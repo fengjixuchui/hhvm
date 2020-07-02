@@ -92,6 +92,7 @@ type t = {
   symbol_write_hhi_path: string;
   symbol_write_ignore_paths: string list;
   symbol_write_index_paths: string list;
+  symbol_write_include_hhi: bool;
   po_disallow_func_ptrs_in_constants: bool;
   tco_error_php_lambdas: bool;
   tco_disallow_discarded_nullable_awaitables: bool;
@@ -102,6 +103,7 @@ type t = {
   po_disable_modes: bool;
   po_disable_hh_ignore_error: bool;
   po_disable_array: bool;
+  po_disable_array_typehint: bool;
   tco_enable_systemlib_annotations: bool;
   tco_pu_enabled_paths: bool * Relative_path.t list;
   tco_widen_is_array: bool;
@@ -255,6 +257,7 @@ let default =
     symbol_write_hhi_path = "hhi";
     symbol_write_ignore_paths = [];
     symbol_write_index_paths = [];
+    symbol_write_include_hhi = true;
     po_disallow_func_ptrs_in_constants = false;
     tco_error_php_lambdas = false;
     tco_disallow_discarded_nullable_awaitables = false;
@@ -265,6 +268,7 @@ let default =
     po_disable_modes = false;
     po_disable_hh_ignore_error = false;
     po_disable_array = false;
+    po_disable_array_typehint = false;
     tco_enable_systemlib_annotations = false;
     tco_pu_enabled_paths = (false, []);
     tco_widen_is_array = false;
@@ -368,6 +372,7 @@ let make
     ?(symbol_write_hhi_path = default.symbol_write_hhi_path)
     ?(symbol_write_ignore_paths = default.symbol_write_ignore_paths)
     ?(symbol_write_index_paths = default.symbol_write_index_paths)
+    ?(symbol_write_include_hhi = default.symbol_write_include_hhi)
     ?(po_disallow_func_ptrs_in_constants =
       default.po_disallow_func_ptrs_in_constants)
     ?(tco_error_php_lambdas = default.tco_error_php_lambdas)
@@ -382,6 +387,7 @@ let make
     ?(po_disable_modes = default.po_disable_modes)
     ?(po_disable_hh_ignore_error = default.po_disable_hh_ignore_error)
     ?(po_disable_array = default.po_disable_array)
+    ?(po_disable_array_typehint = default.po_disable_array_typehint)
     ?(tco_enable_systemlib_annotations =
       default.tco_enable_systemlib_annotations)
     ?(tco_pu_enabled_paths = default.tco_pu_enabled_paths)
@@ -472,6 +478,7 @@ let make
     symbol_write_hhi_path;
     symbol_write_ignore_paths;
     symbol_write_index_paths;
+    symbol_write_include_hhi;
     po_disallow_func_ptrs_in_constants;
     tco_error_php_lambdas;
     tco_disallow_discarded_nullable_awaitables;
@@ -482,6 +489,7 @@ let make
     po_disable_modes;
     po_disable_hh_ignore_error;
     po_disable_array;
+    po_disable_array_typehint;
     tco_enable_systemlib_annotations;
     tco_pu_enabled_paths;
     tco_widen_is_array;
@@ -665,6 +673,8 @@ let symbol_write_ignore_paths t = t.symbol_write_ignore_paths
 
 let symbol_write_index_paths t = t.symbol_write_index_paths
 
+let symbol_write_include_hhi t = t.symbol_write_include_hhi
+
 let set_global_inference t = { t with tco_global_inference = true }
 
 let set_ordered_solving t b = { t with tco_ordered_solving = b }
@@ -693,6 +703,8 @@ let po_disable_modes t = t.po_disable_modes
 let po_disable_hh_ignore_error t = t.po_disable_hh_ignore_error
 
 let po_disable_array t = t.po_disable_array
+
+let po_disable_array_typehint t = t.po_disable_array_typehint
 
 let tco_enable_systemlib_annotations t = t.tco_enable_systemlib_annotations
 

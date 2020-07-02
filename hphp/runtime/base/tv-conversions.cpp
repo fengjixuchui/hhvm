@@ -1140,7 +1140,7 @@ enable_if_lval_t<T, void> tvCastToVArrayInPlace(T tv) {
   assertx(IMPLIES(a->isVanilla(), a->isPackedKind()));
 
   val(tv).parr = a;
-  type(tv) = RuntimeOption::EvalEmitDVArray ? KindOfVArray : KindOfArray;
+  type(tv) = KindOfVArray;
   assertx(tvIsPlausible(*tv));
 }
 
@@ -1241,7 +1241,7 @@ enable_if_lval_t<T, void> tvCastToDArrayInPlace(T tv) {
   assertx(IMPLIES(a->isVanilla(), a->isMixedKind()));
 
   val(tv).parr = a;
-  type(tv) = RuntimeOption::EvalEmitDVArray ? KindOfDArray : KindOfArray;
+  type(tv) = KindOfDArray;
   assertx(tvIsPlausible(*tv));
 }
 
@@ -1307,7 +1307,7 @@ enable_if_lval_t<T, void> tvCastToResourceInPlace(T tv) {
     switch (type(tv)) {
       DT_UNCOUNTED_CASE:
         continue;
-      case KindOfRFunc: // TODO(T63348446)
+      case KindOfRFunc:
       case KindOfString:
       case KindOfVec:
       case KindOfDict:

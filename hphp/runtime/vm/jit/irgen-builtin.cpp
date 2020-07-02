@@ -91,15 +91,7 @@ struct ParamPrep {
 
 // Will turn into either an int or a double in zend_convert_scalar_to_number.
 bool type_converts_to_number(Type ty) {
-  return ty.subtypeOfAny(
-    TDbl,
-    TInt,
-    TNull,
-    TObj,
-    TRes,
-    TStr,
-    TBool
-  );
+  return ty.subtypeOfAny(TDbl, TInt, TNull, TObj, TRes, TStr, TBool);
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -579,7 +571,7 @@ SSATmp* opt_is_list_like(IRGS& env, const ParamPrep& params) {
     return cns(env, true);
   }
   if (!type.maybe(TArrLike)) return cns(env, false);
-  if (type.subtypeOfAny(TVec, TPackedArr)) return cns(env, true);
+  if (type.subtypeOfAny(TVArr, TVec)) return cns(env, true);
   return nullptr;
 }
 
@@ -640,7 +632,7 @@ SSATmp* opt_foldable(IRGS& env,
   if (numNonDefaultArgs > func->numNonVariadicParams()) {
     assertx(params.size() == func->numParams());
     auto const variadic = params.info.back().value;
-    auto const ty = RuntimeOption::EvalHackArrDVArrs ? TVec : TArr;
+    auto const ty = RuntimeOption::EvalHackArrDVArrs ? TVec : TVArr;
     if (!variadic->type().hasConstVal(ty)) return nullptr;
 
     variadicArgs = variadic->variantVal().asCArrRef().get();
@@ -762,11 +754,11 @@ SSATmp* opt_container_first(IRGS& env, const ParamPrep& params) {
   }
   auto const value = params[0].value;
   auto const type = value->type();
-  if (type.subtypeOfAny(TVec, TPackedArr)) {
+  if (type.subtypeOfAny(TVArr, TVec)) {
     auto const r = gen(env, VecFirst, value);
     gen(env, IncRef, r);
     return r;
-  } else if (type.subtypeOfAny(TDict, TMixedArr)) {
+  } else if (type.subtypeOfAny(TDArr, TDict)) {
     auto const r = gen(env, DictFirst, value);
     gen(env, IncRef, r);
     return r;
@@ -784,11 +776,11 @@ SSATmp* opt_container_last(IRGS& env, const ParamPrep& params) {
   }
   auto const value = params[0].value;
   auto const type = value->type();
-  if (type.subtypeOfAny(TVec, TPackedArr)) {
+  if (type.subtypeOfAny(TVArr, TVec)) {
     auto const r = gen(env, VecLast, value);
     gen(env, IncRef, r);
     return r;
-  } else if (type.subtypeOfAny(TDict, TMixedArr)) {
+  } else if (type.subtypeOfAny(TDArr, TDict)) {
     auto const r = gen(env, DictLast, value);
     gen(env, IncRef, r);
     return r;
@@ -807,7 +799,7 @@ SSATmp* opt_container_first_key(IRGS& env, const ParamPrep& params) {
   auto const value = params[0].value;
   auto const type = value->type();
 
-  if (type.subtypeOfAny(TVec, TPackedArr)) {
+  if (type.subtypeOfAny(TVArr, TVec)) {
     return cond(
       env,
       [&](Block* taken) {
@@ -818,7 +810,7 @@ SSATmp* opt_container_first_key(IRGS& env, const ParamPrep& params) {
       [&] { return cns(env, 0); },
       [&] { return cns(env, TInitNull); }
     );
-  } else if (type.subtypeOfAny(TDict, TMixedArr)) {
+  } else if (type.subtypeOfAny(TDArr, TDict)) {
     auto const r = gen(env, DictFirstKey, value);
     gen(env, IncRef, r);
     return r;
@@ -837,7 +829,7 @@ SSATmp* opt_container_last_key(IRGS& env, const ParamPrep& params) {
   auto const value = params[0].value;
   auto const type = value->type();
 
-  if (type.subtypeOfAny(TVec, TPackedArr)) {
+  if (type.subtypeOfAny(TVArr, TVec)) {
     return cond(
       env,
       [&](Block* taken) {
@@ -849,7 +841,7 @@ SSATmp* opt_container_last_key(IRGS& env, const ParamPrep& params) {
       [&] (SSATmp* next) { return gen(env, SubInt, next, cns(env, 1)); },
       [&] { return cns(env, TInitNull); }
     );
-  } else if (type.subtypeOfAny(TDict, TMixedArr)) {
+  } else if (type.subtypeOfAny(TDArr, TDict)) {
     auto const r = gen(env, DictLastKey, value);
     gen(env, IncRef, r);
     return r;
@@ -997,14 +989,12 @@ SSATmp* opt_shapes_idx(IRGS& env, const ParamPrep& params) {
   if (!(defType <= TUninit) && defType.maybe(TUninit)) return nullptr;
   auto const def = defType <= TUninit ? cns(env, TInitNull) : params[2].value;
 
-  // params[0] is an ?darray, which may be a ?Dict or an ?Arr based on options.
-  // If the Hack typehint check flag is on, then we fall back to the native
-  // implementation of this method, which checks the DVArray bit in ArrayData.
+  // params[0] is a ?darray, which may be a ?Dict or a ?DArr based on options.
   bool is_dict;
   auto const arrType = params[0].value->type();
   if (RuntimeOption::EvalHackArrDVArrs && arrType <= TDict) {
     is_dict = true;
-  } else if (!RuntimeOption::EvalHackArrDVArrs && arrType <= TArr) {
+  } else if (!RuntimeOption::EvalHackArrDVArrs && arrType <= TDArr) {
     is_dict = false;
   } else if (arrType <= TNull) {
     gen(env, IncRef, def);
@@ -1013,26 +1003,8 @@ SSATmp* opt_shapes_idx(IRGS& env, const ParamPrep& params) {
     return nullptr;
   }
 
-  // params[0] is the array, for which we may need to do a dvarray check.
-  auto const arr = [&]() -> SSATmp* {
-    auto const val = params[0].value;
-    if (!val->isA(TArr)) return val;
-
-    // Rather than just emitting a notice here, we interp and side-exit for
-    // non-darrays so that we can use layout information in the main trace.
-    //
-    // To interp, we must restore the stack offset from the start of the HHBC.
-    // It's easy to undo the stack offset for FCallBuiltin, but it's too hard
-    // to do the same for inlined NativeImpls (since they end inlined traces).
-    if (curSrcKey(env).op() != Op::FCallBuiltin) return nullptr;
-    env.irb->fs().incBCSPDepth(nparams);
-    auto const result = gen(env, CheckDArray, makeExitSlow(env), val);
-    env.irb->fs().decBCSPDepth(nparams);
-    return result;
-  }();
-  if (!arr) return nullptr;
-
   // Do the array access, using array offset profiling to optimize it.
+  auto const arr = params[0].value;
   auto const key = params[1].value;
   // we might side-exit in profiledArrayAccess
   env.irb->fs().incBCSPDepth(nparams);
@@ -1339,7 +1311,10 @@ Type param_target_type(const Func* callee, uint32_t paramIdx) {
     if (!dt) return TBottom;
     return TNull | Type(*dt);
   }
-  if (!pi.builtinType) return tc.isVArrayOrDArray() ? TArr : TBottom;
+  if (!pi.builtinType) {
+    if (!tc.isVArrayOrDArray()) return TBottom;
+    return RO::EvalHackArrDVArrs ? TVec|TDict : TVArr|TDArr;
+  }
   if (pi.builtinType == KindOfObject &&
       pi.defaultValue.m_type == KindOfNull) {
     return TNullableObj;
@@ -1544,8 +1519,8 @@ SSATmp* realize_param(IRGS& env,
                       R realize) {
   if (param.needsConversion) {
     auto const baseTy = targetTy - TNull;
-    assertx(baseTy.isKnownDataType());
-    auto const convertTy = baseTy;
+    assertx(baseTy.isKnownDataType() ||
+            (baseTy == (RO::EvalHackArrDVArrs ? TVec|TDict : TVArr|TDArr)));
 
     if (auto const value = cond(
           env,
@@ -1563,7 +1538,7 @@ SSATmp* realize_param(IRGS& env,
           },
           [&] (SSATmp* v) { return v; },
           [&] () -> SSATmp* {
-            return convertParam(convertTy);
+            return convertParam(baseTy);
           }
         )) {
       // Heads up on non-local state here: we have to update
@@ -1588,6 +1563,9 @@ SSATmp* maybeCoerceValue(
   U update,
   F fail
 ) {
+  assertx(target.isKnownDataType() ||
+          (target == (RO::EvalHackArrDVArrs ? TVec|TDict : TVArr|TDArr)));
+
   auto bail = [&] { fail(); return cns(env, TBottom); };
   if (target <= TStr) {
     auto const allowedTy = RO::EvalEnableFuncStringInterop ? TFunc|TCls : TCls;
@@ -1635,7 +1613,7 @@ SSATmp* maybeCoerceValue(
     );
   }
 
-  if (target <= (RuntimeOption::EvalHackArrDVArrs ? TVec : TArr)) {
+  if (target <= (RuntimeOption::EvalHackArrDVArrs ? TVec : TVArr)) {
     if (!val->type().maybe(TClsMeth)) return bail();
     auto const& tc = func->params()[id].typeConstraint;
     if (!tc.convertClsMethToArrLike()) return bail();
@@ -1735,7 +1713,6 @@ jit::vector<SSATmp*> realize_params(IRGS& env,
         [&] (const Type& ty) -> SSATmp* {
           hint(env, Block::Hint::Unlikely);
           auto val = gen(env, LdMem, TCell, param.value);
-          assertx(ty.isKnownDataType());
           maybeCoerceValue(
             env,
             val,
@@ -1781,7 +1758,6 @@ jit::vector<SSATmp*> realize_params(IRGS& env,
         },
         [&] (const Type& ty) -> SSATmp* {
           hint(env, Block::Hint::Unlikely);
-          assert(ty.isKnownDataType());
           return maybeCoerceValue(
             env,
             param.value,
@@ -1831,11 +1807,9 @@ jit::vector<SSATmp*> realize_params(IRGS& env,
         return nullptr;
       },
       [&] (const Type& ty) -> SSATmp* {
-        always_assert(ty.isKnownDataType());
         hint(env, Block::Hint::Unlikely);
         auto const off = IRSPRelOffsetData{ offsetFromIRSP(env, offset) };
         auto const tv = gen(env, LdStk, TCell, off, sp(env));
-
         maybeCoerceValue(
           env,
           tv,
@@ -1935,7 +1909,9 @@ SSATmp* builtinCall(IRGS& env,
         decRef(env, realized[i + aoff]);
         realized[i + aoff] = iv;
         ty = iv->type();
-        if (ty->maybe(TPersistentArr)) *ty |= TArr;
+        if (ty->maybe(TPersistentPArr)) *ty |= TPArr;
+        if (ty->maybe(TPersistentVArr)) *ty |= TVArr;
+        if (ty->maybe(TPersistentDArr)) *ty |= TDArr;
         if (ty->maybe(TPersistentVec)) *ty |= TVec;
         if (ty->maybe(TPersistentDict)) *ty |= TDict;
         if (ty->maybe(TPersistentKeyset)) *ty |= TKeyset;
@@ -2251,11 +2227,11 @@ Type builtinOutType(const Func* builtin, uint32_t i) {
     case AnnotMetaType::This:
       return TObj;
     case AnnotMetaType::VArray:
-      return RuntimeOption::EvalHackArrDVArrs ? TVec : TArr;
+      return RO::EvalHackArrDVArrs ? TVec : TVArr;
     case AnnotMetaType::DArray:
-      return RuntimeOption::EvalHackArrDVArrs ? TDict : TArr;
+      return RO::EvalHackArrDVArrs ? TDict : TDArr;
     case AnnotMetaType::VArrOrDArr:
-      return RuntimeOption::EvalHackArrDVArrs ? TVec | TDict : TArr;
+      return RO::EvalHackArrDVArrs ? TVec|TDict : TVArr|TDArr;
     case AnnotMetaType::VecOrDict:
       return TVec | TDict;
     case AnnotMetaType::ArrayLike:
@@ -2572,22 +2548,7 @@ void emitAKExists(IRGS& env) {
     gen(env, ThrowInvalidArrayKey, arr, key);
   };
 
-  auto const check_packed = [&] {
-    assertx(key->isA(TInt));
-
-    auto const result = cond(
-      env,
-      [&](Block* taken) {
-        gen(env, CheckPackedArrayDataBounds, taken, arr, key);
-      },
-      [&] { return cns(env, true); },
-      [&] { return cns(env, false); }
-    );
-    push(env, result);
-    decRef(env, arr);
-  };
-
-  if (arr->isA(TVec)) {
+  if (arr->type().subtypeOfAny(TVArr, TVec)) {
     if (key->isA(TStr)) {
       push(env, cns(env, false));
       decRef(env, arr);
@@ -2595,7 +2556,17 @@ void emitAKExists(IRGS& env) {
       return;
     }
     if (key->isA(TInt)) {
-      return check_packed();
+      auto const result = cond(
+        env,
+        [&](Block* taken) {
+          gen(env, CheckPackedArrayDataBounds, taken, arr, key);
+        },
+        [&] { return cns(env, true); },
+        [&] { return cns(env, false); }
+      );
+      push(env, result);
+      decRef(env, arr);
+      return;
     }
     return throwBadKey();
   }
@@ -2646,12 +2617,8 @@ void emitAKExists(IRGS& env) {
     decRef(env, arr);
     return;
   }
-  if (arr->isA(TArr) && key->isA(TInt) &&
-      arr->type().arrSpec().kind() == ArrayData::kPackedKind) {
-    return check_packed();
-  }
 
- auto const val =
+  auto const val =
     gen(env, arr->isA(TArr) ? AKExistsArr : AKExistsObj, arr, key);
   push(env, val);
   decRef(env, arr);

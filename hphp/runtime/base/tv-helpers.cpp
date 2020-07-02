@@ -109,6 +109,7 @@ bool tvIsPlausible(const TypedValue cell) {
         assertPtr(cell.m_data.parr);
         assertx(cell.m_data.parr->kindIsValid());
         assertx(!cell.m_data.parr->isRefCounted());
+        assertx(!val(cell).parr->isDVArray());
         assertx(cell.m_data.parr->isPHPArrayType());
         return;
       case KindOfDArray:
@@ -129,6 +130,7 @@ bool tvIsPlausible(const TypedValue cell) {
         assertPtr(cell.m_data.parr);
         assertx(cell.m_data.parr->kindIsValid());
         assertx(cell.m_data.parr->checkCountZ());
+        assertx(!val(cell).parr->isDVArray());
         assertx(cell.m_data.parr->isPHPArrayType());
         return;
       case KindOfObject:
@@ -149,7 +151,14 @@ bool tvIsPlausible(const TypedValue cell) {
       case KindOfRFunc:
         assertPtr(cell.m_data.prfunc);
         assertx(cell.m_data.prfunc->m_func->validate());
-        assertx(tvIsPlausible(make_array_like_tv(cell.m_data.prfunc->m_arr)));
+        assertPtr(cell.m_data.prfunc->m_arr);
+        assertx(cell.m_data.prfunc->m_arr->checkCountZ());
+        if (RuntimeOption::EvalHackArrDVArrs) {
+          assertx(cell.m_data.prfunc->m_arr->isVecType());
+          assertx(cell.m_data.prfunc->m_arr->isNotDVArray());
+        } else {
+          assertx(cell.m_data.prfunc->m_arr->isPHPArrayType());
+        }
         return;
       case KindOfFunc:
         assertPtr(cell.m_data.pfunc);

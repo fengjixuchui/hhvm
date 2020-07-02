@@ -225,6 +225,8 @@ type t = {
   symbol_write_ignore_paths: string list;
   (* When set, write indexing data for these filepaths only. Relative to repository root, eg: bar.php for root|bar.php *)
   symbol_write_index_paths: string list;
+  (* Write symbol indexing data for hhi files *)
+  symbol_write_include_hhi: bool;
   (* Flag to disallow HH\fun and HH\class_meth in constants and constant initializers *)
   po_disallow_func_ptrs_in_constants: bool;
   (* Flag to report an error on php style anonymous functions *)
@@ -251,6 +253,7 @@ type t = {
   po_disable_hh_ignore_error: bool;
   (* Disable array(...) *)
   po_disable_array: bool;
+  po_disable_array_typehint: bool;
   (* Enable features used to typecheck systemlib *)
   tco_enable_systemlib_annotations: bool;
   (* Controls if/where the pocket universe syntax is enabled
@@ -350,6 +353,7 @@ val make :
   ?symbol_write_hhi_path:string ->
   ?symbol_write_ignore_paths:string list ->
   ?symbol_write_index_paths:string list ->
+  ?symbol_write_include_hhi:bool ->
   ?po_disallow_func_ptrs_in_constants:bool ->
   ?tco_error_php_lambdas:bool ->
   ?tco_disallow_discarded_nullable_awaitables:bool ->
@@ -360,6 +364,7 @@ val make :
   ?po_disable_modes:bool ->
   ?po_disable_hh_ignore_error:bool ->
   ?po_disable_array:bool ->
+  ?po_disable_array_typehint:bool ->
   ?tco_enable_systemlib_annotations:bool ->
   ?tco_pu_enabled_paths:bool * Relative_path.t list ->
   ?tco_widen_is_array:bool ->
@@ -560,6 +565,8 @@ val symbol_write_ignore_paths : t -> string list
 
 val symbol_write_index_paths : t -> string list
 
+val symbol_write_include_hhi : t -> bool
+
 val po_disallow_func_ptrs_in_constants : t -> bool
 
 val tco_error_php_lambdas : t -> bool
@@ -579,6 +586,8 @@ val po_disable_modes : t -> bool
 val po_disable_hh_ignore_error : t -> bool
 
 val po_disable_array : t -> bool
+
+val po_disable_array_typehint : t -> bool
 
 val tco_enable_systemlib_annotations : t -> bool
 

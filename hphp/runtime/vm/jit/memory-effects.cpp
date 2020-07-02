@@ -1059,6 +1059,8 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
 
   case LdClsFromClsMeth:
   case LdFuncFromClsMeth:
+  case LdFuncFromRFunc:
+  case LdGenericsFromRFunc:
     return may_load_store(AHeapAny, AEmpty);
 
   //////////////////////////////////////////////////////////////////////
@@ -1426,6 +1428,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case NewDArray:
   case NewDictArray:
   case NewPlainArray:
+  case NewRFunc:
   case FuncCred:
   case AllocVArray:
   case AllocVec:
@@ -1702,9 +1705,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case BeginCatch:
   case CheckSurpriseFlags:
   case CheckType:
-  case CheckVArray:
-  case CheckDArray:
-  case CheckDVArray:
   case ZeroErrorLevel:
   case RestoreErrorLevel:
   case CheckCold:
@@ -1720,6 +1720,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case CountVec:
   case CountDict:
   case CountKeyset:
+  case HasReifiedGenerics:
   case InstanceOf:
   case InstanceOfBitmask:
   case NInstanceOfBitmask:
@@ -1787,7 +1788,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case LdClsMethodFCacheFunc:
   case LdClsTypeCns:
   case LdClsTypeCnsClsName:
-  case ProfileArrayKind:
   case ProfileSwitchDest:
   case LdFuncCls:
   case LdFuncNumParams:

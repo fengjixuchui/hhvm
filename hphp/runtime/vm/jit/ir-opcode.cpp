@@ -65,7 +65,6 @@ TRACE_SET_MOD(hhir);
 #define DDictLastKey      HasDest
 #define DKeysetFirstElem  HasDest
 #define DKeysetLastElem   HasDest
-#define DArrRecord     HasDest
 #define DVArr          HasDest
 #define DDArr          HasDest
 #define DStaticDArr    HasDest
@@ -141,7 +140,6 @@ OpInfo g_opInfo[] = {
 #undef DDictLastKey
 #undef DKeysetFirstElem
 #undef DKeysetLastElem
-#undef DArrRecord
 #undef DVArr
 #undef DDArr
 #undef DStaticDArr
@@ -556,8 +554,6 @@ bool opcodeMayRaise(Opcode opc) {
   case Ceil:
   case CheckArrayCOW:
   case CheckCold:
-  case CheckDArray:
-  case CheckDVArray:
   case CheckDictOffset:
   case CheckImplicitContextNull:
   case CheckInit:
@@ -581,7 +577,6 @@ bool opcodeMayRaise(Opcode opc) {
   case CheckSurpriseFlags:
   case CheckType:
   case CheckTypeMem:
-  case CheckVArray:
   case ChrInt:
   case CmpBool:
   case CmpDbl:
@@ -724,6 +719,7 @@ bool opcodeMayRaise(Opcode opc) {
   case GtRes:
   case GtStr:
   case GtStrInt:
+  case HasReifiedGenerics:
   case HasToString:
   case IncCallCounter:
   case IncProfCounter:
@@ -803,10 +799,12 @@ bool opcodeMayRaise(Opcode opc) {
   case LdFrameCls:
   case LdFrameThis:
   case LdFuncFromClsMeth:
+  case LdFuncFromRFunc:
   case LdFuncNumParams:
   case LdFuncName:
   case LdFuncRxLevel:
   case LdFuncVecLen:
+  case LdGenericsFromRFunc:
   case LdIfaceMethod:
   case LdInitPropAddr:
   case LdInitRDSAddr:
@@ -906,6 +904,7 @@ bool opcodeMayRaise(Opcode opc) {
   case NewInstanceRaw:
   case NewPair:
   case NewPlainArray:
+  case NewRFunc:
   case NewStructArray:
   case NewStructDArray:
   case NewStructDict:
@@ -917,7 +916,6 @@ bool opcodeMayRaise(Opcode opc) {
   case OrdStr:
   case OrInt:
   case PairIsset:
-  case ProfileArrayKind:
   case ProfileCall:
   case ProfileDecRef:
   case ProfileDictAccess:

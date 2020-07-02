@@ -92,6 +92,7 @@ struct RepoOptions {
   H(bool,           DisableXHPElementMangling,      false)            \
   H(bool,           DisableArray,                   true)             \
   H(bool,           DisableArrayCast,               false)            \
+  H(bool,           DisableArrayTypehint,           false)            \
   /**/
 
   /**/
@@ -1141,13 +1142,6 @@ struct RuntimeOption {
   /* What fraction of array provenance diagnostics should be logged?    \
    * Set to 0 to disable diagnostics entirely */                        \
   F(uint32_t, LogArrayProvenanceDiagnosticsSampleRate, 0)               \
-  /* Emit values using the KindOfDArray and KindOfVArray types          |
-   * EXPERIMENTAL: Enabling this will cause undefined behvaior. */      \
-  F(bool, EmitDVArray, false)                                           \
-  /* When false, KindOfDArray and KindOfVArray behave as KindOfArray.   |
-   * When true, KindOfDArray and KindOfVArray have distinct behavior.   |
-   * EXPERIMENTAL: Enabling this will cause undefined behvaior. */      \
-  F(bool, SpecializeDVArray, false)                                     \
   /* Warn if is expression are used with type aliases that cannot be    |
    * resolved */                                                        \
   F(bool, IsExprEnableUnresolvedWarning, false)                         \

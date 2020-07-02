@@ -54,6 +54,7 @@ namespace detail {
   T(AsioBlockableChain, TABC)    \
   T(Class*, TCls)                \
   T(Func*, TFunc)                \
+  T(RFuncData*, TRFunc)          \
   T(ClsMethDataRef, TClsMeth)    \
   T(NamedEntity*, TNamedEntity)  \
   T(ResourceHdr*, TRes)          \
@@ -188,6 +189,11 @@ const FuncType* get_func_type(Ret (*f)(Args...)) {
 }
 
 /*
+ * Get the kind of the given subtype of TArr, if we know it statically.
+ */
+folly::Optional<ArrayData::ArrayKind> getArrayKind(Type type);
+
+/*
  * Information about how to make different sorts of calls from the JIT.
  */
 struct CallSpec {
@@ -315,8 +321,7 @@ struct CallSpec {
       const Type& arr_type,
       Ret (*const (*p)[ArrayData::kNumKinds])(ArrayData*, Args...),
       Ret (ArrayData::*fp)(Args...)) {
-    assertx(arr_type <= TArr);
-    if (auto const kind = arr_type.arrSpec().kind()) {
+    if (auto const kind = getArrayKind(arr_type)) {
       return direct((*p)[*kind]);
     }
     return method(fp);
@@ -326,8 +331,7 @@ struct CallSpec {
       const Type& arr_type,
       Ret (*const (*p)[ArrayData::kNumKinds])(const ArrayData*, Args...),
       Ret (ArrayData::*fp)(Args...) const) {
-    assertx(arr_type <= TArr);
-    if (auto const kind = arr_type.arrSpec().kind()) {
+    if (auto const kind = getArrayKind(arr_type)) {
       return direct((*p)[*kind]);
     }
     return method(fp);

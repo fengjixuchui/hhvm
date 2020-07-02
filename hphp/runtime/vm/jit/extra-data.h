@@ -1765,8 +1765,6 @@ X(ThrowArrayKeyException,       ArrayGetExceptionData);
 X(ThrowParameterWrongType,      FuncArgTypeData);
 X(CheckClsReifiedGenericMismatch,
                                 ClassData);
-X(CheckFunReifiedGenericMismatch,
-                                FuncData);
 X(IsFunReifiedGenericsMatched,  FuncData);
 X(IsTypeStruct,                 RDSHandleData);
 X(InterpOne,                    InterpOneData);
@@ -1793,7 +1791,6 @@ X(CountWHNotDone,               CountWHNotDoneData);
 X(CheckMixedArrayOffset,        IndexData);
 X(CheckDictOffset,              IndexData);
 X(CheckKeysetOffset,            IndexData);
-X(ProfileArrayKind,             RDSHandleData);
 X(ProfileMixedArrayAccess,      ArrayAccessProfileData);
 X(ProfileDictAccess,            ArrayAccessProfileData);
 X(ProfileKeysetAccess,          ArrayAccessProfileData);

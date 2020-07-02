@@ -2602,42 +2602,6 @@ SSATmp* simplifyRaiseHackArrPropNotice(State& env, const IRInstruction* inst) {
   return implSimplifyHackArrTypehint(env, inst, inst->src(1));
 }
 
-SSATmp* simplifyCheckDVArray(State& env, const IRInstruction* inst) {
-  auto const src = inst->src(0);
-  if (src->type().subtypeOfAny(TVArr, TDArr)) {
-    gen(env, Nop);
-    return src;
-  } else if (!src->type().maybe(TVArr) && !src->type().maybe(TDArr)) {
-    gen(env, Jmp, inst->taken());
-    return cns(env, TBottom);
-  }
-  return nullptr;
-}
-
-SSATmp* simplifyCheckVArray(State& env, const IRInstruction* inst) {
-  auto const src = inst->src(0);
-  if (src->type() <= TVArr) {
-    gen(env, Nop);
-    return src;
-  } else if (!src->type().maybe(TVArr)) {
-    gen(env, Jmp, inst->taken());
-    return cns(env, TBottom);
-  }
-  return nullptr;
-}
-
-SSATmp* simplifyCheckDArray(State& env, const IRInstruction* inst) {
-  auto const src = inst->src(0);
-  if (src->type() <= TDArr) {
-    gen(env, Nop);
-    return src;
-  } else if (!src->type().maybe(TDArr)) {
-    gen(env, Jmp, inst->taken());
-    return cns(env, TBottom);
-  }
-  return nullptr;
-}
-
 SSATmp* simplifyCheckTypeMem(State& env, const IRInstruction* inst) {
   if (inst->next() == inst->taken() ||
       inst->typeParam() == TBottom) {
@@ -3527,6 +3491,14 @@ SSATmp* simplifyHasToString(State& env, const IRInstruction* inst) {
     });
 }
 
+SSATmp* simplifyHasReifiedGenerics(State& env, const IRInstruction* inst) {
+  auto const src = inst->src(0);
+  if (src->hasConstVal()) {
+    return cns(env, src->funcVal()->hasReifiedGenerics());
+  }
+  return nullptr;
+}
+
 SSATmp* simplifyChrInt(State& env, const IRInstruction* inst) {
   auto const src = inst->src(0);
   if (src->hasConstVal(TInt)) {
@@ -3692,9 +3664,6 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
   X(CheckTypeMem)
   X(RaiseHackArrParamNotice)
   X(RaiseHackArrPropNotice)
-  X(CheckDVArray)
-  X(CheckVArray)
-  X(CheckDArray)
   X(AssertType)
   X(CheckNonNull)
   X(CheckPackedArrayDataBounds)
@@ -3780,6 +3749,7 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
   X(IsWaitHandle)
   X(IsCol)
   X(HasToString)
+  X(HasReifiedGenerics)
   X(LdCls)
   X(LdClsName)
   X(LdWHResult)

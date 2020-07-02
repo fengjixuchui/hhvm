@@ -251,16 +251,6 @@ void verifyTypeImpl(IRGS& env,
     case AnnotAction::VArrayOrDArrayCheck:
     case AnnotAction::NonVArrayOrDArrayCheck: {
       assertx(valType <= TArr);
-      auto const gc = GuardConstraint(DataTypeSpecialized).setWantArrayKind();
-      env.irb->constrainValue(val, gc);
-      auto const type = [&]{
-        if (result == AnnotAction::VArrayCheck) return TPackedArr;
-        if (result == AnnotAction::DArrayCheck) return TMixedArr;
-        return TBottom;
-      }();
-      if (val->type().maybe(type)) {
-        val = gen(env, CheckType, type, makeExit(env), val);
-      }
       ifThen(env,
         [&](Block* taken) { doDVArrChecks(env, val, taken, tc); },
         [&]{ genFail(); }
@@ -489,29 +479,17 @@ SSATmp* isStrImpl(IRGS& env, SSATmp* src) {
   return mc.elseDo([&]{ return cns(env, false); });
 }
 
-// Checks if `arr` is a darray, varray, or varray (based on op). Executes the
-// code in `next` if that is the case.
-template <typename Next>
-void ifDVArray(IRGS& env, Opcode op, SSATmp* arr, Next next) {
-  assertx(arr->isA(TArr));
-  assertx(op == CheckDArray || op == CheckVArray || op == CheckDVArray);
-
-  auto const gc = GuardConstraint(DataTypeSpecialized).setWantArrayKind();
-  env.irb->constrainValue(arr, gc);
-  ifThen(env, [&](Block* taken) { next(gen(env, op, taken, arr)); }, [&]{});
-}
-
 // Checks if the `arr` has provenance, implementing the same logic as in the
 // runtume helper arrprov::arrayWantsTag. If so, logs a serialization notice.
 void maybeLogSerialization(IRGS& env, SSATmp* arr, SerializationSite site) {
-  assertx(arr->type().isKnownDataType());
-
+  assertx(arr->isA(TArr) || arr->type().isKnownDataType());
   if (!RO::EvalLogArrayProvenance) return;
 
   if (arr->isA(TArr) && RO::EvalArrProvDVArrays) {
-    ifDVArray(env, CheckDVArray, arr, [&](SSATmp* arr) {
+    ifThen(env, [&](Block* taken) {
+      arr = gen(env, CheckType, TVArr|TDArr, taken, arr);
       gen(env, RaiseArraySerializeNotice, cns(env, site), arr);
-    });
+    }, [&]{});
   } else if ((arr->isA(TVec) || arr->isA(TDict)) && RO::EvalArrProvHackArrays) {
     gen(env, RaiseArraySerializeNotice, cns(env, site), arr);
   }
@@ -566,7 +544,6 @@ SSATmp* isArrayImpl(IRGS& env, SSATmp* src, bool log_on_hack_arrays) {
 SSATmp* isVecImpl(IRGS& env, SSATmp* src) {
   MultiCond mc{env};
 
-
   mc.ifTypeThen(src, TVec, [&](SSATmp* src) {
     maybeLogSerialization(env, src, SerializationSite::IsVec);
     return cns(env, true);
@@ -596,11 +573,9 @@ SSATmp* isVecImpl(IRGS& env, SSATmp* src) {
 
   if (RO::EvalHackArrCompatIsVecDictNotices ||
       (RO::EvalLogArrayProvenance && RO::EvalArrProvDVArrays)) {
-    mc.ifTypeThen(src, TArr, [&](SSATmp* src) {
-      ifDVArray(env, CheckVArray, src, [&](SSATmp* src) {
-        hacLogging(Strings::HACKARR_COMPAT_VARR_IS_VEC);
-        maybeLogSerialization(env, src, SerializationSite::IsVec);
-      });
+    mc.ifTypeThen(src, TVArr, [&](SSATmp* src) {
+      hacLogging(Strings::HACKARR_COMPAT_VARR_IS_VEC);
+      maybeLogSerialization(env, src, SerializationSite::IsVec);
       return cns(env, false);
     });
   }
@@ -623,11 +598,9 @@ SSATmp* isDictImpl(IRGS& env, SSATmp* src) {
 
   if (RO::EvalHackArrCompatIsVecDictNotices ||
       (RO::EvalLogArrayProvenance && RO::EvalArrProvDVArrays)) {
-    mc.ifTypeThen(src, TArr, [&](SSATmp* src) {
-      ifDVArray(env, CheckDArray, src, [&](SSATmp* src) {
-        hacLogging(Strings::HACKARR_COMPAT_DARR_IS_DICT);
-        maybeLogSerialization(env, src, SerializationSite::IsDict);
-      });
+    mc.ifTypeThen(src, TDArr, [&](SSATmp* src) {
+      hacLogging(Strings::HACKARR_COMPAT_DARR_IS_DICT);
+      maybeLogSerialization(env, src, SerializationSite::IsDict);
       return cns(env, false);
     });
   }
@@ -638,26 +611,14 @@ SSATmp* isDictImpl(IRGS& env, SSATmp* src) {
 SSATmp* isDVArrayImpl(IRGS& env, SSATmp* src, IsTypeOp subop) {
   MultiCond mc{env};
 
-  if (src->type().maybe(TArr)) {
-    auto const gc = GuardConstraint(DataTypeSpecialized).setWantArrayKind();
-    env.irb->constrainValue(src, gc);
-  }
-
   assertx(subop == IsTypeOp::VArray || subop == IsTypeOp::DArray);
   auto const varray = subop == IsTypeOp::VArray;
-  auto const check = varray ? CheckVArray : CheckDArray;
   auto const site = varray ? SerializationSite::IsVArray
                            : SerializationSite::IsDArray;
 
-  mc.ifTypeThen(src, TArr, [&](SSATmp* src) {
-    return cond(env,
-      [&](Block* taken) { return gen(env, check, taken, src); },
-      [&](SSATmp* src) {
-        maybeLogSerialization(env, src, site);
-        return cns(env, true);
-      },
-      [&]{ return cns(env, false); }
-    );
+  mc.ifTypeThen(src, varray ? TVArr : TDArr, [&](SSATmp* src) {
+    maybeLogSerialization(env, src, site);
+    return cns(env, true);
   });
 
   if (varray && RO::EvalIsCompatibleClsMethType) {
@@ -882,10 +843,8 @@ SSATmp* resolveTypeStructureAndCacheInRDS(
 ) {
   if (typeStructureCouldBeNonStatic) return resolveTypeStruct();
   auto const handle = RDSHandleData { rds::alloc<ArrayData*>().handle() };
-  auto const ptrType = RuntimeOption::EvalHackArrDVArrs
-    ? TPtrToOtherDict
-    : TPtrToOtherArr;
-  auto const addr = gen(env, LdRDSAddr, handle, ptrType);
+  auto const type = RO::EvalHackArrDVArrs ? TPtrToOtherDict : TPtrToOtherDArr;
+  auto const addr = gen(env, LdRDSAddr, handle, type);
   ifThen(
     env,
     [&] (Block* taken) {
@@ -897,7 +856,7 @@ SSATmp* resolveTypeStructureAndCacheInRDS(
       gen(env, MarkRDSInitialized, handle);
     }
   );
-  return gen(env, LdMem, RuntimeOption::EvalHackArrDVArrs ? TDict : TArr, addr);
+  return gen(env, LdMem, RO::EvalHackArrDVArrs ? TDict : TDArr, addr);
 }
 
 SSATmp* resolveTypeStructImpl(
@@ -1212,7 +1171,7 @@ SSATmp* handleIsResolutionAndCommonOpts(
   bool& checkValid
 ) {
   auto const a = topC(env);
-  auto const required_ts_type = RuntimeOption::EvalHackArrDVArrs ? TDict : TArr;
+  auto const required_ts_type = RO::EvalHackArrDVArrs ? TDict : TDArr;
   if (!a->isA(required_ts_type)) PUNT(IsTypeStructC-NotArrayTypeStruct);
   if (!a->hasConstVal(required_ts_type)) {
     if (op == TypeStructResolveOp::Resolve) {
@@ -1312,7 +1271,7 @@ void emitThrowAsTypeStructException(IRGS& env) {
   auto const arr = topC(env);
   auto const c = topC(env, BCSPRelOffset { 1 });
   auto const tsAndBlock = [&]() -> std::pair<SSATmp*, Block*> {
-    if (arr->hasConstVal(RuntimeOption::EvalHackArrDVArrs ? TDict : TArr)) {
+    if (arr->hasConstVal(RO::EvalHackArrDVArrs ? TDict : TDArr)) {
       auto const ts = arr->arrLikeVal();
       auto maybe_resolved = ts;
       bool partial = true, invalidType = true;
@@ -1332,7 +1291,7 @@ void emitThrowAsTypeStructException(IRGS& env) {
 
 void emitRecordReifiedGeneric(IRGS& env) {
   auto const ts = popC(env);
-  if (!ts->isA(RuntimeOption::EvalHackArrDVArrs ? TVec : TArr)) {
+  if (!ts->isA(RO::EvalHackArrDVArrs ? TVec : TVArr)) {
     PUNT(RecordReifiedGeneric-InvalidTS);
   }
   // RecordReifiedGenericsAndGetTSList decrefs the ts
@@ -1901,13 +1860,13 @@ void emitAssertRATStk(IRGS& env, uint32_t offset, RepoAuthType rat) {
 SSATmp* doDVArrChecks(IRGS& env, SSATmp* arr, Block* taken,
                       const TypeConstraint& tc) {
   assertx(tc.isArray());
-  if (tc.isVArray()) return gen(env, CheckVArray, taken, arr);
-  if (tc.isDArray()) return gen(env, CheckDArray, taken, arr);
-  if (tc.isVArrayOrDArray()) return gen(env, CheckDVArray, taken, arr);
-
-  ifElse(env, [&](Block* okay) { gen(env, CheckDVArray, okay, arr); },
-              [&]{ gen(env, Jmp, taken); });
-  return arr;
+  auto const type = [&]{
+    if (tc.isVArray()) return TVArr;
+    if (tc.isDArray()) return TDArr;
+    if (tc.isVArrayOrDArray()) return TVArr|TDArr;
+    return TPArr;
+  }();
+  return gen(env, CheckType, type, taken, arr);
 }
 
 //////////////////////////////////////////////////////////////////////
