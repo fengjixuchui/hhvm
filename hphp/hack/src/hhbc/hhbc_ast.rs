@@ -233,8 +233,6 @@ pub enum InstructLitConst {
     /// capacity hint
     NewDArray(isize),
     /// capacity hint
-    NewLikeArrayL(local::Type, isize),
-    /// capacity hint
     NewPackedArray(isize),
     NewStructArray(Vec<String>),
     NewStructDArray(Vec<String>),
@@ -318,6 +316,9 @@ pub enum InstructOperator {
     ResolveClsMethod(MethodId),
     ResolveClsMethodD(ClassId, MethodId),
     ResolveClsMethodS(SpecialClsRef, MethodId),
+    ResolveRClsMethod(MethodId),
+    ResolveRClsMethodD(ClassId, MethodId),
+    ResolveRClsMethodS(SpecialClsRef, MethodId),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -602,14 +603,6 @@ pub enum GenCreationExecution {
 }
 
 #[derive(Clone, Debug)]
-pub enum GenDelegation {
-    ContAssignDelegate(IterId),
-    ContEnterDelegate,
-    YieldFromDelegate(IterId, label::Label),
-    ContUnsetDelegate(FreeIterator, IterId),
-}
-
-#[derive(Clone, Debug)]
 pub enum AsyncFunctions {
     WHResult,
     Await,
@@ -652,6 +645,5 @@ pub enum Instruct {
     ISrcLoc(Srcloc),
     IAsync(AsyncFunctions),
     IGenerator(GenCreationExecution),
-    IGenDelegation(GenDelegation),
     IIncludeEvalDefine(InstructIncludeEvalDefine),
 }

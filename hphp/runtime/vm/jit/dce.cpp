@@ -181,6 +181,9 @@ bool canDCE(IRInstruction* inst) {
   case LdSmashableFunc:
   case LdClsFromClsMeth:
   case LdFuncFromClsMeth:
+  case LdClsFromRClsMeth:
+  case LdFuncFromRClsMeth:
+  case LdGenericsFromRClsMeth:
   case LdFuncFromRFunc:
   case LdGenericsFromRFunc:
   case LdRecDesc:
@@ -211,6 +214,7 @@ bool canDCE(IRInstruction* inst) {
   case NewCol:
   case NewPair:
   case NewRFunc:
+  case NewRClsMeth:
   case DefCallFlags:
   case DefCallFunc:
   case DefCallNumArgs:
@@ -551,8 +555,6 @@ bool canDCE(IRInstruction* inst) {
   case VerifyRetRecDesc:
   case VerifyPropRecDesc:
   case RaiseClsMethPropConvertNotice:
-  case RaiseHackArrParamNotice:
-  case RaiseHackArrPropNotice:
   case RaiseUninitLoc:
   case RaiseUndefProp:
   case RaiseTooManyArg:
@@ -720,7 +722,7 @@ bool canDCE(IRInstruction* inst) {
   case EndInlining:
   case SyncReturnBC:
   case SetOpTV:
-  case SetOpTVVerify:
+  case OutlineSetOp:
   case ConjureUse:
   case LdClsMethodFCacheFunc:
   case LdClsMethodCacheFunc:

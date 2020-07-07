@@ -181,7 +181,7 @@ let rec class_ptype lump_pol_opt proto_renv tparams name =
     (* Purpose of the property takes precedence over any lump policy. *)
     let lump_pol_opt =
       Option.merge
-        (Option.map ~f:(fun pur -> Ppurpose pur) pp_purpose)
+        (Option.map ~f:Ifc_security_lattice.parse_policy pp_purpose)
         lump_pol_opt
         ~f:(fun a _ -> a)
     in
@@ -279,10 +279,6 @@ let add_params renv =
   in
   List.map_env ~f:add_param
 
-type lvalue =
-  | Local of A.local_id
-  | Property of ptype
-
 let binop renv env ty1 ty2 =
   match (ty1, ty2) with
   | (Tprim p1, Tprim p2) ->
@@ -309,7 +305,10 @@ let call renv env callable_name that_pty_opt args_pty ret_ty =
   in
   let env =
     match SMap.find_opt callable_name renv.re_proto.pre_decl.de_fun with
-    | Some { fd_kind = FDInferFlows } ->
+    (* TODO(T68007489): Temporarily infer everything for every function call.
+     * switch back to using InferFlows annotation when scaling is an issue.
+     *)
+    | Some _ ->
       let (env, pc_joined) =
         let join (env, pc) pc' = policy_join renv env ~prefix:"pcjoin" pc pc' in
         List.fold ~f:join ~init:(env, Pbot) renv.re_gpc
@@ -326,21 +325,79 @@ let call renv env callable_name that_pty_opt args_pty ret_ty =
       let env = Env.acc env (fun acc -> Chole fp :: acc) in
       let env = Env.add_dep env callable_name in
       env
-    | Some _ -> fail "TODO(T68007489): function calls"
     | None -> fail "unknown function '%s'" callable_name
   in
   (env, ret_pty)
 
-let rec lvalue renv env (((_epos, ety), e) : Tast.expr) =
-  match e with
-  | A.Lvar (_pos, lid) -> (env, Local lid)
+let vec_element_pty vec_pty =
+  let class_ =
+    match vec_pty with
+    | Tclass cls when String.equal cls.c_name "\\HH\\vec" -> cls
+    | _ -> fail "expected a vector"
+  in
+  match class_.c_tparams with
+  | [(element_pty, _)] -> element_pty
+  | _ -> fail "expected one type parameter from a vector object"
+
+(* Finds what we flow into in an assignment.
+ * The type LHS has in the input is the type after the assignment takes place. *)
+let rec flux_target renv env ((_, lhs_ty), lhs_exp) =
+  match lhs_exp with
+  | A.Lvar (_, lid) ->
+    let prefix = Local_id.to_string lid in
+    let local_pty = ptype None renv.re_proto lhs_ty ~prefix in
+    let env = Env.set_local_type env lid local_pty in
+    (env, local_pty, renv.re_lpc)
   | A.Obj_get (obj, (_, A.Id (_, property)), _) ->
-    let (env, obj_ptype) = expr renv env obj in
-    let obj_pol = (receiver_of_obj_get obj_ptype property).c_self in
-    let prop_ptype = property_ptype renv.re_proto obj_ptype property ety in
-    let env = Env.acc env (add_dependencies [obj_pol] prop_ptype) in
-    (env, Property prop_ptype)
-  | _ -> fail "unsupported lvalue"
+    let (env, obj_pty) = expr renv env obj in
+    let obj_pol = (receiver_of_obj_get obj_pty property).c_self in
+    let prop_pty = property_ptype renv.re_proto obj_pty property lhs_ty in
+    let env = Env.acc env (add_dependencies [obj_pol] prop_pty) in
+    (env, prop_pty, renv.re_gpc)
+  | A.Array_get (vec, ix_opt) ->
+    (* Copy-on-Write handling of Array_get LHS in an assignment. When there is
+     * an assignmnet lhs[ix] = rhs or lhs[] = rhs, we
+     * 1. evaluate ix in case it has side-effects
+     * 2. (a) retrieve the original flux type for the vector
+     *    (b) use flux_target recursively on the vector to generate a new flux
+     *        type and retrieve info. from the mutation root
+     *    (c) make the original flux type flow into the new one to achieve CoW
+     * 3. record the flow due to length increase when ix is not present. (not
+     *    implemented, TODO: T68269878)
+     * 4. access and return the element parameter of the vector
+     *)
+    let env =
+      match ix_opt with
+      | Some ix -> fst @@ expr renv env ix
+      | None -> env
+    in
+    let (env, old_vec_pty) = expr renv env vec in
+    let (env, vec_pty, pc) = flux_target renv env vec in
+    let env = Env.acc env (subtype old_vec_pty vec_pty) in
+    let element_pty = vec_element_pty vec_pty in
+    (* Even though the runtime updates the entire vector, we treat
+     * the mutation as if it were happening on a single element.
+     * That is sound because, after the mutation, changes can only
+     * be observed via the updated element.
+     *)
+    (env, element_pty, pc)
+  | _ -> fail "unhandled flux target (lvalue)"
+
+and assign renv env op lhs_exp rhs_exp =
+  (* Handle the incorporation of LHS in RHS if assignment uses and operation,
+   * e.g., $a += $b. *)
+  let (env, rhs_pty) =
+    if Option.is_none op then
+      expr renv env rhs_exp
+    else
+      let (env, lhs_pty) = expr renv env lhs_exp in
+      let (env, rhs_pty) = expr renv env rhs_exp in
+      binop renv env lhs_pty rhs_pty
+  in
+  let (env, lhs_pty, pc) = flux_target renv env lhs_exp in
+  let env = Env.acc env (subtype rhs_pty lhs_pty) in
+  let env = Env.acc env (add_dependencies pc lhs_pty) in
+  (env, lhs_pty)
 
 (* Generate flow constraints for an expression *)
 and expr renv env (((_epos, ety), e) : Tast.expr) =
@@ -353,34 +410,7 @@ and expr renv env (((_epos, ety), e) : Tast.expr) =
   | A.String _ ->
     (* literals are public *)
     (env, Tprim Pbot)
-  | A.Binop (Ast_defs.Eq op, e1, e2) ->
-    let (env, tyo) = lvalue renv env e1 in
-    let (env, ty) = expr env e2 in
-    let env =
-      match tyo with
-      | Local lid ->
-        let (env, ty) =
-          if Option.is_none op then
-            (env, ty)
-          else
-            let lty = Env.get_local_type env lid in
-            binop renv env lty ty
-        in
-        let prefix = Local_id.to_string lid in
-        let (env, ty) = weaken renv env ty ~prefix in
-        let env = Env.acc env (add_dependencies renv.re_lpc ty) in
-        Env.set_local_type env lid ty
-      | Property prop_ptype ->
-        let (env, ty) =
-          if Option.is_none op then
-            (env, ty)
-          else
-            binop renv env prop_ptype ty
-        in
-        let env = Env.acc env (subtype ty prop_ptype) in
-        Env.acc env (add_dependencies renv.re_gpc prop_ptype)
-    in
-    (env, ty)
+  | A.Binop (Ast_defs.Eq op, e1, e2) -> assign renv env op e1 e2
   | A.Binop (_, e1, e2) ->
     let (env, ty1) = expr env e1 in
     let (env, ty2) = expr env e2 in
@@ -414,6 +444,28 @@ and expr renv env (((_epos, ety), e) : Tast.expr) =
       in
       call renv env callable_name (Some obj_pty) args_pty ety
     | _ -> fail "unhandled method call on %a" Pp.ptype obj_pty)
+  | A.ValCollection (A.Vec, _, exprs) ->
+    (* We require each collection element to be a subtype of the vector
+     * element parameter. *)
+    let vec_pty = ptype ~prefix:"vec" None renv.re_proto ety in
+    let element_pty = vec_element_pty vec_pty in
+    let mk_element_subtype env exp =
+      let (env, pty) = expr env exp in
+      Env.acc env (subtype pty element_pty)
+    in
+    let env = List.fold ~f:mk_element_subtype ~init:env exprs in
+    (env, vec_pty)
+  | A.Array_get (exp, ix_opt) ->
+    (* Return the type parameter corresponding to the vector element type. *)
+    let env =
+      (* Evaluate the index in case it has side-effects. *)
+      match ix_opt with
+      | Some ix -> fst @@ expr env ix
+      | None -> fail "cannot have an empty index when reading"
+    in
+    let (env, vec_pty) = expr env exp in
+    let element_pty = vec_element_pty vec_pty in
+    (env, element_pty)
   (* --- expressions below are not yet supported *)
   | A.Array _
   | A.Darray (_, _)
@@ -427,7 +479,6 @@ and expr renv env (((_epos, ety), e) : Tast.expr) =
   | A.Dollardollar _
   | A.Clone _
   | A.Obj_get (_, _, _)
-  | A.Array_get (_, _)
   | A.Class_get (_, _)
   | A.Class_const (_, _)
   | A.Call (_, _, _, _, _)
@@ -436,7 +487,6 @@ and expr renv env (((_epos, ety), e) : Tast.expr) =
   | A.PrefixedString (_, _)
   | A.Yield _
   | A.Yield_break
-  | A.Yield_from _
   | A.Await _
   | A.Suspend _
   | A.List _
@@ -503,7 +553,7 @@ let rec stmt renv env ((_pos, s) : Tast.stmt) =
 and block renv env (blk : Tast.block) =
   List.fold_left ~f:(stmt renv) ~init:env blk
 
-let callable decl_env class_name_opt name saved_env params body lrty =
+let callable opts decl_env class_name_opt name saved_env params body lrty =
   try
     (* Setup the read-only environment *)
     let scope = Scope.alloc () in
@@ -527,11 +577,13 @@ let callable decl_env class_name_opt name saved_env params body lrty =
     let end_env = env in
 
     (* Display the analysis results *)
-    Format.printf "Analyzing %s:@." name;
-    Format.printf "%a@." Pp.renv renv;
-    Format.printf "* @[<hov2>Params:@ %a@]@." Pp.locals beg_env;
-    Format.printf "* Final environment:@,  %a@." Pp.env end_env;
-    Format.printf "@.";
+    if opts.verbosity >= 2 then begin
+      Format.printf "Analyzing %s:@." name;
+      Format.printf "%a@." Pp.renv renv;
+      Format.printf "* @[<hov2>Params:@ %a@]@." Pp.locals beg_env;
+      Format.printf "* Final environment:@,  %a@." Pp.env end_env;
+      Format.printf "@."
+    end;
 
     (* Return the results *)
     let res =
@@ -556,7 +608,7 @@ let callable decl_env class_name_opt name saved_env params body lrty =
     Format.printf "Analyzing %s:@.  Failure: %s@.@." name s;
     None
 
-let walk_tast decl_env =
+let walk_tast opts decl_env =
   let def = function
     | A.Fun
         {
@@ -569,7 +621,7 @@ let walk_tast decl_env =
         } ->
       Option.map
         ~f:(fun x -> [x])
-        (callable decl_env None name saved_env params body lrty)
+        (callable opts decl_env None name saved_env params body lrty)
     | A.Class { A.c_name = (_, class_name); c_methods = methods; _ } ->
       let handle_method
           {
@@ -580,14 +632,14 @@ let walk_tast decl_env =
             m_ret = (lrty, _);
             _;
           } =
-        callable decl_env (Some class_name) name saved_env params body lrty
+        callable opts decl_env (Some class_name) name saved_env params body lrty
       in
       Some (List.filter_map ~f:handle_method methods)
     | _ -> None
   in
   (fun tast -> List.concat (List.filter_map ~f:def tast))
 
-let do_ files_info opts ctx =
+let do_ opts files_info ctx =
   Relative_path.Map.iter files_info ~f:(fun path i ->
       (* skip decls and partial *)
       match i.FileInfo.file_mode with
@@ -597,13 +649,11 @@ let do_ files_info opts ctx =
           Tast_provider.compute_tast_unquarantined ~ctx ~entry
         in
         let decl_env = Decl.collect_sigs tast in
-        Format.printf "%a@." Pp.decl_env decl_env;
+        if opts.verbosity >= 3 then Format.printf "%a@." Pp.decl_env decl_env;
 
-        if String.equal opts "prtast" then
-          Format.printf "TAST: %a@." Tast.pp_program tast;
+        let results = walk_tast opts decl_env tast in
 
-        let results = walk_tast decl_env tast in
-        begin
+        let results =
           try Solver.global_exn ~subtype results with
           | Solver.Error Solver.RecursiveCycle ->
             fail "solver error: cyclic call graph"
@@ -615,7 +665,51 @@ let do_ files_info opts ctx =
               callee
               caller
               reason
-        end
+        in
+
+        let simplify result =
+          let pred = const true in
+          ( result,
+            Logic.simplify
+            @@ Logic.quantify ~pred ~quant:Qexists result.res_constraint )
+        in
+        let simplified_results = SMap.map simplify results in
+
+        let log_solver name (result, simplified) =
+          Format.printf "@[<v>";
+          Format.printf "Flow constraints for %s:@.  @[<v>" name;
+          Format.printf "@,@[<hov>Simplified:@ @[<hov>%a@]@]" Pp.prop simplified;
+          let raw = result.res_constraint in
+          Format.printf "@,@[<hov>Raw:@ @[<hov>%a@]@]" Pp.prop raw;
+          Format.printf "@]";
+          Format.printf "@]\n\n"
+        in
+        if opts.verbosity >= 1 then SMap.iter log_solver simplified_results;
+
+        let lattice =
+          try Ifc_security_lattice.mk_exn opts.security_lattice
+          with Ifc_security_lattice.Invalid_security_lattice ->
+            fail
+              "lattice parsing error: lattice specification should be `;` basic flux constraints, e.g., `A < B`"
+        in
+        let log_checking name (_, simple) =
+          let violations =
+            try Ifc_security_lattice.check_exn lattice simple
+            with Ifc_security_lattice.Checking_error ->
+              fail
+                "lattice checking error: something went wrong while checking %a against %s"
+                Pp.prop
+                simple
+                opts.security_lattice
+          in
+
+          if not @@ List.is_empty violations then begin
+            Format.printf "There are privacy policy errors in %s:@.  @[<v>" name;
+            List.iter ~f:(Format.printf "%a@," Pp.violation) violations;
+            Format.printf "@]\n"
+          end
+        in
+        SMap.iter log_checking simplified_results
       | _ -> ());
   ()
 

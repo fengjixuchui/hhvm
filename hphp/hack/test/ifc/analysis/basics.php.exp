@@ -1,0 +1,74 @@
+Decls:
+  class \HH\vec: { policied_props = [] }
+  function \assign0: { kind = public }
+  function \assign1: { kind = public }
+  function \binop: { kind = public }
+  function \condition: { kind = public }
+  
+Analyzing \binop:
+* pc: pc
+* This: None
+* Return: <ret>
+* Params: { $x -> <$x>; $y -> <$y> }
+* Final environment:
+  Deps: {}
+  Locals: { $x -> <$x>; $y -> <$y> }
+  Constraints:
+    $x < ret
+
+Analyzing \assign0:
+* pc: pc
+* This: None
+* Return: <ret>
+* Params: { $arg -> <$arg> }
+* Final environment:
+  Deps: {}
+  Locals: { $arg -> <$arg>; $x -> <$x'1> }
+  Constraints:
+    [$arg < $x, PUBLIC < $x'1, $x'1 < ret]
+
+Analyzing \assign1:
+* pc: pc
+* This: None
+* Return: <ret>
+* Params: { $arg -> <$arg> }
+* Final environment:
+  Deps: {}
+  Locals: { $arg -> <$arg>; $x -> <$x'1> }
+  Constraints:
+    [$arg < $x, $x < $x'1, $x'1 < ret]
+
+Analyzing \condition:
+* pc: pc
+* This: None
+* Return: <ret>
+* Params: { $a0 -> <$a0>; $a1 -> <$a1>; $a2 -> <$a2> }
+* Final environment:
+  Deps: {}
+  Locals: { $a0 -> <$a0>; $a1 -> <$a1>; $a2 -> <$a2>; $x -> <$x'2> }
+  Constraints:
+    [$a0 < $x, $a2 < $x, $a1 < $x'1, $a2 < $x'1, $x < $x'2, $x'1 < $x'2,
+     $x'2 < ret]
+
+Flow constraints for \assign0:
+  
+  Simplified: True
+  Raw: [$arg < $x, PUBLIC < $x'1, $x'1 < ret]
+
+Flow constraints for \assign1:
+  
+  Simplified: True
+  Raw: [$arg < $x, $x < $x'1, $x'1 < ret]
+
+Flow constraints for \binop:
+  
+  Simplified: True
+  Raw: $x < ret
+
+Flow constraints for \condition:
+  
+  Simplified: True
+  Raw:
+  [$a0 < $x, $a2 < $x, $a1 < $x'1, $a2 < $x'1, $x < $x'2, $x'1 < $x'2,
+   $x'2 < ret]
+

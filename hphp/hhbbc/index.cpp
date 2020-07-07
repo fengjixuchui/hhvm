@@ -2184,9 +2184,11 @@ std::unique_ptr<php::Func> clone_meth_helper(
     return true;
   };
 
+  auto mf = php::MutFunc(cloneMeth.get());
   hphp_fast_map<size_t, hphp_fast_map<size_t, uint32_t>> updates;
-  for (size_t bid = 0; bid < cloneMeth->blocks.size(); bid++) {
-    auto const b = cloneMeth->blocks[bid].get();
+
+  for (size_t bid = 0; bid < mf.blocks().size(); bid++) {
+    auto const b = mf.blocks()[bid].get();
     for (size_t ix = 0; ix < b->hhbcs.size(); ix++) {
       auto const& bc = b->hhbcs[ix];
       switch (bc.op) {
@@ -2206,8 +2208,7 @@ std::unique_ptr<php::Func> clone_meth_helper(
   }
 
   for (auto elm : updates) {
-    auto& cblk = cloneMeth->blocks[elm.first];
-    auto const blk = cblk.mutate();
+    auto const blk = mf.blocks_mut()[elm.first].mutate();
     for (auto const& ix : elm.second) {
       blk->hhbcs[ix.first].CreateCl.arg2 = ix.second;
     }
@@ -4800,6 +4801,7 @@ Index::ConstraintResolution Index::get_type_for_annotated_type(
       case KindOfUninit:
       case KindOfRFunc:
       case KindOfFunc:
+      case KindOfRClsMeth:
       case KindOfClass:
         always_assert_flog(false, "Unexpected DataType");
         break;
@@ -4837,15 +4839,11 @@ Index::ConstraintResolution Index::get_type_for_annotated_type(
       if (candidate.subtypeOf(BInt)) return TInt;
       if (candidate.subtypeOf(BStr)) return TStr;
       return TArrKey;
-    case AnnotMetaType::VArray:
-      assertx(!RuntimeOption::EvalHackArrDVArrs);
-      return TVArr;
-    case AnnotMetaType::DArray:
-      assertx(!RuntimeOption::EvalHackArrDVArrs);
-      return TDArr;
     case AnnotMetaType::VArrOrDArr:
       assertx(!RuntimeOption::EvalHackArrDVArrs);
-      return TArr;
+      if (candidate.subtypeOf(BVArr)) return TVArr;
+      if (candidate.subtypeOf(BDArr)) return TDArr;
+      break;
     case AnnotMetaType::VecOrDict:
       if (candidate.subtypeOf(BVec)) return TVec;
       if (candidate.subtypeOf(BDict)) return TDict;
@@ -6170,7 +6168,7 @@ Index::could_be_related(const php::Class* cls,
   if (clsClass_it == end(m_data->classInfo) || parentClass_it == end(m_data->classInfo)) {
     return false;
   }
-  
+
   auto const rCls = res::Class { clsClass_it->second };
   auto const rPar = res::Class { parentClass_it->second };
   return rCls.couldBe(rPar);

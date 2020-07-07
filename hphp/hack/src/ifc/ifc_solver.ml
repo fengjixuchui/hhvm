@@ -45,7 +45,6 @@ let global_exn ~subtype callable_results =
     SMap.iter (fun name _ -> dfs SSet.empty name) results_map;
     List.rev !schedule
   in
-  Format.printf "Global solving:@.  @[<v>";
   let close_one closed_results_map res_name =
     let result = SMap.find res_name results_map in
     let rec subst depth = function
@@ -80,22 +79,7 @@ let global_exn ~subtype callable_results =
       | c -> Mapper.prop Utils.identity subst depth c
     in
     let closed_constr = subst 0 result.res_constraint in
-    begin
-      (* simplify the resulting closed constraint and print it *)
-      Format.printf "Flows for %s:@,  @[<v>" res_name;
-      Format.printf "@[<hov>%a@]@," Pp.prop closed_constr;
-      let simpl_constr =
-        let pred _ = true in
-        Logic.simplify (Logic.quantify ~pred ~quant:Qexists closed_constr)
-      in
-      Format.printf "simplified: @[<hov>%a@]" Pp.prop simpl_constr;
-      Format.printf "@]@,"
-    end;
     let closed_result = { result with res_constraint = closed_constr } in
     SMap.add res_name closed_result closed_results_map
   in
-  let _closed_results_map =
-    List.fold_left ~init:SMap.empty ~f:close_one topsort_schedule
-  in
-  Format.printf "@]@.";
-  ()
+  List.fold_left ~init:SMap.empty ~f:close_one topsort_schedule

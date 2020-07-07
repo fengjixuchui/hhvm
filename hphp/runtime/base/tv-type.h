@@ -55,9 +55,17 @@ CASE(Func)
 CASE(RFunc)
 CASE(Class)
 CASE(ClsMeth)
+CASE(RClsMeth)
 CASE(Record)
 
 #undef CASE
+
+// We don't expose isVArrayType or isDArrayType. They shouldn't be used.
+ALWAYS_INLINE bool isHAMSafeDVArrayType(DataType dt) {
+  if (RO::EvalHackArrDVArrs) return isVecType(dt) || isDictType(dt);
+  auto const dtrc = dt_with_rc(dt);
+  return dtrc == KindOfVArray || dtrc == KindOfDArray;
+}
 
 template<typename T>
 ALWAYS_INLINE bool tvIsHAMSafeVArray(const T& tv) {
@@ -69,6 +77,11 @@ template<typename T>
 ALWAYS_INLINE bool tvIsHAMSafeDArray(const T& tv) {
   if (RO::EvalHackArrDVArrs) return tvIsDict(tv);
   return tvIsArrayLike(tv) && val(tv).parr->isDArray();
+}
+
+template<typename T>
+ALWAYS_INLINE bool tvIsHAMSafeDVArray(const T& tv) {
+  return isHAMSafeDVArrayType(type(tv));
 }
 
 template<typename T>

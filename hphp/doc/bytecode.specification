@@ -853,13 +853,6 @@ NewDictArray <capacity hint>    []  ->  [C:Dict]
   it onto the stack. The implementation may make use of the hint in %1 to
   pre-size the array. The hint %1 must be greater than or equal to 0.
 
-NewLikeArrayL <local variable id> <capacity hint>   []  ->  [C:Arr]
-
-  New array with the same kind as the array stored in the local variable %1.
-  If %1 is not an array, returns an array in mixed mode.  The implementation
-  may make use of the hint in %2 to pre-size the array.  If %2 == 0, the
-  implementation may instead use the size of %1 as the hint.
-
 NewPackedArray <num elems>    [C..C]  ->  [C]
 
   New array. Creates a new array from the top %1 cells on the stack, pops those
@@ -3347,6 +3340,20 @@ ResolveClsMethodS <mode>      <litstr id>   []        -> [C]
   used to call that method and pushes the resulting class method pointer onto
   the stack.
 
+ResolveRClsMethod  <litstr id>               [C:VArr C:Class] -> [C]
+ResolveRClsMethodD <litstr id> <litstr id>   [C:VArr]         -> [C]
+ResolveRClsMethodS <mode>      <litstr id>   [C:VArr]         -> [C]
+
+  Similar to their non-reified counterparts (ResolveClsMethod*), these
+  instructions load values into x and y based on the same table and performing
+  the same work and the same checks to resolve the class method pointer.
+
+  $1 contains a list of reified generics. If the class x has accessible
+  static method y and takes the given reified generics, pushes a value
+  capturing the class method pointer and the reified generics. If the
+  class method does not accept the reified generics, pushes the class
+  method pointer onto the stack.
+
 ThrowNonExhaustiveSwitch [] -> []
 
   Throws an exception indicating that the switch statement is non exhaustive.
@@ -3433,81 +3440,6 @@ ContGetReturn    [] -> [C]
 
   Get generator's return value. $this must be a Generator object. Pushes the
   return value of the generator onto the stack.
-
-14.1 Generator Delegation
--------------------------
-
-The following bytecodes are used to implement the Generator Delegation feature
-of PHP7. Generator Delegation (which is exposed to programmers as `yield from`)
-allows generators to yield results from other generators (referred to as their
-"delegates") as if they were the ones yielding the value. For a full
-explanation of the feature, see https://wiki.php.net/rfc/generator-delegation.
-
-The important part of this feature is how it interacts with different inputs.
-The `yield from` pseudo-expression takes two different types of inputs, and
-interacts with them very differently. The first is other generators. When
-When the delegate is a generator we resume execution of the subgenerator and
-return to the caller of the delegating generator (the one containing
-`yield from`) when we encounter a yield. All of the features of generators
-(`send`, `throw`, etc) are piped through to the delegate, and the result of the
-`yield from` expression is the return value of the subgenerator.
-
-The second valid type of input to `yield from` is an object conforming to the
-Traversable interface. When the delegate of a generator is a Traversable the
-`send()` method does nothing more than continue execution of the delegating
-generator. The `throw()` method will throw from the context of the delegating
-generator, and the result of the `yield from` expression will always be NULL.
-At a high level, you can think of `yield from <traversable>` as being
-equivalent to `foreach(<traversable> as $val) { yield $val; }`.
-
-While the bytecodes implementing Generator Delegation have their own API and
-well defined contracts, they generally expect to be used in the following
-pattern:
-
-```
-ContAssignDelegate <expr>
-ContEnterDelegate
-YieldFromDelegate
-ContUnsetDelegate
-```
-
-ContAssignDelegate [C] -> []
-
-  This instruction may only appear in bodies of non-async generators. Stores $1
-  in the generator as it's delegate, for use later by the ContEnterDelegate
-  and YieldFromDelegate bytecodes. Throws an exception if $1 is not either a
-  Traversable or another Generator.
-
-ContEnterDelegate [C] -> []
-
-  This instruction may only appear in bodies of non-async generators, and the
-  delegate property of the current generator must be non-null. If the delegate
-  is a Generator, control flow is transfered to the saved resume offset of the
-  delegate. $1 describes the value given to either ContEnter or ContRaise when
-  execution of the current generator was resumed, and said value is then passed
-  to the delegate generator for use there.
-
-YieldFromDelegate [] -> [C]
-
-  This instruction may only appear in bodies of non-async generators, and the
-  delegate property of the current generator must be non-null. If the delegate
-  is a Traversable the current key/value pair is stored in the generator as
-  the result of the current iteration and the iterator is advanced. When the
-  delegate is a Generator, the ContCurrent and ContKey opcodes handle
-  returning the result from the deepest active generator. When iteration has
-  finished, this opcode continues executing the next instruction, otherwise it
-  sets the resume offset to the offset specified by its immediate and returns
-  control to the caller.
-
-ContUnsetDelegate <free iterator> [] -> []
-
-  This instruction may only appear in bodies of non-async generators. Removes
-  the currently assigned delegate of the generator. If <free iterator> is
-  "FreeIter", and the delegate is not another generator, then this opcode is
-  responsible for freeing the internal iterator used by this group of opcodes.
-  If "IgnoreIter" then it is expected that the iterator is freed elsewhere.
-  When the delegate is another generator then it assumes that the iterator was
-  never initialized in the first place.
 
 15. Async functions
 -------------------

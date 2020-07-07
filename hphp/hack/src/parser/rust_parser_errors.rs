@@ -3234,7 +3234,7 @@ where
                     self.await_as_an_expression_errors(node)
                 }
             }
-            YieldFromExpression(_) | YieldExpression(_) => {
+            YieldExpression(_) => {
                 if self.is_in_unyieldable_magic_method() {
                     self.errors.push(Self::make_error_from_node(
                         node,
@@ -3270,7 +3270,7 @@ where
                 // qualified names, static, self and parent as valid qualifiers
                 // We do not allow string literals in hack
                 match (&qualifier.syntax , Self::token_kind(qualifier)) {
-                | (LiteralExpression (_), _) => (false, false, !(self.env.is_typechecker())),
+                | (LiteralExpression (_), _) => (false, false, false),
                 | (QualifiedName (_), _) => (false, false, true),
                 | (_, Some (TokenKind::Name))
                 | (_, Some (TokenKind::XHPClassName))
@@ -3287,16 +3287,16 @@ where
                 | (SimpleTypeSpecifier (_), _)
                 | (GenericTypeSpecifier (_), _) =>
                   (true, false, true),
-                | _ => (true, false, !self.env.is_typechecker()),
+                | _ => (true, false, false),
             };
-                if !is_valid {
+                if !is_valid && self.env.is_typechecker() {
                     self.errors.push(Self::make_error_from_node(
                         node,
                         errors::invalid_scope_resolution_qualifier,
                     ))
                 }
                 let is_name_class = self.text(name).eq_ignore_ascii_case("class");
-                if is_dynamic_name && is_name_class {
+                if (is_dynamic_name || !is_valid) && is_name_class {
                     self.errors.push(Self::make_error_from_node(
                         node,
                         errors::coloncolonclass_on_dynamic,
@@ -4961,7 +4961,6 @@ where
             | CollectionLiteralExpression(_)
             | GenericTypeSpecifier(_)
             | YieldExpression(_)
-            | YieldFromExpression(_)
             | CastExpression(_)
             | BinaryExpression(_)
             | ConditionalExpression(_)
@@ -5337,7 +5336,6 @@ where
             | KeysetIntrinsicExpression(_)
             | VarrayIntrinsicExpression(_)
             | DarrayIntrinsicExpression(_)
-            | YieldFromExpression(_)
             | YieldExpression(_)
             | ScopeResolutionExpression(_)
             | PrefixUnaryExpression(_)

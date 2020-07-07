@@ -310,6 +310,7 @@ void callFunc(const Func* const func,
     }
 
     case KindOfRFunc:
+    case KindOfRClsMeth:
     case KindOfUninit:
       break;
   }
@@ -349,12 +350,9 @@ void coerceFCallArgsImpl(int32_t numArgs, int32_t numNonDefault,
 
     auto const raise_type_error = [&]{
       auto const expected_type = [&]{
-        if (tc.isArray()) {
-          if (tc.isVArray()) return "varray";
-          if (tc.isDArray()) return "darray";
-          if (tc.isVArrayOrDArray()) return "varray_or_darray";
-          return "array";
-        }
+        if (tc.isVArray()) return "varray";
+        if (tc.isDArray()) return "darray";
+        if (tc.isVArrayOrDArray()) return "varray_or_darray";
         return getDataTypeString(*targetType).data();
       }();
       auto const msg = param_type_error_message(
@@ -365,23 +363,15 @@ void coerceFCallArgsImpl(int32_t numArgs, int32_t numNonDefault,
       SystemLib::throwRuntimeExceptionObject(msg);
     };
 
-    // Checks if we need to raise an error due to a dvarray typehint mismatch.
+    // Check the varray_or_darray and vec_or_dict union types.
     // Precondition: the DataType of the TypedValue is correct.
+    //
+    // TODO(arnabde,kshaunak): Also support vec_or_dict here.
     auto const check_dvarray = [&]{
       assertx(IMPLIES(targetType, equivDataTypes(type(tv), *targetType)));
-      if (!tvIsArray(tv) || !tc.isArray()) {
-        if (tc.isVArrayOrDArray()) raise_type_error();
-        return;
+      if (tc.isVArrayOrDArray() && !tvIsHAMSafeDVArray(tv)) {
+        raise_type_error();
       }
-
-      auto const ad = val(tv).parr;
-      auto const error = [&] {
-        if (tc.isVArray()) return !ad->isVArray();
-        if (tc.isDArray()) return !ad->isDArray();
-        if (tc.isVArrayOrDArray()) return !ad->isDVArray();
-        return ad->isDVArray();
-      }();
-      if (error) raise_type_error();
     };
 
     // Check if we have the right type, or if its a Variant.
@@ -611,6 +601,7 @@ static folly::Optional<TypedValue> builtinInValue(
   case KindOfFunc:
   case KindOfClass:
   case KindOfClsMeth:
+  case KindOfRClsMeth:
   case KindOfRecord:  return make_tv<KindOfNull>();
   }
 
@@ -662,6 +653,7 @@ static bool tcCheckNative(const TypeConstraint& tc, const NativeSig::Type ty) {
     case KindOfFunc:         return ty == T::Func;
     case KindOfClass:        return ty == T::Class;
     case KindOfClsMeth:      return ty == T::ClsMeth;
+    case KindOfRClsMeth:     return false; // TODO(T67037453)
     case KindOfRecord:       return false; // TODO (T41031632)
   }
   not_reached();
@@ -699,6 +691,7 @@ static bool tcCheckNativeIO(
       case KindOfFunc:         return ty == T::FuncIO;
       case KindOfClass:        return ty == T::ClassIO;
       case KindOfClsMeth:      return ty == T::ClsMethIO;
+      case KindOfRClsMeth:     return false; // TODO (T67037453)
       case KindOfRecord:       return false; // TODO (T41031632)
     }
     not_reached();

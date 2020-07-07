@@ -225,7 +225,6 @@ type instruct_lit_const =
   | NewMixedArray of int (* capacity hint *)
   | NewDictArray of int (* capacity hint *)
   | NewDArray of int (* capacity hint *)
-  | NewLikeArrayL of local_id * int (* capacity hint *)
   | NewPackedArray of int
   | NewStructArray of string list
   | NewStructDArray of string list
@@ -307,6 +306,9 @@ type instruct_operator =
   | ResolveClsMethod of method_id
   | ResolveClsMethodD of class_id * method_id
   | ResolveClsMethodS of SpecialClsRef.t * method_id
+  | ResolveRClsMethod of method_id
+  | ResolveRClsMethodD of class_id * method_id
+  | ResolveRClsMethodS of SpecialClsRef.t * method_id
 
 type switchkind =
   | Bounded
@@ -543,12 +545,6 @@ type gen_creation_execution =
   | ContGetReturn
   | ContCurrent
 
-type gen_delegation =
-  | ContAssignDelegate of Iterator.t
-  | ContEnterDelegate
-  | YieldFromDelegate of Iterator.t * Label.t
-  | ContUnsetDelegate of free_iterator * Iterator.t
-
 type async_functions =
   | WHResult
   | Await
@@ -586,5 +582,4 @@ type instruct =
   | ISrcLoc of srcloc
   | IAsync of async_functions
   | IGenerator of gen_creation_execution
-  | IGenDelegation of gen_delegation
   | IIncludeEvalDefine of instruct_include_eval_define

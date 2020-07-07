@@ -286,10 +286,6 @@ pub mod instr {
         instr(Instruct::ILitConst(InstructLitConst::ClsCns(const_id)))
     }
 
-    pub fn newlikearrayl(local: local::Type, size: isize) -> InstrSeq {
-        lit_const(InstructLitConst::NewLikeArrayL(local, size))
-    }
-
     pub fn eq() -> InstrSeq {
         instr(Instruct::IOp(InstructOperator::Eq))
     }
@@ -1006,6 +1002,24 @@ pub mod instr {
         )))
     }
 
+    pub fn resolverclsmethod(method_id: MethodId) -> InstrSeq {
+        instr(Instruct::IOp(InstructOperator::ResolveRClsMethod(
+            method_id,
+        )))
+    }
+
+    pub fn resolverclsmethodd(class_id: ClassId, method_id: MethodId) -> InstrSeq {
+        instr(Instruct::IOp(InstructOperator::ResolveRClsMethodD(
+            class_id, method_id,
+        )))
+    }
+
+    pub fn resolverclsmethods(scref: SpecialClsRef, method_id: MethodId) -> InstrSeq {
+        instr(Instruct::IOp(InstructOperator::ResolveRClsMethodS(
+            scref, method_id,
+        )))
+    }
+
     pub fn resolve_meth_caller(fun_id: FunctionId) -> InstrSeq {
         instr(Instruct::IOp(InstructOperator::ResolveMethCaller(fun_id)))
     }
@@ -1160,36 +1174,6 @@ pub mod instr {
         instr(Instruct::IMisc(InstructMisc::Silence(
             local,
             OpSilence::End,
-        )))
-    }
-
-    pub fn cont_assign_delegate(iter: IterId) -> InstrSeq {
-        instr(Instruct::IGenDelegation(GenDelegation::ContAssignDelegate(
-            iter,
-        )))
-    }
-
-    pub fn cont_enter_delegate() -> InstrSeq {
-        instr(Instruct::IGenDelegation(GenDelegation::ContEnterDelegate))
-    }
-
-    pub fn yield_from_delegate(iter: IterId, l: Label) -> InstrSeq {
-        instr(Instruct::IGenDelegation(GenDelegation::YieldFromDelegate(
-            iter, l,
-        )))
-    }
-
-    pub fn cont_unset_delegate_free(iter: IterId) -> InstrSeq {
-        instr(Instruct::IGenDelegation(GenDelegation::ContUnsetDelegate(
-            FreeIterator::FreeIter,
-            iter,
-        )))
-    }
-
-    pub fn cont_unset_delegate_ignore(iter: IterId) -> InstrSeq {
-        instr(Instruct::IGenDelegation(GenDelegation::ContUnsetDelegate(
-            FreeIterator::IgnoreIter,
-            iter,
         )))
     }
 

@@ -1667,15 +1667,12 @@ void dce(Env& env, const bc::ClsCns& op) { no_dce(env, op); }
 void dce(Env& env, const bc::ClsCnsD& op) { no_dce(env, op); }
 void dce(Env& env, const bc::ClassGetTS& op) { no_dce(env, op); }
 void dce(Env& env, const bc::CnsE& op) { no_dce(env, op); }
-void dce(Env& env, const bc::ContAssignDelegate& op) { no_dce(env, op); }
 void dce(Env& env, const bc::ContCheck& op) { no_dce(env, op); }
 void dce(Env& env, const bc::ContCurrent& op) { no_dce(env, op); }
 void dce(Env& env, const bc::ContEnter& op) { no_dce(env, op); }
-void dce(Env& env, const bc::ContEnterDelegate& op) { no_dce(env, op); }
 void dce(Env& env, const bc::ContGetReturn& op) { no_dce(env, op); }
 void dce(Env& env, const bc::ContKey& op) { no_dce(env, op); }
 void dce(Env& env, const bc::ContRaise& op) { no_dce(env, op); }
-void dce(Env& env, const bc::ContUnsetDelegate& op) { no_dce(env, op); }
 void dce(Env& env, const bc::ContValid& op) { no_dce(env, op); }
 void dce(Env& env, const bc::CreateCl& op) { no_dce(env, op); }
 void dce(Env& env, const bc::CreateCont& op) { no_dce(env, op); }
@@ -1732,7 +1729,6 @@ void dce(Env& env, const bc::MemoSetEager& op) {
 }
 void dce(Env& env, const bc::Method& op) { no_dce(env, op); }
 void dce(Env& env, const bc::NativeImpl& op) { no_dce(env, op); }
-void dce(Env& env, const bc::NewLikeArrayL& op) { no_dce(env, op); }
 void dce(Env& env, const bc::NewObj& op) { no_dce(env, op); }
 void dce(Env& env, const bc::NewObjR& op) { no_dce(env, op); }
 void dce(Env& env, const bc::NewObjD& op) { no_dce(env, op); }
@@ -1750,6 +1746,9 @@ void dce(Env& env, const bc::ReqOnce& op) { no_dce(env, op); }
 void dce(Env& env, const bc::ResolveClsMethod& op) { no_dce(env, op); }
 void dce(Env& env, const bc::ResolveClsMethodD& op) { no_dce(env, op); }
 void dce(Env& env, const bc::ResolveClsMethodS& op) { no_dce(env, op); }
+void dce(Env& env, const bc::ResolveRClsMethod& op) { no_dce(env, op); }
+void dce(Env& env, const bc::ResolveRClsMethodD& op) { no_dce(env, op); }
+void dce(Env& env, const bc::ResolveRClsMethodS& op) { no_dce(env, op); }
 void dce(Env& env, const bc::ResolveFunc& op) { no_dce(env, op); }
 void dce(Env& env, const bc::ResolveMethCaller& op) { no_dce(env, op); }
 void dce(Env& env, const bc::ResolveRFunc& op) { no_dce(env, op); }
@@ -1781,7 +1780,6 @@ void dce(Env& env, const bc::VerifyRetTypeC& op) { no_dce(env, op); }
 void dce(Env& env, const bc::VerifyRetTypeTS& op) { no_dce(env, op); }
 void dce(Env& env, const bc::WHResult& op) { no_dce(env, op); }
 void dce(Env& env, const bc::Yield& op) { no_dce(env, op); }
-void dce(Env& env, const bc::YieldFromDelegate& op) { no_dce(env, op); }
 void dce(Env& env, const bc::YieldK& op) { no_dce(env, op); }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -2092,7 +2090,7 @@ dce_visit(const Index& index,
   // if they are not live there.
   dceState.mayNeedUnsetting = dceState.liveLocals;
 
-  auto const blk = fa.ctx.func->blocks[bid].get();
+  auto const blk = fa.ctx.func.blocks()[bid].get();
   auto const dceStkSz = [&] {
     switch (blk->hhbcs.back().op) {
       case Op::MemoGet:
@@ -2338,7 +2336,7 @@ void adjust_ndiscard(Bytecode& bc, int64_t adj) {
 /*
  * Do the actual updates to the bytecodes.
  */
-void dce_perform(php::Func& func, const DceActionMap& actionMap) {
+void dce_perform(php::MutFunc func, const DceActionMap& actionMap) {
 
   using It = BytecodeVec::iterator;
   auto setloc = [] (int32_t srcLoc, It start, int n) {
@@ -2350,8 +2348,8 @@ void dce_perform(php::Func& func, const DceActionMap& actionMap) {
   for (auto const& elm : actionMap) {
     auto const& id = elm.first;
     auto const& dceAction = elm.second;
-    auto const b = func.blocks[id.blk].mutate();
-    FTRACE(1, "{} {}\n", show(elm), show(func, b->hhbcs[id.idx]));
+    auto const b = func.blocks_mut()[id.blk].mutate();
+    FTRACE(1, "{} {}\n", show(elm), show(*func, b->hhbcs[id.idx]));
     switch (dceAction.action) {
       case DceAction::PopInputs:
         // we want to replace the bytecode with pops of its inputs
@@ -2583,7 +2581,7 @@ void apply_remapping(const FuncAnalysis& ainfo,
   for (auto const bid : ainfo.rpoBlocks) {
     FTRACE(2, "Remapping block #{}\n", bid);
 
-    auto const blk = ainfo.ctx.func->blocks[bid].mutate();
+    auto const blk = ainfo.ctx.func.blocks_mut()[bid].mutate();
     for (uint32_t idx = blk->hhbcs.size(); idx-- > 0;) {
       auto& o = blk->hhbcs[idx];
 
@@ -2810,7 +2808,7 @@ void local_dce(const Index& index,
   auto const ret = optimize_dce(index, ainfo, collect, bid, stateIn,
                                 DceOutState{DceOutState::Local{}});
 
-  dce_perform(*ainfo.ctx.func, ret.actionMap);
+  dce_perform(ainfo.ctx.func, ret.actionMap);
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -2841,7 +2839,7 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
   /*
    * States for each block, indexed by block id.
    */
-  std::vector<DceOutState> blockStates(ai.ctx.func->blocks.size());
+  std::vector<DceOutState> blockStates(ai.ctx.func.blocks().size());
 
   /*
    * If EnableArgsInBacktraces is true, then argument locals (and the reified
@@ -2879,8 +2877,8 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
   );
   for (auto const bid : ai.rpoBlocks) incompleteQ.push(rpoId(bid));
 
-  auto const nonThrowPreds   = computeNonThrowPreds(*ai.ctx.func, ai.rpoBlocks);
-  auto const throwPreds      = computeThrowPreds(*ai.ctx.func, ai.rpoBlocks);
+  auto const nonThrowPreds = computeNonThrowPreds(ai.ctx.func, ai.rpoBlocks);
+  auto const throwPreds    = computeThrowPreds(ai.ctx.func, ai.rpoBlocks);
 
   /*
    * Suppose a stack slot isn't used, but it was pushed on two separate
@@ -3028,7 +3026,7 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
   paramSet.set();
   paramSet >>= kMaxTrackedLocals -
                (ai.ctx.func->params.size() + (uint32_t)ai.ctx.func->isReified);
-  boost::dynamic_bitset<> entrypoint(ai.ctx.func->blocks.size());
+  boost::dynamic_bitset<> entrypoint(ai.ctx.func.blocks().size());
   entrypoint[ai.ctx.func->mainEntry] = true;
   for (auto const blkId: ai.ctx.func->dvEntries) {
     if (blkId != NoBlockId) {
@@ -3040,9 +3038,9 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
    * The set of locals that may need to be unset by a succesor block.
    */
   std::vector<std::bitset<kMaxTrackedLocals>>
-    locMayNeedUnsetting(ai.ctx.func->blocks.size());
+    locMayNeedUnsetting(ai.ctx.func.blocks().size());
   std::vector<std::bitset<kMaxTrackedLocals>>
-    locMayNeedUnsettingExn(ai.ctx.func->blocks.size());
+    locMayNeedUnsettingExn(ai.ctx.func.blocks().size());
 
   /*
    * Iterate on live out states until we reach a fixed point.
@@ -3146,7 +3144,7 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
       FTRACE(2, "  -> {}\n", pid);
       auto& pbs = blockStates[pid];
       auto const oldPredLocLive = pbs.locLive;
-      auto const pred = ai.ctx.func->blocks[pid].get();
+      auto const pred = ai.ctx.func.blocks()[pid].get();
       if (auto const ita = killIterOutputs(pred, bid)) {
         auto const key = ita->hasKey();
         FTRACE(3, "    Killing iterator output locals: {}\n",
@@ -3250,7 +3248,7 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
     combineActions(actionMap, std::move(ret.actionMap));
   }
 
-  dce_perform(*ai.ctx.func, actionMap);
+  dce_perform(ai.ctx.func, actionMap);
 
   remove_unused_local_names(ai, usedLocalNames);
   remap_locals(ai, std::move(localRemappingIndex));

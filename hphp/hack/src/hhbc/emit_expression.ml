@@ -1688,7 +1688,6 @@ and emit_expr (env : Emit_env.t) (expr : Tast.expr) =
   | A.Await e -> emit_await env pos e
   | A.Yield e -> emit_yield env pos e
   | A.Yield_break -> failwith "yield break should be in statement position"
-  | A.Yield_from _ -> failwith "complex yield_from expression"
   | A.Lfun _ ->
     failwith
       "expected Lfun to be converted to Efun during closure conversion emit_expr"
@@ -3882,13 +3881,6 @@ and emit_special_function
     Some
       (gather
          [instr_cgetl (Local.Named (Local_id.get_name param)); instr_whresult])
-  | ("__hhvm_internal_newlikearrayl", [(_, A.Lvar (_, param)); (_, A.Int n)])
-    when Emit_env.is_systemlib () ->
-    Some
-      (instr
-         (ILitConst
-            (NewLikeArrayL
-               (Local.Named (Local_id.get_name param), int_of_string n))))
   | _ ->
     begin
       match (args, istype_op lower_fq_name, is_isexp_op lower_fq_name) with
@@ -3948,7 +3940,7 @@ and emit_class_meth env cls meth =
     in
     match cls with
     | ((pos, _), A.Class_const (cid, (_, id))) when SU.is_class id ->
-      emit_class_meth_native env pos cid method_id
+      emit_class_meth_native env pos cid method_id [ (* targs*) ]
     | (_, A.Id (_, s)) when String.equal s SN.PseudoConsts.g__CLASS__ ->
       instr_resolveclsmethods SpecialClsRef.Self method_id
     | (_, A.String class_name) ->
@@ -3969,7 +3961,7 @@ and emit_class_meth env cls meth =
                NewVArray 2 ));
       ]
 
-and emit_class_meth_native env pos cid method_id =
+and emit_class_meth_native env pos cid method_id targs =
   let cexpr =
     class_id_to_class_expr ~resolve_self:true (Emit_env.get_scope env) cid
   in
@@ -3979,14 +3971,33 @@ and emit_class_meth_native env pos cid method_id =
       Option.value ~default:cexpr (get_reified_var_cexpr env pos name)
     | _ -> cexpr
   in
+  let has_generics = has_non_tparam_generics_targs env targs in
+  let emit_generics () = emit_reified_targs env pos (List.map ~f:snd targs) in
   match cexpr with
-  | Class_id (_, cname) ->
+  | Class_id (_, cname) when not has_generics ->
     instr_resolveclsmethodd (Hhbc_id.Class.from_ast_name cname) method_id
-  | Class_special clsref -> instr_resolveclsmethods clsref method_id
+  | Class_id (_, cname) ->
+    gather
+      [
+        emit_generics ();
+        instr_resolverclsmethodd (Hhbc_id.Class.from_ast_name cname) method_id;
+      ]
+  | Class_special clsref when not has_generics ->
+    instr_resolveclsmethods clsref method_id
+  | Class_special clsref ->
+    gather [emit_generics (); instr_resolverclsmethods clsref method_id]
+  | Class_reified instrs when not has_generics ->
+    gather [instrs; instr_classgetc; instr_resolveclsmethod method_id]
+  | Class_reified instrs ->
+    gather
+      [
+        instrs;
+        instr_classgetc;
+        emit_generics ();
+        instr_resolverclsmethod method_id;
+      ]
   | Class_expr _ ->
     failwith "emit_class_meth_native: Class_expr should be impossible"
-  | Class_reified instrs ->
-    gather [instrs; instr_classgetc; instr_resolveclsmethod method_id]
 
 and emit_inst_meth env obj_expr method_name =
   gather
@@ -4075,7 +4086,7 @@ and emit_function_pointer env (annot, e) targs =
   (* class_meth *)
   | A.Class_const (cid, (_, method_name)) ->
     let method_id = Hhbc_id.Method.from_ast_name method_name in
-    emit_class_meth_native env (fst annot) cid method_id
+    emit_class_meth_native env (fst annot) cid method_id targs
   (* inst_meth *)
   | A.Obj_get
       (obj_expr, (((pos, _) as annot), A.Id (_, method_name)), null_flavor) ->
@@ -4233,7 +4244,6 @@ and can_use_as_rhs_in_list_assignment (expr : Tast.expr_) =
     | String2 _
     | PrefixedString _
     | Yield_break
-    | Yield_from _
     | Suspend _
     | Is _
     | BracedExpr _

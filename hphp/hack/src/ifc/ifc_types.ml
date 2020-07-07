@@ -78,6 +78,16 @@ type prop =
      we do not have a flow type at hand *)
   | Chole of fun_proto
 
+module Flow = struct
+  type t = policy * policy
+
+  let compare = compare
+end
+
+module FlowSet = Set.Make (Flow)
+
+type security_lattice = FlowSet.t
+
 type local_env = { le_vars: ptype LMap.t }
 
 (* The environment is mutable data that
@@ -163,4 +173,17 @@ type callable_result = {
   (* The set of callable that appear in holes of
      res_constraint *)
   res_deps: SSet.t;
+}
+
+type options = {
+  (* Verbosity level for the IFC output.
+   * Each level includes everything below it as well.
+   * 0: What the user is meant to see
+   * 1: Details constraints after solving
+   * 2: Results of IFC analysis on functions/methods
+   * 3: Declaration analysis results
+   *)
+  verbosity: int;
+  (* String representation of a security lattice. *)
+  security_lattice: string;
 }

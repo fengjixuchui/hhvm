@@ -1061,7 +1061,10 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case LdFuncFromClsMeth:
   case LdFuncFromRFunc:
   case LdGenericsFromRFunc:
-    return may_load_store(AHeapAny, AEmpty);
+  case LdClsFromRClsMeth:
+  case LdFuncFromRClsMeth:
+  case LdGenericsFromRClsMeth:
+    return may_load_store(AEmpty, AEmpty);
 
   //////////////////////////////////////////////////////////////////////
   // Object/Ref loads/stores
@@ -1421,6 +1424,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   // track are isolated from anything else we care about.
 
   case NewClsMeth:
+  case NewRClsMeth:
   case NewCol:
   case NewColFromArray:
   case NewPair:
@@ -1872,8 +1876,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case RaiseNotice:
   case RaiseWarning:
   case RaiseHackArrCompatNotice:
-  case RaiseHackArrParamNotice:
-  case RaiseHackArrPropNotice:
   case RaiseForbiddenDynCall:
   case RaiseForbiddenDynConstruct:
   case RaiseStrToClassNotice:
@@ -1967,7 +1969,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case SetLegacyDict:
   case SetLegacyVec:
   case SetOpTV:
-  case SetOpTVVerify:
+  case OutlineSetOp:
   case ThrowAsTypeStructException:
   case PropTypeRedefineCheck: // Can raise and autoload
   case HandleRequestSurprise:

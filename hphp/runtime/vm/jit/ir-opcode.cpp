@@ -68,7 +68,6 @@ TRACE_SET_MOD(hhir);
 #define DVArr          HasDest
 #define DDArr          HasDest
 #define DStaticDArr    HasDest
-#define DCheckDV(...)  HasDest
 #define DCol           HasDest
 #define DMulti         NaryDest
 #define DSetElem       HasDest
@@ -143,7 +142,6 @@ OpInfo g_opInfo[] = {
 #undef DVArr
 #undef DDArr
 #undef DStaticDArr
-#undef DCheckDV
 #undef DCol
 #undef DAllocObj
 #undef DMulti
@@ -436,6 +434,7 @@ bool opcodeMayRaise(Opcode opc) {
   case NewRecord:
   case OODeclExists:
   case OrdStrIdx:
+  case OutlineSetOp:
   case PrintBool:
   case PrintInt:
   case PrintStr:
@@ -450,8 +449,6 @@ bool opcodeMayRaise(Opcode opc) {
   case RaiseForbiddenDynCall:
   case RaiseForbiddenDynConstruct:
   case RaiseHackArrCompatNotice:
-  case RaiseHackArrParamNotice:
-  case RaiseHackArrPropNotice:
   case RaiseNotice:
   case RaiseRxCallViolation:
   case RaiseStrToClassNotice:
@@ -468,7 +465,6 @@ bool opcodeMayRaise(Opcode opc) {
   case SetNewElemKeyset:
   case SetNewElemVec:
   case SetOpTV:
-  case SetOpTVVerify:
   case SetOpElem:
   case SetOpProp:
   case SetProp:
@@ -780,6 +776,7 @@ bool opcodeMayRaise(Opcode opc) {
   case LdClsCns:
   case LdClsCnsVecLen:
   case LdClsFromClsMeth:
+  case LdClsFromRClsMeth:
   case LdClsInitData:
   case LdClsInitElem:
   case LdClsMethod:
@@ -799,12 +796,14 @@ bool opcodeMayRaise(Opcode opc) {
   case LdFrameCls:
   case LdFrameThis:
   case LdFuncFromClsMeth:
+  case LdFuncFromRClsMeth:
   case LdFuncFromRFunc:
   case LdFuncNumParams:
   case LdFuncName:
   case LdFuncRxLevel:
   case LdFuncVecLen:
   case LdGenericsFromRFunc:
+  case LdGenericsFromRClsMeth:
   case LdIfaceMethod:
   case LdInitPropAddr:
   case LdInitRDSAddr:
@@ -897,6 +896,7 @@ bool opcodeMayRaise(Opcode opc) {
   case NeqStr:
   case NeqStrInt:
   case NewClsMeth:
+  case NewRClsMeth:
   case NewCol:
   case NewColFromArray:
   case NewDArray:

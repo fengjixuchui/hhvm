@@ -113,7 +113,6 @@ static const struct {
   { OpNewArray,    {None,             Stack1,       OutArray        }},
   { OpNewMixedArray,  {None,          Stack1,       OutArray        }},
   { OpNewDictArray,   {None,          Stack1,       OutDict         }},
-  { OpNewLikeArrayL,  {Local,         Stack1,       OutArray        }},
   { OpNewPackedArray, {StackN,        Stack1,       OutArray        }},
   { OpNewStructArray, {StackN,        Stack1,       OutArray        }},
   { OpNewStructDArray,{StackN,        Stack1,       OutDArray       }},
@@ -370,6 +369,13 @@ static const struct {
                    {None,             Stack1,       OutClsMeth      }},
   { OpResolveClsMethodS,
                    {None,             Stack1,       OutClsMeth      }},
+  { OpResolveRClsMethod,
+                   {StackTop2,        Stack1,       OutClsMethLike  }},
+  { OpResolveRClsMethodD,
+                   {Stack1,           Stack1,       OutClsMethLike  }},
+  { OpResolveRClsMethodS,
+                   {Stack1,           Stack1,       OutClsMethLike  }},
+
 
   /*** 14. Generator instructions ***/
 
@@ -378,14 +384,6 @@ static const struct {
   { OpContRaise,   {Stack1,           Stack1,       OutUnknown      }},
   { OpYield,       {Stack1,           Stack1,       OutUnknown      }},
   { OpYieldK,      {StackTop2,        Stack1,       OutUnknown      }},
-  { OpContAssignDelegate,
-                   {Stack1,           None,         OutNone         }},
-  { OpContEnterDelegate,
-                   {Stack1,           None,         OutNone         }},
-  { OpYieldFromDelegate,
-                   {None,             Stack1,       OutUnknown      }},
-  { OpContUnsetDelegate,
-                   {None,             None,         OutNone         }},
   { OpContCheck,   {None,             None,         OutNone         }},
   { OpContValid,   {None,             Stack1,       OutBoolean      }},
   { OpContKey,     {None,             Stack1,       OutUnknown      }},
@@ -951,6 +949,9 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::ResolveClsMethod:
   case Op::ResolveClsMethodD:
   case Op::ResolveClsMethodS:
+  case Op::ResolveRClsMethod:
+  case Op::ResolveRClsMethodD:
+  case Op::ResolveRClsMethodS:
   case Op::ResolveObjMethod:
   case Op::False:
   case Op::File:
@@ -978,7 +979,6 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::NewArray:
   case Op::NewCol:
   case Op::NewPair:
-  case Op::NewLikeArrayL:
   case Op::NewMixedArray:
   case Op::NewDictArray:
   case Op::NewPackedArray:
@@ -1072,10 +1072,6 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::DefClsNop:
   case Op::DefTypeAlias:
   case Op::ChainFaults:
-  case Op::ContAssignDelegate:
-  case Op::ContEnterDelegate:
-  case Op::YieldFromDelegate:
-  case Op::ContUnsetDelegate:
     return true;
   }
 

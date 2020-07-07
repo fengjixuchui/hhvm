@@ -1178,7 +1178,7 @@ bool FuncChecker::checkOp(State* cur, PC pc, Op op, Block* b, PC prev_pc) {
         return false;
       }
       auto const dt = unit()->lookupArray(id)->toDataType();
-      if (!equivDataTypes(KindOfArray, dt)) {
+      if (!isArrayType(dt)) {
         ferror("Array references array data that is a {}\n", dt);
         return false;
       }
@@ -1279,16 +1279,6 @@ bool FuncChecker::checkOp(State* cur, PC pc, Op op, Block* b, PC prev_pc) {
       }
       break;
     }
-    case Op::ContAssignDelegate:
-    case Op::ContEnterDelegate:
-    case Op::YieldFromDelegate:
-    case Op::ContUnsetDelegate:
-      if (m_func->isAsync) {
-        ferror("{} may only appear in a non-async generator\n",
-               opcodeToName(op));
-        return false;
-      }
-      // fallthrough
     case Op::CreateCont:
     case Op::YieldK:
     case Op::Yield:
@@ -1510,7 +1500,6 @@ bool FuncChecker::checkRxOp(State* cur, PC pc, Op op) {
     case Op::NewArray:
     case Op::NewMixedArray:
     case Op::NewDictArray:
-    case Op::NewLikeArrayL:
     case Op::NewPackedArray:
     case Op::NewRecord:
     case Op::NewStructArray:
@@ -1693,6 +1682,9 @@ bool FuncChecker::checkRxOp(State* cur, PC pc, Op op) {
     case Op::ResolveClsMethod:
     case Op::ResolveClsMethodD:
     case Op::ResolveClsMethodS:
+    case Op::ResolveRClsMethod:
+    case Op::ResolveRClsMethodD:
+    case Op::ResolveRClsMethodS:
       return true;
 
     // closures and generators
@@ -1861,15 +1853,6 @@ bool FuncChecker::checkRxOp(State* cur, PC pc, Op op) {
     case Op::ReqOnce:
     case Op::ReqDoc:
       ferror("defines/includes are forbidden in Rx functions: {}\n",
-             opcodeToName(op));
-      return RuntimeOption::EvalRxVerifyBody < 2;
-
-    // unsafe: generator delegation (yield from)
-    case Op::ContAssignDelegate:
-    case Op::ContEnterDelegate:
-    case Op::YieldFromDelegate:
-    case Op::ContUnsetDelegate:
-      ferror("`yield from` is forbidden in Rx functions: {}\n",
              opcodeToName(op));
       return RuntimeOption::EvalRxVerifyBody < 2;
 

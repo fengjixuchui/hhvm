@@ -353,6 +353,14 @@ let instr_resolveclsmethodd cls_id method_id =
 let instr_resolveclsmethods scref method_id =
   instr (IOp (ResolveClsMethodS (scref, method_id)))
 
+let instr_resolverclsmethod method_id = instr (IOp (ResolveRClsMethod method_id))
+
+let instr_resolverclsmethodd cls_id method_id =
+  instr (IOp (ResolveRClsMethodD (cls_id, method_id)))
+
+let instr_resolverclsmethods scref method_id =
+  instr (IOp (ResolveRClsMethodS (scref, method_id)))
+
 let instr_await = instr (IAsync Await)
 
 let instr_yield = instr (IGenerator Yield)
@@ -406,20 +414,6 @@ let instr_eval = instr (IIncludeEvalDefine Eval)
 let instr_silence_start local = instr (IMisc (Silence (local, Start)))
 
 let instr_silence_end local = instr (IMisc (Silence (local, End)))
-
-let instr_contAssignDelegate iter =
-  instr (IGenDelegation (ContAssignDelegate iter))
-
-let instr_contEnterDelegate = instr (IGenDelegation ContEnterDelegate)
-
-let instr_yieldFromDelegate iter l =
-  instr (IGenDelegation (YieldFromDelegate (iter, l)))
-
-let instr_contUnsetDelegate_free iter =
-  instr (IGenDelegation (ContUnsetDelegate (FreeIter, iter)))
-
-let instr_contUnsetDelegate_ignore iter =
-  instr (IGenDelegation (ContUnsetDelegate (IgnoreIter, iter)))
 
 let instr_contcheck_check = instr (IGenerator (ContCheck CheckStarted))
 

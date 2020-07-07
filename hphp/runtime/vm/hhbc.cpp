@@ -682,6 +682,7 @@ void staticStreamer(const TypedValue* tv, std::string& out) {
       staticArrayStreamer(tv->m_data.parr, out);
       return;
     case KindOfClsMeth:
+    case KindOfRClsMeth:
     case KindOfObject:
     case KindOfResource:
     case KindOfRFunc:
@@ -1096,7 +1097,6 @@ bool instrIsVMCall(Op opcode) {
   if (isFCall(opcode)) return true;
   switch (opcode) {
     case OpContEnter:
-    case OpContEnterDelegate:
     case OpContRaise:
     case OpEval:
     case OpIncl:

@@ -1432,6 +1432,10 @@ void implRFuncCmp(IRGS& env, Op op, SSATmp* left, SSATmp* right) {
   PUNT(RFunc-cmp);
 }
 
+void implRClsMethCmp(IRGS& env, Op, SSATmp*, SSATmp*) {
+  PUNT(RClsMeth-cmp);
+}
+
 /*
  * Responsible for converting the bytecode comparisons (which are type-agnostic)
  * to IR comparisons (which are typed). This generally involves inserting the
@@ -1505,6 +1509,7 @@ void implCmp(IRGS& env, Op op) {
   auto equiv = [&] {
     return
       equivDataTypes(leftTy.toDataType(), rightTy.toDataType()) ||
+      (isArrayType(leftTy.toDataType()) && isArrayType(rightTy.toDataType())) ||
       (isFuncType(leftTy.toDataType()) && isClassType(rightTy.toDataType())) ||
       (isClassType(leftTy.toDataType()) && isFuncType(rightTy.toDataType())) ||
       (isFuncType(leftTy.toDataType()) && isStringType(rightTy.toDataType())) ||
@@ -1540,6 +1545,7 @@ void implCmp(IRGS& env, Op op) {
   else if (leftTy <= TClsMeth) implClsMethCmp(env, op, left, right);
   else if (leftTy <= TRecord) implRecordCmp(env, op, left, right);
   else if (leftTy <= TRFunc) implRFuncCmp(env, op, left, right);
+  else if (leftTy <= TRClsMeth) implRClsMethCmp(env, op, left, right);
   else always_assert(false);
 
   decRef(env, left);

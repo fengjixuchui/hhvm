@@ -35,9 +35,9 @@ class type cursor =
     saved-state for the point in time represented by this cursor. *)
     method get_file_deltas : Naming_sqlite.file_deltas
 
-    (** Get the cumulative file deltas that have occurred since the
-    saved-state for the point in time represented by this cursor. *)
-    method get_file_deltas : Naming_sqlite.file_deltas
+    (** Get the fanout calculated for the files changed in this cursor.
+    Returns `None` if inapplicable for this type of cursor. *)
+    method get_calculate_fanout_result : Calculate_fanout.result option
 
     (** Get the cumulative dependency graph delta that has occurred since the
     saved-state for the point in time represented by this cursor. *)
@@ -54,6 +54,7 @@ class type cursor =
     The resulting cursor is NOT persisted to disk. The caller is responsible
     for persisting it using `State.add_cursor`. *)
     method advance :
+      detail_level:Calculate_fanout.Detail_level.t ->
       Provider_context.t ->
       MultiWorker.worker list ->
       Relative_path.Set.t ->
@@ -75,12 +76,6 @@ class type cursor =
 
 class type state =
   object
-    (** Commit any changes to this state to disk.
-
-    Changes to this state are NOT guaranteed to be automatically persisted to
-    disk, so you must call this function once done. *)
-    method save : unit
-
     (** Look up the ID of the client corresponding to the provided
     `client_config`.
 
@@ -108,9 +103,6 @@ class type state =
     method look_up_cursor :
       client_id:client_id option -> cursor_id:string -> (cursor, string) result
 
-    (** Add the given cursor to the state.
-
-    Make sure to follow this up with a call to `save` to persist it to disk.
-    *)
+    (** Add the given cursor to the state, committing any changes to disk. *)
     method add_cursor : cursor -> cursor_id
   end

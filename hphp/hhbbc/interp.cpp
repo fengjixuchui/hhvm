@@ -86,7 +86,6 @@ bool poppable(Op op) {
     case Op::NewDArray:
     case Op::NewMixedArray:
     case Op::NewDictArray:
-    case Op::NewLikeArrayL:
     case Op::NewCol:
       return true;
     default:
@@ -1060,11 +1059,6 @@ void in(ISS& env, const bc::NewKeysetArray& op) {
     unreachable(env);
     push(env, TBottom);
   }
-}
-
-void in(ISS& env, const bc::NewLikeArrayL& op) {
-  locAsCell(env, op.loc1);
-  push(env, some_aempty());
 }
 
 void in(ISS& env, const bc::AddElemC& /*op*/) {
@@ -2152,8 +2146,8 @@ void jmpImpl(ISS& env, const JmpOp& op) {
   }
 
   if (e == (Negate ? Emptiness::Empty : Emptiness::NonEmpty) ||
-      (next_real_block(*env.ctx.func, env.blk.fallthrough) ==
-       next_real_block(*env.ctx.func, op.target1))) {
+      (next_real_block(env.ctx.func, env.blk.fallthrough) ==
+       next_real_block(env.ctx.func, op.target1))) {
     return reduce(env, bc::PopC{});
   }
 
@@ -4010,6 +4004,23 @@ Type specialClsRefToCls(ISS& env, SpecialClsRef ref) {
   return op ? *op : TCls;
 }
 
+template<bool reifiedVersion = false>
+void resolveClsMethodSImpl(ISS& env, SpecialClsRef ref, LSString meth_name) {
+  auto const clsTy = specialClsRefToCls(env, ref);
+  auto const rfunc = env.index.resolve_method(env.ctx, clsTy, meth_name);
+  if (is_specialized_cls(clsTy) && dcls_of(clsTy).type == DCls::Exact &&
+      !rfunc.couldHaveReifiedGenerics()) {
+    auto const clsName = dcls_of(clsTy).cls.name();
+    return reduce(env, bc::ResolveClsMethodD { clsName, meth_name });
+  }
+  if (reifiedVersion) popC(env);
+  if (!reifiedVersion || !rfunc.couldHaveReifiedGenerics()) {
+    push(env, TClsMeth);
+  } else {
+    push(env, TClsMethLike);
+  }
+}
+
 } // namespace
 
 void in(ISS& env, const bc::ResolveClsMethod& op) {
@@ -4022,14 +4033,22 @@ void in(ISS& env, const bc::ResolveClsMethodD& op) {
 }
 
 void in(ISS& env, const bc::ResolveClsMethodS& op) {
-  auto const clsTy = specialClsRefToCls(env, op.subop1);
-  auto const rfunc = env.index.resolve_method(env.ctx, clsTy, op.str2);
-  if (is_specialized_cls(clsTy) && dcls_of(clsTy).type == DCls::Exact &&
-      !rfunc.couldHaveReifiedGenerics()) {
-    auto const clsName = dcls_of(clsTy).cls.name();
-    return reduce(env, bc::ResolveClsMethodD { clsName, op.str2 });
-  }
-  push(env, TClsMeth);
+  resolveClsMethodSImpl<false>(env, op.subop1, op.str2);
+}
+
+void in(ISS& env, const bc::ResolveRClsMethod&) {
+  popC(env);
+  popC(env);
+  push(env, TClsMethLike);
+}
+
+void in(ISS& env, const bc::ResolveRClsMethodD&) {
+  popC(env);
+  push(env, TClsMethLike);
+}
+
+void in(ISS& env, const bc::ResolveRClsMethodS& op) {
+  resolveClsMethodSImpl<true>(env, op.subop1, op.str2);
 }
 
 namespace {
@@ -4107,9 +4126,9 @@ void fcallObjMethodImpl(ISS& env, const Op& op, SString methName, bool dynamic,
     if (auto const name = op.fca.context()) {
       auto const rcls = env.index.resolve_class(env.ctx, name);
       if (rcls && rcls->cls()) {
-        return Context { env.ctx.unit, env.ctx.func, rcls->cls() };
+        return AnalysisContext { env.ctx.unit, env.ctx.func, rcls->cls() };
       }
-      return Context { env.ctx.unit, env.ctx.func, nullptr };
+      return AnalysisContext { env.ctx.unit, env.ctx.func, nullptr };
     }
     return env.ctx;
   }();
@@ -4199,9 +4218,9 @@ void fcallClsMethodImpl(ISS& env, const Op& op, Type clsTy, SString methName,
     if (auto const name = op.fca.context()) {
       auto const rcls = env.index.resolve_class(env.ctx, name);
       if (rcls && rcls->cls()) {
-        return Context { env.ctx.unit, env.ctx.func, rcls->cls() };
+        return AnalysisContext { env.ctx.unit, env.ctx.func, rcls->cls() };
       }
-      return Context { env.ctx.unit, env.ctx.func, nullptr };
+      return AnalysisContext { env.ctx.unit, env.ctx.func, nullptr };
     }
     return env.ctx;
   }();
@@ -5186,21 +5205,6 @@ void in(ISS& env, const bc::YieldK&) {
   push(env, TInitCell);
 }
 
-void in(ISS& env, const bc::ContAssignDelegate&) {
-  popC(env);
-}
-
-void in(ISS& env, const bc::ContEnterDelegate&) {
-  popC(env);
-}
-
-void in(ISS& env, const bc::YieldFromDelegate& op) {
-  push(env, TInitCell);
-  env.propagate(op.target2, &env.state);
-}
-
-void in(ISS& /*env*/, const bc::ContUnsetDelegate&) {}
-
 void in(ISS& /*env*/, const bc::ContCheck&) {}
 void in(ISS& env, const bc::ContValid&)   { push(env, TBool); }
 void in(ISS& env, const bc::ContKey&)     { push(env, TInitCell); }
@@ -5743,7 +5747,7 @@ BlockId speculateHelper(ISS& env, BlockId orig, bool updateTaken) {
     State temp{env.state, State::Compact{}};
     while (true) {
       auto const func = env.ctx.func;
-      auto const targetBlk = func->blocks[target].get();
+      auto const targetBlk = func.blocks()[target].get();
       if (!targetBlk->multiPred) break;
       auto const ok = [&] {
         switch (targetBlk->hhbcs.back().op) {

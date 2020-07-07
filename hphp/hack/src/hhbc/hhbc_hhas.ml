@@ -126,8 +126,6 @@ let string_of_lit_const instruction =
   | NullUninit -> "NullUninit"
   | Method -> "Method"
   | NewArray n -> sep ["NewArray"; string_of_int n]
-  | NewLikeArrayL (id, n) ->
-    sep ["NewLikeArrayL"; string_of_local_id id; string_of_int n]
   | CnsE cnsid -> sep ["CnsE"; string_of_const_id cnsid]
 
 let string_of_typestruct_resolve_op = function
@@ -203,6 +201,12 @@ let string_of_operator instruction =
   | ResolveClsMethodS (r, mid) ->
     sep
       ["ResolveClsMethodS"; SpecialClsRef.to_string r; string_of_method_id mid]
+  | ResolveRClsMethod mid -> sep ["ResolveRClsMethod"; string_of_method_id mid]
+  | ResolveRClsMethodD (cid, mid) ->
+    sep ["ResolveRClsMethodD"; string_of_class_id cid; string_of_method_id mid]
+  | ResolveRClsMethodS (r, mid) ->
+    sep
+      ["ResolveRClsMethodS"; SpecialClsRef.to_string r; string_of_method_id mid]
   | Fatal op -> sep ["Fatal"; FatalOp.to_string op]
 
 let string_of_get x =
@@ -683,23 +687,6 @@ let string_of_include_eval_define = function
   | DefCns id -> sep ["DefCns"; string_of_const_num id]
   | DefTypeAlias id -> sep ["DefTypeAlias"; string_of_typedef_num id]
 
-let string_of_free_iterator = function
-  | IgnoreIter -> "IgnoreIter"
-  | FreeIter -> "FreeIter"
-
-let string_of_gen_delegation = function
-  | ContAssignDelegate i -> sep ["ContAssignDelegate"; string_of_iterator_id i]
-  | ContEnterDelegate -> "ContEnterDelegate"
-  | YieldFromDelegate (i, l) ->
-    sep ["YieldFromDelegate"; string_of_iterator_id i; string_of_label l]
-  | ContUnsetDelegate (free, i) ->
-    sep
-      [
-        "ContUnsetDelegate";
-        string_of_free_iterator free;
-        string_of_iterator_id i;
-      ]
-
 let string_of_instruction instruction =
   let s =
     match instruction with
@@ -722,7 +709,6 @@ let string_of_instruction instruction =
     | IAsync i -> string_of_async i
     | IGenerator i -> string_of_generator i
     | IIncludeEvalDefine i -> string_of_include_eval_define i
-    | IGenDelegation i -> string_of_gen_delegation i
     | _ -> failwith "invalid instruction"
   in
   s ^ "\n"
@@ -1373,7 +1359,6 @@ and string_of_expression ~env expr =
   | A.Yield y -> "yield " ^ string_of_afield ~env y
   | A.Await a -> "await " ^ string_of_expression ~env a
   | A.Yield_break -> "return"
-  | A.Yield_from e -> "yield from " ^ string_of_expression ~env e
   | A.Import (fl, e) ->
     let fl = string_of_import_flavor fl in
     let e = string_of_expression ~env e in

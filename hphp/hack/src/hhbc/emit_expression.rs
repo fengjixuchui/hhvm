@@ -274,6 +274,23 @@ mod inout_locals {
     }
 }
 
+pub fn wrap_array_mark_legacy(e: &Emitter, ins: InstrSeq) -> InstrSeq {
+    if mark_as_legacy(e.options()) {
+        InstrSeq::gather(vec![
+            instr::nulluninit(),
+            instr::nulluninit(),
+            instr::nulluninit(),
+            ins,
+            instr::fcallfuncd(
+                FcallArgs::new(FcallFlags::default(), 1, vec![], None, 1, None),
+                function::from_raw_string("HH\\array_mark_legacy"),
+            ),
+        ])
+    } else {
+        ins
+    }
+}
+
 pub fn get_type_structure_for_hint(
     e: &mut Emitter,
     tparams: &[&str],
@@ -294,11 +311,14 @@ pub fn get_type_structure_for_hint(
         false,
     )?;
     let i = emit_adata::get_array_identifier(e, &tv);
-    Ok(if hack_arr_dv_arrs(e.options()) {
-        instr::lit_const(InstructLitConst::Dict(i))
-    } else {
-        instr::lit_const(InstructLitConst::Array(i))
-    })
+    Ok(wrap_array_mark_legacy(
+        e,
+        if hack_arr_dv_arrs(e.options()) {
+            instr::lit_const(InstructLitConst::Dict(i))
+        } else {
+            instr::lit_const(InstructLitConst::Array(i))
+        },
+    ))
 }
 
 pub struct Setrange {
@@ -498,7 +518,6 @@ pub fn emit_expr(emitter: &mut Emitter, env: &Env, expression: &tast::Expr) -> R
         Expr_::Import(e) => emit_import(emitter, env, pos, &e.0, &e.1),
         Expr_::Omitted => Ok(instr::empty()),
         Expr_::YieldBreak => Err(unrecoverable("yield break should be in statement position")),
-        Expr_::YieldFrom(_) => Err(unrecoverable("complex yield_from expression")),
         Expr_::Lfun(_) => Err(unrecoverable(
             "expected Lfun to be converted to Efun during closure conversion emit_expr",
         )),
@@ -868,6 +887,11 @@ pub fn emit_await(emitter: &mut Emitter, env: &Env, pos: &Pos, expr: &tast::Expr
 
 fn hack_arr_dv_arrs(opts: &Options) -> bool {
     opts.hhvm.flags.contains(HhvmFlags::HACK_ARR_DV_ARRS)
+}
+
+fn mark_as_legacy(opts: &Options) -> bool {
+    opts.hhvm.flags.contains(HhvmFlags::HACK_ARR_DV_ARRS)
+        && opts.hhvm.flags.contains(HhvmFlags::HACK_ARR_DV_ARR_MARK)
 }
 
 fn inline_gena_call(emitter: &mut Emitter, env: &Env, arg: &tast::Expr) -> Result {
@@ -1436,32 +1460,36 @@ fn emit_dynamic_collection(
         }
         E_::Varray(_) => {
             let hack_arr_dv_arrs = hack_arr_dv_arrs(e.options());
-            emit_value_only_collection(e, env, pos, fields, |n| {
+            let instrs = emit_value_only_collection(e, env, pos, fields, |n| {
                 if hack_arr_dv_arrs {
                     InstructLitConst::NewVec(n)
                 } else {
                     InstructLitConst::NewVArray(n)
                 }
-            })
+            });
+            Ok(wrap_array_mark_legacy(e, instrs?))
         }
         E_::Darray(_) => {
             if is_struct_init(e, env, fields, false /* allow_numerics */)? {
                 let hack_arr_dv_arrs = hack_arr_dv_arrs(e.options());
-                emit_struct_array(e, env, pos, fields, |_, arg| {
+                let instrs = emit_struct_array(e, env, pos, fields, |_, arg| {
                     let instr = if hack_arr_dv_arrs {
                         instr::newstructdict(arg)
                     } else {
                         instr::newstructdarray(arg)
                     };
                     Ok(emit_pos_then(pos, instr))
-                })
+                });
+                Ok(wrap_array_mark_legacy(e, instrs?))
             } else {
                 let constr = if hack_arr_dv_arrs(e.options()) {
                     InstructLitConst::NewDictArray(count as isize)
                 } else {
                     InstructLitConst::NewDArray(count as isize)
                 };
-                emit_keyvalue_collection(e, env, pos, fields, CollectionType::Array, constr)
+                let instrs =
+                    emit_keyvalue_collection(e, env, pos, fields, CollectionType::Array, constr);
+                Ok(wrap_array_mark_legacy(e, instrs?))
             }
         }
         _ => {
@@ -1817,7 +1845,7 @@ pub fn emit_reified_targs(e: &mut Emitter, env: &Env, pos: &Pos, targs: &[&tast:
             ),
         ])
     } else {
-        InstrSeq::gather(vec![
+        let instrs = InstrSeq::gather(vec![
             InstrSeq::gather(
                 targs
                     .iter()
@@ -1829,7 +1857,8 @@ pub fn emit_reified_targs(e: &mut Emitter, env: &Env, pos: &Pos, targs: &[&tast:
             } else {
                 instr::new_varray(targs.len() as isize)
             },
-        ])
+        ]);
+        wrap_array_mark_legacy(e, instrs)
     })
 }
 
@@ -2604,16 +2633,6 @@ fn emit_special_function(
                 instr::whresult(),
             ])))
         }
-        ("__hhvm_internal_newlikearrayl", &[E(_, E_::Lvar(ref param)), E(_, E_::Int(ref n))])
-            if e.systemlib() =>
-        {
-            Ok(Some(instr::newlikearrayl(
-                local::Type::Named(local_id::get_name(&param.1).into()),
-                n.parse::<isize>().map_err(|_| {
-                    unrecoverable(format!("emit_special_function: error parsing {}", n))
-                })?,
-            )))
-        }
         ("__hhvm_internal_getmemokeyl", &[E(_, E_::Lvar(ref param))]) if e.systemlib() => Ok(Some(
             instr::getmemokeyl(local::Type::Named(local_id::get_name(&param.1).into())),
         )),
@@ -2669,7 +2688,7 @@ fn emit_inst_meth(
     obj_expr: &tast::Expr,
     method_name: &tast::Expr,
 ) -> Result {
-    Ok(InstrSeq::gather(vec![
+    let instrs = InstrSeq::gather(vec![
         emit_expr(e, env, obj_expr)?,
         emit_expr(e, env, method_name)?,
         if e.options()
@@ -2683,7 +2702,16 @@ fn emit_inst_meth(
         } else {
             instr::new_varray(2)
         },
-    ]))
+    ]);
+    if e.options()
+        .hhvm
+        .flags
+        .contains(HhvmFlags::EMIT_INST_METH_POINTERS)
+    {
+        Ok(instrs)
+    } else {
+        Ok(wrap_array_mark_legacy(e, instrs))
+    }
 }
 
 fn emit_class_meth(e: &mut Emitter, env: &Env, cls: &tast::Expr, meth: &tast::Expr) -> Result {
@@ -2699,7 +2727,14 @@ fn emit_class_meth(e: &mut Emitter, env: &Env, cls: &tast::Expr, meth: &tast::Ex
         };
         if let Some((cid, (_, id))) = cls.1.as_class_const() {
             if string_utils::is_class(id) {
-                return emit_class_meth_native(e, env, &cls.0, cid, method_id);
+                return emit_class_meth_native(
+                    e,
+                    env,
+                    &cls.0,
+                    cid,
+                    method_id,
+                    &vec![ /* targs */ ],
+                );
             }
         }
         if let Some(ast_defs::Id(_, s)) = cls.1.as_id() {
@@ -2716,7 +2751,7 @@ fn emit_class_meth(e: &mut Emitter, env: &Env, cls: &tast::Expr, meth: &tast::Ex
         }
         Err(unrecoverable("emit_class_meth: unhandled method"))
     } else {
-        Ok(InstrSeq::gather(vec![
+        let instrs = InstrSeq::gather(vec![
             emit_expr(e, env, cls)?,
             emit_expr(e, env, meth)?,
             if hack_arr_dv_arrs(e.options()) {
@@ -2724,7 +2759,8 @@ fn emit_class_meth(e: &mut Emitter, env: &Env, cls: &tast::Expr, meth: &tast::Ex
             } else {
                 instr::new_varray(2)
             },
-        ]))
+        ]);
+        Ok(wrap_array_mark_legacy(e, instrs))
     }
 }
 
@@ -2734,6 +2770,7 @@ fn emit_class_meth_native(
     pos: &Pos,
     cid: &tast::ClassId,
     method_id: MethodId,
+    targs: &[tast::Targ],
 ) -> Result {
     let mut cexpr = ClassExpr::class_id_to_class_expr(e, false, true, &env.scope, cid);
     if let ClassExpr::Id(ast_defs::Id(_, name)) = &cexpr {
@@ -2741,15 +2778,38 @@ fn emit_class_meth_native(
             cexpr = reified_var_cexpr;
         }
     }
+    let has_generics = has_non_tparam_generics_targs(env, targs);
+    let mut emit_generics = || -> Result {
+        emit_reified_targs(
+            e,
+            env,
+            pos,
+            &targs.iter().map(|targ| &targ.1).collect::<Vec<_>>(),
+        )
+    };
     Ok(match cexpr {
-        ClassExpr::Id(ast_defs::Id(_, name)) => {
+        ClassExpr::Id(ast_defs::Id(_, name)) if !has_generics => {
             instr::resolveclsmethodd(class::Type::from_ast_name_and_mangle(&name), method_id)
         }
-        ClassExpr::Special(clsref) => instr::resolveclsmethods(clsref, method_id),
-        ClassExpr::Reified(instrs) => InstrSeq::gather(vec![
+        ClassExpr::Id(ast_defs::Id(_, name)) => InstrSeq::gather(vec![
+            emit_generics()?,
+            instr::resolverclsmethodd(class::Type::from_ast_name_and_mangle(&name), method_id),
+        ]),
+        ClassExpr::Special(clsref) if !has_generics => instr::resolveclsmethods(clsref, method_id),
+        ClassExpr::Special(clsref) => InstrSeq::gather(vec![
+            emit_generics()?,
+            instr::resolverclsmethods(clsref, method_id),
+        ]),
+        ClassExpr::Reified(instrs) if !has_generics => InstrSeq::gather(vec![
             instrs,
             instr::classgetc(),
             instr::resolveclsmethod(method_id),
+        ]),
+        ClassExpr::Reified(instrs) => InstrSeq::gather(vec![
+            instrs,
+            instr::classgetc(),
+            emit_generics()?,
+            instr::resolverclsmethod(method_id),
         ]),
         ClassExpr::Expr(_) => {
             return Err(unrecoverable(
@@ -2810,7 +2870,7 @@ fn emit_function_pointer(
             // TODO(hrust) should accept `let method_id = method::Type::from_ast_name(&(cc.1).1);`
             let method_id: method::Type =
                 string_utils::strip_global_ns(&(cc.1).1).to_string().into();
-            emit_class_meth_native(e, env, annot, &cc.0, method_id)
+            emit_class_meth_native(e, env, annot, &cc.0, method_id, targs)
         }
         Expr_::ObjGet(og) => match (og.1).1.as_id() {
             Some(ast_defs::Id(_, method_name)) => {
@@ -2819,7 +2879,7 @@ fn emit_function_pointer(
                 if og.2.eq(&ast_defs::OgNullFlavor::OGNullsafe) {
                     let end_label = e.label_gen_mut().next_regular();
                     let meth_instr = emit_expr(e, env, &substitute_method_name)?;
-                    Ok(InstrSeq::gather(vec![
+                    let inst_meth_instrs = InstrSeq::gather(vec![
                         emit_quiet_expr(e, env, &(og.1).0, &og.0, false)?.0,
                         instr::dup(),
                         instr::istypec(IstypeOp::OpNull),
@@ -2836,8 +2896,22 @@ fn emit_function_pointer(
                         } else {
                             instr::new_varray(2)
                         },
-                        instr::label(end_label),
-                    ]))
+                    ]);
+                    if e.options()
+                        .hhvm
+                        .flags
+                        .contains(HhvmFlags::EMIT_INST_METH_POINTERS)
+                    {
+                        Ok(InstrSeq::gather(vec![
+                            inst_meth_instrs,
+                            instr::label(end_label),
+                        ]))
+                    } else {
+                        Ok(InstrSeq::gather(vec![
+                            wrap_array_mark_legacy(e, inst_meth_instrs),
+                            instr::label(end_label),
+                        ]))
+                    }
                 } else {
                     emit_inst_meth(e, env, &og.0, &substitute_method_name)
                 }

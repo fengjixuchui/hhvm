@@ -32,8 +32,8 @@ let option pp fmt opt =
   | None -> fprintf fmt "None"
 
 let show_policy = function
-  | Pbot -> "Bot"
-  | Ptop -> "Top"
+  | Pbot -> "PUBLIC"
+  | Ptop -> "PRIVATE"
   | Ppurpose p -> p
   | Pfree_var (v, _s) -> v
   | Pbound_var n -> Printf.sprintf "<bound%d>" n
@@ -48,6 +48,7 @@ let rec ptype fmt ty =
   match ty with
   | Tprim p -> fprintf fmt "<%a>" policy p
   | Ttuple tl -> list' "," tl
+  | Tunion [] -> fprintf fmt "nothing"
   | Tunion tl -> list' " |" tl
   | Tinter tl -> list' " &" tl
   | Tclass { c_name; c_self; c_lump; c_property_map; c_tparams } ->
@@ -181,3 +182,6 @@ let decl_env fmt de =
   SMap.iter handle_class de.de_class;
   SMap.iter handle_fun de.de_fun;
   fprintf fmt "@]"
+
+let violation fmt (l, r) =
+  fprintf fmt "Data with policy %a appears in context %a." policy l policy r

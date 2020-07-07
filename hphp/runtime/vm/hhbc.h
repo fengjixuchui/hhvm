@@ -551,7 +551,6 @@ constexpr uint32_t kMaxConcatN = 4;
   O(NewArray,        ONE(IVA),         NOV,             ONE(CV),    NF) \
   O(NewMixedArray,   ONE(IVA),         NOV,             ONE(CV),    NF) \
   O(NewDictArray,    ONE(IVA),         NOV,             ONE(CV),    NF) \
-  O(NewLikeArrayL,   TWO(LA,IVA),      NOV,             ONE(CV),    NF) \
   O(NewPackedArray,  ONE(IVA),         CMANY,           ONE(CV),    NF) \
   O(NewStructArray,  ONE(VSA),         SMANY,           ONE(CV),    NF) \
   O(NewStructDArray, ONE(VSA),         SMANY,           ONE(CV),    NF) \
@@ -683,6 +682,13 @@ constexpr uint32_t kMaxConcatN = 4;
   O(ResolveClsMethodS,                                                  \
                      TWO(OA(SpecialClsRef),SA),                         \
                                        NOV,             ONE(CV),    NF) \
+  O(ResolveRClsMethod,                                                  \
+                     ONE(SA),          TWO(CV,CV),      ONE(CV),    NF) \
+  O(ResolveRClsMethodD,                                                 \
+                     TWO(SA,SA),       ONE(CV),         ONE(CV),    NF) \
+  O(ResolveRClsMethodS,                                                 \
+                     TWO(OA(SpecialClsRef),SA),                         \
+                                       ONE(CV),         ONE(CV),    NF) \
   O(NewObj,          NA,               ONE(CV),         ONE(CV),    NF) \
   O(NewObjR,         NA,               TWO(CV,CV),      ONE(CV),    NF) \
   O(NewObjD,         ONE(SA),          NOV,             ONE(CV),    NF) \
@@ -749,13 +755,6 @@ constexpr uint32_t kMaxConcatN = 4;
   O(ContRaise,       NA,               ONE(CV),         ONE(CV),    CF) \
   O(Yield,           NA,               ONE(CV),         ONE(CV),    CF) \
   O(YieldK,          NA,               TWO(CV,CV),      ONE(CV),    CF) \
-  O(ContAssignDelegate,                                                 \
-                     ONE(IA),          ONE(CV),         NOV,        NF) \
-  O(ContEnterDelegate,                                                  \
-                     NA,               ONE(CV),         NOV,        CF) \
-  O(YieldFromDelegate,                                                  \
-                     TWO(IA,BA),       NOV,             ONE(CV),    CF) \
-  O(ContUnsetDelegate, TWO(OA(CudOp),IA), NOV,          NOV,        NF) \
   O(ContCheck,       ONE(OA(ContCheckOp)), NOV,         NOV,        NF) \
   O(ContValid,       NA,               NOV,             ONE(CV),    NF) \
   O(ContKey,         NA,               NOV,             ONE(CV),    NF) \
@@ -1171,7 +1170,7 @@ constexpr bool instrCanHalt(Op op) {
   return op == OpRetC || op == OpNativeImpl ||
          op == OpAwait || op == OpAwaitAll || op == OpCreateCont ||
          op == OpYield || op == OpYieldK || op == OpRetM ||
-         op == OpRetCSuspended || op == OpYieldFromDelegate;
+         op == OpRetCSuspended;
 }
 
 int instrNumPops(PC opcode);

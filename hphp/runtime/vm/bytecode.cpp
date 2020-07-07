@@ -772,6 +772,15 @@ static std::string toStringElm(TypedValue tv) {
        << tv.m_data.pclsmeth->getFunc()->fullName()->data()
        << ")";
        continue;
+    case KindOfRClsMeth:
+      os << ":RClsMeth("
+         << tv.m_data.prclsmeth->m_cls->name()->data()
+         << ", "
+         << tv.m_data.prclsmeth->m_func->fullName()->data()
+         << ")<"
+         << tv.m_data.prclsmeth->m_arr
+         << ">";
+      continue;
     }
     not_reached();
   } while (0);
@@ -925,14 +934,7 @@ TypedValue* Stack::resumableStackBase(const ActRec* fp) {
     // find the caller's FP, compensate for its locals and iterators, and then
     // we've found the base of the generator's stack.
     assertx(fp->func()->isGenerator());
-
-    // Since resumables are stored on the heap, we need to go back in the
-    // callstack a bit to find the base of the stack. Unfortunately, due to
-    // generator delegation, this can be pretty far back...
-    while (sfp->func()->isGenerator()) {
-      sfp = sfp->sfp();
-    }
-
+    assertx(!sfp->func()->isGenerator());
     return (TypedValue*)sfp - sfp->func()->numSlotsInFrame();
   } else {
     // The reentrant case occurs when asio scheduler resumes an async function
@@ -1475,10 +1477,6 @@ OPTBLD_INLINE void iopNewArray(uint32_t capacity) {
 }
 
 OPTBLD_INLINE void iopNewMixedArray(uint32_t capacity) {
-  iopNewArray(capacity);
-}
-
-OPTBLD_INLINE void iopNewLikeArrayL(tv_lval /*unused*/, uint32_t capacity) {
   iopNewArray(capacity);
 }
 
@@ -2331,6 +2329,7 @@ void iopSwitch(PC origpc, PC& pc, SwitchKind kind, int64_t base,
             case KindOfFunc:
             case KindOfClass:
             case KindOfClsMeth:
+            case KindOfRClsMeth:
             case KindOfRecord:
               not_reached();
           }
@@ -2368,6 +2367,11 @@ void iopSwitch(PC origpc, PC& pc, SwitchKind kind, int64_t base,
 
         case KindOfClsMeth:
           tvDecRefClsMeth(val);
+          match = SwitchMatch::DEFAULT;
+          break;
+
+        case KindOfRClsMeth:
+          tvDecRefRClsMeth(val);
           match = SwitchMatch::DEFAULT;
           break;
 
@@ -4098,6 +4102,17 @@ OPTBLD_INLINE void fcallFuncClsMeth(PC origpc, PC& pc, const FCallArgs& fca) {
   fcallImpl<false>(origpc, pc, fca, func, cls);
 }
 
+OPTBLD_INLINE void fcallFuncRClsMeth(PC origpc, PC& pc, const FCallArgs& fca) {
+  assertx(tvIsRClsMeth(vmStack().topC()));
+  auto const rclsMeth = vmStack().topC()->m_data.prclsmeth;
+
+  auto const cls = rclsMeth->m_cls;
+  auto const func = rclsMeth->m_func;
+  auto generics = Array(rclsMeth->m_arr);
+  vmStack().popC();
+  fcallImpl<false>(origpc, pc, fca, func, cls, true, &generics);
+}
+
 Func* resolveFuncImpl(Id id) {
   auto unit = vmfp()->m_func->unit();
   auto const nep = unit->lookupNamedEntityPairId(id);
@@ -4160,6 +4175,7 @@ OPTBLD_INLINE void iopFCallFunc(PC origpc, PC& pc, FCallArgs fca) {
   if (isFuncType(type)) return fcallFuncFunc(origpc, pc, fca);
   if (isRFuncType(type)) return fcallFuncRFunc(origpc, pc, fca);
   if (isClsMethType(type)) return fcallFuncClsMeth(origpc, pc, fca);
+  if (isRClsMethType(type)) return fcallFuncRClsMeth(origpc, pc, fca);
 
   raise_error(Strings::FUNCTION_NAME_MUST_BE_STRING);
 }
@@ -4357,8 +4373,7 @@ Class* specialClsRefToCls(SpecialClsRef ref) {
   always_assert(false);
 }
 
-template<bool extraStk = false>
-void resolveClsMethodImpl(Class* cls, const StringData* methName) {
+const Func* resolveClsMethodFunc(Class* cls, const StringData* methName) {
   const Func* func;
   auto const res = lookupClsMethod(func, cls, methName, nullptr,
                                    arGetContextClass(vmfp()), false);
@@ -4369,6 +4384,12 @@ void resolveClsMethodImpl(Class* cls, const StringData* methName) {
   assertx(res == LookupResult::MethodFoundNoThis);
   assertx(func);
   if (!func->isStaticInPrologue()) throw_missing_this(func);
+  return func;
+}
+
+template<bool extraStk = false>
+void resolveClsMethodImpl(Class* cls, const StringData* methName) {
+  const Func* func = resolveClsMethodFunc(cls, methName);
   auto clsmeth = ClsMethDataRef::create(cls, const_cast<Func*>(func));
   if (extraStk) vmStack().popC();
   vmStack().pushClsMethNoRc(clsmeth);
@@ -4397,6 +4418,59 @@ OPTBLD_INLINE void iopResolveClsMethodD(Id classId,
 OPTBLD_INLINE void iopResolveClsMethodS(SpecialClsRef ref,
                                         const StringData* methName) {
   resolveClsMethodImpl(specialClsRefToCls(ref), methName);
+}
+
+namespace {
+
+template<bool extraStk = false>
+void resolveRClsMethodImpl(Class* cls, const StringData* methName) {
+  const Func* func = resolveClsMethodFunc(cls, methName);
+
+  auto const tsList = vmStack().topC();
+  auto const reified = [&] () -> ArrayData* {
+      if (!tvIsHAMSafeVArray(tsList)) {
+        raise_error("Invalid reified generics when resolving class method");
+      }
+      return tsList->m_data.parr;
+    }();
+
+  if (func->hasReifiedGenerics()) {
+    checkFunReifiedGenericMismatch(func, reified);
+    auto rclsmeth = RClsMethData::create(cls, const_cast<Func*>(func), reified);
+    vmStack().discard();
+    if (extraStk) vmStack().popC();
+    vmStack().pushRClsMethNoRc(rclsmeth);
+  } else {
+    auto clsmeth = ClsMethDataRef::create(cls, const_cast<Func*>(func));
+    vmStack().popC();
+    if (extraStk) vmStack().popC();
+    vmStack().pushClsMethNoRc(clsmeth);
+  }
+}
+
+} // namespace
+
+OPTBLD_INLINE void iopResolveRClsMethod(const StringData* methName) {
+  auto const c = vmStack().indC(1);
+  if (!isClassType(c->m_type)) {
+    raise_error("Attempting ResolveRClsMethod with non-class");
+  }
+  resolveRClsMethodImpl<true>(c->m_data.pclass, methName);
+}
+
+OPTBLD_INLINE void iopResolveRClsMethodD(Id classId,
+                                         const StringData* methName) {
+  auto const nep = vmfp()->m_func->unit()->lookupNamedEntityPairId(classId);
+  auto cls = Unit::loadClass(nep.second, nep.first);
+  if (UNLIKELY(cls == nullptr)) {
+    raise_error("Failure to resolve class name \'%s\'", nep.first->data());
+  }
+  resolveRClsMethodImpl<false>(cls, methName);
+}
+
+OPTBLD_INLINE void iopResolveRClsMethodS(SpecialClsRef ref,
+                                         const StringData* methName) {
+  resolveRClsMethodImpl<false>(specialClsRefToCls(ref), methName);
 }
 
 namespace {
@@ -5207,12 +5281,6 @@ OPTBLD_INLINE void movePCIntoGenerator(PC origpc, BaseGenerator* gen) {
   vmpc() = genAR->func()->unit()->at(gen->resumable()->resumeFromYieldOffset());
 }
 
-OPTBLD_INLINE bool tvIsGenerator(TypedValue tv) {
-  return tv.m_type == KindOfObject &&
-         tv.m_data.pobj->instanceof(Generator::getClass());
-}
-
-template<bool recursive>
 OPTBLD_INLINE void contEnterImpl(PC origpc) {
 
   // The stack must have one cell! Or else resumableStackBase() won't work!
@@ -5221,33 +5289,17 @@ OPTBLD_INLINE void contEnterImpl(PC origpc) {
 
   // Do linkage of the generator's AR.
   assertx(vmfp()->hasThis());
-  // `recursive` determines whether we enter just the top generator or whether
-  // we drop down to the lowest running delegate generator. This is useful for
-  // ContRaise, which should throw from the context of the lowest generator.
-  if(!recursive || vmfp()->getThis()->getVMClass() != Generator::getClass()) {
-    movePCIntoGenerator(origpc, this_base_generator(vmfp()));
-  } else {
-    // TODO(https://github.com/facebook/hhvm/issues/6040)
-    // Implement throwing from delegate generators.
-    assertx(vmfp()->getThis()->getVMClass() == Generator::getClass());
-    auto gen = this_generator(vmfp());
-    if (gen->m_delegate.m_type != KindOfNull) {
-      SystemLib::throwExceptionObject("Throwing from a delegate generator is "
-          "not currently supported in HHVM");
-    }
-    movePCIntoGenerator(origpc, gen);
-  }
-
+  movePCIntoGenerator(origpc, this_base_generator(vmfp()));
   EventHook::FunctionResumeYield(vmfp());
 }
 
 OPTBLD_INLINE void iopContEnter(PC origpc, PC& pc) {
-  contEnterImpl<false>(origpc);
+  contEnterImpl(origpc);
   pc = vmpc();
 }
 
 OPTBLD_INLINE void iopContRaise(PC origpc, PC& pc) {
-  contEnterImpl<true>(origpc);
+  contEnterImpl(origpc);
   pc = vmpc();
   iopThrow(pc);
 }
@@ -5305,180 +5357,6 @@ OPTBLD_INLINE TCA iopYieldK(PC origpc, PC& pc) {
   return yield(origpc, pc, &key, value);
 }
 
-OPTBLD_INLINE bool typeIsValidGeneratorDelegate(DataType type) {
-  return type == KindOfArray           ||
-         type == KindOfPersistentArray ||
-         type == KindOfDArray           ||
-         type == KindOfPersistentDArray ||
-         type == KindOfVArray           ||
-         type == KindOfPersistentVArray ||
-         type == KindOfObject;
-}
-
-OPTBLD_INLINE void iopContAssignDelegate(Iter* iter) {
-  auto param = *vmStack().topC();
-  vmStack().discard();
-  auto gen = frame_generator(vmfp());
-  if (UNLIKELY(!typeIsValidGeneratorDelegate(param.m_type))) {
-    tvDecRefGen(param);
-    SystemLib::throwErrorObject(
-      "Can use \"yield from\" only with arrays and Traversables"
-    );
-  }
-
-  // We don't use the iterator if we have a delegate generator (as iterators
-  // mess with the internal state of the generator), so short circuit and dont
-  // init our iterator in that case. Otherwise, if we init our iterator and it
-  // returns false then we know that we have an empty iterator (like `[]`) in
-  // which case just set our delegate to Null so that ContEnterDelegate and
-  // YieldFromDelegate know something is up.
-  if (tvIsGenerator(param) || iter->init(&param)) {
-    tvSet(param, gen->m_delegate);
-  } else {
-    tvSetNull(gen->m_delegate);
-  }
-  // When using a subgenerator we don't actually read the values of the m_key
-  // and m_value of our frame generator (the delegating generator). The
-  // generator itself is still holding a reference to them though, so null
-  // out the key/value to free the memory.
-  tvSetNull(gen->m_key);
-  tvSetNull(gen->m_value);
-}
-
-OPTBLD_INLINE void iopContEnterDelegate(PC origpc, PC& pc) {
-  // Make sure we have a delegate
-  auto gen = frame_generator(vmfp());
-
-  // Ignore the VM Stack, we want to pass that down from ContEnter
-
-  // ContEnterDelegate doesn't do anything for iterators.
-  if (!tvIsGenerator(gen->m_delegate)) {
-    return;
-  }
-
-  auto delegate = Generator::fromObject(gen->m_delegate.m_data.pobj);
-
-  if (delegate->getState() == BaseGenerator::State::Done) {
-    // If our generator finished earlier (or if there was nothing to do) just
-    // continue on and let YieldFromDelegate handle cleaning up.
-    return;
-  }
-
-  // A pretty odd if statement, but consider the following situation.
-  // Generators A and B both do `yield from` on a shared delegate generator,
-  // C. When A is first used we autoprime it, and therefore also autoprime C as
-  // well. Then we also autoprime B when it gets used, which advances C past
-  // some perfectly valid data.
-  // Basically this check is to make sure that we autoprime delegate generators
-  // when needed, and not if they're shared.
-  if (gen->getState() == BaseGenerator::State::Priming &&
-      delegate->getState() != BaseGenerator::State::Created) {
-    return;
-  }
-
-  // We're about to resume executing our generator, so make sure we're in the
-  // right state.
-  delegate->preNext(false);
-
-  movePCIntoGenerator(origpc, delegate);
-  EventHook::FunctionResumeYield(vmfp());
-  pc = vmpc();
-}
-
-OPTBLD_INLINE
-TCA yieldFromGenerator(PC& pc, Generator* gen, Offset suspendOffset) {
-  auto fp = vmfp();
-
-  assertx(tvIsGenerator(gen->m_delegate));
-  auto delegate = Generator::fromObject(gen->m_delegate.m_data.pobj);
-
-  if (delegate->getState() == BaseGenerator::State::Done) {
-    // If the generator is done, just copy the return value onto the stack.
-    tvDup(delegate->m_value, *vmStack().topTV());
-    return nullptr;
-  }
-
-  auto jitReturn = jitReturnPre(fp);
-
-  EventHook::FunctionSuspendYield(fp);
-  auto const sfp = fp->sfp();
-  auto const callOff = fp->callOffset();
-
-  // We don't actually want to "yield" anything here. The implementation of
-  // key/current are smart enough to dive into our delegate generator, so
-  // really what we want to do is clean up all of the generator metadata
-  // (state, ressume address, etc) and continue on.
-  assertx(gen->isRunning());
-  gen->resumable()->setResumeAddr(nullptr, suspendOffset);
-  gen->setState(BaseGenerator::State::Started);
-
-  returnToCaller(pc, sfp, callOff);
-
-  return jitReturnPost(jitReturn);
-}
-
-OPTBLD_INLINE
-TCA yieldFromIterator(PC& pc, Generator* gen, Iter* it, Offset suspendOffset) {
-  auto fp = vmfp();
-
-  // For the most part this should never happen, the emitter assigns our
-  // delegate to a non-null value in ContAssignDelegate. The one exception to
-  // this is if we are given an empty iterator, in which case
-  // ContAssignDelegate will remove our delegate and just send us to
-  // YieldFromDelegate to return our null.
-  if (UNLIKELY(gen->m_delegate.m_type == KindOfNull)) {
-    tvWriteNull(*vmStack().topTV());
-    return nullptr;
-  }
-
-  // If iteration is complete, then this bytecode pushes null on the stack.
-  if (it->end()) {
-    tvWriteNull(*vmStack().topTV());
-    return nullptr;
-  }
-
-  auto jitReturn = jitReturnPre(fp);
-
-  EventHook::FunctionSuspendYield(fp);
-  auto const sfp = fp->sfp();
-  auto const callOff = fp->callOffset();
-
-  auto key = *it->key().asTypedValue();
-  auto val = *it->val().asTypedValue();
-  gen->yield(suspendOffset, &key, val);
-
-  returnToCaller(pc, sfp, callOff);
-
-  it->next();
-
-  return jitReturnPost(jitReturn);
-}
-
-OPTBLD_INLINE TCA iopYieldFromDelegate(PC origpc, PC& pc, Iter* it, PC) {
-  auto gen = frame_generator(vmfp());
-  auto func = vmfp()->func();
-  auto suspendOffset = func->unit()->offsetOf(origpc);
-  if (tvIsGenerator(gen->m_delegate)) {
-    return yieldFromGenerator(pc, gen, suspendOffset);
-  }
-  return yieldFromIterator(pc, gen, it, suspendOffset);
-}
-
-OPTBLD_INLINE void iopContUnsetDelegate(CudOp subop, Iter* iter) {
-  auto gen = frame_generator(vmfp());
-  // The `shouldFreeIter` immediate determines whether we need to call free
-  // on our iterator or not. Normally if we finish executing our yield from
-  // successfully then the implementation of `next` will automatically do it
-  // for us when there aren't any elements left, but if an exception is thrown
-  // then we need to do it manually. We don't use the iterator when the
-  // delegate is a generator though, so even if the param tells us to free it
-  // we should just ignore it.
-  if (UNLIKELY(subop == CudOp::FreeIter && !tvIsGenerator(gen->m_delegate))) {
-    iter->free();
-  }
-  tvSetNull(gen->m_delegate);
-}
-
 OPTBLD_INLINE void iopContCheck(ContCheckOp subop) {
   this_base_generator(vmfp())->preNext(subop == ContCheckOp::CheckStarted);
 }
@@ -5488,29 +5366,15 @@ OPTBLD_INLINE void iopContValid() {
     this_generator(vmfp())->getState() != BaseGenerator::State::Done);
 }
 
-OPTBLD_INLINE Generator *currentlyDelegatedGenerator(Generator *gen) {
-  while(tvIsGenerator(gen->m_delegate)) {
-    gen = Generator::fromObject(gen->m_delegate.m_data.pobj);
-  }
-  return gen;
-}
-
 OPTBLD_INLINE void iopContKey() {
   Generator* cont = this_generator(vmfp());
   cont->startedCheck();
-
-  // If we are currently delegating to a generator, return its key instead
-  cont = currentlyDelegatedGenerator(cont);
-
   tvDup(cont->m_key, *vmStack().allocC());
 }
 
 OPTBLD_INLINE void iopContCurrent() {
   Generator* cont = this_generator(vmfp());
   cont->startedCheck();
-
-  // If we are currently delegating to a generator, return its value instead
-  cont = currentlyDelegatedGenerator(cont);
 
   if(cont->getState() == BaseGenerator::State::Done) {
     vmStack().pushNull();

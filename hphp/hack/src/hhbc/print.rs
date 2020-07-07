@@ -18,7 +18,8 @@ use env::{iterator::Id as IterId, local::Type as Local, Env as BodyEnv};
 use escaper::{escape, escape_by, is_lit_printable};
 use hhas_adata_rust::HhasAdata;
 use hhas_adata_rust::{
-    ARRAY_PREFIX, DARRAY_PREFIX, DICT_PREFIX, KEYSET_PREFIX, VARRAY_PREFIX, VEC_PREFIX,
+    ARRAY_PREFIX, DARRAY_PREFIX, DICT_PREFIX, KEYSET_PREFIX, LEGACY_DICT_PREFIX, LEGACY_VEC_PREFIX,
+    VARRAY_PREFIX, VEC_PREFIX,
 };
 use hhas_attribute_rust::{self as hhas_attribute, HhasAttribute};
 use hhas_body_rust::HhasBody;
@@ -1018,11 +1019,21 @@ fn print_adata<W: Write>(ctx: &mut Context, w: &mut W, tv: &TypedValue) -> Resul
         // TODO: The False case seems to sometimes be b:0 and sometimes i:0.  Why?
         TypedValue::Bool(false) => w.write("b:0;"),
         TypedValue::Bool(true) => w.write("b:1;"),
-        TypedValue::Dict((pairs, loc)) => {
-            print_adata_dict_collection_argument(ctx, w, DICT_PREFIX, loc, pairs)
+        TypedValue::Dict((pairs, loc, is_legacy)) => {
+            let prefix = if *is_legacy {
+                LEGACY_DICT_PREFIX
+            } else {
+                DICT_PREFIX
+            };
+            print_adata_dict_collection_argument(ctx, w, prefix, loc, pairs)
         }
-        TypedValue::Vec((values, loc)) => {
-            print_adata_collection_argument(ctx, w, VEC_PREFIX, loc, values)
+        TypedValue::Vec((values, loc, is_legacy)) => {
+            let prefix = if *is_legacy {
+                LEGACY_VEC_PREFIX
+            } else {
+                VEC_PREFIX
+            };
+            print_adata_collection_argument(ctx, w, prefix, loc, values)
         }
         TypedValue::DArray((pairs, loc)) => {
             print_adata_dict_collection_argument(ctx, w, DARRAY_PREFIX, loc, pairs)
@@ -1379,33 +1390,7 @@ fn print_instr<W: Write>(w: &mut W, instr: &Instruct) -> Result<(), W::Error> {
         IAsync(a) => print_async(w, a),
         IGenerator(gen) => print_gen_creation_execution(w, gen),
         IIncludeEvalDefine(ed) => print_include_eval_define(w, ed),
-        IGenDelegation(g) => print_gen_delegation(w, g),
         _ => Err(Error::fail("invalid instruction")),
-    }
-}
-
-fn print_gen_delegation<W: Write>(w: &mut W, g: &GenDelegation) -> Result<(), W::Error> {
-    use GenDelegation as G;
-    match g {
-        G::ContAssignDelegate(i) => {
-            w.write("ContAssignDelegate ")?;
-            print_iterator_id(w, i)
-        }
-        G::ContEnterDelegate => w.write("ContEnterDelegate"),
-        G::YieldFromDelegate(i, l) => {
-            w.write("YieldFromDelegate ")?;
-            print_iterator_id(w, i)?;
-            w.write(" ")?;
-            print_label(w, l)
-        }
-        G::ContUnsetDelegate(free, i) => {
-            w.write("ContUnsetDelegate ")?;
-            w.write(match free {
-                FreeIterator::IgnoreIter => "IgnoreIter ",
-                FreeIterator::FreeIter => "FreeIter ",
-            })?;
-            print_iterator_id(w, i)
-        }
     }
 }
 
@@ -2049,12 +2034,6 @@ fn print_lit_const<W: Write>(w: &mut W, lit: &InstructLitConst) -> Result<(), W:
         LC::NewVArray(i) => concat_str_by(w, " ", ["NewVArray", i.to_string().as_str()]),
         LC::NewVec(i) => concat_str_by(w, " ", ["NewVec", i.to_string().as_str()]),
         LC::NewKeysetArray(i) => concat_str_by(w, " ", ["NewKeysetArray", i.to_string().as_str()]),
-        LC::NewLikeArrayL(local, i) => {
-            w.write("NewLikeArrayL ")?;
-            print_local(w, local)?;
-            w.write(" ")?;
-            w.write(i.to_string().as_str())
-        }
         LC::NewStructArray(l) => {
             w.write("NewStructArray ")?;
             angle(w, |w| print_shape_fields(w, l))
@@ -2217,6 +2196,22 @@ fn print_op<W: Write>(w: &mut W, op: &InstructOperator) -> Result<(), W::Error> 
         }
         I::ResolveClsMethodS(r, mid) => {
             w.write("ResolveClsMethodS ")?;
+            print_special_cls_ref(w, r)?;
+            w.write(" ")?;
+            print_method_id(w, mid)
+        }
+        I::ResolveRClsMethod(mid) => {
+            w.write("ResolveRClsMethod ")?;
+            print_method_id(w, mid)
+        }
+        I::ResolveRClsMethodD(cid, mid) => {
+            w.write("ResolveRClsMethodD ")?;
+            print_class_id(w, cid)?;
+            w.write(" ")?;
+            print_method_id(w, mid)
+        }
+        I::ResolveRClsMethodS(r, mid) => {
+            w.write("ResolveRClsMethodS ")?;
             print_special_cls_ref(w, r)?;
             w.write(" ")?;
             print_method_id(w, mid)
@@ -2877,10 +2872,6 @@ fn print_expr<W: Write>(
             print_expr(ctx, w, env, e)
         }
         E_::YieldBreak => w.write("return"),
-        E_::YieldFrom(e) => {
-            w.write("yield from ")?;
-            print_expr(ctx, w, env, e)
-        }
         E_::Import(i) => {
             print_import_flavor(w, &i.0)?;
             w.write(" ")?;
