@@ -1,6 +1,6 @@
 <?hh
-require(__DIR__ . '/common.inc');
 <<__EntryPoint>> function main(): void {
+require(__DIR__ . '/common.inc');
 $path = __FILE__ . ".test";
 $breakpoints = varray[
    darray[
@@ -43,7 +43,7 @@ checkObjEqualRecursively($msg, darray[
           "source" => darray["path" => $path, "name" => str_replace(".test", "", basename($path))],
           "id" => 2,
           "line" => 17,
-          "name" => "{main}"
+          "name" => "main"
         ]
       ]
     ]

@@ -88,16 +88,23 @@ module FlowSet = Set.Make (Flow)
 
 type security_lattice = FlowSet.t
 
+module Policy = struct
+  type t = policy
+
+  let compare = compare
+end
+
+module PCSet = Set.Make (Policy)
+
+type program_counter = PCSet.t
+
 type local_env = {
   le_vars: ptype LMap.t;
   (* Policy tracking local effects, these effects
      are not observable outside the current function.
      Assignments to local variables fall into this
      category. *)
-  le_lpc: policy list;
-  (* Policy tracking effects with global visibility,
-     like assignments to fields of an argument. *)
-  le_gpc: policy list;
+  le_pc: program_counter;
 }
 
 (* The environment is mutable data that
@@ -116,6 +123,9 @@ type policied_property = {
   pp_name: string;
   pp_type: Type.locl_ty;
   pp_purpose: purpose option;
+  (* Visibility is not needed beyond the decl phase, but OCaml makes
+   * it difficult to map between collections, so it is carried to the analysis. *)
+  pp_visibility: Aast.visibility;
 }
 
 type class_decl = {
@@ -160,6 +170,8 @@ type renv = {
   re_this: ptype option;
   (* Return type of the function being checked. *)
   re_ret: ptype;
+  (* The initial program counter for the function *)
+  re_gpc: policy;
 }
 
 (* The analysis result for a callable *)

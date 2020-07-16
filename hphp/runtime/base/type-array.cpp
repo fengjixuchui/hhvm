@@ -43,10 +43,6 @@ namespace HPHP {
 ////////////////////////////////////////////////////////////////////////////////
 
 const Array null_array{};
-const StaticString array_string("Array");
-const StaticString vec_string("Vec");
-const StaticString dict_string("Dict");
-const StaticString keyset_string("Keyset");
 
 void Array::setEvalScalar() const {
   Array* thisPtr = const_cast<Array*>(this);
@@ -329,253 +325,25 @@ Array& Array::mergeImpl(ArrayData *data) {
 String Array::toString() const {
   if (m_arr == nullptr) return empty_string();
   if (m_arr->isPHPArrayType()) {
-    raise_notice("Array to string conversion");
-    return array_string;
+    SystemLib::throwInvalidOperationExceptionObject(
+      "Array to string conversion"
+    );
   }
   assertx(m_arr->isHackArrayType());
   if (m_arr->isVecType()) {
-    raise_notice("Vec to string conversion");
-    return vec_string;
+    SystemLib::throwInvalidOperationExceptionObject(
+      "Vec to string conversion"
+    );
   }
   if (m_arr->isDictType()) {
-    raise_notice("Dict to string conversion");
-    return dict_string;
+    SystemLib::throwInvalidOperationExceptionObject(
+      "Dict to string conversion"
+    );
   }
   assertx(m_arr->isKeysetType());
-  raise_notice("Keyset to string conversion");
-  return keyset_string;
-}
-
-///////////////////////////////////////////////////////////////////////////////
-// Comparisons.
-
-bool Array::same(const Array& v2) const {
-  if (!m_arr) return !v2.get();
-  if (isPHPArray()) {
-    if (UNLIKELY(!v2.isPHPArray())) {
-      if (UNLIKELY(checkHACCompare() && v2.isHackArray())) {
-        raiseHackArrCompatArrHackArrCmp();
-      }
-      return false;
-    }
-    return ArrayData::Same(m_arr.get(), v2.get());
-  }
-
-  auto const nonHackArr = [&]{
-    if (UNLIKELY(checkHACCompare() && v2.isPHPArray() && !v2.isNull())) {
-      raiseHackArrCompatArrHackArrCmp();
-    }
-  };
-
-  if (m_arr->isVecType()) {
-    if (UNLIKELY(!v2.isVec())) {
-      nonHackArr();
-      return false;
-    }
-    assertx(m_arr->isVecKind() && v2->isVecKind());
-    return PackedArray::VecSame(m_arr.get(), v2.get());
-  }
-  if (m_arr->isDictType()) {
-    if (UNLIKELY(!v2.isDict())) {
-      nonHackArr();
-      return false;
-    }
-    assertx(m_arr->isDictKind() && v2->isDictKind());
-    return MixedArray::DictSame(m_arr.get(), v2.get());
-  }
-  if (m_arr->isKeysetType()) {
-    if (UNLIKELY(!v2.isKeyset())) {
-      nonHackArr();
-      return false;
-    }
-    assertx(m_arr->isKeysetKind() && v2->isKeysetKind());
-    return SetArray::Same(m_arr.get(), v2.get());
-  }
-  not_reached();
-}
-
-bool Array::equal(const Array& v2) const {
-  if (isPHPArray()) {
-    if (UNLIKELY(!v2.isPHPArray())) {
-      if (UNLIKELY(checkHACCompare() && m_arr)) {
-        raiseHackArrCompatArrHackArrCmp();
-      }
-      return false;
-    }
-    if (m_arr == nullptr || v2.get() == nullptr) {
-      return HPHP::equal(toBoolean(), v2.toBoolean());
-    }
-    return ArrayData::Equal(m_arr.get(), v2.get());
-  }
-
-  auto const nonHackArr = [&]{
-    if (UNLIKELY(checkHACCompare() && v2.isPHPArray() && !v2.isNull())) {
-      raiseHackArrCompatArrHackArrCmp();
-    }
-  };
-
-  if (m_arr->isVecType()) {
-    if (UNLIKELY(!v2.isVec())) {
-      nonHackArr();
-      return false;
-    }
-    assertx(m_arr->isVecKind() && v2->isVecKind());
-    return PackedArray::VecEqual(m_arr.get(), v2.get());
-  }
-  if (m_arr->isDictType()) {
-    if (UNLIKELY(!v2.isDict())) {
-      nonHackArr();
-      return false;
-    }
-    assertx(m_arr->isDictKind() && v2->isDictKind());
-    return MixedArray::DictEqual(m_arr.get(), v2.get());
-  }
-  if (m_arr->isKeysetType()) {
-    if (UNLIKELY(!v2.isKeyset())) {
-      nonHackArr();
-      return false;
-    }
-    return SetArray::Equal(m_arr.get(), v2.get());
-  }
-  not_reached();
-}
-
-bool Array::less(const Array& v2, bool flip /* = false */) const {
-  if (isPHPArray()) {
-    if (UNLIKELY(!v2.isPHPArray())) {
-      if (UNLIKELY(checkHACCompare() && m_arr)) {
-        raiseHackArrCompatArrHackArrCmp();
-      }
-      if (v2.isVec()) throw_vec_compare_exception();
-      if (v2.isDict()) throw_dict_compare_exception();
-      if (v2.isKeyset()) throw_keyset_compare_exception();
-      not_reached();
-    }
-    if (m_arr == nullptr || v2.get() == nullptr) {
-      return HPHP::less(toBoolean(), v2.toBoolean());
-    }
-    return flip
-      ? ArrayData::Gt(v2.get(), m_arr.get())
-      : ArrayData::Lt(m_arr.get(), v2.get());
-  }
-  if (m_arr->isVecType()) {
-    if (UNLIKELY(!v2.isVec())) {
-      if (UNLIKELY(checkHACCompare() && v2.isPHPArray() && !v2.isNull())) {
-        raiseHackArrCompatArrHackArrCmp();
-      }
-      throw_vec_compare_exception();
-    }
-    assertx(v2->isVecKind() && m_arr->isVecKind());
-    return flip
-      ? PackedArray::VecGt(v2.get(), m_arr.get())
-      : PackedArray::VecLt(m_arr.get(), v2.get());
-  }
-  if (UNLIKELY(checkHACCompare() && v2.isPHPArray() && !v2.isNull())) {
-    raiseHackArrCompatArrHackArrCmp();
-  }
-  if (m_arr->isDictType()) throw_dict_compare_exception();
-  if (m_arr->isKeysetType()) throw_keyset_compare_exception();
-  not_reached();
-}
-
-bool Array::less(const Variant& v2) const {
-  if (isPHPArray()) {
-    if (m_arr == nullptr || v2.isNull()) {
-      if (UNLIKELY(((bool)m_arr == !v2.isPHPArray()))) {
-        throw_arr_non_arr_compare_exception();
-      }
-      return HPHP::less(toBoolean(), v2.toBoolean());
-    }
-  }
-  return HPHP::more(v2, *this);
-}
-
-bool Array::more(const Array& v2, bool flip /* = true */) const {
-  if (isPHPArray()) {
-    if (UNLIKELY(!v2.isPHPArray())) {
-      if (UNLIKELY(checkHACCompare() && m_arr)) {
-        raiseHackArrCompatArrHackArrCmp();
-      }
-      if (v2.isVec()) throw_vec_compare_exception();
-      if (v2.isDict()) throw_dict_compare_exception();
-      if (v2.isKeyset()) throw_keyset_compare_exception();
-      not_reached();
-    }
-    if (m_arr == nullptr || v2.get() == nullptr) {
-      return HPHP::more(toBoolean(), v2.toBoolean());
-    }
-    return flip
-      ? ArrayData::Lt(v2.get(), m_arr.get())
-      : ArrayData::Gt(m_arr.get(), v2.get());
-  }
-  if (m_arr->isVecType()) {
-    if (UNLIKELY(!v2.isVec())) {
-      if (UNLIKELY(checkHACCompare() && v2.isPHPArray() && !v2.isNull())) {
-        raiseHackArrCompatArrHackArrCmp();
-      }
-      throw_vec_compare_exception();
-    }
-    assertx(m_arr->isVecKind() && v2->isVecKind());
-    return flip
-      ? PackedArray::VecGt(v2.get(), m_arr.get())
-      : PackedArray::VecLt(m_arr.get(), v2.get());
-  }
-  if (UNLIKELY(checkHACCompare() && v2.isPHPArray() && !v2.isNull())) {
-    raiseHackArrCompatArrHackArrCmp();
-  }
-  if (m_arr->isDictType()) throw_dict_compare_exception();
-  if (m_arr->isKeysetType()) throw_keyset_compare_exception();
-  not_reached();
-}
-
-bool Array::more(const Variant& v2) const {
-  if (isPHPArray()) {
-    if (m_arr == nullptr || v2.isNull()) {
-      if (UNLIKELY(((bool)m_arr == !v2.isPHPArray()))) {
-        throw_arr_non_arr_compare_exception();
-      }
-      return HPHP::more(toBoolean(), v2.toBoolean());
-    }
-  }
-  return HPHP::less(v2, *this);
-}
-
-int Array::compare(const Array& v2, bool flip /* = false */) const {
-  if (isPHPArray()) {
-    if (UNLIKELY(!v2.isPHPArray())) {
-      if (UNLIKELY(checkHACCompare() && m_arr)) {
-        raiseHackArrCompatArrHackArrCmp();
-      }
-      if (v2.isVec()) throw_vec_compare_exception();
-      if (v2.isDict()) throw_dict_compare_exception();
-      if (v2.isKeyset()) throw_keyset_compare_exception();
-      not_reached();
-    }
-    if (m_arr == nullptr || v2.get() == nullptr) {
-      return HPHP::compare(toBoolean(), v2.toBoolean());
-    }
-    return flip
-      ? -ArrayData::Compare(v2.get(), m_arr.get())
-      : ArrayData::Compare(m_arr.get(), v2.get());
-  }
-  if (m_arr->isVecType()) {
-    if (UNLIKELY(!v2.isVec())) {
-      if (UNLIKELY(checkHACCompare() && v2.isPHPArray() && !v2.isNull())) {
-        raiseHackArrCompatArrHackArrCmp();
-      }
-      throw_vec_compare_exception();
-    }
-    assertx(v2->isVecKind() && m_arr->isVecKind());
-    return flip
-      ? -PackedArray::VecCmp(v2.get(), m_arr.get())
-      : PackedArray::VecCmp(m_arr.get(), v2.get());
-  }
-  if (UNLIKELY(checkHACCompare() && v2.isPHPArray() && !v2.isNull())) {
-    raiseHackArrCompatArrHackArrCmp();
-  }
-  if (m_arr->isDictType()) throw_dict_compare_exception();
-  if (m_arr->isKeysetType()) throw_keyset_compare_exception();
-  not_reached();
+  SystemLib::throwInvalidOperationExceptionObject(
+    "Keyset to string conversion"
+  );
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -680,20 +448,9 @@ decltype(auto) elem(const Array& arr, Fn fn, bool is_key,
 
   // The logic here is a specialization of tvToKey().
   if (key.isNull()) {
-    if (!ad->useWeakKeys()) {
-      throwInvalidArrayKeyException(&immutable_uninit_base, ad);
-    }
-    if (checkHACArrayKeyCast()) {
-      raiseHackArrCompatImplicitArrayKey(&immutable_uninit_base);
-    }
-    return fn(make_tv<KindOfPersistentString>(staticEmptyString()),
-              std::forward<Args>(args)...);
+    throwInvalidArrayKeyException(&immutable_uninit_base, ad);
   }
 
-  int64_t n;
-  if (ad->convertKey(key.get(), n)) {
-    return fn(n, std::forward<Args>(args)...);
-  }
   return fn(key, std::forward<Args>(args)...);
 }
 

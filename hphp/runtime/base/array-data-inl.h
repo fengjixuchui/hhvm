@@ -78,31 +78,23 @@ ALWAYS_INLINE ArrayData* ArrayData::Create() {
 }
 
 ALWAYS_INLINE ArrayData* ArrayData::CreateVArray(arrprov::Tag tag /* = {} */) {
-  return RO::EvalArrayProvenanceEmpty &&
-         RO::EvalArrProvDVArrays
+  return RO::EvalArrayProvenance
     ? arrprov::tagStaticArr(staticEmptyVArray(), tag)
     : staticEmptyVArray();
 }
 
-ALWAYS_INLINE ArrayData* ArrayData::CreateVec(arrprov::Tag tag /* = {} */) {
-  return RO::EvalArrayProvenanceEmpty &&
-         RO::EvalArrProvHackArrays
-    ? arrprov::tagStaticArr(staticEmptyVec(), tag)
-    : staticEmptyVec();
-}
-
 ALWAYS_INLINE ArrayData* ArrayData::CreateDArray(arrprov::Tag tag /* = {} */) {
-  return RO::EvalArrayProvenanceEmpty &&
-         RO::EvalArrProvDVArrays
+  return RO::EvalArrayProvenance
     ? arrprov::tagStaticArr(staticEmptyDArray(), tag)
     : staticEmptyDArray();
 }
 
+ALWAYS_INLINE ArrayData* ArrayData::CreateVec(arrprov::Tag tag /* = {} */) {
+  return staticEmptyVec();
+}
+
 ALWAYS_INLINE ArrayData* ArrayData::CreateDict(arrprov::Tag tag /* = {} */) {
-  return RO::EvalArrayProvenanceEmpty &&
-         RO::EvalArrProvHackArrays
-    ? arrprov::tagStaticArr(staticEmptyDictArray(), tag)
-    : staticEmptyDictArray();
+  return staticEmptyDictArray();
 }
 
 ALWAYS_INLINE ArrayData* ArrayData::CreateKeyset() {
@@ -258,10 +250,6 @@ inline uint8_t ArrayData::auxBits() const {
   return isLegacyArray() ? kLegacyArray : 0;
 }
 
-inline bool ArrayData::useWeakKeys() const {
-  return isPHPArrayType();
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 
 ALWAYS_INLINE
@@ -387,10 +375,6 @@ ALWAYS_INLINE bool checkHACCompare() {
 ALWAYS_INLINE bool checkHACArrayPlus() {
   return RuntimeOption::EvalHackArrCompatNotices &&
          RuntimeOption::EvalHackArrCompatCheckArrayPlus;
-}
-ALWAYS_INLINE bool checkHACArrayKeyCast() {
-  return RuntimeOption::EvalHackArrCompatNotices &&
-         RuntimeOption::EvalHackArrCompatCheckArrayKeyCast;
 }
 
 ///////////////////////////////////////////////////////////////////////////////

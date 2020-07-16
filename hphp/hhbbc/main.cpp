@@ -288,7 +288,6 @@ std::vector<SString> load_input(F&& fun) {
   RO::EvalHackArrCompatNotices =
     RO::EvalHackArrCompatCheckCompare =
     RO::EvalHackArrCompatCheckArrayPlus =
-    RO::EvalHackArrCompatCheckArrayKeyCast =
       gd.HackArrCompatNotices;
   RO::EvalForbidDynamicCallsToFunc = gd.ForbidDynamicCallsToFunc;
   RO::EvalForbidDynamicCallsToClsMeth =
@@ -312,10 +311,7 @@ std::vector<SString> load_input(F&& fun) {
   RO::EvalEmitClsMethPointers = gd.EmitClsMethPointers;
   RO::EvalIsVecNotices = gd.IsVecNotices;
   RO::EvalIsCompatibleClsMethType = gd.IsCompatibleClsMethType;
-  RO::EvalArrayProvenance =
-    RO::EvalArrProvHackArrays =
-    RO::EvalArrProvDVArrays =
-      gd.ArrayProvenance;
+  RO::EvalArrayProvenance = gd.ArrayProvenance;
   RO::StrictArrayFillKeys = gd.StrictArrayFillKeys;
   RO::EvalEnableFuncStringInterop = gd.EnableFuncStringInterop;
   if (gd.HardGenericsUB) {

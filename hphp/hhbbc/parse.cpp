@@ -721,7 +721,6 @@ std::unique_ptr<php::Func> parse_func(ParseUnitState& puState,
   ret->returnUBs          = fe.retUpperBounds;
   ret->originalFilename   = fe.originalFilename;
 
-  ret->top                 = fe.top;
   ret->isClosureBody       = fe.isClosureBody;
   ret->isAsync             = fe.isAsync;
   ret->isGenerator         = fe.isGenerator;
@@ -1136,6 +1135,11 @@ void parse_unit(php::Program& prog, const UnitEmitter* uep) {
   ret->isHHFile = ue.m_isHHFile;
   ret->metaData = ue.m_metaData;
   ret->fileAttributes = ue.m_fileAttributes;
+
+  if (ue.m_fatalUnit) {
+    php::FatalInfo fi{ue.m_fatalLoc, ue.m_fatalOp, ue.m_fatalMsg};
+    ret->fatalInfo = std::make_unique<php::FatalInfo>(fi);
+  }
 
   ParseUnitState puState{ prog.nextFuncId };
   if (ue.hasSourceLocInfo()) {

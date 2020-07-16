@@ -629,11 +629,10 @@ const ArrayFunctions g_array_funcs = {
    * ArrayData* ToPHPArray(ArrayData*, bool)
    *
    *   Convert to a PHP array. If already a PHP array, it will be returned
-   *   unchange (without copying). If copy is false, it may be converted in
+   *   unchanged (without copying). If copy is false, it may be converted in
    *   place.
    */
   DISPATCH(ToPHPArray)
-  DISPATCH(ToPHPArrayIntishCast)
 
    /*
    * ArrayData* ToDict(ArrayData*, bool)
@@ -745,7 +744,14 @@ bool ArrayData::EqualHelper(const ArrayData* ad1, const ArrayData* ad2,
   assertx(IMPLIES(ad1->isHackArrayType(), !bothVanilla(ad1, ad2)));
 
   if (ad1 == ad2) return true;
-  if (!ArrayData::dvArrayEqual(ad1, ad2)) return false;
+  if (!ArrayData::dvArrayEqual(ad1, ad2)) {
+    if (checkHACCompare() &&
+        ((ad1->isDArray() && ad2->isNotDVArray()) ||
+         (ad1->isNotDVArray() && ad2->isDArray()))) {
+      raise_hackarr_compat_notice("Comparing plain array and darray");
+    }
+    return false;
+  }
   if (ad1->size() != ad2->size()) return false;
 
   // Prevent circular referenced objects/arrays or deep ones.
@@ -754,7 +760,7 @@ bool ArrayData::EqualHelper(const ArrayData* ad1, const ArrayData* ad2,
   if (strict) {
     for (ArrayIter iter1{ad1}, iter2{ad2}; iter1; ++iter1, ++iter2) {
       assertx(iter2);
-      if (!same(iter1.first(), iter2.first()) ||
+      if (!HPHP::same(iter1.first(), iter2.first()) ||
           !tvSame(iter1.secondVal(), iter2.secondVal())) {
         return false;
       }
@@ -792,8 +798,11 @@ int64_t ArrayData::CompareHelper(const ArrayData* ad1, const ArrayData* ad2) {
     if (ad2->isVArray()) throw_varray_compare_exception();
     if (ad2->isDArray()) throw_darray_compare_exception();
     always_assert(false);
-  } else if (ad1->isDArray()) {
-    throw_darray_compare_exception();
+  } else if (!ad1->isVArray()) {
+    if (ad1->isDArray()) throw_darray_compare_exception();
+    if (checkHACCompare()) {
+      raise_hackarr_compat_notice("Comparing two plain arrays relationally");
+    }
   }
 
   auto const size1 = ad1->size();
@@ -861,45 +870,7 @@ int64_t ArrayData::Compare(const ArrayData* ad1, const ArrayData* ad2) {
   return CompareHelper(ad1, ad2);
 }
 
-int ArrayData::compare(const ArrayData* v2) const {
-  assertx(v2);
-
-  if (isPHPArrayType()) {
-    if (UNLIKELY(!v2->isPHPArrayType())) {
-      if (UNLIKELY(checkHACCompare())) {
-        raiseHackArrCompatArrHackArrCmp();
-      }
-      if (v2->isVecType()) throw_vec_compare_exception();
-      if (v2->isDictType()) throw_dict_compare_exception();
-      if (v2->isKeysetType()) throw_keyset_compare_exception();
-      not_reached();
-    }
-    return Compare(this, v2);
-  }
-
-  if (isVecType()) {
-    if (UNLIKELY(!v2->isVecType())) {
-      if (UNLIKELY(checkHACCompare() && v2->isPHPArrayType())) {
-        raiseHackArrCompatArrHackArrCmp();
-      }
-      throw_vec_compare_exception();
-    }
-    if (!bothVanilla(this, v2)) return Compare(this, v2);
-    assertx(isVecKind() && v2->isVecKind());
-    return PackedArray::VecCmp(this, v2);
-  }
-
-  if (UNLIKELY(checkHACCompare() && v2->isPHPArrayType())) {
-    raiseHackArrCompatArrHackArrCmp();
-  }
-
-  if (isDictType()) throw_dict_compare_exception();
-  if (isKeysetType()) throw_keyset_compare_exception();
-
-  not_reached();
-}
-
-bool ArrayData::equal(const ArrayData* v2, bool strict) const {
+bool ArrayData::same(const ArrayData* v2) const {
   assertx(v2);
 
   if (toDataType() != v2->toDataType()) {
@@ -910,24 +881,12 @@ bool ArrayData::equal(const ArrayData* v2, bool strict) const {
   }
 
   if (isPHPArrayType() || !bothVanilla(this, v2)) {
-    return strict ? Same(this, v2) : Equal(this, v2);
+    return Same(this, v2);
   }
 
-  if (isVecType()) {
-    return strict
-      ? PackedArray::VecSame(this, v2) : PackedArray::VecEqual(this, v2);
-  }
-
-  if (isDictKind()) {
-    return strict
-      ? MixedArray::DictSame(this, v2) : MixedArray::DictEqual(this, v2);
-  }
-
-  if (isKeysetKind()) {
-    return strict ? SetArray::Same(this, v2) : SetArray::Equal(this, v2);
-  }
-
-  not_reached();
+  if (isVecKind())  return PackedArray::VecSame(this, v2);
+  if (isDictKind()) return MixedArray::DictSame(this, v2);
+  return SetArray::Same(this, v2);
 }
 
 Variant ArrayData::reset() {
@@ -1223,17 +1182,6 @@ void raiseHackArrCompatDVArrCmp(const ArrayData* ad1,
   );
 }
 
-std::string makeHackArrCompatImplicitArrayKeyMsg(const TypedValue* key) {
-  return folly::sformat(
-    "Implicit conversion of {} to array key",
-    describeKeyType(key)
-  );
-}
-
-void raiseHackArrCompatImplicitArrayKey(const TypedValue* key) {
-  raise_hac_array_key_cast_notice(makeHackArrCompatImplicitArrayKeyMsg(key));
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 
 namespace arrprov_detail {
@@ -1263,6 +1211,61 @@ ArrayData* tagArrProvImpl(ArrayData* ad, const SrcArr* src) {
 template ArrayData* tagArrProvImpl<ArrayData>(ArrayData*, const ArrayData*);
 template ArrayData* tagArrProvImpl<APCArray>(ArrayData*, const APCArray*);
 
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+ArrayData* ArrayData::toPHPArrayIntishCast(bool copy) {
+  auto const base = toPHPArray(copy);
+  if (isVArray() || isVecType()) return base;
+
+  // Check if we need to intish-cast any string keys.
+  int64_t i;
+  auto intish = false;
+  IterateKVNoInc(base, [&](TypedValue k, TypedValue) {
+    return intish |= tvIsString(k) && val(k).pstr->isStrictlyInteger(i);
+  });
+  if (!intish) return base;
+
+  // Create a new, plain PHP array with the casted keys.
+  auto result = MixedArrayInit(base->size());
+  IterateKVNoInc(base, [&](TypedValue k, TypedValue v) {
+    result.setUnknownKey<IntishCast::Cast>(tvAsCVarRef(&k), tvAsCVarRef(&v));
+  });
+  if (base != this) decRefArr(base);
+  auto ad = result.create();
+  if (!isKeysetType()) return ad;
+
+  // When keysets are intish-casted, we cast the values, too. Do so in place.
+  // This case is rare, so we keep the extra checks out of the loop above.
+  assertx(ad->hasExactlyOneRef());
+  auto elm = MixedArray::asMixed(ad)->data();
+  for (auto const end = elm + ad->size(); elm != end; elm++) {
+    if (tvIsString(elm->data) && elm->hasIntKey()) {
+      decRefStr(val(elm->data).pstr);
+      tvCopy(make_tv<KindOfInt64>(elm->intKey()), elm->data);
+    }
+  }
+  return ad;
+}
+
+bool ArrayData::intishCastKey(const StringData* key, int64_t& i) const {
+  if (key->isStrictlyInteger(i)) {
+    if (isPHPArrayType()) {
+      if (RO::EvalHackArrCompatIntishCastNotices) {
+        raise_hackarr_compat_notice("triggered array-based IntishCast");
+      }
+      return true;
+    }
+    auto const t = [&]{
+      if (isVecType())  return "vec";
+      if (isDictType()) return "dict";
+      assertx(isKeysetType());
+      return "keyset";
+    }();
+    raise_hackarr_compat_notice(folly::sformat("missed IntishCast for {}", t));
+  }
+  return false;
 }
 
 ///////////////////////////////////////////////////////////////////////////////

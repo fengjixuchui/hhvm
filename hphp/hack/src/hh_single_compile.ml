@@ -38,7 +38,6 @@ type options = {
   for_debugger_eval: bool;
   (* below are used during Rust porting *)
   disable_toplevel_elaboration: bool;
-  rust_emitter: bool;
   include_header: bool;
 }
 
@@ -112,7 +111,6 @@ let parse_options () =
   let log_stats = ref false in
   let for_debugger_eval = ref false in
   let disable_toplevel_elaboration = ref false in
-  let rust_emitter = ref true in
   let include_header = ref false in
   let usage =
     P.sprintf "Usage: hh_single_compile (%s) filename\n" Sys.argv.(0)
@@ -162,9 +160,6 @@ let parse_options () =
       ( "--disable-toplevel-elaboration",
         Arg.Unit (fun () -> disable_toplevel_elaboration := true),
         "Disable toplevel definition elaboration" );
-      ( "--disable-rust-emitter",
-        Arg.Unit (fun () -> rust_emitter := false),
-        "Disable rust emitter" );
       ( "--include-header",
         Arg.Unit (fun () -> include_header := true),
         "Include JSON header" );
@@ -209,7 +204,6 @@ let parse_options () =
     extract_facts = !extract_facts;
     for_debugger_eval = !for_debugger_eval;
     disable_toplevel_elaboration = !disable_toplevel_elaboration;
-    rust_emitter = !rust_emitter;
     include_header = !include_header;
   }
 
@@ -358,6 +352,8 @@ let do_compile_rust
     rust_output_config
     filename
     source_text =
+  (* dummy line to load Full_fidelity_ast *)
+  let _ = Full_fidelity_ast.make_env filename in
   let env =
     Compile_ffi.
       {
@@ -391,36 +387,6 @@ let do_compile_rust
   match Compile_ffi.rust_from_text_ffi env rust_output_config source_text with
   | Ok () -> ()
   | Error msg -> raise (Failure msg)
-
-let do_compile
-    ~is_systemlib
-    ~config_jsons
-    (compiler_options : options)
-    filename
-    source_text
-    debug_time =
-  let env =
-    Compile.
-      {
-        is_systemlib;
-        filepath = filename;
-        is_evaled = is_file_path_for_evaled_code filename;
-        for_debugger_eval = compiler_options.for_debugger_eval;
-        dump_symbol_refs = compiler_options.dump_symbol_refs;
-        config_list = compiler_options.config_list;
-        config_jsons;
-        disable_toplevel_elaboration =
-          compiler_options.disable_toplevel_elaboration;
-      }
-  in
-  let (ret, log_config_json) = Compile.from_text source_text env in
-  (debug_time.parsing_t := Compile.(ret.parsing_t));
-  (debug_time.codegen_t := Compile.(ret.codegen_t));
-  (debug_time.printing_t := Compile.(ret.printing_t));
-  if compiler_options.debug_time then print_debug_time_info filename debug_time;
-  if compiler_options.log_stats then
-    log_success compiler_options filename debug_time;
-  Compile.(ret.bytecode_segments, ret.hhbc_options, log_config_json)
 
 let extract_facts ~compiler_options ~config_jsons ~filename text =
   let (co, log_config_json) =
@@ -489,7 +455,6 @@ let process_single_source_unit
     filename
     source_text =
   try
-    let debug_time = new_debug_time () in
     if compiler_options.extract_facts then
       let (output, _, log_config_json) =
         extract_facts ~compiler_options ~config_jsons ~filename source_text
@@ -502,7 +467,7 @@ let process_single_source_unit
         log_config_json
         config_jsons
         compiler_options.config_list
-    else if compiler_options.rust_emitter then
+    else
       do_compile_rust
         ~is_systemlib
         ~config_jsons
@@ -510,27 +475,6 @@ let process_single_source_unit
         rust_output_config
         filename
         (Full_fidelity_source_text.make filename source_text)
-    else
-      let (output, hhbc_options, log_config_json) =
-        do_compile
-          ~is_systemlib
-          ~config_jsons
-          compiler_options
-          filename
-          source_text
-          debug_time
-      in
-      print_output
-        output
-        rust_output_config
-        filename
-        ( if Hhbc_options.log_extern_compiler_perf hhbc_options then
-          Some debug_time
-        else
-          None )
-        log_config_json
-        config_jsons
-        compiler_options.config_list
   with exc ->
     let stack = Caml.Printexc.get_backtrace () in
     if compiler_options.log_stats then

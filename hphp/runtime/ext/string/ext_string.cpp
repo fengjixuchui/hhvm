@@ -676,12 +676,9 @@ Variant str_replace(const Variant& search, const Variant& replace,
     return ret;
   }
 
-  if (replace.isArray()) {
-    raise_notice("Array to string conversion");
-  }
   int icount;
-  auto ret = string_replace(subject, search.toString(), replace.toString(), icount,
-                            caseSensitive);
+  auto ret = string_replace(subject, search.toString(), replace.toString(),
+                            icount, caseSensitive);
   count = icount;
   return ret;
 }
@@ -2032,9 +2029,7 @@ bool strtr_slow(const Array& arr, StringBuffer& result, String& key,
   memcpy(key.mutableData(), s + pos, maxlen);
   for (int len = maxlen; len >= minlen; len--) {
     key.setSize(len);
-    auto const key_tval = make_tv<KindOfString>(key.get());
-    auto const arrkey = arr.convertKey<IntishCast::Cast>(key_tval);
-    auto const tv = arr->get(arrkey);
+    auto const tv = arr->get(key);
     if (tv.is_init()) {
       String replace = tvCastToString(tv);
       if (!replace.empty()) {

@@ -1092,8 +1092,7 @@ SSATmp* opt_enum_coerce(IRGS& env, const ParamPrep& params) {
 }
 
 SSATmp* opt_tag_provenance_here(IRGS& env, const ParamPrep& params) {
-  if (params.size() != 1) return nullptr;
-  if (RO::EvalLogArrayProvenance) return nullptr;
+  if (RO::EvalArrayProvenance || params.size() != 1) return nullptr;
   auto const result = params[0].value;
   gen(env, IncRef, result);
   return result;
@@ -1640,11 +1639,7 @@ SSATmp* maybeCoerceValue(
   return bail();
 }
 
-StaticString
-  s_varray("varray"),
-  s_darray("darray"),
-  s_varray_or_darray("varray_or_darray"),
-  s_array("array");
+StaticString s_varray_or_darray("varray_or_darray");
 
 /*
  * Prepare the actual arguments to the CallBuiltin instruction, by converting a
@@ -1665,8 +1660,6 @@ jit::vector<SSATmp*> realize_params(IRGS& env,
   auto const genFail = [&](uint32_t param, SSATmp* val) {
     auto const expected_type = [&]{
       auto const& tc = callee->params()[param].typeConstraint;
-      if (tc.isVArray()) return s_varray.get();
-      if (tc.isDArray()) return s_darray.get();
       if (tc.isVArrayOrDArray()) return s_varray_or_darray.get();
       auto const dt = param_target_type(callee, param) - TNull;
       return getDataTypeString(dt.toDataType()).get();
@@ -2552,20 +2545,7 @@ void emitAKExists(IRGS& env) {
   if (!arr->isA(TArr) && !arr->isA(TObj)) PUNT(AKExists_badArray);
 
   if (key->isA(TInitNull) && arr->isA(TArr)) {
-    if (checkHACArrayKeyCast()) {
-      gen(
-        env,
-        RaiseHackArrCompatNotice,
-        cns(
-          env,
-          makeStaticString(
-            makeHackArrCompatImplicitArrayKeyMsg(uninit_variant.asTypedValue())
-          )
-        )
-      );
-    }
-
-    key = cns(env, staticEmptyString());
+    return throwBadKey();
   }
 
   if (!key->isA(TStr) && !key->isA(TInt)) PUNT(AKExists_badKey);

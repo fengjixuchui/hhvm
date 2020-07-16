@@ -117,6 +117,18 @@ AssemblerError::AssemblerError(int where, const std::string& what)
       folly::sformat("Assembler Error: line {}: {}", where, what))
 {}
 
+
+namespace {
+
+struct FatalUnitError {
+  Location::Range pos;
+  FatalOp op;
+  const std::string msg;
+  const StringData* filePath;
+};
+
+} // namespace
+
 //////////////////////////////////////////////////////////////////////
 
 namespace {
@@ -728,7 +740,6 @@ struct AsmState {
   UnitEmitter* ue;
   Input in;
   bool emittedPseudoMain{false};
-  bool emittedTopLevelFunc{false};
 
   /*
    * Map of adata identifiers to their serialized contents
@@ -1930,6 +1941,17 @@ void parse_try_catch(AsmState& as, int nestLevel) {
   eh.m_end = end;
 }
 
+Location::Range parse_srcloc_raw(AsmState& as) {
+  auto const line0 = as.in.readint();
+  as.in.expectWs(':');
+  auto const char0 = as.in.readint();
+  as.in.expectWs(',');
+  auto const line1 = as.in.readint();
+  as.in.expectWs(':');
+  auto const char1 = as.in.readint();
+  return Location::Range(line0, char0, line1, char1);
+}
+
 /*
  * directive-srcloc : line_no ':' chr_no ',' line_no ':' chr_no ';'
  *                  ;
@@ -1942,16 +1964,9 @@ void parse_try_catch(AsmState& as, int nestLevel) {
  * range of inline numbers and character positions specified.
  */
 void parse_srcloc(AsmState& as, int /*nestLevel*/) {
-  auto const line0 = as.in.readint();
-  as.in.expectWs(':');
-  auto const char0 = as.in.readint();
-  as.in.expectWs(',');
-  auto const line1 = as.in.readint();
-  as.in.expectWs(':');
-  auto const char1 = as.in.readint();
+  auto loc = parse_srcloc_raw(as);
   as.in.expectWs(';');
-
-  as.srcLoc = Location::Range(line0, char0, line1, char1);
+  as.srcLoc = loc;
 }
 
 /*
@@ -2201,8 +2216,7 @@ void parse_user_attribute(AsmState& as,
  * if attributeMap is non null.
  */
 Attr parse_attribute_list(AsmState& as, AttrContext ctx,
-                          UserAttributeMap *userAttrs = nullptr,
-                          bool* isTop = nullptr) {
+                          UserAttributeMap *userAttrs = nullptr) {
   as.in.skipWhitespace();
   int ret = AttrNone;
   if (as.in.peek() != '[') return Attr(ret);
@@ -2222,10 +2236,6 @@ Attr parse_attribute_list(AsmState& as, AttrContext ctx,
     auto const abit = string_to_attr(ctx, word);
     if (abit) {
       ret |= *abit;
-      continue;
-    }
-    if (isTop && word == "nontop") {
-      *isTop = false;
       continue;
     }
     auto const rxAttrs = rxAttrsFromAttrString(word);
@@ -2673,10 +2683,8 @@ void parse_function(AsmState& as) {
 
   auto const ubs = parse_ubs(as);
 
-  bool isTop = true;
-
   UserAttributeMap userAttrs;
-  Attr attrs = parse_attribute_list(as, AttrContext::Func, &userAttrs, &isTop);
+  Attr attrs = parse_attribute_list(as, AttrContext::Func, &userAttrs);
 
   if (!SystemLib::s_inited) {
     attrs |= AttrUnique | AttrPersistent | AttrBuiltin;
@@ -2684,13 +2692,6 @@ void parse_function(AsmState& as) {
 
   // Be conservative by default. HHBBC can clear it where appropriate.
   attrs |= AttrMayUseVV;
-
-  if(!isTop && as.emittedTopLevelFunc) {
-    as.error("All top level functions must be defined after any "
-             "non-top functions");
-  }
-
-  as.emittedTopLevelFunc |= isTop;
 
   int line0;
   int line1;
@@ -2703,7 +2704,7 @@ void parse_function(AsmState& as) {
   }
 
   as.fe = as.ue->newFuncEmitter(makeStaticString(name));
-  as.fe->init(line0, line1, as.ue->bcPos(), attrs, isTop, 0);
+  as.fe->init(line0, line1, as.ue->bcPos(), attrs, nullptr);
 
   auto currUBs = getRelevantUpperBounds(retTypeInfo.second, ubs, {}, {});
   auto const hasReifiedGenerics =
@@ -2765,8 +2766,7 @@ void parse_method(AsmState& as, const UpperBoundMap& class_ubs) {
 
   as.fe = as.ue->newMethodEmitter(sname, as.pce);
   as.pce->addMethod(as.fe);
-  as.fe->init(line0, line1,
-              as.ue->bcPos(), attrs, false, 0);
+  as.fe->init(line0, line1, as.ue->bcPos(), attrs, nullptr);
 
   auto const hasReifiedGenerics =
     userAttrs.find(s___Reified.get()) != userAttrs.end() ||
@@ -3247,9 +3247,8 @@ void parse_class(AsmState& as) {
 
   auto ubs = parse_ubs(as);
 
-  bool isTop = true;
   UserAttributeMap userAttrs;
-  Attr attrs = parse_attribute_list(as, AttrContext::Class, &userAttrs, &isTop);
+  Attr attrs = parse_attribute_list(as, AttrContext::Class, &userAttrs);
   if (!SystemLib::s_inited) {
     attrs |= AttrUnique | AttrPersistent | AttrBuiltin;
   }
@@ -3315,9 +3314,7 @@ void parse_class(AsmState& as) {
   as.in.expectWs('{');
   parse_class_body(as, attrs & AttrIsConst, ubs);
 
-  as.pce->setHoistable(
-    isTop ? compute_hoistable(as, name, parentName) : PreClass::NotHoistable
-  );
+  as.pce->setHoistable(compute_hoistable(as, name, parentName));
 
   as.finishClass();
 }
@@ -3385,8 +3382,8 @@ void parse_record(AsmState& as) {
  */
 void parse_filepath(AsmState& as) {
   auto const str = read_litstr(as);
-  if (nullptr == g_hhas_handler) {
-    // We don't want to use file path from cached HHAS
+  if (!g_unit_emitter_compile_hook) {
+    // We don't want to use file path from cached data
     as.ue->m_filepath = str;
   }
   as.in.expectWs(';');
@@ -3539,6 +3536,23 @@ void parse_hh_file(AsmState& as) {
 }
 
 /*
+ * directive-fatal : pos FatalOp string ';'
+ */
+void parse_fatal(AsmState& as) {
+  as.in.skipWhitespace();
+  auto pos = parse_srcloc_raw(as);
+  as.in.skipWhitespace();
+  FatalOp op = static_cast<FatalOp>(read_subop<FatalOp>(as));
+  as.in.skipWhitespace();
+  std::string msg;
+  if (!as.in.readQuotedStr(msg)) {
+    as.error(".fatal must have a message");
+  }
+  as.in.expectWs(';');
+  throw FatalUnitError{pos, op, msg, as.ue->m_filepath};
+}
+
+/*
  * directive-symbols : '{' identifier identifier* '}'
  */
 void parse_symbol_refs(AsmState& as, SymbolRef symbol_kind) {
@@ -3667,6 +3681,7 @@ void parse(AsmState& as) {
     if (directive == ".class_refs")    { parse_class_refs(as)    ; continue; }
     if (directive == ".metadata")      { parse_metadata(as)      ; continue; }
     if (directive == ".file_attributes") { parse_file_attributes(as); continue;}
+    if (directive == ".fatal")         { parse_fatal(as)         ; continue; }
 
     as.error("unrecognized top-level directive `" + directive + "'");
   }
@@ -3733,23 +3748,30 @@ std::unique_ptr<UnitEmitter> assemble_string(
     AsmState as(instr, wantsSymbolRefs);
     as.ue = ue.get();
     parse(as);
+  } catch (const FatalUnitError& e) {
+    auto const filePath = e.filePath ? e.filePath : sd;
+    ue = createFatalUnit(filePath, sha1, e.op, e.msg, e.pos);
   } catch (const FatalErrorException& e) {
     if (!swallowErrors) throw;
-    ue = createFatalUnit(sd, sha1, FatalOp::Runtime,
-                         makeStaticString(e.what()));
-  } catch (const AssemblerError& e) {
-    if (!swallowErrors) throw;
-    ue = createFatalUnit(sd, sha1, FatalOp::Runtime, makeStaticString(e.what()));
+    ue = createFatalUnit(sd, sha1, FatalOp::Runtime, e.what());
+  } catch (AssemblerError& e) {
+    if (!swallowErrors) {
+      e.hhas = std::string{code, (size_t)codeLen};
+      throw;
+    }
+    ue = createFatalUnit(sd, sha1, FatalOp::Runtime, e.what());
   } catch (const AssemblerFatal& e) {
     if (!swallowErrors) throw;
-    ue = createFatalUnit(sd, sha1, FatalOp::Runtime, makeStaticString(e.what()));
+    ue = createFatalUnit(sd, sha1, FatalOp::Runtime, e.what());
   } catch (const std::exception& e) {
     if (!swallowErrors) {
       // assembler should throw only AssemblerErrors and FatalErrorExceptions
-      throw AssemblerError(folly::sformat("AssemblerError: {}", e.what()));
+      throw AssemblerError(
+        folly::sformat("AssemblerError: {}", e.what()),
+        std::string{code, (size_t)codeLen}
+      );
     }
-    ue = createFatalUnit(sd, sha1, FatalOp::Runtime,
-                         makeStaticString(e.what()));
+    ue = createFatalUnit(sd, sha1, FatalOp::Runtime, e.what());
   }
 
   return ue;

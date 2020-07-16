@@ -104,6 +104,13 @@ public:
 struct BlobEncoder {
   static const bool deserializing = false;
   explicit BlobEncoder(bool l) : m_useGlobalIds{l} {}
+
+  void writeRaw(const char* ptr, size_t size) {
+    auto const start = m_blob.size();
+    m_blob.resize(start + size);
+    std::copy(ptr, ptr + size, &m_blob[start]);
+  }
+
   /*
    * Currently the most basic encoder/decode only works for integral
    * types.  (We don't want this to accidentally get used for things
@@ -149,6 +156,13 @@ struct BlobEncoder {
 
   void encode(const SHA1& sha1) {
     for (auto w : sha1.q) encode(w);
+  }
+
+  void encode(Location::Range loc) {
+    encode(loc.line0);
+    encode(loc.char0);
+    encode(loc.line1);
+    encode(loc.char1);
   }
 
   void encode(DataType t) {
@@ -309,6 +323,13 @@ struct BlobDecoder {
     assertx(m_p >= m_last);
   }
 
+  const unsigned char* data() const { return m_p; }
+  void advance(size_t s) { m_p += s; }
+
+  size_t remaining() const {
+    return m_p <= m_last ? (m_last - m_p) : 0;
+  }
+
   // See encode() in BlobEncoder for why this only allows integral
   // types.
   template<class T>
@@ -341,6 +362,15 @@ struct BlobDecoder {
 
   void decode(SHA1& sha1) {
     for (auto& w : sha1.q) decode(w);
+  }
+
+  void decode(Location::Range& loc) {
+    int line0, char0, line1, char1;
+    decode(line0);
+    decode(char0);
+    decode(line1);
+    decode(char1);
+    loc = {line0, char0, line1, char1};
   }
 
   void decode(DataType& t) {

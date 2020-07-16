@@ -559,7 +559,6 @@ struct RuntimeOption {
   // Eval options
   static bool EnableHipHopSyntax;
   static bool EnableShortTags;
-  static bool EnableRustEmitter;
   static bool EnableXHP;
   static bool EnableIntrinsicsExtension;
   static bool CheckSymLink;
@@ -697,6 +696,10 @@ struct RuntimeOption {
   F(string, HackCompilerCommand,       hackCompilerCommandDefault())    \
   /* The number of hh_single_compile daemons to keep alive. */          \
   F(uint64_t, HackCompilerWorkers,     Process::GetCPUCount())          \
+  /* The number of hh_single_compile daemons to keep alive during a     \
+   * repo build after the files in the tree are parsed--set to 0 to     \
+   * disable resizing the pool of compilers */                          \
+  F(uint64_t, HackCompilerSecondaryWorkers, 2)                          \
   /* The number of times to retry after an infra failure communicating
      with a compiler process. */                                        \
   F(uint64_t, HackCompilerMaxRetries,  0)                               \
@@ -720,12 +723,6 @@ struct RuntimeOption {
   F(bool, UseHHBBC,                    !getenv("HHVM_DISABLE_HHBBC"))   \
   F(bool, EnablePerRepoOptions,        true)                            \
   F(bool, CachePerRepoOptionsPath,     true)                            \
-  /* Generate warnings of side effect on top-level code                 \
-   * 0 - Nothing                                                        \
-   * 1 - Raise Warning                                                  \
-   * 2 - Throw exception                                                \
-   */                                                                   \
-  F(int32_t, WarnOnPseudomain, 0)                                       \
   /* ThrowOnNonExhaustiveSwitch
    * Generates warnings when switch statements are non exhaustive.
    *  0 - Nothing
@@ -1002,6 +999,7 @@ struct RuntimeOption {
   F(bool, FilterGCPoints,              true)                            \
   F(bool, Quarantine,                  eagerGcDefault())                \
   F(bool, HeapAllocSampleNativeStack,  false)                           \
+  F(bool, LogKilledRequests,           true)                            \
   F(uint32_t, GCSampleRate,            0)                               \
   F(uint32_t, HeapAllocSampleRequests, 0)                               \
   F(uint32_t, HeapAllocSampleBytes,    256 * 1024)                      \
@@ -1092,8 +1090,9 @@ struct RuntimeOption {
   F(bool, HackArrCompatNotices, false)                                  \
   F(bool, HackArrCompatCheckCompare, false)                             \
   F(bool, HackArrCompatCheckArrayPlus, false)                           \
-  F(bool, HackArrCompatCheckArrayKeyCast, false)                        \
   F(bool, HackArrCompatFBSerializeHackArraysNotices, false)             \
+  /* Raise notices on intish-cast (which may use an is_array check) */  \
+  F(bool, HackArrCompatIntishCastNotices, false)                        \
   /* Raise notices when is_array is called with any hack array */       \
   F(bool, HackArrCompatIsArrayNotices, false)                           \
   /* Raise notices when is_vec or is_dict  is called with a v/darray */ \
@@ -1103,6 +1102,8 @@ struct RuntimeOption {
   F(bool, HackArrCompatCompactSerializeNotices, false)                  \
   /* When this flag is on, d/varray constructions are marked. */        \
   F(bool, HackArrDVArrMark, false)                                      \
+  /* When this flag is on, var_dump outputs d/varrays. */               \
+  F(bool, HackArrDVArrVarDump, false)                                   \
   /* This is the flag for "unification", meaning that darrays are       \
    * replaced by dicts and varrays by vecs. */                          \
   F(bool, HackArrDVArrs, false)                                         \
@@ -1116,14 +1117,12 @@ struct RuntimeOption {
    * RepoAuthoritativeMode wasn't built with this flag or if the        \
    * flag LogArrayProvenance is unset */                                \
   F(bool, ArrayProvenance, false)                                       \
-  /* Tag _all_ empty arrays we create at runtime. */                    \
-  F(bool, ArrayProvenanceEmpty, false)                                  \
-  /* Whether v/darrays and vecs/dicts (respectively) should admit       \
-   * provenance tags. */                                                \
-  F(bool, ArrProvDVArrays, false)                                       \
-  F(bool, ArrProvHackArrays, true)                                      \
-  /* Enable logging the source of vecs/dicts whose vec/dict-ness is     \
-   * observed, e.g. through serialization */                            \
+  /* Log the source of dvarrays whose dvarray-ness is observed, e.g.    \
+   * through serialization. If this flag is off, we won't bother to     \
+   * track array provenance at runtime, because it isn't exposed.       \
+   *                                                                    \
+   * Code should just depend on ArrayProvenance alone - we'll set it    \
+   * based on this flag when loading a repo build. */                   \
   F(bool, LogArrayProvenance, false)                                    \
   /* Log only out out of this many array headers when serializing */    \
   F(uint32_t, LogArrayProvenanceSampleRatio, 1000)                      \
@@ -1182,8 +1181,12 @@ struct RuntimeOption {
    * classes which haven't opted into being called that way.            \
    *                                                                    \
    * 0 - Nothing                                                        \
-   * 1 - Warn                                                           \
-   * 2 - Throw exception                                                \
+   * 1 - Warn if target is not annotated or dynamic callsite is using   \
+   *     a raw string or array                                          \
+   *     (depending on ForbidDynamicCallsWithAttr setting)              \
+   * 2 - Throw exception if target is not annotated, and warn if        \
+   *     dynamic callsite is using a raw string or array                \
+   * 3 - Throw exception                                                \
    *                                                                    \
    */                                                                   \
   F(int32_t, ForbidDynamicCallsToFunc, 0)                               \
@@ -1221,6 +1224,14 @@ struct RuntimeOption {
    */                                                                   \
   F(int32_t, RxVerifyBody, 0)                                           \
   F(bool, RxIsEnabled, EvalRxPretendIsEnabled)                          \
+  /*                                                                    \
+   * Controls behavior on reflection to default value expressions       \
+   * that throw during evaluation                                       \
+   * 0 - Nothing                                                        \
+   * 1 - Warn and retain current behavior                               \
+   * 2 - Return null for parameter value                                \
+   */                                                                   \
+  F(int32_t, FixDefaultArgReflection, 1)                                \
   F(int32_t, ServerOOMAdj, 0)                                           \
   F(std::string, PreludePath, "")                                       \
   F(uint32_t, NonSharedInstanceMemoCaches, 10)                          \

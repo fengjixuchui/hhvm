@@ -214,11 +214,6 @@ void Option::Load(const IniSetting::Map& ini, Hdf &config) {
   Config::Bind(RuntimeOption::EvalArrayProvenance,
                ini, config, "ArrayProvenance",
                RuntimeOption::EvalArrayProvenance);
-  Config::Bind(RuntimeOption::EnableRustEmitter,
-              ini, config, "EnableRustEmitter",
-              RuntimeOption::EnableRustEmitter);
-  RO::EvalArrProvHackArrays = RO::EvalArrayProvenance;
-  RO::EvalArrProvDVArrays   = RO::EvalArrayProvenance;
   Config::Bind(EnableShortTags, ini, config, "EnableShortTags", true);
 
 #define BIND_HAC_OPTION(Name, Def)                      \
@@ -230,7 +225,6 @@ void Option::Load(const IniSetting::Map& ini, Hdf &config) {
 
   BIND_HAC_OPTION_SELF(Notices)
   BIND_HAC_OPTION(CheckCompare, Notices)
-  BIND_HAC_OPTION(CheckArrayKeyCast, Notices)
   BIND_HAC_OPTION(CheckArrayPlus, Notices)
   BIND_HAC_OPTION_SELF(IsArrayNotices)
   BIND_HAC_OPTION_SELF(SerializeNotices)

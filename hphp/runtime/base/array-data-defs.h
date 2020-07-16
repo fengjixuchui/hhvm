@@ -67,10 +67,6 @@ inline ArrayData* ArrayData::toPHPArray(bool copy) {
   return g_array_funcs.toPHPArray[kind()](this, copy);
 }
 
-inline ArrayData* ArrayData::toPHPArrayIntishCast(bool copy) {
-  return g_array_funcs.toPHPArrayIntishCast[kind()](this, copy);
-}
-
 inline ArrayData* ArrayData::toDict(bool copy) {
   return g_array_funcs.toDict[kind()](this, copy);
 }
@@ -407,27 +403,6 @@ inline ArrayData* ArrayData::remove(const String& k) {
 
 inline ArrayData* ArrayData::remove(const Variant& k) {
   return remove(*k.asTypedValue());
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-template <IntishCast IC>
-ALWAYS_INLINE bool ArrayData::convertKey(const StringData* key,
-                                         int64_t& i) const {
-  return IC == IntishCast::Cast &&
-         key->isStrictlyInteger(i) &&
-         useWeakKeys();
-}
-
-template <IntishCast IC>
-ALWAYS_INLINE
-folly::Optional<int64_t> tryIntishCast(const StringData* key) {
-  int64_t i;
-  if (UNLIKELY(IC == IntishCast::Cast &&
-               key->isStrictlyInteger(i))) {
-    return i;
-  }
-  return {};
 }
 
 ///////////////////////////////////////////////////////////////////////////////

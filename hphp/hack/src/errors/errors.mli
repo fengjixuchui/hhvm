@@ -103,6 +103,8 @@ val phase_to_string : phase -> string
 
 val phase_of_string : string -> phase option
 
+val name_context_to_string : name_context -> string
+
 val internal_error : Pos.t -> string -> unit
 
 val unimplemented_feature : Pos.t -> string -> unit
@@ -178,7 +180,7 @@ val start_with_T : Pos.t -> unit
 
 val already_bound : Pos.t -> string -> unit
 
-val unexpected_typedef : Pos.t -> Pos.t -> unit
+val unexpected_typedef : Pos.t -> Pos.t -> name_context -> unit
 
 val fd_name_already_bound : Pos.t -> unit
 
@@ -886,7 +888,8 @@ val to_string : ?indent:bool -> Pos.absolute error_ -> string
 
 val to_contextual_string : Pos.absolute error_ -> string
 
-val format_header_highlighted : int -> string -> string
+val format_claim_highlighted :
+  int -> ?marker:int * Tty.raw_color -> string -> string
 
 val to_highlighted_string : Pos.absolute error_ -> string
 

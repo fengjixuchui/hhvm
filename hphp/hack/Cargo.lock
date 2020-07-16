@@ -62,6 +62,7 @@ dependencies = [
  "arena_trait 0.0.0",
  "bumpalo 3.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "ocamlrep 0.0.0",
+ "ocamlrep_derive 0.0.0",
  "quickcheck 0.9.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.103 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -706,7 +707,6 @@ dependencies = [
 name = "emit_constant_rust"
 version = "0.0.0"
 dependencies = [
- "closure_convert_rust 0.0.0",
  "core_utils_rust 0.0.0",
  "emit_body_rust 0.0.0",
  "emit_type_hint_rust 0.0.0",
@@ -771,7 +771,6 @@ dependencies = [
  "hhas_attribute_rust 0.0.0",
  "instruction_sequence_rust 0.0.0",
  "itertools 0.8.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "naming_special_names_rust 0.0.0",
  "oxidized 0.0.0",
 ]
 
@@ -780,7 +779,6 @@ name = "emit_function_rust"
 version = "0.0.0"
 dependencies = [
  "ast_scope_rust 0.0.0",
- "closure_convert_rust 0.0.0",
  "emit_attribute_rust 0.0.0",
  "emit_body_rust 0.0.0",
  "emit_memoize_helpers_rust 0.0.0",
@@ -1342,7 +1340,6 @@ name = "hhas_function_rust"
 version = "0.0.0"
 dependencies = [
  "bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "closure_convert_rust 0.0.0",
  "hhas_attribute_rust 0.0.0",
  "hhas_body_rust 0.0.0",
  "hhas_param_rust 0.0.0",
@@ -1395,6 +1392,8 @@ dependencies = [
  "hhas_record_def_rust 0.0.0",
  "hhas_symbol_refs_rust 0.0.0",
  "hhas_typedef_rust 0.0.0",
+ "hhbc_ast_rust 0.0.0",
+ "oxidized 0.0.0",
 ]
 
 [[package]]
@@ -1928,6 +1927,7 @@ dependencies = [
 name = "oxidized"
 version = "0.0.0"
 dependencies = [
+ "arena_trait 0.0.0",
  "hh_autoimport_rust 0.0.0",
  "itertools 0.8.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "ocamlrep 0.0.0",

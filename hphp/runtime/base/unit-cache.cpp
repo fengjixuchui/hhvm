@@ -758,18 +758,13 @@ void logLoad(
   ent.setStr("current_dir", cwd);
   ent.setStr("resolved_path", rpath.data());
   if (auto const u = cu.unit) {
-    const StringData* err;
-    int line;
-    if (u->compileTimeFatal(err, line)) {
-      ent.setStr("result", "compile_fatal");
-      ent.setStr("error", err->data());
-    } else if (u->parseFatal(err, line)) {
-      ent.setStr("result", "parse_fatal");
-      ent.setStr("error", err->data());
+    if (auto const info = u->getFatalInfo()) {
+      auto const parse = info->m_fatalOp == FatalOp::Parse;
+      ent.setStr("result", parse ? "parse_fatal" : "compile_fatal");
+      ent.setStr("error", info->m_fatalMsg);
     } else {
       ent.setStr("result", "success");
     }
-
     ent.setStr("sha1", u->sha1().toString());
     ent.setStr("repo_sn", folly::to<std::string>(u->sn()));
     ent.setStr("repo_id", folly::to<std::string>(u->repoID()));
@@ -856,6 +851,7 @@ std::string mangleUnitSha1(const std::string& fileSha1,
     + (RuntimeOption::EvalLogKnownMethodsAsDynamicCalls ? '1' : '0')
     + (RuntimeOption::EvalNoticeOnBuiltinDynamicCalls ? '1' : '0')
     + (RuntimeOption::EvalHackArrDVArrs ? '1' : '0')
+    + (RuntimeOption::EvalHackArrDVArrMark ? '1' : '0')
     + (RuntimeOption::EvalAssemblerFoldDefaultValues ? '1' : '0')
     + RuntimeOption::EvalHackCompilerCommand + '\0'
     + RuntimeOption::EvalHackCompilerArgs + '\0'

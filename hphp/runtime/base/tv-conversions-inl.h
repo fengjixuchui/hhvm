@@ -121,7 +121,7 @@ inline TypedValue tvToKey(TypedValue cell, const ArrayData* ad) {
 
   auto coerceKey = [&] (const StringData* str) {
     int64_t n;
-    if (ad->convertKey<IC>(str, n)) {
+    if (IC == IntishCast::Cast && ad->intishCastKey(str, n)) {
       return make_tv<KindOfInt64>(n);
     }
     return make_tv<KindOfString>(const_cast<StringData*>(str));
@@ -129,7 +129,7 @@ inline TypedValue tvToKey(TypedValue cell, const ArrayData* ad) {
 
   if (isStringType(cell.m_type)) {
     int64_t n;
-    if (ad->convertKey<IC>(cell.m_data.pstr, n)) {
+    if (IC == IntishCast::Cast && ad->intishCastKey(cell.m_data.pstr, n)) {
       return make_tv<KindOfInt64>(n);
     }
     return cell;
@@ -141,56 +141,7 @@ inline TypedValue tvToKey(TypedValue cell, const ArrayData* ad) {
 
   if (LIKELY(isIntType(cell.m_type))) return cell;
 
-  if (!ad->useWeakKeys()) {
-    throwInvalidArrayKeyException(&cell, ad);
-  }
-  if (checkHACArrayKeyCast()) {
-    raiseHackArrCompatImplicitArrayKey(&cell);
-  }
-
-  switch (cell.m_type) {
-    case KindOfUninit:
-    case KindOfNull:
-      return make_tv<KindOfPersistentString>(staticEmptyString());
-
-    case KindOfBoolean:
-      return make_tv<KindOfInt64>(cell.m_data.num);
-
-    case KindOfDouble:
-      return make_tv<KindOfInt64>(double_to_int64(cell.m_data.dbl));
-
-    case KindOfResource:
-      return make_tv<KindOfInt64>(cell.m_data.pres->data()->o_toInt64());
-
-    case KindOfFunc:
-      assertx(!RO::EvalEnableFuncStringInterop);
-    case KindOfDArray:
-    case KindOfPersistentDArray:
-    case KindOfVArray:
-    case KindOfPersistentVArray:
-    case KindOfClsMeth:
-    case KindOfRClsMeth:
-    case KindOfPersistentArray:
-    case KindOfArray:
-    case KindOfPersistentVec:
-    case KindOfVec:
-    case KindOfPersistentDict:
-    case KindOfDict:
-    case KindOfPersistentKeyset:
-    case KindOfKeyset:
-    case KindOfObject:
-    case KindOfRFunc:
-    case KindOfRecord:
-      raise_warning("Invalid operand type was used: Invalid type used as key");
-      return make_tv<KindOfNull>();
-
-    case KindOfInt64:
-    case KindOfString:
-    case KindOfPersistentString:
-    case KindOfClass:
-      break;
-  }
-  not_reached();
+  throwInvalidArrayKeyException(&cell, ad);
 }
 
 ///////////////////////////////////////////////////////////////////////////////

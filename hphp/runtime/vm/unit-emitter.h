@@ -108,13 +108,13 @@ struct UnitEmitter {
    */
   std::unique_ptr<Unit> create(bool saveLineTable = false) const;
 
-  template<class SerDe> void serdeMetaData(SerDe&);
+  template<typename SerDe> void serdeMetaData(SerDe&);
+  template<typename SerDe> void serde(SerDe&);
 
   /*
    * Run the verifier on this unit.
    */
   bool check(bool verbose) const;
-
 
   /////////////////////////////////////////////////////////////////////////////
   // Basic data.
@@ -178,7 +178,7 @@ struct UnitEmitter {
   /*
    * Clear and rebuild the array type table from the builder.
    */
-   void repopulateArrayTypeTable(const ArrayTypeTable::Builder&);
+  void repopulateArrayTypeTable(const ArrayTypeTable::Builder&);
 
   /////////////////////////////////////////////////////////////////////////////
   // FuncEmitters.
@@ -424,6 +424,7 @@ public:
   bool m_returnSeen{false};
   bool m_ICE{false}; // internal compiler error
   bool m_useGlobalIds{0};
+  bool m_fatalUnit{false}; // parse/runtime error
   TypedValue m_mainReturn;
   UserAttributeMap m_metaData;
   UserAttributeMap m_fileAttributes;
@@ -433,6 +434,10 @@ public:
    * name=>NativeFuncInfo for native funcs in this unit
    */
   const Native::FuncTable& m_nativeFuncs;
+
+  Location::Range m_fatalLoc;
+  FatalOp m_fatalOp;
+  std::string m_fatalMsg;
 
 private:
   SHA1 m_sha1;
@@ -662,13 +667,12 @@ struct UnitRepoProxy : public RepoProxy {
 };
 
 std::unique_ptr<UnitEmitter> createFatalUnit(
-  StringData* filename,
+  const StringData* filename,
   const SHA1& sha1,
   FatalOp op,
-  StringData* err
+  std::string err,
+  Location::Range loc = {-1,-1,-1,-1}
 );
-
-template<class SerDe> void serdeLineTable(SerDe&, LineTable&);
 
 ///////////////////////////////////////////////////////////////////////////////
 }

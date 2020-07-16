@@ -203,6 +203,14 @@ pub fn print_program<W: Write>(
     }
 }
 
+fn get_fatal_op(f: &FatalOp) -> &str {
+    return match f {
+        FatalOp::Parse => "Parse",
+        FatalOp::Runtime => "Runtime",
+        FatalOp::RuntimeOmitFrame => "RuntimeOmitFrame",
+    };
+}
+
 fn print_program_<W: Write>(
     ctx: &mut Context,
     w: &mut W,
@@ -211,6 +219,28 @@ fn print_program_<W: Write>(
     let is_hh = if prog.is_hh { "1" } else { "0" };
     newline(w)?;
     concat_str(w, [".hh_file ", is_hh, ";"])?;
+
+    if let Some((fop, p, msg)) = &prog.fatal {
+        newline(w)?;
+        let (line_begin, line_end, col_begin, col_end) = if p.is_none() || !p.is_valid() {
+            (1, 1, 0, 0)
+        } else {
+            p.info_pos_extended()
+        };
+        let pos = format!("{}:{},{}:{}", line_begin, col_begin, line_end, col_end);
+        concat_str(
+            w,
+            [
+                ".fatal ",
+                pos.as_ref(),
+                " ",
+                get_fatal_op(fop),
+                " \"",
+                escape(msg).as_ref(),
+                "\";",
+            ],
+        )?;
+    }
 
     newline(w)?;
     concat(w, &prog.adata, |w, a| print_adata_region(ctx, w, a))?;
@@ -708,9 +738,6 @@ fn print_class_special_attributes<W: Write>(
     }
     if hhas_attribute::has_dynamically_constructible(user_attrs) {
         special_attributes.push("dyn_constructible");
-    }
-    if !c.is_top() {
-        special_attributes.push("nontop");
     }
     if c.is_closure() && !is_system_lib {
         special_attributes.push("unique");
@@ -3174,9 +3201,6 @@ fn print_fun_attrs<W: Write>(
     }
     if f.is_no_injection() {
         special_attrs.push("no_injection");
-    }
-    if !f.is_top() {
-        special_attrs.push("nontop");
     }
     if ctx.is_system_lib() || (has_dynamically_callable(user_attrs) && !f.is_memoize_impl()) {
         special_attrs.push("dyn_callable")

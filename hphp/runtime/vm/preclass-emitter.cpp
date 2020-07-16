@@ -66,6 +66,13 @@ std::string NewAnonymousClassName(folly::StringPiece name) {
   return folly::sformat("{};{}", name, next_anon_class.fetch_add(1));
 }
 
+folly::StringPiece StripIdFromAnonymousClassName(folly::StringPiece name) {
+  auto const pos = RuntimeOption::RepoAuthoritative ?
+    std::string::npos : qfind(name, ';');
+  return pos == std::string::npos ?
+    name : folly::StringPiece{name.data(), pos};
+}
+
 //=============================================================================
 // PreClassEmitter::Prop.
 
@@ -255,7 +262,7 @@ PreClass* PreClassEmitter::create(Unit& unit) const {
     attrs = Attr(attrs & ~AttrPersistent);
   }
 
-  auto const dynamicConstructSampleRate = [&] () -> int64_t {
+  auto const dynConstructSampleRate = [&] () -> int64_t {
     if (!(attrs & AttrDynamicallyConstructible)) return -1;
 
     auto const it = m_userAttributes.find(s_DynamicallyConstructible.get());
@@ -283,7 +290,7 @@ PreClass* PreClassEmitter::create(Unit& unit) const {
   pc->m_enumBaseTy = m_enumBaseTy;
   pc->m_numDeclMethods = -1;
   pc->m_ifaceVtableSlot = m_ifaceVtableSlot;
-  pc->m_dynamicConstructSampleRate = dynamicConstructSampleRate;
+  pc->m_dynConstructSampleRate = dynConstructSampleRate;
 
   // Set user attributes.
   [&] {
@@ -440,11 +447,7 @@ void PreClassRepoProxy::InsertPreClassStmt
     txn.prepare(*this, insertQuery);
   }
 
-  auto n = name->slice();
-  auto const pos = RuntimeOption::RepoAuthoritative ?
-    std::string::npos : qfind(n, ';');
-  auto const nm = pos == std::string::npos ?
-    n : folly::StringPiece{n.data(), pos};
+  auto const nm = StripIdFromAnonymousClassName(name->slice());
   BlobEncoder extraBlob{pce.useGlobalIds()};
   RepoTxnQuery query(txn, *this);
   query.bindInt64("@unitSn", unitSn);

@@ -1238,19 +1238,6 @@ bool ExecutionContext::setHeaderCallback(const Variant& callback) {
   return true;
 }
 
-const StaticString s___HasTopLevelCode("__HasTopLevelCode");
-void checkPseudomain(const Unit* unit) {
-  auto& attrs = unit->fileAttributes();
-  if (attrs.find(s___HasTopLevelCode.get()) != attrs.end()) {
-    if (RuntimeOption::EvalWarnOnPseudomain == 1) {
-      raise_warning("Found top-level code in %s", unit->filepath()->data());
-      return;
-    } else if (RuntimeOption::EvalWarnOnPseudomain == 2) {
-      throw TopLevelCodeBannedException(unit->filepath()->data());
-    }
-  }
-}
-
 const static StaticString
   s_enter_async_entry_point("__SystemLib\\enter_async_entry_point");
 
@@ -1600,8 +1587,6 @@ TypedValue ExecutionContext::invokePseudoMain(const Func* f,
     return *toMerge->getMainReturn();
   }
 
-  checkPseudomain(toMerge);
-
   Stats::inc(Stats::PseudoMain_Executed);
   VMRegAnchor _;
 
@@ -1891,8 +1876,6 @@ bool ExecutionContext::evalUnit(Unit* unit, PC callPC, PC& pc, int funcType) {
     *vmStack().allocTV() = *unit->getMainReturn();
     return false;
   }
-
-  checkPseudomain(unit);
 
   Stats::inc(Stats::PseudoMain_Executed);
 
@@ -2343,7 +2326,7 @@ ExecutionContext::evalPHPDebugger(Unit* unit, int frame) {
 
 void ExecutionContext::enterDebuggerDummyEnv() {
   static Unit* s_debuggerDummy = compile_debugger_string(
-    "<?php?>", 7, RepoOptions::defaults()
+    "<?hh", 4, RepoOptions::defaults()
   );
   // Ensure that the VM stack is completely empty (vmfp() should be null)
   // and that we're not in a nested VM (reentrancy)

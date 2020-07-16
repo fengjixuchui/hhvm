@@ -65,11 +65,14 @@ String HHVM_FUNCTION(gettype, const Variant& v) {
   if (v.isNull()) {
     return s_NULL;
   }
-  if (RuntimeOption::EvalLogArrayProvenance &&
-      v.isArray() && arrprov::arrayWantsTag(v.asCArrRef().get())) {
+  if (v.isArray() && arrprov::arrayWantsTag(v.asCArrRef().get())) {
     raise_array_serialization_notice(SerializationSite::Gettype,
                                      v.getArrayData());
   }
+
+  // OH NO. This string could be used by logic in Hack, so we can't do the
+  // sensible thing here and return "varray" or "darray" for dvarrays.
+  if (isArrayType(v.getType())) return s_array;
   return getDataTypeString(v.getType());
 }
 

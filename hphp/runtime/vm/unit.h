@@ -71,6 +71,19 @@ enum class UnitOrigin {
   Eval = 1
 };
 
+/////////////////////////////////////////////////////////////////////////////
+//
+// Fatal info
+
+/*
+ * Information regarding parse/runtime errors in units
+ */
+struct FatalInfo {
+  Location::Range m_fatalLoc;
+  FatalOp m_fatalOp;
+  std::string m_fatalMsg;
+};
+
 ///////////////////////////////////////////////////////////////////////////////
 // Location tables.
 
@@ -110,6 +123,13 @@ struct SourceLoc {
   int char0{1};
   int line1{1};
   int char1{1};
+
+  template <typename SerDes> void serde(SerDes& sd) {
+    sd(line0);
+    sd(char0);
+    sd(line1);
+    sd(char1);
+  }
 };
 
 /*
@@ -264,11 +284,10 @@ public:
     /*
      * Iterators.
      *
-     * funcHoistableBegin() is in (funcBegin, funcEnd].
+     * funcNonMain() is in (funcBegin, funcEnd].
      */
     Func** funcBegin() const;
     Func** funcEnd() const;
-    Func** funcHoistableBegin() const;
 
     /*
      * Ranges.
@@ -277,7 +296,6 @@ public:
      */
     FuncRange funcs() const;
     MutableFuncRange mutableFuncs() const;
-    MutableFuncRange nonMainFuncs() const;
 
     /*
      * Get a reference or pointer to the mergeable at index `idx'.
@@ -285,7 +303,6 @@ public:
     void*& mergeableObj(int idx);
     void** mergeableData(int idx);
 
-    unsigned m_firstHoistableFunc;
     unsigned m_firstHoistablePreClass;
     unsigned m_firstMergeablePreClass;
     unsigned m_mergeablesSize;
@@ -890,21 +907,6 @@ public:
   // Other methods.
 
   /*
-   * Is this Unit a compile-time fatal?
-   *
-   * A compile-time fatal is encoded as a pseudomain that contains precisely:
-   *
-   *   String <id>; Fatal;
-   *
-   * Decode enough of pseudomain to determine whether it contains a
-   * compile-time fatal, and if so, extract the error message and line number.
-   *
-   * Parse-time fatals are a subset of compile-time fatals.
-   */
-  bool compileTimeFatal(const StringData*& msg, int& line) const;
-  bool parseFatal(const StringData*& msg, int& line) const;
-
-  /*
    * Get or set whether this Unit is interpret-only.
    *
    * This is used by the debugger to signal to the JIT that eval'd commands
@@ -917,6 +919,12 @@ public:
    * Does this unit correspond to a file with "<?hh" at the top?
    */
   bool isHHFile() const;
+
+  /*
+   * Get parse/runtime failure information if this unit is created as
+   * a result of one.
+   */
+  const FatalInfo* getFatalInfo() const;
 
   UserAttributeMap metaData() const;
 
@@ -996,6 +1004,7 @@ private:
   mutable LockFreePtrWrapper<VMCompactVector<LineInfo>> m_lineMap;
   UserAttributeMap m_metaData;
   UserAttributeMap m_fileAttributes;
+  std::unique_ptr<FatalInfo> m_fatalInfo{nullptr};
 
   rds::Link<req::dynamic_bitset, rds::Mode::Normal> m_coverage;
 };

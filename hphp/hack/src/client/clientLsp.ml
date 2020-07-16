@@ -1674,9 +1674,11 @@ let get_hh_server_status (state : state) : ShowStatusFB.params option =
         int_of_float (time -. ienv.first_start_time) |> string_of_int
     in
     (* TODO: better to report time that hh_server has spent initializing *)
-    let id = Random_id.short_string () in
+    let tracker = Connection_tracker.create () in
     let (progress, warning) =
-      match ServerUtils.server_progress ~id ~timeout:3 (get_root_exn ()) with
+      match
+        ServerUtils.server_progress ~tracker ~timeout:3 (get_root_exn ())
+      with
       | Error _ -> ("connecting", None)
       | Ok (progress, warning) -> (progress, warning)
     in
@@ -1948,8 +1950,9 @@ let rpc
         let msg = ServerCommandTypesUtils.debug_describe_t command in
         log_debug "hh_server rpc: [%s] [%0.3f]" msg duration;
         match result with
-        | Ok ((), res, start_server_handle_time) ->
-          ref_unblocked_time := start_server_handle_time;
+        | Ok ((), res, tracker) ->
+          ref_unblocked_time :=
+            Connection_tracker.get_server_unblocked_time tracker;
           Lwt.return res
         | Error
             ( (),
@@ -4018,7 +4021,7 @@ let handle_client_message
       let open DidChangeWatchedFiles in
       let changes =
         List.map notification.changes ~f:(fun change ->
-            change.uri |> lsp_uri_to_path |> Path.make)
+            ClientIdeMessage.Changed_file (lsp_uri_to_path change.uri))
       in
       let%lwt () =
         ide_rpc

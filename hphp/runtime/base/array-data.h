@@ -332,12 +332,6 @@ public:
   bool notCyclic(TypedValue v) const;
 
   /*
-   * Should int-like string keys be implicitly converted to integers before
-   * they are inserted?
-   */
-  bool useWeakKeys() const;
-
-  /*
    * Get the DataType (persistent or non-persistent version) corresponding to
    * the array's kind.
    */
@@ -586,8 +580,7 @@ public:
   /*
    * Comparisons.
    */
-  int compare(const ArrayData* v2) const;
-  bool equal(const ArrayData* v2, bool strict) const;
+  bool same(const ArrayData* v2) const;
 
   static bool Equal(const ArrayData*, const ArrayData*);
   static bool NotEqual(const ArrayData*, const ArrayData*);
@@ -642,8 +635,7 @@ public:
    * (which may depend on the array kind, e.g.).  If true, `i' is set to the
    * intish value of `key'.
    */
-  template <IntishCast IC = IntishCast::None>
-  bool convertKey(const StringData* key, int64_t& i) const;
+  bool intishCastKey(const StringData* key, int64_t& i) const;
 
   /*
    * Re-index all numeric keys to start from 0. This operation may require
@@ -865,7 +857,6 @@ struct ArrayFunctions {
   ArrayData* (*renumber[NK])(ArrayData*);
   void (*onSetEvalScalar[NK])(ArrayData*);
   ArrayData* (*toPHPArray[NK])(ArrayData*, bool);
-  ArrayData* (*toPHPArrayIntishCast[NK])(ArrayData*, bool);
   ArrayData* (*toDict[NK])(ArrayData*, bool);
   ArrayData* (*toVec[NK])(ArrayData*, bool);
   ArrayData* (*toKeyset[NK])(ArrayData*, bool);
@@ -903,19 +894,11 @@ void raiseHackArrCompatArrHackArrCmp();
 void raiseHackArrCompatDVArrCmp(const ArrayData*, const ArrayData*, bool);
 
 std::string makeHackArrCompatImplicitArrayKeyMsg(const TypedValue* key);
-void raiseHackArrCompatImplicitArrayKey(const TypedValue* key);
 
 StringData* getHackArrCompatNullHackArrayKeyMsg();
 
 bool checkHACCompare();
 bool checkHACArrayPlus();
-bool checkHACArrayKeyCast();
-
-/*
- * Like isStrictlyInteger() but changes behavior with the value of `ic'.
- */
-template <IntishCast IC = IntishCast::None>
-folly::Optional<int64_t> tryIntishCast(const StringData* key);
 
 /*
  * Add a provenance tag for the current vmpc to `ad`, copying instead from

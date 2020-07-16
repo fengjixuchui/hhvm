@@ -25,8 +25,12 @@ type client =
       ic: Timeout.in_channel;
       oc: Out_channel.t;
       priority: priority;
+      mutable tracker: Connection_tracker.t;
     }
-  | Persistent_client of Unix.file_descr
+  | Persistent_client of {
+      fd: Unix.file_descr;
+      mutable tracker: Connection_tracker.t;
+    }
 
 type select_outcome =
   | Select_persistent
@@ -38,14 +42,30 @@ let provider_from_file_descriptors x = x
 let provider_for_test () = failwith "for use in tests only"
 
 (** Retrieve channels to client from monitor process. *)
-let accept_client (priority : priority) (parent_in_fd : Unix.file_descr) :
-    client =
+let accept_client
+    (priority : priority)
+    (parent_in_fd : Unix.file_descr)
+    (t_sleep_and_check : float)
+    (t_monitor_fd_ready : float) : client =
   let socket = Libancillary.ancil_recv_fd parent_in_fd in
+  let t_got_client_fd = Unix.gettimeofday () in
+  let tracker : Connection_tracker.t =
+    Marshal_tools.from_fd_with_preamble parent_in_fd
+  in
+  let tracker =
+    let open Connection_tracker in
+    tracker
+    |> track ~key:Server_sleep_and_check ~time:t_sleep_and_check
+    |> track ~key:Server_monitor_fd_ready ~time:t_monitor_fd_ready
+    |> track ~key:Server_got_client_fd ~time:t_got_client_fd
+    |> track ~key:Server_got_tracker
+  in
   Non_persistent_client
     {
       ic = Timeout.in_channel_of_descr socket;
       oc = Unix.out_channel_of_descr socket;
       priority;
+      tracker;
     }
 
 let select ~idle_gc_slice fd_list timeout =
@@ -66,12 +86,13 @@ let sleep_and_check
     ~(idle_gc_slice : int)
     (kind : [< `Any | `Force_dormant_start_only | `Priority ]) : select_outcome
     =
+  let t_sleep_and_check = Unix.gettimeofday () in
   let in_fds = [default_in_fd; priority_in_fd; force_dormant_start_only] in
   let l =
     match (kind, persistent_client_opt) with
     | (`Force_dormant_start_only, _) -> [force_dormant_start_only]
     | (`Priority, _) -> [priority_in_fd]
-    | (`Any, Some (Persistent_client fd)) ->
+    | (`Any, Some (Persistent_client { fd; _ })) ->
       (* If we are not sure that there are no more IDE commands, do not even
        * look at non-persistent client to avoid race conditions.*)
       if not ide_idle then
@@ -86,21 +107,37 @@ let sleep_and_check
     | (`Any, None) -> in_fds
   in
   let ready_fd_l = select ~idle_gc_slice l 0.1 in
+  let t_monitor_fd_ready = Unix.gettimeofday () in
   (* Prioritize existing persistent client requests over command line ones *)
   let is_persistent fd =
     match persistent_client_opt with
-    | Some (Persistent_client x) -> Poly.equal fd x
+    | Some (Persistent_client { fd = x; _ }) -> Poly.equal fd x
     | _ -> false
   in
   try
     if List.exists ready_fd_l ~f:is_persistent then
       Select_persistent
     else if List.mem ~equal:Poly.( = ) ready_fd_l priority_in_fd then
-      Select_new (accept_client Priority_high priority_in_fd)
+      Select_new
+        (accept_client
+           Priority_high
+           priority_in_fd
+           t_sleep_and_check
+           t_monitor_fd_ready)
     else if List.mem ~equal:Poly.( = ) ready_fd_l default_in_fd then
-      Select_new (accept_client Priority_default default_in_fd)
+      Select_new
+        (accept_client
+           Priority_default
+           default_in_fd
+           t_sleep_and_check
+           t_monitor_fd_ready)
     else if List.mem ~equal:Poly.( = ) ready_fd_l force_dormant_start_only then
-      Select_new (accept_client Priority_dormant force_dormant_start_only)
+      Select_new
+        (accept_client
+           Priority_dormant
+           force_dormant_start_only
+           t_sleep_and_check
+           t_monitor_fd_ready)
     else if List.is_empty ready_fd_l then
       Select_nothing
     else
@@ -111,7 +148,7 @@ let sleep_and_check
     Select_nothing
 
 let has_persistent_connection_request = function
-  | Persistent_client fd ->
+  | Persistent_client { fd; _ } ->
     let (ready, _, _) = Unix.select [fd] [] [] 0.0 in
     not (List.is_empty ready)
   | _ -> false
@@ -119,29 +156,47 @@ let has_persistent_connection_request = function
 let priority_fd (_, x, _) = Some x
 
 let get_client_fd = function
-  | Persistent_client fd -> Some fd
+  | Persistent_client { fd; _ } -> Some fd
   | Non_persistent_client _ -> failwith "not implemented"
+
+let track ~key ?time client =
+  match client with
+  | Persistent_client client ->
+    client.tracker <- Connection_tracker.track client.tracker ~key ?time
+  | Non_persistent_client client ->
+    client.tracker <- Connection_tracker.track client.tracker ~key ?time
 
 let say_hello oc =
   let fd = Unix.descr_of_out_channel oc in
   Marshal_tools.to_fd_with_preamble fd ServerCommandTypes.Hello |> ignore
 
-let read_connection_type ic =
+let read_connection_type (ic : Timeout.in_channel) : connection_type =
   Timeout.with_timeout
     ~timeout:1
     ~on_timeout:(fun _ -> raise Read_command_timeout)
-    ~do_:(fun timeout -> Timeout.input_value ~timeout ic)
+    ~do_:(fun timeout ->
+      let connection_type : connection_type = Timeout.input_value ~timeout ic in
+      connection_type)
 
 [@@@warning "-52"]
 
 (* we have no alternative but to depend on Sys_error strings *)
 
-let read_connection_type = function
-  | Non_persistent_client { ic; oc; _ } ->
+let read_connection_type (client : client) : connection_type =
+  match client with
+  | Non_persistent_client client ->
     begin
       try
-        say_hello oc;
-        read_connection_type ic
+        say_hello client.oc;
+        client.tracker <-
+          Connection_tracker.(track client.tracker ~key:Server_sent_hello);
+        let connection_type : connection_type =
+          read_connection_type client.ic
+        in
+        client.tracker <-
+          Connection_tracker.(
+            track client.tracker ~key:Server_got_connection_type);
+        connection_type
       with
       | Sys_error "Connection reset by peer"
       | Unix.Unix_error (Unix.EPIPE, "write", _) ->
@@ -157,16 +212,17 @@ let read_connection_type = function
 
 (* CARE! scope of suppression should be only read_connection_type *)
 
-let send_response_to_client client response t =
-  let fd =
+let send_response_to_client client response =
+  let (fd, tracker) =
     match client with
-    | Non_persistent_client { oc; _ } -> Unix.descr_of_out_channel oc
-    | Persistent_client fd -> fd
+    | Non_persistent_client { oc; tracker; _ } ->
+      (Unix.descr_of_out_channel oc, tracker)
+    | Persistent_client { fd; tracker; _ } -> (fd, tracker)
   in
   let (_ : int) =
     Marshal_tools.to_fd_with_preamble
       fd
-      (ServerCommandTypes.Response (response, t))
+      (ServerCommandTypes.Response (response, tracker))
   in
   ()
 
@@ -174,7 +230,7 @@ let send_push_message_to_client client response =
   match client with
   | Non_persistent_client _ ->
     failwith "non-persistent clients don't expect push messages "
-  | Persistent_client fd ->
+  | Persistent_client { fd; _ } ->
     (try
        let (_ : int) =
          Marshal_tools.to_fd_with_preamble fd (ServerCommandTypes.Push response)
@@ -192,13 +248,13 @@ let read_client_msg ic =
 
 let client_has_message = function
   | Non_persistent_client _ -> true
-  | Persistent_client fd ->
+  | Persistent_client { fd; _ } ->
     let (ready, _, _) = Unix.select [fd] [] [] 0.0 in
     not (List.is_empty ready)
 
 let read_client_msg = function
   | Non_persistent_client { ic; _ } -> read_client_msg ic
-  | Persistent_client fd ->
+  | Persistent_client { fd; _ } ->
     (* TODO: this is probably wrong, since for persistent client we'll
      * construct a new input channel for each message, while the old one
      * could have already buffered it *)
@@ -215,8 +271,8 @@ let get_channels = function
     assert false
 
 let make_persistent = function
-  | Non_persistent_client { ic; _ } ->
-    Persistent_client (Timeout.descr_of_in_channel ic)
+  | Non_persistent_client { ic; tracker; _ } ->
+    Persistent_client { fd = Timeout.descr_of_in_channel ic; tracker }
   | Persistent_client _ ->
     (* See comment on read_connection_type. Non_persistent_client can be
      * turned into Persistent_client, but not the other way *)
@@ -237,7 +293,7 @@ let shutdown_client client =
   let (ic, oc) =
     match client with
     | Non_persistent_client { ic; oc; _ } -> (ic, oc)
-    | Persistent_client fd ->
+    | Persistent_client { fd; _ } ->
       (Timeout.in_channel_of_descr fd, Unix.out_channel_of_descr fd)
   in
   ServerUtils.shutdown_client (ic, oc)

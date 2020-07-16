@@ -26,6 +26,7 @@
 #include "hphp/runtime/base/config.h"
 #include "hphp/runtime/base/file-util.h"
 #include "hphp/runtime/base/ini-setting.h"
+#include "hphp/runtime/base/array-provenance.h"
 #include "hphp/runtime/base/program-functions.h"
 #include "hphp/runtime/vm/extern-compiler.h"
 #include "hphp/runtime/vm/repo.h"
@@ -346,6 +347,8 @@ int prepareOptions(CompilerOptions &po, int argc, char **argv) {
     ("repo-schema", "display the repo schema id used by this app")
     ;
 
+  ARRPROV_USE_RUNTIME_LOCATION_FORCE();
+
   positional_options_description p;
   p.add("inputs", -1);
   variables_map vm;
@@ -629,6 +632,17 @@ int process(const CompilerOptions &po) {
     if (po.target != "filecache") {
       if (!package.parse(!po.force, unit_cache_thread)) {
         return 1;
+      }
+
+      // nuke the compiler pool so we don't waste memory on ten gajillion
+      // instances of hackc
+      if (auto const new_workers = RO::EvalHackCompilerSecondaryWorkers) {
+        Logger::Info(
+          "shutting down hackc worker pool and resizing to %ld workers",
+          new_workers
+        );
+        RO::EvalHackCompilerWorkers = new_workers;
+        compilers_shutdown();
       }
     }
   }

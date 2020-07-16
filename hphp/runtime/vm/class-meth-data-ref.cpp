@@ -53,11 +53,11 @@ ClsMethDataRef ClsMethDataRef::create(Class* cls, Func* func) {
   return ClsMethDataRef(cls, func);
 }
 
-void checkClsMethFuncHelper(const Func* f) {
-  assertx(f->isMethod());
-  if (!f->isStaticInPrologue()) throw_missing_this(f);
-  if (f->isAbstract()) {
-    raise_error("Cannot call abstract method %s", f->fullName()->data());
+void checkClsMethFuncHelper(const Func* func) {
+  assertx(func->isMethod());
+  if (!func->isStaticInPrologue()) throw_missing_this(func);
+  if (func->isAbstract()) {
+    raise_error("Cannot call abstract method %s", func->fullName()->data());
   }
 }
 

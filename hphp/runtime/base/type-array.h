@@ -250,16 +250,6 @@ public:
   TypedValue convertKey(const Variant& k) const;
 
   /*
-   * Should int-like string keys be implicitly converted to integers before they
-   * are inserted?
-   */
-  bool useWeakKeys() const {
-    // If array isn't set we may implicitly create a mixed array, which uses
-    // weak keys.  We never implicitly create a Hack array.
-    return !m_arr || m_arr->useWeakKeys();
-  }
-
-  /*
    * Convert the underlying ArrayData to a static copy of itself.
    */
   void setEvalScalar() const;
@@ -386,17 +376,6 @@ public:
    * Enable the legacy behavior bit on this array
    */
   void setLegacyArray(bool);
-
-  /*
-   * Comparisons.
-   */
-  bool same(const Array& v2) const;
-  bool equal(const Array& v2) const;
-  bool less(const Array& v2, bool flip = false) const;
-  bool less(const Variant& v2) const;
-  bool more(const Array& v2, bool flip = true) const;
-  bool more(const Variant& v2) const;
-  int compare(const Array& v2, bool flip = false) const;
 
   /////////////////////////////////////////////////////////////////////////////
   // Element lookup/lval.

@@ -193,7 +193,7 @@ void UnitEmitter::initMain(int line1, int line2) {
   StringData* name = staticEmptyString();
   FuncEmitter* pseudomain = newFuncEmitter(name);
   Attr attrs = AttrMayUseVV;
-  pseudomain->init(line1, line2, 0, attrs, false, name);
+  pseudomain->init(line1, line2, 0, attrs, name);
 }
 
 void UnitEmitter::addTrivialPseudoMain() {
@@ -611,7 +611,7 @@ std::unique_ptr<Unit> UnitEmitter::create(bool saveLineTable) const {
           const_cast<StringData*>(m_filepath),
           m_sha1,
           FatalOp::Parse,
-          makeStaticString("A bytecode verification error was detected")
+          "A bytecode verification error was detected"
         )->create(saveLineTable);
       }
     }
@@ -626,6 +626,11 @@ std::unique_ptr<Unit> UnitEmitter::create(bool saveLineTable) const {
       m_litstrs.empty() && m_arrayTypeTable.empty() ?
     new Unit : new UnitExtended
   };
+
+  if (m_fatalUnit) {
+    FatalInfo info{m_fatalLoc, m_fatalOp, m_fatalMsg};
+    u->m_fatalInfo = std::make_unique<FatalInfo>(info);
+  }
 
   u->m_repoId = saveLineTable ? RepoIdInvalid : m_repoId;
   u->m_sn = m_sn;
@@ -671,20 +676,10 @@ std::unique_ptr<Unit> UnitEmitter::create(bool saveLineTable) const {
   ix = 0;
   for (auto& fe : m_fes) {
     auto const func = fe->create(*u);
-    if (func->top()) {
-      if (!mi->m_firstHoistableFunc) {
-        mi->m_firstHoistableFunc = ix;
-      }
-    } else {
-      assertx(!mi->m_firstHoistableFunc);
-    }
     assertx(ix == fe->id());
     mi->mergeableObj(ix++) = func;
   }
   assertx(u->getMain(nullptr, false)->isPseudoMain());
-  if (!mi->m_firstHoistableFunc) {
-    mi->m_firstHoistableFunc =  ix;
-  }
   mi->m_firstHoistablePreClass = ix;
   assertx(m_fes.size());
   for (auto& id : m_hoistablePceIdList) {
@@ -792,13 +787,243 @@ void UnitEmitter::serdeMetaData(SerDe& sd) {
     (m_fileAttributes)
     (m_symbol_refs)
     (m_bcSha1)
+    (m_fatalUnit)
     ;
+  if (m_fatalUnit) {
+    sd(m_fatalLoc)
+      (m_fatalOp)
+      (m_fatalMsg)
+      ;
+  }
 
   if (RuntimeOption::EvalLoadFilepathFromUnitCache) {
     /* May be different than the unit origin: e.g. for hhas files. */
     sd(m_filepath);
   }
 }
+
+template <typename SerDe>
+void UnitEmitter::serde(SerDe& sd) {
+  MemoryManager::SuppressOOM so(*tl_heap);
+
+  serdeMetaData(sd);
+  // These are not touched by serdeMetaData:
+  sd(m_returnSeen);
+  sd(m_ICE);
+  sd(m_allClassesHoistable);
+
+  auto const seq = [&] (auto const& c, auto const& r, auto const& w) {
+    if constexpr (SerDe::deserializing) {
+      size_t size;
+      sd(size);
+      for (size_t i = 0; i < size; ++i) r(sd, i);
+    } else {
+      sd(c.size());
+      for (auto const& x : c) w(sd, x);
+    }
+  };
+
+  // Literal strings
+  seq(
+    m_litstrs,
+    [&] (auto& sd, size_t i) {
+      const StringData* s;
+      sd(s);
+      auto const id UNUSED = mergeUnitLitstr(s);
+      assertx(id == i);
+    },
+    [&] (auto& sd, const StringData* s) { sd(s); }
+  );
+
+  // Arrays
+  seq(
+    m_arrays,
+    [&] (auto& sd, size_t i) {
+      std::string key;
+      sd(key);
+
+      auto v = [&]{
+        VariableUnserializer vu{
+          key.data(),
+          key.size(),
+          VariableUnserializer::Type::Internal
+        };
+        vu.setUnitFilename(m_filepath);
+        return vu.unserialize();
+      }();
+      assertx(v.isArray());
+      auto ad = v.detach().m_data.parr;
+      ArrayData::GetScalarArray(&ad);
+      auto const id DEBUG_ONLY = mergeArray(ad);
+      assertx(id == i);
+    },
+    [&] (auto& sd, const ArrayData* a) {
+      auto const str = [&]{
+        VariableSerializer vs{VariableSerializer::Type::Internal};
+        vs.setUnitFilename(m_filepath);
+        return
+          vs.serializeValue(VarNR(const_cast<ArrayData*>(a)), false)
+          .toCppString();
+      }();
+      sd(str);
+    }
+  );
+
+  // HHBBC array types
+  sd(m_arrayTypeTable);
+
+  // Pre-class emitters
+  seq(
+    m_pceVec,
+    [&] (auto& sd, size_t i) {
+      std::string name;
+      int hoistable;
+      sd(name);
+      sd(hoistable);
+      auto pce = newPreClassEmitter(name, (PreClass::Hoistable)hoistable);
+      pce->serdeMetaData(sd);
+      assertx(pce->id() == i);
+    },
+    [&] (auto& sd, PreClassEmitter* pce) {
+      auto const nm = StripIdFromAnonymousClassName(pce->name()->slice());
+      sd(nm.toString());
+      sd((int)pce->hoistability());
+      pce->serdeMetaData(sd);
+    }
+  );
+
+  // Record emitters
+  seq(
+    m_reVec,
+    [&] (auto& sd, size_t i) {
+      std::string name;
+      sd(name);
+      auto re = newRecordEmitter(name);
+      re->serdeMetaData(sd);
+      assertx(re->id() == i);
+    },
+    [&] (auto& sd, RecordEmitter* re) {
+      auto const nm = StripIdFromAnonymousClassName(re->name()->slice());
+      sd(nm.toString());
+      re->serdeMetaData(sd);
+    }
+  );
+
+  // Type aliases
+  seq(
+    m_typeAliases,
+    [&] (auto& sd, size_t i) {
+      TypeAlias ta;
+      sd(ta.name);
+      sd(ta);
+      auto const id UNUSED = addTypeAlias(ta);
+      assertx(id == i);
+    },
+    [&] (auto& sd, const TypeAlias& ta) {
+      sd(ta.name);
+      sd(ta);
+    }
+  );
+
+  // Constants
+  seq(
+    m_constants,
+    [&] (auto& sd, size_t i) {
+      Constant cns;
+      sd(cns.name);
+      sd(cns);
+      if (type(cns.val) == KindOfUninit) {
+        cns.val.m_data.pcnt = reinterpret_cast<MaybeCountable*>(Unit::getCns);
+      }
+      auto const id UNUSED = addConstant(cns);
+      assertx(id == i);
+    },
+    [&] (auto& sd, const Constant& cns) {
+      sd(cns.name);
+      sd(cns);
+    }
+  );
+
+  // Line table
+  sd(
+    m_lineTable,
+    [&] (const LineEntry& prev, const LineEntry& curDelta) {
+      if (SerDe::deserializing) {
+        return LineEntry {
+          curDelta.pastOffset() + prev.pastOffset(),
+          curDelta.val() + prev.val()
+        };
+      } else {
+        return LineEntry {
+          curDelta.pastOffset() - prev.pastOffset(),
+          curDelta.val() - prev.val()
+        };
+      }
+    }
+  );
+
+  // Mergeables
+  sd(m_mergeableStmts);
+
+  // Func emitters (we cannot use seq for these because they come from
+  // both the pre-class emitters and m_fes.
+  if constexpr (SerDe::deserializing) {
+    size_t total;
+    sd(total);
+    for (size_t i = 0; i < total; ++i) {
+      Id pceId;
+      const StringData* name;
+      sd(pceId);
+      sd(name);
+
+      FuncEmitter* fe;
+      if (pceId < 0) {
+        fe = newFuncEmitter(name);
+      } else {
+        auto funcPce = pce(pceId);
+        fe = newMethodEmitter(name, funcPce);
+        auto const added UNUSED = funcPce->addMethod(fe);
+        assertx(added);
+      }
+      assertx(fe->sn() == i);
+      fe->serdeMetaData(sd);
+      fe->setEHTabIsSorted();
+      fe->finish(fe->past);
+    }
+  } else {
+    auto total = m_fes.size();
+    for (auto const pce : m_pceVec) total += pce->methods().size();
+    sd(total);
+
+    auto const write = [&] (FuncEmitter* fe, Id pceId) {
+      sd(pceId);
+      sd(fe->name);
+      fe->serdeMetaData(sd);
+    };
+    for (auto const& fe : m_fes) write(fe.get(), -1);
+    for (auto const pce : m_pceVec) {
+      for (auto const fe : pce->methods()) write(fe, pce->id());
+    }
+  }
+
+  // Source location table
+  sd(m_sourceLocTab);
+
+  // Bytecode
+  if constexpr (SerDe::deserializing) {
+    size_t size;
+    sd(size);
+    assertx(sd.remaining() <= size);
+    setBc(sd.data(), size);
+    sd.advance(size);
+  } else {
+    sd(m_bclen);
+    sd.writeRaw((const char*)m_bc, m_bclen);
+  }
+}
+
+template void UnitEmitter::serde<>(BlobDecoder&);
+template void UnitEmitter::serde<>(BlobEncoder&);
 
 ///////////////////////////////////////////////////////////////////////////////
 // UnitRepoProxy.
@@ -1477,21 +1702,20 @@ UnitRepoProxy::GetSourceLocTabStmt::get(int64_t unitSn,
 }
 
 std::unique_ptr<UnitEmitter>
-createFatalUnit(StringData* filename, const SHA1& sha1, FatalOp /*op*/,
-                StringData* err) {
+createFatalUnit(const StringData* filename, const SHA1& sha1, FatalOp op,
+                std::string err, Location::Range loc) {
   auto ue = std::make_unique<UnitEmitter>(sha1, SHA1{}, Native::s_noNativeFuncs,
                                           false);
   ue->m_filepath = filename;
   ue->m_isHHFile = true;
-  ue->initMain(1, 1);
-  ue->emitOp(OpString);
-  ue->emitInt32(ue->mergeLitstr(err));
-  ue->emitOp(OpFatal);
-  ue->emitByte(static_cast<uint8_t>(FatalOp::Runtime));
-  FuncEmitter* fe = ue->getMain();
-  fe->maxStackCells = 1;
-  // XXX line numbers are bogus
-  fe->finish(ue->bcPos());
+
+  ue->m_fatalUnit = true;
+  ue->m_fatalLoc = loc;
+  ue->m_fatalOp = op;
+  ue->m_fatalMsg = err;
+
+  ue->addTrivialPseudoMain();
+  ue->m_mergeOnly = false;
   return ue;
 }
 

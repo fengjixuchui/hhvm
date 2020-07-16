@@ -1,0 +1,73 @@
+Decls:
+  class \HH\vec: { policied_props = [] }
+  class \PoliciedData: { policied_props = [data:SECRET] }
+  class \PublicData: { policied_props = [data:PUBLIC] }
+  function \PoliciedData#__construct: { kind = public }
+  function \PublicData#__construct: { kind = public }
+  function \earlyReturn: { kind = public }
+  
+Analyzing __construct:
+* pc: pc
+* This: \PublicData<\PublicData, lump, data=<PUBLIC>>
+* Return: <ret>
+* Params:
+  lvars: { $data -> <$data> }
+* Final environment:
+  Deps: {}
+  Locals:
+    lvars: { $data -> <$data> }
+Constraints:
+  [\PublicData = PUBLIC, $data = PUBLIC, pc = PUBLIC]
+
+Analyzing __construct:
+* pc: pc
+* This: \PoliciedData<\PoliciedData, lump, data=<SECRET>>
+* Return: <ret>
+* Params:
+  lvars: { $data -> <$data> }
+* Final environment:
+  Deps: {}
+  Locals:
+    lvars: { $data -> <$data> }
+Constraints:
+  [\PoliciedData < SECRET, $data < SECRET, pc < SECRET]
+
+Analyzing \earlyReturn:
+* pc: pc
+* This: None
+* Return: <ret>
+* Params:
+  lvars:
+    { $x -> \PoliciedData<\PoliciedData, lump, data=<SECRET>>;
+      $y -> \PublicData<\PublicData, lump'1, data=<PUBLIC>> }
+* Final environment:
+  Deps: {}
+  Locals:
+    lvars:
+      { $x -> \PoliciedData<\PoliciedData, lump, data=<SECRET>>;
+        $y -> \PublicData<\PublicData, lump'1, data=<PUBLIC>> }
+    pc: .data
+Constraints:
+  [SECRET < .data, \PoliciedData < .data, \PublicData = PUBLIC,
+   PUBLIC = PUBLIC, .data = PUBLIC, pc = PUBLIC]
+
+Flow constraints for \PoliciedData#__construct:
+  
+  Simplified: True
+  Raw: [\PoliciedData < SECRET, $data < SECRET, pc < SECRET]
+
+Flow constraints for \PublicData#__construct:
+  
+  Simplified: True
+  Raw: [\PublicData = PUBLIC, $data = PUBLIC, pc = PUBLIC]
+
+Flow constraints for \earlyReturn:
+  
+  Simplified: SECRET = PUBLIC
+  Raw:
+  [SECRET < .data, \PoliciedData < .data, \PublicData = PUBLIC,
+   PUBLIC = PUBLIC, .data = PUBLIC, pc = PUBLIC]
+
+There are privacy policy errors in \earlyReturn:
+  Data with policy SECRET appears in context PUBLIC.
+  

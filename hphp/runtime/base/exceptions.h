@@ -25,6 +25,7 @@
 
 #include "hphp/util/portability.h"
 #include "hphp/util/exception.h"
+#include "hphp/parser/location.h"
 #include "hphp/runtime/base/type-array.h"
 #include "hphp/runtime/base/req-root.h"
 #include "hphp/util/rds-local.h"
@@ -102,6 +103,10 @@ void raise_fatal_error(const char* msg, const Array& bt = null_array,
                        bool recoverable = false, bool silent = false,
                        bool throws = true);
 
+[[noreturn]] void raise_parse_error(const StringData*,
+                                    const char*,
+                                    const Location::Range& loc);
+
 //////////////////////////////////////////////////////////////////////
 
 struct ResourceExceededException : FatalErrorException {
@@ -139,7 +144,9 @@ struct RequestOOMKilledException : ResourceExceededException {
         folly::sformat("request aborted due to memory pressure, "
                        "used {} bytes", usedBytes),
         empty_varray())
+    , m_usedBytes(usedBytes)
   {}
+  const size_t m_usedBytes;
   EXCEPTION_COMMON_IMPL(RequestOOMKilledException);
 };
 
@@ -169,12 +176,6 @@ struct PhpNotSupportedException : ExtendedException {
   explicit PhpNotSupportedException(const char* file)
     : ExtendedException("HHVM 4+ does not support PHP: %s", file) {}
   EXCEPTION_COMMON_IMPL(PhpNotSupportedException);
-};
-
-struct TopLevelCodeBannedException : ExtendedException {
-  explicit TopLevelCodeBannedException(const char* file)
-    : ExtendedException("Found top-level code in %s", file) {}
-  EXCEPTION_COMMON_IMPL(TopLevelCodeBannedException);
 };
 
 //////////////////////////////////////////////////////////////////////

@@ -316,7 +316,7 @@ InitFiniNode s_initProvLoggingCounters([] {
 
 void raise_array_serialization_notice(SerializationSite src,
                                       const ArrayData* arr) {
-  assertx(RuntimeOption::EvalLogArrayProvenance);
+  assertx(RuntimeOption::EvalArrayProvenance);
   if (UNLIKELY(g_context.isNull())) return;
   if (arr->isLegacyArray()) return;
   if (UNLIKELY(g_context->getThrowAllErrors())) {
@@ -650,21 +650,12 @@ std::string param_type_error_message(
   }
   assertx(param_num > 0);
 
-  auto const actual_type = [&]{
-    if (tvIsArray(actual_value)) {
-      auto const ad = val(actual_value).parr;
-      if (ad->isVArray()) return "varray";
-      if (ad->isDArray()) return "darray";
-    }
-    return getDataTypeString(type(actual_value)).data();
-  }();
-
   return folly::sformat(
     "{}() expects parameter {} to be {}, {} given",
     func_name,
     param_num,
     expected_type,
-    actual_type);
+    getDataTypeString(type(actual_value)).data());
 }
 
 void raise_param_type_warning(

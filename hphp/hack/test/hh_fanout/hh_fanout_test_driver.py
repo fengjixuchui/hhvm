@@ -8,7 +8,7 @@ files need to be re-typechecked"?
 The test cases are in files called `test.txt` in the subdirectories of this
 directory. They are written in a small DSL (detailed later in this file).
 
-TODO: Additionally, we perform the sanity check that the list of typechecking
+Additionally, we perform the sanity check that the list of typechecking
 errors produced from a full typecheck is the same as for an incremental
 typecheck.
 """
@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 from dataclasses import dataclass
 from typing import Dict, List, Optional, cast
 
@@ -224,6 +225,24 @@ def run_fanout_test(
     return cursor
 
 
+def run_typecheck_test(
+    env: Env, saved_state_info: SavedStateInfo, work_dir: Path, cursor: Cursor
+) -> None:
+    hh_fanout_result = run_hh_fanout_calculate_errors_pretty_print(
+        env=env, saved_state_info=saved_state_info, work_dir=work_dir, cursor=cursor
+    )
+    hh_server_result = run_hh_server_check(env=env, work_dir=work_dir)
+    print(hh_fanout_result)
+
+    if hh_fanout_result == hh_server_result:
+        print("(Additionally, hh_fanout errors matched hh_server errors.)")
+    else:
+        nocommit = "\x40nocommit"
+        print(f"{nocommit} -- hh_fanout did NOT match hh_server output!")
+        print("hh_server errors:")
+        print(hh_server_result)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("test_path", type=os.path.abspath)
@@ -243,42 +262,49 @@ def main() -> None:
             hh_fanout_path=args.hh_fanout,
             hh_server_path=args.hh_server,
         )
-        saved_state_info = generate_saved_state(env, work_dir)
 
         with open(args.test_path) as f:
             test_commands = f.readlines()
 
-        # The test proceeds through a series of timestamps. The first timestamp
-        # is 0, which corresponds to the initial state of the repository,
-        # copied from the test source directory. A saved-state is generated
-        # using that set of files, and fed into `hh_fanout` commands.
-        #
-        # When we move to the next timestamp `N`, we copy any files matching
-        # the pattern `*.php.newN` into the working directory (simulating a
-        # file change on disk).
-        timestamp = 0
+        saved_state_info: Optional[SavedStateInfo] = None
         is_first = True
         changed_files: List[Path] = []
         cursor: Optional[Cursor] = None
-        for test_command in test_commands:
+        i = -1
+        while i + 1 < len(test_commands):
+            i += 1
+            test_command = test_commands[i]
             test_command = test_command.strip()
             if test_command.startswith("#") or test_command == "":
                 continue
             [command, *command_args] = test_command.split()
 
-            # `advance-time` advances the timestamp to the next value, and
-            # copies any files for that timestamp into the test working
-            # directory.
-            if command == "advance-time":
-                timestamp += 1
-                new_files = glob.glob(os.path.join(source_dir, f"*.new{timestamp}"))
+            # `write` writes the given file contents to disk, and queues it up
+            # as a "changed file" for the next `calculate-fanout` query.
+            if command == "write":
+                content_lines = []
+                while i + 1 < len(test_commands) and test_commands[i + 1][0].isspace():
+                    content_lines.append(test_commands[i + 1])
+                    i += 1
+                # Note that the lines already have `\n` at their ends, no need
+                # to add newlines.
+                content = "".join(content_line for content_line in content_lines)
+                content = textwrap.dedent(content)
+
+                [target_filename] = command_args
+                target_path = os.path.join(work_dir, target_filename)
+                changed_files.append(target_path)
+                with open(target_path, "w") as f:
+                    f.write(content)
+
+            # `generate-saved-state` generates a saved-state for use in
+            # subsequent commands. Can only be called once.
+            elif command == "generate-saved-state":
+                assert (
+                    saved_state_info is None
+                ), "Cannot call `generate-saved-state` more than once"
+                saved_state_info = generate_saved_state(env, work_dir)
                 changed_files = []
-                for source_file in new_files:
-                    source_file = os.path.relpath(source_file, os.getcwd())
-                    (target_filename, _) = os.path.splitext(source_file)
-                    target_path = os.path.join(work_dir, target_filename)
-                    changed_files.append(target_path)
-                    copy(source_file, target_path)
 
             # `calculate-fanout` calculates the fanout for the arguments and
             # prints it to the test output for comparison against the `.exp`
@@ -288,8 +314,11 @@ def main() -> None:
                     is_first = False
                 else:
                     print()
-                print(f"Fanout calculation at time #{timestamp}")
+                print(f"Fanout calculation on line {i + 1}")
 
+                assert (
+                    saved_state_info is not None
+                ), f"Must call `generate-saved-state` before `calculate-errors` on line {i + 1}"
                 cursor = run_fanout_test(
                     env=env,
                     saved_state_info=saved_state_info,
@@ -298,6 +327,48 @@ def main() -> None:
                     cursor=cursor,
                 )
                 changed_files = []
+
+            # `calculate-errors` calculates the set of typechecking errors in
+            # the codebase and prints it to the test output for comparison
+            # against the `.exp` file.
+            elif command == "calculate-errors":
+                if is_first:
+                    is_first = False
+                else:
+                    print()
+                print(f"Typecheck for change set on line {i + 1}")
+
+                # We require a cursor to calculate errors, but we won't have a
+                # non-`None` one on the first iteration of this loop. Do an
+                # `hh_fanout` query to bring us up to date and to ensure we
+                # have a cursor.
+                assert (
+                    saved_state_info is not None
+                ), f"Must call `generate-saved-state` before `calculate-errors` on line {i + 1}"
+                cursor = cast(
+                    Optional[Cursor],
+                    run_hh_fanout(
+                        env=env,
+                        saved_state_info=saved_state_info,
+                        changed_files=changed_files,
+                        args=[],
+                        cursor=cursor,
+                    )["cursor"],
+                )
+                changed_files = []
+                assert (
+                    cursor is not None
+                ), "Cursor should be available since we queried fanout"
+
+                assert (
+                    saved_state_info is not None
+                ), f"Must call `generate-saved-state` before `calculate-errors` on line {i + 1}"
+                run_typecheck_test(
+                    env=env,
+                    saved_state_info=saved_state_info,
+                    work_dir=work_dir,
+                    cursor=cursor,
+                )
 
             else:
                 raise ValueError(f"Unrecognized test command: {command}")

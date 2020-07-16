@@ -916,7 +916,7 @@ bool subtypeArrLike(SArray arr1, SArray arr2) {
   if (arr1 == arr2) return true;
   if (arr1->size() != arr2->size()) return false;
   SuppressHACCompareNotices _;
-  if (!arr1->equal(arr2, true)) return false;
+  if (!arr1->same(arr2)) return false;
   return visitDifferingProvTagsInSimilarArrays(arr1, arr2, subtypeProvTag);
 }
 
@@ -924,7 +924,7 @@ bool couldBeArrLike(SArray arr1, SArray arr2) {
   if (arr1 == arr2) return true;
   if (arr1->size() != arr2->size()) return false;
   SuppressHACCompareNotices _;
-  if (!arr1->equal(arr2, true)) return false;
+  if (!arr1->same(arr2)) return false;
   return visitDifferingProvTagsInSimilarArrays(arr1, arr2, couldBeProvTag);
 }
 
@@ -2954,18 +2954,14 @@ Type vec_val(SArray val) {
 
 Type vec_empty(ProvTag tag) {
   auto r = Type { BSVecE };
-  r.m_data.aval = tag.valid()
-    ? arrprov::tagStaticArr(staticEmptyVec(), tag.get())
-    : staticEmptyVec();
+  r.m_data.aval = staticEmptyVec();
   r.m_dataTag = DataTag::ArrLikeVal;
   return r;
 }
 
 Type some_vec_empty(ProvTag tag) {
   auto r = Type { BVecE };
-  r.m_data.aval = tag.valid()
-    ? arrprov::tagStaticArr(staticEmptyVec(), tag.get())
-    : staticEmptyVec();
+  r.m_data.aval = staticEmptyVec();
   r.m_dataTag = DataTag::ArrLikeVal;
   return r;
 }
@@ -3014,18 +3010,14 @@ Type dict_val(SArray val) {
 
 Type dict_empty(ProvTag tag) {
   auto r = Type { BSDictE };
-  r.m_data.aval = tag.valid()
-    ? arrprov::tagStaticArr(staticEmptyDictArray(), tag.get())
-    : staticEmptyDictArray();
+  r.m_data.aval = staticEmptyDictArray();
   r.m_dataTag   = DataTag::ArrLikeVal;
   return r;
 }
 
 Type some_dict_empty(ProvTag tag) {
   auto r = Type { BDictE };
-  r.m_data.aval = tag.valid()
-    ? arrprov::tagStaticArr(staticEmptyDictArray(), tag.get())
-    : staticEmptyDictArray();
+  r.m_data.aval = staticEmptyDictArray();
   r.m_dataTag   = DataTag::ArrLikeVal;
   return r;
 }

@@ -464,6 +464,15 @@ void bump_counter_and_rethrow(bool isPsp) {
       requestHostOOMCounter->addValue(1);
       ServerStats::Log("request.oom_killed.non_psp", 1);
     }
+    if (RuntimeOption::EvalLogKilledRequests && StructuredLog::enabled()) {
+      StructuredLogEntry entry;
+      entry.setInt("mem_used", e.m_usedBytes);
+      entry.setInt("is_psp", static_cast<int>(isPsp));
+      if (g_context) {
+        entry.setStr("url", g_context->getRequestUrl());
+      }
+      StructuredLog::log("hhvm_oom_killed", entry);
+    }
     throw;
   }
 }
@@ -1971,16 +1980,9 @@ static int execute_program_impl(int argc, char** argv) {
       if (unit == nullptr) {
         throw FileOpenException(po.lint);
       }
-      const StringData* msg;
-      int line;
-      if (unit->compileTimeFatal(msg, line)) {
-        VMParserFrame parserFrame;
-        parserFrame.filename = filename;
-        parserFrame.lineNumber = line;
-        Array bt = createBacktrace(BacktraceArgs()
-                                   .withSelf()
-                                   .setParserFrame(&parserFrame));
-        raise_fatal_error(msg->data(), bt);
+      if (auto const info = unit->getFatalInfo()) {
+        raise_parse_error(unit->filepath(), info->m_fatalMsg.c_str(),
+                          info->m_fatalLoc);
       }
     } catch (FileOpenException& e) {
       Logger::Error(e.getMessage());

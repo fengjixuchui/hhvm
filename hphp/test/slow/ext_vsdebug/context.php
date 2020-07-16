@@ -1,4 +1,6 @@
 <?hh
+
+<<__EntryPoint>> function main() {
 require(__DIR__ . '/common.inc');
 
 $path = __FILE__ . ".test";
@@ -45,7 +47,7 @@ checkObjEqualRecursively($msg, darray[
           "source" => darray["path" => $path, "name" => str_replace(".test", "", basename($path))],
           "id" => 2,
           "line" => 31,
-          "name" => "{main}"
+          "name" => "main"
         ]
       ]
     ]
@@ -810,3 +812,4 @@ checkForOutput($testProcess, "hello world 2\n", "stdout");
 vsDebugCleanup($testProcess);
 
 echo "OK!\n";
+}

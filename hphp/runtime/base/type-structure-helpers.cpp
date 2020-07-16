@@ -258,7 +258,7 @@ bool typeStructureIsType(
       auto const inputGenerics = getGenericTypesOpt(input);
       auto const typeGenerics = getGenericTypesOpt(type);
       if (!inputGenerics) {
-        return !strict || (!typeGenerics && type->equal(input, true));
+        return !strict || (!typeGenerics && type->same(input));
       }
       return typeGenerics && typeStructureIsTypeList(*inputGenerics,
                                                      *typeGenerics,
@@ -715,9 +715,7 @@ bool checkTypeStructureMatchesTVImpl(
                                        ));
 
       auto const wants_prov_logging = !gen_error && // avoid double logging :/
-                                      UNLIKELY(RO::EvalLogArrayProvenance) &&
-                                      arrprov::arrayWantsTag(ad) &&
-                                      (isVecType(type) || ad->isDVArray());
+                                      arrprov::arrayWantsTag(ad);
 
       if (RO::EvalHackArrIsShapeTupleNotices && isVecType(type)) {
         raise_hackarr_compat_notice("vec is tuple");
@@ -869,9 +867,7 @@ bool checkTypeStructureMatchesTVImpl(
                                        ));
 
       auto const wants_prov_logging = !gen_error && // avoid double logging :/
-                                      UNLIKELY(RO::EvalLogArrayProvenance) &&
-                                      arrprov::arrayWantsTag(ad) &&
-                                      (isDictType(type) || ad->isDArray());
+                                      arrprov::arrayWantsTag(ad);
 
       if (RO::EvalHackArrIsShapeTupleNotices && isDictType(type)) {
         raise_hackarr_compat_notice("dict is shape");

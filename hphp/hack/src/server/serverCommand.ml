@@ -263,12 +263,18 @@ let actually_handle genv client msg full_recheck_needed ~is_stale env =
    * changes and we asked for an answer that requires ignoring those.
    * This is very rare. *)
   let env = full_recheck_if_needed genv env msg in
+  ClientProvider.track client ~key:Connection_tracker.Server_done_full_recheck;
+
   match msg with
   | Rpc cmd ->
     let cmd_string = ServerCommandTypesUtils.debug_describe_t cmd in
     Hh_logger.debug "ServerCommand.actually_handle rpc %s" cmd_string;
     ClientProvider.ping client;
-    let t = Unix.gettimeofday () in
+    let t_start = Unix.gettimeofday () in
+    ClientProvider.track
+      client
+      ~key:Connection_tracker.Server_start_handle
+      ~time:t_start;
     Sys_utils.start_gc_profiling ();
     Full_fidelity_parser_profiling.start_profiling ();
     let ((new_env, response), declared_names) =
@@ -285,7 +291,13 @@ let actually_handle genv client msg full_recheck_needed ~is_stale env =
     in
     let parsed_files = Full_fidelity_parser_profiling.stop_profiling () in
     let ctx = Provider_utils.ctx_from_server_env env in
+    ClientProvider.track client ~key:Connection_tracker.Server_end_handle;
     predeclare_ide_deps genv ctx declared_names;
+    let t_end = Unix.gettimeofday () in
+    ClientProvider.track
+      client
+      ~key:Connection_tracker.Server_end_handle2
+      ~time:t_end;
     let (major_gc_time, minor_gc_time) = Sys_utils.get_gc_time () in
     let lvl =
       if ClientProvider.is_persistent client then
@@ -298,14 +310,14 @@ let actually_handle genv client msg full_recheck_needed ~is_stale env =
       "Handled %s priority: %s [%f ms]"
       (ClientProvider.priority_to_string client)
       cmd_string
-      (Unix.gettimeofday () -. t);
+      (t_end -. t_start);
     HackEventLogger.handled_command
       cmd_string
-      ~start_t:t
+      ~start_t:t_start
       ~major_gc_time
       ~minor_gc_time
       ~parsed_files;
-    ClientProvider.send_response_to_client client response t;
+    ClientProvider.send_response_to_client client response;
     if
       ServerCommandTypes.is_disconnect_rpc cmd
       || (not @@ ClientProvider.is_persistent client)
@@ -323,7 +335,9 @@ let handle
     (env : ServerEnv.env)
     (client : ClientProvider.client) :
     ServerEnv.env ServerUtils.handle_command_result =
+  ClientProvider.track client ~key:Connection_tracker.Server_waiting_for_cmd;
   let msg = ClientProvider.read_client_msg client in
+  ClientProvider.track client ~key:Connection_tracker.Server_got_cmd;
   let env = { env with ServerEnv.remote = force_remote msg } in
   let full_recheck_needed = command_needs_full_check msg in
   let is_stale = ServerEnv.(env.recent_recheck_loop_stats.updates_stale) in

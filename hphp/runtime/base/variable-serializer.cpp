@@ -115,18 +115,21 @@ VariableSerializer::getKind(const ArrayData* arr) const {
     always_assert(false);
   }();
 
+  auto const differentiateLegacy =
+    getType() == Type::Internal || getType() == Type::VarDump;
+
   if (RuntimeOption::EvalHackArrDVArrs &&
       respectsLegacyBit &&
       !arr->isLegacyArray()) {
     return VariableSerializer::ArrayKind::PHP;
   }
   if (arr->isDictType()) {
-    return getType() == Type::Internal && arr->isLegacyArray()
+    return differentiateLegacy && arr->isLegacyArray()
       ? VariableSerializer::ArrayKind::LegacyDict
       : VariableSerializer::ArrayKind::Dict;
   }
   if (arr->isVecType()) {
-    return getType() == Type::Internal && arr->isLegacyArray()
+    return differentiateLegacy && arr->isLegacyArray()
       ? VariableSerializer::ArrayKind::LegacyVec
       : VariableSerializer::ArrayKind::Vec;
   }
@@ -919,24 +922,28 @@ void VariableSerializer::writeArrayHeader(int size, bool isVectorData,
       m_buf->append(m_objClass);
       m_buf->append(") ");
     } else {
-      switch (kind) {
-      case ArrayKind::Dict:
-      case ArrayKind::LegacyDict:
-        m_buf->append("dict");
-        break;
-      case ArrayKind::Vec:
-      case ArrayKind::LegacyVec:
-        m_buf->append("vec");
-        break;
-      case ArrayKind::Keyset:
-        m_buf->append("keyset");
-        break;
-      case ArrayKind::PHP:
-      case ArrayKind::VArray:
-      case ArrayKind::DArray:
-        m_buf->append("array");
-        break;
-      }
+      auto const header = [&]() {
+        switch (kind) {
+          case ArrayKind::Dict:
+            return "dict";
+          case ArrayKind::LegacyDict:
+            return RuntimeOption::EvalHackArrDVArrVarDump ? "darray" : "dict";
+          case ArrayKind::Vec:
+            return "vec";
+          case ArrayKind::LegacyVec:
+            return RuntimeOption::EvalHackArrDVArrVarDump ? "varray" : "vec";
+          case ArrayKind::Keyset:
+            return "keyset";
+          case ArrayKind::PHP:
+            return "array";
+          case ArrayKind::VArray:
+            return RuntimeOption::EvalHackArrDVArrVarDump ? "varray" : "array";
+          case ArrayKind::DArray:
+            return RuntimeOption::EvalHackArrDVArrVarDump ? "darray" : "array";
+        }
+        not_reached();
+      }();
+      m_buf->append(header);
     }
     m_buf->append('(');
     m_buf->append(size);
@@ -1123,6 +1130,10 @@ void VariableSerializer::writeArrayKey(
   case Type::VarDump:
   case Type::DebugDump:
     if (kind == AK::Vec || kind == AK::Keyset) return;
+    if ((kind == AK::VArray || kind == AK::LegacyVec) &&
+        RuntimeOption::EvalHackArrDVArrVarDump) {
+      return;
+    }
     indent();
     m_buf->append('[');
     if (!skey) {
@@ -1699,9 +1710,7 @@ void VariableSerializer::serializeArrayImpl(const ArrayData* arr,
     }
   };
 
-  if (m_type == Type::Internal &&
-      RuntimeOption::EvalArrayProvenance &&
-      arrprov::arrayWantsTag(arr)) {
+  if (m_type == Type::Internal && arrprov::arrayWantsTag(arr)) {
     auto const tag = arrprov::getTag(arr);
     if (tag.valid()) {
       switch (tag.kind()) {
@@ -1769,9 +1778,7 @@ void VariableSerializer::serializeArray(const ArrayData* arr,
 
   const bool isVectorData = arr->isVectorData();
 
-  if (UNLIKELY(RuntimeOption::EvalLogArrayProvenance &&
-               !m_forcePHPArrays &&
-               arrprov::arrayWantsTag(arr))) {
+  if (UNLIKELY(!m_forcePHPArrays && arrprov::arrayWantsTag(arr))) {
     auto const source = [&]() -> folly::Optional<SerializationSite> {
       switch (getType()) {
       case VariableSerializer::Type::JSON:
@@ -1792,7 +1799,7 @@ void VariableSerializer::serializeArray(const ArrayData* arr,
     if (source) raise_array_serialization_notice(*source, arr);
   }
 
-  if (arr->size() == 0 && LIKELY(!RuntimeOption::EvalArrayProvenance)) {
+  if (arr->size() == 0 && LIKELY(!RO::EvalArrayProvenance)) {
     auto const kind = getKind(arr);
     writeArrayHeader(0, isVectorData, kind);
     writeArrayFooter(kind);

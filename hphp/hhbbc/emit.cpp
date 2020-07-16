@@ -65,11 +65,6 @@ struct PceInfo {
   Id origId;
 };
 
-struct FeInfo {
-  FuncEmitter* fe;
-  Id origId;
-};
-
 struct EmitUnitState {
   explicit EmitUnitState(const Index& index, const php::Unit* unit) :
       index(index), unit(unit) {}
@@ -90,7 +85,6 @@ struct EmitUnitState {
    */
   std::vector<Offset>  classOffsets;
   std::vector<PceInfo> pceInfo;
-  std::vector<FeInfo>  feInfo;
   std::vector<Id>      typeAliasInfo;
   std::vector<Id>      constantInfo;
 
@@ -1303,7 +1297,6 @@ void emit_init_func(FuncEmitter& fe, const php::Func& func) {
     std::get<1>(func.srcInfo.loc),
     fe.ue().bcPos(),
     func.attrs | (func.sampleDynamicCalls ? AttrDynamicallyCallable : AttrNone),
-    func.top,
     func.srcInfo.docComment
   );
 }
@@ -1317,7 +1310,6 @@ void emit_func(EmitUnitState& state, UnitEmitter& ue,
   emit_finish_func(state, func, *fe, info);
 }
 
-const StaticString s___HasTopLevelCode("__HasTopLevelCode");
 void emit_pseudomain(EmitUnitState& state,
                      UnitEmitter& ue,
                      const php::Unit& unit) {
@@ -1330,15 +1322,12 @@ void emit_pseudomain(EmitUnitState& state,
   auto const func = php::ConstFunc(&pm);
   auto const info = emit_bytecode(state, ue, func);
   if (is_systemlib_part(unit)) {
-    ue.m_mergeOnly = true;
     auto const tv = make_tv<KindOfInt64>(1);
     ue.m_mainReturn = tv;
   } else {
-    ue.m_mergeOnly = ue.m_returnSeen
-      && ue.m_mainReturn.m_type != KindOfUninit
-      && ue.m_fileAttributes.find(s___HasTopLevelCode.get())
-         == ue.m_fileAttributes.end();
+    assertx(ue.m_returnSeen && ue.m_mainReturn.m_type != KindOfUninit);
   }
+  ue.m_mergeOnly = true;
 
   emit_finish_func(state, func, *fe, info);
 }
@@ -1548,6 +1537,13 @@ std::unique_ptr<UnitEmitter> emit_unit(const Index& index,
   ue->m_metaData = unit.metaData;
   ue->m_fileAttributes = unit.fileAttributes;
 
+  if (unit.fatalInfo) {
+    ue->m_fatalUnit = true;
+    ue->m_fatalOp = unit.fatalInfo->fatalOp;
+    ue->m_fatalLoc = unit.fatalInfo->fatalLoc;
+    ue->m_fatalMsg = unit.fatalInfo->fatalMsg;
+  }
+
   EmitUnitState state { index, &unit };
   state.classOffsets.resize(unit.classes.size(), kInvalidOffset);
 
@@ -1576,7 +1572,6 @@ std::unique_ptr<UnitEmitter> emit_unit(const Index& index,
   for (size_t id = 0; id < unit.funcs.size(); ++id) {
     auto const f = unit.funcs[id].get();
     assertx(f != unit.pseudomain.get());
-    if (!f->top) continue;
     if (const_86cinit_funcs.find(f->name) != const_86cinit_funcs.end()) {
       continue;
     }
@@ -1602,26 +1597,14 @@ std::unique_ptr<UnitEmitter> emit_unit(const Index& index,
     recordClass(state, *ue, id);
   }
 
-  size_t pceId = 0, feId = 0;
-  do {
-    // Note that state.pceInfo can grow inside the loop
-    while (pceId < state.pceInfo.size()) {
-      auto const& pceInfo = state.pceInfo[pceId++];
-      auto const& c = unit.classes[pceInfo.origId];
-      emit_class(state, *ue, pceInfo.pce,
-                 state.classOffsets[pceInfo.origId], *c);
-    }
-
-    while (feId < state.feInfo.size()) {
-      auto const& feInfo = state.feInfo[feId++];
-      // DefFunc ids are off by one wrt unit.funcs because we don't
-      // store the pseudomain there.
-      auto const& f = unit.funcs[feInfo.origId - 1];
-
-      assertx(!f->top);
-      emit_func(state, *ue, feInfo.fe, *f);
-    }
-  } while (pceId < state.pceInfo.size());
+  size_t pceId = 0;
+  // Note that state.pceInfo can grow inside the loop
+  while (pceId < state.pceInfo.size()) {
+    auto const& pceInfo = state.pceInfo[pceId++];
+    auto const& c = unit.classes[pceInfo.origId];
+    emit_class(state, *ue, pceInfo.pce,
+                state.classOffsets[pceInfo.origId], *c);
+  }
 
   for (auto tid : state.typeAliasInfo) {
     emit_typealias(*ue, *unit.typeAliases[tid], state);

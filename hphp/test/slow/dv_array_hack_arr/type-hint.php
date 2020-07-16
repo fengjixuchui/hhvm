@@ -1,7 +1,5 @@
 <?hh
 
-function takes_array(array $a) {}
-function takes_nullable_array(?array $a) {}
 function takes_varray(varray $a) {}
 function takes_nullable_varray(?varray $a) {}
 function takes_darray(darray $a) {}
@@ -14,8 +12,6 @@ function takes_nullable_vec_or_dict(?vec_or_dict $a) {}
 function takes_varray2(varray<int> $a) {}
 function takes_darray2(darray<int, string> $a) {}
 
-function returns_array($a): array { return $a; }
-function returns_nullable_array($a): ?array { return $a; }
 function returns_varray($a): varray { return $a; }
 function returns_nullable_varray($a): ?varray { return $a; }
 function returns_darray($a): darray { return $a; }
@@ -73,8 +69,6 @@ function test1() {
         keyset[100, 'abc', 200],
         xml_parser_create(),
         new stdclass(),
-        __hhvm_intrinsics\dummy_cast_to_kindofarray(vec[]),
-        __hhvm_intrinsics\dummy_cast_to_kindofarray(vec[1, 2, 3, 4]),
         varray[],
         varray[1, 2, 3],
         darray[],
@@ -84,8 +78,6 @@ function test1() {
 
   $funcs = __hhvm_intrinsics\launder_value(
     vec[
-      'takes_array',
-      'takes_nullable_array',
       'takes_varray',
       'takes_nullable_varray',
       'takes_darray',
@@ -98,8 +90,6 @@ function test1() {
       'takes_varray2',
       'takes_darray2',
 
-      'returns_array',
-      'returns_nullable_array',
       'returns_varray',
       'returns_nullable_varray',
       'returns_darray',

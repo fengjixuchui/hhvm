@@ -363,12 +363,6 @@ struct Func : FuncBase {
   Unit* originalUnit{};
 
   /*
-   * Whether or not this function is a top-level function.  (Defined
-   * outside of any other function body.)
-   */
-  bool top : 1;
-
-  /*
    * This is the generated function for a closure body.  I.e. this
    * function contains the code that should run when the closure is
    * invoked.
@@ -668,6 +662,16 @@ struct Record {
 };
 
 //////////////////////////////////////////////////////////////////////
+
+/*
+ * Information regarding a runtime/parse error in a unit
+ */
+struct FatalInfo {
+  Location::Range fatalLoc;
+  FatalOp fatalOp;
+  std::string fatalMsg;
+};
+
 /*
  * Representation of a php file (normal compilation unit).
  */
@@ -677,8 +681,8 @@ struct Unit {
   LSString filename;
   bool isHHFile{false};
   std::atomic<bool> persistent{true};
-  std::atomic<bool> persistent_pseudomain{false};
   std::unique_ptr<Func> pseudomain;
+  std::unique_ptr<FatalInfo> fatalInfo{nullptr};
   CompactVector<std::unique_ptr<Func>> funcs;
   CompactVector<std::unique_ptr<Class>> classes;
   CompactVector<std::unique_ptr<Record>> records;
