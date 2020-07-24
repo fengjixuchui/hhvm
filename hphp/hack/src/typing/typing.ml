@@ -1840,6 +1840,10 @@ and expr_
       (* Create a class type for the given object instantiated with unresolved
        * types for its type parameters.
        *)
+      let () =
+        if Ast_defs.is_c_trait (Cls.kind class_) then
+          Errors.meth_caller_trait pos class_name
+      in
       let (env, tvarl) =
         List.map_env env (Cls.tparams class_) (fun env _ ->
             Env.fresh_type env p)
@@ -2503,7 +2507,7 @@ and expr_
     let rty =
       match Env.get_fn_kind env with
       | Ast_defs.FCoroutine ->
-        (* yield in coroutine is already reported as error in NastCheck *)
+        (* yield in coroutine is already reported as error in Nast_check *)
         let (_, _, ty) = expr_error env (Reason.Rwitness p) outer in
         ty
       | Ast_defs.FGenerator ->
@@ -5671,7 +5675,7 @@ and trait_most_concrete_req_class trait env =
           | Some c when Ast_defs.(equal_class_kind (Cls.kind c) Cinterface) ->
             acc
           | Some c when Ast_defs.(equal_class_kind (Cls.kind c) Ctrait) ->
-            (* this is an error case for which the nastCheck spits out
+            (* this is an error case for which Typing_check_decls spits out
              * an error, but does *not* currently remove the offending
              * 'require extends' or 'require implements' *)
             acc
@@ -6988,7 +6992,7 @@ and typedef_def ctx typedef =
       typedef.t_tparams
       []
   in
-  NastCheck.typedef env typedef;
+  Typing_check_decls.typedef env typedef;
   let {
     t_annotation = ();
     t_name = (t_pos, t_name);
@@ -6999,6 +7003,7 @@ and typedef_def ctx typedef =
     t_vis = _;
     t_mode = _;
     t_namespace = _;
+    t_span = _;
     t_emit_id = _;
   } =
     typedef
@@ -7049,6 +7054,7 @@ and typedef_def ctx typedef =
     Aast.t_kind = typedef.t_kind;
     Aast.t_tparams = tparams;
     Aast.t_namespace = typedef.t_namespace;
+    Aast.t_span = typedef.t_span;
     Aast.t_emit_id = typedef.t_emit_id;
   }
 

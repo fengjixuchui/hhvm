@@ -428,7 +428,6 @@ bool canDCE(IRInstruction* inst) {
   case DefLabel:
   case LdLocPseudoMain:
   case LdPairElem:
-  case DefCls:
   case LdClsCtor:
   case LdCls:
   case LdClsCached:
@@ -561,7 +560,6 @@ bool canDCE(IRInstruction* inst) {
   case PrintStr:
   case PrintInt:
   case PrintBool:
-  case ArrayAdd:
   case GetMemoKey:
   case LdSwitchObjIndex:
   case LdSSwitchDestSlow:

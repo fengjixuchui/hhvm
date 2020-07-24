@@ -47,6 +47,7 @@ struct FuncEmitter;
 struct PreClassEmitter;
 struct RecordEmitter;
 struct StringData;
+struct TypeAliasEmitter;
 
 namespace Native {
 struct FuncTable;
@@ -298,12 +299,12 @@ struct UnitEmitter {
   /*
    * Const reference to all of the Unit's type aliases.
    */
-  const std::vector<TypeAlias>& typeAliases() const;
+  auto const& typeAliases() const;
 
   /*
    * Add a new type alias to the Unit.
    */
-  Id addTypeAlias(const TypeAlias& td);
+  TypeAliasEmitter* newTypeAliasEmitter(const std::string& name);
 
   /////////////////////////////////////////////////////////////////////////////
   // Constants.
@@ -419,13 +420,10 @@ public:
   int64_t m_sn{-1};
   const StringData* m_filepath{nullptr};
 
-  bool m_mergeOnly{false};
   bool m_isHHFile{false};
-  bool m_returnSeen{false};
   bool m_ICE{false}; // internal compiler error
   bool m_useGlobalIds{0};
   bool m_fatalUnit{false}; // parse/runtime error
-  TypedValue m_mainReturn;
   UserAttributeMap m_metaData;
   UserAttributeMap m_fileAttributes;
   CompactVector<
@@ -470,7 +468,7 @@ private:
   /*
    * Type alias table.
    */
-  std::vector<TypeAlias> m_typeAliases;
+  std::vector<std::unique_ptr<TypeAliasEmitter>> m_typeAliases;
 
   /*
    * Constants table.
@@ -557,7 +555,7 @@ struct UnitRepoProxy : public RepoProxy {
                 RepoTxn& txn,
                 int64_t unitSn,
                 Id typeAliasId,
-                const TypeAlias& typeAlias); // throws(RepoExc)
+                const TypeAliasEmitter& te); // throws(RepoExc)
   };
   struct GetUnitTypeAliasesStmt : public RepoProxy::Stmt {
     GetUnitTypeAliasesStmt(Repo& repo, int repoId) : Stmt(repo, repoId) {}

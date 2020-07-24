@@ -244,6 +244,7 @@
     parsing_service
     remote
     search
+    security_stubs
     server_env
     server_services
     sys_utils
@@ -289,6 +290,7 @@
     lwt
     parent
     provider_backend
+    security_stubs
     server
     state_loader
     typing_service_api

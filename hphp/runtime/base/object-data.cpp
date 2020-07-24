@@ -541,13 +541,6 @@ void ObjectData::o_getArray(Array& props,
   );
 }
 
-// a constant for ArrayIterators that changes the way the
-// object is converted to an array
-const int64_t ARRAY_OBJ_ITERATOR_STD_PROP_LIST = 1;
-
-const StaticString s_flags("flags"),
-                   s_storage("storage");
-
 template <IntishCast IC /* = IntishCast::None */>
 Array ObjectData::toArray(bool pubOnly /* = false */,
                           bool ignoreLateInit /* = false */) const {
@@ -564,22 +557,12 @@ Array ObjectData::toArray(bool pubOnly /* = false */,
     if (RuntimeOption::EvalNoticeOnSimpleXMLBehavior) {
       raise_notice("SimpleXMLElement to array cast");
     }
-    return SimpleXMLElement_objectCast(this, KindOfArray).toArray();
+    return SimpleXMLElement_darrayCast(this);
   } else if (UNLIKELY(instanceof(SystemLib::s_ArrayIteratorClass))) {
-    auto const flags = getProp(SystemLib::s_ArrayIteratorClass, s_flags.get());
-    assertx(flags.is_set());
-    if (UNLIKELY(flags.type() == KindOfInt64 &&
-                 flags.val().num == ARRAY_OBJ_ITERATOR_STD_PROP_LIST)) {
-      auto ret = Array::CreateDArray();
-      o_getArray(ret, true, ignoreLateInit);
-      return ret;
-    }
-
-    check_recursion_throw();
-
-    auto const storage = getProp(SystemLib::s_ArrayIteratorClass, s_storage.get());
-    assertx(storage.is_set());
-    return tvCastToArrayLike(storage.tv());
+    SystemLib::throwInvalidOperationExceptionObject(
+      "ArrayIterator to array cast"
+    );
+    not_reached();
   } else if (UNLIKELY(instanceof(c_Closure::classof()))) {
     return make_varray(Object(const_cast<ObjectData*>(this)));
   } else if (UNLIKELY(instanceof(DateTimeData::getClass()))) {
@@ -851,8 +834,8 @@ bool ObjectData::equal(const ObjectData& other) const {
       raise_notice("SimpleXMLElement equality comparison");
     }
     // Compare the whole object (including native data), not just props
-    auto ar1 = SimpleXMLElement_objectCast(this, KindOfArray).toArray();
-    auto ar2 = SimpleXMLElement_objectCast(&other, KindOfArray).toArray();
+    auto ar1 = SimpleXMLElement_darrayCast(this);
+    auto ar2 = SimpleXMLElement_darrayCast(&other);
     return ArrayData::Equal(ar1.get(), ar2.get());
   }
   if (UNLIKELY(instanceof(c_Closure::classof()))) {
@@ -939,8 +922,8 @@ int64_t ObjectData::compare(const ObjectData& other) const {
       raise_notice("SimpleXMLElement comparison");
     }
     // Compare the whole object (including native data), not just props
-    auto ar1 = SimpleXMLElement_objectCast(this, KindOfArray).toArray();
-    auto ar2 = SimpleXMLElement_objectCast(&other, KindOfArray).toArray();
+    auto ar1 = SimpleXMLElement_darrayCast(this);
+    auto ar2 = SimpleXMLElement_darrayCast(&other);
     return ArrayData::Compare(ar1.get(), ar2.get());
   }
   if (UNLIKELY(instanceof(c_Closure::classof()))) {
@@ -1671,7 +1654,7 @@ String ObjectData::invokeToString() {
     raiseImplicitInvokeToString();
   }
   auto const tv = g_context->invokeMethod(this, method, InvokeArgs{}, false);
-  if (!isStringType(tv.m_type)) {
+  if (!isStringType(tv.m_type) && !isClassType(tv.m_type)) {
     // Discard the value returned by the __toString() method and raise
     // a recoverable error
     tvDecRefGen(tv);
@@ -1683,7 +1666,8 @@ String ObjectData::invokeToString() {
     return empty_string();
   }
 
-  return String::attach(tv.m_data.pstr);
+  if (tvIsString(tv)) return String::attach(val(tv).pstr);
+  return StrNR(classToStringHelper(tv.m_data.pclass));
 }
 
 bool ObjectData::hasToString() {

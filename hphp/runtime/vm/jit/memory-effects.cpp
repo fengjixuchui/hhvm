@@ -21,7 +21,6 @@
 
 #include "hphp/runtime/vm/bytecode.h"
 #include "hphp/runtime/vm/jit/analysis.h"
-#include "hphp/runtime/vm/jit/dce.h"
 #include "hphp/runtime/vm/jit/ir-instruction.h"
 #include "hphp/runtime/vm/jit/ssa-tmp.h"
 #include "hphp/runtime/vm/jit/type-array-elem.h"
@@ -1903,7 +1902,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ConvObjToVArr:  // can invoke PHP
   case ConvObjToDArr:  // can invoke PHP
   case OODeclExists:
-  case DefCls:         // autoload
   case LdCls:          // autoload
   case LdClsCached:    // autoload
   case LdFunc:         // autoload
@@ -1917,7 +1915,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case LookupFuncCached: // autoload
   case StringGet:      // raise_notice
   case OrdStrIdx:      // raise_notice
-  case ArrayAdd:       // decrefs source
   case AddNewElem:         // can re-enter
   case AddNewElemKeyset:   // can re-enter
   case ArrayGet:       // kVPackedKind warnings

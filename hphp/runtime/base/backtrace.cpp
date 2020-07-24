@@ -358,6 +358,15 @@ Array createBacktrace(const BacktraceArgs& btArgs) {
 
   BTContext ctx;
 
+  if (g_context->m_parserFrame) {
+    bt.append(
+      make_darray(
+        s_file, VarNR(g_context->m_parserFrame->filename.get()),
+        s_line, g_context->m_parserFrame->lineNumber
+      )
+    );
+  }
+
   // If there is a parser frame, put it at the beginning of the backtrace.
   if (btArgs.m_parserFrame) {
     bt.append(
@@ -476,11 +485,7 @@ Array createBacktrace(const BacktraceArgs& btArgs) {
       // First local is always $0ReifiedGenerics which comes right after params
       auto const generics = frame_local(fp, fp->func()->numParams());
       if (type(generics) != KindOfUninit) {
-        assertx(
-          RuntimeOption::EvalHackArrDVArrs
-            ? tvIsVec(generics)
-            : tvIsArray(generics)
-        );
+        assertx(tvIsHAMSafeVArray(generics));
         auto const reified_generics = val(generics).parr;
         funcname += mangleReifiedGenericsName(reified_generics);
       }

@@ -97,6 +97,9 @@ val get_severity : 'a error_ -> severity
 
 val make_error : int -> (Pos.t * string) list -> error
 
+val make_absolute_error :
+  int -> (Pos.absolute * string) list -> Pos.absolute error_
+
 val error_code_to_string : int -> string
 
 val phase_to_string : phase -> string
@@ -888,9 +891,6 @@ val to_string : ?indent:bool -> Pos.absolute error_ -> string
 
 val to_contextual_string : Pos.absolute error_ -> string
 
-val format_claim_highlighted :
-  int -> ?marker:int * Tty.raw_color -> string -> string
-
 val to_highlighted_string : Pos.absolute error_ -> string
 
 val format_summary :
@@ -1071,6 +1071,16 @@ val pu_invalid_access : Pos.t -> string -> unit
 val pu_reserved_syntax : Pos.t -> unit
 
 val pu_case_in_trait : Pos.t -> string -> unit
+
+val pu_attribute_invalid : Pos.t -> unit
+
+val pu_attribute_err : Pos.t -> string -> string -> string -> string -> unit
+
+val pu_attribute_dup : Pos.t -> string -> string -> unit
+
+val pu_attribute_suggestion : Pos.t -> string -> string -> unit
+
+val pu_attribute_not_necessary : Pos.t -> string -> unit
 
 val lvar_in_obj_get : Pos.t -> unit
 
@@ -1379,3 +1389,5 @@ val static_meth_with_class_reified_generic : Pos.t -> Pos.t -> unit
 val exception_occurred : Pos.t -> unit
 
 val redundant_covariant : Pos.t -> string -> string -> unit
+
+val meth_caller_trait : Pos.t -> string -> unit

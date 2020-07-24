@@ -17,7 +17,7 @@ use std::rc::Rc;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::{Allocator, FromError, FromOcamlRep, ToOcamlRep, Value};
+use crate::{Allocator, FromError, FromOcamlRep, OpaqueValue, ToOcamlRep, Value};
 
 const UNIT: usize = crate::value::isize_to_ocaml_int(0);
 const INVALID_GENERATION: usize = usize::max_value();
@@ -129,6 +129,19 @@ impl<T> RcOc<T> {
     #[inline(always)]
     pub fn ptr_eq(this: &Self, other: &Self) -> bool {
         Rc::ptr_eq(&this.ptr, &other.ptr)
+    }
+
+    /// Returns the inner value, if the `Rc` has exactly one strong reference.
+    ///
+    /// Otherwise, an `Err` is returned with the same `Rc` that was passed in.
+    ///
+    /// This will succeed even if there are outstanding weak references.
+    #[inline(always)]
+    pub fn try_unwrap(this: Self) -> Result<T, Self> {
+        match Rc::try_unwrap(this.ptr) {
+            Ok(cache) => Ok(cache.value),
+            Err(ptr) => Err(Self { ptr }),
+        }
     }
 }
 
@@ -242,10 +255,10 @@ impl<T> fmt::Pointer for RcOc<T> {
 }
 
 impl<T: ToOcamlRep> ToOcamlRep for RcOc<T> {
-    fn to_ocamlrep<'a, A: Allocator>(&self, alloc: &'a A) -> Value<'a> {
+    fn to_ocamlrep<'a, A: Allocator>(&self, alloc: &'a A) -> OpaqueValue<'a> {
         let generation = alloc.generation();
         match self.get_cached_value_in_generation(generation) {
-            Some(value) => unsafe { Value::from_bits(value) },
+            Some(value) => unsafe { OpaqueValue::from_bits(value) },
             None => {
                 let value = alloc.add(self.as_ref());
                 self.set_cached_value(value.to_bits(), generation);

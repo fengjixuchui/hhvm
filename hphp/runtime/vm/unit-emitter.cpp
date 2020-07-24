@@ -44,6 +44,7 @@
 #include "hphp/runtime/vm/repo.h"
 #include "hphp/runtime/vm/repo-autoload-map-builder.h"
 #include "hphp/runtime/vm/repo-helpers.h"
+#include "hphp/runtime/vm/type-alias-emitter.h"
 #include "hphp/runtime/vm/unit.h"
 #include "hphp/runtime/vm/verifier/check.h"
 
@@ -95,7 +96,6 @@ UnitEmitter::UnitEmitter(const SHA1& sha1,
                          const Native::FuncTable& nativeFuncs,
                          bool useGlobalIds)
   : m_useGlobalIds(useGlobalIds)
-  , m_mainReturn(make_tv<KindOfUninit>())
   , m_nativeFuncs(nativeFuncs)
   , m_sha1(sha1)
   , m_bcSha1(bcSha1)
@@ -199,17 +199,12 @@ void UnitEmitter::initMain(int line1, int line2) {
 void UnitEmitter::addTrivialPseudoMain() {
   initMain(0, 0);
   auto const mfe = getMain();
+  recordSourceLocation({1,0,1,0}, 0);
   emitOp(OpInt);
   emitInt64(1);
   emitOp(OpRetC);
   mfe->maxStackCells = 1;
   mfe->finish(bcPos());
-
-  TypedValue mainReturn;
-  mainReturn.m_data.num = 1;
-  mainReturn.m_type = KindOfInt64;
-  m_mainReturn = mainReturn;
-  m_mergeOnly = true;
 }
 
 FuncEmitter* UnitEmitter::newFuncEmitter(const StringData* name) {
@@ -256,20 +251,14 @@ void UnitEmitter::addPreClassEmitter(PreClassEmitter* pce) {
     pce->setHoistable(PreClass::Mergeable);
   }
   auto hoistable = pce->hoistability();
-
+  if (hoistable <= PreClass::Mergeable) m_allClassesHoistable = false;
   if (hoistable >= PreClass::MaybeHoistable) {
     m_hoistablePreClassSet.insert(pce->name());
     m_hoistablePceIdList.push_back(pce->id());
-  } else {
-    m_allClassesHoistable = false;
   }
   if (hoistable >= PreClass::Mergeable &&
       hoistable < PreClass::AlwaysHoistable) {
-    if (m_returnSeen) {
-      m_allClassesHoistable = false;
-    } else {
-      pushMergeableClass(pce);
-    }
+    pushMergeableClass(pce);
   }
 }
 
@@ -309,10 +298,10 @@ Id UnitEmitter::pceId(folly::StringPiece clsName) {
 ///////////////////////////////////////////////////////////////////////////////
 // Type aliases.
 
-Id UnitEmitter::addTypeAlias(const TypeAlias& td) {
-  Id id = m_typeAliases.size();
-  m_typeAliases.push_back(td);
-  return id;
+TypeAliasEmitter* UnitEmitter::newTypeAliasEmitter(const std::string& name) {
+  auto te = std::make_unique<TypeAliasEmitter>(*this, m_typeAliases.size(), name);
+  m_typeAliases.push_back(std::move(te));
+  return m_typeAliases.back().get();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -470,7 +459,7 @@ RepoStatus UnitEmitter::insert(UnitOrigin unitOrigin, RepoTxn& txn,
     }
     for (unsigned i = 0; i < m_typeAliases.size(); ++i) {
       urp.insertUnitTypeAlias[repoId].insert(*this, txn, usn, i,
-                                             m_typeAliases[i]);
+                                             *m_typeAliases[i]);
     }
     for (unsigned i = 0; i < m_constants.size(); ++i) {
       urp.insertUnitConstant[repoId].insert(*this, txn, usn, i, m_constants[i]);
@@ -637,8 +626,6 @@ std::unique_ptr<Unit> UnitEmitter::create(bool saveLineTable) const {
   u->m_bc = allocateBCRegion(m_bc, m_bclen);
   u->m_bclen = m_bclen;
   u->m_filepath = m_filepath;
-  u->m_mainReturn = m_mainReturn;
-  u->m_mergeOnly = m_mergeOnly;
   u->m_isHHFile = m_isHHFile;
   u->m_dirpath = makeStaticString(FileUtil::dirname(StrNR{m_filepath}));
   u->m_sha1 = m_sha1;
@@ -650,27 +637,16 @@ std::unique_ptr<Unit> UnitEmitter::create(bool saveLineTable) const {
   for (auto const& re : m_reVec) {
     u->m_preRecords.push_back(PreRecordDescPtr(re->create(*u)));
   }
-  u->m_typeAliases = m_typeAliases;
+  for (auto const& te : m_typeAliases) {
+    u->m_typeAliases.push_back(te->create(*u));
+  }
   u->m_constants = m_constants;
   u->m_metaData = m_metaData;
   u->m_fileAttributes = m_fileAttributes;
   u->m_ICE = m_ICE;
 
   size_t ix = m_fes.size() + m_hoistablePceIdList.size();
-  if (m_mergeOnly && !m_allClassesHoistable) {
-    size_t extra = 0;
-    for (auto& mergeable : m_mergeableStmts) {
-      extra++;
-      if (!RuntimeOption::RepoAuthoritative && SystemLib::s_inited) {
-        if (mergeable.first != MergeKind::Class) {
-          extra = 0;
-          u->m_mergeOnly = false;
-          break;
-        }
-      }
-    }
-    ix += extra;
-  }
+  if (!m_allClassesHoistable) ix += m_mergeableStmts.size();
   Unit::MergeInfo *mi = Unit::MergeInfo::alloc(ix);
   u->m_mergeInfo.store(mi, std::memory_order_relaxed);
   ix = 0;
@@ -686,14 +662,13 @@ std::unique_ptr<Unit> UnitEmitter::create(bool saveLineTable) const {
     mi->mergeableObj(ix++) = u->m_preClasses[id].get();
   }
   mi->m_firstMergeablePreClass = ix;
-  if (u->m_mergeOnly && !m_allClassesHoistable) {
+  if (!m_allClassesHoistable) {
     for (auto& mergeable : m_mergeableStmts) {
       switch (mergeable.first) {
         case MergeKind::Class:
           mi->mergeableObj(ix++) = u->m_preClasses[mergeable.second].get();
           break;
         case MergeKind::Define:
-          assertx(RuntimeOption::RepoAuthoritative);
         case MergeKind::Record:
         case MergeKind::TypeAlias:
           mi->mergeableObj(ix++) =
@@ -780,9 +755,7 @@ std::unique_ptr<Unit> UnitEmitter::create(bool saveLineTable) const {
 
 template<class SerDe>
 void UnitEmitter::serdeMetaData(SerDe& sd) {
-  sd(m_mainReturn)
-    (m_mergeOnly)
-    (m_isHHFile)
+  sd(m_isHHFile)
     (m_metaData)
     (m_fileAttributes)
     (m_symbol_refs)
@@ -808,7 +781,6 @@ void UnitEmitter::serde(SerDe& sd) {
 
   serdeMetaData(sd);
   // These are not touched by serdeMetaData:
-  sd(m_returnSeen);
   sd(m_ICE);
   sd(m_allClassesHoistable);
 
@@ -913,15 +885,15 @@ void UnitEmitter::serde(SerDe& sd) {
   seq(
     m_typeAliases,
     [&] (auto& sd, size_t i) {
-      TypeAlias ta;
-      sd(ta.name);
-      sd(ta);
-      auto const id UNUSED = addTypeAlias(ta);
-      assertx(id == i);
+      std::string name;
+      sd(name);
+      auto te = newTypeAliasEmitter(name);
+      te->serdeMetaData(sd);
+      assertx(te->id() == i);
     },
-    [&] (auto& sd, const TypeAlias& ta) {
-      sd(ta.name);
-      sd(ta);
+    [&] (auto& sd, const std::unique_ptr<TypeAliasEmitter>& te) {
+      sd(te->name()->toCppString());
+      te->serdeMetaData(sd);
     }
   );
 
@@ -1447,22 +1419,6 @@ void UnitRepoProxy::GetUnitMergeablesStmt
       Id mergeableId;            /**/ query.getInt(2, mergeableId);
 
       auto k = MergeKind(mergeableKind);
-
-      if (UNLIKELY(!RuntimeOption::RepoAuthoritative)) {
-        /*
-         * We're using a repo generated in WholeProgram mode,
-         * but we're not using it in RepoAuthoritative mode
-         * (this is dodgy to start with). We're not going to
-         * deal with requires at merge time, so drop them
-         * here, and clear the mergeOnly flag for the unit.
-         * The two exceptions are persistent constants and
-         * TypeAliases which are allowed in systemlib.
-         */
-        if ((k != MergeKind::Define && k != MergeKind::TypeAlias)
-            || SystemLib::s_inited) {
-          ue.m_mergeOnly = false;
-        }
-      }
       switch (k) {
         case MergeKind::Define:
         case MergeKind::TypeAlias:
@@ -1538,7 +1494,7 @@ void UnitRepoProxy::InsertUnitTypeAliasStmt
                            RepoTxn& txn,
                            int64_t unitSn,
                            Id typeAliasId,
-                           const TypeAlias& typeAlias) {
+                           const TypeAliasEmitter& te) {
   if (!prepared()) {
     auto insertQuery = folly::sformat(
       "INSERT INTO {} VALUES (@unitSn, @typeAliasId, @name, @data);",
@@ -1550,9 +1506,8 @@ void UnitRepoProxy::InsertUnitTypeAliasStmt
   RepoTxnQuery query(txn, *this);
   query.bindInt64("@unitSn", unitSn);
   query.bindInt64("@typeAliasId", typeAliasId);
-  query.bindStaticString("@name", typeAlias.name);
-
-  dataBlob(typeAlias);
+  query.bindStaticString("@name", te.name());
+  const_cast<TypeAliasEmitter&>(te).serdeMetaData(dataBlob);
   query.bindBlob("@data", dataBlob, /* static */ true);
   query.exec();
 }
@@ -1571,14 +1526,14 @@ void UnitRepoProxy::GetUnitTypeAliasesStmt::get(UnitEmitter& ue) {
   do {
     query.step();
     if (query.row()) {
-      TypeAlias ta;
       Id typeAliasId;        /**/ query.getId(0, typeAliasId);
-      StringData *name;      /**/ query.getStaticString(1, name);
-      ta.name = makeStaticString(name);
+      std::string name;      /**/ query.getStdString(1, name);
       BlobDecoder dataBlob = /**/ query.getBlob(2, ue.useGlobalIds());
-      dataBlob(ta);
-      Id id UNUSED = ue.addTypeAlias(ta);
-      assertx(id == typeAliasId);
+
+      TypeAliasEmitter* te = ue.newTypeAliasEmitter(name);
+      te->serdeMetaData(dataBlob);
+
+      assertx(te->id() == typeAliasId);
     }
   } while (!query.done());
   txn.commit();
@@ -1715,7 +1670,6 @@ createFatalUnit(const StringData* filename, const SHA1& sha1, FatalOp op,
   ue->m_fatalMsg = err;
 
   ue->addTrivialPseudoMain();
-  ue->m_mergeOnly = false;
   return ue;
 }
 

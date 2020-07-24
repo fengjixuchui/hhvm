@@ -346,6 +346,8 @@ end
 
 type t = {
   min_log_level: Hh_logger.Level.t;
+  (* Indicates whether we attempt to fix the credentials if they're broken *)
+  attempt_fix_credentials: bool;
   log_categories: string list;
   (* the list of experiments from the experiments config *)
   experiments: string list;
@@ -467,7 +469,7 @@ type t = {
   (* The flag "--config profile_type_check_twice=true" causes each file to be typechecked twice in succession. If --profile-log then both times are logged. *)
   profile_type_check_twice: bool;
   (* If --profile-log, we can use "--config profile_owner=<str>" to send an arbitrary "owner" along with the telemetry *)
-  profile_owner: string;
+  profile_owner: string option;
   (* If --profile-log, we can use "--config profile_desc=<str>" to send an arbitrary "desc" along with telemetry *)
   profile_desc: string;
   (* Allows the IDE to show the 'find all implementations' button *)
@@ -478,6 +480,7 @@ type t = {
 let default =
   {
     min_log_level = Hh_logger.Level.Info;
+    attempt_fix_credentials = false;
     log_categories = [];
     experiments = [];
     experiments_config_meta = "";
@@ -544,7 +547,7 @@ let default =
     tico_invalidate_smart = false;
     profile_type_check_duration_threshold = 0.05;
     profile_type_check_twice = false;
-    profile_owner = "";
+    profile_owner = None;
     profile_desc = "";
     (* seconds *)
     go_to_implementation = true;
@@ -687,6 +690,13 @@ let load_ fn ~silent ~current_version overrides =
     bool_if_version
       "require_saved_state"
       ~default:default.require_saved_state
+      config
+  in
+  let attempt_fix_credentials =
+    bool_if_min_version
+      "attempt_fix_credentials"
+      ~default:default.attempt_fix_credentials
+      ~current_version
       config
   in
   let enable_on_nfs =
@@ -955,9 +965,7 @@ let load_ fn ~silent ~current_version overrides =
       ~default:default.profile_type_check_twice
       config
   in
-  let profile_owner =
-    string_ "profile_owner" ~default:default.profile_owner config
-  in
+  let profile_owner = string_opt "profile_owner" config in
   let profile_desc =
     string_ "profile_desc" ~default:default.profile_desc config
   in
@@ -969,6 +977,7 @@ let load_ fn ~silent ~current_version overrides =
   in
   {
     min_log_level;
+    attempt_fix_credentials;
     log_categories;
     experiments;
     experiments_config_meta;

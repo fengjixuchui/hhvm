@@ -1104,10 +1104,6 @@ To string conversions:
   Loads the record whose name is recName out of the RDS. If the record is not
   defined, branch to B.
 
-| DefCls, D(Cls), S(Int), NF
-
-  Define the class corresponding to PreClass S0 in the current unit.
-
 | DefConst<T>, DParam(Top), NA, NF
 
   Define a constant value of type T. D is presumed to be globally available and
@@ -2294,10 +2290,6 @@ To string conversions:
   be a subtype of InitCell for array invariants, but we can't assert this yet
   in the IR because many eval stack slots are not entirely typed wrt initness
   right now.)
-
-| ArrayAdd, D(Arr), S(Arr) S(Arr), CRc|PRc
-
-  Has the effects of the php + operator on the two source arrays.
 
 | AKExistsArr, D(Bool), S(Arr) S(Int,Str), NF
 

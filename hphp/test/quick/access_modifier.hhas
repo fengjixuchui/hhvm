@@ -1,11 +1,6 @@
 .hh_file 1;
 #tests that fields and methods with != 1 access modifier fail verification
 
-.main {
-  Int 1
-  RetC
-}
-
 .class A {
   .property [public private] attre =
     """N;""";
@@ -38,7 +33,6 @@
 
 .function ["__EntryPoint"("""y:0:{}""")] main() {
   .declvars $x;
-  DefCls 0
   NewObjD "A"
   Dup
   NullUninit

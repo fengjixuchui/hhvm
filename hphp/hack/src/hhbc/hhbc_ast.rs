@@ -312,6 +312,7 @@ pub enum InstructOperator {
     ResolveRClsMethod(MethodId),
     ResolveRClsMethodD(ClassId, MethodId),
     ResolveRClsMethodS(SpecialClsRef, MethodId),
+    ResolveClass(ClassId),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -378,6 +379,7 @@ pub enum IstypeOp {
     OpClsMeth,
     OpFunc,
     OpPHPArr,
+    OpClass,
 }
 
 #[derive(Clone, Debug)]
@@ -514,11 +516,6 @@ pub enum InstructIncludeEvalDefine {
     ReqOnce,
     ReqDoc,
     Eval,
-    DefCls(ClassNum),
-    DefClsNop(ClassNum),
-    DefRecord(RecordNum),
-    DefCns(ConstNum),
-    DefTypeAlias(TypedefNum),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

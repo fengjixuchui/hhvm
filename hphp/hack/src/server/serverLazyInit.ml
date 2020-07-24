@@ -63,7 +63,8 @@ let merge_saved_state_futures
     (dependency_table_saved_state_future :
       (State_loader.native_load_result, State_loader.error) result Future.t)
     (naming_table_saved_state_future :
-      ( (Saved_state_loader.Naming_table_info.t * Relative_path.t list) option,
+      ( Saved_state_loader.Naming_table_info.t Saved_state_loader.load_result
+        option,
         string )
       result
       Future.t) : (loaded_info, load_state_error) result =
@@ -85,12 +86,15 @@ let merge_saved_state_futures
       let (downloaded_naming_table_path, dirty_naming_files) =
         match naming_table_saved_state_result with
         | Ok (Ok None) -> (None, [])
-        | Ok (Ok (Some (naming_table_info, changed_files))) ->
+        | Ok
+            (Ok
+              (Some { Saved_state_loader.saved_state_info; changed_files; _ }))
+          ->
           let (_ : float) =
             Hh_logger.log_duration "Finished downloading naming table." t
           in
           let path =
-            naming_table_info
+            saved_state_info
               .Saved_state_loader.Naming_table_info.naming_table_path
           in
           (Some (Path.to_string path), changed_files)
@@ -655,14 +659,16 @@ let load_naming_table (genv : ServerEnv.genv) (env : ServerEnv.env) :
   match
     State_loader_futures.wait_for_finish_with_debug_details loader_future
   with
-  | Ok (info, fnl) ->
-    let { Saved_state_loader.Naming_table_info.naming_table_path } = info in
+  | Ok { Saved_state_loader.saved_state_info; changed_files; _ } ->
+    let { Saved_state_loader.Naming_table_info.naming_table_path } =
+      saved_state_info
+    in
     let ctx = Provider_utils.ctx_from_server_env env in
     let naming_table_path = Path.to_string naming_table_path in
     let naming_table = Naming_table.load_from_sqlite ctx naming_table_path in
     let (env, t) =
       initialize_naming_table
-        ~fnl:(Some fnl)
+        ~fnl:(Some changed_files)
         ~do_naming:true
         "full initialization (with loaded naming table)"
         genv
@@ -672,7 +678,7 @@ let load_naming_table (genv : ServerEnv.genv) (env : ServerEnv.env) :
       naming_from_saved_state
         ctx
         env.naming_table
-        (Relative_path.set_of_list fnl)
+        (Relative_path.set_of_list changed_files)
         (Some naming_table_path)
         t
     in
@@ -992,6 +998,23 @@ let saved_state_init
     ( (ServerEnv.env * float) * (loaded_info * Relative_path.Set.t),
       load_state_error )
     result =
+  let t = Unix.gettimeofday () in
+  let attempt_fix = genv.local_config.SLC.attempt_fix_credentials in
+  let () =
+    match Security.check_credentials ~attempt_fix with
+    | Ok success ->
+      HackEventLogger.credentials_check_end
+        (Printf.sprintf "saved_state_init: %s" (Security.show_success success))
+        t
+    | Error error ->
+      let kind = Security.to_error_kind_string error in
+      let message = Security.to_error_message_string error in
+      Hh_logger.log "Error kind: %s\nError message: %s" kind message;
+      HackEventLogger.credentials_check_failure
+        (Printf.sprintf "saved_state_init: [%s]" kind)
+        t
+  in
+
   ServerProgress.send_progress_to_monitor "loading saved state";
 
   let ctx = Provider_utils.ctx_from_server_env env in

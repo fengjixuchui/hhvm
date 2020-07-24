@@ -930,8 +930,7 @@ void in(ISS& env, const bc::Keyset& op) {
 
 void in(ISS& env, const bc::NewDictArray& op) {
   effect_free(env);
-  push(env, op.arg1 == 0 ? dict_empty(provTagHere(env))
-                         : some_dict_empty(provTagHere(env)));
+  push(env, op.arg1 == 0 ? dict_empty() : some_dict_empty());
 }
 
 void in(ISS& env, const bc::NewVArray& op) {
@@ -976,7 +975,7 @@ void in(ISS& env, const bc::NewStructDict& op) {
   for (auto it = op.keys.end(); it != op.keys.begin(); ) {
     map.emplace_front(make_tv<KindOfPersistentString>(*--it), popC(env));
   }
-  push(env, dict_map(std::move(map), provTagHere(env)));
+  push(env, dict_map(std::move(map)));
   effect_free(env);
   constprop(env);
 }
@@ -990,7 +989,7 @@ void in(ISS& env, const bc::NewVec& op) {
   discard(env, op.arg1);
   effect_free(env);
   constprop(env);
-  push(env, vec(std::move(elems), provTagHere(env)));
+  push(env, vec(std::move(elems)));
 }
 
 void in(ISS& env, const bc::NewKeysetArray& op) {
@@ -1042,7 +1041,7 @@ void in(ISS& env, const bc::AddElemC& /*op*/) {
       return array_set(std::move(ty), k, v, tag);
     }
     if (ty.subtypeOf(BDict)) {
-      return dict_set(std::move(ty), k, v, tag);
+      return dict_set(std::move(ty), k, v);
     }
     return folly::none;
   }(std::move(inTy));
@@ -1102,7 +1101,7 @@ void in(ISS& env, const bc::AddNewElemC&) {
       return array_newelem(std::move(ty), std::move(v), tag).first;
     }
     if (ty.subtypeOf(BVec)) {
-      return vec_newelem(std::move(ty), std::move(v), tag).first;
+      return vec_newelem(std::move(ty), std::move(v)).first;
     }
     if (ty.subtypeOf(BKeyset)) {
       return keyset_newelem(std::move(ty), std::move(v)).first;
@@ -1785,12 +1784,10 @@ void in(ISS& env, const bc::CastString&) {
 }
 
 void in(ISS& env, const bc::CastDict&)   {
-  arrprov::TagOverride tag_override{provTagHere(env).get()};
   castImpl(env, TDict, tvCastToDictInPlace);
 }
 
 void in(ISS& env, const bc::CastVec&)    {
-  arrprov::TagOverride tag_override{provTagHere(env).get()};
   castImpl(env, TVec, tvCastToVecInPlace);
 }
 
@@ -2250,7 +2247,7 @@ void in(ISS& env, const bc::RetM& op) {
   for (int i = 0; i < op.arg1; i++) {
     ret[op.arg1 - i - 1] = popC(env);
   }
-  doRet(env, vec(std::move(ret), provTagHere(env)), false);
+  doRet(env, vec(std::move(ret)), false);
 }
 
 void in(ISS& env, const bc::RetCSuspended&) {
@@ -3005,6 +3002,7 @@ bool isValidTypeOpForIsAs(const IsTypeOp& op) {
     case IsTypeOp::ClsMeth:
     case IsTypeOp::Func:
     case IsTypeOp::PHPArr:
+    case IsTypeOp::Class:
       return false;
   }
   not_reached();
@@ -4014,6 +4012,18 @@ void in(ISS& env, const bc::ResolveRClsMethodS& op) {
   resolveClsMethodSImpl<true>(env, op.subop1, op.str2);
 }
 
+void in(ISS& env, const bc::ResolveClass& op) {
+  // TODO (T61651936)
+  auto cls = env.index.resolve_class(env.ctx, op.str1);
+  if (cls && cls->resolved()) {
+    push(env, clsExact(*cls));
+  } else {
+    // If the class is not resolved,
+    // it might not be unique or it might not be a valid classname.
+    push(env, TInitCell);
+  }
+}
+
 namespace {
 
 void fcallObjMethodNullsafe(ISS& env, const FCallArgs& fca, bool extraInput) {
@@ -4697,12 +4707,6 @@ void in(ISS& env, const bc::ReqOnce&)   { inclOpImpl(env); }
 void in(ISS& env, const bc::ReqDoc&)    { inclOpImpl(env); }
 void in(ISS& env, const bc::Eval&)      { inclOpImpl(env); }
 
-void in(ISS& /*env*/, const bc::DefCls&) {}
-void in(ISS& /*env*/, const bc::DefRecord&) {}
-void in(ISS& /*env*/, const bc::DefClsNop&) {}
-void in(ISS& /*env*/, const bc::DefCns&) {}
-void in(ISS& /*env*/, const bc::DefTypeAlias&) {}
-
 void in(ISS& env, const bc::This&) {
   if (thisAvailable(env)) {
     return reduce(env, bc::BareThis { BareThisOp::NeverNull });
@@ -4931,21 +4935,6 @@ void verifyRetImpl(ISS& env, const TCVec& tcs,
     // throw or it will produce a value whose type is compatible with the
     // return type constraint.
     auto tcT = remove_uninit(env.index.lookup_constraint(env.ctx, *constraint));
-
-    // If tcT could be an interface or trait, we upcast it to TObj/TOptObj.
-    // Why?  Because we want uphold the invariant that we only refine return
-    // types and never widen them, and if we allow tcT to be an interface then
-    // it's possible for violations of this invariant to arise.  For an example,
-    // see "hphp/test/slow/hhbbc/return-type-opt-bug.php".
-    // Note: It's safe to use TObj/TOptObj because lookup_constraint() only
-    // returns classes or interfaces or traits (it never returns something that
-    // could be an enum or type alias) and it never returns anything that could
-    // be a "magic" interface that supports non-objects.  (For traits the return
-    // typehint will always throw at run time, so it's safe to use TObj/TOptObj.)
-    if (is_specialized_obj(tcT) && dobj_of(tcT).cls.couldBeInterfaceOrTrait()) {
-      tcT = is_opt(tcT) ? TOptObj : TObj;
-    }
-
     constraintTypes.push_back(tcT);
 
     // In some circumstances, verifyRetType can modify the type. If it

@@ -43,20 +43,30 @@ def copy(source: Path, dest: Path) -> None:
     shutil.copy(source, dest)
 
 
+DEFAULT_EXEC_ENV = {
+    # Local configuration may be different on local vs. CI machines, so just
+    # don't use one for test runs.
+    "HH_LOCALCONF_PATH": "/tmp/nonexistent"
+}
+
+
 def exec(args: List[str], *, raise_on_error: bool = True) -> str:
     command_line = " ".join(args)
     log(f"Running: {command_line}")
-    result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    stdout = result.stdout
+    result = subprocess.run(
+        args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=DEFAULT_EXEC_ENV
+    )
+    stdout = result.stdout.decode()
     if raise_on_error and result.returncode != 0:
         # stderr is pretty noisy ordinarily, and causes the logs to be
         # truncated with its length, so only surface it in cases of error.
         stderr = result.stderr.decode()
         raise RuntimeError(
             f"Command {command_line} failed with return code {result.returncode}.\n"
+            + f"Stdout: {stdout}\n"
             + f"Stderr: {stderr}\n"
         )
-    return stdout.decode()
+    return stdout
 
 
 @dataclass
@@ -84,6 +94,10 @@ def generate_saved_state(env: Env, target_dir: Path) -> SavedStateInfo:
             "--gen-saved-ignore-type-errors",
         ]
     )
+
+    # Used to force a lazy init, without reporting typechecking errors (which
+    # would otherwise cause the process to terminate with error).
+    lazy_init_args = ["--config", "lazy_init2=true", "--config", "lazy_parse=true"]
     exec(
         [
             env.hh_server_path,
@@ -91,6 +105,7 @@ def generate_saved_state(env: Env, target_dir: Path) -> SavedStateInfo:
             env.root_dir,
             "--save-naming",
             naming_table_path,
+            *lazy_init_args,
         ]
     )
     return SavedStateInfo(

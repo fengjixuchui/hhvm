@@ -304,10 +304,6 @@ static const struct {
   { OpReqOnce,     {Stack1,           Stack1,       OutUnknown      }},
   { OpReqDoc,      {Stack1,           Stack1,       OutUnknown      }},
   { OpEval,        {Stack1,           Stack1,       OutUnknown      }},
-  { OpDefTypeAlias,{None,             None,         OutNone         }},
-  { OpDefCls,      {None,             None,         OutNone         }},
-  { OpDefRecord,   {None,             None,         OutNone         }},
-  { OpDefCns,      {None,             None,         OutNone         }},
 
   /*** 13. Miscellaneous instructions ***/
 
@@ -371,6 +367,8 @@ static const struct {
   { OpResolveRClsMethodS,
                    {Stack1,           Stack1,       OutClsMethLike  }},
 
+  // TODO (T61651936): ResolveClass may return a classptr or a string
+  { OpResolveClass,{None,             Stack1,       OutUnknown       }},
 
   /*** 14. Generator instructions ***/
 
@@ -552,7 +550,6 @@ int64_t getStackPushed(PC pc) {
 
 bool isAlwaysNop(const NormalizedInstruction& ni) {
   switch (ni.op()) {
-  case Op::DefClsNop:
   case Op::Nop:
   case Op::CGetCUNop:
   case Op::UGetCUNop:
@@ -851,8 +848,6 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::IsTypeL:
   case Op::IsTypeC:
   case Op::IncDecL:
-  case Op::DefCls:
-  case Op::DefRecord:
   case Op::Eq:
   case Op::Neq:
   case Op::AssertRATL:
@@ -920,7 +915,6 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::ContValid:
   case Op::ContGetReturn:
   case Op::CreateCl:
-  case Op::DefCns:
   case Op::Dir:
   case Op::Div:
   case Op::Double:
@@ -943,6 +937,7 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::ResolveRClsMethodD:
   case Op::ResolveRClsMethodS:
   case Op::ResolveObjMethod:
+  case Op::ResolveClass:
   case Op::False:
   case Op::File:
   case Op::FuncCred:
@@ -1056,8 +1051,6 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::ReqOnce:
   case Op::ReqDoc:
   case Op::Eval:
-  case Op::DefClsNop:
-  case Op::DefTypeAlias:
   case Op::ChainFaults:
     return true;
   }

@@ -119,22 +119,26 @@ Block* make_opt_catch(IRGS& env, const ParamPrep& params) {
 SSATmp* is_a_impl(IRGS& env, const ParamPrep& params, bool subclassOnly) {
   if (params.size() != 3) return nullptr;
 
-  auto const allowString = params[2].value;
-  auto const classname   = params[1].value;
+  auto const allowClass  = params[2].value;
+  auto const cls_        = params[1].value;
   auto const obj         = params[0].value;
 
   if (!obj->isA(TObj) ||
-      !classname->hasConstVal(TStr) ||
-      !allowString->isA(TBool)) {
+      (!cls_->hasConstVal(TStr) && !cls_->isA(TCls)) ||
+      !allowClass->isA(TBool)) {
     return nullptr;
   }
 
   auto const objCls = gen(env, LdObjClass, obj);
 
-  auto const cls = lookupUniqueClass(env, classname->strVal());
-  if (!cls) return nullptr;
-
-  auto const testCls = cns(env, cls);
+  SSATmp* testCls = nullptr;
+  if (cls_->isA(TStr)) {
+    auto const cls = lookupUniqueClass(env, cls_->strVal());
+    if (!cls) return nullptr;
+    testCls = cns(env, cls);
+  } else {
+    testCls = cls_;
+  }
 
   // is_a() finishes here.
   if (!subclassOnly) return gen(env, InstanceOf, objCls, testCls);
@@ -367,6 +371,15 @@ SSATmp* opt_get_class(IRGS& env, const ParamPrep& params) {
   return nullptr;
 }
 
+SSATmp* opt_class_get_class_name(IRGS& env, const ParamPrep& params) {
+  if (params.size() != 1) return nullptr;
+  auto const value = params[0].value;
+  if (value->type() <= TCls) {
+    return gen(env, LdClsName, value);
+  }
+  return nullptr;
+}
+
 SSATmp* opt_sqrt(IRGS& env, const ParamPrep& params) {
   if (params.size() != 1) return nullptr;
 
@@ -591,7 +604,8 @@ SSATmp* opt_is_vec_or_varray(IRGS& env, const ParamPrep& params) {
     return cns(env, true);
   }
 
-  if (!type.maybe(TVec) && !type.maybe(TVArr)) {
+  if (!type.maybe(TVec) && !type.maybe(TVArr) &&
+      !(type.maybe(TClsMeth) && RO::EvalIsCompatibleClsMethType)) {
     return cns(env, false);
   }
 
@@ -1092,10 +1106,27 @@ SSATmp* opt_enum_coerce(IRGS& env, const ParamPrep& params) {
 }
 
 SSATmp* opt_tag_provenance_here(IRGS& env, const ParamPrep& params) {
-  if (RO::EvalArrayProvenance || params.size() != 1) return nullptr;
+
+  if (!(params.size() == 1 ||
+        (params.size() == 2 && params[1].value->isA(TInt)))) {
+    return nullptr;
+  }
   auto const result = params[0].value;
-  gen(env, IncRef, result);
-  return result;
+
+  auto emit_noop = [&]() {
+    gen(env, IncRef, result);
+    return result;
+  };
+
+  if (!RO::EvalArrayProvenance) {
+    return emit_noop();
+  }
+
+  if (!result->type().maybe(TArrLike) && !result->type().maybe(TObj)) {
+    return emit_noop();
+  }
+
+  return nullptr;
 }
 
 StaticString s_ARRAY_MARK_LEGACY_VEC(Strings::ARRAY_MARK_LEGACY_VEC);
@@ -1193,6 +1224,7 @@ const hphp_fast_string_imap<OptEmitFn> s_opt_emit_fns{
   {"HH\\fun_get_function", opt_fun_get_function},
   {"HH\\class_meth_get_class", opt_class_meth_get_class},
   {"HH\\class_meth_get_method", opt_class_meth_get_method},
+  {"HH\\class_get_class_name", opt_class_get_class_name},
   {"HH\\Shapes::idx", opt_shapes_idx},
   {"HH\\BuiltinEnum::getNames", opt_enum_names},
   {"HH\\BuiltinEnum::getValues", opt_enum_values},

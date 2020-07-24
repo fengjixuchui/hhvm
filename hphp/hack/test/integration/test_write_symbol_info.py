@@ -99,6 +99,10 @@ max_workers = 2
                     for fact in pred_obj["facts"]:
                         try:
                             deserialize(
+                                # pyre-fixme[6]: Expected
+                                #  `Type[Variable[thrift.py3.serializer.sT (bound to
+                                #  thrift.py3.types.Struct)]]` for 1st param but got
+                                #  `Optional[Type[thrift.py3.types.Struct]]`.
                                 fact_type,
                                 json.dumps(fact).encode("UTF-8"),
                                 protocol=Protocol.JSON,
@@ -111,7 +115,7 @@ max_workers = 2
                             )
 
     def predicate_name_to_type(self, predicate_name: str) -> Optional[Type[Struct]]:
-        ver = 2
+        ver = 3
         predicate_dict = {
             "hack.ClassConstDeclaration.{}".format(ver): ClassConstDeclaration,
             "hack.ClassConstDefinition.{}".format(ver): ClassConstDefinition,

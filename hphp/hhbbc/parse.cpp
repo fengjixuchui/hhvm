@@ -40,6 +40,7 @@
 #include "hphp/runtime/vm/func-emitter.h"
 #include "hphp/runtime/vm/hhbc-codec.h"
 #include "hphp/runtime/vm/preclass-emitter.h"
+#include "hphp/runtime/vm/type-alias-emitter.h"
 #include "hphp/runtime/vm/unit-emitter.h"
 
 #include "hphp/hhbbc/cfg.h"
@@ -80,15 +81,6 @@ struct ParseUnitState {
   boost::variant< SourceLocTable
                 , LineTable
                 > srcLocInfo;
-
-  /*
-   * Map from class id to the function containing its DefCls
-   * instruction.  We use this to compute whether classes are defined
-   * at top-level.
-   *
-   * TODO_4: if we don't end up with a use for this, remove it.
-   */
-  std::vector<php::Func*> defClsMap;
 
   /*
    * Map from Closure index to the function(s) containing their
@@ -319,15 +311,6 @@ void populate_block(ParseUnitState& puState,
     return ret;
   };
 
-  auto defcns = [&] () {
-    puState.constPassFuncs.insert(&func);
-  };
-  auto defcls = [&] (const Bytecode& b) {
-    puState.defClsMap[b.DefCls.arg1] = &func;
-  };
-  auto defclsnop = [&] (const Bytecode& b) {
-    puState.defClsMap[b.DefClsNop.arg1] = &func;
-  };
   auto createcl = [&] (const Bytecode& b) {
     puState.createClMap[b.CreateCl.arg2].insert(&func);
   };
@@ -441,9 +424,6 @@ void populate_block(ParseUnitState& puState,
         return bc::opcode { IMM_ARG_##imms FLAGS_ARG_##flags };    \
       }();                                                         \
       b.srcLoc = srcLocIx;                                         \
-      if (Op::opcode == Op::DefCns)      defcns();                 \
-      if (Op::opcode == Op::DefCls)      defcls(b);                \
-      if (Op::opcode == Op::DefClsNop)   defclsnop(b);             \
       if (Op::opcode == Op::CreateCl)    createcl(b);              \
       blk.hhbcs.push_back(std::move(b));                           \
       assert(pc == next);                                          \
@@ -1101,16 +1081,20 @@ std::unique_ptr<php::Constant> parse_constant(const Constant& c, php::Unit* unit
   });
 }
 
-std::unique_ptr<php::TypeAlias> parse_type_alias(const TypeAlias& ta, php::Unit* unit) {
-  return std::unique_ptr<php::TypeAlias>(new php::TypeAlias{
+std::unique_ptr<php::TypeAlias> parse_type_alias(php::Unit* unit,
+                                                 const TypeAliasEmitter& te) {
+  FTRACE(2, "  type alias: {}\n", te.name()->data());
+
+  return std::unique_ptr<php::TypeAlias>(new php::TypeAlias {
     unit,
-    ta.name,
-    ta.value,
-    ta.attrs,
-    ta.type,
-    ta.nullable,
-    ta.userAttrs,
-    ta.typeStructure,
+    php::SrcInfo { te.getLocation() },
+    te.name(),
+    te.value(),
+    te.attrs(),
+    te.type(),
+    te.nullable(),
+    te.userAttributes(),
+    te.typeStructure()
   });
 }
 
@@ -1147,7 +1131,6 @@ void parse_unit(php::Program& prog, const UnitEmitter* uep) {
   } else {
     puState.srcLocInfo = ue.lineTable();
   }
-  puState.defClsMap.resize(ue.numPreClasses(), nullptr);
 
   for (size_t i = 0; i < ue.numPreClasses(); ++i) {
     auto cls = parse_class(puState, ret.get(), *ue.pce(i));
@@ -1174,9 +1157,9 @@ void parse_unit(php::Program& prog, const UnitEmitter* uep) {
     ret->srcLocs[srcInfo.second] = srcInfo.first;
   }
 
-  for (auto& ta : ue.typeAliases()) {
+  for (auto& te : ue.typeAliases()) {
     ret->typeAliases.push_back(
-      parse_type_alias(ta, ret.get())
+      parse_type_alias(ret.get(), *te)
     );
   }
 

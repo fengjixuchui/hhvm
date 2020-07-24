@@ -654,7 +654,7 @@ private:
   arrprov::Tag m_tag{};
 };
 
-constexpr auto kProvBits = BVec | BDict | BVArr | BDArr;
+constexpr auto kProvBits = BVArr | BDArr;
 
 //////////////////////////////////////////////////////////////////////
 
@@ -871,15 +871,16 @@ private:
   friend Type aempty_varray(ProvTag);
   friend Type aempty_darray(ProvTag);
   friend Type vec_val(SArray);
-  friend Type vec_empty(ProvTag);
+  friend Type vec_empty();
   friend Type dict_val(SArray);
-  friend Type dict_empty(ProvTag);
+  friend Type dict_empty();
   friend Type some_aempty_darray(ProvTag);
-  friend Type some_vec_empty(ProvTag);
-  friend Type some_dict_empty(ProvTag);
+  friend Type some_vec_empty();
+  friend Type some_dict_empty();
   friend Type keyset_val(SArray);
   friend bool could_contain_objects(const Type&);
   friend bool could_copy_on_write(const Type&);
+  friend Type loosen_interfaces(Type);
   friend Type loosen_staticness(Type);
   friend Type loosen_dvarrayness(Type);
   friend Type loosen_provenance(Type);
@@ -1261,8 +1262,8 @@ Type sempty();
 Type aempty();
 Type aempty_varray(ProvTag = ProvTag::Top);
 Type aempty_darray(ProvTag = ProvTag::Top);
-Type vec_empty(ProvTag = ProvTag::Top);
-Type dict_empty(ProvTag = ProvTag::Top);
+Type vec_empty();
+Type dict_empty();
 Type keyset_empty();
 
 /*
@@ -1270,8 +1271,8 @@ Type keyset_empty();
  */
 Type some_aempty();
 Type some_aempty_darray(ProvTag = ProvTag::Top);
-Type some_vec_empty(ProvTag = ProvTag::Top);
-Type some_dict_empty(ProvTag = ProvTag::Top);
+Type some_vec_empty();
+Type some_dict_empty();
 Type some_keyset_empty();
 
 /*
@@ -1327,8 +1328,8 @@ Type sarr_mapn(Type k, Type v);
  *
  * Pre: !v.empty()
  */
-Type vec(std::vector<Type> v, ProvTag);
-Type svec(std::vector<Type> v, ProvTag);
+Type vec(std::vector<Type> v);
+Type svec(std::vector<Type> v);
 
 /*
  * Vec type of unknown size.
@@ -1341,15 +1342,13 @@ Type svec_n(Type);
  *
  * Pre: !m.empty()
  */
-Type dict_map(MapElems m, ProvTag,
-              Type optKey = TBottom,
-              Type optVal = TBottom);
+Type dict_map(MapElems m, Type optKey = TBottom, Type optVal = TBottom);
 
 /*
  * Dict with key/value types.
  */
-Type dict_n(Type, Type, ProvTag);
-Type sdict_n(Type, Type, ProvTag);
+Type dict_n(Type, Type);
+Type sdict_n(Type, Type);
 
 /*
  * Keyset with key (same as value) type.
@@ -1688,6 +1687,21 @@ bool could_have_magic_bool_conversion(const Type&);
 Type stack_flav(Type a);
 
 /*
+ * The HHBBC type system is not monotonic. However, we want types stored in
+ * the index to become monotonically more refined. We call this helper before
+ * updating function return types to help maintain that invariant. A function
+ * return type should never be an object with some known interface.
+ *
+ * The monotonicity requirement on our types is that given a, b, A, and B
+ * such that A <= a and B <= b, we must have union_of(A, B) <= union_of(a, b)
+ * and intersection_of(A, B) <= intersection_of(a, b).
+ *
+ * The union_of case can fail if a and b are some interface and A and B are
+ * concrete, unrelated classes that implement that interface.
+ */
+Type loosen_interfaces(Type);
+
+/*
  * Discard any countedness information about the type. Force any type
  * (recursively) which contains only static or counted variants to contain
  * both. Doesn't change the type otherwise.
@@ -1805,12 +1819,9 @@ std::pair<Type, ThrowMode> keyset_elem(const Type& keyset, const Type& key,
  */
 std::pair<Type, ThrowMode> array_set(Type arr, const Type& key,
                                      const Type& val, ProvTag src);
-std::pair<Type, ThrowMode> vec_set(Type vec, const Type& key, const Type& val,
-                                   ProvTag src);
-std::pair<Type, ThrowMode> dict_set(Type dict, const Type& key,
-                                    const Type& val, ProvTag src);
-std::pair<Type, ThrowMode> keyset_set(Type keyset, const Type& key,
-                                      const Type& val);
+std::pair<Type, ThrowMode> vec_set(Type vec, const Type& key, const Type& val);
+std::pair<Type, ThrowMode> dict_set(Type dict, const Type& key, const Type& val);
+std::pair<Type, ThrowMode> keyset_set(Type keyset, const Type& key, const Type& val);
 
 /*
  * (array|vec|dict|keyset)_newelem
@@ -1823,8 +1834,8 @@ std::pair<Type, ThrowMode> keyset_set(Type keyset, const Type& key,
  * Pre: first arg is a subtype of TArr, TVec, TDict, TKeyset respectively.
  */
 std::pair<Type,Type> array_newelem(Type arr, const Type& val, ProvTag src);
-std::pair<Type,Type> vec_newelem(Type vec, const Type& val, ProvTag src);
-std::pair<Type,Type> dict_newelem(Type dict, const Type& val, ProvTag src);
+std::pair<Type,Type> vec_newelem(Type vec, const Type& val);
+std::pair<Type,Type> dict_newelem(Type dict, const Type& val);
 std::pair<Type,Type> keyset_newelem(Type keyset, const Type& val);
 
 /*

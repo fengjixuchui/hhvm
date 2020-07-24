@@ -88,11 +88,12 @@ struct RepoOptions {
   H(bool,           DisallowFuncPtrsInConstants,    false)            \
   E(bool,           EmitFuncPointers,               true)             \
   E(bool,           EmitInstMethPointers,           EmitFuncPointers) \
+  E(bool,           EmitClassPointers,              false)            \
   H(bool,           EnableXHPClassModifier,         false)            \
   H(bool,           DisableXHPElementMangling,      false)            \
   H(bool,           DisableArray,                   true)             \
-  H(bool,           DisableArrayCast,               false)            \
-  H(bool,           DisableArrayTypehint,           false)            \
+  H(bool,           DisableArrayCast,               true)             \
+  H(bool,           DisableArrayTypehint,           true)             \
   /**/
 
   /**/
@@ -247,6 +248,7 @@ struct RuntimeOption {
   static int ServerConnectionLimit;
   static int ServerThreadCount;
   static int ServerQueueCount;
+  static int ServerIOThreadCount;
   static int ServerHighQueueingThreshold;
   static bool ServerLegacyBehavior;
   // Number of worker threads with stack partially on huge pages.
@@ -741,7 +743,7 @@ struct RuntimeOption {
          will not allow execution to resume normally; if the user
          error handler returns something other than boolean false,
          the runtime will throw a fatal error. */                       \
-  F(int32_t, CheckReturnTypeHints,     2)                               \
+  F(int32_t, CheckReturnTypeHints,     3)                               \
   /*
     CheckPropTypeHints:
     0 - No checks or enforcement of property type hints.
@@ -756,12 +758,11 @@ struct RuntimeOption {
         returns something other than boolean false, the runtime will throw a
         fatal error.
   */                                                                    \
-  F(int32_t, CheckPropTypeHints,       0)                               \
+  F(int32_t, CheckPropTypeHints,       1)                               \
   /* Enables enforcing upper-bounds for generic types
      1 => warning, 2 => error
   */                                                                    \
-  F(int32_t, EnforceGenericsUB,        0)                               \
-  F(bool, EnforcePropUB,               false)                           \
+  F(int32_t, EnforceGenericsUB,        1)                               \
   /* WarnOnTooManyArguments:
    * 0 -> no warning, 1 -> warning, 2 -> exception
    */                                                                   \
@@ -824,6 +825,8 @@ struct RuntimeOption {
   F(bool,     JitPGOVasmBlockCountersForceSaveSF, false)                \
   F(bool,     JitPGOVasmBlockCountersForceSaveGP, false)                \
   F(uint32_t, JitPGOVasmBlockCountersMaxOpMismatches, 12)               \
+  F(uint32_t, JitPGOVasmBlockCountersMinEntryValue,                     \
+                                       ServerExecutionMode() ? 200 : 0) \
   F(bool,     JitPGOVasmBlockCountersSkipFixWeights, false)             \
   F(double,   JitPGOVasmBlockCountersHotWeightMultiplier, 0)            \
   F(bool, JitLayoutSeparateZeroWeightBlocks, false)                     \
@@ -1069,7 +1072,9 @@ struct RuntimeOption {
    * If we don't end up using a reusable TC, we'll drop the padding. */ \
   F(uint32_t, ReusableTCPadding, 128)                                   \
   F(int64_t,  StressUnitCacheFreq, 0)                                   \
+  /* Perf warning sampling rates. The SelectHotCFG warning is noisy. */ \
   F(int64_t, PerfWarningSampleRate, 1)                                  \
+  F(int64_t, SelectHotCFGSampleRate, 100)                               \
   F(int64_t, FunctionCallSampleRate, 0)                                 \
   F(double, InitialLoadFactor, 1.0)                                     \
   /* When the "allow" flag is off, we assume that all array-likes have  \
@@ -1200,15 +1205,6 @@ struct RuntimeOption {
   F(bool, ForbidDynamicCallsWithAttr, false)                            \
   /* Toggles logging for expressions of type $var::name() */            \
   F(bool, LogKnownMethodsAsDynamicCalls, true)                          \
-  /*                                                                    \
-   * Control handling of out-of-range integer values in the compact     \
-   * Thrift serializer.                                                 \
-   *                                                                    \
-   * 0 - Nothing                                                        \
-   * 1 - Warn                                                           \
-   * 2 - Throw exception                                                \
-   */                                                                   \
-  F(int32_t, ForbidThriftIntegerValuesOutOfRange, 2)                    \
   /*                                                                    \
    * Don't allow unserializing to __PHP_Incomplete_Class                \
    * 0 - Nothing                                                        \

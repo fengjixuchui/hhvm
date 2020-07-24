@@ -184,7 +184,7 @@ const Class* getThis() {
 }
 
 /*
- * Look up a TypeAliasReq for the supplied NamedEntity (which must be the
+ * Look up a TypeAlias for the supplied NamedEntity (which must be the
  * NamedEntity for `name'), invoking autoload if necessary for types but not
  * for classes.
  *
@@ -192,8 +192,8 @@ const Class* getThis() {
  * instance of a class if it's not defined.  However, we need to autoload
  * typedefs because they can affect whether VerifyParamType would succeed.
  */
-const TypeAliasReq* getTypeAliasWithAutoload(const NamedEntity* ne,
-                                             const StringData* name) {
+const TypeAlias* getTypeAliasWithAutoload(const NamedEntity* ne,
+                                          const StringData* name) {
   auto def = ne->getCachedTypeAlias();
   if (!def) {
     VMRegAnchor _;
@@ -207,7 +207,7 @@ const TypeAliasReq* getTypeAliasWithAutoload(const NamedEntity* ne,
 }
 
 /*
- * Look up a TypeAliasReq or a Class for the supplied NamedEntity
+ * Look up a TypeAlias or a Class for the supplied NamedEntity
  * (which must be the NamedEntity for `name'), invoking autoload if
  * necessary.
  *
@@ -215,7 +215,7 @@ const TypeAliasReq* getTypeAliasWithAutoload(const NamedEntity* ne,
  * type alias or an enum class; enum classes are strange in that it
  * *is* possible to have an instance of them even if they are not defined.
  */
-boost::variant<const TypeAliasReq*, RecordDesc*, Class*>
+boost::variant<const TypeAlias*, RecordDesc*, Class*>
 getNamedTypeWithAutoload(const NamedEntity* ne,
                          const StringData* name) {
 
@@ -264,7 +264,7 @@ MaybeDataType TypeConstraint::underlyingDataTypeResolved() const {
 
   if (boost::get<RecordDesc*>(&p)) return KindOfRecord;
 
-  auto ptd = boost::get<const TypeAliasReq*>(&p);
+  auto ptd = boost::get<const TypeAlias*>(&p);
   auto td = ptd ? *ptd : nullptr;
   auto pc = boost::get<Class*>(&p);
   auto c = pc ? *pc : nullptr;
@@ -297,7 +297,7 @@ bool TypeConstraint::isMixedResolved() const {
   // we know it cannot be mixed.
   if (!isObject() || isResolved()) return false;
   auto v = getNamedTypeWithAutoload(m_namedEntity, m_typeName);
-  auto const pTyAlias = boost::get<const TypeAliasReq*>(&v);
+  auto const pTyAlias = boost::get<const TypeAlias*>(&v);
   return pTyAlias && (*pTyAlias)->type == AnnotType::Mixed;
 }
 
@@ -376,12 +376,12 @@ bool TypeConstraint::equivalentForProp(const TypeConstraint& other) const {
 
     assertx(tc.isObject());
 
-    const TypeAliasReq* tyAlias = nullptr;
+    const TypeAlias* tyAlias = nullptr;
     Class* klass = nullptr;
     RecordDesc* rec = nullptr;
     auto v =
       getNamedTypeWithAutoload(tc.m_namedEntity, tc.m_typeName);
-    if (auto pT = boost::get<const TypeAliasReq*>(&v)) {
+    if (auto pT = boost::get<const TypeAlias*>(&v)) {
       tyAlias = *pT;
     }
     if (auto pR = boost::get<RecordDesc*>(&v)) {
@@ -431,7 +431,7 @@ bool TypeConstraint::checkNamedTypeNonObj(tv_rval val) const {
   assertx(isObject() || isRecord());
 
   auto const p = [&]() ->
-    boost::variant<const TypeAliasReq*, RecordDesc*, Class*> {
+    boost::variant<const TypeAlias*, RecordDesc*, Class*> {
     if (!Assert) {
       return getNamedTypeWithAutoload(m_namedEntity, m_typeName);
     }
@@ -443,7 +443,7 @@ bool TypeConstraint::checkNamedTypeNonObj(tv_rval val) const {
     }
     return Unit::lookupClass(m_namedEntity);
   }();
-  auto ptd = boost::get<const TypeAliasReq*>(&p);
+  auto ptd = boost::get<const TypeAlias*>(&p);
   auto td = ptd ? *ptd : nullptr;
   auto prec = boost::get<RecordDesc*>(&p);
   auto rec = prec ? *prec : nullptr;
@@ -515,14 +515,14 @@ template <>
 bool isValid<RecordDesc>(const TypeConstraint* tc) { return tc->isRecord(); }
 
 template <typename T>
-bool isInstanceOf(const T*, const TypeAliasReq*);
+bool isInstanceOf(const T*, const TypeAlias*);
 template<>
-bool isInstanceOf<Class>(const Class* type, const TypeAliasReq* td) {
+bool isInstanceOf<Class>(const Class* type, const TypeAlias* td) {
   return td->type == AnnotType::Object && td->klass &&
     type->classof(td->klass);
 }
 template<>
-bool isInstanceOf<RecordDesc>(const RecordDesc* type, const TypeAliasReq* td) {
+bool isInstanceOf<RecordDesc>(const RecordDesc* type, const TypeAlias* td) {
   return td->type == AnnotType::Record && td->rec &&
     type->recordDescOf(td->rec);
 }
@@ -925,6 +925,17 @@ std::string describe_actual_type(tv_rval val) {
   not_reached();
 }
 
+bool TypeConstraint::checkStringCompatible() const {
+  if (isString() || (isObject() && interface_supports_string(m_typeName))) {
+    return true;
+  }
+  if (!isObject()) return false;
+  if (auto alias = getTypeAliasWithAutoload(m_namedEntity, m_typeName)) {
+    return alias->type == AnnotType::String;
+  }
+  return false;
+}
+
 bool TypeConstraint::convertClsMethToArrLike() const {
   auto const result = annotCompat(KindOfClsMeth, type(), typeName());
   return result == AnnotAction::ClsMethCheck;
@@ -935,7 +946,6 @@ void TypeConstraint::verifyParamFail(const Func* func, tv_lval val,
   verifyFail(func, val, paramNums);
   assertx(
     isSoft() ||
-    isArrayType(val.type()) ||
     (isThis() && couldSeeMockObject()) ||
     (RO::EvalEnforceGenericsUB < 2 && isUpperBound()) ||
     check(val, func->cls())
@@ -961,22 +971,25 @@ void castClsMeth(tv_lval c, F make) {
 void TypeConstraint::verifyOutParamFail(const Func* func,
                                         TypedValue* c,
                                         int paramNum) const {
-  if ((RO::EvalEnableFuncStringInterop && isFuncType(c->m_type)) ||
-      isClassType(c->m_type)) {
+
+  if (RO::EvalEnableFuncStringInterop && isFuncType(c->m_type)) {
     if (isString() || (isObject() && interface_supports_string(m_typeName))) {
       if (RuntimeOption::EvalStringHintNotices) {
-        if (isFuncType(c->m_type)) {
-          raise_notice(Strings::FUNC_TO_STRING_IMPLICIT);
-        } else {
-          raise_notice(Strings::CLASS_TO_STRING_IMPLICIT);
-        }
+        raise_notice(Strings::FUNC_TO_STRING_IMPLICIT);
       }
-      c->m_data.pstr = isFuncType(c->m_type)
-        ? const_cast<StringData*>(c->m_data.pfunc->name())
-        : const_cast<StringData*>(c->m_data.pclass->name());
+      c->m_data.pstr = const_cast<StringData*>(c->m_data.pfunc->name());
       c->m_type = KindOfPersistentString;
       return;
     }
+  }
+
+  if (isClassType(c->m_type) && checkStringCompatible()) {
+    if (RuntimeOption::EvalStringHintNotices) {
+      raise_notice(Strings::CLASS_TO_STRING_IMPLICIT);
+    }
+    c->m_data.pstr = const_cast<StringData*>(c->m_data.pclass->name());
+    c->m_type = KindOfPersistentString;
+    return;
   }
 
   if (isClsMethType(c->m_type) && convertClsMethToArrLike()) {
@@ -1042,6 +1055,15 @@ void TypeConstraint::verifyPropFail(const Class* thisCls,
     }
   }
 
+  if (isClassType(val.type()) && checkStringCompatible()) {
+    if (RuntimeOption::EvalStringHintNotices) {
+      raise_notice(Strings::CLASS_TO_STRING_IMPLICIT);
+    }
+    val.val().pstr = const_cast<StringData*>(val.val().pclass->name());
+    val.type() = KindOfPersistentString;
+    return;
+  }
+
   if (isClsMethType(val.type()) && convertClsMethToArrLike()) {
     if (RuntimeOption::EvalVecHintNotices) {
       raise_clsmeth_compat_type_hint_property_notice(
@@ -1088,22 +1110,25 @@ void TypeConstraint::verifyFail(const Func* func, tv_lval c,
     }
   }
 
-  if ((RO::EvalEnableFuncStringInterop && isFuncType(c.type())) ||
-      isClassType(c.type())) {
+  if (RO::EvalEnableFuncStringInterop && isFuncType(c.type())) {
     if (isString() || (isObject() && interface_supports_string(m_typeName))) {
       if (RuntimeOption::EvalStringHintNotices) {
-        if (isFuncType(c.type())) {
-          raise_notice(Strings::FUNC_TO_STRING_IMPLICIT);
-        } else {
-          raise_notice(Strings::CLASS_TO_STRING_IMPLICIT);
-        }
+        raise_notice(Strings::FUNC_TO_STRING_IMPLICIT);
       }
-      val(c).pstr = isFuncType(c.type())
-        ? const_cast<StringData*>(val(c).pfunc->name())
-        : const_cast<StringData*>(val(c).pclass->name());
+      val(c).pstr = const_cast<StringData*>(val(c).pfunc->name());
       c.type() = KindOfPersistentString;
       return;
     }
+  }
+
+  if (isClassType(c.type()) && checkStringCompatible()) {
+    if (RuntimeOption::EvalStringHintNotices) {
+      raise_notice(Strings::CLASS_TO_STRING_IMPLICIT);
+    }
+    val(c).pstr =
+      const_cast<StringData*>(val(c).pclass->name()); // TODO (T61651936)
+    c.type() = KindOfPersistentString;
+    return;
   }
 
   if (isClsMethType(c.type()) && convertClsMethToArrLike()) {

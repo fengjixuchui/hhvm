@@ -244,8 +244,6 @@ fn print_program_<W: Write>(
 
     newline(w)?;
     concat(w, &prog.adata, |w, a| print_adata_region(ctx, w, a))?;
-    newline(w)?;
-    print_main(ctx, w, &prog.main)?;
     concat(w, &prog.functions, |w, f| print_fun_def(ctx, w, f))?;
     concat(w, &prog.classes, |w, cd| print_class_def(ctx, w, cd))?;
     concat(w, &prog.record_defs, |w, rd| print_record_def(ctx, w, rd))?;
@@ -380,6 +378,8 @@ fn print_typedef<W: Write>(ctx: &mut Context, w: &mut W, td: &HhasTypedef) -> Re
     w.write(td.name.to_raw_string())?;
     w.write(" = ")?;
     print_typedef_info(w, &td.type_info)?;
+    w.write(" ")?;
+    print_span(w, &td.span)?;
     w.write(" ")?;
     triple_quotes(w, |w| print_adata(ctx, w, &td.type_structure))?;
     w.write(";")
@@ -1120,16 +1120,6 @@ fn print_file_attributes<W: Write>(
     newline(w)
 }
 
-fn print_main<W: Write>(ctx: &mut Context, w: &mut W, body: &HhasBody) -> Result<(), W::Error> {
-    w.write(".main ")?;
-    w.write("(1,1) ")?;
-    braces(w, |w| {
-        ctx.block(w, |c, w| print_body(c, w, body))?;
-        newline(w)
-    })?;
-    newline(w)
-}
-
 fn is_bareword_char(c: &u8) -> bool {
     match *c {
         b'_' | b'.' | b'$' | b'\\' => true,
@@ -1676,6 +1666,7 @@ fn print_istype_op<W: Write>(w: &mut W, op: &IstypeOp) -> Result<(), W::Error> {
         Op::OpClsMeth => w.write("ClsMeth"),
         Op::OpFunc => w.write("Func"),
         Op::OpPHPArr => w.write("PHPArr"),
+        Op::OpClass => w.write("Class"),
     }
 }
 
@@ -1950,11 +1941,6 @@ fn print_include_eval_define<W: Write>(
         ReqOnce => w.write("ReqOnce"),
         ReqDoc => w.write("ReqDoc"),
         Eval => w.write("Eval"),
-        DefCls(n) => concat_str_by(w, " ", ["DefCls", n.to_string().as_str()]),
-        DefClsNop(n) => concat_str_by(w, " ", ["DefClsNop", n.to_string().as_str()]),
-        DefRecord(n) => concat_str_by(w, " ", ["DefRecord", n.to_string().as_str()]),
-        DefCns(n) => concat_str_by(w, " ", ["DefCns", n.to_string().as_str()]),
-        DefTypeAlias(id) => write!(w, "DefTypeAlias {}", id),
     }
 }
 
@@ -2231,6 +2217,10 @@ fn print_op<W: Write>(w: &mut W, op: &InstructOperator) -> Result<(), W::Error> 
             print_special_cls_ref(w, r)?;
             w.write(" ")?;
             print_method_id(w, mid)
+        }
+        I::ResolveClass(id) => {
+            w.write("ResolveClass ")?;
+            print_class_id(w, id)
         }
         I::Fatal(fatal_op) => print_fatal_op(w, fatal_op),
     }
@@ -3374,6 +3364,8 @@ fn print_record_def<W: Write>(
     } else {
         concat_str_by(w, " ", [".record", "[final]", record.name.to_raw_string()])?;
     }
+    w.write(" ")?;
+    print_span(w, &record.span)?;
     print_extends(w, record.base.as_ref().map(|b| b.to_raw_string()))?;
     w.write(" ")?;
 

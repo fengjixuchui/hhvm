@@ -1169,40 +1169,6 @@ void checkImplicitContextErrors(const ActRec* ar) {
 
 static void dispatch();
 
-void enterVMAtPseudoMain(ActRec* enterFnAr, VarEnv* varEnv) {
-  assertx(enterFnAr);
-  assertx(enterFnAr->func()->isPseudoMain());
-  assertx(!isResumed(enterFnAr));
-  ARRPROV_USE_VMPC();
-  Stats::inc(Stats::VMEnter);
-
-  enterFnAr->setVarEnv(varEnv);
-  pushFrameSlots(enterFnAr->func());
-  if (varEnv != nullptr) {
-    auto oldFp = vmfp();
-    if (UNLIKELY(oldFp && oldFp->skipFrame())) {
-      oldFp = g_context->getPrevVMStateSkipFrame(oldFp);
-    }
-    varEnv->enterFP(oldFp, enterFnAr);
-  }
-  vmfp() = enterFnAr;
-  vmpc() = enterFnAr->func()->getEntry();
-
-  if (!EventHook::FunctionCall(enterFnAr, EventHook::NormalFunc)) return;
-  checkStack(vmStack(), enterFnAr->m_func, 0);
-  assertx(vmfp()->func()->contains(vmpc()));
-
-  if (RID().getJit() && !RID().getJitFolding()) {
-    jit::TCA start = enterFnAr->m_func->getFuncBody();
-    assert_flog(jit::tc::isValidCodeAddress(start),
-                "start = {} ; func = {} ({})\n",
-                start, enterFnAr->m_func, enterFnAr->m_func->fullName());
-    jit::enterTC(start);
-  } else {
-    dispatch();
-  }
-}
-
 void enterVMAtFunc(ActRec* enterFnAr, Array&& generics, bool hasInOut,
                    bool dynamicCall, bool allowDynCallNoPointer) {
   assertx(enterFnAr);
@@ -2660,6 +2626,21 @@ OPTBLD_INLINE void iopThrowNonExhaustiveSwitch() {
   not_reached();
 }
 
+OPTBLD_INLINE void iopResolveClass(Id id) {
+  auto const cname = vmfp()->unit()->lookupLitstrId(id);
+  auto const class_ = Unit::loadClass(cname);
+  // TODO (T61651936): Disallow implicit conversion to string
+  if (class_ == nullptr) {
+    if (RuntimeOption::EvalRaiseClassConversionWarning) {
+      raise_warning(Strings::CLASS_TO_STRING);
+    }
+    vmStack().pushStaticString(cname);
+  }
+  else {
+    vmStack().pushClass(class_);
+  }
+}
+
 OPTBLD_INLINE void iopClassGetC() {
   auto const cell = vmStack().topC();
   if (isStringType(cell->m_type)) {
@@ -3464,6 +3445,7 @@ OPTBLD_INLINE static bool isTypeHelper(TypedValue val, IsTypeOp op) {
     return is_any_array(&val, /* logOnHackArrays = */ false);
   case IsTypeOp::ClsMeth: return is_clsmeth(&val);
   case IsTypeOp::Func: return is_fun(&val);
+  case IsTypeOp::Class: return is_class(&val);
   }
   not_reached();
 }
@@ -4856,11 +4838,10 @@ OPTBLD_INLINE void inclOp(PC origpc, PC& pc, InclOpFlags flags,
   }
 
   if (!(flags & InclOpFlags::Once) || initial) {
-    g_context->evalUnit(unit, origpc, pc, EventHook::PseudoMain);
-  } else {
-    Stats::inc(Stats::PseudoMain_Guarded);
-    vmStack().pushBool(true);
+    vmpc() = origpc;
+    unit->merge();
   }
+  vmStack().pushBool(true);
 }
 
 OPTBLD_INLINE void iopIncl(PC origpc, PC& pc) {
@@ -4934,23 +4915,9 @@ OPTBLD_INLINE void iopEval(PC origpc, PC& pc) {
     vmStack().pushBool(false);
     return;
   }
-  vm->evalUnit(unit, origpc, pc, EventHook::Eval);
-}
-
-OPTBLD_INLINE void iopDefCls(uint32_t cid) {
-  PreClass* c = vmfp()->m_func->unit()->lookupPreClassId(cid);
-  Unit::defClass(c);
-}
-
-OPTBLD_INLINE void iopDefRecord(uint32_t cid) {
-  auto const r = vmfp()->m_func->unit()->lookupPreRecordId(cid);
-  Unit::defRecordDesc(r);
-}
-
-OPTBLD_INLINE void iopDefClsNop(uint32_t /*cid*/) {}
-
-OPTBLD_INLINE void iopDefTypeAlias(uint32_t tid) {
-  vmfp()->func()->unit()->defTypeAlias(tid);
+  vmpc() = origpc;
+  unit->merge();
+  vmStack().pushBool(true);
 }
 
 OPTBLD_INLINE void iopThis() {

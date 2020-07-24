@@ -295,11 +295,11 @@ template<class Fn> void Unit::forEachFunc(Fn fn) const {
 ///////////////////////////////////////////////////////////////////////////////
 // Type aliases
 
-inline folly::Range<TypeAlias*> Unit::typeAliases() {
+inline folly::Range<PreTypeAlias*> Unit::typeAliases() {
   return { m_typeAliases.begin(), m_typeAliases.end() };
 }
 
-inline folly::Range<const TypeAlias*> Unit::typeAliases() const {
+inline folly::Range<const PreTypeAlias*> Unit::typeAliases() const {
   return { m_typeAliases.begin(), m_typeAliases.end() };
 }
 
@@ -394,17 +394,8 @@ inline Class* Unit::getClass(const StringData* name, bool tryAutoload) {
 ///////////////////////////////////////////////////////////////////////////////
 // Merge.
 
-inline bool Unit::isMergeOnly() const {
-  return m_mergeOnly;
-}
-
 inline bool Unit::isEmpty() const {
   return m_mergeState.load(std::memory_order_relaxed) & MergeState::Empty;
-}
-
-inline const TypedValue* Unit::getMainReturn() const {
-  assertx(isMergeOnly());
-  return &m_mainReturn;
 }
 
 ///////////////////////////////////////////////////////////////////////////////

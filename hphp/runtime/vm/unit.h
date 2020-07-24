@@ -338,7 +338,7 @@ public:
   >;
 
   using PreClassPtrVec = VMCompactVector<PreClassPtr>;
-  using TypeAliasVec = VMFixedVector<TypeAlias>;
+  using TypeAliasVec = VMCompactVector<PreTypeAlias>;
   using ConstantVec = VMFixedVector<Constant>;
 
   /////////////////////////////////////////////////////////////////////////////
@@ -781,36 +781,43 @@ public:
   /////////////////////////////////////////////////////////////////////////////
   // Type aliases.
 
-  folly::Range<TypeAlias*> typeAliases();
-  folly::Range<const TypeAlias*> typeAliases() const;
+  folly::Range<PreTypeAlias*> typeAliases();
+  folly::Range<const PreTypeAlias*> typeAliases() const;
 
   /*
    * Look up without autoloading a type alias named `name'. Returns nullptr
    * if one cannot be found.
    *
    * If the type alias is found and `persistent' is provided, it will be set to
-   * whether or not the TypeAliasReq's RDS handle is persistent.
+   * whether or not the TypeAlias's RDS handle is persistent.
    */
-  static const TypeAliasReq* lookupTypeAlias(const StringData* name,
-                                             bool* persistent = nullptr);
+  static const TypeAlias* lookupTypeAlias(const StringData* name,
+                                          bool* persistent = nullptr);
 
   /*
    * Look up or attempt to autoload a type alias named `name'. Returns nullptr
    * if one cannot be found or autoloaded.
    *
    * If the type alias is found and `persistent' is provided, it will be set to
-   * whether or not the TypeAliasReq's RDS handle is persistent.
+   * whether or not the TypeAlias's RDS handle is persistent.
    */
-  static const TypeAliasReq* loadTypeAlias(const StringData* name,
-                                           bool* persistent = nullptr);
+  static const TypeAlias* loadTypeAlias(const StringData* name,
+                                        bool* persistent = nullptr);
 
   /*
    * Define the type alias given by `id', binding it to the appropriate
    * NamedEntity for this request.
    *
-   * returns true iff the bound type alias is persistent.
+   * Raises a fatal error if type alias already defined or cannot be defined
+   * unless failIsFatal is unset
+   *
+   * Returns:
+   *   Persistent: Type alias is successfully defined and is persistent
+   *   Normal: Type alias is successfully defined and is not persistent
+   *   Fail: Type alias is not successfully defined
    */
-  bool defTypeAlias(Id id);
+  enum class DefTypeAliasResult { Fail, Normal, Persistent };
+  Unit::DefTypeAliasResult defTypeAlias(Id id, bool failIsFatal = true);
 
   /////////////////////////////////////////////////////////////////////////////
   // File attributes.
@@ -826,23 +833,10 @@ public:
   void merge();
 
   /*
-   * Is it sufficient to merge the Unit, and skip invoking its pseudomain?
-   */
-  bool isMergeOnly() const;
-
-  /*
    * Is this Unit empty---i.e., does it define nothing and have no
    * side-effects?
    */
   bool isEmpty() const;
-
-  /*
-   * Get the return value of the pseudomain, or KindOfUninit if not
-   * known.
-   *
-   * @requires: isMergeOnly()
-   */
-  const TypedValue* getMainReturn() const;
 
   /////////////////////////////////////////////////////////////////////////////
   // Info arrays.                                                      [static]
@@ -973,7 +967,6 @@ private:
    * unitInitLock (see unit.cpp).
    */
   std::atomic<uint8_t> m_mergeState{MergeState::Unmerged};
-  bool m_mergeOnly: 1;
   bool m_interpretOnly : 1;
   bool m_isHHFile : 1;
   bool m_extended : 1;
@@ -981,7 +974,6 @@ private:
   bool m_ICE : 1; // was this unit the result of an internal compiler error
   LowStringPtr m_dirpath{nullptr};
 
-  TypedValue m_mainReturn;
   PreClassPtrVec m_preClasses;
   TypeAliasVec m_typeAliases;
   ConstantVec m_constants;

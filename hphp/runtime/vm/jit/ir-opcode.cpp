@@ -299,7 +299,6 @@ bool opcodeMayRaise(Opcode opc) {
   case AKExistsObj:
   case AllocObj:
   case AllocObjReified:
-  case ArrayAdd:
   case ArrayGet:
   case ArraySet:
   case BaseG:
@@ -354,7 +353,6 @@ bool opcodeMayRaise(Opcode opc) {
   case ConvVecToKeyset:
   case Count:
   case CreateAAWH:
-  case DefCls:
   case DictGet:
   case DictSet:
   case ElemArrayD:

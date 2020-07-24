@@ -566,15 +566,6 @@ const ArrayFunctions g_array_funcs = {
   DISPATCH(Append)
 
   /*
-   * ArrayData* PlusEq(ArrayData*, const ArrayData* elems)
-   *
-   *    Performs array addition, logically mutating the first array.
-   *    It may return a new array if the array needed to grow, or if
-   *    it needed to COW because cowCheck() was true.
-   */
-  DISPATCH(PlusEq)
-
-  /*
    * ArrayData* Merge(ArrayData*, const ArrayData* elems)
    *
    *   Perform part of the semantics of the php function array_merge.
@@ -1135,8 +1126,8 @@ void throwInvalidKeysetOperation() {
 }
 
 void throwInvalidAdditionException(const ArrayData* ad) {
-  assertx(ad->isHackArrayType());
   const char* type = [&]{
+    if (ad->isPHPArrayType()) return "Arrays";
     if (ad->isVecType()) return "Vecs";
     if (ad->isDictType()) return "Dicts";
     if (ad->isKeysetType()) return "Keysets";
@@ -1156,10 +1147,6 @@ void throwVecUnsetException() {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-
-void raiseHackArrCompatAdd() {
-  raise_hac_array_plus_notice("Using + operator on arrays");
-}
 
 void raiseHackArrCompatArrHackArrCmp() {
   raise_hac_compare_notice(Strings::HACKARR_COMPAT_ARR_HACK_ARR_CMP);
@@ -1251,19 +1238,10 @@ ArrayData* ArrayData::toPHPArrayIntishCast(bool copy) {
 
 bool ArrayData::intishCastKey(const StringData* key, int64_t& i) const {
   if (key->isStrictlyInteger(i)) {
-    if (isPHPArrayType()) {
-      if (RO::EvalHackArrCompatIntishCastNotices) {
-        raise_hackarr_compat_notice("triggered array-based IntishCast");
-      }
-      return true;
+    if (RO::EvalHackArrCompatIntishCastNotices) {
+      raise_hackarr_compat_notice("triggered array-based IntishCast");
     }
-    auto const t = [&]{
-      if (isVecType())  return "vec";
-      if (isDictType()) return "dict";
-      assertx(isKeysetType());
-      return "keyset";
-    }();
-    raise_hackarr_compat_notice(folly::sformat("missed IntishCast for {}", t));
+    return true;
   }
   return false;
 }

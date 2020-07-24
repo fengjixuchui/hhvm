@@ -392,7 +392,6 @@ public:
   ObjectData* getThis();
   StringData* getContainingFileName();
   int getLine();
-  bool evalUnit(Unit* unit, PC callPC, PC& pc, int funcType);
   TypedValue invokeUnit(const Unit* unit, bool callByHPHPInvoke = false);
   Unit* compileEvalString(StringData* code,
                                 const char* evalFilename = nullptr);
@@ -462,11 +461,6 @@ private:
                          ObjectData* obj, int numArgs);
 public:
   void syncGdbState();
-
-  TypedValue invokePseudoMain(const Func* f,
-                              VarEnv* varEnv = nullptr,
-                              ObjectData* this_ = nullptr,
-                              Class* class_ = nullptr);
 
   using ThisOrClass = Either<ObjectData*, Class*>;
 
@@ -633,6 +627,8 @@ private:
   Array m_debuggerEnv; // variables read/written in the REPL
 public:
   req::vector<ImplicitContext*> m_implicitContexts;
+
+  VMParserFrame* m_parserFrame{nullptr};
 };
 
 ///////////////////////////////////////////////////////////////////////////////

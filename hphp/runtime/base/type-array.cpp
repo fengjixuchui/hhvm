@@ -20,7 +20,6 @@
 #include "hphp/runtime/base/types.h"
 #include "hphp/runtime/base/array-util.h"
 #include "hphp/runtime/base/comparisons.h"
-#include "hphp/runtime/base/double-to-int64.h"
 #include "hphp/runtime/base/memory-manager.h"
 #include "hphp/runtime/base/mixed-array.h"
 #include "hphp/runtime/base/mixed-array-defs.h"
@@ -90,33 +89,10 @@ ArrayIter Array::begin(const String& /*context*/ /* = null_string */) const {
 ///////////////////////////////////////////////////////////////////////////////
 // PHP operations.
 
-Array Array::operator+(ArrayData *data) const {
-  return Array(*this).plusImpl(data);
-}
-
-Array Array::operator+(const Array& arr) const {
-  return Array(*this).plusImpl(arr.get());
-}
-
-Array& Array::operator+=(ArrayData *data) {
-  return plusImpl(data);
-}
-
 NEVER_INLINE
 static void throw_bad_array_merge() {
   throw ExtendedException("Invalid operand type was used: "
                           "merging an array with NULL or non-array.");
-}
-
-Array& Array::operator+=(const Variant& var) {
-  if (!var.isArray()) {
-    throw_bad_array_merge();
-  }
-  return operator+=(var.getArrayData());
-}
-
-Array& Array::operator+=(const Array& arr) {
-  return plusImpl(arr.get());
 }
 
 Array Array::diff(const Variant& array, bool by_key, bool by_value,
@@ -290,24 +266,6 @@ Array Array::diffImpl(const Array& array, bool by_key, bool by_value, bool match
 
 Array& Array::merge(const Array& arr) {
   return mergeImpl(arr.get());
-}
-
-Array& Array::plusImpl(ArrayData *data) {
-  if (m_arr == nullptr || data == nullptr) {
-    throw_bad_array_merge();
-  }
-  if (checkHACArrayPlus()) raiseHackArrCompatAdd();
-  if (!data->empty()) {
-    if (m_arr->empty()) {
-      m_arr = data;
-    } else if (m_arr != data) {
-      auto const escalated = m_arr->plusEq(data);
-      if (escalated != m_arr) {
-        m_arr = Ptr::attach(escalated);
-      }
-    }
-  }
-  return *this;
 }
 
 Array& Array::mergeImpl(ArrayData *data) {

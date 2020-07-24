@@ -571,6 +571,7 @@ dependencies = [
  "escaper 0.0.0",
  "flatten_smart_constructors 0.0.0",
  "hh_autoimport_rust 0.0.0",
+ "minimal_parser 0.0.0",
  "naming_special_names_rust 0.0.0",
  "oxidized_by_ref 0.0.0",
  "parser_core_types 0.0.0",
@@ -976,6 +977,7 @@ dependencies = [
  "emit_fatal_rust 0.0.0",
  "emit_type_hint_rust 0.0.0",
  "env 0.0.0",
+ "hhas_pos_rust 0.0.0",
  "hhas_record_def_rust 0.0.0",
  "hhas_type 0.0.0",
  "hhbc_id_rust 0.0.0",
@@ -1028,6 +1030,7 @@ dependencies = [
  "emit_type_constant_rust 0.0.0",
  "emit_type_hint_rust 0.0.0",
  "env 0.0.0",
+ "hhas_pos_rust 0.0.0",
  "hhas_type 0.0.0",
  "hhas_typedef_rust 0.0.0",
  "hhbc_id_rust 0.0.0",
@@ -1413,6 +1416,7 @@ dependencies = [
 name = "hhas_record_def_rust"
 version = "0.0.0"
 dependencies = [
+ "hhas_pos_rust 0.0.0",
  "hhas_type 0.0.0",
  "hhbc_id_rust 0.0.0",
  "runtime 0.0.0",
@@ -1441,6 +1445,7 @@ name = "hhas_typedef_rust"
 version = "0.0.0"
 dependencies = [
  "hhas_attribute_rust 0.0.0",
+ "hhas_pos_rust 0.0.0",
  "hhas_type 0.0.0",
  "hhbc_id_rust 0.0.0",
  "runtime 0.0.0",
@@ -1965,6 +1970,7 @@ dependencies = [
 name = "parser_core_types"
 version = "0.0.0"
 dependencies = [
+ "bitflags 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "itertools 0.8.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "line_break_map 0.0.0",
  "ocamlrep 0.0.0",

@@ -42,13 +42,28 @@ let add_container_defn_fact ctx source_map clss decl_id member_decls prog =
         let ref = build_id_json decl_id in
         (ref :: decl_refs, prog))
   in
+  let (req_extends_hints, req_implements_hints) =
+    List.partition_tf clss.c_reqs snd
+  in
+  let (req_extends, prog) =
+    add_decls (List.map req_extends_hints fst) ClassDeclaration prog
+  in
+  let (req_implements, prog) =
+    add_decls (List.map req_implements_hints fst) InterfaceDeclaration prog
+  in
   let (defn_pred, json_fields, prog) =
     match get_container_kind clss with
     | InterfaceContainer ->
       let (extends, prog) =
         add_decls clss.c_extends InterfaceDeclaration prog
       in
-      let req_fields = ("extends_", JSON_Array extends) :: common_fields in
+      let req_fields =
+        common_fields
+        @ [
+            ("extends_", JSON_Array extends);
+            ("requireExtends", JSON_Array req_extends);
+          ]
+      in
       (InterfaceDefinition, req_fields, prog)
     | TraitContainer ->
       let (impls, prog) =
@@ -56,8 +71,13 @@ let add_container_defn_fact ctx source_map clss decl_id member_decls prog =
       in
       let (uses, prog) = add_decls clss.c_uses TraitDeclaration prog in
       let req_fields =
-        [("implements_", JSON_Array impls); ("uses", JSON_Array uses)]
-        @ common_fields
+        common_fields
+        @ [
+            ("implements_", JSON_Array impls);
+            ("uses", JSON_Array uses);
+            ("requireExtends", JSON_Array req_extends);
+            ("requireImplements", JSON_Array req_implements);
+          ]
       in
       (TraitDefinition, req_fields, prog)
     | ClassContainer ->
@@ -146,7 +166,13 @@ let add_method_defn_fact ctx source_map meth decl_id progress =
     JSON_Object
       [
         ("declaration", build_id_json decl_id);
-        ("signature", build_signature_json ctx meth.m_params meth.m_ret);
+        ( "signature",
+          build_signature_json
+            ctx
+            source_map
+            meth.m_params
+            meth.m_variadic
+            meth.m_ret );
         ("visibility", build_visibility_json meth.m_visibility);
         ("isAbstract", JSON_Bool meth.m_abstract);
         ("isAsync", build_is_async_json meth.m_fun_kind);
@@ -265,7 +291,13 @@ let add_func_defn_fact ctx source_map elem decl_id progress =
   let json_fields =
     [
       ("declaration", build_id_json decl_id);
-      ("signature", build_signature_json ctx elem.f_params elem.f_ret);
+      ( "signature",
+        build_signature_json
+          ctx
+          source_map
+          elem.f_params
+          elem.f_variadic
+          elem.f_ret );
       ("isAsync", build_is_async_json elem.f_fun_kind);
       ( "attributes",
         build_attributes_json_nested source_map elem.f_user_attributes );
@@ -300,17 +332,24 @@ let add_gconst_decl_fact name progress =
   let json_fact = JSON_Object [("name", build_qname_json_nested name)] in
   add_fact GlobalConstDeclaration json_fact progress
 
-let add_gconst_defn_fact ctx elem decl_id progress =
-  let base_fields =
-    [("declaration", build_id_json decl_id)]
+let add_gconst_defn_fact ctx source_map elem decl_id progress =
+  let value =
+    let ((expr_pos, _), _) = elem.cst_value in
+    let fp = Relative_path.to_absolute (Pos.filename expr_pos) in
+    match SMap.find_opt fp source_map with
+    | Some st -> source_at_span st expr_pos
+    | None -> ""
+  in
+  let req_fields =
+    [("declaration", build_id_json decl_id); ("value", JSON_String value)]
     @ build_namespace_decl_json_nested elem.cst_namespace
   in
   let json_fields =
     match elem.cst_type with
-    | None -> base_fields
+    | None -> req_fields
     | Some h ->
       let ty = get_type_from_hint ctx h in
-      ("type", build_type_json_nested ty) :: base_fields
+      ("type", build_type_json_nested ty) :: req_fields
   in
   let json_fact = JSON_Object json_fields in
   add_fact GlobalConstDefinition json_fact progress

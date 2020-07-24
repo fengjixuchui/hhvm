@@ -33,10 +33,7 @@
  *      Using this module, you can emit pretty much any sort of not
  *      trivially-illegal bytecode stream, and many trivially-illegal
  *      ones as well.  You can also easily create Units with illegal
- *      metadata.  Generally this will crash the VM.  In other cases
- *      (especially if you don't bother to DefCls your classes in your
- *      .main) you'll just get mysterious "class not defined" errors
- *      or weird behavior.
+ *      metadata.  Generally this will crash the VM.
  *
  *    - Whitespace is not normally significant, but newlines may not
  *      be in the middle of a list of opcode arguments.  (After the
@@ -55,8 +52,6 @@
  *
  *   - It might be nice if you could refer to iterators by name
  *     instead of by index.
- *
- *   - DefCls by name would be nice.
  *
  * Missing features (partial list):
  *
@@ -103,6 +98,7 @@
 #include "hphp/runtime/vm/preclass-emitter.h"
 #include "hphp/runtime/vm/record-emitter.h"
 #include "hphp/runtime/vm/rx.h"
+#include "hphp/runtime/vm/type-alias-emitter.h"
 #include "hphp/runtime/vm/unit.h"
 #include "hphp/runtime/vm/unit-emitter.h"
 #include "hphp/system/systemlib.h"
@@ -783,7 +779,6 @@ struct AsmState {
   int minStackDepth{0};
   int maxUnnamed{-1};
   std::set<std::string,stdltistr> hoistables;
-  std::unordered_map<uint32_t,Offset> defClsOffsets;
   Location::Range srcLoc{-1,-1,-1,-1};
   hphp_fast_map<SymbolRef,
                 CompactVector<std::string>,
@@ -1616,10 +1611,6 @@ std::map<std::string,ParserFunc> opcode_parsers;
                                                                        \
     /* Record source location. */                                      \
     as.ue->recordSourceLocation(as.srcLoc, curOpcodeOff);              \
-                                                                       \
-    if (Op##name == OpDefCls || Op##name == OpDefClsNop) {             \
-      as.defClsOffsets.emplace(immIVA[0], curOpcodeOff);               \
-    }                                                                  \
                                                                        \
     /* Retain stack depth after calls to exit */                       \
     if ((instrFlags(thisOpcode) & InstrFlags::TF) &&                   \
@@ -2577,28 +2568,13 @@ bool parse_line_range(AsmState& as, int& line0, int& line1) {
 }
 
 /*
- * If we haven't seen a pseudomain and we are compiling systemlib,
- * add a pseudomain and return true
- * If we haven't seen a pseudomain and we are not compiling systemlib,
- * return false so that the caller can give an assembler error
- * Otherwise, return true
+ * If we haven't seen a pseudomain, add it
  */
-bool ensure_pseudomain(AsmState& as) {
+void ensure_pseudomain(AsmState& as) {
   if (!as.emittedPseudoMain) {
-    if (!SystemLib::s_inited) {
-      /*
-       * The SystemLib::s_hhas_unit is required to be merge-only,
-       * and we create the source by concatenating separate .hhas files
-       * Rather than choosing one to have the .main directive, we just
-       * generate a trivial pseudoMain automatically.
-       */
-      as.ue->addTrivialPseudoMain();
-      as.emittedPseudoMain = true;
-    } else {
-      return false;
-    }
+    as.ue->addTrivialPseudoMain();
+    as.emittedPseudoMain = true;
   }
-  return true;
 }
 
 static StaticString s_native("__Native");
@@ -2675,9 +2651,7 @@ void check_native(AsmState& as, bool is_construct) {
  *                    ;
  */
 void parse_function(AsmState& as) {
-  if (!ensure_pseudomain(as)) {
-    as.error(".function blocks must all follow the .main block");
-  }
+  ensure_pseudomain(as);
 
   as.in.skipWhitespace();
 
@@ -2868,13 +2842,11 @@ void parse_prop_or_field_impl(AsmState& as,
     userAttributes.find(s___Reified.get()) != userAttributes.end();
   auto ub = getRelevantUpperBounds(typeConstraint, class_ubs, {}, {});
   auto needsMultiUBs = false;
-  if (RuntimeOption::EvalEnforcePropUB) {
-    if (ub.size() == 1 && !hasReifiedGenerics) {
-      applyFlagsToUB(ub[0], typeConstraint);
-      typeConstraint = ub[0];
-    } else if (!ub.empty()) {
-      needsMultiUBs = true;
-    }
+  if (ub.size() == 1 && !hasReifiedGenerics) {
+    applyFlagsToUB(ub[0], typeConstraint);
+    typeConstraint = ub[0];
+  } else if (!ub.empty()) {
+    needsMultiUBs = true;
   }
   std::string name;
   as.in.skipSpaceTab();
@@ -3156,9 +3128,7 @@ void parse_cls_doccomment(AsmState& as) {
  */
 void parse_class_body(AsmState& as, bool class_is_const,
                       const UpperBoundMap& class_ubs) {
-  if (!ensure_pseudomain(as)) {
-    as.error(".class blocks must all follow the .main block");
-  }
+  ensure_pseudomain(as);
 
   std::string directive;
   while (as.in.readword(directive)) {
@@ -3187,9 +3157,7 @@ void parse_class_body(AsmState& as, bool class_is_const,
  *                  ;
  */
 void parse_record_body(AsmState& as) {
-  if (!ensure_pseudomain(as)) {
-    as.error(".record blocks must all follow the .main block");
-  }
+  ensure_pseudomain(as);
 
   std::string directive;
   while (as.in.readword(directive)) {
@@ -3296,13 +3264,10 @@ void parse_class(AsmState& as) {
     as.in.expect(')');
   }
 
-  auto off = folly::get_default(as.defClsOffsets, as.ue->numPreClasses(),
-                                as.ue->bcPos());
-
   as.pce = as.ue->newBarePreClassEmitter(name, PreClass::MaybeHoistable);
   as.pce->init(line0,
                line1,
-               off,
+               as.ue->bcPos(),
                attrs,
                makeStaticString(parentName),
                staticEmptyString());
@@ -3450,8 +3415,8 @@ void parse_adata(AsmState& as) {
 void parse_alias(AsmState& as) {
   as.in.skipWhitespace();
 
-  TypeAlias record;
-  Attr attrs = parse_attribute_list(as, AttrContext::Alias, &record.userAttrs);
+  UserAttributeMap userAttrs;
+  Attr attrs = parse_attribute_list(as, AttrContext::Alias, &userAttrs);
   if (!SystemLib::s_inited) {
     attrs |= AttrPersistent;
   }
@@ -3462,6 +3427,11 @@ void parse_alias(AsmState& as) {
   as.in.expectWs('=');
 
   TypeConstraint ty = parse_type_constraint(as);
+
+  int line0;
+  int line1;
+  parse_line_range(as, line0, line1);
+
   Variant ts = parse_maybe_php_serialized(as);
 
   if (ts.isInitialized() && !ts.isArray()) {
@@ -3476,16 +3446,22 @@ void parse_alias(AsmState& as) {
   as.ue->mergeLitstr(sname);
   as.ue->mergeLitstr(typeName);
 
-  record.name = sname;
-  record.value = typeName;
-  record.type = typeName->empty() ? AnnotType::Mixed : ty.type();
-  record.nullable = (ty.flags() & TypeConstraint::Nullable) != 0;
-  record.attrs = attrs;
+  auto te = as.ue->newTypeAliasEmitter(name);
+  te->init(
+    line0,
+    line1,
+    attrs,
+    typeName,
+    typeName->empty() ? AnnotType::Mixed : ty.type(),
+    (ty.flags() & TypeConstraint::Nullable) != 0
+  );
+  te->setUserAttributes(userAttrs);
+
   if (ts.isInitialized()) {
-    record.typeStructure = ArrNR(ArrayData::GetScalarArray(std::move(ts)));
+    te->setTypeStructure(ArrNR(ArrayData::GetScalarArray(std::move(ts))));
   }
-  auto aliasId = as.ue->addTypeAlias(record);
-  as.ue->pushMergeableId(Unit::MergeKind::TypeAlias, aliasId);
+
+  as.ue->pushMergeableId(Unit::MergeKind::TypeAlias, te->id());
 
   as.in.expectWs(';');
 }
@@ -3512,7 +3488,8 @@ void parse_constant(AsmState& as) {
   if (type(constant.val) == KindOfUninit) {
     constant.val.m_data.pcnt = reinterpret_cast<MaybeCountable*>(Unit::getCns);
   }
-  as.ue->addConstant(constant);
+  auto const cid = as.ue->addConstant(constant);
+  as.ue->pushMergeableId(Unit::MergeKind::Define, cid);
 }
 
 /*
@@ -3686,9 +3663,7 @@ void parse(AsmState& as) {
     as.error("unrecognized top-level directive `" + directive + "'");
   }
 
-  if (!ensure_pseudomain(as)) {
-    as.error("no .main found in hhas unit");
-  }
+  ensure_pseudomain(as);
 
   if (as.symbol_refs.size()) {
     for (auto& ent : as.symbol_refs) {
@@ -3729,9 +3704,6 @@ std::unique_ptr<UnitEmitter> assemble_string(
   ARRPROV_USE_RUNTIME_LOCATION();
   auto const bcSha1 = SHA1{string_sha1(folly::StringPiece(code, codeLen))};
   auto ue = std::make_unique<UnitEmitter>(sha1, bcSha1, nativeFuncs, false);
-  if (!SystemLib::s_inited) {
-    ue->m_mergeOnly = true;
-  }
   StringData* sd = makeStaticString(filename);
   ue->m_filepath = sd;
 

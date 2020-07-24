@@ -386,6 +386,10 @@ let to_absolute error =
   let msg_l = List.map msg_l (fun (p, s) -> (Pos.to_absolute p, s)) in
   (code, msg_l)
 
+let make_absolute_error code (x : (Pos.absolute * string) list) :
+    Pos.absolute error_ =
+  (code, x)
+
 let read_lines path = In_channel.read_lines path
 
 let line_margin (line_num : int option) col_width : string =
@@ -682,6 +686,9 @@ type position_group = {
 
 let n_extra_lines_hl = 2
 
+(* 'char' because this is intended to be a string of length 1 *)
+let out_of_bounds_char = "_"
+
 let background_highlighted = Tty.apply_color (Tty.Dim Tty.Default)
 
 let default_highlighted = Tty.apply_color (Tty.Normal Tty.Default)
@@ -689,15 +696,63 @@ let default_highlighted = Tty.apply_color (Tty.Normal Tty.Default)
 let line_num_highlighted line_num =
   background_highlighted (string_of_int line_num)
 
-let marked_messages (position_group : position_group) (line_num : int) =
-  let mml = position_group.messages in
-  List.filter mml ~f:(fun (_, (pos, _)) ->
-      let begin_line = Pos.line pos in
-      let end_line = Pos.end_line pos in
-      begin_line <= line_num && line_num <= end_line)
+(* Checks if a line (or line/col pair) is inside a position,
+   taking care to handle zero-width positions and positions
+   spanning multiple lines.
 
-let markers (position_group : position_group) (line_num : int) =
-  marked_messages position_group line_num |> List.map ~f:fst
+   Some examples:
+                  0         1         2
+                  01234567890123456789012
+     Example 1: 1 class Foo extends    {}
+
+     Example 2: 1 function }
+
+     Example 3: 1 function {
+                2   return 3;
+                3 }
+
+   In example 1, the error position is [1,21] - [1,21) with length 1;
+    column 21 of line 1 is within that error position.
+   In example 2, error position is [1,0] - [1,0) with length 0;
+    column 0 of line 1 is within that error position.
+   In Example 2, the error position is [1,10] - [2,0) with length 1;
+    column 10 of line 1 (but nothing in line 2) is within that error position.
+*)
+let pos_contains (pos : Pos.absolute) ?(col_num : int option) (line_num : int) :
+    bool =
+  let (first_line, first_col) = Pos.line_column pos in
+  let (last_line, last_col) = Pos.end_line_column pos in
+  let is_col_okay = Option.value_map col_num ~default:true in
+  let last_col =
+    match Pos.length pos with
+    | 0 -> last_col + 1
+    | _ -> last_col
+  in
+  (* A position's first line, first column, and last line
+     are all checked inclusively. The position's last column
+     is checked inclusively if the length of the position is zero,
+     and exclusively otherwise, in order to correctly highlight
+     zero-width positions. Line_num is 1-indexed, col_num is 0-indexed. *)
+  if first_line = last_line then
+    first_line = line_num
+    && is_col_okay (fun cn -> first_col <= cn && cn < last_col)
+  else if line_num = first_line then
+    is_col_okay (fun cn -> first_col <= cn)
+  else if line_num = last_line then
+    (* When only checking for a line's inclusion in a position
+      (i.e. when col_num = None), special care must be taken when
+      the line we're checking is the last line of the position:
+      since the end_column is exclusive, the end_column's value
+      must be non-zero signifying there is at least one character
+      on it to be highlighted. *)
+    last_col > 0 && is_col_okay (fun cn -> cn < last_col)
+  else
+    first_line < line_num && line_num < last_line
+
+(* Gets the list of marked messages associated with a line *)
+let marked_messages (position_group : position_group) (line_num : int) =
+  List.filter position_group.messages ~f:(fun (_, (pos, _)) ->
+      pos_contains pos line_num)
 
 (* Gets the string containing the markers that should be displayed next to this line,
    e.g. something like "[1,4,5]" *)
@@ -709,8 +764,8 @@ let markers_string
     else
       s
   in
-  let msl = markers position_group line_num in
-  match msl with
+  let markers = marked_messages position_group line_num |> List.map ~f:fst in
+  match markers with
   | [] -> ""
   | markers ->
     let ms =
@@ -720,8 +775,9 @@ let markers_string
     in
     let lbracket = add_color background_highlighted "[" in
     let rbracket = add_color background_highlighted "]" in
+    let comma = add_color background_highlighted "," in
     let prefix =
-      Printf.sprintf "%s%s%s" lbracket (String.concat ~sep:"," ms) rbracket
+      Printf.sprintf "%s%s%s" lbracket (String.concat ~sep:comma ms) rbracket
     in
     prefix
 
@@ -754,31 +810,45 @@ let line_margin_highlighted position_group line_num col_width_raw : string =
   prefix
 
 (* line_num is 1-based *)
-let line_highlighted position_group line_num line =
+let line_highlighted position_group ~(line_num : int) ~(line : string) =
   match marked_messages position_group line_num with
   | [] -> default_highlighted line
   | ms ->
     let get_markers_at_col col_num =
-      (* +1 because Pos.inside expects 1-indexed *)
       List.filter ms ~f:(fun (_, (pos, _)) ->
-          Pos.inside pos line_num (col_num + 1))
+          pos_contains pos ~col_num line_num)
       |> List.map ~f:fst
+    in
+    let color_column ms c =
+      (* For multiple marked messages for same position, highlight with
+          color of lower-numbered (i.e. more important) message *)
+      let sorted =
+        List.sort ms ~compare:(fun (m, _) (n, _) -> Int.compare m n)
+      in
+      let (_, color) = List.hd_exn sorted in
+      Tty.apply_color (Tty.Normal color) c
     in
     let highlighted_columns : string list =
       (* Not String.mapi because we don't want to return a char from each element *)
       List.mapi (String.to_list line) ~f:(fun i c ->
           match get_markers_at_col i with
           | [] -> default_highlighted (Char.to_string c)
-          | ms ->
-            (* For multiple marked messages for same position, highlight with
-               color of lower-numbered (i.e. more important) message *)
-            let sorted =
-              List.sort ms ~compare:(fun (m, _) (n, _) -> Int.compare m n)
-            in
-            let (_, color) = List.hd_exn sorted in
-            Tty.apply_color (Tty.Normal color) (Char.to_string c))
+          | ms -> color_column ms (Char.to_string c))
     in
-    String.concat highlighted_columns
+    (* Add extra column when position spans multiple lines and we're on the last line. Handles
+       the case where a position exists for after file but there is no character to highlight *)
+    let extra_column =
+      let (end_line, end_col) =
+        Pos.end_line_column position_group.aggregate_position
+      in
+      if line_num = end_line || (line_num + 1 = end_line && end_col = 0) then
+        match get_markers_at_col (String.length line) with
+        | [] -> ""
+        | ms -> color_column ms out_of_bounds_char
+      else
+        ""
+    in
+    String.concat highlighted_columns ^ extra_column
 
 (* Prefixes each line with its corresponding formatted margin *)
 let format_context_lines_highlighted
@@ -794,26 +864,44 @@ let format_context_lines_highlighted
     Printf.sprintf
       "%s %s"
       (line_margin_highlighted position_group line_num col_width)
-      (line_highlighted position_group line_num line)
+      (line_highlighted position_group ~line_num ~line)
   in
   let formatted_lines = List.map ~f:format_line lines in
   String.concat ~sep:"\n" formatted_lines
 
 (* Gets lines from a position, including additional before/after
-   lines from the current position; line numbers are 1-indexed. *)
+   lines from the current position; line numbers are 1-indexed.
+   If the position references one extra line than actually
+   in the file, we append a line with a sentinel character ('_')
+   so that we have a line to highlight later. *)
 let load_context_lines_highlighted ~before ~after ~(pos : Pos.absolute) :
     (int * string) list =
   let path = Pos.filename pos in
-  let start_line = Pos.line pos in
-  let end_line = Pos.end_line pos in
+  let (start_line, _start_col) = Pos.line_column pos in
+  let (end_line, end_col) = Pos.end_line_column pos in
   let lines = (try read_lines path with Sys_error _ -> []) in
   let numbered_lines = List.mapi lines ~f:(fun i l -> (i + 1, l)) in
-  List.filter numbered_lines (fun (i, _) ->
-      i >= start_line - before && i <= end_line + after)
+  let original_lines =
+    List.filter numbered_lines (fun (i, _) ->
+        i >= start_line - before && i <= end_line + after)
+  in
+  let additional_line =
+    let last_line =
+      match List.last original_lines with
+      | Some (last_line, _) -> last_line
+      | None -> 0
+    in
+    if end_line > last_line && end_col > 0 then
+      Some (end_line, out_of_bounds_char)
+    else
+      None
+  in
+  match additional_line with
+  | None -> original_lines
+  | Some additional -> original_lines @ [additional]
 
 let format_context_highlighted
     (position_group : position_group) (col_width : int) ~(is_first : bool) =
-  let pos = position_group.aggregate_position in
   let relative_path path =
     let cwd = Filename.concat (Sys.getcwd ()) "" in
     lstrip path cwd
@@ -822,14 +910,21 @@ let format_context_highlighted
     load_context_lines_highlighted
       ~before:n_extra_lines_hl
       ~after:n_extra_lines_hl
-      ~pos
+      ~pos:position_group.aggregate_position
   in
   let pretty_ctx =
     format_context_lines_highlighted ~position_group ~lines ~col_width
   in
   if is_first then
-    let filename = relative_path (Pos.filename pos) in
-    let (line, col) = Pos.line_column pos in
+    (* Main message is the one with the lowest-numbered marker *)
+    let (_, (main_pos, _)) =
+      List.sort
+        position_group.messages
+        ~compare:(fun ((mk1, _), _) ((mk2, _), _) -> Int.compare mk1 mk2)
+      |> List.hd_exn
+    in
+    let filename = relative_path (Pos.filename main_pos) in
+    let (line, col) = Pos.line_column main_pos in
     let dirname =
       let dn = Filename.dirname filename in
       if String.equal Filename.current_dir_name dn then
@@ -838,17 +933,14 @@ let format_context_highlighted
         background_highlighted (Filename.dirname filename ^ "/")
     in
     let filename = default_highlighted (Filename.basename filename) in
-    let filename_ppt = Printf.sprintf "%s%s" dirname filename in
-    let position_ppt =
-      Printf.sprintf ":%d:%d" line col |> background_highlighted
+    let pretty_filename = Printf.sprintf "%s%s" dirname filename in
+    let pretty_position =
+      Printf.sprintf ":%d:%d" line (col + 1) |> background_highlighted
     in
-    let line_info = Printf.sprintf "%s%s" filename_ppt position_ppt in
+    let line_info = Printf.sprintf "%s%s" pretty_filename pretty_position in
     line_info ^ "\n" ^ pretty_ctx
   else
     pretty_ctx
-
-let merge_abs_pos (pos1 : Pos.absolute) (pos2 : Pos.absolute) =
-  Pos.merge (Pos.to_relative pos1) (Pos.to_relative pos2) |> Pos.to_absolute
 
 (* The column width will be the length of the largest prefix before
    the " |", which is composed of the list of markers, a space, and
@@ -857,7 +949,7 @@ let merge_abs_pos (pos1 : Pos.absolute) (pos2 : Pos.absolute) =
    Returns the length of the raw (uncolored) prefix string.
 
    For example:
-    overlap_pos.php:4:10
+    overlap_pos.php:11:10
            8 |
            9 |
     [2]   10 | function returns_int(): int {
@@ -898,7 +990,10 @@ let col_width_for_highlighted (position_groups : position_group list) =
   let col_width = max_marker_prefix_length + 1 + largest_line_length in
   col_width
 
-(* Each list of position_groups in the returned list is from a different file *)
+(* Each list of position_groups in the returned list is from a different file.
+   The first position_group in the list will contain _at least_ the first (i.e. main)
+   message. The list of marked_messages in each position group is ordered by increasing
+   line number (so the main message isn't necessarily first). *)
 let position_groups_by_file marker_and_msgs : position_group list list =
   let msgs_by_file : marked_message list list =
     List.group marker_and_msgs ~break:(fun (_, msg1) (_, msg2) ->
@@ -931,7 +1026,7 @@ let position_groups_by_file marker_and_msgs : position_group list list =
              {
                aggregate_position =
                  List.map ~f:(fun (_, (pos, _)) -> pos) messages
-                 |> List.reduce_exn ~f:merge_abs_pos;
+                 |> List.reduce_exn ~f:Pos.merge;
                messages;
              }))
 
@@ -946,15 +1041,15 @@ let format_all_contexts_highlighted (marker_and_msgs : marked_message list) =
       (background_highlighted ":")
   in
   let contexts =
-    List.map position_groups (fun spnl ->
-        (* Each position_groups list (spnl) is for a single file, so separate each with ':' *)
+    List.map position_groups (fun pgl ->
+        (* Each position_groups list (pgl) is for a single file, so separate each with ':' *)
         let ctx_strs =
-          List.mapi spnl ~f:(fun i spn ->
-              format_context_highlighted spn col_width ~is_first:(i = 0))
+          List.mapi pgl ~f:(fun i pg ->
+              format_context_highlighted pg col_width ~is_first:(i = 0))
         in
         String.concat ~sep ctx_strs)
   in
-  String.concat ~sep:"\n" contexts ^ "\n\n"
+  String.concat ~sep:"\n\n" contexts ^ "\n\n"
 
 let single_marker_highlighted marker =
   let (n, color) = marker in
@@ -965,18 +1060,10 @@ let single_marker_highlighted marker =
 
 let format_claim_highlighted
     (error_code : error_code)
-    ?(marker : (error_code * Tty.raw_color) option)
+    (marker : error_code * Tty.raw_color)
     (msg : string) : string =
-  let suffix =
-    match marker with
-    | None -> ""
-    | Some marker -> single_marker_highlighted marker
-  in
-  let color =
-    match marker with
-    | None -> Tty.Default
-    | Some (_, color) -> color
-  in
+  let suffix = single_marker_highlighted marker in
+  let (_, color) = marker in
   let pretty_error_code =
     Tty.apply_color (Tty.Bold color) (error_code_to_string error_code)
   in
@@ -1010,7 +1097,7 @@ let make_marker n error_code : marker =
     if n <= 1 then
       claim_color
     else
-      let ix = (n - 1) mod List.length color_wheel in
+      let ix = (n - 2) mod List.length color_wheel in
       List.nth_exn color_wheel ix
   in
   (n, color)
@@ -1029,7 +1116,8 @@ let to_highlighted_string (error : Pos.absolute error_) : string =
   let (claim, reasons) =
     match marker_and_msgs with
     | (marker, (_, msg)) :: msgs ->
-      ( format_claim_highlighted error_code ~marker msg,
+      (* This very vitally assumes that the first message in the error is the main one *)
+      ( format_claim_highlighted error_code marker msg,
         List.map msgs format_reason_highlighted )
     | [] ->
       failwith "Impossible: an error always has non-empty list of messages"
@@ -2197,11 +2285,53 @@ let pu_invalid_access pos msg =
     pos
     ("Invalid Pocket Universe invocation" ^ msg)
 
+let pu_attribute_invalid pos =
+  add
+    (Typing.err_code Typing.PocketUniversesAttributes)
+    pos
+    "Invalid __Pu attribute"
+
+let pu_attribute_dup pos kind s =
+  let s = strip_ns s in
+  add
+    (Typing.err_code Typing.PocketUniversesAttributes)
+    pos
+    (sprintf "Duplicated %s '%s' in __Pu attribute" kind s)
+
+let pu_attribute_err pos kind class_name enum_name attr_name =
+  let class_name = strip_ns class_name in
+  add
+    (Typing.err_code Typing.PocketUniversesAttributes)
+    pos
+    (sprintf
+       "Class/Trait %s has a %s attribute '%s' for enumeration %s"
+       class_name
+       kind
+       attr_name
+       enum_name)
+
+let pu_attribute_suggestion pos class_name content =
+  let class_name = strip_ns class_name in
+  add
+    (Typing.err_code Typing.PocketUniversesAttributes)
+    pos
+    (sprintf
+       "Class/Trait %s should have the attribute:\n__Pu(%s)"
+       class_name
+       content)
+
+let pu_attribute_not_necessary pos class_name =
+  let class_name = strip_ns class_name in
+  add
+    (Typing.err_code Typing.PocketUniversesAttributes)
+    pos
+    (sprintf "Class/Trait %s does not need any __Pu attribute" class_name)
+
 let pu_reserved_syntax pos =
   add
     (Typing.err_code Typing.PocketUniversesReservedSyntax)
     pos
-    ( sprintf "This syntax is reserved for the Pocket Universes prototype.\n"
+    ( "This syntax is reserved for the Pocket Universes prototype.\n"
     ^ "It can only be used in the directories specified by the\n"
     ^ "  pocket_universe_enabled_paths = nowhere|everywhere|dir1,..,dirn\noption in .hhconfig"
     )
@@ -5533,6 +5663,14 @@ let redundant_covariant pos msg suggest =
     ^ ". Consider replacing uses of generic parameter with `"
     ^ suggest
     ^ "` or specifying <<__Explicit>> on the generic parameter" )
+
+let meth_caller_trait pos trait_name =
+  add
+    (Typing.err_code Typing.MethCallerTrait)
+    pos
+    ( strip_ns trait_name
+    ^ " is a trait which cannot be used with meth_caller. Use a class instead."
+    )
 
 (*****************************************************************************)
 (* Printing *)
