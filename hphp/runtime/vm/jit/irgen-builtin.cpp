@@ -1122,7 +1122,7 @@ SSATmp* opt_tag_provenance_here(IRGS& env, const ParamPrep& params) {
     return emit_noop();
   }
 
-  if (!result->type().maybe(TArrLike) && !result->type().maybe(TObj)) {
+  if (!result->type().maybe(TArrLike)) {
     return emit_noop();
   }
 
@@ -1604,16 +1604,22 @@ SSATmp* maybeCoerceValue(
     if (!val->type().maybe(allowedTy)) return bail();
 
     auto castW = [&] (SSATmp* val, bool isCls){
-      if (RuntimeOption::EvalStringHintNotices) {
+      if (RuntimeOption::EvalStringHintNotices && !isCls) {
         gen(
           env,
           RaiseNotice,
           cns(
             env,
-            makeStaticString(
-              isCls ? Strings::CLASS_TO_STRING_IMPLICIT
-                    : Strings::FUNC_TO_STRING_IMPLICIT
-            )
+            makeStaticString(Strings::FUNC_TO_STRING_IMPLICIT)
+          )
+        );
+      } else if (RuntimeOption::EvalClassStringHintNotices && isCls) {
+        gen(
+          env,
+          RaiseNotice,
+          cns(
+            env,
+            makeStaticString(Strings::CLASS_TO_STRING_IMPLICIT)
           )
         );
       }
@@ -2378,7 +2384,7 @@ void implDictKeysetIdx(IRGS& env,
                        bool is_dict,
                        SSATmp* loaded_collection_dict) {
   auto const def = topC(env, BCSPRelOffset{0});
-  auto const key = topC(env, BCSPRelOffset{1});
+  auto const key = convertClassKey(env, topC(env, BCSPRelOffset{1}));
   auto const stack_base = topC(env, BCSPRelOffset{2});
 
   auto const finish = [&](SSATmp* elem) {
@@ -2521,8 +2527,8 @@ void emitIdx(IRGS& env) {
 
 void emitAKExists(IRGS& env) {
   auto const arr = popC(env);
-  auto key = popC(env);
-  if (key->isA(TFunc) || key->isA(TCls)) PUNT(AKExists_func_cls_key);
+  auto key = convertClassKey(env, popC(env));
+  if (key->isA(TFunc)) PUNT(AKExists_func_key);
 
   auto throwBadKey = [&] {
     // TODO(T11019533): Fix the underlying issue with unreachable code rather
@@ -2940,10 +2946,6 @@ void emitMemoSetEager(IRGS& env, LocalRange keys) {
 //////////////////////////////////////////////////////////////////////
 
 void emitSilence(IRGS& env, Id localId, SilenceOp subop) {
-  // We can't generate direct StLoc and LdLocs in pseudomains (violates an IR
-  // invariant).
-  if (curFunc(env)->isPseudoMain()) PUNT(PseudoMain-Silence);
-
   switch (subop) {
   case SilenceOp::Start:
     // We assume that whatever is in the local is dead and doesn't need to be

@@ -88,7 +88,6 @@ struct RepoOptions {
   H(bool,           DisallowFuncPtrsInConstants,    false)            \
   E(bool,           EmitFuncPointers,               true)             \
   E(bool,           EmitInstMethPointers,           EmitFuncPointers) \
-  E(bool,           EmitClassPointers,              false)            \
   H(bool,           EnableXHPClassModifier,         false)            \
   H(bool,           DisableXHPElementMangling,      false)            \
   H(bool,           DisableArray,                   true)             \
@@ -731,7 +730,7 @@ struct RuntimeOption {
    *  1 - Raise Warning
    * >1 - Throw Exception
    */                                                                   \
-  F(uint32_t, ThrowOnNonExhaustiveSwitch, 0)                            \
+  F(uint32_t, ThrowOnNonExhaustiveSwitch, 1)                            \
   /* CheckReturnTypeHints:
      <2 - Raises E_WARNING if a return type hint fails.
      2 - Raises E_RECOVERABLE_ERROR if regular return type hint fails,
@@ -849,8 +848,6 @@ struct RuntimeOption {
   F(bool, TraceCommandLineRequest,     true)                            \
                                                                         \
   F(bool, JitDisabledByHphpd,          false)                           \
-  F(bool, JitPseudomain,               true)                            \
-  F(bool, JitPGOPseudomain,            false)                           \
   F(uint32_t, JitWarmupStatusBytes,    ((25 << 10) + 1))                \
   F(uint32_t, JitWarmupMaxCodeGenRate, 20000)                           \
   F(uint32_t, JitWarmupRateSeconds,    64)                              \
@@ -1141,9 +1138,14 @@ struct RuntimeOption {
   F(bool, IsExprEnableUnresolvedWarning, false)                         \
   /* Raise a notice if a Func type is passed to is_string */            \
   F(bool, IsStringNotices, false)                                       \
+  /* Raise a notice if a Class type is passed to is_string */           \
+  F(bool, ClassIsStringNotices, false)                                  \
   /* Raise a notice if a Func type is passed to function that expects a
      string */                                                          \
   F(bool, StringHintNotices, false)                                     \
+  /* Raise a notice if a Class type is passed to function that expects a
+     string */                                                          \
+  F(bool, ClassStringHintNotices, false)                                \
   /*  Raise a notice if a ClsMeth type is passed to is_vec/is_array */  \
   F(bool, IsVecNotices, false)                                          \
   /*  Raise a notice if a ClsMeth type is passed to a function that
@@ -1164,6 +1166,11 @@ struct RuntimeOption {
   /* Raise warning when class pointers are used as strings. */          \
   F(bool, RaiseClassConversionWarning, false)                           \
   F(bool, EmitClsMethPointers, false)                                   \
+  /* EmitClassPointers:
+   * 0 => convert Foo::class to string "Foo"
+   * 1 => convert Foo::class to class pointer
+   * 2 => convert Foo::class to lazy class */                           \
+  F(uint16_t, EmitClassPointers, 0)                                     \
   /* false to skip type refinement for ClsMeth type at HHBBC. */        \
   F(bool, IsCompatibleClsMethType, false)                               \
   /* Raise warning if a ClsMeth type is compared to other types. */     \
@@ -1308,7 +1315,7 @@ struct RuntimeOption {
   F(bool, EnablePerFileCoverage, false)                                 \
   /* Should we use the autoload map from the repo */                    \
   F(bool, UseRepoAutoloadMap, true)                                     \
-  /* */
+  F(bool, LogOnIsArrayFunction, false)                                  \
 
 private:
   using string = std::string;

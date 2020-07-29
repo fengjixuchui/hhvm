@@ -5,15 +5,10 @@
 // LICENSE file in the "hack" directory of this source tree.
 
 use ocaml::core::memory;
-use ocaml::core::mlvalues::{Color, Size, Tag, Value};
+use ocaml::core::mlvalues::{Size, Tag, Value};
 
 extern "C" {
     fn ocamlpool_reserve_block(tag: Tag, size: Size) -> Value;
-    fn ocamlpool_reserve_string(size: Size) -> Value;
-    static ocamlpool_limit: *mut Value;
-    static ocamlpool_bound: *mut Value;
-    static mut ocamlpool_cursor: *mut Value;
-    static ocamlpool_color: Color;
     static mut ocamlpool_generation: usize;
 }
 
@@ -22,23 +17,11 @@ extern "C" {
 // - between ocamlpool_enter / ocamlpool_leave invocations
 
 pub unsafe fn reserve_block(tag: Tag, size: Size) -> Value {
-    let result = ocamlpool_cursor.offset(-(size as isize) - 1);
-    if result < ocamlpool_limit || result >= ocamlpool_bound {
-        return ocamlpool_reserve_block(tag, size);
-    }
-    ocamlpool_cursor = result;
-    *result = (tag as usize) | ocamlpool_color | (size << 10);
-    return result.offset(1) as Value;
+    ocamlpool_reserve_block(tag, size)
 }
 
 pub unsafe fn caml_set_field(obj: Value, index: usize, val: Value) {
-    if (val & 1 == 1)
-        || ((val as *const Value) >= ocamlpool_limit && (val as *const Value) <= ocamlpool_bound)
-    {
-        *(obj as *mut Value).offset(index as isize) = val;
-    } else {
-        memory::caml_initialize((obj as *mut Value).offset(index as isize), val);
-    }
+    memory::caml_initialize((obj as *mut Value).add(index), val);
 }
 
 // Not implementing Ocamlvalue for integer types, because Value itself is an integer too and it makes
@@ -51,17 +34,8 @@ pub fn u8_to_ocaml(x: u8) -> Value {
     usize_to_ocaml(x as usize)
 }
 
-pub fn str_to_ocaml(s: &[u8]) -> Value {
-    unsafe {
-        let value = ocamlpool_reserve_string(s.len());
-        let mut str_ = ocaml::Str::from(ocaml::Value::new(value));
-        str_.data_mut().copy_from_slice(s);
-        value
-    }
-}
-
 pub fn ocaml_to_isize(i: Value) -> isize {
-    ((i >> 1) | (std::isize::MIN as usize & i)) as isize
+    (i as isize) >> 1
 }
 
 pub unsafe fn block_field(block: &ocaml::Value, field: usize) -> ocaml::Value {

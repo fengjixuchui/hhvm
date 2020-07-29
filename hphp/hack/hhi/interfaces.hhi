@@ -40,7 +40,6 @@ namespace HH {
   KeyedTraversable::class,
   \ResourceBundle::class,
   \SplHeap::class,
-  \SplObjectStorage::class,
   \HH\Rx\Traversable::class
 )>>
 interface Traversable<+Tv> {}
@@ -291,13 +290,6 @@ interface Iterable<+Tv> extends \IteratorAggregate<Tv> {
    * @return - An `Iterator` that allows you to traverse the current `Iterable`.
    */
   public function getIterator(): Iterator<Tv>;
-  /**
-   * Returns an `array` converted from the current `Iterable`.
-   *
-   * @return - an array converted from the current `Iterable`.
-   */
-  <<__PHPStdLib>>
-  public function toArray(): array;
   /**
    * Returns an `array` with the values from the current `Iterable`.
    *

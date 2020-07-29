@@ -104,7 +104,9 @@ ArrayData* SetArray::MakeReserveSet(uint32_t size) {
 ArrayData* SetArray::MakeSet(uint32_t size, const TypedValue* values) {
   for (uint32_t i = 0; i < size; ++i) {
     auto& tv = values[i];
-    if (!isIntType(tv.m_type) && !isStringType(tv.m_type)) {
+    if (!isIntType(tv.m_type) &&
+        !isStringType(tv.m_type) &&
+        !isClassType(tv.m_type))  {
       throwInvalidArrayKeyException(&tv, ArrayData::CreateKeyset());
     }
   }
@@ -117,9 +119,14 @@ ArrayData* SetArray::MakeSet(uint32_t size, const TypedValue* values) {
      */
     if (isIntType(tv.m_type)) {
       ad->insert(tv.m_data.num);
-    } else {
+    } else if (isStringType(tv.m_type)) {
       ad->insert(tv.m_data.pstr);
       decRefStr(tv.m_data.pstr); // FIXME
+    } else {
+      assertx(isClassType(tv.m_type));
+      auto const keyStr =
+        const_cast<StringData*>(classToStringHelper(tv.m_data.pclass));
+      ad->insert(keyStr);
     }
   }
   return ad;
@@ -661,7 +668,7 @@ ArrayData* SetArray::AppendImpl(ArrayData* ad, TypedValue v, bool copy) {
 }
 
 ArrayData* SetArray::Append(ArrayData* ad, TypedValue v) {
-  return AppendImpl(ad, v, ad->cowCheck());
+  return AppendImpl(ad, tvClassToString(v), ad->cowCheck());
 }
 
 ArrayData* SetArray::Merge(ArrayData*, const ArrayData*) {
@@ -766,20 +773,15 @@ void SetArray::OnSetEvalScalar(ArrayData* ad) {
   }
 }
 
-template <typename Init>
-ALWAYS_INLINE
-ArrayData* SetArray::ToArrayImpl(ArrayData* ad, bool toDArray) {
-  auto a = asSet(ad);
-  auto size = a->size();
+ArrayData* SetArray::ToDArrayImpl(const SetArray* ad) {
+  auto const size = ad->size();
+  if (!size) return ArrayData::CreateDArray();
+  DArrayInit init{size};
 
-  if (!size) return toDArray ? ArrayData::CreateDArray() : ArrayData::Create();
-
-  Init init{size};
-
-  auto const elms = a->data();
-  auto const used = a->m_used;
+  auto const elms = ad->data();
+  auto const used = ad->m_used;
   for (uint32_t i = 0; i < used; ++i) {
-    auto& elm = elms[i];
+    auto const& elm = elms[i];
     if (UNLIKELY(elm.isTombstone())) continue;
     if (elm.hasIntKey()) {
       init.set(elm.intKey(), tvAsCVarRef(&elm.tv));
@@ -788,20 +790,14 @@ ArrayData* SetArray::ToArrayImpl(ArrayData* ad, bool toDArray) {
     }
   }
 
-  auto out = init.create();
+  auto const out = init.create();
   assertx(MixedArray::asMixed(out));
-  return out;
-}
-
-ArrayData* SetArray::ToPHPArray(ArrayData* ad, bool) {
-  auto out = ToArrayImpl<MixedArrayInit>(ad, false);
-  assertx(out->isNotDVArray());
   return out;
 }
 
 ArrayData* SetArray::ToDArray(ArrayData* ad, bool copy) {
   if (RuntimeOption::EvalHackArrDVArrs) return ToDict(ad, copy);
-  auto out = ToArrayImpl<DArrayInit>(ad, true);
+  auto out = ToDArrayImpl(SetArray::asSet(ad));
   assertx(out->isDArray());
   return out;
 }

@@ -841,6 +841,8 @@ val cannot_declare_constant :
 val ambiguous_inheritance :
   Pos.t -> string -> string -> error -> typing_error_callback -> unit
 
+val duplicate_interface : Pos.t -> string -> Pos.t list -> unit
+
 val cyclic_typeconst : Pos.t -> string list -> unit
 
 val abstract_concrete_override :
@@ -1386,7 +1388,7 @@ val php_lambda_disallowed : Pos.t -> unit
 
 val static_meth_with_class_reified_generic : Pos.t -> Pos.t -> unit
 
-val exception_occurred : Pos.t -> unit
+val exception_occurred : Pos.t -> Exception.t -> unit
 
 val redundant_covariant : Pos.t -> string -> string -> unit
 

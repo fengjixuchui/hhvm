@@ -749,10 +749,15 @@ let pos_contains (pos : Pos.absolute) ?(col_num : int option) (line_num : int) :
   else
     first_line < line_num && line_num < last_line
 
-(* Gets the list of marked messages associated with a line *)
-let marked_messages (position_group : position_group) (line_num : int) =
+(* Gets the list of unique marker/position tuples associated with a line. *)
+let markers_and_positions_for_line
+    (position_group : position_group) (line_num : int) :
+    (marker * Pos.absolute) sexp_list =
   List.filter position_group.messages ~f:(fun (_, (pos, _)) ->
       pos_contains pos line_num)
+  |> List.dedup_and_sort ~compare:(fun ((m, _), _) ((n, _), _) ->
+         Int.compare m n)
+  |> List.map ~f:(fun (marker, (pos, _)) -> (marker, pos))
 
 (* Gets the string containing the markers that should be displayed next to this line,
    e.g. something like "[1,4,5]" *)
@@ -764,7 +769,9 @@ let markers_string
     else
       s
   in
-  let markers = marked_messages position_group line_num |> List.map ~f:fst in
+  let markers =
+    markers_and_positions_for_line position_group line_num |> List.map ~f:fst
+  in
   match markers with
   | [] -> ""
   | markers ->
@@ -810,56 +817,56 @@ let line_margin_highlighted position_group line_num col_width_raw : string =
   prefix
 
 (* line_num is 1-based *)
-let line_highlighted position_group ~(line_num : int) ~(line : string) =
-  match marked_messages position_group line_num with
-  | [] -> default_highlighted line
-  | ms ->
-    let get_markers_at_col col_num =
-      List.filter ms ~f:(fun (_, (pos, _)) ->
-          pos_contains pos ~col_num line_num)
-      |> List.map ~f:fst
-    in
-    let color_column ms c =
-      (* For multiple marked messages for same position, highlight with
-          color of lower-numbered (i.e. more important) message *)
-      let sorted =
-        List.sort ms ~compare:(fun (m, _) (n, _) -> Int.compare m n)
+let line_highlighted position_group ~(line_num : int) ~(line : string option) =
+  match line with
+  | None -> Tty.apply_color (Tty.Dim Tty.Default) "No source found"
+  | Some line ->
+    (match markers_and_positions_for_line position_group line_num with
+    | [] -> default_highlighted line
+    | ms ->
+      let get_markers_at_col col_num =
+        List.filter ms ~f:(fun (_, pos) -> pos_contains pos ~col_num line_num)
       in
-      let (_, color) = List.hd_exn sorted in
-      Tty.apply_color (Tty.Normal color) c
-    in
-    let highlighted_columns : string list =
-      (* Not String.mapi because we don't want to return a char from each element *)
-      List.mapi (String.to_list line) ~f:(fun i c ->
-          match get_markers_at_col i with
-          | [] -> default_highlighted (Char.to_string c)
-          | ms -> color_column ms (Char.to_string c))
-    in
-    (* Add extra column when position spans multiple lines and we're on the last line. Handles
-       the case where a position exists for after file but there is no character to highlight *)
-    let extra_column =
-      let (end_line, end_col) =
-        Pos.end_line_column position_group.aggregate_position
+      let color_column ms c =
+        (* Prefer shorter smaller positions so the boundaries between overlapping
+          positions are visible. Take the lowest-number (presumably more important)
+          to break ties. *)
+        let ((_, color), _) =
+          List.stable_sort ms ~compare:(fun ((m1, _), p1) ((m2, _), p2) ->
+              match Int.compare (Pos.length p1) (Pos.length p2) with
+              | 0 -> Int.compare m1 m2
+              | v -> v)
+          |> List.hd_exn
+        in
+        Tty.apply_color (Tty.Normal color) c
       in
-      if line_num = end_line || (line_num + 1 = end_line && end_col = 0) then
-        match get_markers_at_col (String.length line) with
-        | [] -> ""
-        | ms -> color_column ms out_of_bounds_char
-      else
-        ""
-    in
-    String.concat highlighted_columns ^ extra_column
+      let highlighted_columns : string list =
+        (* Not String.mapi because we don't want to return a char from each element *)
+        List.mapi (String.to_list line) ~f:(fun i c ->
+            match get_markers_at_col i with
+            | [] -> default_highlighted (Char.to_string c)
+            | ms -> color_column ms (Char.to_string c))
+      in
+      (* Add extra column when position spans multiple lines and we're on the last line. Handles
+        the case where a position exists for after file but there is no character to highlight *)
+      let extra_column =
+        let (end_line, end_col) =
+          Pos.end_line_column position_group.aggregate_position
+        in
+        if line_num = end_line || (line_num + 1 = end_line && end_col = 0) then
+          match get_markers_at_col (String.length line) with
+          | [] -> ""
+          | ms -> color_column ms out_of_bounds_char
+        else
+          ""
+      in
+      String.concat highlighted_columns ^ extra_column)
 
 (* Prefixes each line with its corresponding formatted margin *)
 let format_context_lines_highlighted
     ~(position_group : position_group)
-    ~(lines : (int * string) list)
+    ~(lines : (int * string option) list)
     ~(col_width : int) : string =
-  let lines =
-    match lines with
-    | [] -> [(1, "No source found")]
-    | ls -> ls
-  in
   let format_line (line_num, line) =
     Printf.sprintf
       "%s %s"
@@ -874,31 +881,37 @@ let format_context_lines_highlighted
    If the position references one extra line than actually
    in the file, we append a line with a sentinel character ('_')
    so that we have a line to highlight later. *)
-let load_context_lines_highlighted ~before ~after ~(pos : Pos.absolute) :
-    (int * string) list =
+let load_context_lines_for_highlighted ~before ~after ~(pos : Pos.absolute) :
+    (int * string option) list =
   let path = Pos.filename pos in
   let (start_line, _start_col) = Pos.line_column pos in
   let (end_line, end_col) = Pos.end_line_column pos in
   let lines = (try read_lines path with Sys_error _ -> []) in
-  let numbered_lines = List.mapi lines ~f:(fun i l -> (i + 1, l)) in
-  let original_lines =
-    List.filter numbered_lines (fun (i, _) ->
-        i >= start_line - before && i <= end_line + after)
-  in
-  let additional_line =
-    let last_line =
-      match List.last original_lines with
-      | Some (last_line, _) -> last_line
-      | None -> 0
+  match lines with
+  | [] ->
+    List.range ~start:`inclusive ~stop:`inclusive start_line end_line
+    |> List.map ~f:(fun line_num -> (line_num, None))
+  | lines ->
+    let numbered_lines = List.mapi lines ~f:(fun i l -> (i + 1, Some l)) in
+    let original_lines =
+      List.filter numbered_lines (fun (i, _) ->
+          i >= start_line - before && i <= end_line + after)
     in
-    if end_line > last_line && end_col > 0 then
-      Some (end_line, out_of_bounds_char)
-    else
-      None
-  in
-  match additional_line with
-  | None -> original_lines
-  | Some additional -> original_lines @ [additional]
+    let additional_line =
+      let last_line =
+        match List.last original_lines with
+        | Some (last_line, _) -> last_line
+        | None -> 0
+      in
+      if end_line > last_line && end_col > 0 then
+        Some (end_line, out_of_bounds_char)
+      else
+        None
+    in
+    (match additional_line with
+    | None -> original_lines
+    | Some (line_num, additional) ->
+      original_lines @ [(line_num, Some additional)])
 
 let format_context_highlighted
     (position_group : position_group) (col_width : int) ~(is_first : bool) =
@@ -907,7 +920,7 @@ let format_context_highlighted
     lstrip path cwd
   in
   let lines =
-    load_context_lines_highlighted
+    load_context_lines_for_highlighted
       ~before:n_extra_lines_hl
       ~after:n_extra_lines_hl
       ~pos:position_group.aggregate_position
@@ -1102,12 +1115,31 @@ let make_marker n error_code : marker =
   in
   (n, color)
 
+let marked_messages (error_code : error_code) (msgl : Pos.absolute message list)
+    : marked_message list =
+  (* If any position (meaning exact location and size) already has a marker and color,
+     use that position's marker and color instead of creating a new one. *)
+  List.folding_map
+    msgl
+    ~init:(1, [])
+    ~f:(fun (next_marker_n, existing_markers) msg ->
+      let (next_marker_n, existing_markers, marker) =
+        let curr_msg_pos = fst msg in
+        match
+          List.find existing_markers ~f:(fun (_, pos) ->
+              Pos.equal_absolute curr_msg_pos pos)
+        with
+        | None ->
+          let marker = make_marker next_marker_n error_code in
+          (next_marker_n + 1, (marker, curr_msg_pos) :: existing_markers, marker)
+        | Some (marker, _) -> (next_marker_n, existing_markers, marker)
+      in
+      ((next_marker_n, existing_markers), (marker, msg)))
+
 let to_highlighted_string (error : Pos.absolute error_) : string =
   let (error_code, msgl) = (get_code error, to_list error |> group_by_file) in
   let buf = Buffer.create 50 in
-  let marker_and_msgs =
-    List.mapi msgl ~f:(fun i m -> (make_marker (i + 1) error_code, m))
-  in
+  let marker_and_msgs = marked_messages error_code msgl in
 
   (* Typing[4110] Invalid return type [1]   <claim>
       -> Expected int [2]                   <reasons>
@@ -5646,7 +5678,13 @@ let invalid_arraykey_constraint pos t =
     ^ t
     ^ ", which cannot be used as an arraykey (string | int)" )
 
-let exception_occurred pos =
+let exception_occurred pos e =
+  let pos_str = pos |> Pos.to_absolute |> Pos.string in
+  HackEventLogger.type_check_exn_bug ~path:(Pos.filename pos) ~pos:pos_str ~e;
+  Hh_logger.error
+    "Exception while typechecking at position %s\n%s"
+    pos_str
+    (Exception.to_string e);
   add
     (Typing.err_code Typing.ExceptionOccurred)
     pos
@@ -5671,6 +5709,15 @@ let meth_caller_trait pos trait_name =
     ( strip_ns trait_name
     ^ " is a trait which cannot be used with meth_caller. Use a class instead."
     )
+
+let duplicate_interface pos name others =
+  add_list
+    (Typing.err_code Typing.DuplicateInterface)
+    ( ( pos,
+        Printf.sprintf
+          "Interface %s is used more than once in this declaration."
+          (strip_ns name) )
+    :: List.map others (fun pos -> (pos, "Here is another occurrence")) )
 
 (*****************************************************************************)
 (* Printing *)

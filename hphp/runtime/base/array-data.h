@@ -496,27 +496,10 @@ public:
   Variant end();
 
   /*
-   * Rewind or advance the array's internal cursor, then return the value it
-   * points to.
-   *
-   * Return false if the cursor is or becomes invalid.
-   */
-  Variant prev();
-  Variant next();
-
-  /*
    * Like getValue(), except if `pos' is specifically the canonical invalid
    * position (i.e., iter_end()), return false.
    */
   Variant value(int32_t pos) const;
-
-  /*
-   * Return a 4-element array with keys 0 and "key" set to key() and keys 1 and
-   * "value" set to current(), then advance the array's internal cursor.
-   *
-   * If the cursor is invalid, return false.
-   */
-  Variant each();
 
   /*
    * Is the array's internal cursor pointing to...
@@ -773,7 +756,6 @@ extern std::aligned_storage<sizeof(ArrayData), 16>::type s_theEmptyVec;
 extern std::aligned_storage<sizeof(ArrayData), 16>::type s_theEmptyVArray;
 extern std::aligned_storage<kEmptyMixedArraySize, 16>::type s_theEmptyDictArray;
 extern std::aligned_storage<kEmptyMixedArraySize, 16>::type s_theEmptyDArray;
-extern std::aligned_storage<kEmptyMixedArraySize, 16>::type s_theEmptyArray;
 extern std::aligned_storage<kEmptySetArraySize, 16>::type s_theEmptySetArray;
 
 /*
@@ -854,7 +836,6 @@ struct ArrayFunctions {
   ArrayData* (*prepend[NK])(ArrayData*, TypedValue v);
   ArrayData* (*renumber[NK])(ArrayData*);
   void (*onSetEvalScalar[NK])(ArrayData*);
-  ArrayData* (*toPHPArray[NK])(ArrayData*, bool);
   ArrayData* (*toDict[NK])(ArrayData*, bool);
   ArrayData* (*toVec[NK])(ArrayData*, bool);
   ArrayData* (*toKeyset[NK])(ArrayData*, bool);

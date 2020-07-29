@@ -329,14 +329,6 @@ public:
    */
   using FuncRange = MergeInfo::FuncRange;
   using MutableFuncRange = MergeInfo::MutableFuncRange;
-
-  /*
-   * Cache for pseudomains for this unit, keyed by Class context.
-   */
-  using PseudoMainCacheMap = hphp_hash_map<
-    const Class*, Func*, pointer_hash<Class>
-  >;
-
   using PreClassPtrVec = VMCompactVector<PreClassPtr>;
   using TypeAliasVec = VMCompactVector<PreTypeAlias>;
   using ConstantVec = VMFixedVector<Constant>;
@@ -551,14 +543,6 @@ public:
   folly::Range<const PreClassPtr*> preclasses() const;
   folly::Range<PreRecordDescPtr*> prerecords();
   folly::Range<const PreRecordDescPtr*> prerecords() const;
-
-  /*
-   * Get a pseudomain for the Unit with the context class `cls'.
-   *
-   * We clone the toplevel pseudomain for each context class and cache the
-   * results in m_pseudoMainCache.
-   */
-  Func* getMain(Class* cls, bool hasThis) const;
 
   // Return the cached EntryPoint
   Func* getCachedEntryPoint() const;
@@ -992,7 +976,6 @@ private:
   SHA1 m_sha1;
   SHA1 m_bcSha1;
   VMFixedVector<const ArrayData*> m_arrays;
-  mutable PseudoMainCacheMap* m_pseudoMainCache{nullptr};
   mutable LockFreePtrWrapper<VMCompactVector<LineInfo>> m_lineMap;
   UserAttributeMap m_metaData;
   UserAttributeMap m_fileAttributes;

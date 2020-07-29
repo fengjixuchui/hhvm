@@ -1,5 +1,4 @@
 Decls:
-  class \E: { policied_props = [] }
   class \Exception: { policied_props = [] }
   class \HH\vec: { policied_props = [] }
   class \X: { policied_props = [valuex:PRIVATE] }
@@ -10,8 +9,9 @@ Decls:
   
 Analyzing __construct:
 * pc: pc
-* This: \X<\X, lump, valuex=<PRIVATE>>
+* This: \X<\X, lump'1, valuex=<PRIVATE>>
 * Return: <ret>
+* Exception: \Exception<\Exception, lump>
 * Params:
   lvars: { $valuex -> <$valuex> }
 * Final environment:
@@ -23,8 +23,9 @@ Constraints:
 
 Analyzing __construct:
 * pc: pc
-* This: \Y<\Y, lump, valuey=<PUBLIC>>
+* This: \Y<\Y, lump'1, valuey=<PUBLIC>>
 * Return: <ret>
+* Exception: \Exception<\Exception, lump>
 * Params:
   lvars: { $valuey -> <$valuey> }
 * Final environment:
@@ -38,22 +39,23 @@ Analyzing \f:
 * pc: pc
 * This: None
 * Return: <ret>
+* Exception: \Exception<\Exception, lump>
 * Params:
   lvars:
-    { $e -> \E<\E, lump'2>;
-      $x -> \X<\X, lump, valuex=<PRIVATE>>;
-      $y -> \Y<\Y, lump'1, valuey=<PUBLIC>> }
+    { $e -> \Exception<\Exception'1, lump'3>;
+      $x -> \X<\X, lump'1, valuex=<PRIVATE>>;
+      $y -> \Y<\Y, lump'2, valuey=<PUBLIC>> }
 * Final environment:
   Deps: {}
   Locals:
     lvars:
-      { $e -> \E<\E, lump'2>;
-        $x -> \X<\X, lump, valuex=<PRIVATE>>;
-        $y -> \Y<\Y, lump'1, valuey=<PUBLIC>> }
+      { $e -> \Exception<\Exception'1, lump'3>;
+        $x -> \X<\X, lump'1, valuex=<PRIVATE>>;
+        $y -> \Y<\Y, lump'2, valuey=<PUBLIC>> }
     pc: .valuex
 Constraints:
-  [.valuex = PRIVATE, \X < .valuex, \Y = PUBLIC, PUBLIC = PUBLIC,
-   .valuex = PUBLIC, pc = PUBLIC]
+  [.valuex = PRIVATE, \X < .valuex, lump'3 = lump, \Exception'1 < \Exception,
+   \Y = PUBLIC, PUBLIC = PUBLIC, .valuex = PUBLIC, pc = PUBLIC]
 
 Flow constraints for \X#__construct:
   
@@ -69,8 +71,8 @@ Flow constraints for \f:
   
   Simplified: PRIVATE = PUBLIC
   Raw:
-  [.valuex = PRIVATE, \X < .valuex, \Y = PUBLIC, PUBLIC = PUBLIC,
-   .valuex = PUBLIC, pc = PUBLIC]
+  [.valuex = PRIVATE, \X < .valuex, lump'3 = lump, \Exception'1 < \Exception,
+   \Y = PUBLIC, PUBLIC = PUBLIC, .valuex = PUBLIC, pc = PUBLIC]
 
 There are privacy policy errors in \f:
   Data with policy PRIVATE appears in context PUBLIC.

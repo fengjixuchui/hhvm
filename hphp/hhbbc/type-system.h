@@ -405,6 +405,11 @@ enum trep : uint64_t {
   BOptStrLike    = BInitNull | BStrLike,
   BOptUncStrLike = BInitNull | BUncStrLike,
 
+  BUncArrKeyCompat = BUncArrKey | BCls | BFunc,
+  BArrKeyCompat    = BArrKey | BCls | BFunc,
+  BOptUncArrKeyCompat = BInitNull | BUncArrKeyCompat,
+  BOptArrKeyCompat = BInitNull | BArrKeyCompat,
+
   BVArrCompat   = BClsMeth | BVArr,
   BVArrCompatSA = BClsMeth | BSVArr,
 
@@ -423,8 +428,7 @@ enum trep : uint64_t {
   BOptArrCompat   = BInitNull | BArrCompat,
   BOptArrCompatSA = BInitNull | BArrCompatSA,
 
-  BInitPrim = BInitNull | BBool | BNum | BFunc | BCls | BFuncS |
-              (use_lowptr ? BClsMeth : 0),
+  BInitPrim = BInitNull | BBool | BNum,
 
   BSArrLikeE = BSArrE | BSVecE | BSDictE | BSKeysetE,
   BCArrLikeE = BCArrE | BCVecE | BCDictE | BCKeysetE,
@@ -453,7 +457,8 @@ enum trep : uint64_t {
   BOptArrLikeCompatSA = BInitNull | BArrLikeCompatSA,
 
   BPrim     = BInitPrim | BUninit,
-  BInitUnc  = BInitPrim | BSStr | BSArr | BSVec | BSDict | BSKeyset,
+  BInitUnc  = BInitPrim | BSStr | BSArr | BSVec | BSDict | BSKeyset |
+              BCls | BFunc | BFuncS | (use_lowptr ? BClsMeth : 0),
   BUnc      = BInitUnc | BUninit,
   BInitCell = BInitNull | BBool | BInt | BDbl | BStr | BArr | BObj | BRes |
               BVec | BDict | BKeyset | BFunc | BFuncS | BCls | BClsMeth |
@@ -1067,6 +1072,8 @@ X(FuncOrCls)                                    \
 X(ClsMethLike)                                  \
 X(UncStrLike)                                   \
 X(StrLike)                                      \
+X(UncArrKeyCompat)                              \
+X(ArrKeyCompat)                                 \
 X(ArrCompatSA)                                  \
 X(ArrCompat)                                    \
 X(VArrCompatSA)                                 \
@@ -1142,6 +1149,8 @@ X(OptFuncOrCls)                                 \
 X(OptClsMethLike)                               \
 X(OptUncStrLike)                                \
 X(OptStrLike)                                   \
+X(OptUncArrKeyCompat)                           \
+X(OptArrKeyCompat)                              \
 X(OptArrCompatSA)                               \
 X(OptArrCompat)                                 \
 X(OptVArrCompatSA)                              \
@@ -1298,7 +1307,9 @@ Type subRecord(res::Record);
  */
 Type arr_packed(std::vector<Type> v);
 Type arr_packed_varray(std::vector<Type> v, ProvTag = ProvTag::Top);
+Type arr_packed_darray(std::vector<Type> v);
 Type sarr_packed(std::vector<Type> v);
+Type sarr_packed_darray(std::vector<Type> v);
 
 /*
  * Packed array types of unknown size.
@@ -1307,6 +1318,7 @@ Type sarr_packed(std::vector<Type> v);
  */
 Type arr_packedn(Type);
 Type sarr_packedn(Type);
+Type sarr_packedn_darray(Type);
 
 /*
  * Struct-like arrays.
@@ -1316,12 +1328,15 @@ Type sarr_packedn(Type);
 Type arr_map(MapElems m, Type optKey = TBottom, Type optVal = TBottom);
 Type arr_map_darray(MapElems m, ProvTag = ProvTag::Top);
 Type sarr_map(MapElems m, Type optKey = TBottom, Type optVal = TBottom);
+Type sarr_map_darray(MapElems m, Type optKey = TBottom, Type optVal = TBottom);
 
 /*
  * Map-like arrays.
  */
 Type arr_mapn(Type k, Type v);
+Type arr_mapn_darray(Type k, Type v);
 Type sarr_mapn(Type k, Type v);
+Type sarr_mapn_darray(Type k, Type v);
 
 /*
  * vec types with known size.

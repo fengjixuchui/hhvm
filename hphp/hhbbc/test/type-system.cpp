@@ -69,11 +69,6 @@ const StaticString s_Awaitable("HH\\Awaitable");
 void add_test_unit(php::Program& program) {
   assert(SystemLib::s_inited);
   std::string const hhas = R"(
-    .main {
-      Int 1
-      RetC
-    }
-
     # Technically this should be provided by systemlib, but it's the
     # only one we have to make sure the type system can see for unit
     # test purposes, so we can just define it here.  We don't need to
@@ -331,7 +326,9 @@ auto const optionals = folly::lazy([] {
     TOptDbl,
     TOptNum,
     TOptUncArrKey,
+    TOptUncArrKeyCompat,
     TOptArrKey,
+    TOptArrKeyCompat,
     TOptSStr,
     TOptStr,
     TOptSPArrE,
@@ -422,7 +419,9 @@ auto const non_opt_unions = folly::lazy([] {
     TInitUnc,
     TUnc,
     TUncArrKey,
+    TUncArrKeyCompat,
     TArrKey,
+    TArrKeyCompat,
     TArrCompat,
     TArrCompatSA,
     TVArrCompat,
@@ -539,7 +538,6 @@ TEST(Type, Prims) {
 TEST(Type, Relations) {
   auto const program = make_test_program();
   Index index { program.get() };
-
   // couldBe is symmetric and reflexive
   for (auto& t1 : all_with_waithandles(index)) {
     for (auto& t2 : all_with_waithandles(index)) {
@@ -606,11 +604,9 @@ TEST(Type, Relations) {
       }
     }
   }
-
   for (auto const& t1 : all_with_waithandles(index)) {
     for (auto const& t2 : all_with_waithandles(index)) {
       EXPECT_EQ(intersection_of(t1, t2), intersection_of(t2, t1));
-
       if (t1.subtypeOf(t2)) {
         EXPECT_EQ(intersection_of(t1, t2), t1);
       } else if (t2.subtypeOf(t1)) {
@@ -650,10 +646,6 @@ TEST(Type, Prim) {
     { TDbl,      TInitPrim },
     { dval(0.0), TInitPrim },
     { ival(0),   TInitPrim },
-    { TFunc,     TInitPrim },
-    { TFuncS,    TInitPrim },
-    { TCls,      TInitPrim },
-    { TFuncOrCls, TInitPrim },
   };
 
   const std::initializer_list<std::pair<Type, Type>> subtype_false{
@@ -680,6 +672,10 @@ TEST(Type, Prim) {
     { TArrCompat, TPrim },
     { TStrLike, TPrim },
     { TFuncLike, TPrim },
+    { TCls, TInitPrim },
+    { TFunc,     TInitPrim },
+    { TFuncS,    TInitPrim },
+    { TFuncOrCls, TInitPrim },
   };
 
   const std::initializer_list<std::pair<Type, Type>> couldbe_true{
@@ -692,12 +688,6 @@ TEST(Type, Prim) {
     { TPrim, TOptObj },
     { TPrim, TOptRecord },
     { TPrim, TOptFalse },
-    { TPrim, TFunc },
-    { TPrim, TFuncS },
-    { TPrim, TCls },
-    { TPrim, TFuncLike },
-    { TPrim, TFuncOrCls },
-    { TPrim, TStrLike },
   };
 
   const std::initializer_list<std::pair<Type, Type>> couldbe_false{
@@ -710,6 +700,11 @@ TEST(Type, Prim) {
     { TPrim, TRecord },
     { TPrim, TRes },
     { TPrim, TRFunc },
+    { TPrim, TFunc },
+    { TPrim, TFuncS },
+    { TPrim, TFuncLike },
+    { TPrim, TFuncOrCls },
+    { TPrim, TStrLike },
   };
 
   for (auto kv : subtype_true) {
@@ -736,19 +731,11 @@ TEST(Type, Prim) {
       << show(kv.first) << " !couldbe " << show(kv.second);
   }
 
-  if (use_lowptr) {
-    EXPECT_TRUE(TClsMeth.subtypeOf(TInitPrim));
-    EXPECT_TRUE(TPrim.couldBe(TClsMeth));
-    EXPECT_TRUE(TPrim.couldBe(TVArrCompat));
-    EXPECT_TRUE(TPrim.couldBe(TVecCompat));
-    EXPECT_TRUE(TPrim.couldBe(TArrCompat));
-  } else {
-    EXPECT_FALSE(TClsMeth.subtypeOf(TInitPrim));
-    EXPECT_FALSE(TPrim.couldBe(TClsMeth));
-    EXPECT_FALSE(TPrim.couldBe(TVArrCompat));
-    EXPECT_FALSE(TPrim.couldBe(TVecCompat));
-    EXPECT_FALSE(TPrim.couldBe(TArrCompat));
-  }
+  EXPECT_FALSE(TClsMeth.subtypeOf(TInitPrim));
+  EXPECT_FALSE(TPrim.couldBe(TClsMeth));
+  EXPECT_FALSE(TPrim.couldBe(TVArrCompat));
+  EXPECT_FALSE(TPrim.couldBe(TVecCompat));
+  EXPECT_FALSE(TPrim.couldBe(TArrCompat));
 }
 
 TEST(Type, CouldBeValues) {
@@ -813,6 +800,7 @@ TEST(Type, Unc) {
     { TNum, TUnc, true },
     { TNum, TInitUnc, true },
     { TUncArrKey, TInitUnc, true },
+    { TUncArrKeyCompat, TUncArrKey, true },
     { TStrLike, TInitUnc, true },
     { TUncStrLike, TInitUnc, true },
     { TFuncOrCls, TInitUnc, true },
@@ -918,6 +906,10 @@ TEST(Type, Option) {
   EXPECT_TRUE(TArrKey.subtypeOf(BOptArrKey));
   EXPECT_TRUE(TInitNull.subtypeOf(BOptArrKey));
   EXPECT_TRUE(!TUninit.subtypeOf(BOptArrKey));
+
+  EXPECT_TRUE(TArrKeyCompat.subtypeOf(BOptArrKeyCompat));
+  EXPECT_TRUE(TInitNull.subtypeOf(BOptArrKeyCompat));
+  EXPECT_TRUE(!TUninit.subtypeOf(BOptArrKeyCompat));
 
   for (auto& t : optionals()) EXPECT_EQ(t, opt(unopt(t)));
   for (auto& t : optionals()) EXPECT_TRUE(is_opt(t));
@@ -1978,8 +1970,8 @@ TEST(Type, ArrPacked2) {
   }
 
   {
-    auto const a1 = arr_packed({TInt, TInt, TInt});
-    auto const s1 = sarr_packed({TInt, TInt, TInt});
+    auto const a1 = arr_packed_darray({TInt, TInt, TInt});
+    auto const s1 = sarr_packed_darray({TInt, TInt, TInt});
     auto const s2 = aval(test_array_vector_value());
     EXPECT_TRUE(s2.subtypeOf(a1));
     EXPECT_TRUE(s2.subtypeOf(s1));
@@ -1988,11 +1980,11 @@ TEST(Type, ArrPacked2) {
   }
 
   {
-    auto const s1 = sarr_packed({ival(42), ival(23), ival(12)});
+    auto const s1 = sarr_packed_darray({ival(42), ival(23), ival(12)});
     auto const s2 = aval(test_array_vector_value());
-    auto const s3 = sarr_packed({TInt});
-    auto const a4 = sarr_packed({TInt});
-    auto const a5 = arr_packed({ival(42), ival(23), ival(12)});
+    auto const s3 = sarr_packed_darray({TInt});
+    auto const a4 = sarr_packed_darray({TInt});
+    auto const a5 = arr_packed_darray({ival(42), ival(23), ival(12)});
     EXPECT_TRUE(s1.subtypeOf(s2));
     EXPECT_EQ(s1, s2);
     EXPECT_FALSE(s2.subtypeOf(s3));
@@ -2028,8 +2020,8 @@ TEST(Type, ArrPackedUnion) {
 
   {
     auto const s1 = aval(test_array_vector_value());
-    auto const s2 = sarr_packed({TInt, TInt, TInt});
-    auto const s3 = sarr_packed({TInt, TNum, TInt});
+    auto const s2 = sarr_packed_darray({TInt, TInt, TInt});
+    auto const s3 = sarr_packed_darray({TInt, TNum, TInt});
     EXPECT_EQ(union_of(s1, s2), s2);
     EXPECT_EQ(union_of(s1, s3), s3);
   }
@@ -2052,15 +2044,16 @@ TEST(Type, ArrPackedUnion) {
   {
     auto const s1 = aval(test_array_vector_value());
     auto const s2 = aval(test_array_vector_value2());
-    EXPECT_EQ(union_of(s1, s2), sarr_packed({ival(42), TNum, ival(12)}));
+    EXPECT_EQ(union_of(s1, s2), sarr_packed_darray({ival(42), TNum, ival(12)}));
   }
 }
 
 TEST(Type, ArrPackedN) {
-  auto const s1 = aval(test_array_vector_value());
-  auto const s2 = sarr_packed({TInt, TInt});
-  EXPECT_EQ(union_of(s1, s2), sarr_packedn(TInt));
+  auto const a1 = aval(test_array_vector_value());
+  auto const a2 = sarr_packed_darray({TInt, TInt});
+  EXPECT_EQ(union_of(a1, a2), sarr_packedn_darray(TInt));
 
+  auto const s2 = sarr_packed({TInt, TInt});
   EXPECT_TRUE(s2.subtypeOf(sarr_packedn(TInt)));
   EXPECT_FALSE(s2.subtypeOf(sarr_packedn(TDbl)));
   EXPECT_TRUE(s2.subtypeOf(sarr_packedn(TNum)));
@@ -2139,13 +2132,13 @@ TEST(Type, ArrStruct) {
   auto test_map_d          = MapElems{};
   test_map_d[tv(s_A)]      = sval(s_B.get());
   test_map_d[tv(s_test)]   = ival(12);
-  auto const sd = sarr_map(test_map_d);
+  auto const sd = sarr_map_darray(test_map_d);
   EXPECT_EQ(sd, aval(test_array_map_value()));
 
   auto test_map_e          = MapElems{};
   test_map_e[tv(s_A)]      = TSStr;
   test_map_e[tv(s_test)]   = TNum;
-  auto const se = sarr_map(test_map_e);
+  auto const se = sarr_map_darray(test_map_e);
   EXPECT_TRUE(aval(test_array_map_value()).subtypeOf(se));
   EXPECT_TRUE(se.couldBe(aval(test_array_map_value())));
 }
@@ -2153,8 +2146,8 @@ TEST(Type, ArrStruct) {
 TEST(Type, ArrMapN) {
   auto const test_map = aval(test_array_map_value());
   EXPECT_TRUE(test_map != arr_mapn(TSStr, TInitUnc));
-  EXPECT_TRUE(test_map.subtypeOf(arr_mapn(TSStr, TInitUnc)));
-  EXPECT_TRUE(test_map.subtypeOf(sarr_mapn(TSStr, TInitUnc)));
+  EXPECT_TRUE(test_map.subtypeOf(arr_mapn_darray(TSStr, TInitUnc)));
+  EXPECT_TRUE(test_map.subtypeOf(sarr_mapn_darray(TSStr, TInitUnc)));
   EXPECT_TRUE(sarr_packedn({TInt}).subtypeOf(arr_mapn(TInt, TInt)));
   EXPECT_TRUE(sarr_packed({TInt}).subtypeOf(arr_mapn(TInt, TInt)));
 
@@ -2167,12 +2160,12 @@ TEST(Type, ArrMapN) {
   EXPECT_TRUE(tstruct.subtypeOf(sarr_mapn(TSStr, TInt)));
   EXPECT_TRUE(tstruct.subtypeOf(arr_mapn(TStr, TInt)));
 
-  EXPECT_TRUE(test_map.couldBe(arr_mapn(TSStr, TInitCell)));
-  EXPECT_FALSE(test_map.couldBe(arr_mapn(TSStr, TStr)));
-  EXPECT_FALSE(test_map.couldBe(arr_mapn(TSStr, TObj)));
+  EXPECT_TRUE(test_map.couldBe(arr_mapn_darray(TSStr, TInitCell)));
+  EXPECT_FALSE(test_map.couldBe(arr_mapn_darray(TSStr, TStr)));
+  EXPECT_FALSE(test_map.couldBe(arr_mapn_darray(TSStr, TObj)));
 
   EXPECT_FALSE(test_map.couldBe(aval(test_empty_array())));
-  EXPECT_FALSE(arr_mapn(TSStr, TInt).couldBe(aval(test_empty_array())));
+  EXPECT_FALSE(arr_mapn_darray(TSStr, TInt).couldBe(aval(test_empty_array())));
 
   EXPECT_TRUE(sarr_packedn(TInt).couldBe(sarr_mapn(TInt, TInt)));
   EXPECT_FALSE(sarr_packedn(TInt).couldBe(sarr_mapn(TInt, TObj)));
@@ -2184,7 +2177,7 @@ TEST(Type, ArrMapN) {
 TEST(Type, ArrEquivalentRepresentations) {
   {
     auto const simple = aval(test_array_vector_value());
-    auto const bulky  = sarr_packed({ival(42), ival(23), ival(12)});
+    auto const bulky  = sarr_packed_darray({ival(42), ival(23), ival(12)});
     EXPECT_EQ(simple, bulky);
   }
 
@@ -2194,7 +2187,7 @@ TEST(Type, ArrEquivalentRepresentations) {
     auto map          = MapElems{};
     map[tv(s_A)]      = sval(s_B.get());
     map[tv(s_test)]   = ival(12);
-    auto const bulky  = sarr_map(map);
+    auto const bulky  = sarr_map_darray(map);
 
     EXPECT_EQ(simple, bulky);
   }
@@ -2236,7 +2229,7 @@ TEST(Type, ArrUnions) {
 
   auto const aval1 = aval(test_array_vector_value());
   auto const aval2 = aval(test_array_vector_value3());
-  EXPECT_EQ(union_of(aval1, aval2), sarr_packedn(TInt));
+  EXPECT_EQ(union_of(aval1, aval2), sarr_packedn_darray(TInt));
 }
 
 TEST(Type, ArrIntersections) {
@@ -2534,6 +2527,11 @@ TEST(Type, ArrKey) {
   EXPECT_TRUE(opt(TUncArrKey) == TOptUncArrKey);
   EXPECT_TRUE(unopt(TOptArrKey) == TArrKey);
   EXPECT_TRUE(unopt(TOptUncArrKey) == TUncArrKey);
+
+  EXPECT_TRUE(union_of(TArrKey, TCls) == TArrKeyCompat);
+  EXPECT_TRUE(union_of(TUncArrKey, TCls) == TUncArrKeyCompat);
+  EXPECT_TRUE(union_of(TArrKeyCompat, TInitNull) == TOptArrKeyCompat);
+  EXPECT_TRUE(union_of(TUncArrKeyCompat, TInitNull) == TOptUncArrKeyCompat);
 }
 
 TEST(Type, LoosenStaticness) {
@@ -2542,6 +2540,7 @@ TEST(Type, LoosenStaticness) {
 
   for (auto const& t : all()) {
     if (t == TUncArrKey || t == TOptUncArrKey ||
+        t == TUncArrKeyCompat || t == TOptUncArrKeyCompat ||
         t == TInitUnc || t == TUnc ||
         (t.subtypeOfAny(TOptArr,
                         TOptVec,
@@ -2593,6 +2592,7 @@ TEST(Type, LoosenStaticness) {
     { TSKeysetN, TKeysetN },
     { TSKeyset, TKeyset },
     { TUncArrKey, TArrKey },
+    { TUncArrKeyCompat, TArrKeyCompat },
     { TUnc, TCell },
     { TInitUnc, TInitCell },
     { sval(s_test.get()), sval_nonstatic(s_test.get()) },
@@ -2711,7 +2711,7 @@ TEST(Type, LoosenValues) {
     { dval(3.14), TDbl },
     { sval(s_test.get()), TSStr },
     { sval_nonstatic(s_test.get()), TStr },
-    { aval(test_array_vector_value()), TSPArrN },
+    { aval(test_array_vector_value()), TSDArrN },
     { arr_packedn(TInt), TPArrN },
     { arr_packed({TInt, TBool}), TPArrN },
     { arr_packed_varray({TInt, TBool}), TVArrN },
@@ -3121,6 +3121,8 @@ TEST(Type, MustBeCounted) {
     { TSDictN, false },
     { TArrKey, false },
     { TUncArrKey, false },
+    { TArrKeyCompat, false },
+    { TUncArrKeyCompat, false },
     { TStrLike, false },
     { TUncStrLike, false },
     { TInitCell, false },
