@@ -1468,7 +1468,6 @@ void VariableSerializer::serializeFunc(const Func* func) {
     case Type::APCSerialize:
     case Type::DebuggerSerialize:
       invalidFuncConversion("string");
-      write(StrNR(funcToStringHelper(func)));
       break;
   }
 }
@@ -1618,8 +1617,6 @@ void VariableSerializer::serializeVariant(tv_rval tv,
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-    case KindOfPersistentArray:
-    case KindOfArray:
       assertx(!isArrayKey);
       assertx(val(tv).parr->isPHPArrayType());
       serializeArray(val(tv).parr, skipNestCheck);

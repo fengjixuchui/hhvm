@@ -76,15 +76,12 @@ APCHandle::Pair APCHandle::Create(const_variant_ref source,
         auto const value = new APCNamedEntity(func);
         return {value->getHandle(), sizeof(APCNamedEntity)};
       }
-      // fallthrough to string serialization
-      if (!func->isMethod()) invalidFuncConversion("string");
+      invalidFuncConversion("string");
     }
     case KindOfClass:
     case KindOfPersistentString:
     case KindOfString: {
       auto const s =
-        isFuncType(cell.type())
-          ? const_cast<StringData*>(funcToStringHelper(val(cell).pfunc)) :
         isClassType(cell.type())
           ? const_cast<StringData*>(classToStringHelper(val(cell).pclass))
           : val(cell).pstr;
@@ -134,9 +131,7 @@ APCHandle::Pair APCHandle::Create(const_variant_ref source,
     case KindOfPersistentDArray:
     case KindOfDArray:
     case KindOfPersistentVArray:
-    case KindOfVArray:
-    case KindOfPersistentArray:
-    case KindOfArray: {
+    case KindOfVArray: {
       auto const ad = val(cell).parr;
       assertx(ad->isPHPArrayType());
       return APCArray::MakeSharedArray(ad, level, unserializeObj);

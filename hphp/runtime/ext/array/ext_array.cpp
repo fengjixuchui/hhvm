@@ -360,19 +360,12 @@ bool HHVM_FUNCTION(array_key_exists,
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-    case KindOfPersistentArray:
-    case KindOfArray:
     case KindOfObject:
     case KindOfResource:
     case KindOfRecord:
     case KindOfRFunc:
-      throwInvalidArrayKeyException(cell, ad);
-
     case KindOfFunc:
-      if (!RO::EvalEnableFuncStringInterop) {
-        throwInvalidArrayKeyException(cell, ad);
-      }
-      return ad->exists(StrNR(funcToStringHelper(cell->m_data.pfunc)));
+      throwInvalidArrayKeyException(cell, ad);
 
     case KindOfClass:
       return ad->exists(StrNR(classToStringHelper(cell->m_data.pclass)));
@@ -744,8 +737,6 @@ TypedValue HHVM_FUNCTION(array_product,
       case KindOfDArray:
       case KindOfPersistentVArray:
       case KindOfVArray:
-      case KindOfPersistentArray:
-      case KindOfArray:
       case KindOfObject:
       case KindOfResource:
       case KindOfRFunc:
@@ -774,7 +765,6 @@ DOUBLE:
       case KindOfKeyset:
       case KindOfDArray:
       case KindOfVArray:
-      case KindOfArray:
       case KindOfClsMeth:
       case KindOfRClsMeth:
       case KindOfObject:
@@ -1031,8 +1021,6 @@ TypedValue HHVM_FUNCTION(array_sum,
       case KindOfDArray:
       case KindOfPersistentVArray:
       case KindOfVArray:
-      case KindOfPersistentArray:
-      case KindOfArray:
       case KindOfObject:
       case KindOfResource:
       case KindOfRFunc:
@@ -1061,7 +1049,6 @@ DOUBLE:
       case KindOfKeyset:
       case KindOfDArray:
       case KindOfVArray:
-      case KindOfArray:
       case KindOfClsMeth:
       case KindOfRClsMeth:
       case KindOfObject:
@@ -1269,8 +1256,6 @@ int64_t HHVM_FUNCTION(count,
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentArray:
-    case KindOfArray:
       if ((CountMode)mode == CountMode::RECURSIVE) {
         const Array& arr_var = var.asCArrRef();
         return php_count_recursive(arr_var);
@@ -3205,12 +3190,9 @@ TypedValue HHVM_FUNCTION(HH_array_key_cast, const Variant& input) {
     }
 
     case KindOfFunc:
-      if (!RO::EvalEnableFuncStringInterop) {
-        SystemLib::throwInvalidArgumentExceptionObject(
-          "Funcs cannot be cast to an array-key"
-        );
-      }
-      return tvReturn(StrNR(funcToStringHelper(input.toFuncVal())));
+      SystemLib::throwInvalidArgumentExceptionObject(
+        "Funcs cannot be cast to an array-key"
+      );
 
     case KindOfClass:
       return tvReturn(StrNR(classToStringHelper(input.toClassVal())));
@@ -3244,8 +3226,6 @@ TypedValue HHVM_FUNCTION(HH_array_key_cast, const Variant& input) {
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-    case KindOfPersistentArray:
-    case KindOfArray:
       SystemLib::throwInvalidArgumentExceptionObject(
         "Arrays cannot be cast to an array-key"
       );

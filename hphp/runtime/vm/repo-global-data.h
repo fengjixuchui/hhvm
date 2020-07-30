@@ -43,15 +43,6 @@ struct Repo::GlobalData {
   uint32_t InitialStaticStringTableSize = 0;
 
   /*
-   * Indicates whether a repo was compiled with HardReturnTypeHints.
-   *
-   * If so, we disallow recovering from the E_RECOVERABLE_ERROR we
-   * raise if you violate a return typehint, because doing so would
-   * allow violating assumptions from the optimizer.
-   */
-  bool HardReturnTypeHints = false;
-
-  /*
    * Indicates whether the repo was compiled with CheckPropTypeHints.
    */
   int32_t CheckPropTypeHints = 0;
@@ -169,10 +160,6 @@ struct Repo::GlobalData {
   /* Avoid optimizations that interfere with array provenance */
   bool ArrayProvenance = false;
 
-  /* When true function pointers will pass string typehints and checks,
-     while optionally raising notices. */
-  bool EnableFuncStringInterop = true;
-
   /*
    * The Hack.Lang.StrictArrayFillKeys option the repo was compiled with.
    */
@@ -188,7 +175,6 @@ struct Repo::GlobalData {
     sd(InitialNamedEntityTableSize)
       (InitialStaticStringTableSize)
       (HardGenericsUB)
-      (HardReturnTypeHints)
       (CheckPropTypeHints)
       (HardPrivatePropInference)
       (PHP7_NoHexNumerics)
@@ -216,7 +202,6 @@ struct Repo::GlobalData {
       (IsCompatibleClsMethType)
       (ArrayProvenance)
       (StrictArrayFillKeys)
-      (EnableFuncStringInterop)
       (WidenIsArray)
       (WidenIsArrayLogs)
       ;

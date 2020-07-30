@@ -9,6 +9,12 @@
 
 type 'a error_
 
+type 'a message
+
+val get_message_pos : 'a message -> 'a
+
+val get_message_str : 'a message -> string
+
 type error = Pos.t error_ [@@deriving eq]
 
 type applied_fixme = Pos.t * int
@@ -62,6 +68,10 @@ module Naming : Error_category
 module NastCheck : Error_category
 
 module Typing : Error_category
+
+val read_lines : string -> string list
+
+val num_digits : int -> int
 
 val add_error : error -> unit
 
@@ -236,6 +246,8 @@ val nonstatic_property_with_lsb : Pos.t -> unit
 val lowercase_this : Pos.t -> string -> unit
 
 val classname_param : Pos.t -> unit
+
+val typaram_applied_to_type : Pos.t -> string -> unit
 
 val tparam_with_tparam : Pos.t -> string -> unit
 
@@ -889,23 +901,12 @@ val to_json : Pos.absolute error_ -> Hh_json.json
 val convert_errors_to_string :
   ?include_filename:bool -> error list -> string list
 
+val group_messages_by_file : Pos.absolute error_ -> Pos.absolute message list
+
 val to_string : ?indent:bool -> Pos.absolute error_ -> string
-
-val to_contextual_string : Pos.absolute error_ -> string
-
-val to_highlighted_string : Pos.absolute error_ -> string
 
 val format_summary :
   format -> 'a error_ list -> int -> int option -> string option
-
-val format_filename : Pos.absolute -> string
-
-val format_message :
-  string ->
-  Pos.absolute ->
-  is_first:bool ->
-  col_width:int option ->
-  string * string
 
 val try_ : (unit -> 'a) -> (error -> 'a) -> 'a
 

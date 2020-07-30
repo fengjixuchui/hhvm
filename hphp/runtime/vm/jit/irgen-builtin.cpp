@@ -716,32 +716,19 @@ SSATmp* opt_foldable(IRGS& env,
         return cns(env, makeStaticString(retVal.m_data.pstr));
       case KindOfPersistentVec:
       case KindOfVec:
-        return cns(
-          env,
-          make_tv<KindOfPersistentVec>(scalar_array())
-        );
+        return cns(env, make_tv<KindOfPersistentVec>(scalar_array()));
       case KindOfPersistentDict:
       case KindOfDict:
-        return cns(
-          env,
-          make_tv<KindOfPersistentDict>(scalar_array())
-        );
+        return cns(env, make_tv<KindOfPersistentDict>(scalar_array()));
       case KindOfPersistentKeyset:
       case KindOfKeyset:
-        return cns(
-          env,
-          make_tv<KindOfPersistentKeyset>(scalar_array())
-        );
+        return cns(env, make_tv<KindOfPersistentKeyset>(scalar_array()));
       case KindOfPersistentDArray:
       case KindOfDArray:
+        return cns(env, make_tv<KindOfPersistentDArray>(scalar_array()));
       case KindOfPersistentVArray:
       case KindOfVArray:
-      case KindOfPersistentArray:
-      case KindOfArray:
-        return cns(
-          env,
-          make_persistent_array_like_tv(scalar_array())
-        );
+        return cns(env, make_tv<KindOfPersistentVArray>(scalar_array()));
       case KindOfUninit:
       case KindOfObject:
       case KindOfResource:
@@ -1600,53 +1587,26 @@ SSATmp* maybeCoerceValue(
 
   auto bail = [&] { fail(); return cns(env, TBottom); };
   if (target <= TStr) {
-    auto const allowedTy = RO::EvalEnableFuncStringInterop ? TFunc|TCls : TCls;
-    if (!val->type().maybe(allowedTy)) return bail();
+    if (!val->type().maybe(TCls)) return bail();
 
-    auto castW = [&] (SSATmp* val, bool isCls){
-      if (RuntimeOption::EvalStringHintNotices && !isCls) {
+    auto castW = [&] (SSATmp* val){
+      if (RuntimeOption::EvalClassStringHintNotices) {
         gen(
           env,
           RaiseNotice,
-          cns(
-            env,
-            makeStaticString(Strings::FUNC_TO_STRING_IMPLICIT)
-          )
-        );
-      } else if (RuntimeOption::EvalClassStringHintNotices && isCls) {
-        gen(
-          env,
-          RaiseNotice,
-          cns(
-            env,
-            makeStaticString(Strings::CLASS_TO_STRING_IMPLICIT)
-          )
+          cns(env, makeStaticString(Strings::CLASS_TO_STRING_IMPLICIT))
         );
       }
       return update(val);
     };
 
-    auto checkCls = [&] {
-      return cond(
-        env,
-        [&] (Block* f) { return gen(env, CheckType, TCls, f, val); },
-        [&] (SSATmp* cval) { return castW(gen(env, LdClsName, cval), true); },
-        [&] {
-          hint(env, Block::Hint::Unlikely);
-          return bail();
-        }
-      );
-    };
-
-    if (!RO::EvalEnableFuncStringInterop) return checkCls();
-
     return cond(
       env,
-      [&] (Block* f) { return gen(env, CheckType, TFunc, f, val); },
-      [&] (SSATmp* fval) { return castW(gen(env, LdFuncName, fval), false); },
+      [&] (Block* f) { return gen(env, CheckType, TCls, f, val); },
+      [&] (SSATmp* cval) { return castW(gen(env, LdClsName, cval)); },
       [&] {
         hint(env, Block::Hint::Unlikely);
-        return checkCls();
+        return bail();
       }
     );
   }
@@ -1909,7 +1869,6 @@ SSATmp* builtinCall(IRGS& env,
         decRef(env, realized[i + aoff]);
         realized[i + aoff] = iv;
         ty = iv->type();
-        if (ty->maybe(TPersistentPArr)) *ty |= TPArr;
         if (ty->maybe(TPersistentVArr)) *ty |= TVArr;
         if (ty->maybe(TPersistentDArr)) *ty |= TDArr;
         if (ty->maybe(TPersistentVec)) *ty |= TVec;

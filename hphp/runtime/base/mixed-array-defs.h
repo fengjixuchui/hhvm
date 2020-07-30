@@ -193,11 +193,9 @@ void ConvertTvToUncounted(
       assertx(data.pfunc->isPersistent());
       break;
     }
-    if (!data.pfunc->isMethod()) invalidFuncConversion("string");
+    invalidFuncConversion("string");
     case KindOfClass:
-      data.pstr = isFuncType(type)
-        ? const_cast<StringData*>(funcToStringHelper(data.pfunc))
-        : const_cast<StringData*>(classToStringHelper(data.pclass));
+      data.pstr = const_cast<StringData*>(classToStringHelper(data.pclass));
       // Fall-through
     case KindOfString:
       type = KindOfPersistentString;
@@ -276,12 +274,10 @@ void ConvertTvToUncounted(
 
     case KindOfDArray:
     case KindOfVArray:
-    case KindOfArray:
       type = dt_with_persistence(type);
       // Fall-through.
     case KindOfPersistentDArray:
-    case KindOfPersistentVArray:
-    case KindOfPersistentArray: {
+    case KindOfPersistentVArray: {
       auto& ad = data.parr;
       assertx(ad->isPHPArrayType());
       assertx(!RuntimeOption::EvalHackArrDVArrs || ad->isNotDVArray());
@@ -315,7 +311,7 @@ void ConvertTvToUncounted(
         break;
       } else {
         tvCastToVArrayInPlace(source);
-        type = KindOfPersistentArray;
+        type = KindOfPersistentVArray;
         auto& ad = data.parr;
         if (handlePersistent(ad)) break;
         assertx(!ad->empty());

@@ -18,10 +18,11 @@ exception Invalid_security_lattice
 
 exception Checking_error
 
-let parse_policy = function
+let parse_policy purpose_str =
+  match String.uppercase purpose_str with
   | "PUBLIC" -> Pbot
   | "PRIVATE" -> Ptop
-  | pur -> Ppurpose (String.uppercase pur)
+  | purpose -> Ppurpose purpose
 
 (* Parses a Hasse diagram written in a ';' separated format,
  * e.g., "A < B; B < C; A < D"
@@ -40,13 +41,6 @@ let parse_exn str =
          | None -> raise Invalid_security_lattice)
   |> FlowSet.of_list
 
-let bounded_extension_of lattice =
-  let add_top_bottom (l, r) acc =
-    let bounds = FlowSet.of_list [(Pbot, l); (l, Ptop); (Pbot, r); (r, Ptop)] in
-    FlowSet.union bounds acc
-  in
-  FlowSet.fold add_top_bottom lattice lattice |> FlowSet.add (Pbot, Ptop)
-
 (* A naive implementation of transitive closure *)
 let rec transitive_closure set =
   let immediate_consequence (x, y) set =
@@ -64,12 +58,19 @@ let rec transitive_closure set =
   else
     transitive_closure new_set
 
-let mk_exn str = parse_exn str |> bounded_extension_of |> transitive_closure
+let mk_exn str = parse_exn str |> transitive_closure
 
-let rec check_exn lattice = function
+let rec check_exn lattice =
+  let is_safe_flow = function
+    | (Pbot, _)
+    | (_, Ptop) ->
+      true
+    | flow -> FlowSet.mem flow lattice
+  in
+  function
   | Ctrue -> []
   | Cflow flow ->
-    if FlowSet.mem flow lattice then
+    if is_safe_flow flow then
       []
     else
       [flow]

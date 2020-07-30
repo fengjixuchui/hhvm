@@ -856,10 +856,7 @@ void do_optimize(const Index& index, FuncAnalysis&& ainfo, bool isFinal) {
   }
 
   for (auto& p : func->params) fixTypeConstraint(index, p.typeConstraint);
-
-  if (RuntimeOption::EvalCheckReturnTypeHints >= 3) {
-    fixTypeConstraint(index, func->retTypeConstraint);
-  }
+  fixTypeConstraint(index, func->retTypeConstraint);
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -903,13 +900,11 @@ Bytecode gen_constant(const TypedValue& cell) {
     case KindOfPersistentKeyset:
       assert(cell.m_data.parr->isKeysetType());
       return bc::Keyset { cell.m_data.parr };
-    case KindOfVArray:
     case KindOfDArray:
-    case KindOfArray:
+    case KindOfVArray:
       assert(cell.m_data.parr->isStatic());
-    case KindOfPersistentVArray:
     case KindOfPersistentDArray:
-    case KindOfPersistentArray:
+    case KindOfPersistentVArray:
       assert(cell.m_data.parr->isPHPArrayType());
       return bc::Array { cell.m_data.parr };
 

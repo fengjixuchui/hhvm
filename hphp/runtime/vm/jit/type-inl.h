@@ -134,7 +134,6 @@ inline Type for_const(const ArrayData* ad) {
   assertx(ad->isStatic());
   if (ad->isVArray()) return TStaticVArr;
   if (ad->isDArray()) return TStaticDArr;
-  if (ad->isPHPArrayType()) return TStaticPArr;
   if (ad->isVecType()) return TStaticVec;
   if (ad->isDictType()) return TStaticDict;
   if (ad->isKeysetType()) return TStaticKeyset;
@@ -247,7 +246,7 @@ inline bool Type::isKnownDataType() const {
 
   // Some unions correspond to single KindOfs.
   if (!isUnion()) return true;
-  return subtypeOfAny(TStr, TPArr, TVArr, TDArr, TVec, TDict, TKeyset);
+  return subtypeOfAny(TStr, TVArr, TDArr, TVec, TDict, TKeyset);
 }
 
 inline bool Type::needsReg() const {
@@ -335,11 +334,6 @@ inline Type Type::cns(const TypedValue& tv) {
       case KindOfPersistentVArray:
       case KindOfVArray:
         assertx(val(tv).parr->isVArray());
-        return type_detail::for_const(tv.m_data.parr);
-
-      case KindOfPersistentArray:
-      case KindOfArray:
-        assertx(val(tv).parr->isPHPArrayType());
         return type_detail::for_const(tv.m_data.parr);
 
       case KindOfObject:

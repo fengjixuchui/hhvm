@@ -283,17 +283,13 @@ void Repo::loadGlobalData(bool readGlobalTables /* = true */) {
     RuntimeOption::EvalAbortBuildOnVerifyError =
       s_globalData.AbortBuildOnVerifyError;
     RuntimeOption::StrictArrayFillKeys      = s_globalData.StrictArrayFillKeys;
-    if (s_globalData.HardReturnTypeHints) {
-      RuntimeOption::EvalCheckReturnTypeHints = 3;
-    }
-    if (s_globalData.HardGenericsUB) {
+   if (s_globalData.HardGenericsUB) {
       RuntimeOption::EvalEnforceGenericsUB = 2;
     }
 
     RuntimeOption::EvalIsCompatibleClsMethType =
       s_globalData.IsCompatibleClsMethType;
     RuntimeOption::EvalEmitClsMethPointers = s_globalData.EmitClsMethPointers;
-    RO::EvalEnableFuncStringInterop = s_globalData.EnableFuncStringInterop;
     RO::EvalForbidDynamicCallsWithAttr =
       s_globalData.ForbidDynamicCallsWithAttr;
 

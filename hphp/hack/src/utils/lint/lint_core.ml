@@ -67,27 +67,18 @@ let to_string lint =
   Printf.sprintf "%s\n%s (%s)" (Pos.string lint.pos) lint.message code
 
 let to_contextual_string lint =
-  let color =
+  let claim_color =
     match lint.severity with
-    | Lint_error -> Tty.apply_color (Tty.Bold Tty.Red)
-    | Lint_warning -> Tty.apply_color (Tty.Bold Tty.Yellow)
-    | Lint_advice -> Tty.apply_color (Tty.Bold Tty.White)
+    | Lint_error -> Tty.Red
+    | Lint_warning -> Tty.Yellow
+    | Lint_advice -> Tty.Default
   in
-  let heading =
-    Printf.sprintf
-      "%s %s"
-      (color (Errors.error_code_to_string lint.code))
-      (Tty.apply_color (Tty.Bold Tty.White) lint.message)
-  in
-  let fn = Errors.format_filename lint.pos in
-  let (ctx, msg) =
-    Errors.format_message "" lint.pos ~is_first:true ~col_width:None
-  in
-  Printf.sprintf "%s\n%s\n%s\n%s\n" heading fn ctx msg
+  Errors.make_absolute_error lint.code [(lint.pos, lint.message)]
+  |> Contextual_error_formatter.to_string ~claim_color
 
 let to_highlighted_string (lint : string t) =
   Errors.make_absolute_error lint.code [(lint.pos, lint.message)]
-  |> Errors.to_highlighted_string
+  |> Highlighted_error_formatter.to_string
 
 let to_json
     {

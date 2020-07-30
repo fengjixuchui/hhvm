@@ -468,7 +468,6 @@ ALWAYS_INLINE String serialize_impl(const Variant& value,
     case KindOfString: {
       auto const str =
         isStringType(value.getType()) ? value.getStringData() :
-        isFuncType(value.getType())   ? funcToStringHelper(value.toFuncVal()) :
                                         classToStringHelper(value.toClassVal());
       auto const size = str->size();
       if (size >= RuntimeOption::MaxSerializedStringSize) {
@@ -522,20 +521,18 @@ ALWAYS_INLINE String serialize_impl(const Variant& value,
     case KindOfPersistentDArray:
     case KindOfDArray:
     case KindOfPersistentVArray:
-    case KindOfVArray:
-    case KindOfPersistentArray:
-    case KindOfArray: {
+    case KindOfVArray: {
       ArrayData *arr = value.getArrayData();
       assertx(arr->isPHPArrayType());
-      assertx(!RuntimeOption::EvalHackArrDVArrs || arr->isNotDVArray());
+      assertx(!RO::EvalHackArrDVArrs);
       if (arr->empty()) {
         if (UNLIKELY(RuntimeOption::EvalHackArrCompatSerializeNotices &&
                      phpWarn)) {
           raise_hack_arr_compat_serialize_notice(arr);
         }
         if (keepDVArrays && !forcePHPArrays) {
-          if (arr->isVArray()) return s_EmptyVArray;
-          if (arr->isDArray()) return s_EmptyDArray;
+          assertx(arr->isDVArray());
+          return arr->isVArray() ? s_EmptyVArray : s_EmptyDArray;
         }
         return s_EmptyArray;
       }

@@ -76,10 +76,10 @@ let print_error_color e =
   List.iter (List.tl_exn msg_list) (print_reason_color ~first:false ~code)
 
 let print_error_contextual e =
-  Printf.printf "%s" (Errors.to_contextual_string e)
+  Printf.printf "%s" (Contextual_error_formatter.to_string e)
 
 let print_error_highlighted e =
-  Printf.printf "%s" (Errors.to_highlighted_string e)
+  Printf.printf "%s" (Highlighted_error_formatter.to_string e)
 
 let is_stale_msg liveness =
   match liveness with

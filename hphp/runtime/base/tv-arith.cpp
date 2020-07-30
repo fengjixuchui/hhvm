@@ -110,7 +110,6 @@ TypedNum numericConvHelper(TypedValue cell) {
 
     case KindOfFunc:
       invalidFuncConversion("int");
-      return stringToNumeric(funcToStringHelper(cell.m_data.pfunc));
 
     case KindOfClass:
       return stringToNumeric(classToStringHelper(cell.m_data.pclass));
@@ -129,8 +128,6 @@ TypedNum numericConvHelper(TypedValue cell) {
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentArray:
-    case KindOfArray:
       throw_bad_array_operand(cell.m_data.parr);
     case KindOfClsMeth:
       throw ExtendedException("Invalid operand type was used: cannot perform "
@@ -499,9 +496,6 @@ void tvIncDecOp(Op op, tv_lval cell) {
     case KindOfFunc: {
       raiseIncDecInvalidType(cell);
       invalidFuncConversion("int");
-      auto s = funcToStringHelper(val(cell).pfunc);
-      stringIncDecOp(op, cell, const_cast<StringData*>(s));
-      return;
     }
 
     case KindOfClass: {
@@ -528,8 +522,6 @@ void tvIncDecOp(Op op, tv_lval cell) {
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-    case KindOfPersistentArray:
-    case KindOfArray:
     case KindOfObject:
     case KindOfResource:
     case KindOfClsMeth:
@@ -792,10 +784,10 @@ void tvBitNot(TypedValue& cell) {
 
     case KindOfFunc:
       invalidFuncConversion("int");
+
     case KindOfClass:
-      cell.m_data.pstr = isFuncType(cell.m_type)
-        ? const_cast<StringData*>(funcToStringHelper(cell.m_data.pfunc))
-        : const_cast<StringData*>(classToStringHelper(cell.m_data.pclass));
+      cell.m_data.pstr =
+        const_cast<StringData*>(classToStringHelper(cell.m_data.pclass));
       cell.m_type = KindOfString;
     case KindOfString:
       if (cell.m_data.pstr->cowCheck()) {
@@ -838,8 +830,6 @@ void tvBitNot(TypedValue& cell) {
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-    case KindOfPersistentArray:
-    case KindOfArray:
     case KindOfObject:
     case KindOfResource:
     case KindOfClsMeth:

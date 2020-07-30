@@ -27,7 +27,6 @@ std::string show(const Repo::GlobalData& gd) {
 #define SHOW(x) folly::format(&out, "  {}: {}\n", #x, gd.x)
   SHOW(InitialNamedEntityTableSize);
   SHOW(InitialStaticStringTableSize);
-  SHOW(HardReturnTypeHints);
   SHOW(CheckPropTypeHints);
   SHOW(HardGenericsUB);
   SHOW(HardPrivatePropInference);
@@ -56,7 +55,6 @@ std::string show(const Repo::GlobalData& gd) {
   SHOW(IsCompatibleClsMethType);
   SHOW(ArrayProvenance);
   SHOW(StrictArrayFillKeys);
-  SHOW(EnableFuncStringInterop);
   SHOW(WidenIsArray);
   SHOW(WidenIsArrayLogs);
 #undef SHOW

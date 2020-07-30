@@ -515,21 +515,18 @@ Type::bits_t Type::bitsFromDataType(DataType outer) {
     case KindOfDouble           : return kDbl;
     case KindOfPersistentString : return kPersistentStr;
     case KindOfString           : return kStr;
+
     case KindOfPersistentVec    : return kPersistentVec;
     case KindOfPersistentDict   : return kPersistentDict;
     case KindOfPersistentKeyset : return kPersistentKeyset;
-
     case KindOfPersistentDArray : return kPersistentDArr;
     case KindOfPersistentVArray : return kPersistentVArr;
-    case KindOfPersistentArray  : return kPersistentPArr;
 
     case KindOfVec              : return kVec;
     case KindOfDict             : return kDict;
     case KindOfKeyset           : return kKeyset;
-
     case KindOfDArray           : return kDArr;
     case KindOfVArray           : return kVArr;
-    case KindOfArray            : return kPArr;
 
     case KindOfResource         : return kRes;
     case KindOfObject           : return kObj;
@@ -556,8 +553,6 @@ DataType Type::toDataType() const {
   if (*this <= TDbl)         return KindOfDouble;
   if (*this <= TPersistentStr) return KindOfPersistentString;
   if (*this <= TStr)         return KindOfString;
-  if (*this <= TPersistentPArr) return KindOfPersistentArray;
-  if (*this <= TPArr)         return KindOfArray;
   if (*this <= TPersistentVArr) return KindOfPersistentVArray;
   if (*this <= TVArr)         return KindOfVArray;
   if (*this <= TPersistentDArr) return KindOfPersistentDArray;
@@ -610,7 +605,6 @@ Type Type::specialize(TypeSpec spec) const {
 
 Type Type::modified() const {
   auto t = unspecialize();
-  if (t.maybe(TPArr))   t |= TPArr;
   if (t.maybe(TVArr))   t |= TVArr;
   if (t.maybe(TDArr))   t |= TDArr;
   if (t.maybe(TVec))    t |= TVec;
@@ -939,24 +933,19 @@ Type typeFromRATImpl(RepoAuthType ty, const Class* ctx) {
     case T::OptRes:         return TRes        | TInitNull;
     case T::OptObj:         return TObj        | TInitNull;
     case T::OptFunc:        return TFunc       | TInitNull;
-    case T::OptFuncS:       return TFunc       | TInitNull;
     case T::OptCls:         return TCls        | TInitNull;
     case T::OptClsMeth:     return TClsMeth    | TInitNull;
     case T::OptRecord:      return TRecord     | TInitNull;
     case T::OptArrKey:      return TInt | TStr | TInitNull;
     case T::OptUncArrKey:   return TInt | TPersistentStr | TInitNull;
     case T::OptUncStrLike:
-      return (RO::EvalEnableFuncStringInterop ? TFunc : TBottom) |
-             TCls | TPersistentStr | TInitNull;
+      return TCls | TPersistentStr | TInitNull;
     case T::OptStrLike:
-      return (RO::EvalEnableFuncStringInterop ? TFunc : TBottom) |
-             TCls | TStr | TInitNull;
+      return TCls | TStr | TInitNull;
     case T::OptArrKeyCompat:
-      return TInt | TStr | TCls | TInitNull |
-             (RO::EvalEnableFuncStringInterop ? TFunc : TBottom);
+      return TInt | TStr | TCls | TInitNull;
     case T::OptUncArrKeyCompat:
-      return TInt | TPersistentStr | TCls | TInitNull |
-             (RO::EvalEnableFuncStringInterop ? TFunc : TBottom);
+      return TInt | TPersistentStr | TCls | TInitNull;
 
     case T::Uninit:         return TUninit;
     case T::InitNull:       return TInitNull;
@@ -969,7 +958,6 @@ Type typeFromRATImpl(RepoAuthType ty, const Class* ctx) {
     case T::Str:            return TStr;
     case T::Obj:            return TObj;
     case T::Func:           return TFunc;
-    case T::FuncS:          return TFunc;
     case T::Cls:            return TCls;
     case T::ClsMeth:        return TClsMeth;
     case T::Record:         return TRecord;
@@ -978,17 +966,13 @@ Type typeFromRATImpl(RepoAuthType ty, const Class* ctx) {
     case T::UncArrKey:      return TInt | TPersistentStr;
     case T::ArrKey:         return TInt | TStr;
     case T::UncStrLike:
-      return (RO::EvalEnableFuncStringInterop ? TFunc : TBottom) |
-             TCls | TPersistentStr;
+      return TCls | TPersistentStr;
     case T::StrLike:
-      return (RO::EvalEnableFuncStringInterop ? TFunc : TBottom) |
-             TCls | TStr;
+      return TCls | TStr;
     case T::UncArrKeyCompat:
-      return TInt | TPersistentStr | TCls |
-             (RO::EvalEnableFuncStringInterop ? TFunc : TBottom);
+      return TInt | TPersistentStr | TCls;
     case T::ArrKeyCompat:
-      return TInt | TStr | TCls |
-             (RO::EvalEnableFuncStringInterop ? TFunc : TBottom);
+      return TInt | TStr | TCls;
     case T::InitUnc:        return TUncountedInit;
     case T::Unc:            return TUncounted;
     case T::InitCell:       return TInitCell;
@@ -1144,7 +1128,6 @@ Type typeFromPropTC(const HPHP::TypeConstraint& tc,
       case A::Int:        return TInt;
       case A::Float:      return TDbl;
       case A::String:     return TStr;
-      case A::Array:      return TPArr;
       case A::Record:     return TRecord;
       // We only call this once we've attempted resolving the
       // type-constraint. If we successfully resolved it, we'll never get here,
@@ -1228,7 +1211,6 @@ Type negativeCheckType(Type srcType, Type typeParam) {
   auto tmp = srcType - typeParam;
   if (typeParam.maybe(TPersistent)) {
     if (tmp.maybe(TCountedStr)) tmp |= TStr;
-    if (tmp.maybe(TCountedPArr)) tmp |= TPArr;
     if (tmp.maybe(TCountedVArr)) tmp |= TVArr;
     if (tmp.maybe(TCountedDArr)) tmp |= TDArr;
     if (tmp.maybe(TCountedVec)) tmp |= TVec;
@@ -1287,7 +1269,6 @@ Type relaxToGuardable(Type ty) {
 
   // We don't support guarding on counted-ness or static-ness, so widen
   // subtypes of any maybe-countable types to the full type.
-  if (ty <= TPArr) return TPArr;
   if (ty <= TVArr) return TVArr;
   if (ty <= TDArr) return TDArr;
   if (ty <= TVec) return TVec;

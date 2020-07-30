@@ -1541,8 +1541,8 @@ bool sameJmpImpl(ISS& env, Op sameOp, const JmpOp& jmp) {
   }
 
   // Same currently lies about the distinction between Func/Cls/Str
-  if (ty0.couldBe(BFunc | BCls) && ty1.couldBe(BStr)) return false;
-  if (ty1.couldBe(BFunc | BCls) && ty0.couldBe(BStr)) return false;
+  if (ty0.couldBe(BCls) && ty1.couldBe(BStr)) return false;
+  if (ty1.couldBe(BCls) && ty0.couldBe(BStr)) return false;
 
   // We need to loosen provenance here because it doesn't affect same / equal.
   auto isect = intersection_of(loosen_provenance(ty0), loosen_provenance(ty1));
@@ -3872,7 +3872,7 @@ void fcallFuncClsMeth(ISS& env, const bc::FCallFunc& op) {
 }
 
 void fcallFuncFunc(ISS& env, const bc::FCallFunc& op) {
-  assertx(topC(env).subtypeOf(BFunc|BFuncS));
+  assertx(topC(env).subtypeOf(BFunc));
 
   // TODO: optimize me
   fcallFuncUnknown(env, op);
@@ -3912,7 +3912,7 @@ void fcallFuncStr(ISS& env, const bc::FCallFunc& op) {
 
 void in(ISS& env, const bc::FCallFunc& op) {
   auto const callable = topC(env);
-  if (callable.subtypeOf(BFunc|BFuncS)) return fcallFuncFunc(env, op);
+  if (callable.subtypeOf(BFunc)) return fcallFuncFunc(env, op);
   if (callable.subtypeOf(BClsMeth)) return fcallFuncClsMeth(env, op);
   if (callable.subtypeOf(BObj)) return fcallFuncObj(env, op);
   if (callable.subtypeOf(BStr)) return fcallFuncStr(env, op);
@@ -3920,14 +3920,12 @@ void in(ISS& env, const bc::FCallFunc& op) {
 }
 
 void in(ISS& env, const bc::ResolveFunc& op) {
-  if (RO::EvalEnableFuncStringInterop) push(env, TFunc);
-  else                                 push(env, TFuncS);
+  push(env, TFunc);
 }
 
 void in(ISS& env, const bc::ResolveMethCaller& op) {
   // TODO (T29639296)
-  if (RO::EvalEnableFuncStringInterop) push(env, TFunc);
-  else                                 push(env, TFuncS);
+  push(env, TFunc);
 }
 
 void in(ISS& env, const bc::ResolveRFunc& op) {
@@ -4841,7 +4839,7 @@ void in(ISS& env, const bc::VerifyParamType& op) {
                                                 locAsCell(env, op.loc1),
                                                 *tc);
           })) {
-    if (!locAsCell(env, op.loc1).couldBe(BFunc | BCls)) {
+    if (!locAsCell(env, op.loc1).couldBe(BCls)) {
       return reduce(env);
     }
   }
@@ -4930,7 +4928,7 @@ void verifyRetImpl(ISS& env, const TCVec& tcs,
   auto dont_reduce = false;
 
   for (auto const& constraint : tcs) {
-    // For CheckReturnTypeHints >= 3 AND the constraint is not soft.
+    // When the constraint is not soft.
     // We can safely assume that either VerifyRetTypeC will
     // throw or it will produce a value whose type is compatible with the
     // return type constraint.
@@ -4939,9 +4937,9 @@ void verifyRetImpl(ISS& env, const TCVec& tcs,
 
     // In some circumstances, verifyRetType can modify the type. If it
     // does that we can't reduce even when we know it succeeds.
-    // VerifyRetType will convert a TFunc to a TStr implicitly
+    // VerifyRetType will convert a TCls to a TStr implicitly
     // (and possibly warn)
-    if (tcT.couldBe(BStr) && stackT.couldBe(BFunc | BCls)) {
+    if (tcT.couldBe(BStr) && stackT.couldBe(BCls)) {
       stackT |= TStr;
       dont_reduce = true;
     }
@@ -4962,10 +4960,9 @@ void verifyRetImpl(ISS& env, const TCVec& tcs,
       }
     }
 
-    // If CheckReturnTypeHints < 3 OR if the constraint is soft,
-    // then there are no optimizations we can safely do here, so
-    // just leave the top of stack as is.
-    if (RuntimeOption::EvalCheckReturnTypeHints < 3 || constraint->isSoft() ||
+    // If the constraint is soft, then there are no optimizations we can safely
+    // do here, so just leave the top of stack as is.
+    if (constraint->isSoft() ||
         (RuntimeOption::EvalEnforceGenericsUB < 2 &&
          constraint->isUpperBound()))
     {
@@ -5066,7 +5063,7 @@ void in(ISS& env, const bc::VerifyRetTypeTS& /*op*/) {
 
 void in(ISS& env, const bc::VerifyRetNonNullC& /*op*/) {
   auto const constraint = env.ctx.func->retTypeConstraint;
-  if (RuntimeOption::EvalCheckReturnTypeHints < 3 || constraint.isSoft()) {
+  if (constraint.isSoft()) {
     return;
   }
 

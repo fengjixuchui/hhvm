@@ -135,7 +135,6 @@ void commitGlobalData(std::unique_ptr<ArrayTypeTable::Builder> arrTable,
 
   auto gd                        = Repo::GlobalData{};
   gd.Signature                   = nanos.count();
-  gd.HardReturnTypeHints         = RuntimeOption::EvalCheckReturnTypeHints >= 3;
   gd.CheckPropTypeHints          = RuntimeOption::EvalCheckPropTypeHints;
   gd.HardPrivatePropInference    = true;
   gd.PHP7_NoHexNumerics          = RuntimeOption::PHP7_NoHexNumerics;
@@ -175,7 +174,6 @@ void commitGlobalData(std::unique_ptr<ArrayTypeTable::Builder> arrTable,
   gd.IsVecNotices = RuntimeOption::EvalIsVecNotices;
   gd.IsCompatibleClsMethType = RuntimeOption::EvalIsCompatibleClsMethType;
   gd.StrictArrayFillKeys = RuntimeOption::StrictArrayFillKeys;
-  gd.EnableFuncStringInterop = RO::EvalEnableFuncStringInterop;
   gd.WidenIsArray = RO::EvalWidenIsArray;
   gd.WidenIsArrayLogs = RO::EvalWidenIsArrayLogs;
 

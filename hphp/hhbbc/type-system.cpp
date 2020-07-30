@@ -92,7 +92,7 @@ bool mayHaveData(trep bits) {
   case BArrN:    case BSArrN:    case BCArrN:
   case BOptArr:  case BOptSArr:  case BOptCArr:
   case BOptArrN: case BOptSArrN: case BOptCArrN:
-  case BFunc:    case BFuncS:
+  case BFunc:
   case BRFunc:   case BOptRFunc:
   case BFuncLike: case BOptFuncLike:
   case BVec:      case BSVec:      case BCVec:
@@ -217,7 +217,6 @@ bool mayHaveData(trep bits) {
   case BOptArrKeyCompat:
   case BOptUncArrKeyCompat:
   case BOptFunc:
-  case BOptFuncS:
   case BOptCls:
   case BClsMeth:
   case BOptClsMeth:
@@ -261,7 +260,6 @@ bool canBeOptional(trep bits) {
   case BObj:
   case BRes:
   case BFunc:
-  case BFuncS:
   case BCls:
   case BClsMeth:
   case BRClsMeth:
@@ -399,7 +397,6 @@ bool canBeOptional(trep bits) {
   case BOptVecCompatSA:
   case BOptVecCompat:
   case BOptFunc:
-  case BOptFuncS:
   case BOptCls:
   case BOptClsMeth:
   case BOptRClsMeth:
@@ -3933,7 +3930,7 @@ Type type_of_istype(IsTypeOp op) {
   case IsTypeOp::ClsMeth: return TClsMeth;
   case IsTypeOp::Class: return TCls;
   case IsTypeOp::Func:
-    return RO::EvalEnableFuncStringInterop ? TFunc : TFuncS;
+    return TFunc;
   case IsTypeOp::Arr:
     if (!RO::EvalWidenIsArray) return php_arr;
     /* fallthrough */
@@ -3966,7 +3963,7 @@ folly::Optional<IsTypeOp> type_to_istypeop(const Type& t) {
   }
   if (t.subtypeOf(BClsMeth)) return IsTypeOp::ClsMeth;
   if (t.subtypeOf(BCls)) return IsTypeOp::Class;
-  if (t.subtypeOf(BFunc|BFuncS)) return IsTypeOp::Func;
+  if (t.subtypeOf(BFunc)) return IsTypeOp::Func;
   return folly::none;
 }
 
@@ -4158,8 +4155,6 @@ Type from_cell(TypedValue cell) {
   case KindOfDArray:
   case KindOfPersistentVArray:
   case KindOfVArray:
-  case KindOfPersistentArray:
-  case KindOfArray:
     always_assert(cell.m_data.parr->isStatic());
     always_assert(cell.m_data.parr->isPHPArrayType());
     return aval(cell.m_data.parr);
@@ -4198,12 +4193,10 @@ Type from_DataType(DataType dt) {
   case KindOfDArray:   return TDArr;
   case KindOfPersistentVArray:
   case KindOfVArray:   return TVArr;
-  case KindOfPersistentArray:
-  case KindOfArray:    return TArr;
   case KindOfObject:   return TObj;
   case KindOfResource: return TRes;
   case KindOfRFunc:    return TRFunc;
-  case KindOfFunc:     return RO::EvalEnableFuncStringInterop ? TFunc : TFuncS;
+  case KindOfFunc:     return TFunc;
   case KindOfClass:    return TCls;
   case KindOfClsMeth:  return TClsMeth;
   case KindOfRClsMeth: return TRClsMeth;
@@ -5027,7 +5020,7 @@ Type loosen_likeness(Type t) {
     }
   }
 
-  if (t.couldBe(BFunc | BCls)) t = union_of(std::move(t), TUncStrLike);
+  if (t.couldBe(BCls)) t = union_of(std::move(t), TUncStrLike);
 
   switch (t.m_dataTag) {
   case DataTag::None:
@@ -5208,9 +5201,9 @@ folly::Optional<ArrKey> maybe_class_func_key(const Type& keyTy, bool strict) {
 
   auto ret = ArrKey{};
 
-  if (keyTy.subtypeOf(BOptCls | BOptFunc)) {
+  if (keyTy.subtypeOf(BOptCls)) {
     ret.mayThrow = true;
-    if (keyTy.subtypeOf(BCls | BFunc)) {
+    if (keyTy.subtypeOf(BCls)) {
       if (keyTy.strictSubtypeOf(TCls)) {
         auto cname = dcls_of(keyTy).cls.name();
         ret.s = cname;
@@ -5222,7 +5215,7 @@ folly::Optional<ArrKey> maybe_class_func_key(const Type& keyTy, bool strict) {
     }
     ret.type = TUncArrKey;
     return ret;
-  } else if (keyTy.couldBe(BOptCls | BOptFunc)) {
+  } else if (keyTy.couldBe(BOptCls)) {
     ret.mayThrow = true;
     if (strict) ret.type = keyTy.couldBe(BCStr) ? TArrKey : TUncArrKey;
     else        ret.type = TInitCell;
@@ -6282,7 +6275,7 @@ bool is_type_might_raise(const Type& testTy, const Type& valTy) {
 
   if (is_opt(testTy)) return is_type_might_raise(unopt(testTy), valTy);
   if (testTy == TStrLike) {
-    return valTy.couldBe(BFunc | BCls);
+    return valTy.couldBe(BCls);
   } else if (testTy == TArr || testTy == TArrCompat) {
     return mayLogProv ||
            (RO::EvalIsVecNotices && !hackarr && valTy.couldBe(BClsMeth)) ||
@@ -6753,8 +6746,6 @@ RepoAuthType make_repo_type(ArrayTypeTable::Builder& arrTable, const Type& t) {
   X(OptObj)
   X(Func)
   X(OptFunc)
-  X(FuncS)
-  X(OptFuncS)
   X(Cls)
   X(OptCls)
   X(ClsMeth)

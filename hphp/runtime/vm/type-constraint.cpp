@@ -141,7 +141,6 @@ std::string TypeConstraint::displayName(const Class* context /*= nullptr*/,
       case AnnotType::Int:      str = "int";  break;
       case AnnotType::Float:    str = "float"; break;
       case AnnotType::String:   str = "string"; break;
-      case AnnotType::Array:    str = "array"; break;
       case AnnotType::Resource: str = "resource"; break;
       case AnnotType::Dict:     str = "dict"; break;
       case AnnotType::Vec:      str = "vec"; break;
@@ -467,9 +466,7 @@ bool TypeConstraint::checkNamedTypeNonObj(tv_rval val) const {
         assertx(td->type == AnnotType::Object);
         c = td->klass;
         break;
-      case AnnotAction::WarnFunc:
       case AnnotAction::WarnClass:
-      case AnnotAction::ConvertFunc:
       case AnnotAction::ConvertClass:
         return false; // verifyFail will deal with the conversion/warning
       case AnnotAction::ClsMethCheck:
@@ -690,9 +687,7 @@ bool TypeConstraint::checkImpl(tv_rval val,
     case AnnotAction::ObjectCheck:
       assertx(isObject());
       return !isPasses && checkNamedTypeNonObj<isAssert, isProp>(val);
-    case AnnotAction::WarnFunc:
     case AnnotAction::WarnClass:
-    case AnnotAction::ConvertFunc:
     case AnnotAction::ConvertClass:
       return false; // verifyFail will handle the conversion/warning
     case AnnotAction::ClsMethCheck:
@@ -746,8 +741,6 @@ bool TypeConstraint::alwaysPasses(const StringData* clsName) const {
       case AnnotAction::CallableCheck:
       case AnnotAction::ObjectCheck:
         return false;
-      case AnnotAction::WarnFunc:
-      case AnnotAction::ConvertFunc:
       case AnnotAction::WarnClass:
       case AnnotAction::ConvertClass:
       case AnnotAction::ClsMethCheck:
@@ -796,8 +789,6 @@ bool TypeConstraint::alwaysPasses(DataType dt) const {
     case AnnotAction::Fail:
     case AnnotAction::CallableCheck:
     case AnnotAction::ObjectCheck:
-    case AnnotAction::WarnFunc:
-    case AnnotAction::ConvertFunc:
     case AnnotAction::WarnClass:
     case AnnotAction::ConvertClass:
     case AnnotAction::ClsMethCheck:
@@ -902,8 +893,6 @@ std::string describe_actual_type(tv_rval val) {
     case KindOfDArray:        return "darray";
     case KindOfPersistentVArray:
     case KindOfVArray:        return "varray";
-    case KindOfPersistentArray:
-    case KindOfArray:         return "array";
     case KindOfResource:
       return val.val().pres->data()->o_getClassName().c_str();
     case KindOfRFunc:         return "reified function";
@@ -971,18 +960,6 @@ void castClsMeth(tv_lval c, F make) {
 void TypeConstraint::verifyOutParamFail(const Func* func,
                                         TypedValue* c,
                                         int paramNum) const {
-
-  if (RO::EvalEnableFuncStringInterop && isFuncType(c->m_type)) {
-    if (isString() || (isObject() && interface_supports_string(m_typeName))) {
-      if (RuntimeOption::EvalStringHintNotices) {
-        raise_notice(Strings::FUNC_TO_STRING_IMPLICIT);
-      }
-      c->m_data.pstr = const_cast<StringData*>(c->m_data.pfunc->name());
-      c->m_type = KindOfPersistentString;
-      return;
-    }
-  }
-
   if (isClassType(c->m_type) && checkStringCompatible()) {
     if (RuntimeOption::EvalClassStringHintNotices) {
       raise_notice(Strings::CLASS_TO_STRING_IMPLICIT);
@@ -1015,8 +992,7 @@ void TypeConstraint::verifyOutParamFail(const Func* func,
       describe_actual_type(c)
   );
 
-  if (RuntimeOption::EvalCheckReturnTypeHints >= 2 && !isSoft()
-      && (!isUpperBound() || RuntimeOption::EvalEnforceGenericsUB >= 2)) {
+  if (!isSoft() && (!isUpperBound() || RuntimeOption::EvalEnforceGenericsUB >= 2)) {
     raise_return_typehint_error(msg);
   } else {
     raise_warning_unsampled(msg);
@@ -1110,17 +1086,6 @@ void TypeConstraint::verifyFail(const Func* func, tv_lval c,
     }
   }
 
-  if (RO::EvalEnableFuncStringInterop && isFuncType(c.type())) {
-    if (isString() || (isObject() && interface_supports_string(m_typeName))) {
-      if (RuntimeOption::EvalStringHintNotices) {
-        raise_notice(Strings::FUNC_TO_STRING_IMPLICIT);
-      }
-      val(c).pstr = const_cast<StringData*>(val(c).pfunc->name());
-      c.type() = KindOfPersistentString;
-      return;
-    }
-  }
-
   if (isClassType(c.type()) && checkStringCompatible()) {
     if (RuntimeOption::EvalClassStringHintNotices) {
       raise_notice(Strings::CLASS_TO_STRING_IMPLICIT);
@@ -1167,8 +1132,7 @@ void TypeConstraint::verifyFail(const Func* func, tv_lval c,
           givenType
         ).str();
     }
-    if (RuntimeOption::EvalCheckReturnTypeHints >= 2 && !isSoft()
-        && (!isUpperBound() || RuntimeOption::EvalEnforceGenericsUB >= 2)) {
+    if (!isSoft() && (!isUpperBound() || RuntimeOption::EvalEnforceGenericsUB >= 2)) {
       raise_return_typehint_error(msg);
     } else {
       raise_warning_unsampled(msg);
@@ -1270,8 +1234,6 @@ MemoKeyConstraint memoKeyConstraintFromTC(const TypeConstraint& tc) {
         case KindOfDArray:
         case KindOfPersistentVArray:
         case KindOfVArray:
-        case KindOfPersistentArray:
-        case KindOfArray:
         case KindOfClsMeth:
         case KindOfResource:
         case KindOfRecord:

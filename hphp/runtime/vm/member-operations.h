@@ -514,12 +514,8 @@ NEVER_INLINE TypedValue ElemSlow(tv_rval base, key_type<keyType> key) {
     case KindOfResource:
     case KindOfRFunc:
     case KindOfRClsMeth:
-      return ElemScalar();
     case KindOfFunc:
-      if (!RO::EvalEnableFuncStringInterop) return ElemScalar();
-      return ElemString<mode, keyType>(
-        funcToStringHelper(base.val().pfunc), key
-      );
+      return ElemScalar();
     case KindOfClass:
       return ElemString<mode, keyType>(
         classToStringHelper(base.val().pclass), key
@@ -539,8 +535,6 @@ NEVER_INLINE TypedValue ElemSlow(tv_rval base, key_type<keyType> key) {
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-    case KindOfPersistentArray:
-    case KindOfArray:
       always_assert(false);
 
     case KindOfObject:
@@ -914,8 +908,6 @@ tv_lval ElemD(tv_lval base, key_type<keyType> key) {
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-    case KindOfPersistentArray:
-    case KindOfArray:
       return ElemDArray<keyType>(base, key);
     case KindOfObject:
       return ElemDObject<keyType>(base, key);
@@ -1242,8 +1234,6 @@ tv_lval ElemU(tv_lval base, key_type<keyType> key) {
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-    case KindOfPersistentArray:
-    case KindOfArray:
       return ElemUArray<keyType>(base, key);
     case KindOfObject:
       return ElemUObject<keyType>(base, key);
@@ -1339,8 +1329,6 @@ inline tv_lval NewElem(tv_lval base) {
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-    case KindOfPersistentArray:
-    case KindOfArray:
       return NewElemArray(base);
     case KindOfObject:
       return NewElemObject(base);
@@ -1714,8 +1702,6 @@ StringData* SetElemSlow(tv_lval base, key_type<keyType> key,
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-    case KindOfPersistentArray:
-    case KindOfArray:
       always_assert(false);
 
     case KindOfObject:
@@ -1933,8 +1919,6 @@ inline void SetNewElem(tv_lval base, TypedValue* value) {
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-    case KindOfPersistentArray:
-    case KindOfArray:
       return SetNewElemArray(base, value);
     case KindOfObject:
       return SetNewElemObject(base, value);
@@ -2037,8 +2021,6 @@ inline TypedValue SetOpElem(SetOpOp op, tv_lval base,
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-    case KindOfPersistentArray:
-    case KindOfArray:
       return handleArray();
 
     case KindOfObject: {
@@ -2115,8 +2097,6 @@ inline TypedValue SetOpNewElem(SetOpOp op, tv_lval base, TypedValue* rhs) {
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-    case KindOfPersistentArray:
-    case KindOfArray:
       throwMissingElementException("Set-op");
 
     case KindOfObject: {
@@ -2237,8 +2217,6 @@ inline TypedValue IncDecElem(IncDecOp op, tv_lval base, TypedValue key) {
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-    case KindOfPersistentArray:
-    case KindOfArray:
       return handleArray();
 
     case KindOfObject: {
@@ -2322,8 +2300,6 @@ inline TypedValue IncDecNewElem(IncDecOp op, tv_lval base) {
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-    case KindOfPersistentArray:
-    case KindOfArray:
       throwMissingElementException("Inc/dec");
 
     case KindOfObject: {
@@ -2578,8 +2554,6 @@ void UnsetElemSlow(tv_lval base, key_type<keyType> key) {
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-    case KindOfPersistentArray:
-    case KindOfArray:
       UnsetElemArray<keyType>(base, key);
       return;
 
@@ -2758,13 +2732,8 @@ NEVER_INLINE bool IssetElemSlow(tv_rval base, key_type<keyType> key) {
     case KindOfResource:
     case KindOfRFunc:
     case KindOfRClsMeth:
-      return false;
-
     case KindOfFunc:
-      if (!RO::EvalEnableFuncStringInterop) return false;
-      return IssetElemString<keyType>(
-        funcToStringHelper(val(base).pfunc), key
-      );
+      return false;
 
     case KindOfClass:
       return IssetElemString<keyType>(
@@ -2786,8 +2755,6 @@ NEVER_INLINE bool IssetElemSlow(tv_rval base, key_type<keyType> key) {
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-    case KindOfPersistentArray:
-    case KindOfArray:
       always_assert(false);
 
     case KindOfObject:
@@ -2874,8 +2841,6 @@ tv_lval propPre(TypedValue& tvRef, tv_lval base) {
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentArray:
-    case KindOfArray:
     case KindOfClsMeth:
     case KindOfRClsMeth:
     case KindOfRecord:
@@ -2912,8 +2877,6 @@ inline tv_lval nullSafeProp(TypedValue& tvRef,
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-    case KindOfPersistentArray:
-    case KindOfArray:
     case KindOfRFunc:
     case KindOfFunc:
     case KindOfClass:
@@ -3024,8 +2987,6 @@ inline void SetProp(Class* ctx, tv_lval base, key_type<keyType> key,
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-    case KindOfPersistentArray:
-    case KindOfArray:
     case KindOfResource:
     case KindOfRFunc:
     case KindOfFunc:
@@ -3088,8 +3049,6 @@ inline tv_lval SetOpProp(TypedValue& tvRef,
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-    case KindOfPersistentArray:
-    case KindOfArray:
     case KindOfResource:
     case KindOfRFunc:
     case KindOfFunc:
@@ -3154,8 +3113,6 @@ inline TypedValue IncDecProp(
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-    case KindOfPersistentArray:
-    case KindOfArray:
     case KindOfResource:
     case KindOfRFunc:
     case KindOfFunc:

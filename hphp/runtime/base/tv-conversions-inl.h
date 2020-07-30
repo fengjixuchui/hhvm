@@ -29,12 +29,10 @@ namespace HPHP {
 
 // We want to avoid potential include cycle with func.h/class.h, so putting
 // forward declarations here is more feasible and simpler.
-const StringData* funcToStringHelper(const Func* func);
-int64_t funcToInt64Helper(const Func* func);
 const StringData* classToStringHelper(const Class* cls);
 Array clsMethToVecHelper(const ClsMethDataRef clsMeth);
 void raiseClsMethConvertWarningHelper(const char* toType);
-void invalidFuncConversion(const char*);
+[[noreturn]] void invalidFuncConversion(const char*);
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -58,9 +56,7 @@ inline bool tvToBool(TypedValue cell) {
     case KindOfPersistentDict:
     case KindOfDict:
     case KindOfPersistentKeyset:
-    case KindOfKeyset:
-    case KindOfPersistentArray:
-    case KindOfArray:         return !cell.m_data.parr->empty();
+    case KindOfKeyset:        return !cell.m_data.parr->empty();
     case KindOfObject:        return cell.m_data.pobj->toBoolean();
     case KindOfResource:      return cell.m_data.pres->data()->o_toBoolean();
     case KindOfRecord:        raise_convert_record_to_type("bool"); break;
@@ -93,16 +89,13 @@ inline int64_t tvToInt(TypedValue cell) {
     case KindOfPersistentDict:
     case KindOfDict:
     case KindOfPersistentKeyset:
-    case KindOfKeyset:
-    case KindOfPersistentArray:
-    case KindOfArray:         return cell.m_data.parr->empty() ? 0 : 1;
+    case KindOfKeyset:        return cell.m_data.parr->empty() ? 0 : 1;
     case KindOfObject:        return cell.m_data.pobj->toInt64();
     case KindOfResource:      return cell.m_data.pres->data()->o_toInt64();
     case KindOfRecord:        raise_convert_record_to_type("int"); break;
     case KindOfRFunc:         raise_convert_rfunc_to_type("int"); break;
     case KindOfFunc:
       invalidFuncConversion("int");
-      return funcToInt64Helper(cell.m_data.pfunc);
     case KindOfClass:
       return classToStringHelper(cell.m_data.pclass)->toInt64();
     case KindOfClsMeth:
@@ -119,22 +112,12 @@ template <IntishCast IC>
 inline TypedValue tvToKey(TypedValue cell, const ArrayData* ad) {
   assertx(tvIsPlausible(cell));
 
-  auto coerceKey = [&] (const StringData* str) {
-    int64_t n;
-    if (IC == IntishCast::Cast && ad->intishCastKey(str, n)) {
-      return make_tv<KindOfInt64>(n);
-    }
-    return make_tv<KindOfString>(const_cast<StringData*>(str));
-  };
-
   if (isStringType(cell.m_type)) {
     int64_t n;
     if (IC == IntishCast::Cast && ad->intishCastKey(cell.m_data.pstr, n)) {
       return make_tv<KindOfInt64>(n);
     }
     return cell;
-  } else if (isFuncType(cell.m_type) && RO::EvalEnableFuncStringInterop) {
-    return coerceKey(funcToStringHelper(cell.m_data.pfunc));
   }
 
   if (LIKELY(isIntType(cell.m_type))) return cell;

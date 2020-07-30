@@ -62,12 +62,6 @@ bool tvInstanceOfImpl(const TypedValue* tv, F lookupClass) {
     }
 
     case KindOfFunc: {
-      auto const cls = lookupClass();
-      if (RO::EvalEnableFuncStringInterop &&
-          cls && interface_supports_string(cls->name())) {
-        funcToStringHelper(tv->m_data.pfunc); // maybe raise a warning
-        return true;
-      }
       return false;
     }
 
@@ -96,9 +90,7 @@ bool tvInstanceOfImpl(const TypedValue* tv, F lookupClass) {
     case KindOfPersistentDArray:
     case KindOfDArray:
     case KindOfPersistentVArray:
-    case KindOfVArray:
-    case KindOfPersistentArray:
-    case KindOfArray: {
+    case KindOfVArray: {
       auto const cls = lookupClass();
       return cls && interface_supports_arrlike(cls->name());
     }
@@ -596,12 +588,6 @@ bool checkTypeStructureMatchesTVImpl(
       return isIntType(type) || isStringType(type);
 
     case TypeStructure::Kind::T_string:
-      if (RO::EvalEnableFuncStringInterop && isFuncType(type)) {
-        if (RO::EvalIsStringNotices) {
-          raise_notice("Func used in is_string");
-        }
-        return true;
-      }
       if (isClassType(type)) {
         if (RO::EvalClassIsStringNotices) {
           raise_notice("Class used in is_string");

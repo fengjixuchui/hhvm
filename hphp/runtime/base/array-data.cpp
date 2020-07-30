@@ -100,7 +100,6 @@ struct ScalarHash {
           case KindOfPersistentString:
           case KindOfPersistentDArray:
           case KindOfPersistentVArray:
-          case KindOfPersistentArray:
           case KindOfPersistentVec:
           case KindOfPersistentDict:
           case KindOfPersistentKeyset:
@@ -110,7 +109,6 @@ struct ScalarHash {
           case KindOfString:
           case KindOfDArray:
           case KindOfVArray:
-          case KindOfArray:
           case KindOfVec:
           case KindOfDict:
           case KindOfKeyset:
@@ -273,14 +271,12 @@ static_assert(ArrayFunctions::NK == ArrayData::ArrayKind::kNumKinds,
     BespokeArray::entry,     /* bespoke darray */ \
     PackedArray::entry,      /* varray */         \
     BespokeArray::entry,     /* bespoke varray */ \
-    MixedArray::entry,       /* plain array */    \
-    BespokeArray::entry,     /* bespoke array */  \
-    SetArray::entry,         /* keyset */         \
-    BespokeArray::entry,     /* bespoke keyset */ \
     MixedArray::entry##Dict, /* dict */           \
     BespokeArray::entry,     /* bespoke dict */   \
     PackedArray::entry##Vec, /* vec */            \
     BespokeArray::entry,     /* bespoke vec */    \
+    SetArray::entry,         /* keyset */         \
+    BespokeArray::entry,     /* bespoke keyset */ \
   },
 
 /*
@@ -918,19 +914,17 @@ void ArrayData::getNotFound(const StringData* k) const {
 }
 
 const char* ArrayData::kindToString(ArrayKind kind) {
-  std::array<const char*, 12> names = {{
+  std::array<const char*, 10> names = {{
     "MixedKind",
     "BespokeDArrayKind",
     "PackedKind",
     "BespokeVArrayKind",
-    "PlainKind",
-    "BespokeArrayKind",
-    "KeysetKind",
-    "BespokeKeysetKind",
     "DictKind",
     "BespokeDictKind",
     "VecKind",
     "BespokeVecKind",
+    "KeysetKind",
+    "BespokeKeysetKind",
   }};
   static_assert(names.size() == kNumKinds, "add new kinds here");
   return names[kind];
@@ -955,12 +949,13 @@ std::string describeKeyType(const TypedValue* tv) {
   case KindOfDict:             return "dict";
   case KindOfPersistentKeyset:
   case KindOfKeyset:           return "keyset";
+
+  // TODO(kshaunak): Fix the messages for dvarrays here.
   case KindOfPersistentDArray:
   case KindOfDArray:           return "array";
   case KindOfPersistentVArray:
   case KindOfVArray:           return "array";
-  case KindOfPersistentArray:
-  case KindOfArray:            return "array";
+
   case KindOfResource:
     return tv->m_data.pres->data()->o_getClassName().toCppString();
 
@@ -1000,8 +995,6 @@ std::string describeKeyValue(TypedValue tv) {
   case KindOfDArray:
   case KindOfPersistentVArray:
   case KindOfVArray:
-  case KindOfPersistentArray:
-  case KindOfArray:
   case KindOfResource:
   case KindOfObject:
   case KindOfRFunc:
