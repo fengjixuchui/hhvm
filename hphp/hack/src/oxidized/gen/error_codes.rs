@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<483a28f859f97cb6ac0885589460f9e0>>
+// @generated SignedSource<<3a1845841b88a704c87f9ca0ac277cc0>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
@@ -168,6 +168,8 @@ pub enum Naming {
     PocketUniversesAtomUnknown,
     PocketUniversesLocalization,
     ClassMethNonFinalSelf,
+    ParentInFunctionPointer,
+    SelfInNonFinalFunctionPointer,
 }
 impl TrivialDrop for Naming {}
 
@@ -667,6 +669,7 @@ pub enum Typing {
     ConcreteConstInterfaceOverride,
     MethCallerTrait,
     PocketUniversesAttributes,
+    DuplicateInterface,
 }
 impl TrivialDrop for Typing {}
 
