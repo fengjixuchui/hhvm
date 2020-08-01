@@ -13,7 +13,9 @@ open Ifc_types
 module Decl = Ifc_decl
 module Env = Ifc_env
 module Logic = Ifc_logic
+module Opts = Ifc_options
 module Pp = Ifc_pretty
+module Lattice = Ifc_security_lattice
 module Solver = Ifc_solver
 module Utils = Ifc_utils
 module A = Aast
@@ -27,6 +29,9 @@ module TEnv = Typing_env
 module TUtils = Typing_utils
 
 exception FlowInference of string
+
+let should_print ~user_mode ~phase =
+  equal_mode user_mode Mdebug || equal_mode user_mode phase
 
 let fail fmt = Format.kasprintf (fun s -> raise (FlowInference s)) fmt
 
@@ -275,7 +280,7 @@ let rec class_ptype lump_pol_opt proto_renv targs name =
     (* Purpose of the property takes precedence over any lump policy. *)
     let lump_pol_opt =
       Option.merge
-        (Option.map ~f:Ifc_security_lattice.parse_policy pp_purpose)
+        (Option.map ~f:Lattice.parse_policy pp_purpose)
         lump_pol_opt
         ~f:(fun a _ -> a)
     in
@@ -311,7 +316,9 @@ and ptype ?prefix lump_pol_opt proto_renv (t : T.locl_ty) =
   let ptype = ptype ?prefix lump_pol_opt proto_renv in
   match T.get_node t with
   | T.Tprim _ -> Tprim (get_policy lump_pol_opt proto_renv ?prefix)
-  | T.Tgeneric _ -> Tgeneric (get_policy lump_pol_opt proto_renv ?prefix)
+  | T.Tgeneric (_name, _targs) ->
+    (* TODO(T69551141) Handle type arguments *)
+    Tgeneric (get_policy lump_pol_opt proto_renv ?prefix)
   | T.Ttuple tyl -> Ttuple (List.map ~f:ptype tyl)
   | T.Tunion tyl -> Tunion (List.map ~f:ptype tyl)
   | T.Tintersection tyl -> Tinter (List.map ~f:ptype tyl)
@@ -397,10 +404,24 @@ let property_ptype proto_renv obj_ptype property property_ty =
   | None ->
     ptype ~prefix:("." ^ property) (Some class_.c_lump) proto_renv property_ty
 
+let throw renv env exn_ty =
+  let union env t1 t2 = (env, mk_union t1 t2) in
+  let env = Env.merge_conts_into ~union env [K.Next] K.Catch in
+  let lpc = Env.get_lpc_policy env K.Next in
+  Env.acc
+    env
+    L.(
+      subtype renv.re_proto.pre_meta exn_ty renv.re_exn
+      && add_dependencies (PCSet.elements lpc) renv.re_exn)
+
 let call renv env callable_name that_pty_opt args_pty ret_ty =
   let ret_pty =
     let prefix = callable_name ^ "_ret" in
     ptype ~prefix None renv.re_proto ret_ty
+  in
+  let callee_exn_policy = Env.new_policy_var renv.re_proto "exn" in
+  let callee_exn =
+    class_ptype (Some callee_exn_policy) renv.re_proto [] Decl.exception_id
   in
   let env =
     match SMap.find_opt callable_name renv.re_proto.pre_decl.de_fun with
@@ -419,11 +440,16 @@ let call renv env callable_name that_pty_opt args_pty ret_ty =
           fp_pc = pc_joined;
           fp_args = args_pty;
           fp_ret = ret_pty;
+          fp_exn = callee_exn;
         }
       in
       let env = Env.acc env (fun acc -> Chole fp :: acc) in
       let env = Env.add_dep env callable_name in
-      env
+      (* Any function call may throw, so we need to update the current PC and
+       * exception dependencies based on the callee's exception policy
+       *)
+      let env = Env.push_pc env K.Next callee_exn_policy in
+      throw renv env callee_exn
     | None -> fail "unknown function '%s'" callable_name
   in
   (env, ret_pty)
@@ -688,10 +714,8 @@ let rec stmt renv env ((_pos, s) : Tast.stmt) =
             && subtype te renv.re_ret)
     end
   | A.Throw e ->
-    let (env, ty) = expr renv env e in
-    let union env t1 t2 = (env, mk_union t1 t2) in
-    let env = Env.merge_conts_into ~union env [K.Next] K.Catch in
-    Env.acc env @@ subtype ty renv.re_exn
+    let (env, exn_ty) = expr renv env e in
+    throw renv env exn_ty
   | A.Try (try_blk, [((_, exn), (_, exn_var), catch_blk)], []) ->
     (* NOTE: for now we only support try with a single catch block and no finally
      * block. Only \Exception is allowed to be caught
@@ -755,7 +779,7 @@ let callable meta decl_env class_name_opt name saved_env params body lrty =
     let end_env = env in
 
     (* Display the analysis results *)
-    if meta.m_opts.verbosity >= 2 then begin
+    if should_print meta.m_opts.opt_mode Manalyse then begin
       Format.printf "Analyzing %s:@." name;
       Format.printf "%a@." Pp.renv renv;
       Format.printf "* Params:@,  %a@." Pp.locals beg_env;
@@ -772,6 +796,7 @@ let callable meta decl_env class_name_opt name saved_env params body lrty =
           fp_this = this_ty;
           fp_args = param_tys;
           fp_ret = ret_ty;
+          fp_exn = exn;
         }
       in
       {
@@ -818,7 +843,27 @@ let walk_tast meta decl_env =
   in
   (fun tast -> List.concat (List.filter_map ~f:def tast))
 
-let do_ opts files_info ctx =
+let opts_of_raw_opts raw_opts =
+  let opt_mode =
+    try Opts.parse_mode_exn raw_opts.ropt_mode
+    with Opts.Invalid_ifc_mode mode ->
+      fail "option error: %s is not a recognised mode" mode
+  in
+  let opt_security_lattice =
+    try Lattice.mk_exn raw_opts.ropt_security_lattice
+    with Lattice.Invalid_security_lattice ->
+      fail
+        "option error: lattice specification should be basic flux constraints, e.g., `A < B` separated by `;`"
+  in
+  { opt_mode; opt_security_lattice }
+
+let do_ raw_opts files_info ctx =
+  let opts = opts_of_raw_opts raw_opts in
+
+  ( if should_print ~user_mode:opts.opt_mode ~phase:Mlattice then
+    let lattice = opts.opt_security_lattice in
+    Format.printf "@[Lattice:@. %a@]\n\n" Pp.security_lattice lattice );
+
   Relative_path.Map.iter files_info ~f:(fun path i ->
       (* skip decls and partial *)
       match i.FileInfo.file_mode with
@@ -828,11 +873,16 @@ let do_ opts files_info ctx =
         let { Tast_provider.Compute_tast.tast; _ } =
           Tast_provider.compute_tast_unquarantined ~ctx ~entry
         in
-        let decl_env = Decl.collect_sigs tast in
-        if opts.verbosity >= 3 then Format.printf "%a@." Pp.decl_env decl_env;
 
+        (* Declaration phase *)
+        let decl_env = Decl.collect_sigs tast in
+        if should_print ~user_mode:opts.opt_mode ~phase:Mdecl then
+          Format.printf "%a@." Pp.decl_env decl_env;
+
+        (* Flow analysis phase *)
         let results = walk_tast meta decl_env tast in
 
+        (* Solver phase *)
         let results =
           try Solver.global_exn ~subtype:(subtype meta) results with
           | Solver.Error Solver.RecursiveCycle ->
@@ -864,30 +914,19 @@ let do_ opts files_info ctx =
           Format.printf "@]";
           Format.printf "@]\n\n"
         in
-        if opts.verbosity >= 1 then SMap.iter log_solver simplified_results;
+        if should_print ~user_mode:opts.opt_mode ~phase:Msolve then
+          SMap.iter log_solver simplified_results;
 
-        let lattice =
-          try Ifc_security_lattice.mk_exn opts.security_lattice
-          with Ifc_security_lattice.Invalid_security_lattice ->
-            fail
-              "lattice parsing error: lattice specification should be `;` basic flux constraints, e.g., `A < B`"
-        in
-
-        if opts.verbosity >= 3 then
-          Format.printf "@[Lattice:@. %a@]\n\n" Pp.security_lattice lattice;
-
+        (* Checking phase *)
         let log_checking name (_, simple) =
           let violations =
-            try Ifc_security_lattice.check_exn lattice simple
-            with Ifc_security_lattice.Checking_error ->
-              fail
-                "lattice checking error: something went wrong while checking %a against %s"
-                Pp.prop
-                simple
-                opts.security_lattice
+            Logic.entailment_violations opts.opt_security_lattice simple
           in
 
-          if not @@ List.is_empty violations then begin
+          if
+            should_print ~user_mode:opts.opt_mode ~phase:Mcheck
+            && not (List.is_empty violations)
+          then begin
             Format.printf "There are privacy policy errors in %s:@.  @[<v>" name;
             List.iter ~f:(Format.printf "%a@," Pp.violation) violations;
             Format.printf "@]\n"

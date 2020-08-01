@@ -207,6 +207,10 @@ inline bool ArrayData::isHAMSafeVArray() const {
 inline bool ArrayData::isHAMSafeDArray() const {
   return RuntimeOption::EvalHackArrDVArrs ? isDictType() : isDArray();
 }
+inline bool ArrayData::isHAMSafeDVArray() const {
+  return RuntimeOption::EvalHackArrDVArrs ? isDictType() || isVecType()
+                                          : isDVArray();
+}
 
 inline bool ArrayData::dvArrayEqual(const ArrayData* a, const ArrayData* b) {
   static_assert(kMixedKind == 0);
@@ -220,22 +224,6 @@ inline bool ArrayData::dvArrayEqual(const ArrayData* a, const ArrayData* b) {
 inline bool ArrayData::hasApcTv() const { return m_aux16 & kHasApcTv; }
 
 inline bool ArrayData::isLegacyArray() const { return m_aux16 & kLegacyArray; }
-
-inline void ArrayData::setLegacyArray(bool legacy) {
-  assertx(hasExactlyOneRef());
-  assertx(!legacy
-          || isDictType()
-          || isVecType()
-          || (!RO::EvalHackArrDVArrs && isDVArray()));
-  /* TODO(jgriego) we should be asserting that the
-   * mark-ee should have provenance here but it's not
-   * safe and sane yet */
-  if (legacy && !isLegacyArray() && hasProvenanceData()) {
-    arrprov::clearTag(this);
-    setHasProvenanceData(false);
-  }
-  m_aux16 = (m_aux16 & ~kLegacyArray) | (legacy ? kLegacyArray : 0);
-}
 
 inline bool ArrayData::hasStrKeyTable() const {
   return m_aux16 & kHasStrKeyTable;

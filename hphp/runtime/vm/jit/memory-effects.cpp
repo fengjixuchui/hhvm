@@ -836,8 +836,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   // heap.
   case CreateGen:
   case CreateAGen:
-  case CreateAFWH:
-  case CreateAFWHNoVV: {
+  case CreateAFWH: {
     auto const fp = canonical(inst.src(0));
     auto fpInst = fp->inst();
     auto const frame = [&] () -> AliasClass {
@@ -1984,11 +1983,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ConvArrToDArr:
   case ConvVecToDArr:
     return may_load_store(AElemAny, AEmpty);
-
-  case ReleaseVVAndSkip:  // can decref VarEnv and Locals
-    return
-      may_load_store(AHeapAny|ALocalAny|livefp(inst.src(0)),
-                     AHeapAny|ALocalAny|livefp(inst.src(0)));
 
   // debug_backtrace() traverses stack and WaitHandles on the heap.
   case DebugBacktrace:

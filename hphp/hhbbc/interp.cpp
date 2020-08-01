@@ -2267,13 +2267,14 @@ void in(ISS& env, const bc::Throw& /*op*/) {
 
 void in(ISS& env, const bc::ThrowNonExhaustiveSwitch& /*op*/) {}
 
+void in(ISS& env, const bc::RaiseClassStringConversionWarning& /*op*/) {}
+
 void in(ISS& env, const bc::ChainFaults&) {
   popC(env);
 }
 
 void in(ISS& env, const bc::NativeImpl&) {
   killLocals(env);
-  mayUseVV(env);
 
   if (is_collection_method_returning_this(env.ctx.cls, env.ctx.func)) {
     auto const resCls = env.index.builtin_class(env.ctx.cls->name);
@@ -4694,7 +4695,6 @@ void inclOpImpl(ISS& env) {
   killLocals(env);
   killThisProps(env);
   killSelfProps(env);
-  mayUseVV(env);
   push(env, TInitCell);
 }
 
@@ -4794,9 +4794,6 @@ void in(ISS& env, const bc::OODeclExists& op) {
       if (canConstProp()) {
         constprop(env);
         return mayExist ? TTrue : TFalse;
-      }
-      if (!any(env.collect.opts & CollectionOpts::Inlining)) {
-        unit->persistent.store(false, std::memory_order_relaxed);
       }
       // At this point, if it mayExist, we still don't know that it
       // *does* exist, but if not we know that it either doesn't

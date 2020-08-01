@@ -88,6 +88,7 @@ let make_abstract env id name namel bnd =
        Here, $x->get() has type expr#1::T as T1::T (as Box::T).
        But T1::T is exactly equal to int, so $x->get() no longer needs
        to be expression dependent. Thus, $x->get() typechecks. *)
+    (* TODO(T69551141) handle type arguments *)
     Exact (MakeType.generic Reason.Rnone tp_name)
   else
     Abstract (name, namel, bnd)
@@ -186,6 +187,7 @@ let rec type_of_result ctx env root res =
     ) else
       let generic_name = tp_name name id in
       let reason = make_reason env Reason.Rnone id root in
+      (* TODO(T69551141) handle type arguments *)
       let ty = MakeType.generic reason generic_name in
       let env =
         Option.fold bnd ~init:env ~f:(fun env bnd ->
@@ -240,7 +242,8 @@ let rec expand ctx env root =
     in
     let ctx = { ctx with allow_abstract } in
     create_root_from_type_constant ctx env root cls opt_class_def
-  | Tgeneric s ->
+  | Tgeneric (s, _tyargs) ->
+    (* TODO(T69551141) handle type arguments *)
     let ctx =
       let generics_seen = TySet.add root ctx.generics_seen in
       let base = Some (Option.value ctx.base ~default:root) in

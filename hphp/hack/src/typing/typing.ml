@@ -1796,6 +1796,7 @@ and expr_
       in
       let params =
         List.map (Cls.tparams class_) (fun { tp_name = (p, n); _ } ->
+            (* TODO(T69551141) handle type arguments for Tgeneric *)
             MakeType.generic (Reason.Rwitness p) n)
       in
       let obj_type = MakeType.apply (Reason.Rwitness p) pos_cname params in
@@ -2282,6 +2283,7 @@ and expr_
             ~f:
               begin
                 fun { tp_name = (p, x); _ } ->
+                (* TODO(T69551141) handle type arguments for Tgeneric *)
                 MakeType.generic (Reason.Rwitness p) x
               end
             tparaml
@@ -5290,6 +5292,7 @@ and class_get_
       ty
       (p, mid)
   | (_, Tgeneric _) ->
+    (* TODO(T69551141) handle type arguments? *)
     let resl =
       TUtils.try_over_concrete_supertypes env cty (fun env ty ->
           class_get_
@@ -5760,6 +5763,7 @@ and static_class_id
           (List.map ~f:snd tal)
       in
       let r = Reason.Rhint p in
+      (* TODO(T69551141) handle type arguments for Tgeneric *)
       let tgeneric = MakeType.generic r id in
       make_result env tal (Aast.CI c) tgeneric
     else
@@ -6656,7 +6660,8 @@ and generate_fresh_tparams env class_info reason hint_tyl =
     | Some ty ->
       begin
         match get_node ty with
-        | Tgeneric name when Env.is_fresh_generic_parameter name ->
+        | Tgeneric (name, _targs) when Env.is_fresh_generic_parameter name ->
+          (* TODO(T69551141) handle type arguments above and below *)
           (env, (Some (tp, name), MakeType.generic reason name))
         | _ -> (env, (None, ty))
       end
@@ -6669,6 +6674,7 @@ and generate_fresh_tparams env class_info reason hint_tyl =
           ~enforceable
           ~newable
       in
+      (* TODO(T69551141) handle type arguments for Tgeneric *)
       (env, (Some (tp, new_name), MakeType.generic reason new_name))
   in
   let (env, tparams_and_tyl) =
@@ -6795,6 +6801,7 @@ and safely_refine_is_array env ty p pred_name arg_expr =
           ~enforceable:false
           ~newable:false
       in
+      (* TODO(T69551141) handle type arguments for Tgeneric *)
       let tarrkey = MakeType.generic r tarrkey_name in
       let env =
         SubType.add_constraint
@@ -6812,6 +6819,7 @@ and safely_refine_is_array env ty p pred_name arg_expr =
           ~enforceable:false
           ~newable:false
       in
+      (* TODO(T69551141) handle type arguments for Tgeneric *)
       let tfresh = MakeType.generic r tfresh_name in
       (* If we're refining the type for `is_array` we have a slightly more
        * involved process. Let's separate out that logic so we can re-use it.
@@ -7072,6 +7080,7 @@ and class_get_pu_ env cty name =
   | Tdynamic
   | Tunion _
   | Tgeneric _ ->
+    (* TODO(T69551141) handle type arguments *)
     (env, None)
   | Tvar _
   | Tnonnull

@@ -144,13 +144,12 @@ struct alignas(16) Resumable {
     return reinterpret_cast<Resumable*>(frame + frameSize);
   }
 
-  template<bool clone,
-           bool mayUseVV = true>
+  template<bool clone>
   void initialize(const ActRec* fp, jit::TCA resumeAddr,
                   Offset suspendOffset, size_t frameSize, size_t totalSize) {
     assertx(fp);
     assertx(isResumed(fp) == clone);
-    auto const func = fp->func();
+    DEBUG_ONLY auto const func = fp->func();
     assertx(func);
     assertx(func->isResumable());
     assertx(func->contains(suspendOffset));
@@ -162,14 +161,6 @@ struct alignas(16) Resumable {
       auto src = reinterpret_cast<const char*>(fp) - frameSize;
       auto dst = reinterpret_cast<char*>(actRec()) - frameSize;
       wordcpy(dst, src, frameSize + sizeof(ActRec));
-
-      // Suspend VarEnv if needed
-      assertx(mayUseVV || !(func->attrs() & AttrMayUseVV));
-      if (mayUseVV &&
-          UNLIKELY(func->attrs() & AttrMayUseVV) &&
-          UNLIKELY(fp->hasVarEnv())) {
-        fp->getVarEnv()->suspend(fp, actRec());
-      }
     } else {
       // If we are cloning a Resumable, only copy the ActRec. The
       // caller will take care of copying locals, setting the VarEnv, etc.

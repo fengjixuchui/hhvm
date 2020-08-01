@@ -1752,12 +1752,6 @@ To string conversions:
   For debugging purposes.  Store kTVTrashJITRetVal to the return value slot on
   the activation record pointed to by S0.
 
-| ReleaseVVAndSkip, ND, S(FramePtr), B
-
-  Loads the VarEnv slot off the ActRec pointed to by S0. If it is null, does
-  nothing. Otherwise it frees the VarEnv and jumps to block B. This instruction
-  may not occur in an inlined call.
-
 | GenericRetDecRefs, ND, S(FramePtr), NF
 
   Does decrefs of all the current function's locals, where S0 is a pointer to
@@ -2436,16 +2430,6 @@ To string conversions:
   S0 into its embedded ActRec, allocating S1 slots for locals/iterators.  Set
   the native resume address to S2, resume offset to S3, and mark it blocked on
   non-finished child S4.
-
-| CreateAFWHNoVV, DAllocObj,
-|                 S(FramePtr) C(Int) S(TCA,Nullptr) C(Int) S(Obj),
-|                 CRc|PRc
-
-  Create an AsyncFunctionWaitHandle object and suspend the ActRec provided by
-  S0 into its embedded ActRec, allocating S1 slots for locals/iterators.  Set
-  the native resume address to S2, resume offset to S3, and mark it blocked on
-  non-finished child S4.  This version of the instruction guarantees that the
-  VarEnv is unused.
 
 | CreateAGWH, DAllocObj,
 |             S(FramePtr) S(TCA,Nullptr) C(Int) S(Obj),

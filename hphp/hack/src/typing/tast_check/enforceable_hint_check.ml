@@ -49,7 +49,8 @@ let validator =
         ^ tconst
         ^ " because it is not marked <<__Enforceable>>"
 
-    method! on_tgeneric acc r name =
+    method! on_tgeneric acc r name _tyargs =
+      (* TODO(T69551141) handle type arguments *)
       if acc.like_context then
         acc
       else
@@ -148,6 +149,25 @@ let validator =
       match get_node ty with
       | Tapply ((_, name), _) -> String.equal name SN.Typehints.wildcard
       | _ -> false
+
+    method check_for_wildcards acc tyl s =
+      match List.filter tyl ~f:this#is_wildcard with
+      | [] -> acc
+      | tyl ->
+        this#invalid_list
+          acc
+          (List.map tyl ~f:(fun ty ->
+               ( Typing_defs_core.get_reason ty,
+                 "_ in a " ^ s ^ " (use `mixed` instead)" )))
+
+    method! on_ttuple acc _ tyl =
+      let acc = List.fold_left tyl ~f:this#on_type ~init:acc in
+      this#check_for_wildcards acc tyl "tuple"
+
+    method! on_tshape acc _ _ fdm =
+      let tyl = ShapeMap.values fdm |> List.map ~f:(fun s -> s.sft_ty) in
+      let acc = List.fold_left tyl ~init:acc ~f:this#on_type in
+      this#check_for_wildcards acc tyl "shape"
 
     method check_generic acc r name =
       match

@@ -349,7 +349,6 @@ VarEnv::VarEnv(ActRec* fp)
   , m_depth(1)
   , m_global(false)
 {
-  assertx(fp->func()->attrs() & AttrMayUseVV);
   TRACE(3, "Creating lazily attached VarEnv %p on stack\n", this);
 }
 
@@ -360,7 +359,6 @@ VarEnv::VarEnv(const VarEnv* varEnv, ActRec* fp)
 {
   assertx(varEnv->m_depth == 1);
   assertx(!varEnv->m_global);
-  assertx(fp->func()->attrs() & AttrMayUseVV);
 
   TRACE(3, "Cloning VarEnv %p to %p\n", varEnv, this);
 }
@@ -382,76 +380,12 @@ VarEnv::~VarEnv() {
   }
 }
 
-void VarEnv::deallocate(ActRec* fp) {
-  fp->m_varEnv->exitFP(fp);
-}
-
-VarEnv* VarEnv::createLocal(ActRec* fp) {
-  return req::make_raw<VarEnv>(fp);
-}
-
 VarEnv* VarEnv::clone(ActRec* fp) const {
   return req::make_raw<VarEnv>(this, fp);
 }
 
 void VarEnv::suspend(const ActRec* oldFP, ActRec* newFP) {
   m_nvTable.suspend(oldFP, newFP);
-}
-
-void VarEnv::enterFP(ActRec* oldFP, ActRec* newFP) {
-  TRACE(3, "Attaching VarEnv %p [%s] fp @%p\n",
-           this,
-           isGlobalScope() ? "global scope" : "local scope",
-           newFP);
-  assertx(newFP);
-  if (oldFP == nullptr) {
-    assertx(isGlobalScope() && m_depth == 0);
-  } else {
-    assertx(m_depth >= 1);
-    assertx(g_context->getPrevVMStateSkipFrame(newFP) == oldFP);
-    if (debug) {
-      auto prev = newFP;
-      while (true) {
-        prev = g_context->getPrevVMState(prev);
-        if (prev == oldFP) break;
-        assertx(!(prev->m_func->attrs() & AttrMayUseVV) || !prev->hasVarEnv());
-      }
-    }
-    m_nvTable.detach(oldFP);
-  }
-
-  assertx(newFP->func()->attrs() & AttrMayUseVV);
-  m_nvTable.attach(newFP);
-  m_depth++;
-}
-
-void VarEnv::exitFP(ActRec* fp) {
-  TRACE(3, "Detaching VarEnv %p [%s] @%p\n",
-           this,
-           isGlobalScope() ? "global scope" : "local scope",
-           fp);
-  assertx(fp);
-  assertx(m_depth > 0);
-
-  m_depth--;
-  m_nvTable.detach(fp);
-
-  if (m_depth == 0) {
-    // don't free global VarEnv
-    if (!isGlobalScope()) {
-      req::destroy_raw(this);
-    }
-  } else {
-    while (true) {
-      auto const prevFP = g_context->getPrevVMState(fp);
-      if (prevFP->func()->attrs() & AttrMayUseVV &&
-          prevFP->m_varEnv == this) {
-        m_nvTable.attach(prevFP);
-        break;
-      }
-      fp = prevFP;
-    }
-  }
 }
 
 void VarEnv::set(const StringData* name, tv_rval tv) {
@@ -939,10 +873,6 @@ TypedValue* Stack::resumableStackBase(const ActRec* fp) {
 
 Array getDefinedVariables(const ActRec* fp) {
   if (UNLIKELY(fp == nullptr || fp->isInlined())) return empty_darray();
-
-  if ((fp->func()->attrs() & AttrMayUseVV) && fp->hasVarEnv()) {
-    return fp->m_varEnv->getDefinedVariables();
-  }
   auto const func = fp->m_func;
   auto const numLocals = func->numNamedLocals();
   DArrayInit ret(numLocals);
@@ -1044,11 +974,6 @@ static void prepareFuncEntry(ActRec *ar, Array&& generics) {
   folly::Optional<uint32_t> raiseTooManyArgumentsWarnings;
   const int nparams = func->numNonVariadicParams();
   auto& stack = vmStack();
-
-  ar->trashVarEnv();
-  if (!debug || (ar->func()->attrs() & AttrMayUseVV)) {
-    ar->setVarEnv(nullptr);
-  }
 
   auto const nargs = ar->numArgs();
   assertx(((TypedValue*)ar - stack.top()) == nargs);
@@ -2599,6 +2524,12 @@ OPTBLD_INLINE void iopThrowNonExhaustiveSwitch() {
   not_reached();
 }
 
+OPTBLD_INLINE void iopRaiseClassStringConversionWarning() {
+  if (RuntimeOption::EvalRaiseClassConversionWarning) {
+    raise_warning(Strings::CLASS_TO_STRING);
+  }
+}
+
 OPTBLD_INLINE void iopResolveClass(Id id) {
   auto const cname = vmfp()->unit()->lookupLitstrId(id);
   auto const class_ = Unit::loadClass(cname);
@@ -3878,7 +3809,6 @@ void fcallImpl(PC origpc, PC& pc, const FCallArgs& fca, const Func* func,
   auto const asyncEagerReturn =
     fca.asyncEagerOffset != kInvalidOffset && func->supportsAsyncEagerReturn();
   ar->setReturn(vmfp(), origpc, jit::tc::ustubs().retHelper, asyncEagerReturn);
-  ar->trashVarEnv();
   ar->setThisOrClassAllowNull(takeCtx(std::forward<Ctx>(ctx)));
 
   auto const callFlags = CallFlags(
@@ -5309,7 +5239,7 @@ OPTBLD_INLINE void asyncSuspendE(PC origpc, PC& pc) {
   if (!func->isGenerator()) {  // Async function.
     // Create the AsyncFunctionWaitHandle object. Create takes care of
     // copying local variables and itertors.
-    auto waitHandle = c_AsyncFunctionWaitHandle::Create<true>(
+    auto waitHandle = c_AsyncFunctionWaitHandle::Create(
       fp, func->numSlotsInFrame(), nullptr, suspendOffset, child);
 
     if (RO::EvalEnableImplicitContext) {

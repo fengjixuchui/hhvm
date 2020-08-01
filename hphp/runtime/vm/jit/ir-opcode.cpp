@@ -617,7 +617,6 @@ bool opcodeMayRaise(Opcode opc) {
   case CountVec:
   case CountWHNotDone:
   case CreateAFWH:
-  case CreateAFWHNoVV:
   case CreateAGen:
   case CreateAGWH:
   case CreateGen:
@@ -913,7 +912,6 @@ bool opcodeMayRaise(Opcode opc) {
   case ProfileType:
   case RBTraceEntry:
   case RBTraceMsg:
-  case ReleaseVVAndSkip:
   case ReqBindJmp:
   case ReqRetranslate:
   case ReqRetranslateOpt:

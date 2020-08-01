@@ -106,12 +106,6 @@ void Generator::copyVars(const ActRec* srcFp) {
   if (func->cls() && dstFp->hasThis()) {
     dstFp->getThis()->incRefCount();
   }
-
-  if (LIKELY(!(srcFp->func()->attrs() & AttrMayUseVV))) return;
-  if (LIKELY(srcFp->m_varEnv == nullptr)) return;
-
-  assertx(srcFp->hasVarEnv());
-  dstFp->setVarEnv(srcFp->getVarEnv()->clone(dstFp));
 }
 
 void Generator::yield(Offset suspendOffset,
@@ -190,7 +184,7 @@ struct GeneratorExtension final : Extension {
     HHVM_ME(Generator, getCalledClass);
     Native::registerNativeDataInfo<Generator>(
       Generator::s_className.get(),
-      Native::NDIFlags::NO_SWEEP);
+      Native::NDIFlags::NO_SWEEP | Native::NDIFlags::CTOR_THROWS);
     loadSystemlib("generator");
     Generator::s_class = Unit::lookupClass(Generator::s_className.get());
     assertx(Generator::s_class);

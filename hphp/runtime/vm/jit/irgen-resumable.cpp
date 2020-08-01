@@ -116,7 +116,6 @@ bool isTailAwait(const IRGS& env, std::vector<Type>& locals) {
 }
 
 void doTailAwaitDecRefs(IRGS& env, const std::vector<Type>& locals) {
-  auto const func = curFunc(env);
   auto const shouldFreeInline = [&]{
     if (locals.size() > RO::EvalHHIRInliningMaxReturnLocals) return false;
     auto numRefCounted = 0;
@@ -126,29 +125,17 @@ void doTailAwaitDecRefs(IRGS& env, const std::vector<Type>& locals) {
     return numRefCounted <= RO::EvalHHIRInliningMaxReturnDecRefs;
   }();
 
-  auto decRefLocalsAndThis = [&]{
-    if (shouldFreeInline) {
-      for (auto i = 0; i < locals.size(); i++) {
-        if (!locals[i].maybe(TCounted)) continue;
-        auto const data = LocalId { safe_cast<uint32_t>(i) };
-        gen(env, AssertLoc, data, locals[i], fp(env));
-        decRef(env, gen(env, LdLoc, data, locals[i], fp(env)), i);
-      }
-    } else {
-      gen(env, GenericRetDecRefs, fp(env));
+  if (shouldFreeInline) {
+    for (auto i = 0; i < locals.size(); i++) {
+      if (!locals[i].maybe(TCounted)) continue;
+      auto const data = LocalId { safe_cast<uint32_t>(i) };
+      gen(env, AssertLoc, data, locals[i], fp(env));
+      decRef(env, gen(env, LdLoc, data, locals[i], fp(env)), i);
     }
-    decRefThis(env);
-  };
-
-  // The VarEnv and the this pointer always need to be cleaned up.
-  if (func->attrs() & AttrMayUseVV) {
-    ifElse(env,
-      [&] (Block* skip) { gen(env, ReleaseVVAndSkip, skip, fp(env)); },
-      [&] { decRefLocalsAndThis(); }
-    );
   } else {
-    decRefLocalsAndThis();
+    gen(env, GenericRetDecRefs, fp(env));
   }
+  decRefThis(env);
 }
 
 template<class Hook>
@@ -192,9 +179,8 @@ void implAwaitE(IRGS& env, SSATmp* child, Offset suspendOffset,
     // copying local variables and iterators. We don't support tracing when
     // we do the tail-call optimization, so we push the suspend hook here.
     auto const createNewAFWH = [&]{
-      auto const mayUseVV = func->attrs() & AttrMayUseVV;
-      auto const op = mayUseVV ? CreateAFWH : CreateAFWHNoVV;
-      auto const wh = gen(env, op, fp(env), cns(env, func->numSlotsInFrame()),
+      auto const wh = gen(env, CreateAFWH, fp(env),
+                          cns(env, func->numSlotsInFrame()),
                           resumeAddr(), suspendOff, child);
       suspendHook(env, [&] {
         auto const asyncAR = gen(env, LdAFWHActRec, wh);
@@ -414,7 +400,7 @@ Type awaitedTypeFromSSATmp(const SSATmp* awaitable) {
     return inst->src(2)->hasConstVal(TFunc)
       ? awaitedCallReturnType(inst->src(2)->funcVal()) : TInitCell;
   }
-  if (inst->is(CreateAFWH) || inst->is(CreateAFWHNoVV)) {
+  if (inst->is(CreateAFWH)) {
     return awaitedCallReturnType(inst->func());
   }
   if (inst->is(DefLabel)) {
@@ -441,7 +427,7 @@ bool likelySuspended(const SSATmp* awaitable) {
   awaitable = canonical(awaitable);
   auto const inst = awaitable->inst();
   if (inst->is(Call) && inst->extra<Call>()->asyncEagerReturn) return true;
-  if (inst->is(CreateAFWH) || inst->is(CreateAFWHNoVV)) return true;
+  if (inst->is(CreateAFWH)) return true;
   if (inst->is(DefLabel)) {
     auto likely = true;
     auto const dsts = inst->dsts();
