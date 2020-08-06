@@ -33,6 +33,7 @@ impl Default for GlobalOptions {
             po_disable_nontoplevel_declarations: false,
             po_disable_static_closures: true,
             po_allow_goto: false,
+            po_allow_unstable_features: false,
             tco_log_inference_constraints: false,
             tco_disallow_array_typehint: false,
             tco_disallow_array_literal: false,
@@ -107,6 +108,7 @@ impl Default for GlobalOptions {
             tco_pu_enabled_paths: (false, vec![]),
             tco_widen_is_array: false,
             tco_higher_kinded_types: false,
+            tco_method_call_inference: false,
         }
     }
 }

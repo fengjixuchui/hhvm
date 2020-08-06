@@ -3,13 +3,14 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<2b16d087624d39bf936cfad2f17b6aaf>>
+// @generated SignedSource<<8849e38eba43b6c30aab78f04db9327e>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
 
 use arena_trait::TrivialDrop;
 use ocamlrep_derive::FromOcamlRep;
+use ocamlrep_derive::FromOcamlRepIn;
 use ocamlrep_derive::ToOcamlRep;
 use serde::Deserialize;
 use serde::Serialize;
@@ -555,6 +556,7 @@ pub struct Fun_<Ex, Fb, En, Hi> {
     pub where_constraints: Vec<WhereConstraint>,
     pub variadic: FunVariadicity<Ex, Fb, En, Hi>,
     pub params: Vec<FunParam<Ex, Fb, En, Hi>>,
+    pub cap: TypeHint<Hi>,
     pub body: FuncBody<Ex, Fb, En, Hi>,
     pub fun_kind: ast_defs::FunKind,
     pub user_attributes: Vec<UserAttribute<Ex, Fb, En, Hi>>,
@@ -749,10 +751,12 @@ pub type IsExtends = bool;
 
 #[derive(
     Clone,
+    Copy,
     Debug,
     Deserialize,
     Eq,
     FromOcamlRep,
+    FromOcamlRepIn,
     Hash,
     Ord,
     PartialEq,
@@ -828,6 +832,7 @@ pub type XhpAttrHint = Hint;
     Deserialize,
     Eq,
     FromOcamlRep,
+    FromOcamlRepIn,
     Hash,
     Ord,
     PartialEq,
@@ -987,10 +992,12 @@ pub struct ClassTypeconst<Ex, Fb, En, Hi> {
 
 #[derive(
     Clone,
+    Copy,
     Debug,
     Deserialize,
     Eq,
     FromOcamlRep,
+    FromOcamlRepIn,
     Hash,
     Ord,
     PartialEq,
@@ -1055,6 +1062,7 @@ pub struct Method_<Ex, Fb, En, Hi> {
     pub where_constraints: Vec<WhereConstraint>,
     pub variadic: FunVariadicity<Ex, Fb, En, Hi>,
     pub params: Vec<FunParam<Ex, Fb, En, Hi>>,
+    pub cap: TypeHint<Hi>,
     pub body: FuncBody<Ex, Fb, En, Hi>,
     pub fun_kind: ast_defs::FunKind,
     pub user_attributes: Vec<UserAttribute<Ex, Fb, En, Hi>>,
@@ -1294,6 +1302,7 @@ pub enum Def<Ex, Fb, En, Hi> {
     Deserialize,
     Eq,
     FromOcamlRep,
+    FromOcamlRepIn,
     Hash,
     Ord,
     PartialEq,
@@ -1317,6 +1326,7 @@ impl TrivialDrop for NsKind {}
     Deserialize,
     Eq,
     FromOcamlRep,
+    FromOcamlRepIn,
     Hash,
     Ord,
     PartialEq,

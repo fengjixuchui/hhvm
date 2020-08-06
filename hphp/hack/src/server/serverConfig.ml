@@ -348,6 +348,8 @@ let load ~silent config_filename options =
         (ServerArgs.log_inference_constraints options)
       ~tco_migration_flags:(config_tc_migration_flags config)
       ~tco_shallow_class_decl:local_config.ServerLocalConfig.shallow_class_decl
+      ~po_allow_unstable_features:
+        local_config.ServerLocalConfig.allow_unstable_features
       ~profile_type_check_duration_threshold:
         local_config.ServerLocalConfig.profile_type_check_duration_threshold
       ~profile_type_check_twice:
@@ -438,6 +440,7 @@ let load ~silent config_filename options =
             ( false,
               List.map ~f:(fun suffix -> Relative_path.from_root ~suffix) l ))
       ?tco_widen_is_array:(bool_opt "widen_is_array" config)
+      ?tco_method_call_inference:(bool_opt "method_call_inference" config)
       ()
   in
   Errors.allowed_fixme_codes_strict :=

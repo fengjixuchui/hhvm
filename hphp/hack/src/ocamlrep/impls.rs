@@ -12,8 +12,20 @@ use std::mem::size_of;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use bumpalo::Bump;
+
 use crate::{block, from};
-use crate::{Allocator, FromError, FromOcamlRep, OpaqueValue, ToOcamlRep, Value};
+use crate::{Allocator, FromError, FromOcamlRep, FromOcamlRepIn, OpaqueValue, ToOcamlRep, Value};
+
+macro_rules! trivial_from_in_impl {
+    ($ty:ty) => {
+        impl<'a> FromOcamlRepIn<'a> for $ty {
+            fn from_ocamlrep_in(value: Value<'_>, _alloc: &'a Bump) -> Result<Self, FromError> {
+                Self::from_ocamlrep(value)
+            }
+        }
+    };
+}
 
 const WORD_SIZE: usize = std::mem::size_of::<Value<'_>>();
 
@@ -43,6 +55,8 @@ impl FromOcamlRep for () {
     }
 }
 
+trivial_from_in_impl!(());
+
 impl ToOcamlRep for isize {
     fn to_ocamlrep<'a, A: Allocator>(&self, _alloc: &'a A) -> OpaqueValue<'a> {
         OpaqueValue::int(*self)
@@ -54,6 +68,8 @@ impl FromOcamlRep for isize {
         from::expect_int(value)
     }
 }
+
+trivial_from_in_impl!(isize);
 
 impl ToOcamlRep for usize {
     fn to_ocamlrep<'a, A: Allocator>(&self, _alloc: &'a A) -> OpaqueValue<'a> {
@@ -67,6 +83,8 @@ impl FromOcamlRep for usize {
     }
 }
 
+trivial_from_in_impl!(usize);
+
 impl ToOcamlRep for i64 {
     fn to_ocamlrep<'a, A: Allocator>(&self, _alloc: &'a A) -> OpaqueValue<'a> {
         OpaqueValue::int((*self).try_into().unwrap())
@@ -78,6 +96,8 @@ impl FromOcamlRep for i64 {
         Ok(from::expect_int(value)?.try_into()?)
     }
 }
+
+trivial_from_in_impl!(i64);
 
 impl ToOcamlRep for u64 {
     fn to_ocamlrep<'a, A: Allocator>(&self, _alloc: &'a A) -> OpaqueValue<'a> {
@@ -91,6 +111,8 @@ impl FromOcamlRep for u64 {
     }
 }
 
+trivial_from_in_impl!(u64);
+
 impl ToOcamlRep for i32 {
     fn to_ocamlrep<'a, A: Allocator>(&self, _alloc: &'a A) -> OpaqueValue<'a> {
         OpaqueValue::int((*self).try_into().unwrap())
@@ -103,6 +125,8 @@ impl FromOcamlRep for i32 {
     }
 }
 
+trivial_from_in_impl!(i32);
+
 impl ToOcamlRep for u32 {
     fn to_ocamlrep<'a, A: Allocator>(&self, _alloc: &'a A) -> OpaqueValue<'a> {
         OpaqueValue::int((*self).try_into().unwrap())
@@ -114,6 +138,8 @@ impl FromOcamlRep for u32 {
         Ok(from::expect_int(value)?.try_into()?)
     }
 }
+
+trivial_from_in_impl!(u32);
 
 impl ToOcamlRep for bool {
     fn to_ocamlrep<'a, A: Allocator>(&self, _alloc: &'a A) -> OpaqueValue<'a> {
@@ -130,6 +156,8 @@ impl FromOcamlRep for bool {
         }
     }
 }
+
+trivial_from_in_impl!(bool);
 
 impl ToOcamlRep for char {
     fn to_ocamlrep<'a, A: Allocator>(&self, _alloc: &'a A) -> OpaqueValue<'a> {
@@ -151,6 +179,8 @@ impl FromOcamlRep for char {
     }
 }
 
+trivial_from_in_impl!(char);
+
 impl ToOcamlRep for f64 {
     fn to_ocamlrep<'a, A: Allocator>(&self, alloc: &'a A) -> OpaqueValue<'a> {
         let mut block = alloc.block_with_size_and_tag(1, block::DOUBLE_TAG);
@@ -167,6 +197,8 @@ impl FromOcamlRep for f64 {
         Ok(f64::from_bits(block[0].0 as u64))
     }
 }
+
+trivial_from_in_impl!(f64);
 
 impl<T: ToOcamlRep> ToOcamlRep for Box<T> {
     fn to_ocamlrep<'a, A: Allocator>(&self, alloc: &'a A) -> OpaqueValue<'a> {
@@ -187,6 +219,12 @@ impl<T: ToOcamlRep + Sized> ToOcamlRep for &'_ T {
             size_of::<T>(),
             |alloc| (**self).to_ocamlrep(alloc),
         )
+    }
+}
+
+impl<'a, T: FromOcamlRepIn<'a>> FromOcamlRepIn<'a> for &'a T {
+    fn from_ocamlrep_in(value: Value<'_>, alloc: &'a Bump) -> Result<Self, FromError> {
+        Ok(alloc.alloc(T::from_ocamlrep_in(value, alloc)?))
     }
 }
 
@@ -223,6 +261,14 @@ impl<T: FromOcamlRep> FromOcamlRep for RefCell<T> {
     }
 }
 
+impl<'a, T: FromOcamlRepIn<'a>> FromOcamlRepIn<'a> for RefCell<T> {
+    fn from_ocamlrep_in(value: Value<'_>, alloc: &'a Bump) -> Result<Self, FromError> {
+        let block = from::expect_tuple(value, 1)?;
+        let value: T = from::field_in(block, 0, alloc)?;
+        Ok(RefCell::new(value))
+    }
+}
+
 impl<T: ToOcamlRep> ToOcamlRep for Option<T> {
     fn to_ocamlrep<'a, A: Allocator>(&self, alloc: &'a A) -> OpaqueValue<'a> {
         match self {
@@ -244,6 +290,18 @@ impl<T: FromOcamlRep> FromOcamlRep for Option<T> {
         } else {
             let block = expect_block_with_size_and_tag(value, 1, 0)?;
             Ok(Some(from::field(block, 0)?))
+        }
+    }
+}
+
+impl<'a, T: FromOcamlRepIn<'a>> FromOcamlRepIn<'a> for Option<T> {
+    fn from_ocamlrep_in(value: Value<'_>, alloc: &'a Bump) -> Result<Self, FromError> {
+        if value.is_immediate() {
+            let _ = from::expect_nullary_variant(value, 0)?;
+            Ok(None)
+        } else {
+            let block = expect_block_with_size_and_tag(value, 1, 0)?;
+            Ok(Some(from::field_in(block, 0, alloc)?))
         }
     }
 }
@@ -276,6 +334,17 @@ impl<T: FromOcamlRep, E: FromOcamlRep> FromOcamlRep for Result<T, E> {
     }
 }
 
+impl<'a, T: FromOcamlRepIn<'a>, E: FromOcamlRepIn<'a>> FromOcamlRepIn<'a> for Result<T, E> {
+    fn from_ocamlrep_in(value: Value<'_>, alloc: &'a Bump) -> Result<Self, FromError> {
+        let block = from::expect_block(value)?;
+        match block.tag() {
+            0 => Ok(Ok(from::field_in(block, 0, alloc)?)),
+            1 => Ok(Err(from::field_in(block, 0, alloc)?)),
+            t => Err(FromError::BlockTagOutOfRange { max: 1, actual: t }),
+        }
+    }
+}
+
 impl<T: ToOcamlRep> ToOcamlRep for [T] {
     fn to_ocamlrep<'a, A: Allocator>(&self, alloc: &'a A) -> OpaqueValue<'a> {
         let mut hd = alloc.add(&());
@@ -296,6 +365,31 @@ impl<T: ToOcamlRep> ToOcamlRep for &'_ [T] {
             self.len() * size_of::<T>(),
             |alloc| (**self).to_ocamlrep(alloc),
         )
+    }
+}
+
+impl<'a, T: FromOcamlRepIn<'a>> FromOcamlRepIn<'a> for &'a [T] {
+    fn from_ocamlrep_in(value: Value<'_>, alloc: &'a Bump) -> Result<Self, FromError> {
+        let mut len = 0usize;
+        let mut hd = value;
+        while !hd.is_immediate() {
+            let block = from::expect_tuple(hd, 2)?;
+            len += 1;
+            hd = block[1];
+        }
+        let hd = hd.as_int().unwrap();
+        if hd != 0 {
+            return Err(FromError::ExpectedUnit(hd));
+        }
+
+        let mut vec = bumpalo::collections::Vec::with_capacity_in(len, alloc);
+        let mut hd = value;
+        while !hd.is_immediate() {
+            let block = from::expect_tuple(hd, 2).unwrap();
+            vec.push(from::field_in(block, 0, alloc)?);
+            hd = block[1];
+        }
+        Ok(vec.into_bump_slice())
     }
 }
 
@@ -322,6 +416,12 @@ impl<T: FromOcamlRep> FromOcamlRep for Vec<T> {
     }
 }
 
+impl<'a, T: FromOcamlRep> FromOcamlRepIn<'a> for Vec<T> {
+    fn from_ocamlrep_in(value: Value<'_>, _alloc: &'a Bump) -> Result<Self, FromError> {
+        Self::from_ocamlrep(value)
+    }
+}
+
 impl<K: ToOcamlRep + Ord, V: ToOcamlRep> ToOcamlRep for BTreeMap<K, V> {
     fn to_ocamlrep<'a, A: Allocator>(&self, alloc: &'a A) -> OpaqueValue<'a> {
         if self.is_empty() {
@@ -339,6 +439,12 @@ impl<K: FromOcamlRep + Ord, V: FromOcamlRep> FromOcamlRep for BTreeMap<K, V> {
         let mut map = BTreeMap::new();
         btree_map_from_ocamlrep(&mut map, value)?;
         Ok(map)
+    }
+}
+
+impl<'a, K: FromOcamlRep + Ord, V: FromOcamlRep> FromOcamlRepIn<'a> for BTreeMap<K, V> {
+    fn from_ocamlrep_in(value: Value<'_>, _alloc: &'a Bump) -> Result<Self, FromError> {
+        Self::from_ocamlrep(value)
     }
 }
 
@@ -384,6 +490,28 @@ fn btree_map_from_ocamlrep<K: FromOcamlRep + Ord, V: FromOcamlRep>(
     Ok(())
 }
 
+pub fn vec_from_ocaml_map_in<'a, K, V>(
+    value: Value<'_>,
+    vec: &mut bumpalo::collections::Vec<'a, (K, V)>,
+    alloc: &'a Bump,
+) -> Result<(), FromError>
+where
+    K: FromOcamlRepIn<'a> + Ord,
+    V: FromOcamlRepIn<'a>,
+{
+    if value.is_immediate() {
+        let _ = from::expect_nullary_variant(value, 0)?;
+        return Ok(());
+    }
+    let block = expect_block_with_size_and_tag(value, 5, 0)?;
+    vec_from_ocaml_map_in(block[0], vec, alloc)?;
+    let key: K = from::field_in(block, 1, alloc)?;
+    let val: V = from::field_in(block, 2, alloc)?;
+    vec.push((key, val));
+    vec_from_ocaml_map_in(block[3], vec, alloc)?;
+    Ok(())
+}
+
 impl<T: ToOcamlRep + Ord> ToOcamlRep for BTreeSet<T> {
     fn to_ocamlrep<'a, A: Allocator>(&self, alloc: &'a A) -> OpaqueValue<'a> {
         if self.is_empty() {
@@ -401,6 +529,12 @@ impl<T: FromOcamlRep + Ord> FromOcamlRep for BTreeSet<T> {
         let mut set = BTreeSet::new();
         btree_set_from_ocamlrep(&mut set, value)?;
         Ok(set)
+    }
+}
+
+impl<'a, T: FromOcamlRep + Ord> FromOcamlRepIn<'a> for BTreeSet<T> {
+    fn from_ocamlrep_in(value: Value<'_>, _alloc: &'a Bump) -> Result<Self, FromError> {
+        Self::from_ocamlrep(value)
     }
 }
 
@@ -442,6 +576,22 @@ fn btree_set_from_ocamlrep<T: FromOcamlRep + Ord>(
     Ok(())
 }
 
+pub fn vec_from_ocaml_set_in<'a, T: FromOcamlRepIn<'a> + Ord>(
+    value: Value<'_>,
+    vec: &mut bumpalo::collections::Vec<'a, T>,
+    alloc: &'a Bump,
+) -> Result<(), FromError> {
+    if value.is_immediate() {
+        let _ = from::expect_nullary_variant(value, 0)?;
+        return Ok(());
+    }
+    let block = expect_block_with_size_and_tag(value, 4, 0)?;
+    vec_from_ocaml_set_in(block[0], vec, alloc)?;
+    vec.push(from::field_in(block, 1, alloc)?);
+    vec_from_ocaml_set_in(block[2], vec, alloc)?;
+    Ok(())
+}
+
 impl ToOcamlRep for OsStr {
     // TODO: A Windows implementation would be nice, but what does the OCaml
     // runtime do? If we need Windows support, we'll have to find out.
@@ -457,6 +607,15 @@ impl ToOcamlRep for &'_ OsStr {
     fn to_ocamlrep<'a, A: Allocator>(&self, alloc: &'a A) -> OpaqueValue<'a> {
         use std::os::unix::ffi::OsStrExt;
         alloc.add(self.as_bytes())
+    }
+}
+
+impl<'a> FromOcamlRepIn<'a> for &'a OsStr {
+    fn from_ocamlrep_in<'b>(value: Value<'b>, alloc: &'a Bump) -> Result<Self, FromError> {
+        use std::os::unix::ffi::OsStrExt;
+        Ok(std::ffi::OsStr::from_bytes(<&'a [u8]>::from_ocamlrep_in(
+            value, alloc,
+        )?))
     }
 }
 
@@ -488,6 +647,12 @@ impl ToOcamlRep for &'_ Path {
     }
 }
 
+impl<'a> FromOcamlRepIn<'a> for &'a Path {
+    fn from_ocamlrep_in<'b>(value: Value<'b>, alloc: &'a Bump) -> Result<Self, FromError> {
+        Ok(Path::new(<&'a OsStr>::from_ocamlrep_in(value, alloc)?))
+    }
+}
+
 impl ToOcamlRep for PathBuf {
     fn to_ocamlrep<'a, A: Allocator>(&self, alloc: &'a A) -> OpaqueValue<'a> {
         alloc.add(self.as_os_str())
@@ -511,6 +676,8 @@ impl FromOcamlRep for String {
         Ok(String::from(str_from_ocamlrep(value)?))
     }
 }
+
+trivial_from_in_impl!(String);
 
 impl ToOcamlRep for Cow<'_, str> {
     fn to_ocamlrep<'a, A: Allocator>(&self, alloc: &'a A) -> OpaqueValue<'a> {
@@ -536,6 +703,12 @@ impl ToOcamlRep for &'_ str {
         alloc.memoized(self.as_bytes().as_ptr() as usize, self.len(), |alloc| {
             (**self).to_ocamlrep(alloc)
         })
+    }
+}
+
+impl<'a> FromOcamlRepIn<'a> for &'a str {
+    fn from_ocamlrep_in<'b>(value: Value<'b>, alloc: &'a Bump) -> Result<Self, FromError> {
+        Ok(alloc.alloc_str(str_from_ocamlrep(value)?))
     }
 }
 
@@ -577,6 +750,12 @@ impl ToOcamlRep for &'_ [u8] {
     }
 }
 
+impl<'a> FromOcamlRepIn<'a> for &'a [u8] {
+    fn from_ocamlrep_in<'b>(value: Value<'b>, alloc: &'a Bump) -> Result<Self, FromError> {
+        Ok(alloc.alloc_slice_copy(bytes_from_ocamlrep(value)?))
+    }
+}
+
 /// Allocate an OCaml string using the given allocator and copy the given byte
 /// slice into it.
 pub fn bytes_to_ocamlrep<'a, A: Allocator>(s: &[u8], alloc: &'a A) -> OpaqueValue<'a> {
@@ -584,7 +763,7 @@ pub fn bytes_to_ocamlrep<'a, A: Allocator>(s: &[u8], alloc: &'a A) -> OpaqueValu
     let length = words * WORD_SIZE;
     let mut block = alloc.block_with_size_and_tag(words, block::STRING_TAG);
     let block_contents_as_slice: &mut [u8] = unsafe {
-        let block = block.as_mut_ptr();
+        let block = alloc.block_ptr_mut(&mut block);
         *block.add(words - 1) = OpaqueValue::from_bits(0);
         let block_bytes = block as *mut u8;
         *block_bytes.add(length - 1) = (length - s.len() - 1) as u8;
@@ -634,6 +813,19 @@ where
     }
 }
 
+impl<'a, T0, T1> FromOcamlRepIn<'a> for (T0, T1)
+where
+    T0: FromOcamlRepIn<'a>,
+    T1: FromOcamlRepIn<'a>,
+{
+    fn from_ocamlrep_in<'b>(value: Value<'b>, alloc: &'a Bump) -> Result<Self, FromError> {
+        let block = from::expect_tuple(value, 2)?;
+        let f0: T0 = from::field_in(block, 0, alloc)?;
+        let f1: T1 = from::field_in(block, 1, alloc)?;
+        Ok((f0, f1))
+    }
+}
+
 impl<T0, T1, T2> ToOcamlRep for (T0, T1, T2)
 where
     T0: ToOcamlRep,
@@ -660,6 +852,21 @@ where
         let f0: T0 = from::field(block, 0)?;
         let f1: T1 = from::field(block, 1)?;
         let f2: T2 = from::field(block, 2)?;
+        Ok((f0, f1, f2))
+    }
+}
+
+impl<'a, T0, T1, T2> FromOcamlRepIn<'a> for (T0, T1, T2)
+where
+    T0: FromOcamlRepIn<'a>,
+    T1: FromOcamlRepIn<'a>,
+    T2: FromOcamlRepIn<'a>,
+{
+    fn from_ocamlrep_in<'b>(value: Value<'b>, alloc: &'a Bump) -> Result<Self, FromError> {
+        let block = from::expect_tuple(value, 3)?;
+        let f0: T0 = from::field_in(block, 0, alloc)?;
+        let f1: T1 = from::field_in(block, 1, alloc)?;
+        let f2: T2 = from::field_in(block, 2, alloc)?;
         Ok((f0, f1, f2))
     }
 }
@@ -694,6 +901,23 @@ where
         let f1: T1 = from::field(block, 1)?;
         let f2: T2 = from::field(block, 2)?;
         let f3: T3 = from::field(block, 3)?;
+        Ok((f0, f1, f2, f3))
+    }
+}
+
+impl<'a, T0, T1, T2, T3> FromOcamlRepIn<'a> for (T0, T1, T2, T3)
+where
+    T0: FromOcamlRepIn<'a>,
+    T1: FromOcamlRepIn<'a>,
+    T2: FromOcamlRepIn<'a>,
+    T3: FromOcamlRepIn<'a>,
+{
+    fn from_ocamlrep_in<'b>(value: Value<'b>, alloc: &'a Bump) -> Result<Self, FromError> {
+        let block = from::expect_tuple(value, 4)?;
+        let f0: T0 = from::field_in(block, 0, alloc)?;
+        let f1: T1 = from::field_in(block, 1, alloc)?;
+        let f2: T2 = from::field_in(block, 2, alloc)?;
+        let f3: T3 = from::field_in(block, 3, alloc)?;
         Ok((f0, f1, f2, f3))
     }
 }
@@ -736,6 +960,25 @@ where
     }
 }
 
+impl<'a, T0, T1, T2, T3, T4> FromOcamlRepIn<'a> for (T0, T1, T2, T3, T4)
+where
+    T0: FromOcamlRepIn<'a>,
+    T1: FromOcamlRepIn<'a>,
+    T2: FromOcamlRepIn<'a>,
+    T3: FromOcamlRepIn<'a>,
+    T4: FromOcamlRepIn<'a>,
+{
+    fn from_ocamlrep_in<'b>(value: Value<'b>, alloc: &'a Bump) -> Result<Self, FromError> {
+        let block = from::expect_tuple(value, 5)?;
+        let f0: T0 = from::field_in(block, 0, alloc)?;
+        let f1: T1 = from::field_in(block, 1, alloc)?;
+        let f2: T2 = from::field_in(block, 2, alloc)?;
+        let f3: T3 = from::field_in(block, 3, alloc)?;
+        let f4: T4 = from::field_in(block, 4, alloc)?;
+        Ok((f0, f1, f2, f3, f4))
+    }
+}
+
 impl<T0, T1, T2, T3, T4, T5> ToOcamlRep for (T0, T1, T2, T3, T4, T5)
 where
     T0: ToOcamlRep,
@@ -774,6 +1017,27 @@ where
         let f3: T3 = from::field(block, 3)?;
         let f4: T4 = from::field(block, 4)?;
         let f5: T5 = from::field(block, 5)?;
+        Ok((f0, f1, f2, f3, f4, f5))
+    }
+}
+
+impl<'a, T0, T1, T2, T3, T4, T5> FromOcamlRepIn<'a> for (T0, T1, T2, T3, T4, T5)
+where
+    T0: FromOcamlRepIn<'a>,
+    T1: FromOcamlRepIn<'a>,
+    T2: FromOcamlRepIn<'a>,
+    T3: FromOcamlRepIn<'a>,
+    T4: FromOcamlRepIn<'a>,
+    T5: FromOcamlRepIn<'a>,
+{
+    fn from_ocamlrep_in<'b>(value: Value<'b>, alloc: &'a Bump) -> Result<Self, FromError> {
+        let block = from::expect_tuple(value, 6)?;
+        let f0: T0 = from::field_in(block, 0, alloc)?;
+        let f1: T1 = from::field_in(block, 1, alloc)?;
+        let f2: T2 = from::field_in(block, 2, alloc)?;
+        let f3: T3 = from::field_in(block, 3, alloc)?;
+        let f4: T4 = from::field_in(block, 4, alloc)?;
+        let f5: T5 = from::field_in(block, 5, alloc)?;
         Ok((f0, f1, f2, f3, f4, f5))
     }
 }
@@ -824,6 +1088,29 @@ where
     }
 }
 
+impl<'a, T0, T1, T2, T3, T4, T5, T6> FromOcamlRepIn<'a> for (T0, T1, T2, T3, T4, T5, T6)
+where
+    T0: FromOcamlRepIn<'a>,
+    T1: FromOcamlRepIn<'a>,
+    T2: FromOcamlRepIn<'a>,
+    T3: FromOcamlRepIn<'a>,
+    T4: FromOcamlRepIn<'a>,
+    T5: FromOcamlRepIn<'a>,
+    T6: FromOcamlRepIn<'a>,
+{
+    fn from_ocamlrep_in<'b>(value: Value<'b>, alloc: &'a Bump) -> Result<Self, FromError> {
+        let block = from::expect_tuple(value, 7)?;
+        let f0: T0 = from::field_in(block, 0, alloc)?;
+        let f1: T1 = from::field_in(block, 1, alloc)?;
+        let f2: T2 = from::field_in(block, 2, alloc)?;
+        let f3: T3 = from::field_in(block, 3, alloc)?;
+        let f4: T4 = from::field_in(block, 4, alloc)?;
+        let f5: T5 = from::field_in(block, 5, alloc)?;
+        let f6: T6 = from::field_in(block, 6, alloc)?;
+        Ok((f0, f1, f2, f3, f4, f5, f6))
+    }
+}
+
 impl<T0, T1, T2, T3, T4, T5, T6, T7> ToOcamlRep for (T0, T1, T2, T3, T4, T5, T6, T7)
 where
     T0: ToOcamlRep,
@@ -870,6 +1157,31 @@ where
         let f5: T5 = from::field(block, 5)?;
         let f6: T6 = from::field(block, 6)?;
         let f7: T7 = from::field(block, 7)?;
+        Ok((f0, f1, f2, f3, f4, f5, f6, f7))
+    }
+}
+
+impl<'a, T0, T1, T2, T3, T4, T5, T6, T7> FromOcamlRepIn<'a> for (T0, T1, T2, T3, T4, T5, T6, T7)
+where
+    T0: FromOcamlRepIn<'a>,
+    T1: FromOcamlRepIn<'a>,
+    T2: FromOcamlRepIn<'a>,
+    T3: FromOcamlRepIn<'a>,
+    T4: FromOcamlRepIn<'a>,
+    T5: FromOcamlRepIn<'a>,
+    T6: FromOcamlRepIn<'a>,
+    T7: FromOcamlRepIn<'a>,
+{
+    fn from_ocamlrep_in<'b>(value: Value<'b>, alloc: &'a Bump) -> Result<Self, FromError> {
+        let block = from::expect_tuple(value, 8)?;
+        let f0: T0 = from::field_in(block, 0, alloc)?;
+        let f1: T1 = from::field_in(block, 1, alloc)?;
+        let f2: T2 = from::field_in(block, 2, alloc)?;
+        let f3: T3 = from::field_in(block, 3, alloc)?;
+        let f4: T4 = from::field_in(block, 4, alloc)?;
+        let f5: T5 = from::field_in(block, 5, alloc)?;
+        let f6: T6 = from::field_in(block, 6, alloc)?;
+        let f7: T7 = from::field_in(block, 7, alloc)?;
         Ok((f0, f1, f2, f3, f4, f5, f6, f7))
     }
 }

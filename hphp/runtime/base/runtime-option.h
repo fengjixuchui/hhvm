@@ -88,6 +88,7 @@ struct RepoOptions {
   H(bool,           DisallowFuncPtrsInConstants,    false)            \
   E(bool,           EmitFuncPointers,               true)             \
   E(bool,           EmitInstMethPointers,           EmitFuncPointers) \
+  H(bool,           AllowUnstableFeatures,          false)            \
   H(bool,           EnableXHPClassModifier,         false)            \
   H(bool,           DisableXHPElementMangling,      false)            \
   H(bool,           DisableArray,                   true)             \
@@ -836,6 +837,8 @@ struct RuntimeOption {
   F(bool, TraceCommandLineRequest,     true)                            \
                                                                         \
   F(bool, JitDisabledByHphpd,          false)                           \
+  F(bool, JitPseudomain,               true)                            \
+  F(bool, JitPGOPseudomain,            false)                           \
   F(uint32_t, JitWarmupStatusBytes,    ((25 << 10) + 1))                \
   F(uint32_t, JitWarmupMaxCodeGenRate, 20000)                           \
   F(uint32_t, JitWarmupRateSeconds,    64)                              \

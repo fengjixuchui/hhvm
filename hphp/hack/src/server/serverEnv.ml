@@ -17,29 +17,41 @@ type recheck_loop_stats = {
   (* Watchman subscription has gone down, so state of the world after the
    * recheck loop may not reflect what is actually on disk. *)
   updates_stale: bool;
-  rechecked_batches: int;
+  per_batch_telemetry: Telemetry.t list;
   rechecked_count: int;
   (* includes dependencies *)
   total_rechecked_count: int;
-  telemetry: Telemetry.t;
+  duration: float;
+  (* in seconds *)
+  recheck_id: string;
+  any_full_checks: bool;
 }
 [@@deriving show]
 
-let empty_recheck_loop_stats =
+let empty_recheck_loop_stats ~(recheck_id : string) : recheck_loop_stats =
   {
     updates_stale = false;
-    rechecked_batches = 0;
+    per_batch_telemetry = [];
     rechecked_count = 0;
     total_rechecked_count = 0;
-    telemetry = Telemetry.create ();
+    duration = 0.;
+    recheck_id;
+    any_full_checks = false;
   }
 
-type recheck_info = {
-  stats: recheck_loop_stats;
-  recheck_id: string;
-  recheck_time: float;
-}
-[@@deriving show]
+(** The format of this json is user-facing, returned from 'hh check --json' *)
+let recheck_loop_stats_to_user_telemetry (stats : recheck_loop_stats) :
+    Telemetry.t =
+  Telemetry.create ()
+  |> Telemetry.string_ ~key:"id" ~value:stats.recheck_id
+  |> Telemetry.float_ ~key:"time" ~value:stats.duration
+  |> Telemetry.int_ ~key:"count" ~value:stats.total_rechecked_count
+  |> Telemetry.int_ ~key:"reparse_count" ~value:stats.rechecked_count
+  |> Telemetry.object_list
+       ~key:"per_batch"
+       ~value:(List.rev stats.per_batch_telemetry)
+  |> Telemetry.bool_ ~key:"updates_stale" ~value:stats.updates_stale
+  |> Telemetry.bool_ ~key:"any_full_checks" ~value:stats.any_full_checks
 
 (*****************************************************************************)
 (* The "static" environment, initialized first and then doesn't change *)
@@ -196,8 +208,8 @@ type env = {
       [@opaque]
   (* The diagnostic subscription information of the current client *)
   diag_subscribe: Diagnostic_subscription.t option;
-  recent_recheck_loop_stats: recheck_loop_stats;
-  last_recheck_info: recheck_info option;
+  last_recheck_loop_stats: recheck_loop_stats;
+  last_recheck_loop_stats_for_actual_work: recheck_loop_stats option;
   (* Symbols for locally changed files *)
   local_symbol_table: SearchUtils.si_env; [@opaque]
 }
@@ -300,8 +312,8 @@ and init_env = {
   init_start_t: float;
   init_type: string;
   mergebase: string option;
-  (* Whether a full check was ever completed since init. *)
-  needs_full_init: bool;
+  (* Whether a full check was ever completed since init, and why it was needed *)
+  why_needed_full_init: Telemetry.t option;
   recheck_id: string option;
   (* Additional data associated with init that we want to log when a first full
    * check completes. *)

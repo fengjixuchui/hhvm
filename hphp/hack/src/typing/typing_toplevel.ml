@@ -462,6 +462,8 @@ let rec fun_def ctx f :
           Aast.f_where_constraints = f.f_where_constraints;
           Aast.f_variadic = t_variadic;
           Aast.f_params = typed_params;
+          (* TODO(T70095684) fix f_cap *)
+          Aast.f_cap = (MakeType.mixed Reason.none, hint_of_type_hint f.f_cap);
           Aast.f_fun_kind = f.f_fun_kind;
           Aast.f_file_attributes = file_attrs;
           Aast.f_user_attributes = user_attributes;
@@ -654,6 +656,8 @@ and method_def env cls m =
           Aast.m_where_constraints = m.m_where_constraints;
           Aast.m_variadic = t_variadic;
           Aast.m_params = typed_params;
+          (* TODO(T70095684) fix m_cap *)
+          Aast.m_cap = (MakeType.mixed Reason.none, hint_of_type_hint m.m_cap);
           Aast.m_fun_kind = m.m_fun_kind;
           Aast.m_user_attributes = user_attributes;
           Aast.m_ret = (locl_ty, hint_of_type_hint m.m_ret);
@@ -813,14 +817,24 @@ and class_def_ env c tc =
       | None -> Pos.none
     in
     let check_override ~is_static (id, ce) =
-      (* `ce_override` is set in Decl when we determine that an
-       * override_per_trait error needs emit. This emission is deferred
-       * until Typing to ensure that this method has been added to
-       * Decl_heap *)
       if get_ce_override ce then
         let pos = method_pos ~is_static ce.ce_origin id in
-        Errors.override_per_trait c.c_name id pos
+        (* Method is actually defined in this class *)
+        if String.equal ce.ce_origin (snd c.c_name) then
+          Errors.should_be_override pos (snd c.c_name) id
+        else
+          match Env.get_class env ce.ce_origin with
+          | None -> ()
+          | Some parent_class ->
+            (* If it's not defined here, then either it's inherited (so we have emitted an error already)
+             * or it's in a trait, and so we need to emit the error now *)
+            if not Ast_defs.(equal_class_kind (Cls.kind parent_class) Ctrait)
+            then
+              ()
+            else
+              Errors.override_per_trait c.c_name id pos
     in
+
     List.iter (Cls.methods tc) (check_override ~is_static:false);
     List.iter (Cls.smethods tc) (check_override ~is_static:true)
   );

@@ -88,7 +88,13 @@ where
         is_systemlib,
         env.flags.contains(EnvFlags::FOR_DEBUGGER_EVAL),
     );
-    let prog = emit_program::emit_fatal_program(FatalOp::Parse, &Pos::make_none(), err_msg);
+    let prog = emit_program::emit_fatal_program(
+        emitter.options(),
+        is_systemlib,
+        FatalOp::Parse,
+        &Pos::make_none(),
+        err_msg,
+    );
     let prog = prog.map_err(|e| anyhow!("Unhandled Emitter error: {}", e))?;
     print_program(
         &mut Context::new(
@@ -165,7 +171,7 @@ where
             profile(move || emit(e, &env, namespace, *is_hh_file, ast))
         }
         Either::Left((pos, msg, is_runtime_error)) => {
-            profile(|| emit_fatal(*is_runtime_error, pos, msg))
+            profile(|| emit_fatal(&mut emitter, *is_runtime_error, pos, msg))
         }
     };
     let program = program.map_err(|e| anyhow!("Unhandled Emitter error: {}", e))?;
@@ -219,6 +225,7 @@ fn emit<'p, S: AsRef<str>>(
 }
 
 fn emit_fatal<'a>(
+    emitter: &mut Emitter,
     is_runtime_error: bool,
     pos: &Pos,
     msg: impl AsRef<str>,
@@ -228,7 +235,7 @@ fn emit_fatal<'a>(
     } else {
         FatalOp::Parse
     };
-    emit_program::emit_fatal_program(op, pos, msg)
+    emit_program::emit_fatal_program(emitter.options(), emitter.systemlib(), op, pos, msg)
 }
 
 fn create_parser_options(opts: &Options) -> ParserOptions {
@@ -263,6 +270,7 @@ fn create_parser_options(opts: &Options) -> ParserOptions {
         hack_lang_flags(LangFlags::ENABLE_FIRST_CLASS_FUNCTION_POINTERS);
     popt.po_disable_array = hack_lang_flags(LangFlags::DISABLE_ARRAY);
     popt.po_disable_array_typehint = hack_lang_flags(LangFlags::DISABLE_ARRAY_TYPEHINT);
+    popt.po_allow_unstable_features = hack_lang_flags(LangFlags::ALLOW_UNSTABLE_FEATURES);
     popt
 }
 

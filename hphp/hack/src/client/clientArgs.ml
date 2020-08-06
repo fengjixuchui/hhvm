@@ -87,10 +87,11 @@ let parse_check_args cmd =
   let autostart = ref true in
   let config = ref [] in
   let dynamic_view = ref false in
-  let error_format = ref Errors.Context in
+  let error_format = ref None in
   let force_dormant_start = ref false in
   let format_from = ref 0 in
   let from = ref "" in
+  let show_spinner = ref None in
   let hot_classes_threshold = ref 0 in
   let gen_saved_ignore_type_errors = ref false in
   let ignore_hh_version = ref false in
@@ -232,9 +233,9 @@ let parse_check_args cmd =
         Arg.String
           (fun s ->
             match s with
-            | "raw" -> error_format := Errors.Raw
-            | "context" -> error_format := Errors.Context
-            | "highlighted" -> error_format := Errors.Highlighted
+            | "raw" -> error_format := Some Errors.Raw
+            | "context" -> error_format := Some Errors.Context
+            | "highlighted" -> error_format := Some Errors.Highlighted
             | _ -> print_string "Warning: unrecognized error format.\n"),
         "<raw|context|highlighted> Error formatting style" );
       ( "--extract-standalone",
@@ -625,6 +626,9 @@ let parse_check_args cmd =
       ( "--server-rage",
         Arg.Unit (set_mode MODE_SERVER_RAGE),
         " (mode) dumps internal state of hh_server" );
+      ( "--show-spinner",
+        Arg.Bool (fun x -> show_spinner := Some x),
+        " shows a spinner while awaiting the typechecker" );
       ( "--single",
         Arg.String (fun x -> set_mode (MODE_STATUS_SINGLE x) ()),
         "<path> Return errors in file with provided name (give '-' for stdin)"
@@ -736,6 +740,7 @@ let parse_check_args cmd =
       error_format = !error_format;
       force_dormant_start = !force_dormant_start;
       from = !from;
+      show_spinner = Option.value ~default:(String.equal !from "") !show_spinner;
       gen_saved_ignore_type_errors = !gen_saved_ignore_type_errors;
       ignore_hh_version = !ignore_hh_version;
       saved_state_ignore_hhconfig = !saved_state_ignore_hhconfig;

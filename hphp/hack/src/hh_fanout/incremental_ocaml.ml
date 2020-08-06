@@ -173,10 +173,10 @@ class cursor ~client_id ~cursor_state =
             errors
             |> List.map ~f:(fun (_phase, path) -> path)
             |> List.fold ~init:acc ~f:Relative_path.Set.union
-          | Saved_state_delta { changed_files; _ } ->
-            changed_files
-            |> Relative_path.Map.keys
-            |> List.fold ~init:acc ~f:Relative_path.Set.add
+          | Saved_state_delta { fanout_result; _ } ->
+            Relative_path.Set.union
+              acc
+              fanout_result.Calculate_fanout.fanout_files
           | Typecheck_result _ ->
             (* Don't need to typecheck any previous cursors. The fanout of
             the files that have changed before this typecheck have already
@@ -374,8 +374,19 @@ let make (state_dir : Path.t) : Incremental.state =
         state#save);
   let state_path = get_state_file_path state_dir in
   let (persistent_state : persistent_state) =
-    In_channel.with_file ~binary:true (Path.to_string state_path) ~f:(fun ic ->
-        Marshal.from_channel ic)
+    try
+      In_channel.with_file
+        ~binary:true
+        (Path.to_string state_path)
+        ~f:(fun ic -> Marshal.from_channel ic)
+    with e ->
+      let e = Exception.wrap e in
+      Hh_logger.warn
+        ( "HINT: An error occurred while loading hh_fanout state. "
+        ^^ "If it is corrupted, "
+        ^^ "try running `hh_fanout clean` to delete the state, "
+        ^^ "then try your query again." );
+      Exception.reraise e
   in
   let state = new state ~state_path ~persistent_state in
   (state :> Incremental.state)

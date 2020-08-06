@@ -479,18 +479,10 @@ and hint_
     (p, x) =
   let tcopt = Provider_context.get_tcopt (fst env).ctx in
   let like_type_hints_enabled = TypecheckerOptions.like_type_hints tcopt in
-  let union_intersection_type_hints_enabled =
-    TypecheckerOptions.union_intersection_type_hints tcopt
-  in
   let hint = hint ~forbid_this ~allow_wildcard ~allow_like in
   match x with
-  | Aast.Hunion hl ->
-    if not union_intersection_type_hints_enabled then
-      Errors.experimental_feature p "union type hints";
-    N.Hunion (List.map hl ~f:(hint ~allow_retonly env))
+  | Aast.Hunion hl -> N.Hunion (List.map hl ~f:(hint ~allow_retonly env))
   | Aast.Hintersection hl ->
-    if not union_intersection_type_hints_enabled then
-      Errors.experimental_feature p "intersection type hints";
     N.Hintersection (List.map hl ~f:(hint ~allow_retonly env))
   | Aast.Htuple hl ->
     N.Htuple (List.map hl ~f:(hint ~allow_retonly ~tp_depth:(tp_depth + 1) env))
@@ -1442,6 +1434,7 @@ and method_ genv m =
     N.m_tparams = tparam_l;
     N.m_where_constraints = where_constraints;
     N.m_params = paraml;
+    N.m_cap = m.Aast.m_cap;
     N.m_body = body;
     N.m_fun_kind = m.Aast.m_fun_kind;
     N.m_ret = ret;
@@ -1604,6 +1597,8 @@ and fun_ ctx f =
       f_tparams;
       f_where_constraints = where_constraints;
       f_params = paraml;
+      (* TODO(T70095684) double-check f_cap *)
+      f_cap = f.Aast.f_cap;
       f_body = body;
       f_fun_kind = f_kind;
       f_variadic = variadicity;
@@ -2378,6 +2373,8 @@ and expr_lambda env f =
     f_name = f.Aast.f_name;
     f_params = paraml;
     f_tparams = [];
+    (* TODO(T70095684) double-check f_cap *)
+    f_cap = f.Aast.f_cap;
     f_where_constraints = [];
     f_body = body;
     f_fun_kind = f.Aast.f_fun_kind;

@@ -44,7 +44,9 @@ let subtype_method
     let check_tparam_constraints
         env { tp_name = (p, name); tp_constraints = cstrl; _ } =
       List.fold_left cstrl ~init:env ~f:(fun env (ck, cstr_ty) ->
-          (* TODO(T69551141) handle type arguments *)
+          (* TODO(T70068435) Revisit this when implementing bounds on HK generic vars.
+             For now it's safe to produce a Tgeneric with empty args here, because
+             if [name] were higher-kinded, then the constraints must be empty. *)
           let tgeneric = MakeType.generic (Reason.Rwitness p) name in
           Typing_generic_constraint.check_constraint
             env
@@ -146,6 +148,7 @@ let subtype_method_decl
    * subtyping in the context of the ft_super constraints. But we'd better
    * restore tpenv afterwards *)
   let old_tpenv = Env.get_tpenv env in
+  let old_global_tpenv = Env.get_global_tpenv env in
   (* First extend the environment with the type parameters from the supertype, along
    * with their bounds
    *)
@@ -179,4 +182,4 @@ let subtype_method_decl
       on_error
   in
   (* Restore the type parameter environment *)
-  Env.env_with_tpenv env old_tpenv
+  Env.env_with_tpenv (Env.env_with_global_tpenv env old_global_tpenv) old_tpenv

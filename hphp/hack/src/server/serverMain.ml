@@ -68,18 +68,10 @@ module Program = struct
       genv
       env
       (save_state_result : SaveStateServiceTypes.save_state_result option) =
-    let last_recheck_info = env.ServerEnv.last_recheck_info in
     let recheck_stats =
-      match last_recheck_info with
-      | None -> None
-      | Some info ->
-        Some
-          {
-            ServerCommandTypes.Recheck_stats.id = info.recheck_id;
-            time = info.recheck_time;
-            count = info.stats.total_rechecked_count;
-            telemetry = info.stats.telemetry;
-          }
+      Option.map
+        ~f:ServerEnv.recheck_loop_stats_to_user_telemetry
+        env.ServerEnv.last_recheck_loop_stats_for_actual_work
     in
     ServerError.print_error_list
       stdout
@@ -141,18 +133,27 @@ module Program = struct
     to_recheck
 end
 
-let finalize_init init_env =
+let finalize_init init_env typecheck_telemetry init_telemetry =
+  ServerProgress.send_to_monitor (MonitorRpc.PROGRESS_WARNING None);
+  (* rest is just logging/telemetry *)
+  let t' = Unix.gettimeofday () in
   let heap_size = SharedMem.heap_size () in
-  Hh_logger.log "Heap size: %d" heap_size;
+  let hash_telemetry = ServerUtils.log_and_get_sharedmem_load_telemetry () in
   let telemetry =
-    ServerUtils.log_hash_stats (Telemetry.create ())
+    Telemetry.create ()
+    |> Telemetry.duration ~start_time:init_env.init_start_t
+    |> Telemetry.object_ ~key:"init" ~value:init_telemetry
+    |> Telemetry.object_ ~key:"typecheck" ~value:typecheck_telemetry
+    |> Telemetry.object_ ~key:"hash" ~value:hash_telemetry
     |> Telemetry.int_ ~key:"heap_size" ~value:heap_size
   in
-  Hh_logger.log "Server is READY";
-  let t' = Unix.gettimeofday () in
-  Hh_logger.log "Took %f seconds to initialize." (t' -. init_env.init_start_t);
   HackEventLogger.server_is_ready telemetry;
-  ServerProgress.send_to_monitor (MonitorRpc.PROGRESS_WARNING None)
+  Hh_logger.log
+    "SERVER_IS_READY. Heap size: %d. Took %f seconds to init. Telemetry:\n%s"
+    heap_size
+    (t' -. init_env.init_start_t)
+    (Telemetry.to_string telemetry);
+  ()
 
 let shutdown_persistent_client client env =
   ClientProvider.shutdown_client client;
@@ -272,19 +273,19 @@ let report_persistent_exception
     ~(stack : string)
     ~(client : ClientProvider.client)
     ~(is_fatal : bool) : unit =
-  Marshal_tools.(
-    let message = Exn.to_string e in
-    let push =
-      if is_fatal then
-        ServerCommandTypes.FATAL_EXCEPTION { message; stack }
-      else
-        ServerCommandTypes.NONFATAL_EXCEPTION { message; stack }
-    in
-    begin
-      try ClientProvider.send_push_message_to_client client push with _ -> ()
-    end;
-    EventLogger.master_exception e stack;
-    Printf.eprintf "Error: %s\n%s\n%!" message stack)
+  let open Marshal_tools in
+  let message = Exn.to_string e in
+  let push =
+    if is_fatal then
+      ServerCommandTypes.FATAL_EXCEPTION { message; stack }
+    else
+      ServerCommandTypes.NONFATAL_EXCEPTION { message; stack }
+  in
+  begin
+    try ClientProvider.send_push_message_to_client client push with _ -> ()
+  end;
+  EventLogger.master_exception e stack;
+  Printf.eprintf "Error: %s\n%s\n%!" message stack
 
 (* Same as handle_connection_try, but for persistent clients *)
 [@@@warning "-52"]
@@ -341,58 +342,52 @@ let handle_connection genv env client client_kind =
     handle_connection_ genv env client
     |> ServerUtils.wrap (handle_connection_try (fun x -> x) client)
 
-let recheck genv old_env check_kind =
-  let can_interrupt =
-    match check_kind with
-    | ServerTypeCheck.Full_check -> true
-    | _ -> false
+let query_notifier genv env query_kind start_time =
+  let open ServerNotifierTypes in
+  let telemetry =
+    Telemetry.create () |> Telemetry.duration ~key:"start" ~start_time
   in
-  let old_env = { old_env with can_interrupt } in
-  let (new_env, res) = ServerTypeCheck.type_check genv old_env check_kind in
-  let new_env = { new_env with can_interrupt = true } in
-  if old_env.init_env.needs_full_init && not new_env.init_env.needs_full_init
-  then
-    finalize_init new_env.init_env;
-  ServerStamp.touch_stamp_errors
-    (Errors.get_error_list old_env.errorl)
-    (Errors.get_error_list new_env.errorl);
-  (new_env, res)
-
-let query_notifier genv env query_kind t =
-  ServerNotifierTypes.(
-    let (env, raw_updates) =
-      match query_kind with
-      | `Sync ->
-        ( env,
-          begin
-            try Notifier_synchronous_changes (genv.notifier ())
-            with Watchman.Timeout -> Notifier_unavailable
-          end )
-      | `Async ->
-        ({ env with last_notifier_check_time = t }, genv.notifier_async ())
-      | `Skip -> (env, Notifier_async_changes SSet.empty)
-    in
-    let unpack_updates = function
-      | Notifier_unavailable -> (true, SSet.empty)
-      | Notifier_state_enter _ -> (true, SSet.empty)
-      | Notifier_state_leave _ -> (true, SSet.empty)
-      | Notifier_async_changes updates -> (true, updates)
-      | Notifier_synchronous_changes updates -> (false, updates)
-    in
-    let (updates_stale, raw_updates) = unpack_updates raw_updates in
-    let rec pump_async_updates acc =
-      match genv.notifier_async_reader () with
-      | Some reader when Buffered_line_reader.is_readable reader ->
-        let (_, raw_updates) = unpack_updates (genv.notifier_async ()) in
-        pump_async_updates (SSet.union acc raw_updates)
-      | _ -> acc
-    in
-    let raw_updates = pump_async_updates raw_updates in
-    let updates = Program.process_updates genv raw_updates in
-    Bad_files.check updates;
-    if not @@ Relative_path.Set.is_empty updates then
-      HackEventLogger.notifier_returned t (SSet.cardinal raw_updates);
-    (env, updates, updates_stale))
+  let (env, raw_updates) =
+    match query_kind with
+    | `Sync ->
+      ( env,
+        begin
+          try Notifier_synchronous_changes (genv.notifier ())
+          with Watchman.Timeout -> Notifier_unavailable
+        end )
+    | `Async ->
+      ( { env with last_notifier_check_time = start_time },
+        genv.notifier_async () )
+    | `Skip -> (env, Notifier_async_changes SSet.empty)
+  in
+  let telemetry = Telemetry.duration telemetry ~key:"notified" ~start_time in
+  let unpack_updates = function
+    | Notifier_unavailable -> (true, SSet.empty)
+    | Notifier_state_enter _ -> (true, SSet.empty)
+    | Notifier_state_leave _ -> (true, SSet.empty)
+    | Notifier_async_changes updates -> (true, updates)
+    | Notifier_synchronous_changes updates -> (false, updates)
+  in
+  let (updates_stale, raw_updates) = unpack_updates raw_updates in
+  let rec pump_async_updates acc =
+    match genv.notifier_async_reader () with
+    | Some reader when Buffered_line_reader.is_readable reader ->
+      let (_, raw_updates) = unpack_updates (genv.notifier_async ()) in
+      pump_async_updates (SSet.union acc raw_updates)
+    | _ -> acc
+  in
+  let raw_updates = pump_async_updates raw_updates in
+  let telemetry = Telemetry.duration telemetry ~key:"pumped" ~start_time in
+  let updates = Program.process_updates genv raw_updates in
+  let telemetry =
+    telemetry
+    |> Telemetry.duration ~key:"processed" ~start_time
+    |> Telemetry.int_ ~key:"raw_updates" ~value:(SSet.cardinal raw_updates)
+    |> Telemetry.int_ ~key:"updates" ~value:(Relative_path.Set.cardinal updates)
+  in
+  if not @@ Relative_path.Set.is_empty updates then
+    HackEventLogger.notifier_returned start_time (SSet.cardinal raw_updates);
+  (env, updates, updates_stale, telemetry)
 
 (* This function loops until it has processed all outstanding changes.
  *
@@ -411,8 +406,13 @@ let query_notifier genv env query_kind t =
  * The above doesn't apply in presence of interruptions / cancellations -
  * it's possible for client to request current recheck to be stopped.
  *)
-let rec recheck_loop acc genv env select_outcome =
-  let t = Unix.gettimeofday () in
+let rec recheck_until_no_changes_left acc genv env select_outcome =
+  let start_time = Unix.gettimeofday () in
+  (* this is telemetry for the current batch, i.e. iteration: *)
+  let telemetry =
+    Telemetry.create () |> Telemetry.float_ ~key:"start_time" ~value:start_time
+  in
+
   (* When a new client connects, we use the synchronous notifier.
    * This is to get synchronous file system changes when invoking
    * hh_client in terminal.
@@ -423,7 +423,7 @@ let rec recheck_loop acc genv env select_outcome =
     match select_outcome with
     | ClientProvider.Select_new _ -> `Sync
     | ClientProvider.Select_nothing ->
-      if Float.(t -. env.last_notifier_check_time > 0.5) then
+      if start_time -. env.last_notifier_check_time > 0.5 then
         `Async
       else
         `Skip
@@ -432,7 +432,14 @@ let rec recheck_loop acc genv env select_outcome =
     * do analysis on mid-edit state of the world *)
     | ClientProvider.Select_persistent -> `Skip
   in
-  let (env, updates, updates_stale) = query_notifier genv env query_kind t in
+  let (env, updates, updates_stale, query_telemetry) =
+    query_notifier genv env query_kind start_time
+  in
+  let telemetry =
+    telemetry
+    |> Telemetry.object_ ~key:"query" ~value:query_telemetry
+    |> Telemetry.duration ~key:"query_done" ~start_time
+  in
   let acc = { acc with updates_stale } in
   let is_idle =
     (match select_outcome with
@@ -440,7 +447,7 @@ let rec recheck_loop acc genv env select_outcome =
     | _ -> true)
     && (* "average person types [...] between 190 and 200 characters per minute"
         * 60/200 = 0.3 *)
-    Float.(t -. env.last_command_time > 0.3)
+    start_time -. env.last_command_time > 0.3
   in
   (* saving any file is our trigger to start full recheck *)
   let env =
@@ -456,6 +463,7 @@ let rec recheck_loop acc genv env select_outcome =
         { env with disk_needs_parsing; full_check = Full_check_needed }
       | _ -> { env with disk_needs_parsing; full_check = Full_check_started }
   in
+  let telemetry = Telemetry.duration telemetry ~key:"got_updates" ~start_time in
   let env =
     match env.default_client_pending_command_needs_full_check with
     (* We need to auto-restart the recheck to make progress towards handling
@@ -466,7 +474,7 @@ let rec recheck_loop acc genv env select_outcome =
             * rechecks and us restarting them. We're going to heavily favor edits and
             * restart only after a longer period since last edit. Note that we'll still
             * start full recheck immediately after any file save. *)
-           && Float.(t -. env.last_command_time > 5.0) ->
+           && start_time -. env.last_command_time > 5.0 ->
       let still_there =
         try
           ClientProvider.ping client;
@@ -490,6 +498,9 @@ let rec recheck_loop acc genv env select_outcome =
       { env with full_check = Full_check_started }
     | _ -> env
   in
+  let telemetry =
+    Telemetry.duration telemetry ~key:"sorted_out_client" ~start_time
+  in
   (* We have some new, or previously un-processed updates *)
   let full_check =
     is_full_check_started env.full_check
@@ -501,7 +512,19 @@ let rec recheck_loop acc genv env select_outcome =
   let lazy_check =
     (not @@ Relative_path.Set.is_empty env.ide_needs_parsing) && is_idle
   in
+  let telemetry =
+    telemetry
+    |> Telemetry.bool_ ~key:"full_check" ~value:full_check
+    |> Telemetry.bool_ ~key:"lazy_check" ~value:lazy_check
+    |> Telemetry.duration ~key:"figured_check_kind" ~start_time
+  in
   if (not full_check) && not lazy_check then
+    let telemetry =
+      Telemetry.string_ telemetry ~key:"check_kind" ~value:"None"
+    in
+    let acc =
+      { acc with per_batch_telemetry = telemetry :: acc.per_batch_telemetry }
+    in
     (acc, env)
   else
     let check_kind =
@@ -510,25 +533,52 @@ let rec recheck_loop acc genv env select_outcome =
       else
         ServerTypeCheck.Full_check
     in
-    let ( env,
-          ServerTypeCheck.{ reparse_count; total_rechecked_count; telemetry } )
-        =
-      recheck genv env check_kind
+    let env = { env with can_interrupt = not lazy_check } in
+    let needed_full_init = env.init_env.why_needed_full_init in
+    let old_errorl = Errors.get_error_list env.errorl in
+
+    (* HERE'S WHERE WE DO THE HEAVY WORK! **)
+    let telemetry =
+      telemetry
+      |> Telemetry.string_
+           ~key:"check_kind"
+           ~value:(ServerTypeCheck.check_kind_to_string check_kind)
+      |> Telemetry.duration ~key:"type_check_start" ~start_time
+    in
+    let (env, res, type_check_telemetry) =
+      ServerTypeCheck.type_check genv env check_kind start_time
     in
     let telemetry =
-      Telemetry.object_
-        acc.telemetry
-        ~key:(Printf.sprintf "batch_%d" acc.rechecked_batches)
-        ~value:telemetry
+      telemetry
+      |> Telemetry.object_ ~key:"type_check" ~value:type_check_telemetry
+      |> Telemetry.duration ~key:"type_check_end" ~start_time
+    in
+
+    (* END OF HEAVY WORK *)
+
+    (* Final telemetry and cleanup... *)
+    let env = { env with can_interrupt = true } in
+    begin
+      match (needed_full_init, env.init_env.why_needed_full_init) with
+      | (Some needed_full_init, None) ->
+        finalize_init env.init_env telemetry needed_full_init
+      | _ -> ()
+    end;
+    ServerStamp.touch_stamp_errors old_errorl (Errors.get_error_list env.errorl);
+    let telemetry =
+      Telemetry.duration telemetry ~key:"finalized_and_touched" ~start_time
     in
     let acc =
       {
-        acc with
-        rechecked_batches = acc.rechecked_batches + 1;
-        rechecked_count = acc.rechecked_count + reparse_count;
+        rechecked_count =
+          acc.rechecked_count + res.ServerTypeCheck.reparse_count;
+        per_batch_telemetry = telemetry :: acc.per_batch_telemetry;
         total_rechecked_count =
-          acc.total_rechecked_count + total_rechecked_count;
-        telemetry;
+          acc.total_rechecked_count + res.ServerTypeCheck.total_rechecked_count;
+        updates_stale = acc.updates_stale;
+        recheck_id = acc.recheck_id;
+        duration = acc.duration +. (Unix.gettimeofday () -. start_time);
+        any_full_checks = acc.any_full_checks || not lazy_check;
       }
     in
     (* Avoid batching ide rechecks with disk rechecks - there might be
@@ -545,13 +595,7 @@ let rec recheck_loop acc genv env select_outcome =
     then
       (acc, env)
     else
-      recheck_loop acc genv env select_outcome
-
-let recheck_loop genv env select_outcome =
-  let (stats, env) =
-    recheck_loop empty_recheck_loop_stats genv env select_outcome
-  in
-  { env with recent_recheck_loop_stats = stats }
+      recheck_until_no_changes_left acc genv env select_outcome
 
 let new_serve_iteration_id () = Random_id.short_string ()
 
@@ -589,22 +633,6 @@ let has_pending_disk_changes genv =
   match genv.notifier_async_reader () with
   | Some reader when Buffered_line_reader.is_readable reader -> true
   | _ -> false
-
-let update_recheck_values env start_t recheck_id =
-  let end_t = Unix.gettimeofday () in
-  let recheck_time = end_t -. start_t in
-  let stats = env.recent_recheck_loop_stats in
-  match stats.total_rechecked_count with
-  | 0 -> env
-  | _ ->
-    HackEventLogger.recheck_end
-      recheck_time
-      stats.rechecked_batches
-      stats.rechecked_count
-      stats.total_rechecked_count;
-
-    Hh_logger.log "Recheck id: %s" recheck_id;
-    { env with last_recheck_info = Some { stats; recheck_id; recheck_time } }
 
 let serve_one_iteration genv env client_provider =
   let recheck_id = new_serve_iteration_id () in
@@ -647,14 +675,14 @@ let serve_one_iteration genv env client_provider =
   let env =
     match select_outcome with
     | ClientProvider.Select_nothing ->
-      let last_stats = env.recent_recheck_loop_stats in
+      let last_stats = env.last_recheck_loop_stats in
       (* Ugly hack: We want GC_SHAREDMEM_RAN to record the last rechecked
        * count so that we can figure out if the largest reclamations
        * correspond to massive rebases. However, the logging call is done in
        * the SharedMem module, which doesn't know anything about Server stuff.
        * So we wrap the call here. *)
       HackEventLogger.with_rechecked_stats
-        last_stats.rechecked_batches
+        (List.length last_stats.per_batch_telemetry)
         last_stats.rechecked_count
         last_stats.total_rechecked_count
         (fun () -> SharedMem.collect `aggressive);
@@ -666,9 +694,8 @@ let serve_one_iteration genv env client_provider =
         env
     | _ -> env
   in
-  let t_start_recheck = Unix.gettimeofday () in
   let stage =
-    if env.init_env.needs_full_init then
+    if Option.is_some env.init_env.why_needed_full_init then
       `Init
     else
       `Recheck
@@ -676,53 +703,76 @@ let serve_one_iteration genv env client_provider =
   HackEventLogger.with_id ~stage recheck_id @@ fun () ->
   (* We'll first do "recheck_loop" to handle all outstanding changes, so that *)
   (* after that we'll be able to give an up-to-date answer to the client. *)
-  let env = recheck_loop genv env select_outcome in
-  let env = update_recheck_values env t_start_recheck recheck_id in
-  let t_done_recheck = Unix.gettimeofday () in
-  (* if actual work was done, log whether anything got communicated to client *)
-  let log_diagnostics =
-    env.recent_recheck_loop_stats.total_rechecked_count > 0
-  in
-  let env =
-    match env.diag_subscribe with
-    | None ->
-      if log_diagnostics then
-        Hh_logger.log "Finished recheck_loop; no diag subscriptions";
+  (* Except: this might be stopped early in some cases, e.g. IDE checks. *)
+  let t_start_recheck = Unix.gettimeofday () in
+  let (stats, env) =
+    recheck_until_no_changes_left
+      (empty_recheck_loop_stats ~recheck_id)
+      genv
       env
+      select_outcome
+  in
+  let t_done_recheck = Unix.gettimeofday () in
+  let did_work = stats.total_rechecked_count > 0 in
+  let env =
+    {
+      env with
+      last_recheck_loop_stats = stats;
+      last_recheck_loop_stats_for_actual_work =
+        ( if did_work then
+          Some stats
+        else
+          env.last_recheck_loop_stats_for_actual_work );
+    }
+  in
+  (* push diagnostic changes to client, if necessary *)
+  let (env, diag_reason) =
+    match env.diag_subscribe with
+    | None -> (env, "no diag subscriptions")
     | Some sub ->
       let client = Utils.unsafe_opt env.persistent_client in
-      (* We possibly just did a lot of work. Check the client again to see
-       * that we are still idle before proceeding to send diagnostics *)
-      if ClientProvider.client_has_message client then (
-        if log_diagnostics then
-          Hh_logger.log "Finished recheck_loop; client has message";
-        env
-      ) else if not @@ Relative_path.Set.is_empty env.ide_needs_parsing then (
-        (* We processed some edits but didn't recheck them yet. *)
-        if log_diagnostics then
-          Hh_logger.log "Finished recheck_loop; ide_needs_parsing";
-        env
-      ) else if has_pending_disk_changes genv then (
-        if log_diagnostics then
-          Hh_logger.log "Finished recheck_loop; has_pending_disk_changes";
-        env
-      ) else
+      (* Should we hold off sending diagnostics to the client? *)
+      if ClientProvider.client_has_message client then
+        (env, "client has message")
+      else if not @@ Relative_path.Set.is_empty env.ide_needs_parsing then
+        (env, "ide_needs_parsing: processed edits but didn't recheck them yet")
+      else if has_pending_disk_changes genv then
+        (env, "has_pending_disk_changes")
+      else
         let (sub, errors) = Diagnostic_subscription.pop_errors sub env.errorl in
-        ( if SMap.is_empty errors then (
-          if log_diagnostics then
-            Hh_logger.log "Finished recheck_loop; is_empty errors"
-        ) else
-          let id = Diagnostic_subscription.get_id sub in
-          let res = ServerCommandTypes.DIAGNOSTIC (id, errors) in
+        let env = { env with diag_subscribe = Some sub } in
+        let id = Diagnostic_subscription.get_id sub in
+        let res = ServerCommandTypes.DIAGNOSTIC (id, errors) in
+        if SMap.is_empty errors then
+          (env, "is_empty errors")
+        else begin
           try
-            Hh_logger.log "Finished recheck_loop; sending push message";
-            ClientProvider.send_push_message_to_client client res
+            ClientProvider.send_push_message_to_client client res;
+            (env, "sent push message")
           with ClientProvider.Client_went_away ->
             (* Leaving cleanup of this condition to handled_connection function *)
-            Hh_logger.log "Finished recheck_loop; Client_went_away" );
-        { env with diag_subscribe = Some sub }
+            (env, "Client_went_away")
+        end
   in
   let t_sent_diagnostics = Unix.gettimeofday () in
+
+  if did_work then begin
+    let telemetry =
+      ServerEnv.recheck_loop_stats_to_user_telemetry stats
+      |> Telemetry.string_ ~key:"diag_reason" ~value:diag_reason
+    in
+    HackEventLogger.recheck_end
+      stats.duration
+      (List.length stats.per_batch_telemetry - 1)
+      stats.rechecked_count
+      stats.total_rechecked_count
+      (Option.some_if stats.any_full_checks telemetry);
+    Hh_logger.log
+      "RECHECK_END (recheck_id %s):\n%s"
+      recheck_id
+      (Telemetry.to_string telemetry)
+  end;
+
   let env =
     match select_outcome with
     | ClientProvider.Select_persistent -> env
@@ -812,8 +862,10 @@ let serve_one_iteration genv env client_provider =
   env
 
 let watchman_interrupt_handler genv env =
-  let t = Unix.gettimeofday () in
-  let (env, updates, updates_stale) = query_notifier genv env `Async t in
+  let start_time = Unix.gettimeofday () in
+  let (env, updates, updates_stale, _telemetry) =
+    query_notifier genv env `Async start_time
+  in
   (* Async updates can always be stale, so we don't care *)
   ignore updates_stale;
   let size = Relative_path.Set.cardinal updates in
@@ -835,7 +887,9 @@ let priority_client_interrupt_handler genv client_provider env =
    * this file contents. Async notifications are not always fast enough to
    * quarantee it, so we need an additional sync query before accepting such
    * client *)
-  let (env, updates, _) = query_notifier genv env `Sync t in
+  let (env, updates, _updates_stale, _telemetry) =
+    query_notifier genv env `Sync t
+  in
   let size = Relative_path.Set.cardinal updates in
   if size > 0 then (
     Hh_logger.log "Interrupted by Watchman sync query: %d files changed" size;
@@ -991,8 +1045,20 @@ let serve genv env in_fds =
   MultiThreadedCall.on_exception (fun (e, stack) ->
       ServerUtils.exit_on_exception e ~stack);
   let client_provider = ClientProvider.provider_from_file_descriptors in_fds in
-  (* This is needed when typecheck_after_init option is disabled. *)
-  if not env.init_env.needs_full_init then finalize_init env.init_env;
+
+  (* This is needed when typecheck_after_init option is disabled.
+   * We're just filling it with placeholder telemetry values since
+   * we don't much care about this scenario. *)
+  let init_telemetry =
+    Telemetry.create ()
+    |> Telemetry.string_
+         ~key:"mode"
+         ~value:"serve_due_to_disabled_typecheck_after_init"
+  in
+  let typecheck_telemetry = Telemetry.create () in
+  if Option.is_none env.init_env.why_needed_full_init then
+    finalize_init env.init_env typecheck_telemetry init_telemetry;
+
   let env = setup_interrupts env client_provider in
   let env = ref env in
   while true do
@@ -1124,7 +1190,7 @@ let program_init genv env =
     genv.local_config.ServerLocalConfig.load_state_script_timeout
   in
   EventLogger.set_init_type init_type;
-  let telemetry = ServerUtils.log_hash_stats (Telemetry.create ()) in
+  let telemetry = ServerUtils.log_and_get_sharedmem_load_telemetry () in
   HackEventLogger.init_lazy_end
     telemetry
     ~informant_use_xdb

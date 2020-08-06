@@ -100,9 +100,6 @@ let shallow_class_decl = GlobalOptions.tco_shallow_class_decl
 
 let like_type_hints = GlobalOptions.tco_like_type_hints
 
-let union_intersection_type_hints =
-  GlobalOptions.tco_union_intersection_type_hints
-
 let like_casts = GlobalOptions.tco_like_casts
 
 let simple_pessimize = GlobalOptions.tco_simple_pessimize
@@ -147,3 +144,5 @@ let enable_systemlib_annotations =
 let widen_is_array = GlobalOptions.tco_widen_is_array
 
 let higher_kinded_types = GlobalOptions.tco_higher_kinded_types
+
+let method_call_inference = GlobalOptions.tco_method_call_inference

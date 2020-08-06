@@ -186,6 +186,7 @@ void parse_options(int argc, char** argv) {
     ("strength-reduce",           po::value(&options.StrengthReduce))
     ("func-families",             po::value(&options.FuncFamilies))
     ("hard-private-prop",         po::value(&options.HardPrivatePropInference))
+    ("analyze-pseudomains",       po::value(&options.AnalyzePseudomains))
     ("analyze-public-statics",    po::value(&options.AnalyzePublicStatics))
     ;
 
@@ -244,6 +245,11 @@ void parse_options(int argc, char** argv) {
 UNUSED void validate_options() {
   if (parallel::work_chunk <= 10 || parallel::num_threads < 1) {
     std::cerr << "Invalid parallelism configuration.\n";
+    std::exit(1);
+  }
+
+  if (options.AnalyzePublicStatics && !options.AnalyzePseudomains) {
+    std::cerr << "-fanalyze-public-statics requires -fanalyze-pseudomains\n";
     std::exit(1);
   }
 
@@ -551,6 +557,8 @@ int main(int argc, char** argv) try {
   if (!hack_compiler_extract_path.empty()) {
     RuntimeOption::EvalHackCompilerExtractPath = hack_compiler_extract_path;
   }
+
+  RuntimeOption::EvalLowStaticArrays = false;
 
   register_process_init();
 

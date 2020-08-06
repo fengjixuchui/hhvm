@@ -2189,6 +2189,9 @@ std::unique_ptr<php::Func> clone_meth_helper(
           updates[bid][ix] = clsId;
           break;
         }
+        case Op::DefCls:
+        case Op::DefClsNop:
+          return nullptr;
         default:
           break;
       }
@@ -3754,13 +3757,25 @@ Index::Index(php::Program* program)
     preresolveTypes(env, m_data->classInfo);
   }
 
+  auto const error = [&](auto symbol, auto symbol2) {
+    auto filename = [](auto t) {
+      auto unit = t->unit;
+      if (!unit) return "BUILTIN";
+      return unit->filename->data();
+    };
+    throw Index::NonUniqueSymbolException(folly::sformat(
+      "More than one symbol with the name {} is defined. In {} and {}",
+      symbol->name->data(), filename(symbol), filename(symbol2)
+    ));
+  };
+
   for (auto &it : m_data->typeAliases) {
     const php::TypeAlias* ta = it.second;
-    attribute_setter(
-      ta->attrs,
-      !m_data->classInfo.count(ta->name) &&
-      !m_data->records.count(ta->name),
-      AttrUnique);
+    auto ci = m_data->classInfo.find(ta->name);
+    if (ci != m_data->classInfo.end()) error(ta, ci->second->cls);
+    auto sym = m_data->records.find(ta->name);
+    if (sym != m_data->records.end()) error(ta, sym->second);
+    attribute_setter(ta->attrs, true, AttrUnique);
   }
 
   for (auto &it : m_data->constants) {
@@ -3768,20 +3783,12 @@ Index::Index(php::Program* program)
   }
 
   for (auto& rinfo : m_data->allRecordInfos) {
-    auto const set = [&] {
-      auto const recname = rinfo->rec->name;
-      if (m_data->recordInfo.count(recname) != 1 ||
-          m_data->typeAliases.count(recname) ||
-          m_data->classes.count(recname)) {
-        return false;
-      }
-      if (rinfo->parent && !(rinfo->parent->rec->attrs & AttrUnique)) {
-        return false;
-      }
-      FTRACE(2, "Adding AttrUnique to record {}\n", recname->data());
-      return true;
-    }();
-    attribute_setter(rinfo->rec->attrs, set, AttrUnique);
+    auto const rec = rinfo->rec;
+    auto ci = m_data->classInfo.find(rec->name);
+    if (ci != m_data->classInfo.end()) error(rec, ci->second->cls);
+    auto sym = m_data->typeAliases.find(rec->name);
+    if (sym != m_data->typeAliases.end()) error(rec, sym->second);
+    attribute_setter(rinfo->rec->attrs, true, AttrUnique);
   }
 
   // Iterate allClassInfos so that we visit parent classes before
@@ -3863,25 +3870,22 @@ Index::~Index() {}
 void Index::mark_persistent_types_and_functions(php::Program& program) {
   for (auto& unit : program.units) {
     for (auto& f : unit->funcs) {
-      attribute_setter(f->attrs,
-                       f->attrs & AttrUnique,
-                       AttrPersistent);
+      assertx(f->attrs & AttrUnique);
+      attribute_setter(f->attrs, true, AttrPersistent);
     }
 
     for (auto& t : unit->typeAliases) {
-      attribute_setter(t->attrs,
-                       t->attrs & AttrUnique,
-                       AttrPersistent);
+      assertx(t->attrs & AttrUnique);
+      attribute_setter(t->attrs, true, AttrPersistent);
     }
 
     for (auto& c : unit->constants) {
-      attribute_setter(c->attrs,
-                       c->attrs & AttrUnique,
-                       AttrPersistent);
+      assertx(c->attrs & AttrUnique);
+      attribute_setter(c->attrs, true, AttrPersistent);
     }
   }
 
-  auto check_persistent_class = [&] (const ClassInfo& cinfo) {
+  DEBUG_ONLY auto check_persistent_class = [&] (const ClassInfo& cinfo) {
     if (cinfo.parent && !(cinfo.parent->cls->attrs & AttrPersistent)) {
       return false;
     }
@@ -3893,22 +3897,18 @@ void Index::mark_persistent_types_and_functions(php::Program& program) {
     return true;
   };
 
-  auto check_persistent_record = [&] (const RecordInfo& rinfo) {
+  DEBUG_ONLY auto check_persistent_record = [&] (const RecordInfo& rinfo) {
     return !rinfo.parent || (rinfo.parent->rec->attrs & AttrPersistent);
   };
 
   for (auto& c : m_data->allClassInfos) {
-    attribute_setter(c->cls->attrs,
-                     (c->cls->attrs & AttrUnique) &&
-                     check_persistent_class(*c),
-                     AttrPersistent);
+    assertx((c->cls->attrs & AttrUnique) && check_persistent_class(*c));
+    attribute_setter(c->cls->attrs, true, AttrPersistent);
   }
 
   for (auto& r : m_data->allRecordInfos) {
-    attribute_setter(r->rec->attrs,
-                     (r->rec->attrs & AttrUnique) &&
-                     check_persistent_record(*r),
-                     AttrPersistent);
+    assertx((r->rec->attrs & AttrUnique) && check_persistent_record(*r));
+    attribute_setter(r->rec->attrs, true, AttrPersistent);
   }
 }
 

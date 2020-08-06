@@ -106,7 +106,10 @@ let connect ?(use_priority_pipe = false) args =
       profile_log = args.profile_log;
       remote = args.remote;
       ai_mode = args.ai_mode;
-      progress_callback = ClientConnect.tty_progress_reporter ();
+      progress_callback =
+        Option.some_if
+          args.show_spinner
+          (ClientConnect.tty_progress_reporter ());
       do_post_handoff_handshake = true;
       ignore_hh_version = args.ignore_hh_version;
       saved_state_ignore_hhconfig = args.saved_state_ignore_hhconfig;
@@ -553,7 +556,8 @@ let main (args : client_check_env) : Exit_status.t Lwt.t =
           ServerCommandTypes.FileContent (Sys_utils.read_stdin_to_string ())
         | _ -> ServerCommandTypes.FileName (expand_path filename)
       in
-      let%lwt ((error_list, dropped_count), telemetry) =
+      let%lwt ((error_list, dropped_count, highlighted_error_format), telemetry)
+          =
         rpc args (Rpc.STATUS_SINGLE (file_input, args.max_errors))
       in
       let status =
@@ -563,6 +567,7 @@ let main (args : client_check_env) : Exit_status.t Lwt.t =
           Rpc.Server_status.liveness = Rpc.Live_status;
           has_unsaved_changes = false;
           last_recheck_stats = None;
+          highlighted_error_format;
         }
       in
       let exit_status =

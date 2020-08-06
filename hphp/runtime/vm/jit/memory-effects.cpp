@@ -984,10 +984,18 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     return PureLoad { ALocal { inst.src(0), inst.extra<LocalId>()->locId } };
 
   case CheckLoc:
+  case LdLocPseudoMain:
+    // Note: LdLocPseudoMain is both a guard and a load, so it must not be a
+    // PureLoad.
     return may_load_store(
       ALocal { inst.src(0), inst.extra<LocalId>()->locId },
       AEmpty
     );
+
+  case StLocPseudoMain:
+    // This can store to globals or locals, but we don't have globals supported
+    // in AliasClass yet.
+    return PureStore { AUnknown, inst.src(1), nullptr };
 
   //////////////////////////////////////////////////////////////////////
   // Pointer-based loads and stores
@@ -1431,12 +1439,11 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     return IrrelevantEffects {};
 
   case AllocObj:
-    // AllocObj re-enters to call constructors, but if it weren't for that we
-    // could ignore its loads and stores since it's a new object.
-    return may_load_store(AEmpty, AEmpty);
+    // AllocObj may reenter if it throws or raises a notice.
+    return may_load_store(AHeapAny, AHeapAny);
   case AllocObjReified:
     // Similar to AllocObj but also stores the reification
-    return may_load_store(AEmpty, AHeapAny);
+    return may_load_store(AHeapAny, AHeapAny);
 
   //////////////////////////////////////////////////////////////////////
   // Instructions that explicitly manipulate the stack.
@@ -1893,6 +1900,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ConvObjToVArr:  // can invoke PHP
   case ConvObjToDArr:  // can invoke PHP
   case OODeclExists:
+  case DefCls:         // autoload
   case LdCls:          // autoload
   case LdClsCached:    // autoload
   case LdFunc:         // autoload

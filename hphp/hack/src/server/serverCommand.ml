@@ -127,8 +127,11 @@ let full_recheck_if_needed' genv env reason =
     env
   else
     let () = Hh_logger.log "Starting a blocking type-check due to %s" reason in
+    let start_time = Unix.gettimeofday () in
     let env = { env with ServerEnv.can_interrupt = false } in
-    let (env, _) = ServerTypeCheck.(type_check genv env Full_check) in
+    let (env, _res, _telemetry) =
+      ServerTypeCheck.(type_check genv env Full_check start_time)
+    in
     let env = { env with ServerEnv.can_interrupt = true } in
     assert (ServerEnv.(is_full_check_done env.full_check));
     env
@@ -340,7 +343,7 @@ let handle
   ClientProvider.track client ~key:Connection_tracker.Server_got_cmd;
   let env = { env with ServerEnv.remote = force_remote msg } in
   let full_recheck_needed = command_needs_full_check msg in
-  let is_stale = ServerEnv.(env.recent_recheck_loop_stats.updates_stale) in
+  let is_stale = ServerEnv.(env.last_recheck_loop_stats.updates_stale) in
   let continuation =
     actually_handle genv client msg full_recheck_needed ~is_stale
   in

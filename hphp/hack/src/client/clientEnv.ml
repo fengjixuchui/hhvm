@@ -73,9 +73,10 @@ type client_check_env = {
   autostart: bool;
   config: (string * string) list;
   dynamic_view: bool;
-  error_format: Errors.format;
+  error_format: Errors.format option;
   force_dormant_start: bool;
   from: string;
+  show_spinner: bool;
   gen_saved_ignore_type_errors: bool;
   ignore_hh_version: bool;
   saved_state_ignore_hhconfig: bool;

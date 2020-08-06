@@ -33,6 +33,7 @@ type t = {
   po_disable_nontoplevel_declarations: bool;
   po_disable_static_closures: bool;
   po_allow_goto: bool;
+  po_allow_unstable_features: bool;
   tco_log_inference_constraints: bool;
   tco_disallow_array_typehint: bool;
   tco_disallow_array_literal: bool;
@@ -107,6 +108,7 @@ type t = {
   tco_pu_enabled_paths: bool * Relative_path.t list;
   tco_widen_is_array: bool;
   tco_higher_kinded_types: bool;
+  tco_method_call_inference: bool;
 }
 [@@deriving eq, show]
 
@@ -198,6 +200,7 @@ let default =
     po_disable_nontoplevel_declarations = false;
     po_disable_static_closures = true;
     po_allow_goto = false;
+    po_allow_unstable_features = false;
     tco_log_inference_constraints = false;
     tco_disallow_array_typehint = false;
     tco_disallow_array_literal = false;
@@ -272,6 +275,7 @@ let default =
     tco_pu_enabled_paths = (false, []);
     tco_widen_is_array = false;
     tco_higher_kinded_types = false;
+    tco_method_call_inference = false;
   }
 
 let make
@@ -387,11 +391,13 @@ let make
     ?(po_disable_hh_ignore_error = default.po_disable_hh_ignore_error)
     ?(po_disable_array = default.po_disable_array)
     ?(po_disable_array_typehint = default.po_disable_array_typehint)
+    ?(po_allow_unstable_features = default.po_allow_unstable_features)
     ?(tco_enable_systemlib_annotations =
       default.tco_enable_systemlib_annotations)
     ?(tco_pu_enabled_paths = default.tco_pu_enabled_paths)
     ?(tco_widen_is_array = default.tco_widen_is_array)
     ?(tco_higher_kinded_types = default.tco_higher_kinded_types)
+    ?(tco_method_call_inference = default.tco_method_call_inference)
     () =
   {
     tco_experimental_features;
@@ -422,6 +428,7 @@ let make
     po_disable_nontoplevel_declarations;
     po_disable_static_closures;
     po_allow_goto;
+    po_allow_unstable_features;
     tco_log_inference_constraints;
     tco_disallow_array_typehint;
     tco_disallow_array_literal;
@@ -493,6 +500,7 @@ let make
     tco_pu_enabled_paths;
     tco_widen_is_array;
     tco_higher_kinded_types;
+    tco_method_call_inference;
   }
 
 let tco_experimental_feature_enabled t s =
@@ -631,6 +639,8 @@ let po_allowed_decl_fixme_codes t = t.po_allowed_decl_fixme_codes
 
 let po_allow_new_attribute_syntax t = t.po_allow_new_attribute_syntax
 
+let po_allow_unstable_features t = t.po_allow_unstable_features
+
 let tco_global_inference t = t.tco_global_inference
 
 let tco_gi_reinfer_types t = t.tco_gi_reinfer_types
@@ -711,3 +721,5 @@ let tco_pu_enabled_paths t = t.tco_pu_enabled_paths
 let tco_widen_is_array t = t.tco_widen_is_array
 
 let tco_higher_kinded_types t = t.tco_higher_kinded_types
+
+let tco_method_call_inference t = t.tco_method_call_inference
