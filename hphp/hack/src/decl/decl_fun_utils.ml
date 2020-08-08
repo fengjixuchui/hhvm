@@ -266,15 +266,7 @@ let ret_from_fun_kind ?(is_constructor = false) ~is_lambda env pos kind hint =
       ret_ty ())
   | Some _ -> ret_ty ()
 
-let type_param env (t : Nast.tparam) =
-  {
-    Typing_defs.tp_variance = t.tp_variance;
-    tp_name = t.tp_name;
-    tp_constraints =
-      List.map t.tp_constraints (fun (ck, h) -> (ck, Decl_hint.hint env h));
-    tp_reified = t.tp_reified;
-    tp_user_attributes = t.tp_user_attributes;
-  }
+let type_param = Decl_hint.aast_tparam_to_decl_tparam
 
 let where_constraint env (ty1, ck, ty2) =
   (Decl_hint.hint env ty1, ck, Decl_hint.hint env ty2)
@@ -292,7 +284,7 @@ let minimum_arity paraml =
   in
   List.count paraml f
 
-let check_params env paraml =
+let check_params paraml =
   (* We wish to give an error on the first non-default parameter
   after a default parameter. That is:
   function foo(int $x, ?int $y = null, int $z)
@@ -316,8 +308,7 @@ let check_params env paraml =
       else
         loop (Option.is_some param.param_expr) rl
   in
-  (* PHP allows non-default valued parameters after default valued parameters. *)
-  if not FileInfo.(equal_mode env.Decl_env.mode Mphp) then loop false paraml
+  loop false paraml
 
 let make_params env ~is_lambda paraml =
   List.map paraml ~f:(make_param_ty env ~is_lambda)

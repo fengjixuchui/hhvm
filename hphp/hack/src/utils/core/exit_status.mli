@@ -15,8 +15,6 @@ shape. *)
 
 type t =
   | No_error
-  | Build_error
-  | Build_terminated
   | Checkpoint_error
   | Input_error
   | Kill_error
@@ -51,7 +49,7 @@ type t =
   | File_provider_stale
   | Hhconfig_deleted
   | Hhconfig_changed
-  | Server_shutting_down
+  | Server_shutting_down_due_to_sigusr2
   | IDE_malformed_request
   | IDE_no_server
   | IDE_out_of_retries
@@ -77,14 +75,12 @@ type t =
   | Big_rebase_detected
   | Failed_to_load_should_retry
   | Failed_to_load_should_abort
+  | Server_non_opt_build_mode
+[@@deriving show]
 
 exception Exit_with of t
 
 val exit_code : t -> int
-
-val exit : t -> 'a
-
-val to_string : t -> string
 
 val exit_code_to_string : int -> string
 

@@ -26,6 +26,8 @@ and aast_tparam_to_decl_tparam env t =
   {
     tp_variance = t.Aast.tp_variance;
     tp_name = t.Aast.tp_name;
+    tp_tparams =
+      List.map ~f:(aast_tparam_to_decl_tparam env) t.Aast.tp_parameters;
     tp_constraints =
       List.map ~f:(Tuple.T2.map_snd ~f:(hint env)) t.Aast.tp_constraints;
     tp_reified = t.Aast.tp_reified;
@@ -54,7 +56,9 @@ and hint_ p env = function
     in
     Tvarray_or_darray (t1, hint env h2)
   | Hprim p -> Tprim p
-  | Habstr x -> Tgeneric (x, [])
+  | Habstr (x, argl) ->
+    let argl = List.map argl (hint env) in
+    Tgeneric (x, argl)
   | Hoption h ->
     let h = hint env h in
     Toption h

@@ -133,9 +133,7 @@ struct
     | Tvarray root_ty -> Tvarray (ty root_ty)
     | Tvarray_or_darray (ty1, ty2) -> Tvarray_or_darray (ty ty1, ty ty2)
     | Tprim _ as x -> x
-    | Tgeneric _ as x ->
-      (* TODO(T69551141) handle type arguments *)
-      x
+    | Tgeneric (name, args) -> Tgeneric (name, List.map args ty)
     | Ttuple tyl -> Ttuple (List.map tyl ty)
     | Tunion tyl -> Tunion (List.map tyl ty)
     | Tintersection tyl -> Tintersection (List.map tyl ty)
@@ -276,8 +274,10 @@ struct
 
   and type_param t =
     {
-      t with
       tp_name = string_id t.tp_name;
+      tp_variance = t.tp_variance;
+      tp_reified = t.tp_reified;
+      tp_tparams = List.map ~f:type_param t.tp_tparams;
       tp_constraints = constraint_ t.tp_constraints;
       tp_user_attributes = List.map ~f:user_attribute t.tp_user_attributes;
     }

@@ -28,6 +28,7 @@
 
 #include "hphp/hhbbc/analyze.h"
 #include "hphp/hhbbc/class-util.h"
+#include "hphp/hhbbc/compression.h"
 #include "hphp/hhbbc/debug.h"
 #include "hphp/hhbbc/emit.h"
 #include "hphp/hhbbc/func-util.h"
@@ -548,6 +549,9 @@ void whole_program(php::ProgramPtr program,
                    int num_threads) {
   trace_time tracer("whole program");
 
+  if (options.TestCompression || RO::EvalHHBBCTestCompression) {
+    compression::testCompression(*program);
+  }
 
   if (num_threads > 0) {
     parallel::num_threads = num_threads;
@@ -597,7 +601,6 @@ void whole_program(php::ProgramPtr program,
     index.use_class_dependencies(options.HardPrivatePropInference);
     analyze_iteratively(index, *program, AnalyzeMode::NormalPass);
     cleanup_pre = std::thread([&] { index.cleanup_for_final(); });
-    index.mark_persistent_types_and_functions(*program);
     index.join_iface_vtable_thread();
     if (parallel::num_threads > parallel::final_threads) {
       parallel::num_threads = parallel::final_threads;

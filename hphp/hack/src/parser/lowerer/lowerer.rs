@@ -105,7 +105,6 @@ impl ExprLocation {
 pub enum SuspensionKind {
     SKSync,
     SKAsync,
-    SKCoroutine,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -395,13 +394,6 @@ where
     Syntax<T, V>: PositionedSyntaxTrait,
     V: SyntaxValueWithKind + SyntaxValueType<T> + std::fmt::Debug,
 {
-    fn mode_annotation(mode: file_info::Mode) -> file_info::Mode {
-        match mode {
-            file_info::Mode::Mphp => file_info::Mode::Mdecl,
-            m => m,
-        }
-    }
-
     fn p_pos(node: &Syntax<T, V>, env: &Env) -> Pos {
         node.position_exclusive(env.indexed_source_text)
             .unwrap_or_else(|| env.mk_none_pos())
@@ -991,7 +983,7 @@ where
                 }
                 Ok(Hfun(ast::HintFun {
                     reactive_kind: ast::FuncReactive::FNonreactive,
-                    is_coroutine: !c.closure_coroutine.is_missing(),
+                    is_coroutine: false,
                     param_tys: type_hints,
                     param_kinds: kinds,
                     param_mutability: vec![],
@@ -1568,8 +1560,7 @@ where
         };
         match &node.syntax {
             LambdaExpression(c) => {
-                let suspension_kind =
-                    Self::mk_suspension_kind(node, env, &c.lambda_async, &c.lambda_coroutine);
+                let suspension_kind = Self::mk_suspension_kind(&c.lambda_async);
                 let (params, ret) = match &c.lambda_signature.syntax {
                     LambdaSignature(c) => (
                         Self::could_map(Self::p_fun_param, &c.lambda_parameters, env)?,
@@ -1604,7 +1595,7 @@ where
                 let fun = ast::Fun_ {
                     span: pos.clone(),
                     annotation: (),
-                    mode: Self::mode_annotation(env.file_mode()),
+                    mode: env.file_mode(),
                     ret: ast::TypeHint((), ret),
                     name: ast::Id(pos, String::from(";anonymous")),
                     tparams: vec![],
@@ -2231,12 +2222,7 @@ where
                     }
                     _ => Ok(vec![]),
                 };
-                let suspension_kind = Self::mk_suspension_kind(
-                    node,
-                    env,
-                    &c.anonymous_async_keyword,
-                    &c.anonymous_coroutine_keyword,
-                );
+                let suspension_kind = Self::mk_suspension_kind(&c.anonymous_async_keyword);
                 let (body, yield_) = {
                     let mut env1 = Env::clone_and_unset_toplevel_if_toplevel(env);
                     Self::mp_yielding(&Self::p_function_body, &c.anonymous_body, env1.as_mut())?
@@ -2250,7 +2236,7 @@ where
                 let fun = ast::Fun_ {
                     span: Self::p_pos(node, env),
                     annotation: (),
-                    mode: Self::mode_annotation(env.file_mode()),
+                    mode: env.file_mode(),
                     ret: ast::TypeHint(
                         (),
                         Self::mp_optional(Self::p_hint, &c.anonymous_type, env)?,
@@ -2277,8 +2263,7 @@ where
                 Ok(E_::mk_efun(fun, uses))
             }
             AwaitableCreationExpression(c) => {
-                let suspension_kind =
-                    Self::mk_suspension_kind(node, env, &c.awaitable_async, &c.awaitable_coroutine);
+                let suspension_kind = Self::mk_suspension_kind(&c.awaitable_async);
                 let (blk, yld) = Self::mp_yielding(
                     &Self::p_function_body,
                     &c.awaitable_compound_statement,
@@ -2290,7 +2275,7 @@ where
                 let body = ast::Fun_ {
                     span: pos.clone(),
                     annotation: (),
-                    mode: Self::mode_annotation(env.file_mode()),
+                    mode: env.file_mode(),
                     ret: ast::TypeHint((), None),
                     name: ast::Id(name_pos, String::from(";anonymous")),
                     tparams: vec![],
@@ -3537,11 +3522,9 @@ where
                 }
                 let kinds = Self::p_kinds(function_modifiers, env)?;
                 let has_async = kinds.has(modifier::ASYNC);
-                let has_coroutine = kinds.has(modifier::COROUTINE);
                 let parameters = Self::could_map(Self::p_fun_param, function_parameter_list, env)?;
                 let return_type = Self::mp_optional(Self::p_hint, function_type, env)?;
-                let suspension_kind =
-                    Self::mk_suspension_kind_(node, env, has_async, has_coroutine);
+                let suspension_kind = Self::mk_suspension_kind_(has_async);
                 let name = Self::pos_name(function_name, env)?;
                 let constrs = Self::p_where_constraint(false, node, function_where_clause, env)?;
                 let type_parameters = Self::p_tparam_l(false, function_type_parameter_list, env)?;
@@ -3658,35 +3641,15 @@ where
         Self::with_new_nonconcurrent_scope(f, env)
     }
 
-    fn mk_suspension_kind(
-        node: &Syntax<T, V>,
-        env: &mut Env,
-        async_keyword: &Syntax<T, V>,
-        coroutine_keyword: &Syntax<T, V>,
-    ) -> SuspensionKind {
-        Self::mk_suspension_kind_(
-            node,
-            env,
-            !async_keyword.is_missing(),
-            !coroutine_keyword.is_missing(),
-        )
+    fn mk_suspension_kind(async_keyword: &Syntax<T, V>) -> SuspensionKind {
+        Self::mk_suspension_kind_(!async_keyword.is_missing())
     }
 
-    fn mk_suspension_kind_(
-        node: &Syntax<T, V>,
-        env: &mut Env,
-        has_async: bool,
-        has_coroutine: bool,
-    ) -> SuspensionKind {
+    fn mk_suspension_kind_(has_async: bool) -> SuspensionKind {
         use SuspensionKind::*;
-        match (has_async, has_coroutine) {
-            (false, false) => SKSync,
-            (true, false) => SKAsync,
-            (false, true) => SKCoroutine,
-            (true, true) => {
-                Self::raise_parsing_error(node, env, "Coroutine functions may not be async");
-                SKCoroutine
-            }
+        match has_async {
+            false => SKSync,
+            true => SKAsync,
         }
     }
 
@@ -3698,7 +3661,6 @@ where
             (SKAsync, true) => FAsyncGenerator,
             (SKSync, false) => FSync,
             (SKAsync, false) => FAsync,
-            (SKCoroutine, _) => FCoroutine,
         }
     }
 
@@ -4690,7 +4652,7 @@ where
                 Ok(vec![ast::Def::mk_fun(ast::Fun_ {
                     span: Self::p_fun_pos(node, env),
                     annotation: (),
-                    mode: Self::mode_annotation(env.file_mode()),
+                    mode: env.file_mode(),
                     ret,
                     name: hdr.name,
                     tparams: hdr.type_parameters,
@@ -4714,7 +4676,7 @@ where
             ClassishDeclaration(c) if Self::contains_class_body(c) => {
                 let mut env = Env::clone_and_unset_toplevel_if_toplevel(env);
                 let env = env.as_mut();
-                let mode = Self::mode_annotation(env.file_mode());
+                let mode = env.file_mode();
                 let user_attributes = Self::p_user_attributes(&c.classish_attribute, env)?;
                 let kinds = Self::p_kinds(&c.classish_modifiers, env)?;
                 let final_ = kinds.has(modifier::FINAL);
@@ -4811,7 +4773,7 @@ where
                             let init = &c.constant_declarator_initializer;
                             let gconst = ast::Gconst {
                                 annotation: (),
-                                mode: Self::mode_annotation(env.file_mode()),
+                                mode: env.file_mode(),
                                 name: Self::pos_name(name, env)?,
                                 type_: Self::mp_optional(Self::p_hint, ty, env)?,
                                 value: Self::p_simple_initializer(init, env)?,
@@ -4847,7 +4809,7 @@ where
                             .collect::<std::result::Result<Vec<Vec<_>>, _>>()?,
                     ),
                     namespace: Self::mk_empty_ns_env(env),
-                    mode: Self::mode_annotation(env.file_mode()),
+                    mode: env.file_mode(),
                     vis: match Self::token_kind(&c.alias_keyword) {
                         Some(TK::Type) => ast::TypedefVisibility::Transparent,
                         Some(TK::Newtype) => ast::TypedefVisibility::Opaque,
@@ -4872,7 +4834,7 @@ where
                 };
                 Ok(vec![ast::Def::mk_class(ast::Class_ {
                     annotation: (),
-                    mode: Self::mode_annotation(env.file_mode()),
+                    mode: env.file_mode(),
                     user_attributes: Self::p_user_attributes(&c.enum_attribute_spec, env)?,
                     file_attributes: vec![],
                     final_: false,
@@ -4937,11 +4899,7 @@ where
                     emit_id: None,
                 })])
             }
-            InclusionDirective(c)
-                if env.file_mode() != file_info::Mode::Mdecl
-                    && env.file_mode() != file_info::Mode::Mphp
-                    || env.codegen() =>
-            {
+            InclusionDirective(c) if env.file_mode() != file_info::Mode::Mdecl || env.codegen() => {
                 let expr = Self::p_expr(&c.inclusion_expression, env)?;
                 Ok(vec![ast::Def::mk_stmt(ast::Stmt::new(
                     Self::p_pos(node, env),
@@ -5008,11 +4966,7 @@ where
                     namespace: Self::mk_empty_ns_env(env),
                 })])
             }
-            _ if env.file_mode() == file_info::Mode::Mdecl
-                || (env.file_mode() == file_info::Mode::Mphp && !env.codegen) =>
-            {
-                Ok(vec![])
-            }
+            _ if env.file_mode() == file_info::Mode::Mdecl => Ok(vec![]),
             _ => Ok(vec![ast::Def::mk_stmt(Self::p_stmt(node, env)?)]),
         }
     }

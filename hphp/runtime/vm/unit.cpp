@@ -185,7 +185,6 @@ Unit::MergeInfo* Unit::MergeInfo::alloc(size_t size) {
 Unit::Unit()
   : m_mergeOnly(false)
   , m_interpretOnly(false)
-  , m_isHHFile(false)
   , m_extended(false)
   , m_serialized(false)
   , m_ICE(false)
@@ -954,6 +953,8 @@ Class* Unit::defClass(const PreClass* preClass,
       }
       return nullptr;
     }
+    assertx(!RO::RepoAuthoritative ||
+            (cls->isPersistent() && classHasPersistentRDS(cls)));
     return cls;
   }
 
@@ -971,6 +972,8 @@ Class* Unit::defClass(const PreClass* preClass,
       if (LIKELY(avail == Class::Avail::True)) {
         cur->setCached();
         DEBUGGER_ATTACHED_ONLY(phpDebuggerDefClassHook(cur));
+        assertx(!RO::RepoAuthoritative ||
+                (cur->isPersistent() && classHasPersistentRDS(cur)));
         return cur;
       }
       if (avail == Class::Avail::Fail) {
@@ -1016,6 +1019,9 @@ Class* Unit::defClass(const PreClass* preClass,
      */
     newClass.get()->setCached();
     DEBUGGER_ATTACHED_ONLY(phpDebuggerDefClassHook(newClass.get()));
+    assertx(!RO::RepoAuthoritative ||
+            (newClass.get()->isPersistent() &&
+             classHasPersistentRDS(newClass.get())));
     return newClass.get();
   }
 }

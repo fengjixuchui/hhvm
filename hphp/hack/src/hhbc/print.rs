@@ -216,10 +216,6 @@ fn print_program_<W: Write>(
     w: &mut W,
     prog: &HhasProgram,
 ) -> Result<(), W::Error> {
-    let is_hh = if prog.is_hh { "1" } else { "0" };
-    newline(w)?;
-    concat_str(w, [".hh_file ", is_hh, ";"])?;
-
     if let Some((fop, p, msg)) = &prog.fatal {
         newline(w)?;
         let (line_begin, line_end, col_begin, col_end) = if p.is_none() || !p.is_valid() {

@@ -48,6 +48,8 @@ let on_clone_cancelled parent_outfd =
  *****************************************************************************)
 
 let subprocess_main ic oc =
+  (* Explicitly ensure that Folly is initialized (installs signal handlers) *)
+  Folly.ensure_folly_init ();
   let start_user_time = ref 0. in
   let start_system_time = ref 0. in
   let start_minor_words = ref 0. in
@@ -169,9 +171,9 @@ let subprocess_main ic oc =
     exit 0
   with
   | End_of_file -> exit 1
-  | SharedMem.Out_of_shared_memory -> Exit_status.(exit Out_of_shared_memory)
-  | SharedMem.Hash_table_full -> Exit_status.(exit Hash_table_full)
-  | SharedMem.Heap_full -> Exit_status.(exit Heap_full)
+  | SharedMem.Out_of_shared_memory -> Exit.exit Exit_status.Out_of_shared_memory
+  | SharedMem.Hash_table_full -> Exit.exit Exit_status.Hash_table_full
+  | SharedMem.Heap_full -> Exit.exit Exit_status.Heap_full
   | SharedMem.Sql_assertion_failure err_num ->
     let exit_code =
       match err_num with
@@ -180,7 +182,7 @@ let subprocess_main ic oc =
       | 21 -> Exit_status.Sql_misuse
       | _ -> Exit_status.Sql_assertion_failure
     in
-    Exit_status.exit exit_code
+    Exit.exit exit_code
   | e ->
     let e_backtrace = Caml.Printexc.get_backtrace () in
     let e_str = Caml.Printexc.to_string e in
