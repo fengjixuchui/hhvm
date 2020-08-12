@@ -142,6 +142,7 @@ inline Type for_const(const ArrayData* ad) {
 inline Type for_const(double)        { return TDbl; }
 inline Type for_const(const Func*)   { return TFunc; }
 inline Type for_const(const Class*)  { return TCls; }
+inline Type for_const(LazyClassData) { return TLazyCls; }
 inline Type for_const(const RecordDesc*)  { return TRecDesc; }
 inline Type for_const(ClsMethDataRef) { return TClsMeth; }
 inline Type for_const(TCA)           { return TTCA; }
@@ -336,6 +337,9 @@ inline Type Type::cns(const TypedValue& tv) {
         assertx(val(tv).parr->isVArray());
         return type_detail::for_const(tv.m_data.parr);
 
+      case KindOfLazyClass:
+        return type_detail::for_const(tv.m_data.plazyclass);
+
       case KindOfObject:
       case KindOfResource:
       case KindOfRFunc:
@@ -409,6 +413,7 @@ IMPLEMENT_CNS_VAL(TStaticDict, dict, const ArrayData*)
 IMPLEMENT_CNS_VAL(TStaticKeyset, keyset, const ArrayData*)
 IMPLEMENT_CNS_VAL(TFunc,       func, const HPHP::Func*)
 IMPLEMENT_CNS_VAL(TCls,        cls,  const Class*)
+IMPLEMENT_CNS_VAL(TLazyCls,    lcls,  LazyClassData)
 IMPLEMENT_CNS_VAL(TRecDesc,    rec,  const RecordDesc*)
 IMPLEMENT_CNS_VAL(TClsMeth,    clsmeth,  ClsMethDataRef)
 IMPLEMENT_CNS_VAL(TTCA,        tca,  jit::TCA)

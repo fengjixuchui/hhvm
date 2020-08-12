@@ -16,6 +16,7 @@
 
 #include "hphp/runtime/vm/jit/type.h"
 
+#include "hphp/runtime/base/bespoke-array.h"
 #include "hphp/runtime/base/repo-auth-type-array.h"
 #include "hphp/runtime/base/tv-type.h"
 #include "hphp/runtime/vm/jit/guard-constraint.h"
@@ -146,6 +147,9 @@ std::string Type::constValString() const {
   if (*this <= TCls) {
     return folly::format("Cls({})", m_clsVal->name()->data()).str();
   }
+  if (*this <= TLazyCls) {
+    return folly::format("LCls({})", m_lclsVal.name()->data()).str();
+  }
   if (*this <= TClsMeth) {
     return folly::format("ClsMeth({},{})",
       m_clsmethVal->getCls() ?
@@ -245,6 +249,9 @@ std::string Type::toString() const {
   if (m_hasConstVal) {
     if (*this <= TCls) {
       return folly::sformat("Cls={}", m_clsVal->name()->data());
+    }
+    if (*this <= TLazyCls) {
+      return folly::sformat("LCls={}", m_lclsVal.name()->data());
     }
     if (*this <= TRecDesc) {
       return folly::sformat("RecDesc={}", m_recVal->name()->data());
@@ -385,6 +392,7 @@ void Type::serialize(ProfDataSerializer& ser) const {
 
   if (key == TypeKey::Const) {
     if (t <= TCls)       return write_class(ser, t.m_clsVal);
+    if (t <= TLazyCls)   return write_lclass(ser, t.m_lclsVal);
     if (t <= TFunc)      return write_func(ser, t.m_funcVal);
     if (t <= TStaticStr) return write_string(ser, t.m_strVal);
     if (t < TArrLike) {
@@ -422,6 +430,10 @@ Type Type::deserialize(ProfDataDeserializer& ser) {
       t.m_hasConstVal = true;
       if (t <= TCls) {
         t.m_clsVal = read_class(ser);
+        return t;
+      }
+      if (t <= TLazyCls) {
+        t.m_lclsVal = read_lclass(ser);
         return t;
       }
       if (t <= TFunc) {
@@ -478,7 +490,8 @@ Type Type::deserialize(ProfDataDeserializer& ser) {
 bool Type::checkValid() const {
   // NOTE: Be careful: the TFoo objects aren't all constructed yet in this
   // function, and we can't call operator<=, etc. because they call checkValid.
-  auto constexpr kNonNullConstVals = kArrLike | kCls | kFunc | kRecDesc | kStr;
+  auto constexpr kNonNullConstVals = kArrLike | kCls | kLazyCls |
+                                     kFunc | kRecDesc | kStr;
   if (m_hasConstVal && ((m_bits & kNonNullConstVals) == m_bits)) {
     assert_flog(m_extra, "Null constant type: {}", m_bits.hexStr());
   }
@@ -533,6 +546,7 @@ Type::bits_t Type::bitsFromDataType(DataType outer) {
     case KindOfRFunc            : return kRFunc;
     case KindOfFunc             : return kFunc;
     case KindOfClass            : return kCls;
+    case KindOfLazyClass        : return kLazyCls;
     case KindOfClsMeth          : return kClsMeth;
     case KindOfRClsMeth         : return kRClsMeth;
     case KindOfRecord           : return kRecord;
@@ -567,6 +581,7 @@ DataType Type::toDataType() const {
   if (*this <= TRes)         return KindOfResource;
   if (*this <= TFunc)        return KindOfFunc;
   if (*this <= TCls)         return KindOfClass;
+  if (*this <= TLazyCls)     return KindOfLazyClass;
   if (*this <= TClsMeth)     return KindOfClsMeth;
   if (*this <= TRecord)      return KindOfRecord;
   if (*this <= TRFunc)       return KindOfRFunc;
@@ -1107,7 +1122,7 @@ Type typeFromRATImpl(RepoAuthType ty, const Class* ctx) {
 
 Type typeFromRAT(RepoAuthType ty, const Class* ctx) {
   auto const result = typeFromRATImpl(ty, ctx);
-  return RO::EvalAllowBespokeArrayLikes ? result.widenToBespoke() : result;
+  return allowBespokeArrayLikes() ? result.widenToBespoke() : result;
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -1259,7 +1274,7 @@ Type relaxToConstraint(Type t, const GuardConstraint& gc) {
   // we could guard to superclasses and unify multiple regions. Rethink it.
   if (gc.wantClass()) return t;
   assertx(gc.wantVanillaArray());
-  assertx(RO::EvalAllowBespokeArrayLikes);
+  assertx(allowBespokeArrayLikes());
   return t.arrSpec().vanilla() ? t.unspecialize().narrowToVanilla() : t;
 }
 

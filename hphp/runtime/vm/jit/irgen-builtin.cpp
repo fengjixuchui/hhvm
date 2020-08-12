@@ -16,6 +16,7 @@
 #include "hphp/runtime/vm/jit/irgen-builtin.h"
 
 #include "hphp/runtime/base/array-init.h"
+#include "hphp/runtime/base/bespoke-array.h"
 #include "hphp/runtime/base/collections.h"
 #include "hphp/runtime/base/enum-cache.h"
 #include "hphp/runtime/base/file-util.h"
@@ -689,7 +690,7 @@ SSATmp* opt_foldable(IRGS& env,
     // set to anything valid, so we need to do so here (for assertions and
     // backtraces in the invocation, among other things).
     auto const savedPC = vmpc();
-    vmpc() = vmfp() ? vmfp()->m_func->getEntry() : nullptr;
+    vmpc() = vmfp() ? vmfp()->m_func->entry() : nullptr;
     SCOPE_EXIT{ vmpc() = savedPC; };
 
     assertx(!RID().getJitFolding());
@@ -729,6 +730,8 @@ SSATmp* opt_foldable(IRGS& env,
       case KindOfPersistentVArray:
       case KindOfVArray:
         return cns(env, make_tv<KindOfPersistentVArray>(scalar_array()));
+      case KindOfLazyClass:
+        return cns(env, retVal.m_data.plazyclass.name());
       case KindOfUninit:
       case KindOfObject:
       case KindOfResource:
@@ -2231,7 +2234,7 @@ Type builtinReturnType(const Func* builtin) {
 
   // Allow builtins to return bespoke array likes if the flag is set.
   assertx(!type.arrSpec().vanilla());
-  if (!RO::EvalAllowBespokeArrayLikes) type = type.narrowToVanilla();
+  if (!allowBespokeArrayLikes()) type = type.narrowToVanilla();
 
   // "Reference" types (types represented by a pointer) can always be null.
   if (type.isReferenceType()) {
@@ -2905,10 +2908,6 @@ void emitMemoSetEager(IRGS& env, LocalRange keys) {
 //////////////////////////////////////////////////////////////////////
 
 void emitSilence(IRGS& env, Id localId, SilenceOp subop) {
-  // We can't generate direct StLoc and LdLocs in pseudomains (violates an IR
-  // invariant).
-  if (curFunc(env)->isPseudoMain()) PUNT(PseudoMain-Silence);
-
   switch (subop) {
   case SilenceOp::Start:
     // We assume that whatever is in the local is dead and doesn't need to be

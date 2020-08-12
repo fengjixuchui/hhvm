@@ -1100,7 +1100,7 @@ struct Index::IndexData {
 
   hphp_hash_map<
     const php::Class*,
-    hphp_fast_set<php::Func*>
+    hphp_fast_set<const php::Func*>
   > classExtraMethodMap;
 
   /*
@@ -1771,8 +1771,7 @@ bool build_class_methods(BuildClsInfo& info) {
         }
         res.first->second.idx = idx++;
       }
-      info.index.classExtraMethodMap[info.rleaf->cls].insert(
-        const_cast<php::Func*>(method));
+      info.index.classExtraMethodMap[info.rleaf->cls].insert(method);
     }
   } catch (TMIOps::TMIException& ex) {
     ITRACE(2,
@@ -2185,9 +2184,6 @@ std::unique_ptr<php::Func> clone_meth_helper(
           updates[bid][ix] = clsId;
           break;
         }
-        case Op::DefCls:
-        case Op::DefClsNop:
-          return nullptr;
         default:
           break;
       }
@@ -3310,11 +3306,7 @@ Type context_sensitive_return_type(IndexData& data,
     if (constraint.hasConstraint() &&
         !constraint.isTypeVar() &&
         !constraint.isTypeConstant()) {
-      auto ctx = Context {
-        finfo->func->unit,
-        const_cast<php::Func*>(finfo->func),
-        finfo->func->cls
-      };
+      auto ctx = Context { finfo->func->unit, finfo->func, finfo->func->cls };
       auto t = data.m_index->lookup_constraint(ctx, constraint);
       return callCtx.args[i].strictlyMoreRefined(t);
     }
@@ -3368,7 +3360,7 @@ Type context_sensitive_return_type(IndexData& data,
 
     auto const calleeCtx = Context {
       finfo->func->unit,
-      const_cast<php::Func*>(finfo->func),
+      finfo->func,
       finfo->func->cls
     };
     auto const ty =
@@ -4160,7 +4152,7 @@ Index::lookup_closures(const php::Class* cls) const {
   return nullptr;
 }
 
-const hphp_fast_set<php::Func*>*
+const hphp_fast_set<const php::Func*>*
 Index::lookup_extra_methods(const php::Class* cls) const {
   if (cls->attrs & AttrNoExpandTrait) return nullptr;
   auto const it = m_data->classExtraMethodMap.find(cls);
@@ -4729,6 +4721,7 @@ Index::ConstraintResolution Index::get_type_for_annotated_type(
       case KindOfFunc:
       case KindOfRClsMeth:
       case KindOfClass:
+      case KindOfLazyClass:
         always_assert_flog(false, "Unexpected DataType");
         break;
       }
@@ -5024,7 +5017,7 @@ Type Index::lookup_foldable_return_type(Context ctx,
 
     auto const fa = analyze_func_inline(
       *this,
-      Context { func->unit, const_cast<php::Func*>(func), func->cls },
+      Context { func->unit, func, func->cls },
       calleeCtx.context,
       calleeCtx.args,
       CollectionOpts::EffectFreeOnly
@@ -5528,15 +5521,10 @@ void Index::init_return_type(const php::Func* func) {
         (RuntimeOption::EvalEnforceGenericsUB < 2 && tc.isUpperBound())) {
       return TBottom;
     }
-    return lookup_constraint(
-      Context {
-        func->unit,
-          const_cast<php::Func*>(func),
-          func->cls && func->cls->closureContextCls ?
-          func->cls->closureContextCls : func->cls
-      },
-      tc
-    );
+    auto const cls = func->cls && func->cls->closureContextCls
+      ? func->cls->closureContextCls
+      : func->cls;
+    return lookup_constraint(Context { func->unit, func, cls }, tc);
   };
 
   auto const finfo = create_func_info(*m_data, func);

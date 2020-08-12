@@ -104,12 +104,8 @@ inline const Func::NamedLocalsMap::Builder& FuncEmitter::localNameMap() const {
 ///////////////////////////////////////////////////////////////////////////////
 // Helper accessors.
 
-inline bool FuncEmitter::isPseudoMain() const {
-  return name->empty();
-}
-
 inline bool FuncEmitter::isMethod() const {
-  return !isPseudoMain() && pce();
+  return pce();
 }
 
 inline bool FuncEmitter::isVariadic() const {
@@ -126,6 +122,14 @@ inline std::pair<int,int> FuncEmitter::getLocation() const {
 inline void FuncEmitter::setLocation(int l1, int l2) {
   line1 = l1;
   line2 = l2;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+// Bytecode.
+
+inline Offset FuncEmitter::offsetOf(const unsigned char* pc) const {
+  return pc - ue().bc();
 }
 
 ///////////////////////////////////////////////////////////////////////////////

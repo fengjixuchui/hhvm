@@ -204,6 +204,7 @@ bool canDCE(IRInstruction* inst) {
   case LdPackedElem:
   case LdPackedArrayDataElemAddr:
   case NewInstanceRaw:
+  case NewLoggingArray:
   case NewDArray:
   case NewDictArray:
   case NewCol:
@@ -426,9 +427,7 @@ bool canDCE(IRInstruction* inst) {
   case Unreachable:
   case Jmp:
   case DefLabel:
-  case LdLocPseudoMain:
   case LdPairElem:
-  case DefCls:
   case LdClsCtor:
   case LdCls:
   case LdClsCached:
@@ -503,7 +502,6 @@ bool canDCE(IRInstruction* inst) {
   case StIterEnd:
   case StIterPos:
   case StLoc:
-  case StLocPseudoMain:
   case StLocRange:
   case EagerSyncVMRegs:
   case ReqBindJmp:

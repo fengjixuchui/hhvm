@@ -16,6 +16,8 @@
 
 #include "hphp/runtime/vm/jit/normalized-instruction.h"
 
+#include "hphp/runtime/base/bespoke-array.h"
+
 #include "hphp/runtime/vm/jit/array-iter-profile.h"
 #include "hphp/runtime/vm/jit/irgen-exit.h"
 #include "hphp/runtime/vm/jit/irgen-control.h"
@@ -333,7 +335,9 @@ struct PackedAccessor : public Accessor {
     is_ptr_iter = specialization.base_const && !specialization.output_key;
     is_hack_arr = specialization.base_type == IterSpecialization::Vec;
     arr_type = is_hack_arr ? TVec : TVArr;
-    if (RO::EvalAllowBespokeArrayLikes) arr_type = arr_type.narrowToVanilla();
+    if (allowBespokeArrayLikes()) {
+      arr_type = arr_type.narrowToVanilla();
+    }
     pos_type = is_ptr_iter ? TPtrToElemCell : TInt;
     iter_type = specialization;
   }
@@ -381,7 +385,9 @@ struct MixedAccessor : public Accessor {
     is_ptr_iter = specialization.base_const;
     is_hack_arr = specialization.base_type == IterSpecialization::Dict;
     arr_type = is_hack_arr ? TDict : TDArr;
-    if (RO::EvalAllowBespokeArrayLikes) arr_type = arr_type.narrowToVanilla();
+    if (allowBespokeArrayLikes()) {
+      arr_type = arr_type.narrowToVanilla();
+    }
     pos_type = is_ptr_iter ? TPtrToElemCell : TInt;
     key_type = getKeyType(specialization);
     iter_type = specialization;
@@ -448,7 +454,6 @@ std::unique_ptr<Accessor> getAccessor(IterSpecialization type) {
 // so we can assert that the type of the base matches the iterator type.
 SSATmp* iterBase(IRGS& env, const Accessor& accessor,
                  const IterArgs& data, uint32_t baseLocalId) {
-  assertx(!curFunc(env)->isPseudoMain());
   auto const type = accessor.arr_type;
   auto const local = baseLocalId != kInvalidId;
   if (!local) return gen(env, LdIterBase, type, IterId(data.iterId), fp(env));
@@ -480,7 +485,6 @@ void iterIfThen(IRGS& env, Branch branch, Taken taken) {
 // iterators in pseudo-mains, we can use LdLoc here without a problem.
 void iterClear(IRGS& env, uint32_t local) {
   assertx(local != kInvalidId);
-  assertx(!curFunc(env)->isPseudoMain());
   env.irb->constrainLocal(local, DataTypeCountness, "iterClear");
   decRef(env, gen(env, LdLoc, TCell, LocalId(local), fp(env)), local);
 }
@@ -490,7 +494,6 @@ void iterClear(IRGS& env, uint32_t local) {
 void iterStore(IRGS& env, uint32_t local, SSATmp* cell) {
   assertx(cell->type() <= TCell);
   assertx(local != kInvalidId);
-  assertx(!curFunc(env)->isPseudoMain());
   gen(env, StLoc, LocalId(local), fp(env), cell);
 }
 
@@ -530,7 +533,6 @@ void iterSurpriseCheck(IRGS& env, const Accessor& accessor,
 void profileDecRefs(IRGS& env, const IterArgs& data, SSATmp* base,
                     const bool local, const bool init) {
   if (env.context.kind != TransKind::Profile) return;
-  if (curFunc(env)->isPseudoMain()) return;
 
   // We could profile the iterator's base for IterNext here, too, but loading
   // the value out of the base is tricky and it doesn't affect perf measurably.
@@ -713,7 +715,6 @@ void specializeIterInit(IRGS& env, Offset doneOffset,
     assertx(!env.iters[body]->iter_type.specialized);
     logArrayIterProfile(env, data, folly::none);
   };
-  if (curFunc(env)->isPseudoMain()) return despecialize();
 
   // We don't need to specialize on key type for value-only iterators.
   // However, we still need to call accessor.check to rule out tombstones.
@@ -774,7 +775,6 @@ bool specializeIterNext(IRGS& env, Offset loopOffset,
                         const IterArgs& data, uint32_t baseLocalId) {
   auto const local = baseLocalId != kInvalidId;
   profileDecRefs(env, data, nullptr, local, /*init=*/false);
-  if (curFunc(env)->isPseudoMain()) return false;
 
   auto const body = getBlock(env, bcOff(env) + loopOffset);
   if (!env.iters.contains(body)) return false;

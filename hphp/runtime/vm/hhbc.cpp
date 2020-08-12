@@ -686,19 +686,26 @@ void staticStreamer(const TypedValue* tv, std::string& out) {
     case KindOfRFunc:
     case KindOfFunc:
     case KindOfClass:
+    case KindOfLazyClass:
     case KindOfRecord:
       break;
   }
   not_reached();
 }
 
-std::string instrToString(PC it, Either<const Unit*, const UnitEmitter*> u) {
+std::string instrToString(PC it, Either<const Func*, const FuncEmitter*> f) {
   std::string out;
   PC iStart = it;
   Op op = decode_op(it);
 
+  auto u = f.match(
+    [](const Func* f) -> Either<const Unit*, const UnitEmitter*> { return f->unit(); },
+    [](const FuncEmitter* fe) -> Either<const Unit*, const UnitEmitter*> { return &fe->ue(); }
+  );
+
   auto readRATA = [&] {
-    if (auto unit = u.left()) {
+    if (auto func = f.left()) {
+      auto const unit = func->unit();
       auto const rat = decodeRAT(unit, it);
       folly::format(&out, " {}", show(rat));
       return;
@@ -709,10 +716,10 @@ std::string instrToString(PC it, Either<const Unit*, const UnitEmitter*> u) {
     out += " <RepoAuthType>";
   };
 
-  auto offsetOf = [u](PC pc) {
-    return u.match(
-      [pc](const Unit* u) { return u->offsetOf(pc); },
-      [pc](const UnitEmitter* ue) { return ue->offsetOf(pc); }
+  auto offsetOf = [f](PC pc) {
+    return f.match(
+      [pc](const Func* f) { return f->offsetOf(pc); },
+      [pc](const FuncEmitter* fe) { return fe->offsetOf(pc); }
     );
   };
 
@@ -735,7 +742,7 @@ std::string instrToString(PC it, Either<const Unit*, const UnitEmitter*> u) {
   };
 
   auto showOffset = [&](Offset offset) {
-    if (u == nullptr) return folly::sformat("{}", offset);
+    if (f == nullptr) return folly::sformat("{}", offset);
     auto const unitOff = offsetOf(iStart + offset);
     return folly::sformat("{} ({})", offset, unitOff);
   };

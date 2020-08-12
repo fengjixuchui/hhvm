@@ -105,6 +105,18 @@ module PCSet = Set.Make (Policy)
 
 type program_counter = PCSet.t
 
+module Var = struct
+  type t = string * Ifc_scope.t
+
+  let compare = compare
+end
+
+module VarSet = Set.Make (Var)
+
+type var_set = VarSet.t
+
+type entailment = prop -> Flow.t list
+
 type local_env = {
   le_vars: ptype LMap.t;
   (* Policy tracking local effects, these effects
@@ -245,6 +257,8 @@ type callable_result = {
   (* The set of callable that appear in holes of
      res_constraint *)
   res_deps: SSet.t;
+  (* Entailment based on the function's assumed prototype *)
+  res_entailment: entailment;
 }
 
 type adjustment =

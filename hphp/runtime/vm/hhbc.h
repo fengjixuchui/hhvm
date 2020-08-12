@@ -38,6 +38,7 @@ namespace HPHP {
 struct Unit;
 struct UnitEmitter;
 struct Func;
+struct FuncEmitter;
 
 constexpr size_t kMaxHhbcImms = 6;
 
@@ -721,11 +722,6 @@ constexpr uint32_t kMaxConcatN = 4;
   O(ReqOnce,         NA,               ONE(CV),         ONE(CV),    CF) \
   O(ReqDoc,          NA,               ONE(CV),         ONE(CV),    CF) \
   O(Eval,            NA,               ONE(CV),         ONE(CV),    CF) \
-  O(DefCls,          ONE(IVA),         NOV,             NOV,        NF) \
-  O(DefClsNop,       ONE(IVA),         NOV,             NOV,        NF) \
-  O(DefRecord,       ONE(IVA),         NOV,             NOV,        NF) \
-  O(DefCns,          ONE(IVA),         NOV,             NOV,        NF) \
-  O(DefTypeAlias,    ONE(IVA),         NOV,             NOV,        NF) \
   O(This,            NA,               NOV,             ONE(CV),    NF) \
   O(BareThis,        ONE(OA(BareThisOp)),                               \
                                        NOV,             ONE(CV),    NF) \
@@ -926,7 +922,7 @@ ArgUnion* getImmPtr(PC opcode, int idx);
 
 void staticStreamer(const TypedValue* tv, std::string& out);
 
-std::string instrToString(PC it, Either<const Unit*, const UnitEmitter*> u);
+std::string instrToString(PC it, Either<const Func*, const FuncEmitter*> f);
 void staticArrayStreamer(const ArrayData*, std::string&);
 
 /*
@@ -1031,6 +1027,21 @@ constexpr bool isJmp(Op opcode) {
     opcode == Op::JmpNS ||
     opcode == Op::JmpZ  ||
     opcode == Op::JmpNZ;
+}
+
+constexpr bool isArrLikeConstructorOp(Op opcode) {
+  return
+    opcode == Op::Array ||
+    opcode == Op::Dict ||
+    opcode == Op::Keyset ||
+    opcode == Op::Vec ||
+    opcode == Op::NewDictArray ||
+    opcode == Op::NewStructDArray ||
+    opcode == Op::NewStructDict ||
+    opcode == Op::NewVec ||
+    opcode == Op::NewKeysetArray ||
+    opcode == Op::NewVArray ||
+    opcode == Op::NewDArray;
 }
 
 constexpr bool isBinaryOp(Op opcode) {

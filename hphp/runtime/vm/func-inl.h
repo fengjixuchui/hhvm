@@ -246,7 +246,7 @@ inline const StringData* Func::docComment() const {
 ///////////////////////////////////////////////////////////////////////////////
 // Bytecode.
 
-inline PC Func::getEntry() const {
+inline PC Func::entry() const {
   return m_unit->entry() + shared()->m_base;
 }
 
@@ -270,6 +270,23 @@ inline bool Func::contains(PC pc) const {
 
 inline bool Func::contains(Offset offset) const {
   return offset >= base() && offset < past();
+}
+
+inline PC Func::at(Offset off) const {
+  // We don't use contains because we want to allow past becase it is often
+  // used in loops
+  assertx(off >= base() && off <= past());
+  return unit()->entry() + off;
+}
+
+inline Offset Func::offsetOf(PC pc) const {
+  assertx(contains(pc));
+  return pc - unit()->entry();
+}
+
+inline Op Func::getOp(Offset instrOffset) const {
+  assertx(contains(instrOffset));
+  return peek_op(unit()->entry() + instrOffset);
 }
 
 inline Offset Func::ctiEntry() const {
@@ -415,12 +432,8 @@ inline void Func::setGenerated(bool isGenerated) {
 ///////////////////////////////////////////////////////////////////////////////
 // Definition context.
 
-inline bool Func::isPseudoMain() const {
-  return m_name->empty();
-}
-
 inline bool Func::isMethod() const {
-  return !isPseudoMain() && (bool)baseCls();
+  return (bool)baseCls();
 }
 
 inline bool Func::isFromTrait() const {
@@ -598,7 +611,7 @@ inline bool Func::isNoInjection() const {
 }
 
 inline bool Func::isSkipFrame() const {
-  return isCPPBuiltin() || (isBuiltin() && !isMethod() && !isPseudoMain());
+  return isCPPBuiltin() || (isBuiltin() && !isMethod());
 }
 
 inline bool Func::isProvenanceSkipFrame() const {

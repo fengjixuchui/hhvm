@@ -450,6 +450,7 @@ function get_options($argv) {
     'jitsample:' => '',
     '*hh_single_type_check:' => '',
     'write-to-checkout' => '',
+    'bespoke' => '',
   ];
   $options = darray[];
   $files = varray[];
@@ -912,6 +913,10 @@ function hhvm_cmd_impl(
       $args[] = '--hh_single_type_check='.$options['hh_single_type_check'];
     }
 
+    if (isset($options['bespoke'])) {
+      $args[] = '-vEval.BespokeArrayLikeMode=1';
+    }
+
     $cmds[] = implode(' ', array_merge($args, $extra_args));
   }
   return $cmds;
@@ -1165,7 +1170,12 @@ function exec_with_stack($cmd) {
     }
     return "Timed out running `$cmd'\n\n$s";
   }
-  if (!$status['exitcode']) return true;
+  if (
+    !$status['exitcode'] &&
+    !preg_match('/\\b(error|exception|fatal)\\b/', $s)
+  ) {
+    return true;
+  }
   $pid = $status['pid'];
   $stack =
     @file_get_contents("/tmp/stacktrace.$pid.log") ?:
@@ -1991,6 +2001,13 @@ function skip_test($options, $test, $run_skipif = true): ?string {
     if (find_debug_config($test, 'hphpd.ini')) {
       return 'skip-debugger';
     }
+  }
+
+
+  if (isset($options['bespoke']) &&
+      strpos($test, "nan_array_id_test.php") !== false) {
+      // Skip due to changes in array identity
+      return 'skip-bespoke';
   }
 
   if (!$run_skipif) return null;

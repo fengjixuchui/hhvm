@@ -2298,7 +2298,7 @@ void in(ISS& env, const bc::CGetL& op) {
     }
   }
   if (auto const last = last_op(env)) {
-    if (!is_pseudomain(env.ctx.func) && last->op == Op::PopL &&
+    if (last->op == Op::PopL &&
         op.nloc1.id == last->PopL.loc1) {
       reprocess(env);
       rewind(env, 1);
@@ -2320,7 +2320,7 @@ void in(ISS& env, const bc::CGetQuietL& op) {
     return reduce(env, bc::BareThis { BareThisOp::NoNotice });
   }
   if (auto const last = last_op(env)) {
-    if (!is_pseudomain(env.ctx.func) && last->op == Op::PopL &&
+    if (last->op == Op::PopL &&
         op.loc1 == last->PopL.loc1) {
       reprocess(env);
       rewind(env, 1);
@@ -2471,12 +2471,7 @@ void in(ISS& env, const bc::ClassGetC& op) {
 
   if (auto const clsname = getNameFromType(t)) {
     if (auto const rcls = env.index.resolve_class(env.ctx, clsname)) {
-      auto const cls = rcls->cls();
-      if (cls &&
-          ((cls->attrs & AttrPersistent) ||
-           cls == env.ctx.cls)) {
-        effect_free(env);
-      }
+      if (rcls->cls()) effect_free(env);
       push(env, clsExact(*rcls));
       return;
     }
@@ -4704,12 +4699,6 @@ void in(ISS& env, const bc::Req&)       { inclOpImpl(env); }
 void in(ISS& env, const bc::ReqOnce&)   { inclOpImpl(env); }
 void in(ISS& env, const bc::ReqDoc&)    { inclOpImpl(env); }
 void in(ISS& env, const bc::Eval&)      { inclOpImpl(env); }
-
-void in(ISS& /*env*/, const bc::DefCls&) {}
-void in(ISS& /*env*/, const bc::DefRecord&) {}
-void in(ISS& /*env*/, const bc::DefClsNop&) {}
-void in(ISS& /*env*/, const bc::DefCns&) {}
-void in(ISS& /*env*/, const bc::DefTypeAlias&) {}
 
 void in(ISS& env, const bc::This&) {
   if (thisAvailable(env)) {

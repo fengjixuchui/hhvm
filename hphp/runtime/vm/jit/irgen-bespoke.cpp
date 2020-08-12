@@ -15,6 +15,8 @@
 */
 #include "hphp/runtime/vm/jit/irgen-bespoke.h"
 
+#include "hphp/runtime/base/bespoke-array.h"
+
 #include "hphp/runtime/vm/jit/irgen-builtin.h"
 #include "hphp/runtime/vm/jit/irgen-exit.h"
 #include "hphp/runtime/vm/jit/irgen-internal.h"
@@ -156,7 +158,7 @@ bool skipVanillaGuards(IRGS& env, SrcKey sk, const Locations& locs) {
 ///////////////////////////////////////////////////////////////////////////////
 
 bool checkBespokeInputs(IRGS& env, SrcKey sk) {
-  if (!RO::EvalAllowBespokeArrayLikes) return true;
+  if (!allowBespokeArrayLikes()) return true;
   auto const locs = getVanillaLocations(env, sk);
   if (skipVanillaGuards(env, sk, locs)) return true;
 
@@ -171,13 +173,33 @@ bool checkBespokeInputs(IRGS& env, SrcKey sk) {
 }
 
 void handleBespokeInputs(IRGS& env, SrcKey sk) {
-  if (!RO::EvalAllowBespokeArrayLikes) return;
+  if (!allowBespokeArrayLikes()) return;
   auto const locs = getVanillaLocations(env, sk);
   if (skipVanillaGuards(env, sk, locs)) return;
 
   assertx(!env.irb->guardFailBlock());
   for (auto const loc : locs) guardToVanilla(env, sk, loc);
   env.irb->resetGuardFailBlock();
+}
+
+void handleVanillaOutputs(IRGS& env, SrcKey sk) {
+  if (!allowBespokeArrayLikes()) return;
+  if (env.context.kind != TransKind::Profile) return;
+  if (!isArrLikeConstructorOp(sk.op())) return;
+
+  auto const vanilla = topC(env);
+  auto const logging = gen(env, NewLoggingArray, vanilla);
+  ifThen(env,
+    [&](Block* taken) {
+      auto const eq = gen(env, EqArrayDataPtr, vanilla, logging);
+      gen(env, JmpZero, taken, eq);
+    },
+    [&]{
+      discard(env);
+      push(env, logging);
+      gen(env, Jmp, makeExit(env, nextBcOff(env)));
+    }
+  );
 }
 
 ///////////////////////////////////////////////////////////////////////////////

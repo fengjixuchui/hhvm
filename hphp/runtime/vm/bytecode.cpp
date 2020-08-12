@@ -622,6 +622,11 @@ static std::string toStringElm(TypedValue tv) {
          << tv.m_data.pclass->name()->data()
          << ")";
       continue;
+    case KindOfLazyClass:
+      os << ":LClass("
+         << tv.m_data.plazyclass.name()->data()
+         << ")";
+      continue;
     case KindOfClsMeth:
       os << ":ClsMeth("
        << tv.m_data.pclsmeth->getCls()->name()->data()
@@ -690,7 +695,7 @@ static void toStringFrame(std::ostream& os, const ActRec* fp,
   if (func->numLocals() > 0) {
     // Don't print locals for parent frames on a Ret(C|V) since some of them
     // may already be destructed.
-    if (isRet(func->unit()->getOp(offset)) && !isTop) {
+    if (isRet(func->getOp(offset)) && !isTop) {
       os << "<locals destroyed>";
     } else {
       os << "<";
@@ -750,7 +755,7 @@ std::string Stack::toString(const ActRec* fp, int offset,
   auto func = fp->func();
   os << prefix << "=== Stack at "
      << unit->filepath()->data() << ":"
-     << unit->getLineNumber(unit->offsetOf(vmpc()))
+     << unit->getLineNumber(func->offsetOf(vmpc()))
      << " func " << func->fullName()->data() << " ===\n";
 
   toStringFrame(os, fp, offset, m_top, prefix);
@@ -976,7 +981,7 @@ static void prepareFuncEntry(ActRec *ar, Array&& generics) {
   vmfp() = ar;
   vmpc() = firstDVInitializer != kInvalidOffset
     ? func->unit()->entry() + firstDVInitializer
-    : func->getEntry();
+    : func->entry();
   vmJitReturnAddr() = nullptr;
 
   if (nargs < func->numRequiredParams()) {
@@ -1016,32 +1021,6 @@ void checkImplicitContextErrors(const ActRec* ar) {
 } // namespace
 
 static void dispatch();
-
-void enterVMAtPseudoMain(ActRec* enterFnAr) {
-  assertx(enterFnAr);
-  assertx(enterFnAr->func()->isPseudoMain());
-  assertx(!isResumed(enterFnAr));
-  ARRPROV_USE_VMPC();
-  Stats::inc(Stats::VMEnter);
-
-  pushFrameSlots(enterFnAr->func());
-  vmfp() = enterFnAr;
-  vmpc() = enterFnAr->func()->getEntry();
-
-  if (!EventHook::FunctionCall(enterFnAr, EventHook::NormalFunc)) return;
-  checkStack(vmStack(), enterFnAr->m_func, 0);
-  assertx(vmfp()->func()->contains(vmpc()));
-
-  if (RID().getJit() && !RID().getJitFolding()) {
-    jit::TCA start = enterFnAr->m_func->getFuncBody();
-    assert_flog(jit::tc::isValidCodeAddress(start),
-                "start = {} ; func = {} ({})\n",
-                start, enterFnAr->m_func, enterFnAr->m_func->fullName());
-    jit::enterTC(start);
-  } else {
-    dispatch();
-  }
-}
 
 void enterVMAtFunc(ActRec* enterFnAr, Array&& generics, bool hasInOut,
                    bool dynamicCall, bool allowDynCallNoPointer) {
@@ -2093,12 +2072,14 @@ void iopSwitch(PC origpc, PC& pc, SwitchKind kind, int64_t base,
           return;
 
         case KindOfClass:
+        case KindOfLazyClass:
         case KindOfPersistentString:
         case KindOfString: {
           double dval = 0.0;
           auto const str =
             isClassType(val->m_type) ? classToStringHelper(val->m_data.pclass) :
-            val->m_data.pstr;
+            isLazyClassType(val->m_type) ?
+            lazyClassToStringHelper(val->m_data.plazyclass) : val->m_data.pstr;
           DataType t = str->isNumericWithVal(intval, dval, 1);
           switch (t) {
             case KindOfNull:
@@ -2129,6 +2110,7 @@ void iopSwitch(PC origpc, PC& pc, SwitchKind kind, int64_t base,
             case KindOfRFunc:
             case KindOfFunc:
             case KindOfClass:
+            case KindOfLazyClass:
             case KindOfClsMeth:
             case KindOfRClsMeth:
             case KindOfRecord:
@@ -2315,7 +2297,7 @@ OPTBLD_INLINE TCA jitReturnPost(JitReturn retInfo) {
 OPTBLD_INLINE void returnToCaller(PC& pc, ActRec* sfp, Offset callOff) {
   vmfp() = sfp;
   pc = LIKELY(sfp != nullptr)
-    ? skipCall(sfp->func()->getEntry() + callOff)
+    ? skipCall(sfp->func()->entry() + callOff)
     : nullptr;
 }
 
@@ -3728,7 +3710,7 @@ bool doFCall(ActRec* ar, uint32_t numArgs, bool hasUnpack,
     } else {
       // Unwind live frame.
       vmfp() = ar->m_sfp;
-      vmpc() = vmfp()->func()->getEntry() + ar->callOffset();
+      vmpc() = vmfp()->func()->entry() + ar->callOffset();
       assertx(vmStack().top() + func->numSlotsInFrame() == (void*)ar);
       frame_free_locals_inl_no_hook(ar, func->numLocals());
       vmStack().ndiscard(func->numSlotsInFrame());
@@ -3762,7 +3744,7 @@ void fcallImpl(PC origpc, PC& pc, const FCallArgs& fca, const Func* func,
 
   assertx(kNumActRecCells == 3);
   ActRec* ar = vmStack().indA(fca.numInputs());
-  ar->m_func = func;
+  ar->setFunc(func);
   ar->setNumArgs(fca.numArgs + (fca.hasUnpack() ? 1 : 0));
   auto const asyncEagerReturn =
     fca.asyncEagerOffset != kInvalidOffset && func->supportsAsyncEagerReturn();
@@ -4699,11 +4681,10 @@ OPTBLD_INLINE void inclOp(PC origpc, PC& pc, InclOpFlags flags,
   }
 
   if (!(flags & InclOpFlags::Once) || initial) {
-    g_context->evalUnit(unit, origpc, pc, EventHook::PseudoMain);
-  } else {
-    Stats::inc(Stats::PseudoMain_Guarded);
-    vmStack().pushBool(true);
+    vmpc() = origpc;
+    unit->merge();
   }
+  vmStack().pushBool(true);
 }
 
 OPTBLD_INLINE void iopIncl(PC origpc, PC& pc) {
@@ -4774,23 +4755,9 @@ OPTBLD_INLINE void iopEval(PC origpc, PC& pc) {
     vmStack().pushBool(false);
     return;
   }
-  vm->evalUnit(unit, origpc, pc, EventHook::Eval);
-}
-
-OPTBLD_INLINE void iopDefCls(uint32_t cid) {
-  PreClass* c = vmfp()->m_func->unit()->lookupPreClassId(cid);
-  Unit::defClass(c);
-}
-
-OPTBLD_INLINE void iopDefRecord(uint32_t cid) {
-  auto const r = vmfp()->m_func->unit()->lookupPreRecordId(cid);
-  Unit::defRecordDesc(r);
-}
-
-OPTBLD_INLINE void iopDefClsNop(uint32_t /*cid*/) {}
-
-OPTBLD_INLINE void iopDefTypeAlias(uint32_t tid) {
-  vmfp()->func()->unit()->defTypeAlias(tid);
+  vmpc() = origpc;
+  unit->merge();
+  vmStack().pushBool(true);
 }
 
 OPTBLD_INLINE void iopThis() {
@@ -5036,7 +5003,7 @@ OPTBLD_INLINE TCA iopCreateCont(PC origpc, PC& pc) {
   auto const fp = vmfp();
   auto const func = fp->func();
   auto const numSlots = func->numSlotsInFrame();
-  auto const suspendOffset = func->unit()->offsetOf(origpc);
+  auto const suspendOffset = func->offsetOf(origpc);
   assertx(!isResumed(fp));
   assertx(func->isGenerator());
 
@@ -5077,7 +5044,7 @@ OPTBLD_INLINE void movePCIntoGenerator(PC origpc, BaseGenerator* gen) {
   genAR->setReturn(vmfp(), origpc, retHelper, false);
 
   vmfp() = genAR;
-  vmpc() = genAR->func()->unit()->at(gen->resumable()->resumeFromYieldOffset());
+  vmpc() = genAR->func()->at(gen->resumable()->resumeFromYieldOffset());
 }
 
 OPTBLD_INLINE void contEnterImpl(PC origpc) {
@@ -5108,7 +5075,7 @@ OPTBLD_INLINE TCA yield(PC origpc, PC& pc, const TypedValue* key, const TypedVal
 
   auto const fp = vmfp();
   auto const func = fp->func();
-  auto const suspendOffset = func->unit()->offsetOf(origpc);
+  auto const suspendOffset = func->offsetOf(origpc);
   assertx(isResumed(fp));
   assertx(func->isGenerator());
 
@@ -5197,7 +5164,7 @@ OPTBLD_INLINE void iopContGetReturn() {
 OPTBLD_INLINE void asyncSuspendE(PC origpc, PC& pc) {
   auto const fp = vmfp();
   auto const func = fp->func();
-  auto const suspendOffset = func->unit()->offsetOf(origpc);
+  auto const suspendOffset = func->offsetOf(origpc);
   assertx(func->isAsync());
   assertx(resumeModeFromActRec(fp) != ResumeMode::Async);
 
@@ -5258,7 +5225,7 @@ OPTBLD_INLINE void asyncSuspendE(PC origpc, PC& pc) {
 OPTBLD_INLINE void asyncSuspendR(PC origpc, PC& pc) {
   auto const fp = vmfp();
   auto const func = fp->func();
-  auto const suspendOffset = func->unit()->offsetOf(origpc);
+  auto const suspendOffset = func->offsetOf(origpc);
   assertx(!fp->sfp());
   assertx(func->isAsync());
   assertx(resumeModeFromActRec(fp) == ResumeMode::Async);
@@ -5514,7 +5481,8 @@ void DumpCurUnit(int skip) {
 void PrintTCCallerInfo() {
   VMRegAnchor _;
 
-  auto const u = vmfp()->m_func->unit();
+  auto const f = vmfp()->m_func;
+  auto const u = f->unit();
   auto const rip = []() -> jit::TCA {
     DECLARE_FRAME_POINTER(reg_fp);
     // NB: We can't directly mutate the register-mapped `reg_fp'.
@@ -5527,7 +5495,7 @@ void PrintTCCallerInfo() {
 
   fprintf(stderr, "Called from TC address %p\n", rip);
   std::cerr << u->filepath()->data() << ':'
-            << u->getLineNumber(u->offsetOf(vmpc())) << '\n';
+            << u->getLineNumber(f->offsetOf(vmpc())) << '\n';
 }
 
 // thread-local cached coverage info
@@ -5753,9 +5721,9 @@ OPCODES
   condStackTraceSep(Op##opcode);                                        \
   COND_STACKTRACE("op"#opcode" pre:  ");                                \
   PC pc = vmpc();                                                       \
-  ONTRACE(1, auto offset = vmfp()->m_func->unit()->offsetOf(pc);        \
+  ONTRACE(1, auto offset = vmfp()->m_func->offsetOf(pc);                \
           Trace::trace("op"#opcode" offset: %d\n", offset));            \
-  assertx(peek_op(pc) == Op::opcode);                                    \
+  assertx(peek_op(pc) == Op::opcode);                                   \
   pc += encoded_op_size(Op::opcode);                                    \
   auto const retAddr = iopWrap##opcode(pc);                             \
   vmpc() = pc;                                                          \
@@ -5869,7 +5837,7 @@ TCA dispatchImpl() {
     op = decode_op(pc);                                                 \
     COND_STACKTRACE("dispatch:                    ");                   \
     FTRACE(1, "dispatch: {}: {}\n", pcOff(),                            \
-           instrToString(opPC, vmfp()->m_func->unit()));                \
+           instrToString(opPC, vmfp()->m_func));                        \
     DISPATCH_ACTUAL();                                                  \
 } while (0)
 
@@ -6029,7 +5997,7 @@ PcPair run(TCA* returnaddr, ExecMode modes, rds::Header* tl, PC nextpc, PC pc,
   assert(vmpc() == pc);
   assert(peek_op(pc) == opcode);
   FTRACE(1, "dispatch: {}: {}\n", pcOff(),
-         instrToString(pc, vmfp()->m_func->unit()));
+         instrToString(pc, vmfp()->m_func));
   if (!repo_auth) {
     if (UNLIKELY(modes != ExecMode::Normal)) {
       execModeHelper(pc, modes);
@@ -6080,7 +6048,7 @@ PcPair run(TCA* returnaddr, ExecMode modes, rds::Header* tl, PC nextpc, PC pc,
     assert(nextpc == origPc + instrLen(origPc));
     pushPrediction({*returnaddr + kCtiIndirectJmpSize, nextpc});
   }
-  if (do_prof) LookupProf(pc == vmfp()->m_func->getEntry());
+  if (do_prof) LookupProf(pc == vmfp()->m_func->entry());
   // return ip to jump to, caller will do jmp(rax)
   return lookup_cti(vmfp()->m_func, pc);
 }

@@ -298,7 +298,7 @@ void interpOne(IRGS& env) {
   auto popped = getStackPopped(sk.pc());
   auto pushed = getStackPushed(sk.pc());
   FTRACE(1, "emitting InterpOne for {}, result = {}, popped {}, pushed {}\n",
-         instrToString(sk.pc(), sk.unit()),
+         instrToString(sk.pc(), sk.func()),
          stackType.has_value() ? stackType->toString() : "<none>",
          popped, pushed);
 
@@ -334,8 +334,8 @@ void interpOne(IRGS& env,
                int popped,
                int pushed,
                InterpOneData& idata) {
-  auto const unit = curUnit(env);
-  auto const op = unit->getOp(bcOff(env));
+  auto const func = curFunc(env);
+  auto const op = func->getOp(bcOff(env));
 
   idata.bcOff = bcOff(env);
   idata.cellsPopped = popped;
@@ -370,10 +370,6 @@ void emitReq(IRGS& env)                       { interpOne(env); }
 void emitReqDoc(IRGS& env)                    { interpOne(env); }
 void emitReqOnce(IRGS& env)                   { interpOne(env); }
 void emitEval(IRGS& env)                      { interpOne(env); }
-void emitDefTypeAlias(IRGS& env, uint32_t)    { interpOne(env); }
-void emitDefCns(IRGS& env, uint32_t)          { interpOne(env); }
-void emitDefCls(IRGS& env, uint32_t)          { interpOne(env); }
-void emitDefRecord(IRGS& env, uint32_t)       { interpOne(env); }
 void emitChainFaults(IRGS& env)               { interpOne(env); }
 void emitContGetReturn(IRGS& env)             { interpOne(env); }
 void emitResolveClass(IRGS& env, const StringData*)

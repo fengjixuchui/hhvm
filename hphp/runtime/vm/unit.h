@@ -31,6 +31,7 @@
 #include "hphp/runtime/vm/named-entity-pair-table.h"
 #include "hphp/runtime/vm/preclass.h"
 #include "hphp/runtime/vm/record.h"
+#include "hphp/runtime/vm/source-location.h"
 #include "hphp/runtime/vm/type-alias.h"
 
 #include "hphp/util/compact-vector.h"
@@ -84,135 +85,10 @@ struct FatalInfo {
   std::string m_fatalMsg;
 };
 
-///////////////////////////////////////////////////////////////////////////////
-// Location tables.
-
-/*
- * Delimiter pairs for a location in the source code.
- */
-struct SourceLoc {
-  /*
-   * Constructors.
-   */
-  SourceLoc() {}
-  explicit SourceLoc(const Location::Range& l);
-
-  /*
-   * Reset to, or check for, the invalid state.
-   */
-  void reset();
-  bool valid() const;
-
-  /*
-   * Set to a parser Location.
-   */
-  void setLoc(const Location::Range* l);
-
-  /*
-   * Equality.
-   */
-  bool same(const SourceLoc* l) const;
-  bool operator==(const SourceLoc& l) const;
-
-  /*
-   * Start and end lines and characters.
-   *
-   * The default {1, 1, 1, 1} is an invalid sentinel value.
-   */
-  int line0{1};
-  int char0{1};
-  int line1{1};
-  int char1{1};
-
-  template <typename SerDes> void serde(SerDes& sd) {
-    sd(line0);
-    sd(char0);
-    sd(line1);
-    sd(char1);
-  }
-};
-
-/*
- * Pair of (base, past) offsets.
- */
-struct OffsetRange {
-  OffsetRange() {}
-
-  OffsetRange(Offset base, Offset past)
-    : base(base)
-    , past(past)
-  {}
-
-  Offset base{0};
-  Offset past{0};
-};
-
-using OffsetRangeVec = std::vector<OffsetRange>;
-
-/*
- * Generic entry for representing many-to-one mappings of Offset -> T.
- *
- * Each entry's `pastOffset' is expected to be the offset just past the range
- * of offsets which logically map to its `val'.  In this way, by maintaining a
- * relatively sparse set of entries in a vector, we can use least upper bound
- * searches on an offset key to find its corresponding T.
- *
- * The values of `pastOffset' in such a table are expected to be sorted and
- * unique, but the values of `val' need not be.
- */
-template<typename T>
-struct TableEntry {
-  /*
-   * Constructors.
-   */
-  TableEntry()
-    : m_pastOffset()
-    , m_val()
-  {}
-
-  TableEntry(Offset pastOffset, T val)
-    : m_pastOffset(pastOffset)
-    , m_val(val)
-  {}
-
-  /*
-   * Accessors.
-   */
-  Offset pastOffset() const;
-  T val() const;
-
-  /*
-   * Comparison.
-   */
-  bool operator<(const TableEntry& other) const;
-
-  template<class SerDe> void serde(SerDe& sd);
-
-private:
-  Offset m_pastOffset{0};
-  T m_val;
-};
-
 /*
  * Table specializations.
  */
-using LineEntry      = TableEntry<int>;
-using SourceLocEntry = TableEntry<SourceLoc>;
-using LineInfo       = std::pair<OffsetRange, int>;
-
-using LineTable      = std::vector<LineEntry>;
-using SourceLocTable = std::vector<SourceLocEntry>;
 using FuncTable      = VMCompactVector<const Func*>;
-
-/*
- * Get the line number or SourceLoc for Offset `pc' in `table'.
- */
-int getLineNumber(const LineTable& table, Offset pc);
-bool getSourceLoc(const SourceLocTable& table, Offset pc, SourceLoc& sLoc);
-void stashLineTable(const Unit* unit, LineTable table);
-void stashExtendedLineTable(const Unit* unit, SourceLocTable table);
-
-const SourceLocTable& getSourceLocTable(const Unit*);
 
 /*
  * Sum of all Unit::m_bclen
@@ -329,14 +205,6 @@ public:
    */
   using FuncRange = MergeInfo::FuncRange;
   using MutableFuncRange = MergeInfo::MutableFuncRange;
-
-  /*
-   * Cache for pseudomains for this unit, keyed by Class context.
-   */
-  using PseudoMainCacheMap = hphp_hash_map<
-    const Class*, Func*, pointer_hash<Class>
-  >;
-
   using PreClassPtrVec = VMCompactVector<PreClassPtr>;
   using TypeAliasVec = VMCompactVector<PreTypeAlias>;
   using ConstantVec = VMFixedVector<Constant>;
@@ -391,22 +259,6 @@ public:
    */
   PC entry() const;
   Offset bclen() const;
-
-  /*
-   * Convert between PC and Offset from entry().
-   */
-  PC at(Offset off) const;
-  Offset offsetOf(PC pc) const;
-
-  /*
-   * Is `pc' in this Unit?
-   */
-  bool contains(PC pc) const;
-
-  /*
-   * Get the Op at `instrOffset'.
-   */
-  Op getOp(Offset instrOffset) const;
 
   /////////////////////////////////////////////////////////////////////////////
   // Code locations.                                                    [const]
@@ -551,14 +403,6 @@ public:
   folly::Range<const PreClassPtr*> preclasses() const;
   folly::Range<PreRecordDescPtr*> prerecords();
   folly::Range<const PreRecordDescPtr*> prerecords() const;
-
-  /*
-   * Get a pseudomain for the Unit with the context class `cls'.
-   *
-   * We clone the toplevel pseudomain for each context class and cache the
-   * results in m_pseudoMainCache.
-   */
-  Func* getMain(Class* cls, bool hasThis) const;
 
   // Return the cached EntryPoint
   Func* getCachedEntryPoint() const;
@@ -808,9 +652,16 @@ public:
    * Define the type alias given by `id', binding it to the appropriate
    * NamedEntity for this request.
    *
-   * returns true iff the bound type alias is persistent.
+   * Raises a fatal error if type alias already defined or cannot be defined
+   * unless failIsFatal is unset
+   *
+   * Returns:
+   *   Persistent: Type alias is successfully defined and is persistent
+   *   Normal: Type alias is successfully defined and is not persistent
+   *   Fail: Type alias is not successfully defined
    */
-  bool defTypeAlias(Id id);
+  enum class DefTypeAliasResult { Fail, Normal, Persistent };
+  Unit::DefTypeAliasResult defTypeAlias(Id id, bool failIsFatal = true);
 
   /////////////////////////////////////////////////////////////////////////////
   // File attributes.
@@ -824,11 +675,6 @@ public:
    * Merge the Unit if it is not already merged.
    */
   void merge();
-
-  /*
-   * Is it sufficient to merge the Unit, and skip invoking its pseudomain?
-   */
-  bool isMergeOnly() const;
 
   /*
    * Is this Unit empty---i.e., does it define nothing and have no
@@ -960,7 +806,6 @@ private:
    * unitInitLock (see unit.cpp).
    */
   std::atomic<uint8_t> m_mergeState{MergeState::Unmerged};
-  bool m_mergeOnly: 1;
   bool m_interpretOnly : 1;
   bool m_extended : 1;
   bool m_serialized : 1;
@@ -985,7 +830,6 @@ private:
   SHA1 m_sha1;
   SHA1 m_bcSha1;
   VMFixedVector<const ArrayData*> m_arrays;
-  mutable PseudoMainCacheMap* m_pseudoMainCache{nullptr};
   mutable LockFreePtrWrapper<VMCompactVector<LineInfo>> m_lineMap;
   UserAttributeMap m_metaData;
   UserAttributeMap m_fileAttributes;

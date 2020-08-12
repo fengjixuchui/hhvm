@@ -196,7 +196,7 @@ bool fcallHelper(CallFlags callFlags, Func* func, int32_t numArgs, void* ctx,
   }
 
   unsafeRegs.stack.nalloc(numArgs + (callFlags.hasGenerics() ? 1 : 0));
-  unsafeRegs.pc = unsafeRegs.fp->unit()->at(
+  unsafeRegs.pc = unsafeRegs.fp->func()->at(
     unsafeRegs.fp->func()->base() + callFlags.callOffset());
   unsafeRegs.jitReturnAddr = savedRip;
   tl_regState = VMRegState::CLEAN;
@@ -211,7 +211,7 @@ bool fcallHelper(CallFlags callFlags, Func* func, int32_t numArgs, void* ctx,
   ActRec* ar = reinterpret_cast<ActRec*>(calleeFP);
   ar->m_sfp = vmfp();
   ar->setJitReturn(savedRip);
-  ar->m_func = func;
+  ar->setFunc(func);
   ar->m_callOffAndFlags = ActRec::encodeCallOffsetAndFlags(
     callFlags.callOffset(),
     callFlags.asyncEagerReturn() ? (1 << ActRec::AsyncEagerRet) : 0

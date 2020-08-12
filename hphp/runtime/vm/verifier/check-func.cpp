@@ -374,7 +374,7 @@ bool FuncChecker::checkPrimaryBody(Offset base, Offset past) {
       }
       if ((instrFlags(op) & TF) == 0) {
         error("Last instruction in primary body is not terminal %d:%s\n",
-              offset(pc), instrToString(pc, unit()).c_str());
+              offset(pc), instrToString(pc, m_func).c_str());
         ok = false;
       }
     }
@@ -1114,23 +1114,6 @@ bool FuncChecker::checkOp(State* cur, PC pc, Op op, Block* b, PC prev_pc) {
       }
       break;
     }
-    case Op::DefCls:
-    case Op::DefClsNop: {
-      auto const id = getImm(pc, 0).u_IVA;
-      if (id >= unit()->numPreClasses()) {
-        ferror("{} references nonexistent class ({})\n", opcodeToName(op), id);
-        return false;
-      }
-      break;
-    }
-    case Op::DefRecord: {
-      auto const id = getImm(pc, 0).u_IVA;
-      if (id >= unit()->numRecords()) {
-        ferror("{} references nonexistent record ({})\n", opcodeToName(op), id);
-        return false;
-      }
-      break;
-    }
     case Op::CreateCl: {
       auto const id = getImm(pc, 1).u_IVA;
       if (id >= unit()->numPreClasses()) {
@@ -1157,15 +1140,6 @@ bool FuncChecker::checkOp(State* cur, PC pc, Op op, Block* b, PC prev_pc) {
                  preCls->name(), m_func->pce() ? "static method" : "function");
           return false;
         }
-      }
-      break;
-    }
-    case Op::DefTypeAlias: {
-      auto id = getImm(pc, 0).u_IVA;
-      if (id >= unit()->typeAliases().size()) {
-        ferror("{} references nonexistent type alias ({})\n",
-                opcodeToName(op), id);
-        return false;
       }
       break;
     }
@@ -1835,11 +1809,6 @@ bool FuncChecker::checkRxOp(State* cur, PC pc, Op op) {
       return RuntimeOption::EvalRxVerifyBody < 2;
 
     // unsafe: defines and includes
-    case Op::DefCls:
-    case Op::DefClsNop:
-    case Op::DefRecord:
-    case Op::DefCns:
-    case Op::DefTypeAlias:
     case Op::Incl:
     case Op::InclOnce:
     case Op::Req:
@@ -1962,7 +1931,7 @@ bool FuncChecker::checkBlock(State& cur, Block* b) {
   auto const verify_rx = (RuntimeOption::EvalRxVerifyBody > 0) &&
     funcAttrIsAnyRx(m_func->attrs) && !m_func->isRxDisabled;
   if (m_errmode == kVerbose) {
-    std::cout << blockToString(b, m_graph, unit()) << std::endl;
+    std::cout << blockToString(b, m_graph, m_func) << std::endl;
   }
   PC prev_pc = nullptr;
   for (InstrRange i = blockInstrs(b); !i.empty(); ) {
@@ -1970,7 +1939,7 @@ bool FuncChecker::checkBlock(State& cur, Block* b) {
     if (m_errmode == kVerbose) {
       std::cout << "  " << std::setw(5) << offset(pc) << ":" <<
                    stateToString(cur) << " " <<
-                   instrToString(pc, unit()) << std::endl;
+                   instrToString(pc, m_func) << std::endl;
     }
     auto const op = peek_op(pc);
     if (mayTakeExnEdges(op)) ok &= checkExnEdge(cur, op, b);

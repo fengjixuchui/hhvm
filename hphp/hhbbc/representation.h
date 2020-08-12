@@ -443,7 +443,7 @@ struct ConstFunc {
 };
 struct MutFunc : public ConstFunc {
   MutFunc() = default;
-  explicit MutFunc(const Func* f) : ConstFunc(f) {}
+  explicit MutFunc(Func* f) : ConstFunc(f) {}
 
   BlockVec& blocks_mut() const { return const_cast<Func*>(func)->rawBlocks; }
   operator Func*() const { return const_cast<Func*>(func); }
@@ -680,7 +680,6 @@ struct Unit {
   int64_t sn{-1};
   SHA1 sha1;
   LSString filename;
-  std::unique_ptr<Func> pseudomain;
   std::unique_ptr<FatalInfo> fatalInfo{nullptr};
   CompactVector<std::unique_ptr<Func>> funcs;
   CompactVector<std::unique_ptr<Class>> classes;

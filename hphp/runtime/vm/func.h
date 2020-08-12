@@ -388,7 +388,7 @@ struct Func final {
   /*
    * Get the function's main entrypoint.
    */
-  PC getEntry() const;
+  PC entry() const;
 
   /*
    * Get the offsets of the start (base) and end (past) of the function's
@@ -403,6 +403,17 @@ struct Func final {
    */
   bool contains(PC pc) const;
   bool contains(Offset offset) const;
+
+  /*
+   * Convert between PC and Offset from entry().
+   */
+  PC at(Offset off) const;
+  Offset offsetOf(PC pc) const;
+
+  /*
+   * Get the Op at `instrOffset'.
+   */
+  Op getOp(Offset instrOffset) const;
 
   /*
    * Return a vector of pairs of (param index, corresponding DV funclet
@@ -606,12 +617,6 @@ struct Func final {
 
   /////////////////////////////////////////////////////////////////////////////
   // Definition context.                                                [const]
-
-  /*
-   * Is the function a pseudomain (i.e., the function implicitly defined by the
-   * text after <?hh in a file)?
-   */
-  bool isPseudoMain() const;
 
   /*
    * Is this function a method defined on a class?

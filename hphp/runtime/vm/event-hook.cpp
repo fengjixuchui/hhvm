@@ -491,7 +491,7 @@ bool EventHook::RunInterceptHandler(ActRec* ar) {
     stack.topTV()->m_aux.u_asyncEagerReturnFlag = 0;
 
     vmfp() = outer;
-    vmpc() = outer ? outer->func()->unit()->at(pcOff) : nullptr;
+    vmpc() = outer ? outer->func()->at(pcOff) : nullptr;
     if (vmpc() && !vmEntry) vmpc() = skipCall(vmpc());
 
     return false;
@@ -513,11 +513,6 @@ const char* EventHook::GetFunctionNameForProfiler(const Func* func,
         // likely getting the default value for a function parameter
         name = "{internal}";
       }
-      break;
-    case EventHook::PseudoMain:
-      name = makeStaticString(
-        std::string("run_init::") + func->unit()->filepath()->data())
-        ->data();
       break;
     case EventHook::Eval:
       name = "_";

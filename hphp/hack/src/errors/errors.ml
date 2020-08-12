@@ -3948,8 +3948,8 @@ let required_field_is_optional pos1 pos2 name (on_error : typing_error_callback)
   on_error
     ~code:(Typing.err_code Typing.RequiredFieldIsOptional)
     [
-      (pos1, "The field '" ^ name ^ "' is optional");
-      (pos2, "The field '" ^ name ^ "' is defined as required");
+      (pos1, "The field '" ^ name ^ "' is **optional**");
+      (pos2, "The field '" ^ name ^ "' is defined as **required**");
     ]
 
 let array_get_with_optional_field pos1 pos2 name =
@@ -5037,6 +5037,35 @@ let duplicate_interface pos name others =
           "Interface %s is used more than once in this declaration."
           (strip_ns name) )
     :: List.map others (fun pos -> (pos, "Here is another occurrence")) )
+
+let hk_var_description because_nested var_name =
+  if because_nested then
+    var_name
+    ^ " is a is a generic parameter of another (higher-kinded) generic parameter. "
+  else
+    var_name
+    ^ " is a higher-kinded type parameter, standing for a type that has type parameters itself. "
+
+let unsupported_hk_feature ~because_nested pos var_name feature_description =
+  let var_description = hk_var_description because_nested var_name in
+  add
+    (Naming.err_code Naming.HigherKindedTypesUnsupportedFeature)
+    pos
+    ( var_description
+    ^ "We don't support "
+    ^ feature_description
+    ^ " parameters like "
+    ^ var_name
+    ^ "." )
+
+let tparam_non_shadowing_reuse pos var_name =
+  add
+    (Typing.err_code Typing.TypeParameterNameAlreadyUsedNonShadow)
+    pos
+    ( "The name "
+    ^ var_name
+    ^ " was already used for another generic parameter. Please use a different name to avoid confusion."
+    )
 
 (*****************************************************************************)
 (* Printing *)

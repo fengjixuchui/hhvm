@@ -189,11 +189,6 @@ void emitEntryAssertions(irgen::IRGS& irgs, const Func* func, SrcKey sk) {
     // on hhbbc to assert these types.
     return;
   }
-  if (func->isPseudoMain()) {
-    // Pseudomains inherit the variable environment of their caller, so don't
-    // assert anything in them.
-    return;
-  }
   auto const numLocs = func->numLocals();
   auto loc = func->numParams();
   if (func->hasReifiedGenerics()) {
@@ -474,7 +469,7 @@ TranslateResult irGenRegionImpl(irgen::IRGS& irgs,
     }
 
     // Generate IR for each bytecode instruction in this block.
-    for (unsigned i = 0; i < block.length(); ++i, sk.advance(block.unit())) {
+    for (unsigned i = 0; i < block.length(); ++i, sk.advance(block.func())) {
       ProfSrcKey psk { canonTransID(irgs.profTransIDs), sk };
       auto const lastInstr = i == block.length() - 1;
       auto const penultimateInst = i == block.length() - 2;
