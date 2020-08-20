@@ -681,9 +681,6 @@ public:
     return f;
   }
 
-  /////////////////////////////////////////////////////////////////////////////
-
-protected:
   /*
    * Throw an out of bounds exception if 'k' is undefined. The text of the
    * message depends on the array's type.
@@ -691,6 +688,9 @@ protected:
   [[noreturn]] void getNotFound(int64_t k) const;
   [[noreturn]] void getNotFound(const StringData* k) const;
 
+  /////////////////////////////////////////////////////////////////////////////
+
+protected:
   /*
    * Is `k' of an arraykey type (i.e., int or string)?
    */
@@ -752,8 +752,11 @@ constexpr size_t kEmptySetArraySize = 96;
  */
 extern std::aligned_storage<sizeof(ArrayData), 16>::type s_theEmptyVec;
 extern std::aligned_storage<sizeof(ArrayData), 16>::type s_theEmptyVArray;
+extern std::aligned_storage<sizeof(ArrayData), 16>::type s_theEmptyMarkedVec;
 extern std::aligned_storage<kEmptyMixedArraySize, 16>::type s_theEmptyDictArray;
 extern std::aligned_storage<kEmptyMixedArraySize, 16>::type s_theEmptyDArray;
+extern
+std::aligned_storage<kEmptyMixedArraySize, 16>::type s_theEmptyMarkedDictArray;
 extern std::aligned_storage<kEmptySetArraySize, 16>::type s_theEmptySetArray;
 
 /*
@@ -767,7 +770,9 @@ ArrayData* staticEmptyArray();
 ArrayData* staticEmptyVArray();
 ArrayData* staticEmptyDArray();
 ArrayData* staticEmptyVec();
+ArrayData* staticEmptyMarkedVec();
 ArrayData* staticEmptyDictArray();
+ArrayData* staticEmptyMarkedDictArray();
 ArrayData* staticEmptyKeysetArray();
 
 /*

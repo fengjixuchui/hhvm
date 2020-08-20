@@ -27,10 +27,9 @@ class B extends A {}
 let errors =
   {|
 File "/B.php", line 3, characters 7-7:
-Class B does not initialize all of its members; x is not always initialized.
-Make sure you systematically set $this->x when the method __construct is called.
-Alternatively, you can define the member as nullable (?...)
- (NastCheck[3015])
+Class `B` does not initialize all of its members; `x` is not always initialized.
+Make sure you systematically set `$this->x` when the method `__construct` is called.
+Alternatively, you can define the member as nullable with `?int $x`. (NastCheck[3015])
 |}
 
 let test () =

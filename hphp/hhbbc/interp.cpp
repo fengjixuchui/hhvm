@@ -54,6 +54,7 @@
 #include "hphp/hhbbc/type-ops.h"
 #include "hphp/hhbbc/type-system.h"
 #include "hphp/hhbbc/unit-util.h"
+#include "hphp/hhbbc/wide-func.h"
 
 #include "hphp/hhbbc/interp-internal.h"
 
@@ -2587,7 +2588,7 @@ const StaticString
   s_implicit_context_genSet("HH\\ImplicitContext::genSet");
 
 void in(ISS& env, const bc::GetMemoKeyL& op) {
-  auto const func = env.ctx.func;
+  auto const& func = env.ctx.func;
   auto const name = folly::to<std::string>(
     func && func->cls ? func->cls->name->data() : "",
     func && func->cls ? "::" : "",
@@ -3617,17 +3618,16 @@ bool fcallOptimizeChecks(
   }
 
   // Infer whether the callee supports async eager return.
-  if (fca.asyncEagerTarget() != NoBlockId &&
-      !fca.supportsAsyncEagerReturn()) {
+  if (fca.asyncEagerTarget() != NoBlockId) {
     auto const status = env.index.supports_async_eager_return(func);
-    if (status) {
-      reduce(env, fcallWithFCA(fca.fixEager(*status)));
+    if (status && !*status) {
+      reduce(env, fcallWithFCA(fca.withoutAsyncEagerTarget()));
       return true;
     }
   }
 
-  if (!fca.skipNumArgsCheck() && fca.numArgs() <= func.minNonVariadicParams()) {
-    reduce(env, fcallWithFCA(fca.withoutNumArgsCheck()));
+  if (!fca.skipRepack() && fca.numArgs() <= func.minNonVariadicParams()) {
+    reduce(env, fcallWithFCA(fca.withoutRepack()));
     return true;
   }
 
@@ -3778,7 +3778,7 @@ void fcallKnownImpl(
 
   if (fca.asyncEagerTarget() != NoBlockId && typeFromWH(returnType) == TBottom) {
     // Kill the async eager target if the function never returns.
-    reduce(env, fcallWithFCA(std::move(fca.fixEager(false))));
+    reduce(env, fcallWithFCA(std::move(fca.withoutAsyncEagerTarget())));
     return;
   }
 
@@ -4020,6 +4020,17 @@ void in(ISS& env, const bc::ResolveClass& op) {
 
 namespace {
 
+Context getCallContext(const ISS& env, const FCallArgs& fca) {
+  if (auto const name = fca.context()) {
+    auto const rcls = env.index.resolve_class(env.ctx, name);
+    if (rcls && rcls->cls()) {
+      return Context { env.ctx.unit, env.ctx.func, rcls->cls() };
+    }
+    return Context { env.ctx.unit, env.ctx.func, nullptr };
+  }
+  return env.ctx;
+}
+
 void fcallObjMethodNullsafe(ISS& env, const FCallArgs& fca, bool extraInput) {
   BytecodeVec repl;
   if (extraInput) repl.push_back(bc::PopC {});
@@ -4089,17 +4100,7 @@ void fcallObjMethodImpl(ISS& env, const Op& op, SString methName, bool dynamic,
     return unknown();
   }
 
-  auto const ctx = [&] {
-    if (auto const name = op.fca.context()) {
-      auto const rcls = env.index.resolve_class(env.ctx, name);
-      if (rcls && rcls->cls()) {
-        return AnalysisContext { env.ctx.unit, env.ctx.func, rcls->cls() };
-      }
-      return AnalysisContext { env.ctx.unit, env.ctx.func, nullptr };
-    }
-    return env.ctx;
-  }();
-
+  auto const ctx = getCallContext(env, op.fca);
   auto const ctxTy = intersection_of(input, TObj);
   auto const clsTy = objcls(ctxTy);
   auto const rfunc = env.index.resolve_method(ctx, clsTy, methName);
@@ -4181,17 +4182,7 @@ template <typename Op, class UpdateBC>
 void fcallClsMethodImpl(ISS& env, const Op& op, Type clsTy, SString methName,
                         bool dynamic, uint32_t numExtraInputs,
                         UpdateBC updateBC) {
-  auto const ctx = [&] {
-    if (auto const name = op.fca.context()) {
-      auto const rcls = env.index.resolve_class(env.ctx, name);
-      if (rcls && rcls->cls()) {
-        return AnalysisContext { env.ctx.unit, env.ctx.func, rcls->cls() };
-      }
-      return AnalysisContext { env.ctx.unit, env.ctx.func, nullptr };
-    }
-    return env.ctx;
-  }();
-
+  auto const ctx = getCallContext(env, op.fca);
   auto const rfunc = env.index.resolve_method(ctx, clsTy, methName);
 
   if (fcallOptimizeChecks(env, op.fca, rfunc, updateBC) ||
@@ -5687,7 +5678,7 @@ BlockId speculateHelper(ISS& env, BlockId orig, bool updateTaken) {
   if (options.RemoveDeadBlocks) {
     State temp{env.state, State::Compact{}};
     while (true) {
-      auto const func = env.ctx.func;
+      auto const& func = env.ctx.func;
       auto const targetBlk = func.blocks()[target].get();
       if (!targetBlk->multiPred) break;
       auto const ok = [&] {

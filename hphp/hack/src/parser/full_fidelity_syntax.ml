@@ -66,6 +66,7 @@ module WithToken(Token: TokenType) = struct
       | SimpleTypeSpecifier               _ -> SyntaxKind.SimpleTypeSpecifier
       | LiteralExpression                 _ -> SyntaxKind.LiteralExpression
       | PrefixedStringExpression          _ -> SyntaxKind.PrefixedStringExpression
+      | PrefixedCodeExpression            _ -> SyntaxKind.PrefixedCodeExpression
       | VariableExpression                _ -> SyntaxKind.VariableExpression
       | PipeVariableExpression            _ -> SyntaxKind.PipeVariableExpression
       | FileAttributeSpecification        _ -> SyntaxKind.FileAttributeSpecification
@@ -169,7 +170,6 @@ module WithToken(Token: TokenType) = struct
       | ObjectCreationExpression          _ -> SyntaxKind.ObjectCreationExpression
       | ConstructorCall                   _ -> SyntaxKind.ConstructorCall
       | RecordCreationExpression          _ -> SyntaxKind.RecordCreationExpression
-      | ArrayIntrinsicExpression          _ -> SyntaxKind.ArrayIntrinsicExpression
       | DarrayIntrinsicExpression         _ -> SyntaxKind.DarrayIntrinsicExpression
       | DictionaryIntrinsicExpression     _ -> SyntaxKind.DictionaryIntrinsicExpression
       | KeysetIntrinsicExpression         _ -> SyntaxKind.KeysetIntrinsicExpression
@@ -258,6 +258,7 @@ module WithToken(Token: TokenType) = struct
     let is_simple_type_specifier                = has_kind SyntaxKind.SimpleTypeSpecifier
     let is_literal_expression                   = has_kind SyntaxKind.LiteralExpression
     let is_prefixed_string_expression           = has_kind SyntaxKind.PrefixedStringExpression
+    let is_prefixed_code_expression             = has_kind SyntaxKind.PrefixedCodeExpression
     let is_variable_expression                  = has_kind SyntaxKind.VariableExpression
     let is_pipe_variable_expression             = has_kind SyntaxKind.PipeVariableExpression
     let is_file_attribute_specification         = has_kind SyntaxKind.FileAttributeSpecification
@@ -361,7 +362,6 @@ module WithToken(Token: TokenType) = struct
     let is_object_creation_expression           = has_kind SyntaxKind.ObjectCreationExpression
     let is_constructor_call                     = has_kind SyntaxKind.ConstructorCall
     let is_record_creation_expression           = has_kind SyntaxKind.RecordCreationExpression
-    let is_array_intrinsic_expression           = has_kind SyntaxKind.ArrayIntrinsicExpression
     let is_darray_intrinsic_expression          = has_kind SyntaxKind.DarrayIntrinsicExpression
     let is_dictionary_intrinsic_expression      = has_kind SyntaxKind.DictionaryIntrinsicExpression
     let is_keyset_intrinsic_expression          = has_kind SyntaxKind.KeysetIntrinsicExpression
@@ -477,7 +477,6 @@ module WithToken(Token: TokenType) = struct
     let is_abstract   = is_specific_token TokenKind.Abstract
     let is_final      = is_specific_token TokenKind.Final
     let is_async      = is_specific_token TokenKind.Async
-    let is_coroutine  = is_specific_token TokenKind.Coroutine
     let is_void       = is_specific_token TokenKind.Void
     let is_left_brace = is_specific_token TokenKind.LeftBrace
     let is_ellipsis   = is_specific_token TokenKind.DotDotDot
@@ -536,6 +535,17 @@ module WithToken(Token: TokenType) = struct
       } ->
          let acc = f acc prefixed_string_name in
          let acc = f acc prefixed_string_str in
+         acc
+      | PrefixedCodeExpression {
+        prefixed_code_prefix;
+        prefixed_code_left_backtick;
+        prefixed_code_expression;
+        prefixed_code_right_backtick;
+      } ->
+         let acc = f acc prefixed_code_prefix in
+         let acc = f acc prefixed_code_left_backtick in
+         let acc = f acc prefixed_code_expression in
+         let acc = f acc prefixed_code_right_backtick in
          acc
       | VariableExpression {
         variable_expression;
@@ -1664,17 +1674,6 @@ module WithToken(Token: TokenType) = struct
          let acc = f acc record_creation_members in
          let acc = f acc record_creation_right_bracket in
          acc
-      | ArrayIntrinsicExpression {
-        array_intrinsic_keyword;
-        array_intrinsic_left_paren;
-        array_intrinsic_members;
-        array_intrinsic_right_paren;
-      } ->
-         let acc = f acc array_intrinsic_keyword in
-         let acc = f acc array_intrinsic_left_paren in
-         let acc = f acc array_intrinsic_members in
-         let acc = f acc array_intrinsic_right_paren in
-         acc
       | DarrayIntrinsicExpression {
         darray_intrinsic_keyword;
         darray_intrinsic_explicit_type;
@@ -2377,6 +2376,17 @@ module WithToken(Token: TokenType) = struct
       } -> [
         prefixed_string_name;
         prefixed_string_str;
+      ]
+      | PrefixedCodeExpression {
+        prefixed_code_prefix;
+        prefixed_code_left_backtick;
+        prefixed_code_expression;
+        prefixed_code_right_backtick;
+      } -> [
+        prefixed_code_prefix;
+        prefixed_code_left_backtick;
+        prefixed_code_expression;
+        prefixed_code_right_backtick;
       ]
       | VariableExpression {
         variable_expression;
@@ -3505,17 +3515,6 @@ module WithToken(Token: TokenType) = struct
         record_creation_members;
         record_creation_right_bracket;
       ]
-      | ArrayIntrinsicExpression {
-        array_intrinsic_keyword;
-        array_intrinsic_left_paren;
-        array_intrinsic_members;
-        array_intrinsic_right_paren;
-      } -> [
-        array_intrinsic_keyword;
-        array_intrinsic_left_paren;
-        array_intrinsic_members;
-        array_intrinsic_right_paren;
-      ]
       | DarrayIntrinsicExpression {
         darray_intrinsic_keyword;
         darray_intrinsic_explicit_type;
@@ -4219,6 +4218,17 @@ module WithToken(Token: TokenType) = struct
       } -> [
         "prefixed_string_name";
         "prefixed_string_str";
+      ]
+      | PrefixedCodeExpression {
+        prefixed_code_prefix;
+        prefixed_code_left_backtick;
+        prefixed_code_expression;
+        prefixed_code_right_backtick;
+      } -> [
+        "prefixed_code_prefix";
+        "prefixed_code_left_backtick";
+        "prefixed_code_expression";
+        "prefixed_code_right_backtick";
       ]
       | VariableExpression {
         variable_expression;
@@ -5347,17 +5357,6 @@ module WithToken(Token: TokenType) = struct
         "record_creation_members";
         "record_creation_right_bracket";
       ]
-      | ArrayIntrinsicExpression {
-        array_intrinsic_keyword;
-        array_intrinsic_left_paren;
-        array_intrinsic_members;
-        array_intrinsic_right_paren;
-      } -> [
-        "array_intrinsic_keyword";
-        "array_intrinsic_left_paren";
-        "array_intrinsic_members";
-        "array_intrinsic_right_paren";
-      ]
       | DarrayIntrinsicExpression {
         darray_intrinsic_keyword;
         darray_intrinsic_explicit_type;
@@ -6122,6 +6121,18 @@ module WithToken(Token: TokenType) = struct
         PrefixedStringExpression {
           prefixed_string_name;
           prefixed_string_str;
+        }
+      | (SyntaxKind.PrefixedCodeExpression, [
+          prefixed_code_prefix;
+          prefixed_code_left_backtick;
+          prefixed_code_expression;
+          prefixed_code_right_backtick;
+        ]) ->
+        PrefixedCodeExpression {
+          prefixed_code_prefix;
+          prefixed_code_left_backtick;
+          prefixed_code_expression;
+          prefixed_code_right_backtick;
         }
       | (SyntaxKind.VariableExpression, [
           variable_expression;
@@ -7353,18 +7364,6 @@ module WithToken(Token: TokenType) = struct
           record_creation_members;
           record_creation_right_bracket;
         }
-      | (SyntaxKind.ArrayIntrinsicExpression, [
-          array_intrinsic_keyword;
-          array_intrinsic_left_paren;
-          array_intrinsic_members;
-          array_intrinsic_right_paren;
-        ]) ->
-        ArrayIntrinsicExpression {
-          array_intrinsic_keyword;
-          array_intrinsic_left_paren;
-          array_intrinsic_members;
-          array_intrinsic_right_paren;
-        }
       | (SyntaxKind.DarrayIntrinsicExpression, [
           darray_intrinsic_keyword;
           darray_intrinsic_explicit_type;
@@ -8192,6 +8191,21 @@ module WithToken(Token: TokenType) = struct
         let syntax = PrefixedStringExpression {
           prefixed_string_name;
           prefixed_string_str;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_prefixed_code_expression
+        prefixed_code_prefix
+        prefixed_code_left_backtick
+        prefixed_code_expression
+        prefixed_code_right_backtick
+      =
+        let syntax = PrefixedCodeExpression {
+          prefixed_code_prefix;
+          prefixed_code_left_backtick;
+          prefixed_code_expression;
+          prefixed_code_right_backtick;
         } in
         let value = ValueBuilder.value_from_syntax syntax in
         make syntax value
@@ -9731,21 +9745,6 @@ module WithToken(Token: TokenType) = struct
           record_creation_left_bracket;
           record_creation_members;
           record_creation_right_bracket;
-        } in
-        let value = ValueBuilder.value_from_syntax syntax in
-        make syntax value
-
-      let make_array_intrinsic_expression
-        array_intrinsic_keyword
-        array_intrinsic_left_paren
-        array_intrinsic_members
-        array_intrinsic_right_paren
-      =
-        let syntax = ArrayIntrinsicExpression {
-          array_intrinsic_keyword;
-          array_intrinsic_left_paren;
-          array_intrinsic_members;
-          array_intrinsic_right_paren;
         } in
         let value = ValueBuilder.value_from_syntax syntax in
         make syntax value

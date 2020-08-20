@@ -125,7 +125,6 @@ and ('ex, 'fb, 'en, 'hi) function_ptr_id =
   | FP_class_const of ('ex, 'fb, 'en, 'hi) class_id * pstring
 
 and ('ex, 'fb, 'en, 'hi) expr_ =
-  | Array of ('ex, 'fb, 'en, 'hi) afield list
   | Darray of
       ('hi targ * 'hi targ) option
       * (('ex, 'fb, 'en, 'hi) expr * ('ex, 'fb, 'en, 'hi) expr) list
@@ -204,6 +203,7 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
       (** TODO: T38184446 Consolidate collections in AAST *)
   | BracedExpr of ('ex, 'fb, 'en, 'hi) expr
   | ParenthesizedExpr of ('ex, 'fb, 'en, 'hi) expr
+  | ExpressionTree of hint * ('ex, 'fb, 'en, 'hi) expr
   (* None of these constructors exist in the AST *)
   | Lplaceholder of pos
   | Fun_id of sid

@@ -42,14 +42,14 @@
 #include "hphp/hhbbc/misc.h"
 #include "hphp/hhbbc/src-loc.h"
 
-namespace HPHP { namespace HHBBC {
-namespace php {
+namespace HPHP { namespace HHBBC { namespace php {
 
 //////////////////////////////////////////////////////////////////////
 
-struct Func;
 struct ExnNode;
+struct Func;
 struct Unit;
+struct WideFunc;
 
 //////////////////////////////////////////////////////////////////////
 
@@ -205,27 +205,6 @@ struct Param {
   bool isVariadic: 1;
 };
 
-template <typename T>
-struct IntLikeIterator {
-  explicit IntLikeIterator(T v) : val{v} {}
-  T operator *() const { return val; }
-  T operator ++() { return ++val; }
-  bool operator !=(IntLikeIterator other) { return val != other.val; }
-private:
-  T val;
-};
-
-template <typename T>
-struct IntLikeRange {
-  explicit IntLikeRange(T v) : sz{v} {}
-  template<typename C>
-  explicit IntLikeRange(const C& v) : sz(v.size()) {}
-  IntLikeIterator<T> begin() const { return IntLikeIterator<T>{0}; }
-  IntLikeIterator<T> end() const { return IntLikeIterator<T>{sz}; }
-private:
-    T sz;
-};
-
 /*
  * Metadata about a local variable in a function.  Name may be
  * nullptr, for unnamed locals.
@@ -284,12 +263,11 @@ private:
    * blocks in an unspecified order.  Blocks use BlockIds to represent
    * control flow arcs. The id of a block is its index in this vector.
    *
-   * Use ConstFunc / MutFunc wrapper types to access this data.
+   * Use WideFunc to access this data.
    */
-  BlockVec rawBlocks;
+  copy_ptr<CompactVector<char>> rawBlocks;
 
-  friend struct ConstFunc;
-  friend struct MutFunc;
+  friend struct WideFunc;
 };
 
 /*
@@ -420,35 +398,6 @@ struct Func : FuncBase {
    * User attribute list.
    */
   UserAttributeMap userAttributes;
-};
-
-/*
- * We keep the code of a Func compressed at rest, so you must instantiate
- * one of the two "fat pointers" below to actually read or write its code.
- * Instantiating these pointers is a potentially heavy-weight operation.
- */
-struct ConstFunc {
-  ConstFunc() = default;
-  explicit ConstFunc(const Func* f) : func(f) {}
-
-  const BlockVec& blocks() const { return func->rawBlocks; }
-  operator const Func*() const { return func; }
-  const Func& operator*() const { return *func; }
-  const Func* operator->() const { return func; }
-
-  operator bool() const { return func; }
-  auto blockRange() const { return IntLikeRange<BlockId>{func->rawBlocks}; }
-
-  const Func* func;
-};
-struct MutFunc : public ConstFunc {
-  MutFunc() = default;
-  explicit MutFunc(Func* f) : ConstFunc(f) {}
-
-  BlockVec& blocks_mut() const { return const_cast<Func*>(func)->rawBlocks; }
-  operator Func*() const { return const_cast<Func*>(func); }
-  Func* operator->() const { return const_cast<Func*>(func); }
-  Func& operator*() const { return *const_cast<Func*>(func); }
 };
 
 //////////////////////////////////////////////////////////////////////

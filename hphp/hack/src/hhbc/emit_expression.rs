@@ -455,10 +455,6 @@ pub fn emit_expr(emitter: &mut Emitter, env: &Env, expression: &tast::Expr) -> R
         Expr_::New(e) => emit_new(emitter, env, pos, e),
         Expr_::FunctionPointer(fp) => emit_function_pointer(emitter, env, pos, &fp.0, &fp.1),
         Expr_::Record(e) => emit_record(emitter, env, pos, e),
-        Expr_::Array(es) => Ok(emit_pos_then(
-            pos,
-            emit_collection(emitter, env, expression, es, None)?,
-        )),
         Expr_::Darray(e) => Ok(emit_pos_then(
             pos,
             emit_collection(emitter, env, expression, &mk_afkvalues(&e.1), None)?,
@@ -2627,11 +2623,17 @@ fn emit_special_function(
                     instr::istypec(i),
                 ])),
                 _ => match get_call_builtin_func_info(e.options(), lower_fq_name) {
-                    Some((nargs, i)) if nargs == args.len() => Some(InstrSeq::gather(vec![
-                        emit_exprs(e, env, args)?,
-                        emit_pos(pos),
-                        instr::instr(i),
-                    ])),
+                    Some((nargs, i)) if nargs == args.len() => {
+                        let instrs = InstrSeq::gather(vec![
+                            emit_exprs(e, env, args)?,
+                            emit_pos(pos),
+                            instr::instr(i),
+                        ]);
+                        match lower_fq_name {
+                            "HH\\varray" | "HH\\darray" => Some(wrap_array_mark_legacy(e, instrs)),
+                            _ => Some(instrs),
+                        }
+                    }
                     _ => None,
                 },
             },
@@ -3432,12 +3434,8 @@ fn emit_array_get_(
     null_coalesce_assignment: bool,
     inout_param_info: Option<(usize, &inout_locals::AliasInfoMap)>,
 ) -> Result<(ArrayGetInstr, Option<usize>)> {
-    use tast::{Expr as E, Expr_ as E_};
+    use tast::Expr as E;
     match (base_expr, elem) {
-        (E(pos, E_::Array(_)), None) => Err(emit_fatal::raise_fatal_parse(
-            pos,
-            "Can't use array() as base in write context",
-        )),
         (E(pos, _), None) if !env.flags.contains(env::Flags::ALLOWS_ARRAY_APPEND) => Err(
             emit_fatal::raise_fatal_runtime(pos, "Can't use [] for reading"),
         ),
@@ -5098,7 +5096,6 @@ fn can_use_as_rhs_in_list_assignment(expr: &tast::Expr_) -> Result<bool> {
         | E_::Yield(_)
         | E_::Cast(_)
         | E_::Eif(_)
-        | E_::Array(_)
         | E_::Varray(_)
         | E_::Darray(_)
         | E_::Collection(_)

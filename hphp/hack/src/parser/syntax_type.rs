@@ -26,6 +26,7 @@ pub trait SyntaxType<'a, C>: SyntaxTypeBase<'a, C>
     fn make_simple_type_specifier(ctx: &C, simple_type_specifier: Self) -> Self;
     fn make_literal_expression(ctx: &C, literal_expression: Self) -> Self;
     fn make_prefixed_string_expression(ctx: &C, prefixed_string_name: Self, prefixed_string_str: Self) -> Self;
+    fn make_prefixed_code_expression(ctx: &C, prefixed_code_prefix: Self, prefixed_code_left_backtick: Self, prefixed_code_expression: Self, prefixed_code_right_backtick: Self) -> Self;
     fn make_variable_expression(ctx: &C, variable_expression: Self) -> Self;
     fn make_pipe_variable_expression(ctx: &C, pipe_variable_expression: Self) -> Self;
     fn make_file_attribute_specification(ctx: &C, file_attribute_specification_left_double_angle: Self, file_attribute_specification_keyword: Self, file_attribute_specification_colon: Self, file_attribute_specification_attributes: Self, file_attribute_specification_right_double_angle: Self) -> Self;
@@ -129,7 +130,6 @@ pub trait SyntaxType<'a, C>: SyntaxTypeBase<'a, C>
     fn make_object_creation_expression(ctx: &C, object_creation_new_keyword: Self, object_creation_object: Self) -> Self;
     fn make_constructor_call(ctx: &C, constructor_call_type: Self, constructor_call_left_paren: Self, constructor_call_argument_list: Self, constructor_call_right_paren: Self) -> Self;
     fn make_record_creation_expression(ctx: &C, record_creation_type: Self, record_creation_left_bracket: Self, record_creation_members: Self, record_creation_right_bracket: Self) -> Self;
-    fn make_array_intrinsic_expression(ctx: &C, array_intrinsic_keyword: Self, array_intrinsic_left_paren: Self, array_intrinsic_members: Self, array_intrinsic_right_paren: Self) -> Self;
     fn make_darray_intrinsic_expression(ctx: &C, darray_intrinsic_keyword: Self, darray_intrinsic_explicit_type: Self, darray_intrinsic_left_bracket: Self, darray_intrinsic_members: Self, darray_intrinsic_right_bracket: Self) -> Self;
     fn make_dictionary_intrinsic_expression(ctx: &C, dictionary_intrinsic_keyword: Self, dictionary_intrinsic_explicit_type: Self, dictionary_intrinsic_left_bracket: Self, dictionary_intrinsic_members: Self, dictionary_intrinsic_right_bracket: Self) -> Self;
     fn make_keyset_intrinsic_expression(ctx: &C, keyset_intrinsic_keyword: Self, keyset_intrinsic_explicit_type: Self, keyset_intrinsic_left_bracket: Self, keyset_intrinsic_members: Self, keyset_intrinsic_right_bracket: Self) -> Self;

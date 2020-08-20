@@ -43,7 +43,6 @@ type t =
   | Const
   | Construct
   | Continue
-  | Coroutine
   | Darray
   | Default
   | Define
@@ -202,6 +201,7 @@ type t =
   | LessThanSlash
   | LessThanQuestion
   | ColonAt
+  | Backtick
   | XHP
   (* Variable text tokens *)
   | ErrorToken
@@ -258,7 +258,6 @@ let from_string keyword ~only_reserved =
   | "const"                               -> Some Const
   | "__construct"                         -> Some Construct
   | "continue"                            -> Some Continue
-  | "coroutine"    when not only_reserved -> Some Coroutine
   | "darray"       when not only_reserved -> Some Darray
   | "default"                             -> Some Default
   | "define"       when not only_reserved -> Some Define
@@ -417,6 +416,7 @@ let from_string keyword ~only_reserved =
   | "</"                                  -> Some LessThanSlash
   | "<?"                                  -> Some LessThanQuestion
   | ":@"                                  -> Some ColonAt
+  | "`"                                   -> Some Backtick
   | "xhp"          when not only_reserved -> Some XHP
   | _              -> None
 
@@ -447,7 +447,6 @@ let to_string kind =
   | Const                         -> "const"
   | Construct                     -> "__construct"
   | Continue                      -> "continue"
-  | Coroutine                     -> "coroutine"
   | Darray                        -> "darray"
   | Default                       -> "default"
   | Define                        -> "define"
@@ -606,6 +605,7 @@ let to_string kind =
   | LessThanSlash                 -> "</"
   | LessThanQuestion              -> "<?"
   | ColonAt                       -> ":@"
+  | Backtick                      -> "`"
   | XHP                           -> "xhp"
   (* Variable text tokens *)
   | ErrorToken                    -> "error_token"

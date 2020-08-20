@@ -534,7 +534,7 @@ Flags handle_general_effects(Local& env,
     break;
   }
 
-  case CheckPackedArrayDataBounds: {
+  case CheckVecBounds: {
     assertx(inst.src(0)->type().subtypeOfAny(TVArr, TVec));
     if (!inst.src(1)->hasConstVal(TInt)) break;
 
@@ -667,7 +667,7 @@ Flags handle_end_catch(Local& env, const IRInstruction& inst) {
   auto pc = inst.marker().fixupSk().unit()->entry() + inst.marker().bcOff();
   auto const op = decode_op(pc);
   if (op == OpFCallCtor &&
-      decodeFCallArgs(op, pc, nullptr /* StringDecoder */).lockWhileUnwinding) {
+      decodeFCallArgs(op, pc, nullptr /*StringDecoder*/).lockWhileUnwinding()) {
     FTRACE(4, "      non-reducible EndCatch -- lock while unwinding\n");
     return FNone{};
   }

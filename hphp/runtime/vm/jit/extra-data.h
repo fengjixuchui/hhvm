@@ -810,10 +810,10 @@ struct CallData : IRExtraData {
                     uint32_t genericsBitmap,
                     bool hasGenerics,
                     bool hasUnpack,
+                    bool skipRepack,
                     bool dynamicCall,
                     bool asyncEagerReturn,
-                    bool formingRegion,
-                    bool skipNumArgsCheck)
+                    bool formingRegion)
     : spOffset(spOffset)
     , numArgs(numArgs)
     , numOut(numOut)
@@ -821,10 +821,10 @@ struct CallData : IRExtraData {
     , genericsBitmap(genericsBitmap)
     , hasGenerics(hasGenerics)
     , hasUnpack(hasUnpack)
+    , skipRepack(skipRepack)
     , dynamicCall(dynamicCall)
     , asyncEagerReturn(asyncEagerReturn)
     , formingRegion(formingRegion)
-    , skipNumArgsCheck(skipNumArgsCheck)
   {}
 
   std::string show() const {
@@ -834,10 +834,10 @@ struct CallData : IRExtraData {
         ? folly::sformat(",hasGenerics({})", genericsBitmap)
         : std::string{},
       hasUnpack ? ",unpack" : "",
+      skipRepack ? ",skipRepack" : "",
       dynamicCall ? ",dynamicCall" : "",
       asyncEagerReturn ? ",asyncEagerReturn" : "",
-      formingRegion ? ",formingRegion" : "",
-      skipNumArgsCheck ? ",skipNumArgsCheck" : ""
+      formingRegion ? ",formingRegion" : ""
     );
   }
 
@@ -852,10 +852,10 @@ struct CallData : IRExtraData {
   uint32_t genericsBitmap;
   bool hasGenerics;
   bool hasUnpack;
+  bool skipRepack;
   bool dynamicCall;
   bool asyncEagerReturn;
   bool formingRegion;
-  bool skipNumArgsCheck;
 
   // Set if the catch trace for this call has a SyncReturnBC instruction because
   // an inline frame was elided around it.
@@ -1652,8 +1652,8 @@ X(LdClsInitElem,                IndexData);
 X(StClsInitElem,                IndexData);
 X(StLoc,                        LocalId);
 X(StLocRange,                   LocalIdRange);
-X(AdvanceMixedPtrIter,          IterOffsetData);
-X(AdvancePackedPtrIter,         IterOffsetData);
+X(AdvanceDictPtrIter,           IterOffsetData);
+X(AdvanceVecPtrIter,            IterOffsetData);
 X(CheckIter,                    IterTypeData);
 X(StIterBase,                   IterId);
 X(StIterType,                   IterTypeData);
@@ -1730,8 +1730,6 @@ X(RaiseClsMethPropConvertNotice,RaiseClsMethPropConvertNoticeData);
 X(RaiseTooManyArg,              FuncData);
 X(ThrowParamInOutMismatch,      ParamData);
 X(ThrowParamInOutMismatchRange, CheckInOutsData);
-X(ThrowArrayIndexException,     ArrayGetExceptionData);
-X(ThrowArrayKeyException,       ArrayGetExceptionData);
 X(ThrowParameterWrongType,      FuncArgTypeData);
 X(CheckClsReifiedGenericMismatch,
                                 ClassData);
@@ -1751,9 +1749,9 @@ X(AllocStructDict,              NewStructData);
 X(AllocVArray,                  PackedArrayData);
 X(AllocVec,                     PackedArrayData);
 X(NewKeysetArray,               NewKeysetArrayData);
-X(InitPackedLayoutArrayLoop,    InitPackedArrayLoopData);
-X(InitPackedLayoutArray,        IndexData);
-X(InitMixedLayoutArray,         KeyedIndexData);
+X(InitVecElemLoop,              InitPackedArrayLoopData);
+X(InitVecElem,                  IndexData);
+X(InitDictElem,                 KeyedIndexData);
 X(CreateAAWH,                   CreateAAWHData);
 X(CountWHNotDone,               CountWHNotDoneData);
 X(CheckMixedArrayOffset,        IndexData);

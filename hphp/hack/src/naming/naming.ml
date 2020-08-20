@@ -434,7 +434,7 @@ and unwrap_mutability p =
     (Some N.POwnedMutable, t)
   | t -> (None, t)
 
-and hfun env reactivity is_coroutine hl kl variadic_hint h =
+and hfun env reactivity hl kl variadic_hint h =
   let variadic_hint = Option.map variadic_hint (hint env) in
   let (muts, hl) =
     List.map
@@ -459,7 +459,6 @@ and hfun env reactivity is_coroutine hl kl variadic_hint h =
     N.
       {
         hf_reactive_kind = reactivity;
-        hf_is_coroutine = is_coroutine;
         hf_param_tys = hl;
         hf_param_kinds = kl;
         hf_param_mutability = muts;
@@ -500,7 +499,6 @@ and hint_
       Aast.
         {
           hf_reactive_kind = reactivity;
-          hf_is_coroutine = coroutine;
           hf_param_tys = hl;
           hf_param_kinds = kl;
           hf_param_mutability = _;
@@ -508,7 +506,7 @@ and hint_
           hf_return_ty = h;
           hf_is_mutable_return = _;
         } ->
-    hfun env reactivity coroutine hl kl variadic_hint h
+    hfun env reactivity hl kl variadic_hint h
   (* Special case for Pure<function> *)
   | Aast.Happly
       ( (_, hname),
@@ -518,7 +516,6 @@ and hint_
               Aast.
                 {
                   hf_reactive_kind = _;
-                  hf_is_coroutine;
                   hf_param_tys = hl;
                   hf_param_kinds = kl;
                   hf_param_mutability = _;
@@ -528,7 +525,7 @@ and hint_
                 } );
         ] )
     when String.equal hname SN.Rx.hPure ->
-    hfun env N.FPure hf_is_coroutine hl kl variadic_hint h
+    hfun env N.FPure hl kl variadic_hint h
   (* Special case for Rx<function> *)
   | Aast.Happly
       ( (_, hname),
@@ -538,7 +535,6 @@ and hint_
               Aast.
                 {
                   hf_reactive_kind = _;
-                  hf_is_coroutine;
                   hf_param_tys = hl;
                   hf_param_kinds = kl;
                   hf_param_mutability = _;
@@ -548,7 +544,7 @@ and hint_
                 } );
         ] )
     when String.equal hname SN.Rx.hRx ->
-    hfun env N.FReactive hf_is_coroutine hl kl variadic_hint h
+    hfun env N.FReactive hl kl variadic_hint h
   (* Special case for RxShallow<function> *)
   | Aast.Happly
       ( (_, hname),
@@ -558,7 +554,6 @@ and hint_
               Aast.
                 {
                   hf_reactive_kind = _;
-                  hf_is_coroutine;
                   hf_param_tys = hl;
                   hf_param_kinds = kl;
                   hf_param_mutability = _;
@@ -568,7 +563,7 @@ and hint_
                 } );
         ] )
     when String.equal hname SN.Rx.hRxShallow ->
-    hfun env N.FShallow hf_is_coroutine hl kl variadic_hint h
+    hfun env N.FShallow hl kl variadic_hint h
   (* Special case for RxLocal<function> *)
   | Aast.Happly
       ( (_, hname),
@@ -578,7 +573,6 @@ and hint_
               Aast.
                 {
                   hf_reactive_kind = _;
-                  hf_is_coroutine;
                   hf_param_tys = hl;
                   hf_param_kinds = kl;
                   hf_param_mutability = _;
@@ -588,7 +582,7 @@ and hint_
                 } );
         ] )
     when String.equal hname SN.Rx.hRxLocal ->
-    hfun env N.FLocal hf_is_coroutine hl kl variadic_hint h
+    hfun env N.FLocal hl kl variadic_hint h
   | Aast.Happly (((p, _x) as id), hl) ->
     let hint_id =
       hint_id ~forbid_this ~allow_retonly ~allow_wildcard ~tp_depth env id hl
@@ -1327,7 +1321,6 @@ and check_constant_expr env (pos, e) =
     check_constant_expr env e1
     && Option.for_all e2 (check_constant_expr env)
     && check_constant_expr env e3
-  | Aast.Array l -> List.for_all l ~f:(check_afield_constant_expr env)
   | Aast.Darray (_, l) ->
     List.for_all l ~f:(fun (e1, e2) ->
         check_constant_expr env e1 && check_constant_expr env e2)
@@ -1899,11 +1892,6 @@ and expr env (p, e) = (p, expr_ env p e)
 and expr_ env p (e : Nast.expr_) =
   match e with
   | Aast.ParenthesizedExpr e -> N.ParenthesizedExpr (expr env e)
-  | Aast.Array l ->
-    let tcopt = Provider_context.get_tcopt (fst env).ctx in
-    if TypecheckerOptions.disallow_array_literal tcopt then
-      Errors.array_literals_disallowed p;
-    N.Array (List.map l (afield env))
   | Aast.Varray (ta, l) ->
     N.Varray (Option.map ~f:(targ env) ta, List.map l (expr env))
   | Aast.Darray (tap, l) ->
@@ -2135,7 +2123,11 @@ and expr_ env p (e : Nast.expr_) =
              * declarations).
              *)
             (match (fst env).current_cls with
-            | Some (cid, _, _) -> N.Smethod_id (cid, (pm, meth))
+            | Some (cid, _, true) -> N.Smethod_id ((p, snd cid), (pm, meth))
+            | Some (cid, kind, false) ->
+              let is_trait = Ast_defs.is_c_trait kind in
+              Errors.class_meth_non_final_CLASS p is_trait (snd cid);
+              N.Any
             | None ->
               Errors.illegal_class_meth p;
               N.Any)
@@ -2259,6 +2251,7 @@ and expr_ env p (e : Nast.expr_) =
         h
     in
     N.Cast (ty, expr env e2)
+  | Aast.ExpressionTree (ty, e2) -> N.ExpressionTree (hint env ty, expr env e2)
   | Aast.Unop (uop, e) -> N.Unop (uop, expr env e)
   | Aast.Binop ((Ast_defs.Eq None as op), lv, e2) ->
     let e2 = expr env e2 in

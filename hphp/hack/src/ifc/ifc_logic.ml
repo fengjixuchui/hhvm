@@ -20,19 +20,22 @@ module Mapper = Ifc_mapper
 
 (* A small DSL to accumulate constraints *)
 module Infix = struct
-  let on_lists l1 l2 ~op acc =
+  let on_lists ~pos l1 l2 ~op acc =
     List.fold_left
       (List.cartesian_product l1 l2)
       ~init:acc
-      ~f:(fun acc (a, b) -> op a b acc)
+      ~f:(fun acc (a, b) -> op ~pos a b acc)
 
-  let ( < ) a b acc = Cflow (a, b) :: acc
+  let ( < ) ~pos a b acc = Cflow (PosSet.singleton pos, a, b) :: acc
 
-  let ( <* ) al bl = on_lists al bl ~op:( < )
+  let ( <* ) ~pos al bl = on_lists ~pos al bl ~op:( < )
 
-  let ( = ) a b acc = Cconj (Cflow (a, b), Cflow (b, a)) :: acc
+  let ( = ) ~pos a b acc =
+    Cconj
+      (Cflow (PosSet.singleton pos, a, b), Cflow (PosSet.singleton pos, b, a))
+    :: acc
 
-  let ( =* ) al bl = on_lists al bl ~op:( = )
+  let ( =* ) ~pos al bl = on_lists ~pos al bl ~op:( = )
 
   let ( && ) c1 c2 env = c2 (c1 env)
 end
@@ -40,33 +43,35 @@ end
 (* Compute the meet of two policies, returns None if
    one of the two policies is a variable. *)
 let policy_meet p1 p2 =
+  let pos = PosSet.union (pos_of p1) (pos_of p2) in
   match (p1, p2) with
-  | (Ptop, p)
-  | (p, Ptop) ->
-    Some p
-  | (Ppurpose n1, Ppurpose n2) ->
+  | (Ptop _, p)
+  | (p, Ptop _) ->
+    Some (set_pos pos p)
+  | (Ppurpose (_, n1), Ppurpose (_, n2)) ->
     if String.equal n1 n2 then
-      Some p1
+      Some (set_pos pos p1)
     else
-      Some Pbot
-  | (Pbot, _)
-  | (_, Pbot) ->
-    Some Pbot
+      Some (Pbot pos)
+  | (Pbot _, _)
+  | (_, Pbot _) ->
+    Some (Pbot pos)
   | _ -> None
 
 let policy_join p1 p2 =
+  let pos = PosSet.union (pos_of p1) (pos_of p2) in
   match (p1, p2) with
-  | (Ptop, _)
-  | (_, Ptop) ->
-    Some Ptop
-  | (Pbot, p)
-  | (p, Pbot) ->
-    Some p
-  | (Ppurpose n1, Ppurpose n2) ->
+  | (Ptop _, _)
+  | (_, Ptop _) ->
+    Some (Ptop pos)
+  | (Pbot _, p)
+  | (p, Pbot _) ->
+    Some (set_pos pos p)
+  | (Ppurpose (_, n1), Ppurpose (_, n2)) ->
     if String.equal n1 n2 then
-      Some p1
+      Some (set_pos pos p1)
     else
-      Some Ptop
+      Some (Ptop pos)
   | _ -> None
 
 let conjoin = function
@@ -120,13 +125,13 @@ let quantify ~pred ~quant:q ?(depth = 0) c =
    are left; it is used internally in the simplify function
    below *)
 type if_tree =
-  | ITE of (policy * purpose) * if_tree * if_tree
-  | FLW of (policy * policy) list
+  | ITE of (Pos.t * policy * purpose) * if_tree * if_tree
+  | FLW of (PosSet.t * policy * policy) list
 
 (* Slow simplification procedure for constraints.
    A correctness proof for the quantifier elimination is here:
    https://github.com/mpu/hol/blob/master/hol4/constraintScript.sml *)
-let simplify c =
+let simplify (c : prop) =
   let split3 l =
     (* Split a list of flow constraints as:
        - lower bounds for (Pbound_var 0)
@@ -134,15 +139,20 @@ let simplify c =
        - the rest
     *)
     List.partition3_map l ~f:(function
-        | (l, Pbound_var 0) -> `Fst l
-        | (Pbound_var 0, u) -> `Snd u
+        | (poss, l, Pbound_var 0) -> `Fst (poss, l)
+        | (poss, Pbound_var 0, u) -> `Snd (poss, u)
         | f -> `Trd f)
   in
   let elim_exists l =
     (* Eliminate (Pbound_var 0) from a list of simple flow
        constraints assuming it is existentially quantified *)
     let (lbs, ubs, oth) = split3 l in
-    List.unordered_append oth (List.cartesian_product lbs ubs)
+    let merge ((poss1, pol1), (poss2, pol2)) =
+      (PosSet.union poss1 poss2, pol1, pol2)
+    in
+    List.cartesian_product lbs ubs
+    |> List.map ~f:merge
+    |> List.unordered_append oth
   in
   let elim_forall ~max l =
     (* Eliminate (Pbound_var 0) from a list of simple flow
@@ -152,15 +162,15 @@ let simplify c =
     List.concat
       [
         oth;
-        List.map ~f:(fun l -> (l, Pbot)) lbs;
-        List.map ~f:(fun u -> (max, u)) ubs;
+        List.map ~f:(fun (pos, l) -> (pos, l, Pbot PosSet.empty)) lbs;
+        List.map ~f:(fun (pos, u) -> (pos, max, u)) ubs;
       ]
   in
   let dedup l =
     let cpol = compare_policy in
-    let compare = Tuple2.compare ~cmp1:cpol ~cmp2:cpol in
+    let compare = Tuple3.compare ~cmp1:PosSet.compare ~cmp2:cpol ~cmp3:cpol in
     List.filter
-      ~f:(fun (p1, p2) -> not (equal_policy p1 p2))
+      ~f:(fun (_, p1, p2) -> not (equal_policy p1 p2))
       (List.dedup_and_sort ~compare l)
   in
   let rec pop = function
@@ -168,15 +178,15 @@ let simplify c =
        this will crash if (Pbound_var 0) appears in the
        constraint *)
     | FLW l ->
-      let f (a, b) = (shift a, shift b) in
+      let f (pos, a, b) = (pos, shift a, shift b) in
       FLW (List.map ~f l)
-    | ITE ((p, x), t1, t2) -> ITE ((shift p, x), pop t1, pop t2)
+    | ITE ((pos, p, x), t1, t2) -> ITE ((pos, shift p, x), pop t1, pop t2)
   in
   let rec elim_exists_ift = function
     (* Same as exelim above, but for if_tree constraints *)
     | FLW l -> FLW (dedup (elim_exists l))
-    | ITE (c, t1, t2) ->
-      assert (not (equal_policy (fst c) (Pbound_var 0)));
+    | ITE (((_, pol, _) as c), t1, t2) ->
+      assert (not (equal_policy pol (Pbound_var 0)));
       ITE (c, elim_exists_ift t1, elim_exists_ift t2)
   in
   let rec cat t1 t2 =
@@ -190,8 +200,10 @@ let simplify c =
   let rec elim_forall_ift max = function
     (* Same as alelim above, but for if_tree constraints *)
     | FLW l -> FLW (elim_forall ~max l)
-    | ITE ((Pbound_var 0, x), t1, t2) ->
-      let max_if = Option.value_exn (policy_meet max (Ppurpose x)) in
+    | ITE ((pos, Pbound_var 0, x), t1, t2) ->
+      let max_if =
+        Option.value_exn (policy_meet max (Ppurpose (PosSet.singleton pos, x)))
+      in
       cat (elim_forall_ift max_if t1) (elim_forall_ift max t2)
     | ITE (c, t1, t2) -> ITE (c, elim_forall_ift max t1, elim_forall_ift max t2)
   in
@@ -203,12 +215,12 @@ let simplify c =
       let elim =
         match q with
         | Qexists -> elim_exists_ift
-        | Qforall -> elim_forall_ift Ptop
+        | Qforall -> elim_forall_ift (Ptop PosSet.empty)
       in
       let elim l = pop (elim l) in
       funpow n ~f:elim ~init:(qelim c)
     | Ccond (c, ct, ce) -> ITE (c, qelim ct, qelim ce)
-    | Cflow (p1, p2) -> FLW [(p1, p2)]
+    | Cflow (pos, p1, p2) -> FLW [(pos, p1, p2)]
     | Cconj (cl, cr) -> cat (qelim cl) (qelim cr)
     | Ctrue -> FLW []
     | Chole _ -> invalid_arg "cannot simplify constraint with hole"
@@ -227,20 +239,21 @@ let simplify c =
  *)
 let rec entailment_violations lattice = function
   | Ctrue -> []
-  | Ccond ((p1, p2), c1, c2) ->
-    let flow = (p1, Ppurpose p2) in
+  | Ccond ((pos, p1, p2), c1, c2) ->
+    let pos = PosSet.singleton pos in
+    let flow = (pos, p1, Ppurpose (pos, p2)) in
     if List.is_empty @@ entailment_violations lattice (Cflow flow) then
       entailment_violations lattice c1
     else
       entailment_violations lattice c2
   | Cconj (c1, c2) ->
     entailment_violations lattice c1 @ entailment_violations lattice c2
-  | Cflow (_, Ptop)
-  | Cflow (Pbot, _) ->
+  | Cflow (_, _, Ptop _)
+  | Cflow (_, Pbot _, _) ->
     []
-  | Cflow (p1, p2) when equal_policy p1 p2 -> []
-  | Cflow flow ->
-    if FlowSet.mem flow lattice then
+  | Cflow (_, p1, p2) when equal_policy p1 p2 -> []
+  | Cflow ((_, pol1, pol2) as flow) ->
+    if FlowSet.mem (pol1, pol2) lattice then
       []
     else
       [flow]
@@ -254,7 +267,7 @@ let rec entailment_violations lattice = function
 let rec flatten_prop = function
   | Ctrue -> FlowSet.empty
   | Cconj (c1, c2) -> FlowSet.union (flatten_prop c1) (flatten_prop c2)
-  | Cflow f -> FlowSet.singleton f
+  | Cflow (_, l, r) -> FlowSet.singleton (l, r)
   (* Not supported *)
   | Ccond _ -> failwith "Ccond"
   | Cquant _ -> failwith "Cquant"

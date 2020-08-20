@@ -1,4 +1,12 @@
-There are privacy policy errors in \test:
-  Data with policy P3 appears in context P2.
-  Data with policy P3 appears in context P1.
-  
+File "inheritance.php", line 22, characters 3-16:
+Data with policy `P3` appears in context `P2`. (Typing[4379])
+File "inheritance.php", line 17, characters 14-19:
+The data source with policy `P3`
+File "inheritance.php", line 10, characters 14-19:
+The data sink with policy `P2`
+File "inheritance.php", line 21, characters 3-16:
+Data with policy `P3` appears in context `P1`. (Typing[4379])
+File "inheritance.php", line 17, characters 14-19:
+The data source with policy `P3`
+File "inheritance.php", line 5, characters 14-19:
+The data sink with policy `P1`

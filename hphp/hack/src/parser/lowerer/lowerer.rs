@@ -983,7 +983,6 @@ where
                 }
                 Ok(Hfun(ast::HintFun {
                     reactive_kind: ast::FuncReactive::FNonreactive,
-                    is_coroutine: false,
                     param_tys: type_hints,
                     param_kinds: kinds,
                     param_mutability: vec![],
@@ -1694,21 +1693,6 @@ where
                     _ => Self::missing_syntax("DarrayIntrinsicExpression type args", node, env),
                 }
             }
-            ArrayIntrinsicExpression(c) => {
-                if env.parser_options.po_disable_array {
-                    Self::raise_parsing_error_pos(
-                        &pos,
-                        env,
-                        "Array literals are no longer legal; use varray or darray instead",
-                    );
-                }
-                /* TODO: Or tie in with other intrinsics and post-process to Array */
-                Ok(E_::Array(Self::could_map(
-                    Self::p_afield,
-                    &c.array_intrinsic_members,
-                    env,
-                )?))
-            }
             ListExpression(c) => {
                 /* TODO: Or tie in with other intrinsics and post-process to List */
                 let p_binder_or_ignore = |n: &Syntax<T, V>, e: &mut Env| -> Result<ast::Expr> {
@@ -2095,6 +2079,10 @@ where
                 Self::p_hint(&c.cast_type, env)?,
                 Self::p_expr(&c.cast_operand, env)?,
             )),
+            PrefixedCodeExpression(c) => Ok(E_::mk_expression_tree(
+                Self::p_hint(&c.prefixed_code_prefix, env)?,
+                Self::p_expr(&c.prefixed_code_expression, env)?,
+            )),
             ConditionalExpression(c) => {
                 let alter = Self::p_expr(&c.conditional_alternative, env)?;
                 let consequence = Self::mp_optional(Self::p_expr, &c.conditional_consequence, env)?;
@@ -2402,12 +2390,12 @@ where
                     Self::check_lvalue(i, env);
                 }
             }
-            Array(_) | Darray(_) | Varray(_) | Shape(_) | Collection(_) | Record(_) | Null
-            | True | False | Id(_) | Clone(_) | ClassConst(_) | Int(_) | Float(_)
-            | PrefixedString(_) | String(_) | String2(_) | Yield(_) | YieldBreak | Await(_)
-            | Suspend(_) | ExprList(_) | Cast(_) | Unop(_) | Binop(_) | Eif(_) | New(_)
-            | Efun(_) | Lfun(_) | Xml(_) | Import(_) | Pipe(_) | Callconv(_) | Is(_) | As(_)
-            | ParenthesizedExpr(_) | PUIdentifier(_) => raise("Invalid lvalue"),
+            Darray(_) | Varray(_) | Shape(_) | Collection(_) | Record(_) | Null | True | False
+            | Id(_) | Clone(_) | ClassConst(_) | Int(_) | Float(_) | PrefixedString(_)
+            | String(_) | String2(_) | Yield(_) | YieldBreak | Await(_) | Suspend(_)
+            | ExprList(_) | Cast(_) | Unop(_) | Binop(_) | Eif(_) | New(_) | Efun(_) | Lfun(_)
+            | Xml(_) | Import(_) | Pipe(_) | Callconv(_) | Is(_) | As(_) | ParenthesizedExpr(_)
+            | PUIdentifier(_) => raise("Invalid lvalue"),
             _ => {}
         }
     }
@@ -3646,10 +3634,10 @@ where
     }
 
     fn mk_suspension_kind_(has_async: bool) -> SuspensionKind {
-        use SuspensionKind::*;
-        match has_async {
-            false => SKSync,
-            true => SKAsync,
+        if has_async {
+            SuspensionKind::SKAsync
+        } else {
+            SuspensionKind::SKSync
         }
     }
 
@@ -3754,7 +3742,6 @@ where
                 }
             }
             // Top-level Collections
-            ArrayIntrinsicExpression(c) => is_valid_list(&c.array_intrinsic_members),
             DarrayIntrinsicExpression(c) => is_valid_list(&c.darray_intrinsic_members),
             DictionaryIntrinsicExpression(c) => is_valid_list(&c.dictionary_intrinsic_members),
             KeysetIntrinsicExpression(c) => is_valid_list(&c.keyset_intrinsic_members),

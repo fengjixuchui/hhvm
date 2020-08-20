@@ -40,9 +40,9 @@ let a_contents3_diagnostics =
 File \"/a.php\", line 4, characters 5-12:
 Typing error (Typing[4110])
 File \"/a.php\", line 4, characters 10-12:
-Expected num because this is used in an arithmetic operation
+Expected `num` because this is used in an arithmetic operation
 File \"/a.php\", line 4, characters 10-12:
-But got string"
+But got `string`"
 
 let b_name = "b.php"
 
@@ -59,11 +59,11 @@ let final_global_diagnostics =
   "
 /b.php:
 File \"/b.php\", line 4, characters 12-14:
-No method 'foo' in B (did you mean 'bar'?) (Typing[4053])
+No method `foo` in `B` (did you mean `bar`?) (Typing[4053])
 File \"/b.php\", line 4, characters 5-9:
 This is why I think it is an object of type B
 File \"/b.php\", line 2, characters 7-7:
-Declaration of B is here
+Declaration of `B` is here
 "
 
 let autocomplete_contents =

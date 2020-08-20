@@ -231,8 +231,6 @@ val xhp_required_with_default : Pos.t -> string -> unit
 
 val array_typehints_disallowed : Pos.t -> unit
 
-val array_literals_disallowed : Pos.t -> unit
-
 val wildcard_disallowed : Pos.t -> unit
 
 val object_cast : Pos.t -> unit
@@ -286,6 +284,8 @@ val illegal_meth_caller : Pos.t -> unit
 val illegal_class_meth : Pos.t -> unit
 
 val class_meth_non_final_self : Pos.t -> string -> unit
+
+val class_meth_non_final_CLASS : Pos.t -> bool -> string -> unit
 
 val assert_arity : Pos.t -> unit
 
@@ -686,7 +686,7 @@ val no_construct_parent : Pos.t -> unit
 
 val constructor_required : Pos.t * string -> string list -> unit
 
-val not_initialized : Pos.t * string -> string list -> unit
+val not_initialized : Pos.t * string -> (string * string) list -> unit
 
 val call_before_init : Pos.t -> string -> unit
 
@@ -1407,3 +1407,11 @@ val unsupported_hk_feature :
   because_nested:bool -> Pos.t -> string -> string -> unit
 
 val tparam_non_shadowing_reuse : Pos.t -> string -> unit
+
+val illegal_information_flow :
+  Pos.t -> Pos.t list -> Pos.t list * string -> Pos.t list * string -> unit
+
+val context_implicit_policy_leakage :
+  Pos.t -> Pos.t list -> Pos.t list * string -> Pos.t list * string -> unit
+
+val reified_function_reference : Pos.t -> unit

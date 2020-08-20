@@ -690,7 +690,7 @@ SSATmp* opt_foldable(IRGS& env,
     // set to anything valid, so we need to do so here (for assertions and
     // backtraces in the invocation, among other things).
     auto const savedPC = vmpc();
-    vmpc() = vmfp() ? vmfp()->m_func->entry() : nullptr;
+    vmpc() = vmfp() ? vmfp()->func()->entry() : nullptr;
     SCOPE_EXIT{ vmpc() = savedPC; };
 
     assertx(!RID().getJitFolding());
@@ -808,8 +808,7 @@ SSATmp* opt_container_first_key(IRGS& env, const ParamPrep& params) {
     return cond(
       env,
       [&](Block* taken) {
-        auto const length = type <= TVec ?
-          gen(env, CountVec, value) : gen(env, CountArray, value);
+        auto const length = gen(env, CountVec, value);
         gen(env, JmpZero, taken, length);
       },
       [&] { return cns(env, 0); },
@@ -838,8 +837,7 @@ SSATmp* opt_container_last_key(IRGS& env, const ParamPrep& params) {
     return cond(
       env,
       [&](Block* taken) {
-        auto const length = type <= TVec ?
-          gen(env, CountVec, value) : gen(env, CountArray, value);
+        auto const length = gen(env, CountVec, value);
         gen(env, JmpZero, taken, length);
         return length;
       },
@@ -1065,14 +1063,13 @@ SSATmp* opt_enum_is_valid(IRGS& env, const ParamPrep& params) {
   auto const enum_values = getEnumValues(env, params);
   if (!enum_values) return nullptr;
   auto const ad = MixedArray::asMixed(enum_values->names.get());
-  auto const op = ad->isDictType() ? AKExistsDict : AKExistsArr;
   if (value->isA(TInt)) {
     if (ad->keyTypes().mustBeStrs()) return cns(env, false);
-    return gen(env, op, cns(env, ad->asArrayData()), value);
+    return gen(env, AKExistsDict, cns(env, ad->asArrayData()), value);
   } else if (value->isA(TStr)) {
     // We're not doing intish-casts here, so we bail if ad has any int keys.
     if (!ad->keyTypes().mustBeStrs()) return nullptr;
-    return gen(env, op, cns(env, ad->asArrayData()), value);
+    return gen(env, AKExistsDict, cns(env, ad->asArrayData()), value);
   }
   return cns(env, false);
 }
@@ -1142,6 +1139,17 @@ SSATmp* opt_array_mark_legacy(IRGS& env, const ParamPrep& params) {
     return gen(env, SetLegacyVec, value);
   } else if (value->isA(TDict)) {
     return gen(env, SetLegacyDict, value);
+  }
+  return nullptr;
+}
+
+SSATmp* opt_array_unmark_legacy(IRGS& env, const ParamPrep& params) {
+  if (params.size() != 1) return nullptr;
+  auto const value = params[0].value;
+  if (value->isA(TVec)) {
+    return gen(env, UnsetLegacyVec, value);
+  } else if (value->isA(TDict)) {
+    return gen(env, UnsetLegacyDict, value);
   }
   return nullptr;
 }
@@ -1223,6 +1231,7 @@ const hphp_fast_string_imap<OptEmitFn> s_opt_emit_fns{
   {"HH\\is_meth_caller", opt_is_meth_caller},
   {"HH\\tag_provenance_here", opt_tag_provenance_here},
   {"HH\\array_mark_legacy", opt_array_mark_legacy},
+  {"HH\\array_unmark_legacy", opt_array_unmark_legacy},
   {"HH\\meth_caller_get_class", opt_meth_caller_get_class},
   {"HH\\meth_caller_get_method", opt_meth_caller_get_method},
 };
@@ -2332,7 +2341,7 @@ void implVecIdx(IRGS& env, SSATmp* loaded_collection_vec) {
   auto const elem = cond(
     env,
     [&] (Block* taken) {
-      gen(env, CheckPackedArrayDataBounds, taken, use_base, key);
+      gen(env, CheckVecBounds, taken, use_base, key);
     },
     [&] { return gen(env, LdVecElem, use_base, key); },
     [&] { return def; }
@@ -2503,7 +2512,7 @@ void emitAKExists(IRGS& env) {
     gen(env, ThrowInvalidArrayKey, arr, key);
   };
 
-  if (arr->type().subtypeOfAny(TVArr, TVec)) {
+  if (arr->type().subtypeOfAny(TVec, TVArr)) {
     if (key->isA(TStr)) {
       push(env, cns(env, false));
       decRef(env, arr);
@@ -2514,7 +2523,7 @@ void emitAKExists(IRGS& env) {
       auto const result = cond(
         env,
         [&](Block* taken) {
-          gen(env, CheckPackedArrayDataBounds, taken, arr, key);
+          gen(env, CheckVecBounds, taken, arr, key);
         },
         [&] { return cns(env, true); },
         [&] { return cns(env, false); }
@@ -2526,16 +2535,12 @@ void emitAKExists(IRGS& env) {
     return throwBadKey();
   }
 
-  if (arr->isA(TDict) || arr->isA(TKeyset)) {
+  if (arr->isA(TDict) || arr->isA(TDArr) || arr->isA(TKeyset)) {
     if (!key->isA(TInt) && !key->isA(TStr)) {
       return throwBadKey();
     }
-    auto const val = gen(
-      env,
-      arr->isA(TDict) ? AKExistsDict : AKExistsKeyset,
-      arr,
-      key
-    );
+    auto const op = arr->isA(TKeyset) ? AKExistsKeyset : AKExistsDict;
+    auto const val = gen(env, op, arr, key);
     push(env, val);
     decRef(env, arr);
     decRef(env, key);

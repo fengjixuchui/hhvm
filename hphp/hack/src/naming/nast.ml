@@ -453,8 +453,6 @@ module Visitor_DEPRECATED = struct
 
       method on_as_expr : 'a -> (Pos.t, func_body_ann, unit, unit) as_expr -> 'a
 
-      method on_array : 'a -> afield list -> 'a
-
       method on_shape : 'a -> (Ast_defs.shape_field_name * expr) list -> 'a
 
       method on_valCollection : 'a -> vc_kind -> targ option -> expr list -> 'a
@@ -530,6 +528,8 @@ module Visitor_DEPRECATED = struct
       method on_expr_list : 'a -> expr list -> 'a
 
       method on_cast : 'a -> hint -> expr -> 'a
+
+      method on_expression_tree : 'a -> hint -> expr -> 'a
 
       method on_unop : 'a -> Ast_defs.uop -> expr -> 'a
 
@@ -773,7 +773,6 @@ module Visitor_DEPRECATED = struct
       method on_expr_ acc e =
         match e with
         | Any -> acc
-        | Array afl -> this#on_array acc afl
         | Darray (tap, fieldl) -> this#on_darray acc tap fieldl
         | Varray (ta, el) -> this#on_varray acc ta el
         | Shape sh -> this#on_shape acc sh
@@ -812,6 +811,7 @@ module Visitor_DEPRECATED = struct
         | PrefixedString (_, e) -> this#on_expr acc e
         | Pair (ta, e1, e2) -> this#on_pair acc ta e1 e2
         | Cast (hint, e) -> this#on_cast acc hint e
+        | ExpressionTree (hint, e) -> this#on_expression_tree acc hint e
         | Unop (uop, e) -> this#on_unop acc uop e
         | Binop (bop, e1, e2) -> this#on_binop acc bop e1 e2
         | Pipe (id, e1, e2) -> this#on_pipe acc id e1 e2
@@ -834,8 +834,6 @@ module Visitor_DEPRECATED = struct
         | ParenthesizedExpr e -> this#on_expr acc e
         | PU_atom sid -> this#on_pu_atom acc sid
         | PU_identifier (e, s1, s2) -> this#on_pu_identifier acc e s1 s2
-
-      method on_array acc afl = List.fold_left afl ~f:this#on_afield ~init:acc
 
       method on_collection acc tal afl =
         let acc =
@@ -993,6 +991,8 @@ module Visitor_DEPRECATED = struct
         acc
 
       method on_cast acc _ e = this#on_expr acc e
+
+      method on_expression_tree acc _ e = this#on_expr acc e
 
       method on_unop acc _ e = this#on_expr acc e
 

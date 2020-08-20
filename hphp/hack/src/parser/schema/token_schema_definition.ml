@@ -98,7 +98,6 @@ let given_text_tokens =
     make_token_node "Const" "const" ();
     make_token_node "Construct" "__construct" ();
     make_token_node "Continue" "continue" ();
-    make_token_node "Coroutine" "coroutine" ~allowed_as_identifier:true ();
     make_token_node "Darray" "darray" ~allowed_as_identifier:true ();
     make_token_node "Default" "default" ();
     make_token_node "Define" "define" ~allowed_as_identifier:true ();
@@ -257,6 +256,7 @@ let given_text_tokens =
     make_token_node "LessThanSlash" "</" ();
     make_token_node "LessThanQuestion" "<?" ();
     make_token_node "ColonAt" ":@" ();
+    make_token_node "Backtick" "`" ();
     make_token_node "XHP" "xhp" ~allowed_as_identifier:true ();
   ]
 

@@ -160,6 +160,12 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     { prefixed_string_name                               : t
     ; prefixed_string_str                                : t
     }
+  | PrefixedCodeExpression            of
+    { prefixed_code_prefix                               : t
+    ; prefixed_code_left_backtick                        : t
+    ; prefixed_code_expression                           : t
+    ; prefixed_code_right_backtick                       : t
+    }
   | VariableExpression                of
     { variable_expression                                : t
     }
@@ -775,12 +781,6 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; record_creation_members                            : t
     ; record_creation_right_bracket                      : t
     }
-  | ArrayIntrinsicExpression          of
-    { array_intrinsic_keyword                            : t
-    ; array_intrinsic_left_paren                         : t
-    ; array_intrinsic_members                            : t
-    ; array_intrinsic_right_paren                        : t
-    }
   | DarrayIntrinsicExpression         of
     { darray_intrinsic_keyword                           : t
     ; darray_intrinsic_explicit_type                     : t
@@ -1195,6 +1195,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   and expression =
   | ExprLiteral                      of literal_expression
   | ExprPrefixedString               of prefixed_string_expression
+  | ExprPrefixedCode                 of prefixed_code_expression
   | ExprVariable                     of variable_expression
   | ExprPipeVariable                 of pipe_variable_expression
   | ExprDecorated                    of decorated_expression
@@ -1226,7 +1227,6 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   | ExprCollectionLiteral            of collection_literal_expression
   | ExprObjectCreation               of object_creation_expression
   | ExprRecordCreation               of record_creation_expression
-  | ExprArrayIntrinsic               of array_intrinsic_expression
   | ExprDarrayIntrinsic              of darray_intrinsic_expression
   | ExprDictionaryIntrinsic          of dictionary_intrinsic_expression
   | ExprKeysetIntrinsic              of keyset_intrinsic_expression
@@ -1313,6 +1313,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   and lambda_body =
   | LambdaLiteral                      of literal_expression
   | LambdaPrefixedString               of prefixed_string_expression
+  | LambdaPrefixedCode                 of prefixed_code_expression
   | LambdaVariable                     of variable_expression
   | LambdaPipeVariable                 of pipe_variable_expression
   | LambdaDecorated                    of decorated_expression
@@ -1345,7 +1346,6 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   | LambdaCollectionLiteral            of collection_literal_expression
   | LambdaObjectCreation               of object_creation_expression
   | LambdaRecordCreation               of record_creation_expression
-  | LambdaArrayIntrinsic               of array_intrinsic_expression
   | LambdaDarrayIntrinsic              of darray_intrinsic_expression
   | LambdaDictionaryIntrinsic          of dictionary_intrinsic_expression
   | LambdaKeysetIntrinsic              of keyset_intrinsic_expression
@@ -1362,6 +1362,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   and constructor_expression =
   | CExprLiteral                      of literal_expression
   | CExprPrefixedString               of prefixed_string_expression
+  | CExprPrefixedCode                 of prefixed_code_expression
   | CExprVariable                     of variable_expression
   | CExprPipeVariable                 of pipe_variable_expression
   | CExprDecorated                    of decorated_expression
@@ -1393,7 +1394,6 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   | CExprCollectionLiteral            of collection_literal_expression
   | CExprObjectCreation               of object_creation_expression
   | CExprRecordCreation               of record_creation_expression
-  | CExprArrayIntrinsic               of array_intrinsic_expression
   | CExprDarrayIntrinsic              of darray_intrinsic_expression
   | CExprDictionaryIntrinsic          of dictionary_intrinsic_expression
   | CExprKeysetIntrinsic              of keyset_intrinsic_expression
@@ -1446,6 +1446,12 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   and prefixed_string_expression =
     { prefixed_string_name: Token.t value
     ; prefixed_string_str: Token.t value
+    }
+  and prefixed_code_expression =
+    { prefixed_code_prefix: Token.t value
+    ; prefixed_code_left_backtick: Token.t value
+    ; prefixed_code_expression: expression value
+    ; prefixed_code_right_backtick: Token.t value
     }
   and variable_expression =
     { variable_expression: Token.t value
@@ -2061,12 +2067,6 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; record_creation_left_bracket: Token.t value
     ; record_creation_members: element_initializer listesque value
     ; record_creation_right_bracket: Token.t value
-    }
-  and array_intrinsic_expression =
-    { array_intrinsic_keyword: Token.t value
-    ; array_intrinsic_left_paren: Token.t value
-    ; array_intrinsic_members: constructor_expression listesque value
-    ; array_intrinsic_right_paren: Token.t value
     }
   and darray_intrinsic_expression =
     { darray_intrinsic_keyword: Token.t value

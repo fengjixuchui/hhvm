@@ -32,9 +32,9 @@ let option pp fmt opt =
   | None -> fprintf fmt "None"
 
 let show_policy = function
-  | Pbot -> "PUBLIC"
-  | Ptop -> "PRIVATE"
-  | Ppurpose p -> p
+  | Pbot _ -> "PUBLIC"
+  | Ptop _ -> "PRIVATE"
+  | Ppurpose (_, p) -> p
   | Pfree_var (v, _s) -> v
   | Pbound_var n -> Printf.sprintf "<bound%d>" n
 
@@ -71,10 +71,11 @@ and lazy_ptype fmt ty =
   else
     fprintf fmt "?thunk"
 
+(* Format: <pc, self>(arg1, arg2, ...): ret [exn] *)
 and fun_ fmt fn =
-  fprintf fmt "<%a, %a>" policy fn.f_pc ptype fn.f_exn;
+  fprintf fmt "<%a, %a>" policy fn.f_pc policy fn.f_self;
   fprintf fmt "(@[<hov>%a@])" (list comma_sep ptype) fn.f_args;
-  fprintf fmt ":@ %a" ptype fn.f_ret
+  fprintf fmt ":@ %a [%a]" ptype fn.f_ret ptype fn.f_exn
 
 let fun_proto fmt fp =
   Option.iter ~f:(fprintf fmt "(this: %a)->" ptype) fp.fp_this;
@@ -82,11 +83,11 @@ let fun_proto fmt fp =
 
 let prop =
   let rec conjuncts = function
-    | Cconj (Cflow (a, b), Cflow (c, d))
+    | Cconj (Cflow (_, a, b), Cflow (_, c, d))
       when equal_policy a d && equal_policy b c ->
       [`q (a, b)]
-    | Cflow (a, (Pbot as b))
-    | Cflow ((Ptop as b), a) ->
+    | Cflow (_, a, (Pbot _ as b))
+    | Cflow (_, (Ptop _ as b), a) ->
       [`q (a, b)]
     | Cconj (cl, cr) -> conjuncts cl @ conjuncts cr
     | Ctrue -> []
@@ -109,7 +110,7 @@ let prop =
     function
     | [] -> fprintf fmt "True"
     | [`q (p1, p2)] -> fprintf fmt "%a = %a" pol p1 pol p2
-    | [`c (Cflow (p1, p2))] -> fprintf fmt "%a < %a" pol p1 pol p2
+    | [`c (Cflow (_, p1, p2))] -> fprintf fmt "%a < %a" pol p1 pol p2
     | [`c (Cquant (q, n, c))] ->
       fprintf
         fmt
@@ -125,12 +126,12 @@ let prop =
               ~init:(b + 1, [])))
         (aux (b + n))
         (conjuncts c)
-    | [`c (Ccond ((p, x), ct, ce))] ->
+    | [`c (Ccond ((_, p, x), ct, ce))] ->
       fprintf fmt "@[<hov>if %a < %s@" pol p x;
       let cct = conjuncts ct in
       let cce = conjuncts ce in
       fprintf fmt "then %a@ else %a@]" (aux b) cct (aux b) cce
-    | [`c (Chole fp)] -> fprintf fmt "@[<h>{%a}@]" fun_proto fp
+    | [`c (Chole (_, fp))] -> fprintf fmt "@[<h>{%a}@]" fun_proto fp
     | l ->
       let pp = list comma_sep (fun fmt c -> aux b fmt [c]) in
       fprintf fmt "[@[<hov>%a@]]" pp l
@@ -201,9 +202,6 @@ let decl_env fmt de =
   SMap.iter handle_class de.de_class;
   SMap.iter handle_fun de.de_fun;
   fprintf fmt "@]"
-
-let violation fmt (l, r) =
-  fprintf fmt "Data with policy %a appears in context %a." policy l policy r
 
 let implicit_violation fmt (l, r) =
   fprintf

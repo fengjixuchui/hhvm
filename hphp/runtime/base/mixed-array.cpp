@@ -60,6 +60,7 @@ static_assert(MixedArray::computeAllocBytes(MixedArray::SmallScale) ==
 
 std::aligned_storage<kEmptyMixedArraySize, 16>::type s_theEmptyDictArray;
 std::aligned_storage<kEmptyMixedArraySize, 16>::type s_theEmptyDArray;
+std::aligned_storage<kEmptyMixedArraySize, 16>::type s_theEmptyMarkedDictArray;
 
 struct MixedArray::Initializer {
   Initializer() {
@@ -87,6 +88,18 @@ struct MixedArray::DArrayInitializer {
 };
 MixedArray::DArrayInitializer MixedArray::s_darr_initializer;
 
+struct MixedArray::MarkedDictArrayInitializer {
+  MarkedDictArrayInitializer() {
+    auto const ad = reinterpret_cast<MixedArray*>(&s_theEmptyMarkedDictArray);
+    ad->initHash(1);
+    ad->m_sizeAndPos = 0;
+    ad->m_scale_used = 1;
+    ad->m_nextKI = 0;
+    ad->initHeader_16(HeaderKind::Dict, StaticValue, ArrayData::kLegacyArray);
+    assertx(ad->checkInvariants());
+  }
+};
+MixedArray::MarkedDictArrayInitializer MixedArray::s_marked_dict_initializer;
 //////////////////////////////////////////////////////////////////////
 
 ALWAYS_INLINE
@@ -563,7 +576,7 @@ ArrayData* MixedArray::MakeUncounted(ArrayData* array,
   return tagArrProv(ad, array);
 }
 
-ArrayData* MixedArray::MakeDictFromAPC(const APCArray* apc) {
+ArrayData* MixedArray::MakeDictFromAPC(const APCArray* apc, bool isLegacy) {
   assertx(apc->isHashed());
   auto const apcSize = apc->size();
   DictInit init{apcSize};
@@ -571,6 +584,7 @@ ArrayData* MixedArray::MakeDictFromAPC(const APCArray* apc) {
     init.setValidKey(apc->getKey(i), apc->getValue(i)->toLocal());
   }
   auto const ad = init.create();
+  ad->setLegacyArray(isLegacy);
   return tagArrProv(ad, apc);
 }
 
@@ -1041,8 +1055,7 @@ ArrayData* MixedArray::update(K k, TypedValue data) {
 arr_lval MixedArray::LvalInt(ArrayData* adIn, int64_t key) {
   auto const pos = asMixed(adIn)->find(key, hash_int64(key));
   if (!validPos(pos)) {
-    adIn->isDictType() ? throwOOBArrayKeyException(key, adIn)
-                       : throwMissingElementException("Lval");
+    throwOOBArrayKeyException(key, adIn);
   }
   auto const ad = adIn->cowCheck() ? Copy(adIn) : adIn;
   auto const& elm = asMixed(ad)->data()[pos];
@@ -1053,8 +1066,7 @@ arr_lval MixedArray::LvalInt(ArrayData* adIn, int64_t key) {
 arr_lval MixedArray::LvalStr(ArrayData* adIn, StringData* key) {
   auto const pos = asMixed(adIn)->find(key, key->hash());
   if (!validPos(pos)) {
-    adIn->isDictType() ? throwOOBArrayKeyException(key, adIn)
-                       : throwMissingElementException("Lval");
+    throwOOBArrayKeyException(key, adIn);
   }
   auto const ad = adIn->cowCheck() ? Copy(adIn) : adIn;
   auto const& elm = asMixed(ad)->data()[pos];

@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<be5ecf9f03808f2fc90d5347f54889fe>>
+// @generated SignedSource<<01ebe94fd7b9ebaa509f5696c312a1f6>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
@@ -908,9 +908,6 @@ impl<Ex, Fb, En, Hi> FunctionPtrId<Ex, Fb, En, Hi> {
     }
 }
 impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
-    pub fn mk_array(p0: Vec<Afield<Ex, Fb, En, Hi>>) -> Self {
-        Expr_::Array(p0)
-    }
     pub fn mk_darray(
         p0: Option<(Targ<Hi>, Targ<Hi>)>,
         p1: Vec<(Expr<Ex, Fb, En, Hi>, Expr<Ex, Fb, En, Hi>)>,
@@ -1094,6 +1091,9 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
     pub fn mk_parenthesized_expr(p0: Expr<Ex, Fb, En, Hi>) -> Self {
         Expr_::ParenthesizedExpr(Box::new(p0))
     }
+    pub fn mk_expression_tree(p0: Hint, p1: Expr<Ex, Fb, En, Hi>) -> Self {
+        Expr_::ExpressionTree(Box::new((p0, p1)))
+    }
     pub fn mk_lplaceholder(p0: Pos) -> Self {
         Expr_::Lplaceholder(Box::new(p0))
     }
@@ -1127,12 +1127,6 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
     }
     pub fn mk_any() -> Self {
         Expr_::Any
-    }
-    pub fn is_array(&self) -> bool {
-        match self {
-            Expr_::Array(..) => true,
-            _ => false,
-        }
     }
     pub fn is_darray(&self) -> bool {
         match self {
@@ -1422,6 +1416,12 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
             _ => false,
         }
     }
+    pub fn is_expression_tree(&self) -> bool {
+        match self {
+            Expr_::ExpressionTree(..) => true,
+            _ => false,
+        }
+    }
     pub fn is_lplaceholder(&self) -> bool {
         match self {
             Expr_::Lplaceholder(..) => true,
@@ -1480,12 +1480,6 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
         match self {
             Expr_::Any => true,
             _ => false,
-        }
-    }
-    pub fn as_array(&self) -> Option<&Vec<Afield<Ex, Fb, En, Hi>>> {
-        match self {
-            Expr_::Array(p0) => Some(p0),
-            _ => None,
         }
     }
     pub fn as_darray(
@@ -1793,6 +1787,12 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
             _ => None,
         }
     }
+    pub fn as_expression_tree(&self) -> Option<(&Hint, &Expr<Ex, Fb, En, Hi>)> {
+        match self {
+            Expr_::ExpressionTree(p0) => Some((&p0.0, &p0.1)),
+            _ => None,
+        }
+    }
     pub fn as_lplaceholder(&self) -> Option<&Pos> {
         match self {
             Expr_::Lplaceholder(p0) => Some(&p0),
@@ -1850,12 +1850,6 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
     pub fn as_puidentifier(&self) -> Option<(&ClassId<Ex, Fb, En, Hi>, &Pstring, &Pstring)> {
         match self {
             Expr_::PUIdentifier(p0) => Some((&p0.0, &p0.1, &p0.2)),
-            _ => None,
-        }
-    }
-    pub fn as_array_mut(&mut self) -> Option<&mut Vec<Afield<Ex, Fb, En, Hi>>> {
-        match self {
-            Expr_::Array(p0) => Some(p0),
             _ => None,
         }
     }
@@ -2200,6 +2194,12 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
             _ => None,
         }
     }
+    pub fn as_expression_tree_mut(&mut self) -> Option<(&mut Hint, &mut Expr<Ex, Fb, En, Hi>)> {
+        match self {
+            Expr_::ExpressionTree(p0) => Some((&mut p0.0, &mut p0.1)),
+            _ => None,
+        }
+    }
     pub fn as_lplaceholder_mut(&mut self) -> Option<&mut Pos> {
         match self {
             Expr_::Lplaceholder(p0) => Some(p0.as_mut()),
@@ -2259,12 +2259,6 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
     ) -> Option<(&mut ClassId<Ex, Fb, En, Hi>, &mut Pstring, &mut Pstring)> {
         match self {
             Expr_::PUIdentifier(p0) => Some((&mut p0.0, &mut p0.1, &mut p0.2)),
-            _ => None,
-        }
-    }
-    pub fn as_array_into(self) -> Option<Vec<Afield<Ex, Fb, En, Hi>>> {
-        match self {
-            Expr_::Array(p0) => Some(p0),
             _ => None,
         }
     }
@@ -2570,6 +2564,12 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
     pub fn as_parenthesized_expr_into(self) -> Option<Expr<Ex, Fb, En, Hi>> {
         match self {
             Expr_::ParenthesizedExpr(p0) => Some(*p0),
+            _ => None,
+        }
+    }
+    pub fn as_expression_tree_into(self) -> Option<(Hint, Expr<Ex, Fb, En, Hi>)> {
+        match self {
+            Expr_::ExpressionTree(p0) => Some(((*p0).0, (*p0).1)),
             _ => None,
         }
     }

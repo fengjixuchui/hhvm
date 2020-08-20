@@ -135,7 +135,7 @@ XhpOptionalRequiredAttr = 2079
 XhpRequiredWithDefault = 2080
 VariableVariablesDisallowedDEPRECATED = 2081
 ArrayTypehintsDisallowed = 2082
-ArrayLiteralsDisallowed = 2083
+ArrayLiteralsDisallowedDEPRECATED = 2083
 WildcardDisallowed = 2084
 AttributeClassNameConflict = 2085
 MethodNeedsVisibility = 2086
@@ -166,6 +166,7 @@ PocketUniversesLocalization = 2110
 ClassMethNonFinalSelf = 2111
 ParentInFunctionPointer = 2112
 SelfInNonFinalFunctionPointer = 2113
+ClassMethNonFinalCLASS = 2114
 
 NastCheck Errors:
 AbstractBody = 3001
@@ -635,4 +636,7 @@ MethCallerTrait = 4375
 PocketUniversesAttributes = 4376
 DuplicateInterface = 4377
 TypeParameterNameAlreadyUsedNonShadow = 4378
+IllegalInformationFlow = 4379
+ContextImplicitPolicyLeakage = 4380
+ReifiedFunctionReference = 4381
   |}]

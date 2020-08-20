@@ -1029,6 +1029,8 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   X("?ClsMeth", T::OptClsMeth);
   X("Record",   T::Record);
   X("?Record",  T::OptRecord);
+  X("LazyCls",     T::LazyCls);
+  X("?LazyCls",    T::OptLazyCls);
   X("?Res",     T::OptRes);
   X("Res",      T::Res);
   X("?SArr",    T::OptSArr);
@@ -1123,6 +1125,8 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   case T::OptClsMeth:
   case T::Record:
   case T::OptRecord:
+  case T::LazyCls:
+  case T::OptLazyCls:
   case T::InitUnc:
   case T::Unc:
   case T::OptUncArrKey:
@@ -1314,28 +1318,17 @@ IterArgs read_iter_args(AsmState& as) {
   return IterArgs(IterArgs::Flags::None, iterId, keyId, valId);
 }
 
-std::tuple<FCallArgs::Flags, bool, bool>
-read_fcall_flags(AsmState& as, Op thisOpcode) {
+FCallArgs::Flags read_fcall_flags(AsmState& as, Op thisOpcode) {
   uint8_t flags = 0;
-  bool lockWhileUnwinding = false;
-  bool skipNumArgsCheck = false;
 
   as.in.skipSpaceTab();
   as.in.expect('<');
 
   std::string flag;
   while (as.in.readword(flag)) {
-    if (flag == "SupportsAER") {
-      if (thisOpcode == Op::FCallCtor) {
-        as.error("FCall flag SupportsAER is not valid for FCallCtor");
-      } else {
-        flags |= FCallArgs::SupportsAsyncEagerReturn;
-        continue;
-      }
-    }
     if (flag == "LockWhileUnwinding") {
       if (thisOpcode == Op::FCallCtor) {
-        lockWhileUnwinding = true;
+        flags |= FCallArgs::LockWhileUnwinding;
         continue;
       } else {
         as.error("FCall flag LockWhileUnwinding is only valid for FCallCtor");
@@ -1343,14 +1336,13 @@ read_fcall_flags(AsmState& as, Op thisOpcode) {
     }
     if (flag == "Unpack") { flags |= FCallArgs::HasUnpack; continue; }
     if (flag == "Generics") { flags |= FCallArgs::HasGenerics; continue; }
-    if (flag == "SkipNumArgsCheck") { skipNumArgsCheck = true; continue; }
+    if (flag == "SkipRepack") { flags |= FCallArgs::SkipRepack; continue; }
 
     as.error("unrecognized FCall flag `" + flag + "'");
   }
   as.in.expectWs('>');
 
-  return std::make_tuple(static_cast<FCallArgs::Flags>(flags),
-                         lockWhileUnwinding, skipNumArgsCheck);
+  return static_cast<FCallArgs::Flags>(flags);
 }
 
 // Read a vector of booleans formatted as a quoted string of '0' and '1'.
@@ -1388,19 +1380,14 @@ const StringData* read_fca_context(AsmState& as) {
 std::tuple<FCallArgsBase, std::unique_ptr<uint8_t[]>, std::string,
            const StringData*>
 read_fcall_args(AsmState& as, Op thisOpcode) {
-  FCallArgs::Flags flags;
-  bool lockWhileUnwinding;
-  bool skipNumArgsCheck;
-  std::tie(flags, lockWhileUnwinding, skipNumArgsCheck)
-    = read_fcall_flags(as, thisOpcode);
+  auto const flags = read_fcall_flags(as, thisOpcode);
   auto const numArgs = read_opcode_arg<uint32_t>(as);
   auto const numRets = read_opcode_arg<uint32_t>(as);
   auto inoutArgs = read_inouts(as, numArgs);
   auto asyncEagerLabel = read_opcode_arg<std::string>(as);
   auto const ctx = read_fca_context(as);
   return std::make_tuple(
-    FCallArgsBase(flags, numArgs, numRets,
-                  lockWhileUnwinding, skipNumArgsCheck),
+    FCallArgsBase(flags, numArgs, numRets),
     std::move(inoutArgs),
     std::move(asyncEagerLabel),
     ctx
@@ -1543,8 +1530,7 @@ std::map<std::string,ParserFunc> opcode_parsers;
 
 #define O(name, imm, pop, push, flags)                                 \
   void parse_opcode_##name(AsmState& as) {                             \
-    UNUSED auto immFCA = FCallArgsBase(FCallArgsBase::None, -1, -1,    \
-                                       false, false);                  \
+    UNUSED auto immFCA = FCallArgsBase(FCallArgsBase::None, -1, -1);   \
     UNUSED uint32_t immIVA[kMaxHhbcImms];                              \
     UNUSED auto const thisOpcode = Op::name;                           \
     UNUSED const Offset curOpcodeOff = as.ue->bcPos();                 \

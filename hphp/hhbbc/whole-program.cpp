@@ -28,7 +28,6 @@
 
 #include "hphp/hhbbc/analyze.h"
 #include "hphp/hhbbc/class-util.h"
-#include "hphp/hhbbc/compression.h"
 #include "hphp/hhbbc/debug.h"
 #include "hphp/hhbbc/emit.h"
 #include "hphp/hhbbc/func-util.h"
@@ -40,6 +39,7 @@
 #include "hphp/hhbbc/representation.h"
 #include "hphp/hhbbc/stats.h"
 #include "hphp/hhbbc/type-system.h"
+#include "hphp/hhbbc/wide-func.h"
 
 namespace HPHP { namespace HHBBC {
 
@@ -294,11 +294,12 @@ void analyze_iteratively(Index& index, php::Program& program,
         // DefaultConstructible.
         [&] (const WorkItem& wi) -> folly::Optional<WorkResult> {
           switch (wi.type) {
-          case WorkType::Func:
+          case WorkType::Func: {
             ++total_funcs;
-            return WorkResult {
-              analyze_func(index, wi.ctx, CollectionOpts{})
-            };
+            auto const wf = php::WideFunc::cns(wi.ctx.func);
+            auto const ctx = AnalysisContext { wi.ctx.unit, wf, wi.ctx.cls };
+            return WorkResult { analyze_func(index, ctx, CollectionOpts{}) };
+          }
           case WorkType::Class:
             ++total_classes;
             return WorkResult { analyze_class(index, wi.ctx) };
@@ -318,21 +319,21 @@ void analyze_iteratively(Index& index, php::Program& program,
       SCOPE_ASSERT_DETAIL("update_func") {
         return "Updating Func: " + show(fa.ctx);
       };
+      // This const_cast is safe since no two threads update the same Func.
+      auto func = php::WideFunc::mut(const_cast<php::Func*>(fa.ctx.func));
       index.refine_return_info(fa, deps);
       index.refine_constants(fa, deps);
-      update_bytecode(fa.ctx.func, std::move(fa.blockUpdates));
+      update_bytecode(func, std::move(fa.blockUpdates));
 
       if (options.AnalyzePublicStatics && mode == AnalyzeMode::NormalPass) {
         index.record_public_static_mutations(
-          *fa.ctx.func,
+          *func,
           std::move(fa.publicSPropMutations)
         );
       }
 
       if (fa.resolvedConstants.size()) {
-        index.refine_class_constants(fa.ctx,
-                                     fa.resolvedConstants,
-                                     deps);
+        index.refine_class_constants(fa.ctx, fa.resolvedConstants, deps);
       }
       for (auto& kv : fa.closureUseTypes) {
         assert(is_closure(*kv.first));
@@ -455,8 +456,11 @@ void final_pass(Index& index,
           contexts.push_back(std::move(ctx));
         }
       );
-      for (auto const& ctx : contexts) {
-        optimize_func(index, analyze_func(index, ctx, CollectionOpts{}));
+      for (auto const& context : contexts) {
+        // This const_cast is safe since no two threads update the same Func.
+        auto func = php::WideFunc::mut(const_cast<php::Func*>(context.func));
+        auto const ctx = AnalysisContext { context.unit, func, context.cls };
+        optimize_func(index, analyze_func(index, ctx, CollectionOpts{}), func);
       }
       assert(check(*unit));
       state_after("optimize", *unit);
@@ -536,7 +540,7 @@ void whole_program(php::ProgramPtr program,
   trace_time tracer("whole program");
 
   if (options.TestCompression || RO::EvalHHBBCTestCompression) {
-    compression::testCompression(*program);
+    php::testCompression(*program);
   }
 
   if (num_threads > 0) {
@@ -547,10 +551,6 @@ void whole_program(php::ProgramPtr program,
 
   Index index(program.get());
   auto stats = allocate_stats();
-  auto freeFuncMem = [&] (php::Func* fun) {
-    auto mf = php::MutFunc(fun);
-    mf.blocks_mut().clear();
-  };
   auto emitUnit = [&] (php::Unit& unit) {
     auto ue = emit_unit(index, unit);
     if (RuntimeOption::EvalAbortBuildOnVerifyError && !ue->check(false)) {
@@ -563,14 +563,6 @@ void whole_program(php::ProgramPtr program,
       _Exit(1);
     }
     ueq.push(std::move(ue));
-    for (auto& c : unit.classes) {
-      for (auto& m : c->methods) {
-        freeFuncMem(m.get());
-      }
-    }
-    for (auto& f : unit.funcs) {
-      freeFuncMem(f.get());
-    }
   };
 
   std::thread cleanup_pre;
@@ -620,6 +612,8 @@ void whole_program(php::ProgramPtr program,
   ueq.push(nullptr);
   cleanup_pre.join();
   cleanup_post.join();
+
+  summarize_memory();
 }
 
 //////////////////////////////////////////////////////////////////////

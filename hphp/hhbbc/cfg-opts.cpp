@@ -25,6 +25,7 @@
 #include "hphp/hhbbc/func-util.h"
 #include "hphp/hhbbc/options.h"
 #include "hphp/hhbbc/unit-util.h"
+#include "hphp/hhbbc/wide-func.h"
 
 namespace HPHP { namespace HHBBC {
 
@@ -36,16 +37,15 @@ static bool is_dead(const php::Block* blk) {
   return blk->dead;
 }
 
-void remove_unreachable_blocks(const FuncAnalysis& ainfo) {
+void remove_unreachable_blocks(const FuncAnalysis& ainfo, php::WideFunc& func) {
   auto done_header = false;
   auto header = [&] {
     if (done_header) return;
     done_header = true;
-    FTRACE(2, "Remove unreachable blocks: {}\n", ainfo.ctx.func->name);
+    FTRACE(2, "Remove unreachable blocks: {}\n", func->name);
   };
 
-  auto const func = ainfo.ctx.func;
-  auto& blocks = ainfo.ctx.func.blocks();
+  auto& blocks = func.blocks();
 
   auto make_unreachable = [&](BlockId bid) {
     auto const blk = blocks[bid].get();
@@ -57,11 +57,11 @@ void remove_unreachable_blocks(const FuncAnalysis& ainfo) {
            blk->hhbcs.back().op != Op::Fatal;
   };
 
-  for (auto bid : ainfo.ctx.func.blockRange()) {
+  for (auto bid : func.blockRange()) {
     if (!make_unreachable(bid)) continue;
     header();
     FTRACE(2, "Marking {} unreachable\n", bid);
-    auto const blk = func.blocks_mut()[bid].mutate();
+    auto const blk = func.blocks()[bid].mutate();
     auto const srcLoc = blk->hhbcs.front().srcLoc;
     blk->hhbcs = {
       bc_with_loc(srcLoc, bc::String { s_unreachable.get() }),
@@ -100,7 +100,7 @@ void remove_unreachable_blocks(const FuncAnalysis& ainfo) {
       case Op::JmpNZ:
       case Op::JmpZ: {
         FTRACE(2, "blk: {} - jcc -> jmp {}\n", bid, reachableTarget);
-        auto const blk = func.blocks_mut()[bid].mutate();
+        auto const blk = func.blocks()[bid].mutate();
         blk->hhbcs.back() = bc_with_loc(blk->hhbcs.back().srcLoc, bc::PopC {});
         blk->fallthrough = reachableTarget;
         break;
@@ -108,7 +108,7 @@ void remove_unreachable_blocks(const FuncAnalysis& ainfo) {
       case Op::Switch:
       case Op::SSwitch: {
         FTRACE(2, "blk: {} -", bid);
-        auto const blk = func.blocks_mut()[bid].mutate();
+        auto const blk = func.blocks()[bid].mutate();
         forEachNormalSuccessor(
           *blk,
           [&] (BlockId& id) {
@@ -155,8 +155,7 @@ struct SwitchInfo {
   DataType kind;
 };
 
-bool analyzeSwitch(php::ConstFunc func,
-                   BlockId bid,
+bool analyzeSwitch(const php::WideFunc& func, BlockId bid,
                    std::vector<MergeBlockInfo>& blkInfos,
                    SwitchInfo* switchInfo) {
   auto const& blk = *func.blocks()[bid];
@@ -307,8 +306,7 @@ Bytecode buildStringSwitch(SwitchInfo& switchInfo) {
   return { bc::SSwitch { std::move(sswitchTab) } };
 }
 
-bool buildSwitches(php::MutFunc func,
-                   BlockId bid,
+bool buildSwitches(php::WideFunc& func, BlockId bid,
                    std::vector<MergeBlockInfo>& blkInfos) {
   SwitchInfo switchInfo;
   std::vector<BlockId> blocks;
@@ -330,7 +328,7 @@ bool buildSwitches(php::MutFunc func,
       auto bc = switchInfo.kind == KindOfInt64 ?
         buildIntSwitch(switchInfo) : buildStringSwitch(switchInfo);
       if (bc.op != Op::Nop) {
-        auto const blk = func.blocks_mut()[bid].mutate();
+        auto const blk = func.blocks()[bid].mutate();
         auto it = blk->hhbcs.end();
         // blk->fallthrough implies it was a JmpZ JmpNZ block,
         // which means we have exactly 4 instructions making up
@@ -350,7 +348,7 @@ bool buildSwitches(php::MutFunc func,
         blk->fallthrough = NoBlockId;
         for (auto id : blocks) {
           if (blkInfos[id].multiplePreds) continue;
-          auto const removed = func.blocks_mut()[id].mutate();
+          auto const removed = func.blocks()[id].mutate();
           removed->dead = true;
           removed->hhbcs = { bc::Nop {} };
           removed->fallthrough = NoBlockId;
@@ -369,8 +367,7 @@ bool buildSwitches(php::MutFunc func,
 
 }
 
-bool control_flow_opts(const FuncAnalysis& ainfo) {
-  auto const func = ainfo.ctx.func;
+bool control_flow_opts(const FuncAnalysis& ainfo, php::WideFunc& func) {
   FTRACE(2, "control_flow_opts: {}\n", func->name);
 
   std::vector<MergeBlockInfo> blockInfo(
@@ -425,7 +422,7 @@ bool control_flow_opts(const FuncAnalysis& ainfo) {
   }
   for (auto bid : func.blockRange()) {
     if (blockInfo[bid].followSucc) {
-      auto const blk = func.blocks_mut()[bid].mutate();
+      auto const blk = func.blocks()[bid].mutate();
       forEachNormalSuccessor(
         *blk,
         [&] (BlockId& succId) {
@@ -460,12 +457,12 @@ bool control_flow_opts(const FuncAnalysis& ainfo) {
       bInfo.couldBeSwitch = nInfo.couldBeSwitch;
       bInfo.onlySwitch = false;
 
-      auto const blk = func.blocks_mut()[bid].mutate();
+      auto const blk = func.blocks()[bid].mutate();
       blk->fallthrough = cnxt->fallthrough;
       blk->fallthroughNS = cnxt->fallthroughNS;
       std::copy(cnxt->hhbcs.begin(), cnxt->hhbcs.end(),
                 std::back_inserter(blk->hhbcs));
-      auto const nxt = func.blocks_mut()[nid].mutate();
+      auto const nxt = func.blocks()[nid].mutate();
       nxt->fallthrough = NoBlockId;
       nxt->dead = true;
       nxt->hhbcs = { bc::Nop {} };
@@ -485,10 +482,10 @@ bool control_flow_opts(const FuncAnalysis& ainfo) {
   return anyChanges;
 }
 
-void split_critical_edges(const Index& index, FuncAnalysis& ainfo) {
+void split_critical_edges(const Index& index, FuncAnalysis& ainfo,
+                          php::WideFunc& func) {
   // Changed tracks if we need to recompute RPO.
   auto changed = false;
-  auto const func = ainfo.ctx.func;
   assertx(func.blocks().size() == ainfo.bdata.size());
 
   // Makes an empty block and inserts it between src and dst.  Since we can't
@@ -502,7 +499,7 @@ void split_critical_edges(const Index& index, FuncAnalysis& ainfo) {
                               BlockId dstBid) {
     auto const srcLoc = srcBlk->hhbcs.back().srcLoc;
     auto const newBid = make_block(func, srcBlk);
-    auto const newBlk = func.blocks_mut()[newBid].mutate();
+    auto const newBlk = func.blocks()[newBid].mutate();
     newBlk->hhbcs = { bc_with_loc(srcLoc, bc::Nop{}) };
     newBlk->fallthrough = dstBid;
 
@@ -519,9 +516,10 @@ void split_critical_edges(const Index& index, FuncAnalysis& ainfo) {
       index, ainfo.ctx, nullptr,
       CollectionOpts{}, &ainfo
     };
+    auto const ctx = AnalysisContext { ainfo.ctx.unit, func, ainfo.ctx.cls };
     ainfo.bdata.push_back({
       0, // We renumber the blocks at the end of the function.
-      locally_propagated_bid_state(index, ainfo, collect, srcBid,
+      locally_propagated_bid_state(index, ctx, collect, srcBid,
                                    ainfo.bdata[srcBid].stateIn,
                                    newBid)
     });
@@ -562,7 +560,7 @@ void split_critical_edges(const Index& index, FuncAnalysis& ainfo) {
     forEachNormalSuccessor(*blk, [&] (BlockId succBid) {
       if (hasMultiplePreds[succBid] && !seenSuccs[succBid]) {
         seenSuccs[succBid] = true;
-        split_edge(bid, func.blocks_mut()[bid].mutate(), succBid);
+        split_edge(bid, func.blocks()[bid].mutate(), succBid);
       }
     });
   }

@@ -255,7 +255,7 @@ prepare_incompleteQ(const Index& index,
  * Note that in the interpreter code, ctx.func->cls is not
  * necessarily the same as ctx.cls because of closures.
  */
-Context adjust_closure_context(Context ctx) {
+AnalysisContext adjust_closure_context(AnalysisContext ctx) {
   if (ctx.cls && ctx.cls->closureContextCls) {
     ctx.cls = ctx.cls->closureContextCls;
   }
@@ -263,16 +263,11 @@ Context adjust_closure_context(Context ctx) {
 }
 
 FuncAnalysis do_analyze_collect(const Index& index,
-                                const Context& base_ctx,
+                                const AnalysisContext& ctx,
                                 CollectedInfo& collect,
                                 const KnownArgs* knownArgs) {
-  assertx(base_ctx.cls == adjust_closure_context(base_ctx).cls);
-  auto const ctx = AnalysisContext {
-    base_ctx.unit,
-    php::MutFunc(const_cast<php::Func*>(base_ctx.func)),
-    base_ctx.cls
-  };
-  FuncAnalysis ai{ctx};
+  assertx(ctx.cls == adjust_closure_context(ctx).cls);
+  auto ai = FuncAnalysis { ctx };
 
   SCOPE_ASSERT_DETAIL("do-analyze-collect-2") {
     std::string ret;
@@ -382,9 +377,7 @@ FuncAnalysis do_analyze_collect(const Index& index,
 
       auto const blk = ctx.func.blocks()[bid].get();
       auto stateOut = ai.bdata[bid].stateIn;
-      auto interp   = Interp {
-        index, ctx, collect, bid, blk, stateOut
-      };
+      auto interp   = Interp { index, ctx, collect, bid, blk, stateOut };
       auto flags    = run(interp, ai.bdata[bid].stateIn, propagate);
       if (any(collect.opts & CollectionOpts::EffectFreeOnly) &&
           !collect.effectFree) {
@@ -468,14 +461,12 @@ FuncAnalysis do_analyze_collect(const Index& index,
 }
 
 FuncAnalysis do_analyze(const Index& index,
-                        const Context& inputCtx,
+                        const AnalysisContext& inputCtx,
                         ClassAnalysis* clsAnalysis,
-                        const KnownArgs* knownArgs,
-                        CollectionOpts opts) {
+                        const KnownArgs* knownArgs = nullptr,
+                        CollectionOpts opts = CollectionOpts{}) {
   auto const ctx = adjust_closure_context(inputCtx);
-  CollectedInfo collect {
-    index, ctx, clsAnalysis, opts
-  };
+  auto collect = CollectedInfo { index, ctx, clsAnalysis, opts };
 
   auto ret = do_analyze_collect(index, ctx, collect, knownArgs);
   if (ctx.func->name == s_86cinit.get() && !knownArgs) {
@@ -570,24 +561,18 @@ FuncAnalysis::FuncAnalysis(AnalysisContext ctx)
   }
 }
 
-FuncAnalysis analyze_func(const Index& index, const Context& ctx,
+FuncAnalysis analyze_func(const Index& index, const AnalysisContext& ctx,
                           CollectionOpts opts) {
   return do_analyze(index, ctx, nullptr, nullptr, opts);
 }
 
-FuncAnalysis analyze_func_collect(const Index& index,
-                                  const Context& ctx,
-                                  CollectedInfo& collect) {
-  return do_analyze_collect(index, ctx, collect, nullptr);
-}
-
 FuncAnalysis analyze_func_inline(const Index& index,
-                                 const Context& ctx,
+                                 const AnalysisContext& ctx,
                                  const Type& thisType,
                                  const CompactVector<Type>& args,
                                  CollectionOpts opts) {
   assert(!ctx.func->isClosureBody);
-  KnownArgs knownArgs { thisType, args };
+  auto const knownArgs = KnownArgs { thisType, args };
   return do_analyze(index, ctx, nullptr, &knownArgs,
                     opts | CollectionOpts::Inlining);
 }
@@ -710,11 +695,10 @@ ClassAnalysis analyze_class(const Index& index, const Context& ctx) {
    */
   CompactVector<FuncAnalysis> initResults;
   auto analyze_86init = [&](const StaticString &name) {
-    if (auto f = find_method(ctx.cls, name.get())) {
-      auto context = Context { ctx.unit, f, ctx.cls };
-      initResults.push_back(
-        do_analyze(index, context, &clsAnalysis, nullptr, CollectionOpts{})
-      );
+    if (auto func = find_method(ctx.cls, name.get())) {
+      auto const wf = php::WideFunc::cns(func);
+      auto const context = AnalysisContext { ctx.unit, wf, ctx.cls };
+      initResults.push_back(do_analyze(index, context, &clsAnalysis));
     }
   };
   analyze_86init(s_86pinit);
@@ -760,19 +744,16 @@ ClassAnalysis analyze_class(const Index& index, const Context& ctx) {
         continue;
       }
 
-      auto context = Context { ctx.unit, f.get(), ctx.cls };
-      methodResults.push_back(
-        do_analyze(index, context, &clsAnalysis, nullptr, CollectionOpts{})
-      );
+      auto const wf = php::WideFunc::cns(f.get());
+      auto const context = AnalysisContext { ctx.unit, wf, ctx.cls };
+      methodResults.push_back(do_analyze(index, context, &clsAnalysis));
     }
 
     if (associatedClosures) {
       for (auto const c : *associatedClosures) {
-        auto const invoke = c->methods[0].get();
-        auto context = Context { ctx.unit, invoke, c };
-        closureResults.push_back(
-          do_analyze(index, context, &clsAnalysis, nullptr, CollectionOpts{})
-        );
+        auto const wf = php::WideFunc::cns(c->methods[0].get());
+        auto const context = AnalysisContext { ctx.unit, wf, c };
+        closureResults.push_back(do_analyze(index, context, &clsAnalysis));
       }
     }
 
@@ -781,8 +762,9 @@ ClassAnalysis analyze_class(const Index& index, const Context& ctx) {
         // We throw the results of the analysis away. We're only doing
         // this for the effects on the private properties, and the
         // results aren't meaningful outside of this context.
-        auto context = Context { m->unit, m, ctx.cls };
-        do_analyze(index, context, &clsAnalysis, nullptr, CollectionOpts{});
+        auto const wf = php::WideFunc::cns(m);
+        auto const context = AnalysisContext { m->unit, wf, ctx.cls };
+        do_analyze(index, context, &clsAnalysis);
       }
     }
 
@@ -846,18 +828,17 @@ ClassAnalysis analyze_class(const Index& index, const Context& ctx) {
 
 std::vector<std::pair<State,StepFlags>>
 locally_propagated_states(const Index& index,
-                          const FuncAnalysis& fa,
+                          const AnalysisContext& ctx,
                           CollectedInfo& collect,
                           BlockId bid,
                           State state) {
   Trace::Bump bumper{Trace::hhbbc, 10};
 
+  auto const blk = ctx.func.blocks()[bid].get();
+  auto interp = Interp { index, ctx, collect, bid, blk, state };
+
   std::vector<std::pair<State,StepFlags>> ret;
-
-  auto const blk = fa.ctx.func.blocks()[bid].get();
   ret.reserve(blk->hhbcs.size() + 1);
-
-  auto interp = Interp { index, fa.ctx, collect, bid, blk, state };
 
   for (auto& op : blk->hhbcs) {
     ret.emplace_back(state, StepFlags{});
@@ -871,7 +852,7 @@ locally_propagated_states(const Index& index,
 
 
 State locally_propagated_bid_state(const Index& index,
-                                   const FuncAnalysis& fa,
+                                   const AnalysisContext& ctx,
                                    CollectedInfo& collect,
                                    BlockId bid,
                                    State state,
@@ -879,17 +860,15 @@ State locally_propagated_bid_state(const Index& index,
   Trace::Bump bumper{Trace::hhbbc, 10};
   if (!state.initialized) return {};
 
-  auto const blk = fa.ctx.func.blocks()[bid].get();
-  auto stateOut = state;
-  Interp interp {
-    index, fa.ctx, collect, bid, blk, stateOut
-  };
+  auto const originalState = state;
+  auto const blk = ctx.func.blocks()[bid].get();
+  auto interp = Interp { index, ctx, collect, bid, blk, state };
 
   State ret{};
   auto const propagate = [&] (BlockId target, const State* st) {
     if (target == targetBid) merge_into(ret, *st);
   };
-  run(interp, state, propagate);
+  run(interp, originalState, propagate);
 
   ret.stack.compact();
   return ret;

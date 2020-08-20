@@ -115,7 +115,7 @@ void cgCall(IRLS& env, const IRInstruction* inst) {
             extra->numArgs == func->numNonVariadicParams());
     v << callphp{tc::ustubs().immutableBindCallStub, php_call_regs(withCtx),
                  func, numArgsInclUnpack};
-  } else if (extra->skipNumArgsCheck) {
+  } else if (extra->skipRepack) {
     // If we've statically determined the provided number of arguments
     // doesn't exceed what the target expects, we can skip the stub
     // and call the prologue directly.
@@ -438,7 +438,7 @@ void cgNativeImpl(IRLS& env, const IRInstruction* inst) {
 static void traceCallback(ActRec* fp, TypedValue* sp, Offset bcOff) {
   if (Trace::moduleEnabled(Trace::hhirTracelets)) {
     FTRACE(0, "{} {} {} {} {}\n",
-           fp->m_func->fullName()->data(), bcOff, fp, sp,
+           fp->func()->fullName()->data(), bcOff, fp, sp,
            __builtin_return_address(0));
   }
   checkFrame(fp, sp, true /* fullCheck */);

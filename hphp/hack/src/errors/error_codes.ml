@@ -134,7 +134,7 @@ module Naming = struct
     | XhpRequiredWithDefault
     | VariableVariablesDisallowedDEPRECATED
     | ArrayTypehintsDisallowed
-    | ArrayLiteralsDisallowed
+    | ArrayLiteralsDisallowedDEPRECATED
     | WildcardDisallowed
     | AttributeClassNameConflict
     | MethodNeedsVisibility
@@ -164,7 +164,8 @@ module Naming = struct
     | PocketUniversesLocalization
     | ClassMethNonFinalSelf
     | ParentInFunctionPointer
-    | SelfInNonFinalFunctionPointer (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
+    | SelfInNonFinalFunctionPointer
+    | ClassMethNonFinalCLASS (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
   [@@deriving enum, show { with_path = false }]
 
   let err_code = to_enum
@@ -643,7 +644,10 @@ module Typing = struct
     | MethCallerTrait
     | PocketUniversesAttributes
     | DuplicateInterface
-    | TypeParameterNameAlreadyUsedNonShadow (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
+    | TypeParameterNameAlreadyUsedNonShadow
+    | IllegalInformationFlow
+    | ContextImplicitPolicyLeakage
+    | ReifiedFunctionReference (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
   [@@deriving enum, show { with_path = false }]
 
   let err_code = to_enum

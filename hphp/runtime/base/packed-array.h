@@ -111,8 +111,6 @@ struct PackedArray final : type_scan::MarkCollectable<PackedArray> {
 
   static constexpr auto ToKeyset = &ArrayCommon::ToKeyset;
 
-  static arr_lval LvalIntVec(ArrayData*, int64_t);
-  static arr_lval LvalStrVec(ArrayData*, StringData*);
   static ArrayData* ToVArrayVec(ArrayData*, bool);
   static constexpr auto ToDictVec = &ToDict;
   static ArrayData* ToVecVec(ArrayData*, bool);
@@ -155,6 +153,8 @@ struct PackedArray final : type_scan::MarkCollectable<PackedArray> {
   static constexpr auto OnSetEvalScalarVec = &OnSetEvalScalar;
   static constexpr auto ToKeysetVec = &ArrayCommon::ToKeyset;
   static constexpr auto ToDArrayVec = &ToDArray;
+  static constexpr auto LvalIntVec = &LvalInt;
+  static constexpr auto LvalStrVec = &LvalStr;
 
   //////////////////////////////////////////////////////////////////////
 
@@ -221,7 +221,7 @@ struct PackedArray final : type_scan::MarkCollectable<PackedArray> {
   ) = delete;
   static ArrayData* MakeUncountedHelper(ArrayData* array, size_t extra);
 
-  static ArrayData* MakeVecFromAPC(const APCArray* apc);
+  static ArrayData* MakeVecFromAPC(const APCArray* apc, bool isLegacy = false);
   static ArrayData* MakeVArrayFromAPC(const APCArray* apc);
 
   static bool VecEqual(const ArrayData* ad1, const ArrayData* ad2);
@@ -275,6 +275,9 @@ private:
 
   struct VArrayInitializer;
   static VArrayInitializer s_varr_initializer;
+
+  struct MarkedVecInitializer;
+  static MarkedVecInitializer s_marked_vec_initializer;
 };
 
 //////////////////////////////////////////////////////////////////////

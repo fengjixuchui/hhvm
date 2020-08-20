@@ -399,6 +399,13 @@ where
                         str_maybe, StringLiteralKind::LiteralDoubleQuoted);
                         S!(make_prefixed_string_expression, self, qualified_name, str_)
                     }
+                    | TokenKind::Backtick => {
+                        let prefix = S!(make_simple_type_specifier, self, qualified_name);
+                        let left_backtick = self.require_token(TokenKind::Backtick, Errors::error1065);
+                        let expr = self.parse_expression_with_reset_precedence();
+                        let right_backtick = self.require_token(TokenKind::Backtick, Errors::error1065);
+                        S!(make_prefixed_code_expression, self, prefix, left_backtick, expr, right_backtick)
+                    }
                     | _ => {
                         // Not a prefixed string or an attempt at one
                         self.parse_name_or_collection_literal_expression(qualified_name)
@@ -440,7 +447,6 @@ where
             }
             | TokenKind::List  => self.parse_list_expression(),
             | TokenKind::New => self.parse_object_creation_expression(),
-            | TokenKind::Array => self.parse_array_intrinsic_expression(),
             | TokenKind::Varray => self.parse_varray_intrinsic_expression(),
             | TokenKind::Vec => self.parse_vector_intrinsic_expression(),
             | TokenKind::Darray => self.parse_darray_intrinsic_expression(),
@@ -460,8 +466,7 @@ where
             // LessThanLessThan start attribute spec that is allowed on anonymous
             // functions or lambdas
             | TokenKind::LessThanLessThan
-            | TokenKind::Async
-            | TokenKind::Coroutine => self.parse_anon_or_lambda_or_awaitable(),
+            | TokenKind::Async => self.parse_anon_or_lambda_or_awaitable(),
             | TokenKind::At if allow_new_attr => self.parse_anon_or_lambda_or_awaitable(),
             | TokenKind::Include
             | TokenKind::Include_once
@@ -2296,22 +2301,6 @@ where
             p.parse_expression_with_reset_precedence()
         });
         S!(make_list_expression, self, keyword, left, items, right)
-    }
-
-    // grammar:
-    //   array_intrinsic := array ( array-initializer-opt )
-    fn parse_array_intrinsic_expression(&mut self) -> S::R {
-        let array_keyword = self.assert_token(TokenKind::Array);
-        let (left_paren, members, right_paren) = self
-            .parse_parenthesized_comma_list_opt_allow_trailing(|p| p.parse_array_element_init());
-        S!(
-            make_array_intrinsic_expression,
-            self,
-            array_keyword,
-            left_paren,
-            members,
-            right_paren
-        )
     }
 
     fn parse_bracketed_collection_intrinsic_expression<F, G>(

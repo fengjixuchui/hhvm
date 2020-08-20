@@ -378,11 +378,23 @@ let add_decl_comment_fact doc pos decl_json progress =
   in
   add_fact DeclarationComment json_fact progress
 
+let add_decl_span_fact pos decl_json progress =
+  let filepath = Relative_path.to_absolute (Pos.filename pos) in
+  let json_fact =
+    JSON_Object
+      [
+        ("declaration", decl_json);
+        ("file", build_file_json_nested filepath);
+        ("span", build_bytespan_json pos);
+      ]
+  in
+  add_fact DeclarationSpan json_fact progress
+
 let add_file_lines_fact filepath sourceText progress =
   let lineLengths =
     Line_break_map.offsets_to_line_lengths sourceText.offset_map
   in
-  let endsInNewline = false (* TODO *) in
+  let endsInNewline = ends_in_newline sourceText in
   let hasUnicodeOrTabs = false (* TODO *) in
   let json_fact =
     build_file_lines_json filepath lineLengths endsInNewline hasUnicodeOrTabs

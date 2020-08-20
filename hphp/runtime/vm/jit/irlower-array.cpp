@@ -58,7 +58,7 @@ TRACE_SET_MOD(irlower);
 
 ///////////////////////////////////////////////////////////////////////////////
 
-void cgCheckPackedArrayDataBounds(IRLS& env, const IRInstruction* inst) {
+void cgCheckVecBounds(IRLS& env, const IRInstruction* inst) {
   static_assert(ArrayData::sizeofSize() == 4, "");
 
   // We may check packed array bounds on profiled arrays that we do not
@@ -92,20 +92,20 @@ void cgCheckPackedArrayDataBounds(IRLS& env, const IRInstruction* inst) {
 
 namespace {
 
-ArrayData* setLegacyHelper(ArrayData* arr) {
+ArrayData* setLegacyHelper(ArrayData* arr, bool set) {
   if (arr->cowCheck()) {
     auto ad = arr->copy();
     arr->decRefCount();
-    ad->setLegacyArray(true);
+    ad->setLegacyArray(set);
     return ad;
   } else {
-    arr->setLegacyArray(true);
+    arr->setLegacyArray(set);
     return arr;
   }
 }
 
-void setLegacyImpl(IRLS& env, const IRInstruction* inst) {
-  auto const args = argGroup(env, inst).ssa(0);
+void setLegacyImpl(IRLS& env, const IRInstruction* inst, bool set) {
+  auto const args = argGroup(env, inst).ssa(0).imm(set);
 
   cgCallHelper(vmain(env),
                env,
@@ -118,11 +118,19 @@ void setLegacyImpl(IRLS& env, const IRInstruction* inst) {
 }
 
 void cgSetLegacyVec(IRLS& env, const IRInstruction* inst) {
-  setLegacyImpl(env, inst);
+  setLegacyImpl(env, inst, true);
 }
 
 void cgSetLegacyDict(IRLS& env, const IRInstruction* inst) {
-  setLegacyImpl(env, inst);
+  setLegacyImpl(env, inst, true);
+}
+
+void cgUnsetLegacyVec(IRLS& env, const IRInstruction* inst) {
+  setLegacyImpl(env, inst, false);
+}
+
+void cgUnsetLegacyDict(IRLS& env, const IRInstruction* inst) {
+  setLegacyImpl(env, inst, false);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -202,9 +210,11 @@ void cgAKExistsDict(IRLS& env, const IRInstruction* inst) {
   auto const keyTy = inst->src(1)->type();
   auto& v = vmain(env);
 
+  static_assert(MixedArray::ExistsInt == MixedArray::ExistsIntDict);
+  static_assert(MixedArray::ExistsStr == MixedArray::ExistsStrDict);
   auto const target = (keyTy <= TInt)
-    ? CallSpec::direct(MixedArray::ExistsIntDict)
-    : CallSpec::direct(MixedArray::ExistsStrDict);
+    ? CallSpec::direct(MixedArray::ExistsInt)
+    : CallSpec::direct(MixedArray::ExistsStr);
 
   cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::None,
                argGroup(env, inst).ssa(0).ssa(1));
@@ -370,10 +380,10 @@ void cgAllocStructDict(IRLS& env, const IRInstruction* inst) {
   );
 }
 
-void cgInitMixedLayoutArray(IRLS& env, const IRInstruction* inst) {
+void cgInitDictElem(IRLS& env, const IRInstruction* inst) {
   auto const arr = srcLoc(env, inst, 0).reg();
-  auto const key = inst->extra<InitMixedLayoutArray>()->key;
-  auto const idx = inst->extra<InitMixedLayoutArray>()->index;
+  auto const key = inst->extra<InitDictElem>()->key;
+  auto const idx = inst->extra<InitDictElem>()->index;
 
   auto const elm_off  = MixedArray::elmOff(idx);
   auto const key_ptr  = arr[elm_off + MixedArrayElm::keyOff()];
@@ -386,19 +396,19 @@ void cgInitMixedLayoutArray(IRLS& env, const IRInstruction* inst) {
   v << store { v.cns(key), key_ptr };
 }
 
-void cgInitPackedLayoutArray(IRLS& env, const IRInstruction* inst) {
+void cgInitVecElem(IRLS& env, const IRInstruction* inst) {
   auto const arr = srcLoc(env, inst, 0).reg();
-  auto const index = inst->extra<InitPackedLayoutArray>()->index;
+  auto const index = inst->extra<InitVecElem>()->index;
 
   auto const slot_off = PackedArray::entriesOffset() +
                         index * sizeof(TypedValue);
   storeTV(vmain(env), arr[slot_off], srcLoc(env, inst, 1), inst->src(1));
 }
 
-void cgInitPackedLayoutArrayLoop(IRLS& env, const IRInstruction* inst) {
+void cgInitVecElemLoop(IRLS& env, const IRInstruction* inst) {
   auto const arr = srcLoc(env, inst, 0).reg();
   auto const spIn = srcLoc(env, inst, 1).reg();
-  auto const extra = inst->extra<InitPackedLayoutArrayLoop>();
+  auto const extra = inst->extra<InitVecElemLoop>();
   auto const count = safe_cast<int>(extra->size);
   auto& v = vmain(env);
 

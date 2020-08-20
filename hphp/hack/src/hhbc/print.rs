@@ -1210,9 +1210,6 @@ fn print_fcall_args<W: Write>(
     let mut flags = vec![];
     if_then(fls.contains(F::HAS_UNPACK), || flags.push("Unpack"));
     if_then(fls.contains(F::HAS_GENERICS), || flags.push("Generics"));
-    if_then(fls.contains(F::SUPPORTS_ASYNC_EAGER_RETURN), || {
-        flags.push("SupportsAER")
-    });
     if_then(fls.contains(F::LOCK_WHILE_UNWINDING), || {
         flags.push("LockWhileUnwinding")
     });
@@ -2651,7 +2648,6 @@ fn print_expr<W: Write>(
         // For arrays and collections, we are making a conscious decision to not
         // match HHMV has HHVM's emitter has inconsistencies in the pretty printer
         // https://fburl.com/tzom2qoe
-        E_::Array(afl) => wrap_by_(w, "array(", ")", |w| print_afields(ctx, w, env, afl)),
         E_::Collection(c) if (c.0).1 == "vec" || (c.0).1 == "dict" || (c.0).1 == "keyset" => {
             w.write(&(c.0).1)?;
             square(w, |w| print_afields(ctx, w, env, &c.2))

@@ -50,8 +50,8 @@ void print_boolean(bool val);
 
 void raiseWarning(const StringData* sd);
 void raiseNotice(const StringData* sd);
-[[noreturn]] void throwArrayIndexException(int64_t index, bool isInOut);
-[[noreturn]] void throwArrayKeyException(const StringData* key, bool isInOut);
+[[noreturn]] void throwArrayIndexException(const ArrayData *ad, int64_t index);
+[[noreturn]] void throwArrayKeyException(const ArrayData *ad, const StringData* key);
 std::string formatParamInOutMismatch(const char* fname, uint32_t index,
                                    bool funcByRef);
 [[noreturn]] void throwParamInOutMismatch(const Func* func, uint32_t index);
@@ -64,7 +64,7 @@ void raiseRxCallViolation(const ActRec* caller, const Func* callee);
 inline Iter*
 frame_iter(const ActRec* fp, int i) {
   return (Iter*)(uintptr_t(fp)
-          - uintptr_t(fp->m_func->numLocals() * sizeof(TypedValue))
+          - uintptr_t(fp->func()->numLocals() * sizeof(TypedValue))
           - uintptr_t((i+1) * sizeof(Iter)));
 }
 
@@ -106,12 +106,12 @@ frame_async_generator(const ActRec* fp) {
 
 void ALWAYS_INLINE
 frame_free_locals_helper_inl(ActRec* fp, int numLocals) {
-  assertx(numLocals == fp->m_func->numLocals());
+  assertx(numLocals == fp->func()->numLocals());
   // Free locals
   for (int i = numLocals - 1; i >= 0; --i) {
     TRACE_MOD(Trace::runtime, 5,
               "RetC: freeing %d'th local of %d\n", i,
-              fp->m_func->numLocals());
+              fp->func()->numLocals());
     tvDecRefGen(*frame_local(fp, i));
   }
 }

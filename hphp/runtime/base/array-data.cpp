@@ -210,8 +210,17 @@ void ArrayData::GetScalarArray(ArrayData** parr, arrprov::Tag tag) {
   if (arr->empty() && LIKELY(!requested_tag)) {
     if (arr->isVArray())     return replace(staticEmptyVArray());
     if (arr->isDArray())     return replace(staticEmptyDArray());
-    if (arr->isVecType())    return replace(staticEmptyVec());
-    if (arr->isDictType())   return replace(staticEmptyDictArray());
+    if (arr->isVecType()) {
+      return replace(
+        arr->isLegacyArray() ? staticEmptyMarkedVec() : staticEmptyVec()
+      );
+    }
+    if (arr->isDictType()) {
+      return replace(
+        arr->isLegacyArray() ? staticEmptyMarkedDictArray() :
+                               staticEmptyDictArray()
+      );
+    }
     if (arr->isKeysetType()) return replace(staticEmptyKeysetArray());
     return replace(staticEmptyArray());
   }
@@ -904,14 +913,18 @@ const StaticString
 // helpers
 
 void ArrayData::getNotFound(int64_t k) const {
-  if (isHackArrayType()) throwOOBArrayKeyException(k, this);
-  throwArrayIndexException(k, false);
+  throwOOBArrayKeyException(k, this);
 }
 
 void ArrayData::getNotFound(const StringData* k) const {
+  // For vecs (and not varrays), we throw an InvalidArgumentException
   if (isVecType()) throwInvalidArrayKeyException(k, this);
-  if (isHackArrayType()) throwOOBArrayKeyException(k, this);
-  throwArrayKeyException(k, false);
+  if (RO::EvalHackArrCompatNotices) {
+    raise_hackarr_compat_notice(
+      "Raising OutOfBoundsException for accessing string index of varray"
+    );
+  }
+  throwOOBArrayKeyException(k, this);
 }
 
 const char* ArrayData::kindToString(ArrayKind kind) {
@@ -1051,17 +1064,11 @@ void throwMissingElementException(const char* op) {
 }
 
 void throwOOBArrayKeyException(TypedValue key, const ArrayData* ad) {
-  const char* type = [&]{
-    if (ad->isVecType()) return "vec";
-    if (ad->isDictType()) return "dict";
-    if (ad->isKeysetType()) return "keyset";
-    assertx(ad->isPHPArrayType());
-    return "array";
-  }();
   SystemLib::throwOutOfBoundsExceptionObject(
     folly::sformat(
       "Out of bounds {} access: invalid index {}",
-      type, describeKeyValue(key)
+      getDataTypeString(ad->toDataType()).data(),
+      describeKeyValue(key)
     )
   );
 }

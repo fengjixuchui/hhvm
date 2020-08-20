@@ -27,6 +27,7 @@ type t =
   | SimpleTypeSpecifier
   | LiteralExpression
   | PrefixedStringExpression
+  | PrefixedCodeExpression
   | VariableExpression
   | PipeVariableExpression
   | FileAttributeSpecification
@@ -130,7 +131,6 @@ type t =
   | ObjectCreationExpression
   | ConstructorCall
   | RecordCreationExpression
-  | ArrayIntrinsicExpression
   | DarrayIntrinsicExpression
   | DictionaryIntrinsicExpression
   | KeysetIntrinsicExpression
@@ -209,6 +209,7 @@ let to_string kind =
   | SimpleTypeSpecifier               -> "simple_type_specifier"
   | LiteralExpression                 -> "literal"
   | PrefixedStringExpression          -> "prefixed_string"
+  | PrefixedCodeExpression            -> "prefixed_code"
   | VariableExpression                -> "variable"
   | PipeVariableExpression            -> "pipe_variable"
   | FileAttributeSpecification        -> "file_attribute_specification"
@@ -312,7 +313,6 @@ let to_string kind =
   | ObjectCreationExpression          -> "object_creation_expression"
   | ConstructorCall                   -> "constructor_call"
   | RecordCreationExpression          -> "record_creation_expression"
-  | ArrayIntrinsicExpression          -> "array_intrinsic_expression"
   | DarrayIntrinsicExpression         -> "darray_intrinsic_expression"
   | DictionaryIntrinsicExpression     -> "dictionary_intrinsic_expression"
   | KeysetIntrinsicExpression         -> "keyset_intrinsic_expression"

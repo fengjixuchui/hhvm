@@ -78,7 +78,7 @@ void emitClassGetTS(IRGS& env) {
 
   auto const val = gen(
     env,
-    RuntimeOption::EvalHackArrDVArrs ? AKExistsDict : AKExistsArr,
+    AKExistsDict,
     ts,
     cns(env, s_generic_types.get())
   );
@@ -95,7 +95,7 @@ void emitClassGetTS(IRGS& env) {
       );
     },
     [&] (SSATmp* key) {
-      gen(env, ThrowArrayKeyException, ArrayGetExceptionData { false }, key);
+      gen(env, ThrowArrayKeyException, ts, key);
       return cns(env, TBottom);
     },
     [&] (SSATmp* key, SizeHintData) {

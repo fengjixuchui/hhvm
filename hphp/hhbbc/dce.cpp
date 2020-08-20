@@ -2036,11 +2036,7 @@ struct DceOutState {
 };
 
 folly::Optional<DceState>
-dce_visit(const Index& index,
-          const FuncAnalysis& fa,
-          CollectedInfo& collect,
-          BlockId bid,
-          const State& stateIn,
+dce_visit(VisitContext& visit, BlockId bid, const State& stateIn,
           const DceOutState& dceOutState,
           LocalRemappingIndex* localRemappingIndex = nullptr) {
   if (!stateIn.initialized) {
@@ -2056,10 +2052,13 @@ dce_visit(const Index& index,
     return folly::none;
   }
 
-  auto const states = locally_propagated_states(index, fa, collect,
-                                                bid, stateIn);
+  auto& func = visit.func;
+  auto const& fa = visit.ainfo;
+  auto const ctx = AnalysisContext { fa.ctx.unit, func, fa.ctx.cls };
+  auto const states = locally_propagated_states(
+    visit.index, ctx, visit.collect, bid, stateIn);
 
-  auto dceState = DceState{ index, fa };
+  auto dceState = DceState{ visit.index, fa };
   dceState.liveLocals = dceOutState.locLive;
   dceState.isLocal    = dceOutState.isLocal;
   dceState.remappingIndex = localRemappingIndex;
@@ -2067,7 +2066,7 @@ dce_visit(const Index& index,
   // if they are not live there.
   dceState.mayNeedUnsetting = dceState.liveLocals;
 
-  auto const blk = fa.ctx.func.blocks()[bid].get();
+  auto const blk = func.blocks()[bid].get();
   auto const dceStkSz = [&] {
     switch (blk->hhbcs.back().op) {
       case Op::MemoGet:
@@ -2095,7 +2094,7 @@ dce_visit(const Index& index,
   for (uint32_t idx = blk->hhbcs.size(); idx-- > 0;) {
     auto const& op = blk->hhbcs[idx];
 
-    FTRACE(2, "  == #{} {}\n", idx, show(fa.ctx.func, op));
+    FTRACE(2, "  == #{} {}\n", idx, show(func, op));
 
     auto visit_env = Env {
       dceState,
@@ -2183,7 +2182,7 @@ dce_visit(const Index& index,
       // we flag it as maybe needing to be unset in all successors.
       dceState.mayNeedUnsetting |= unsetable;
     } else if (unsetable.any() && !visit_env.stateAfter.unreachable) {
-      auto bcs = eager_unsets(unsetable, fa.ctx.func, [&](uint32_t i) {
+      auto bcs = eager_unsets(unsetable, func, [&](uint32_t i) {
         return visit_env.stateAfter.locals[i];
       });
       if (!bcs.empty()) {
@@ -2210,7 +2209,7 @@ dce_visit(const Index& index,
     }
 
     FTRACE(4, "    dce frame: {}\n",
-           loc_bits_string(fa.ctx.func, dceState.liveLocals));
+           loc_bits_string(func, dceState.liveLocals));
     FTRACE(4, "    dce stack: {}\n",
       [&] {
         using namespace folly::gen;
@@ -2248,25 +2247,20 @@ struct DceAnalysis {
   std::bitset<kMaxTrackedLocals>      locMayNeedUnsettingExn;
 };
 
-DceAnalysis analyze_dce(const Index& index,
-                        const FuncAnalysis& fa,
-                        CollectedInfo& collect,
-                        BlockId bid,
-                        const State& stateIn,
-                        const DceOutState& dceOutState,
+DceAnalysis analyze_dce(VisitContext& visit, BlockId bid,
+                        const State& stateIn, const DceOutState& dceOutState,
                         LocalRemappingIndex* localRemappingIndex = nullptr) {
-  if (auto dceState = dce_visit(index, fa, collect,
-                                bid, stateIn, dceOutState,
-                                localRemappingIndex)) {
-    return DceAnalysis {
-      dceState->liveLocals,
-      dceState->stack,
-      dceState->forcedLiveLocations,
-      dceState->mayNeedUnsetting,
-      dceState->mayNeedUnsettingExn
-    };
-  }
-  return DceAnalysis {};
+  auto dceState = dce_visit(visit, bid, stateIn, dceOutState,
+                            localRemappingIndex);
+  if (!dceState) return DceAnalysis {};
+
+  return DceAnalysis {
+    dceState->liveLocals,
+    dceState->stack,
+    dceState->forcedLiveLocations,
+    dceState->mayNeedUnsetting,
+    dceState->mayNeedUnsettingExn
+  };
 }
 
 template<class Op>
@@ -2313,7 +2307,7 @@ void adjust_ndiscard(Bytecode& bc, int64_t adj) {
 /*
  * Do the actual updates to the bytecodes.
  */
-void dce_perform(php::MutFunc func, const DceActionMap& actionMap) {
+void dce_perform(php::WideFunc& func, const DceActionMap& actionMap) {
 
   using It = BytecodeVec::iterator;
   auto setloc = [] (int32_t srcLoc, It start, int n) {
@@ -2325,7 +2319,7 @@ void dce_perform(php::MutFunc func, const DceActionMap& actionMap) {
   for (auto const& elm : actionMap) {
     auto const& id = elm.first;
     auto const& dceAction = elm.second;
-    auto const b = func.blocks_mut()[id.blk].mutate();
+    auto const b = func.blocks()[id.blk].mutate();
     FTRACE(1, "{} {}\n", show(elm), show(*func, b->hhbcs[id.idx]));
     switch (dceAction.action) {
       case DceAction::PopInputs:
@@ -2496,17 +2490,10 @@ struct DceOptResult {
 };
 
 DceOptResult
-optimize_dce(const Index& index,
-             const FuncAnalysis& fa,
-             CollectedInfo& collect,
-             BlockId bid,
-             const State& stateIn,
+optimize_dce(VisitContext& visit, BlockId bid, const State& stateIn,
              const DceOutState& dceOutState) {
-  auto dceState = dce_visit(index, fa, collect, bid, stateIn, dceOutState);
-
-  if (!dceState) {
-    return {std::bitset<kMaxTrackedLocals>{}};
-  }
+  auto dceState = dce_visit(visit, bid, stateIn, dceOutState);
+  if (!dceState) return {std::bitset<kMaxTrackedLocals>{}};
 
   return {
     std::move(dceState->usedLocalNames),
@@ -2519,10 +2506,9 @@ optimize_dce(const Index& index,
 
 //////////////////////////////////////////////////////////////////////
 
-void remove_unused_local_names(const FuncAnalysis& ainfo,
+void remove_unused_local_names(php::WideFunc& func,
                                std::bitset<kMaxTrackedLocals> usedLocalNames) {
   if (!options.RemoveUnusedLocalNames) return;
-  auto const func = ainfo.ctx.func;
   /*
    * Closures currently rely on name information being available.
    */
@@ -2540,14 +2526,14 @@ void remove_unused_local_names(const FuncAnalysis& ainfo,
     }
     if (loc->id < kMaxTrackedLocals && !usedLocalNames.test(loc->id)) {
       FTRACE(2, "  killing: {}\n", local_string(*func, loc->id));
-      const_cast<php::Local&>(*loc).unusedName = true;
+      loc->unusedName = true;
     }
   }
 }
 
 // Take a vector mapping local ids to new local ids, and apply it to the
 // function passed in via ainfo.
-void apply_remapping(const FuncAnalysis& ainfo,
+void apply_remapping(const FuncAnalysis& ainfo, php::WideFunc& func,
                      std::vector<LocalId>&& remapping) {
   auto const maxRemappedLocals = remapping.size();
   // During Global DCE we are for the most part free to modify the BCs since
@@ -2557,7 +2543,7 @@ void apply_remapping(const FuncAnalysis& ainfo,
   for (auto const bid : ainfo.rpoBlocks) {
     FTRACE(2, "Remapping block #{}\n", bid);
 
-    auto const blk = ainfo.ctx.func.blocks_mut()[bid].mutate();
+    auto const blk = func.blocks()[bid].mutate();
     for (uint32_t idx = blk->hhbcs.size(); idx-- > 0;) {
       auto& o = blk->hhbcs[idx];
 
@@ -2673,10 +2659,9 @@ void apply_remapping(const FuncAnalysis& ainfo,
   }
 }
 
-void remap_locals(const FuncAnalysis& ainfo,
+void remap_locals(const FuncAnalysis& ainfo, php::WideFunc& func,
                   LocalRemappingIndex&& remappingIndex) {
   if (!options.CompactLocalSlots) return;
-  auto const func = ainfo.ctx.func;
   /*
    * Remapping locals in closures requires checking which ones
    * are captured variables so we can remove the relevant properties,
@@ -2765,7 +2750,7 @@ void remap_locals(const FuncAnalysis& ainfo,
   }
 
   if (!identityMapping) {
-    apply_remapping(ainfo, std::move(remapping));
+    apply_remapping(ainfo, func, std::move(remapping));
   }
 }
 
@@ -2773,36 +2758,33 @@ void remap_locals(const FuncAnalysis& ainfo,
 
 }
 
-void local_dce(const Index& index,
-               const FuncAnalysis& ainfo,
-               CollectedInfo& collect,
-               BlockId bid,
-               const State& stateIn) {
+void local_dce(VisitContext& visit, BlockId bid, const State& stateIn) {
   // For local DCE, we have to assume all variables are in the
   // live-out set for the block.
-  auto const ret = optimize_dce(index, ainfo, collect, bid, stateIn,
+  auto const ret = optimize_dce(visit, bid, stateIn,
                                 DceOutState{DceOutState::Local{}});
-
-  dce_perform(ainfo.ctx.func, ret.actionMap);
+  dce_perform(visit.func, ret.actionMap);
 }
 
 //////////////////////////////////////////////////////////////////////
 
-bool global_dce(const Index& index, const FuncAnalysis& ai) {
+bool global_dce(const Index& index, const FuncAnalysis& ai,
+                php::WideFunc& func) {
   auto rpoId = [&] (BlockId blk) {
     return ai.bdata[blk].rpoId;
   };
 
   auto collect = CollectedInfo{index, ai.ctx, nullptr, CollectionOpts{}, &ai};
+  auto visit = VisitContext(index, ai, collect, func);
+
   FTRACE(1, "|---- global DCE analyze ({})\n", show(ai.ctx));
   FTRACE(2, "{}", [&] {
     using namespace folly::gen;
     auto i = uint32_t{0};
-    return from(ai.ctx.func->locals)
+    return from(func->locals)
       | mapped(
         [&] (const php::Local& l) {
-          return folly::sformat("  {} {}\n",
-                                i++, local_string(*ai.ctx.func, l.id));
+          return folly::sformat("  {} {}\n", i++, local_string(*func, l.id));
         })
       | unsplit<std::string>("");
   }());
@@ -2810,7 +2792,7 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
   /*
    * States for each block, indexed by block id.
    */
-  std::vector<DceOutState> blockStates(ai.ctx.func.blocks().size());
+  std::vector<DceOutState> blockStates(func.blocks().size());
 
   /*
    * If EnableArgsInBacktraces is true, then argument locals (and the reified
@@ -2819,7 +2801,6 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
    * quickly in this case, we update the locLiveExn sets early.
    */
   if (RuntimeOption::EnableArgsInBacktraces) {
-    auto const func = ai.ctx.func;
     auto const args = func->params.size() + (int)func->isReified;
     auto locLiveExn = std::bitset<kMaxTrackedLocals>();
     if (args < kMaxTrackedLocals) {
@@ -2848,8 +2829,8 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
   );
   for (auto const bid : ai.rpoBlocks) incompleteQ.push(rpoId(bid));
 
-  auto const nonThrowPreds = computeNonThrowPreds(ai.ctx.func, ai.rpoBlocks);
-  auto const throwPreds    = computeThrowPreds(ai.ctx.func, ai.rpoBlocks);
+  auto const nonThrowPreds = computeNonThrowPreds(func, ai.rpoBlocks);
+  auto const throwPreds    = computeThrowPreds(func, ai.rpoBlocks);
 
   /*
    * Suppose a stack slot isn't used, but it was pushed on two separate
@@ -2983,7 +2964,7 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
    * get fed any such information.
    */
   auto const maxRemappedLocals = std::min(
-      (size_t)ai.ctx.func->locals.size(),
+      (size_t)func->locals.size(),
       (size_t)kMaxTrackedLocals);
   LocalRemappingIndex localRemappingIndex(maxRemappedLocals);
 
@@ -2995,11 +2976,10 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
    */
   std::bitset<kMaxTrackedLocals> paramSet;
   paramSet.set();
-  paramSet >>= kMaxTrackedLocals -
-               (ai.ctx.func->params.size() + (uint32_t)ai.ctx.func->isReified);
-  boost::dynamic_bitset<> entrypoint(ai.ctx.func.blocks().size());
-  entrypoint[ai.ctx.func->mainEntry] = true;
-  for (auto const blkId: ai.ctx.func->dvEntries) {
+  paramSet >>= kMaxTrackedLocals - (func->params.size() + (int)func->isReified);
+  boost::dynamic_bitset<> entrypoint(func.blocks().size());
+  entrypoint[func->mainEntry] = true;
+  for (auto const blkId: func->dvEntries) {
     if (blkId != NoBlockId) {
       entrypoint[blkId]= true;
     }
@@ -3009,9 +2989,9 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
    * The set of locals that may need to be unset by a succesor block.
    */
   std::vector<std::bitset<kMaxTrackedLocals>>
-    locMayNeedUnsetting(ai.ctx.func.blocks().size());
+    locMayNeedUnsetting(func.blocks().size());
   std::vector<std::bitset<kMaxTrackedLocals>>
-    locMayNeedUnsettingExn(ai.ctx.func.blocks().size());
+    locMayNeedUnsettingExn(func.blocks().size());
 
   /*
    * Iterate on live out states until we reach a fixed point.
@@ -3030,22 +3010,15 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
     FTRACE(2, "block #{}\n", bid);
 
     auto& blockState = blockStates[bid];
-    auto const result = analyze_dce(
-      index,
-      ai,
-      collect,
-      bid,
-      ai.bdata[bid].stateIn,
-      blockState,
-      &localRemappingIndex
-    );
+    auto const result = analyze_dce(visit, bid, ai.bdata[bid].stateIn,
+                                    blockState, &localRemappingIndex);
 
     FTRACE(2, "loc live out  : {}\n"
               "loc out exn   : {}\n"
               "loc live in   : {}\n",
-              loc_bits_string(ai.ctx.func, blockState.locLive),
-              loc_bits_string(ai.ctx.func, blockState.locLiveExn),
-              loc_bits_string(ai.ctx.func, result.locLiveIn));
+              loc_bits_string(func, blockState.locLive),
+              loc_bits_string(func, blockState.locLiveExn),
+              loc_bits_string(func, result.locLiveIn));
 
     processForcedLive(result.forcedLiveLocations);
     locMayNeedUnsetting[bid] = result.locMayNeedUnsetting;
@@ -3115,7 +3088,7 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
       FTRACE(2, "  -> {}\n", pid);
       auto& pbs = blockStates[pid];
       auto const oldPredLocLive = pbs.locLive;
-      auto const pred = ai.ctx.func.blocks()[pid].get();
+      auto const pred = func.blocks()[pid].get();
       if (auto const ita = killIterOutputs(pred, bid)) {
         auto const key = ita->hasKey();
         FTRACE(3, "    Killing iterator output locals: {}\n",
@@ -3186,20 +3159,13 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
   bool didAddOpts = false;
   for (auto const bid : ai.rpoBlocks) {
     FTRACE(2, "block #{}\n", bid);
-    auto ret = optimize_dce(
-      index,
-      ai,
-      collect,
-      bid,
-      ai.bdata[bid].stateIn,
-      blockStates[bid]
-    );
-
+    auto const& stateIn = ai.bdata[bid].stateIn;
+    auto ret = optimize_dce(visit, bid, stateIn, blockStates[bid]);
     auto const unsetable = (~ret.locLiveIn) & predMayNeedUnsetting(bid) &
                            (~ret.willBeUnsetLocals);
     if (unsetable.any() && ai.bdata[bid].stateIn.initialized &&
         !ai.bdata[bid].stateIn.unreachable) {
-      auto bcs = eager_unsets(unsetable, ai.ctx.func, [&](uint32_t i) {
+      auto bcs = eager_unsets(unsetable, func, [&](uint32_t i) {
         return ai.bdata[bid].stateIn.locals[i];
       });
       if (!bcs.empty()) {
@@ -3219,11 +3185,9 @@ bool global_dce(const Index& index, const FuncAnalysis& ai) {
     combineActions(actionMap, std::move(ret.actionMap));
   }
 
-  dce_perform(ai.ctx.func, actionMap);
-
-  remove_unused_local_names(ai, usedLocalNames);
-  remap_locals(ai, std::move(localRemappingIndex));
-
+  dce_perform(func, actionMap);
+  remove_unused_local_names(func, usedLocalNames);
+  remap_locals(ai, func, std::move(localRemappingIndex));
   return didAddOpts;
 }
 

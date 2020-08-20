@@ -100,6 +100,21 @@ let schema : schema_node list =
       fields = [("name", Token); ("str", Token)];
     };
     {
+      kind_name = "PrefixedCodeExpression";
+      type_name = "prefixed_code_expression";
+      func_name = "prefixed_code_expression";
+      description = "prefixed_code";
+      prefix = "prefixed_code";
+      aggregates = [Expression; ConstructorExpression; LambdaBody];
+      fields =
+        [
+          ("prefix", Token);
+          ("left_backtick", Token);
+          ("expression", Aggregate Expression);
+          ("right_backtick", Token);
+        ];
+    };
+    {
       kind_name = "VariableExpression";
       type_name = "variable_expression";
       func_name = "variable_expression";
@@ -1528,21 +1543,6 @@ let schema : schema_node list =
           ("left_bracket", Token);
           ("members", ZeroOrMore (Just "ElementInitializer"));
           ("right_bracket", Token);
-        ];
-    };
-    {
-      kind_name = "ArrayIntrinsicExpression";
-      type_name = "array_intrinsic_expression";
-      func_name = "array_intrinsic_expression";
-      description = "array_intrinsic_expression";
-      prefix = "array_intrinsic";
-      aggregates = [Expression; ConstructorExpression; LambdaBody];
-      fields =
-        [
-          ("keyword", Token);
-          ("left_paren", Token);
-          ("members", ZeroOrMore (Aggregate ConstructorExpression));
-          ("right_paren", Token);
         ];
     };
     {

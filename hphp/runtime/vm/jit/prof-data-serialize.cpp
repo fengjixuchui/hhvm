@@ -576,14 +576,18 @@ Class* read_class_internal(ProfDataDeserializer& ser) {
   if (preClass->attrs() & AttrEnum &&
       preClass->enumBaseTy().isObject()) {
     auto const dt = read_raw<DataType>(ser);
-    auto const ne = preClass->enumBaseTy().namedEntity();
+    auto const& tc = preClass->enumBaseTy();
+    auto const ne = tc.namedEntity();
     if (!ne->m_cachedTypeAlias.bound() ||
         !ne->m_cachedTypeAlias.isInit()) {
       enumBaseReq.emplace();
       enumBaseReq->type = dt == KindOfInt64 ?
         AnnotType::Int : AnnotType::String;
-      enumBaseReq->name = preClass->enumBaseTy().typeName();
-      ne->m_cachedTypeAlias.bind(rds::Mode::Normal, rds::LinkID{"NETypeAlias"});
+      enumBaseReq->name = tc.typeName();
+      ne->m_cachedTypeAlias.bind(
+        rds::Mode::Normal,
+        rds::LinkName{"TypeAlias", tc.typeName()}
+      );
       ne->m_cachedTypeAlias.initWith(*enumBaseReq);
     }
   }
@@ -891,6 +895,30 @@ struct SymbolFixup : boost::static_visitor<void> {
       read_maybe_serializable(ser, prof.value());
     } else {
       read_raw(ser, &prof.value(), size);
+    }
+    if (HPHP::Trace::moduleEnabledRelease(HPHP::Trace::print_profiles, 1)) {
+      auto const pd = profData();
+      assertx(pd != nullptr);
+      if (isValidTransID(pt.transId)) {
+        auto const ptr = pd->transRec(pt.transId);
+        if (ptr) {
+          auto const srcKey = ptr->srcKey();
+          auto const func = srcKey.func();
+          auto const unit = srcKey.unit();
+          const char *filePath = "";
+          if (unit->filepath()->data() && unit->filepath()->size()) {
+            filePath = unit->filepath()->data();
+          }
+          folly::dynamic targetProfileInfo = folly::dynamic::object;
+          targetProfileInfo["trans_id"] = pt.transId;
+          targetProfileInfo["profile_raw_name"] = name->toCppString();
+          targetProfileInfo["profile"] = prof.value().toDynamic();
+          targetProfileInfo["file_path"] = filePath;
+          targetProfileInfo["line_number"] = unit->getLineNumber(srcKey.offset());
+          targetProfileInfo["function_name"] = func->fullName()->data();
+          HPHP::Trace::traceRelease("json:%s\n", folly::toJson(targetProfileInfo).c_str());
+        }
+      }
     }
   }
 

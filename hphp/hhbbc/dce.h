@@ -24,21 +24,21 @@
 
 namespace HPHP { namespace HHBBC {
 
+//////////////////////////////////////////////////////////////////////
+
+namespace php { struct WideFunc; }
+
+struct FuncAnalysis;
 struct Index;
 struct State;
-struct Context;
-struct Bytecode;
-struct FuncAnalysis;
-struct CollectedInfo;
-namespace php { struct Block; }
+struct VisitContext;
 
 //////////////////////////////////////////////////////////////////////
 
 /*
  * Perform DCE on a single basic block.
  */
-void local_dce(const Index&, const FuncAnalysis&, CollectedInfo& collect,
-               BlockId bid, const State&);
+void local_dce(VisitContext& visit, BlockId bid, const State&);
 
 /*
  * Eliminate dead code in a function, across basic blocks, based on
@@ -46,7 +46,7 @@ void local_dce(const Index&, const FuncAnalysis&, CollectedInfo& collect,
  *
  * Returns true if we should re-run the optimizer.
  */
-bool global_dce(const Index&, const FuncAnalysis&);
+bool global_dce(const Index&, const FuncAnalysis&, php::WideFunc&);
 
 //////////////////////////////////////////////////////////////////////
 

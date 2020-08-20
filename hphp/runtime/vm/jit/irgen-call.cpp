@@ -225,10 +225,10 @@ SSATmp* callImpl(IRGS& env, SSATmp* callee, const FCallArgs& fca,
     genericsBitmap,
     fca.hasGenerics(),
     fca.hasUnpack(),
+    fca.skipRepack(),
     dynamicCall,
     asyncEagerReturn,
-    env.formingRegion,
-    fca.skipNumArgsCheck
+    env.formingRegion
   };
   return gen(env, Call, data, sp(env), fp(env), callee, objOrClass);
 }
@@ -438,13 +438,12 @@ void prepareAndCallKnown(IRGS& env, const Func* callee, const FCallArgs& fca,
   if (generics) push(env, generics);
 
   doCall(FCallArgs(
-    static_cast<FCallArgs::Flags>(fca.flags | FCallArgs::Flags::HasUnpack),
+    static_cast<FCallArgs::Flags>(
+      fca.flags | FCallArgs::Flags::HasUnpack | FCallArgs::Flags::SkipRepack),
     callee->numNonVariadicParams(),
     fca.numRets,
     nullptr,  // inout-ness already checked
     fca.asyncEagerOffset,
-    fca.lockWhileUnwinding,
-    fca.skipNumArgsCheck,
     fca.context
   ));
 }
@@ -969,19 +968,6 @@ void fcallFuncRFunc(IRGS& env, const FCallArgs& fca) {
   auto const func = gen(env, LdFuncFromRFunc, rfunc);
   auto const generics = gen(env, LdGenericsFromRFunc, rfunc);
 
-  auto const new_fca = FCallArgs(
-    static_cast<FCallArgsBase::Flags>(
-      fca.flags | FCallArgsBase::Flags::HasGenerics
-    ),
-    fca.numArgs,
-    fca.numRets,
-    fca.inoutArgs,
-    fca.asyncEagerOffset,
-    fca.lockWhileUnwinding,
-    fca.skipNumArgsCheck,
-    fca.context
-  );
-
   gen(env, IncRef, generics);
   push(env, generics);
 
@@ -989,7 +975,7 @@ void fcallFuncRFunc(IRGS& env, const FCallArgs& fca) {
   updateMarker(env);
   env.irb->exceptionStackBoundary();
 
-  prepareAndCallProfiled(env, func, new_fca, nullptr, false, false);
+  prepareAndCallProfiled(env, func, fca.withGenerics(), nullptr, false, false);
 }
 
 void fcallFuncClsMeth(IRGS& env, const FCallArgs& fca) {
@@ -1009,19 +995,6 @@ void fcallFuncRClsMeth(IRGS& env, const FCallArgs& fca) {
   auto const func = gen(env, LdFuncFromRClsMeth, rclsMeth);
   auto const generics = gen(env, LdGenericsFromRClsMeth, rclsMeth);
 
-  auto const new_fca = FCallArgs(
-    static_cast<FCallArgsBase::Flags>(
-      fca.flags | FCallArgsBase::Flags::HasGenerics
-    ),
-    fca.numArgs,
-    fca.numRets,
-    fca.inoutArgs,
-    fca.asyncEagerOffset,
-    fca.lockWhileUnwinding,
-    fca.skipNumArgsCheck,
-    fca.context
-  );
-
   gen(env, IncRef, generics);
   push(env, generics);
 
@@ -1029,7 +1002,7 @@ void fcallFuncRClsMeth(IRGS& env, const FCallArgs& fca) {
   updateMarker(env);
   env.irb->exceptionStackBoundary();
 
-  prepareAndCallProfiled(env, func, new_fca, cls, false, false);
+  prepareAndCallProfiled(env, func, fca.withGenerics(), cls, false, false);
 }
 
 void fcallFuncStr(IRGS& env, const FCallArgs& fca) {
@@ -1508,8 +1481,8 @@ void emitResolveObjMethod(IRGS& env) {
     RuntimeOption::EvalHackArrDVArrs ? AllocVec : AllocVArray,
     PackedArrayData { 2 }
   );
-  gen(env, InitPackedLayoutArray, IndexData { 0 }, methPair, obj);
-  gen(env, InitPackedLayoutArray, IndexData { 1 }, methPair, func);
+  gen(env, InitVecElem, IndexData { 0 }, methPair, obj);
+  gen(env, InitVecElem, IndexData { 1 }, methPair, func);
   decRef(env, name);
   popC(env);
   popC(env);
@@ -1841,7 +1814,7 @@ void emitDirectCall(IRGS& env, Func* callee, uint32_t numParams,
   }
 
   auto const fca = FCallArgs(FCallArgs::Flags::None, numParams, 1, nullptr,
-                             kInvalidOffset, false, false, nullptr);
+                             kInvalidOffset, nullptr);
   prepareAndCallKnown(env, callee, fca, nullptr, false, false);
 }
 

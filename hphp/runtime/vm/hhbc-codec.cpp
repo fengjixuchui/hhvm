@@ -127,21 +127,13 @@ void encodeFCallArgsBase(UnitEmitter& ue, const FCallArgsBase& fca,
                          bool hasContext) {
   auto flags = uint8_t{fca.flags};
   assertx(!(flags & ~FCallArgsBase::kInternalFlags));
-  if (!fca.numArgs && fca.skipNumArgsCheck) flags |= FCallArgsBase::NoArgs;
   if (fca.numRets != 1) flags |= FCallArgsBase::HasInOut;
   if (hasInoutArgs) flags |= FCallArgsBase::EnforceInOut;
   if (hasAsyncEagerOffset) flags |= FCallArgsBase::HasAsyncEagerOffset;
   if (hasContext) flags |= FCallArgsBase::ExplicitContext;
-  if (fca.lockWhileUnwinding) {
-    // intentionally re-using the SupportsAsyncEagerReturn bit
-    assertx(!(flags & FCallArgsBase::SupportsAsyncEagerReturn));
-    flags |= FCallArgsBase::SupportsAsyncEagerReturn;
-  }
 
   ue.emitByte(flags);
-  if (fca.numArgs || !fca.skipNumArgsCheck) {
-    ue.emitIVA((uint64_t)fca.numArgs * 2 + fca.skipNumArgsCheck);
-  }
+  ue.emitIVA(fca.numArgs);
   if (fca.numRets != 1) ue.emitIVA(fca.numRets);
 }
 
@@ -152,30 +144,15 @@ void encodeFCallArgsIO(UnitEmitter& ue, int numBytes,
 
 FCallArgs decodeFCallArgs(Op thisOpcode, PC& pc, StringDecoder u) {
   assertx(isFCall(thisOpcode));
-  bool lockWhileUnwinding = false;
   bool skipContext = true;
   auto const flags = [&]() {
     auto rawFlags = decode_byte(pc);
-    if (thisOpcode == Op::FCallCtor &&
-        (rawFlags & FCallArgs::SupportsAsyncEagerReturn)) {
-      lockWhileUnwinding = true;
-      rawFlags &= ~FCallArgs::SupportsAsyncEagerReturn;
-    }
     skipContext = !(rawFlags & FCallArgs::ExplicitContext);
     if (u.isNull()) rawFlags &= ~FCallArgs::ExplicitContext;
     return rawFlags;
   }();
 
-  uint32_t numArgs;
-  bool skipNumArgsCheck;
-  if (flags & FCallArgs::NoArgs) {
-    numArgs = 0;
-    skipNumArgsCheck = true;
-  } else {
-    numArgs = decode_iva(pc);
-    skipNumArgsCheck = numArgs % 2;
-    numArgs /= 2;
-  }
+  uint32_t numArgs = decode_iva(pc);
   auto const numRets = (flags & FCallArgs::HasInOut) ? decode_iva(pc) : 1;
   auto const inoutArgs = (flags & FCallArgs::EnforceInOut) ? pc : nullptr;
   if (inoutArgs != nullptr) pc += (numArgs + 7) / 8;
@@ -184,8 +161,7 @@ FCallArgs decodeFCallArgs(Op thisOpcode, PC& pc, StringDecoder u) {
   auto const context = !skipContext ? decode_string(pc, u) : nullptr;
   return FCallArgs(
     static_cast<FCallArgs::Flags>(flags & FCallArgs::kInternalFlags),
-    numArgs, numRets, inoutArgs, asyncEagerOffset, lockWhileUnwinding,
-    skipNumArgsCheck, context
+    numArgs, numRets, inoutArgs, asyncEagerOffset, context
   );
 }
 

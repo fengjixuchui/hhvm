@@ -6,6 +6,12 @@ class Baz {
 }
 
 function foo($x) {
+  $ed = darray[];
+  var_dump(HH\is_array_marked_legacy($ed));
+  var_dump($ed);
+  $ev = varray[];
+  var_dump(HH\is_array_marked_legacy($ev));
+  var_dump($ev);
   $a = darray['a' => $x];
   var_dump(HH\is_array_marked_legacy($a));
   var_dump($a);
@@ -45,6 +51,20 @@ function foo($x) {
   $e = dict[1 => $x];
   var_dump(HH\is_array_marked_legacy($e));
   var_dump($e);
+
+  // casts to d/varray
+  $a = darray(vec[]);
+  var_dump(HH\is_array_marked_legacy($a));
+  var_dump($a);
+  $b = darray(vec[1, 2]);
+  var_dump(HH\is_array_marked_legacy($b));
+  var_dump($b);
+  $c = varray(dict[]);
+  var_dump(HH\is_array_marked_legacy($c));
+  var_dump($c);
+  $d = varray(dict['k' => 1, 2 => 2]);
+  var_dump(HH\is_array_marked_legacy($d));
+  var_dump($d);
 }
 
 function bar<reify T>(vec<T> $v, int $i) {

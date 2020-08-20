@@ -1510,27 +1510,27 @@ To string conversions:
 | AllocVArray<size>, DVArr, NA, PRc
 
   Allocate a new uninitialized vec-like array with space for size elements in
-  it.  The array will be initialized with values using either
-  InitPackedLayoutArray or InitPackedLayoutArrayLoop.
+  it.  The array will be initialized with values using either InitVecElem or
+  InitVecElemLoop.
 
 | AllocVec<size>, D(Vec), NA, PRc
 
   Allocate a new uninitialized vector array with space for size elements in it.
-  The array will be initialized with values using either InitPackedLayoutArray
-  or InitPackedLayoutArrayLoop.
+  The array will be initialized with values using either InitVecElem or
+  InitVecElemLoop.
 
-| InitPackedLayoutArray<index>, ND, S(VArr,Vec) S(Cell), CRc
+| InitVecElem<index>, ND, S(VArr,Vec) S(Cell), CRc
 
   Store the S1 into the slot at index in array S0. This instruction assumes
   that it doesn't have to incref the value being stored. Used to initialize an
-  array allocated with AllocPackedArray or AllocVec.
+  array allocated with AllocVArray or AllocVec.
 
-| InitPackedLayoutArrayLoop<offset,size>, ND, S(VArr,Vec) S(StkPtr), CRc
+| InitVecElemLoop<offset,size>, ND, S(VArr,Vec) S(StkPtr), CRc
 
   Move `size' elements from the stack given by S1, at `offset', into the array
   S0.  Assumes that the first element on the stack is the last element in the
-  array.  Used to initialize an array allocated with AllocPackedArray or
-  AllocVec that was too big to use a series of InitPackedLayoutArray ops.
+  array.  Used to initialize an array allocated with AllocVArray or
+  AllocVec that was too big to use a series of InitVecElem ops.
 
 | AllocStructDArray<keys...>, DDArr,          NA, PRc
 
@@ -1538,9 +1538,9 @@ To string conversions:
 
   Allocate a new key/value dict or mixed-layout array, given N string literal
   immediates for keys. This op initializes the header and hash table of the
-  new array-like, but does not its elements; use InitMixedLayoutArray for that.
+  new array-like, but does not its elements; use InitDictElem for that.
 
-| InitMixedLayoutArray<index,key>, ND, S(DArr,Dict) S(Cell), NF
+| InitDictElem<index,key>, ND, S(DArr,Dict) S(Cell), NF
 
   Initialize the element at position `index` in array S0 to have the string
   literal `key` as its key and S1 as its value. This instruction assumes that
@@ -1967,9 +1967,9 @@ To string conversions:
 
 | CountArray,      D(Int), S(Arr),    NF
 
-| CountVec,        D(Int), S(Vec),    NF
+| CountVec,        D(Int), S(VArr,Vec),    NF
 
-| CountDict,       D(Int), S(Dict),   NF
+| CountDict,       D(Int), S(DArr,Dict),   NF
 
 | CountKeyset,     D(Int), S(Keyset), NF
 
@@ -2281,7 +2281,7 @@ To string conversions:
 
   Has the effects of array_key_exists(S0, S1).
 
-| AKExistsDict, D(Bool), S(Dict) S(Int,Str), NF
+| AKExistsDict, D(Bool), S(DArr,Dict) S(Int,Str), NF
 
   Has the effects of array_key_exists(S0, S1).
 
@@ -2710,17 +2710,17 @@ To string conversions:
   We can use this operation to elide stores for iterator fields that do not
   get loaded again. In debug builds, it will write poison values to the fields.
 
-| GetMixedPtrIter,  DPtrIter, S(DArr,Dict) S(Int), NF
+| GetDictPtrIter,  DPtrIter, S(DArr,Dict) S(Int), NF
 
-| GetPackedPtrIter, DPtrIter, S(VArr,Vec) S(Int), NF
+| GetVecPtrIter, DPtrIter, S(VArr,Vec) S(Int), NF
 
   Returns a pointer to the elm S1 of a {mixed,packed}-layout array S0. S1 does
   not need to be a valid array position; for example, it may equal the size of
   the array (so that the "elm" returned is the pointer-iteration end for S0).
 
-| AdvanceMixedPtrIter<offset>,  DPtrIter, S(PtrToElemCell), NF
+| AdvanceDictPtrIter<offset>,  DPtrIter, S(PtrToElemCell), NF
 
-| AdvancePackedPtrIter<offset>, DPtrIter, S(PtrToElemCell), NF
+| AdvanceVecPtrIter<offset>, DPtrIter, S(PtrToElemCell), NF
 
   Increments the pointer S0 to the array element with the given layout `offset`
   positions forward. `offset` is allowed to be negative.
@@ -2857,7 +2857,7 @@ fields of that struct for holding intermediate values.
 
   Profile access of the element keyed by S1 in S0, tracking sizes and offsets.
 
-| CheckMixedArrayKeys<T>, ND, S(DArr,Dict), B
+| CheckDictKeys<T>, ND, S(DArr,Dict), B
 
   Check that the given mixed array is free of tombstones and that all of its
   elements' keys match the type T. If any check fails, branch to block B.
@@ -3184,15 +3184,13 @@ fields of that struct for holding intermediate values.
 
   Returns true iff S0 is in the range [0, S1).
 
-| ThrowArrayIndexException<isInOut>, ND, S(Int), T
+| ThrowArrayIndexException, ND, S(ArrLike) S(Int), T
 
   Throws an out of bounds exception if S0 is an undefined index for an array.
-  The isInOut option indicates that the access was for an inout parameter.
 
-| ThrowArrayKeyException<isInOut>, ND, S(Str), T
+| ThrowArrayKeyException, ND, S(ArrLike) S(Str), T
 
   Throws an out of bounds exception if S0 is an undefined key for an array.
-  The isInOut option indicates that the access was for an inout parameter.
 
 | ThrowOutOfBounds, ND, S(ArrLike|Obj) S(Cell), T|LA
 
@@ -3239,18 +3237,18 @@ fields of that struct for holding intermediate values.
 
   Profile the access to property S(1) with base class S(0).
 
-| CheckPackedArrayDataBounds, ND, S(VArr,Vec) S(Int), B
+| CheckVecBounds, ND, S(VArr,Vec) S(Int), B
 
   Checks that the index in S1 is within the bounds of the packed array or
   vector array in S0. Branches to B if the index is out of bounds.
 
-| LdPackedArrayDataElemAddr<T>, DParam(LvalToElemCell), S(VArr,Vec) S(Int), NF
+| LdVecElemAddr<T>, DParam(LvalToElemCell), S(VArr,Vec) S(Int), NF
 
   Loads the address of the element at index S1 of the packed array or vec array
   in S0. This instruction assumes the array actually contains an element at
   that offset (IE, the array has the proper length).
 
-| ReservePackedArrayDataNewElem, D(Int), S(VArr,Vec), B
+| ReserveVecNewElem, D(Int), S(VArr,Vec), B
 
   If there is room in the packed or vec array (which is assumed to be mutable),
   increments the array size and returns the index of the new last element
@@ -3323,8 +3321,12 @@ fields of that struct for holding intermediate values.
 
 | SetLegacyDict, D(Dict), S(Dict), CRc|PRc
 
-  Enable the legacy bit on the vec/dict in S0, copying it if necessary and
-  returning the tagged array.
+| UnsetLegacyVec, D(Vec), S(Vec), CRc|PRc
+
+| UnsetLegacyDict, D(Dict), S(Dict), CRc|PRc
+
+  Enable/disable the legacy bit on the vec/dict in S0, copying it if necessary 
+  and returning the tagged array.
 
 
 18. Exception/unwinding support

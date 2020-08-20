@@ -72,6 +72,7 @@ enum BinopAllowsAwaitInPositions {
 enum UnstableFeatures {
     UnionIntersectionTypeHints,
     ClassLevelWhere,
+    ExpressionTrees,
 }
 
 use BinopAllowsAwaitInPositions::*;
@@ -426,6 +427,7 @@ where
                 parser_options.tco_union_intersection_type_hints
             }
             UnstableFeatures::ClassLevelWhere => parser_options.po_enable_class_level_where_clauses,
+            _ => false,
         } || self.env.context.active_unstable_features.contains(feature);
         if !enabled {
             self.errors.push(Self::make_error_from_node(
@@ -1831,7 +1833,7 @@ where
                 );
 
                 self.invalid_modifier_errors("Top-level functions", node, |kind| {
-                    kind == TokenKind::Async || kind == TokenKind::Coroutine
+                    kind == TokenKind::Async
                 });
             }
             MethodishDeclaration(md) => {
@@ -1882,7 +1884,6 @@ where
                         || kind == TokenKind::Protected
                         || kind == TokenKind::Public
                         || kind == TokenKind::Async
-                        || kind == TokenKind::Coroutine
                 });
 
                 if self.is_inside_interface() {
@@ -3116,7 +3117,6 @@ where
                 | ConstructorCall(_)
                 | ShapeExpression(_)
                 | TupleExpression(_)
-                | ArrayIntrinsicExpression(_)
                 | DarrayIntrinsicExpression(_)
                 | DictionaryIntrinsicExpression(_)
                 | KeysetIntrinsicExpression(_)
@@ -4634,9 +4634,6 @@ where
             DictionaryIntrinsicExpression(x) => {
                 check_collection_members(self, &x.dictionary_intrinsic_members)
             }
-            ArrayIntrinsicExpression(x) => {
-                check_collection_members(self, &x.array_intrinsic_members)
-            }
             ShapeExpression(x) => check_collection_members(self, &x.shape_expression_fields),
             ElementInitializer(x) => {
                 self.check_constant_expression(&x.element_key);
@@ -5086,7 +5083,6 @@ where
             LambdaExpression(_)
             | AnonymousFunction(_)
             | AwaitableCreationExpression(_)
-            | ArrayIntrinsicExpression(_)
             | DarrayIntrinsicExpression(_)
             | VarrayIntrinsicExpression(_)
             | ShapeExpression(_)
@@ -5490,7 +5486,6 @@ where
                 self.methodish_errors(node);
             }
 
-            ArrayIntrinsicExpression(_) => self.expression_errors(node),
             LiteralExpression(_)
             | SafeMemberSelectionExpression(_)
             | FunctionCallExpression(_)
@@ -5670,6 +5665,9 @@ where
                 ),
                 _ => (),
             },
+            PrefixedCodeExpression(_) => {
+                self.check_can_use_feature(node, &UnstableFeatures::ExpressionTrees)
+            }
             _ => (),
         }
 
@@ -5696,7 +5694,7 @@ where
     }
 
     fn parse_errors_impl(mut self) -> Vec<SyntaxError> {
-        if self.env.is_typechecker() && !self.env.parser_options.po_disable_modes {
+        if self.env.is_typechecker() {
             self.is_invalid_hack_mode();
         }
         self.fold_child_nodes(self.env.syntax_tree.root());
@@ -5754,8 +5752,8 @@ where
     }
 }
 
-pub fn parse_errors<'a>(
-    tree: &'a SyntaxTree<'a, PositionedSyntax, ()>,
+pub fn parse_errors<'a, State: Clone>(
+    tree: &'a SyntaxTree<'a, PositionedSyntax, State>,
     parser_options: ParserOptions,
     hhvm_compat_mode: bool,
     hhi_mode: bool,
@@ -5771,8 +5769,8 @@ pub fn parse_errors<'a>(
     )
 }
 
-pub fn parse_errors_with_text<'a>(
-    tree: &'a SyntaxTree<'a, PositionedSyntax, ()>,
+pub fn parse_errors_with_text<'a, State: Clone>(
+    tree: &'a SyntaxTree<'a, PositionedSyntax, State>,
     text: IndexedSourceText<'a>,
     parser_options: ParserOptions,
     hhvm_compat_mode: bool,

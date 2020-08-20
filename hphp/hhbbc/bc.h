@@ -139,10 +139,8 @@ inline bool operator!=(const LocalRange& a, const LocalRange& b) {
 struct FCallArgsShort {
   using Flags = FCallArgsBase::Flags;
   static constexpr int kValidFlag = (1u << 15);
-  static constexpr int kSkipNumArgsCheck = (1u << 14);
-  static constexpr int kLockWhileUnwinding = (1u << 13);
-  static constexpr int kEnforceInOut = (1u << 12);
-  static constexpr int kInoutMask = (1u << 12) - 1;
+  static constexpr int kEnforceInOut = (1u << 14);
+  static constexpr int kInoutMask = (1u << 14) - 1;
 
   BlockId       asyncEagerTarget;
   Flags         flags;
@@ -152,8 +150,7 @@ struct FCallArgsShort {
   static FCallArgsShort create(
       Flags flags, uint32_t numArgs, uint32_t numRets,
       const std::unique_ptr<uint8_t[]>& inoutArgs,
-      BlockId asyncEagerTarget, bool lockWhileUnwinding,
-      bool skipNumArgsCheck, LSString context) {
+      BlockId asyncEagerTarget, LSString context) {
     if (numArgs >= 16 ||
         numRets >= 16 ||
         (inoutArgs && numArgs > 8 && inoutArgs[1] > (kInoutMask >> 8)) ||
@@ -172,18 +169,10 @@ struct FCallArgsShort {
       }
       fca.inoutArgsAndFlags |= kEnforceInOut;
     }
-    if (skipNumArgsCheck) fca.inoutArgsAndFlags |= kSkipNumArgsCheck;
-    if (lockWhileUnwinding) fca.inoutArgsAndFlags |= kLockWhileUnwinding;
     fca.inoutArgsAndFlags |= kValidFlag;
     return fca;
   }
   bool valid() const { return inoutArgsAndFlags & kValidFlag; }
-  bool skipNumArgsCheck() const {
-    return inoutArgsAndFlags & kSkipNumArgsCheck;
-  }
-  bool lockWhileUnwinding() const {
-    return inoutArgsAndFlags & kLockWhileUnwinding;
-  }
   bool enforceInOut() const {
     return inoutArgsAndFlags & kEnforceInOut;
   }
@@ -197,29 +186,24 @@ struct FCallArgsShort {
     fca.flags = static_cast<Flags>(fca.flags & ~Flags::HasGenerics);
     return fca;
   }
+  FCallArgsShort withoutLockWhileUnwinding() const {
+    auto fca = *this;
+    fca.flags = static_cast<Flags>(fca.flags & ~Flags::LockWhileUnwinding);
+    return fca;
+  }
+  FCallArgsShort withoutRepack() const {
+    auto fca = *this;
+    fca.flags = static_cast<Flags>(fca.flags | Flags::SkipRepack);
+    return fca;
+  }
   FCallArgsShort withoutInOut() const {
     auto fca = *this;
     fca.inoutArgsAndFlags &= ~(kInoutMask | kEnforceInOut);
     return fca;
   }
-  FCallArgsShort withoutLockWhileUnwinding() const {
+  FCallArgsShort withoutAsyncEagerTarget() const {
     auto fca = *this;
-    fca.inoutArgsAndFlags &= ~kLockWhileUnwinding;
-    return fca;
-  }
-  FCallArgsShort fixEager(bool supports_eager) const {
-    auto fca = *this;
-    if (supports_eager) {
-      assertx(fca.asyncEagerTarget != NoBlockId);
-      fca.flags = static_cast<Flags>(
-        fca.flags | Flags::SupportsAsyncEagerReturn
-      );
-    } else {
-      fca.asyncEagerTarget = NoBlockId;
-      fca.flags = static_cast<Flags>(
-        fca.flags & ~Flags::SupportsAsyncEagerReturn
-      );
-    }
+    fca.asyncEagerTarget = NoBlockId;
     return fca;
   }
 
@@ -231,11 +215,6 @@ struct FCallArgsShort {
     f(numArgs > 8 ? 2 : 1, br);
   }
 
-  FCallArgsShort withoutNumArgsCheck() const {
-    auto fca = *this;
-    fca.inoutArgsAndFlags |= kSkipNumArgsCheck;
-    return fca;
-  }
   friend bool operator==(const FCallArgsShort& a, const FCallArgsShort& b) {
     return
       a.flags == b.flags && a.numArgs == b.numArgs && a.numRets == b.numRets &&
@@ -255,7 +234,6 @@ struct FCallArgsShort {
       );
     }
     hash = HPHP::hash_int64_pair(hash, asyncEagerTarget);
-    hash = HPHP::hash_int64_pair(hash, lockWhileUnwinding());
     return static_cast<size_t>(hash);
   }
   bool hasUnpack() const {
@@ -264,8 +242,11 @@ struct FCallArgsShort {
   bool hasGenerics() const {
     return flags & Flags::HasGenerics;
   }
-  bool supportsAsyncEagerReturn() const {
-    return flags & Flags::SupportsAsyncEagerReturn;
+  bool lockWhileUnwinding() const {
+    return flags & Flags::LockWhileUnwinding;
+  }
+  bool skipRepack() const {
+    return flags & Flags::SkipRepack;
   }
   uint32_t numInputs() const {
     return
@@ -302,33 +283,25 @@ struct FCallArgsShort {
     return Flavor::U;
   }
   FCallArgsBase base() const {
-    return FCallArgsBase{
-      flags, numArgs, numRets,
-      lockWhileUnwinding(), skipNumArgsCheck()
-    };
+    return FCallArgsBase{flags, numArgs, numRets};
   }
 };
 
 struct FCallArgsLong : FCallArgsBase {
   explicit FCallArgsLong(uint32_t numArgs)
-    : FCallArgsLong(Flags::None, numArgs, 1,
-                    nullptr, NoBlockId, false, false, nullptr) {
+    : FCallArgsLong(Flags::None, numArgs, 1, nullptr, NoBlockId, nullptr) {
   }
   explicit FCallArgsLong(Flags flags, uint32_t numArgs, uint32_t numRets,
                          std::unique_ptr<uint8_t[]> inoutArgs,
-                         BlockId asyncEagerTarget, bool lockWhileUnwinding,
-                         bool skipNumArgsCheck, LSString context)
-    : FCallArgsBase(flags, numArgs, numRets,
-                    lockWhileUnwinding, skipNumArgsCheck)
+                         BlockId asyncEagerTarget, LSString context)
+    : FCallArgsBase(flags, numArgs, numRets)
     , inoutArgs(std::move(inoutArgs))
     , asyncEagerTarget(asyncEagerTarget)
     , context(context) {
-    assertx(IMPLIES(asyncEagerTarget == NoBlockId,
-                    !supportsAsyncEagerReturn()));
   }
   FCallArgsLong(const FCallArgsLong& o)
     : FCallArgsLong(o.flags, o.numArgs, o.numRets, nullptr, o.asyncEagerTarget,
-                    o.lockWhileUnwinding, o.skipNumArgsCheck, o.context) {
+                    o.context) {
     if (o.inoutArgs) {
       auto const numBytes = (numArgs + 7) / 8;
       inoutArgs = std::make_unique<uint8_t[]>(numBytes);
@@ -337,8 +310,7 @@ struct FCallArgsLong : FCallArgsBase {
   }
   FCallArgsLong(FCallArgsLong&& o)
     : FCallArgsLong(o.flags, o.numArgs, o.numRets, std::move(o.inoutArgs),
-                    o.asyncEagerTarget, o.lockWhileUnwinding,
-                    o.skipNumArgsCheck, o.context) {}
+                    o.asyncEagerTarget, o.context) {}
 
   bool enforceInOut() const { return inoutArgs.get() != nullptr; }
   bool isInOut(uint32_t i) const {
@@ -351,36 +323,27 @@ struct FCallArgsLong : FCallArgsBase {
     fca.flags = static_cast<Flags>(fca.flags & ~Flags::HasGenerics);
     return fca;
   }
+  FCallArgsLong withoutLockWhileUnwinding() const {
+    auto fca = *this;
+    fca.flags = static_cast<Flags>(fca.flags & ~Flags::LockWhileUnwinding);
+    return fca;
+  }
+
+  FCallArgsLong withoutRepack() const {
+    auto fca = *this;
+    fca.flags = static_cast<Flags>(fca.flags | Flags::SkipRepack);
+    return fca;
+  }
 
   FCallArgsLong withoutInOut() const {
     auto fca = *this;
     fca.inoutArgs = nullptr;
     return fca;
   }
-  FCallArgsLong withoutLockWhileUnwinding() const {
-    auto fca = *this;
-    fca.lockWhileUnwinding = false;
-    return fca;
-  }
 
-  FCallArgsLong fixEager(bool supports_eager) const {
+  FCallArgsLong withoutAsyncEagerTarget() const {
     auto fca = *this;
-    if (supports_eager) {
-      assertx(fca.asyncEagerTarget != NoBlockId);
-      fca.flags = static_cast<Flags>(
-        fca.flags | SupportsAsyncEagerReturn
-      );
-    } else {
-      fca.asyncEagerTarget = NoBlockId;
-      fca.flags = static_cast<Flags>(
-        fca.flags & ~SupportsAsyncEagerReturn
-      );
-    }
-    return fca;
-  }
-  FCallArgsLong withoutNumArgsCheck() const {
-    auto fca = *this;
-    fca.skipNumArgsCheck = true;
+    fca.asyncEagerTarget = NoBlockId;
     return fca;
   }
   template<typename F>
@@ -398,8 +361,6 @@ struct FCallArgsLong : FCallArgsBase {
       a.flags == b.flags && a.numArgs == b.numArgs && a.numRets == b.numRets &&
       eq(a.inoutArgs.get(), b.inoutArgs.get(), (a.numArgs + 7) / 8) &&
       a.asyncEagerTarget == b.asyncEagerTarget &&
-      a.lockWhileUnwinding == b.lockWhileUnwinding &&
-      a.skipNumArgsCheck == b.skipNumArgsCheck &&
       a.context == b.context;
   }
 
@@ -411,7 +372,6 @@ struct FCallArgsLong : FCallArgsBase {
       hash = HPHP::hash_int64_pair(hash, hash_br);
     }
     hash = HPHP::hash_int64_pair(hash, asyncEagerTarget);
-    hash = HPHP::hash_int64_pair(hash, lockWhileUnwinding);
     if (context) hash = HPHP::hash_int64_pair(hash, context->hash());
     return static_cast<size_t>(hash);
   }
@@ -447,19 +407,16 @@ struct FCallArgsLong : FCallArgsBase {
 struct FCallArgs {
   using Flags = FCallArgsBase::Flags;
   explicit FCallArgs(uint32_t numArgs)
-    : FCallArgs(Flags::None, numArgs, 1, nullptr, NoBlockId, false, false,
-                nullptr) {}
+    : FCallArgs(Flags::None, numArgs, 1, nullptr, NoBlockId, nullptr) {}
   FCallArgs(Flags flags, uint32_t numArgs, uint32_t numRets,
-            std::unique_ptr<uint8_t[]> inoutArgs,
-            BlockId asyncEagerTarget, bool lockWhileUnwinding,
-            bool skipNumArgsCheck, LSString context)
+            std::unique_ptr<uint8_t[]> inoutArgs, BlockId asyncEagerTarget,
+            LSString context)
       : s{FCallArgsShort::create(flags, numArgs, numRets, inoutArgs,
-                                 asyncEagerTarget, lockWhileUnwinding,
-                                 skipNumArgsCheck, context)} {
+                                 asyncEagerTarget, context)} {
     if (!s.valid()) {
       assertx(!l);
       l.emplace(flags, numArgs, numRets, std::move(inoutArgs), asyncEagerTarget,
-                lockWhileUnwinding, skipNumArgsCheck, context);
+                context);
     }
   }
   FCallArgs(const FCallArgsShort& o) : s{o} {}
@@ -516,13 +473,13 @@ struct FCallArgs {
     if (s.valid()) return s.withoutLockWhileUnwinding();
     return l->withoutLockWhileUnwinding();
   }
-  FCallArgs fixEager(bool supports_eager) const {
-    if (s.valid()) return s.fixEager(supports_eager);
-    return l->fixEager(supports_eager);
+  FCallArgs withoutAsyncEagerTarget() const {
+    if (s.valid()) return s.withoutAsyncEagerTarget();
+    return l->withoutAsyncEagerTarget();
   }
-  FCallArgs withoutNumArgsCheck() const {
-    if (s.valid()) return s.withoutNumArgsCheck();
-    return l->withoutNumArgsCheck();
+  FCallArgs withoutRepack() const {
+    if (s.valid()) return s.withoutRepack();
+    return l->withoutRepack();
   }
 
   FCallArgsBase base() const {
@@ -570,27 +527,20 @@ struct FCallArgs {
   BlockId& asyncEagerTarget() {
     return s.valid() ? s.asyncEagerTarget : l.mutate()->asyncEagerTarget;
   }
-  bool lockWhileUnwinding() const {
-    return s.valid() ? s.lockWhileUnwinding() : l->lockWhileUnwinding;
-  }
   bool hasUnpack() const {
     return s.valid() ? s.hasUnpack() : l->hasUnpack();
   }
   bool hasGenerics() const {
     return s.valid() ? s.hasGenerics() : l->hasGenerics();
   }
+  bool lockWhileUnwinding() const {
+    return s.valid() ? s.lockWhileUnwinding() : l->lockWhileUnwinding();
+  }
   uint32_t numInputs() const {
     return s.valid() ? s.numInputs() : l->numInputs();
   }
-  bool supportsAsyncEagerReturn() const {
-    return s.valid() ?
-      s.supportsAsyncEagerReturn() :
-      l->supportsAsyncEagerReturn();
-  }
-  bool skipNumArgsCheck() const {
-    return s.valid() ?
-      s.skipNumArgsCheck() :
-      l->skipNumArgsCheck;
+  bool skipRepack() const {
+    return s.valid() ? s.skipRepack() : l->skipRepack();
   }
   template<int nin>
   uint32_t numPop() const {

@@ -18,6 +18,8 @@ type purpose = string [@@deriving ord, eq, show]
 (* A policy variable *)
 type policy_var = string [@@deriving ord, eq, show]
 
+module PosSet = Set.Make (Pos)
+
 (* In policies, variables are handled using a locally-nameless
    representation. This means that variables bound in a
    constraints use de Bruijn indices while free variables use
@@ -29,12 +31,26 @@ type policy =
   (* Free variable; relative to a scope *)
   | Pfree_var of policy_var * Ifc_scope.t
   (* A policy allowing use for a single purpose *)
-  | Ppurpose of purpose
+  | Ppurpose of
+      (PosSet.t[@equal (fun _ _ -> true)] [@compare (fun _ _ -> 0)]) * purpose
   (* Bottom policy; public *)
-  | Pbot
+  | Pbot of (PosSet.t[@equal (fun _ _ -> true)] [@compare (fun _ _ -> 0)])
   (* Top policy; private *)
-  | Ptop
-[@@deriving ord, eq, show]
+  | Ptop of (PosSet.t[@equal (fun _ _ -> true)] [@compare (fun _ _ -> 0)])
+[@@deriving eq, ord]
+
+let pos_of = function
+  | Ppurpose (pos, _)
+  | Ptop pos
+  | Pbot pos ->
+    pos
+  | _ -> PosSet.empty
+
+let set_pos pos = function
+  | Ppurpose (_, name) -> Ppurpose (pos, name)
+  | Ptop _ -> Ptop pos
+  | Pbot _ -> Pbot pos
+  | pol -> pol
 
 (* Two kinds of quantification in constraints, universal and
    existential *)
@@ -61,7 +77,10 @@ and class_ = {
 }
 
 and fun_ = {
+  (* The PC guards a function's effects *)
   f_pc: policy;
+  (* Policy that the function's computational contents depend on *)
+  f_self: policy;
   f_args: ptype list;
   f_ret: ptype;
   f_exn: ptype;
@@ -78,12 +97,12 @@ type prop =
   | Ctrue
   | Cquant of quant * int * prop
   (* if policy <= purpose then prop0 else prop1 *)
-  | Ccond of (policy * purpose) * prop * prop
+  | Ccond of (Pos.t * policy * purpose) * prop * prop
   | Cconj of prop * prop
-  | Cflow of (policy * policy)
+  | Cflow of (PosSet.t * policy * policy)
   (* holes are introduced by calls to functions for which
      we do not have a flow type at hand *)
-  | Chole of fun_proto
+  | Chole of (Pos.t * fun_proto)
 
 module Flow = struct
   type t = policy * policy
@@ -115,7 +134,7 @@ module VarSet = Set.Make (Var)
 
 type var_set = VarSet.t
 
-type entailment = prop -> Flow.t list
+type entailment = prop -> (PosSet.t * policy * policy) list
 
 type local_env = {
   le_vars: ptype LMap.t;
@@ -139,6 +158,7 @@ type env = {
 }
 
 type policied_property = {
+  pp_pos: Pos.t;
   pp_name: string;
   pp_type: Type.locl_ty;
   pp_purpose: purpose option;
@@ -246,6 +266,8 @@ type renv = {
 
 (* The analysis result for a callable *)
 type callable_result = {
+  (* Position of the callable the result pertains to *)
+  res_span: Pos.t;
   (* The callable signature, with flow types *)
   res_proto: fun_proto;
   (* The scope of the free policy variables in res_proto
@@ -264,3 +286,7 @@ type callable_result = {
 type adjustment =
   | Astrengthen
   | Aweaken
+
+type call_type =
+  | Cglobal of string
+  | Clocal of fun_

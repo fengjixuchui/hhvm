@@ -45,6 +45,7 @@ namespace HPHP {
 
 std::aligned_storage<sizeof(ArrayData), 16>::type s_theEmptyVec;
 std::aligned_storage<sizeof(ArrayData), 16>::type s_theEmptyVArray;
+std::aligned_storage<sizeof(ArrayData), 16>::type s_theEmptyMarkedVec;
 
 struct PackedArray::VecInitializer {
   VecInitializer() {
@@ -68,6 +69,16 @@ struct PackedArray::VArrayInitializer {
 };
 PackedArray::VArrayInitializer PackedArray::s_varr_initializer;
 
+struct PackedArray::MarkedVecInitializer {
+  MarkedVecInitializer() {
+    auto const aux = packSizeIndexAndAuxBits(0, ArrayData::kLegacyArray);
+    auto const ad = reinterpret_cast<ArrayData*>(&s_theEmptyMarkedVec);
+    ad->m_sizeAndPos = 0;
+    ad->initHeader_16(HeaderKind::Vec, StaticValue, aux);
+    assertx(checkInvariants(ad));
+  }
+};
+PackedArray::MarkedVecInitializer PackedArray::s_marked_vec_initializer;
 //////////////////////////////////////////////////////////////////////
 
 namespace {
@@ -473,7 +484,7 @@ ArrayData* PackedArray::MakeUninitializedVec(uint32_t size) {
   return tagArrProv(ad);
 }
 
-ArrayData* PackedArray::MakeVecFromAPC(const APCArray* apc) {
+ArrayData* PackedArray::MakeVecFromAPC(const APCArray* apc, bool isLegacy) {
   assertx(apc->isPacked());
   auto const apcSize = apc->size();
   VecInit init{apcSize};
@@ -481,6 +492,7 @@ ArrayData* PackedArray::MakeVecFromAPC(const APCArray* apc) {
     init.append(apc->getValue(i)->toLocal());
   }
   auto const ad = init.create();
+  ad->setLegacyArray(isLegacy);
   return tagArrProv(ad, apc);
 }
 
@@ -603,12 +615,6 @@ auto MutableOpInt(ArrayData* adIn, int64_t k, bool copy, FoundFn found) {
 
 arr_lval PackedArray::LvalInt(ArrayData* adIn, int64_t k) {
   assertx(checkInvariants(adIn));
-  if (!ExistsInt(adIn, k)) throwMissingElementException("Lval");
-  auto const ad = adIn->cowCheck() ? Copy(adIn) : adIn;
-  return { ad, LvalUncheckedInt(ad, k) };
-}
-
-arr_lval PackedArray::LvalIntVec(ArrayData* adIn, int64_t k) {
   return MutableOpInt(adIn, k, adIn->cowCheck(),
     [&] (ArrayData* ad) { return arr_lval { ad, LvalUncheckedInt(ad, k) }; }
   );
@@ -621,15 +627,18 @@ tv_lval PackedArray::LvalUncheckedInt(ArrayData* ad, int64_t k) {
   return &packedData(ad)[k];
 }
 
-arr_lval PackedArray::LvalStr(ArrayData* adIn, StringData*) {
+arr_lval PackedArray::LvalStr(ArrayData* adIn, StringData* key) {
   assertx(checkInvariants(adIn));
-  throwMissingElementException("Lval");
-}
-
-arr_lval PackedArray::LvalStrVec(ArrayData* adIn, StringData* key) {
-  assertx(checkInvariants(adIn));
-  assertx(adIn->isVecKind());
-  throwInvalidArrayKeyException(key, adIn);
+  if (adIn->isVecKind()) {
+    throwInvalidArrayKeyException(key, adIn);
+  } else {
+    if (RO::EvalHackArrCompatNotices) {
+      raise_hackarr_compat_notice(
+        "Raising OutOfBoundsException for accessing string index of varray"
+      );
+    }
+    throwOOBArrayKeyException(key, adIn);
+  }
 }
 
 tv_lval PackedArray::LvalNewInPlace(ArrayData* ad) {

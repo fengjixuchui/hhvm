@@ -347,12 +347,11 @@ struct PackedAccessor : public Accessor {
   }
 
   SSATmp* getSize(IRGS& env, SSATmp* arr) const override {
-    auto const op = is_hack_arr ? CountVec : CountArray;
-    return gen(env, op, arr);
+    return gen(env, CountVec, arr);
   }
 
   SSATmp* getPos(IRGS& env, SSATmp* arr, SSATmp* idx) const override {
-    return is_ptr_iter ? gen(env, GetPackedPtrIter, arr, idx) : idx;
+    return is_ptr_iter ? gen(env, GetVecPtrIter, arr, idx) : idx;
   }
 
   SSATmp* getElm(IRGS& env, SSATmp* arr, SSATmp* pos) const override {
@@ -371,7 +370,7 @@ struct PackedAccessor : public Accessor {
 
   SSATmp* advancePos(IRGS& env, SSATmp* pos, int16_t offset) const override {
     return is_ptr_iter
-      ? gen(env, AdvancePackedPtrIter, IterOffsetData{offset}, pos)
+      ? gen(env, AdvanceVecPtrIter, IterOffsetData{offset}, pos)
       : gen(env, AddInt, cns(env, offset), pos);
   }
 
@@ -383,8 +382,7 @@ private:
 struct MixedAccessor : public Accessor {
   explicit MixedAccessor(IterSpecialization specialization) {
     is_ptr_iter = specialization.base_const;
-    is_hack_arr = specialization.base_type == IterSpecialization::Dict;
-    arr_type = is_hack_arr ? TDict : TDArr;
+    arr_type = specialization.base_type == IterSpecialization::Dict ? TDict : TDArr;
     if (allowBespokeArrayLikes()) {
       arr_type = arr_type.narrowToVanilla();
     }
@@ -395,21 +393,20 @@ struct MixedAccessor : public Accessor {
 
   SSATmp* checkBase(IRGS& env, SSATmp* base, Block* exit) const override {
     auto const arr = gen(env, CheckType, exit, arr_type, base);
-    gen(env, CheckMixedArrayKeys, exit, key_type, arr);
+    gen(env, CheckDictKeys, exit, key_type, arr);
     return arr;
   }
 
   SSATmp* getSize(IRGS& env, SSATmp* arr) const override {
-    auto const op = is_hack_arr ? CountDict : CountArray;
-    return gen(env, op, arr);
+    return gen(env, CountDict, arr);
   }
 
   SSATmp* getPos(IRGS& env, SSATmp* arr, SSATmp* idx) const override {
-    return is_ptr_iter ? gen(env, GetMixedPtrIter, arr, idx) : idx;
+    return is_ptr_iter ? gen(env, GetDictPtrIter, arr, idx) : idx;
   }
 
   SSATmp* getElm(IRGS& env, SSATmp* arr, SSATmp* pos) const override {
-    return is_ptr_iter ? pos : gen(env, GetMixedPtrIter, arr, pos);
+    return is_ptr_iter ? pos : gen(env, GetDictPtrIter, arr, pos);
   }
 
   SSATmp* getKey(IRGS& env, SSATmp* arr, SSATmp* elm) const override {
@@ -422,13 +419,12 @@ struct MixedAccessor : public Accessor {
 
   SSATmp* advancePos(IRGS& env, SSATmp* pos, int16_t offset) const override {
     return is_ptr_iter
-      ? gen(env, AdvanceMixedPtrIter, IterOffsetData{offset}, pos)
+      ? gen(env, AdvanceDictPtrIter, IterOffsetData{offset}, pos)
       : gen(env, AddInt, cns(env, offset), pos);
   }
 
 private:
   bool is_ptr_iter = false;
-  bool is_hack_arr = false;
   Type key_type;
 };
 

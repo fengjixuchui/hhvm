@@ -51,17 +51,18 @@
 #include "hphp/runtime/vm/trait-method-import-data.h"
 #include "hphp/runtime/vm/unit-util.h"
 
-#include "hphp/hhbbc/type-builtins.h"
-#include "hphp/hhbbc/type-system.h"
-#include "hphp/hhbbc/representation.h"
-#include "hphp/hhbbc/unit-util.h"
+#include "hphp/hhbbc/analyze.h"
 #include "hphp/hhbbc/class-util.h"
 #include "hphp/hhbbc/context.h"
 #include "hphp/hhbbc/func-util.h"
 #include "hphp/hhbbc/options.h"
 #include "hphp/hhbbc/options-util.h"
 #include "hphp/hhbbc/parallel.h"
-#include "hphp/hhbbc/analyze.h"
+#include "hphp/hhbbc/representation.h"
+#include "hphp/hhbbc/type-builtins.h"
+#include "hphp/hhbbc/type-system.h"
+#include "hphp/hhbbc/unit-util.h"
+#include "hphp/hhbbc/wide-func.h"
 
 #include "hphp/util/algorithm.h"
 #include "hphp/util/assertions.h"
@@ -2170,7 +2171,7 @@ std::unique_ptr<php::Func> clone_meth_helper(
     return true;
   };
 
-  auto mf = php::MutFunc(cloneMeth.get());
+  auto mf = php::WideFunc::mut(cloneMeth.get());
   hphp_fast_map<size_t, hphp_fast_map<size_t, uint32_t>> updates;
 
   for (size_t bid = 0; bid < mf.blocks().size(); bid++) {
@@ -2191,7 +2192,7 @@ std::unique_ptr<php::Func> clone_meth_helper(
   }
 
   for (auto elm : updates) {
-    auto const blk = mf.blocks_mut()[elm.first].mutate();
+    auto const blk = mf.blocks()[elm.first].mutate();
     for (auto const& ix : elm.second) {
       blk->hhbcs[ix.first].CreateCl.arg2 = ix.second;
     }
@@ -3358,11 +3359,9 @@ Type context_sensitive_return_type(IndexData& data,
     ++interp_nesting_level;
     SCOPE_EXIT { --interp_nesting_level; };
 
-    auto const calleeCtx = Context {
-      finfo->func->unit,
-      finfo->func,
-      finfo->func->cls
-    };
+    auto const func = finfo->func;
+    auto const wf = php::WideFunc::cns(func);
+    auto const calleeCtx = AnalysisContext { func->unit, wf, func->cls };
     auto const ty =
       analyze_func_inline(*data.m_index, calleeCtx,
                           callCtx.context, callCtx.args).inferredReturn;
@@ -5015,9 +5014,10 @@ Type Index::lookup_foldable_return_type(Context ctx,
     ++interp_nesting_level;
     SCOPE_EXIT { --interp_nesting_level; };
 
+    auto const wf = php::WideFunc::cns(func);
     auto const fa = analyze_func_inline(
       *this,
-      Context { func->unit, func, func->cls },
+      AnalysisContext { func->unit, wf, func->cls },
       calleeCtx.context,
       calleeCtx.args,
       CollectionOpts::EffectFreeOnly
@@ -5473,7 +5473,7 @@ void Index::refine_class_constants(
 
 void Index::refine_constants(const FuncAnalysisResult& fa,
                              DependencyContextSet& deps) {
-  auto const func = fa.ctx.func;
+  auto const& func = fa.ctx.func;
   if (func->cls != nullptr) return;
 
   auto const val = tv(fa.inferredReturn);
@@ -5572,7 +5572,7 @@ static bool moreRefinedForIndex(const Type& newType,
 
 void Index::refine_return_info(const FuncAnalysisResult& fa,
                                DependencyContextSet& deps) {
-  auto const func = fa.ctx.func;
+  auto const& func = fa.ctx.func;
   auto const finfo = create_func_info(*m_data, func);
   auto const t = loosen_interfaces(fa.inferredReturn);
 

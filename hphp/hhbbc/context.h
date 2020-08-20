@@ -22,6 +22,7 @@
 #include "hphp/hhbbc/index.h"
 #include "hphp/hhbbc/representation.h"
 #include "hphp/hhbbc/type-system.h"
+#include "hphp/hhbbc/wide-func.h"
 
 #include "hphp/util/compact-vector.h"
 
@@ -29,7 +30,9 @@ namespace HPHP { namespace HHBBC {
 
 //////////////////////////////////////////////////////////////////////
 
+struct CollectedInfo;
 struct ContextHash;
+struct FuncAnalysis;
 
 //////////////////////////////////////////////////////////////////////
 
@@ -45,6 +48,7 @@ struct Context {
 
   using Hash = ContextHash;
 };
+
 struct ContextHash {
   size_t operator()(const Context& c) const {
     return pointer_hash<void>{}(c.func ? (void*)c.func :
@@ -81,18 +85,30 @@ inline bool operator==(const CallContext& a, const CallContext& b) {
 //////////////////////////////////////////////////////////////////////
 
 /*
- * Context used to analyze or optimize a function. Instantiating this type
- * of context requires accessing the Func's bytecode, which is a potentially
- * heavy-weight deserialization operation. We only do it once per analysis.
+ * Context used to analyze a function. Anyone constructing this context
+ * must ensure that the provided WideFunc lives longer than the context.
  */
 struct AnalysisContext {
   const php::Unit* unit;
-  php::MutFunc func;
+  const php::WideFunc& func;
   const php::Class* cls;
 
-  operator Context() const {
-    return Context { unit, func.func, cls };
-  }
+  operator Context() const { return { unit, func, cls }; }
+};
+
+/*
+ * Context used for per-block optimizations. As with AnalysisContext,
+ * callers must ensure that all the references here outlive this context.
+ * The WideFunc in this struct will always match the func in ainfo.ctx.
+ */
+struct VisitContext {
+  const Index& index;
+  const FuncAnalysis& ainfo;
+  CollectedInfo& collect;
+  php::WideFunc& func;
+
+  VisitContext(const Index& index, const FuncAnalysis& ainfo,
+               CollectedInfo& collect, php::WideFunc& func);
 };
 
 //////////////////////////////////////////////////////////////////////

@@ -50,6 +50,12 @@ module type Syntax_S = sig
     { prefixed_string_name                               : t
     ; prefixed_string_str                                : t
     }
+  | PrefixedCodeExpression            of
+    { prefixed_code_prefix                               : t
+    ; prefixed_code_left_backtick                        : t
+    ; prefixed_code_expression                           : t
+    ; prefixed_code_right_backtick                       : t
+    }
   | VariableExpression                of
     { variable_expression                                : t
     }
@@ -665,12 +671,6 @@ module type Syntax_S = sig
     ; record_creation_members                            : t
     ; record_creation_right_bracket                      : t
     }
-  | ArrayIntrinsicExpression          of
-    { array_intrinsic_keyword                            : t
-    ; array_intrinsic_left_paren                         : t
-    ; array_intrinsic_members                            : t
-    ; array_intrinsic_right_paren                        : t
-    }
   | DarrayIntrinsicExpression         of
     { darray_intrinsic_keyword                           : t
     ; darray_intrinsic_explicit_type                     : t
@@ -1040,10 +1040,6 @@ module type Syntax_S = sig
     Full_fidelity_source_text.t ->
     Full_fidelity_parser_env.t ->
     unit * t * Full_fidelity_syntax_error.t list * Rust_pointer.t option
-  val rust_parse_with_coroutine_sc :
-    Full_fidelity_source_text.t ->
-    Full_fidelity_parser_env.t ->
-    bool * t * Full_fidelity_syntax_error.t list * Rust_pointer.t option
   val rust_parse_with_decl_mode_sc :
     Full_fidelity_source_text.t ->
     Full_fidelity_parser_env.t ->
@@ -1084,6 +1080,7 @@ module type Syntax_S = sig
   val make_simple_type_specifier : t -> t
   val make_literal_expression : t -> t
   val make_prefixed_string_expression : t -> t -> t
+  val make_prefixed_code_expression : t -> t -> t -> t -> t
   val make_variable_expression : t -> t
   val make_pipe_variable_expression : t -> t
   val make_file_attribute_specification : t -> t -> t -> t -> t -> t
@@ -1187,7 +1184,6 @@ module type Syntax_S = sig
   val make_object_creation_expression : t -> t -> t
   val make_constructor_call : t -> t -> t -> t -> t
   val make_record_creation_expression : t -> t -> t -> t -> t
-  val make_array_intrinsic_expression : t -> t -> t -> t -> t
   val make_darray_intrinsic_expression : t -> t -> t -> t -> t -> t
   val make_dictionary_intrinsic_expression : t -> t -> t -> t -> t -> t
   val make_keyset_intrinsic_expression : t -> t -> t -> t -> t -> t
@@ -1264,6 +1260,7 @@ module type Syntax_S = sig
   val is_simple_type_specifier : t -> bool
   val is_literal_expression : t -> bool
   val is_prefixed_string_expression : t -> bool
+  val is_prefixed_code_expression : t -> bool
   val is_variable_expression : t -> bool
   val is_pipe_variable_expression : t -> bool
   val is_file_attribute_specification : t -> bool
@@ -1367,7 +1364,6 @@ module type Syntax_S = sig
   val is_object_creation_expression : t -> bool
   val is_constructor_call : t -> bool
   val is_record_creation_expression : t -> bool
-  val is_array_intrinsic_expression : t -> bool
   val is_darray_intrinsic_expression : t -> bool
   val is_dictionary_intrinsic_expression : t -> bool
   val is_keyset_intrinsic_expression : t -> bool
@@ -1446,7 +1442,6 @@ module type Syntax_S = sig
   val is_abstract       : t -> bool
   val is_final          : t -> bool
   val is_async          : t -> bool
-  val is_coroutine      : t -> bool
   val is_void           : t -> bool
   val is_left_brace     : t -> bool
   val is_ellipsis       : t -> bool

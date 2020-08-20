@@ -93,13 +93,13 @@ let find_ancestor_tparams proto_renv class_name (targs : T.locl_ty list) =
 
 (* A constraint accumulator that registers a subtyping
    requirement t1 <: t2 *)
-let rec subtype meta t1 t2 acc =
-  let subtype = subtype meta in
-  let equivalent = equivalent meta in
+let rec subtype ~pos meta t1 t2 acc =
+  let subtype = subtype ~pos meta in
+  let equivalent = equivalent ~pos meta in
   match (t1, t2) with
   | (Tprim p1, Tprim p2)
   | (Tgeneric p1, Tgeneric p2) ->
-    L.(p1 < p2) acc
+    L.(p1 < p2) ~pos acc
   | (Ttuple tl1, Ttuple tl2) ->
     (match List.zip tl1 tl2 with
     | Some zip ->
@@ -150,9 +150,9 @@ let rec subtype meta t1 t2 acc =
      * type parameters *)
     |> tparams_subtype
     (* Invariant in lump policy *)
-    |> L.(cl1.c_lump = cl2.c_lump)
+    |> L.(cl1.c_lump = cl2.c_lump) ~pos
     (* Covariant in class policy *)
-    |> L.(cl1.c_self < cl2.c_self)
+    |> L.(cl1.c_self < cl2.c_self) ~pos
   | (Tfun f1, Tfun f2) ->
     let zipped_args =
       match List.zip f1.f_args f2.f_args with
@@ -162,7 +162,9 @@ let rec subtype meta t1 t2 acc =
     (* Contravariant in argument types *)
     List.fold ~f:(fun acc (t1, t2) -> subtype t2 t1 acc) ~init:acc zipped_args
     (* Contravariant in PC *)
-    |> L.(f2.f_pc < f1.f_pc)
+    |> L.(f2.f_pc < f1.f_pc) ~pos
+    (* Covariant in its own identity *)
+    |> L.(f1.f_self < f2.f_self) ~pos
     (* Covariant in return type and exceptions *)
     |> L.(subtype f1.f_ret f2.f_ret && subtype f1.f_exn f2.f_exn)
   | (Tunion tl, _) ->
@@ -171,10 +173,12 @@ let rec subtype meta t1 t2 acc =
     fail "unhandled subtyping query for %a <: %a" Pp.ptype pty1 Pp.ptype pty2
 
 (* A constraint accumulator that registers that t1 = t2 *)
-and equivalent meta t1 t2 acc = subtype meta t1 t2 (subtype meta t2 t1 acc)
+and equivalent ~pos meta t1 t2 acc =
+  let subtype = subtype ~pos meta in
+  subtype t1 t2 (subtype t2 t1 acc)
 
 (* Generates a fresh supertype of the argument type *)
-let adjust ?(prefix = "weak") ~adjustment renv env ty =
+let adjust ?(prefix = "weak") ~pos ~adjustment renv env ty =
   let flip = function
     | Astrengthen -> Aweaken
     | Aweaken -> Astrengthen
@@ -183,8 +187,8 @@ let adjust ?(prefix = "weak") ~adjustment renv env ty =
     let new_policy = Env.new_policy_var renv.re_proto prefix in
     let prop =
       match adjustment with
-      | Astrengthen -> L.(new_policy < policy)
-      | Aweaken -> L.(policy < new_policy)
+      | Astrengthen -> L.(new_policy < policy) ~pos
+      | Aweaken -> L.(policy < new_policy) ~pos
     in
     (prop acc, new_policy)
   in
@@ -225,37 +229,37 @@ let adjust ?(prefix = "weak") ~adjustment renv env ty =
       (acc, Tclass { class_ with c_self = super_pol; c_tparams = tparams })
     | Tfun fun_ ->
       let (acc, f_pc) = freshen_pol_con acc fun_.f_pc in
+      let (acc, f_self) = freshen_pol_cov acc fun_.f_self in
       let (acc, f_args) = List.map_env acc ~f:freshen_con fun_.f_args in
       let (acc, f_ret) = freshen_cov acc fun_.f_ret in
       let (acc, f_exn) = freshen_cov acc fun_.f_exn in
-      (acc, Tfun { f_pc; f_args; f_ret; f_exn })
+      (acc, Tfun { f_pc; f_self; f_args; f_ret; f_exn })
   in
   let (acc, ty') = freshen adjustment env.e_acc ty in
   (Env.acc env (fun _ -> acc), ty')
 
-let rec add_dependencies pl t acc =
+let rec add_dependencies ~pos pl t acc =
   match t with
   | Tinter [] ->
     (* The policy p flows into a value of type mixed.
        Here we choose that mixed will be public; we
        could choose a different default policy or
        have mixed carry a policy (preferable). *)
-    L.(pl <* [Pbot]) acc
+    L.(pl <* [Pbot PosSet.empty]) ~pos acc
   | Tprim pol
   | Tgeneric pol
-  (* For classes, we only add a dependency to the class policy and not to its
-     properties *)
-  | Tclass { c_self = pol; _ } ->
-    L.(pl <* [pol]) acc
+  (* For classes and functions, we only add a dependency to the self policy and
+     not to its properties *)
+  | Tclass { c_self = pol; _ }
+  | Tfun { f_self = pol; _ } ->
+    L.(pl <* [pol]) ~pos acc
   | Tunion tl
   | Ttuple tl
   | Tinter tl ->
-    let f acc t = add_dependencies pl t acc in
+    let f acc t = add_dependencies ~pos pl t acc in
     List.fold tl ~init:acc ~f
-  (* TODO(T70958722): Implement add_dependencies for Tfun *)
-  | Tfun _ -> fail "cannot add dependencies for Tfun"
 
-let policy_join renv env ?(prefix = "join") p1 p2 =
+let policy_join ~pos renv env ?(prefix = "join") p1 p2 =
   match Logic.policy_join p1 p2 with
   | Some p -> (env, p)
   | None ->
@@ -265,7 +269,7 @@ let policy_join renv env ?(prefix = "join") p1 p2 =
       (env, p1)
     | _ ->
       let pv = Env.new_policy_var renv.re_proto prefix in
-      let env = Env.acc env L.(p1 < pv && p2 < pv) in
+      let env = Env.acc env L.((p1 < pv) ~pos && (p2 < pv) ~pos) in
       (env, pv))
 
 let mk_union t1 t2 =
@@ -299,11 +303,12 @@ let rec class_ptype lump_pol_opt proto_renv targs name =
     | Some class_sig -> class_sig
     | None -> fail "could not found a class policy signature for %s" name
   in
-  let prop_ptype { pp_name; pp_type; pp_purpose; _ } =
+  let prop_ptype { pp_name; pp_type; pp_purpose; pp_pos; _ } =
     (* Purpose of the property takes precedence over any lump policy. *)
     let lump_pol_opt =
+      let pos = PosSet.singleton pp_pos in
       Option.merge
-        (Option.map ~f:Lattice.parse_policy pp_purpose)
+        (Option.map ~f:(Lattice.parse_policy pos) pp_purpose)
         lump_pol_opt
         ~f:(fun a _ -> a)
     in
@@ -359,7 +364,17 @@ and ptype ?prefix lump_pol_opt proto_renv (t : T.locl_ty) =
         id
     in
     ptype ty
-  (* ---  types below are not yet unpported *)
+  | T.Tfun fun_ty ->
+    Tfun
+      {
+        f_pc = get_policy lump_pol_opt proto_renv ~prefix:"pc";
+        f_self = get_policy lump_pol_opt proto_renv ?prefix;
+        f_args =
+          List.map ~f:(fun p -> ptype p.T.fp_type.T.et_type) fun_ty.T.ft_params;
+        f_ret = ptype fun_ty.T.ft_ret.T.et_type;
+        f_exn = class_ptype None proto_renv [] Decl.exception_id;
+      }
+  (* ---  types below are not yet supported *)
   | T.Tdependent (_, _ty) -> fail "Tdependent"
   | T.Tdarray (_keyty, _valty) -> fail "Tdarray"
   | T.Tvarray _ty -> fail "Tvarray"
@@ -369,7 +384,6 @@ and ptype ?prefix lump_pol_opt proto_renv (t : T.locl_ty) =
   | T.Tnonnull -> fail "Tnonnull"
   | T.Tdynamic -> fail "Tdynamic"
   | T.Toption _ty -> fail "Toption"
-  | T.Tfun _fun_ty -> fail "Tfun"
   | T.Tshape (_sh_kind, _sh_type_map) -> fail "Tshape"
   | T.Tnewtype (_name, _ty_list, _as_bound) -> fail "Tnewtype"
   | T.Tobject -> fail "Tobject"
@@ -378,7 +392,7 @@ and ptype ?prefix lump_pol_opt proto_renv (t : T.locl_ty) =
 
 (* Uses a Hack-inferred type to update the flow type of a local
    variable *)
-let refresh_lvar_type renv env lid (ety : T.locl_ty) =
+let refresh_lvar_type ~pos renv env lid (ety : T.locl_ty) =
   (* TODO(T68306543): make this faster when ety is the skeleton
      of the type we already have for lid *)
   let is_simple pty =
@@ -394,7 +408,7 @@ let refresh_lvar_type renv env lid (ety : T.locl_ty) =
   else
     let prefix = Local_id.to_string lid in
     let new_pty = ptype None renv.re_proto ety ~prefix in
-    let env = Env.acc env (subtype renv.re_proto.pre_meta pty new_pty) in
+    let env = Env.acc env (subtype ~pos renv.re_proto.pre_meta pty new_pty) in
     let env = Env.set_local_type env lid new_pty in
     (env, new_pty)
 
@@ -408,10 +422,10 @@ let add_params renv =
   in
   List.map_env ~f:add_param
 
-let binop renv env ty1 ty2 =
+let binop ~pos renv env ty1 ty2 =
   match (ty1, ty2) with
   | (Tprim p1, Tprim p2) ->
-    let (env, pj) = policy_join renv env ~prefix:"bop" p1 p2 in
+    let (env, pj) = policy_join ~pos renv env ~prefix:"bop" p1 p2 in
     (env, Tprim pj)
   | _ -> fail "unexpected Binop types"
 
@@ -427,57 +441,100 @@ let property_ptype proto_renv obj_ptype property property_ty =
   | None ->
     ptype ~prefix:("." ^ property) (Some class_.c_lump) proto_renv property_ty
 
-let throw renv env exn_ty =
+let throw ~pos renv env exn_ty =
   let union env t1 t2 = (env, mk_union t1 t2) in
   let env = Env.merge_conts_into ~union env [K.Next] K.Catch in
   let lpc = Env.get_lpc_policy env K.Next in
   Env.acc
     env
     L.(
-      subtype renv.re_proto.pre_meta exn_ty renv.re_exn
-      && add_dependencies (PCSet.elements lpc) renv.re_exn)
+      subtype ~pos renv.re_proto.pre_meta exn_ty renv.re_exn
+      && add_dependencies ~pos (PCSet.elements lpc) renv.re_exn)
 
-let call renv env callable_name that_pty_opt args_pty ret_ty =
-  let ret_pty =
-    let prefix = callable_name ^ "_ret" in
-    ptype ~prefix None renv.re_proto ret_ty
+let rec set_policy p = function
+  | Tprim _ -> Tprim p
+  | Tgeneric _ -> Tgeneric p
+  | Ttuple l -> Ttuple (List.map ~f:(set_policy p) l)
+  | Tunion l -> Tunion (List.map ~f:(set_policy p) l)
+  | Tinter l -> Tinter (List.map ~f:(set_policy p) l)
+  | Tclass c -> Tclass { c with c_self = p }
+  | Tfun f ->
+    Tfun
+      {
+        f_pc = p;
+        f_self = p;
+        f_args = List.map ~f:(set_policy p) f.f_args;
+        f_ret = set_policy p f.f_ret;
+        f_exn = set_policy p f.f_exn;
+      }
+
+let call ~pos renv env call_type that_pty_opt args_pty ret_ty =
+  let (callee, ret_pty) =
+    let name =
+      match call_type with
+      | Cglobal callable_name -> callable_name
+      | Clocal _ -> "anonymous"
+    in
+    let ret_pty = ptype ~prefix:(name ^ "_ret") None renv.re_proto ret_ty in
+    let callee = Env.new_policy_var renv.re_proto name in
+    (callee, ret_pty)
   in
   let callee_exn_policy = Env.new_policy_var renv.re_proto "exn" in
   let callee_exn =
     class_ptype (Some callee_exn_policy) renv.re_proto [] Decl.exception_id
   in
-  let env =
-    match SMap.find_opt callable_name renv.re_proto.pre_decl.de_fun with
-    (* TODO(T68007489): Temporarily infer everything for every function call.
-     * switch back to using InferFlows annotation when scaling is an issue.
-     *)
-    | Some _ ->
-      let (env, pc_joined) =
-        let join pc' (env, pc) = policy_join renv env ~prefix:"pcjoin" pc pc' in
-        PCSet.fold join (Env.get_gpc_policy renv env K.Next) (env, Pbot)
-      in
-      let fp =
-        {
-          fp_name = callable_name;
-          fp_this = that_pty_opt;
-          fp_type =
-            {
-              f_pc = pc_joined;
-              f_args = args_pty;
-              f_ret = ret_pty;
-              f_exn = callee_exn;
-            };
-        }
-      in
-      let env = Env.acc env (fun acc -> Chole fp :: acc) in
-      let env = Env.add_dep env callable_name in
-      (* Any function call may throw, so we need to update the current PC and
-       * exception dependencies based on the callee's exception policy
-       *)
-      let env = Env.push_pc env K.Next callee_exn_policy in
-      throw renv env callee_exn
-    | None -> fail "unknown function '%s'" callable_name
+  (* The PC of the function being called depends on the join of the current
+   * PC dependencies, as well as the function's own self policy *)
+  let (env, pc_joined) =
+    let join pc' (env, pc) =
+      policy_join ~pos renv env ~prefix:"pcjoin" pc pc'
+    in
+    PCSet.fold join (Env.get_gpc_policy renv env K.Next) (env, callee)
   in
+  let hole_ty =
+    {
+      f_pc = pc_joined;
+      f_self = callee;
+      f_args = args_pty;
+      f_ret = ret_pty;
+      f_exn = callee_exn;
+    }
+  in
+  let env =
+    match call_type with
+    | Clocal fty ->
+      Env.acc env
+      @@ subtype ~pos renv.re_proto.pre_meta (Tfun fty) (Tfun hole_ty)
+    | Cglobal callable_name ->
+      begin
+        match SMap.find_opt callable_name renv.re_proto.pre_decl.de_fun with
+        | Some { fd_kind = FDCIPP } ->
+          let cipp_policy = Env.new_policy_var renv.re_proto "implicit" in
+          let cipp_ty = set_policy cipp_policy (Tfun hole_ty) in
+          Env.acc env
+          @@ subtype ~pos renv.re_proto.pre_meta cipp_ty (Tfun hole_ty)
+        (* TODO(T68007489): Temporarily infer everything for every function call.
+         * switch back to using InferFlows annotation when scaling is an issue.
+         *)
+        | Some _ ->
+          let fp =
+            {
+              fp_name = callable_name;
+              fp_this = that_pty_opt;
+              fp_type = hole_ty;
+            }
+          in
+          let env = Env.add_dep env callable_name in
+          Env.acc env (fun acc -> Chole (pos, fp) :: acc)
+        | None -> fail "unknown function '%s'" callable_name
+      end
+  in
+  let env = Env.acc env @@ add_dependencies ~pos [callee] ret_pty in
+  (* Any function call may throw, so we need to update the current PC and
+   * exception dependencies based on the callee's exception policy
+   *)
+  let env = Env.push_pc env K.Next callee_exn_policy in
+  let env = throw ~pos renv env callee_exn in
   (env, ret_pty)
 
 let vec_element_pty vec_pty =
@@ -492,7 +549,8 @@ let vec_element_pty vec_pty =
 
 (* Finds what we flow into in an assignment.
  * The type LHS has in the input is the type after the assignment takes place. *)
-let rec flux_target renv env ((_, lhs_ty), lhs_exp) =
+let rec flux_target ~pos renv env ((_, lhs_ty), lhs_exp) =
+  let expr = expr ~pos renv in
   match lhs_exp with
   | A.Lvar (_, lid) ->
     let prefix = Local_id.to_string lid in
@@ -500,10 +558,10 @@ let rec flux_target renv env ((_, lhs_ty), lhs_exp) =
     let env = Env.set_local_type env lid local_pty in
     (env, local_pty, Env.get_lpc_policy env K.Next)
   | A.Obj_get (obj, (_, A.Id (_, property)), _) ->
-    let (env, obj_pty) = expr renv env obj in
+    let (env, obj_pty) = expr env obj in
     let obj_pol = (receiver_of_obj_get obj_pty property).c_self in
     let prop_pty = property_ptype renv.re_proto obj_pty property lhs_ty in
-    let env = Env.acc env (add_dependencies [obj_pol] prop_pty) in
+    let env = Env.acc env (add_dependencies ~pos [obj_pol] prop_pty) in
     (env, prop_pty, Env.get_gpc_policy renv env K.Next)
   | A.Array_get (vec, ix_opt) ->
     (* Copy-on-Write handling of Array_get LHS in an assignment. When there is
@@ -519,13 +577,13 @@ let rec flux_target renv env ((_, lhs_ty), lhs_exp) =
      *)
     let env =
       match ix_opt with
-      | Some ix -> fst @@ expr renv env ix
+      | Some ix -> fst @@ expr env ix
       | None -> env
     in
-    let (env, old_vec_pty) = expr renv env vec in
-    let (env, vec_pty, pc) = flux_target renv env vec in
+    let (env, old_vec_pty) = expr env vec in
+    let (env, vec_pty, pc) = flux_target ~pos renv env vec in
     let meta = renv.re_proto.pre_meta in
-    let env = Env.acc env @@ subtype meta old_vec_pty vec_pty in
+    let env = Env.acc env @@ subtype ~pos meta old_vec_pty vec_pty in
     let element_pty = vec_element_pty vec_pty in
     (* Even though the runtime updates the entire vector, we treat
      * the mutation as if it were happening on a single element.
@@ -535,25 +593,26 @@ let rec flux_target renv env ((_, lhs_ty), lhs_exp) =
     (env, element_pty, pc)
   | _ -> fail "unhandled flux target (lvalue)"
 
-and assign renv env op lhs_exp rhs_exp =
+and assign ~pos renv env op lhs_exp rhs_exp =
+  let expr = expr ~pos renv in
   (* Handle the incorporation of LHS in RHS if assignment uses and operation,
    * e.g., $a += $b. *)
   let (env, rhs_pty) =
     if Option.is_none op then
-      expr renv env rhs_exp
+      expr env rhs_exp
     else
-      let (env, lhs_pty) = expr renv env lhs_exp in
-      let (env, rhs_pty) = expr renv env rhs_exp in
-      binop renv env lhs_pty rhs_pty
+      let (env, lhs_pty) = expr env lhs_exp in
+      let (env, rhs_pty) = expr env rhs_exp in
+      binop ~pos renv env lhs_pty rhs_pty
   in
-  let (env, lhs_pty, pc) = flux_target renv env lhs_exp in
-  let env = Env.acc env (subtype renv.re_proto.pre_meta rhs_pty lhs_pty) in
-  let env = Env.acc env (add_dependencies (PCSet.elements pc) lhs_pty) in
+  let (env, lhs_pty, pc) = flux_target ~pos renv env lhs_exp in
+  let env = Env.acc env (subtype ~pos renv.re_proto.pre_meta rhs_pty lhs_pty) in
+  let env = Env.acc env (add_dependencies ~pos (PCSet.elements pc) lhs_pty) in
   (env, lhs_pty)
 
 (* Generate flow constraints for an expression *)
-and expr renv env (((_epos, ety), e) : Tast.expr) =
-  let expr = expr renv in
+and expr ~pos renv env (((epos, ety), e) : Tast.expr) =
+  let expr = expr ~pos renv in
   match e with
   | A.True
   | A.False
@@ -561,41 +620,60 @@ and expr renv env (((_epos, ety), e) : Tast.expr) =
   | A.Float _
   | A.String _ ->
     (* literals are public *)
-    (env, Tprim Pbot)
-  | A.Binop (Ast_defs.Eq op, e1, e2) -> assign renv env op e1 e2
+    (env, Tprim (Pbot (PosSet.singleton epos)))
+  | A.Binop (Ast_defs.Eq op, e1, e2) -> assign ~pos renv env op e1 e2
   | A.Binop (_, e1, e2) ->
     let (env, ty1) = expr env e1 in
     let (env, ty2) = expr env e2 in
-    binop renv env ty1 ty2
-  | A.Lvar (_pos, lid) -> refresh_lvar_type renv env lid ety
+    binop ~pos renv env ty1 ty2
+  | A.Lvar (_pos, lid) -> refresh_lvar_type ~pos renv env lid ety
   | A.Obj_get (obj, (_, A.Id (_, property)), _) ->
     let (env, obj_ptype) = expr env obj in
     let prop_ptype = property_ptype renv.re_proto obj_ptype property ety in
+    let prefix = "." ^ property in
     let (env, super_ptype) =
-      adjust ~adjustment:Aweaken ~prefix:("." ^ property) renv env prop_ptype
+      adjust ~pos ~prefix ~adjustment:Aweaken renv env prop_ptype
     in
     let obj_class = receiver_of_obj_get obj_ptype property in
-    let env = Env.acc env (add_dependencies [obj_class.c_self] super_ptype) in
+    let env =
+      Env.acc env (add_dependencies ~pos [obj_class.c_self] super_ptype)
+    in
     (env, super_ptype)
   | A.This ->
     (match renv.re_this with
     | Some ptype -> (env, ptype)
     | None -> fail "encountered $this outside of a class context")
-  | A.BracedExpr e -> expr env e
-  | A.Call (_call_type, (_, A.Id (_, name)), _type_args, args, _extra_args) ->
+  | A.ExpressionTree (_, e)
+  | A.BracedExpr e ->
+    expr env e
+  (* TODO(T68414656): Support calls with type arguments *)
+  | A.Call (_call_type, e, _type_args, args, _extra_args) ->
     let (env, args_pty) = List.map_env ~f:expr env args in
-    let callable_name = Decl.make_callable_name None name in
-    call renv env callable_name None args_pty ety
-  | A.Call (_, (_, A.Obj_get (obj, (_, A.Id (_, meth_name)), _)), _, args, _) ->
-    let (env, args_pty) = List.map_env ~f:expr env args in
-    let (env, obj_pty) = expr env obj in
-    (match obj_pty with
-    | Tclass class_ ->
-      let callable_name =
-        Decl.make_callable_name (Some class_.c_name) meth_name
-      in
-      call renv env callable_name (Some obj_pty) args_pty ety
-    | _ -> fail "unhandled method call on %a" Pp.ptype obj_pty)
+    begin
+      match e with
+      | (_, A.Id (_, name)) ->
+        let call_type = Cglobal (Decl.make_callable_name None name) in
+        call ~pos renv env call_type None args_pty ety
+      | (_, A.Obj_get (obj, (_, A.Id (_, meth_name)), _)) ->
+        let (env, obj_pty) = expr env obj in
+        begin
+          match obj_pty with
+          | Tclass class_ ->
+            let call_type =
+              Cglobal (Decl.make_callable_name (Some class_.c_name) meth_name)
+            in
+            call ~pos renv env call_type (Some obj_pty) args_pty ety
+          | _ -> fail "unhandled method call on %a" Pp.ptype obj_pty
+        end
+      | _ ->
+        let (env, func_ty) = expr env e in
+        let fty =
+          match func_ty with
+          | Tfun fty -> fty
+          | _ -> failwith "calling something that is not a function"
+        in
+        call ~pos renv env (Clocal fty) None args_pty ety
+    end
   | A.ValCollection (A.Vec, _, exprs) ->
     (* We require each collection element to be a subtype of the vector
      * element parameter. *)
@@ -603,7 +681,7 @@ and expr renv env (((_epos, ety), e) : Tast.expr) =
     let element_pty = vec_element_pty vec_pty in
     let mk_element_subtype env exp =
       let (env, pty) = expr env exp in
-      Env.acc env (subtype renv.re_proto.pre_meta pty element_pty)
+      Env.acc env (subtype ~pos renv.re_proto.pre_meta pty element_pty)
     in
     let env = List.fold ~f:mk_element_subtype ~init:env exprs in
     (env, vec_pty)
@@ -638,14 +716,43 @@ and expr renv env (((_epos, ety), e) : Tast.expr) =
         in
         let lty = T.mk (Typing_reason.Rnone, T.Tprim A.Tvoid) in
         let (env, _) =
-          call renv env callable_name (Some obj_pty) args_pty lty
+          call ~pos renv env (Cglobal callable_name) (Some obj_pty) args_pty lty
         in
         let pty = ptype ?prefix:(Some "constr") None renv.re_proto ety in
         (env, pty)
       | _ -> fail "unhandled method call on %a" Pp.ptype obj_pty
     end
+  | A.Efun (fun_, captured_ids)
+  | A.Lfun (fun_, captured_ids) ->
+    (* Stash the cenv so it can be restored later *)
+    let pre_cenv = Env.get_cenv env in
+    (* Drop all conts except for Next and drop the local PC because we are
+     * entering a new scope of execution. Freshen all the local variables since
+     * their changes are not visible outside of the lambda's scope
+     *)
+    let env = Env.filter_conts env (K.equal K.Next) in
+    let env = Env.set_pc env K.Next PCSet.empty in
+    let env =
+      let freshen = adjust ~pos ~adjustment:Aweaken in
+      Env.freshen_cenv ~freshen renv env captured_ids
+    in
+
+    let pc = Env.new_policy_var renv.re_proto "pc" in
+    let self = Env.new_policy_var renv.re_proto "lambda" in
+    let (env, ptys) = add_params renv env fun_.A.f_params in
+    let exn = class_ptype None renv.re_proto [] Decl.exception_id in
+    let ret = ptype ~prefix:"ret" None renv.re_proto (fst fun_.A.f_ret) in
+    let renv = { renv with re_ret = ret; re_exn = exn; re_gpc = pc } in
+
+    let env = block renv env fun_.A.f_body.A.fb_ast in
+
+    (* Restore conts now that we exit the lambda's scope *)
+    let env = Env.set_cenv env pre_cenv in
+    let ty =
+      Tfun { f_pc = pc; f_self = self; f_args = ptys; f_ret = ret; f_exn = exn }
+    in
+    (env, ty)
   (* --- expressions below are not yet supported *)
-  | A.Array _
   | A.Darray (_, _)
   | A.Varray (_, _)
   | A.Shape _
@@ -659,7 +766,6 @@ and expr renv env (((_epos, ety), e) : Tast.expr) =
   | A.Obj_get (_, _, _)
   | A.Class_get (_, _)
   | A.Class_const (_, _)
-  | A.Call (_, _, _, _, _)
   | A.FunctionPointer (_, _)
   | A.String2 _
   | A.PrefixedString (_, _)
@@ -676,8 +782,6 @@ and expr renv env (((_epos, ety), e) : Tast.expr) =
   | A.Is (_, _)
   | A.As (_, _, _)
   | A.Record (_, _)
-  | A.Efun (_, _)
-  | A.Lfun (_, _)
   | A.Xml (_, _, _)
   | A.Callconv (_, _)
   | A.Import (_, _)
@@ -695,14 +799,15 @@ and expr renv env (((_epos, ety), e) : Tast.expr) =
   | A.Any ->
     fail "expr"
 
-let rec stmt renv env ((_pos, s) : Tast.stmt) =
+and stmt renv env ((pos, s) : Tast.stmt) =
+  let expr = expr renv in
   let subtype = subtype renv.re_proto.pre_meta in
   match s with
   | A.Expr e ->
-    let (env, _ty) = expr renv env e in
+    let (env, _ty) = expr ~pos env e in
     env
-  | A.If (e, b1, b2) ->
-    let (env, ety) = expr renv env e in
+  | A.If ((((pos, _), _) as e), b1, b2) ->
+    let (env, ety) = expr ~pos env e in
     (* Stash the PC so they can be restored after the if *)
     let pc = Env.get_lpc_policy env K.Next in
     let env =
@@ -729,19 +834,19 @@ let rec stmt renv env ((_pos, s) : Tast.stmt) =
       match e with
       | None -> env
       | Some e ->
-        let (env, te) = expr renv env e in
+        let (env, te) = expr ~pos env e in
         (* to account for enclosing conditionals, make the return
           type depend on the local pc *)
         let lpc = Env.get_lpc_policy env K.Next in
         Env.acc
           env
           L.(
-            add_dependencies (PCSet.elements lpc) renv.re_ret
-            && subtype te renv.re_ret)
+            add_dependencies ~pos (PCSet.elements lpc) renv.re_ret
+            && subtype ~pos te renv.re_ret)
     end
   | A.Throw e ->
-    let (env, exn_ty) = expr renv env e in
-    throw renv env exn_ty
+    let (env, exn_ty) = expr ~pos env e in
+    throw ~pos renv env exn_ty
   | A.Try (try_blk, [((_, exn), (_, exn_var), catch_blk)], []) ->
     (* NOTE: for now we only support try with a single catch block and no finally
      * block. Only \Exception is allowed to be caught
@@ -779,22 +884,6 @@ and block renv env (blk : Tast.block) =
   in
   List.fold_left ~f:seq ~init:env blk
 
-let rec set_policy p = function
-  | Tprim _ -> Tprim p
-  | Tgeneric _ -> Tgeneric p
-  | Ttuple l -> Ttuple (List.map ~f:(set_policy p) l)
-  | Tunion l -> Tunion (List.map ~f:(set_policy p) l)
-  | Tinter l -> Tinter (List.map ~f:(set_policy p) l)
-  | Tclass c -> Tclass { c with c_self = p }
-  | Tfun f ->
-    Tfun
-      {
-        f_pc = p;
-        f_args = List.map ~f:(set_policy p) f.f_args;
-        f_ret = set_policy p f.f_ret;
-        f_exn = set_policy p f.f_exn;
-      }
-
 let rec domain =
   let get_var = function
     | Pfree_var (v, s) -> VarSet.singleton (v, s)
@@ -819,7 +908,7 @@ let rec domain =
  * policy flows into the argument and pc and that the return type flows into
  * the policy
  *)
-let governs meta p fp acc =
+let governs ~pos meta p fp acc =
   let proto_vars = domain @@ Tfun fp.fp_type in
   (* Quantify only the free variables that do not show up in the function
    * prototype. We eliminate them via simplification because they only show up
@@ -837,7 +926,7 @@ let governs meta p fp acc =
      * In the future, we can adjust these flows by using different assumed
      * types for the upper and lower bounds.
      *)
-    equivalent meta (Tfun fp.fp_type) assumed_ty []
+    equivalent ~pos meta (Tfun fp.fp_type) assumed_ty []
     |> Logic.conjoin
     |> quantify
     |> Logic.simplify
@@ -847,7 +936,7 @@ let governs meta p fp acc =
   let prop = quantify acc |> Logic.simplify in
   Logic.entailment_violations lattice prop
 
-let callable meta decl_env class_name_opt name saved_env params body lrty =
+let callable span meta decl_env class_name_opt name saved_env params body lrty =
   try
     (* Setup the read-only environment *)
     let scope = Scope.alloc () in
@@ -882,13 +971,20 @@ let callable meta decl_env class_name_opt name saved_env params body lrty =
     end;
 
     let callable_name = Decl.make_callable_name class_name_opt name in
+    let f_self = Env.new_policy_var proto_renv callable_name in
 
     let proto =
       {
         fp_name = Decl.make_callable_name class_name_opt name;
         fp_this = this_ty;
         fp_type =
-          { f_pc = global_pc; f_args = param_tys; f_ret = ret_ty; f_exn = exn };
+          {
+            f_pc = global_pc;
+            f_self;
+            f_args = param_tys;
+            f_ret = ret_ty;
+            f_exn = exn;
+          };
       }
     in
 
@@ -896,13 +992,14 @@ let callable meta decl_env class_name_opt name saved_env params body lrty =
       match SMap.find_opt callable_name decl_env.de_fun with
       | Some { fd_kind = FDCIPP } ->
         let implicit = Env.new_policy_var proto_renv "implicit" in
-        governs meta implicit proto
+        governs ~pos:span meta implicit proto
       | _ -> const []
     in
 
     (* Return the results *)
     let res =
       {
+        res_span = span;
         res_proto = proto;
         res_scope = scope;
         res_constraint = Logic.conjoin env.e_acc;
@@ -924,11 +1021,12 @@ let walk_tast meta decl_env =
           f_params = params;
           f_body = body;
           f_ret = (lrty, _);
+          f_span = span;
           _;
         } ->
       Option.map
         ~f:(fun x -> [x])
-        (callable meta decl_env None name saved_env params body lrty)
+        (callable span meta decl_env None name saved_env params body lrty)
     | A.Class { A.c_name = (_, class_name); c_methods = methods; _ } ->
       let handle_method
           {
@@ -937,10 +1035,11 @@ let walk_tast meta decl_env =
             m_params = params;
             m_body = body;
             m_ret = (lrty, _);
+            m_span = span;
             _;
           } =
         let c_name = Some class_name in
-        callable meta decl_env c_name name saved_env params body lrty
+        callable span meta decl_env c_name name saved_env params body lrty
       in
       Some (List.filter_map ~f:handle_method methods)
     | _ -> None
@@ -961,6 +1060,102 @@ let opts_of_raw_opts raw_opts =
   in
   { opt_mode; opt_security_lattice }
 
+let check meta tast () =
+  (* Declaration phase *)
+  let decl_env = Decl.collect_sigs tast in
+  if should_print ~user_mode:meta.m_opts.opt_mode ~phase:Mdecl then
+    Format.printf "%a@." Pp.decl_env decl_env;
+
+  (* Flow analysis phase *)
+  let results = walk_tast meta decl_env tast in
+
+  (* Solver phase *)
+  let results =
+    try Solver.global_exn ~subtype:(subtype meta) results with
+    | Solver.Error Solver.RecursiveCycle ->
+      fail "solver error: cyclic call graph"
+    | Solver.Error (Solver.MissingResults callable) ->
+      fail "solver error: missing results for callable '%s'" callable
+    | Solver.Error (Solver.InvalidCall (reason, caller, callee)) ->
+      fail
+        "solver error: invalid call to '%s' in '%s' (%s)"
+        callee
+        caller
+        reason
+  in
+
+  let simplify result =
+    let pred = const true in
+    ( result,
+      result.res_entailment result.res_constraint,
+      Logic.simplify
+      @@ Logic.quantify ~pred ~quant:Qexists result.res_constraint )
+  in
+  let simplified_results = SMap.map simplify results in
+
+  let log_solver name (result, _, simplified) =
+    Format.printf "@[<v>";
+    Format.printf "Flow constraints for %s:@.  @[<v>" name;
+    Format.printf "@,@[<hov>Simplified:@ @[<hov>%a@]@]" Pp.prop simplified;
+    let raw = result.res_constraint in
+    Format.printf "@,@[<hov>Raw:@ @[<hov>%a@]@]" Pp.prop raw;
+    Format.printf "@]";
+    Format.printf "@]\n\n"
+  in
+  if should_print ~user_mode:meta.m_opts.opt_mode ~phase:Msolve then
+    SMap.iter log_solver simplified_results;
+
+  (* Checking phase *)
+  let check_valid_flow _ (result, implicit, simple) =
+    let simple_illegal_flows =
+      Logic.entailment_violations meta.m_opts.opt_security_lattice simple
+    in
+    let to_err node =
+      (PosSet.elements (pos_of node), Format.asprintf "%a" Pp.policy node)
+    in
+    let illegal_information_flow (poss, source, sink) =
+      (* Separate error positions that are not in the result and filter out
+         unknown positions *)
+      let (primary_poss, other_poss) =
+        PosSet.filter (fun p -> not @@ Pos.equal Pos.none p) poss
+        |> PosSet.elements
+        |> List.partition_tf ~f:(Pos.overlaps result.res_span)
+      in
+      (* Make sure the primary error position is the latest position in the
+         callable being analysed *)
+      let (primary_pos, other_poss) =
+        match List.sort ~compare:Pos.compare primary_poss |> List.rev with
+        | [] -> (result.res_span, other_poss)
+        | primary :: primary_poss ->
+          (primary, List.unordered_append primary_poss other_poss)
+      in
+
+      let (source, sink) = (to_err source, to_err sink) in
+      Errors.illegal_information_flow primary_pos other_poss source sink
+    in
+
+    let context_implicit_policy_leakage (pos, source, sink) =
+      (* The latest program point contributing to the violation is the primary error *)
+      let (primary, secondaries) =
+        let poss =
+          PosSet.elements pos |> List.sort ~compare:Pos.compare |> List.rev
+        in
+        match poss with
+        | [] -> (result.res_span, [])
+        | primary :: secondaries -> (primary, secondaries)
+      in
+      let (source, sink) = (to_err source, to_err sink) in
+      Errors.context_implicit_policy_leakage primary secondaries source sink
+    in
+
+    if should_print ~user_mode:meta.m_opts.opt_mode ~phase:Mcheck then begin
+      List.iter ~f:illegal_information_flow simple_illegal_flows;
+
+      List.iter ~f:context_implicit_policy_leakage implicit
+    end
+  in
+  SMap.iter check_valid_flow simplified_results
+
 let do_ raw_opts files_info ctx =
   let opts = opts_of_raw_opts raw_opts in
 
@@ -968,82 +1163,22 @@ let do_ raw_opts files_info ctx =
     let lattice = opts.opt_security_lattice in
     Format.printf "@[Lattice:@. %a@]\n\n" Pp.security_lattice lattice );
 
-  Relative_path.Map.iter files_info ~f:(fun path i ->
-      (* skip decls and partial *)
-      match i.FileInfo.file_mode with
-      | Some FileInfo.Mstrict ->
-        let (ctx, entry) = Provider_context.add_entry_if_missing ~ctx ~path in
-        let meta = { m_opts = opts; m_path = path; m_ctx = ctx } in
-        let { Tast_provider.Compute_tast.tast; _ } =
-          Tast_provider.compute_tast_unquarantined ~ctx ~entry
-        in
+  let handle_file path info errors =
+    match info.FileInfo.file_mode with
+    | Some FileInfo.Mstrict ->
+      let (ctx, entry) = Provider_context.add_entry_if_missing ~ctx ~path in
+      let meta = { m_opts = opts; m_path = path; m_ctx = ctx } in
+      let { Tast_provider.Compute_tast.tast; _ } =
+        Tast_provider.compute_tast_unquarantined ~ctx ~entry
+      in
 
-        (* Declaration phase *)
-        let decl_env = Decl.collect_sigs tast in
-        if should_print ~user_mode:opts.opt_mode ~phase:Mdecl then
-          Format.printf "%a@." Pp.decl_env decl_env;
+      let check = check meta tast in
+      let (new_errors, _) = Errors.do_with_context path Errors.Typing check in
+      errors @ Errors.get_error_list new_errors
+    | _ -> errors
+  in
 
-        (* Flow analysis phase *)
-        let results = walk_tast meta decl_env tast in
-
-        (* Solver phase *)
-        let results =
-          try Solver.global_exn ~subtype:(subtype meta) results with
-          | Solver.Error Solver.RecursiveCycle ->
-            fail "solver error: cyclic call graph"
-          | Solver.Error (Solver.MissingResults callable) ->
-            fail "solver error: missing results for callable '%s'" callable
-          | Solver.Error (Solver.InvalidCall (reason, caller, callee)) ->
-            fail
-              "solver error: invalid call to '%s' in '%s' (%s)"
-              callee
-              caller
-              reason
-        in
-
-        let simplify result =
-          let pred = const true in
-          ( result,
-            result.res_entailment result.res_constraint,
-            Logic.simplify
-            @@ Logic.quantify ~pred ~quant:Qexists result.res_constraint )
-        in
-        let simplified_results = SMap.map simplify results in
-
-        let log_solver name (result, _, simplified) =
-          Format.printf "@[<v>";
-          Format.printf "Flow constraints for %s:@.  @[<v>" name;
-          Format.printf "@,@[<hov>Simplified:@ @[<hov>%a@]@]" Pp.prop simplified;
-          let raw = result.res_constraint in
-          Format.printf "@,@[<hov>Raw:@ @[<hov>%a@]@]" Pp.prop raw;
-          Format.printf "@]";
-          Format.printf "@]\n\n"
-        in
-        if should_print ~user_mode:opts.opt_mode ~phase:Msolve then
-          SMap.iter log_solver simplified_results;
-
-        (* Checking phase *)
-        let log_checking name (_, impl, simple) =
-          let with_pp pp = List.map ~f:(fun v -> (v, pp)) in
-          let violations =
-            with_pp
-              Pp.violation
-              (Logic.entailment_violations opts.opt_security_lattice simple)
-            @ with_pp Pp.implicit_violation impl
-          in
-
-          if
-            should_print ~user_mode:opts.opt_mode ~phase:Mcheck
-            && not (List.is_empty violations)
-          then begin
-            Format.printf "There are privacy policy errors in %s:@.  @[<v>" name;
-            List.iter ~f:(fun (v, f) -> Format.printf "%a@," f v) violations;
-            Format.printf "@]\n"
-          end
-        in
-        SMap.iter log_checking simplified_results
-      | _ -> ());
-  ()
+  Relative_path.Map.fold files_info ~init:[] ~f:handle_file
 
 let magic_builtins =
   [|

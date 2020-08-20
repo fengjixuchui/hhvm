@@ -85,6 +85,9 @@ where S: SmartConstructors<'src, State> {
     fn make_prefixed_string_expression(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R {
         compose(SyntaxKind::PrefixedStringExpression, self.s.make_prefixed_string_expression(arg0.1, arg1.1))
     }
+    fn make_prefixed_code_expression(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R {
+        compose(SyntaxKind::PrefixedCodeExpression, self.s.make_prefixed_code_expression(arg0.1, arg1.1, arg2.1, arg3.1))
+    }
     fn make_variable_expression(&mut self, arg0 : Self::R) -> Self::R {
         compose(SyntaxKind::VariableExpression, self.s.make_variable_expression(arg0.1))
     }
@@ -393,9 +396,6 @@ where S: SmartConstructors<'src, State> {
     }
     fn make_record_creation_expression(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R {
         compose(SyntaxKind::RecordCreationExpression, self.s.make_record_creation_expression(arg0.1, arg1.1, arg2.1, arg3.1))
-    }
-    fn make_array_intrinsic_expression(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R {
-        compose(SyntaxKind::ArrayIntrinsicExpression, self.s.make_array_intrinsic_expression(arg0.1, arg1.1, arg2.1, arg3.1))
     }
     fn make_darray_intrinsic_expression(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R) -> Self::R {
         compose(SyntaxKind::DarrayIntrinsicExpression, self.s.make_darray_intrinsic_expression(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1))

@@ -3,7 +3,6 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<3113300f159d55572dabfcaa630e95aa>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_rc/regen.sh
@@ -149,7 +148,6 @@ pub enum FunctionPtrId<Ex, Fb, En, Hi> {
     Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, ToOcamlRep
 )]
 pub enum Expr_<Ex, Fb, En, Hi> {
-    Array(Vec<Afield<Ex, Fb, En, Hi>>),
     Darray(
         std::rc::Rc<(
             Option<(Targ<Hi>, Targ<Hi>)>,
@@ -253,6 +251,7 @@ pub enum Expr_<Ex, Fb, En, Hi> {
     Collection(std::rc::Rc<(Sid, Option<CollectionTarg<Hi>>, Vec<Afield<Ex, Fb, En, Hi>>)>),
     BracedExpr(std::rc::Rc<Expr<Ex, Fb, En, Hi>>),
     ParenthesizedExpr(std::rc::Rc<Expr<Ex, Fb, En, Hi>>),
+    ExpressionTree(std::rc::Rc<(Hint, Expr<Ex, Fb, En, Hi>)>),
     Lplaceholder(std::rc::Rc<std::rc::Rc<Pos>>),
     FunId(std::rc::Rc<Sid>),
     MethodId(std::rc::Rc<(Expr<Ex, Fb, En, Hi>, Pstring)>),

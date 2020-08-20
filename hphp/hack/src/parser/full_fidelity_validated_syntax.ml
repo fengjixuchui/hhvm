@@ -185,6 +185,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     match Syntax.syntax x with
     | Syntax.LiteralExpression _ -> tag validate_literal_expression (fun x -> ExprLiteral x) x
     | Syntax.PrefixedStringExpression _ -> tag validate_prefixed_string_expression (fun x -> ExprPrefixedString x) x
+    | Syntax.PrefixedCodeExpression _ -> tag validate_prefixed_code_expression (fun x -> ExprPrefixedCode x) x
     | Syntax.VariableExpression _ -> tag validate_variable_expression (fun x -> ExprVariable x) x
     | Syntax.PipeVariableExpression _ -> tag validate_pipe_variable_expression (fun x -> ExprPipeVariable x) x
     | Syntax.DecoratedExpression _ -> tag validate_decorated_expression (fun x -> ExprDecorated x) x
@@ -216,7 +217,6 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | Syntax.CollectionLiteralExpression _ -> tag validate_collection_literal_expression (fun x -> ExprCollectionLiteral x) x
     | Syntax.ObjectCreationExpression _ -> tag validate_object_creation_expression (fun x -> ExprObjectCreation x) x
     | Syntax.RecordCreationExpression _ -> tag validate_record_creation_expression (fun x -> ExprRecordCreation x) x
-    | Syntax.ArrayIntrinsicExpression _ -> tag validate_array_intrinsic_expression (fun x -> ExprArrayIntrinsic x) x
     | Syntax.DarrayIntrinsicExpression _ -> tag validate_darray_intrinsic_expression (fun x -> ExprDarrayIntrinsic x) x
     | Syntax.DictionaryIntrinsicExpression _ -> tag validate_dictionary_intrinsic_expression (fun x -> ExprDictionaryIntrinsic x) x
     | Syntax.KeysetIntrinsicExpression _ -> tag validate_keyset_intrinsic_expression (fun x -> ExprKeysetIntrinsic x) x
@@ -236,6 +236,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     match thing with
     | ExprLiteral                      thing -> invalidate_literal_expression             (value, thing)
     | ExprPrefixedString               thing -> invalidate_prefixed_string_expression     (value, thing)
+    | ExprPrefixedCode                 thing -> invalidate_prefixed_code_expression       (value, thing)
     | ExprVariable                     thing -> invalidate_variable_expression            (value, thing)
     | ExprPipeVariable                 thing -> invalidate_pipe_variable_expression       (value, thing)
     | ExprDecorated                    thing -> invalidate_decorated_expression           (value, thing)
@@ -267,7 +268,6 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | ExprCollectionLiteral            thing -> invalidate_collection_literal_expression  (value, thing)
     | ExprObjectCreation               thing -> invalidate_object_creation_expression     (value, thing)
     | ExprRecordCreation               thing -> invalidate_record_creation_expression     (value, thing)
-    | ExprArrayIntrinsic               thing -> invalidate_array_intrinsic_expression     (value, thing)
     | ExprDarrayIntrinsic              thing -> invalidate_darray_intrinsic_expression    (value, thing)
     | ExprDictionaryIntrinsic          thing -> invalidate_dictionary_intrinsic_expression (value, thing)
     | ExprKeysetIntrinsic              thing -> invalidate_keyset_intrinsic_expression    (value, thing)
@@ -439,6 +439,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     match Syntax.syntax x with
     | Syntax.LiteralExpression _ -> tag validate_literal_expression (fun x -> LambdaLiteral x) x
     | Syntax.PrefixedStringExpression _ -> tag validate_prefixed_string_expression (fun x -> LambdaPrefixedString x) x
+    | Syntax.PrefixedCodeExpression _ -> tag validate_prefixed_code_expression (fun x -> LambdaPrefixedCode x) x
     | Syntax.VariableExpression _ -> tag validate_variable_expression (fun x -> LambdaVariable x) x
     | Syntax.PipeVariableExpression _ -> tag validate_pipe_variable_expression (fun x -> LambdaPipeVariable x) x
     | Syntax.DecoratedExpression _ -> tag validate_decorated_expression (fun x -> LambdaDecorated x) x
@@ -471,7 +472,6 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | Syntax.CollectionLiteralExpression _ -> tag validate_collection_literal_expression (fun x -> LambdaCollectionLiteral x) x
     | Syntax.ObjectCreationExpression _ -> tag validate_object_creation_expression (fun x -> LambdaObjectCreation x) x
     | Syntax.RecordCreationExpression _ -> tag validate_record_creation_expression (fun x -> LambdaRecordCreation x) x
-    | Syntax.ArrayIntrinsicExpression _ -> tag validate_array_intrinsic_expression (fun x -> LambdaArrayIntrinsic x) x
     | Syntax.DarrayIntrinsicExpression _ -> tag validate_darray_intrinsic_expression (fun x -> LambdaDarrayIntrinsic x) x
     | Syntax.DictionaryIntrinsicExpression _ -> tag validate_dictionary_intrinsic_expression (fun x -> LambdaDictionaryIntrinsic x) x
     | Syntax.KeysetIntrinsicExpression _ -> tag validate_keyset_intrinsic_expression (fun x -> LambdaKeysetIntrinsic x) x
@@ -490,6 +490,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     match thing with
     | LambdaLiteral                      thing -> invalidate_literal_expression             (value, thing)
     | LambdaPrefixedString               thing -> invalidate_prefixed_string_expression     (value, thing)
+    | LambdaPrefixedCode                 thing -> invalidate_prefixed_code_expression       (value, thing)
     | LambdaVariable                     thing -> invalidate_variable_expression            (value, thing)
     | LambdaPipeVariable                 thing -> invalidate_pipe_variable_expression       (value, thing)
     | LambdaDecorated                    thing -> invalidate_decorated_expression           (value, thing)
@@ -522,7 +523,6 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | LambdaCollectionLiteral            thing -> invalidate_collection_literal_expression  (value, thing)
     | LambdaObjectCreation               thing -> invalidate_object_creation_expression     (value, thing)
     | LambdaRecordCreation               thing -> invalidate_record_creation_expression     (value, thing)
-    | LambdaArrayIntrinsic               thing -> invalidate_array_intrinsic_expression     (value, thing)
     | LambdaDarrayIntrinsic              thing -> invalidate_darray_intrinsic_expression    (value, thing)
     | LambdaDictionaryIntrinsic          thing -> invalidate_dictionary_intrinsic_expression (value, thing)
     | LambdaKeysetIntrinsic              thing -> invalidate_keyset_intrinsic_expression    (value, thing)
@@ -540,6 +540,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     match Syntax.syntax x with
     | Syntax.LiteralExpression _ -> tag validate_literal_expression (fun x -> CExprLiteral x) x
     | Syntax.PrefixedStringExpression _ -> tag validate_prefixed_string_expression (fun x -> CExprPrefixedString x) x
+    | Syntax.PrefixedCodeExpression _ -> tag validate_prefixed_code_expression (fun x -> CExprPrefixedCode x) x
     | Syntax.VariableExpression _ -> tag validate_variable_expression (fun x -> CExprVariable x) x
     | Syntax.PipeVariableExpression _ -> tag validate_pipe_variable_expression (fun x -> CExprPipeVariable x) x
     | Syntax.DecoratedExpression _ -> tag validate_decorated_expression (fun x -> CExprDecorated x) x
@@ -571,7 +572,6 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | Syntax.CollectionLiteralExpression _ -> tag validate_collection_literal_expression (fun x -> CExprCollectionLiteral x) x
     | Syntax.ObjectCreationExpression _ -> tag validate_object_creation_expression (fun x -> CExprObjectCreation x) x
     | Syntax.RecordCreationExpression _ -> tag validate_record_creation_expression (fun x -> CExprRecordCreation x) x
-    | Syntax.ArrayIntrinsicExpression _ -> tag validate_array_intrinsic_expression (fun x -> CExprArrayIntrinsic x) x
     | Syntax.DarrayIntrinsicExpression _ -> tag validate_darray_intrinsic_expression (fun x -> CExprDarrayIntrinsic x) x
     | Syntax.DictionaryIntrinsicExpression _ -> tag validate_dictionary_intrinsic_expression (fun x -> CExprDictionaryIntrinsic x) x
     | Syntax.KeysetIntrinsicExpression _ -> tag validate_keyset_intrinsic_expression (fun x -> CExprKeysetIntrinsic x) x
@@ -591,6 +591,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     match thing with
     | CExprLiteral                      thing -> invalidate_literal_expression             (value, thing)
     | CExprPrefixedString               thing -> invalidate_prefixed_string_expression     (value, thing)
+    | CExprPrefixedCode                 thing -> invalidate_prefixed_code_expression       (value, thing)
     | CExprVariable                     thing -> invalidate_variable_expression            (value, thing)
     | CExprPipeVariable                 thing -> invalidate_pipe_variable_expression       (value, thing)
     | CExprDecorated                    thing -> invalidate_decorated_expression           (value, thing)
@@ -622,7 +623,6 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | CExprCollectionLiteral            thing -> invalidate_collection_literal_expression  (value, thing)
     | CExprObjectCreation               thing -> invalidate_object_creation_expression     (value, thing)
     | CExprRecordCreation               thing -> invalidate_record_creation_expression     (value, thing)
-    | CExprArrayIntrinsic               thing -> invalidate_array_intrinsic_expression     (value, thing)
     | CExprDarrayIntrinsic              thing -> invalidate_darray_intrinsic_expression    (value, thing)
     | CExprDictionaryIntrinsic          thing -> invalidate_dictionary_intrinsic_expression (value, thing)
     | CExprKeysetIntrinsic              thing -> invalidate_keyset_intrinsic_expression    (value, thing)
@@ -770,6 +770,24 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       Syntax.PrefixedStringExpression
       { prefixed_string_name = invalidate_token x.prefixed_string_name
       ; prefixed_string_str = invalidate_token x.prefixed_string_str
+      }
+    ; Syntax.value = v
+    }
+  and validate_prefixed_code_expression : prefixed_code_expression validator = function
+  | { Syntax.syntax = Syntax.PrefixedCodeExpression x; value = v } -> v,
+    { prefixed_code_right_backtick = validate_token x.prefixed_code_right_backtick
+    ; prefixed_code_expression = validate_expression x.prefixed_code_expression
+    ; prefixed_code_left_backtick = validate_token x.prefixed_code_left_backtick
+    ; prefixed_code_prefix = validate_token x.prefixed_code_prefix
+    }
+  | s -> validation_fail (Some SyntaxKind.PrefixedCodeExpression) s
+  and invalidate_prefixed_code_expression : prefixed_code_expression invalidator = fun (v, x) ->
+    { Syntax.syntax =
+      Syntax.PrefixedCodeExpression
+      { prefixed_code_prefix = invalidate_token x.prefixed_code_prefix
+      ; prefixed_code_left_backtick = invalidate_token x.prefixed_code_left_backtick
+      ; prefixed_code_expression = invalidate_expression x.prefixed_code_expression
+      ; prefixed_code_right_backtick = invalidate_token x.prefixed_code_right_backtick
       }
     ; Syntax.value = v
     }
@@ -2618,24 +2636,6 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       ; record_creation_left_bracket = invalidate_token x.record_creation_left_bracket
       ; record_creation_members = invalidate_list_with (invalidate_element_initializer) x.record_creation_members
       ; record_creation_right_bracket = invalidate_token x.record_creation_right_bracket
-      }
-    ; Syntax.value = v
-    }
-  and validate_array_intrinsic_expression : array_intrinsic_expression validator = function
-  | { Syntax.syntax = Syntax.ArrayIntrinsicExpression x; value = v } -> v,
-    { array_intrinsic_right_paren = validate_token x.array_intrinsic_right_paren
-    ; array_intrinsic_members = validate_list_with (validate_constructor_expression) x.array_intrinsic_members
-    ; array_intrinsic_left_paren = validate_token x.array_intrinsic_left_paren
-    ; array_intrinsic_keyword = validate_token x.array_intrinsic_keyword
-    }
-  | s -> validation_fail (Some SyntaxKind.ArrayIntrinsicExpression) s
-  and invalidate_array_intrinsic_expression : array_intrinsic_expression invalidator = fun (v, x) ->
-    { Syntax.syntax =
-      Syntax.ArrayIntrinsicExpression
-      { array_intrinsic_keyword = invalidate_token x.array_intrinsic_keyword
-      ; array_intrinsic_left_paren = invalidate_token x.array_intrinsic_left_paren
-      ; array_intrinsic_members = invalidate_list_with (invalidate_constructor_expression) x.array_intrinsic_members
-      ; array_intrinsic_right_paren = invalidate_token x.array_intrinsic_right_paren
       }
     ; Syntax.value = v
     }
