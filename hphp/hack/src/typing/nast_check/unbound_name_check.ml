@@ -182,8 +182,7 @@ let handler ctx =
           env with
           droot = Typing_deps.Dep.Class (snd c.Aast.c_name);
           mode = c.Aast.c_mode;
-          type_params =
-            extend_type_params SMap.empty c.Aast.c_tparams.Aast.c_tparam_list;
+          type_params = extend_type_params SMap.empty c.Aast.c_tparams;
           in_ppl = is_ppl;
         }
       in
@@ -231,12 +230,6 @@ let handler ctx =
       {
         env with
         type_params = extend_type_params env.type_params m.Aast.m_tparams;
-      }
-
-    method! at_method_redeclaration env mt =
-      {
-        env with
-        type_params = extend_type_params env.type_params mt.Aast.mt_tparams;
       }
 
     method! at_pu_enum env pu_enum =
@@ -321,7 +314,6 @@ let handler ctx =
         let () = check_fun_name env id in
         env
       | Aast.Method_caller (id, _)
-      | Aast.Smethod_id (id, _)
       | Aast.Xml (id, _, _) ->
         let () =
           check_type_name

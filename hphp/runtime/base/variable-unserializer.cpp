@@ -858,32 +858,25 @@ void VariableUnserializer::unserializeVariant(
       tvMove(make_array_like_tv(a.detach()), self);
     }
     return; // array has '}' terminating
-  case 'x': // legacy dict
-    {
-      // Check stack depth to avoid overflow.
-      check_recursion_throw();
-      auto a = unserializeDict();
-      a.setLegacyArray(true);
-      tvMove(make_array_like_tv(a.detach()), self);
-    }
-    return; // array has '}' terminating
+  case 'X': // MarkedDArray
   case 'Y': // DArray
     {
       // Check stack depth to avoid overflow.
       check_recursion_throw();
       auto a = unserializeDArray();
-      if (UNLIKELY(m_markLegacyArrays)) {
+      if (UNLIKELY(m_markLegacyArrays || type == 'X')) {
         a.setLegacyArray(true);
       }
       tvMove(make_array_like_tv(a.detach()), self);
     }
     return; // array has '}' terminating
+  case 'x': // MarkedVArray
   case 'y': // VArray
     {
       // Check stack depth to avoid overflow.
       check_recursion_throw();
       auto a = unserializeVArray();
-      if (UNLIKELY(m_markLegacyArrays)) {
+      if (UNLIKELY(m_markLegacyArrays || type == 'x')) {
         a.setLegacyArray(true);
       }
       tvMove(make_array_like_tv(a.detach()), self);
@@ -897,15 +890,6 @@ void VariableUnserializer::unserializeVariant(
       tvMove(make_tv<KindOfVec>(a.detach()), self);
     }
     return; // array has '}' terminating
-  case 'X': // legacy vec
-  {
-    // Check stack depth to avoid overflow.
-    check_recursion_throw();
-    auto a = unserializeVec();
-    a.setLegacyArray(true);
-    tvMove(make_tv<KindOfVec>(a.detach()), self);
-  }
-  return; // array has '}' terminating
   case 'k': // Keyset
     {
       // Check stack depth to avoid overflow.
@@ -1262,9 +1246,7 @@ arrprov::Tag VariableUnserializer::unserializeProvenanceTag() {
     }
   };
 
-  if (type() != VariableUnserializer::Type::Internal) return {};
-  if (peek() == 'p') {
-    expectChar('p');
+  auto const read_file_line = [&]() -> std::pair<const StringData*, int> {
     expectChar(':');
     expectChar('i');
     expectChar(':');
@@ -1272,11 +1254,25 @@ arrprov::Tag VariableUnserializer::unserializeProvenanceTag() {
     expectChar(';');
     auto const filename = read_filename();
     expectChar(';');
+    return std::make_pair(filename, line);
+  };
+
+  if (type() != VariableUnserializer::Type::Internal) {
+    return {};
+  }
+
+  if (peek() != 'p') {
+    return {};
+  }
+  expectChar('p');
+
+  if (peek() == ':') {
+    auto const [filename, line] = read_file_line();
     return finish(
       arrprov::Tag { filename, line }
     );
-  } else if (peek() == 'P') {
-    expectChar('P');
+  } else if (peek() == 'u') {
+    expectChar('u');
     expectChar(';');
     return finish(
       arrprov::Tag::RepoUnion()
@@ -1296,6 +1292,18 @@ arrprov::Tag VariableUnserializer::unserializeProvenanceTag() {
     expectChar(';');
     return finish(
       arrprov::Tag::LargeEnum(filename)
+    );
+  } if (peek() == 'c') {
+    expectChar('c');
+    auto const [filename, line] = read_file_line();
+    return finish(
+        arrprov::Tag::RuntimeLocation(filename, line)
+    );
+  } if (peek() == 'z') {
+    expectChar('z');
+    auto const [filename, line] = read_file_line();
+    return finish(
+        arrprov::Tag::RuntimeLocationPoison(filename, line)
     );
   } else {
     return {};

@@ -78,15 +78,35 @@ namespace jit {
 
 //////////////////////////////////////////////////////////////////////
 
-ArrayData* addNewElemHelper(ArrayData* a, TypedValue value) {
-  assertx(a->isPHPArrayType());
-
-  auto r = a->append(*tvAssertPlausible(&value));
-  if (UNLIKELY(r != a)) {
-    decRefArr(a);
-  }
-  return r;
+void setNewElem(tv_lval base, TypedValue val) {
+  HPHP::SetNewElem<false>(base, &val);
 }
+
+void setNewElemVec(tv_lval base, TypedValue val) {
+  HPHP::SetNewElemVecMove(base, &val);
+}
+
+void setNewElemDict(tv_lval base, TypedValue val) {
+  HPHP::SetNewElemDict(base, &val);
+}
+
+//////////////////////////////////////////////////////////////////////
+
+ArrayData* addNewElemVec(ArrayData* vec, TypedValue v) {
+  assertx(vec->hasVanillaPackedLayout());
+  auto out = PackedArray::Append(vec, v);
+  if (vec != out) decRefArr(vec);
+  return out;
+}
+
+ArrayData* addNewElemKeyset(ArrayData* keyset, TypedValue v) {
+  assertx(keyset->isKeysetKind());
+  auto out = SetArray::Append(keyset, v);
+  if (keyset != out) decRefArr(keyset);
+  return out;
+}
+
+//////////////////////////////////////////////////////////////////////
 
 ArrayData* convArrToVecHelper(ArrayData* adIn) {
   assertx(adIn->isPHPArrayType());
@@ -97,7 +117,7 @@ ArrayData* convArrToVecHelper(ArrayData* adIn) {
 
 ArrayData* convDictToVecHelper(ArrayData* adIn) {
   assertx(adIn->isDictKind());
-  auto a = MixedArray::ToVecDict(adIn, adIn->cowCheck());
+  auto a = MixedArray::ToVec(adIn, adIn->cowCheck());
   assertx(a != adIn);
   decRefArr(adIn);
   return a;
@@ -127,7 +147,7 @@ ArrayData* convArrToDictHelper(ArrayData* adIn) {
 
 ArrayData* convVecToDictHelper(ArrayData* adIn) {
   assertx(adIn->isVecKind());
-  auto a = PackedArray::ToDictVec(adIn, adIn->cowCheck());
+  auto a = PackedArray::ToDict(adIn, adIn->cowCheck());
   assertx(a != adIn);
   decRefArr(adIn);
   return a;
@@ -156,7 +176,7 @@ ArrayData* convArrToKeysetHelper(ArrayData* adIn) {
 
 ArrayData* convVecToKeysetHelper(ArrayData* adIn) {
   assertx(adIn->isVecKind());
-  auto a = PackedArray::ToKeysetVec(adIn, adIn->cowCheck());
+  auto a = PackedArray::ToKeyset(adIn, adIn->cowCheck());
   assertx(a != adIn);
   decRefArr(adIn);
   return a;
@@ -164,7 +184,7 @@ ArrayData* convVecToKeysetHelper(ArrayData* adIn) {
 
 ArrayData* convDictToKeysetHelper(ArrayData* adIn) {
   assertx(adIn->isDictKind());
-  auto a = MixedArray::ToKeysetDict(adIn, adIn->cowCheck());
+  auto a = MixedArray::ToKeyset(adIn, adIn->cowCheck());
   if (a != adIn) decRefArr(adIn);
   return a;
 }
@@ -485,16 +505,14 @@ TypedValue arrayIdxScan(ArrayData* a, StringData* key, TypedValue def) {
 // This helper may also be used when we know we have a MixedArray in the JIT.
 TypedValue dictIdxI(ArrayData* a, int64_t key, TypedValue def) {
   assertx(a->hasVanillaMixedLayout());
-  static_assert(MixedArray::NvGetInt == MixedArray::NvGetIntDict, "");
-  return getDefaultIfMissing(MixedArray::NvGetIntDict(a, key), def);
+  return getDefaultIfMissing(MixedArray::NvGetInt(a, key), def);
 }
 
 // This helper is also used for MixedArrays.
 NEVER_INLINE
 TypedValue dictIdxS(ArrayData* a, StringData* key, TypedValue def) {
   assertx(a->hasVanillaMixedLayout());
-  static_assert(MixedArray::NvGetStr == MixedArray::NvGetStrDict, "");
-  return getDefaultIfMissing(MixedArray::NvGetStrDict(a, key), def);
+  return getDefaultIfMissing(MixedArray::NvGetStr(a, key), def);
 }
 
 // This helper is also used for MixedArrays.
@@ -521,7 +539,7 @@ TypedValue vecFirstLast(ArrayData* a) {
   assertx(a->isVecKind() || a->isPackedKind());
   auto const size = a->getSize();
   if (UNLIKELY(size == 0)) return make_tv<KindOfNull>();
-  return PackedArray::NvGetIntVec(a, isFirst ? 0 : size - 1);
+  return PackedArray::NvGetInt(a, isFirst ? 0 : size - 1);
 }
 
 template TypedValue vecFirstLast<true>(ArrayData*);
@@ -839,14 +857,24 @@ void throwOOBException(TypedValue base, TypedValue key) {
 }
 
 void invalidArrayKeyHelper(const ArrayData* ad, TypedValue key) {
+  if (ad->isVArray() && tvIsString(key)) {
+    if (RO::EvalHackArrCompatNotices) {
+      raise_hackarr_compat_notice(
+        "Raising OutOfBoundsException for accessing string index of varray"
+      );
+    }
+    throwOOBArrayKeyException(key, ad);
+  } else {
+    throwInvalidArrayKeyException(&key, ad);
+  }
+}
+
+void invalidArrayKeyForSetHelper(const ArrayData* ad, TypedValue key) {
   throwInvalidArrayKeyException(&key, ad);
 }
 
-namespace MInstrHelpers {
 
-void setNewElemArray(tv_lval base, TypedValue val) {
-  HPHP::SetNewElemArray(base, &val);
-}
+namespace MInstrHelpers {
 
 TypedValue setOpElem(tv_lval base, TypedValue key,
                      TypedValue val, SetOpOp op) {
@@ -880,7 +908,7 @@ TypedValue incDecElem(tv_lval base, TypedValue key, IncDecOp op) {
 }
 
 tv_lval elemVecIU(tv_lval base, int64_t key) {
-  assertx(isVecType(type(base)));
+  assertx(tvIsVecOrVArray(base));
   return ElemUVec<KeyType::Int>(base, key);
 }
 

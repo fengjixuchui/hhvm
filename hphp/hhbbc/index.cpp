@@ -1003,24 +1003,43 @@ bool Func::mightBeBuiltin() const {
   );
 }
 
-uint32_t Func::minNonVariadicParams() const {
-  auto const count = [] (const php::Func& f) -> uint32_t {
-    for (size_t i = 0; i < f.params.size(); ++i) {
-      if (f.params[i].isVariadic) return i;
-    }
-    return f.params.size();
-  };
+namespace {
 
+uint32_t numNVArgs(const php::Func& f) {
+  uint32_t cnt = f.params.size();
+  return cnt && f.params[cnt - 1].isVariadic ? cnt - 1 : cnt;
+}
+
+}
+
+uint32_t Func::minNonVariadicParams() const {
   return match<uint32_t>(
     val,
     [&] (FuncName) { return 0; },
     [&] (MethodName) { return 0; },
-    [&] (FuncInfo* fi) { return count(*fi->func); },
-    [&] (const MethTabEntryPair* mte) { return count(*mte->second.func); },
+    [&] (FuncInfo* fi) { return numNVArgs(*fi->func); },
+    [&] (const MethTabEntryPair* mte) { return numNVArgs(*mte->second.func); },
     [&] (FuncFamily* fa) {
       auto c = std::numeric_limits<uint32_t>::max();
       for (auto const pf : fa->possibleFuncs()) {
-        c = std::min(c, count(*pf->second.func));
+        c = std::min(c, numNVArgs(*pf->second.func));
+      }
+      return c;
+    }
+  );
+}
+
+uint32_t Func::maxNonVariadicParams() const {
+  return match<uint32_t>(
+    val,
+    [&] (FuncName) { return std::numeric_limits<uint32_t>::max(); },
+    [&] (MethodName) { return std::numeric_limits<uint32_t>::max(); },
+    [&] (FuncInfo* fi) { return numNVArgs(*fi->func); },
+    [&] (const MethTabEntryPair* mte) { return numNVArgs(*mte->second.func); },
+    [&] (FuncFamily* fa) {
+      uint32_t c = 0;
+      for (auto const pf : fa->possibleFuncs()) {
+        c = std::max(c, numNVArgs(*pf->second.func));
       }
       return c;
     }
@@ -1362,16 +1381,6 @@ struct TMIOps {
     return modifiers & AttrAbstract;
   }
 
-  static bool isAsync(method_type meth) {
-    return meth->isAsync;
-  }
-  static bool isStatic(method_type meth) {
-    return meth->attrs & AttrStatic;
-  }
-  static bool isFinal(method_type meth) {
-    return meth->attrs & AttrFinal;
-  }
-
   // Whether to exclude methods with name `methName' when adding.
   static bool exclude(string_type methName) {
     return Func::isSpecial(methName);
@@ -1453,22 +1462,6 @@ struct TMIOps {
     throw TMIException(folly::sformat("MultiplyExcluded: {}::{}",
                                       traitName, methName));
   }
-  static void errorInconsistentAttr(string_type traitName,
-                                    string_type methName,
-                                    const char* attr) {
-    throw TMIException(folly::sformat(
-      "Redeclaration of trait method '{}::{}' is inconsistent about '{}'",
-      traitName, methName, attr
-    ));
-  }
-  static void errorRedeclaredNotFinal(string_type traitName,
-                                      string_type methName) {
-    throw TMIException(folly::sformat(
-      "Redeclaration of final trait method '{}::{}' must also be final",
-      traitName, methName
-    ));
-  }
-
 };
 
 using TMIData = TraitMethodImportData<TraitMethod,
@@ -1739,8 +1732,9 @@ bool build_class_methods(BuildClsInfo& info) {
     for (auto const& precRule : info.rleaf->cls->traitPrecRules) {
       tmid.applyPrecRule(precRule, info.rleaf);
     }
-    auto const& aliasRules = info.rleaf->cls->traitAliasRules;
-    tmid.applyAliasRules(aliasRules.begin(), aliasRules.end(), info.rleaf);
+    for (auto const& aliasRule : info.rleaf->cls->traitAliasRules) {
+      tmid.applyAliasRule(aliasRule, info.rleaf);
+    }
     auto traitMethods = tmid.finish(info.rleaf);
     // Import the methods.
     for (auto const& mdata : traitMethods) {

@@ -210,7 +210,7 @@ and class_ tenv c =
     Phase.localize_and_add_ast_generic_parameters_and_where_constraints
       (fst c.c_name)
       tenv
-      c.c_tparams.c_tparam_list
+      c.c_tparams
       c.c_where_constraints
   in
   let env = { env with tenv } in
@@ -218,14 +218,15 @@ and class_ tenv c =
   let (c_static_vars, c_vars) = split_vars c in
   if not Ast_defs.(equal_class_kind c.c_kind Cinterface) then
     maybe method_ env c_constructor;
-  List.iter c.c_tparams.c_tparam_list (tparam env);
+  List.iter c.c_tparams (tparam env);
   List.iter c.c_where_constraints (where_constr env);
   List.iter c.c_extends (hint env);
   List.iter c.c_implements (hint env);
   List.iter c.c_uses (hint env);
-  List.iter c.c_typeconsts (typeconst (env, c.c_tparams.c_tparam_list));
+  List.iter c.c_typeconsts (typeconst (env, c.c_tparams));
   List.iter c_static_vars (class_var env);
   List.iter c_vars (class_var env);
+  List.iter c.c_consts (const env);
   List.iter c_statics (method_ env);
   List.iter c_methods (method_ env);
   List.iter c.c_pu_enums (pu_enum env (snd c.c_name))
@@ -233,6 +234,8 @@ and class_ tenv c =
 and typeconst (env, _) tconst =
   maybe hint env tconst.c_tconst_type;
   maybe hint env tconst.c_tconst_constraint
+
+and const env class_const = maybe hint env class_const.cc_type
 
 and class_var env cv = maybe hint env (hint_of_type_hint cv.cv_type)
 

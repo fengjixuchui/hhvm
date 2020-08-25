@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<2779fb9e4bf13e934b246cd0c682a2b4>>
+// @generated SignedSource<<ebc9347d27258555558bee0f41d263c2>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
@@ -391,24 +391,6 @@ impl<P: Params> NodeMut<P> for ClassKind {
         }
     }
 }
-impl<P: Params> NodeMut<P> for ClassTparams<P::Ex, P::Fb, P::En, P::Hi> {
-    fn accept<'node>(
-        &'node mut self,
-        c: &mut P::Context,
-        v: &mut dyn VisitorMut<'node, P = P>,
-    ) -> Result<(), P::Error> {
-        v.visit_class_tparams(c, self)
-    }
-    fn recurse<'node>(
-        &'node mut self,
-        c: &mut P::Context,
-        v: &mut dyn VisitorMut<'node, P = P>,
-    ) -> Result<(), P::Error> {
-        self.list.accept(c, v)?;
-        self.constraints.accept(c, v)?;
-        Ok(())
-    }
-}
 impl<P: Params> NodeMut<P> for ClassTypeconst<P::Ex, P::Fb, P::En, P::Hi> {
     fn accept<'node>(
         &'node mut self,
@@ -486,7 +468,6 @@ impl<P: Params> NodeMut<P> for Class_<P::Ex, P::Fb, P::En, P::Hi> {
         self.uses.accept(c, v)?;
         self.use_as_alias.accept(c, v)?;
         self.insteadof_alias.accept(c, v)?;
-        self.method_redeclarations.accept(c, v)?;
         self.xhp_attr_uses.accept(c, v)?;
         self.xhp_category.accept(c, v)?;
         self.reqs.accept(c, v)?;
@@ -965,6 +946,10 @@ impl<P: Params> NodeMut<P> for Expr_<P::Ex, P::Fb, P::En, P::Hi> {
                 a.2.accept(c, v)?;
                 Ok(())
             }
+            Expr_::ETSplice(a0) => {
+                a0.accept(c, v)?;
+                Ok(())
+            }
             Expr_::Any => Ok(()),
         }
     }
@@ -1435,36 +1420,6 @@ impl<P: Params> NodeMut<P> for Lid {
     ) -> Result<(), P::Error> {
         self.0.accept(c, v)?;
         self.1.accept(c, v)?;
-        Ok(())
-    }
-}
-impl<P: Params> NodeMut<P> for MethodRedeclaration<P::Ex, P::Fb, P::En, P::Hi> {
-    fn accept<'node>(
-        &'node mut self,
-        c: &mut P::Context,
-        v: &mut dyn VisitorMut<'node, P = P>,
-    ) -> Result<(), P::Error> {
-        v.visit_method_redeclaration(c, self)
-    }
-    fn recurse<'node>(
-        &'node mut self,
-        c: &mut P::Context,
-        v: &mut dyn VisitorMut<'node, P = P>,
-    ) -> Result<(), P::Error> {
-        self.final_.accept(c, v)?;
-        self.abstract_.accept(c, v)?;
-        self.static_.accept(c, v)?;
-        self.visibility.accept(c, v)?;
-        self.name.accept(c, v)?;
-        self.tparams.accept(c, v)?;
-        self.where_constraints.accept(c, v)?;
-        self.variadic.accept(c, v)?;
-        self.params.accept(c, v)?;
-        self.fun_kind.accept(c, v)?;
-        self.ret.accept(c, v)?;
-        self.trait_.accept(c, v)?;
-        self.method.accept(c, v)?;
-        self.user_attributes.accept(c, v)?;
         Ok(())
     }
 }

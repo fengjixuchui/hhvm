@@ -2207,10 +2207,6 @@ SSATmp* simplifyConvTVToBool(State& env, const IRInstruction* inst) {
 
   if (srcType <= TBool) return src;
   if (srcType <= TNull) return cns(env, false);
-  if (srcType <= TArr) {
-    auto const length = gen(env, CountArray, src);
-    return gen(env, NeqInt, length, cns(env, 0));
-  }
   if (srcType.subtypeOfAny(TVec, TVArr)) {
     auto const length = gen(env, CountVec, src);
     return gen(env, NeqInt, length, cns(env, 0));
@@ -2805,43 +2801,6 @@ SSATmp* arrKeyImpl(State& env, const IRInstruction* inst) {
   return tv.is_init() ? cns(env, tv) : nullptr;
 }
 
-SSATmp* simplifyArrayGet(State& env, const IRInstruction* inst) {
-  if (inst->src(0)->hasConstVal() && inst->src(1)->hasConstVal()) {
-    if (auto const result = arrKeyImpl(env, inst)) return result;
-    auto const mode = inst->extra<ArrayGet>()->mode;
-    if (mode == MOpMode::None) return cns(env, TInitNull);
-    auto const op = inst->src(1)->isA(TInt) ? ThrowArrayIndexException
-                                            : ThrowArrayKeyException;
-    gen(env, op, inst->taken(), inst->src(0), inst->src(1));
-    return cns(env, TBottom);
-  }
-  return nullptr;
-}
-
-SSATmp* simplifyArrayIsset(State& env, const IRInstruction* inst) {
-  if (inst->src(0)->hasConstVal() && inst->src(1)->hasConstVal()) {
-    auto const result = arrKeyImpl(env, inst);
-    return cns(env, result && !result->isA(TInitNull));
-  }
-  return nullptr;
-}
-
-SSATmp* simplifyArrayIdx(State& env, const IRInstruction* inst) {
-  if (inst->src(0)->hasConstVal() && inst->src(1)->hasConstVal()) {
-    auto const result = arrKeyImpl(env, inst);
-    return result ? result : inst->src(2);
-  }
-  return nullptr;
-}
-
-SSATmp* simplifyAKExistsArr(State& env, const IRInstruction* inst) {
-  if (inst->src(0)->hasConstVal() && inst->src(1)->hasConstVal()) {
-    auto const result = arrKeyImpl(env, inst);
-    return cns(env, (bool)result);
-  }
-  return nullptr;
-}
-
 namespace {
 
 SSATmp* arrGetKImpl(State& env, const IRInstruction* inst) {
@@ -2972,51 +2931,47 @@ SSATmp* hackArrAKExistsImpl(State& env, const IRInstruction* inst,
 
 }
 
-#define X(Name, Action, Get)                                          \
+#define X(Name, Action)                                               \
 SSATmp* simplify##Name(State& env, const IRInstruction* inst) {       \
   return hackArr##Action##Impl(                                       \
     env, inst,                                                        \
     [](SSATmp* a, int64_t k) {                                        \
-      return MixedArray::NvGetIntDict(a->Get(), k);                   \
+      return MixedArray::NvGetInt(a->arrLikeVal(), k);                \
     },                                                                \
     [](SSATmp* a, const StringData* k) {                              \
-      return MixedArray::NvGetStrDict(a->Get(), k);                   \
+      return MixedArray::NvGetStr(a->arrLikeVal(), k);                \
     }                                                                 \
   );                                                                  \
 }
 
-X(DictGet, Get, dictVal)
-X(DictGetQuiet, GetQuiet, dictVal)
-X(DictIsset, Isset, dictVal)
-X(DictIdx, Idx, dictVal)
-X(AKExistsDict, AKExists, arrLikeVal)
+X(DictGet, Get)
+X(DictGetQuiet, GetQuiet)
+X(DictIsset, Isset)
+X(DictIdx, Idx)
+X(AKExistsDict, AKExists)
 
 #undef X
 
-#define X(Name, Action, Get)                                          \
+#define X(Name, Action)                                               \
 SSATmp* simplify##Name(State& env, const IRInstruction* inst) {       \
   return hackArr##Action##Impl(                                       \
     env, inst,                                                        \
     [](SSATmp* a, int64_t k) {                                        \
-      return SetArray::NvGetInt(a->Get(), k);                         \
+      return SetArray::NvGetInt(a->keysetVal(), k);                   \
     },                                                                \
     [](SSATmp* a, const StringData* k) {                              \
-      return SetArray::NvGetStr(a->Get(), k);                         \
+      return SetArray::NvGetStr(a->keysetVal(), k);                   \
     }                                                                 \
   );                                                                  \
 }
 
-X(KeysetGet, Get, keysetVal)
-X(KeysetGetQuiet, GetQuiet, keysetVal)
-X(KeysetIsset, Isset, keysetVal)
-X(KeysetIdx, Idx, keysetVal)
-X(AKExistsKeyset, AKExists, keysetVal)
+X(KeysetGet, Get)
+X(KeysetGetQuiet, GetQuiet)
+X(KeysetIsset, Isset)
+X(KeysetIdx, Idx)
+X(AKExistsKeyset, AKExists)
 
 #undef X
-
-SSATmp* simplifyMixedArrayGetK(State& env, const IRInstruction* inst) {
-  return arrGetKImpl(env, inst);
-}
 
 SSATmp* simplifyDictGetK(State& env, const IRInstruction* inst) {
   return arrGetKImpl(env, inst);
@@ -3185,7 +3140,6 @@ SSATmp* simplify##Name(State& env, const IRInstruction* inst) { \
   return simplifyCountHelper(env, inst);                        \
 }
 
-X(CountArray)
 X(CountVec)
 X(CountDict)
 X(CountKeyset)
@@ -3217,32 +3171,17 @@ SSATmp* simplifyLdStrLen(State& env, const IRInstruction* inst) {
   return src->hasConstVal(TStr) ? cns(env, src->strVal()->size()) : nullptr;
 }
 
-namespace {
-
-SSATmp* packedLayoutLoadImpl(State& env,
-                             const IRInstruction* inst,
-                             bool isVec) {
+SSATmp* simplifyLdVecElem(State& env, const IRInstruction* inst) {
   auto const src0 = inst->src(0);
   auto const src1 = inst->src(1);
   if (src0->hasConstVal() && src1->hasConstVal(TInt)) {
     auto const arr = src0->arrLikeVal();
     auto const idx = src1->intVal();
     assertx(arr->hasVanillaPackedLayout());
-    auto const tv = isVec ? PackedArray::NvGetIntVec(arr, idx)
-                          : PackedArray::NvGetInt(arr, idx);
+    auto const tv = PackedArray::NvGetInt(arr, idx);
     return tv.is_init() ? cns(env, tv) : nullptr;
   }
   return nullptr;
-}
-
-}
-
-SSATmp* simplifyLdVecElem(State& env, const IRInstruction* inst) {
-  return packedLayoutLoadImpl(env, inst, true);
-}
-
-SSATmp* simplifyLdPackedElem(State& env, const IRInstruction* inst) {
-  return packedLayoutLoadImpl(env, inst, false);
 }
 
 template <class F>
@@ -3585,7 +3524,6 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
   X(ConvKeysetToDArr)
   X(DblAsBits)
   X(Count)
-  X(CountArray)
   X(CountVec)
   X(CountDict)
   X(CountKeyset)
@@ -3621,7 +3559,6 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
   X(LdClsMethod)
   X(LdStrLen)
   X(LdVecElem)
-  X(LdPackedElem)
   X(MethodExists)
   X(FuncHasAttr)
   X(IsClsDynConstructible)
@@ -3718,8 +3655,6 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
   X(EqCls)
   X(EqStrPtr)
   X(EqArrayDataPtr)
-  X(ArrayGet)
-  X(MixedArrayGetK)
   X(DictGet)
   X(DictGetQuiet)
   X(DictGetK)
@@ -3734,11 +3669,8 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
   X(CheckKeysetOffset)
   X(CheckArrayCOW)
   X(CheckMissingKeyInArrLike)
-  X(ArrayIsset)
   X(DictIsset)
   X(KeysetIsset)
-  X(ArrayIdx)
-  X(AKExistsArr)
   X(DictIdx)
   X(AKExistsDict)
   X(KeysetIdx)

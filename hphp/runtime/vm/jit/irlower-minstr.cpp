@@ -328,14 +328,6 @@ void cgSetRangeRev(IRLS& env, const IRInstruction* inst) {
   cgSetRange(env, inst);
 }
 
-void cgSetNewElem(IRLS& env, const IRInstruction* inst) {
-  auto const target = CallSpec::direct(MInstrHelpers::setNewElem);
-  auto const args = argGroup(env, inst).ssa(0).typedValue(1);
-
-  auto& v = vmain(env);
-  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
-}
-
 void cgSetOpElem(IRLS& env, const IRInstruction* inst) {
   auto& v = vmain(env);
 
@@ -446,12 +438,6 @@ void implCheckMixedArrayLikeOffset(IRLS& env, const IRInstruction* inst,
   }
 }
 
-}
-
-void cgProfileMixedArrayAccess(IRLS& env, const IRInstruction* inst) {
-  BUILD_OPTAB(PROFILE_MIXED_ARRAY_ACCESS_HELPER_TABLE,
-              getKeyType(inst->src(1)));
-  implProfileHackArrayAccess(env, inst, target);
 }
 
 void cgProfileDictAccess(IRLS& env, const IRInstruction* inst) {
@@ -610,18 +596,6 @@ void cgCheckMissingKeyInArrLike(IRLS& env, const IRInstruction* inst) {
 
 namespace {
 
-void implArrayGet(IRLS& env, const IRInstruction* inst, MOpMode mode) {
-  if (inst->src(0)->isA(TDArr)) {
-    if (mode == MOpMode::None) return cgDictGetQuiet(env, inst);
-    if (mode == MOpMode::Warn) return cgDictGet(env, inst);
-  }
-  BUILD_OPTAB(ARRAYGET_HELPER_TABLE, getKeyType(inst->src(1)), mode);
-
-  auto& v = vmain(env);
-  cgCallHelper(v, env, target, callDestTV(env, inst),
-               SyncOptions::Sync, argGroup(env, inst).ssa(0).ssa(1));
-}
-
 VscaledDisp getMixedLayoutOffset(IRLS& env, const IRInstruction* inst) {
   auto const pos = srcLoc(env, inst, 2).reg();
   auto& v = vmain(env);
@@ -646,22 +620,6 @@ VscaledDisp getSetArrayLayoutOffset(IRLS& env, const IRInstruction* inst) {
 
 } // namespace
 
-void cgElemArrayD(IRLS& env, const IRInstruction* inst) {
-  BUILD_OPTAB(ELEM_ARRAY_D_HELPER_TABLE, getKeyType(inst->src(1)));
-
-  auto& v = vmain(env);
-  cgCallHelper(v, env, target, callDest(env, inst),
-               SyncOptions::Sync, argGroup(env, inst).ssa(0).ssa(1));
-}
-
-void cgElemArrayU(IRLS& env, const IRInstruction* inst) {
-  BUILD_OPTAB(ELEM_ARRAY_U_HELPER_TABLE, getKeyType(inst->src(1)));
-
-  auto& v = vmain(env);
-  cgCallHelper(v, env, target, callDest(env, inst),
-               SyncOptions::Sync, argGroup(env, inst).ssa(0).ssa(1));
-}
-
 void cgElemMixedArrayK(IRLS& env, const IRInstruction* inst) {
   auto const arr = srcLoc(env, inst, 0).reg();
   auto const dst = dstLoc(env, inst, 0);
@@ -674,10 +632,6 @@ void cgElemMixedArrayK(IRLS& env, const IRInstruction* inst) {
     static_assert(TVOFF(m_data) == 0, "");
     v << lea{arr[off + TVOFF(m_type)], dst.reg(tv_lval::type_idx)};
   }
-}
-
-void cgArrayGet(IRLS& env, const IRInstruction* inst) {
-  return implArrayGet(env, inst, inst->extra<ArrayGet>()->mode);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -781,98 +735,12 @@ void cgEqPtrIter(IRLS& env, const IRInstruction* inst) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-void cgMixedArrayGetK(IRLS& env, const IRInstruction* inst) {
-  auto const arr = srcLoc(env, inst, 0).reg();
-  auto const off = getMixedLayoutOffset(env, inst);
-  loadTV(vmain(env), inst->dst(0), dstLoc(env, inst, 0), arr[off]);
-}
+IMPL_OPCODE_CALL(SetNewElem);
+IMPL_OPCODE_CALL(SetNewElemVec);
+IMPL_OPCODE_CALL(SetNewElemDict);
 
-void cgArraySet(IRLS& env, const IRInstruction* inst) {
-  auto const& arr_type = inst->src(0)->type();
-  auto const& key_type = inst->src(1)->type();
-
-  using SetIntMove = ArrayData* (ArrayData::*)(int64_t, TypedValue);
-  using SetStrMove = ArrayData* (ArrayData::*)(StringData*, TypedValue);
-
-  assertx(key_type.subtypeOfAny(TInt, TStr));
-  auto const target = (key_type <= TInt)
-    ? CallSpec::array(arr_type, &g_array_funcs.setIntMove,
-                      static_cast<SetIntMove>(&ArrayData::setMove))
-    : CallSpec::array(arr_type, &g_array_funcs.setStrMove,
-                      static_cast<SetStrMove>(&ArrayData::setMove));
-
-  auto& v = vmain(env);
-  auto const args = argGroup(env, inst).ssa(0).ssa(1).typedValue(2);
-  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
-}
-
-IMPL_OPCODE_CALL(SetNewElemArray);
-IMPL_OPCODE_CALL(AddNewElem);
-
-static ArrayData* addNewElemKeysetImpl(ArrayData* keyset, TypedValue v) {
-  assertx(keyset->isKeysetKind());
-  auto out = SetArray::Append(keyset, v);
-  if (keyset != out) decRefArr(keyset);
-  return out;
-}
-
-static ArrayData* addNewElemVecImpl(ArrayData* vec, TypedValue v) {
-  assertx(vec->isVecKind());
-  auto out = PackedArray::AppendVec(vec, v);
-  if (vec != out) decRefArr(vec);
-  return out;
-}
-
-void cgAddNewElemKeyset(IRLS& env, const IRInstruction* inst) {
-  cgCallHelper(
-    vmain(env),
-    env,
-    CallSpec::direct(addNewElemKeysetImpl),
-    callDest(env, inst),
-    SyncOptions::Sync,
-    argGroup(env, inst).ssa(0).typedValue(1)
-  );
-}
-
-void cgAddNewElemVec(IRLS& env, const IRInstruction* inst) {
-  cgCallHelper(
-    vmain(env),
-    env,
-    CallSpec::direct(addNewElemVecImpl),
-    callDest(env, inst),
-    SyncOptions::None,
-    argGroup(env, inst).ssa(0).typedValue(1)
-  );
-}
-
-void cgArrayIsset(IRLS& env, const IRInstruction* inst) {
-  BUILD_OPTAB(ARRAY_ISSET_HELPER_TABLE, getKeyType(inst->src(1)));
-
-  auto& v = vmain(env);
-  cgCallHelper(v, env, target, callDest(env, inst),
-               SyncOptions::Sync, argGroup(env, inst).ssa(0).ssa(1));
-}
-
-void cgArrayIdx(IRLS& env, const IRInstruction* inst) {
-  auto const arr = inst->src(0);
-  auto const def = inst->src(2);
-  if (arr->isA(TDArr))     return cgDictIdx(env, inst);
-  if (def->isA(TInitNull)) return implArrayGet(env, inst, MOpMode::None);
-  auto const keyType = getKeyType(inst->src(1));
-
-  auto const target = [&] () -> CallSpec {
-    if (keyType == KeyType::Int) return CallSpec::direct(arrayIdxI);
-    assertx(keyType == KeyType::Str);
-    auto const scan =
-      inst->extra<SizeHintData>()->hint == SizeHintData::SmallStatic &&
-      inst->src(1)->isA(TStaticStr);
-    return CallSpec::direct(scan ? arrayIdxScan : arrayIdxS);
-  }();
-
-  auto& v = vmain(env);
-  cgCallHelper(v, env, target, callDestTV(env, inst), SyncOptions::Sync,
-               argGroup(env, inst).ssa(0).ssa(1).typedValue(2));
-}
+IMPL_OPCODE_CALL(AddNewElemVec);
+IMPL_OPCODE_CALL(AddNewElemKeyset);
 
 template <TypedValue (*f)(ArrayData*)>
 void containerFirstLastHelper(IRLS& env, const IRInstruction* inst) {
@@ -961,7 +829,7 @@ LvalPtrs implPackedLayoutElemAddr(IRLS& env, Vloc arrLoc,
 }
 
 void implVecSet(IRLS& env, const IRInstruction* inst) {
-  auto const target = CallSpec::direct(PackedArray::SetIntMoveVec);
+  auto const target = CallSpec::direct(PackedArray::SetIntMove);
   auto const args = argGroup(env, inst).ssa(0).ssa(1).typedValue(2);
 
   auto& v = vmain(env);
@@ -1003,25 +871,13 @@ void cgLdVecElemAddr(IRLS& env, const IRInstruction* inst) {
   }
 }
 
-namespace {
-
-void packedLayoutLoadImpl(IRLS& env, const IRInstruction* inst) {
+void cgLdVecElem(IRLS& env, const IRInstruction* inst) {
   auto const arrLoc = srcLoc(env, inst, 0);
   auto const idxLoc = srcLoc(env, inst, 1);
   auto const addr = implPackedLayoutElemAddr(env, arrLoc, idxLoc, inst->src(1));
 
   loadTV(vmain(env), inst->dst()->type(), dstLoc(env, inst, 0),
          addr.type, addr.val);
-}
-
-}
-
-void cgLdVecElem(IRLS& env, const IRInstruction* inst) {
-  packedLayoutLoadImpl(env, inst);
-}
-
-void cgLdPackedElem(IRLS& env, const IRInstruction* inst) {
-  packedLayoutLoadImpl(env, inst);
 }
 
 void cgElemVecD(IRLS& env, const IRInstruction* inst) {
@@ -1035,14 +891,6 @@ void cgElemVecD(IRLS& env, const IRInstruction* inst) {
 IMPL_OPCODE_CALL(ElemVecU)
 
 void cgVecSet(IRLS& env, const IRInstruction* i)    { implVecSet(env, i); }
-
-void cgSetNewElemVec(IRLS& env, const IRInstruction* inst) {
-  auto const target = CallSpec::direct(MInstrHelpers::setNewElemVec);
-  auto const args = argGroup(env, inst).ssa(0).typedValue(1);
-
-  auto& v = vmain(env);
-  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
-}
 
 void cgReserveVecNewElem(IRLS& env, const IRInstruction* i) {
   static_assert(ArrayData::sizeofSize() == 4, "");

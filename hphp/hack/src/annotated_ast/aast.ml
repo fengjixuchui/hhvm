@@ -162,7 +162,7 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
   | FunctionPointer of ('ex, 'fb, 'en, 'hi) function_ptr_id * 'hi targ list
   | Int of string
   | Float of string
-  | String of string
+  | String of byte_string
   | String2 of ('ex, 'fb, 'en, 'hi) expr list
   | PrefixedString of string * ('ex, 'fb, 'en, 'hi) expr
   | Yield of ('ex, 'fb, 'en, 'hi) afield
@@ -210,7 +210,7 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
   | Method_id of ('ex, 'fb, 'en, 'hi) expr * pstring
   | Method_caller of sid * pstring
       (** meth_caller('Class name', 'method name') *)
-  | Smethod_id of sid * pstring
+  | Smethod_id of ('ex, 'fb, 'en, 'hi) class_id * pstring
   | Pair of
       ('hi targ * 'hi targ) option
       * ('ex, 'fb, 'en, 'hi) expr
@@ -218,6 +218,7 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
   | Assert of ('ex, 'fb, 'en, 'hi) assert_expr
   | PU_atom of string
   | PU_identifier of ('ex, 'fb, 'en, 'hi) class_id * pstring * pstring
+  | ET_Splice of ('ex, 'fb, 'en, 'hi) expr
   | Any
 
 and ('ex, 'fb, 'en, 'hi) class_get_expr =
@@ -341,16 +342,6 @@ and ('ex, 'fb, 'en, 'hi) tparam = {
   tp_user_attributes: ('ex, 'fb, 'en, 'hi) user_attribute list;
 }
 
-and ('ex, 'fb, 'en, 'hi) class_tparams = {
-  c_tparam_list: ('ex, 'fb, 'en, 'hi) tparam list;
-  c_tparam_constraints:
-    (reify_kind * (Ast_defs.constraint_kind * hint) list) SMap.t;
-      [@visitors.opaque]
-      (** keeping around the ast version of the constraint only
-       * for the purposes of Naming.class_meth_bodies
-       * TODO: remove this and use tp_constraints *)
-}
-
 and use_as_alias = sid option * pstring * sid option * use_as_visibility list
 
 and insteadof_alias = sid * pstring * sid list
@@ -372,13 +363,12 @@ and ('ex, 'fb, 'en, 'hi) class_ = {
   c_has_xhp_keyword: bool;
   c_kind: Ast_defs.class_kind;
   c_name: sid;
-  c_tparams: ('ex, 'fb, 'en, 'hi) class_tparams;
+  c_tparams: ('ex, 'fb, 'en, 'hi) tparam list;
       (** The type parameters of a class A<T> (T is the parameter) *)
   c_extends: class_hint list;
   c_uses: trait_hint list;
   c_use_as_alias: use_as_alias list;
   c_insteadof_alias: insteadof_alias list;
-  c_method_redeclarations: ('ex, 'fb, 'en, 'hi) method_redeclaration list;
   c_xhp_attr_uses: xhp_attr_hint list;
   c_xhp_category: (pos * pstring list) option;
   c_reqs: (class_hint * is_extends) list;
@@ -498,23 +488,6 @@ and ('ex, 'fb, 'en, 'hi) method_ = {
       (** true if this declaration has no body because it is an external method
           declaration (e.g. from an HHI file) *)
   m_doc_comment: doc_comment option;
-}
-
-and ('ex, 'fb, 'en, 'hi) method_redeclaration = {
-  mt_final: bool;
-  mt_abstract: bool;
-  mt_static: bool;
-  mt_visibility: visibility;
-  mt_name: sid;
-  mt_tparams: ('ex, 'fb, 'en, 'hi) tparam list;
-  mt_where_constraints: where_constraint list;
-  mt_variadic: ('ex, 'fb, 'en, 'hi) fun_variadicity;
-  mt_params: ('ex, 'fb, 'en, 'hi) fun_param list;
-  mt_fun_kind: Ast_defs.fun_kind;
-  mt_ret: 'hi type_hint;
-  mt_trait: trait_hint;
-  mt_method: pstring;
-  mt_user_attributes: ('ex, 'fb, 'en, 'hi) user_attribute list;
 }
 
 and nsenv = (Namespace_env.env[@visitors.opaque])

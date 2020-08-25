@@ -60,7 +60,6 @@ bool loadsCell(const IRInstruction& inst) {
     return arch_allows && (!wide_tv_val || inst.src(0)->isA(TPtrToCell));
 
   case LdVecElem:
-  case LdPackedElem:
     static_assert(PackedArray::stores_typed_values, "");
     return arch_allows;
 
@@ -69,7 +68,6 @@ bool loadsCell(const IRInstruction& inst) {
   case LdContField:
   case InitClsCns:
   case CGetProp:
-  case ArrayGet:
   case DictGet:
   case DictGetQuiet:
   case DictGetK:
@@ -78,7 +76,6 @@ bool loadsCell(const IRInstruction& inst) {
   case KeysetGetK:
   case MapGet:
   case CGetElem:
-  case ArrayIdx:
   case DictIdx:
   case KeysetIdx:
   case MemoGetStaticValue:

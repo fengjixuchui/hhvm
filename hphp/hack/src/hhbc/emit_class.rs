@@ -29,7 +29,7 @@ use hhbc_ast_rust::{FcallArgs, FcallFlags, SpecialClsRef};
 use hhbc_id_rust::r#const;
 use hhbc_id_rust::{self as hhbc_id, class, method, prop, Id};
 use hhbc_string_utils_rust as string_utils;
-use instruction_sequence_rust::{instr, Error::Unrecoverable, InstrSeq, Result};
+use instruction_sequence_rust::{instr, InstrSeq, Result};
 use label_rust as label;
 use naming_special_names_rust as special_names;
 use options::HhvmFlags;
@@ -381,7 +381,6 @@ fn emit_reified_init_method<'a>(
 
     let num_reified = ast_class
         .tparams
-        .list
         .iter()
         .filter(|x| x.reified != ReifyKind::Erased)
         .count();
@@ -469,8 +468,7 @@ pub fn emit_class<'a>(emitter: &mut Emitter, ast_class: &'a tast::Class_) -> Res
 
     let mut attributes = emit_attribute::from_asts(emitter, namespace, &ast_class.user_attributes)?;
     if !is_closure {
-        attributes
-            .extend(emit_attribute::add_reified_attribute(&ast_class.tparams.list).into_iter());
+        attributes.extend(emit_attribute::add_reified_attribute(&ast_class.tparams).into_iter());
         attributes.extend(
             emit_attribute::add_reified_parent_attribute(&env, &ast_class.extends).into_iter(),
         )
@@ -524,35 +522,6 @@ pub fn emit_class<'a>(emitter: &mut Emitter, ast_class: &'a tast::Class_) -> Res
             (id1, id2.into(), ids)
         })
         .collect();
-    let string_of_trait = |trait_: &'a tast::Hint| {
-        use tast::Hint_::*;
-        match trait_.1.as_ref() {
-            // TODO: Currently, names are not elaborated.
-            // Names should be elaborated if this feature is to be supported
-            // T56629465
-            Happly(tast::Id(_, trait_), _) => Ok(trait_.into()),
-            // Happly converted from naming
-            Hprim(p) => Ok(emit_type_hint::prim_to_string(p).into()),
-            Hany | Herr => Err(Unrecoverable(
-                "I'm convinced that this should be an error caught in naming".into(),
-            )),
-            Hmixed => Ok(special_names::typehints::MIXED.into()),
-            Hnonnull => Ok(special_names::typehints::NONNULL.into()),
-            Habstr(s, _) => Ok(s.into()),
-            Harray(_, _) => Ok(special_names::typehints::ARRAY.into()),
-            Hdarray(_, _) => Ok(special_names::typehints::DARRAY.into()),
-            Hvarray(_) => Ok(special_names::typehints::VARRAY.into()),
-            HvarrayOrDarray(_, _) => Ok(special_names::typehints::VARRAY_OR_DARRAY.into()),
-            Hthis => Ok(special_names::typehints::THIS.into()),
-            Hdynamic => Ok(special_names::typehints::DYNAMIC.into()),
-            _ => Err(Unrecoverable("TODO Fail gracefully here".into())),
-        }
-    };
-    let method_trait_resolutions: Vec<(_, class::Type)> = ast_class
-        .method_redeclarations
-        .iter()
-        .map(|mtr| Ok((mtr, string_of_trait(&mtr.trait_)?)))
-        .collect::<Result<_>>()?;
 
     let enum_type = if ast_class.kind == tast::ClassKind::Cenum {
         from_enum_type(ast_class.enum_.as_ref())?
@@ -584,7 +553,6 @@ pub fn emit_class<'a>(emitter: &mut Emitter, ast_class: &'a tast::Class_) -> Res
 
     let tparams: Vec<&str> = ast_class
         .tparams
-        .list
         .iter()
         .map(|x| x.name.1.as_ref())
         .collect();
@@ -756,7 +724,7 @@ pub fn emit_class<'a>(emitter: &mut Emitter, ast_class: &'a tast::Class_) -> Res
     let mut methods = emit_method::from_asts(emitter, ast_class, &ast_class.methods)?;
     methods.extend(additional_methods.into_iter());
     let type_constants = from_class_elt_typeconsts(emitter, ast_class)?;
-    let upper_bounds = emit_body::emit_generics_upper_bounds(&ast_class.tparams.list, &[], false);
+    let upper_bounds = emit_body::emit_generics_upper_bounds(&ast_class.tparams, &[], false);
 
     if !no_xhp_attributes {
         properties.extend(emit_xhp::properties_for_cache(
@@ -797,7 +765,6 @@ pub fn emit_class<'a>(emitter: &mut Emitter, ast_class: &'a tast::Class_) -> Res
         uses,
         use_aliases,
         use_precedences,
-        method_trait_resolutions,
         methods,
         enum_type,
         upper_bounds,

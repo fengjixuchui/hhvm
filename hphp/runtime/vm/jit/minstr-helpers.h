@@ -297,35 +297,6 @@ ISSET_OBJ_PROP_HELPER_TABLE(X)
 
 //////////////////////////////////////////////////////////////////////
 
-inline void profileMixedArrayAccessHelper(const ArrayData* ad, int64_t i,
-                                          ArrayAccessProfile* prof,
-                                          bool cowCheck) {
-  prof->update(ad, i, cowCheck);
-}
-inline void profileMixedArrayAccessHelper(const ArrayData* ad,
-                                          const StringData* sd,
-                                          ArrayAccessProfile* prof,
-                                          bool cowCheck) {
-  prof->update(ad, sd, cowCheck);
-}
-
-#define PROFILE_MIXED_ARRAY_ACCESS_HELPER_TABLE(m)  \
-  /* name                      keyType */           \
-  m(profileMixedArrayAccessS,  KeyType::Str)        \
-  m(profileMixedArrayAccessI,  KeyType::Int)        \
-
-#define X(nm, keyType)                              \
-inline void nm(const ArrayData* a,                  \
-               key_type<keyType> k,                 \
-               ArrayAccessProfile* p,               \
-               bool cowCheck) {                     \
-  profileMixedArrayAccessHelper(a, k, p, cowCheck); \
-}
-PROFILE_MIXED_ARRAY_ACCESS_HELPER_TABLE(X)
-#undef X
-
-//////////////////////////////////////////////////////////////////////
-
 inline void profileDictAccessHelper(const ArrayData* ad, int64_t i,
                                     ArrayAccessProfile* prof,
                                     bool cowCheck) {
@@ -427,61 +398,6 @@ ELEMU_HELPER_TABLE(X)
 
 //////////////////////////////////////////////////////////////////////
 
-#define ELEM_ARRAY_D_HELPER_TABLE(m)  \
-  /* name           keyType */        \
-  m(elemArraySD,    KeyType::Str)     \
-  m(elemArrayID,    KeyType::Int)     \
-
-#define X(nm, keyType)                                   \
-inline tv_lval nm(tv_lval base, key_type<keyType> key) { \
-  assertx(isArrayType(type(base)));                      \
-  return ElemDArray<keyType>(base, key);                 \
-}
-ELEM_ARRAY_D_HELPER_TABLE(X)
-#undef X
-
-#define ELEM_ARRAY_U_HELPER_TABLE(m)  \
-  /* name         keyType */          \
-  m(elemArraySU,  KeyType::Str)       \
-  m(elemArrayIU,  KeyType::Int)       \
-
-#define X(nm, keyType)                                     \
-inline tv_lval nm(tv_lval base, key_type<keyType> key) {   \
-  assertx(isArrayType(type(base)));                       \
-  return ElemUArray<keyType>(base, key);                  \
-}
-ELEM_ARRAY_U_HELPER_TABLE(X)
-#undef X
-
-//////////////////////////////////////////////////////////////////////
-
-template<KeyType keyType, MOpMode mode>
-TypedValue arrayGetImpl(ArrayData* a, key_type<keyType> key) {
-  auto const result = a->get(key);
-  if (result.is_init()) return result;
-  if (mode == MOpMode::None) return make_tv<KindOfNull>();
-  assertx(mode == MOpMode::InOut || mode == MOpMode::Warn);
-  a->getNotFound(key);
-}
-
-#define ARRAYGET_HELPER_TABLE(m)                  \
-  /* name           keyType       mode */         \
-  m(arrayGetS,      KeyType::Str, MOpMode::None)  \
-  m(arrayGetI,      KeyType::Int, MOpMode::None)  \
-  m(arrayGetS_W,    KeyType::Str, MOpMode::Warn)  \
-  m(arrayGetI_W,    KeyType::Int, MOpMode::Warn)  \
-  m(arrayGetS_IO,   KeyType::Str, MOpMode::InOut) \
-  m(arrayGetI_IO,   KeyType::Int, MOpMode::InOut) \
-
-#define X(nm, keyType, mode)                                \
-inline TypedValue nm(ArrayData* a, key_type<keyType> key) { \
-  return arrayGetImpl<keyType, mode>(a, key);               \
-}
-ARRAYGET_HELPER_TABLE(X)
-#undef X
-
-//////////////////////////////////////////////////////////////////////
-
 #define ELEM_DICT_D_HELPER_TABLE(m) \
   /* name          keyType       */ \
   m(elemDictSD,    KeyType::Str)    \
@@ -489,7 +405,7 @@ ARRAYGET_HELPER_TABLE(X)
 
 #define X(nm, keyType)                                   \
 inline tv_lval nm(tv_lval base, key_type<keyType> key) { \
-  assertx(isDictType(type(base)));                       \
+  assertx(tvIsDictOrDArray(base));                       \
   return ElemDDict<keyType>(base, key);                  \
 }
 ELEM_DICT_D_HELPER_TABLE(X)
@@ -502,7 +418,7 @@ ELEM_DICT_D_HELPER_TABLE(X)
 
 #define X(nm, keyType)                                   \
 inline tv_lval nm(tv_lval base, key_type<keyType> key) { \
-  assertx(isDictType(type(base)));                       \
+  assertx(tvIsDictOrDArray(base));                       \
   return ElemUDict<keyType>(base, key);                  \
 }
 ELEM_DICT_U_HELPER_TABLE(X)
@@ -586,16 +502,16 @@ CGETELEM_HELPER_TABLE(X)
 //////////////////////////////////////////////////////////////////////
 
 inline ArrayData* dictSetImplPre(ArrayData* a, int64_t i, TypedValue val) {
-  return MixedArray::SetIntMoveDict(a, i, val);
+  return MixedArray::SetIntMove(a, i, val);
 }
 inline ArrayData* dictSetImplPre(ArrayData* a, StringData* s, TypedValue val) {
-  return MixedArray::SetStrMoveDict(a, s, val);
+  return MixedArray::SetStrMove(a, s, val);
 }
 
 template<KeyType keyType>
 auto dictSetImpl(ArrayData* a, key_type<keyType> key, TypedValue value) {
   assertx(tvIsPlausible(value));
-  assertx(a->isDictKind());
+  assertx(a->hasVanillaMixedLayout());
   return dictSetImplPre(a, key, value);
 }
 
@@ -612,15 +528,6 @@ DICTSET_HELPER_TABLE(X)
 #undef X
 
 //////////////////////////////////////////////////////////////////////
-
-inline void setNewElem(tv_lval base, TypedValue val) {
-  HPHP::SetNewElem<false>(base, &val);
-}
-
-inline void setNewElemVec(tv_lval base, TypedValue val) {
-  HPHP::SetNewElemVec(base, &val);
-}
-
 
 inline ArrayData* keysetSetNewElemImplPre(ArrayData* a, int64_t i) {
   return SetArray::AddToSet(a, i);
@@ -674,26 +581,6 @@ inline StringData* nm(tv_lval base, key_type<kt> key, TypedValue val) { \
   return setElemImpl<kt>(base, key, val);                               \
 }
 SETELEM_HELPER_TABLE(X)
-#undef X
-
-//////////////////////////////////////////////////////////////////////
-
-
-template<KeyType keyType>
-uint64_t arrayIssetImpl(ArrayData* a, key_type<keyType> key) {
-  return !isNullType(type(a->get(key)));
-}
-
-#define ARRAY_ISSET_HELPER_TABLE(m) \
-  /* name           keyType */      \
-  m(arrayIssetS,    KeyType::Str)   \
-  m(arrayIssetI,    KeyType::Int)   \
-
-#define X(nm, keyType)                                    \
-inline uint64_t nm(ArrayData* a, key_type<keyType> key) { \
-  return arrayIssetImpl<keyType>(a, key);                 \
-}
-ARRAY_ISSET_HELPER_TABLE(X)
 #undef X
 
 //////////////////////////////////////////////////////////////////////

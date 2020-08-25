@@ -1565,11 +1565,17 @@ let array_typehints_disallowed pos =
     pos
     "Array typehints are no longer legal; use `varray` or `darray` instead"
 
-let wildcard_disallowed pos =
+let wildcard_hint_disallowed pos =
   add
-    (Naming.err_code Naming.WildcardDisallowed)
+    (Naming.err_code Naming.WildcardHintDisallowed)
     pos
     "Wildcard typehints are not allowed in this position"
+
+let wildcard_param_disallowed pos =
+  add
+    (Naming.err_code Naming.WildcardTypeParamDisallowed)
+    pos
+    "Cannot use anonymous type parameter in this position."
 
 let misplaced_mutability_hint pos =
   add
@@ -1795,43 +1801,18 @@ let constructor_required (pos, name) prop_names =
 
 let not_initialized (pos, cname) props =
   let cname = strip_ns cname in
-  let prop_names = List.map ~f:fst props in
-  let props_str = List.map prop_names ~f:md_codify |> String.concat ~sep:", " in
-  let (members, verb) =
-    if 1 = List.length prop_names then
-      ("member", "is")
-    else
-      ("members", "are")
+  let prop_msgs =
+    List.map props ~f:(fun (pos, prop) ->
+        (pos, md_codify ("$this->" ^ prop) ^ " is not initialized."))
   in
-  let setters_str =
-    List.map prop_names ~f:(fun x -> md_codify ("$this->" ^ x))
-    |> String.concat ~sep:", "
-  in
-  let nullable_tys =
-    List.map props ~f:(fun (name, ty) -> md_codify ("?" ^ ty ^ " $" ^ name))
-    |> String.concat ~sep:", "
-  in
-  add
+  add_list
     (NastCheck.err_code NastCheck.NotInitialized)
-    pos
-    (Utils.sl
-       [
-         "Class ";
-         md_codify cname;
-         " does not initialize all of its members; ";
-         props_str;
-         " ";
-         verb;
-         " not always initialized.";
-         "\nMake sure you systematically set ";
-         setters_str;
-         " when the method `__construct` is called.";
-         "\nAlternatively, you can define the ";
-         members;
-         " as nullable with ";
-         nullable_tys;
-         ".";
-       ])
+    ( ( pos,
+        "Class "
+        ^ md_codify cname
+        ^ " has properties that cannot be null and aren't always set in `__construct`."
+      )
+    :: prop_msgs )
 
 let call_before_init pos cv =
   add
@@ -5273,6 +5254,70 @@ let reified_function_reference call_pos =
     (Typing.err_code Typing.ReifiedFunctionReference)
     call_pos
     "Invalid function reference. This function requires reified generics. Prefer using a lambda instead."
+
+let class_meth_abstract_call cname meth_name call_pos decl_pos =
+  let cname = strip_ns cname in
+  add_list
+    (Typing.err_code Typing.ClassMethAbstractCall)
+    [
+      ( call_pos,
+        "Cannot create a class_meth of "
+        ^ cname
+        ^ "::"
+        ^ meth_name
+        ^ "; it is abstract." );
+      (decl_pos, "Declaration is here");
+    ]
+
+let higher_kinded_partial_application pos count =
+  add
+    (Naming.err_code Naming.HigherKindedTypesUnsupportedFeature)
+    pos
+    ( "A higher-kinded type is expected here."
+    ^ " We do not not support partial applications to yield higher-kinded types, but you are providing "
+    ^ string_of_int count
+    ^ " type arguments." )
+
+let wildcard_for_higher_kinded_type pos =
+  add
+    (Naming.err_code Naming.HigherKindedTypesUnsupportedFeature)
+    pos
+    ( "You are supplying _ where a higher-kinded type is expected."
+    ^ " We cannot infer higher-kinded type arguments at this time, please state the actual type."
+    )
+
+(* This is only to be used in a context where we expect something higher-kinded,
+  meaning that expected_kind_repr should never just be * *)
+let kind_mismatch
+    ~use_pos
+    ~def_pos
+    ~tparam_name
+    ~expected_kind_repr
+    ~actual_is_fully_applied
+    ~actual_kind_repr =
+  let use_site_desc =
+    if actual_is_fully_applied then
+      "This is a fully-applied type, but a type constructor of kind "
+      ^ expected_kind_repr
+      ^ " was expected here."
+    else
+      "This type constructor has kind "
+      ^ actual_kind_repr
+      ^ ", but a type constructor of kind "
+      ^ expected_kind_repr
+      ^ " was expected here."
+  in
+  add_list
+    (Typing.err_code Typing.KindMismatch)
+    [
+      (use_pos, use_site_desc);
+      ( def_pos,
+        "We are expecting a type constructor of kind "
+        ^ expected_kind_repr
+        ^ " due to the definition of "
+        ^ tparam_name
+        ^ " here." );
+    ]
 
 (*****************************************************************************)
 (* Printing *)

@@ -24,6 +24,7 @@ module Cls = Decl_provider.Class
 module Fake = Typing_fake_members
 module ITySet = Internal_type_set
 module TPEnv = Type_parameter_env
+module KDefs = Typing_kinding_defs
 module TySet = Typing_set
 
 let show_env _ = "<env>"
@@ -324,16 +325,21 @@ let get_tpenv env =
 
 let get_global_tpenv env = env.global_tpenv
 
-let get_lower_bounds env name =
+let get_pos_and_kind_of_generic env name =
+  match TPEnv.get_with_pos name (get_tpenv env) with
+  | Some r -> Some r
+  | None -> TPEnv.get_with_pos name env.global_tpenv
+
+let get_lower_bounds env name tyargs =
   let tpenv = get_tpenv env in
-  let local = TPEnv.get_lower_bounds tpenv name in
-  let global = TPEnv.get_lower_bounds env.global_tpenv name in
+  let local = TPEnv.get_lower_bounds tpenv name tyargs in
+  let global = TPEnv.get_lower_bounds env.global_tpenv name tyargs in
   TySet.union local global
 
-let get_upper_bounds env name =
+let get_upper_bounds env name tyargs =
   let tpenv = get_tpenv env in
-  let local = TPEnv.get_upper_bounds tpenv name in
-  let global = TPEnv.get_upper_bounds env.global_tpenv name in
+  let local = TPEnv.get_upper_bounds tpenv name tyargs in
+  let global = TPEnv.get_upper_bounds env.global_tpenv name tyargs in
   TySet.union local global
 
 let get_reified env name =
@@ -362,9 +368,9 @@ let get_newable env name =
   local || global
 
 (* Get bounds that are both an upper and lower of a given generic *)
-let get_equal_bounds env name =
-  let lower = get_lower_bounds env name in
-  let upper = get_upper_bounds env name in
+let get_equal_bounds env name tyargs =
+  let lower = get_lower_bounds env name tyargs in
+  let upper = get_upper_bounds env name tyargs in
   TySet.inter lower upper
 
 let env_with_tpenv env tpenv =
@@ -443,7 +449,7 @@ let mark_inconsistent env =
 
 (* Generate a fresh generic parameter with a specified prefix but distinct
  * from all generic parameters in the environment *)
-let add_fresh_generic_parameter env prefix ~reified ~enforceable ~newable =
+let add_fresh_generic_parameter_by_kind env prefix kind =
   let rec iterate i =
     let name = Printf.sprintf "%s#%d" prefix i in
     if is_generic_parameter env name then
@@ -453,22 +459,22 @@ let add_fresh_generic_parameter env prefix ~reified ~enforceable ~newable =
   in
   let name = iterate 1 in
   let env = { env with fresh_typarams = SSet.add name env.fresh_typarams } in
-  let env =
-    env_with_tpenv
-      env
-      (TPEnv.add
-         name
-         TPEnv.
-           {
-             lower_bounds = empty_bounds;
-             upper_bounds = empty_bounds;
-             reified;
-             enforceable;
-             newable;
-           }
-         (get_tpenv env))
-  in
+  let env = env_with_tpenv env (TPEnv.add name kind (get_tpenv env)) in
   (env, name)
+
+let add_fresh_generic_parameter env prefix ~reified ~enforceable ~newable =
+  let kind =
+    KDefs.
+      {
+        lower_bounds = empty_bounds;
+        upper_bounds = empty_bounds;
+        reified;
+        enforceable;
+        newable;
+        parameters = [];
+      }
+  in
+  add_fresh_generic_parameter_by_kind env prefix kind
 
 let is_fresh_generic_parameter name =
   String.contains name '#' && not (DependentKind.is_generic_dep_ty name)
@@ -503,13 +509,15 @@ let get_tpenv_tparams env =
   TPEnv.fold
     begin
       fun _x
-          TPEnv.
+          KDefs.
             {
               lower_bounds;
               upper_bounds;
               reified = _;
               enforceable = _;
               newable = _;
+              (* FIXME what to do here? it seems dangerous to just traverse *)
+              parameters = _;
             }
           acc ->
       let folder ty acc =
@@ -1365,7 +1373,9 @@ and get_tyvars_i env (ty : internal_type) =
       let (env, positive2, negative2) = get_tyvars env ty2 in
       (env, ISet.union positive1 positive2, ISet.union negative1 negative2)
     | Tpu (base, _) -> get_tyvars env base
-    | Tpu_type_access (_, _) -> (env, ISet.empty, ISet.empty))
+    | Tpu_type_access (_, _)
+    | Tunapplied_alias _ ->
+      (env, ISet.empty, ISet.empty))
   | ConstraintType ty ->
     (match deref_constraint_type ty with
     | (_, Tdestructure { d_required; d_optional; d_variadic; d_kind = _ }) ->

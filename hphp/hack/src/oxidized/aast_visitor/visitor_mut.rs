@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<0f6350b5131c3b61d78073f807ab79c8>>
+// @generated SignedSource<<14c4b7325fd2abfe51b2ab0cd22afb15>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
@@ -207,18 +207,6 @@ pub trait VisitorMut<'node> {
         &mut self,
         c: &mut <Self::P as Params>::Context,
         p: &'node mut ClassKind,
-    ) -> Result<(), <Self::P as Params>::Error> {
-        p.recurse(c, self.object())
-    }
-    fn visit_class_tparams(
-        &mut self,
-        c: &mut <Self::P as Params>::Context,
-        p: &'node mut ClassTparams<
-            <Self::P as Params>::Ex,
-            <Self::P as Params>::Fb,
-            <Self::P as Params>::En,
-            <Self::P as Params>::Hi,
-        >,
     ) -> Result<(), <Self::P as Params>::Error> {
         p.recurse(c, self.object())
     }
@@ -492,18 +480,6 @@ pub trait VisitorMut<'node> {
         &mut self,
         c: &mut <Self::P as Params>::Context,
         p: &'node mut Lid,
-    ) -> Result<(), <Self::P as Params>::Error> {
-        p.recurse(c, self.object())
-    }
-    fn visit_method_redeclaration(
-        &mut self,
-        c: &mut <Self::P as Params>::Context,
-        p: &'node mut MethodRedeclaration<
-            <Self::P as Params>::Ex,
-            <Self::P as Params>::Fb,
-            <Self::P as Params>::En,
-            <Self::P as Params>::Hi,
-        >,
     ) -> Result<(), <Self::P as Params>::Error> {
         p.recurse(c, self.object())
     }

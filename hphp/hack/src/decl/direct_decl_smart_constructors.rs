@@ -6,6 +6,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use bstr::BStr;
 use bumpalo::{
     collections::{String, Vec},
     Bump,
@@ -33,7 +34,7 @@ use oxidized_by_ref::{
     typing_defs::{
         EnumType, FunArity, FunElt, FunParam, FunParams, FunType, ParamMode, ParamMutability,
         PossiblyEnforcedTy, Reactivity, ShapeFieldType, ShapeKind, Tparam, Ty, Ty_,
-        TypeconstAbstractKind, TypedefType,
+        TypeconstAbstractKind, TypedefType, XhpAttrTag,
     },
     typing_defs_flags::{FunParamFlags, FunTypeFlags},
     typing_reason::Reason,
@@ -201,11 +202,26 @@ fn prefix_slash<'a>(arena: &'a Bump, name: &str) -> &'a str {
     s.into_bump_str()
 }
 
+fn prefix_colon<'a>(arena: &'a Bump, name: &str) -> &'a str {
+    let mut s = String::with_capacity_in(1 + name.len(), arena);
+    s.push(':');
+    s.push_str(name);
+    s.into_bump_str()
+}
+
 fn concat<'a>(arena: &'a Bump, str1: &str, str2: &str) -> &'a str {
     let mut result = String::with_capacity_in(str1.len() + str2.len(), arena);
     result.push_str(str1);
     result.push_str(str2);
     result.into_bump_str()
+}
+
+fn str_from_utf8<'a>(arena: &'a Bump, slice: &'a [u8]) -> &'a str {
+    if let Ok(s) = std::str::from_utf8(slice) {
+        s
+    } else {
+        String::from_utf8_lossy_in(slice, arena).into_bump_str()
+    }
 }
 
 fn strip_dollar_prefix<'a>(name: &'a str) -> &'a str {
@@ -529,6 +545,21 @@ pub struct PropertyNode<'a> {
 }
 
 #[derive(Clone, Debug)]
+pub struct XhpClassAttributeDeclarationNode<'a> {
+    xhp_attr_decls: &'a [ShallowProp<'a>],
+    xhp_attr_uses_decls: &'a [Node<'a>],
+}
+
+#[derive(Clone, Debug)]
+pub struct XhpClassAttributeNode<'a> {
+    name: Id<'a>,
+    tag: Option<XhpAttrTag>,
+    needs_init: bool,
+    nullable: bool,
+    hint: Node<'a>,
+}
+
+#[derive(Clone, Debug)]
 pub struct ShapeFieldNode<'a> {
     name: &'a ShapeField<'a>,
     type_: &'a ShapeFieldType<'a>,
@@ -545,11 +576,11 @@ pub enum Node<'a> {
     Array(&'a Pos<'a>),
     Darray(&'a Pos<'a>),
     Varray(&'a Pos<'a>),
-    StringLiteral(&'a (&'a str, &'a Pos<'a>)), // For shape keys and const expressions.
-    IntLiteral(&'a (&'a str, &'a Pos<'a>)),    // For const expressions.
+    StringLiteral(&'a (&'a BStr, &'a Pos<'a>)), // For shape keys and const expressions.
+    IntLiteral(&'a (&'a str, &'a Pos<'a>)),     // For const expressions.
     FloatingLiteral(&'a (&'a str, &'a Pos<'a>)), // For const expressions.
     BooleanLiteral(&'a (&'a str, &'a Pos<'a>)), // For const expressions.
-    Null(&'a Pos<'a>),                         // For const expressions.
+    Null(&'a Pos<'a>),                          // For const expressions.
     Ty(&'a Ty<'a>),
     TypeconstAccess(&'a (Cell<&'a Pos<'a>>, Ty<'a>, RefCell<Vec<'a, Id<'a>>>)),
     Backslash(&'a Pos<'a>), // This needs a pos since it shows up in names.
@@ -562,6 +593,10 @@ pub enum Node<'a> {
     Method(&'a MethodNode<'a>),
     Property(&'a PropertyNode<'a>),
     TraitUse(&'a Node<'a>),
+    XhpClassAttributeDeclaration(&'a XhpClassAttributeDeclarationNode<'a>),
+    XhpClassAttribute(&'a XhpClassAttributeNode<'a>),
+    XhpAttributeUse(&'a Node<'a>),
+    XhpEnumType(&'a Node<'a>),
     TypeConstant(&'a ShallowTypeconst<'a>),
     RequireClause(&'a RequireClause<'a>),
     ClassishBody(&'a &'a [Node<'a>]),
@@ -829,9 +864,11 @@ impl<'a> Node<'a> {
                     "__MutableReturn" => attributes.returns_mutable = true,
                     "__ReturnsVoidToRx" => attributes.returns_void_to_rx = true,
                     "__Deprecated" => {
-                        fn fold_string_concat<'a>(expr: &nast::Expr<'a>, acc: &mut String<'a>) {
+                        fn fold_string_concat<'a>(expr: &nast::Expr<'a>, acc: &mut Vec<'a, u8>) {
                             match expr {
-                                &aast::Expr(_, aast::Expr_::String(val)) => acc.push_str(val),
+                                &aast::Expr(_, aast::Expr_::String(val)) => {
+                                    acc.extend_from_slice(val)
+                                }
                                 &aast::Expr(_, aast::Expr_::Binop(&(Bop::Dot, e1, e2))) => {
                                     fold_string_concat(&e1, acc);
                                     fold_string_concat(&e2, acc);
@@ -839,16 +876,20 @@ impl<'a> Node<'a> {
                                 _ => (),
                             }
                         }
-                        attributes.deprecated = attribute.params.first().and_then(|expr| match expr
-                        {
-                            &aast::Expr(_, aast::Expr_::String(val)) => Some(val),
-                            &aast::Expr(_, aast::Expr_::Binop(_)) => {
-                                let mut acc = String::new_in(arena);
-                                fold_string_concat(expr, &mut acc);
-                                Some(acc.into_bump_str())
-                            }
-                            _ => None,
-                        })
+                        attributes.deprecated = attribute
+                            .params
+                            .first()
+                            .and_then(|expr| match expr {
+                                &aast::Expr(_, aast::Expr_::String(val)) => Some(val.as_ref()),
+                                &aast::Expr(_, aast::Expr_::Binop(_)) => {
+                                    let mut acc = Vec::new_in(arena);
+                                    fold_string_concat(expr, &mut acc);
+                                    let bytes = acc.into_bump_slice();
+                                    Some(bytes)
+                                }
+                                _ => None,
+                            })
+                            .map(|bytes| str_from_utf8(arena, bytes))
                     }
                     "__Reifiable" => attributes.reifiable = Some(attribute.name.0),
                     "__LateInit" => {
@@ -966,11 +1007,7 @@ impl<'a> DirectDeclSmartConstructors<'a> {
     // the same data. Otherwise, copy the slice into our arena using
     // String::from_utf8_lossy_in, and return a reference to the arena str.
     fn str_from_utf8(&self, slice: &'a [u8]) -> &'a str {
-        if let Ok(s) = std::str::from_utf8(slice) {
-            s
-        } else {
-            String::from_utf8_lossy_in(slice, self.state.arena).into_bump_str()
-        }
+        str_from_utf8(self.state.arena, slice)
     }
 
     fn node_to_expr(&self, node: Node<'a>) -> Option<nast::Expr<'a>> {
@@ -1041,12 +1078,13 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                         ArrayGet(_) | As(_) | Assert(_) | Await(_) | Binop(_) | BracedExpr(_)
                         | Call(_) | Callconv(_) | Cast(_) | ClassConst(_) | ClassGet(_)
                         | Clone(_) | Collection(_) | Darray(_) | Dollardollar(_) | Efun(_)
-                        | Eif(_) | ExpressionTree(_) | ExprList(_) | FunctionPointer(_)
-                        | FunId(_) | Id(_) | Import(_) | Is(_) | KeyValCollection(_) | Lfun(_)
-                        | List(_) | Lplaceholder(_) | Lvar(_) | MethodCaller(_) | MethodId(_)
-                        | New(_) | ObjGet(_) | Omitted | Pair(_) | Pipe(_) | PUAtom(_)
-                        | PUIdentifier(_) | Record(_) | Shape(_) | SmethodId(_) | Suspend(_)
-                        | ValCollection(_) | Varray(_) | Xml(_) | Yield(_) | YieldBreak => None,
+                        | Eif(_) | ETSplice(_) | ExpressionTree(_) | ExprList(_)
+                        | FunctionPointer(_) | FunId(_) | Id(_) | Import(_) | Is(_)
+                        | KeyValCollection(_) | Lfun(_) | List(_) | Lplaceholder(_) | Lvar(_)
+                        | MethodCaller(_) | MethodId(_) | New(_) | ObjGet(_) | Omitted
+                        | Pair(_) | Pipe(_) | PUAtom(_) | PUIdentifier(_) | Record(_)
+                        | Shape(_) | SmethodId(_) | Suspend(_) | ValCollection(_) | Varray(_)
+                        | Xml(_) | Yield(_) | YieldBreak => None,
                     }
                 }
 
@@ -1075,6 +1113,9 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                 self.alloc(Reason::hint(pos)),
                 self.alloc(Ty_::Tprim(self.alloc(aast::Tprim::Tnull))),
             )),
+            Node::XhpEnumType(enum_values) => {
+                enum_values.iter().next().map(|x| self.node_to_ty(*x))?
+            }
             node => {
                 let Id(pos, name) = self.get_name("", node)?;
                 let reason = self.alloc(Reason::hint(pos));
@@ -1336,13 +1377,13 @@ impl<'a> DirectDeclSmartConstructors<'a> {
         }
     }
 
-    fn make_shape_field_name(name: Node<'a>) -> Option<ShapeFieldName<'a>> {
+    fn make_shape_field_name(&self, name: Node<'a>) -> Option<ShapeFieldName<'a>> {
         Some(match name {
             Node::StringLiteral(&(s, pos)) => ShapeFieldName::SFlitStr((pos, s)),
             // TODO: OCaml decl produces SFlitStr here instead of SFlitInt, so
             // we must also. Looks like int literal keys have become a parse
             // error--perhaps that's why.
-            Node::IntLiteral(&(s, pos)) => ShapeFieldName::SFlitStr((pos, s)),
+            Node::IntLiteral(&(s, pos)) => ShapeFieldName::SFlitStr((pos, s.into())),
             Node::Expr(aast::Expr(
                 _,
                 aast::Expr_::ClassConst(&(
@@ -1578,6 +1619,8 @@ impl<'a> FlattenOp for DirectDeclSmartConstructors<'a> {
     fn is_zero(s: &Self::S) -> bool {
         match s {
             Node::Token(TokenKind::Yield) => false,
+            Node::Token(TokenKind::Required) => false,
+            Node::Token(TokenKind::Lateinit) => false,
             Node::List(inner) => inner.iter().all(Self::is_zero),
             _ => true,
         }
@@ -1649,41 +1692,47 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             | TokenKind::Tuple
             | TokenKind::Classname
             | TokenKind::SelfToken => Node::Name(self.alloc((token_text(self), token_pos(self)))),
-            TokenKind::XHPClassName => {
+            TokenKind::XHPClassName | TokenKind::XHP | TokenKind::XHPElementName => {
                 Node::XhpName(self.alloc((token_text(self), token_pos(self))))
             }
-            TokenKind::SingleQuotedStringLiteral => Node::StringLiteral(self.alloc((
-                unwrap_or_return!(escaper::unescape_single_in(
+            TokenKind::SingleQuotedStringLiteral => Node::StringLiteral(
+                self.alloc((
+                    unwrap_or_return!(escaper::unescape_single_in(
                         self.str_from_utf8(escaper::unquote_slice(self.token_bytes(&token))),
                         self.state.arena,
                     )
-                    .ok()),
-                token_pos(self),
-            ))),
+                    .ok())
+                    .into(),
+                    token_pos(self),
+                )),
+            ),
             TokenKind::DoubleQuotedStringLiteral => Node::StringLiteral(self.alloc((
-                self.str_from_utf8(unwrap_or_return!(escaper::unescape_double_in(
+                unwrap_or_return!(escaper::unescape_double_in(
                             self.str_from_utf8(escaper::unquote_slice(self.token_bytes(&token))),
                             self.state.arena,
                         )
-                        .ok())),
+                        .ok()),
                 token_pos(self),
             ))),
             TokenKind::HeredocStringLiteral => Node::StringLiteral(self.alloc((
-                self.str_from_utf8(unwrap_or_return!(escaper::unescape_heredoc_in(
-                        self.str_from_utf8(escaper::unquote_slice(self.token_bytes(&token))),
-                        self.state.arena,
-                    )
-                    .ok())),
-                token_pos(self),
-            ))),
-            TokenKind::NowdocStringLiteral => Node::StringLiteral(self.alloc((
-                unwrap_or_return!(escaper::unescape_nowdoc_in(
+                unwrap_or_return!(escaper::unescape_heredoc_in(
                         self.str_from_utf8(escaper::unquote_slice(self.token_bytes(&token))),
                         self.state.arena,
                     )
                     .ok()),
                 token_pos(self),
             ))),
+            TokenKind::NowdocStringLiteral => Node::StringLiteral(
+                self.alloc((
+                    unwrap_or_return!(escaper::unescape_nowdoc_in(
+                        self.str_from_utf8(escaper::unquote_slice(self.token_bytes(&token))),
+                        self.state.arena,
+                    )
+                    .ok())
+                    .into(),
+                    token_pos(self),
+                )),
+            ),
             TokenKind::DecimalLiteral
             | TokenKind::OctalLiteral
             | TokenKind::HexadecimalLiteral
@@ -1766,7 +1815,6 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             | TokenKind::Interface
             | TokenKind::Newtype
             | TokenKind::Type
-            | TokenKind::XHP
             | TokenKind::Yield
             | TokenKind::Semicolon
             | TokenKind::Private
@@ -1774,7 +1822,9 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             | TokenKind::Public
             | TokenKind::Reify
             | TokenKind::Static
-            | TokenKind::Trait => Node::Token(kind),
+            | TokenKind::Trait
+            | TokenKind::Lateinit
+            | TokenKind::Required => Node::Token(kind),
             _ => Node::Ignored,
         };
         self.state.previous_token_kind = kind;
@@ -2559,6 +2609,11 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         let Id(pos, name) = unwrap_or_return!(
             self.get_name(self.state.namespace_builder.current_namespace(), name)
         );
+        let (is_xhp, name) = if name.starts_with(":") {
+            (true, prefix_slash(self.state.arena, name))
+        } else {
+            (false, name)
+        };
 
         let mut class_kind = match class_keyword {
             Node::Token(TokenKind::Interface) => ClassKind::Cinterface,
@@ -2583,6 +2638,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         };
 
         let mut uses_len = 0;
+        let mut xhp_attr_uses_len = 0;
         let mut req_extends_len = 0;
         let mut req_implements_len = 0;
         let mut consts_len = 0;
@@ -2603,6 +2659,13 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         for element in body.iter().copied() {
             match element {
                 Node::TraitUse(names) => uses_len += names.len(),
+                Node::XhpClassAttributeDeclaration(&XhpClassAttributeDeclarationNode {
+                    xhp_attr_decls,
+                    xhp_attr_uses_decls,
+                }) => {
+                    props_len += xhp_attr_decls.len();
+                    xhp_attr_uses_len += xhp_attr_uses_decls.len();
+                }
                 Node::TypeConstant(..) => typeconsts_len += 1,
                 Node::RequireClause(require) => match require.require_type {
                     Node::Token(TokenKind::Extends) => req_extends_len += 1,
@@ -2634,6 +2697,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         let mut constructor = None;
 
         let mut uses = Vec::with_capacity_in(uses_len, self.state.arena);
+        let mut xhp_attr_uses = Vec::with_capacity_in(xhp_attr_uses_len, self.state.arena);
         let mut req_extends = Vec::with_capacity_in(req_extends_len, self.state.arena);
         let mut req_implements = Vec::with_capacity_in(req_implements_len, self.state.arena);
         let mut consts = Vec::with_capacity_in(consts_len, self.state.arena);
@@ -2654,11 +2718,23 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         // though it's the reverse of the syntactic ordering).
         user_attributes.reverse();
 
+        // xhp props go after regular props, regardless of their order in file
+        let mut xhp_props = vec![];
+
         for element in body.iter().copied() {
             match element {
                 Node::TraitUse(names) => {
                     for name in names.iter() {
                         uses.push(unwrap_or_return!(self.node_to_ty(*name)));
+                    }
+                }
+                Node::XhpClassAttributeDeclaration(&XhpClassAttributeDeclarationNode {
+                    xhp_attr_decls,
+                    xhp_attr_uses_decls,
+                }) => {
+                    xhp_props.extend(xhp_attr_decls);
+                    for xhp_attr_use in xhp_attr_uses_decls {
+                        xhp_attr_uses.push(unwrap_or_return!(self.node_to_ty(*xhp_attr_use)))
                     }
                 }
                 Node::TypeConstant(constant) => typeconsts.push(constant.clone()),
@@ -2698,7 +2774,10 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             }
         }
 
+        props.extend(xhp_props.into_iter().cloned());
+
         let uses = uses.into_bump_slice();
+        let xhp_attr_uses = xhp_attr_uses.into_bump_slice();
         let req_extends = req_extends.into_bump_slice();
         let req_implements = req_implements.into_bump_slice();
         let consts = consts.into_bump_slice();
@@ -2725,7 +2804,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                 FileModeBuilder::Set(mode) => mode,
             },
             final_,
-            is_xhp: false,
+            is_xhp,
             has_xhp_keyword: match xhp_keyword {
                 Node::Token(TokenKind::XHP) => true,
                 _ => false,
@@ -2736,8 +2815,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             where_constraints: &[],
             extends,
             uses,
-            method_redeclarations: &[],
-            xhp_attr_uses: &[],
+            xhp_attr_uses,
             req_extends,
             req_implements,
             implements,
@@ -2806,6 +2884,106 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             decls: declarators,
             is_static: modifiers.is_static,
         }))
+    }
+
+    fn make_xhp_class_attribute_declaration(
+        &mut self,
+        _arg0: Self::R,
+        attributes: Self::R,
+        _arg2: Self::R,
+    ) -> Self::R {
+        let xhp_attr_decls = unwrap_or_return!(self.maybe_slice_from_iter(
+            attributes
+                .iter()
+                .filter_map(|x| match x {
+                    Node::XhpClassAttribute(x) => Some(x),
+                    _ => None,
+                })
+                .map(|node| {
+                    let Id(pos, name) = node.name;
+                    let name = prefix_colon(self.state.arena, name);
+
+                    let type_ = self.node_to_ty(node.hint);
+                    let type_ = if node.nullable && node.tag.is_none() {
+                        type_.and_then(|x| match x {
+                            Ty(_, Ty_::Toption(_)) => type_, // already nullable
+                            _ => self.node_to_ty(self.hint_ty(x.get_pos()?, Ty_::Toption(x))), // make nullable
+                        })
+                    } else {
+                        type_
+                    };
+                    Some(ShallowProp {
+                        abstract_: false,
+                        const_: false,
+                        fixme_codes: ISet::empty(),
+                        lateinit: false,
+                        lsb: false,
+                        name: Id(pos, name),
+                        needs_init: node.needs_init,
+                        visibility: aast::Visibility::Public,
+                        type_,
+                        xhp_attr: Some(shallow_decl_defs::XhpAttr {
+                            tag: node.tag,
+                            has_default: !node.needs_init,
+                        }),
+                    })
+                })
+        ));
+
+        let xhp_attr_uses_decls = self.slice_from_iter(
+            attributes
+                .iter()
+                .filter_map(|x| match x {
+                    Node::XhpAttributeUse(name) => Some(name.clone()),
+                    _ => None,
+                })
+                .copied(),
+        );
+
+        Node::XhpClassAttributeDeclaration(self.alloc(XhpClassAttributeDeclarationNode {
+            xhp_attr_decls,
+            xhp_attr_uses_decls,
+        }))
+    }
+
+    fn make_xhp_enum_type(
+        &mut self,
+        _arg0: Self::R,
+        _arg1: Self::R,
+        _arg2: Self::R,
+        xhp_enum_values: Self::R,
+        _arg4: Self::R,
+    ) -> Self::R {
+        Node::XhpEnumType(self.alloc(xhp_enum_values))
+    }
+
+    fn make_xhp_class_attribute(
+        &mut self,
+        type_: Self::R,
+        name: Self::R,
+        initializer: Self::R,
+        tag: Self::R,
+    ) -> Self::R {
+        unwrap_or_return!((|| Some(Node::XhpClassAttribute(self.alloc(
+            XhpClassAttributeNode {
+                name: self.get_name("", name)?,
+                hint: type_,
+                needs_init: !initializer.is_present(),
+                tag: match tag {
+                    Node::Token(TokenKind::Required) => Some(XhpAttrTag::Required),
+                    Node::Token(TokenKind::Lateinit) => Some(XhpAttrTag::Lateinit),
+                    _ => None,
+                },
+                nullable: match initializer {
+                    Node::Null(_) => true,
+                    _ => !initializer.is_present(),
+                },
+            }
+        ))))())
+    }
+
+    fn make_xhp_simple_class_attribute(&mut self, name: Self::R) -> Self::R {
+        Node::XhpAttributeUse(self.alloc(name))
     }
 
     fn make_property_declarator(&mut self, name: Self::R, initializer: Self::R) -> Self::R {
@@ -2965,7 +3143,6 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             where_constraints: &[],
             extends: bumpalo::vec![in self.state.arena; extends].into_bump_slice(),
             uses: &[],
-            method_redeclarations: &[],
             xhp_attr_uses: &[],
             req_extends: &[],
             req_implements: &[],
@@ -3065,7 +3242,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             unwrap_or_return!(
                 self.maybe_slice_from_iter(fields.iter().map(|node| match node {
                     Node::ListItem(&(key, value)) => {
-                        let key = Self::make_shape_field_name(key)?;
+                        let key = self.make_shape_field_name(key)?;
                         let value = self.node_to_expr(value)?;
                         Some((key, value))
                     }
@@ -3166,7 +3343,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         type_: Self::R,
     ) -> Self::R {
         let optional = question_token.is_present();
-        let name = unwrap_or_return!(Self::make_shape_field_name(name));
+        let name = unwrap_or_return!(self.make_shape_field_name(name));
         Node::ShapeFieldSpecifier(self.alloc(ShapeFieldNode {
             name: self.alloc(ShapeField(name)),
             type_: self.alloc(ShapeFieldType {

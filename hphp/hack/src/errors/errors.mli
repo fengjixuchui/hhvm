@@ -231,7 +231,9 @@ val xhp_required_with_default : Pos.t -> string -> unit
 
 val array_typehints_disallowed : Pos.t -> unit
 
-val wildcard_disallowed : Pos.t -> unit
+val wildcard_hint_disallowed : Pos.t -> unit
+
+val wildcard_param_disallowed : Pos.t -> unit
 
 val object_cast : Pos.t -> unit
 
@@ -686,7 +688,7 @@ val no_construct_parent : Pos.t -> unit
 
 val constructor_required : Pos.t * string -> string list -> unit
 
-val not_initialized : Pos.t * string -> (string * string) list -> unit
+val not_initialized : Pos.t * string -> (Pos.t * string) list -> unit
 
 val call_before_init : Pos.t -> string -> unit
 
@@ -1415,3 +1417,18 @@ val context_implicit_policy_leakage :
   Pos.t -> Pos.t list -> Pos.t list * string -> Pos.t list * string -> unit
 
 val reified_function_reference : Pos.t -> unit
+
+val class_meth_abstract_call : string -> string -> Pos.t -> Pos.t -> unit
+
+val higher_kinded_partial_application : Pos.t -> int -> unit
+
+val wildcard_for_higher_kinded_type : Pos.t -> unit
+
+val kind_mismatch :
+  use_pos:Pos.t ->
+  def_pos:Pos.t ->
+  tparam_name:string ->
+  expected_kind_repr:string ->
+  actual_is_fully_applied:bool ->
+  actual_kind_repr:string ->
+  unit

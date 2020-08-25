@@ -4,6 +4,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
+use bstr::{BStr, BString, ByteSlice, B};
 use escaper::*;
 use hh_autoimport_rust as hh_autoimport;
 use itertools::{Either, Either::Left, Either::Right};
@@ -44,28 +45,12 @@ use std::{
 
 use crate::modifier;
 
-fn unescape_double(s: &str) -> std::result::Result<String, escaper::InvalidString> {
-    // FIXME: This is NOT SAFE--`unescape_double` may return invalid UTF-8, and
-    // constructing a String containing invalid UTF-8 can trigger undefined
-    // behavior. We should consistently represent unescaped string literals with
-    // `bstr::BString` instead.
-    Ok(unsafe { String::from_utf8_unchecked(escaper::unescape_double(s)?.into()) })
+fn unescape_single(s: &str) -> std::result::Result<BString, escaper::InvalidString> {
+    Ok(escaper::unescape_single(s)?.into())
 }
 
-fn unescape_backtick(s: &str) -> std::result::Result<String, escaper::InvalidString> {
-    // FIXME: This is NOT SAFE--`unescape_backtick` may return invalid UTF-8, and
-    // constructing a String containing invalid UTF-8 can trigger undefined
-    // behavior. We should consistently represent unescaped string literals with
-    // `bstr::BString` instead.
-    Ok(unsafe { String::from_utf8_unchecked(escaper::unescape_backtick(s)?.into()) })
-}
-
-fn unescape_heredoc(s: &str) -> std::result::Result<String, escaper::InvalidString> {
-    // FIXME: This is NOT SAFE--`unescape_heredoc` may return invalid UTF-8, and
-    // constructing a String containing invalid UTF-8 can trigger undefined
-    // behavior. We should consistently represent unescaped string literals with
-    // `bstr::BString` instead.
-    Ok(unsafe { String::from_utf8_unchecked(escaper::unescape_heredoc(s)?.into()) })
+fn unescape_nowdoc(s: &str) -> std::result::Result<BString, escaper::InvalidString> {
+    Ok(escaper::unescape_nowdoc(s)?.into())
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -578,9 +563,9 @@ where
         }
     }
 
-    fn mk_str<F>(node: &Syntax<T, V>, env: &mut Env, unescaper: F, mut content: &str) -> String
+    fn mk_str<F>(node: &Syntax<T, V>, env: &mut Env, unescaper: F, mut content: &str) -> BString
     where
-        F: Fn(&str) -> std::result::Result<String, InvalidString>,
+        F: Fn(&str) -> std::result::Result<BString, InvalidString>,
     {
         if let Some('b') = content.chars().nth(0) {
             content = content.get(1..).unwrap();
@@ -599,7 +584,7 @@ where
                             env,
                             &format!("Malformed string literal <<{}>>", &no_quotes),
                         );
-                        String::from("")
+                        BString::from("")
                     }
                 }
             }
@@ -609,16 +594,17 @@ where
                     env,
                     &format!("Malformed string literal <<{}>>", &content),
                 );
-                String::from("")
+                BString::from("")
             }
         }
     }
 
-    fn unesc_dbl(s: &str) -> std::result::Result<String, InvalidString> {
+    fn unesc_dbl(s: &str) -> std::result::Result<BString, InvalidString> {
         let unesc_s = unescape_double(s)?;
-        match unesc_s.as_str() {
-            "''" | "\"\"" => Ok(String::from("")),
-            _ => Ok(unesc_s),
+        if unesc_s == B("''") || unesc_s == B("\"\"") {
+            Ok(BString::from(""))
+        } else {
+            Ok(unesc_s)
         }
     }
 
@@ -631,10 +617,10 @@ where
     }
 
     fn unesc_xhp_attr(s: &[u8]) -> Vec<u8> {
-        // TODO: change unesc_dbl to &[u8] -> Vec<u8>
+        // TODO: change unesc_dbl to &[u8] -> BString
         let r = Self::get_quoted_content(s);
         let r = unsafe { std::str::from_utf8_unchecked(r) };
-        Self::unesc_dbl(r).unwrap().into_bytes()
+        Self::unesc_dbl(r).unwrap().into()
     }
 
     fn get_quoted_content(s: &[u8]) -> &[u8] {
@@ -858,7 +844,7 @@ where
                 // TODO:(shiqicao) improve perf
                 // 1. replace HashSet by fnv hash map or something faster,
                 // 2. move `set` to Env to avoid allocation,
-                let mut set: HashSet<&str> = HashSet::with_capacity(field_map.len());
+                let mut set: HashSet<&BStr> = HashSet::with_capacity(field_map.len());
                 for f in field_map.iter() {
                     if !set.insert(f.name.get_name()) {
                         Self::raise_hh_error(
@@ -1131,9 +1117,9 @@ where
     }
 
     #[inline]
-    fn wrap_unescaper<F>(unescaper: F, s: &str) -> Result<String>
+    fn wrap_unescaper<F>(unescaper: F, s: &str) -> Result<BString>
     where
-        F: FnOnce(&str) -> std::result::Result<String, InvalidString>,
+        F: FnOnce(&str) -> std::result::Result<BString, InvalidString>,
     {
         unescaper(s).map_err(|e| Error::Failwith(e.msg))
     }
@@ -1741,7 +1727,7 @@ where
                             ast::CallType::Cnormal,
                             Self::p_expr(recv, env)?,
                             vec![],
-                            vec![E::new(literal_expression_pos, E_::String(s))],
+                            vec![E::new(literal_expression_pos, E_::String(s.into()))],
                             None,
                         ))
                     }
@@ -1768,6 +1754,7 @@ where
                             ParenthesizedExpression(_) => Some(Self::p_pos(recv, env)),
                             _ => None,
                         };
+                        let is_splice = Self::text_str(recv, env) == special_functions::SPLICE;
                         let recv = Self::p_expr(recv, env)?;
                         let recv = match (&recv.1, pos_if_has_parens) {
                             (E_::ObjGet(_), Some(p)) => E::new(p, E_::mk_parenthesized_expr(recv)),
@@ -1777,6 +1764,13 @@ where
                             _ => recv,
                         };
                         let (args, varargs) = split_args_vararg(args, env)?;
+                        if is_splice {
+                            if args.len() == 1 && targs.len() == 0 && varargs == None {
+                                if let Some(e) = args.first() {
+                                    return Ok(E_::mk_etsplice(e.to_owned()));
+                                }
+                            }
+                        }
                         Ok(E_::mk_call(
                             ast::CallType::Cnormal,
                             recv,
@@ -1830,7 +1824,7 @@ where
             QualifiedName(_) => {
                 if location.in_string() {
                     let ast::Id(_, n) = Self::pos_qualified_name(node, env)?;
-                    Ok(E_::String(n))
+                    Ok(E_::String(n.into()))
                 } else {
                     Ok(E_::mk_id(Self::pos_qualified_name(node, env)?))
                 }
@@ -1928,7 +1922,21 @@ where
                         Some(TK::Dollar) => {
                             let E(_, expr_) = expr;
                             match expr_ {
-                                E_::String(s) | E_::Int(s) | E_::Float(s) => {
+                                E_::String(s) => {
+                                    if !env.codegen() {
+                                        Self::raise_parsing_error(
+                                            op,
+                                            env,
+                                            &syntax_error::invalid_variable_name,
+                                        )
+                                    }
+                                    let id = String::with_capacity(1 + s.len())
+                                        + "$"
+                                        + s.to_str().map_err(|e| Error::Failwith(e.to_string()))?;
+                                    let lid = ast::Lid(pos, (0, id));
+                                    Ok(E_::mk_lvar(lid))
+                                }
+                                E_::Int(s) | E_::Float(s) => {
                                     if !env.codegen() {
                                         Self::raise_parsing_error(
                                             op,
@@ -2051,7 +2059,11 @@ where
                         match expr_ {
                             E_::String(id) => Ok(E_::mk_class_const(
                                 ast::ClassId(pos, ast::ClassId_::CIexpr(qual)),
-                                (p, id),
+                                (
+                                    p,
+                                    String::from_utf8(id.into())
+                                        .map_err(|e| Error::Failwith(e.to_string()))?,
+                                ),
                             )),
                             E_::Id(id) => {
                                 let ast::Id(p, n) = *id;
@@ -2339,7 +2351,10 @@ where
                 };
                 let E(p, expr_) = Self::p_expr(&c.pocket_identifier_field, env)?;
                 let field = match expr_ {
-                    E_::String(id) => (p, id),
+                    E_::String(id) => (
+                        p,
+                        String::from_utf8(id.into()).map_err(|e| Error::Failwith(e.to_string()))?,
+                    ),
                     E_::Id(id) => {
                         let ast::Id(p, n) = *id;
                         (p, n)
@@ -2348,7 +2363,10 @@ where
                 };
                 let E(p, expr_) = Self::p_expr(&c.pocket_identifier_name, env)?;
                 let name = match expr_ {
-                    E_::String(id) => (p, id),
+                    E_::String(id) => (
+                        p,
+                        String::from_utf8(id.into()).map_err(|e| Error::Failwith(e.to_string()))?,
+                    ),
                     E_::Id(id) => {
                         let ast::Id(p, n) = *id;
                         (p, n)
@@ -3937,12 +3955,6 @@ where
             }
             false
         };
-        let has_fun_header_mtr = |m: &MethodishTraitResolutionChildren<T, V>| {
-            if let FunctionDeclarationHeader(_) = m.methodish_trait_function_decl_header.syntax {
-                return true;
-            }
-            false
-        };
         let p_method_vis = |node: &Syntax<T, V>,
                             name_pos: &Pos,
                             env: &mut Env|
@@ -4187,42 +4199,6 @@ where
                 };
                 class.vars.append(&mut member_def);
                 Ok(class.methods.push(method))
-            }
-            MethodishTraitResolution(c) if has_fun_header_mtr(c) => {
-                let header = &c.methodish_trait_function_decl_header;
-                let h = match &header.syntax {
-                    FunctionDeclarationHeader(h) => h,
-                    _ => panic!(),
-                };
-                let hdr = Self::p_fun_hdr(header, env)?;
-                let kind = Self::p_kinds(&h.function_modifiers, env)?;
-                let (qualifier, name) = match &c.methodish_trait_name.syntax {
-                    ScopeResolutionExpression(c) => (
-                        Self::p_hint(&c.scope_resolution_qualifier, env)?,
-                        Self::p_pstring(&c.scope_resolution_name, env)?,
-                    ),
-                    _ => Self::missing_syntax("trait method redeclaration", node, env)?,
-                };
-                let user_attributes = Self::p_user_attributes(&c.methodish_trait_attribute, env)?;
-                let visibility = p_method_vis(&h.function_modifiers, &hdr.name.0, env)?;
-                let mtr = ast::MethodRedeclaration {
-                    final_: kind.has(modifier::FINAL),
-                    abstract_: kind.has(modifier::ABSTRACT),
-                    static_: kind.has(modifier::STATIC),
-                    visibility,
-                    name: hdr.name,
-                    tparams: hdr.type_parameters,
-                    where_constraints: hdr.constrs,
-                    variadic: Self::determine_variadicity(&hdr.parameters),
-                    params: hdr.parameters,
-                    fun_kind: Self::mk_fun_kind(hdr.suspension_kind, false),
-                    ret: ast::TypeHint((), hdr.return_type),
-                    trait_: qualifier,
-                    method: name,
-                    user_attributes,
-                };
-                class.method_redeclarations.push(mtr);
-                Ok(())
             }
             TraitUseConflictResolution(c) => {
                 type Ret = Result<Either<ast::InsteadofAlias, ast::UseAsAlias>>;
@@ -4678,10 +4654,7 @@ where
                 };
                 let name = Self::pos_name(&c.classish_name, env)?;
                 *env.cls_reified_generics() = HashSet::new();
-                let tparams = ast::ClassTparams {
-                    list: Self::p_tparam_l(true, &c.classish_type_parameters, env)?,
-                    constraints: s_map::SMap::new(),
-                };
+                let tparams = Self::p_tparam_l(true, &c.classish_type_parameters, env)?;
                 let extends = Self::could_map(Self::p_hint, &c.classish_extends_list, env)?;
                 *env.parent_maybe_reified() = match extends.first().map(|h| h.1.as_ref()) {
                     Some(ast::Hint_::Happly(_, hl)) => !hl.is_empty(),
@@ -4714,7 +4687,6 @@ where
                     uses: vec![],
                     use_as_alias: vec![],
                     insteadof_alias: vec![],
-                    method_redeclarations: vec![],
                     xhp_attr_uses: vec![],
                     xhp_category: None,
                     reqs: vec![],
@@ -4829,10 +4801,7 @@ where
                     is_xhp: false,
                     has_xhp_keyword: false,
                     name: Self::pos_name(&c.enum_name, env)?,
-                    tparams: ast::ClassTparams {
-                        list: vec![],
-                        constraints: s_map::SMap::new(),
-                    },
+                    tparams: vec![],
                     extends: vec![],
                     implements: vec![],
                     where_constraints: vec![],
@@ -4848,7 +4817,6 @@ where
                     uses: vec![],
                     use_as_alias: vec![],
                     insteadof_alias: vec![],
-                    method_redeclarations: vec![],
                     xhp_attr_uses: vec![],
                     xhp_category: None,
                     reqs: vec![],

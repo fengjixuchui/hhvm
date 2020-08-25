@@ -159,7 +159,7 @@ AliasClass pointee(
     if (type <= TMemToMembCell) {
       // Takes a PtrToCell as its first operand, so we can't easily grab an
       // array base.
-      if (sinst->is(ElemArrayU, ElemVecU, ElemDictU, ElemKeysetU)) {
+      if (sinst->is(ElemVecU, ElemDictU, ElemKeysetU)) {
         return AElemAny;
       }
 
@@ -1091,8 +1091,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     return PureStore { AElemS { arr, key }, val, arr };
   }
 
-  case LdVecElem:
-  case LdPackedElem: {
+  case LdVecElem: {
     auto const base = inst.src(0);
     auto const key  = inst.src(1);
     return PureLoad {
@@ -1206,7 +1205,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     return may_load_store(frame, AEmpty);
   }
 
-  case MixedArrayGetK:
   case DictGetK:
   case KeysetGetK: {
     auto const base = inst.src(0);
@@ -1269,18 +1267,10 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case CheckDictOffset:
   case CheckKeysetOffset:
   case CheckMissingKeyInArrLike:
-  case ProfileMixedArrayAccess:
   case ProfileDictAccess:
   case ProfileKeysetAccess:
   case CheckArrayCOW:
     return may_load_store(AHeapAny, AEmpty);
-
-  case ArrayIsset:
-  case AKExistsArr:
-    return may_load_store(AElemAny, AEmpty);
-
-  case ArrayIdx:
-    return may_load_store(AElemAny, AEmpty);
 
   case SameArr:
   case NSameArr:
@@ -1348,12 +1338,10 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case SetOpElem:
   case SetOpProp:
   case SetProp:
-  case SetNewElemArray:
+  case SetNewElemDict:
   case SetNewElemVec:
   case SetNewElemKeyset:
   case UnsetElem:
-  case ElemArrayD:
-  case ElemArrayU:
   case ElemVecD:
   case ElemVecU:
   case ElemDictD:
@@ -1707,7 +1695,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ContPreNext:
   case ContStartedCheck:
   case ConvArrToDbl:
-  case CountArray:
   case CountVec:
   case CountDict:
   case CountKeyset:
@@ -1910,10 +1897,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case LookupFuncCached: // autoload
   case StringGet:      // raise_notice
   case OrdStrIdx:      // raise_notice
-  case AddNewElem:         // can re-enter
   case AddNewElemKeyset:   // can re-enter
-  case ArrayGet:       // kVPackedKind warnings
-  case ArraySet:       // kVPackedKind warnings
   case DictGet:
   case KeysetGet:
   case VecSet:
@@ -1939,6 +1923,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ConvObjToKeyset:
   case ThrowOutOfBounds:
   case ThrowInvalidArrayKey:
+  case ThrowInvalidArrayKeyForSet:
   case ThrowInvalidOperation:
   case ThrowCallReifiedFunctionWithoutGenerics:
   case ThrowDivisionByZeroException:

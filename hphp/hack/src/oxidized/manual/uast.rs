@@ -68,8 +68,6 @@ pub type ClassId<A> =
     aast::ClassId<<A as Annot>::Ex, <A as Annot>::Fb, <A as Annot>::En, <A as Annot>::Hi>;
 pub type ClassId_<A> =
     aast::ClassId_<<A as Annot>::Ex, <A as Annot>::Fb, <A as Annot>::En, <A as Annot>::Hi>;
-pub type ClassTparams<A> =
-    aast::ClassTparams<<A as Annot>::Ex, <A as Annot>::Fb, <A as Annot>::En, <A as Annot>::Hi>;
 pub type ClassTypeconst<A> =
     aast::ClassTypeconst<<A as Annot>::Ex, <A as Annot>::Fb, <A as Annot>::En, <A as Annot>::Hi>;
 pub type ClassVar<A> =
@@ -98,12 +96,6 @@ pub type Gconst<A> =
     aast::Gconst<<A as Annot>::Ex, <A as Annot>::Fb, <A as Annot>::En, <A as Annot>::Hi>;
 pub type Method_<A> =
     aast::Method_<<A as Annot>::Ex, <A as Annot>::Fb, <A as Annot>::En, <A as Annot>::Hi>;
-pub type MethodRedeclaration<A> = aast::MethodRedeclaration<
-    <A as Annot>::Ex,
-    <A as Annot>::Fb,
-    <A as Annot>::En,
-    <A as Annot>::Hi,
->;
 pub type Program<A> =
     aast::Program<<A as Annot>::Ex, <A as Annot>::Fb, <A as Annot>::En, <A as Annot>::Hi>;
 pub type PuEnum<A> =

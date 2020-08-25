@@ -9,13 +9,7 @@
 
 type tparam_bounds = Typing_set.t
 
-type tparam_info = {
-  lower_bounds: tparam_bounds;
-  upper_bounds: tparam_bounds;
-  reified: Aast.reify_kind;
-  enforceable: bool;
-  newable: bool;
-}
+type tparam_info = Typing_kinding_defs.kind
 
 type t
 
@@ -25,7 +19,9 @@ val mem : string -> t -> bool
 
 val get : string -> t -> tparam_info option
 
-val add : string -> tparam_info -> t -> t
+val get_with_pos : string -> t -> (Pos.t * tparam_info) option
+
+val add : ?def_pos:Pos.t -> string -> tparam_info -> t -> t
 
 val union : t -> t -> t
 
@@ -40,14 +36,17 @@ val merge_env :
   combine:
     ('env ->
     string ->
-    tparam_info option ->
-    tparam_info option ->
-    'env * tparam_info option) ->
+    (Pos.t * tparam_info) option ->
+    (Pos.t * tparam_info) option ->
+    'env * (Pos.t * tparam_info) option) ->
   'env * t
 
-val get_lower_bounds : t -> string -> tparam_bounds
+val get_lower_bounds : t -> string -> Typing_defs.locl_ty list -> tparam_bounds
 
-val get_upper_bounds : t -> string -> tparam_bounds
+val get_upper_bounds : t -> string -> Typing_defs.locl_ty list -> tparam_bounds
+
+(* value > 0 indicates higher-kinded type parameter *)
+val get_arity : t -> string -> int
 
 val get_reified : t -> string -> Aast.reify_kind
 
@@ -88,5 +87,7 @@ val remove_lower_bound : t -> string -> Typing_defs.locl_ty -> t
 val remove_upper_bound : t -> string -> Typing_defs.locl_ty -> t
 
 val remove : t -> string -> t
+
+val get_parameter_names : tparam_info -> string list
 
 val pp : Format.formatter -> t -> unit

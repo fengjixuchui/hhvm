@@ -148,10 +148,6 @@ void implCountArrayLike(IRLS& env, const IRInstruction* inst) {
 
 IMPL_OPCODE_CALL(Count)
 
-void cgCountArray(IRLS& env, const IRInstruction* inst) {
-  implCountArrayLike(env, inst);
-}
-
 void cgCountVec(IRLS& env, const IRInstruction* inst) {
   implCountArrayLike(env, inst);
 }
@@ -187,31 +183,10 @@ bool ak_exist_string_obj(ObjectData* obj, StringData* key) {
   return arr.get()->exists(key);
 }
 
-void cgAKExistsArr(IRLS& env, const IRInstruction* inst) {
-  auto const& arr_type = inst->src(0)->type();
-  auto const& key_type = inst->src(1)->type();
-  auto& v = vmain(env);
-
-  using ExistsInt = bool (ArrayData::*)(int64_t) const;
-  using ExistsStr = bool (ArrayData::*)(const StringData*) const;
-
-  assertx(key_type.subtypeOfAny(TInt, TStr));
-  auto const target = (key_type <= TInt)
-    ? CallSpec::array(arr_type, &g_array_funcs.existsInt,
-                      static_cast<ExistsInt>(&ArrayData::exists))
-    : CallSpec::array(arr_type, &g_array_funcs.existsStr,
-                      static_cast<ExistsStr>(&ArrayData::exists));
-
-  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::None,
-               argGroup(env, inst).ssa(0).ssa(1));
-}
-
 void cgAKExistsDict(IRLS& env, const IRInstruction* inst) {
   auto const keyTy = inst->src(1)->type();
   auto& v = vmain(env);
 
-  static_assert(MixedArray::ExistsInt == MixedArray::ExistsIntDict);
-  static_assert(MixedArray::ExistsStr == MixedArray::ExistsStrDict);
   auto const target = (keyTy <= TInt)
     ? CallSpec::direct(MixedArray::ExistsInt)
     : CallSpec::direct(MixedArray::ExistsStr);
@@ -249,7 +224,7 @@ void cgAKExistsObj(IRLS& env, const IRInstruction* inst) {
 
 void cgNewLoggingArray(IRLS& env, const IRInstruction* inst) {
   auto const target = CallSpec::direct(
-    static_cast<ArrayData*(*)(ArrayData*)>(&bespoke::maybeEnableLogging));
+    static_cast<ArrayData*(*)(ArrayData*)>(&bespoke::maybeMakeLoggingArray));
   cgCallHelper(vmain(env), env, target, callDest(env, inst),
                SyncOptions::Sync, argGroup(env, inst).ssa(0));
 }

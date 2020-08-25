@@ -23,7 +23,7 @@ let add_container_decl_fact decl_pred name progress =
 
 let add_container_defn_fact ctx source_map clss decl_id member_decls prog =
   let tparams =
-    List.map clss.c_tparams.c_tparam_list (build_type_param_json ctx source_map)
+    List.map clss.c_tparams (build_type_param_json ctx source_map)
   in
   let common_fields =
     [
@@ -395,7 +395,7 @@ let add_file_lines_fact filepath sourceText progress =
     Line_break_map.offsets_to_line_lengths sourceText.offset_map
   in
   let endsInNewline = ends_in_newline sourceText in
-  let hasUnicodeOrTabs = false (* TODO *) in
+  let hasUnicodeOrTabs = has_tabs_or_multibyte_codepoints sourceText in
   let json_fact =
     build_file_lines_json filepath lineLengths endsInNewline hasUnicodeOrTabs
   in

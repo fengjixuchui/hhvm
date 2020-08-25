@@ -8,6 +8,7 @@
  *)
 
 module TP = Type_parameter_env
+module KDefs = Typing_kinding_defs
 module TySet = Typing_set
 module Env = Typing_env
 open Hh_prelude
@@ -65,20 +66,29 @@ let join_upper_bounds env u1 u2 =
     (env, TySet.singleton new_upper)
 
 let join env tpenv1 tpenv2 =
+  let merge_pos p1 p2 =
+    if Pos.equal p1 Pos.none then
+      p2
+    else
+      p1
+  in
+
   TP.merge_env env tpenv1 tpenv2 ~combine:(fun env _tparam info1 info2 ->
       match (info1, info2) with
-      | ( Some (TP.{ lower_bounds = l1; upper_bounds = u1; _ } as info1),
-          Some TP.{ lower_bounds = l2; upper_bounds = u2; _ } ) ->
+      | ( Some
+            (pos1, (KDefs.{ lower_bounds = l1; upper_bounds = u1; _ } as info1)),
+          Some (pos2, KDefs.{ lower_bounds = l2; upper_bounds = u2; _ }) ) ->
         let (env, lower_bounds) = join_lower_bounds env l1 l2 in
         let (env, upper_bounds) = join_upper_bounds env u1 u2 in
-        (env, Some TP.{ info1 with lower_bounds; upper_bounds })
-      | (Some info, _) -> (env, Some info)
-      | (_, Some info) -> (env, Some info)
+        let pos = merge_pos pos1 pos2 in
+        (env, Some (pos, KDefs.{ info1 with lower_bounds; upper_bounds }))
+      | (Some (pos, info), _) -> (env, Some (pos, info))
+      | (_, Some (pos, info)) -> (env, Some (pos, info))
       | (_, _) -> (env, None))
 
-let get_tpenv_equal_bounds env name =
-  let lower = TP.get_lower_bounds env name in
-  let upper = TP.get_upper_bounds env name in
+let get_tpenv_equal_bounds env name tyargs =
+  let lower = TP.get_lower_bounds env name tyargs in
+  let upper = TP.get_upper_bounds env name tyargs in
   TySet.inter lower upper
 
 (** Given a list of type parameter names, attempt to simplify away those
@@ -88,7 +98,6 @@ Returns a set of substitutions mapping each type parameter name to the type
 to which it is equal if found, otherwise to itself. *)
 let simplify_tpenv env (tparams : ((_ * string) option * locl_ty) list) r =
   (* TODO(T70068435)
-    TODO(T69927003)
     TODO(T70087549)
     This currently assumes that [tparams] only contains non-HK type paramters.
     (as seen in the Tgenerics created within and their arguments ignored)
@@ -111,9 +120,9 @@ let simplify_tpenv env (tparams : ((_ * string) option * locl_ty) list) r =
         match p_opt with
         | None -> (env, tpenv, substs)
         | Some (tp, tparam_name) ->
-          let equal_bounds = get_tpenv_equal_bounds tpenv tparam_name in
-          let lower_bounds = TP.get_lower_bounds tpenv tparam_name in
-          let upper_bounds = TP.get_upper_bounds tpenv tparam_name in
+          let equal_bounds = get_tpenv_equal_bounds tpenv tparam_name [] in
+          let lower_bounds = TP.get_lower_bounds tpenv tparam_name [] in
+          let upper_bounds = TP.get_upper_bounds tpenv tparam_name [] in
           let (env, lower_bound) = union_lower_bounds env reason lower_bounds in
           let (env, upper_bound) =
             intersect_upper_bounds env reason upper_bounds

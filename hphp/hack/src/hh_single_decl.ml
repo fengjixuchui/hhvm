@@ -48,6 +48,16 @@ let time verbosity msg f =
     Printf.printf "%s: %f ms\n" msg ((after -. before) *. 1000.);
   ret
 
+let colon = Str.regexp ":"
+
+let dash = Str.regexp "-"
+
+let mangle_xhp x =
+  x
+  |> Str.replace_first colon "xhp_"
+  |> Str.global_replace colon "__"
+  |> Str.global_replace dash "_"
+
 let compare_decl ctx verbosity fn =
   let fn = Path.to_string fn in
   let text = RealDisk.cat fn in
@@ -100,7 +110,8 @@ let compare_decl ctx verbosity fn =
       compare
         "class(es)"
         (Facts.InvSMap.keys facts.Facts.types)
-        (SMap.keys decls.classes @ SMap.keys decls.typedefs);
+        ( List.map (SMap.keys decls.classes) ~f:mangle_xhp
+        @ SMap.keys decls.typedefs );
     ]
     |> List.reduce_exn ~f:( && )
   in
@@ -220,6 +231,7 @@ let () =
     | Some _ -> usage_and_exit ()
   in
   let verbosity = ref Standard in
+  let skip_if_errors = ref false in
   Arg.parse
     [
       ( "--compare-direct-decl-parser",
@@ -240,6 +252,9 @@ let () =
                   @@ Printf.sprintf "Did not understand verbosity level %s" v ),
         " Set the verbosity level. Silent will hide the \"no differences\" message on a successful "
         ^ "run, and verbose will print debugging information to the console" );
+      ( "--skip-if-errors",
+        Arg.Set skip_if_errors,
+        "Skip comparison if the corresponding .exp file has errors" );
     ]
     set_file
     usage;
@@ -250,6 +265,18 @@ let () =
       match !file with
       | None -> usage_and_exit ()
       | Some file ->
+        let () =
+          if
+            !skip_if_errors
+            && not
+               @@ String_utils.is_substring
+                    "No errors"
+                    (RealDisk.cat (file ^ ".exp"))
+          then begin
+            print_endline "Skipping because input file has errors";
+            exit 0
+          end
+        in
         let file = Path.make file in
         let ctx = init (Path.dirname file) in
         Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->

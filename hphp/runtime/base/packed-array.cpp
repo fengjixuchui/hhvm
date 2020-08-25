@@ -46,6 +46,7 @@ namespace HPHP {
 std::aligned_storage<sizeof(ArrayData), 16>::type s_theEmptyVec;
 std::aligned_storage<sizeof(ArrayData), 16>::type s_theEmptyVArray;
 std::aligned_storage<sizeof(ArrayData), 16>::type s_theEmptyMarkedVec;
+std::aligned_storage<sizeof(ArrayData), 16>::type s_theEmptyMarkedVArray;
 
 struct PackedArray::VecInitializer {
   VecInitializer() {
@@ -79,6 +80,18 @@ struct PackedArray::MarkedVecInitializer {
   }
 };
 PackedArray::MarkedVecInitializer PackedArray::s_marked_vec_initializer;
+
+struct PackedArray::MarkedVArrayInitializer {
+  MarkedVArrayInitializer() {
+    auto const aux = packSizeIndexAndAuxBits(0, ArrayData::kLegacyArray);
+    auto const ad = reinterpret_cast<ArrayData*>(&s_theEmptyMarkedVArray);
+    ad->m_sizeAndPos = 0;
+    ad->initHeader_16(HeaderKind::Packed, StaticValue, aux);
+    assertx(RuntimeOption::EvalHackArrDVArrs || checkInvariants(ad));
+  }
+};
+PackedArray::MarkedVArrayInitializer PackedArray::s_marked_varr_initializer;
+
 //////////////////////////////////////////////////////////////////////
 
 namespace {
@@ -396,7 +409,7 @@ ArrayData* PackedArray::MakeReserveVec(uint32_t capacity) {
   assertx(ad->m_size == 0);
   assertx(ad->m_pos == 0);
   assertx(checkInvariants(ad));
-  return tagArrProv(ad);
+  return ad;
 }
 
 template<bool reverse>
@@ -444,7 +457,7 @@ ArrayData* PackedArray::MakeVec(uint32_t size, const TypedValue* values) {
   // grows down.
   auto ad = MakePackedImpl<true>(size, values, HeaderKind::Vec);
   assertx(ad->isVecKind());
-  return tagArrProv(ad);
+  return ad;
 }
 
 ArrayData* PackedArray::MakeVArrayNatural(uint32_t size, const TypedValue* values) {
@@ -459,7 +472,7 @@ ArrayData* PackedArray::MakeVArrayNatural(uint32_t size, const TypedValue* value
 ArrayData* PackedArray::MakeVecNatural(uint32_t size, const TypedValue* values) {
   auto ad = MakePackedImpl<false>(size, values, HeaderKind::Vec);
   assertx(ad->isVecKind());
-  return tagArrProv(ad);
+  return ad;
 }
 
 ArrayData* PackedArray::MakeUninitializedVArray(uint32_t size) {
@@ -481,7 +494,7 @@ ArrayData* PackedArray::MakeUninitializedVec(uint32_t size) {
   assertx(ad->m_size == size);
   assertx(ad->m_pos == 0);
   assertx(checkInvariants(ad));
-  return tagArrProv(ad);
+  return ad;
 }
 
 ArrayData* PackedArray::MakeVecFromAPC(const APCArray* apc, bool isLegacy) {
@@ -493,7 +506,7 @@ ArrayData* PackedArray::MakeVecFromAPC(const APCArray* apc, bool isLegacy) {
   }
   auto const ad = init.create();
   ad->setLegacyArray(isLegacy);
-  return tagArrProv(ad, apc);
+  return ad;
 }
 
 ArrayData* PackedArray::MakeVArrayFromAPC(const APCArray* apc) {
@@ -734,17 +747,25 @@ ssize_t PackedArray::IterRewind(const ArrayData* ad, ssize_t pos) {
   return ad->m_size;
 }
 
-ArrayData* PackedArray::AppendImpl(ArrayData* adIn, TypedValue v, bool copy) {
+ArrayData* PackedArray::AppendImpl(ArrayData* adIn, TypedValue v, bool copy, bool move) {
   assertx(checkInvariants(adIn));
   assertx(v.m_type != KindOfUninit);
   assertx(copy || adIn->notCyclic(v));
   auto const ad = PrepareForInsert(adIn, copy);
-  tvDup(v, LvalUncheckedInt(ad, ad->m_size++));
+  if (move) {
+    tvCopy(v, LvalUncheckedInt(ad, ad->m_size++));
+  } else {
+    tvDup(v, LvalUncheckedInt(ad, ad->m_size++));
+  }
   return ad;
 }
 
 ArrayData* PackedArray::Append(ArrayData* adIn, TypedValue v) {
   return AppendImpl(adIn, v, adIn->cowCheck());
+}
+
+ArrayData* PackedArray::AppendMove(ArrayData* adIn, TypedValue v) {
+  return AppendImpl(adIn, v, adIn->cowCheck(), true);
 }
 
 ArrayData* PackedArray::AppendInPlace(ArrayData* adIn, TypedValue v) {
@@ -813,9 +834,16 @@ ArrayData* PackedArray::Prepend(ArrayData* adIn, TypedValue v) {
 
 ArrayData* PackedArray::ToVArray(ArrayData* adIn, bool copy) {
   assertx(checkInvariants(adIn));
-  assertx(adIn->isPackedKind());
-  assertx(adIn->isVArray());
-  return adIn;
+  assertx(adIn->hasVanillaPackedLayout());
+  if (RuntimeOption::EvalHackArrDVArrs || adIn->isVArray()) return adIn;
+
+  if (adIn->getSize() == 0) return ArrayData::CreateVArray();
+  auto const ad = copy ? Copy(adIn) : adIn;
+  ad->m_kind = HeaderKind::Packed;
+  ad->setLegacyArray(false);
+  if (RO::EvalArrayProvenance) arrprov::reassignTag(ad);
+  assertx(checkInvariants(ad));
+  return ad;
 }
 
 ArrayData* PackedArray::ToDArray(ArrayData* adIn, bool /*copy*/) {
@@ -825,19 +853,6 @@ ArrayData* PackedArray::ToDArray(ArrayData* adIn, bool /*copy*/) {
   DArrayInit init{size};
   for (int64_t i = 0; i < size; ++i) init.add(i, GetPosVal(adIn, i));
   return init.create();
-}
-
-ArrayData* PackedArray::ToVArrayVec(ArrayData* adIn, bool copy) {
-  assertx(checkInvariants(adIn));
-  assertx(adIn->isVecKind());
-  if (RuntimeOption::EvalHackArrDVArrs) return adIn;
-  if (adIn->getSize() == 0) return ArrayData::CreateVArray();
-  auto const ad = copy ? Copy(adIn) : adIn;
-  ad->m_kind = HeaderKind::Packed;
-  ad->setLegacyArray(false);
-  if (RO::EvalArrayProvenance) arrprov::reassignTag(ad);
-  assertx(checkInvariants(ad));
-  return ad;
 }
 
 ArrayData* PackedArray::ToDict(ArrayData* ad, bool copy) {
@@ -852,8 +867,9 @@ ArrayData* PackedArray::ToDict(ArrayData* ad, bool copy) {
 
 ArrayData* PackedArray::ToVec(ArrayData* adIn, bool copy) {
   assertx(checkInvariants(adIn));
-  assertx(adIn->isPackedKind());
+  assertx(adIn->hasVanillaPackedLayout());
 
+  if (adIn->isVecKind()) return adIn;
   if (adIn->empty()) return ArrayData::CreateVec();
 
   ArrayData* ad;
@@ -869,7 +885,7 @@ ArrayData* PackedArray::ToVec(ArrayData* adIn, bool copy) {
     adIn->m_kind = HeaderKind::Vec;
     ad = adIn;
   }
-  if (RO::EvalArrayProvenance) arrprov::reassignTag(ad);
+  if (RO::EvalArrayProvenance) arrprov::clearTag(ad);
 
   assertx(ad->isVecKind());
   assertx(capacity(ad) == capacity(adIn));
@@ -877,12 +893,6 @@ ArrayData* PackedArray::ToVec(ArrayData* adIn, bool copy) {
   assertx(ad->m_pos == adIn->m_pos);
   assertx(ad->hasExactlyOneRef());
   assertx(checkInvariants(ad));
-  return tagArrProv(ad);
-}
-
-ArrayData* PackedArray::ToVecVec(ArrayData* ad, bool) {
-  assertx(checkInvariants(ad));
-  assertx(ad->isVecKind());
   return ad;
 }
 

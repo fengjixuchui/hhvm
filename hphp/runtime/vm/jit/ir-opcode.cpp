@@ -51,10 +51,10 @@ TRACE_SET_MOD(hhir);
 #define DParam(t)      HasDest
 #define DLdObjCls      HasDest
 #define DAllocObj      HasDest
-#define DArrSet        HasDest
-#define DArrElem       HasDest
 #define DVecElem       HasDest
 #define DDictElem      HasDest
+#define DDictSet       HasDest
+#define DVecSet        HasDest
 #define DKeysetElem    HasDest
 #define DVecFirstElem     HasDest
 #define DVecLastElem      HasDest
@@ -126,10 +126,10 @@ OpInfo g_opInfo[] = {
 #undef DParamMayRelax
 #undef DParam
 #undef DLdObjCls
-#undef DArrSet
-#undef DArrElem
 #undef DVecElem
 #undef DDictElem
+#undef DDictSet
+#undef DVecSet
 #undef DKeysetElem
 #undef DVecFirstElem
 #undef DVecLastElem
@@ -295,14 +295,11 @@ bool opcodeMayRaise(Opcode opc) {
            RuntimeOption::EvalIsExprEnableUnresolvedWarning ||
            RuntimeOption::EvalIsVecNotices;
 
-  case AddNewElem:
   case AddNewElemKeyset:
   case AFWHPrepareChild:
   case AKExistsObj:
   case AllocObj:
   case AllocObjReified:
-  case ArrayGet:
-  case ArraySet:
   case BaseG:
   case Call:
   case CallBuiltin:
@@ -357,8 +354,6 @@ bool opcodeMayRaise(Opcode opc) {
   case CreateAAWH:
   case DictGet:
   case DictSet:
-  case ElemArrayD:
-  case ElemArrayU:
   case ElemDictD:
   case ElemDictU:
   case ElemDX:
@@ -457,7 +452,7 @@ bool opcodeMayRaise(Opcode opc) {
   case ReturnHook:
   case SetElem:
   case SetNewElem:
-  case SetNewElemArray:
+  case SetNewElemDict:
   case SetNewElemKeyset:
   case SetNewElemVec:
   case SetOpTV:
@@ -479,6 +474,7 @@ bool opcodeMayRaise(Opcode opc) {
   case ThrowDivisionByZeroException:
   case ThrowHasThisNeedStatic:
   case ThrowInvalidArrayKey:
+  case ThrowInvalidArrayKeyForSet:
   case ThrowInvalidOperation:
   case ThrowLateInitPropError:
   case ThrowMissingArg:
@@ -522,7 +518,6 @@ bool opcodeMayRaise(Opcode opc) {
   case AdvanceVecPtrIter:
   case AFWHBlockOn:
   case AFWHPushTailFrame:
-  case AKExistsArr:
   case AKExistsDict:
   case AKExistsKeyset:
   case AllocStructDArray:
@@ -530,8 +525,6 @@ bool opcodeMayRaise(Opcode opc) {
   case AllocVArray:
   case AllocVec:
   case AndInt:
-  case ArrayIdx:
-  case ArrayIsset:
   case AssertLoc:
   case AssertMBase:
   case AssertNonNull:
@@ -612,7 +605,6 @@ bool opcodeMayRaise(Opcode opc) {
   case ConvVecToDict:
   case ConvVecToVArr:
   case ConvPtrToLval:
-  case CountArray:
   case CountCollection:
   case CountDict:
   case CountKeyset:
@@ -810,7 +802,6 @@ bool opcodeMayRaise(Opcode opc) {
   case LdObjInvoke:
   case LdOutAddr:
   case LdVecElemAddr:
-  case LdPackedElem:
   case LdPairElem:
   case LdPropAddr:
   case LdRDSAddr:
@@ -868,7 +859,6 @@ bool opcodeMayRaise(Opcode opc) {
   case MemoSetLSBCache:
   case MemoSetLSBValue:
   case MethodExists:
-  case MixedArrayGetK:
   case Mod:
   case Mov:
   case MulDbl:
@@ -908,7 +898,6 @@ bool opcodeMayRaise(Opcode opc) {
   case ProfileIsTypeStruct:
   case ProfileKeysetAccess:
   case ProfileMethod:
-  case ProfileMixedArrayAccess:
   case ProfileProp:
   case ProfileSubClsCns:
   case ProfileSwitchDest:

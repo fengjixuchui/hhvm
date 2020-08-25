@@ -95,7 +95,8 @@ let valid_newable_hint env tp (pos, hint) =
 
 let verify_has_consistent_bound env (tparam : Tast.tparam) =
   let upper_bounds =
-    Typing_set.elements (Env.get_upper_bounds env (snd tparam.tp_name))
+    (* a newable type parameter cannot be higher-kinded/require arguments *)
+    Typing_set.elements (Env.get_upper_bounds env (snd tparam.tp_name) [])
   in
   let bound_classes =
     List.filter_map upper_bounds ~f:(fun ty ->
@@ -199,13 +200,12 @@ let handler =
           | _ -> ()
         end
       | ((pos, _), Call (_, ((_, fun_ty), _), targs, _, _)) ->
-        begin
-          match get_node fun_ty with
-          | Tfun ({ ft_tparams; _ } as ty)
-            when not @@ get_ft_is_function_pointer ty ->
-            verify_call_targs env pos (get_pos fun_ty) ft_tparams targs
-          | _ -> ()
-        end
+        let (env, efun_ty) = Env.expand_type env fun_ty in
+        (match get_node efun_ty with
+        | Tfun ({ ft_tparams; _ } as ty)
+          when not @@ get_ft_is_function_pointer ty ->
+          verify_call_targs env pos (get_pos efun_ty) ft_tparams targs
+        | _ -> ())
       | ((pos, _), New (((_, ty), CI (_, class_id)), targs, _, _, _)) ->
         let (env, ty) = Env.expand_type env ty in
         (match get_node ty with
@@ -213,9 +213,13 @@ let handler =
           (* ignoring type arguments here: If we get a Tgeneric here, the underlying type
              parameter must have been newable and reified, neither of which his allowed for
              higher-kinded type-parameters *)
-          if not (Env.get_newable env ci) then Errors.new_without_newable pos ci;
-          if not (List.is_empty targs) then
-            Errors.typaram_applied_to_type pos ci
+          if not (Env.get_newable env ci) then Errors.new_without_newable pos ci
+        (* No need to report a separate error here if targs is non-empty:
+             If targs is not empty then there are two cases:
+             - ci is indeed higher-kinded, in which case it is not allowed to be newable
+               (yielding an error above)
+             - ci is not higher-kinded. Typing_phase.localize_targs_* is called
+               on the the type arguments, reporting the arity mismatch *)
         | _ ->
           (match Env.get_class env class_id with
           | Some cls ->

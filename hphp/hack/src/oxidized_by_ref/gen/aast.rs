@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<d1228704d5dbcaabb2e6d5c93ecff093>>
+// @generated SignedSource<<b2e126e9e768f57ea02032a6a5312eda>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
@@ -340,7 +340,7 @@ pub enum Expr_<'a, Ex, Fb, En, Hi> {
     FunctionPointer(&'a (FunctionPtrId<'a, Ex, Fb, En, Hi>, &'a [Targ<'a, Hi>])),
     Int(&'a str),
     Float(&'a str),
-    String(&'a str),
+    String(&'a bstr::BStr),
     String2(&'a [Expr<'a, Ex, Fb, En, Hi>]),
     PrefixedString(&'a (&'a str, Expr<'a, Ex, Fb, En, Hi>)),
     Yield(&'a Afield<'a, Ex, Fb, En, Hi>),
@@ -411,7 +411,7 @@ pub enum Expr_<'a, Ex, Fb, En, Hi> {
     MethodId(&'a (Expr<'a, Ex, Fb, En, Hi>, Pstring<'a>)),
     /// meth_caller('Class name', 'method name')
     MethodCaller(&'a (Sid<'a>, Pstring<'a>)),
-    SmethodId(&'a (Sid<'a>, Pstring<'a>)),
+    SmethodId(&'a (ClassId<'a, Ex, Fb, En, Hi>, Pstring<'a>)),
     Pair(
         &'a (
             Option<(Targ<'a, Hi>, Targ<'a, Hi>)>,
@@ -422,6 +422,7 @@ pub enum Expr_<'a, Ex, Fb, En, Hi> {
     Assert(&'a AssertExpr<'a, Ex, Fb, En, Hi>),
     PUAtom(&'a str),
     PUIdentifier(&'a (ClassId<'a, Ex, Fb, En, Hi>, Pstring<'a>, Pstring<'a>)),
+    ETSplice(&'a Expr<'a, Ex, Fb, En, Hi>),
     Any,
 }
 impl<'a, Ex: TrivialDrop, Fb: TrivialDrop, En: TrivialDrop, Hi: TrivialDrop> TrivialDrop
@@ -811,36 +812,6 @@ impl<'a, Ex: TrivialDrop, Fb: TrivialDrop, En: TrivialDrop, Hi: TrivialDrop> Tri
     Serialize,
     ToOcamlRep
 )]
-pub struct ClassTparams<'a, Ex, Fb, En, Hi> {
-    pub list: &'a [Tparam<'a, Ex, Fb, En, Hi>],
-    /// keeping around the ast version of the constraint only
-    /// for the purposes of Naming.class_meth_bodies
-    /// TODO: remove this and use tp_constraints
-    pub constraints: s_map::SMap<
-        'a,
-        (
-            oxidized::aast::ReifyKind,
-            &'a [(oxidized::ast_defs::ConstraintKind, Hint<'a>)],
-        ),
-    >,
-}
-impl<'a, Ex: TrivialDrop, Fb: TrivialDrop, En: TrivialDrop, Hi: TrivialDrop> TrivialDrop
-    for ClassTparams<'a, Ex, Fb, En, Hi>
-{
-}
-
-#[derive(
-    Clone,
-    Debug,
-    Eq,
-    FromOcamlRepIn,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-    ToOcamlRep
-)]
 pub struct UseAsAlias<'a>(
     pub Option<Sid<'a>>,
     pub Pstring<'a>,
@@ -890,12 +861,11 @@ pub struct Class_<'a, Ex, Fb, En, Hi> {
     pub kind: oxidized::ast_defs::ClassKind,
     pub name: Sid<'a>,
     /// The type parameters of a class A<T> (T is the parameter)
-    pub tparams: ClassTparams<'a, Ex, Fb, En, Hi>,
+    pub tparams: &'a [Tparam<'a, Ex, Fb, En, Hi>],
     pub extends: &'a [ClassHint<'a>],
     pub uses: &'a [TraitHint<'a>],
     pub use_as_alias: &'a [UseAsAlias<'a>],
     pub insteadof_alias: &'a [InsteadofAlias<'a>],
-    pub method_redeclarations: &'a [MethodRedeclaration<'a, Ex, Fb, En, Hi>],
     pub xhp_attr_uses: &'a [XhpAttrHint<'a>],
     pub xhp_category: Option<(&'a Pos<'a>, &'a [Pstring<'a>])>,
     pub reqs: &'a [(ClassHint<'a>, oxidized::aast::IsExtends)],
@@ -1157,39 +1127,6 @@ pub struct Method_<'a, Ex, Fb, En, Hi> {
 }
 impl<'a, Ex: TrivialDrop, Fb: TrivialDrop, En: TrivialDrop, Hi: TrivialDrop> TrivialDrop
     for Method_<'a, Ex, Fb, En, Hi>
-{
-}
-
-#[derive(
-    Clone,
-    Debug,
-    Eq,
-    FromOcamlRepIn,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-    ToOcamlRep
-)]
-pub struct MethodRedeclaration<'a, Ex, Fb, En, Hi> {
-    pub final_: bool,
-    pub abstract_: bool,
-    pub static_: bool,
-    pub visibility: oxidized::aast::Visibility,
-    pub name: Sid<'a>,
-    pub tparams: &'a [Tparam<'a, Ex, Fb, En, Hi>],
-    pub where_constraints: &'a [WhereConstraint<'a>],
-    pub variadic: FunVariadicity<'a, Ex, Fb, En, Hi>,
-    pub params: &'a [&'a FunParam<'a, Ex, Fb, En, Hi>],
-    pub fun_kind: oxidized::ast_defs::FunKind,
-    pub ret: TypeHint<'a, Hi>,
-    pub trait_: TraitHint<'a>,
-    pub method: Pstring<'a>,
-    pub user_attributes: &'a [UserAttribute<'a, Ex, Fb, En, Hi>],
-}
-impl<'a, Ex: TrivialDrop, Fb: TrivialDrop, En: TrivialDrop, Hi: TrivialDrop> TrivialDrop
-    for MethodRedeclaration<'a, Ex, Fb, En, Hi>
 {
 }
 

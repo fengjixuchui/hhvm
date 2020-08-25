@@ -389,6 +389,7 @@ and ptype ?prefix lump_pol_opt proto_renv (t : T.locl_ty) =
   | T.Tobject -> fail "Tobject"
   | T.Tpu (_locl_ty, _sid) -> fail "Tpu"
   | T.Tpu_type_access (_sid1, _sid2) -> fail "Tpu_type_access"
+  | T.Tunapplied_alias _ -> fail "Tunapplied_alias"
 
 (* Uses a Hack-inferred type to update the flow type of a local
    variable *)
@@ -643,6 +644,7 @@ and expr ~pos renv env (((epos, ety), e) : Tast.expr) =
     (match renv.re_this with
     | Some ptype -> (env, ptype)
     | None -> fail "encountered $this outside of a class context")
+  | A.ET_Splice e
   | A.ExpressionTree (_, e)
   | A.BracedExpr e ->
     expr env e
