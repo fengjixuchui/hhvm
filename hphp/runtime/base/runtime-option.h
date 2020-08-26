@@ -625,7 +625,6 @@ struct RuntimeOption {
 
   static int GetScannerType();
 
-  static std::set<std::string, stdltistr> DynamicInvokeFunctions;
   static hphp_string_imap<TypedValue> ConstantFunctions;
 
   static const uint32_t kPCREInitialTableSize = 96 * 1024;
@@ -1082,6 +1081,9 @@ struct RuntimeOption {
    *     Logging arrays are only created before RTA has begun. */       \
   F(int32_t, BespokeArrayLikeMode, 0)                                   \
   F(uint64_t, EmitLoggingArraySampleRate, 0)                            \
+  F(bool, ExportLoggingArrayDataToFile, false)                          \
+  F(bool, ExportLoggingArrayDataToStructuredLog, false)                 \
+  F(string, ExportLoggingArrayDataPath, "/tmp")                         \
   /* Raise notices on various array operations which may present        \
    * compatibility issues with Hack arrays.                             \
    *                                                                    \

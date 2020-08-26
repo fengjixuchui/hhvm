@@ -34,7 +34,7 @@ use oxidized_by_ref::{
     typing_defs::{
         EnumType, FunArity, FunElt, FunParam, FunParams, FunType, ParamMode, ParamMutability,
         PossiblyEnforcedTy, Reactivity, ShapeFieldType, ShapeKind, Tparam, Ty, Ty_,
-        TypeconstAbstractKind, TypedefType, XhpAttrTag,
+        TypeconstAbstractKind, TypedefType, WhereConstraint, XhpAttrTag,
     },
     typing_defs_flags::{FunParamFlags, FunTypeFlags},
     typing_reason::Reason,
@@ -175,6 +175,21 @@ impl<'a> DirectDeclSmartConstructors<'a> {
             result.push(item?);
         }
         Some(result.into_bump_slice())
+    }
+
+    fn unwrap_mutability(hint: Node<'a>) -> (Node<'a>, Option<ParamMutability>) {
+        match hint {
+            Node::Ty(Ty(_, Ty_::Tapply((hn, [t])))) if hn.1 == "\\Mutable" => {
+                (Node::Ty(t), Some(ParamMutability::ParamBorrowedMutable))
+            }
+            Node::Ty(Ty(_, Ty_::Tapply((hn, [t])))) if hn.1 == "\\OwnedMutable" => {
+                (Node::Ty(t), Some(ParamMutability::ParamOwnedMutable))
+            }
+            Node::Ty(Ty(_, Ty_::Tapply((hn, [t])))) if hn.1 == "\\MaybeMutable" => {
+                (Node::Ty(t), Some(ParamMutability::ParamMaybeMutable))
+            }
+            _ => (hint, None),
+        }
     }
 }
 
@@ -609,6 +624,7 @@ pub enum Node<'a> {
     Construct(&'a Pos<'a>),
     This(&'a Pos<'a>), // This needs a pos since it shows up in Taccess.
     TypeParameters(&'a &'a [Tparam<'a>]),
+    WhereConstraint(&'a WhereConstraint<'a>),
 
     // For cases where the position of a node is included in some outer
     // position, but we do not need to track any further information about that
@@ -808,6 +824,9 @@ impl<'a> Node<'a> {
             at_most_rx_as_func: false,
             enforceable: None,
             returns_void_to_rx: false,
+            accept_disposable: false,
+            dynamically_callable: false,
+            returns_disposable: false,
         };
 
         let mut reactivity_condition_type = None;
@@ -851,6 +870,9 @@ impl<'a> Node<'a> {
                     }
                     "__RxLocal" => {
                         attributes.reactivity = Reactivity::Local(reactivity_condition_type.take())
+                    }
+                    "__Pure" => {
+                        attributes.reactivity = Reactivity::Pure(reactivity_condition_type.take());
                     }
                     "__Mutable" => {
                         attributes.param_mutability = Some(ParamMutability::ParamBorrowedMutable)
@@ -913,6 +935,15 @@ impl<'a> Node<'a> {
                     "__Enforceable" => {
                         attributes.enforceable = Some(attribute.name.0);
                     }
+                    "__AcceptDisposable" => {
+                        attributes.accept_disposable = true;
+                    }
+                    "__DynamicallyCallable" => {
+                        attributes.dynamically_callable = true;
+                    }
+                    "__ReturnDisposable" => {
+                        attributes.returns_disposable = true;
+                    }
                     _ => (),
                 }
             } else {
@@ -946,6 +977,9 @@ struct Attributes<'a> {
     at_most_rx_as_func: bool,
     enforceable: Option<&'a Pos<'a>>,
     returns_void_to_rx: bool,
+    accept_disposable: bool,
+    dynamically_callable: bool,
+    returns_disposable: bool,
 }
 
 impl<'a> DirectDeclSmartConstructors<'a> {
@@ -1152,11 +1186,61 @@ impl<'a> DirectDeclSmartConstructors<'a> {
         }
     }
 
+    fn ret_from_fun_kind(&self, kind: FunKind, type_: Ty<'a>) -> Ty<'a> {
+        let pos = type_.get_pos().unwrap_or_else(|| Pos::none());
+        match kind {
+            FunKind::FAsyncGenerator => Ty(
+                self.alloc(Reason::RretFunKind(pos, kind)),
+                self.alloc(Ty_::Tapply(self.alloc((
+                    Id(pos, naming_special_names::classes::ASYNC_GENERATOR),
+                    self.alloc([type_, type_, type_]),
+                )))),
+            ),
+            FunKind::FGenerator => Ty(
+                self.alloc(Reason::RretFunKind(pos, kind)),
+                self.alloc(Ty_::Tapply(self.alloc((
+                    Id(pos, naming_special_names::classes::GENERATOR),
+                    self.alloc([type_, type_, type_]),
+                )))),
+            ),
+            FunKind::FAsync => Ty(
+                self.alloc(Reason::RretFunKind(pos, kind)),
+                self.alloc(Ty_::Tapply(self.alloc((
+                    Id(pos, naming_special_names::classes::AWAITABLE),
+                    self.alloc([type_]),
+                )))),
+            ),
+            _ => type_,
+        }
+    }
+
     fn is_type_param_in_scope(&self, name: &str) -> bool {
         self.state
             .type_parameters
             .iter()
             .any(|tps| tps.contains(name))
+    }
+
+    fn param_mutability_to_fun_type_flags(
+        param_mutability: Option<ParamMutability>,
+    ) -> FunTypeFlags {
+        match param_mutability {
+            Some(ParamMutability::ParamBorrowedMutable) => FunTypeFlags::MUTABLE_FLAGS_BORROWED,
+            Some(ParamMutability::ParamOwnedMutable) => FunTypeFlags::MUTABLE_FLAGS_OWNED,
+            Some(ParamMutability::ParamMaybeMutable) => FunTypeFlags::MUTABLE_FLAGS_MAYBE,
+            None => FunTypeFlags::empty(),
+        }
+    }
+
+    fn param_mutability_to_fun_param_flags(
+        param_mutability: Option<ParamMutability>,
+    ) -> FunParamFlags {
+        match param_mutability {
+            Some(ParamMutability::ParamBorrowedMutable) => FunParamFlags::MUTABLE_FLAGS_BORROWED,
+            Some(ParamMutability::ParamOwnedMutable) => FunParamFlags::MUTABLE_FLAGS_OWNED,
+            Some(ParamMutability::ParamMaybeMutable) => FunParamFlags::MUTABLE_FLAGS_MAYBE,
+            None => FunParamFlags::empty(),
+        }
     }
 
     fn function_into_ty(
@@ -1197,6 +1281,11 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                 FunKind::FSync
             }
         };
+        let type_ = if !header.ret_hint.is_present() {
+            self.ret_from_fun_kind(fun_kind, type_)
+        } else {
+            type_
+        };
         let attributes = attributes.as_attributes(self.state.arena)?;
         // TODO(hrust) Put this in a helper. Possibly do this for all flags.
         let mut flags = match fun_kind {
@@ -1209,21 +1298,14 @@ impl<'a> DirectDeclSmartConstructors<'a> {
         if attributes.returns_mutable {
             flags |= FunTypeFlags::RETURNS_MUTABLE;
         }
+        if attributes.returns_disposable {
+            flags |= FunTypeFlags::RETURN_DISPOSABLE;
+        }
         if attributes.returns_void_to_rx {
             flags |= FunTypeFlags::RETURNS_VOID_TO_RX;
         }
-        match attributes.param_mutability {
-            Some(ParamMutability::ParamBorrowedMutable) => {
-                flags |= FunTypeFlags::MUTABLE_FLAGS_BORROWED;
-            }
-            Some(ParamMutability::ParamOwnedMutable) => {
-                flags |= FunTypeFlags::MUTABLE_FLAGS_OWNED;
-            }
-            Some(ParamMutability::ParamMaybeMutable) => {
-                flags |= FunTypeFlags::MUTABLE_FLAGS_MAYBE;
-            }
-            None => (),
-        };
+
+        flags |= Self::param_mutability_to_fun_type_flags(attributes.param_mutability);
         // Pop the type params stack only after creating all inner types.
         let tparams = self.pop_type_params(header.type_params);
         let ft = self.alloc(FunType {
@@ -1284,7 +1366,7 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                                 properties.push(ShallowProp {
                                     const_: false,
                                     xhp_attr: None,
-                                    lateinit: false,
+                                    lateinit: attributes.late_init,
                                     lsb: false,
                                     name: Id(pos, name),
                                     needs_init: true,
@@ -1334,6 +1416,9 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                                 }
                                 None => FunParamFlags::empty(),
                             };
+                            if attributes.accept_disposable {
+                                flags |= FunParamFlags::ACCEPT_DISPOSABLE
+                            }
                             match kind {
                                 ParamMode::FPinout => {
                                     flags |= FunParamFlags::INOUT;
@@ -1408,7 +1493,34 @@ impl<'a> DirectDeclSmartConstructors<'a> {
         let type_arguments =
             unwrap_or_return!(self
                 .maybe_slice_from_iter(type_arguments.iter().map(|&node| self.node_to_ty(node))));
-        let ty_ = Ty_::Tapply(self.alloc((base_ty, type_arguments)));
+
+        let ty_ = match (base_ty, type_arguments) {
+            (Id(_, name), &[Ty(_, Ty_::Tfun(f))]) if name == "\\Pure" => {
+                Ty_::Tfun(self.alloc(FunType {
+                    reactive: Reactivity::Pure(None),
+                    ..(*f).clone()
+                }))
+            }
+            (Id(_, name), &[Ty(_, Ty_::Tfun(f))]) if name == "\\Rx" => {
+                Ty_::Tfun(self.alloc(FunType {
+                    reactive: Reactivity::Reactive(None),
+                    ..(*f).clone()
+                }))
+            }
+            (Id(_, name), &[Ty(_, Ty_::Tfun(f))]) if name == "\\RxShallow" => {
+                Ty_::Tfun(self.alloc(FunType {
+                    reactive: Reactivity::Shallow(None),
+                    ..(*f).clone()
+                }))
+            }
+            (Id(_, name), &[Ty(_, Ty_::Tfun(f))]) if name == "\\RxLocal" => {
+                Ty_::Tfun(self.alloc(FunType {
+                    reactive: Reactivity::Local(None),
+                    ..(*f).clone()
+                }))
+            }
+            _ => Ty_::Tapply(self.alloc((base_ty, type_arguments))),
+        };
         let pos = match pos_to_merge {
             Some(p) => unwrap_or_return!(Pos::merge(self.state.arena, base_ty.0, p).ok()),
             None => base_ty.0,
@@ -2388,6 +2500,24 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         }))
     }
 
+    fn make_variadic_parameter(&mut self, _: Self::R, hint: Self::R, _: Self::R) -> Self::R {
+        Node::FunParam(
+            self.alloc(FunParamDecl {
+                attributes: Node::Ignored,
+                visibility: Node::Ignored,
+                kind: ParamMode::FPnormal,
+                hint,
+                id: Id(
+                    hint.get_pos(self.state.arena)
+                        .unwrap_or_else(|| Pos::none()),
+                    "".into(),
+                ),
+                variadic: true,
+                initializer: Node::Ignored,
+            }),
+        )
+    }
+
     fn make_function_declaration(
         &mut self,
         attributes: Self::R,
@@ -2591,6 +2721,28 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         Node::NamespaceUseClause(self.alloc(NamespaceUseClause { id, as_ }))
     }
 
+    fn make_where_clause(&mut self, _: Self::R, where_constraints: Self::R) -> Self::R {
+        where_constraints
+    }
+
+    fn make_where_constraint(
+        &mut self,
+        left_type: Self::R,
+        operator: Self::R,
+        right_type: Self::R,
+    ) -> Self::R {
+        Node::WhereConstraint(self.alloc(WhereConstraint(
+            self.node_to_ty(left_type).unwrap_or_else(|| tany()),
+            match operator {
+                Node::Operator((_, TokenKind::Equal)) => ConstraintKind::ConstraintEq,
+                Node::Token(TokenKind::As) => ConstraintKind::ConstraintAs,
+                Node::Token(TokenKind::Super) => ConstraintKind::ConstraintSuper,
+                _ => ConstraintKind::ConstraintAs,
+            },
+            self.node_to_ty(right_type).unwrap_or_else(|| tany()),
+        )))
+    }
+
     fn make_classish_declaration(
         &mut self,
         attributes: Self::R,
@@ -2603,7 +2755,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         extends: Self::R,
         _arg7: Self::R,
         implements: Self::R,
-        _arg9: Self::R,
+        where_clause: Self::R,
         body: Self::R,
     ) -> Self::R {
         let Id(pos, name) = unwrap_or_return!(
@@ -2631,6 +2783,11 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         }
 
         let attributes = attributes;
+        let where_constraints =
+            self.slice_from_iter(where_clause.iter().copied().filter_map(|x| match x {
+                Node::WhereConstraint(x) => Some(shallow_decl_defs::WhereConstraint(x.0, x.1, x.2)),
+                _ => None,
+            }));
 
         let body = match body {
             Node::ClassishBody(body) => body,
@@ -2812,7 +2969,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             kind: class_kind,
             name: Id(pos, name),
             tparams,
-            where_constraints: &[],
+            where_constraints,
             extends,
             uses,
             xhp_attr_uses,
@@ -2863,7 +3020,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                     } else {
                         strip_dollar_prefix(name)
                     };
-                    let ty = self.node_to_ty(hint)?;
+                    let ty = self.node_to_ty(hint);
                     Some(ShallowProp {
                         const_: attributes.const_,
                         xhp_attr: None,
@@ -2871,7 +3028,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                         lsb: attributes.lsb,
                         name: Id(pos, name),
                         needs_init: initializer.is_ignored(),
-                        type_: Some(ty),
+                        type_: ty,
                         abstract_: modifiers.is_abstract,
                         visibility: modifiers.visibility,
                         fixme_codes: ISet::empty(),
@@ -3046,12 +3203,14 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                 Reactivity::Reactive(condition_type) => Some(MethodReactivity::MethodReactive(
                     get_condition_type_name(condition_type),
                 )),
-                Reactivity::Nonreactive
-                | Reactivity::MaybeReactive(_)
-                | Reactivity::RxVar(_)
-                | Reactivity::Pure(_) => None,
+                Reactivity::Pure(condition_type) => Some(MethodReactivity::MethodPure(
+                    get_condition_type_name(condition_type),
+                )),
+                Reactivity::Nonreactive | Reactivity::MaybeReactive(_) | Reactivity::RxVar(_) => {
+                    None
+                }
             },
-            dynamicallycallable: false,
+            dynamicallycallable: attributes.dynamically_callable,
             type_: ty,
             visibility: modifiers.visibility,
             fixme_codes: ISet::empty(),
@@ -3102,10 +3261,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                     abstract_: false,
                     expr: Some(self.node_to_expr(value)?),
                     name: self.get_name("", name)?,
-                    type_: Ty(
-                        self.alloc(Reason::witness(value.get_pos(self.state.arena)?)),
-                        hint.1,
-                    ),
+                    type_: self.node_to_ty(value).unwrap_or_else(|| tany()),
                 }),
                 n => panic!("Expected an enum case, got {:?}", n),
             }
@@ -3521,29 +3677,63 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         ret_hint: Self::R,
         right_paren: Self::R,
     ) -> Self::R {
-        let params = unwrap_or_return!(self.maybe_slice_from_iter(args.iter().map(|&node| {
-            Some(self.alloc(FunParam {
-                pos: node.get_pos(self.state.arena)?,
+        let make_param = |fp: &'a FunParamDecl<'a>| -> &'a FunParam<'a> {
+            let mut flags = FunParamFlags::empty();
+            let (hint, mutability) = Self::unwrap_mutability(fp.hint);
+            flags |= Self::param_mutability_to_fun_param_flags(mutability);
+
+            match fp.kind {
+                ParamMode::FPinout => {
+                    flags |= FunParamFlags::INOUT;
+                }
+                ParamMode::FPnormal => {}
+            };
+
+            self.alloc(FunParam {
+                pos: fp
+                    .hint
+                    .get_pos(self.state.arena)
+                    .unwrap_or_else(|| Pos::none()),
                 name: None,
                 type_: PossiblyEnforcedTy {
                     enforced: false,
-                    type_: self.node_to_ty(node)?,
+                    type_: self.node_to_ty(hint).unwrap_or_else(|| tany()),
                 },
-                flags: FunParamFlags::empty(),
+                flags,
                 rx_annotation: None,
-            }))
-        })));
-        let ret = unwrap_or_return!(self.node_to_ty(ret_hint));
+            })
+        };
+
+        let arity = args
+            .iter()
+            .find_map(|&node| match node {
+                Node::FunParam(fp) if fp.variadic => Some(FunArity::Fvariadic(make_param(fp))),
+                _ => None,
+            })
+            .unwrap_or(FunArity::Fstandard);
+
+        let params = self.slice_from_iter(args.iter().filter_map(|&node| match node {
+            Node::FunParam(fp) if !fp.variadic => Some(make_param(fp)),
+            _ => None,
+        }));
+
+        let (hint, mutability) = Self::unwrap_mutability(ret_hint);
+        let ret = unwrap_or_return!(self.node_to_ty(hint));
         let pos = unwrap_or_return!(Pos::merge(
             self.state.arena,
             unwrap_or_return!(left_paren.get_pos(self.state.arena)),
             unwrap_or_return!(right_paren.get_pos(self.state.arena)),
         )
         .ok());
+        let mut flags = FunTypeFlags::empty();
+        if mutability.is_some() {
+            flags |= FunTypeFlags::RETURNS_MUTABLE;
+        }
+
         self.hint_ty(
             pos,
             Ty_::Tfun(self.alloc(FunType {
-                arity: FunArity::Fstandard,
+                arity,
                 tparams: &[],
                 where_constraints: &[],
                 params,
@@ -3552,13 +3742,25 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                     type_: ret,
                 },
                 reactive: Reactivity::Nonreactive,
-                flags: FunTypeFlags::empty(),
+                flags,
             })),
         )
     }
 
-    fn make_closure_parameter_type_specifier(&mut self, _arg0: Self::R, name: Self::R) -> Self::R {
-        name
+    fn make_closure_parameter_type_specifier(&mut self, inout: Self::R, hint: Self::R) -> Self::R {
+        let kind = match inout {
+            Node::Token(TokenKind::Inout) => ParamMode::FPinout,
+            _ => ParamMode::FPnormal,
+        };
+        Node::FunParam(self.alloc(FunParamDecl {
+            attributes: Node::Ignored,
+            visibility: Node::Ignored,
+            kind,
+            hint,
+            id: Id(hint.get_pos(self.state.arena).unwrap(), "".into()),
+            variadic: false,
+            initializer: Node::Ignored,
+        }))
     }
 
     fn make_type_const_declaration(

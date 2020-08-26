@@ -912,8 +912,7 @@ static void prepareFuncEntry(ActRec *ar, Array&& generics) {
   const int nparams = func->numNonVariadicParams();
   auto& stack = vmStack();
 
-  auto const nargs = ar->numArgs();
-  assertx(((TypedValue*)ar - stack.top()) == nargs);
+  auto const nargs = (TypedValue*)ar - stack.top();
 
   if (UNLIKELY(nargs > nparams)) {
     // All extra arguments are expected to be packed in a varray.
@@ -4500,7 +4499,6 @@ bool doFCallUnpackTC(PC origpc, int32_t numInputs, CallFlags callFlags,
   tl_regState = VMRegState::CLEAN;
   auto const ar = vmStack().indA(numInputs);
   if (callFlags.hasGenerics()) --numInputs;
-  assertx(ar->numArgs() == numInputs);
   ar->setReturn(vmfp(), origpc, jit::tc::ustubs().retHelper, false);
   ar->setJitReturn(retAddr);
   auto const ret = doFCall(ar, numInputs - 1, true, callFlags);
@@ -4530,13 +4528,13 @@ void iopFCallBuiltin(
 
   TypedValue* args = vmStack().indTV(numArgs-1);
   TypedValue ret;
-  Native::coerceFCallArgsFromStack(args, numArgs, numNonDefault, func);
+  Native::coerceFCallArgsFromStack(args, numArgs, func);
 
   if (func->hasVariadicCaptureParam()) {
     assertx(numArgs > 0);
     assertx(tvIsHAMSafeVArray(args[1 - safe_cast<int32_t>(numArgs)]));
   }
-  Native::callFunc(func, vmfp(), ctx, args, numNonDefault, ret, true);
+  Native::callFunc(func, vmfp(), ctx, args, ret, true);
 
   frame_free_args(args, numNonDefault);
   vmStack().ndiscard(numArgs);

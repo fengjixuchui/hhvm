@@ -73,6 +73,13 @@ void cgCall(IRLS& env, const IRInstruction* inst) {
   auto const ctx = srcLoc(env, inst, 3).reg();
   auto const extra = inst->extra<Call>();
   auto const numArgsInclUnpack = extra->numArgs + (extra->hasUnpack ? 1 : 0);
+  auto const func = inst->src(2)->hasConstVal(TFunc)
+    ? inst->src(2)->funcVal() : nullptr;
+  // Upgrade skipRepack if HHIR opts inferred the callee. We can't do this for
+  // unpack, as it is not guaranteed to be a varray.
+  auto const skipRepack = extra->skipRepack || (
+    func && !extra->hasUnpack && extra->numArgs <= func->numNonVariadicParams()
+  );
 
   auto& v = vmain(env);
 
@@ -105,25 +112,23 @@ void cgCall(IRLS& env, const IRInstruction* inst) {
   v << syncvmsp{ssp};
 
   auto const done = v.makeBlock();
-  if (inst->src(2)->hasConstVal(TFunc) &&
-      extra->numArgs <= inst->src(2)->funcVal()->numNonVariadicParams()) {
+  if (skipRepack && func) {
     // Emit a smashable call that initially calls a recyclable service request
     // stub.  The stub and the eventual targets take rvmfp() as an argument,
     // pointing to the callee ActRec.
-    auto const func = inst->src(2)->funcVal();
-    assertx(!extra->hasUnpack ||
-            extra->numArgs == func->numNonVariadicParams());
-    v << callphp{tc::ustubs().immutableBindCallStub, php_call_regs(withCtx),
-                 func, numArgsInclUnpack};
-  } else if (extra->skipRepack) {
+    assertx(
+      (!extra->hasUnpack && extra->numArgs <= func->numNonVariadicParams()) ||
+      (extra->hasUnpack && extra->numArgs == func->numNonVariadicParams()));
+    v << callphps{tc::ustubs().immutableBindCallStub, php_call_regs(withCtx),
+                  func, numArgsInclUnpack};
+  } else if (skipRepack) {
     // If we've statically determined the provided number of arguments
     // doesn't exceed what the target expects, we can skip the stub
     // and call the prologue directly.
-    assertx(!extra->hasUnpack);
     auto const pTabOff = safe_cast<int32_t>(Func::prologueTableOff());
     auto const ptrSize = safe_cast<int32_t>(sizeof(LowPtr<uint8_t>));
     auto const dest = v.makeReg();
-    emitLdLowPtr(v, r_php_call_func()[extra->numArgs * ptrSize + pTabOff],
+    emitLdLowPtr(v, r_php_call_func()[numArgsInclUnpack * ptrSize + pTabOff],
                  dest, sizeof(LowPtr<uint8_t>));
     v << callphpr{dest, php_call_regs(withCtx)};
   } else {
@@ -132,8 +137,7 @@ void cgCall(IRLS& env, const IRInstruction* inst) {
     // stub that will pack any extra arguments and transfer control to the
     // appropriate prologue.
     assertx(!extra->hasUnpack);
-    v << callphp{tc::ustubs().funcPrologueRedispatch, php_call_regs(withCtx),
-                 nullptr, extra->numArgs};
+    v << callphp{tc::ustubs().funcPrologueRedispatch, php_call_regs(withCtx)};
   }
 
   // The prologue is responsible for unwinding all inputs. We could have

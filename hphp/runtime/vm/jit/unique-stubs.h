@@ -133,7 +133,8 @@ struct UniqueStubs {
    * prologue succeeds, we update the prologue table to point to the new
    * prologue instead of this stub.
    *
-   * @reached:  callphp from TC
+   * @reached:  callphpr from TC
+   *            callphps from TC
    *            jmp from immutableBindCallStub
    *            jmp from funcPrologueRedispatch
    * @context:  func prologue
@@ -248,7 +249,7 @@ struct UniqueStubs {
   /*
    * Stub for immutable PHP calls.
    *
-   * @reached:  callphp from TC
+   * @reached:  callphps from TC
    * @context:  func prologue
    */
   TCA immutableBindCallStub;

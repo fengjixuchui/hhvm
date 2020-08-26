@@ -79,6 +79,7 @@ bool isCall(Vinstr::Opcode op) {
     case Vinstr::callm:
     case Vinstr::callphp:
     case Vinstr::callphpr:
+    case Vinstr::callphps:
     case Vinstr::callr:
     case Vinstr::calls:
     case Vinstr::callstub:
@@ -167,6 +168,7 @@ Width width(Vinstr::Opcode op) {
     case Vinstr::phpret:
     case Vinstr::callphp:
     case Vinstr::callphpr:
+    case Vinstr::callphps:
     case Vinstr::callunpack:
     case Vinstr::vcallunpack:
     case Vinstr::contenter:
