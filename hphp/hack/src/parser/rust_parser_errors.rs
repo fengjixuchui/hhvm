@@ -73,6 +73,7 @@ enum UnstableFeatures {
     UnionIntersectionTypeHints,
     ClassLevelWhere,
     ExpressionTrees,
+    PocketUniverses,
 }
 
 use BinopAllowsAwaitInPositions::*;
@@ -964,12 +965,6 @@ where
         let is_abstract = Self::has_modifier_abstract(node);
         let has_private = Self::has_modifier_private(node);
         is_abstract && has_private
-    }
-
-    fn methodish_abstract_inside_interface(&self, node: &'a Syntax<Token, Value>) -> bool {
-        let is_abstract = Self::has_modifier_abstract(node);
-        let is_in_interface = self.methodish_inside_interface();
-        is_abstract && is_in_interface
     }
 
     fn using_statement_function_scoped_is_legal(&self) -> bool {
@@ -1890,7 +1885,7 @@ where
 
                 if self.is_inside_interface() {
                     self.invalid_modifier_errors("Interface methods", node, |kind| {
-                        kind != TokenKind::Final
+                        kind != TokenKind::Final && kind != TokenKind::Abstract
                     });
                 };
 
@@ -1951,12 +1946,6 @@ where
                     );
                 }
 
-                self.produce_error(
-                    |self_, x| self_.methodish_abstract_inside_interface(x),
-                    node,
-                    || errors::error2045,
-                    modifiers,
-                );
                 self.methodish_memoize_lsb_on_non_static(node);
                 let async_annotation =
                     Self::extract_keyword(|x| x.is_async(), node).unwrap_or(node);
@@ -5679,6 +5668,16 @@ where
         match &node.syntax {
             UnionTypeSpecifier(_) | IntersectionTypeSpecifier(_) => {
                 self.check_can_use_feature(node, &UnstableFeatures::UnionIntersectionTypeHints)
+            }
+            PocketAtomExpression(_)
+            | PocketIdentifierExpression(_)
+            | PocketAtomMappingDeclaration(_)
+            | PocketEnumDeclaration(_)
+            | PocketFieldTypeExprDeclaration(_)
+            | PocketFieldTypeDeclaration(_)
+            | PocketMappingIdDeclaration(_)
+            | PocketMappingTypeDeclaration(_) => {
+                self.check_can_use_feature(node, &UnstableFeatures::PocketUniverses)
             }
             ClassishDeclaration(x) => match &x.classish_where_clause.syntax {
                 WhereClause(_) => self.check_can_use_feature(

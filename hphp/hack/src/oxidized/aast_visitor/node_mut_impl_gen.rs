@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<ebc9347d27258555558bee0f41d263c2>>
+// @generated SignedSource<<246c4cf9f8cd9834a28d50bac9b16d6b>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
@@ -649,6 +649,25 @@ impl<P: Params> NodeMut<P> for Enum_ {
         self.base.accept(c, v)?;
         self.constraint.accept(c, v)?;
         Ok(())
+    }
+}
+impl<P: Params> NodeMut<P> for EnvAnnot {
+    fn accept<'node>(
+        &'node mut self,
+        c: &mut P::Context,
+        v: &mut dyn VisitorMut<'node, P = P>,
+    ) -> Result<(), P::Error> {
+        v.visit_env_annot(c, self)
+    }
+    fn recurse<'node>(
+        &'node mut self,
+        c: &mut P::Context,
+        v: &mut dyn VisitorMut<'node, P = P>,
+    ) -> Result<(), P::Error> {
+        match self {
+            EnvAnnot::Join => Ok(()),
+            EnvAnnot::Refinement => Ok(()),
+        }
     }
 }
 impl<P: Params> NodeMut<P> for Expr<P::Ex, P::Fb, P::En, P::Hi> {
@@ -1820,6 +1839,11 @@ impl<P: Params> NodeMut<P> for Stmt_<P::Ex, P::Fb, P::En, P::Hi> {
             }
             Stmt_::Markup(a0) => {
                 a0.accept(c, v)?;
+                Ok(())
+            }
+            Stmt_::AssertEnv(a) => {
+                a.0.accept(c, v)?;
+                a.1.accept(c, v)?;
                 Ok(())
             }
         }

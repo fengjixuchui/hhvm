@@ -31,6 +31,8 @@ struct LoggingProfile;
 struct LoggingArray : BespokeArray {
   static LoggingArray* asLogging(ArrayData* ad);
   static const LoggingArray* asLogging(const ArrayData* ad);
+  static LoggingArray* MakeStatic(ArrayData* ad, LoggingProfile* prof);
+  static void FreeStatic(LoggingArray* lad);
 
   // Updates m_kind in place to match the wrapped array's kind. Returns this.
   LoggingArray* updateKind();
@@ -50,8 +52,8 @@ struct LoggingLayout : public Layout {
   void convertToUncounted(
     ArrayData*, DataWalker::PointerMap* seen) const final;
   void releaseUncounted(ArrayData*) const final;
-
   void release(ArrayData*) const final;
+
   size_t size(const ArrayData*) const final;
   bool isVectorData(const ArrayData*) const final;
 

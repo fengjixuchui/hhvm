@@ -250,6 +250,7 @@ let parse_options () =
   let codes_not_raised_partial = ref ISet.empty in
   let allowed_decl_fixme_codes = ref ISet.empty in
   let method_call_inference = ref false in
+  let report_pos_from_reason = ref false in
   let options =
     [
       ( "--ifc",
@@ -593,6 +594,10 @@ let parse_options () =
       ( "--method-call-inference",
         Arg.Set method_call_inference,
         " Infer constraints for method calls." );
+      ( "--report-pos-from-reason",
+        Arg.Set report_pos_from_reason,
+        " Flag errors whose position is derived from reason information in types."
+      );
     ]
   in
   let options = Arg.align ~limit:25 options in
@@ -666,11 +671,11 @@ let parse_options () =
       ~po_disable_modes:!disable_modes
       ~po_disable_hh_ignore_error:!disable_hh_ignore_error
       ~tco_enable_systemlib_annotations:!enable_systemlib_annotations
-      ~tco_pu_enabled_paths:(!enable_pocket_universes_syntax, [])
       ~tco_higher_kinded_types:!enable_higher_kinded_types
       ~po_allowed_decl_fixme_codes:!allowed_decl_fixme_codes
       ~po_allow_unstable_features:true
       ~tco_method_call_inference:!method_call_inference
+      ~tco_report_pos_from_reason:!report_pos_from_reason
       ()
   in
   Errors.allowed_fixme_codes_strict :=
@@ -679,6 +684,8 @@ let parse_options () =
     GlobalOptions.allowed_fixme_codes_partial tcopt;
   Errors.codes_not_raised_partial :=
     GlobalOptions.codes_not_raised_partial tcopt;
+  Errors.report_pos_from_reason :=
+    GlobalOptions.tco_report_pos_from_reason tcopt;
   let tcopt =
     {
       tcopt with

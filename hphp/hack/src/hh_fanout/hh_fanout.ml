@@ -9,8 +9,6 @@
 module Hh_daemon = Daemon
 open Core
 
-type state_backend = OCaml_state_backend
-
 type env = {
   from: string;
   client_id: string;
@@ -22,7 +20,6 @@ type env = {
   watchman_sockname: Path.t option;
   changed_files: Relative_path.Set.t;
   state_path: Path.t option;
-  state_backend: state_backend;
 }
 
 type setup_result = {
@@ -37,6 +34,10 @@ type saved_state_result = {
   errors_path: Path.t;
   saved_state_changed_files: Relative_path.Set.t;
 }
+
+type previous_cursor =
+  | Previous_cursor_from_saved_state of saved_state_result
+  | Previous_cursor_id of string
 
 let set_up_global_environment (env : env) : setup_result =
   let server_args =
@@ -144,9 +145,6 @@ let load_saved_state ~(env : env) ~(setup_result : setup_result) :
         FindUtils.file_filter (Relative_path.to_absolute path))
   in
 
-  SharedMem.load_dep_table_sqlite
-    (Path.to_string dep_table_path)
-    env.ignore_hh_version;
   let naming_table =
     Naming_table.load_from_sqlite
       setup_result.ctx
@@ -197,36 +195,38 @@ let get_state_path ~(env : env) : Path.t =
 let make_incremental_state ~(env : env) : Incremental.state =
   let state_path = get_state_path env in
   Hh_logger.log "State path: %s" (Path.to_string state_path);
-  match env.state_backend with
-  | OCaml_state_backend -> Incremental_ocaml.make state_path
+  Incremental.make_reference_implementation state_path
 
 let advance_cursor
     ~(env : env)
     ~(setup_result : setup_result)
-    ~(saved_state_result : saved_state_result)
     ~(incremental_state : Incremental.state)
-    ~(input_files : Relative_path.Set.t)
-    ~(cursor_id : string option) : Incremental.cursor =
-  let client_id =
-    incremental_state#look_up_client_id
-      {
-        Incremental.client_id = env.client_id;
-        dep_table_saved_state_path = saved_state_result.dep_table_path;
-        errors_saved_state_path = saved_state_result.errors_path;
-        naming_table_saved_state_path =
-          Naming_sqlite.Db_path
-            (Path.to_string saved_state_result.naming_table_path);
-      }
-  in
+    ~(previous_cursor : previous_cursor)
+    ~(input_files : Relative_path.Set.t) : Incremental.cursor =
   let (cursor, cursor_changed_files) =
-    match cursor_id with
-    | None ->
-      let cursor = incremental_state#make_default_cursor client_id in
-      let cursor = Result.ok_or_failwith cursor in
-      (cursor, saved_state_result.saved_state_changed_files)
-    | Some cursor_id ->
+    match previous_cursor with
+    | Previous_cursor_from_saved_state saved_state_result ->
+      let client_id =
+        incremental_state#make_client_id
+          {
+            Incremental.client_id = env.client_id;
+            ignore_hh_version = env.ignore_hh_version;
+            dep_table_saved_state_path = saved_state_result.dep_table_path;
+            dep_table_errors_saved_state_path = saved_state_result.errors_path;
+            naming_table_saved_state_path =
+              Naming_sqlite.Db_path
+                (Path.to_string saved_state_result.naming_table_path);
+          }
+      in
       let cursor =
-        incremental_state#look_up_cursor ~client_id:(Some client_id) ~cursor_id
+        incremental_state#make_default_cursor client_id |> Result.ok_or_failwith
+      in
+      (cursor, saved_state_result.saved_state_changed_files)
+    | Previous_cursor_id cursor_id ->
+      let cursor =
+        incremental_state#look_up_cursor
+          ~client_id:(Some (Incremental.Client_id env.client_id))
+          ~cursor_id
         |> Result.ok_or_failwith
       in
       (cursor, Relative_path.Set.empty)
@@ -254,7 +254,13 @@ let mode_calculate
     unit Lwt.t =
   let telemetry = Telemetry.create () in
   let setup_result = set_up_global_environment env in
-  let%lwt saved_state_result = load_saved_state ~env ~setup_result in
+  let%lwt previous_cursor =
+    match cursor_id with
+    | None ->
+      let%lwt saved_state_result = load_saved_state ~env ~setup_result in
+      Lwt.return (Previous_cursor_from_saved_state saved_state_result)
+    | Some cursor_id -> Lwt.return (Previous_cursor_id cursor_id)
+  in
 
   let input_files =
     Path.Set.fold input_files ~init:Relative_path.Set.empty ~f:(fun path acc ->
@@ -266,10 +272,9 @@ let mode_calculate
     advance_cursor
       ~env
       ~setup_result
-      ~saved_state_result
       ~incremental_state
+      ~previous_cursor
       ~input_files
-      ~cursor_id
   in
 
   let calculate_fanout_result = cursor#get_calculate_fanout_result in
@@ -482,20 +487,6 @@ let parse_env () =
       ~doc:
         ( "PATH The path to the persistent state on disk. "
         ^ "If not provided, will use the default path for the repository." )
-  and state_backend =
-    flag
-      "--state-backend"
-      (optional_with_default
-         OCaml_state_backend
-         (Command.Arg_type.create (fun state_backend ->
-              match state_backend with
-              | "ocaml" -> OCaml_state_backend
-              | _ ->
-                failwith
-                  (Printf.sprintf
-                     "Unrecognized state backend: %s"
-                     state_backend))))
-      ~doc:"The implementation of persistent state to use."
   in
   let root =
     match root with
@@ -542,7 +533,6 @@ let parse_env () =
     watchman_sockname;
     changed_files;
     state_path;
-    state_backend;
   }
 
 let clean_subcommand =
@@ -612,6 +602,15 @@ let mode_debug ~(env : env) ~(path : Path.t) ~(cursor_id : string option) :
   let%lwt ({ naming_table = old_naming_table; _ } as saved_state_result) =
     load_saved_state ~env ~setup_result
   in
+  let previous_cursor =
+    match cursor_id with
+    | Some _ ->
+      Hh_logger.warn
+        ( "A cursor ID was passed to `debug`, "
+        ^^ "but loading from a previous cursor is not yet implemented." );
+      Previous_cursor_from_saved_state saved_state_result
+    | None -> Previous_cursor_from_saved_state saved_state_result
+  in
 
   let path = Relative_path.create_detect_prefix (Path.to_string path) in
   let input_files = Relative_path.Set.singleton path in
@@ -620,10 +619,9 @@ let mode_debug ~(env : env) ~(path : Path.t) ~(cursor_id : string option) :
     advance_cursor
       ~env
       ~setup_result
-      ~saved_state_result
       ~incremental_state
+      ~previous_cursor
       ~input_files
-      ~cursor_id
   in
   let file_deltas = cursor#get_file_deltas in
   let new_naming_table =

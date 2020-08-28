@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<edd7f0d582308a38913bca070f502c79>>
+// @generated SignedSource<<0c6f8e71ba4486536f17dfbbf2e1b85d>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
@@ -108,7 +108,29 @@ pub enum Stmt_<Ex, Fb, En, Hi> {
     Noop,
     Block(Block<Ex, Fb, En, Hi>),
     Markup(Box<Pstring>),
+    AssertEnv(Box<(EnvAnnot, LocalIdMap<Ex>)>),
 }
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    FromOcamlRep,
+    FromOcamlRepIn,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub enum EnvAnnot {
+    Join,
+    Refinement,
+}
+impl TrivialDrop for EnvAnnot {}
 
 #[derive(
     Clone,

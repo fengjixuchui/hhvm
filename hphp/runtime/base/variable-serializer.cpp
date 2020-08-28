@@ -99,12 +99,12 @@ VariableSerializer::getKind(const ArrayData* arr) const {
   auto const respectsLegacyBit = [&] {
     switch (getType()) {
     case Type::PrintR:
+    case Type::VarDump:
     case Type::VarExport:
     case Type::Serialize:
     case Type::JSON:
       return true;
     case Type::Internal:
-    case Type::VarDump:
     case Type::DebugDump:
     case Type::DebuggerDump:
     case Type::PHPOutput:
@@ -115,26 +115,31 @@ VariableSerializer::getKind(const ArrayData* arr) const {
     always_assert(false);
   }();
 
-  // TODO(dneiter): this is broken, fix this
-  if (RuntimeOption::EvalHackArrDVArrs &&
-      respectsLegacyBit &&
-      !arr->isLegacyArray()) {
-    return VariableSerializer::ArrayKind::PHP;
-  }
+  auto const serializesLegacyBit = getType() == Type::Internal ||
+    (getType() == Type::Serialize && m_serializeProvenanceAndLegacy);
 
-  auto const differentiateLegacy =
-    getType() == Type::Internal || getType() == Type::VarDump;
-
-  if (differentiateLegacy && arr->isLegacyArray()) {
-    if (arr->isDictType()) return VariableSerializer::ArrayKind::MarkedDArray;
-    if (arr->isVecType()) return VariableSerializer::ArrayKind::MarkedVArray;
+  if (serializesLegacyBit && arr->isLegacyArray()) {
     assertx(!arr->isKeysetType());
     if (m_keepDVArrays) {
-      if (arr->isVArray()) return VariableSerializer::ArrayKind::MarkedVArray;
-      if (arr->isDArray()) return VariableSerializer::ArrayKind::MarkedDArray;
+      if (arr->isDictType() || arr->isDArray()) {
+        return VariableSerializer::ArrayKind::MarkedDArray;
+      }
+      if (arr->isVecType() || arr->isVArray()) {
+        return VariableSerializer::ArrayKind::MarkedVArray;
+      }
     }
-    assertx(arr->isPHPArrayType());
     return VariableSerializer::ArrayKind::MarkedDArray;
+  }
+
+  if (RuntimeOption::EvalHackArrDVArrs &&
+      respectsLegacyBit &&
+      arr->isLegacyArray()) {
+    assertx(!arr->isKeysetType());
+    if (m_keepDVArrays) {
+      if (arr->isVecType()) return VariableSerializer::ArrayKind::VArray;
+      if (arr->isDictType()) return VariableSerializer::ArrayKind::DArray;
+    }
+    return VariableSerializer::ArrayKind::PHP;
   }
 
   if (arr->isDictType()) return VariableSerializer::ArrayKind::Dict;
@@ -1726,7 +1731,8 @@ void VariableSerializer::serializeArrayImpl(const ArrayData* arr,
     write_filename(filename);
   };
 
-  if (m_type == Type::Internal && arrprov::arrayWantsTag(arr)) {
+  if ((m_type == Type::Internal || m_serializeProvenanceAndLegacy) &&
+      arrprov::arrayWantsTag(arr)) {
     auto const tag = arrprov::getTag(arr);
     if (tag.valid()) {
       switch (tag.kind()) {
@@ -1792,7 +1798,8 @@ void VariableSerializer::serializeArray(const ArrayData* arr,
 
   const bool isVectorData = arr->isVectorData();
 
-  if (UNLIKELY(!m_forcePHPArrays && arrprov::arrayWantsTag(arr))) {
+  if (UNLIKELY(!m_forcePHPArrays && !m_serializeProvenanceAndLegacy &&
+               arrprov::arrayWantsTag(arr))) {
     auto const source = [&]() -> folly::Optional<SerializationSite> {
       switch (getType()) {
       case VariableSerializer::Type::JSON:
@@ -1813,7 +1820,7 @@ void VariableSerializer::serializeArray(const ArrayData* arr,
     if (source) raise_array_serialization_notice(*source, arr);
   }
 
-  if (arr->size() == 0 && LIKELY(!RO::EvalArrayProvenance)) {
+  if (arr->size() == 0 && LIKELY(!arrprov::arrayWantsTag(arr))) {
     auto const kind = getKind(arr);
     writeArrayHeader(0, isVectorData, kind);
     writeArrayFooter(kind);

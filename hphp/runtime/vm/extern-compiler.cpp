@@ -28,6 +28,7 @@
 #include <folly/DynamicConverter.h>
 #include <folly/json.h>
 #include <folly/FileUtil.h>
+#include <folly/system/ThreadName.h>
 
 #include "hphp/runtime/base/ini-setting.h"
 #include "hphp/runtime/vm/native.h"
@@ -51,7 +52,7 @@ namespace HPHP {
 
 TRACE_SET_MOD(extern_compiler);
 
-UnitEmitterCompileHook g_unit_emitter_compile_hook = nullptr;
+UnitEmitterCacheHook g_unit_emitter_cache_hook = nullptr;
 
 namespace {
 
@@ -234,7 +235,9 @@ struct LogThread {
   LogThread(int pid, FILE* file)
     : m_pid(pid), m_file(file), m_signalPipe(true)
   {
-    m_thread = std::make_unique<std::thread>([&]() {
+    m_thread = std::make_unique<std::thread>([this]() {
+        folly::setThreadName("extern-compiler-log");
+
         int ret = 0;
         auto pid = m_pid;
         auto signalFD = m_signalPipe.remoteIn();
@@ -352,63 +355,34 @@ struct ExternCompiler {
     }
   }
 
-  std::unique_ptr<UnitEmitter> compile(
+  // To avoid ambiguity with std::string in variant
+  struct Hhas { std::string s; };
+
+  Hhas compile(
     const char* filename,
     const SHA1& sha1,
     folly::StringPiece code,
-    const Native::FuncTable& nativeFuncs,
     bool forDebuggerEval,
-    bool wantsSymbolRefs,
     const RepoOptions& options
   ) {
-    tracing::BlockNoTrace _{"compile-unit-emitter"};
-
     try {
-      auto const compileHHAS = [&] {
-        tracing::Block _{
-          "extern-compiler-invoke",
-          [&] {
-            return tracing::Props{}
-              .add("filename", filename)
-              .add("code_size", code.size());
-          }
-        };
-        if (!isRunning()) start();
-        writeProgram(filename, sha1, code, forDebuggerEval, options);
-        StructuredLogEntry log;
-        auto const hhas = readResult(&log);
-        if (RuntimeOption::EvalLogExternCompilerPerf) {
-          log.setStr("filename", filename);
-          StructuredLog::log("hhvm_detailed_frontend_performance", log);
+      tracing::Block _{
+        "extern-compiler-invoke",
+        [&] {
+          return tracing::Props{}
+            .add("filename", filename)
+            .add("code_size", code.size());
         }
-        return hhas;
       };
-
-      auto const assembleUE = [&] (const std::string& hhas) {
-        return assemble_string(
-          hhas.data(),
-          hhas.length(),
-          filename,
-          sha1,
-          nativeFuncs,
-          false /* swallow errors */,
-          wantsSymbolRefs
-        );
-      };
-
-      if (g_unit_emitter_compile_hook) {
-        return g_unit_emitter_compile_hook(
-          filename,
-          sha1,
-          code.size(),
-          compileHHAS,
-          assembleUE,
-          options,
-          nativeFuncs
-        );
-      } else {
-        return assembleUE(compileHHAS());
+      if (!isRunning()) start();
+      writeProgram(filename, sha1, code, forDebuggerEval, options);
+      StructuredLogEntry log;
+      auto const hhas = readResult(&log);
+      if (RuntimeOption::EvalLogExternCompilerPerf) {
+        log.setStr("filename", filename);
+        StructuredLog::log("hhvm_detailed_frontend_performance", log);
       }
+      return Hhas { hhas };
     } catch (const CompileException& ex) {
       stop();
       if (m_options.verboseErrors) {
@@ -418,34 +392,8 @@ struct ExternCompiler {
     } catch (const CompilerFatal&) {
       // this catch is here so we don't fall into the std::runtime_error one
       throw;
-    } catch (const AssemblerFatal&) {
-      // this catch is here so we don't fall into the std::runtime_error one
-      throw;
     } catch (const FatalErrorException&) {
       // we want these to propagate out of the compiler
-      throw;
-    } catch (const AssemblerUnserializationError& ex) {
-      // This (probably) has nothing to do with the php/hhas, so don't do the
-      // verbose error handling we have in the AssemblerError case.
-      throw;
-    } catch (const AssemblerError& ex) {
-      if (m_options.verboseErrors) {
-        auto const msg = folly::sformat(
-          "{}\n"
-          "========== PHP Source ==========\n"
-          "{}\n"
-          "========== ExternCompiler Result ==========\n"
-          "{}\n",
-          ex.what(),
-          code,
-          ex.hhas
-        );
-        Logger::FError("ExternCompiler Generated a bad unit: {}", msg);
-
-        // Throw the extended message to ensure the fataling unit contains the
-        // additional context
-        throw AssemblerError(msg);
-      }
       throw;
     } catch (const std::runtime_error& ex) {
       if (m_options.verboseErrors) {
@@ -493,12 +441,10 @@ struct CompilerGuard;
 
 struct CompilerPool {
   explicit CompilerPool(CompilerOptions&& options)
-    : m_options(options)
-    , m_compilers(options.workers, nullptr)
-  {}
+    : m_options(std::move(options)) {}
 
-  std::pair<size_t, ExternCompiler*> getCompiler();
-  void releaseCompiler(size_t id, ExternCompiler* ptr);
+  std::unique_ptr<ExternCompiler> getCompiler();
+  void releaseCompiler(std::unique_ptr<ExternCompiler> ptr);
   void start();
   void shutdown(bool detach_compilers);
   CompilerResult compile(const char* code,
@@ -507,7 +453,6 @@ struct CompilerPool {
                          const SHA1& sha1,
                          const Native::FuncTable& nativeFuncs,
                          bool forDebuggerEval,
-                         bool wantsSymbolRefs,
                          bool& internal_error,
                          const RepoOptions& options,
                          CompileAbortMode mode);
@@ -524,83 +469,71 @@ struct CompilerPool {
   }
  private:
   CompilerOptions m_options;
-  std::atomic<size_t> m_freeCount{0};
   std::mutex m_compilerLock;
   std::condition_variable m_compilerCv;
-  AtomicVector<ExternCompiler*> m_compilers;
+  std::vector<std::unique_ptr<ExternCompiler>> m_compilers;
   std::string m_version;
 };
 
 struct CompilerGuard final: public FactsParser {
   explicit CompilerGuard(CompilerPool& pool)
-    : m_pool(pool) {
-    std::tie(m_index, m_ptr) = m_pool.getCompiler();
+    : m_ptr{pool.getCompiler()}
+    , m_pool{pool} {}
+
+  ~CompilerGuard() {
+    m_pool.releaseCompiler(std::move(m_ptr));
   }
 
-  ~CompilerGuard() override {
-    m_pool.releaseCompiler(m_index, m_ptr);
-  }
-
+  CompilerGuard(const CompilerGuard&) = delete;
   CompilerGuard(CompilerGuard&&) = delete;
+  CompilerGuard& operator=(const CompilerGuard&) = delete;
   CompilerGuard& operator=(CompilerGuard&&) = delete;
 
-  ExternCompiler* operator->() const { return m_ptr; }
+  ExternCompiler* operator->() const { return m_ptr.get(); }
 
 private:
-  size_t m_index;
-  ExternCompiler* m_ptr;
+  std::unique_ptr<ExternCompiler> m_ptr;
   CompilerPool& m_pool;
 };
 
-std::pair<size_t, ExternCompiler*> CompilerPool::getCompiler() {
-  std::unique_lock<std::mutex> l(m_compilerLock);
+std::unique_ptr<ExternCompiler> CompilerPool::getCompiler() {
+  // If this is zero, we'll wait forever....
+  assertx(m_options.workers > 0);
 
-  m_compilerCv.wait(l, [&] {
-    return m_freeCount.load(std::memory_order_relaxed) != 0;
-  });
-  m_freeCount -= 1;
-
-  for (size_t id = 0; id < m_compilers.size(); ++id) {
-    auto ret = m_compilers.exchange(id, nullptr);
-    if (ret) return std::make_pair(id, ret);
-  }
-
-  not_reached();
+  std::unique_lock<std::mutex> l{m_compilerLock};
+  m_compilerCv.wait(l, [&] { return !m_compilers.empty(); });
+  auto compiler = std::move(m_compilers.back());
+  m_compilers.pop_back();
+  return compiler;
 }
 
-void CompilerPool::releaseCompiler(size_t id, ExternCompiler* ptr) {
+void CompilerPool::releaseCompiler(std::unique_ptr<ExternCompiler> c) {
   std::unique_lock<std::mutex> l(m_compilerLock);
-
-  m_compilers[id].store(ptr, std::memory_order_relaxed);
-  m_freeCount += 1;
-
-  l.unlock();
+  m_compilers.emplace_back(std::move(c));
   m_compilerCv.notify_one();
 }
 
 void CompilerPool::start() {
-  auto const nworkers = m_options.workers;
-  m_freeCount.store(nworkers, std::memory_order_relaxed);
-  for (int i = 0; i < nworkers; ++i) {
-    m_compilers[i].store(new ExternCompiler(m_options),
-        std::memory_order_relaxed);
+  always_assert(m_options.workers > 0);
+
+  {
+    std::unique_lock<std::mutex> l{m_compilerLock};
+    for (size_t i = 0; i < m_options.workers; ++i) {
+      m_compilers.emplace_back(std::make_unique<ExternCompiler>(m_options));
+    }
   }
 
-  CompilerGuard g(*this);
+  CompilerGuard g{*this};
   m_version = g->getVersionString();
 }
 
-void CompilerPool::shutdown(bool detach_compilers) {
-  for (int i = 0; i < m_compilers.size(); ++i) {
-    if (auto c = m_compilers.exchange(i, nullptr)) {
-      if (detach_compilers) {
-        c->detach_from_process();
-      }
-      delete c;
-    }
+void CompilerPool::shutdown(bool detach) {
+  std::unique_lock<std::mutex> l{m_compilerLock};
+  if (detach) {
+    for (auto const& c : m_compilers) c->detach_from_process();
   }
+  m_compilers.clear();
 }
-
 
 template<typename F>
 auto run_compiler(
@@ -626,22 +559,9 @@ auto run_compiler(
     } catch (FatalErrorException&) {
       // let these propagate out of the compiler
       throw;
-    } catch (AssemblerUnserializationError& ex) {
-      // Variable unserializer threw when called from the assembler, treat it
-      // as an internal error.
-      internal_error = true;
-      return ex.what();
-    } catch (AssemblerError& ex) {
-      if (mode >= CompileAbortMode::VerifyErrors) internal_error = true;
-      // Assembler rejected hhas generated by external compiler
-      return ex.what();
     } catch (CompilerFatal& ex) {
       if (mode >= CompileAbortMode::AllErrors) internal_error = true;
       // ExternCompiler returned an error when building this unit
-      return ex.what();
-    } catch (AssemblerFatal& ex) {
-      if (mode >= CompileAbortMode::VerifyErrors) internal_error = true;
-      // Assembler returned an error when building this unit
       return ex.what();
     } catch (CompileException& ex) {
       internal_error = true;
@@ -693,27 +613,77 @@ CompilerResult CompilerPool::compile(const char* code,
                                      const SHA1& sha1,
                                      const Native::FuncTable& nativeFuncs,
                                      bool forDebuggerEval,
-                                     bool wantsSymbolRefs,
                                      bool& internal_error,
                                      const RepoOptions& options,
-                                     CompileAbortMode mode
-) {
-  auto compile = [&](const CompilerGuard& c) {
-    return c->compile(filename,
-                      sha1,
-                      folly::StringPiece(code, len),
-                      nativeFuncs,
-                      forDebuggerEval,
-                      wantsSymbolRefs,
-                      options);
-  };
-  return run_compiler(
-    CompilerGuard(*this),
+                                     CompileAbortMode mode) {
+  tracing::BlockNoTrace _{"compile-unit-emitter"};
+
+  auto const hhas = run_compiler(
+    CompilerGuard{*this},
     m_options.maxRetries,
     m_options.verboseErrors,
-    compile,
+    [&] (const CompilerGuard& c) {
+      return c->compile(
+        filename,
+        sha1,
+        folly::StringPiece(code, len),
+        forDebuggerEval,
+        options
+      );
+    },
     internal_error,
-    mode);
+    mode
+  );
+
+  return match<CompilerResult>(
+    hhas,
+    [&] (const ExternCompiler::Hhas& s) -> CompilerResult {
+      try {
+        return assemble_string(
+          s.s.data(),
+          s.s.length(),
+          filename,
+          sha1,
+          nativeFuncs,
+          false /* swallow errors */
+        );
+      } catch (const FatalErrorException&) {
+        throw;
+      } catch (const AssemblerFatal& ex) {
+        // Assembler returned an error when building this unit
+        if (mode >= CompileAbortMode::VerifyErrors) internal_error = true;
+        return ex.what();
+      } catch (const AssemblerUnserializationError& ex) {
+        // Variable unserializer threw when called from the assembler, treat it
+        // as an internal error.
+        internal_error = true;
+        return ex.what();
+      } catch (const AssemblerError& ex) {
+        if (mode >= CompileAbortMode::VerifyErrors) internal_error = true;
+
+        if (m_options.verboseErrors) {
+          auto const msg = folly::sformat(
+            "{}\n"
+            "========== PHP Source ==========\n"
+            "{}\n"
+            "========== ExternCompiler Result ==========\n"
+            "{}\n",
+            ex.what(),
+            code,
+            s.s
+          );
+          Logger::FError("ExternCompiler Generated a bad unit: {}", msg);
+          return msg;
+        } else {
+          return ex.what();
+        }
+      } catch (const std::exception& ex) {
+        internal_error = true;
+        return ex.what();
+      }
+    },
+    [] (std::string s) { return s; }
+  );
 }
 
 FfpResult CompilerPool::parse(
@@ -1096,7 +1066,6 @@ CompilerResult hackc_compile(
   const SHA1& sha1,
   const Native::FuncTable& nativeFuncs,
   bool forDebuggerEval,
-  bool wantsSymbolRefs,
   bool& internal_error,
   const RepoOptions& options,
   CompileAbortMode mode
@@ -1108,7 +1077,6 @@ CompilerResult hackc_compile(
     sha1,
     nativeFuncs,
     forDebuggerEval,
-    wantsSymbolRefs,
     internal_error,
     options,
     mode
@@ -1270,23 +1238,38 @@ UnitCompiler::create(const char* code,
                      const SHA1& sha1,
                      const Native::FuncTable& nativeFuncs,
                      bool forDebuggerEval,
-                     const RepoOptions& options
-) {
-  s_manager.ensure_started();
-  return std::make_unique<HackcUnitCompiler>(
-    code,
-    codeLen,
-    filename,
-    sha1,
-    nativeFuncs,
-    forDebuggerEval,
-    options
-  );
+                     const RepoOptions& options) {
+  auto const make = [code, codeLen, filename, sha1, forDebuggerEval,
+                     &nativeFuncs, &options] {
+    s_manager.ensure_started();
+    return std::make_unique<HackcUnitCompiler>(
+      code,
+      codeLen,
+      filename,
+      sha1,
+      nativeFuncs,
+      forDebuggerEval,
+      options
+    );
+  };
+
+  if (g_unit_emitter_cache_hook && !forDebuggerEval) {
+    return std::make_unique<CacheUnitCompiler>(
+      code,
+      codeLen,
+      filename,
+      sha1,
+      nativeFuncs,
+      false,
+      options,
+      std::move(make)
+    );
+  } else {
+    return make();
+  }
 }
 
-std::unique_ptr<UnitEmitter> HackcUnitCompiler::compile(
-  bool wantsSymbolRefs,
-  CompileAbortMode mode) const {
+std::unique_ptr<UnitEmitter> HackcUnitCompiler::compile(CompileAbortMode mode) {
   bool ice = false;
   auto res = hackc_compile(m_code,
                            m_codeLen,
@@ -1294,19 +1277,20 @@ std::unique_ptr<UnitEmitter> HackcUnitCompiler::compile(
                            m_sha1,
                            m_nativeFuncs,
                            m_forDebuggerEval,
-                           wantsSymbolRefs,
                            ice,
                            m_options,
                            mode);
-  std::unique_ptr<UnitEmitter> unitEmitter;
-  match<void>(
+  auto unitEmitter = match<std::unique_ptr<UnitEmitter>>(
     res,
     [&] (std::unique_ptr<UnitEmitter>& ue) {
-      unitEmitter = std::move(ue);
+      return std::move(ue);
     },
     [&] (std::string& err) {
       switch (mode) {
-      case CompileAbortMode::Never: break;
+      case CompileAbortMode::Never:
+        break;
+      case CompileAbortMode::AllErrorsNull:
+        return std::unique_ptr<UnitEmitter>{};
       case CompileAbortMode::OnlyICE:
       case CompileAbortMode::VerifyErrors:
       case CompileAbortMode::AllErrors:
@@ -1321,16 +1305,35 @@ std::unique_ptr<UnitEmitter> HackcUnitCompiler::compile(
           _Exit(1);
         }
       }
-      unitEmitter = createFatalUnit(
+      return createFatalUnit(
         makeStaticString(m_filename),
         m_sha1,
         FatalOp::Runtime,
-        err);
+        err
+      );
     }
   );
 
   if (unitEmitter) unitEmitter->m_ICE = ice;
   return unitEmitter;
+}
+
+std::unique_ptr<UnitEmitter>
+CacheUnitCompiler::compile(CompileAbortMode mode) {
+  assertx(g_unit_emitter_cache_hook);
+  return g_unit_emitter_cache_hook(
+    m_filename,
+    m_sha1,
+    m_codeLen,
+    [&] (bool wantsICE) {
+      if (!m_fallback) m_fallback = m_makeFallback();
+      assertx(m_fallback);
+      return m_fallback->compile(
+        wantsICE ? mode : CompileAbortMode::AllErrorsNull
+      );
+    },
+    m_nativeFuncs
+  );
 }
 
 ////////////////////////////////////////////////////////////////////////////////

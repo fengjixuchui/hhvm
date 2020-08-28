@@ -1296,7 +1296,7 @@ and pu_enum_def
     List.fold
       ~init:local_tpenv
       ~f:(fun tpenv { tp_name; tp_reified; _ } ->
-        let name = snd tp_name in
+        let (def_pos, name) = tp_name in
         let tpinfo =
           Typing_kinding_defs.
             {
@@ -1310,7 +1310,7 @@ and pu_enum_def
               parameters = [];
             }
         in
-        TPEnv.add name tpinfo tpenv)
+        TPEnv.add ~def_pos name tpinfo tpenv)
       pu_case_types
   in
   Aast.
@@ -1397,7 +1397,6 @@ and class_constr_def env cls constructor =
 and class_implements_type env c1 ctype2 =
   let params =
     List.map c1.c_tparams (fun { tp_name = (p, s); _ } ->
-        (* TODO(T69551141) handle type arguments *)
         mk (Reason.Rwitness p, Tgeneric (s, [])))
   in
   let r = Reason.Rwitness (fst c1.c_name) in

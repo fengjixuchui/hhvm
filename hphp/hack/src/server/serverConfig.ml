@@ -424,22 +424,8 @@ let load ~silent config_filename options =
       ?po_disable_hh_ignore_error:(bool_opt "disable_hh_ignore_error" config)
       ?po_enable_first_class_function_pointers:
         (bool_opt "enable_first_class_function_pointers" config)
-      ?tco_pu_enabled_paths:
-        (match
-           string_list
-             ~delim:config_list_regexp
-             ~default:[]
-             "pocket_universe_enabled_paths"
-             config
-         with
-        | [] -> Some (false, [])
-        | ["nowhere"] -> Some (false, [])
-        | ["everywhere"] -> Some (true, [])
-        | l ->
-          Some
-            ( false,
-              List.map ~f:(fun suffix -> Relative_path.from_root ~suffix) l ))
       ?tco_method_call_inference:(bool_opt "method_call_inference" config)
+      ?tco_report_pos_from_reason:(bool_opt "report_pos_from_reason" config)
       ()
   in
   Errors.allowed_fixme_codes_strict :=
@@ -450,6 +436,8 @@ let load ~silent config_filename options =
     GlobalOptions.codes_not_raised_partial global_opts;
   Errors.error_codes_treated_strictly :=
     GlobalOptions.error_codes_treated_strictly global_opts;
+  Errors.report_pos_from_reason :=
+    GlobalOptions.tco_report_pos_from_reason global_opts;
   ( {
       version;
       load_script_timeout;

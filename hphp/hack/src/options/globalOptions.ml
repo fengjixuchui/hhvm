@@ -105,9 +105,9 @@ type t = {
   po_disable_array: bool;
   po_disable_array_typehint: bool;
   tco_enable_systemlib_annotations: bool;
-  tco_pu_enabled_paths: bool * Relative_path.t list;
   tco_higher_kinded_types: bool;
   tco_method_call_inference: bool;
+  tco_report_pos_from_reason: bool;
 }
 [@@deriving eq, show]
 
@@ -265,9 +265,9 @@ let default =
     po_disable_array = true;
     po_disable_array_typehint = true;
     tco_enable_systemlib_annotations = false;
-    tco_pu_enabled_paths = (false, []);
     tco_higher_kinded_types = false;
     tco_method_call_inference = false;
+    tco_report_pos_from_reason = false;
   }
 
 let make
@@ -386,9 +386,9 @@ let make
     ?(po_allow_unstable_features = default.po_allow_unstable_features)
     ?(tco_enable_systemlib_annotations =
       default.tco_enable_systemlib_annotations)
-    ?(tco_pu_enabled_paths = default.tco_pu_enabled_paths)
     ?(tco_higher_kinded_types = default.tco_higher_kinded_types)
     ?(tco_method_call_inference = default.tco_method_call_inference)
+    ?(tco_report_pos_from_reason = default.tco_report_pos_from_reason)
     () =
   {
     tco_experimental_features;
@@ -488,9 +488,9 @@ let make
     po_disable_array;
     po_disable_array_typehint;
     tco_enable_systemlib_annotations;
-    tco_pu_enabled_paths;
     tco_higher_kinded_types;
     tco_method_call_inference;
+    tco_report_pos_from_reason;
   }
 
 let tco_experimental_feature_enabled t s =
@@ -706,8 +706,8 @@ let po_disable_array_typehint t = t.po_disable_array_typehint
 
 let tco_enable_systemlib_annotations t = t.tco_enable_systemlib_annotations
 
-let tco_pu_enabled_paths t = t.tco_pu_enabled_paths
-
 let tco_higher_kinded_types t = t.tco_higher_kinded_types
 
 let tco_method_call_inference t = t.tco_method_call_inference
+
+let tco_report_pos_from_reason t = t.tco_report_pos_from_reason

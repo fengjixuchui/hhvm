@@ -476,6 +476,8 @@ let to_absolute_for_test error =
   in
   (code, msg_l)
 
+let report_pos_from_reason = ref false
+
 let to_string ?(indent = false) (error : Pos.absolute error_) : string =
   let (error_code, msgl) = (get_code error, to_list error) in
   let buf = Buffer.create 50 in
@@ -486,7 +488,18 @@ let to_string ?(indent = false) (error : Pos.absolute error_) : string =
       buf
       begin
         let error_code = error_code_to_string error_code in
-        Printf.sprintf "%s\n%s (%s)\n" (Pos.string pos1) msg1 error_code
+        let reason_msg =
+          if !report_pos_from_reason && Pos.get_from_reason pos1 then
+            " [FROM REASON INFO]"
+          else
+            ""
+        in
+        Printf.sprintf
+          "%s\n%s (%s)%s\n"
+          (Pos.string pos1)
+          msg1
+          error_code
+          reason_msg
       end;
     let indentstr =
       if indent then
@@ -577,7 +590,6 @@ let hard_banned_codes =
       Typing.err_code Typing.NewStaticClassReified;
       Typing.err_code Typing.MemoizeReified;
       Typing.err_code Typing.ClassGetReified;
-      Typing.err_code Typing.PocketUniversesReservedSyntax;
     ]
 
 let allowed_fixme_codes_strict = ref ISet.empty
@@ -686,6 +698,11 @@ and add_list code pos_msg_l =
     add_error_impl (make_error code pos_msg_l)
   else if Relative_path.(is_hhi (prefix (Pos.filename pos))) then
     add_applied_fixme code pos
+  else if !report_pos_from_reason && Pos.get_from_reason pos then
+    let explanation =
+      "You cannot use HH_FIXME or HH_IGNORE_ERROR comments to suppress an error whose position was derived from reason information"
+    in
+    add_error_with_fixme_error code explanation pos_msg_l
   else if !is_hh_fixme_disallowed pos code then
     let explanation =
       Printf.sprintf
@@ -1722,15 +1739,6 @@ let pu_attribute_not_necessary pos class_name =
     (sprintf
        "Class/Trait %s does not need any `__Pu` attribute"
        (md_codify class_name))
-
-let pu_reserved_syntax pos =
-  add
-    (Typing.err_code Typing.PocketUniversesReservedSyntax)
-    pos
-    ( "This syntax is reserved for the Pocket Universes prototype.\n"
-    ^ "It can only be used in the directories specified by the\n"
-    ^ "  `pocket_universe_enabled_paths = nowhere|everywhere|dir1,..,dirn`\noption in .hhconfig"
-    )
 
 let illegal_use_of_dynamically_callable attr_pos meth_pos visibility =
   add_list
@@ -5215,14 +5223,15 @@ let illegal_information_flow
   let source = md_codify source in
   let sink = md_codify sink in
   let reasons =
-    let sprintf = Printf.sprintf "Data with policy %s appears in context %s." in
-    let sprintf_source = Printf.sprintf "The data source with policy %s" in
-    let sprintf_sink = Printf.sprintf "The data sink with policy %s" in
+    let sprintf = Printf.sprintf in
+    let sprintf_main = sprintf "Data with policy %s appears in context %s." in
+    let sprintf_source = sprintf "This may be the data source with policy %s" in
+    let sprintf_sink = sprintf "This may be the data sink with policy %s" in
     let other_occurrences =
       let f p = (p, "Another program point contributing to the illegal flow") in
       List.map ~f secondaries
     in
-    [(primary, sprintf source sink)]
+    [(primary, sprintf_main source sink)]
     |> explain source_poss source sprintf_source
     |> explain sink_poss sink sprintf_sink
     |> List.append other_occurrences
@@ -5326,6 +5335,48 @@ let kind_mismatch
         ^ " due to the definition of "
         ^ tparam_name
         ^ " here." );
+    ]
+
+let class_with_constraints_used_as_hk_type use_pos class_name =
+  add
+    (Naming.err_code Naming.HigherKindedTypesUnsupportedFeature)
+    use_pos
+    ( "The class "
+    ^ strip_ns class_name
+    ^ " imposes constraints on some of its type parameters. Classes that do this cannot be used as higher-kinded types at this time."
+    )
+
+let alias_with_implicit_constraints_as_hk_type
+    ~use_pos
+    ~typedef_pos
+    ~used_class_in_def_pos
+    ~typedef_name
+    ~typedef_tparam_name
+    ~used_class_in_def_name
+    ~used_class_tparam_name =
+  add_list
+    (Naming.err_code Naming.HigherKindedTypesUnsupportedFeature)
+    [
+      ( use_pos,
+        "The type "
+        ^ strip_ns typedef_name
+        ^ " implicitly imposes constraints on its type parameters. Therefore, it cannot be used as a higher-kinded type at this time."
+      );
+      (typedef_pos, "The definition of " ^ strip_ns typedef_name ^ " is here.");
+      ( used_class_in_def_pos,
+        "The definition of "
+        ^ strip_ns typedef_name
+        ^ " relies on "
+        ^ strip_ns used_class_in_def_name
+        ^ " and the constraints that "
+        ^ strip_ns used_class_in_def_name
+        ^ " imposes on its type parameter "
+        ^ strip_ns used_class_tparam_name
+        ^ " then become implicit constraints on the type parameter "
+        ^ typedef_tparam_name
+        ^ " of "
+        ^ strip_ns typedef_name
+        ^ "." );
     ]
 
 (*****************************************************************************)

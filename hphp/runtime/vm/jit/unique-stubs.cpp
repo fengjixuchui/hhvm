@@ -177,56 +177,114 @@ TCA emitCallToExit(CodeBlock& cb, DataBlock& data, UniqueStubs& us) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-bool fcallHelper(CallFlags callFlags, Func* func, int32_t numArgs, void* ctx,
-                 TCA savedRip) {
-  assert_native_stack_aligned();
-  assertx(numArgs <= func->numNonVariadicParams() + 1);
-
+template<class Result, class Handler>
+Result withVMRegsForCall(CallFlags callFlags, const Func* func,
+                         uint32_t numArgs, bool hasUnpack, TCA savedRip,
+                         Handler handler) {
   // The stub already synced the vmfp() and vmsp() registers, but the vmsp() is
-  // pointing to the space reserved for the ActRec. This space together with
-  // the space reserved for output args may contain random garbage, as the Call
-  // opcode promises to kill/write this space, so store-elim is allowed to
-  // optimize away these writes. So, write NullUninits over this space, adjust
-  // vmsp() and set vmpc()/vmJitReturnAddr().
+  // pointing to the space reserved for the ActRec. Adjust it to point to the
+  // top of the stack containing call inputs and set vmpc()/vmJitReturnAddr().
   assertx(tl_regState == VMRegState::DIRTY);
   auto& unsafeRegs = vmRegsUnsafe();
   auto const calleeFP = unsafeRegs.stack.top();
-  for (auto i = kNumActRecCells + func->numInOutParamsForArgs(numArgs); i--;) {
-    tvWriteUninit(calleeFP[i]);
-  }
+  auto const callerFP = unsafeRegs.fp;
 
-  unsafeRegs.stack.nalloc(numArgs + (callFlags.hasGenerics() ? 1 : 0));
-  unsafeRegs.pc = unsafeRegs.fp->func()->at(
-    unsafeRegs.fp->func()->base() + callFlags.callOffset());
+  unsafeRegs.stack.nalloc(
+    numArgs + (hasUnpack ? 1 : 0) + (callFlags.hasGenerics() ? 1 : 0));
+  unsafeRegs.pc = callerFP->func()->at(
+    callerFP->func()->base() + callFlags.callOffset());
   unsafeRegs.jitReturnAddr = savedRip;
   tl_regState = VMRegState::CLEAN;
 
-  // Check for stack overflow in the same place func prologues make their
-  // StackCheck::Early check (see irgen-func-prologue.cpp).
-  if (checkCalleeStackOverflow(calleeFP, func)) {
-    throw_stack_overflow();
+  try {
+    auto const result = handler(unsafeRegs.stack, calleeFP);
+    // If we did not throw, we are going to reenter TC, so set the registers
+    // as dirty.
+    tl_regState = VMRegState::DIRTY;
+    return result;
+  } catch (...) {
+    // Manually unwind the stack to the point expected by the Call opcode as
+    // defined by its fixup. Note that the callee frame must be either not
+    // initialized yet, or already unwound by the handler. In the first case
+    // the stack space needs to be discarded. In the second case, the stack
+    // does not contain that space anymore.
+    assertx(callerFP == vmfp());
+    auto& stack = vmStack();
+    while (stack.top() < calleeFP) stack.popTV();
+    if (stack.top() == calleeFP) stack.discardAR();
+    auto const numInOutParams = func->numInOutParamsForArgs(numArgs);
+    assertx(stack.top() <= calleeFP + numInOutParams + kNumActRecCells);
+    stack.ndiscard(calleeFP + numInOutParams + kNumActRecCells - stack.top());
+    assertx(stack.top() == calleeFP + numInOutParams + kNumActRecCells);
+    throw;
   }
+}
 
-  // Write ActRec.
-  ActRec* ar = reinterpret_cast<ActRec*>(calleeFP);
-  ar->m_sfp = vmfp();
-  ar->setJitReturn(savedRip);
-  ar->setFunc(func);
-  ar->m_callOffAndFlags = ActRec::encodeCallOffsetAndFlags(
-    callFlags.callOffset(),
-    callFlags.asyncEagerReturn() ? (1 << ActRec::AsyncEagerRet) : 0
-  );
-  ar->setNumArgs(numArgs);
-  ar->m_thisUnsafe = reinterpret_cast<ObjectData*>(ctx);
+uint32_t fcallRepackHelper(CallFlags callFlags, const Func* func,
+                           uint32_t numArgsInclUnpack, TCA savedRip) {
+  assert_native_stack_aligned();
+  return withVMRegsForCall<uint32_t>(
+      callFlags, func, numArgsInclUnpack - 1, true, savedRip,
+      [&] (Stack& stack, TypedValue* calleeFP) {
+    // Check for stack overflow as we may unpack arbitrary number of arguments.
+    if (checkCalleeStackOverflow(calleeFP, func)) {
+      throw_stack_overflow();
+    }
 
-  // If doFCall() returns false, we've been asked to skip the function body due
-  // to fb_intercept, so indicate that via the return value. If we did not
-  // throw, we are going to reenter TC, so set the registers as dirty.
-  auto const hasUnpack = numArgs == func->numNonVariadicParams() + 1;
-  if (hasUnpack) --numArgs;
-  auto const notIntercepted = doFCall(ar, numArgs, hasUnpack, callFlags);
-  tl_regState = VMRegState::DIRTY;
-  return notIntercepted;
+    // Stash generics.
+    auto generics = callFlags.hasGenerics()
+      ? Array::attach(stack.topC()->m_data.parr) : Array();
+    if (callFlags.hasGenerics()) stack.discard();
+
+    // Repack arguments.
+    auto const numNewArgs =
+      prepareUnpackArgs(func, numArgsInclUnpack - 1, true);
+    assertx(numNewArgs <= func->numNonVariadicParams() + 1);
+
+    // Repush generics.
+    if (!generics.isNull()) {
+      if (RuntimeOption::EvalHackArrDVArrs) {
+        stack.pushVecNoRc(generics.detach());
+      } else {
+        stack.pushArrayNoRc(generics.detach());
+      }
+    }
+
+    return numNewArgs;
+  });
+}
+
+bool fcallHelper(CallFlags callFlags, Func* func, uint32_t numArgsInclUnpack,
+                 void* ctx, TCA savedRip) {
+  assert_native_stack_aligned();
+  assertx(numArgsInclUnpack <= func->numNonVariadicParams() + 1);
+  auto const hasUnpack = numArgsInclUnpack == func->numNonVariadicParams() + 1;
+  auto const numArgs = numArgsInclUnpack - (hasUnpack ? 1 : 0);
+  return withVMRegsForCall<bool>(
+      callFlags, func, numArgs, hasUnpack, savedRip,
+      [&](Stack&, TypedValue* calleeFP) {
+    // Check for stack overflow in the same place func prologues make their
+    // StackCheck::Early check (see irgen-func-prologue.cpp).
+    if (checkCalleeStackOverflow(calleeFP, func)) {
+      throw_stack_overflow();
+    }
+
+    // Write ActRec.
+    ActRec* ar = reinterpret_cast<ActRec*>(calleeFP);
+    ar->m_sfp = vmfp();
+    ar->setJitReturn(savedRip);
+    ar->setFunc(func);
+    ar->m_callOffAndFlags = ActRec::encodeCallOffsetAndFlags(
+      callFlags.callOffset(),
+      callFlags.asyncEagerReturn() ? (1 << ActRec::AsyncEagerRet) : 0
+    );
+    ar->setNumArgs(numArgsInclUnpack);
+    ar->m_thisUnsafe = reinterpret_cast<ObjectData*>(ctx);
+
+    // If doFCall() returns false, we've been asked to skip the function body
+    // due to fb_intercept, so indicate that via the return value.
+    return doFCall(ar, numArgs, hasUnpack, callFlags);
+  });
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -332,6 +390,67 @@ TCA emitFuncPrologueRedispatch(CodeBlock& cb, DataBlock& data) {
                  dest, sizeof(LowPtr<uint8_t>));
     v << tailcallstubr{dest, php_call_regs(true)};
   });
+}
+
+TCA emitFuncPrologueRedispatchUnpack(CodeBlock& main, CodeBlock& cold,
+                                     DataBlock& data, UniqueStubs& us) {
+  alignCacheLine(main);
+  CGMeta meta;
+
+  auto const start = vwrap2(main, cold, data, meta, [&] (Vout& v, Vout& vc) {
+    v << stublogue{false};
+
+    // Save all inputs.
+    auto const flags = v.makeReg();
+    auto const func = v.makeReg();
+    auto const numArgs = v.makeReg();
+    auto const savedRip = v.makeReg();
+    v << copy{r_php_call_flags(), flags};
+    v << copy{r_php_call_func(), func};
+    v << copy{r_php_call_num_args(), numArgs};
+    v << loadstubret{savedRip};
+
+    // Call C++ helper to repack arguments.
+    auto const numNewArgs = v.makeReg();
+    storeVMRegs(v);
+    {
+      PhysRegSaver prs{v, RegSet{r_php_call_ctx()}};
+      auto const done = v.makeBlock();
+      auto const ctch = vc.makeBlock();
+      v << vinvoke{
+        CallSpec::direct(fcallRepackHelper),
+        v.makeVcallArgs({{flags, func, numArgs, savedRip}}),
+        v.makeTuple({numNewArgs}),
+        {done, ctch},
+        Fixup{makeIndirectFixup(prs.dwordsPushed())},
+        DestType::SSA
+      };
+
+      vc = ctch;
+      emitStubCatch(vc, us, [&] (Vout& v) {
+        v << lea{rsp()[prs.dwordsPushed() * sizeof(uintptr_t)], rsp()};
+        loadVmfp(v);
+      });
+
+      v = done;
+    }
+
+    // Restore all inputs.
+    v << copy{flags, r_php_call_flags()};
+    v << copy{func, r_php_call_func()};
+    v << copy{numNewArgs, r_php_call_num_args()};
+
+    // Call the numNewArgs prologue.
+    auto const pTabOff = safe_cast<int32_t>(Func::prologueTableOff());
+    auto const ptrSize = safe_cast<int32_t>(sizeof(LowPtr<uint8_t>));
+    auto const dest = v.makeReg();
+    emitLdLowPtr(v, func[numNewArgs * ptrSize + pTabOff], dest,
+                 sizeof(LowPtr<uint8_t>));
+    v << tailcallstubr{dest, php_call_regs(true)};
+  });
+
+  meta.process(nullptr);
+  return start;
 }
 
 TCA emitFCallHelperThunk(CodeBlock& main, CodeBlock& cold, DataBlock& data,
@@ -627,94 +746,6 @@ TCA emitBindCallStub(CodeBlock& cb, DataBlock& data) {
     v << copy{numArgs, r_php_call_num_args()};
     v << tailcallstubr{target, php_call_regs(true)};
   });
-}
-
-TCA emitFCallUnpackHelper(CodeBlock& main, CodeBlock& cold,
-                          DataBlock& data, UniqueStubs& us) {
-  alignCacheLine(main);
-
-  CGMeta meta;
-
-  auto const ret = vwrap2(main, cold, data, meta, [&] (Vout& v, Vout& vc) {
-    // We reach fcallUnpackHelper in the same context as a func prologue, so
-    // this should really be a phplogue{}---but we don't need the return
-    // address in the ActRec until later, and in the event the callee is
-    // intercepted, we must save it on the stack because the callee frame will
-    // already have been popped.  So use a stublogue and "convert" it manually
-    // later.
-    v << stublogue{};
-
-    storeVMRegs(v);
-
-    auto const func = v.makeReg();
-    auto const unit = v.makeReg();
-    auto const bc = v.makeReg();
-
-    // Load fp->func()->m_unit->m_bc.
-    v << load{rvmfp()[AROFF(m_func)], func};
-    v << load{func[Func::unitOff()], unit};
-    v << load{unit[Unit::bcOff()], bc};
-
-    auto const pc = v.makeReg();
-
-    // Convert offsets into PCs, and sync the PC.
-    v << addq{bc, rarg(0), pc, v.makeReg()};
-    v << store{pc, rvmtl()[rds::kVmpcOff]};
-
-    auto const retAddr = v.makeReg();
-    v << loadstubret{retAddr};
-
-    auto const done = v.makeBlock();
-    auto const ctch = vc.makeBlock();
-    auto const should_continue = v.makeReg();
-    bool (*helper)(PC, int32_t, CallFlags, void*) = &doFCallUnpackTC;
-
-    v << vinvoke{
-      CallSpec::direct(helper),
-      v.makeVcallArgs({{pc, rarg(1), rarg(2), retAddr}}),
-      v.makeTuple({should_continue}),
-      {done, ctch},
-      Fixup{},
-      DestType::SSA
-    };
-    vc = ctch;
-    emitStubCatch(vc, us, [] (Vout& v) { loadVmfp(v); });
-
-    v = done;
-
-    // Load only rvmsp(); we need to wait to make sure we aren't skipping the
-    // callee before loading rvmfp().
-    v << load{rvmtl()[rds::kVmspOff], rvmsp()};
-
-    auto const sf = v.makeReg();
-    v << testb{should_continue, should_continue, sf};
-
-    unlikelyIfThen(v, vc, CC_Z, sf, [&] (Vout& v) {
-      // If false was returned, we should skip the callee.  The interpreter
-      // will have popped the pre-live ActRec already, so we can just return to
-      // the caller after syncing the return regs.
-      loadReturnRegs(v);
-      v << stubret{php_return_regs()};
-    });
-    loadVmfp(v);
-
-    // If true was returned, we're calling the callee, so undo the stublogue{}
-    // and convert to a phplogue{}.
-    v << stubtophp{};
-
-    auto const callee = v.makeReg();
-    auto const body = v.makeReg();
-
-    v << load{rvmfp()[AROFF(m_func)], callee};
-    emitLdLowPtr(v, callee[Func::funcBodyOff()], body, sizeof(LowPtr<uint8_t>));
-
-    // We jmp directly to the func body---this keeps the return stack buffer
-    // balanced between the call to this stub and the ret from the callee.
-    v << jmpr{body};
-  });
-
-  meta.process(nullptr);
-  return ret;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1229,6 +1260,9 @@ void UniqueStubs::emitAll(CodeCache& code, Debug::DebugInfo& dbg) {
   ADD(funcPrologueRedispatch,
       hotView(),
       emitFuncPrologueRedispatch(hot(), data));
+  ADD(funcPrologueRedispatchUnpack,
+      hotView(),
+      emitFuncPrologueRedispatchUnpack(hot(), cold, data, *this));
   ADD(funcBodyHelperThunk,    view, emitFuncBodyHelperThunk(cold, data));
   ADD(functionEnterHelper,
       hotView(),
@@ -1243,9 +1277,6 @@ void UniqueStubs::emitAll(CodeCache& code, Debug::DebugInfo& dbg) {
   ADD(retInlHelper, hotView(), emitInterpRet(hot(), data));
 
   ADD(immutableBindCallStub, view, emitBindCallStub(cold, data));
-  ADD(fcallUnpackHelper,
-      hotView(),
-      emitFCallUnpackHelper(hot(), cold, data, *this));
 
   ADD(decRefGeneric,  hotView(), emitDecRefGeneric(hot(), data));
 

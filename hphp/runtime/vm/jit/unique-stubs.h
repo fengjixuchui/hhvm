@@ -94,7 +94,7 @@ struct UniqueStubs {
    *  +---------+---------------------+---------+-----------+
    *  | native  | call{,r,m,s}        | ret     | N/A       |
    *  +---------+---------------------+---------+-----------+
-   *  | PHP     | phpcall, callunpack | phpret  | phplogue  |
+   *  | PHP     | phpcall             | phpret  | phplogue  |
    *  +---------+---------------------+---------+----------+
    *  | stub    | callstub            | stubret | stublogue |
    *  +---------+---------------------+---------+-----------+
@@ -117,12 +117,13 @@ struct UniqueStubs {
 
   /*
    * Dynamically dispatch to the appropriate func prologue based on the
-   * information in php_call_regs.
+   * information in php_call_regs, while repacking arguments as needed.
    *
    * @reached:  callphp from TC
    * @context:  func guard
    */
   TCA funcPrologueRedispatch;
+  TCA funcPrologueRedispatchUnpack;
 
   /*
    * Look up or emit a func prologue and jump to it---or, failing that, call
@@ -137,6 +138,7 @@ struct UniqueStubs {
    *            callphps from TC
    *            jmp from immutableBindCallStub
    *            jmp from funcPrologueRedispatch
+   *            jmp from funcPrologueRedispatchUnpack
    * @context:  func prologue
    */
   TCA fcallHelperThunk;
@@ -151,7 +153,6 @@ struct UniqueStubs {
    * translation.
    *
    * @reached:  call from enterTCHelper$callTC
-   *            jmp from fcallUnpackHelper
    * @context:  func body
    */
   TCA funcBodyHelperThunk;
@@ -253,18 +254,6 @@ struct UniqueStubs {
    * @context:  func prologue
    */
   TCA immutableBindCallStub;
-
-  /*
-   * Use interpreter functions to enter the pre-live ActRec that we place on
-   * the stack (along with arguments, the array of arguments to unpack and
-   * optionally the array of generics) in a CallUnpack instruction. The last
-   * two args specify the total number of inputs, including unpack arguments and
-   * generics, and a call flags (see CallFlags).
-   *
-   * @reached:  callunpack from TC
-   * @context:  func prologue
-   */
-  TCA fcallUnpackHelper;
 
 
   /////////////////////////////////////////////////////////////////////////////

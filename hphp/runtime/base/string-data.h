@@ -38,6 +38,7 @@ struct APCString;
 struct Array;
 struct String;
 struct APCHandle;
+struct NamedEntity;
 
 //////////////////////////////////////////////////////////////////////
 
@@ -410,6 +411,33 @@ struct StringData final : MaybeCountable,
    *      string must be request local
    */
   StringData* increment();
+
+  /*
+   * We identify certain strings as "symbols", which store a small cache.
+   * This concept is just an optimization; nothing is required to be a symbol.
+   *
+   * After loading a majority of symbols, call StringData::markSymbolsLoaded
+   * to avoid allocating these extra caches on any more static strings.
+   */
+  bool isSymbol() const;
+  static void markSymbolsLoaded();
+
+  /*
+   * Get or set the cached class or named entity. Get will return nullptr
+   * if the corresponding cached value hasn't been set yet.
+   *
+   * Pre: isSymbol()
+   */
+  Class* getCachedClass() const;
+  NamedEntity* getNamedEntity() const;
+  void setCachedClass(Class* cls);
+  void setNamedEntity(NamedEntity* ne);
+
+  /*
+   * Helpers used to JIT access to the symbol cache.
+   */
+  static ptrdiff_t isSymbolOffset();
+  static ptrdiff_t cachedClassOffset();
 
   /*
    * Type conversion functions.

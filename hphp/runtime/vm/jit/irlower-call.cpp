@@ -132,12 +132,16 @@ void cgCall(IRLS& env, const IRInstruction* inst) {
                  dest, sizeof(LowPtr<uint8_t>));
     v << callphpr{dest, php_call_regs(withCtx)};
   } else {
-    // If the callee is not known statically, or it was determined later, but
-    // we have too many arguments for prologue to handle, go to the redispatch
-    // stub that will pack any extra arguments and transfer control to the
-    // appropriate prologue.
-    assertx(!extra->hasUnpack);
-    v << callphp{tc::ustubs().funcPrologueRedispatch, php_call_regs(withCtx)};
+    // It was not statically determined that the arguments are passed in a way
+    // the callee expects. Use the redispatch stub to repack them as needed and
+    // transfer control to the appropriate prologue. This can happen due to:
+    // - the callee not being statically known
+    // - the callee inferred later in HHIR opts, but arguments mispacked
+    // - unpack used in a different position than callee's variadic param
+    auto const stub = !extra->hasUnpack
+      ? tc::ustubs().funcPrologueRedispatch
+      : tc::ustubs().funcPrologueRedispatchUnpack;
+    v << callphp{stub, php_call_regs(withCtx)};
   }
 
   // The prologue is responsible for unwinding all inputs. We could have
@@ -148,59 +152,6 @@ void cgCall(IRLS& env, const IRInstruction* inst) {
     marker.spOff() - extra->numInputs() - kNumActRecCells - extra->numOut;
   v << syncpoint{Fixup{fixupBcOff, fixupSpOff.offset}};
   v << unwind{done, label(env, inst->taken())};
-  v = done;
-
-  auto const dst = dstLoc(env, inst, 0);
-  auto const type = inst->dst()->type();
-  if (!type.admitsSingleVal()) {
-    v << defvmretdata{dst.reg(0)};
-  }
-  if (type.needsReg()) {
-    v << defvmrettype{dst.reg(1)};
-  }
-}
-
-void cgCallUnpack(IRLS& env, const IRInstruction* inst) {
-  auto const extra = inst->extra<CallUnpack>();
-  auto const sp = srcLoc(env, inst, 0).reg();
-  auto const callee = srcLoc(env, inst, 2).reg();
-  auto const ctx = srcLoc(env, inst, 3).reg();
-  auto& v = vmain(env);
-
-  auto const calleeSP = sp[cellsToBytes(extra->spOffset.offset)];
-  auto const calleeAR = calleeSP + cellsToBytes(extra->numInputs());
-  v << store{callee, calleeAR + AROFF(m_func)};
-  v << storeli{safe_cast<int32_t>(extra->numArgs) + 1,
-               calleeAR + AROFF(m_numArgs)};
-
-  assertx(inst->src(3)->isA(TObj) || inst->src(3)->isA(TCls) ||
-          inst->src(3)->isA(TNullptr));
-  if (inst->src(3)->isA(TObj) || inst->src(3)->isA(TCls)) {
-    v << store{ctx, calleeAR + AROFF(m_thisUnsafe)};
-  } else if (RuntimeOption::EvalHHIRGenerateAsserts) {
-    emitImmStoreq(v, ActRec::kTrashedThisSlot, calleeAR + AROFF(m_thisUnsafe));
-  }
-
-  auto const syncSP = v.makeReg();
-  v << lea{sp[cellsToBytes(extra->spOffset.offset)], syncSP};
-  v << syncvmsp{syncSP};
-
-  auto const callFlags = CallFlags(
-    extra->hasGenerics,
-    extra->dynamicCall,
-    false,  // async eager return unsupported with unpack
-    0, // call offset passed differently to unpack
-    0  // generics bitmap not used with unpack
-  );
-
-  auto const target = tc::ustubs().fcallUnpackHelper;
-  auto const callOff = v.cns(extra->callOffset);
-  auto const args = v.makeTuple(
-    {callOff, v.cns(extra->numInputs()), v.cns(callFlags.value())});
-
-  auto const done = v.makeBlock();
-  v << vcallunpack{target, fcall_unpack_regs(), args,
-                   {done, label(env, inst->taken())}};
   v = done;
 
   auto const dst = dstLoc(env, inst, 0);

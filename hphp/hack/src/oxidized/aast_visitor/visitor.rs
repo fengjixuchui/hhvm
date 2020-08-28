@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<c32fa468ed3c4d120603b7d12aeab768>>
+// @generated SignedSource<<caf478fb8cc946d0f4801f0f1ce668df>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
@@ -290,6 +290,13 @@ pub trait Visitor<'node> {
         &mut self,
         c: &mut <Self::P as Params>::Context,
         p: &'node Enum_,
+    ) -> Result<(), <Self::P as Params>::Error> {
+        p.recurse(c, self.object())
+    }
+    fn visit_env_annot(
+        &mut self,
+        c: &mut <Self::P as Params>::Context,
+        p: &'node EnvAnnot,
     ) -> Result<(), <Self::P as Params>::Error> {
         p.recurse(c, self.object())
     }

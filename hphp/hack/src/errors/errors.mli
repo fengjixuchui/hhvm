@@ -87,6 +87,8 @@ val codes_not_raised_partial : ISet.t ref
 (* Error codes that should be treated strictly, regardless of their file mode. *)
 val error_codes_treated_strictly : ISet.t ref
 
+val report_pos_from_reason : bool ref
+
 val is_strict_code : int -> bool
 
 val set_allow_errors_in_default_path : bool -> unit
@@ -1076,8 +1078,6 @@ val pu_localize : Pos.t -> string -> string -> unit
 
 val pu_invalid_access : Pos.t -> string -> unit
 
-val pu_reserved_syntax : Pos.t -> unit
-
 val pu_case_in_trait : Pos.t -> string -> unit
 
 val pu_attribute_invalid : Pos.t -> unit
@@ -1433,4 +1433,16 @@ val kind_mismatch :
   tparam_name:string ->
   expected_kind_repr:string ->
   actual_kind_repr:string ->
+  unit
+
+val class_with_constraints_used_as_hk_type : Pos.t -> string -> unit
+
+val alias_with_implicit_constraints_as_hk_type :
+  use_pos:Pos.t ->
+  typedef_pos:Pos.t ->
+  used_class_in_def_pos:Pos.t ->
+  typedef_name:string ->
+  typedef_tparam_name:string ->
+  used_class_in_def_name:string ->
+  used_class_tparam_name:string ->
   unit

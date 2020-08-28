@@ -2876,15 +2876,17 @@ void hphp_process_exit() noexcept {
   LOG_AND_IGNORE(Xenon::getInstance().stop())
   LOG_AND_IGNORE(jit::mcgen::joinWorkerThreads())
   LOG_AND_IGNORE(jit::tc::processExit())
-  LOG_AND_IGNORE(bespoke::stopExportProfiles())
+  LOG_AND_IGNORE(bespoke::waitOnExportProfiles())
   LOG_AND_IGNORE(PageletServer::Stop())
   LOG_AND_IGNORE(XboxServer::Stop())
   // Debugger::Stop() needs an execution context
   LOG_AND_IGNORE(g_context.getCheck())
   LOG_AND_IGNORE(Eval::Debugger::Stop())
   LOG_AND_IGNORE(g_context.destroy())
-  LOG_AND_IGNORE(ExtensionRegistry::moduleShutdown())
   LOG_AND_IGNORE(compilers_shutdown())
+  // This needs to be done before moduleShutdown()
+  LOG_AND_IGNORE(clearUnitCacheForExit())
+  LOG_AND_IGNORE(ExtensionRegistry::moduleShutdown())
 #ifndef _MSC_VER
   LOG_AND_IGNORE(LightProcess::Close())
 #endif
@@ -2892,7 +2894,6 @@ void hphp_process_exit() noexcept {
   LOG_AND_IGNORE(folly::SingletonVault::singleton()->destroyInstances())
   LOG_AND_IGNORE(embedded_data_cleanup())
   LOG_AND_IGNORE(Debug::destroyDebugInfo())
-  LOG_AND_IGNORE(clearUnitCacheForExit())
 #undef LOG_AND_IGNORE
 }
 

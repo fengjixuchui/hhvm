@@ -18,8 +18,9 @@ type dep_graph_delta = (Typing_deps.Dep.t * Typing_deps.Dep.t) HashSet.t
 (** Any options which would affect the results of the returned fanouts. *)
 type client_config = {
   client_id: string;
+  ignore_hh_version: bool;
   dep_table_saved_state_path: Path.t;
-  errors_saved_state_path: Path.t;
+  dep_table_errors_saved_state_path: Path.t;
   naming_table_saved_state_path: Naming_sqlite.db_path;
 }
 
@@ -45,6 +46,12 @@ class type cursor =
 
     (** Get the client ID that owns this cursor. *)
     method get_client_id : client_id
+
+    (** Get the client configuration associated with this cursor.
+
+    In particular, this contains information about the saved-state that this
+    cursor was initialized with. *)
+    method get_client_config : client_config
 
     (** Process the provided set of changed files and advance the cursor.
 
@@ -81,7 +88,7 @@ class type state =
 
     If no such client already exists, one is created. This operation is
     idempotent. *)
-    method look_up_client_id : client_config -> client_id
+    method make_client_id : client_config -> client_id
 
     (** Construct the cursor corresponding to the saved-state.
 
@@ -106,3 +113,12 @@ class type state =
     (** Add the given cursor to the state, committing any changes to disk. *)
     method add_cursor : cursor -> cursor_id
   end
+
+(** Reference implementation using OCaml blobs to store state. Loads the
+state from the given path on disk.
+
+If the path does not exist, it is atomically created and loaded.
+
+Currently not production-usable -- it is not safe for concurrent consumers.
+*)
+val make_reference_implementation : Path.t -> state

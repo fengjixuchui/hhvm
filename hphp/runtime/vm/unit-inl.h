@@ -60,6 +60,15 @@ inline UnitExtended* Unit::getExtended() {
   return static_cast<UnitExtended*>(this);
 }
 
+inline SymbolRefs* Unit::claimSymbolRefsForPrefetch() {
+  if (!m_extended) return nullptr; // No symbol refs
+  auto extended = getExtended();
+  // Atomically mark them as taken and check if they were already
+  // taken
+  if (extended->m_symbolRefsPrefetched.test_and_set()) return nullptr;
+  return &extended->m_symbolRefsForPrefetch;
+}
+
 inline const UnitExtended* Unit::getExtended() const {
   assertx(m_extended);
   return static_cast<const UnitExtended*>(this);
@@ -290,18 +299,30 @@ inline const Class* Unit::lookupUniqueClassInContext(const StringData* name,
 }
 
 inline Class* Unit::loadClass(const StringData* name) {
-  String normStr;
-  auto ne = NamedEntity::get(name, true, &normStr);
+  if (name->isSymbol()) {
+    if (auto const result = name->getCachedClass()) return result;
+  }
+  auto const orig = name;
 
-  // Try to fetch from cache
-  Class* class_ = ne->getCachedClass();
-  if (LIKELY(class_ != nullptr)) return class_;
+  auto const result = [&]() -> Class* {
+    String normStr;
+    auto ne = NamedEntity::get(name, true, &normStr);
 
-  // Normalize the namespace
-  if (normStr) name = normStr.get();
+    // Try to fetch from cache
+    Class* class_ = ne->getCachedClass();
+    if (LIKELY(class_ != nullptr)) return class_;
 
-  // Autoload the class
-  return loadClass(ne, name);
+    // Normalize the namespace
+    if (normStr) name = normStr.get();
+
+    // Autoload the class
+    return loadClass(ne, name);
+  }();
+
+  if (orig->isSymbol() && result && classHasPersistentRDS(result)) {
+    const_cast<StringData*>(orig)->setCachedClass(result);
+  }
+  return result;
 }
 
 inline Class* Unit::getClass(const StringData* name, bool tryAutoload) {
