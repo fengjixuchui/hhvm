@@ -1457,7 +1457,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case DefFuncEntryFP:
     return may_load_store(livefp(inst.src(0)), livefp(inst.dst()));
 
-  case LdARNumParams:
   case LdARFlags:
     return PureLoad { AFMeta { inst.src(0) }};
 
@@ -1593,6 +1592,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ConvPtrToLval:
   case ProfileProp:
   case ProfileIsTypeStruct:
+  case LdLazyClsName:
     return IrrelevantEffects {};
 
   case StClosureArg:
@@ -1626,7 +1626,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     return PureStore { AFContext { inst.src(0) }, inst.src(1) };
 
   case StFrameFunc:
-    return PureStore { AFFunc { inst.src(0) }, inst.src(1) };
+    return PureStore { AFFunc { inst.src(0) }, nullptr };
 
   case StFrameMeta:
     return PureStore { AFMeta { inst.src(0) }, nullptr };

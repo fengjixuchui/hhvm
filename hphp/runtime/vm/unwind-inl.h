@@ -22,12 +22,11 @@ namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
 template<class Action>
-inline void exception_handler(Action action) {
+inline bool exception_handler(Action action) {
   Trace::Indent _i;
   try {
     action();
-    vmpc() = 0;
-    return;
+    return true;
   }
 
   catch (const Object& o) {
@@ -37,7 +36,7 @@ inline void exception_handler(Action action) {
     assertx(o.get());
     if (vmfp() == nullptr) throw;
     unwindVM(o.get());
-    return;
+    return false;
   }
 
   catch (Exception& e) {
@@ -45,6 +44,7 @@ inline void exception_handler(Action action) {
     ITRACE_MOD(Trace::unwind, 1, "unwind: Exception: {}\n", e.what());
     if (vmfp() == nullptr) throw;
     unwindVM(e.clone());
+    not_reached();
   }
 
   catch (std::exception& e) {
@@ -54,6 +54,7 @@ inline void exception_handler(Action action) {
       new Exception("unexpected %s: %s", typeid(e).name(), e.what());
     if (vmfp() == nullptr) exn->throwException();
     unwindVM(exn);
+    not_reached();
   }
 
   catch (...) {
@@ -62,9 +63,8 @@ inline void exception_handler(Action action) {
     auto const exn = new Exception("unknown exception");
     if (vmfp() == nullptr) exn->throwException();
     unwindVM(exn);
+    not_reached();
   }
-
-  not_reached();
 }
 
 ///////////////////////////////////////////////////////////////////////////////

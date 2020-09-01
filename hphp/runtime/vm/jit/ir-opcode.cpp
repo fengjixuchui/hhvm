@@ -744,7 +744,6 @@ bool opcodeMayRaise(Opcode opc) {
   case KillIter:
   case LdAFWHActRec:
   case LdARFlags:
-  case LdARNumParams:
   case LdBindAddr:
   case LdClosureCls:
   case LdClosureThis:
@@ -761,6 +760,7 @@ bool opcodeMayRaise(Opcode opc) {
   case LdClsMethodCacheFunc:
   case LdClsMethodFCacheFunc:
   case LdClsName:
+  case LdLazyClsName:
   case LdCns:
   case LdColDict:
   case LdColVec:

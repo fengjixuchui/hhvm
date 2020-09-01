@@ -103,6 +103,7 @@ struct ScalarHash {
           case KindOfPersistentVec:
           case KindOfPersistentDict:
           case KindOfPersistentKeyset:
+          case KindOfLazyClass:
             ret = folly::hash::hash_combine(ret, v.m_data.num);
             break;
           case KindOfUninit:
@@ -117,7 +118,6 @@ struct ScalarHash {
           case KindOfRFunc:
           case KindOfFunc:
           case KindOfClass:
-          case KindOfLazyClass:
           case KindOfClsMeth:
           case KindOfRClsMeth:
           case KindOfRecord:
@@ -135,13 +135,6 @@ struct ScalarHash {
       if (!ad2->isHackArrayType()) return false;
       if (ad1->kind() != ad2->kind()) return false;
     } else if (ad2->isHackArrayType()) {
-      return false;
-    }
-
-    if (ad1->isLegacyArray() != ad2->isLegacyArray()) return false;
-
-    if (UNLIKELY(RuntimeOption::EvalArrayProvenance) &&
-        arrprov::getTag(ad1) != arrprov::getTag(ad2)) {
       return false;
     }
 
@@ -928,9 +921,11 @@ std::string describeKeyType(const TypedValue* tv) {
   case KindOfPersistentString:
   case KindOfString:           return "string";
   case KindOfPersistentVec:
-  case KindOfVec:              return "vec";
+  case KindOfVec:
+    return val(*tv).parr->isLegacyArray() ? "array" : "vec";
   case KindOfPersistentDict:
-  case KindOfDict:             return "dict";
+  case KindOfDict:
+    return val(*tv).parr->isLegacyArray() ? "array" : "dict";
   case KindOfPersistentKeyset:
   case KindOfKeyset:           return "keyset";
 
@@ -1037,7 +1032,7 @@ void throwOOBArrayKeyException(TypedValue key, const ArrayData* ad) {
   SystemLib::throwOutOfBoundsExceptionObject(
     folly::sformat(
       "Out of bounds {} access: invalid index {}",
-      getDataTypeString(ad->toDataType()).data(),
+      getDataTypeString(ad->toDataType(), ad->isLegacyArray()).data(),
       describeKeyValue(key)
     )
   );

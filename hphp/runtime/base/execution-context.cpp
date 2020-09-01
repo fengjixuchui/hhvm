@@ -1451,23 +1451,38 @@ void ExecutionContext::requestExit() {
   if (m_requestTrace) record_trace(std::move(*m_requestTrace));
 }
 
+/**
+ * Enter VM by calling action(), which invokes a function or resumes
+ * an async function. The 'ar' argument points to an ActRec of the
+ * invoked/resumed function.
+ */
 template<class Action>
 static inline void enterVM(ActRec* ar, Action action) {
-  enterVMCustomHandler(ar, [&] { exception_handler(action); });
+  assertx(ar);
+  assertx(!ar->sfp());
+  assertx(isReturnHelper(reinterpret_cast<void*>(ar->m_savedRip)));
+  assertx(ar->callOffset() == 0);
+
+  vmFirstAR() = ar;
+  vmJitCalledFrame() = nullptr;
+  vmJitReturnAddr() = 0;
+
+  action();
+
+  while (vmpc()) {
+    exception_handler(enterVMAtCurPC);
+  }
 }
 
 /*
  * Shared implementation for invokeFunc{,Few}().
- *
- * The `doEnterVM' callback take an ActRec* argument corresponding to
- * the reentry frame.
  */
-template<class FEnterVM>
 ALWAYS_INLINE
 TypedValue ExecutionContext::invokeFuncImpl(const Func* f,
                                             ObjectData* thiz, Class* cls,
                                             uint32_t numArgsInclUnpack,
-                                            FEnterVM doEnterVM) {
+                                            Array&& generics, bool dynamic,
+                                            bool allowDynCallNoPointer) {
   assertx(f);
   // If `f' is a regular function, `thiz' and `cls' must be null.
   assertx(IMPLIES(!f->implCls(), (!thiz && !cls)));
@@ -1515,7 +1530,12 @@ TypedValue ExecutionContext::invokeFuncImpl(const Func* f,
     popVMState();
   };
 
-  enterVM(ar, [&] { doEnterVM(ar); });
+  enterVM(ar, [&] {
+    exception_handler([&] {
+      enterVMAtFunc(ar, std::move(generics), f->takesInOutParams(), dynamic,
+                    allowDynCallNoPointer);
+    });
+  });
 
   if (UNLIKELY(f->takesInOutParams())) {
     // This is OK (albeit ugly) since the return value should only be readable
@@ -1535,29 +1555,6 @@ TypedValue ExecutionContext::invokeFuncImpl(const Func* f,
     auto const retval = *vmStack().topTV();
     vmStack().discard();
     return retval;
-  }
-}
-
-/**
- * Enter VM by calling action(), which invokes a function or resumes
- * an async function. The 'ar' argument points to an ActRec of the
- * invoked/resumed function.
- */
-template<class Action>
-static inline void enterVMCustomHandler(ActRec* ar, Action action) {
-  assertx(ar);
-  assertx(!ar->sfp());
-  assertx(isReturnHelper(reinterpret_cast<void*>(ar->m_savedRip)));
-  assertx(ar->callOffset() == 0);
-
-  vmFirstAR() = ar;
-  vmJitCalledFrame() = nullptr;
-  vmJitReturnAddr() = 0;
-
-  action();
-
-  while (vmpc()) {
-    exception_handler(enterVMAtCurPC);
   }
 }
 
@@ -1605,12 +1602,8 @@ TypedValue ExecutionContext::invokeFunc(const Func* f,
   // Caller checks.
   if (dynamic) callerDynamicCallChecks(f, allowDynCallNoPointer);
 
-  auto const doEnterVM = [&] (ActRec* ar) {
-    enterVMAtFunc(ar, std::move(reifiedGenerics), f->takesInOutParams(),
-                  dynamic, allowDynCallNoPointer);
-  };
-
-  return invokeFuncImpl(f, thiz, cls, numArgs, doEnterVM);
+  return invokeFuncImpl(f, thiz, cls, numArgs, std::move(reifiedGenerics),
+                        dynamic, allowDynCallNoPointer);
 }
 
 TypedValue ExecutionContext::invokeFuncFew(
@@ -1660,14 +1653,8 @@ TypedValue ExecutionContext::invokeFuncFew(
   // Caller checks.
   if (dynamic) callerDynamicCallChecks(f, allowDynCallNoPointer);
 
-  auto const doEnterVM = [&] (ActRec* ar) {
-    enterVMAtFunc(ar, Array(), f->takesInOutParams(), dynamic, false);
-  };
-
-  return invokeFuncImpl(f,
-                        thisOrCls.left(),
-                        thisOrCls.right(),
-                        numArgs, doEnterVM);
+  return invokeFuncImpl(f, thisOrCls.left(), thisOrCls.right(), numArgs,
+                        Array(), dynamic, false);
 }
 
 static void prepareAsyncFuncEntry(ActRec* enterFnAr,
@@ -1720,15 +1707,17 @@ void ExecutionContext::resumeAsyncFunc(Resumable* resumable,
   SCOPE_EXIT { popVMState(); };
 
   enterVM(fp, [&] {
-    prepareAsyncFuncEntry(fp, resumable, false);
+    exception_handler([&] {
+      prepareAsyncFuncEntry(fp, resumable, false);
 
-    const bool useJit = RID().getJit();
-    if (LIKELY(useJit && resumable->resumeAddr())) {
-      Stats::inc(Stats::VMEnter);
-      jit::enterTC(resumable->resumeAddr());
-    } else {
-      enterVMAtCurPC();
-    }
+      const bool useJit = RID().getJit();
+      if (LIKELY(useJit && resumable->resumeAddr())) {
+        Stats::inc(Stats::VMEnter);
+        jit::enterTC(resumable->resumeAddr());
+      } else {
+        enterVMAtCurPC();
+      }
+    });
   });
 }
 
@@ -1759,8 +1748,15 @@ void ExecutionContext::resumeAsyncFuncThrow(Resumable* resumable,
   pushVMState(vmStack().top());
   SCOPE_EXIT { popVMState(); };
 
-  enterVMCustomHandler(fp, [&] {
-    prepareAsyncFuncEntry(fp, resumable, true);
+  enterVM(fp, [&] {
+    DEBUG_ONLY auto const success = exception_handler([&] {
+      prepareAsyncFuncEntry(fp, resumable, true);
+    });
+    // Function entry may fail only with a C++ exception thrown by the event
+    // hook, which would be rethrown by the exception_handler() after unwinding
+    // the current frame.
+    assertx(success);
+
     unwindVM(exception);
     e.reset();
   });

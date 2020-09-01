@@ -231,26 +231,9 @@ uint32_t fcallRepackHelper(CallFlags callFlags, const Func* func,
       throw_stack_overflow();
     }
 
-    // Stash generics.
-    auto generics = callFlags.hasGenerics()
-      ? Array::attach(stack.topC()->m_data.parr) : Array();
-    if (callFlags.hasGenerics()) stack.discard();
-
-    // Repack arguments.
-    auto const numNewArgs =
-      prepareUnpackArgs(func, numArgsInclUnpack - 1, true);
-    assertx(numNewArgs <= func->numNonVariadicParams() + 1);
-
-    // Repush generics.
-    if (!generics.isNull()) {
-      if (RuntimeOption::EvalHackArrDVArrs) {
-        stack.pushVecNoRc(generics.detach());
-      } else {
-        stack.pushArrayNoRc(generics.detach());
-      }
-    }
-
-    return numNewArgs;
+    // Repack arguments while saving generics.
+    GenericsSaver gs{callFlags.hasGenerics()};
+    return prepareUnpackArgs(func, numArgsInclUnpack - 1, true);
   });
 }
 
@@ -269,21 +252,9 @@ bool fcallHelper(CallFlags callFlags, Func* func, uint32_t numArgsInclUnpack,
       throw_stack_overflow();
     }
 
-    // Write ActRec.
-    ActRec* ar = reinterpret_cast<ActRec*>(calleeFP);
-    ar->m_sfp = vmfp();
-    ar->setJitReturn(savedRip);
-    ar->setFunc(func);
-    ar->m_callOffAndFlags = ActRec::encodeCallOffsetAndFlags(
-      callFlags.callOffset(),
-      callFlags.asyncEagerReturn() ? (1 << ActRec::AsyncEagerRet) : 0
-    );
-    ar->setNumArgs(numArgsInclUnpack);
-    ar->m_thisUnsafe = reinterpret_cast<ObjectData*>(ctx);
-
     // If doFCall() returns false, we've been asked to skip the function body
     // due to fb_intercept, so indicate that via the return value.
-    return doFCall(ar, numArgs, hasUnpack, callFlags);
+    return doFCall(callFlags, func, numArgsInclUnpack, ctx, savedRip);
   });
 }
 

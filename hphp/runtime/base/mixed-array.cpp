@@ -146,13 +146,16 @@ ArrayData* MixedArray::MakeReserveImpl(uint32_t size, HeaderKind hk) {
 }
 
 ArrayData* MixedArray::MakeReserveMixed(uint32_t size) {
-  return RO::EvalHackArrDVArrs
-    ? MakeReserveDict(size)
-    : MakeReserveDArray(size);
+  return MakeReserveDArray(size);
 }
 
 ArrayData* MixedArray::MakeReserveDArray(uint32_t size) {
-  assertx(!RuntimeOption::EvalHackArrDVArrs);
+  if (RuntimeOption::EvalHackArrDVArrs) {
+    auto const ad = MakeReserveDict(size);
+    ad->setLegacyArray(RO::EvalHackArrDVArrMark);
+    return ad;
+  }
+
   auto ad = MakeReserveImpl(size, HeaderKind::Mixed);
   assertx(ad->isMixedKind());
   assertx(ad->isDArray());
@@ -336,7 +339,11 @@ MixedArray* MixedArray::MakeMixedImpl(uint32_t size, const TypedValue* kvs) {
 }
 
 MixedArray* MixedArray::MakeDArray(uint32_t size, const TypedValue* kvs) {
-  if (RuntimeOption::EvalHackArrDVArrs) return MakeDict(size, kvs);
+  if (RuntimeOption::EvalHackArrDVArrs) {
+    auto const ad = MakeDict(size, kvs);
+    ad->setLegacyArray(RO::EvalHackArrDVArrMark);
+    return ad;
+  }
 
   auto const ad = MakeMixedImpl<HeaderKind::Mixed>(size, kvs);
   assertx(ad == nullptr || ad->kind() == kMixedKind);
@@ -362,7 +369,10 @@ MixedArray* MixedArray::MakeDArrayNatural(uint32_t size,
 
   ad->m_sizeAndPos       = size; // pos=0
   if (RuntimeOption::EvalHackArrDVArrs) {
-    ad->initHeader_16(HeaderKind::Dict, OneReference, aux);
+    ad->initHeader_16(
+        HeaderKind::Dict,
+        OneReference,
+        aux | (RO::EvalHackArrDVArrMark ? ArrayData::kLegacyArray : 0));
   } else {
     ad->initHeader_16(HeaderKind::Mixed, OneReference, aux);
   }
@@ -446,10 +456,8 @@ MixedArray* MixedArray::CopyMixed(const MixedArray& other,
   memcpy(ad, &other, sizeof(MixedArray) + sizeof(Elm) * other.m_used);
 #endif
   auto const count = mode == AllocMode::Request ? OneReference : StaticValue;
-  auto const aux =
-    other.keyTypes().packForAux() |
-    (other.isLegacyArray() ? ArrayData::kLegacyArray : 0) |
-    (shouldCreateStrKeyTable ? kHasStrKeyTable : 0);
+  auto const aux = other.auxBits() | other.keyTypes().packForAux() |
+                   (shouldCreateStrKeyTable ? kHasStrKeyTable : 0);
   ad->initHeader_16(dest_hk, count, aux);
 
   // We want SlowCopy to be a tail call in the opt build, but we still want to
@@ -1360,8 +1368,10 @@ ArrayData* MixedArray::Merge(ArrayData* ad, const ArrayData* elems) {
   assertx(ret->hasExactlyOneRef());
   auto const aux = asMixed(ad)->keyTypes().packForAux();
   auto const hk  = RO::EvalHackArrDVArrs ? HeaderKind::Dict : HeaderKind::Mixed;
-  ret->initHeader_16(hk, OneReference, aux);
-
+  ret->initHeader_16(hk, OneReference,
+      aux |
+      (RO::EvalHackArrDVArrMark && RO::EvalHackArrDVArrs ?
+       ArrayData::kLegacyArray : 0));
   if (elems->hasVanillaMixedLayout()) {
     auto const rhs = asMixed(elems);
     auto srcElem = rhs->data();
@@ -1496,7 +1506,17 @@ ArrayData* MixedArray::ToDArrayImpl(const MixedArray* ad) {
 }
 
 ArrayData* MixedArray::ToDArray(ArrayData* in, bool copy) {
-  if (RuntimeOption::EvalHackArrDVArrs || in->isDArray()) return in;
+  if (in->isDArray()) return in;
+  if (RuntimeOption::EvalHackArrDVArrs) {
+    if (RuntimeOption::EvalHackArrDVArrMark && !in->isLegacyArray()) {
+      if (copy) {
+        auto const ma = asMixed(in);
+        in = CopyMixed(*ma, AllocMode::Request, HeaderKind::Dict);
+      }
+      in->setLegacyArray(true);
+    }
+    return in;
+  }
   auto a = asMixed(in);
 
   auto const size = a->getSize();

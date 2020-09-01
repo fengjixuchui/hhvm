@@ -89,8 +89,8 @@ struct RepoOptions {
   E(bool,           EmitFuncPointers,               true)             \
   E(bool,           EmitInstMethPointers,           EmitFuncPointers) \
   H(bool,           AllowUnstableFeatures,          false)            \
-  H(bool,           EnableXHPClassModifier,         false)            \
-  H(bool,           DisableXHPElementMangling,      false)            \
+  H(bool,           EnableXHPClassModifier,         true)             \
+  H(bool,           DisableXHPElementMangling,      true)             \
   H(bool,           DisableArray,                   true)             \
   H(bool,           DisableArrayCast,               true)             \
   H(bool,           DisableArrayTypehint,           true)             \
@@ -1081,9 +1081,7 @@ struct RuntimeOption {
    *     Logging arrays are only created before RTA has begun. */       \
   F(int32_t, BespokeArrayLikeMode, 0)                                   \
   F(uint64_t, EmitLoggingArraySampleRate, 0)                            \
-  F(bool, ExportLoggingArrayDataToFile, false)                          \
-  F(bool, ExportLoggingArrayDataToStructuredLog, false)                 \
-  F(string, ExportLoggingArrayDataPath, "/tmp")                         \
+  F(string, ExportLoggingArrayDataPath, "")                             \
   /* Raise notices on various array operations which may present        \
    * compatibility issues with Hack arrays.                             \
    *                                                                    \
@@ -1162,7 +1160,7 @@ struct RuntimeOption {
    * 0 => convert Foo::class to string "Foo"
    * 1 => convert Foo::class to class pointer
    * 2 => convert Foo::class to lazy class */                           \
-  F(uint16_t, EmitClassPointers, 0)                                     \
+  F(int32_t, EmitClassPointers, 0)                                      \
   /* false to skip type refinement for ClsMeth type at HHBBC. */        \
   F(bool, IsCompatibleClsMethType, false)                               \
   /* Raise warning if a ClsMeth type is compared to other types. */     \
@@ -1305,8 +1303,6 @@ struct RuntimeOption {
   F(bool, WidenIsArray, false)                                          \
   F(bool, WidenIsArrayLogs, true)                                       \
   F(bool, EnablePerFileCoverage, false)                                 \
-  /* Should we use the autoload map from the repo */                    \
-  F(bool, UseRepoAutoloadMap, true)                                     \
   F(bool, LogOnIsArrayFunction, false)                                  \
   /* Unit prefetching options */                                        \
   F(uint32_t, UnitPrefetcherMaxThreads, 0)                              \

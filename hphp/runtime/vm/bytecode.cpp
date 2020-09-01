@@ -846,6 +846,7 @@ uint32_t prepareUnpackArgs(const Func* func, uint32_t numArgs,
     // Convert unpack args to the proper type.
     if (RuntimeOption::EvalHackArrDVArrs) {
       tvCastToVecInPlace(&unpackArgs);
+      tvSetLegacyArrayInPlace(&unpackArgs, RuntimeOption::EvalHackArrDVArrs);
       stack.pushVec(unpackArgs.m_data.parr);
     } else {
       tvCastToVArrayInPlace(&unpackArgs);
@@ -869,6 +870,7 @@ uint32_t prepareUnpackArgs(const Func* func, uint32_t numArgs,
       // may be a deficit of non-variadic arguments, and the need to push an
       // empty array for the variadic argument ... that work is left to
       // prepareFuncEntry.
+      assertx(numArgs + numUnpackArgs <= numParams);
       return numArgs + numUnpackArgs;
     }
   }
@@ -918,11 +920,12 @@ static void prepareFuncEntry(ActRec *ar, Array&& generics) {
     // All extra arguments are expected to be packed in a varray.
     assertx(nargs == nparams + 1);
     assertx(tvIsHAMSafeVArray(stack.topC()));
-    auto const unpackArgs = stack.topC()->m_data.parr;
-    assertx(!unpackArgs->empty());
     if (!func->hasVariadicCaptureParam()) {
       // Record the number of args for the warning before dropping extra args.
-      raiseTooManyArgumentsWarnings = nparams + unpackArgs->size();
+      auto const unpackArgs = stack.topC()->m_data.parr;
+      if (!unpackArgs->empty()) {
+        raiseTooManyArgumentsWarnings = nparams + unpackArgs->size();
+      }
       stack.popC();
       ar->setNumArgs(nparams);
     }
@@ -1129,10 +1132,12 @@ static inline void lookup_sprop(ActRec* fp,
 
 static inline Class* lookupClsRef(TypedValue* input) {
   Class* class_ = nullptr;
-  if (isStringType(input->m_type)) {
-    class_ = Unit::loadClass(input->m_data.pstr);
+  if (isStringType(input->m_type) || isLazyClassType(input->m_type)) {
+    auto const cname = isStringType(input->m_type) ?
+      input->m_data.pstr : input->m_data.plazyclass.name();
+    class_ = Unit::loadClass(cname);
     if (class_ == nullptr) {
-      raise_error(Strings::UNKNOWN_CLASS, input->m_data.pstr->data());
+      raise_error(Strings::UNKNOWN_CLASS, cname->data());
     }
   } else if (input->m_type == KindOfObject) {
     class_ = input->m_data.pobj->getVMClass();
@@ -2486,6 +2491,12 @@ OPTBLD_INLINE void iopResolveClass(Id id) {
   }
 }
 
+OPTBLD_INLINE void iopLazyClass(Id id) {
+  auto const cname = vmfp()->unit()->lookupLitstrId(id);
+  auto const lclass = LazyClassData::create(cname);
+  vmStack().pushLazyClass(lclass);
+}
+
 OPTBLD_INLINE void iopClassGetC() {
   auto const cell = vmStack().topC();
   if (isStringType(cell->m_type)) {
@@ -3655,45 +3666,30 @@ OPTBLD_INLINE void iopUnsetG() {
   vmStack().popC();
 }
 
-bool doFCall(ActRec* ar, uint32_t numArgs, bool hasUnpack,
-             CallFlags callFlags, Array* savedGenerics) {
+bool doFCall(CallFlags callFlags, const Func* func, uint32_t numArgsInclUnpack,
+             void* ctx, TCA retAddr) {
   TRACE(3, "FCall: pc %p func %p base %d\n", vmpc(),
         vmfp()->unit()->entry(),
         int(vmfp()->func()->base()));
 
+  assertx(numArgsInclUnpack <= func->numNonVariadicParams() + 1);
+  assertx(kNumActRecCells == 3);
+  ActRec* ar = vmStack().indA(
+    numArgsInclUnpack + (callFlags.hasGenerics() ? 1 : 0));
+  ar->m_sfp = vmfp();
+  ar->setJitReturn(retAddr);
+  ar->setFunc(func);
+  ar->m_callOffAndFlags = ActRec::encodeCallOffsetAndFlags(
+    callFlags.callOffset(),
+    callFlags.asyncEagerReturn() ? (1 << ActRec::AsyncEagerRet) : 0
+  );
+  ar->setNumArgs(numArgsInclUnpack);
+  ar->setThisOrClassAllowNull(ctx);
+
   try {
-    assertx(!callFlags.hasGenerics() || tvIsHAMSafeVArray(vmStack().topC()));
-    auto generics = [&] () -> Array {
-        if (callFlags.hasGenerics()) {
-          assertx(savedGenerics == nullptr);
-          return Array::attach(vmStack().topC()->m_data.parr);
-        } else if (savedGenerics) {
-          return *savedGenerics;
-        } else {
-          return Array();
-        }
-      }();
-    if (callFlags.hasGenerics()) vmStack().discard();
+    prepareFuncEntry(ar, GenericsSaver::pop(callFlags.hasGenerics()));
 
-    auto const func = ar->func();
-    if (hasUnpack) {
-      checkStack(vmStack(), func, 0);
-      auto const newNumArgs = prepareUnpackArgs(func, numArgs, true);
-      ar->setNumArgs(newNumArgs);
-    } else if (UNLIKELY(numArgs > func->numNonVariadicParams())) {
-      if (RuntimeOption::EvalHackArrDVArrs) {
-        iopNewVec(numArgs - func->numNonVariadicParams());
-      } else {
-        iopNewVArray(numArgs - func->numNonVariadicParams());
-      }
-      ar->setNumArgs(func->numNonVariadicParams() + 1);
-    }
-
-    prepareFuncEntry(ar, std::move(generics));
-
-    if (!savedGenerics) { // Checked when constructing the rfunc
-      checkForReifiedGenericsErrors(ar, callFlags.hasGenerics());
-    }
+    checkForReifiedGenericsErrors(ar, callFlags.hasGenerics());
     calleeDynamicCallChecks(ar->func(), callFlags.isDynamicCall());
     checkImplicitContextErrors(ar);
     return EventHook::FunctionCall(ar, EventHook::NormalFunc);
@@ -3703,7 +3699,7 @@ bool doFCall(ActRec* ar, uint32_t numArgs, bool hasUnpack,
     assertx(vmfp() == ar || vmfp() == ar->m_sfp);
 
     auto const func = ar->func();
-    auto const numInOutParams = func->numInOutParamsForArgs(numArgs);
+    auto const numInOutParams = func->numInOutParamsForArgs(numArgsInclUnpack);
 
     if (ar->m_sfp == vmfp()) {
       // Unwind pre-live frame.
@@ -3740,31 +3736,43 @@ void* takeCtx(NoCtx) {
 
 template<bool dynamic, typename Ctx>
 void fcallImpl(PC origpc, PC& pc, const FCallArgs& fca, const Func* func,
-               Ctx&& ctx, bool logAsDynamicCall = true,
-               Array* savedGenerics = nullptr) {
+               Ctx&& ctx, bool logAsDynamicCall = true) {
   if (fca.enforceInOut()) callerInOutChecks(func, fca);
   if (dynamic && logAsDynamicCall) callerDynamicCallChecks(func);
   callerRxChecks(vmfp(), func);
   checkStack(vmStack(), func, 0);
 
-  assertx(kNumActRecCells == 3);
-  ActRec* ar = vmStack().indA(fca.numInputs());
-  ar->setFunc(func);
-  ar->setNumArgs(fca.numArgs + (fca.hasUnpack() ? 1 : 0));
-  auto const asyncEagerReturn =
-    fca.asyncEagerOffset != kInvalidOffset && func->supportsAsyncEagerReturn();
-  ar->setReturn(vmfp(), origpc, jit::tc::ustubs().retHelper, asyncEagerReturn);
-  ar->setThisOrClassAllowNull(takeCtx(std::forward<Ctx>(ctx)));
+  auto const numArgsInclUnpack = [&] {
+    if (UNLIKELY(fca.hasUnpack())) {
+      checkStack(vmStack(), func, 0);
+
+      GenericsSaver gs{fca.hasGenerics()};
+      return prepareUnpackArgs(func, fca.numArgs, true);
+    }
+
+    if (UNLIKELY(fca.numArgs > func->numNonVariadicParams())) {
+      GenericsSaver gs{fca.hasGenerics()};
+      if (RuntimeOption::EvalHackArrDVArrs) {
+        iopNewVec(fca.numArgs - func->numNonVariadicParams());
+      } else {
+        iopNewVArray(fca.numArgs - func->numNonVariadicParams());
+      }
+      return func->numNonVariadicParams() + 1;
+    }
+
+    return fca.numArgs;
+  }();
 
   auto const callFlags = CallFlags(
     fca.hasGenerics(),
     dynamic,
-    asyncEagerReturn,
-    0, // call offset already set on the ActRec
+    fca.asyncEagerOffset != kInvalidOffset && func->supportsAsyncEagerReturn(),
+    Offset(origpc - vmfp()->func()->entry()),
     0  // generics bitmap not used by interpreter
   );
 
-  doFCall(ar, fca.numArgs, fca.hasUnpack(), callFlags, savedGenerics);
+  doFCall(callFlags, func, numArgsInclUnpack, takeCtx(std::forward<Ctx>(ctx)),
+          jit::tc::ustubs().retHelper);
   pc = vmpc();
 }
 
@@ -3877,12 +3885,17 @@ OPTBLD_INLINE void fcallFuncFunc(PC origpc, PC& pc, const FCallArgs& fca) {
 
 OPTBLD_INLINE void fcallFuncRFunc(PC origpc, PC& pc, FCallArgs& fca) {
   assertx(tvIsRFunc(vmStack().topC()));
-  auto rfunc = vmStack().topC()->m_data.prfunc;
+  auto const rfunc = vmStack().topC()->m_data.prfunc;
+  auto const func = rfunc->m_func;
+  vmStack().discard();
+  if (RuntimeOption::EvalHackArrDVArrs) {
+    vmStack().pushVec(rfunc->m_arr);
+  } else {
+    vmStack().pushArray(rfunc->m_arr);
+  }
+  decRefRFunc(rfunc);
 
-  auto func = rfunc->m_func;
-  auto generics = Array(rfunc->m_arr);
-  vmStack().popC();
-  fcallImpl<false>(origpc, pc, fca, func, NoCtx{}, true, &generics);
+  fcallImpl<false>(origpc, pc, fca.withGenerics(), func, NoCtx{});
 }
 
 OPTBLD_INLINE void fcallFuncClsMeth(PC origpc, PC& pc, const FCallArgs& fca) {
@@ -3900,12 +3913,17 @@ OPTBLD_INLINE void fcallFuncClsMeth(PC origpc, PC& pc, const FCallArgs& fca) {
 OPTBLD_INLINE void fcallFuncRClsMeth(PC origpc, PC& pc, const FCallArgs& fca) {
   assertx(tvIsRClsMeth(vmStack().topC()));
   auto const rclsMeth = vmStack().topC()->m_data.prclsmeth;
-
   auto const cls = rclsMeth->m_cls;
   auto const func = rclsMeth->m_func;
-  auto generics = Array(rclsMeth->m_arr);
-  vmStack().popC();
-  fcallImpl<false>(origpc, pc, fca, func, cls, true, &generics);
+  vmStack().discard();
+  if (RuntimeOption::EvalHackArrDVArrs) {
+    vmStack().pushVec(rclsMeth->m_arr);
+  } else {
+    vmStack().pushArray(rclsMeth->m_arr);
+  }
+  decRefRClsMeth(rclsMeth);
+
+  fcallImpl<false>(origpc, pc, fca.withGenerics(), func, cls);
 }
 
 Func* resolveFuncImpl(Id id) {
@@ -5862,6 +5880,7 @@ TCA dispatchImpl() {
     }                                                         \
     if (instrCanHalt(Op::name) && UNLIKELY(!pc)) {            \
       vmfp() = nullptr;                                       \
+      vmpc() = nullptr;                                       \
       /* We returned from the top VM frame in this nesting level. This means
        * m_savedRip in our ActRec must have been callToExit, which should've
        * been returned by jitReturnPost(), whether or not we were called from
@@ -5905,8 +5924,7 @@ DispatchSwitch:
 #undef OPCODE_COVER_BODY
 #undef OPCODE_MAIN_BODY
 
-  assertx(retAddr == nullptr);
-  return nullptr;
+  not_reached();
 }
 
 static void dispatch() {
@@ -6016,6 +6034,7 @@ PcPair run(TCA* returnaddr, ExecMode modes, rds::Header* tl, PC nextpc, PC pc,
   // call & indirect branch: caller will jump to address returned in rax
   if (instrCanHalt(opcode) && !pc) {
     vmfp() = nullptr;
+    vmpc() = nullptr;
     // We returned from the top VM frame in this nesting level. This means
     // m_savedRip in our ActRec must have been callToExit, which should've
     // been returned by jitReturnPost(), whether or not we were called from

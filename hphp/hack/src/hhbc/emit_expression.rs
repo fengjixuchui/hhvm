@@ -3938,6 +3938,8 @@ fn emit_class_const(
             Ok(if string_utils::is_class(&id.1) {
                 if e.options().emit_class_pointers() == 1 {
                     emit_pos_then(&pos, instr::resolveclass(cid))
+                } else if e.options().emit_class_pointers() == 2 {
+                    emit_pos_then(&pos, instr::lazyclass(cid))
                 } else {
                     emit_pos_then(&pos, instr::string(cname))
                 }
@@ -3960,7 +3962,7 @@ fn emit_class_const(
                     string_utils::strip_global_ns(&id.1).to_string().into();
                 instr::clscns(const_id)
             };
-            if string_utils::is_class(&id.1) && e.options().emit_class_pointers() == 1 {
+            if string_utils::is_class(&id.1) && e.options().emit_class_pointers() > 0 {
                 emit_load_class_ref(e, env, pos, cexpr)
             } else {
                 Ok(InstrSeq::gather(vec![

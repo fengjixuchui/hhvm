@@ -236,18 +236,16 @@ void Repo::loadGlobalData(bool readGlobalTables /* = true */) {
           decoder.assertDone();
         }
 
-        if (RuntimeOption::EvalUseRepoAutoloadMap) {
-          {
-            RepoTxnQuery query(txn, stmt);
-            auto key = std::string("autoloadmap");
-            query.bindStdString("@key", key);
-            query.step();
-            if (!query.row()) {
-              throw RepoExc("Can't find key = 'autoloadmap' in %s", tbl.c_str());
-            }
-            BlobDecoder decoder = query.getBlob(0, true);
-            s_globalData.AutoloadMap = RepoAutoloadMapBuilder::serde(decoder);
+        {
+          RepoTxnQuery query(txn, stmt);
+          auto key = std::string("autoloadmap");
+          query.bindStdString("@key", key);
+          query.step();
+          if (!query.row()) {
+            throw RepoExc("Can't find key = 'autoloadmap' in %s", tbl.c_str());
           }
+          BlobDecoder decoder = query.getBlob(0, true);
+          s_globalData.AutoloadMap = RepoAutoloadMapBuilder::serde(decoder);
         }
       }
 
@@ -288,6 +286,7 @@ void Repo::loadGlobalData(bool readGlobalTables /* = true */) {
 
     RuntimeOption::EvalIsCompatibleClsMethType =
       s_globalData.IsCompatibleClsMethType;
+    RuntimeOption::EvalEmitClassPointers = s_globalData.EmitClassPointers;
     RuntimeOption::EvalEmitClsMethPointers = s_globalData.EmitClsMethPointers;
     RO::EvalForbidDynamicCallsWithAttr =
       s_globalData.ForbidDynamicCallsWithAttr;

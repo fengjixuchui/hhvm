@@ -41,7 +41,7 @@ const StaticString s_new_instance_of_not_string(
 
 void emitClassGetC(IRGS& env) {
   auto const name = topC(env);
-  if (!name->type().subtypeOfAny(TObj, TCls, TStr)) {
+  if (!name->type().subtypeOfAny(TObj, TCls, TStr, TLazyCls)) {
     interpOne(env);
     return;
   }
@@ -58,7 +58,9 @@ void emitClassGetC(IRGS& env) {
     return;
   }
 
-  if (!name->hasConstVal() && RO::EvalRaiseStrToClsConversionWarning) {
+  if (name->isA(TStr) &&
+      !name->hasConstVal() &&
+      RO::EvalRaiseStrToClsConversionWarning) {
     gen(env, RaiseStrToClassNotice, name);
   }
 
@@ -591,6 +593,10 @@ void emitDict(IRGS& env, const ArrayData* x) {
 void emitKeyset(IRGS& env, const ArrayData* x) {
   assertx(x->isKeysetType());
   push(env, cns(env, x));
+}
+
+void emitLazyClass(IRGS& env, const StringData* name) {
+  push(env, cns(env, LazyClassData::create(name)));
 }
 
 void emitString(IRGS& env, const StringData* s) { push(env, cns(env, s)); }

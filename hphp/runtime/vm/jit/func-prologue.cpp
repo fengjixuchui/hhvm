@@ -88,7 +88,7 @@ genFuncPrologue(TransID transID, TransKind kind,
   IRUnit unit{context, std::make_unique<AnnotationData>()};
   irgen::IRGS env{unit, nullptr, 0, nullptr, true};
 
-  irgen::emitFuncPrologue(env, argc, transID);
+  irgen::emitFuncPrologue(env, func, argc, transID);
   irgen::sealUnit(env);
 
   printUnit(2, unit, "After initial prologue generation");
@@ -113,40 +113,6 @@ genFuncPrologue(TransID transID, TransKind kind,
 
   emitVunit(*vunit, env.unit, codeView, fixups);
   return std::make_tuple(maker.markEnd().loc(), mainOrig, codeView);
-}
-
-TransLoc genFuncBodyDispatch(Func* func, const DVFuncletsVec& dvs,
-                             TransKind kind, CodeCache& code,
-                             tc::CodeMetaLock* locker) {
-  auto context = prologue_context(kInvalidTransID, kind, func,
-                                  func->numSlotsInFrame(), func->base());
-
-  tracing::Block _{
-    "gen-func-body-dispatch",
-    [&] { return traceProps(context); }
-  };
-
-  IRUnit unit{context, std::make_unique<AnnotationData>()};
-  irgen::IRGS env{unit, nullptr, 0, nullptr};
-
-  irgen::emitFuncBodyDispatch(env, dvs);
-  irgen::sealUnit(env);
-
-  CGMeta fixups;
-  auto vunit = irlower::lowerUnit(env.unit, CodeKind::Prologue);
-
-  if (locker) locker->lock();
-  SCOPE_EXIT { if (locker) locker->unlock(); };
-
-  auto const& codeView = code.view(kind);
-  tc::TransLocMaker maker{codeView};
-  maker.markStart();
-
-  emitVunit(*vunit, env.unit, codeView, fixups);
-
-  auto const loc = maker.markEnd().loc();
-  fixups.process(nullptr);
-  return loc;
 }
 
 ///////////////////////////////////////////////////////////////////////////////

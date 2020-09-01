@@ -298,7 +298,7 @@ void beginInlining(IRGS& env,
   meta.asyncEagerReturn = returnTarget.asyncEagerOffset != kInvalidOffset;
 
   gen(env, StFrameMeta, meta, calleeFP);
-  gen(env, StFrameFunc, calleeFP, cns(env, target));
+  gen(env, StFrameFunc, FuncData { target }, calleeFP);
 
   InlineCallData data;
   data.spOffset = calleeAROff;
@@ -339,11 +339,11 @@ void beginInlining(IRGS& env,
     0
   ).value());
 
-  emitPrologueLocals(env, numArgs, callFlags, closure);
+  emitPrologueLocals(env, target, numArgs, callFlags, closure);
 
-  emitGenericsMismatchCheck(env, callFlags);
-  emitCalleeDynamicCallCheck(env, callFlags);
-  emitImplicitContextCheck(env);
+  emitGenericsMismatchCheck(env, target, callFlags);
+  emitCalleeDynamicCallCheck(env, target, callFlags);
+  emitImplicitContextCheck(env, target);
 
   assertx(startSk.hasThis() == startSk.func()->hasThisInBody());
   assertx(

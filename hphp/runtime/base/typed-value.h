@@ -70,8 +70,6 @@ union Value {
   LazyClassData plazyclass;   // KindOfLazyClass
 };
 
-enum VarNrFlag { NR_FLAG = 1 << 29 };
-
 struct ConstModifiers {
   uint32_t rawData;
 
@@ -107,16 +105,8 @@ union AuxUnion {
   uint32_t u_asyncEagerReturnFlag;
   // Key type and hash for MixedArray.
   int32_t u_hash;
-  // Magic number for asserts in VarNR.
-  VarNrFlag u_varNrFlag;
-  // Used by Class::initPropsImpl() for deep init.
-  bool u_deepInit;
-  // Used by unit.cpp to squirrel away RDS handles.
-  int32_t u_rdsHandle;
   // Used by Class::Const.
   ConstModifiers u_constModifiers;
-  // Used by InvokeResult.
-  bool u_ok;
   // Used by system constants
   bool u_dynamic;
 };
@@ -163,15 +153,6 @@ struct TypedValueAux : TypedValue {
 
   const int32_t& hash() const { return m_aux.u_hash; }
         int32_t& hash()       { return m_aux.u_hash; }
-
-  const VarNrFlag& varNrFlag() const { return m_aux.u_varNrFlag; }
-        VarNrFlag& varNrFlag()       { return m_aux.u_varNrFlag; }
-
-  const bool& deepInit() const { return m_aux.u_deepInit; }
-        bool& deepInit()       { return m_aux.u_deepInit; }
-
-  const int32_t& rdsHandle() const { return m_aux.u_rdsHandle; }
-        int32_t& rdsHandle()       { return m_aux.u_rdsHandle; }
 
   const ConstModifiers& constModifiers() const {
     return m_aux.u_constModifiers;
@@ -302,6 +283,7 @@ X(KindOfClass,        Class*);
 X(KindOfClsMeth,      ClsMethDataRef);
 X(KindOfRClsMeth,     RClsMethData*);
 X(KindOfRecord,       RecordData*);
+X(KindOfLazyClass,    LazyClassData);
 
 #undef X
 
@@ -329,6 +311,12 @@ inline Value make_value(double d) { Value v; v.dbl = d; return v; }
 inline Value make_value(ClsMethDataRef clsMeth) {
   Value v;
   v.pclsmeth = clsMeth;
+  return v;
+}
+
+inline Value make_value(LazyClassData lclass) {
+  Value v;
+  v.plazyclass = lclass;
   return v;
 }
 

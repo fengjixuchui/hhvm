@@ -367,6 +367,13 @@ public:
     *m_top = make_tv<KindOfPersistentString>(s);
   }
 
+  ALWAYS_INLINE
+  void pushLazyClass(LazyClassData l) {
+    assertx(m_top != m_elms);
+    m_top--;
+    *m_top = make_tv<KindOfLazyClass>(l);
+  }
+
   // These should only be called directly when the caller has
   // already adjusted the refcount appropriately
   ALWAYS_INLINE
@@ -660,12 +667,20 @@ void resetCoverageCounters();
 using InterpOneFunc = jit::TCA (*) (ActRec*, TypedValue*, Offset);
 extern InterpOneFunc interpOneEntryPoints[];
 
-bool doFCall(ActRec* ar, uint32_t numArgs, bool hasUnpack, CallFlags callFlags,
-             Array* savedGenerics = nullptr);
+bool doFCall(CallFlags callFlags, const Func* func, uint32_t numArgsInclUnpack,
+             void* ctx, jit::TCA retAddr);
 jit::TCA dispatchBB();
 void pushFrameSlots(const Func* func, int nparams = 0);
 Array getDefinedVariables(const ActRec*);
 
+/*
+ * Start a new nested instance of VM either at the beginning of a function
+ * determined by the enterFnAr frame, or at the current vmpc() location.
+ *
+ * Execution finishes by either returning, awaiting or yielding from the top
+ * level frame, in which case vmfp()/vmpc() are set to nullptr, or by throwing
+ * an exception, which callers usually process via exception_handler().
+ */
 void enterVMAtFunc(ActRec* enterFnAr, Array&& generics, bool hasInOut,
                    bool dynamicCall, bool allowDynCallNoPointer);
 void enterVMAtCurPC();

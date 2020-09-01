@@ -49,7 +49,7 @@ struct NamedEntity;
 struct PreClass;
 struct StringData;
 struct StructuredLogEntry;
-template <typename T> struct AtomicVector;
+template <typename T> struct AtomicLowPtrVector;
 
 /*
  * Signature for native functions called by the hhvm using the hhvm
@@ -65,11 +65,6 @@ using ArFunction = TypedValue* (*)(ActRec* ar);
  */
 struct NativeArgs; // never defined
 using NativeFunction = void(*)(NativeArgs*);
-
-/*
- * Vector of pairs (param index, offset of corresponding DV funclet).
- */
-using DVFuncletsVec = std::vector<std::pair<int, Offset>>;
 
 ///////////////////////////////////////////////////////////////////////////////
 // EH table.
@@ -119,6 +114,10 @@ struct EHEnt {
  */
 struct Func final {
   friend struct FuncEmitter;
+
+  // DO NOT access it directly, instead use Func::getFuncVec()
+  // Exposed in the header file for gdb python macros
+  static AtomicLowPtrVector<const Func> s_funcVec;
 
   /////////////////////////////////////////////////////////////////////////////
   // Types.
@@ -404,12 +403,6 @@ struct Func final {
    * Get the Op at `instrOffset'.
    */
   Op getOp(Offset instrOffset) const;
-
-  /*
-   * Return a vector of pairs of (param index, corresponding DV funclet
-   * offset).
-   */
-  DVFuncletsVec getDVFunclets() const;
 
   /*
    * Is there a main or default value entrypoint at the given offset?
@@ -1046,7 +1039,7 @@ struct Func final {
   /*
    * Access to the global vector of funcs.  This maps FuncID's back to Func*'s.
    */
-  static const AtomicVector<const Func*>& getFuncVec();
+  static const AtomicLowPtrVector<const Func>& getFuncVec();
 
 
   /////////////////////////////////////////////////////////////////////////////

@@ -32,54 +32,62 @@ namespace HPHP { namespace bespoke {
 
 struct LoggingArray;
 
+// The second entry in these tuples is an "is read operation" flag.
+// This flag is set for ops that are guaranteed to preserve the array's layout,
+// even if - like with the ToVArray op - they may update the array due to COW.
 #define ARRAY_OPS \
-  X(Scan) \
-  X(EscalateToVanilla) \
-  X(ConvertToUncounted) \
-  X(ReleaseUncounted) \
-  X(Release) \
-  X(Size) \
-  X(IsVectorData) \
-  X(GetInt) \
-  X(GetStr) \
-  X(GetIntPos) \
-  X(GetStrPos) \
-  X(LvalInt) \
-  X(LvalStr) \
-  X(SetInt) \
-  X(SetStr) \
-  X(RemoveInt) \
-  X(RemoveStr) \
-  X(IterBegin) \
-  X(IterLast) \
-  X(IterEnd) \
-  X(IterAdvance) \
-  X(IterRewind) \
-  X(Append) \
-  X(Prepend) \
-  X(Merge) \
-  X(Pop) \
-  X(Dequeue) \
-  X(Renumber) \
-  X(Copy) \
-  X(ToVArray) \
-  X(ToDArray) \
-  X(ToVec) \
-  X(ToDict) \
-  X(ToKeyset)
+  X(Scan,               true)  \
+  X(EscalateToVanilla,  true)  \
+  X(ConvertToUncounted, true)  \
+  X(ReleaseUncounted,   true)  \
+  X(Release,            true)  \
+  X(Size,               true)  \
+  X(IsVectorData,       true)  \
+  X(GetInt,             true)  \
+  X(GetStr,             true)  \
+  X(GetIntPos,          true)  \
+  X(GetStrPos,          true)  \
+  X(LvalInt,            false) \
+  X(LvalStr,            false) \
+  X(SetInt,             false) \
+  X(SetStr,             false) \
+  X(ConstructInt,       false) \
+  X(ConstructStr,       false) \
+  X(RemoveInt,          false) \
+  X(RemoveStr,          false) \
+  X(IterBegin,          true)  \
+  X(IterLast,           true)  \
+  X(IterEnd,            true)  \
+  X(IterAdvance,        true)  \
+  X(IterRewind,         true)  \
+  X(Append,             false) \
+  X(Prepend,            false) \
+  X(Merge,              true)  \
+  X(Pop,                false) \
+  X(Dequeue,            false) \
+  X(Renumber,           false) \
+  X(Copy,               true)  \
+  X(ToVArray,           true)  \
+  X(ToDArray,           true)  \
+  X(ToVec,              true)  \
+  X(ToDict,             true)  \
+  X(ToKeyset,           true)
 
 enum class ArrayOp : uint8_t {
-#define X(name) name,
+#define X(name, read) name,
 ARRAY_OPS
 #undef X
 };
 
+// Internal storage detail of EventMap.
+struct EventKey;
+
 // We'll store a LoggingProfile for each array construction site SrcKey.
 // It tracks the operations that happen on arrays coming from that site.
 struct LoggingProfile {
-  using EventMapKey = std::pair<SrcKey, std::string>;
+  using EventMapKey = std::pair<SrcKey, uint64_t>;
   using EventMapHasher = pairHashCompare<
-    SrcKey, std::string, SrcKey::TbbHashCompare, stringHashCompare>;
+    SrcKey, uint64_t, SrcKey::TbbHashCompare, integralHashCompare<uint64_t>>;
 
   // Values in the event map are sampled event counts.
   using EventMap = tbb::concurrent_hash_map<
@@ -87,7 +95,9 @@ struct LoggingProfile {
 
   explicit LoggingProfile(SrcKey source) : source(source) {}
 
-  size_t eventCount() const;
+  double getSampleCountMultiplier() const;
+  uint64_t getTotalEvents() const;
+  double getProfileWeight() const;
 
   // We take specific inputs rather than templated inputs because we're going
   // to follow up soon with limitations on the number of arguments we can log.
@@ -99,11 +109,12 @@ struct LoggingProfile {
   void logEvent(ArrayOp op, const StringData* k, TypedValue v);
 
 private:
-  void logEventImpl(const std::string& key);
+  void logEventImpl(const EventKey& key);
 
 public:
   SrcKey source;
   std::atomic<uint64_t> sampleCount = 0;
+  std::atomic<uint64_t> loggingArraysEmitted = 0;
   LoggingArray* staticArray = nullptr;
   EventMap events;
 };
