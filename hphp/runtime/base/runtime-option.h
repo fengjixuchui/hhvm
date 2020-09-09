@@ -74,26 +74,27 @@ struct RepoOptions {
 // (Type, HDFName, DV)
 // (N=no-prefix, P=PHP7, E=Eval, H=Hack.Lang)
 #define PARSERFLAGS() \
-  N(StringMap,      AliasedNamespaces,              StringMap{})      \
-  P(bool,           UVS,                            s_PHP7_master)    \
-  P(bool,           LTRAssign,                      s_PHP7_master)    \
-  H(bool,           EnableCoroutines,               true)             \
-  H(bool,           Hacksperimental,                false)            \
-  H(bool,           DisableLvalAsAnExpression,      false)            \
-  H(bool,           AllowNewAttributeSyntax,        false)            \
-  H(bool,           ConstDefaultFuncArgs,           false)            \
-  H(bool,           ConstStaticProps,               false)            \
-  H(bool,           AbstractStaticProps,            false)            \
-  H(bool,           DisableUnsetClassConst,         false)            \
-  H(bool,           DisallowFuncPtrsInConstants,    false)            \
-  E(bool,           EmitFuncPointers,               true)             \
-  E(bool,           EmitInstMethPointers,           EmitFuncPointers) \
-  H(bool,           AllowUnstableFeatures,          false)            \
-  H(bool,           EnableXHPClassModifier,         true)             \
-  H(bool,           DisableXHPElementMangling,      true)             \
-  H(bool,           DisableArray,                   true)             \
-  H(bool,           DisableArrayCast,               true)             \
-  H(bool,           DisableArrayTypehint,           true)             \
+  N(StringMap,      AliasedNamespaces,                StringMap{})    \
+  P(bool,           UVS,                              s_PHP7_master)  \
+  P(bool,           LTRAssign,                        s_PHP7_master)  \
+  H(bool,           EnableCoroutines,                 true)           \
+  H(bool,           Hacksperimental,                  false)          \
+  H(bool,           DisableLvalAsAnExpression,        false)          \
+  H(bool,           AllowNewAttributeSyntax,          false)          \
+  H(bool,           ConstDefaultFuncArgs,             false)          \
+  H(bool,           ConstStaticProps,                 false)          \
+  H(bool,           AbstractStaticProps,              false)          \
+  H(bool,           DisableUnsetClassConst,           false)          \
+  H(bool,           DisallowFuncPtrsInConstants,      false)          \
+  E(bool,           EmitFuncPointers,                 true)           \
+  E(bool,           EmitInstMethPointers,             false)          \
+  H(bool,           AllowUnstableFeatures,            false)          \
+  H(bool,           EnableXHPClassModifier,           true)           \
+  H(bool,           DisableXHPElementMangling,        true)           \
+  H(bool,           DisableArray,                     true)           \
+  H(bool,           DisableArrayCast,                 true)           \
+  H(bool,           DisableArrayTypehint,             true)           \
+  H(bool,           EnableFirstClassFunctionPointers, false)          \
   /**/
 
   /**/
@@ -638,8 +639,7 @@ struct RuntimeOption {
 
 #define HAC_CHECK_OPTS                         \
   HC(Compare, compare)                         \
-  HC(ArrayKeyCast, array_key_cast)             \
-  HC(ArrayPlus, array_plus)
+  HC(ArrayKeyCast, array_key_cast)
 
 #define EVALFLAGS()                                                     \
   /* F(type, name, defaultVal) */                                       \
@@ -1091,7 +1091,6 @@ struct RuntimeOption {
    * checks are made; they do not affect any optimizations. */          \
   F(bool, HackArrCompatNotices, false)                                  \
   F(bool, HackArrCompatCheckCompare, false)                             \
-  F(bool, HackArrCompatCheckArrayPlus, false)                           \
   F(bool, HackArrCompatFBSerializeHackArraysNotices, false)             \
   /* Raise notices on intish-cast (which may use an is_array check) */  \
   F(bool, HackArrCompatIntishCastNotices, false)                        \
