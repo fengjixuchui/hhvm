@@ -2396,6 +2396,12 @@ void insertLoadsAt(jit::vector<Vinstr>& code, unsigned& j,
 void insertCopies(Vunit& unit, const VxlsContext& ctx,
                   const jit::vector<Variable*>& /*variables*/,
                   const ResolutionPlan& resolution) {
+  auto const getSlots = [&] (folly::Optional<int> offset) {
+      folly::Optional<MemoryRef> slots;
+      if (offset) slots = ctx.sp[*offset];
+      return slots;
+  };
+
   // Insert copies inside blocks.
   for (auto const b : ctx.blocks) {
     auto& block = unit.blocks[b];
@@ -2404,8 +2410,7 @@ void insertCopies(Vunit& unit, const VxlsContext& ctx,
     auto offset = ctx.spill_offsets[b];
 
     for (unsigned j = 0; j < code.size(); j++, pos += 2) {
-      folly::Optional<MemoryRef> slots = folly::none;
-      if (offset) slots = ctx.sp[*offset];
+      auto const slots = getSlots(offset);
 
       // Spills, reg-reg moves, and loads of constant values or spill space all
       // occur between instruction.  Insert them in order.
@@ -2449,8 +2454,7 @@ void insertCopies(Vunit& unit, const VxlsContext& ctx,
         unsigned j = code.size() - 1;
         auto const pos = ctx.block_ranges[b].end - 1;
         auto const offset = ctx.spill_offsets[succlist[0]];
-        assertx(offset);
-        auto const slots = ctx.sp[*offset];
+        auto const slots = getSlots(offset);
 
         // We interleave copies and loads in `edge_copies', so here and below
         // we process them separately (and pass `true' to avoid asserting).
@@ -2467,8 +2471,7 @@ void insertCopies(Vunit& unit, const VxlsContext& ctx,
           unsigned j = 0;
           auto const pos = ctx.block_ranges[s].start;
           auto const offset = ctx.spill_offsets[s];
-          assertx(offset);
-          auto const slots = ctx.sp[*offset];
+          auto const slots = getSlots(offset);
 
           insertCopiesAt(ctx, code, j, c->second, pos);
           insertLoadsAt(code, j, c->second, slots, pos);

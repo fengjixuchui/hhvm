@@ -49,26 +49,13 @@ static_assert(kSizeIndex == 0 ||
               kSizeIndex2Size[kSizeIndex - 1] < sizeof(LoggingArray),
               "kSizeIndex must be the smallest size for LoggingArray");
 
-LoggingLayout* s_layout = new LoggingLayout();
+Layout* s_layout = new LoggingLayout();
 std::atomic<bool> g_emitLoggingArrays;
 
 // The bespoke kind for a vanilla kind.
 HeaderKind getBespokeKind(ArrayData::ArrayKind kind) {
   assertx(!(kind & ArrayData::kBespokeKindMask));
   return HeaderKind(kind | ArrayData::kBespokeKindMask);
-}
-
-LoggingArray* makeWithProfile(ArrayData* ad, LoggingProfile* prof) {
-  assertx(ad->isVanilla());
-  assertx(ad->getPosition() == ad->iter_begin());
-
-  auto lad = static_cast<LoggingArray*>(tl_heap->objMallocIndex(kSizeIndex));
-  lad->initHeader_16(getBespokeKind(ad->kind()), OneReference, ad->auxBits());
-  lad->setLayout(s_layout);
-  lad->wrapped = ad;
-  lad->profile = prof;
-  assertx(lad->checkInvariants());
-  return lad;
 }
 
 template <typename... Ts>
@@ -125,7 +112,7 @@ ArrayData* maybeMakeLoggingArray(ArrayData* ad) {
     tvIsString(k) ? profile->logEvent(ArrayOp::ConstructStr, val(k).pstr, v)
                   : profile->logEvent(ArrayOp::ConstructInt, val(k).num, v);
   });
-  return makeWithProfile(ad, profile);
+  return LoggingArray::Make(ad, profile);
 }
 
 const ArrayData* maybeMakeLoggingArray(const ArrayData* ad) {
@@ -134,17 +121,32 @@ const ArrayData* maybeMakeLoggingArray(const ArrayData* ad) {
 
 //////////////////////////////////////////////////////////////////////////////
 
-LoggingArray* LoggingArray::MakeStatic(ArrayData* ad, LoggingProfile* prof) {
+LoggingArray* LoggingArray::Make(ArrayData* ad, LoggingProfile* profile) {
+  assertx(ad->isVanilla());
+
+  auto lad = static_cast<LoggingArray*>(tl_heap->objMallocIndex(kSizeIndex));
+  lad->initHeader_16(getBespokeKind(ad->kind()), OneReference, ad->auxBits());
+  lad->m_size = ad->size();
+  lad->setLayoutRaw(s_layout);
+  lad->wrapped = ad;
+  lad->profile = profile;
+  assertx(lad->checkInvariants());
+  return lad;
+}
+
+LoggingArray* LoggingArray::MakeStatic(ArrayData* ad, LoggingProfile* profile) {
+  assertx(ad->isVanilla());
   assertx(ad->isStatic());
 
   auto const size = sizeof(LoggingArray);
   auto lad = static_cast<LoggingArray*>(
       RO::EvalLowStaticArrays ? low_malloc(size) : uncounted_malloc(size));
   lad->initHeader_16(getBespokeKind(ad->kind()), StaticValue, ad->auxBits());
-  lad->setLayout(s_layout);
+  lad->m_size = ad->size();
+  lad->setLayoutRaw(s_layout);
   lad->wrapped = ad;
-  lad->profile = prof;
-
+  lad->profile = profile;
+  assertx(lad->checkInvariants());
   return lad;
 }
 
@@ -158,8 +160,9 @@ bool LoggingArray::checkInvariants() const {
   assertx(kindIsValid());
   assertx(wrapped->isVanilla());
   assertx(wrapped->kindIsValid());
+  assertx(wrapped->size() == size());
   assertx(wrapped->toDataType() == toDataType());
-  assertx(asBespoke(this)->layout() == s_layout);
+  assertx(layoutRaw() == s_layout);
   assertx(m_kind == getBespokeKind(wrapped->kind()));
   assertx(isLegacyArray() == wrapped->isLegacyArray());
   return true;
@@ -174,12 +177,16 @@ const LoggingArray* LoggingArray::asLogging(const ArrayData* ad) {
   return asLogging(const_cast<ArrayData*>(ad));
 }
 
-LoggingArray* LoggingArray::updateKind() {
-  auto const kind = getBespokeKind(wrapped->kind());
-  assertx(IMPLIES(kind != m_kind, hasExactlyOneRef()));
-  m_kind = kind;
+void LoggingArray::updateKindAndSize() {
+  if (hasExactlyOneRef()) {
+    m_kind = getBespokeKind(wrapped->kind());
+    m_size = wrapped->size();
+  }
   assertx(checkInvariants());
-  return this;
+}
+
+std::string LoggingLayout::describe() const {
+  return "Logging";
 }
 
 size_t LoggingLayout::heapSize(const ArrayData*) const {
@@ -222,15 +229,10 @@ void LoggingLayout::release(ArrayData* ad) const {
 //////////////////////////////////////////////////////////////////////////////
 // Accessors
 
-size_t LoggingLayout::size(const ArrayData* ad) const {
-  logEvent(ad, ArrayOp::Size);
-  return LoggingArray::asLogging(ad)->wrapped->size();
-}
 bool LoggingLayout::isVectorData(const ArrayData* ad) const {
   logEvent(ad, ArrayOp::IsVectorData);
   return LoggingArray::asLogging(ad)->wrapped->isVectorData();
 }
-
 TypedValue LoggingLayout::getInt(const ArrayData* ad, int64_t k) const {
   logEvent(ad, ArrayOp::GetInt, k);
   return LoggingArray::asLogging(ad)->wrapped->get(k);
@@ -259,8 +261,9 @@ ssize_t LoggingLayout::getStrPos(const ArrayData* ad, const StringData* k) const
 
 namespace {
 ArrayData* escalate(LoggingArray* lad, ArrayData* result) {
+  lad->updateKindAndSize();
   if (result == lad->wrapped) return lad;
-  return makeWithProfile(result, lad->profile);
+  return LoggingArray::Make(result, lad->profile);
 }
 
 arr_lval escalate(LoggingArray* lad, arr_lval result) {
@@ -356,15 +359,16 @@ ArrayData* convert(ArrayData* ad, F&& f) {
   auto const lad = LoggingArray::asLogging(ad);
   auto const wrapped = lad->wrapped;
   auto const result = f(wrapped);
+  lad->updateKindAndSize();
 
   // Reuse existing profile for in-place conversions.
-  if (result == wrapped) return lad->updateKind();
+  if (result == wrapped) return lad;
 
   // Reuse existing profile for conversions that don't change array layout.
   if ((wrapped->hasVanillaMixedLayout() && result->hasVanillaMixedLayout()) ||
       (wrapped->hasVanillaPackedLayout() && result->hasVanillaPackedLayout()) ||
       (wrapped->isKeysetKind() && result->isKeysetKind())) {
-    return makeWithProfile(result, lad->profile);
+    return LoggingArray::Make(result, lad->profile);
   }
 
   // If the layout has changed, make a fresh profile at the new creation site.
@@ -374,8 +378,8 @@ ArrayData* convert(ArrayData* ad, F&& f) {
     return result;
   }
 
-  auto const prof = getLoggingProfile(sk, result);
-  if (!prof) return result;
+  auto const profile = getLoggingProfile(sk, result);
+  if (!profile) return result;
 
   // We expect 1 / SampleRate LoggingArrays to make it here. Bump sampleCount
   // for the cast site accordingly. Since we sample the second array created
@@ -383,19 +387,19 @@ ArrayData* convert(ArrayData* ad, F&& f) {
   //
   // TODO(kshaunak): Treat this site like a constructor and log pseudo-ops.
   uint64_t expected = 0;
-  if (!prof->sampleCount.compare_exchange_strong(expected, 2)) {
-    prof->sampleCount += RO::EvalEmitLoggingArraySampleRate;
+  if (!profile->sampleCount.compare_exchange_strong(expected, 2)) {
+    profile->sampleCount += RO::EvalEmitLoggingArraySampleRate;
   }
-  prof->loggingArraysEmitted++;
+  profile->loggingArraysEmitted++;
 
-  return makeWithProfile(result, prof);
+  return LoggingArray::Make(result, profile);
 }
 }
 
 ArrayData* LoggingLayout::copy(const ArrayData* ad) const {
   logEvent(ad, ArrayOp::Copy);
   auto const lad = LoggingArray::asLogging(ad);
-  return makeWithProfile(lad->wrapped->copy(), lad->profile);
+  return LoggingArray::Make(lad->wrapped->copy(), lad->profile);
 }
 ArrayData* LoggingLayout::toVArray(ArrayData* ad, bool copy) const {
   logEvent(ad, ArrayOp::ToVArray);

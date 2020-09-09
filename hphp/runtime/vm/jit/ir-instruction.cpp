@@ -543,7 +543,15 @@ Type outputType(const IRInstruction* inst, int /*dstId*/) {
   // because we never use these types. Otherwise, apply layout-dependence.
   auto const checkLayoutFlags = [&](Type t) {
     if (!allowBespokeArrayLikes()) return t;
-    return inst->isLayoutAgnostic() ? t.widenToBespoke() : t.narrowToVanilla();
+    if (inst->isLayoutPreserving()) {
+      assertx(inst->src(0)->type() <= TArrLike);
+      return inst->src(0)->type().arrSpec().vanilla() ? t.narrowToVanilla()
+                                                      : t.widenToBespoke();
+    } else if (inst->isLayoutAgnostic()) {
+      return t.widenToBespoke();
+    } else {
+      return t.narrowToVanilla();
+    }
   };
   using namespace TypeNames;
   using TypeNames::TCA;

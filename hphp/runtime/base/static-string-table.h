@@ -71,12 +71,13 @@ StringData* makeStaticString(const char* str, size_t len);
 StringData* makeStaticString(const char* str);
 
 /*
- * As their counterparts above, but check that the static string
- * table has been initialized. These should be used for anything
- * that might run before main().
+ * Insert an already initialized static StringData into the static string table.
+ * If the same string is already present, invoke the deleter to take appropriate
+ * action. By default, the deleter tries to free the memory; thus we need to
+ * pass a custom deleter if we manipulate pre-allocated memory.
  */
-StringData* makeStaticStringSafe(const char* str, size_t len);
-StringData* makeStaticStringSafe(const char* str);
+StringData* insertStaticString(StringData*,
+                               void (*deleter)(StringData*) = nullptr);
 
 /*
  * Lookup static strings for single character strings.  (We pre-create
@@ -135,6 +136,11 @@ Array lookupDefinedConstants(bool categorize = false);
  */
 size_t countStaticStringConstants();
 
+/*
+ * Initialize the static string table. This needs to happen before any static
+ * strings are materialized.
+ */
+void create_string_data_map();
 /*
  * The static string table is generally initially created before main
  * by global constructors (StaticString objects).  After we've parsed

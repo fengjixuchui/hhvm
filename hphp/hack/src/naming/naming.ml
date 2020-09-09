@@ -1145,6 +1145,7 @@ and enum_ env e =
   {
     N.e_base = hint env e.Aast.e_base;
     N.e_constraint = Option.map e.Aast.e_constraint (hint env);
+    N.e_includes = List.map ~f:(hint env) e.Aast.e_includes;
   }
 
 and type_paraml ?(forbid_this = false) env tparams =
@@ -1460,6 +1461,7 @@ and method_ genv m =
     N.m_where_constraints = where_constraints;
     N.m_params = paraml;
     N.m_cap = m.Aast.m_cap;
+    N.m_unsafe_cap = m.Aast.m_unsafe_cap;
     N.m_body = body;
     N.m_fun_kind = m.Aast.m_fun_kind;
     N.m_ret = ret;
@@ -1559,6 +1561,10 @@ and fun_ ctx f =
       else
         failwith "ast_to_nast error unnamedbody in fun_"
   in
+  let f_cap = Aast.type_hint_option_map ~f:(hint env) f.Aast.f_cap in
+  let f_unsafe_cap =
+    Aast.type_hint_option_map ~f:(hint env) f.Aast.f_unsafe_cap
+  in
   let named_fun =
     {
       N.f_annotation = ();
@@ -1570,7 +1576,8 @@ and fun_ ctx f =
       f_where_constraints = where_constraints;
       f_params = paraml;
       (* TODO(T70095684) double-check f_cap *)
-      f_cap = f.Aast.f_cap;
+      f_cap;
+      f_unsafe_cap;
       f_body = body;
       f_fun_kind = f_kind;
       f_variadic = variadicity;
@@ -2354,6 +2361,7 @@ and expr_lambda env f =
     f_tparams = [];
     (* TODO(T70095684) double-check f_cap *)
     f_cap = f.Aast.f_cap;
+    f_unsafe_cap = f.Aast.f_unsafe_cap;
     f_where_constraints = [];
     f_body = body;
     f_fun_kind = f.Aast.f_fun_kind;

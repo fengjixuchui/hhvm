@@ -95,6 +95,7 @@ type expand_typeconst =
   ?as_tyvar_with_cnstr:bool ->
   locl_ty ->
   Aast.sid ->
+  root_pos:Pos.t ->
   on_error:Errors.typing_error_callback ->
   allow_abstract_tconst:bool ->
   env * locl_ty
@@ -550,6 +551,10 @@ let reactivity_to_string env r =
     | MaybeReactive n -> "maybe (" ^ aux n ^ ")"
     | Nonreactive -> "non-reactive"
     | RxVar _ -> "maybe reactive"
+    | Cipp None -> "cipp"
+    | Cipp (Some s) -> "cipp(" ^ s ^ ")"
+    | CippLocal None -> "cipp_local"
+    | CippLocal (Some s) -> "cipp_local(" ^ s ^ ")"
   in
   aux r
 

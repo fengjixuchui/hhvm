@@ -52,7 +52,7 @@ struct PackedArray::VecInitializer {
   VecInitializer() {
     auto const aux = packSizeIndexAndAuxBits(0, 0);
     auto const ad = reinterpret_cast<ArrayData*>(&s_theEmptyVec);
-    ad->m_sizeAndPos = 0;
+    ad->m_size = 0;
     ad->initHeader_16(HeaderKind::Vec, StaticValue, aux);
     assertx(checkInvariants(ad));
   }
@@ -63,7 +63,7 @@ struct PackedArray::VArrayInitializer {
   VArrayInitializer() {
     auto const aux = packSizeIndexAndAuxBits(0, 0);
     auto const ad = reinterpret_cast<ArrayData*>(&s_theEmptyVArray);
-    ad->m_sizeAndPos = 0;
+    ad->m_size = 0;
     ad->initHeader_16(HeaderKind::Packed, StaticValue, aux);
     assertx(RuntimeOption::EvalHackArrDVArrs || checkInvariants(ad));
   }
@@ -74,7 +74,7 @@ struct PackedArray::MarkedVecInitializer {
   MarkedVecInitializer() {
     auto const aux = packSizeIndexAndAuxBits(0, ArrayData::kLegacyArray);
     auto const ad = reinterpret_cast<ArrayData*>(&s_theEmptyMarkedVec);
-    ad->m_sizeAndPos = 0;
+    ad->m_size = 0;
     ad->initHeader_16(HeaderKind::Vec, StaticValue, aux);
     assertx(checkInvariants(ad));
   }
@@ -85,7 +85,7 @@ struct PackedArray::MarkedVArrayInitializer {
   MarkedVArrayInitializer() {
     auto const aux = packSizeIndexAndAuxBits(0, ArrayData::kLegacyArray);
     auto const ad = reinterpret_cast<ArrayData*>(&s_theEmptyMarkedVArray);
-    ad->m_sizeAndPos = 0;
+    ad->m_size = 0;
     ad->initHeader_16(HeaderKind::Packed, StaticValue, aux);
     assertx(RuntimeOption::EvalHackArrDVArrs || checkInvariants(ad));
   }
@@ -98,9 +98,7 @@ namespace {
 
 inline ArrayData* alloc_packed_static(const ArrayData* ad) {
   auto const extra = arrprov::tagSize(ad);
-  auto const size = sizeof(ArrayData)
-                  + ad->getSize() * sizeof(TypedValue)
-                  + extra;
+  auto const size = sizeof(ArrayData) + ad->size() * sizeof(TypedValue) + extra;
   auto const ret = RuntimeOption::EvalLowStaticArrays
     ? low_malloc(size)
     : uncounted_malloc(size);
@@ -114,13 +112,10 @@ bool PackedArray::checkInvariants(const ArrayData* arr) {
   assertx(arr->checkCountZ());
   assertx(arr->m_size <= MixedArray::MaxSize);
   assertx(arr->m_size <= capacity(arr));
-  assertx(arr->m_pos >= 0 && arr->m_pos <= arr->m_size);
   assertx(IMPLIES(arr->isVArray(), arr->isPackedKind()));
   assertx(IMPLIES(arr->isNotDVArray(), arr->isVecKind()));
   assertx(!RO::EvalHackArrDVArrs || arr->isVecKind());
   assertx(arrprov::arrayWantsTag(arr) || !arr->hasProvenanceData());
-  // Note that m_pos < m_size is not an invariant, because an array
-  // that grows will only adjust m_size to zero on the old array.
 
   // This loop is too slow for normal use, but can be enabled to debug
   // packed arrays.
@@ -145,13 +140,12 @@ MixedArray* PackedArray::ToMixedHeader(const ArrayData* old,
   auto const scale   = MixedArray::computeScaleFromSize(neededSize);
   auto const ad      = MixedArray::reqAlloc(scale);
   auto const kind    = old->isVArray() ? HeaderKind::Mixed : HeaderKind::Dict;
-  ad->m_sizeAndPos   = oldSize | int64_t{old->m_pos} << 32;
   ad->initHeader_16(kind, OneReference, MixedArrayKeys::packIntsForAux());
+  ad->m_size         = oldSize;
   ad->m_scale_used   = scale | uint64_t{oldSize} << 32; // used=oldSize
   ad->m_nextKI       = oldSize;
 
   assertx(ad->m_size == oldSize);
-  assertx(ad->m_pos == old->m_pos);
   assertx(ad->hasVanillaMixedLayout());
   assertx(ad->isDArray() == old->isVArray());
   assertx(ad->hasExactlyOneRef());
@@ -184,7 +178,7 @@ MixedArray* PackedArray::ToMixed(ArrayData* old) {
     tvCopy(GetPosVal(old, i), dstData->data);
     ++dstData;
   }
-  old->m_sizeAndPos = 0;
+  old->m_size = 0;
 
   assertx(ad->checkInvariants());
   assertx(!ad->isFull());
@@ -241,7 +235,7 @@ ArrayData* PackedArray::Grow(ArrayData* adIn, bool copy) {
   auto ad = static_cast<ArrayData*>(tl_heap->objMallocIndex(sizeIndex));
 
   if (copy) {
-    // CopyPackedHelper will copy the header and m_sizeAndPos; since we pass
+    // CopyPackedHelper will copy the header and m_size; since we pass
     // convertingPackedToVec = false, it can't fail. All we have to do
     // afterwards is fix the capacity and refcount on the copy; it's easiest
     // to do that by reinitializing the whole header.
@@ -253,9 +247,8 @@ ArrayData* PackedArray::Grow(ArrayData* adIn, bool copy) {
     );
 
     assertx(ad->m_size == adIn->m_size);
-    assertx(ad->m_pos == adIn->m_pos);
   } else {
-    // Copy everything from `adIn' to `ad', including header and m_sizeAndPos
+    // Copy everything from `adIn' to `ad', including header and m_size
     static_assert(sizeof(ArrayData) == 16 && sizeof(TypedValue) == 16, "");
     static_assert(PackedArray::stores_typed_values, "");
     memcpy16_inline(ad, adIn, (adIn->m_size + 1) * sizeof(TypedValue));
@@ -266,8 +259,7 @@ ArrayData* PackedArray::Grow(ArrayData* adIn, bool copy) {
     );
 
     assertx(ad->m_size == adIn->m_size);
-    assertx(ad->m_pos == adIn->m_pos);
-    adIn->m_sizeAndPos = 0; // old is a zombie now
+    adIn->m_size = 0; // old is a zombie now
   }
 
   ad->m_aux16 &= ~ArrayData::kHasProvenanceData;
@@ -291,7 +283,7 @@ ArrayData* PackedArray::PrepareForInsert(ArrayData* adIn, bool copy) {
 //////////////////////////////////////////////////////////////////////
 
 /* This helper copies everything from adIn to ad, including the header
- * (capacity, kind, and refcount) and m_sizeAndPos. It then increfs the
+ * (capacity, kind, and refcount) and m_size. It then increfs the
  * contents, if needed.
  *
  * If convertingPackedToVec is false, it will always succeed (return true).
@@ -325,8 +317,7 @@ ArrayData* PackedArray::Copy(const ArrayData* adIn) {
   auto ad = static_cast<ArrayData*>(tl_heap->objMallocIndex(sizeClass(adIn)));
 
   // CopyPackedHelper will copy the header (including capacity and kind), and
-  // m_sizeAndPos.  All we have to do afterwards is fix the refcount on the
-  // copy.
+  // m_size.  All we have to do afterwards is fix the refcount on the copy.
   CopyPackedHelper(adIn, ad);
   ad->m_count = OneReference;
 
@@ -334,7 +325,6 @@ ArrayData* PackedArray::Copy(const ArrayData* adIn) {
   assertx(ad->isLegacyArray() == adIn->isLegacyArray());
   assertx(capacity(ad) == capacity(adIn));
   assertx(ad->m_size == adIn->m_size);
-  assertx(ad->m_pos == adIn->m_pos);
   assertx(ad->hasExactlyOneRef());
   assertx(checkInvariants(ad));
   return tagArrProv(ad, adIn);
@@ -345,7 +335,7 @@ ArrayData* PackedArray::CopyStatic(const ArrayData* adIn) {
 
   auto const sizeIndex = capacityToSizeIndex(adIn->m_size);
   auto ad = alloc_packed_static(adIn);
-  // CopyPackedHelper will copy the header and m_sizeAndPos. All we have to do
+  // CopyPackedHelper will copy the header and m_size. All we have to do
   // afterwards is fix the capacity and refcount on the copy; it's easiest to do
   // that by reinitializing the whole header.
   CopyPackedHelper(adIn, ad);
@@ -369,7 +359,6 @@ ArrayData* PackedArray::CopyStatic(const ArrayData* adIn) {
           arrprov::getTag(ad) == arrprov::getTag(adIn));
   assertx(capacity(ad) >= adIn->m_size);
   assertx(ad->m_size == adIn->m_size);
-  assertx(ad->m_pos == adIn->m_pos);
   assertx(ad->isStatic());
   assertx(checkInvariants(ad));
   return ad;
@@ -377,7 +366,7 @@ ArrayData* PackedArray::CopyStatic(const ArrayData* adIn) {
 
 /* This helper allocates an ArrayData and initializes the header (including
  * capacity, kind, and refcount). The caller is responsible for initializing
- * m_sizeAndPos, and initializing array entries (if any).
+ * m_size, and initializing array entries (if any).
  */
 ALWAYS_INLINE
 ArrayData* PackedArray::MakeReserveImpl(uint32_t cap, HeaderKind hk) {
@@ -399,21 +388,19 @@ ArrayData* PackedArray::MakeReserveVArray(uint32_t capacity) {
   }
 
   auto ad = MakeReserveImpl(capacity, HeaderKind::Packed);
-  ad->m_sizeAndPos = 0;
+  ad->m_size = 0;
   assertx(ad->isPackedKind());
   assertx(ad->isVArray());
   assertx(ad->m_size == 0);
-  assertx(ad->m_pos == 0);
   assertx(checkInvariants(ad));
   return tagArrProv(ad);
 }
 
 ArrayData* PackedArray::MakeReserveVec(uint32_t capacity) {
   auto ad = MakeReserveImpl(capacity, HeaderKind::Vec);
-  ad->m_sizeAndPos = 0;
+  ad->m_size = 0;
   assertx(ad->isVecKind());
   assertx(ad->m_size == 0);
-  assertx(ad->m_pos == 0);
   assertx(checkInvariants(ad));
   return ad;
 }
@@ -425,7 +412,7 @@ ArrayData* PackedArray::MakePackedImpl(uint32_t size,
                                        HeaderKind hk) {
   assertx(size > 0);
   auto ad = MakeReserveImpl(size, hk);
-  ad->m_sizeAndPos = size; // pos = 0
+  ad->m_size = size;
 
   // Append values by moving; this function takes ownership of them.
   if (reverse) {
@@ -443,7 +430,6 @@ ArrayData* PackedArray::MakePackedImpl(uint32_t size,
   }
 
   assertx(ad->m_size == size);
-  assertx(ad->m_pos == 0);
   assertx(checkInvariants(ad));
   return ad;
 }
@@ -488,21 +474,19 @@ ArrayData* PackedArray::MakeVecNatural(uint32_t size, const TypedValue* values) 
 ArrayData* PackedArray::MakeUninitializedVArray(uint32_t size) {
   assertx(!RuntimeOption::EvalHackArrDVArrs);
   auto ad = MakeReserveImpl(size, HeaderKind::Packed);
-  ad->m_sizeAndPos = size; // pos = 0
+  ad->m_size = size; // pos = 0
   assertx(ad->isPackedKind());
   assertx(ad->isVArray());
   assertx(ad->m_size == size);
-  assertx(ad->m_pos == 0);
   assertx(checkInvariants(ad));
   return tagArrProv(ad);
 }
 
 ArrayData* PackedArray::MakeUninitializedVec(uint32_t size) {
   auto ad = MakeReserveImpl(size, HeaderKind::Vec);
-  ad->m_sizeAndPos = size; // pos = 0
+  ad->m_size = size; // pos = 0
   assertx(ad->isVecKind());
   assertx(ad->m_size == size);
-  assertx(ad->m_pos == 0);
   assertx(checkInvariants(ad));
   return ad;
 }
@@ -605,11 +589,6 @@ TypedValue PackedArray::GetPosVal(const ArrayData* ad, ssize_t pos) {
   return *LvalUncheckedInt(const_cast<ArrayData*>(ad), pos);
 }
 
-size_t PackedArray::Vsize(const ArrayData*) {
-  // PackedArray always has a valid m_size so it's an error to get here.
-  always_assert(false);
-}
-
 bool PackedArray::ExistsInt(const ArrayData* ad, int64_t k) {
   assertx(checkInvariants(ad));
   return size_t(k) < ad->m_size;
@@ -627,7 +606,7 @@ namespace {
 template<typename FoundFn>
 auto MutableOpInt(ArrayData* adIn, int64_t k, bool copy, FoundFn found) {
   assertx(PackedArray::checkInvariants(adIn));
-  if (UNLIKELY(size_t(k) >= adIn->getSize())) {
+  if (UNLIKELY(size_t(k) >= adIn->size())) {
     throwOOBArrayKeyException(k, adIn);
   }
   auto const ad = copy ? PackedArray::Copy(adIn) : adIn;
@@ -709,7 +688,7 @@ ArrayData* PackedArray::RemoveInt(ArrayData* adIn, int64_t k) {
   if (LIKELY(size_t(k) + 1 == adIn->m_size)) {
     auto const ad = adIn->cowCheck() ? Copy(adIn) : adIn;
     auto const size = ad->m_size - 1;
-    ad->m_sizeAndPos = size; // pos = 0
+    ad->m_size = size;
     tvDecRefGen(LvalUncheckedInt(ad, size));
     return ad;
   }
@@ -797,7 +776,6 @@ ArrayData* PackedArray::Pop(ArrayData* adIn, Variant& value) {
   auto const ad = adIn->cowCheck() ? Copy(adIn) : adIn;
 
   if (UNLIKELY(ad->m_size == 0)) {
-    assertx(ad->m_pos == 0);
     value = uninit_null();
     return ad;
   }
@@ -805,7 +783,7 @@ ArrayData* PackedArray::Pop(ArrayData* adIn, Variant& value) {
   auto const size = ad->m_size - 1;
   auto const tv = *LvalUncheckedInt(ad, size);
   value = tvAsCVarRef(&tv);
-  ad->m_sizeAndPos = size; // pos = 0
+  ad->m_size = size;
   tvDecRefGen(tv);
   return ad;
 }
@@ -825,7 +803,7 @@ ArrayData* PackedArray::Dequeue(ArrayData* adIn, Variant& value) {
   auto const data = packedData(ad);
   value = std::move(tvAsVariant(data)); // no incref+decref
   std::memmove(data, data + 1, size * sizeof *data);
-  ad->m_sizeAndPos = size; // pos = 0
+  ad->m_size = size;
   return ad;
 }
 
@@ -838,7 +816,6 @@ ArrayData* PackedArray::Prepend(ArrayData* adIn, TypedValue v) {
   std::memmove(data + 1, data, sizeof *data * size);
   tvDup(v, data[0]);
   ad->m_size = size + 1;
-  ad->m_pos = 0;
   return ad;
 }
 
@@ -855,7 +832,7 @@ ArrayData* PackedArray::ToVArray(ArrayData* adIn, bool copy) {
     return adIn;
   }
 
-  if (adIn->getSize() == 0) return ArrayData::CreateVArray();
+  if (adIn->size() == 0) return ArrayData::CreateVArray();
   auto const ad = copy ? Copy(adIn) : adIn;
   ad->m_kind = HeaderKind::Packed;
   ad->setLegacyArray(false);
@@ -866,7 +843,7 @@ ArrayData* PackedArray::ToVArray(ArrayData* adIn, bool copy) {
 
 ArrayData* PackedArray::ToDArray(ArrayData* adIn, bool /*copy*/) {
   assertx(checkInvariants(adIn));
-  auto const size = adIn->getSize();
+  auto const size = adIn->size();
   if (size == 0) return ArrayData::CreateDArray();
   DArrayInit init{size};
   for (int64_t i = 0; i < size; ++i) init.add(i, GetPosVal(adIn, i));
@@ -892,7 +869,7 @@ ArrayData* PackedArray::ToVec(ArrayData* adIn, bool copy) {
 
   ArrayData* ad;
   if (copy) {
-    // CopyPackedHelper will copy the header and m_sizeAndPos. All we have to do
+    // CopyPackedHelper will copy the header and m_size. All we have to do
     // afterwards is fix the kind and refcount in the copy; it's easiest to do
     // that by reinitializing the whole header.
     ad = static_cast<ArrayData*>(tl_heap->objMallocIndex(sizeClass(adIn)));
@@ -908,7 +885,6 @@ ArrayData* PackedArray::ToVec(ArrayData* adIn, bool copy) {
   assertx(ad->isVecKind());
   assertx(capacity(ad) == capacity(adIn));
   assertx(ad->m_size == adIn->m_size);
-  assertx(ad->m_pos == adIn->m_pos);
   assertx(ad->hasExactlyOneRef());
   assertx(checkInvariants(ad));
   return ad;
@@ -974,7 +950,7 @@ ArrayData* PackedArray::MakeUncounted(ArrayData* array,
     packSizeIndexAndAuxBits(sizeIndex, array->auxBits()) |
     (withApcTypedValue ? ArrayData::kHasApcTv : 0)
   );
-  ad->m_sizeAndPos = array->m_sizeAndPos;
+  ad->m_size = array->m_size;
 
   ad->m_aux16 &= ~ArrayData::kHasProvenanceData;
 
@@ -991,7 +967,6 @@ ArrayData* PackedArray::MakeUncounted(ArrayData* array,
   assertx(ArrayData::dvArrayEqual(ad, array));
   assertx(capacity(ad) >= size);
   assertx(ad->m_size == size);
-  assertx(ad->m_pos == array->m_pos);
   assertx(ad->isUncounted());
   assertx(checkInvariants(ad));
   if (updateSeen) (*seen)[array] = ad;

@@ -242,22 +242,22 @@ fn gen_pu_accessor(
         cases.push(do_case(atom_name, value.clone()));
     }
     let extends =
-        /* returns a stmt_, to be used in the default branch */
-        if extends {
-            let parent_call = class_const(pos.clone(), "parent", &fun_name);
-            let call = call(pos.clone(), parent_call, vec![var_atom.clone()]);
-            return_(pos.clone(), call)
-        } else {
-            let msg_ = Tast::Expr_::mk_binop(
-                ast_defs::Bop::Dot,
-                str_(pos.clone(), error),
-                var_atom.clone()
-            );
-            let msg = Tast::Expr(pos.clone(), msg_);
-            let new_exn = new_(pos.clone(), "\\Exception", vec![msg]);
-            let throw = Tast::Stmt_::mk_throw(new_exn);
-            Tast::Stmt(pos.clone(), throw)
-        };
+    /* returns a stmt_, to be used in the default branch */
+    if extends {
+        let parent_call = class_const(pos.clone(), "parent", &fun_name);
+        let call = call(pos.clone(), parent_call, vec![var_atom.clone()]);
+        return_(pos.clone(), call)
+    } else {
+        let msg_ = Tast::Expr_::mk_binop(
+            ast_defs::Bop::Dot,
+            str_(pos.clone(), error),
+            var_atom.clone(),
+        );
+        let msg = Tast::Expr(pos.clone(), msg_);
+        let new_exn = new_(pos.clone(), "\\Exception", vec![msg]);
+        let throw = Tast::Stmt_::mk_throw(new_exn);
+        Tast::Stmt(pos.clone(), throw)
+    };
     let default = if uses.is_empty() {
         Tast::Case::Default(pos.clone(), vec![extends])
     } else {
@@ -372,6 +372,7 @@ fn gen_pu_accessor(
             visibility: None,
         }],
         cap: create_mixed_type_hint(pos.clone()),
+        unsafe_cap: create_mixed_type_hint(pos.clone()),
         body,
         fun_kind: ast_defs::FunKind::FSync,
         user_attributes: vec![memoize(pos.clone())],
@@ -588,6 +589,7 @@ fn gen_members_search(
         variadic: Tast::FunVariadicity::FVnonVariadic,
         params: vec![],
         cap: create_mixed_type_hint(pos.clone()),
+        unsafe_cap: create_mixed_type_hint(pos.clone()),
         body,
         fun_kind: ast_defs::FunKind::FSync,
         user_attributes: vec![memoize(pos.clone()), override_(pos.clone())],
@@ -643,6 +645,7 @@ fn gen_members_no_search(
         variadic: Tast::FunVariadicity::FVnonVariadic,
         params: vec![],
         cap: create_mixed_type_hint(pos.clone()),
+        unsafe_cap: create_mixed_type_hint(pos.clone()),
         body,
         fun_kind: ast_defs::FunKind::FSync,
         user_attributes: vec![memoize(pos.clone())],
@@ -731,7 +734,7 @@ impl<'ast> VisitorMut<'ast> for EraseBodyVisitor {
                 aast_defs::Tprim::Tatom(_) => {
                     *h = Box::new(Tast::Hint_::Hprim(aast_defs::Tprim::Tstring))
                 }
-                _ => (),
+                _ => {}
             }),
             _ => h.recurse(c, self.object()),
         }
@@ -783,6 +786,6 @@ fn update_def(d: &mut Tast::Def) {
         Tast::Def::Class(c) => update_class(c),
         Tast::Def::Stmt(s) => erase_stmt(s),
         Tast::Def::Fun(f) => erase_fun(f),
-        _ => (),
+        _ => {}
     }
 }

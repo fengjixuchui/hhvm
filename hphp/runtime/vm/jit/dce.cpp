@@ -69,7 +69,6 @@ bool canDCE(IRInstruction* inst) {
   case ConvDblToBool:
   case ConvIntToBool:
   case ConvStrToBool:
-  case ConvArrToDbl:
   case ConvBoolToDbl:
   case ConvIntToDbl:
   case ConvStrToDbl:
@@ -146,10 +145,7 @@ bool canDCE(IRInstruction* inst) {
   case InstanceOfBitmask:
   case NInstanceOfBitmask:
   case InstanceOfRecDesc:
-  case InterfaceSupportsArr:
-  case InterfaceSupportsVec:
-  case InterfaceSupportsDict:
-  case InterfaceSupportsKeyset:
+  case InterfaceSupportsArrLike:
   case InterfaceSupportsStr:
   case InterfaceSupportsInt:
   case InterfaceSupportsDbl:
@@ -317,27 +313,15 @@ bool canDCE(IRInstruction* inst) {
   case ConvObjToStr:
   case ConvResToStr:
   case ConvTVToStr:
-  case ConvArrToVec:
-  case ConvDictToVec:
-  case ConvKeysetToVec:
+  case ConvArrLikeToVec:
   case ConvObjToVec:
-  case ConvArrToDict:
-  case ConvVecToDict:
-  case ConvKeysetToDict:
+  case ConvArrLikeToDict:
   case ConvObjToDict:
-  case ConvArrToKeyset:
-  case ConvVecToKeyset:
-  case ConvDictToKeyset:
+  case ConvArrLikeToKeyset:
   case ConvObjToKeyset:
-  case ConvArrToVArr:
-  case ConvVecToVArr:
-  case ConvDictToVArr:
-  case ConvKeysetToVArr:
+  case ConvArrLikeToVArr:
   case ConvObjToVArr:
-  case ConvArrToDArr:
-  case ConvVecToDArr:
-  case ConvDictToDArr:
-  case ConvKeysetToDArr:
+  case ConvArrLikeToDArr:
   case ConvObjToDArr:
   case LdOutAddr:
     return !opcodeMayRaise(inst->op()) &&

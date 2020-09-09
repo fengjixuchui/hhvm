@@ -309,7 +309,11 @@ struct
   and requirement (p, t) = (pos p, ty t)
 
   and enum_type te =
-    { te_base = ty te.te_base; te_constraint = ty_opt te.te_constraint }
+    {
+      te_base = ty te.te_base;
+      te_constraint = ty_opt te.te_constraint;
+      te_includes = List.map ~f:ty te.te_includes;
+    }
 
   and typedef tdef =
     {
@@ -395,7 +399,6 @@ struct
       sp_type = Option.map sp.sp_type ty;
       sp_abstract = sp.sp_abstract;
       sp_visibility = sp.sp_visibility;
-      sp_fixme_codes = ISet.empty;
     }
 
   and shallow_method sm =
@@ -409,7 +412,6 @@ struct
       sm_reactivity = sm.sm_reactivity;
       sm_type = ty sm.sm_type;
       sm_visibility = sm.sm_visibility;
-      sm_fixme_codes = ISet.empty;
       sm_deprecated = sm.sm_deprecated;
     }
 end

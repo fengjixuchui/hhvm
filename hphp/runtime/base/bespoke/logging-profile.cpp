@@ -235,7 +235,8 @@ void LoggingProfile::logEventImpl(const EventKey& key) {
   if (s_exportStarted.load(std::memory_order_relaxed)) return;
 
   EventMap::accessor it;
-  auto const sink = getSrcKey();
+  auto const has_sink = key.getOp() != ArrayOp::ReleaseUncounted;
+  auto const sink = has_sink ? getSrcKey() : SrcKey{};
   if (events.insert(it, {sink, key.toUInt64()})) {
     it->second = 1;
   } else {
@@ -541,6 +542,9 @@ LoggingProfile* getLoggingProfile(SrcKey sk, ArrayData* ad) {
 }
 
 SrcKey getSrcKey() {
+  // If there are no VM frames, don't drop an anchor
+  if (!rds::header()) return SrcKey();
+
   VMRegAnchor _(VMRegAnchor::Soft);
   if (tl_regState != VMRegState::CLEAN || vmfp() == nullptr) {
     return SrcKey();

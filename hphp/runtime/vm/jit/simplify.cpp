@@ -1940,28 +1940,23 @@ SSATmp* arrayLikeConvImpl(State& env, const IRInstruction* inst, C convert) {
   return cns(env, converted);
 }
 
-SSATmp* convToVecImpl(State& env, const IRInstruction* inst) {
+}
+
+SSATmp* simplifyConvArrLikeToVec(State& env, const IRInstruction* inst) {
   return arrayLikeConvImpl(
     env, inst,
     [&](ArrayData* a) { return a->toVec(true); }
   );
 }
 
-SSATmp* convToDictImpl(State& env, const IRInstruction* inst) {
+SSATmp* simplifyConvArrLikeToDict(State& env, const IRInstruction* inst) {
   return arrayLikeConvImpl(
     env, inst,
     [&](ArrayData* a) { return a->toDict(true); }
   );
 }
 
-SSATmp* convToNonDVArrImpl(State& env, const IRInstruction* inst) {
-  return arrayLikeConvImpl(
-    env, inst,
-    [&](ArrayData* a) { return a->toPHPArray(true); }
-  );
-}
-
-SSATmp* convToKeysetImpl(State& env, const IRInstruction* inst) {
+SSATmp* simplifyConvArrLikeToKeyset(State& env, const IRInstruction* inst) {
   return arrayLikeConvImpl(
     env, inst,
     [&](ArrayData* a) {
@@ -1984,53 +1979,19 @@ SSATmp* convToKeysetImpl(State& env, const IRInstruction* inst) {
   );
 }
 
-SSATmp* convToVArrImpl(State& env, const IRInstruction* inst) {
+SSATmp* simplifyConvArrLikeToVArr(State& env, const IRInstruction* inst) {
   return arrayLikeConvImpl(
     env, inst,
     [&](ArrayData* a) { return a->toVArray(true); }
   );
 }
 
-SSATmp* convToDArrImpl(State& env, const IRInstruction* inst) {
+SSATmp* simplifyConvArrLikeToDArr(State& env, const IRInstruction* inst) {
   return arrayLikeConvImpl(
     env, inst,
     [&](ArrayData* a) { return a->toDArray(true); }
   );
 }
-
-}
-
-#define X(FromTy, ToTy)                                                   \
-SSATmp*                                                                   \
-simplifyConv##FromTy##To##ToTy(State& env, const IRInstruction* inst) {   \
-  return convTo##ToTy##Impl(env, inst);                                   \
-}
-
-X(Arr, Vec)
-X(Dict, Vec)
-X(Keyset, Vec)
-
-X(Arr, Dict)
-X(Vec, Dict)
-X(Keyset, Dict)
-
-X(Arr, Keyset)
-X(Vec, Keyset)
-X(Dict, Keyset)
-
-X(Arr, VArr)
-X(Vec, VArr)
-X(Dict, VArr)
-X(Keyset, VArr)
-
-X(Arr, DArr)
-X(Vec, DArr)
-X(Dict, DArr)
-X(Keyset, DArr)
-
-X(Arr, NonDVArr)
-
-#undef X
 
 SSATmp* simplifyConvClsMethToVArr(State& env, const IRInstruction* inst) {
   auto const src = inst->src(0);
@@ -2110,16 +2071,6 @@ SSATmp* simplifyConvStrToBool(State& env, const IRInstruction* inst) {
     // are converted to true
     auto const str = src->strVal();
     return cns(env, !str->empty() && !str->isZero());
-  }
-  return nullptr;
-}
-
-SSATmp* simplifyConvArrToDbl(State& env, const IRInstruction* inst) {
-  auto const src = inst->src(0);
-  if (src->hasConstVal()) {
-    if (src->arrVal()->empty()) {
-      return cns(env, 0.0);
-    }
   }
   return nullptr;
 }
@@ -2297,10 +2248,6 @@ SSATmp* simplifyConvTVToInt(State& env, const IRInstruction* inst) {
 
   if (srcType <= TInt)  return src;
   if (srcType <= TNull) return cns(env, 0);
-  if (srcType <= TArr)  {
-    auto const length = gen(env, Count, src);
-    return gen(env, Select, length, cns(env, 1), cns(env, 0));
-  }
   if (srcType.subtypeOfAny(TVec, TVArr)) {
     auto const length = gen(env, CountVec, src);
     return gen(env, Select, length, cns(env, 1), cns(env, 0));
@@ -2334,7 +2281,6 @@ SSATmp* simplifyConvTVToDbl(State& env, const IRInstruction* inst) {
 
   if (srcType <= TDbl)  return src;
   if (srcType <= TNull) return cns(env, 0.0);
-  if (srcType <= TArr)  return gen(env, ConvArrToDbl, src);
   if (srcType.subtypeOfAny(TVec, TVArr)) {
     auto const length = gen(env, CountVec, src);
     return gen(env, ConvBoolToDbl, gen(env, ConvIntToBool, length));
@@ -3489,7 +3435,6 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
   X(ConcatStr4)
   X(ConcatIntStr)
   X(ConcatStrInt)
-  X(ConvArrToDbl)
   X(ConvBoolToDbl)
   X(ConvBoolToInt)
   X(ConvTVToBool)
@@ -3511,23 +3456,11 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
   X(ConvStrToBool)
   X(ConvStrToDbl)
   X(ConvStrToInt)
-  X(ConvArrToVec)
-  X(ConvDictToVec)
-  X(ConvKeysetToVec)
-  X(ConvArrToDict)
-  X(ConvVecToDict)
-  X(ConvKeysetToDict)
-  X(ConvArrToKeyset)
-  X(ConvVecToKeyset)
-  X(ConvDictToKeyset)
-  X(ConvArrToVArr)
-  X(ConvVecToVArr)
-  X(ConvDictToVArr)
-  X(ConvKeysetToVArr)
-  X(ConvArrToDArr)
-  X(ConvVecToDArr)
-  X(ConvDictToDArr)
-  X(ConvKeysetToDArr)
+  X(ConvArrLikeToVec)
+  X(ConvArrLikeToDict)
+  X(ConvArrLikeToKeyset)
+  X(ConvArrLikeToVArr)
+  X(ConvArrLikeToDArr)
   X(DblAsBits)
   X(Count)
   X(CountVec)

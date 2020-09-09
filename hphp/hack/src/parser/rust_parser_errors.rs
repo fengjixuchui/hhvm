@@ -74,6 +74,8 @@ enum UnstableFeatures {
     ClassLevelWhere,
     ExpressionTrees,
     PocketUniverses,
+    CoeffectsProvisional,
+    EnumSupertyping,
 }
 
 use BinopAllowsAwaitInPositions::*;
@@ -1416,7 +1418,7 @@ where
         match &node.syntax {
             SimpleTypeSpecifier(x) => check_type_name(self, &x.simple_type_specifier),
             GenericTypeSpecifier(x) => check_type_name(self, &x.generic_class_type),
-            _ => (),
+            _ => {}
         }
     }
 
@@ -1502,6 +1504,8 @@ where
             || name == sn::user_attributes::LOCAL_REACTIVE
             || name == sn::user_attributes::NON_RX
             || name == sn::user_attributes::PURE
+            || name == sn::user_attributes::CIPP
+            || name == sn::user_attributes::CIPP_LOCAL
     }
 
     fn is_some_reactivity_attribute(&self, node: &'a Syntax<Token, Value>) -> bool {
@@ -1552,7 +1556,7 @@ where
                     has_memoize = true
                 }
                 Some(n) if n == sn::user_attributes::MUTABLE => mutable_node = Some(node),
-                _ => (),
+                _ => {}
             }
         }
 
@@ -1992,7 +1996,7 @@ where
                     method_attrs,
                 );
             }
-            _ => (),
+            _ => {}
         }
     }
 
@@ -2095,7 +2099,7 @@ where
                     node,
                     errors::conflicting_owned_mutable_and_maybe_mutable_attributes,
                 )),
-                _ => (),
+                _ => {}
             }
             if (has_mutable || has_owned_mutable || has_maybemutable)
                 && Self::is_variadic_expression(name)
@@ -2170,17 +2174,17 @@ where
                         if node as *const _ == &x.for_initializer as *const _
                             || node as *const _ == &x.for_end_of_loop as *const _ =>
                     {
-                        return true
+                        return true;
                     }
                     UsingStatementFunctionScoped(x)
                         if node as *const _ == &x.using_function_expression as *const _ =>
                     {
-                        return true
+                        return true;
                     }
                     UsingStatementBlockScoped(x)
                         if node as *const _ == &x.using_block_expressions as *const _ =>
                     {
-                        return true
+                        return true;
                     }
                     _ => return false,
                 }
@@ -2373,7 +2377,7 @@ where
                 }
             }
             DecoratedExpression(_) => self.decoration_errors(node),
-            _ => (),
+            _ => {}
         }
     }
 
@@ -2417,13 +2421,13 @@ where
                         self.errors
                             .push(Self::make_error_from_node_with_type(node, err, err_type))
                     }
-                    _ => (),
+                    _ => {}
                 };
                 self.names
                     .attributes
                     .add(sn::user_attributes::ENTRY_POINT, def)
             }
-            _ => (),
+            _ => {}
         }
     }
 
@@ -2530,7 +2534,7 @@ where
                                     &|x, y| errors::declared_name_is_already_in_use(line_num, x, y),
                                 ))
                             }
-                            _ => (),
+                            _ => {}
                         };
                         self.names.functions.add(function_name, def)
                     }
@@ -2538,10 +2542,10 @@ where
                         node,
                         errors::decl_outside_global_scope,
                     )),
-                    _ => (),
+                    _ => {}
                 }
             }
-            _ => (),
+            _ => {}
         }
     }
 
@@ -2606,7 +2610,7 @@ where
                     ))
                 }
             }
-            ScopeResolutionExpression(_) => (),
+            ScopeResolutionExpression(_) => {}
             QualifiedName(_) => {
                 if self.env.is_typechecker() {
                     self.errors.push(Self::make_error_from_node(
@@ -2738,7 +2742,7 @@ where
             SafeMemberSelectionExpression(x) => {
                 check(self, &x.safe_member_object, &x.safe_member_name)
             }
-            _ => (),
+            _ => {}
         }
     }
 
@@ -2766,12 +2770,12 @@ where
                                 .push(Self::make_error_from_node(node, errors::memoize_on_lambda))
                         }
 
-                        _ => (),
+                        _ => {}
                     }
                 }
             }
 
-            _ => (),
+            _ => {}
         }
     }
 
@@ -2799,7 +2803,7 @@ where
             SimpleTypeSpecifier(_)
             | VariableExpression(_)
             | GenericTypeSpecifier(_)
-            | PipeVariableExpression(_) => (),
+            | PipeVariableExpression(_) => {}
             SubscriptExpression(x) if x.subscript_index.is_missing() => self.errors.push(
                 Self::make_error_from_node(node, errors::instanceof_missing_subscript_index),
             ),
@@ -2853,7 +2857,7 @@ where
     fn class_type_designator_errors(&mut self, node: &'a Syntax<Token, Value>) {
         if !Self::is_good_scope_resolution_qualifier(node) {
             match &node.syntax {
-                ParenthesizedExpression(_) => (),
+                ParenthesizedExpression(_) => {}
                 _ => self.new_variable_errors(node),
             }
         }
@@ -2896,7 +2900,7 @@ where
                 }
                 _ => {
                     match Self::node_lval_type(node, parents) {
-                        LvalTypeFinal | LvalTypeNone => (),
+                        LvalTypeFinal | LvalTypeNone => {}
                         LvalTypeNonFinalInout | LvalTypeNonFinal => {
                             acc.push(Self::make_error_from_node(node, errors::lval_as_expression))
                         }
@@ -3005,17 +3009,17 @@ where
                 ForStatement(x) if node as *const _ == &x.for_initializer as *const _ => break,
                 SwitchStatement(x) if node as *const _ == &x.switch_expression as *const _ => break,
                 ForeachStatement(x) if node as *const _ == &x.foreach_collection as *const _ => {
-                    break
+                    break;
                 }
                 UsingStatementBlockScoped(x)
                     if node as *const _ == &x.using_block_expressions as *const _ =>
                 {
-                    break
+                    break;
                 }
                 UsingStatementFunctionScoped(x)
                     if node as *const _ == &x.using_function_expression as *const _ =>
                 {
-                    break
+                    break;
                 }
                 LambdaExpression(x) if node as *const _ == &x.lambda_body as *const _ => break,
                 // Dependent awaits are not allowed currently
@@ -3030,15 +3034,15 @@ where
                 }
                 // Unary based expressions have their own custom fanout
                 PrefixUnaryExpression(x) if Self::unop_allows_await(&x.prefix_unary_operator) => {
-                    continue
+                    continue;
                 }
                 PostfixUnaryExpression(x) if Self::unop_allows_await(&x.postfix_unary_operator) => {
-                    continue
+                    continue;
                 }
                 DecoratedExpression(x)
                     if Self::unop_allows_await(&x.decorated_expression_decorator) =>
                 {
-                    continue
+                    continue;
                 }
                 // Special case the pipe operator error message
                 BinaryExpression(x)
@@ -3067,12 +3071,12 @@ where
                         BinopAllowAwaitNone => false,
                     }) =>
                 {
-                    continue
+                    continue;
                 }
                 // test part of conditional expression is considered legal location if
                 //  onditional expression itself is in legal location
                 ConditionalExpression(x) if node as *const _ == &x.conditional_test as *const _ => {
-                    continue
+                    continue;
                 }
                 FunctionCallExpression(x)
                     if node as *const _ == &x.function_call_receiver as *const _
@@ -3081,7 +3085,7 @@ where
                                 .function_call_receiver
                                 .is_safe_member_selection_expression() =>
                 {
-                    continue
+                    continue;
                 }
 
                 // object of member selection expression or safe member selection expression
@@ -3089,7 +3093,7 @@ where
                 SafeMemberSelectionExpression(x)
                     if node as *const _ == &x.safe_member_object as *const _ =>
                 {
-                    continue
+                    continue;
                 }
 
                 // These are nodes where any position is valid
@@ -3243,7 +3247,7 @@ where
                         errors::invalid_is_as_expression_hint(n, "__Soft"),
                     ));
                 }
-                _ => (),
+                _ => {}
             }
         };
         match &node.syntax {
@@ -3405,26 +3409,28 @@ where
                 // PHP langspec allows string literals, variables
                 // qualified names, static, self and parent as valid qualifiers
                 // We do not allow string literals in hack
-                match (&qualifier.syntax , Self::token_kind(qualifier)) {
-                | (LiteralExpression (_), _) => (false, false, false),
-                | (QualifiedName (_), _) => (false, false, true),
-                | (_, Some (TokenKind::Name))
-                | (_, Some (TokenKind::XHPClassName))
-                | (_, Some (TokenKind::Static)) =>
-                  (false, false, true),
-                | (_, Some (TokenKind::SelfToken))
-                | (_, Some (TokenKind::Parent)) =>
-                  (false, true, true),
-                // ${}::class
-                | (PrefixUnaryExpression (x), _) if Self::token_kind(&x.prefix_unary_operator) == Some (TokenKind::Dollar) =>
-                  (true, false, true),
-                | (PipeVariableExpression (_), _)
-                | (VariableExpression (_), _)
-                | (SimpleTypeSpecifier (_), _)
-                | (GenericTypeSpecifier (_), _) =>
-                  (true, false, true),
-                | _ => (true, false, false),
-            };
+                match (&qualifier.syntax, Self::token_kind(qualifier)) {
+                    (LiteralExpression(_), _) => (false, false, false),
+                    (QualifiedName(_), _) => (false, false, true),
+                    (_, Some(TokenKind::Name))
+                    | (_, Some(TokenKind::XHPClassName))
+                    | (_, Some(TokenKind::Static)) => (false, false, true),
+                    (_, Some(TokenKind::SelfToken)) | (_, Some(TokenKind::Parent)) => {
+                        (false, true, true)
+                    }
+                    // ${}::class
+                    (PrefixUnaryExpression(x), _)
+                        if Self::token_kind(&x.prefix_unary_operator)
+                            == Some(TokenKind::Dollar) =>
+                    {
+                        (true, false, true)
+                    }
+                    (PipeVariableExpression(_), _)
+                    | (VariableExpression(_), _)
+                    | (SimpleTypeSpecifier(_), _)
+                    | (GenericTypeSpecifier(_), _) => (true, false, true),
+                    _ => (true, false, false),
+                };
                 if !is_valid && self.env.is_typechecker() {
                     self.errors.push(Self::make_error_from_node(
                         node,
@@ -3497,7 +3503,7 @@ where
                         self.errors
                             .push(Self::make_error_from_node(node, errors::nested_ternary))
                     }
-                    _ => (),
+                    _ => {}
                 }
             }
             LambdaExpression(x) => {
@@ -3639,7 +3645,7 @@ where
                         ));
                     }
 
-                    ValidClass(_) => (),
+                    ValidClass(_) => {}
                     InvalidBraceKind => self.errors.push(Self::make_error_from_node(
                         node,
                         errors::invalid_brace_kind_in_collection_initializer,
@@ -3656,7 +3662,7 @@ where
                 self.await_as_an_expression_errors(node)
             }
             // Other kinds of expressions currently produce no expr errors.
-            _ => (),
+            _ => {}
         }
     }
 
@@ -3700,7 +3706,7 @@ where
                 }
             }
             TypeConstDeclaration(x) => check(&x.type_const_name, c_names),
-            _ => (),
+            _ => {}
         }
     }
 
@@ -3726,7 +3732,7 @@ where
                 | (Some(TokenKind::Class), Some(TokenKind::Implements)) => self
                     .errors
                     .push(Self::make_error_from_node(node, errors::error2030)),
-                _ => (),
+                _ => {}
             }
         }
     }
@@ -3800,7 +3806,7 @@ where
                         notreified.insert(name);
                     }
                 }
-                _ => (),
+                _ => {}
             }
         }
         (res, notreified)
@@ -3811,6 +3817,14 @@ where
             if let TypeParameters(x) = &x.function_type_parameter_list.syntax {
                 self.get_type_params_and_emit_shadowing_errors(&x.type_parameters_parameters)
                     .0;
+            }
+        }
+    }
+
+    fn capability_errors(&mut self, node: &'a Syntax<Token, Value>) {
+        if let FunctionDeclarationHeader(x) = &node.syntax {
+            if !&x.function_capability_provisional.is_missing() {
+                self.check_can_use_feature(node, &UnstableFeatures::CoeffectsProvisional);
             }
         }
     }
@@ -3960,10 +3974,11 @@ where
         if let ClassishDeclaration(cd) = &node.syntax {
             // Given a ClassishDeclaration node, test whether or not it's a trait
             // invoking the 'extends' keyword.
-            let classish_invalid_extends_keyword = |_|
-              // Invalid if uses 'extends' and is a trait.
-              Self::token_kind(&cd.classish_extends_keyword) == Some(TokenKind::Extends)
-              && Self::token_kind(&cd.classish_keyword) == Some(TokenKind::Trait);
+            let classish_invalid_extends_keyword = |_| {
+                // Invalid if uses 'extends' and is a trait.
+                Self::token_kind(&cd.classish_extends_keyword) == Some(TokenKind::Extends)
+                    && Self::token_kind(&cd.classish_keyword) == Some(TokenKind::Trait)
+            };
 
             let abstract_keyword = Self::extract_keyword(|x| x.is_abstract(), node).unwrap_or(node);
 
@@ -4092,7 +4107,7 @@ where
                         node,
                         errors::declared_final("Traits"),
                     )),
-                    _ => (),
+                    _ => {}
                 }
             }
 
@@ -4110,7 +4125,7 @@ where
                         node,
                         errors::invalid_xhp_classish("Enums"),
                     )),
-                    _ => (),
+                    _ => {}
                 }
             }
 
@@ -4160,7 +4175,7 @@ where
                     let location = Self::make_location_of_node(&cd.classish_name);
                     self.check_type_name(&cd.classish_name, name, location)
                 }
-                _ => (),
+                _ => {}
             }
         }
     }
@@ -4442,7 +4457,7 @@ where
                         match &clause.syntax {
                             NamespaceUseClause(x) if !x.namespace_use_name.is_missing() => self
                                 .check_preceding_backslashes_qualified_name(&x.namespace_use_name),
-                            _ => (),
+                            _ => {}
                         }
                         self.use_class_or_namespace_clause_errors(
                             Some(self.text(&x.namespace_group_use_prefix)),
@@ -4700,7 +4715,7 @@ where
                         TokenKind::Parent => {
                             return self
                                 .text(&x.scope_resolution_name)
-                                .eq_ignore_ascii_case("class")
+                                .eq_ignore_ascii_case("class");
                         }
                         _ => return false,
                     }
@@ -4779,7 +4794,7 @@ where
                             &|x, y| errors::declared_name_is_already_in_use(line_num, x, y),
                         ))
                     }
-                    _ => (),
+                    _ => {}
                 }
                 self.names.constants.add(constant_name, def)
             }
@@ -4957,7 +4972,7 @@ where
                                         break;
                                     }
                                 }
-                                NamespaceUseDeclaration(_) | FileAttributeSpecification(_) => (),
+                                NamespaceUseDeclaration(_) | FileAttributeSpecification(_) => {}
                                 NamespaceDeclaration(_) => {
                                     is_first_decl = true;
                                     break;
@@ -4996,7 +5011,7 @@ where
                     ))
                 }
             }
-            _ => (),
+            _ => {}
         }
     }
 
@@ -5129,7 +5144,7 @@ where
                     append_errors(self_, roperand, errors::globals_without_subscript)
                 }
 
-                _ => (),
+                _ => {}
             }
         };
 
@@ -5187,7 +5202,7 @@ where
                     ))
                 }
             }
-            _ => (),
+            _ => {}
         }
     }
 
@@ -5335,7 +5350,7 @@ where
                     Some(t) if Self::token_kind(t) == Some(TokenKind::Backslash) => self
                         .errors
                         .push(Self::make_error_from_node(t, errors::error0008)),
-                    _ => (),
+                    _ => {}
                 }
             }
         }
@@ -5354,7 +5369,7 @@ where
                 Some(t) if Self::token_kind(t) == Some(TokenKind::Backslash) => self.errors.push(
                     Self::make_error_from_node(node, errors::preceding_backslash),
                 ),
-                _ => (),
+                _ => {}
             }
         }
     }
@@ -5487,6 +5502,7 @@ where
                 self.redeclaration_errors(node);
                 self.multiple_entrypoint_attribute_errors(node);
                 self.methodish_errors(node);
+                self.capability_errors(node);
             }
 
             LiteralExpression(_)
@@ -5684,9 +5700,14 @@ where
                     &x.classish_where_clause,
                     &UnstableFeatures::ClassLevelWhere,
                 ),
-                _ => (),
+                _ => {}
             },
-            _ => (),
+            EnumDeclaration(x) => match &x.enum_includes_keyword.syntax {
+                Token(_) => self.check_can_use_feature(node, &UnstableFeatures::EnumSupertyping),
+                _ => {}
+            },
+
+            _ => {}
         }
 
         if let Some(prev_context) = prev_context {

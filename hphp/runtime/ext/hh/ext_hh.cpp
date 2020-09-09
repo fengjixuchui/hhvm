@@ -76,7 +76,9 @@ bool HHVM_FUNCTION(autoload_set_paths,
                    const String& root) {
   // If we are using a native autoload map you are not allowed to override it
   // in repo mode
-  if (RuntimeOption::RepoAuthoritative) {
+  if (RuntimeOption::RepoAuthoritative &&
+      RuntimeOption::EvalUseRepoAutoloadMap &&
+      Repo::get().global().AutoloadMap.get()) {
     return false;
   }
 
@@ -106,10 +108,7 @@ Variant autoload_symbol_to_path(const String& symbol, AutoloadMap::KindOf kind) 
     SystemLib::throwInvalidOperationExceptionObject(
       "Only available when autoloader is active");
   }
-  auto path = AutoloadHandler::s_instance->getFile(
-    symbol,
-    kind,
-    kind != AutoloadMap::KindOf::Constant);
+  auto path = AutoloadHandler::s_instance->getFile(symbol, kind);
   if (!path) {
     return null_string;
   }

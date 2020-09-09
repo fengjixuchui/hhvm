@@ -393,6 +393,8 @@ and reactivity =
   | Pure of decl_ty option
   | MaybeReactive of reactivity
   | RxVar of reactivity option
+  | Cipp of string option
+  | CippLocal of string option
 
 (** The type of a function AND a method.
  * A function has a min and max arity because of optional arguments *)
@@ -472,6 +474,8 @@ let deref p = p
 let get_reason (r, _) = r
 
 let get_node (_, n) = n
+
+let with_reason (_, ty) reason = (reason, ty)
 
 let get_pos t = Reason.to_pos (get_reason t)
 

@@ -35,6 +35,8 @@ namespace HPHP {
 
 //////////////////////////////////////////////////////////////////////
 
+StringData** precomputed_chars;
+
 namespace {
 
 // the string key will one of these values:
@@ -149,17 +151,19 @@ DEBUG_ONLY bool checkStaticStr(const StringData* s) {
   return true;
 }
 
-StringData** precompute_chars();
 StringData** precompute_chars() {
   StringData** raw = new StringData*[256];
   for (int i = 0; i < 256; i++) {
     char s[2] = { (char)i, 0 };
-    raw[i] = makeStaticStringSafe(&s[0], 1);
+    raw[i] = makeStaticString(&s[0], 1);
   }
   return raw;
 }
 
-StringData* insertStaticString(StringData* sd) {
+}
+
+StringData* insertStaticString(StringData* sd,
+                               void (*deleter)(StringData*)) {
   assertx(sd->isStatic());
   auto pair = s_stringDataMap->insert(
     safe_cast<StrInternKey>(reinterpret_cast<uintptr_t>(sd)),
@@ -167,10 +171,16 @@ StringData* insertStaticString(StringData* sd) {
   );
 
   if (!pair.second) {
-    sd->destructStatic();
+    if (deleter) {
+      deleter(sd);
+    } else {
+      sd->destructStatic();
+    }
   } else {
-    MemoryStats::LogAlloc(AllocKind::StaticString,
-                          sd->size() + sizeof(StringData));
+    auto const symbol = sd->isSymbol();
+    auto const allocSize = sd->size() + kStringOverhead
+                         + (symbol ? sizeof(SymbolPrefix) : 0);
+    MemoryStats::LogAlloc(AllocKind::StaticString, allocSize);
     if (RuntimeOption::EvalEnableReverseDataMap) {
       data_map::register_start(sd);
     }
@@ -180,10 +190,6 @@ StringData* insertStaticString(StringData* sd) {
   assertx(to_sdata(pair.first->first) != nullptr);
 
   return const_cast<StringData*>(to_sdata(pair.first->first));
-}
-
-inline StringData* insertStaticStringSlice(folly::StringPiece slice) {
-  return insertStaticString(StringData::MakeStatic(slice));
 }
 
 void create_string_data_map() {
@@ -196,13 +202,12 @@ void create_string_data_map() {
   s_stringDataMap.emplace(RuntimeOption::EvalInitialStaticStringTableSize,
                           config);
   insertStaticString(StringData::MakeEmpty());
-}
-
+  if (!precomputed_chars) {
+    precomputed_chars = precompute_chars();
+  }
 }
 
 //////////////////////////////////////////////////////////////////////
-
-StringData** precomputed_chars = precompute_chars();
 
 size_t makeStaticStringCount() {
   if (!s_stringDataMap) return 0;
@@ -218,7 +223,7 @@ StringData* makeStaticString(const StringData* str) {
   if (it != s_stringDataMap->end()) {
     return const_cast<StringData*>(to_sdata(it->first));
   }
-  return insertStaticStringSlice(str->slice());
+  return insertStaticString(StringData::MakeStatic(str->slice()));
 }
 
 StringData* makeStaticString(folly::StringPiece slice) {
@@ -226,7 +231,7 @@ StringData* makeStaticString(folly::StringPiece slice) {
   if (it != s_stringDataMap->end()) {
     return const_cast<StringData*>(to_sdata(it->first));
   }
-  return insertStaticStringSlice(slice);
+  return insertStaticString(StringData::MakeStatic(slice));
 }
 
 StringData* lookupStaticString(const StringData *str) {
@@ -270,20 +275,6 @@ StringData* makeStaticString(char c) {
   return precomputed_chars[(uint8_t)c];
 }
 
-StringData* makeStaticStringSafe(const char* str, size_t len) {
-  assertx(len <= StringData::MaxSize);
-  if (UNLIKELY(!s_stringDataMap)) {
-    create_string_data_map();
-  }
-  return makeStaticString(str, len);
-}
-
-StringData* makeStaticStringSafe(const char* str) {
-  if (UNLIKELY(!s_stringDataMap)) {
-    create_string_data_map();
-  }
-  return makeStaticString(str);
-}
 
 bool bindPersistentCns(const StringData* cnsName, const TypedValue& value) {
   assertx(s_stringDataMap);

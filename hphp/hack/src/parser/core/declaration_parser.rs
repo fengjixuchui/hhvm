@@ -213,9 +213,13 @@ where
     }
 
     fn parse_enum_declaration(&mut self, attrs: S::R) -> S::R {
-        //
+        // enum-name-list-nonempty:
+        //   :  enum-name enum-name-list
+        // includes-declaration-opt:
+        //   :
+        //   :  includes enum-name-list-nonempty
         // enum-declaration:
-        //   attribute-specification-opt enum  name  enum-base  type-constraint-opt /
+        //   attribute-specification-opt enum  name  enum-base  type-constraint-opt  includes-declaration-opt /
         //     {  enumerator-list-opt  }
         // enum-base:
         //   :  int
@@ -232,6 +236,7 @@ where
         let base =
             self.parse_type_specifier(false /* allow_var */, true /* allow_attr */);
         let enum_type = self.parse_type_constraint_opt();
+        let (classish_includes, classish_includes_list) = self.parse_classish_includes_opt();
         let (left_brace, enumerators, right_brace) =
             self.parse_braced_list(|x: &mut Self| x.parse_enumerator_list_opt());
         S!(
@@ -243,6 +248,8 @@ where
             colon,
             base,
             enum_type,
+            classish_includes,
+            classish_includes_list,
             left_brace,
             enumerators,
             right_brace,
@@ -609,6 +616,19 @@ where
         }
     }
 
+    fn parse_classish_includes_opt(&mut self) -> (S::R, S::R) {
+        if self.peek_token_kind() != TokenKind::Includes {
+            let missing1 = S!(make_missing, self, self.pos());
+            let missing2 = S!(make_missing, self, self.pos());
+            (missing1, missing2)
+        } else {
+            let includes_token = self.next_token();
+            let includes_token = S!(make_token, self, includes_token);
+            let includes_list = self.parse_special_type_list();
+            (includes_token, includes_list)
+        }
+    }
+
     fn parse_xhp_keyword(&mut self) -> (S::R, bool) {
         let xhp = self.optional_token(TokenKind::XHP);
         let is_missing = xhp.is_missing();
@@ -707,8 +727,8 @@ where
     }
 
     fn parse_special_type_list(&mut self) -> S::R {
-        // An extends / implements list is a comma-separated list of types, but
-        // very special types; we want the types to consist of a name and an
+        // An extends / implements / includes list is a comma-separated list of types,
+        // but very special types; we want the types to consist of a name and an
         // optional generic type argument list.
         //
         // TODO: Can the type name be of the form "foo::bar"? Those do not
@@ -1564,6 +1584,44 @@ where
         }
     }
 
+    fn parse_capability_opt(&mut self) -> S::R {
+        let token_kind = self.peek_token_kind();
+        if token_kind == TokenKind::At {
+            let token = self.next_token();
+            let at = S!(make_token, self, token);
+            let cap_lb = self.require_token(TokenKind::LeftBrace, Errors::error1034);
+            let cap_type = self.with_type_parser(|p: &mut TypeParser<'a, S, T>| {
+                p.parse_type_specifier(false, false)
+            });
+            let maybe_plus = self.peek_token_kind();
+            let (unsafe_cap_plus, unsafe_cap_type) = if maybe_plus == TokenKind::Plus {
+                let token = self.next_token();
+                let unsafe_cap_plus = S!(make_token, self, token);
+                let unsafe_cap_type = self.with_type_parser(|p: &mut TypeParser<'a, S, T>| {
+                    p.parse_type_specifier(false, false)
+                });
+                (unsafe_cap_plus, unsafe_cap_type)
+            } else {
+                let missing1 = S!(make_missing, self, self.pos());
+                let missing2 = S!(make_missing, self, self.pos());
+                (missing1, missing2)
+            };
+            let cap_rb = self.require_token(TokenKind::RightBrace, Errors::error1006);
+            S!(
+                make_capability_provisional,
+                self,
+                at,
+                cap_lb,
+                cap_type,
+                unsafe_cap_plus,
+                unsafe_cap_type,
+                cap_rb,
+            )
+        } else {
+            S!(make_missing, self, self.pos())
+        }
+    }
+
     pub fn parse_parameter_list_opt(&mut self) -> (S::R, S::R, S::R) {
         // SPEC
         // TODO: The specification is wrong in several respects concerning
@@ -1838,6 +1896,7 @@ where
             p.parse_generic_type_parameter_list_opt()
         });
         let (left_paren_token, parameter_list, right_paren_token) = self.parse_parameter_list_opt();
+        let capability = self.parse_capability_opt();
         let (colon_token, return_type) = self.parse_return_type_hint_opt();
         let where_clause = self.parse_where_clause_opt();
         S!(
@@ -1850,6 +1909,7 @@ where
             left_paren_token,
             parameter_list,
             right_paren_token,
+            capability,
             colon_token,
             return_type,
             where_clause,

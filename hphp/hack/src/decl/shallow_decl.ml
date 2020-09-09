@@ -153,7 +153,6 @@ let prop env cv =
     sp_type = ty;
     sp_abstract = cv.cv_abstract;
     sp_visibility = cv.cv_visibility;
-    sp_fixme_codes = Fixme_provider.get_fixme_codes_for_pos cv_pos;
   }
 
 and static_prop env cv =
@@ -179,7 +178,6 @@ and static_prop env cv =
     sp_type = ty;
     sp_abstract = cv.cv_abstract;
     sp_visibility = cv.cv_visibility;
-    sp_fixme_codes = Fixme_provider.get_fixme_codes_for_pos cv_pos;
   }
 
 let method_type env m =
@@ -287,12 +285,8 @@ let method_ env c m =
     sm_reactivity = reactivity;
     sm_type = mk (Reason.Rwitness pos, Tfun ft);
     sm_visibility = m.m_visibility;
-    sm_fixme_codes = Fixme_provider.get_fixme_codes_for_pos pos;
     sm_deprecated;
   }
-
-let enum_type hint e =
-  { te_base = hint e.e_base; te_constraint = Option.map e.e_constraint hint }
 
 let class_ env c =
   let hint = Decl_hint.hint env in
@@ -319,6 +313,17 @@ let class_ env c =
   in
   let where_constraints =
     List.map c.c_where_constraints (where_constraint env)
+  in
+  let enum_type hint e =
+    let et =
+      {
+        te_base = hint e.e_base;
+        te_constraint = Option.map e.e_constraint hint;
+        te_includes = List.map ~f:hint e.e_includes;
+      }
+    in
+    List.iter ~f:add_cstr_dep et.te_includes;
+    et
   in
   List.iter ~f:add_cstr_dep sc_extends;
   List.iter ~f:add_cstr_dep sc_uses;

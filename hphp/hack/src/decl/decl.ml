@@ -785,19 +785,9 @@ and constructor_decl
       Inconsistent
   in
   let cstr =
-    match (class_.sc_constructor, pcstr) with
-    | (None, _) -> pcstr
-    | (Some method_, Some elt) when get_elt_final elt ->
-      let fe = Decl_heap.Constructors.find_unsafe elt.elt_origin in
-      Errors.override_final
-        ~parent:fe.fe_pos
-        ~child:(fst method_.sm_name)
-        ~on_error:None;
-      let cstr = build_constructor ~write_shmem:true class_ method_ in
-      cstr
-    | (Some method_, _) ->
-      let cstr = build_constructor ~write_shmem:true class_ method_ in
-      cstr
+    match class_.sc_constructor with
+    | None -> pcstr
+    | Some method_ -> build_constructor ~write_shmem:true class_ method_
   in
   (cstr, Decl_utils.coalesce_consistent pconsist cconsist)
 
@@ -825,7 +815,6 @@ and build_constructor
       elt_visibility = vis;
       elt_origin = class_name;
       elt_reactivity = None;
-      elt_fixme_codes = method_.sm_fixme_codes;
       elt_deprecated = method_.sm_deprecated;
     }
   in
@@ -903,7 +892,6 @@ and prop_decl
       elt_visibility = vis;
       elt_origin = snd c.sc_name;
       elt_reactivity = None;
-      elt_fixme_codes = sp.sp_fixme_codes;
       elt_deprecated = None;
     }
   in
@@ -940,7 +928,6 @@ and static_prop_decl
       elt_visibility = vis;
       elt_origin = snd c.sc_name;
       elt_reactivity = None;
-      elt_fixme_codes = sp.sp_fixme_codes;
       elt_deprecated = None;
     }
   in
@@ -1078,7 +1065,6 @@ and method_decl_acc
       elt_visibility = vis;
       elt_origin = snd c.sc_name;
       elt_reactivity = m.sm_reactivity;
-      elt_fixme_codes = m.sm_fixme_codes;
       elt_deprecated = m.sm_deprecated;
     }
   in

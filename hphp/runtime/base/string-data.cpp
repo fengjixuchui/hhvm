@@ -70,13 +70,7 @@ std::aligned_storage<
 //////////////////////////////////////////////////////////////////////
 
 namespace {
-struct SymbolPrefix {
-  AtomicLowPtr<NamedEntity> ne;
-  AtomicLowPtr<Class> cls;
-};
 std::atomic<bool> s_symbols_loaded;
-
-static_assert(sizeof(SymbolPrefix) % alignof(StringData) == 0, "");
 
 SymbolPrefix* getSymbolPrefix(StringData* sd) {
   assertx(sd->isSymbol());
@@ -131,7 +125,7 @@ ptrdiff_t StringData::cachedClassOffset() {
 // of the string. Static are alive for the lifetime of the process.
 // Uncounted are not ref counted but will be deleted at some point.
 template <bool trueStatic> ALWAYS_INLINE
-StringData* StringData::MakeShared(folly::StringPiece sl) {
+MemBlock StringData::AllocateShared(folly::StringPiece sl) {
   if (UNLIKELY(sl.size() > StringData::MaxSize)) {
     raiseStringLengthExceededError(sl.size());
   }
@@ -140,11 +134,22 @@ StringData* StringData::MakeShared(folly::StringPiece sl) {
     trueStatic && !s_symbols_loaded.load(std::memory_order_acquire);
 
   auto const extra = symbol ? sizeof(SymbolPrefix) : 0;
-  auto const bytes = sl.size() + kStringOverhead + extra;
-  auto const alloc = reinterpret_cast<char*>(
-    trueStatic ? lower_malloc(bytes) : uncounted_malloc(bytes)
+  auto const allocSize = sl.size() + kStringOverhead + extra;
+  auto const ptr = trueStatic ? lower_malloc(allocSize)
+                              : uncounted_malloc(allocSize);
+  return MemBlock{ptr, allocSize};
+}
+
+template <bool trueStatic> ALWAYS_INLINE
+StringData* StringData::MakeSharedAt(folly::StringPiece sl, MemBlock range) {
+  assertx(range.size >= sl.size() + kStringOverhead);
+  auto const symbol = trueStatic &&
+    !s_symbols_loaded.load(std::memory_order_acquire) &&
+    (range.size >= sl.size() + kStringOverhead + sizeof(SymbolPrefix));
+  auto const extra = symbol ? sizeof(SymbolPrefix) : 0;
+  StringData* sd = reinterpret_cast<StringData*>(
+    reinterpret_cast<uintptr_t>(range.ptr) + extra
   );
-  auto const sd = reinterpret_cast<StringData*>(alloc + extra);
   auto const data = reinterpret_cast<char*>(sd + 1);
 
 #ifndef NO_M_DATA
@@ -174,37 +179,25 @@ StringData* StringData::MakeShared(folly::StringPiece sl) {
   return ret;
 }
 
+StringData* StringData::MakeStaticAt(folly::StringPiece sl, MemBlock range) {
+  return MakeSharedAt<true>(sl, range);
+}
+
 StringData* StringData::MakeStatic(folly::StringPiece sl) {
-  return MakeShared<true>(sl);
+  assertx(StaticString::s_globalInit);
+  return MakeStaticAt(sl, AllocateShared<true>(sl));
 }
 
 StringData* StringData::MakeUncounted(folly::StringPiece sl) {
   if (APCStats::IsCreated()) {
     APCStats::getAPCStats().addAPCUncountedBlock();
   }
-  return MakeShared<false>(sl);
+  return MakeSharedAt<false>(sl, AllocateShared<false>(sl));
 }
 
 StringData* StringData::MakeEmpty() {
-  auto const sd = staticEmptyString();
-  auto const data = reinterpret_cast<char*>(sd + 1);
-
-#ifndef NO_M_DATA
-  sd->m_data        = data;
-#endif
-  sd->initHeader(HeaderKind::String, StaticValue);
-  sd->m_lenAndHash  = 0; // len=0, hash=0
-  data[0] = 0;
-  sd->preCompute();
-
-  assertx(sd->m_len == 0);
-  assertx(sd->capacity() == 0);
-  assertx(sd->m_kind == HeaderKind::String);
-  assertx(sd->isFlat());
-  assertx(sd->isStatic());
-  assertx(!sd->isSymbol());
-  assertx(sd->checkSane());
-  return sd;
+  return MakeStaticAt(folly::StringPiece{""},
+                      MemBlock{&s_theEmptyString, sizeof(s_theEmptyString)});
 }
 
 void StringData::destructStatic() {

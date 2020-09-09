@@ -107,6 +107,8 @@ pub struct FunHdr {
     constrs: Vec<ast::WhereConstraint>,
     type_parameters: Vec<ast::Tparam>,
     parameters: Vec<ast::FunParam>,
+    capability: Option<ast::Hint>,
+    unsafe_capability: Option<ast::Hint>,
     return_type: Option<ast::Hint>,
 }
 
@@ -118,6 +120,8 @@ impl FunHdr {
             constrs: vec![],
             type_parameters: vec![],
             parameters: vec![],
+            capability: None,
+            unsafe_capability: None,
             return_type: None,
         }
     }
@@ -721,7 +725,12 @@ where
             if let Token(t) = &c.literal_expression.syntax {
                 if is_valid_shape_literal(t) {
                     let ast::Id(p, n) = Self::pos_name(node, env)?;
-                    let str_ = Self::mk_str(node, env, Self::unesc_dbl, &n);
+                    let unescp = if t.kind() == TK::SingleQuotedStringLiteral {
+                        unescape_single
+                    } else {
+                        Self::unesc_dbl
+                    };
+                    let str_ = Self::mk_str(node, env, unescp, &n);
                     if let Some(_) = ocaml_helper::int_of_string_opt(&str_.as_bytes()) {
                         Self::raise_parsing_error(
                             node,
@@ -1593,6 +1602,7 @@ where
                     variadic: Self::determine_variadicity(&params),
                     params,
                     cap: ast::TypeHint((), None), // TODO(T70095684)
+                    unsafe_cap: ast::TypeHint((), None), // TODO(T70095684)
                     user_attributes: Self::p_user_attributes(&c.lambda_attribute_spec, env)?,
                     file_attributes: vec![],
                     external,
@@ -2252,6 +2262,7 @@ where
                     variadic: Self::determine_variadicity(&params),
                     params,
                     cap: ast::TypeHint((), None), // TODO(T70095684)
+                    unsafe_cap: ast::TypeHint((), None), // TODO(T70095684)
                     user_attributes,
                     file_attributes: vec![],
                     external,
@@ -2293,6 +2304,7 @@ where
                     variadic: Self::determine_variadicity(&[]),
                     params: vec![],
                     cap: ast::TypeHint((), None), // TODO(T70095684)
+                    unsafe_cap: ast::TypeHint((), None), // TODO(T70095684)
                     user_attributes,
                     file_attributes: vec![],
                     external,
@@ -3514,6 +3526,19 @@ where
         }
     }
 
+    fn p_cap(node: &Syntax<T, V>, env: &mut Env) -> Result<(Option<ast::Hint>, Option<ast::Hint>)> {
+        match &node.syntax {
+            Missing => Ok((None, None)),
+            CapabilityProvisional(c) => {
+                let cap = Self::p_hint(&c.capability_provisional_type, env)?;
+                let unsafe_cap =
+                    Self::mp_optional(Self::p_hint, &c.capability_provisional_unsafe_type, env)?;
+                Ok((Some(cap), unsafe_cap))
+            }
+            _ => Self::missing_syntax("type parameter", node, env),
+        }
+    }
+
     fn p_fun_hdr(node: &Syntax<T, V>, env: &mut Env) -> Result<FunHdr> {
         match &node.syntax {
             FunctionDeclarationHeader(c) => {
@@ -3529,6 +3554,8 @@ where
                 let kinds = Self::p_kinds(function_modifiers, env)?;
                 let has_async = kinds.has(modifier::ASYNC);
                 let parameters = Self::could_map(Self::p_fun_param, function_parameter_list, env)?;
+                let (capability, unsafe_capability) =
+                    Self::p_cap(&c.function_capability_provisional, env)?;
                 let return_type = Self::mp_optional(Self::p_hint, function_type, env)?;
                 let suspension_kind = Self::mk_suspension_kind_(has_async);
                 let name = Self::pos_name(function_name, env)?;
@@ -3540,6 +3567,8 @@ where
                     constrs,
                     type_parameters,
                     parameters,
+                    capability,
+                    unsafe_capability,
                     return_type,
                 })
             }
@@ -3720,7 +3749,7 @@ where
                 Self::is_valid_attribute_arg(&c.parenthesized_expression_expression, env)
             }
             // Normal literals (string, int, etc)
-            LiteralExpression(_) => (),
+            LiteralExpression(_) => {}
             // ::class strings
             ScopeResolutionExpression(c) => {
                 if let Some(TK::Class) = Self::token_kind(&c.scope_resolution_name) {
@@ -3737,8 +3766,8 @@ where
                 Self::is_valid_attribute_arg(&c.prefix_unary_operand, env);
                 let token = Self::token_kind(&c.prefix_unary_operator);
                 match token {
-                    Some(TK::Minus) => (),
-                    Some(TK::Plus) => (),
+                    Some(TK::Minus) => {}
+                    Some(TK::Plus) => {}
                     _ => Self::raise_parsing_error(
                         node,
                         env,
@@ -4187,6 +4216,7 @@ where
                     variadic: Self::determine_variadicity(&hdr.parameters),
                     params: hdr.parameters,
                     cap: ast::TypeHint((), None), // TODO(T70095684)
+                    unsafe_cap: ast::TypeHint((), None), // TODO(T70095684)
                     body: ast::FuncBody {
                         annotation: (),
                         ast: body,
@@ -4611,6 +4641,8 @@ where
                 };
                 let user_attributes = Self::p_user_attributes(function_attribute_spec, env)?;
                 let variadic = Self::determine_variadicity(&hdr.parameters);
+                let cap = ast::TypeHint((), hdr.capability);
+                let unsafe_cap = ast::TypeHint((), hdr.unsafe_capability);
                 let ret = ast::TypeHint((), hdr.return_type);
                 Ok(vec![ast::Def::mk_fun(ast::Fun_ {
                     span: Self::p_fun_pos(node, env),
@@ -4621,7 +4653,8 @@ where
                     tparams: hdr.type_parameters,
                     where_constraints: hdr.constrs,
                     params: hdr.parameters,
-                    cap: ast::TypeHint((), None), // TODO(T70095684)
+                    cap,
+                    unsafe_cap,
                     body: ast::FuncBody {
                         ast: block,
                         annotation: (),
@@ -4811,6 +4844,7 @@ where
                     enum_: Some(ast::Enum_ {
                         base: Self::p_hint(&c.enum_base, env)?,
                         constraint: Self::mp_optional(Self::p_tconstraint_ty, &c.enum_type, env)?,
+                        includes: Self::could_map(Self::p_hint, &c.enum_includes_list, env)?,
                     }),
 
                     doc_comment: doc_comment_opt,

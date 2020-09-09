@@ -208,10 +208,18 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           enum_colon = colon_kw;
           enum_base = base;
           enum_type;
+          enum_includes_keyword = enum_includes_kw;
+          enum_includes_list;
           enum_left_brace = left_b;
           enum_enumerators = enumerators;
           enum_right_brace = right_b;
         } ->
+      let after_each_ancestor is_last =
+        if is_last then
+          Nothing
+        else
+          space_split ()
+      in
       Concat
         [
           t env attr;
@@ -223,6 +231,33 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           Space;
           SplitWith Cost.Base;
           Nest [Space; t env base; Space; t env enum_type; Space];
+          when_present enum_includes_kw (fun () ->
+              Nest
+                [
+                  Space;
+                  Split;
+                  t env enum_includes_kw;
+                  WithRule
+                    ( Rule.Parental,
+                      Nest
+                        [
+                          Span
+                            [
+                              Space;
+                              ( if list_length enum_includes_list = 1 then
+                                SplitWith Cost.Base
+                              else
+                                Split );
+                              Nest
+                                [
+                                  handle_possible_list
+                                    env
+                                    ~after_each:after_each_ancestor
+                                    enum_includes_list;
+                                ];
+                            ];
+                        ] );
+                ]);
           braced_block_nest
             env
             left_b
@@ -485,6 +520,7 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           function_left_paren = leftp;
           function_parameter_list = params;
           function_right_paren = rightp;
+          function_capability_provisional = cap;
           function_colon = colon;
           function_type = ret_type;
           function_where_clause = where;
@@ -493,6 +529,7 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
         [
           Span (transform_fn_decl_name env modifiers kw name type_params leftp);
           transform_fn_decl_args env params rightp;
+          t env cap;
           t env colon;
           when_present colon space;
           t env ret_type;
@@ -515,6 +552,17 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           where_constraint_right_type = right;
         } ->
       Concat [t env left; Space; t env op; Space; t env right]
+    | Syntax.CapabilityProvisional
+        {
+          capability_provisional_at = at;
+          capability_provisional_left_brace = lb;
+          capability_provisional_type = cap;
+          capability_provisional_unsafe_plus = plus;
+          capability_provisional_unsafe_type = unsafe_cap;
+          capability_provisional_right_brace = rb;
+        } ->
+      Concat
+        [t env at; t env lb; t env cap; t env plus; t env unsafe_cap; t env rb]
     | Syntax.MethodishDeclaration
         {
           methodish_attribute = attr;

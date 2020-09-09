@@ -40,9 +40,13 @@ class type cursor =
     Returns `None` if inapplicable for this type of cursor. *)
     method get_calculate_fanout_result : Calculate_fanout.result option
 
-    (** Get the cumulative dependency graph delta that has occurred since the
-    saved-state for the point in time represented by this cursor. *)
-    method get_dep_graph_delta : dep_graph_delta
+    (** Get the fanout that needs to be re-typechecked (i.e. the fanout of
+    the files changed since the last typecheck).
+
+    There is one element in the returned list per cursor-advance since the
+    last typecheck. The newest elements are first. *)
+    method get_calculate_fanout_results_since_last_typecheck :
+      Calculate_fanout.result list
 
     (** Get the client ID that owns this cursor. *)
     method get_client_id : client_id

@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<246c4cf9f8cd9834a28d50bac9b16d6b>>
+// @generated SignedSource<<e0b3f934bfa6b823093c4e7453896672>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
@@ -648,6 +648,7 @@ impl<P: Params> NodeMut<P> for Enum_ {
     ) -> Result<(), P::Error> {
         self.base.accept(c, v)?;
         self.constraint.accept(c, v)?;
+        self.includes.accept(c, v)?;
         Ok(())
     }
 }
@@ -1105,6 +1106,7 @@ impl<P: Params> NodeMut<P> for Fun_<P::Ex, P::Fb, P::En, P::Hi> {
         self.variadic.accept(c, v)?;
         self.params.accept(c, v)?;
         self.cap.accept(c, v)?;
+        self.unsafe_cap.accept(c, v)?;
         self.body.accept(c, v)?;
         self.fun_kind.accept(c, v)?;
         self.user_attributes.accept(c, v)?;
@@ -1467,6 +1469,7 @@ impl<P: Params> NodeMut<P> for Method_<P::Ex, P::Fb, P::En, P::Hi> {
         self.variadic.accept(c, v)?;
         self.params.accept(c, v)?;
         self.cap.accept(c, v)?;
+        self.unsafe_cap.accept(c, v)?;
         self.body.accept(c, v)?;
         self.fun_kind.accept(c, v)?;
         self.user_attributes.accept(c, v)?;

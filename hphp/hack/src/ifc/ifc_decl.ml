@@ -9,6 +9,11 @@
 open Hh_prelude
 open Hh_core
 open Ifc_types
+module Env = Ifc_env
+module Logic = Ifc_logic
+module Mapper = Ifc_mapper
+module Lattice = Ifc_security_lattice
+module L = Logic.Infix
 module A = Aast
 module T = Typing_defs
 
@@ -28,9 +33,11 @@ let exception_id = "\\Exception"
 
 let vec_id = "\\HH\\vec"
 
-let cipp_id = "\\Cipp"
+let governed_id = "\\Governed"
 
 let construct_id = "__construct"
+
+let external_id = "\\External"
 
 let make_callable_name cls_name_opt name =
   match cls_name_opt with
@@ -44,22 +51,43 @@ let get_attr attr attrs =
   | [a] -> Some a
   | _ -> fail ("multiple '" ^ attr ^ "' attributes found")
 
-let callable_decl attrs =
+let callable_decl attrs args =
   let fd_kind =
-    if Option.is_some (get_attr infer_flows_id attrs) then
-      FDInferFlows
-    else if Option.is_some (get_attr cipp_id attrs) then
-      FDCIPP
-    else
-      FDPublic
+    match get_attr governed_id attrs with
+    | Some attr ->
+      let policy =
+        match attr.A.ua_params with
+        | [] -> None
+        | [((pos, _), A.String purpose)] ->
+          Some (Lattice.parse_policy (PosSet.singleton pos) purpose)
+        | _ -> fail "expected a string literal as governed by argument."
+      in
+      FDGovernedBy policy
+    | None ->
+      if Option.is_some (get_attr infer_flows_id attrs) then
+        FDInferFlows
+      else
+        (* Eventually, make this (FDGovernedBy Pbot) *)
+        FDInferFlows
   in
-  { fd_kind }
+  let fd_args =
+    let f param =
+      match get_attr external_id param.A.param_user_attributes with
+      | Some { A.ua_name = (pos, _); _ } -> AKExternal pos
+      | None -> AKDefault
+    in
+    List.map ~f args
+  in
+  { fd_kind; fd_args }
 
-let fun_ { A.f_name = (_, name); f_user_attributes = attrs; _ } =
-  (make_callable_name None name, callable_decl attrs)
+let fun_ { A.f_name = (_, name); f_user_attributes = attrs; f_params = args; _ }
+    =
+  (make_callable_name None name, callable_decl attrs args)
 
-let meth class_name { A.m_name = (_, name); m_user_attributes = attrs; _ } =
-  (make_callable_name (Some class_name) name, callable_decl attrs)
+let meth
+    class_name
+    { A.m_name = (_, name); m_user_attributes = attrs; m_params = args; _ } =
+  (make_callable_name (Some class_name) name, callable_decl attrs args)
 
 let immediate_supers { A.c_uses; A.c_extends; _ } =
   let id_of_hint = function
@@ -216,7 +244,49 @@ let collect_sigs defs =
   in
   List.fold ~f:add_class_decl ~init classes
 
-let find_core_class_decl meta class_name =
-  match Decl_provider.get_class meta.m_ctx class_name with
-  | Some class_decl -> class_decl
-  | None -> fail ("couldn't find the decl for " ^ class_name)
+let property_policy { de_class; _ } cname pname =
+  Option.(
+    SMap.find_opt cname de_class >>= fun cls ->
+    List.find
+      ~f:(fun p -> String.equal p.pp_name pname)
+      cls.cd_policied_properties
+    >>= fun p ->
+    return
+      (Ifc_security_lattice.parse_policy
+         (PosSet.singleton p.pp_pos)
+         p.pp_purpose))
+
+(* Builds the type scheme for a callable *)
+let make_callable_scheme renv pol fp args =
+  let renv = { renv with re_scope = Scope.alloc () } in
+  let policy =
+    match pol with
+    | Some policy -> policy
+    | None -> Env.new_policy_var renv "implicit"
+  in
+  let rec set_policy p pty = Mapper.ptype (set_policy p) (const p) pty in
+  let pbot = Pbot PosSet.empty in
+  let (acc, args) =
+    let f acc ty = function
+      | AKDefault -> (acc, set_policy policy ty)
+      | AKExternal pos ->
+        let ext = Env.new_policy_var renv "external" in
+        (L.(ext < policy) ~pos acc, set_policy ext ty)
+    in
+    List.map2_env [] ~f fp.fp_type.f_args args
+  in
+  let fp' =
+    {
+      fp_name = fp.fp_name;
+      fp_this = Option.map ~f:(set_policy policy) fp.fp_this;
+      fp_type =
+        {
+          f_pc = policy;
+          f_args = args;
+          f_ret = set_policy policy fp.fp_type.f_ret;
+          f_exn = set_policy policy fp.fp_type.f_exn;
+          f_self = pbot;
+        };
+    }
+  in
+  Fscheme (renv.re_scope, fp', Logic.conjoin acc)

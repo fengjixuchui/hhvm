@@ -140,6 +140,18 @@ class ['a, 'b, 'c, 'd] generic_elaborator =
       let env = extend_tparams env f.f_tparams in
       super#on_fun_def env f
 
+    method! on_fun_ env f =
+      let open Namespace_env in
+      let namespace =
+        { empty_with_default with ns_name = Some "HH\\Capabilities" }
+      in
+      let f_cap = super#on_type_hint { env with namespace } f.f_cap in
+      let f_unsafe_cap =
+        super#on_type_hint { env with namespace } f.f_unsafe_cap
+      in
+      let f = super#on_fun_ env f in
+      { f with f_cap; f_unsafe_cap }
+
     method! on_method_ env m =
       let env = extend_tparams env m.m_tparams in
       super#on_method_ env m

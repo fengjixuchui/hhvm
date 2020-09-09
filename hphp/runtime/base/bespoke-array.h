@@ -21,6 +21,7 @@
 #include "hphp/runtime/base/datatype.h"
 #include "hphp/runtime/base/data-walker.h"
 #include "hphp/runtime/base/typed-value.h"
+#include "hphp/runtime/base/bespoke-layout.h"
 
 namespace HPHP {
 
@@ -33,7 +34,7 @@ inline bool shouldTestBespokeArrayLikes() {
 }
 
 namespace bespoke {
-// Hide "BespokeLayout" and its implementations to the rest of the codebase.
+// Hide Layout and its implementations to the rest of the codebase.
 struct Layout;
 // Maybe wrap this array in a LoggingArray, based on runtime options.
 ArrayData* maybeMakeLoggingArray(ArrayData*);
@@ -48,16 +49,19 @@ void waitOnExportProfiles();
  * a variety of possible memory layouts. Eventually, our goal is to generate
  * these layouts at runtime, based on profiling information.
  *
- * Bespoke arrays have an m_size that is the ones-complement of their bespoke
- * layout id. This means we will always call Vsize() for these arrays.
+ * Bespoke arrays store their bespoke layout in the ArrayData's m_extra field.
  */
 struct BespokeArray : ArrayData {
   static BespokeArray* asBespoke(ArrayData*);
   static const BespokeArray* asBespoke(const ArrayData*);
 
-  const bespoke::Layout* layout() const;
-  void setLayout(const bespoke::Layout*);
+  BespokeLayout layout() const;
 
+protected:
+  const bespoke::Layout* layoutRaw() const;
+  void setLayoutRaw(const bespoke::Layout*);
+
+public:
   size_t heapSize() const;
   void scan(type_scan::Scanner& scan) const;
   void setLegacyArrayBit(bool legacy);
@@ -80,7 +84,6 @@ private:
 public:
   // ArrayData interface
   static void Release(ArrayData*);
-  static size_t Vsize(const ArrayData* ad);
   static bool IsVectorData(const ArrayData* ad);
 
   // RO access

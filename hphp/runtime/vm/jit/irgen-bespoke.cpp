@@ -54,28 +54,14 @@ Locations getVanillaLocationsForBuiltin(const IRGS& env, SrcKey sk) {
   }
 }
 
-Locations getVanillaLocationsForCall(const IRGS& env, SrcKey sk) {
-  auto const soff = env.irb->fs().bcSPOff();
-  auto const fca = getImm(sk.pc(), 0).u_FCA;
-  if (!fca.hasUnpack()) return {};
-  auto const input = getInstrInfo(sk.op()).in;
-  auto const extra = ((input & InstrFlags::Stack1) ? 1 : 0) +
-                     ((input & InstrFlags::Stack2) ? 1 : 0);
-  return {Location::Stack{soff - (fca.hasGenerics() ? 1 : 0) - extra}};
-}
-
 Locations getVanillaLocations(const IRGS& env, SrcKey sk) {
   auto const op = sk.op();
   auto const soff = env.irb->fs().bcSPOff();
 
   if (op == Op::FCallBuiltin || op == Op::NativeImpl) {
     return getVanillaLocationsForBuiltin(env, sk);
-  } else if (isFCall(op)) {
-    return getVanillaLocationsForCall(env, sk);
-  } else if (isBinaryOp(op)) {
+  } else if (isComparisonOp(op)) {
     return {Location::Stack{soff}, Location::Stack{soff - 1}};
-  } else if (isCast(op)) {
-    return {Location::Stack{soff}};
   } else if (isMemberDimOp(op) || isMemberFinalOp(op)) {
     return {Location::MBase{}};
   }
@@ -89,52 +75,22 @@ Locations getVanillaLocations(const IRGS& env, SrcKey sk) {
     case Op::AddNewElemC:
       return {Location::Stack{soff - 1}};
     case Op::AKExists:
+    case Op::ClassGetTS:
     case Op::ColFromArray:
+    case Op::IterInit:
       return {Location::Stack{soff}};
 
-    // Miscellaneous ops that constrain one local.
-    case Op::IncDecL: {
-      auto const local = getImm(sk.pc(), localImmIdx(op)).u_NLA;
-      return {Location::Local{safe_cast<uint32_t>(local.id)}};
-    }
+    // Local iterators constrain the local base.
     case Op::LIterInit:
     case Op::LIterNext: {
       auto const local = getImm(sk.pc(), localImmIdx(op)).u_LA;
       return {Location::Local{safe_cast<uint32_t>(local)}};
     }
 
-    case Op::SetOpL: {
-      auto const local = getImm(sk.pc(), localImmIdx(op)).u_LA;
-      return {Location{Location::Local{safe_cast<uint32_t>(local)}},
-              Location{Location::Stack{soff}}};
-    }
-
-    // Miscellaneous ops that constrain one stack value.
-    case Op::BitNot:
-    case Op::ClassGetTS:
-    case Op::IterInit:
-    case Op::JmpNZ:
-    case Op::JmpZ:
-    case Op::Not:
-      return {Location::Stack{soff}};
-
     default:
       return {};
   }
   always_assert(false);
-}
-
-// Returns a type `t` such that if the input is a subtype of `t`, the cast
-// is trivial. For non-casts, or casts we don't care about, returns TBottom.
-Type getTypeForCast(Op op) {
-  switch (op) {
-    case Op::CastVec:    return TVec;
-    case Op::CastDict:   return TDict;
-    case Op::CastKeyset: return TKeyset;
-    case Op::CastVArray: return TVArr;
-    case Op::CastDArray: return TDArr;
-    default:             return TBottom;
-  }
 }
 
 void guardToVanilla(IRGS& env, SrcKey sk, Location loc) {
@@ -163,9 +119,6 @@ bool skipVanillaGuards(IRGS& env, SrcKey sk, const Locations& locs) {
   if (op == Op::Same || op == Op::NSame) {
     assertx(locs.size() == 2);
     return !is_arrlike(locs[0]) || !is_arrlike(locs[1]);
-  } else if (isCast(op)) {
-    assertx(locs.size() == 1);
-    return env.irb->fs().typeOf(locs[0]) <= getTypeForCast(op);
   }
   return false;
 }

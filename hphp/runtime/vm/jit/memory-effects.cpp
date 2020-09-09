@@ -1219,10 +1219,9 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   }
   case VecLast: {
     auto const base = inst.src(0);
-    if (base->hasConstVal(TArr)) {
-      return may_load_store(
-          AElemI { base, static_cast<int64_t>(base->arrVal()->size() - 1) },
-          AEmpty);
+    if (base->hasConstVal(TArrLike)) {
+      auto const index = static_cast<int64_t>(base->arrLikeVal()->size() - 1);
+      return may_load_store(AElemI { base, index }, AEmpty);
     }
     return may_load_store(AElemIAny, AEmpty);
   }
@@ -1668,7 +1667,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case IncStat:
   case ContPreNext:
   case ContStartedCheck:
-  case ConvArrToDbl:
   case CountVec:
   case CountDict:
   case CountKeyset:
@@ -1678,10 +1676,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case NInstanceOfBitmask:
   case InstanceOfIface:
   case InstanceOfRecDesc:
-  case InterfaceSupportsArr:
-  case InterfaceSupportsVec:
-  case InterfaceSupportsDict:
-  case InterfaceSupportsKeyset:
+  case InterfaceSupportsArrLike:
   case InterfaceSupportsDbl:
   case InterfaceSupportsInt:
   case InterfaceSupportsStr:
@@ -1890,8 +1885,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ConcatStr3:
   case ConcatStr4:
   case ConvTVToDbl:
-  case ConvArrToVec:
-  case ConvArrToDict:
   case ConvObjToVec:
   case ConvObjToDict:
   case ConvObjToKeyset:
@@ -1925,28 +1918,16 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case RecordReifiedGenericsAndGetTSList:
     return may_load_store(AElemAny, AEmpty);
 
-  case ConvArrToKeyset: // Decrefs input values
-  case ConvVecToKeyset:
-  case ConvDictToKeyset:
-  case ConvDictToDArr: // These 4 may raise Hack array compat notices
-  case ConvKeysetToDArr:
+  case ConvArrLikeToVec:
+  case ConvArrLikeToVArr:
+  case ConvArrLikeToDArr: // May raise Hack array compat notices
+  case ConvArrLikeToDict:
+  case ConvArrLikeToKeyset: // Decrefs input values
   case ConvClsMethToDArr:
   case ConvClsMethToDict:
   case ConvClsMethToKeyset:
   case ConvClsMethToVArr:
   case ConvClsMethToVec:
-    return may_load_store(AElemAny, AEmpty);
-
-  case ConvDictToVec:
-  case ConvKeysetToVec:
-  case ConvVecToDict:
-  case ConvKeysetToDict:
-  case ConvArrToVArr:
-  case ConvVecToVArr:
-  case ConvDictToVArr:
-  case ConvKeysetToVArr:
-  case ConvArrToDArr:
-  case ConvVecToDArr:
     return may_load_store(AElemAny, AEmpty);
 
   // debug_backtrace() traverses stack and WaitHandles on the heap.

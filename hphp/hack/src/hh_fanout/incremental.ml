@@ -131,11 +131,13 @@ class cursor ~client_id ~cursor_state =
     val cursor_state : cursor_state = cursor_state
 
     method get_file_deltas : Naming_sqlite.file_deltas =
-      match cursor_state with
-      | Saved_state _
-      | Typecheck_result _ ->
-        Relative_path.Map.empty
-      | Saved_state_delta { changed_files; _ } -> changed_files
+      let rec helper cursor_state =
+        match cursor_state with
+        | Saved_state _ -> Relative_path.Map.empty
+        | Typecheck_result { previous; _ } -> helper previous
+        | Saved_state_delta { changed_files; _ } -> changed_files
+      in
+      helper cursor_state
 
     method get_calculate_fanout_result : Calculate_fanout.result option =
       match cursor_state with
@@ -143,6 +145,18 @@ class cursor ~client_id ~cursor_state =
       | Typecheck_result _ ->
         None
       | Saved_state_delta { fanout_result; _ } -> Some fanout_result
+
+    method get_calculate_fanout_results_since_last_typecheck
+        : Calculate_fanout.result list =
+      let rec helper cursor_state =
+        match cursor_state with
+        | Saved_state _
+        | Typecheck_result _ ->
+          []
+        | Saved_state_delta { fanout_result; previous; _ } ->
+          fanout_result :: helper previous
+      in
+      helper cursor_state
 
     method private load_naming_table (ctx : Provider_context.t) : Naming_table.t
         =
@@ -173,18 +187,6 @@ class cursor ~client_id ~cursor_state =
         changed_file_infos
         naming_table_path
 
-    method get_dep_graph_delta : dep_graph_delta =
-      let rec helper cursor_state acc =
-        match cursor_state with
-        | Saved_state _ -> acc
-        | Typecheck_result
-            { previous; typecheck_result = { fanout_files_deps; _ } } ->
-          HashSet.union acc ~other:fanout_files_deps;
-          helper previous acc
-        | Saved_state_delta { previous; _ } -> helper previous acc
-      in
-      helper cursor_state (HashSet.create ())
-
     method get_client_id : client_id = client_id
 
     method get_client_config : client_config =
@@ -200,49 +202,56 @@ class cursor ~client_id ~cursor_state =
       let { dep_table_saved_state_path; ignore_hh_version; _ } =
         self#get_client_config
       in
-      SharedMem.load_dep_table_sqlite
-        (Path.to_string dep_table_saved_state_path)
-        ignore_hh_version
+      let () =
+        SharedMem.load_dep_table_sqlite
+          (Path.to_string dep_table_saved_state_path)
+          ignore_hh_version
+      in
 
-    method private find_cursors_since_last_typecheck : cursor_state list =
       let rec helper cursor_state =
         match cursor_state with
-        | Saved_state _
-        | Typecheck_result _ ->
-          [cursor_state]
-        | Saved_state_delta { previous; _ } -> cursor_state :: helper previous
+        | Saved_state _ -> ()
+        | Saved_state_delta { previous; _ } -> helper previous
+        | Typecheck_result
+            { previous; typecheck_result = { fanout_files_deps; _ } } ->
+          HashSet.iter fanout_files_deps ~f:(fun (dependent, dependency) ->
+              Typing_deps.add_idep_directly_to_graph dependent dependency);
+          helper previous
       in
       helper cursor_state
 
     method private get_files_to_typecheck : Relative_path.Set.t =
-      let cursors = self#find_cursors_since_last_typecheck in
-      List.fold cursors ~init:Relative_path.Set.empty ~f:(fun acc cursor ->
-          match cursor with
-          | Saved_state { dep_table_errors_saved_state_path; _ } ->
-            let errors : SaveStateServiceTypes.saved_state_errors =
-              if
-                Sys.file_exists
-                  (Path.to_string dep_table_errors_saved_state_path)
-              then
-                In_channel.with_file
-                  ~binary:true
-                  (Path.to_string dep_table_errors_saved_state_path)
-                  ~f:(fun ic -> Marshal.from_channel ic)
-              else
-                []
-            in
-            errors
-            |> List.map ~f:(fun (_phase, path) -> path)
-            |> List.fold ~init:acc ~f:Relative_path.Set.union
-          | Saved_state_delta { fanout_result; _ } ->
+      let rec helper cursor_state acc =
+        match cursor_state with
+        | Typecheck_result _ ->
+          (* Don't need to typecheck any previous cursors. The fanout of
+            the files that have changed before this typecheck have already
+            been processed. Stop recursion here. *)
+          acc
+        | Saved_state { dep_table_errors_saved_state_path; _ } ->
+          let errors : SaveStateServiceTypes.saved_state_errors =
+            if
+              Sys.file_exists (Path.to_string dep_table_errors_saved_state_path)
+            then
+              In_channel.with_file
+                ~binary:true
+                (Path.to_string dep_table_errors_saved_state_path)
+                ~f:(fun ic -> Marshal.from_channel ic)
+            else
+              []
+          in
+          errors
+          |> List.map ~f:(fun (_phase, path) -> path)
+          |> List.fold ~init:acc ~f:Relative_path.Set.union
+        | Saved_state_delta { previous; fanout_result; _ } ->
+          let acc =
             Relative_path.Set.union
               acc
               fanout_result.Calculate_fanout.fanout_files
-          | Typecheck_result _ ->
-            (* Don't need to typecheck any previous cursors. The fanout of
-            the files that have changed before this typecheck have already
-            been processed. Stop recursion here. *)
-            acc)
+          in
+          helper previous acc
+      in
+      helper cursor_state Relative_path.Set.empty
 
     method advance
         ~(detail_level : Calculate_fanout.Detail_level.t)
@@ -323,6 +332,10 @@ class cursor ~client_id ~cursor_state =
                  (Relative_path.Set.elements files_to_typecheck)
                  ~num_workers:(List.length workers))
         in
+        Hh_logger.log
+          "Got %d new dependency edges as a result of typechecking %d files"
+          (HashSet.length fanout_files_deps)
+          (Relative_path.Set.cardinal files_to_typecheck);
         let typecheck_result = { fanout_files_deps; errors } in
         let cursor =
           new cursor

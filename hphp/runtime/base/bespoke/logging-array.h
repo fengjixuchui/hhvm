@@ -31,11 +31,12 @@ struct LoggingProfile;
 struct LoggingArray : BespokeArray {
   static LoggingArray* asLogging(ArrayData* ad);
   static const LoggingArray* asLogging(const ArrayData* ad);
-  static LoggingArray* MakeStatic(ArrayData* ad, LoggingProfile* prof);
+  static LoggingArray* Make(ArrayData* ad, LoggingProfile* profile);
+  static LoggingArray* MakeStatic(ArrayData* ad, LoggingProfile* profile);
   static void FreeStatic(LoggingArray* lad);
 
-  // Updates m_kind in place to match the wrapped array's kind. Returns this.
-  LoggingArray* updateKind();
+  // Update m_kind and m_size after doing a mutation on the wrapped array.
+  void updateKindAndSize();
 
   bool checkInvariants() const;
 
@@ -44,6 +45,8 @@ struct LoggingArray : BespokeArray {
 };
 
 struct LoggingLayout : public Layout {
+  std::string describe() const final;
+
   size_t heapSize(const ArrayData* ad) const final;
   void scan(const ArrayData* ad, type_scan::Scanner& scan) const final;
   ArrayData* escalateToVanilla(
@@ -54,9 +57,7 @@ struct LoggingLayout : public Layout {
   void releaseUncounted(ArrayData*) const final;
   void release(ArrayData*) const final;
 
-  size_t size(const ArrayData*) const final;
   bool isVectorData(const ArrayData*) const final;
-
   TypedValue getInt(const ArrayData*, int64_t) const final;
   TypedValue getStr(const ArrayData*, const StringData*) const final;
   TypedValue getKey(const ArrayData*, ssize_t pos) const final;

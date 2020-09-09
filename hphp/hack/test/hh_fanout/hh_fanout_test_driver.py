@@ -66,6 +66,9 @@ def exec(args: List[str], *, raise_on_error: bool = True) -> str:
             + f"Stdout: {stdout}\n"
             + f"Stderr: {stderr}\n"
         )
+    elif DEBUGGING:
+        stderr = result.stderr.decode()
+        log(f"Stderr: {stderr}")
     return stdout
 
 
@@ -168,7 +171,7 @@ def run_hh_fanout_calculate_errors(
 
 
 def run_hh_fanout_calculate_errors_pretty_print(
-    env: Env, saved_state_info: SavedStateInfo, work_dir: Path, cursor: Cursor
+    env: Env, saved_state_info: SavedStateInfo, cursor: Cursor
 ) -> str:
     args = []
     args.extend(("--from", "integration-test"))
@@ -181,18 +184,31 @@ def run_hh_fanout_calculate_errors_pretty_print(
     args.append("--pretty-print")
 
     result = exec([env.hh_fanout_path, "calculate-errors", *args])
-    result = result.replace(work_dir, "")
+    result = result.replace(env.root_dir, "")
     result = result.strip()
     return result
 
 
-def run_hh_server_check(env: Env, work_dir: Path) -> str:
+def run_hh_fanout_status(env: Env, cursor: Cursor) -> str:
+    args = []
+    args.extend(("--from", "integration-test"))
+    args.extend(("--root", env.root_dir))
+    args.extend(("--state-path", os.path.join(env.root_dir, "hh_fanout_state")))
+    args.extend(("--cursor", cursor))
+
+    result = exec([env.hh_fanout_path, "status", *args])
+    result = result.replace(env.root_dir, "")
+    result = result.strip()
+    return result
+
+
+def run_hh_server_check(env: Env) -> str:
     result = exec(
-        [env.hh_server_path, "--check", work_dir, "--no-load"],
+        [env.hh_server_path, "--check", env.root_dir, "--no-load"],
         # Returns 1 when there's typechecking errors.
         raise_on_error=False,
     )
-    result = result.replace(work_dir, "")
+    result = result.replace(env.root_dir, "")
     result = result.strip()
     return result
 
@@ -237,9 +253,9 @@ def run_typecheck_test(
     env: Env, saved_state_info: SavedStateInfo, work_dir: Path, cursor: Cursor
 ) -> None:
     hh_fanout_result = run_hh_fanout_calculate_errors_pretty_print(
-        env=env, saved_state_info=saved_state_info, work_dir=work_dir, cursor=cursor
+        env=env, saved_state_info=saved_state_info, cursor=cursor
     )
-    hh_server_result = run_hh_server_check(env=env, work_dir=work_dir)
+    hh_server_result = run_hh_server_check(env=env)
     print(hh_fanout_result)
 
     if hh_fanout_result == hh_server_result:
