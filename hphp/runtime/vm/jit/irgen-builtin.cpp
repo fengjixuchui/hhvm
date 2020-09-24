@@ -536,12 +536,17 @@ SSATmp* impl_opt_type_structure(IRGS& env, const ParamPrep& params,
 
   auto const data = LdSubClsCnsData { cnsName, cnsSlot };
   if (!getName) {
-    auto const ptr = gen(env, LdSubClsCns, data, clsTmp);
     return cond(
       env,
       [&] (Block* taken) {
-        gen(env, CheckTypeMem, TUncountedInit, taken, ptr);
-        return gen(env, LdTypeCns, taken, gen(env, LdMem, TUncountedInit, ptr));
+        auto const val = gen(
+          env,
+          CheckType,
+          TUncountedInit,
+          taken,
+          gen(env, LdSubClsCns, data, clsTmp)
+        );
+        return gen(env, LdTypeCns, taken, val);
       },
       [&] (SSATmp* cns) { return cns; },
       [&] /* taken */ {
@@ -923,7 +928,7 @@ SSATmp* meth_caller_get_name(IRGS& env, SSATmp *value) {
       return ret;
     };
 
-    auto const mcCls = Unit::lookupClass(s_meth_caller_cls.get());
+    auto const mcCls = Class::lookup(s_meth_caller_cls.get());
     assertx(mcCls && meth_caller_has_expected_prop(mcCls));
     return cond(
       env,
@@ -1161,7 +1166,7 @@ SSATmp* opt_is_meth_caller(IRGS& env, const ParamPrep& params) {
       value);
   }
   if (value->isA(TObj)) {
-    auto const mcCls = Unit::lookupClass(s_meth_caller_cls.get());
+    auto const mcCls = Class::lookup(s_meth_caller_cls.get());
     assertx(mcCls);
     return gen(env, EqCls, cns(env, mcCls), gen(env, LdObjClass, value));
   }
@@ -2039,7 +2044,7 @@ void emitFCallBuiltin(IRGS& env,
                       uint32_t numNonDefault,
                       uint32_t numOut,
                       const StringData* funcName) {
-  auto const callee = Unit::lookupBuiltin(funcName);
+  auto const callee = Func::lookupBuiltin(funcName);
   if (!callee) PUNT(Missing-builtin);
 
   if (callee->numInOutParams() != numOut) PUNT(bad-inout);
@@ -2764,7 +2769,7 @@ void memoSetImpl(IRGS& env, LocalRange keys, bool eager) {
         MemoSetInstanceValue,
         MemoValueInstanceData { memoInfo.first, func, asyncEager, false },
         this_,
-        ldVal(DataTypeCountness)
+        ldVal(DataTypeGeneric)
       );
       return;
     }
@@ -2807,7 +2812,7 @@ void memoSetImpl(IRGS& env, LocalRange keys, bool eager) {
       env,
       MemoSetLSBValue,
       MemoValueStaticData { func, asyncEager, false },
-      ldVal(DataTypeCountness),
+      ldVal(DataTypeGeneric),
       lsbCls
     );
     return;
@@ -2828,7 +2833,7 @@ void memoSetImpl(IRGS& env, LocalRange keys, bool eager) {
     env,
     MemoSetStaticValue,
     MemoValueStaticData { func, asyncEager, false },
-    ldVal(DataTypeCountness)
+    ldVal(DataTypeGeneric)
   );
 }
 

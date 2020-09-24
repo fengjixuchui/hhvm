@@ -17,7 +17,121 @@
                          ([4:12-14], (Int "10"))))),
                      ([4:17-31],
                       (ET_Splice ([4:28-30], (Lvar ([4:28-30], $x)))))
-                     )))
+                     ))),
+                 (Some ([4:8-31],
+                        (Lfun (
+                           { f_span = [4:8-31]; f_annotation = ();
+                             f_mode = Mstrict; f_ret = ((), None);
+                             f_name = ([Pos.none], ";anonymous");
+                             f_tparams = []; f_where_constraints = [];
+                             f_variadic = FVnonVariadic;
+                             f_params =
+                             [{ param_annotation = [4:3-7];
+                                param_type_hint =
+                                ((),
+                                 (Some ([4:3-7],
+                                        (Happly (([4:3-7], "\\Code"), [])))));
+                                param_is_variadic = false;
+                                param_pos = [4:3-7]; param_name = "$v";
+                                param_expr = None; param_callconv = None;
+                                param_user_attributes = [];
+                                param_visibility = None }
+                               ];
+                             f_cap = ((), None); f_unsafe_cap = ((), None);
+                             f_body =
+                             { fb_ast =
+                               [([4:8-31],
+                                 (Return
+                                    (Some ([4:8-31],
+                                           (Call (
+                                              ([4:8-31],
+                                               (Obj_get (
+                                                  ([4:8-31],
+                                                   (Lvar ([4:8-31], $v))),
+                                                  ([4:8-31],
+                                                   (Id ([4:8-31], "plus"))),
+                                                  OG_nullthrows))),
+                                              [],
+                                              [([4:8-14],
+                                                (Call (
+                                                   ([4:8-14],
+                                                    (Obj_get (
+                                                       ([4:8-14],
+                                                        (Lvar ([4:8-14], $v))),
+                                                       ([4:8-14],
+                                                        (Id
+                                                           ([4:8-14], "plus"))),
+                                                       OG_nullthrows))),
+                                                   [],
+                                                   [([4:8-9],
+                                                     (Call (
+                                                        ([4:8-9],
+                                                         (Obj_get (
+                                                            ([4:8-9],
+                                                             (Lvar
+                                                                ([4:8-9], $v))),
+                                                            ([4:8-9],
+                                                             (Id
+                                                                ([4:8-9],
+                                                                 "intLiteral"))),
+                                                            OG_nullthrows))),
+                                                        [],
+                                                        [([4:8-9], (Int "4"))
+                                                          ],
+                                                        None)));
+                                                     ([4:12-14],
+                                                      (Call (
+                                                         ([4:12-14],
+                                                          (Obj_get (
+                                                             ([4:12-14],
+                                                              (Lvar
+                                                                 ([4:12-14],
+                                                                  $v))),
+                                                             ([4:12-14],
+                                                              (Id
+                                                                 ([4:12-14],
+                                                                  "intLiteral"))),
+                                                             OG_nullthrows))),
+                                                         [],
+                                                         [([4:12-14],
+                                                           (Int "10"))],
+                                                         None)))
+                                                     ],
+                                                   None)));
+                                                ([4:17-31],
+                                                 (Call (
+                                                    ([4:17-31],
+                                                     (Obj_get (
+                                                        ([4:17-31],
+                                                         (Lvar
+                                                            ([4:17-31], $v))),
+                                                        ([4:17-31],
+                                                         (Id
+                                                            ([4:17-31],
+                                                             "unsupportedSyntax"))),
+                                                        OG_nullthrows))),
+                                                    [],
+                                                    [([Pos.none],
+                                                      (String
+                                                         "ETSplice(\n    Expr(\n        Pos(\n            Small {\n                file: RelativePath {\n                    prefix: Dummy,\n                    path: \"expression_tree_splice.php\",\n                },\n                start: FilePosSmall {\n                    bol: 30,\n                    line: 4,\n                    column: 27,\n                },\n                end: FilePosSmall {\n                    bol: 30,\n                    line: 4,\n                    column: 29,\n                },\n            },\n        ),\n        Lvar(\n            Lid(\n                Pos(\n                    Small {\n                        file: RelativePath {\n                            prefix: Dummy,\n                            path: \"expression_tree_splice.php\",\n                        },\n                        start: FilePosSmall {\n                            bol: 30,\n                            line: 4,\n                            column: 27,\n                        },\n                        end: FilePosSmall {\n                            bol: 30,\n                            line: 4,\n                            column: 29,\n                        },\n                    },\n                ),\n                (\n                    0,\n                    \"$x\",\n                ),\n            ),\n        ),\n    ),\n)"))
+                                                      ],
+                                                    None)))
+                                                ],
+                                              None))))))
+                                 ];
+                               fb_annotation = Named };
+                             f_fun_kind = FSync; f_user_attributes = [];
+                             f_file_attributes = []; f_external = false;
+                             f_namespace =
+                             { Namespace_env.ns_ns_uses = <opaque>;
+                               ns_class_uses = <opaque>;
+                               ns_record_def_uses = <opaque>;
+                               ns_fun_uses = <opaque>;
+                               ns_const_uses = <opaque>; ns_name = None;
+                               ns_auto_ns_map = []; ns_is_codegen = false;
+                               ns_disable_xhp_element_mangling = false };
+                             f_doc_comment = None; f_static = false },
+                           []))))
                  )))))
           ];
         fb_annotation = Named };

@@ -310,8 +310,6 @@ static const struct {
   { OpThis,        {None,             Stack1,       OutThisObject   }},
   { OpBareThis,    {None,             Stack1,       OutUnknown      }},
   { OpCheckThis,   {This,             None,         OutNone         }},
-  { OpInitThisLoc,
-                   {None,             Local,        OutUnknown      }},
   { OpChainFaults, {StackTop2,        Stack1,       OutObject       }},
   { OpVerifyParamType,
                    {Local,            Local,        OutUnknown      }},
@@ -947,7 +945,6 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::FuncCred:
   case Op::GetMemoKeyL:
   case Op::Idx:
-  case Op::InitThisLoc:
   case Op::InstanceOf:
   case Op::InstanceOfD:
   case Op::IsLateBoundCls:
@@ -1176,7 +1173,7 @@ void translateInstr(irgen::IRGS& irgs, const NormalizedInstruction& ni) {
   const Func* builtinFunc = nullptr;
   if (ni.op() == OpFCallBuiltin) {
     auto str = ni.m_unit->lookupLitstrId(ni.imm[3].u_SA);
-    builtinFunc = Unit::lookupBuiltin(str);
+    builtinFunc = Func::lookupBuiltin(str);
   }
   auto pc = ni.pc();
   for (auto i = 0, num = instrNumPops(pc); i < num; ++i) {
@@ -1202,19 +1199,16 @@ void translateInstr(irgen::IRGS& irgs, const NormalizedInstruction& ni) {
   }
 
   if (isAlwaysNop(ni)) return;
-  handleBespokeInputs(irgs, ni.source);
-  if (ni.interp || RuntimeOption::EvalJitAlwaysInterpOne) {
-    irgen::interpOne(irgs);
-    return;
-  }
 
-  if (ni.forceSurpriseCheck) {
-    surpriseCheck(irgs);
-  }
-
-  translateDispatch(irgs, ni);
-
-  handleVanillaOutputs(irgs, ni.source);
+  handleBespokeInputs(irgs, ni.source, [&](irgen::IRGS& env) {
+    if (ni.interp || RuntimeOption::EvalJitAlwaysInterpOne) {
+      irgen::interpOne(env);
+      return;
+    }
+    if (ni.forceSurpriseCheck) surpriseCheck(env);
+    translateDispatch(env, ni);
+    handleVanillaOutputs(env, ni.source);
+  });
 
   FTRACE(3, "\nTranslated {}: {} with state:\n{}\n",
          ni.offset(), ni, show(irgs));

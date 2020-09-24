@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<44505d39012ebc9668d5c30fdad0cc59>>
+// @generated SignedSource<<31a3dcae055af51d154b225345f3e083>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
@@ -51,6 +51,24 @@ impl<'a> TrivialDrop for PuOrigin<'a> {}
     Serialize,
     ToOcamlRep
 )]
+pub struct ConstDecl<'a> {
+    pub pos: &'a pos::Pos<'a>,
+    pub type_: Ty<'a>,
+}
+impl<'a> TrivialDrop for ConstDecl<'a> {}
+
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    FromOcamlRepIn,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
 pub struct ClassElt<'a> {
     pub visibility: Visibility<'a>,
     pub type_: lazy::Lazy<Ty<'a>>,
@@ -77,7 +95,6 @@ impl<'a> TrivialDrop for ClassElt<'a> {}
 pub struct FunElt<'a> {
     pub deprecated: Option<&'a str>,
     pub type_: Ty<'a>,
-    pub decl_errors: Option<errors::Errors<'a>>,
     pub pos: &'a pos::Pos<'a>,
 }
 impl<'a> TrivialDrop for FunElt<'a> {}
@@ -152,8 +169,6 @@ pub struct ClassType<'a> {
     pub abstract_: bool,
     pub final_: bool,
     pub const_: bool,
-    /// True when the class is annotated with the __PPL attribute.
-    pub ppl: bool,
     /// When a class is abstract (or in a trait) the initialization of
     /// a protected member can be delayed
     pub deferred_init_members: s_set::SSet<'a>,
@@ -327,7 +342,6 @@ pub struct RecordDefType<'a> {
     pub fields: &'a [(nast::Sid<'a>, RecordFieldReq)],
     pub abstract_: bool,
     pub pos: &'a pos::Pos<'a>,
-    pub errors: Option<errors::Errors<'a>>,
 }
 impl<'a> TrivialDrop for RecordDefType<'a> {}
 
@@ -349,7 +363,6 @@ pub struct TypedefType<'a> {
     pub tparams: &'a [Tparam<'a>],
     pub constraint: Option<Ty<'a>>,
     pub type_: Ty<'a>,
-    pub decl_errors: Option<errors::Errors<'a>>,
 }
 impl<'a> TrivialDrop for TypedefType<'a> {}
 

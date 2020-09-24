@@ -623,73 +623,29 @@ To string conversions:
   SameObj and NSameObj may re-enter the VM and therefore may throw
   exceptions. SameObj and NSameObj never re-enter or throw.
 
-| GtArr,                       D(Bool), S(Arr) S(Arr),                    NF
+| GtArrLike,                   D(Bool), S(ArrLike) S(ArrLike),            NF|LA
 
-| GteArr,                      D(Bool), S(Arr) S(Arr),                    NF
+| GteArrLike,                  D(Bool), S(ArrLike) S(ArrLike),            NF|LA
 
-| LtArr,                       D(Bool), S(Arr) S(Arr),                    NF
+| LtArrLike,                   D(Bool), S(ArrLike) S(ArrLike),            NF|LA
 
-| LteArr,                      D(Bool), S(Arr) S(Arr),                    NF
+| LteArrLike,                  D(Bool), S(ArrLike) S(ArrLike),            NF|LA
 
-| EqArr,                       D(Bool), S(Arr) S(Arr),                    NF
+| EqArrLike,                   D(Bool), S(ArrLike) S(ArrLike),            NF|LA
 
-| NeqArr,                      D(Bool), S(Arr) S(Arr),                    NF
+| NeqArrLike,                  D(Bool), S(ArrLike) S(ArrLike),            NF|LA
 
-| SameArr,                     D(Bool), S(Arr) S(Arr),                    NF
+| SameArrLike,                 D(Bool), S(ArrLike) S(ArrLike),            NF|LA
 
-| NSameArr,                    D(Bool), S(Arr) S(Arr),                    NF
+| NSameArrLike,                D(Bool), S(ArrLike) S(ArrLike),            NF|LA
 
-| CmpArr,                      D(Int),  S(Arr) S(Arr),                    NF
+| CmpArrLike,                  D(Int),  S(ArrLike) S(ArrLike),            NF|LA
 
-  Perform comparison of arrays using PHP semantics. All versions except for
-  SameArr and NSameArr may re-enter the VM and therefore may throw
-  exceptions. SameArr and NSameArr never re-enter or throw.
-
-| GtVec,                       D(Bool), S(Vec) S(Vec),                    NF
-
-| GteVec,                      D(Bool), S(Vec) S(Vec),                    NF
-
-| LtVec,                       D(Bool), S(Vec) S(Vec),                    NF
-
-| LteVec,                      D(Bool), S(Vec) S(Vec),                    NF
-
-| EqVec,                       D(Bool), S(Vec) S(Vec),                    NF
-
-| NeqVec,                      D(Bool), S(Vec) S(Vec),                    NF
-
-| SameVec,                     D(Bool), S(Vec) S(Vec),                    NF
-
-| NSameVec,                    D(Bool), S(Vec) S(Vec),                    NF
-
-| CmpVec,                      D(Int),  S(Vec) S(Vec),                    NF
-
-  Perform comparison of vecs. All versions except for SameVec and NSameVec may
-  re-enter the VM and therefore may throw exceptions. SameVec and NSameVec
-  never re-enter or throw.
-
-| EqDict,                      D(Bool), S(Dict) S(Dict),                  NF
-
-| NeqDict,                     D(Bool), S(Dict) S(Dict),                  NF
-
-| SameDict,                    D(Bool), S(Dict) S(Dict),                  NF
-
-| NSameDict,                   D(Bool), S(Dict) S(Dict),                  NF
-
-  Perform comparison of dicts. EqDict and NeqDict may re-enter the VM and
-  therefore may throw exceptions. SameDict and NSameDict never re-enter or
-  throw. Relational comparisons for dicts are not supported.
-
-| EqKeyset,                    D(Bool), S(Keyset) S(Keyset),              NF
-
-| NeqKeyset,                   D(Bool), S(Keyset) S(Keyset),              NF
-
-| SameKeyset,                  D(Bool), S(Keyset) S(Keyset),              NF
-
-| NSameKeyset,                 D(Bool), S(Keyset) S(Keyset),              NF
-
-  Perform comparison of keysets. As keysets can only contain ints and strings,
-  comparisons never re-enter or throw. Relational comparisons for keysets are
-  not supported.
+  Perform comparison of array-likes. All versions except for SameArrLike and
+  NSameArrLike may re-enter the VM and therefore may throw exceptions.
+  SameArrLike and NSameArrLike never re-enter or throw. Relational comparisons
+  for dicts and keysets are not supported. As keysets only contain ints and
+  strings, comparisons never re-enter or throw.
 
 | GtRes,                       D(Bool), S(Res) S(Res),                    NF
 
@@ -1113,27 +1069,32 @@ To string conversions:
   Lookup the cached-class RDS handle for a given class name. Dereference that
   handle and return the associated Class, or null if not present.
 
-| LdCns, DCns, CStr, B
+| LdCns, D(InitCell), CStr, B
 
   Load the constant named S0, branching to B if isn't present.
 
-| LookupCnsE<T,constName>,  DCns, CStr, PRc
+| LookupCnsE<T,constName>,  D(InitCell), CStr, PRc
 
   Load a constant via the RDS. Raises a fatal error if it cannot define the
   constant.  This should only be executed if LdCns on the same constant has
   failed.
 
-| LdClsCns<className,constantName>, D(PtrToCell), NA, B
+| LdClsCns<className,constantName>, DParam(InitCell), NA, B
 
-  Load the address of the constant 'constantName' for the class 'className' in
-  RDS. If not initialized, branch to B.
+  Load the constant 'constantName' for the class 'className'. If not
+  initialized, branch to B.
 
-| LdSubClsCns<constantName,slot>, D(PtrToCell), S(Cls), NF
+| LdSubClsCns<constantName,slot>, D(Uncounted), S(Cls), NF
 
-  Load the address of the constant 'constantName' for the class S0. The
-  constant is known to be in the given slot. If the returned TypedValue is not
-  UncountedInit, its value should not be used, and a fallback method should be
-  called.
+  Load the constant 'constantName' for the class S0. The constant is known to
+  be in the given slot. If the returned value is Uninit, the constant is not
+  initialized and it must be loaded using InitSubClsCns. Counted constants will
+  never have their slot be initialized and thus always take the slow path.
+
+| InitSubClsCns<constantName,slot>, D(Cell), S(Cls), NF
+
+  Slow path for LdSubClsCns. Used when LdSubClsCns indicates the slot is
+  uninitialized.
 
 | LdSubClsCnsClsName<constantName,slot>, D(StaticStr|Nullptr), S(Cls), NF
 
@@ -1166,11 +1127,11 @@ To string conversions:
   raises an error if no such constant could be found, or if S0::S1 is not a
   type constant.
 
-| ProfileSubClsCns<constantName,handle>, D(PtrToCell), S(Cls), NF
+| ProfileSubClsCns<constantName,handle>, D(Cell), S(Cls), NF
 
-  Load the address of the constant 'constantName' for the class S0, profiling
-  the observed slots. If the returned TypedValue is not UncountedInit, its
-  value should not be used, and a fallback method should be called.
+  Load the constant 'constantName' for the class S0, profiling the observed
+  slots. If the returned value is Uninit, the constant does not exist or is
+  abstract or is a type-constant.
 
 | LdClsMethodFCacheFunc<clsName,methodName>, D(Func), NA, B
 
@@ -1466,6 +1427,11 @@ To string conversions:
   Maybe create a LoggingArray wrapping the vanilla array-like S0. The decision
   may be based on flags or sampling. If we don't create an array, we return S0
   unchanged. The result will match S0 in type and static-ness.
+
+| LogArrayReach<TransGuard>, ND, S(ArrLike), LA
+
+  If the supplied array is a LoggingArray, log that the current tracelet. This
+  will log a Reach event with the specified TransID.
 
 | NewDArray, DDArr, C(Int), PRc
 
@@ -1882,21 +1848,25 @@ To string conversions:
 
   Creates a temporary D representing the current vm frame pointer.
 
-| DefFrameRelSP<stackOff>, D(StkPtr), S(FramePtr), NF
+| DefFrameRelSP<irSPOff, bcSPOff>, D(StkPtr), S(FramePtr), NF
 
-  Creates a temporary D representing the current VM stack pointer as an offset
-  `stackOff' from the frame pointer S0.
+| DefRegSP<irSPOff, bcSPOff>, D(StkPtr), NA, NF
 
-  This instruction is used at the beginning of translations of non-resumed
+  Defines a stack positioned relative to the frame or the rvmsp register.
+  
+  Creates a temporary D representing the current VM stack pointer:
+  - DefFrameRelSP: D points to the same location as the frame pointer S0
+  - DefRegSP: D is the memory address given by the rvmsp register
+
+  The logical stack starts at the stack base and its position and size is
+  defined by these values:
+  - `irSPOff' is the offset from the stack base to D
+  - `bcSPOff' is the offset from the stack base to the top of the stack
+
+  DefFrameRelSP is used at the beginning of translations of non-resumed
   functions to represent the state of the stack on entry.
 
-| DefRegSP<stackOff>, D(StkPtr), NA, NF
-
-  Creates a temporary D representing the current VM stack pointer given by
-  the rvmsp register. The `stackOff' is a logical offset from a stack base,
-  which is a stack pointer to the empty logical stack within the translation.
-
-  This instruction is used at the beginning of translations of prologues and
+  DegRegSP is used at the beginning of translations of prologues and
   resumed functions to represent the state of the stack on entry.
 
   In prologues, the stack base represents a stack without any func arguments,
@@ -2192,7 +2162,7 @@ To string conversions:
   reified generics). If this opcode returned false, further checks implemented
   by CheckFunReifiedGenericMismatch are needed.
 
-| InitClsCns<className,constName>, DCns, NA, PRc
+| InitClsCns<className,constName>, DParam(InitCell), NA, NF
 
   Initialize the RDS entry for a constant for a class, invoking autoload if it
   is not defined. The initialized value is returned. This instruction may raise
@@ -2828,6 +2798,11 @@ fields of that struct for holding intermediate values.
   that S1 exactly matches the element key of S0 at `pos'.  If any of the checks
   fail, branch to B.  This check is allowed to have false negatives.
 
+| CheckDictOffsetLA<pos>, ND, S(DArr,Dict) S(Int,Str), B|LA
+
+  Layout-agnostic variant of CheckDictOffset. Checks that S0 is vanilla and
+  has key S1 at `pos`, branching to B otherwise. May have false negatives.
+
 | ProfileKeysetAccess, ND, S(Keyset) S(Int,Str), NF
 
   Profile access of the element keyed by S1 in S0, tracking sizes and offsets.
@@ -3105,11 +3080,11 @@ fields of that struct for holding intermediate values.
 
 | ThrowArrayIndexException, ND, S(ArrLike) S(Int), T
 
-  Throws an out of bounds exception if S0 is an undefined index for an array.
+  Throws an OutOfBoundsException if S0 is an undefined index for an array.
 
-| ThrowArrayKeyException, ND, S(ArrLike) S(Str), T
+| ThrowArrayKeyException, ND, S(DArr,Dict) S(Str), T
 
-  Throws an out of bounds exception if S0 is an undefined key for an array.
+  Throws an OutOfBoundsException if S0 is an undefined key for a darray or dict.
 
 | ThrowOutOfBounds, ND, S(ArrLike|Obj) S(Cell), T|LA
 
@@ -3117,12 +3092,6 @@ fields of that struct for holding intermediate values.
   S1.
 
 | ThrowInvalidArrayKey, ND, S(ArrLike) S(Cell), T|LA
-
-  Throws an InvalidArgumentException corresponding to an access of S0 with the
-  key S1, which has a type invalid for that array. For varrays, an
-  OutOfBoundsException will be thrown instead for compatibility.
-
-| ThrowInvalidArrayKeyForSet, ND, S(ArrLike) S(Cell), T|LA
 
   Throws an InvalidArgumentException corresponding to an access of S0 with the
   key S1, which has a type invalid for that array.
@@ -3166,6 +3135,11 @@ fields of that struct for holding intermediate values.
 
   Checks that the index in S1 is within the bounds of the packed array or
   vector array in S0. Branches to B if the index is out of bounds.
+
+| CheckVecBoundsLA, ND, S(VArr,Vec) C(Int), B|LA
+
+  Layout-agnostic variant of CheckVecBounds. Branches to B if the S1 is an
+  out-of-bounds index for S0, or if S0 is a bespoke array-like.
 
 | LdVecElemAddr<T>, DParam(LvalToElemCell), S(VArr,Vec) S(Int), NF
 

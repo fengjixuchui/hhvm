@@ -58,7 +58,8 @@
                   )))));
            ([11:3-13:4],
             (While ((([11:10-12], ?A), (Lvar ([11:10-12], $x))),
-               [([11:3-13:4], (AssertEnv (Join, {$x})));
+               [([11:3-13:4],
+                 (AssertEnv (Join, {$#capability $#local_capability $x})));
                  ([11:3-13:4], (AssertEnv (Refinement, {$x})));
                  ([12:5-22],
                   (Expr
@@ -66,7 +67,7 @@
                       (Binop ((Eq None),
                          (([12:5-7], ?A), (Lvar ([12:5-7], $x))),
                          (([12:10-21], ?A),
-                          (Call (Cnormal,
+                          (Call (
                              (([12:10-19], (function(): ?A)),
                               (Id ([12:10-19], "\\get_A_opt"))),
                              [], [], None)))
@@ -111,7 +112,7 @@
                     (Binop ((Eq None),
                        (([17:26-28], ?A), (Lvar ([17:26-28], $x))),
                        (([17:31-42], ?A),
-                        (Call (Cnormal,
+                        (Call (
                            (([17:31-40], (function(): ?A)),
                             (Id ([17:31-40], "\\get_A_opt"))),
                            [], [], None)))

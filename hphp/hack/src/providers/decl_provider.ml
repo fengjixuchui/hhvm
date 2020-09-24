@@ -27,7 +27,7 @@ type record_def_decl = Typing_defs.record_def_type
 
 type typedef_decl = Typing_defs.typedef_type
 
-type gconst_decl = Typing_defs.decl_ty * Errors.t
+type gconst_decl = Typing_defs.decl_ty
 
 let get_fun (ctx : Provider_context.t) (fun_name : fun_key) : fun_decl option =
   match Provider_context.get_backend ctx with
@@ -80,13 +80,7 @@ let convert_class_elt_to_fun_decl class_elt_opt : fun_decl option =
   Typing_defs.(
     match class_elt_opt with
     | Some { ce_type = (lazy ty); ce_deprecated; ce_pos = (lazy pos); _ } ->
-      Some
-        {
-          fe_pos = pos;
-          fe_type = ty;
-          fe_deprecated = ce_deprecated;
-          fe_decl_errors = None;
-        }
+      Some { fe_pos = pos; fe_type = ty; fe_deprecated = ce_deprecated }
     | _ -> None)
 
 let get_class_constructor (ctx : Provider_context.t) (class_name : class_key) :
@@ -196,7 +190,6 @@ let get_gconst (ctx : Provider_context.t) (gconst_name : string) :
         | None -> None)
   | Provider_backend.Decl_service { decl; _ } ->
     Decl_service_client.rpc_get_gconst decl gconst_name
-    |> Option.map ~f:(fun decl -> (decl, Errors.empty))
 
 let local_changes_push_sharedmem_stack () : unit =
   Decl_heap.Funs.LocalChanges.push_stack ();

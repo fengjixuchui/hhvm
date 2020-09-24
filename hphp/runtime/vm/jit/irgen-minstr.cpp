@@ -892,13 +892,6 @@ void baseGImpl(IRGS& env, SSATmp* name, MOpMode mode) {
 ///////////////////////////////////////////////////////////////////////////////
 
 /*
- * Update FrameState for a base at a known location.
- */
-void simpleBaseImpl(IRGS& env, SSATmp* base, MOpMode mode, Location l) {
-  env.irb->fs().setMemberBase(base);
-}
-
-/*
  * We'd like to use value-type access rather than ref-type access for "lookup"
  * member-op sequences (that is, ones with mode Warn, None, or InOut).
  *
@@ -1305,9 +1298,7 @@ SSATmp* setPropImpl(IRGS& env, uint32_t nDiscard, SSATmp* key) {
       &newVal
     );
 
-    auto propTy = propPtr->type().deref();
-
-    env.irb->constrainValue(value, DataTypeCountness);
+    auto const propTy = propPtr->type().deref();
     auto const oldVal = gen(env, LdMem, propTy, propPtr);
     gen(env, IncRef, newVal);
     gen(env, StMem, propPtr, newVal);
@@ -1354,7 +1345,7 @@ SSATmp* emitArrayLikeSet(IRGS& env, SSATmp* key, SSATmp* value) {
 
   if ((isVec && !key->isA(TInt)) ||
       (isDict && !key->isA(TInt | TStr))) {
-    gen(env, ThrowInvalidArrayKeyForSet, base, key);
+    gen(env, ThrowInvalidArrayKey, base, key);
     return cns(env, TBottom);
   }
 
@@ -1513,7 +1504,6 @@ SSATmp* setElemImpl(IRGS& env, uint32_t nDiscard, SSATmp* key) {
       } else if (t == TStaticStr) {
         // Base is a string. Stack result is a new string so we're responsible
         // for decreffing value.
-        env.irb->constrainValue(value, DataTypeCountness);
         decRef(env, value);
         value = result;
       } else {
@@ -1606,18 +1596,15 @@ void emitBaseL(IRGS& env, NamedLocal loc, MOpMode mode) {
     gen(env, RaiseUninitLoc, cns(env, baseName));
   }
 
-  simpleBaseImpl(
-    env, base, mode, Location::Local { safe_cast<uint32_t>(loc.id) }
-  );
+  env.irb->fs().setMemberBase(base);
 }
 
 void emitBaseC(IRGS& env, uint32_t idx, MOpMode mode) {
   auto const bcOff = BCSPRelOffset{safe_cast<int32_t>(idx)};
-  auto const irOff = offsetFromIRSP(env, bcOff);
   stMBase(env, ldStkAddr(env, bcOff));
 
   auto base = topC(env, bcOff);
-  simpleBaseImpl(env, base, mode, Location::Stack { offsetFromFP(env, irOff) });
+  env.irb->fs().setMemberBase(base);
 }
 
 void emitBaseH(IRGS& env) {

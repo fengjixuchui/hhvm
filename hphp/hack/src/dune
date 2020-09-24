@@ -34,7 +34,6 @@
   (ocamlc_flags (:standard -custom))
   (link_flags (:standard (:include dune_config/ld-opts.sexp)))
   (libraries
-    ai
     client
     default_injector_config
     file_content
@@ -56,7 +55,6 @@
   (ocamlc_flags (:standard -custom))
   (link_flags (:standard (:include dune_config/ld-opts.sexp)))
   (libraries
-    ai
     client
     default_injector_config
     file_content
@@ -143,6 +141,7 @@
     hh_server.exe
     hh_single_compile.exe
     hh_single_type_check.exe
+    ai/zoncolan.exe
     ))
 
 (alias
@@ -176,4 +175,3 @@
     hh_single_compile.bc
     hh_single_type_check.bc
     ))
-

@@ -13,8 +13,7 @@
    | license@php.net so we can mail you a copy immediately.               |
    +----------------------------------------------------------------------+
 */
-#ifndef incl_HPHP_REPO_GLOBAL_DATA_H_
-#define incl_HPHP_REPO_GLOBAL_DATA_H_
+#pragma once
 
 #include "hphp/runtime/vm/repo.h"
 #include "hphp/runtime/base/repo-auth-type-array.h"
@@ -90,7 +89,6 @@ struct Repo::GlobalData {
    * may be disabled.
    */
   bool HackArrCompatNotices = false;
-  bool HackArrCompatIsArrayNotices = false;
   bool HackArrCompatIsVecDictNotices = false;
   bool HackArrCompatSerializeNotices = false;
 
@@ -98,11 +96,6 @@ struct Repo::GlobalData {
    * Are d/varrays dicts and vecs?
    */
   bool HackArrDVArrs = false;
-
-  /* Do we widen the behavior of `is_array` to `is_any_array`? */
-  bool WidenIsArray = false;
-  /* Do we logs for Hack arrays flowing into `is_array` post widening? */
-  bool WidenIsArrayLogs = true;
 
   /*
    * Should the extension containing HHVM intrinsics be enabled?
@@ -183,7 +176,6 @@ struct Repo::GlobalData {
       (PHP7_Builtins)
       (EnableRenameFunction)
       (HackArrCompatNotices)
-      (HackArrCompatIsArrayNotices)
       (HackArrCompatIsVecDictNotices)
       (HackArrCompatSerializeNotices)
       (HackArrDVArrs)
@@ -204,8 +196,6 @@ struct Repo::GlobalData {
       (IsCompatibleClsMethType)
       (ArrayProvenance)
       (StrictArrayFillKeys)
-      (WidenIsArray)
-      (WidenIsArrayLogs)
       ;
   }
 };
@@ -217,4 +207,3 @@ std::string show(const Repo::GlobalData& gd);
 }
 
 
-#endif

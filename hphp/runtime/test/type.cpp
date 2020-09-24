@@ -407,7 +407,6 @@ inline bool fits(Type t, GuardConstraint gc) {
 
 TEST(Type, GuardConstraints) {
   EXPECT_TRUE(fits(TCell, DataTypeGeneric));
-  EXPECT_FALSE(fits(TCell, DataTypeCountness));
   EXPECT_FALSE(fits(TCell, DataTypeCountnessInit));
   EXPECT_FALSE(fits(TCell, DataTypeSpecific));
 
@@ -442,8 +441,6 @@ TEST(Type, RelaxType) {
 TEST(Type, RelaxConstraint) {
   EXPECT_EQ(GuardConstraint(DataTypeCountnessInit),
             relaxConstraint(GuardConstraint{DataTypeSpecific}, TCell, TDict));
-  EXPECT_EQ(GuardConstraint(DataTypeGeneric),
-            relaxConstraint(GuardConstraint{DataTypeCountness}, TDict, TCell));
 }
 
 TEST(Type, Specialized) {
@@ -801,7 +798,6 @@ TEST(Type, Const) {
   EXPECT_FALSE(ratArray1 < narrowedRat);
   EXPECT_FALSE(ratArray1 <= narrowedRat);
   EXPECT_EQ(narrowedRat, ratArray1 & TVanillaArr);
-  EXPECT_EQ(ratArray1, narrowedRat.widenToBespoke());
   EXPECT_FALSE(ratArray1.arrSpec().vanilla());
 
   auto darray = ArrayData::GetScalarArray(make_darray(1, 1, 10, 10));
@@ -867,12 +863,6 @@ TEST(Type, NarrowToVanilla) {
   EXPECT_EQ("{Vec|Obj}", (TVec|TObj).narrowToVanilla().toString());
 }
 
-TEST(Type, WidenToBespoke) {
-  EXPECT_EQ("Arr", TVanillaArr.widenToBespoke().toString());
-  EXPECT_EQ("Vec", TVanillaVec.widenToBespoke().toString());
-  EXPECT_EQ("{Vec|Int}", (TVanillaVec|TInt).widenToBespoke().toString());
-}
-
 TEST(Type, VanillaArray) {
   EXPECT_EQ("Arr=Vanilla", TVanillaArr.toString());
   EXPECT_EQ("ArrLike=Vanilla", TVanillaArrLike.toString());
@@ -892,7 +882,6 @@ TEST(Type, VanillaVec) {
   EXPECT_TRUE(TVanillaVec.arrSpec().vanilla());
   EXPECT_EQ(TVanillaVec, TVec & TVanillaVec);
   EXPECT_EQ(TVanillaVec, TVec.narrowToVanilla());
-  EXPECT_EQ(TVec, TVanillaVec.widenToBespoke());
 
   EXPECT_FALSE(TVec <= TVanillaVec);
   EXPECT_TRUE(TVanillaVec <= TVec);
@@ -920,6 +909,9 @@ TEST(Type, BespokeVec) {
   EXPECT_FALSE(vecBar <= vecFoo);
   EXPECT_EQ(TBottom, vecFoo & vecBar);
   EXPECT_EQ(TVec, vecFoo | vecBar);
+
+  auto const vecVanillaBar = TVanillaVec.narrowToBespokeLayout(bar_layout);
+  EXPECT_EQ(TBottom, vecVanillaBar);
 }
 
 TEST(Type, BespokeVecRAT) {
@@ -955,7 +947,6 @@ TEST(Type, VanillaVecRAT) {
   EXPECT_TRUE(vanillaVecRat.arrSpec().type());
   EXPECT_TRUE(vanillaVecRat.arrSpec().vanilla());
   EXPECT_EQ(vanillaVecRat, vecRat & TVanillaVec);
-  EXPECT_EQ(vecRat, vanillaVecRat.widenToBespoke());
 
   EXPECT_FALSE(TVec <= vecRat);
   EXPECT_TRUE(vecRat <= TVec);

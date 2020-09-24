@@ -1,5 +1,4 @@
-#ifndef incl_HPHP_EXT_ICU_BREAK_ITERATOR_H
-#define incl_HPHP_EXT_ICU_BREAK_ITERATOR_H
+#pragma once
 
 #include "hphp/runtime/ext/icu/icu.h"
 #include "hphp/runtime/ext/icu/CodePointBreakIterator.h"
@@ -43,7 +42,7 @@ struct IntlBreakIterator : IntlError {
 
   static Object newInstance(icu::BreakIterator* bi = nullptr) {
     if (!c_IntlBreakIterator) {
-      c_IntlBreakIterator = Unit::lookupClass(s_IntlBreakIterator.get());
+      c_IntlBreakIterator = Class::lookup(s_IntlBreakIterator.get());
       assertx(c_IntlBreakIterator);
     }
     Object obj{c_IntlBreakIterator};
@@ -56,7 +55,7 @@ struct IntlBreakIterator : IntlError {
   static Object newCodePointInstance(CodePointBreakIterator* bi = nullptr) {
     if (!c_IntlCodePointBreakIterator) {
       c_IntlCodePointBreakIterator =
-        Unit::lookupClass(s_IntlCodePointBreakIterator.get());
+        Class::lookup(s_IntlCodePointBreakIterator.get());
       assertx(c_IntlCodePointBreakIterator);
     }
     Object obj{c_IntlCodePointBreakIterator};
@@ -118,4 +117,3 @@ struct IntlBreakIterator : IntlError {
 
 /////////////////////////////////////////////////////////////////////////////
 }} // namespace HPHP::Intl
-#endif // icl_HPHP_EXT_ICU_BREAK_ITERATOR_H

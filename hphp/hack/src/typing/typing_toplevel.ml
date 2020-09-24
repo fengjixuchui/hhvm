@@ -332,6 +332,47 @@ let check_pu_in_locl_ty env lty =
   in
   check_pu_visitor#on_type env lty
 
+let register_capabilities env cap unsafe_cap default_pos =
+  let cap_hint_opt = hint_of_type_hint cap in
+  let (env, cap_ty) =
+    Option.value_map
+      cap_hint_opt
+      ~default:(env, MakeType.default_capability (Reason.Rhint default_pos))
+      ~f:(Phase.localize_hint_with_self env)
+  in
+  let cap_pos = Typing_defs.get_pos cap_ty in
+  (* Represents the capability for local operations inside a function body, excluding calls. *)
+  let env =
+    Env.set_local
+      env
+      (Local_id.make_unscoped SN.Coeffects.local_capability)
+      cap_ty
+      cap_pos
+  in
+  let unsafe_cap_hint_opt = hint_of_type_hint unsafe_cap in
+  let (env, unsafe_cap_ty) =
+    Option.value_map
+      unsafe_cap_hint_opt (* default is no unsafe capabilities *)
+      ~default:(env, MakeType.mixed (Reason.Rhint default_pos))
+      ~f:(Phase.localize_hint_with_self env)
+  in
+  let env =
+    let (env, ty) =
+      Typing_intersection.intersect
+        env
+        ~r:(Reason.Rhint cap_pos)
+        cap_ty
+        unsafe_cap_ty
+    in
+    (* The implicit argument for ft_implicit_params.capability *)
+    Env.set_local
+      env
+      (Local_id.make_unscoped SN.Coeffects.capability)
+      ty
+      cap_pos
+  in
+  (env, (cap_ty, cap_hint_opt), (unsafe_cap_ty, unsafe_cap_hint_opt))
+
 let rec fun_def ctx f :
     (Tast.fun_def * Typing_inference_env.t_global_with_pos) option =
   Errors.run_with_span f.f_span @@ fun () ->
@@ -341,16 +382,13 @@ let rec fun_def ctx f :
       Reason.expr_display_id_map := IMap.empty;
       let pos = fst f.f_name in
       let decl_header = get_decl_function_header env (snd f.f_name) in
-      Typing_helpers.add_decl_errors
-        (Option.map
-           (Env.get_fun env (snd f.f_name))
-           ~f:(fun x -> Option.value_exn x.fe_decl_errors));
       let env = Env.open_tyvars env (fst f.f_name) in
       let env = Env.set_env_function_pos env pos in
       let env = Env.set_env_pessimize env in
       let env =
         Typing.attributes_check_def env SN.AttributeKinds.fn f.f_user_attributes
       in
+      let (env, file_attrs) = Typing.file_attributes env f.f_file_attributes in
       let reactive =
         fun_reactivity env.decl_env f.f_user_attributes f.f_params
       in
@@ -430,20 +468,8 @@ let rec fun_def ctx f :
           SN.UserAttributes.uaDisableTypecheckerInternal
           f.f_user_attributes
       in
-      let cap_hint_opt = hint_of_type_hint f.f_cap in
-      let (env, cap_ty) =
-        Option.value_map
-          cap_hint_opt
-          ~default:(env, MakeType.nothing (Reason.Rwitness (fst f.f_name)))
-          ~f:(Phase.localize_hint_with_self env)
-      in
-      let unsafe_cap_hint_opt = hint_of_type_hint f.f_unsafe_cap in
-      let (env, unsafe_cap_ty) =
-        Option.value_map
-          unsafe_cap_hint_opt
-          (* note the top type here, default is no unsafe capabilities *)
-          ~default:(env, MakeType.mixed (Reason.Rwitness (fst f.f_name)))
-          ~f:(Phase.localize_hint_with_self env)
+      let (env, f_cap, f_unsafe_cap) =
+        register_capabilities env f.f_cap f.f_unsafe_cap (fst f.f_name)
       in
       let (env, tb) =
         Typing.fun_ ~disable env return pos f.f_body f.f_fun_kind
@@ -456,7 +482,6 @@ let rec fun_def ctx f :
           if partial_callback 4030 then Errors.expecting_return_type_hint pos
         | Some hint -> Typing_return.async_suggest_return f.f_fun_kind hint pos
       end;
-      let (env, file_attrs) = Typing.file_attributes env f.f_file_attributes in
       let (env, tparams) = List.map_env env f.f_tparams Typing.type_param in
       let (env, user_attributes) =
         List.map_env env f.f_user_attributes Typing.user_attribute
@@ -478,9 +503,8 @@ let rec fun_def ctx f :
           Aast.f_where_constraints = f.f_where_constraints;
           Aast.f_variadic = t_variadic;
           Aast.f_params = typed_params;
-          (* TODO(T70095684) fix f_cap *)
-          Aast.f_cap = (cap_ty, cap_hint_opt);
-          Aast.f_unsafe_cap = (unsafe_cap_ty, unsafe_cap_hint_opt);
+          Aast.f_cap;
+          Aast.f_unsafe_cap;
           Aast.f_fun_kind = f.f_fun_kind;
           Aast.f_file_attributes = file_attrs;
           Aast.f_user_attributes = user_attributes;
@@ -626,6 +650,9 @@ and method_def env cls m =
           SN.UserAttributes.uaDisableTypecheckerInternal
           m.m_user_attributes
       in
+      let (env, m_cap, m_unsafe_cap) =
+        register_capabilities env m.m_cap m.m_unsafe_cap (fst m.m_name)
+      in
       let (env, tb) =
         Typing.fun_
           ~abstract:m.m_abstract
@@ -673,10 +700,8 @@ and method_def env cls m =
           Aast.m_where_constraints = m.m_where_constraints;
           Aast.m_variadic = t_variadic;
           Aast.m_params = typed_params;
-          (* TODO(T70095684) fix m_cap *)
-          Aast.m_cap = (MakeType.mixed Reason.none, hint_of_type_hint m.m_cap);
-          Aast.m_unsafe_cap =
-            (MakeType.mixed Reason.none, hint_of_type_hint m.m_unsafe_cap);
+          Aast.m_cap;
+          Aast.m_unsafe_cap;
           Aast.m_fun_kind = m.m_fun_kind;
           Aast.m_user_attributes = user_attributes;
           Aast.m_ret = (locl_ty, hint_of_type_hint m.m_ret);
@@ -767,6 +792,92 @@ and check_const_trait_members pos env use_list =
         if not (get_ce_const ce) then Errors.trait_prop_const_class pos x)
   | _ -> ()
 
+let check_consistent_enum_inclusion included_cls dest_cls =
+  match (Cls.enum_type included_cls, Cls.enum_type dest_cls) with
+  | (Some included_e, Some dest_e) ->
+    (* ensure that the base types are identical *)
+    if not (Typing_defs.equal_decl_ty included_e.te_base dest_e.te_base) then
+      Errors.incompatible_enum_inclusion_base
+        (Cls.pos dest_cls)
+        (Cls.name dest_cls)
+        (Cls.name included_cls);
+    (* ensure that the visibility constraint are compatible *)
+    (match (included_e.te_constraint, dest_e.te_constraint) with
+    | (None, Some _) ->
+      Errors.incompatible_enum_inclusion_constraint
+        (Cls.pos dest_cls)
+        (Cls.name dest_cls)
+        (Cls.name included_cls)
+    | (_, _) -> ())
+  | (None, _) ->
+    Errors.enum_inclusion_not_enum
+      (Cls.pos dest_cls)
+      (Cls.name dest_cls)
+      (Cls.name included_cls)
+  | (_, _) -> ()
+
+let check_enum_includes env cls =
+  (* checks that there are no duplicated enum-constants when folded-decls are enabled *)
+  if Ast_defs.is_c_enum cls.c_kind then (
+    let (dest_class_pos, dest_class_name) = cls.c_name in
+    let enum_constant_map = ref SMap.empty in
+    (* prepopulate the map with the constants declared in cls *)
+    List.iter cls.c_consts ~f:(fun cc ->
+        enum_constant_map :=
+          SMap.add
+            (snd cc.cc_id)
+            (fst cc.cc_id, dest_class_name)
+            !enum_constant_map);
+    (* for all included enums *)
+    let included_enums =
+      Aast.enum_includes_map cls.c_enum ~f:(fun ce ->
+          List.filter_map ce.e_includes ~f:(fun ie ->
+              match snd ie with
+              | Happly (sid, _) ->
+                (match Env.get_class env (snd sid) with
+                | None -> None
+                | Some ie_cls -> Some (fst ie, ie_cls))
+              | _ -> None))
+    in
+    List.iter included_enums ~f:(fun (ie_pos, ie_cls) ->
+        let src_class_name = Cls.name ie_cls in
+        (* 1. Check for consistency *)
+        (match Env.get_class env dest_class_name with
+        | None -> ()
+        | Some cls -> check_consistent_enum_inclusion ie_cls cls);
+        (* 2. Check for duplicates *)
+        List.iter (Cls.consts ie_cls) ~f:(fun (const_name, class_const) ->
+            ( if String.equal const_name "class" then
+              ()
+            else if SMap.mem const_name !enum_constant_map then
+              (* distinguish between multiple inherit and redeclare *)
+              let (origin_const_pos, origin_class_name) =
+                SMap.find const_name !enum_constant_map
+              in
+              if String.equal origin_class_name dest_class_name then
+                (* redeclare *)
+                Errors.redeclaring_classish_const
+                  dest_class_pos
+                  dest_class_name
+                  origin_const_pos
+                  src_class_name
+                  const_name
+              else
+                (* multiple inherit *)
+                Errors.reinheriting_classish_const
+                  dest_class_pos
+                  dest_class_name
+                  ie_pos
+                  src_class_name
+                  origin_class_name
+                  const_name );
+            enum_constant_map :=
+              SMap.add
+                const_name
+                (dest_class_pos, class_const.cc_origin)
+                !enum_constant_map))
+  )
+
 let shallow_decl_enabled (ctx : Provider_context.t) : bool =
   TypecheckerOptions.shallow_class_decl (Provider_context.get_tcopt ctx)
 
@@ -810,13 +921,14 @@ and class_def_ env c tc =
     in
     Typing.attributes_check_def env kind c.c_user_attributes
   in
+  let (env, file_attrs) = Typing.file_attributes env c.c_file_attributes in
   let ctx = Env.get_ctx env in
   if
     ( Ast_defs.(equal_class_kind c.c_kind Cnormal)
     || Ast_defs.(equal_class_kind c.c_kind Cabstract) )
     && not (shallow_decl_enabled ctx)
   then (
-    (* This check is only for eager mode. The same check is performed
+    (* These checks are only for eager mode. The same checks are performed
      * for shallow mode in Typing_inheritance *)
     let method_pos ~is_static class_id meth_id =
       let get_meth =
@@ -851,15 +963,7 @@ and class_def_ env c tc =
     List.iter (Cls.methods tc) (check_override ~is_static:false);
     List.iter (Cls.smethods tc) (check_override ~is_static:true)
   );
-  let env =
-    {
-      env with
-      inside_ppl_class =
-        Naming_attributes.mem
-          SN.UserAttributes.uaProbabilisticModel
-          c.c_user_attributes;
-    }
-  in
+  check_enum_includes env c;
   let (pc, _) = c.c_name in
   let extends = List.map c.c_extends (Decl_hint.hint env.decl_env) in
   let implements = List.map c.c_implements (Decl_hint.hint env.decl_env) in
@@ -955,7 +1059,7 @@ and class_def_ env c tc =
     List.filter_map methods (method_def env tc) |> List.unzip
   in
   let (env, typed_typeconsts) =
-    List.map_env env c.c_typeconsts (typeconst_def (snd c.c_name))
+    List.map_env env c.c_typeconsts (typeconst_def c)
   in
   let (env, consts) = List.map_env env c.c_consts (class_const_def c) in
   let (typed_consts, const_types) = List.unzip consts in
@@ -971,7 +1075,6 @@ and class_def_ env c tc =
   let (typed_static_methods, static_methods_global_inference_envs) =
     List.filter_map static_methods (method_def env tc) |> List.unzip
   in
-  let (env, file_attrs) = Typing.file_attributes env c.c_file_attributes in
   let (methods, constr_global_inference_env) =
     match typed_constructor with
     | None -> (typed_static_methods @ typed_methods, [])
@@ -1113,7 +1216,7 @@ and get_decl_prop_ty env cls ~is_static prop_id =
     None
 
 and typeconst_def
-    class_name
+    cls
     env
     {
       c_tconst_abstract;
@@ -1124,6 +1227,19 @@ and typeconst_def
       c_tconst_span;
       c_tconst_doc_comment;
     } =
+  begin
+    match cls.c_kind with
+    | Ast_defs.Ctrait
+    | Ast_defs.Cenum ->
+      let kind =
+        match cls.c_kind with
+        | Ast_defs.Ctrait -> `trait
+        | Ast_defs.Cenum -> `enum
+        | _ -> assert false
+      in
+      Errors.cannot_declare_constant kind pos cls.c_name
+    | _ -> ()
+  end;
   let (env, cstr) = opt Phase.localize_hint_with_self env c_tconst_constraint in
   let (env, ty) =
     match hint with
@@ -1131,7 +1247,7 @@ and typeconst_def
     | Some hint ->
       let ty = Decl_hint.hint env.decl_env hint in
       (* We want to report cycles through the definition *)
-      let name = class_name ^ "::" ^ snd id in
+      let name = snd cls.c_name ^ "::" ^ snd id in
       let (env, ty) =
         Phase.localize_with_self env ~pos ~report_cycle:(pos, name) ty
       in
@@ -1359,6 +1475,11 @@ and is_literal_expr e =
 
 and class_const_def c env cc =
   let { cc_type = h; cc_id = id; cc_expr = e; _ } = cc in
+  begin
+    match c.c_kind with
+    | Ast_defs.Ctrait -> Errors.cannot_declare_constant `trait (fst id) c.c_name
+    | _ -> ()
+  end;
   let (env, ty, opt_expected) =
     match h with
     | None ->
@@ -1466,6 +1587,7 @@ and class_var_def ~is_static cls env cv =
       in
       (env, Some te)
   in
+
   let env =
     if is_static then
       Typing.attributes_check_def
@@ -1517,8 +1639,6 @@ let gconst_def ctx cst =
   Errors.run_with_span cst.cst_span @@ fun () ->
   let env = EnvFromDef.gconst_env ctx cst in
   let env = Env.set_env_pessimize env in
-  add_decl_errors (Option.map (Env.get_gconst env (snd cst.cst_name)) ~f:snd);
-
   let (typed_cst_value, env) =
     let value = cst.cst_value in
     match cst.cst_type with

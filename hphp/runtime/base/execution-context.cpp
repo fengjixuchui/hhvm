@@ -1058,7 +1058,7 @@ TypedValue ExecutionContext::lookupClsCns(const NamedEntity* ne,
                                       const StringData* cns) {
   Class* class_ = nullptr;
   try {
-    class_ = Unit::loadClass(ne, cls);
+    class_ = Class::load(ne, cls);
   } catch (Object& ex) {
     // For compatibility with php, throwing through a constant lookup has
     // different behavior inside a property initializer (86pinit/86sinit).
@@ -1080,7 +1080,7 @@ TypedValue ExecutionContext::lookupClsCns(const NamedEntity* ne,
 }
 
 static Class* loadClass(StringData* clsName) {
-  Class* class_ = Unit::loadClass(clsName);
+  Class* class_ = Class::load(clsName);
   if (class_ == nullptr) {
     raise_error(Strings::UNKNOWN_CLASS, clsName->data());
   }
@@ -1243,7 +1243,7 @@ TypedValue ExecutionContext::invokeUnit(const Unit* unit,
   if (callByHPHPInvoke && it != nullptr) {
     if (it->isAsync()) {
       invokeFunc(
-        Unit::lookupFunc(s_enter_async_entry_point.get()),
+        Func::lookup(s_enter_async_entry_point.get()),
         make_vec_array_tagged(ARRPROV_HERE(), Variant{it}),
         nullptr, nullptr, false
       );
@@ -1831,10 +1831,14 @@ Variant ExecutionContext::getEvaledArg(const StringData* val,
   }
 
   Unit* unit = compileEvalString(code.get());
+  // This exception will be caught by the caller and proper error message
+  // will be emitted
+  if (unit->getFatalInfo()) throw Exception("Parse error");
   assertx(unit != nullptr);
   unit->setInterpretOnly();
 
   // The evaluate_default_argument function should be the last one
+  assertx(unit->funcs().size() >= 1);
   auto func = *(unit->funcs().end() - 1);
   assertx(func->name()->equal(funcName.get()) &&
           "We expecting the evaluate_default_argument func");
@@ -1949,6 +1953,7 @@ ExecutionContext::evalPHPDebugger(StringData* code, int frame) {
 
 const StaticString
   s_DebuggerMainAttr("__DebuggerMain"),
+  s_debuggerThis("__debugger$this"),
   s_uninitClsName("__uninitSentinel");
 
 ExecutionContext::EvaluationResult
@@ -2011,7 +2016,7 @@ ExecutionContext::evalPHPDebugger(Unit* unit, int frame) {
 
     enum VarAction { StoreFrame, StoreEnv };
 
-    auto const uninit_cls = Unit::loadClass(s_uninitClsName.get());
+    auto const uninit_cls = Class::load(s_uninitClsName.get());
 
     auto& env = m_debuggerEnv;
 
@@ -2047,6 +2052,11 @@ ExecutionContext::evalPHPDebugger(Unit* unit, int frame) {
     for (Id id = 0; id < f->numParams() - 1; id++) {
       assertx(id < f->numNamedLocals());
       assertx(f->params()[id].isInOut());
+      if (f->localVarName(id)->equal(s_debuggerThis.get()) &&
+          ctx && fp->hasThis()) {
+        args.append(make_tv<KindOfObject>(fp->getThis()));
+        continue;
+      }
       if (fp) {
         auto const idx = fp->func()->lookupVarId(f->localVarName(id));
         if (idx != kInvalidId) {

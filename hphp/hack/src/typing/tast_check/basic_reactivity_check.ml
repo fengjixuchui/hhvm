@@ -11,7 +11,7 @@ include TM.Shared (Env)
 
 let expr_is_valid_owned_arg (e : expr) : bool =
   match snd e with
-  | Call (_, (_, Id (_, id)), _, _, _) ->
+  | Call ((_, Id (_, id)), _, _, _) ->
     String.equal id SN.Rx.mutable_ || String.equal id SN.Rx.move
   | _ -> false
 
@@ -365,8 +365,8 @@ let check_rx_mutable_arguments (p : Pos.t) (env : Env.env) (tel : expr list) =
 
 let enforce_mutable_call (env : Env.env) (te : expr) =
   match snd te with
-  | Call (_, (_, Id ((_, s) as id)), _, el, _)
-  | Call (_, (_, Fun_id ((_, s) as id)), _, el, _)
+  | Call ((_, Id ((_, s) as id)), _, el, _)
+  | Call ((_, Fun_id ((_, s) as id)), _, el, _)
     when String.( <> ) s SN.Rx.move && String.( <> ) s SN.Rx.freeze ->
     begin
       match Env.get_fun env (snd id) with
@@ -375,12 +375,12 @@ let enforce_mutable_call (env : Env.env) (te : expr) =
       | _ -> ()
     end
   (* static methods/lambdas *)
-  | Call (_, ((_, fun_ty), Class_const _), _, el, _)
-  | Call (_, ((_, fun_ty), Lvar _), _, el, _) ->
+  | Call (((_, fun_ty), Class_const _), _, el, _)
+  | Call (((_, fun_ty), Lvar _), _, el, _) ->
     let (env, efun_ty) = Env.expand_type env fun_ty in
     check_mutability_fun_params env Borrowable_args.empty efun_ty el
   (* $x->method() where method is mutable *)
-  | Call (_, ((pos, fun_ty), Obj_get (expr, _, _)), _, el, _) ->
+  | Call (((pos, fun_ty), Obj_get (expr, _, _)), _, el, _) ->
     let (env, efun_ty) = Env.expand_type env fun_ty in
     begin
       match get_node efun_ty with
@@ -534,6 +534,8 @@ let get_reactivity_from_user_attributes user_attributes =
         Some (Cipp (get_params ua_params))
       else if String.equal n UA.uaCippLocal then
         Some (CippLocal (get_params ua_params))
+      else if String.equal n UA.uaCippGlobal then
+        Some CippGlobal
       else
         go tl
   in
@@ -566,10 +568,17 @@ let check =
       | _ ->
         begin
           match b.fb_ast with
-          | [(_, If ((_, Id (_, c)), then_stmt, else_stmt))]
+          | [(_, If (((p, _), Id (_, c)), then_stmt, else_stmt))]
             when SN.Rx.is_enabled c ->
-            List.iter then_stmt (self#on_stmt (env, ctx));
-            List.iter else_stmt ~f:(check_non_rx#on_stmt env)
+            (match ctx.reactivity with
+            | Pure _
+            | MaybeReactive (Pure _)
+            | RxVar (Some (Pure _)) ->
+              Errors.rx_enabled_in_non_rx_context p;
+              List.iter b.fb_ast (self#on_stmt (env, ctx))
+            | _ ->
+              List.iter then_stmt (self#on_stmt (env, ctx));
+              List.iter else_stmt ~f:(check_non_rx#on_stmt env))
           | _ -> List.iter b.fb_ast (self#on_stmt (env, ctx))
         end
 
@@ -704,6 +713,11 @@ let check =
                   (env, set_reactivity ctx (Env.env_reactivity env))
               in
               self#handle_body env ctx f.f_body
+            | ( _,
+                Unop
+                  ( ( Ast_defs.Uincr | Ast_defs.Udecr | Ast_defs.Upincr
+                    | Ast_defs.Updecr ),
+                    te1 ) )
             | (_, Binop (Ast_defs.Eq _, te1, _)) ->
               check_assignment_or_unset_target
                 ~is_assignment:true
@@ -713,7 +727,7 @@ let check =
 
               (* dive into subnodes *)
               super#on_expr (env, ctx) expr
-            | (_, Call (_, (_, Id (_, f)), _, el, None))
+            | (_, Call ((_, Id (_, f)), _, el, None))
               when String.equal f SN.PseudoFunctions.unset ->
               List.iter
                 el
@@ -721,15 +735,15 @@ let check =
 
               (* dive into subnodes *)
               super#on_expr (env, ctx) expr
-            | (_, Call (_, (_, Id (_, f)), _, el, None))
+            | (_, Call ((_, Id (_, f)), _, el, None))
               when String.equal f SN.Rx.mutable_ ->
               check_rx_mutable_arguments (get_position expr) env el;
               super#on_expr (env, ctx) expr
-            | (_, Call (_, (_, Id (p, f)), _, _, None))
+            | (_, Call ((_, Id (p, f)), _, _, None))
               when String.equal f SN.SpecialFunctions.echo ->
               Errors.echo_in_reactive_context p;
               super#on_expr (env, ctx) expr
-            | (_, Call (_, f, _, _, _)) ->
+            | (_, Call (f, _, _, _)) ->
               enforce_mutable_call env expr;
               ( if not is_expr_statement then
                 let (_env, fun_ty) = Env.expand_type env (get_type f) in
@@ -758,8 +772,13 @@ let check_redundant_rx_condition env pos r =
   | Local (Some cond_ty)
   | Shallow (Some cond_ty) ->
     let (env, cond_ty) = Tast_env.localize_with_self env cond_ty in
-    if Tast_env.can_subtype env (Tast_env.get_self_ty_exn env) cond_ty then
-      Errors.redundant_rx_condition pos
+    if Tast_env.can_subtype env (Tast_env.get_self_ty_exn env) cond_ty then (
+      match get_node cond_ty with
+      | Tany _
+      | Terr ->
+        ()
+      | _ -> Errors.redundant_rx_condition pos
+    )
   | _ -> ()
 
 let error_on_attr env attrs attr f =

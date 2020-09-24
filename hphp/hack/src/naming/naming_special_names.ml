@@ -242,6 +242,8 @@ module UserAttributes = struct
 
   let uaCippLocal = "__CippLocal"
 
+  let uaCippGlobal = "__CippGlobal"
+
   let uaReactive = "__Rx"
 
   let uaLocalReactive = "__RxLocal"
@@ -253,8 +255,6 @@ module UserAttributes = struct
   let uaMutableReturn = "__MutableReturn"
 
   let uaOnlyRxIfImpl = "__OnlyRxIfImpl"
-
-  let uaProbabilisticModel = "__PPL"
 
   let uaLSB = "__LSB"
 
@@ -330,20 +330,20 @@ module UserAttributes = struct
           (uaPure, [fn; mthd]);
           (uaCipp, [fn; mthd]);
           (uaCippLocal, [fn; mthd]);
+          (uaCippGlobal, [fn; mthd]);
           (uaReactive, [fn; mthd]);
           (uaLocalReactive, [fn; mthd]);
-          (uaMutable, [fn; mthd; parameter; instProperty; staticProperty]);
+          (uaMutable, [mthd; parameter]);
           (uaMutableReturn, [fn; mthd]);
           (uaShallowReactive, [fn; mthd]);
-          (uaOnlyRxIfImpl, [parameter; fn; mthd]);
-          (uaProbabilisticModel, [cls]);
+          (uaOnlyRxIfImpl, [parameter; mthd]);
           (uaLSB, [staticProperty]);
           (uaSealed, [cls]);
           (uaReturnsVoidToRx, [fn; mthd]);
-          (uaMaybeMutable, [fn; mthd; parameter]);
+          (uaMaybeMutable, [mthd; parameter]);
           (uaLateInit, [instProperty; parameter; staticProperty]);
-          (uaAtMostRxAsFunc, [cls; fn; parameter]);
-          (uaAtMostRxAsArgs, [cls; fn; mthd]);
+          (uaAtMostRxAsFunc, [parameter]);
+          (uaAtMostRxAsArgs, [fn; mthd]);
           (uaOwnedMutable, [parameter]);
           (uaNonRx, [fn; mthd]);
           (uaNewable, [typeparam]);
@@ -803,4 +803,16 @@ module XHP = struct
     String.equal name pcdata || String.equal name any || String.equal name empty
 
   let is_xhp_category name = String_utils.string_starts_with name "%"
+end
+
+(* This should be a subset of rust_parser_errors::UnstableFeatures that is relevant
+ * to the typechecker *)
+module UnstableFeatures = struct
+  let coeffects_provisional = "coeffects_provisional"
+end
+
+module Coeffects = struct
+  let capability = "$#capability"
+
+  let local_capability = "$#local_capability"
 end

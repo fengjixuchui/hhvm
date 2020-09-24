@@ -143,24 +143,21 @@ struct
 
   and possibly_enforced_ty et = { et with et_type = ty et.et_type }
 
+  and fun_implicit_params implicit = { capability = ty implicit.capability }
+
   and fun_type ft =
     {
       ft with
       ft_tparams = List.map ~f:type_param ft.ft_tparams;
       ft_where_constraints = List.map ft.ft_where_constraints where_constraint;
       ft_params = List.map ft.ft_params fun_param;
+      ft_implicit_params = fun_implicit_params ft.ft_implicit_params;
       ft_ret = possibly_enforced_ty ft.ft_ret;
       ft_arity = fun_arity ft.ft_arity;
       ft_reactive = fun_reactive ft.ft_reactive;
     }
 
-  and fun_elt fe =
-    {
-      fe with
-      fe_type = ty fe.fe_type;
-      fe_pos = pos fe.fe_pos;
-      fe_decl_errors = None;
-    }
+  and fun_elt fe = { fe with fe_type = ty fe.fe_type; fe_pos = pos fe.fe_pos }
 
   and fun_reactive = function
     | Local (Some ty1) -> Local (Some (ty ty1))
@@ -267,7 +264,6 @@ struct
     {
       dc_final = dc.dc_final;
       dc_const = dc.dc_const;
-      dc_ppl = dc.dc_ppl;
       dc_need_init = dc.dc_need_init;
       dc_deferred_init_members = dc.dc_deferred_init_members;
       dc_abstract = dc.dc_abstract;
@@ -312,7 +308,7 @@ struct
     {
       te_base = ty te.te_base;
       te_constraint = ty_opt te.te_constraint;
-      te_includes = List.map ~f:ty te.te_includes;
+      te_includes = List.map te.te_includes ty;
     }
 
   and typedef tdef =
@@ -322,7 +318,6 @@ struct
       td_tparams = List.map tdef.td_tparams type_param;
       td_constraint = ty_opt tdef.td_constraint;
       td_type = ty tdef.td_type;
-      td_decl_errors = None;
     }
 
   and shallow_class sc =

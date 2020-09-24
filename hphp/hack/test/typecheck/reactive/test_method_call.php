@@ -10,7 +10,7 @@ class Something {
 class Test {
   <<__Rx, __MutableReturn>>
   public function get(): Something {
-    // UNSAFE
+    return new Something(42);
   }
 }
 <<__Rx>>

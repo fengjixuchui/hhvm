@@ -11,7 +11,7 @@ class A {
 
 class B extends A {
   <<__Rx>>
-  public function g() {
+  public function g(): void {
     // should be an error, B does not implement Rx
     static::f();
   }

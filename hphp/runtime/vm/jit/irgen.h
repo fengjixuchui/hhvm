@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_JIT_IRGEN_H_
-#define incl_HPHP_JIT_IRGEN_H_
+#pragma once
 
 #include "hphp/runtime/base/repo-auth-type.h"
 #include "hphp/runtime/base/types.h"
@@ -115,6 +114,7 @@ void checkType(IRGS&, const Location&, Type, Offset dest);
 void assertTypeStack(IRGS&, BCSPRelOffset, Type);
 void assertTypeLocal(IRGS&, uint32_t id, Type);
 void assertTypeLocation(IRGS&, const Location&, Type);
+void genLogArrayReach(IRGS&, const Location&, Type, size_t idx);
 
 /*
  * Type predictions.
@@ -352,4 +352,3 @@ Type predictedType(const IRGS&, const Location&);
 
 }}}
 
-#endif

@@ -15,8 +15,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_TRACE_H_
-#define incl_HPHP_TRACE_H_
+#pragma once
 
 #include <string>
 #include <vector>
@@ -148,6 +147,7 @@ namespace Trace {
       TM(hhir_refineTmps) \
       TM(hhir_store)    \
       TM(hhir_unreachable) \
+      TM(hhir_vanilla)  \
       TM(hhprof)        \
       TM(inlining)      \
       TM(instancebits)  \
@@ -527,4 +527,3 @@ class FormatValue<Val,
 };
 }
 
-#endif /* incl_HPHP_TRACE_H_ */

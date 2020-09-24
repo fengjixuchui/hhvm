@@ -113,11 +113,11 @@ void objReleaseWrapper(ObjectData* obj) noexcept {
 
 }
 
-static_assert(typeToDestrIdx(KindOfDArray)   == 0, "Array destruct index");
-static_assert(typeToDestrIdx(KindOfVArray)   == 1, "Array destruct index");
-static_assert(typeToDestrIdx(KindOfKeyset)   == 2, "Keyset destruct index");
-static_assert(typeToDestrIdx(KindOfDict)     == 3, "Dict destruct index");
-static_assert(typeToDestrIdx(KindOfVec)      == 4, "Vec destruct index");
+static_assert(typeToDestrIdx(KindOfDArray)   == 0, "darray destruct index");
+static_assert(typeToDestrIdx(KindOfVArray)   == 1, "varray destruct index");
+static_assert(typeToDestrIdx(KindOfDict)     == 2, "Dict destruct index");
+static_assert(typeToDestrIdx(KindOfVec)      == 3, "Vec destruct index");
+static_assert(typeToDestrIdx(KindOfKeyset)   == 4, "Keyset destruct index");
 static_assert(typeToDestrIdx(KindOfRecord)   == 5, "Record destruct index");
 static_assert(typeToDestrIdx(KindOfString)   == 6, "String destruct index");
 static_assert(typeToDestrIdx(KindOfObject)   == 8, "Object destruct index");
@@ -134,9 +134,9 @@ static_assert(kDestrTableSize == 13,
 RawDestructor g_destructors[] = {
   (RawDestructor)&mixedReleaseWrapper,                // KindOfDArray
   (RawDestructor)&packedReleaseWrapper,               // KindOfVArray
-  (RawDestructor)&keysetReleaseWrapper,               // KindOfKeyset
   (RawDestructor)&mixedReleaseWrapper,                // KindOfDict
   (RawDestructor)&packedReleaseWrapper,               // KindOfVec
+  (RawDestructor)&keysetReleaseWrapper,               // KindOfKeyset
   (RawDestructor)getMethodPtr(&RecordData::release),  // KindOfRecord
   (RawDestructor)getMethodPtr(&StringData::release),  // KindOfString
   nullptr, // hole
@@ -347,7 +347,7 @@ bool Variant::isScalar() const noexcept {
   not_reached();
 }
 
-static bool isAllowedAsConstantValueImpl(TypedValue tv) {
+static Variant::AllowedAsConstantValue isAllowedAsConstantValueImpl(TypedValue tv) {
   switch (tv.m_type) {
     case KindOfNull:
     case KindOfBoolean:
@@ -364,33 +364,48 @@ static bool isAllowedAsConstantValueImpl(TypedValue tv) {
     case KindOfResource:
     case KindOfFunc:
     case KindOfClsMeth:
-      return true;
+      return Variant::AllowedAsConstantValue::Allowed;
 
     case KindOfDArray:
     case KindOfVArray:
     case KindOfVec:
     case KindOfDict: {
-      auto allowed = true;
+      auto allowed = Variant::AllowedAsConstantValue::Allowed;
       IterateV(tv.m_data.parr, [&] (TypedValue v) {
-        if (!isAllowedAsConstantValueImpl(v)) allowed = false;
-        return !allowed;
-      });
+        switch (isAllowedAsConstantValueImpl(v)) {
+          case Variant::AllowedAsConstantValue::NotAllowed: {
+            allowed = Variant::AllowedAsConstantValue::NotAllowed;
+            break;
+          }
+          case Variant::AllowedAsConstantValue::ContainsObject: {
+            allowed = Variant::AllowedAsConstantValue::ContainsObject;
+            break;
+          }
+          case Variant::AllowedAsConstantValue::Allowed: {
+            break;
+          }
+        }
+        return (allowed != Variant::AllowedAsConstantValue::NotAllowed);
+       });
+
       return allowed;
     }
 
-    case KindOfUninit:
     case KindOfObject:
+      return Variant::AllowedAsConstantValue::ContainsObject;
+
+    case KindOfUninit:
     case KindOfClass:
     case KindOfLazyClass:
     case KindOfRFunc:
     case KindOfRClsMeth:
     case KindOfRecord:
-      return false;
+      return Variant::AllowedAsConstantValue::NotAllowed;
   }
   not_reached();
 }
 
-bool Variant::isAllowedAsConstantValue() const {
+Variant::AllowedAsConstantValue Variant::isAllowedAsConstantValue() const {
   return isAllowedAsConstantValueImpl(*this);
 }
 

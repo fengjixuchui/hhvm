@@ -13,7 +13,7 @@ module Decl_cache_entry : sig
     | Class_decl : string -> Obj.t t
     | Record_decl : string -> Typing_defs.record_def_type t
     | Typedef_decl : string -> Typing_defs.typedef_type t
-    | Gconst_decl : string -> (Typing_defs.decl_ty * Errors.t) t
+    | Gconst_decl : string -> Typing_defs.decl_ty t
 
   type 'a key = 'a t
 
@@ -163,11 +163,14 @@ type local_memory = {
 
 type t =
   | Shared_memory
+      (** Used by hh_server and hh_single_type_check *)
   | Local_memory of local_memory
+      (** Used by serverless IDE *)
   | Decl_service of {
       decl: Decl_service_client.t;
       fixmes: Fixmes.t;
     }
+      (** Used by the hh_server rearchitecture (hh_decl/hh_worker) *)
 
 val t_to_string : t -> string
 

@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<4961246a1ef861ea23c47de5276e1cea>>
+// @generated SignedSource<<63bfd83b652578821f43b4596a4b1978>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
@@ -308,7 +308,6 @@ pub enum Expr_<Ex, Fb, En, Hi> {
     ClassConst(Box<(ClassId<Ex, Fb, En, Hi>, Pstring)>),
     Call(
         Box<(
-            CallType,
             Expr<Ex, Fb, En, Hi>,
             Vec<Targ<Hi>>,
             Vec<Expr<Ex, Fb, En, Hi>>,
@@ -366,7 +365,7 @@ pub enum Expr_<Ex, Fb, En, Hi> {
     Collection(Box<(Sid, Option<CollectionTarg<Hi>>, Vec<Afield<Ex, Fb, En, Hi>>)>),
     BracedExpr(Box<Expr<Ex, Fb, En, Hi>>),
     ParenthesizedExpr(Box<Expr<Ex, Fb, En, Hi>>),
-    ExpressionTree(Box<(Hint, Expr<Ex, Fb, En, Hi>)>),
+    ExpressionTree(Box<(Hint, Expr<Ex, Fb, En, Hi>, Option<Expr<Ex, Fb, En, Hi>>)>),
     Lplaceholder(Box<Pos>),
     FunId(Box<Sid>),
     MethodId(Box<(Expr<Ex, Fb, En, Hi>, Pstring)>),
@@ -865,7 +864,7 @@ pub struct XhpAttr<Ex, Fb, En, Hi>(
     pub TypeHint<Hi>,
     pub ClassVar<Ex, Fb, En, Hi>,
     pub Option<XhpAttrTag>,
-    pub Option<(Pos, bool, Vec<Expr<Ex, Fb, En, Hi>>)>,
+    pub Option<(Pos, Vec<Expr<Ex, Fb, En, Hi>>)>,
 );
 
 #[derive(

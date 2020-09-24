@@ -231,6 +231,8 @@ pub mod user_attributes {
 
     pub const CIPP_LOCAL: &str = "__CippLocal";
 
+    pub const CIPP_GLOBAL: &str = "__CippGlobal";
+
     pub const REACTIVE: &str = "__Rx";
 
     pub const LOCAL_REACTIVE: &str = "__RxLocal";
@@ -242,8 +244,6 @@ pub mod user_attributes {
     pub const MUTABLE_RETURN: &str = "__MutableReturn";
 
     pub const ONLY_RX_IF_IMPL: &str = "__OnlyRxIfImpl";
-
-    pub const PROBABILISTIC_MODEL: &str = "__PPL";
 
     pub const LSB: &str = "__LSB";
 
@@ -287,6 +287,8 @@ pub mod user_attributes {
 
     pub const ENABLE_UNSTABLE_FEATURES: &str = "__EnableUnstableFeatures";
 
+    pub const ENUM_CLASS: &str = "__EnumClass";
+
     lazy_static! {
         static ref AS_SET: HashSet<&'static str> = vec![
             OVERRIDE,
@@ -303,13 +305,13 @@ pub mod user_attributes {
             PURE,
             CIPP,
             CIPP_LOCAL,
+            CIPP_GLOBAL,
             REACTIVE,
             LOCAL_REACTIVE,
             MUTABLE,
             MUTABLE_RETURN,
             SHALLOW_REACTIVE,
             ONLY_RX_IF_IMPL,
-            PROBABILISTIC_MODEL,
             LSB,
             SEALED,
             RETURNS_VOID_TO_RX,
@@ -777,6 +779,8 @@ pub mod rx {
 
     pub const CIPP_LOCAL: &str = "CippLocal";
 
+    pub const CIPP_GLOBAL: &str = "CippGlobal";
+
     pub const RX: &str = "Rx";
 
     pub const RX_LOCAL: &str = "RxLocal";
@@ -798,6 +802,7 @@ pub mod rx {
                 PURE,
                 CIPP,
                 CIPP_LOCAL,
+                CIPP_GLOBAL,
                 RX,
                 RX_LOCAL,
                 RX_SHALLOW,

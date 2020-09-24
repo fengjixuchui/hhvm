@@ -33,7 +33,6 @@
 #include "hphp/runtime/vm/jit/punt.h"
 #include "hphp/runtime/vm/jit/simple-propagation.h"
 #include "hphp/runtime/vm/jit/simplify.h"
-#include "hphp/runtime/vm/jit/timer.h"
 #include "hphp/runtime/vm/jit/translator.h"
 
 namespace HPHP { namespace jit { namespace irgen {
@@ -80,7 +79,7 @@ IRBuilder::IRBuilder(IRUnit& unit, const BCMarker& initMarker)
   : m_unit(unit)
   , m_initialMarker(initMarker)
   , m_curBCContext{initMarker, 0}
-  , m_state(initMarker)
+  , m_state(initMarker.func())
   , m_curBlock(m_unit.entry())
 {
   if (RuntimeOption::EvalHHIRGenOpts) {
@@ -782,7 +781,7 @@ bool IRBuilder::startBlock(Block* block, bool hasUnprocessedPred) {
   always_assert(m_state.fp() != nullptr);
 
   FTRACE(2, "IRBuilder switching to block B{}: {}\n", block->id(),
-         show(m_state));
+         m_state.show());
   return true;
 }
 

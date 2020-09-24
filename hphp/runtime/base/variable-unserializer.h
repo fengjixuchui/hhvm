@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_VARIABLE_UNSERIALIZER_H_
-#define incl_HPHP_VARIABLE_UNSERIALIZER_H_
+#pragma once
 
 #include "hphp/runtime/base/type-variant.h"
 #include "hphp/runtime/base/variable-serializer.h"
@@ -44,7 +43,8 @@ struct VariableUnserializer {
     Serialize,
     Internal,
     APCSerialize,
-    DebuggerSerialize
+    DebuggerSerialize,
+    Last
   };
 
   /*
@@ -207,4 +207,3 @@ private:
 
 }
 
-#endif // incl_HPHP_VARIABLE_UNSERIALIZER_H_

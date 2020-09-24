@@ -1030,7 +1030,6 @@ std::string mangleUnitSha1(const std::string& fileSha1,
     + (RuntimeOption::EnableXHP ? '1' : '0')
     + (RuntimeOption::EvalEnableCallBuiltin ? '1' : '0')
     + (RuntimeOption::EvalHackArrCompatNotices ? '1' : '0')
-    + (RuntimeOption::EvalHackArrCompatIsArrayNotices ? '1' : '0')
     + (RuntimeOption::EvalHackArrCompatIsVecDictNotices ? '1' : '0')
     + (RuntimeOption::EvalHackArrCompatSerializeNotices ? '1' : '0')
     + (RuntimeOption::EvalHackCompilerUseEmbedded ? '1' : '0')
@@ -1063,8 +1062,6 @@ std::string mangleUnitSha1(const std::string& fileSha1,
     + (RuntimeOption::EvalAllowHhas ? '1' : '0')
     + std::to_string(RuntimeOption::EvalEnforceGenericsUB)
     + (RuntimeOption::EvalEmitMethCallerFuncPointers ? '1' : '0')
-    + (RuntimeOption::EvalWidenIsArray ? '1' : '0')
-    + (RuntimeOption::EvalWidenIsArrayLogs ? '1' : '0')
     + std::to_string(RuntimeOption::EvalAssemblerMaxScalarSize)
     + std::to_string(RuntimeOption::EvalEmitClassPointers)
     + opts.cacheKeyRaw()
@@ -1214,12 +1211,14 @@ Unit* lookupSyslibUnit(StringData* path, const Native::FuncTable& nativeFuncs) {
 //////////////////////////////////////////////////////////////////////
 
 void clearUnitCacheForExit() {
-  if (!RO::RepoAuthoritative && unitPrefetchingEnabled()) {
-    getPrefetchExecutor().join();
-  }
   s_nonRepoUnitCache.clear();
   s_repoUnitCache.clear();
   s_perUserUnitCaches.clear();
+}
+
+void shutdownUnitPrefetcher() {
+  if (RO::RepoAuthoritative || !unitPrefetchingEnabled()) return;
+  getPrefetchExecutor().join();
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -1480,6 +1479,8 @@ void prefetchUnit(StringData* requestedPath,
       if (cachedUnit.try_lock_for_update()) {
         if (cachedUnit.get().get() != cuptr) {
           updateAndUnlock(cachedUnit, std::move(cuptr));
+        } else {
+          cachedUnit.unlock();
         }
       }
     },

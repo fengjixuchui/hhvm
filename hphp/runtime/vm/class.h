@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_VM_CLASS_H_
-#define incl_HPHP_VM_CLASS_H_
+#pragma once
 
 #include "hphp/runtime/base/attr.h"
 #include "hphp/runtime/base/datatype.h"
@@ -94,6 +93,18 @@ enum class ClsCnsLookup {
   NoTypes,
   IncludeTypes,
   IncludeTypesPartial
+};
+
+/*
+ * Class kinds---classes, interfaces, traits, and enums.
+ *
+ * "Normal class" refers to any classes that are not interfaces, traits, enums.
+ */
+enum class ClassKind {
+  Class = AttrNone,
+  Interface = AttrInterface,
+  Trait = AttrTrait,
+  Enum = AttrEnum
 };
 
 using ClassPtr = AtomicSharedLowPtr<Class>;
@@ -1023,13 +1034,11 @@ public:
    * Look up the actual value of a class constant.  Perform dynamic
    * initialization if necessary.
    *
-   * Return a TypedValue containing KindOfUninit if this class has no such constant.
-   *
-   * The returned TypedValue is guaranteed not to hold a reference counted object (it
-   * may, however, be KindOfString for a static string).
+   * Return a TypedValue containing KindOfUninit if this class has no
+   * such constant.
    */
   TypedValue clsCnsGet(const StringData* clsCnsName,
-                 ClsCnsLookup what = ClsCnsLookup::NoTypes) const;
+                       ClsCnsLookup what = ClsCnsLookup::NoTypes) const;
 
   /*
    * Look up a class constant's TypedValue if it doesn't require dynamic
@@ -1044,15 +1053,8 @@ public:
    * need to run 86cinit code to determine their value at runtime.
    */
   const TypedValue* cnsNameToTV(const StringData* clsCnsName,
-                          Slot& clsCnsInd,
-                          ClsCnsLookup what = ClsCnsLookup::NoTypes) const;
-
-  /*
-   * Provide the current runtime type of this class constant.
-   *
-   * This has predictive value for the translator.
-   */
-  DataType clsCnsType(const StringData* clsCnsName) const;
+                                Slot& clsCnsInd,
+                                ClsCnsLookup what = ClsCnsLookup::NoTypes) const;
 
   /*
    * Get the slot for a constant with name, which can optionally be abstract and
@@ -1330,6 +1332,80 @@ public:
   static constexpr size_t constantsVecLenSize() {
     return ConstMap::sizeSize();
   }
+
+  /////////////////////////////////////////////////////////////////////////////
+  // Lookup.                                                           [static]
+
+  /*
+   * Define a new Class from `preClass' for this request.
+   *
+   * Raises a fatal error in various conditions (e.g., Class already defined,
+   * parent Class not defined, etc.) if `failIsFatal' is set).
+   *
+   * Also always fatals if a type alias already exists in this request with the
+   * same name as that of `preClass', regardless of the value of `failIsFatal'.
+   */
+  static Class* def(const PreClass* preClass, bool failIsFatal = true);
+
+  /*
+   * Define a closure from preClass. Closures have unique names, so unlike
+   * defClass, this is a one time operation.
+   */
+  static Class* defClosure(const PreClass* preClass);
+
+  /*
+   * Look up the Class in this request with name `name', or with the name
+   * mapped to the NamedEntity `ne'.
+   *
+   * Return nullptr if the class is not yet defined in this request.
+   */
+  static Class* lookup(const NamedEntity* ne);
+  static Class* lookup(const StringData* name);
+
+  /*
+   * Finds a class which is guaranteed to be unique in the specified
+   * context. The class has not necessarily been loaded in the
+   * current request.
+   *
+   * Return nullptr if there is no such class.
+   */
+  static const Class* lookupUniqueInContext(const NamedEntity* ne,
+                                            const Class* ctx,
+                                            const Unit* unit);
+  static const Class* lookupUniqueInContext(const StringData* name,
+                                            const Class* ctx,
+                                            const Unit* unit);
+
+  /*
+   * Look up, or autoload and define, the Class in this request with name
+   * `name', or with the name mapped to the NamedEntity `ne'.
+   *
+   * @requires: NamedEntity::get(name) == ne
+   */
+  static Class* load(const NamedEntity* ne, const StringData* name);
+  static Class* load(const StringData* name);
+
+  /*
+   * Autoload the Class with name `name' and bind it `ne' in this request.
+   *
+   * @requires: NamedEntity::get(name) == ne
+   */
+  static Class* loadMissing(const NamedEntity* ne, const StringData* name);
+
+  /*
+   * Same as lookupClass(), but if `tryAutoload' is set, call and return
+   * loadMissingClass().
+   */
+  static Class* get(const NamedEntity* ne, const StringData* name,
+                    bool tryAutoload);
+  static Class* get(const StringData* name, bool tryAutoload);
+
+  /*
+   * Whether a Class with name `name' of type `kind' has been defined in this
+   * request, autoloading it if `autoload' is set.
+   */
+  static bool exists(const StringData* name,
+                          bool autoload, ClassKind kind);
 
   /////////////////////////////////////////////////////////////////////////////
   // ExtraData.
@@ -1793,18 +1869,6 @@ extern Mutex g_classesMutex;
 
 ///////////////////////////////////////////////////////////////////////////////
 
-/*
- * Class kinds---classes, interfaces, traits, and enums.
- *
- * "Normal class" refers to any classes that are not interfaces, traits, enums.
- */
-enum class ClassKind {
-  Class = AttrNone,
-  Interface = AttrInterface,
-  Trait = AttrTrait,
-  Enum = AttrEnum
-};
-
 Attr classKindAsAttr(ClassKind kind);
 
 bool isTrait(const Class* cls);
@@ -1835,5 +1899,3 @@ const StringData* classToStringHelper(const Class* cls);
 #define incl_HPHP_VM_CLASS_INL_H_
 #include "hphp/runtime/vm/class-inl.h"
 #undef incl_HPHP_VM_CLASS_INL_H_
-
-#endif // incl_HPHP_VM_CLASS_H_

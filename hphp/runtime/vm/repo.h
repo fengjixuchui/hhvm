@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_VM_REPO_H_
-#define incl_HPHP_VM_REPO_H_
+#pragma once
 
 #include <vector>
 #include <utility>
@@ -77,13 +76,18 @@ struct Repo : RepoProxy {
     assertx(repoId < RepoIdCount);
     return kDbs[repoId];
   }
+
+  int8_t numOpenRepos() const {
+    return m_numOpenRepos;
+  }
+
   sqlite3* dbc() const { return m_dbc; }
   int repoIdForNewUnit(UnitOrigin unitOrigin) const {
     switch (unitOrigin) {
     case UnitOrigin::File:
       return m_localWritable ? RepoIdLocal : RepoIdCentral;
     case UnitOrigin::Eval:
-      return m_evalRepoId;
+      return RepoIdInvalid;
     default:
       assertx(false);
       return RepoIdInvalid;
@@ -237,7 +241,7 @@ struct Repo : RepoProxy {
   void disconnect() noexcept;
   void initCentral();
   RepoStatus openCentral(const char* repoPath, std::string& errorMsg);
-  void initLocal();
+  bool initLocal();
   bool attachLocal(const char* repoPath, bool isWritable);
   void pragmas(int repoId); // throws(RepoExc)
   void getIntPragma(int repoId, const char* name, int& val); // throws(RepoExc)
@@ -260,7 +264,6 @@ private:
   sqlite3* m_dbc; // Database connection, shared by multiple attached databases.
   bool m_localReadable;
   bool m_localWritable;
-  int m_evalRepoId;
   unsigned m_txDepth; // Transaction nesting depth.
   bool m_rollback; // If true, rollback rather than commit.
   RepoStmt m_beginStmt;
@@ -271,6 +274,7 @@ private:
   RecordRepoProxy m_rrp;
   FuncRepoProxy m_frp;
   LitstrRepoProxy m_lsrp;
+  int8_t m_numOpenRepos;
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -289,4 +293,3 @@ bool batchCommitWithoutRetry(const std::vector<std::unique_ptr<UnitEmitter>>&,
 
 }
 
-#endif

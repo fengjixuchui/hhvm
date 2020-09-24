@@ -491,7 +491,7 @@ pub const interface_with_memoize: Error =
     Cow::Borrowed("`__Memoize` is not allowed on interface methods");
 pub const multiple_reactivity_annotations: Error = Cow::Borrowed(concat!(
     "Only one of following annotations is allowed: `__Pure`, `__Rx`, ",
-    "`__RxShallow`, `__RxLocal`, `__NonRx`, `__Cipp`, `__CippLocal`.",
+    "`__RxShallow`, `__RxLocal`, `__NonRx`, `__Cipp`, `__CippLocal`, `__CippGlobal`.",
 ));
 pub const functions_cannot_implement_reactive: Error =
     Cow::Borrowed("`__OnlyRxIfImpl` annotations are only valid on class methods.");
@@ -499,8 +499,6 @@ pub const missing_reactivity_for_condition: Error = Cow::Borrowed(concat!(
     "`__OnlyRxIfImpl` and `__AtMostRxAsArgs` annotations cannot ",
     "be used without `__Rx`, `__RxShallow`, or `__RxLocal`.",
 ));
-pub const misplaced_owned_mutable: Error =
-    Cow::Borrowed("`__OwnedMutable` annotation can only be placed on parameters.");
 pub const conflicting_mutable_and_owned_mutable_attributes: Error =
     Cow::Borrowed("Parameter cannot have both `__Mutable` and `__OwnedMutable` annotations.");
 pub const conflicting_mutable_and_maybe_mutable_attributes: Error =
@@ -539,8 +537,6 @@ pub const invalid_await_position_dependent: Error = Cow::Borrowed(concat!(
     "`await` cannot be used as an expression inside another await expression. ",
     "Pull the inner `await` out into its own statement.",
 ));
-pub const misplaced_reactivity_annotation: Error =
-    Cow::Borrowed("Reactive annotations `__Rx` are not allowed on classes, interfaces or traits.");
 pub const mutability_annotation_on_constructor: Error = Cow::Borrowed(
     "`__Mutable`, `__MaybeMutable`, and `__MutableReturn` annotations are not allowed on constructors.",
 );
@@ -558,9 +554,6 @@ pub fn mutable_parameter_in_memoize_function(is_this: bool) -> Error {
 }
 pub const mutable_return_in_memoize_function: Error =
     Cow::Borrowed("Memoized functions cannot return mutable objects.");
-pub const vararg_and_mutable: Error = Cow::Borrowed(
-    "`__Mutable`, `__OwnedMutable` and `__MaybeMutable` annotations cannot be used with variadic parameters.",
-);
 pub const tparams_in_tconst: Error =
     Cow::Borrowed("Type parameters are not allowed on class type constants");
 pub const targs_not_allowed: Error =
@@ -907,8 +900,11 @@ pub fn lowering_parsing_error(text: &str, syntax: &str) -> Error {
 }
 pub const xhp_class_attribute_type_constant: Error =
     Cow::Borrowed("Type constants are not allowed on xhp class attributes");
-pub const globals_without_subscript: Error =
-    Cow::Borrowed("`$GLOBALS` access requires a subscript.");
+pub const globals_disallowed: Error =
+    Cow::Borrowed("`$GLOBALS` variable is removed from the language. Use HH\\global functions");
+pub const invalid_this: Error =
+    Cow::Borrowed("`$this` cannot be used in functions and static methods");
+pub const cannot_unset_this: Error = Cow::Borrowed("`$this` cannot be unset");
 pub const invalid_await_position_pipe: Error =
     Cow::Borrowed("`await` cannot be used as an expression right of a pipe operator.");
 pub fn invalid_modifier_for_declaration(decl: &str, modifier: &str) -> Error {

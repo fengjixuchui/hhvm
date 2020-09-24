@@ -5,10 +5,7 @@
 
 mod verify_smart_constructors_generated;
 
-use parser_core_types::{
-    parser_env::ParserEnv, positioned_syntax::PositionedSyntax, source_text::SourceText,
-    syntax_kind::SyntaxKind,
-};
+use parser_core_types::{positioned_syntax::PositionedSyntax, syntax_kind::SyntaxKind};
 use syntax_smart_constructors::{StateType, SyntaxSmartConstructors};
 
 use ocaml::core::mlvalues::Value;
@@ -56,11 +53,7 @@ impl State {
     }
 }
 
-impl<'src> StateType<'src, PositionedSyntax> for State {
-    fn initial(_env0: &ParserEnv, _src: &SourceText<'src>) -> Self {
-        Self::new()
-    }
-
+impl StateType<PositionedSyntax> for State {
     fn next(&mut self, _inputs: &[&PositionedSyntax]) {}
 }
 
@@ -79,7 +72,7 @@ impl VerifySmartConstructors {
     }
 }
 
-impl<'src> SyntaxSmartConstructors<'src, PositionedSyntax, State> for VerifySmartConstructors {}
+impl SyntaxSmartConstructors<PositionedSyntax, State> for VerifySmartConstructors {}
 
 impl ToOcaml for State {
     unsafe fn to_ocaml(&self, context: &SerializationContext) -> Value {

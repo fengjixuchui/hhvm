@@ -15,11 +15,11 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_EXT_THRIFT_H_
-#define incl_HPHP_EXT_THRIFT_H_
+#pragma once
 
 #include "hphp/runtime/ext/extension.h"
 #include "hphp/runtime/vm/native-data.h"
+#include "thrift/lib/cpp2/async/RequestCallback.h"
 
 namespace HPHP { namespace thrift {
 ///////////////////////////////////////////////////////////////////////////////
@@ -77,7 +77,7 @@ struct RpcOptions {
 
   static Class* PhpClass() {
     if (!c_RpcOptions) {
-      c_RpcOptions = Unit::lookupClass(s_RpcOptions.get());
+      c_RpcOptions = Class::lookup(s_RpcOptions.get());
       assert(c_RpcOptions);
     }
     return c_RpcOptions;
@@ -97,16 +97,10 @@ struct RpcOptions {
     return Native::data<RpcOptions>(object_);
   }
 
-  int32_t chunkBufferSize{100};
-
-  std::string routingKey;
-  std::string shardId;
-
-  std::map<std::string, std::string> writeHeaders;
+  apache::thrift::RpcOptions rpcOptions;
  private:
   static Class* c_RpcOptions;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
 }}
-#endif // incl_HPHP_EXT_THRIFT_H_

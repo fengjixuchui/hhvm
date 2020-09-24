@@ -39,6 +39,8 @@ type policy =
   | Ptop of (PosSet.t[@equal (fun _ _ -> true)] [@compare (fun _ _ -> 0)])
 [@@deriving eq, ord]
 
+let pbot = Pbot PosSet.empty
+
 let pos_of = function
   | Ppurpose (pos, _)
   | Ptop pos
@@ -73,6 +75,14 @@ type ptype =
   | Tinter of ptype list
   | Tclass of class_
   | Tfun of fun_
+  | Tcow_array of cow_array
+
+(* Copy-on-write indexed collection used for Hack arrays i.e. vec, dict, and
+   keyset *)
+and cow_array = {
+  a_key: ptype;
+  a_value: ptype;
+}
 
 and fun_ = {
   (* The PC guards a function's effects *)
@@ -126,9 +136,7 @@ module Policy = struct
   let compare = compare_policy
 end
 
-module PCSet = Set.Make (Policy)
-
-type program_counter = PCSet.t
+module PSet = Set.Make (Policy)
 
 module Var = struct
   type t = string * Ifc_scope.t
@@ -142,11 +150,11 @@ type var_set = VarSet.t
 
 type local_env = {
   le_vars: ptype LMap.t;
-  (* Policy tracking local effects, these effects
-     are not observable outside the current function.
-     Assignments to local variables fall into this
-     category. *)
-  le_pc: program_counter;
+  (* Policy tracking the dependencies of the current
+     code path. NB: only dependencies *local* to the
+     function are tracked here (i.e., the function's
+     pc policy is not included) *)
+  le_pc: PSet.t;
 }
 
 (* The environment is mutable data that
@@ -188,6 +196,7 @@ type fun_decl_kind =
 type arg_kind =
   | AKDefault
   | AKExternal of Pos.t
+  | AKCallable of Pos.t
 
 type fun_decl = {
   fd_kind: fun_decl_kind;

@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_TRANSLATOR_RUNTIME_H_
-#define incl_HPHP_TRANSLATOR_RUNTIME_H_
+#pragma once
 
 #include "hphp/runtime/base/datatype.h"
 #include "hphp/runtime/base/rds.h"
@@ -192,8 +191,6 @@ ArrayData* recordReifiedGenericsAndGetTSList(ArrayData*);
 
 [[noreturn]] void throwOOBException(TypedValue base, TypedValue key);
 [[noreturn]] void invalidArrayKeyHelper(const ArrayData* ad, TypedValue key);
-[[noreturn]] void invalidArrayKeyForSetHelper(const ArrayData* ad,
-                                              TypedValue key);
 
 namespace MInstrHelpers {
 TypedValue setOpElem(tv_lval base, TypedValue key, TypedValue val, SetOpOp op);
@@ -213,4 +210,3 @@ uintptr_t tlsBaseNoInline();
 
 }}
 
-#endif

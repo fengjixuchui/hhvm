@@ -65,6 +65,25 @@ let rec ty ?prefix ?lump renv (t : T.locl_ty) =
   | T.Ttuple tyl -> Ttuple (List.map ~f:ty tyl)
   | T.Tunion tyl -> Tunion (List.map ~f:ty tyl)
   | T.Tintersection tyl -> Tinter (List.map ~f:ty tyl)
+  | T.Tclass ((_, name), _, targs) when String.equal name Decl.vec_id ->
+    begin
+      match targs with
+      | [element_ty] ->
+        Tcow_array
+          {
+            (* Inventing a policy type for indices out of thin air *)
+            a_key = Tprim (get_policy ~prefix:"key" lump renv);
+            a_value = ty element_ty;
+          }
+      | _ -> fail "vector needs a single type parameter"
+    end
+  | T.Tclass ((_, name), _, targs) when String.equal name Decl.dict_id ->
+    begin
+      match targs with
+      | [key_ty; value_ty] ->
+        Tcow_array { a_key = ty key_ty; a_value = ty value_ty }
+      | _ -> fail "dict needs two type parameters"
+    end
   | T.Tclass ((_, name), _, _) -> class_ty ?lump renv name
   | T.Tvar id -> ty (expand_var renv id)
   | T.Tfun fun_ty ->
@@ -80,6 +99,9 @@ let rec ty ?prefix ?lump renv (t : T.locl_ty) =
   | T.Tdependent (T.DTthis, tbound) ->
     (* TODO(T72024862): This treatment ignores late static binding. *)
     ty tbound
+  | T.Toption t ->
+    let tnull = Tprim (get_policy ?prefix lump renv) in
+    Tunion [tnull; ty t]
   (* ---  types below are not yet supported *)
   | T.Tdependent (_, _ty) -> fail "Tdependent"
   | T.Tdarray (_keyty, _valty) -> fail "Tdarray"
@@ -89,7 +111,6 @@ let rec ty ?prefix ?lump renv (t : T.locl_ty) =
   | T.Terr -> fail "Terr"
   | T.Tnonnull -> fail "Tnonnull"
   | T.Tdynamic -> fail "Tdynamic"
-  | T.Toption _ty -> fail "Toption"
   | T.Tshape (_sh_kind, _sh_type_map) -> fail "Tshape"
   | T.Tnewtype (_name, _ty_list, _as_bound) -> fail "Tnewtype"
   | T.Tobject -> fail "Tobject"

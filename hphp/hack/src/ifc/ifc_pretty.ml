@@ -56,6 +56,8 @@ let rec ptype fmt ty =
   | Tclass { c_name; c_self; c_lump } ->
     fprintf fmt "%s<@[<hov2>%a,@ %a@]>" c_name policy c_self policy c_lump
   | Tfun fn -> fun_ fmt fn
+  | Tcow_array { a_key; a_value } ->
+    fprintf fmt "CoW<%a => %a>" ptype a_key ptype a_value
 
 (* Format: <pc, self>(arg1, arg2, ...): ret [exn] *)
 and fun_ fmt fn =
@@ -71,9 +73,6 @@ let prop =
   let rec conjuncts = function
     | Cconj (Cflow (_, a, b), Cflow (_, c, d))
       when equal_policy a d && equal_policy b c ->
-      [`q (a, b)]
-    | Cflow (_, a, (Pbot _ as b))
-    | Cflow (_, (Ptop _ as b), a) ->
       [`q (a, b)]
     | Cconj (cl, cr) -> conjuncts cl @ conjuncts cr
     | Ctrue -> []
@@ -124,24 +123,32 @@ let prop =
   in
   (fun fmt c -> aux 0 fmt (conjuncts c))
 
+let pp_lenv fmt lenv =
+  pp_open_vbox fmt 0;
+  fprintf
+    fmt
+    "@[<hov2>lvars:@ %a@]"
+    (LMap.make_pp Local_id.pp ptype)
+    lenv.le_vars;
+  let policy_set fmt s = list comma_sep policy fmt (PSet.elements s) in
+  if not (PSet.is_empty lenv.le_pc) then
+    fprintf fmt "@,@[<hov2>pc: @[<hov>%a@]@]" policy_set lenv.le_pc;
+  pp_close_box fmt ()
+
 let locals fmt env =
-  let pp_lenv fmt lenv =
-    pp_open_vbox fmt 0;
-    fprintf
-      fmt
-      "@[<hov2>lvars:@ %a@]"
-      (LMap.make_pp Local_id.pp ptype)
-      lenv.le_vars;
-    let policy_set fmt s = list comma_sep policy fmt (PCSet.elements s) in
-    if not (PCSet.is_empty lenv.le_pc) then
-      fprintf fmt "@,@[<hov2>pc: @[<hov>%a@]@]" policy_set lenv.le_pc;
-    pp_close_box fmt ()
-  in
   let pp_lenv_opt fmt = function
     | Some lenv -> pp_lenv fmt lenv
     | None -> fprintf fmt "<empty>"
   in
   pp_lenv_opt fmt (Env.get_lenv_opt env Typing_cont_key.Next)
+
+let all_locals fmt env =
+  let pp k lenv =
+    let cont = Typing_continuations.to_string k in
+    fprintf fmt "@,@[<hov2>%s: @[<hov>%a@]@]" cont pp_lenv lenv
+  in
+  fprintf fmt "Locals:";
+  KMap.iter pp env.e_cont
 
 let renv fmt renv =
   pp_open_vbox fmt 0;

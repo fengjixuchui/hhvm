@@ -107,7 +107,7 @@ let print_error format ?(oc = stderr) l =
   let formatter =
     match format with
     | Errors.Context -> (fun e -> Contextual_error_formatter.to_string e)
-    | Errors.Raw -> (fun e -> Errors.to_string ~indent:false e)
+    | Errors.Raw -> (fun e -> Errors.to_string e)
     | Errors.Highlighted -> Highlighted_error_formatter.to_string
   in
   Out_channel.output_string oc (formatter (Errors.to_absolute_for_test l))
@@ -154,7 +154,7 @@ let print_error_list format errors max_errors =
     Printf.printf "No errors\n"
 
 let print_errors format (errors : Errors.t) max_errors : unit =
-  print_error_list format (Errors.get_error_list errors) max_errors
+  print_error_list format (Errors.get_sorted_error_list errors) max_errors
 
 let print_errors_if_present (errors : Errors.error list) =
   if not (List.is_empty errors) then (
@@ -202,6 +202,7 @@ let parse_options () =
   let out_extension = ref ".out" in
   let like_type_hints = ref false in
   let union_intersection_type_hints = ref false in
+  let coeffects = ref false in
   let like_casts = ref false in
   let simple_pessimize = ref 0.0 in
   let complex_coercion = ref false in
@@ -593,7 +594,8 @@ let parse_options () =
         "List of fixmes that are allowed in declarations." );
       ( "--method-call-inference",
         Arg.Set method_call_inference,
-        " Infer constraints for method calls." );
+        " Infer constraints for method calls. NB: incompatible with like types."
+      );
       ( "--report-pos-from-reason",
         Arg.Set report_pos_from_reason,
         " Flag errors whose position is derived from reason information in types."
@@ -631,6 +633,7 @@ let parse_options () =
       ~tco_shallow_class_decl:!shallow_class_decl
       ~tco_like_type_hints:!like_type_hints
       ~tco_union_intersection_type_hints:!union_intersection_type_hints
+      ~tco_coeffects:!coeffects
       ~tco_like_casts:!like_casts
       ~tco_simple_pessimize:!simple_pessimize
       ~tco_complex_coercion:!complex_coercion
@@ -869,7 +872,7 @@ let check_file ctx ~verbosity errors files_info error_format max_errors =
           let (new_tasts, new_genvs, new_errors) =
             Typing_check_utils.type_file_with_global_tvenvs ctx fn fileinfo
           in
-          ( errors @ Errors.get_error_list new_errors,
+          ( errors @ Errors.get_sorted_error_list new_errors,
             new_tasts @ tasts,
             Lazy.force new_genvs @ genvs )
         end
@@ -1213,7 +1216,7 @@ let typecheck_tasts tasts tcopt (filename : Relative_path.t) =
   let env = Typing_env.empty tcopt filename ~droot:None in
   let tasts = Relative_path.Map.values tasts in
   let typecheck_tast tast =
-    Errors.get_error_list (Tast_typecheck.check env tast)
+    Errors.get_sorted_error_list (Tast_typecheck.check env tast)
   in
   List.concat_map tasts ~f:typecheck_tast
 
@@ -1579,7 +1582,7 @@ let handle_mode
     let (errors, tasts, _gi_solved) =
       compute_tasts_expand_types ctx ~verbosity files_info files_contents
     in
-    print_errors_if_present (parse_errors @ Errors.get_error_list errors);
+    print_errors_if_present (parse_errors @ Errors.get_sorted_error_list errors);
     print_tasts tasts ctx
   | Check_tast ->
     iter_over_files (fun filename ->
@@ -1613,7 +1616,7 @@ let handle_mode
     let (errors, _tasts, gi_solved) =
       compute_tasts_expand_types ctx ~verbosity files_info files_contents
     in
-    print_errors_if_present (parse_errors @ Errors.get_error_list errors);
+    print_errors_if_present (parse_errors @ Errors.get_sorted_error_list errors);
     (match gi_solved with
     | None ->
       prerr_endline
@@ -1748,7 +1751,7 @@ let handle_mode
                 check_file
                   ctx
                   ~verbosity
-                  (Errors.get_error_list parse_errors)
+                  (Errors.get_sorted_error_list parse_errors)
                   individual_file_info
                   error_format
                   max_errors
@@ -1836,24 +1839,30 @@ let handle_mode
                       [
                         ( if Option.is_some mro.mro_required_at then
                           Some "requirement"
-                        else if mro.mro_via_req_extends || mro.mro_via_req_impl
+                        else if
+                        is_set mro_via_req_extends mro.mro_flags
+                        || is_set mro_via_req_impl mro.mro_flags
                       then
                           Some "synthesized"
                         else
                           None );
-                        ( if mro.mro_xhp_attrs_only then
+                        ( if is_set mro_xhp_attrs_only mro.mro_flags then
                           Some "xhp_attrs_only"
                         else
                           None );
-                        ( if mro.mro_consts_only then
+                        ( if is_set mro_consts_only mro.mro_flags then
                           Some "consts_only"
                         else
                           None );
-                        ( if mro.mro_copy_private_members then
+                        ( if is_set mro_copy_private_members mro.mro_flags then
                           Some "copy_private_members"
                         else
                           None );
-                        ( if mro.mro_passthrough_abstract_typeconst then
+                        ( if
+                          is_set
+                            mro_passthrough_abstract_typeconst
+                            mro.mro_flags
+                        then
                           Some "PAT"
                         else
                           None );
@@ -1987,7 +1996,7 @@ let decl_and_run_mode
     builtins
     files_contents
     files_info
-    (Errors.get_error_list errors)
+    (Errors.get_sorted_error_list errors)
     max_errors
     error_format
     batch_mode

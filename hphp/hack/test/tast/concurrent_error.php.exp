@@ -1,6 +1,6 @@
 Errors:
-  [10:5-21] Statement without an `await` in a concurrent block
   [8:14-11:4] Statement without an `await` in a concurrent block
+  [10:5-21] Statement without an `await` in a concurrent block
   [12:10-19] Typing error
   [12:16-19] Expected `num` because this is used in an arithmetic operation
   [3:27-41] But got `Awaitable<int>`
@@ -41,7 +41,7 @@ Errors:
            (Awaitall (
               [((Some ([9:17-26], __tmp$1)),
                 (([9:17-26], Awaitable<int>),
-                 (Call (Cnormal,
+                 (Call (
                     (([9:17-24], (function(): Awaitable<int>)),
                      (Id ([9:17-24], "\\gen_int"))),
                     [], [], None))))
@@ -52,7 +52,7 @@ Errors:
                     (Binop ((Eq None),
                        (([10:5-8], Awaitable<int>), (Lvar ([10:5-8], $v2))),
                        (([10:11-20], Awaitable<int>),
-                        (Call (Cnormal,
+                        (Call (
                            (([10:11-18], (function(): Awaitable<int>)),
                             (Id ([10:11-18], "\\gen_int"))),
                            [], [], None)))

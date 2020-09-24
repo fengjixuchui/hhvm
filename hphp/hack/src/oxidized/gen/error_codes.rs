@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<552b2c7f31067502e57d2fb67abbcfaa>>
+// @generated SignedSource<<560cceb3f77a08b919929b496882a161>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
@@ -461,7 +461,7 @@ pub enum Typing {
     ContravariantThis,
     InstanceofAlwaysFalseDEPRECATED,
     InstanceofAlwaysTrueDEPRECATED,
-    AmbiguousMember,
+    AmbiguousMemberDEPRECATED,
     InstanceofGenericClassnameDEPRECATED,
     RequiredFieldIsOptional,
     FinalProperty,
@@ -557,22 +557,22 @@ pub enum Typing {
     CallSiteReactivityMismatch,
     RxParameterConditionMismatch,
     AmbiguousObjectAccess,
-    ExtendPPL,
+    ExtendPPLDEPRECATED,
     ReassignMaybeMutableVar,
     MaybeMutableArgumentMismatch,
     ImmutableArgumentMismatch,
     ImmutableCallOnMutable,
     InvalidCallMaybeMutable,
     MutabilityMismatch,
-    InvalidPPLCall,
-    InvalidPPLStaticCall,
+    InvalidPPLCallDEPRECATED,
+    InvalidPPLStaticCallDEPRECATED,
     TypeTestInLambdaDEPRECATED,
     InvalidTraversableInRx,
     ReassignMutableThis,
     MutableExpressionAsMultipleMutableArguments,
     InvalidUnsetTargetInRx,
     CoroutineOutsideExperimental,
-    PPLMethPointer,
+    PPLMethPointerDEPRECATED,
     InvalidTruthinessTestDEPRECATED,
     RePrefixedNonString,
     BadRegexPattern,
@@ -685,6 +685,12 @@ pub enum Typing {
     ClassMethAbstractCall,
     KindMismatch,
     UnboundNameTypeConstantAccess,
+    UnknownInformationFlow,
+    CallsiteCIPPMismatch,
+    NonpureFunctionCall,
+    IncompatibleEnumInclusion,
+    RedeclaringClassishConstant,
+    CallCoeffects,
 }
 impl TrivialDrop for Typing {}
 

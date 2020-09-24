@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_VM_FUNC_H_
-#define incl_HPHP_VM_FUNC_H_
+#pragma once
 
 #include "hphp/runtime/base/atomic-countable.h"
 #include "hphp/runtime/base/attr.h"
@@ -1003,18 +1002,57 @@ struct Func final {
 
   struct PrintOpts {
     PrintOpts()
-      : metadata(true)
+      : name(true)
+      , metadata(true)
+      , startOffset(0)
+      , stopOffset(kInvalidOffset)
+      , showLines(true)
+      , indentSize(1)
     {}
+
+    PrintOpts& noName() {
+      name = false;
+      return *this;
+    }
 
     PrintOpts& noMetadata() {
       metadata = false;
       return *this;
     }
 
+    PrintOpts& noBytecode() {
+      startOffset = kInvalidOffset;
+      stopOffset = kInvalidOffset;
+      return *this;
+    }
+
+    PrintOpts& range(Offset start, Offset stop) {
+      startOffset = start;
+      stopOffset = stop;
+      return *this;
+    }
+
+    PrintOpts& noLineNumbers() {
+      showLines = false;
+      return *this;
+    }
+
+    PrintOpts& indent(int i) {
+      indentSize = i;
+      return *this;
+    }
+
+    bool name;
     bool metadata;
+    Offset startOffset;
+    Offset stopOffset;
+    bool showLines;
+    int indentSize;
   };
 
   void prettyPrint(std::ostream& out, const PrintOpts& = PrintOpts()) const;
+
+  void prettyPrintInstruction(std::ostream& out, Offset offset) const;
 
   /*
    * Print function attributes to out.
@@ -1110,6 +1148,46 @@ struct Func final {
     mask.m_hasReifiedGenerics = true;
     return mask.m_allFlags;
   }
+
+  /////////////////////////////////////////////////////////////////////////////
+  // Lookup                                                            [static]
+
+  /*
+   * Define `func' for this request by initializing its RDS handle.
+   */
+  static void def(Func* func, bool debugger);
+
+  /*
+   * Look up the defined Func in this request with name `name', or with the name
+   * mapped to the NamedEntity `ne'.
+   *
+   * Return nullptr if the function is not yet defined in this request.
+   */
+  static Func* lookup(const NamedEntity* ne);
+  static Func* lookup(const StringData* name);
+
+  /*
+   * Look up, or autoload and define, the Func in this request with name `name',
+   * or with the name mapped to the NamedEntity `ne'.
+   *
+   * @requires: NamedEntity::get(name) == ne
+   */
+  static Func* load(const NamedEntity* ne, const StringData* name);
+  static Func* load(const StringData* name);
+
+  /*
+   * bind (or rebind) a func to the NamedEntity corresponding to its
+   * name.
+   */
+  static void bind(Func* func);
+
+  /*
+   * Lookup the builtin in this request with name `name', or nullptr if none
+   * exists. This does not access RDS so it is safe to use from within the
+   * compiler. Note that does not mean imply that the name binding for the
+   * builtin is immutable. The builtin could be renamed or intercepted.
+   */
+  static Func* lookupBuiltin(const StringData* name);
 
   /////////////////////////////////////////////////////////////////////////////
   // SharedData.
@@ -1513,4 +1591,3 @@ inline tracing::Props traceProps(const Func* f) {
 #include "hphp/runtime/vm/func-inl.h"
 #undef incl_HPHP_VM_FUNC_INL_H_
 
-#endif // incl_HPHP_VM_FUNC_H_

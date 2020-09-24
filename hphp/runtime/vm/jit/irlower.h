@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_JIT_IRLOWER_H_
-#define incl_HPHP_JIT_IRLOWER_H_
+#pragma once
 
 #include "hphp/runtime/vm/jit/code-cache.h"
 #include "hphp/runtime/vm/jit/state-vector.h"
@@ -39,7 +38,6 @@ namespace irlower {
 enum class SyncOptions {
   None,
   Sync,
-  SyncStublogue,
 };
 
 /*
@@ -95,4 +93,3 @@ std::unique_ptr<Vunit> lowerUnit(const IRUnit&,
 
 }}}
 
-#endif

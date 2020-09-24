@@ -133,7 +133,12 @@ let get_last error_map =
     | [] -> None
     | e :: _ -> Some e)
 
-type 'a error_ = error_code * 'a message list [@@deriving eq]
+type 'a error_ = {
+  code: error_code;
+  claim: 'a message;
+  reasons: 'a message list;
+}
+[@@deriving eq]
 
 type error = Pos.t error_ [@@deriving eq]
 
@@ -185,18 +190,21 @@ let try_with_result f1 f2 =
   in
   match get_last errors with
   | None -> result
-  | Some (code, l) ->
+  | Some { code; claim; reasons } ->
     (* Remove bad position sentinel if present: we might be about to add a new primary
      * error position*)
     let l =
-      match l with
-      | (_, msg) :: l
-        when String.equal msg badpos_message
-             || String.equal msg badpos_message_2 ->
-        l
-      | _ -> l
+      let (_, msg) = claim in
+      if String.equal msg badpos_message || String.equal msg badpos_message_2
+      then
+        if List.is_empty reasons then
+          failwith "in try_with_result"
+        else
+          reasons
+      else
+        claim :: reasons
     in
-    f2 result (code, l)
+    f2 result { code; claim = List.hd_exn l; reasons = List.tl_exn l }
 
 let do_ f =
   let error_map_copy = !error_map in
@@ -298,15 +306,7 @@ let (name_context_to_string : name_context -> string) = function
   | ClassContext -> "class"
   | RecordContext -> "record"
 
-let get_message (error : error) =
-  (* We get the position of the first item in the message error list, which
-    represents the location of the error (error claim). Other messages represent
-    the reason for the error (the warrant and the grounds). *)
-  let message_list = snd error in
-  let first_message = List.hd_exn message_list in
-  first_message
-
-let get_pos (error : error) = fst (get_message error)
+let get_pos { claim; _ } = fst claim
 
 let sort err =
   let rec compare (x_code, x_messages) (y_code, y_messages) =
@@ -343,15 +343,18 @@ let sort err =
           comparison
       in
       (* Finally, if the message text is also the same, then continue comparing
-      the rest of the messages (which indicate the reason why Hack believes
-      there is an error reported in the 1st message) *)
+      the reason messages (which indicate the reason why Hack believes
+      there is an error reported in the claim message) *)
       if comparison = 0 then
         compare (x_code, x_messages) (y_code, y_messages)
       else
         comparison
   in
   let equal x y = compare x y = 0 in
-  List.sort ~compare err |> List.remove_consecutive_duplicates ~equal
+  let coalesce { code; claim; reasons } = (code, claim :: reasons) in
+  List.sort ~compare:(fun x y -> compare (coalesce x) (coalesce y)) err
+  |> List.remove_consecutive_duplicates ~equal:(fun x y ->
+         equal (coalesce x) (coalesce y))
 
 let get_sorted_error_list (err, _) = sort (files_t_to_list err)
 
@@ -385,27 +388,32 @@ let run_in_decl_mode filename f =
   in_lazy_decl := Some filename;
   Utils.try_finally ~f ~finally:(fun () -> in_lazy_decl := old_in_lazy_decl)
 
-and make_error code (x : (Pos.t * string) list) : error = (code, x)
+and make_error code (x : (Pos.t * string) list) : error =
+  match x with
+  | [] -> failwith "an error must have at least one message"
+  | claim :: reasons -> { code; claim; reasons }
 
 (*****************************************************************************)
 (* Accessors. *)
 (*****************************************************************************)
-and get_code (error : 'a error_) = (fst error : error_code)
+and get_code ({ code; _ } : 'a error_) = (code : error_code)
 
 let get_severity (error : 'a error_) = get_code_severity (get_code error)
 
-let to_list (error : 'a error_) = snd error
+let to_list ({ claim; reasons; _ } : 'a error_) = claim :: reasons
 
-let to_absolute error =
-  let (code, msg_l) = (get_code error, to_list error) in
-  let msg_l = List.map msg_l (fun (p, s) -> (Pos.to_absolute p, s)) in
-  (code, msg_l)
+let to_absolute { code; claim; reasons } =
+  let claim = (fst claim |> Pos.to_absolute, snd claim) in
+  let reasons = List.map reasons (fun (p, s) -> (Pos.to_absolute p, s)) in
+  { code; claim; reasons }
 
 let make_absolute_error code (x : (Pos.absolute * string) list) :
     Pos.absolute error_ =
-  (code, x)
+  match x with
+  | [] -> failwith "an error must have at least one message"
+  | claim :: reasons -> { code; claim; reasons }
 
-let get_messages (error : 'a error_) = snd error
+let get_messages ({ claim; reasons; _ } : 'a error_) = claim :: reasons
 
 let read_lines path =
   try In_channel.read_lines path
@@ -462,57 +470,46 @@ let format_summary format errors dropped_count max_errors : string option =
     Some (formatted_total ^ truncated)
   | Raw -> None
 
-let to_absolute_for_test error =
-  let (code, msg_l) = (get_code error, to_list error) in
-  let msg_l =
-    List.map msg_l (fun (p, s) ->
-        let path = Pos.filename p in
-        let path_without_prefix = Relative_path.suffix path in
-        let p =
-          Pos.set_file
-            (Relative_path.create Relative_path.Dummy path_without_prefix)
-            p
-        in
-        (Pos.to_absolute p, s))
+let to_absolute_for_test { code; claim; reasons } =
+  let f (p, s) =
+    let path = Pos.filename p in
+    let path_without_prefix = Relative_path.suffix path in
+    let p =
+      Pos.set_file
+        (Relative_path.create Relative_path.Dummy path_without_prefix)
+        p
+    in
+    (Pos.to_absolute p, s)
   in
-  (code, msg_l)
+  let claim = f claim in
+  let reasons = List.map ~f reasons in
+  { code; claim; reasons }
 
 let report_pos_from_reason = ref false
 
-let to_string ?(indent = false) (error : Pos.absolute error_) : string =
-  let (error_code, msgl) = (get_code error, to_list error) in
+let to_string ({ code; claim; reasons } : Pos.absolute error_) : string =
   let buf = Buffer.create 50 in
-  (match msgl with
-  | [] -> assert false
-  | (pos1, msg1) :: rest_of_error ->
-    Buffer.add_string
-      buf
-      begin
-        let error_code = error_code_to_string error_code in
-        let reason_msg =
-          if !report_pos_from_reason && Pos.get_from_reason pos1 then
-            " [FROM REASON INFO]"
-          else
-            ""
-        in
-        Printf.sprintf
-          "%s\n%s (%s)%s\n"
-          (Pos.string pos1)
-          msg1
-          error_code
-          reason_msg
-      end;
-    let indentstr =
-      if indent then
-        "  "
-      else
-        ""
-    in
-    List.iter rest_of_error (fun (p, w) ->
-        let msg =
-          Printf.sprintf "%s%s\n%s%s\n" indentstr (Pos.string p) indentstr w
-        in
-        Buffer.add_string buf msg));
+  let (pos1, msg1) = claim in
+  Buffer.add_string
+    buf
+    begin
+      let error_code = error_code_to_string code in
+      let reason_msg =
+        if !report_pos_from_reason && Pos.get_from_reason pos1 then
+          " [FROM REASON INFO]"
+        else
+          ""
+      in
+      Printf.sprintf
+        "%s\n%s (%s)%s\n"
+        (Pos.string pos1)
+        msg1
+        error_code
+        reason_msg
+    end;
+  List.iter reasons (fun (p, w) ->
+      let msg = Printf.sprintf "  %s\n  %s\n" (Pos.string p) w in
+      Buffer.add_string buf msg);
   Buffer.contents buf
 
 let add_error_impl error =
@@ -667,15 +664,14 @@ let rec add_applied_fixme code pos =
 
 and add code pos msg = add_list code [(pos, msg)]
 
-and add_error_with_check (error : error) : unit =
-  add_list (fst error) (snd error)
-
 and fixme_present pos code =
   !is_hh_fixme pos code || !is_hh_fixme_disallowed pos code
 
-and add_list code pos_msg_l =
-  let pos = fst (List.hd_exn pos_msg_l) in
-  let pos_msg_l = check_pos_msg pos_msg_l in
+and add_list code errl = make_error code errl |> add_error
+
+and add_error { code; claim; reasons } =
+  let pos = fst claim in
+  let pos_msg_l = check_pos_msg (claim :: reasons) in
 
   if ISet.mem code hard_banned_codes then
     if fixme_present pos code then
@@ -730,8 +726,6 @@ and add_list code pos_msg_l =
           code
       in
       add_error_with_fixme_error code explanation pos_msg_l
-
-and add_error (code, pos_msg_l) = add_list code pos_msg_l
 
 and merge (err', fixmes') (err, fixmes) =
   let append _ _ x y =
@@ -899,7 +893,7 @@ let strip_ns id = id |> Utils.strip_ns |> Hh_autoimport.reverse_type
 
 let on_error_or_add (on_error : typing_error_callback option) code errl =
   match on_error with
-  | None -> add_list code errl
+  | None -> make_error code errl |> add_error
   | Some f -> f ~code errl
 
 (*****************************************************************************)
@@ -922,29 +916,35 @@ let xhp_parsing_error (p, msg) =
 (*****************************************************************************)
 
 let mk_unsupported_trait_use_as pos =
-  ( Naming.err_code Naming.UnsupportedTraitUseAs,
-    [
+  {
+    code = Naming.err_code Naming.UnsupportedTraitUseAs;
+    claim =
       ( pos,
         "Aliasing with `as` within a trait `use` is a PHP feature that is unsupported in Hack"
       );
-    ] )
+    reasons = [];
+  }
 
-let unsupported_trait_use_as pos =
-  add_error_with_check (mk_unsupported_trait_use_as pos)
+let unsupported_trait_use_as pos = add_error (mk_unsupported_trait_use_as pos)
 
 let mk_unsupported_instead_of pos =
-  ( Naming.err_code Naming.UnsupportedInsteadOf,
-    [(pos, "`insteadof` is a PHP feature that is unsupported in Hack")] )
+  {
+    code = Naming.err_code Naming.UnsupportedInsteadOf;
+    claim = (pos, "`insteadof` is a PHP feature that is unsupported in Hack");
+    reasons = [];
+  }
 
-let unsupported_instead_of pos =
-  add_error_with_check (mk_unsupported_instead_of pos)
+let unsupported_instead_of pos = add_error (mk_unsupported_instead_of pos)
 
 let mk_invalid_trait_use_as_visibility pos =
-  ( Naming.err_code Naming.InvalidTraitUseAsVisibility,
-    [(pos, "Cannot redeclare trait method's visibility in this manner")] )
+  {
+    code = Naming.err_code Naming.InvalidTraitUseAsVisibility;
+    claim = (pos, "Cannot redeclare trait method's visibility in this manner");
+    reasons = [];
+  }
 
 let invalid_trait_use_as_visibility pos =
-  add_error_with_check (mk_invalid_trait_use_as_visibility pos)
+  add_error (mk_invalid_trait_use_as_visibility pos)
 
 (*****************************************************************************)
 (* Naming errors *)
@@ -1022,7 +1022,7 @@ let error_name_already_bound name name_prev p p_prev =
           "Previous definition is here"
         else
           "Previous definition "
-          ^ highlight_differences name name_prev
+          ^ (highlight_differences name name_prev |> Markdown_lite.md_codify)
           ^ " differs only by case " );
     ]
   in
@@ -1094,7 +1094,7 @@ let hint_message ?(modifier = "") orig hint hint_pos =
       Printf.sprintf
         "Did you mean %s%s instead (which only differs by case)?"
         modifier
-        (highlight_differences orig hint)
+        (highlight_differences orig hint |> Markdown_lite.md_codify)
     else
       Printf.sprintf
         "Did you mean %s%s instead?"
@@ -1152,11 +1152,13 @@ let unexpected_typedef pos def_pos expected_kind =
     ]
 
 let mk_fd_name_already_bound pos =
-  ( Naming.err_code Naming.FdNameAlreadyBound,
-    [(pos, "Field name already bound")] )
+  {
+    code = Naming.err_code Naming.FdNameAlreadyBound;
+    claim = (pos, "Field name already bound");
+    reasons = [];
+  }
 
-let fd_name_already_bound pos =
-  add_error_with_check (mk_fd_name_already_bound pos)
+let fd_name_already_bound pos = add_error (mk_fd_name_already_bound pos)
 
 let repeated_record_field name pos prev_pos =
   let msg =
@@ -1601,11 +1603,14 @@ let goto_invoked_in_finally pos =
     "It is illegal to invoke goto within a `finally` block."
 
 let mk_method_needs_visibility pos =
-  ( Naming.err_code Naming.MethodNeedsVisibility,
-    [(pos, "Methods need to be marked `public`, `private`, or `protected`.")] )
+  {
+    code = Naming.err_code Naming.MethodNeedsVisibility;
+    claim =
+      (pos, "Methods need to be marked `public`, `private`, or `protected`.");
+    reasons = [];
+  }
 
-let method_needs_visibility pos =
-  add_error_with_check (mk_method_needs_visibility pos)
+let method_needs_visibility pos = add_error (mk_method_needs_visibility pos)
 
 let dynamic_class_name_in_strict_mode pos =
   add
@@ -1930,15 +1935,17 @@ let not_abstract_without_body (p, _) =
     "This method is not declared as abstract, it must have a body"
 
 let mk_not_abstract_without_typeconst (p, _) =
-  ( NastCheck.err_code NastCheck.NotAbstractWithoutTypeconst,
-    [
+  {
+    code = NastCheck.err_code NastCheck.NotAbstractWithoutTypeconst;
+    claim =
       ( p,
         "This type constant is not declared as abstract, it must have"
         ^ " an assigned type" );
-    ] )
+    reasons = [];
+  }
 
 let not_abstract_without_typeconst node =
-  add_error_with_check (mk_not_abstract_without_typeconst node)
+  add_error (mk_not_abstract_without_typeconst node)
 
 let typeconst_depends_on_external_tparam pos ext_pos ext_name =
   add_list
@@ -1959,11 +1966,13 @@ let interface_with_partial_typeconst tconst_pos =
     "An interface cannot contain a partially abstract type constant"
 
 let mk_multiple_xhp_category pos =
-  ( NastCheck.err_code NastCheck.MultipleXhpCategory,
-    [(pos, "XHP classes can only contain one category declaration")] )
+  {
+    code = NastCheck.err_code NastCheck.MultipleXhpCategory;
+    claim = (pos, "XHP classes can only contain one category declaration");
+    reasons = [];
+  }
 
-let multiple_xhp_category pos =
-  add_error_with_check (mk_multiple_xhp_category pos)
+let multiple_xhp_category pos = add_error (mk_multiple_xhp_category pos)
 
 let return_in_gen p =
   add
@@ -2009,24 +2018,6 @@ let interface_use_trait p =
     (NastCheck.err_code NastCheck.InterfaceUsesTrait)
     p
     "Interfaces cannot use traits"
-
-let await_in_coroutine p =
-  add
-    (NastCheck.err_code NastCheck.AwaitInCoroutine)
-    p
-    "`await` is not allowed in coroutines."
-
-let yield_in_coroutine p =
-  add
-    (NastCheck.err_code NastCheck.YieldInCoroutine)
-    p
-    "`yield` is not allowed in coroutines."
-
-let suspend_outside_of_coroutine p =
-  add
-    (NastCheck.err_code NastCheck.SuspendOutsideOfCoroutine)
-    p
-    "`suspend` is only allowed in coroutines."
 
 let suspend_in_finally p =
   add
@@ -2117,29 +2108,11 @@ let illegal_function_name pos mname =
     pos
     ("Illegal function name: " ^ (strip_ns mname |> Markdown_lite.md_codify))
 
-let inout_params_in_coroutine pos =
-  add
-    (NastCheck.err_code NastCheck.InoutParamsInCoroutine)
-    pos
-    "`inout` parameters cannot be defined on coroutines."
-
-let mutable_attribute_on_function pos =
-  add
-    (NastCheck.err_code NastCheck.MutableAttributeOnFunction)
-    pos
-    "`<<__Mutable>>` only makes sense on methods, or parameters on functions or methods."
-
-let maybe_mutable_attribute_on_function pos =
-  add
-    (NastCheck.err_code NastCheck.MaybeMutableAttributeOnFunction)
-    pos
-    "`<<__MaybeMutable>>` only makes sense on methods, or parameters on functions or methods."
-
 let conflicting_mutable_and_maybe_mutable_attributes pos =
   add
     (NastCheck.err_code NastCheck.ConflictingMutableAndMaybeMutableAttributes)
     pos
-    "Declaration cannot have both `<<__Mutable>>` and `<<__MaybeMutable>>` attributtes."
+    "Declaration cannot have both `<<__Mutable>>` and `<<__MaybeMutable>>` attributes."
 
 let mutable_methods_must_be_reactive pos name =
   add
@@ -2270,12 +2243,6 @@ let conditionally_reactive_annotation_invalid_arguments ~is_method pos =
     ^ " is marked with `<<__OnlyRxIfImpl>>` attribute that have "
     ^ "invalid arguments. This attribute must have one argument and it should be the "
     ^ "`::class` class constant." )
-
-let coroutine_in_constructor pos =
-  add
-    (NastCheck.err_code NastCheck.CoroutineInConstructor)
-    pos
-    "A class constructor may not be a coroutine"
 
 let switch_non_terminal_default pos =
   add
@@ -3307,37 +3274,6 @@ let trait_prop_const_class pos x =
     ^ Markdown_lite.md_codify x
     ^ " is incompatible with a const class" )
 
-let extend_ppl
-    child_pos
-    child_class_type
-    child_is_ppl
-    parent_pos
-    parent_class_type
-    parent_name
-    verb =
-  let name = strip_ns parent_name |> Markdown_lite.md_codify in
-  let warning =
-    if child_is_ppl then
-      child_class_type
-      ^ " annotated with `<<__PPL>>` cannot "
-      ^ verb
-      ^ " non-`<<__PPL>>` "
-      ^ parent_class_type
-      ^ ": "
-      ^ name
-    else
-      child_class_type
-      ^ " must be annotated with `<<__PPL>>` to "
-      ^ verb
-      ^ " `<<__PPL>>` "
-      ^ parent_class_type
-      ^ ": "
-      ^ name
-  in
-  add_list
-    (Typing.err_code Typing.ExtendPPL)
-    [(child_pos, warning); (parent_pos, "Declaration is here")]
-
 let read_before_write (pos, v) =
   add
     (Typing.err_code Typing.ReadBeforeWrite)
@@ -3348,12 +3284,6 @@ let read_before_write (pos, v) =
          Markdown_lite.md_codify ("$this->" ^ v);
          " before initialization";
        ])
-
-let final_property pos =
-  add
-    (Typing.err_code Typing.FinalProperty)
-    pos
-    "Properties cannot be declared final"
 
 let implement_abstract ~is_final pos1 pos2 kind x =
   let name = "abstract " ^ kind ^ " " ^ Markdown_lite.md_codify x in
@@ -3756,6 +3686,19 @@ let callsite_reactivity_mismatch
             );
           ]) )
 
+let callsite_cipp_mismatch f_pos def_pos callee_cipp caller_cipp =
+  add_list
+    (Typing.err_code Typing.CallsiteCIPPMismatch)
+    [
+      ( f_pos,
+        "CIPP mismatch: "
+        ^ caller_cipp
+        ^ " function cannot call "
+        ^ callee_cipp
+        ^ " function." );
+      (def_pos, "This is the declaration of the function being called.");
+    ]
+
 let invalid_argument_of_rx_mutable_function pos =
   add
     (Typing.err_code Typing.InvalidArgumentOfRxMutableFunction)
@@ -4107,21 +4050,6 @@ let non_class_member ~is_method s pos1 ty pos2 =
     (Typing.err_code Typing.NonClassMember)
     [(pos1, msg); (pos2, "Definition is here")]
 
-let ambiguous_member ~is_method s pos1 ty pos2 =
-  let msg =
-    Printf.sprintf
-      "You are trying to access the %s %s but there is more than one implementation on %s"
-      ( if is_method then
-        "method"
-      else
-        "property" )
-      (Markdown_lite.md_codify s)
-      ty
-  in
-  add_list
-    (Typing.err_code Typing.AmbiguousMember)
-    [(pos1, msg); (pos2, "Definition is here")]
-
 let null_container p null_witness =
   add_list
     (Typing.err_code Typing.NullContainer)
@@ -4228,85 +4156,6 @@ let array_get_with_optional_field pos1 pos2 name =
           (Markdown_lite.md_codify name) );
       (pos2, "This is where the field was declared as optional.");
     ]
-
-let non_call_argument_in_suspend pos msgs =
-  add_list
-    (Typing.err_code Typing.NonCallArgumentInSuspend)
-    ( [(pos, "`suspend` operator expects call to a coroutine as an argument.")]
-    @ msgs )
-
-let non_coroutine_call_in_suspend pos msgs =
-  add_list
-    (Typing.err_code Typing.NonCoroutineCallInSuspend)
-    ( [
-        ( pos,
-          "Only coroutine functions are allowed to be called in `suspend` operator."
-        );
-      ]
-    @ msgs )
-
-let coroutine_call_outside_of_suspend pos =
-  add_list
-    (Typing.err_code Typing.CoroutineCallOutsideOfSuspend)
-    [
-      ( pos,
-        "Coroutine calls are only allowed when they are arguments to `suspend` operator"
-      );
-    ]
-
-let function_is_not_coroutine pos name =
-  add_list
-    (Typing.err_code Typing.FunctionIsNotCoroutine)
-    [
-      ( pos,
-        "Function "
-        ^ Markdown_lite.md_codify name
-        ^ " is not a coroutine and cannot be used in as an argument of `suspend` operator."
-      );
-    ]
-
-let coroutinness_mismatch
-    pos1_is_coroutine pos1 pos2 (on_error : typing_error_callback) =
-  let m1 = "This is a coroutine." in
-  let m2 = "This is not a coroutine." in
-  on_error
-    ~code:(Typing.err_code Typing.CoroutinnessMismatch)
-    [
-      ( pos1,
-        if pos1_is_coroutine then
-          m1
-        else
-          m2 );
-      ( pos2,
-        if pos1_is_coroutine then
-          m2
-        else
-          m1 );
-    ]
-
-let invalid_ppl_call pos context =
-  let error_msg =
-    "Cannot call a method on an object of a `<<__PPL>>` class " ^ context
-  in
-  add (Typing.err_code Typing.InvalidPPLCall) pos error_msg
-
-let invalid_ppl_static_call pos reason =
-  let error_msg =
-    "Cannot call a static method on a `<<__PPL>>` class " ^ reason
-  in
-  add (Typing.err_code Typing.InvalidPPLStaticCall) pos error_msg
-
-let ppl_meth_pointer pos func =
-  let error_msg =
-    Markdown_lite.md_codify func ^ " cannot be used with a `<<__PPL>>` class"
-  in
-  add (Typing.err_code Typing.PPLMethPointer) pos error_msg
-
-let coroutine_outside_experimental pos =
-  add
-    (Typing.err_code Typing.CoroutineOutsideExperimental)
-    pos
-    Coroutine_errors.error_message
 
 let return_disposable_mismatch
     pos1_return_disposable pos1 pos2 (on_error : typing_error_callback) =
@@ -4532,6 +4381,15 @@ let cyclic_record_def names pos =
     (Printf.sprintf
        "Record inheritance cycle: %s"
        (String.concat ~sep:" " names))
+
+let trait_reuse_with_final_method use_pos trait_name parent_cls_name trace =
+  let msg =
+    Printf.sprintf
+      "Traits with final methods cannot be reused, and `%s` is already used by `%s`."
+      (strip_ns trait_name)
+      (strip_ns parent_cls_name)
+  in
+  add_list (Typing.err_code Typing.TraitReuse) ((use_pos, msg) :: trace)
 
 let trait_reuse p_pos p_name class_name trait =
   let (c_pos, c_name) = class_name in
@@ -4814,10 +4672,13 @@ let attribute_param_type pos x =
     pos
     ("This attribute parameter should be " ^ x)
 
-let deprecated_use pos pos_def msg =
-  add_list
-    (Typing.err_code Typing.DeprecatedUse)
-    [(pos, msg); (pos_def, "Definition is here")]
+let deprecated_use pos ?(pos_def = None) msg =
+  let def_message =
+    match pos_def with
+    | Some pos_def -> [(pos_def, "Definition is here")]
+    | None -> []
+  in
+  add_list (Typing.err_code Typing.DeprecatedUse) ((pos, msg) :: def_message)
 
 let cannot_declare_constant kind pos (class_pos, class_name) =
   let kind_str =
@@ -4987,6 +4848,14 @@ let nonreactive_function_call pos decl_pos callee_reactivity cause_pos_opt =
               "This argument caused function to be " ^ callee_reactivity ^ "."
             );
           ]) )
+
+let nonpure_function_call pos decl_pos callee_reactivity =
+  add_list
+    (Typing.err_code Typing.NonpureFunctionCall)
+    [
+      (pos, "Pure functions can only call other pure functions.");
+      (decl_pos, "This function is " ^ callee_reactivity ^ ".");
+    ]
 
 let nonreactive_call_from_shallow pos decl_pos callee_reactivity cause_pos_opt =
   add_list
@@ -5440,6 +5309,12 @@ let context_implicit_policy_leakage
   in
   add_list (Typing.err_code Typing.ContextImplicitPolicyLeakage) reasons
 
+let unknown_information_flow pos str =
+  add
+    (Typing.err_code Typing.UnknownInformationFlow)
+    pos
+    ("Unable to analyze information flow for " ^ str ^ ". This might be unsafe.")
+
 let reified_function_reference call_pos =
   add
     (Typing.err_code Typing.ReifiedFunctionReference)
@@ -5561,6 +5436,98 @@ let alias_with_implicit_constraints_as_hk_type
         ^ "." );
     ]
 
+let reinheriting_classish_const
+    dest_classish_pos
+    dest_classish_name
+    src_classish_pos
+    src_classish_name
+    existing_const_origin
+    const_name =
+  add_list
+    (Typing.err_code Typing.RedeclaringClassishConstant)
+    [
+      ( src_classish_pos,
+        strip_ns dest_classish_name
+        ^ " cannot re-inherit constant "
+        ^ const_name
+        ^ " from "
+        ^ src_classish_name );
+      ( dest_classish_pos,
+        "because it already inherited it via " ^ strip_ns existing_const_origin
+      );
+    ]
+
+let redeclaring_classish_const
+    classish_pos
+    classish_name
+    redeclaration_pos
+    existing_const_origin
+    const_name =
+  add_list
+    (Typing.err_code Typing.RedeclaringClassishConstant)
+    [
+      ( redeclaration_pos,
+        strip_ns classish_name ^ " cannot re-declare constant " ^ const_name );
+      ( classish_pos,
+        "because it already inherited it via " ^ strip_ns existing_const_origin
+      );
+    ]
+
+let incompatible_enum_inclusion_base
+    dest_classish_pos dest_classish_name src_classish_name =
+  add_list
+    (Typing.err_code Typing.IncompatibleEnumInclusion)
+    [
+      ( dest_classish_pos,
+        "Enum "
+        ^ strip_ns dest_classish_name
+        ^ " includes enum "
+        ^ strip_ns src_classish_name
+        ^ " but their base types are incompatible" );
+    ]
+
+let incompatible_enum_inclusion_constraint
+    dest_classish_pos dest_classish_name src_classish_name =
+  add_list
+    (Typing.err_code Typing.IncompatibleEnumInclusion)
+    [
+      ( dest_classish_pos,
+        "Enum "
+        ^ strip_ns dest_classish_name
+        ^ " includes enum "
+        ^ strip_ns src_classish_name
+        ^ " but their constraints are incompatible" );
+    ]
+
+let enum_inclusion_not_enum
+    dest_classish_pos dest_classish_name src_classish_name =
+  add_list
+    (Typing.err_code Typing.IncompatibleEnumInclusion)
+    [
+      ( dest_classish_pos,
+        "Enum "
+        ^ strip_ns dest_classish_name
+        ^ " includes "
+        ^ strip_ns src_classish_name
+        ^ " which is not an enum" );
+    ]
+
+let call_coeffect_error
+    call_pos pos_env_capability env_capability pos_capability capability =
+  add_list
+    (Typing.err_code Typing.CallCoeffects)
+    [
+      ( call_pos,
+        "This call is not allowed because its coeffects are incompatible with the context"
+      );
+      ( pos_env_capability,
+        "From this declaration, the context of this function body provides the capabilities: "
+        ^ env_capability );
+      ( pos_capability,
+        "But the function being called requires the capabilities: " ^ capability
+      );
+    ]
+
 (*****************************************************************************)
 (* Printing *)
 (*****************************************************************************)
@@ -5608,15 +5575,14 @@ let convert_errors_to_string ?(include_filename = false) (errors : error list) :
 (* Try if errors. *)
 (*****************************************************************************)
 
-let try_ f1 f2 = try_with_result f1 (fun _ l -> f2 l)
+let try_ f1 f2 = try_with_result f1 (fun _ err -> f2 err)
 
 let try_with_error f1 f2 =
-  try_ f1 (fun err ->
-      let (error_code, l) = (get_code err, to_list err) in
-      add_list error_code l;
+  try_ f1 (fun error ->
+      add_error error;
       f2 ())
 
-let has_no_errors f =
+let has_no_errors (f : unit -> 'a) : bool =
   try_
     (fun () ->
       let _ = f () in
@@ -5635,7 +5601,7 @@ let ignore_ f =
   result
 
 let try_when f ~when_ ~do_ =
-  try_with_result f (fun result (error : error) ->
+  try_with_result f (fun result error ->
       if when_ () then
         do_ error
       else

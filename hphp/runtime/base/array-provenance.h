@@ -14,8 +14,7 @@
   +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_ARRAY_PROVENANCE_H
-#define incl_HPHP_ARRAY_PROVENANCE_H
+#pragma once
 
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/static-string-table.h"
@@ -53,8 +52,6 @@ struct Tag {
   enum class Kind {
     /* uninitialized */
     Invalid,
-    /* known unit + line number */
-    Known,
     /* result of a union in a repo build */
     UnknownRepo,
     /* lost original line number as a result of trait ${x}init merges */
@@ -65,14 +62,18 @@ struct Tag {
     RuntimeLocation,
     /* some piece of the runtime prevented a backtrace from being collected--
      * e.g. the JIT will use this to prevent a tag being assigned to an array
-     * inside of the JIT corresponding to the PHP location that entered the JIT
-     */
+     * in the JIT corresponding to the PHP location that entered the JIT */
     RuntimeLocationPoison,
+    /* known unit + line number. Must be the last kind - see name() for why */
+    Known,
+    /* NOTE: We CANNOT fit another kind here; kind 7 is reserved */
   };
 
   constexpr Tag() = default;
-  Tag(const StringData* filename, int32_t line) {
-    *this = Tag(Kind::Known, filename, line);
+  Tag(const Func* func, Offset offset);
+
+  static Tag Known(const StringData* filename, int32_t line) {
+    return Tag(Kind::Known, filename, line);
   }
   static Tag RepoUnion() {
     return Tag(Kind::UnknownRepo, nullptr);
@@ -138,8 +139,29 @@ struct Tag {
 private:
   Tag(Kind kind, const StringData* name, int32_t line = -1);
 
-  LowPtr<const char> m_name{nullptr};
-  int32_t m_line{0};
+  /* these are here since we needed to be friends with these types */
+  static Tag get(const ArrayData* ad);
+  static Tag get(const APCArray* a);
+  static Tag get(const AsioExternalThreadEvent* ev);
+  static void set(ArrayData* ad, Tag tag);
+  static void set(APCArray* a, Tag tag);
+  static void set(AsioExternalThreadEvent* ev, Tag tag);
+
+  /* we are just everybody's best friend */
+  friend Tag getTag(const ArrayData* a);
+  friend Tag getTag(const APCArray* a);
+  friend Tag getTag(const AsioExternalThreadEvent* ev);
+
+  friend void setTag(ArrayData* a, Tag tag);
+  friend void setTag(APCArray* a, Tag tag);
+  friend void setTag(AsioExternalThreadEvent* ev, Tag tag);
+
+  friend void clearTag(ArrayData* ad);
+  friend void clearTag(APCArray* a);
+  friend void clearTag(AsioExternalThreadEvent* ev);
+
+private:
+  uint32_t m_id = 0;
 };
 
 /*
@@ -162,12 +184,12 @@ struct ArrayProvenanceTable {
 /*
  * Create a tag based on the current PC and unit.
  *
- * Attempts to sync VM regs and returns folly::none on failure.
+ * Returns an invalid tag if arrprov is off, or if we can't sync the VM regs.
  */
 Tag tagFromPC();
 
 /*
- * Create a tag based on the given SrcKey
+ * Create a tag based on `sk`. Returns an invalid tag if arrprov is off.
  */
 Tag tagFromSK(SrcKey sk);
 
@@ -237,13 +259,7 @@ bool arrayWantsTag(const ArrayData* a);
 bool arrayWantsTag(const APCArray* a);
 bool arrayWantsTag(const AsioExternalThreadEvent* a);
 
-/*
- * Space requirement for a tag for `a'.
- */
-template<typename A>
-size_t tagSize(const A* a) {
-  return RO::EvalArrayProvenance && arrayWantsTag(a) ? sizeof(Tag) : 0;
-}
+auto constexpr kAPCTagSize = 8;
 
 /*
  * Get the provenance tag for `a`.
@@ -253,19 +269,11 @@ Tag getTag(const APCArray* a);
 Tag getTag(const AsioExternalThreadEvent* ev);
 
 /*
- * Set mode: insert or emplace.
- *
- * Just controls whether we assert about provenance not already being set: we
- * assert for Insert mode, and not for Emplace.
- */
-enum class Mode { Insert, Emplace };
-
-/*
  * Set the provenance tag for `a` to `tag`.
  */
-template<Mode mode = Mode::Insert> void setTag(ArrayData* a, Tag tag);
-template<Mode mode = Mode::Insert> void setTag(APCArray* a, Tag tag);
-template<Mode mode = Mode::Insert> void setTag(AsioExternalThreadEvent* ev, Tag tag);
+void setTag(ArrayData* a, Tag tag);
+void setTag(APCArray* a, Tag tag);
+void setTag(AsioExternalThreadEvent* ev, Tag tag);
 
 /*
  * Clear a tag for a released array---only call this if the array is henceforth
@@ -337,4 +345,3 @@ TypedValue markTvShallow(TypedValue in, bool legacy);
 
 }}
 
-#endif

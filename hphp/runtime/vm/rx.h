@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_VM_RX_H_
-#define incl_HPHP_VM_RX_H_
+#pragma once
 
 #include "hphp/runtime/base/attr.h"
 
@@ -69,6 +68,10 @@ constexpr bool funcAttrIsAnyRx(Attr a) {
   return static_cast<uint32_t>(a) & kRxAttrMask;
 }
 
+constexpr bool funcAttrIsPure(Attr a) {
+  return static_cast<uint32_t>(a) & AttrRxLevel2;
+}
+
 bool rxEnforceCallsInLevel(RxLevel level);
 RxLevel rxRequiredCalleeLevel(RxLevel level);
 
@@ -79,4 +82,3 @@ RxLevel rxRequiredCalleeLevel(RxLevel level);
 #include "hphp/runtime/vm/rx-inl.h"
 #undef incl_HPHP_VM_RX_INL_H_
 
-#endif // incl_HPHP_VM_RX_H_

@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_RUNTIME_ERROR_H_
-#define incl_HPHP_RUNTIME_ERROR_H_
+#pragma once
 
 #include <cstdarg>
 #include <string>
@@ -192,7 +191,7 @@ void raise_convert_rcls_meth_to_type(const char* typeName);
 
 void raise_hack_arr_compat_serialize_notice(const ArrayData*);
 
-void raise_hack_arr_compat_array_producing_func_notice(const std::string& name);
+void raise_hack_arr_compat_cast_marked_array_notice(const ArrayData*);
 
 void raise_hackarr_compat_is_operator(const char* source, const char* target);
 
@@ -262,4 +261,3 @@ void raise_clsmeth_compat_type_hint_property_notice(
 ///////////////////////////////////////////////////////////////////////////////
 }
 
-#endif // incl_HPHP_RUNTIME_ERROR_H_

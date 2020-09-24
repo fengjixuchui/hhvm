@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_ARRAY_DATA_H_
-#define incl_HPHP_ARRAY_DATA_H_
+#pragma once
 
 #include "hphp/runtime/base/array-provenance.h"
 #include "hphp/runtime/base/countable.h"
@@ -45,6 +44,8 @@ struct String;
 struct StringData;
 struct VariableSerializer;
 struct Variant;
+
+namespace arrprov { struct Tag; }
 
 /*
  * arr_lval is a tv_lval augmented with an ArrayData*, and is used to return an
@@ -114,16 +115,10 @@ struct ArrayData : MaybeCountable {
   static auto constexpr kLegacyArray = 2;
 
   /*
-   * Indicates that this array has provenance data available in a side table
-   * See array-provenance.h
-   */
-  static auto constexpr kHasProvenanceData = 4;
-
-  /*
    * Indicates that this array has a side table that contains information about
    * its keys.
    */
-  static auto constexpr kHasStrKeyTable = 8;
+  static auto constexpr kHasStrKeyTable = 4;
 
   /////////////////////////////////////////////////////////////////////////////
   // Creation and destruction.
@@ -262,17 +257,6 @@ public:
    * co-allocated APCTypedValue preceding this array.
    */
   bool hasApcTv() const;
-
-  /*
-   * Whether this ArrayData has provenance data stored in the
-   * side table--see array-provenance.h
-   */
-  bool hasProvenanceData() const;
-
-  /*
-   * Sets the provenance data bit
-   */
-  void setHasProvenanceData(bool value);
 
   /*
    * Whether the array has legacy behaviors enabled (this bit can only be set
@@ -669,11 +653,37 @@ protected:
   friend struct BaseMap;
   friend struct c_Map;
   friend struct c_ImmMap;
+  friend struct arrprov::Tag;
 
-  // m_extra is free for use by different ArrayKind implementations.
-  // Right now, it's only used by bespoke arrays for the bespoke layout ID.
   uint32_t m_size;
-  uint32_t m_extra;
+  /*
+   * m_extra is used both to store bespoke IDs and for array provenance (for
+   * v/darrays.) It's fine to share the field since we already refuse to enable
+   * these features together.
+   *
+   * When RO::EvalArrayProvenance is on, this stores an arrprov::Tag--otherwise
+   * we use this field as follows:
+   *
+   * When the array is bespoke (m_kind & kBespokeKindMask):
+   *
+   *   bits 0..15: for private bespoke-array use. we don't require these to be
+   *                have any specific value but are reserved for use by bespoke
+   *                layouts
+   *
+   *   bits 16..30: store the bespoke layout index
+   *
+   *   bit 31:      must be set
+   *
+   * When the array is vanilla and array provenance is off, m_extra must be 0.
+   */
+  union {
+    uint32_t m_extra;
+    struct {
+      /* NB the names are definitely little-endian centric but whatever */
+      uint16_t m_extra_lo16;
+      uint16_t m_extra_hi16;
+    };
+  };
 };
 
 static_assert(ArrayData::kPackedKind == uint8_t(HeaderKind::Packed), "");
@@ -841,4 +851,3 @@ ArrayData* tagArrProv(ArrayData* ad, const APCArray* src);
 
 #include "hphp/runtime/base/array-data-inl.h"
 
-#endif // incl_HPHP_ARRAY_DATA_H_

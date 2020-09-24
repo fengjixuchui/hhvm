@@ -277,9 +277,26 @@ module Full = struct
   let pu_concat k ty access = k ty ^^ text (":@" ^ access)
 
   let thas_member k hm =
-    let { hm_name = (_, name); hm_type; hm_class_id = _ } = hm in
+    let { hm_name = (_, name); hm_type; hm_class_id = _; hm_explicit_targs } =
+      hm
+    in
+    (* TODO: T71614503 print explicit type arguments appropriately *)
+    let printed_explicit_targs =
+      match hm_explicit_targs with
+      | None -> text "None"
+      | Some _ -> text "Some <targs>"
+    in
     Concat
-      [text "has_member"; text "("; text name; comma_sep; k hm_type; text ")"]
+      [
+        text "has_member";
+        text "(";
+        text name;
+        comma_sep;
+        k hm_type;
+        comma_sep;
+        printed_explicit_targs;
+        text ")";
+      ]
 
   let tdestructure k d =
     let { d_required; d_optional; d_variadic; d_kind } = d in
@@ -1389,6 +1406,11 @@ module Json = struct
             (Tfun
                {
                  ft_params;
+                 ft_implicit_params =
+                   {
+                     capability =
+                       Typing_make_type.default_capability Reason.Rnone;
+                   };
                  ft_ret = { et_type = ft_ret; et_enforced = false };
                  (* Dummy values: these aren't currently serialized. *)
                  ft_arity = Fstandard;
@@ -1729,14 +1751,7 @@ end
 
 module PrintTypedef = struct
   let typedef tcopt = function
-    | {
-        td_pos;
-        td_vis = _;
-        td_tparams;
-        td_constraint;
-        td_type;
-        td_decl_errors = _;
-      } ->
+    | { td_pos; td_vis = _; td_tparams; td_constraint; td_type } ->
       let tparaml_s = PrintClass.tparam_list tcopt td_tparams in
       let constr_s =
         match td_constraint with
@@ -1804,7 +1819,7 @@ let debug_i env ty =
 
 let class_ ctx c = PrintClass.class_type ctx c
 
-let gconst ctx gc = Full.to_string_decl ctx (fst gc)
+let gconst ctx gc = Full.to_string_decl ctx gc
 
 let fun_ ctx { fe_type; _ } = Full.to_string_decl ctx fe_type
 
@@ -1832,3 +1847,10 @@ let subtype_prop env prop =
   in
   let p_str = subtype_prop prop in
   p_str
+
+let coeffects env ty =
+  Full.to_string
+    ~ty:Full.locl_ty
+    (fun s -> Doc.text (Utils.strip_all_ns s))
+    env
+    ty

@@ -157,8 +157,8 @@ fn make_memoize_function_with_params_code(
     let deprecation_body =
         emit_body::emit_deprecation_info(&env.scope, deprecation_info, e.systemlib())?;
     let (begin_label, default_value_setters) =
-        // Default value setters belong in the wrapper method not in the original method
-        emit_param::emit_param_default_value_setter(e, env, false, pos, hhas_params)?;
+    // Default value setters belong in the wrapper method not in the original method
+     emit_param::emit_param_default_value_setter(e, env, false, pos, hhas_params)?;
     let fcall_args = {
         let mut fcall_flags = FcallFlags::default();
         fcall_flags.set(FcallFlags::HAS_GENERICS, is_reified);
@@ -190,7 +190,7 @@ fn make_memoize_function_with_params_code(
     let param_count = (param_count + add_refied) as isize;
     Ok(InstrSeq::gather(vec![
         begin_label,
-        emit_body::emit_method_prolog(e, env, pos, hhas_params, ast_params, &[], false)?,
+        emit_body::emit_method_prolog(e, env, pos, hhas_params, ast_params, &[])?,
         deprecation_body,
         emit_memoize_helpers::param_code_sets(hhas_params, param_count as usize),
         reified_memokeym,

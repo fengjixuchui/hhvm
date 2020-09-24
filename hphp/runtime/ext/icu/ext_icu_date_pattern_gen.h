@@ -1,5 +1,4 @@
-#ifndef incl_HPHP_ICU_DATE_PATTERN_GEN_H
-#define incl_HPHP_ICU_DATE_PATTERN_GEN_H
+#pragma once
 
 #include "hphp/runtime/ext/extension.h"
 #include "hphp/runtime/ext/icu/icu.h"
@@ -25,7 +24,7 @@ struct IntlDatePatternGenerator : IntlError {
   ) {
     if (!c_IntlDatePatternGenerator) {
       c_IntlDatePatternGenerator =
-        Unit::lookupClass(s_IntlDatePatternGenerator.get());
+        Class::lookup(s_IntlDatePatternGenerator.get());
       assertx(c_IntlDatePatternGenerator);
     }
     Object ret{c_IntlDatePatternGenerator};
@@ -56,4 +55,3 @@ struct IntlDatePatternGenerator : IntlError {
 
 /////////////////////////////////////////////////////////////////////////////
 }} // namespace HPHP::Intl
-#endif // incl_HPHP_ICU_DATE_PATTERN_GEN_H

@@ -75,8 +75,6 @@ val num_digits : int -> int
 
 val add_error : error -> unit
 
-val add_error_with_check : error -> unit
-
 (* Error codes that can be suppressed in strict mode with a FIXME based on configuration. *)
 val allowed_fixme_codes_strict : ISet.t ref
 
@@ -475,9 +473,6 @@ val extend_sealed : Pos.t -> Pos.t -> string -> string -> string -> unit
 
 val trait_prop_const_class : Pos.t -> string -> unit
 
-val extend_ppl :
-  Pos.t -> string -> bool -> Pos.t -> string -> string -> string -> unit
-
 val read_before_write : Pos.t * string -> unit
 
 val implement_abstract :
@@ -617,9 +612,6 @@ val unknown_object_member :
 val non_class_member :
   is_method:bool -> string -> Pos.t -> string -> Pos.t -> unit
 
-val ambiguous_member :
-  is_method:bool -> string -> Pos.t -> string -> Pos.t -> unit
-
 val null_container : Pos.t -> (Pos.t * string) list -> unit
 
 val option_mixed : Pos.t -> unit
@@ -649,6 +641,9 @@ val unsatisfied_req : Pos.t -> string -> Pos.t -> unit
 val cyclic_class_def : SSet.t -> Pos.t -> unit
 
 val cyclic_record_def : string list -> Pos.t -> unit
+
+val trait_reuse_with_final_method :
+  Pos.t -> string -> string -> (Pos.t * string) list -> unit
 
 val trait_reuse : Pos.t -> string -> Pos.t * string -> string -> unit
 
@@ -719,12 +714,6 @@ val toplevel_continue : Pos.t -> unit
 val continue_in_switch : Pos.t -> unit
 
 val await_in_sync_function : Pos.t -> unit
-
-val await_in_coroutine : Pos.t -> unit
-
-val yield_in_coroutine : Pos.t -> unit
-
-val suspend_outside_of_coroutine : Pos.t -> unit
 
 val suspend_in_finally : Pos.t -> unit
 
@@ -856,7 +845,7 @@ val attribute_too_few_arguments : Pos.t -> string -> int -> unit
 
 val attribute_param_type : Pos.t -> string -> unit
 
-val deprecated_use : Pos.t -> Pos.t -> string -> unit
+val deprecated_use : Pos.t -> ?pos_def:Pos.t option -> string -> unit
 
 val cannot_declare_constant :
   [< `enum | `trait | `record ] -> Pos.t -> Pos.t * string -> unit
@@ -895,8 +884,6 @@ val eq_incompatible_types :
 val comparison_invalid_types :
   Pos.t -> (Pos.t * string) list -> (Pos.t * string) list -> unit
 
-val final_property : Pos.t -> unit
-
 val invalid_new_disposable : Pos.t -> unit
 
 val invalid_disposable_hint : Pos.t -> string -> unit
@@ -914,7 +901,7 @@ val convert_errors_to_string :
 
 val combining_sort : 'a list -> f:('a -> string) -> 'a list
 
-val to_string : ?indent:bool -> Pos.absolute error_ -> string
+val to_string : Pos.absolute error_ -> string
 
 val format_summary :
   format -> 'a error_ list -> int -> int option -> string option
@@ -1021,25 +1008,6 @@ val reading_from_append : Pos.t -> unit
 
 val nullable_cast : Pos.t -> string -> Pos.t -> unit
 
-val non_call_argument_in_suspend : Pos.t -> (Pos.t * string) list -> unit
-
-val non_coroutine_call_in_suspend : Pos.t -> (Pos.t * string) list -> unit
-
-val coroutine_call_outside_of_suspend : Pos.t -> unit
-
-val function_is_not_coroutine : Pos.t -> string -> unit
-
-val coroutinness_mismatch :
-  bool -> Pos.t -> Pos.t -> typing_error_callback -> unit
-
-val invalid_ppl_call : Pos.t -> string -> unit
-
-val invalid_ppl_static_call : Pos.t -> string -> unit
-
-val ppl_meth_pointer : Pos.t -> string -> unit
-
-val coroutine_outside_experimental : Pos.t -> unit
-
 val return_disposable_mismatch :
   bool -> Pos.t -> Pos.t -> typing_error_callback -> unit
 
@@ -1056,8 +1024,6 @@ val invalid_mutable_return_result : Pos.t -> Pos.t -> string -> unit
 
 val mutable_return_result_mismatch :
   bool -> Pos.t -> Pos.t -> typing_error_callback -> unit
-
-val mutable_attribute_on_function : Pos.t -> unit
 
 val mutable_methods_must_be_reactive : Pos.t -> string -> unit
 
@@ -1121,8 +1087,6 @@ val must_extend_disposable : Pos.t -> unit
 val accept_disposable_invariant :
   Pos.t -> Pos.t -> typing_error_callback -> unit
 
-val inout_params_in_coroutine : Pos.t -> unit
-
 val inout_params_special : Pos.t -> unit
 
 val inout_params_memoize : Pos.t -> Pos.t -> unit
@@ -1144,6 +1108,8 @@ val illegal_xhp_child : Pos.t -> (Pos.t * string) list -> unit
 val missing_xhp_required_attr : Pos.t -> string -> (Pos.t * string) list -> unit
 
 val nonreactive_function_call : Pos.t -> Pos.t -> string -> Pos.t option -> unit
+
+val nonpure_function_call : Pos.t -> Pos.t -> string -> unit
 
 val nonreactive_indexing : bool -> Pos.t -> unit
 
@@ -1188,8 +1154,6 @@ val decl_override_missing_hint : Pos.t -> typing_error_callback -> unit
 val atmost_rx_as_rxfunc_invalid_location : Pos.t -> unit
 
 val no_atmost_rx_as_rxfunc_for_rx_if_args : Pos.t -> unit
-
-val coroutine_in_constructor : Pos.t -> unit
 
 val pu_duplication : Pos.t -> string -> string -> string -> unit
 
@@ -1261,10 +1225,10 @@ val invalid_argument_type_for_condition_in_rx :
 val callsite_reactivity_mismatch :
   Pos.t -> Pos.t -> string -> Pos.t option -> string -> unit
 
+val callsite_cipp_mismatch : Pos.t -> Pos.t -> string -> string -> unit
+
 val rx_parameter_condition_mismatch :
   string -> Pos.t -> Pos.t -> typing_error_callback -> unit
-
-val maybe_mutable_attribute_on_function : Pos.t -> unit
 
 val conflicting_mutable_and_maybe_mutable_attributes : Pos.t -> unit
 
@@ -1422,6 +1386,8 @@ val illegal_information_flow :
 val context_implicit_policy_leakage :
   Pos.t -> Pos.t list -> Pos.t list * string -> Pos.t list * string -> unit
 
+val unknown_information_flow : Pos.t -> string -> unit
+
 val reified_function_reference : Pos.t -> unit
 
 val class_meth_abstract_call : string -> string -> Pos.t -> Pos.t -> unit
@@ -1452,3 +1418,17 @@ val alias_with_implicit_constraints_as_hk_type :
   used_class_in_def_name:string ->
   used_class_tparam_name:string ->
   unit
+
+val reinheriting_classish_const :
+  Pos.t -> string -> Pos.t -> string -> string -> string -> unit
+
+val redeclaring_classish_const :
+  Pos.t -> string -> Pos.t -> string -> string -> unit
+
+val incompatible_enum_inclusion_base : Pos.t -> string -> string -> unit
+
+val incompatible_enum_inclusion_constraint : Pos.t -> string -> string -> unit
+
+val enum_inclusion_not_enum : Pos.t -> string -> string -> unit
+
+val call_coeffect_error : Pos.t -> Pos.t -> string -> Pos.t -> string -> unit

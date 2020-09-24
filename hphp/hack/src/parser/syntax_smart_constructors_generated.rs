@@ -20,10 +20,10 @@ use parser_core_types::syntax::*;
 use smart_constructors::{NoState, SmartConstructors};
 use crate::StateType;
 
-pub trait SyntaxSmartConstructors<'src, S: SyntaxType<'src, State>, State = NoState>:
-    SmartConstructors<'src, State, R=S, Token=S::Token>
+pub trait SyntaxSmartConstructors<S: SyntaxType<State>, State = NoState>:
+    SmartConstructors<State, R=S, Token=S::Token>
 where
-    State: StateType<'src, S>,
+    State: StateType<S>,
 {
     fn make_missing(&mut self, offset: usize) -> Self::R {
         let r = Self::R::make_missing(self.state_mut(), offset);
@@ -39,7 +39,7 @@ where
 
     fn make_list(&mut self, items: Vec<Self::R>, offset: usize) -> Self::R {
         if items.is_empty() {
-            <Self as SyntaxSmartConstructors<'src, S, State>>::make_missing(self, offset)
+            <Self as SyntaxSmartConstructors<S, State>>::make_missing(self, offset)
         } else {
             let item_refs: Vec<_> = items.iter().collect();
             self.state_mut().next(&item_refs);
@@ -662,9 +662,9 @@ where
         Self::R::make_xhp_category_declaration(self.state_mut(), arg0, arg1, arg2)
     }
 
-    fn make_xhp_enum_type(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R) -> Self::R {
-        self.state_mut().next(&[&arg0, &arg1, &arg2, &arg3, &arg4]);
-        Self::R::make_xhp_enum_type(self.state_mut(), arg0, arg1, arg2, arg3, arg4)
+    fn make_xhp_enum_type(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R {
+        self.state_mut().next(&[&arg0, &arg1, &arg2, &arg3]);
+        Self::R::make_xhp_enum_type(self.state_mut(), arg0, arg1, arg2, arg3)
     }
 
     fn make_xhp_lateinit(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R {

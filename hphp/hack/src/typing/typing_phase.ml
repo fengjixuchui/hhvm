@@ -118,6 +118,8 @@ let env_with_self ?pos ?(quiet = false) ?report_cycle env =
 (*****************************************************************************)
 
 let rec localize ~ety_env env (dty : decl_ty) =
+  Typing_log.log_localize ~level:1 dty
+  @@
   let tvar_or_localize ~ety_env env r ty ~i =
     if
       GlobalOptions.tco_global_inference env.genv.tcopt
@@ -135,13 +137,15 @@ let rec localize ~ety_env env (dty : decl_ty) =
   | (r, Tmixed) -> (env, MakeType.mixed r)
   | (r, Tthis) ->
     let ty =
-      match deref ety_env.this_ty with
-      | (Reason.Rnone, ty) -> mk (r, ty)
-      | (Reason.Rexpr_dep_type (_, pos, s), ty) ->
-        mk (Reason.Rexpr_dep_type (r, pos, s), ty)
-      | (reason, ty) when Option.is_some ety_env.from_class -> mk (reason, ty)
-      | (reason, ty) ->
-        mk (Reason.Rinstantiate (reason, SN.Typehints.this, r), ty)
+      map_reason ety_env.this_ty ~f:(function
+          | Reason.Rnone -> r
+          | Reason.Rexpr_dep_type (_, pos, s) ->
+            Reason.Rexpr_dep_type (r, pos, s)
+          | reason ->
+            if Option.is_some ety_env.from_class then
+              reason
+            else
+              Reason.Rinstantiate (reason, SN.Typehints.this, r))
     in
     let (env, ty) =
       match ety_env.from_class with
@@ -300,7 +304,6 @@ let rec localize ~ety_env env (dty : decl_ty) =
               ~allow_abstract_tconst,
             fst id ))
     in
-    let expansion_reason = get_reason ty in
     (* Elaborate reason with information about expression dependent types and
      * the original location of the Taccess type
      *)
@@ -322,7 +325,8 @@ let rec localize ~ety_env env (dty : decl_ty) =
       in
       Reason.Rtype_access (expand_reason, [(reason, taccess_string)])
     in
-    (env, with_reason ty @@ elaborate_reason expansion_reason)
+    let ty = map_reason ty ~f:elaborate_reason in
+    (env, ty)
   | (r, Tshape (shape_kind, tym)) ->
     let (env, tym) = ShapeFieldMap.map_env (localize ~ety_env) env tym in
     (env, mk (r, Tshape (shape_kind, tym)))
@@ -580,9 +584,11 @@ and localize_possibly_enforced_ty ~ety_env env ety =
   (env, { ety with et_type })
 
 and localize_cstr_ty ~ety_env env ty tp_name =
-  let (env, ety) = localize ~ety_env env ty in
-  let (r, ty_) = deref ety in
-  let ty = mk (Reason.Rcstr_on_generics (Reason.to_pos r, tp_name), ty_) in
+  let (env, ty) = localize ~ety_env env ty in
+  let ty =
+    map_reason ty ~f:(fun r ->
+        Reason.Rcstr_on_generics (Reason.to_pos r, tp_name))
+  in
   (env, ty)
 
 (* Localize an explicit type argument to a constructor or function. We
@@ -615,9 +621,22 @@ and localize_targ ~check_well_kinded env hint =
 
 (* See signature in .mli file for details *)
 and localize_targs_with_kinds
-    ~check_well_kinded ~is_method ~def_pos ~use_pos ~use_name env nkinds targl =
-  let tparam_count = List.length nkinds in
+    ~check_well_kinded
+    ~is_method
+    ~def_pos
+    ~use_pos
+    ~use_name
+    ?(check_explicit_targs = true)
+    ?(tparaml = [])
+    env
+    named_kinds
+    targl =
   let targ_count = List.length targl in
+  let tparam_count =
+    match List.length tparaml with
+    | 0 -> List.length named_kinds
+    | n -> n
+  in
   (* If there are explicit type arguments but too few or too many then
    * report an error *)
   if Int.( <> ) targ_count 0 && Int.( <> ) tparam_count targ_count then
@@ -641,41 +660,71 @@ and localize_targs_with_kinds
     List.map2_env
       env
       targl
-      (List.take nkinds targ_count)
+      (List.take named_kinds targ_count)
       (localize_targ_with_kind ~check_well_kinded)
   in
   (* Generate fresh type variables for the remainder *)
   let (env, implicit_targs) =
-    List.map_env env (List.drop nkinds targ_count) (fun env nkind ->
-        let (name, kind) = nkind in
-        let is_higher_kinded = KindDefs.Simple.get_arity kind > 0 in
-        let wildcard_hint =
-          (use_pos, Aast.Happly ((Pos.none, SN.Typehints.wildcard), []))
+    let mk_implicit_targ env (kind_name, kind) =
+      let wildcard_hint =
+        (use_pos, Aast.Happly ((Pos.none, SN.Typehints.wildcard), []))
+      in
+      if
+        check_well_kinded
+        && KindDefs.Simple.get_arity kind > 0
+        && Int.( = ) targ_count 0
+      then (
+        (* We only throw an error if the user didn't provide any type arguments at all.
+           Otherwise, if they provided some, but not all of them, n arity mismatch
+           triggers earlier in this function, independently from higher-kindedness *)
+        Errors.implicit_type_argument_for_higher_kinded_type
+          ~use_pos
+          ~def_pos:(fst kind_name)
+          (snd kind_name);
+        (env, (mk (Reason.none, Terr), wildcard_hint))
+      ) else
+        let (env, tvar) =
+          Env.fresh_type_reason
+            env
+            (Reason.Rtype_variable_generics (use_pos, snd kind_name, use_name))
         in
-        if check_well_kinded && is_higher_kinded && Int.( = ) targ_count 0 then (
-          (* We only throw an error if the user didn't provide any type arguments at all.
-             Otherwise, if they provided some, but not all of them, n arity mismatch
-             triggers earlier in this function, independently from higher-kindedness *)
-          let def_pos = fst name in
-          Errors.implicit_type_argument_for_higher_kinded_type
-            ~use_pos
-            ~def_pos
-            (snd name);
-          (env, (mk (Reason.none, Terr), wildcard_hint))
-        ) else
-          let (env, tvar) =
-            Env.fresh_type_reason
-              env
-              (Reason.Rtype_variable_generics (use_pos, snd name, use_name))
-          in
-          Typing_log.log_tparam_instantiation env use_pos (snd name) tvar;
-          (env, (tvar, wildcard_hint)))
+        Typing_log.log_tparam_instantiation env use_pos (snd kind_name) tvar;
+        (env, (tvar, wildcard_hint))
+    in
+    List.map_env env (List.drop named_kinds targ_count) mk_implicit_targ
   in
+  let check_for_explicit_user_attribute tparam (_, hint) =
+    let is_wildcard =
+      match hint with
+      | (_, Aast.Happly ((_, class_id), _))
+        when String.equal class_id SN.Typehints.wildcard ->
+        true
+      | _ -> false
+    in
+    if
+      Attributes.mem SN.UserAttributes.uaExplicit tparam.tp_user_attributes
+      && is_wildcard
+    then
+      Errors.require_generic_explicit tparam.tp_name (fst hint)
+  in
+  if check_explicit_targs then
+    List.iter2
+      tparaml
+      (explicit_targs @ implicit_targs)
+      ~f:check_for_explicit_user_attribute
+    |> ignore;
   (env, explicit_targs @ implicit_targs)
 
 and localize_targs
-    ~check_well_kinded ~is_method ~def_pos ~use_pos ~use_name env tparaml targl
-    =
+    ~check_well_kinded
+    ~is_method
+    ~def_pos
+    ~use_pos
+    ~use_name
+    ?(check_explicit_targs = true)
+    env
+    tparaml
+    targl =
   let nkinds = KindDefs.Simple.named_kinds_of_decl_tparams tparaml in
   localize_targs_with_kinds
     ~check_well_kinded
@@ -683,6 +732,8 @@ and localize_targs
     ~def_pos
     ~use_pos
     ~use_name
+    ~tparaml
+    ~check_explicit_targs
     env
     nkinds
     targl
@@ -819,6 +870,12 @@ and localize_ft
         in
         (env, { param with fp_type = ty }))
   in
+  let (env, implicit_params) =
+    let (env, capability) =
+      localize ~ety_env env ft.ft_implicit_params.capability
+    in
+    (env, { capability })
+  in
   let (env, ret) = localize_possibly_enforced_ty ~ety_env env ft.ft_ret in
   let ft =
     set_ft_ftk
@@ -833,6 +890,7 @@ and localize_ft
       ft with
       ft_arity = arity;
       ft_params = params;
+      ft_implicit_params = implicit_params;
       ft_ret = ret;
       ft_tparams = tparams;
       ft_where_constraints = where_constraints;
@@ -975,6 +1033,7 @@ and localize_targs_and_check_constraints
     ~check_constraints
     ~def_pos
     ~use_pos
+    ?(check_explicit_targs = true)
     env
     class_id
     from_class
@@ -987,6 +1046,7 @@ and localize_targs_and_check_constraints
       ~def_pos
       ~use_pos
       ~use_name:(Utils.strip_ns (snd class_id))
+      ~check_explicit_targs
       env
       tparaml
       hintl

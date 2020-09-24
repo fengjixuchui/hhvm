@@ -420,7 +420,7 @@ Type newColReturn(const IRInstruction* inst) {
   assertx(inst->is(NewCol, NewPair, NewColFromArray));
   auto getColClassType = [&](CollectionType ct) -> Type {
     auto name = collections::typeToString(ct);
-    auto cls = Unit::lookupUniqueClassInContext(name, inst->ctx(), nullptr);
+    auto cls = Class::lookupUniqueInContext(name, inst->ctx(), nullptr);
     if (cls == nullptr) return TObj;
     return Type::ExactObj(cls);
   };
@@ -545,10 +545,9 @@ Type outputType(const IRInstruction* inst, int /*dstId*/) {
     if (!allowBespokeArrayLikes()) return t;
     if (inst->isLayoutPreserving()) {
       assertx(inst->src(0)->type() <= TArrLike);
-      return inst->src(0)->type().arrSpec().vanilla() ? t.narrowToVanilla()
-                                                      : t.widenToBespoke();
+      return inst->src(0)->type().arrSpec().vanilla() ? t.narrowToVanilla() : t;
     } else if (inst->isLayoutAgnostic()) {
-      return t.widenToBespoke();
+      return t;
     } else {
       return t.narrowToVanilla();
     }
@@ -595,9 +594,6 @@ Type outputType(const IRInstruction* inst, int /*dstId*/) {
 #define DCall           return callReturn(inst);
 #define DGenIter        return genIterReturn(inst);
 #define DSubtract(n, t) return inst->src(n)->type() - t;
-#define DCns            return TUninit | TInitNull | TBool | \
-                               TInt | TDbl | TStr | TArr | \
-                               TVec | TDict | TKeyset | TRes;
 #define DUnion(...)     return unionReturn(inst, IdxSeq<__VA_ARGS__>{});
 #define DMemoKey        return memoKeyReturn(inst);
 #define DLvalOfPtr      return ptrToLvalReturn(inst);
@@ -646,7 +642,6 @@ Type outputType(const IRInstruction* inst, int /*dstId*/) {
 #undef DCall
 #undef DGenIter
 #undef DSubtract
-#undef DCns
 #undef DUnion
 #undef DMemoKey
 #undef DLvalOfPtr

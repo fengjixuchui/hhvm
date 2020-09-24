@@ -376,10 +376,9 @@ void raise_array_serialization_notice(SerializationSite src,
       tag.toString());
 }
 
-void
-raise_hack_arr_compat_array_producing_func_notice(const std::string& name) {
-  raise_notice("Hack Array Compat: Calling array producing function %s",
-               name.c_str());
+void raise_hack_arr_compat_cast_marked_array_notice(const ArrayData* ad) {
+  raise_notice("Hack Array Compat: Casting marked %s to Hack array",
+               getDataTypeString(ad->toDataType()).data());
 }
 
 namespace {
@@ -646,12 +645,15 @@ std::string param_type_error_message(
   }
   assertx(param_num > 0);
 
+  auto const isLegacy =
+    isArrayLikeType(type(actual_value)) &&
+    val(actual_value).parr->isLegacyArray();
   return folly::sformat(
     "{}() expects parameter {} to be {}, {} given",
     func_name,
     param_num,
     expected_type,
-    getDataTypeString(type(actual_value)).data());
+    getDataTypeString(type(actual_value), isLegacy).data());
 }
 
 void raise_param_type_warning(

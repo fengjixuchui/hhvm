@@ -263,11 +263,7 @@ fn print_include_region<W: Write>(
         option(w, p.to_str(), |w, p: &str| write!(w, "\n  {}", p))
     }
     fn print_if_exists<W: Write>(w: &mut W, p: &Path) -> Result<(), W::Error> {
-        if p.exists() {
-            print_path(w, p)
-        } else {
-            Ok(())
-        }
+        if p.exists() { print_path(w, p) } else { Ok(()) }
     }
     fn print_include<W: Write>(
         ctx: &mut Context,
@@ -700,6 +696,9 @@ fn print_class_special_attributes<W: Write>(
     }
     if hhas_attribute::has_foldable(user_attrs) {
         special_attributes.push("foldable")
+    }
+    if hhas_attribute::has_enum_class(user_attrs) {
+        special_attributes.push("enum_class")
     }
     if is_system_lib {
         special_attributes.extend(&["persistent", "builtin", "unique"])
@@ -1168,11 +1167,7 @@ fn print_instructions<W: Write>(
 }
 
 fn if_then<F: FnOnce() -> R, R>(cond: bool, f: F) -> Option<R> {
-    if cond {
-        Some(f())
-    } else {
-        None
-    }
+    if cond { Some(f()) } else { None }
 }
 
 fn print_fcall_args<W: Write>(
@@ -1619,7 +1614,6 @@ fn print_istype_op<W: Write>(w: &mut W, op: &IstypeOp) -> Result<(), W::Error> {
         Op::OpInt => w.write("Int"),
         Op::OpDbl => w.write("Dbl"),
         Op::OpStr => w.write("Str"),
-        Op::OpArr => w.write("Arr"),
         Op::OpObj => w.write("Obj"),
         Op::OpRes => w.write("Res"),
         Op::OpScalar => w.write("Scalar"),
@@ -1864,10 +1858,6 @@ fn print_misc<W: Write>(w: &mut W, misc: &InstructMisc) -> Result<(), W::Error> 
         M::MemoSetEager(None) => w.write("MemoSetEager L:0+0"),
         M::MemoSetEager(_) => Err(Error::fail("MemoSetEager needs an unnamed local")),
 
-        M::InitThisLoc(id) => {
-            w.write("InitThisLoc ")?;
-            print_local(w, id)
-        }
         M::OODeclExists(k) => concat_str_by(
             w,
             " ",
@@ -2666,7 +2656,7 @@ fn print_expr<W: Write>(
             print_expr(ctx, w, env, e2)
         }
         E_::Call(c) => {
-            let (_, e, _, es, unpacked_element) = &**c;
+            let (e, _, es, unpacked_element) = &**c;
             match e.as_id() {
                 Some(ast_defs::Id(_, call_id)) => {
                     w.write(lstrip(adjust_id(env, &call_id).as_ref(), "\\\\"))?

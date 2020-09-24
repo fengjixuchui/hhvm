@@ -1684,7 +1684,7 @@ folly::Optional<TypedValue> fromTypeVec(const std::vector<Type> &elems,
   auto var = ai.toVariant();
   if (tag.valid()) {
     assertx(RuntimeOption::EvalArrayProvenance);
-    arrprov::setTag<arrprov::Mode::Emplace>(var.asArrRef().get(), tag.get());
+    arrprov::setTag(var.asArrRef().get(), tag.get());
   }
   if (force_static) var.setEvalScalar();
   return tvReturn(std::move(var));
@@ -1727,7 +1727,7 @@ folly::Optional<TypedValue> fromTypeMap(const ArrayLikeMap<Key> &elems,
     if (tag.valid()) {
       assertx(RuntimeOption::EvalArrayProvenance);
       assertx(arrprov::arrayWantsTag(var.asCArrRef().get()));
-      arrprov::setTag<arrprov::Mode::Emplace>(var.asArrRef().get(), tag.get());
+      arrprov::setTag(var.asArrRef().get(), tag.get());
     }
     if (force_static) var.setEvalScalar();
     return tvReturn(std::move(var));
@@ -2697,10 +2697,9 @@ bool Type::checkInvariants() const {
     assert(!isKeyset || m_data.aval->isKeysetType());
     assert(!isDict || m_data.aval->isDictType());
     assertx(!RuntimeOption::EvalHackArrDVArrs || m_data.aval->isNotDVArray());
-    assertx(!m_data.aval->hasProvenanceData() || RO::EvalArrayProvenance);
-    assertx(!m_data.aval->hasProvenanceData() || bits() & kProvBits);
-    assertx(!m_data.aval->hasProvenanceData() ||
-            arrprov::getTag(m_data.aval).valid());
+    assertx(IMPLIES(RO::EvalArrayProvenance &&
+                    arrprov::getTag(m_data.aval).valid(),
+                    bits() & kProvBits));
     break;
   case DataTag::ArrLikePacked: {
     assert(!m_data.packed->elems.empty());
@@ -3838,9 +3837,6 @@ Type type_of_istype(IsTypeOp op) {
   case IsTypeOp::Class: return TCls;
   case IsTypeOp::Func:
     return TFunc;
-  case IsTypeOp::Arr:
-    if (!RO::EvalWidenIsArray) return php_arr;
-    /* fallthrough */
   case IsTypeOp::ArrLike:
     return RO::EvalIsCompatibleClsMethType ? TArrLikeCompat : TArrLike;
   case IsTypeOp::Scalar: always_assert(0);
@@ -6158,7 +6154,6 @@ bool could_copy_on_write(const Type& t) {
 
 bool is_type_might_raise(const Type& testTy, const Type& valTy) {
   auto const hackarr = RO::EvalHackArrDVArrs;
-  auto const BHackArr = BVec | BDict | BKeyset;
 
   // Explanation for the array-like type test behaviors:
   //
@@ -6179,8 +6174,7 @@ bool is_type_might_raise(const Type& testTy, const Type& valTy) {
     return valTy.couldBe(BCls);
   } else if (testTy == TArr || testTy == TArrCompat) {
     return mayLogProv ||
-           (RO::EvalIsVecNotices && !hackarr && valTy.couldBe(BClsMeth)) ||
-           (RO::EvalHackArrCompatIsArrayNotices && valTy.couldBe(BHackArr));
+           (RO::EvalIsVecNotices && !hackarr && valTy.couldBe(BClsMeth));
   } else if (testTy == TVArr || testTy == TVArrCompat) {
     return mayLogProv ||
            (RO::EvalIsVecNotices && valTy.couldBe(BClsMeth)) ||
@@ -6205,8 +6199,6 @@ bool is_type_might_raise(IsTypeOp testOp, const Type& valTy) {
   switch (testOp) {
     case IsTypeOp::Scalar:
       return false;
-    case IsTypeOp::Arr:
-      if (RO::EvalWidenIsArray && valTy.couldBe(BVec | BDict | BKeyset)) return true;
       /* fallthrough */
     default:
       return is_type_might_raise(type_of_istype(testOp), valTy);

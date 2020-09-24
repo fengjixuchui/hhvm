@@ -13,7 +13,6 @@ use crate::operator::{Assoc, Operator};
 use crate::parser_env::ParserEnv;
 use crate::parser_trait::{Context, ParserTrait};
 use crate::smart_constructors::{NodeType, SmartConstructors};
-use crate::source_text::SourceText;
 use crate::statement_parser::StatementParser;
 use crate::type_parser::TypeParser;
 use parser_core_types::lexable_token::LexableToken;
@@ -38,7 +37,7 @@ impl<P> BinaryExpressionPrefixKind<P> {
 
 pub struct ExpressionParser<'a, S, T>
 where
-    S: SmartConstructors<'a, T>,
+    S: SmartConstructors<T>,
     S::R: NodeType,
 {
     lexer: Lexer<'a, S::Token>,
@@ -48,12 +47,13 @@ where
     sc: S,
     precedence: usize,
     allow_as_expressions: bool,
+    in_expression_tree: bool,
     _phantom: PhantomData<S>,
 }
 
 impl<'a, S, T: Clone> std::clone::Clone for ExpressionParser<'a, S, T>
 where
-    S: SmartConstructors<'a, T>,
+    S: SmartConstructors<T>,
     S::R: NodeType,
 {
     fn clone(&self) -> Self {
@@ -66,13 +66,14 @@ where
             precedence: self.precedence,
             _phantom: self._phantom,
             allow_as_expressions: self.allow_as_expressions,
+            in_expression_tree: self.in_expression_tree,
         }
     }
 }
 
 impl<'a, S, T: Clone> ParserTrait<'a, S, T> for ExpressionParser<'a, S, T>
 where
-    S: SmartConstructors<'a, T>,
+    S: SmartConstructors<T>,
     S::R: NodeType,
 {
     fn make(
@@ -90,6 +91,7 @@ where
             errors,
             sc,
             allow_as_expressions: true,
+            in_expression_tree: false,
             _phantom: PhantomData,
         }
     }
@@ -155,11 +157,15 @@ where
 
 impl<'a, S, T: Clone> ExpressionParser<'a, S, T>
 where
-    S: SmartConstructors<'a, T>,
+    S: SmartConstructors<T>,
     S::R: NodeType,
 {
     fn allow_as_expressions(&self) -> bool {
         self.allow_as_expressions
+    }
+
+    fn in_expression_tree(&self) -> bool {
+        self.in_expression_tree
     }
 
     pub fn with_as_expressions<F, U>(&mut self, enabled: bool, f: F) -> U
@@ -399,10 +405,12 @@ where
                         str_maybe, StringLiteralKind::LiteralDoubleQuoted);
                         S!(make_prefixed_string_expression, self, qualified_name, str_)
                     }
-                    | TokenKind::Backtick => {
+                    | TokenKind::Backtick if !self.in_expression_tree() => {
                         let prefix = S!(make_simple_type_specifier, self, qualified_name);
                         let left_backtick = self.require_token(TokenKind::Backtick, Errors::error1065);
+                        self.in_expression_tree = true;
                         let expr = self.parse_expression_with_reset_precedence();
+                        self.in_expression_tree = false;
                         let right_backtick = self.require_token(TokenKind::Backtick, Errors::error1065);
                         S!(make_prefixed_code_expression, self, prefix, left_backtick, expr, right_backtick)
                     }
@@ -813,7 +821,7 @@ where
         //
         //
 
-        let merge = |token: S::Token, head: Option<S::Token>, source: &SourceText<'a>| {
+        let merge = |token: S::Token, head: Option<S::Token>| {
             // TODO: Assert that new head has no leading trivia, old head has no
             // trailing trivia.
             // Invariant: A token inside a list of string fragments is always a head,
@@ -858,7 +866,7 @@ where
                     let (l, _, _) = head.into_trivia_and_width();
                     let (_, _, t) = token.into_trivia_and_width();
                     // TODO: Make a "position" type that is a tuple of source and offset.
-                    Some(S::Token::make(k, source, o, w, l, t))
+                    Some(S::Token::make(k, o, w, l, t))
                 }
                 None => {
                     let token = match token.kind() {
@@ -974,10 +982,12 @@ where
             }
         };
 
-        let handle_left_brace = |parser: &mut Self,
-                                 left_brace: S::Token,
-                                 head: Option<S::Token>,
-                                 acc: &mut Vec<S::R>| {
+        let handle_left_brace = |
+            parser: &mut Self,
+            left_brace: S::Token,
+            head: Option<S::Token>,
+            acc: &mut Vec<S::R>,
+        | {
             // Note that here we use next_token_in_string because we need to know
             // whether there is trivia between the left brace and the $x which follows.
             let mut parser1 = parser.clone();
@@ -1000,7 +1010,7 @@ where
                     // TODO: Give an error.
                     // We got a { not followed by a $. Ignore it.
                     // TODO: Give a warning?
-                    merge(left_brace, head, parser.lexer.source())
+                    merge(left_brace, head)
                 }
             }
         };
@@ -1039,7 +1049,7 @@ where
                     _ => {
                         // We got a $ not followed by a { or variable name. Ignore it.
                         // TODO: Give a warning?
-                        merge(dollar, head, parser.lexer.source())
+                        merge(dollar, head)
                     }
                 }
             };
@@ -1051,7 +1061,7 @@ where
             let token = self.next_token_in_string(&literal_kind);
             match token.kind() {
                 TokenKind::HeredocStringLiteralTail | TokenKind::DoubleQuotedStringLiteralTail => {
-                    let head = merge(token, head, self.lexer.source());
+                    let head = merge(token, head);
                     put_opt(self, head, &mut acc);
                     break;
                 }
@@ -1063,7 +1073,7 @@ where
                     acc.push(expr)
                 }
                 TokenKind::Dollar => head = handle_dollar(self, token, head, &mut acc),
-                _ => head = merge(token, head, self.lexer.source()),
+                _ => head = merge(token, head),
             }
         }
 

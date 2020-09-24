@@ -53,6 +53,21 @@ let make_lazy_class_type ctx class_name sc =
   }
 
 module Classes = struct
+  (** This module is an abstraction layer over shallow vs folded decl,
+      and provides a view of classes which includes all
+      inherited members and their types.
+
+      In legacy folded decl, that view is constructed by merging a single
+      heap entry for the folded class with many entries for the types
+      of each of its members (those member entries are looked up lazily,
+      as needed).
+
+      In shallow decl, that view is constructed even more lazily,
+      by iterating over the shallow representation of the class
+      and its ancestors one at a time. *)
+
+  (** This cache caches the result of full class computations
+      (the class merged with all its inherited members.)  *)
   module Cache =
     SharedMem.LocalCache
       (StringKey)
@@ -194,13 +209,6 @@ module Api = struct
     match t with
     | Lazy lc -> Attrs.mem SN.UserAttributes.uaConst lc.sc.sc_user_attributes
     | Eager c -> c.tc_const
-
-  let ppl t =
-    Counters.count_decl_accessor @@ fun () ->
-    match t with
-    | Lazy lc ->
-      Attrs.mem SN.UserAttributes.uaProbabilisticModel lc.sc.sc_user_attributes
-    | Eager c -> c.tc_ppl
 
   let kind t =
     Counters.count_decl_accessor @@ fun () ->

@@ -186,11 +186,7 @@ void throwArrayIndexException(const ArrayData* ad, const int64_t index) {
 }
 
 void throwArrayKeyException(const ArrayData* ad, const StringData* key) {
-  if (ad->isVArray() && RO::EvalHackArrCompatNotices) {
-    raise_hackarr_compat_notice(
-      "Raising OutOfBoundsException for accessing string index of varray"
-    );
-  }
+  assertx(ad->isDArray() || ad->isDictType());
   throwOOBArrayKeyException(key, ad);
 }
 
@@ -235,16 +231,18 @@ void throwInvalidUnpackArgs() {
 }
 
 void raiseRxCallViolation(const ActRec* caller, const Func* callee) {
-  assertx(RuntimeOption::EvalRxEnforceCalls > 0);
+  assertx(RuntimeOption::EvalPureEnforceCalls > 0);
+  auto const callerIsPure = caller->func()->rxLevel() == RxLevel::Pure;
   auto const errMsg = folly::sformat(
-    "Call to {} '{}' from {} '{}' violates reactivity constraints.",
+    "Call to {} '{}' from {} '{}' violates {} constraints.",
     rxLevelToString(callee->rxLevel()),
     callee->fullName()->data(),
     rxLevelToString(caller->rxMinLevel()),
-    caller->func()->fullName()->data()
+    caller->func()->fullName()->data(),
+    callerIsPure ? "purity" : "reactivity"
   );
-
-  if (RuntimeOption::EvalRxEnforceCalls >= 2) {
+  if (RuntimeOption::EvalRxEnforceCalls >= 2 ||
+      (callerIsPure && RuntimeOption::EvalPureEnforceCalls >= 2)) {
     SystemLib::throwBadMethodCallExceptionObject(errMsg);
   } else {
     raise_warning(errMsg);

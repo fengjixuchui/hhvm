@@ -43,6 +43,7 @@ use std::{
     slice::Iter,
 };
 
+use crate::desugar_expression_tree::desugar;
 use crate::modifier;
 
 fn unescape_single(s: &str) -> std::result::Result<BString, escaper::InvalidString> {
@@ -72,18 +73,11 @@ pub enum ExprLocation {
     TopLevel,
     MemberSelect,
     InDoubleQuotedString,
-    InBacktickedString,
     AsStatement,
     RightOfAssignment,
     RightOfAssignmentInUsingStatement,
     RightOfReturn,
     UsingStatement,
-}
-
-impl ExprLocation {
-    fn in_string(self) -> bool {
-        self == ExprLocation::InDoubleQuotedString || self == ExprLocation::InBacktickedString
-    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -169,7 +163,7 @@ pub struct Env<'a> {
 
     // Cache none pos, lazy_static doesn't allow Rc.
     pos_none: Pos,
-    empty_ns_env: RcOc<NamespaceEnv>,
+    pub empty_ns_env: RcOc<NamespaceEnv>,
 
     pub saw_yield: bool, /* Information flowing back up */
     pub lifted_awaits: Option<LiftedAwaits>,
@@ -379,7 +373,7 @@ use parser_core_types::syntax::SyntaxVariant::*;
 
 trait Lowerer<'a, T, V>
 where
-    T: LexablePositionedToken<'a>,
+    T: LexablePositionedToken,
     Syntax<T, V>: PositionedSyntaxTrait,
     V: SyntaxValueWithKind + SyntaxValueType<T> + std::fmt::Debug,
 {
@@ -920,7 +914,10 @@ where
                         if args.len() == 1 {
                             let eq = |s| name.1.eq_ignore_ascii_case(s);
                             if (args[0].1.is_hfun()
-                                && (eq(rx::RX) || eq(rx::RX_LOCAL) || eq(rx::RX_SHALLOW)))
+                                && (eq(rx::RX)
+                                    || eq(rx::RX_LOCAL)
+                                    || eq(rx::RX_SHALLOW)
+                                    || eq(rx::PURE)))
                                 || (args[0].1.is_happly()
                                     && (eq(rx::MUTABLE)
                                         || eq(rx::MAYBE_MUTABLE)
@@ -1395,9 +1392,6 @@ where
                     (ExprLocation::InDoubleQuotedString, _) if env.codegen() => {
                         Ok(E_::String(Self::mk_str(expr, env, Self::unesc_dbl, s)))
                     }
-                    (ExprLocation::InBacktickedString, _) if env.codegen() => {
-                        Ok(E_::String(Self::mk_str(expr, env, unescape_backtick, s)))
-                    }
                     (_, Some(TK::OctalLiteral))
                         if env.is_typechecker() && !Self::is_num_octal_lit(s) =>
                     {
@@ -1480,9 +1474,10 @@ where
     ) -> Result<ast::Expr_> {
         env.check_stack_limit();
         use ast::Expr as E;
-        let split_args_vararg = |arg_list_node: &Syntax<T, V>,
-                                 e: &mut Env|
-         -> Result<(Vec<ast::Expr>, Option<ast::Expr>)> {
+        let split_args_vararg = |
+            arg_list_node: &Syntax<T, V>,
+            e: &mut Env,
+        | -> Result<(Vec<ast::Expr>, Option<ast::Expr>)> {
             let mut arg_list: Vec<_> = arg_list_node.syntax_node_to_list_skip_separator().collect();
             if let Some(last_arg) = arg_list.last() {
                 if let DecoratedExpression(c) = &last_arg.syntax {
@@ -1527,19 +1522,14 @@ where
                     _ => recv,
                 };
                 let (args, varargs) = split_args_vararg(args, e)?;
-                Ok(E_::mk_call(
-                    ast::CallType::Cnormal,
-                    recv,
-                    vec![],
-                    args,
-                    varargs,
-                ))
+                Ok(E_::mk_call(recv, vec![], args, varargs))
             };
-        let p_obj_get = |recv: &Syntax<T, V>,
-                         op: &Syntax<T, V>,
-                         name: &Syntax<T, V>,
-                         e: &mut Env|
-         -> Result<ast::Expr_> {
+        let p_obj_get = |
+            recv: &Syntax<T, V>,
+            op: &Syntax<T, V>,
+            name: &Syntax<T, V>,
+            e: &mut Env,
+        | -> Result<ast::Expr_> {
             if recv.is_object_creation_expression() && !e.codegen() {
                 Self::raise_parsing_error(recv, e, &syntax_error::invalid_constructor_method_call);
             }
@@ -1734,7 +1724,6 @@ where
                         let s = extract_unquoted_string(Self::text_str(expr, env), 0, expr.width())
                             .map_err(|e| Error::Failwith(e.msg))?;
                         Ok(E_::mk_call(
-                            ast::CallType::Cnormal,
                             Self::p_expr(recv, env)?,
                             vec![],
                             vec![E::new(literal_expression_pos, E_::String(s.into()))],
@@ -1781,13 +1770,7 @@ where
                                 }
                             }
                         }
-                        Ok(E_::mk_call(
-                            ast::CallType::Cnormal,
-                            recv,
-                            targs,
-                            args,
-                            varargs,
-                        ))
+                        Ok(E_::mk_call(recv, targs, args, varargs))
                     }
                 }
             }
@@ -1831,14 +1814,13 @@ where
                     }
                 }
             }
-            QualifiedName(_) => {
-                if location.in_string() {
+            QualifiedName(_) => match location {
+                ExprLocation::InDoubleQuotedString => {
                     let ast::Id(_, n) = Self::pos_qualified_name(node, env)?;
                     Ok(E_::String(n.into()))
-                } else {
-                    Ok(E_::mk_id(Self::pos_qualified_name(node, env)?))
                 }
-            }
+                _ => Ok(E_::mk_id(Self::pos_qualified_name(node, env)?)),
+            },
             VariableExpression(c) => Ok(E_::mk_lvar(Self::lid_from_pos_name(
                 pos,
                 &c.variable_expression,
@@ -1920,7 +1902,6 @@ where
                         Some(TK::Suspend) => Ok(E_::mk_suspend(expr)),
                         Some(TK::Clone) => Ok(E_::mk_clone(expr)),
                         Some(TK::Print) => Ok(E_::mk_call(
-                            ast::CallType::Cnormal,
                             E::new(
                                 pos.clone(),
                                 E_::mk_id(ast::Id(pos, special_functions::ECHO.into())),
@@ -2008,10 +1989,6 @@ where
                         Self::unesc_dbl,
                         Self::text_str(node, env),
                     )?)),
-                    (InBacktickedString, _) => Ok(E_::String(Self::wrap_unescaper(
-                        unescape_backtick,
-                        Self::text_str(node, env),
-                    )?)),
                     (MemberSelect, _)
                     | (TopLevel, _)
                     | (AsStatement, _)
@@ -2041,7 +2018,6 @@ where
             DefineExpression(c) => {
                 let name = Self::pos_name(&c.define_keyword, env)?;
                 Ok(E_::mk_call(
-                    ast::CallType::Cnormal,
                     mk_id_expr(name),
                     vec![],
                     c.define_argument_list
@@ -2101,10 +2077,12 @@ where
                 Self::p_hint(&c.cast_type, env)?,
                 Self::p_expr(&c.cast_operand, env)?,
             )),
-            PrefixedCodeExpression(c) => Ok(E_::mk_expression_tree(
-                Self::p_hint(&c.prefixed_code_prefix, env)?,
-                Self::p_expr(&c.prefixed_code_expression, env)?,
-            )),
+            PrefixedCodeExpression(c) => {
+                let e = Self::p_expr(&c.prefixed_code_expression, env)?;
+                let hint = Self::p_hint(&c.prefixed_code_prefix, env)?;
+                let desugared_e = desugar(&hint, &e, &env);
+                Ok(E_::mk_expression_tree(hint, e, Some(desugared_e)))
+            }
             ConditionalExpression(c) => {
                 let alter = Self::p_expr(&c.conditional_alternative, env)?;
                 let consequence = Self::mp_optional(Self::p_expr, &c.conditional_consequence, env)?;
@@ -2313,7 +2291,6 @@ where
                     static_: false,
                 };
                 Ok(E_::mk_call(
-                    ast::CallType::Cnormal,
                     E::new(pos, E_::mk_lfun(body, vec![])),
                     vec![],
                     vec![],
@@ -2409,7 +2386,7 @@ where
                     raise("Array-like class consts are not valid lvalues");
                 }
             }
-            Call(c) => match &(c.1).1 {
+            Call(c) => match &(c.0).1 {
                 Id(sid) if sid.1 == "tuple" => {
                     raise("Tuple cannot be used as an lvalue. Maybe you meant list?")
                 }
@@ -2492,11 +2469,13 @@ where
     ) -> Result<Vec<Either<Syntax<T, V>, &'b Syntax<T, V>>>> {
         let nodes = nodes.syntax_node_to_list_skip_separator();
         let mut state = (None, None, vec![]); // (start, end, result)
-        let combine = |state: &mut (
-            Option<&'b Syntax<T, V>>,
-            Option<&'b Syntax<T, V>>,
-            Vec<Either<Syntax<T, V>, &'b Syntax<T, V>>>,
-        )| {
+        let combine = |
+            state: &mut (
+                Option<&'b Syntax<T, V>>,
+                Option<&'b Syntax<T, V>>,
+                Vec<Either<Syntax<T, V>, &'b Syntax<T, V>>>,
+            ),
+        | {
             match (state.0, state.1) {
                 (Some(s), None) => state.2.push(Right(s)),
                 (Some(s), Some(e)) => {
@@ -3079,10 +3058,7 @@ where
                     let args = Self::could_map(Self::p_expr, &c.echo_expressions, e)?;
                     Ok(S::new(
                         pos.clone(),
-                        S_::mk_expr(ast::Expr::new(
-                            pos,
-                            E_::mk_call(ast::CallType::Cnormal, echo, vec![], args, None),
-                        )),
+                        S_::mk_expr(ast::Expr::new(pos, E_::mk_call(echo, vec![], args, None))),
                     ))
                 };
                 Self::lift_awaits_in_statement(f, node, env)
@@ -3103,10 +3079,7 @@ where
                     };
                     Ok(S::new(
                         pos.clone(),
-                        S_::mk_expr(ast::Expr::new(
-                            pos,
-                            E_::mk_call(ast::CallType::Cnormal, unset, vec![], args, None),
-                        )),
+                        S_::mk_expr(ast::Expr::new(pos, E_::mk_call(unset, vec![], args, None))),
                     ))
                 };
                 Self::lift_awaits_in_statement(f, node, env)
@@ -3984,10 +3957,11 @@ where
             }
             false
         };
-        let p_method_vis = |node: &Syntax<T, V>,
-                            name_pos: &Pos,
-                            env: &mut Env|
-         -> Result<ast::Visibility> {
+        let p_method_vis = |
+            node: &Syntax<T, V>,
+            name_pos: &Pos,
+            env: &mut Env,
+        | -> Result<ast::Visibility> {
             match Self::p_visibility_last_win(node, env)? {
                 None => {
                     Self::raise_hh_error(env, Naming::method_needs_visibility(name_pos.clone()));
@@ -4203,6 +4177,8 @@ where
                 let is_abstract = kinds.has(modifier::ABSTRACT);
                 let is_external = !is_abstract && c.methodish_function_body.is_external();
                 let user_attributes = Self::p_user_attributes(&c.methodish_attribute, env)?;
+                let cap = ast::TypeHint((), hdr.capability);
+                let unsafe_cap = ast::TypeHint((), hdr.unsafe_capability);
                 let method = ast::Method_ {
                     span: Self::p_fun_pos(node, env),
                     annotation: (),
@@ -4215,8 +4191,8 @@ where
                     where_constraints: hdr.constrs,
                     variadic: Self::determine_variadicity(&hdr.parameters),
                     params: hdr.parameters,
-                    cap: ast::TypeHint((), None), // TODO(T70095684)
-                    unsafe_cap: ast::TypeHint((), None), // TODO(T70095684)
+                    cap,
+                    unsafe_cap,
                     body: ast::FuncBody {
                         annotation: (),
                         ast: body,
@@ -4361,10 +4337,9 @@ where
                             let (hint, enum_) = match &ty.syntax {
                                 XHPEnumType(c) => {
                                     let p = Self::p_pos(ty, env);
-                                    let opt = !(&c.xhp_enum_optional.is_missing());
                                     let vals =
                                         Self::could_map(Self::p_expr, &c.xhp_enum_values, env)?;
-                                    (None, Some((p, opt, vals)))
+                                    (None, Some((p, vals)))
                                 }
                                 _ => (Some(Self::p_hint(ty, env)?), None),
                             };

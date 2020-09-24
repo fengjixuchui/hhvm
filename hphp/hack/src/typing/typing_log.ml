@@ -454,7 +454,7 @@ let rec reactivity_to_string env r =
     | Some ty -> " " ^ Typing_print.debug_decl env ty
   in
   match r with
-  | Nonreactive -> "nonreactive"
+  | Nonreactive -> "normal"
   | Local opt_ty -> from_decl opt_ty "local"
   | Shallow opt_ty -> from_decl opt_ty "shallow"
   | Reactive opt_ty -> from_decl opt_ty "reactive"
@@ -478,6 +478,7 @@ let rec reactivity_to_string env r =
     (match s with
     | None -> ""
     | Some s -> "(" ^ s ^ ")")
+  | CippGlobal -> "cipp_global"
 
 let lenv_as_value env lenv =
   let { per_cont_env; local_using_vars; local_reactive; local_mutability } =
@@ -555,7 +556,6 @@ let env_as_value env =
     in_try;
     in_case;
     inside_constructor;
-    inside_ppl_class;
     global_tpenv;
     log_levels = _;
     allow_wildcards;
@@ -575,7 +575,6 @@ let env_as_value env =
       ("in_try", bool_as_value in_try);
       ("in_case", bool_as_value in_case);
       ("inside_constructor", bool_as_value inside_constructor);
-      ("inside_ppl_class", bool_as_value inside_ppl_class);
       ("global_tpenv", tpenv_as_value env global_tpenv);
       ("allow_wildcards", bool_as_value allow_wildcards);
       ( "inference_env",
@@ -623,6 +622,7 @@ let hh_show p env ty =
 type log_structure =
   | Log_head of string * log_structure list
   | Log_type of string * Typing_defs.locl_ty
+  | Log_decl_type of string * Typing_defs.decl_ty
   | Log_type_i of string * Typing_defs.internal_type
 
 let log_with_level env key ~level log_f =
@@ -640,6 +640,11 @@ let log_types p env items =
               indentEnv ~color:(Normal Yellow) message (fun () -> go items)
             | Log_type (message, ty) ->
               let s = Typing_print.debug env ty in
+              lprintf (Bold Green) "%s: " message;
+              lprintf (Normal Green) "%s" s;
+              lnewline ()
+            | Log_decl_type (message, ty) ->
+              let s = Typing_print.debug_decl env ty in
               lprintf (Bold Green) "%s: " message;
               lprintf (Normal Green) "%s" s;
               lnewline ()
@@ -711,6 +716,34 @@ let log_intersection ~level env r ty1 ty2 ~inter_ty =
                 Log_type ("intersection", inter_ty);
               ] );
         ])
+
+let log_type_access ~level root (p, type_const_name) (env, result_ty) =
+  ( log_with_level env "tyconst" ~level @@ fun () ->
+    log_types
+      p
+      env
+      [
+        Log_head
+          ( "Accessing type constant " ^ type_const_name ^ " of",
+            [Log_type ("type", root); Log_type ("result", result_ty)] );
+      ] );
+  (env, result_ty)
+
+let log_localize ~level (decl_ty : decl_ty) (env, result_ty) =
+  ( log_with_level env "localize" ~level @@ fun () ->
+    let pos = Reason.to_pos @@ get_reason result_ty in
+    log_types
+      pos
+      env
+      [
+        Log_head
+          ( "Localizing",
+            [
+              Log_decl_type ("decl type", decl_ty);
+              Log_type ("result", result_ty);
+            ] );
+      ] );
+  (env, result_ty)
 
 let increment_feature_count env s =
   if GlobalOptions.tco_language_feature_logging (Env.get_tcopt env) then

@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_HPHP_ARRAY_H_
-#define incl_HPHP_HPHP_ARRAY_H_
+#pragma once
 
 #include "hphp/runtime/base/array-common.h"
 #include "hphp/runtime/base/array-data.h"
@@ -269,7 +268,8 @@ public:
   ) = delete;
 
   static ArrayData* MakeDictFromAPC(const APCArray* apc, bool isLegacy = false);
-  static ArrayData* MakeDArrayFromAPC(const APCArray* apc);
+  static ArrayData* MakeDArrayFromAPC(const APCArray* apc,
+                                      bool isMarked = false);
 
   static bool DictEqual(const ArrayData*, const ArrayData*);
   static bool DictNotEqual(const ArrayData*, const ArrayData*);
@@ -463,7 +463,7 @@ private:
 private:
   enum class AllocMode : bool { Request, Static };
 
-  static MixedArray* CopyMixed(const MixedArray& other, AllocMode, HeaderKind);
+  static MixedArray* CopyMixed(const MixedArray& other, AllocMode);
   static MixedArray* CopyReserve(const MixedArray* src, size_t expectedSize);
 
   // Slow paths used for MixedArrays with references or counted string keys.
@@ -600,4 +600,3 @@ HASH_TABLE_CHECK_OFFSETS(MixedArray, MixedArrayElm)
 
 }
 
-#endif // incl_HPHP_HPHP_ARRAY_H_

@@ -128,7 +128,7 @@ Class* get_cls(const Variant& class_or_object) {
     return class_or_object.toClassVal();
   }
 
-  return Unit::loadClass(class_or_object.toString().get());
+  return Class::load(class_or_object.toString().get());
 }
 
 const Func* get_method_func(const Class* cls, const String& meth_name) {
@@ -426,7 +426,7 @@ Variant HHVM_FUNCTION(hphp_invoke_method, const Variant& obj,
     Reflection::ThrowReflectionExceptionObject(s_invoke_non_object);
   }
 
-  auto const providedClass = Unit::loadClass(cls.get());
+  auto const providedClass = Class::load(cls.get());
   if (!providedClass) {
     raise_error("Call to undefined method %s::%s()", cls.data(), name.data());
   }
@@ -493,7 +493,7 @@ Variant HHVM_FUNCTION(hphp_get_static_property, const String& cls,
                                                 const String& prop,
                                                 bool force) {
   auto const sd = cls.get();
-  auto const class_ = Unit::lookupClass(sd);
+  auto const class_ = Class::lookup(sd);
   if (!class_) {
     raise_error("Non-existent class %s", sd->data());
   }
@@ -523,7 +523,7 @@ void HHVM_FUNCTION(hphp_set_static_property, const String& cls,
       "allowed in RepoAuthoritative mode");
   }
   auto const sd = cls.get();
-  auto const class_ = Unit::lookupClass(sd);
+  auto const class_ = Class::lookup(sd);
 
   if (!class_) raise_error("Non-existent class %s", sd->data());
 
@@ -1041,7 +1041,7 @@ static Array HHVM_METHOD(ReflectionFile, getAttributesNamespaced) {
 // helper for __construct
 static bool HHVM_METHOD(ReflectionFunction, __initName, const String& name) {
   if (name.isNull()) { return false; }
-  const Func* func = Unit::loadFunc(name.get());
+  const Func* func = Func::load(name.get());
   if (!func) { return false; }
   ReflectionFuncHandle::Get(this_)->setFunc(func);
   return true;
@@ -1297,7 +1297,7 @@ static bool HHVM_METHOD(ReflectionClass, hasMethod, const String& name) {
 
 namespace {
   const Class* get_class_from_name(const String& name) {
-    auto const cls = Unit::loadClass(name.get());
+    auto const cls = Class::load(name.get());
     if (!cls) {
       auto message = folly::sformat(
         "class {} could not be loaded",
@@ -2227,10 +2227,10 @@ struct ReflectionExtension final : Extension {
     loadSystemlib("reflection_hni");
 
     Reflection::s_ReflectionExceptionClass =
-      Unit::lookupClass(s_reflectionexception.get());
+      Class::lookup(s_reflectionexception.get());
     assertx(Reflection::s_ReflectionExceptionClass);
     Reflection::s_ReflectionExtensionClass =
-      Unit::lookupClass(s_reflectionextension.get());
+      Class::lookup(s_reflectionextension.get());
     assertx(Reflection::s_ReflectionExtensionClass);
   }
 } s_reflection_extension;
@@ -2341,7 +2341,7 @@ static void set_debugger_reflection_method_info(Array& ret, const Func* func,
 
 Array get_function_info(const String& name) {
   if (name.get() == nullptr) return null_array;
-  const Func* func = Unit::loadFunc(name.get());
+  const Func* func = Func::load(name.get());
   if (!func) return null_array;
   auto ret = Array::CreateDArray();
   ret.set(s_name,       make_tv<KindOfPersistentString>(func->name()));

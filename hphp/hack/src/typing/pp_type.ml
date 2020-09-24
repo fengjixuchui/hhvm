@@ -288,6 +288,8 @@ and show_shape_kind : shape_kind -> string =
 and pp_reactivity : Format.formatter -> reactivity -> unit =
  fun fmt r ->
   match r with
+  (* Nonreactive functions are printed in error messages as "normal", *)
+  (* But for this printing purpose, we print the same as the ast structure *)
   | Nonreactive -> Format.pp_print_string fmt "Nonreactive"
   | RxVar v ->
     Format.pp_print_string fmt "RxVar {";
@@ -327,6 +329,7 @@ and pp_reactivity : Format.formatter -> reactivity -> unit =
     Format.pp_print_string fmt "CippLocal {";
     Format.pp_print_string fmt s;
     Format.pp_print_string fmt "}"
+  | CippGlobal -> Format.pp_print_string fmt "CippGlobal"
 
 and show_reactivity : reactivity -> string =
  (fun x -> Format.asprintf "%a" pp_reactivity x)
@@ -374,6 +377,17 @@ and pp_fun_elt : Format.formatter -> fun_elt -> unit =
 
 and show_fun_elt x = Format.asprintf "%a" pp_fun_elt x
 
+and pp_fun_implicit_params :
+    type a. Format.formatter -> a ty fun_implicit_params -> unit =
+ fun fmt x ->
+  Format.fprintf fmt "@[<2>{ ";
+
+  Format.fprintf fmt "@[%s =@ " "capability";
+  pp_ty fmt x.capability;
+  Format.fprintf fmt "@]";
+
+  Format.fprintf fmt "@ }@]"
+
 and pp_fun_type : type a. Format.formatter -> a ty fun_type -> unit =
  fun fmt x ->
   Format.fprintf fmt "@[<2>{ ";
@@ -413,6 +427,11 @@ and pp_fun_type : type a. Format.formatter -> a ty fun_type -> unit =
 
   Format.fprintf fmt "@[%s =@ " "ft_params";
   pp_fun_params fmt x.ft_params;
+  Format.fprintf fmt "@]";
+  Format.fprintf fmt ";@ ";
+
+  Format.fprintf fmt "@[%s =@ " "ft_implicit_params";
+  pp_fun_implicit_params fmt x.ft_implicit_params;
   Format.fprintf fmt "@]";
   Format.fprintf fmt ";@ ";
 
@@ -721,6 +740,17 @@ and pp_class_const : Format.formatter -> class_const -> unit =
 and show_class_const : class_const -> string =
  (fun x -> Format.asprintf "%a" pp_class_const x)
 
+and pp_const_decl : Format.formatter -> const_decl -> unit =
+ fun fmt x ->
+  Format.fprintf fmt "(@[";
+  Pos.pp fmt x.cd_pos;
+  Format.fprintf fmt ",@ ";
+  pp_ty fmt x.cd_type;
+  Format.fprintf fmt "@])"
+
+and show_const_elt : const_decl -> string =
+ (fun x -> Format.asprintf "%a" pp_const_decl x)
+
 and pp_requirement : Format.formatter -> requirement -> unit =
  fun fmt (a0, a1) ->
   Format.fprintf fmt "(@[";
@@ -765,11 +795,6 @@ and pp_class_type : Format.formatter -> class_type -> unit =
 
   Format.fprintf fmt "@[%s =@ " "tc_const";
   Format.fprintf fmt "%B" x.tc_const;
-  Format.fprintf fmt "@]";
-  Format.fprintf fmt ";@ ";
-
-  Format.fprintf fmt "@[%s =@ " "tc_ppl";
-  Format.fprintf fmt "%B" x.tc_ppl;
   Format.fprintf fmt "@]";
   Format.fprintf fmt ";@ ";
 

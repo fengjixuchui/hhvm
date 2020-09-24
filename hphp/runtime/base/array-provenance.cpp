@@ -48,48 +48,120 @@ TRACE_SET_MOD(runtime);
 
 namespace {
 
-static auto constexpr kKindMask = 0x7;
+using TagID = uint32_t;
+using TagStorage = std::pair<LowPtr<const StringData>, int32_t>;
 
-Tag::Kind extractKind(const char* ptr) {
-  return static_cast<Tag::Kind>(uintptr_t(ptr) & kKindMask);
+static constexpr TagID kKindBits = 3;
+static constexpr TagID kKindMask = 0x7;
+static constexpr size_t kMaxTagID = (1 << (8 * sizeof(TagID) - kKindBits)) - 1;
+
+struct TagHashCompare {
+  bool equal(TagStorage a, TagStorage b) const {
+    return a == b;
+  }
+  size_t hash(TagStorage a) const {
+    static_assert(IMPLIES(use_lowptr, sizeof(TagStorage) == sizeof(int64_t)));
+    if constexpr (use_lowptr) {
+      auto result = int64_t{};
+      memcpy(&result, &a, sizeof(TagStorage));
+      return hash_int64(result);
+    }
+    auto const first = safe_cast<int64_t>(uintptr_t(a.first.get()));
+    return hash_int64_pair(first, a.second);
+  }
+};
+
+using TagIDs = tbb::concurrent_hash_map<TagStorage, TagID, TagHashCompare>;
+
+static std::atomic<size_t> s_numTags;
+static TagIDs s_tagIDs;
+
+TagStorage* getRawTagStorageArray() {
+  assertx(!use_lowptr || RO::EvalArrayProvenance);
+  static auto const result = reinterpret_cast<TagStorage*>(
+    malloc((kMaxTagID + 1) * sizeof(TagStorage))
+  );
+  return result;
 }
 
-const StringData* extractName(const char* ptr) {
-  return reinterpret_cast<const StringData*>(uintptr_t(ptr) & ~kKindMask);
+TagStorage getTagStorage(TagID i) {
+  return getRawTagStorageArray()[i];
 }
 
-const char* packKindAndName(Tag::Kind kind, const StringData* name) {
-  auto const ptr = reinterpret_cast<uintptr_t>(name);
-  assertx(!(ptr & kKindMask));
-  return reinterpret_cast<const char*>(ptr + static_cast<uintptr_t>(kind));
+TagID getTagID(TagStorage tag) {
+  {
+    TagIDs::const_accessor it;
+    if (s_tagIDs.find(it, tag)) return it->second;
+  }
+  TagIDs::accessor it;
+  if (s_tagIDs.insert(it, tag)) {
+    auto const i = s_numTags++;
+    always_assert(i <= kMaxTagID);
+    getRawTagStorageArray()[i] = tag;
+    it->second = i;
+  }
+  return it->second;
 }
 
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 
-Tag::Tag(Tag::Kind kind, const StringData* name, int32_t line)
-  : m_name(packKindAndName(kind, name))
-  , m_line(line) {}
+Tag::Tag(const Func* func, Offset offset) {
+  // Builtins have empty filenames, so use the unit; else use func->filename
+  // in order to resolve the original filenames of flattened traits.
+  auto const unit = func->unit();
+  auto const file = func->isBuiltin() ? unit->filepath() : func->filename();
+  *this = Known(file, unit->getLineNumber(offset));
+}
+
+Tag::Tag(Tag::Kind kind, const StringData* name, int32_t line) {
+  auto const k = TagID(kind);
+  assertx(k < kKindMask);
+  assertx((k & kKindMask) == k);
+  assertx((k & uintptr_t(name)) == 0);
+  assertx(kind != Kind::Invalid);
+
+  if (kind == Kind::Known) {
+    m_id = k | (getTagID({name, line}) << kKindBits);
+  } else if (uintptr_t(name) <= std::numeric_limits<TagID>::max()) {
+    m_id = k | safe_cast<TagID>(uintptr_t(name));
+  } else {
+    m_id = kKindMask | (getTagID({name, -int(k)}) << kKindBits);
+  }
+
+  // Check that we can undo tag compression and get back the original values.
+  assertx(this->kind() == kind);
+  assertx(this->name() == name);
+  assertx(this->line() == line);
+}
 
 Tag::Kind Tag::kind() const {
-  return extractKind(m_name.get());
+  auto const bits = m_id & kKindMask;
+  if (bits < kKindMask) return Tag::Kind(bits);
+  return Tag::Kind(-getTagStorage(size_t(m_id) >> kKindBits).second);
 }
 const StringData* Tag::name() const {
-  return extractName(m_name.get());
+  auto const bits = m_id & kKindMask;
+  if (bits < TagID(Kind::Known)) {
+    return reinterpret_cast<StringData*>(m_id & ~kKindMask);
+  }
+  return getTagStorage(size_t(m_id) >> kKindBits).first;
 }
 int32_t Tag::line() const {
-  return kind() == Kind::Known ? m_line : -1;
+  auto const bits = m_id & kKindMask;
+  if (bits != TagID(Kind::Known)) return -1;
+  return getTagStorage(size_t(m_id) >> kKindBits).second;
 }
 uint64_t Tag::hash() const {
-  return folly::hash::hash_combine(uintptr_t(m_name.get()), m_line);
+  return m_id;
 }
 
 bool Tag::operator==(const Tag& other) const {
-  return m_name == other.m_name && m_line == other.m_line;
+  return m_id == other.m_id;
 }
 bool Tag::operator!=(const Tag& other) const {
-  return m_name != other.m_name || m_line != other.m_line;
+  return m_id != other.m_id;
 }
 
 std::string Tag::toString() const {
@@ -148,45 +220,55 @@ bool arrayWantsTag(const AsioExternalThreadEvent* ev) {
   return true;
 }
 
+/*
+ * Mutable access to a given object's provenance slot.
+ */
+void Tag::set(ArrayData* ad, Tag tag) {
+  assertx(ad->isVanilla());
+  static_assert(sizeof(decltype(ad->m_extra)) == sizeof(Tag));
+  ad->m_extra = folly::bit_cast<uint32_t>(tag);
+}
+
+void Tag::set(APCArray* a, Tag tag) {
+  auto mem = reinterpret_cast<Tag*>(
+    reinterpret_cast<char*>(a) - kAPCTagSize
+  );
+  *mem = tag;
+}
+
+void Tag::set(AsioExternalThreadEvent* a, Tag tag) {
+  if (tag.valid()) {
+    rl_array_provenance->tags[a] = tag;
+  } else {
+    rl_array_provenance->tags.erase(a);
+  }
+}
+
+/*
+ * Const access to a given object's provenance slot.
+ */
+Tag Tag::get(const ArrayData* ad) {
+  assertx(ad->isVanilla());
+  static_assert(sizeof(decltype(ad->m_extra)) == sizeof(Tag));
+  return folly::bit_cast<Tag>(ad->m_extra);
+}
+
+Tag Tag::get(const APCArray* a) {
+  auto const mem = reinterpret_cast<const Tag*>(
+    reinterpret_cast<const char*>(a) - kAPCTagSize
+  );
+  return *mem;
+}
+
+Tag Tag::get(const AsioExternalThreadEvent* a) {
+  auto const& table = rl_array_provenance->tags;
+  auto const it = table.find(a);
+  if (it == table.end()) return {};
+  assertx(it->second.valid());
+  return it->second;
+}
+
 namespace {
-
-/*
- * Whether provenance for a given array should be request-local.
- *
- * True for refcounted request arrays, else false.
- */
-bool wants_local_prov(const ArrayData* ad) { return ad->isRefCounted(); }
-constexpr bool wants_local_prov(const APCArray* a) { return false; }
-constexpr bool wants_local_prov(const AsioExternalThreadEvent* ev) {
-  return true;
-}
-
-/*
- * Get the provenance slot for a non-request array.
- */
-Tag& tag_for_nonreq(ArrayData* ad) {
-  assertx(arrayWantsTag(ad));
-  assertx(!wants_local_prov(ad));
-
-  auto const mem = reinterpret_cast<char*>(ad)
-    - sizeof(Tag)
-    - (ad->hasStrKeyTable() ? sizeof(StrKeyTable) : 0)
-    - (ad->hasApcTv() ? sizeof(APCTypedValue) : 0);
-
-  return *reinterpret_cast<Tag*>(mem);
-}
-
-Tag& tag_for_nonreq(APCArray* a) {
-  auto const mem = reinterpret_cast<char*>(a) - sizeof(Tag);
-  return *reinterpret_cast<Tag*>(mem);
-}
-
-Tag& tag_for_nonreq(AsioExternalThreadEvent*) {
-  always_assert(false); // only req-local provenance is supported
-}
-
-template<typename A>
-Tag tag_for_nonreq(const A* a) { return tag_for_nonreq(const_cast<A*>(a)); }
 
 /*
  * Used to override the provenance tag reported for ArrayData*'s in a given
@@ -213,111 +295,64 @@ Tag tag_for_nonreq(const A* a) { return tag_for_nonreq(const_cast<A*>(a)); }
  */
 thread_local folly::Optional<Tag> tl_tag_override = folly::none;
 
-template<typename A>
-Tag getTagImpl(const A* a) {
-  using ProvenanceTable = decltype(rl_array_provenance->tags);
-
-  auto const get = [] (
-    const A* a,
-    const ProvenanceTable& tbl
-  ) -> Tag {
-    auto const it = tbl.find(a);
-    if (it == tbl.cend()) return {};
-    assertx(it->second.valid());
-    return it->second;
-  };
-
-  if (wants_local_prov(a)) {
-    return get(a, rl_array_provenance->tags);
-  } else {
-    return tag_for_nonreq(a);
-  }
-}
-
-template<Mode mode, typename A>
-bool setTagImpl(A* a, Tag tag) {
-  assertx(tag.valid());
-  if (!arrayWantsTag(a)) return false;
-
-  if (wants_local_prov(a)) {
-    assertx(mode == Mode::Emplace || !getTag(a) || tl_tag_override);
-    rl_array_provenance->tags[a] = tag;
-  } else {
-    tag_for_nonreq(a) = tag;
-  }
-  return true;
-}
-
-template<typename A>
-void clearTagImpl(const A* a) {
-  if (!arrayWantsTag(a)) return;
-
-  if (wants_local_prov(a)) {
-    rl_array_provenance->tags.erase(a);
-  } else {
-    tag_for_nonreq(a) = Tag{};
-  }
-}
-
-
 } // namespace
 
 Tag getTag(const ArrayData* ad) {
+  assertx(RO::EvalArrayProvenance);
   if (tl_tag_override) return *tl_tag_override;
-  if (!ad->hasProvenanceData()) return {};
-  auto const tag = getTagImpl(ad);
-  assertx(tag.valid());
-  return tag;
+  return Tag::get(ad);
 }
+
 Tag getTag(const APCArray* a) {
-  return getTagImpl(a);
+  assertx(RO::EvalArrayProvenance);
+  return Tag::get(a);
 }
+
 Tag getTag(const AsioExternalThreadEvent* ev) {
-  return getTagImpl(ev);
+  assertx(RO::EvalArrayProvenance);
+  return Tag::get(ev);
 }
 
-template<Mode mode>
 void setTag(ArrayData* ad, Tag tag) {
-  if (setTagImpl<mode>(ad, tag)) {
-    ad->setHasProvenanceData(true);
-  }
+  assertx(RO::EvalArrayProvenance);
+  assertx(tag.valid());
+  if (!arrayWantsTag(ad)) return;
+  Tag::set(ad, tag);
 }
-template<Mode mode>
+
 void setTag(APCArray* a, Tag tag) {
-  setTagImpl<mode>(a, tag);
+  assertx(RO::EvalArrayProvenance);
+  assertx(tag.valid());
+  if (!arrayWantsTag(a)) return;
+  Tag::set(a, tag);
 }
 
-template <Mode mode>
 void setTag(AsioExternalThreadEvent* ev, Tag tag) {
-  setTagImpl<mode>(ev, tag);
+  assertx(RO::EvalArrayProvenance);
+  assertx(tag.valid());
+  if (!arrayWantsTag(ev)) return;
+  Tag::set(ev, tag);
 }
-
-template void setTag<Mode::Insert>(ArrayData*, Tag);
-template void setTag<Mode::Emplace>(ArrayData*, Tag);
-template void setTag<Mode::Insert>(APCArray*, Tag);
-template void setTag<Mode::Emplace>(APCArray*, Tag);
-template void setTag<Mode::Insert>(AsioExternalThreadEvent*, Tag);
-template void setTag<Mode::Emplace>(AsioExternalThreadEvent*, Tag);
 
 void clearTag(ArrayData* ad) {
-  ad->setHasProvenanceData(false);
-  clearTagImpl(ad);
+  Tag::set(ad, {});
 }
+
 void clearTag(APCArray* a) {
-  clearTagImpl(a);
+  Tag::set(a, {});
 }
+
 void clearTag(AsioExternalThreadEvent* ev) {
-  clearTagImpl(ev);
+  Tag::set(ev, {});
 }
 
 void reassignTag(ArrayData* ad) {
   if (arrayWantsTag(ad)) {
     if (auto const tag = tagFromPC()) {
-      setTag<Mode::Emplace>(ad, tag);
+      setTag(ad, tag);
       return;
     }
   }
-
   clearTag(ad);
 }
 
@@ -363,6 +398,8 @@ TagOverride::~TagOverride() {
 }
 
 Tag tagFromPC() {
+  if (!RO::EvalArrayProvenance) return {};
+
   auto log_violation = [&](const char* why) {
     auto const rate = RO::EvalLogArrayProvenanceDiagnosticsSampleRate;
     if (StructuredLog::coinflip(rate)) {
@@ -388,17 +425,8 @@ Tag tagFromPC() {
     return {};
   }
 
-  auto const make_tag = [&] (
-    const ActRec* fp,
-    Offset offset
-  ) {
-    auto const func = fp->func();
-    auto const unit = fp->unit();
-    // Builtins have empty filenames, so use the unit; else use func->filename
-    // in order to resolve the original filenames of flattened traits.
-    auto const file = func->isBuiltin() ? unit->filepath() : func->filename();
-    auto const line = unit->getLineNumber(offset);
-    return Tag { file, line };
+  auto const make_tag = [&] (const ActRec* fp, Offset offset) {
+    return Tag { fp->func(), offset };
   };
 
   auto const skip_frame = [] (const ActRec* fp) {
@@ -413,13 +441,8 @@ Tag tagFromPC() {
 
 Tag tagFromSK(SrcKey sk) {
   assert(sk.valid());
-  auto const unit = sk.unit();
-  auto const func = sk.func();
-  // Builtins have empty filenames, so use the unit; else use func->filename
-  // in order to resolve the original filenames of flattened traits.
-  auto const file = func->isBuiltin() ? unit->filepath() : func->filename();
-  auto const line = unit->getLineNumber(sk.offset());
-  return Tag { file, line };
+  if (!RO::EvalArrayProvenance) return {};
+  return Tag { sk.func(), sk.offset() };
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -433,7 +456,6 @@ struct MutationState {
   Mutation& mutation;
   const char* function_name;
   bool recursive = true;
-  bool raised_object_notice = false;
   bool raised_stack_notice = false;
 };
 
@@ -477,12 +499,7 @@ ArrayData* apply_mutation(TypedValue tv, State& state,
     return nullptr;
   }
 
-  if (isObjectType(type(tv)) && !state.raised_object_notice) {
-    auto const cls = val(tv).pobj->getClassName().data();
-    raise_notice("%s called on object: %s", state.function_name, cls);
-    state.raised_object_notice = true;
-    return nullptr;
-  } else if (!isArrayLikeType(type(tv))) {
+  if (!isArrayLikeType(type(tv))) {
     return nullptr;
   }
 
@@ -581,7 +598,6 @@ TypedValue markTvImpl(TypedValue in, bool legacy, bool recursive) {
     } else {
       auto state = MutationState<decltype(unmark_tv)>{
         unmark_tv, "array_unmark_legacy", recursive};
-      state.raised_object_notice = true;
       return apply_mutation(in, state);
     }
   }();
@@ -598,13 +614,11 @@ TypedValue tagTvImpl(TypedValue in, int64_t flags) {
     if (!tag) tag = arrprov::tagFromPC();
     if (!tag->valid()) return nullptr;
     auto result = copy_if_needed(ad, cow);
-    arrprov::setTag<arrprov::Mode::Emplace>(result, *tag);
+    arrprov::setTag(result, *tag);
     return cow ? result : nullptr;
   };
 
   auto state = MutationState<decltype(tag_tv)>{tag_tv, "tag_provenance_here"};
-  // don't raise notice on objects in tag_provenance_here
-  state.raised_object_notice = true;
   auto const ad = apply_mutation(in, state);
   return ad ? make_array_like_tv(ad) : tvReturn(tvAsCVarRef(&in));
 }

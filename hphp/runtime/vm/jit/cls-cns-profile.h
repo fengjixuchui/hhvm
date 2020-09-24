@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_JIT_CLS_CNS_PROFILE_H_
-#define incl_HPHP_JIT_CLS_CNS_PROFILE_H_
+#pragma once
 
 #include <folly/dynamic.h>
 
@@ -51,7 +50,7 @@ struct ClsCnsProfile {
   /*
    * Register a use of a class constant
    */
-  const TypedValue* reportClsCns(const Class* cls, const StringData* cns);
+  TypedValue reportClsCns(const Class* cls, const StringData* cns);
 
   /*
    * Aggregate two ClsCnsProfiles.
@@ -67,5 +66,3 @@ private:
 ///////////////////////////////////////////////////////////////////////////////
 
 }}
-
-#endif

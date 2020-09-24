@@ -392,6 +392,7 @@ struct HSLFileDescriptor {
   void close() {
     switch (m_type) {
       case Type::FD:
+        FileAwait::closeAllForFD(m_fd);
         throw_errno_if_minus_one(::close(fd()));
         s_fds_to_close->erase(m_fd);
         m_fd = -1;
@@ -1315,7 +1316,7 @@ struct OSExtension final : Extension {
     HHVM_FALIAS(HH\\Lib\\_Private\\_OS\\fork_and_execve, HSL_os_fork_and_execve);
 
     loadSystemlib();
-    s_FileDescriptorClass = Unit::lookupClass(s_FQHSLFileDescriptor.get());
+    s_FileDescriptorClass = Class::lookup(s_FQHSLFileDescriptor.get());
     assertx(s_FileDescriptorClass);
   }
 

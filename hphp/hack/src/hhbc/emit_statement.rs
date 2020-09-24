@@ -101,7 +101,7 @@ pub fn emit_stmt(e: &mut Emitter, env: &mut Env, stmt: &tast::Stmt) -> Result {
                 instr::popc(),
             ])),
             a::Expr_::Call(c) => {
-                if let (_, a::Expr(_, a::Expr_::Id(sid)), _, exprs, None) = c.as_ref() {
+                if let (a::Expr(_, a::Expr_::Id(sid)), _, exprs, None) = c.as_ref() {
                     let ft = hhbc_id::function::Type::from_ast_name(&sid.1);
                     let fname = ft.to_raw_string();
                     if fname.eq_ignore_ascii_case("unset") {
@@ -465,11 +465,12 @@ fn emit_using(e: &mut Emitter, env: &mut Env, pos: &Pos, using: &tast::UsingStmt
                 tfr::cleanup_try_body(&body)
             };
 
-            let emit_finally = |e: &mut Emitter,
-                                local: local::Type,
-                                has_await: bool,
-                                is_block_scoped: bool|
-             -> InstrSeq {
+            let emit_finally = |
+                e: &mut Emitter,
+                local: local::Type,
+                has_await: bool,
+                is_block_scoped: bool,
+            | -> InstrSeq {
                 let (epilogue, async_eager_label) = if has_await {
                     let after_await = e.label_gen_mut().next_regular();
                     (
@@ -571,10 +572,11 @@ fn emit_switch(
     let break_label = e.label_gen_mut().next_regular();
     let has_default = cl.iter().any(|c| c.is_default());
 
-    let emit_cases = |env: &mut Env,
-                      e: &mut Emitter,
-                      cases: &[tast::Case]|
-     -> Result<(InstrSeq, InstrSeq, Label)> {
+    let emit_cases = |
+        env: &mut Env,
+        e: &mut Emitter,
+        cases: &[tast::Case],
+    | -> Result<(InstrSeq, InstrSeq, Label)> {
         match cases.split_last() {
             None => {
                 return Err(Unrecoverable(
@@ -1060,7 +1062,7 @@ fn emit_iterator_key_value_storage(
                     &pos,
                     "Cannot re-assign $this",
                 ));
-            } else if !(superglobals::is_superglobal(&name) || name == superglobals::GLOBALS) {
+            } else if !(superglobals::is_superglobal(&name)) {
                 return Ok(Some(name.into()));
             }
         };
@@ -1507,7 +1509,6 @@ pub fn emit_markup(
         let call_expr = tast::Expr(
             Pos::make_none(),
             tast::Expr_::mk_call(
-                tast::CallType::Cnormal,
                 tast::Expr(
                     Pos::make_none(),
                     tast::Expr_::mk_id(ast_defs::Id(Pos::make_none(), fname)),

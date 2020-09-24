@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_PROCESS_H_
-#define incl_HPHP_PROCESS_H_
+#pragma once
 
 #include <atomic>
 #include <cassert>
@@ -151,6 +150,14 @@ struct Process {
    * Get memory usage in MB by a process.
    */
   static int64_t GetMemUsageMb();
+
+  /**
+   * Get the total systems cpu delay in milliseconds.
+   *
+   * The cpu delay measure the total amount of time that a processes were
+   * runnable, but not running because the CPUs were busy.
+   */
+  static int64_t GetSystemCPUDelayMS();
 
   /**
    * Get the number of threads running in the current process.
@@ -316,4 +323,3 @@ struct Process {
 ///////////////////////////////////////////////////////////////////////////////
 }
 
-#endif

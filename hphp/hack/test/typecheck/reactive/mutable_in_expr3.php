@@ -2,7 +2,8 @@
 
 class A_f11 {
   <<__Rx, __Mutable>>
-    public function f(): A_f11 {
+  public function f(): A_f11 {
+    return new A_f11();
   }
 }
 

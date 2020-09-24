@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_JIT_GUARD_CONSTRAINT_H_
-#define incl_HPHP_JIT_GUARD_CONSTRAINT_H_
+#pragma once
 
 #include "hphp/runtime/base/datatype.h"
 #include "hphp/runtime/vm/jit/type.h"
@@ -167,10 +166,9 @@ bool typeFitsConstraint(Type t, GuardConstraint gc);
  *
  * If constrainValue is called with (t24, DataTypeSpecialized), relaxConstraint
  * will be called with (DataTypeSpecialized, Obj<C>|InitNull, Obj). After a few
- * iterations it will determine that constraining Obj with
- * DataTypeCountness will still allow the result type of the AssertType
- * instruction to satisfy DataTypeSpecialized, because relaxType(Obj,
- * DataTypeCountness) == Obj.
+ * iterations it will determine that constraining Obj to DataTypeCountnessInit
+ * will still allow the result type of the AssertType instruction to satisfy
+ * DataTypeSpecialized, because relaxType(Obj, DataTypeCountnessInit) == Obj.
  */
 GuardConstraint relaxConstraint(GuardConstraint origGc,
                                 Type knownType, Type toRelax);
@@ -186,4 +184,3 @@ GuardConstraint applyConstraint(GuardConstraint origGc, GuardConstraint newGc);
 
 #include "hphp/runtime/vm/jit/guard-constraint-inl.h"
 
-#endif

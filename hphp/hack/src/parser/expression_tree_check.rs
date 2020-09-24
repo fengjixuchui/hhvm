@@ -6,7 +6,6 @@
 
 use oxidized::{
     aast,
-    aast_defs::CallType,
     aast_visitor::{visit, AstParams, Node, Visitor},
     ast_defs::*,
     pos::Pos,
@@ -50,6 +49,7 @@ impl<'ast> Visitor<'ast> for Checker {
             Expr(_) => {}
             Return(_) => {}
             If(_) => {}
+            While(_) => {}
             // Primarily used for if without else, but also used for standalone ;.
             Noop => {}
             // Ban any other statement syntax inside expression trees.
@@ -70,10 +70,22 @@ impl<'ast> Visitor<'ast> for Checker {
 
         // Ensure the context tracks whether we're in a backtick.
         match &e.1 {
-            ExpressionTree(_) => {
+            ExpressionTree(et) => {
                 c.in_expression_tree = true;
-                let res = e.recurse(c, self);
+
+                // Only run the syntax check on the original syntax
+                // from the user. Ignore the desugared expression.
+                let user_syntax = &et.1;
+                let res = user_syntax.accept(c, self);
+
                 c.in_expression_tree = false;
+                return res;
+            }
+            ETSplice(e) => {
+                let previous_state = c.in_expression_tree;
+                c.in_expression_tree = false;
+                let res = e.accept(c, self);
+                c.in_expression_tree = previous_state;
                 return res;
             }
             _ => {
@@ -86,25 +98,26 @@ impl<'ast> Visitor<'ast> for Checker {
 
         if c.in_expression_tree {
             let valid_syntax = match &e.1 {
-                // Allow integer and string literals.
+                // Allow integer, string, boolean and null literals.
                 Int(_) => true,
                 String(_) => true,
+                True | False | Null => true,
                 // Allow local variables $foo.
                 Lvar(_) => true,
-                // Only allow + for binary operators.
                 Binop(bop) => match **bop {
+                    // Allow the addition operator.
                     (Bop::Plus, _, _) => true,
+                    // Allow $x = 1, but not $x += 1.
+                    (Bop::Eq(None), _, _) => true,
                     _ => false,
                 },
                 // Allow simple function calls.
                 Call(call) => match &**call {
-                    // Ban call_user_func(...)
-                    (CallType::CuserFunc, _, _, _, _) => false,
                     // Ban variadic calls foo(...$x);
-                    (CallType::Cnormal, _, _, _, Some(_)) => false,
+                    (_, _, _, Some(_)) => false,
                     // Ban generic type arguments foo<X, Y>();
-                    (CallType::Cnormal, _, targs, _, _) if !targs.is_empty() => false,
-                    (CallType::Cnormal, recv, _targs, args, _variadic) => {
+                    (_, targs, _, _) if !targs.is_empty() => false,
+                    (recv, _targs, args, _variadic) => {
                         // Only allow direct function calls, so allow
                         // foo(), but don't allow (foo())().
                         match recv.1 {

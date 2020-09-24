@@ -71,6 +71,8 @@ struct Env<'a> {
     in_using: bool,
     /// Global compiler/hack options
     options: &'a Options,
+    /// For debugger eval
+    for_debugger_eval: bool,
 }
 
 #[derive(Default, Clone)]
@@ -87,9 +89,10 @@ impl<'a> Env<'a> {
         function_count: usize,
         defs: &Program,
         options: &'a Options,
+        for_debugger_eval: bool,
     ) -> Result<Self> {
         let scope = Scope::toplevel();
-        let all_vars = get_vars(&scope, false, &vec![], Either::Left(&defs))?;
+        let all_vars = get_vars(&vec![], Either::Left(&defs))?;
 
         Ok(Self {
             pos: Pos::make_none(),
@@ -103,20 +106,21 @@ impl<'a> Env<'a> {
             defined_function_count: function_count,
             in_using: false,
             options,
+            for_debugger_eval,
         })
     }
 
     fn with_function_like_(
         &mut self,
         e: ScopeItem<'a>,
-        is_closure_body: bool,
+        _is_closure_body: bool,
         params: &[FunParam],
         pos: Pos,
         body: &Block,
     ) -> Result<()> {
         self.pos = pos;
         self.scope.push_item(e);
-        let all_vars = get_vars(&self.scope, is_closure_body, params, Either::Right(body))?;
+        let all_vars = get_vars(params, Either::Right(body))?;
         Ok(self.variable_scopes.push(Variables {
             parameter_names: get_parameter_names(params),
             all_vars,
@@ -352,9 +356,7 @@ fn add_var(env: &Env, st: &mut State, var: &str) {
     // If it's bound as a parameter or definite assignment, don't add it
     // Also don't add the pipe variable and superglobals
     (should_capture_var(env, var))
-        && !(var == special_idents::DOLLAR_DOLLAR
-            || superglobals::GLOBALS == var
-            || superglobals::is_superglobal(var))
+        && !(var == special_idents::DOLLAR_DOLLAR || superglobals::is_superglobal(var))
     {
         st.captured_vars.add(var.to_string())
     }
@@ -383,20 +385,8 @@ fn add_generic(env: &mut Env, st: &mut State, var: &str) {
     }
 }
 
-fn get_vars(
-    scope: &Scope,
-    is_closure_body: bool,
-    params: &[FunParam],
-    body: ast_body::AstBody,
-) -> Result<HashSet<String>> {
-    use decl_vars::{vars_from_ast, Flags};
-    let mut flags = Flags::empty();
-    flags.set(Flags::HAS_THIS, scope.has_this());
-    flags.set(Flags::IS_TOPLEVEL, scope.is_toplevel());
-    flags.set(Flags::IS_IN_STATIC_METHOD, scope.is_in_static_method());
-    flags.set(Flags::IS_CLOSURE_BODY, is_closure_body);
-    let res = vars_from_ast(params, &body, flags).map_err(unrecoverable);
-    res
+fn get_vars(params: &[FunParam], body: ast_body::AstBody) -> Result<HashSet<String>> {
+    return decl_vars::vars_from_ast(params, &body).map_err(unrecoverable);
 }
 
 fn get_parameter_names(params: &[FunParam]) -> HashSet<String> {
@@ -850,7 +840,6 @@ fn convert_meth_caller_to_func_ptr<'a>(
     };
     let mangle_name = string_utils::mangle_meth_caller(cls, fname);
     let fun_handle: Expr_ = Expr_::mk_call(
-        CallType::Cnormal,
         expr_id("\\__systemlib\\meth_caller".into()),
         vec![],
         vec![Expr(pos(), Expr_::mk_string(mangle_name.clone().into()))],
@@ -865,14 +854,12 @@ fn convert_meth_caller_to_func_ptr<'a>(
     let assert_invariant = Expr(
         pos(),
         Expr_::mk_call(
-            CallType::Cnormal,
             expr_id("\\HH\\invariant".into()),
             vec![],
             vec![
                 Expr(
                     pos(),
                     Expr_::mk_call(
-                        CallType::Cnormal,
                         expr_id("\\is_a".into()),
                         vec![],
                         vec![
@@ -896,7 +883,6 @@ fn convert_meth_caller_to_func_ptr<'a>(
     let meth_caller_handle = Expr(
         pos(),
         Expr_::mk_call(
-            CallType::Cnormal,
             Expr(
                 pos(),
                 Expr_::ObjGet(Box::new((
@@ -1139,7 +1125,15 @@ impl<'ast, 'a> VisitorMut<'ast> for ClosureConvertVisitor<'a> {
         *e = match e_owned {
             Expr_::Efun(x) => convert_lambda(env, self, x.0, Some(x.1))?,
             Expr_::Lfun(x) => convert_lambda(env, self, x.0, None)?,
-            Expr_::Lvar(id) => {
+            Expr_::Lvar(id_orig) => {
+                let id = if env.for_debugger_eval
+                    && local_id::get_name(&id_orig.1) == special_idents::THIS
+                    && env.scope.is_in_debugger_eval_fun()
+                {
+                    Box::new(Lid(id_orig.0, (0, "$__debugger$this".to_string())))
+                } else {
+                    id_orig
+                };
                 add_var(env, &mut self.state, local_id::get_name(&id.1));
                 Expr_::Lvar(id)
             }
@@ -1154,7 +1148,7 @@ impl<'ast, 'a> VisitorMut<'ast> for ClosureConvertVisitor<'a> {
             }
             Expr_::Call(mut x)
                 if {
-                    if let Expr_::Id(ref id) = (x.1).1 {
+                    if let Expr_::Id(ref id) = (x.0).1 {
                         let name = strip_id(id);
                         ["hh\\meth_caller", "meth_caller"]
                             .iter()
@@ -1169,7 +1163,7 @@ impl<'ast, 'a> VisitorMut<'ast> for ClosureConvertVisitor<'a> {
                     }
                 } =>
             {
-                if let [Expr(pc, cls), Expr(pf, func)] = &mut *x.3 {
+                if let [Expr(pc, cls), Expr(pf, func)] = &mut *x.2 {
                     match (&cls, func.as_string()) {
                         (Expr_::ClassConst(cc), Some(fname))
                             if string_utils::is_class(&(cc.1).1) =>
@@ -1245,13 +1239,13 @@ impl<'ast, 'a> VisitorMut<'ast> for ClosureConvertVisitor<'a> {
                 }
             }
             Expr_::Call(x)
-                if (x.1)
+                if (x.0)
                     .as_class_get()
                     .and_then(|(id, _)| id.as_ciexpr())
                     .and_then(|x| x.as_id())
                     .map(string_utils::is_parent)
                     .unwrap_or(false)
-                    || (x.1)
+                    || (x.0)
                         .as_class_const()
                         .and_then(|(id, _)| id.as_ciexpr())
                         .and_then(|x| x.as_id())
@@ -1264,13 +1258,13 @@ impl<'ast, 'a> VisitorMut<'ast> for ClosureConvertVisitor<'a> {
                 res
             }
             Expr_::Call(mut x)
-                if x.1
+                if x.0
                     .as_id()
                     .map(|id| id.1.eq_ignore_ascii_case("tuple"))
                     .unwrap_or_default() =>
             {
                 // replace tuple with varray
-                let call_args = mem::replace(&mut x.3, vec![]);
+                let call_args = mem::replace(&mut x.2, vec![]);
                 let mut res = Expr_::mk_varray(None, call_args);
                 res.recurse(env, self.object())?;
                 res
@@ -1348,7 +1342,7 @@ fn extract_debugger_main(
     all_defs: &mut Program,
 ) -> std::result::Result<(), String> {
     let (stmts, mut defs): (Vec<Def>, Vec<Def>) = all_defs.drain(..).partition(|x| x.is_stmt());
-    let mut vars = decl_vars::vars_from_ast(&[], &Either::Left(&stmts), decl_vars::Flags::empty())?
+    let mut vars = decl_vars::vars_from_ast(&[], &Either::Left(&stmts))?
         .into_iter()
         .collect::<Vec<_>>();
     // TODO(hrust) sort is only required when comparing Rust/Ocaml, remove sort after emitter shipped
@@ -1376,13 +1370,7 @@ fn extract_debugger_main(
                 p(),
                 Stmt_::mk_expr(Expr(
                     p(),
-                    Expr_::mk_call(
-                        CallType::Cnormal,
-                        id("unset"),
-                        vec![],
-                        vec![lv(&name)],
-                        None,
-                    ),
+                    Expr_::mk_call(id("unset"), vec![], vec![lv(&name)], None),
                 )),
             );
             Stmt(
@@ -1408,10 +1396,7 @@ fn extract_debugger_main(
         .iter()
         .map(|name| {
             let checkfunc = id("\\__systemlib\\__debugger_is_uninit");
-            let isuninit = Expr(
-                p(),
-                Expr_::mk_call(CallType::Cnormal, checkfunc, vec![], vec![lv(name)], None),
-            );
+            let isuninit = Expr(p(), Expr_::mk_call(checkfunc, vec![], vec![lv(name)], None));
             let obj = Expr(
                 p(),
                 Expr_::mk_new(
@@ -1429,6 +1414,7 @@ fn extract_debugger_main(
             Stmt(p(), Stmt_::mk_if(isuninit, vec![set], vec![]))
         })
         .collect();
+    vars.push("$__debugger$this".into());
     vars.push("$__debugger_exn$output".into());
     let params: Vec<_> = vars
         .iter()
@@ -1500,6 +1486,7 @@ pub fn convert_toplevel_prog(e: &mut Emitter, defs: &mut Program) -> Result<()> 
         1,
         defs,
         e.options(),
+        e.for_debugger_eval,
     )?;
     *defs = flatten_ns(defs);
     let ns = RcOc::new(empty_namespace);

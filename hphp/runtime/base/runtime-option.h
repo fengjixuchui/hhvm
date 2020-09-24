@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_RUNTIME_OPTION_H_
-#define incl_HPHP_RUNTIME_OPTION_H_
+#pragma once
 
 #include <folly/dynamic.h>
 #include <folly/experimental/io/FsUtil.h>
@@ -86,7 +85,6 @@ struct RepoOptions {
   H(bool,           AbstractStaticProps,              false)          \
   H(bool,           DisableUnsetClassConst,           false)          \
   H(bool,           DisallowFuncPtrsInConstants,      false)          \
-  E(bool,           EmitFuncPointers,                 true)           \
   E(bool,           EmitInstMethPointers,             false)          \
   H(bool,           AllowUnstableFeatures,            false)          \
   H(bool,           EnableXHPClassModifier,           true)           \
@@ -95,6 +93,7 @@ struct RepoOptions {
   H(bool,           DisableArrayCast,                 true)           \
   H(bool,           DisableArrayTypehint,             true)           \
   H(bool,           EnableFirstClassFunctionPointers, false)          \
+  H(bool,           EnableEnumClasses,                false)          \
   /**/
 
   /**/
@@ -658,7 +657,7 @@ struct RuntimeOption {
   F(bool, JitRequireWriteLease,        false)                           \
   F(uint64_t, JitRelocationSize,       kJitRelocationSizeDefault)       \
   F(uint64_t, JitMatureSize,           125 << 20)                       \
-  F(bool, JitMatureAfterWarmup,        true)                            \
+  F(bool, JitMatureAfterWarmup,        false)                           \
   F(double, JitMaturityExponent,       1.)                              \
   F(bool, JitTimer,                    kJitTimerDefault)                \
   F(int, JitConcurrently,              1)                               \
@@ -841,6 +840,7 @@ struct RuntimeOption {
   F(uint32_t, JitWarmupStatusBytes,    ((25 << 10) + 1))                \
   F(uint32_t, JitWarmupMaxCodeGenRate, 20000)                           \
   F(uint32_t, JitWarmupRateSeconds,    64)                              \
+  F(uint32_t, JitWarmupMinFillFactor,  10)                              \
   F(uint32_t, JitWriteLeaseExpiration, 1500) /* in microseconds */      \
   F(int, JitRetargetJumps,             1)                               \
   /* Sync VM reg state for all native calls. */                         \
@@ -1094,13 +1094,14 @@ struct RuntimeOption {
   F(bool, HackArrCompatFBSerializeHackArraysNotices, false)             \
   /* Raise notices on intish-cast (which may use an is_array check) */  \
   F(bool, HackArrCompatIntishCastNotices, false)                        \
-  /* Raise notices when is_array is called with any hack array */       \
-  F(bool, HackArrCompatIsArrayNotices, false)                           \
   /* Raise notices when is_vec or is_dict  is called with a v/darray */ \
   F(bool, HackArrCompatIsVecDictNotices, false)                         \
   F(bool, HackArrCompatSerializeNotices, false)                         \
   /* Raise notices when fb_compact_*() would change behavior */         \
   F(bool, HackArrCompatCompactSerializeNotices, false)                  \
+  /* Raise notices when we cast a marked dvarray to a vec or a marked   \
+   * darray to a dict (implicitly clearing the legacy mark). */         \
+  F(bool, HackArrCompatCastMarkedArrayNotices, false)                   \
   /* When this flag is on, d/varray constructions are marked. */        \
   F(bool, HackArrDVArrMark, false)                                      \
   /* When this flag is on, var_dump outputs d/varrays. */               \
@@ -1209,12 +1210,14 @@ struct RuntimeOption {
    */                                                                   \
   F(int32_t, ForbidUnserializeIncompleteClass, 0)                       \
   F(int32_t, RxEnforceCalls, 0)                                         \
+  F(int32_t, PureEnforceCalls, 0)                                       \
   /*                                                                    \
    * 0 - Nothing                                                        \
    * 1 - Warn                                                           \
    * 2 - Fail unit verification (i.e. fail to load it)                  \
    */                                                                   \
   F(int32_t, RxVerifyBody, 0)                                           \
+  F(int32_t, PureVerifyBody, 0)                                         \
   F(bool, RxIsEnabled, EvalRxPretendIsEnabled)                          \
   /*                                                                    \
    * Controls behavior on reflection to default value expressions       \
@@ -1296,14 +1299,8 @@ struct RuntimeOption {
   /* When set:
    * - `is_array` becomes equivalent to `is_any_array` or
    *  `isTvArrayLike` instead of being a strict PHP array check.
-   * - For safety, we still log when these calls receive Hack arrays.
-   *   See `SuppressWidenIsArrayLogs`.
    */                                                                   \
-  F(bool, WidenIsArray, false)                                          \
-  F(bool, WidenIsArrayLogs, true)                                       \
   F(bool, EnablePerFileCoverage, false)                                 \
-  /* Should we use the autoload map from the repo */                    \
-  F(bool, UseRepoAutoloadMap, true)                                     \
   F(bool, LogOnIsArrayFunction, false)                                  \
   /* Unit prefetching options */                                        \
   F(uint32_t, UnitPrefetcherMaxThreads, 0)                              \
@@ -1335,7 +1332,6 @@ public:
   static std::string RepoCentralFileUser;
   static std::string RepoCentralFileGroup;
   static bool RepoAllowFallbackPath;
-  static std::string RepoEvalMode;
   static std::string RepoJournal;
   static bool RepoCommit;
   static bool RepoDebugInfo;
@@ -1443,4 +1439,3 @@ inline bool unitPrefetchingEnabled() {
 ///////////////////////////////////////////////////////////////////////////////
 }
 
-#endif // incl_HPHP_RUNTIME_OPTION_H_

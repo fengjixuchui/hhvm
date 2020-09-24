@@ -429,7 +429,7 @@ module Typing = struct
     | ContravariantThis
     | InstanceofAlwaysFalseDEPRECATED
     | InstanceofAlwaysTrueDEPRECATED
-    | AmbiguousMember
+    | AmbiguousMemberDEPRECATED
     | InstanceofGenericClassnameDEPRECATED
     | RequiredFieldIsOptional
     | FinalProperty
@@ -525,22 +525,22 @@ module Typing = struct
     | CallSiteReactivityMismatch
     | RxParameterConditionMismatch
     | AmbiguousObjectAccess
-    | ExtendPPL
+    | ExtendPPLDEPRECATED
     | ReassignMaybeMutableVar
     | MaybeMutableArgumentMismatch
     | ImmutableArgumentMismatch
     | ImmutableCallOnMutable
     | InvalidCallMaybeMutable
     | MutabilityMismatch
-    | InvalidPPLCall
-    | InvalidPPLStaticCall
+    | InvalidPPLCallDEPRECATED
+    | InvalidPPLStaticCallDEPRECATED
     | TypeTestInLambdaDEPRECATED
     | InvalidTraversableInRx
     | ReassignMutableThis
     | MutableExpressionAsMultipleMutableArguments
     | InvalidUnsetTargetInRx
     | CoroutineOutsideExperimental
-    | PPLMethPointer
+    | PPLMethPointerDEPRECATED
     | InvalidTruthinessTestDEPRECATED
     | RePrefixedNonString
     | BadRegexPattern
@@ -652,7 +652,13 @@ module Typing = struct
     | ReifiedFunctionReference
     | ClassMethAbstractCall
     | KindMismatch
-    | UnboundNameTypeConstantAccess (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
+    | UnboundNameTypeConstantAccess
+    | UnknownInformationFlow
+    | CallsiteCIPPMismatch
+    | NonpureFunctionCall
+    | IncompatibleEnumInclusion
+    | RedeclaringClassishConstant
+    | CallCoeffects (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
   [@@deriving enum, show { with_path = false }]
 
   let err_code = to_enum

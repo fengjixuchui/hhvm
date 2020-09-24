@@ -245,7 +245,7 @@ void ArrayData::GetScalarArray(ArrayData** parr, arrprov::Tag tag) {
   auto const DEBUG_ONLY inserted = s_arrayDataMap.insert(ad).second;
   assertx(inserted);
 
-  if (tag.valid()) arrprov::setTag<arrprov::Mode::Emplace>(ad, tag);
+  if (tag.valid()) arrprov::setTag(ad, tag);
   return replace(ad);
 }
 
@@ -707,13 +707,6 @@ ArrayData* ArrayData::Create(TypedValue name, TypedValue value) {
 ALWAYS_INLINE
 bool ArrayData::EqualHelper(const ArrayData* ad1, const ArrayData* ad2,
                             bool strict) {
-  // There are only two cases where we should call this slow, generic method:
-  //  1. We have two PHP arrays.
-  //  2. We have two Hack arrays (of same type), and at least one is bespoke.
-  assertx((ad1->isPHPArrayType() && ad2->isPHPArrayType()) ||
-          (ad1->toDataType() == ad2->toDataType()));
-  assertx(IMPLIES(ad1->isHackArrayType(), !bothVanilla(ad1, ad2)));
-
   if (ad1 == ad2) return true;
   if (!ArrayData::dvArrayEqual(ad1, ad2)) {
     if (checkHACCompare() &&
@@ -756,13 +749,6 @@ bool ArrayData::EqualHelper(const ArrayData* ad1, const ArrayData* ad2,
 
 ALWAYS_INLINE
 int64_t ArrayData::CompareHelper(const ArrayData* ad1, const ArrayData* ad2) {
-  // There are only two cases where we should call this slow, generic method:
-  //  1. We have two PHP arrays.
-  //  2. We have two vecs, and at least one is bespoke.
-  assertx((ad1->isPHPArrayType() && ad2->isPHPArrayType()) ||
-          (ad1->isVecType() && ad2->isVecType()));
-  assertx(IMPLIES(ad1->isVecType(), !bothVanilla(ad1, ad2)));
-
   if (!ArrayData::dvArrayEqual(ad1, ad2)) {
     if (ad1->isVArray()) throw_varray_compare_exception();
     if (ad1->isDArray()) throw_darray_compare_exception();
@@ -830,11 +816,11 @@ bool ArrayData::Lte(const ArrayData* ad1, const ArrayData* ad2) {
 }
 
 bool ArrayData::Gt(const ArrayData* ad1, const ArrayData* ad2) {
-  return 0 > CompareHelper(ad2, ad1); // Not symmetric; Order matters here.
+  return CompareHelper(ad1, ad2) > 0;
 }
 
 bool ArrayData::Gte(const ArrayData* ad1, const ArrayData* ad2) {
-  return 0 >= CompareHelper(ad2, ad1); // Not symmetric; Order matters here.
+  return CompareHelper(ad1, ad2) >= 0;
 }
 
 int64_t ArrayData::Compare(const ArrayData* ad1, const ArrayData* ad2) {
@@ -868,13 +854,8 @@ void ArrayData::getNotFound(int64_t k) const {
 }
 
 void ArrayData::getNotFound(const StringData* k) const {
-  // For vecs (and not varrays), we throw an InvalidArgumentException
-  if (isVecType()) throwInvalidArrayKeyException(k, this);
-  if (RO::EvalHackArrCompatNotices) {
-    raise_hackarr_compat_notice(
-      "Raising OutOfBoundsException for accessing string index of varray"
-    );
-  }
+  // For varrays and vecs, we throw an InvalidArgumentException
+  if (isVArray() || isVecType()) throwInvalidArrayKeyException(k, this);
   throwOOBArrayKeyException(k, this);
 }
 
@@ -1099,7 +1080,7 @@ ArrayData* tagArrProvImpl(ArrayData* ad, const SrcArr* src) {
   auto const do_tag = [] (ArrayData* ad, arrprov::Tag tag) {
     if (ad->isStatic()) return tagStaticArr(ad, tag);
 
-    arrprov::setTag<arrprov::Mode::Emplace>(ad, tag);
+    arrprov::setTag(ad, tag);
     return ad;
   };
 
@@ -1171,9 +1152,11 @@ void ArrayData::setLegacyArray(bool legacy) {
   /* TODO(jgriego) we should be asserting that the
    * mark-ee should have provenance here but it's not
    * safe and sane yet */
-  if (legacy && !isLegacyArray() && hasProvenanceData()) {
+  if (legacy &&
+      !isLegacyArray() &&
+      RO::EvalArrayProvenance &&
+      arrprov::getTag(this).valid()) {
     arrprov::clearTag(this);
-    setHasProvenanceData(false);
   }
   if (isVanilla()) {
     m_aux16 = (m_aux16 & ~kLegacyArray) | (legacy ? kLegacyArray : 0);

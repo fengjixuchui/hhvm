@@ -396,7 +396,6 @@ Type typeOpToType(IsTypeOp op) {
   case IsTypeOp::VArray:
   case IsTypeOp::DArray:
   case IsTypeOp::ArrLike:
-  case IsTypeOp::Arr:
   case IsTypeOp::PHPArr:
   case IsTypeOp::Scalar: not_reached();
   }
@@ -445,7 +444,7 @@ void maybeLogSerialization(IRGS& env, SSATmp* arr, SerializationSite site) {
   gen(env, RaiseArraySerializeNotice, cns(env, site), arr);
 }
 
-SSATmp* isArrayImpl(IRGS& env, SSATmp* src, bool log_on_hack_arrays) {
+SSATmp* isPHPArrayImpl(IRGS& env, SSATmp* src) {
   MultiCond mc{env};
 
   mc.ifTypeThen(src, TVArr|TDArr, [&](SSATmp* src) {
@@ -460,28 +459,6 @@ SSATmp* isArrayImpl(IRGS& env, SSATmp* src, bool log_on_hack_arrays) {
         gen(env, RaiseNotice, cns(env, msg));
       }
       return cns(env, true);
-    });
-  }
-
-  auto const hacLogging = [&](const char* msg) {
-    if (!RO::EvalHackArrCompatIsArrayNotices) return;
-    gen(env, RaiseHackArrCompatNotice, cns(env, makeStaticString(msg)));
-  };
-
-  if (!curFunc(env)->isBuiltin() &&
-      RO::EvalHackArrCompatIsArrayNotices &&
-      log_on_hack_arrays) {
-    mc.ifTypeThen(src, TVec, [&](SSATmp* src) {
-      hacLogging(Strings::HACKARR_COMPAT_VEC_IS_ARR);
-      return cns(env, false);
-    });
-    mc.ifTypeThen(src, TDict, [&](SSATmp* src) {
-      hacLogging(Strings::HACKARR_COMPAT_DICT_IS_ARR);
-      return cns(env, false);
-    });
-    mc.ifTypeThen(src, TKeyset, [&](SSATmp* src) {
-      hacLogging(Strings::HACKARR_COMPAT_KEYSET_IS_ARR);
-      return cns(env, false);
     });
   }
 
@@ -574,7 +551,7 @@ SSATmp* isDVArrayImpl(IRGS& env, SSATmp* src, IsTypeOp subop) {
   return mc.elseDo([&]{ return cns(env, false); });
 }
 
-SSATmp* isArrLikeImpl(IRGS& env, SSATmp* src, bool log_on_hack_arrays) {
+SSATmp* isArrLikeImpl(IRGS& env, SSATmp* src) {
   MultiCond mc{env};
 
   // We eventually want ClsMeth to be its own DataType, so we must log.
@@ -586,18 +563,6 @@ SSATmp* isArrLikeImpl(IRGS& env, SSATmp* src, bool log_on_hack_arrays) {
       }
       return cns(env, true);
     });
-  }
-
-  if (log_on_hack_arrays && RO::EvalWidenIsArrayLogs) {
-    auto const widenIsArrayLogging = [&](Type t, const char* msg) {
-      mc.ifTypeThen(src, t, [&](SSATmp* src) {
-        gen(env, RaiseHackArrCompatNotice, cns(env, makeStaticString(msg)));
-        return cns(env, true);
-      });
-    };
-    widenIsArrayLogging(TVec, Strings::HACKARR_COMPAT_VEC_IS_ARR);
-    widenIsArrayLogging(TDict, Strings::HACKARR_COMPAT_DICT_IS_ARR);
-    widenIsArrayLogging(TKeyset, Strings::HACKARR_COMPAT_KEYSET_IS_ARR);
   }
 
   return mc.elseDo([&]{ return gen(env, IsType, TArrLike, src); });
@@ -1528,9 +1493,10 @@ void verifyPropType(IRGS& env,
       [&] {
         // Unlike the other type-hint checks, we don't punt here. We instead do
         // the check using a runtime helper. This gives us the freedom to call
-        // verifyPropType without us worrying about it punting the entire
-        // operation.
-        if (coerce && (tc->isArray() || (tc->isObject() && !tc->isResolved()))) {
+        // verifyPropType without us worrying about it punting the whole set op.
+        // This check is fragile - which type constraints coerce?
+        if (coerce && (tc->isArray() || tc->isString() ||
+                       (tc->isObject() && !tc->isResolved()))) {
           *coerce = gen(
             env,
             VerifyPropCoerce,
@@ -1651,18 +1617,12 @@ SSATmp* isTypeHelper(IRGS& env, IsTypeOp subop, SSATmp* val) {
   switch (subop) {
     case IsTypeOp::VArray: /* intentional fallthrough */
     case IsTypeOp::DArray:  return isDVArrayImpl(env, val, subop);
-    case IsTypeOp::PHPArr:
-      return isArrayImpl(env, val, /*log_on_hack_arrays=*/false);
-    case IsTypeOp::Arr:
-      return RO::EvalWidenIsArray
-        ? isArrLikeImpl(env, val, /* log_on_hack_arrays = */ true)
-        : isArrayImpl(env, val, /*log_on_hack_arrays=*/true);
+    case IsTypeOp::PHPArr:  return isPHPArrayImpl(env, val);
     case IsTypeOp::Vec:     return isVecImpl(env, val);
     case IsTypeOp::Dict:    return isDictImpl(env, val);
     case IsTypeOp::Scalar:  return isScalarImpl(env, val);
     case IsTypeOp::Str:     return isStrImpl(env, val);
-    case IsTypeOp::ArrLike:
-      return isArrLikeImpl(env, val, /*log_on_hack_arrays = */ false);
+    case IsTypeOp::ArrLike: return isArrLikeImpl(env, val);
     default: break;
   }
 

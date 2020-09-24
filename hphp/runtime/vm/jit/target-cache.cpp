@@ -119,7 +119,7 @@ const Func* FuncCache::lookup(rds::Handle handle, StringData* sd) {
   if (!notClassMethodPair(sd)) return nullptr;
 
   // Miss. Does it actually exist?
-  auto const* func = Unit::loadFunc(sd);
+  auto const* func = Func::load(sd);
   if (UNLIKELY(func == nullptr)) raise_call_to_undefined(sd);
 
   assertx(!func->implCls());
@@ -158,7 +158,7 @@ const Class* ClassCache::lookup(rds::Handle handle, StringData* name) {
   const StringData* pairSd = pair->m_key;
   if (!stringMatches(pairSd, name)) {
     TRACE(1, "ClassCache miss: %s\n", name->data());
-    Class* c = Unit::loadClass(name);
+    Class* c = Class::load(name);
     if (UNLIKELY(!c)) {
       raise_error(Strings::UNKNOWN_CLASS, name->data());
     }
@@ -192,7 +192,7 @@ LowPtr<const Class> TSClassCache::write(rds::Handle handle, ArrayData* ad) {
   auto const kind = get_ts_kind(ad);
   if (kind != TypeStructure::Kind::T_class) return nullptr;
   auto const name = get_ts_classname(ad);
-  Class* c = Unit::loadClass(name);
+  Class* c = Class::load(name);
   if (UNLIKELY(!c)) return nullptr;
   assertx(!isInterface(c));
   pair->m_key = ad;
@@ -443,14 +443,14 @@ StaticMethodCache::lookup(rds::Handle handle, const NamedEntity *ne,
         clsName->data(), methName->data(), __builtin_return_address(0));
 
   const Func* f;
-  auto const cls = Unit::loadClass(ne, clsName);
+  auto const cls = Class::load(ne, clsName);
   if (UNLIKELY(!cls)) {
     raise_error(Strings::UNKNOWN_CLASS, clsName->data());
   }
 
   // After this call, it's a post-condition that the RDS entry for `cls' is
   // initialized, so make sure it has been as a side-effect of
-  // Unit::loadClass().
+  // Class::load().
   assertx(cls == ne->getCachedClass());
 
   LookupResult res = lookupClsMethod(f, cls, methName,

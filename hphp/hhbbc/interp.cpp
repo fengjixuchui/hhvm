@@ -225,7 +225,7 @@ bool mutate_add_elem_array(ISS& env, ProvTag loc, Fn&& mutate) {
   if (arrprov::arrayWantsTag(*arr)) {
     if (tag == ProvTag::NoTag) {
       arrprov::setTag(*arr, loc.get());
-    } else if (!(*arr)->hasProvenanceData()) {
+    } else if (!arrprov::getTag(*arr).valid()) {
       arrprov::setTag(*arr, tag.get());
     }
   }
@@ -234,7 +234,7 @@ bool mutate_add_elem_array(ISS& env, ProvTag loc, Fn&& mutate) {
   // definitely assigned one leaving this op.
   assertx(!loc.valid() ||
           !arrprov::arrayWantsTag(*arr) ||
-          (*arr)->hasProvenanceData());
+          arrprov::getTag(*arr).valid());
   return true;
 }
 
@@ -1767,9 +1767,20 @@ void castImpl(ISS& env, Type target, void(*fn)(TypedValue*)) {
 
   if (fn && !needsRuntimeProvenance) {
     if (auto val = tv(t)) {
-      if (auto result = eval_cell([&] { fn(&*val); return *val; })) {
-        constprop(env);
-        target = *result;
+      // Legacy dvarrays may raise a notice on cast. In order to simplify the
+      // rollout of these notices, we don't const-fold casts on these arrays.
+      auto const may_raise_notice = [&]{
+        if (!tvIsArrayLike(*val)) return false;
+        auto const ad = val->m_data.parr;
+        if (!ad->isLegacyArray()) return false;
+        return (ad->isDArray() && target == TDict) ||
+               (ad->isVArray() && target == TVec);
+      }();
+      if (!may_raise_notice) {
+        if (auto result = eval_cell([&] { fn(&*val); return *val; })) {
+          constprop(env);
+          target = *result;
+        }
       }
     }
   }
@@ -2988,7 +2999,6 @@ bool isValidTypeOpForIsAs(const IsTypeOp& op) {
     case IsTypeOp::Obj:
       return true;
     case IsTypeOp::Res:
-    case IsTypeOp::Arr:
     case IsTypeOp::Vec:
     case IsTypeOp::Dict:
     case IsTypeOp::Keyset:
@@ -3060,11 +3070,10 @@ void isTypeStructImpl(ISS& env, SArray inputTS) {
     case TypeStructure::Kind::T_void:
     case TypeStructure::Kind::T_null:
       return check(ts_type);
-    // TODO(kshaunak): Change `deopt` for tuple to "vec", for shape to "dict".
     case TypeStructure::Kind::T_tuple:
-      return check(ts_type, TDArr);
+      return check(ts_type, TVec);
     case TypeStructure::Kind::T_shape:
-      return check(ts_type, TVArr);
+      return check(ts_type, TDict);
     case TypeStructure::Kind::T_dict:
       return check(ts_type, TDArr);
     case TypeStructure::Kind::T_vec:
@@ -4753,13 +4762,6 @@ void in(ISS& env, const bc::BareThis& op) {
   }
 
   push(env, ty, StackThisId);
-}
-
-void in(ISS& env, const bc::InitThisLoc& op) {
-  if (!is_volatile_local(env.ctx.func, op.loc1)) {
-    setLocRaw(env, op.loc1, TCell);
-    env.state.thisLoc = op.loc1;
-  }
 }
 
 /*

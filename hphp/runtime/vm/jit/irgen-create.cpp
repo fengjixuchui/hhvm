@@ -348,7 +348,7 @@ SSATmp* allocObjFast(IRGS& env, const Class* cls) {
  */
 void emitCreateCl(IRGS& env, uint32_t numParams, uint32_t clsIx) {
   auto const preCls = curFunc(env)->unit()->lookupPreClassId(clsIx);
-  auto cls = Unit::defClosure(preCls);
+  auto cls = Class::defClosure(preCls);
 
   assertx(cls);
   assertx(cls->attrs() & AttrUnique);
@@ -460,7 +460,6 @@ void emitNewVec(IRGS& env, uint32_t numArgs) {
 }
 
 void emitNewVArray(IRGS& env, uint32_t numArgs) {
-  assertx(!RuntimeOption::EvalHackArrDVArrs);
   emitNewPackedLayoutArray(env, numArgs, AllocVArray);
 }
 
@@ -539,7 +538,7 @@ void emitAddNewElemC(IRGS& env) {
   if (!arrType.subtypeOfAny(TKeyset, TVec, TVArr)) {
     return interpOne(env);
   }
-  auto const val = popC(env, DataTypeCountness);
+  auto const val = popC(env, DataTypeGeneric);
   auto const arr = popC(env);
   push(
     env,

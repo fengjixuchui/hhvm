@@ -336,6 +336,16 @@ and has_member = {
       (** This is required to check ambiguous object access, where sometimes
   HHVM would access the private member of a parent class instead of the
   one from the current class. *)
+  hm_explicit_targs: Nast.targ list option;
+      (* - For a "has-property" constraint, this is `None`
+       * - For a "has-method" constraint, this is `Some targs`, where targs
+       *   is the list of explicit type arguments provided to the method call.
+       *   Note that this list can be empty (i.e. `Some []`) in the case of a
+       *   method not taking type arguments, or when we leave them implicit
+       *
+       * We need to know if this is a "has-property" or "has-method" to pass
+       * the correct `is_method` parameter to `Typing_object_get.obj_get`.
+       *)
 }
 
 and destructure = {
@@ -395,6 +405,11 @@ and reactivity =
   | RxVar of reactivity option
   | Cipp of string option
   | CippLocal of string option
+  | CippGlobal
+
+(** Companion to fun_params type, intended to consolidate checking of
+ * implicit params for functions. *)
+and 'ty fun_implicit_params = { capability: 'ty }
 
 (** The type of a function AND a method.
  * A function has a min and max arity because of optional arguments *)
@@ -403,6 +418,7 @@ and 'ty fun_type = {
   ft_tparams: 'ty tparam list;
   ft_where_constraints: 'ty where_constraint list;
   ft_params: 'ty fun_params;
+  ft_implicit_params: 'ty fun_implicit_params;
   ft_ret: 'ty possibly_enforced_ty;
       (** Carries through the sync/async information from the aast *)
   ft_reactive: reactivity;
@@ -462,8 +478,6 @@ and locl_fun_params = locl_ty fun_params
  * rid of this one, we will have to write it *)
 let compare_decl_ty : decl_ty -> decl_ty -> int = Stdlib.compare
 
-let equal_locl_ty : locl_ty -> locl_ty -> bool = Stdlib.( = )
-
 (* Constructor and deconstructor functions for types and constraint types.
  * Abstracting these lets us change the implementation, e.g. hash cons
  *)
@@ -475,7 +489,11 @@ let get_reason (r, _) = r
 
 let get_node (_, n) = n
 
-let with_reason (_, ty) reason = (reason, ty)
+let map_reason (r, ty) ~(f : Reason.t -> Reason.t) = (f r, ty)
+
+let map_ty (r, ty) ~(f : _ ty_ -> _ ty_) = (r, f ty)
+
+let with_reason ty r = map_reason ty ~f:(fun _r -> r)
 
 let get_pos t = Reason.to_pos (get_reason t)
 

@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_UTIL_ADDRESS_RANGE_H_
-#define incl_HPHP_UTIL_ADDRESS_RANGE_H_
+#pragma once
 
 #include "hphp/util/alloc-defs.h"
 
@@ -46,8 +45,6 @@ constexpr size_t kLocalArenaSizeLimit = 64ull << 30;
 // Extra pages for Arena 0
 constexpr uintptr_t kArena0Base = 2ull << 40;
 
-#if USE_JEMALLOC_EXTENT_HOOKS
-
 namespace alloc {
 
 // List of address ranges ManagedArena can manage.
@@ -65,13 +62,18 @@ enum class Direction : uint32_t {
 };
 
 enum class Reserved {};
+enum class Mapped {};
 
 struct RangeMapper;
 
 // An address range, supporting bump mapping and allocation from both ends.
-struct alignas(64) RangeState {
+struct RangeState {
   // Default constructor that does nothing.
   RangeState() = default;
+
+  // Constructor that accepts an already mapped address range (so there is no
+  // need for mappers).
+  RangeState(uintptr_t lowAddr, uintptr_t highAddr, Mapped);
 
   // Constructor that accepts an already reserved address range.
   RangeState(uintptr_t lowAddr, uintptr_t highAddr, Reserved);
@@ -147,7 +149,7 @@ struct alignas(64) RangeState {
   // running) to allocate without adding new mappings.
   bool trivial(size_t size, size_t align, Direction d) const {
     auto const mask = align - 1;
-    assert((align & mask) == 0);
+    assertx((align & mask) == 0);
     if (d == Direction::LowToHigh) {
       auto const use = low_use.load(std::memory_order_acquire);
       auto const aligned = (use + mask) & ~mask;
@@ -162,7 +164,7 @@ struct alignas(64) RangeState {
   // Whether free space in this range is insufficient for the allocation.
   bool infeasible(size_t size, size_t align, Direction d) const {
     auto const mask = align - 1;
-    assert((align & mask) == 0);
+    assertx((align & mask) == 0);
     if (d == Direction::LowToHigh) {
       auto const newUse =
         ((low_use.load(std::memory_order_acquire) + mask) & ~mask) + size;
@@ -204,7 +206,7 @@ struct alignas(64) RangeState {
     auto const mapFrontier = low_map.load(std::memory_order_acquire);
     auto oldUse = low_use.load(std::memory_order_acquire);
     auto const mask = align - 1;
-    assert((align & mask) == 0);
+    assertx((align & mask) == 0);
     do {
       auto const aligned = (oldUse + mask) & ~mask;
       auto const newUse = aligned + size;
@@ -222,7 +224,7 @@ struct alignas(64) RangeState {
     auto const mapFrontier = high_map.load(std::memory_order_acquire);
     auto oldUse = high_use.load(std::memory_order_acquire);
     auto const mask = align - 1;
-    assert((align & mask) == 0);
+    assertx((align & mask) == 0);
     do {
       auto const newUse = (oldUse - size) & ~mask;
       // Need to add more mapping.
@@ -233,6 +235,17 @@ struct alignas(64) RangeState {
         return reinterpret_cast<void*>(newUse);
       }
     } while (true);
+  }
+
+  // Reset low_use, for immediate deallocation after allocation. Return whether
+  // the operation was successful.
+  bool tryFreeLow(void* ptr, size_t size) {
+    auto const p = reinterpret_cast<uintptr_t>(ptr);
+    assertx(p < low_use.load(std::memory_order_relaxed));
+    assertx(p >= low());
+    uintptr_t expected = p + size;
+    return low_use.compare_exchange_strong(expected, p,
+                                           std::memory_order_relaxed);
   }
 
   std::atomic<uintptr_t> low_use{0};
@@ -254,8 +267,5 @@ RangeState& getRange(AddrRangeClass rc);
 
 }
 
-#endif // USE_JEMALLOC_EXTENT_HOOKS
-
 }
 
-#endif

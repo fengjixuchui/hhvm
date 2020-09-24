@@ -90,15 +90,23 @@ ALWAYS_INLINE ArrayData* ArrayData::Create() {
 }
 
 ALWAYS_INLINE ArrayData* ArrayData::CreateVArray(arrprov::Tag tag /* = {} */) {
+  auto const ad = RuntimeOption::EvalHackArrDVArrs ?
+    (RuntimeOption::EvalHackArrDVArrMark ?
+     staticEmptyMarkedVec() : staticEmptyVec()) :
+    staticEmptyVArray();
   return RO::EvalArrayProvenance
-    ? arrprov::tagStaticArr(staticEmptyVArray(), tag)
-    : staticEmptyVArray();
+    ? arrprov::tagStaticArr(ad, tag)
+    : ad;
 }
 
 ALWAYS_INLINE ArrayData* ArrayData::CreateDArray(arrprov::Tag tag /* = {} */) {
+  auto const ad = RuntimeOption::EvalHackArrDVArrs ?
+    (RuntimeOption::EvalHackArrDVArrMark ?
+     staticEmptyMarkedDictArray() : staticEmptyDictArray()) :
+    staticEmptyDArray();
   return RO::EvalArrayProvenance
-    ? arrprov::tagStaticArr(staticEmptyDArray(), tag)
-    : staticEmptyDArray();
+    ? arrprov::tagStaticArr(ad, tag)
+    : ad;
 }
 
 ALWAYS_INLINE ArrayData* ArrayData::CreateVec(arrprov::Tag tag /* = {} */) {
@@ -299,19 +307,6 @@ DataType ArrayData::toPersistentDataType() const {
 
 inline bool ArrayData::IsValidKey(const StringData* k) {
   return k;
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-ALWAYS_INLINE
-bool ArrayData::hasProvenanceData() const {
-  return m_aux16 & kHasProvenanceData;
-}
-
-ALWAYS_INLINE
-void ArrayData::setHasProvenanceData(bool value) {
-  m_aux16 = (m_aux16 & ~kHasProvenanceData) |
-    (value ? kHasProvenanceData : 0);
 }
 
 ///////////////////////////////////////////////////////////////////////////////

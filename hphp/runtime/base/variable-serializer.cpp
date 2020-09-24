@@ -94,6 +94,14 @@ VariableSerializer::getKind(const ArrayData* arr) const {
   assertx(!RuntimeOption::EvalHackArrDVArrs || arr->isNotDVArray());
   if (UNLIKELY(m_forcePHPArrays)) {
     return VariableSerializer::ArrayKind::PHP;
+  } else if (UNLIKELY(m_forceHackArrays)) {
+    if (arr->isDArray() || arr->isDictType()) {
+      return VariableSerializer::ArrayKind::Dict;
+    } else if (arr->isVArray() || arr->isVecType()) {
+      return VariableSerializer::ArrayKind::Vec;
+    }
+    assertx(arr->isKeysetType());
+    return VariableSerializer::ArrayKind::Keyset;
   }
 
   auto const respectsLegacyBit = [&] {
@@ -103,13 +111,13 @@ VariableSerializer::getKind(const ArrayData* arr) const {
     case Type::VarExport:
     case Type::Serialize:
     case Type::JSON:
+    case Type::DebuggerDump:
+    case Type::DebuggerSerialize:
       return true;
     case Type::Internal:
     case Type::DebugDump:
-    case Type::DebuggerDump:
     case Type::PHPOutput:
     case Type::APCSerialize:
-    case Type::DebuggerSerialize:
       return false;
     }
     always_assert(false);
@@ -688,7 +696,7 @@ void VariableSerializer::write(const Object& v) {
       } else {
         auto props = v->toArray(true, m_ignoreLateInit);
         pushObjectInfo(v->getClassName(), 'O');
-        serializeArray(props, true);
+        serializeObjProps(props);
         popObjectInfo();
       }
     });
@@ -1595,14 +1603,12 @@ void VariableSerializer::serializeClsMeth(
     case Type::Internal:
     case Type::APCSerialize:
     case Type::DebuggerSerialize:
+    case Type::JSON: {
       raiseClsMethToVecWarningHelper();
-      serializeArray(clsMethToVecHelper(clsMeth), skipNestCheck);
+      auto const vec = clsMethToVecHelper(clsMeth);
+      serializeArray(vec.get(), skipNestCheck);
       break;
-
-    case Type::JSON:
-      raiseClsMethToVecWarningHelper();
-      serializeArray(clsMethToVecHelper(clsMeth), skipNestCheck);
-      break;
+    }
   }
 }
 
@@ -1721,7 +1727,7 @@ void VariableSerializer::serializeVariant(tv_rval tv,
 
 void VariableSerializer::serializeResourceImpl(const ResourceData* res) {
   pushResourceInfo(res->o_getResourceName(), res->getId());
-  serializeArray(empty_array());
+  serializeArray(ArrayData::CreateDict());
   popResourceInfo();
 }
 
@@ -1730,7 +1736,8 @@ void VariableSerializer::serializeResource(const ResourceData* res) {
   if (UNLIKELY(incNestedLevel(&tv))) {
     writeOverflow(&tv);
   } else if (auto trace = dynamic_cast<const CompactTrace*>(res)) {
-    serializeArray(trace->extract());
+    auto const trace_array = trace->extract();
+    serializeArray(trace_array.get());
   } else {
     serializeResourceImpl(res);
   }
@@ -1835,8 +1842,8 @@ void VariableSerializer::serializeArray(const ArrayData* arr,
 
   const bool isVectorData = arr->isVectorData();
 
-  if (UNLIKELY(!m_forcePHPArrays && !m_serializeProvenanceAndLegacy &&
-               arrprov::arrayWantsTag(arr))) {
+  if (arrprov::arrayWantsTag(arr) && !m_serializeProvenanceAndLegacy &&
+      !m_forcePHPArrays && !m_forceHackArrays) {
     auto const source = [&]() -> folly::Optional<SerializationSite> {
       switch (getType()) {
       case VariableSerializer::Type::JSON:
@@ -1873,19 +1880,23 @@ void VariableSerializer::serializeArray(const ArrayData* arr,
     }
     decNestedLevel(&tv);
   } else {
-    // If isObject, the array is temporary and we should not check or save
-    // its pointer.
+    // If skipNestCheck, the array is temporary and we should not check or
+    // save its pointer. We'll serialize it without its header.
     serializeArrayImpl(arr, isVectorData);
   }
 }
 
-void VariableSerializer::serializeArray(const Array& arr,
-                                        bool isObject /* = false */) {
-  if (!arr.isNull()) {
-    serializeArray(arr.get(), isObject);
-  } else {
+void VariableSerializer::serializeObjProps(Array& arr) {
+  if (arr.isNull()) {
     writeNull();
+    return;
   }
+
+  auto const ad = arr.detach();
+  auto const dict = ad->toDict(ad->cowCheck());
+  if (dict != ad) decRefArr(ad);
+  serializeArray(dict, /*skipNestCheck=*/true);
+  decRefArr(dict);
 }
 
 void VariableSerializer::serializeCollection(ObjectData* obj) {
@@ -2103,7 +2114,7 @@ void VariableSerializer::serializeObjectImpl(const ObjectData* obj) {
             } else {
               attrMask = AttrPrivate;
               String cls = memberName.substr(1, subLen - 2);
-              ctx = Unit::lookupClass(cls.get());
+              ctx = Class::lookup(cls.get());
               if (ctx) {
                 memberName = memberName.substr(subLen);
               } else {
@@ -2155,7 +2166,7 @@ void VariableSerializer::serializeObjectImpl(const ObjectData* obj) {
       if (!serializableNativeData.isNull()) {
         wanted.set(s_serializedNativeDataKey, serializableNativeData);
       }
-      serializeArray(wanted, true);
+      serializeObjProps(wanted);
       popObjectInfo();
     } else {
       raise_notice("serialize(): __sleep should return an array only "
@@ -2235,7 +2246,7 @@ void VariableSerializer::serializeObjectImpl(const ObjectData* obj) {
         if (cname && isStringType(cname.type())) {
           pushObjectInfo(StrNR(cname.val().pstr), 'O');
           properties.remove(s_PHP_Incomplete_Class_Name, true);
-          serializeArray(properties, true);
+          serializeObjProps(properties);
           popObjectInfo();
           return;
         }
@@ -2244,7 +2255,7 @@ void VariableSerializer::serializeObjectImpl(const ObjectData* obj) {
       if (!serializableNativeData.isNull()) {
         properties.set(s_serializedNativeDataKey, serializableNativeData);
       }
-      serializeArray(properties, true);
+      serializeObjProps(properties);
       popObjectInfo();
     }
   }

@@ -156,8 +156,7 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
       ('ex, 'fb, 'en, 'hi) class_id * ('ex, 'fb, 'en, 'hi) class_get_expr
   | Class_const of ('ex, 'fb, 'en, 'hi) class_id * pstring
   | Call of
-      call_type
-      * ('ex, 'fb, 'en, 'hi) expr
+      ('ex, 'fb, 'en, 'hi) expr
       (* function *)
       * 'hi targ list
       (* explicit type annotations *)
@@ -208,7 +207,8 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
       (** TODO: T38184446 Consolidate collections in AAST *)
   | BracedExpr of ('ex, 'fb, 'en, 'hi) expr
   | ParenthesizedExpr of ('ex, 'fb, 'en, 'hi) expr
-  | ExpressionTree of hint * ('ex, 'fb, 'en, 'hi) expr
+  | ExpressionTree of
+      hint * ('ex, 'fb, 'en, 'hi) expr * ('ex, 'fb, 'en, 'hi) expr option
   (* None of these constructors exist in the AST *)
   | Lplaceholder of pos
   | Fun_id of sid
@@ -410,7 +410,7 @@ and ('ex, 'fb, 'en, 'hi) xhp_attr =
   'hi type_hint
   * ('ex, 'fb, 'en, 'hi) class_var
   * xhp_attr_tag option
-  * (pos * bool * ('ex, 'fb, 'en, 'hi) expr list) option
+  * (pos * ('ex, 'fb, 'en, 'hi) expr list) option
 
 and ('ex, 'fb, 'en, 'hi) class_attr =
   | CA_name of sid
@@ -706,3 +706,9 @@ let type_hint_option_map ~f ta =
 
 (* extract an hint from a type annotation *)
 let hint_of_type_hint = snd
+
+(* helper function to access the list of enums included by an enum *)
+let enum_includes_map ?(default = []) ~f includes =
+  match includes with
+  | None -> default
+  | Some includes -> f includes

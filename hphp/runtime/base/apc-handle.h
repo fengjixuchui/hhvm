@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_APC_HANDLE_H_
-#define incl_HPHP_APC_HANDLE_H_
+#pragma once
 
 #include <atomic>
 
@@ -54,7 +53,8 @@ enum class APCKind: uint8_t {
   SharedVec, SharedLegacyVec,
   SharedDict, SharedLegacyDict,
   SharedKeyset,
-  SharedVArray, SharedDArray,
+  SharedVArray, SharedMarkedVArray,
+  SharedDArray, SharedMarkedDArray,
   SharedObject, SharedCollection,
   SerializedArray, SerializedVec,
   SerializedDict,
@@ -121,10 +121,14 @@ enum class APCKind: uint8_t {
  *  SharedArray       APCArray        kInvalidDataType
  *  SharedPackedArray APCArray        kInvalidDataType
  *  SharedVec         APCArray        kInvalidDataType
+ *  SharedLegacyVec   APCArray        kInvalidDataType
  *  SharedDict        APCArray        kInvalidDataType
+ *  SharedLegacyDict  APCArray        kInvalidDataType
  *  SharedKeyset      APCArray        kInvalidDataType
  *  SharedDArray      APCArray        kInvalidDataType
+ *  SharedMarkedDArray APCArray       kInvalidDataType
  *  SharedVArray      APCArray        kInvalidDataType
+ *  SharedMarkedVArray APCArray       kInvalidDataType
  *  SharedObject      APCObject       kInvalidDataType
  *  SharedCollection  APCObject       kInvalidDataType
  *  SerializedArray   APCString       kInvalidDataType
@@ -302,4 +306,3 @@ private:
 
 }
 
-#endif

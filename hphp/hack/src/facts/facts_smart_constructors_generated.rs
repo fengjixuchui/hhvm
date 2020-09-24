@@ -26,7 +26,7 @@ use crate::*;
 pub struct FactsSmartConstructors<'src> {
     pub state: HasScriptContent<'src>,
 }
-impl<'src> SmartConstructors<'src, HasScriptContent<'src>> for FactsSmartConstructors<'src> {
+impl<'src> SmartConstructors<HasScriptContent<'src>> for FactsSmartConstructors<'src> {
     type Token = PositionedToken;
     type R = Node;
 
@@ -542,8 +542,8 @@ impl<'src> SmartConstructors<'src, HasScriptContent<'src>> for FactsSmartConstru
         <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_xhp_category_declaration(self, arg0, arg1, arg2)
     }
 
-    fn make_xhp_enum_type(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_xhp_enum_type(self, arg0, arg1, arg2, arg3, arg4)
+    fn make_xhp_enum_type(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_xhp_enum_type(self, arg0, arg1, arg2, arg3)
     }
 
     fn make_xhp_lateinit(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {

@@ -121,7 +121,7 @@ bool tvInstanceOfImpl(const TypedValue* tv, F lookupClass) {
 } // namespace
 
 bool tvInstanceOf(const TypedValue* tv, const NamedEntity* ne) {
-  return tvInstanceOfImpl(tv, [ne]() { return Unit::lookupClass(ne); });
+  return tvInstanceOfImpl(tv, [ne]() { return Class::lookup(ne); });
 }
 
 bool tvInstanceOf(const TypedValue* tv, const Class* cls) {
@@ -368,7 +368,7 @@ bool typeStructureIsTypeList(
   bool found = false;
   if (!strict && clsname) {
     auto const ne = NamedEntity::get(clsname);
-    if (auto const cls = Unit::lookupClass(ne)) {
+    if (auto const cls = Class::lookup(ne)) {
       found = true;
       tpinfo = cls->getReifiedGenericsInfo().m_typeParamInfo;
       if (tpinfo.size() == 0) return true;
@@ -411,7 +411,7 @@ bool checkReifiedGenericsMatch(
   // TODO(T31677864): Handle non KindOfObject types
   if (c1.m_type != KindOfObject) return true;
   auto const obj = c1.m_data.pobj;
-  auto const cls = Unit::lookupClass(ne);
+  auto const cls = Class::lookup(ne);
   assertx(cls);
   if (!cls->hasReifiedGenerics()) {
     if (!strict) return true;
@@ -607,7 +607,7 @@ bool checkTypeStructureMatchesTVImpl(
     case TypeStructure::Kind::T_darray:
     case TypeStructure::Kind::T_varray:
     case TypeStructure::Kind::T_varray_or_darray:
-      return !isOrAsOp && is_array(&c1, /*logOnHackArrays=*/true);
+      return !isOrAsOp && is_php_array(&c1);
 
     case TypeStructure::Kind::T_dict:
       return is_dict(&c1);
@@ -632,7 +632,7 @@ bool checkTypeStructureMatchesTVImpl(
 
     case TypeStructure::Kind::T_enum: {
       assertx(ts.exists(s_classname));
-      auto const cls = Unit::lookupClass(ts[s_classname].asStrRef().get());
+      auto const cls = Class::lookup(ts[s_classname].asStrRef().get());
       if (!isOrAsOp) {
         if (auto const dt = cls ? cls->enumBaseTy() : folly::none) {
           return equivDataTypes(*dt, type);
@@ -675,57 +675,32 @@ bool checkTypeStructureMatchesTVImpl(
       }
 
       if (!isArrayLikeType(type)) return false;
+
+      /*
+       * There are two behaviors we're trying to deal with these notices:
+       *
+       *   1. The reified generic path for tuple checks allows darrays to pass
+       *      these checks. We want to restrict to only varrays. See isOrAsOp.
+       *
+       *   2. If any Hack array makes it to one of these check sites, we want
+       *      to lift the HAM observation behavior into an is_php_array call.
+       *
+       * The two behaviors interact; if we can complete item 1 early, then we
+       * can restrict logging for item 2 to vecs alone.
+       */
       auto const ad = data.parr;
-
-      // A short novel about what we do for this case:
-      //
-      // Let's denote:
-      //
-      //    (*) Whether `ad` has a tuple-like structure.
-      //
-      //  - If `ad` is a regular PHP array or a darray, we return (*).  If
-      //    typehint logging is enabled for v/darrays, we log if (*) holds.
-      //
-      //  - If `ad` is a varray or a legacy vec, we return (*).  If provenance
-      //    logging is enabled for v/darrays, we log if (*) holds (since it
-      //    would no longer hold if varrays behaved like vecs do today).
-      //
-      //  - If `ad` is a vec, we return false, but first we raise a notice if
-      //    hackarr-is-shape/tuple notices are enabled.  If provenance logging
-      //    is enabled for Hack arrays, we log if (*) holds (since it would
-      //    hold if vecs behaved like varrays do today).
-
-      // Whether, based on only the array kind (and not its internal
-      // structure), `ad` could possibly be a tuple.  TODO(T56477937)
-      auto const kind_supports_tuple = !RO::EvalHackArrDVArrs && (
-                                       isArrayType(type) || (
-                                         isVecType(type) &&
-                                         ad->isLegacyArray()
-                                       ));
-
-      auto const wants_prov_logging = !gen_error && // avoid double logging :/
-                                      arrprov::arrayWantsTag(ad);
-
-      if (RO::EvalHackArrIsShapeTupleNotices && isVecType(type)) {
-        raise_hackarr_compat_notice("vec is tuple");
-      }
-
-      if (!kind_supports_tuple && !wants_prov_logging) {
-        // `ad` is a Hack array and we have no logging to do; it can never be a
-        // tuple, so return false.
-        assertx(ad->isHackArrayType());
-        return false;
-      }
-
-      auto const with_prov_check = [&] (bool const result) {
-        if (result && wants_prov_logging) {
-          raise_array_serialization_notice(SerializationSite::IsTuple, ad);
-          if (!kind_supports_tuple) return false;
+      auto const maybe_raise_notice = [&] (bool const result) {
+        if (!gen_error /* avoid double logging */ && result &&
+            RO::EvalHackArrIsShapeTupleNotices && !ad->isVArray()) {
+          auto const dt = getDataTypeString(ad->toDataType());
+          raise_hackarr_compat_notice(folly::sformat("{} is tuple", dt));
         }
-        return result;
+        return result && (isArrayType(type) || RO::EvalHackArrDVArrs);
       };
 
-      if (!isOrAsOp) return with_prov_check(true);
+      if (!isOrAsOp) return maybe_raise_notice(!isKeysetType(type));
+
+      if (!ad->isVArray() && !ad->isVecType()) return false;
 
       assertx(ts.exists(s_elem_types));
       auto const ts_arr = ts[s_elem_types].getArrayData();
@@ -769,10 +744,7 @@ bool checkTypeStructureMatchesTVImpl(
         return vals_match;
       }();
 
-      if (is_tuple_like && ad->isPHPArrayType() && !ad->isVArray()) {
-        return false;
-      }
-      return with_prov_check(is_tuple_like);
+      return maybe_raise_notice(is_tuple_like);
     }
 
     case TypeStructure::Kind::T_shape: {
@@ -795,89 +767,25 @@ bool checkTypeStructureMatchesTVImpl(
       }
 
       if (!isArrayLikeType(type)) return false;
+
+      /*
+       * By analogy with the tuple case (see above), we're trying to restrict
+       * reified generics to darrays, and also logging when a Hack array would
+       * haved passed one of these checks.
+       */
       auto const ad = data.parr;
-
-      // A sequence of haikus about what we do for this case:
-      //
-      // Let us denote, (*):
-      // Whether `ad` does admit
-      // a shape-like structure.
-      //
-      //  - Should `ad`'s sort be
-      //    PHP- or v-array
-      //    we just return (*).
-      //
-      //    If we've enabled
-      //    our typehint logging options,
-      //    log if (*) holds, too.
-      //
-      //  - Should `ad`'s sort be
-      //    darray, just return (*).
-      //    But first, if perchance
-      //
-      //    provenance logging
-      //    has been justly enabled
-      //    for v/darrays:
-      //
-      //    We log if (*) holds
-      //    (since, were darrays like dicts,
-      //    it would not be so).
-      //
-      //    (We also do this
-      //    if `ad` happens to be
-      //    a legacy vec.)
-      //
-      //  - Should `ad` be dict,
-      //    return false, though possibly
-      //    we will do a warn
-      //
-      //    if the pertinent
-      //    runtime option has been set.
-      //    But first, if perchance
-      //
-      //    provenance logging
-      //    has been justly enabled
-      //    for dicts (and also vecs):
-      //
-      //    We log if (*) holds
-      //    (since, were dicts like darrays,
-      //    it would not be so).
-      //
-      // In brief summary,
-      // this is all analogous
-      // to the `tuple` case.
-
-      // Whether, based on only the array kind (and not its internal
-      // structure), `ad` could possibly be a shape.  TODO(T56477937)
-      auto const kind_supports_shape = !RO::EvalHackArrDVArrs && (
-                                       isArrayType(type) || (
-                                         isDictType(type) &&
-                                         ad->isLegacyArray()
-                                       ));
-
-      auto const wants_prov_logging = !gen_error && // avoid double logging :/
-                                      arrprov::arrayWantsTag(ad);
-
-      if (RO::EvalHackArrIsShapeTupleNotices && isDictType(type)) {
-        raise_hackarr_compat_notice("dict is shape");
-      }
-
-      if (!kind_supports_shape && !wants_prov_logging) {
-        // `ad` is a Hack array and we have no logging to do; it can never be a
-        // shape, so return false.
-        assertx(ad->isHackArrayType());
-        return false;
-      }
-
-      auto const with_prov_check = [&] (bool const result) {
-        if (result && wants_prov_logging) {
-          raise_array_serialization_notice(SerializationSite::IsShape, ad);
-          if (!kind_supports_shape) return false;
+      auto const maybe_raise_notice = [&] (bool const result) {
+        if (!gen_error /* avoid double logging */ && result &&
+            RO::EvalHackArrIsShapeTupleNotices && !ad->isDArray()) {
+          auto const dt = getDataTypeString(ad->toDataType());
+          raise_hackarr_compat_notice(folly::sformat("{} is shape", dt));
         }
-        return result;
+        return result && (isArrayType(type) || RO::EvalHackArrDVArrs);
       };
 
-      if (!isOrAsOp) return with_prov_check(true);
+      if (!isOrAsOp) return maybe_raise_notice(!isKeysetType(type));
+
+      if (!ad->isDArray() && !ad->isDictType()) return false;
 
       assertx(ts.exists(s_fields));
       auto const ts_arr = ts[s_fields].getArrayData();
@@ -945,11 +853,7 @@ bool checkTypeStructureMatchesTVImpl(
         warn = false;
         return false;
       }
-
-      if (!warn && ad->isPHPArrayType() && !ad->isDArray()) {
-        return false;
-      }
-      return with_prov_check(!warn);
+      return maybe_raise_notice(!warn);
     }
 
     case TypeStructure::Kind::T_nothing:

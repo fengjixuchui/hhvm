@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<50d6b80daaf73b46ec00748f701fc649>>
+// @generated SignedSource<<68c8e52e5d134fd5a6965f5307929018>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
@@ -557,6 +557,7 @@ pub struct HasMember<'a> {
     /// HHVM would access the private member of a parent class instead of the
     /// one from the current class.
     pub class_id: nast::ClassId_<'a>,
+    pub explicit_targs: Option<&'a [nast::Targ<'a>]>,
 }
 impl<'a> TrivialDrop for HasMember<'a> {}
 
@@ -668,8 +669,30 @@ pub enum Reactivity<'a> {
     Pure(Option<Ty<'a>>),
     MaybeReactive(&'a Reactivity<'a>),
     RxVar(Option<&'a Reactivity<'a>>),
+    Cipp(Option<&'a str>),
+    CippLocal(Option<&'a str>),
+    CippGlobal,
 }
 impl<'a> TrivialDrop for Reactivity<'a> {}
+
+/// Companion to fun_params type, intended to consolidate checking of
+/// implicit params for functions.
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    FromOcamlRepIn,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub struct FunImplicitParams<'a> {
+    pub capability: Ty<'a>,
+}
+impl<'a> TrivialDrop for FunImplicitParams<'a> {}
 
 /// The type of a function AND a method.
 /// A function has a min and max arity because of optional arguments
@@ -690,6 +713,7 @@ pub struct FunType<'a> {
     pub tparams: &'a [Tparam<'a>],
     pub where_constraints: &'a [WhereConstraint<'a>],
     pub params: FunParams<'a>,
+    pub implicit_params: FunImplicitParams<'a>,
     /// Carries through the sync/async information from the aast
     pub ret: PossiblyEnforcedTy<'a>,
     pub reactive: Reactivity<'a>,

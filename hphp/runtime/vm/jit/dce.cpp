@@ -121,10 +121,6 @@ bool canDCE(IRInstruction* inst) {
   case CmpBool:
   case SameObj:
   case NSameObj:
-  case EqKeyset:
-  case NeqKeyset:
-  case SameKeyset:
-  case NSameKeyset:
   case GtRes:
   case GteRes:
   case LtRes:
@@ -186,6 +182,7 @@ bool canDCE(IRInstruction* inst) {
   case LdClsMethodCacheCls:
   case LdFuncVecLen:
   case LdClsMethod:
+  case LdSubClsCns:
   case LdIfaceMethod:
   case LdPropAddr:
   case LdObjClass:
@@ -373,22 +370,11 @@ bool canDCE(IRInstruction* inst) {
   case EqObj:
   case NeqObj:
   case CmpObj:
-  case GtArr:
-  case GteArr:
-  case LtArr:
-  case LteArr:
-  case EqArr:
-  case NeqArr:
-  case CmpArr:
-  case GtVec:
-  case GteVec:
-  case LtVec:
-  case LteVec:
-  case EqVec:
-  case NeqVec:
-  case CmpVec:
-  case EqDict:
-  case NeqDict:
+  case GtArrLike:
+  case GteArrLike:
+  case LtArrLike:
+  case LteArrLike:
+  case CmpArrLike:
   case JmpZero:
   case JmpNZero:
   case JmpSSwitchDest:
@@ -421,7 +407,7 @@ bool canDCE(IRInstruction* inst) {
   case LookupCnsE:
   case LdClsCns:
   case InitClsCns:
-  case LdSubClsCns:
+  case InitSubClsCns:
   case LdSubClsCnsClsName:
   case LdTypeCns:
   case CheckSubClsCns:
@@ -603,6 +589,7 @@ bool canDCE(IRInstruction* inst) {
   case CheckArrayCOW:
   case ProfileDictAccess:
   case CheckDictOffset:
+  case CheckDictOffsetLA:
   case ProfileKeysetAccess:
   case CheckKeysetOffset:
   case ElemMixedArrayK:
@@ -645,6 +632,7 @@ bool canDCE(IRInstruction* inst) {
   case ProfileMethod:
   case ProfileSubClsCns:
   case CheckVecBounds:
+  case CheckVecBoundsLA:
   case LdVectorSize:
   case BeginCatch:
   case EndCatch:
@@ -660,7 +648,6 @@ bool canDCE(IRInstruction* inst) {
   case JmpPlaceholder:
   case ThrowOutOfBounds:
   case ThrowInvalidArrayKey:
-  case ThrowInvalidArrayKeyForSet:
   case ThrowInvalidOperation:
   case ThrowCallReifiedFunctionWithoutGenerics:
   case ThrowDivisionByZeroException:
@@ -681,6 +668,7 @@ bool canDCE(IRInstruction* inst) {
   case ConjureUse:
   case LdClsMethodFCacheFunc:
   case LdClsMethodCacheFunc:
+  case LogArrayReach:
   case ProfileInstanceCheck:
   case MemoGetStaticValue:
   case MemoGetStaticCache:
@@ -706,14 +694,14 @@ bool canDCE(IRInstruction* inst) {
   case StFrameMeta:
     return false;
 
-  case SameArr:
-  case NSameArr:
-  case SameVec:
-  case NSameVec:
-  case SameDict:
-  case NSameDict:
   case IsTypeStruct:
     return !opcodeMayRaise(inst->op());
+
+  case EqArrLike:
+  case NeqArrLike:
+  case SameArrLike:
+  case NSameArrLike:
+    return !inst->mayRaiseErrorWithSources();
   }
   not_reached();
 }

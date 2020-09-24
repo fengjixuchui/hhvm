@@ -76,9 +76,7 @@ bool HHVM_FUNCTION(autoload_set_paths,
                    const String& root) {
   // If we are using a native autoload map you are not allowed to override it
   // in repo mode
-  if (RuntimeOption::RepoAuthoritative &&
-      RuntimeOption::EvalUseRepoAutoloadMap &&
-      Repo::get().global().AutoloadMap.get()) {
+  if (RuntimeOption::RepoAuthoritative) {
     return false;
   }
 
@@ -559,7 +557,7 @@ bool HHVM_FUNCTION(clear_static_memoization,
   };
 
   if (isStringType(clsStr.m_type)) {
-    auto const cls = Unit::loadClass(clsStr.m_data.pstr);
+    auto const cls = Class::load(clsStr.m_data.pstr);
     if (!cls) return false;
     if (isStringType(funcStr.m_type)) {
       auto const func = cls->lookupMethod(funcStr.m_data.pstr);
@@ -576,7 +574,7 @@ bool HHVM_FUNCTION(clear_static_memoization,
   }
 
   if (isStringType(funcStr.m_type)) {
-    auto const func = Unit::loadFunc(funcStr.m_data.pstr);
+    auto const func = Func::load(funcStr.m_data.pstr);
     return func && clear(func);
   }
 
@@ -617,7 +615,7 @@ bool HHVM_FUNCTION(clear_lsb_memoization,
     return true;
   };
 
-  auto const cls = Unit::loadClass(clsStr.get());
+  auto const cls = Class::load(clsStr.get());
   if (!cls) return false;
 
   if (isStringType(funcStr.m_type)) {
@@ -821,7 +819,7 @@ enum class DynamicAttr : int8_t { Ignore, Require };
 
 template <DynamicAttr DA = DynamicAttr::Require>
 TypedValue dynamicFun(const StringData* fun) {
-  auto const func = Unit::loadFunc(fun);
+  auto const func = Func::load(fun);
   if (!func) {
     SystemLib::throwInvalidArgumentExceptionObject(
       folly::sformat("Unable to find function {}", fun->data())
@@ -843,7 +841,7 @@ TypedValue dynamicFun(const StringData* fun) {
 
 template <DynamicAttr DA = DynamicAttr::Require, bool checkVis = true>
 TypedValue dynamicClassMeth(const StringData* cls, const StringData* meth) {
-  auto const c = Unit::loadClass(cls);
+  auto const c = Class::load(cls);
   if (!c) {
     SystemLib::throwInvalidArgumentExceptionObject(
       folly::sformat("Unable to find class {}", cls->data())

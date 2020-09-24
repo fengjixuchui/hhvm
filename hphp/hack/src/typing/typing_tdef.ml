@@ -23,8 +23,7 @@ module MakeType = Typing_make_type
 
 let expand_typedef_ ?(force_expand = false) ety_env env r x argl =
   let pos = Reason.to_pos r in
-  let { td_pos; td_vis; td_tparams; td_type; td_constraint; td_decl_errors = _ }
-      =
+  let { td_pos; td_vis; td_tparams; td_type; td_constraint } =
     unsafe_opt @@ Typing_env.get_typedef env x
   in
   match Typing_defs.has_expanded ety_env x with
@@ -72,10 +71,10 @@ let expand_typedef_ ?(force_expand = false) ety_env env r x argl =
     if Naming_special_names.Classes.is_format_string x then
       (env, (ety_env, MakeType.class_type r x argl))
     else
-      (env, (ety_env, mk (r, get_node expanded_ty)))
+      (env, (ety_env, with_reason expanded_ty r))
 
-let expand_typedef ety_env env r x argl =
-  let (env, (_, ty)) = expand_typedef_ ety_env env r x argl in
+let expand_typedef ety_env env r type_name argl =
+  let (env, (_, ty)) = expand_typedef_ ety_env env r type_name argl in
   (env, ty)
 
 (* Expand a typedef, smashing abstraction and collecting a trail

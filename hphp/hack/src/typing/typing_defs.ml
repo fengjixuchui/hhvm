@@ -126,6 +126,11 @@ type pu_origin = {
   pu_enum: string;
 }
 
+type const_decl = {
+  cd_pos: Pos.t;
+  cd_type: decl_ty;
+}
+
 type class_elt = {
   ce_visibility: visibility;
   ce_type: decl_ty Lazy.t;
@@ -138,7 +143,6 @@ type class_elt = {
 and fun_elt = {
   fe_deprecated: string option;
   fe_type: decl_ty;
-  fe_decl_errors: Errors.t option;
   fe_pos: Pos.t;
 }
 
@@ -175,8 +179,6 @@ and class_type = {
   tc_abstract: bool;
   tc_final: bool;
   tc_const: bool;
-  tc_ppl: bool;
-      (** True when the class is annotated with the __PPL attribute. *)
   tc_deferred_init_members: SSet.t;
       (** When a class is abstract (or in a trait) the initialization of
        * a protected member can be delayed *)
@@ -254,7 +256,6 @@ and record_def_type = {
   rdt_fields: (Nast.sid * record_field_req) list;
   rdt_abstract: bool;
   rdt_pos: Pos.t;
-  rdt_errors: Errors.t option;
 }
 
 and typedef_type = {
@@ -263,7 +264,6 @@ and typedef_type = {
   td_tparams: decl_tparam list;
   td_constraint: decl_ty option;
   td_type: decl_ty;
-  td_decl_errors: Errors.t option;
 }
 
 and decl_tparam = decl_ty tparam
@@ -390,7 +390,7 @@ let has_expanded { type_expansions; _ } x =
       | _ -> None)
 
 let reason = function
-  | LoclType t -> fst (deref t)
+  | LoclType t -> get_reason t
   | ConstraintType t -> fst (deref_constraint_type t)
 
 let is_constraint_type = function
@@ -733,12 +733,32 @@ let class_id_equal cid1 cid2 = Int.equal (class_id_compare cid1 cid2) 0
 
 let has_member_compare ~normalize_lists hm1 hm2 =
   let ty_compare = ty_compare ~normalize_lists in
-  let { hm_name = (_, m1); hm_type = ty1; hm_class_id = cid1 } = hm1 in
-  let { hm_name = (_, m2); hm_type = ty2; hm_class_id = cid2 } = hm2 in
+  let {
+    hm_name = (_, m1);
+    hm_type = ty1;
+    hm_class_id = cid1;
+    hm_explicit_targs = targs1;
+  } =
+    hm1
+  in
+  let {
+    hm_name = (_, m2);
+    hm_type = ty2;
+    hm_class_id = cid2;
+    hm_explicit_targs = targs2;
+  } =
+    hm2
+  in
+  let targ_compare (_, (_, hint1)) (_, (_, hint2)) =
+    Aast_defs.compare_hint_ hint1 hint2
+  in
   match String.compare m1 m2 with
   | 0 ->
     (match ty_compare ty1 ty2 with
-    | 0 -> class_id_compare cid1 cid2
+    | 0 ->
+      (match class_id_compare cid1 cid2 with
+      | 0 -> Option.compare (List.compare targ_compare) targs1 targs2
+      | comp -> comp)
     | comp -> comp)
   | comp -> comp
 
@@ -843,12 +863,13 @@ let rec equal_decl_ty_ ty_1 ty_2 =
   | (Tmixed, Tmixed) -> true
   | (Tnonnull, Tnonnull) -> true
   | (Tdynamic, Tdynamic) -> true
-  | (Tapply (id1, tyl1), Tapply (id2, tyl2)) ->
-    Aast.equal_sid id1 id2 && equal_decl_tyl tyl1 tyl2
+  | (Tapply ((_, s1), tyl1), Tapply ((_, s2), tyl2)) ->
+    String.equal s1 s2 && equal_decl_tyl tyl1 tyl2
   | (Tgeneric (s1, argl1), Tgeneric (s2, argl2)) ->
     String.equal s1 s2 && equal_decl_tyl argl1 argl2
   | (Taccess (ty1, idl1), Taccess (ty2, idl2)) ->
-    equal_decl_ty ty1 ty2 && List.equal ~equal:Aast.equal_sid idl1 idl2
+    equal_decl_ty ty1 ty2
+    && List.equal ~equal:(fun (_, s1) (_, s2) -> String.equal s1 s2) idl1 idl2
   | (Tarray (tk1, tv1), Tarray (tk2, tv2)) ->
     Option.equal equal_decl_ty tk1 tk2 && Option.equal equal_decl_ty tv1 tv2
   | (Tdarray (tk1, tv1), Tdarray (tk2, tv2)) ->
@@ -871,8 +892,8 @@ let rec equal_decl_ty_ ty_1 ty_2 =
            Ast_defs.ShapeField.equal k1 k2 && equal_shape_field_type v1 v2)
          (Nast.ShapeMap.elements fields1)
          (Nast.ShapeMap.elements fields2)
-  | (Tpu_access (ty1, id1), Tpu_access (ty2, id2)) ->
-    equal_decl_ty ty1 ty2 && Aast.equal_sid id1 id2
+  | (Tpu_access (ty1, (_, s1)), Tpu_access (ty2, (_, s2))) ->
+    equal_decl_ty ty1 ty2 && String.equal s1 s2
   | (Tvar v1, Tvar v2) -> Ident.equal v1 v2
   | (Tany _, _)
   | (Terr, _)
@@ -918,6 +939,9 @@ and equal_decl_fun_arity ft1 ft2 =
 and equal_decl_fun_type fty1 fty2 =
   equal_decl_possibly_enforced_ty fty1.ft_ret fty2.ft_ret
   && equal_decl_ft_params fty1.ft_params fty2.ft_params
+  && equal_decl_ft_implicit_params
+       fty1.ft_implicit_params
+       fty2.ft_implicit_params
   && equal_decl_fun_arity fty1 fty2
   && equal_reactivity fty1.ft_reactive fty2.ft_reactive
   && Int.equal fty1.ft_flags fty2.ft_flags
@@ -934,6 +958,7 @@ and equal_reactivity r1 r2 =
   | (RxVar r1, RxVar r2) -> Option.equal equal_reactivity r1 r2
   | (Cipp s1, Cipp s2) -> Option.equal String.equal s1 s2
   | (CippLocal s1, CippLocal s2) -> Option.equal String.equal s1 s2
+  | (CippGlobal, CippGlobal) -> true
   | _ -> false
 
 and equal_param_rx_annotation pa1 pa2 =
@@ -956,6 +981,9 @@ and equal_decl_fun_param param1 param2 =
 
 and equal_decl_ft_params params1 params2 =
   List.equal ~equal:equal_decl_fun_param params1 params2
+
+and equal_decl_ft_implicit_params { capability = cap1 } { capability = cap2 } =
+  equal_decl_ty cap1 cap2
 
 let equal_typeconst_abstract_kind ak1 ak2 =
   match (ak1, ak2) with
@@ -1003,6 +1031,9 @@ let equal_fun_elt fe1 fe2 =
   Option.equal String.equal fe1.fe_deprecated fe2.fe_deprecated
   && equal_decl_ty fe1.fe_type fe2.fe_type
   && Pos.equal fe1.fe_pos fe2.fe_pos
+
+let equal_const_decl cd1 cd2 =
+  Pos.equal cd1.cd_pos cd2.cd_pos && equal_decl_ty cd1.cd_type cd2.cd_type
 
 let get_ce_abstract ce = is_set ce_flags_abstract ce.ce_flags
 

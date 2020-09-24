@@ -14,8 +14,7 @@
    | license@php.net so we can mail you a copy immediately.               |
    +----------------------------------------------------------------------+
 */
-#ifndef incl_HPHP_INTL_CALENDAR_H
-#define incl_HPHP_INTL_CALENDAR_H
+#pragma once
 
 #include "hphp/runtime/ext/extension.h"
 #include "hphp/runtime/ext/icu/icu.h"
@@ -47,7 +46,7 @@ struct IntlCalendar : IntlError {
 
   static Object newInstance(icu::Calendar *cal) {
     if (!c_IntlCalendar) {
-      c_IntlCalendar = Unit::lookupClass(s_IntlCalendar.get());
+      c_IntlCalendar = Class::lookup(s_IntlCalendar.get());
       assertx(c_IntlCalendar);
     }
     Object ret{c_IntlCalendar};
@@ -82,4 +81,3 @@ struct IntlCalendar : IntlError {
 /////////////////////////////////////////////////////////////////////////////
 }} // namespace HPHP::Intl
 
-#endif // incl_HPHP_INTL_CALENDAR_H

@@ -57,6 +57,7 @@ impl Default for GlobalOptions {
             profile_desc: String::new(),
             tco_like_type_hints: false,
             tco_union_intersection_type_hints: false,
+            tco_coeffects: false,
             tco_like_casts: false,
             tco_simple_pessimize: 0.0,
             tco_complex_coercion: false,
@@ -100,6 +101,7 @@ impl Default for GlobalOptions {
             symbol_write_index_paths: vec![],
             symbol_write_include_hhi: true,
             po_enable_first_class_function_pointers: false,
+            po_enable_enum_classes: false,
             po_disable_modes: false,
             po_disable_hh_ignore_error: false,
             po_disable_array: false,
@@ -108,6 +110,7 @@ impl Default for GlobalOptions {
             tco_higher_kinded_types: false,
             tco_method_call_inference: false,
             tco_report_pos_from_reason: false,
+            tco_typecheck_sample_rate: 1.0,
         }
     }
 }

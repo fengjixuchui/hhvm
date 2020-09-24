@@ -1,5 +1,4 @@
-#ifndef incl_HPHP_EXT_COLLECTIONS_PAIR_H
-#define incl_HPHP_EXT_COLLECTIONS_PAIR_H
+#pragma once
 
 #include "hphp/runtime/ext/collections/ext_collections.h"
 #include "hphp/runtime/vm/native-data.h"
@@ -177,7 +176,7 @@ struct PairIterator {
   ~PairIterator() {}
 
   static Object newInstance() {
-    static Class* cls = Unit::lookupClass(s_PairIterator.get());
+    static Class* cls = Class::lookup(s_PairIterator.get());
     assertx(cls);
     return Object{cls};
   }
@@ -219,4 +218,3 @@ struct PairIterator {
 
 /////////////////////////////////////////////////////////////////////////////
 }}
-#endif

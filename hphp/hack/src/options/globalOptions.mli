@@ -151,6 +151,8 @@ type t = {
   tco_like_type_hints: bool;
   (* Enables union and intersection type hints *)
   tco_union_intersection_type_hints: bool;
+  (* Enables checking of coeffects *)
+  tco_coeffects: bool;
   (* Enables like casts *)
   tco_like_casts: bool;
   (* A simpler form of pessimization, only wraps the outermost type in like
@@ -248,6 +250,8 @@ type t = {
   po_disable_xhp_children_declarations: bool;
   (* Enables the special first class function pointer syntax foo<> *)
   po_enable_first_class_function_pointers: bool;
+  (* Enable enum class syntax *)
+  po_enable_enum_classes: bool;
   (* Treats partial files as strict *)
   po_disable_modes: bool;
   po_disable_hh_ignore_error: bool;
@@ -264,6 +268,10 @@ type t = {
    * with such positions are flagged
    *)
   tco_report_pos_from_reason: bool;
+  (* Type check this proportion of all files. Default is 1.0.
+   * DO NOT set to any other value except for testing purposes.
+   *)
+  tco_typecheck_sample_rate: float;
 }
 [@@deriving eq, show]
 
@@ -315,6 +323,7 @@ val make :
   ?profile_desc:string ->
   ?tco_like_type_hints:bool ->
   ?tco_union_intersection_type_hints:bool ->
+  ?tco_coeffects:bool ->
   ?tco_like_casts:bool ->
   ?tco_simple_pessimize:float ->
   ?tco_complex_coercion:bool ->
@@ -358,6 +367,7 @@ val make :
   ?po_disable_xhp_element_mangling:bool ->
   ?po_disable_xhp_children_declarations:bool ->
   ?po_enable_first_class_function_pointers:bool ->
+  ?po_enable_enum_classes:bool ->
   ?po_disable_modes:bool ->
   ?po_disable_hh_ignore_error:bool ->
   ?po_disable_array:bool ->
@@ -367,6 +377,7 @@ val make :
   ?tco_higher_kinded_types:bool ->
   ?tco_method_call_inference:bool ->
   ?tco_report_pos_from_reason:bool ->
+  ?tco_typecheck_sample_rate:float ->
   unit ->
   t
 
@@ -486,6 +497,10 @@ val tco_like_type_hints : t -> bool
 
 val tco_union_intersection_type_hints : t -> bool
 
+val coeffects : t -> bool
+
+val set_coeffects : t -> t
+
 val tco_like_casts : t -> bool
 
 val tco_simple_pessimize : t -> float
@@ -578,6 +593,8 @@ val po_disable_xhp_children_declarations : t -> bool
 
 val po_enable_first_class_function_pointers : t -> bool
 
+val po_enable_enum_classes : t -> bool
+
 val po_disable_modes : t -> bool
 
 val po_disable_hh_ignore_error : t -> bool
@@ -593,3 +610,5 @@ val tco_higher_kinded_types : t -> bool
 val tco_method_call_inference : t -> bool
 
 val tco_report_pos_from_reason : t -> bool
+
+val tco_typecheck_sample_rate : t -> float

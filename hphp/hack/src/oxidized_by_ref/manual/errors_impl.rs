@@ -9,54 +9,70 @@ use crate::errors::*;
 use crate::pos::Pos;
 
 impl<'a> Error_<'a, Pos<'a>> {
-    pub fn new(code: ErrorCode, messages: &'a [Message<'a, Pos<'a>>]) -> Self {
-        Error_(code, messages)
+    pub fn new(
+        code: ErrorCode,
+        claim: Message<'a, Pos<'a>>,
+        reasons: &'a [Message<'a, Pos<'a>>],
+    ) -> Self {
+        Error_ {
+            code,
+            claim,
+            reasons,
+        }
     }
 
     pub fn pos(&self) -> &Pos<'a> {
-        let Self(_code, messages) = self;
-        let (pos, _msg) = messages.first().unwrap();
+        let (pos, _msg) = &self.claim;
         pos
     }
 
     pub fn code(&self) -> ErrorCode {
-        self.0
+        self.code
     }
 }
 
-impl<P: Ord> Ord for Error_<'_, P> {
+pub trait FileOrd {
+    fn cmp_file(&self, other: &Self) -> Ordering;
+}
+
+impl FileOrd for &Pos<'_> {
+    fn cmp_file(&self, other: &Self) -> Ordering {
+        self.filename().cmp(other.filename())
+    }
+}
+
+impl<P: Ord + FileOrd> Ord for Error_<'_, P> {
     // Intended to match the implementation of `compare` in `Errors.sort` in OCaml.
     fn cmp(&self, other: &Self) -> Ordering {
-        let Self(self_code, self_messages) = self;
-        let Self(other_code, other_messages) = other;
-        let (self_first, other_first) = match (self_messages.first(), other_messages.first()) {
-            (None, None) => return Ordering::Equal,
-            (Some(_), None) => return Ordering::Greater,
-            (None, Some(_)) => return Ordering::Less,
-            (Some(self_first), Some(other_first)) => (self_first, other_first),
-        };
-        let (self_pos, self_msg) = self_first;
-        let (other_pos, other_msg) = other_first;
-        // The primary sort order is the position of the first message.
+        let Self {
+            code: self_code,
+            claim: self_claim,
+            reasons: self_reasons,
+        } = self;
+        let Self {
+            code: other_code,
+            claim: other_claim,
+            reasons: other_reasons,
+        } = other;
+        let (self_pos, self_msg) = self_claim;
+        let (other_pos, other_msg) = other_claim;
+        // The primary sort order is by file of the claim (main message).
         self_pos
-            .cmp(other_pos)
-            // If the positions are the same, sort by error code.
-            .then((*self_code as isize).cmp(&(*other_code as isize)))
+            .cmp_file(other_pos)
+            // If the files are the same, sort by phase.
+            .then(((*self_code / 1000) as isize).cmp(&((*other_code / 1000) as isize)))
+            // If the phases are the same, sort by position.
+            .then(self_pos.cmp(other_pos))
             // If the error codes are the same, sort by message text.
             .then(self_msg.cmp(other_msg))
-            // If the first message text is the same, compare the rest of the
+            // If the claim message text is the same, compare the reason
             // messages (which contain further explanation for the error
-            // reported in the first message).
-            .then(
-                self_messages
-                    .iter()
-                    .skip(1)
-                    .cmp(other_messages.iter().skip(1)),
-            )
+            // reported in the claim message).
+            .then(self_reasons.iter().cmp(other_reasons.iter()))
     }
 }
 
-impl<P: Ord> PartialOrd for Error_<'_, P> {
+impl<P: Ord + FileOrd> PartialOrd for Error_<'_, P> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
@@ -74,11 +90,15 @@ pub struct DisplayRaw<'a>(&'a Error_<'a, Pos<'a>>);
 
 impl<'a> std::fmt::Display for DisplayRaw<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Error_(code, messages) = self.0;
-        let (pos, msg) = messages.first().unwrap();
+        let Error_ {
+            code,
+            claim,
+            reasons,
+        } = self.0;
+        let (pos, msg) = claim;
         let code = DisplayErrorCode(*code);
         write!(f, "{}\n{} ({})", pos.string(), msg, code)?;
-        for (pos, msg) in messages.iter().skip(1) {
+        for (pos, msg) in reasons.iter() {
             write!(f, "\n  {}\n  {}", pos.string(), msg)?;
         }
         Ok(())

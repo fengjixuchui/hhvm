@@ -13,8 +13,7 @@
    | license@php.net so we can mail you a copy immediately.               |
    +----------------------------------------------------------------------+
 */
-#ifndef incl_HPHP_PACKED_ARRAY_H_
-#define incl_HPHP_PACKED_ARRAY_H_
+#pragma once
 
 #include <cstddef>
 #include <cstdint>
@@ -174,17 +173,13 @@ struct PackedArray final : type_scan::MarkCollectable<PackedArray> {
   static ArrayData* MakeUncountedHelper(ArrayData* array, size_t extra);
 
   static ArrayData* MakeVecFromAPC(const APCArray* apc, bool isLegacy = false);
-  static ArrayData* MakeVArrayFromAPC(const APCArray* apc);
+  static ArrayData* MakeVArrayFromAPC(const APCArray* apc,
+                                      bool isMarked = false);
 
   static bool VecEqual(const ArrayData* ad1, const ArrayData* ad2);
   static bool VecNotEqual(const ArrayData* ad1, const ArrayData* ad2);
   static bool VecSame(const ArrayData* ad1, const ArrayData* ad2);
   static bool VecNotSame(const ArrayData* ad1, const ArrayData* ad2);
-  static bool VecLt(const ArrayData* ad1, const ArrayData* ad2);
-  static bool VecLte(const ArrayData* ad1, const ArrayData* ad2);
-  static bool VecGt(const ArrayData* ad1, const ArrayData* ad2);
-  static bool VecGte(const ArrayData* ad1, const ArrayData* ad2);
-  static int64_t VecCmp(const ArrayData* ad1, const ArrayData* ad2);
 
   // Fast iteration
   template <class F, bool inc = true>
@@ -244,4 +239,3 @@ private:
 
 }
 
-#endif

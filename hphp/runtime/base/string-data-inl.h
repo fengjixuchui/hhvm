@@ -13,8 +13,7 @@
    | license@php.net so we can mail you a copy immediately.               |
    +----------------------------------------------------------------------+
 */
-#ifndef incl_HPHP_RUNTIME_BASE_STRING_DATA_INL_H_
-#define incl_HPHP_RUNTIME_BASE_STRING_DATA_INL_H_
+#pragma once
 
 namespace HPHP {
 
@@ -98,6 +97,7 @@ inline char* StringData::mutableData() const {
 inline int StringData::size() const { return m_len; }
 inline bool StringData::empty() const { return size() == 0; }
 inline uint32_t StringData::capacity() const {
+  assertx(isRefCounted());
   return kSizeIndex2StringCapacity[m_aux16 & 0xff];
 }
 
@@ -249,4 +249,3 @@ struct string_data_lti {
 
 }
 
-#endif

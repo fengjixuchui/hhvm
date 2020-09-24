@@ -18,6 +18,7 @@
 
 #include "hphp/runtime/base/attr.h"
 #include "hphp/runtime/ext/extension.h"
+#include "hphp/runtime/base/autoload-handler.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/execution-context.h"
 #include "hphp/runtime/base/init-fini-node.h"
@@ -54,6 +55,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <iomanip>
 #include <ostream>
 #include <string>
 #include <vector>
@@ -584,92 +586,128 @@ void Func::print_attrs(std::ostream& out, Attr attrs) {
 }
 
 void Func::prettyPrint(std::ostream& out, const PrintOpts& opts) const {
-  if (preClass() != nullptr) {
-    out << "Method";
-    print_attrs(out, m_attrs);
-    if (isPhpLeafFn()) out << " (leaf)";
-    if (isMemoizeWrapper()) out << " (memoize_wrapper)";
-    if (isMemoizeWrapperLSB()) out << " (memoize_wrapper_lsb)";
-    if (cls() != nullptr) {
-      out << ' ' << fullName()->data();
-    } else {
-      out << ' ' << preClass()->name()->data() << "::" << m_name->data();
-    }
-  } else {
-    out << "Function";
-    print_attrs(out, m_attrs);
-    if (isPhpLeafFn()) out << " (leaf)";
-    if (isMemoizeWrapper()) out << " (memoize_wrapper)";
-    if (isMemoizeWrapperLSB()) out << " (memoize_wrapper_lsb)";
-    out << ' ' << m_name->data();
-  }
-
-  out << " at " << base();
-  out << std::endl;
-
-  if (!opts.metadata) return;
-
-  const ParamInfoVec& params = shared()->m_params;
-  for (uint32_t i = 0; i < params.size(); ++i) {
-    auto const& param = params[i];
-    out << " Param: " << localVarName(i)->data();
-    if (param.typeConstraint.hasConstraint()) {
-      out << " " << param.typeConstraint.displayName(cls(), true);
-    }
-    if (param.userType) {
-      out << " (" << param.userType->data() << ")";
-    }
-    if (param.funcletOff != kInvalidOffset) {
-      out << " DV" << " at " << param.funcletOff;
-      if (param.phpCode) {
-        out << " = " << param.phpCode->data();
+  if (opts.name) {
+    if (preClass() != nullptr) {
+      out << "Method";
+      print_attrs(out, m_attrs);
+      if (isPhpLeafFn()) out << " (leaf)";
+      if (isMemoizeWrapper()) out << " (memoize_wrapper)";
+      if (isMemoizeWrapperLSB()) out << " (memoize_wrapper_lsb)";
+      if (cls() != nullptr) {
+        out << ' ' << fullName()->data();
+      } else {
+        out << ' ' << preClass()->name()->data() << "::" << m_name->data();
       }
+    } else {
+      out << "Function";
+      print_attrs(out, m_attrs);
+      if (isPhpLeafFn()) out << " (leaf)";
+      if (isMemoizeWrapper()) out << " (memoize_wrapper)";
+      if (isMemoizeWrapperLSB()) out << " (memoize_wrapper_lsb)";
+      out << ' ' << m_name->data();
     }
+
+    out << " at " << base();
     out << std::endl;
   }
 
-  if (returnTypeConstraint().hasConstraint() ||
-      (returnUserType() && !returnUserType()->empty())) {
-    out << " Ret: ";
-    if (returnTypeConstraint().hasConstraint()) {
-      out << " " << returnTypeConstraint().displayName(cls(), true);
+  if (opts.metadata) {
+    const ParamInfoVec& params = shared()->m_params;
+    for (uint32_t i = 0; i < params.size(); ++i) {
+      auto const& param = params[i];
+      out << " Param: " << localVarName(i)->data();
+      if (param.typeConstraint.hasConstraint()) {
+        out << " " << param.typeConstraint.displayName(cls(), true);
+      }
+      if (param.userType) {
+        out << " (" << param.userType->data() << ")";
+      }
+      if (param.funcletOff != kInvalidOffset) {
+        out << " DV" << " at " << param.funcletOff;
+        if (param.phpCode) {
+          out << " = " << param.phpCode->data();
+        }
+      }
+      out << std::endl;
     }
-    if (returnUserType() && !returnUserType()->empty()) {
-      out << " (" << returnUserType()->data() << ")";
+
+    if (returnTypeConstraint().hasConstraint() ||
+        (returnUserType() && !returnUserType()->empty())) {
+      out << " Ret: ";
+      if (returnTypeConstraint().hasConstraint()) {
+        out << " " << returnTypeConstraint().displayName(cls(), true);
+      }
+      if (returnUserType() && !returnUserType()->empty()) {
+        out << " (" << returnUserType()->data() << ")";
+      }
+      out << std::endl;
     }
-    out << std::endl;
+
+    if (repoReturnType().tag() != RepoAuthType::Tag::Cell) {
+      out << "repoReturnType: " << show(repoReturnType()) << '\n';
+    }
+    if (repoAwaitedReturnType().tag() != RepoAuthType::Tag::Cell) {
+      out << "repoAwaitedReturnType: " << show(repoAwaitedReturnType()) << '\n';
+    }
+    out << "maxStackCells: " << maxStackCells() << '\n'
+        << "numLocals: " << numLocals() << '\n'
+        << "numIterators: " << numIterators() << '\n';
+
+    const EHEntVec& ehtab = shared()->m_ehtab;
+    size_t ehId = 0;
+    for (auto it = ehtab.begin(); it != ehtab.end(); ++it, ++ehId) {
+      out << " EH " << ehId << " Catch for " <<
+        it->m_base << ":" << it->m_past;
+      if (it->m_parentIndex != -1) {
+        out << " outer EH " << it->m_parentIndex;
+      }
+      if (it->m_iterId != -1) {
+        out << " iterId " << it->m_iterId;
+      }
+      out << " handle at " << it->m_handler;
+      if (it->m_end != kInvalidOffset) {
+        out << ":" << it->m_end;
+      }
+      if (it->m_parentIndex != -1) {
+        out << " parentIndex " << it->m_parentIndex;
+      }
+      out << std::endl;
+    }
   }
 
-  if (repoReturnType().tag() != RepoAuthType::Tag::Cell) {
-    out << "repoReturnType: " << show(repoReturnType()) << '\n';
-  }
-  if (repoAwaitedReturnType().tag() != RepoAuthType::Tag::Cell) {
-    out << "repoAwaitedReturnType: " << show(repoAwaitedReturnType()) << '\n';
-  }
-  out << "maxStackCells: " << maxStackCells() << '\n'
-      << "numLocals: " << numLocals() << '\n'
-      << "numIterators: " << numIterators() << '\n';
+  if (opts.startOffset != kInvalidOffset) {
+    auto startOffset = std::max(base(), opts.startOffset);
+    auto stopOffset = std::min(past(), opts.stopOffset);
 
-  const EHEntVec& ehtab = shared()->m_ehtab;
-  size_t ehId = 0;
-  for (auto it = ehtab.begin(); it != ehtab.end(); ++it, ++ehId) {
-    out << " EH " << ehId << " Catch for " <<
-      it->m_base << ":" << it->m_past;
-    if (it->m_parentIndex != -1) {
-      out << " outer EH " << it->m_parentIndex;
+    if (startOffset >= stopOffset) {
+      return;
     }
-    if (it->m_iterId != -1) {
-      out << " iterId " << it->m_iterId;
+
+    const auto bc = unit()->entry();
+    const auto* it = &bc[startOffset];
+    int prevLineNum = -1;
+    while (it < &bc[stopOffset]) {
+      if (opts.showLines) {
+        int lineNum = unit()->getLineNumber(offsetOf(it));
+        if (lineNum != prevLineNum) {
+          out << "  // line " << lineNum << std::endl;
+          prevLineNum = lineNum;
+        }
+      }
+
+      out << std::string(opts.indentSize, ' ');
+      prettyPrintInstruction(out, offsetOf(it));
+      it += instrLen(it);
     }
-    out << " handle at " << it->m_handler;
-    if (it->m_end != kInvalidOffset) {
-      out << ":" << it->m_end;
-    }
-    if (it->m_parentIndex != -1) {
-      out << " parentIndex " << it->m_parentIndex;
-    }
-    out << std::endl;
   }
+}
+
+void Func::prettyPrintInstruction(std::ostream& out, Offset offset) const {
+  const auto bc = unit()->entry();
+  const auto* it = &bc[offset];
+  out << std::setw(4) << (it - bc) << ": "
+    << instrToString(it, this)
+    << std::endl;
 }
 
 
@@ -745,6 +783,123 @@ void logFunc(const Func* func, StructuredLogEntry& ent) {
   ent.setInt("num_iterators", func->numIterators());
   ent.setInt("frame_cells", func->numSlotsInFrame());
   ent.setInt("max_stack_cells", func->maxStackCells());
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Lookup
+
+const StaticString s_DebuggerMain("__DebuggerMain");
+
+void Func::def(Func* func, bool debugger) {
+  assertx(!func->isMethod());
+  auto const handle = func->funcHandle();
+
+  if (UNLIKELY(debugger)) {
+    // Don't define the __debugger_main() function
+    if (func->userAttributes().count(s_DebuggerMain.get())) return;
+  }
+
+  if (rds::isPersistentHandle(handle)) {
+    auto& funcAddr = rds::handleToRef<LowPtr<Func>,
+                                      rds::Mode::Persistent>(handle);
+    auto const oldFunc = funcAddr.get();
+    if (oldFunc == func) return;
+    if (UNLIKELY(oldFunc != nullptr)) {
+      assertx(oldFunc->isBuiltin() && !func->isBuiltin());
+      raise_error(Strings::REDECLARE_BUILTIN, func->name()->data());
+    }
+    funcAddr = func;
+  } else {
+    assertx(rds::isNormalHandle(handle));
+    auto& funcAddr = rds::handleToRef<LowPtr<Func>, rds::Mode::Normal>(handle);
+    if (!rds::isHandleInit(handle, rds::NormalTag{})) {
+      rds::initHandle(handle);
+    } else {
+      if (funcAddr.get() == func) return;
+      if (func->attrs() & AttrIsMethCaller) {
+        // emit the duplicated meth_caller directly
+        return;
+      }
+      raise_error(Strings::FUNCTION_ALREADY_DEFINED, func->name()->data());
+    }
+    funcAddr = func;
+  }
+
+  if (func->isUnique()) func->getNamedEntity()->setUniqueFunc(func);
+
+  if (UNLIKELY(debugger)) phpDebuggerDefFuncHook(func);
+}
+
+Func* Func::lookup(const NamedEntity* ne) {
+  return ne->getCachedFunc();
+}
+
+Func* Func::lookup(const StringData* name) {
+  const NamedEntity* ne = NamedEntity::get(name);
+  return ne->getCachedFunc();
+}
+
+Func* Func::lookupBuiltin(const StringData* name) {
+  // Builtins are either persistent (the normal case), or defined at the
+  // beginning of every request (if JitEnableRenameFunction or interception is
+  // enabled). In either case, they're unique, so they should be present in the
+  // NamedEntity.
+  auto const ne = NamedEntity::get(name);
+  auto const f = ne->uniqueFunc();
+  return (f && f->isBuiltin()) ? f : nullptr;
+}
+
+Func* Func::load(const NamedEntity* ne, const StringData* name) {
+  Func* func = ne->getCachedFunc();
+  if (LIKELY(func != nullptr)) return func;
+  if (AutoloadHandler::s_instance->autoloadFunc(
+        const_cast<StringData*>(name))) {
+    func = ne->getCachedFunc();
+  }
+  return func;
+}
+
+Func* Func::load(const StringData* name) {
+  String normStr;
+  auto ne = NamedEntity::get(name, true, &normStr);
+
+  // Try to fetch from cache
+  Func* func_ = ne->getCachedFunc();
+  if (LIKELY(func_ != nullptr)) return func_;
+
+  // Normalize the namespace
+  if (normStr) {
+    name = normStr.get();
+  }
+
+  // Autoload the function
+  return AutoloadHandler::s_instance->autoloadFunc(
+    const_cast<StringData*>(name)
+  ) ? ne->getCachedFunc() : nullptr;
+}
+
+void Func::bind(Func *func) {
+  assertx(!func->isMethod());
+  auto const ne = func->getNamedEntity();
+
+  auto const persistent =
+    (RuntimeOption::RepoAuthoritative || !SystemLib::s_inited) &&
+    (func->attrs() & AttrPersistent);
+
+  auto const init_val = LowPtr<Func>(func);
+
+  ne->m_cachedFunc.bind(
+    persistent ? rds::Mode::Persistent : rds::Mode::Normal,
+    rds::LinkName{"Func", func->name()},
+    &init_val
+  );
+  if (func->isUnique() && func == ne->getCachedFunc()) {
+    // we need to check that we actually were responsible for the bind here
+    // before we set the uniqueFunc on `ne`.  this seems strange, but it's
+    // because meth_caller funcs are unique but can have the same name.
+    ne->setUniqueFunc(func);
+  }
+  func->setFuncHandle(ne->m_cachedFunc);
 }
 
 ///////////////////////////////////////////////////////////////////////////////

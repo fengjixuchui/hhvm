@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_JIT_TYPE_H_
-#define incl_HPHP_JIT_TYPE_H_
+#pragma once
 
 #include "hphp/runtime/base/array-data.h"
 #include "hphp/runtime/base/bespoke-layout.h"
@@ -612,9 +611,12 @@ public:
   static Type cns(std::nullptr_t);
 
   /*
-   * Return a const type for `tv'.
+   * Return a const type for `tv'. `cns' will assert if given a type
+   * which isn't allowed to have constants, while `tryCns' will return
+   * folly::none.
    */
-  static Type cns(const TypedValue& tv);
+  static Type cns(TypedValue tv);
+  static folly::Optional<Type> tryCns(TypedValue tv);
 
   /*
    * If this represents a constant value, return the most specific strict
@@ -772,18 +774,11 @@ public:
 
   /*
    * Return a copy of this type with an ArraySpec for the given bespoke index
-   *   TVanillaArr.narrowToBespokeLayout(<some layout>) == TArr
-   *   (TVec|TInt).narrowToBespokeLayout(<some layout>) == TVec=Bespoke(<some layout>)|TIn
+   *   TVanillaArr.narrowToBespokeLayout(<some layout>) == TBottom
+   *   TVec.narrowToBespokeLayout(<some layout>) == TVec=Bespoke(<some layout>)
+   *   (TVec|TInt).narrowToBespokeLayout(<some layout>) == TVec=Bespoke(<some layout>)|TInt
    */
   Type narrowToBespokeLayout(BespokeLayout) const;
-
-  /*
-   * Return a copy of this type without a vanilla ArraySpec. Examples:
-   *   TVanillaArr.widenToBespoke()        == TArr
-   *   (TVanillaVec|TInt).widenToBespoke() == TVec|TInt
-   *   TPackedArr.widenToBespoke()         == TArr={PackedKind|Bespoke}
-   */
-  Type widenToBespoke() const;
 
   /*
    * Return a copy of this Type with the specialization dropped.
@@ -999,4 +994,3 @@ namespace std {
 #include "hphp/runtime/vm/jit/type-inl.h"
 #undef incl_HPHP_JIT_TYPE_INL_H_
 
-#endif

@@ -272,13 +272,9 @@ let rec ifun_decl
   fe
 
 and fun_decl (ctx : Provider_context.t) (f : Nast.fun_) : Typing_defs.fun_elt =
-  let (errors, fe) =
-    Errors.do_ (fun () ->
-        let dep = Dep.Fun (snd f.f_name) in
-        let env = { Decl_env.mode = f.f_mode; droot = Some dep; ctx } in
-        fun_decl_in_env env ~is_lambda:false f)
-  in
-  let fe = { fe with fe_decl_errors = Some errors } in
+  let dep = Dep.Fun (snd f.f_name) in
+  let env = { Decl_env.mode = f.f_mode; droot = Some dep; ctx } in
+  let fe = fun_decl_in_env env ~is_lambda:false f in
   record_fun (snd f.f_name);
   fe
 
@@ -290,6 +286,15 @@ and fun_decl_in_env (env : Decl_env.env) ~(is_lambda : bool) (f : Nast.fun_) :
   let returns_void_to_rx = fun_returns_void_to_rx f.f_user_attributes in
   let return_disposable = has_return_disposable_attribute f.f_user_attributes in
   let params = make_params env ~is_lambda f.f_params in
+  let capability =
+    hint_to_type
+      ~is_lambda:false
+      ~default:
+        (Typing_make_type.default_capability (Reason.Rhint (fst f.f_name)))
+      env
+      (Reason.Rwitness (fst f.f_name))
+      (hint_of_type_hint f.f_cap)
+  in
   let ret_ty =
     ret_from_fun_kind
       ~is_lambda
@@ -325,6 +330,7 @@ and fun_decl_in_env (env : Decl_env.env) ~(is_lambda : bool) (f : Nast.fun_) :
             ft_tparams = tparams;
             ft_where_constraints = where_constraints;
             ft_params = params;
+            ft_implicit_params = { capability };
             ft_ret = { et_type = ret_ty; et_enforced = false };
             ft_reactive = reactivity;
             ft_flags =
@@ -337,7 +343,7 @@ and fun_decl_in_env (env : Decl_env.env) ~(is_lambda : bool) (f : Nast.fun_) :
                 ~returns_void_to_rx;
           } )
   in
-  { fe_pos = fst f.f_name; fe_type; fe_deprecated; fe_decl_errors = None }
+  { fe_pos = fst f.f_name; fe_type; fe_deprecated }
 
 (*****************************************************************************)
 (* Section declaring the type of a class *)
@@ -485,6 +491,10 @@ and class_parents_decl
   List.iter c.sc_xhp_attr_uses class_type;
   List.iter c.sc_req_extends class_type;
   List.iter c.sc_req_implements class_type;
+  let enum_includes =
+    Aast.enum_includes_map ~f:(fun et -> et.te_includes) c.sc_enum_type
+  in
+  List.iter enum_includes class_type;
   ()
 
 and is_disposable_type (env : Decl_env.env) (hint : Typing_defs.decl_ty) : bool
@@ -562,9 +572,6 @@ and class_decl
     (c : Shallow_decl_defs.shallow_class) : Decl_defs.decl_class_type =
   let is_abstract = class_is_abstract c in
   let const = Attrs.mem SN.UserAttributes.uaConst c.sc_user_attributes in
-  let is_ppl =
-    Attrs.mem SN.UserAttributes.uaProbabilisticModel c.sc_user_attributes
-  in
   let (_p, cls_name) = c.sc_name in
   let class_dep = Dep.Class cls_name in
   let env = { Decl_env.mode = c.sc_mode; droot = Some class_dep; ctx } in
@@ -694,7 +701,6 @@ and class_decl
     {
       dc_final = c.sc_final;
       dc_const = const;
-      dc_ppl = is_ppl;
       dc_abstract = is_abstract;
       dc_need_init = has_concrete_cstr;
       dc_deferred_init_members = deferred_members;
@@ -823,7 +829,6 @@ and build_constructor
       fe_pos = pos;
       fe_deprecated = method_.sm_deprecated;
       fe_type = method_.sm_type;
-      fe_decl_errors = None;
     }
   in
   if write_shmem then Decl_heap.Constructors.add class_name fe;
@@ -1068,14 +1073,7 @@ and method_decl_acc
       elt_deprecated = m.sm_deprecated;
     }
   in
-  let fe =
-    {
-      fe_pos = pos;
-      fe_deprecated = None;
-      fe_type = m.sm_type;
-      fe_decl_errors = None;
-    }
-  in
+  let fe = { fe_pos = pos; fe_deprecated = None; fe_type = m.sm_type } in
   if write_shmem then
     if is_static then
       Decl_heap.StaticMethods.add (elt.elt_origin, id) fe
@@ -1108,16 +1106,14 @@ let record_def_decl (rd : Nast.record_def) : Typing_defs.record_def_type =
     rdt_fields = fields;
     rdt_abstract = rd.rd_abstract;
     rdt_pos = rd.rd_span;
-    rdt_errors = None;
   }
 
 let type_record_def_naming_and_decl
     ~(write_shmem : bool) (ctx : Provider_context.t) (rd : Nast.record_def) :
     Typing_defs.record_def_type =
   let rd = Errors.ignore_ (fun () -> Naming.record_def ctx rd) in
-  let (errors, tdecl) = Errors.do_ (fun () -> record_def_decl rd) in
+  let tdecl = record_def_decl rd in
   record_record_def (snd rd.rd_name);
-  let tdecl = { tdecl with rdt_errors = Some errors } in
   if write_shmem then Decl_heap.RecordDefs.add (snd rd.rd_name) tdecl;
   tdecl
 
@@ -1169,16 +1165,14 @@ and typedef_decl (ctx : Provider_context.t) (tdef : Nast.typedef) :
   let td_tparams = List.map params (type_param env) in
   let td_type = Decl_hint.hint env concrete_type in
   let td_constraint = Option.map tcstr (Decl_hint.hint env) in
-  let td_decl_errors = None in
-  { td_vis; td_tparams; td_constraint; td_type; td_pos; td_decl_errors }
+  { td_vis; td_tparams; td_constraint; td_type; td_pos }
 
 and type_typedef_naming_and_decl
     ~(write_shmem : bool) (ctx : Provider_context.t) (tdef : Nast.typedef) :
     Typing_defs.typedef_type =
   let tdef = Errors.ignore_ (fun () -> Naming.typedef ctx tdef) in
-  let (errors, tdecl) = Errors.do_ (fun () -> typedef_decl ctx tdef) in
+  let tdecl = typedef_decl ctx tdef in
   record_typedef (snd tdef.t_name);
-  let tdecl = { tdecl with td_decl_errors = Some errors } in
   if write_shmem then Decl_heap.Typedefs.add (snd tdef.t_name) tdecl;
   tdecl
 
@@ -1202,12 +1196,12 @@ let const_decl (ctx : Provider_context.t) (cst : Nast.gconst) :
 
 let iconst_decl
     ~(write_shmem : bool) (ctx : Provider_context.t) (cst : Nast.gconst) :
-    Typing_defs.decl_ty * Errors.t =
+    Typing_defs.decl_ty =
   let cst = Errors.ignore_ (fun () -> Naming.global_const ctx cst) in
-  let (errors, hint_ty) = Errors.do_ (fun () -> const_decl ctx cst) in
+  let hint_ty = const_decl ctx cst in
   record_const (snd cst.cst_name);
-  if write_shmem then Decl_heap.GConsts.add (snd cst.cst_name) (hint_ty, errors);
-  (hint_ty, errors)
+  if write_shmem then Decl_heap.GConsts.add (snd cst.cst_name) hint_ty;
+  hint_ty
 
 (*****************************************************************************)
 let rec name_and_declare_types_program
@@ -1232,7 +1226,7 @@ let rec name_and_declare_types_program
       | Typedef typedef -> type_typedef_decl_if_missing ~sh ctx typedef
       | Stmt _ -> ()
       | Constant cst ->
-        let (_ : decl_ty * Errors.t) = iconst_decl ~write_shmem:true ctx cst in
+        let (_ : decl_ty) = iconst_decl ~write_shmem:true ctx cst in
         ())
 
 let make_env
@@ -1290,7 +1284,7 @@ let declare_const_in_file
     ~(write_shmem : bool)
     (ctx : Provider_context.t)
     (file : Relative_path.t)
-    (name : string) : Typing_defs.decl_ty * Errors.t =
+    (name : string) : Typing_defs.decl_ty =
   match Ast_provider.find_gconst_in_file ctx file name with
   | Some cst -> iconst_decl ~write_shmem ctx cst
   | None -> err_not_found file name

@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_IRGEN_BESPOKE_H
-#define incl_HPHP_IRGEN_BESPOKE_H
+#pragma once
 
 #include "hphp/runtime/vm/jit/irgen-state.h"
 #include "hphp/runtime/vm/srckey.h"
@@ -38,7 +37,7 @@ bool checkBespokeInputs(IRGS&, SrcKey);
  * Having this hook allows us to handle these cases in wildly different ways
  * based on runtime flags, profiling vs. optimizing, etc.
  */
-void handleBespokeInputs(IRGS&, SrcKey);
+void handleBespokeInputs(IRGS&, SrcKey, std::function<void(IRGS&)> emitVanilla);
 
 /*
  * After emitting code for the given SrcKey, call this method to perform any
@@ -50,4 +49,3 @@ void handleVanillaOutputs(IRGS&, SrcKey);
 
 }}}
 
-#endif

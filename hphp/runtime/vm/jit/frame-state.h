@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_JIT_FRAME_STATE_H_
-#define incl_HPHP_JIT_FRAME_STATE_H_
+#pragma once
 
 #include "hphp/runtime/vm/jit/alias-class.h"
 #include "hphp/runtime/vm/jit/cfg.h"
@@ -130,18 +129,30 @@ struct MBRState {
  * stack, that we push and pop as we enter and leave inlined frames.
  */
 struct FrameState {
+  explicit FrameState(const Func* func);
+  bool checkInvariants() const;
+
   /*
-   * Current Func, VM stack pointer, VM frame pointer, offset between sp and
-   * fp, and bytecode position.
+   * Function, instructions are emitted on behalf of. This may be different from
+   * the function of the `fpValue` frame, e.g. stublogues run in the context of
+   * the caller, but the code is emitted on behalf of the callee.
    */
   const Func* curFunc;
+
+  /*
+   * VM frame pointer.
+   */
   SSATmp* fpValue{nullptr};
 
   /*
-   * Tracking of in-memory state of the evaluation stack.
+   * Logical stack base.
+   *
+   * - `spValue` points to an arbitrary stack position, which may even be
+   *   outside of the logical stack
+   * - `irSPOff` is an offset from the logical stack base to `spValue`
    */
   SSATmp* spValue{nullptr};
-  FPInvOffset irSPOff;  // delta from vmfp to `spValue'
+  FPInvOffset irSPOff{0};
 
   /*
    * Depth of the in-memory eval stack.
@@ -219,7 +230,7 @@ struct FrameState {
  *   - current function and bytecode offset
  */
 struct FrameStateMgr final {
-  explicit FrameStateMgr(const BCMarker&);
+  explicit FrameStateMgr(const Func* func);
 
   FrameStateMgr(const FrameStateMgr&) = delete;
   FrameStateMgr(FrameStateMgr&&) = default;
@@ -300,7 +311,6 @@ struct FrameStateMgr final {
    * In the presence of inlining, these return state for the most-inlined
    * frame.
    */
-  const Func* func()              const { return cur().curFunc; }
   SSATmp*     fp()                const { return cur().fpValue; }
   SSATmp*     sp()                const { return cur().spValue; }
   SSATmp*     ctx()               const { return cur().ctx; }
@@ -320,8 +330,7 @@ struct FrameStateMgr final {
    * @requires: inlineDepth() > 0
    */
   FPInvOffset callerIRSPOff() const {
-    assertx(inlineDepth() > 0);
-    return m_stack.at(m_stack.size() - 2).irSPOff;
+    return caller().irSPOff;
   }
 
   /*
@@ -368,6 +377,11 @@ struct FrameStateMgr final {
    */
   void refinePredictedType(Location l, Type type);
 
+  /*
+   * Debug stringification.
+   */
+  std::string show() const;
+
   /////////////////////////////////////////////////////////////////////////////
 
 private:
@@ -376,7 +390,16 @@ private:
     return m_stack.back();
   }
   const FrameState& cur() const {
-    return const_cast<FrameStateMgr*>(this)->cur();
+    assertx(!m_stack.empty());
+    return m_stack.back();
+  }
+  FrameState& caller() {
+    assertx(inlineDepth() > 0);
+    return m_stack.at(m_stack.size() - 2);
+  }
+  const FrameState& caller() const {
+    assertx(inlineDepth() > 0);
+    return m_stack.at(m_stack.size() - 2);
   }
 
   /*
@@ -397,6 +420,8 @@ private:
   bool checkInvariants() const;
   void updateMInstr(const IRInstruction*);
   void updateMBase(const IRInstruction*);
+  void initStack(SSATmp* sp, FPInvOffset irSPOff, FPInvOffset bcSPOff);
+  void uninitStack();
   void trackInlineCall(const IRInstruction* inst);
   void trackInlineReturn();
   void trackCall();
@@ -405,7 +430,7 @@ private:
    * Per-block state helpers.
    */
   bool save(Block* b, Block* pred = nullptr);
-  void collectPostConds(Block* exitBlock);
+  PostConditions collectPostConds();
 
   /*
    * LocationState update helpers.
@@ -468,13 +493,5 @@ private:
 
 ///////////////////////////////////////////////////////////////////////////////
 
-/*
- * Debug stringification.
- */
-std::string show(const FrameStateMgr&);
-
-///////////////////////////////////////////////////////////////////////////////
-
 }}}
 
-#endif

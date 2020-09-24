@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_PIDCONTOLLER_H_
-#define incl_HPHP_PIDCONTOLLER_H_
+#pragma once
 
 #include <cmath>
 #include <limits>
@@ -79,6 +78,12 @@ struct PIDController {
     return output;
   }
 
+  void setStartingOutput(double output) {
+    if (output > max) output = max;
+    if (output < min) output = min;
+    m_integral = output / kI;
+  }
+
   double dt;
   double max;
   double min;
@@ -95,4 +100,3 @@ private:
 
 }
 
-#endif // incl_HPHP_PIDCONTOLLER_H_

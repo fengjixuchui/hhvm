@@ -600,7 +600,7 @@ Class* read_class_internal(ProfDataDeserializer& ser) {
     ne->m_cachedClass.markUninit();
   }
 
-  auto const cls = Unit::defClass(preClass, true);
+  auto const cls = Class::def(preClass, true);
   if (cls->pinitVec().size()) cls->initPropHandle();
   if (cls->numStaticProperties()) cls->initSPropHandles();
 
@@ -774,8 +774,11 @@ void maybe_output_prof_trans_rec_trace(
   if (HPHP::Trace::moduleEnabledRelease(HPHP::Trace::print_profiles)) {
     auto const sk = profTransRec->srcKey();
     auto const unit = sk.unit();
+    auto const func = sk.func();
     const char *filePath = "";
-    if (unit->filepath()->data() && unit->filepath()->size()) {
+    if (func->originalFilename() && func->originalFilename()->size()) {
+      filePath = func->originalFilename()->data();
+    } else if (unit->filepath()->data() && unit->filepath()->size()) {
       filePath = unit->filepath()->data();
     }
     folly::dynamic blocks = folly::dynamic::array;
@@ -924,7 +927,9 @@ void maybe_output_target_profile_trace(
         auto const func = srcKey.func();
         auto const unit = srcKey.unit();
         const char *filePath = "";
-        if (unit->filepath()->data() && unit->filepath()->size()) {
+        if (func->originalFilename() && func->originalFilename()->size()) {
+          filePath = func->originalFilename()->data();
+        } else if (unit->filepath()->data() && unit->filepath()->size()) {
           filePath = unit->filepath()->data();
         }
         folly::dynamic targetProfileInfo = folly::dynamic::object;
@@ -932,7 +937,7 @@ void maybe_output_target_profile_trace(
         targetProfileInfo["profile_raw_name"] = name->toCppString();
         targetProfileInfo["profile"] = prof.value().toDynamic();
         targetProfileInfo["file_path"] = filePath;
-        targetProfileInfo["line_number"] = unit->getLineNumber(srcKey.offset());
+        targetProfileInfo["line_number"] = unit->getLineNumber(pt.bcOff);
         targetProfileInfo["function_name"] = func->fullName()->data();
         HPHP::Trace::traceRelease("json:%s\n", folly::toJson(targetProfileInfo).c_str());
       }
@@ -1353,7 +1358,7 @@ void write_class(ProfDataSerializer& ser, const Class* cls) {
   if (cls->preClass()->attrs() & AttrNoExpandTrait) {
     for (auto const tName : cls->preClass()->usedTraits()) {
       auto const trait =
-        Unit::lookupUniqueClassInContext(tName, nullptr, nullptr);
+        Class::lookupUniqueInContext(tName, nullptr, nullptr);
       assertx(trait);
       record_dep(trait);
     }
@@ -1506,7 +1511,7 @@ Func* read_func(ProfDataDeserializer& ser) {
           fid = ~fid;
           auto const name = read_string(ser);
           if (name->isame(s_86ctor.get())) return SystemLib::s_nullCtor;
-          return Unit::lookupFunc(name);
+          return Func::lookup(name);
         }
         auto const id = read_raw<uint32_t>(ser);
         if (id & 0x80000000) {
@@ -1520,14 +1525,14 @@ Func* read_func(ProfDataDeserializer& ser) {
         auto const unit = read_unit(ser);
         for (auto const f : unit->funcs()) {
           if (f->base() == id) {
-            Unit::bindFunc(f);
+            Func::bind(f);
             auto const handle = f->funcHandle();
             if (!rds::isPersistentHandle(handle) &&
                 (!rds::isHandleInit(handle, rds::NormalTag{}) ||
                  rds::handleToRef<LowPtr<Func>,
                                   rds::Mode::Normal>(handle).get() != f)) {
               rds::uninitHandle(handle);
-              Unit::defFunc(f, false);
+              Func::def(f, false);
             }
             return f;
           }

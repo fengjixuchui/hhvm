@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<37b4cc6686a3936bb0a0a867795e9523>>
+// @generated SignedSource<<968dbc046ff0fae9e09909c078af81b6>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
@@ -75,6 +75,7 @@ pub struct GlobalOptions<'a> {
     pub profile_desc: &'a str,
     pub tco_like_type_hints: bool,
     pub tco_union_intersection_type_hints: bool,
+    pub tco_coeffects: bool,
     pub tco_like_casts: bool,
     pub tco_simple_pessimize: f64,
     pub tco_complex_coercion: bool,
@@ -118,6 +119,7 @@ pub struct GlobalOptions<'a> {
     pub po_disable_xhp_element_mangling: bool,
     pub po_disable_xhp_children_declarations: bool,
     pub po_enable_first_class_function_pointers: bool,
+    pub po_enable_enum_classes: bool,
     pub po_disable_modes: bool,
     pub po_disable_hh_ignore_error: bool,
     pub po_disable_array: bool,
@@ -126,5 +128,6 @@ pub struct GlobalOptions<'a> {
     pub tco_higher_kinded_types: bool,
     pub tco_method_call_inference: bool,
     pub tco_report_pos_from_reason: bool,
+    pub tco_typecheck_sample_rate: f64,
 }
 impl<'a> TrivialDrop for GlobalOptions<'a> {}

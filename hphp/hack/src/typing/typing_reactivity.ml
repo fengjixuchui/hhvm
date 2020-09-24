@@ -180,7 +180,11 @@ let check_reactivity_matches
       (* Pure functions can only call pure functions *)
       | ( (MaybeReactive (Pure _) | Pure _),
           ( MaybeReactive (Reactive _ | Shallow _ | Local _ | Nonreactive)
-          | Reactive _ | Shallow _ | Local _ | Nonreactive ) )
+          | Reactive _ | Shallow _ | Local _ | Nonreactive ) ) ->
+        Errors.nonpure_function_call
+          pos
+          (Reason.to_pos reason)
+          (TU.reactivity_to_string env callee_reactivity)
       (* Reactive functions can only call reactive or pure functions *)
       | ( (MaybeReactive (Reactive _) | Reactive _),
           ( MaybeReactive (Shallow _ | Local _ | Nonreactive)
@@ -196,6 +200,13 @@ let check_reactivity_matches
           (Reason.to_pos reason)
           (TU.reactivity_to_string env callee_reactivity)
           cause_pos
+      | ((Cipp _ | CippGlobal | CippLocal _), _)
+      | (_, (Cipp _ | CippGlobal | CippLocal _)) ->
+        Errors.callsite_cipp_mismatch
+          pos
+          (Reason.to_pos reason)
+          (TU.reactivity_to_string env callee_reactivity)
+          (TU.reactivity_to_string env caller_reactivity)
       | _ ->
         Errors.callsite_reactivity_mismatch
           pos
@@ -253,6 +264,9 @@ let check_call env method_info pos reason ft arg_types =
        stripped condition types (they were checked on step 1) *)
       let caller_reactivity =
         let rec go = function
+          | Pure (Some _)
+          | MaybeReactive (Pure (Some _)) ->
+            MaybeReactive (Pure None)
           | Reactive (Some _)
           | MaybeReactive (Reactive (Some _)) ->
             MaybeReactive (Reactive None)

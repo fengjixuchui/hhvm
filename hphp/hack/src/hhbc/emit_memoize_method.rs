@@ -247,8 +247,8 @@ fn make_memoize_method_with_params_code(
     let deprecation_body =
         emit_body::emit_deprecation_info(args.scope, args.deprecation_info, emitter.systemlib())?;
     let (begin_label, default_value_setters) =
-        // Default value setters belong in the wrapper method not in the original method
-        emit_param::emit_param_default_value_setter(emitter, env, false, pos, hhas_params)?;
+    // Default value setters belong in the wrapper method not in the original method
+     emit_param::emit_param_default_value_setter(emitter, env, false, pos, hhas_params)?;
     let fcall_args = {
         let mut fcall_flags = FcallFlags::default();
         if args.flags.contains(Flags::IS_REFIED) {
@@ -282,7 +282,7 @@ fn make_memoize_method_with_params_code(
     param_count += add_refied;
     Ok(InstrSeq::gather(vec![
         begin_label,
-        emit_body::emit_method_prolog(emitter, env, pos, hhas_params, args.params, &[], false)?,
+        emit_body::emit_method_prolog(emitter, env, pos, hhas_params, args.params, &[])?,
         deprecation_body,
         if args.method.static_ {
             instr::empty()
@@ -427,7 +427,6 @@ fn make_wrapper<'a>(
     // TODO(hrust): Just clone env
     let env_copy = emit_body::make_env(
         RcOc::clone(&env.namespace),
-        env.flags.contains(env::Flags::NEEDS_LOCAL_THIS),
         env.scope.clone(),
         None,
         env.flags.contains(env::Flags::IN_RX_BODY),

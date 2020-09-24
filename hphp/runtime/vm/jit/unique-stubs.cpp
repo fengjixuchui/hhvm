@@ -70,7 +70,6 @@
 #include "hphp/runtime/ext/asio/ext_async-generator.h"
 #include "hphp/runtime/ext/generator/ext_generator.h"
 
-#include "hphp/util/abi-cxx.h"
 #include "hphp/util/arch.h"
 #include "hphp/util/asm-x64.h"
 #include "hphp/util/data-block.h"
@@ -310,11 +309,7 @@ TCA emitFuncPrologueRedispatch(CodeBlock& cb, DataBlock& data) {
                            TypedValue* values) -> ArrayData* {
       // TODO(jgriego) surely we have a better way of instrumenting this ...
       ARRPROV_USE_RUNTIME_LOCATION();
-      if (RO::EvalHackArrDVArrs) {
-        return PackedArray::MakeVec(count, values);
-      } else {
-        return PackedArray::MakeVArray(count, values);
-      }
+      return PackedArray::MakeVArray(count, values);
     };
     auto const packedArr = v.makeReg();
     {

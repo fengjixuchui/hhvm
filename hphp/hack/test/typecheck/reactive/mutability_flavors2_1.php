@@ -2,6 +2,7 @@
 
 class A {}
 
+<<__Rx>>
 function g(A $a): void {
 }
 

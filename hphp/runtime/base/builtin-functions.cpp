@@ -288,7 +288,7 @@ Class* vm_decode_class_from_name(
                       "is undefined", clsName.data(), funcName.data());
       }
     }
-    cls = Unit::loadClass(clsName.get());
+    cls = Class::load(clsName.get());
   }
   return cls;
 }
@@ -417,7 +417,7 @@ bool checkMethCallerTarget(const Func* meth, const Class* ctx, bool error) {
 }
 
 void checkMethCaller(const Func* func, const Class* ctx) {
-  auto const cls = Unit::loadClass(func->methCallerClsName());
+  auto const cls = Class::load(func->methCallerClsName());
   if (!cls) {
     SystemLib::throwInvalidArgumentExceptionObject(folly::sformat(
       "meth_caller(): class {} not found", func->methCallerClsName()->data()
@@ -579,7 +579,7 @@ vm_decode_function(const_variant_ref function,
           }
         }
       } else {
-        cc = Unit::loadClass(c.get());
+        cc = Class::load(c.get());
       }
       if (!cc) {
         if (flags == DecodeFlags::Warn) {
@@ -605,7 +605,7 @@ vm_decode_function(const_variant_ref function,
     }
 
     if (!cls) {
-      HPHP::Func* f = HPHP::Unit::loadFunc(name.get());
+      HPHP::Func* f = HPHP::Func::load(name.get());
       if (!f) {
         if (flags == DecodeFlags::Warn) {
           raise_invalid_argument_warning("function: method '%s' not found",
@@ -669,7 +669,7 @@ Variant vm_call_user_func(const_variant_ref function, const Variant& params,
 Variant
 invoke(const String& function, const Variant& params,
        bool allowDynCallNoPointer /* = false */) {
-  Func* func = Unit::loadFunc(function.get());
+  Func* func = Func::load(function.get());
   if (func && (isContainer(params) || params.isNull())) {
     auto ret = Variant::attach(
       g_context->invokeFunc(func, params, nullptr, nullptr, true, false,
@@ -687,7 +687,7 @@ invoke(const String& function, const Variant& params,
 
 Variant invoke_static_method(const String& s, const String& method,
                              const Variant& params, bool fatal /* = true */) {
-  HPHP::Class* class_ = Unit::lookupClass(s.get());
+  HPHP::Class* class_ = Class::lookup(s.get());
   if (class_ == nullptr) {
     o_invoke_failed(s.data(), method.data(), fatal);
     return uninit_null();
@@ -1292,7 +1292,7 @@ Variant require(const String& file,
 }
 
 bool function_exists(const String& function_name) {
-  auto f = Unit::lookupFunc(function_name.get());
+  auto f = Func::lookup(function_name.get());
   return (f != nullptr) &&
          (f->arFuncPtr() != Native::unimplementedWrapper);
 }

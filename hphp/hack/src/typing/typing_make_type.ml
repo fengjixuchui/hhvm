@@ -102,15 +102,15 @@ let err r = mk (r, Terr)
 
 let nullable_decl r ty =
   (* Cheap avoidance of double nullable *)
-  match deref ty with
-  | (_, (Toption _ as ty_)) -> mk (r, ty_)
+  match get_node ty with
+  | Toption _ as ty_ -> mk (r, ty_)
   | _ -> mk (r, Toption ty)
 
 let nullable_locl r ty =
   (* Cheap avoidance of double nullable *)
-  match deref ty with
-  | (_, (Toption _ as ty_)) -> mk (r, ty_)
-  | (_, Tunion []) -> null r
+  match get_node ty with
+  | Toption _ as ty_ -> mk (r, ty_)
+  | Tunion [] -> null r
   | _ -> mk (r, Toption ty)
 
 let nothing r = mk (r, Tunion [])
@@ -132,10 +132,19 @@ let intersection r tyl =
 
 let unenforced ty = { et_type = ty; et_enforced = false }
 
-let has_member r name ty class_id =
+let enforced ty = { et_type = ty; et_enforced = true }
+
+let has_member r ~name ~ty ~class_id ~explicit_targs =
   ConstraintType
     (mk_constraint_type
-       (r, Thas_member { hm_name = name; hm_type = ty; hm_class_id = class_id }))
+       ( r,
+         Thas_member
+           {
+             hm_name = name;
+             hm_type = ty;
+             hm_class_id = class_id;
+             hm_explicit_targs = explicit_targs;
+           } ))
 
 let list_destructure r tyl =
   ConstraintType
@@ -160,3 +169,7 @@ let simple_variadic_splat r ty =
              d_variadic = Some ty;
              d_kind = SplatUnpack;
            } ))
+
+let default_capability r =
+  (* TODO(coeffects) Replace with type alias from HHI *)
+  nothing r

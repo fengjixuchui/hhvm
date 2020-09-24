@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_ATTR_H_
-#define incl_HPHP_ATTR_H_
+#pragma once
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
@@ -166,7 +165,9 @@ enum Attr {
   // skip tagging the return value with the builtin's callsite.)
   AttrProvenanceSkipFrame  = (1u << 29), //       |          |    X    //
                                          //       |          |         //
-
+  // Is this an "enum class" (in the sense of the "enum dependent types" feature)?
+  AttrEnumClass            = (1u << 30), //    X  |          |         //
+                                         //       |          |         //
   // XXX: The enum is used as a bitmask and without a value in the highest bit
   //      we get assertions in dev builds.
   AttrUnusedMaxAttr        = (1u << 31),
@@ -196,4 +197,3 @@ inline const char* attrToVisibilityStr(Attr attr) {
 ///////////////////////////////////////////////////////////////////////////////
 }
 
-#endif // incl_HPHP_ATTR_H_

@@ -1100,7 +1100,6 @@ std::string RuntimeOption::RepoCentralPath;
 int32_t RuntimeOption::RepoCentralFileMode;
 std::string RuntimeOption::RepoCentralFileUser;
 std::string RuntimeOption::RepoCentralFileGroup;
-std::string RuntimeOption::RepoEvalMode;
 std::string RuntimeOption::RepoJournal = "delete";
 bool RuntimeOption::RepoAllowFallbackPath = true;
 bool RuntimeOption::RepoCommit = true;
@@ -1734,18 +1733,6 @@ void RuntimeOption::Load(
     replacePlaceholders(RepoLocalPath);
     replacePlaceholders(RepoCentralPath);
 
-    // Repo - Eval
-    Config::Bind(RepoEvalMode, ini, config, "Repo.Eval.Mode");
-    if (RepoEvalMode.empty()) {
-      RepoEvalMode = "readonly";
-    } else if (RepoEvalMode.compare("local")
-               && RepoEvalMode.compare("central")
-               && RepoEvalMode.compare("readonly")) {
-      Logger::Error("Bad config setting: Repo.Eval.Mode=%s",
-                    RepoEvalMode.c_str());
-      RepoEvalMode = "readonly";
-    }
-
     Config::Bind(RepoJournal, ini, config, "Repo.Journal", RepoJournal);
     Config::Bind(RepoCommit, ini, config, "Repo.Commit",
                  RepoCommit);
@@ -1843,6 +1830,8 @@ void RuntimeOption::Load(
       low_2m_pages(EvalMaxLowMemHugePages);
       high_2m_pages(EvalMaxHighArenaHugePages);
     }
+    s_enable_static_arena =
+      Config::GetBool(ini, config, "Eval.UseTLStaticArena", false);
 
     replacePlaceholders(EvalHackCompilerExtractPath);
     replacePlaceholders(EvalHackCompilerFallbackPath);
@@ -2791,7 +2780,8 @@ void RuntimeOption::Load(
 
   // We don't support provenance for bespoke array-likes, so don't construct
   // any at runtime if we're logging provenance instrumentation results.
-  if (RO::EvalBespokeArrayLikeMode > 0 && RO::EvalLogArrayProvenance) {
+  if (RO::EvalBespokeArrayLikeMode > 0 &&
+      (RO::EvalArrayProvenance || RO::EvalLogArrayProvenance)) {
     RO::EvalBespokeArrayLikeMode = 0;
   }
 
@@ -2814,6 +2804,13 @@ void RuntimeOption::Load(
   if (RuntimeOption::EvalArrayProvenance) {
     RuntimeOption::EvalJitForceVMRegSync = true;
   }
+
+  // we need to maintain an invariant that PureEnforceCalls >= RxEnforceCalls...
+  // We can't be stricter on rx than on pure, as that would break rx assumptions
+  RuntimeOption::EvalPureEnforceCalls = std::max(
+    RuntimeOption::EvalPureEnforceCalls, RuntimeOption::EvalRxEnforceCalls);
+  RuntimeOption::EvalPureVerifyBody = std::max(
+    RuntimeOption::EvalPureVerifyBody, RuntimeOption::EvalRxVerifyBody);
 
   // Initialize defaults for repo-specific parser configuration options.
   RepoOptions::setDefaults(config, ini);

@@ -104,11 +104,19 @@ APCArray::MakeSharedArray(ArrayData* arr, APCHandleLevel level,
 
       if (arr->isVArray()) {
         assertx(!RuntimeOption::EvalHackArrDVArrs);
-        return add_prov(MakePacked(arr, APCKind::SharedVArray, unserializeObj));
+        return add_prov(MakePacked(arr,
+                                   arr->isLegacyArray() ?
+                                     APCKind::SharedMarkedVArray :
+                                     APCKind::SharedVArray,
+                                   unserializeObj));
       }
       if (arr->isDArray()) {
         assertx(!RuntimeOption::EvalHackArrDVArrs);
-        return add_prov(MakeHash(arr, APCKind::SharedDArray, unserializeObj));
+        return add_prov(MakeHash(arr,
+                                 arr->isLegacyArray() ?
+                                   APCKind::SharedMarkedDArray :
+                                   APCKind::SharedDArray,
+                                 unserializeObj));
       }
       return arr->isVectorData()
         ? MakePacked(arr, APCKind::SharedPackedArray, unserializeObj)
@@ -192,7 +200,7 @@ APCHandle::Pair APCArray::MakeHash(ArrayData* arr, APCKind kind,
                                    bool unserializeObj) {
   auto const num = arr->size();
   auto const cap = num > 2 ? folly::nextPowTwo(num) : 2;
-  auto const prov_off = arrprov::tagSize(arr);
+  auto const prov_off = arrprov::arrayWantsTag(arr) ? arrprov::kAPCTagSize : 0;
   auto const allocSize = sizeof(APCArray)
                        + sizeof(int) * cap
                        + sizeof(Bucket) * num
@@ -287,7 +295,7 @@ APCHandle* APCArray::MakeUncountedKeyset(
 APCHandle::Pair APCArray::MakePacked(ArrayData* arr, APCKind kind,
                                      bool unserializeObj) {
   auto const num_elems = arr->size();
-  auto const prov_off = arrprov::tagSize(arr);
+  auto const prov_off = arrprov::arrayWantsTag(arr) ? arrprov::kAPCTagSize : 0;
   auto const allocSize = sizeof(APCArray)
                        + sizeof(APCHandle*) * num_elems
                        + prov_off;
@@ -320,11 +328,8 @@ APCHandle::Pair APCArray::MakePacked(ArrayData* arr, APCKind kind,
 
 void APCArray::Delete(APCHandle* handle) {
   auto const arr = APCArray::fromHandle(handle);
-  auto const prov_off = arrprov::tagSize(arr);
+  auto const prov_off = arrprov::arrayWantsTag(arr) ? arrprov::kAPCTagSize : 0;
   arr->~APCArray();
-  if (RuntimeOption::EvalArrayProvenance) {
-    arrprov::clearTag(arr);
-  }
   apc_free(reinterpret_cast<char*>(arr) - prov_off);
 }
 

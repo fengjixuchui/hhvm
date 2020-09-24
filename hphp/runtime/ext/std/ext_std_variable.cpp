@@ -127,17 +127,14 @@ bool HHVM_FUNCTION(is_scalar, const Variant& v) {
 bool HHVM_FUNCTION(HH_is_php_array, const Variant& v) {
   // We want this set to false as this is meant to be the "this can receive
   // both PHP and Hack arrays" version of `is_array`.
-  return is_array(v.asTypedValue(), /* logOnHackArrays = */ false);
+  return is_php_array(v.asTypedValue());
 }
 
 bool HHVM_FUNCTION(is_array, const Variant& v) {
   if (RuntimeOption::EvalLogOnIsArrayFunction) {
     raise_notice("call to deprecated builtin is_array()");
   }
-  if (UNLIKELY(RuntimeOption::EvalWidenIsArray)) {
-    return is_any_array(v.asTypedValue(), /* logOnHackArrays = */ true);
-  }
-  return is_array(v.asTypedValue(), /*logOnHackArrays=*/true);
+  return is_any_array(v.asTypedValue());
 }
 
 bool HHVM_FUNCTION(HH_is_vec, const Variant& v) {
@@ -206,7 +203,7 @@ bool HHVM_FUNCTION(HH_is_meth_caller, TypedValue v) {
   if (tvIsFunc(v)) {
     return val(v).pfunc->isMethCaller();
   } else if (tvIsObject(v)) {
-    auto const mcCls = Unit::lookupClass(s_meth_caller_cls.get());
+    auto const mcCls = Class::lookup(s_meth_caller_cls.get());
     assertx(mcCls);
     return mcCls == val(v).pobj->getVMClass();
   }
@@ -582,7 +579,7 @@ bool HHVM_FUNCTION(HH_is_late_init_prop_init,
 bool HHVM_FUNCTION(HH_is_late_init_sprop_init,
                    const String& clsName,
                    const String& name) {
-  auto const cls = Unit::loadClass(clsName.get());
+  auto const cls = Class::load(clsName.get());
   if (!cls) {
     SystemLib::throwInvalidArgumentExceptionObject(
       folly::sformat("Unknown class {}", clsName)

@@ -87,12 +87,6 @@ Type Type::narrowToBespokeLayout(BespokeLayout layout) const {
   return Type(*this, newSpec);
 }
 
-Type Type::widenToBespoke() const {
-  if (!supports(SpecKind::Array)) return *this;
-  if (supports(SpecKind::Class) || supports(SpecKind::Record)) return *this;
-  return Type(*this, arrSpec().widenToBespoke());
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 
 const ArrayData* Type::arrLikeVal() const {
@@ -963,7 +957,11 @@ bool ratArrIsCounted(const RepoAuthType::Array* arr, const Class* ctx) {
   return false;
 }
 
-Type typeFromRATImpl(RepoAuthType ty, const Class* ctx) {
+}
+
+//////////////////////////////////////////////////////////////////////
+
+Type typeFromRAT(RepoAuthType ty, const Class* ctx) {
   using T = RepoAuthType::Tag;
   switch (ty.tag()) {
     case T::OptBool:        return TBool       | TInitNull;
@@ -1090,7 +1088,7 @@ Type typeFromRATImpl(RepoAuthType ty, const Class* ctx) {
     case T::OptExactObj: {
       auto base = TObj;
 
-      if (auto const cls = Unit::lookupUniqueClassInContext(ty.clsName(),
+      if (auto const cls = Class::lookupUniqueInContext(ty.clsName(),
                                                             ctx, nullptr)) {
         if (ty.tag() == T::ExactObj || ty.tag() == T::OptExactObj) {
           base = Type::ExactObj(cls);
@@ -1110,7 +1108,7 @@ Type typeFromRATImpl(RepoAuthType ty, const Class* ctx) {
     case T::OptExactCls: {
       auto base = TCls;
 
-      if (auto const cls = Unit::lookupUniqueClassInContext(ty.clsName(),
+      if (auto const cls = Class::lookupUniqueInContext(ty.clsName(),
                                                             ctx, nullptr)) {
         if (ty.tag() == T::ExactCls || ty.tag() == T::OptExactCls) {
           base = Type::ExactCls(cls);
@@ -1145,15 +1143,6 @@ Type typeFromRATImpl(RepoAuthType ty, const Class* ctx) {
   }
   not_reached();
 }
-
-}
-
-Type typeFromRAT(RepoAuthType ty, const Class* ctx) {
-  auto const result = typeFromRATImpl(ty, ctx);
-  return allowBespokeArrayLikes() ? result.widenToBespoke() : result;
-}
-
-//////////////////////////////////////////////////////////////////////
 
 Type typeFromPropTC(const HPHP::TypeConstraint& tc,
                     const Class* propCls,
@@ -1232,7 +1221,7 @@ Type typeFromPropTC(const HPHP::TypeConstraint& tc,
     }
 
     if (auto const cls =
-          Unit::lookupUniqueClassInContext(tc.typeName(), ctx, nullptr)) {
+          Class::lookupUniqueInContext(tc.typeName(), ctx, nullptr)) {
       return handleCls(cls);
     }
 
@@ -1271,9 +1260,6 @@ Type relaxType(Type t, DataTypeCategory cat) {
   switch (cat) {
     case DataTypeGeneric:
       return TCell;
-
-    case DataTypeCountness:
-      return !t.maybe(TCounted) ? TUncounted : t.unspecialize();
 
     case DataTypeCountnessInit:
       if (t <= TUninit) return TUninit;

@@ -8,8 +8,8 @@ mod decl_mode_smart_constructors_generated;
 
 use ocaml::core::mlvalues::Value;
 use parser_core_types::{
-    lexable_token::LexableToken, lexable_trivia::LexableTrivia, parser_env::ParserEnv,
-    source_text::SourceText, syntax::*, token_kind::TokenKind,
+    lexable_token::LexableToken, lexable_trivia::LexableTrivia, source_text::SourceText, syntax::*,
+    token_kind::TokenKind,
 };
 use rust_to_ocaml::{SerializationContext, ToOcaml};
 use syntax_smart_constructors::{StateType, SyntaxSmartConstructors};
@@ -30,7 +30,7 @@ impl<'src, S> State<'src, S> {
     }
 }
 
-impl<'a, S> Clone for State<'a, S> {
+impl<S> Clone for State<'_, S> {
     fn clone(&self) -> Self {
         Self {
             source: self.source.clone(),
@@ -40,7 +40,7 @@ impl<'a, S> Clone for State<'a, S> {
     }
 }
 
-impl<'a, S> State<'a, S> {
+impl<S> State<'_, S> {
     /// Pops n times and returns the first popped element
     fn pop_n(&mut self, n: usize) -> bool {
         if self.stack.len() < n {
@@ -60,11 +60,7 @@ impl<'a, S> State<'a, S> {
     }
 }
 
-impl<'src, S> StateType<'src, S> for State<'src, S> {
-    fn initial(_: &ParserEnv, source: &SourceText<'src>) -> Self {
-        Self::new(source)
-    }
-
+impl<S> StateType<S> for State<'_, S> {
     fn next(&mut self, inputs: &[&S]) {
         let st_todo = if self.stack.len() > inputs.len() {
             self.stack.split_off(self.stack.len() - inputs.len())
@@ -104,11 +100,11 @@ impl<'a, S, Token, Value> Clone for DeclModeSmartConstructors<'a, S, Token, Valu
     }
 }
 
-impl<'a, Token, Value>
-    SyntaxSmartConstructors<'a, Syntax<Token, Value>, State<'a, Syntax<Token, Value>>>
-    for DeclModeSmartConstructors<'a, Syntax<Token, Value>, Token, Value>
+impl<'src, Token, Value>
+    SyntaxSmartConstructors<Syntax<Token, Value>, State<'src, Syntax<Token, Value>>>
+    for DeclModeSmartConstructors<'src, Syntax<Token, Value>, Token, Value>
 where
-    Token: LexableToken<'a>,
+    Token: LexableToken,
     Value: SyntaxValueType<Token>,
 {
     fn make_yield_expression(&mut self, _r1: Self::R, _r2: Self::R) -> Self::R {
@@ -191,7 +187,7 @@ fn replace_body<'a, Token, Value>(
     saw_yield: bool,
 ) -> Syntax<Token, Value>
 where
-    Token: LexableToken<'a>,
+    Token: LexableToken,
     Value: SyntaxValueType<Token>,
 {
     match body.syntax {
@@ -199,7 +195,6 @@ where
             let stmts = if saw_yield {
                 let token = Token::make(
                     TokenKind::Yield,
-                    &st.source,
                     0,
                     0,
                     Token::Trivia::new(),

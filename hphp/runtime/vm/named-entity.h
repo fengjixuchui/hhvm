@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_VM_NAMED_ENTITY_H_
-#define incl_HPHP_VM_NAMED_ENTITY_H_
+#pragma once
 
 #include "hphp/runtime/base/rds.h"
 #include "hphp/runtime/base/string-data.h"
@@ -234,6 +233,9 @@ struct NamedEntity {
    */
   static std::vector<std::pair<const char*, int64_t>> tableStats();
 
+  template<class T>
+  const char* checkSameName();
+
 private:
   static Map* table();
 
@@ -269,4 +271,3 @@ using NamedEntityPair = std::pair<LowStringPtr,LowPtr<const NamedEntity>>;
 #include "hphp/runtime/vm/named-entity-inl.h"
 #undef incl_HPHP_VM_NAMED_ENTITY_INL_H_
 
-#endif

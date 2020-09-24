@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_DATATYPE_H_
-#define incl_HPHP_DATATYPE_H_
+#pragma once
 
 #include <cstdint>
 #include <cstdio>
@@ -60,12 +59,12 @@ namespace HPHP {
   DT(DArray,           -13) \
   DT(PersistentVArray, -12) \
   DT(VArray,           -11) \
-  DT(PersistentKeyset, -10) \
-  DT(Keyset,            -9) \
-  DT(PersistentDict,    -8) \
-  DT(Dict,              -7) \
-  DT(PersistentVec,     -6) \
-  DT(Vec,               -5) \
+  DT(PersistentDict,   -10) \
+  DT(Dict,              -9) \
+  DT(PersistentVec,     -8) \
+  DT(Vec,               -7) \
+  DT(PersistentKeyset,  -6) \
+  DT(Keyset,            -5) \
   DT(Record,            -3) \
   DT(PersistentString,  -2) \
   DT(String,            -1) \
@@ -178,7 +177,6 @@ MaybeDataType get_datatype(
 // even in the absence of type information.
 #define DT_CATEGORIES(func)                     \
   func(Generic)                                 \
-  func(Countness)                               \
   func(CountnessInit)                           \
   func(Specific)                                \
   func(Specialized)
@@ -289,7 +287,7 @@ inline bool isStringType(MaybeDataType t) {
 }
 
 constexpr bool isArrayLikeType(DataType t) {
-  return t <= KindOfVec;
+  return t <= KindOfKeyset;
 }
 inline bool isArrayLikeType(MaybeDataType t) {
   return t && isArrayLikeType(*t);
@@ -332,7 +330,7 @@ inline bool isArrayType(MaybeDataType t) {
 }
 
 constexpr bool isHackArrayType(DataType t) {
-  return t >= KindOfPersistentKeyset && t <= KindOfVec;
+  return t >= KindOfPersistentDict && t <= KindOfKeyset;
 }
 inline bool isHackArrayType(MaybeDataType t) {
   return t && isHackArrayType(*t);
@@ -459,4 +457,3 @@ template<> class FormatValue<HPHP::DataType> {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-#endif

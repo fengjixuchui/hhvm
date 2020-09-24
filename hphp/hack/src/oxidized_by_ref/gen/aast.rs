@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<930f63cccf422f1815bcf70b51a7ccf8>>
+// @generated SignedSource<<7d0c9e6093187f095b97cb69b0c6bc45>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
@@ -333,7 +333,6 @@ pub enum Expr_<'a, Ex, Fb, En, Hi> {
     ClassConst(&'a (ClassId<'a, Ex, Fb, En, Hi>, Pstring<'a>)),
     Call(
         &'a (
-            oxidized::aast::CallType,
             Expr<'a, Ex, Fb, En, Hi>,
             &'a [Targ<'a, Hi>],
             &'a [Expr<'a, Ex, Fb, En, Hi>],
@@ -408,7 +407,13 @@ pub enum Expr_<'a, Ex, Fb, En, Hi> {
     ),
     BracedExpr(&'a Expr<'a, Ex, Fb, En, Hi>),
     ParenthesizedExpr(&'a Expr<'a, Ex, Fb, En, Hi>),
-    ExpressionTree(&'a (Hint<'a>, Expr<'a, Ex, Fb, En, Hi>)),
+    ExpressionTree(
+        &'a (
+            Hint<'a>,
+            Expr<'a, Ex, Fb, En, Hi>,
+            Option<Expr<'a, Ex, Fb, En, Hi>>,
+        ),
+    ),
     Lplaceholder(&'a Pos<'a>),
     FunId(&'a Sid<'a>),
     MethodId(&'a (Expr<'a, Ex, Fb, En, Hi>, Pstring<'a>)),
@@ -919,7 +924,7 @@ pub struct XhpAttr<'a, Ex, Fb, En, Hi>(
     pub TypeHint<'a, Hi>,
     pub ClassVar<'a, Ex, Fb, En, Hi>,
     pub Option<oxidized::aast::XhpAttrTag>,
-    pub Option<(&'a Pos<'a>, bool, &'a [Expr<'a, Ex, Fb, En, Hi>])>,
+    pub Option<(&'a Pos<'a>, &'a [Expr<'a, Ex, Fb, En, Hi>])>,
 );
 impl<'a, Ex: TrivialDrop, Fb: TrivialDrop, En: TrivialDrop, Hi: TrivialDrop> TrivialDrop
     for XhpAttr<'a, Ex, Fb, En, Hi>

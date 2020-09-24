@@ -13,8 +13,7 @@
    | license@php.net so we can mail you a copy immediately.               |
    +----------------------------------------------------------------------+
 */
-#ifndef incl_HPHP_JIT_IRGEN_INTERNAL_H_
-#define incl_HPHP_JIT_IRGEN_INTERNAL_H_
+#pragma once
 
 #include "hphp/runtime/vm/jit/irgen.h"
 
@@ -519,7 +518,7 @@ inline void decRef(IRGS& env, SSATmp* tmp, int locId=-1) {
   gen(env, DecRef, DecRefData(locId), tmp);
 }
 
-inline void popDecRef(IRGS& env, GuardConstraint gc = DataTypeCountness) {
+inline void popDecRef(IRGS& env, GuardConstraint gc = DataTypeGeneric) {
   auto const val = pop(env, gc);
   decRef(env, val);
 }
@@ -533,7 +532,7 @@ inline SSATmp* push(IRGS& env, SSATmp* tmp) {
 }
 
 inline SSATmp* pushIncRef(IRGS& env, SSATmp* tmp,
-                          GuardConstraint gc = DataTypeCountness) {
+                          GuardConstraint gc = DataTypeGeneric) {
   env.irb->constrainValue(tmp, gc);
   gen(env, IncRef, tmp);
   return push(env, tmp);
@@ -572,6 +571,7 @@ inline BCMarker makeMarker(IRGS& env, Offset bcOff) {
   return BCMarker {
     SrcKey(curSrcKey(env), bcOff),
     stackOff,
+    env.irb->fs().stublogue(),
     env.profTransIDs,
     env.irb->fs().fp()
   };
@@ -641,7 +641,7 @@ inline const Class* lookupUniqueClass(IRGS& env,
                                       bool trustUnit = false) {
   // TODO: Once top level code is entirely dead it should be safe to always
   // trust the unit.
-  return Unit::lookupUniqueClassInContext(
+  return Class::lookupUniqueInContext(
     name, curClass(env), trustUnit ? curUnit(env) : nullptr);
 }
 
@@ -706,8 +706,6 @@ inline SSATmp* ldLocWarn(IRGS& env,
     return cns(env, TInitNull);
   };
 
-  env.irb->constrainLocal(loc.id, DataTypeCountnessInit, "ldLocWarn");
-
   if (locVal->type() <= TUninit) return warnUninit();
   if (!locVal->type().maybe(TUninit)) return locVal;
 
@@ -754,8 +752,7 @@ inline SSATmp* stLocImpl(IRGS& env,
                          SSATmp* newVal,
                          bool decRefOld,
                          bool incRefNew) {
-  auto const cat = decRefOld ? DataTypeCountness : DataTypeGeneric;
-  auto const oldLoc = ldLoc(env, id, ldPMExit, cat);
+  auto const oldLoc = ldLoc(env, id, ldPMExit, DataTypeGeneric);
 
   stLocRaw(env, id, fp(env), newVal);
   if (incRefNew) gen(env, IncRef, newVal);
@@ -785,7 +782,7 @@ inline void stLocMove(IRGS& env,
                       uint32_t id,
                       Block* ldPMExit,
                       SSATmp* newVal) {
-  auto const oldLoc = ldLoc(env, id, ldPMExit, DataTypeCountness);
+  auto const oldLoc = ldLoc(env, id, ldPMExit, DataTypeGeneric);
 
   stLocRaw(env, id, fp(env), newVal);
   decRef(env, oldLoc);
@@ -805,8 +802,6 @@ inline SSATmp* pushStLoc(IRGS& env,
     decRefOld,
     incRefNew
   );
-
-  env.irb->constrainValue(ret, DataTypeCountness);
   return push(env, ret);
 }
 
@@ -899,4 +894,3 @@ SSATmp* convertClsMethToVec(IRGS& env, SSATmp* clsMeth);
 SSATmp* convertClassKey(IRGS& env, SSATmp* key);
 }}}
 
-#endif

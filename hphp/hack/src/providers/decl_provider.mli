@@ -5,6 +5,9 @@
  * LICENSE file in the "hack" directory of this source tree.
  *
  *)
+
+(** Provides decls from the configured backend, e.g. shared memory, local memory, service, etc. *)
+
 type fun_key = string
 
 type class_key = string
@@ -27,7 +30,7 @@ type record_def_decl = Typing_defs.record_def_type
 
 type typedef_decl = Typing_defs.typedef_type
 
-type gconst_decl = Typing_defs.decl_ty * Errors.t
+type gconst_decl = Typing_defs.decl_ty
 
 val get_fun : Provider_context.t -> fun_key -> fun_decl option
 

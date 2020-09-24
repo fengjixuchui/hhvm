@@ -13,7 +13,7 @@ use emit_type_constant_rust as emit_type_constant;
 use env::{emitter::Emitter, local, Env, Flags as EnvFlags};
 use hhas_symbol_refs_rust::IncludePath;
 use hhbc_ast_rust::*;
-use hhbc_id_rust::{class, function, method, prop, r#const, Id};
+use hhbc_id_rust::{class, r#const, function, method, prop, Id};
 use hhbc_string_utils_rust as string_utils;
 use instruction_sequence_rust::{
     instr, unrecoverable,
@@ -221,7 +221,7 @@ mod inout_locals {
         ) -> std::result::Result<(), ()> {
             // f(inout $v) or f(&$v)
             if let tast::Expr_::Call(expr) = p {
-                let (_, _, _, args, uarg) = &**expr;
+                let (_, _, args, uarg) = &**expr;
                 args.iter()
                     .for_each(|arg| handle_arg(&c.env, false, c.i, arg, &mut c.state));
                 uarg.as_ref()
@@ -426,27 +426,18 @@ pub fn emit_expr(emitter: &mut Emitter, env: &Env, expression: &tast::Expr) -> R
         )),
         Expr_::ArrayGet(e) => {
             let (base_expr, opt_elem_expr) = &**e;
-            match (base_expr.lvar_name(), opt_elem_expr) {
-                (Some(name), Some(e)) if name == superglobals::GLOBALS => {
-                    Ok(InstrSeq::gather(vec![
-                        emit_expr(emitter, env, e)?,
-                        emit_pos(pos),
-                        instr::cgetg(),
-                    ]))
-                }
-                _ => Ok(emit_array_get(
-                    emitter,
-                    env,
-                    pos,
-                    None,
-                    QueryOp::CGet,
-                    base_expr,
-                    opt_elem_expr.as_ref(),
-                    false,
-                    false,
-                )?
-                .0),
-            }
+            Ok(emit_array_get(
+                emitter,
+                env,
+                pos,
+                None,
+                QueryOp::CGet,
+                base_expr,
+                opt_elem_expr.as_ref(),
+                false,
+                false,
+            )?
+            .0)
         }
         Expr_::ObjGet(e) => {
             Ok(emit_obj_get(emitter, env, pos, QueryOp::CGet, &e.0, &e.1, &e.2, false)?.0)
@@ -530,6 +521,16 @@ pub fn emit_expr(emitter: &mut Emitter, env: &Env, expression: &tast::Expr) -> R
         Expr_::PUAtom(_) | Expr_::PUIdentifier(_) => Err(unrecoverable(
             "TODO(T35357243): Pocket Universes syntax must be erased by now",
         )),
+        Expr_::ExpressionTree(et) => {
+            let desugared_expr = &et.2;
+            if let Some(expr) = desugared_expr {
+                emit_expr(emitter, env, expr)
+            } else {
+                Err(unrecoverable(
+                    "TODO(exprtrees): Expression Trees need to be desugared before emission",
+                ))
+            }
+        }
         _ => unimplemented!("TODO(hrust)"),
     }
 }
@@ -852,7 +853,7 @@ pub fn emit_await(emitter: &mut Emitter, env: &Env, pos: &Pos, expr: &tast::Expr
         .flags
         .contains(HhvmFlags::JIT_ENABLE_RENAME_FUNCTION);
     match e.as_call() {
-        Some((_, tast::Expr(_, tast::Expr_::Id(id)), _, args, None))
+        Some((tast::Expr(_, tast::Expr_::Id(id)), _, args, None))
             if (cant_inline_gen_functions
                 && args.len() == 1
                 && string_utils::strip_global_ns(&(*id.1)) == "gena") =>
@@ -1566,31 +1567,18 @@ fn emit_record(
 fn emit_call_isset_expr(e: &mut Emitter, env: &Env, outer_pos: &Pos, expr: &tast::Expr) -> Result {
     let pos = &expr.0;
     if let Some((base_expr, opt_elem_expr)) = expr.1.as_array_get() {
-        return Ok(match (base_expr.1.as_lvar(), opt_elem_expr) {
-            (Some(tast::Lid(_, id)), Some(elem))
-                if local_id::get_name(&id) == superglobals::GLOBALS =>
-            {
-                InstrSeq::gather(vec![
-                    emit_expr(e, env, elem)?,
-                    emit_pos(outer_pos),
-                    instr::issetg(),
-                ])
-            }
-            _ => {
-                emit_array_get(
-                    e,
-                    env,
-                    pos,
-                    None,
-                    QueryOp::Isset,
-                    base_expr,
-                    opt_elem_expr.as_ref(),
-                    false,
-                    false,
-                )?
-                .0
-            }
-        });
+        return Ok(emit_array_get(
+            e,
+            env,
+            pos,
+            None,
+            QueryOp::Isset,
+            base_expr,
+            opt_elem_expr.as_ref(),
+            false,
+            false,
+        )?
+        .0);
     }
     if let Some((cid, id)) = expr.1.as_class_get() {
         return emit_class_get(e, env, QueryOp::Isset, cid, id);
@@ -2403,13 +2391,7 @@ fn emit_special_function(
             );
             let call = tast::Expr(
                 pos.clone(),
-                tast::Expr_::mk_call(
-                    tast::CallType::Cnormal,
-                    expr_id,
-                    vec![],
-                    args[1..].to_owned(),
-                    uarg.cloned(),
-                ),
+                tast::Expr_::mk_call(expr_id, vec![], args[1..].to_owned(), uarg.cloned()),
             );
             let ignored_expr = emit_ignored_expr(e, env, &Pos::make_none(), &call)?;
             Ok(Some(InstrSeq::gather(vec![
@@ -2879,31 +2861,23 @@ fn emit_hh_fun(
     fname: &str,
 ) -> Result<InstrSeq> {
     let fname = string_utils::strip_global_ns(fname);
-    if e.options()
-        .hhvm
-        .flags
-        .contains(HhvmFlags::EMIT_FUNC_POINTERS)
-    {
-        if has_non_tparam_generics_targs(env, targs) {
-            let generics = emit_reified_targs(
-                e,
-                env,
-                pos,
-                targs
-                    .iter()
-                    .map(|targ| &targ.1)
-                    .collect::<Vec<_>>()
-                    .as_slice(),
-            )?;
-            Ok(InstrSeq::gather(vec![
-                generics,
-                instr::resolve_rfunc(fname.to_owned().into()),
-            ]))
-        } else {
-            Ok(instr::resolve_func(fname.to_owned().into()))
-        }
+    if has_non_tparam_generics_targs(env, targs) {
+        let generics = emit_reified_targs(
+            e,
+            env,
+            pos,
+            targs
+                .iter()
+                .map(|targ| &targ.1)
+                .collect::<Vec<_>>()
+                .as_slice(),
+        )?;
+        Ok(InstrSeq::gather(vec![
+            generics,
+            instr::resolve_rfunc(fname.to_owned().into()),
+        ]))
     } else {
-        Ok(instr::string(fname))
+        Ok(instr::resolve_func(fname.to_owned().into()))
     }
 }
 
@@ -2934,7 +2908,6 @@ fn istype_op(opts: &Options, id: impl AsRef<str>) -> Option<IstypeOp> {
         "is_bool" => Some(OpBool),
         "is_float" | "is_real" | "is_double" => Some(OpDbl),
         "is_string" => Some(OpStr),
-        "is_array" => Some(OpArr),
         "is_object" => Some(OpObj),
         "is_null" => Some(OpNull),
         "is_scalar" => Some(OpScalar),
@@ -2985,8 +2958,7 @@ fn emit_call_expr(
     env: &Env,
     pos: &Pos,
     async_eager_label: Option<Label>,
-    (_, expr, targs, args, uarg): &(
-        tast::CallType,
+    (expr, targs, args, uarg): &(
         tast::Expr,
         Vec<tast::Targ>,
         Vec<tast::Expr>,
@@ -3898,12 +3870,7 @@ fn emit_conditional_expr(
 fn emit_local(e: &mut Emitter, env: &Env, notice: BareThisOp, lid: &aast_defs::Lid) -> Result {
     let tast::Lid(pos, id) = lid;
     let id_name = local_id::get_name(id);
-    if superglobals::GLOBALS == id_name {
-        Err(emit_fatal::raise_fatal_parse(
-            pos,
-            "Access $GLOBALS via wrappers",
-        ))
-    } else if superglobals::is_superglobal(id_name) {
+    if superglobals::is_superglobal(id_name) {
         Ok(InstrSeq::gather(vec![
             instr::string(string_utils::locals::strip_dollar(id_name)),
             emit_pos(pos),
@@ -4209,46 +4176,21 @@ fn emit_quiet_expr(
     null_coalesce_assignment: bool,
 ) -> Result<(InstrSeq, Option<NumParams>)> {
     match &expr.1 {
-        tast::Expr_::Lvar(lid) if local_id::get_name(&lid.1) == superglobals::GLOBALS => Ok((
-            InstrSeq::gather(vec![
-                emit_pos(&lid.0),
-                instr::string(string_utils::locals::strip_dollar(local_id::get_name(
-                    &lid.1,
-                ))),
-                emit_pos(pos),
-                instr::cgetg(),
-            ]),
-            None,
-        )),
         tast::Expr_::Lvar(lid) if !is_local_this(env, &lid.1) => Ok((
             instr::cgetquietl(get_local(e, env, pos, local_id::get_name(&lid.1))?),
             None,
         )),
-        tast::Expr_::ArrayGet(x) => match ((x.0).1.as_lvar(), x.1.as_ref()) {
-            (Some(tast::Lid(_, id)), Some(elem))
-                if local_id::get_name(id) == superglobals::GLOBALS =>
-            {
-                Ok((
-                    InstrSeq::gather(vec![
-                        emit_expr(e, env, elem)?,
-                        emit_pos(pos),
-                        instr::cgetg(),
-                    ]),
-                    None,
-                ))
-            }
-            _ => emit_array_get(
-                e,
-                env,
-                pos,
-                None,
-                QueryOp::CGetQuiet,
-                &x.0,
-                x.1.as_ref(),
-                false,
-                null_coalesce_assignment,
-            ),
-        },
+        tast::Expr_::ArrayGet(x) => emit_array_get(
+            e,
+            env,
+            pos,
+            None,
+            QueryOp::CGetQuiet,
+            &x.0,
+            x.1.as_ref(),
+            false,
+            null_coalesce_assignment,
+        ),
         tast::Expr_::ObjGet(x) => emit_obj_get(
             e,
             env,
@@ -4697,12 +4639,14 @@ fn emit_base_(
         mode
     };
     let local_temp_kind = get_local_temp_kind(env, true, inout_param_info, Some(expr));
-    let emit_default = |e: &mut Emitter,
-                        base_instrs,
-                        cls_instrs,
-                        setup_instrs,
-                        base_stack_size,
-                        cls_stack_size| {
+    let emit_default = |
+        e: &mut Emitter,
+        base_instrs,
+        cls_instrs,
+        setup_instrs,
+        base_stack_size,
+        cls_stack_size,
+    | {
         match local_temp_kind {
             Some(local_temp) => {
                 let local = e.local_gen_mut().get_unnamed();
@@ -4728,10 +4672,6 @@ fn emit_base_(
     };
     use tast::Expr_ as E_;
     match expr_ {
-        E_::Lvar(x) if &(x.1).1 == superglobals::GLOBALS => Err(emit_fatal::raise_fatal_runtime(
-            pos,
-            "Cannot use [] with $GLOBALS",
-        )),
         E_::Lvar(x) if superglobals::is_superglobal(&(x.1).1) => {
             let base_instrs = emit_pos_then(
                 &x.0,
@@ -4788,32 +4728,6 @@ fn emit_base_(
             ))
         }
         E_::ArrayGet(x) => match (&(x.0).1, x.1.as_ref()) {
-            (E_::Lvar(v), Some(expr)) if local_id::get_name(&v.1) == superglobals::GLOBALS => {
-                Ok(match expr.1.as_lvar() {
-                    Some(tast::Lid(pos, id)) => {
-                        let v = get_local(e, env, pos, local_id::get_name(id))?;
-                        emit_default(
-                            e,
-                            instr::empty(),
-                            instr::empty(),
-                            instr::basegl(v, base_mode),
-                            0,
-                            0,
-                        )
-                    }
-                    _ => {
-                        let elem_instrs = emit_expr(e, env, expr)?;
-                        emit_default(
-                            e,
-                            elem_instrs,
-                            instr::empty(),
-                            instr::basegc(base_offset, base_mode),
-                            1,
-                            0,
-                        )
-                    }
-                })
-            }
             // $a[] can not be used as the base of an array get unless as an lval
             (_, None) if !env.flags.contains(env::Flags::ALLOWS_ARRAY_APPEND) => {
                 return Err(emit_fatal::raise_fatal_runtime(
@@ -5133,7 +5047,7 @@ fn can_use_as_rhs_in_list_assignment(expr: &tast::Expr_) -> Result<bool> {
     use aast::Expr_ as E_;
     Ok(match expr {
         E_::Call(c)
-            if ((c.1).1)
+            if ((c.0).1)
                 .as_id()
                 .map_or(false, |id| id.1 == special_functions::ECHO) =>
         {
@@ -5436,27 +5350,6 @@ pub fn emit_lval_op_nonlist_steps(
                 })
             }
             E_::ArrayGet(x) => match (&(x.0).1, x.1.as_ref()) {
-                (E_::Lvar(v), Some(expr)) if local_id::get_name(&v.1) == superglobals::GLOBALS => {
-                    let final_global_op_instrs = emit_final_global_op(pos, op);
-                    if rhs_stack_size == 0 {
-                        (
-                            emit_expr(e, env, expr)?,
-                            instr::empty(),
-                            final_global_op_instrs,
-                        )
-                    } else {
-                        let (index_instrs, under_top) = emit_first_expr(e, env, expr)?;
-                        if under_top {
-                            (
-                                instr::empty(),
-                                InstrSeq::gather(vec![rhs_instrs, index_instrs]),
-                                final_global_op_instrs,
-                            )
-                        } else {
-                            (index_instrs, rhs_instrs, final_global_op_instrs)
-                        }
-                    }
-                }
                 (_, None) if !env.flags.contains(env::Flags::ALLOWS_ARRAY_APPEND) => {
                     return Err(emit_fatal::raise_fatal_runtime(
                         pos,

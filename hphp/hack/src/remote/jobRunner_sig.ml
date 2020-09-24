@@ -31,11 +31,12 @@ module type S = sig
     check_id:string ->
     transport_channel:string option ->
     file_system_mode:string ->
+    recli_version:string ->
     root:string ->
     min_log_level:Hh_logger.Level.t ->
     version_specifier:string option ->
     eden:bool ->
-    command
+    command Future.t
 
   val is_alive : status -> bool
 

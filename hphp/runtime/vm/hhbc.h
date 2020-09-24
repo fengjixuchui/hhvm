@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_VM_HHBC_H_
-#define incl_HPHP_VM_HHBC_H_
+#pragma once
 
 #include <type_traits>
 
@@ -310,7 +309,6 @@ inline bool isIncDecO(IncDecOp op) {
   ISTYPE_OP(Int)                               \
   ISTYPE_OP(Dbl)                               \
   ISTYPE_OP(Str)                               \
-  ISTYPE_OP(Arr)                               \
   ISTYPE_OP(Vec)                               \
   ISTYPE_OP(Dict)                              \
   ISTYPE_OP(Keyset)                            \
@@ -722,7 +720,6 @@ constexpr uint32_t kMaxConcatN = 4;
   O(BareThis,        ONE(OA(BareThisOp)),                               \
                                        NOV,             ONE(CV),    NF) \
   O(CheckThis,       NA,               NOV,             NOV,        NF) \
-  O(InitThisLoc,     ONE(LA),          NOV,             NOV,        NF) \
   O(ChainFaults,     NA,               TWO(CV,CV),      ONE(CV),    NF) \
   O(OODeclExists,    ONE(OA(OODeclExistsOp)),                           \
                                        TWO(CV,CV),      ONE(CV),    NF) \
@@ -1180,4 +1177,3 @@ struct hash<HPHP::Op> {
 
 //////////////////////////////////////////////////////////////////////
 
-#endif

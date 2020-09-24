@@ -9,23 +9,29 @@
 
 open Hh_prelude
 
-type pos = Relative_path.t * int * int * (int * int) option [@@deriving eq]
+type pos = Relative_path.t * int * int * (int * int) option
 
 type spos = string * int * int * (int * int) option [@@deriving eq, ord]
 
 let recheck_typing ctx (pos_list : pos list) =
   let files_to_check =
-    pos_list |> List.remove_consecutive_duplicates ~equal:equal_pos
+    pos_list
+    |> List.map ~f:(fun (path, _, _, _) -> path)
+    |> List.remove_consecutive_duplicates ~equal:Relative_path.equal
+    (* note: our caller has already sorted pos_list *)
   in
-  let tasts =
-    List.map files_to_check ~f:(fun (path, _, _, _) ->
-        let (_ctx, entry) = Provider_context.add_entry_if_missing ~ctx ~path in
+  let (ctx, paths_and_tasts) =
+    List.fold
+      files_to_check
+      ~init:(ctx, [])
+      ~f:(fun (ctx, paths_and_tasts) path ->
+        let (ctx, entry) = Provider_context.add_entry_if_missing ~ctx ~path in
         let { Tast_provider.Compute_tast.tast; _ } =
           Tast_provider.compute_tast_unquarantined ~ctx ~entry
         in
-        (path, tast))
+        (ctx, (path, tast) :: paths_and_tasts))
   in
-  tasts
+  (ctx, paths_and_tasts)
 
 let result_to_string result (fn, line, char, range_end) =
   Hh_json.(
@@ -51,9 +57,10 @@ let result_to_string result (fn, line, char, range_end) =
     json_to_string obj)
 
 let helper ctx acc pos_list =
+  let (ctx, paths_and_tasts) = recheck_typing ctx pos_list in
   let tasts =
     List.fold
-      (recheck_typing ctx pos_list)
+      paths_and_tasts
       ~init:Relative_path.Map.empty
       ~f:(fun map (key, data) -> Relative_path.Map.add map ~key ~data)
   in
@@ -80,6 +87,9 @@ let helper ctx acc pos_list =
       in
       result_to_string result pos :: acc)
 
+(** This parallel_helper divides pos_list amongst all the workers.
+It might end up with several workers all working on positions
+for the same file. *)
 let parallel_helper workers ctx pos_list =
   MultiWorker.call
     workers
@@ -88,13 +98,43 @@ let parallel_helper workers ctx pos_list =
     ~merge:List.rev_append
     ~next:(MultiWorker.next workers pos_list)
 
+(** This parallel_helper_ex divides files amongst all the workers.
+No file is handled by more than one worker. *)
+let parallel_helper_ex
+    (workers : MultiWorker.worker list option)
+    (ctx : Provider_context.t)
+    (pos_list : pos list) : string list =
+  let add_pos_to_map map pos =
+    let (path, _, _, _) = pos in
+    Relative_path.Map.update
+      path
+      (function
+        | None -> Some [pos]
+        | Some others -> Some (pos :: others))
+      map
+  in
+  let pos_by_file =
+    List.fold ~init:Relative_path.Map.empty ~f:add_pos_to_map pos_list
+    |> Relative_path.Map.values
+  in
+  (* pos_by_file is a list-of-lists [[posA1;posA2;...];[posB1;...];...]
+  where each inner list [posA1;posA2;...] is all for the same file.
+  This is so that a given file is only ever processed by a single worker. *)
+  MultiWorker.call
+    workers
+    ~job:(fun acc pos_by_file -> helper ctx acc (List.concat pos_by_file))
+    ~neutral:[]
+    ~merge:List.rev_append
+    ~next:(MultiWorker.next workers pos_by_file)
+
 (* Entry Point *)
 let go :
     MultiWorker.worker list option ->
+    bool ->
     (string * int * int * (int * int) option) list ->
     ServerEnv.env ->
     string list =
- fun workers pos_list env ->
+ fun workers experimental pos_list env ->
   let pos_list =
     pos_list
     (* Sort, so that many queries on the same file will (generally) be
@@ -106,11 +146,26 @@ let go :
            let fn = Relative_path.create_detect_prefix fn in
            (fn, line, char, range_end))
   in
+  let num_files =
+    pos_list
+    |> List.map ~f:(fun (path, _, _, _) -> path)
+    |> Relative_path.Set.of_list
+    |> Relative_path.Set.cardinal
+  in
+  let num_positions = List.length pos_list in
   let ctx = Provider_utils.ctx_from_server_env env in
+  let start_time = Unix.gettimeofday () in
   let results =
-    if List.length pos_list < 10 then
+    if num_positions < 10 then
       helper ctx [] pos_list
+    else if experimental then
+      parallel_helper_ex workers ctx pos_list
     else
       parallel_helper workers ctx pos_list
   in
+  HackEventLogger.type_at_pos_batch
+    ~start_time
+    ~num_files
+    ~num_positions
+    ~experimental;
   results

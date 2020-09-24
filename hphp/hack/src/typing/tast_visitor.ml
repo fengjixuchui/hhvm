@@ -48,10 +48,6 @@ class virtual iter =
     method! on_pu_enum env x =
       super#on_pu_enum (Env.restore_pu_enum_env env x) x
 
-    method! on_Efun env x = super#on_Efun (Env.set_ppl_lambda env) x
-
-    method! on_Lfun env x = super#on_Lfun (Env.set_ppl_lambda env) x
-
     method! on_Binop env op e1 e2 =
       match op with
       | Ast_defs.Eq _ ->
@@ -116,12 +112,6 @@ class virtual ['state] iter_with_state =
     method! on_pu_enum (env, state) x =
       super#on_pu_enum (Env.restore_pu_enum_env env x, state) x
 
-    method! on_Efun (env, state) x =
-      super#on_Efun (Env.set_ppl_lambda env, state) x
-
-    method! on_Lfun (env, state) x =
-      super#on_Lfun (Env.set_ppl_lambda env, state) x
-
     method! on_Binop (env, state) op e1 e2 =
       match op with
       | Ast_defs.Eq _ ->
@@ -177,10 +167,6 @@ class virtual ['a] reduce =
 
     method! on_pu_enum env x =
       super#on_pu_enum (Env.restore_pu_enum_env env x) x
-
-    method! on_Efun env x = super#on_Efun (Env.set_ppl_lambda env) x
-
-    method! on_Lfun env x = super#on_Lfun (Env.set_ppl_lambda env) x
 
     method! on_Binop env op e1 e2 =
       match op with
@@ -247,10 +233,6 @@ class virtual map =
     method! on_pu_enum env x =
       super#on_pu_enum (Env.restore_pu_enum_env env x) x
 
-    method! on_Efun env x = super#on_Efun (Env.set_ppl_lambda env) x
-
-    method! on_Lfun env x = super#on_Lfun (Env.set_ppl_lambda env) x
-
     method! on_Binop env op e1 e2 =
       match op with
       | Ast_defs.Eq _ ->
@@ -315,10 +297,6 @@ class virtual endo =
     method! on_pu_enum env x =
       super#on_pu_enum (Env.restore_pu_enum_env env x) x
 
-    method! on_Efun env x = super#on_Efun (Env.set_ppl_lambda env) x
-
-    method! on_Lfun env x = super#on_Lfun (Env.set_ppl_lambda env) x
-
     method! on_Binop env this op e1 e2 =
       match op with
       | Ast_defs.Eq _ ->
@@ -366,7 +344,6 @@ class type handler =
 
     method at_Call :
       Env.t ->
-      Aast.call_type ->
       Tast.expr ->
       Tast.targ list ->
       Tast.expr list ->
@@ -404,7 +381,7 @@ class virtual handler_base : handler =
 
     method at_fun_ _ _ = ()
 
-    method at_Call _ _ _ _ _ _ = ()
+    method at_Call _ _ _ _ _ = ()
 
     method at_hint _ _ = ()
 
@@ -455,9 +432,9 @@ let iter_with (handlers : handler list) : iter =
       List.iter handlers (fun v -> v#at_fun_ env x);
       super#on_fun_ env x
 
-    method! on_Call env ct e tal el unpacked_element =
-      List.iter handlers (fun v -> v#at_Call env ct e tal el unpacked_element);
-      super#on_Call env ct e tal el unpacked_element
+    method! on_Call env e tal el unpacked_element =
+      List.iter handlers (fun v -> v#at_Call env e tal el unpacked_element);
+      super#on_Call env e tal el unpacked_element
 
     method! on_hint env h =
       List.iter handlers (fun v -> v#at_hint env h);

@@ -78,7 +78,6 @@ TRACE_SET_MOD(hhir);
 #define DCall          HasDest
 #define DGenIter       HasDest
 #define DSubtract(n,t) HasDest
-#define DCns           HasDest
 #define DUnion(...)    HasDest
 #define DMemoKey       HasDest
 #define DLvalOfPtr     HasDest
@@ -154,7 +153,6 @@ OpInfo g_opInfo[] = {
 #undef DCall
 #undef DGenIter
 #undef DSubtract
-#undef DCns
 #undef DUnion
 #undef DMemoKey
 #undef DLvalOfPtr
@@ -249,25 +247,10 @@ folly::Optional<Opcode> negateCmpOp(Opcode opc) {
 
     // Arrays/vec/dicts can contain an element with NaN, so only equality
     // comparisons can be negated.
-    case EqArr:               return NeqArr;
-    case NeqArr:              return EqArr;
-    case SameArr:             return NSameArr;
-    case NSameArr:            return SameArr;
-
-    case EqVec:               return NeqVec;
-    case NeqVec:              return EqVec;
-    case SameVec:             return NSameVec;
-    case NSameVec:            return SameVec;
-
-    case EqDict:              return NeqDict;
-    case NeqDict:             return EqDict;
-    case SameDict:            return NSameDict;
-    case NSameDict:           return SameDict;
-
-    case EqKeyset:            return NeqKeyset;
-    case NeqKeyset:           return EqKeyset;
-    case SameKeyset:          return NSameKeyset;
-    case NSameKeyset:         return SameKeyset;
+    case EqArrLike:           return NeqArrLike;
+    case NeqArrLike:          return EqArrLike;
+    case SameArrLike:         return NSameArrLike;
+    case NSameArrLike:        return SameArrLike;
 
     case GtRes:               return LteRes;
     case GteRes:              return LtRes;
@@ -282,16 +265,12 @@ folly::Optional<Opcode> negateCmpOp(Opcode opc) {
 
 bool opcodeMayRaise(Opcode opc) {
   switch (opc) {
-  case NSameArr:
-  case SameArr:
-  case NSameDict:
-  case NSameVec:
-  case SameDict:
-  case SameVec:
+  case NSameArrLike:
+  case SameArrLike:
     return RuntimeOption::EvalHackArrCompatCheckCompare;
 
   case IsTypeStruct:
-    return RuntimeOption::EvalHackArrCompatIsArrayNotices ||
+    return RuntimeOption::EvalHackArrIsShapeTupleNotices ||
            RuntimeOption::EvalIsExprEnableUnresolvedWarning ||
            RuntimeOption::EvalIsVecNotices;
 
@@ -313,9 +292,8 @@ bool opcodeMayRaise(Opcode opc) {
   case CheckSurpriseAndStack:
   case CheckSurpriseFlagsEnter:
   case Clone:
-  case CmpArr:
+  case CmpArrLike:
   case CmpObj:
-  case CmpVec:
   case ConcatIntStr:
   case ConcatStr3:
   case ConcatStr4:
@@ -323,7 +301,9 @@ bool opcodeMayRaise(Opcode opc) {
   case ConcatStrStr:
   case ConstructInstance:
   case ContEnter:
+  case ConvArrLikeToDict:
   case ConvArrLikeToKeyset:
+  case ConvArrLikeToVec:
   case ConvTVToBool:
   case ConvTVToDbl:
   case ConvTVToInt:
@@ -355,23 +335,20 @@ bool opcodeMayRaise(Opcode opc) {
   case ElemVecD:
   case ElemVecU:
   case ElemX:
-  case EqArr:
-  case EqDict:
+  case EqArrLike:
   case EqObj:
-  case EqVec:
   case GetMemoKey:
-  case GtArr:
-  case GteArr:
+  case GtArrLike:
+  case GteArrLike:
   case GteObj:
-  case GteVec:
   case GtObj:
-  case GtVec:
   case HandleRequestSurprise:
   case IncDecElem:
   case IncDecProp:
   case InitClsCns:
   case InitProps:
   case InitSProps:
+  case InitSubClsCns:
   case InterpOne:
   case IssetElem:
   case IssetProp:
@@ -401,19 +378,15 @@ bool opcodeMayRaise(Opcode opc) {
   case LookupClsMethodFCache:
   case LookupCnsE:
   case LookupFuncCached:
-  case LtArr:
-  case LteArr:
+  case LtArrLike:
+  case LteArrLike:
   case LteObj:
-  case LteVec:
   case LtObj:
-  case LtVec:
   case MapGet:
   case MapSet:
   case NativeImpl:
-  case NeqArr:
-  case NeqDict:
+  case NeqArrLike:
   case NeqObj:
-  case NeqVec:
   case NewKeysetArray:
   case NewRecord:
   case OODeclExists:
@@ -422,6 +395,7 @@ bool opcodeMayRaise(Opcode opc) {
   case PrintBool:
   case PrintInt:
   case PrintStr:
+  case ProfileSubClsCns:
   case PropDX:
   case PropQ:
   case PropTypeRedefineCheck:
@@ -467,7 +441,6 @@ bool opcodeMayRaise(Opcode opc) {
   case ThrowDivisionByZeroException:
   case ThrowHasThisNeedStatic:
   case ThrowInvalidArrayKey:
-  case ThrowInvalidArrayKeyForSet:
   case ThrowInvalidOperation:
   case ThrowLateInitPropError:
   case ThrowMissingArg:
@@ -532,6 +505,7 @@ bool opcodeMayRaise(Opcode opc) {
   case CheckArrayCOW:
   case CheckCold:
   case CheckDictOffset:
+  case CheckDictOffsetLA:
   case CheckImplicitContextNull:
   case CheckInit:
   case CheckInitMem:
@@ -545,6 +519,7 @@ bool opcodeMayRaise(Opcode opc) {
   case CheckNonNull:
   case CheckNullptr:
   case CheckVecBounds:
+  case CheckVecBoundsLA:
   case CheckRange:
   case CheckRDSInitialized:
   case CheckInOuts:
@@ -573,8 +548,6 @@ bool opcodeMayRaise(Opcode opc) {
   case ContStarted:
   case ContStartedCheck:
   case ContValid:
-  case ConvArrLikeToDict:
-  case ConvArrLikeToVec:
   case ConvArrLikeToDArr:
   case ConvArrLikeToVArr:
   case ConvBoolToDbl:
@@ -651,7 +624,6 @@ bool opcodeMayRaise(Opcode opc) {
   case EqDbl:
   case EqFunc:
   case EqInt:
-  case EqKeyset:
   case EqPtrIter:
   case EqRes:
   case EqStr:
@@ -812,6 +784,7 @@ bool opcodeMayRaise(Opcode opc) {
   case LIterNext:
   case LIterNextK:
   case LockObj:
+  case LogArrayReach:
   case LookupClsRDS:
   case LookupSPropSlot:
   case Lshr:
@@ -850,7 +823,6 @@ bool opcodeMayRaise(Opcode opc) {
   case NeqBool:
   case NeqDbl:
   case NeqInt:
-  case NeqKeyset:
   case NeqRes:
   case NeqStr:
   case NeqStrInt:
@@ -868,7 +840,6 @@ bool opcodeMayRaise(Opcode opc) {
   case NewStructDict:
   case NInstanceOfBitmask:
   case Nop:
-  case NSameKeyset:
   case NSameObj:
   case NSameStr:
   case OrdStr:
@@ -882,7 +853,6 @@ bool opcodeMayRaise(Opcode opc) {
   case ProfileKeysetAccess:
   case ProfileMethod:
   case ProfileProp:
-  case ProfileSubClsCns:
   case ProfileSwitchDest:
   case ProfileType:
   case RBTraceEntry:
@@ -893,7 +863,6 @@ bool opcodeMayRaise(Opcode opc) {
   case ReserveVecNewElem:
   case RestoreErrorLevel:
   case RetCtrl:
-  case SameKeyset:
   case SameObj:
   case SameStr:
   case Select:

@@ -434,6 +434,7 @@ function get_options($argv) {
     '*hhas-round-trip' => '',
     'color' => 'c',
     'no-fun' => '',
+    'no-skipif' => '',
     'cores' => '',
     'dump-tc' => '',
     'no-clean' => '',
@@ -1085,7 +1086,7 @@ function hphp_cmd($options, $test, $program): string {
     '--nofork=1 -thhbc -l1 -k1',
     '-o "' . test_repo($options, $test) . '"',
     "--program $program.hhbc \"$test\"",
-    "-vRuntime.Repo.Local.Mode=rw -vRuntime.Repo.Local.Path=".verify_hhbc(),
+    "-vRuntime.Repo.Local.Mode=-- -vRuntime.Repo.Central.Path=".verify_hhbc(),
     $extra_args,
     $compiler_args,
     read_opts_file("$test.hphp_opts"),
@@ -2583,7 +2584,7 @@ function run_and_lock_test($options, $test) {
 }
 
 function run_test($options, $test) {
-  $skip_reason = skip_test($options, $test);
+  $skip_reason = skip_test($options, $test, !($options['no-skipif'] ?? false));
   if ($skip_reason !== null) return $skip_reason;
 
   list($hhvm, $hhvm_env) = hhvm_cmd($options, $test);

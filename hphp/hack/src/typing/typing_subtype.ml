@@ -341,8 +341,17 @@ let rec describe_ty_super env ?(short = false) ty =
   | ConstraintType ty ->
     (match deref_constraint_type ty with
     | (_, Thas_member hm) ->
-      let { hm_name = (_, name); hm_type = _; hm_class_id = _ } = hm in
-      Printf.sprintf "an object with member `%s`" name
+      let {
+        hm_name = (_, name);
+        hm_type = _;
+        hm_class_id = _;
+        hm_explicit_targs = targs;
+      } =
+        hm
+      in
+      (match targs with
+      | None -> Printf.sprintf "an object with property `%s`" name
+      | Some _ -> Printf.sprintf "an object with method `%s`" name)
     | (_, Tdestructure _) ->
       Typing_print.with_blank_tyvars (fun () ->
           Typing_print.full_strip_ns_i env (ConstraintType ty))
@@ -381,6 +390,14 @@ and simplify_subtype
     ty_sub
     ty_super =
   simplify_subtype_i ~subtype_env ~this_ty (LoclType ty_sub) (LoclType ty_super)
+
+and get_enum_includes env enum_name =
+  match Env.get_enum env enum_name with
+  | None -> []
+  | Some enum_cls_decl ->
+    (match Cls.enum_type enum_cls_decl with
+    | None -> []
+    | Some enum -> enum.te_includes)
 
 (* Attempt to "solve" a subtype assertion ty_sub <: ty_super.
  * Return a proposition that is equivalent, but simpler, than
@@ -682,26 +699,15 @@ and simplify_subtype_i
           (match deref lty with
           | (r, Toption ty) ->
             let ty_null = MakeType.null r in
-            let (env, p1) =
-              simplify_subtype_i
-                ~subtype_env
-                ~this_ty
-                (LoclType ty_null)
-                ty_super
-                env
-            in
-            if TL.is_unsat p1 then
-              invalid_env env
-            else
-              let (env, p2) =
-                simplify_subtype_i
-                  ~subtype_env
-                  ~this_ty
-                  (LoclType ty)
-                  ty_super
-                  env
-              in
-              (env, TL.conj p1 p2)
+            if_unsat
+              invalid_env
+              (simplify_subtype_i
+                 ~subtype_env
+                 ~this_ty
+                 (LoclType ty_null)
+                 ty_super
+                 env)
+            &&& simplify_subtype_i ~subtype_env ~this_ty (LoclType ty) ty_super
           | (_, (Tintersection _ | Tunion _ | Terr | Tvar _)) ->
             default_subtype env
           | _ ->
@@ -873,7 +879,12 @@ and simplify_subtype_i
         end
       | ( r,
           Thas_member
-            { hm_name = name; hm_type = member_ty; hm_class_id = class_id } ) ->
+            {
+              hm_name = name;
+              hm_type = member_ty;
+              hm_class_id = class_id;
+              hm_explicit_targs = explicit_targs;
+            } ) ->
         (match ety_sub with
         | ConstraintType cty ->
           begin
@@ -884,8 +895,18 @@ and simplify_subtype_i
                     hm_name = name_sub;
                     hm_type = ty_sub;
                     hm_class_id = cid_sub;
+                    hm_explicit_targs = explicit_targs_sub;
                   } ) ->
-              if Nast.equal_sid name_sub name && class_id_equal cid_sub class_id
+              if
+                let targ_equal (_, (_, hint1)) (_, (_, hint2)) =
+                  Aast_defs.equal_hint_ hint1 hint2
+                in
+                String.equal (snd name_sub) (snd name)
+                && class_id_equal cid_sub class_id
+                && Option.equal
+                     (List.equal ~equal:targ_equal)
+                     explicit_targs_sub
+                     explicit_targs
               then
                 simplify_subtype ~subtype_env ~this_ty ty_sub member_ty env
               else
@@ -902,27 +923,32 @@ and simplify_subtype_i
                  Option.is_some non_ty_opt ->
             default_subtype env
           (* Ideally, we'd want this case to come after the case with an intersection
-     on the left, to deal properly with (#1 & A) <: Thas_member(#2) by potentially
-     adding an upper bound to #1, but that would result in a disjunction
-     which we don't handle very well at the moment.
-     TODO: when we have a better treatment of disjunctions, move that case after
-     the case with an intersection on the left.
-     For now, if there is an intersection on the left here,
-     we rely on how obj_get itself treats intersections. If that
-     intersection contains a type variable, this type variable will be eagerly
-     solved. Once this case is moved, we can clean up obj_get from the Tvar and
-     Tintersection cases *)
+            on the left, to deal properly with (#1 & A) <: Thas_member(#2) by potentially
+            adding an upper bound to #1, but that would result in a disjunction
+            which we don't handle very well at the moment.
+            TODO: when we have a better treatment of disjunctions, move that case after
+            the case with an intersection on the left.
+            For now, if there is an intersection on the left here,
+            we rely on how obj_get itself treats intersections. If that
+            intersection contains a type variable, this type variable will be eagerly
+            solved. Once this case is moved, we can clean up obj_get from the Tvar and
+            Tintersection cases *)
           | _ ->
+            let (is_method, explicit_targs) =
+              match explicit_targs with
+              | None -> (false, [])
+              | Some targs -> (true, targs)
+            in
             let (obj_get_ty, error_prop) =
               Errors.try_with_result
                 (fun () ->
                   let (env, (obj_get_ty, _tal)) =
                     Typing_object_get.obj_get
                       ~obj_pos:(Reason.to_pos r)
-                      ~is_method:false
+                      ~is_method
                       ~coerce_from_ty:None
                       ~nullsafe:None
-                      ~explicit_targs:[]
+                      ~explicit_targs
                       env
                       ty_sub
                       class_id
@@ -1050,26 +1076,15 @@ and simplify_subtype_i
         (* Likewise, reduce nullable on left to a union *)
         | (r, Toption ty) ->
           let ty_null = MakeType.null r in
-          let (env, p1) =
-            simplify_subtype_i
-              ~subtype_env
-              ~this_ty
-              (LoclType ty_null)
-              ety_super
-              env
-          in
-          if TL.is_unsat p1 then
-            invalid_env env
-          else
-            let (env, p2) =
-              simplify_subtype_i
-                ~subtype_env
-                ~this_ty
-                (LoclType ty)
-                ety_super
-                env
-            in
-            (env, TL.conj p1 p2)
+          if_unsat
+            invalid_env
+            (simplify_subtype_i
+               ~subtype_env
+               ~this_ty
+               (LoclType ty_null)
+               ety_super
+               env)
+          &&& simplify_subtype_i ~subtype_env ~this_ty (LoclType ty) ety_super
         | (_, Tintersection tyl)
           when let (_, non_ty_opt, _) = find_type_with_exact_negation env tyl in
                Option.is_some non_ty_opt ->
@@ -1386,14 +1401,14 @@ and simplify_subtype_i
         | (_, (Tunion _ | Tintersection _ | Tvar _)) -> default_subtype env
         | _ when subtype_env.no_top_bottom -> default env
         (* If ty_sub contains other types, e.g. C<T>, make this a subtype assertion on
-    those inner types and `any`. For example transform the assertion
-      C<D> <: Tany
-    into
-      C<D> <: C<Tany>
-    which might become
-      D <: Tany
-    if say C is covariant.
-    *)
+            those inner types and `any`. For example transform the assertion
+              C<D> <: Tany
+            into
+              C<D> <: C<Tany>
+            which might become
+              D <: Tany
+            if say C is covariant.
+            *)
         | _ ->
           let ty_super = anyfy env r_super ty_sub in
           simplify_subtype ~subtype_env ~this_ty ty_sub ty_super env))
@@ -1522,15 +1537,14 @@ and simplify_subtype_i
             valid env
           else
             default_subtype env
-        | (_, Tnewtype (name_sub, tyl_sub, _))
-          when String.equal name_sub name_super ->
-          if List.is_empty tyl_sub then
-            valid env
-          else if Env.is_enum env name_super && Env.is_enum env name_sub then
-            valid env
-          else
-            let td = Env.get_typedef env name_super in
-            begin
+        | (_, Tnewtype (name_sub, tyl_sub, _)) ->
+          if String.equal name_sub name_super then
+            if List.is_empty tyl_sub then
+              valid env
+            else if Env.is_enum env name_super && Env.is_enum env name_sub then
+              valid env
+            else
+              let td = Env.get_typedef env name_super in
               match td with
               | Some { td_tparams; _ } ->
                 let variance_reifiedl =
@@ -1544,7 +1558,35 @@ and simplify_subtype_i
                   tyl_super
                   env
               | None -> invalid_env env
-            end
+          else if
+            (* this implements the enum supertying subtype relation *)
+            Env.is_enum env name_super
+            && Env.is_enum env name_sub
+            && not (List.is_empty (get_enum_includes env name_super))
+          then
+            let name_of_decl (ty : decl_ty) : string option =
+              match get_node ty with
+              | Tapply ((_, name), _) -> Some name
+              | _ -> None
+            in
+            let rec includes_enum sub_enum super_enum =
+              match
+                List.filter_map
+                  ~f:name_of_decl
+                  (get_enum_includes env super_enum)
+              with
+              | [] -> false
+              | super_include :: super_includes ->
+                String.equal super_include sub_enum
+                || includes_enum sub_enum super_include
+                || List.exists ~f:(includes_enum sub_enum) super_includes
+            in
+            if includes_enum name_sub name_super then
+              valid env
+            else
+              invalid_env env
+          else
+            default_subtype env
         | _ -> default_subtype env))
     | (_, Tunapplied_alias n_sup) ->
       (match ety_sub with
@@ -2313,7 +2355,28 @@ and simplify_subtype_reactivity
     when is_call_site && (Option.is_none x || Option.equal String.equal x y) ->
     valid env
   (* CippLocal can also call nonreactive *)
-  | ((Pure _ | Nonreactive), CippLocal _) when is_call_site -> valid env
+  | ( (Nonreactive | Reactive _ | Local _ | Shallow _ | MaybeReactive _),
+      CippLocal _ )
+    when is_call_site ->
+    valid env
+  (* CippLocal can also call nonreactive *)
+  | ( (Nonreactive | Reactive _ | Local _ | Shallow _ | MaybeReactive _),
+      CippLocal _ )
+    when is_call_site ->
+    valid env
+  (* Anything can call CippGlobal*)
+  (* Nonreactive is covered from above*)
+  | ( CippGlobal,
+      ( Reactive _ | Local _ | Shallow _ | MaybeReactive _ | Cipp _
+      | CippLocal _ | CippGlobal | Pure _ ) )
+    when is_call_site ->
+    valid env
+  (* CippGlobal can call anything *)
+  | ( ( Nonreactive | Pure _ | Reactive _ | Local _ | Shallow _
+      | MaybeReactive _ | Cipp _ | CippLocal _ | CippGlobal ),
+      CippGlobal )
+    when is_call_site ->
+    valid env
   | _ -> check_condition_type_has_matching_reactive_method env
 
 and should_check_fun_params_reactivity (ft_super : locl_fun_type) =
@@ -2566,7 +2629,6 @@ and simplify_param_accept_disposable ~subtype_env param1 param2 env =
  *   <<__MutableReturn>> attribute
  *   <<__Rx>> attribute
  *   <<__Mutable>> attribute
- *   whether or not the function is a coroutine
  *   variadic arity
  *)
 and simplify_subtype_funs_attributes
@@ -2595,14 +2657,6 @@ and simplify_subtype_funs_attributes
     p_super
     ft_super.ft_reactive
     env
-  |> check_with
-       (Bool.equal (get_ft_is_coroutine ft_sub) (get_ft_is_coroutine ft_super))
-       (fun () ->
-         Errors.coroutinness_mismatch
-           (get_ft_is_coroutine ft_super)
-           p_super
-           p_sub
-           subtype_env.on_error)
   |> check_with
        (Bool.equal
           (get_ft_return_disposable ft_sub)
@@ -2738,7 +2792,7 @@ and simplify_subtype_funs
     simplify_subtype_possibly_enforced ~subtype_env
   in
   let simplify_subtype_params = simplify_subtype_params ~subtype_env in
-  (* First apply checks on attributes, coroutine-ness and variadic arity *)
+  (* First apply checks on attributes and variadic arity *)
   env
   |> simplify_subtype_funs_attributes
        ~subtype_env

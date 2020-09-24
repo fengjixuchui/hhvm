@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_JIT_TYPE_SPECIALIZATION_H_
-#define incl_HPHP_JIT_TYPE_SPECIALIZATION_H_
+#pragma once
 
 #include "hphp/runtime/base/array-data.h"
 #include "hphp/runtime/base/bespoke-layout.h"
@@ -61,10 +60,9 @@ struct ArraySpec {
   explicit ArraySpec(BespokeLayout layout);
 
   /*
-   * Set or unset the vanilla bits on an ArraySpec.
+   * Set the vanilla bits on an ArraySpec.
    */
   ArraySpec narrowToVanilla() const;
-  ArraySpec widenToBespoke() const;
 
   /*
    * Assign the bespoke layout of the ArraySpec, if it is possible
@@ -360,4 +358,3 @@ private:
 
 #include "hphp/runtime/vm/jit/type-specialization-inl.h"
 
-#endif

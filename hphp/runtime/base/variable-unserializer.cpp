@@ -623,7 +623,7 @@ void VariableUnserializer::unserializeRemainingProps(
       String k(kdata + subLen, ksize - subLen, CopyString);
       Class* ctx = (Class*)-1;
       if (kdata[1] != '*') {
-        ctx = Unit::lookupClass(
+        ctx = Class::lookup(
           String(kdata + 1, subLen - 2, CopyString).get());
       }
       unserializeProp(obj.get(), k, ctx, key,
@@ -685,7 +685,7 @@ const StringData* getAlternateCollectionName(const StringData* clsName) {
 
 Class* tryAlternateCollectionClass(const StringData* clsName) {
   auto altName = getAlternateCollectionName(clsName);
-  return altName ? Unit::getClass(altName, /* autoload */ false) : nullptr;
+  return altName ? Class::get(altName, /* autoload */ false) : nullptr;
 }
 
 /*
@@ -948,7 +948,7 @@ void VariableUnserializer::unserializeVariant(
             // In order to support the legacy {O|V}:{Set|Vector|Map}
             // serialization, we defer autoloading until we know that there's
             // no alternate (builtin) collection class.
-            cls = Unit::getClass(clsName.get(), /* autoload */ false);
+            cls = Class::get(clsName.get(), /* autoload */ false);
             if (!cls) {
               cls = tryAlternateCollectionClass(clsName.get());
             }
@@ -959,12 +959,12 @@ void VariableUnserializer::unserializeVariant(
             if (!is_valid_class_name(clsName.slice())) {
               throwInvalidClassName();
             }
-            cls = Unit::loadClass(clsName.get()); // with autoloading
+            cls = Class::load(clsName.get()); // with autoloading
           }
         }
       } else {
         // Collections are CPP builtins; don't attempt to autoload
-        cls = Unit::getClass(clsName.get(), /* autoload */ false);
+        cls = Class::get(clsName.get(), /* autoload */ false);
         if (!cls) {
           cls = tryAlternateCollectionClass(clsName.get());
         }
@@ -1161,12 +1161,12 @@ void VariableUnserializer::unserializeVariant(
       auto obj = [&]() -> Object {
         if (whitelistCheck(clsName)) {
           // Try loading without the autoloader first
-          auto cls = Unit::getClass(clsName.get(), /* autoload */ false);
+          auto cls = Class::get(clsName.get(), /* autoload */ false);
           if (!cls) {
             if (!is_valid_class_name(clsName.slice())) {
               throwInvalidClassName();
             }
-            cls = Unit::loadClass(clsName.get());
+            cls = Class::load(clsName.get());
           }
           if (cls) {
             return Object::attach(g_context->createObject(cls, init_null_variant,
@@ -1209,15 +1209,14 @@ Array VariableUnserializer::unserializeArray() {
     throwArraySizeOutOfBounds();
   }
 
-  auto provTag = unserializeProvenanceTag();
-  if (!RO::EvalArrayProvenance) provTag = {};
+  auto const provTag = unserializeProvenanceTag();
 
   if (size == 0) {
     expectChar('}');
     auto arr =  m_forceDArrays || type() == Type::Serialize
       ? Array::CreateDArray()
       : Array::Create();
-    if (provTag) arrprov::setTag<arrprov::Mode::Emplace>(arr.get(), provTag);
+    if (provTag) arrprov::setTag(arr.get(), provTag);
     return arr;
   }
   // For large arrays, do a naive pre-check for OOM.
@@ -1243,7 +1242,7 @@ Array VariableUnserializer::unserializeArray() {
 
   check_non_safepoint_surprise();
   expectChar('}');
-  if (provTag) arrprov::setTag<arrprov::Mode::Emplace>(arr.get(), provTag);
+  if (provTag) arrprov::setTag(arr.get(), provTag);
   return arr;
 }
 
@@ -1252,11 +1251,6 @@ arrprov::Tag VariableUnserializer::unserializeProvenanceTag() {
       type() != VariableUnserializer::Type::Serialize) {
     return {};
   }
-
-  auto const finish = [&] (auto tag) -> arrprov::Tag {
-    if (!RO::EvalArrayProvenance) return {};
-    return tag;
-  };
 
   auto const read_name = [&]() -> const StringData* {
     if (peek() == 't') {
@@ -1284,6 +1278,10 @@ arrprov::Tag VariableUnserializer::unserializeProvenanceTag() {
   }
   expectChar('p');
 
+  // We assert that we don't construct a non-trivial arrprov::Tag when arrprov
+  // is disabled, because doing so is expensive. We must construct them lazily.
+#define FINISH(x) (RO::EvalArrayProvenance ? arrprov::Tag::x : arrprov::Tag{})
+
   if (peek() == ':') {
     expectChar(':');
     expectChar('i');
@@ -1292,22 +1290,28 @@ arrprov::Tag VariableUnserializer::unserializeProvenanceTag() {
     expectChar(';');
     auto const name = read_name();
     expectChar(';');
-    return finish(arrprov::Tag(name, line));
+    return FINISH(Known(name, line));
   } else if (peek() == 'u') {
     expectChar('u');
     expectChar(';');
-    return finish(arrprov::Tag::RepoUnion());
+    return FINISH(RepoUnion());
   } else if (peek() == 'r') {
-    return finish(arrprov::Tag::TraitMerge(expect_name()));
+    auto const name = expect_name();
+    return FINISH(TraitMerge(name));
   } else if (peek() == 'e') {
-    return finish(arrprov::Tag::LargeEnum(expect_name()));
+    auto const name = expect_name();
+    return FINISH(LargeEnum(name));
   } if (peek() == 'c') {
-    return finish(arrprov::Tag::RuntimeLocation(expect_name()));
+    auto const name = expect_name();
+    return FINISH(RuntimeLocation(name));
   } if (peek() == 'z') {
-    return finish(arrprov::Tag::RuntimeLocationPoison(expect_name()));
+    auto const name = expect_name();
+    return FINISH(RuntimeLocationPoison(name));
   } else {
     return {};
   }
+
+#undef FINISH
 }
 
 Array VariableUnserializer::unserializeDict() {
@@ -1396,8 +1400,7 @@ Array VariableUnserializer::unserializeVArray() {
     throwArraySizeOutOfBounds();
   }
 
-  auto provTag = unserializeProvenanceTag();
-  if (!RO::EvalArrayProvenance) provTag = {};
+  auto const provTag = unserializeProvenanceTag();
 
   if (size == 0) {
     expectChar('}');
@@ -1453,7 +1456,7 @@ Array VariableUnserializer::unserializeVArray() {
 
   check_non_safepoint_surprise();
   expectChar('}');
-  if (provTag) arrprov::setTag<arrprov::Mode::Emplace>(arr.get(), provTag);
+  if (provTag) arrprov::setTag(arr.get(), provTag);
   return arr;
 }
 
@@ -1468,8 +1471,7 @@ Array VariableUnserializer::unserializeDArray() {
     throwArraySizeOutOfBounds();
   }
 
-  auto provTag = unserializeProvenanceTag();
-  if (!RO::EvalArrayProvenance) provTag = {};
+  auto const provTag = unserializeProvenanceTag();
 
   if (size == 0) {
     expectChar('}');
@@ -1498,7 +1500,7 @@ Array VariableUnserializer::unserializeDArray() {
 
   check_non_safepoint_surprise();
   expectChar('}');
-  if (provTag) arrprov::setTag<arrprov::Mode::Emplace>(arr.get(), provTag);
+  if (provTag) arrprov::setTag(arr.get(), provTag);
   return arr;
 }
 

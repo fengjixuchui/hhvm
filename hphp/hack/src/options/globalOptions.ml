@@ -57,6 +57,7 @@ type t = {
   profile_desc: string;
   tco_like_type_hints: bool;
   tco_union_intersection_type_hints: bool;
+  tco_coeffects: bool;
   tco_like_casts: bool;
   tco_simple_pessimize: float;
   tco_complex_coercion: bool;
@@ -100,6 +101,7 @@ type t = {
   po_disable_xhp_element_mangling: bool;
   po_disable_xhp_children_declarations: bool;
   po_enable_first_class_function_pointers: bool;
+  po_enable_enum_classes: bool;
   po_disable_modes: bool;
   po_disable_hh_ignore_error: bool;
   po_disable_array: bool;
@@ -108,6 +110,7 @@ type t = {
   tco_higher_kinded_types: bool;
   tco_method_call_inference: bool;
   tco_report_pos_from_reason: bool;
+  tco_typecheck_sample_rate: float;
 }
 [@@deriving eq, show]
 
@@ -217,6 +220,7 @@ let default =
     profile_desc = "";
     tco_like_type_hints = false;
     tco_union_intersection_type_hints = false;
+    tco_coeffects = false;
     tco_like_casts = false;
     tco_simple_pessimize = 0.0;
     tco_complex_coercion = false;
@@ -260,6 +264,7 @@ let default =
     po_disable_xhp_element_mangling = true;
     po_disable_xhp_children_declarations = true;
     po_enable_first_class_function_pointers = false;
+    po_enable_enum_classes = false;
     po_disable_modes = false;
     po_disable_hh_ignore_error = false;
     po_disable_array = true;
@@ -268,6 +273,7 @@ let default =
     tco_higher_kinded_types = false;
     tco_method_call_inference = false;
     tco_report_pos_from_reason = false;
+    tco_typecheck_sample_rate = 1.0;
   }
 
 let make
@@ -326,6 +332,7 @@ let make
     ?(tco_like_type_hints = default.tco_like_type_hints)
     ?(tco_union_intersection_type_hints =
       default.tco_union_intersection_type_hints)
+    ?(tco_coeffects = default.tco_coeffects)
     ?(tco_like_casts = default.tco_like_casts)
     ?(tco_simple_pessimize = default.tco_simple_pessimize)
     ?(tco_complex_coercion = default.tco_complex_coercion)
@@ -379,6 +386,7 @@ let make
       default.po_disable_xhp_children_declarations)
     ?(po_enable_first_class_function_pointers =
       default.po_enable_first_class_function_pointers)
+    ?(po_enable_enum_classes = default.po_enable_enum_classes)
     ?(po_disable_modes = default.po_disable_modes)
     ?(po_disable_hh_ignore_error = default.po_disable_hh_ignore_error)
     ?(po_disable_array = default.po_disable_array)
@@ -389,6 +397,7 @@ let make
     ?(tco_higher_kinded_types = default.tco_higher_kinded_types)
     ?(tco_method_call_inference = default.tco_method_call_inference)
     ?(tco_report_pos_from_reason = default.tco_report_pos_from_reason)
+    ?(tco_typecheck_sample_rate = default.tco_typecheck_sample_rate)
     () =
   {
     tco_experimental_features;
@@ -440,6 +449,7 @@ let make
     profile_desc;
     tco_like_type_hints;
     tco_union_intersection_type_hints;
+    tco_coeffects;
     tco_like_casts;
     tco_simple_pessimize;
     tco_complex_coercion;
@@ -483,6 +493,7 @@ let make
     po_disable_xhp_element_mangling;
     po_disable_xhp_children_declarations;
     po_enable_first_class_function_pointers;
+    po_enable_enum_classes;
     po_disable_modes;
     po_disable_hh_ignore_error;
     po_disable_array;
@@ -491,6 +502,7 @@ let make
     tco_higher_kinded_types;
     tco_method_call_inference;
     tco_report_pos_from_reason;
+    tco_typecheck_sample_rate;
   }
 
 let tco_experimental_feature_enabled t s =
@@ -600,6 +612,10 @@ let tco_like_type_hints t = t.tco_like_type_hints
 
 let tco_union_intersection_type_hints t = t.tco_union_intersection_type_hints
 
+let coeffects t = t.tco_coeffects
+
+let set_coeffects t = { t with tco_coeffects = true }
+
 let tco_like_casts t = t.tco_like_casts
 
 let tco_simple_pessimize t = t.tco_simple_pessimize
@@ -696,6 +712,8 @@ let po_disable_xhp_children_declarations t =
 let po_enable_first_class_function_pointers t =
   t.po_enable_first_class_function_pointers
 
+let po_enable_enum_classes t = t.po_enable_enum_classes
+
 let po_disable_modes t = t.po_disable_modes
 
 let po_disable_hh_ignore_error t = t.po_disable_hh_ignore_error
@@ -711,3 +729,5 @@ let tco_higher_kinded_types t = t.tco_higher_kinded_types
 let tco_method_call_inference t = t.tco_method_call_inference
 
 let tco_report_pos_from_reason t = t.tco_report_pos_from_reason
+
+let tco_typecheck_sample_rate t = t.tco_typecheck_sample_rate

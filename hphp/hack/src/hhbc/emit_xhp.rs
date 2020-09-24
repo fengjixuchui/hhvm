@@ -81,7 +81,6 @@ pub fn from_attribute_declaration<'a>(
         mk_expr(Expr_::mk_null()),
     ));
     let mut args = vec![mk_expr(Expr_::mk_call(
-        CallType::Cnormal,
         mk_expr(Expr_::mk_class_const(
             ClassId(
                 Pos::make_none(),
@@ -98,7 +97,6 @@ pub fn from_attribute_declaration<'a>(
             Some((ast_defs::Id(_, s), hints)) if hints.is_empty() => {
                 let s = string_utils::mangle(string_utils::strip_global_ns(s).into());
                 let arg = mk_expr(Expr_::mk_call(
-                    CallType::Cnormal,
                     mk_expr(Expr_::mk_class_const(
                         ClassId(
                             Pos::make_none(),
@@ -120,7 +118,6 @@ pub fn from_attribute_declaration<'a>(
     }
     args.push(emit_xhp_attribute_array(xal)?);
     let array_merge_call = mk_expr(Expr_::mk_call(
-        CallType::Cnormal,
         mk_expr(id_from_str("__SystemLib\\merge_xhp_attr_declarations")),
         vec![],
         args,
@@ -376,7 +373,7 @@ fn emit_xhp_attribute_array(xal: &[HhasXhpAttribute]) -> Result<Expr> {
         }
     }
     fn inner_array(xa: &HhasXhpAttribute) -> Result<Vec<Expr>> {
-        let enum_opt = xa.maybe_enum.map(|(_, _, es)| es);
+        let enum_opt = xa.maybe_enum.map(|(_, es)| es);
         let expr = match &(xa.class_var).expr {
             Some(e) => e.clone(),
             None => mk_expr(Expr_::Null),

@@ -273,7 +273,7 @@ struct ParserErrors<'a, Token, Value, State> {
 impl<'a, Token: 'a, Value: 'a, State: 'a> ParserErrors<'a, Token, Value, State>
 where
     Syntax<Token, Value>: SyntaxTrait,
-    Token: LexableToken<'a> + std::fmt::Debug,
+    Token: LexableToken + std::fmt::Debug,
     Value: SyntaxValueType<Token> + std::fmt::Debug,
     State: Clone,
 {
@@ -352,9 +352,11 @@ where
             Missing => Left(Left(empty())),
             SyntaxList(s) => Left(Right(
                 s.iter()
-                    .map(move |x| match &x.syntax {
-                        ListItem(x) => Left(on_list_item(x)),
-                        _ => Right(once(x)),
+                    .map(move |x| {
+                        match &x.syntax {
+                            ListItem(x) => Left(on_list_item(x)),
+                            _ => Right(once(x)),
+                        }
                     })
                     .flatten(),
             )),
@@ -732,6 +734,16 @@ where
                         .any(|&x| Self::has_modifier_static(x))
             }
             _ => false,
+        }
+    }
+
+    fn has_this(&self) -> bool {
+        if !self.is_in_active_class_scope() {
+            return false;
+        }
+        match self.env.context.active_methodish {
+            Some(x) if Self::has_modifier_static(x) => false,
+            _ => true,
         }
     }
 
@@ -1585,10 +1597,6 @@ where
         }
     }
 
-    fn methodish_contains_owned_mutable_attribute(&self, node: &'a Syntax<Token, Value>) -> bool {
-        self.methodish_contains_attribute(node, sn::user_attributes::OWNED_MUTABLE)
-    }
-
     fn check_nonrx_annotation(&mut self, node: &'a Syntax<Token, Value>) {
         let err_decl = |self_: &mut Self| {
             self_.errors.push(Self::make_error_from_node(
@@ -1671,20 +1679,6 @@ where
         }
     }
 
-    fn function_declaration_contains_only_rx_if_impl_attribute(
-        &self,
-        node: &'a Syntax<Token, Value>,
-    ) -> bool {
-        self.function_declaration_contains_attribute(node, sn::user_attributes::ONLY_RX_IF_IMPL)
-    }
-
-    fn function_declaration_contains_owned_mutable_attribute(
-        &self,
-        node: &'a Syntax<Token, Value>,
-    ) -> bool {
-        self.function_declaration_contains_attribute(node, sn::user_attributes::OWNED_MUTABLE)
-    }
-
     fn attribute_multiple_reactivity_annotations(
         &self,
         attr_spec: &'a Syntax<Token, Value>,
@@ -1733,6 +1727,17 @@ where
                 ))
             }
         }
+    }
+
+    fn is_in_enum_class(&self) -> bool {
+        let active_classish = match self.env.context.active_classish {
+            Some(x) => x,
+            _ => return false,
+        };
+        if let ClassishDeclaration(cd) = &active_classish.syntax {
+            return self.attr_spec_contains_enum_class(&cd.classish_attribute);
+        }
+        return false;
     }
 
     fn is_in_reified_class(&self) -> bool {
@@ -1807,29 +1812,12 @@ where
                 );
                 self.error_if_memoize_function_returns_mutable(function_attrs);
 
-                self.produce_error(
-                    |self_, x| {
-                        Self::function_declaration_contains_only_rx_if_impl_attribute(self_, x)
-                    },
-                    node,
-                    || errors::functions_cannot_implement_reactive,
-                    function_attrs,
-                );
                 self.check_nonrx_annotation(node);
 
                 self.produce_error(
                     |self_, x| Self::function_missing_reactivity_for_condition(self_, x),
                     node,
                     || errors::missing_reactivity_for_condition,
-                    function_attrs,
-                );
-
-                self.produce_error(
-                    |self_, x| {
-                        Self::function_declaration_contains_owned_mutable_attribute(self_, x)
-                    },
-                    node,
-                    || errors::misplaced_owned_mutable,
                     function_attrs,
                 );
 
@@ -1989,12 +1977,6 @@ where
                     || errors::missing_reactivity_for_condition,
                     method_attrs,
                 );
-                self.produce_error(
-                    |self_, x| self_.methodish_contains_owned_mutable_attribute(x),
-                    node,
-                    || errors::misplaced_owned_mutable,
-                    method_attrs,
-                );
             }
             _ => {}
         }
@@ -2076,7 +2058,6 @@ where
     fn parameter_rx_errors(&mut self, node: &'a Syntax<Token, Value>) {
         if let ParameterDeclaration(x) = &node.syntax {
             let spec = &x.parameter_attribute;
-            let name = &x.parameter_name;
             let has_owned_mutable =
                 self.attribute_specification_contains(spec, sn::user_attributes::OWNED_MUTABLE);
 
@@ -2100,12 +2081,6 @@ where
                     errors::conflicting_owned_mutable_and_maybe_mutable_attributes,
                 )),
                 _ => {}
-            }
-            if (has_mutable || has_owned_mutable || has_maybemutable)
-                && Self::is_variadic_expression(name)
-            {
-                self.errors
-                    .push(Self::make_error_from_node(name, errors::vararg_and_mutable))
             }
             let is_inout = Self::is_parameter_with_callconv(node);
             if is_inout && (has_mutable || has_maybemutable || has_owned_mutable) {
@@ -2655,17 +2630,58 @@ where
         })
     }
 
+    fn check_disallowed_variables(&mut self, node: &'a Syntax<Token, Value>) {
+        match &node.syntax {
+            VariableExpression(x) => {
+                // TODO(T75820862): Allow $GLOBALS to be used as a variable name
+                if self.text(&x.variable_expression) == sn::superglobals::GLOBALS {
+                    self.errors
+                        .push(Self::make_error_from_node(node, errors::globals_disallowed))
+                } else if self.text(&x.variable_expression) == sn::special_idents::THIS
+                    && !self.has_this()
+                {
+                    // If we are in the special top level debugger function, lets not check for $this since
+                    // it will be properly lifted in closure convert
+                    if self
+                        .first_parent_function_name()
+                        .map_or(true, |s| s == "include")
+                    {
+                        return {};
+                    }
+                    self.errors
+                        .push(Self::make_error_from_node(node, errors::invalid_this))
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn unset_errors(&mut self, node: &'a Syntax<Token, Value>) {
+        match &node.syntax {
+            UnsetStatement(x) => {
+                for expr in Self::syntax_to_list_no_separators(&x.unset_variables) {
+                    match &expr.syntax {
+                        VariableExpression(x)
+                            if self.text(&x.variable_expression) == sn::special_idents::THIS =>
+                        {
+                            self.errors
+                                .push(Self::make_error_from_node(node, errors::cannot_unset_this))
+                        }
+                        _ => {}
+                    }
+                }
+                {}
+            }
+            _ => {}
+        }
+    }
+
     fn function_call_argument_errors(
         &mut self,
         in_constructor_call: bool,
         node: &'a Syntax<Token, Value>,
     ) {
         if let Some(e) = match &node.syntax {
-            VariableExpression(x)
-                if self.text(&x.variable_expression) == sn::superglobals::GLOBALS =>
-            {
-                Some(errors::globals_without_subscript)
-            }
             DecoratedExpression(x) => {
                 if let Token(token) = &x.decorated_expression_decorator.syntax {
                     if token.kind() == TokenKind::Inout {
@@ -2675,10 +2691,12 @@ where
                             VariableExpression(x)
                                 if sn::superglobals::is_any_global(
                                     self.text(&x.variable_expression),
-                                ) =>
+                                ) || self.text(&x.variable_expression)
+                                    == sn::special_idents::THIS =>
                             {
                                 Some(errors::fun_arg_invalid_arg)
                             }
+                            PipeVariableExpression(_) => Some(errors::fun_arg_invalid_arg),
                             BinaryExpression(_) => Some(errors::fun_arg_inout_set),
                             QualifiedName(_) => Some(errors::fun_arg_inout_const),
                             Token(_) if expression.is_name() => Some(errors::fun_arg_inout_const),
@@ -2716,9 +2734,11 @@ where
     }
 
     fn function_call_on_xhp_name_errors(&mut self, node: &'a Syntax<Token, Value>) {
-        let check = |self_: &mut Self,
-                     member_object: &'a Syntax<Token, Value>,
-                     name: &'a Syntax<Token, Value>| {
+        let check = |
+            self_: &mut Self,
+            member_object: &'a Syntax<Token, Value>,
+            name: &'a Syntax<Token, Value>,
+        | {
             if let XHPExpression(_) = &member_object.syntax {
                 if self_.env.is_typechecker() {
                     self_.errors.push(Self::make_error_from_node(
@@ -3911,6 +3931,10 @@ where
         self.attribute_specification_contains(node, sn::user_attributes::SEALED)
     }
 
+    fn attr_spec_contains_enum_class(&self, node: &'a Syntax<Token, Value>) -> bool {
+        self.attribute_specification_contains(node, sn::user_attributes::ENUM_CLASS)
+    }
+
     fn attr_spec_contains_const(&self, node: &'a Syntax<Token, Value>) -> bool {
         self.attribute_specification_contains(node, sn::user_attributes::CONST)
     }
@@ -4029,13 +4053,6 @@ where
                 || errors::error2037,
                 &cd.classish_extends_list,
             );
-
-            if let Some(n) = self.attribute_first_reactivity_annotation(&cd.classish_attribute) {
-                self.errors.push(Self::make_error_from_node(
-                    n,
-                    errors::misplaced_reactivity_annotation,
-                ))
-            };
 
             self.invalid_modifier_errors("Classes, interfaces, and traits", node, |kind| {
                 kind == TokenKind::Abstract || kind == TokenKind::Final || kind == TokenKind::XHP
@@ -4296,45 +4313,45 @@ where
                     self.text(&x.namespace_use_alias),
                 );
 
-                let do_check =
-                    |self_: &mut Self,
-                     error_on_global_redefinition,
-                     get_names: &dyn Fn(&mut UsedNames) -> &mut Strmap<FirstUseOrDef>,
-                     report_error| {
-                        let is_global_namespace = self_.is_global_namespace();
-                        let names = get_names(&mut self_.names);
-                        match names.get(&short_name) {
-                            Some(FirstUseOrDef {
-                                location,
-                                kind,
-                                global,
-                                ..
-                            }) => {
-                                if *kind != NameDef
-                                    || error_on_global_redefinition
-                                        && (is_global_namespace || *global)
-                                {
-                                    self_.errors.push(Self::make_name_already_used_error(
-                                        name,
-                                        name_text,
-                                        &short_name,
-                                        location,
-                                        report_error,
-                                    ))
-                                }
-                            }
-                            None => {
-                                let new_use = make_first_use_or_def(
-                                    false,
-                                    NameUse,
-                                    Self::make_location_of_node(name),
-                                    GLOBAL_NAMESPACE_NAME,
-                                    &qualified_name,
-                                );
-                                names.add(&short_name, new_use)
+                let do_check = |
+                    self_: &mut Self,
+                    error_on_global_redefinition,
+                    get_names: &dyn Fn(&mut UsedNames) -> &mut Strmap<FirstUseOrDef>,
+                    report_error,
+                | {
+                    let is_global_namespace = self_.is_global_namespace();
+                    let names = get_names(&mut self_.names);
+                    match names.get(&short_name) {
+                        Some(FirstUseOrDef {
+                            location,
+                            kind,
+                            global,
+                            ..
+                        }) => {
+                            if *kind != NameDef
+                                || error_on_global_redefinition && (is_global_namespace || *global)
+                            {
+                                self_.errors.push(Self::make_name_already_used_error(
+                                    name,
+                                    name_text,
+                                    &short_name,
+                                    location,
+                                    report_error,
+                                ))
                             }
                         }
-                    };
+                        None => {
+                            let new_use = make_first_use_or_def(
+                                false,
+                                NameUse,
+                                Self::make_location_of_node(name),
+                                GLOBAL_NAMESPACE_NAME,
+                                &qualified_name,
+                            );
+                            names.add(&short_name, new_use)
+                        }
+                    }
+                };
 
                 match &kind.syntax {
                     Token(token) => match token.kind() {
@@ -4702,6 +4719,12 @@ where
                     default(self)
                 }
             }
+            ObjectCreationExpression(_) => {
+                // We allow "enum class" constants to be initialized via new.
+                if !(self.env.parser_options.po_enable_enum_classes && self.is_in_enum_class()) {
+                    default(self);
+                }
+            }
             _ => default(self),
         }
     }
@@ -4859,10 +4882,12 @@ where
     }
 
     fn class_property_declarator_errors(&mut self, node: &'a Syntax<Token, Value>) {
-        let check_decls = |self_: &mut Self,
-                           f: &dyn Fn(&'a Syntax<Token, Value>) -> bool,
-                           error: errors::Error,
-                           property_declarators| {
+        let check_decls = |
+            self_: &mut Self,
+            f: &dyn Fn(&'a Syntax<Token, Value>) -> bool,
+            error: errors::Error,
+            property_declarators,
+        | {
             Self::syntax_to_list_no_separators(property_declarators).for_each(|decl| {
                 if let PropertyDeclarator(x) = &decl.syntax {
                     if f(&x.property_initializer) {
@@ -5048,7 +5073,7 @@ where
         }
     }
 
-    fn check_lvalue(&mut self, allow_reassign: bool, loperand: &'a Syntax<Token, Value>) {
+    fn check_lvalue(&mut self, loperand: &'a Syntax<Token, Value>) {
         let append_errors = |self_: &mut Self, node, error| {
             self_.errors.push(Self::make_error_from_node(node, error))
         };
@@ -5060,9 +5085,15 @@ where
             _ => err(self_, errors::not_allowed_in_write("Unary expression")),
         };
 
+        let check_variable = |self_: &mut Self, text| {
+            if text == sn::special_idents::THIS {
+                err(self_, errors::reassign_this)
+            }
+        };
+
         match &loperand.syntax {
             ListExpression(x) => Self::syntax_to_list_no_separators(&x.list_members)
-                .for_each(|n| self.check_lvalue(false, n)),
+                .for_each(|n| self.check_lvalue(n)),
             SafeMemberSelectionExpression(_) => {
                 err(self, errors::not_allowed_in_write("`?->` operator"))
             }
@@ -5071,16 +5102,8 @@ where
                     err(self, errors::not_allowed_in_write("`->:` operator"))
                 }
             }
-            VariableExpression(x) => {
-                if !allow_reassign {
-                    let text = self.text(&x.variable_expression);
-                    if text == sn::special_idents::THIS {
-                        err(self, errors::reassign_this)
-                    } else if text == sn::superglobals::GLOBALS {
-                        err(self, errors::not_allowed_in_write("`$GLOBALS`"))
-                    }
-                }
-            }
+            CatchClause(x) => check_variable(self, self.text(&x.catch_variable)),
+            VariableExpression(x) => check_variable(self, self.text(&x.variable_expression)),
             DecoratedExpression(x) => match Self::token_kind(&x.decorated_expression_decorator) {
                 Some(TokenKind::Clone) => err(self, errors::not_allowed_in_write("`clone`")),
                 Some(TokenKind::Await) => err(self, errors::not_allowed_in_write("`await`")),
@@ -5094,10 +5117,8 @@ where
                 Some(TokenKind::Inout) => err(self, errors::not_allowed_in_write("`inout`")),
                 _ => {}
             },
-            ParenthesizedExpression(x) => {
-                self.check_lvalue(allow_reassign, &x.parenthesized_expression_expression)
-            }
-            SubscriptExpression(x) => self.check_lvalue(true, &x.subscript_receiver),
+            ParenthesizedExpression(x) => self.check_lvalue(&x.parenthesized_expression_expression),
+            SubscriptExpression(x) => self.check_lvalue(&x.subscript_receiver),
             LambdaExpression(_)
             | AnonymousFunction(_)
             | AwaitableCreationExpression(_)
@@ -5133,24 +5154,9 @@ where
     }
 
     fn assignment_errors(&mut self, node: &'a Syntax<Token, Value>) {
-        let check_rvalue = |self_: &mut Self, roperand: &'a Syntax<Token, Value>| {
-            let append_errors = |self_: &mut Self, node, error| {
-                self_.errors.push(Self::make_error_from_node(node, error))
-            };
-            match &roperand.syntax {
-                VariableExpression(x)
-                    if self_.text(&x.variable_expression) == sn::superglobals::GLOBALS =>
-                {
-                    append_errors(self_, roperand, errors::globals_without_subscript)
-                }
-
-                _ => {}
-            }
-        };
-
         let check_unary_expression = |self_: &mut Self, op, loperand: &'a Syntax<Token, Value>| {
             if Self::does_unop_create_write(Self::token_kind(op)) {
-                self_.check_lvalue(true, loperand)
+                self_.check_lvalue(loperand)
             }
         };
         match &node.syntax {
@@ -5165,21 +5171,21 @@ where
                 if Self::does_decorator_create_write(Self::token_kind(
                     &x.decorated_expression_decorator,
                 )) {
-                    self.check_lvalue(true, &loperand)
+                    self.check_lvalue(&loperand)
                 }
             }
             BinaryExpression(x) => {
                 let loperand = &x.binary_left_operand;
-                let roperand = &x.binary_right_operand;
                 if Self::does_binop_create_write_on_left(Self::token_kind(&x.binary_operator)) {
-                    self.check_lvalue(false, &loperand);
-                    check_rvalue(self, &roperand);
+                    self.check_lvalue(&loperand);
                 }
             }
             ForeachStatement(x) => {
-                self.check_lvalue(false, &x.foreach_value);
-                self.check_lvalue(false, &x.foreach_key);
-                check_rvalue(self, &x.foreach_collection);
+                self.check_lvalue(&x.foreach_value);
+                self.check_lvalue(&x.foreach_key);
+            }
+            CatchClause(_) => {
+                self.check_lvalue(node);
             }
             _ => {}
         }
@@ -5530,6 +5536,7 @@ where
             | ConditionalExpression(_)
             | CollectionLiteralExpression(_)
             | VariableExpression(_) => {
+                self.check_disallowed_variables(node);
                 self.dynamic_method_call_errors(node);
                 self.expression_errors(node);
                 self.check_nonrx_annotation(node);
@@ -5565,9 +5572,10 @@ where
             TraitUseAliasItem(_) => self.trait_use_alias_item_modifier_errors(node),
             EnumDeclaration(_) => self.enum_decl_errors(node),
             Enumerator(_) => self.enumerator_errors(node),
-            PostfixUnaryExpression(_) | BinaryExpression(_) | ForeachStatement(_) => {
-                self.assignment_errors(node)
-            }
+            PostfixUnaryExpression(_)
+            | BinaryExpression(_)
+            | ForeachStatement(_)
+            | CatchClause(_) => self.assignment_errors(node),
             XHPEnumType(_) | XHPExpression(_) => self.xhp_errors(node),
             PropertyDeclarator(x) => {
                 let init = &x.property_initializer;
@@ -5588,6 +5596,7 @@ where
             SoftTypeSpecifier(_) => self.disabled_legacy_soft_typehint_errors(node),
             FunctionPointerExpression(_) => self.disabled_function_pointer_expression_error(node),
             QualifiedName(_) => self.check_qualified_name(node),
+            UnsetStatement(_) => self.unset_errors(node),
             _ => {}
         }
         self.lval_errors(node);
@@ -5677,6 +5686,14 @@ where
                 self.env.context.active_expression_tree = true;
 
                 self.fold_child_nodes(node)
+            }
+            FunctionCallExpression(x)
+                if self.text(&x.function_call_receiver) == sn::special_functions::SPLICE =>
+            {
+                let previous_state = self.env.context.active_expression_tree;
+                self.env.context.active_expression_tree = false;
+                self.fold_child_nodes(node);
+                self.env.context.active_expression_tree = previous_state;
             }
             _ => self.fold_child_nodes(node),
         }

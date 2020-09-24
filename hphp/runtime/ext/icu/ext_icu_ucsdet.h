@@ -1,5 +1,4 @@
-#ifndef incl_HPHP_ICU_UCSDET_H
-#define incl_HPHP_ICU_UCSDET_H
+#pragma once
 
 #include "hphp/runtime/ext/extension.h"
 #include "hphp/runtime/ext/icu/icu.h"
@@ -57,7 +56,7 @@ struct EncodingMatch : IntlError {
   static Object newInstance(const UCharsetMatch* match,
                             const std::shared_ptr<UCharsetDetector>& det) {
     if (UNLIKELY(!c_EncodingMatch)) {
-      c_EncodingMatch = Unit::lookupClass(s_EncodingMatch.get());
+      c_EncodingMatch = Class::lookup(s_EncodingMatch.get());
       assertx(c_EncodingMatch);
     }
     Object ret{c_EncodingMatch};
@@ -86,4 +85,3 @@ struct EncodingMatch : IntlError {
 /////////////////////////////////////////////////////////////////////////////
 }} // namespace HPHP::Intl
 
-#endif // incl_HPHP_ICU_UCSDET_H

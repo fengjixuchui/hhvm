@@ -490,7 +490,7 @@ module Visitor_DEPRECATED = struct
 
       method on_class_const : 'a -> class_id -> pstring -> 'a
 
-      method on_call : 'a -> call_type -> expr -> expr list -> expr option -> 'a
+      method on_call : 'a -> expr -> expr list -> expr option -> 'a
 
       method on_function_pointer :
         'a ->
@@ -528,7 +528,7 @@ module Visitor_DEPRECATED = struct
 
       method on_cast : 'a -> hint -> expr -> 'a
 
-      method on_expression_tree : 'a -> hint -> expr -> 'a
+      method on_expression_tree : 'a -> hint -> expr -> expr option -> 'a
 
       method on_unop : 'a -> Ast_defs.uop -> expr -> 'a
 
@@ -804,15 +804,15 @@ module Visitor_DEPRECATED = struct
         | Array_get (e1, e2) -> this#on_array_get acc e1 e2
         | Class_get (cid, e) -> this#on_class_get acc cid e
         | Class_const (cid, id) -> this#on_class_const acc cid id
-        | Call (ct, e, _, el, unpacked_element) ->
-          this#on_call acc ct e el unpacked_element
+        | Call (e, _, el, unpacked_element) ->
+          this#on_call acc e el unpacked_element
         | FunctionPointer (fpid, targs) ->
           this#on_function_pointer acc fpid targs
         | String2 el -> this#on_string2 acc el
         | PrefixedString (_, e) -> this#on_expr acc e
         | Pair (ta, e1, e2) -> this#on_pair acc ta e1 e2
         | Cast (hint, e) -> this#on_cast acc hint e
-        | ExpressionTree (hint, e) -> this#on_expression_tree acc hint e
+        | ExpressionTree (hint, e, e2) -> this#on_expression_tree acc hint e e2
         | Unop (uop, e) -> this#on_unop acc uop e
         | Binop (bop, e1, e2) -> this#on_binop acc bop e1 e2
         | Pipe (id, e1, e2) -> this#on_pipe acc id e1 e2
@@ -936,7 +936,7 @@ module Visitor_DEPRECATED = struct
 
       method on_class_const acc cid _ = this#on_class_id acc cid
 
-      method on_call acc _ e el unpacked_element =
+      method on_call acc e el unpacked_element =
         let acc = this#on_expr acc e in
         let acc = List.fold_left el ~f:this#on_expr ~init:acc in
         let acc =
@@ -994,7 +994,11 @@ module Visitor_DEPRECATED = struct
 
       method on_cast acc _ e = this#on_expr acc e
 
-      method on_expression_tree acc _ e = this#on_expr acc e
+      method on_expression_tree acc _ e e2 =
+        let acc = this#on_expr acc e in
+        match e2 with
+        | None -> acc
+        | Some e -> this#on_expr acc e
 
       method on_unop acc _ e = this#on_expr acc e
 

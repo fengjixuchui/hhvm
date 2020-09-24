@@ -19,7 +19,7 @@ use parser_core_types::trivia_kind::TriviaKind;
 #[derive(Debug)]
 pub struct DeclarationParser<'a, S, T>
 where
-    S: SmartConstructors<'a, T>,
+    S: SmartConstructors<T>,
     S::R: NodeType,
 {
     lexer: Lexer<'a, S::Token>,
@@ -31,7 +31,7 @@ where
 
 impl<'a, S, T: Clone> Clone for DeclarationParser<'a, S, T>
 where
-    S: SmartConstructors<'a, T>,
+    S: SmartConstructors<T>,
     S::R: NodeType,
 {
     fn clone(&self) -> Self {
@@ -47,7 +47,7 @@ where
 
 impl<'a, S, T: Clone> ParserTrait<'a, S, T> for DeclarationParser<'a, S, T>
 where
-    S: SmartConstructors<'a, T>,
+    S: SmartConstructors<T>,
     S::R: NodeType,
 {
     fn make(
@@ -127,7 +127,7 @@ where
 
 impl<'a, S, T: Clone> DeclarationParser<'a, S, T>
 where
-    S: SmartConstructors<'a, T>,
+    S: SmartConstructors<T>,
     S::R: NodeType,
 {
     fn with_type_parser<F, U>(&mut self, f: F) -> U
@@ -960,17 +960,6 @@ where
         // a later pass.
         let mut parser1 = self.clone();
         let token = parser1.next_token();
-        let (token, optional) = match token.kind() {
-            TokenKind::Question => {
-                let enum_token = parser1.next_token();
-                let token = S!(make_token, parser1, token);
-                (enum_token, token)
-            }
-            _ => {
-                let missing = S!(make_missing, parser1, self.pos());
-                (token, missing)
-            }
-        };
         match token.kind() {
             TokenKind::Enum => {
                 self.continue_from(parser1);
@@ -982,7 +971,6 @@ where
                 S!(
                     make_xhp_enum_type,
                     self,
-                    optional,
                     enum_token,
                     left_brace,
                     values,
@@ -2138,19 +2126,14 @@ where
     fn parse_enum_or_classish_or_function_declaration(&mut self) -> S::R {
         // An enum, type alias, function, interface, trait or class may all
         // begin with an attribute.
-        let mut parser1 = self.clone();
-        let attribute_specification = parser1.parse_attribute_specification_opt();
+        let attribute_specification = match self.peek_token_kind() {
+            TokenKind::At | TokenKind::LessThanLessThan => self.parse_attribute_specification_opt(),
+            _ => S!(make_missing, self, self.pos()),
+        };
 
-        let mut parser2 = parser1.clone();
-        let token = parser2.next_token();
-        match token.kind() {
-            TokenKind::Enum => {
-                self.continue_from(parser1);
-                self.parse_enum_declaration(attribute_specification)
-            }
+        match self.peek_token_kind() {
+            TokenKind::Enum => self.parse_enum_declaration(attribute_specification),
             TokenKind::Type | TokenKind::Newtype => {
-                self.continue_from(parser1);
-
                 self.parse_alias_declaration(attribute_specification)
             }
             TokenKind::Async | TokenKind::Function => {
@@ -2163,7 +2146,6 @@ where
                         p.parse_possible_php_function(/* toplevel=*/ true)
                     })
                 } else {
-                    self.continue_from(parser1);
                     self.parse_function_declaration(attribute_specification)
                 }
             }
@@ -2172,15 +2154,12 @@ where
             | TokenKind::Interface
             | TokenKind::Trait
             | TokenKind::XHP
-            | TokenKind::Class => {
-                self.continue_from(parser1);
-                self.parse_classish_declaration(attribute_specification)
-            }
+            | TokenKind::Class => self.parse_classish_declaration(attribute_specification),
             _ => {
                 // ERROR RECOVERY: we encountered an unexpected token, raise an error and continue
                 // TODO: This is wrong; we have lost the attribute specification
                 // from the tree.
-                self.continue_from(parser2);
+                let token = self.next_token();
                 self.with_error(Errors::error1057(self.token_text(&token)));
                 let token = S!(make_token, self, token);
                 S!(make_error, self, token)

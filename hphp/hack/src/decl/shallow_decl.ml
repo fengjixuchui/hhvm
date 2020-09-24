@@ -21,9 +21,7 @@ let class_const env c cc =
   let { cc_id = name; cc_type = h; cc_expr = e; cc_doc_comment = _ } = cc in
   let pos = fst name in
   match c.c_kind with
-  | Ast_defs.Ctrait ->
-    Errors.cannot_declare_constant `trait pos c.c_name;
-    None
+  | Ast_defs.Ctrait -> None
   | Ast_defs.Cnormal
   | Ast_defs.Cabstract
   | Ast_defs.Cinterface
@@ -60,13 +58,6 @@ let typeconst env c tc =
   match c.c_kind with
   | Ast_defs.Ctrait
   | Ast_defs.Cenum ->
-    let kind =
-      match c.c_kind with
-      | Ast_defs.Ctrait -> `trait
-      | Ast_defs.Cenum -> `enum
-      | _ -> assert false
-    in
-    Errors.cannot_declare_constant kind (fst tc.c_tconst_name) c.c_name;
     None
   | Ast_defs.Cinterface
   | Ast_defs.Cabstract
@@ -140,9 +131,6 @@ let prop env cv =
   in
   let const = Attrs.mem SN.UserAttributes.uaConst cv.cv_user_attributes in
   let lateinit = Attrs.mem SN.UserAttributes.uaLateInit cv.cv_user_attributes in
-  if cv.cv_final then Errors.final_property cv_pos;
-  if lateinit && Option.is_some cv.cv_expr then
-    Errors.lateinit_with_default cv_pos;
   {
     sp_const = const;
     sp_xhp_attr = make_xhp_attr cv;
@@ -188,6 +176,15 @@ let method_type env m =
   let returns_void_to_rx = fun_returns_void_to_rx m.m_user_attributes in
   let return_disposable = has_return_disposable_attribute m.m_user_attributes in
   let params = make_params env ~is_lambda:false m.m_params in
+  let capability =
+    hint_to_type
+      ~is_lambda:false
+      ~default:
+        (Typing_make_type.default_capability (Reason.Rhint (fst m.m_name)))
+      env
+      (Reason.Rwitness (fst m.m_name))
+      (hint_of_type_hint m.m_cap)
+  in
   let ret =
     ret_from_fun_kind
       ~is_lambda:false
@@ -214,6 +211,7 @@ let method_type env m =
     ft_tparams = tparams;
     ft_where_constraints = where_constraints;
     ft_params = params;
+    ft_implicit_params = { capability };
     ft_ret = { et_type = ret; et_enforced = false };
     ft_reactive = reactivity;
     ft_flags =
@@ -319,7 +317,7 @@ let class_ env c =
       {
         te_base = hint e.e_base;
         te_constraint = Option.map e.e_constraint hint;
-        te_includes = List.map ~f:hint e.e_includes;
+        te_includes = List.map e.e_includes hint;
       }
     in
     List.iter ~f:add_cstr_dep et.te_includes;

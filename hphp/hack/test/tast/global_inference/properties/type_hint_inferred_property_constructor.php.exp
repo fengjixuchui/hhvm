@@ -26,7 +26,7 @@
             param_callconv = None; param_user_attributes = [];
             param_visibility = (Some Public) }
            ];
-         m_cap = ((mixed), None); m_unsafe_cap = ((mixed), None);
+         m_cap = ((nothing), None); m_unsafe_cap = ((mixed), None);
          m_body =
          { fb_ast =
            [([4:38-40],
@@ -103,7 +103,7 @@
            ([12:3-11],
             (Expr
                (([12:3-10], void),
-                (Call (Cnormal,
+                (Call (
                    (([12:3-6], (function(int $_): void)),
                     (Id ([12:3-6], "\\foo"))),
                    [], [(([12:7-9], int), (Lvar ([12:7-9], $x)))], None)))))

@@ -14,8 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#ifndef incl_HPHP_APC_NAMED_ENTITY_H_
-#define incl_HPHP_APC_NAMED_ENTITY_H_
+#pragma once
 
 #include "hphp/runtime/base/apc-handle-defs.h"
 #include "hphp/runtime/vm/unit.h"
@@ -40,7 +39,7 @@ struct APCNamedEntity {
   APCHandle* getHandle() { return &m_handle; }
   Variant getEntityOrNull() const {
     assertx(m_handle.kind() == APCKind::FuncEntity);
-    auto const f = Unit::loadFunc(m_entity, m_name);
+    auto const f = Func::load(m_entity, m_name);
     return f ? Variant{f} : Variant{Variant::NullInit{}};
   }
 
@@ -52,4 +51,3 @@ private:
 
 }
 
-#endif

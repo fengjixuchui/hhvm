@@ -9,7 +9,7 @@ function basic(): void {
   $z = \HH\Rx\mutable(new C(7)); // $z is mutable
   $z->val = 5; // okay
   $z = 7; // error, cannot change mutability flavor of the local
-  $b = $z; // can reassign an immutable object
+  $b = $z; // can reassign a mutable object
 
   // $x is mutable(mutably owned)
   $x = \HH\Rx\mutable(returnsMut());
@@ -19,5 +19,5 @@ function basic(): void {
 
 <<__Rx, __MutableReturn>>
 function returnsMut(): C {
-  // UNSAFE
+  return new C(42);
 }
