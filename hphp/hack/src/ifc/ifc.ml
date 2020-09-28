@@ -77,7 +77,10 @@ let rec subtype ~pos t1 t2 acc =
     |> subtype f1.f_ret f2.f_ret
     |> subtype f1.f_exn f2.f_exn
   | (Tcow_array arr1, Tcow_array arr2) ->
-    acc |> subtype arr1.a_key arr2.a_key |> subtype arr1.a_value arr2.a_value
+    acc
+    |> subtype arr1.a_key arr2.a_key
+    |> subtype arr1.a_value arr2.a_value
+    |> L.(arr1.a_length < arr2.a_length) ~pos
   | (Tunion tl, _) ->
     List.fold tl ~init:acc ~f:(fun acc t1 -> subtype t1 t2 acc)
   | (_, Tinter tl) ->
@@ -133,8 +136,13 @@ let rec policy_occurrences pty =
       :: policy_occurrences f_ret
       :: policy_occurrences f_exn
       :: List.map ~f:swap_policy_occurrences f_args )
-  | Tcow_array { a_key; a_value } ->
-    on_list [policy_occurrences a_key; policy_occurrences a_value]
+  | Tcow_array { a_key; a_value; a_length; _ } ->
+    on_list
+      [
+        (pol a_length, emp, emp);
+        policy_occurrences a_key;
+        policy_occurrences a_value;
+      ]
 
 (* Returns the list of free policy variables in a type *)
 let free_pvars pty =
@@ -330,7 +338,8 @@ let adjust_ptype ?prefix ~pos ~adjustment renv env ty =
     | Tcow_array arr ->
       let (env, a_key) = freshen_cov env arr.a_key in
       let (env, a_value) = freshen_cov env arr.a_value in
-      (env, Tcow_array { a_key; a_value })
+      let (env, a_length) = freshen_pol_cov env arr.a_length in
+      (env, Tcow_array { a_kind = arr.a_kind; a_key; a_value; a_length })
   in
   freshen adjustment env ty
 
@@ -347,8 +356,9 @@ let rec object_policy = function
   | Ttuple tl ->
     let f set t = PSet.union (object_policy t) set in
     List.fold tl ~init:PSet.empty ~f
-  | Tcow_array { a_key; a_value } ->
+  | Tcow_array { a_key; a_value; a_length; _ } ->
     PSet.union (object_policy a_key) (object_policy a_value)
+    |> PSet.add a_length
 
 let add_dependencies ~pos pl t acc =
   L.(pl <* PSet.elements (object_policy t)) ~pos acc
@@ -380,14 +390,17 @@ let union env t1 t2 =
 let get_local_type ~pos env lid =
   match Env.get_local_type env lid with
   | None ->
-    let msg = "local " ^ Local_id.get_name lid ^ " missing from env" in
-    Errors.unknown_information_flow pos msg;
+    let name = Local_id.get_name lid in
+    (* FIXME: deal with co-effect thingies *)
+    ( if not (String.equal (String.sub name ~pos:0 ~len:2) "$#") then
+      let msg = "local " ^ name ^ " missing from env" in
+      Errors.unknown_information_flow pos msg );
     None
   | pty_opt -> pty_opt
 
 (* Uses a Hack-inferred type to update the flow type of a local
    variable *)
-let refresh_local_type ~pos renv env lid lty =
+let refresh_local_type ?(force = false) ~pos renv env lid lty =
   let is_simple pty =
     match pty with
     | Tunion _ -> false
@@ -398,7 +411,7 @@ let refresh_local_type ~pos renv env lid lty =
     | Some pty -> pty
     | None -> Lift.ty renv lty
   in
-  if is_simple pty then
+  if (not force) && is_simple pty then
     (* if the type is already simple, do not refresh it with
        what Hack found *)
     (env, pty)
@@ -526,9 +539,12 @@ let cow_array ~pos renv ty =
   | Some arry -> arry
   | None ->
     Errors.unknown_information_flow pos "Hack array";
+    (* The following CoW array is completely arbitrary. *)
     {
+      a_kind = Adict;
       a_key = Tprim (Env.new_policy_var renv "fake_key");
       a_value = Tprim (Env.new_policy_var renv "fake_value");
+      a_length = Env.new_policy_var renv "fake_length";
     }
 
 (* Deals with a true assignment to either a local variable
@@ -557,6 +573,33 @@ let asn ~expr ~pos renv env ((_, lhs_ty), lhs_exp) rhs_pty =
     Errors.unknown_information_flow pos "lvalue";
     env
 
+(*
+  If {} is used for primitive indexing, the following is the morally
+  equivalent code array mutation/access represents and that we generate
+  constraints for:
+
+  ```
+  $arry = array expression
+  $ix = indexing expression
+  if ($ix < $arry->length) {
+    $arry{$ix} or $arry{$ix} = value expression
+  } else {
+    throw new OutOfBoundsException();
+  }
+  ```
+*)
+let may_throw_out_of_bounds_exn ~pos renv env arry ix_pty =
+  (* Flow from the pc due to the conditional exception behaviour. Both the
+     index and the length of the array flow. *)
+  let checked_policies = PSet.add arry.a_length (object_policy ix_pty) in
+  let env = Env.push_pcs env K.Next checked_policies in
+
+  (* Invalid indexing causes an `OutOfBoundsException`. *)
+  let exn = Lift.class_ty renv Decl.out_of_bounds_exception_id in
+  let env = throw ~pos renv env exn in
+
+  env
+
 (* A wrapper for asn that deals with Hack arrays' syntactic
    sugar; it is important to get it right to account for the
    CoW semantics of Hack arrays:
@@ -567,29 +610,47 @@ let asn ~expr ~pos renv env ((_, lhs_ty), lhs_exp) rhs_pty =
    the object $x instead.  *)
 let rec asn_top ~expr ~pos renv env lhs rhs_pty =
   match snd lhs with
-  | A.Array_get (arry, ix_opt) ->
-    (* TODO(T68269878): track flows due to length changes *)
-    let (env, _ix_ty_opt) =
-      match ix_opt with
-      | Some ix ->
-        let (env, ty) = expr env ix in
-        (env, Some ty)
-      | None -> (env, None)
-    in
-    (* we now compute the type of the new array resulting
-       from the insertion/update *)
-    let (env, arry_pty) =
-      let (env, old_arry_pty) = expr env arry in
+  | A.Array_get (arry_exp, ix_opt) ->
+    (* Evaluate the array *)
+    let (env, arry_pty, arry) =
+      let (env, old_arry_pty) = expr env arry_exp in
+      (* Here weakening achieves copy-on-write because any new flow we
+         register won't share the same flow destination as the earlier
+         assignments. *)
       let (env, arry_pty) =
         adjust_ptype ~pos ~adjustment:Aweaken renv env old_arry_pty
       in
-      (* the rhs flows into the element type *)
-      let value_pty = (cow_array ~pos renv arry_pty).a_value in
-      let env = Env.acc env (subtype ~pos rhs_pty value_pty) in
-      (env, arry_pty)
+      let arry = cow_array ~pos renv arry_pty in
+      (env, arry_pty, arry)
     in
+
+    (* TODO(T68269878): track flows due to length changes *)
+    (* Evaluate the index *)
+    let (env, ix_pty_opt) =
+      match ix_opt with
+      | Some ix ->
+        let (env, ix_pty) = expr env ix in
+        (* The index flows to they key of the array *)
+        let env = Env.acc env (subtype ~pos ix_pty arry.a_key) in
+        (env, Some ix_pty)
+      | None -> (env, None)
+    in
+
+    (* Potentially raise `OutOfBoundsException` *)
+    let env =
+      match ix_pty_opt with
+      (* When there is no index, we add a new element, hence no exception. *)
+      | None -> env
+      (* Dictionaries don't throw on assignment, they register a new key. *)
+      | Some _ when equal_array_kind arry.a_kind Adict -> env
+      | Some ix_pty -> may_throw_out_of_bounds_exn ~pos renv env arry ix_pty
+    in
+
+    (* Do the assignment *)
+    let env = Env.acc env (subtype ~pos rhs_pty arry.a_value) in
+
     (* assign the vector itself *)
-    asn_top ~expr ~pos renv env arry arry_pty
+    asn_top ~expr ~pos renv env arry_exp arry_pty
   | _ -> asn ~expr ~pos renv env lhs rhs_pty
 
 let rec assign ~pos renv env op lhs_exp rhs_exp =
@@ -700,17 +761,16 @@ and expr ~pos renv env (((_, ety), e) : Tast.expr) =
         in
         call env (Clocal fty) None
     end
-  | A.ValCollection (A.Vec, _, exprs) ->
-    (* Each element of the vector is a subtype of the vector's value
-       parameter. *)
-    let vec_pty = Lift.ty ~prefix:"vec" renv ety in
-    let element_pty = (cow_array ~pos renv vec_pty).a_value in
+  | A.ValCollection (((A.Vec | A.Keyset) as kind), _, exprs) ->
+    (* Each element of the array is a subtype of the array's value parameter. *)
+    let arry_pty = Lift.ty ~prefix:(A.show_vc_kind kind) renv ety in
+    let element_pty = (cow_array ~pos renv arry_pty).a_value in
     let mk_element_subtype env exp =
       let (env, pty) = expr env exp in
       Env.acc env (subtype ~pos pty element_pty)
     in
     let env = List.fold ~f:mk_element_subtype ~init:env exprs in
-    (env, vec_pty)
+    (env, arry_pty)
   | A.KeyValCollection (A.Dict, _, fields) ->
     (* Each field's key and value are subtypes of the array key and value
        policy types. *)
@@ -726,20 +786,27 @@ and expr ~pos renv env (((_, ety), e) : Tast.expr) =
     let env = List.fold ~f:mk_element_subtype ~init:env fields in
     (env, dict_pty)
   | A.Array_get (arry, ix_opt) ->
-    (* Return the type parameter corresponding to the vector element type. *)
-    let env =
-      (* Evaluate the index in case it has side-effects. *)
+    (* Evaluate the array *)
+    let (env, arry_pty) = expr env arry in
+    let arry = cow_array ~pos renv arry_pty in
+
+    (* Evaluate the index, it might have side-effects! *)
+    let (env, ix_pty) =
       match ix_opt with
-      | Some ix -> fst @@ expr env ix
+      | Some ix -> expr env ix
       | None -> fail "cannot have an empty index when reading"
     in
-    let (env, arry_pty) = expr env arry in
-    let value_pty = (cow_array ~pos renv arry_pty).a_value in
-    (env, value_pty)
-  (* TODO(T70139741): support variadic functions and constructors
-   * TODO(T70139893): support classes with type parameters
-   *)
+
+    (* The index flows into the array key which flows into the array value *)
+    let env = Env.acc env @@ subtype ~pos ix_pty arry.a_key in
+
+    let env = may_throw_out_of_bounds_exn ~pos renv env arry ix_pty in
+
+    (env, arry.a_value)
   | A.New (((_, lty), cid), _targs, args, _extra_args, _) ->
+    (* TODO(T70139741): support variadic functions and constructors
+     * TODO(T70139893): support classes with type parameters
+     *)
     let (env, args_pty) = List.map_env ~f:expr env args in
     let env =
       match cid with
@@ -793,6 +860,7 @@ and expr ~pos renv env (((_, ety), e) : Tast.expr) =
       Tfun { f_pc = pc; f_self = self; f_args = ptys; f_ret = ret; f_exn = exn }
     in
     (env, ty)
+  | A.Await e -> expr env e
   (* --- expressions below are not yet supported *)
   | A.Darray (_, _)
   | A.Varray (_, _)
@@ -811,7 +879,6 @@ and expr ~pos renv env (((_, ety), e) : Tast.expr) =
   | A.PrefixedString (_, _)
   | A.Yield _
   | A.Yield_break
-  | A.Await _
   | A.Suspend _
   | A.List _
   | A.Expr_list _
@@ -859,13 +926,13 @@ and stmt renv env ((pos, s) : Tast.stmt) =
   | A.Expr e ->
     let (env, _ty) = expr ~pos env e in
     env
-  | A.If ((((pos, _), _) as e), b1, b2) ->
-    let (env, ety) = expr ~pos env e in
+  | A.If ((((pos, _), _) as cond), b1, b2) ->
+    let (env, cty) = expr ~pos env cond in
     (* stash the PC so it can be restored after the if *)
     let pc = Env.get_lpc env K.Next in
     (* use object_policy to account for both booleans
        and null checks *)
-    let env = Env.push_pcs env K.Next (object_policy ety) in
+    let env = Env.push_pcs env K.Next (object_policy cty) in
     let cenv = Env.get_cenv env in
     let env = block renv (Env.set_cenv env cenv) b1 in
     let cenv1 = Env.get_cenv env in
@@ -874,6 +941,49 @@ and stmt renv env ((pos, s) : Tast.stmt) =
     let env = Env.merge_and_set_cenv ~union env cenv1 cenv2 in
     (* Restore the program counter from before the IF *)
     Env.set_lpc env K.Next pc
+  | A.While (cond, (_, A.AssertEnv (A.Join, tymap)) :: blk) ->
+    let pos = fst (fst cond) in
+    (* build the environment with the invariant types we will
+       use to check the loop body *)
+    let env =
+      Local_id.Map.fold
+        (fun var (_, lty) env ->
+          let (env, _pty) =
+            refresh_local_type ~force:true ~pos renv env var lty
+          in
+          env)
+        tymap
+        env
+    in
+    Env.with_stashed_conts env [K.Break; K.Continue] (fun env ->
+        let beg_env = env in
+        let beg_pc = Env.get_lpc beg_env K.Next in
+        let (env, cty) = expr ~pos env cond in
+        let env = Env.push_pcs env K.Next (object_policy cty) in
+        let env = block renv env blk in
+        let env = Env.move_conts_into ~union env [K.Continue] K.Next in
+        (* issue a subtype call between the type of locals at the end of
+           the loop and their type at the beginning of the loop *)
+        let env =
+          Env.acc env
+          @@ Env.fold_locals beg_env (fun var ty_beg ->
+                 match Env.get_local_type env var with
+                 | Some ty_end -> subtype ~pos ty_end ty_beg
+                 | None -> Utils.identity)
+        in
+        (* use the locals' type from beg_env *)
+        let env =
+          Env.fold_locals
+            (* iterates over beg_env *) beg_env
+            (fun var ty_beg env -> Env.set_local_type env var ty_beg)
+            (* modifies env *) env
+        in
+        (* the break continuation is merged and the pc restored before
+           returning the env for what happens after the while() loop *)
+        let env = Env.move_conts_into ~union env [K.Break] K.Next in
+        Env.set_lpc env K.Next beg_pc)
+  | A.Break -> Env.merge_conts_into ~union env [K.Next] K.Break
+  | A.Continue -> Env.merge_conts_into ~union env [K.Next] K.Continue
   | A.Return e ->
     let env = Env.merge_conts_into ~union env [K.Next] K.Exit in
     begin
@@ -973,7 +1083,9 @@ and stmt renv env ((pos, s) : Tast.stmt) =
     env
 
 and block renv env (blk : Tast.block) =
-  let merge_pcs env = Env.merge_pcs_into env [K.Exit; K.Catch] K.Next in
+  let merge_pcs env =
+    Env.merge_pcs_into env [K.Exit; K.Catch; K.Break; K.Continue] K.Next
+  in
   let seq env s = stmt renv env s |> merge_pcs in
   let env = merge_pcs env in
   List.fold_left ~f:seq ~init:env blk

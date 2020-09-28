@@ -14,6 +14,14 @@ open Full_fidelity_schema
 
 let full_fidelity_path_prefix = "hphp/hack/src/parser/"
 
+let rust_keywords =
+  [ "as"; "break"; "const"; "continue"; "crate"; "else"; "enum"; "extern";
+    "false"; "fn"; "for"; "if"; "impl"; "in"; "let"; "loop"; "match"; "mod";
+    "move"; "mut"; "pub"; "ref"; "return"; "self"; "Self"; "static"; "struct";
+    "super"; "trait"; "true"; "type"; "unsafe"; "use"; "where"; "while";
+    "async"; "await"; "dyn" ]
+  [@@ocamlformat "disable"]
+
 type comment_style =
   | CStyle
   | MLStyle
@@ -1586,41 +1594,47 @@ module GenerateRustFlattenSmartConstructors = struct
     sprintf
       "    fn make_%s(&mut self, %s) -> Self::R {
         if %s {
-          Self::zero()
+          Self::zero(SyntaxKind::%s)
         } else {
-          self.flatten(vec!(%s))
+          self.flatten(SyntaxKind::%s, vec!(%s))
         }
     }\n\n"
       x.type_name
       args
       if_cond
+      x.kind_name
+      x.kind_name
       flatten_args
 
   let flatten_smart_constructors_template : string =
     make_header CStyle ""
     ^ "
 use smart_constructors::SmartConstructors;
+use parser_core_types::{
+  lexable_token::LexableToken,
+  syntax_kind::SyntaxKind,
+};
 
 pub trait FlattenOp {
     type S;
     fn is_zero(s: &Self::S) -> bool;
-    fn zero() -> Self::S;
-    fn flatten(&self, lst: Vec<Self::S>) -> Self::S;
+    fn zero(kind: SyntaxKind) -> Self::S;
+    fn flatten(&self, kind: SyntaxKind, lst: Vec<Self::S>) -> Self::S;
 }
 
 pub trait FlattenSmartConstructors<'src, State>
 : SmartConstructors<State> + FlattenOp<S=<Self as SmartConstructors<State>>::R>
 {
     fn make_missing(&mut self, _: usize) -> Self::R {
-       Self::zero()
+       Self::zero(SyntaxKind::Missing)
     }
 
-    fn make_token(&mut self, _: Self::Token) -> Self::R {
-        Self::zero()
+    fn make_token(&mut self, token: Self::Token) -> Self::R {
+        Self::zero(SyntaxKind::Token(token.kind()))
     }
 
     fn make_list(&mut self, _: Vec<Self::R>, _: usize) -> Self::R {
-        Self::zero()
+        Self::zero(SyntaxKind::SyntaxList)
     }
 
 CONSTRUCTOR_METHODS}
@@ -1707,9 +1721,18 @@ end
 
 module GenerateRustDirectDeclSmartConstructors = struct
   let to_constructor_methods x =
-    let args = List.mapi x.fields ~f:(fun i _ -> sprintf "arg%d: Self::R" i) in
+    let as_local_var field_name =
+      if List.mem rust_keywords field_name ~equal:String.equal then
+        sprintf "%s_" field_name
+      else
+        field_name
+    in
+    let args =
+      List.map x.fields ~f:(fun (name, _) ->
+          sprintf "%s: Self::R" (as_local_var name))
+    in
     let args = String.concat ~sep:", " args in
-    let fwd_args = List.mapi x.fields ~f:(fun i _ -> sprintf "arg%d" i) in
+    let fwd_args = List.map x.fields ~f:(fun (name, _) -> as_local_var name) in
     let fwd_args = String.concat ~sep:", " fwd_args in
     sprintf
       "    fn make_%s(&mut self, %s) -> Self::R {

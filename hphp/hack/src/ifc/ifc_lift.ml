@@ -71,9 +71,11 @@ let rec ty ?prefix ?lump renv (t : T.locl_ty) =
       | [element_ty] ->
         Tcow_array
           {
+            a_kind = Avec;
             (* Inventing a policy type for indices out of thin air *)
             a_key = Tprim (get_policy ~prefix:"key" lump renv);
             a_value = ty element_ty;
+            a_length = get_policy ~prefix:"len" lump renv;
           }
       | _ -> fail "vector needs a single type parameter"
     end
@@ -81,8 +83,38 @@ let rec ty ?prefix ?lump renv (t : T.locl_ty) =
     begin
       match targs with
       | [key_ty; value_ty] ->
-        Tcow_array { a_key = ty key_ty; a_value = ty value_ty }
+        Tcow_array
+          {
+            a_kind = Adict;
+            a_key = ty key_ty;
+            a_value = ty value_ty;
+            a_length = get_policy ~prefix:"len" lump renv;
+          }
       | _ -> fail "dict needs two type parameters"
+    end
+  | T.Tclass ((_, name), _, targs) when String.equal name Decl.keyset_id ->
+    begin
+      match targs with
+      | [value_ty] ->
+        let element_pty = ty value_ty in
+        Tcow_array
+          {
+            a_kind = Akeyset;
+            (* Keysets have identical keys and values with identity
+               $keyset[$ix] === $ix (as bizarre as it is) *)
+            a_key = element_pty;
+            a_value = element_pty;
+            a_length = get_policy ~prefix:"len" lump renv;
+          }
+      | _ -> fail "keyset needs one type parameter"
+    end
+  | T.Tclass ((_, name), _, targs) when String.equal name Decl.awaitable_id ->
+    begin
+      match targs with
+      (* NOTE: Strip Awaitable out of the type since it has no affect on
+         information flow *)
+      | [inner_ty] -> ty inner_ty
+      | _ -> fail "Awaitable needs one type parameter"
     end
   | T.Tclass ((_, name), _, _) -> class_ty ?lump renv name
   | T.Tvar id -> ty (expand_var renv id)

@@ -2346,18 +2346,19 @@ and simplify_subtype_reactivity
       p_super
       cond_super
       env
-  (* local can call into non-reactive *)
+  (* local can call into non-reactive, but not for inheritance *)
   | (Nonreactive, Local _) when is_call_site -> valid env
   (* Cipp(Local) can call pure *)
-  | (Pure _, (Cipp _ | CippLocal _)) when is_call_site -> valid env
+  | (Pure _, (Cipp _ | CippLocal _)) -> valid env
   (* Cipp can call Cipp(Local) if the params match *)
-  | ((Cipp x | CippLocal x), (Cipp y | CippLocal y))
-    when is_call_site && (Option.is_none x || Option.equal String.equal x y) ->
+  | (Cipp x, Cipp y) when Option.is_none x || Option.equal String.equal x y ->
     valid env
-  (* CippLocal can also call nonreactive *)
-  | ( (Nonreactive | Reactive _ | Local _ | Shallow _ | MaybeReactive _),
-      CippLocal _ )
-    when is_call_site ->
+  | ((Cipp x | CippLocal x), CippLocal y)
+    when Option.is_none x || Option.equal String.equal x y ->
+    valid env
+  (* Unsafe direction is only legal for callsites *)
+  | (CippLocal x, Cipp y)
+    when (is_call_site && Option.is_none x) || Option.equal String.equal x y ->
     valid env
   (* CippLocal can also call nonreactive *)
   | ( (Nonreactive | Reactive _ | Local _ | Shallow _ | MaybeReactive _),
@@ -2365,18 +2366,16 @@ and simplify_subtype_reactivity
     when is_call_site ->
     valid env
   (* Anything can call CippGlobal*)
+  (* CippRx is the same as CippGlobal, but with reactivity constraints *)
   (* Nonreactive is covered from above*)
-  | ( CippGlobal,
+  | ( (CippGlobal | CippRx),
       ( Reactive _ | Local _ | Shallow _ | MaybeReactive _ | Cipp _
-      | CippLocal _ | CippGlobal | Pure _ ) )
-    when is_call_site ->
+      | CippLocal _ | CippGlobal | CippRx | Pure _ ) ) ->
     valid env
-  (* CippGlobal can call anything *)
-  | ( ( Nonreactive | Pure _ | Reactive _ | Local _ | Shallow _
-      | MaybeReactive _ | Cipp _ | CippLocal _ | CippGlobal ),
-      CippGlobal )
-    when is_call_site ->
-    valid env
+  (* CippGlobal can (safely) call anything the following *)
+  | ( ( Pure _ | Cipp _ | CippLocal _ ), CippGlobal ) -> valid env
+  (* CippGlobal can call anything (unsafe) *)
+  | (_, CippGlobal) when is_call_site -> valid env
   | _ -> check_condition_type_has_matching_reactive_method env
 
 and should_check_fun_params_reactivity (ft_super : locl_fun_type) =

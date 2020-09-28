@@ -17,6 +17,7 @@
 #include "hphp/runtime/base/bespoke-layout.h"
 
 #include "hphp/runtime/base/bespoke/layout.h"
+#include "hphp/runtime/base/bespoke/logging-array.h"
 #include "hphp/runtime/base/bespoke-array.h"
 
 namespace HPHP {

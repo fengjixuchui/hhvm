@@ -144,6 +144,7 @@ and fun_elt = {
   fe_deprecated: string option;
   fe_type: decl_ty;
   fe_pos: Pos.t;
+  fe_php_std_lib: bool;
 }
 
 and class_const = {
@@ -316,6 +317,11 @@ type expand_env = {
 let get_var t =
   match get_node t with
   | Tvar v -> Some v
+  | _ -> None
+
+let get_class_type t =
+  match get_node t with
+  | Tclass (id, exact, tyl) -> Some (id, exact, tyl)
   | _ -> None
 
 let get_var_i t =

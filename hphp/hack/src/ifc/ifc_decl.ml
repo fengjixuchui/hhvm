@@ -31,9 +31,15 @@ let infer_flows_id = "\\InferFlows"
 
 let exception_id = "\\Exception"
 
+let out_of_bounds_exception_id = "\\OutOfBoundsException"
+
 let vec_id = "\\HH\\vec"
 
 let dict_id = "\\HH\\dict"
+
+let keyset_id = "\\HH\\keyset"
+
+let awaitable_id = "\\HH\\Awaitable"
 
 let governed_id = "\\Governed"
 

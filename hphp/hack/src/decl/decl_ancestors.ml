@@ -19,7 +19,7 @@ type ancestor_caches = {
   parents_and_traits: unit LSTable.t;  (** Names of parents and traits only *)
   members_fully_known: bool Lazy.t;
   req_ancestor_names: unit LSTable.t;
-  all_requirements: (Pos.t * decl_ty) list Lazy.t;
+  all_requirements: (Pos.t * decl_ty) Sequence.t;
 }
 
 let type_of_mro_element mro =
@@ -39,36 +39,35 @@ let members_fully_known lin =
     (Sequence.for_all lin ~f:(fun mro ->
          not (is_set mro_class_not_found mro.mro_flags)))
 
-let req_ancestor_names ctx class_name =
-  let key = (class_name, Decl_defs.Member_resolution) in
-  Decl_linearize.get_linearization ctx key
+let req_ancestor_names lin_members =
+  lin_members
   |> Sequence.filter ~f:(fun mro ->
          is_set mro_via_req_extends mro.mro_flags
          || is_set mro_via_req_impl mro.mro_flags)
   |> Sequence.map ~f:(fun mro -> (mro.mro_name, ()))
 
-let all_requirements ctx class_name =
-  let key = (class_name, Decl_defs.Member_resolution) in
-  lazy
-    ( Decl_linearize.get_linearization ctx key
-    |> Sequence.filter ~f:(fun mro ->
-           not (is_set mro_xhp_attrs_only mro.mro_flags))
-    |> Sequence.filter_map ~f:(fun mro ->
-           Option.map mro.mro_required_at (fun pos ->
-               (pos, type_of_mro_element mro)))
-    (* To behave a bit more like legacy decl, reverse the list. *)
-    |> Sequence.to_list_rev )
+let all_requirements lin_members =
+  lin_members
+  |> Sequence.filter ~f:(fun mro ->
+         not (is_set mro_xhp_attrs_only mro.mro_flags))
+  |> Sequence.filter_map ~f:(fun mro ->
+         Option.map mro.mro_required_at (fun pos ->
+             (pos, type_of_mro_element mro)))
 
 let is_canonical _ = true
 
 let merge ~earlier ~later:_ = earlier
 
 let make ctx class_name =
-  let key = (class_name, Decl_defs.Ancestor_types) in
   let lin =
-    Decl_linearize.get_linearization ctx key
+    Decl_linearize.get_linearization ctx (class_name, Decl_defs.Ancestor_types)
     (* Drop the requested class; we only want its ancestors. *)
     |> fun lin -> Sequence.drop_eagerly lin 1
+  in
+  let lin_members =
+    Decl_linearize.get_linearization
+      ctx
+      (class_name, Decl_defs.Member_resolution)
   in
   {
     ancestors = LSTable.make (all_ancestors lin) ~is_canonical ~merge;
@@ -76,6 +75,6 @@ let make ctx class_name =
       LSTable.make (parents_and_traits lin) ~is_canonical ~merge;
     members_fully_known = members_fully_known lin;
     req_ancestor_names =
-      LSTable.make (req_ancestor_names ctx class_name) ~is_canonical ~merge;
-    all_requirements = all_requirements ctx class_name;
+      LSTable.make (req_ancestor_names lin_members) ~is_canonical ~merge;
+    all_requirements = all_requirements lin_members;
   }
