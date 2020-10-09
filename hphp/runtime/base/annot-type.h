@@ -121,6 +121,8 @@ enum class AnnotAction {
   CallableCheck,
   WarnClass,
   ConvertClass,
+  WarnLazyClass,
+  ConvertLazyClass,
   ClsMethCheck,
   RecordCheck,
 };
@@ -168,4 +170,3 @@ annotCompat(DataType dt, AnnotType at, const StringData* annotClsName);
 ///////////////////////////////////////////////////////////////////////////////
 
 }
-

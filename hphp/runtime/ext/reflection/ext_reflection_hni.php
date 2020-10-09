@@ -305,7 +305,7 @@ abstract class ReflectionFunctionAbstract implements Reflector {
    *
    * @return     array  The parameters, as a ReflectionParameter object.
    */
-  <<__Pure, __MaybeMutable>>
+  <<__Pure, __MaybeMutable, __ProvenanceSkipFrame>>
   public function getParameters(): varray<ReflectionParameter> {
     // FIXME: ReflectionParameter sh/could have native data pointing to the
     // relevant Func::ParamInfo data structure
@@ -428,7 +428,7 @@ abstract class ReflectionFunctionAbstract implements Reflector {
     $ret .= $this->getName() . " ] {\n";
 
     if ($this->getStartLine() > 0) {
-      $ret .= "  @@ {$this->getFilename()} " .
+      $ret .= "  @@ {$this->getFileName()} " .
               "{$this->getStartLine()} - {$this->getEndLine()}\n";
     }
 
@@ -754,7 +754,7 @@ class ReflectionMethod extends ReflectionFunctionAbstract {
   }
 
   <<__Pure, __MaybeMutable>>
-  public function __debuginfo() {
+  public function __debugInfo() {
     return darray['name' => $this->name, 'class' => $this->class];
   }
 
@@ -1148,7 +1148,7 @@ class ReflectionClass implements Reflector {
     }
     $ret .= " ] {\n";
     if ($this->getStartLine() > 0) {
-      $ret .= "  @@ {$this->getFilename()} " .
+      $ret .= "  @@ {$this->getFileName()} " .
               "{$this->getStartLine()}-{$this->getEndLine()}\n";
     }
 
@@ -1417,7 +1417,7 @@ class ReflectionClass implements Reflector {
    * @return     mixed   An array of ReflectionMethod objects reflecting each
    *                     method.
    */
-  <<__Pure, __MaybeMutable>>
+  <<__Pure, __MaybeMutable, __ProvenanceSkipFrame>>
   public function getMethods(?int $filter = null): varray<ReflectionMethod> {
     $ret = varray[];
     $clsname = $this->getName();
@@ -1520,7 +1520,7 @@ class ReflectionClass implements Reflector {
     return array_key_exists($name, $this->getTypeConstantNamesWithCaching());
   }
 
-  <<__Pure, __MaybeMutable>>
+  <<__Pure, __MaybeMutable, __ProvenanceSkipFrame>>
   public function getTypeConstants(): varray<ReflectionTypeConstant> {
     $ret = varray[];
     $class = $this->getName();
@@ -1883,7 +1883,7 @@ class ReflectionClass implements Reflector {
    *
    * @return     mixed   An array of ReflectionProperty objects.
    */
-  <<__Pure, __MaybeMutable>>
+  <<__Pure, __MaybeMutable, __ProvenanceSkipFrame>>
   public function getProperties($filter = 0xFFFF): varray<ReflectionProperty> {
     $ret = varray[];
     foreach ($this->getOrderedPropertyInfos() as $name => $prop_info) {
@@ -1911,6 +1911,7 @@ class ReflectionClass implements Reflector {
    *
    * @return     mixed   The static properties, as an array.
    */
+  <<__ProvenanceSkipFrame>>
   public function getStaticProperties(): darray<string, mixed> {
     $ret = darray[];
     foreach ($this->getProperties(ReflectionProperty::IS_STATIC) as $prop) {
@@ -1983,7 +1984,7 @@ class ReflectionClass implements Reflector {
    *                     properties and does not take visibility modifiers
    *                     into account.
    */
-  <<__Pure, __MaybeMutable>>
+  <<__Pure, __MaybeMutable, __ProvenanceSkipFrame>>
   public function getDefaultProperties(): darray<string, mixed> {
     $ret = darray[];
     foreach ($this->getProperties() as $prop) {

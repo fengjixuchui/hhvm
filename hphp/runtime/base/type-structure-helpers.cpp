@@ -217,7 +217,7 @@ bool typeStructureIsType(
     case TypeStructure::Kind::T_vec:
     case TypeStructure::Kind::T_keyset:
     case TypeStructure::Kind::T_vec_or_dict:
-    case TypeStructure::Kind::T_arraylike: {
+    case TypeStructure::Kind::T_any_array: {
       if (is_ts_nullable(type)) {
         auto const inputT = get_ts_kind(input);
         return inputT == tsKind || inputT == TypeStructure::Kind::T_null;
@@ -341,7 +341,6 @@ bool typeStructureIsType(
         ? typeStructureIsType(inputV, typeV, warn, strict)
         : inputV == typeV;
     }
-    case TypeStructure::Kind::T_array:
     case TypeStructure::Kind::T_darray:
     case TypeStructure::Kind::T_varray:
     case TypeStructure::Kind::T_varray_or_darray:
@@ -588,10 +587,16 @@ bool checkTypeStructureMatchesTVImpl(
     case TypeStructure::Kind::T_num:
       return isIntType(type) || isDoubleType(type);
     case TypeStructure::Kind::T_arraykey:
+      if (isClassType(type) || isLazyClassType(type)) {
+        if (RO::EvalClassIsStringNotices) {
+          raise_notice("Class used in is_arraykey");
+        }
+        return true;
+      }
       return isIntType(type) || isStringType(type);
 
     case TypeStructure::Kind::T_string:
-      if (isClassType(type)) {
+      if (isClassType(type) || isLazyClassType(type)) {
         if (RO::EvalClassIsStringNotices) {
           raise_notice("Class used in is_string");
         }
@@ -603,7 +608,6 @@ bool checkTypeStructureMatchesTVImpl(
       return isResourceType(type) &&
              !reinterpret_cast<const Resource*>(&data.pres)->isInvalid();
 
-    case TypeStructure::Kind::T_array:
     case TypeStructure::Kind::T_darray:
     case TypeStructure::Kind::T_varray:
     case TypeStructure::Kind::T_varray_or_darray:
@@ -621,7 +625,7 @@ bool checkTypeStructureMatchesTVImpl(
     case TypeStructure::Kind::T_keyset:
       return is_keyset(&c1);
 
-    case TypeStructure::Kind::T_arraylike:
+    case TypeStructure::Kind::T_any_array:
       if (isClsMethType(type)) {
         if (RuntimeOption::EvalIsVecNotices) {
           raise_notice(Strings::CLSMETH_COMPAT_IS_ANY_ARR);
@@ -698,9 +702,9 @@ bool checkTypeStructureMatchesTVImpl(
         return result && (isArrayType(type) || RO::EvalHackArrDVArrs);
       };
 
-      if (!isOrAsOp) return maybe_raise_notice(!isKeysetType(type));
-
       if (!ad->isVArray() && !ad->isVecType()) return false;
+
+      if (!isOrAsOp) return maybe_raise_notice(true);
 
       assertx(ts.exists(s_elem_types));
       auto const ts_arr = ts[s_elem_types].getArrayData();
@@ -783,9 +787,9 @@ bool checkTypeStructureMatchesTVImpl(
         return result && (isArrayType(type) || RO::EvalHackArrDVArrs);
       };
 
-      if (!isOrAsOp) return maybe_raise_notice(!isKeysetType(type));
-
       if (!ad->isDArray() && !ad->isDictType()) return false;
+
+      if (!isOrAsOp) return maybe_raise_notice(true);
 
       assertx(ts.exists(s_fields));
       auto const ts_arr = ts[s_fields].getArrayData();
@@ -966,7 +970,7 @@ bool errorOnIsAsExpressionInvalidTypes(const Array& ts, bool dryrun,
     case TypeStructure::Kind::T_vec:
     case TypeStructure::Kind::T_keyset:
     case TypeStructure::Kind::T_vec_or_dict:
-    case TypeStructure::Kind::T_arraylike:
+    case TypeStructure::Kind::T_any_array:
     case TypeStructure::Kind::T_null:
     case TypeStructure::Kind::T_void:
     case TypeStructure::Kind::T_nothing:
@@ -987,7 +991,6 @@ bool errorOnIsAsExpressionInvalidTypes(const Array& ts, bool dryrun,
                                                      true);
       }
       return false;
-    case TypeStructure::Kind::T_array:
     case TypeStructure::Kind::T_darray:
     case TypeStructure::Kind::T_varray:
     case TypeStructure::Kind::T_varray_or_darray:
@@ -1025,7 +1028,6 @@ bool typeStructureCouldBeNonStatic(const ArrayData* ts) {
   switch (get_ts_kind(ts)) {
     case TypeStructure::Kind::T_tuple:
     case TypeStructure::Kind::T_fun:
-    case TypeStructure::Kind::T_array:
     case TypeStructure::Kind::T_darray:
     case TypeStructure::Kind::T_varray:
     case TypeStructure::Kind::T_varray_or_darray:
@@ -1037,7 +1039,7 @@ bool typeStructureCouldBeNonStatic(const ArrayData* ts) {
     case TypeStructure::Kind::T_vec:
     case TypeStructure::Kind::T_keyset:
     case TypeStructure::Kind::T_vec_or_dict:
-    case TypeStructure::Kind::T_arraylike:
+    case TypeStructure::Kind::T_any_array:
     case TypeStructure::Kind::T_typeaccess:
     case TypeStructure::Kind::T_reifiedtype:
       return true;

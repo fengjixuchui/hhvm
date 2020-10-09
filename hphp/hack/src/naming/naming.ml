@@ -412,7 +412,7 @@ and unwrap_mutability p =
     (Some N.POwnedMutable, t)
   | t -> (None, t)
 
-and hfun env reactivity hl kl variadic_hint h =
+and hfun env reactivity hl kl variadic_hint cap h =
   let variadic_hint = Option.map variadic_hint (hint env) in
   let (muts, hl) =
     List.map
@@ -424,6 +424,7 @@ and hfun env reactivity hl kl variadic_hint h =
       hl
     |> List.unzip
   in
+  let cap = Option.map cap (hint env) in
   let (ret_mut, rh) = unwrap_mutability h in
   let ret_mut =
     match ret_mut with
@@ -441,6 +442,7 @@ and hfun env reactivity hl kl variadic_hint h =
         hf_param_kinds = kl;
         hf_param_mutability = muts;
         hf_variadic_ty = variadic_hint;
+        hf_cap = cap;
         hf_return_ty = hint ~allow_retonly:true env rh;
         hf_is_mutable_return = ret_mut;
       }
@@ -481,10 +483,11 @@ and hint_
           hf_param_kinds = kl;
           hf_param_mutability = _;
           hf_variadic_ty = variadic_hint;
+          hf_cap = cap;
           hf_return_ty = h;
           hf_is_mutable_return = _;
         } ->
-    hfun env reactivity hl kl variadic_hint h
+    hfun env reactivity hl kl variadic_hint cap h
   (* Special case for Pure<function> *)
   | Aast.Happly
       ( (_, hname),
@@ -498,12 +501,13 @@ and hint_
                   hf_param_kinds = kl;
                   hf_param_mutability = _;
                   hf_variadic_ty = variadic_hint;
+                  hf_cap = cap;
                   hf_return_ty = h;
                   hf_is_mutable_return = _;
                 } );
         ] )
     when String.equal hname SN.Rx.hPure ->
-    hfun env N.FPure hl kl variadic_hint h
+    hfun env N.FPure hl kl variadic_hint cap h
   (* Special case for Rx<function> *)
   | Aast.Happly
       ( (_, hname),
@@ -517,12 +521,13 @@ and hint_
                   hf_param_kinds = kl;
                   hf_param_mutability = _;
                   hf_variadic_ty = variadic_hint;
+                  hf_cap = cap;
                   hf_return_ty = h;
                   hf_is_mutable_return = _;
                 } );
         ] )
     when String.equal hname SN.Rx.hRx ->
-    hfun env N.FReactive hl kl variadic_hint h
+    hfun env N.FReactive hl kl variadic_hint cap h
   (* Special case for RxShallow<function> *)
   | Aast.Happly
       ( (_, hname),
@@ -536,12 +541,13 @@ and hint_
                   hf_param_kinds = kl;
                   hf_param_mutability = _;
                   hf_variadic_ty = variadic_hint;
+                  hf_cap = cap;
                   hf_return_ty = h;
                   hf_is_mutable_return = _;
                 } );
         ] )
     when String.equal hname SN.Rx.hRxShallow ->
-    hfun env N.FShallow hl kl variadic_hint h
+    hfun env N.FShallow hl kl variadic_hint cap h
   (* Special case for RxLocal<function> *)
   | Aast.Happly
       ( (_, hname),
@@ -555,12 +561,13 @@ and hint_
                   hf_param_kinds = kl;
                   hf_param_mutability = _;
                   hf_variadic_ty = variadic_hint;
+                  hf_cap = cap;
                   hf_return_ty = h;
                   hf_is_mutable_return = _;
                 } );
         ] )
     when String.equal hname SN.Rx.hRxLocal ->
-    hfun env N.FLocal hl kl variadic_hint h
+    hfun env N.FLocal hl kl variadic_hint cap h
   | Aast.Happly (((p, _x) as id), hl) ->
     let hint_id =
       hint_id ~forbid_this ~allow_retonly ~allow_wildcard ~tp_depth env id hl
@@ -640,7 +647,6 @@ and hint_
   | Aast.Hmixed
   | Aast.Hnonnull
   | Aast.Habstr _
-  | Aast.Harray _
   | Aast.Hdarray _
   | Aast.Hvarray _
   | Aast.Hvarray_or_darray _
@@ -687,7 +693,6 @@ and hint_id
              || String.equal x ("\\" ^ SN.Typehints.resource)
              || String.equal x ("\\" ^ SN.Typehints.mixed)
              || String.equal x ("\\" ^ SN.Typehints.nonnull)
-             || String.equal x ("\\" ^ SN.Typehints.array)
              || String.equal x ("\\" ^ SN.Typehints.arraykey) ->
         Errors.primitive_toplevel p;
         N.Herr
@@ -783,20 +788,6 @@ and try_castable_hint
     | nm when String.equal nm SN.Typehints.bool -> Some (N.Hprim N.Tbool)
     | nm when String.equal nm SN.Typehints.float -> Some (N.Hprim N.Tfloat)
     | nm when String.equal nm SN.Typehints.string -> Some (N.Hprim N.Tstring)
-    | nm when String.equal nm SN.Typehints.array ->
-      let tcopt = Provider_context.get_tcopt (fst env).ctx in
-      let array_typehints_disallowed =
-        TypecheckerOptions.disallow_array_typehint tcopt
-      in
-      if array_typehints_disallowed then Errors.array_typehints_disallowed p;
-      Some
-        (match hl with
-        | [] -> N.Harray (None, None)
-        | [val_] -> N.Harray (Some (hint env val_), None)
-        | [key_; val_] -> N.Harray (Some (hint env key_), Some (hint env val_))
-        | _ ->
-          Errors.too_many_type_arguments p;
-          N.Herr)
     | nm when String.equal nm SN.Typehints.darray ->
       Some
         (match hl with
@@ -2301,6 +2292,10 @@ and expr_lambda env f =
    * environment *)
   let body_nast = f_body env f.Aast.f_body in
   let annotation = Nast.Named in
+  let f_cap = Aast.type_hint_option_map ~f:(hint env) f.Aast.f_cap in
+  let f_unsafe_cap =
+    Aast.type_hint_option_map ~f:(hint env) f.Aast.f_unsafe_cap
+  in
   (* These could all be probably be replaced with a {... where ...} *)
   let body = { N.fb_ast = body_nast; fb_annotation = annotation } in
   {
@@ -2311,9 +2306,8 @@ and expr_lambda env f =
     f_name = f.Aast.f_name;
     f_params = paraml;
     f_tparams = [];
-    (* TODO(T70095684) double-check f_cap *)
-    f_cap = f.Aast.f_cap;
-    f_unsafe_cap = f.Aast.f_unsafe_cap;
+    f_cap;
+    f_unsafe_cap;
     f_where_constraints = [];
     f_body = body;
     f_fun_kind = f.Aast.f_fun_kind;

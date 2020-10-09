@@ -19,7 +19,9 @@ let _ = show_key_value_pair
 let compare (left : key_value_pair) (right : key_value_pair) : int =
   String.compare (fst left) (fst right)
 
-let create () : t = []
+let empty = []
+
+let create () : t = empty
 
 let to_json (telemetry : t) : Hh_json.json =
   Hh_json.JSON_Object (List.rev telemetry)
@@ -141,86 +143,153 @@ let quick_gc_stat () : t =
   |> int_ ~key:"compactions" ~value:stat.compactions
   |> int_ ~key:"top_heap_bytes" ~value:(stat.top_heap_words * bytes_per_word)
 
-let rec diff ~(all : bool) (telemetry : t) ~(prev : t) : t =
-  let telemetry = List.sort telemetry ~compare in
-  let prev = List.sort prev ~compare in
-  let acc = [] in
-  diff_already_sorted telemetry ~prev ~all acc
+let diff ~(all : bool) ?(suffix_keys = true) (telemetry : t) ~(prev : t) : t =
+  let (prev_suffix, diff_suffix) =
+    if suffix_keys then
+      ("__prev", "__diff")
+    else
+      ("", "")
+  in
+  let rec diff (telemetry : t) ~(prev : t) : t =
+    let telemetry = List.sort telemetry ~compare in
+    let prev = List.sort prev ~compare in
+    let acc = [] in
+    diff_already_sorted telemetry ~prev acc
+  and diff_already_sorted (current : t) ~(prev : t) (acc : t) : t =
+    match (current, prev, all) with
+    | ([], [], _) -> acc
+    | (c :: cs, [], true) ->
+      acc |> diff_no_prev c |> diff_already_sorted cs ~prev:[]
+    | (_, [], false) -> acc
+    | ([], p :: ps, true) ->
+      acc |> diff_no_current p |> diff_already_sorted [] ~prev:ps
+    | ([], _, false) -> acc
+    | (c :: cs, p :: ps, true) when compare c p < 0 ->
+      acc |> diff_no_prev c |> diff_already_sorted cs ~prev:(p :: ps)
+    | (c :: cs, p :: ps, false) when compare c p > 0 ->
+      acc |> diff_no_current p |> diff_already_sorted (c :: cs) ~prev:ps
+    | (c :: cs, p :: ps, _) ->
+      acc |> diff_both c p |> diff_already_sorted cs ~prev:ps
+  and diff_no_prev ((key, val_c) : key_value_pair) (acc : t) : t =
+    (key, val_c) :: (key ^ "__prev", Hh_json.JSON_Null) :: acc
+  and diff_no_current ((key, val_p) : key_value_pair) (acc : t) : t =
+    let open Hh_json in
+    match val_p with
+    | JSON_Object elems ->
+      let elems =
+        elems |> List.fold ~init:[] ~f:(fun acc e -> diff_no_current e acc)
+      in
+      (key, JSON_Null) :: (key ^ prev_suffix, JSON_Object elems) :: acc
+    | _ -> (key, Hh_json.JSON_Null) :: (key ^ prev_suffix, val_p) :: acc
+  and acc_if b elem acc =
+    if b then
+      elem :: acc
+    else
+      acc
+  and diff_both
+      ((key, val_c) : key_value_pair) ((_key, val_p) : key_value_pair) (acc : t)
+      : t =
+    let open Hh_json in
+    match (val_c, val_p) with
+    | (JSON_Object elems_c, JSON_Object elems_p) ->
+      let elems = diff elems_c ~prev:elems_p in
+      acc_if
+        (all || not (List.is_empty elems))
+        (key, JSON_Object (diff elems_c ~prev:elems_p))
+        acc
+    | (JSON_Object _, _)
+    | (_, JSON_Object _)
+    | (JSON_Array _, _)
+    | (_, JSON_Array _) ->
+      acc_if all (key, val_c) acc
+    | (JSON_Bool val_c, JSON_Bool val_p) when Bool.equal val_c val_p ->
+      acc_if all (key, JSON_Bool val_c) acc
+    | (JSON_String val_c, JSON_String val_p) when String.equal val_c val_p ->
+      acc_if all (key, JSON_String val_c) acc
+    | (JSON_Number val_c, JSON_Number val_p) when String.equal val_c val_p ->
+      acc_if all (key, JSON_Number val_c) acc
+    | (JSON_Null, JSON_Null) -> acc_if all (key, JSON_Null) acc
+    | (JSON_Number c, JSON_Number p) ->
+      (* JSON_Numbers are strings - maybe ints, maybe floats, maybe we
+    can't parse them or they're outside ocaml maximum range *)
+      begin
+        try
+          let (c, p) = (int_of_string c, int_of_string p) in
+          (key ^ diff_suffix, int_ (c - p)) :: acc_if all (key, int_ c) acc
+        with _ ->
+          begin
+            try
+              let (c, p) = (float_of_string c, float_of_string p) in
+              (key ^ diff_suffix, float_ (c -. p))
+              :: acc_if all (key, float_ c) acc
+            with _ ->
+              (key, JSON_Number c) :: (key ^ prev_suffix, JSON_Number p) :: acc
+          end
+      end
+    | (_, _) -> (key, val_c) :: (key ^ prev_suffix, val_p) :: acc
+  in
 
-and diff_already_sorted (current : t) ~(prev : t) ~(all : bool) (acc : t) : t =
-  match (current, prev, all) with
-  | ([], [], _) -> acc
-  | (c :: cs, [], true) ->
-    acc |> diff_no_prev c |> diff_already_sorted cs ~prev:[] ~all
-  | (_, [], false) -> acc
-  | ([], p :: ps, true) ->
-    acc |> diff_no_current p |> diff_already_sorted [] ~prev:ps ~all
-  | ([], _, false) -> acc
-  | (c :: cs, p :: ps, true) when compare c p < 0 ->
-    acc |> diff_no_prev c |> diff_already_sorted cs ~prev:(p :: ps) ~all
-  | (c :: cs, p :: ps, false) when compare c p > 0 ->
-    acc |> diff_no_current p |> diff_already_sorted (c :: cs) ~prev:ps ~all
-  | (c :: cs, p :: ps, _) ->
-    acc |> diff_both ~all c p |> diff_already_sorted cs ~prev:ps ~all
+  diff telemetry ~prev
 
-and diff_no_prev ((key, val_c) : key_value_pair) (acc : t) : t =
-  (key, val_c) :: (key ^ "__prev", Hh_json.JSON_Null) :: acc
+let rec add (telemetry1 : t) (telemetry2 : t) : t =
+  let telemetry1 = List.sort telemetry1 ~compare in
+  let telemetry2 = List.sort telemetry2 ~compare in
+  add_already_sorted telemetry1 telemetry2 []
 
-and diff_no_current ((key, val_p) : key_value_pair) (acc : t) : t =
+and add_already_sorted (telemetry1 : t) (telemetry2 : t) (acc : t) : t =
+  match (telemetry1, telemetry2) with
+  | ([], []) -> acc
+  | (t :: telemetry, [])
+  | ([], t :: telemetry) ->
+    let acc = add_single t acc in
+    add_already_sorted telemetry [] acc
+  | (t1 :: telemetry1, t2 :: _) when compare t1 t2 < 0 ->
+    let acc = add_single t1 acc in
+    add_already_sorted telemetry1 telemetry2 acc
+  | (t1 :: _, t2 :: telemetry2) when compare t1 t2 > 0 ->
+    let acc = add_single t2 acc in
+    add_already_sorted telemetry1 telemetry2 acc
+  | (t1 :: telemetry1, t2 :: telemetry2) ->
+    let acc = add_elems t1 t2 acc in
+    add_already_sorted telemetry1 telemetry2 acc
+
+and add_single ((key, value) : key_value_pair) (acc : t) : t =
   let open Hh_json in
-  match val_p with
+  match value with
+  | JSON_Number _ -> (key, value) :: acc
   | JSON_Object elems ->
-    let elems =
-      elems |> List.fold ~init:[] ~f:(fun acc e -> diff_no_current e acc)
-    in
-    (key, JSON_Null) :: (key ^ "__prev", JSON_Object elems) :: acc
-  | _ -> (key, Hh_json.JSON_Null) :: (key ^ "__prev", val_p) :: acc
-
-and acc_if b elem acc =
-  if b then
-    elem :: acc
-  else
+    let elems = add elems [] in
+    if not (List.is_empty elems) then
+      (key, JSON_Object elems) :: acc
+    else
+      acc
+  | JSON_Array _
+  | JSON_Bool _
+  | JSON_Null
+  | JSON_String _ ->
     acc
 
-and diff_both
-    ~(all : bool)
-    ((key, val_c) : key_value_pair)
-    ((_key, val_p) : key_value_pair)
-    (acc : t) : t =
+and add_elems
+    ((key, val1) : key_value_pair) ((_key, val2) : key_value_pair) (acc : t) : t
+    =
   let open Hh_json in
-  match (val_c, val_p) with
-  | (JSON_Object elems_c, JSON_Object elems_p) ->
-    let elems = diff ~all elems_c ~prev:elems_p in
-    acc_if
-      (all || not (List.is_empty elems))
-      (key, JSON_Object (diff ~all elems_c ~prev:elems_p))
+  match (val1, val2) with
+  | (JSON_Number n1, JSON_Number n2) ->
+    (try
+       let n1 = int_of_string n1 in
+       let n2 = int_of_string n2 in
+       (key, int_ (n1 + n2)) :: acc
+     with _ ->
+       let n1 = float_of_string n1 in
+       let n2 = float_of_string n2 in
+       (key, float_ (n1 +. n2)) :: acc)
+  | (JSON_Object elems1, JSON_Object elems2) ->
+    let elems = add elems1 elems2 in
+    if not @@ List.is_empty elems then
+      (key, JSON_Object elems) :: acc
+    else
       acc
-  | (JSON_Object _, _)
-  | (_, JSON_Object _)
-  | (JSON_Array _, _)
-  | (_, JSON_Array _) ->
-    acc_if all (key, val_c) acc
-  | (JSON_Bool val_c, JSON_Bool val_p) when Bool.equal val_c val_p ->
-    acc_if all (key, JSON_Bool val_c) acc
-  | (JSON_String val_c, JSON_String val_p) when String.equal val_c val_p ->
-    acc_if all (key, JSON_String val_c) acc
-  | (JSON_Number val_c, JSON_Number val_p) when String.equal val_c val_p ->
-    acc_if all (key, JSON_Number val_c) acc
-  | (JSON_Null, JSON_Null) -> acc_if all (key, JSON_Null) acc
-  | (JSON_Number c, JSON_Number p) ->
-    (* JSON_Numbers are strings - maybe ints, maybe floats, maybe we
-    can't parse them or they're outside ocaml maximum range *)
-    begin
-      try
-        let (c, p) = (int_of_string c, int_of_string p) in
-        (key ^ "__diff", int_ (c - p)) :: acc_if all (key, int_ c) acc
-      with _ ->
-        begin
-          try
-            let (c, p) = (float_of_string c, float_of_string p) in
-            (key ^ "__diff", float_ (c -. p)) :: acc_if all (key, float_ c) acc
-          with _ ->
-            (key, JSON_Number c) :: (key ^ "__prev", JSON_Number p) :: acc
-        end
-    end
-  | (_, _) -> (key, val_c) :: (key ^ "__prev", val_p) :: acc
+  | ( ( JSON_Number _ | JSON_Object _ | JSON_Array _ | JSON_Bool _ | JSON_Null
+      | JSON_String _ ),
+      _ ) ->
+    acc

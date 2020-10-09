@@ -123,6 +123,8 @@ fn rewrite_expr(e: &Expr) -> Expr {
                 &e.0,
             )
         }
+        // Convert `{ expr }` to `$v->splice( expr )`
+        ETSplice(e) => meth_call("splice", vec![*e.clone()], &e.0),
         // Convert anything else to $v->unsupportedSyntax().
         // Type checking should prevent us hitting these cases.
         _ => meth_call(
@@ -178,6 +180,10 @@ fn rewrite_stmt(s: &Stmt) -> Option<Expr> {
                 ))
             }
         },
+        // Convert `break;` to `$v->breakStatement()`
+        Break => Some(meth_call("breakStatement", vec![], &s.0)),
+        // Convert `continue;` to `$v->continueStatement()`
+        Continue => Some(meth_call("continueStatement", vec![], &s.0)),
         Noop => None,
         // Convert anything else to $v->unsupportedSyntax().
         // Type checking should prevent us hitting these cases.

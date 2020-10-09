@@ -14,7 +14,7 @@ class TestSoapClient extends SoapClient {
     $this->server->addFunction('Test');
   }
 
-  function __doRequest($request, $location, $action, $version, $one_way = 0) {
+  function __dorequest($request, $location, $action, $version, $one_way = 0) {
     ob_start();
     $this->server->handle($request);
     $response = ob_get_contents();
@@ -31,8 +31,8 @@ abstract final class DvArrayHackArrExtSoapBug38055 {
 function main_entry(): void {
 
   $client = new TestSoapClient(dirname(__FILE__).'/bug38055.wsdl');
-  var_dump($client->__getfunctions());
-  var_dump($client->__gettypes());
+  var_dump($client->__getFunctions());
+  var_dump($client->__getTypes());
   $boolA = 1;
   $boolB = '1';
   $res = $client->__soapcall(

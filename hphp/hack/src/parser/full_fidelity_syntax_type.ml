@@ -90,6 +90,7 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; function_left_paren                                : t
     ; function_parameter_list                            : t
     ; function_right_paren                               : t
+    ; function_capability                                : t
     ; function_capability_provisional                    : t
     ; function_colon                                     : t
     ; function_type                                      : t
@@ -125,6 +126,7 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     { lambda_left_paren                                  : t
     ; lambda_parameters                                  : t
     ; lambda_right_paren                                 : t
+    ; lambda_capability                                  : t
     ; lambda_colon                                       : t
     ; lambda_type                                        : t
     }
@@ -134,6 +136,7 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; closure_inner_left_paren                           : t
     ; closure_parameter_list                             : t
     ; closure_inner_right_paren                          : t
+    ; closure_capability                                 : t
     ; closure_colon                                      : t
     ; closure_return_type                                : t
     ; closure_outer_right_paren                          : t
@@ -287,10 +290,16 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; function_left_paren                                : t
     ; function_parameter_list                            : t
     ; function_right_paren                               : t
+    ; function_capability                                : t
     ; function_capability_provisional                    : t
     ; function_colon                                     : t
     ; function_type                                      : t
     ; function_where_clause                              : t
+    }
+  | Capability                        of
+    { capability_left_bracket                            : t
+    ; capability_types                                   : t
+    ; capability_right_bracket                           : t
     }
   | CapabilityProvisional             of
     { capability_provisional_at                          : t
@@ -653,6 +662,7 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     { lambda_left_paren                                  : t
     ; lambda_parameters                                  : t
     ; lambda_right_paren                                 : t
+    ; lambda_capability                                  : t
     ; lambda_colon                                       : t
     ; lambda_type                                        : t
     }
@@ -957,12 +967,6 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; varray_trailing_comma                              : t
     ; varray_right_angle                                 : t
     }
-  | VectorArrayTypeSpecifier          of
-    { vector_array_keyword                               : t
-    ; vector_array_left_angle                            : t
-    ; vector_array_type                                  : t
-    ; vector_array_right_angle                           : t
-    }
   | TypeParameter                     of
     { type_attribute_spec                                : t
     ; type_reified                                       : t
@@ -984,14 +988,6 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; darray_trailing_comma                              : t
     ; darray_right_angle                                 : t
     }
-  | MapArrayTypeSpecifier             of
-    { map_array_keyword                                  : t
-    ; map_array_left_angle                               : t
-    ; map_array_key                                      : t
-    ; map_array_comma                                    : t
-    ; map_array_value                                    : t
-    ; map_array_right_angle                              : t
-    }
   | DictionaryTypeSpecifier           of
     { dictionary_type_keyword                            : t
     ; dictionary_type_left_angle                         : t
@@ -1004,6 +1000,7 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; closure_inner_left_paren                           : t
     ; closure_parameter_list                             : t
     ; closure_inner_right_paren                          : t
+    ; closure_capability                                 : t
     ; closure_colon                                      : t
     ; closure_return_type                                : t
     ; closure_outer_right_paren                          : t
@@ -1254,6 +1251,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   | ExprPocketIdentifier             of pocket_identifier_expression
   and specifier =
   | SpecSimple            of simple_type_specifier
+  | SpecCapability        of capability
   | SpecVariadicParameter of variadic_parameter
   | SpecLambdaSignature   of lambda_signature
   | SpecXHPEnumType       of xhp_enum_type
@@ -1261,9 +1259,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   | SpecKeyset            of keyset_type_specifier
   | SpecTupleTypeExplicit of tuple_type_explicit_specifier
   | SpecVarray            of varray_type_specifier
-  | SpecVectorArray       of vector_array_type_specifier
   | SpecDarray            of darray_type_specifier
-  | SpecMapArray          of map_array_type_specifier
   | SpecDictionary        of dictionary_type_specifier
   | SpecClosure           of closure_type_specifier
   | SpecClosureParameter  of closure_parameter_type_specifier
@@ -1584,10 +1580,16 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; function_left_paren: Token.t value
     ; function_parameter_list: parameter listesque value
     ; function_right_paren: Token.t value
+    ; function_capability: capability option value
     ; function_capability_provisional: capability_provisional option value
     ; function_colon: Token.t option value
     ; function_type: attributized_specifier option value
     ; function_where_clause: where_clause option value
+    }
+  and capability =
+    { capability_left_bracket: Token.t value
+    ; capability_types: specifier listesque value
+    ; capability_right_bracket: Token.t value
     }
   and capability_provisional =
     { capability_provisional_at: Token.t value
@@ -1950,6 +1952,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     { lambda_left_paren: Token.t value
     ; lambda_parameters: parameter listesque value
     ; lambda_right_paren: Token.t value
+    ; lambda_capability: capability option value
     ; lambda_colon: Token.t option value
     ; lambda_type: specifier option value
     }
@@ -2254,12 +2257,6 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; varray_trailing_comma: Token.t option value
     ; varray_right_angle: Token.t value
     }
-  and vector_array_type_specifier =
-    { vector_array_keyword: Token.t value
-    ; vector_array_left_angle: Token.t value
-    ; vector_array_type: specifier value
-    ; vector_array_right_angle: Token.t value
-    }
   and type_parameter =
     { type_attribute_spec: attribute_specification option value
     ; type_reified: Token.t option value
@@ -2281,14 +2278,6 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; darray_trailing_comma: Token.t option value
     ; darray_right_angle: Token.t value
     }
-  and map_array_type_specifier =
-    { map_array_keyword: Token.t value
-    ; map_array_left_angle: Token.t value
-    ; map_array_key: specifier value
-    ; map_array_comma: Token.t value
-    ; map_array_value: specifier value
-    ; map_array_right_angle: Token.t value
-    }
   and dictionary_type_specifier =
     { dictionary_type_keyword: Token.t value
     ; dictionary_type_left_angle: Token.t value
@@ -2301,6 +2290,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; closure_inner_left_paren: Token.t value
     ; closure_parameter_list: closure_parameter_type_specifier listesque value
     ; closure_inner_right_paren: Token.t value
+    ; closure_capability: capability option value
     ; closure_colon: Token.t value
     ; closure_return_type: specifier value
     ; closure_outer_right_paren: Token.t value

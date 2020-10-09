@@ -7,7 +7,7 @@
  *
  *)
 
-open Hh_core
+open Hh_prelude
 
 type raw_color =
   | Default
@@ -94,7 +94,7 @@ let supports_color =
       let value =
         match Sys_utils.getenv_term () with
         | None -> false
-        | Some term -> Unix.isatty Unix.stdout && term <> "dumb"
+        | Some term -> Unix.isatty Unix.stdout && not (String.equal term "dumb")
       in
       memo := Some value;
       value
@@ -102,7 +102,7 @@ let supports_color =
 let should_color color_mode =
   let force_color =
     Sys_utils.get_env "FORCE_ERROR_COLOR"
-    |> Option.value_map ~default:false ~f:(fun s -> s = "true")
+    |> Option.value_map ~default:false ~f:(fun s -> String.equal s "true")
   in
   match color_mode with
   | Color_Always -> true
@@ -127,7 +127,8 @@ let emoji_spinner =
     ]
 
 (* See https://github.com/yarnpkg/yarn/issues/405. *)
-let supports_emoji () = Sys.os_type <> "Win32" && supports_color ()
+let supports_emoji () =
+  (not (String.equal Sys.os_type "Win32")) && supports_color ()
 
 let apply_color ?(color_mode = Color_Auto) c s : string =
   if should_color color_mode then
@@ -141,13 +142,13 @@ let apply_color_from_style ?(color_mode = Color_Auto) style s : string =
   else
     Printf.sprintf "%s" s
 
-let print_one ?(color_mode = Color_Auto) ?(out_channel = stdout) c s =
-  Printf.fprintf out_channel "%s" (apply_color ~color_mode c s)
+let print_one ?(color_mode = Color_Auto) ?(out_channel = Stdio.stdout) c s =
+  Stdlib.Printf.fprintf out_channel "%s" (apply_color ~color_mode c s)
 
-let cprint ?(color_mode = Color_Auto) ?(out_channel = stdout) strs =
+let cprint ?(color_mode = Color_Auto) ?(out_channel = Stdio.stdout) strs =
   List.iter strs (fun (c, s) -> print_one ~color_mode ~out_channel c s)
 
-let cprintf ?(color_mode = Color_Auto) ?(out_channel = stdout) c =
+let cprintf ?(color_mode = Color_Auto) ?(out_channel = Stdio.stdout) c =
   Printf.ksprintf (print_one ~color_mode ~out_channel c)
 
 let (spinner, spinner_used) =
@@ -159,7 +160,7 @@ let (spinner, spinner_used) =
         else
           ["-"; "\\"; "|"; "/"]
       in
-      let str = List.nth_exn spinner (!state mod 4) in
+      let str = List.nth_exn spinner (!state % 4) in
       state := !state + 1;
       str),
     (fun () -> !state <> 0) )
@@ -192,12 +193,12 @@ let read_char () =
  * characters are entered, the prompt repeats indefinitely. *)
 let read_choice message choices =
   let rec loop () =
-    Printf.printf
+    Stdio.printf
       "%s (%s)%!"
       message
-      (String.concat "|" (List.map choices String_utils.string_of_char));
+      (String.concat ~sep:"|" (List.map choices String_utils.string_of_char));
     let choice = read_char () in
-    print_newline ();
+    Stdio.print_endline "";
     if List.mem ~equal:Char.equal choices choice then
       choice
     else
@@ -224,4 +225,4 @@ let get_term_cols () =
   if (not Sys.unix) || not (supports_color ()) then
     None
   else
-    try Some (int_of_string (Sys_utils.exec_read "tput cols")) with _ -> None
+    Option.map ~f:int_of_string (Sys_utils.exec_read "tput cols")

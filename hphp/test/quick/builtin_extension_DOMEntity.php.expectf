@@ -6,7 +6,7 @@ Warning: Attempted to serialize unserializable builtin class DOMEntity in %s/tes
 string(2) "N;"
 NULL
 varray(19) {
-  string(11) "__debuginfo"
+  string(11) "__debugInfo"
   string(11) "__construct"
   string(11) "appendChild"
   string(9) "cloneNode"
@@ -22,8 +22,8 @@ varray(19) {
   string(9) "normalize"
   string(11) "removeChild"
   string(12) "replaceChild"
-  string(4) "c14n"
-  string(8) "c14nfile"
+  string(4) "C14N"
+  string(8) "C14Nfile"
   string(11) "getNodePath"
 }
 ================
@@ -37,7 +37,7 @@ Warning: Attempted to serialize unserializable builtin class A_DOMEntity in %s/t
 string(2) "N;"
 NULL
 varray(19) {
-  string(11) "__debuginfo"
+  string(11) "__debugInfo"
   string(11) "__construct"
   string(11) "appendChild"
   string(9) "cloneNode"
@@ -53,7 +53,7 @@ varray(19) {
   string(9) "normalize"
   string(11) "removeChild"
   string(12) "replaceChild"
-  string(4) "c14n"
-  string(8) "c14nfile"
+  string(4) "C14N"
+  string(8) "C14Nfile"
   string(11) "getNodePath"
 }

@@ -285,6 +285,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   and validate_specifier : specifier validator = fun x ->
     match Syntax.syntax x with
     | Syntax.SimpleTypeSpecifier _ -> tag validate_simple_type_specifier (fun x -> SpecSimple x) x
+    | Syntax.Capability _ -> tag validate_capability (fun x -> SpecCapability x) x
     | Syntax.VariadicParameter _ -> tag validate_variadic_parameter (fun x -> SpecVariadicParameter x) x
     | Syntax.LambdaSignature _ -> tag validate_lambda_signature (fun x -> SpecLambdaSignature x) x
     | Syntax.XHPEnumType _ -> tag validate_xhp_enum_type (fun x -> SpecXHPEnumType x) x
@@ -292,9 +293,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | Syntax.KeysetTypeSpecifier _ -> tag validate_keyset_type_specifier (fun x -> SpecKeyset x) x
     | Syntax.TupleTypeExplicitSpecifier _ -> tag validate_tuple_type_explicit_specifier (fun x -> SpecTupleTypeExplicit x) x
     | Syntax.VarrayTypeSpecifier _ -> tag validate_varray_type_specifier (fun x -> SpecVarray x) x
-    | Syntax.VectorArrayTypeSpecifier _ -> tag validate_vector_array_type_specifier (fun x -> SpecVectorArray x) x
     | Syntax.DarrayTypeSpecifier _ -> tag validate_darray_type_specifier (fun x -> SpecDarray x) x
-    | Syntax.MapArrayTypeSpecifier _ -> tag validate_map_array_type_specifier (fun x -> SpecMapArray x) x
     | Syntax.DictionaryTypeSpecifier _ -> tag validate_dictionary_type_specifier (fun x -> SpecDictionary x) x
     | Syntax.ClosureTypeSpecifier _ -> tag validate_closure_type_specifier (fun x -> SpecClosure x) x
     | Syntax.ClosureParameterTypeSpecifier _ -> tag validate_closure_parameter_type_specifier (fun x -> SpecClosureParameter x) x
@@ -312,6 +311,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   and invalidate_specifier : specifier invalidator = fun (value, thing) ->
     match thing with
     | SpecSimple            thing -> invalidate_simple_type_specifier          (value, thing)
+    | SpecCapability        thing -> invalidate_capability                     (value, thing)
     | SpecVariadicParameter thing -> invalidate_variadic_parameter             (value, thing)
     | SpecLambdaSignature   thing -> invalidate_lambda_signature               (value, thing)
     | SpecXHPEnumType       thing -> invalidate_xhp_enum_type                  (value, thing)
@@ -319,9 +319,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     | SpecKeyset            thing -> invalidate_keyset_type_specifier          (value, thing)
     | SpecTupleTypeExplicit thing -> invalidate_tuple_type_explicit_specifier  (value, thing)
     | SpecVarray            thing -> invalidate_varray_type_specifier          (value, thing)
-    | SpecVectorArray       thing -> invalidate_vector_array_type_specifier    (value, thing)
     | SpecDarray            thing -> invalidate_darray_type_specifier          (value, thing)
-    | SpecMapArray          thing -> invalidate_map_array_type_specifier       (value, thing)
     | SpecDictionary        thing -> invalidate_dictionary_type_specifier      (value, thing)
     | SpecClosure           thing -> invalidate_closure_type_specifier         (value, thing)
     | SpecClosureParameter  thing -> invalidate_closure_parameter_type_specifier (value, thing)
@@ -1129,6 +1127,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; function_type = validate_option_with (validate_attributized_specifier) x.function_type
     ; function_colon = validate_option_with (validate_token) x.function_colon
     ; function_capability_provisional = validate_option_with (validate_capability_provisional) x.function_capability_provisional
+    ; function_capability = validate_option_with (validate_capability) x.function_capability
     ; function_right_paren = validate_token x.function_right_paren
     ; function_parameter_list = validate_list_with (validate_parameter) x.function_parameter_list
     ; function_left_paren = validate_token x.function_left_paren
@@ -1148,10 +1147,27 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       ; function_left_paren = invalidate_token x.function_left_paren
       ; function_parameter_list = invalidate_list_with (invalidate_parameter) x.function_parameter_list
       ; function_right_paren = invalidate_token x.function_right_paren
+      ; function_capability = invalidate_option_with (invalidate_capability) x.function_capability
       ; function_capability_provisional = invalidate_option_with (invalidate_capability_provisional) x.function_capability_provisional
       ; function_colon = invalidate_option_with (invalidate_token) x.function_colon
       ; function_type = invalidate_option_with (invalidate_attributized_specifier) x.function_type
       ; function_where_clause = invalidate_option_with (invalidate_where_clause) x.function_where_clause
+      }
+    ; Syntax.value = v
+    }
+  and validate_capability : capability validator = function
+  | { Syntax.syntax = Syntax.Capability x; value = v } -> v,
+    { capability_right_bracket = validate_token x.capability_right_bracket
+    ; capability_types = validate_list_with (validate_specifier) x.capability_types
+    ; capability_left_bracket = validate_token x.capability_left_bracket
+    }
+  | s -> validation_fail (Some SyntaxKind.Capability) s
+  and invalidate_capability : capability invalidator = fun (v, x) ->
+    { Syntax.syntax =
+      Syntax.Capability
+      { capability_left_bracket = invalidate_token x.capability_left_bracket
+      ; capability_types = invalidate_list_with (invalidate_specifier) x.capability_types
+      ; capability_right_bracket = invalidate_token x.capability_right_bracket
       }
     ; Syntax.value = v
     }
@@ -2221,6 +2237,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   | { Syntax.syntax = Syntax.LambdaSignature x; value = v } -> v,
     { lambda_type = validate_option_with (validate_specifier) x.lambda_type
     ; lambda_colon = validate_option_with (validate_token) x.lambda_colon
+    ; lambda_capability = validate_option_with (validate_capability) x.lambda_capability
     ; lambda_right_paren = validate_token x.lambda_right_paren
     ; lambda_parameters = validate_list_with (validate_parameter) x.lambda_parameters
     ; lambda_left_paren = validate_token x.lambda_left_paren
@@ -2232,6 +2249,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       { lambda_left_paren = invalidate_token x.lambda_left_paren
       ; lambda_parameters = invalidate_list_with (invalidate_parameter) x.lambda_parameters
       ; lambda_right_paren = invalidate_token x.lambda_right_paren
+      ; lambda_capability = invalidate_option_with (invalidate_capability) x.lambda_capability
       ; lambda_colon = invalidate_option_with (invalidate_token) x.lambda_colon
       ; lambda_type = invalidate_option_with (invalidate_specifier) x.lambda_type
       }
@@ -3169,24 +3187,6 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       }
     ; Syntax.value = v
     }
-  and validate_vector_array_type_specifier : vector_array_type_specifier validator = function
-  | { Syntax.syntax = Syntax.VectorArrayTypeSpecifier x; value = v } -> v,
-    { vector_array_right_angle = validate_token x.vector_array_right_angle
-    ; vector_array_type = validate_specifier x.vector_array_type
-    ; vector_array_left_angle = validate_token x.vector_array_left_angle
-    ; vector_array_keyword = validate_token x.vector_array_keyword
-    }
-  | s -> validation_fail (Some SyntaxKind.VectorArrayTypeSpecifier) s
-  and invalidate_vector_array_type_specifier : vector_array_type_specifier invalidator = fun (v, x) ->
-    { Syntax.syntax =
-      Syntax.VectorArrayTypeSpecifier
-      { vector_array_keyword = invalidate_token x.vector_array_keyword
-      ; vector_array_left_angle = invalidate_token x.vector_array_left_angle
-      ; vector_array_type = invalidate_specifier x.vector_array_type
-      ; vector_array_right_angle = invalidate_token x.vector_array_right_angle
-      }
-    ; Syntax.value = v
-    }
   and validate_type_parameter : type_parameter validator = function
   | { Syntax.syntax = Syntax.TypeParameter x; value = v } -> v,
     { type_constraints = validate_list_with (validate_type_constraint) x.type_constraints
@@ -3247,28 +3247,6 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       }
     ; Syntax.value = v
     }
-  and validate_map_array_type_specifier : map_array_type_specifier validator = function
-  | { Syntax.syntax = Syntax.MapArrayTypeSpecifier x; value = v } -> v,
-    { map_array_right_angle = validate_token x.map_array_right_angle
-    ; map_array_value = validate_specifier x.map_array_value
-    ; map_array_comma = validate_token x.map_array_comma
-    ; map_array_key = validate_specifier x.map_array_key
-    ; map_array_left_angle = validate_token x.map_array_left_angle
-    ; map_array_keyword = validate_token x.map_array_keyword
-    }
-  | s -> validation_fail (Some SyntaxKind.MapArrayTypeSpecifier) s
-  and invalidate_map_array_type_specifier : map_array_type_specifier invalidator = fun (v, x) ->
-    { Syntax.syntax =
-      Syntax.MapArrayTypeSpecifier
-      { map_array_keyword = invalidate_token x.map_array_keyword
-      ; map_array_left_angle = invalidate_token x.map_array_left_angle
-      ; map_array_key = invalidate_specifier x.map_array_key
-      ; map_array_comma = invalidate_token x.map_array_comma
-      ; map_array_value = invalidate_specifier x.map_array_value
-      ; map_array_right_angle = invalidate_token x.map_array_right_angle
-      }
-    ; Syntax.value = v
-    }
   and validate_dictionary_type_specifier : dictionary_type_specifier validator = function
   | { Syntax.syntax = Syntax.DictionaryTypeSpecifier x; value = v } -> v,
     { dictionary_type_right_angle = validate_token x.dictionary_type_right_angle
@@ -3292,6 +3270,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     { closure_outer_right_paren = validate_token x.closure_outer_right_paren
     ; closure_return_type = validate_specifier x.closure_return_type
     ; closure_colon = validate_token x.closure_colon
+    ; closure_capability = validate_option_with (validate_capability) x.closure_capability
     ; closure_inner_right_paren = validate_token x.closure_inner_right_paren
     ; closure_parameter_list = validate_list_with (validate_closure_parameter_type_specifier) x.closure_parameter_list
     ; closure_inner_left_paren = validate_token x.closure_inner_left_paren
@@ -3307,6 +3286,7 @@ module Make(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
       ; closure_inner_left_paren = invalidate_token x.closure_inner_left_paren
       ; closure_parameter_list = invalidate_list_with (invalidate_closure_parameter_type_specifier) x.closure_parameter_list
       ; closure_inner_right_paren = invalidate_token x.closure_inner_right_paren
+      ; closure_capability = invalidate_option_with (invalidate_capability) x.closure_capability
       ; closure_colon = invalidate_token x.closure_colon
       ; closure_return_type = invalidate_specifier x.closure_return_type
       ; closure_outer_right_paren = invalidate_token x.closure_outer_right_paren

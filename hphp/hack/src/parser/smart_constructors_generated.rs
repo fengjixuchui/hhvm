@@ -18,14 +18,25 @@
  */
 use parser_core_types::{
   lexable_token::LexableToken,
+  token_kind::TokenKind,
 };
 
-pub trait SmartConstructors<State>: Clone {
+pub trait SmartConstructors: Clone {
+    type State;
     type Token: LexableToken;
     type R;
 
-    fn state_mut(&mut self) -> &mut State;
-    fn into_state(self) -> State;
+    fn state_mut(&mut self) -> &mut Self::State;
+    fn into_state(self) -> Self::State;
+
+    fn create_token(
+        &mut self,
+        kind: TokenKind,
+        offset: usize,
+        width: usize,
+        leading: <Self::Token as LexableToken>::Trivia,
+        trailing: <Self::Token as LexableToken>::Trivia,
+    ) -> Self::Token;
 
     fn make_missing(&mut self, offset : usize) -> Self::R;
     fn make_token(&mut self, arg0: Self::Token) -> Self::R;
@@ -55,7 +66,8 @@ pub trait SmartConstructors<State>: Clone {
     fn make_namespace_group_use_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R) -> Self::R;
     fn make_namespace_use_clause(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R;
     fn make_function_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R;
-    fn make_function_declaration_header(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R, arg9 : Self::R, arg10 : Self::R) -> Self::R;
+    fn make_function_declaration_header(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R, arg9 : Self::R, arg10 : Self::R, arg11 : Self::R) -> Self::R;
+    fn make_capability(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R;
     fn make_capability_provisional(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R) -> Self::R;
     fn make_where_clause(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R;
     fn make_where_constraint(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R;
@@ -114,7 +126,7 @@ pub trait SmartConstructors<State>: Clone {
     fn make_anonymous_function(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R, arg9 : Self::R, arg10 : Self::R) -> Self::R;
     fn make_anonymous_function_use_clause(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R;
     fn make_lambda_expression(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R) -> Self::R;
-    fn make_lambda_signature(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R) -> Self::R;
+    fn make_lambda_signature(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R) -> Self::R;
     fn make_cast_expression(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R;
     fn make_scope_resolution_expression(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R;
     fn make_member_selection_expression(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R;
@@ -170,13 +182,11 @@ pub trait SmartConstructors<State>: Clone {
     fn make_keyset_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R) -> Self::R;
     fn make_tuple_type_explicit_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R;
     fn make_varray_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R) -> Self::R;
-    fn make_vector_array_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R;
     fn make_type_parameter(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R) -> Self::R;
     fn make_type_constraint(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R;
     fn make_darray_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R) -> Self::R;
-    fn make_map_array_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R) -> Self::R;
     fn make_dictionary_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R;
-    fn make_closure_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R) -> Self::R;
+    fn make_closure_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R) -> Self::R;
     fn make_closure_parameter_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R;
     fn make_classname_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R) -> Self::R;
     fn make_field_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R;

@@ -18,6 +18,7 @@
 
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/exceptions.h"
+#include "hphp/runtime/base/implicit-context.h"
 #include "hphp/runtime/base/runtime-error.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/request-info.h"
@@ -25,6 +26,7 @@
 #include "hphp/runtime/vm/bytecode.h"
 #include "hphp/runtime/vm/func.h"
 #include "hphp/runtime/vm/hhbc.h"
+#include "hphp/runtime/vm/reified-generics.h"
 #include "hphp/runtime/vm/runtime.h"
 #include "hphp/runtime/vm/rx.h"
 #include "hphp/util/text-util.h"
@@ -159,6 +161,103 @@ inline bool callerRxChecks(const ActRec* caller, const Func* callee) {
   if (LIKELY(callee->rxLevel() >= minReqCalleeLevel)) return true;
   raiseRxCallViolation(caller, callee);
   return false;
+}
+
+/*
+ * Check for presence, count and wildcard match of generics.
+ */
+inline void calleeGenericsChecks(const Func* callee, bool hasGenerics) {
+  if (LIKELY(!callee->hasReifiedGenerics())) {
+    if (UNLIKELY(hasGenerics)) vmStack().popC();
+    return;
+  }
+
+  if (!hasGenerics) {
+    if (!areAllGenericsSoft(callee->getReifiedGenericsInfo())) {
+      throw_call_reified_func_without_generics(callee);
+    }
+
+    raise_warning_for_soft_reified(0, true, callee->fullName());
+
+    // Push an empty array, as the remainder of the call setup assumes generics
+    // are on the stack.
+    ARRPROV_USE_RUNTIME_LOCATION();
+    auto const ad = ArrayData::CreateVArray();
+    if (RuntimeOption::EvalHackArrDVArrs) {
+      vmStack().pushVecNoRc(ad);
+    } else {
+      vmStack().pushArrayNoRc(ad);
+    }
+    return;
+  }
+
+  auto const generics = vmStack().topC();
+  assertx(tvIsHAMSafeVArray(generics));
+  checkFunReifiedGenericMismatch(callee, val(generics).parr);
+}
+
+/*
+ * Check for too few or too many arguments and trim extra args.
+ */
+inline void calleeArgumentArityChecks(const Func* callee,
+                                      uint32_t numArgsInclUnpack) {
+  if (numArgsInclUnpack < callee->numRequiredParams()) {
+    throwMissingArgument(callee, numArgsInclUnpack);
+  }
+
+  if (numArgsInclUnpack > callee->numParams()) {
+    assertx(!callee->hasVariadicCaptureParam());
+    assertx(numArgsInclUnpack == callee->numNonVariadicParams() + 1);
+
+    GenericsSaver gs{callee->hasReifiedGenerics()};
+
+    assertx(tvIsHAMSafeVArray(vmStack().topC()));
+    auto const numUnpackArgs = vmStack().topC()->m_data.parr->size();
+    vmStack().popC();
+
+    if (numUnpackArgs != 0) {
+      raiseTooManyArguments(callee, numArgsInclUnpack + numUnpackArgs - 1);
+    }
+  }
+}
+
+inline void calleeImplicitContextChecks(const Func* callee) {
+  if (!RO::EvalEnableImplicitContext ||
+      !callee->hasNoContextAttr() ||
+      *ImplicitContext::activeCtx == nullptr) {
+    return;
+  }
+  throw_implicit_context_exception(folly::to<std::string>(
+    "Function ", callee->fullName()->data(), " has implicit context "
+    "but is marked with __NoContext"));
+}
+
+inline void initFuncInputs(const Func* callee, uint32_t numArgsInclUnpack) {
+  assertx(numArgsInclUnpack <= callee->numNonVariadicParams() + 1);
+
+  // All arguments already initialized. Extra arguments already popped
+  // by calleeArgumentArityChecks().
+  if (LIKELY(numArgsInclUnpack >= callee->numParams())) return;
+
+  GenericsSaver gs{callee->hasReifiedGenerics()};
+  auto const numParams = callee->numNonVariadicParams();
+  while (numArgsInclUnpack < numParams) {
+    vmStack().pushUninit();
+    ++numArgsInclUnpack;
+  }
+
+  if (callee->hasVariadicCaptureParam()) {
+    ARRPROV_USE_RUNTIME_LOCATION();
+    auto const ad = ArrayData::CreateVArray();
+    if (RuntimeOption::EvalHackArrDVArrs) {
+      vmStack().pushVecNoRc(ad);
+    } else {
+      vmStack().pushArrayNoRc(ad);
+    }
+    ++numArgsInclUnpack;
+  }
+
+  assertx(numArgsInclUnpack == callee->numParams());
 }
 
 /*

@@ -47,6 +47,7 @@ type t =
   | NamespaceUseClause
   | FunctionDeclaration
   | FunctionDeclarationHeader
+  | Capability
   | CapabilityProvisional
   | WhereClause
   | WhereConstraint
@@ -161,11 +162,9 @@ type t =
   | KeysetTypeSpecifier
   | TupleTypeExplicitSpecifier
   | VarrayTypeSpecifier
-  | VectorArrayTypeSpecifier
   | TypeParameter
   | TypeConstraint
   | DarrayTypeSpecifier
-  | MapArrayTypeSpecifier
   | DictionaryTypeSpecifier
   | ClosureTypeSpecifier
   | ClosureParameterTypeSpecifier
@@ -230,6 +229,7 @@ let to_string kind =
   | NamespaceUseClause                -> "namespace_use_clause"
   | FunctionDeclaration               -> "function_declaration"
   | FunctionDeclarationHeader         -> "function_declaration_header"
+  | Capability                        -> "capability"
   | CapabilityProvisional             -> "capability_provisional"
   | WhereClause                       -> "where_clause"
   | WhereConstraint                   -> "where_constraint"
@@ -344,11 +344,9 @@ let to_string kind =
   | KeysetTypeSpecifier               -> "keyset_type_specifier"
   | TupleTypeExplicitSpecifier        -> "tuple_type_explicit_specifier"
   | VarrayTypeSpecifier               -> "varray_type_specifier"
-  | VectorArrayTypeSpecifier          -> "vector_array_type_specifier"
   | TypeParameter                     -> "type_parameter"
   | TypeConstraint                    -> "type_constraint"
   | DarrayTypeSpecifier               -> "darray_type_specifier"
-  | MapArrayTypeSpecifier             -> "map_array_type_specifier"
   | DictionaryTypeSpecifier           -> "dictionary_type_specifier"
   | ClosureTypeSpecifier              -> "closure_type_specifier"
   | ClosureParameterTypeSpecifier     -> "closure_parameter_type_specifier"

@@ -111,6 +111,8 @@ const StaticString s_stderr("STDERR");
 
 }
 
+std::atomic<size_t> Unit::s_liveUnits{0};
+
 ///////////////////////////////////////////////////////////////////////////////
 // MergeInfo.
 
@@ -132,7 +134,9 @@ Unit::Unit()
   , m_extended(false)
   , m_serialized(false)
   , m_ICE(false)
-{}
+{
+  ++s_liveUnits;
+}
 
 Unit::~Unit() {
   if (RuntimeOption::EvalEnableReverseDataMap &&
@@ -182,6 +186,8 @@ Unit::~Unit() {
   }
 
   free(mi);
+
+  --s_liveUnits;
 }
 
 void* Unit::operator new(size_t sz) {
@@ -1396,17 +1402,24 @@ void Unit::mergeImpl(MergeInfo* mi) {
 namespace {
 
 Array getClassesWithAttrInfo(Attr attrs, bool inverse = false) {
-  Array a = Array::CreateVArray();
+  auto builtins = Array::CreateVArray();
+  auto non_builtins = Array::CreateVArray();
   NamedEntity::foreach_cached_class([&](Class* c) {
     if ((c->attrs() & attrs) ? !inverse : inverse) {
       if (c->isBuiltin()) {
-        a.prepend(make_tv<KindOfPersistentString>(c->name()));
+        builtins.append(make_tv<KindOfPersistentString>(c->name()));
       } else {
-        a.append(make_tv<KindOfPersistentString>(c->name()));
+        non_builtins.append(make_tv<KindOfPersistentString>(c->name()));
       }
     }
   });
-  return a;
+  if (builtins.empty()) return non_builtins;
+  auto all = VArrayInit(builtins.size() + non_builtins.size());
+  for (auto i = builtins.size(); i > 0; i--) {
+    all.append(builtins.lookup(safe_cast<int64_t>(i - 1)));
+  }
+  IterateVNoInc(non_builtins.get(), [&](auto name) { all.append(name); });
+  return all.toArray();
 }
 
 template<bool system>

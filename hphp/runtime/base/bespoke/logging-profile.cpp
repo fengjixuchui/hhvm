@@ -395,6 +395,7 @@ struct SourceOutputData {
   {
     std::sort(sinks.begin(), sinks.end());
     std::sort(monotypeEscalations.begin(), monotypeEscalations.end());
+    std::sort(monotypeUses.begin(), monotypeUses.end());
     std::sort(operations.begin(), operations.end());
     std::sort(traceletReach.begin(), traceletReach.end());
 
@@ -668,19 +669,14 @@ LoggingProfile* getLoggingProfile(SrcKey sk, ArrayData* ad) {
   if (s_exportStarted.load(std::memory_order_relaxed)) return nullptr;
 
   auto prof = std::make_unique<LoggingProfile>(sk);
-  if (ad->isStatic()) {
-    prof->staticArray = LoggingArray::MakeStatic(ad, prof.get());
-  }
+  if (ad) prof->staticArray = LoggingArray::MakeStatic(ad, prof.get());
 
   ProfileMap::accessor insert;
   if (s_profileMap.insert(insert, sk)) {
     insert->second = prof.release();
     MemoryStats::LogAlloc(AllocKind::StaticArray, sizeof(LoggingArray));
-  } else {
-    // Someone beat us; clean up
-    if (ad->isStatic()) {
-      LoggingArray::FreeStatic(prof->staticArray);
-    }
+  } else if (ad) {
+    LoggingArray::FreeStatic(prof->staticArray);
   }
 
   return insert->second;

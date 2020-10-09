@@ -442,7 +442,13 @@ module Full = struct
       to_doc s ^^ list "<" k tyl ">"
     | Tdependent (dep, cstr) ->
       let cstr_info =
-        if !debug_mode then
+        if
+          !debug_mode
+          ||
+          match dep with
+          | DTexpr _ -> true
+          | _ -> false
+        then
           Concat [Space; text "as"; Space; k cstr]
         else
           Nothing
@@ -1483,10 +1489,6 @@ module PrintClass = struct
     let contents = SSet.fold (fun x acc -> x ^ " " ^ acc) s "" in
     Printf.sprintf "Set( %s)" contents
 
-  let sseq s =
-    let contents = Sequence.fold s ~init:"" ~f:(fun acc x -> x ^ " " ^ acc) in
-    Printf.sprintf "Seq( %s)" contents
-
   let pos p =
     let (line, start, end_) = Pos.info_pos p in
     Printf.sprintf "(line %d: chars %d-%d)" line start end_
@@ -1690,8 +1692,10 @@ module PrintClass = struct
     let tc_construct = constructor ctx (Cls.construct c) in
     let tc_ancestors = ancestors ctx (Cls.all_ancestors c) in
     let tc_req_ancestors = req_ancestors ctx (Cls.all_ancestor_reqs c) in
-    let tc_req_ancestors_extends = sseq (Cls.all_ancestor_req_names c) in
-    let tc_extends = sseq (Cls.all_extends_ancestors c) in
+    let tc_req_ancestors_extends =
+      String.concat ~sep:" " (Cls.all_ancestor_req_names c)
+    in
+    let tc_extends = String.concat ~sep:" " (Cls.all_extends_ancestors c) in
     "tc_need_init: "
     ^ tc_need_init
     ^ "\n"
@@ -1849,8 +1853,37 @@ let subtype_prop env prop =
   p_str
 
 let coeffects env ty =
-  Full.to_string
-    ~ty:Full.locl_ty
-    (fun s -> Doc.text (Utils.strip_all_ns s))
-    env
-    ty
+  let to_string ty =
+    with_blank_tyvars (fun () ->
+        Full.to_string
+          ~ty:Full.locl_ty
+          (fun s -> Doc.text (Utils.strip_all_ns s))
+          env
+          ty)
+  in
+  let exception UndesugarableCoeffect of locl_ty in
+  let rec desugar_simple_intersection (ty : locl_ty) : string list =
+    match snd @@ deref ty with
+    | Tintersection tyl -> List.concat_map ~f:desugar_simple_intersection tyl
+    | Tunion [ty] -> desugar_simple_intersection ty
+    | Tunion _
+    | Tnonnull
+    | Tdynamic ->
+      raise (UndesugarableCoeffect ty)
+    | Toption ty' ->
+      begin
+        match deref ty' with
+        | (_, Tnonnull) -> [] (* another special case of `mixed` *)
+        | _ -> raise (UndesugarableCoeffect ty)
+      end
+    | _ -> [to_string ty]
+  in
+  "the capability "
+  ^
+  try
+    "set {"
+    ^ ( desugar_simple_intersection ty
+      |> List.sort ~compare:String.compare
+      |> String.concat ~sep:", " )
+    ^ "}"
+  with UndesugarableCoeffect _ -> to_string ty

@@ -258,12 +258,11 @@ fn default_type_check(
 fn get_hint_display_name(hint: Option<&String>) -> Option<&str> {
     hint.map(|h| match h.as_str() {
         "HH\\bool" => "bool",
-        "array" => "array",
         "HH\\varray" => "HH\\varray",
         "HH\\darray" => "HH\\darray",
         "HH\\varray_or_darray" => "HH\\varray_or_darray",
         "HH\\vec_or_dict" => "HH\\vec_or_dict",
-        "HH\\arraylike" => "HH\\arraylike",
+        "HH\\AnyArray" => "HH\\AnyArray",
         "HH\\int" => "int",
         "HH\\num" => "num",
         "HH\\arraykey" => "arraykey",

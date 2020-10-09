@@ -35,12 +35,12 @@ impl<P> BinaryExpressionPrefixKind<P> {
     }
 }
 
-pub struct ExpressionParser<'a, S, T>
+pub struct ExpressionParser<'a, S>
 where
-    S: SmartConstructors<T>,
+    S: SmartConstructors,
     S::R: NodeType,
 {
-    lexer: Lexer<'a, S::Token>,
+    lexer: Lexer<'a, S>,
     env: ParserEnv,
     context: Context<'a, S::Token>,
     errors: Vec<SyntaxError>,
@@ -51,9 +51,9 @@ where
     _phantom: PhantomData<S>,
 }
 
-impl<'a, S, T: Clone> std::clone::Clone for ExpressionParser<'a, S, T>
+impl<'a, S> std::clone::Clone for ExpressionParser<'a, S>
 where
-    S: SmartConstructors<T>,
+    S: SmartConstructors,
     S::R: NodeType,
 {
     fn clone(&self) -> Self {
@@ -71,13 +71,13 @@ where
     }
 }
 
-impl<'a, S, T: Clone> ParserTrait<'a, S, T> for ExpressionParser<'a, S, T>
+impl<'a, S> ParserTrait<'a, S> for ExpressionParser<'a, S>
 where
-    S: SmartConstructors<T>,
+    S: SmartConstructors,
     S::R: NodeType,
 {
     fn make(
-        lexer: Lexer<'a, S::Token>,
+        lexer: Lexer<'a, S>,
         env: ParserEnv,
         context: Context<'a, S::Token>,
         errors: Vec<SyntaxError>,
@@ -96,29 +96,19 @@ where
         }
     }
 
-    fn into_parts(
-        self,
-    ) -> (
-        Lexer<'a, S::Token>,
-        Context<'a, S::Token>,
-        Vec<SyntaxError>,
-        S,
-    ) {
+    fn into_parts(self) -> (Lexer<'a, S>, Context<'a, S::Token>, Vec<SyntaxError>, S) {
         (self.lexer, self.context, self.errors, self.sc)
     }
 
-    fn lexer(&self) -> &Lexer<'a, S::Token> {
+    fn lexer(&self) -> &Lexer<'a, S> {
         &self.lexer
     }
 
-    fn lexer_mut(&mut self) -> &mut Lexer<'a, S::Token> {
+    fn lexer_mut(&mut self) -> &mut Lexer<'a, S> {
         &mut self.lexer
     }
 
-    fn continue_from<P: ParserTrait<'a, S, T>>(&mut self, other: P)
-    where
-        T: Clone,
-    {
+    fn continue_from<P: ParserTrait<'a, S>>(&mut self, other: P) {
         let (lexer, context, errors, sc) = other.into_parts();
         self.lexer = lexer;
         self.context = context;
@@ -155,9 +145,9 @@ where
     }
 }
 
-impl<'a, S, T: Clone> ExpressionParser<'a, S, T>
+impl<'a, S> ExpressionParser<'a, S>
 where
-    S: SmartConstructors<T>,
+    S: SmartConstructors,
     S::R: NodeType,
 {
     fn allow_as_expressions(&self) -> bool {
@@ -181,10 +171,9 @@ where
 
     fn with_type_parser<F, U>(&mut self, f: F) -> U
     where
-        T: Clone,
-        F: Fn(&mut TypeParser<'a, S, T>) -> U,
+        F: Fn(&mut TypeParser<'a, S>) -> U,
     {
-        let mut type_parser: TypeParser<S, T> = TypeParser::make(
+        let mut type_parser: TypeParser<S> = TypeParser::make(
             self.lexer.clone(),
             self.env.clone(),
             self.context.clone(),
@@ -197,7 +186,7 @@ where
     }
 
     fn parse_remaining_type_specifier(&mut self, name: S::R) -> S::R {
-        let mut type_parser: TypeParser<S, T> = TypeParser::make(
+        let mut type_parser: TypeParser<S> = TypeParser::make(
             self.lexer.clone(),
             self.env.clone(),
             self.context.clone(),
@@ -215,10 +204,9 @@ where
 
     fn with_decl_parser<F, U>(&mut self, f: F) -> U
     where
-        T: Clone,
-        F: Fn(&mut DeclarationParser<'a, S, T>) -> U,
+        F: Fn(&mut DeclarationParser<'a, S>) -> U,
     {
-        let mut decl_parser: DeclarationParser<S, T> = DeclarationParser::make(
+        let mut decl_parser: DeclarationParser<S> = DeclarationParser::make(
             self.lexer.clone(),
             self.env.clone(),
             self.context.clone(),
@@ -232,10 +220,9 @@ where
 
     fn with_statement_parser<F, U>(&mut self, f: F) -> U
     where
-        T: Clone,
-        F: Fn(&mut StatementParser<'a, S, T>) -> U,
+        F: Fn(&mut StatementParser<'a, S>) -> U,
     {
-        let mut statement_parser: StatementParser<S, T> = StatementParser::make(
+        let mut statement_parser: StatementParser<S> = StatementParser::make(
             self.lexer.clone(),
             self.env.clone(),
             self.context.clone(),
@@ -617,7 +604,10 @@ where
         // ERROR RECOVERY: If the right brace is missing, treat the remainder as
         // string text.
 
-        let is_assignment_op = |token| Operator::trailing_from_token(token).is_assignment();
+        let is_assignment_op = |token| {
+            Operator::is_trailing_operator_token(token)
+                && Operator::trailing_from_token(token).is_assignment()
+        };
 
         let left_brace_trailing_is_empty = left_brace.trailing_is_empty();
         let left_brace = S!(make_token, self, left_brace);
@@ -821,7 +811,7 @@ where
         //
         //
 
-        let merge = |token: S::Token, head: Option<S::Token>| {
+        let merge = |parser: &mut Self, token: S::Token, head: Option<S::Token>| {
             // TODO: Assert that new head has no leading trivia, old head has no
             // trailing trivia.
             // Invariant: A token inside a list of string fragments is always a head,
@@ -866,7 +856,7 @@ where
                     let (l, _, _) = head.into_trivia_and_width();
                     let (_, _, t) = token.into_trivia_and_width();
                     // TODO: Make a "position" type that is a tuple of source and offset.
-                    Some(S::Token::make(k, o, w, l, t))
+                    Some(parser.sc_mut().create_token(k, o, w, l, t))
                 }
                 None => {
                     let token = match token.kind() {
@@ -1010,7 +1000,7 @@ where
                     // TODO: Give an error.
                     // We got a { not followed by a $. Ignore it.
                     // TODO: Give a warning?
-                    merge(left_brace, head)
+                    merge(parser, left_brace, head)
                 }
             }
         };
@@ -1049,7 +1039,7 @@ where
                     _ => {
                         // We got a $ not followed by a { or variable name. Ignore it.
                         // TODO: Give a warning?
-                        merge(dollar, head)
+                        merge(parser, dollar, head)
                     }
                 }
             };
@@ -1061,7 +1051,7 @@ where
             let token = self.next_token_in_string(&literal_kind);
             match token.kind() {
                 TokenKind::HeredocStringLiteralTail | TokenKind::DoubleQuotedStringLiteralTail => {
-                    let head = merge(token, head);
+                    let head = merge(self, token, head);
                     put_opt(self, head, &mut acc);
                     break;
                 }
@@ -1073,7 +1063,7 @@ where
                     acc.push(expr)
                 }
                 TokenKind::Dollar => head = handle_dollar(self, token, head, &mut acc),
-                _ => head = merge(token, head),
+                _ => head = merge(self, token, head),
             }
         }
 
@@ -1731,10 +1721,10 @@ where
         // cast-expression:
         //   (  cast-type  ) unary-expression
         // cast-type:
-        //   array, bool, double, float, real, int, integer, object, string, binary
+        //   bool, double, float, real, int, integer, object, string, binary
         //
         // TODO: This implies that a cast "(name)" can only be a simple name, but
-        // I would expect that (\Foo\Bar), (:foo), (array<int>), and the like
+        // I would expect that (\Foo\Bar), (:foo), and the like
         // should also be legal casts. If we implement that then we will need
         // a sophisticated heuristic to determine whether this is a cast or a
         // parenthesized expression.
@@ -1752,8 +1742,7 @@ where
         let right_paren = self.next_token();
         let is_cast = right_paren.kind() == TokenKind::RightParen
             && match type_token_kind {
-                TokenKind::Array
-                | TokenKind::Bool
+                TokenKind::Bool
                 | TokenKind::Boolean
                 | TokenKind::Double
                 | TokenKind::Float
@@ -1867,6 +1856,8 @@ where
             S!(make_token, self, token)
         } else {
             let (left, params, right) = self.parse_parameter_list_opt();
+            let capability =
+                self.with_type_parser(|p: &mut TypeParser<'a, S>| p.parse_capability_opt());
             let (colon, return_type) = self.parse_optional_return();
             S!(
                 make_lambda_signature,
@@ -1874,6 +1865,7 @@ where
                 left,
                 params,
                 right,
+                capability,
                 colon,
                 return_type
             )
@@ -1955,8 +1947,8 @@ where
         F: Fn(&mut Self, S::R, S::R, S::R) -> S::R,
     {
         let op = self.assert_token(kw);
-        let right = self
-            .with_type_parser(|p: &mut TypeParser<'a, S, T>| p.parse_type_specifier(false, true));
+        let right =
+            self.with_type_parser(|p: &mut TypeParser<'a, S>| p.parse_type_specifier(false, true));
         let result = f(self, left, op, right);
         self.parse_remaining_expression(result)
     }

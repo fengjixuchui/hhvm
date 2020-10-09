@@ -133,9 +133,12 @@ class ['a, 'b, 'c, 'd] generic_elaborator =
     method! on_fun_ env f =
       let open Namespace_env in
       let namespace =
-        { empty_with_default with ns_name = Some "HH\\Capabilities" }
+        { empty_with_default with ns_name = Some "HH\\Contexts" }
       in
       let f_cap = super#on_type_hint { env with namespace } f.f_cap in
+      let namespace =
+        { empty_with_default with ns_name = Some "HH\\Contexts\\Unsafe" }
+      in
       let f_unsafe_cap =
         super#on_type_hint { env with namespace } f.f_unsafe_cap
       in
@@ -326,6 +329,16 @@ class ['a, 'b, 'c, 'd] generic_elaborator =
         let x = elaborate_type_name env x in
         Happly (x, List.map hl ~f:(self#on_hint env))
       | _ -> super#on_hint_ env h
+
+    method! on_hint_fun env hf =
+      let open Namespace_env in
+      let namespace =
+        { empty_with_default with ns_name = Some "HH\\Contexts" }
+      in
+      let cap_env = { env with namespace } in
+      let hf_cap = Option.map ~f:(self#on_hint cap_env) hf.hf_cap in
+      let hf = super#on_hint_fun env hf in
+      { hf with hf_cap }
 
     method! on_shape_field_name env sfn =
       match sfn with

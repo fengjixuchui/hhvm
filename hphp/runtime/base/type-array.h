@@ -191,7 +191,6 @@ public:
    * Like the underlying ArrayData::copy operation, the returned Array may
    * point to the same underlying array as the original, or a new one.
    */
-  Array copy() const { COPY_BODY(copy(), Array{}) }
   Array toVec() const { COPY_BODY(toVec(true), CreateVec()) }
   Array toDict() const { COPY_BODY(toDict(true), CreateDict()) }
   Array toKeyset() const { COPY_BODY(toKeyset(true), CreateKeyset()) }
@@ -266,18 +265,6 @@ public:
   Array& operator+=(ArrayData* data) = delete;
   Array& operator+=(const Array& v) = delete;
   Array& operator+=(const Variant& v) = delete;
-
-  /*
-   * Implementation of array_merge().
-   *
-   * This is different from operator+(), where existing keys' values are NOT
-   * modified.  This function will actually override with new values.
-   *
-   * When merging a packed array with another packed array, new elements are
-   * always appended, and this is also different from operator+() where
-   * existing numeric indices are not modified.
-   */
-  Array& merge(const Array& arr);
 
   /*
    * Comparison function for array operations.
@@ -484,12 +471,10 @@ public:
 #undef C
 
   /*
-   * Append or prepend an element, with semantics like set().
+   * Append an element, with semantics like set().
    */
   void append(TypedValue v);
   void append(const Variant& v);
-  void prepend(TypedValue v);
-  void prepend(const Variant& v);
 
   /*
    * Remove all elements.
@@ -497,10 +482,9 @@ public:
   void clear() { operator=(Create()); }
 
   /*
-   * Stack/queue-like functions.
+   * Stack-like function - the inverse of append().
    */
   Variant pop();
-  Variant dequeue();
 
 #undef FOR_EACH_KEY_TYPE
 
@@ -509,7 +493,6 @@ public:
 private:
   Array(ArrayData* ad, NoIncRef) : m_arr(ad, NoIncRef{}) {}
 
-  Array& mergeImpl(ArrayData* data);
   Array diffImpl(const Array& array, bool by_key, bool by_value, bool match,
                  PFUNC_CMP key_cmp_function, const void* key_data,
                  PFUNC_CMP value_cmp_function, const void* value_data) const;

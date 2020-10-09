@@ -19,6 +19,8 @@
 use flatten_smart_constructors::*;
 use smart_constructors::SmartConstructors;
 use parser_core_types::compact_token::CompactToken;
+use parser_core_types::compact_trivia::CompactTrivia;
+use parser_core_types::token_kind::TokenKind;
 
 use crate::{State, Node};
 
@@ -26,7 +28,8 @@ use crate::{State, Node};
 pub struct DirectDeclSmartConstructors<'src> {
     pub state: State<'src>,
 }
-impl<'src> SmartConstructors<State<'src>> for DirectDeclSmartConstructors<'src> {
+impl<'src> SmartConstructors for DirectDeclSmartConstructors<'src> {
+    type State = State<'src>;
     type Token = CompactToken;
     type R = Node<'src>;
 
@@ -36,6 +39,17 @@ impl<'src> SmartConstructors<State<'src>> for DirectDeclSmartConstructors<'src> 
 
     fn into_state(self) -> State<'src> {
       self.state
+    }
+
+    fn create_token(
+        &mut self,
+        kind: TokenKind,
+        offset: usize,
+        width: usize,
+        leading: CompactTrivia,
+        trailing: CompactTrivia,
+    ) -> Self::Token {
+        CompactToken::new(kind, offset, width, leading, trailing)
     }
 
     fn make_missing(&mut self, offset: usize) -> Self::R {
@@ -150,8 +164,12 @@ impl<'src> SmartConstructors<State<'src>> for DirectDeclSmartConstructors<'src> 
         <Self as FlattenSmartConstructors<'src, State<'src>>>::make_function_declaration(self, attribute_spec, declaration_header, body)
     }
 
-    fn make_function_declaration_header(&mut self, modifiers: Self::R, keyword: Self::R, name: Self::R, type_parameter_list: Self::R, left_paren: Self::R, parameter_list: Self::R, right_paren: Self::R, capability_provisional: Self::R, colon: Self::R, type_: Self::R, where_clause: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_function_declaration_header(self, modifiers, keyword, name, type_parameter_list, left_paren, parameter_list, right_paren, capability_provisional, colon, type_, where_clause)
+    fn make_function_declaration_header(&mut self, modifiers: Self::R, keyword: Self::R, name: Self::R, type_parameter_list: Self::R, left_paren: Self::R, parameter_list: Self::R, right_paren: Self::R, capability: Self::R, capability_provisional: Self::R, colon: Self::R, type_: Self::R, where_clause: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_function_declaration_header(self, modifiers, keyword, name, type_parameter_list, left_paren, parameter_list, right_paren, capability, capability_provisional, colon, type_, where_clause)
+    }
+
+    fn make_capability(&mut self, left_bracket: Self::R, types: Self::R, right_bracket: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_capability(self, left_bracket, types, right_bracket)
     }
 
     fn make_capability_provisional(&mut self, at: Self::R, left_brace: Self::R, type_: Self::R, unsafe_plus: Self::R, unsafe_type: Self::R, right_brace: Self::R) -> Self::R {
@@ -386,8 +404,8 @@ impl<'src> SmartConstructors<State<'src>> for DirectDeclSmartConstructors<'src> 
         <Self as FlattenSmartConstructors<'src, State<'src>>>::make_lambda_expression(self, attribute_spec, async_, signature, arrow, body)
     }
 
-    fn make_lambda_signature(&mut self, left_paren: Self::R, parameters: Self::R, right_paren: Self::R, colon: Self::R, type_: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_lambda_signature(self, left_paren, parameters, right_paren, colon, type_)
+    fn make_lambda_signature(&mut self, left_paren: Self::R, parameters: Self::R, right_paren: Self::R, capability: Self::R, colon: Self::R, type_: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_lambda_signature(self, left_paren, parameters, right_paren, capability, colon, type_)
     }
 
     fn make_cast_expression(&mut self, left_paren: Self::R, type_: Self::R, right_paren: Self::R, operand: Self::R) -> Self::R {
@@ -610,10 +628,6 @@ impl<'src> SmartConstructors<State<'src>> for DirectDeclSmartConstructors<'src> 
         <Self as FlattenSmartConstructors<'src, State<'src>>>::make_varray_type_specifier(self, keyword, left_angle, type_, trailing_comma, right_angle)
     }
 
-    fn make_vector_array_type_specifier(&mut self, keyword: Self::R, left_angle: Self::R, type_: Self::R, right_angle: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_vector_array_type_specifier(self, keyword, left_angle, type_, right_angle)
-    }
-
     fn make_type_parameter(&mut self, attribute_spec: Self::R, reified: Self::R, variance: Self::R, name: Self::R, param_params: Self::R, constraints: Self::R) -> Self::R {
         <Self as FlattenSmartConstructors<'src, State<'src>>>::make_type_parameter(self, attribute_spec, reified, variance, name, param_params, constraints)
     }
@@ -626,16 +640,12 @@ impl<'src> SmartConstructors<State<'src>> for DirectDeclSmartConstructors<'src> 
         <Self as FlattenSmartConstructors<'src, State<'src>>>::make_darray_type_specifier(self, keyword, left_angle, key, comma, value, trailing_comma, right_angle)
     }
 
-    fn make_map_array_type_specifier(&mut self, keyword: Self::R, left_angle: Self::R, key: Self::R, comma: Self::R, value: Self::R, right_angle: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_map_array_type_specifier(self, keyword, left_angle, key, comma, value, right_angle)
-    }
-
     fn make_dictionary_type_specifier(&mut self, keyword: Self::R, left_angle: Self::R, members: Self::R, right_angle: Self::R) -> Self::R {
         <Self as FlattenSmartConstructors<'src, State<'src>>>::make_dictionary_type_specifier(self, keyword, left_angle, members, right_angle)
     }
 
-    fn make_closure_type_specifier(&mut self, outer_left_paren: Self::R, function_keyword: Self::R, inner_left_paren: Self::R, parameter_list: Self::R, inner_right_paren: Self::R, colon: Self::R, return_type: Self::R, outer_right_paren: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_closure_type_specifier(self, outer_left_paren, function_keyword, inner_left_paren, parameter_list, inner_right_paren, colon, return_type, outer_right_paren)
+    fn make_closure_type_specifier(&mut self, outer_left_paren: Self::R, function_keyword: Self::R, inner_left_paren: Self::R, parameter_list: Self::R, inner_right_paren: Self::R, capability: Self::R, colon: Self::R, return_type: Self::R, outer_right_paren: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_closure_type_specifier(self, outer_left_paren, function_keyword, inner_left_paren, parameter_list, inner_right_paren, capability, colon, return_type, outer_right_paren)
     }
 
     fn make_closure_parameter_type_specifier(&mut self, call_convention: Self::R, type_: Self::R) -> Self::R {

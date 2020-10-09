@@ -18,7 +18,9 @@
  */
 use crate::*;
 use parser_core_types::positioned_syntax::PositionedSyntax;
-use parser_core_types::positioned_token::PositionedToken;
+use parser_core_types::positioned_token::{PositionedToken, new};
+use parser_core_types::positioned_trivia::PositionedTrivia;
+use parser_core_types::token_kind::TokenKind;
 use smart_constructors::SmartConstructors;
 use syntax_smart_constructors::SyntaxSmartConstructors;
 
@@ -31,8 +33,9 @@ macro_rules! arg_kinds {
     );
 }
 
-impl<'src> SmartConstructors<State> for VerifySmartConstructors
+impl<'src> SmartConstructors for VerifySmartConstructors
 {
+    type State = State;
     type Token = PositionedToken;
     type R = PositionedSyntax;
 
@@ -42,6 +45,23 @@ impl<'src> SmartConstructors<State> for VerifySmartConstructors
 
     fn into_state(self) -> State {
       self.state
+    }
+
+    fn create_token(
+        &mut self,
+        kind: TokenKind,
+        offset: usize,
+        width: usize,
+        leading: PositionedTrivia,
+        trailing: PositionedTrivia,
+    ) -> Self::Token {
+        new(
+            kind,
+            offset,
+            width,
+            leading,
+            trailing,
+        )
     }
 
     fn make_missing(&mut self, offset: usize) -> Self::R {
@@ -64,7 +84,7 @@ impl<'src> SmartConstructors<State> for VerifySmartConstructors
             self.state_mut().push(r.kind());
             r
         } else {
-            <Self as SmartConstructors<State>>::make_missing(self, offset)
+            <Self as SmartConstructors>::make_missing(self, offset)
         }
     }
 
@@ -268,9 +288,17 @@ impl<'src> SmartConstructors<State> for VerifySmartConstructors
         r
     }
 
-    fn make_function_declaration_header(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R, arg10: Self::R) -> Self::R {
-        let args = arg_kinds!(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10);
-        let r = <Self as SyntaxSmartConstructors<PositionedSyntax, State>>::make_function_declaration_header(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10);
+    fn make_function_declaration_header(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R, arg10: Self::R, arg11: Self::R) -> Self::R {
+        let args = arg_kinds!(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11);
+        let r = <Self as SyntaxSmartConstructors<PositionedSyntax, State>>::make_function_declaration_header(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11);
+        self.state_mut().verify(&args);
+        self.state_mut().push(r.kind());
+        r
+    }
+
+    fn make_capability(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
+        let args = arg_kinds!(arg0, arg1, arg2);
+        let r = <Self as SyntaxSmartConstructors<PositionedSyntax, State>>::make_capability(self, arg0, arg1, arg2);
         self.state_mut().verify(&args);
         self.state_mut().push(r.kind());
         r
@@ -740,9 +768,9 @@ impl<'src> SmartConstructors<State> for VerifySmartConstructors
         r
     }
 
-    fn make_lambda_signature(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R) -> Self::R {
-        let args = arg_kinds!(arg0, arg1, arg2, arg3, arg4);
-        let r = <Self as SyntaxSmartConstructors<PositionedSyntax, State>>::make_lambda_signature(self, arg0, arg1, arg2, arg3, arg4);
+    fn make_lambda_signature(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
+        let args = arg_kinds!(arg0, arg1, arg2, arg3, arg4, arg5);
+        let r = <Self as SyntaxSmartConstructors<PositionedSyntax, State>>::make_lambda_signature(self, arg0, arg1, arg2, arg3, arg4, arg5);
         self.state_mut().verify(&args);
         self.state_mut().push(r.kind());
         r
@@ -1188,14 +1216,6 @@ impl<'src> SmartConstructors<State> for VerifySmartConstructors
         r
     }
 
-    fn make_vector_array_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
-        let args = arg_kinds!(arg0, arg1, arg2, arg3);
-        let r = <Self as SyntaxSmartConstructors<PositionedSyntax, State>>::make_vector_array_type_specifier(self, arg0, arg1, arg2, arg3);
-        self.state_mut().verify(&args);
-        self.state_mut().push(r.kind());
-        r
-    }
-
     fn make_type_parameter(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
         let args = arg_kinds!(arg0, arg1, arg2, arg3, arg4, arg5);
         let r = <Self as SyntaxSmartConstructors<PositionedSyntax, State>>::make_type_parameter(self, arg0, arg1, arg2, arg3, arg4, arg5);
@@ -1220,14 +1240,6 @@ impl<'src> SmartConstructors<State> for VerifySmartConstructors
         r
     }
 
-    fn make_map_array_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
-        let args = arg_kinds!(arg0, arg1, arg2, arg3, arg4, arg5);
-        let r = <Self as SyntaxSmartConstructors<PositionedSyntax, State>>::make_map_array_type_specifier(self, arg0, arg1, arg2, arg3, arg4, arg5);
-        self.state_mut().verify(&args);
-        self.state_mut().push(r.kind());
-        r
-    }
-
     fn make_dictionary_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
         let args = arg_kinds!(arg0, arg1, arg2, arg3);
         let r = <Self as SyntaxSmartConstructors<PositionedSyntax, State>>::make_dictionary_type_specifier(self, arg0, arg1, arg2, arg3);
@@ -1236,9 +1248,9 @@ impl<'src> SmartConstructors<State> for VerifySmartConstructors
         r
     }
 
-    fn make_closure_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R) -> Self::R {
-        let args = arg_kinds!(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7);
-        let r = <Self as SyntaxSmartConstructors<PositionedSyntax, State>>::make_closure_type_specifier(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7);
+    fn make_closure_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R) -> Self::R {
+        let args = arg_kinds!(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8);
+        let r = <Self as SyntaxSmartConstructors<PositionedSyntax, State>>::make_closure_type_specifier(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8);
         self.state_mut().verify(&args);
         self.state_mut().push(r.kind());
         r

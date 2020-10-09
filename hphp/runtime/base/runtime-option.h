@@ -65,6 +65,12 @@ enum class JitSerdesMode {
   DeserializeAndExit    = 0x12,         // 10010
 };
 
+enum class RepoMode {
+  Closed    = 0,
+  ReadOnly  = 1,
+  ReadWrite = 2,
+};
+
 struct RepoOptions {
   RepoOptions(const RepoOptions&) = default;
   RepoOptions(RepoOptions&&) = default;
@@ -92,7 +98,7 @@ struct RepoOptions {
   H(bool,           DisableArray,                     true)           \
   H(bool,           DisableArrayCast,                 true)           \
   H(bool,           DisableArrayTypehint,             true)           \
-  H(bool,           EnableFirstClassFunctionPointers, false)          \
+  H(bool,           EnableFirstClassFunctionPointers, true)           \
   H(bool,           EnableEnumClasses,                false)          \
   /**/
 
@@ -722,6 +728,7 @@ struct RuntimeOption {
   F(bool, HHBBCTestCompression,        false)                           \
   F(bool, EnablePerRepoOptions,        true)                            \
   F(bool, CachePerRepoOptionsPath,     true)                            \
+  F(bool, RaiseOnCaseInsensitiveLookup,true)                            \
   /* ThrowOnNonExhaustiveSwitch
    * Generates warnings when switch statements are non exhaustive.
    *  0 - Nothing
@@ -959,6 +966,7 @@ struct RuntimeOption {
   F(bool,     DumpCallTargets,         false)                           \
   F(bool,     DumpLayoutCFG,           false)                           \
   F(bool,     DumpVBC,                 false)                           \
+  F(bool,     DumpArrAccProf,          false)                           \
   F(bool, DumpAst,                     false)                           \
   F(bool, DumpTargetProfiles,          false)                           \
   F(bool, MapTgtCacheHuge,             false)                           \
@@ -1077,6 +1085,11 @@ struct RuntimeOption {
   F(int32_t, BespokeArrayLikeMode, 0)                                   \
   F(uint64_t, EmitLoggingArraySampleRate, 0)                            \
   F(string, ExportLoggingArrayDataPath, "")                             \
+  /* Allows the tracelet selector to emit guards to specific bespoke    \
+   * types if the live types invovle a bespoke. Implies                 \
+   * BespokeArrayLikeMode to be nonzero, and in particular will set it  \
+   * to 1 if it is 0 */                                                 \
+  F(bool, AllowBespokesInLiveTypes, false)                              \
   /* Raise notices on various array operations which may present        \
    * compatibility issues with Hack arrays.                             \
    *                                                                    \
@@ -1100,7 +1113,7 @@ struct RuntimeOption {
   /* When this flag is on, d/varray constructions are marked. */        \
   F(bool, HackArrDVArrMark, false)                                      \
   /* When this flag is on, var_dump outputs d/varrays. */               \
-  F(bool, HackArrDVArrVarDump, false)                                   \
+  F(bool, HackArrDVArrVarDump, true)                                    \
   /* This is the flag for "unification", meaning that darrays are       \
    * replaced by dicts and varrays by vecs. */                          \
   F(bool, HackArrDVArrs, false)                                         \
@@ -1320,8 +1333,9 @@ public:
   static std::string CodeCoverageOutputFile;
 
   // Repo (hhvm bytecode repository) options
-  static std::string RepoLocalMode;
+  static RepoMode RepoLocalMode;
   static std::string RepoLocalPath;
+  static RepoMode RepoCentralMode;
   static std::string RepoCentralPath;
   static int32_t RepoCentralFileMode;
   static std::string RepoCentralFileUser;
@@ -1398,6 +1412,7 @@ public:
   // fb303 server
   static bool EnableFb303Server;
   static int Fb303ServerPort;
+  static std::string Fb303ServerIP;
   static int Fb303ServerThreadStackSizeMb;
   static int Fb303ServerWorkerThreads;
   static int Fb303ServerPoolThreads;

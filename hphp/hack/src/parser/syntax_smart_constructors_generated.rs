@@ -21,7 +21,7 @@ use smart_constructors::{NoState, SmartConstructors};
 use crate::StateType;
 
 pub trait SyntaxSmartConstructors<S: SyntaxType<State>, State = NoState>:
-    SmartConstructors<State, R=S, Token=S::Token>
+    SmartConstructors<State = State, R=S, Token=S::Token>
 where
     State: StateType<S>,
 {
@@ -172,9 +172,14 @@ where
         Self::R::make_function_declaration(self.state_mut(), arg0, arg1, arg2)
     }
 
-    fn make_function_declaration_header(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R, arg9 : Self::R, arg10 : Self::R) -> Self::R {
-        self.state_mut().next(&[&arg0, &arg1, &arg2, &arg3, &arg4, &arg5, &arg6, &arg7, &arg8, &arg9, &arg10]);
-        Self::R::make_function_declaration_header(self.state_mut(), arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10)
+    fn make_function_declaration_header(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R, arg9 : Self::R, arg10 : Self::R, arg11 : Self::R) -> Self::R {
+        self.state_mut().next(&[&arg0, &arg1, &arg2, &arg3, &arg4, &arg5, &arg6, &arg7, &arg8, &arg9, &arg10, &arg11]);
+        Self::R::make_function_declaration_header(self.state_mut(), arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11)
+    }
+
+    fn make_capability(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
+        self.state_mut().next(&[&arg0, &arg1, &arg2]);
+        Self::R::make_capability(self.state_mut(), arg0, arg1, arg2)
     }
 
     fn make_capability_provisional(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R) -> Self::R {
@@ -467,9 +472,9 @@ where
         Self::R::make_lambda_expression(self.state_mut(), arg0, arg1, arg2, arg3, arg4)
     }
 
-    fn make_lambda_signature(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R) -> Self::R {
-        self.state_mut().next(&[&arg0, &arg1, &arg2, &arg3, &arg4]);
-        Self::R::make_lambda_signature(self.state_mut(), arg0, arg1, arg2, arg3, arg4)
+    fn make_lambda_signature(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R) -> Self::R {
+        self.state_mut().next(&[&arg0, &arg1, &arg2, &arg3, &arg4, &arg5]);
+        Self::R::make_lambda_signature(self.state_mut(), arg0, arg1, arg2, arg3, arg4, arg5)
     }
 
     fn make_cast_expression(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R {
@@ -747,11 +752,6 @@ where
         Self::R::make_varray_type_specifier(self.state_mut(), arg0, arg1, arg2, arg3, arg4)
     }
 
-    fn make_vector_array_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R {
-        self.state_mut().next(&[&arg0, &arg1, &arg2, &arg3]);
-        Self::R::make_vector_array_type_specifier(self.state_mut(), arg0, arg1, arg2, arg3)
-    }
-
     fn make_type_parameter(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R) -> Self::R {
         self.state_mut().next(&[&arg0, &arg1, &arg2, &arg3, &arg4, &arg5]);
         Self::R::make_type_parameter(self.state_mut(), arg0, arg1, arg2, arg3, arg4, arg5)
@@ -767,19 +767,14 @@ where
         Self::R::make_darray_type_specifier(self.state_mut(), arg0, arg1, arg2, arg3, arg4, arg5, arg6)
     }
 
-    fn make_map_array_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R) -> Self::R {
-        self.state_mut().next(&[&arg0, &arg1, &arg2, &arg3, &arg4, &arg5]);
-        Self::R::make_map_array_type_specifier(self.state_mut(), arg0, arg1, arg2, arg3, arg4, arg5)
-    }
-
     fn make_dictionary_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R {
         self.state_mut().next(&[&arg0, &arg1, &arg2, &arg3]);
         Self::R::make_dictionary_type_specifier(self.state_mut(), arg0, arg1, arg2, arg3)
     }
 
-    fn make_closure_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R) -> Self::R {
-        self.state_mut().next(&[&arg0, &arg1, &arg2, &arg3, &arg4, &arg5, &arg6, &arg7]);
-        Self::R::make_closure_type_specifier(self.state_mut(), arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7)
+    fn make_closure_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R) -> Self::R {
+        self.state_mut().next(&[&arg0, &arg1, &arg2, &arg3, &arg4, &arg5, &arg6, &arg7, &arg8]);
+        Self::R::make_closure_type_specifier(self.state_mut(), arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8)
     }
 
     fn make_closure_parameter_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R {

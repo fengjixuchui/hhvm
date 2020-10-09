@@ -1146,6 +1146,7 @@ and expr
     ?(is_using_clause = false)
     ?(valkind = `other)
     ?(check_defined = true)
+    ?in_await
     env
     ((p, _) as e) =
   try
@@ -1169,6 +1170,7 @@ and expr
       ~is_using_clause
       ~valkind
       ~check_defined
+      ?in_await
       ?expected
       env
       e
@@ -1184,6 +1186,7 @@ and raw_expr
     ?lhs_of_null_coalesce
     ?(valkind = `other)
     ?(check_defined = true)
+    ?in_await
     env
     e =
   debug_last_pos := fst e;
@@ -1192,6 +1195,7 @@ and raw_expr
     ~is_using_clause
     ?expected
     ?lhs_of_null_coalesce
+    ?in_await
     ~valkind
     ~check_defined
     env
@@ -1231,7 +1235,7 @@ and loop_forever env =
 (* $x ?? 0 is handled similarly to $x ?: 0, except that the latter will also
  * look for sketchy null checks in the condition. *)
 (* TODO TAST: type refinement should be made explicit in the typed AST *)
-and eif env ~(expected : ExpectedTy.t option) p c e1 e2 =
+and eif env ~(expected : ExpectedTy.t option) ?in_await p c e1 e2 =
   let condition = condition ~lhs_of_null_coalesce:false in
   let (env, tc, tyc) = raw_expr ~lhs_of_null_coalesce:false env c in
   let parent_lenv = env.lenv in
@@ -1242,13 +1246,13 @@ and eif env ~(expected : ExpectedTy.t option) p c e1 e2 =
       let (env, ty) = Typing_solver.non_null env p tyc in
       (env, None, ty)
     | Some e1 ->
-      let (env, te1, ty1) = expr ?expected env e1 in
+      let (env, te1, ty1) = expr ?expected ?in_await env e1 in
       (env, Some te1, ty1)
   in
   let lenv1 = env.lenv in
   let env = { env with lenv = parent_lenv } in
   let (env, _lset) = condition env false tc in
-  let (env, te2, ty2) = expr ?expected env e2 in
+  let (env, te2, ty2) = expr ?expected ?in_await env e2 in
   let lenv2 = env.lenv in
   let env = LEnv.union_lenvs env parent_lenv lenv1 lenv2 in
   let (env, ty) = Union.union env ty1 ty2 in
@@ -1318,6 +1322,7 @@ and expr_
     ?(accept_using_var = false)
     ?(is_using_clause = false)
     ?lhs_of_null_coalesce
+    ?in_await
     ~(valkind : [> `lvalue | `lvalue_subexpr | `other ])
     ~check_defined
     env
@@ -1399,6 +1404,7 @@ and expr_
   let check_call
       ~is_using_clause
       ~(expected : ExpectedTy.t option)
+      ?in_await
       env
       p
       e
@@ -1409,6 +1415,7 @@ and expr_
       dispatch_call
         ~is_using_clause
         ~expected
+        ?in_await
         p
         env
         e
@@ -1428,7 +1435,7 @@ and expr_
     let ty = Typing_utils.mk_tany env p in
     make_result env p Aast.Omitted ty
   | ParenthesizedExpr e ->
-    let (env, te, ty) = expr env e in
+    let (env, te, ty) = expr ?in_await env e in
     make_result env p (Aast.ParenthesizedExpr te) ty
   | Any -> expr_error env (Reason.Rwitness p) outer
   | Varray (th, el)
@@ -1781,6 +1788,7 @@ and expr_
         ~incl_tc:false (* What is this? *)
         ~coerce_from_ty:None (* What is this? *)
         ~explicit_targs:targs
+        ~function_pointer:true
         env
         cty
         meth
@@ -2048,6 +2056,7 @@ and expr_
       check_call
         ~is_using_clause
         ~expected
+        ?in_await
         env
         p
         e
@@ -2118,17 +2127,7 @@ and expr_
       else
         env
     in
-    (* If we are assigning a local variable to another local variable then
-     * the expression ID associated with e2 is transferred to e1
-     *)
-    (match (e1, e2) with
-    | ((_, Lvar (_, x1)), (_, Lvar (_, x2))) ->
-      let eid2 = Env.get_local_expr_id env x2 in
-      let env =
-        Option.value_map eid2 ~default:env ~f:(Env.set_local_expr_id env x1)
-      in
-      make_result env p (Aast.Binop (Ast_defs.Eq None, te1, te2)) ty
-    | _ -> make_result env p (Aast.Binop (Ast_defs.Eq None, te1, te2)) ty)
+    make_result env p (Aast.Binop (Ast_defs.Eq None, te1, te2)) ty
   | Binop (((Ast_defs.Ampamp | Ast_defs.Barbar) as bop), e1, e2) ->
     let c = Ast_defs.(equal_bop bop Ampamp) in
     let (env, te1, _) = expr env e1 in
@@ -2190,7 +2189,7 @@ and expr_
     let (env, te, ty) = raw_expr env e in
     let env = might_throw env in
     Typing_arithmetic.unop p env uop te ty
-  | Eif (c, e1, e2) -> eif env ~expected p c e1 e2
+  | Eif (c, e1, e2) -> eif env ~expected ?in_await p c e1 e2
   | Class_const ((p, CI sid), pstr)
     when String.equal (snd pstr) "class" && Env.is_typedef env (snd sid) ->
     begin
@@ -2408,7 +2407,9 @@ and expr_
   | Await e ->
     let env = might_throw env in
     (* Await is permitted in a using clause e.g. using (await make_handle()) *)
-    let (env, te, rty) = expr ~is_using_clause env e in
+    let (env, te, rty) =
+      expr ~is_using_clause ~in_await:(Reason.Rwitness p) env e
+    in
     let (env, ty) = Async.overload_extract_from_awaitable env p rty in
     make_result env p (Aast.Await te) ty
   | Suspend e ->
@@ -2497,13 +2498,8 @@ and expr_
     | None -> Errors.type_not_record id pos);
 
     expr_error env (Reason.Rwitness p) outer
-  | Cast ((_, Harray (None, None)), _)
-    when Partial.should_check_error (Env.get_mode env) 4007
-         || TCO.migration_flag_enabled (Env.get_tcopt env) "array_cast" ->
-    Errors.array_cast p;
-    expr_error env (Reason.Rwitness p) outer
   | Cast (hint, e) ->
-    let (env, te, ty2) = expr env e in
+    let (env, te, ty2) = expr ?in_await env e in
     let env = might_throw env in
     let env =
       if
@@ -2523,13 +2519,7 @@ and expr_
     in
     let (env, ty) = Phase.localize_hint_with_self env hint in
     make_result env p (Aast.Cast (hint, te)) ty
-  | ExpressionTree (hint, e, e2) ->
-    let (env, te, ty) = expr env e in
-    (match e2 with
-    | Some e2 ->
-      let (env, te2, _ty2) = expr env e2 in
-      make_result env p (Aast.ExpressionTree (hint, te, Some te2)) ty
-    | None -> make_result env p (Aast.ExpressionTree (hint, te, None)) ty)
+  | ExpressionTree (hint, e, e2) -> expression_tree env p hint e e2
   | Is (e, hint) ->
     Typing_kinding.Simple.check_well_kinded_hint env hint;
     let (env, te, _) = expr env e in
@@ -2583,7 +2573,9 @@ and expr_
     Typing_check_decls.fun_ env f;
     (* This is the function type as declared on the lambda itself.
      * If type hints are absent then use Tany instead. *)
-    let declared_fe = Decl.fun_decl_in_env env.decl_env ~is_lambda:true f in
+    let declared_fe =
+      Decl_nast.fun_decl_in_env env.decl_env ~is_lambda:true f
+    in
     let { fe_type; fe_pos; _ } = declared_fe in
     let (declared_pos, declared_ft) =
       match get_node fe_type with
@@ -2621,6 +2613,29 @@ and expr_
         Errors.ellipsis_strict_mode ~require:`Param_name p
       | _ -> ()
     end;
+
+    (* Extract capabilities from AAST and add them to the environment *)
+    let env =
+      match (hint_of_type_hint f.f_cap, hint_of_type_hint f.f_unsafe_cap) with
+      | (None, None) ->
+        (* if the closure has no explicit coeffect annotations,
+           do _not_ insert (unsafe) capabilities into the environment;
+           instead, rely on the fact that a capability from an enclosing
+           scope can simply be captured, which has the same semantics
+           as redeclaring and shadowing with another same-typed capability.
+           This avoid unnecessary overhead in the most common case, i.e.,
+           when a closure does not need a different (usually smaller)
+           set of capabilities. *)
+        env
+      | (_, _) ->
+        let (env, f_cap, f_unsafe_cap) =
+          type_capability env f.f_cap f.f_unsafe_cap (fst f.f_name)
+        in
+        Typing_coeffects.register_capabilities
+          env
+          (fst f_cap)
+          (fst f_unsafe_cap)
+    in
 
     (* Is the return type declared? *)
     let is_explicit_ret = Option.is_some (hint_of_type_hint f.f_ret) in
@@ -2962,9 +2977,7 @@ and expr_
     let s = enum ^ ":@" ^ atom in
     Errors.pu_typing p "identifier" s;
     expr_error env (Reason.Rwitness p) outer
-  | ET_Splice e ->
-    let (env, te, ty) = expr env e in
-    make_result env p (Aast.ET_Splice te) ty
+  | ET_Splice e -> et_splice env p e
 
 (* let ty = err_witness env cst_pos in *)
 and class_const ?(incl_tc = false) env p ((cpos, cid), mid) =
@@ -3332,6 +3345,9 @@ and anon_make ?el ?ret_ty env lambda_pos f ft idl is_anon =
           let (env, user_attributes) =
             List.map_env env f.f_user_attributes user_attribute
           in
+          let (env, f_cap, f_unsafe_cap) =
+            type_capability env f.f_cap f.f_unsafe_cap (fst f.f_name)
+          in
           let tfun_ =
             {
               Aast.f_annotation = Env.save local_tpenv env;
@@ -3346,10 +3362,8 @@ and anon_make ?el ?ret_ty env lambda_pos f ft idl is_anon =
               Aast.f_user_attributes = user_attributes;
               Aast.f_body = { Aast.fb_ast = tb; fb_annotation = () };
               (* TODO(T70095684) definitely fix f_cap *)
-              Aast.f_cap =
-                (MakeType.nothing Reason.none, hint_of_type_hint f.f_cap);
-              Aast.f_unsafe_cap =
-                (MakeType.mixed Reason.none, hint_of_type_hint f.f_unsafe_cap);
+              Aast.f_cap;
+              Aast.f_unsafe_cap;
               Aast.f_params = t_params;
               Aast.f_variadic = t_variadic;
               (* TODO TAST: Variadic efuns *)
@@ -3378,6 +3392,73 @@ and anon_make ?el ?ret_ty env lambda_pos f ft idl is_anon =
 (*****************************************************************************)
 (* End of anonymous functions. *)
 (*****************************************************************************)
+
+(*****************************************************************************)
+(* Expression trees *)
+(*****************************************************************************)
+and expression_tree env p visitor_class e desugared_expr =
+  let (spliced_expressions, new_et) =
+    Typing_expression_trees.extract_spliced_expressions e
+  in
+  let (env, spliced_expression_map) =
+    List.fold
+      ~f:(fun (env, map) (id, e) ->
+        let (env, te, ty) = expr env e in
+        (env, IMap.add id (te, ty) map))
+      ~init:(env, IMap.empty)
+      spliced_expressions
+  in
+  let env = { env with et_spliced_types = Some spliced_expression_map } in
+  let (env, (te, ty)) =
+    Typing_lenv.stash_and_do env (Env.all_continuations env) (fun env ->
+        let env = Env.reinitialize_locals env in
+        let (env, te, ty) = expr env new_et in
+        (env, (te, ty)))
+  in
+  let env = { env with et_spliced_types = None } in
+  match desugared_expr with
+  | Some desugared_expr ->
+    let (env, te2, _ty2) = expr env desugared_expr in
+    make_result env p (Aast.ExpressionTree (visitor_class, te, Some te2)) ty
+  | None -> make_result env p (Aast.ExpressionTree (visitor_class, te, None)) ty
+
+and et_splice env p e =
+  let error = expr_error env Reason.Rnone e in
+  match snd e with
+  | Id (_, id) ->
+    let id = int_of_string id in
+    let v =
+      IMap.find_opt id (Option.value env.et_spliced_types ~default:IMap.empty)
+    in
+    begin
+      match v with
+      | None -> error
+      | Some (te, ty) -> make_result env p (Aast.ET_Splice te) ty
+    end
+  | _ -> error
+
+(*****************************************************************************)
+(* End expression trees *)
+(*****************************************************************************)
+
+(* Goes from Nast.f_cap to Tast.f_cap (same for unsafe_cap) *)
+and type_capability env cap unsafe_cap default_pos =
+  let cap_hint_opt = hint_of_type_hint cap in
+  let (env, cap_ty) =
+    Option.value_map
+      cap_hint_opt
+      ~default:(env, MakeType.default_capability (Reason.Rhint default_pos))
+      ~f:(Phase.localize_hint_with_self env)
+  in
+  let unsafe_cap_hint_opt = hint_of_type_hint unsafe_cap in
+  let (env, unsafe_cap_ty) =
+    Option.value_map
+      unsafe_cap_hint_opt (* default is no unsafe capabilities *)
+      ~default:(env, MakeType.mixed (Reason.Rhint default_pos))
+      ~f:(Phase.localize_hint_with_self env)
+  in
+  (env, (cap_ty, cap_hint_opt), (unsafe_cap_ty, unsafe_cap_hint_opt))
+
 and requires_consistent_construct = function
   | CIstatic -> true
   | CIexpr _ -> true
@@ -3810,7 +3891,7 @@ and assign_ p ur env e1 ty2 =
     let nullsafe =
       match nullflavor with
       | OG_nullthrows -> None
-      | OG_nullsafe -> Some pobj
+      | OG_nullsafe -> Some (Reason.Rnullsafe_op pobj)
     in
     let (env, tobj, obj_ty) = expr ~accept_using_var:true env obj in
     let env = might_throw env in
@@ -4003,7 +4084,7 @@ and check_parent_construct pos env el unpacked_element env_parent =
     parent,
     fty )
 
-and check_class_get env p def_pos cid mid ce e =
+and check_class_get env p def_pos cid mid ce e function_pointer =
   match e with
   | CIself when get_ce_abstract ce ->
     begin
@@ -4035,6 +4116,8 @@ and check_class_get env p def_pos cid mid ce e =
     end
   | CIparent when get_ce_abstract ce ->
     Errors.parent_abstract_call mid p def_pos
+  | CI _ when get_ce_abstract ce && function_pointer ->
+    Errors.abstract_function_pointer cid mid p def_pos
   | CI _ when get_ce_abstract ce ->
     Errors.classname_abstract_call cid mid p def_pos
   | CI (_, classname) when get_ce_synthesized ce ->
@@ -4077,6 +4160,7 @@ and call_parent_construct pos env el unpacked_element =
 and dispatch_call
     ~(expected : ExpectedTy.t option)
     ~is_using_clause
+    ?in_await
     p
     env
     ((fpos, fun_expr) as e)
@@ -4642,7 +4726,7 @@ and dispatch_call
       TOG.obj_get
         ~obj_pos:(fst e1)
         ~is_method:true
-        ~nullsafe
+        ~nullsafe:(Option.map ~f:(fun p -> Reason.Rnullsafe_op p) nullsafe)
         ~coerce_from_ty:None
         ~explicit_targs
         env
@@ -4763,6 +4847,7 @@ and dispatch_call
              ~is_static:false
              receiver_ty
              (snd meth))
+        ?in_await
         p
         env
         method_ty
@@ -5103,6 +5188,7 @@ and class_get
     ~coerce_from_ty
     ?(explicit_targs = [])
     ?(incl_tc = false)
+    ?(function_pointer = false)
     env
     cty
     (p, mid)
@@ -5120,6 +5206,7 @@ and class_get
     ~explicit_targs
     ~incl_tc
     ~coerce_from_ty
+    ~function_pointer
     env
     cid
     cty
@@ -5132,6 +5219,7 @@ and class_get_
     ~coerce_from_ty
     ?(explicit_targs = [])
     ?(incl_tc = false)
+    ?(function_pointer = false)
     env
     cid
     cty
@@ -5331,7 +5419,7 @@ and class_get_
             cid
             class_;
           TVis.check_deprecated ~use_pos:p ~def_pos ce_deprecated;
-          check_class_get env p def_pos c mid ce cid;
+          check_class_get env p def_pos c mid ce cid function_pointer;
           let (env, member_ty, et_enforced, tal) =
             match deref member_decl_ty with
             (* We special case Tfun here to allow passing in explicit tparams to localize_ft. *)
@@ -5855,6 +5943,7 @@ and call
     ~(expected : ExpectedTy.t option)
     ?(method_call_info : TR.method_call_info option)
     ?(nullsafe : Pos.t option = None)
+    ?in_await
     pos
     env
     fty
@@ -5933,11 +6022,19 @@ and call
           in
           (env, (tel, None, ty))
         | (_, Tunion [ty]) ->
-          call ~expected ~nullsafe pos env ty el unpacked_element
+          call ~expected ~nullsafe ?in_await pos env ty el unpacked_element
         | (r, Tunion tyl) ->
           let (env, resl) =
             List.map_env env tyl (fun env ty ->
-                call ~expected ~nullsafe pos env ty el unpacked_element)
+                call
+                  ~expected
+                  ~nullsafe
+                  ?in_await
+                  pos
+                  env
+                  ty
+                  el
+                  unpacked_element)
           in
           let retl = List.map resl ~f:(fun (_, _, x) -> x) in
           let (env, ty) = Union.union_list env r retl in
@@ -5952,7 +6049,15 @@ and call
         | (r, Tintersection tyl) ->
           let (env, resl) =
             TUtils.run_on_intersection env tyl ~f:(fun env ty ->
-                call ~expected ~nullsafe pos env ty el unpacked_element)
+                call
+                  ~expected
+                  ~nullsafe
+                  ?in_await
+                  pos
+                  env
+                  ty
+                  el
+                  unpacked_element)
           in
           let retl = List.map resl ~f:(fun (_, _, x) -> x) in
           let (env, ty) = Inter.intersect_list env r retl in
@@ -6243,6 +6348,11 @@ and call
               { capability }
             in
             let (env, return_ty) = Env.fresh_type env pos in
+            let return_ty =
+              match in_await with
+              | None -> return_ty
+              | Some r -> MakeType.awaitable r return_ty
+            in
             let ft_ret = MakeType.enforced return_ty in
             (* A non-reactive supertype is most permissive: *)
             let ft_reactive = Nonreactive in

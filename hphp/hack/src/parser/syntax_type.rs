@@ -45,7 +45,8 @@ pub trait SyntaxType<C>: SyntaxTypeBase<C>
     fn make_namespace_group_use_declaration(ctx: &C, namespace_group_use_keyword: Self, namespace_group_use_kind: Self, namespace_group_use_prefix: Self, namespace_group_use_left_brace: Self, namespace_group_use_clauses: Self, namespace_group_use_right_brace: Self, namespace_group_use_semicolon: Self) -> Self;
     fn make_namespace_use_clause(ctx: &C, namespace_use_clause_kind: Self, namespace_use_name: Self, namespace_use_as: Self, namespace_use_alias: Self) -> Self;
     fn make_function_declaration(ctx: &C, function_attribute_spec: Self, function_declaration_header: Self, function_body: Self) -> Self;
-    fn make_function_declaration_header(ctx: &C, function_modifiers: Self, function_keyword: Self, function_name: Self, function_type_parameter_list: Self, function_left_paren: Self, function_parameter_list: Self, function_right_paren: Self, function_capability_provisional: Self, function_colon: Self, function_type: Self, function_where_clause: Self) -> Self;
+    fn make_function_declaration_header(ctx: &C, function_modifiers: Self, function_keyword: Self, function_name: Self, function_type_parameter_list: Self, function_left_paren: Self, function_parameter_list: Self, function_right_paren: Self, function_capability: Self, function_capability_provisional: Self, function_colon: Self, function_type: Self, function_where_clause: Self) -> Self;
+    fn make_capability(ctx: &C, capability_left_bracket: Self, capability_types: Self, capability_right_bracket: Self) -> Self;
     fn make_capability_provisional(ctx: &C, capability_provisional_at: Self, capability_provisional_left_brace: Self, capability_provisional_type: Self, capability_provisional_unsafe_plus: Self, capability_provisional_unsafe_type: Self, capability_provisional_right_brace: Self) -> Self;
     fn make_where_clause(ctx: &C, where_clause_keyword: Self, where_clause_constraints: Self) -> Self;
     fn make_where_constraint(ctx: &C, where_constraint_left_type: Self, where_constraint_operator: Self, where_constraint_right_type: Self) -> Self;
@@ -104,7 +105,7 @@ pub trait SyntaxType<C>: SyntaxTypeBase<C>
     fn make_anonymous_function(ctx: &C, anonymous_attribute_spec: Self, anonymous_static_keyword: Self, anonymous_async_keyword: Self, anonymous_function_keyword: Self, anonymous_left_paren: Self, anonymous_parameters: Self, anonymous_right_paren: Self, anonymous_colon: Self, anonymous_type: Self, anonymous_use: Self, anonymous_body: Self) -> Self;
     fn make_anonymous_function_use_clause(ctx: &C, anonymous_use_keyword: Self, anonymous_use_left_paren: Self, anonymous_use_variables: Self, anonymous_use_right_paren: Self) -> Self;
     fn make_lambda_expression(ctx: &C, lambda_attribute_spec: Self, lambda_async: Self, lambda_signature: Self, lambda_arrow: Self, lambda_body: Self) -> Self;
-    fn make_lambda_signature(ctx: &C, lambda_left_paren: Self, lambda_parameters: Self, lambda_right_paren: Self, lambda_colon: Self, lambda_type: Self) -> Self;
+    fn make_lambda_signature(ctx: &C, lambda_left_paren: Self, lambda_parameters: Self, lambda_right_paren: Self, lambda_capability: Self, lambda_colon: Self, lambda_type: Self) -> Self;
     fn make_cast_expression(ctx: &C, cast_left_paren: Self, cast_type: Self, cast_right_paren: Self, cast_operand: Self) -> Self;
     fn make_scope_resolution_expression(ctx: &C, scope_resolution_qualifier: Self, scope_resolution_operator: Self, scope_resolution_name: Self) -> Self;
     fn make_member_selection_expression(ctx: &C, member_object: Self, member_operator: Self, member_name: Self) -> Self;
@@ -160,13 +161,11 @@ pub trait SyntaxType<C>: SyntaxTypeBase<C>
     fn make_keyset_type_specifier(ctx: &C, keyset_type_keyword: Self, keyset_type_left_angle: Self, keyset_type_type: Self, keyset_type_trailing_comma: Self, keyset_type_right_angle: Self) -> Self;
     fn make_tuple_type_explicit_specifier(ctx: &C, tuple_type_keyword: Self, tuple_type_left_angle: Self, tuple_type_types: Self, tuple_type_right_angle: Self) -> Self;
     fn make_varray_type_specifier(ctx: &C, varray_keyword: Self, varray_left_angle: Self, varray_type: Self, varray_trailing_comma: Self, varray_right_angle: Self) -> Self;
-    fn make_vector_array_type_specifier(ctx: &C, vector_array_keyword: Self, vector_array_left_angle: Self, vector_array_type: Self, vector_array_right_angle: Self) -> Self;
     fn make_type_parameter(ctx: &C, type_attribute_spec: Self, type_reified: Self, type_variance: Self, type_name: Self, type_param_params: Self, type_constraints: Self) -> Self;
     fn make_type_constraint(ctx: &C, constraint_keyword: Self, constraint_type: Self) -> Self;
     fn make_darray_type_specifier(ctx: &C, darray_keyword: Self, darray_left_angle: Self, darray_key: Self, darray_comma: Self, darray_value: Self, darray_trailing_comma: Self, darray_right_angle: Self) -> Self;
-    fn make_map_array_type_specifier(ctx: &C, map_array_keyword: Self, map_array_left_angle: Self, map_array_key: Self, map_array_comma: Self, map_array_value: Self, map_array_right_angle: Self) -> Self;
     fn make_dictionary_type_specifier(ctx: &C, dictionary_type_keyword: Self, dictionary_type_left_angle: Self, dictionary_type_members: Self, dictionary_type_right_angle: Self) -> Self;
-    fn make_closure_type_specifier(ctx: &C, closure_outer_left_paren: Self, closure_function_keyword: Self, closure_inner_left_paren: Self, closure_parameter_list: Self, closure_inner_right_paren: Self, closure_colon: Self, closure_return_type: Self, closure_outer_right_paren: Self) -> Self;
+    fn make_closure_type_specifier(ctx: &C, closure_outer_left_paren: Self, closure_function_keyword: Self, closure_inner_left_paren: Self, closure_parameter_list: Self, closure_inner_right_paren: Self, closure_capability: Self, closure_colon: Self, closure_return_type: Self, closure_outer_right_paren: Self) -> Self;
     fn make_closure_parameter_type_specifier(ctx: &C, closure_parameter_call_convention: Self, closure_parameter_type: Self) -> Self;
     fn make_classname_type_specifier(ctx: &C, classname_keyword: Self, classname_left_angle: Self, classname_type: Self, classname_trailing_comma: Self, classname_right_angle: Self) -> Self;
     fn make_field_specifier(ctx: &C, field_question: Self, field_name: Self, field_arrow: Self, field_type: Self) -> Self;

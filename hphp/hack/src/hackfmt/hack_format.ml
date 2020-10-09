@@ -520,7 +520,8 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           function_left_paren = leftp;
           function_parameter_list = params;
           function_right_paren = rightp;
-          function_capability_provisional = cap;
+          function_capability = cap;
+          function_capability_provisional = cap_provisional;
           function_colon = colon;
           function_type = ret_type;
           function_where_clause = where;
@@ -530,6 +531,7 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           Span (transform_fn_decl_name env modifiers kw name type_params leftp);
           transform_fn_decl_args env params rightp;
           t env cap;
+          t env cap_provisional;
           t env colon;
           when_present colon space;
           t env ret_type;
@@ -552,6 +554,13 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           where_constraint_right_type = right;
         } ->
       Concat [t env left; Space; t env op; Space; t env right]
+    | Syntax.Capability
+        {
+          capability_left_bracket = lb;
+          capability_types = tys;
+          capability_right_bracket = rb;
+        } ->
+      Concat [t env lb; t env tys; t env rb]
     | Syntax.CapabilityProvisional
         {
           capability_provisional_at = at;
@@ -562,7 +571,18 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           capability_provisional_right_brace = rb;
         } ->
       Concat
-        [t env at; t env lb; t env cap; t env plus; t env unsafe_cap; t env rb]
+        [
+          t env at;
+          t env lb;
+          Space;
+          t env cap;
+          Space;
+          t env plus;
+          Space;
+          t env unsafe_cap;
+          Space;
+          t env rb;
+        ]
     | Syntax.MethodishDeclaration
         {
           methodish_attribute = attr;
@@ -1422,10 +1442,20 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           lambda_left_paren = lp;
           lambda_parameters = params;
           lambda_right_paren = rp;
+          lambda_capability = cap;
           lambda_colon = colon;
           lambda_type = ret_type;
         } ->
-      transform_argish_with_return_type env lp params rp colon ret_type
+      Concat
+        [
+          t env lp;
+          when_present params split;
+          transform_fn_decl_args env params rp;
+          t env cap;
+          t env colon;
+          when_present colon space;
+          t env ret_type;
+        ]
     | Syntax.CastExpression _ -> Span (List.map (Syntax.children node) (t env))
     | Syntax.MemberSelectionExpression _
     | Syntax.SafeMemberSelectionExpression _ ->
@@ -1519,7 +1549,7 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
                 t env false_expr );
             ] )
     | Syntax.FunctionCallExpression _ -> handle_possible_chaining env node
-    | Syntax.FunctionPointerExpression _ -> handle_possible_chaining env node
+    | Syntax.FunctionPointerExpression _ -> transform_simple env node
     | Syntax.EvalExpression
         {
           eval_keyword = kw;
@@ -2057,14 +2087,6 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
             trailing_comma
             right_a;
         ]
-    | Syntax.VectorArrayTypeSpecifier
-        {
-          vector_array_keyword = kw;
-          vector_array_left_angle = left_a;
-          vector_array_type = vec_type;
-          vector_array_right_angle = right_a;
-        } ->
-      Concat [t env kw; transform_braced_item env left_a vec_type right_a]
     | Syntax.VectorTypeSpecifier
         {
           vector_type_keyword = kw;
@@ -2145,23 +2167,6 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
         [
           t env kw; transform_argish env ~allow_trailing:true left_a args right_a;
         ]
-    | Syntax.MapArrayTypeSpecifier
-        {
-          map_array_keyword = kw;
-          map_array_left_angle = left_a;
-          map_array_key = key;
-          map_array_comma = comma_kw;
-          map_array_value = value;
-          map_array_right_angle = right_a;
-        } ->
-      Concat
-        [
-          t env kw;
-          (let key_list_item = Syntax.make_list_item key comma_kw in
-           let val_list_item = Syntax.make_list_item value (make_missing ()) in
-           let args = make_list [key_list_item; val_list_item] in
-           transform_argish env ~allow_trailing:false left_a args right_a);
-        ]
     | Syntax.DictionaryTypeSpecifier
         {
           dictionary_type_keyword = kw;
@@ -2177,6 +2182,7 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           closure_inner_left_paren = inner_left_p;
           closure_parameter_list = param_list;
           closure_inner_right_paren = inner_right_p;
+          closure_capability = cap;
           closure_colon = colon;
           closure_return_type = ret_type;
           closure_outer_right_paren = outer_right_p;
@@ -2185,13 +2191,13 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
         [
           t env outer_left_p;
           t env kw;
-          transform_argish_with_return_type
-            env
-            inner_left_p
-            param_list
-            inner_right_p
-            colon
-            ret_type;
+          t env inner_left_p;
+          when_present param_list split;
+          transform_fn_decl_args env param_list inner_right_p;
+          t env cap;
+          t env colon;
+          when_present colon space;
+          t env ret_type;
           t env outer_right_p;
         ]
     | Syntax.ClosureParameterTypeSpecifier
@@ -2706,6 +2712,19 @@ and handle_possible_chaining env node =
         } ->
       handle_member_selection acc (obj, arrow, member, None) None
     | _ -> (node, [])
+  in
+  (* It's easy to end up with an infinite loop by passing an unexpected node
+     kind here, so confirm that we have an expected kind in hand. *)
+  let () =
+    match Syntax.kind node with
+    | SyntaxKind.FunctionCallExpression
+    | SyntaxKind.MemberSelectionExpression
+    | SyntaxKind.SafeMemberSelectionExpression ->
+      ()
+    | kind ->
+      failwith
+        ( "Unexpected SyntaxKind in handle_possible_chaining: "
+        ^ SyntaxKind.show kind )
   in
   (* Flatten nested member selection expressions into the first receiver and a
      list of member selections.

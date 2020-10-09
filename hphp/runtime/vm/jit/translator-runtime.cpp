@@ -428,12 +428,6 @@ TypedValue getDefaultIfMissing(TypedValue tv, TypedValue def) {
   return tv.is_init() ? tv : def;
 }
 
-NEVER_INLINE
-TypedValue arrayIdxSSlow(ArrayData* a, StringData* key, TypedValue def) {
-  assertx(a->isPHPArrayType());
-  return getDefaultIfMissing(a->get(key), def);
-}
-
 ALWAYS_INLINE
 TypedValue doScan(const MixedArray* arr, StringData* key, TypedValue def) {
   assertx(key->isStatic());
@@ -447,23 +441,6 @@ TypedValue doScan(const MixedArray* arr, StringData* key, TypedValue def) {
   return def;
 }
 
-}
-
-TypedValue arrayIdxI(ArrayData* a, int64_t key, TypedValue def) {
-  assertx(a->isPHPArrayType());
-  return getDefaultIfMissing(a->get(key), def);
-}
-
-TypedValue arrayIdxS(ArrayData* a, StringData* key, TypedValue def) {
-  assertx(a->isPHPArrayType());
-  if (!a->isMixedKind()) return arrayIdxSSlow(a, key, def);
-  return dictIdxS(a, key, def);
-}
-
-TypedValue arrayIdxScan(ArrayData* a, StringData* key, TypedValue def) {
-  assertx(a->isPHPArrayType());
-  if (!a->isMixedKind()) return arrayIdxSSlow(a, key, def);
-  return dictIdxScan(a, key, def);
 }
 
 // This helper may also be used when we know we have a MixedArray in the JIT.
@@ -661,7 +638,8 @@ const Func* loadClassCtor(Class* cls, Class* ctx) {
   const Func* f = cls->getCtor();
   if (UNLIKELY(!(f->attrs() & AttrPublic))) {
     UNUSED auto func =
-      lookupMethodCtx(cls, nullptr, ctx, CallType::CtorMethod, true);
+      lookupMethodCtx(cls, nullptr, ctx, CallType::CtorMethod,
+                      MethodLookupErrorOptions::RaiseOnNotFound);
     assertx(func == f);
   }
   return f;
@@ -670,7 +648,8 @@ const Func* loadClassCtor(Class* cls, Class* ctx) {
 const Func* lookupClsMethodHelper(const Class* cls, const StringData* methName,
                                   ObjectData* obj, const Class* ctx) {
   const Func* f;
-  auto const res = lookupClsMethod(f, cls, methName, obj, ctx, true);
+  auto const res = lookupClsMethod(f, cls, methName, obj, ctx,
+                                   MethodLookupErrorOptions::RaiseOnNotFound);
 
   if (res == LookupResult::MethodFoundWithThis) {
     // Handled by interpreter.
@@ -683,58 +662,6 @@ const Func* lookupClsMethodHelper(const Class* cls, const StringData* methName,
   }
 
   return f;
-}
-
-//////////////////////////////////////////////////////////////////////
-
-namespace {
-
-std::string formatArgumentErrMsg(const Func* func, const char* amount,
-                                 uint32_t expected, uint32_t got) {
-  return folly::sformat(
-    "{}() expects {} {} parameter{}, {} given",
-    func->fullName()->data(),
-    amount,
-    expected,
-    expected == 1 ? "" : "s",
-    got
-  );
-}
-
-}
-
-void throwMissingArgument(const Func* func, int got) {
-  auto const expected = func->numRequiredParams();
-  assertx(got < expected);
-  auto const amount = expected < func->numParams() ? "at least" : "exactly";
-  auto const errMsg = formatArgumentErrMsg(func, amount, expected, got);
-  SystemLib::throwRuntimeExceptionObject(Variant(errMsg));
-}
-
-void raiseTooManyArguments(const Func* func, int got) {
-  assertx(!func->hasVariadicCaptureParam());
-
-  if (!RuntimeOption::EvalWarnOnTooManyArguments && !func->isCPPBuiltin()) {
-    return;
-  }
-
-  auto const total = func->numNonVariadicParams();
-  assertx(got > total);
-  auto const amount = func->numRequiredParams() < total ? "at most" : "exactly";
-  auto const errMsg = formatArgumentErrMsg(func, amount, total, got);
-
-  if (RuntimeOption::EvalWarnOnTooManyArguments > 1 || func->isCPPBuiltin()) {
-    SystemLib::throwRuntimeExceptionObject(Variant(errMsg));
-  } else {
-    raise_warning(errMsg);
-  }
-}
-
-void raiseTooManyArgumentsPrologue(const Func* func, ArrayData* unpackArgs) {
-  SCOPE_EXIT { decRefArr(unpackArgs); };
-  if (unpackArgs->empty()) return;
-  auto const got = func->numNonVariadicParams() + unpackArgs->size();
-  raiseTooManyArguments(func, got);
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -862,12 +789,6 @@ tv_lval elemVecIU(tv_lval base, int64_t key) {
   return ElemUVec<KeyType::Int>(base, key);
 }
 
-}
-
-//////////////////////////////////////////////////////////////////////
-
-uintptr_t tlsBaseNoInline() {
-  return tlsBase();
 }
 
 //////////////////////////////////////////////////////////////////////

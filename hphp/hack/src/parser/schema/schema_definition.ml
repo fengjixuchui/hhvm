@@ -389,10 +389,25 @@ let schema : schema_node list =
           ("left_paren", Token);
           ("parameter_list", ZeroOrMore (Aggregate Parameter));
           ("right_paren", Token);
+          ("capability", ZeroOrOne (Just "Capability"));
           ("capability_provisional", ZeroOrOne (Just "CapabilityProvisional"));
           ("colon", ZeroOrOne Token);
           ("type", ZeroOrOne (Just "AttributizedSpecifier"));
           ("where_clause", ZeroOrOne (Just "WhereClause"));
+        ];
+    };
+    {
+      kind_name = "Capability";
+      type_name = "capability";
+      func_name = "capability";
+      description = "capability";
+      prefix = "capability";
+      aggregates = [Specifier];
+      fields =
+        [
+          ("left_bracket", Token);
+          ("types", ZeroOrMore (Aggregate Specifier));
+          ("right_bracket", Token);
         ];
     };
     {
@@ -1213,6 +1228,7 @@ let schema : schema_node list =
           ("left_paren", Token);
           ("parameters", ZeroOrMore (Aggregate Parameter));
           ("right_paren", Token);
+          ("capability", ZeroOrOne (Just "Capability"));
           ("colon", ZeroOrOne Token);
           ("type", ZeroOrOne (Aggregate Specifier));
         ];
@@ -1973,21 +1989,6 @@ let schema : schema_node list =
         ];
     };
     {
-      kind_name = "VectorArrayTypeSpecifier";
-      type_name = "vector_array_type_specifier";
-      func_name = "vector_array_type_specifier";
-      description = "vector_array_type_specifier";
-      prefix = "vector_array";
-      aggregates = [Specifier];
-      fields =
-        [
-          ("keyword", Token);
-          ("left_angle", Token);
-          ("type", Aggregate Specifier);
-          ("right_angle", Token);
-        ];
-    };
-    {
       kind_name = "TypeParameter";
       type_name = "type_parameter";
       func_name = "type_parameter";
@@ -2032,23 +2033,6 @@ let schema : schema_node list =
         ];
     };
     {
-      kind_name = "MapArrayTypeSpecifier";
-      type_name = "map_array_type_specifier";
-      func_name = "map_array_type_specifier";
-      description = "map_array_type_specifier";
-      prefix = "map_array";
-      aggregates = [Specifier];
-      fields =
-        [
-          ("keyword", Token);
-          ("left_angle", Token);
-          ("key", Aggregate Specifier);
-          ("comma", Token);
-          ("value", Aggregate Specifier);
-          ("right_angle", Token);
-        ];
-    };
-    {
       kind_name = "DictionaryTypeSpecifier";
       type_name = "dictionary_type_specifier";
       func_name = "dictionary_type_specifier";
@@ -2077,6 +2061,7 @@ let schema : schema_node list =
           ("inner_left_paren", Token);
           ("parameter_list", ZeroOrMore (Just "ClosureParameterTypeSpecifier"));
           ("inner_right_paren", Token);
+          ("capability", ZeroOrOne (Just "Capability"));
           ("colon", Token);
           ("return_type", Aggregate Specifier);
           ("outer_right_paren", Token);

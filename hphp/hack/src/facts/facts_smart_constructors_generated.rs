@@ -18,7 +18,8 @@
  */
 use flatten_smart_constructors::*;
 use smart_constructors::SmartConstructors;
-use parser_core_types::positioned_token::PositionedToken;
+use parser_core_types::positioned_token::{PositionedToken, new};
+use parser_core_types::positioned_trivia::PositionedTrivia;
 
 use crate::*;
 
@@ -26,7 +27,8 @@ use crate::*;
 pub struct FactsSmartConstructors<'src> {
     pub state: HasScriptContent<'src>,
 }
-impl<'src> SmartConstructors<HasScriptContent<'src>> for FactsSmartConstructors<'src> {
+impl<'src> SmartConstructors for FactsSmartConstructors<'src> {
+    type State = HasScriptContent<'src>;
     type Token = PositionedToken;
     type R = Node;
 
@@ -36,6 +38,23 @@ impl<'src> SmartConstructors<HasScriptContent<'src>> for FactsSmartConstructors<
 
     fn into_state(self) -> HasScriptContent<'src> {
       self.state
+    }
+
+    fn create_token(
+        &mut self,
+        kind: TokenKind,
+        offset: usize,
+        width: usize,
+        leading: PositionedTrivia,
+        trailing: PositionedTrivia,
+    ) -> Self::Token {
+        new(
+            kind,
+            offset,
+            width,
+            leading,
+            trailing,
+        )
     }
 
     fn make_missing(&mut self, offset: usize) -> Self::R {
@@ -150,8 +169,12 @@ impl<'src> SmartConstructors<HasScriptContent<'src>> for FactsSmartConstructors<
         <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_function_declaration(self, arg0, arg1, arg2)
     }
 
-    fn make_function_declaration_header(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R, arg10: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_function_declaration_header(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10)
+    fn make_function_declaration_header(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R, arg10: Self::R, arg11: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_function_declaration_header(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11)
+    }
+
+    fn make_capability(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_capability(self, arg0, arg1, arg2)
     }
 
     fn make_capability_provisional(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
@@ -386,8 +409,8 @@ impl<'src> SmartConstructors<HasScriptContent<'src>> for FactsSmartConstructors<
         <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_lambda_expression(self, arg0, arg1, arg2, arg3, arg4)
     }
 
-    fn make_lambda_signature(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_lambda_signature(self, arg0, arg1, arg2, arg3, arg4)
+    fn make_lambda_signature(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_lambda_signature(self, arg0, arg1, arg2, arg3, arg4, arg5)
     }
 
     fn make_cast_expression(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
@@ -610,10 +633,6 @@ impl<'src> SmartConstructors<HasScriptContent<'src>> for FactsSmartConstructors<
         <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_varray_type_specifier(self, arg0, arg1, arg2, arg3, arg4)
     }
 
-    fn make_vector_array_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_vector_array_type_specifier(self, arg0, arg1, arg2, arg3)
-    }
-
     fn make_type_parameter(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
         <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_type_parameter(self, arg0, arg1, arg2, arg3, arg4, arg5)
     }
@@ -626,16 +645,12 @@ impl<'src> SmartConstructors<HasScriptContent<'src>> for FactsSmartConstructors<
         <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_darray_type_specifier(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6)
     }
 
-    fn make_map_array_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_map_array_type_specifier(self, arg0, arg1, arg2, arg3, arg4, arg5)
-    }
-
     fn make_dictionary_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
         <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_dictionary_type_specifier(self, arg0, arg1, arg2, arg3)
     }
 
-    fn make_closure_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_closure_type_specifier(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7)
+    fn make_closure_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_closure_type_specifier(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8)
     }
 
     fn make_closure_parameter_type_specifier(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {

@@ -60,6 +60,63 @@ enum class CaseMode {
   UPPER = 1,
 };
 
+namespace {
+
+// Create a new array-like with the given type and with enough capacity to
+// store `size` elements. HAM safe: it returns the same type as its input.
+Array makeReserveLike(DataType type, size_t size) {
+  auto const ad = [&]{
+    switch (dt_with_rc(type)) {
+      case KindOfVec:    return PackedArray::MakeReserveVec(size);
+      case KindOfVArray: return PackedArray::MakeReserveVArray(size);
+      case KindOfDict:   return MixedArray::MakeReserveDict(size);
+      case KindOfDArray: return MixedArray::MakeReserveDArray(size);
+      case KindOfKeyset: return SetArray::MakeReserveSet(size);
+      default:           always_assert(false);
+    }
+    not_reached();
+  }();
+  return Array::attach(ad);
+}
+
+// Appends all keys and values in the ArrayIter `it` to the array `array`.
+// If `array` is a keyset, we preserve int keys; otherwise, we renumber them.
+//
+// `array` must be the same type of array that `it` iterates over - we use
+// this fact for optimizations here.
+void appendKeysAndVals(Array& array, ArrayIter& it) {
+  assertx(array->toDataType() == it.getArrayData()->toDataType());
+  if (array.isVArray() || array.isVec() || array.isKeyset()) {
+    for (; it; ++it) {
+      array.append(it.secondVal());
+    }
+  } else {
+    for (; it; ++it) {
+      auto const key = it.nvFirst();
+      if (tvIsInt(key)) {
+        array.append(it.secondVal());
+      } else {
+        auto const str = StrNR(val(key).pstr);
+        array.set(str.asString(), it.secondVal(), true);
+      }
+    }
+  }
+}
+
+// Pushes the given value into a (non-empty) array and pops the last element,
+// allowing us to "cycle" optional arguments for certain variadic functions.
+Variant cycleVariadics(Array& array, const Variant& val) {
+  assertx(!array.empty());
+  auto result = makeReserveLike(array->toDataType(), array.size() + 1);
+  result.append(val);
+  ArrayIter it(array.detach(), ArrayIter::noInc);
+  appendKeysAndVals(result, it);
+  array = std::move(result);
+  return array.pop();
+}
+
+}
+
 TypedValue HHVM_FUNCTION(array_change_key_case,
                          const Variant& input,
                          int64_t case_ /* = 0 */) {
@@ -138,6 +195,7 @@ TypedValue HHVM_FUNCTION(array_column,
     return make_tv<KindOfBoolean>(false);
   }
   ArrayInit ret(arr_input.size(), ArrayInit::Map{});
+  int64_t nextKI = 0; // for appends
   for (ArrayIter it(arr_input); it; ++it) {
     Array sub;
     if (UNLIKELY(RuntimeOption::PHP7_Builtins && it.second().isObject())) {
@@ -161,16 +219,23 @@ TypedValue HHVM_FUNCTION(array_column,
       }
     }
     if (idx.isNull()) {
-      ret.append(elem);
+      ret.set(nextKI++, elem);
     } else {
       auto const idx_key = sub.convertKey<IntishCast::Cast>(idx);
       if (!sub.exists(idx_key)) {
-        ret.append(elem);
-      } else if (sub[idx_key].isObject()) {
-        ret.setUnknownKey<IntishCast::Cast>(sub[idx_key].toString(),
-                                                    elem);
+        // nextKI may wrap around due to overflow if we intish-cast a string
+        // key to std::numeric_limits<int64_t>::max() in the case below...
+        if (nextKI >= 0) ret.set(nextKI++, elem);
       } else {
-        ret.setUnknownKey<IntishCast::Cast>(sub[idx_key], elem);
+        auto const sub_idx = [&]{
+          auto const result = sub[idx_key];
+          return result.isObject() ? result.toString() : result;
+        }();
+        auto const converted = sub.convertKey<IntishCast::Cast>(sub_idx);
+        if (tvIsInt(converted) && converted.val().num >= nextKI) {
+          nextKI = int64_t(size_t(converted.val().num) + 1);
+        }
+        ret.setUnknownKey(tvAsCVarRef(converted), elem);
       }
     }
   }
@@ -283,8 +348,9 @@ TypedValue HHVM_FUNCTION(array_fill,
   } else {
     DArrayInit ret(num, CheckAllocation{});
     ret.set(start_index, value);
-    for (int i = num - 1; i > 0; i--) {
-      ret.append(value);
+    auto const base = std::max(start_index + 1, 0);
+    for (auto i = 1; i < num; i++) {
+      ret.set(base + i - 1, value);
     }
     return make_array_like_tv(ret.create());
   }
@@ -403,7 +469,15 @@ TypedValue HHVM_FUNCTION(array_keys,
   return make_array_like_tv(ai.create());
 }
 
-static void php_array_merge_recursive(Array &arr1, const Array& arr2) {
+namespace {
+
+void php_array_merge(Array& arr1, const Array& arr2) {
+  assertx(arr1->hasVanillaMixedLayout());
+  arr1.reset(!arr2.empty() ? MixedArray::Merge(arr1.get(), arr2.get())
+                           : MixedArray::Renumber(arr1.get()));
+}
+
+void php_array_merge_recursive(Array& arr1, const Array& arr2) {
   for (ArrayIter iter(arr2); iter; ++iter) {
     Variant key(iter.first());
     if (key.isNumeric()) {
@@ -416,16 +490,16 @@ static void php_array_merge_recursive(Array &arr1, const Array& arr2) {
       auto const lval = arr1.lval(arrkey, AccessFlags::Key);
       auto subarr1 = tvCastToArrayLike<IntishCast::Cast>(lval.tv());
       subarr1 = subarr1.toDArray();
-      php_array_merge_recursive(
-        subarr1,
-        tvCastToArrayLike<IntishCast::Cast>(iter.secondVal())
-      );
+      auto subarr2 = tvCastToArrayLike<IntishCast::Cast>(iter.secondVal());
+      php_array_merge_recursive(subarr1, subarr2);
       tvUnset(lval); // avoid contamination of the value that was strongly bound
       tvSet(make_array_like_tv(subarr1.get()), lval);
     } else {
       arr1.set(key, iter.secondVal(), true);
     }
   }
+}
+
 }
 
 TypedValue HHVM_FUNCTION(array_map,
@@ -517,7 +591,7 @@ TypedValue HHVM_FUNCTION(array_merge,
                          const Array& arrays /* = null array */) {
   getCheckedContainer(array1);
   Array ret = Array::CreateDArray();
-  ret.merge(arr_array1);
+  php_array_merge(ret, arr_array1);
 
   bool success = true;
   IterateV(
@@ -529,7 +603,7 @@ TypedValue HHVM_FUNCTION(array_merge,
         return true;
       }
 
-      ret.merge(asCArrRef(&v));
+      php_array_merge(ret, asCArrRef(&v));
       return false;
     }
   );
@@ -866,7 +940,15 @@ TypedValue HHVM_FUNCTION(array_shift,
     return make_tv<KindOfNull>();
   }
   if (isArrayLikeType(cell_array->m_type)) {
-    return tvReturn(array.asArrRef().dequeue());
+    auto& arr_array = array.asArrRef();
+    assertx(!arr_array.empty());
+    auto newArray  = makeReserveLike(cell_array->m_type, arr_array.size() - 1);
+    ArrayIter it(arr_array.detach(), ArrayIter::noInc);
+    auto const result = it.second();
+    ++it;
+    appendKeysAndVals(newArray, it);
+    arr_array = std::move(newArray);
+    return tvReturn(result);
   }
   assertx(cell_array->m_type == KindOfObject);
   return tvReturn(collections::shift(cell_array->m_data.pobj));
@@ -954,6 +1036,7 @@ TypedValue HHVM_FUNCTION(array_slice,
   // preserved even when preserve_keys is false
   bool is_php_array = isArrayType(cell_input.m_type);
   Array ret = Array::attach(MixedArray::MakeReserveDArray(len));
+  auto nextKI = 0; // for appends
   for (; pos < (offset + len) && iter; ++pos, ++iter) {
     Variant key(iter.first());
     if (!is_php_array && key.isString()) {
@@ -961,7 +1044,7 @@ TypedValue HHVM_FUNCTION(array_slice,
       if (key.asCStrRef().get()->isStrictlyInteger(n)) key = n;
     }
     if (!preserve_keys && key.isInteger()) {
-      ret.append(iter.secondValPlus());
+      ret.set(nextKI++, iter.secondValPlus());
     } else {
       ret.set(key, iter.secondValPlus(), true);
     }
@@ -1091,51 +1174,16 @@ TypedValue HHVM_FUNCTION(array_unshift,
   }
   auto const dt = type(cell_array);
   if (isArrayLikeType(dt)) {
-    Array& arr_array = array.asArrRef();
-    if (cell_array->m_data.parr->isVectorData()) {
-      if (!args.empty()) {
-        auto pos_limit = args->iter_end();
-        for (ssize_t pos = args->iter_last(); pos != pos_limit;
-             pos = args->iter_rewind(pos)) {
-          arr_array.prepend(args->nvGetVal(pos));
-        }
-      }
-      arr_array.prepend(var);
-    } else {
-      // Non-vector-like arrays. PackedArrays and vecs are handled above.
-      auto const ad = [&]{
-        auto const size = val(cell_array).parr->size();
-        if (isDictType(dt))   return MixedArray::MakeReserveDict(size);
-        if (isKeysetType(dt)) return SetArray::MakeReserveSet(size);
-        assertx(isPHPArrayType(dt));
-        return MixedArray::MakeReserveDArray(size);
-      }();
-      auto newArray = Array::attach(ad);
-      newArray.append(var);
-      if (!args.empty()) {
-        auto pos_limit = args->iter_end();
-        for (ssize_t pos = args->iter_begin(); pos != pos_limit;
-             pos = args->iter_advance(pos)) {
-          newArray.append(args->nvGetVal(pos));
-        }
-      }
-      if (isKeysetType(dt)) {
-        for (ArrayIter iter(array.toArray()); iter; ++iter) {
-          Variant key(iter.first());
-          newArray.append(key);
-        }
-      } else {
-        for (ArrayIter iter(array.toArray()); iter; ++iter) {
-          Variant key(iter.first());
-          if (key.isInteger()) {
-            newArray.append(iter.secondVal());
-          } else {
-            newArray.set(key, iter.secondVal(), true);
-          }
-        }
-      }
-      arr_array = std::move(newArray);
+    auto const size = val(cell_array).parr->size() + args.size() + 1;
+    auto newArray = makeReserveLike(dt, size);
+    newArray.append(var);
+    if (!args.empty()) {
+      IterateVNoInc(args.get(), [&](auto val) { newArray.append(val); });
     }
+    Array& arr_array = array.asArrRef();
+    ArrayIter it(arr_array.detach(), ArrayIter::noInc);
+    appendKeysAndVals(newArray, it);
+    arr_array = std::move(newArray);
     return make_tv<KindOfInt64>(arr_array.size());
   }
   // Handle collections
@@ -1889,8 +1937,7 @@ TypedValue HHVM_FUNCTION(array_udiff,
   Variant func = data_compare_func;
   Array extra = args;
   if (!extra.empty()) {
-    extra.prepend(func);
-    func = extra.pop();
+    func = cycleVariadics(extra, func);
   }
   diff_intersect_body(diff, extra, false COMMA true COMMA NULL COMMA NULL
                       COMMA cmp_func COMMA &func);
@@ -1917,8 +1964,7 @@ TypedValue HHVM_FUNCTION(array_diff_uassoc,
   Variant func = key_compare_func;
   Array extra = args;
   if (!extra.empty()) {
-    extra.prepend(func);
-    func = extra.pop();
+    func = cycleVariadics(extra, func);
   }
   diff_intersect_body(diff, extra, true COMMA true COMMA cmp_func COMMA &func);
 }
@@ -1934,8 +1980,7 @@ TypedValue HHVM_FUNCTION(array_udiff_assoc,
   Variant func = data_compare_func;
   Array extra = args;
   if (!extra.empty()) {
-    extra.prepend(func);
-    func = extra.pop();
+    func = cycleVariadics(extra, func);
   }
   diff_intersect_body(diff, extra, true COMMA true COMMA NULL COMMA NULL
                       COMMA cmp_func COMMA &func);
@@ -1954,10 +1999,8 @@ TypedValue HHVM_FUNCTION(array_udiff_uassoc,
   Variant key_func = key_compare_func;
   Array extra = args;
   if (!extra.empty()) {
-    extra.prepend(key_func);
-    extra.prepend(data_func);
-    key_func = extra.pop();
-    data_func = extra.pop();
+    key_func = cycleVariadics(extra, key_func);
+    data_func = cycleVariadics(extra, data_func);
   }
   diff_intersect_body(diff, extra, true
                       COMMA true COMMA cmp_func COMMA &key_func
@@ -1975,8 +2018,7 @@ TypedValue HHVM_FUNCTION(array_diff_ukey,
   Variant func = key_compare_func;
   Array extra = args;
   if (!extra.empty()) {
-    extra.prepend(func);
-    func = extra.pop();
+    func = cycleVariadics(extra, func);
   }
   diff_intersect_body(diff, extra, true COMMA false COMMA cmp_func COMMA &func);
 }
@@ -2429,8 +2471,7 @@ TypedValue HHVM_FUNCTION(array_uintersect,
   Variant func = data_compare_func;
   Array extra = args;
   if (!extra.empty()) {
-    extra.prepend(func);
-    func = extra.pop();
+    func = cycleVariadics(extra, func);
   }
   diff_intersect_body(intersect, extra, false COMMA true COMMA NULL COMMA NULL
                       COMMA cmp_func COMMA &func);
@@ -2457,8 +2498,7 @@ TypedValue HHVM_FUNCTION(array_intersect_uassoc,
   Variant func = key_compare_func;
   Array extra = args;
   if (!extra.empty()) {
-    extra.prepend(func);
-    func = extra.pop();
+    func = cycleVariadics(extra, func);
   }
   diff_intersect_body(intersect, extra, true COMMA true
                       COMMA cmp_func COMMA &func);
@@ -2475,8 +2515,7 @@ TypedValue HHVM_FUNCTION(array_uintersect_assoc,
   Variant func = data_compare_func;
   Array extra = args;
   if (!extra.empty()) {
-    extra.prepend(func);
-    func = extra.pop();
+    func = cycleVariadics(extra, func);
   }
   diff_intersect_body(intersect, extra, true COMMA true COMMA NULL COMMA NULL
                       COMMA cmp_func COMMA &func);
@@ -2495,10 +2534,8 @@ TypedValue HHVM_FUNCTION(array_uintersect_uassoc,
   Variant key_func = key_compare_func;
   Array extra = args;
   if (!extra.empty()) {
-    extra.prepend(key_func);
-    extra.prepend(data_func);
-    key_func = extra.pop();
-    data_func = extra.pop();
+    key_func = cycleVariadics(extra, key_func);
+    data_func = cycleVariadics(extra, data_func);
   }
   diff_intersect_body(intersect, extra, true COMMA true COMMA cmp_func
                       COMMA &key_func COMMA cmp_func COMMA &data_func);
@@ -2515,8 +2552,7 @@ TypedValue HHVM_FUNCTION(array_intersect_ukey,
   Variant func = key_compare_func;
   Array extra = args;
   if (!extra.empty()) {
-    extra.prepend(func);
-    func = extra.pop();
+    func = cycleVariadics(extra, func);
   }
   diff_intersect_body(intersect, extra, true COMMA false
                       COMMA cmp_func COMMA &func);

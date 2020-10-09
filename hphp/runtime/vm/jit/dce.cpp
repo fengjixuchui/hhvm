@@ -241,7 +241,6 @@ bool canDCE(IRInstruction* inst) {
   case ChrInt:
   case CheckRange:
   case LdMBase:
-  case MethodExists:
   case LdTVAux:
   case DictGetQuiet:
   case DictGetK:
@@ -662,7 +661,6 @@ bool canDCE(IRInstruction* inst) {
   case FinishMemberOp:
   case BeginInlining:
   case EndInlining:
-  case SyncReturnBC:
   case SetOpTV:
   case OutlineSetOp:
   case ConjureUse:
@@ -702,6 +700,8 @@ bool canDCE(IRInstruction* inst) {
   case SameArrLike:
   case NSameArrLike:
     return !inst->mayRaiseErrorWithSources();
+  case MethodExists:
+    return !RO::EvalRaiseOnCaseInsensitiveLookup;
   }
   not_reached();
 }

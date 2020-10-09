@@ -17,25 +17,45 @@
  *
  */
 use parser_core_types::{
-  lexable_token::LexableToken,
+  lexable_token::{LexableToken, TokenBuilder},
   syntax::{
     Syntax,
     SyntaxValueType,
   },
+  token_kind::TokenKind
 };
 use crate::*;
 use smart_constructors::SmartConstructors;
 use syntax_smart_constructors::SyntaxSmartConstructors;
 
 impl<'src, Token, Value>
-SmartConstructors<State<'src, Syntax<Token, Value>>>
+SmartConstructors
     for DeclModeSmartConstructors<'src, Syntax<Token, Value>, Token, Value>
 where
-    Token: LexableToken,
+    Token: LexableToken + TokenBuilder<State<'src, Syntax<Token, Value>>, <Token as LexableToken>::Trivia>,
     Value: SyntaxValueType<Token>,
 {
+    type State = State<'src, Syntax<Token, Value>>;
     type Token = Token;
     type R = Syntax<Token, Value>;
+
+    fn create_token(
+        &mut self,
+        kind: TokenKind,
+        offset: usize,
+        width: usize,
+        leading: <Self::Token as LexableToken>::Trivia,
+        trailing: <Self::Token as LexableToken>::Trivia,
+    ) -> Self::Token {
+        Token::make(
+            self.state_mut(),
+            kind,
+            offset,
+            width,
+            leading,
+            trailing,
+        )
+    }
 
     fn state_mut(&mut self) -> &mut State<'src, Syntax<Token, Value>> {
         &mut self.state
@@ -157,8 +177,12 @@ where
         <Self as SyntaxSmartConstructors<Self::R, State<Self::R>>>::make_function_declaration(self, arg0, arg1, arg2)
     }
 
-    fn make_function_declaration_header(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R, arg10: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<Self::R, State<Self::R>>>::make_function_declaration_header(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10)
+    fn make_function_declaration_header(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R, arg10: Self::R, arg11: Self::R) -> Self::R {
+        <Self as SyntaxSmartConstructors<Self::R, State<Self::R>>>::make_function_declaration_header(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11)
+    }
+
+    fn make_capability(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
+        <Self as SyntaxSmartConstructors<Self::R, State<Self::R>>>::make_capability(self, arg0, arg1, arg2)
     }
 
     fn make_capability_provisional(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
@@ -393,8 +417,8 @@ where
         <Self as SyntaxSmartConstructors<Self::R, State<Self::R>>>::make_lambda_expression(self, arg0, arg1, arg2, arg3, arg4)
     }
 
-    fn make_lambda_signature(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<Self::R, State<Self::R>>>::make_lambda_signature(self, arg0, arg1, arg2, arg3, arg4)
+    fn make_lambda_signature(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
+        <Self as SyntaxSmartConstructors<Self::R, State<Self::R>>>::make_lambda_signature(self, arg0, arg1, arg2, arg3, arg4, arg5)
     }
 
     fn make_cast_expression(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
@@ -617,10 +641,6 @@ where
         <Self as SyntaxSmartConstructors<Self::R, State<Self::R>>>::make_varray_type_specifier(self, arg0, arg1, arg2, arg3, arg4)
     }
 
-    fn make_vector_array_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<Self::R, State<Self::R>>>::make_vector_array_type_specifier(self, arg0, arg1, arg2, arg3)
-    }
-
     fn make_type_parameter(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
         <Self as SyntaxSmartConstructors<Self::R, State<Self::R>>>::make_type_parameter(self, arg0, arg1, arg2, arg3, arg4, arg5)
     }
@@ -633,16 +653,12 @@ where
         <Self as SyntaxSmartConstructors<Self::R, State<Self::R>>>::make_darray_type_specifier(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6)
     }
 
-    fn make_map_array_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<Self::R, State<Self::R>>>::make_map_array_type_specifier(self, arg0, arg1, arg2, arg3, arg4, arg5)
-    }
-
     fn make_dictionary_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
         <Self as SyntaxSmartConstructors<Self::R, State<Self::R>>>::make_dictionary_type_specifier(self, arg0, arg1, arg2, arg3)
     }
 
-    fn make_closure_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<Self::R, State<Self::R>>>::make_closure_type_specifier(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7)
+    fn make_closure_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R) -> Self::R {
+        <Self as SyntaxSmartConstructors<Self::R, State<Self::R>>>::make_closure_type_specifier(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8)
     }
 
     fn make_closure_parameter_type_specifier(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {

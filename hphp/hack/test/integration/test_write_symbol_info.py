@@ -69,6 +69,13 @@ max_workers = 2
 """
             )
 
+    def tearDown(self) -> None:
+        try:
+            # driver.tearDown() can throw if the env is not as expected
+            super().tearDown()
+        except Exception as e:
+            print("Error during test teardown : {}".format(str(e)))
+
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
@@ -125,7 +132,7 @@ max_workers = 2
             "hack.ClassDefinition.{}".format(ver): ClassDefinition,
             "hack.DeclarationComment.{}".format(ver): DeclarationComment,
             "hack.DeclarationLocation.{}".format(ver): DeclarationLocation,
-            "hack.DeclarationSpan.{}".format(ver): DeclarationLocation,
+            "hack.DeclarationSpan.{}".format(ver): DeclarationSpan,
             "hack.EnumDeclaration.{}".format(ver): EnumDeclaration,
             "hack.EnumDefinition.{}".format(ver): EnumDefinition,
             "hack.Enumerator.{}".format(ver): Enumerator,
@@ -166,7 +173,14 @@ max_workers = 2
             changed_files = []
         if args is None:
             args = []
-        cmd = [hh_server, "--max-procs", "2", self.test_driver.repo_dir] + args
+        cmd = [
+            hh_server,
+            "--max-procs",
+            "2",
+            "--config",
+            "symbolindex_search_provider=NoIndex",
+            self.test_driver.repo_dir,
+        ] + args
         self.test_driver.proc_call(cmd)
 
     def test_json_format(self) -> None:

@@ -332,49 +332,9 @@ let check_pu_in_locl_ty env lty =
   in
   check_pu_visitor#on_type env lty
 
-let register_capabilities env cap unsafe_cap default_pos =
-  let cap_hint_opt = hint_of_type_hint cap in
-  let (env, cap_ty) =
-    Option.value_map
-      cap_hint_opt
-      ~default:(env, MakeType.default_capability (Reason.Rhint default_pos))
-      ~f:(Phase.localize_hint_with_self env)
-  in
-  let cap_pos = Typing_defs.get_pos cap_ty in
-  (* Represents the capability for local operations inside a function body, excluding calls. *)
-  let env =
-    Env.set_local
-      env
-      (Local_id.make_unscoped SN.Coeffects.local_capability)
-      cap_ty
-      cap_pos
-  in
-  let unsafe_cap_hint_opt = hint_of_type_hint unsafe_cap in
-  let (env, unsafe_cap_ty) =
-    Option.value_map
-      unsafe_cap_hint_opt (* default is no unsafe capabilities *)
-      ~default:(env, MakeType.mixed (Reason.Rhint default_pos))
-      ~f:(Phase.localize_hint_with_self env)
-  in
-  let env =
-    let (env, ty) =
-      Typing_intersection.intersect
-        env
-        ~r:(Reason.Rhint cap_pos)
-        cap_ty
-        unsafe_cap_ty
-    in
-    (* The implicit argument for ft_implicit_params.capability *)
-    Env.set_local
-      env
-      (Local_id.make_unscoped SN.Coeffects.capability)
-      ty
-      cap_pos
-  in
-  (env, (cap_ty, cap_hint_opt), (unsafe_cap_ty, unsafe_cap_hint_opt))
-
 let rec fun_def ctx f :
     (Tast.fun_def * Typing_inference_env.t_global_with_pos) option =
+  Counters.count_typecheck @@ fun () ->
   Errors.run_with_span f.f_span @@ fun () ->
   let env = EnvFromDef.fun_env ctx f in
   with_timeout env f.f_name ~do_:(fun env ->
@@ -469,7 +429,13 @@ let rec fun_def ctx f :
           f.f_user_attributes
       in
       let (env, f_cap, f_unsafe_cap) =
-        register_capabilities env f.f_cap f.f_unsafe_cap (fst f.f_name)
+        Typing.type_capability env f.f_cap f.f_unsafe_cap (fst f.f_name)
+      in
+      let env =
+        Typing_coeffects.register_capabilities
+          env
+          (fst f_cap)
+          (fst f_unsafe_cap)
       in
       let (env, tb) =
         Typing.fun_ ~disable env return pos f.f_body f.f_fun_kind
@@ -651,7 +617,13 @@ and method_def env cls m =
           m.m_user_attributes
       in
       let (env, m_cap, m_unsafe_cap) =
-        register_capabilities env m.m_cap m.m_unsafe_cap (fst m.m_name)
+        Typing.type_capability env m.m_cap m.m_unsafe_cap (fst m.m_name)
+      in
+      let env =
+        Typing_coeffects.register_capabilities
+          env
+          (fst m_cap)
+          (fst m_unsafe_cap)
       in
       let (env, tb) =
         Typing.fun_
@@ -714,6 +686,7 @@ and method_def env cls m =
       let _env = Env.log_env_change "method_def" initial_env env in
       (method_def, (pos, global_inference_env)))
 
+(** Checks that extending this parent is legal - e.g. it is not final and not const. *)
 and check_parent env class_def class_type =
   match Env.get_parent_class env with
   | Some parent_type ->
@@ -783,6 +756,17 @@ and check_implements_or_extends_unique impl =
         Errors.duplicate_interface pos name pos_list;
       check_implements_or_extends_unique rest
     | _ -> check_implements_or_extends_unique rest)
+
+and check_cstr_dep deps =
+  List.iter deps (fun dep ->
+      match deref dep with
+      | (_, Tapply _) -> ()
+      | (r, Tgeneric _) ->
+        let p = Typing_reason.to_pos r in
+        Errors.expected_class ~suffix:" or interface but got a generic" p
+      | (r, _) ->
+        let p = Typing_reason.to_pos r in
+        Errors.expected_class ~suffix:" or interface" p)
 
 and check_const_trait_members pos env use_list =
   let (_, trait, _) = Decl_utils.unwrap_class_hint use_list in
@@ -886,12 +870,12 @@ let class_type_param env ct =
   (env, tparam_list)
 
 let rec class_def ctx c =
+  Counters.count_typecheck @@ fun () ->
   Errors.run_with_span c.c_span @@ fun () ->
   let env = EnvFromDef.class_env ctx c in
   let tc = Env.get_class env (snd c.c_name) in
   let env = Env.set_env_pessimize env in
-  Typing_helpers.add_decl_errors
-    Option.(map tc (fun tc -> value_exn (Cls.decl_errors tc)));
+  Typing_helpers.add_decl_errors (Option.bind tc Cls.decl_errors);
   Typing_check_decls.class_ env c;
   NastInitCheck.class_ env c;
   match tc with
@@ -965,11 +949,33 @@ and class_def_ env c tc =
   );
   check_enum_includes env c;
   let (pc, _) = c.c_name in
+  let (req_extends, req_implements) = split_reqs c in
   let extends = List.map c.c_extends (Decl_hint.hint env.decl_env) in
   let implements = List.map c.c_implements (Decl_hint.hint env.decl_env) in
   let uses = List.map c.c_uses (Decl_hint.hint env.decl_env) in
+  let req_extends = List.map req_extends (Decl_hint.hint env.decl_env) in
+  let req_implements = List.map req_implements (Decl_hint.hint env.decl_env) in
+  let additional_parents =
+    (* In an abstract class or a trait, we assume the interfaces
+       will be implemented in the future, so we take them as
+       part of the class (as requested by dependency injection implementers) *)
+    match c.c_kind with
+    | Ast_defs.Cabstract -> implements
+    | Ast_defs.Ctrait -> implements @ req_implements
+    | _ -> []
+  in
   check_implements_or_extends_unique implements;
   check_implements_or_extends_unique extends;
+  check_cstr_dep extends;
+  check_cstr_dep uses;
+  check_cstr_dep req_extends;
+  check_cstr_dep additional_parents;
+  begin
+    match c.c_enum with
+    | Some e ->
+      check_cstr_dep (List.map e.e_includes (Decl_hint.hint env.decl_env))
+    | _ -> ()
+  end;
   let impl = extends @ implements @ uses in
   let env =
     Phase.localize_and_add_ast_generic_parameters_and_where_constraints
@@ -1135,6 +1141,7 @@ and class_def_ env c tc =
     @ static_vars_global_inference_envs
     @ vars_global_inference_envs )
 
+(** Checks that a dynamic element is also dynamic in the parents. *)
 and check_dynamic_class_element get_static_elt element_name dyn_pos ~elt_type =
   (* The non-static properties that we get passed do not start with '$', but the
      static properties we want to look up do, so add it. *)
@@ -1153,6 +1160,7 @@ and check_dynamic_class_element get_static_elt element_name dyn_pos ~elt_type =
       element_name
       ~elt_type
 
+(** Checks that a static element is also static in the parents. *)
 and check_static_class_element get_dyn_elt element_name static_pos ~elt_type =
   (* The static properties that we get passed in start with '$', but the
      non-static properties we're matching against don't, so we need to detect
@@ -1168,6 +1176,8 @@ and check_static_class_element get_dyn_elt element_name static_pos ~elt_type =
       element_name
       ~elt_type
 
+(** Error if there are abstract methods that this class is supposed to provide
+    implementation for. *)
 and check_extend_abstract_meth ~is_final p seq =
   List.iter seq (fun (x, ce) ->
       match ce.ce_type with
@@ -1542,7 +1552,7 @@ and class_implements_type env c1 ctype2 =
   let ctype1 = mk (r, Tapply (c1.c_name, params)) in
   Typing_extends.check_implements env ctype2 ctype1
 
-(* Type-check a property declaration, with optional initializer *)
+(** Type-check a property declaration, with optional initializer *)
 and class_var_def ~is_static cls env cv =
   (* First pick up and localize the hint if it exists *)
   let decl_cty =
@@ -1636,6 +1646,7 @@ and class_var_def ~is_static cls env cv =
       (cv.cv_span, global_inference_env) ) )
 
 let gconst_def ctx cst =
+  Counters.count_typecheck @@ fun () ->
   Errors.run_with_span cst.cst_span @@ fun () ->
   let env = EnvFromDef.gconst_env ctx cst in
   let env = Env.set_env_pessimize env in
@@ -1754,6 +1765,7 @@ let check_record_inheritance_cycle env ((rd_pos, rd_name) : Aast.sid) : unit =
   worker rd_name [rd_name] (SSet.singleton rd_name)
 
 let record_def_def ctx rd =
+  Counters.count_typecheck @@ fun () ->
   let env = EnvFromDef.record_def_env ctx rd in
   (match rd.rd_extends with
   | Some parent -> record_def_parent env rd parent

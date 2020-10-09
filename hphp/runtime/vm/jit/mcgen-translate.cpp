@@ -509,8 +509,8 @@ translate(TransArgs args, FPInvOffset spOff,
     auto const transContext =
       TransContext{env.transID == kInvalidTransID ? TransIDSet{}
                                                   : TransIDSet{env.transID},
-                   args.kind, args.flags, args.sk,
-                   env.initSpOffset, args.optIndex, args.region.get()};
+                   args.optIndex, args.kind, args.flags, args.sk,
+                   args.region.get()};
 
     env.unit = irGenRegion(*args.region, transContext, env.pconds);
     auto const unitAnnotations = env.unit->annotationData->getAllAnnotations();
@@ -532,7 +532,7 @@ TCA retranslate(TransArgs args, const RegionContext& ctx) {
   if (RID().isJittingDisabled()) {
     SKTRACE(2, args.sk, "punting because jitting code was disabled\n");
     return nullptr;
-  } else if (ctx.liveBespoke) {
+  } else if (LIKELY(!RO::EvalAllowBespokesInLiveTypes) && ctx.liveBespoke) {
     assertx(args.kind != TransKind::Profile);
     SKTRACE(2, args.sk, "punting because region includes a live bespoke\n");
     return nullptr;

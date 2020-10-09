@@ -13,10 +13,9 @@ namespace {
  *   FALSE if input is not an array.
  *
  */
-<<__Native, __IsFoldable, __Pure, __AtMostRxAsArgs>>
+<<__Native, __IsFoldable, __Pure>>
 function array_change_key_case(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class), __MaybeMutable>>mixed
-    $input,
+  <<__MaybeMutable>> mixed $input,
   int $case_ = CASE_LOWER,
 ): mixed;
 
@@ -33,10 +32,9 @@ function array_change_key_case(
  *   starting with zero, with each dimension containing size elements.
  *
  */
-<<__Native, __IsFoldable, __Pure, __AtMostRxAsArgs>>
+<<__Native, __IsFoldable, __Pure>>
 function array_chunk(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class), __MaybeMutable>>mixed
-    $input,
+  <<__MaybeMutable>> mixed $input,
   int $size,
   bool $preserve_keys = false,
 ): mixed;
@@ -52,9 +50,9 @@ function array_chunk(
  * @return mixed - Returns the array column, or FALSE on failure
  *
  */
-<<__Native, __IsFoldable, __Pure, __AtMostRxAsArgs>>
+<<__Native, __IsFoldable, __Pure>>
 function array_column(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class), __MaybeMutable>>mixed $arr,
+  <<__MaybeMutable>> mixed $arr,
   mixed $val_key,
   mixed $idx_key = null,
 ): mixed;
@@ -71,25 +69,24 @@ function array_column(
  *   for each array isn't equal or if the arrays are empty.
  *
  */
-<<__Native, __IsFoldable, __Pure, __AtMostRxAsArgs>>
+<<__Native, __IsFoldable, __Pure>>
 function array_combine(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class), __MaybeMutable>>mixed $keys,
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class), __MaybeMutable>>mixed
-    $values,
+  <<__MaybeMutable>> mixed $keys,
+  <<__MaybeMutable>> mixed $values,
 ): mixed;
 
 /**
  * array_count_values() returns an array using the values of the input array
  *   as keys and their frequency in input as values.
  *
- * @param arraylike $input - The array of values to count
+ * @param AnyArray $input - The array of values to count
  *
  * @return mixed - Returns an associative array of values from input as keys
  *   and their count as value.
  *
  */
 <<__Native, __IsFoldable, __Pure>>
-function array_count_values(arraylike $input): mixed;
+function array_count_values(AnyArray $input): mixed;
 
 /**
  * Fills an array with the value of the value parameter, using the values of
@@ -102,9 +99,9 @@ function array_count_values(arraylike $input): mixed;
  * @return mixed - Returns the filled array
  *
  */
-<<__Native, __IsFoldable, __Pure, __AtMostRxAsArgs>>
+<<__Native, __IsFoldable, __Pure>>
 function array_fill_keys(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class), __MaybeMutable>>mixed $keys,
+  <<__MaybeMutable>> mixed $keys,
   mixed $value,
 ): mixed;
 
@@ -136,10 +133,9 @@ function array_fill(int $start_index, int $num, mixed $value): mixed;
  * @return mixed - Returns the flipped array on success and NULL on failure.
  *
  */
-<<__Native, __IsFoldable, __Pure, __AtMostRxAsArgs>>
+<<__Native, __IsFoldable, __Pure>>
 function array_flip(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class), __MaybeMutable>>mixed
-    $trans,
+  <<__MaybeMutable>> mixed $trans,
 ): mixed;
 
 /**
@@ -152,11 +148,10 @@ function array_flip(
  * @return bool - Returns TRUE on success or FALSE on failure.
  *
  */
-<<__Native, __IsFoldable, __Pure, __AtMostRxAsArgs>>
+<<__Native, __IsFoldable, __Pure>>
 function array_key_exists(
   mixed $key,
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class), __MaybeMutable>>mixed
-    $search,
+  <<__MaybeMutable>> mixed $search,
 ): bool;
 
 /**
@@ -170,11 +165,10 @@ function array_key_exists(
  * @return bool - Returns TRUE on success or FALSE on failure.
  *
  */
-<<__Native, __IsFoldable, __Pure, __AtMostRxAsArgs>>
+<<__Native, __IsFoldable, __Pure>>
 function key_exists(
   mixed $key,
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class), __MaybeMutable>>mixed
-    $search,
+  <<__MaybeMutable>> mixed $search,
 ): bool;
 
 /**
@@ -191,10 +185,9 @@ function key_exists(
  * @return mixed - Returns an array of all the keys in input.
  *
  */
-<<__Native, __IsFoldable, __Pure, __AtMostRxAsArgs>>
+<<__Native, __IsFoldable, __Pure>>
 function array_keys(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class), __MaybeMutable>>mixed
-    $input,
+  <<__MaybeMutable>> mixed $input,
 ): mixed;
 
 /**
@@ -214,7 +207,7 @@ function array_keys(
  *   together.
  *
  */
-<<__Native, __IsFoldable>>
+<<__Native, __IsFoldable, __Pure>>
 function array_merge_recursive(mixed $array1, ...$arrays): mixed;
 
 /**
@@ -232,7 +225,7 @@ function array_merge_recursive(mixed $array1, ...$arrays): mixed;
  * @return mixed - Returns the resulting array.
  *
  */
-<<__Native, __IsFoldable>>
+<<__Native, __IsFoldable, __Pure>>
 function array_merge(mixed $array1, ...$arrays): mixed;
 
 /**
@@ -255,7 +248,7 @@ function array_merge(mixed $array1, ...$arrays): mixed;
  * @return mixed - Returns an array, or NULL if an error occurs.
  *
  */
-<<__Native, __IsFoldable>>
+<<__Native, __IsFoldable, __Pure>>
 function array_replace_recursive(
   mixed $array1,
   mixed $array2 = null,
@@ -279,7 +272,7 @@ function array_replace_recursive(
  * @return mixed - Returns an array, or NULL if an error occurs.
  *
  */
-<<__Native, __IsFoldable>>
+<<__Native, __IsFoldable, __Pure>>
 function array_replace(mixed $array1, mixed $array2 = null, ...$argv): mixed;
 
 /**
@@ -300,10 +293,9 @@ function array_replace(mixed $array1, mixed $array2 = null, ...$argv): mixed;
  *   padding takes place.
  *
  */
-<<__Native, __IsFoldable, __Pure, __AtMostRxAsArgs>>
+<<__Native, __IsFoldable, __Pure>>
 function array_pad(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class), __MaybeMutable>>mixed
-    $input,
+  <<__MaybeMutable>> mixed $input,
   int $pad_size,
   mixed $pad_value,
 ): mixed;
@@ -320,8 +312,10 @@ function array_pad(
  *   not an array), NULL will be returned.
  *
  */
-<<__Native>>
-function array_pop(inout mixed $array): mixed;
+<<__Native, __Pure, __AtMostRxAsArgs>>
+function array_pop(
+  <<__OnlyRxIfImpl(AnyArray::class)>> inout mixed $array
+): mixed;
 
 /**
  * array_product() returns the product of values in an array.
@@ -331,10 +325,9 @@ function array_pop(inout mixed $array): mixed;
  * @return num - Returns the product as an integer or float.
  *
  */
-<<__Native, __IsFoldable, __Pure, __AtMostRxAsArgs>>
+<<__Native, __IsFoldable, __Pure>>
 function array_product(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class), __MaybeMutable>>mixed
-    $input,
+  <<__MaybeMutable>> mixed $input,
 ): mixed;
 
 /**
@@ -353,8 +346,12 @@ function array_product(
  * @return mixed - Returns the new number of elements in the container.
  *
  */
-<<__Native>>
-function array_push(inout mixed $array, mixed $var, ...$args): mixed;
+<<__Native, __Pure, __AtMostRxAsArgs>>
+function array_push(
+  <<__OnlyRxIfImpl(AnyArray::class)>> inout mixed $array,
+  mixed $var,
+  ...$args
+): mixed;
 
 /**
  * Picks one ore more random entries out of an array, and returns the key (or
@@ -401,10 +398,9 @@ function array_rand(mixed $input, int $num_req = 1): mixed;
  * @return mixed - Returns the reversed array.
  *
  */
-<<__Native, __IsFoldable, __Pure, __AtMostRxAsArgs>>
+<<__Native, __IsFoldable, __Pure>>
 function array_reverse(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class), __MaybeMutable>>mixed
-    $array,
+  <<__MaybeMutable>> mixed $array,
   bool $preserve_keys = false,
 ): mixed;
 
@@ -429,11 +425,10 @@ function array_reverse(
  *   value of this function.
  *
  */
-<<__Native, __IsFoldable, __Pure, __AtMostRxAsArgs>>
+<<__Native, __IsFoldable, __Pure>>
 function array_search(
   mixed $needle,
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class), __MaybeMutable>>mixed
-    $haystack,
+  <<__MaybeMutable>> mixed $haystack,
   bool $strict = false,
 ): mixed;
 
@@ -450,8 +445,10 @@ function array_search(
  *   not an array.
  *
  */
-<<__Native>>
-function array_shift(inout mixed $array): mixed;
+<<__Native, __Pure, __AtMostRxAsArgs>>
+function array_shift(
+  <<__OnlyRxIfImpl(AnyArray::class)>> inout mixed $array
+): mixed;
 
 /**
  * array_slice() returns the sequence of elements from the array array as
@@ -475,10 +472,9 @@ function array_shift(inout mixed $array): mixed;
  * @return mixed - Returns the slice.
  *
  */
-<<__Native, __IsFoldable, __Pure, __AtMostRxAsArgs>>
+<<__Native, __IsFoldable, __Pure>>
 function array_slice(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class), __MaybeMutable>>mixed
-    $array,
+  <<__MaybeMutable>> mixed $array,
   int $offset,
   mixed $length = null,
   bool $preserve_keys = false,
@@ -512,12 +508,12 @@ function array_slice(
  * @return mixed - Returns the array consisting of the extracted elements.
  *
  */
-<<__Native, __Pure, __AtMostRxAsArgs>>
+<<__Native, __Pure>>
 function array_splice(
-  <<__OnlyRxIfImpl(\HH\Rx\Traversable::class)>> inout mixed $input,
+  inout mixed $input,
   int $offset,
   mixed $length = null,
-  <<__OnlyRxIfImpl(\HH\Rx\Traversable::class)>> mixed $replacement = null,
+  mixed $replacement = null,
 ): mixed;
 
 /**
@@ -528,10 +524,9 @@ function array_splice(
  * @return num - Returns the sum of values as an integer or float.
  *
  */
-<<__Native, __IsFoldable, __Pure, __AtMostRxAsArgs>>
+<<__Native, __IsFoldable, __Pure>>
 function array_sum(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class), __MaybeMutable>>mixed
-    $input,
+  <<__MaybeMutable>> mixed $input,
 ): mixed;
 
 /**
@@ -555,10 +550,9 @@ function array_sum(
  * @return mixed - Returns the filtered array.
  *
  */
-<<__Native, __IsFoldable, __Pure, __AtMostRxAsArgs>>
+<<__Native, __IsFoldable, __Pure>>
 function array_unique(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class), __MaybeMutable>>mixed
-    $array,
+  <<__MaybeMutable>> mixed $array,
   int $sort_flags = 2,
 ): mixed;
 
@@ -574,8 +568,12 @@ function array_unique(
  * @return mixed - Returns the new number of elements in the array.
  *
  */
-<<__Native>>
-function array_unshift(inout mixed $array, mixed $var, ...$argv): mixed;
+<<__Native, __Pure, __AtMostRxAsArgs>>
+function array_unshift(
+  <<__OnlyRxIfImpl(AnyArray::class)>> inout mixed $array,
+  mixed $var,
+  ...$argv
+): mixed;
 
 /**
  * array_values() returns all the values from the input array and indexes
@@ -586,10 +584,9 @@ function array_unshift(inout mixed $array, mixed $var, ...$argv): mixed;
  * @return mixed - Returns an indexed array of values.
  *
  */
-<<__Native, __IsFoldable, __Pure, __AtMostRxAsArgs>>
+<<__Native, __IsFoldable, __Pure>>
 function array_values(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class), __MaybeMutable>>mixed
-    $input,
+  <<__MaybeMutable>> mixed $input,
 ): mixed;
 
 /**
@@ -627,9 +624,9 @@ function shuffle(inout mixed $array): bool;
  *
  * T35863429 for removing second arg
  */
-<<__Native, __IsFoldable, __Pure, __AtMostRxAsArgs>>
+<<__Native, __IsFoldable, __Pure>>
 function count(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class), __MaybeMutable>>mixed $var,
+  <<__MaybeMutable>> mixed $var,
   int $mode = COUNT_NORMAL,
 ): int;
 
@@ -637,9 +634,9 @@ function count(
  * @param mixed $var
  * @return int
  */
-<<__Native, __IsFoldable, __Pure, __AtMostRxAsArgs>>
+<<__Native, __IsFoldable, __Pure>>
 function sizeof(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class), __MaybeMutable>>mixed $var,
+  <<__MaybeMutable>> mixed $var,
 ): int;
 
 /**
@@ -657,11 +654,10 @@ function sizeof(
  *   otherwise.
  *
  */
-<<__Native, __IsFoldable, __Pure, __AtMostRxAsArgs>>
+<<__Native, __IsFoldable, __Pure>>
 function in_array(
   mixed $needle,
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class), __MaybeMutable>>mixed
-    $haystack,
+  <<__MaybeMutable>> mixed $haystack,
   bool $strict = false,
 ): bool;
 
@@ -691,7 +687,7 @@ function range(mixed $low, mixed $high, mixed $step = 1): mixed;
  *   that are not present in any of the other containers.
  *
  */
-<<__Native, __IsFoldable>>
+<<__Native, __IsFoldable, __Pure>>
 function array_diff(mixed $container1, mixed $container2, ...$argv): mixed;
 
 /**
@@ -711,11 +707,11 @@ function array_diff(mixed $container1, mixed $container2, ...$argv): mixed;
  *   are not present in any of the other arguments.
  *
  */
-<<__Native>>
+<<__Native, __Pure, __AtMostRxAsArgs>>
 function array_udiff(
   mixed $array1,
   mixed $array2,
-  mixed $data_compare_func,
+  <<__AtMostRxAsFunc>> mixed $data_compare_func,
   ...$argv
 ): mixed;
 
@@ -730,7 +726,7 @@ function array_udiff(
  *   are not present in any of the other arrays.
  *
  */
-<<__Native, __IsFoldable>>
+<<__Native, __IsFoldable, __Pure>>
 function array_diff_assoc(mixed $array1, mixed $array2, ...$argv): mixed;
 
 /**
@@ -747,11 +743,11 @@ function array_diff_assoc(mixed $array1, mixed $array2, ...$argv): mixed;
  *   that are not present in any of the other arrays.
  *
  */
-<<__Native>>
+<<__Native, __Pure, __AtMostRxAsArgs>>
 function array_diff_uassoc(
   mixed $array1,
   mixed $array2,
-  mixed $key_compare_func,
+  <<__AtMostRxAsFunc>> mixed $key_compare_func,
   ...$argv
 ): mixed;
 
@@ -779,11 +775,11 @@ function array_diff_uassoc(
  *   comparison.
  *
  */
-<<__Native>>
+<<__Native, __Pure, __AtMostRxAsArgs>>
 function array_udiff_assoc(
   mixed $array1,
   mixed $array2,
-  mixed $data_compare_func,
+  <<__AtMostRxAsFunc>> mixed $data_compare_func,
   ...$argv
 ): mixed;
 
@@ -811,12 +807,12 @@ function array_udiff_assoc(
  *   are not present in any of the other arguments.
  *
  */
-<<__Native>>
+<<__Native, __Pure, __AtMostRxAsArgs>>
 function array_udiff_uassoc(
   mixed $array1,
   mixed $array2,
-  mixed $data_compare_func,
-  mixed $key_compare_func,
+  <<__AtMostRxAsFunc>> mixed $data_compare_func,
+  <<__AtMostRxAsFunc>> mixed $key_compare_func,
   ...$argv
 ): mixed;
 
@@ -832,7 +828,7 @@ function array_udiff_uassoc(
  *   whose keys are not present in any of the other containers.
  *
  */
-<<__Native, __IsFoldable>>
+<<__Native, __IsFoldable, __Pure>>
 function array_diff_key(mixed $container1, mixed $container2, ...$argv): mixed;
 
 /**
@@ -850,11 +846,11 @@ function array_diff_key(mixed $container1, mixed $container2, ...$argv): mixed;
  *   that are not present in any of the other arrays.
  *
  */
-<<__Native>>
+<<__Native, __Pure, __AtMostRxAsArgs>>
 function array_diff_ukey(
   mixed $array1,
   mixed $array2,
-  mixed $key_compare_func,
+  <<__AtMostRxAsFunc>> mixed $key_compare_func,
   ...$argv
 ): mixed;
 
@@ -869,7 +865,7 @@ function array_diff_ukey(
  *   whose values exist in all of the parameters.
  *
  */
-<<__Native, __IsFoldable>>
+<<__Native, __IsFoldable, __Pure>>
 function array_intersect(mixed $container1, mixed $container2, ...$argv): mixed;
 
 /**
@@ -887,11 +883,11 @@ function array_intersect(mixed $container1, mixed $container2, ...$argv): mixed;
  *   are present in all the arguments.
  *
  */
-<<__Native>>
+<<__Native, __Pure, __AtMostRxAsArgs>>
 function array_uintersect(
   mixed $array1,
   mixed $array2,
-  mixed $data_compare_func,
+  <<__AtMostRxAsFunc>> mixed $data_compare_func,
   ...$argv
 ): mixed;
 
@@ -903,7 +899,7 @@ function array_uintersect(
  *   array1 that are present in all of the arguments.
  *
  */
-<<__Native, __IsFoldable>>
+<<__Native, __IsFoldable, __Pure>>
 function array_intersect_assoc(mixed $array1, mixed $array2, ...$argv): mixed;
 
 /**
@@ -923,11 +919,11 @@ function array_intersect_assoc(mixed $array1, mixed $array2, ...$argv): mixed;
  *   the arguments.
  *
  */
-<<__Native>>
+<<__Native, __Pure, __AtMostRxAsArgs>>
 function array_intersect_uassoc(
   mixed $array1,
   mixed $array2,
-  mixed $key_compare_func,
+  <<__AtMostRxAsFunc>> mixed $key_compare_func,
   ...$argv
 ): mixed;
 
@@ -948,11 +944,11 @@ function array_intersect_uassoc(
  *   are present in all the arguments.
  *
  */
-<<__Native>>
+<<__Native, __Pure, __AtMostRxAsArgs>>
 function array_uintersect_assoc(
   mixed $array1,
   mixed $array2,
-  mixed $data_compare_func,
+  <<__AtMostRxAsFunc>> mixed $data_compare_func,
   ...$argv
 ): mixed;
 
@@ -974,12 +970,12 @@ function array_uintersect_assoc(
  *   are present in all the arguments.
  *
  */
-<<__Native>>
+<<__Native, __Pure, __AtMostRxAsArgs>>
 function array_uintersect_uassoc(
   mixed $array1,
   mixed $array2,
-  mixed $data_compare_func,
-  mixed $key_compare_func,
+  <<__AtMostRxAsFunc>> mixed $data_compare_func,
+  <<__AtMostRxAsFunc>> mixed $key_compare_func,
   ...$argv
 ): mixed;
 
@@ -994,7 +990,7 @@ function array_uintersect_uassoc(
  *   which have keys that are present in all arguments.
  *
  */
-<<__Native, __IsFoldable>>
+<<__Native, __IsFoldable, __Pure>>
 function array_intersect_key(
   mixed $container1,
   mixed $container2,
@@ -1018,11 +1014,11 @@ function array_intersect_key(
  *   arguments.
  *
  */
-<<__Native>>
+<<__Native, __Pure, __AtMostRxAsArgs>>
 function array_intersect_ukey(
   mixed $array1,
   mixed $array2,
-  mixed $key_compare_func,
+  <<__AtMostRxAsFunc>> mixed $key_compare_func,
   ...$argv
 ): mixed;
 
@@ -1044,7 +1040,7 @@ function array_intersect_ukey(
  */
 <<__Native, __Pure, __AtMostRxAsArgs>>
 function sort(
-  <<__OnlyRxIfImpl(\HH\Rx\Traversable::class)>> inout mixed $array,
+  <<__OnlyRxIfImpl(AnyArray::class)>> inout mixed $array,
   int $sort_flags = 0,
 ): bool;
 
@@ -1060,7 +1056,7 @@ function sort(
  */
 <<__Native, __Pure, __AtMostRxAsArgs>>
 function rsort(
-  <<__OnlyRxIfImpl(\HH\Rx\Traversable::class)>> inout mixed $array,
+  <<__OnlyRxIfImpl(AnyArray::class)>> inout mixed $array,
   int $sort_flags = 0,
 ): bool;
 
@@ -1079,7 +1075,7 @@ function rsort(
  */
 <<__Native, __Pure, __AtMostRxAsArgs>>
 function asort(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> inout mixed $array,
+  <<__OnlyRxIfImpl(AnyArray::class)>> inout mixed $array,
   int $sort_flags = 0,
 ): bool;
 
@@ -1098,7 +1094,7 @@ function asort(
  */
 <<__Native, __Pure, __AtMostRxAsArgs>>
 function arsort(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> inout mixed $array,
+  <<__OnlyRxIfImpl(AnyArray::class)>> inout mixed $array,
   int $sort_flags = 0,
 ): bool;
 
@@ -1115,7 +1111,7 @@ function arsort(
  */
 <<__Native, __Pure, __AtMostRxAsArgs>>
 function ksort(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> inout mixed $array,
+  <<__OnlyRxIfImpl(AnyArray::class)>> inout mixed $array,
   int $sort_flags = 0,
 ): bool;
 
@@ -1132,7 +1128,7 @@ function ksort(
  */
 <<__Native, __Pure, __AtMostRxAsArgs>>
 function krsort(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> inout mixed $array,
+  <<__OnlyRxIfImpl(AnyArray::class)>> inout mixed $array,
   int $sort_flags = 0,
 ): bool;
 
@@ -1156,7 +1152,7 @@ function krsort(
  */
 <<__Native, __Pure, __AtMostRxAsArgs>>
 function usort(
-  <<__OnlyRxIfImpl(\HH\Rx\Traversable::class)>> inout mixed $array,
+  <<__OnlyRxIfImpl(AnyArray::class)>> inout mixed $array,
   <<__AtMostRxAsFunc>> mixed $cmp_function,
 ): bool;
 
@@ -1175,7 +1171,7 @@ function usort(
  */
 <<__Native, __Pure, __AtMostRxAsArgs>>
 function uasort(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> inout mixed $array,
+  <<__OnlyRxIfImpl(AnyArray::class)>> inout mixed $array,
   <<__AtMostRxAsFunc>> mixed $cmp_function,
 ): bool;
 
@@ -1196,7 +1192,7 @@ function uasort(
  */
 <<__Native, __Pure, __AtMostRxAsArgs>>
 function uksort(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class)>> inout mixed $array,
+  <<__OnlyRxIfImpl(AnyArray::class)>> inout mixed $array,
   <<__AtMostRxAsFunc>> mixed $cmp_function,
 ): bool;
 
@@ -1212,8 +1208,8 @@ function uksort(
  * @return bool - Returns TRUE on success or FALSE on failure.
  *
  */
-<<__Native>>
-function natsort(inout mixed $array): bool;
+<<__Native, __Pure, __AtMostRxAsArgs>>
+function natsort(<<__OnlyRxIfImpl(AnyArray::class)>> inout mixed $array): bool;
 
 /**
  * natcasesort() is a case insensitive version of natsort(). This function
@@ -1226,8 +1222,10 @@ function natsort(inout mixed $array): bool;
  * @return bool - Returns TRUE on success or FALSE on failure.
  *
  */
-<<__Native>>
-function natcasesort(inout mixed $array): bool;
+<<__Native, __Pure, __AtMostRxAsArgs>>
+function natcasesort(
+  <<__OnlyRxIfImpl(AnyArray::class)>> inout mixed $array
+): bool;
 
 <<__Native>>
 function i18n_loc_get_default(): string;
@@ -1257,10 +1255,9 @@ function i18n_loc_get_error_code(): mixed;
  *   not found.
  *
  */
-<<__Native, __HipHopSpecific, __IsFoldable, __Pure, __AtMostRxAsArgs>>
+<<__Native, __HipHopSpecific, __IsFoldable, __Pure>>
 function hphp_array_idx(
-  <<__OnlyRxIfImpl(\HH\Rx\KeyedTraversable::class), __MaybeMutable>>mixed
-    $search,
+  <<__MaybeMutable>> mixed $search,
   mixed $key,
   mixed $def,
 ): mixed;
@@ -1439,6 +1436,6 @@ namespace HH {
   <<__Native>>
   function get_provenance(mixed $key): string;
 
-  <<__Native>>
+  <<__Native, __Pure>>
   function tag_provenance_here(mixed $key, int $flags = 0): mixed;
 }

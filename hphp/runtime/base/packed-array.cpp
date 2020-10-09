@@ -382,7 +382,7 @@ ArrayData* PackedArray::MakeReserveImpl(uint32_t cap, HeaderKind hk) {
 ArrayData* PackedArray::MakeReserveVArray(uint32_t capacity) {
   if (RuntimeOption::EvalHackArrDVArrs) {
     auto const ad =  MakeReserveVec(capacity);
-    ad->setLegacyArray(RuntimeOption::EvalHackArrDVArrMark);
+    ad->setLegacyArrayInPlace(RuntimeOption::EvalHackArrDVArrMark);
     return ad;
   }
 
@@ -441,7 +441,7 @@ ArrayData* PackedArray::MakeVArray(uint32_t size, const TypedValue* values) {
   // grows down.
   if (RuntimeOption::EvalHackArrDVArrs) {
     auto const ad = MakeVec(size, values);
-    ad->setLegacyArray(RuntimeOption::EvalHackArrDVArrMark);
+    ad->setLegacyArrayInPlace(RuntimeOption::EvalHackArrDVArrMark);
     return ad;
   }
   auto ad = MakePackedImpl<true>(size, values, HeaderKind::Packed);
@@ -461,7 +461,7 @@ ArrayData* PackedArray::MakeVec(uint32_t size, const TypedValue* values) {
 ArrayData* PackedArray::MakeVArrayNatural(uint32_t size, const TypedValue* values) {
   if (RuntimeOption::EvalHackArrDVArrs) {
     auto const ad = MakeVecNatural(size, values);
-    ad->setLegacyArray(RuntimeOption::EvalHackArrDVArrMark);
+    ad->setLegacyArrayInPlace(RuntimeOption::EvalHackArrDVArrMark);
     return ad;
   }
 
@@ -480,7 +480,7 @@ ArrayData* PackedArray::MakeVecNatural(uint32_t size, const TypedValue* values) 
 ArrayData* PackedArray::MakeUninitializedVArray(uint32_t size) {
   if (RuntimeOption::EvalHackArrDVArrs) {
     auto const ad = MakeUninitializedVec(size);
-    ad->setLegacyArray(RuntimeOption::EvalHackArrDVArrMark);
+    ad->setLegacyArrayInPlace(RuntimeOption::EvalHackArrDVArrMark);
     return ad;
   }
   auto ad = MakeReserveImpl(size, HeaderKind::Packed);
@@ -511,7 +511,7 @@ ArrayData* PackedArray::MakeVecFromAPC(const APCArray* apc, bool isLegacy) {
     init.append(apc->getValue(i)->toLocal());
   }
   auto const ad = init.create();
-  ad->setLegacyArray(isLegacy);
+  ad->setLegacyArrayInPlace(isLegacy);
   return ad;
 }
 
@@ -524,7 +524,7 @@ ArrayData* PackedArray::MakeVArrayFromAPC(const APCArray* apc, bool isMarked) {
     init.append(apc->getValue(i)->toLocal());
   }
   auto const ad = init.create();
-  ad->setLegacyArray(isMarked);
+  ad->setLegacyArrayInPlace(isMarked);
   return tagArrProv(ad, apc);
 }
 
@@ -766,14 +766,6 @@ ArrayData* PackedArray::AppendInPlace(ArrayData* adIn, TypedValue v) {
   return AppendImpl(adIn, v, false);
 }
 
-ArrayData* PackedArray::Merge(ArrayData* adIn, const ArrayData* elems) {
-  assertx(checkInvariants(adIn));
-  auto const neededSize = adIn->m_size + elems->size();
-  auto const ret = ToMixedCopyReserve(adIn, neededSize);
-  ret->m_kind = RO::EvalHackArrDVArrs ? HeaderKind::Dict : HeaderKind::Mixed;
-  return MixedArray::ArrayMergeGeneric(ret, elems);
-}
-
 ArrayData* PackedArray::Pop(ArrayData* adIn, Variant& value) {
   assertx(checkInvariants(adIn));
 
@@ -792,25 +784,6 @@ ArrayData* PackedArray::Pop(ArrayData* adIn, Variant& value) {
   return ad;
 }
 
-ArrayData* PackedArray::Dequeue(ArrayData* adIn, Variant& value) {
-  assertx(checkInvariants(adIn));
-
-  auto const ad = adIn->cowCheck() ? Copy(adIn) : adIn;
-  if (UNLIKELY(ad->m_size == 0)) {
-    value = uninit_null();
-    return ad;
-  }
-
-  // This is O(N), but so is Dequeue on a mixed array, because it
-  // needs to renumber keys.  So it makes sense to stay packed.
-  auto const size = ad->m_size - 1;
-  auto const data = packedData(ad);
-  value = std::move(tvAsVariant(data)); // no incref+decref
-  std::memmove(data, data + 1, size * sizeof *data);
-  ad->m_size = size;
-  return ad;
-}
-
 ArrayData* PackedArray::Prepend(ArrayData* adIn, TypedValue v) {
   assertx(checkInvariants(adIn));
 
@@ -823,76 +796,23 @@ ArrayData* PackedArray::Prepend(ArrayData* adIn, TypedValue v) {
   return ad;
 }
 
-ArrayData* PackedArray::ToVArray(ArrayData* adIn, bool copy) {
+ArrayData* PackedArray::ToDVArray(ArrayData* adIn, bool copy) {
   assertx(checkInvariants(adIn));
-  if (adIn->isVArray()) return adIn;
-  if (RuntimeOption::EvalHackArrDVArrs) {
-    if (RuntimeOption::EvalHackArrDVArrMark && !adIn->isLegacyArray()) {
-      auto const ad = copy ? Copy(adIn) : adIn;
-      ad->setLegacyArray(true);
-      return ad;
-    }
-    return adIn;
-  }
-
   if (adIn->empty()) return ArrayData::CreateVArray();
   auto const ad = copy ? Copy(adIn) : adIn;
-
   ad->m_kind = HeaderKind::Packed;
   if (RO::EvalArrayProvenance) arrprov::reassignTag(ad);
   assertx(checkInvariants(ad));
   return ad;
 }
 
-ArrayData* PackedArray::ToDArray(ArrayData* adIn, bool /*copy*/) {
+ArrayData* PackedArray::ToHackArr(ArrayData* adIn, bool copy) {
   assertx(checkInvariants(adIn));
-  auto const size = adIn->size();
-  if (size == 0) return ArrayData::CreateDArray();
-  DArrayInit init{size};
-  for (int64_t i = 0; i < size; ++i) init.add(i, GetPosVal(adIn, i));
-  return init.create();
-}
-
-ArrayData* PackedArray::ToDict(ArrayData* ad, bool copy) {
-  assertx(checkInvariants(ad));
-  if (ad->empty()) return ArrayData::CreateDict();
-  auto const mixed = copy ? ToMixedCopy(ad) : ToMixed(ad);
-  if (RO::EvalArrayProvenance) arrprov::clearTag(mixed);
-  mixed->m_kind = HeaderKind::Dict;
-  assertx(mixed->checkInvariants());
-  return mixed;
-}
-
-ArrayData* PackedArray::ToVec(ArrayData* adIn, bool copy) {
-  assertx(checkInvariants(adIn));
-  if (adIn->isVecKind()) return adIn;
-
-  if (adIn->isLegacyArray() && RO::EvalHackArrCompatCastMarkedArrayNotices) {
-    raise_hack_arr_compat_cast_marked_array_notice(adIn);
-  }
   if (adIn->empty()) return ArrayData::CreateVec();
-
-  ArrayData* ad;
-  if (copy) {
-    // CopyPackedHelper will copy the header and m_size. All we have to do
-    // afterwards is fix the kind and refcount in the copy; it's easiest to do
-    // that by reinitializing the whole header.
-    ad = static_cast<ArrayData*>(tl_heap->objMallocIndex(sizeClass(adIn)));
-    CopyPackedHelper(adIn, ad);
-    auto const aux = packSizeIndexAndAuxBits(sizeClass(adIn), 0);
-    if (RO::EvalArrayProvenance) arrprov::clearTag(ad);
-    ad->initHeader_16(HeaderKind::Vec, OneReference, aux);
-  } else {
-    if (RO::EvalArrayProvenance) arrprov::clearTag(adIn);
-    adIn->m_kind = HeaderKind::Vec;
-    adIn->setLegacyArray(false);
-    ad = adIn;
-  }
-
-  assertx(ad->isVecKind());
-  assertx(capacity(ad) == capacity(adIn));
-  assertx(ad->m_size == adIn->m_size);
-  assertx(ad->hasExactlyOneRef());
+  auto const ad = copy ? Copy(adIn) : adIn;
+  ad->m_kind = HeaderKind::Vec;
+  ad->setLegacyArrayInPlace(false);
+  if (RO::EvalArrayProvenance) arrprov::clearTag(ad);
   assertx(checkInvariants(ad));
   return ad;
 }

@@ -299,8 +299,8 @@ public:
   void unsetenv(const String& name);
   Array getEnvs() const;
 
-  String getTimeZone() const;
-  void setTimeZone(const String&);
+  String getTimezone() const;
+  void setTimezone(const String&);
 
   bool getThrowAllErrors() const;
 
@@ -392,8 +392,6 @@ public:
   StringData* getContainingFileName();
   int getLine();
   TypedValue invokeUnit(const Unit* unit, bool callByHPHPInvoke = false);
-  Unit* compileEvalString(StringData* code,
-                                const char* evalFilename = nullptr);
 
   struct EvaluationResult {
     bool failed;
@@ -512,7 +510,7 @@ public:
 
 private:
   TypedValue invokeFuncImpl(const Func* f, ObjectData* thiz, Class* cls,
-                            uint32_t numArgsInclUnpack, Array&& generics,
+                            uint32_t numArgsInclUnpack, bool hasGenerics,
                             bool dynamic, bool allowDynCallNoPointer);
 
   struct ExcLoggerHook final : LoggerHook {
@@ -649,4 +647,3 @@ extern rds::local::AliasedRDSLocal<ExecutionContext,
 }
 
 #include "hphp/runtime/base/execution-context-inl.h"
-

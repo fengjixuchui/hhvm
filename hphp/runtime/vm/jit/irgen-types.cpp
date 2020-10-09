@@ -189,6 +189,7 @@ SSATmp* implInstanceCheck(IRGS& env, SSATmp* src, const StringData* className,
 template <typename GetVal,
           typename FuncToStr,
           typename ClassToStr,
+          typename LazyClassToStr,
           typename ClsMethToVec,
           typename Fail,
           typename Callable,
@@ -202,6 +203,7 @@ void verifyTypeImpl(IRGS& env,
                     GetVal getVal,
                     FuncToStr funcToStr,
                     ClassToStr classToStr,
+                    LazyClassToStr lazyClassToStr,
                     ClsMethToVec clsMethToVec,
                     Fail fail,
                     Callable callable,
@@ -260,6 +262,23 @@ void verifyTypeImpl(IRGS& env,
     case AnnotAction::ConvertClass:
       assertx(valType <= TCls);
       if (!classToStr(val)) return genFail();
+      return;
+    case AnnotAction::WarnLazyClass:
+      assertx(valType <= TLazyCls);
+      if (!lazyClassToStr(val)) return genFail();
+      gen(
+        env,
+        RaiseNotice,
+        cns(
+          env,
+          makeStaticString(Strings::CLASS_TO_STRING_IMPLICIT)
+        )
+      );
+      return;
+
+    case AnnotAction::ConvertLazyClass:
+      assertx(valType <= TLazyCls);
+      if (!lazyClassToStr(val)) return genFail();
       return;
     case AnnotAction::ClsMethCheck:
       assertx(valType <= TClsMeth);
@@ -921,7 +940,7 @@ bool emitIsTypeStructWithoutResolvingIfPossible(
       return success();
     case TypeStructure::Kind::T_num:         return unionOf(TInt, TDbl);
     case TypeStructure::Kind::T_arraykey:    return unionOf(TInt, TStr);
-    case TypeStructure::Kind::T_arraylike:
+    case TypeStructure::Kind::T_any_array:
       if (t->type().maybe(TClsMeth)) {
         if (t->isA(TClsMeth)) {
           if (RuntimeOption::EvalIsVecNotices) {
@@ -1006,7 +1025,6 @@ bool emitIsTypeStructWithoutResolvingIfPossible(
     case TypeStructure::Kind::T_typevar:
     case TypeStructure::Kind::T_fun:
     case TypeStructure::Kind::T_trait:
-    case TypeStructure::Kind::T_array:
     case TypeStructure::Kind::T_darray:
     case TypeStructure::Kind::T_varray:
     case TypeStructure::Kind::T_varray_or_darray:
@@ -1215,6 +1233,13 @@ void verifyRetTypeImpl(IRGS& env, int32_t id, int32_t ind,
         env.irb->exceptionStackBoundary();
         return true;
       },
+      [&] (SSATmp* val) { // lazy class to string conversions
+        auto const str = gen(env, LdLazyClsName, val);
+        auto const offset = offsetFromIRSP(env, BCSPRelOffset { ind });
+        gen(env, StStk, IRSPRelOffsetData{offset}, sp(env), str);
+        env.irb->exceptionStackBoundary();
+        return true;
+      },
       [&] (SSATmp* val) { // clsmeth to varray/vec conversions
         if (RuntimeOption::EvalVecHintNotices) {
           raiseClsmethCompatTypeHint(env, id, func, tc);
@@ -1316,6 +1341,11 @@ void verifyParamTypeImpl(IRGS& env, int32_t id) {
         stLocRaw(env, id, fp(env), str);
         return true;
       },
+      [&] (SSATmp* val) { // lazy class to string conversions
+        auto const str = gen(env, LdLazyClsName, val);
+        stLocRaw(env, id, fp(env), str);
+        return true;
+      },
       [&] (SSATmp* val) { // clsmeth to varray/vec conversions
         if (RuntimeOption::EvalVecHintNotices) {
           raiseClsmethCompatTypeHint(env, id, func, tc);
@@ -1327,7 +1357,7 @@ void verifyParamTypeImpl(IRGS& env, int32_t id) {
       },
       [&] (Type valType, bool hard) { // Check failure
         auto const failHard = hard &&
-          !(tc.isArray() && valType.maybe(TObj));
+          !(tc.isPHPArray() && valType.maybe(TObj));
         gen(
           env,
           failHard ? VerifyParamFailHard : VerifyParamFail,
@@ -1420,6 +1450,12 @@ void verifyPropType(IRGS& env,
         *coerce = gen(env, LdClsName, val);
         return true;
       },
+      [&] (SSATmp*) {  // lazy class to string automatic conversions
+        if (!coerce) return false;
+        if (RO::EvalCheckPropTypeHints < 3) return false;
+        *coerce = gen(env, LdLazyClsName, val);
+        return true;
+      },
       [&] (SSATmp* val) {
         if (!coerce) return false;
         // If we're not hard enforcing property type mismatches don't coerce
@@ -1495,7 +1531,11 @@ void verifyPropType(IRGS& env,
         // the check using a runtime helper. This gives us the freedom to call
         // verifyPropType without us worrying about it punting the whole set op.
         // This check is fragile - which type constraints coerce?
-        if (coerce && (tc->isArray() || tc->isString() ||
+
+        // WARNING: Post HADVAs, VArray typehints (which are now vec typehints)
+        // will also coerce. It must be included in the isArray check, or else
+        // we have a bug.
+        if (coerce && (tc->isPHPArray() || tc->isString() ||
                        (tc->isObject() && !tc->isResolved()))) {
           *coerce = gen(
             env,
@@ -1659,7 +1699,7 @@ void emitAssertRATStk(IRGS& env, uint32_t offset, RepoAuthType rat) {
 
 SSATmp* doDVArrChecks(IRGS& env, SSATmp* arr, Block* taken,
                       const TypeConstraint& tc) {
-  assertx(tc.isArray());
+  assertx(tc.isPHPArray());
   auto const type = [&]{
     if (tc.isVArray()) return TVArr;
     if (tc.isDArray()) return TDArr;

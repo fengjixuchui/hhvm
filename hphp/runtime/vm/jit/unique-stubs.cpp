@@ -145,7 +145,7 @@ Vinstr simplecall(Vout& v, F helper, Vreg arg, Vreg d) {
     CallSpec::direct(helper, nullptr),
     v.makeVcallArgs({{arg}}),
     v.makeTuple({d}),
-    Fixup{},
+    Fixup::none(),
     DestType::SSA
   };
 }
@@ -319,7 +319,7 @@ TCA emitFuncPrologueRedispatch(CodeBlock& cb, DataBlock& data) {
         CallSpec::direct(static_cast<ArrayData* (*)(uint32_t, TypedValue*)>(helper)),
         v.makeVcallArgs({{numToPack, stackTopPtr}}),
         v.makeTuple({packedArr}),
-        Fixup{},
+        Fixup::none(),
         DestType::SSA
       };
     }
@@ -388,13 +388,13 @@ TCA emitFuncPrologueRedispatchUnpack(CodeBlock& main, CodeBlock& cold,
         v.makeVcallArgs({{flags, func, numArgs, savedRip}}),
         v.makeTuple({numNewArgs}),
         {done, ctch},
-        Fixup{makeIndirectFixup(prs.dwordsPushed())},
+        Fixup::indirect(prs.qwordsPushed(), FPInvOffset{0}),
         DestType::SSA
       };
 
       vc = ctch;
       emitStubCatch(vc, us, [&] (Vout& v) {
-        v << lea{rsp()[prs.dwordsPushed() * sizeof(uintptr_t)], rsp()};
+        v << lea{rsp()[prs.qwordsPushed() * sizeof(uintptr_t)], rsp()};
         loadVmfp(v);
       });
 
@@ -441,7 +441,7 @@ TCA emitFCallHelperThunk(CodeBlock& main, CodeBlock& cold, DataBlock& data,
         CallSpec::direct(mcgen::getFuncPrologue),
         v.makeVcallArgs({{func, numArgs}}),
         v.makeTuple({target}),
-        Fixup{},
+        Fixup::none(),
         DestType::SSA
       };
     }
@@ -472,7 +472,7 @@ TCA emitFCallHelperThunk(CodeBlock& main, CodeBlock& cold, DataBlock& data,
       v.makeVcallArgs({{flags, func, numArgs, ctx, savedRip}}),
       v.makeTuple({notIntercepted}),
       {done, ctch},
-      Fixup{},
+      Fixup::none(),
       DestType::SSA
     };
 
@@ -548,7 +548,7 @@ TCA emitFunctionEnterHelper(CodeBlock& main, CodeBlock& cold,
       v.makeVcallArgs({{ar, v.cns(EventHook::NormalFunc)}}),
       v.makeTuple({should_continue}),
       {done, ctch},
-      Fixup{},
+      Fixup::none(),
       DestType::SSA
     };
 
@@ -615,7 +615,7 @@ TCA emitFunctionSurprisedOrStackOverflow(CodeBlock& main,
 
     v << vinvoke{CallSpec::direct(handlePossibleStackOverflow),
                  v.makeVcallArgs({{rvmfp()}}), v.makeTuple({}),
-                 {done, ctch}};
+                 {done, ctch}, Fixup::none()};
     vc = ctch;
     emitStubCatch(vc, us, [] (Vout& v) { loadVmfp(v); });
 
@@ -702,7 +702,7 @@ TCA emitBindCallStub(CodeBlock& cb, DataBlock& data) {
         CallSpec::direct(svcreq::handleBindCall),
         v.makeVcallArgs({{toSmash, func, numArgs}}),
         v.makeTuple({target}),
-        Fixup{},
+        Fixup::none(),
         DestType::SSA
       };
     }
@@ -876,7 +876,7 @@ TCA emitDecRefGeneric(CodeBlock& cb, DataBlock& data) {
       if (!fullFrame) {
         // The stub frame's saved RIP is at %rsp[8] before we saved the
         // caller-saved registers.
-        v << syncpoint{makeIndirectFixup(prs.dwordsPushed())};
+        v << syncpoint{Fixup::indirect(prs.qwordsPushed(), FPInvOffset{0})};
       }
     };
 
@@ -1004,7 +1004,7 @@ TCA emitHandleSRHelper(CodeBlock& cb, DataBlock& data) {
       CallSpec::direct(svcreq::handleServiceRequest),
       v.makeVcallArgs({{sp}}),
       v.makeTuple({ret}),
-      Fixup{},
+      Fixup::none(),
       DestType::SSA
     };
 
@@ -1096,11 +1096,19 @@ TCA emitEndCatchHelper(CodeBlock& cb, DataBlock& data, UniqueStubs& us) {
   return teardownEnter;
 }
 
-TCA emitEndCatchStublogueHelper(CodeBlock& cb, DataBlock& data,
-                                UniqueStubs& us) {
+TCA emitEndCatchStublogueHelpers(CodeBlock& cb, DataBlock& data,
+                                 UniqueStubs& us) {
   alignJmpTarget(cb);
 
-  return vwrap(cb, data, [&] (Vout& v) {
+  us.endCatchStubloguePrologueHelper = vwrap(cb, data, [&] (Vout& v) {
+    for (auto i = 0; i < kNumActRecCells; ++i) {
+      auto const offset = cellsToBytes(i) + TVOFF(m_type);
+      v << storebi{static_cast<int8_t>(KindOfUninit), rvmsp()[offset]};
+    }
+    v << fallthru{vm_regs_no_sp()};
+  });
+
+  us.endCatchStublogueHelper = vwrap(cb, data, [&] (Vout& v) {
     // End catch situation in stublogue context: pop the native frame and
     // pass the curent rvmfp() and saved RIP from the native frame to
     // tc_unwind_resume_stublogue(),which returns the catch trace (or null)
@@ -1119,6 +1127,9 @@ TCA emitEndCatchStublogueHelper(CodeBlock& cb, DataBlock& data,
 
     v << jmpr{rret(0), vm_regs_no_sp()};
   });
+
+  // Unused.
+  return nullptr;
 }
 
 TCA emitUnwinderAsyncRet(CodeBlock& cb, DataBlock& data) {
@@ -1214,9 +1225,11 @@ void UniqueStubs::emitAll(CodeCache& code, Debug::DebugInfo& dbg) {
   // These guys are required by a number of other stubs.
   ADD(handleSRHelper, hotView(), emitHandleSRHelper(hot(), data));
   ADD(endCatchHelper, hotView(), emitEndCatchHelper(hot(), data, *this));
-  ADD(endCatchStublogueHelper,
-      hotView(),
-      emitEndCatchStublogueHelper(hot(), data, *this));
+  EMIT(
+    "endCatchStublogueHelpers",
+    hotView(),
+    [&] { return emitEndCatchStublogueHelpers(hot(), data, *this); }
+  );
   ADD(unwinderAsyncRet, hotView(), emitUnwinderAsyncRet(hot(), data));
   ADD(unwinderAsyncNullRet, hotView(), emitUnwinderAsyncNullRet(hot(), data));
   ADD(throwExceptionWhileUnwinding,

@@ -86,6 +86,7 @@ module WithToken(Token: TokenType) = struct
       | NamespaceUseClause                _ -> SyntaxKind.NamespaceUseClause
       | FunctionDeclaration               _ -> SyntaxKind.FunctionDeclaration
       | FunctionDeclarationHeader         _ -> SyntaxKind.FunctionDeclarationHeader
+      | Capability                        _ -> SyntaxKind.Capability
       | CapabilityProvisional             _ -> SyntaxKind.CapabilityProvisional
       | WhereClause                       _ -> SyntaxKind.WhereClause
       | WhereConstraint                   _ -> SyntaxKind.WhereConstraint
@@ -200,11 +201,9 @@ module WithToken(Token: TokenType) = struct
       | KeysetTypeSpecifier               _ -> SyntaxKind.KeysetTypeSpecifier
       | TupleTypeExplicitSpecifier        _ -> SyntaxKind.TupleTypeExplicitSpecifier
       | VarrayTypeSpecifier               _ -> SyntaxKind.VarrayTypeSpecifier
-      | VectorArrayTypeSpecifier          _ -> SyntaxKind.VectorArrayTypeSpecifier
       | TypeParameter                     _ -> SyntaxKind.TypeParameter
       | TypeConstraint                    _ -> SyntaxKind.TypeConstraint
       | DarrayTypeSpecifier               _ -> SyntaxKind.DarrayTypeSpecifier
-      | MapArrayTypeSpecifier             _ -> SyntaxKind.MapArrayTypeSpecifier
       | DictionaryTypeSpecifier           _ -> SyntaxKind.DictionaryTypeSpecifier
       | ClosureTypeSpecifier              _ -> SyntaxKind.ClosureTypeSpecifier
       | ClosureParameterTypeSpecifier     _ -> SyntaxKind.ClosureParameterTypeSpecifier
@@ -279,6 +278,7 @@ module WithToken(Token: TokenType) = struct
     let is_namespace_use_clause                 = has_kind SyntaxKind.NamespaceUseClause
     let is_function_declaration                 = has_kind SyntaxKind.FunctionDeclaration
     let is_function_declaration_header          = has_kind SyntaxKind.FunctionDeclarationHeader
+    let is_capability                           = has_kind SyntaxKind.Capability
     let is_capability_provisional               = has_kind SyntaxKind.CapabilityProvisional
     let is_where_clause                         = has_kind SyntaxKind.WhereClause
     let is_where_constraint                     = has_kind SyntaxKind.WhereConstraint
@@ -393,11 +393,9 @@ module WithToken(Token: TokenType) = struct
     let is_keyset_type_specifier                = has_kind SyntaxKind.KeysetTypeSpecifier
     let is_tuple_type_explicit_specifier        = has_kind SyntaxKind.TupleTypeExplicitSpecifier
     let is_varray_type_specifier                = has_kind SyntaxKind.VarrayTypeSpecifier
-    let is_vector_array_type_specifier          = has_kind SyntaxKind.VectorArrayTypeSpecifier
     let is_type_parameter                       = has_kind SyntaxKind.TypeParameter
     let is_type_constraint                      = has_kind SyntaxKind.TypeConstraint
     let is_darray_type_specifier                = has_kind SyntaxKind.DarrayTypeSpecifier
-    let is_map_array_type_specifier             = has_kind SyntaxKind.MapArrayTypeSpecifier
     let is_dictionary_type_specifier            = has_kind SyntaxKind.DictionaryTypeSpecifier
     let is_closure_type_specifier               = has_kind SyntaxKind.ClosureTypeSpecifier
     let is_closure_parameter_type_specifier     = has_kind SyntaxKind.ClosureParameterTypeSpecifier
@@ -483,7 +481,6 @@ module WithToken(Token: TokenType) = struct
     let is_left_brace = is_specific_token TokenKind.LeftBrace
     let is_ellipsis   = is_specific_token TokenKind.DotDotDot
     let is_comma      = is_specific_token TokenKind.Comma
-    let is_array      = is_specific_token TokenKind.Array
     let is_ampersand  = is_specific_token TokenKind.Ampersand
     let is_inout      = is_specific_token TokenKind.Inout
 
@@ -763,6 +760,7 @@ module WithToken(Token: TokenType) = struct
         function_left_paren;
         function_parameter_list;
         function_right_paren;
+        function_capability;
         function_capability_provisional;
         function_colon;
         function_type;
@@ -775,10 +773,20 @@ module WithToken(Token: TokenType) = struct
          let acc = f acc function_left_paren in
          let acc = f acc function_parameter_list in
          let acc = f acc function_right_paren in
+         let acc = f acc function_capability in
          let acc = f acc function_capability_provisional in
          let acc = f acc function_colon in
          let acc = f acc function_type in
          let acc = f acc function_where_clause in
+         acc
+      | Capability {
+        capability_left_bracket;
+        capability_types;
+        capability_right_bracket;
+      } ->
+         let acc = f acc capability_left_bracket in
+         let acc = f acc capability_types in
+         let acc = f acc capability_right_bracket in
          acc
       | CapabilityProvisional {
         capability_provisional_at;
@@ -1440,12 +1448,14 @@ module WithToken(Token: TokenType) = struct
         lambda_left_paren;
         lambda_parameters;
         lambda_right_paren;
+        lambda_capability;
         lambda_colon;
         lambda_type;
       } ->
          let acc = f acc lambda_left_paren in
          let acc = f acc lambda_parameters in
          let acc = f acc lambda_right_paren in
+         let acc = f acc lambda_capability in
          let acc = f acc lambda_colon in
          let acc = f acc lambda_type in
          acc
@@ -1996,17 +2006,6 @@ module WithToken(Token: TokenType) = struct
          let acc = f acc varray_trailing_comma in
          let acc = f acc varray_right_angle in
          acc
-      | VectorArrayTypeSpecifier {
-        vector_array_keyword;
-        vector_array_left_angle;
-        vector_array_type;
-        vector_array_right_angle;
-      } ->
-         let acc = f acc vector_array_keyword in
-         let acc = f acc vector_array_left_angle in
-         let acc = f acc vector_array_type in
-         let acc = f acc vector_array_right_angle in
-         acc
       | TypeParameter {
         type_attribute_spec;
         type_reified;
@@ -2046,21 +2045,6 @@ module WithToken(Token: TokenType) = struct
          let acc = f acc darray_trailing_comma in
          let acc = f acc darray_right_angle in
          acc
-      | MapArrayTypeSpecifier {
-        map_array_keyword;
-        map_array_left_angle;
-        map_array_key;
-        map_array_comma;
-        map_array_value;
-        map_array_right_angle;
-      } ->
-         let acc = f acc map_array_keyword in
-         let acc = f acc map_array_left_angle in
-         let acc = f acc map_array_key in
-         let acc = f acc map_array_comma in
-         let acc = f acc map_array_value in
-         let acc = f acc map_array_right_angle in
-         acc
       | DictionaryTypeSpecifier {
         dictionary_type_keyword;
         dictionary_type_left_angle;
@@ -2078,6 +2062,7 @@ module WithToken(Token: TokenType) = struct
         closure_inner_left_paren;
         closure_parameter_list;
         closure_inner_right_paren;
+        closure_capability;
         closure_colon;
         closure_return_type;
         closure_outer_right_paren;
@@ -2087,6 +2072,7 @@ module WithToken(Token: TokenType) = struct
          let acc = f acc closure_inner_left_paren in
          let acc = f acc closure_parameter_list in
          let acc = f acc closure_inner_right_paren in
+         let acc = f acc closure_capability in
          let acc = f acc closure_colon in
          let acc = f acc closure_return_type in
          let acc = f acc closure_outer_right_paren in
@@ -2623,6 +2609,7 @@ module WithToken(Token: TokenType) = struct
         function_left_paren;
         function_parameter_list;
         function_right_paren;
+        function_capability;
         function_capability_provisional;
         function_colon;
         function_type;
@@ -2635,10 +2622,20 @@ module WithToken(Token: TokenType) = struct
         function_left_paren;
         function_parameter_list;
         function_right_paren;
+        function_capability;
         function_capability_provisional;
         function_colon;
         function_type;
         function_where_clause;
+      ]
+      | Capability {
+        capability_left_bracket;
+        capability_types;
+        capability_right_bracket;
+      } -> [
+        capability_left_bracket;
+        capability_types;
+        capability_right_bracket;
       ]
       | CapabilityProvisional {
         capability_provisional_at;
@@ -3300,12 +3297,14 @@ module WithToken(Token: TokenType) = struct
         lambda_left_paren;
         lambda_parameters;
         lambda_right_paren;
+        lambda_capability;
         lambda_colon;
         lambda_type;
       } -> [
         lambda_left_paren;
         lambda_parameters;
         lambda_right_paren;
+        lambda_capability;
         lambda_colon;
         lambda_type;
       ]
@@ -3856,17 +3855,6 @@ module WithToken(Token: TokenType) = struct
         varray_trailing_comma;
         varray_right_angle;
       ]
-      | VectorArrayTypeSpecifier {
-        vector_array_keyword;
-        vector_array_left_angle;
-        vector_array_type;
-        vector_array_right_angle;
-      } -> [
-        vector_array_keyword;
-        vector_array_left_angle;
-        vector_array_type;
-        vector_array_right_angle;
-      ]
       | TypeParameter {
         type_attribute_spec;
         type_reified;
@@ -3906,21 +3894,6 @@ module WithToken(Token: TokenType) = struct
         darray_trailing_comma;
         darray_right_angle;
       ]
-      | MapArrayTypeSpecifier {
-        map_array_keyword;
-        map_array_left_angle;
-        map_array_key;
-        map_array_comma;
-        map_array_value;
-        map_array_right_angle;
-      } -> [
-        map_array_keyword;
-        map_array_left_angle;
-        map_array_key;
-        map_array_comma;
-        map_array_value;
-        map_array_right_angle;
-      ]
       | DictionaryTypeSpecifier {
         dictionary_type_keyword;
         dictionary_type_left_angle;
@@ -3938,6 +3911,7 @@ module WithToken(Token: TokenType) = struct
         closure_inner_left_paren;
         closure_parameter_list;
         closure_inner_right_paren;
+        closure_capability;
         closure_colon;
         closure_return_type;
         closure_outer_right_paren;
@@ -3947,6 +3921,7 @@ module WithToken(Token: TokenType) = struct
         closure_inner_left_paren;
         closure_parameter_list;
         closure_inner_right_paren;
+        closure_capability;
         closure_colon;
         closure_return_type;
         closure_outer_right_paren;
@@ -4484,6 +4459,7 @@ module WithToken(Token: TokenType) = struct
         function_left_paren;
         function_parameter_list;
         function_right_paren;
+        function_capability;
         function_capability_provisional;
         function_colon;
         function_type;
@@ -4496,10 +4472,20 @@ module WithToken(Token: TokenType) = struct
         "function_left_paren";
         "function_parameter_list";
         "function_right_paren";
+        "function_capability";
         "function_capability_provisional";
         "function_colon";
         "function_type";
         "function_where_clause";
+      ]
+      | Capability {
+        capability_left_bracket;
+        capability_types;
+        capability_right_bracket;
+      } -> [
+        "capability_left_bracket";
+        "capability_types";
+        "capability_right_bracket";
       ]
       | CapabilityProvisional {
         capability_provisional_at;
@@ -5161,12 +5147,14 @@ module WithToken(Token: TokenType) = struct
         lambda_left_paren;
         lambda_parameters;
         lambda_right_paren;
+        lambda_capability;
         lambda_colon;
         lambda_type;
       } -> [
         "lambda_left_paren";
         "lambda_parameters";
         "lambda_right_paren";
+        "lambda_capability";
         "lambda_colon";
         "lambda_type";
       ]
@@ -5717,17 +5705,6 @@ module WithToken(Token: TokenType) = struct
         "varray_trailing_comma";
         "varray_right_angle";
       ]
-      | VectorArrayTypeSpecifier {
-        vector_array_keyword;
-        vector_array_left_angle;
-        vector_array_type;
-        vector_array_right_angle;
-      } -> [
-        "vector_array_keyword";
-        "vector_array_left_angle";
-        "vector_array_type";
-        "vector_array_right_angle";
-      ]
       | TypeParameter {
         type_attribute_spec;
         type_reified;
@@ -5767,21 +5744,6 @@ module WithToken(Token: TokenType) = struct
         "darray_trailing_comma";
         "darray_right_angle";
       ]
-      | MapArrayTypeSpecifier {
-        map_array_keyword;
-        map_array_left_angle;
-        map_array_key;
-        map_array_comma;
-        map_array_value;
-        map_array_right_angle;
-      } -> [
-        "map_array_keyword";
-        "map_array_left_angle";
-        "map_array_key";
-        "map_array_comma";
-        "map_array_value";
-        "map_array_right_angle";
-      ]
       | DictionaryTypeSpecifier {
         dictionary_type_keyword;
         dictionary_type_left_angle;
@@ -5799,6 +5761,7 @@ module WithToken(Token: TokenType) = struct
         closure_inner_left_paren;
         closure_parameter_list;
         closure_inner_right_paren;
+        closure_capability;
         closure_colon;
         closure_return_type;
         closure_outer_right_paren;
@@ -5808,6 +5771,7 @@ module WithToken(Token: TokenType) = struct
         "closure_inner_left_paren";
         "closure_parameter_list";
         "closure_inner_right_paren";
+        "closure_capability";
         "closure_colon";
         "closure_return_type";
         "closure_outer_right_paren";
@@ -6425,6 +6389,7 @@ module WithToken(Token: TokenType) = struct
           function_left_paren;
           function_parameter_list;
           function_right_paren;
+          function_capability;
           function_capability_provisional;
           function_colon;
           function_type;
@@ -6438,10 +6403,21 @@ module WithToken(Token: TokenType) = struct
           function_left_paren;
           function_parameter_list;
           function_right_paren;
+          function_capability;
           function_capability_provisional;
           function_colon;
           function_type;
           function_where_clause;
+        }
+      | (SyntaxKind.Capability, [
+          capability_left_bracket;
+          capability_types;
+          capability_right_bracket;
+        ]) ->
+        Capability {
+          capability_left_bracket;
+          capability_types;
+          capability_right_bracket;
         }
       | (SyntaxKind.CapabilityProvisional, [
           capability_provisional_at;
@@ -7161,6 +7137,7 @@ module WithToken(Token: TokenType) = struct
           lambda_left_paren;
           lambda_parameters;
           lambda_right_paren;
+          lambda_capability;
           lambda_colon;
           lambda_type;
         ]) ->
@@ -7168,6 +7145,7 @@ module WithToken(Token: TokenType) = struct
           lambda_left_paren;
           lambda_parameters;
           lambda_right_paren;
+          lambda_capability;
           lambda_colon;
           lambda_type;
         }
@@ -7773,18 +7751,6 @@ module WithToken(Token: TokenType) = struct
           varray_trailing_comma;
           varray_right_angle;
         }
-      | (SyntaxKind.VectorArrayTypeSpecifier, [
-          vector_array_keyword;
-          vector_array_left_angle;
-          vector_array_type;
-          vector_array_right_angle;
-        ]) ->
-        VectorArrayTypeSpecifier {
-          vector_array_keyword;
-          vector_array_left_angle;
-          vector_array_type;
-          vector_array_right_angle;
-        }
       | (SyntaxKind.TypeParameter, [
           type_attribute_spec;
           type_reified;
@@ -7827,22 +7793,6 @@ module WithToken(Token: TokenType) = struct
           darray_trailing_comma;
           darray_right_angle;
         }
-      | (SyntaxKind.MapArrayTypeSpecifier, [
-          map_array_keyword;
-          map_array_left_angle;
-          map_array_key;
-          map_array_comma;
-          map_array_value;
-          map_array_right_angle;
-        ]) ->
-        MapArrayTypeSpecifier {
-          map_array_keyword;
-          map_array_left_angle;
-          map_array_key;
-          map_array_comma;
-          map_array_value;
-          map_array_right_angle;
-        }
       | (SyntaxKind.DictionaryTypeSpecifier, [
           dictionary_type_keyword;
           dictionary_type_left_angle;
@@ -7861,6 +7811,7 @@ module WithToken(Token: TokenType) = struct
           closure_inner_left_paren;
           closure_parameter_list;
           closure_inner_right_paren;
+          closure_capability;
           closure_colon;
           closure_return_type;
           closure_outer_right_paren;
@@ -7871,6 +7822,7 @@ module WithToken(Token: TokenType) = struct
           closure_inner_left_paren;
           closure_parameter_list;
           closure_inner_right_paren;
+          closure_capability;
           closure_colon;
           closure_return_type;
           closure_outer_right_paren;
@@ -8575,6 +8527,7 @@ module WithToken(Token: TokenType) = struct
         function_left_paren
         function_parameter_list
         function_right_paren
+        function_capability
         function_capability_provisional
         function_colon
         function_type
@@ -8588,10 +8541,24 @@ module WithToken(Token: TokenType) = struct
           function_left_paren;
           function_parameter_list;
           function_right_paren;
+          function_capability;
           function_capability_provisional;
           function_colon;
           function_type;
           function_where_clause;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_capability
+        capability_left_bracket
+        capability_types
+        capability_right_bracket
+      =
+        let syntax = Capability {
+          capability_left_bracket;
+          capability_types;
+          capability_right_bracket;
         } in
         let value = ValueBuilder.value_from_syntax syntax in
         make syntax value
@@ -9488,6 +9455,7 @@ module WithToken(Token: TokenType) = struct
         lambda_left_paren
         lambda_parameters
         lambda_right_paren
+        lambda_capability
         lambda_colon
         lambda_type
       =
@@ -9495,6 +9463,7 @@ module WithToken(Token: TokenType) = struct
           lambda_left_paren;
           lambda_parameters;
           lambda_right_paren;
+          lambda_capability;
           lambda_colon;
           lambda_type;
         } in
@@ -10268,21 +10237,6 @@ module WithToken(Token: TokenType) = struct
         let value = ValueBuilder.value_from_syntax syntax in
         make syntax value
 
-      let make_vector_array_type_specifier
-        vector_array_keyword
-        vector_array_left_angle
-        vector_array_type
-        vector_array_right_angle
-      =
-        let syntax = VectorArrayTypeSpecifier {
-          vector_array_keyword;
-          vector_array_left_angle;
-          vector_array_type;
-          vector_array_right_angle;
-        } in
-        let value = ValueBuilder.value_from_syntax syntax in
-        make syntax value
-
       let make_type_parameter
         type_attribute_spec
         type_reified
@@ -10334,25 +10288,6 @@ module WithToken(Token: TokenType) = struct
         let value = ValueBuilder.value_from_syntax syntax in
         make syntax value
 
-      let make_map_array_type_specifier
-        map_array_keyword
-        map_array_left_angle
-        map_array_key
-        map_array_comma
-        map_array_value
-        map_array_right_angle
-      =
-        let syntax = MapArrayTypeSpecifier {
-          map_array_keyword;
-          map_array_left_angle;
-          map_array_key;
-          map_array_comma;
-          map_array_value;
-          map_array_right_angle;
-        } in
-        let value = ValueBuilder.value_from_syntax syntax in
-        make syntax value
-
       let make_dictionary_type_specifier
         dictionary_type_keyword
         dictionary_type_left_angle
@@ -10374,6 +10309,7 @@ module WithToken(Token: TokenType) = struct
         closure_inner_left_paren
         closure_parameter_list
         closure_inner_right_paren
+        closure_capability
         closure_colon
         closure_return_type
         closure_outer_right_paren
@@ -10384,6 +10320,7 @@ module WithToken(Token: TokenType) = struct
           closure_inner_left_paren;
           closure_parameter_list;
           closure_inner_right_paren;
+          closure_capability;
           closure_colon;
           closure_return_type;
           closure_outer_right_paren;
@@ -10788,6 +10725,7 @@ module WithToken(Token: TokenType) = struct
           function_left_paren;
           function_parameter_list;
           function_right_paren;
+          function_capability;
           function_capability_provisional;
           function_colon;
           function_type;
@@ -10800,6 +10738,7 @@ module WithToken(Token: TokenType) = struct
           function_left_paren;
           function_parameter_list;
           function_right_paren;
+          function_capability;
           function_capability_provisional;
           function_colon;
           function_type;
@@ -10858,12 +10797,14 @@ module WithToken(Token: TokenType) = struct
           lambda_left_paren;
           lambda_parameters;
           lambda_right_paren;
+          lambda_capability;
           lambda_colon;
           lambda_type;
        } = LambdaSignature {
           lambda_left_paren;
           lambda_parameters;
           lambda_right_paren;
+          lambda_capability;
           lambda_colon;
           lambda_type;
        }
@@ -10873,6 +10814,7 @@ module WithToken(Token: TokenType) = struct
           closure_inner_left_paren;
           closure_parameter_list;
           closure_inner_right_paren;
+          closure_capability;
           closure_colon;
           closure_return_type;
           closure_outer_right_paren;
@@ -10882,6 +10824,7 @@ module WithToken(Token: TokenType) = struct
           closure_inner_left_paren;
           closure_parameter_list;
           closure_inner_right_paren;
+          closure_capability;
           closure_colon;
           closure_return_type;
           closure_outer_right_paren;
@@ -10910,6 +10853,7 @@ module WithToken(Token: TokenType) = struct
           function_left_paren;
           function_parameter_list;
           function_right_paren;
+          function_capability;
           function_capability_provisional;
           function_colon;
           function_type;
@@ -10922,6 +10866,7 @@ module WithToken(Token: TokenType) = struct
           function_left_paren;
           function_parameter_list;
           function_right_paren;
+          function_capability;
           function_capability_provisional;
           function_colon;
           function_type;
@@ -10992,12 +10937,14 @@ module WithToken(Token: TokenType) = struct
           lambda_left_paren;
           lambda_parameters;
           lambda_right_paren;
+          lambda_capability;
           lambda_colon;
           lambda_type;
             } -> {
           lambda_left_paren;
           lambda_parameters;
           lambda_right_paren;
+          lambda_capability;
           lambda_colon;
           lambda_type;
            }
@@ -11010,6 +10957,7 @@ module WithToken(Token: TokenType) = struct
           closure_inner_left_paren;
           closure_parameter_list;
           closure_inner_right_paren;
+          closure_capability;
           closure_colon;
           closure_return_type;
           closure_outer_right_paren;
@@ -11019,6 +10967,7 @@ module WithToken(Token: TokenType) = struct
           closure_inner_left_paren;
           closure_parameter_list;
           closure_inner_right_paren;
+          closure_capability;
           closure_colon;
           closure_return_type;
           closure_outer_right_paren;

@@ -225,12 +225,6 @@ module ApiShallow = struct
     | Lazy lc -> lc.sc.sc_where_constraints
     | Eager c -> c.tc_where_constraints
 
-  let construct t =
-    Counters.count_decl_accessor @@ fun () ->
-    match t with
-    | Lazy lc -> Lazy.force lc.ih.construct
-    | Eager c -> c.tc_construct
-
   let enum_type t =
     Counters.count_decl_accessor @@ fun () ->
     match t with
@@ -252,19 +246,8 @@ module ApiShallow = struct
   let decl_errors t =
     Counters.count_decl_accessor @@ fun () ->
     match t with
-    | Lazy lc -> Some lc.sc.sc_decl_errors
+    | Lazy _ -> None
     | Eager c -> c.tc_decl_errors
-
-  let need_init t =
-    Counters.count_decl_accessor @@ fun () ->
-    match t with
-    | Lazy _ ->
-      begin
-        match fst (construct t) with
-        | None -> false
-        | Some ce -> not (get_ce_abstract ce)
-      end
-    | Eager c -> c.tc_need_init
 
   let all_where_constraints_on_this t =
     (* tally is already done by where_constraints *)
@@ -320,11 +303,22 @@ module ApiShallow = struct
 end
 
 module ApiLazy = struct
-  let members_fully_known t =
+  let construct t =
     Counters.count_decl_accessor @@ fun () ->
     match t with
-    | Lazy lc -> Caml.Lazy.force lc.members_fully_known
-    | Eager c -> c.tc_members_fully_known
+    | Lazy lc -> Lazy.force lc.ih.construct
+    | Eager c -> c.tc_construct
+
+  let need_init t =
+    Counters.count_decl_accessor @@ fun () ->
+    match t with
+    | Lazy _ ->
+      begin
+        match fst (construct t) with
+        | None -> false
+        | Some ce -> not (get_ce_abstract ce)
+      end
+    | Eager c -> c.tc_need_init
 
   let get_ancestor t ancestor =
     Counters.count_decl_accessor @@ fun () ->
@@ -425,7 +419,7 @@ module ApiLazy = struct
   let get_any_method ~is_static cls id =
     (* tally is already done inside the following three methods *)
     if String.equal id SN.Members.__construct then
-      fst (ApiShallow.construct cls)
+      fst (construct cls)
     else if is_static then
       get_smethod cls id
     else
@@ -433,37 +427,30 @@ module ApiLazy = struct
 end
 
 module ApiEager = struct
-  (** Internal helper, for all the accessors that return sequences,
-  so we properly tally up the time spent iterating over those sequences. *)
-  let tally_sequence (seq : 'a Sequence.t) : 'a Sequence.t =
-    Sequence.map
-      ~f:(fun elem -> Counters.count_decl_accessor (fun () -> elem))
-      seq
+  let members_fully_known t =
+    Counters.count_decl_accessor @@ fun () ->
+    match t with
+    | Lazy lc -> Lazy.force lc.members_fully_known
+    | Eager c -> c.tc_members_fully_known
 
   let all_ancestor_req_names t =
     Counters.count_decl_accessor @@ fun () ->
     (* The two below will traverse ancestors in different orders.
     But if the typechecker discovers errors in different order, no matter. *)
     match t with
-    | Lazy lc ->
-      LSTable.to_seq lc.req_ancestor_names
-      |> Sequence.map ~f:fst
-      |> tally_sequence
-    | Eager c -> Sequence.of_list (SSet.elements c.tc_req_ancestors_extends)
+    | Lazy lc -> LSTable.to_list lc.req_ancestor_names |> List.map ~f:fst
+    | Eager c -> SSet.elements c.tc_req_ancestors_extends
 
   let all_extends_ancestors t =
     Counters.count_decl_accessor @@ fun () ->
     match t with
-    | Lazy lc ->
-      LSTable.to_seq lc.parents_and_traits
-      |> Sequence.map ~f:fst
-      |> tally_sequence
-    | Eager c -> Sequence.of_list (SSet.elements c.tc_extends)
+    | Lazy lc -> LSTable.to_list lc.parents_and_traits |> List.map ~f:fst
+    | Eager c -> SSet.elements c.tc_extends
 
   let all_ancestors t =
     Counters.count_decl_accessor @@ fun () ->
     match t with
-    | Lazy lc -> LSTable.to_seq lc.ancestors |> Sequence.to_list_rev
+    | Lazy lc -> LSTable.to_list lc.ancestors
     | Eager c -> SMap.bindings c.tc_ancestors
 
   let all_ancestor_names t =
@@ -484,7 +471,6 @@ module ApiEager = struct
     |> List.append (ApiShallow.upper_bounds_on_this_from_constraints t)
 
   let is_disposable t =
-    (* TODO(shallow): this eagerly flattens the ancestor mro, but could easily be lazy *)
     Counters.count_decl_accessor @@ fun () ->
     let is_disposable_class_name class_name =
       String.equal class_name SN.Classes.cIDisposable
@@ -494,7 +480,7 @@ module ApiEager = struct
     | Lazy _ ->
       is_disposable_class_name (ApiShallow.name t)
       || List.exists (all_ancestor_names t) is_disposable_class_name
-      || Sequence.exists (all_ancestor_req_names t) is_disposable_class_name
+      || List.exists (all_ancestor_req_names t) is_disposable_class_name
     | Eager c -> c.tc_is_disposable
 
   let get_pu_enum t id =
@@ -506,43 +492,43 @@ module ApiEager = struct
   let consts t =
     Counters.count_decl_accessor @@ fun () ->
     match t with
-    | Lazy lc -> LSTable.to_seq lc.ih.consts |> Sequence.to_list_rev
+    | Lazy lc -> LSTable.to_list lc.ih.consts
     | Eager c -> SMap.bindings c.tc_consts
 
   let typeconsts t =
     Counters.count_decl_accessor @@ fun () ->
     match t with
-    | Lazy lc -> LSTable.to_seq lc.ih.typeconsts |> Sequence.to_list_rev
+    | Lazy lc -> LSTable.to_list lc.ih.typeconsts
     | Eager c -> SMap.bindings c.tc_typeconsts
 
   let pu_enums t =
     Counters.count_decl_accessor @@ fun () ->
     match t with
-    | Lazy lc -> LSTable.to_seq lc.ih.pu_enums |> Sequence.to_list_rev
+    | Lazy lc -> LSTable.to_list lc.ih.pu_enums
     | Eager c -> SMap.bindings c.tc_pu_enums
 
   let props t =
     Counters.count_decl_accessor @@ fun () ->
     match t with
-    | Lazy lc -> LSTable.to_seq lc.ih.props |> Sequence.to_list_rev
+    | Lazy lc -> LSTable.to_list lc.ih.props
     | Eager c -> SMap.bindings c.tc_props
 
   let sprops t =
     Counters.count_decl_accessor @@ fun () ->
     match t with
-    | Lazy lc -> LSTable.to_seq lc.ih.sprops |> Sequence.to_list_rev
+    | Lazy lc -> LSTable.to_list lc.ih.sprops
     | Eager c -> SMap.bindings c.tc_sprops
 
   let methods t =
     Counters.count_decl_accessor @@ fun () ->
     match t with
-    | Lazy lc -> LSTable.to_seq lc.ih.methods |> Sequence.to_list_rev
+    | Lazy lc -> LSTable.to_list lc.ih.methods
     | Eager c -> SMap.bindings c.tc_methods
 
   let smethods t =
     Counters.count_decl_accessor @@ fun () ->
     match t with
-    | Lazy lc -> LSTable.to_seq lc.ih.smethods |> Sequence.to_list_rev
+    | Lazy lc -> LSTable.to_list lc.ih.smethods
     | Eager c -> SMap.bindings c.tc_smethods
 
   let all_inherited_methods t id =

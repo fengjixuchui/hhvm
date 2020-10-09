@@ -71,7 +71,10 @@ let lock_and_load_deptable
     end
   | CustomDeptable fn ->
     Hh_logger.log "Loading custom dependency graph from %s" fn;
-    (match Typing_deps.load_custom_dep_graph fn with
+    (* We force load the dependency graph here early, because we
+     * want to catch loading errors early, and "properly" handle them *)
+    Typing_deps.(set_mode @@ CustomMode fn);
+    (match Typing_deps.force_load_custom_dep_graph () with
     | Ok () -> ()
     | Error msg -> failwith msg)
 
@@ -852,17 +855,7 @@ let full_init (genv : ServerEnv.genv) (env : ServerEnv.env) :
   let fnl = Relative_path.Map.keys fast in
   let env =
     if is_check_mode then
-      let should_start_delegate =
-        ServerCheckUtils.should_do_remote
-          genv
-          env.tcopt
-          ~file_count:(List.length fnl)
-          env.errorl
-      in
-      if should_start_delegate then
-        start_typing_delegate genv env
-      else
-        env
+      start_delegate_if_needed env genv (List.length fnl) env.errorl
     else
       env
   in

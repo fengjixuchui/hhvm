@@ -380,6 +380,8 @@ let rec string_of_hint hint =
         hf_param_kinds;
         hf_param_mutability = _;
         hf_variadic_ty;
+        hf_cap = _;
+        (* TODO(vmladenov) support capability types here *)
         hf_return_ty;
         hf_is_mutable_return = _;
       } ->
@@ -438,13 +440,6 @@ let rec string_of_hint hint =
   | Hsoft hint -> "@" ^ string_of_hint hint
   | Hmixed -> "mixed"
   | Hnonnull -> "nonnull"
-  | Harray (None, None) -> "array"
-  | Harray (None, Some vhint) ->
-    Printf.sprintf "array<%s>" (string_of_hint vhint)
-  | Harray (Some khint, Some vhint) ->
-    Printf.sprintf "array<%s, %s>" (string_of_hint khint) (string_of_hint vhint)
-  | Harray (Some _, None) ->
-    failwith "malformed type hint: Harray (Some _, None)"
   | Hdarray (khint, vhint) ->
     Printf.sprintf
       "darray<%s, %s>"
@@ -631,7 +626,6 @@ let rec get_init_from_hint ctx tparams_stack hint =
   | Hprim prim -> get_init_for_prim prim
   | Hoption _ -> "null"
   | Hlike hint -> get_init_from_hint ctx tparams_stack hint
-  | Harray _ -> "darray[]"
   | Hdarray _ -> "darray[]"
   | Hvarray_or_darray _
   | Hvarray _ ->
@@ -1359,7 +1353,7 @@ let get_implementation_dependencies ctx env cls_name =
       List.fold ~init:[] ~f:add_impls (Class.all_ancestor_names cls)
     in
     let result =
-      Sequence.fold ~init:result ~f:add_impls (Class.all_ancestor_req_names cls)
+      List.fold ~init:result ~f:add_impls (Class.all_ancestor_req_names cls)
     in
     result
 

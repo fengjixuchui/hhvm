@@ -2035,7 +2035,7 @@ struct DOMNodePropHandler : public DOMPropHandler<DOMNodePropHandler> {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-Array HHVM_METHOD(DOMNode, __debuginfo) {
+Array HHVM_METHOD(DOMNode, __debugInfo) {
   auto* data = Native::data<DOMNode>(this_);
   if (!data->node()) {
     return this_->toArray();
@@ -2592,7 +2592,7 @@ Variant HHVM_METHOD(DOMNode, replaceChild,
   return false;
 }
 
-Variant HHVM_METHOD(DOMNode, c14n,
+Variant HHVM_METHOD(DOMNode, C14N,
                     bool exclusive /* = false */,
                     bool with_comments /* = false */,
                     const Variant& xpath /* = null */,
@@ -2606,7 +2606,7 @@ Variant HHVM_METHOD(DOMNode, c14n,
                               xpath, ns_prefixes, 0);
 }
 
-Variant HHVM_METHOD(DOMNode, c14nfile,
+Variant HHVM_METHOD(DOMNode, C14Nfile,
                     const String& uri,
                     bool exclusive /* = false */,
                     bool with_comments /* = false */,
@@ -2731,7 +2731,7 @@ void HHVM_METHOD(DOMAttr, __construct,
   }
 }
 
-Array HHVM_METHOD(DOMAttr, __debuginfo) {
+Array HHVM_METHOD(DOMAttr, __debugInfo) {
   auto data = Native::data<DOMNode>(this_);
   if (!data->node()) {
     return this_->toArray();
@@ -2796,7 +2796,7 @@ struct DOMCharacterDataPropHandler :
 
 ///////////////////////////////////////////////////////////////////////////////
 
-Array HHVM_METHOD(DOMCharacterData, __debuginfo) {
+Array HHVM_METHOD(DOMCharacterData, __debugInfo) {
   auto data = Native::data<DOMNode>(this_);
   if (!data->node()) {
     return this_->toArray();
@@ -3036,7 +3036,7 @@ void HHVM_METHOD(DOMText, __construct,
   }
 }
 
-Array HHVM_METHOD(DOMText, __debuginfo) {
+Array HHVM_METHOD(DOMText, __debugInfo) {
   auto data = Native::data<DOMNode>(this_);
   if (!data->node()) {
     return this_->toArray();
@@ -3334,7 +3334,7 @@ void HHVM_METHOD(DOMDocument, __construct,
   data->setNode((xmlNodePtr)docp);
 }
 
-Array HHVM_METHOD(DOMDocument, __debuginfo) {
+Array HHVM_METHOD(DOMDocument, __debugInfo) {
   auto* data = Native::data<DOMNode>(this_);
   if (!data->node()) {
     return this_->toArray();
@@ -4004,7 +4004,7 @@ struct DOMDocumentTypePropHandler :
 
 ///////////////////////////////////////////////////////////////////////////////
 
-Array HHVM_METHOD(DOMDocumentType, __debuginfo) {
+Array HHVM_METHOD(DOMDocumentType, __debugInfo) {
   auto data = Native::data<DOMNode>(this_);
   if (!data->node()) {
     return this_->toArray();
@@ -4115,7 +4115,7 @@ void HHVM_METHOD(DOMElement, __construct,
   data->setNode(nodep);
 }
 
-Array HHVM_METHOD(DOMElement, __debuginfo) {
+Array HHVM_METHOD(DOMElement, __debugInfo) {
   auto* data = Native::data<DOMElement>(this_);
   if (!data->node()) {
     return this_->toArray();
@@ -4802,7 +4802,7 @@ struct DOMEntityPropHandler : public DOMPropHandler<DOMEntityPropHandler> {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-Array HHVM_METHOD(DOMEntity, __debuginfo) {
+Array HHVM_METHOD(DOMEntity, __debugInfo) {
   auto data = Native::data<DOMNode>(this_);
   if (!data->node()) {
     return this_->toArray();
@@ -4873,7 +4873,7 @@ struct DOMNotationPropHandler : public DOMPropHandler<DOMNotationPropHandler> {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-Array HHVM_METHOD(DOMNotation, __debuginfo) {
+Array HHVM_METHOD(DOMNotation, __debugInfo) {
   auto* data = Native::data<DOMNode>(this_);
   if (!data->node()) {
     return this_->toArray();
@@ -4941,7 +4941,7 @@ void HHVM_METHOD(DOMProcessingInstruction, __construct,
   }
 }
 
-Array HHVM_METHOD(DOMProcessingInstruction, __debuginfo) {
+Array HHVM_METHOD(DOMProcessingInstruction, __debugInfo) {
   auto* data = Native::data<DOMNode>(this_);
   if (!data->node()) {
     return this_->toArray();
@@ -5107,7 +5107,7 @@ Variant HHVM_METHOD(DOMNamedNodeMap, item,
   return init_null();
 }
 
-Array HHVM_METHOD(DOMNamedNodeMap, __debuginfo) {
+Array HHVM_METHOD(DOMNamedNodeMap, __debugInfo) {
   return domnamednodemap_properties_map.debugInfo(Object{this_});
 }
 
@@ -5175,7 +5175,7 @@ struct DOMNodeListPropHandler : public DOMPropHandler<DOMNodeListPropHandler> {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-Array HHVM_METHOD(DOMNodeList, __debuginfo) {
+Array HHVM_METHOD(DOMNodeList, __debugInfo) {
   return domnodelist_properties_map.debugInfo(Object{this_});
 }
 
@@ -5452,8 +5452,7 @@ static void dom_xpath_ext_function_php(xmlXPathParserContextPtr ctxt,
     return;
   }
 
-  Array args;
-  /* Reverse order to pop values off ctxt stack */
+  Array args_vec = Array::CreateVec();
   for (int i = nargs - 2; i >= 0; i--) {
     Variant arg;
     obj = valuePop(ctxt);
@@ -5506,7 +5505,13 @@ static void dom_xpath_ext_function_php(xmlXPathParserContextPtr ctxt,
       arg = String((char *)xmlXPathCastToString(obj), CopyString);
     }
     xmlXPathFreeObject(obj);
-    args.prepend(arg);
+    args_vec.append(arg);
+  }
+
+  /* Reverse order to pop values off ctxt stack */
+  Array args;
+  for (auto i = args_vec.size(); i > 0; i--) {
+    args.append(args_vec.lookup(safe_cast<int64_t>(i - 1)));
   }
 
   obj = valuePop(ctxt);
@@ -5592,7 +5597,7 @@ void HHVM_METHOD(DOMXPath, __construct,
   ctx->userData = data;
 }
 
-Array HHVM_METHOD(DOMXPath, __debuginfo) {
+Array HHVM_METHOD(DOMXPath, __debugInfo) {
   auto* data = Native::data<DOMXPath>(this_);
   if (!data->m_node) {
     return this_->toArray();
@@ -5858,17 +5863,17 @@ struct DOMDocumentExtension final : Extension {
     HHVM_ME(DOMNode, normalize);
     HHVM_ME(DOMNode, removeChild);
     HHVM_ME(DOMNode, replaceChild);
-    HHVM_ME(DOMNode, c14n);
-    HHVM_ME(DOMNode, c14nfile);
+    HHVM_ME(DOMNode, C14N);
+    HHVM_ME(DOMNode, C14Nfile);
     HHVM_ME(DOMNode, getNodePath);
-    HHVM_ME(DOMNode, __debuginfo);
+    HHVM_ME(DOMNode, __debugInfo);
     Native::registerNativeDataInfo<DOMNode>(s_DOMNode.get(),
                                             Native::NDIFlags::NO_SWEEP);
     Native::registerNativePropHandler<DOMNodePropHandler>(s_DOMNode);
 
     HHVM_ME(DOMAttr, __construct);
     HHVM_ME(DOMAttr, isId);
-    HHVM_ME(DOMAttr, __debuginfo);
+    HHVM_ME(DOMAttr, __debugInfo);
     Native::registerNativePropHandler<DOMAttrPropHandler>(s_DOMAttr);
 
     HHVM_ME(DOMCharacterData, appendData);
@@ -5876,7 +5881,7 @@ struct DOMDocumentExtension final : Extension {
     HHVM_ME(DOMCharacterData, insertData);
     HHVM_ME(DOMCharacterData, replaceData);
     HHVM_ME(DOMCharacterData, substringData);
-    HHVM_ME(DOMCharacterData, __debuginfo);
+    HHVM_ME(DOMCharacterData, __debugInfo);
     Native::registerNativePropHandler<DOMCharacterDataPropHandler>(
       s_DOMCharacterData);
 
@@ -5886,7 +5891,7 @@ struct DOMDocumentExtension final : Extension {
     HHVM_ME(DOMText, isWhitespaceInElementContent);
     HHVM_ME(DOMText, isElementContentWhitespace);
     HHVM_ME(DOMText, splitText);
-    HHVM_ME(DOMText, __debuginfo);
+    HHVM_ME(DOMText, __debugInfo);
     Native::registerNativePropHandler<DOMTextPropHandler>(s_DOMText);
 
     HHVM_ME(DOMCdataSection, __construct);
@@ -5920,13 +5925,13 @@ struct DOMDocumentExtension final : Extension {
     HHVM_ME(DOMDocument, schemaValidateSource);
     HHVM_ME(DOMDocument, validate);
     HHVM_ME(DOMDocument, xinclude);
-    HHVM_ME(DOMDocument, __debuginfo);
+    HHVM_ME(DOMDocument, __debugInfo);
     Native::registerNativePropHandler<DOMDocumentPropHandler>(s_DOMDocument);
 
     HHVM_ME(DOMDocumentFragment, __construct);
     HHVM_ME(DOMDocumentFragment, appendXML);
 
-    HHVM_ME(DOMDocumentType, __debuginfo);
+    HHVM_ME(DOMDocumentType, __debugInfo);
     Native::registerNativePropHandler<DOMDocumentTypePropHandler>(
       s_DOMDocumentType);
 
@@ -5949,21 +5954,21 @@ struct DOMDocumentExtension final : Extension {
     HHVM_ME(DOMElement, setIDAttribute);
     HHVM_ME(DOMElement, setIDAttributeNode);
     HHVM_ME(DOMElement, setIDAttributeNS);
-    HHVM_ME(DOMElement, __debuginfo);
+    HHVM_ME(DOMElement, __debugInfo);
     Native::registerNativeDataInfo<DOMElement>(s_DOMElement.get(),
                                             Native::NDIFlags::NO_SWEEP);
     Native::registerNativePropHandler<DOMElementPropHandler>(s_DOMElement);
 
-    HHVM_ME(DOMEntity, __debuginfo);
+    HHVM_ME(DOMEntity, __debugInfo);
     Native::registerNativePropHandler<DOMEntityPropHandler>(s_DOMEntity);
 
     HHVM_ME(DOMEntityReference, __construct);
 
-    HHVM_ME(DOMNotation, __debuginfo);
+    HHVM_ME(DOMNotation, __debugInfo);
     Native::registerNativePropHandler<DOMNotationPropHandler>(s_DOMNotation);
 
     HHVM_ME(DOMProcessingInstruction, __construct);
-    HHVM_ME(DOMProcessingInstruction, __debuginfo);
+    HHVM_ME(DOMProcessingInstruction, __debugInfo);
     Native::registerNativePropHandler<DOMProcessingInstructionPropHandler>(
       s_DOMProcessingInstruction);
 
@@ -5984,7 +5989,7 @@ struct DOMDocumentExtension final : Extension {
 
     HHVM_ME(DOMNodeList, item);
     HHVM_ME(DOMNodeList, getIterator);
-    HHVM_ME(DOMNodeList, __debuginfo);
+    HHVM_ME(DOMNodeList, __debugInfo);
     Native::registerNativePropHandler<DOMNodeListPropHandler>(s_DOMNodeList);
 
     Native::registerNativeDataInfo<DOMIterable>(
@@ -5999,7 +6004,7 @@ struct DOMDocumentExtension final : Extension {
     HHVM_ME(DOMXPath, query);
     HHVM_ME(DOMXPath, registerNamespace);
     HHVM_ME(DOMXPath, registerPHPFunctions);
-    HHVM_ME(DOMXPath, __debuginfo);
+    HHVM_ME(DOMXPath, __debugInfo);
     Native::registerNativeDataInfo<DOMXPath>(s_DOMXPath.get());
     Native::registerNativePropHandler<DOMXPathPropHandler>(s_DOMXPath);
 

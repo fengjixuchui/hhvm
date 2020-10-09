@@ -633,7 +633,7 @@ resolveTSStaticallyImpl(ISS& env, hphp_fast_set<SArray>& seenTs, SArray ts,
     case TypeStructure::Kind::T_vec:
     case TypeStructure::Kind::T_keyset:
     case TypeStructure::Kind::T_vec_or_dict:
-    case TypeStructure::Kind::T_arraylike: {
+    case TypeStructure::Kind::T_any_array: {
       if (!ts->exists(s_generic_types)) return finish(ts);
       auto const generics = get_ts_generic_types(ts);
       auto rgenerics =
@@ -749,7 +749,6 @@ resolveTSStaticallyImpl(ISS& env, hphp_fast_set<SArray>& seenTs, SArray ts,
       }
       return finish(result);
     }
-    case TypeStructure::Kind::T_array:
     case TypeStructure::Kind::T_darray:
     case TypeStructure::Kind::T_varray:
     case TypeStructure::Kind::T_varray_or_darray:
@@ -3128,11 +3127,10 @@ void isTypeStructImpl(ISS& env, SArray inputTS) {
     case TypeStructure::Kind::T_enum:
     case TypeStructure::Kind::T_resource:
     case TypeStructure::Kind::T_vec_or_dict:
-    case TypeStructure::Kind::T_arraylike:
+    case TypeStructure::Kind::T_any_array:
       // TODO(T29232862): implement
       return result(TBool);
     case TypeStructure::Kind::T_typeaccess:
-    case TypeStructure::Kind::T_array:
     case TypeStructure::Kind::T_darray:
     case TypeStructure::Kind::T_varray:
     case TypeStructure::Kind::T_varray_or_darray:
@@ -3176,7 +3174,7 @@ bool canReduceToDontResolve(SArray ts, bool checkArrays) {
     case TypeStructure::Kind::T_vec:
     case TypeStructure::Kind::T_keyset:
     case TypeStructure::Kind::T_vec_or_dict:
-    case TypeStructure::Kind::T_arraylike:
+    case TypeStructure::Kind::T_any_array:
       return !checkArrays || checkGenerics(ts);
     case TypeStructure::Kind::T_class:
     case TypeStructure::Kind::T_interface:
@@ -3201,7 +3199,6 @@ bool canReduceToDontResolve(SArray ts, bool checkArrays) {
     // Following cannot be used in is/as expressions, we need to error on them
     // Currently erroring happens as a part of the resolving phase,
     // so keep resolving them
-    case TypeStructure::Kind::T_array:
     case TypeStructure::Kind::T_darray:
     case TypeStructure::Kind::T_varray:
     case TypeStructure::Kind::T_varray_or_darray:
@@ -4775,8 +4772,8 @@ void in(ISS& env, const bc::OODeclExists& op) {
       auto const v = tv(name);
       if (!v) return TBool;
       auto rcls = env.index.resolve_class(env.ctx, v->m_data.pstr);
-      if (!rcls || !rcls->cls()) return TBool;
-      auto const mayExist = [&] () -> bool {
+      if (!rcls || !rcls->cls()) return TFalse;
+      auto const exist = [&] () -> bool {
         switch (op.subop1) {
           case OODeclExistsOp::Class:
             return !(rcls->cls()->attrs & (AttrInterface | AttrTrait));
@@ -4787,24 +4784,8 @@ void in(ISS& env, const bc::OODeclExists& op) {
         }
         not_reached();
       }();
-      auto unit = rcls->cls()->unit;
-      auto canConstProp = [&] {
-        // Its generally not safe to constprop this, because of
-        // autoload. We're safe if its part of systemlib, or a
-        // superclass of the current context.
-        if (is_systemlib_part(*unit)) return true;
-        if (!env.ctx.cls) return false;
-        auto thisClass = env.index.resolve_class(env.ctx.cls);
-        return thisClass.mustBeSubtypeOf(*rcls);
-      };
-      if (canConstProp()) {
-        constprop(env);
-        return mayExist ? TTrue : TFalse;
-      }
-      // At this point, if it mayExist, we still don't know that it
-      // *does* exist, but if not we know that it either doesn't
-      // exist, or it doesn't have the right type.
-      return mayExist ? TBool : TFalse;
+      constprop(env);
+      return exist ? TTrue : TFalse;
     } ());
 }
 
@@ -4942,7 +4923,7 @@ void verifyRetImpl(ISS& env, const TCVec& tcs,
     // does that we can't reduce even when we know it succeeds.
     // VerifyRetType will convert a TCls to a TStr implicitly
     // (and possibly warn)
-    if (tcT.couldBe(BStr) && stackT.couldBe(BCls)) {
+    if (tcT.couldBe(BStr) && stackT.couldBe(BCls | BLazyCls)) {
       stackT |= TStr;
       dont_reduce = true;
     }

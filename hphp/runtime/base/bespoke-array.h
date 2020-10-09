@@ -34,14 +34,27 @@ inline bool shouldTestBespokeArrayLikes() {
 }
 
 namespace bespoke {
+
 // Hide Layout and its implementations to the rest of the codebase.
 struct Layout;
+struct LayoutFunctions;
+
 // Maybe wrap this array in a LoggingArray, based on runtime options.
 ArrayData* maybeMakeLoggingArray(ArrayData*);
 const ArrayData* maybeMakeLoggingArray(const ArrayData*);
+ArrayData* maybeMonoify(ArrayData*);
+ArrayData* makeBespokeForTesting(ArrayData*);
 void setLoggingEnabled(bool);
 void exportProfiles();
 void waitOnExportProfiles();
+
+// Type-safe layout index, so that we can't mix it up with other ints.
+struct LayoutIndex {
+  bool operator==(LayoutIndex o) const { return raw == o.raw; }
+  bool operator!=(LayoutIndex o) const { return raw != o.raw; }
+  uint16_t raw;
+};
+
 }
 
 /*
@@ -61,7 +74,7 @@ struct BespokeArray : ArrayData {
    * is so (on little-endian systems) we can do a single comparison to test both
    * (size >= some constant) and bespoke-ness together.
    */
-  static constexpr uint16_t kExtraMagicBit = (1 << 15);
+  static constexpr bespoke::LayoutIndex kExtraMagicBit = {1 << 15};
 
   static BespokeArray* asBespoke(ArrayData*);
   static const BespokeArray* asBespoke(const ArrayData*);
@@ -69,13 +82,13 @@ struct BespokeArray : ArrayData {
   BespokeLayout layout() const;
 
 protected:
-  const bespoke::Layout* layoutRaw() const;
-  void setLayoutRaw(const bespoke::Layout*);
+  bespoke::LayoutIndex layoutIndex() const;
+  const bespoke::LayoutFunctions* vtable() const;
+  void setLayoutIndex(bespoke::LayoutIndex index);
 
 public:
   size_t heapSize() const;
   void scan(type_scan::Scanner& scan) const;
-  void setLegacyArrayBit(bool legacy);
 
   bool checkInvariants() const;
 
@@ -112,9 +125,29 @@ public:
   static bool ExistsInt(const ArrayData* ad, int64_t key);
   static bool ExistsStr(const ArrayData* ad, const StringData* key);
 
+  // iteration
+  static ssize_t IterBegin(const ArrayData* ad);
+  static ssize_t IterLast(const ArrayData* ad);
+  static ssize_t IterEnd(const ArrayData* ad);
+  static ssize_t IterAdvance(const ArrayData* ad, ssize_t pos);
+  static ssize_t IterRewind(const ArrayData* ad, ssize_t pos);
+
   // RW access
+  //
+  // The "Elem" methods are variants on the "Lval" methods that allow us to
+  // avoid unnecessary escalation. It restricts both the callee and caller:
+  //
+  //  * The callee implementing the method may *never* return a DataType*
+  //    pointing to a persistent counterpart of a maybe-countable DataType
+  //    (i.e. KindOfPersistentString, or any of the persistent array-likes).
+  //
+  //  * The caller using this method may *never* change the value of the type
+  //    the resulting lval points to. (It may store to it with the same type.)
+  //
   static arr_lval LvalInt(ArrayData* ad, int64_t key);
   static arr_lval LvalStr(ArrayData* ad, StringData* key);
+  static arr_lval ElemInt(ArrayData* ad, int64_t key);
+  static arr_lval ElemStr(ArrayData* ad, StringData* key);
 
   // insertion
   static ArrayData* SetInt(ArrayData* ad, int64_t key, TypedValue v);
@@ -125,13 +158,6 @@ public:
   // deletion
   static ArrayData* RemoveInt(ArrayData* ad, int64_t key);
   static ArrayData* RemoveStr(ArrayData* ad, const StringData* key);
-
-  // iteration
-  static ssize_t IterBegin(const ArrayData* ad);
-  static ssize_t IterLast(const ArrayData* ad);
-  static ssize_t IterEnd(const ArrayData* ad);
-  static ssize_t IterAdvance(const ArrayData* ad, ssize_t pos);
-  static ssize_t IterRewind(const ArrayData* ad, ssize_t pos);
 
   // sorting
   static ArrayData* EscalateForSort(ArrayData* ad, SortFunction sf);
@@ -144,24 +170,14 @@ public:
 
   // high-level ops
   static ArrayData* Append(ArrayData* ad, TypedValue v);
-  static ArrayData* Prepend(ArrayData* ad, TypedValue v);
-  static ArrayData* Merge(ArrayData* ad, const ArrayData* elems);
   static ArrayData* Pop(ArrayData* ad, Variant& out);
-  static ArrayData* Dequeue(ArrayData* ad, Variant& out);
-  static ArrayData* Renumber(ArrayData* ad);
   static void OnSetEvalScalar(ArrayData* ad);
 
   // copies and conversions
-  static ArrayData* Copy(const ArrayData* ad);
   static ArrayData* CopyStatic(const ArrayData* ad);
-  static ArrayData* ToVArray(ArrayData* ad, bool copy);
-  static ArrayData* ToDArray(ArrayData* ad, bool copy);
-  static ArrayData* ToVec(ArrayData* ad, bool copy);
-  static ArrayData* ToDict(ArrayData* ad, bool copy);
-  static ArrayData* ToKeyset(ArrayData* ad, bool copy);
-
-  // flags
-  static void SetLegacyArrayInPlace(ArrayData* ad, bool legacy);
+  static ArrayData* ToDVArray(ArrayData* ad, bool copy);
+  static ArrayData* ToHackArr(ArrayData* ad, bool copy);
+  static ArrayData* SetLegacyArray(ArrayData* ad, bool copy, bool legacy);
 };
 
 } // namespace HPHP

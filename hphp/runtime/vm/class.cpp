@@ -959,6 +959,7 @@ void Class::checkPropInitialValues() const {
     }
 
     // No coercion for statically initialized properties.
+    // Coercing property values here is not thread-safe.
     assertx(type(tv) == type(rval));
     assertx(val(tv).num == val(rval).num);
   }
@@ -2997,7 +2998,6 @@ template<typename XProp>
 void Class::checkPrePropVal(XProp& prop, const PreClass::Prop* preProp) {
   auto const& tv = preProp->val();
   auto const& tc = preProp->typeConstraint();
-
   assertx(
     !(preProp->attrs() & AttrSystemInitialValue) ||
     tv.m_type != KindOfNull ||
@@ -3543,6 +3543,7 @@ void Class::setEnumType() {
 
     // Make sure we've loaded a valid underlying type.
     if (m_enumBaseTy &&
+        !((attrs() & AttrEnumClass) && isObjectType(*m_enumBaseTy)) &&
         !isIntType(*m_enumBaseTy) &&
         !isStringType(*m_enumBaseTy)) {
       raise_error("Invalid base type for enum %s",

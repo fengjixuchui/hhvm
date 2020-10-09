@@ -273,8 +273,6 @@ private:
   void insert(StringData* k, strhash_t h);
   void insert(StringData* k);
 
-  ssize_t findElm(const Elm& e) const;
-
   void erase(RemovePos);
 
   /*
@@ -402,17 +400,10 @@ public:
   static ArrayData* Copy(const ArrayData*);
   static ArrayData* CopyStatic(const ArrayData*);
   static ArrayData* Append(ArrayData*, TypedValue);
-  static ArrayData* Merge(ArrayData*, const ArrayData*);
   static ArrayData* Pop(ArrayData*, Variant&);
-  static ArrayData* Dequeue(ArrayData*, Variant&);
-  static ArrayData* Prepend(ArrayData*, TypedValue);
-  static ArrayData* Renumber(ArrayData*);
+  static ArrayData* ToDVArray(ArrayData*, bool copy);
+  static ArrayData* ToHackArr(ArrayData*, bool copy);
   static void OnSetEvalScalar(ArrayData*);
-  static constexpr auto ToDict = &ArrayCommon::ToDict;
-  static constexpr auto ToVec = &ArrayCommon::ToVec;
-  static ArrayData* ToKeyset(ArrayData*, bool);
-  static constexpr auto ToVArray = &ArrayCommon::ToVArray;
-  static ArrayData* ToDArray(ArrayData*, bool);
   static bool Equal(const ArrayData*, const ArrayData*);
   static bool NotEqual(const ArrayData*, const ArrayData*);
   static bool Same(const ArrayData*, const ArrayData*);

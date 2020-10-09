@@ -79,6 +79,7 @@ and hint_fun = {
   hf_param_kinds: Ast_defs.param_kind option list;
   hf_param_mutability: param_mutability option list;
   hf_variadic_ty: variadic_hint;
+  hf_cap: hint option;
   hf_return_ty: hint;
   hf_is_mutable_return: mutable_return;
 }
@@ -117,7 +118,6 @@ and hint_ =
   | Hmixed
   | Hnonnull
   | Habstr of string * hint list
-  | Harray of hint option * hint option
   | Hdarray of hint * hint
   | Hvarray of hint
   | Hvarray_or_darray of hint option * hint

@@ -30,7 +30,7 @@ pub trait FlattenOp {
 }
 
 pub trait FlattenSmartConstructors<'src, State>
-: SmartConstructors<State> + FlattenOp<S=<Self as SmartConstructors<State>>::R>
+: SmartConstructors<State = State> + FlattenOp<S=<Self as SmartConstructors>::R>
 {
     fn make_missing(&mut self, _: usize) -> Self::R {
        Self::zero(SyntaxKind::Missing)
@@ -244,11 +244,19 @@ pub trait FlattenSmartConstructors<'src, State>
         }
     }
 
-    fn make_function_declaration_header(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R, arg10: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) && Self::is_zero(&arg5) && Self::is_zero(&arg6) && Self::is_zero(&arg7) && Self::is_zero(&arg8) && Self::is_zero(&arg9) && Self::is_zero(&arg10) {
+    fn make_function_declaration_header(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R, arg10: Self::R, arg11: Self::R) -> Self::R {
+        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) && Self::is_zero(&arg5) && Self::is_zero(&arg6) && Self::is_zero(&arg7) && Self::is_zero(&arg8) && Self::is_zero(&arg9) && Self::is_zero(&arg10) && Self::is_zero(&arg11) {
           Self::zero(SyntaxKind::FunctionDeclarationHeader)
         } else {
-          self.flatten(SyntaxKind::FunctionDeclarationHeader, vec!(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10))
+          self.flatten(SyntaxKind::FunctionDeclarationHeader, vec!(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11))
+        }
+    }
+
+    fn make_capability(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
+        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) {
+          Self::zero(SyntaxKind::Capability)
+        } else {
+          self.flatten(SyntaxKind::Capability, vec!(arg0, arg1, arg2))
         }
     }
 
@@ -716,11 +724,11 @@ pub trait FlattenSmartConstructors<'src, State>
         }
     }
 
-    fn make_lambda_signature(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) {
+    fn make_lambda_signature(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
+        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) && Self::is_zero(&arg5) {
           Self::zero(SyntaxKind::LambdaSignature)
         } else {
-          self.flatten(SyntaxKind::LambdaSignature, vec!(arg0, arg1, arg2, arg3, arg4))
+          self.flatten(SyntaxKind::LambdaSignature, vec!(arg0, arg1, arg2, arg3, arg4, arg5))
         }
     }
 
@@ -1164,14 +1172,6 @@ pub trait FlattenSmartConstructors<'src, State>
         }
     }
 
-    fn make_vector_array_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) {
-          Self::zero(SyntaxKind::VectorArrayTypeSpecifier)
-        } else {
-          self.flatten(SyntaxKind::VectorArrayTypeSpecifier, vec!(arg0, arg1, arg2, arg3))
-        }
-    }
-
     fn make_type_parameter(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
         if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) && Self::is_zero(&arg5) {
           Self::zero(SyntaxKind::TypeParameter)
@@ -1196,14 +1196,6 @@ pub trait FlattenSmartConstructors<'src, State>
         }
     }
 
-    fn make_map_array_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) && Self::is_zero(&arg5) {
-          Self::zero(SyntaxKind::MapArrayTypeSpecifier)
-        } else {
-          self.flatten(SyntaxKind::MapArrayTypeSpecifier, vec!(arg0, arg1, arg2, arg3, arg4, arg5))
-        }
-    }
-
     fn make_dictionary_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
         if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) {
           Self::zero(SyntaxKind::DictionaryTypeSpecifier)
@@ -1212,11 +1204,11 @@ pub trait FlattenSmartConstructors<'src, State>
         }
     }
 
-    fn make_closure_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) && Self::is_zero(&arg5) && Self::is_zero(&arg6) && Self::is_zero(&arg7) {
+    fn make_closure_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R) -> Self::R {
+        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) && Self::is_zero(&arg5) && Self::is_zero(&arg6) && Self::is_zero(&arg7) && Self::is_zero(&arg8) {
           Self::zero(SyntaxKind::ClosureTypeSpecifier)
         } else {
-          self.flatten(SyntaxKind::ClosureTypeSpecifier, vec!(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7))
+          self.flatten(SyntaxKind::ClosureTypeSpecifier, vec!(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8))
         }
     }
 

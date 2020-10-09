@@ -23,6 +23,7 @@
 use parser_core_types::{
   lexable_token::LexableToken,
   syntax_kind::SyntaxKind,
+  token_kind::TokenKind,
 };
 use crate::SmartConstructors;
 
@@ -37,8 +38,9 @@ impl<S> WithKind<S> {
     }
 }
 
-impl<S, State> SmartConstructors<State> for WithKind<S>
-where S: SmartConstructors<State> {
+impl<S, State> SmartConstructors for WithKind<S>
+where S: SmartConstructors<State = State> {
+    type State = State;
     type Token = S::Token;
     type R = (SyntaxKind, S::R);
 
@@ -48,6 +50,17 @@ where S: SmartConstructors<State> {
 
     fn into_state(self) -> State {
       self.s.into_state()
+    }
+
+    fn create_token(
+        &mut self,
+        kind: TokenKind,
+        offset: usize,
+        width: usize,
+        leading: <Self::Token as LexableToken>::Trivia,
+        trailing: <Self::Token as LexableToken>::Trivia,
+    ) -> Self::Token {
+        self.s.create_token(kind, offset, width, leading, trailing)
     }
 
     fn make_token(&mut self, token: Self::Token) -> Self::R {
@@ -142,8 +155,11 @@ where S: SmartConstructors<State> {
     fn make_function_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
         compose(SyntaxKind::FunctionDeclaration, self.s.make_function_declaration(arg0.1, arg1.1, arg2.1))
     }
-    fn make_function_declaration_header(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R, arg9 : Self::R, arg10 : Self::R) -> Self::R {
-        compose(SyntaxKind::FunctionDeclarationHeader, self.s.make_function_declaration_header(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1, arg6.1, arg7.1, arg8.1, arg9.1, arg10.1))
+    fn make_function_declaration_header(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R, arg9 : Self::R, arg10 : Self::R, arg11 : Self::R) -> Self::R {
+        compose(SyntaxKind::FunctionDeclarationHeader, self.s.make_function_declaration_header(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1, arg6.1, arg7.1, arg8.1, arg9.1, arg10.1, arg11.1))
+    }
+    fn make_capability(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
+        compose(SyntaxKind::Capability, self.s.make_capability(arg0.1, arg1.1, arg2.1))
     }
     fn make_capability_provisional(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R) -> Self::R {
         compose(SyntaxKind::CapabilityProvisional, self.s.make_capability_provisional(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1))
@@ -319,8 +335,8 @@ where S: SmartConstructors<State> {
     fn make_lambda_expression(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R) -> Self::R {
         compose(SyntaxKind::LambdaExpression, self.s.make_lambda_expression(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1))
     }
-    fn make_lambda_signature(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R) -> Self::R {
-        compose(SyntaxKind::LambdaSignature, self.s.make_lambda_signature(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1))
+    fn make_lambda_signature(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R) -> Self::R {
+        compose(SyntaxKind::LambdaSignature, self.s.make_lambda_signature(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1))
     }
     fn make_cast_expression(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R {
         compose(SyntaxKind::CastExpression, self.s.make_cast_expression(arg0.1, arg1.1, arg2.1, arg3.1))
@@ -487,9 +503,6 @@ where S: SmartConstructors<State> {
     fn make_varray_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R) -> Self::R {
         compose(SyntaxKind::VarrayTypeSpecifier, self.s.make_varray_type_specifier(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1))
     }
-    fn make_vector_array_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R {
-        compose(SyntaxKind::VectorArrayTypeSpecifier, self.s.make_vector_array_type_specifier(arg0.1, arg1.1, arg2.1, arg3.1))
-    }
     fn make_type_parameter(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R) -> Self::R {
         compose(SyntaxKind::TypeParameter, self.s.make_type_parameter(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1))
     }
@@ -499,14 +512,11 @@ where S: SmartConstructors<State> {
     fn make_darray_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R) -> Self::R {
         compose(SyntaxKind::DarrayTypeSpecifier, self.s.make_darray_type_specifier(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1, arg6.1))
     }
-    fn make_map_array_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R) -> Self::R {
-        compose(SyntaxKind::MapArrayTypeSpecifier, self.s.make_map_array_type_specifier(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1))
-    }
     fn make_dictionary_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R {
         compose(SyntaxKind::DictionaryTypeSpecifier, self.s.make_dictionary_type_specifier(arg0.1, arg1.1, arg2.1, arg3.1))
     }
-    fn make_closure_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R) -> Self::R {
-        compose(SyntaxKind::ClosureTypeSpecifier, self.s.make_closure_type_specifier(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1, arg6.1, arg7.1))
+    fn make_closure_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R) -> Self::R {
+        compose(SyntaxKind::ClosureTypeSpecifier, self.s.make_closure_type_specifier(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1, arg6.1, arg7.1, arg8.1))
     }
     fn make_closure_parameter_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R {
         compose(SyntaxKind::ClosureParameterTypeSpecifier, self.s.make_closure_parameter_type_specifier(arg0.1, arg1.1))

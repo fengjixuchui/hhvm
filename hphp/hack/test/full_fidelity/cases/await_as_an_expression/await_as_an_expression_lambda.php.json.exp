@@ -134,6 +134,7 @@
                 "line_number":3
               }
             },
+            "function_capability":{"kind":"missing"},
             "function_capability_provisional":{"kind":"missing"},
             "function_colon":{
               "kind":"token",
@@ -754,6 +755,7 @@
                             "line_number":6
                           }
                         },
+                        "lambda_capability":{"kind":"missing"},
                         "lambda_colon":{"kind":"missing"},
                         "lambda_type":{"kind":"missing"}
                       },
@@ -935,6 +937,7 @@
                             "line_number":7
                           }
                         },
+                        "lambda_capability":{"kind":"missing"},
                         "lambda_colon":{"kind":"missing"},
                         "lambda_type":{"kind":"missing"}
                       },
@@ -1171,6 +1174,7 @@
                             "line_number":8
                           }
                         },
+                        "lambda_capability":{"kind":"missing"},
                         "lambda_colon":{"kind":"missing"},
                         "lambda_type":{"kind":"missing"}
                       },
@@ -1405,6 +1409,7 @@
                             "line_number":9
                           }
                         },
+                        "lambda_capability":{"kind":"missing"},
                         "lambda_colon":{"kind":"missing"},
                         "lambda_type":{"kind":"missing"}
                       },
@@ -2171,5 +2176,5 @@
     }
   },
   "program_text":"<?hh\n\nasync function foo(): Awaitable<void> {\n  $x = async { await genx(); };\n  $x = async { f(await genx()); };\n  $x = async () ==> await genx();\n  $x = async () ==> f(await genx());\n  $x = async () ==> { await genx(); };\n  $x = async () ==> { f(await genx()); };\n  $x = async function () { await genx(); };\n  $x = async function () { f(await genx()); };\n}\n",
-  "version":"2020-08-17-0000"
+  "version":"2020-09-14-0000"
 }

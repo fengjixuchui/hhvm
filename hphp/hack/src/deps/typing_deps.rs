@@ -8,18 +8,18 @@
 use depgraph::reader::{Dep, DepGraph, DepGraphOpener};
 use fnv::FnvHasher;
 use im_rc::OrdSet;
-use ocamlrep::{from, Allocator, FromError, FromOcamlRep, OpaqueValue, ToOcamlRep, Value};
+use ocamlrep::Value;
 use ocamlrep_custom::{caml_serialize_default_impls, CamlSerialize, Custom};
 use ocamlrep_ocamlpool::ocaml_ffi;
+use once_cell::sync::OnceCell;
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::convert::TryInto;
 use std::ffi::OsString;
 use std::hash::Hasher;
+use std::io::Write;
 use std::panic;
-
-extern "C" {
-    fn assert_master();
-}
+use std::sync::Mutex;
 
 fn _static_assert() {
     // The use of 64-bit (actually 63-bit) dependency hashes requires that we
@@ -27,10 +27,35 @@ fn _static_assert() {
     //
     // OCaml only supports unboxed integers of WORD SIZE - 1 bits. We don't want to
     // be boxing dependency hashes, so we require a 64-bit word size.
+    //
+    // If this check fails, it would be impossible to correctly convert back and
+    // forth between OCaml's native integer type and Rust's u64.
     let _ = [(); 0 - (!(8 == std::mem::size_of::<usize>()) as usize)];
 }
 
-static mut UNSAFE_DEPGRAPH: Option<Box<UnsafeDepGraph>> = None;
+/// Custom node, we'll be generating 64-bit hashes.
+///
+/// The optional string points to an existing dep graph, if available.
+/// This file name will be set in every worker, and when trying to read
+/// from it, will be lazily opened.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DepGraphMode(Option<OsString>);
+
+static DEPGRAPH_MODE: OnceCell<DepGraphMode> = OnceCell::new();
+
+/// A structure wrapping the memory-mapped dependency graph.
+/// Each worker will itself lazily (or eagerly upon request)
+/// open a memory-mapping to the dependency graph.
+///
+/// It's an option, because custom mode might be enabled without
+/// an existing saved-state.
+static DEPGRAPH: OnceCell<Option<UnsafeDepGraph>> = OnceCell::new();
+
+/// The dependency graph delta.
+///
+/// Even though this is only used in a single-threaded context (from OCaml)
+/// we wrap it in a `Mutex` to ensure safety.
+static DEPGRAPH_DELTA: OnceCell<Mutex<DepGraphDelta>> = OnceCell::new();
 
 /// We wrap the dependency graph in an unsafe structure.
 ///
@@ -75,26 +100,167 @@ impl UnsafeDepGraph {
         &self._do_not_reference_depgraph
     }
 
+    /// Enable the custom dep graph, either with or without existing
+    /// saved-state.
+    ///
+    /// # Panics
+    ///
+    /// If previously called with a different argument.
+    pub fn enable(depgraph_fn: Option<OsString>) {
+        let new_mode = DepGraphMode(depgraph_fn);
+        let current_mode = DEPGRAPH_MODE.get_or_init(|| new_mode.clone());
+
+        if current_mode != &new_mode {
+            panic!("programming error: dep graph mode already enabled");
+        }
+    }
+
+    /// Load the graph using `DEPGRAPH_MODE`
+    ///
+    /// A no-op if the graph is already loaded.
+    ///
+    /// # Panics
+    ///
+    /// If this function is called before enabling custom mode
+    /// using `enable`.
+    pub fn load() -> Result<(), String> {
+        let _depgraph = DEPGRAPH.get_or_try_init::<_, String>(|| {
+            match DEPGRAPH_MODE.get() {
+                None => panic!("programming error: cannot call load before enabling mode"),
+                Some(DepGraphMode(None)) => {
+                    // Enabled, but we don't have a saved-state, so we can't open it
+                    Ok(None)
+                }
+                Some(DepGraphMode(Some(depgraph_fn))) => {
+                    let opener = DepGraphOpener::from_path(&depgraph_fn)
+                        .map_err(|err| format!("could not open dep graph file: {:?}", err))?;
+                    let depgraph = UnsafeDepGraph::new(opener)?;
+                    Ok(Some(depgraph))
+                }
+            }
+        })?;
+
+        Ok(())
+    }
+
     /// Run the closure with the loaded dep graph.
     ///
     /// # Panics
     ///
-    /// Panics if the graph is not loaded
+    /// Panics if the graph is not loaded, and custom mode is not enabled
+    /// or custom mode is enabled, but without a saved-state.
+    ///
+    /// Panics if the graph is not yet loaded, and opening
+    /// the graph results in an error.
     pub fn with<F, R>(f: F) -> R
     where
         for<'a> F: FnOnce(&'a DepGraph<'a>) -> R,
     {
-        // Safety: We only load the dependency graph once.
-        // The dependency graph, if loaded will not be deallocated.
-        let g: &UnsafeDepGraph = unsafe { UNSAFE_DEPGRAPH.as_ref().unwrap() };
-        f(g.depgraph())
+        if !Self::is_initialized() {
+            Self::load().unwrap();
+        }
+
+        let g = DEPGRAPH.get().unwrap();
+        f(g.as_ref()
+            .expect("no saved-state dep graph available")
+            .depgraph())
+    }
+
+    /// Run the closure with the loaded dep graph. If the custom dep graph
+    /// mode was enabled without a saved-state, return the passed default
+    /// value.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the graph is not loaded, and custom mode was not enabled.
+    ///
+    /// Panics if the graph is not yet loaded, and opening
+    /// the graph results in an error.
+    pub fn with_default<F, R>(default: R, f: F) -> R
+    where
+        for<'a> F: FnOnce(&'a DepGraph<'a>) -> R,
+    {
+        if !Self::is_initialized() {
+            Self::load().unwrap();
+        }
+
+        let g = DEPGRAPH.get().unwrap();
+        match g.as_ref() {
+            None => default,
+            Some(g) => f(g.depgraph()),
+        }
     }
 
     /// Return whether the global custom dependency graph is initialized.
     #[inline(always)]
     pub fn is_initialized() -> bool {
-        // Safety: just comparing pointers: UNSAFE_DEPGRAPH != NULL
-        unsafe { UNSAFE_DEPGRAPH.is_some() }
+        // This should be really fast on x86, as the `get` call
+        // just does an atomic load with acquire semantics, which doesn't
+        // require any memory fences on x86.
+        DEPGRAPH.get().is_some()
+    }
+
+    /// Return whether the custom dependency graph is enabled.
+    ///
+    /// For example, used to determine whether 64-bit or 32-bit hashes
+    /// should be generated.
+    #[inline(always)]
+    pub fn is_enabled() -> bool {
+        // This should be really fast on x86, as the `get` call
+        // just does an atomic load with acquire semantics, which doesn't
+        // require any memory fences on x86.
+        DEPGRAPH_MODE.get().is_some()
+    }
+}
+
+pub struct DepGraphDelta(BTreeMap<Dep, BTreeSet<Dep>>);
+
+impl DepGraphDelta {
+    pub fn new() -> Self {
+        DepGraphDelta(BTreeMap::new())
+    }
+
+    pub fn insert(&mut self, dependent: Dep, dependency: Dep) {
+        self.0
+            .entry(dependency)
+            .and_modify(|depts| {
+                depts.insert(dependent);
+            })
+            .or_insert_with(|| {
+                let mut s = BTreeSet::new();
+                s.insert(dependent);
+                s
+            });
+    }
+
+    pub fn get(&self, dependency: Dep) -> Option<&BTreeSet<Dep>> {
+        self.0.get(&dependency)
+    }
+
+    pub fn with_cell<R>(f: impl FnOnce(&Mutex<Self>) -> R) -> R {
+        let cell = DEPGRAPH_DELTA.get_or_init(|| Mutex::new(Self::new()));
+        f(cell)
+    }
+
+    /// Run the closure with the dep graph delta.
+    ///
+    /// # Panics
+    ///
+    /// When another reference to delta is still active, but that
+    /// isn't likely,given that we only have one thread, and the
+    /// `with`/`with_mut` auxiliary functions disallow the reference
+    /// to escape.
+    pub fn with<R>(f: impl FnOnce(&Self) -> R) -> R {
+        Self::with_cell(|cell| f(&cell.lock().unwrap()))
+    }
+
+    /// Run the closure with the mutable dep graph delta.
+    ///
+    /// # Panics
+    ///
+    /// See `with`
+    pub fn with_mut<R>(f: impl FnOnce(&mut Self) -> R) -> R {
+        Self::with_cell(|cell| f(&mut cell.lock().unwrap()))
     }
 }
 
@@ -165,7 +331,7 @@ fn postprocess_hash(dep_type: DepType, hash: u64) -> u64 {
         }
     };
 
-    if !UnsafeDepGraph::is_initialized() {
+    if !UnsafeDepGraph::is_enabled() {
         // We are in the legacy dependency graph system:
         //
         // The shared-memory dependency graph stores edges as pairs of vertices.
@@ -298,66 +464,20 @@ pub fn combine_hashes(dep_hash: u64, naming_hash: i64) -> i64 {
     upper_31_bits | lower_31_bits
 }
 
-// A wrapper around isize, an OCaml int, representing a dependency, with
-// conversion support to and from `Dep`.
-#[derive(Debug, Copy, Clone)]
-struct OcamlDep(isize);
-
-impl From<Dep> for OcamlDep {
-    fn from(dep: Dep) -> OcamlDep {
-        let dep: u64 = dep.into();
-        // In Rust, a numeric cast between two integers of the same size
-        // is a no-op. We require a 64-bit word size.
-        OcamlDep(dep as isize)
-    }
-}
-
-impl Into<Dep> for OcamlDep {
-    fn into(self) -> Dep {
-        let dep: isize = self.0;
-        // In Rust, a numeric cast between two integers of the same size
-        // is a no-op. We require a 64-bit word size.
-        Dep::new(dep as u64)
-    }
-}
-
-impl FromOcamlRep for OcamlDep {
-    fn from_ocamlrep(value: Value<'_>) -> Result<Self, FromError> {
-        let x = from::expect_int(value)?;
-        Ok(OcamlDep(x))
-    }
-}
-
-impl ToOcamlRep for OcamlDep {
-    fn to_ocamlrep<'a, A: Allocator>(&self, _alloc: &'a A) -> OpaqueValue<'a> {
-        let dep = self.0;
-        OpaqueValue::int(dep)
-    }
-}
-
 // Functions to load the dep graph
 ocaml_ffi! {
-    fn hh_load_custom_dep_graph(depgraph_fn: OsString) -> Result<(), String> {
-        unsafe {
-            assert_master();
-        }
+    fn hh_custom_dep_graph_enable(depgraph_fn: Option<OsString>) {
+        UnsafeDepGraph::enable(depgraph_fn);
+    }
 
-        let opener = DepGraphOpener::from_path(&depgraph_fn).map_err(
-            |err| format!("could not open dep graph file: {:?}", err)
-        )?;
-        let unsafe_depgraph = UnsafeDepGraph::new(opener)?;
-
-        unsafe {
-            UNSAFE_DEPGRAPH = Some(Box::new(unsafe_depgraph));
-        }
-
-        Ok(())
+    fn hh_custom_dep_graph_force_load() -> Result<(), String> {
+        UnsafeDepGraph::load()
     }
 }
 
 /// Rust set of dependencies that can be transferred from
 /// OCaml to Rust memory.
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct DepSet(OrdSet<Dep>);
 
 impl std::ops::Deref for DepSet {
@@ -376,6 +496,31 @@ impl From<OrdSet<Dep>> for DepSet {
 
 impl CamlSerialize for DepSet {
     caml_serialize_default_impls!();
+
+    fn serialize(&self) -> Vec<u8> {
+        let num_elems = self.len();
+        let mut buf = Vec::with_capacity(std::mem::size_of::<u64>() * num_elems);
+        for &x in self.iter() {
+            let x: u64 = x.into();
+            buf.write_all(&x.to_le_bytes()).unwrap();
+        }
+        buf
+    }
+
+    fn deserialize(data: &[u8]) -> Self {
+        const U64_SIZE: usize = std::mem::size_of::<u64>();
+
+        let num_elems = data.len() / U64_SIZE;
+        let max_index = num_elems * U64_SIZE;
+        let mut s: OrdSet<Dep> = OrdSet::new();
+        let mut index = 0;
+        while index < max_index {
+            let x = u64::from_le_bytes(data[index..index + U64_SIZE].try_into().unwrap());
+            s.insert(Dep::new(x));
+            index += U64_SIZE;
+        }
+        s.into()
+    }
 }
 
 /// Rust set of visited hashes
@@ -400,51 +545,127 @@ impl CamlSerialize for VisitedSet {
     caml_serialize_default_impls!();
 }
 
+// Functions to register custom Rust types with the OCaml runtime
+ocaml_ffi! {
+    fn hh_custom_dep_graph_register_custom_types() {
+        // Safety: The OCaml runtime is currently interrupted by a call into
+        // this function, so it's safe to interact with it.
+        unsafe {
+            DepSet::register();
+            VisitedSet::register();
+        }
+    }
+}
+
 // Functions to query the dependency graph
 ocaml_ffi! {
-    fn hh_custom_dep_graph_get_ideps_from_hash(dep: OcamlDep) -> Custom<DepSet> {
-        let set_opt = UnsafeDepGraph::with(move |g| {
-            let list = g.hash_list_for(dep.into())?;
-            let hashes: OrdSet<Dep> = g.hash_list_hashes(list).collect();
-            Some(hashes)
-        });
-        Custom::from(set_opt.unwrap_or_else(OrdSet::new).into())
-    }
-
-    fn hh_custom_dep_graph_add_typing_deps(s: Custom<DepSet>) -> Custom<DepSet> {
-        UnsafeDepGraph::with(move |g| {
-            Custom::from(g.query_typing_deps_multi(&s).into())
+    fn hh_custom_dep_graph_has_edge(dependent: Dep, dependency: Dep) -> bool {
+        UnsafeDepGraph::with_default(false, move |g| {
+            match g.hash_list_for(dependency) {
+                Some(hash_list) => g.hash_list_contains(hash_list, dependent),
+                None => false,
+            }
         })
     }
 
-    fn hh_custom_dep_graph_add_extend_deps(s: Custom<DepSet>) -> Custom<DepSet> {
-        let mut visited = BTreeSet::new();
-        let s = s.clone();
-        let mut acc = s.clone();
-        let acc = UnsafeDepGraph::with(move |g| {
-            for dep in s {
-                if dep.is_class() {
-                    g.add_extend_deps(&mut acc, dep, &mut visited);
+    fn hh_custom_dep_graph_get_ideps_from_hash(dep: Dep) -> Custom<DepSet> {
+
+        let mut deps = OrdSet::new();
+        DepGraphDelta::with(|delta| {
+            if let Some(delta_deps) = delta.get(dep) {
+                deps.extend(delta_deps.iter().copied());
+            }
+        });
+        UnsafeDepGraph::with(|g| {
+            if let Some(hash_list) = g.hash_list_for(dep) {
+                deps.extend(g.hash_list_hashes(hash_list));
+            }
+        });
+
+        Custom::from(DepSet(deps))
+    }
+
+    fn hh_custom_dep_graph_add_typing_deps(query: Custom<DepSet>) -> Custom<DepSet> {
+        let mut s = UnsafeDepGraph::with(|g| g.query_typing_deps_multi(&query));
+        DepGraphDelta::with(|delta| {
+            for dep in query.iter() {
+                if let Some(depies) = delta.get(*dep) {
+                    s.extend(depies.iter().copied());
                 }
             }
-            acc
         });
+        Custom::from(DepSet(s))
+    }
+
+    fn hh_custom_dep_graph_add_extend_deps(query: Custom<DepSet>) -> Custom<DepSet> {
+        let mut visited = BTreeSet::new();
+        let mut queue = VecDeque::new();
+        let mut acc = query.clone();
+        for source_class in query.iter() {
+            get_extend_deps_visit(&mut visited, &mut queue, *source_class, &mut acc);
+        }
+        while let Some(source_class) = queue.pop_front() {
+            get_extend_deps_visit(&mut visited, &mut queue, source_class, &mut acc);
+        }
         Custom::from(acc.into())
     }
 
     fn hh_custom_dep_graph_get_extend_deps(
         visited: Custom<VisitedSet>,
-        source_class: OcamlDep,
+        source_class: Dep,
         acc: Custom<DepSet>,
     ) -> Custom<DepSet> {
         let mut visited = visited.borrow_mut();
+        let mut queue = VecDeque::new();
         let mut acc = acc.clone();
-        let acc = UnsafeDepGraph::with(move |g| {
-            g.add_extend_deps(&mut acc, source_class.into(), &mut visited);
-            acc
-        });
+        get_extend_deps_visit(&mut visited, &mut queue, source_class, &mut acc);
+        while let Some(source_class) = queue.pop_front() {
+            get_extend_deps_visit(&mut visited, &mut queue, source_class, &mut acc);
+        }
         Custom::from(acc.into())
     }
+
+    fn hh_custom_dep_graph_register_discovered_dep_edge(
+        dependent: Dep,
+        dependency: Dep,
+    ) {
+        DepGraphDelta::with_mut(move |s| {
+            s.insert(dependent, dependency);
+        });
+    }
+}
+
+fn get_extend_deps_visit(
+    visited: &mut BTreeSet<Dep>,
+    queue: &mut VecDeque<Dep>,
+    source_class: Dep,
+    acc: &mut OrdSet<Dep>,
+) {
+    if !visited.insert(source_class) {
+        return;
+    }
+    let extends_hash = match source_class.class_to_extends() {
+        None => return,
+        Some(hash) => hash,
+    };
+    let mut handle_extends_dep = |dep: Dep| {
+        if dep.is_class() {
+            if acc.insert(dep).is_none() {
+                queue.push_back(dep);
+            }
+        }
+    };
+    DepGraphDelta::with(|delta| {
+        if let Some(delta_deps) = delta.get(extends_hash) {
+            delta_deps.iter().copied().for_each(&mut handle_extends_dep);
+        }
+    });
+    UnsafeDepGraph::with(|g| {
+        if let Some(hash_list) = g.hash_list_for(extends_hash) {
+            g.hash_list_hashes(hash_list)
+                .for_each(&mut handle_extends_dep);
+        }
+    })
 }
 
 // Auxiliary functions for Typing_deps.DepSet/Typing_deps.VisitedSet
@@ -457,15 +678,15 @@ ocaml_ffi! {
         Custom::from(OrdSet::new().into())
     }
 
-    fn hh_dep_set_singleton(dep: OcamlDep) -> Custom<DepSet> {
+    fn hh_dep_set_singleton(dep: Dep) -> Custom<DepSet> {
         let mut s = OrdSet::new();
-        s.insert(dep.into());
+        s.insert(dep);
         Custom::from(s.into())
     }
 
-    fn hh_dep_set_add(s: Custom<DepSet>, dep: OcamlDep) -> Custom<DepSet> {
+    fn hh_dep_set_add(s: Custom<DepSet>, dep: Dep) -> Custom<DepSet> {
         let mut s = s.clone();
-        s.insert(dep.into());
+        s.insert(dep);
         Custom::from(s.into())
     }
 
@@ -487,12 +708,12 @@ ocaml_ffi! {
         Custom::from(s1.difference(s2).into())
     }
 
-    fn hh_dep_set_mem(s: Custom<DepSet>, dep: OcamlDep) -> bool {
-        s.contains(&dep.into())
+    fn hh_dep_set_mem(s: Custom<DepSet>, dep: Dep) -> bool {
+        s.contains(&dep)
     }
 
-    fn hh_dep_set_elements(s: Custom<DepSet>) -> Vec<OcamlDep> {
-        s.iter().copied().map(OcamlDep::from).collect()
+    fn hh_dep_set_elements(s: Custom<DepSet>) -> Vec<Dep> {
+        s.iter().copied().map(Dep::from).collect()
     }
 
      fn hh_dep_set_cardinal(s: Custom<DepSet>) -> usize {
@@ -508,6 +729,7 @@ ocaml_ffi! {
 mod tests {
     extern crate test;
 
+    use super::*;
     use ocamlrep::{Arena, Value};
     use test::Bencher;
 
@@ -569,5 +791,18 @@ mod tests {
                 name2.to_bits(),
             )
         });
+    }
+
+    #[test]
+    fn test_dep_set_serialize() {
+        let mut x: OrdSet<Dep> = OrdSet::new();
+        x.insert(Dep::new(1));
+        x.insert(Dep::new(2));
+        let x: DepSet = x.into();
+
+        let buf = x.serialize();
+        let y = DepSet::deserialize(&buf);
+
+        assert_eq!(x, y);
     }
 }

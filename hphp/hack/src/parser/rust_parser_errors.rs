@@ -3843,14 +3843,6 @@ where
         }
     }
 
-    fn capability_errors(&mut self, node: &'a Syntax<Token, Value>) {
-        if let FunctionDeclarationHeader(x) = &node.syntax {
-            if !&x.function_capability_provisional.is_missing() {
-                self.check_can_use_feature(node, &UnstableFeatures::CoeffectsProvisional);
-            }
-        }
-    }
-
     fn is_method_declaration(node: &'a Syntax<Token, Value>) -> bool {
         if let MethodishDeclaration(_) = &node.syntax {
             true
@@ -4528,10 +4520,10 @@ where
                     Name | Trait | Extends | Implements | Static | Abstract | Final | Private
                     | Protected | Public | Global | Goto | Instanceof | Insteadof | Interface
                     | Namespace | New | Try | Use | Var | List | Clone | Include | Include_once
-                    | Throw | Array | Tuple | Print | Echo | Require | Require_once | Return
-                    | Else | Elseif | Default | Break | Continue | Switch | Yield | Function
-                    | If | Finally | For | Foreach | Case | Do | While | As | Catch | Empty
-                    | Using | Class | NullLiteral | Super | Where => true,
+                    | Throw | Tuple | Print | Echo | Require | Require_once | Return | Else
+                    | Elseif | Default | Break | Continue | Switch | Yield | Function | If
+                    | Finally | For | Foreach | Case | Do | While | As | Catch | Empty | Using
+                    | Class | NullLiteral | Super | Where => true,
                     _ => false,
                 }
             }
@@ -5510,7 +5502,6 @@ where
                 self.redeclaration_errors(node);
                 self.multiple_entrypoint_attribute_errors(node);
                 self.methodish_errors(node);
-                self.capability_errors(node);
             }
 
             LiteralExpression(_)
@@ -5703,6 +5694,9 @@ where
         match &node.syntax {
             UnionTypeSpecifier(_) | IntersectionTypeSpecifier(_) => {
                 self.check_can_use_feature(node, &UnstableFeatures::UnionIntersectionTypeHints)
+            }
+            Capability(_) | CapabilityProvisional(_) => {
+                self.check_can_use_feature(node, &UnstableFeatures::CoeffectsProvisional)
             }
             PocketAtomExpression(_)
             | PocketIdentifierExpression(_)

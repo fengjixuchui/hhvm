@@ -906,139 +906,46 @@ uint32_t prepareUnpackArgs(const Func* func, uint32_t numArgs,
   return numParams + 1;
 }
 
-static void prepareFuncEntry(ActRec *ar, Array&& generics) {
+static void prepareFuncEntry(ActRec *ar, uint32_t numArgsInclUnpack) {
   assertx(!isResumed(ar));
+  assertx(
+    reinterpret_cast<TypedValue*>(ar) - vmStack().top() ==
+      ar->func()->numParams() + (ar->func()->hasReifiedGenerics() ? 1U : 0U)
+  );
+
   const Func* func = ar->func();
-  Offset firstDVInitializer = kInvalidOffset;
-  folly::Optional<uint32_t> raiseTooManyArgumentsWarnings;
-  const int nparams = func->numNonVariadicParams();
-  auto& stack = vmStack();
-
-  auto const nargs = (TypedValue*)ar - stack.top();
-
-  if (UNLIKELY(nargs > nparams)) {
-    // All extra arguments are expected to be packed in a varray.
-    assertx(nargs == nparams + 1);
-    assertx(tvIsHAMSafeVArray(stack.topC()));
-    if (!func->hasVariadicCaptureParam()) {
-      // Record the number of args for the warning before dropping extra args.
-      auto const unpackArgs = stack.topC()->m_data.parr;
-      if (!unpackArgs->empty()) {
-        raiseTooManyArgumentsWarnings = nparams + unpackArgs->size();
-      }
-      stack.popC();
-      ar->setNumArgs(nparams);
-    }
-  } else {
-    if (nargs < nparams) {
-      // This is where we are going to enter, assuming we don't fail on
-      // a missing argument check.
-      firstDVInitializer = func->params()[nargs].funcletOff;
-
-      // Push uninitialized nulls for missing arguments. They will end up
-      // getting default-initialized, but regardless, we need to make space
-      // for them on the stack.
-      for (int i = nargs; i < nparams; ++i) {
-        stack.pushUninit();
-      }
-    }
-    if (UNLIKELY(func->hasVariadicCaptureParam())) {
-      ARRPROV_USE_RUNTIME_LOCATION();
-      auto const ad = ArrayData::CreateVArray();
-      if (RuntimeOption::EvalHackArrDVArrs) {
-        stack.pushVecNoRc(ad);
-      } else {
-        stack.pushArrayNoRc(ad);
-      }
-    }
-  }
-
   int nlocals = func->numParams();
   if (UNLIKELY(func->isClosureBody())) {
-    int nuse = c_Closure::initActRecFromClosure(ar, stack.top());
+    int nuse = c_Closure::initActRecFromClosure(ar, vmStack().top());
     // initActRecFromClosure doesn't move stack
-    stack.nalloc(nuse);
+    vmStack().nalloc(nuse);
     nlocals += nuse;
     func = ar->func();
   }
 
   if (ar->func()->hasReifiedGenerics()) {
-    ARRPROV_USE_RUNTIME_LOCATION();
     // Currently does not work with closures
     assertx(!func->isClosureBody());
-    // push for first local
-    auto const ad = generics.isNull() ? ArrayData::CreateVArray()
-                                      : generics.detach();
-    if (RuntimeOption::EvalHackArrDVArrs) {
-      stack.pushVecNoRc(ad);
-    } else {
-      stack.pushArrayNoRc(ad);
-    }
     nlocals++;
-  } else {
-    generics.reset();
   }
 
   pushFrameSlots(func, nlocals);
 
   vmfp() = ar;
-  vmpc() = firstDVInitializer != kInvalidOffset
-    ? func->unit()->entry() + firstDVInitializer
-    : func->entry();
+  vmpc() = func->unit()->entry() + func->getEntryForNumArgs(numArgsInclUnpack);
   vmJitReturnAddr() = nullptr;
-
-  if (nargs < func->numRequiredParams()) {
-    HPHP::jit::throwMissingArgument(func, nargs);
-  }
-  if (raiseTooManyArgumentsWarnings) {
-    HPHP::jit::raiseTooManyArguments(func, *raiseTooManyArgumentsWarnings);
-  }
 }
-
-namespace {
-// Check whether the location of reified generics matches the one we expect
-void checkForReifiedGenericsErrors(const ActRec* ar, bool hasGenerics) {
-  if (!ar->func()->hasReifiedGenerics()) return;
-  if (!hasGenerics) {
-    if (areAllGenericsSoft(ar->func()->getReifiedGenericsInfo())) {
-      raise_warning_for_soft_reified(0, true, ar->func()->fullName());
-      return;
-    }
-    throw_call_reified_func_without_generics(ar->func());
-  }
-  auto const generics = frame_local(ar, ar->func()->numParams());
-  assertx(tvIsHAMSafeVArray(generics));
-  checkFunReifiedGenericMismatch(ar->func(), val(generics).parr);
-}
-
-void checkImplicitContextErrors(const ActRec* ar) {
-  if (!RO::EvalEnableImplicitContext ||
-      !ar->func()->hasNoContextAttr() ||
-      *ImplicitContext::activeCtx == nullptr) {
-    return;
-  }
-  throw_implicit_context_exception(folly::to<std::string>(
-    "Function ", ar->func()->fullName()->data(), " has implicit context "
-    "but is marked with __NoContext"));
-}
-} // namespace
 
 static void dispatch();
 
-void enterVMAtFunc(ActRec* enterFnAr, Array&& generics, bool hasInOut,
-                   bool dynamicCall, bool allowDynCallNoPointer) {
+void enterVMAtFunc(ActRec* enterFnAr, uint32_t numArgsInclUnpack) {
   assertx(enterFnAr);
   assertx(!isResumed(enterFnAr));
   ARRPROV_USE_VMPC();
   Stats::inc(Stats::VMEnter);
 
-  auto const hasGenerics = !generics.isNull();
-  prepareFuncEntry(enterFnAr, std::move(generics));
+  prepareFuncEntry(enterFnAr, numArgsInclUnpack);
 
-  checkForReifiedGenericsErrors(enterFnAr, hasGenerics);
-  calleeDynamicCallChecks(enterFnAr->func(), dynamicCall,
-                          allowDynCallNoPointer);
-  checkImplicitContextErrors(enterFnAr);
   if (!EventHook::FunctionCall(enterFnAr, EventHook::NormalFunc)) return;
   checkStack(vmStack(), enterFnAr->func(), 0);
   assertx(vmfp()->func()->contains(vmpc()));
@@ -3672,6 +3579,14 @@ bool doFCall(CallFlags callFlags, const Func* func, uint32_t numArgsInclUnpack,
   assertx(kNumActRecCells == 3);
   ActRec* ar = vmStack().indA(
     numArgsInclUnpack + (callFlags.hasGenerics() ? 1 : 0));
+
+  // Callee checks and input initialization.
+  calleeGenericsChecks(func, callFlags.hasGenerics());
+  calleeArgumentArityChecks(func, numArgsInclUnpack);
+  calleeDynamicCallChecks(func, callFlags.isDynamicCall());
+  calleeImplicitContextChecks(func);
+  initFuncInputs(func, numArgsInclUnpack);
+
   ar->m_sfp = vmfp();
   ar->setJitReturn(retAddr);
   ar->setFunc(func);
@@ -3679,15 +3594,12 @@ bool doFCall(CallFlags callFlags, const Func* func, uint32_t numArgsInclUnpack,
     callFlags.callOffset(),
     callFlags.asyncEagerReturn() ? (1 << ActRec::AsyncEagerRet) : 0
   );
-  ar->setNumArgs(numArgsInclUnpack);
+  ar->setNumArgs(std::min(numArgsInclUnpack, func->numParams()));
   ar->setThisOrClassAllowNull(ctx);
 
   try {
-    prepareFuncEntry(ar, GenericsSaver::pop(callFlags.hasGenerics()));
+    prepareFuncEntry(ar, numArgsInclUnpack);
 
-    checkForReifiedGenericsErrors(ar, callFlags.hasGenerics());
-    calleeDynamicCallChecks(ar->func(), callFlags.isDynamicCall());
-    checkImplicitContextErrors(ar);
     return EventHook::FunctionCall(ar, EventHook::NormalFunc);
   } catch (...) {
     // Manually unwind the pre-live or live frame, as we may be called from JIT
@@ -3708,7 +3620,10 @@ bool doFCall(CallFlags callFlags, const Func* func, uint32_t numArgsInclUnpack,
       // Unwind live frame.
       vmfp() = ar->m_sfp;
       vmpc() = vmfp()->func()->entry() + ar->callOffset();
-      assertx(vmStack().top() + func->numSlotsInFrame() == (void*)ar);
+      assertx(vmStack().top() + func->numSlotsInFrame() <= (void*)ar);
+      while (vmStack().top() + func->numSlotsInFrame() != (void*)ar) {
+        vmStack().popTV();
+      }
       frame_free_locals_inl_no_hook(ar, func->numLocals());
       vmStack().ndiscard(func->numSlotsInFrame());
       vmStack().discardAR();
@@ -4014,7 +3929,8 @@ void fcallObjMethodImpl(PC origpc, PC& pc, const FCallArgs& fca,
     return Class::load(fca.context);
   }();
   // if lookup throws, obj will be decref'd via stack
-  res = lookupObjMethod(func, cls, methName, ctx, true);
+  res = lookupObjMethod(func, cls, methName, ctx,
+                        MethodLookupErrorOptions::RaiseOnNotFound);
   assertx(func);
   decRefStr(methName);
   if (res == LookupResult::MethodFoundNoThis) {
@@ -4185,7 +4101,8 @@ Class* specialClsRefToCls(SpecialClsRef ref) {
 const Func* resolveClsMethodFunc(Class* cls, const StringData* methName) {
   const Func* func;
   auto const res = lookupClsMethod(func, cls, methName, nullptr,
-                                   arGetContextClass(vmfp()), false);
+                                   arGetContextClass(vmfp()),
+                                   MethodLookupErrorOptions::None);
   if (res == LookupResult::MethodNotFound) {
     raise_error("Failure to resolve method name \'%s::%s\'",
                 cls->name()->data(), methName->data());
@@ -4294,7 +4211,8 @@ void fcallClsMethodImpl(PC origpc, PC& pc, const FCallArgs& fca, Class* cls,
   }();
   auto obj = liveClass() && vmfp()->hasThis() ? vmfp()->getThis() : nullptr;
   const Func* func;
-  auto const res = lookupClsMethod(func, cls, methName, obj, ctx, true);
+  auto const res = lookupClsMethod(func, cls, methName, obj, ctx,
+                                   MethodLookupErrorOptions::RaiseOnNotFound);
   assertx(func);
   decRefStr(methName);
 
@@ -4495,7 +4413,8 @@ OPTBLD_INLINE void iopFCallCtor(PC origpc, PC& pc, FCallArgs fca,
 
   const Func* func;
   auto const ctx = arGetContextClass(vmfp());
-  auto const res UNUSED = lookupCtorMethod(func, obj->getVMClass(), ctx, true);
+  auto const res UNUSED = lookupCtorMethod(func, obj->getVMClass(), ctx,
+                            MethodLookupErrorOptions::RaiseOnNotFound);
   assertx(res == LookupResult::MethodFoundWithThis);
 
   // fcallImpl() will do further checks before spilling the ActRec. If any
@@ -4737,7 +4656,7 @@ OPTBLD_INLINE void iopEval(PC origpc, PC& pc) {
     vm->getLine(),
     string_md5(code.slice()).c_str()
   );
-  Unit* unit = vm->compileEvalString(prefixedCode.get(), evalFilename.c_str());
+  auto unit = compileEvalString(prefixedCode.get(), evalFilename.c_str());
   if (!RuntimeOption::EvalJitEvaledCode) {
     unit->setInterpretOnly();
   }

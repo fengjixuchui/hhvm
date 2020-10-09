@@ -176,10 +176,16 @@ module type Syntax_S = sig
     ; function_left_paren                                : t
     ; function_parameter_list                            : t
     ; function_right_paren                               : t
+    ; function_capability                                : t
     ; function_capability_provisional                    : t
     ; function_colon                                     : t
     ; function_type                                      : t
     ; function_where_clause                              : t
+    }
+  | Capability                        of
+    { capability_left_bracket                            : t
+    ; capability_types                                   : t
+    ; capability_right_bracket                           : t
     }
   | CapabilityProvisional             of
     { capability_provisional_at                          : t
@@ -542,6 +548,7 @@ module type Syntax_S = sig
     { lambda_left_paren                                  : t
     ; lambda_parameters                                  : t
     ; lambda_right_paren                                 : t
+    ; lambda_capability                                  : t
     ; lambda_colon                                       : t
     ; lambda_type                                        : t
     }
@@ -846,12 +853,6 @@ module type Syntax_S = sig
     ; varray_trailing_comma                              : t
     ; varray_right_angle                                 : t
     }
-  | VectorArrayTypeSpecifier          of
-    { vector_array_keyword                               : t
-    ; vector_array_left_angle                            : t
-    ; vector_array_type                                  : t
-    ; vector_array_right_angle                           : t
-    }
   | TypeParameter                     of
     { type_attribute_spec                                : t
     ; type_reified                                       : t
@@ -873,14 +874,6 @@ module type Syntax_S = sig
     ; darray_trailing_comma                              : t
     ; darray_right_angle                                 : t
     }
-  | MapArrayTypeSpecifier             of
-    { map_array_keyword                                  : t
-    ; map_array_left_angle                               : t
-    ; map_array_key                                      : t
-    ; map_array_comma                                    : t
-    ; map_array_value                                    : t
-    ; map_array_right_angle                              : t
-    }
   | DictionaryTypeSpecifier           of
     { dictionary_type_keyword                            : t
     ; dictionary_type_left_angle                         : t
@@ -893,6 +886,7 @@ module type Syntax_S = sig
     ; closure_inner_left_paren                           : t
     ; closure_parameter_list                             : t
     ; closure_inner_right_paren                          : t
+    ; closure_capability                                 : t
     ; closure_colon                                      : t
     ; closure_return_type                                : t
     ; closure_outer_right_paren                          : t
@@ -1109,7 +1103,8 @@ module type Syntax_S = sig
   val make_namespace_group_use_declaration : t -> t -> t -> t -> t -> t -> t -> t
   val make_namespace_use_clause : t -> t -> t -> t -> t
   val make_function_declaration : t -> t -> t -> t
-  val make_function_declaration_header : t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t
+  val make_function_declaration_header : t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t
+  val make_capability : t -> t -> t -> t
   val make_capability_provisional : t -> t -> t -> t -> t -> t -> t
   val make_where_clause : t -> t -> t
   val make_where_constraint : t -> t -> t -> t
@@ -1168,7 +1163,7 @@ module type Syntax_S = sig
   val make_anonymous_function : t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t
   val make_anonymous_function_use_clause : t -> t -> t -> t -> t
   val make_lambda_expression : t -> t -> t -> t -> t -> t
-  val make_lambda_signature : t -> t -> t -> t -> t -> t
+  val make_lambda_signature : t -> t -> t -> t -> t -> t -> t
   val make_cast_expression : t -> t -> t -> t -> t
   val make_scope_resolution_expression : t -> t -> t -> t
   val make_member_selection_expression : t -> t -> t -> t
@@ -1224,13 +1219,11 @@ module type Syntax_S = sig
   val make_keyset_type_specifier : t -> t -> t -> t -> t -> t
   val make_tuple_type_explicit_specifier : t -> t -> t -> t -> t
   val make_varray_type_specifier : t -> t -> t -> t -> t -> t
-  val make_vector_array_type_specifier : t -> t -> t -> t -> t
   val make_type_parameter : t -> t -> t -> t -> t -> t -> t
   val make_type_constraint : t -> t -> t
   val make_darray_type_specifier : t -> t -> t -> t -> t -> t -> t -> t
-  val make_map_array_type_specifier : t -> t -> t -> t -> t -> t -> t
   val make_dictionary_type_specifier : t -> t -> t -> t -> t
-  val make_closure_type_specifier : t -> t -> t -> t -> t -> t -> t -> t -> t
+  val make_closure_type_specifier : t -> t -> t -> t -> t -> t -> t -> t -> t -> t
   val make_closure_parameter_type_specifier : t -> t -> t
   val make_classname_type_specifier : t -> t -> t -> t -> t -> t
   val make_field_specifier : t -> t -> t -> t -> t
@@ -1291,6 +1284,7 @@ module type Syntax_S = sig
   val is_namespace_use_clause : t -> bool
   val is_function_declaration : t -> bool
   val is_function_declaration_header : t -> bool
+  val is_capability : t -> bool
   val is_capability_provisional : t -> bool
   val is_where_clause : t -> bool
   val is_where_constraint : t -> bool
@@ -1405,11 +1399,9 @@ module type Syntax_S = sig
   val is_keyset_type_specifier : t -> bool
   val is_tuple_type_explicit_specifier : t -> bool
   val is_varray_type_specifier : t -> bool
-  val is_vector_array_type_specifier : t -> bool
   val is_type_parameter : t -> bool
   val is_type_constraint : t -> bool
   val is_darray_type_specifier : t -> bool
-  val is_map_array_type_specifier : t -> bool
   val is_dictionary_type_specifier : t -> bool
   val is_closure_type_specifier : t -> bool
   val is_closure_parameter_type_specifier : t -> bool
@@ -1458,7 +1450,6 @@ module type Syntax_S = sig
   val is_left_brace     : t -> bool
   val is_ellipsis       : t -> bool
   val is_comma          : t -> bool
-  val is_array          : t -> bool
   val is_ampersand      : t -> bool
   val is_inout          : t -> bool
 

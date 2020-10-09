@@ -103,7 +103,7 @@ std::vector<Unit*> loadedUnitsRepoAuth();
  * Note: it's unclear what's "vm" about this, and why it's not just
  * resolve_include.  (Likely naming relic from hphpc days.)
  */
-String resolveVmInclude(StringData* path,
+String resolveVmInclude(const StringData* path,
                         const char* currentDir,
                         struct stat* s,  // out
                         const Native::FuncTable&,
@@ -170,7 +170,13 @@ void prefetchUnit(StringData* path,
  */
 void drainUnitPrefetcher();
 
+/*
+ * Compile a string into an Unit for the purposes of eval
+ * execution. Units may be cached.
+ */
+Unit* compileEvalString(const StringData* code,
+                        const char* evalFilename = nullptr);
+
 //////////////////////////////////////////////////////////////////////
 
 }
-

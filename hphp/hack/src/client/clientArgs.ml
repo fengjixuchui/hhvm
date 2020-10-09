@@ -49,6 +49,12 @@ module Common_argspecs = struct
       Arg.Unit (fun () -> value_ref := Some true),
       " override value of \"prechecked_files\" flag from hh.conf" )
 
+  let with_mini_state (value_ref : string option ref) =
+    ( "--with-mini-state",
+      Arg.String (fun s -> value_ref := Some s),
+      " Init with the given saved state instead of the one based on current repo version."
+    )
+
   let watchman_debug_logging value_ref =
     ( "--watchman-debug-logging",
       Arg.Set value_ref,
@@ -103,6 +109,7 @@ let parse_check_args cmd =
   let hot_classes_threshold = ref 0 in
   let gen_saved_ignore_type_errors = ref false in
   let ignore_hh_version = ref false in
+  let save_64bit = ref None in
   let saved_state_ignore_hhconfig = ref false in
   let log_inference_constraints = ref false in
   let max_errors = ref None in
@@ -115,6 +122,7 @@ let parse_check_args cmd =
   let no_load = ref false in
   let output_json = ref false in
   let prechecked = ref None in
+  let mini_state : string option ref = ref None in
   let profile_log = ref false in
   let refactor_before = ref "" in
   let refactor_mode = ref "" in
@@ -525,6 +533,7 @@ let parse_check_args cmd =
         " (mode) prints an outline of the text on stdin" );
       Common_argspecs.prechecked prechecked;
       Common_argspecs.no_prechecked prechecked;
+      Common_argspecs.with_mini_state mini_state;
       ( "--pause",
         Arg.Unit (set_mode (MODE_PAUSE true)),
         " (mode) pause recheck-on-file-change [EXPERIMENTAL]" );
@@ -614,6 +623,9 @@ let parse_check_args cmd =
         Arg.String (fun x -> set_mode (MODE_SAVE_STATE x) ()),
         " (mode) Save a saved state to the given file."
         ^ " Returns number of edges dumped from memory to the database." );
+      ( "--save-64bit",
+        Arg.String (fun x -> save_64bit := Some x),
+        " save discovered 64-bit to the given directory" );
       ( "--saved-state-ignore-hhconfig",
         Arg.Set saved_state_ignore_hhconfig,
         " ignore hhconfig hash when loading saved states (default: false)" );
@@ -777,8 +789,10 @@ let parse_check_args cmd =
         match mode with
         | MODE_REMOVE_DEAD_FIXMES _ -> true
         | _ -> false );
+      save_64bit = !save_64bit;
       output_json = !output_json;
       prechecked = !prechecked;
+      mini_state = !mini_state;
       profile_log = !profile_log;
       remote = !remote;
       replace_state_after_saving = !replace_state_after_saving;
@@ -806,6 +820,7 @@ let parse_start_env command =
   let ignore_hh_version = ref false in
   let saved_state_ignore_hhconfig = ref false in
   let prechecked = ref None in
+  let mini_state = ref None in
   let from = ref "" in
   let config = ref [] in
   let custom_telemetry_data = ref [] in
@@ -832,6 +847,7 @@ let parse_start_env command =
       ("--no-load", Arg.Set no_load, " start from a fresh state");
       Common_argspecs.no_prechecked prechecked;
       Common_argspecs.prechecked prechecked;
+      Common_argspecs.with_mini_state mini_state;
       ("--profile-log", Arg.Set profile_log, " enable profile logging");
       ( "--saved-state-ignore-hhconfig",
         Arg.Set saved_state_ignore_hhconfig,
@@ -864,9 +880,11 @@ let parse_start_env command =
     from = !from;
     ignore_hh_version = !ignore_hh_version;
     saved_state_ignore_hhconfig = !saved_state_ignore_hhconfig;
+    save_64bit = None;
     log_inference_constraints = !log_inference_constraints;
     no_load = !no_load;
     prechecked = !prechecked;
+    mini_state = !mini_state;
     profile_log = !profile_log;
     root;
     silent = false;

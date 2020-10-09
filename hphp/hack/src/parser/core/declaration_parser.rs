@@ -17,21 +17,21 @@ use parser_core_types::token_kind::TokenKind;
 use parser_core_types::trivia_kind::TriviaKind;
 
 #[derive(Debug)]
-pub struct DeclarationParser<'a, S, T>
+pub struct DeclarationParser<'a, S>
 where
-    S: SmartConstructors<T>,
+    S: SmartConstructors,
     S::R: NodeType,
 {
-    lexer: Lexer<'a, S::Token>,
+    lexer: Lexer<'a, S>,
     env: ParserEnv,
     context: Context<'a, S::Token>,
     errors: Vec<SyntaxError>,
     sc: S,
 }
 
-impl<'a, S, T: Clone> Clone for DeclarationParser<'a, S, T>
+impl<'a, S> Clone for DeclarationParser<'a, S>
 where
-    S: SmartConstructors<T>,
+    S: SmartConstructors,
     S::R: NodeType,
 {
     fn clone(&self) -> Self {
@@ -45,13 +45,13 @@ where
     }
 }
 
-impl<'a, S, T: Clone> ParserTrait<'a, S, T> for DeclarationParser<'a, S, T>
+impl<'a, S> ParserTrait<'a, S> for DeclarationParser<'a, S>
 where
-    S: SmartConstructors<T>,
+    S: SmartConstructors,
     S::R: NodeType,
 {
     fn make(
-        lexer: Lexer<'a, S::Token>,
+        lexer: Lexer<'a, S>,
         env: ParserEnv,
         context: Context<'a, S::Token>,
         errors: Vec<SyntaxError>,
@@ -66,29 +66,19 @@ where
         }
     }
 
-    fn into_parts(
-        self,
-    ) -> (
-        Lexer<'a, S::Token>,
-        Context<'a, S::Token>,
-        Vec<SyntaxError>,
-        S,
-    ) {
+    fn into_parts(self) -> (Lexer<'a, S>, Context<'a, S::Token>, Vec<SyntaxError>, S) {
         (self.lexer, self.context, self.errors, self.sc)
     }
 
-    fn lexer(&self) -> &Lexer<'a, S::Token> {
+    fn lexer(&self) -> &Lexer<'a, S> {
         &self.lexer
     }
 
-    fn lexer_mut(&mut self) -> &mut Lexer<'a, S::Token> {
+    fn lexer_mut(&mut self) -> &mut Lexer<'a, S> {
         &mut self.lexer
     }
 
-    fn continue_from<P: ParserTrait<'a, S, T>>(&mut self, other: P)
-    where
-        T: Clone,
-    {
+    fn continue_from<P: ParserTrait<'a, S>>(&mut self, other: P) {
         let (lexer, context, errors, sc) = other.into_parts();
         self.lexer = lexer;
         self.context = context;
@@ -125,17 +115,16 @@ where
     }
 }
 
-impl<'a, S, T: Clone> DeclarationParser<'a, S, T>
+impl<'a, S> DeclarationParser<'a, S>
 where
-    S: SmartConstructors<T>,
+    S: SmartConstructors,
     S::R: NodeType,
 {
     fn with_type_parser<F, U>(&mut self, f: F) -> U
     where
-        T: Clone,
-        F: Fn(&mut TypeParser<'a, S, T>) -> U,
+        F: Fn(&mut TypeParser<'a, S>) -> U,
     {
-        let mut type_parser: TypeParser<S, T> = TypeParser::make(
+        let mut type_parser: TypeParser<S> = TypeParser::make(
             self.lexer.clone(),
             self.env.clone(),
             self.context.clone(),
@@ -148,17 +137,16 @@ where
     }
 
     fn parse_type_specifier(&mut self, allow_var: bool, allow_attr: bool) -> S::R {
-        self.with_type_parser(|p: &mut TypeParser<'a, S, T>| {
+        self.with_type_parser(|p: &mut TypeParser<'a, S>| {
             p.parse_type_specifier(allow_var, allow_attr)
         })
     }
 
     fn with_statement_parser<F, U>(&mut self, f: F) -> U
     where
-        T: Clone,
-        F: Fn(&mut StatementParser<'a, S, T>) -> U,
+        F: Fn(&mut StatementParser<'a, S>) -> U,
     {
-        let mut statement_parser: StatementParser<S, T> = StatementParser::make(
+        let mut statement_parser: StatementParser<S> = StatementParser::make(
             self.lexer.clone(),
             self.env.clone(),
             self.context.clone(),
@@ -171,19 +159,18 @@ where
     }
 
     fn parse_simple_type_or_type_constant(&mut self) -> S::R {
-        self.with_type_parser(|x: &mut TypeParser<'a, S, T>| x.parse_simple_type_or_type_constant())
+        self.with_type_parser(|x: &mut TypeParser<'a, S>| x.parse_simple_type_or_type_constant())
     }
 
     fn parse_simple_type_or_generic(&mut self) -> S::R {
-        self.with_type_parser(|p: &mut TypeParser<'a, S, T>| p.parse_simple_type_or_generic())
+        self.with_type_parser(|p: &mut TypeParser<'a, S>| p.parse_simple_type_or_generic())
     }
 
     fn with_expression_parser<F, U>(&mut self, f: F) -> U
     where
-        T: Clone,
-        F: Fn(&mut ExpressionParser<'a, S, T>) -> U,
+        F: Fn(&mut ExpressionParser<'a, S>) -> U,
     {
-        let mut expression_parser: ExpressionParser<S, T> = ExpressionParser::make(
+        let mut expression_parser: ExpressionParser<S> = ExpressionParser::make(
             self.lexer.clone(),
             self.env.clone(),
             self.context.clone(),
@@ -196,11 +183,11 @@ where
     }
 
     fn parse_expression(&mut self) -> S::R {
-        self.with_expression_parser(|p: &mut ExpressionParser<'a, S, T>| p.parse_expression())
+        self.with_expression_parser(|p: &mut ExpressionParser<'a, S>| p.parse_expression())
     }
 
     fn parse_compound_statement(&mut self) -> S::R {
-        self.with_statement_parser(|p: &mut StatementParser<'a, S, T>| p.parse_compound_statement())
+        self.with_statement_parser(|p: &mut StatementParser<'a, S>| p.parse_compound_statement())
     }
 
     fn parse_enumerator_list_opt(&mut self) -> S::R {
@@ -316,7 +303,7 @@ where
     pub fn parse_leading_markup_section(&mut self) -> Option<S::R> {
         let mut parser1 = self.clone();
         let (markup_section, has_suffix) =
-            parser1.with_statement_parser(|p: &mut StatementParser<'a, S, T>| p.parse_header());
+            parser1.with_statement_parser(|p: &mut StatementParser<'a, S>| p.parse_header());
         // proceed successfully if we've consumed <?..., or dont need it
         // We purposefully ignore leading trivia before the <?hh, and handle
         // the error on a later pass
@@ -570,7 +557,7 @@ where
         } else {
             self.require_class_name()
         };
-        let generic_type_parameter_list = self.with_type_parser(|p: &mut TypeParser<'a, S, T>| {
+        let generic_type_parameter_list = self.with_type_parser(|p: &mut TypeParser<'a, S>| {
             p.parse_generic_type_parameter_list_opt()
         });
         let (classish_extends, classish_extends_list) = self.parse_extends_opt();
@@ -1466,7 +1453,7 @@ where
     ) -> S::R {
         let type_token = self.assert_token(TokenKind::Type);
         let name = self.require_name_allow_non_reserved();
-        let generic_type_parameter_list = self.with_type_parser(|p: &mut TypeParser<'a, S, T>| {
+        let generic_type_parameter_list = self.with_type_parser(|p: &mut TypeParser<'a, S>| {
             p.parse_generic_type_parameter_list_opt()
         });
         let type_constraint = self.parse_type_constraint_opt();
@@ -1563,7 +1550,7 @@ where
             let token = self.next_token();
             let colon_token = S!(make_token, self, token);
             let return_type =
-                self.with_type_parser(|p: &mut TypeParser<'a, S, T>| p.parse_return_type());
+                self.with_type_parser(|p: &mut TypeParser<'a, S>| p.parse_return_type());
             (colon_token, return_type)
         } else {
             let missing1 = S!(make_missing, self, self.pos());
@@ -1572,20 +1559,19 @@ where
         }
     }
 
-    fn parse_capability_opt(&mut self) -> S::R {
+    fn parse_capability_provisional_opt(&mut self) -> S::R {
         let token_kind = self.peek_token_kind();
         if token_kind == TokenKind::At {
             let token = self.next_token();
             let at = S!(make_token, self, token);
             let cap_lb = self.require_token(TokenKind::LeftBrace, Errors::error1034);
-            let cap_type = self.with_type_parser(|p: &mut TypeParser<'a, S, T>| {
-                p.parse_type_specifier(false, false)
-            });
+            let cap_type = self
+                .with_type_parser(|p: &mut TypeParser<'a, S>| p.parse_type_specifier(false, false));
             let maybe_plus = self.peek_token_kind();
             let (unsafe_cap_plus, unsafe_cap_type) = if maybe_plus == TokenKind::Plus {
                 let token = self.next_token();
                 let unsafe_cap_plus = S!(make_token, self, token);
-                let unsafe_cap_type = self.with_type_parser(|p: &mut TypeParser<'a, S, T>| {
+                let unsafe_cap_type = self.with_type_parser(|p: &mut TypeParser<'a, S>| {
                     p.parse_type_specifier(false, false)
                 });
                 (unsafe_cap_plus, unsafe_cap_type)
@@ -1880,11 +1866,13 @@ where
         // at parse time but rather by a later pass.
         let function_token = self.require_function();
         let label = self.parse_function_label_opt(is_methodish);
-        let generic_type_parameter_list = self.with_type_parser(|p: &mut TypeParser<'a, S, T>| {
+        let generic_type_parameter_list = self.with_type_parser(|p: &mut TypeParser<'a, S>| {
             p.parse_generic_type_parameter_list_opt()
         });
         let (left_paren_token, parameter_list, right_paren_token) = self.parse_parameter_list_opt();
-        let capability = self.parse_capability_opt();
+        let capability =
+            self.with_type_parser(|p: &mut TypeParser<'a, S>| p.parse_capability_opt());
+        let capability_provisional = self.parse_capability_provisional_opt();
         let (colon_token, return_type) = self.parse_return_type_hint_opt();
         let where_clause = self.parse_where_clause_opt();
         S!(
@@ -1898,6 +1886,7 @@ where
             parameter_list,
             right_paren_token,
             capability,
+            capability_provisional,
             colon_token,
             return_type,
             where_clause,
@@ -1943,7 +1932,7 @@ where
     }
 
     fn parse_old_attribute(&mut self) -> S::R {
-        self.with_expression_parser(|p: &mut ExpressionParser<'a, S, T>| p.parse_constructor_call())
+        self.with_expression_parser(|p: &mut ExpressionParser<'a, S>| p.parse_constructor_call())
     }
 
     pub fn parse_attribute_specification_opt(&mut self) -> S::R {
@@ -1968,7 +1957,7 @@ where
         let at = self.assert_token(TokenKind::At);
         let token = self.peek_token();
         let constructor_call = match token.kind() {
-            TokenKind::Name => self.with_expression_parser(|p: &mut ExpressionParser<'a, S, T>| {
+            TokenKind::Name => self.with_expression_parser(|p: &mut ExpressionParser<'a, S>| {
                 p.parse_constructor_call()
             }),
             _ => {
@@ -2142,7 +2131,7 @@ where
                     // function declaration or expression statement containing
                     // anonymous function - use statement parser to determine in which case
                     // we are currently in
-                    self.with_statement_parser(|p: &mut StatementParser<'a, S, T>| {
+                    self.with_statement_parser(|p: &mut StatementParser<'a, S>| {
                         p.parse_possible_php_function(/* toplevel=*/ true)
                     })
                 } else {
@@ -2279,7 +2268,7 @@ where
     }
 
     fn parse_type_constraint_opt(&mut self) -> S::R {
-        self.with_type_parser(|p: &mut TypeParser<'a, S, T>| p.parse_type_constraint_opt())
+        self.with_type_parser(|p: &mut TypeParser<'a, S>| p.parse_type_constraint_opt())
     }
 
     fn parse_alias_declaration(&mut self, attr: S::R) -> S::R {
@@ -2295,7 +2284,7 @@ where
         // must allow keywords in the place of identifiers; at least to parse .hhi
         // files.
         let name = self.require_name_allow_non_reserved();
-        let generic = self.with_type_parser(|p: &mut TypeParser<'a, S, T>| {
+        let generic = self.with_type_parser(|p: &mut TypeParser<'a, S>| {
             p.parse_generic_type_parameter_list_opt()
         });
         let constr = self.parse_type_constraint_opt();
@@ -2368,76 +2357,75 @@ where
         self.expect_in_new_scope(ExpectedTokens::Classish);
         let mut parser1 = self.clone();
         let token = parser1.next_token();
-        let result =
-            match token.kind() {
-                TokenKind::Include
-                | TokenKind::Include_once
-                | TokenKind::Require
-                | TokenKind::Require_once => self.parse_inclusion_directive(),
-                TokenKind::Type | TokenKind::Newtype
-                    if {
-                        let kind = parser1.peek_token_kind();
-                        kind == TokenKind::Name || kind == TokenKind::Classname
-                    } =>
+        let result = match token.kind() {
+            TokenKind::Include
+            | TokenKind::Include_once
+            | TokenKind::Require
+            | TokenKind::Require_once => self.parse_inclusion_directive(),
+            TokenKind::Type | TokenKind::Newtype
+                if {
+                    let kind = parser1.peek_token_kind();
+                    kind == TokenKind::Name || kind == TokenKind::Classname
+                } =>
+            {
+                let missing = S!(make_missing, self, self.pos());
+                self.parse_alias_declaration(missing)
+            }
+            TokenKind::Enum => {
+                let missing = S!(make_missing, self, self.pos());
+                self.parse_enum_declaration(missing)
+            }
+            TokenKind::RecordDec => {
+                let missing = S!(make_missing, self, self.pos());
+                self.parse_record_declaration(missing)
+            }
+            // The keyword namespace before a name should be parsed as
+            // "the current namespace we are in", essentially a no op.
+            // example:
+            // namespace\f1(); should be parsed as a call to the function f1 in
+            // the current namespace.
+            TokenKind::Namespace if parser1.peek_token_kind() == TokenKind::Backslash => {
+                self.with_statement_parser(|p: &mut StatementParser<'a, S>| p.parse_statement())
+            }
+            TokenKind::Namespace => self.parse_namespace_declaration(),
+            TokenKind::Use => self.parse_namespace_use_declaration(),
+            TokenKind::Trait | TokenKind::Interface | TokenKind::Class => {
+                let missing = S!(make_missing, self, self.pos());
+                self.parse_classish_declaration(missing)
+            }
+            TokenKind::Abstract | TokenKind::Final | TokenKind::XHP => {
+                let missing = S!(make_missing, self, self.pos());
+                match parser1.peek_token_kind() {
+                    TokenKind::RecordDec => self.parse_record_declaration(missing),
+                    _ => self.parse_classish_declaration(missing),
+                }
+            }
+            TokenKind::Async | TokenKind::Function => {
+                self.with_statement_parser(|p: &mut StatementParser<'a, S>| {
+                    p.parse_possible_php_function(true)
+                })
+            }
+            TokenKind::At if self.env.allow_new_attribute_syntax => {
+                self.parse_enum_or_classish_or_function_declaration()
+            }
+            TokenKind::LessThanLessThan => match parser1.peek_token_kind() {
+                TokenKind::File
+                    if parser1.peek_token_kind_with_lookahead(1) == TokenKind::Colon =>
                 {
-                    let missing = S!(make_missing, self, self.pos());
-                    self.parse_alias_declaration(missing)
+                    self.parse_file_attribute_specification_opt()
                 }
-                TokenKind::Enum => {
-                    let missing = S!(make_missing, self, self.pos());
-                    self.parse_enum_declaration(missing)
-                }
-                TokenKind::RecordDec => {
-                    let missing = S!(make_missing, self, self.pos());
-                    self.parse_record_declaration(missing)
-                }
-                // The keyword namespace before a name should be parsed as
-                // "the current namespace we are in", essentially a no op.
-                // example:
-                // namespace\f1(); should be parsed as a call to the function f1 in
-                // the current namespace.
-                TokenKind::Namespace if parser1.peek_token_kind() == TokenKind::Backslash => self
-                    .with_statement_parser(|p: &mut StatementParser<'a, S, T>| p.parse_statement()),
-                TokenKind::Namespace => self.parse_namespace_declaration(),
-                TokenKind::Use => self.parse_namespace_use_declaration(),
-                TokenKind::Trait | TokenKind::Interface | TokenKind::Class => {
-                    let missing = S!(make_missing, self, self.pos());
-                    self.parse_classish_declaration(missing)
-                }
-                TokenKind::Abstract | TokenKind::Final | TokenKind::XHP => {
-                    let missing = S!(make_missing, self, self.pos());
-                    match parser1.peek_token_kind() {
-                        TokenKind::RecordDec => self.parse_record_declaration(missing),
-                        _ => self.parse_classish_declaration(missing),
-                    }
-                }
-                TokenKind::Async | TokenKind::Function => {
-                    self.with_statement_parser(|p: &mut StatementParser<'a, S, T>| {
-                        p.parse_possible_php_function(true)
-                    })
-                }
-                TokenKind::At if self.env.allow_new_attribute_syntax => {
-                    self.parse_enum_or_classish_or_function_declaration()
-                }
-                TokenKind::LessThanLessThan => match parser1.peek_token_kind() {
-                    TokenKind::File
-                        if parser1.peek_token_kind_with_lookahead(1) == TokenKind::Colon =>
-                    {
-                        self.parse_file_attribute_specification_opt()
-                    }
-                    _ => self.parse_enum_or_classish_or_function_declaration(),
-                },
-                // TODO figure out what global const differs from class const
-                TokenKind::Const => {
-                    let missing1 = S!(make_missing, parser1, self.pos());
-                    self.continue_from(parser1);
-                    let token = S!(make_token, self, token);
-                    self.parse_const_declaration(missing1, token)
-                }
-                // TODO: What if it's not a legal statement? Do we still make progress here?
-                _ => self
-                    .with_statement_parser(|p: &mut StatementParser<'a, S, T>| p.parse_statement()),
-            };
+                _ => self.parse_enum_or_classish_or_function_declaration(),
+            },
+            // TODO figure out what global const differs from class const
+            TokenKind::Const => {
+                let missing1 = S!(make_missing, parser1, self.pos());
+                self.continue_from(parser1);
+                let token = S!(make_token, self, token);
+                self.parse_const_declaration(missing1, token)
+            }
+            // TODO: What if it's not a legal statement? Do we still make progress here?
+            _ => self.with_statement_parser(|p: &mut StatementParser<'a, S>| p.parse_statement()),
+        };
 
         self.pop_scope(ExpectedTokens::Classish);
         result
@@ -2524,9 +2512,8 @@ where
                 match self.peek_token_kind() {
                     TokenKind::Type => {
                         let type_tok = self.assert_token(TokenKind::Type);
-                        let type_param = self.with_type_parser(|p: &mut TypeParser<'a, S, T>| {
-                            p.parse_type_parameter()
-                        });
+                        let type_param = self
+                            .with_type_parser(|p: &mut TypeParser<'a, S>| p.parse_type_parameter());
                         let semi = self.require_semicolon();
                         S!(
                             make_pocket_field_type_declaration,

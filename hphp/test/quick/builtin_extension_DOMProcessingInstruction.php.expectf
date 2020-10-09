@@ -43,7 +43,7 @@ string(2) "N;"
 NULL
 varray(19) {
   string(11) "__construct"
-  string(11) "__debuginfo"
+  string(11) "__debugInfo"
   string(11) "appendChild"
   string(9) "cloneNode"
   string(9) "getLineNo"
@@ -58,8 +58,8 @@ varray(19) {
   string(9) "normalize"
   string(11) "removeChild"
   string(12) "replaceChild"
-  string(4) "c14n"
-  string(8) "c14nfile"
+  string(4) "C14N"
+  string(8) "C14Nfile"
   string(11) "getNodePath"
 }
 ================
@@ -110,7 +110,7 @@ string(2) "N;"
 NULL
 varray(19) {
   string(11) "__construct"
-  string(11) "__debuginfo"
+  string(11) "__debugInfo"
   string(11) "appendChild"
   string(9) "cloneNode"
   string(9) "getLineNo"
@@ -125,7 +125,7 @@ varray(19) {
   string(9) "normalize"
   string(11) "removeChild"
   string(12) "replaceChild"
-  string(4) "c14n"
-  string(8) "c14nfile"
+  string(4) "C14N"
+  string(8) "C14Nfile"
   string(11) "getNodePath"
 }

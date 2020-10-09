@@ -29,6 +29,11 @@ namespace {
 
 //////////////////////////////////////////////////////////////////////////////
 
+DataType mergeEquivTypes(DataType a, DataType b) {
+  assertx(equivDataTypes(a, b));
+  return a == b ? a : dt_with_rc(a);
+}
+
 KeyTypes keyTypesForKey(TypedValue k, KeyTypes b) {
   auto const a = [&] {
     if (isStringType(k.type())) {
@@ -63,7 +68,7 @@ std::pair<ValueTypes, DataType> valueTypesForValue(TypedValue v,
 
     case ValueTypes::Monotype:
       if (equivDataTypes(type, v.type())) {
-        return {ValueTypes::Monotype, type};
+        return {ValueTypes::Monotype, mergeEquivTypes(type, v.type())};
       } else if (isNullType(v.type())) {
         return {ValueTypes::MonotypeNullable, type};
       } else if (isNullType(type)) {
@@ -73,7 +78,9 @@ std::pair<ValueTypes, DataType> valueTypesForValue(TypedValue v,
       }
 
     case ValueTypes::MonotypeNullable:
-      if (isNullType(v.type()) || equivDataTypes(type, v.type())) {
+      if (equivDataTypes(type, v.type())) {
+        return {ValueTypes::MonotypeNullable, mergeEquivTypes(type, v.type())};
+      } else if (isNullType(v.type())) {
         return {ValueTypes::MonotypeNullable, type};
       } else {
         return {ValueTypes::Any, kInvalidDataType};
@@ -101,27 +108,12 @@ bool EntryTypes::checkInvariants() const {
 }
 
 EntryTypes EntryTypes::ForArray(ArrayData* ad) {
-  auto state = EntryTypes(KeyTypes::Empty, ValueTypes::Empty,
-                          kInvalidDataType);
-
-  IterateKV(
-    ad,
-    [&](TypedValue k, TypedValue v) {
-      state = state.withKV(k, v);
-      return true;
-    }
-  );
-
+  auto state = EntryTypes(KeyTypes::Empty, ValueTypes::Empty, kInvalidDataType);
+  IterateKVNoInc(ad, [&](auto k, auto v) { state = state.with(k, v); });
   return state;
 }
 
-EntryTypes EntryTypes::withV(TypedValue v) const {
-  auto const valuePair = valueTypesForValue(v, valueTypes, valueDatatype);
-
-  return EntryTypes(keyTypes, valuePair.first, valuePair.second);
-}
-
-EntryTypes EntryTypes::withKV(TypedValue k, TypedValue v) const {
+EntryTypes EntryTypes::with(TypedValue k, TypedValue v) const {
   auto const newKeyTypes = keyTypesForKey(k, keyTypes);
   auto const valuePair = valueTypesForValue(v, valueTypes, valueDatatype);
 
@@ -129,8 +121,7 @@ EntryTypes EntryTypes::withKV(TypedValue k, TypedValue v) const {
 }
 
 EntryTypes EntryTypes::pessimizeValueTypes() const {
-  return EntryTypes(keyTypes, ValueTypes::Any,
-                    kInvalidDataType);
+  return EntryTypes(keyTypes, ValueTypes::Any, kInvalidDataType);
 }
 
 std::string EntryTypes::toString() const {

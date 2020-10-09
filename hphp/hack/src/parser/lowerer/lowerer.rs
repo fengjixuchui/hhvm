@@ -792,15 +792,6 @@ where
                 Self::map_flatten_(&Self::p_hint, ty, env, vec![key])?,
             ))
         };
-        let ban_arrays = |node: &Syntax<T, V>, env: &mut Env| {
-            if env.parser_options.po_disable_array_typehint {
-                Self::raise_parsing_error(
-                    node,
-                    env,
-                    &"Array typehints are no longer legal; use varray or darray instead",
-                );
-            }
-        };
 
         match &node.syntax {
             /* Dirty hack; CastExpression can have type represented by token */
@@ -821,8 +812,6 @@ where
                     suggest(&name, special_typehints::FLOAT);
                 } else if "real".eq_ignore_ascii_case(&name) {
                     suggest(&name, special_typehints::FLOAT);
-                } else if "array".eq_ignore_ascii_case(&name) {
-                    ban_arrays(node, env);
                 }
                 Ok(Happly(ast::Id(pos, name), vec![]))
             }
@@ -881,21 +870,8 @@ where
             ClassnameTypeSpecifier(c) => unary(&c.classname_keyword, &c.classname_type, env),
             TupleTypeExplicitSpecifier(c) => unary(&c.tuple_type_keyword, &c.tuple_type_types, env),
             VarrayTypeSpecifier(c) => unary(&c.varray_keyword, &c.varray_type, env),
-            VectorArrayTypeSpecifier(c) => {
-                ban_arrays(node, env);
-                unary(&c.vector_array_keyword, &c.vector_array_type, env)
-            }
             DarrayTypeSpecifier(c) => {
                 binary(&c.darray_keyword, &c.darray_key, &c.darray_value, env)
-            }
-            MapArrayTypeSpecifier(c) => {
-                ban_arrays(node, env);
-                binary(
-                    &c.map_array_keyword,
-                    &c.map_array_key,
-                    &c.map_array_value,
-                    env,
-                )
             }
             DictionaryTypeSpecifier(c) => {
                 unary(&c.dictionary_type_keyword, &c.dictionary_type_members, env)
@@ -973,12 +949,14 @@ where
                         variadic_hints.len().to_string()
                     ));
                 }
+                let (cap, _) = Self::p_capability(&c.closure_capability, env)?;
                 Ok(Hfun(ast::HintFun {
                     reactive_kind: ast::FuncReactive::FNonreactive,
                     param_tys: type_hints,
                     param_kinds: kinds,
                     param_mutability: vec![],
                     variadic_ty: variadic_hints.into_iter().next().unwrap_or(None),
+                    cap,
                     return_ty: Self::p_hint(&c.closure_return_type, env)?,
                     is_mutable_return: true,
                 }))
@@ -1545,30 +1523,33 @@ where
         match &node.syntax {
             LambdaExpression(c) => {
                 let suspension_kind = Self::mk_suspension_kind(&c.lambda_async);
-                let (params, ret) = match &c.lambda_signature.syntax {
-                    LambdaSignature(c) => (
-                        Self::could_map(Self::p_fun_param, &c.lambda_parameters, env)?,
-                        Self::mp_optional(Self::p_hint, &c.lambda_type, env)?,
-                    ),
-                    Token(_) => {
-                        let ast::Id(p, n) = Self::pos_name(&c.lambda_signature, env)?;
-                        (
-                            vec![ast::FunParam {
-                                annotation: p.clone(),
-                                type_hint: ast::TypeHint((), None),
-                                is_variadic: false,
-                                pos: p,
-                                name: n,
-                                expr: None,
-                                callconv: None,
-                                user_attributes: vec![],
-                                visibility: None,
-                            }],
-                            None,
-                        )
-                    }
-                    _ => Self::missing_syntax("lambda signature", &c.lambda_signature, env)?,
-                };
+                let (params, (capability, unsafe_capability), ret) =
+                    match &c.lambda_signature.syntax {
+                        LambdaSignature(c) => (
+                            Self::could_map(Self::p_fun_param, &c.lambda_parameters, env)?,
+                            Self::p_capability(&c.lambda_capability, env)?,
+                            Self::mp_optional(Self::p_hint, &c.lambda_type, env)?,
+                        ),
+                        Token(_) => {
+                            let ast::Id(p, n) = Self::pos_name(&c.lambda_signature, env)?;
+                            (
+                                vec![ast::FunParam {
+                                    annotation: p.clone(),
+                                    type_hint: ast::TypeHint((), None),
+                                    is_variadic: false,
+                                    pos: p,
+                                    name: n,
+                                    expr: None,
+                                    callconv: None,
+                                    user_attributes: vec![],
+                                    visibility: None,
+                                }],
+                                (None, None),
+                                None,
+                            )
+                        }
+                        _ => Self::missing_syntax("lambda signature", &c.lambda_signature, env)?,
+                    };
                 let (body, yield_) = if !c.lambda_body.is_compound_statement() {
                     Self::mp_yielding(Self::p_function_body, &c.lambda_body, env)?
                 } else {
@@ -1591,8 +1572,8 @@ where
                     fun_kind: Self::mk_fun_kind(suspension_kind, yield_),
                     variadic: Self::determine_variadicity(&params),
                     params,
-                    cap: ast::TypeHint((), None), // TODO(T70095684)
-                    unsafe_cap: ast::TypeHint((), None), // TODO(T70095684)
+                    cap: ast::TypeHint((), capability),
+                    unsafe_cap: ast::TypeHint((), unsafe_capability),
                     user_attributes: Self::p_user_attributes(&c.lambda_attribute_spec, env)?,
                     file_attributes: vec![],
                     external,
@@ -3499,7 +3480,31 @@ where
         }
     }
 
-    fn p_cap(node: &Syntax<T, V>, env: &mut Env) -> Result<(Option<ast::Hint>, Option<ast::Hint>)> {
+    fn p_capability(
+        node: &Syntax<T, V>,
+        env: &mut Env,
+    ) -> Result<(Option<ast::Hint>, Option<ast::Hint>)> {
+        match &node.syntax {
+            Missing => Ok((None, None)),
+            Capability(c) => {
+                let hint_ = ast::Hint_::Hintersection(Self::could_map(
+                    &Self::p_hint,
+                    &c.capability_types,
+                    env,
+                )?);
+                let pos = Self::p_pos(node, env);
+                let hint = ast::Hint::new(pos, hint_);
+                let unsafe_hint = hint.clone();
+                Ok((Some(hint), Some(unsafe_hint)))
+            }
+            _ => Self::missing_syntax("capability", node, env),
+        }
+    }
+
+    fn p_capability_provisional(
+        node: &Syntax<T, V>,
+        env: &mut Env,
+    ) -> Result<(Option<ast::Hint>, Option<ast::Hint>)> {
         match &node.syntax {
             Missing => Ok((None, None)),
             CapabilityProvisional(c) => {
@@ -3508,7 +3513,28 @@ where
                     Self::mp_optional(Self::p_hint, &c.capability_provisional_unsafe_type, env)?;
                 Ok((Some(cap), unsafe_cap))
             }
-            _ => Self::missing_syntax("type parameter", node, env),
+            _ => Self::missing_syntax("capability_provisional", node, env),
+        }
+    }
+
+    /* Just temporary to handle both syntaxes. This will be removed when p_capability_provisional is removed */
+    fn p_cap(
+        capability: &Syntax<T, V>,
+        capability_provisional: &Syntax<T, V>,
+        env: &mut Env,
+    ) -> Result<(Option<ast::Hint>, Option<ast::Hint>)> {
+        if !capability.is_missing() && !capability_provisional.is_missing() {
+            Self::raise_parsing_error(
+                capability_provisional,
+                env,
+                "Cannot use both the [ and @{ syntax for coeffects",
+            );
+            /* Not exactly missing, but this is the standard function used to get an Err result in the lowerer */
+            Self::missing_syntax("capability", capability, env)
+        } else if !capability.is_missing() {
+            Self::p_capability(capability, env)
+        } else {
+            Self::p_capability_provisional(capability_provisional, env)
         }
     }
 
@@ -3527,8 +3553,11 @@ where
                 let kinds = Self::p_kinds(function_modifiers, env)?;
                 let has_async = kinds.has(modifier::ASYNC);
                 let parameters = Self::could_map(Self::p_fun_param, function_parameter_list, env)?;
-                let (capability, unsafe_capability) =
-                    Self::p_cap(&c.function_capability_provisional, env)?;
+                let (capability, unsafe_capability) = Self::p_cap(
+                    &c.function_capability,
+                    &c.function_capability_provisional,
+                    env,
+                )?;
                 let return_type = Self::mp_optional(Self::p_hint, function_type, env)?;
                 let suspension_kind = Self::mk_suspension_kind_(has_async);
                 let name = Self::pos_name(function_name, env)?;
@@ -3548,6 +3577,10 @@ where
             LambdaSignature(c) => {
                 let mut header = FunHdr::make_empty(env);
                 header.parameters = Self::could_map(Self::p_fun_param, &c.lambda_parameters, env)?;
+                let (capability, unsafe_capability) =
+                    Self::p_capability(&c.lambda_capability, env)?;
+                header.capability = capability;
+                header.unsafe_capability = unsafe_capability;
                 header.return_type = Self::mp_optional(Self::p_hint, &c.lambda_type, env)?;
                 Ok(header)
             }

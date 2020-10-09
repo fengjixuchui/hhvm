@@ -6,7 +6,7 @@ Warning: Attempted to serialize unserializable builtin class DOMCharacterData in
 string(2) "N;"
 NULL
 varray(24) {
-  string(11) "__debuginfo"
+  string(11) "__debugInfo"
   string(10) "appendData"
   string(10) "deleteData"
   string(10) "insertData"
@@ -27,8 +27,8 @@ varray(24) {
   string(9) "normalize"
   string(11) "removeChild"
   string(12) "replaceChild"
-  string(4) "c14n"
-  string(8) "c14nfile"
+  string(4) "C14N"
+  string(8) "C14Nfile"
   string(11) "getNodePath"
 }
 ================
@@ -42,7 +42,7 @@ Warning: Attempted to serialize unserializable builtin class A_DOMCharacterData 
 string(2) "N;"
 NULL
 varray(24) {
-  string(11) "__debuginfo"
+  string(11) "__debugInfo"
   string(10) "appendData"
   string(10) "deleteData"
   string(10) "insertData"
@@ -63,7 +63,7 @@ varray(24) {
   string(9) "normalize"
   string(11) "removeChild"
   string(12) "replaceChild"
-  string(4) "c14n"
-  string(8) "c14nfile"
+  string(4) "C14N"
+  string(8) "C14Nfile"
   string(11) "getNodePath"
 }

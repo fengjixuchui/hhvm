@@ -55,23 +55,45 @@ namespace HPHP {
 
 TRACE_SET_MOD(runtime);
 
-static_assert(MixedArray::computeAllocBytes(MixedArray::SmallScale) ==
-              kEmptyMixedArraySize, "");
+static_assert(
+  MixedArray::computeAllocBytes(MixedArray::SmallScale) +
+  kEmptyMixedArrayStrKeyTableSize ==
+  kEmptyMixedArraySize, ""
+);
 
-std::aligned_storage<kEmptyMixedArraySize, 16>::type s_theEmptyDictArray;
-std::aligned_storage<kEmptyMixedArraySize, 16>::type s_theEmptyDArray;
-std::aligned_storage<kEmptyMixedArraySize, 16>::type s_theEmptyMarkedDictArray;
-std::aligned_storage<kEmptyMixedArraySize, 16>::type s_theEmptyMarkedDArray;
+namespace {
+using EmptyArrayType = std::aligned_storage<kEmptyMixedArraySize, 16>::type;
+EmptyArrayType s_theEmptyDictArrayMem;
+EmptyArrayType s_theEmptyDArrayMem;
+EmptyArrayType s_theEmptyMarkedDictArrayMem;
+EmptyArrayType s_theEmptyMarkedDArrayMem;
+}
+
+#define ArrayMemToPtr(mem) ((ArrayData*)(((char*)&mem) +                \
+                                         kEmptyMixedArrayStrKeyTableSize))
+
+
+ArrayData*      s_theEmptyDictArrayPtr =
+  ArrayMemToPtr(s_theEmptyDictArrayMem);
+ArrayData*      s_theEmptyDArrayPtr =
+  ArrayMemToPtr(s_theEmptyDArrayMem);
+ArrayData*      s_theEmptyMarkedDictArrayPtr =
+  ArrayMemToPtr(s_theEmptyMarkedDictArrayMem);
+ArrayData*      s_theEmptyMarkedDArrayPtr =
+  ArrayMemToPtr(s_theEmptyMarkedDArrayMem);
+
+#undef ArrayMemToPtr
 
 struct MixedArray::DictInitializer {
   DictInitializer() {
-    auto const ad = reinterpret_cast<MixedArray*>(&s_theEmptyDictArray);
+    auto const ad = reinterpret_cast<MixedArray*>(s_theEmptyDictArrayPtr);
     ad->initHash(1);
     ad->m_size  = 0;
     ad->m_extra = 0;
     ad->m_scale_used = 1;
     ad->m_nextKI = 0;
-    ad->initHeader(HeaderKind::Dict, StaticValue);
+    ad->initHeader_16(HeaderKind::Dict, StaticValue, kHasStrKeyTable);
+    ad->mutableStrKeyTable()->reset();
     assertx(ad->checkInvariants());
   }
 };
@@ -79,13 +101,14 @@ MixedArray::DictInitializer MixedArray::s_dict_initializer;
 
 struct MixedArray::DArrayInitializer {
   DArrayInitializer() {
-    auto const ad = reinterpret_cast<MixedArray*>(&s_theEmptyDArray);
+    auto const ad = reinterpret_cast<MixedArray*>(s_theEmptyDArrayPtr);
     ad->initHash(1);
     ad->m_size = 0;
     ad->m_extra = 0;
     ad->m_scale_used = 1;
     ad->m_nextKI = 0;
-    ad->initHeader(HeaderKind::Mixed, StaticValue);
+    ad->initHeader_16(HeaderKind::Mixed, StaticValue, kHasStrKeyTable);
+    ad->mutableStrKeyTable()->reset();
     assertx(RuntimeOption::EvalHackArrDVArrs || ad->checkInvariants());
   }
 };
@@ -93,13 +116,15 @@ MixedArray::DArrayInitializer MixedArray::s_darr_initializer;
 
 struct MixedArray::MarkedDictArrayInitializer {
   MarkedDictArrayInitializer() {
-    auto const ad = reinterpret_cast<MixedArray*>(&s_theEmptyMarkedDictArray);
+    auto const ad = reinterpret_cast<MixedArray*>(s_theEmptyMarkedDictArrayPtr);
     ad->initHash(1);
     ad->m_size = 0;
     ad->m_extra = 0;
     ad->m_scale_used = 1;
     ad->m_nextKI = 0;
-    ad->initHeader_16(HeaderKind::Dict, StaticValue, ArrayData::kLegacyArray);
+    ad->initHeader_16(HeaderKind::Dict, StaticValue,
+                      kLegacyArray | kHasStrKeyTable);
+    ad->mutableStrKeyTable()->reset();
     assertx(!RuntimeOption::EvalHackArrDVArrs || ad->checkInvariants());
   }
 };
@@ -107,13 +132,15 @@ MixedArray::MarkedDictArrayInitializer MixedArray::s_marked_dict_initializer;
 
 struct MixedArray::MarkedDArrayInitializer {
   MarkedDArrayInitializer() {
-    auto const ad = reinterpret_cast<MixedArray*>(&s_theEmptyMarkedDArray);
+    auto const ad = reinterpret_cast<MixedArray*>(s_theEmptyMarkedDArrayPtr);
     ad->initHash(1);
     ad->m_size = 0;
     ad->m_extra = 0;
     ad->m_scale_used = 1;
     ad->m_nextKI = 0;
-    ad->initHeader_16(HeaderKind::Mixed, StaticValue, ArrayData::kLegacyArray);
+    ad->initHeader_16(HeaderKind::Mixed, StaticValue,
+                      kLegacyArray | kHasStrKeyTable);
+    ad->mutableStrKeyTable()->reset();
     assertx(RuntimeOption::EvalHackArrDVArrs || ad->checkInvariants());
   }
 };
@@ -156,7 +183,7 @@ ArrayData* MixedArray::MakeReserveMixed(uint32_t size) {
 ArrayData* MixedArray::MakeReserveDArray(uint32_t size) {
   if (RuntimeOption::EvalHackArrDVArrs) {
     auto const ad = MakeReserveDict(size);
-    ad->setLegacyArray(RO::EvalHackArrDVArrMark);
+    ad->setLegacyArrayInPlace(RO::EvalHackArrDVArrMark);
     return ad;
   }
 
@@ -345,7 +372,7 @@ MixedArray* MixedArray::MakeMixedImpl(uint32_t size, const TypedValue* kvs) {
 MixedArray* MixedArray::MakeDArray(uint32_t size, const TypedValue* kvs) {
   if (RuntimeOption::EvalHackArrDVArrs) {
     auto const ad = MakeDict(size, kvs);
-    ad->setLegacyArray(RO::EvalHackArrDVArrMark);
+    ad->setLegacyArrayInPlace(RO::EvalHackArrDVArrMark);
     return ad;
   }
 
@@ -598,7 +625,7 @@ ArrayData* MixedArray::MakeDictFromAPC(const APCArray* apc, bool isLegacy) {
     init.setValidKey(apc->getKey(i), apc->getValue(i)->toLocal());
   }
   auto const ad = init.create();
-  ad->setLegacyArray(isLegacy);
+  ad->setLegacyArrayInPlace(isLegacy);
   return ad;
 }
 
@@ -611,7 +638,7 @@ ArrayData* MixedArray::MakeDArrayFromAPC(const APCArray* apc, bool isMarked) {
     init.setValidKey(apc->getKey(i), apc->getValue(i)->toLocal());
   }
   auto const ad = init.create();
-  ad->setLegacyArray(isMarked);
+  ad->setLegacyArrayInPlace(isMarked);
   return tagArrProv(ad, apc);
 }
 
@@ -1198,6 +1225,16 @@ ArrayData* MixedArray::Copy(const ArrayData* ad) {
 ArrayData* MixedArray::AppendImpl(ArrayData* ad, TypedValue v, bool copy) {
   assertx(copy || ad->notCyclic(v));
   auto a = asMixed(ad);
+
+  if (a->m_nextKI != a->m_size && RO::EvalHackArrCompatNotices) {
+    // Try to eliminate the internal index used for "append", replacing it
+    // with a simple set of the key equal to the array's size. If we can make
+    // this change now, we can drop appends completely as a follow-up.
+    auto const dt = getDataTypeString(a->toDataType());
+    raise_notice("Hack Array Compat: append to %s at index %s count",
+                 dt.data(), a->m_nextKI < a->m_size ? "<" : ">");
+  }
+
   if (UNLIKELY(a->m_nextKI < 0)) {
     raise_warning("Cannot add element to the array as the next element is "
                   "already occupied");
@@ -1329,12 +1366,7 @@ ArrayData* MixedArray::Merge(ArrayData* ad, const ArrayData* elems) {
   PackedArray::IterateVNoInc(elems, [&](TypedValue tv) {
     ret->nextInsert(tv);
   });
-
   return tagArrProv(ret);
-
-  // Note: currently caller is responsible for calling renumber after
-  // this.  Should refactor so we handle it (we already know things
-  // about the array).
 }
 
 ArrayData* MixedArray::Pop(ArrayData* ad, Variant& value) {
@@ -1360,114 +1392,25 @@ ArrayData* MixedArray::Pop(ArrayData* ad, Variant& value) {
   return a;
 }
 
-ArrayData* MixedArray::Dequeue(ArrayData* adInput, Variant& value) {
-  auto a = asMixed(adInput);
-  if (a->cowCheck()) a = a->copyMixed();
-  auto elms = a->data();
-  if (a->m_size) {
-    ssize_t pos = a->nextElm(elms, -1);
-    assertx(pos >= 0 && pos < a->m_used);
-    auto& e = elms[pos];
-    assertx(!isTombstone(e.data.m_type));
-    value = tvAsCVarRef(&e.data);
-    auto pos2 = e.hasStrKey() ? a->findForRemove(e.skey, e.hash())
-                              : a->findForRemove(e.ikey, e.hash());
-    if (!e.hasStrKey()) {
-      a->updateNextKI(e.ikey, false);
-    }
-    assertx(pos2.elmIdx == pos);
-    a->erase(pos2);
-  } else {
-    value = uninit_null();
-  }
-  // Even if the array is empty, for PHP5 conformity we need call
-  // compact() because it has side-effects that are important
-  a->compact(true);
-  return a;
+ArrayData* MixedArray::ToDVArray(ArrayData* adIn, bool copy) {
+  assertx(MixedArray::asMixed(adIn));
+  if (adIn->empty()) return ArrayData::CreateDArray();
+  auto const ad = copy ? Copy(adIn) : adIn;
+  ad->m_kind = HeaderKind::Mixed;
+  if (RO::EvalArrayProvenance) arrprov::reassignTag(ad);
+  assertx(MixedArray::asMixed(ad));
+  return ad;
 }
 
-ArrayData* MixedArray::Prepend(ArrayData* adInput, TypedValue v) {
-  auto a = asMixed(adInput)->prepareForInsert(adInput->cowCheck());
-
-  auto elms = a->data();
-  if (a->m_used > 0 && !isTombstone(elms[0].data.m_type)) {
-    // Move the existing elements to make element 0 available.
-    memmove(&elms[1], &elms[0], a->m_used * sizeof(*elms));
-    ++a->m_used;
-  }
-
-  // Prepend.
-  ++a->m_size;
-  auto& e = elms[0];
-  e.setIntKey(0, hash_int64(0));
-  a->mutableKeyTypes()->recordInt();
-  tvDup(v, e.data);
-
-  // Renumber.
-  a->compact(true);
-  return a;
-}
-
-ArrayData* MixedArray::ToDArrayImpl(const MixedArray* ad) {
-  auto const size = ad->size();
-  auto const elms = ad->data();
-  auto const used = ad->m_used;
-
-  auto out = asMixed(MakeReserveDArray(size));
-  for (uint32_t i = 0; i < used; ++i) {
-    auto const& e = elms[i];
-    if (e.isTombstone()) continue;
-    if (e.hasIntKey()) {
-      out->update(e.ikey, e.data);
-    } else {
-      out->update(e.skey, e.data);
-    }
-  }
-
-  assertx(out->isPHPArrayType());
-  assertx(out->checkInvariants());
-  assertx(out->hasExactlyOneRef());
-  return out;
-}
-
-ArrayData* MixedArray::ToDArray(ArrayData* in, bool copy) {
-  if (in->isDArray()) return in;
-  if (RuntimeOption::EvalHackArrDVArrs) {
-    if (RuntimeOption::EvalHackArrDVArrMark && !in->isLegacyArray()) {
-      if (copy) in = CopyMixed(*asMixed(in), AllocMode::Request);
-      in->setLegacyArray(true);
-    }
-    return in;
-  }
-
-  if (in->empty()) return ArrayData::CreateDArray();
-
-  auto const a = asMixed(in);
-  if (copy) return ToDArrayImpl(a);
-
-  a->m_kind = HeaderKind::Mixed;
-  if (RO::EvalArrayProvenance) arrprov::reassignTag(a);
-  assertx(a->checkInvariants());
-  return a;
-}
-
-ArrayData* MixedArray::ToDict(ArrayData* ad, bool copy) {
-  assertx(asMixed(ad)->checkInvariants());
-  if (ad->isDictKind()) return ad;
-
-  if (ad->isLegacyArray() && RO::EvalHackArrCompatCastMarkedArrayNotices) {
-    raise_hack_arr_compat_cast_marked_array_notice(ad);
-  }
-  auto a = asMixed(ad);
-  if (a->empty() && a->m_nextKI == 0) return ArrayData::CreateDict();
-
-  if (copy) a = CopyMixed(*a, AllocMode::Request);
-
-  if (RO::EvalArrayProvenance) arrprov::clearTag(a);
-  a->m_kind = HeaderKind::Dict;
-  a->setLegacyArray(false);
-  assertx(a->checkInvariants());
-  return a;
+ArrayData* MixedArray::ToHackArr(ArrayData* adIn, bool copy) {
+  assertx(MixedArray::asMixed(adIn));
+  if (adIn->empty()) return ArrayData::CreateDict();
+  auto const ad = copy ? Copy(adIn) : adIn;
+  ad->m_kind = HeaderKind::Dict;
+  ad->setLegacyArrayInPlace(false);
+  if (RO::EvalArrayProvenance) arrprov::clearTag(ad);
+  assertx(MixedArray::asMixed(ad));
+  return ad;
 }
 
 ArrayData* MixedArray::Renumber(ArrayData* adIn) {

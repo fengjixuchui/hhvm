@@ -16,21 +16,21 @@ use parser_core_types::lexable_token::LexableToken;
 use parser_core_types::syntax_error::{self as Errors, SyntaxError};
 use parser_core_types::token_kind::TokenKind;
 
-pub struct TypeParser<'a, S, T>
+pub struct TypeParser<'a, S>
 where
-    S: SmartConstructors<T>,
+    S: SmartConstructors,
     S::R: NodeType,
 {
-    lexer: Lexer<'a, S::Token>,
+    lexer: Lexer<'a, S>,
     env: ParserEnv,
     context: Context<'a, S::Token>,
     errors: Vec<SyntaxError>,
     sc: S,
 }
 
-impl<'a, S, T: Clone> std::clone::Clone for TypeParser<'a, S, T>
+impl<'a, S> std::clone::Clone for TypeParser<'a, S>
 where
-    S: SmartConstructors<T>,
+    S: SmartConstructors,
     S::R: NodeType,
 {
     fn clone(&self) -> Self {
@@ -44,13 +44,13 @@ where
     }
 }
 
-impl<'a, S, T: Clone> ParserTrait<'a, S, T> for TypeParser<'a, S, T>
+impl<'a, S> ParserTrait<'a, S> for TypeParser<'a, S>
 where
-    S: SmartConstructors<T>,
+    S: SmartConstructors,
     S::R: NodeType,
 {
     fn make(
-        mut lexer: Lexer<'a, S::Token>,
+        mut lexer: Lexer<'a, S>,
         env: ParserEnv,
         context: Context<'a, S::Token>,
         errors: Vec<SyntaxError>,
@@ -66,30 +66,20 @@ where
         }
     }
 
-    fn into_parts(
-        mut self,
-    ) -> (
-        Lexer<'a, S::Token>,
-        Context<'a, S::Token>,
-        Vec<SyntaxError>,
-        S,
-    ) {
+    fn into_parts(mut self) -> (Lexer<'a, S>, Context<'a, S::Token>, Vec<SyntaxError>, S) {
         self.lexer.set_in_type(false);
         (self.lexer, self.context, self.errors, self.sc)
     }
 
-    fn lexer(&self) -> &Lexer<'a, S::Token> {
+    fn lexer(&self) -> &Lexer<'a, S> {
         &self.lexer
     }
 
-    fn lexer_mut(&mut self) -> &mut Lexer<'a, S::Token> {
+    fn lexer_mut(&mut self) -> &mut Lexer<'a, S> {
         &mut self.lexer
     }
 
-    fn continue_from<P: ParserTrait<'a, S, T>>(&mut self, other: P)
-    where
-        T: Clone,
-    {
+    fn continue_from<P: ParserTrait<'a, S>>(&mut self, other: P) {
         let (mut lexer, context, errors, sc) = other.into_parts();
         lexer.set_in_type(true);
         self.lexer = lexer;
@@ -127,18 +117,18 @@ where
     }
 }
 
-impl<'a, S, T: Clone> TypeParser<'a, S, T>
+impl<'a, S> TypeParser<'a, S>
 where
-    S: SmartConstructors<T>,
+    S: SmartConstructors,
     S::R: NodeType,
 {
     fn with_expression_parser<F, U>(&mut self, f: F) -> U
     where
-        F: Fn(&mut ExpressionParser<'a, S, T>) -> U,
+        F: Fn(&mut ExpressionParser<'a, S>) -> U,
     {
         let mut lexer = self.lexer.clone();
         lexer.set_in_type(false);
-        let mut expression_parser: ExpressionParser<S, T> = ExpressionParser::make(
+        let mut expression_parser: ExpressionParser<S> = ExpressionParser::make(
             lexer,
             self.env.clone(),
             self.context.clone(),
@@ -151,17 +141,17 @@ where
     }
 
     fn parse_expression(&mut self) -> S::R {
-        self.with_expression_parser(|p: &mut ExpressionParser<'a, S, T>| p.parse_expression())
+        self.with_expression_parser(|p: &mut ExpressionParser<'a, S>| p.parse_expression())
     }
 
     fn with_decl_parser<F, U>(&mut self, f: F) -> U
     where
-        F: Fn(&mut DeclarationParser<'a, S, T>) -> U,
+        F: Fn(&mut DeclarationParser<'a, S>) -> U,
     {
         let mut lexer = self.lexer.clone();
         lexer.set_in_type(false);
 
-        let mut declaration_parser: DeclarationParser<S, T> = DeclarationParser::make(
+        let mut declaration_parser: DeclarationParser<S> = DeclarationParser::make(
             lexer,
             self.env.clone(),
             self.context.clone(),
@@ -223,7 +213,6 @@ where
             | TokenKind::Category
             | TokenKind::XHP
             | TokenKind::XHPClassName => self.parse_simple_type_or_type_constant_or_generic(),
-            | TokenKind::Array => self.parse_array_type_specifier(),
             | TokenKind::Darray => self.parse_darray_type_specifier(),
             | TokenKind::Varray => self.parse_varray_type_specifier(),
             | TokenKind::Vec => self.parse_vec_type_specifier(),
@@ -402,7 +391,7 @@ where
     // https://github.com/hhvm/hack-langspec/issues/83
     // TODO: Update the spec with reified
     pub fn parse_type_parameter(&mut self) -> S::R {
-        let attributes = self.with_decl_parser(|x: &mut DeclarationParser<'a, S, T>| {
+        let attributes = self.with_decl_parser(|x: &mut DeclarationParser<'a, S>| {
             x.parse_attribute_specification_opt()
         });
         let reified = self.optional_token(TokenKind::Reify);
@@ -591,68 +580,6 @@ where
                 let missing = S!(make_missing, self, self.pos());
                 let result = S!(make_type_arguments, self, open_angle, args, missing);
                 (result, no_arg_is_missing)
-            }
-        }
-    }
-
-    fn parse_array_type_specifier(&mut self) -> S::R {
-        // We allow
-        // array
-        // array<type>
-        // array<type, type>
-        // TODO: Put a proper reference to the specification in here.
-        // TODO: in HHVM trailing comma is permitted only in the case with one
-        // type argument: array<type, >
-        // so now it is not really comma-separated list
-        let array_token = self.assert_token(TokenKind::Array);
-        if self.peek_token_kind_with_possible_attributized_type_list() != TokenKind::LessThan {
-            S!(make_simple_type_specifier, self, array_token)
-        } else {
-            let left_angle = self.assert_left_angle_in_type_list_with_possible_attribute();
-            // ERROR RECOVERY: We could improve error recovery by detecting
-            // array<,  and marking the key type as missing.
-            let key_type = self.parse_type_specifier(false, true);
-            let kind = self.peek_token_kind();
-            if kind == TokenKind::GreaterThan {
-                let right_angle = self.fetch_token();
-                S!(
-                    make_vector_array_type_specifier,
-                    self,
-                    array_token,
-                    left_angle,
-                    key_type,
-                    right_angle
-                )
-            } else if kind == TokenKind::Comma {
-                let comma = self.fetch_token();
-                let next_token_kind = self.peek_token_kind();
-                let value_type = if next_token_kind == TokenKind::GreaterThan {
-                    S!(make_missing, self, self.pos())
-                } else {
-                    self.parse_type_specifier(false, true)
-                };
-                let right_angle = self.require_right_angle();
-                S!(
-                    make_map_array_type_specifier,
-                    self,
-                    array_token,
-                    left_angle,
-                    key_type,
-                    comma,
-                    value_type,
-                    right_angle,
-                )
-            } else {
-                // ERROR RECOVERY: TokenKind::Assume that the > is missing and keep going.
-                let right_angle = S!(make_missing, self, self.pos());
-                S!(
-                    make_vector_array_type_specifier,
-                    self,
-                    array_token,
-                    left_angle,
-                    key_type,
-                    right_angle
-                )
             }
         }
     }
@@ -846,6 +773,18 @@ where
         }
     }
 
+    pub fn parse_capability_opt(&mut self) -> S::R {
+        if self.peek_token_kind() == TokenKind::LeftBracket {
+            let (left_bracket, types, right_bracket) = self
+                .parse_bracketted_comma_list_opt_allow_trailing(|x: &mut Self| {
+                    x.parse_type_specifier(false, false)
+                });
+            S!(make_capability, self, left_bracket, types, right_bracket)
+        } else {
+            S!(make_missing, self, self.pos())
+        }
+    }
+
     fn parse_closure_type_specifier(&mut self) -> S::R {
         // SPEC
         //
@@ -875,6 +814,7 @@ where
             let irp = self.require_right_paren();
             (pts, irp)
         };
+        let capability = self.parse_capability_opt();
         let col = self.require_colon();
         let ret = self.parse_type_specifier(false, true);
         let orp = self.require_right_paren();
@@ -886,6 +826,7 @@ where
             ilp,
             pts,
             irp,
+            capability,
             col,
             ret,
             orp
@@ -994,7 +935,7 @@ where
         // SPEC
         // attributized-specifier:
         // attribute-specification-opt type-specifier
-        let attribute_spec_opt = self.with_decl_parser(|x: &mut DeclarationParser<'a, S, T>| {
+        let attribute_spec_opt = self.with_decl_parser(|x: &mut DeclarationParser<'a, S>| {
             x.parse_attribute_specification_opt()
         });
         let attributized_type = self.parse_type_specifier(false, true);

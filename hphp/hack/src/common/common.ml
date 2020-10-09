@@ -72,6 +72,21 @@ module List = struct
       let (env, rl) = map2_env env rl1 rl2 ~f in
       (env, x :: rl)
 
+  let rec map3_env env l1 l2 l3 ~f =
+    if length l1 <> length l2 || length l2 <> length l3 then
+      raise @@ Invalid_argument "map3_env"
+    else
+      match (l1, l2, l3) with
+      | ([], [], []) -> (env, [])
+      | ([], _, _)
+      | (_, [], _)
+      | (_, _, []) ->
+        raise @@ Invalid_argument "map3_env"
+      | (x1 :: rl1, x2 :: rl2, x3 :: rl3) ->
+        let (env, x) = f env x1 x2 x3 in
+        let (env, rl) = map3_env env rl1 rl2 rl3 ~f in
+        (env, x :: rl)
+
   let filter_map_env env xs ~f =
     let (env, l) = rev_map_env env xs ~f in
     (env, rev_filter_map l ~f:(fun x -> x))
@@ -84,28 +99,4 @@ module List = struct
       @@ Invalid_argument
            (Printf.sprintf "List.replicate was called with %d argument" n)
     | _ -> x :: replicate ~num:(num - 1) x
-end
-
-module Option = struct
-  include Core_kernel.Option
-
-  let pp : (Format.formatter -> 'a -> unit) -> Format.formatter -> 'a t -> unit
-      =
-   fun pp_x fmt x_opt ->
-    match x_opt with
-    | None -> Format.pp_print_string fmt "None"
-    | Some x ->
-      Format.pp_print_string fmt "(Some ";
-      pp_x fmt x;
-      Format.pp_print_string fmt ")"
-
-  let show : (Format.formatter -> 'a -> unit) -> 'a t -> string =
-   (fun pp_x x_opt -> Format.asprintf "%a" (pp pp_x) x_opt)
-
-  let if_none x_opt ~f =
-    match x_opt with
-    | Some x -> Some x
-    | None -> f ()
-
-  let ( >>! ) = if_none
 end

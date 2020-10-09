@@ -170,6 +170,8 @@ SSATmp* opt_is_subclass_of(IRGS& env, const ParamPrep& params) {
 }
 
 SSATmp* opt_method_exists(IRGS& env, const ParamPrep& params) {
+  // We might need to raise a notice, so lets not optimize
+  if (RO::EvalRaiseOnCaseInsensitiveLookup) return nullptr;
   if (params.size() != 2) return nullptr;
 
   auto const meth = params[1].value;
@@ -1598,7 +1600,7 @@ SSATmp* maybeCoerceValue(
 
   auto bail = [&] { fail(); return cns(env, TBottom); };
   if (target <= TStr) {
-    if (!val->type().maybe(TCls)) return bail();
+    if (!val->type().maybe(TLazyCls | TCls)) return bail();
 
     auto castW = [&] (SSATmp* val){
       if (RuntimeOption::EvalClassStringHintNotices) {
@@ -1611,15 +1613,17 @@ SSATmp* maybeCoerceValue(
       return update(val);
     };
 
-    return cond(
-      env,
-      [&] (Block* f) { return gen(env, CheckType, TCls, f, val); },
-      [&] (SSATmp* cval) { return castW(gen(env, LdClsName, cval)); },
-      [&] {
-        hint(env, Block::Hint::Unlikely);
-        return bail();
-      }
-    );
+    MultiCond mc{env};
+    mc.ifTypeThen(val, TLazyCls, [&](SSATmp* lcval) {
+      return castW(gen(env, LdLazyClsName, lcval));
+    });
+    mc.ifTypeThen(val, TCls, [&](SSATmp* cval) {
+      return castW(gen(env, LdClsName, cval));
+    });
+    return mc.elseDo([&] {
+      hint(env, Block::Hint::Unlikely);
+      return bail();
+    });
   }
 
   if (target <= (RuntimeOption::EvalHackArrDVArrs ? TVec : TVArr)) {
@@ -1912,7 +1916,7 @@ SSATmp* builtinCall(IRGS& env,
   // so there's nothing for FrameState to do.
   auto const retOff = [&] () -> folly::Optional<IRSPRelOffset> {
     if (params.forNativeImpl && !catchMaker.inlining()) {
-      assertx(env.irb->fs().bcSPOff() == env.context.initSpOffset);
+      assertx(spOffBCFromFP(env) == FPInvOffset{callee->numSlotsInFrame()});
       return folly::none;
     }
     return offsetFromIRSP(

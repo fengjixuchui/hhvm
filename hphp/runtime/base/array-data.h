@@ -46,6 +46,10 @@ struct VariableSerializer;
 struct Variant;
 
 namespace arrprov { struct Tag; }
+namespace bespoke {
+  struct LoggingArray;
+  struct MonotypeVec;
+}
 
 /*
  * arr_lval is a tv_lval augmented with an ArrayData*, and is used to return an
@@ -129,6 +133,26 @@ protected:
    */
   ~ArrayData() { always_assert(false); }
 
+  /*
+   * Part of the implementation of conversion methods.
+   *
+   * If you call ToDVArray on a {vec, dict}, you'll get a {varray, darray}.
+   * We only ever call it on vecs and dicts. Similarly, toDVArr converts in
+   * the opposite direction, and we only ever call it on dvarrays.
+   *
+   * It's important that we implement these conversions efficiently, but these
+   * casts also come with critical logging behavior. As a result, we extract
+   * the (per-layout) conversion helper for performance, and then add logging
+   * and HAM behavior in the generic helpers.
+   *
+   * All other conversions can be implemented generically with no performance
+   * penalty (since they require a change of layout).
+   */
+  ArrayData* toDVArrayWithLogging(bool copy);
+  ArrayData* toHackArrWithLogging(bool copy);
+  ArrayData* toDVArray(bool copy);
+  ArrayData* toHackArr(bool copy);
+
 public:
   /*
    * Create a new empty ArrayData with the appropriate ArrayKind.
@@ -157,15 +181,6 @@ public:
   static ArrayData* Create(TypedValue name, TypedValue value);
   static ArrayData* Create(const Variant& name, TypedValue value);
   static ArrayData* Create(const Variant& name, const Variant& value);
-
-  /*
-   * Make a copy of the array.
-   *
-   * copy() makes a normal request-allocated ArrayData, whereas copyStatic()
-   * makes a static ArrayData.
-   */
-  ArrayData* copy() const;
-  ArrayData* copyStatic() const;
 
   /*
    * Convert between array kinds.
@@ -259,11 +274,16 @@ public:
   bool hasApcTv() const;
 
   /*
-   * Whether the array has legacy behaviors enabled (this bit can only be set
-   * for vecs and dicts).
+   * Whether the array has legacy behaviors enabled. This method can only be
+   * called for dvarrays, vecs and dicts.
+   *
+   * The default setter has the normal copy/escalation behavior. If it returns
+   * a new ArrayData, the caller must dec-ref the old one. The in-place setter
+   * may only be called if the array is known to have exactly one ref.
    */
   bool isLegacyArray() const;
-  void setLegacyArray(bool legacy);
+  ArrayData* setLegacyArray(bool copy, bool legacy);
+  void setLegacyArrayInPlace(bool legacy);
 
   bool hasStrKeyTable() const;
 
@@ -292,11 +312,6 @@ public:
    * For non-hasPackedLayout() arrays, this is generally an O(N) operation.
    */
   bool isVectorData() const;
-
-  /*
-   * Return true for array kinds that don't have COW semantics.
-   */
-  bool noCopyOnWrite() const;
 
   /*
    * ensure a circular self-reference is not being created
@@ -464,32 +479,10 @@ public:
   bool uasort(const Variant& cmp_function);
 
   /*
-   * PHP array_merge() implementations.
-   */
-  ArrayData* merge(const ArrayData* elems);
-
-  /*
    * Remove the first or last element of the array, and assign it to `value'.
-   *
-   * These implement:
-   *  - dequeue(): array_shift()
-   *  - pop(): array_pop()
-   *
-   * Return `this' if copy/escalation are not needed, or a copied/escalated
-   * array data.
+   * Return a copied/escalated array if necessary, or `this` otherwise.
    */
-  ArrayData* dequeue(Variant& value);
   ArrayData* pop(Variant& value);
-
-  /*
-   * Prepend `v' to the array, making a copy first if cowCheck() returns true.
-   *
-   * This implements array_unshift().
-   *
-   * Return `this' if copy/escalation are not needed, or a copied/escalated
-   * array data.
-   */
-  ArrayData* prepend(TypedValue v);
 
   /*
    * Comparisons.
@@ -552,12 +545,6 @@ public:
   bool intishCastKey(const StringData* key, int64_t& i) const;
 
   /*
-   * Re-index all numeric keys to start from 0. This operation may require
-   * escalation on the array, so it returns the new result.
-   */
-  ArrayData* renumber();
-
-  /*
    * Get the string name for the array kind `kind'.
    */
   static const char* kindToString(ArrayKind kind);
@@ -569,6 +556,10 @@ public:
    */
   static constexpr size_t offsetofSize() { return offsetof(ArrayData, m_size); }
   static constexpr size_t sizeofSize() { return sizeof(m_size); }
+
+  static constexpr size_t offsetOfBespokeIndex() {
+    return offsetof(ArrayData, m_extra_hi16);
+  }
 
   const StrKeyTable& missingKeySideTable() const {
     assertx(this->hasStrKeyTable());
@@ -640,9 +631,16 @@ private:
   static bool EqualHelper(const ArrayData*, const ArrayData*, bool);
   static int64_t CompareHelper(const ArrayData*, const ArrayData*);
 
+  /*
+   * Make a copy of the array. Only for internal use. To make a static array,
+   * we convert its contents static values, then copy it to static memory.
+   */
+  ArrayData* copyStatic() const;
+
   /////////////////////////////////////////////////////////////////////////////
 
 protected:
+  friend struct BespokeArray;
   friend struct PackedArray;
   friend struct EmptyArray;
   friend struct MixedArray;
@@ -654,6 +652,8 @@ protected:
   friend struct c_Map;
   friend struct c_ImmMap;
   friend struct arrprov::Tag;
+  friend struct bespoke::LoggingArray;
+  friend struct bespoke::MonotypeVec;
 
   uint32_t m_size;
   /*
@@ -693,7 +693,13 @@ static_assert(ArrayData::kVecKind == uint8_t(HeaderKind::Vec), "");
 
 //////////////////////////////////////////////////////////////////////
 
-constexpr size_t kEmptyMixedArraySize = 120;
+// The size of the StrKeyTable, which is stored in front of the array, needs to
+// rounded up to a multiple of 16, so that we can enforce the base array pointer
+// is 16-byte aligned.
+constexpr size_t kEmptyMixedArrayStrKeyTableSize =
+  ((sizeof(StrKeyTable) - 1) / 16 + 1) * 16;
+
+constexpr size_t kEmptyMixedArraySize = 120 + kEmptyMixedArrayStrKeyTableSize;
 constexpr size_t kEmptySetArraySize = 96;
 
 /*
@@ -701,14 +707,18 @@ constexpr size_t kEmptySetArraySize = 96;
  */
 extern std::aligned_storage<sizeof(ArrayData), 16>::type s_theEmptyVec;
 extern std::aligned_storage<sizeof(ArrayData), 16>::type s_theEmptyVArray;
-extern std::aligned_storage<kEmptyMixedArraySize, 16>::type s_theEmptyDictArray;
-extern std::aligned_storage<kEmptyMixedArraySize, 16>::type s_theEmptyDArray;
 extern std::aligned_storage<kEmptySetArraySize, 16>::type s_theEmptySetArray;
 
 extern std::aligned_storage<sizeof(ArrayData), 16>::type s_theEmptyMarkedVArray;
-extern std::aligned_storage<kEmptyMixedArraySize, 16>::type s_theEmptyMarkedDArray;
 extern std::aligned_storage<sizeof(ArrayData), 16>::type s_theEmptyMarkedVec;
-extern std::aligned_storage<kEmptyMixedArraySize, 16>::type s_theEmptyMarkedDictArray;
+
+/*
+ * Pointers to canonical empty Dicts/DArrays.
+ */
+extern ArrayData* s_theEmptyDictArrayPtr;
+extern ArrayData* s_theEmptyDArrayPtr;
+extern ArrayData* s_theEmptyMarkedDArrayPtr;
+extern ArrayData* s_theEmptyMarkedDictArrayPtr;
 
 /*
  * Return the static empty array, for PHP and Hack arrays.
@@ -786,20 +796,12 @@ struct ArrayFunctions {
   bool (*uksort[NK])(ArrayData* ad, const Variant& cmp_function);
   bool (*usort[NK])(ArrayData* ad, const Variant& cmp_function);
   bool (*uasort[NK])(ArrayData* ad, const Variant& cmp_function);
-  ArrayData* (*copy[NK])(const ArrayData*);
   ArrayData* (*copyStatic[NK])(const ArrayData*);
   ArrayData* (*append[NK])(ArrayData*, TypedValue v);
-  ArrayData* (*merge[NK])(ArrayData*, const ArrayData* elems);
   ArrayData* (*pop[NK])(ArrayData*, Variant& value);
-  ArrayData* (*dequeue[NK])(ArrayData*, Variant& value);
-  ArrayData* (*prepend[NK])(ArrayData*, TypedValue v);
-  ArrayData* (*renumber[NK])(ArrayData*);
+  ArrayData* (*toDVArray[NK])(ArrayData*, bool copy);
+  ArrayData* (*toHackArr[NK])(ArrayData*, bool copy);
   void (*onSetEvalScalar[NK])(ArrayData*);
-  ArrayData* (*toDict[NK])(ArrayData*, bool);
-  ArrayData* (*toVec[NK])(ArrayData*, bool);
-  ArrayData* (*toKeyset[NK])(ArrayData*, bool);
-  ArrayData* (*toVArray[NK])(ArrayData*, bool);
-  ArrayData* (*toDArray[NK])(ArrayData*, bool);
 };
 
 extern const ArrayFunctions g_array_funcs;
@@ -820,14 +822,12 @@ extern const ArrayFunctions g_array_funcs;
 [[noreturn]] void throwOOBArrayKeyException(const StringData* key,
                                             const ArrayData* ad);
 [[noreturn]] void throwFalseyPromoteException(const char* type);
-[[noreturn]] void throwMissingElementException(const char* op);
 [[noreturn]] void throwInvalidKeysetOperation();
 [[noreturn]] void throwInvalidAdditionException(const ArrayData* ad);
 [[noreturn]] void throwVarrayUnsetException();
 [[noreturn]] void throwVecUnsetException();
 
 void raiseHackArrCompatArrHackArrCmp();
-void raiseHackArrCompatDVArrCmp(const ArrayData*, const ArrayData*, bool);
 
 std::string makeHackArrCompatImplicitArrayKeyMsg(const TypedValue* key);
 
@@ -850,4 +850,3 @@ ArrayData* tagArrProv(ArrayData* ad, const APCArray* src);
 }
 
 #include "hphp/runtime/base/array-data-inl.h"
-

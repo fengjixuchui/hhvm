@@ -243,10 +243,19 @@ RDS_LOCAL(std::string, s_lastSeenRepoConfig);
 }
 
 const RepoOptions& RepoOptions::forFile(const char* path) {
+  tracing::BlockNoTrace _{"repo-options"};
+
   if (!RuntimeOption::EvalEnablePerRepoOptions) return defaults();
 
   std::string fpath{path};
   if (boost::starts_with(fpath, "/:")) return defaults();
+
+  auto const isParentOf = [] (const std::string& p1, const std::string& p2) {
+    return boost::starts_with(
+      boost::filesystem::path{p2},
+      boost::filesystem::path{p1}.parent_path()
+    );
+  };
 
   // Fast path: we have an active request and it has cached a RepoOptions
   // which has not been modified. This only works when the runtime option
@@ -259,7 +268,7 @@ const RepoOptions& RepoOptions::forFile(const char* path) {
       // negatively cached the existance of a .hhvmconfig.hdf for this request.
       if (opts->path().empty()) return *opts;
 
-      if (boost::starts_with(fpath, opts->path())) {
+      if (isParentOf(opts->path(), fpath)) {
         struct stat st;
         if (lstat(opts->path().data(), &st) == 0) {
           if (!CachedRepoOptions::isChanged(opts, st)) return *opts;
@@ -304,7 +313,7 @@ const RepoOptions& RepoOptions::forFile(const char* path) {
   //          optimization.
   if (RuntimeOption::EvalCachePerRepoOptionsPath) {
     if (!s_lastSeenRepoConfig->empty() &&
-        boost::starts_with(fpath, *s_lastSeenRepoConfig)) {
+        isParentOf(*s_lastSeenRepoConfig, fpath)) {
       if (auto const r = test(*s_lastSeenRepoConfig)) return *r;
       s_lastSeenRepoConfig->clear();
     }
@@ -820,7 +829,7 @@ uint64_t RuntimeOption::DisableConstant = 0;
 bool RuntimeOption::DisableNontoplevelDeclarations = false;
 bool RuntimeOption::DisableStaticClosures = false;
 bool RuntimeOption::EnableClassLevelWhereClauses = false;
-bool RuntimeOption::EnableFirstClassFunctionPointers = false;
+bool RuntimeOption::EnableFirstClassFunctionPointers = true;
 
 #ifdef HHVM_DYNAMIC_EXTENSION_DIR
 std::string RuntimeOption::ExtensionDir = HHVM_DYNAMIC_EXTENSION_DIR;
@@ -1091,8 +1100,9 @@ hphp_string_imap<TypedValue> RuntimeOption::ConstantFunctions;
 bool RuntimeOption::RecordCodeCoverage = false;
 std::string RuntimeOption::CodeCoverageOutputFile;
 
-std::string RuntimeOption::RepoLocalMode;
+RepoMode RuntimeOption::RepoLocalMode = RepoMode::ReadOnly;
 std::string RuntimeOption::RepoLocalPath;
+RepoMode RuntimeOption::RepoCentralMode = RepoMode::ReadWrite;
 std::string RuntimeOption::RepoCentralPath;
 int32_t RuntimeOption::RepoCentralFileMode;
 std::string RuntimeOption::RepoCentralFileUser;
@@ -1166,6 +1176,7 @@ int RuntimeOption::ProfilerMaxTraceBuffer = 0;
 #ifdef FACEBOOK
 bool RuntimeOption::EnableFb303Server = false;
 int RuntimeOption::Fb303ServerPort = 0;
+std::string RuntimeOption::Fb303ServerIP;
 int RuntimeOption::Fb303ServerThreadStackSizeMb = 8;
 int RuntimeOption::Fb303ServerWorkerThreads = 1;
 int RuntimeOption::Fb303ServerPoolThreads = 1;
@@ -1693,22 +1704,44 @@ void RuntimeOption::Load(
   }
   {
     // Repo
-    // Local Repo
-    Config::Bind(RepoLocalMode, ini, config, "Repo.Local.Mode", RepoLocalMode);
-    if (RepoLocalMode.empty()) {
-      const char* HHVM_REPO_LOCAL_MODE = getenv("HHVM_REPO_LOCAL_MODE");
-      if (HHVM_REPO_LOCAL_MODE != nullptr) {
-        RepoLocalMode = HHVM_REPO_LOCAL_MODE;
+    auto repoModeToStr = [](RepoMode mode) {
+      switch (mode) {
+        case RepoMode::Closed:
+          return "--";
+        case RepoMode::ReadOnly:
+          return "r-";
+        case RepoMode::ReadWrite:
+          return "rw";
       }
-      RepoLocalMode = "r-";
-    }
-    if (RepoLocalMode.compare("rw")
-        && RepoLocalMode.compare("r-")
-        && RepoLocalMode.compare("--")) {
-      Logger::Error("Bad config setting: Repo.Local.Mode=%s",
-                    RepoLocalMode.c_str());
-      RepoLocalMode = "rw";
-    }
+
+      always_assert(false);
+      return "";
+    };
+
+    auto parseRepoMode = [&](const std::string& repoModeStr, const char* type, RepoMode defaultMode) {
+      if (repoModeStr.empty()) {
+        return defaultMode;
+      }
+      if (repoModeStr == "--") {
+        return RepoMode::Closed;
+      }
+      if (repoModeStr == "r-") {
+        return RepoMode::ReadOnly;
+      }
+      if (repoModeStr == "rw") {
+        return RepoMode::ReadWrite;
+      }
+
+      Logger::Error("Bad config setting: Repo.%s.Mode=%s",
+                    type, repoModeStr.c_str());
+      return RepoMode::ReadWrite;
+    };
+
+    // Local Repo
+    static std::string repoLocalMode;
+    Config::Bind(repoLocalMode, ini, config, "Repo.Local.Mode", repoModeToStr(RepoLocalMode));
+    RepoLocalMode = parseRepoMode(repoLocalMode, "Local", RepoMode::ReadOnly);
+
     // Repo.Local.Path
     Config::Bind(RepoLocalPath, ini, config, "Repo.Local.Path");
     if (RepoLocalPath.empty()) {
@@ -1719,6 +1752,11 @@ void RuntimeOption::Load(
     }
 
     // Central Repo
+    static std::string repoCentralMode;
+    Config::Bind(repoCentralMode, ini, config, "Repo.Central.Mode", repoModeToStr(RepoCentralMode));
+    RepoCentralMode = parseRepoMode(repoCentralMode, "Central", RepoMode::ReadWrite);
+
+    // Repo.Central.Path
     Config::Bind(RepoCentralPath, ini, config, "Repo.Central.Path");
     Config::Bind(RepoCentralFileMode, ini, config, "Repo.Central.FileMode");
     Config::Bind(RepoCentralFileUser, ini, config, "Repo.Central.FileUser");
@@ -1828,7 +1866,7 @@ void RuntimeOption::Load(
       high_2m_pages(EvalMaxHighArenaHugePages);
     }
     s_enable_static_arena =
-      Config::GetBool(ini, config, "Eval.UseTLStaticArena", false);
+      Config::GetBool(ini, config, "Eval.UseTLStaticArena", true);
 
     replacePlaceholders(EvalHackCompilerExtractPath);
     replacePlaceholders(EvalHackCompilerFallbackPath);
@@ -1956,7 +1994,7 @@ void RuntimeOption::Load(
     Config::Bind(StrictArrayFillKeys, ini, config,
                  "Hack.Lang.StrictArrayFillKeys", HackStrictOption::ON);
     Config::Bind(EnableFirstClassFunctionPointers, ini, config,
-                 "Hack.Lang.EnableFirstClassFunctionPointers", 0);
+                 "Hack.Lang.EnableFirstClassFunctionPointers", 1);
 
     Config::Bind(LookForTypechecker, ini, config,
                  "Hack.Lang.LookForTypechecker", false);
@@ -2591,6 +2629,7 @@ void RuntimeOption::Load(
     Config::Bind(EnableFb303Server, ini, config, "Fb303Server.Enable",
                  EnableFb303Server);
     Config::Bind(Fb303ServerPort, ini, config, "Fb303Server.Port", 0);
+    Config::Bind(Fb303ServerIP, ini, config, "Fb303Server.IP");
     Config::Bind(Fb303ServerThreadStackSizeMb, ini, config,
                  "Fb303Server.ThreadStackSizeMb", 8);
     Config::Bind(Fb303ServerWorkerThreads, ini, config,
@@ -2769,6 +2808,12 @@ void RuntimeOption::Load(
   }
 
   // Bespoke array-likes
+
+  // AllowBespokesInLiveTypes implies BespokeArrayLikeMode > 0--bump it to 1 if
+  // not already
+  if (RO::EvalAllowBespokesInLiveTypes && RO::EvalBespokeArrayLikeMode == 0) {
+    RO::EvalBespokeArrayLikeMode = 1;
+  }
 
   // We don't support provenance for bespoke array-likes, so don't construct
   // any at runtime if we're logging provenance instrumentation results.

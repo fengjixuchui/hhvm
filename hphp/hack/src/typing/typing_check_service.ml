@@ -77,7 +77,13 @@ module Delegate = Typing_service_delegate
 
 type progress = job_progress
 
-let neutral = Errors.empty
+let neutral : unit -> typing_result =
+ fun () ->
+  {
+    errors = Errors.empty;
+    dep_edges = Typing_deps.dep_edges_make ();
+    telemetry = Telemetry.create ();
+  }
 
 (*****************************************************************************)
 (* The job that will be run on the workers *)
@@ -266,72 +272,36 @@ let get_mem_telemetry () : Telemetry.t option =
   else
     None
 
-let diff_mem_telemetry
-    (start : Telemetry.t option)
-    (second_start : Telemetry.t option)
-    (end_ : Telemetry.t option) : Telemetry.t =
-  match (start, second_start, end_) with
-  | (Some t1, Some t2, Some t3) ->
-    Telemetry.create ()
-    |> Telemetry.object_
-         ~key:"decl_and_typecheck"
-         ~value:(Telemetry.diff ~all:false t2 ~prev:t1)
-    |> Telemetry.object_
-         ~key:"second_typecheck"
-         ~value:(Telemetry.diff ~all:false t3 ~prev:t2)
-  | (Some t1, None, Some t3) ->
-    Telemetry.create ()
-    |> Telemetry.object_
-         ~key:"decl_and_typecheck"
-         ~value:(Telemetry.diff ~all:false t3 ~prev:t1)
-  | _ -> Telemetry.create ()
-
-let diff_counters_telemetry
-    (counters : Telemetry.t) (second_counters : Telemetry.t option) :
-    Telemetry.t =
-  let telemetry =
-    Telemetry.create ()
-    |> Telemetry.object_ ~key:"decl_and_typecheck" ~value:counters
-  in
-  match second_counters with
-  | None -> telemetry
-  | Some second_counters ->
-    Telemetry.object_
-      telemetry
-      ~key:"second_typecheck"
-      ~value:(Telemetry.diff ~all:false second_counters ~prev:counters)
-
 let profile_log
     ~(check_info : check_info)
-    ~(start_time : float)
-    ~(counters : Telemetry.t)
-    ~(start_telemetry : Telemetry.t option)
-    ~(second_start_time : float option)
-    ~(second_counters : Telemetry.t option)
-    ~(second_start_telemetry : Telemetry.t option)
+    ~(start_counters : Counters.time_in_sec * Telemetry.t)
+    ~(end_counters : Counters.time_in_sec * Telemetry.t)
+    ~(second_run_end_counters : (Counters.time_in_sec * Telemetry.t) option)
     ~(file : check_file_computation)
     ~(result : process_file_results) : unit =
+  let (start_time, start_counters) = start_counters in
+  let (end_time, end_counters) = end_counters in
+  let duration = end_time -. start_time in
+  let profile = Telemetry.diff ~all:false ~prev:start_counters end_counters in
+  let (duration_second_run, profile_second_run) =
+    match second_run_end_counters with
+    | Some (time, counters) ->
+      let duration = time -. end_time in
+      let profile = Telemetry.diff ~all:false ~prev:end_counters counters in
+      (Some duration, Some profile)
+    | None -> (None, None)
+  in
   let { computation; _ } = result in
-  let end_time = Unix.gettimeofday () in
   let times_checked = file.deferred_count + 1 in
-  let end_telemetry_opt = get_mem_telemetry () in
   let files_to_declare =
     List.count computation ~f:(fun f ->
         match f with
         | Declare _ -> true
         | _ -> false)
   in
-  let (time_decl_and_typecheck, time_typecheck_opt) =
-    match second_start_time with
-    | None -> (end_time -. start_time, None)
-    | Some second_start_time ->
-      (second_start_time -. start_time, Some (end_time -. second_start_time))
-  in
   (* "deciding_time" is what we compare against the threshold, *)
   (* to see if we should log. *)
-  let deciding_time =
-    Option.value time_typecheck_opt ~default:time_decl_and_typecheck
-  in
+  let deciding_time = Option.value duration_second_run ~default:duration in
   let should_log =
     Float.(deciding_time >= check_info.profile_type_check_duration_threshold)
     || times_checked > 1
@@ -349,22 +319,16 @@ let profile_log
     in
     let telemetry =
       Telemetry.create ()
-      |> Telemetry.float_
-           ~key:"duration_decl_and_typecheck"
-           ~value:time_decl_and_typecheck
-      |> Telemetry.float_opt ~key:"duration_typecheck" ~value:time_typecheck_opt
       |> Telemetry.int_opt ~key:"filesize" ~value:filesize_opt
       |> Telemetry.object_ ~key:"deferment" ~value:deferment_telemetry
-      |> Telemetry.object_
-           ~key:"counters"
-           ~value:(diff_counters_telemetry counters second_counters)
-      |> Telemetry.object_
-           ~key:"mem"
-           ~value:
-             (diff_mem_telemetry
-                start_telemetry
-                second_start_telemetry
-                end_telemetry_opt)
+      |> Telemetry.object_ ~key:"profile" ~value:profile
+    in
+    let telemetry =
+      Option.fold
+        ~init:telemetry
+        profile_second_run
+        ~f:(fun telemetry profile ->
+          Telemetry.object_ telemetry ~key:"profile_second_run" ~value:profile)
     in
     HackEventLogger.ProfileTypeCheck.process_file
       ~recheck_id:check_info.recheck_id
@@ -384,16 +348,45 @@ let profile_log
         "" )
   )
 
+let read_counters () : Counters.time_in_sec * Telemetry.t =
+  let typecheck_time = Counters.read_time Counters.Category.Typecheck in
+  let mem_telemetry = get_mem_telemetry () in
+  let operations_counters = Counters.get_counters () in
+  ( typecheck_time,
+    Telemetry.create ()
+    |> Telemetry.object_opt ~key:"memory" ~value:mem_telemetry
+    |> Telemetry.object_ ~key:"operations" ~value:operations_counters )
+
 let process_files
     (dynamic_view_files : Relative_path.Set.t)
     (ctx : Provider_context.t)
-    (errors : Errors.t)
+    ({ errors; dep_edges; telemetry } : typing_result)
     (progress : computation_progress)
     ~(memory_cap : int option)
-    ~(check_info : check_info) : Errors.t * computation_progress =
+    ~(check_info : check_info) : typing_result * computation_progress =
   SharedMem.invalidate_caches ();
   File_provider.local_changes_push_sharedmem_stack ();
   Ast_provider.local_changes_push_sharedmem_stack ();
+
+  let _prev_counters_state =
+    Counters.(
+      Category.(
+        let categories = [] in
+        let categories =
+          if check_info.profile_log then
+            Decl_accessors :: Get_ast :: Disk_cat :: Typecheck :: categories
+          else
+            categories
+        in
+        let categories =
+          if check_info.profile_total_typecheck_duration then
+            Typecheck :: Decling :: categories
+          else
+            categories
+        in
+        reset ~enabled_categories:(CategorySet.of_list categories)))
+  in
+  let (_start_time, start_counters) = read_counters () in
 
   let rec process_or_exit errors progress =
     match progress.remaining with
@@ -401,37 +394,34 @@ let process_files
       let (errors, deferred) =
         match fn with
         | Check file ->
-          let start_time = Unix.gettimeofday () in
-          let start_telemetry = get_mem_telemetry () in
-          let prev_counters_state =
-            Counters.reset ~enable:check_info.profile_log
+          let process_file () =
+            process_file dynamic_view_files ctx errors file
           in
-          let result = process_file dynamic_view_files ctx errors file in
-          let counters = Counters.get_counters () in
-          let (second_start_time, second_start_telemetry, second_counters) =
-            if check_info.profile_type_check_twice then
-              let t = Unix.gettimeofday () in
-              (* we're running this routine solely for the side effect *)
-              (* of seeing how long it takes to run. *)
-              let (_ignored : process_file_results) =
-                process_file dynamic_view_files ctx errors file
+          let result =
+            if check_info.profile_log then (
+              let start_counters = read_counters () in
+              let result = process_file () in
+              let end_counters = read_counters () in
+              let second_run_end_counters =
+                if check_info.profile_type_check_twice then
+                  (* we're running this routine solely for the side effect *)
+                  (* of seeing how long it takes to run. *)
+                  let _ignored = process_file () in
+                  Some (read_counters ())
+                else
+                  None
               in
-              (Some t, get_mem_telemetry (), Some (Counters.get_counters ()))
-            else
-              (None, None, None)
+              profile_log
+                ~check_info
+                ~start_counters
+                ~end_counters
+                ~second_run_end_counters
+                ~file
+                ~result;
+              result
+            ) else
+              process_file ()
           in
-          Counters.restore_state prev_counters_state;
-          if check_info.profile_log then
-            profile_log
-              ~check_info
-              ~start_time
-              ~counters
-              ~start_telemetry
-              ~second_start_time
-              ~second_counters
-              ~second_start_telemetry
-              ~file
-              ~result;
           (result.errors, result.computation)
         | Declare path ->
           let errors = Decl_service.decl_file ctx errors path in
@@ -453,25 +443,46 @@ let process_files
         process_or_exit errors progress
     | [] -> (errors, progress)
   in
-  let result = process_or_exit errors progress in
+  let (errors, progress) = process_or_exit errors progress in
+
+  let (_end_time, end_counters) = read_counters () in
+  let telemetry =
+    Telemetry.add
+      telemetry
+      (Telemetry.diff
+         ~all:false
+         ~suffix_keys:false
+         end_counters
+         ~prev:start_counters)
+  in
+
+  let new_dep_edges = Typing_deps.flush_ideps_batch () in
+  let dep_edges = Typing_deps.merge_dep_edges dep_edges new_dep_edges in
+
   TypingLogger.flush_buffers ();
   Ast_provider.local_changes_pop_sharedmem_stack ();
   File_provider.local_changes_pop_sharedmem_stack ();
-  result
+  ({ errors; dep_edges; telemetry }, progress)
 
 let load_and_process_files
     (ctx : Provider_context.t)
     (dynamic_view_files : Relative_path.Set.t)
-    (errors : Errors.t)
+    (typing_result : typing_result)
     (progress : computation_progress)
     ~(memory_cap : int option)
-    ~(check_info : check_info) : Errors.t * computation_progress =
+    ~(check_info : check_info) : typing_result * computation_progress =
   (* When the type-checking worker receives SIGUSR1, display a position which
      corresponds approximately with the function/expression being checked. *)
   Sys_utils.set_signal
     Sys.sigusr1
     (Sys.Signal_handle Typing.debug_print_last_pos);
-  process_files dynamic_view_files ctx errors progress ~memory_cap ~check_info
+  process_files
+    dynamic_view_files
+    ctx
+    typing_result
+    progress
+    ~memory_cap
+    ~check_info
 
 (*****************************************************************************)
 (* Let's go! That's where the action is *)
@@ -489,26 +500,27 @@ let merge
     (files_initial_count : int)
     (files_in_progress : file_computation Hash_set.t)
     (files_checked_count : int ref)
-    ((errors : Errors.t), (results : progress))
-    (acc : Errors.t) : Errors.t =
+    ((produced_by_job : typing_result), (progress : progress))
+    (acc : typing_result) : typing_result =
   let () =
-    match results.kind with
+    match progress.kind with
     | Progress -> ()
     | DelegateProgress _ ->
-      delegate_state := Delegate.merge !delegate_state errors results.progress
+      delegate_state :=
+        Delegate.merge !delegate_state produced_by_job.errors progress.progress
   in
-  let results = results.progress in
+  let progress = progress.progress in
 
-  files_to_process := results.remaining @ !files_to_process;
+  files_to_process := progress.remaining @ !files_to_process;
 
   (* Let's also prepend the deferred files! *)
-  files_to_process := results.deferred @ !files_to_process;
+  files_to_process := progress.deferred @ !files_to_process;
 
   (* Prefetch the deferred files, if necessary *)
   files_to_process :=
-    if should_prefetch_deferred_files && List.length results.deferred > 10 then
+    if should_prefetch_deferred_files && List.length progress.deferred > 10 then
       let files_to_prefetch =
-        List.fold results.deferred ~init:[] ~f:(fun acc computation ->
+        List.fold progress.deferred ~init:[] ~f:(fun acc computation ->
             match computation with
             | Declare path -> path :: acc
             | _ -> acc)
@@ -536,7 +548,7 @@ let merge
             | _ -> acc
           end
         | _ -> acc)
-      results.completed
+      progress.completed
   in
 
   (* Deferred type check computations should be subtracted from completed
@@ -548,7 +560,7 @@ let merge
     | Check _ -> true
     | _ -> false
   in
-  let deferred_check_count = List.count ~f:is_check results.deferred in
+  let deferred_check_count = List.count ~f:is_check progress.deferred in
   let completed_check_count = completed_check_count - deferred_check_count in
 
   files_checked_count := !files_checked_count + completed_check_count;
@@ -561,7 +573,7 @@ let merge
     ~total_count:files_initial_count
     ~unit:"files"
     ~extra:delegate_progress;
-  Errors.merge errors acc
+  accumulate_job_output produced_by_job acc
 
 let next
     (workers : MultiWorker.worker list option)
@@ -675,7 +687,7 @@ let process_in_parallel
     ~(interrupt : 'a MultiWorker.interrupt_config)
     ~(memory_cap : int option)
     ~(check_info : check_info) :
-    Errors.t * Delegate.state * Telemetry.t * 'a * Relative_path.t list =
+    typing_result * Delegate.state * Telemetry.t * 'a * Relative_path.t list =
   let delegate_state = ref delegate_state in
   let files_to_process = ref fnl in
   let files_in_progress = Hash_set.Poly.create () in
@@ -700,19 +712,19 @@ let process_in_parallel
   let job =
     load_and_process_files ctx dynamic_view_files ~memory_cap ~check_info
   in
-  let job (errors : Errors.t) (progress : progress) =
-    let (errors, computation_progress) =
+  let job (typing_result : typing_result) (progress : progress) =
+    let (typing_result, computation_progress) =
       match progress.kind with
-      | Progress -> job errors progress.progress
+      | Progress -> job typing_result progress.progress
       | DelegateProgress job -> Delegate.process job
     in
-    (errors, { progress with progress = computation_progress })
+    (typing_result, { progress with progress = computation_progress })
   in
-  let (errors, env, cancelled_results) =
+  let (typing_result, env, cancelled_results) =
     MultiWorker.call_with_interrupt
       workers
       ~job
-      ~neutral
+      ~neutral:(neutral ())
       ~merge:
         (merge
            ~should_prefetch_deferred_files
@@ -740,7 +752,7 @@ let process_in_parallel
     in
     List.concat (List.map cancelled_results ~f:paths_of)
   in
-  (errors, !delegate_state, telemetry, env, paths_of cancelled_results)
+  (typing_result, !delegate_state, telemetry, env, paths_of cancelled_results)
 
 type ('a, 'b, 'c, 'd) job_result = 'a * 'b * 'c * 'd * Relative_path.t list
 
@@ -836,20 +848,24 @@ let go_with_interrupt
   in
   let fnl = List.map fnl ~f:(fun path -> Check { path; deferred_count = 0 }) in
   Mocking.with_test_mocking fnl @@ fun fnl ->
-  let result =
+  let (typing_result, delegate_state, telemetry, env, cancelled_fnl) =
     if should_process_sequentially opts fnl then begin
       Hh_logger.log "Type checking service will process files sequentially";
       let progress = { completed = []; remaining = fnl; deferred = [] } in
-      let (errors, _) =
+      let (typing_result, _progress) =
         process_files
           dynamic_view_files
           ctx
-          neutral
+          (neutral ())
           progress
           ~memory_cap:None
           ~check_info
       in
-      (errors, delegate_state, telemetry, interrupt.MultiThreadedCall.env, [])
+      ( typing_result,
+        delegate_state,
+        telemetry,
+        interrupt.MultiThreadedCall.env,
+        [] )
     end else begin
       Hh_logger.log "Type checking service will process files in parallel";
       let workers =
@@ -873,13 +889,20 @@ let go_with_interrupt
         ~check_info
     end
   in
+  Typing_deps.register_discovered_dep_edges typing_result.dep_edges;
   if check_info.profile_log then
     Hh_logger.log
       "Typecheck perf: %s"
       (HackEventLogger.ProfileTypeCheck.get_telemetry_url
          ~init_id:check_info.init_id
          ~recheck_id:check_info.recheck_id);
-  result
+  let telemetry =
+    Telemetry.object_
+      telemetry
+      ~key:"profiling_info"
+      ~value:typing_result.telemetry
+  in
+  (typing_result.errors, delegate_state, telemetry, env, cancelled_fnl)
 
 let go
     (ctx : Provider_context.t)

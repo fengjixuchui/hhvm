@@ -37,9 +37,11 @@ type env = {
   ai_mode: string option;
   debug_port: Unix.file_descr option;
   ignore_hh_version: bool;
+  save_64bit: string option;
   saved_state_ignore_hhconfig: bool;
   dynamic_view: bool;
   prechecked: bool option;
+  mini_state: string option;
   config: (string * string) list;
   custom_telemetry_data: (string * string) list;
   allow_non_opt_build: bool;
@@ -58,9 +60,11 @@ let start_server (env : env) =
     ai_mode;
     debug_port;
     ignore_hh_version;
+    save_64bit;
     saved_state_ignore_hhconfig;
     dynamic_view;
     prechecked;
+    mini_state;
     config;
     custom_telemetry_data;
     allow_non_opt_build;
@@ -93,6 +97,9 @@ let start_server (env : env) =
           [||]
         else
           [| "--from"; from |] );
+        (match mini_state with
+        | None -> [||]
+        | Some state -> [| "--with-mini-state"; state |]);
         ( if no_load then
           [| "--no-load" |]
         else
@@ -125,6 +132,9 @@ let start_server (env : env) =
           [| "--saved-state-ignore-hhconfig" |]
         else
           [||] );
+        (match save_64bit with
+        | None -> [||]
+        | Some dest -> [| "--save-64bit"; dest |]);
         ( if dynamic_view then
           [| "--dynamic-view" |]
         else
@@ -149,6 +159,12 @@ let start_server (env : env) =
           [| "--debug-client"; string_of_int @@ Handle.get_handle fd |]);
       ]
   in
+  if not silent then
+    Printf.eprintf
+      "Server launched with the following command:\n\t%s\n%!"
+      (String.concat
+         ~sep:" "
+         (Array.to_list (Array.map ~f:Filename.quote hh_server_args)));
   let (stdin, stdout, stderr) =
     if silent then
       let nfd = Unix.openfile Sys_utils.null_path [Unix.O_RDWR] 0 in

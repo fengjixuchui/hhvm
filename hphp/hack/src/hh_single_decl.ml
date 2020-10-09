@@ -67,7 +67,7 @@ let compare_decl ctx verbosity fn =
   let text = RealDisk.cat fn in
   let fn = Relative_path.(create Root fn) in
   let decls =
-    time verbosity "Parsed decls" (fun () -> parse_decls ~contents:text fn)
+    time verbosity "Parsed decls" (fun () -> parse_decls_ffi fn text)
   in
   let facts =
     Option.value_exn
@@ -196,7 +196,7 @@ let compare_decl ctx verbosity fn =
           let class_ =
             Shallow_classes_provider.decl ctx ~use_cache:true class_
           in
-          { class_ with Shallow_decl_defs.sc_decl_errors = Errors.empty })
+          class_)
         Shallow_decl_defs.equal_shallow_class
         Shallow_decl_defs.show_shallow_class
         decls.classes;

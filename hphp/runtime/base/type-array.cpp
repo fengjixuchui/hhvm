@@ -264,19 +264,6 @@ Array Array::diffImpl(const Array& array, bool by_key, bool by_value, bool match
   return ret;
 }
 
-Array& Array::merge(const Array& arr) {
-  return mergeImpl(arr.get());
-}
-
-Array& Array::mergeImpl(ArrayData *data) {
-  if (m_arr == nullptr || data == nullptr) {
-    throw_bad_array_merge();
-  }
-  auto const escalated = data->empty() ? m_arr->renumber() : m_arr->merge(data);
-  if (escalated != m_arr) m_arr = Ptr::attach(escalated);
-  return *this;
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 // Type conversions.
 
@@ -308,12 +295,8 @@ String Array::toString() const {
 
 void Array::setLegacyArray(bool isLegacy) {
   auto const ad = get();
-  if (isLegacy == ad->isLegacyArray()) return;
-
-  if (ad->cowCheck()) {
-    m_arr = Ptr::attach(ad->copy());
-  }
-  m_arr->setLegacyArray(isLegacy);
+  auto const result = ad->setLegacyArray(ad->cowCheck(), isLegacy);
+  if (result != ad) m_arr = Ptr::attach(result);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -530,27 +513,10 @@ void Array::append(TypedValue v) {
   if (escalated != m_arr) m_arr = Ptr::attach(escalated);
 }
 
-void Array::prepend(TypedValue v) {
-  if (!m_arr) operator=(Create());
-  assertx(m_arr);
-  auto const escalated = m_arr->prepend(tvToInit(v));
-  if (escalated != m_arr) m_arr = Ptr::attach(escalated);
-}
-
 Variant Array::pop() {
   if (m_arr) {
     Variant ret;
     ArrayData *newarr = m_arr->pop(ret);
-    if (newarr != m_arr) m_arr = Ptr::attach(newarr);
-    return ret;
-  }
-  return init_null();
-}
-
-Variant Array::dequeue() {
-  if (m_arr) {
-    Variant ret;
-    ArrayData *newarr = m_arr->dequeue(ret);
     if (newarr != m_arr) m_arr = Ptr::attach(newarr);
     return ret;
   }

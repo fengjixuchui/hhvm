@@ -25,7 +25,26 @@ type computation_progress = {
 }
 [@@deriving show]
 
-type delegate_job_sig = unit -> Errors.t * computation_progress
+type typing_result = {
+  errors: Errors.t;
+  dep_edges: Typing_deps.dep_edges;
+  telemetry: Telemetry.t;
+}
+
+let accumulate_job_output
+    (produced_by_job : typing_result) (accumulated_so_far : typing_result) :
+    typing_result =
+  {
+    errors = Errors.merge produced_by_job.errors accumulated_so_far.errors;
+    dep_edges =
+      Typing_deps.merge_dep_edges
+        produced_by_job.dep_edges
+        accumulated_so_far.dep_edges;
+    telemetry =
+      Telemetry.add produced_by_job.telemetry accumulated_so_far.telemetry;
+  }
+
+type delegate_job_sig = unit -> typing_result * computation_progress
 
 type progress_kind =
   | Progress
@@ -40,6 +59,7 @@ type check_info = {
   init_id: string;
   recheck_id: string option;
   profile_log: bool;
+  profile_total_typecheck_duration: bool;
   profile_type_check_twice: bool;
   profile_type_check_duration_threshold: float;
 }

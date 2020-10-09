@@ -1402,6 +1402,7 @@ functor
       in
 
       (* TYPE CHECKING *********************************************************)
+      let type_check_start_t = Unix.gettimeofday () in
 
       (* For a full check, typecheck everything which may be affected by the
        changes. For a lazy check, typecheck only the affected files which are
@@ -1410,18 +1411,12 @@ functor
       let (files_to_check, lazy_check_later) =
         CheckKind.get_defs_to_recheck files_to_parse fast to_recheck env
       in
-      let should_start_delegate =
-        ServerCheckUtils.should_do_remote
-          genv
-          env.tcopt
-          ~file_count:(Relative_path.Set.cardinal files_to_check)
-          errors
-      in
       let env =
-        if should_start_delegate then
-          start_typing_delegate genv env
-        else
+        start_delegate_if_needed
           env
+          genv
+          (Relative_path.Set.cardinal files_to_check)
+          errors
       in
       let files_to_check =
         remove_failed_parsing_set
@@ -1445,7 +1440,7 @@ functor
         ~include_in_logs:false
         "typechecking %d files"
         to_recheck_count;
-      let logstring = Printf.sprintf "Typechecking %d files" in
+      let logstring = Printf.sprintf "typechecking %d files" in
       Hh_logger.log "Begin %s" (logstring to_recheck_count);
 
       debug_print_path_set genv "to_recheck" files_to_check;
@@ -1604,9 +1599,9 @@ functor
           env with
           typing_service =
             {
-              env.typing_service with
               delegate_state =
                 Typing_service_delegate.stop env.typing_service.delegate_state;
+              enabled = false;
             };
         }
       in
@@ -1620,7 +1615,7 @@ functor
         ~started_count:to_recheck_count
         ~count:total_rechecked_count
         ~experiments:genv.local_config.ServerLocalConfig.experiments
-        ~start_t:t;
+        ~start_t:type_check_start_t;
 
       (env, { reparse_count; total_rechecked_count }, telemetry)
   end

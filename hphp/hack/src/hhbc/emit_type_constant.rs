@@ -58,7 +58,6 @@ fn get_kind_num(tparams: &[&str], mut p: &str) -> i64 {
         "hh\\mixed" => 9,
         "tuple" => 10,
         "$$internal$$fun" => 11,
-        "array" => 12,
         "$$internal$$typevar" | "_" => 13, // corresponds to user OF_GENERIC
         "shape" => 14,
         "class" => 15,
@@ -73,7 +72,7 @@ fn get_kind_num(tparams: &[&str], mut p: &str) -> i64 {
         "hh\\darray" => 24,
         "hh\\varray" => 25,
         "hh\\varray_or_darray" => 26,
-        "hh\\arraylike" => 27,
+        "hh\\anyarray" => 27,
         "hh\\null" => 28,
         "hh\\nothing" => 29,
         "hh\\dynamic" => 30,
@@ -101,15 +100,14 @@ fn is_prim(s: &str) -> bool {
 
 fn is_resolved_classname(s: &str) -> bool {
     match s {
-        "array"
-        | "HH\\darray"
+        "HH\\darray"
         | "HH\\varray"
         | "HH\\varray_or_darray"
         | "HH\\vec"
         | "HH\\dict"
         | "HH\\keyset"
         | "HH\\vec_or_dict"
-        | "HH\\arraylike" => true,
+        | "HH\\AnyArray" => true,
         _ => false,
     }
 }

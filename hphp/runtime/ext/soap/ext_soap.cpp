@@ -520,7 +520,7 @@ static bool do_request(ObjectData* obj_client, xmlDoc *request,
   if (!response.isString()) {
     if (client->m_soap_fault.isNull()) {
       client->m_soap_fault =
-        create_soap_fault("Client", "SoapClient::__doRequest() "
+        create_soap_fault("Client", "SoapClient::__dorequest() "
                           "returned non string value");
     }
   } else if (client->m_trace) {
@@ -2028,7 +2028,7 @@ void HHVM_METHOD(SoapServer, __construct,
   }
 }
 
-void HHVM_METHOD(SoapServer, setclass,
+void HHVM_METHOD(SoapServer, setClass,
                  const String& name,
                  const Array& argv /* = null_array */) {
   auto* data = Native::data<SoapServer>(this_);
@@ -2051,7 +2051,7 @@ void HHVM_METHOD(SoapServer, setobject,
   data->m_soap_object = obj.toObject();
 }
 
-void HHVM_METHOD(SoapServer, addfunction,
+void HHVM_METHOD(SoapServer, addFunction,
                  const Variant& func) {
   auto* data = Native::data<SoapServer>(this_);
   SoapServerScope ss(this_);
@@ -2404,7 +2404,7 @@ void HHVM_METHOD(SoapServer, fault,
   send_soap_server_fault(std::shared_ptr<sdlFunction>(), obj, nullptr);
 }
 
-void HHVM_METHOD(SoapServer, addsoapheader,
+void HHVM_METHOD(SoapServer, addSoapHeader,
                  const Variant& fault) {
   auto* data = Native::data<SoapServer>(this_);
   SoapServerScope ss(this_);
@@ -2600,7 +2600,9 @@ Variant HHVM_METHOD(SoapClient, soapcallImpl,
     return init_null();
   }
   if (!data->m_default_headers.isNull()) {
-    soap_headers.merge(data->m_default_headers.toArray());
+    IterateVNoInc(data->m_default_headers.toArray().get(), [&](auto val) {
+      soap_headers.append(val);
+    });
   }
 
   Array output_headers;
@@ -2741,7 +2743,7 @@ Variant HHVM_METHOD(SoapClient, __getlastresponseheaders) {
   return data->m_last_response_headers;
 }
 
-Variant HHVM_METHOD(SoapClient, __getfunctions) {
+Variant HHVM_METHOD(SoapClient, __getFunctions) {
   auto* data = Native::data<SoapClient>(this_);
   SoapClientScope ss(this_);
 
@@ -2757,7 +2759,7 @@ Variant HHVM_METHOD(SoapClient, __getfunctions) {
   return init_null();
 }
 
-Variant HHVM_METHOD(SoapClient, __gettypes) {
+Variant HHVM_METHOD(SoapClient, __getTypes) {
   auto* data = Native::data<SoapClient>(this_);
   SoapClientScope ss(this_);
 
@@ -3104,14 +3106,14 @@ static struct SoapExtension final : Extension {
   SoapExtension() : Extension("soap", NO_EXTENSION_VERSION_YET) {}
   void moduleInit() override {
     HHVM_ME(SoapServer, __construct);
-    HHVM_ME(SoapServer, setclass);
+    HHVM_ME(SoapServer, setClass);
     HHVM_ME(SoapServer, setobject);
-    HHVM_ME(SoapServer, addfunction);
+    HHVM_ME(SoapServer, addFunction);
     HHVM_ME(SoapServer, getfunctions);
     HHVM_ME(SoapServer, handle);
     HHVM_ME(SoapServer, setpersistence);
     HHVM_ME(SoapServer, fault);
-    HHVM_ME(SoapServer, addsoapheader);
+    HHVM_ME(SoapServer, addSoapHeader);
     Native::registerNativeDataInfo<SoapServer>(SoapServer::s_className.get(),
                                                Native::NDIFlags::NO_SWEEP);
 
@@ -3121,8 +3123,8 @@ static struct SoapExtension final : Extension {
     HHVM_ME(SoapClient, __getlastresponse);
     HHVM_ME(SoapClient, __getlastrequestheaders);
     HHVM_ME(SoapClient, __getlastresponseheaders);
-    HHVM_ME(SoapClient, __getfunctions);
-    HHVM_ME(SoapClient, __gettypes);
+    HHVM_ME(SoapClient, __getFunctions);
+    HHVM_ME(SoapClient, __getTypes);
     HHVM_ME(SoapClient, __dorequest);
     HHVM_ME(SoapClient, __setcookie);
     HHVM_ME(SoapClient, __setlocation);

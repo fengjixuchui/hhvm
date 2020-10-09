@@ -42,7 +42,7 @@ object(DOMElement) (0) {
 }
 varray(37) {
   string(11) "__construct"
-  string(11) "__debuginfo"
+  string(11) "__debugInfo"
   string(12) "getAttribute"
   string(16) "getAttributeNode"
   string(18) "getAttributeNodeNS"
@@ -75,8 +75,8 @@ varray(37) {
   string(9) "normalize"
   string(11) "removeChild"
   string(12) "replaceChild"
-  string(4) "c14n"
-  string(8) "c14nfile"
+  string(4) "C14N"
+  string(8) "C14Nfile"
   string(11) "getNodePath"
 }
 ================
@@ -128,7 +128,7 @@ object(A_DOMElement) (1) {
 }
 varray(37) {
   string(11) "__construct"
-  string(11) "__debuginfo"
+  string(11) "__debugInfo"
   string(12) "getAttribute"
   string(16) "getAttributeNode"
   string(18) "getAttributeNodeNS"
@@ -161,7 +161,7 @@ varray(37) {
   string(9) "normalize"
   string(11) "removeChild"
   string(12) "replaceChild"
-  string(4) "c14n"
-  string(8) "c14nfile"
+  string(4) "C14N"
+  string(8) "C14Nfile"
   string(11) "getNodePath"
 }

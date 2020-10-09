@@ -214,11 +214,27 @@ void beginInlining(IRGS& env,
   assertx((!curFunc(env) ||
           curFunc(env)->base() + callBcOffset < curFunc(env)->past()) &&
          "callBcOffset past end of caller");
+  assertx(fca.numArgs >= target->numRequiredParams());
   assertx(fca.numArgs <= target->numNonVariadicParams());
   assertx(!fca.hasUnpack() || fca.numArgs == target->numNonVariadicParams());
   assertx(!fca.hasUnpack() || target->hasVariadicCaptureParam());
 
   FTRACE(1, "[[[ begin inlining: {}\n", target->fullName()->data());
+
+  auto const numArgsInclUnpack = fca.numArgs + (fca.hasUnpack() ? 1U : 0U);
+  auto const callFlags = cns(env, CallFlags(
+    fca.hasGenerics(),
+    dynamicCall,
+    returnTarget.asyncEagerOffset != kInvalidOffset,
+    0, // call offset unused by the logic below
+    0
+  ).value());
+
+  // Callee checks and input initialization.
+  emitCalleeGenericsChecks(env, target, callFlags, fca.hasGenerics());
+  emitCalleeDynamicCallChecks(env, target, callFlags);
+  emitCalleeImplicitContextChecks(env, target);
+  emitInitFuncInputs(env, target, numArgsInclUnpack);
 
   auto const closure = target->isClosureBody()
     ? gen(env, AssertType, Type::ExactObj(target->implCls()), ctx)
@@ -261,18 +277,11 @@ void beginInlining(IRGS& env,
     return gen(env, AssertType, ty, ctx);
   }();
 
-  auto const generics = [&]() -> SSATmp* {
-    if (!fca.hasGenerics()) return nullptr;
-    if (target->hasReifiedGenerics()) return popC(env);
-    popDecRef(env, DataTypeGeneric);
-    return nullptr;
-  }();
-
-  auto const numArgs = fca.numArgs + (fca.hasUnpack() ? 1 : 0);
-  jit::vector<SSATmp*> params{numArgs + 1};
-
-  for (unsigned i = 0; i < numArgs; ++i) {
-    params[numArgs - i - 1] = popC(env);
+  auto const numTotalInputs =
+    target->numParams() + (target->hasReifiedGenerics() ? 1U : 0U);
+  jit::vector<SSATmp*> inputs{numTotalInputs};
+  for (auto i = 0; i < numTotalInputs; ++i) {
+    inputs[numTotalInputs - i - 1] = popC(env);
   }
 
   // NB: Now that we've popped the callee's arguments off the stack
@@ -287,14 +296,14 @@ void beginInlining(IRGS& env,
   auto const calleeFP = gen(
     env,
     BeginInlining,
-    BeginInliningData{calleeAROff, target, cost, int(numArgs)},
+    BeginInliningData{calleeAROff, target, cost, int(numArgsInclUnpack)},
     sp(env),
     fp(env)
   );
 
   StFrameMetaData meta;
   meta.callBCOff     = callBcOffset;
-  meta.numArgs       = numArgs;
+  meta.numArgs       = numArgsInclUnpack;
   meta.asyncEagerReturn = returnTarget.asyncEagerOffset != kInvalidOffset;
 
   gen(env, StFrameMeta, meta, calleeFP);
@@ -305,7 +314,7 @@ void beginInlining(IRGS& env,
   data.syncVmpc = nullptr;
 
   assertx(startSk.func() == target &&
-          startSk.offset() == target->getEntryForNumArgs(numArgs) &&
+          startSk.offset() == target->getEntryForNumArgs(numArgsInclUnpack) &&
           startSk.resumeMode() == ResumeMode::None);
 
   env.inlineState.depth++;
@@ -321,29 +330,14 @@ void beginInlining(IRGS& env,
 
   if (!(ctx->type() <= TNullptr)) gen(env, StFrameCtx, fp(env), ctx);
 
-  for (unsigned i = 0; i < numArgs; ++i) {
-    stLocRaw(env, i, calleeFP, params[i]);
-  }
-  if (generics != nullptr) stLocRaw(env, numArgs, calleeFP, generics);
-
-  // All the code below may reenter, so update the marker so we don't
-  // accidentally overwrite the locals.
+  // We have entered a new frame.
   updateMarker(env);
   env.irb->exceptionStackBoundary();
 
-  auto const callFlags = cns(env, CallFlags(
-    generics != nullptr,
-    dynamicCall,
-    returnTarget.asyncEagerOffset != kInvalidOffset,
-    0, // call offset unused by the logic below
-    0
-  ).value());
-
-  emitPrologueLocals(env, target, numArgs, callFlags, closure);
-
-  emitGenericsMismatchCheck(env, target, callFlags);
-  emitCalleeDynamicCallCheck(env, target, callFlags);
-  emitImplicitContextCheck(env, target);
+  for (auto i = 0; i < numTotalInputs; ++i) {
+    stLocRaw(env, i, calleeFP, inputs[i]);
+  }
+  emitInitFuncLocals(env, target, closure);
 
   assertx(startSk.hasThis() == startSk.func()->hasThisInBody());
   assertx(
@@ -378,6 +372,10 @@ void conjureBeginInlining(IRGS& env,
   for (auto const argType : args) {
     push(env, conjure(argType));
   }
+
+  // beginInlining() assumes synced state.
+  updateMarker(env);
+  env.irb->exceptionStackBoundary();
 
   auto const flags = hasUnpack
     ? FCallArgs::Flags::HasUnpack : FCallArgs::Flags::None;

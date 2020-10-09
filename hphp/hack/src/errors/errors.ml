@@ -1810,6 +1810,12 @@ let illegal_use_of_dynamically_callable attr_pos meth_pos visibility =
         sprintf "But this method is %s" (Markdown_lite.md_codify visibility) );
     ]
 
+let dynamically_callable_reified attr_pos =
+  add
+    (NastCheck.err_code NastCheck.DynamicallyCallableReified)
+    attr_pos
+    "`__DynamicallyCallable` cannot be used on reified functions or methods"
+
 let parent_in_function_pointer pos parento meth_name =
   let suggestion =
     match parento with
@@ -2863,7 +2869,7 @@ let array_cast pos =
 let string_cast pos ty =
   add (Typing.err_code Typing.StringCast) pos
   @@ Printf.sprintf
-       "Cannot cast a value of type %s to string.\nOnly primitives may be used in a `(string)` cast.\nIf you are trying to cast a Stringish type, please use `stringish_cast`.\nThis functionality is being removed from HHVM."
+       "Cannot cast a value of type %s to string. Only primitives may be used in a `(string)` cast."
        (Markdown_lite.md_codify ty)
 
 let nullable_cast pos ty ty_pos =
@@ -3367,8 +3373,8 @@ let expected_tparam
         "Expected "
         ^
         match n with
-        | 0 -> "no type parameter"
-        | 1 -> "a type parameter"
+        | 0 -> "no type parameters"
+        | 1 -> "exactly one type parameter"
         | n -> string_of_int n ^ " type parameters" );
       (definition_pos, "Definition is here");
     ]
@@ -5521,11 +5527,21 @@ let call_coeffect_error
         "This call is not allowed because its coeffects are incompatible with the context"
       );
       ( pos_env_capability,
-        "From this declaration, the context of this function body provides the capabilities: "
+        "From this declaration, the context of this function body provides "
         ^ env_capability );
-      ( pos_capability,
-        "But the function being called requires the capabilities: " ^ capability
-      );
+      (pos_capability, "But the function being called requires " ^ capability);
+    ]
+
+let abstract_function_pointer cname meth_name call_pos decl_pos =
+  let cname = strip_ns cname in
+  add_list
+    (Typing.err_code Typing.AbstractFunctionPointer)
+    [
+      ( call_pos,
+        "Cannot create a function pointer to "
+        ^ Markdown_lite.md_codify (cname ^ "::" ^ meth_name)
+        ^ "; it is abstract" );
+      (decl_pos, "Declaration is here");
     ]
 
 (*****************************************************************************)

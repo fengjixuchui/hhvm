@@ -49,6 +49,8 @@ struct EntryTypes;
   X(GetStrPos,          true)  \
   X(LvalInt,            false) \
   X(LvalStr,            false) \
+  X(ElemInt,            false) \
+  X(ElemStr,            false) \
   X(SetInt,             false) \
   X(SetStr,             false) \
   X(ConstructInt,       false) \
@@ -61,17 +63,10 @@ struct EntryTypes;
   X(IterAdvance,        true)  \
   X(IterRewind,         true)  \
   X(Append,             false) \
-  X(Prepend,            false) \
-  X(Merge,              true)  \
   X(Pop,                false) \
-  X(Dequeue,            false) \
-  X(Renumber,           false) \
-  X(Copy,               true)  \
-  X(ToVArray,           true)  \
-  X(ToDArray,           true)  \
-  X(ToVec,              true)  \
-  X(ToDict,             true)  \
-  X(ToKeyset,           true)
+  X(ToDVArray,          true)  \
+  X(ToHackArr,          true)  \
+  X(SetLegacyArray,     true)
 
 enum class ArrayOp : uint8_t {
 #define X(name, read) name,
@@ -144,9 +139,9 @@ public:
 };
 
 // Return a profile for the given (valid) SrcKey. If no profile for the SrcKey
-// exists, a new one is created. *StaticLoggingArray helpers are used to
-// construct the shared LoggingArray if the ArrayData is static. May return
-// null if no profile exists and the the profile export has begun.
+// exists, a new one is created. `ad` may be null; if provided, it must be a
+// static array, and we will use *StaticLoggingArray to construct a matching
+// static LoggingArray. May return null after exportProfiles begins.
 LoggingProfile* getLoggingProfile(SrcKey sk, ArrayData* ad);
 
 // Attempt to get the current SrcKey. May fail and return an invalid SrcKey.

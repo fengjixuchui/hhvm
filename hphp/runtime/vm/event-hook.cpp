@@ -199,7 +199,6 @@ Array getReifiedClasses(const ActRec* ar) {
     case K::T_mixed:
     case K::T_tuple:
     case K::T_fun:
-    case K::T_array:
     case K::T_typevar:
     case K::T_shape:
     case K::T_dict:
@@ -210,7 +209,7 @@ Array getReifiedClasses(const ActRec* ar) {
     case K::T_darray:
     case K::T_varray:
     case K::T_varray_or_darray:
-    case K::T_arraylike:
+    case K::T_any_array:
     case K::T_null:
     case K::T_nothing:
     case K::T_dynamic:

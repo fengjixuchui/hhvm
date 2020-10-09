@@ -19,6 +19,8 @@
 use parser_core_types::{
   minimal_syntax::MinimalSyntax,
   minimal_token::MinimalToken,
+  minimal_trivia::MinimalTrivia,
+  token_kind::TokenKind,
 };
 use smart_constructors::{NoState, SmartConstructors};
 use syntax_smart_constructors::SyntaxSmartConstructors;
@@ -38,16 +40,34 @@ impl<'src> SyntaxSmartConstructors<MinimalSyntax, NoState>
     for MinimalSmartConstructors
 {}
 
-impl<'src> SmartConstructors<NoState> for MinimalSmartConstructors {
+impl<'src> SmartConstructors for MinimalSmartConstructors {
+    type State = NoState;
     type Token = MinimalToken;
     type R = MinimalSyntax;
 
-    fn state_mut(&mut self) -> &mut NoState {
+    fn state_mut(&mut self) -> &mut Self::State {
         &mut self.dummy_state
     }
 
-    fn into_state(self) -> NoState {
+    fn into_state(self) -> Self::State {
       self.dummy_state
+    }
+
+    fn create_token(
+        &mut self,
+        kind: TokenKind,
+        offset: usize,
+        width: usize,
+        leading: MinimalTrivia,
+        trailing: MinimalTrivia,
+    ) -> Self::Token {
+        MinimalToken::make(
+            kind,
+            offset,
+            width,
+            leading,
+            trailing,
+        )
     }
 
     fn make_missing(&mut self, offset: usize) -> Self::R {
@@ -162,8 +182,12 @@ impl<'src> SmartConstructors<NoState> for MinimalSmartConstructors {
         <Self as SyntaxSmartConstructors<MinimalSyntax, NoState>>::make_function_declaration(self, arg0, arg1, arg2)
     }
 
-    fn make_function_declaration_header(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R, arg10: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<MinimalSyntax, NoState>>::make_function_declaration_header(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10)
+    fn make_function_declaration_header(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R, arg10: Self::R, arg11: Self::R) -> Self::R {
+        <Self as SyntaxSmartConstructors<MinimalSyntax, NoState>>::make_function_declaration_header(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11)
+    }
+
+    fn make_capability(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
+        <Self as SyntaxSmartConstructors<MinimalSyntax, NoState>>::make_capability(self, arg0, arg1, arg2)
     }
 
     fn make_capability_provisional(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
@@ -398,8 +422,8 @@ impl<'src> SmartConstructors<NoState> for MinimalSmartConstructors {
         <Self as SyntaxSmartConstructors<MinimalSyntax, NoState>>::make_lambda_expression(self, arg0, arg1, arg2, arg3, arg4)
     }
 
-    fn make_lambda_signature(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<MinimalSyntax, NoState>>::make_lambda_signature(self, arg0, arg1, arg2, arg3, arg4)
+    fn make_lambda_signature(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
+        <Self as SyntaxSmartConstructors<MinimalSyntax, NoState>>::make_lambda_signature(self, arg0, arg1, arg2, arg3, arg4, arg5)
     }
 
     fn make_cast_expression(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
@@ -622,10 +646,6 @@ impl<'src> SmartConstructors<NoState> for MinimalSmartConstructors {
         <Self as SyntaxSmartConstructors<MinimalSyntax, NoState>>::make_varray_type_specifier(self, arg0, arg1, arg2, arg3, arg4)
     }
 
-    fn make_vector_array_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<MinimalSyntax, NoState>>::make_vector_array_type_specifier(self, arg0, arg1, arg2, arg3)
-    }
-
     fn make_type_parameter(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
         <Self as SyntaxSmartConstructors<MinimalSyntax, NoState>>::make_type_parameter(self, arg0, arg1, arg2, arg3, arg4, arg5)
     }
@@ -638,16 +658,12 @@ impl<'src> SmartConstructors<NoState> for MinimalSmartConstructors {
         <Self as SyntaxSmartConstructors<MinimalSyntax, NoState>>::make_darray_type_specifier(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6)
     }
 
-    fn make_map_array_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<MinimalSyntax, NoState>>::make_map_array_type_specifier(self, arg0, arg1, arg2, arg3, arg4, arg5)
-    }
-
     fn make_dictionary_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
         <Self as SyntaxSmartConstructors<MinimalSyntax, NoState>>::make_dictionary_type_specifier(self, arg0, arg1, arg2, arg3)
     }
 
-    fn make_closure_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<MinimalSyntax, NoState>>::make_closure_type_specifier(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7)
+    fn make_closure_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R) -> Self::R {
+        <Self as SyntaxSmartConstructors<MinimalSyntax, NoState>>::make_closure_type_specifier(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8)
     }
 
     fn make_closure_parameter_type_specifier(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {

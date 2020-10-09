@@ -3,7 +3,7 @@
 <<__EntryPoint>> function main(): void {
 $server = new SoapServer(NULL, darray['uri'=>"http://testuri.org"]);
 
-var_dump($server->getFunctions());
+var_dump($server->getfunctions());
 
 $server->setClass("NotExistingClass");
 

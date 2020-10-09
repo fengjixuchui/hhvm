@@ -122,7 +122,6 @@ const std::string
   s_mixed("mixed"),
   s_dynamic("dynamic"),
   s_nonnull("nonnull"),
-  s_array("array"),
   s_darray("HH\\darray"),
   s_varray("HH\\varray"),
   s_varray_or_darray("HH\\varray_or_darray"),
@@ -131,7 +130,7 @@ const std::string
   s_hh_dict("HH\\dict"),
   s_hh_keyset("HH\\keyset"),
   s_hh_vec_or_dict("HH\\vec_or_dict"),
-  s_hh_arraylike("HH\\arraylike"),
+  s_hh_any_array("HH\\AnyArray"),
   s_hh("HH\\")
 ;
 
@@ -355,12 +354,6 @@ std::string fullName(const Array& arr, TypeStructure::TSDisplayType type) {
     case TypeStructure::Kind::T_fun:
       functionTypeName(arr, name, type);
       break;
-    case TypeStructure::Kind::T_array:
-      name += s_array;
-      if (arr.exists(s_generic_types)) {
-        genericTypeName(arr, name, type);
-      }
-      break;
     case TypeStructure::Kind::T_darray:
       name += s_darray;
       if (arr.exists(s_generic_types)) {
@@ -407,8 +400,8 @@ std::string fullName(const Array& arr, TypeStructure::TSDisplayType type) {
         genericTypeName(arr, name, type);
       }
       break;
-    case TypeStructure::Kind::T_arraylike:
-      name += s_hh_arraylike;
+    case TypeStructure::Kind::T_any_array:
+      name += s_hh_any_array;
       if (arr.exists(s_generic_types)) {
         genericTypeName(arr, name, type);
       }
@@ -680,7 +673,6 @@ Array resolveTS(TSEnv& env, const TSCtx& ctx, const Array& arr) {
 
       break;
     }
-    case TypeStructure::Kind::T_array:
     case TypeStructure::Kind::T_darray:
     case TypeStructure::Kind::T_varray:
     case TypeStructure::Kind::T_varray_or_darray:
@@ -688,9 +680,8 @@ Array resolveTS(TSEnv& env, const TSCtx& ctx, const Array& arr) {
     case TypeStructure::Kind::T_vec:
     case TypeStructure::Kind::T_keyset:
     case TypeStructure::Kind::T_vec_or_dict:
-    case TypeStructure::Kind::T_arraylike: {
-      if (kind == TypeStructure::Kind::T_array ||
-        kind == TypeStructure::Kind::T_darray ||
+    case TypeStructure::Kind::T_any_array: {
+      if (kind == TypeStructure::Kind::T_darray ||
         kind == TypeStructure::Kind::T_varray ||
         kind == TypeStructure::Kind::T_varray_or_darray
       ) {
@@ -838,9 +829,10 @@ Array resolveTS(TSEnv& env, const TSCtx& ctx, const Array& arr) {
       assertx(arr.exists(s_id));
       auto id = arr[s_id].toInt64Val();
       assertx(id < env.tsList->size());
-      // We want the data in the reified generic array to write over the data
-      // in newarr hence using merge
-      newarr = newarr.merge(env.tsList->at(id)).toDArray();
+      // Overwrite data in newarr with fields in the reified generics type.
+      IterateKVNoInc(env.tsList->at(id).get(), [&](auto key, auto val) {
+        newarr.set(key, val);
+      });
       break;
     }
     case TypeStructure::Kind::T_xhp:
@@ -1023,7 +1015,6 @@ bool coerceToTypeStructure(Array& arr) {
   }
   auto const kind = static_cast<TypeStructure::Kind>(kindfield.val().num);
   switch (kind) {
-    case TypeStructure::Kind::T_array:
     case TypeStructure::Kind::T_darray:
     case TypeStructure::Kind::T_varray:
     case TypeStructure::Kind::T_varray_or_darray:
@@ -1031,7 +1022,7 @@ bool coerceToTypeStructure(Array& arr) {
     case TypeStructure::Kind::T_vec:
     case TypeStructure::Kind::T_keyset:
     case TypeStructure::Kind::T_vec_or_dict:
-    case TypeStructure::Kind::T_arraylike:
+    case TypeStructure::Kind::T_any_array:
     case TypeStructure::Kind::T_null:
     case TypeStructure::Kind::T_void:
     case TypeStructure::Kind::T_int:

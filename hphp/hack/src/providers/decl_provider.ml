@@ -29,7 +29,24 @@ type typedef_decl = Typing_defs.typedef_type
 
 type gconst_decl = Typing_defs.decl_ty
 
+let prepare_for_typecheck
+    (ctx : Provider_context.t) (path : Relative_path.t) (content : string) :
+    unit =
+  match Provider_context.get_backend ctx with
+  | Provider_backend.Shared_memory
+  | Provider_backend.Local_memory _ ->
+    ()
+  (* When using the decl service, before typechecking the file, populate our
+     decl caches with the symbols declared within that file. If we leave this to
+     the decl service, then in longer files, the decls declared later in the
+     file may be evicted by the time we attempt to typecheck them, forcing the
+     decl service to re-parse the file. This can lead to many re-parses in
+     extreme cases. *)
+  | Provider_backend.Decl_service { decl; _ } ->
+    Decl_service_client.parse_and_cache_decls_in decl path content
+
 let get_fun (ctx : Provider_context.t) (fun_name : fun_key) : fun_decl option =
+  Counters.count Counters.Category.Decling @@ fun () ->
   match Provider_context.get_backend ctx with
   | Provider_backend.Shared_memory ->
     Typing_lazy_heap.get_fun ~sh:SharedMem.Uses ctx fun_name
@@ -55,6 +72,7 @@ let get_fun (ctx : Provider_context.t) (fun_name : fun_key) : fun_decl option =
 
 let get_class (ctx : Provider_context.t) (class_name : class_key) :
     class_decl option =
+  Counters.count Counters.Category.Decling @@ fun () ->
   match Provider_context.get_backend ctx with
   | Provider_backend.Shared_memory -> Typing_lazy_heap.get_class ctx class_name
   | Provider_backend.Local_memory { Provider_backend.decl_cache; _ } ->
@@ -91,6 +109,7 @@ let convert_class_elt_to_fun_decl class_elt_opt : fun_decl option =
 
 let get_class_constructor (ctx : Provider_context.t) (class_name : class_key) :
     fun_decl option =
+  Counters.count Counters.Category.Decling @@ fun () ->
   match get_class ctx class_name with
   | None -> None
   | Some cls ->
@@ -100,6 +119,7 @@ let get_class_constructor (ctx : Provider_context.t) (class_name : class_key) :
 let get_class_method
     (ctx : Provider_context.t) (class_name : class_key) (method_name : fun_key)
     : fun_decl option =
+  Counters.count Counters.Category.Decling @@ fun () ->
   match get_class ctx class_name with
   | None -> None
   | Some cls ->
@@ -109,6 +129,7 @@ let get_class_method
 let get_static_method
     (ctx : Provider_context.t) (class_name : class_key) (method_name : fun_key)
     : fun_decl option =
+  Counters.count Counters.Category.Decling @@ fun () ->
   match get_class ctx class_name with
   | None -> None
   | Some cls ->
@@ -123,6 +144,7 @@ let get_type_id_filename ctx x expected_kind =
 
 let get_typedef (ctx : Provider_context.t) (typedef_name : string) :
     typedef_decl option =
+  Counters.count Counters.Category.Decling @@ fun () ->
   match Provider_context.get_backend ctx with
   | Provider_backend.Shared_memory ->
     Typing_lazy_heap.get_typedef ~sh:SharedMem.Uses ctx typedef_name
@@ -148,6 +170,7 @@ let get_typedef (ctx : Provider_context.t) (typedef_name : string) :
 
 let get_record_def (ctx : Provider_context.t) (record_name : string) :
     record_def_decl option =
+  Counters.count Counters.Category.Decling @@ fun () ->
   match Provider_context.get_backend ctx with
   | Provider_backend.Shared_memory ->
     Typing_lazy_heap.get_record_def ~sh:SharedMem.Uses ctx record_name
@@ -174,6 +197,7 @@ let get_record_def (ctx : Provider_context.t) (record_name : string) :
 
 let get_gconst (ctx : Provider_context.t) (gconst_name : string) :
     gconst_decl option =
+  Counters.count Counters.Category.Decling @@ fun () ->
   match Provider_context.get_backend ctx with
   | Provider_backend.Shared_memory ->
     Typing_lazy_heap.get_gconst ~sh:SharedMem.Uses ctx gconst_name

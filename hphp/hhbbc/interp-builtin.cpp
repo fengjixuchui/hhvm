@@ -225,6 +225,8 @@ bool builtin_array_key_cast(ISS& env, const bc::FCallBuiltin& op) {
       retTy |= TStr;
     }
   }
+  // TODO: T70712990: Specialize lazy class types
+  if (ty.couldBe(BLazyCls)) retTy |= TStr;
   if (ty.couldBe(BStr)) {
     retTy |= [&] {
       if (ty.subtypeOf(BSStr)) {
@@ -750,10 +752,7 @@ bool handle_function_exists(ISS& env, const Type& name) {
   auto const v = tv(name);
   if (!v) return false;
   auto const rfunc = env.index.resolve_func(env.ctx, v->m_data.pstr);
-  if (auto const func = rfunc.exactFunc()) {
-    if (is_systemlib_part(*func->unit)) return true;
-  }
-  return false;
+  return rfunc.exactFunc();
 }
 
 folly::Optional<Type> const_fold(ISS& env,

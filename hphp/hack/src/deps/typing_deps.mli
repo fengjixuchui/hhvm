@@ -161,7 +161,26 @@ module Files : sig
   val update_file : Relative_path.t -> FileInfo.t -> unit
 end
 
-val load_custom_dep_graph : string -> (unit, string) result
+type dep_edge
+
+type dep_edges
+
+type mode =
+  | SQLiteMode
+  | CustomMode of string
+  | SaveCustomMode of {
+      graph: string option;
+      new_edges_dir: string;
+    }
+[@@deriving show]
+
+val get_mode : unit -> mode
+
+val set_mode : mode -> unit
+
+val worker_id : int option ref
+
+val force_load_custom_dep_graph : unit -> (unit, string) result
 
 val trace : bool ref
 
@@ -176,6 +195,14 @@ val allow_dependency_table_reads : bool -> bool
 val add_idep : Dep.dependent Dep.variant -> Dep.dependency Dep.variant -> unit
 
 val add_idep_directly_to_graph : dependent:Dep.t -> dependency:Dep.t -> unit
+
+val dep_edges_make : unit -> dep_edges
+
+val flush_ideps_batch : unit -> dep_edges
+
+val merge_dep_edges : dep_edges -> dep_edges -> dep_edges
+
+val register_discovered_dep_edges : dep_edges -> unit
 
 val get_ideps_from_hash : Dep.t -> DepSet.t
 

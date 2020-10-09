@@ -107,7 +107,8 @@ ArrayData* SetArray::MakeSet(uint32_t size, const TypedValue* values) {
     auto& tv = values[i];
     if (!isIntType(tv.m_type) &&
         !isStringType(tv.m_type) &&
-        !isClassType(tv.m_type))  {
+        !isClassType(tv.m_type) &&
+        !isLazyClassType(tv.m_type))  {
       throwInvalidArrayKeyException(&tv, ArrayData::CreateKeyset());
     }
   }
@@ -123,10 +124,14 @@ ArrayData* SetArray::MakeSet(uint32_t size, const TypedValue* values) {
     } else if (isStringType(tv.m_type)) {
       ad->insert(tv.m_data.pstr);
       decRefStr(tv.m_data.pstr); // FIXME
-    } else {
-      assertx(isClassType(tv.m_type));
+    } else if (isClassType(tv.m_type)) {
       auto const keyStr =
         const_cast<StringData*>(classToStringHelper(tv.m_data.pclass));
+      ad->insert(keyStr);
+    } else {
+      assertx(isLazyClassType(tv.m_type));
+      auto const keyStr =
+        const_cast<StringData*>(lazyClassToStringHelper(tv.m_data.plazyclass));
       ad->insert(keyStr);
     }
   }
@@ -315,13 +320,6 @@ void SetArray::ReleaseUncounted(ArrayData* in) {
 }
 
 //////////////////////////////////////////////////////////////////////
-
-ssize_t SetArray::findElm(const Elm& e) const {
-  assertx(!e.isInvalid());
-  return e.hasIntKey()
-    ? find(e.intKey(), e.hash())
-    : find(e.strKey(), e.hash());
-}
 
 void SetArray::insert(int64_t k, inthash_t h) {
   assertx(!isFull());
@@ -647,12 +645,6 @@ ArrayData* SetArray::Append(ArrayData* ad, TypedValue v) {
   return AppendImpl(ad, tvClassToString(v), ad->cowCheck());
 }
 
-ArrayData* SetArray::Merge(ArrayData*, const ArrayData*) {
-  SystemLib::throwInvalidOperationExceptionObject(
-    "Invalid keyset operation (merge)"
-  );
-}
-
 ArrayData* SetArray::Pop(ArrayData* ad, Variant& value) {
   auto a = asSet(ad);
   if (a->cowCheck()) a = a->copySet();
@@ -671,59 +663,12 @@ ArrayData* SetArray::Pop(ArrayData* ad, Variant& value) {
   return a;
 }
 
-ArrayData* SetArray::Dequeue(ArrayData* ad, Variant& value) {
-  auto a = asSet(ad);
-  if (a->cowCheck()) a = a->copySet();
-  if (a->m_size) {
-    ssize_t pos = a->getIterBegin();
-    tvDup(a->getElm(pos), *value.asTypedValue());
-    auto const pelm = &a->data()[pos];
-    auto const loc = a->findForRemove(pelm->hash(),
-      [pelm] (const Elm& e) { return &e == pelm; }
-    );
-    assertx(loc.valid());
-    a->erase(loc);
-  } else {
-    value = uninit_null();
-  }
-  return a;
+ArrayData* SetArray::ToDVArray(ArrayData* ad, bool copy) {
+  always_assert(false);
 }
 
-ArrayData* SetArray::Prepend(ArrayData* ad, TypedValue v) {
-  Elm e;
-  assertx(ClearElms(&e, 1));
-  auto a = [&]{
-    if (isIntType(v.m_type)) {
-      e.setIntKey(v.m_data.num, hash_int64(v.m_data.num));
-      return asSet(RemoveInt(ad, v.m_data.num));
-    } else if (isStringType(v.m_type)) {
-      e.setStrKey(v.m_data.pstr, v.m_data.pstr->hash());
-      return asSet(RemoveStr(ad, v.m_data.pstr));
-    } else {
-      throwInvalidArrayKeyException(&v, ad);
-    }
-  }();
-  if (a->cowCheck()) a = a->copySet();
-
-  auto elms = a->data();
-  if (!elms[0].isTombstone()) {
-    a = a->prepareForInsert(false);
-    elms = a->data();
-    memmove(&elms[1], &elms[0], a->m_used * sizeof(Elm));
-    ++a->m_used;
-  }
-
-  ++a->m_size;
-  elms[0] = e;
-  assertx(!elms[0].isInvalid());
-  a->compact(); // Rebuild the hash table.
-  return a;
-}
-
-ArrayData* SetArray::Renumber(ArrayData*) {
-  SystemLib::throwInvalidOperationExceptionObject(
-    "Invalid keyset operation (renumbering)"
-  );
+ArrayData* SetArray::ToHackArr(ArrayData* ad, bool copy) {
+  always_assert(false);
 }
 
 void SetArray::OnSetEvalScalar(ArrayData* ad) {
@@ -736,47 +681,6 @@ void SetArray::OnSetEvalScalar(ArrayData* ad) {
     assertx(!elm.isEmpty());
     tvAsVariant(&elm.tv).setEvalScalar();
   }
-}
-
-ArrayData* SetArray::ToDArrayImpl(const SetArray* ad) {
-  auto const size = ad->size();
-  if (!size) return ArrayData::CreateDArray();
-  DArrayInit init{size};
-
-  auto const elms = ad->data();
-  auto const used = ad->m_used;
-  for (uint32_t i = 0; i < used; ++i) {
-    auto const& elm = elms[i];
-    if (UNLIKELY(elm.isTombstone())) continue;
-    if (elm.hasIntKey()) {
-      init.set(elm.intKey(), tvAsCVarRef(&elm.tv));
-    } else {
-      init.set(elm.strKey(), tvAsCVarRef(&elm.tv));
-    }
-  }
-
-  auto const out = init.create();
-  assertx(MixedArray::asMixed(out));
-  return out;
-}
-
-ArrayData* SetArray::ToDArray(ArrayData* ad, bool copy) {
-  if (RuntimeOption::EvalHackArrDVArrs) {
-    auto out = ToDict(ad, copy);
-    if (RuntimeOption::EvalHackArrDVArrMark) {
-      if (out->cowCheck()) out = out->copy();
-      out->setLegacyArray(true);
-    }
-    return out;
-  }
-  auto out = ToDArrayImpl(SetArray::asSet(ad));
-  assertx(out->isDArray());
-  return out;
-}
-
-ArrayData* SetArray::ToKeyset(ArrayData* ad, bool /*copy*/) {
-  assertx(asSet(ad)->checkInvariants());
-  return ad;
 }
 
 ALWAYS_INLINE
