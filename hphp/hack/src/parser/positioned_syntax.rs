@@ -5,13 +5,10 @@
 // LICENSE file in the "hack" directory of this source tree.
 
 use crate::{
-    indexed_source_text::IndexedSourceText, lexable_token::LexableToken,
-    positioned_token::PositionedToken, source_text::SourceText, syntax::*, syntax_kind::SyntaxKind,
-    syntax_trait::SyntaxTrait, token_kind::TokenKind,
+    lexable_token::LexableToken, positioned_token::PositionedToken, source_text::SourceText,
+    syntax::*, syntax_kind::SyntaxKind, syntax_trait::SyntaxTrait, token_kind::TokenKind,
 };
-
 use ocamlrep::rc::RcOc;
-use oxidized::pos::Pos;
 
 #[derive(Debug, Clone)]
 pub struct Span {
@@ -192,33 +189,32 @@ impl SyntaxValueType<PositionedToken> for PositionedValue {
         Self::from_(child_values)
     }
 
-    fn from_children(_: SyntaxKind, offset: usize, nodes: &[&Self]) -> Self {
+    fn from_children<'a>(
+        _: SyntaxKind,
+        offset: usize,
+        nodes: impl Iterator<Item = &'a Self>,
+    ) -> Self {
         // We need to determine the offset, leading, middle and trailing widths of
         // the node to be constructed based on its children.  If the children are
         // all of zero width -- including the case where there are no children at
         // all -- then we make a zero-width value at the given offset.
         // Otherwise, we can determine the associated value from the first and last
         // children that have width.
-        let mut have_width = nodes.iter().filter(|x| x.width() > 0).peekable();
+        let mut have_width = nodes.filter(|x| x.width() > 0).peekable();
         match have_width.peek() {
             None => PositionedValue::Missing { offset },
             Some(first) => Self::value_from_outer_children(first, have_width.last().unwrap()),
         }
     }
 
-    fn from_token(token: &PositionedToken) -> Self {
+    fn from_token(token: PositionedToken) -> Self {
         if token.kind() == TokenKind::EndOfFile || token.full_width() == 0 {
             PositionedValue::Missing {
                 offset: token.end_offset(),
             }
         } else {
-            PositionedValue::TokenValue(RcOc::clone(&token))
+            PositionedValue::TokenValue(token)
         }
-    }
-
-    fn text_range(&self) -> Option<(usize, usize)> {
-        let beg = self.start_offset();
-        Some((beg, beg + self.width()))
     }
 }
 
@@ -251,56 +247,5 @@ impl SyntaxTrait for PositionedSyntax {
 
     fn extract_text<'a>(&self, source_text: &'a SourceText) -> Option<&'a str> {
         Some(self.text(source_text))
-    }
-}
-
-pub trait PositionedSyntaxTrait: SyntaxTrait {
-    fn start_offset(&self) -> usize;
-    fn end_offset(&self) -> usize;
-
-    /**
-     * Similar to position except that the end_offset does not include
-     * the last character. (the end offset is one larger than given by position)
-     */
-    fn position_exclusive(&self, source_text: &IndexedSourceText) -> Option<Pos>;
-    fn position(&self, source_text: &IndexedSourceText) -> Option<Pos>;
-    fn text<'a>(&self, source_text: &'a SourceText) -> &'a str;
-    fn full_text<'a>(&self, source_text: &'a SourceText) -> &'a [u8];
-    fn leading_text<'a>(&self, source_text: &'a SourceText) -> &'a str;
-}
-
-impl PositionedSyntaxTrait for PositionedSyntax {
-    fn start_offset(&self) -> usize {
-        self.leading_start_offset() + self.leading_width()
-    }
-
-    fn end_offset(&self) -> usize {
-        let mut w = self.width();
-        w = if w <= 0 { 0 } else { w - 1 };
-        self.start_offset() + w
-    }
-
-    fn position_exclusive(&self, source_text: &IndexedSourceText) -> Option<Pos> {
-        let start_offset = self.start_offset();
-        let end_offset = self.end_offset() + 1;
-        Some(source_text.relative_pos(start_offset, end_offset))
-    }
-
-    fn position(&self, source_text: &IndexedSourceText) -> Option<Pos> {
-        let start_offset = self.start_offset();
-        let end_offset = self.end_offset();
-        Some(source_text.relative_pos(start_offset, end_offset))
-    }
-
-    fn text<'a>(&self, source_text: &'a SourceText) -> &'a str {
-        source_text.sub_as_str(self.start_offset(), self.width())
-    }
-
-    fn full_text<'a>(&self, source_text: &'a SourceText) -> &'a [u8] {
-        source_text.sub(self.leading_start_offset(), self.full_width())
-    }
-
-    fn leading_text<'a>(&self, source_text: &'a SourceText) -> &'a str {
-        source_text.sub_as_str(self.leading_start_offset(), self.leading_width())
     }
 }

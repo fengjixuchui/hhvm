@@ -91,8 +91,8 @@ val acc : ('a, 'b) env -> (prop list -> prop list) -> ('a, 'b) env
 val get_constraints : ('a, 'b) env -> prop list
 
 (* throw registers that the expression currently being checked
-   can throw an exception; the exception may or may not be thrown 
-   depending on the value of some data subject to the policies 
+   can throw an exception; the exception may or may not be thrown
+   depending on the value of some data subject to the policies
    passed as second argument *)
 val throw : expr_env -> PSet.t -> expr_env
 
@@ -105,6 +105,10 @@ val analyze_lambda_body : expr_env -> (blank_env -> blank_env) -> expr_env
 val get_local_type : (yes, 'a) env -> Local_id.t -> ptype option
 
 val set_local_type : (yes, 'a) env -> Local_id.t -> ptype -> (yes, 'a) env
+
+(* Update or remove a local from the env *)
+val set_local_type_opt :
+  (yes, 'a) env -> Local_id.t -> ptype option -> (yes, 'a) env
 
 (* - Outcomes - *)
 

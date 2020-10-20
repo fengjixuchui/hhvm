@@ -3,12 +3,13 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<33ba4ca932ff40d657b650e5215555a3>>
+// @generated SignedSource<<1ef6697eb20ebf991abfe9978b74ec3b>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
 
 use arena_trait::TrivialDrop;
+use no_pos_hash::NoPosHash;
 use ocamlrep_derive::FromOcamlRep;
 use ocamlrep_derive::FromOcamlRepIn;
 use ocamlrep_derive::ToOcamlRep;
@@ -27,6 +28,7 @@ pub use typing_defs_core::*;
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -45,6 +47,7 @@ impl<'a> TrivialDrop for PuOrigin<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -53,7 +56,7 @@ impl<'a> TrivialDrop for PuOrigin<'a> {}
 )]
 pub struct ConstDecl<'a> {
     pub pos: &'a pos::Pos<'a>,
-    pub type_: Ty<'a>,
+    pub type_: &'a Ty<'a>,
 }
 impl<'a> TrivialDrop for ConstDecl<'a> {}
 
@@ -63,6 +66,7 @@ impl<'a> TrivialDrop for ConstDecl<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -70,8 +74,8 @@ impl<'a> TrivialDrop for ConstDecl<'a> {}
     ToOcamlRep
 )]
 pub struct ClassElt<'a> {
-    pub visibility: &'a Visibility<'a>,
-    pub type_: &'a lazy::Lazy<Ty<'a>>,
+    pub visibility: CeVisibility<'a>,
+    pub type_: &'a lazy::Lazy<&'a Ty<'a>>,
     /// identifies the class from which this elt originates
     pub origin: &'a str,
     pub deprecated: Option<&'a str>,
@@ -86,6 +90,7 @@ impl<'a> TrivialDrop for ClassElt<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -94,7 +99,7 @@ impl<'a> TrivialDrop for ClassElt<'a> {}
 )]
 pub struct FunElt<'a> {
     pub deprecated: Option<&'a str>,
-    pub type_: Ty<'a>,
+    pub type_: &'a Ty<'a>,
     pub pos: &'a pos::Pos<'a>,
     pub php_std_lib: bool,
 }
@@ -106,6 +111,7 @@ impl<'a> TrivialDrop for FunElt<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -116,11 +122,54 @@ pub struct ClassConst<'a> {
     pub synthesized: bool,
     pub abstract_: bool,
     pub pos: &'a pos::Pos<'a>,
-    pub type_: Ty<'a>,
+    pub type_: &'a Ty<'a>,
     /// identifies the class from which this const originates
     pub origin: &'a str,
 }
 impl<'a> TrivialDrop for ClassConst<'a> {}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    FromOcamlRep,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub enum RecordFieldReq {
+    ValueRequired,
+    HasDefaultValue,
+}
+impl TrivialDrop for RecordFieldReq {}
+
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub struct RecordDefType<'a> {
+    pub name: nast::Sid<'a>,
+    pub extends: Option<nast::Sid<'a>>,
+    pub fields: &'a [(nast::Sid<'a>, RecordFieldReq)],
+    pub abstract_: bool,
+    pub pos: &'a pos::Pos<'a>,
+}
+impl<'a> TrivialDrop for RecordDefType<'a> {}
 
 /// The position is that of the hint in the `use` / `implements` AST node
 /// that causes a class to have this requirement applied to it. E.g.
@@ -141,13 +190,14 @@ impl<'a> TrivialDrop for ClassConst<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
     Serialize,
     ToOcamlRep
 )]
-pub struct Requirement<'a>(pub &'a pos::Pos<'a>, pub Ty<'a>);
+pub struct Requirement<'a>(pub &'a pos::Pos<'a>, pub &'a Ty<'a>);
 impl<'a> TrivialDrop for Requirement<'a> {}
 
 #[derive(
@@ -156,6 +206,7 @@ impl<'a> TrivialDrop for Requirement<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -192,7 +243,7 @@ pub struct ClassType<'a> {
     pub construct: (Option<&'a ClassElt<'a>>, ConsistentKind),
     /// This includes all the classes, interfaces and traits this class is
     /// using.
-    pub ancestors: s_map::SMap<'a, Ty<'a>>,
+    pub ancestors: s_map::SMap<'a, &'a Ty<'a>>,
     pub req_ancestors: &'a [&'a Requirement<'a>],
     /// the extends of req_ancestors
     pub req_ancestors_extends: s_set::SSet<'a>,
@@ -210,6 +261,7 @@ impl<'a> TrivialDrop for ClassType<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -217,7 +269,7 @@ impl<'a> TrivialDrop for ClassType<'a> {}
     ToOcamlRep
 )]
 pub enum TypeconstAbstractKind<'a> {
-    TCAbstract(Option<Ty<'a>>),
+    TCAbstract(Option<&'a Ty<'a>>),
     TCPartiallyAbstract,
     TCConcrete,
 }
@@ -229,6 +281,7 @@ impl<'a> TrivialDrop for TypeconstAbstractKind<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -238,8 +291,8 @@ impl<'a> TrivialDrop for TypeconstAbstractKind<'a> {}
 pub struct TypeconstType<'a> {
     pub abstract_: TypeconstAbstractKind<'a>,
     pub name: nast::Sid<'a>,
-    pub constraint: Option<Ty<'a>>,
-    pub type_: Option<Ty<'a>>,
+    pub constraint: Option<&'a Ty<'a>>,
+    pub type_: Option<&'a Ty<'a>>,
     pub origin: &'a str,
     pub enforceable: (&'a pos::Pos<'a>, bool),
     pub reifiable: Option<&'a pos::Pos<'a>>,
@@ -252,6 +305,7 @@ impl<'a> TrivialDrop for TypeconstType<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -262,7 +316,7 @@ pub struct PuEnumType<'a> {
     pub name: nast::Sid<'a>,
     pub is_final: bool,
     pub case_types: s_map::SMap<'a, (&'a PuOrigin<'a>, &'a Tparam<'a>)>,
-    pub case_values: s_map::SMap<'a, (&'a PuOrigin<'a>, nast::Sid<'a>, Ty<'a>)>,
+    pub case_values: s_map::SMap<'a, (&'a PuOrigin<'a>, nast::Sid<'a>, &'a Ty<'a>)>,
     pub members: s_map::SMap<'a, &'a PuMemberType<'a>>,
 }
 impl<'a> TrivialDrop for PuEnumType<'a> {}
@@ -273,6 +327,7 @@ impl<'a> TrivialDrop for PuEnumType<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -282,7 +337,7 @@ impl<'a> TrivialDrop for PuEnumType<'a> {}
 pub struct PuMemberType<'a> {
     pub atom: nast::Sid<'a>,
     pub origin: &'a PuOrigin<'a>,
-    pub types: s_map::SMap<'a, (&'a PuOrigin<'a>, nast::Sid<'a>, Ty<'a>)>,
+    pub types: s_map::SMap<'a, (&'a PuOrigin<'a>, nast::Sid<'a>, &'a Ty<'a>)>,
     pub exprs: s_map::SMap<'a, (&'a PuOrigin<'a>, nast::Sid<'a>)>,
 }
 impl<'a> TrivialDrop for PuMemberType<'a> {}
@@ -293,6 +348,7 @@ impl<'a> TrivialDrop for PuMemberType<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -300,59 +356,20 @@ impl<'a> TrivialDrop for PuMemberType<'a> {}
     ToOcamlRep
 )]
 pub struct EnumType<'a> {
-    pub base: Ty<'a>,
-    pub constraint: Option<Ty<'a>>,
-    pub includes: &'a [Ty<'a>],
+    pub base: &'a Ty<'a>,
+    pub constraint: Option<&'a Ty<'a>>,
+    pub includes: &'a [&'a Ty<'a>],
+    pub enum_class: bool,
 }
 impl<'a> TrivialDrop for EnumType<'a> {}
 
 #[derive(
     Clone,
-    Copy,
-    Debug,
-    Eq,
-    FromOcamlRep,
-    FromOcamlRepIn,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-    ToOcamlRep
-)]
-pub enum RecordFieldReq {
-    ValueRequired,
-    HasDefaultValue,
-}
-impl TrivialDrop for RecordFieldReq {}
-
-#[derive(
-    Clone,
     Debug,
     Eq,
     FromOcamlRepIn,
     Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-    ToOcamlRep
-)]
-pub struct RecordDefType<'a> {
-    pub name: nast::Sid<'a>,
-    pub extends: Option<nast::Sid<'a>>,
-    pub fields: &'a [(nast::Sid<'a>, RecordFieldReq)],
-    pub abstract_: bool,
-    pub pos: &'a pos::Pos<'a>,
-}
-impl<'a> TrivialDrop for RecordDefType<'a> {}
-
-#[derive(
-    Clone,
-    Debug,
-    Eq,
-    FromOcamlRepIn,
-    Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -363,8 +380,8 @@ pub struct TypedefType<'a> {
     pub pos: &'a pos::Pos<'a>,
     pub vis: oxidized::aast::TypedefVisibility,
     pub tparams: &'a [&'a Tparam<'a>],
-    pub constraint: Option<Ty<'a>>,
-    pub type_: Ty<'a>,
+    pub constraint: Option<&'a Ty<'a>>,
+    pub type_: &'a Ty<'a>,
 }
 impl<'a> TrivialDrop for TypedefType<'a> {}
 
@@ -375,6 +392,7 @@ impl<'a> TrivialDrop for TypedefType<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,

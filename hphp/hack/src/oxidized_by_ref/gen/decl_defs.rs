@@ -3,12 +3,13 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<6416e973d10f8f60b055a6606a3ba473>>
+// @generated SignedSource<<875756161141535232a03946a68cf13a>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
 
 use arena_trait::TrivialDrop;
+use no_pos_hash::NoPosHash;
 use ocamlrep_derive::FromOcamlRep;
 use ocamlrep_derive::FromOcamlRepIn;
 use ocamlrep_derive::ToOcamlRep;
@@ -55,6 +56,7 @@ pub use typing_defs::*;
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -62,7 +64,7 @@ pub use typing_defs::*;
     ToOcamlRep
 )]
 pub struct SubstContext<'a> {
-    pub subst: s_map::SMap<'a, Ty<'a>>,
+    pub subst: s_map::SMap<'a, &'a Ty<'a>>,
     pub class_context: &'a str,
     pub from_req_extends: bool,
 }
@@ -76,6 +78,7 @@ impl<'a> TrivialDrop for SubstContext<'a> {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -102,6 +105,7 @@ impl TrivialDrop for SourceType {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -125,6 +129,7 @@ pub type ConditionTypeName<'a> = Option<&'a str>;
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -145,6 +150,7 @@ impl<'a> TrivialDrop for MethodReactivity<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -176,7 +182,7 @@ pub struct DeclClassType<'a> {
     pub methods: s_map::SMap<'a, &'a Element<'a>>,
     pub smethods: s_map::SMap<'a, &'a Element<'a>>,
     pub construct: (Option<&'a Element<'a>>, ConsistentKind),
-    pub ancestors: s_map::SMap<'a, Ty<'a>>,
+    pub ancestors: s_map::SMap<'a, &'a Ty<'a>>,
     pub req_ancestors: &'a [&'a Requirement<'a>],
     pub req_ancestors_extends: s_set::SSet<'a>,
     pub extends: s_set::SSet<'a>,
@@ -196,6 +202,7 @@ impl<'a> TrivialDrop for DeclClassType<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -206,7 +213,7 @@ pub struct Element<'a> {
     pub flags: isize,
     pub reactivity: Option<MethodReactivity<'a>>,
     pub origin: &'a str,
-    pub visibility: &'a Visibility<'a>,
+    pub visibility: CeVisibility<'a>,
     pub deprecated: Option<&'a str>,
 }
 impl<'a> TrivialDrop for Element<'a> {}

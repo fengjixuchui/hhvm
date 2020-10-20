@@ -285,6 +285,8 @@ bool canDCE(IRInstruction* inst) {
   case LdPtrIterKey:
   case LdPtrIterVal:
   case EqPtrIter:
+  case LdUnitPerRequestFilepath:
+  case DirFromFilepath:
     assertx(!inst->isControlFlow());
     return true;
 
@@ -611,6 +613,8 @@ bool canDCE(IRInstruction* inst) {
   case DictSet:
   case MapSet:
   case VectorSet:
+  case BespokeSet:
+  case BespokeAppend:
   case SetElem:
   case SetRange:
   case SetRangeRev:
@@ -632,6 +636,7 @@ bool canDCE(IRInstruction* inst) {
   case ProfileSubClsCns:
   case CheckVecBounds:
   case CheckVecBoundsLA:
+  case BespokeGet:
   case LdVectorSize:
   case BeginCatch:
   case EndCatch:
@@ -640,7 +645,6 @@ bool canDCE(IRInstruction* inst) {
   case DbgTrashStk:
   case DbgTrashFrame:
   case DbgTrashMem:
-  case DbgTrashRetVal:
   case EnterPrologue:
   case CheckStackOverflow:
   case CheckSurpriseFlagsEnter:

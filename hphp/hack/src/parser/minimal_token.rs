@@ -8,7 +8,7 @@ use ocamlrep_derive::{FromOcamlRep, ToOcamlRep};
 
 use crate::{
     lexable_token::LexableToken, lexable_trivia::LexableTrivia, minimal_trivia::MinimalTrivia,
-    token_kind::TokenKind, trivia_kind::TriviaKind,
+    token_factory::SimpleTokenFactory, token_kind::TokenKind, trivia_kind::TriviaKind,
 };
 
 #[derive(Debug, Clone, PartialEq, FromOcamlRep, ToOcamlRep)]
@@ -33,6 +33,38 @@ impl MinimalToken {
             trailing,
             width,
         }
+    }
+}
+
+impl SimpleTokenFactory for MinimalToken {
+    fn make(
+        kind: TokenKind,
+        _offset: usize,
+        width: usize,
+        leading: MinimalTrivia,
+        trailing: MinimalTrivia,
+    ) -> Self {
+        Self {
+            kind,
+            leading,
+            trailing,
+            width,
+        }
+    }
+
+    fn with_trailing(mut self, trailing: MinimalTrivia) -> Self {
+        self.trailing = trailing;
+        self
+    }
+
+    fn with_leading(mut self, leading: MinimalTrivia) -> Self {
+        self.leading = leading;
+        self
+    }
+
+    fn with_kind(mut self, kind: TokenKind) -> Self {
+        self.kind = kind;
+        self
     }
 }
 
@@ -77,21 +109,6 @@ impl LexableToken for MinimalToken {
 
     fn trailing_is_empty(&self) -> bool {
         self.trailing.is_empty()
-    }
-
-    fn with_trailing(mut self, trailing: Self::Trivia) -> Self {
-        self.trailing = trailing;
-        self
-    }
-
-    fn with_leading(mut self, leading: Self::Trivia) -> Self {
-        self.leading = leading;
-        self
-    }
-
-    fn with_kind(mut self, kind: TokenKind) -> Self {
-        self.kind = kind;
-        self
     }
 
     fn has_leading_trivia_kind(&self, kind: TriviaKind) -> bool {

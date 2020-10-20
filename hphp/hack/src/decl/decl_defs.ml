@@ -9,7 +9,6 @@
 
 open Hh_prelude
 open Typing_defs
-open Pp_type
 
 (** Exception representing not finding a class during decl *)
 exception Decl_not_found of string
@@ -214,7 +213,7 @@ and element = {
   elt_flags: int;
   elt_reactivity: method_reactivity option;
   elt_origin: string;
-  elt_visibility: visibility;
+  elt_visibility: ce_visibility;
   elt_deprecated: string option;
 }
 

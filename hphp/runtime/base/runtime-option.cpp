@@ -34,6 +34,7 @@
 #include "hphp/runtime/base/request-info.h"
 #include "hphp/runtime/base/static-string-table.h"
 #include "hphp/runtime/base/tv-refcount.h"
+#include "hphp/runtime/base/zend-string.h"
 #include "hphp/runtime/base/zend-url.h"
 #include "hphp/runtime/ext/extension-registry.h"
 #include "hphp/runtime/server/access-log.h"
@@ -1235,6 +1236,16 @@ static void normalizePath(std::string &path) {
   }
 }
 
+static String todayDate() {
+  time_t rawtime;
+  struct tm timeinfo;
+  char buf[256];
+  time(&rawtime);
+  localtime_r(&rawtime, &timeinfo);
+  strftime(buf, sizeof(buf), "%Y-%m-%d", &timeinfo);
+  return buf;
+}
+
 static bool matchShard(
   const std::string& hostname,
   const IniSetting::Map& ini, Hdf hdfPattern,
@@ -1253,7 +1264,9 @@ static bool matchShard(
 
   auto input = hostname;
   if (hdfPattern.exists("ShardSalt")) {
-    input += Config::GetString(ini, hdfPattern, "ShardSalt", "", false);
+    auto salt = Config::GetString(ini, hdfPattern, "ShardSalt", "", false);
+    salt = string_replace(salt, "%{date}", todayDate()).toCppString();
+    input += salt;
   }
 
   auto const md5 = Md5Digest(input.data(), input.size());
@@ -2808,12 +2821,6 @@ void RuntimeOption::Load(
   }
 
   // Bespoke array-likes
-
-  // AllowBespokesInLiveTypes implies BespokeArrayLikeMode > 0--bump it to 1 if
-  // not already
-  if (RO::EvalAllowBespokesInLiveTypes && RO::EvalBespokeArrayLikeMode == 0) {
-    RO::EvalBespokeArrayLikeMode = 1;
-  }
 
   // We don't support provenance for bespoke array-likes, so don't construct
   // any at runtime if we're logging provenance instrumentation results.

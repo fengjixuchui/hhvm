@@ -3,12 +3,13 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<4015d15449464911dd80220d1db0f433>>
+// @generated SignedSource<<84b4fb28cfbf7f50ca152922f471e85c>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
 
 use arena_trait::TrivialDrop;
+use no_pos_hash::NoPosHash;
 use ocamlrep_derive::FromOcamlRep;
 use ocamlrep_derive::FromOcamlRepIn;
 use ocamlrep_derive::ToOcamlRep;
@@ -26,18 +27,39 @@ pub use crate::typing_reason as reason;
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
     Serialize,
     ToOcamlRep
 )]
-pub enum Visibility<'a> {
+pub enum CeVisibility<'a> {
     Vpublic,
     Vprivate(&'a str),
     Vprotected(&'a str),
 }
-impl<'a> TrivialDrop for Visibility<'a> {}
+impl<'a> TrivialDrop for CeVisibility<'a> {}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub enum IfcFunDecl<'a> {
+    FDPolicied(Option<&'a str>),
+    FDInferFlows,
+}
+impl<'a> TrivialDrop for IfcFunDecl<'a> {}
 
 #[derive(
     Clone,
@@ -47,6 +69,7 @@ impl<'a> TrivialDrop for Visibility<'a> {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -67,6 +90,7 @@ impl TrivialDrop for Exact {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -88,6 +112,7 @@ impl TrivialDrop for ValKind {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -109,6 +134,7 @@ impl TrivialDrop for ParamMutability {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -137,6 +163,7 @@ impl TrivialDrop for FunTparamsKind {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -157,6 +184,7 @@ impl TrivialDrop for ShapeKind {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -177,6 +205,7 @@ impl TrivialDrop for ParamMode {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -196,6 +225,7 @@ impl TrivialDrop for XhpAttrTag {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -223,6 +253,7 @@ impl TrivialDrop for XhpAttr {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -243,38 +274,18 @@ impl TrivialDrop for ConsistentKind {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
     Serialize,
     ToOcamlRep
 )]
-pub enum DependentType<'a> {
+pub enum DependentType {
     DTthis,
-    DTcls(&'a str),
     DTexpr(ident::Ident),
 }
-impl<'a> TrivialDrop for DependentType<'a> {}
-
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    FromOcamlRep,
-    FromOcamlRepIn,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-    ToOcamlRep
-)]
-pub enum DestructureKind {
-    ListDestructure,
-    SplatUnpack,
-}
-impl TrivialDrop for DestructureKind {}
+impl TrivialDrop for DependentType {}
 
 #[derive(
     Clone,
@@ -282,6 +293,7 @@ impl TrivialDrop for DestructureKind {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -300,6 +312,7 @@ impl<'a> TrivialDrop for UserAttribute<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -310,7 +323,7 @@ pub struct Tparam<'a> {
     pub variance: oxidized::ast_defs::Variance,
     pub name: ast_defs::Id<'a>,
     pub tparams: &'a [&'a Tparam<'a>],
-    pub constraints: &'a [(oxidized::ast_defs::ConstraintKind, Ty<'a>)],
+    pub constraints: &'a [(oxidized::ast_defs::ConstraintKind, &'a Ty<'a>)],
     pub reified: oxidized::aast::ReifyKind,
     pub user_attributes: &'a [&'a UserAttribute<'a>],
 }
@@ -322,6 +335,7 @@ impl<'a> TrivialDrop for Tparam<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -329,14 +343,14 @@ impl<'a> TrivialDrop for Tparam<'a> {}
     ToOcamlRep
 )]
 pub struct WhereConstraint<'a>(
-    pub Ty<'a>,
+    pub &'a Ty<'a>,
     pub oxidized::ast_defs::ConstraintKind,
-    pub Ty<'a>,
+    pub &'a Ty<'a>,
 );
 impl<'a> TrivialDrop for WhereConstraint<'a> {}
 
-#[derive(Clone, Copy, Debug, FromOcamlRepIn, Hash, Serialize, ToOcamlRep)]
-pub struct Ty<'a>(pub &'a reason::Reason<'a>, pub &'a Ty_<'a>);
+#[derive(Clone, Debug, FromOcamlRepIn, Hash, NoPosHash, Serialize, ToOcamlRep)]
+pub struct Ty<'a>(pub &'a reason::Reason<'a>, pub Ty_<'a>);
 impl<'a> TrivialDrop for Ty<'a> {}
 
 /// A shape may specify whether or not fields are required. For example, consider
@@ -354,6 +368,7 @@ impl<'a> TrivialDrop for Ty<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -362,7 +377,7 @@ impl<'a> TrivialDrop for Ty<'a> {}
 )]
 pub struct ShapeFieldType<'a> {
     pub optional: bool,
-    pub ty: Ty<'a>,
+    pub ty: &'a Ty<'a>,
 }
 impl<'a> TrivialDrop for ShapeFieldType<'a> {}
 
@@ -372,6 +387,7 @@ impl<'a> TrivialDrop for ShapeFieldType<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -382,7 +398,7 @@ pub enum Ty_<'a> {
     /// The late static bound type of a class
     Tthis,
     /// Either an object type or a type alias, ty list are the arguments
-    Tapply(&'a (nast::Sid<'a>, &'a [Ty<'a>])),
+    Tapply(&'a (nast::Sid<'a>, &'a [&'a Ty<'a>])),
     /// Name of class, name of type const, remaining names of type consts
     Taccess(&'a TaccessType<'a>),
     /// The type of the various forms of "array":
@@ -393,7 +409,7 @@ pub enum Ty_<'a> {
     /// Tarray (Some ty1, Some ty2) => "array<ty1, ty2>"
     /// Tarray (None, Some ty)      => [invalid]
     /// ```
-    Tarray(&'a (Option<Ty<'a>>, Option<Ty<'a>>)),
+    Tarray(&'a (Option<&'a Ty<'a>>, Option<&'a Ty<'a>>)),
     /// "Any" is the type of a variable with a missing annotation, and "mixed" is
     /// the type of a variable annotated as "mixed". THESE TWO ARE VERY DIFFERENT!
     /// Any unifies with anything, i.e., it is both a supertype and subtype of any
@@ -421,13 +437,13 @@ pub enum Ty_<'a> {
     /// mixed exists only in the decl_phase phase because it is desugared into ?nonnull
     /// during the localization phase.
     Tmixed,
-    Tlike(Ty<'a>),
+    Tlike(&'a Ty<'a>),
     /// Access to a Pocket Universe or Pocket Universes dependent type,
     /// denoted by Foo:@Bar.
     /// It might be unresolved at first (e.g. if Foo is a generic variable).
     /// Will be refined to Tpu, or to the actual type associated with an
     /// atom, once typechecking is successful.
-    TpuAccess(&'a (Ty<'a>, nast::Sid<'a>)),
+    TpuAccess(&'a (&'a Ty<'a>, nast::Sid<'a>)),
     Tany(tany_sentinel::TanySentinel),
     Terr,
     Tnonnull,
@@ -442,14 +458,14 @@ pub enum Ty_<'a> {
     /// See tests in typecheck/dynamic/ for more examples.
     Tdynamic,
     /// Nullable, called "option" in the ML parlance.
-    Toption(Ty<'a>),
+    Toption(&'a Ty<'a>),
     /// All the primitive types: int, string, void, etc.
     Tprim(&'a aast::Tprim<'a>),
     /// A wrapper around fun_type, which contains the full type information for a
     /// function, method, lambda, etc.
     Tfun(&'a FunType<'a>),
     /// Tuple, with ordered list of the types of the elements of the tuple.
-    Ttuple(&'a [Ty<'a>]),
+    Ttuple(&'a [&'a Ty<'a>]),
     /// Whether all fields of this shape are known, types of each of the
     /// known arms.
     Tshape(
@@ -464,7 +480,7 @@ pub enum Ty_<'a> {
     /// is set up when checking the body of a function or method. See uses of
     /// Typing_phase.add_generic_parameters_and_constraints. The list denotes
     /// type arguments.
-    Tgeneric(&'a (&'a str, &'a [Ty<'a>])),
+    Tgeneric(&'a (&'a str, &'a [&'a Ty<'a>])),
     /// Union type.
     /// The values that are members of this type are the union of the values
     /// that are members of the components of the union.
@@ -472,14 +488,14 @@ pub enum Ty_<'a> {
     ///   Tunion []  is the "nothing" type, with no values
     ///   Tunion [int;float] is the same as num
     ///   Tunion [null;t] is the same as Toption t
-    Tunion(&'a [Ty<'a>]),
-    Tintersection(&'a [Ty<'a>]),
+    Tunion(&'a [&'a Ty<'a>]),
+    Tintersection(&'a [&'a Ty<'a>]),
     /// Tdarray (ty1, ty2) => "darray<ty1, ty2>"
-    Tdarray(&'a (Ty<'a>, Ty<'a>)),
+    Tdarray(&'a (&'a Ty<'a>, &'a Ty<'a>)),
     /// Tvarray (ty) => "varray<ty>"
-    Tvarray(Ty<'a>),
+    Tvarray(&'a Ty<'a>),
     /// Tvarray_or_darray (ty1, ty2) => "varray_or_darray<ty1, ty2>"
-    TvarrayOrDarray(&'a (Ty<'a>, Ty<'a>)),
+    TvarrayOrDarray(&'a (&'a Ty<'a>, &'a Ty<'a>)),
     /// This represents a type alias that lacks necessary type arguments. Given
     /// type Foo<T1,T2> = ...
     /// Tunappliedalias "Foo" stands for usages of plain Foo, without supplying
@@ -500,9 +516,9 @@ pub enum Ty_<'a> {
     ///   Tnewtype ((pos, "my_type"), [], Tprim Tint)
     ///
     /// Which means that my_type is abstract, but is subtype of int as well.
-    Tnewtype(&'a (&'a str, &'a [Ty<'a>], Ty<'a>)),
+    Tnewtype(&'a (&'a str, &'a [&'a Ty<'a>], &'a Ty<'a>)),
     /// see dependent_type
-    Tdependent(&'a (DependentType<'a>, Ty<'a>)),
+    Tdependent(&'a (DependentType, &'a Ty<'a>)),
     /// Tobject is an object type compatible with all objects. This type is also
     /// compatible with some string operations (since a class might implement
     /// __toString), but not with string type hints.
@@ -513,11 +529,11 @@ pub enum Ty_<'a> {
     /// An instance of a class or interface, ty list are the arguments
     /// If exact=Exact, then this represents instances of *exactly* this class
     /// If exact=Nonexact, this also includes subclasses
-    Tclass(&'a (nast::Sid<'a>, Exact, &'a [Ty<'a>])),
+    Tclass(&'a (nast::Sid<'a>, Exact, &'a [&'a Ty<'a>])),
     /// Typing of Pocket Universe Expressions
     /// - first parameter is the enclosing class
     /// - second parameter is the name of the Pocket Universe Enumeration
-    Tpu(&'a (Ty<'a>, nast::Sid<'a>)),
+    Tpu(&'a (&'a Ty<'a>, nast::Sid<'a>)),
     /// Typing of Pocket Universes type projections
     /// - first parameter is the Tgeneric in place of the member name
     /// - second parameter is the name of the type to project
@@ -527,120 +543,18 @@ impl<'a> TrivialDrop for Ty_<'a> {}
 
 #[derive(
     Clone,
-    Copy,
     Debug,
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
     Serialize,
     ToOcamlRep
 )]
-pub enum ConstraintType_<'a> {
-    ThasMember(&'a HasMember<'a>),
-    /// The type of container destructuring via list() or splat `...`
-    Tdestructure(&'a Destructure<'a>),
-    TCunion(&'a (Ty<'a>, ConstraintType<'a>)),
-    TCintersection(&'a (Ty<'a>, ConstraintType<'a>)),
-}
-impl<'a> TrivialDrop for ConstraintType_<'a> {}
-
-#[derive(
-    Clone,
-    Debug,
-    Eq,
-    FromOcamlRepIn,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-    ToOcamlRep
-)]
-pub struct HasMember<'a> {
-    pub name: nast::Sid<'a>,
-    pub type_: Ty<'a>,
-    /// This is required to check ambiguous object access, where sometimes
-    /// HHVM would access the private member of a parent class instead of the
-    /// one from the current class.
-    pub class_id: &'a nast::ClassId_<'a>,
-    pub explicit_targs: Option<&'a [&'a nast::Targ<'a>]>,
-}
-impl<'a> TrivialDrop for HasMember<'a> {}
-
-#[derive(
-    Clone,
-    Debug,
-    Eq,
-    FromOcamlRepIn,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-    ToOcamlRep
-)]
-pub struct Destructure<'a> {
-    /// This represents the standard parameters of a function or the fields in a list
-    /// destructuring assignment. Example:
-    ///
-    /// function take(bool $b, float $f = 3.14, arraykey ...$aks): void {}
-    /// function f((bool, float, int, string) $tup): void {
-    ///   take(...$tup);
-    /// }
-    ///
-    /// corresponds to the subtyping assertion
-    ///
-    /// (bool, float, int, string) <: splat([#1], [opt#2], ...#3)
-    pub required: &'a [Ty<'a>],
-    /// Represents the optional parameters in a function, only used for splats
-    pub optional: &'a [Ty<'a>],
-    /// Represents a function's variadic parameter, also only used for splats
-    pub variadic: Option<Ty<'a>>,
-    /// list() destructuring allows for partial matches on lists, even when the operation
-    /// might throw i.e. list($a) = vec[];
-    pub kind: DestructureKind,
-}
-impl<'a> TrivialDrop for Destructure<'a> {}
-
-#[derive(Clone, Copy, Debug, FromOcamlRepIn, Hash, Serialize, ToOcamlRep)]
-pub struct ConstraintType<'a>(pub &'a reason::Reason<'a>, pub &'a ConstraintType_<'a>);
-impl<'a> TrivialDrop for ConstraintType<'a> {}
-
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    FromOcamlRepIn,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-    ToOcamlRep
-)]
-pub enum InternalType<'a> {
-    LoclType(Ty<'a>),
-    ConstraintType(ConstraintType<'a>),
-}
-impl<'a> TrivialDrop for InternalType<'a> {}
-
-#[derive(
-    Clone,
-    Debug,
-    Eq,
-    FromOcamlRepIn,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-    ToOcamlRep
-)]
-pub struct TaccessType<'a>(pub Ty<'a>, pub &'a [nast::Sid<'a>]);
+pub struct TaccessType<'a>(pub &'a Ty<'a>, pub &'a [nast::Sid<'a>]);
 impl<'a> TrivialDrop for TaccessType<'a> {}
 
 /// represents reactivity of function
@@ -665,6 +579,7 @@ impl<'a> TrivialDrop for TaccessType<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -673,10 +588,10 @@ impl<'a> TrivialDrop for TaccessType<'a> {}
 )]
 pub enum Reactivity<'a> {
     Nonreactive,
-    Local(Option<Ty<'a>>),
-    Shallow(Option<Ty<'a>>),
-    Reactive(Option<Ty<'a>>),
-    Pure(Option<Ty<'a>>),
+    Local(Option<&'a Ty<'a>>),
+    Shallow(Option<&'a Ty<'a>>),
+    Reactive(Option<&'a Ty<'a>>),
+    Pure(Option<&'a Ty<'a>>),
     MaybeReactive(&'a Reactivity<'a>),
     RxVar(Option<&'a Reactivity<'a>>),
     Cipp(Option<&'a str>),
@@ -694,6 +609,7 @@ impl<'a> TrivialDrop for Reactivity<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -701,7 +617,7 @@ impl<'a> TrivialDrop for Reactivity<'a> {}
     ToOcamlRep
 )]
 pub struct FunImplicitParams<'a> {
-    pub capability: Ty<'a>,
+    pub capability: &'a Ty<'a>,
 }
 impl<'a> TrivialDrop for FunImplicitParams<'a> {}
 
@@ -713,6 +629,7 @@ impl<'a> TrivialDrop for FunImplicitParams<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -729,6 +646,7 @@ pub struct FunType<'a> {
     pub ret: &'a PossiblyEnforcedTy<'a>,
     pub reactive: Reactivity<'a>,
     pub flags: typing_defs_flags::FunTypeFlags,
+    pub ifc_decl: IfcFunDecl<'a>,
 }
 impl<'a> TrivialDrop for FunType<'a> {}
 
@@ -742,6 +660,7 @@ impl<'a> TrivialDrop for FunType<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -763,6 +682,7 @@ impl<'a> TrivialDrop for FunArity<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -771,7 +691,7 @@ impl<'a> TrivialDrop for FunArity<'a> {}
 )]
 pub enum ParamRxAnnotation<'a> {
     ParamRxVar,
-    ParamRxIfImpl(Ty<'a>),
+    ParamRxIfImpl(&'a Ty<'a>),
 }
 impl<'a> TrivialDrop for ParamRxAnnotation<'a> {}
 
@@ -781,6 +701,7 @@ impl<'a> TrivialDrop for ParamRxAnnotation<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -790,7 +711,7 @@ impl<'a> TrivialDrop for ParamRxAnnotation<'a> {}
 pub struct PossiblyEnforcedTy<'a> {
     /// True if consumer of this type enforces it at runtime
     pub enforced: bool,
-    pub type_: Ty<'a>,
+    pub type_: &'a Ty<'a>,
 }
 impl<'a> TrivialDrop for PossiblyEnforcedTy<'a> {}
 
@@ -800,6 +721,7 @@ impl<'a> TrivialDrop for PossiblyEnforcedTy<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -816,3 +738,140 @@ pub struct FunParam<'a> {
 impl<'a> TrivialDrop for FunParam<'a> {}
 
 pub type FunParams<'a> = [&'a FunParam<'a>];
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    FromOcamlRep,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub enum DestructureKind {
+    ListDestructure,
+    SplatUnpack,
+}
+impl TrivialDrop for DestructureKind {}
+
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub struct Destructure<'a> {
+    /// This represents the standard parameters of a function or the fields in a list
+    /// destructuring assignment. Example:
+    ///
+    /// function take(bool $b, float $f = 3.14, arraykey ...$aks): void {}
+    /// function f((bool, float, int, string) $tup): void {
+    ///   take(...$tup);
+    /// }
+    ///
+    /// corresponds to the subtyping assertion
+    ///
+    /// (bool, float, int, string) <: splat([#1], [opt#2], ...#3)
+    pub required: &'a [&'a Ty<'a>],
+    /// Represents the optional parameters in a function, only used for splats
+    pub optional: &'a [&'a Ty<'a>],
+    /// Represents a function's variadic parameter, also only used for splats
+    pub variadic: Option<&'a Ty<'a>>,
+    /// list() destructuring allows for partial matches on lists, even when the operation
+    /// might throw i.e. list($a) = vec[];
+    pub kind: DestructureKind,
+}
+impl<'a> TrivialDrop for Destructure<'a> {}
+
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub struct HasMember<'a> {
+    pub name: nast::Sid<'a>,
+    pub type_: &'a Ty<'a>,
+    /// This is required to check ambiguous object access, where sometimes
+    /// HHVM would access the private member of a parent class instead of the
+    /// one from the current class.
+    pub class_id: &'a nast::ClassId_<'a>,
+    pub explicit_targs: Option<&'a [&'a nast::Targ<'a>]>,
+}
+impl<'a> TrivialDrop for HasMember<'a> {}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub enum ConstraintType_<'a> {
+    ThasMember(&'a HasMember<'a>),
+    /// The type of container destructuring via list() or splat `...`
+    Tdestructure(&'a Destructure<'a>),
+    TCunion(&'a (&'a Ty<'a>, ConstraintType<'a>)),
+    TCintersection(&'a (&'a Ty<'a>, ConstraintType<'a>)),
+}
+impl<'a> TrivialDrop for ConstraintType_<'a> {}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Serialize,
+    ToOcamlRep
+)]
+pub struct ConstraintType<'a>(pub &'a reason::Reason<'a>, pub &'a ConstraintType_<'a>);
+impl<'a> TrivialDrop for ConstraintType<'a> {}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub enum InternalType<'a> {
+    LoclType(&'a Ty<'a>),
+    ConstraintType(ConstraintType<'a>),
+}
+impl<'a> TrivialDrop for InternalType<'a> {}

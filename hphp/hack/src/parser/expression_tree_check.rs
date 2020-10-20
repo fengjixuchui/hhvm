@@ -111,6 +111,15 @@ impl<'ast> Visitor<'ast> for Checker {
                     (Bop::Plus, _, _) => true,
                     // Allow $x = 1, but not $x += 1.
                     (Bop::Eq(None), _, _) => true,
+                    // Allow boolean && operator
+                    (Bop::Ampamp, _, _) => true,
+                    // Allow boolean || operator
+                    (Bop::Barbar, _, _) => true,
+                    _ => false,
+                },
+                Unop(uop) => match **uop {
+                    // Allow boolean not operator !$x
+                    (Uop::Unot, _) => true,
                     _ => false,
                 },
                 // Allow simple function calls.

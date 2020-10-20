@@ -16,30 +16,23 @@
  **
  *
  */
-use parser_core_types::{
-  lexable_token::LexableToken,
-  token_kind::TokenKind,
-};
+use parser_core_types::token_factory::TokenFactory;
+use parser_core_types::lexable_token::LexableToken;
+
+pub type Token<S> = <<S as SmartConstructors>::TF as TokenFactory>::Token;
+pub type Trivia<S> = <Token<S> as LexableToken>::Trivia;
 
 pub trait SmartConstructors: Clone {
+    type TF: TokenFactory;
     type State;
-    type Token: LexableToken;
     type R;
 
     fn state_mut(&mut self) -> &mut Self::State;
     fn into_state(self) -> Self::State;
-
-    fn create_token(
-        &mut self,
-        kind: TokenKind,
-        offset: usize,
-        width: usize,
-        leading: <Self::Token as LexableToken>::Trivia,
-        trailing: <Self::Token as LexableToken>::Trivia,
-    ) -> Self::Token;
+    fn token_factory(&mut self) -> &mut Self::TF;
 
     fn make_missing(&mut self, offset : usize) -> Self::R;
-    fn make_token(&mut self, arg0: Self::Token) -> Self::R;
+    fn make_token(&mut self, arg0: Token<Self>) -> Self::R;
     fn make_list(&mut self, arg0: Vec<Self::R>, offset: usize) -> Self::R;
     fn make_end_of_file(&mut self, arg0 : Self::R) -> Self::R;
     fn make_script(&mut self, arg0 : Self::R) -> Self::R;
@@ -53,6 +46,8 @@ pub trait SmartConstructors: Clone {
     fn make_file_attribute_specification(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R) -> Self::R;
     fn make_enum_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R, arg9 : Self::R, arg10 : Self::R) -> Self::R;
     fn make_enumerator(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R;
+    fn make_enum_class_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R, arg9 : Self::R, arg10 : Self::R) -> Self::R;
+    fn make_enum_class_enumerator(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R) -> Self::R;
     fn make_record_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R) -> Self::R;
     fn make_record_field(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R;
     fn make_alias_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R) -> Self::R;

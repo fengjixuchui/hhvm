@@ -29,9 +29,8 @@ use oxidized::{
 };
 use parser_core_types::{
     indexed_source_text::IndexedSourceText, lexable_token::LexablePositionedToken,
-    positioned_syntax::PositionedSyntaxTrait, positioned_syntax::PositionedValue,
-    positioned_token::PositionedToken, source_text::SourceText, syntax::*, syntax_error,
-    syntax_kind, syntax_trait::SyntaxTrait, token_kind::TokenKind as TK,
+    positioned_syntax::PositionedValue, positioned_token::PositionedToken, source_text::SourceText,
+    syntax::*, syntax_error, syntax_kind, syntax_trait::SyntaxTrait, token_kind::TokenKind as TK,
 };
 use regex::bytes::Regex;
 use stack_limit::StackLimit;
@@ -98,7 +97,7 @@ pub enum TokenOp {
 pub struct FunHdr {
     suspension_kind: SuspensionKind,
     name: ast::Sid,
-    constrs: Vec<ast::WhereConstraint>,
+    constrs: Vec<ast::WhereConstraintHint>,
     type_parameters: Vec<ast::Tparam>,
     parameters: Vec<ast::FunParam>,
     capability: Option<ast::Hint>,
@@ -149,7 +148,7 @@ const EXP_RECUSION_LIMIT: usize = 30_000;
 
 #[derive(Debug, Clone)]
 pub struct Env<'a> {
-    codegen: bool,
+    pub codegen: bool,
     pub keep_errors: bool,
     quick_mode: bool,
     /// Show errors even in quick mode. Does not override keep_errors. Hotfix
@@ -374,7 +373,7 @@ use parser_core_types::syntax::SyntaxVariant::*;
 trait Lowerer<'a, T, V>
 where
     T: LexablePositionedToken,
-    Syntax<T, V>: PositionedSyntaxTrait,
+    Syntax<T, V>: SyntaxTrait,
     V: SyntaxValueWithKind + SyntaxValueType<T> + std::fmt::Debug,
 {
     fn p_pos(node: &Syntax<T, V>, env: &Env) -> Pos {
@@ -1285,8 +1284,11 @@ where
         Ok(result)
     }
 
-    fn p_expr_l(node: &Syntax<T, V>, env: &mut Env) -> Result<ast::Expr> {
-        Self::p_expr_l_with_loc(ExprLocation::TopLevel, node, env)
+    fn p_expr_l(node: &Syntax<T, V>, env: &mut Env) -> Result<Vec<ast::Expr>> {
+        let p_expr = |n: &Syntax<T, V>, e: &mut Env| -> Result<ast::Expr> {
+            Self::p_expr_with_loc(ExprLocation::TopLevel, n, e)
+        };
+        Self::could_map(p_expr, node, env)
     }
 
     fn p_expr_l_with_loc(
@@ -2059,9 +2061,9 @@ where
                 Self::p_expr(&c.cast_operand, env)?,
             )),
             PrefixedCodeExpression(c) => {
-                let e = Self::p_expr(&c.prefixed_code_expression, env)?;
+                let mut e = Self::p_expr(&c.prefixed_code_expression, env)?;
                 let hint = Self::p_hint(&c.prefixed_code_prefix, env)?;
-                let desugared_e = desugar(&hint, &e, &env);
+                let desugared_e = desugar(&hint, &mut e, &env);
                 Ok(E_::mk_expression_tree(hint, e, Some(desugared_e)))
             }
             ConditionalExpression(c) => {
@@ -2938,7 +2940,7 @@ where
             ForStatement(c) => {
                 let f = |e: &mut Env| -> Result<ast::Stmt> {
                     let ini = Self::p_expr_l(&c.for_initializer, e)?;
-                    let ctr = Self::p_expr_l(&c.for_control, e)?;
+                    let ctr = Self::mp_optional(Self::p_expr, &c.for_control, e)?;
                     let eol = Self::p_expr_l(&c.for_end_of_loop, e)?;
                     let blk = Self::p_block(true, &c.for_body, e)?;
                     Ok(S::new(pos, S_::mk_for(ini, ctr, eol, blk)))
@@ -3174,7 +3176,7 @@ where
     fn p_markup(node: &Syntax<T, V>, env: &mut Env) -> Result<ast::Stmt> {
         match &node.syntax {
             MarkupSection(c) => {
-                let markup_text = &c.markup_text;
+                let markup_hashbang = &c.markup_hashbang;
                 let pos = Self::p_pos(node, env);
                 let f = pos.filename();
                 if f.has_extension("hack") || f.has_extension("hackpartial") {
@@ -3184,10 +3186,10 @@ where
                         env,
                         &syntax_error::error1060(&ext.to_str().unwrap()),
                     );
-                } else if markup_text.width() > 0 && !Self::is_hashbang(&markup_text, env) {
+                } else if markup_hashbang.width() > 0 && !Self::is_hashbang(&markup_hashbang, env) {
                     Self::raise_parsing_error(node, env, &syntax_error::error1001);
                 }
-                let stmt_ = ast::Stmt_::mk_markup((pos.clone(), Self::text(&markup_text, env)));
+                let stmt_ = ast::Stmt_::mk_markup((pos.clone(), Self::text(&markup_hashbang, env)));
                 Ok(ast::Stmt::new(pos, stmt_))
             }
             _ => Self::failwith("invalid node"),
@@ -4543,11 +4545,11 @@ where
         parent: &Syntax<T, V>,
         node: &Syntax<T, V>,
         env: &mut Env,
-    ) -> Result<Vec<ast::WhereConstraint>> {
+    ) -> Result<Vec<ast::WhereConstraintHint>> {
         match &node.syntax {
             Missing => Ok(vec![]),
             WhereClause(c) => {
-                let f = |n: &Syntax<T, V>, e: &mut Env| -> Result<ast::WhereConstraint> {
+                let f = |n: &Syntax<T, V>, e: &mut Env| -> Result<ast::WhereConstraintHint> {
                     match &n.syntax {
                         WhereConstraint(c) => {
                             use ast::ConstraintKind::*;
@@ -4560,7 +4562,7 @@ where
                                 _ => Self::missing_syntax("constraint operator", o, e)?,
                             };
                             let r = Self::p_hint(&c.where_constraint_right_type, e)?;
-                            Ok(ast::WhereConstraint(l, o, r))
+                            Ok(ast::WhereConstraintHint(l, o, r))
                         }
                         _ => Self::missing_syntax("where constraint", n, e),
                     }
@@ -4865,6 +4867,7 @@ where
                         base: Self::p_hint(&c.enum_base, env)?,
                         constraint: Self::mp_optional(Self::p_tconstraint_ty, &c.enum_type, env)?,
                         includes: Self::could_map(Self::p_hint, &c.enum_includes_list, env)?,
+                        enum_class: false,
                     }),
 
                     doc_comment: doc_comment_opt,
@@ -4883,6 +4886,120 @@ where
                     pu_enums: vec![],
                     emit_id: None,
                 })])
+            }
+            EnumClassDeclaration(c) => {
+                let name = Self::pos_name(&c.enum_class_name, env)?;
+                // Adding __EnumClass
+                let mut user_attributes =
+                    Self::p_user_attributes(&c.enum_class_attribute_spec, env)?;
+                let enum_class_attribute = ast::UserAttribute {
+                    name: ast::Id(name.0.clone(), special_attrs::ENUM_CLASS.to_string()),
+                    params: vec![],
+                };
+                user_attributes.push(enum_class_attribute);
+                // During lowering we store the base type as is. It will be updated during
+                // the naming phase
+                let base_type = Self::p_hint(&c.enum_class_base, env)?;
+
+                let name_s = name.1.clone(); // TODO: can I avoid this clone ?
+
+                // Helper to build X -> HH\Elt<enum_name, X>
+                let build_elt = |p: Pos, ty: ast::Hint| -> ast::Hint {
+                    let enum_name = ast::Id(p.clone(), name_s.clone());
+                    let enum_class = ast::Hint_::mk_happly(enum_name, vec![]);
+                    let enum_class = ast::Hint::new(p.clone(), enum_class);
+                    let elt_id = ast::Id(p.clone(), special_classes::ELT.to_string());
+                    let full_type = ast::Hint_::mk_happly(elt_id, vec![enum_class, ty]);
+                    ast::Hint::new(p.clone(), full_type)
+                };
+
+                let extends = Self::could_map(Self::p_hint, &c.enum_class_extends_list, env)?;
+
+                let mut enum_class = ast::Class_ {
+                    annotation: (),
+                    mode: env.file_mode(),
+                    user_attributes,
+                    file_attributes: vec![],
+                    final_: false, // TODO(T77095784): support final EDTs
+                    kind: ast::ClassKind::Cenum,
+                    is_xhp: false,
+                    has_xhp_keyword: false,
+                    name,
+                    tparams: vec![],
+                    extends: extends.clone(),
+                    implements: vec![],
+                    where_constraints: vec![],
+                    consts: vec![],
+                    namespace: Self::mk_empty_ns_env(env),
+                    span: Self::p_pos(node, env),
+                    enum_: Some(ast::Enum_ {
+                        base: base_type,
+                        constraint: None,
+                        includes: extends,
+                        enum_class: true,
+                    }),
+                    doc_comment: doc_comment_opt,
+                    uses: vec![],
+                    use_as_alias: vec![],
+                    insteadof_alias: vec![],
+                    xhp_attr_uses: vec![],
+                    xhp_category: None,
+                    reqs: vec![],
+                    vars: vec![],
+                    typeconsts: vec![],
+                    methods: vec![],
+                    attributes: vec![],
+                    xhp_children: vec![],
+                    xhp_attrs: vec![],
+                    pu_enums: vec![],
+                    emit_id: None,
+                };
+
+                for n in c.enum_class_elements.syntax_node_to_list_skip_separator() {
+                    match &n.syntax {
+                        // TODO(T77095784): check pos and span usage
+                        EnumClassEnumerator(c) => {
+                            // we turn:
+                            // - name<type>(args)
+                            // into
+                            // - const Elt<enum_name, type> name = new Elt('name', args)
+                            let span = Self::p_pos(n, env);
+                            let name = Self::pos_name(&c.enum_class_enumerator_name, env)?;
+                            let pos = &name.0;
+                            let string_name = ast::Expr_::mk_string(BString::from(name.1.clone()));
+                            let string_name_expr = ast::Expr::new(pos.clone(), string_name);
+                            let elt_type = Self::p_hint(&c.enum_class_enumerator_type, env)?;
+                            let full_type = build_elt(pos.clone(), elt_type);
+                            let initial_value =
+                                Self::p_expr(&c.enum_class_enumerator_initial_value, env)?;
+                            let elt_arguments = vec![string_name_expr, initial_value];
+                            let elt_id = ast::Id(pos.clone(), special_classes::ELT.to_string());
+                            let elt_name = E_::mk_id(elt_id.clone());
+                            let elt_expr = ast::Expr::new(span.clone(), elt_name);
+                            let cid_ = ast::ClassId_::CIexpr(elt_expr);
+                            let cid = ast::ClassId(pos.clone(), cid_);
+                            let new_expr =
+                                E_::mk_new(cid, vec![], elt_arguments, None, span.clone());
+                            let init = ast::Expr::new(span, new_expr);
+                            let class_const = ast::ClassConst {
+                                type_: Some(full_type),
+                                id: name,
+                                expr: Some(init),
+                                doc_comment: None,
+                            };
+                            enum_class.consts.push(class_const)
+                        }
+                        _ => {
+                            let pos = Self::p_pos(n, env);
+                            Self::raise_parsing_error_pos(
+                                &pos,
+                                env,
+                                &syntax_error::invalid_enum_class_enumerator,
+                            )
+                        }
+                    }
+                }
+                Ok(vec![ast::Def::mk_class(enum_class)])
             }
             RecordDeclaration(c) => {
                 let p_field = |n: &Syntax<T, V>, e: &mut Env| match &n.syntax {

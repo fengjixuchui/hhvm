@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<a8a528a0c792c37bd96ebba68744e4e3>>
+// @generated SignedSource<<fa2493096c289cdd6ec164534c81366a>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
@@ -630,6 +630,7 @@ impl<P: Params> Node<P> for Enum_ {
         self.base.accept(c, v)?;
         self.constraint.accept(c, v)?;
         self.includes.accept(c, v)?;
+        self.enum_class.accept(c, v)?;
         Ok(())
     }
 }
@@ -2156,13 +2157,13 @@ impl<P: Params> Node<P> for Visibility {
         }
     }
 }
-impl<P: Params> Node<P> for WhereConstraint {
+impl<P: Params> Node<P> for WhereConstraintHint {
     fn accept<'node>(
         &'node self,
         c: &mut P::Context,
         v: &mut dyn Visitor<'node, P = P>,
     ) -> Result<(), P::Error> {
-        v.visit_where_constraint(c, self)
+        v.visit_where_constraint_hint(c, self)
     }
     fn recurse<'node>(
         &'node self,

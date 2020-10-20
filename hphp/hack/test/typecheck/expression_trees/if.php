@@ -56,10 +56,17 @@ class Code {
   }
 }
 
-function foo(): void {
-  $if = Code`($x) ==> { if($x) { return 1; } return 2; }`;
+final class ExprTree<TVisitor, TResult, TInfer>{
+  public function __construct(
+    private (function(TVisitor): TResult) $x,
+    private (function(): TInfer) $err,
+  ) {}
+}
 
-  $if_else = Code`($x, $y) ==> {
+function foo(): void {
+  $if = Code`(bool $x) ==> { if($x) { return 1; } return 2; }`;
+
+  $if_else = Code`(bool $x, bool $y) ==> {
     if ($x) {
       return 1;
     } else if ($y) {

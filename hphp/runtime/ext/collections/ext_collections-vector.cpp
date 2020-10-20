@@ -74,109 +74,6 @@ void copySlice(ArrayData* from, ArrayData* to,
 /////////////////////////////////////////////////////////////////////////////
 // BaseVector
 
-template<class TVector>
-typename std::enable_if<
-  std::is_base_of<BaseVector, TVector>::value, Object>::type
-BaseVector::php_take(const Variant& n) {
-  if (!n.isInteger()) {
-    SystemLib::throwInvalidArgumentExceptionObject(
-      "Parameter n must be an integer");
-  }
-  int64_t len = std::max(n.toInt64(), int64_t{0});
-  uint32_t sz = std::min(len, int64_t(m_size));
-  if (sz == 0) {
-    return Object{req::make<TVector>()};
-  }
-  auto vec = req::make<TVector>(sz);
-  vec->setSize(sz);
-  copySlice(m_arr, vec->m_arr, 0, 0, sz);
-  return Object{std::move(vec)};
-}
-
-template<class TVector>
-typename std::enable_if<
-  std::is_base_of<BaseVector, TVector>::value, Object>::type
-BaseVector::php_skip(const Variant& n) {
-  if (!n.isInteger()) {
-    SystemLib::throwInvalidArgumentExceptionObject(
-      "Parameter n must be an integer");
-  }
-  int64_t len = std::max(n.toInt64(), int64_t{0});
-  uint32_t skipAmt = std::min(len, int64_t(m_size));
-  uint32_t sz = m_size - skipAmt;
-  if (sz == 0) {
-    return Object{req::make<TVector>()};
-  }
-  auto vec = req::make<TVector>(sz);
-  vec->setSize(sz);
-  copySlice(m_arr, vec->m_arr, skipAmt, 0, sz);
-  return Object{std::move(vec)};
-}
-
-template<class TVector>
-typename std::enable_if<
-  std::is_base_of<BaseVector, TVector>::value, Object>::type
-BaseVector::php_slice(const Variant& start, const Variant& len) {
-  int64_t istart;
-  int64_t ilen;
-  if (!start.isInteger() || (istart = start.toInt64()) < 0) {
-    SystemLib::throwInvalidArgumentExceptionObject(
-      "Parameter start must be a non-negative integer");
-  }
-  if (!len.isInteger() || (ilen = len.toInt64()) < 0) {
-    SystemLib::throwInvalidArgumentExceptionObject(
-      "Parameter len must be a non-negative integer");
-  }
-  uint32_t skipAmt = std::min(istart, int64_t(m_size));
-  uint32_t sz = std::min(ilen, int64_t(m_size - skipAmt));
-  if (sz == 0) {
-    return Object{req::make<TVector>()};
-  }
-  auto vec = req::make<TVector>(sz);
-  vec->setSize(sz);
-  copySlice(m_arr, vec->m_arr, skipAmt, 0, sz);
-  return Object{std::move(vec)};
-}
-
-template<class TVector>
-typename std::enable_if<
-  std::is_base_of<BaseVector, TVector>::value, Object>::type
-BaseVector::php_concat(const Variant& iterable) {
-  size_t itSize;
-  ArrayIter iter = getArrayIterHelper(iterable, itSize);
-  uint32_t sz = m_size + itSize;
-  auto vec = req::make<TVector>(sz);
-  if (m_size > 0) {
-    vec->setSize(m_size);
-    copySlice(m_arr, vec->m_arr, 0, 0, m_size);
-  }
-  for (; iter; ++iter) {
-    vec->addRaw(iter.second());
-  }
-  return Object{std::move(vec)};
-}
-
-template<class TVector>
-typename std::enable_if<
-  std::is_base_of<BaseVector, TVector>::value, Object>::type
-BaseVector::php_zip(const Variant& iterable) {
-  size_t itSize;
-  ArrayIter iter = getArrayIterHelper(iterable, itSize);
-  if (m_size == 0 || !iter) {
-    return Object{req::make<TVector>()};
-  }
-  uint32_t sz = std::min(itSize, size_t(m_size));
-  auto vec = req::make<TVector>(sz);
-  uint32_t i = 0;
-  do {
-    Variant v = iter.second();
-    auto pair = req::make<c_Pair>(*dataAt(i), *v.asTypedValue());
-    vec->addRaw(make_tv<KindOfObject>(pair.get()));
-    ++iter;
-  } while (++i < m_size && iter);
-  return Object{std::move(vec)};
-}
-
 // Used by __construct for Vector and ImmVector
 // Used by addAll for Vector only
 void BaseVector::addAllImpl(const Variant& t) {
@@ -186,17 +83,35 @@ void BaseVector::addAllImpl(const Variant& t) {
     *t.asTypedValue(),
     [&, this](ArrayData* adata) {
       if (adata->empty()) return true;
-      if (!m_size && adata->isVecKind()) {
-        dropImmCopy();
-        auto oldAd = arrayData();
-        m_arr = adata;
-        adata->incRefCount();
-        m_size = arrayData()->m_size;
-        decRefArr(oldAd);
-        return true;
+      if (m_size) {
+        reserve(m_size + adata->size());
+        return false;
       }
-      reserve(m_size + adata->size());
-      return false;
+      // The ArrayData backing a Vector must be a vanilla, unmarked vec.
+      // Do all three escalations here. Dec-ref any intermediate values we
+      // create along the way, but do not dec-ref the original adata.
+      auto array = adata;
+      if (!array->isVanilla()) {
+        array = BespokeArray::ToVanilla(array, "BaseVector::addAllImpl");
+      }
+      if (array->hasVanillaPackedLayout() && array->isLegacyArray()) {
+        auto const tmp = array->setLegacyArray(array->cowCheck(), false);
+        if (array != adata && array != tmp) decRefArr(array);
+        array = tmp;
+      }
+      if (!array->isVecKind()) {
+        auto const vec = array->toVec(array->cowCheck());
+        if (array != adata && array != vec) decRefArr(array);
+        array = vec;
+      }
+      if (array == adata) {
+        array->incRefCount();
+      }
+      dropImmCopy();
+      decRefArr(arrayData());
+      setArrayData(array);
+      m_size = array->size();
+      return true;
     },
     [this](TypedValue v) {
       addRaw(v);
@@ -213,32 +128,6 @@ void BaseVector::addAllImpl(const Variant& t) {
   if (UNLIKELY(!ok)) {
     throw_invalid_collection_parameter();
   }
-}
-
-int64_t BaseVector::linearSearch(const Variant& search_value) {
-  auto search_tv = *search_value.asTypedValue();
-  for (uint32_t i = 0; i < m_size; ++i) {
-    if (tvSame(search_tv, *dataAt(i))) {
-      return i;
-    }
-  }
-  return -1;
-}
-
-template<class TVector>
-typename std::enable_if<
-  std::is_base_of<BaseVector, TVector>::value, Object>::type
-BaseVector::php_keys() {
-  if (m_size == 0) {
-    return Object{req::make<TVector>()};
-  }
-  auto vec = req::make<TVector>(m_size);
-  vec->setSize(m_size);
-  uint32_t i = 0;
-  do {
-    tvCopy(make_tv<KindOfInt64>(i), vec->dataAt(i));
-  } while (++i < m_size);
-  return Object{std::move(vec)};
 }
 
 bool BaseVector::OffsetIsset(ObjectData* obj, const TypedValue* key) {
@@ -270,8 +159,8 @@ bool BaseVector::Equals(const ObjectData* obj1, const ObjectData* obj2) {
 void BaseVector::addFront(TypedValue tv) {
   dropImmCopy();
   auto oldAd = arrayData();
-  m_arr = PackedArray::Prepend(oldAd, tv);
-  if (m_arr != oldAd) {
+  setArrayData(PackedArray::Prepend(oldAd, tv));
+  if (arrayData() != oldAd) {
     decRefArr(oldAd);
   }
   m_size = arrayData()->m_size;
@@ -288,11 +177,12 @@ Variant BaseVector::popFront() {
 TypedValue BaseVector::removeKeyImpl(int64_t k) {
   assertx(contains(k));
   mutate();
-  const auto result = *dataAt(k);
+  const auto result = *lvalAt(k);
   if (k+1 < m_size) {
     static_assert(PackedArray::stores_typed_values, "");
     size_t bytes = (m_size-(k+1)) * sizeof(TypedValue);
-    std::memmove(&packedData(m_arr)[k], &packedData(m_arr)[k+1], bytes);
+    std::memmove(&packedData(arrayData())[k],
+                 &packedData(arrayData())[k+1], bytes);
   }
   decSize();
   return result;
@@ -300,14 +190,15 @@ TypedValue BaseVector::removeKeyImpl(int64_t k) {
 
 void BaseVector::reserveImpl(uint32_t newCap) {
   auto oldAd = arrayData();
-  m_arr = PackedArray::MakeReserveVec(newCap);
-  arrayData()->m_size = m_size;
+  auto const arr = PackedArray::MakeReserveVec(newCap);
+  setArrayData(arr);
+  arr->m_size = m_size;
   if (LIKELY(!oldAd->cowCheck())) {
     assertx(oldAd->isVecKind());
     if (m_size > 0) {
       static_assert(PackedArray::stores_typed_values, "");
       size_t bytes = m_size * sizeof(TypedValue);
-      std::memcpy(packedData(m_arr), packedData(oldAd), bytes);
+      std::memcpy(packedData(arr), packedData(oldAd), bytes);
       // Mark oldAd as having 0 elements so that the array release logic doesn't
       // decRef the elements (since we teleported the elements to a new array)
       oldAd->m_size = 0;
@@ -315,7 +206,7 @@ void BaseVector::reserveImpl(uint32_t newCap) {
     decRefArr(oldAd);
   } else {
     if (m_size > 0) {
-      copySlice(oldAd, m_arr, 0, 0, m_size);
+      copySlice(oldAd, arr, 0, 0, m_size);
     }
     assertx(!oldAd->decWillRelease());
     oldAd->decRefCount();
@@ -344,7 +235,7 @@ BaseVector::~BaseVector() {
 
 void BaseVector::mutateImpl() {
   auto oldAd = arrayData();
-  m_arr = PackedArray::Copy(oldAd);
+  setArrayData(PackedArray::Copy(oldAd));
   assertx(!oldAd->decWillRelease());
   oldAd->decRefCount();
 }
@@ -356,23 +247,6 @@ BaseVector::Clone(ObjectData* obj) {
   auto thiz = static_cast<TVector*>(obj);
   thiz->arrayData()->incRefCount();
   return req::make<TVector>(thiz->arrayData()).detach();
-}
-
-template<class TVector> typename
-  std::enable_if<std::is_base_of<BaseVector, TVector>::value, Object>::type
-BaseVector::fromKeysOf(const TypedValue& container) {
-  uint32_t sz = getContainerSize(container);
-  if (sz == 0) {
-    return Object{req::make<TVector>()};
-  }
-  auto vec = req::make<TVector>(sz);
-  ArrayIter iter(container);
-  assertx(iter);
-  do {
-    vec->addRaw(*iter.first().asTypedValue());
-    ++iter;
-  } while (iter);
-  return Object{std::move(vec)};
 }
 
 // This function will create a immutable copy of this Vector (if it doesn't
@@ -404,7 +278,7 @@ Class* c_Vector::s_cls;
 void c_Vector::clear() {
   dropImmCopy();
   decRefArr(arrayData());
-  m_arr = ArrayData::CreateVec();
+  setArrayData(ArrayData::CreateVec());
   m_size = 0;
 }
 
@@ -413,27 +287,13 @@ void c_Vector::removeKey(int64_t k) {
   tvDecRefGen(removeKeyImpl(k));
 }
 
-void c_Vector::addAllKeysOf(const Variant& container) {
-  if (container.isNull()) return;
-  auto const& containerCell = container_as_tv(container);
-
-  auto sz = getContainerSize(containerCell);
-  ArrayIter iter(containerCell);
-  if (!sz || !iter) return;
-  reserve(m_size + sz);
-  do {
-    addRaw(iter.first());
-    ++iter;
-  } while (iter);
-}
-
 Variant c_Vector::pop() {
   if (UNLIKELY(m_size == 0)) {
     SystemLib::throwInvalidOperationExceptionObject("Cannot pop empty Vector");
   }
   mutate();
   decSize();
-  const auto tv = *dataAt(m_size);
+  const auto tv = *lvalAt(m_size);
   return Variant(tvAsCVarRef(&tv), Variant::TVCopy());
 }
 
@@ -444,7 +304,7 @@ void c_Vector::resize(uint32_t sz, const TypedValue* val) {
   if (sz == 0) {
     dropImmCopy();
     decRefArr(arrayData());
-    m_arr = ArrayData::CreateVec();
+    setArrayData(ArrayData::CreateVec());
     m_size = 0;
   } else if (m_size > sz) {
     // If there were any objects in the part that's being resized away, their
@@ -453,15 +313,16 @@ void c_Vector::resize(uint32_t sz, const TypedValue* val) {
     // keeping into a new vec, swap them, and decref the old one.
     dropImmCopy();
     auto oldAd = arrayData();
-    m_arr = PackedArray::MakeReserveVec(sz);
-    copySlice(oldAd, m_arr, 0, 0, sz);
+    auto const arr = PackedArray::MakeReserveVec(sz);
+    setArrayData(arr);
+    copySlice(oldAd, arr, 0, 0, sz);
     arrayData()->m_size = m_size = sz;
     decRefArr(oldAd);
   } else {
     reserve(sz);
     uint32_t i = m_size;
     do {
-      tvDup(*val, dataAt(i));
+      tvDup(*val, lvalAt(i));
     } while (++i < sz);
     setSize(sz);
   }
@@ -473,7 +334,7 @@ void c_Vector::reverse() {
   uint32_t i = 0;
   uint32_t j = m_size - 1;
   do {
-    tvSwap(dataAt(i), dataAt(j));
+    tvSwap(lvalAt(i), lvalAt(j));
   } while (++i < --j);
 }
 
@@ -486,12 +347,13 @@ void c_Vector::splice(int64_t startPos, int64_t endPos) {
   uint32_t sz = m_size - (endPos - startPos);
   dropImmCopy();
   auto oldAd = arrayData();
-  m_arr = PackedArray::MakeReserveVec(sz);
+  auto const arr = PackedArray::MakeReserveVec(sz);
+  setArrayData(arr);
   if (startPos > 0) {
-    copySlice(oldAd, m_arr, 0, 0, startPos);
+    copySlice(oldAd, arr, 0, 0, startPos);
   }
   if (sz > startPos) {
-    copySlice(oldAd, m_arr, endPos, startPos, sz - startPos);
+    copySlice(oldAd, arr, endPos, startPos, sz - startPos);
   }
   arrayData()->m_size = m_size = sz;
   decRefArr(oldAd);
@@ -544,7 +406,7 @@ void c_Vector::shuffle() {
   uint32_t i = 1;
   do {
     const uint32_t j = math_mt_rand(0, i);
-    tvSwap(dataAt(i), dataAt(j));
+    tvSwap(lvalAt(i), lvalAt(j));
   } while (++i < m_size);
 }
 
@@ -568,7 +430,7 @@ Object c_Vector::fromArray(const Class*, const Variant& arr) {
   ssize_t pos = ad->iter_begin();
   do {
     assertx(pos != ad->iter_end());
-    tvDup(ad->nvGetVal(pos), target->dataAt(i));
+    tvDup(ad->nvGetVal(pos), target->lvalAt(i));
     pos = ad->iter_advance(pos);
   } while (++i < sz);
   return Object{std::move(target)};
@@ -594,34 +456,6 @@ c_ImmVector* c_ImmVector::Clone(ObjectData* obj) {
 }
 
 namespace collections {
-/////////////////////////////////////////////////////////////////////////////
-// BaseVector
-
-template<class TVector>
-ALWAYS_INLINE typename std::enable_if<
-  std::is_base_of<BaseVector, TVector>::value, Object>::type
-HHVM_STATIC_METHOD(BaseVector, fromItems, const Variant& iterable) {
-  auto target = req::make<TVector>();
-  if (iterable.isNull()) return Object{std::move(target)};
-  target->init(iterable);
-  return Object{std::move(target)};
-}
-
-template<class TVector>
-ALWAYS_INLINE typename std::enable_if<
-  std::is_base_of<BaseVector, TVector>::value, Object>::type
-HHVM_STATIC_METHOD(BaseVector, fromKeysOf, const Variant& container) {
-  if (container.isNull()) { return Object{req::make<TVector>()}; }
-
-  const auto& cellContainer = *container.asTypedValue();
-  if (UNLIKELY(!isContainer(cellContainer))) {
-    SystemLib::throwInvalidArgumentExceptionObject(
-      "Parameter must be a container (array or collection)");
-  }
-  return BaseVector::fromKeysOf<TVector>(cellContainer);
-}
-
-/////////////////////////////////////////////////////////////////////////////
 
 void CollectionsExtension::initVector() {
   HHVM_ME(VectorIterator, current);
@@ -641,44 +475,10 @@ void CollectionsExtension::initVector() {
   HHVM_NAMED_ME(HH\\Vector,    mn, impl); \
   HHVM_NAMED_ME(HH\\ImmVector, mn, impl);
   BASE_ME(__construct,  &BaseVector::init);
-  BASE_ME(count,        &BaseVector::size);
-  BASE_ME(at,           &BaseVector::php_at);
-  BASE_ME(get,          &BaseVector::php_get);
-  BASE_ME(toVArray,     &BaseVector::toVArray);
-  BASE_ME(toDArray,     &BaseVector::toDArray);
   BASE_ME(getIterator,  &BaseVector::getIterator);
-  BASE_ME(firstValue,   &BaseVector::firstValue);
-  BASE_ME(lastValue,    &BaseVector::lastValue);
-  BASE_ME(linearSearch, &BaseVector::linearSearch);
 #undef BASE_ME
 
-#define TMPL_ME(mn, impl) \
-  HHVM_NAMED_ME(HH\\Vector,    mn, impl<c_Vector>); \
-  HHVM_NAMED_ME(HH\\ImmVector, mn, impl<c_ImmVector>);
-  TMPL_ME(keys,           &BaseVector::php_keys);
-  TMPL_ME(take,           &BaseVector::php_take);
-  TMPL_ME(skip,           &BaseVector::php_skip);
-  TMPL_ME(slice,          &BaseVector::php_slice);
-  TMPL_ME(concat,         &BaseVector::php_concat);
-  TMPL_ME(zip,            &BaseVector::php_zip);
-#undef TMPL_ME
-
-  HHVM_NAMED_STATIC_ME(HH\\Vector,    fromItems,
-                       HHVM_STATIC_MN(BaseVector, fromItems)<c_Vector>);
-  HHVM_NAMED_STATIC_ME(HH\\Vector,    fromKeysOf,
-                       HHVM_STATIC_MN(BaseVector, fromKeysOf)<c_Vector>);
-  HHVM_NAMED_STATIC_ME(HH\\Vector,    fromArray,
-                       c_Vector::fromArray);
-  HHVM_NAMED_STATIC_ME(HH\\ImmVector, fromItems,
-                       HHVM_STATIC_MN(BaseVector, fromItems)<c_ImmVector>);
-  HHVM_NAMED_STATIC_ME(HH\\ImmVector, fromKeysOf,
-                       HHVM_STATIC_MN(BaseVector, fromKeysOf)<c_ImmVector>);
-
   // Vector specific
-  HHVM_NAMED_ME(HH\\Vector, add,          &c_Vector::php_add);
-  HHVM_NAMED_ME(HH\\Vector, append,       &c_Vector::php_add);
-  HHVM_NAMED_ME(HH\\Vector, addAll,       &c_Vector::php_addAll);
-  HHVM_NAMED_ME(HH\\Vector, addAllKeysOf, &c_Vector::php_addAllKeysOf);
   HHVM_NAMED_ME(HH\\Vector, clear,        &c_Vector::php_clear);
   HHVM_NAMED_ME(HH\\Vector, pop,          &c_Vector::pop);
   HHVM_NAMED_ME(HH\\Vector, reverse,      &c_Vector::reverse);
@@ -686,22 +486,7 @@ void CollectionsExtension::initVector() {
   HHVM_NAMED_ME(HH\\Vector, removeKey,    &c_Vector::php_removeKey);
   HHVM_NAMED_ME(HH\\Vector, reserve,      &c_Vector::php_reserve);
   HHVM_NAMED_ME(HH\\Vector, resize,       &c_Vector::php_resize);
-  HHVM_NAMED_ME(HH\\Vector, set,          &c_Vector::php_set);
-  HHVM_NAMED_ME(HH\\Vector, setAll,       &c_Vector::php_setAll);
   HHVM_NAMED_ME(HH\\Vector, splice,       &c_Vector::php_splice);
-
-  // Materialization
-  HHVM_NAMED_ME(HH\\Vector,      toMap,       materialize<c_Map>);
-  HHVM_NAMED_ME(HH\\Vector,      toImmMap,    materialize<c_ImmMap>);
-  HHVM_NAMED_ME(HH\\Vector,      toSet,       materialize<c_Set>);
-  HHVM_NAMED_ME(HH\\Vector,      toImmSet,    materialize<c_ImmSet>);
-  HHVM_NAMED_ME(HH\\Vector,      toImmVector, &c_Vector::getImmutableCopy);
-
-  HHVM_NAMED_ME(HH\\ImmVector,   toMap,       materialize<c_Map>);
-  HHVM_NAMED_ME(HH\\ImmVector,   toImmMap,    materialize<c_ImmMap>);
-  HHVM_NAMED_ME(HH\\ImmVector,   toSet,       materialize<c_Set>);
-  HHVM_NAMED_ME(HH\\ImmVector,   toImmSet,    materialize<c_ImmSet>);
-  HHVM_NAMED_ME(HH\\ImmVector,   toVector,    materialize<c_Vector>);
 
   Native::registerNativePropHandler<CollectionPropHandler>(s_HH_Vector);
   Native::registerNativePropHandler<CollectionPropHandler>(s_HH_ImmVector);

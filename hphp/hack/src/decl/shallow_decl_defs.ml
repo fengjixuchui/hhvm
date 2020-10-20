@@ -8,7 +8,6 @@
  *)
 
 open Typing_defs
-open Pp_type
 
 type shallow_class_const = {
   scc_abstract: bool;
@@ -52,7 +51,7 @@ type shallow_prop = {
   sp_needs_init: bool;
   sp_type: decl_ty option;
   sp_abstract: bool;
-  sp_visibility: Aast_defs.visibility;
+  sp_visibility: Ast_defs.visibility;
 }
 [@@deriving eq, show]
 
@@ -65,7 +64,7 @@ type shallow_method = {
   sm_dynamicallycallable: bool;
   sm_reactivity: Decl_defs.method_reactivity option;
   sm_type: decl_ty;
-  sm_visibility: Aast_defs.visibility;
+  sm_visibility: Ast_defs.visibility;
   sm_deprecated: string option;
 }
 [@@deriving eq, show]

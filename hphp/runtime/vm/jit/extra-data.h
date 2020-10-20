@@ -18,6 +18,7 @@
 
 #include "hphp/runtime/base/collections.h"
 #include "hphp/runtime/base/typed-value.h"
+#include "hphp/runtime/base/bespoke/layout.h"
 #include "hphp/runtime/vm/bytecode.h"
 #include "hphp/runtime/vm/iter.h"
 #include "hphp/runtime/vm/srckey.h"
@@ -788,13 +789,11 @@ struct StFrameMetaData : IRExtraData {
   std::string show() const {
     return folly::to<std::string>(
       callBCOff, ',',
-      numArgs, ',',
       asyncEagerReturn
     );
   }
 
   Offset callBCOff;
-  uint32_t numArgs;
   bool asyncEagerReturn;
 };
 
@@ -1608,6 +1607,19 @@ struct MethCallerData : IRExtraData {
   bool isCls;
 };
 
+struct BespokeLayoutData : IRExtraData {
+  explicit BespokeLayoutData(const bespoke::Layout* layout)
+    : layout(layout)
+  {}
+
+  std::string show() const {
+    return layout ? folly::sformat("{}", layout->describe())
+                  : "Generic";
+  }
+
+  const bespoke::Layout* layout;
+};
+
 //////////////////////////////////////////////////////////////////////
 
 #define X(op, data)                                                   \
@@ -1820,6 +1832,10 @@ X(FuncHasAttr,                  AttrData);
 X(LdMethCallerName,             MethCallerData);
 X(LdRecDescCached,              RecNameData);
 X(LdRecDescCachedSafe,          RecNameData);
+X(BespokeGet,                   BespokeLayoutData);
+X(BespokeSet,                   BespokeLayoutData);
+X(BespokeAppend,                BespokeLayoutData);
+X(LdUnitPerRequestFilepath,     RDSHandleData);
 
 #undef X
 

@@ -631,9 +631,11 @@ val wrong_extend_kind :
   parent_pos:Pos.t ->
   parent_kind:Ast_defs.class_kind ->
   parent_name:string ->
+  parent_is_enum_class:bool ->
   child_pos:Pos.t ->
   child_kind:Ast_defs.class_kind ->
   child_name:string ->
+  child_is_enum_class:bool ->
   unit
 
 val unsatisfied_req : Pos.t -> string -> Pos.t -> unit
@@ -765,7 +767,7 @@ val missing_constructor : Pos.t -> typing_error_callback -> unit
 
 val enum_constant_type_bad : Pos.t -> Pos.t -> string -> Pos.t list -> unit
 
-val enum_type_bad : Pos.t -> string -> Pos.t list -> unit
+val enum_type_bad : Pos.t -> bool -> string -> Pos.t list -> unit
 
 val enum_type_typedef_nonnull : Pos.t -> unit
 
@@ -1314,7 +1316,7 @@ val invalid_reified_argument :
 val invalid_reified_argument_reifiable :
   Pos.t * string -> Pos.t -> Pos.t -> string -> unit
 
-val new_static_class_reified : Pos.t -> unit
+val new_class_reified : Pos.t -> string -> string option -> unit
 
 val class_get_reified : Pos.t -> unit
 
@@ -1436,3 +1438,10 @@ val enum_inclusion_not_enum : Pos.t -> string -> string -> unit
 val call_coeffect_error : Pos.t -> Pos.t -> string -> Pos.t -> string -> unit
 
 val abstract_function_pointer : string -> string -> Pos.t -> Pos.t -> unit
+
+val unnecessary_attribute :
+  Pos.t ->
+  attr:string ->
+  reason:Pos.t * string ->
+  suggestion:string option ->
+  unit

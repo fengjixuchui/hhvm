@@ -177,27 +177,6 @@ TCA getTranslation(TransArgs args) {
   return mcgen::retranslate(args, getContext(args.sk, args.kind == TransKind::Profile));
 }
 
-TCA getFuncBody(Func* func) {
-  auto tca = func->getFuncBody();
-  if (tca != tc::ustubs().funcBodyHelperThunk) return tca;
-
-  LeaseHolder writer(func, TransKind::Profile);
-  if (!writer) return nullptr;
-
-  tca = func->getFuncBody();
-  if (tca != tc::ustubs().funcBodyHelperThunk) return tca;
-
-  if (func->numRequiredParams() != func->numNonVariadicParams()) {
-    tca = tc::ustubs().resumeHelper;
-  } else {
-    SrcKey sk(func, func->base(), ResumeMode::None);
-    tca = getTranslation(TransArgs{sk});
-  }
-
-  if (tca) func->setFuncBody(tca);
-  return tca;
-}
-
 /*
  * Runtime service handler that patches a jmp to the translation of u:dest from
  * toSmash.
@@ -216,50 +195,29 @@ TCA bindJmp(TCA toSmash, SrcKey destSk, ServiceRequest req, TransFlags trflags,
   return tc::bindJmp(toSmash, destSk, trflags, smashed);
 }
 
-void syncFuncBodyVMRegs(ActRec* fp, void* sp) {
-  auto& regs = vmRegsUnsafe();
-  regs.fp = fp;
-  regs.stack.top() = (TypedValue*)sp;
-  regs.jitReturnAddr = nullptr;
-
-  auto const nargs = fp->numArgs();
-  auto const nparams = fp->func()->numNonVariadicParams();
-  auto const& paramInfo = fp->func()->params();
-
-  auto firstDVI = kInvalidOffset;
-
-  for (auto i = nargs; i < nparams; ++i) {
-    auto const dvi = paramInfo[i].funcletOff;
-    if (dvi != kInvalidOffset) {
-      firstDVI = dvi;
-      break;
-    }
-  }
-  if (firstDVI != kInvalidOffset) {
-    regs.pc = fp->func()->unit()->entry() + firstDVI;
-  } else {
-    regs.pc = fp->func()->entry();
-  }
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 
 }
 
-TCA funcBodyHelper(ActRec* fp) {
-  assert_native_stack_aligned();
-  void* const sp = reinterpret_cast<TypedValue*>(fp) - fp->func()->numSlotsInFrame();
-  syncFuncBodyVMRegs(fp, sp);
-  tl_regState = VMRegState::CLEAN;
+TCA getFuncBody(const Func* func) {
+  auto tca = func->getFuncBody();
+  if (tca != nullptr) return tca;
 
-  auto const func = const_cast<Func*>(fp->func());
-  auto tca = getFuncBody(func);
-  if (!tca) {
+  LeaseHolder writer(func, TransKind::Profile);
+  if (!writer) return tc::ustubs().resumeHelper;
+
+  tca = func->getFuncBody();
+  if (tca != nullptr) return tca;
+
+  if (func->numRequiredParams() != func->numNonVariadicParams()) {
     tca = tc::ustubs().resumeHelper;
+  } else {
+    SrcKey sk(func, func->base(), ResumeMode::None);
+    tca = getTranslation(TransArgs{sk});
   }
 
-  tl_regState = VMRegState::DIRTY;
-  return tca;
+  if (tca) const_cast<Func*>(func)->setFuncBody(tca);
+  return tca != nullptr ? tca : tc::ustubs().resumeHelper;
 }
 
 TCA handleServiceRequest(ReqInfo& info) noexcept {
@@ -315,17 +273,27 @@ TCA handleServiceRequest(ReqInfo& info) noexcept {
       break;
     }
 
-    case REQ_POST_INTERP_RET: {
+    case REQ_POST_INTERP_RET:
+    case REQ_POST_INTERP_RET_GENITER: {
       // This is only responsible for the control-flow aspect of the Ret:
       // getting to the destination's translation, if any.
-      auto ar = info.args[0].ar;
+      auto const ar = info.args[0].ar;
       auto const caller = info.args[1].ar;
+      UNUSED auto const func = ar->func();
+      auto const callOff = ar->callOffset();
+      auto const isAER = ar->isAsyncEagerReturn();
       assertx(caller == vmfp());
       auto const destFunc = caller->func();
       // Set PC so logging code in getTranslation doesn't get confused.
-      vmpc() = skipCall(
-        destFunc->at(destFunc->base() + ar->callOffset()));
-      if (ar->isAsyncEagerReturn()) {
+      vmpc() = skipCall(destFunc->at(destFunc->base() + callOff));
+      if (info.req == REQ_POST_INTERP_RET) {
+        TypedValue rv;
+        rv.m_data = info.args[2].tvData;
+        rv.m_type = info.args[3].tvType;
+        rv.m_aux = info.args[3].tvAux;
+        *ar->retSlot() = rv;
+      }
+      if (isAER) {
         // When returning to the interpreted FCall, the execution continues at
         // the next opcode, not honoring the request for async eager return.
         // If the callee returned eagerly, we need to wrap the result into
@@ -338,9 +306,10 @@ TCA handleServiceRequest(ReqInfo& info) noexcept {
         }
       }
       assertx(caller == vmfp());
-      TRACE(3, "REQ_POST_INTERP_RET: from %s to %s\n",
-            ar->func()->fullName()->data(),
-            destFunc->fullName()->data());
+      FTRACE(3, "REQ_POST_INTERP_RET{}: from {} to {}\n",
+             info.req == REQ_POST_INTERP_RET ? "" : "_GENITER",
+             func->fullName()->data(),
+             destFunc->fullName()->data());
       sk = liveSK();
       start = getTranslation(TransArgs{sk});
       break;

@@ -1933,6 +1933,7 @@ let rpc_lock = Lwt_mutex.create ()
 let rpc
     (server_conn : server_conn)
     (ref_unblocked_time : float ref)
+    ~(desc : string)
     (command : 'a ServerCommandTypes.t) : 'a Lwt.t =
   let%lwt result =
     Lwt_mutex.with_lock rpc_lock (fun () ->
@@ -1949,6 +1950,7 @@ let rpc
             (server_conn.ic, server_conn.oc)
             ()
             callback
+            ~desc
             command
         in
         let end_time = Unix.gettimeofday () in
@@ -1978,9 +1980,9 @@ let rpc
   in
   Lwt.return result
 
-let rpc_with_retry server_conn ref_unblocked_time command =
+let rpc_with_retry server_conn ref_unblocked_time ~desc command =
   ServerCommandTypes.Done_or_retry.call ~f:(fun () ->
-      rpc server_conn ref_unblocked_time command)
+      rpc server_conn ref_unblocked_time ~desc command)
 
 (** A thin wrapper around ClientIdeMessage which turns errors into exceptions *)
 let ide_rpc
@@ -2024,9 +2026,12 @@ let do_shutdown
           rpc
             menv.conn
             ref_unblocked_time
+            ~desc:"shutdown"
             (ServerCommandTypes.UNSUBSCRIBE_DIAGNOSTIC 0)
         in
-        let%lwt () = rpc menv.conn (ref 0.0) ServerCommandTypes.DISCONNECT in
+        let%lwt () =
+          rpc menv.conn (ref 0.0) ~desc:"shutdown" ServerCommandTypes.DISCONNECT
+        in
         Lwt.return_unit)
     | In_init _ienv ->
       (* In In_init state, even though we have a 'conn', it's still waiting for *)
@@ -2128,54 +2133,13 @@ let do_rageFB (state : state) : RageFB.result Lwt.t =
   in
   let%lwt current_version_and_switch = read_hhconfig_version_and_switch () in
 
-  (* spawn hh rage --rageid <rageid>, and write <rageid> in our own rage output *)
-  let rageid = Random_id.short_string () in
-  let devnull = Unix.openfile Sys_utils.null_path [Unix.O_RDWR] 0 in
-  let rage =
-    try
-      let (_pid : int) =
-        Unix.create_process
-          (Exec_command.to_string Exec_command.Hh)
-          [|
-            Exec_command.to_string Exec_command.Hh;
-            "rage";
-            "--rageid";
-            rageid;
-            "--from";
-            !from;
-            "--desc";
-            "lsp_rage";
-            get_root_exn () |> Path.to_string;
-          |]
-          devnull
-          devnull
-          devnull
-      in
-      Printf.sprintf
-        ( "Detailed hack information can't be included here for technical reasons.\n"
-        ^^ "Please look it up by rageid. (This will take several minutes to be ready.)\n"
-        ^^ "rageid: %s\nlook up rageid: %s\n" )
-        rageid
-        (HackEventLogger.Rage.get_telemetry_url rageid)
-    with e -> Exception.wrap e |> Exception.to_string
-  in
-
-  (* We kicked off a potentially long-running `hh rage` command. What happens if we ourselves
-  die before it has finished? Will it be allowed to finish?
-  Unix behavior is that the worst that can happen is that the rage process gets reparented onto
-  parent pid 1, and its stdin/out/err get closed, and it gets sent SIGHUP. The behavior of
-  hh rage when it receives the `--rageid` argument is to ignore all these things. Hence it
-  will run to completion. *)
-
   (* that's it! *)
   let data =
     Printf.sprintf
       ( "%s\n\n"
-      ^^ "%s\n\n"
       ^^ "version previously read from .hhconfig and switch: %s\n"
       ^^ "version in .hhconfig and switch: %s\n\n"
       ^^ "clientLsp belief of hh_server_state:\n%s\n" )
-      rage
       (state_to_rage state)
       !hhconfig_version_and_switch
       current_version_and_switch
@@ -2192,7 +2156,7 @@ let do_toggleTypeCoverageFB
     ServerCommandTypes.DYNAMIC_VIEW params.ToggleTypeCoverageFB.toggle
   in
   cached_toggle_state := params.ToggleTypeCoverageFB.toggle;
-  rpc conn ref_unblocked_time command
+  rpc conn ref_unblocked_time ~desc:"coverage" command
 
 let do_didOpen
     (conn : server_conn)
@@ -2203,7 +2167,7 @@ let do_didOpen
   let filename = lsp_uri_to_path params.textDocument.uri in
   let text = params.textDocument.text in
   let command = ServerCommandTypes.OPEN_FILE (filename, text) in
-  rpc conn ref_unblocked_time command
+  rpc conn ref_unblocked_time ~desc:"open" command
 
 let do_didClose
     (conn : server_conn)
@@ -2213,7 +2177,7 @@ let do_didClose
   let open TextDocumentIdentifier in
   let filename = lsp_uri_to_path params.textDocument.uri in
   let command = ServerCommandTypes.CLOSE_FILE filename in
-  rpc conn ref_unblocked_time command
+  rpc conn ref_unblocked_time ~desc:"close" command
 
 let do_didChange
     (conn : server_conn)
@@ -2231,7 +2195,7 @@ let do_didChange
   let filename = lsp_uri_to_path params.textDocument.uri in
   let changes = List.map params.contentChanges ~f:lsp_change_to_ide in
   let command = ServerCommandTypes.EDIT_FILE (filename, changes) in
-  rpc conn ref_unblocked_time command
+  rpc conn ref_unblocked_time ~desc:"change" command
 
 let do_hover_common (infos : HoverService.hover_info list) : Hover.result =
   let contents =
@@ -2266,7 +2230,7 @@ let do_hover
     (params : Hover.params) : Hover.result Lwt.t =
   let (file, line, column) = lsp_file_position_to_hack params in
   let command = ServerCommandTypes.IDE_HOVER (file, line, column) in
-  let%lwt infos = rpc conn ref_unblocked_time command in
+  let%lwt infos = rpc conn ref_unblocked_time ~desc:"hover" command in
   Lwt.return (do_hover_common infos)
 
 let do_hover_local
@@ -2295,7 +2259,7 @@ let do_typeDefinition
   let command =
     ServerCommandTypes.(IDENTIFY_TYPES (LabelledFileName file, line, column))
   in
-  let%lwt results = rpc conn ref_unblocked_time command in
+  let%lwt results = rpc conn ref_unblocked_time ~desc:"go-to-typedef" command in
   Lwt.return
     (List.map results ~f:(fun nast_sid ->
          hack_pos_definition_to_lsp_identifier_location
@@ -2347,7 +2311,7 @@ let do_definition
   let command =
     ServerCommandTypes.GO_TO_DEFINITION (labelled_file, line, column)
   in
-  let%lwt results = rpc conn ref_unblocked_time command in
+  let%lwt results = rpc conn ref_unblocked_time ~desc:"go-to-def" command in
   Lwt.return
     (List.map results ~f:(fun (_occurrence, definition) ->
          hack_symbol_definition_to_lsp_identifier_location
@@ -2573,7 +2537,7 @@ let do_completion_ffp
     lsp_uri_to_path params.loc.TextDocumentPositionParams.textDocument.uri
   in
   let command = ServerCommandTypes.IDE_FFP_AUTOCOMPLETE (filename, pos) in
-  let%lwt result = rpc conn ref_unblocked_time command in
+  let%lwt result = rpc conn ref_unblocked_time ~desc:"completion" command in
   make_ide_completion_response result filename
 
 let do_completion_legacy
@@ -2596,7 +2560,7 @@ let do_completion_legacy
   let command =
     ServerCommandTypes.IDE_AUTOCOMPLETE (filename, pos, is_manually_invoked)
   in
-  let%lwt result = rpc conn ref_unblocked_time command in
+  let%lwt result = rpc conn ref_unblocked_time ~desc:"completion" command in
   make_ide_completion_response result filename
 
 let do_completion_local
@@ -2690,7 +2654,9 @@ let do_completionItemResolve
             ServerCommandTypes.DOCBLOCK_FOR_SYMBOL
               (fullname, resolve_ranking_source kind ranking_source)
           in
-          let%lwt raw_docblock = rpc conn ref_unblocked_time command in
+          let%lwt raw_docblock =
+            rpc conn ref_unblocked_time ~desc:"completion" command
+          in
           Lwt.return (docblock_with_ranking_detail raw_docblock ranking_detail)
         ) else
           (* Okay let's get a docblock for this specific location *)
@@ -2702,7 +2668,9 @@ let do_completionItemResolve
                 base_class,
                 resolve_ranking_source kind ranking_source )
           in
-          let%lwt raw_docblock = rpc conn ref_unblocked_time command in
+          let%lwt raw_docblock =
+            rpc conn ref_unblocked_time ~desc:"completion" command
+          in
           Lwt.return (docblock_with_ranking_detail raw_docblock ranking_detail)
       (* If that failed, fetch docblock using just the symbol name *)
     with _ ->
@@ -2715,7 +2683,9 @@ let do_completionItemResolve
         ServerCommandTypes.DOCBLOCK_FOR_SYMBOL
           (symbolname, resolve_ranking_source kind ranking_source)
       in
-      let%lwt raw_docblock = rpc conn ref_unblocked_time command in
+      let%lwt raw_docblock =
+        rpc conn ref_unblocked_time ~desc:"completion" command
+      in
       Lwt.return raw_docblock
   in
   (* Convert to markdown and return *)
@@ -2855,7 +2825,7 @@ let do_workspaceSymbol
   let command =
     ServerCommandTypes.SEARCH (params.WorkspaceSymbol.query, query_type)
   in
-  let%lwt results = rpc conn ref_unblocked_time command in
+  let%lwt results = rpc conn ref_unblocked_time ~desc:"find-symbol" command in
   Lwt.return (List.map results ~f:hack_symbol_to_lsp)
 
 let do_workspaceSymbol_local
@@ -2930,7 +2900,7 @@ let do_documentSymbol
   let open TextDocumentIdentifier in
   let filename = lsp_uri_to_path params.textDocument.uri in
   let command = ServerCommandTypes.OUTLINE filename in
-  let%lwt outline = rpc conn ref_unblocked_time command in
+  let%lwt outline = rpc conn ref_unblocked_time ~desc:"outline" command in
   let converted =
     hack_symbol_tree_to_lsp ~filename ~accu:[] ~container_name:None outline
   in
@@ -2984,7 +2954,9 @@ let do_findReferences
   let command =
     ServerCommandTypes.IDE_FIND_REFS (labelled_file, line, column, include_defs)
   in
-  let%lwt results = rpc_with_retry conn ref_unblocked_time command in
+  let%lwt results =
+    rpc_with_retry conn ref_unblocked_time ~desc:"find-refs" command
+  in
   (* TODO: respect params.context.include_declaration *)
   match results with
   | None -> Lwt.return []
@@ -3007,7 +2979,9 @@ let do_goToImplementation
   let command =
     ServerCommandTypes.IDE_GO_TO_IMPL (labelled_file, line, column)
   in
-  let%lwt results = rpc_with_retry conn ref_unblocked_time command in
+  let%lwt results =
+    rpc_with_retry conn ref_unblocked_time ~desc:"go-to-impl" command
+  in
   match results with
   | None -> Lwt.return []
   | Some (_name, positions) ->
@@ -3026,7 +3000,9 @@ let do_documentHighlight
   let command =
     ServerCommandTypes.(IDE_HIGHLIGHT_REFS (file, FileName file, line, column))
   in
-  let%lwt results = rpc conn ref_unblocked_time command in
+  let%lwt results =
+    rpc conn ref_unblocked_time ~desc:"highlight-references" command
+  in
   Lwt.return (List.map results ~f:hack_range_to_lsp_highlight)
 
 (* Serverless IDE implementation of highlight *)
@@ -3079,7 +3055,7 @@ let do_typeCoverageFB
         (filename, ServerCommandTypes.FileName filename)
     in
     let%lwt (results, counts) : Coverage_level_defs.result =
-      rpc conn ref_unblocked_time command
+      rpc conn ref_unblocked_time ~desc:"coverage" command
     in
     let formatted =
       format_typeCoverage_result ~equal:String.equal results counts
@@ -3220,7 +3196,7 @@ let do_signatureHelp
     (params : SignatureHelp.params) : SignatureHelp.result Lwt.t =
   let (file, line, column) = lsp_file_position_to_hack params in
   let command = ServerCommandTypes.IDE_SIGNATURE_HELP (file, line, column) in
-  rpc conn ref_unblocked_time command
+  rpc conn ref_unblocked_time ~desc:"tooltip" command
 
 (* Serverless IDE version of signature help *)
 let do_signatureHelp_local
@@ -3293,7 +3269,9 @@ let do_documentRename
     ServerCommandTypes.IDE_REFACTOR
       { ServerCommandTypes.Ide_refactor_type.filename; line; char; new_name }
   in
-  let%lwt patches = rpc_with_retry conn ref_unblocked_time command in
+  let%lwt patches =
+    rpc_with_retry conn ref_unblocked_time ~desc:"rename" command
+  in
   let patches =
     match patches with
     | Ok patches -> patches
@@ -4560,7 +4538,11 @@ let connect_after_hello (server_conn : server_conn) (state : state) : unit Lwt.t
       (* tell server we want diagnostics *)
       log "Diag_subscribe: clientLsp subscribing diagnostic 0";
       let%lwt () =
-        rpc server_conn ignore (ServerCommandTypes.SUBSCRIBE_DIAGNOSTIC 0)
+        rpc
+          server_conn
+          ignore
+          ~desc:"connect"
+          (ServerCommandTypes.SUBSCRIBE_DIAGNOSTIC 0)
       in
       (* Extract the list of file changes we're tracking *)
       let editor_open_files =
@@ -4582,7 +4564,7 @@ let connect_after_hello (server_conn : server_conn) (state : state) : unit Lwt.t
               ServerCommandTypes.OPEN_FILE
                 (filename, textDocument.TextDocumentItem.text)
             in
-            rpc server_conn float_unblocked_time command)
+            rpc server_conn float_unblocked_time ~desc:"open" command)
           editor_open_files
       in
       Lwt.return_unit
@@ -4679,7 +4661,11 @@ let handle_tick
           (* handle command-line requests.                                          *)
           state := Main_loop { menv with needs_idle = false };
           let%lwt () =
-            rpc menv.conn ref_unblocked_time ServerCommandTypes.IDE_IDLE
+            rpc
+              menv.conn
+              ref_unblocked_time
+              ~desc:"idle"
+              ServerCommandTypes.IDE_IDLE
           in
           Lwt.return_unit
         end else

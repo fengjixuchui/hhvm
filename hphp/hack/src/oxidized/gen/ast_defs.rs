@@ -3,12 +3,13 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<00b57534892e019b3ef33251b59a5459>>
+// @generated SignedSource<<bd3ee5f9d50be7cafce640d591eb7a2a>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
 
 use arena_trait::TrivialDrop;
+use no_pos_hash::NoPosHash;
 use ocamlrep_derive::FromOcamlRep;
 use ocamlrep_derive::FromOcamlRepIn;
 use ocamlrep_derive::ToOcamlRep;
@@ -29,6 +30,7 @@ pub use pos::Pos;
     Eq,
     FromOcamlRep,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -50,6 +52,7 @@ pub type PositionedByteString = (Pos, bstr::BString);
     Eq,
     FromOcamlRep,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -71,6 +74,7 @@ pub enum ShapeFieldName {
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -93,6 +97,7 @@ impl TrivialDrop for Variance {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -117,6 +122,7 @@ pub type Reified = bool;
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -141,6 +147,7 @@ impl TrivialDrop for ClassKind {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -161,6 +168,7 @@ impl TrivialDrop for ParamKind {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -182,6 +190,7 @@ impl TrivialDrop for OgNullFlavor {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -204,6 +213,7 @@ impl TrivialDrop for FunKind {}
     Eq,
     FromOcamlRep,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -248,6 +258,7 @@ pub enum Bop {
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -266,3 +277,26 @@ pub enum Uop {
     Usilence,
 }
 impl TrivialDrop for Uop {}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    FromOcamlRep,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub enum Visibility {
+    Private,
+    Public,
+    Protected,
+}
+impl TrivialDrop for Visibility {}

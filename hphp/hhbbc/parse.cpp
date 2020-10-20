@@ -690,6 +690,8 @@ std::unique_ptr<php::Func> parse_func(ParseUnitState& puState,
     return false;
   }();
 
+  for (auto& rule : fe.coeffectRules) ret->coeffectRules.push_back(rule);
+
   ret->sampleDynamicCalls = [&] {
     if (!(fe.attrs & AttrDynamicallyCallable)) return false;
 
@@ -909,6 +911,9 @@ std::unique_ptr<php::Class> parse_class(ParseUnitState& puState,
 
   for (auto& iface : pce.interfaces()) {
     ret->interfaceNames.push_back(iface);
+  }
+  for (auto& enumInclude : pce.enumIncludes()) {
+    ret->includedEnums.push_back(enumInclude);
   }
 
   copy(ret->usedTraitNames,  pce.usedTraits());

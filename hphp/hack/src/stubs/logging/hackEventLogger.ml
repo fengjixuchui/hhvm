@@ -203,6 +203,8 @@ let client_connect_once _ = ()
 
 let client_connect_once_busy _ = ()
 
+let client_connect_autostart () = ()
+
 let check_response _ = ()
 
 let got_client_channels _ = ()
@@ -289,8 +291,7 @@ let check_mergebase_failed _ _ = ()
 
 let check_mergebase_success _ = ()
 
-let type_at_pos_batch
-    ~start_time:_ ~num_files:_ ~num_positions:_ ~experimental:_ ~results:_ =
+let type_at_pos_batch ~start_time:_ ~num_files:_ ~num_positions:_ ~results:_ =
   ()
 
 let with_id ~stage:_ _ f = f ()
@@ -305,9 +306,9 @@ let state_loader_dirty_files _ = ()
 
 let changed_while_parsing_end _ = ()
 
-let save_decls_end _ = ()
+let save_decls_end _ _ = ()
 
-let save_decls_failure _ _ = ()
+let save_decls_failure _ = ()
 
 let load_decls_end _ = ()
 

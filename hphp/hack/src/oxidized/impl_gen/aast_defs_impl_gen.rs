@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<1df3c9291e742bf388bb4873c8c9c85c>>
+// @generated SignedSource<<1667714d87f446debdeb00089bccb4d1>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
@@ -972,35 +972,6 @@ impl VcKind {
         }
     }
 }
-impl Visibility {
-    pub fn mk_private() -> Self {
-        Visibility::Private
-    }
-    pub fn mk_public() -> Self {
-        Visibility::Public
-    }
-    pub fn mk_protected() -> Self {
-        Visibility::Protected
-    }
-    pub fn is_private(&self) -> bool {
-        match self {
-            Visibility::Private => true,
-            _ => false,
-        }
-    }
-    pub fn is_public(&self) -> bool {
-        match self {
-            Visibility::Public => true,
-            _ => false,
-        }
-    }
-    pub fn is_protected(&self) -> bool {
-        match self {
-            Visibility::Protected => true,
-            _ => false,
-        }
-    }
-}
 impl UseAsVisibility {
     pub fn mk_use_as_public() -> Self {
         UseAsVisibility::UseAsPublic
@@ -1055,6 +1026,35 @@ impl TypedefVisibility {
     pub fn is_opaque(&self) -> bool {
         match self {
             TypedefVisibility::Opaque => true,
+            _ => false,
+        }
+    }
+}
+impl ReifyKind {
+    pub fn mk_erased() -> Self {
+        ReifyKind::Erased
+    }
+    pub fn mk_soft_reified() -> Self {
+        ReifyKind::SoftReified
+    }
+    pub fn mk_reified() -> Self {
+        ReifyKind::Reified
+    }
+    pub fn is_erased(&self) -> bool {
+        match self {
+            ReifyKind::Erased => true,
+            _ => false,
+        }
+    }
+    pub fn is_soft_reified(&self) -> bool {
+        match self {
+            ReifyKind::SoftReified => true,
+            _ => false,
+        }
+    }
+    pub fn is_reified(&self) -> bool {
+        match self {
+            ReifyKind::Reified => true,
             _ => false,
         }
     }

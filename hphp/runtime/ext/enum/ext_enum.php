@@ -75,4 +75,26 @@ abstract class BuiltinEnum<+T> {
 
 type enumname<T> = classname<BuiltinEnum<T>>;
 
+/**
+ * BuiltinEnumClass contains the utility methods provided by enum classes.
+ * Under the hood, an enum class Foo : Bar will extend
+ * BuiltinEnumClass<HH\Elt<this, Bar>>.
+ *
+ * HHVM provides a native implementation for this class. The PHP class
+ * definition below is not actually used at run time; it is simply
+ * provided for the typechecker and for developer reference.
+ */
+<<__EnumClass>>
+abstract class BuiltinEnumClass<+T> {
+  /**
+   * Get the values of the public consts defined on this class,
+   * indexed by the string name of those consts.
+   *
+   * @return array ('CONST_NAME' => $value, ....)
+   */
+  <<__Native, __Pure>>
+  final public static function getValues(): darray<string, T>;
+}
+
+
 }

@@ -19,11 +19,10 @@
  // This module contains smart constructors implementation that can be used to
  // build AST.
 
-
 use parser_core_types::{
   lexable_token::LexableToken,
   syntax_kind::SyntaxKind,
-  token_kind::TokenKind,
+  token_factory::TokenFactory,
 };
 use crate::SmartConstructors;
 
@@ -39,9 +38,10 @@ impl<S> WithKind<S> {
 }
 
 impl<S, State> SmartConstructors for WithKind<S>
-where S: SmartConstructors<State = State> {
+where S: SmartConstructors<State = State>,
+{
+    type TF = S::TF;
     type State = State;
-    type Token = S::Token;
     type R = (SyntaxKind, S::R);
 
     fn state_mut(&mut self) -> &mut State {
@@ -52,18 +52,12 @@ where S: SmartConstructors<State = State> {
       self.s.into_state()
     }
 
-    fn create_token(
-        &mut self,
-        kind: TokenKind,
-        offset: usize,
-        width: usize,
-        leading: <Self::Token as LexableToken>::Trivia,
-        trailing: <Self::Token as LexableToken>::Trivia,
-    ) -> Self::Token {
-        self.s.create_token(kind, offset, width, leading, trailing)
+    fn token_factory(&mut self) -> &mut Self::TF {
+        self.s.token_factory()
     }
 
-    fn make_token(&mut self, token: Self::Token) -> Self::R {
+
+    fn make_token(&mut self, token: <Self::TF as TokenFactory>::Token) -> Self::R {
         compose(SyntaxKind::Token(token.kind()), self.s.make_token(token))
     }
 
@@ -115,6 +109,12 @@ where S: SmartConstructors<State = State> {
     }
     fn make_enumerator(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R {
         compose(SyntaxKind::Enumerator, self.s.make_enumerator(arg0.1, arg1.1, arg2.1, arg3.1))
+    }
+    fn make_enum_class_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R, arg9 : Self::R, arg10 : Self::R) -> Self::R {
+        compose(SyntaxKind::EnumClassDeclaration, self.s.make_enum_class_declaration(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1, arg6.1, arg7.1, arg8.1, arg9.1, arg10.1))
+    }
+    fn make_enum_class_enumerator(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R) -> Self::R {
+        compose(SyntaxKind::EnumClassEnumerator, self.s.make_enum_class_enumerator(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1, arg6.1, arg7.1))
     }
     fn make_record_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R) -> Self::R {
         compose(SyntaxKind::RecordDeclaration, self.s.make_record_declaration(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1, arg6.1, arg7.1, arg8.1))

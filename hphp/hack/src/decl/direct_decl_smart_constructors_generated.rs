@@ -19,18 +19,18 @@
 use flatten_smart_constructors::*;
 use smart_constructors::SmartConstructors;
 use parser_core_types::compact_token::CompactToken;
-use parser_core_types::compact_trivia::CompactTrivia;
-use parser_core_types::token_kind::TokenKind;
+use parser_core_types::token_factory::SimpleTokenFactoryImpl;
 
 use crate::{State, Node};
 
 #[derive(Clone)]
 pub struct DirectDeclSmartConstructors<'src> {
     pub state: State<'src>,
+    pub token_factory: SimpleTokenFactoryImpl<CompactToken>,
 }
 impl<'src> SmartConstructors for DirectDeclSmartConstructors<'src> {
     type State = State<'src>;
-    type Token = CompactToken;
+    type TF = SimpleTokenFactoryImpl<CompactToken>;
     type R = Node<'src>;
 
     fn state_mut(&mut self) -> &mut State<'src> {
@@ -41,22 +41,15 @@ impl<'src> SmartConstructors for DirectDeclSmartConstructors<'src> {
       self.state
     }
 
-    fn create_token(
-        &mut self,
-        kind: TokenKind,
-        offset: usize,
-        width: usize,
-        leading: CompactTrivia,
-        trailing: CompactTrivia,
-    ) -> Self::Token {
-        CompactToken::new(kind, offset, width, leading, trailing)
+    fn token_factory(&mut self) -> &mut Self::TF {
+        &mut self.token_factory
     }
 
     fn make_missing(&mut self, offset: usize) -> Self::R {
         <Self as FlattenSmartConstructors<'src, State<'src>>>::make_missing(self, offset)
     }
 
-    fn make_token(&mut self, token: Self::Token) -> Self::R {
+    fn make_token(&mut self, token: CompactToken) -> Self::R {
         <Self as FlattenSmartConstructors<'src, State<'src>>>::make_token(self, token)
     }
 
@@ -110,6 +103,14 @@ impl<'src> SmartConstructors for DirectDeclSmartConstructors<'src> {
 
     fn make_enumerator(&mut self, name: Self::R, equal: Self::R, value: Self::R, semicolon: Self::R) -> Self::R {
         <Self as FlattenSmartConstructors<'src, State<'src>>>::make_enumerator(self, name, equal, value, semicolon)
+    }
+
+    fn make_enum_class_declaration(&mut self, attribute_spec: Self::R, enum_keyword: Self::R, class_keyword: Self::R, name: Self::R, colon: Self::R, base: Self::R, extends: Self::R, extends_list: Self::R, left_brace: Self::R, elements: Self::R, right_brace: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_enum_class_declaration(self, attribute_spec, enum_keyword, class_keyword, name, colon, base, extends, extends_list, left_brace, elements, right_brace)
+    }
+
+    fn make_enum_class_enumerator(&mut self, name: Self::R, left_angle: Self::R, type_: Self::R, right_angle: Self::R, left_paren: Self::R, initial_value: Self::R, right_paren: Self::R, semicolon: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_enum_class_enumerator(self, name, left_angle, type_, right_angle, left_paren, initial_value, right_paren, semicolon)
     }
 
     fn make_record_declaration(&mut self, attribute_spec: Self::R, modifier: Self::R, keyword: Self::R, name: Self::R, extends_keyword: Self::R, extends_opt: Self::R, left_brace: Self::R, fields: Self::R, right_brace: Self::R) -> Self::R {
@@ -272,8 +273,8 @@ impl<'src> SmartConstructors for DirectDeclSmartConstructors<'src> {
         <Self as FlattenSmartConstructors<'src, State<'src>>>::make_expression_statement(self, expression, semicolon)
     }
 
-    fn make_markup_section(&mut self, text: Self::R, suffix: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_markup_section(self, text, suffix)
+    fn make_markup_section(&mut self, hashbang: Self::R, suffix: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_markup_section(self, hashbang, suffix)
     }
 
     fn make_markup_suffix(&mut self, less_than_question: Self::R, name: Self::R) -> Self::R {

@@ -70,9 +70,9 @@ and ('ex, 'fb, 'en, 'hi) stmt_ =
   | While of ('ex, 'fb, 'en, 'hi) expr * ('ex, 'fb, 'en, 'hi) block
   | Using of ('ex, 'fb, 'en, 'hi) using_stmt
   | For of
-      ('ex, 'fb, 'en, 'hi) expr
-      * ('ex, 'fb, 'en, 'hi) expr
-      * ('ex, 'fb, 'en, 'hi) expr
+      ('ex, 'fb, 'en, 'hi) expr list
+      * ('ex, 'fb, 'en, 'hi) expr option
+      * ('ex, 'fb, 'en, 'hi) expr list
       * ('ex, 'fb, 'en, 'hi) block
   | Switch of ('ex, 'fb, 'en, 'hi) expr * ('ex, 'fb, 'en, 'hi) case list
   (* Dropped the Pos.t option *)
@@ -283,7 +283,7 @@ and ('ex, 'fb, 'en, 'hi) fun_ = {
   f_ret: 'hi type_hint;
   f_name: sid;
   f_tparams: ('ex, 'fb, 'en, 'hi) tparam list;
-  f_where_constraints: where_constraint list;
+  f_where_constraints: where_constraint_hint list;
   f_variadic: ('ex, 'fb, 'en, 'hi) fun_variadicity;
   f_params: ('ex, 'fb, 'en, 'hi) fun_param list;
   f_cap: 'hi type_hint;
@@ -378,7 +378,7 @@ and ('ex, 'fb, 'en, 'hi) class_ = {
   c_xhp_category: (pos * pstring list) option;
   c_reqs: (class_hint * is_extends) list;
   c_implements: class_hint list;
-  c_where_constraints: where_constraint list;
+  c_where_constraints: where_constraint_hint list;
   c_consts: ('ex, 'fb, 'en, 'hi) class_const list;
   c_typeconsts: ('ex, 'fb, 'en, 'hi) class_typeconst list;
   c_vars: ('ex, 'fb, 'en, 'hi) class_var list;
@@ -481,7 +481,7 @@ and ('ex, 'fb, 'en, 'hi) method_ = {
   m_visibility: visibility;
   m_name: sid;
   m_tparams: ('ex, 'fb, 'en, 'hi) tparam list;
-  m_where_constraints: where_constraint list;
+  m_where_constraints: where_constraint_hint list;
   m_variadic: ('ex, 'fb, 'en, 'hi) fun_variadicity;
   m_params: ('ex, 'fb, 'en, 'hi) fun_param list;
   m_cap: 'hi type_hint;
@@ -604,11 +604,6 @@ and ns_kind =
   | NSFun
   | NSConst
 
-and reify_kind =
-  | Erased
-  | SoftReified
-  | Reified
-
 and doc_comment = (Doc_comment.t[@visitors.opaque])
 
 let is_erased = function
@@ -694,17 +689,20 @@ let get_break_continue_level level_opt =
   | _ -> Level_non_literal
   | exception _ -> Level_non_literal
 
+(* extract the hint from a type annotation *)
+let hint_of_type_hint : 'hi. 'hi type_hint -> type_hint_ = snd
+
+(* extract the type from a type annotation *)
+let type_of_type_hint : 'hi. 'hi type_hint -> 'hi = fst
+
 (* map a function over the second part of a type annotation *)
 let type_hint_option_map ~f ta =
   let mapped_hint =
-    match snd ta with
+    match hint_of_type_hint ta with
     | Some hint -> Some (f hint)
     | None -> None
   in
-  (fst ta, mapped_hint)
-
-(* extract an hint from a type annotation *)
-let hint_of_type_hint = snd
+  (type_of_type_hint ta, mapped_hint)
 
 (* helper function to access the list of enums included by an enum *)
 let enum_includes_map ?(default = []) ~f includes =

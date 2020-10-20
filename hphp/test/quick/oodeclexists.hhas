@@ -3,7 +3,6 @@
 .function ["__EntryPoint"("""y:0:{}""")] main() {
   NullUninit
   NullUninit
-  NullUninit
   String "abc"
   String "asdfasdf"
   OODeclExists Interface

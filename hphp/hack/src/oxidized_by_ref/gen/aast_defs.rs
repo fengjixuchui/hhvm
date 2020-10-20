@@ -3,12 +3,13 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<b8e4cf87a5906712a525612777fbc1ba>>
+// @generated SignedSource<<955cbe59363c1ab8fdb1b9f731aec3d3>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
 
 use arena_trait::TrivialDrop;
+use no_pos_hash::NoPosHash;
 use ocamlrep_derive::FromOcamlRepIn;
 use ocamlrep_derive::ToOcamlRep;
 use serde::Serialize;
@@ -25,12 +26,15 @@ pub use ast_defs::Pstring;
 pub use local_id::LocalId;
 pub use shape_map::ShapeMap;
 
+pub use oxidized::aast_defs::Visibility;
+
 #[derive(
     Clone,
     Debug,
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -57,6 +61,7 @@ pub use oxidized::aast_defs::ImportFlavor;
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -79,6 +84,7 @@ pub use oxidized::aast_defs::XhpChildOp;
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -98,6 +104,7 @@ pub type VariadicHint<'a> = Option<&'a Hint<'a>>;
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -123,6 +130,7 @@ impl<'a> TrivialDrop for HintFun<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -182,6 +190,7 @@ impl<'a> TrivialDrop for Hint_<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -211,6 +220,7 @@ impl<'a> TrivialDrop for Tprim<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -230,6 +240,7 @@ impl<'a> TrivialDrop for ShapeFieldInfo<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -246,8 +257,6 @@ pub use oxidized::aast_defs::KvcKind;
 
 pub use oxidized::aast_defs::VcKind;
 
-pub use oxidized::aast_defs::Visibility;
-
 pub use oxidized::aast_defs::UseAsVisibility;
 
 pub use oxidized::aast_defs::TypedefVisibility;
@@ -258,6 +267,7 @@ pub use oxidized::aast_defs::TypedefVisibility;
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -268,6 +278,7 @@ pub struct Enum_<'a> {
     pub base: &'a Hint<'a>,
     pub constraint: Option<&'a Hint<'a>>,
     pub includes: &'a [&'a Hint<'a>],
+    pub enum_class: bool,
 }
 impl<'a> TrivialDrop for Enum_<'a> {}
 
@@ -277,15 +288,18 @@ impl<'a> TrivialDrop for Enum_<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
     Serialize,
     ToOcamlRep
 )]
-pub struct WhereConstraint<'a>(
+pub struct WhereConstraintHint<'a>(
     pub &'a Hint<'a>,
     pub oxidized::ast_defs::ConstraintKind,
     pub &'a Hint<'a>,
 );
-impl<'a> TrivialDrop for WhereConstraint<'a> {}
+impl<'a> TrivialDrop for WhereConstraintHint<'a> {}
+
+pub use oxidized::aast_defs::ReifyKind;

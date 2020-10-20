@@ -479,7 +479,7 @@ int64_t getStackPopped(PC pc) {
     case Op::FCallObjMethodD: {
       auto const fca = getImm(pc, 0).u_FCA;
       auto const nin = countOperands(getInstrInfo(op).in);
-      return nin + fca.numInputs() + kNumActRecCells - 1 + fca.numRets;
+      return nin + fca.numInputs() + (kNumActRecCells - 1) + fca.numRets;
     }
 
     case Op::QueryM:
@@ -497,7 +497,7 @@ int64_t getStackPopped(PC pc) {
       return getImm(pc, 0).u_IVA + getImm(pc, 2).u_IVA;
 
     case Op::PopFrame:
-      return getImm(pc, 0).u_IVA + 3;
+      return getImm(pc, 0).u_IVA + kNumActRecCells;
 
     case Op::SetM:
     case Op::SetOpM:
@@ -711,7 +711,7 @@ InputInfoVec getInputs(const NormalizedInstruction& ni, FPInvOffset bcSPOff) {
       case Op::ConcatN:
         return ni.imm[0].u_IVA;
       case Op::PopFrame:
-        return ni.imm[0].u_IVA + 3;
+        return ni.imm[0].u_IVA + kNumActRecCells;
       default:
         return ni.immVec.numStackValues();
       }
@@ -740,7 +740,7 @@ InputInfoVec getInputs(const NormalizedInstruction& ni, FPInvOffset bcSPOff) {
 
     if (fca.hasGenerics()) inputs.emplace_back(Location::Stack { stackOff-- });
     if (fca.hasUnpack()) inputs.emplace_back(Location::Stack { stackOff-- });
-    stackOff -= fca.numArgs + 2;
+    stackOff -= fca.numArgs + (kNumActRecCells - 1);
 
     switch (ni.op()) {
       case Op::FCallCtor:
@@ -1068,8 +1068,7 @@ bool instrBreaksProfileBB(const NormalizedInstruction& inst) {
       op == OpAwait || // may branch to scheduler and suspend execution
       op == OpAwaitAll || // similar to Await
       op == OpClsCnsD || // side exits if misses in the RDS
-      (op == OpThrowNonExhaustiveSwitch && // control flow breaks bb
-       RuntimeOption::EvalThrowOnNonExhaustiveSwitch > 1) ||
+      op == OpThrowNonExhaustiveSwitch || // control flow breaks bb
       op == OpVerifyParamTypeTS || // avoids combinatorial explosion
       op == OpVerifyParamType) {   // with nullable types
     return true;
@@ -1085,6 +1084,8 @@ bool instrBreaksProfileBB(const NormalizedInstruction& inst) {
 }
 
 //////////////////////////////////////////////////////////////////////
+
+namespace {
 
 #define IMM_BLA(n)     ni.immVec
 #define IMM_SLA(n)     ni.immVec
@@ -1115,8 +1116,8 @@ bool instrBreaksProfileBB(const NormalizedInstruction& inst) {
 #define SIX(x0,x1,x2,x3,x4,x5) , IMM_##x0(0), IMM_##x1(1), IMM_##x2(2), IMM_##x3(3), IMM_##x4(4), IMM_##x5(5)
 #define NA                   /*  */
 
-static void translateDispatch(irgen::IRGS& irgs,
-                              const NormalizedInstruction& ni) {
+void translateDispatch(irgen::IRGS& irgs,
+                       const NormalizedInstruction& ni) {
 #define O(nm, imms, ...) case Op::nm: irgen::emit##nm(irgs imms); return;
   switch (ni.op()) { OPCODES }
 #undef O
@@ -1152,8 +1153,6 @@ static void translateDispatch(irgen::IRGS& irgs,
 #undef IMM_FCA
 
 //////////////////////////////////////////////////////////////////////
-
-namespace {
 
 Type flavorToType(FlavorDesc f) {
   switch (f) {
@@ -1200,12 +1199,14 @@ void translateInstr(irgen::IRGS& irgs, const NormalizedInstruction& ni) {
 
   if (isAlwaysNop(ni)) return;
 
-  handleBespokeInputs(irgs, ni.source, [&](irgen::IRGS& env) {
-    if (ni.interp || RuntimeOption::EvalJitAlwaysInterpOne) {
-      irgen::interpOne(env);
-      return;
-    }
-    if (ni.forceSurpriseCheck) surpriseCheck(env);
+  if (ni.interp || RuntimeOption::EvalJitAlwaysInterpOne) {
+    irgen::interpOne(irgs);
+    return;
+  }
+
+  if (ni.forceSurpriseCheck) surpriseCheck(irgs);
+
+  handleBespokeInputs(irgs, ni, [&](irgen::IRGS& env) {
     translateDispatch(env, ni);
     handleVanillaOutputs(env, ni.source);
   });

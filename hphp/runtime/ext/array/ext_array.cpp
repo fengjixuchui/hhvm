@@ -82,8 +82,9 @@ Array makeReserveLike(DataType type, size_t size) {
 // Appends all keys and values in the ArrayIter `it` to the array `array`.
 // If `array` is a keyset, we preserve int keys; otherwise, we renumber them.
 //
-// `array` must be the same type of array that `it` iterates over - we use
-// this fact for optimizations here.
+// `array` must be the same type of array that `it` iterates over. If `array`
+// is a dict or darray, it must have vector-like keys. We use both constraints
+// for optimizations in the loops below.
 void appendKeysAndVals(Array& array, ArrayIter& it) {
   assertx(array->toDataType() == it.getArrayData()->toDataType());
   if (array.isVArray() || array.isVec() || array.isKeyset()) {
@@ -91,10 +92,12 @@ void appendKeysAndVals(Array& array, ArrayIter& it) {
       array.append(it.secondVal());
     }
   } else {
+    assertx(array->isVectorData());
+    auto nextKI = safe_cast<int64_t>(array->size());
     for (; it; ++it) {
       auto const key = it.nvFirst();
       if (tvIsInt(key)) {
-        array.append(it.secondVal());
+        array.set(nextKI++, it.secondVal());
       } else {
         auto const str = StrNR(val(key).pstr);
         array.set(str.asString(), it.secondVal(), true);
@@ -149,7 +152,7 @@ TypedValue HHVM_FUNCTION(array_chunk,
     if (preserve_keys) {
       chunk.set(iter.first(), iter.secondValPlus(), true);
     } else {
-      chunk.append(iter.secondValPlus());
+      chunk.set(safe_cast<int64_t>(chunk.size()), iter.secondValPlus());
     }
     if ((++current % chunkSize) == 0) {
       ret.append(chunk);
@@ -1057,7 +1060,7 @@ Variant array_splice(Variant& input, int offset,
   getCheckedArrayVariant(input);
   Array ret = Array::CreateDArray();
   int64_t len = length.isNull() ? 0x7FFFFFFF : length.toInt64();
-  input = ArrayUtil::Splice(arr_input, offset, len, replacement, &ret);
+  input = ArrayUtil::Splice(arr_input, offset, len, replacement, ret);
   return ret;
 }
 
@@ -1176,9 +1179,17 @@ TypedValue HHVM_FUNCTION(array_unshift,
   if (isArrayLikeType(dt)) {
     auto const size = val(cell_array).parr->size() + args.size() + 1;
     auto newArray = makeReserveLike(dt, size);
-    newArray.append(var);
-    if (!args.empty()) {
-      IterateVNoInc(args.get(), [&](auto val) { newArray.append(val); });
+    if (isDictOrDArrayType(dt)) {
+      int64_t i = 0;
+      newArray.set(i++, var);
+      if (!args.empty()) {
+        IterateVNoInc(args.get(), [&](auto val) { newArray.set(i++, val); });
+      }
+    } else {
+      newArray.append(var);
+      if (!args.empty()) {
+        IterateVNoInc(args.get(), [&](auto val) { newArray.append(val); });
+      }
     }
     Array& arr_array = array.asArrRef();
     ArrayIter it(arr_array.detach(), ArrayIter::noInc);
@@ -1800,31 +1811,6 @@ void array_diff_intersect_key_check_pair(TypedValue k, TypedValue v, SI setInt,
   if (diff) setStr(k.m_data.pstr, v);
 }
 
-template <bool coerceThis, bool coerceAd, typename SP>
-ALWAYS_INLINE
-void array_intersect_key_check_pos(const ArrayData* ad, TypedValue k, SP setPos) {
-  if (k.m_type == KindOfInt64) {
-    setPos(ad->nvGetIntPos(k.m_data.num));
-    if (coerceAd) {
-      auto const s = String::attach(buildStringData(k.m_data.num));
-      setPos(ad->nvGetStrPos(s.get()));
-    }
-    return;
-  }
-
-  if (coerceThis || coerceAd) {
-    int64_t n;
-    if (k.m_data.pstr->isStrictlyInteger(n)) {
-      if (coerceThis) setPos(ad->nvGetIntPos(n));
-      // If we're only coercing keys on one side, then this isStrictlyInteger
-      // key can't match as a string.
-      if (coerceThis != coerceAd) return;
-    }
-  }
-
-  setPos(ad->nvGetStrPos(k.m_data.pstr));
-}
-
 }
 
 TypedValue HHVM_FUNCTION(array_diff_key,
@@ -2293,104 +2279,8 @@ TypedValue HHVM_FUNCTION(array_intersect_key,
   }
 
   auto intersect_step = [](TypedValue left, TypedValue right) {
-    auto leftSize = getContainerSize(left);
-    // If we have more than 2 args, the left input could end up empty
+    auto const leftSize = getContainerSize(left);
     if (leftSize == 0) return empty_array();
-    auto rightSize = getContainerSize(right);
-
-    if (leftSize > rightSize + 2) {
-      // left is bigger than right, so try to reduce the number of hash lookups
-      // by iterating right and probing left
-
-      auto leftAd = [&](){
-        if (isArrayLikeType(type(left))) return left.m_data.parr;
-        return collections::asArray(left.m_data.pobj);
-      }();
-      // we can't get a null leftAd because leftSize is at least 3 (which
-      // precludes Pairs)
-      assertx(leftAd);
-      auto const left_end = leftAd->iter_end();
-
-      std::vector<ssize_t> positions;
-      // we can technically end up with up to rightSize*2 entries due to
-      // intish key casting, but that is unlikely
-      positions.reserve(rightSize);
-      auto setPos = [&](ssize_t pos) {
-        if (pos != left_end) positions.push_back(pos);
-      };
-
-      auto iterate_right_with = [&](auto test_key) {
-        IterateKV(right, test_key);
-      };
-
-      // For historical reasons, we coerce intish string keys only when they
-      // came from a hack collection.
-      auto coerceLeft = !isArrayLikeType(type(left));
-      auto coerceRight = !isArrayLikeType(type(right));
-
-      if (coerceLeft) {
-        if (coerceRight) {
-          iterate_right_with([&](TypedValue k, TypedValue) {
-            array_intersect_key_check_pos<true, true>(leftAd, k, setPos);
-          });
-        } else {
-          iterate_right_with([&](TypedValue k, TypedValue) {
-            array_intersect_key_check_pos<false, true>(leftAd, k, setPos);
-          });
-        }
-      } else {
-        if (coerceRight) {
-          iterate_right_with([&](TypedValue k, TypedValue) {
-            array_intersect_key_check_pos<true, false>(leftAd, k, setPos);
-          });
-        } else {
-          iterate_right_with([&](TypedValue k, TypedValue) {
-            array_intersect_key_check_pos<false, false>(leftAd, k, setPos);
-          });
-        }
-      }
-
-      if (positions.empty()) return empty_array();
-
-      std::sort(positions.begin(), positions.end());
-      positions.erase(
-        std::unique(positions.begin(), positions.end()),
-        positions.end()
-      );
-      assertx(positions.size() <= leftSize);
-
-      if (positions.size() == leftSize) {
-        if (coerceLeft) {
-          return Array(leftAd).toPHPArrayIntishCast();
-        } else {
-          return Array(leftAd).toPHPArray();
-        }
-      }
-
-      ArrayInit ret(positions.size(), ArrayInit::Map{});
-
-      if (coerceLeft) {
-        for (auto pos : positions) {
-          auto const k = leftAd->nvGetKey(pos);
-          if (k.m_type == KindOfInt64) {
-            ret.set(k.m_data.num, leftAd->nvGetVal(pos));
-          } else {
-            int64_t n;
-            if (k.m_data.pstr->isStrictlyInteger(n)) {
-              ret.set(n, leftAd->nvGetVal(pos));
-            } else {
-              ret.set(k.m_data.pstr, leftAd->nvGetVal(pos));
-            }
-          }
-        }
-      } else {
-        for (auto pos : positions) {
-          ret.set(leftAd->nvGetKey(pos), leftAd->nvGetVal(pos));
-        }
-      }
-
-      return ret.toArray();
-    }
 
     ArrayInit ret(leftSize, ArrayInit::Map{});
     auto setInt = [&](int64_t k, TypedValue v) { ret.set(k, v); };

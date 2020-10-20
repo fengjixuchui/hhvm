@@ -88,6 +88,29 @@ module type Syntax_S = sig
     ; enumerator_value                                   : t
     ; enumerator_semicolon                               : t
     }
+  | EnumClassDeclaration              of
+    { enum_class_attribute_spec                          : t
+    ; enum_class_enum_keyword                            : t
+    ; enum_class_class_keyword                           : t
+    ; enum_class_name                                    : t
+    ; enum_class_colon                                   : t
+    ; enum_class_base                                    : t
+    ; enum_class_extends                                 : t
+    ; enum_class_extends_list                            : t
+    ; enum_class_left_brace                              : t
+    ; enum_class_elements                                : t
+    ; enum_class_right_brace                             : t
+    }
+  | EnumClassEnumerator               of
+    { enum_class_enumerator_name                         : t
+    ; enum_class_enumerator_left_angle                   : t
+    ; enum_class_enumerator_type                         : t
+    ; enum_class_enumerator_right_angle                  : t
+    ; enum_class_enumerator_left_paren                   : t
+    ; enum_class_enumerator_initial_value                : t
+    ; enum_class_enumerator_right_paren                  : t
+    ; enum_class_enumerator_semicolon                    : t
+    }
   | RecordDeclaration                 of
     { record_attribute_spec                              : t
     ; record_modifier                                    : t
@@ -335,7 +358,7 @@ module type Syntax_S = sig
     ; expression_statement_semicolon                     : t
     }
   | MarkupSection                     of
-    { markup_text                                        : t
+    { markup_hashbang                                    : t
     ; markup_suffix                                      : t
     }
   | MarkupSuffix                      of
@@ -1044,10 +1067,6 @@ module type Syntax_S = sig
     Full_fidelity_source_text.t ->
     Full_fidelity_parser_env.t ->
     unit * t * Full_fidelity_syntax_error.t list * Rust_pointer.t option
-  val rust_parse_with_decl_mode_sc :
-    Full_fidelity_source_text.t ->
-    Full_fidelity_parser_env.t ->
-    bool list * t * Full_fidelity_syntax_error.t list * Rust_pointer.t option
   val rust_parse_with_verify_sc :
     Full_fidelity_source_text.t ->
     Full_fidelity_parser_env.t ->
@@ -1090,6 +1109,8 @@ module type Syntax_S = sig
   val make_file_attribute_specification : t -> t -> t -> t -> t -> t
   val make_enum_declaration : t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t
   val make_enumerator : t -> t -> t -> t -> t
+  val make_enum_class_declaration : t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t
+  val make_enum_class_enumerator : t -> t -> t -> t -> t -> t -> t -> t -> t
   val make_record_declaration : t -> t -> t -> t -> t -> t -> t -> t -> t -> t
   val make_record_field : t -> t -> t -> t -> t
   val make_alias_declaration : t -> t -> t -> t -> t -> t -> t -> t -> t
@@ -1270,6 +1291,8 @@ module type Syntax_S = sig
   val is_file_attribute_specification : t -> bool
   val is_enum_declaration : t -> bool
   val is_enumerator : t -> bool
+  val is_enum_class_declaration : t -> bool
+  val is_enum_class_enumerator : t -> bool
   val is_record_declaration : t -> bool
   val is_record_field : t -> bool
   val is_alias_declaration : t -> bool

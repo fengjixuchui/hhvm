@@ -106,6 +106,7 @@ struct
     | Rglobal_class_prop p -> Rglobal_class_prop (pos p)
     | Rglobal_fun_param p -> Rglobal_fun_param (pos p)
     | Rglobal_fun_ret p -> Rglobal_fun_ret (pos p)
+    | Rsplice p -> Rsplice (pos p)
 
   let rec ty t =
     let (p, x) = deref t in
@@ -309,6 +310,7 @@ struct
       te_base = ty te.te_base;
       te_constraint = ty_opt te.te_constraint;
       te_includes = List.map te.te_includes ty;
+      te_enum_class = te.te_enum_class;
     }
 
   and typedef tdef =

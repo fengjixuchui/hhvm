@@ -5,15 +5,12 @@
 .function caller($who, $arg) {
   NullUninit
   NullUninit
-  NullUninit
   CGetL $arg
   CGetL $who
   FCallFunc <> 1 1 "" - ""
 
   SetL $ret
   PopC
-
-  NullUninit
   NullUninit
   NullUninit
   CGetL $ret
@@ -54,7 +51,6 @@
 .function ["__EntryPoint"("""y:0:{}""")] main() {
   NullUninit
   NullUninit
-  NullUninit
   String "a"
   String "b"
   FCallFuncD <> 2 1 "" - "" "caller"
@@ -63,7 +59,6 @@
   String "strval"
   SetL $funk
   PopC
-  NullUninit
   NullUninit
   NullUninit
   NullUninit

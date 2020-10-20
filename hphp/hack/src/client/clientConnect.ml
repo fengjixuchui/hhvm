@@ -57,6 +57,7 @@ type conn = {
   conn_progress_callback: (string option -> unit) option;
   conn_root: Path.t;
   conn_deadline: float option;
+  from: string;
 }
 
 let get_finale_data (server_finale_file : string) : Exit.finale_data option =
@@ -344,6 +345,7 @@ let rec connect
           conn_progress_callback = env.progress_callback;
           conn_root = env.root;
           conn_deadline = env.deadline;
+          from = env.from;
         }
   | Error e ->
     log
@@ -388,6 +390,7 @@ let rec connect
         } =
           env
         in
+        HackEventLogger.client_connect_autostart ();
         ClientStart.(
           start_server
             {
@@ -502,7 +505,9 @@ let connect (env : env) : conn Lwt.t =
     HackEventLogger.client_establish_connection_exception e;
     Caml.Printexc.raise_with_backtrace e backtrace
 
-let rpc : type a. conn -> a ServerCommandTypes.t -> (a * Telemetry.t) Lwt.t =
+let rpc :
+    type a.
+    conn -> desc:string -> a ServerCommandTypes.t -> (a * Telemetry.t) Lwt.t =
  fun {
        connection_log_id;
        t_connected_to_monitor;
@@ -513,10 +518,13 @@ let rpc : type a. conn -> a ServerCommandTypes.t -> (a * Telemetry.t) Lwt.t =
        conn_progress_callback = progress_callback;
        conn_root;
        conn_deadline = deadline;
+       from;
      }
+     ~desc
      cmd ->
   let t_ready_to_send_cmd = Unix.gettimeofday () in
-  Marshal.to_channel oc (ServerCommandTypes.Rpc cmd) [];
+  let metadata = { ServerCommandTypes.from; desc } in
+  Marshal.to_channel oc (ServerCommandTypes.Rpc (metadata, cmd)) [];
   Out_channel.flush oc;
   let t_sent_cmd = Unix.gettimeofday () in
   with_server_hung_up @@ fun () ->
@@ -552,9 +560,10 @@ let rpc : type a. conn -> a ServerCommandTypes.t -> (a * Telemetry.t) Lwt.t =
 
 let rpc_with_retry
     (conn_f : unit -> conn Lwt.t)
+    ~(desc : string)
     (cmd : 'a ServerCommandTypes.Done_or_retry.t ServerCommandTypes.t) :
     'a Lwt.t =
   ServerCommandTypes.Done_or_retry.call ~f:(fun () ->
       let%lwt conn = conn_f () in
-      let%lwt (result, _telemetry) = rpc conn cmd in
+      let%lwt (result, _telemetry) = rpc conn ~desc cmd in
       Lwt.return result)

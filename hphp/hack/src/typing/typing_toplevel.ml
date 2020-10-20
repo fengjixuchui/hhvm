@@ -431,11 +431,11 @@ let rec fun_def ctx f :
       let (env, f_cap, f_unsafe_cap) =
         Typing.type_capability env f.f_cap f.f_unsafe_cap (fst f.f_name)
       in
-      let env =
+      let (env, _) =
         Typing_coeffects.register_capabilities
           env
-          (fst f_cap)
-          (fst f_unsafe_cap)
+          (type_of_type_hint f_cap)
+          (type_of_type_hint f_unsafe_cap)
       in
       let (env, tb) =
         Typing.fun_ ~disable env return pos f.f_body f.f_fun_kind
@@ -619,11 +619,11 @@ and method_def env cls m =
       let (env, m_cap, m_unsafe_cap) =
         Typing.type_capability env m.m_cap m.m_unsafe_cap (fst m.m_name)
       in
-      let env =
+      let (env, _) =
         Typing_coeffects.register_capabilities
           env
-          (fst m_cap)
-          (fst m_unsafe_cap)
+          (type_of_type_hint m_cap)
+          (type_of_type_hint m_unsafe_cap)
       in
       let (env, tb) =
         Typing.fun_
@@ -792,7 +792,18 @@ let check_consistent_enum_inclusion included_cls dest_cls =
         (Cls.pos dest_cls)
         (Cls.name dest_cls)
         (Cls.name included_cls)
-    | (_, _) -> ())
+    | (_, _) -> ());
+    (* ensure normal enums can't include enum classes *)
+    if included_e.te_enum_class && not dest_e.te_enum_class then
+      Errors.wrong_extend_kind
+        ~parent_pos:(Cls.pos included_cls)
+        ~parent_kind:Ast_defs.Cenum
+        ~parent_name:(Cls.name included_cls)
+        ~parent_is_enum_class:true
+        ~child_pos:(Cls.pos dest_cls)
+        ~child_kind:Ast_defs.Cenum
+        ~child_name:(Cls.name dest_cls)
+        ~child_is_enum_class:false
   | (None, _) ->
     Errors.enum_inclusion_not_enum
       (Cls.pos dest_cls)

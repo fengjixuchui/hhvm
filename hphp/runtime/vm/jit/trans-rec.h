@@ -26,7 +26,7 @@ namespace HPHP { namespace jit {
  */
 struct TransBCMapping {
   SHA1   sha1;
-  Offset bcStart;
+  SrcKey sk;
   TCA    aStart;
   TCA    acoldStart;
   TCA    afrozenStart;
@@ -57,7 +57,6 @@ struct TransRec {
   uint32_t               aLen;
   uint32_t               acoldLen;
   uint32_t               afrozenLen;
-  Offset                 bcStart;
   TransID                id{kInvalidTransID};
   TransKind              kind;
   bool                   hasLoop;

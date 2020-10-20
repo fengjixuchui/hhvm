@@ -12,7 +12,7 @@ Parsed decls:
       sc_methods = []; sc_user_attributes = []; sc_enum_type = None } };
   funs =
   { "\\f" ->
-    { fe_pos = [6:10-11];
+    { Typing_defs.fe_deprecated = None;
       fe_type =
       (Rwitness (root|mutable.php line 6, characters 10-10),
        (Tfun
@@ -36,9 +36,10 @@ Parsed decls:
                              (Tapply (([6:33-34], "\\A"), [])))
                             };
                           fp_flags =
-                          (make_fp_flags ~mutability:mutable
+                          (make_fp_flags
+                            ~mutability:(Some Typing_defs_core.Param_borrowed_mutable)
                             ~accept_disposable:false ~has_default:false
-                            ~mode:FPnormal);
+                            ~mode:Typing_defs_core.FPnormal);
                            }
                          ];
                        ft_implicit_params =
@@ -53,13 +54,14 @@ Parsed decls:
                           (Tprim Tvoid))
                          };
                        ft_flags =
-                       (make_ft_flags sync none ~return_disposable:false
+                       (make_ft_flags FSync None ~return_disposable:false
                          ~returns_mutable:false ~returns_void_to_rx:false);
-                       ft_reactive = Reactive {} }))
+                       ft_reactive = Reactive {};
+                       ft_ifc_decl = FDPolicied {#PUBLIC} }))
                  };
                fp_flags =
-               (make_fp_flags ~mutability:none ~accept_disposable:false
-                 ~has_default:false ~mode:FPnormal);
+               (make_fp_flags ~mutability:None ~accept_disposable:false
+                 ~has_default:false ~mode:Typing_defs_core.FPnormal);
                 }
               ];
             ft_implicit_params =
@@ -73,12 +75,12 @@ Parsed decls:
                (Tprim Tvoid))
               };
             ft_flags =
-            (make_ft_flags sync none ~return_disposable:false
+            (make_ft_flags FSync None ~return_disposable:false
               ~returns_mutable:false ~returns_void_to_rx:false);
-            ft_reactive = Reactive {} }));
-      fe_deprecated = None;  };
+            ft_reactive = Reactive {}; ft_ifc_decl = FDPolicied {#PUBLIC} }));
+      fe_pos = [6:10-11]; fe_php_std_lib = false };
     "\\g" ->
-    { fe_pos = [9:10-11];
+    { Typing_defs.fe_deprecated = None;
       fe_type =
       (Rwitness (root|mutable.php line 9, characters 10-10),
        (Tfun
@@ -102,9 +104,10 @@ Parsed decls:
                              (Tapply (([9:38-39], "\\A"), [])))
                             };
                           fp_flags =
-                          (make_fp_flags ~mutability:maybe-mutable
+                          (make_fp_flags
+                            ~mutability:(Some Typing_defs_core.Param_maybe_mutable)
                             ~accept_disposable:false ~has_default:false
-                            ~mode:FPnormal);
+                            ~mode:Typing_defs_core.FPnormal);
                            }
                          ];
                        ft_implicit_params =
@@ -119,13 +122,14 @@ Parsed decls:
                           (Tprim Tvoid))
                          };
                        ft_flags =
-                       (make_ft_flags sync none ~return_disposable:false
+                       (make_ft_flags FSync None ~return_disposable:false
                          ~returns_mutable:false ~returns_void_to_rx:false);
-                       ft_reactive = Reactive {} }))
+                       ft_reactive = Reactive {};
+                       ft_ifc_decl = FDPolicied {#PUBLIC} }))
                  };
                fp_flags =
-               (make_fp_flags ~mutability:none ~accept_disposable:false
-                 ~has_default:false ~mode:FPnormal);
+               (make_fp_flags ~mutability:None ~accept_disposable:false
+                 ~has_default:false ~mode:Typing_defs_core.FPnormal);
                 }
               ];
             ft_implicit_params =
@@ -139,12 +143,12 @@ Parsed decls:
                (Tprim Tvoid))
               };
             ft_flags =
-            (make_ft_flags sync none ~return_disposable:false
+            (make_ft_flags FSync None ~return_disposable:false
               ~returns_mutable:false ~returns_void_to_rx:false);
-            ft_reactive = Reactive {} }));
-      fe_deprecated = None;  };
+            ft_reactive = Reactive {}; ft_ifc_decl = FDPolicied {#PUBLIC} }));
+      fe_pos = [9:10-11]; fe_php_std_lib = false };
     "\\h" ->
-    { fe_pos = [12:10-11];
+    { Typing_defs.fe_deprecated = None;
       fe_type =
       (Rwitness (root|mutable.php line 12, characters 10-10),
        (Tfun
@@ -168,9 +172,10 @@ Parsed decls:
                              (Tapply (([12:38-39], "\\A"), [])))
                             };
                           fp_flags =
-                          (make_fp_flags ~mutability:owned mutable
+                          (make_fp_flags
+                            ~mutability:(Some Typing_defs_core.Param_owned_mutable)
                             ~accept_disposable:false ~has_default:false
-                            ~mode:FPnormal);
+                            ~mode:Typing_defs_core.FPnormal);
                            }
                          ];
                        ft_implicit_params =
@@ -185,13 +190,14 @@ Parsed decls:
                           (Tprim Tvoid))
                          };
                        ft_flags =
-                       (make_ft_flags sync none ~return_disposable:false
+                       (make_ft_flags FSync None ~return_disposable:false
                          ~returns_mutable:false ~returns_void_to_rx:false);
-                       ft_reactive = Reactive {} }))
+                       ft_reactive = Reactive {};
+                       ft_ifc_decl = FDPolicied {#PUBLIC} }))
                  };
                fp_flags =
-               (make_fp_flags ~mutability:none ~accept_disposable:false
-                 ~has_default:false ~mode:FPnormal);
+               (make_fp_flags ~mutability:None ~accept_disposable:false
+                 ~has_default:false ~mode:Typing_defs_core.FPnormal);
                 }
               ];
             ft_implicit_params =
@@ -206,12 +212,12 @@ Parsed decls:
                (Tprim Tvoid))
               };
             ft_flags =
-            (make_ft_flags sync none ~return_disposable:false
+            (make_ft_flags FSync None ~return_disposable:false
               ~returns_mutable:false ~returns_void_to_rx:false);
-            ft_reactive = Reactive {} }));
-      fe_deprecated = None;  };
+            ft_reactive = Reactive {}; ft_ifc_decl = FDPolicied {#PUBLIC} }));
+      fe_pos = [12:10-11]; fe_php_std_lib = false };
     "\\i" ->
-    { fe_pos = [15:10-11];
+    { Typing_defs.fe_deprecated = None;
       fe_type =
       (Rwitness (root|mutable.php line 15, characters 10-10),
        (Tfun
@@ -238,13 +244,14 @@ Parsed decls:
                           (Tapply (([15:41-42], "\\A"), [])))
                          };
                        ft_flags =
-                       (make_ft_flags sync none ~return_disposable:false
+                       (make_ft_flags FSync None ~return_disposable:false
                          ~returns_mutable:true ~returns_void_to_rx:false);
-                       ft_reactive = Reactive {} }))
+                       ft_reactive = Reactive {};
+                       ft_ifc_decl = FDPolicied {#PUBLIC} }))
                  };
                fp_flags =
-               (make_fp_flags ~mutability:none ~accept_disposable:false
-                 ~has_default:false ~mode:FPnormal);
+               (make_fp_flags ~mutability:None ~accept_disposable:false
+                 ~has_default:false ~mode:Typing_defs_core.FPnormal);
                 }
               ];
             ft_implicit_params =
@@ -259,10 +266,10 @@ Parsed decls:
                (Tprim Tvoid))
               };
             ft_flags =
-            (make_ft_flags sync none ~return_disposable:false
+            (make_ft_flags FSync None ~return_disposable:false
               ~returns_mutable:false ~returns_void_to_rx:false);
-            ft_reactive = Reactive {} }));
-      fe_deprecated = None;  } };
+            ft_reactive = Reactive {}; ft_ifc_decl = FDPolicied {#PUBLIC} }));
+      fe_pos = [15:10-11]; fe_php_std_lib = false } };
   typedefs = {}; consts = {} }
 
 They matched!

@@ -579,7 +579,7 @@ module Typing = struct
     | InvalidNewableTypeArgument [@value 4307]
     | InvalidNewableTypeParamConstraints [@value 4308]
     | NewWithoutNewable [@value 4309]
-    | NewStaticClassReified [@value 4310]
+    | NewClassReified [@value 4310]
     | MemoizeReified [@value 4311]
     | ConsistentConstructReified [@value 4312]
     | MethodVariance [@value 4313]
@@ -660,7 +660,8 @@ module Typing = struct
     | IncompatibleEnumInclusion [@value 4388]
     | RedeclaringClassishConstant [@value 4389]
     | CallCoeffects [@value 4390]
-    | AbstractFunctionPointer [@value 4391] (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
+    | AbstractFunctionPointer [@value 4391]
+    | UnnecessaryAttribute [@value 4392] (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
   [@@deriving enum, show { with_path = false }]
 
   let err_code = to_enum

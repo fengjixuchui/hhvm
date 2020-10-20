@@ -7,6 +7,7 @@ oxidized::aast_defs::KvcKind
 oxidized::aast_defs::MutableReturn
 oxidized::aast_defs::ParamMutability
 oxidized::aast_defs::PuLoc
+oxidized::aast_defs::ReifyKind
 oxidized::aast_defs::TypedefVisibility
 oxidized::aast_defs::UseAsVisibility
 oxidized::aast_defs::VcKind
@@ -23,6 +24,7 @@ oxidized::aast::KvcKind
 oxidized::aast::NsKind
 oxidized::aast::OgNullFlavor
 oxidized::aast::ReifyKind
+oxidized::aast::ReifyKind
 oxidized::aast::TypedefVisibility
 oxidized::aast::UseAsVisibility
 oxidized::aast::VcKind
@@ -37,6 +39,7 @@ oxidized::ast_defs::ParamKind
 oxidized::ast_defs::Reified
 oxidized::ast_defs::Uop
 oxidized::ast_defs::Variance
+oxidized::ast_defs::Visibility
 oxidized::doc_comment::DocComment
 oxidized::error_codes::Init
 oxidized::error_codes::Naming

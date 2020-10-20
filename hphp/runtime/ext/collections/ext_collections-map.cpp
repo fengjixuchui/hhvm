@@ -43,7 +43,7 @@ BaseMap::Clone(ObjectData* obj) {
   }
   thiz->arrayData()->incRefCount();
   target->m_size = thiz->m_size;
-  target->m_arr = thiz->m_arr;
+  target->setArrayData(thiz->arrayData());
   return target.detach();
 }
 
@@ -72,12 +72,17 @@ void BaseMap::addAllImpl(const Variant& iterable) {
         mutate();
         return false;
       }
-      // We have to do two orthogonal escalations. Careful with refcounting:
-      // we should not dec-ref the original adata, but we should dec-ref any
-      // intermediate values we create here.
+      // The ArrayData backing a Map must be a vanilla, unmarked dict.
+      // Do all three escalations here. Dec-ref any intermediate values we
+      // create along the way, but do not dec-ref the original adata.
       auto array = adata;
       if (!array->isVanilla()) {
         array = BespokeArray::ToVanilla(array, "BaseMap::addAllImpl");
+      }
+      if (array->hasVanillaMixedLayout() && array->isLegacyArray()) {
+        auto const tmp = array->setLegacyArray(array->cowCheck(), false);
+        if (array != adata && array != tmp) decRefArr(array);
+        array = tmp;
       }
       if (!array->isDictKind()) {
         auto const dict = array->toDict(array->cowCheck());
@@ -575,7 +580,7 @@ BaseMap::php_concat(const Variant& iterable) {
     if (isTombstone(i)) {
       continue;
     }
-    tvDup(data()[i].data, vec->dataAt(j));
+    tvDup(data()[i].data, vec->lvalAt(j));
     ++j;
   }
   for (; iter; ++iter) {
@@ -643,7 +648,7 @@ BaseMap::FromArray(const Class*, const Variant& arr) {
 void c_Map::clear() {
   dropImmCopy();
   decRefArr(arrayData());
-  m_arr = CreateDictAsMixed();
+  setArrayData(CreateDictAsMixed());
   m_size = 0;
 }
 
@@ -653,7 +658,7 @@ Object c_Map::getImmutableCopy() {
   if (m_immCopy.isNull()) {
     auto map = req::make<c_ImmMap>();
     map->m_size = m_size;
-    map->m_arr = m_arr;
+    map->setArrayData(arrayData());
     m_immCopy = std::move(map);
     arrayData()->incRefCount();
   }

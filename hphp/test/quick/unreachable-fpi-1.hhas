@@ -2,13 +2,11 @@
   NewObjD "Exception"
   Dup
   NullUninit
-  NullUninit
   String "foo"
   FCallCtor <LockWhileUnwinding> 1 1 "" - "" ""
   PopC
   LockObj
   Throw
-  NullUninit
   NullUninit
   NullUninit
   FCallFuncD <> 0 1 "" - "" "bar"

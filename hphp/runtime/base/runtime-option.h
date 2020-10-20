@@ -729,13 +729,7 @@ struct RuntimeOption {
   F(bool, EnablePerRepoOptions,        true)                            \
   F(bool, CachePerRepoOptionsPath,     true)                            \
   F(bool, RaiseOnCaseInsensitiveLookup,true)                            \
-  /* ThrowOnNonExhaustiveSwitch
-   * Generates warnings when switch statements are non exhaustive.
-   *  0 - Nothing
-   *  1 - Raise Warning
-   * >1 - Throw Exception
-   */                                                                   \
-  F(uint32_t, ThrowOnNonExhaustiveSwitch, 1)                            \
+  F(uint32_t, RaiseOnCaseInsensitiveLookupSampleRate, 1)                \
   /*
     CheckPropTypeHints:
     0 - No checks or enforcement of property type hints.
@@ -819,7 +813,6 @@ struct RuntimeOption {
   F(uint32_t, JitPGOVasmBlockCountersMaxOpMismatches, 12)               \
   F(uint32_t, JitPGOVasmBlockCountersMinEntryValue,                     \
                                        ServerExecutionMode() ? 200 : 0) \
-  F(bool,     JitPGOVasmBlockCountersSkipFixWeights, false)             \
   F(double,   JitPGOVasmBlockCountersHotWeightMultiplier, 0)            \
   F(bool, JitLayoutSeparateZeroWeightBlocks, false)                     \
   F(bool, JitLayoutPrologueSplitHotCold, layoutPrologueSplitHotColdDefault()) \
@@ -1085,11 +1078,6 @@ struct RuntimeOption {
   F(int32_t, BespokeArrayLikeMode, 0)                                   \
   F(uint64_t, EmitLoggingArraySampleRate, 0)                            \
   F(string, ExportLoggingArrayDataPath, "")                             \
-  /* Allows the tracelet selector to emit guards to specific bespoke    \
-   * types if the live types invovle a bespoke. Implies                 \
-   * BespokeArrayLikeMode to be nonzero, and in particular will set it  \
-   * to 1 if it is 0 */                                                 \
-  F(bool, AllowBespokesInLiveTypes, false)                              \
   /* Raise notices on various array operations which may present        \
    * compatibility issues with Hack arrays.                             \
    *                                                                    \
@@ -1141,6 +1129,9 @@ struct RuntimeOption {
   /* What fraction of array provenance diagnostics should be logged?    \
    * Set to 0 to disable diagnostics entirely */                        \
   F(uint32_t, LogArrayProvenanceDiagnosticsSampleRate, 0)               \
+  /* Raise a notice when the result of appending to a dict or darray    \
+   * is affected by removing keys from that array-like. */              \
+  F(bool, DictDArrayAppendNotices, true)                                \
   /* Warn if is expression are used with type aliases that cannot be    |
    * resolved */                                                        \
   F(bool, IsExprEnableUnresolvedWarning, false)                         \
@@ -1289,6 +1280,7 @@ struct RuntimeOption {
   F(uint64_t, RecordFirstUnits, 0)                                      \
   /* More aggresively reuse already compiled units based on SHA1     */ \
   F(bool, CheckUnitSHA1, true)                                          \
+  F(bool, ReuseUnitsByHash, false)                                      \
   /* When dynamic_fun is called on a function not marked as
      __DynamicallyCallable:
 
@@ -1314,6 +1306,10 @@ struct RuntimeOption {
   F(uint32_t, UnitPrefetcherMaxThreads, 0)                              \
   F(uint32_t, UnitPrefetcherMinThreads, 0)                              \
   F(uint32_t, UnitPrefetcherIdleThreadTimeoutSecs, 60)                  \
+  /* Delete any Unit not used in last N seconds */                      \
+  F(uint32_t, IdleUnitTimeoutSecs, 0)                                   \
+  /* Don't reap total Units below threshold */                          \
+  F(uint32_t, IdleUnitMinThreshold, 0)                                  \
   /* */
 
 private:

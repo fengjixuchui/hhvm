@@ -11,19 +11,6 @@ use crate::{
     token_kind::TokenKind, trivia_kind::TriviaKind,
 };
 
-pub trait TokenBuilder<State, Trivia> {
-    //type Trivia;
-
-    fn make(
-        state: &mut State,
-        kind: TokenKind,
-        offset: usize,
-        width: usize,
-        leading: Trivia,
-        trailing: Trivia,
-    ) -> Self;
-}
-
 pub trait LexableToken: Clone {
     type Trivia: LexableTrivia;
 
@@ -43,10 +30,6 @@ pub trait LexableToken: Clone {
 
     fn leading_is_empty(&self) -> bool;
     fn trailing_is_empty(&self) -> bool;
-
-    fn with_leading(self, trailing: Self::Trivia) -> Self;
-    fn with_trailing(self, trailing: Self::Trivia) -> Self;
-    fn with_kind(self, kind: TokenKind) -> Self;
 
     fn has_leading_trivia_kind(&self, kind: TriviaKind) -> bool;
     fn has_trailing_trivia_kind(&self, kind: TriviaKind) -> bool;

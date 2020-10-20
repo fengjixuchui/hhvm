@@ -51,7 +51,6 @@
   .method [public] some_junk {
     This
     NullUninit
-    NullUninit
     FCallObjMethodD <> 0 1 "" - "" "" NullThrows "prot_method"
     PopC
 
@@ -121,7 +120,6 @@
   NewObjD "WithProps"
   Dup
   NullUninit
-  NullUninit
   FCallCtor <LockWhileUnwinding> 0 1 "" - "" ""
   PopC
   LockObj
@@ -136,12 +134,10 @@
 
   CGetL $obj
   NullUninit
-  NullUninit
   FCallObjMethodD <> 0 1 "" - "" "" NullThrows "print_funk"
   PopC
 
   CGetL $obj
-  NullUninit
   NullUninit
   FCallObjMethodD <> 0 1 "" - "" "" NullThrows "print_defaulted"
   PopC
@@ -154,14 +150,11 @@
   NewObjD "Base"
   Dup
   NullUninit
-  NullUninit
   FCallCtor <LockWhileUnwinding> 0 1 "" - "" ""
   PopC
   LockObj
   SetL $base
   PopC
-
-  NullUninit
   NullUninit
   NullUninit
   String "printing this string"
@@ -174,7 +167,6 @@
   NewObjD "Derived"
   Dup
   NullUninit
-  NullUninit
   FCallCtor <LockWhileUnwinding> 0 1 "" - "" ""
   PopC
   LockObj
@@ -183,29 +175,23 @@
 
   CGetL $derived
   NullUninit
-  NullUninit
   FCallObjMethodD <> 0 1 "" - "" "" NullThrows "some_junk"
   PopC
 
   CGetL $base
   NullUninit
-  NullUninit
   FCallObjMethodD <> 0 1 "" - "" "" NullThrows "overriden"
   PopC
 
   CGetL $derived
   NullUninit
-  NullUninit
   FCallObjMethodD <> 0 1 "" - "" "" NullThrows "overriden"
   PopC
 
   CGetL $derived
-  NullUninit
   NullUninit
   FCallObjMethodD <> 0 1 "" - "" "" NullThrows "abs_method"
   PopC
-
-  NullUninit
   NullUninit
   NullUninit
   FCallFuncD <> 0 1 "" - "" "prop_test"

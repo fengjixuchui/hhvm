@@ -3,12 +3,13 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<fb9cfa112d26bb1685be82f399487ec1>>
+// @generated SignedSource<<cc020a43d35218ebf6790fc7f3febf51>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
 
 use arena_trait::TrivialDrop;
+use no_pos_hash::NoPosHash;
 use ocamlrep_derive::FromOcamlRepIn;
 use ocamlrep_derive::ToOcamlRep;
 use serde::Serialize;
@@ -26,13 +27,14 @@ pub type ExpressionId = ident::Ident;
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
     Serialize,
     ToOcamlRep
 )]
-pub struct Local<'a>(pub Ty<'a>, pub &'a pos::Pos<'a>, pub &'a ExpressionId);
+pub struct Local<'a>(pub &'a Ty<'a>, pub &'a pos::Pos<'a>, pub &'a ExpressionId);
 impl<'a> TrivialDrop for Local<'a> {}
 
 pub type TypingLocalTypes<'a> = local_id::map::Map<'a, &'a Local<'a>>;

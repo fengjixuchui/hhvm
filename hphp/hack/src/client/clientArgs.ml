@@ -134,13 +134,18 @@ let parse_check_args cmd =
   let version = ref false in
   let watchman_debug_logging = ref false in
   let allow_non_opt_build = ref false in
+  let desc = ref "check" in
   (* custom behaviors *)
+  let current_option = ref None in
   let set_from x () = from := x in
-  let set_mode x () =
-    if Option.is_some !mode then
+  let set_mode ?(validate = true) x =
+    if validate && Option.is_some !mode then
       raise (Arg.Bad "only a single mode should be specified")
-    else
-      mode := Some x
+    else begin
+      mode := Some x;
+      Option.iter !current_option ~f:(fun option -> desc := option);
+      ()
+    end
   in
   (* parse args *)
   let usage =
@@ -177,48 +182,49 @@ let parse_check_args cmd =
                   s )),
         " run AI module with provided options" );
       ( "--ai-query",
-        Arg.String (fun x -> set_mode (MODE_AI_QUERY x) ()),
+        Arg.String (fun x -> set_mode (MODE_AI_QUERY x)),
         (* Send an AI query *) "" );
       Common_argspecs.allow_non_opt_build allow_non_opt_build;
       ( "--auto-complete",
-        Arg.Unit (set_mode MODE_AUTO_COMPLETE),
+        Arg.Unit (fun () -> set_mode MODE_AUTO_COMPLETE),
         " (mode) auto-completes the text on stdin" );
       ( "--autostart-server",
         Arg.Bool (fun x -> autostart := x),
         " automatically start hh_server if it's not running (default: true)" );
       ( "--bigcode",
-        Arg.String (fun filename -> set_mode (MODE_BIGCODE filename) ()),
+        Arg.String (fun filename -> set_mode (MODE_BIGCODE filename)),
         " (mode) source code indexing functionalities for Big Code analysis" );
       ( "--color",
-        Arg.String (fun x -> set_mode (MODE_COLORING x) ()),
+        Arg.String (fun x -> set_mode (MODE_COLORING x)),
         " (mode) pretty prints the file content showing what is checked (give '-' for stdin)"
       );
-      ("--colour", Arg.String (fun x -> set_mode (MODE_COLORING x) ()), " ");
+      ("--colour", Arg.String (fun x -> set_mode (MODE_COLORING x)), " ");
       Common_argspecs.config config;
       ( "--coverage",
-        Arg.String (fun x -> set_mode (MODE_COVERAGE x) ()),
+        Arg.String (fun x -> set_mode (MODE_COVERAGE x)),
         " (mode) calculates the extent of typing of a given file or directory"
       );
       ( "--create-checkpoint",
-        Arg.String (fun x -> set_mode (MODE_CREATE_CHECKPOINT x) ()),
+        Arg.String (fun x -> set_mode (MODE_CREATE_CHECKPOINT x)),
         (* Create a checkpoint which can be used to retrieve changed files later *)
         "" );
       ( "--cst-search",
-        Arg.Unit (set_mode (MODE_CST_SEARCH None)),
+        Arg.Unit (fun () -> set_mode (MODE_CST_SEARCH None)),
         " (mode) Search the concrete syntax trees of files in the codebase"
         ^ " for a given pattern" );
       ( "--cst-search-files",
         Arg.Rest
           begin
             fun fn ->
-            mode :=
-              match !mode with
+            set_mode
+              ~validate:false
+              (match !mode with
               | None
               | Some (MODE_CST_SEARCH None) ->
-                Some (MODE_CST_SEARCH (Some [fn]))
+                MODE_CST_SEARCH (Some [fn])
               | Some (MODE_CST_SEARCH (Some fnl)) ->
-                Some (MODE_CST_SEARCH (Some (fn :: fnl)))
-              | _ -> raise (Arg.Bad "only a single mode should be specified")
+                MODE_CST_SEARCH (Some (fn :: fnl))
+              | _ -> raise (Arg.Bad "only a single mode should be specified"))
           end,
         " Run CST search on this set of files,"
         ^ " rather than all the files in the codebase." );
@@ -226,13 +232,13 @@ let parse_check_args cmd =
       (* Delete an existing checkpoint.
        * Exitcode will be non-zero if no checkpoint is found *)
       ( "--delete-checkpoint",
-        Arg.String (fun x -> set_mode (MODE_DELETE_CHECKPOINT x) ()),
+        Arg.String (fun x -> set_mode (MODE_DELETE_CHECKPOINT x)),
         "" );
       ( "--dump-full-fidelity-parse",
-        Arg.String (fun x -> set_mode (MODE_FULL_FIDELITY_PARSE x) ()),
+        Arg.String (fun x -> set_mode (MODE_FULL_FIDELITY_PARSE x)),
         "" );
       ( "--dump-symbol-info",
-        Arg.String (fun files -> set_mode (MODE_DUMP_SYMBOL_INFO files) ()),
+        Arg.String (fun files -> set_mode (MODE_DUMP_SYMBOL_INFO files)),
         (*  Input format:
          *  The file list can either be "-" which accepts the input from stdin
          *  separated by newline(for long list) or directly from command line
@@ -256,32 +262,32 @@ let parse_check_args cmd =
             | _ -> print_string "Warning: unrecognized error format.\n"),
         "<raw|context|highlighted> Error formatting style" );
       ( "--extract-standalone",
-        Arg.String (fun name -> set_mode (MODE_EXTRACT_STANDALONE name) ()),
+        Arg.String (fun name -> set_mode (MODE_EXTRACT_STANDALONE name)),
         " extract a given function / method together with its dependencies as a standalone file"
       );
       ( "--concatenate-all",
-        Arg.Unit (fun () -> set_mode MODE_CONCATENATE_ALL ()),
+        Arg.Unit (fun () -> set_mode MODE_CONCATENATE_ALL),
         "(mode) create a single file containing all Hack code in the specified prefix"
       );
       ( "--file-dependents",
         Arg.Unit
           (fun () ->
             let () = prechecked := Some false in
-            set_mode MODE_FILE_DEPENDENTS ()),
+            set_mode MODE_FILE_DEPENDENTS),
         " (mode) Given a list of filepaths, shows list of (possibly) dependent files"
       );
       ( "--find-class-refs",
-        Arg.String (fun x -> set_mode (MODE_FIND_CLASS_REFS x) ()),
+        Arg.String (fun x -> set_mode (MODE_FIND_CLASS_REFS x)),
         " (mode) finds references of the provided class name" );
       ( "--find-refs",
-        Arg.String (fun x -> set_mode (MODE_FIND_REFS x) ()),
+        Arg.String (fun x -> set_mode (MODE_FIND_REFS x)),
         " (mode) finds references of the provided method name" );
       Common_argspecs.force_dormant_start force_dormant_start;
       ( "--format",
         Arg.Tuple
           [
             Arg.Int (fun x -> format_from := x);
-            Arg.Int (fun x -> set_mode (MODE_FORMAT (!format_from, x)) ());
+            Arg.Int (fun x -> set_mode (MODE_FORMAT (!format_from, x)));
           ],
         "" );
       Common_argspecs.from from;
@@ -301,18 +307,19 @@ let parse_check_args cmd =
         Arg.Unit (fun () -> from := "vim"),
         " (deprecated) equivalent to --from vim" );
       ( "--full-fidelity-schema",
-        Arg.Unit (set_mode MODE_FULL_FIDELITY_SCHEMA),
+        Arg.Unit (fun () -> set_mode MODE_FULL_FIDELITY_SCHEMA),
         "" );
       ( "--fun-deps-at-pos-batch",
         Arg.Rest
           begin
             fun position ->
-            mode :=
-              match !mode with
-              | None -> Some (MODE_FUN_DEPS_AT_POS_BATCH [position])
+            set_mode
+              ~validate:false
+              (match !mode with
+              | None -> MODE_FUN_DEPS_AT_POS_BATCH [position]
               | Some (MODE_FUN_DEPS_AT_POS_BATCH positions) ->
-                Some (MODE_FUN_DEPS_AT_POS_BATCH (position :: positions))
-              | _ -> raise (Arg.Bad "only a single mode should be specified")
+                MODE_FUN_DEPS_AT_POS_BATCH (position :: positions)
+              | _ -> raise (Arg.Bad "only a single mode should be specified"))
           end,
         " (mode) for each entry in input list get list of function dependencies [file:line:character list]"
       );
@@ -320,13 +327,13 @@ let parse_check_args cmd =
         Arg.Rest
           begin
             fun position ->
-            mode :=
-              match !mode with
-              | None -> Some (MODE_FUN_IS_LOCALLABLE_AT_POS_BATCH [position])
+            set_mode
+              ~validate:false
+              (match !mode with
+              | None -> MODE_FUN_IS_LOCALLABLE_AT_POS_BATCH [position]
               | Some (MODE_FUN_IS_LOCALLABLE_AT_POS_BATCH positions) ->
-                Some
-                  (MODE_FUN_IS_LOCALLABLE_AT_POS_BATCH (position :: positions))
-              | _ -> raise (Arg.Bad "only a single mode should be specified")
+                MODE_FUN_IS_LOCALLABLE_AT_POS_BATCH (position :: positions)
+              | _ -> raise (Arg.Bad "only a single mode should be specified"))
           end,
         " (mode) for each entry in input list checks if function at position can be made RxLocal [file:line:character list]"
       );
@@ -336,7 +343,7 @@ let parse_check_args cmd =
             Arg.Int (fun x -> hot_classes_threshold := x);
             Arg.String
               (fun x ->
-                set_mode (MODE_GEN_HOT_CLASSES (!hot_classes_threshold, x)) ());
+                set_mode (MODE_GEN_HOT_CLASSES (!hot_classes_threshold, x)));
           ],
         " generate a JSON file listing all classes with more dependents than the"
         ^ " given threshold. Usage: --gen-hot-classes-file 500 ~/hh_hot_classes.json"
@@ -346,27 +353,27 @@ let parse_check_args cmd =
         " generate a saved state even if there are type errors (default: false)."
       );
       ( "--get-method-name",
-        Arg.String (fun x -> set_mode (MODE_IDENTIFY_SYMBOL3 x) ()),
+        Arg.String (fun x -> set_mode (MODE_IDENTIFY_SYMBOL3 x)),
         (* alias for --identify-function *) "" );
       ( "--go-to-impl-class",
-        Arg.String (fun x -> set_mode (MODE_GO_TO_IMPL_CLASS x) ()),
+        Arg.String (fun x -> set_mode (MODE_GO_TO_IMPL_CLASS x)),
         " (mode) goes to implementation of the provided class/trait/interface/etc. with the given name"
       );
       ( "--go-to-impl-class-remote",
-        Arg.String (fun x -> set_mode (MODE_GO_TO_IMPL_CLASS_REMOTE x) ()),
+        Arg.String (fun x -> set_mode (MODE_GO_TO_IMPL_CLASS_REMOTE x)),
         " (mode) similar to go-to-class-impl, but uses a glean database for faster but potentially out-of-date results"
       );
       ( "--go-to-impl-method",
-        Arg.String (fun x -> set_mode (MODE_GO_TO_IMPL_METHOD x) ()),
+        Arg.String (fun x -> set_mode (MODE_GO_TO_IMPL_METHOD x)),
         " (mode) goes to implementation of the provided method name" );
       ( "--ide-find-refs",
-        Arg.String (fun x -> set_mode (MODE_IDE_FIND_REFS x) ()),
+        Arg.String (fun x -> set_mode (MODE_IDE_FIND_REFS x)),
         "" );
       ( "--ide-get-definition",
-        Arg.String (fun x -> set_mode (MODE_IDENTIFY_SYMBOL2 x) ()),
+        Arg.String (fun x -> set_mode (MODE_IDENTIFY_SYMBOL2 x)),
         (* alias for --identify-function *) "" );
       ( "--ide-highlight-refs",
-        Arg.String (fun x -> set_mode (MODE_IDE_HIGHLIGHT_REFS x) ()),
+        Arg.String (fun x -> set_mode (MODE_IDE_HIGHLIGHT_REFS x)),
         (* Similar to --ide-find-refs, but returns references in current file only,
          * and is optimized to be faster in that case *)
         "" );
@@ -374,8 +381,9 @@ let parse_check_args cmd =
         Arg.Rest
           begin
             fun fn ->
-            mode :=
-              match !mode with
+            set_mode
+              ~validate:false
+              (match !mode with
               | None ->
                 let submode =
                   (*
@@ -395,117 +403,110 @@ let parse_check_args cmd =
                       (Arg.Bad
                          ("No " ^ fn ^ " submode supported for global inference"))
                 in
-                Some (MODE_GLOBAL_INFERENCE (submode, []))
+                MODE_GLOBAL_INFERENCE (submode, [])
               | Some (MODE_GLOBAL_INFERENCE (submode, fnl)) ->
-                Some (MODE_GLOBAL_INFERENCE (submode, fn :: fnl))
-              | _ -> raise (Arg.Bad "only a single mode should be specified")
+                MODE_GLOBAL_INFERENCE (submode, fn :: fnl)
+              | _ -> raise (Arg.Bad "only a single mode should be specified"))
           end,
         " (mode) global inference operations, Usage: --global-inference "
         ^ "[\"merge\", \"solve\", \"export-json\", \"rewrite\"] files..." );
-      ("--ide-outline", Arg.Unit (set_mode MODE_OUTLINE2), "");
+      ("--ide-outline", Arg.Unit (fun () -> set_mode MODE_OUTLINE2), "");
       ( "--ide-refactor",
-        Arg.String (fun x -> set_mode (MODE_IDE_REFACTOR x) ()),
+        Arg.String (fun x -> set_mode (MODE_IDE_REFACTOR x)),
         " (mode) rename a symbol, Usage: --ide-refactor "
         ^ " <filename>:<line number>:<col number>:<new name>" );
       ( "--identify-function",
-        Arg.String (fun x -> set_mode (MODE_IDENTIFY_SYMBOL1 x) ()),
+        Arg.String (fun x -> set_mode (MODE_IDENTIFY_SYMBOL1 x)),
         " (mode) print the full function name at the position "
         ^ "[line:character] of the text on stdin" );
       ( "--identify",
-        Arg.String (fun x -> set_mode (MODE_IDENTIFY_SYMBOL x) ()),
+        Arg.String (fun x -> set_mode (MODE_IDENTIFY_SYMBOL x)),
         " (mode) identify the named symbol" );
       ( "--ignore-hh-version",
         Arg.Set ignore_hh_version,
         " ignore hh_version check when loading saved states (default: false)" );
       ( "--in-memory-dep-table-size",
-        Arg.Unit (set_mode MODE_IN_MEMORY_DEP_TABLE_SIZE),
+        Arg.Unit (fun () -> set_mode MODE_IN_MEMORY_DEP_TABLE_SIZE),
         " number of entries in the in-memory dependency table" );
       ( "--inheritance-ancestor-classes",
-        Arg.String
-          (fun x -> set_mode (MODE_METHOD_JUMP_ANCESTORS (x, "Class")) ()),
+        Arg.String (fun x -> set_mode (MODE_METHOD_JUMP_ANCESTORS (x, "Class"))),
         " (mode) prints a list of classes that this class extends" );
       ( "--inheritance-ancestor-classes-batch",
         Arg.Rest
           begin
             fun class_ ->
-            mode :=
-              match !mode with
-              | None ->
-                Some (MODE_METHOD_JUMP_ANCESTORS_BATCH ([class_], "Class"))
+            set_mode
+              ~validate:false
+              (match !mode with
+              | None -> MODE_METHOD_JUMP_ANCESTORS_BATCH ([class_], "Class")
               | Some (MODE_METHOD_JUMP_ANCESTORS_BATCH (classes, "Class")) ->
-                Some
-                  (MODE_METHOD_JUMP_ANCESTORS_BATCH (class_ :: classes, "Class"))
-              | _ -> raise (Arg.Bad "only a single mode should be specified")
+                MODE_METHOD_JUMP_ANCESTORS_BATCH (class_ :: classes, "Class")
+              | _ -> raise (Arg.Bad "only a single mode should be specified"))
           end,
         " (mode) prints a list of classes that these classes extend" );
       ( "--inheritance-ancestor-interfaces",
         Arg.String
-          (fun x -> set_mode (MODE_METHOD_JUMP_ANCESTORS (x, "Interface")) ()),
+          (fun x -> set_mode (MODE_METHOD_JUMP_ANCESTORS (x, "Interface"))),
         " (mode) prints a list of interfaces that this class implements" );
       ( "--inheritance-ancestor-interfaces-batch",
         Arg.Rest
           begin
             fun class_ ->
-            mode :=
-              match !mode with
-              | None ->
-                Some (MODE_METHOD_JUMP_ANCESTORS_BATCH ([class_], "Interface"))
+            set_mode
+              ~validate:false
+              (match !mode with
+              | None -> MODE_METHOD_JUMP_ANCESTORS_BATCH ([class_], "Interface")
               | Some (MODE_METHOD_JUMP_ANCESTORS_BATCH (classes, "Interface"))
                 ->
-                Some
-                  (MODE_METHOD_JUMP_ANCESTORS_BATCH
-                     (class_ :: classes, "Interface"))
-              | _ -> raise (Arg.Bad "only a single mode should be specified")
+                MODE_METHOD_JUMP_ANCESTORS_BATCH (class_ :: classes, "Interface")
+              | _ -> raise (Arg.Bad "only a single mode should be specified"))
           end,
         " (mode) prints a list of interfaces that these classes implement" );
       ( "--inheritance-ancestor-traits",
-        Arg.String
-          (fun x -> set_mode (MODE_METHOD_JUMP_ANCESTORS (x, "Trait")) ()),
+        Arg.String (fun x -> set_mode (MODE_METHOD_JUMP_ANCESTORS (x, "Trait"))),
         " (mode) prints a list of traits that this class uses" );
       ( "--inheritance-ancestor-traits-batch",
         Arg.Rest
           begin
             fun class_ ->
-            mode :=
-              match !mode with
-              | None ->
-                Some (MODE_METHOD_JUMP_ANCESTORS_BATCH ([class_], "Trait"))
+            set_mode
+              ~validate:false
+              (match !mode with
+              | None -> MODE_METHOD_JUMP_ANCESTORS_BATCH ([class_], "Trait")
               | Some (MODE_METHOD_JUMP_ANCESTORS_BATCH (classes, "Trait")) ->
-                Some
-                  (MODE_METHOD_JUMP_ANCESTORS_BATCH (class_ :: classes, "Trait"))
-              | _ -> raise (Arg.Bad "only a single mode should be specified")
+                MODE_METHOD_JUMP_ANCESTORS_BATCH (class_ :: classes, "Trait")
+              | _ -> raise (Arg.Bad "only a single mode should be specified"))
           end,
         " (mode) prints a list of traits that these classes use" );
       ( "--inheritance-ancestors",
         Arg.String
-          (fun x -> set_mode (MODE_METHOD_JUMP_ANCESTORS (x, "No_filter")) ()),
+          (fun x -> set_mode (MODE_METHOD_JUMP_ANCESTORS (x, "No_filter"))),
         " (mode) prints a list of all related classes or methods"
         ^ " to the given class" );
       ( "--inheritance-children",
-        Arg.String (fun x -> set_mode (MODE_METHOD_JUMP_CHILDREN x) ()),
+        Arg.String (fun x -> set_mode (MODE_METHOD_JUMP_CHILDREN x)),
         " (mode) prints a list of all related classes or methods"
         ^ " to the given class" );
       ( "--json",
         Arg.Set output_json,
         " output json for machine consumption. (default: false)" );
       ( "--lint",
-        Arg.Unit (set_mode MODE_LINT),
+        Arg.Unit (fun () -> set_mode MODE_LINT),
         " (mode) lint the given list of files" );
       ( "--lint-all",
-        Arg.Int (fun x -> set_mode (MODE_LINT_ALL x) ()),
+        Arg.Int (fun x -> set_mode (MODE_LINT_ALL x)),
         " (mode) find all occurrences of lint with the given error code" );
       ( "--lint-stdin",
-        Arg.String (fun filename -> set_mode (MODE_LINT_STDIN filename) ()),
+        Arg.String (fun filename -> set_mode (MODE_LINT_STDIN filename)),
         " (mode) lint a file given on stdin; the filename should be the"
         ^ " argument to this option" );
       ( "--lint-xcontroller",
-        Arg.String
-          (fun filename -> set_mode (MODE_LINT_XCONTROLLER filename) ()),
+        Arg.String (fun filename -> set_mode (MODE_LINT_XCONTROLLER filename)),
         "" )
       (* (mode) lint all xcontrollers in files listed in given file (i.e. the argument is
        * a path to a file that contains a list of files) *);
       ( "--list-files",
-        Arg.Unit (set_mode MODE_LIST_FILES),
+        Arg.Unit (fun () -> set_mode MODE_LIST_FILES),
         " (mode) list files with errors" );
       ( "--log-inference-constraints",
         Arg.Set log_inference_constraints,
@@ -529,13 +530,13 @@ let parse_check_args cmd =
         " (mode) show client lsp log filename and exit" );
       ("--no-load", Arg.Set no_load, " start from a fresh state");
       ( "--outline",
-        Arg.Unit (set_mode MODE_OUTLINE),
+        Arg.Unit (fun () -> set_mode MODE_OUTLINE),
         " (mode) prints an outline of the text on stdin" );
       Common_argspecs.prechecked prechecked;
       Common_argspecs.no_prechecked prechecked;
       Common_argspecs.with_mini_state mini_state;
       ( "--pause",
-        Arg.Unit (set_mode (MODE_PAUSE true)),
+        Arg.Unit (fun () -> set_mode (MODE_PAUSE true)),
         " (mode) pause recheck-on-file-change [EXPERIMENTAL]" );
       ("--profile-log", Arg.Set profile_log, " enable profile logging");
       ( "--refactor",
@@ -546,9 +547,7 @@ let parse_check_args cmd =
             Arg.String (fun x -> refactor_before := x);
             Arg.String
               (fun x ->
-                set_mode
-                  (MODE_REFACTOR (!refactor_mode, !refactor_before, x))
-                  ());
+                set_mode (MODE_REFACTOR (!refactor_mode, !refactor_before, x)));
           ],
         " (mode) rename a symbol, Usage: --refactor "
         ^ "[\"Class\", \"Function\", \"Method\"] <Current Name> <New Name>" );
@@ -557,17 +556,18 @@ let parse_check_args cmd =
         Arg.Int
           begin
             fun code ->
-            mode :=
-              match !mode with
-              | None -> Some (MODE_REMOVE_DEAD_FIXMES [code])
+            set_mode
+              ~validate:false
+              (match !mode with
+              | None -> MODE_REMOVE_DEAD_FIXMES [code]
               | Some (MODE_REMOVE_DEAD_FIXMES codel) ->
-                Some (MODE_REMOVE_DEAD_FIXMES (code :: codel))
-              | _ -> raise (Arg.Bad "only a single mode should be specified")
+                MODE_REMOVE_DEAD_FIXMES (code :: codel)
+              | _ -> raise (Arg.Bad "only a single mode should be specified"))
           end,
         " (mode) remove dead HH_FIXME for specified error code "
         ^ "(first do hh_client restart --no-load)" );
       ( "--remove-dead-fixmes",
-        Arg.Unit (set_mode (MODE_REMOVE_DEAD_FIXMES [])),
+        Arg.Unit (fun () -> set_mode (MODE_REMOVE_DEAD_FIXMES [])),
         " (mode) remove dead HH_FIXME for any error code < 5000 "
         ^ "(first do hh_client restart --no-load)" );
       ( "--replace-state-after-saving",
@@ -576,7 +576,7 @@ let parse_check_args cmd =
         ^ " to replace the program state; otherwise, the state files are not"
         ^ " used after being written to disk (default: false)" );
       ( "--resume",
-        Arg.Unit (set_mode (MODE_PAUSE false)),
+        Arg.Unit (fun () -> set_mode (MODE_PAUSE false)),
         " (mode) resume recheck-on-file-change [EXPERIMENTAL]" );
       ( "--retries",
         Arg.Int (fun n -> timeout := Some (float_of_int (max 5 n))),
@@ -585,19 +585,20 @@ let parse_check_args cmd =
        * Output is separated by newline.
        * Exit code will be non-zero if no checkpoint is found *)
       ( "--retrieve-checkpoint",
-        Arg.String (fun x -> set_mode (MODE_RETRIEVE_CHECKPOINT x) ()),
+        Arg.String (fun x -> set_mode (MODE_RETRIEVE_CHECKPOINT x)),
         "" );
       ("--retry-if-init", Arg.Bool (fun _ -> ()), " (deprecated and ignored)");
       ( "--rewrite-lambda-parameters",
         Arg.Rest
           begin
             fun fn ->
-            mode :=
-              match !mode with
-              | None -> Some (MODE_REWRITE_LAMBDA_PARAMETERS [fn])
+            set_mode
+              ~validate:false
+              (match !mode with
+              | None -> MODE_REWRITE_LAMBDA_PARAMETERS [fn]
               | Some (MODE_REWRITE_LAMBDA_PARAMETERS fnl) ->
-                Some (MODE_REWRITE_LAMBDA_PARAMETERS (fn :: fnl))
-              | _ -> raise (Arg.Bad "only a single mode should be specified")
+                MODE_REWRITE_LAMBDA_PARAMETERS (fn :: fnl)
+              | _ -> raise (Arg.Bad "only a single mode should be specified"))
           end,
         " (mode) rewrite lambdas in the files from the given list"
         ^ " with suggested parameter types" );
@@ -605,22 +606,23 @@ let parse_check_args cmd =
         Arg.Rest
           begin
             fun fn ->
-            mode :=
-              match !mode with
-              | None -> Some (MODE_REWRITE_TYPE_PARAMS_TYPE [fn])
+            set_mode
+              ~validate:false
+              (match !mode with
+              | None -> MODE_REWRITE_TYPE_PARAMS_TYPE [fn]
               | Some (MODE_REWRITE_TYPE_PARAMS_TYPE fnl) ->
-                Some (MODE_REWRITE_TYPE_PARAMS_TYPE (fn :: fnl))
-              | _ -> raise (Arg.Bad "only a single mode should be specified")
+                MODE_REWRITE_TYPE_PARAMS_TYPE (fn :: fnl)
+              | _ -> raise (Arg.Bad "only a single mode should be specified"))
           end,
         " (mode) add missing type parameters in the type hints for function"
         ^ " parameters (e.g.: C $x -> C<int> $x) in the files from the given list"
       );
       ( "--save-naming",
-        Arg.String (fun x -> set_mode (MODE_SAVE_NAMING x) ()),
+        Arg.String (fun x -> set_mode (MODE_SAVE_NAMING x)),
         " (mode) Save the naming table to the given file."
         ^ " Returns the number of files and symbols written to disk." );
       ( "--save-state",
-        Arg.String (fun x -> set_mode (MODE_SAVE_STATE x) ()),
+        Arg.String (fun x -> set_mode (MODE_SAVE_STATE x)),
         " (mode) Save a saved state to the given file."
         ^ " Returns number of edges dumped from memory to the database." );
       ( "--save-64bit",
@@ -630,81 +632,113 @@ let parse_check_args cmd =
         Arg.Set saved_state_ignore_hhconfig,
         " ignore hhconfig hash when loading saved states (default: false)" );
       ( "--search",
-        Arg.String (fun x -> set_mode (MODE_SEARCH (x, "")) ()),
+        Arg.String (fun x -> set_mode (MODE_SEARCH (x, ""))),
         " (mode) fuzzy search symbol definitions" );
       ( "--search-class",
-        Arg.String (fun x -> set_mode (MODE_SEARCH (x, "class")) ()),
+        Arg.String (fun x -> set_mode (MODE_SEARCH (x, "class"))),
         " (mode) fuzzy search class definitions" );
       ( "--search-constant",
-        Arg.String (fun x -> set_mode (MODE_SEARCH (x, "constant")) ()),
+        Arg.String (fun x -> set_mode (MODE_SEARCH (x, "constant"))),
         " (mode) fuzzy search constant definitions" );
       ( "--search-function",
-        Arg.String (fun x -> set_mode (MODE_SEARCH (x, "function")) ()),
+        Arg.String (fun x -> set_mode (MODE_SEARCH (x, "function"))),
         " (mode) fuzzy search function definitions" );
       ( "--search-typedef",
-        Arg.String (fun x -> set_mode (MODE_SEARCH (x, "typedef")) ()),
+        Arg.String (fun x -> set_mode (MODE_SEARCH (x, "typedef"))),
         " (mode) fuzzy search typedef definitions" );
       ( "--server-rage",
-        Arg.Unit (set_mode MODE_SERVER_RAGE),
+        Arg.Unit (fun () -> set_mode MODE_SERVER_RAGE),
         " (mode) dumps internal state of hh_server" );
       ( "--show-spinner",
         Arg.Bool (fun x -> show_spinner := Some x),
         " shows a spinner while awaiting the typechecker" );
       ( "--single",
-        Arg.String (fun x -> set_mode (MODE_STATUS_SINGLE x) ()),
+        Arg.String (fun x -> set_mode (MODE_STATUS_SINGLE x)),
         "<path> Return errors in file with provided name (give '-' for stdin)"
       );
       ("--sort-results", Arg.Set sort_results, " sort output for CST search.");
       ( "--stats",
-        Arg.Unit (set_mode MODE_STATS),
+        Arg.Unit (fun () -> set_mode MODE_STATS),
         " display some server statistics" );
       ( "--stdin-name",
         Arg.String (fun x -> stdin_name := Some x),
         " substitute stdin for contents of file with specified name" );
       ( "--status",
-        Arg.Unit (set_mode MODE_STATUS),
+        Arg.Unit (fun () -> set_mode MODE_STATUS),
         " (mode) show a human readable list of errors (default)" );
       ( "--timeout",
         Arg.Float (fun x -> timeout := Some (Float.max 5. x)),
         " set the timeout in seconds (default: no timeout)" );
       ( "--type-at-pos",
-        Arg.String (fun x -> set_mode (MODE_TYPE_AT_POS x) ()),
+        Arg.String (fun x -> set_mode (MODE_TYPE_AT_POS x)),
         " (mode) show type at a given position in file [line:character]" );
       ( "--type-at-pos-batch",
         Arg.Rest
           begin
             fun position ->
-            mode :=
-              match !mode with
-              | None -> Some (MODE_TYPE_AT_POS_BATCH (false, [position]))
-              | Some (MODE_TYPE_AT_POS_BATCH (_, positions)) ->
-                Some (MODE_TYPE_AT_POS_BATCH (false, position :: positions))
-              | _ -> raise (Arg.Bad "only a single mode should be specified")
+            set_mode
+              ~validate:false
+              (match !mode with
+              | None -> MODE_TYPE_AT_POS_BATCH [position]
+              | Some (MODE_TYPE_AT_POS_BATCH positions) ->
+                MODE_TYPE_AT_POS_BATCH (position :: positions)
+              | _ -> raise (Arg.Bad "only a single mode should be specified"))
           end,
         " (mode) show types at multiple positions [file:line:character list]" );
       ( "--type-at-pos-batch-ex",
         Arg.Rest
           begin
             fun position ->
-            mode :=
-              match !mode with
-              | None -> Some (MODE_TYPE_AT_POS_BATCH (true, [position]))
-              | Some (MODE_TYPE_AT_POS_BATCH (_, positions)) ->
-                Some (MODE_TYPE_AT_POS_BATCH (true, position :: positions))
-              | _ -> raise (Arg.Bad "only a single mode should be specified")
+            set_mode
+              ~validate:false
+              (match !mode with
+              | None -> MODE_TYPE_AT_POS_BATCH [position]
+              | Some (MODE_TYPE_AT_POS_BATCH positions) ->
+                MODE_TYPE_AT_POS_BATCH (position :: positions)
+              | _ -> raise (Arg.Bad "only a single mode should be specified"))
           end,
-        " (mode) show types at multiple positions [file:line:character list] -- experimental"
-      );
+        " (deprecated) same as --type-at-pos-batch" );
       ( "--verbose-on",
-        Arg.Unit (fun () -> set_mode (MODE_VERBOSE true) ()),
+        Arg.Unit (fun () -> set_mode (MODE_VERBOSE true)),
         " (mode) turn on verbose server log" );
       ( "--verbose-off",
-        Arg.Unit (fun () -> set_mode (MODE_VERBOSE false) ()),
+        Arg.Unit (fun () -> set_mode (MODE_VERBOSE false)),
         " (mode) turn off verbose server log" );
       ("--version", Arg.Set version, " (mode) show version and exit");
       Common_argspecs.watchman_debug_logging watchman_debug_logging;
       (* Please keep these sorted in the alphabetical order *)
     ]
+  in
+  (* If the user typed an option like "--type-at-pos" which set a mode which triggered
+  a command, we want to be able to show "hh_server is busy [--type-at-pos]" to show that
+  hh_server is currently busy with something that the user typed. The string
+  description that appears inside the square brackets must go into args.desc.
+  Unfortunately this isn't well supported by the Arg library, so we have to hack it up
+  ourselves: (1) For any option that takes say Arg.Unit(callback), we'll change it into
+  Arg.Unit(modified_callback) where modified_callback sets 'current_option' to the
+  option string being handled and then calls the original callback. (2) If the original
+  callback calls set_mode, then set_mode will take the opportunity to do desc := current_option.
+  *)
+  let modify_callback : type a. string -> (a -> unit) -> a -> unit =
+   fun option callback value ->
+    current_option := Some option;
+    callback value;
+    current_option := None
+  in
+  let rec modify_spec ~option spec =
+    match spec with
+    | Arg.Unit callback -> Arg.Unit (modify_callback option callback)
+    | Arg.Bool callback -> Arg.Bool (modify_callback option callback)
+    | Arg.String callback -> Arg.String (modify_callback option callback)
+    | Arg.Int callback -> Arg.Int (modify_callback option callback)
+    | Arg.Float callback -> Arg.Float (modify_callback option callback)
+    | Arg.Rest callback -> Arg.Rest (modify_callback option callback)
+    | Arg.Tuple specs -> Arg.Tuple (List.map specs ~f:(modify_spec ~option))
+    | spec -> spec
+  in
+  let options =
+    List.map options ~f:(fun (option, spec, text) ->
+        (option, modify_spec ~option spec, text))
   in
   let args = parse_without_command options usage "check" in
   if !version then (
@@ -802,6 +836,7 @@ let parse_check_args cmd =
       deadline = Option.map ~f:(fun t -> Unix.time () +. t) !timeout;
       watchman_debug_logging = !watchman_debug_logging;
       allow_non_opt_build = !allow_non_opt_build;
+      desc = !desc;
     }
 
 let parse_start_env command =

@@ -30,6 +30,12 @@ type pos = Ast_defs.pos [@@deriving eq, show, ord]
 
 type byte_string = Ast_defs.byte_string [@@deriving eq, show, ord]
 
+type visibility = Ast_defs.visibility =
+  | Private [@visitors.name "visibility_Private"]
+  | Public [@visitors.name "visibility_Public"]
+  | Protected [@visitors.name "visibility_Protected"]
+[@@deriving eq, ord, show { with_path = false }]
+
 type local_id = (Local_id.t[@visitors.opaque])
 
 and lid = pos * local_id
@@ -172,11 +178,6 @@ and vc_kind =
   | Keyset
 [@@visitors.opaque]
 
-and visibility =
-  | Private [@visitors.name "visibility_Private"]
-  | Public [@visitors.name "visibility_Public"]
-  | Protected [@visitors.name "visibility_Protected"]
-
 and use_as_visibility =
   | UseAsPublic
   | UseAsPrivate
@@ -191,9 +192,15 @@ and enum_ = {
   e_base: hint;
   e_constraint: hint option;
   e_includes: hint list;
+  e_enum_class: bool;
 }
 
-and where_constraint = hint * Ast_defs.constraint_kind * hint
+and where_constraint_hint = hint * Ast_defs.constraint_kind * hint
+
+and reify_kind =
+  | Erased
+  | SoftReified
+  | Reified
 [@@deriving
   show { with_path = false },
     eq,

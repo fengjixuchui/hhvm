@@ -9,7 +9,7 @@ use crate::expression_parser::ExpressionParser;
 use crate::lexer::Lexer;
 use crate::parser_env::ParserEnv;
 use crate::parser_trait::{Context, ExpectedTokens, ParserTrait};
-use crate::smart_constructors::{NodeType, SmartConstructors};
+use crate::smart_constructors::{NodeType, SmartConstructors, Token};
 use crate::type_parser::TypeParser;
 use parser_core_types::lexable_token::LexableToken;
 use parser_core_types::syntax_error::{self as Errors, SyntaxError};
@@ -21,9 +21,9 @@ where
     S: SmartConstructors,
     S::R: NodeType,
 {
-    lexer: Lexer<'a, S>,
+    lexer: Lexer<'a, S::TF>,
     env: ParserEnv,
-    context: Context<'a, S::Token>,
+    context: Context<'a, Token<S>>,
     errors: Vec<SyntaxError>,
     sc: S,
 }
@@ -50,9 +50,9 @@ where
     S::R: NodeType,
 {
     fn make(
-        lexer: Lexer<'a, S>,
+        lexer: Lexer<'a, S::TF>,
         env: ParserEnv,
-        context: Context<'a, S::Token>,
+        context: Context<'a, Token<S>>,
         errors: Vec<SyntaxError>,
         sc: S,
     ) -> Self {
@@ -65,15 +65,15 @@ where
         }
     }
 
-    fn into_parts(self) -> (Lexer<'a, S>, Context<'a, S::Token>, Vec<SyntaxError>, S) {
+    fn into_parts(self) -> (Lexer<'a, S::TF>, Context<'a, Token<S>>, Vec<SyntaxError>, S) {
         (self.lexer, self.context, self.errors, self.sc)
     }
 
-    fn lexer(&self) -> &Lexer<'a, S> {
+    fn lexer(&self) -> &Lexer<'a, S::TF> {
         &self.lexer
     }
 
-    fn lexer_mut(&mut self) -> &mut Lexer<'a, S> {
+    fn lexer_mut(&mut self) -> &mut Lexer<'a, S::TF> {
         &mut self.lexer
     }
 
@@ -97,19 +97,19 @@ where
         &mut self.sc
     }
 
-    fn drain_skipped_tokens(&mut self) -> std::vec::Drain<S::Token> {
+    fn drain_skipped_tokens(&mut self) -> std::vec::Drain<Token<S>> {
         self.context.skipped_tokens.drain(..)
     }
 
-    fn skipped_tokens(&self) -> &[S::Token] {
+    fn skipped_tokens(&self) -> &[Token<S>] {
         &self.context.skipped_tokens
     }
 
-    fn context_mut(&mut self) -> &mut Context<'a, S::Token> {
+    fn context_mut(&mut self) -> &mut Context<'a, Token<S>> {
         &mut self.context
     }
 
-    fn context(&self) -> &Context<'a, S::Token> {
+    fn context(&self) -> &Context<'a, Token<S>> {
         &self.context
     }
 }
@@ -318,9 +318,13 @@ where
         //   for   (   for-initializer-opt   ;   for-control-opt   ;    \
         //     for-end-of-loop-opt   )   statement
         //
-        // Each clause is an optional, comma-separated list of expressions.
+        // The initialize and end-of-loop clauses are optional,
+        // comma-separated lists of expressions. The control clause is
+        // an optional single expression.
+        //
         // Note that unlike most such lists in Hack, it may *not* have a trailing
         // comma.
+        //
         // TODO: There is no compelling reason to not allow a trailing comma
         // from the grammatical point of view. Each clause unambiguously ends in
         // either a semi or a paren, so we can allow a trailing comma without
@@ -332,10 +336,10 @@ where
                 x.parse_expression()
             });
         let for_first_semicolon = self.require_semicolon();
-        let for_control_expr =
-            self.parse_comma_list_opt(TokenKind::Semicolon, Errors::error1015, |x| {
-                x.parse_expression()
-            });
+        let for_control_expr = match self.peek_token_kind() {
+            TokenKind::Semicolon => S!(make_missing, self, self.pos()),
+            _ => self.parse_expression(),
+        };
         let for_second_semicolon = self.require_semicolon();
         let for_end_of_loop_expr =
             self.parse_comma_list_opt(TokenKind::RightParen, Errors::error1015, |x| {

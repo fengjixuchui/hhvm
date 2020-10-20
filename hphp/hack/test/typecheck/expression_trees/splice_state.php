@@ -74,6 +74,17 @@ class Code {
   }
 }
 
+final class ExprTree<TVisitor, TResult, TInfer>{
+  public function __construct(
+    private (function(TVisitor): TResult) $x,
+    private (function(): TInfer) $err,
+  ) {}
+}
+
+function lift<T>(T $_): ExprTree<Code, Code::TAst, T> {
+  throw new Exception();
+}
+
 // This technically shouldn't throw an error.
 // It currently is due to typechecking the current desugaring
 // So, for the moment, allow this error to be thrown and fix the desugaring
@@ -83,7 +94,7 @@ function test(): void {
   if ($x->x !== null) {
     $_ = Code`() ==> {
       // We know that $x->x is not null
-      __splice__($x->x + 1);
+      __splice__(lift($x->x + 1));
       return;
     }`;
   }

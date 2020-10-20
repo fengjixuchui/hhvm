@@ -3,7 +3,6 @@
 .function foo($x){
     NullUninit
     NullUninit
-    NullUninit
     Int 2
     JmpNZ target_label
     AssertRATL $x Int
@@ -14,7 +13,6 @@
 }
 
 .function ["__EntryPoint"("""y:0:{}""")] main() {
-  NullUninit
   NullUninit
   NullUninit
   Int 9

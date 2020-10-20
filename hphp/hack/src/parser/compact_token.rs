@@ -10,6 +10,7 @@ use crate::{
     compact_trivia::{CompactTrivia, TriviaKinds},
     lexable_token::LexableToken,
     source_text::SourceText,
+    token_factory::SimpleTokenFactory,
     token_kind::TokenKind,
     trivia_kind::TriviaKind,
 };
@@ -246,7 +247,42 @@ impl LexableToken for CompactToken {
         self.trailing_is_empty()
     }
 
-    fn with_leading(mut self, leading: Self::Trivia) -> Self {
+    fn has_leading_trivia_kind(&self, kind: TriviaKind) -> bool {
+        self.has_leading_trivia_kind(kind)
+    }
+
+    fn has_trailing_trivia_kind(&self, kind: TriviaKind) -> bool {
+        self.has_trailing_trivia_kind(kind)
+    }
+
+    fn into_trivia_and_width(self) -> (Self::Trivia, usize, Self::Trivia) {
+        match self.repr {
+            Small(t) => (
+                CompactTrivia::make(t.leading, t.leading_width as usize),
+                t.width as usize,
+                CompactTrivia::make(t.trailing, t.trailing_width as usize),
+            ),
+            Large(t) => (
+                CompactTrivia::make(t.leading, t.leading_width),
+                t.width,
+                CompactTrivia::make(t.trailing, t.trailing_width),
+            ),
+        }
+    }
+}
+
+impl SimpleTokenFactory for CompactToken {
+    fn make(
+        kind: TokenKind,
+        offset: usize,
+        width: usize,
+        leading: CompactTrivia,
+        trailing: CompactTrivia,
+    ) -> Self {
+        Self::new(kind, offset, width, leading, trailing)
+    }
+
+    fn with_leading(mut self, leading: CompactTrivia) -> Self {
         match &mut self.repr {
             Large(token) => {
                 token.leading_width = leading.width;
@@ -274,7 +310,7 @@ impl LexableToken for CompactToken {
         self
     }
 
-    fn with_trailing(mut self, trailing: Self::Trivia) -> Self {
+    fn with_trailing(mut self, trailing: CompactTrivia) -> Self {
         match &mut self.repr {
             Large(token) => {
                 token.trailing_width = trailing.width;
@@ -308,29 +344,6 @@ impl LexableToken for CompactToken {
             Large(t) => t.kind = kind,
         }
         self
-    }
-
-    fn has_leading_trivia_kind(&self, kind: TriviaKind) -> bool {
-        self.has_leading_trivia_kind(kind)
-    }
-
-    fn has_trailing_trivia_kind(&self, kind: TriviaKind) -> bool {
-        self.has_trailing_trivia_kind(kind)
-    }
-
-    fn into_trivia_and_width(self) -> (Self::Trivia, usize, Self::Trivia) {
-        match self.repr {
-            Small(t) => (
-                CompactTrivia::make(t.leading, t.leading_width as usize),
-                t.width as usize,
-                CompactTrivia::make(t.trailing, t.trailing_width as usize),
-            ),
-            Large(t) => (
-                CompactTrivia::make(t.leading, t.leading_width),
-                t.width,
-                CompactTrivia::make(t.trailing, t.trailing_width),
-            ),
-        }
     }
 }
 

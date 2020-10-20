@@ -10,7 +10,6 @@
   .declvars $z;
   NullUninit
   NullUninit
-  NullUninit
   Int 3
   Int 2
   FCallFuncD <> 2 1 "" - "" "add"
@@ -36,7 +35,6 @@
   Silence _8 End
   NullUninit
   NullUninit
-  NullUninit
   Int 1
   FCallFuncD <> 1 1 "" - "" "var_dump"
   PopC
@@ -45,7 +43,6 @@ L0:
   Silence _6 Start
   Silence _2 End
   Silence _9 End
-  NullUninit
   NullUninit
   NullUninit
   Int 2

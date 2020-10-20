@@ -12,7 +12,6 @@
 .function ArrayMember() {
   NullUninit
   NullUninit
-  NullUninit
     String "arr"
     String "ClassWithArray"
     ClassGetC
@@ -23,8 +22,6 @@
   String "ClassWithArray"
   SetL $x
   PopC
-
-  NullUninit
   NullUninit
   NullUninit
     String "arr"
@@ -41,7 +38,6 @@
 }
 
 .function ["__EntryPoint"("""y:0:{}""")] main() {
-  NullUninit
   NullUninit
   NullUninit
   FCallFuncD <> 0 1 "" - "" "ArrayMember"
@@ -92,15 +88,11 @@
 unset_label:  String "win\n"
               Print
               PopC
-
-              NullUninit
               NullUninit
               NullUninit
               CGetL $arr
               FCallFuncD <> 1 1 "" - "" "var_dump"
               PopC
-
-              NullUninit
               NullUninit
               NullUninit
               Int 1

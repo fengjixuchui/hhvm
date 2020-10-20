@@ -8,7 +8,7 @@ use crate::expression_parser::ExpressionParser;
 use crate::lexer::Lexer;
 use crate::parser_env::ParserEnv;
 use crate::parser_trait::{Context, ExpectedTokens, ParserTrait, SeparatedListKind};
-use crate::smart_constructors::{NodeType, SmartConstructors};
+use crate::smart_constructors::{NodeType, SmartConstructors, Token};
 use crate::statement_parser::StatementParser;
 use crate::type_parser::TypeParser;
 use parser_core_types::lexable_token::LexableToken;
@@ -16,15 +16,14 @@ use parser_core_types::syntax_error::{self as Errors, SyntaxError};
 use parser_core_types::token_kind::TokenKind;
 use parser_core_types::trivia_kind::TriviaKind;
 
-#[derive(Debug)]
 pub struct DeclarationParser<'a, S>
 where
     S: SmartConstructors,
     S::R: NodeType,
 {
-    lexer: Lexer<'a, S>,
+    lexer: Lexer<'a, S::TF>,
     env: ParserEnv,
-    context: Context<'a, S::Token>,
+    context: Context<'a, Token<S>>,
     errors: Vec<SyntaxError>,
     sc: S,
 }
@@ -51,9 +50,9 @@ where
     S::R: NodeType,
 {
     fn make(
-        lexer: Lexer<'a, S>,
+        lexer: Lexer<'a, S::TF>,
         env: ParserEnv,
-        context: Context<'a, S::Token>,
+        context: Context<'a, Token<S>>,
         errors: Vec<SyntaxError>,
         sc: S,
     ) -> Self {
@@ -66,15 +65,15 @@ where
         }
     }
 
-    fn into_parts(self) -> (Lexer<'a, S>, Context<'a, S::Token>, Vec<SyntaxError>, S) {
+    fn into_parts(self) -> (Lexer<'a, S::TF>, Context<'a, Token<S>>, Vec<SyntaxError>, S) {
         (self.lexer, self.context, self.errors, self.sc)
     }
 
-    fn lexer(&self) -> &Lexer<'a, S> {
+    fn lexer(&self) -> &Lexer<'a, S::TF> {
         &self.lexer
     }
 
-    fn lexer_mut(&mut self) -> &mut Lexer<'a, S> {
+    fn lexer_mut(&mut self) -> &mut Lexer<'a, S::TF> {
         &mut self.lexer
     }
 
@@ -98,19 +97,19 @@ where
         &mut self.sc
     }
 
-    fn drain_skipped_tokens(&mut self) -> std::vec::Drain<S::Token> {
+    fn drain_skipped_tokens(&mut self) -> std::vec::Drain<Token<S>> {
         self.context.skipped_tokens.drain(..)
     }
 
-    fn skipped_tokens(&self) -> &[S::Token] {
+    fn skipped_tokens(&self) -> &[Token<S>] {
         &self.context.skipped_tokens
     }
 
-    fn context_mut(&mut self) -> &mut Context<'a, S::Token> {
+    fn context_mut(&mut self) -> &mut Context<'a, Token<S>> {
         &mut self.context
     }
 
-    fn context(&self) -> &Context<'a, S::Token> {
+    fn context(&self) -> &Context<'a, Token<S>> {
         &self.context
     }
 }
@@ -199,6 +198,13 @@ where
         self.parse_terminated_list(|x: &mut Self| x.parse_enumerator(), TokenKind::RightBrace)
     }
 
+    fn parse_enum_class_enumerator_list_opt(&mut self) -> S::R {
+        self.parse_terminated_list(
+            |x: &mut Self| x.parse_enum_class_enumerator(),
+            TokenKind::RightBrace,
+        )
+    }
+
     fn parse_enum_declaration(&mut self, attrs: S::R) -> S::R {
         // enum-name-list-nonempty:
         //   :  enum-name enum-name-list
@@ -241,6 +247,43 @@ where
             enumerators,
             right_brace,
         )
+    }
+
+    fn parse_enum_class_declaration(&mut self, attrs: S::R) -> S::R {
+        // enum-class-declaration:
+        //   attribute-specification-opt enum class name : base { enum-class-enumerator-list-opt }
+        let enum_kw = self.assert_token(TokenKind::Enum);
+        let class_kw = self.assert_token(TokenKind::Class);
+        let name = self.require_class_name();
+        let colon = self.require_colon();
+        let base =
+            self.parse_type_specifier(false /* allow_var */, false /* allow_attr */);
+        let (classish_extends, classish_extends_list) = self.parse_extends_opt();
+        let left_brace = self.require_left_brace();
+        let enumerators = self.parse_enum_class_enumerator_list_opt();
+        let right_brace = self.require_right_brace();
+        S!(
+            make_enum_class_declaration,
+            self,
+            attrs,
+            enum_kw,
+            class_kw,
+            name,
+            colon,
+            base,
+            classish_extends,
+            classish_extends_list,
+            left_brace,
+            enumerators,
+            right_brace
+        )
+    }
+
+    fn parse_enum_or_enum_class_declaration(&mut self, attrs: S::R) -> S::R {
+        match self.peek_token_kind_with_lookahead(1) {
+            TokenKind::Class => self.parse_enum_class_declaration(attrs),
+            _ => self.parse_enum_declaration(attrs),
+        }
     }
 
     fn parse_record_field(&mut self) -> S::R {
@@ -1895,7 +1938,7 @@ where
 
     // A function label is either a function name or a __construct label.
     fn parse_function_label_opt(&mut self, is_methodish: bool) -> S::R {
-        let report_error = |x: &mut Self, token: S::Token| {
+        let report_error = |x: &mut Self, token: Token<S>| {
             x.with_error(Errors::error1044);
             let token = S!(make_token, x, token);
             S!(make_error, x, token)
@@ -2121,7 +2164,7 @@ where
         };
 
         match self.peek_token_kind() {
-            TokenKind::Enum => self.parse_enum_declaration(attribute_specification),
+            TokenKind::Enum => self.parse_enum_or_enum_class_declaration(attribute_specification),
             TokenKind::Type | TokenKind::Newtype => {
                 self.parse_alias_declaration(attribute_specification)
             }
@@ -2324,6 +2367,35 @@ where
         S!(make_enumerator, self, name, equal, value, semicolon)
     }
 
+    fn parse_enum_class_enumerator(&mut self) -> S::R {
+        // SPEC
+        // enum-class-enumerator:
+        //   name < type-specifier > ( expression ) ;
+        // Taken from parse_enumerator:
+        // TODO: We must allow TRUE to be a legal enum member name; here we allow
+        // any keyword.  Consider making this more strict.
+        let name = self.require_name_allow_all_keywords();
+        let left_angle = self.require_left_angle();
+        let ty = self.parse_type_specifier(/*allow_var*/ false, /*allow_attr*/ true);
+        let right_angle = self.require_right_angle();
+        let left_paren = self.require_left_paren();
+        let initial_value = self.parse_expression();
+        let right_paren = self.require_right_paren();
+        let semicolon = self.require_semicolon();
+        S!(
+            make_enum_class_enumerator,
+            self,
+            name,
+            left_angle,
+            ty,
+            right_angle,
+            left_paren,
+            initial_value,
+            right_paren,
+            semicolon
+        )
+    }
+
     fn parse_inclusion_directive(&mut self) -> S::R {
         // SPEC:
         // inclusion-directive:
@@ -2373,7 +2445,7 @@ where
             }
             TokenKind::Enum => {
                 let missing = S!(make_missing, self, self.pos());
-                self.parse_enum_declaration(missing)
+                self.parse_enum_or_enum_class_declaration(missing)
             }
             TokenKind::RecordDec => {
                 let missing = S!(make_missing, self, self.pos());

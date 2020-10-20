@@ -16,12 +16,15 @@
  **
  *
  */
-use parser_core_types::syntax::*;
+use parser_core_types::{
+    syntax::*,
+    token_factory::TokenFactory,
+};
 use smart_constructors::{NoState, SmartConstructors};
 use crate::StateType;
 
-pub trait SyntaxSmartConstructors<S: SyntaxType<State>, State = NoState>:
-    SmartConstructors<State = State, R=S, Token=S::Token>
+pub trait SyntaxSmartConstructors<S: SyntaxType<State>, TF: TokenFactory<Token = S::Token>, State = NoState>:
+    SmartConstructors<State = State, R=S, TF = TF>
 where
     State: StateType<S>,
 {
@@ -31,7 +34,7 @@ where
         r
     }
 
-    fn make_token(&mut self, arg: Self::Token) -> Self::R {
+    fn make_token(&mut self, arg: <Self::TF as TokenFactory>::Token) -> Self::R {
         let r = Self::R::make_token(self.state_mut(), arg);
         self.state_mut().next(&[]);
         r
@@ -39,7 +42,7 @@ where
 
     fn make_list(&mut self, items: Vec<Self::R>, offset: usize) -> Self::R {
         if items.is_empty() {
-            <Self as SyntaxSmartConstructors<S, State>>::make_missing(self, offset)
+            <Self as SyntaxSmartConstructors<S, TF, State>>::make_missing(self, offset)
         } else {
             let item_refs: Vec<_> = items.iter().collect();
             self.state_mut().next(&item_refs);
@@ -105,6 +108,16 @@ where
     fn make_enumerator(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R {
         self.state_mut().next(&[&arg0, &arg1, &arg2, &arg3]);
         Self::R::make_enumerator(self.state_mut(), arg0, arg1, arg2, arg3)
+    }
+
+    fn make_enum_class_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R, arg9 : Self::R, arg10 : Self::R) -> Self::R {
+        self.state_mut().next(&[&arg0, &arg1, &arg2, &arg3, &arg4, &arg5, &arg6, &arg7, &arg8, &arg9, &arg10]);
+        Self::R::make_enum_class_declaration(self.state_mut(), arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10)
+    }
+
+    fn make_enum_class_enumerator(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R) -> Self::R {
+        self.state_mut().next(&[&arg0, &arg1, &arg2, &arg3, &arg4, &arg5, &arg6, &arg7]);
+        Self::R::make_enum_class_enumerator(self.state_mut(), arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7)
     }
 
     fn make_record_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R) -> Self::R {

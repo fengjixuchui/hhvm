@@ -103,9 +103,9 @@ void alignCacheLine(CodeBlock& cb) {
   }
 }
 
-void assertNativeStackAligned(Vout& v) {
+void assertNativeStackAligned(Vout& v, RegSet set = {}) {
   if (RuntimeOption::EvalHHIRGenerateAsserts) {
-    v << call{TCA(assert_native_stack_aligned)};
+    v << call{TCA(assert_native_stack_aligned), set};
   }
 }
 
@@ -503,17 +503,6 @@ TCA emitFCallHelperThunk(CodeBlock& main, CodeBlock& cold, DataBlock& data,
   return start;
 }
 
-TCA emitFuncBodyHelperThunk(CodeBlock& cb, DataBlock& data) {
-  alignJmpTarget(cb);
-
-  return vwrap(cb, data, [] (Vout& v) {
-    TCA (*helper)(ActRec*) = &svcreq::funcBodyHelper;
-    auto const dest = v.makeReg();
-    v << simplecall(v, helper, rvmfp(), dest);
-    v << jmpr{dest};
-  });
-}
-
 TCA emitFunctionEnterHelper(CodeBlock& main, CodeBlock& cold,
                             DataBlock& data, UniqueStubs& us) {
   alignCacheLine(main);
@@ -646,13 +635,16 @@ TCA emitInterpRet(CodeBlock& cb, DataBlock& data) {
   alignCacheLine(cb);
 
   auto const start = vwrap(cb, data, [] (Vout& v) {
-    // Sync return regs before calling native assert function.
-    storeReturnRegs(v);
-    assertNativeStackAligned(v);
+    // After writing to svcreq registers or calling a function,
+    // return regs are invalid
+    v << copy2{rret_data(), rret_type(), r_svcreq_arg(2), r_svcreq_arg(3)};
+
+    assertNativeStackAligned(v, RegSet() | r_svcreq_arg(2) | r_svcreq_arg(3));
 
     v << lea{rvmsp()[-kArRetOff], r_svcreq_arg(0)};
     v << copy{rvmfp(), r_svcreq_arg(1)};
-    v << fallthru{r_svcreq_arg(0) | r_svcreq_arg(1)};
+    v << fallthru{r_svcreq_arg(0) | r_svcreq_arg(1) |
+                  r_svcreq_arg(2) | r_svcreq_arg(3)};
   });
   svcreq::emit_persistent(cb, data, folly::none, REQ_POST_INTERP_RET);
   return start;
@@ -671,7 +663,7 @@ TCA emitInterpGenRet(CodeBlock& cb, DataBlock& data) {
     v << copy{rvmfp(), r_svcreq_arg(1)};
     v << fallthru{r_svcreq_arg(0) | r_svcreq_arg(1)};
   });
-  svcreq::emit_persistent(cb, data, folly::none, REQ_POST_INTERP_RET);
+  svcreq::emit_persistent(cb, data, folly::none, REQ_POST_INTERP_RET_GENITER);
   return start;
 }
 
@@ -1242,7 +1234,6 @@ void UniqueStubs::emitAll(CodeCache& code, Debug::DebugInfo& dbg) {
   ADD(funcPrologueRedispatchUnpack,
       hotView(),
       emitFuncPrologueRedispatchUnpack(hot(), cold, data, *this));
-  ADD(funcBodyHelperThunk,    view, emitFuncBodyHelperThunk(cold, data));
   ADD(functionEnterHelper,
       hotView(),
       emitFunctionEnterHelper(hot(), cold, data, *this));

@@ -12,7 +12,24 @@ open SaveStateServiceTypes
 
 let get_errors_filename (filename : string) : string = filename ^ ".err"
 
-let get_decls_filename (filename : string) : string = filename ^ ".decls"
+let get_legacy_decls_filename (filename : string) : string = filename ^ ".decls"
+
+let get_shallow_decls_filename (filename : string) : string =
+  filename ^ ".shallowdecls"
+
+(* Writes some OCaml object to a file with the given filename. *)
+let save_contents (output_filename : string) (contents : 'a) : unit =
+  let chan = Stdlib.open_out_bin output_filename in
+  Marshal.to_channel chan contents [];
+  Stdlib.close_out chan
+
+(* If the contents doesn't contain the value of the expected type, the result
+  is undefined behavior. We may crash, or we may continue with a bogus value. *)
+let load_contents_unsafe (input_filename : string) : 'a =
+  let ic = Stdlib.open_in_bin input_filename in
+  let contents = Marshal.from_channel ic in
+  Stdlib.close_in ic;
+  contents
 
 (* Gets a set of file paths out of saved state errors *)
 let fold_error_files (errors_in_phases : saved_state_errors) :
@@ -37,24 +54,25 @@ let partition_error_files_tf
   in
   (fold_error_files errors_in_phases_t, fold_error_files errors_in_phases_f)
 
-(* If the contents doesn't contain the value of the expected type, the result
-  is undefined behavior. We may crash, or we may continue with a bogus value. *)
-let load_contents_unsafe (input_filename : string) : 'a =
-  let ic = Stdlib.open_in_bin input_filename in
-  let contents = Marshal.from_channel ic in
-  Stdlib.close_in ic;
-  contents
-
-let load_class_decls (input_filename : string) : unit =
+let load_class_decls ~(shallow_decls : bool) ~(base_filename : string) : unit =
   let start_t = Unix.gettimeofday () in
   Hh_logger.log "Begin loading class declarations";
   try
-    Hh_logger.log "Unmarshalling class declarations from %s" input_filename;
-    let decls = load_contents_unsafe input_filename in
-    Hh_logger.log "Importing class declarations...";
-    let classes = Decl_export.import_class_decls decls in
-    let num_classes = SSet.cardinal classes in
-    let msg = Printf.sprintf "Loaded %d class declarations" num_classes in
+    let (filename, num_classes) =
+      if shallow_decls then
+        let shallow_filename = get_shallow_decls_filename base_filename in
+        ( shallow_filename,
+          load_contents_unsafe shallow_filename
+          |> Decl_export.restore_shallow_decls )
+      else
+        let legacy_filename = get_legacy_decls_filename base_filename in
+        ( legacy_filename,
+          load_contents_unsafe legacy_filename
+          |> Decl_export.restore_legacy_decls )
+    in
+    let msg =
+      Printf.sprintf "Loaded %d class declarations from %s" num_classes filename
+    in
     HackEventLogger.load_decls_end start_t;
     ignore @@ Hh_logger.log_duration msg start_t
   with exn ->
@@ -65,6 +83,7 @@ let load_class_decls (input_filename : string) : unit =
 (* Loads the file info and the errors, if any. *)
 let load_saved_state
     ~(load_decls : bool)
+    ~(shallow_decls : bool)
     ~(naming_table_fallback_path : string option)
     (ctx : Provider_context.t)
     (saved_state_filename : string) : Naming_table.t * saved_state_errors =
@@ -96,15 +115,10 @@ let load_saved_state
     else
       Marshal.from_channel (In_channel.create ~binary:true errors_filename)
   in
-  if load_decls then load_class_decls (get_decls_filename saved_state_filename);
+  if load_decls then
+    load_class_decls ~shallow_decls ~base_filename:saved_state_filename;
 
   (old_naming_table, old_errors)
-
-(* Writes some OCaml object to a file with the given filename. *)
-let dump_contents (output_filename : string) (contents : 'a) : unit =
-  let chan = Stdlib.open_out_bin output_filename in
-  Marshal.to_channel chan contents [];
-  Stdlib.close_out chan
 
 let get_hot_classes_filename () =
   let prefix = Relative_path.(path_of_prefix Root) in
@@ -125,28 +139,49 @@ let get_hot_classes (filename : string) : SSet.t =
     |> List.map ~f:Hh_json.get_string_exn
     |> SSet.of_list
 
-let dump_class_decls ctx filename =
+let dump_class_decls genv env ~base_filename =
+  let ctx = Provider_utils.ctx_from_server_env env in
   let start_t = Unix.gettimeofday () in
-  Hh_logger.log "Begin saving class declarations";
+  let hot_classes_filename = get_hot_classes_filename () in
+  Hh_logger.log
+    "Begin saving class declarations to %s based on %s"
+    base_filename
+    hot_classes_filename;
   try
-    let hot_classes_filename = get_hot_classes_filename () in
-    Hh_logger.log "Reading hot class names from %s" hot_classes_filename;
     let classes = get_hot_classes hot_classes_filename in
-    Hh_logger.log "Exporting %d class declarations..." @@ SSet.cardinal classes;
-    let decls = Decl_export.export_class_decls ctx classes in
-    Hh_logger.log "Marshalling class declarations...";
-    dump_contents filename decls;
-    HackEventLogger.save_decls_end start_t;
-    ignore @@ Hh_logger.log_duration "Saved class declarations" start_t
-  with exn ->
-    let stack = Printexc.get_backtrace () in
-    HackEventLogger.save_decls_failure exn stack;
-    Hh_logger.exc exn ~stack ~prefix:"Failed to save class declarations: "
+    let t1 = Unix.gettimeofday () in
+    let legacy_decls = Decl_export.collect_legacy_decls ctx classes in
+    let t2 = Unix.gettimeofday () in
+    let shallow_decls =
+      Decl_export.collect_shallow_decls ctx genv.ServerEnv.workers classes
+    in
+    let t3 = Unix.gettimeofday () in
+    save_contents (get_legacy_decls_filename base_filename) legacy_decls;
+    save_contents (get_shallow_decls_filename base_filename) shallow_decls;
+    let t4 = Unix.gettimeofday () in
+    let telemetry =
+      Telemetry.create ()
+      |> Telemetry.int_ ~key:"count" ~value:(SSet.cardinal classes)
+      |> Telemetry.float_ ~key:"load_classnames" ~value:(t1 -. start_t)
+      |> Telemetry.float_ ~key:"collect_legacy" ~value:(t2 -. t1)
+      |> Telemetry.float_ ~key:"collect_shallow" ~value:(t3 -. t2)
+      |> Telemetry.float_ ~key:"save" ~value:(t4 -. t3)
+    in
+    HackEventLogger.save_decls_end start_t telemetry;
+    Hh_logger.log "Saved class declarations: %s" (Telemetry.to_string telemetry)
+  with e ->
+    let e = Exception.wrap e in
+    HackEventLogger.save_decls_failure e;
+    Hh_logger.error
+      "Failed to save class declarations:\n%s"
+      (Exception.to_string e)
 
-(* Dumps the file info and the errors, if any. *)
-let dump_saved_state
+(** Dumps the naming-table (a saveable form of FileInfo), and errors if any,
+and hot class decls. *)
+let dump_naming_errors_decls
     ~(save_decls : bool)
-    (ctx : Provider_context.t)
+    (genv : ServerEnv.genv)
+    (env : ServerEnv.env)
     (output_filename : string)
     (naming_table : Naming_table.t)
     (errors : Errors.t) : unit =
@@ -154,7 +189,7 @@ let dump_saved_state
   let (naming_table_saved : Naming_table.saved_state_info) =
     Naming_table.to_saved naming_table
   in
-  dump_contents output_filename naming_table_saved;
+  save_contents output_filename naming_table_saved;
 
   if not (Sys.file_exists output_filename) then
     failwith
@@ -171,12 +206,13 @@ let dump_saved_state
         ~f:(fun phase -> (phase, Errors.get_failed_files errors phase))
         [Errors.Parsing; Errors.Decl; Errors.Naming; Errors.Typing]
     in
-    dump_contents (get_errors_filename output_filename) errors_in_phases );
+    save_contents (get_errors_filename output_filename) errors_in_phases );
 
-  if save_decls then dump_class_decls ctx (get_decls_filename output_filename)
+  if save_decls then dump_class_decls genv env ~base_filename:output_filename
 
 let update_save_state
     ~(save_decls : bool)
+    (genv : ServerEnv.genv)
     (env : ServerEnv.env)
     (output_filename : string)
     (replace_state_after_saving : bool) : save_state_result =
@@ -186,8 +222,13 @@ let update_save_state
     failwith "Given existing save state SQL file missing";
   let naming_table = env.ServerEnv.naming_table in
   let errors = env.ServerEnv.errorl in
-  let ctx = Provider_utils.ctx_from_server_env env in
-  dump_saved_state ~save_decls ctx output_filename naming_table errors;
+  dump_naming_errors_decls
+    ~save_decls
+    genv
+    env
+    output_filename
+    naming_table
+    errors;
   let dep_table_edges_added =
     SharedMem.update_dep_table_sqlite
       db_name
@@ -202,6 +243,7 @@ let update_save_state
 * edges dumped into the database. *)
 let save_state
     ~(save_decls : bool)
+    (genv : ServerEnv.genv)
     (env : ServerEnv.env)
     (output_filename : string)
     ~(replace_state_after_saving : bool) : save_state_result =
@@ -225,8 +267,13 @@ let save_state
     let naming_table = env.ServerEnv.naming_table in
     let errors = env.ServerEnv.errorl in
     let t = Unix.gettimeofday () in
-    let ctx = Provider_utils.ctx_from_server_env env in
-    dump_saved_state ~save_decls ctx output_filename naming_table errors;
+    dump_naming_errors_decls
+      ~save_decls
+      genv
+      env
+      output_filename
+      naming_table
+      errors;
 
     let dep_table_edges_added =
       SharedMem.save_dep_table_sqlite
@@ -246,7 +293,12 @@ let save_state
     let (_ : float) =
       Hh_logger.log_duration "Made disk copy of loaded saved state. Took" t
     in
-    update_save_state ~save_decls env output_filename replace_state_after_saving
+    update_save_state
+      ~save_decls
+      genv
+      env
+      output_filename
+      replace_state_after_saving
 
 let get_in_memory_dep_table_entry_count () : (int, string) result =
   Utils.try_with_stack (fun () ->
@@ -275,9 +327,15 @@ let go_naming (naming_table : Naming_table.t) (output_filename : string) :
 (* TODO: write some other stats, e.g., the number of names, the number of errors, etc. *)
 let go
     ~(save_decls : bool)
+    (genv : ServerEnv.genv)
     (env : ServerEnv.env)
     (output_filename : string)
     ~(replace_state_after_saving : bool) : (save_state_result, string) result =
   Utils.try_with_stack (fun () ->
-      save_state ~save_decls env output_filename ~replace_state_after_saving)
+      save_state
+        ~save_decls
+        genv
+        env
+        output_filename
+        ~replace_state_after_saving)
   |> Result.map_error ~f:(fun (exn, _stack) -> Exn.to_string exn)

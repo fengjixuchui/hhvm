@@ -10,8 +10,6 @@
   NewStructDArray <"one" "two" "three" "four">
   SetL $arr
   PopC
-
-  NullUninit
   NullUninit
   NullUninit
   CGetL $arr

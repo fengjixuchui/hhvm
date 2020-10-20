@@ -202,6 +202,29 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; enumerator_value                                   : t
     ; enumerator_semicolon                               : t
     }
+  | EnumClassDeclaration              of
+    { enum_class_attribute_spec                          : t
+    ; enum_class_enum_keyword                            : t
+    ; enum_class_class_keyword                           : t
+    ; enum_class_name                                    : t
+    ; enum_class_colon                                   : t
+    ; enum_class_base                                    : t
+    ; enum_class_extends                                 : t
+    ; enum_class_extends_list                            : t
+    ; enum_class_left_brace                              : t
+    ; enum_class_elements                                : t
+    ; enum_class_right_brace                             : t
+    }
+  | EnumClassEnumerator               of
+    { enum_class_enumerator_name                         : t
+    ; enum_class_enumerator_left_angle                   : t
+    ; enum_class_enumerator_type                         : t
+    ; enum_class_enumerator_right_angle                  : t
+    ; enum_class_enumerator_left_paren                   : t
+    ; enum_class_enumerator_initial_value                : t
+    ; enum_class_enumerator_right_paren                  : t
+    ; enum_class_enumerator_semicolon                    : t
+    }
   | RecordDeclaration                 of
     { record_attribute_spec                              : t
     ; record_modifier                                    : t
@@ -449,7 +472,7 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; expression_statement_semicolon                     : t
     }
   | MarkupSection                     of
-    { markup_text                                        : t
+    { markup_hashbang                                    : t
     ; markup_suffix                                      : t
     }
   | MarkupSuffix                      of
@@ -1169,6 +1192,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   | TLDEndOfFile                    of end_of_file
   | TLDFileAttributeSpecification   of file_attribute_specification
   | TLDEnum                         of enum_declaration
+  | TLDEnumClass                    of enum_class_declaration
   | TLDRecord                       of record_declaration
   | TLDAlias                        of alias_declaration
   | TLDNamespace                    of namespace_declaration
@@ -1492,6 +1516,29 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; enumerator_value: expression value
     ; enumerator_semicolon: Token.t value
     }
+  and enum_class_declaration =
+    { enum_class_attribute_spec: attribute_specification option value
+    ; enum_class_enum_keyword: Token.t value
+    ; enum_class_class_keyword: Token.t value
+    ; enum_class_name: Token.t value
+    ; enum_class_colon: Token.t value
+    ; enum_class_base: specifier value
+    ; enum_class_extends: Token.t option value
+    ; enum_class_extends_list: specifier listesque value
+    ; enum_class_left_brace: Token.t value
+    ; enum_class_elements: enum_class_enumerator listesque value
+    ; enum_class_right_brace: Token.t value
+    }
+  and enum_class_enumerator =
+    { enum_class_enumerator_name: Token.t value
+    ; enum_class_enumerator_left_angle: Token.t value
+    ; enum_class_enumerator_type: specifier value
+    ; enum_class_enumerator_right_angle: Token.t value
+    ; enum_class_enumerator_left_paren: Token.t value
+    ; enum_class_enumerator_initial_value: expression value
+    ; enum_class_enumerator_right_paren: Token.t value
+    ; enum_class_enumerator_semicolon: Token.t value
+    }
   and record_declaration =
     { record_attribute_spec: attribute_specification option value
     ; record_modifier: Token.t value
@@ -1739,7 +1786,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; expression_statement_semicolon: Token.t value
     }
   and markup_section =
-    { markup_text: Token.t value
+    { markup_hashbang: Token.t value
     ; markup_suffix: markup_suffix option value
     }
   and markup_suffix =

@@ -91,6 +91,59 @@ let pgrep pattern =
     Lwt.return pids
   | Error _ -> Lwt.return []
 
+let rage_strobelight () : string Lwt.t =
+  (* We'll run strobelight on each hh_server ServerMain process *)
+  let%lwt pids = pgrep "hh_server" in
+  let pids =
+    List.filter_map pids ~f:(fun (pid, reason) ->
+        Option.some_if
+          (String_utils.is_substring "ServerMain" reason)
+          (Some (pid, reason)))
+  in
+  (* We'll also run strobelight without specifying a pid *)
+  let pids = None :: pids in
+  (* Strobelight doesn't support parallel execution, so we do it in sequence *)
+  let%lwt results =
+    Lwt_list.map_s
+      (fun pid ->
+        let common_args =
+          [
+            "run";
+            "--profile";
+            "bpf";
+            "--event";
+            "cpu-clock";
+            "--sample-rate";
+            "10000000";
+            "--duration-ms";
+            "10000";
+          ]
+        in
+        let (pid_args, reason) =
+          match pid with
+          | None -> ([], "ALL PROCESSES")
+          | Some (pid, reason) ->
+            ( ["--pid"; string_of_int pid],
+              Printf.sprintf "PROCESS %d - %s" pid reason )
+        in
+        let%lwt result =
+          Lwt_utils.exec_checked
+            ~timeout:60.0
+            Exec_command.Strobeclient
+            (common_args @ pid_args |> Array.of_list)
+        in
+        let result =
+          match result with
+          | Ok { Lwt_utils.Process_success.stdout; stderr; _ } ->
+            reason ^ "\n" ^ stdout ^ "\n" ^ stderr
+          | Error failure -> reason ^ format_failure "" failure
+        in
+        Lwt.return result)
+      pids
+  in
+  let results = String.concat results ~sep:"\n\n\n" in
+  Lwt.return results
+
 let rage_pstacks (env : env) : string Lwt.t =
   (* We'll look at all relevant pids: all those from the hh_server
   binary, and the hh_client binary, and all those in the server pids_file.
@@ -518,6 +571,11 @@ let main (env : env) : Exit_status.t Lwt.t =
     if Sys.file_exists fn then add (name, contents)
   in
 
+  (* strobelight *)
+  eprintf "Strobelight (this takes a minute...)";
+  let%lwt strobelight = rage_strobelight () in
+  add ("strobelight", strobelight);
+
   (* stacks of processes *)
   eprintf "Fetching pstacks (this takes a minute...)";
   let%lwt pstacks = rage_pstacks env in
@@ -529,6 +587,28 @@ let main (env : env) : Exit_status.t Lwt.t =
   let hhconfig_file = Filename.concat (Path.to_string env.root) ".hhconfig" in
   add_fn "hhconfig.txt" hhconfig_file;
   add_fn "hh_conf.txt" ServerLocalConfig.path;
+
+  (* sandcastle *)
+  begin
+    match Sys.getenv_opt "SANDCASTLE_NEXUS" with
+    | None -> ()
+    | Some sandcastle_nexus ->
+      let dir = Filename.concat sandcastle_nexus "variables" in
+      let fns = (try Sys.readdir dir with _ -> [||]) in
+      let fns =
+        fns |> Array.to_list |> List.map ~f:(fun fn -> Filename.concat dir fn)
+      in
+      let fns = "/tmp/sandcastle.capabilities" :: fns in
+      let contents =
+        List.map fns ~f:(fun fn ->
+            let content =
+              try Sys_utils.cat fn |> String_utils.truncate 10240
+              with e -> e |> Exception.wrap |> Exception.to_string
+            in
+            Printf.sprintf "%s\n%s" fn content)
+      in
+      add ("sandcastle", String.concat contents ~sep:"\n\n")
+  end;
 
   (* version *)
   let%lwt hash_and_config = Config_file_lwt.parse_hhconfig hhconfig_file in

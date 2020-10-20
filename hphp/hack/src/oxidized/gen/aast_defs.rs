@@ -3,12 +3,13 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<d4c3ac7465a9b6f1d17f23256c3aff34>>
+// @generated SignedSource<<5397b8d95654b0da0c9a3369fd05b240>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
 
 use arena_trait::TrivialDrop;
+use no_pos_hash::NoPosHash;
 use ocamlrep_derive::FromOcamlRep;
 use ocamlrep_derive::FromOcamlRepIn;
 use ocamlrep_derive::ToOcamlRep;
@@ -24,6 +25,7 @@ pub use ast_defs::OgNullFlavor;
 pub use ast_defs::Pos;
 pub use ast_defs::PositionedByteString;
 pub use ast_defs::Pstring;
+pub use ast_defs::Visibility;
 pub use local_id::LocalId;
 pub use shape_map::ShapeMap;
 
@@ -34,6 +36,7 @@ pub use shape_map::ShapeMap;
     Eq,
     FromOcamlRep,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -55,6 +58,7 @@ pub type IsReified = bool;
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -79,6 +83,7 @@ impl TrivialDrop for FuncReactive {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -101,6 +106,7 @@ impl TrivialDrop for ParamMutability {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -122,6 +128,7 @@ impl TrivialDrop for ImportFlavor {}
     Eq,
     FromOcamlRep,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -144,6 +151,7 @@ pub enum XhpChild {
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -164,6 +172,7 @@ impl TrivialDrop for XhpChildOp {}
     Eq,
     FromOcamlRep,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -183,6 +192,7 @@ pub type VariadicHint = Option<Hint>;
     Eq,
     FromOcamlRep,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -207,6 +217,7 @@ pub struct HintFun {
     Eq,
     FromOcamlRep,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -265,6 +276,7 @@ pub enum Hint_ {
     Eq,
     FromOcamlRep,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -294,6 +306,7 @@ pub enum Tprim {
     Eq,
     FromOcamlRep,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -313,6 +326,7 @@ pub struct ShapeFieldInfo {
     Eq,
     FromOcamlRep,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -333,6 +347,7 @@ pub struct NastShapeInfo {
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -355,6 +370,7 @@ impl TrivialDrop for KvcKind {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -381,28 +397,7 @@ impl TrivialDrop for VcKind {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-    ToOcamlRep
-)]
-pub enum Visibility {
-    Private,
-    Public,
-    Protected,
-}
-impl TrivialDrop for Visibility {}
-
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Deserialize,
-    Eq,
-    FromOcamlRep,
-    FromOcamlRepIn,
-    Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -426,6 +421,7 @@ impl TrivialDrop for UseAsVisibility {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -445,6 +441,7 @@ impl TrivialDrop for TypedefVisibility {}
     Eq,
     FromOcamlRep,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -455,6 +452,7 @@ pub struct Enum_ {
     pub base: Hint,
     pub constraint: Option<Hint>,
     pub includes: Vec<Hint>,
+    pub enum_class: bool,
 }
 
 #[derive(
@@ -464,10 +462,34 @@ pub struct Enum_ {
     Eq,
     FromOcamlRep,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
     Serialize,
     ToOcamlRep
 )]
-pub struct WhereConstraint(pub Hint, pub ast_defs::ConstraintKind, pub Hint);
+pub struct WhereConstraintHint(pub Hint, pub ast_defs::ConstraintKind, pub Hint);
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    FromOcamlRep,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub enum ReifyKind {
+    Erased,
+    SoftReified,
+    Reified,
+}
+impl TrivialDrop for ReifyKind {}

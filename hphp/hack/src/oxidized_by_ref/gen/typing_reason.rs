@@ -3,12 +3,13 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<f90facc37ec58d42d408b88a68aa6615>>
+// @generated SignedSource<<7a9b7bad36d15de37725b54c00f39e6a>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
 
 use arena_trait::TrivialDrop;
+use no_pos_hash::NoPosHash;
 use ocamlrep_derive::FromOcamlRep;
 use ocamlrep_derive::FromOcamlRepIn;
 use ocamlrep_derive::ToOcamlRep;
@@ -25,6 +26,7 @@ use crate::*;
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -113,6 +115,7 @@ pub enum Reason<'a> {
     RglobalClassProp(&'a pos::Pos<'a>),
     RglobalFunParam(&'a pos::Pos<'a>),
     RglobalFunRet(&'a pos::Pos<'a>),
+    Rsplice(&'a pos::Pos<'a>),
 }
 impl<'a> TrivialDrop for Reason<'a> {}
 
@@ -124,6 +127,7 @@ impl<'a> TrivialDrop for Reason<'a> {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -144,6 +148,7 @@ impl TrivialDrop for ArgPosition {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -168,6 +173,7 @@ impl<'a> TrivialDrop for ExprDepTypeReason<'a> {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -189,6 +195,7 @@ impl TrivialDrop for BlameSource {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -207,6 +214,7 @@ impl<'a> TrivialDrop for Blame<'a> {}
     Eq,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,

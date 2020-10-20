@@ -46,6 +46,8 @@ let keyset r ty = class_type r SN.Collections.cKeyset [ty]
 
 let vec r ty = class_type r SN.Collections.cVec [ty]
 
+let any_array r kty vty = class_type r SN.Collections.cAnyArray [kty; vty]
+
 let container r ty = class_type r SN.Collections.cContainer [ty]
 
 let throwable r = class_type r SN.Classes.cThrowable []
@@ -59,6 +61,8 @@ let const_vector r ty = class_type r SN.Collections.cConstVector [ty]
 let const_collection r ty = class_type r SN.Collections.cConstCollection [ty]
 
 let collection r ty = class_type r SN.Collections.cCollection [ty]
+
+let expr_tree r ty1 ty2 ty3 = class_type r SN.Classes.cExprTree [ty1; ty2; ty3]
 
 let varray_or_darray r kty vty = mk (r, Tvarray_or_darray (kty, vty))
 

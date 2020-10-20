@@ -56,6 +56,13 @@ class Code {
   }
 }
 
+final class ExprTree<TVisitor, TResult, TInfer>{
+  public function __construct(
+    private (function(TVisitor): TResult) $x,
+    private (function(): TInfer) $err,
+  ) {}
+}
+
 function test(): void {
   $_ = Code`() ==> {
     $x = "hello";

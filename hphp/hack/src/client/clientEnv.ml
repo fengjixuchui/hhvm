@@ -61,7 +61,7 @@ type client_mode =
   | MODE_STATUS
   | MODE_STATUS_SINGLE of string (* filename *)
   | MODE_TYPE_AT_POS of string
-  | MODE_TYPE_AT_POS_BATCH of bool * string list (* bool is 'experimental mode' *)
+  | MODE_TYPE_AT_POS_BATCH of string list
   | MODE_FUN_DEPS_AT_POS_BATCH of string list
   | MODE_FUN_IS_LOCALLABLE_AT_POS_BATCH of string list
   | MODE_FILE_DEPENDENTS
@@ -99,6 +99,8 @@ type client_check_env = {
   deadline: float option;
   watchman_debug_logging: bool;
   allow_non_opt_build: bool;
+      (** desc is a human-readable string description, to appear in "hh_server busy [desc]" *)
+  desc: string;
 }
 
 let mode_to_string = function

@@ -1,4 +1,5 @@
 aast_defs::Hint_
+aast_defs::ReifyKind
 aast_defs::Sid
 aast_defs::Tprim
 aast_defs::XhpChild
@@ -15,6 +16,7 @@ aast::Def
 aast::Expr_
 aast::FunctionPtrId
 aast::FunVariadicity
+aast::ReifyKind
 aast::Sid
 aast::Stmt_
 aast::TypeconstAbstractKind
@@ -41,6 +43,7 @@ oxidized::aast_defs::FuncReactive
 oxidized::aast_defs::ImportFlavor
 oxidized::aast_defs::KvcKind
 oxidized::aast_defs::ParamMutability
+oxidized::aast_defs::ReifyKind
 oxidized::aast_defs::TypedefVisibility
 oxidized::aast_defs::UseAsVisibility
 oxidized::aast_defs::VcKind
@@ -58,6 +61,7 @@ oxidized::aast::OgNullFlavor
 oxidized::aast::ParamKind
 oxidized::aast::ParamMutability
 oxidized::aast::ReifyKind
+oxidized::aast::ReifyKind
 oxidized::aast::TypedefVisibility
 oxidized::aast::Uop
 oxidized::aast::UseAsVisibility
@@ -73,6 +77,7 @@ oxidized::ast_defs::OgNullFlavor
 oxidized::ast_defs::ParamKind
 oxidized::ast_defs::Uop
 oxidized::ast_defs::Variance
+oxidized::ast_defs::Visibility
 oxidized::error_codes::Init
 oxidized::error_codes::Naming
 oxidized::error_codes::NastCheck
@@ -97,6 +102,7 @@ tast::Reactivity
 tast::TypeParamMutability
 tast::ValKind
 typing_cont_key::TypingContKey
+typing_defs_core::CeVisibility
 typing_defs_core::ConsistentKind
 typing_defs_core::ConstraintType
 typing_defs_core::ConstraintType_
@@ -105,20 +111,20 @@ typing_defs_core::DestructureKind
 typing_defs_core::Exact
 typing_defs_core::FunArity
 typing_defs_core::FunTparamsKind
+typing_defs_core::IfcFunDecl
 typing_defs_core::InternalType
 typing_defs_core::ParamMode
 typing_defs_core::ParamMutability
 typing_defs_core::ParamRxAnnotation
 typing_defs_core::Reactivity
 typing_defs_core::ShapeKind
-typing_defs_core::Ty
 typing_defs_core::Ty_
 typing_defs_core::ValKind
-typing_defs_core::Visibility
 typing_defs_core::XhpAttr
 typing_defs_core::XhpAttrTag
 typing_defs_flags::FunParamFlags
 typing_defs_flags::FunTypeFlags
+typing_defs::CeVisibility
 typing_defs::ConsistentKind
 typing_defs::ConstraintType
 typing_defs::DeserializationError
@@ -130,7 +136,6 @@ typing_defs::ParamMode
 typing_defs::ParamMutability
 typing_defs::RecordFieldReq
 typing_defs::ShapeKind
-typing_defs::Ty
 typing_defs::Ty_
 typing_defs::TypeconstAbstractKind
 typing_defs::ValKind

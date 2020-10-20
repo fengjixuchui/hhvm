@@ -54,6 +54,10 @@ val get_self_ty : env -> Tast.ty option
     When not in a class definition, raise {!Not_in_class}. *)
 val get_self_ty_exn : env -> Tast.ty
 
+(** Return the name of the parent of the enclosing class definition.
+    When not in a class definition or no parent exists, return {!None}. *)
+val get_parent_id : env -> string option
+
 (** Return the info of the given class from the typing heap. *)
 val get_class :
   env -> Decl_provider.class_key -> Decl_provider.class_decl option
@@ -104,7 +108,7 @@ val get_concrete_supertypes : env -> Tast.ty -> env * Tast.ty list
     {!get_self}) to access its members with the given {visibility}. *)
 val is_visible :
   env ->
-  Typing_defs.visibility * bool ->
+  Typing_defs.ce_visibility * bool ->
   Nast.class_id_ option ->
   Decl_provider.class_decl ->
   bool

@@ -76,6 +76,7 @@ enum UnstableFeatures {
     PocketUniverses,
     CoeffectsProvisional,
     EnumSupertyping,
+    EnumClass,
 }
 
 use BinopAllowsAwaitInPositions::*;
@@ -4023,6 +4024,37 @@ where
                 })
             };
 
+            // Only "regular" class names are allowed in `__Sealed()`
+            // attributes.
+            for node in Self::attr_spec_to_node_list(&cd.classish_attribute) {
+                if (self.attr_name(node)) == Some(sn::user_attributes::SEALED) {
+                    match self.attr_args(node) {
+                        Some(args) => {
+                            for arg in args {
+                                match &arg.syntax {
+                                    ScopeResolutionExpression(x) => {
+                                        let txt = self.text(&x.scope_resolution_qualifier);
+                                        let excludes = vec![
+                                            sn::classes::SELF,
+                                            sn::classes::PARENT,
+                                            sn::classes::STATIC,
+                                        ];
+                                        if excludes.iter().any(|&e| txt == e) {
+                                            self.errors.push(Self::make_error_from_node(
+                                                &x.scope_resolution_qualifier,
+                                                errors::sealed_qualifier_invalid,
+                                            ));
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        None => {}
+                    }
+                }
+            }
+
             let classish_is_sealed = self.attr_spec_contains_sealed(&cd.classish_attribute);
 
             // Given a ClassishDeclaration node, test whether or not length of
@@ -4983,8 +5015,8 @@ where
                         for decl in Self::syntax_to_list_no_separators(syntax_list) {
                             match &decl.syntax {
                                 MarkupSection(x) => {
-                                    if x.markup_text.width() == 0
-                                        || self.is_hashbang(&x.markup_text)
+                                    if x.markup_hashbang.width() == 0
+                                        || self.is_hashbang(&x.markup_hashbang)
                                     {
                                         continue;
                                     } else {
@@ -5004,8 +5036,8 @@ where
                             && Self::syntax_to_list_no_separators(syntax_list).any(|decl| {
                                 match &decl.syntax {
                                     MarkupSection(x) => {
-                                        !(x.markup_text.width() == 0
-                                            || self.is_hashbang(&x.markup_text))
+                                        !(x.markup_hashbang.width() == 0
+                                            || self.is_hashbang(&x.markup_hashbang))
                                     }
                                     NamespaceDeclaration(_)
                                     | FileAttributeSpecification(_)
@@ -5719,6 +5751,9 @@ where
                 Token(_) => self.check_can_use_feature(node, &UnstableFeatures::EnumSupertyping),
                 _ => {}
             },
+            EnumClassDeclaration(_) | EnumClassEnumerator(_) => {
+                self.check_can_use_feature(node, &UnstableFeatures::EnumClass)
+            }
 
             _ => {}
         }

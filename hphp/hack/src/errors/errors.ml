@@ -585,7 +585,7 @@ let hard_banned_codes =
       Typing.err_code Typing.InvalidNewableTypeArgument;
       Typing.err_code Typing.InvalidNewableTypeParamConstraints;
       Typing.err_code Typing.NewWithoutNewable;
-      Typing.err_code Typing.NewStaticClassReified;
+      Typing.err_code Typing.NewClassReified;
       Typing.err_code Typing.MemoizeReified;
       Typing.err_code Typing.ClassGetReified;
     ]
@@ -2380,14 +2380,17 @@ let enum_constant_type_bad pos ty_pos ty trail =
     ]
     trail
 
-let enum_type_bad pos ty trail =
+let enum_type_bad pos ty_dependent ty trail =
+  let msg =
+    if ty_dependent then
+      "Enum classes base type must be an interface without generic "
+      ^ "parameters, not "
+    else
+      "Enums must be `int` or `string` or `arraykey`, not "
+  in
   add_with_trail
     (Typing.err_code Typing.EnumTypeBad)
-    [
-      ( pos,
-        "Enums must be `int` or `string` or `arraykey`, not "
-        ^ Markdown_lite.md_codify ty );
-    ]
+    [(pos, msg ^ Markdown_lite.md_codify ty)]
     trail
 
 let enum_type_typedef_nonnull pos =
@@ -2940,7 +2943,7 @@ let self_abstract_call meth_name call_pos decl_pos =
     (Typing.err_code Typing.AbstractCall)
     [
       ( call_pos,
-        "Cannot call self::"
+        "Cannot call "
         ^ Markdown_lite.md_codify ("self::" ^ meth_name ^ "()")
         ^ "; it is abstract. Did you mean "
         ^ Markdown_lite.md_codify ("static::" ^ meth_name ^ "()")
@@ -3768,11 +3771,21 @@ let invalid_reified_argument_reifiable (def_pos, def_name) arg_pos ty_pos ty_msg
       (def_pos, Markdown_lite.md_codify def_name ^ " is reified");
     ]
 
-let new_static_class_reified pos =
+let new_class_reified pos class_type suggested_class =
+  let suggestion =
+    match suggested_class with
+    | Some s ->
+      let s = strip_ns s in
+      sprintf ". Try `new %s` instead." s
+    | None -> ""
+  in
   add
-    (Typing.err_code Typing.NewStaticClassReified)
+    (Typing.err_code Typing.NewClassReified)
     pos
-    "Cannot call `new static` because the current class has reified generics"
+    (sprintf
+       "Cannot call `new %s` because the current class has reified generics%s"
+       class_type
+       suggestion)
 
 let class_get_reified pos =
   add
@@ -4309,8 +4322,19 @@ let php_lambda_disallowed pos =
 (*****************************************************************************)
 
 let wrong_extend_kind
-    ~parent_pos ~parent_kind ~parent_name ~child_pos ~child_kind ~child_name =
-  let parent_kind_str = Ast_defs.string_of_class_kind parent_kind in
+    ~parent_pos
+    ~parent_kind
+    ~parent_name
+    ~parent_is_enum_class
+    ~child_pos
+    ~child_kind
+    ~child_name
+    ~child_is_enum_class =
+  let parent_kind_str =
+    Ast_defs.string_of_class_kind
+      parent_kind
+      ~is_enum_class:parent_is_enum_class
+  in
   let parent_name = strip_ns parent_name in
   let child_name = strip_ns child_name in
   let use_msg =
@@ -4343,9 +4367,12 @@ let wrong_extend_kind
       in
       extends_msg ^ suggestion
     | Ast_defs.Cenum ->
-      (* This case should never happen, as the type checker will have already caught
+      if child_is_enum_class then
+        "Enum classes can only extend other enum classes."
+      else
+        (* This case should never happen, as the type checker will have already caught
           it with EnumTypeBad. But just in case, report this error here too. *)
-      "Enums can only extend int, string, or arraykey."
+        "Enums can only extend int, string, or arraykey."
     | Ast_defs.Ctrait ->
       (* This case should never happen, as the parser will have caught it before
           we get here. *)
@@ -5542,6 +5569,22 @@ let abstract_function_pointer cname meth_name call_pos decl_pos =
         ^ Markdown_lite.md_codify (cname ^ "::" ^ meth_name)
         ^ "; it is abstract" );
       (decl_pos, "Declaration is here");
+    ]
+
+let unnecessary_attribute pos ~attr ~reason ~suggestion =
+  let attr = strip_ns attr in
+  let (reason_pos, reason_msg) = reason in
+  let suggestion =
+    match suggestion with
+    | None -> "Try deleting this attribute"
+    | Some s -> s
+  in
+  add_list
+    (Typing.err_code Typing.UnnecessaryAttribute)
+    [
+      (pos, sprintf "The attribute `%s` is unnecessary" attr);
+      (reason_pos, "It is unnecessary because " ^ reason_msg);
+      (pos, suggestion);
     ]
 
 (*****************************************************************************)

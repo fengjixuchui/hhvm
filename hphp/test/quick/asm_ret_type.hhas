@@ -11,7 +11,6 @@
 .function ["__EntryPoint"("""y:0:{}""")] main() {
   NullUninit
   NullUninit
-  NullUninit
   FCallFuncD <> 0 1 "" - "" "fail"
   PopC
   Int 1

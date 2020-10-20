@@ -25,7 +25,6 @@ dv_init2:
       NewObjD "Exception"
       Dup
       NullUninit
-      NullUninit
       FCallCtor <LockWhileUnwinding> 0 1 "" - "" ""
       PopC
       LockObj
@@ -48,8 +47,6 @@ out_of_catch:
 .function ["__EntryPoint"("""y:0:{}""")] main {
   NullUninit
   NullUninit
-  NullUninit
-    NullUninit
     NullUninit
     NullUninit
     FCallFuncD <> 0 1 "" - "" "foo"

@@ -6,7 +6,6 @@
   NewObjD "heh"
   Dup
   NullUninit
-  NullUninit
   FCallCtor <LockWhileUnwinding> 0 1 "" - "" ""
   PopC
   LockObj
@@ -22,8 +21,6 @@
 }
 
 .function ["__EntryPoint"("""y:0:{}""")] main() {
-  NullUninit
-  NullUninit
   NullUninit
   NullUninit
   NullUninit

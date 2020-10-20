@@ -30,7 +30,6 @@
   NewObjD "Foo"
   Dup
   NullUninit
-  NullUninit
   FCallCtor <LockWhileUnwinding> 0 1 "" - "" ""
   PopC
   LockObj
@@ -39,10 +38,8 @@
 
   CGetL $object
   NullUninit
-  NullUninit
    NewObjD "Foo"
    Dup
-   NullUninit
    NullUninit
    FCallCtor <LockWhileUnwinding> 0 1 "" - "" ""
    PopC
@@ -51,7 +48,6 @@
   PopC
 
   CGetL $object
-  NullUninit
   NullUninit
    Null
   FCallObjMethodD <> 1 1 "" - "" "" NullThrows "main"

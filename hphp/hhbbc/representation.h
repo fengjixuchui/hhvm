@@ -34,6 +34,7 @@
 #include "hphp/runtime/vm/constant.h"
 #include "hphp/runtime/vm/func.h"
 #include "hphp/runtime/vm/preclass.h"
+#include "hphp/runtime/vm/rx.h"
 #include "hphp/runtime/vm/type-alias.h"
 #include "hphp/runtime/vm/type-constraint.h"
 
@@ -397,6 +398,11 @@ struct Func : FuncBase {
    * User attribute list.
    */
   UserAttributeMap userAttributes;
+
+  /*
+   * List of all coeffect rules
+   */
+  CompactVector<CoeffectRule> coeffectRules;
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -515,6 +521,11 @@ struct Class : ClassBase {
    * Names of inherited interfaces.
    */
   CompactVector<LowStringPtr> interfaceNames;
+
+  /*
+   * Names of included enums.
+   */
+  CompactVector<LowStringPtr> includedEnums;
 
   /*
    * Names of used traits, number of declared (i.e., non-trait, non-inherited)

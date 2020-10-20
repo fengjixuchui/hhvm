@@ -1519,9 +1519,10 @@ std::map<std::string,ParserFunc> opcode_parsers;
 #define NUM_POP_MFINAL immIVA[0]
 #define NUM_POP_C_MFINAL(n) (immIVA[0] + n)
 #define NUM_POP_CUMANY immIVA[0] /* number of arguments */
-#define NUM_POP_CMANY_U3 immIVA[0] + 3
+#define NUM_POP_CMANY_U2 immIVA[0] + 2
 #define NUM_POP_CALLNATIVE (immIVA[0] + immIVA[2]) /* number of args + nout */
-#define NUM_POP_FCALL(nin, nobj) (nin + immFCA.numInputs() + 2 + immFCA.numRets)
+#define NUM_POP_FCALL(nin, nobj) (nin + immFCA.numInputs() + \
+                                  (kNumActRecCells - 1) + immFCA.numRets)
 #define NUM_POP_CMANY immIVA[0] /* number of arguments */
 #define NUM_POP_SMANY vecImmStackValues
 
@@ -1642,7 +1643,7 @@ OPCODES
 #undef NUM_POP_MFINAL
 #undef NUM_POP_C_MFINAL
 #undef NUM_POP_CUMANY
-#undef NUM_POP_CMANY_U3
+#undef NUM_POP_CMANY_U2
 #undef NUM_POP_CALLNATIVE
 #undef NUM_POP_FCALL
 #undef NUM_POP_CMANY
@@ -1839,6 +1840,41 @@ void parse_declvars(AsmState& as) {
       break;
     }
   }
+  as.in.expectWs(';');
+}
+
+/*
+ * directive-rx_cond_rx_of_arg : integer ';'
+ *                             ;
+ */
+void parse_rx_cond_rx_of_arg(AsmState& as) {
+  auto const pos = read_opcode_arg<uint32_t>(as);
+  as.fe->coeffectRules.emplace_back(
+    CoeffectRule(CoeffectRule::CondRxArg{}, pos));
+  as.in.expectWs(';');
+}
+
+/*
+ * directive-rx_cond_implements : name ';'
+ *                              ;
+ */
+void parse_rx_cond_implements(AsmState& as) {
+  auto const name = makeStaticString(read_litstr(as));
+  as.fe->coeffectRules.emplace_back(
+    CoeffectRule(CoeffectRule::CondRxImpl{}, name));
+  as.in.expectWs(';');
+}
+
+/*
+ * directive-rx_cond_arg_implements : integer name ';'
+ *                                  ;
+ */
+void parse_rx_cond_arg_implements(AsmState& as) {
+  auto const pos = read_opcode_arg<uint32_t>(as);
+  as.in.skipWhitespace();
+  auto const name = makeStaticString(read_litstr(as));
+  as.fe->coeffectRules.emplace_back(
+    CoeffectRule(CoeffectRule::CondRxArgImpl{}, pos, name));
   as.in.expectWs(';');
 }
 
@@ -2135,6 +2171,18 @@ void parse_function_body(AsmState& as, int nestLevel /* = 0 */) {
       if (word == ".try") { parse_try_catch(as, nestLevel); continue; }
       if (word == ".srcloc") { parse_srcloc(as, nestLevel); continue; }
       if (word == ".doc") { parse_func_doccomment(as); continue; }
+      if (word == ".rx_cond_rx_of_arg") {
+        parse_rx_cond_rx_of_arg(as);
+        continue;
+      }
+      if (word == ".rx_cond_implements") {
+        parse_rx_cond_implements(as);
+        continue;
+      }
+      if (word == ".rx_cond_arg_implements") {
+        parse_rx_cond_arg_implements(as);
+        continue;
+      }
       as.error("unrecognized directive `" + word + "' in function");
     }
     if (as.in.peek() == ':') {
@@ -3220,6 +3268,16 @@ void parse_class(AsmState& as) {
     as.in.expect(')');
   }
 
+  std::vector<std::string> enum_includes;
+  if (as.in.tryConsume("enum_includes")) {
+    as.in.expectWs('(');
+    std::string word;
+    while (as.in.readname(word)) {
+      enum_includes.push_back(word);
+    }
+    as.in.expect(')');
+  }
+
   as.pce = as.ue->newBarePreClassEmitter(name, PreClass::MaybeHoistable);
   as.pce->init(line0,
                line1,
@@ -3228,6 +3286,9 @@ void parse_class(AsmState& as) {
                staticEmptyString());
   for (auto const& iface : ifaces) {
     as.pce->addInterface(makeStaticString(iface));
+  }
+  for (auto const& enum_include : enum_includes) {
+    as.pce->addEnumInclude(makeStaticString(enum_include));
   }
   as.pce->setUserAttributes(userAttrs);
 
@@ -3302,7 +3363,6 @@ void parse_record(AsmState& as) {
  */
 void parse_filepath(AsmState& as) {
   auto const str = read_litstr(as);
-  // We don't want to use file path from cached data
   as.ue->m_filepath = str;
   as.in.expectWs(';');
 }

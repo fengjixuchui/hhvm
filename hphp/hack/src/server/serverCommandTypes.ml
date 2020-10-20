@@ -248,7 +248,7 @@ type _ t =
       -> (Pos.absolute Errors.error_ list * int) t
   | INFER_TYPE : file_input * int * int * bool -> InferAtPosService.result t
   | INFER_TYPE_BATCH :
-      bool * (string * int * int * (int * int) option) list * bool
+      (string * int * int * (int * int) option) list * bool
       -> string list t
   | IDE_HOVER : string * int * int -> HoverService.result t
   | DOCBLOCK_AT :
@@ -341,6 +341,12 @@ type _ t =
       -> ServerGlobalInferenceTypes.result t
   | VERBOSE : bool -> unit t
 
+type cmd_metadata = {
+  from: string;
+  (* a short human-readable string, used in "hh_server is busy [desc]" *)
+  desc: string;
+}
+
 let is_disconnect_rpc : type a. a t -> bool = function
   | DISCONNECT -> true
   | _ -> false
@@ -359,7 +365,7 @@ let is_critical_rpc : type a. a t -> bool = function
   | _ -> false
 
 type 'a command =
-  | Rpc of 'a t
+  | Rpc of cmd_metadata * 'a t
   | Debug
 
 and streamed =

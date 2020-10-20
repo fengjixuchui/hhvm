@@ -41,14 +41,14 @@ type policy =
 
 let pbot = Pbot PosSet.empty
 
-let pos_of = function
-  | Ppurpose (pos, _)
-  | Ptop pos
-  | Pbot pos ->
-    pos
+let pos_set_of_policy = function
+  | Ppurpose (poss, _)
+  | Ptop poss
+  | Pbot poss ->
+    poss
   | _ -> PosSet.empty
 
-let set_pos pos = function
+let set_pos_set_of_policy pos = function
   | Ppurpose (_, name) -> Ppurpose (pos, name)
   | Ptop _ -> Ptop pos
   | Pbot _ -> Pbot pos
@@ -82,6 +82,7 @@ type ptype =
   | Tclass of class_
   | Tfun of fun_
   | Tcow_array of cow_array
+  | Tshape of Type.shape_kind * shape_field_type Nast.ShapeMap.t
 
 (* Copy-on-write indexed collection used for Hack arrays i.e. vec, dict, and
    keyset *)
@@ -90,6 +91,11 @@ and cow_array = {
   a_key: ptype;
   a_value: ptype;
   a_length: policy;
+}
+
+and shape_field_type = {
+  sft_optional: bool;
+  sft_ty: ptype;
 }
 
 and fun_ = {
@@ -122,6 +128,19 @@ type prop =
   (* holes are introduced by calls to functions for which
      we do not have a flow type at hand *)
   | Chole of (Pos.t * fun_proto)
+
+let unique_pos_of_prop =
+  let is_real pos = not @@ Pos.equal pos Pos.none in
+  function
+  | Cflow (posset, _, _) ->
+    begin
+      match PosSet.elements posset with
+      | [pos] when is_real pos -> Some pos
+      | _ -> None
+    end
+  | Ccond ((pos, _, _), _, _) when is_real pos -> Some pos
+  | Chole (pos, _) when not @@ is_real pos -> Some pos
+  | _ -> None
 
 type fun_scheme = Fscheme of Scope.t * fun_proto * prop
 

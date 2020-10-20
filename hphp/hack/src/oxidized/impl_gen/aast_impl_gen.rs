@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<40cdbf8caf658a9c41094042e8057b00>>
+// @generated SignedSource<<d436b437860405e41a9de18d5609bcd4>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
@@ -59,9 +59,9 @@ impl<Ex, Fb, En, Hi> Stmt_<Ex, Fb, En, Hi> {
         Stmt_::Using(Box::new(p0))
     }
     pub fn mk_for(
-        p0: Expr<Ex, Fb, En, Hi>,
-        p1: Expr<Ex, Fb, En, Hi>,
-        p2: Expr<Ex, Fb, En, Hi>,
+        p0: Vec<Expr<Ex, Fb, En, Hi>>,
+        p1: Option<Expr<Ex, Fb, En, Hi>>,
+        p2: Vec<Expr<Ex, Fb, En, Hi>>,
         p3: Block<Ex, Fb, En, Hi>,
     ) -> Self {
         Stmt_::For(Box::new((p0, p1, p2, p3)))
@@ -295,9 +295,9 @@ impl<Ex, Fb, En, Hi> Stmt_<Ex, Fb, En, Hi> {
     pub fn as_for(
         &self,
     ) -> Option<(
-        &Expr<Ex, Fb, En, Hi>,
-        &Expr<Ex, Fb, En, Hi>,
-        &Expr<Ex, Fb, En, Hi>,
+        &Vec<Expr<Ex, Fb, En, Hi>>,
+        &Option<Expr<Ex, Fb, En, Hi>>,
+        &Vec<Expr<Ex, Fb, En, Hi>>,
         &Block<Ex, Fb, En, Hi>,
     )> {
         match self {
@@ -429,9 +429,9 @@ impl<Ex, Fb, En, Hi> Stmt_<Ex, Fb, En, Hi> {
     pub fn as_for_mut(
         &mut self,
     ) -> Option<(
-        &mut Expr<Ex, Fb, En, Hi>,
-        &mut Expr<Ex, Fb, En, Hi>,
-        &mut Expr<Ex, Fb, En, Hi>,
+        &mut Vec<Expr<Ex, Fb, En, Hi>>,
+        &mut Option<Expr<Ex, Fb, En, Hi>>,
+        &mut Vec<Expr<Ex, Fb, En, Hi>>,
         &mut Block<Ex, Fb, En, Hi>,
     )> {
         match self {
@@ -563,9 +563,9 @@ impl<Ex, Fb, En, Hi> Stmt_<Ex, Fb, En, Hi> {
     pub fn as_for_into(
         self,
     ) -> Option<(
-        Expr<Ex, Fb, En, Hi>,
-        Expr<Ex, Fb, En, Hi>,
-        Expr<Ex, Fb, En, Hi>,
+        Vec<Expr<Ex, Fb, En, Hi>>,
+        Option<Expr<Ex, Fb, En, Hi>>,
+        Vec<Expr<Ex, Fb, En, Hi>>,
         Block<Ex, Fb, En, Hi>,
     )> {
         match self {
@@ -3567,35 +3567,6 @@ impl NsKind {
     pub fn is_nsconst(&self) -> bool {
         match self {
             NsKind::NSConst => true,
-            _ => false,
-        }
-    }
-}
-impl ReifyKind {
-    pub fn mk_erased() -> Self {
-        ReifyKind::Erased
-    }
-    pub fn mk_soft_reified() -> Self {
-        ReifyKind::SoftReified
-    }
-    pub fn mk_reified() -> Self {
-        ReifyKind::Reified
-    }
-    pub fn is_erased(&self) -> bool {
-        match self {
-            ReifyKind::Erased => true,
-            _ => false,
-        }
-    }
-    pub fn is_soft_reified(&self) -> bool {
-        match self {
-            ReifyKind::SoftReified => true,
-            _ => false,
-        }
-    }
-    pub fn is_reified(&self) -> bool {
-        match self {
-            ReifyKind::Reified => true,
             _ => false,
         }
     }

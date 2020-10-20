@@ -37,12 +37,9 @@ fail:
 .function case_three() {
   NullUninit
   NullUninit
-  NullUninit
   FCallFuncD <> 0 1 "" - "" "get_three"
   SetL $foo
   PopC
-
-  NullUninit
   NullUninit
   NullUninit
   CGetL $foo
@@ -62,14 +59,11 @@ fail:
   NewObjD "Obj"
   Dup
   NullUninit
-  NullUninit
   FCallCtor <LockWhileUnwinding> 0 1 "" - "" ""
   PopC
   LockObj
   SetL $obj
   PopC
-
-  NullUninit
   NullUninit
   NullUninit
   CGetL $obj
@@ -80,7 +74,6 @@ fail:
 .function case_default() {
   NullUninit
   NullUninit
-  NullUninit
   String "kujhasekguheku"
   FCallFuncD <> 1 1 "" - "" "sswitch_on"
   RetC
@@ -89,17 +82,12 @@ fail:
 .function ["__EntryPoint"("""y:0:{}""")] main() {
   NullUninit
   NullUninit
-  NullUninit
   FCallFuncD <> 0 1 "" - "" "case_three"
   PopC
-
-  NullUninit
   NullUninit
   NullUninit
   FCallFuncD <> 0 1 "" - "" "with_obj"
   PopC
-
-  NullUninit
   NullUninit
   NullUninit
   FCallFuncD <> 0 1 "" - "" "case_default"

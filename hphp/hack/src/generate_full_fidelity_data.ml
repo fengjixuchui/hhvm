@@ -22,6 +22,12 @@ let rust_keywords =
     "async"; "await"; "dyn" ]
   [@@ocamlformat "disable"]
 
+let escape_rust_keyword field_name =
+  if List.mem rust_keywords field_name ~equal:String.equal then
+    sprintf "%s_" field_name
+  else
+    field_name
+
 type comment_style =
   | CStyle
   | MLStyle
@@ -505,6 +511,220 @@ end
       ()
 end
 
+module GenerateFFRustSyntaxImplByRef = struct
+  let to_kind x =
+    sprintf
+      "            SyntaxVariant::%s {..} => SyntaxKind::%s,\n"
+      x.kind_name
+      x.kind_name
+
+  let template =
+    make_header CStyle ""
+    ^ "
+use crate::{syntax_kind::SyntaxKind, lexable_token::LexableToken};
+use super::{syntax::Syntax, syntax_variant_generated::SyntaxVariant};
+
+impl<T: LexableToken, V> Syntax<'_, T, V> {
+    pub fn kind(&self) -> SyntaxKind {
+        match &self.children {
+            SyntaxVariant::Missing => SyntaxKind::Missing,
+            SyntaxVariant::Token (t) => SyntaxKind::Token(t.kind()),
+            SyntaxVariant::SyntaxList (_) => SyntaxKind::SyntaxList,
+TO_KIND        }
+    }
+}
+    "
+
+  let full_fidelity_syntax =
+    Full_fidelity_schema.make_template_file
+      ~transformations:[{ pattern = "TO_KIND"; func = to_kind }]
+      ~filename:
+        (full_fidelity_path_prefix ^ "syntax_by_ref/syntax_impl_generated.rs")
+      ~template
+      ()
+end
+
+module GenerateFFRustSyntaxVariantByRef = struct
+  let to_syntax_variant_children x =
+    let mapper (f, _) =
+      sprintf "    pub %s: Syntax<'a, T, V>," (escape_rust_keyword f)
+    in
+    let fields = map_and_concat_separated "\n" mapper x.fields in
+    sprintf
+      "#[derive(Debug, Clone)]\npub struct %sChildren<'a, T, V> {\n%s\n}\n\n"
+      x.kind_name
+      fields
+
+  let to_syntax_variant x =
+    sprintf "    %s(&'a %sChildren<'a, T, V>),\n" x.kind_name x.kind_name
+
+  let full_fidelity_syntax_template =
+    make_header CStyle ""
+    ^ "
+use super::{
+    syntax::Syntax,
+    syntax_children_iterator::SyntaxChildrenIterator,
+};
+
+#[derive(Debug, Clone)]
+pub enum SyntaxVariant<'a, T, V> {
+    Token(T),
+    Missing,
+    SyntaxList(&'a [Syntax<'a, T, V>]),
+SYNTAX_VARIANT}
+
+SYNTAX_CHILDREN
+
+impl<'a, T, V> SyntaxVariant<'a, T, V> {
+    pub fn iter_children(&'a self) -> SyntaxChildrenIterator<'a, T, V> {
+        SyntaxChildrenIterator {
+            syntax: &self,
+            index: 0,
+            index_back: 0,
+        }
+    }
+}
+"
+
+  let full_fidelity_syntax =
+    Full_fidelity_schema.make_template_file
+      ~transformations:
+        [
+          { pattern = "SYNTAX_VARIANT"; func = to_syntax_variant };
+          { pattern = "SYNTAX_CHILDREN"; func = to_syntax_variant_children };
+        ]
+      ~filename:
+        (full_fidelity_path_prefix ^ "syntax_by_ref/syntax_variant_generated.rs")
+      ~template:full_fidelity_syntax_template
+      ()
+end
+
+module GenerateSyntaxChildrenIterator = struct
+  let to_iter_children x =
+    let index = ref 0 in
+    let mapper (f, _) =
+      let res = sprintf "%d => Some(&x.%s)," !index (escape_rust_keyword f) in
+      let () = incr index in
+      res
+    in
+    let fields =
+      map_and_concat_separated "\n                    " mapper x.fields
+    in
+    sprintf
+      "            %s(x) => {
+                get_index(%d).and_then(|index| { match index {
+                        %s
+                        _ => None,
+                    }
+                })
+            },\n"
+      x.kind_name
+      (List.length x.fields)
+      fields
+
+  let full_fidelity_syntax_template =
+    make_header CStyle ""
+    ^ "
+use super::{
+    syntax_children_iterator::*,
+    syntax_variant_generated::*,
+    syntax::*
+};
+
+impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
+    pub fn next_impl(&mut self, direction : bool) -> Option<&'a Syntax<'a, T, V>> {
+        use SyntaxVariant::*;
+        let get_index = |len| {
+            let back_index_plus_1 = len - self.index_back;
+            if back_index_plus_1 <= self.index {
+                return None
+            }
+            if direction {
+                Some (self.index)
+            } else {
+                Some (back_index_plus_1 - 1)
+            }
+        };
+        let res = match self.syntax {
+            Missing => None,
+            Token (_) => None,
+            SyntaxList(elems) => {
+                get_index(elems.len()).and_then(|x| elems.get(x))
+            },
+ITER_CHILDREN
+        };
+        if res.is_some() {
+            if direction {
+                self.index = self.index + 1
+            } else {
+                self.index_back = self.index_back + 1
+            }
+        }
+        res
+    }
+}
+    "
+
+  let full_fidelity_syntax =
+    Full_fidelity_schema.make_template_file
+      ~transformations:[{ pattern = "ITER_CHILDREN"; func = to_iter_children }]
+      ~filename:
+        ( full_fidelity_path_prefix
+        ^ "syntax_by_ref/syntax_children_iterator_generated.rs" )
+      ~template:full_fidelity_syntax_template
+      ()
+end
+
+module GenerateSyntaxTypeImpl = struct
+  let to_syntax_constructors x =
+    let mapper (f, _) = sprintf "%s: Self" (escape_rust_keyword f) in
+    let args = map_and_concat_separated ", " mapper x.fields in
+    let mapper (f, _) = sprintf "%s" (escape_rust_keyword f) in
+    let fields = map_and_concat_separated ",\n            " mapper x.fields in
+    sprintf
+      "    fn make_%s(ctx: &C, %s) -> Self {
+        let syntax = SyntaxVariant::%s(ctx.get_arena().alloc(%sChildren {
+            %s,
+        }));
+        let value = PositionedValue::from_values(syntax.iter_children().map(|child| &child.value));
+        Self::make(syntax, value)
+    }\n\n"
+      x.type_name
+      args
+      x.kind_name
+      x.kind_name
+      fields
+
+  let full_fidelity_syntax_template =
+    make_header CStyle ""
+    ^ "
+use super::{
+    syntax::*,
+    syntax_variant_generated::*,
+    has_arena::HasArena,
+    positioned_token::PositionedToken,
+    positioned_value::PositionedValue
+};
+use crate::syntax::{SyntaxType, SyntaxValueType};
+
+impl<'a, C> SyntaxType<C> for Syntax<'a, PositionedToken<'a>, PositionedValue<'a>>
+where
+    C: HasArena<'a>,
+{
+SYNTAX_CONSTRUCTORS }
+"
+
+  let full_fidelity_syntax =
+    Full_fidelity_schema.make_template_file
+      ~transformations:
+        [{ pattern = "SYNTAX_CONSTRUCTORS"; func = to_syntax_constructors }]
+      ~filename:
+        ( full_fidelity_path_prefix
+        ^ "syntax_by_ref/syntax_type_impl_generated.rs" )
+      ~template:full_fidelity_syntax_template
+      ()
+end
+
 module GenerateFFRustSyntax = struct
   let from_children x =
     let mapper prefix (f, _) =
@@ -878,10 +1098,6 @@ SYNTAX
     Full_fidelity_source_text.t ->
     Full_fidelity_parser_env.t ->
     unit * t * Full_fidelity_syntax_error.t list * Rust_pointer.t option
-  val rust_parse_with_decl_mode_sc :
-    Full_fidelity_source_text.t ->
-    Full_fidelity_parser_env.t ->
-    bool list * t * Full_fidelity_syntax_error.t list * Rust_pointer.t option
   val rust_parse_with_verify_sc :
     Full_fidelity_source_text.t ->
     Full_fidelity_parser_env.t ->
@@ -1008,30 +1224,23 @@ module GenerateFFRustSmartConstructors = struct
   let full_fidelity_smart_constructors_template : string =
     make_header CStyle ""
     ^ "
-use parser_core_types::{
-  lexable_token::LexableToken,
-  token_kind::TokenKind,
-};
+use parser_core_types::token_factory::TokenFactory;
+use parser_core_types::lexable_token::LexableToken;
+
+pub type Token<S> = <<S as SmartConstructors>::TF as TokenFactory>::Token;
+pub type Trivia<S> = <Token<S> as LexableToken>::Trivia;
 
 pub trait SmartConstructors: Clone {
+    type TF: TokenFactory;
     type State;
-    type Token: LexableToken;
     type R;
 
     fn state_mut(&mut self) -> &mut Self::State;
     fn into_state(self) -> Self::State;
-
-    fn create_token(
-        &mut self,
-        kind: TokenKind,
-        offset: usize,
-        width: usize,
-        leading: <Self::Token as LexableToken>::Trivia,
-        trailing: <Self::Token as LexableToken>::Trivia,
-    ) -> Self::Token;
+    fn token_factory(&mut self) -> &mut Self::TF;
 
     fn make_missing(&mut self, offset : usize) -> Self::R;
-    fn make_token(&mut self, arg0: Self::Token) -> Self::R;
+    fn make_token(&mut self, arg0: Token<Self>) -> Self::R;
     fn make_list(&mut self, arg0: Vec<Self::R>, offset: usize) -> Self::R;
 MAKE_METHODS
 }
@@ -1055,7 +1264,7 @@ module GenerateFFRustMinimalSmartConstructors = struct
     let fwd_args = String.concat ~sep:", " fwd_args in
     sprintf
       "    fn make_%s(&mut self, %s) -> Self::R {
-        <Self as SyntaxSmartConstructors<MinimalSyntax, NoState>>::make_%s(self, %s)
+        <Self as SyntaxSmartConstructors<MinimalSyntax, SimpleTokenFactoryImpl<MinimalToken>, NoState>>::make_%s(self, %s)
     }\n\n"
       x.type_name
       args
@@ -1068,8 +1277,7 @@ module GenerateFFRustMinimalSmartConstructors = struct
 use parser_core_types::{
   minimal_syntax::MinimalSyntax,
   minimal_token::MinimalToken,
-  minimal_trivia::MinimalTrivia,
-  token_kind::TokenKind,
+  token_factory::SimpleTokenFactoryImpl,
 };
 use smart_constructors::{NoState, SmartConstructors};
 use syntax_smart_constructors::SyntaxSmartConstructors;
@@ -1077,21 +1285,25 @@ use syntax_smart_constructors::SyntaxSmartConstructors;
 #[derive(Clone)]
 pub struct MinimalSmartConstructors {
   dummy_state: NoState,
+  token_factory: SimpleTokenFactoryImpl<MinimalToken>,
 }
 
 impl MinimalSmartConstructors {
     pub fn new() -> Self {
-        MinimalSmartConstructors { dummy_state: NoState }
+        MinimalSmartConstructors {
+            dummy_state: NoState,
+            token_factory: SimpleTokenFactoryImpl::new(),
+        }
     }
 }
 
-impl<'src> SyntaxSmartConstructors<MinimalSyntax, NoState>
+impl<'src> SyntaxSmartConstructors<MinimalSyntax, SimpleTokenFactoryImpl<MinimalToken>, NoState>
     for MinimalSmartConstructors
 {}
 
 impl<'src> SmartConstructors for MinimalSmartConstructors {
+    type TF = SimpleTokenFactoryImpl<MinimalToken>;
     type State = NoState;
-    type Token = MinimalToken;
     type R = MinimalSyntax;
 
     fn state_mut(&mut self) -> &mut Self::State {
@@ -1102,33 +1314,20 @@ impl<'src> SmartConstructors for MinimalSmartConstructors {
       self.dummy_state
     }
 
-    fn create_token(
-        &mut self,
-        kind: TokenKind,
-        offset: usize,
-        width: usize,
-        leading: MinimalTrivia,
-        trailing: MinimalTrivia,
-    ) -> Self::Token {
-        MinimalToken::make(
-            kind,
-            offset,
-            width,
-            leading,
-            trailing,
-        )
+    fn token_factory(&mut self) -> &mut Self::TF {
+        &mut self.token_factory
     }
 
     fn make_missing(&mut self, offset: usize) -> Self::R {
-        <Self as SyntaxSmartConstructors<MinimalSyntax, NoState>>::make_missing(self, offset)
+        <Self as SyntaxSmartConstructors<MinimalSyntax, SimpleTokenFactoryImpl<MinimalToken>, NoState>>::make_missing(self, offset)
     }
 
-    fn make_token(&mut self, offset: Self::Token) -> Self::R {
-        <Self as SyntaxSmartConstructors<MinimalSyntax, NoState>>::make_token(self, offset)
+    fn make_token(&mut self, offset: MinimalToken) -> Self::R {
+        <Self as SyntaxSmartConstructors<MinimalSyntax, SimpleTokenFactoryImpl<MinimalToken>, NoState>>::make_token(self, offset)
     }
 
     fn make_list(&mut self, lst: Vec<Self::R>, offset: usize) -> Self::R {
-        <Self as SyntaxSmartConstructors<MinimalSyntax, NoState>>::make_list(self, lst, offset)
+        <Self as SyntaxSmartConstructors<MinimalSyntax, SimpleTokenFactoryImpl<MinimalToken>, NoState>>::make_list(self, lst, offset)
     }
 
 CONSTRUCTOR_METHODS}
@@ -1153,7 +1352,7 @@ module GenerateFFRustPositionedSmartConstructors = struct
     let fwd_args = String.concat ~sep:", " fwd_args in
     sprintf
       "    fn make_%s(&mut self, %s) -> Self::R {
-        <Self as SyntaxSmartConstructors<S, State>>::make_%s(self, %s)
+        <Self as SyntaxSmartConstructors<S, TF, State>>::make_%s(self, %s)
     }\n\n"
       x.type_name
       args
@@ -1165,37 +1364,44 @@ module GenerateFFRustPositionedSmartConstructors = struct
     ^ "
 
 
-use parser_core_types::{syntax::*, lexable_token::{LexableToken, TokenBuilder}, token_kind::TokenKind};
+use parser_core_types::{
+    syntax::*,
+    lexable_token::LexableToken,
+    token_factory::TokenFactory,
+};
 use smart_constructors::SmartConstructors;
 use syntax_smart_constructors::{SyntaxSmartConstructors, StateType};
 
 #[derive(Clone)]
-pub struct PositionedSmartConstructors<S, State: StateType<S>> {
+pub struct PositionedSmartConstructors<S, TF, State: StateType<S>> {
     pub state: State,
+    token_factory: TF,
     phantom_s: std::marker::PhantomData<S>,
 }
 
-impl<S, State: StateType<S>> PositionedSmartConstructors<S, State> {
-    pub fn new(state: State) -> Self {
-        Self { state, phantom_s: std::marker::PhantomData }
+impl<S, TF, State: StateType<S>> PositionedSmartConstructors<S, TF, State> {
+    pub fn new(state: State, token_factory: TF) -> Self {
+        Self { state, token_factory, phantom_s: std::marker::PhantomData }
     }
 }
 
-impl<S, State> SyntaxSmartConstructors<S, State> for PositionedSmartConstructors<S, State>
+impl<S, TF, State> SyntaxSmartConstructors<S, TF, State> for PositionedSmartConstructors<S, TF, State>
 where
+    TF: TokenFactory<Token = S::Token>,
     State: StateType<S>,
     S: SyntaxType<State> + Clone,
-    S::Token: LexableToken + TokenBuilder<State, <S::Token as LexableToken>::Trivia>,
+    S::Token: LexableToken,
 {}
 
-impl<S, State> SmartConstructors for PositionedSmartConstructors<S, State>
+impl<S, TF, State> SmartConstructors for PositionedSmartConstructors<S, TF, State>
 where
-    S::Token: LexableToken + TokenBuilder<State, <S::Token as LexableToken>::Trivia>,
+    TF: TokenFactory<Token = S::Token>,
+    S::Token: LexableToken,
     S: SyntaxType<State> + Clone,
     State: StateType<S>,
 {
+    type TF = TF;
     type State = State;
-    type Token = S::Token;
     type R = S;
 
     fn state_mut(&mut self) -> &mut State {
@@ -1206,34 +1412,20 @@ where
       self.state
     }
 
-    fn create_token(
-        &mut self,
-        kind: TokenKind,
-        offset: usize,
-        width: usize,
-        leading: <Self::Token as LexableToken>::Trivia,
-        trailing: <Self::Token as LexableToken>::Trivia,
-    ) -> Self::Token {
-        S::Token::make(
-            self.state_mut(),
-            kind,
-            offset,
-            width,
-            leading,
-            trailing,
-        )
+    fn token_factory(&mut self) -> &mut Self::TF {
+        &mut self.token_factory
     }
 
     fn make_missing(&mut self, offset: usize) -> Self::R {
-        <Self as SyntaxSmartConstructors<S, State>>::make_missing(self, offset)
+        <Self as SyntaxSmartConstructors<S, TF, State>>::make_missing(self, offset)
     }
 
-    fn make_token(&mut self, offset: Self::Token) -> Self::R {
-        <Self as SyntaxSmartConstructors<S, State>>::make_token(self, offset)
+    fn make_token(&mut self, offset: <Self::TF as TokenFactory>::Token) -> Self::R {
+        <Self as SyntaxSmartConstructors<S, TF, State>>::make_token(self, offset)
     }
 
     fn make_list(&mut self, lst: Vec<Self::R>, offset: usize) -> Self::R {
-        <Self as SyntaxSmartConstructors<S, State>>::make_list(self, lst, offset)
+        <Self as SyntaxSmartConstructors<S, TF, State>>::make_list(self, lst, offset)
     }
 CONSTRUCTOR_METHODS}
 "
@@ -1258,7 +1450,7 @@ module GenerateFFRustVerifySmartConstructors = struct
     sprintf
       "    fn make_%s(&mut self, %s) -> Self::R {
         let args = arg_kinds!(%s);
-        let r = <Self as SyntaxSmartConstructors<PositionedSyntax, State>>::make_%s(self, %s);
+        let r = <Self as SyntaxSmartConstructors<PositionedSyntax, SimpleTokenFactoryImpl<PositionedToken>, State>>::make_%s(self, %s);
         self.state_mut().verify(&args);
         self.state_mut().push(r.kind());
         r
@@ -1274,9 +1466,8 @@ module GenerateFFRustVerifySmartConstructors = struct
     ^ "
 use crate::*;
 use parser_core_types::positioned_syntax::PositionedSyntax;
-use parser_core_types::positioned_token::{PositionedToken, new};
-use parser_core_types::positioned_trivia::PositionedTrivia;
-use parser_core_types::token_kind::TokenKind;
+use parser_core_types::positioned_token::PositionedToken;
+use parser_core_types::token_factory::SimpleTokenFactoryImpl;
 use smart_constructors::SmartConstructors;
 use syntax_smart_constructors::SyntaxSmartConstructors;
 
@@ -1292,7 +1483,7 @@ macro_rules! arg_kinds {
 impl<'src> SmartConstructors for VerifySmartConstructors
 {
     type State = State;
-    type Token = PositionedToken;
+    type TF = SimpleTokenFactoryImpl<PositionedToken>;
     type R = PositionedSyntax;
 
     fn state_mut(&mut self) -> &mut State {
@@ -1303,31 +1494,18 @@ impl<'src> SmartConstructors for VerifySmartConstructors
       self.state
     }
 
-    fn create_token(
-        &mut self,
-        kind: TokenKind,
-        offset: usize,
-        width: usize,
-        leading: PositionedTrivia,
-        trailing: PositionedTrivia,
-    ) -> Self::Token {
-        new(
-            kind,
-            offset,
-            width,
-            leading,
-            trailing,
-        )
+    fn token_factory(&mut self) -> &mut Self::TF {
+        &mut self.token_factory
     }
 
     fn make_missing(&mut self, offset: usize) -> Self::R {
-        let r = <Self as SyntaxSmartConstructors<PositionedSyntax, State>>::make_missing(self, offset);
+        let r = <Self as SyntaxSmartConstructors<PositionedSyntax, SimpleTokenFactoryImpl<PositionedToken>, State>>::make_missing(self, offset);
         self.state_mut().push(r.kind());
         r
     }
 
-    fn make_token(&mut self, offset: Self::Token) -> Self::R {
-        let r = <Self as SyntaxSmartConstructors<PositionedSyntax, State>>::make_token(self, offset);
+    fn make_token(&mut self, offset: PositionedToken) -> Self::R {
+        let r = <Self as SyntaxSmartConstructors<PositionedSyntax, SimpleTokenFactoryImpl<PositionedToken>, State>>::make_token(self, offset);
         self.state_mut().push(r.kind());
         r
     }
@@ -1335,7 +1513,7 @@ impl<'src> SmartConstructors for VerifySmartConstructors
     fn make_list(&mut self, lst: Vec<Self::R>, offset: usize) -> Self::R {
         if !lst.is_empty() {
             let args: Vec<_> = (&lst).iter().map(|s| s.kind()).collect();
-            let r = <Self as SyntaxSmartConstructors<PositionedSyntax, State>>::make_list(self, lst, offset);
+            let r = <Self as SyntaxSmartConstructors<PositionedSyntax, SimpleTokenFactoryImpl<PositionedToken>, State>>::make_list(self, lst, offset);
             self.state_mut().verify(&args);
             self.state_mut().push(r.kind());
             r
@@ -1467,12 +1645,15 @@ module GenerateFFRustSyntaxSmartConstructors = struct
   let full_fidelity_syntax_smart_constructors_template : string =
     make_header CStyle ""
     ^ "
-use parser_core_types::syntax::*;
+use parser_core_types::{
+    syntax::*,
+    token_factory::TokenFactory,
+};
 use smart_constructors::{NoState, SmartConstructors};
 use crate::StateType;
 
-pub trait SyntaxSmartConstructors<S: SyntaxType<State>, State = NoState>:
-    SmartConstructors<State = State, R=S, Token=S::Token>
+pub trait SyntaxSmartConstructors<S: SyntaxType<State>, TF: TokenFactory<Token = S::Token>, State = NoState>:
+    SmartConstructors<State = State, R=S, TF = TF>
 where
     State: StateType<S>,
 {
@@ -1482,7 +1663,7 @@ where
         r
     }
 
-    fn make_token(&mut self, arg: Self::Token) -> Self::R {
+    fn make_token(&mut self, arg: <Self::TF as TokenFactory>::Token) -> Self::R {
         let r = Self::R::make_token(self.state_mut(), arg);
         self.state_mut().next(&[]);
         r
@@ -1490,7 +1671,7 @@ where
 
     fn make_list(&mut self, items: Vec<Self::R>, offset: usize) -> Self::R {
         if items.is_empty() {
-            <Self as SyntaxSmartConstructors<S, State>>::make_missing(self, offset)
+            <Self as SyntaxSmartConstructors<S, TF, State>>::make_missing(self, offset)
         } else {
             let item_refs: Vec<_> = items.iter().collect();
             self.state_mut().next(&item_refs);
@@ -1582,7 +1763,7 @@ module GenerateFFRustDeclModeSmartConstructors = struct
     let fwd_args = String.concat ~sep:", " fwd_args in
     sprintf
       "    fn make_%s(&mut self, %s) -> Self::R {
-        <Self as SyntaxSmartConstructors<Self::R, State<Self::R>>>::make_%s(self, %s)
+        <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_%s(self, %s)
     }\n\n"
       x.type_name
       args
@@ -1593,12 +1774,12 @@ module GenerateFFRustDeclModeSmartConstructors = struct
     make_header CStyle ""
     ^ "
 use parser_core_types::{
-  lexable_token::{LexableToken, TokenBuilder},
+  lexable_token::LexableToken,
   syntax::{
     Syntax,
     SyntaxValueType,
   },
-  token_kind::TokenKind
+  token_factory::{SimpleTokenFactory, SimpleTokenFactoryImpl, TokenFactory},
 };
 use crate::*;
 use smart_constructors::SmartConstructors;
@@ -1608,30 +1789,12 @@ impl<'src, Token, Value>
 SmartConstructors
     for DeclModeSmartConstructors<'src, Syntax<Token, Value>, Token, Value>
 where
-    Token: LexableToken + TokenBuilder<State<'src, Syntax<Token, Value>>, <Token as LexableToken>::Trivia>,
+    Token: LexableToken + SimpleTokenFactory,
     Value: SyntaxValueType<Token>,
 {
     type State = State<'src, Syntax<Token, Value>>;
-    type Token = Token;
+    type TF = SimpleTokenFactoryImpl<Token>;
     type R = Syntax<Token, Value>;
-
-    fn create_token(
-        &mut self,
-        kind: TokenKind,
-        offset: usize,
-        width: usize,
-        leading: <Self::Token as LexableToken>::Trivia,
-        trailing: <Self::Token as LexableToken>::Trivia,
-    ) -> Self::Token {
-        Token::make(
-            self.state_mut(),
-            kind,
-            offset,
-            width,
-            leading,
-            trailing,
-        )
-    }
 
     fn state_mut(&mut self) -> &mut State<'src, Syntax<Token, Value>> {
         &mut self.state
@@ -1641,16 +1804,20 @@ where
       self.state
     }
 
-    fn make_missing(&mut self, o: usize) -> Self::R {
-        <Self as SyntaxSmartConstructors<Self::R, State<Self::R>>>::make_missing(self, o)
+    fn token_factory(&mut self) -> &mut Self::TF {
+        &mut self.token_factory
     }
 
-    fn make_token(&mut self, token: Self::Token) -> Self::R {
-        <Self as SyntaxSmartConstructors<Self::R, State<Self::R>>>::make_token(self, token)
+    fn make_missing(&mut self, o: usize) -> Self::R {
+        <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_missing(self, o)
+    }
+
+    fn make_token(&mut self, token: <Self::TF as TokenFactory>::Token) -> Self::R {
+        <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_token(self, token)
     }
 
     fn make_list(&mut self, items: Vec<Self::R>, offset: usize) -> Self::R {
-        <Self as SyntaxSmartConstructors<Self::R, State<Self::R>>>::make_list(self, items, offset)
+        <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_list(self, items, offset)
     }
 
 CONSTRUCTOR_METHODS}
@@ -1700,6 +1867,7 @@ use smart_constructors::SmartConstructors;
 use parser_core_types::{
   lexable_token::LexableToken,
   syntax_kind::SyntaxKind,
+  token_factory::TokenFactory,
 };
 
 pub trait FlattenOp {
@@ -1716,7 +1884,7 @@ pub trait FlattenSmartConstructors<'src, State>
        Self::zero(SyntaxKind::Missing)
     }
 
-    fn make_token(&mut self, token: Self::Token) -> Self::R {
+    fn make_token(&mut self, token: <Self::TF as TokenFactory>::Token) -> Self::R {
         Self::zero(SyntaxKind::Token(token.kind()))
     }
 
@@ -1758,18 +1926,19 @@ module GenerateRustFactsSmartConstructors = struct
     ^ "
 use flatten_smart_constructors::*;
 use smart_constructors::SmartConstructors;
-use parser_core_types::positioned_token::{PositionedToken, new};
-use parser_core_types::positioned_trivia::PositionedTrivia;
+use parser_core_types::positioned_token::PositionedToken;
+use parser_core_types::token_factory::SimpleTokenFactoryImpl;
 
 use crate::*;
 
 #[derive(Clone)]
 pub struct FactsSmartConstructors<'src> {
     pub state: HasScriptContent<'src>,
+    pub token_factory: SimpleTokenFactoryImpl<PositionedToken>,
 }
 impl<'src> SmartConstructors for FactsSmartConstructors<'src> {
     type State = HasScriptContent<'src>;
-    type Token = PositionedToken;
+    type TF = SimpleTokenFactoryImpl<PositionedToken>;
     type R = Node;
 
     fn state_mut(&mut self) -> &mut HasScriptContent<'src> {
@@ -1780,28 +1949,15 @@ impl<'src> SmartConstructors for FactsSmartConstructors<'src> {
       self.state
     }
 
-    fn create_token(
-        &mut self,
-        kind: TokenKind,
-        offset: usize,
-        width: usize,
-        leading: PositionedTrivia,
-        trailing: PositionedTrivia,
-    ) -> Self::Token {
-        new(
-            kind,
-            offset,
-            width,
-            leading,
-            trailing,
-        )
+    fn token_factory(&mut self) -> &mut Self::TF {
+        &mut self.token_factory
     }
 
     fn make_missing(&mut self, offset: usize) -> Self::R {
         <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_missing(self, offset)
     }
 
-    fn make_token(&mut self, token: Self::Token) -> Self::R {
+    fn make_token(&mut self, token: PositionedToken) -> Self::R {
         <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_token(self, token)
     }
 
@@ -1827,18 +1983,14 @@ end
 
 module GenerateRustDirectDeclSmartConstructors = struct
   let to_constructor_methods x =
-    let as_local_var field_name =
-      if List.mem rust_keywords field_name ~equal:String.equal then
-        sprintf "%s_" field_name
-      else
-        field_name
-    in
     let args =
       List.map x.fields ~f:(fun (name, _) ->
-          sprintf "%s: Self::R" (as_local_var name))
+          sprintf "%s: Self::R" (escape_rust_keyword name))
     in
     let args = String.concat ~sep:", " args in
-    let fwd_args = List.map x.fields ~f:(fun (name, _) -> as_local_var name) in
+    let fwd_args =
+      List.map x.fields ~f:(fun (name, _) -> escape_rust_keyword name)
+    in
     let fwd_args = String.concat ~sep:", " fwd_args in
     sprintf
       "    fn make_%s(&mut self, %s) -> Self::R {
@@ -1855,18 +2007,18 @@ module GenerateRustDirectDeclSmartConstructors = struct
 use flatten_smart_constructors::*;
 use smart_constructors::SmartConstructors;
 use parser_core_types::compact_token::CompactToken;
-use parser_core_types::compact_trivia::CompactTrivia;
-use parser_core_types::token_kind::TokenKind;
+use parser_core_types::token_factory::SimpleTokenFactoryImpl;
 
 use crate::{State, Node};
 
 #[derive(Clone)]
 pub struct DirectDeclSmartConstructors<'src> {
     pub state: State<'src>,
+    pub token_factory: SimpleTokenFactoryImpl<CompactToken>,
 }
 impl<'src> SmartConstructors for DirectDeclSmartConstructors<'src> {
     type State = State<'src>;
-    type Token = CompactToken;
+    type TF = SimpleTokenFactoryImpl<CompactToken>;
     type R = Node<'src>;
 
     fn state_mut(&mut self) -> &mut State<'src> {
@@ -1877,22 +2029,15 @@ impl<'src> SmartConstructors for DirectDeclSmartConstructors<'src> {
       self.state
     }
 
-    fn create_token(
-        &mut self,
-        kind: TokenKind,
-        offset: usize,
-        width: usize,
-        leading: CompactTrivia,
-        trailing: CompactTrivia,
-    ) -> Self::Token {
-        CompactToken::new(kind, offset, width, leading, trailing)
+    fn token_factory(&mut self) -> &mut Self::TF {
+        &mut self.token_factory
     }
 
     fn make_missing(&mut self, offset: usize) -> Self::R {
         <Self as FlattenSmartConstructors<'src, State<'src>>>::make_missing(self, offset)
     }
 
-    fn make_token(&mut self, token: Self::Token) -> Self::R {
+    fn make_token(&mut self, token: CompactToken) -> Self::R {
         <Self as FlattenSmartConstructors<'src, State<'src>>>::make_token(self, token)
     }
 
@@ -1998,11 +2143,10 @@ module GenerateFFRustSmartConstructorsWrappers = struct
  // build AST.
 "
     ^ "
-
 use parser_core_types::{
   lexable_token::LexableToken,
   syntax_kind::SyntaxKind,
-  token_kind::TokenKind,
+  token_factory::TokenFactory,
 };
 use crate::SmartConstructors;
 
@@ -2018,9 +2162,10 @@ impl<S> WithKind<S> {
 }
 
 impl<S, State> SmartConstructors for WithKind<S>
-where S: SmartConstructors<State = State> {
+where S: SmartConstructors<State = State>,
+{
+    type TF = S::TF;
     type State = State;
-    type Token = S::Token;
     type R = (SyntaxKind, S::R);
 
     fn state_mut(&mut self) -> &mut State {
@@ -2031,18 +2176,12 @@ where S: SmartConstructors<State = State> {
       self.s.into_state()
     }
 
-    fn create_token(
-        &mut self,
-        kind: TokenKind,
-        offset: usize,
-        width: usize,
-        leading: <Self::Token as LexableToken>::Trivia,
-        trailing: <Self::Token as LexableToken>::Trivia,
-    ) -> Self::Token {
-        self.s.create_token(kind, offset, width, leading, trailing)
+    fn token_factory(&mut self) -> &mut Self::TF {
+        self.s.token_factory()
     }
 
-    fn make_token(&mut self, token: Self::Token) -> Self::R {
+
+    fn make_token(&mut self, token: <Self::TF as TokenFactory>::Token) -> Self::R {
         compose(SyntaxKind::Token(token.kind()), self.s.make_token(token))
     }
 
@@ -3069,4 +3208,8 @@ let templates =
     GenerateFFRustSmartConstructorsWrappers
     .full_fidelity_smart_constructors_wrappers;
     GenerateOcamlSyntax.ocaml_syntax;
+    GenerateFFRustSyntaxVariantByRef.full_fidelity_syntax;
+    GenerateSyntaxTypeImpl.full_fidelity_syntax;
+    GenerateSyntaxChildrenIterator.full_fidelity_syntax;
+    GenerateFFRustSyntaxImplByRef.full_fidelity_syntax;
   ]

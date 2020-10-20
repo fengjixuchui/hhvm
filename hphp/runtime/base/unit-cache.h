@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include "hphp/util/sha1.h"
+
 #include <string>
 #include <vector>
 
@@ -63,10 +65,12 @@ struct FuncTable;
  * fatal errors.
  */
 Unit* lookupUnit(StringData* path, const char* currentDir, bool* initial_opt,
-                 const Native::FuncTable&, bool alreadyRealpath);
+                 const Native::FuncTable&, bool alreadyRealpath,
+                 bool forPrefetch = false);
 
 /*
- * As above, but for system units.
+ * As above, but for system units. Only appropriate in
+ * RepoAuthoritative mode, as we do not cache system units otherwise.
  */
 Unit* lookupSyslibUnit(StringData* path, const Native::FuncTable&);
 
@@ -91,6 +95,13 @@ size_t numLoadedUnits();
  * Precondition: RepoAuthoritative
  */
 std::vector<Unit*> loadedUnitsRepoAuth();
+
+/*
+ * Return the current entires in the non-repo Unit cache or the
+ * per-hash Unit cache. Used for debugging.
+ */
+std::vector<std::pair<const StringData*, Unit*>> nonRepoUnitCacheUnits();
+std::vector<std::pair<SHA1, Unit*>> nonRepoUnitHashCacheUnits();
 
 /*
  * Resolve an include path, for the supplied path and directory, using the same
@@ -128,6 +139,12 @@ void clearUnitCacheForExit();
  * clearUnitCacheForExit().
  */
 void shutdownUnitPrefetcher();
+
+/*
+ * Shutdown the Unit reaper. This needs to be done before
+ * clearUnitCacheForExit().
+ */
+void shutdownUnitReaper();
 
 /*
  * Returns a unit if it's already loaded. If not then this returns nullptr.

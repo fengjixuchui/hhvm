@@ -3,12 +3,13 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<c8bd1cb29f3e2c9a15e01bedbe15770d>>
+// @generated SignedSource<<e15ad0d92fa01ba2e93e761ca9ed7831>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
 
 use arena_trait::TrivialDrop;
+use no_pos_hash::NoPosHash;
 use ocamlrep_derive::FromOcamlRep;
 use ocamlrep_derive::FromOcamlRepIn;
 use ocamlrep_derive::ToOcamlRep;
@@ -27,6 +28,7 @@ use crate::*;
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -49,6 +51,7 @@ impl TrivialDrop for Parsing {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -154,6 +157,7 @@ impl TrivialDrop for Naming {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -237,6 +241,7 @@ impl TrivialDrop for NastCheck {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,
@@ -488,7 +493,7 @@ pub enum Typing {
     InvalidNewableTypeArgument = 4307,
     InvalidNewableTypeParamConstraints = 4308,
     NewWithoutNewable = 4309,
-    NewStaticClassReified = 4310,
+    NewClassReified = 4310,
     MemoizeReified = 4311,
     ConsistentConstructReified = 4312,
     MethodVariance = 4313,
@@ -567,6 +572,7 @@ pub enum Typing {
     RedeclaringClassishConstant = 4389,
     CallCoeffects = 4390,
     AbstractFunctionPointer = 4391,
+    UnnecessaryAttribute = 4392,
 }
 impl TrivialDrop for Typing {}
 
@@ -579,6 +585,7 @@ impl TrivialDrop for Typing {}
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
+    NoPosHash,
     Ord,
     PartialEq,
     PartialOrd,

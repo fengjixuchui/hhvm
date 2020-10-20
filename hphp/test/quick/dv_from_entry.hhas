@@ -27,7 +27,6 @@ DV2:
 .function ["__EntryPoint"("""y:0:{}""")] main() {
   NullUninit
   NullUninit
-  NullUninit
   FCallFuncD <> 0 1 "" - "" "foo"
   PopC
   Int 1

@@ -65,6 +65,9 @@ let rec policy_occurrences pty =
         policy_occurrences a_key;
         policy_occurrences a_value;
       ]
+  | Tshape (_, m) ->
+    let f sft = policy_occurrences sft.sft_ty in
+    Nast.ShapeMap.values m |> List.map ~f |> on_list
 
 exception SubtypeFailure of string * ptype * ptype
 
@@ -135,6 +138,42 @@ let rec subtype ~pos t1 t2 acc =
     acc
     |> L.(PSet.elements cov <* [cl.c_self]) ~pos
     |> L.(PSet.elements inv =* [cl.c_lump]) ~pos
+  | (Tshape (k1, s1), Tshape (k2, s2)) ->
+    begin
+      match (k1, k2) with
+      | (T.Open_shape, T.Closed_shape) ->
+        err "An open shape cannot subtype a closed shape"
+      | _ ->
+        let preprocess shape_kind = function
+          (* A missing field of an open shape becomes an optional field of type mixed *)
+          | None when T.equal_shape_kind shape_kind T.Open_shape ->
+            Some { sft_optional = true; sft_ty = Tinter [] }
+          (* If a field is optional with type nothing, consider it missing *)
+          | Some { sft_ty = Tunion []; sft_optional = true } -> None
+          | sft -> sft
+        in
+        let process_field acc _ f1 f2 =
+          let f1 = preprocess k1 f1 in
+          let f2 = preprocess k2 f2 in
+          match (f1, f2) with
+          | (Some { sft_optional = true; _ }, Some { sft_optional = false; _ })
+            ->
+            err "optional field cannot be subtype of required"
+          | (Some { sft_ty = t1; _ }, Some { sft_ty = t2; _ }) ->
+            (subtype t1 t2 acc, None)
+          | (Some _, None) -> err "missing field"
+          | (None, Some { sft_optional; _ }) ->
+            if sft_optional then
+              (acc, None)
+            else
+              err "missing field"
+          | (None, None) -> (acc, None)
+        in
+        let (acc, _) =
+          Nast.ShapeMap.merge_env ~combine:process_field acc s1 s2
+        in
+        acc
+    end
   | (Tunion tl, _) ->
     List.fold tl ~init:acc ~f:(fun acc t1 -> subtype t1 t2 acc)
   | (_, Tinter tl) ->
@@ -359,6 +398,13 @@ let adjust_ptype ?prefix ~pos ~adjustment renv env ty =
       let (env, a_value) = freshen_cov env arr.a_value in
       let (env, a_length) = freshen_pol_cov env arr.a_length in
       (env, Tcow_array { a_kind = arr.a_kind; a_key; a_value; a_length })
+    | Tshape (k, s) ->
+      let f env _ sft =
+        let (env, ty) = freshen_cov env sft.sft_ty in
+        (env, { sft with sft_ty = ty })
+      in
+      let (env, s) = Nast.ShapeMap.map_env f env s in
+      (env, Tshape (k, s))
   in
   freshen adjustment env ty
 
@@ -378,6 +424,9 @@ let rec object_policy = function
   | Tcow_array { a_key; a_value; a_length; _ } ->
     PSet.union (object_policy a_key) (object_policy a_value)
     |> PSet.add a_length
+  | Tshape (_, s) ->
+    let f _ sft acc = PSet.union (object_policy sft.sft_ty) acc in
+    Nast.ShapeMap.fold f s PSet.empty
 
 let add_dependencies pl t = L.(pl <* PSet.elements (object_policy t))
 
@@ -709,7 +758,7 @@ and expr ~pos renv (env : Env.expr_env) (((_, ety), e) : Tast.expr) =
     | None -> fail "encountered $this outside of a class context")
   | A.ET_Splice e
   | A.ExpressionTree (_, e, _)
-  | A.BracedExpr e ->
+  | A.ParenthesizedExpr e ->
     expr env e
   (* TODO(T68414656): Support calls with type arguments *)
   | A.Call (e, _type_args, args, _extra_args) ->
@@ -876,15 +925,29 @@ and expr ~pos renv (env : Env.expr_env) (((_, ety), e) : Tast.expr) =
   | A.List es ->
     let (env, ptys) = List.map_env env es ~f:(fun env e -> expr env e) in
     (env, Ttuple ptys)
+  | A.Pipe ((_, dollardollar), e1, e2) ->
+    let (env, t1) = expr env e1 in
+    let dd_old = Env.get_local_type env dollardollar in
+    let env = Env.set_local_type env dollardollar t1 in
+    let (env, t2) = expr env e2 in
+    let env = Env.set_local_type_opt env dollardollar dd_old in
+    (env, t2)
+  | A.Dollardollar (_, lid) -> refresh_local_type ~pos renv env lid ety
+  | A.Shape s ->
+    let f (env, m) (key, e) =
+      let (env, t) = expr env e in
+      let sft = { sft_ty = t; sft_optional = false } in
+      (env, Nast.ShapeMap.add key sft m)
+    in
+    let (env, s) = List.fold ~f ~init:(env, Nast.ShapeMap.empty) s in
+    (env, Tshape (T.Closed_shape, s))
   (* --- expressions below are not yet supported *)
   | A.Darray (_, _)
   | A.Varray (_, _)
-  | A.Shape _
   | A.ValCollection (_, _, _)
   | A.KeyValCollection (_, _, _)
   | A.Omitted
   | A.Id _
-  | A.Dollardollar _
   | A.Clone _
   | A.Obj_get (_, _, _)
   | A.Class_get (_, _)
@@ -897,16 +960,12 @@ and expr ~pos renv (env : Env.expr_env) (((_, ety), e) : Tast.expr) =
   | A.Suspend _
   | A.Expr_list _
   | A.Cast (_, _)
-  | A.Pipe (_, _, _)
   | A.Eif (_, _, _)
   | A.Is (_, _)
   | A.As (_, _, _)
   | A.Record (_, _)
   | A.Xml (_, _, _)
   | A.Callconv (_, _)
-  | A.Import (_, _)
-  | A.Collection (_, _, _)
-  | A.ParenthesizedExpr _
   | A.Lplaceholder _
   | A.Fun_id _
   | A.Method_id (_, _)
@@ -919,6 +978,10 @@ and expr ~pos renv (env : Env.expr_env) (((_, ety), e) : Tast.expr) =
   | A.Any ->
     Errors.unknown_information_flow pos "expression";
     (env, Lift.ty renv ety)
+  | A.Import _
+  | A.Collection _
+  | A.BracedExpr _ ->
+    failwith "AST should not contain these nodes"
 
 and stmt renv (env : Env.stmt_env) ((pos, s) : Tast.stmt) =
   let expr_ = expr
@@ -936,6 +999,29 @@ and stmt renv (env : Env.stmt_env) ((pos, s) : Tast.stmt) =
       KMap.map (fun k -> { k with k_pc = untainted_pc }) out
     else
       out
+  in
+  let refresh_with_tymap ~pos renv env tymap =
+    let refresh var (_, lty) env =
+      fst @@ refresh_local_type ~force:true ~pos renv env var lty
+    in
+    Local_id.Map.fold refresh tymap env
+  in
+  let loop_the_env ~pos env out_blk beg_locals =
+    (* issue a subtype call between the type of the locals at
+       the end of loop and their invariant type; this constrains
+       their IFC type to indeed be invariant and spares us from
+       running a more classic fixpoint computation *)
+    Env.acc env
+    @@
+    match KMap.find_opt K.Next out_blk with
+    | None -> Utils.identity
+    | Some { k_vars = end_locals; _ } ->
+      let update_lid lid end_type =
+        match LMap.find_opt lid beg_locals with
+        | None -> Utils.identity
+        | Some beg_type -> subtype ~pos end_type beg_type
+      in
+      LMap.fold update_lid end_locals
   in
   match s with
   | A.AssertEnv (A.Refinement, tymap) ->
@@ -972,40 +1058,60 @@ and stmt renv (env : Env.stmt_env) ((pos, s) : Tast.stmt) =
     (env, out)
   | A.While (cond, (_, A.AssertEnv (A.Join, tymap)) :: blk) ->
     let pos = fst (fst cond) in
-    (* build the environment with the invariant types we will
-       use to check the loop body *)
-    let env =
-      Local_id.Map.fold
-        (fun var (_, lty) env ->
-          fst (refresh_local_type ~force:true ~pos renv env var lty))
-        tymap
-        env
-    in
+    let env = refresh_with_tymap ~pos renv env tymap in
     let beg_locals = Env.get_locals env in
+    (* TODO: pc_pols should also flow into cty because the condition is evaluated
+       unconditionally only the first time around the loop. *)
     let (env, cty, cthrow) = expr ~pos renv env cond in
-    (* TODO: constrain pc with cty *)
-    Env.with_pc_deps env (object_policy cty) @@ fun env ->
+
+    let pc_policies = object_policy cty in
+    Env.with_pc_deps env pc_policies @@ fun env ->
     let tainted_lpc = Env.get_lpc env in
     let (env, out_blk) = block renv env blk in
     let out_blk = Env.merge_out out_blk cthrow in
     let out_blk = Env.merge_in_next out_blk K.Continue in
-    let env =
-      (* issue a subtype call between the type of the locals at
-         the end of loop and their invariant type; this constrains
-         their IFC type to indeed be invariant and spares us from
-         running a more classic fixpoint computation *)
-      Env.acc env
-      @@
-      match KMap.find_opt K.Next out_blk with
-      | None -> Utils.identity
-      | Some { k_vars = end_locals; _ } ->
-        LMap.fold
-          (fun lid end_type ->
-            match LMap.find_opt lid beg_locals with
-            | None -> Utils.identity
-            | Some beg_type -> subtype ~pos end_type beg_type)
-          end_locals
+    let env = loop_the_env ~pos env out_blk beg_locals in
+    let out =
+      (* overwrite the Next outcome to use the type for local
+         variables as they are at the beginning of the loop,
+         then merge the Break outcome in Next *)
+      let next = { k_pc = tainted_lpc; k_vars = beg_locals } in
+      Env.merge_in_next (KMap.add K.Next next out_blk) K.Break
     in
+    let out = clear_pc_deps out in
+    (env, out)
+  | A.Foreach (collection, as_exp, (_, A.AssertEnv (A.Join, tymap)) :: blk) ->
+    let pos = fst (fst collection) in
+    let env = refresh_with_tymap ~pos renv env tymap in
+    let beg_locals = Env.get_locals env in
+
+    (* TODO: pc should also flow into cty because the condition is evaluated
+       unconditionally only the first time around the loop. *)
+    let (env, array_pty, cthrow) = expr ~pos renv env collection in
+    let array = cow_array ~pos renv array_pty in
+
+    let env = Env.prep_expr env in
+    let expr = expr_ ~pos renv in
+    let env =
+      match as_exp with
+      | Aast.As_v value
+      | Aast.Await_as_v (_, value) ->
+        asn ~expr ~pos renv env value array.a_value
+      | Aast.As_kv (key, value)
+      | Aast.Await_as_kv (_, key, value) ->
+        let env = asn ~expr ~pos renv env value array.a_value in
+        asn ~expr ~pos renv env key array.a_key
+    in
+
+    let pc_policies = PSet.singleton array.a_length in
+    let (env, ethrow) = Env.close_expr env in
+    if not @@ KMap.is_empty ethrow then fail "foreach collection threw";
+    Env.with_pc_deps env pc_policies @@ fun env ->
+    let tainted_lpc = Env.get_lpc env in
+    let (env, out_blk) = block renv env blk in
+    let out_blk = Env.merge_out out_blk cthrow in
+    let out_blk = Env.merge_in_next out_blk K.Continue in
+    let env = loop_the_env ~pos env out_blk beg_locals in
     let out =
       (* overwrite the Next outcome to use the type for local
          variables as they are at the beginning of the loop,
@@ -1017,6 +1123,7 @@ and stmt renv (env : Env.stmt_env) ((pos, s) : Tast.stmt) =
     (env, out)
   | A.Break -> Env.close_stmt env K.Break
   | A.Continue -> Env.close_stmt env K.Continue
+  | A.Fallthrough -> Env.close_stmt env K.Fallthrough
   | A.Return e ->
     let (env, ethrow) =
       match e with
@@ -1106,6 +1213,42 @@ and stmt renv (env : Env.stmt_env) ((pos, s) : Tast.stmt) =
         (env, Env.merge_out out_finally out))
       out_try_catch
       (env, KMap.empty)
+  | A.Switch (e, cl) ->
+    let pos = fst (fst e) in
+    let (env, ety, ethrow) = expr ~pos renv env e in
+    let (env, out_cond) = Env.close_stmt ~merge:ethrow env K.Fallthrough in
+    let case (env, (out, deps)) c =
+      let out = Env.merge_out out_cond out in
+      let (out, ft_cont_opt) = Env.strip_cont out K.Fallthrough in
+      (* out_cond has a Fallthrough so ft_cont_opt cannot be None *)
+      let env = Env.prep_stmt env (Option.value_exn ft_cont_opt) in
+      Env.with_pc_deps env deps @@ fun env ->
+      let (env, out, new_deps, b) =
+        match c with
+        | A.Default (_, b) -> (env, out, PSet.empty, b)
+        | A.Case (e, b) ->
+          let pos = fst (fst e) in
+          let (env, ety, ethrow) = expr ~pos renv env e in
+          let out = Env.merge_out out ethrow in
+          (env, out, object_policy ety, b)
+      in
+      Env.with_pc_deps env new_deps @@ fun env ->
+      let (env, out_blk) = block renv env b in
+      let out = Env.merge_out out out_blk in
+      (* deps is accumulated monotonically because going
+         through each 'case' reveals increasingly more
+         information about the scrutinee and the cases *)
+      (env, (out, PSet.union deps new_deps))
+    in
+    let (env, (out, _final_deps)) =
+      let initial_deps = object_policy ety in
+      List.fold ~f:case ~init:(env, (out_cond, initial_deps)) cl
+    in
+    let out = Env.merge_in_next out K.Continue in
+    let out = Env.merge_in_next out K.Break in
+    let out = Env.merge_in_next out K.Fallthrough in
+    let out = clear_pc_deps out in
+    (env, out)
   | A.Noop -> Env.close_stmt env K.Next
   | _ ->
     Errors.unknown_information_flow pos "statement";
@@ -1377,7 +1520,8 @@ let check opts tast =
       Logic.entailment_violations opts.opt_security_lattice simple
     in
     let to_err node =
-      (PosSet.elements (pos_of node), Format.asprintf "%a" Pp.policy node)
+      ( PosSet.elements (pos_set_of_policy node),
+        Format.asprintf "%a" Pp.policy node )
     in
     let illegal_information_flow (poss, source, sink) =
       (* Separate error positions that are not in the result and filter out

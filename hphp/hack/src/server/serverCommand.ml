@@ -100,11 +100,11 @@ let rpc_command_needs_full_check : type a. a t -> bool =
   | VERBOSE _ -> false
 
 let command_needs_full_check = function
-  | Rpc x -> rpc_command_needs_full_check x
+  | Rpc (_metadata, x) -> rpc_command_needs_full_check x
   | Debug -> false
 
 let is_edit : type a. a command -> bool = function
-  | Rpc (EDIT_FILE _) -> true
+  | Rpc (_metadata, EDIT_FILE _) -> true
   | _ -> false
 
 let rpc_command_needs_writes : type a. a t -> bool = function
@@ -116,7 +116,7 @@ let rpc_command_needs_writes : type a. a t -> bool = function
   | _ -> false
 
 let commands_needs_writes = function
-  | Rpc x -> rpc_command_needs_writes x
+  | Rpc (_metadata, x) -> rpc_command_needs_writes x
   | _ -> false
 
 let full_recheck_if_needed' genv env reason =
@@ -137,11 +137,11 @@ let full_recheck_if_needed' genv env reason =
     env
 
 let force_remote = function
-  | Rpc (STATUS status) -> status.remote
+  | Rpc (_metadata, STATUS status) -> status.remote
   | _ -> false
 
 let ignore_ide = function
-  | Rpc (STATUS status) -> status.ignore_ide
+  | Rpc (_metadata, STATUS status) -> status.ignore_ide
   | _ -> false
 
 let apply_changes env changes =
@@ -269,9 +269,12 @@ let actually_handle genv client msg full_recheck_needed ~is_stale env =
   ClientProvider.track client ~key:Connection_tracker.Server_done_full_recheck;
 
   match msg with
-  | Rpc cmd ->
+  | Rpc ({ ServerCommandTypes.from; _ }, cmd) ->
     let cmd_string = ServerCommandTypesUtils.debug_describe_t cmd in
-    Hh_logger.debug "ServerCommand.actually_handle rpc %s" cmd_string;
+    Hh_logger.debug
+      "ServerCommand.actually_handle rpc %s, --from %s"
+      cmd_string
+      from;
     ClientProvider.ping client;
     let t_start = Unix.gettimeofday () in
     ClientProvider.track
@@ -341,6 +344,8 @@ let handle
   ClientProvider.track client ~key:Connection_tracker.Server_waiting_for_cmd;
   let msg = ClientProvider.read_client_msg client in
   ClientProvider.track client ~key:Connection_tracker.Server_got_cmd;
+  ServerProgress.send_to_monitor
+    (MonitorRpc.PROGRESS (ServerCommandTypesUtils.status_describe_cmd msg));
   let env = { env with ServerEnv.remote = force_remote msg } in
   let full_recheck_needed = command_needs_full_check msg in
   let is_stale = ServerEnv.(env.last_recheck_loop_stats.updates_stale) in

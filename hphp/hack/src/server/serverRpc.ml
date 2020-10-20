@@ -89,11 +89,11 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
           ServerInferType.go_ctx ~ctx ~entry ~line ~column)
     in
     (env, result)
-  | INFER_TYPE_BATCH (experimental, positions, dynamic_view) ->
+  | INFER_TYPE_BATCH (positions, dynamic_view) ->
     let tcopt = env.ServerEnv.tcopt in
     let tcopt = { tcopt with GlobalOptions.tco_dynamic_view = dynamic_view } in
     let env = { env with tcopt } in
-    (env, ServerInferTypeBatch.go genv.workers experimental positions env)
+    (env, ServerInferTypeBatch.go genv.workers positions env)
   | IDE_HOVER (path, line, column) ->
     let (ctx, entry) = single_ctx_path env path in
     let result = ServerHover.go_quarantined ~ctx ~entry ~line ~column in
@@ -318,8 +318,12 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
         genv.local_config.ServerLocalConfig.store_decls_in_saved_state
       in
       ( env,
-        SaveStateService.go ~save_decls env filename ~replace_state_after_saving
-      )
+        SaveStateService.go
+          ~save_decls
+          genv
+          env
+          filename
+          ~replace_state_after_saving )
     else
       (env, Error "There are typecheck errors; cannot generate saved state.")
   | SEARCH (query, type_) ->

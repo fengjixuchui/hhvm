@@ -126,6 +126,7 @@
 #include "hphp/runtime/vm/jit/code-cache.h"
 #include "hphp/runtime/vm/jit/enter-tc.h"
 #include "hphp/runtime/vm/jit/perf-counters.h"
+#include "hphp/runtime/vm/jit/service-request-handlers.h"
 #include "hphp/runtime/vm/jit/tc.h"
 #include "hphp/runtime/vm/jit/translator-inline.h"
 #include "hphp/runtime/vm/jit/translator-runtime.h"
@@ -951,7 +952,7 @@ void enterVMAtFunc(ActRec* enterFnAr, uint32_t numArgsInclUnpack) {
   assertx(vmfp()->func()->contains(vmpc()));
 
   if (RID().getJit() && !RID().getJitFolding()) {
-    jit::TCA start = enterFnAr->func()->getFuncBody();
+    jit::TCA start = jit::svcreq::getFuncBody(enterFnAr->func());
     assert_flog(jit::tc::isValidCodeAddress(start),
                 "start = {} ; func = {} ({})\n",
                 start, enterFnAr->func(), enterFnAr->func()->fullName());
@@ -1095,11 +1096,10 @@ OPTBLD_INLINE void iopPopU2() {
 OPTBLD_INLINE void iopPopFrame(uint32_t nout) {
   assertx(vmStack().indC(nout + 0)->m_type == KindOfUninit);
   assertx(vmStack().indC(nout + 1)->m_type == KindOfUninit);
-  assertx(vmStack().indC(nout + 2)->m_type == KindOfUninit);
   for (int32_t i = nout - 1; i >= 0; --i) {
-    *vmStack().indC(i + 3) = *vmStack().indC(i);
+    *vmStack().indC(i + kNumActRecCells) = *vmStack().indC(i);
   }
-  vmStack().ndiscard(3);
+  vmStack().ndiscard(kNumActRecCells);
 }
 
 OPTBLD_INLINE void iopPopL(tv_lval to) {
@@ -1140,8 +1140,10 @@ OPTBLD_INLINE void iopFile() {
 }
 
 OPTBLD_INLINE void iopDir() {
-  auto s = vmfp()->func()->unit()->dirpath();
-  vmStack().pushStaticString(s);
+  auto const filepath = vmfp()->func()->unit()->filepath();
+  vmStack().pushStaticString(
+    makeStaticString(FileUtil::dirname(StrNR{filepath}))
+  );
 }
 
 OPTBLD_INLINE void iopMethod() {
@@ -1250,12 +1252,18 @@ OPTBLD_INLINE void iopNewKeysetArray(uint32_t n) {
   vmStack().pushKeysetNoRc(bespoke::maybeMakeLoggingArray(ad));
 }
 
-OPTBLD_INLINE void iopNewVArray(uint32_t n) {
-  assertx(!RuntimeOption::EvalHackArrDVArrs);
+namespace {
+void newVArrayImpl(uint32_t n) {
   // This constructor moves values, no inc/decref is necessary.
   auto const ad = PackedArray::MakeVArray(n, vmStack().topC());
   vmStack().ndiscard(n);
-  vmStack().pushArrayNoRc(bespoke::maybeMakeLoggingArray(ad));
+  vmStack().pushArrayLikeNoRc(bespoke::maybeMakeLoggingArray(ad));
+}
+}
+
+OPTBLD_INLINE void iopNewVArray(uint32_t n) {
+  assertx(!RuntimeOption::EvalHackArrDVArrs);
+  newVArrayImpl(n);
 }
 
 OPTBLD_INLINE void iopNewDArray(uint32_t capacity) {
@@ -2222,7 +2230,11 @@ OPTBLD_INLINE TCA ret(PC& pc) {
   assertx(!suspended || vmfp()->func()->isAsyncFunction());
   assertx(!suspended || !isResumed(vmfp()));
 
-  auto const jitReturn = jitReturnPre(vmfp());
+  // Grab info from callee's ActRec.
+  auto const fp = vmfp();
+  auto const func = fp->func();
+  auto const sfp = fp->sfp();
+  auto const jitReturn = jitReturnPre(fp);
 
   // Get the return value.
   TypedValue retval = *vmStack().topTV();
@@ -2236,17 +2248,13 @@ OPTBLD_INLINE TCA ret(PC& pc) {
   // value must be removed from the stack, or the unwinder would try to free it
   // if the hook throws---but the event hook routine decrefs the return value
   // in that case if necessary.
-  frame_free_locals_inl(vmfp(), vmfp()->func()->numLocals(), &retval);
+  frame_free_locals_inl(fp, func->numLocals(), &retval);
 
-  // Grab caller info from ActRec.
-  ActRec* sfp = vmfp()->sfp();
-  Offset callOff = vmfp()->callOffset();
-
-  if (LIKELY(!isResumed(vmfp()))) {
+  if (LIKELY(!isResumed(fp))) {
     // If in an eagerly executed async function, wrap the return value into
     // succeeded StaticWaitHandle. Async eager return requests are currently
     // not respected, as we don't have a way to obtain the async eager offset.
-    if (UNLIKELY(vmfp()->func()->isAsyncFunction()) && !suspended) {
+    if (UNLIKELY(func->isAsyncFunction()) && !suspended) {
       auto const& retvalCell = *tvAssertPlausible(&retval);
       // Heads up that we're assuming CreateSucceeded can't throw, or we won't
       // decref the return value.  (It can't right now.)
@@ -2255,23 +2263,23 @@ OPTBLD_INLINE TCA ret(PC& pc) {
     }
 
     // Free ActRec and store the return value.
-    vmStack().ndiscard(vmfp()->func()->numSlotsInFrame());
+    vmStack().ndiscard(func->numSlotsInFrame());
     vmStack().ret();
     *vmStack().topTV() = retval;
-    assertx(vmStack().topTV() == vmfp()->retSlot());
+    assertx(vmStack().topTV() == fp->retSlot());
     // In case async eager return was requested by the caller, pretend that
     // we did not finish eagerly as we already boxed the value.
     vmStack().topTV()->m_aux.u_asyncEagerReturnFlag = 0;
-  } else if (vmfp()->func()->isAsyncFunction()) {
+  } else if (func->isAsyncFunction()) {
     // Mark the async function as succeeded and store the return value.
     assertx(!sfp);
-    auto wh = frame_afwh(vmfp());
+    auto wh = frame_afwh(fp);
     wh->ret(retval);
     decRefObj(wh);
-  } else if (vmfp()->func()->isAsyncGenerator()) {
+  } else if (func->isAsyncGenerator()) {
     // Mark the async generator as finished.
     assertx(isNullType(retval.m_type));
-    auto const gen = frame_async_generator(vmfp());
+    auto const gen = frame_async_generator(fp);
     auto const eagerResult = gen->ret();
     if (eagerResult) {
       // Eager execution => return StaticWaitHandle.
@@ -2281,9 +2289,9 @@ OPTBLD_INLINE TCA ret(PC& pc) {
       // Resumed execution => return control to the scheduler.
       assertx(!sfp);
     }
-  } else if (vmfp()->func()->isNonAsyncGenerator()) {
+  } else if (func->isNonAsyncGenerator()) {
     // Mark the generator as finished and store the return value.
-    frame_generator(vmfp())->ret(retval);
+    frame_generator(fp)->ret(retval);
 
     // Push return value of next()/send()/raise().
     vmStack().pushNull();
@@ -2292,7 +2300,7 @@ OPTBLD_INLINE TCA ret(PC& pc) {
   }
 
   // Return control to the caller.
-  returnToCaller(pc, sfp, callOff);
+  returnToCaller(pc, sfp, jitReturn.callOff);
 
   return jitReturnPost(jitReturn);
 }
@@ -2365,17 +2373,7 @@ OPTBLD_INLINE void iopThrow(PC&) {
 }
 
 OPTBLD_INLINE void iopThrowNonExhaustiveSwitch() {
-  switch (RuntimeOption::EvalThrowOnNonExhaustiveSwitch) {
-    case 0:
-      return;
-    case 1:
-      raise_warning(Strings::NONEXHAUSTIVE_SWITCH);
-      return;
-    default:
-      SystemLib::throwRuntimeExceptionObject(
-        String(Strings::NONEXHAUSTIVE_SWITCH));
-  }
-  not_reached();
+  SystemLib::throwRuntimeExceptionObject(String(Strings::NONEXHAUSTIVE_SWITCH));
 }
 
 OPTBLD_INLINE void iopRaiseClassStringConversionWarning() {
@@ -3576,7 +3574,7 @@ bool doFCall(CallFlags callFlags, const Func* func, uint32_t numArgsInclUnpack,
         int(vmfp()->func()->base()));
 
   assertx(numArgsInclUnpack <= func->numNonVariadicParams() + 1);
-  assertx(kNumActRecCells == 3);
+  assertx(kNumActRecCells == 2);
   ActRec* ar = vmStack().indA(
     numArgsInclUnpack + (callFlags.hasGenerics() ? 1 : 0));
 
@@ -3594,7 +3592,6 @@ bool doFCall(CallFlags callFlags, const Func* func, uint32_t numArgsInclUnpack,
     callFlags.callOffset(),
     callFlags.asyncEagerReturn() ? (1 << ActRec::AsyncEagerRet) : 0
   );
-  ar->setNumArgs(std::min(numArgsInclUnpack, func->numParams()));
   ar->setThisOrClassAllowNull(ctx);
 
   try {
@@ -3663,11 +3660,7 @@ void fcallImpl(PC origpc, PC& pc, const FCallArgs& fca, const Func* func,
 
     if (UNLIKELY(fca.numArgs > func->numNonVariadicParams())) {
       GenericsSaver gs{fca.hasGenerics()};
-      if (RuntimeOption::EvalHackArrDVArrs) {
-        iopNewVec(fca.numArgs - func->numNonVariadicParams());
-      } else {
-        iopNewVArray(fca.numArgs - func->numNonVariadicParams());
-      }
+      newVArrayImpl(fca.numArgs - func->numNonVariadicParams());
       return func->numNonVariadicParams() + 1;
     }
 
@@ -3921,8 +3914,9 @@ void fcallObjMethodImpl(PC origpc, PC& pc, const FCallArgs& fca,
                         StringData* methName) {
   const Func* func;
   LookupResult res;
-  assertx(tvIsObject(vmStack().indC(fca.numInputs() + 2)));
-  auto const obj = vmStack().indC(fca.numInputs() + 2)->m_data.pobj;
+  assertx(tvIsObject(vmStack().indC(fca.numInputs() + (kNumActRecCells - 1))));
+  auto const obj =
+    vmStack().indC(fca.numInputs() + (kNumActRecCells - 1))->m_data.pobj;
   auto cls = obj->getVMClass();
   auto const ctx = [&] {
     if (!fca.context) return arGetContextClass(vmfp());
@@ -3945,7 +3939,7 @@ void fcallObjMethodImpl(PC origpc, PC& pc, const FCallArgs& fca,
 
   // fcallImpl() will do further checks before spilling the ActRec. If any
   // of these checks fail, make sure it gets decref'd only via ctx.
-  tvWriteNull(*vmStack().indC(fca.numInputs() + 2));
+  tvWriteNull(*vmStack().indC(fca.numInputs() + (kNumActRecCells - 1)));
   fcallImpl<dynamic>(origpc, pc, fca, func, Object::attach(obj));
 }
 
@@ -3974,7 +3968,9 @@ static void throw_call_non_object(const char* methodName,
 ALWAYS_INLINE bool
 fcallObjMethodHandleInput(const FCallArgs& fca, ObjMethodOp op,
                           const StringData* methName, bool extraStk) {
-  TypedValue* obj = vmStack().indC(fca.numInputs() + 2 + (extraStk ? 1 : 0));
+  TypedValue* obj = vmStack().indC(fca.numInputs()
+                                   + (kNumActRecCells - 1)
+                                   + (extraStk ? 1 : 0));
   if (LIKELY(isObjectType(obj->m_type))) return false;
 
   if (UNLIKELY(op == ObjMethodOp::NullThrows || !isNullType(obj->m_type))) {
@@ -3989,7 +3985,6 @@ fcallObjMethodHandleInput(const FCallArgs& fca, ObjMethodOp op,
   if (fca.hasGenerics()) stack.popC();
   if (fca.hasUnpack()) stack.popC();
   for (uint32_t i = 0; i < fca.numArgs; ++i) stack.popTV();
-  stack.popU();
   stack.popU();
   stack.popC();
   for (uint32_t i = 0; i < fca.numRets - 1; ++i) stack.popU();
@@ -4408,8 +4403,9 @@ OPTBLD_INLINE void iopFCallCtor(PC origpc, PC& pc, FCallArgs fca,
                                 const StringData*) {
   assertx(fca.numRets == 1);
   assertx(fca.asyncEagerOffset == kInvalidOffset);
-  assertx(tvIsObject(vmStack().indC(fca.numInputs() + 2)));
-  auto const obj = vmStack().indC(fca.numInputs() + 2)->m_data.pobj;
+  assertx(tvIsObject(vmStack().indC(fca.numInputs() + (kNumActRecCells - 1))));
+  auto const obj =
+    vmStack().indC(fca.numInputs() + (kNumActRecCells - 1))->m_data.pobj;
 
   const Func* func;
   auto const ctx = arGetContextClass(vmfp());
@@ -4419,7 +4415,7 @@ OPTBLD_INLINE void iopFCallCtor(PC origpc, PC& pc, FCallArgs fca,
 
   // fcallImpl() will do further checks before spilling the ActRec. If any
   // of these checks fail, make sure it gets decref'd only via ctx.
-  tvWriteNull(*vmStack().indC(fca.numInputs() + 2));
+  tvWriteNull(*vmStack().indC(fca.numInputs() + (kNumActRecCells - 1)));
   fcallImpl<false>(origpc, pc, fca, func, Object::attach(obj));
 }
 
@@ -4842,18 +4838,16 @@ OPTBLD_INLINE void iopVerifyRetNonNullC() {
 }
 
 OPTBLD_INLINE TCA iopNativeImpl(PC& pc) {
-  auto const jitReturn = jitReturnPre(vmfp());
+  auto const fp = vmfp();
   auto const func = vmfp()->func();
+  auto const sfp = fp->sfp();
+  auto const jitReturn = jitReturnPre(fp);
   auto const native = func->arFuncPtr();
   assertx(native != nullptr);
   // Actually call the native implementation. This will handle freeing the
   // locals in the normal case. In the case of an exception, the VM unwinder
   // will take care of it.
-  native(vmfp());
-
-  // Grab caller info from ActRec.
-  ActRec* sfp = vmfp()->sfp();
-  Offset callOff = vmfp()->callOffset();
+  native(fp);
 
   // Adjust the stack; the native implementation put the return value in the
   // right place for us already
@@ -4861,7 +4855,7 @@ OPTBLD_INLINE TCA iopNativeImpl(PC& pc) {
   vmStack().ret();
 
   // Return control to the caller.
-  returnToCaller(pc, sfp, callOff);
+  returnToCaller(pc, sfp, jitReturn.callOff);
   return jitReturnPost(jitReturn);
 }
 

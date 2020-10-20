@@ -36,8 +36,6 @@
   NewVArray 3
   SetL $b
   PopC
-
-  NullUninit
   NullUninit
   NullUninit
     PushL $a

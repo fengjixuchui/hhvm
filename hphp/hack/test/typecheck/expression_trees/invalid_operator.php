@@ -64,6 +64,13 @@ class Foo {
   public static function bar(): int { return 1; }
 }
 
+final class ExprTree<TVisitor, TResult, TInfer>{
+  public function __construct(
+    private (function(TVisitor): TResult) $x,
+    private (function(): TInfer) $err,
+  ) {}
+}
+
 const int MY_CONST = 1;
 
 function foo(): void {
@@ -85,12 +92,12 @@ function foo(): void {
   $f = Code`() ==> { for($i = 0; $i < 10; $i++) {} }`;
 
   // Ban lambdas with default arguments.
-  $f = Code`($x = 1) ==> { return $x; }`;
+  $f = Code`(int $x = 1) ==> { return $x; }`;
 
   // Ban assignment to things that aren't simple variables.
   $f = Code`(dynamic $x) ==> { $x[0] = 1; }`;
   $f = Code`(dynamic $x) ==> { $x->foo = 1; }`;
 
   // Ban assignments that mutate a local.
-  $f = Code`($x) ==> { $x += 1; }`;
+  $f = Code`(int $x) ==> { $x += 1; }`;
 }

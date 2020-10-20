@@ -17,15 +17,22 @@
 #include "hphp/runtime/base/bespoke/layout.h"
 
 #include "hphp/runtime/base/bespoke/logging-array.h"
+#include "hphp/runtime/base/bespoke/logging-profile.h"
+#include "hphp/runtime/base/bespoke/monotype-dict.h"
 #include "hphp/runtime/base/bespoke/monotype-vec.h"
+#include "hphp/runtime/base/packed-array-defs.h"
 #include "hphp/runtime/vm/jit/irgen.h"
+#include "hphp/runtime/vm/jit/mcgen-translate.h"
 #include "hphp/runtime/vm/jit/punt.h"
+#include "hphp/util/trace.h"
 
 #include <atomic>
 #include <array>
 #include <folly/lang/Bits.h>
 
 namespace HPHP { namespace bespoke {
+
+//////////////////////////////////////////////////////////////////////////////
 
 using namespace jit;
 using namespace jit::irgen;
@@ -87,8 +94,78 @@ struct Layout::Initializer {
     assertx(s_layoutTableIndex.load(std::memory_order_relaxed) == 0);
     LoggingArray::InitializeLayouts();
     MonotypeVec::InitializeLayouts();
+    EmptyMonotypeDict::InitializeLayouts();
   }
 };
 Layout::Initializer Layout::s_initializer;
+
+//////////////////////////////////////////////////////////////////////////////
+
+void logBespokeDispatch(const ArrayData* ad, const char* fn) {
+  DEBUG_ONLY auto const sk = getSrcKey();
+  DEBUG_ONLY auto const layout = BespokeArray::asBespoke(ad)->layout();
+  TRACE_MOD(Trace::bespoke, 6, "Bespoke dispatch: %s: %s::%s\n",
+            sk.getSymbol().data(), layout.describe().data(), fn);
+}
+
+namespace {
+ArrayData* maybeMonoify(ArrayData* ad) {
+  assertx(ad->isVanilla());
+  if (ad->isKeysetType()) return ad;
+
+  auto const et = EntryTypes::ForArray(ad);
+  auto const monotype_keys =
+    et.keyTypes == KeyTypes::Ints ||
+    et.keyTypes == KeyTypes::Strings ||
+    et.keyTypes == KeyTypes::StaticStrings ||
+    et.keyTypes == KeyTypes::Empty;
+  auto const monotype_vals =
+    et.valueTypes == ValueTypes::Monotype ||
+    et.valueTypes == ValueTypes::Empty;
+
+  assertx(IMPLIES(ad->isVArray() || ad->isVecType(), monotype_keys));
+
+  if (!(monotype_keys && monotype_vals)) {
+    return ad;
+  }
+
+  SCOPE_EXIT { ad->decRefAndRelease(); };
+
+  auto const legacy = ad->isLegacyArray();
+
+  if (et.valueTypes == ValueTypes::Empty) {
+    switch (ad->toDataType()) {
+      case KindOfVArray: return EmptyMonotypeVec::GetVArray(legacy);
+      case KindOfVec:    return EmptyMonotypeVec::GetVec(legacy);
+      case KindOfDArray: return EmptyMonotypeDict::GetDArray(legacy);
+      case KindOfDict:   return EmptyMonotypeDict::GetDict(legacy);
+      default: always_assert(false);
+    }
+  }
+
+  auto const dt = dt_modulo_persistence(et.valueDatatype);
+  if (ad->isDArray() || ad->isDictType()) {
+    return MakeMonotypeDictFromVanilla(ad, dt, et.keyTypes);
+  }
+
+  assertx(ad->isVArray() || ad->isVecType());
+  auto const hk = ad->isVecType() ? HeaderKind::BespokeVec
+                                  : HeaderKind::BespokeVArray;
+  return MonotypeVec::Make(dt, ad->size(), packedData(ad), hk,
+                           ad->isLegacyArray(), ad->isStatic());
+}
+}
+
+ArrayData* makeBespokeForTesting(ArrayData* ad) {
+  if (!jit::mcgen::retranslateAllEnabled()) {
+    return bespoke::maybeMakeLoggingArray(ad);
+  }
+  auto const mod = requestCount() % 3;
+  if (mod == 1) return bespoke::maybeMakeLoggingArray(ad);
+  if (mod == 2) return bespoke::maybeMonoify(ad);
+  return ad;
+}
+
+//////////////////////////////////////////////////////////////////////////////
 
 }}

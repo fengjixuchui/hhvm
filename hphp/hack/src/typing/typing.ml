@@ -156,12 +156,6 @@ let get_vc_inst vc_kind ty =
     Some vty
   | _ -> get_value_collection_inst ty
 
-(* Is this type array<vty> or a supertype for some vty? *)
-let get_akvarray_inst ty =
-  match get_node ty with
-  | Tvarray vty -> Some vty
-  | _ -> get_value_collection_inst ty
-
 (* Is this type one of the three key-value collection types
  * e.g. dict<kty,vty> or a supertype for some kty and vty? *)
 let get_kvc_inst p kvc_kind ty =
@@ -214,12 +208,24 @@ let refinement_annot_map env lset =
       Some map
   | None -> None
 
-let add_block_annots ~pos ?join_map ?refinement_map blk =
-  let mk_join_annot map = (pos, Aast.AssertEnv (Aast.Join, map)) in
-  let mk_refinement_annot map = (pos, Aast.AssertEnv (Aast.Refinement, map)) in
-  Option.to_list (Option.map ~f:mk_join_annot join_map)
-  @ Option.to_list (Option.map ~f:mk_refinement_annot refinement_map)
-  @ blk
+let assert_env_blk ~pos ~at annotation_kind env_map_opt blk =
+  let mk_assert map = (pos, Aast.AssertEnv (annotation_kind, map)) in
+  let annot_blk = Option.to_list (Option.map ~f:mk_assert env_map_opt) in
+  match at with
+  | `Start -> annot_blk @ blk
+  | `End -> blk @ annot_blk
+
+let assert_env_stmt ~pos ~at annotation_kind env_map_opt stmt =
+  let mk_assert map = (pos, Aast.AssertEnv (annotation_kind, map)) in
+  match env_map_opt with
+  | Some env_map ->
+    let blk =
+      match at with
+      | `Start -> [mk_assert env_map; (pos, stmt)]
+      | `End -> [(pos, stmt); mk_assert env_map]
+    in
+    Aast.Block blk
+  | None -> stmt
 
 let set_tcopt_unstable_features env { fa_user_attributes; _ } =
   match
@@ -607,16 +613,25 @@ and stmt_ env pos st =
     in
     (env, Aast.Expr te)
   | If (e, b1, b2) ->
+    let assert_refinement_env =
+      assert_env_blk ~pos ~at:`Start Aast.Refinement
+    in
     let (env, te, _) = expr env e in
     let (env, tb1, tb2) =
       branch
         env
         (fun env ->
-          let (env, _lset) = condition env true te in
-          block env b1)
+          let (env, lset) = condition env true te in
+          let refinement_map = refinement_annot_map env lset in
+          let (env, b1) = block env b1 in
+          let b1 = assert_refinement_env refinement_map b1 in
+          (env, b1))
         (fun env ->
-          let (env, _lset) = condition env false te in
-          block env b2)
+          let (env, lset) = condition env false te in
+          let refinement_map = refinement_annot_map env lset in
+          let (env, b2) = block env b2 in
+          let b2 = assert_refinement_env refinement_map b2 in
+          (env, b2))
     in
     (* TODO TAST: annotate with joined types *)
     (env, Aast.If (te, tb1, tb2))
@@ -736,7 +751,7 @@ and stmt_ env pos st =
     in
     (env, Aast.Do (tb, te))
   | While (e, b) ->
-    let (env, (te, tb)) =
+    let (env, (te, tb, refinement_map)) =
       LEnv.stash_and_do env [C.Continue; C.Break] (fun env ->
           let env = LEnv.save_and_merge_next_in_cont env C.Continue in
           let (env, tb) =
@@ -752,16 +767,29 @@ and stmt_ env pos st =
                 let refinement_map = refinement_annot_map env lset in
                 (* TODO TAST: avoid repeated generation of block *)
                 let (env, tb) = block env b in
-                let tb = add_block_annots ~pos ?join_map ?refinement_map tb in
+
+                (* Annotate loop body with join and refined environments *)
+                let at = `Start in
+                let tb =
+                  assert_env_blk ~pos ~at Aast.Refinement refinement_map tb
+                in
+                let tb = assert_env_blk ~pos ~at Aast.Join join_map tb in
+
                 (env, tb))
           in
           let env = LEnv.update_next_from_conts env [C.Continue; C.Next] in
           let (env, te, _) = expr env e in
-          let (env, _lset) = condition env false te in
+          let (env, lset) = condition env false te in
+          let refinement_map_at_exit = refinement_annot_map env lset in
           let env = LEnv.update_next_from_conts env [C.Break; C.Next] in
-          (env, (te, tb)))
+          (env, (te, tb, refinement_map_at_exit)))
     in
-    (env, Aast.While (te, tb))
+    let while_st = Aast.While (te, tb) in
+    (* Export the refined environment after the exit condition holds *)
+    let while_st =
+      assert_env_stmt ~pos ~at:`End Aast.Refinement refinement_map while_st
+    in
+    (env, while_st)
   | Using
       {
         us_has_await = has_await;
@@ -786,12 +814,17 @@ and stmt_ env pos st =
             us_is_block_scoped;
           } )
   | For (e1, e2, e3, b) ->
+    let e2 =
+      match e2 with
+      | Some e2 -> e2
+      | None -> (Pos.none, True)
+    in
     let (env, (te1, te2, te3, tb)) =
       LEnv.stash_and_do env [C.Continue; C.Break] (fun env ->
           (* For loops leak their initalizer, but nothing that's defined in the
            body
          *)
-          let (env, te1, _) = expr env e1 in
+          let (env, te1, _) = exprs env e1 in
           (* initializer *)
           let env = LEnv.save_and_merge_next_in_cont env C.Continue in
           let (env, (tb, te3)) =
@@ -804,7 +837,7 @@ and stmt_ env pos st =
                 let env =
                   LEnv.update_next_from_conts env [C.Continue; C.Next]
                 in
-                let (env, te3, _) = expr env e3 in
+                let (env, te3, _) = exprs env e3 in
                 (env, (tb, te3)))
           in
           let env = LEnv.update_next_from_conts env [C.Continue; C.Next] in
@@ -813,7 +846,7 @@ and stmt_ env pos st =
           let env = LEnv.update_next_from_conts env [C.Break; C.Next] in
           (env, (te1, te2, te3, tb)))
     in
-    (env, Aast.For (te1, te2, te3, tb))
+    (env, Aast.For (te1, Some te2, te3, tb))
   | Switch (((pos, _) as e), cl) ->
     let (env, te, ty) = expr env e in
     (* NB: A 'continue' inside a 'switch' block is equivalent to a 'break'.
@@ -842,8 +875,11 @@ and stmt_ env pos st =
                 let env =
                   LEnv.update_next_from_conts env [C.Continue; C.Next]
                 in
+                let join_map = annot_map env in
                 let (env, te2) = bind_as_expr env (fst e1) tk tv e2 in
                 let (env, tb) = block env b in
+                (* Export the join environment *)
+                let tb = assert_env_blk ~pos ~at:`Start Aast.Join join_map tb in
                 (env, (te2, tb)))
           in
           let env =
@@ -1763,6 +1799,7 @@ and expr_
             (* propagate 'is_coroutine' from the method being called*)
             ft_flags = fty.ft_flags;
             ft_reactive = fty.ft_reactive;
+            ft_ifc_decl = fty.ft_ifc_decl;
           }
         in
         make_result
@@ -2615,7 +2652,7 @@ and expr_
     end;
 
     (* Extract capabilities from AAST and add them to the environment *)
-    let env =
+    let (env, capability) =
       match (hint_of_type_hint f.f_cap, hint_of_type_hint f.f_unsafe_cap) with
       | (None, None) ->
         (* if the closure has no explicit coeffect annotations,
@@ -2626,15 +2663,15 @@ and expr_
            This avoid unnecessary overhead in the most common case, i.e.,
            when a closure does not need a different (usually smaller)
            set of capabilities. *)
-        env
+        (env, Env.get_local env Typing_coeffects.local_capability_id)
       | (_, _) ->
         let (env, f_cap, f_unsafe_cap) =
           type_capability env f.f_cap f.f_unsafe_cap (fst f.f_name)
         in
         Typing_coeffects.register_capabilities
           env
-          (fst f_cap)
-          (fst f_unsafe_cap)
+          (type_of_type_hint f_cap)
+          (type_of_type_hint f_unsafe_cap)
     in
 
     (* Is the return type declared? *)
@@ -2652,6 +2689,7 @@ and expr_
         {
           ft with
           ft_reactive = reactivity;
+          ft_implicit_params = { capability };
           ft_flags =
             Typing_defs_flags.(
               set_bit ft_flags_is_coroutine is_coroutine ft.ft_flags);
@@ -2744,16 +2782,12 @@ and expr_
                 f.f_variadic
                 declared_ft.ft_arity
                 expected_ft.ft_arity;
-          }
-        in
-        let expected_ft =
-          {
-            expected_ft with
             ft_params =
               replace_non_declared_types
                 f.f_params
                 declared_ft.ft_params
                 expected_ft.ft_params;
+            ft_implicit_params = declared_ft.ft_implicit_params;
           }
         in
         (* Don't bother passing in `void` if there is no explicit return *)
@@ -2854,6 +2888,9 @@ and expr_
               let env =
                 Env.set_tyvar_variance env (mk (Reason.Rnone, Tfun declared_ft))
               in
+              (* TODO(jjwu): the declared_ft here is set to public,
+                but is actually inferred from the surrounding context
+                (don't think this matters in practice, since we check lambdas separately) *)
               check_body_under_known_params
                 env
                 ~ret_ty:declared_ft.ft_ret.et_type
@@ -3418,8 +3455,8 @@ and expression_tree env p visitor_class e desugared_expr =
   let env = { env with et_spliced_types = None } in
   match desugared_expr with
   | Some desugared_expr ->
-    let (env, te2, _ty2) = expr env desugared_expr in
-    make_result env p (Aast.ExpressionTree (visitor_class, te, Some te2)) ty
+    let (env, te2, ty2) = expr env desugared_expr in
+    make_result env p (Aast.ExpressionTree (visitor_class, te, Some te2)) ty2
   | None -> make_result env p (Aast.ExpressionTree (visitor_class, te, None)) ty
 
 and et_splice env p e =
@@ -3433,7 +3470,15 @@ and et_splice env p e =
     begin
       match v with
       | None -> error
-      | Some (te, ty) -> make_result env p (Aast.ET_Splice te) ty
+      | Some (te, ty) ->
+        let (env, ty_visitor) = Env.fresh_type env p in
+        let (env, ty_res) = Env.fresh_type env p in
+        let (env, ty_infer) = Env.fresh_type env p in
+        let expr_tree_type =
+          MakeType.expr_tree (Reason.Rsplice p) ty_visitor ty_res ty_infer
+        in
+        let env = SubType.sub_type env ty expr_tree_type Errors.unify_error in
+        make_result env p (Aast.ET_Splice te) ty_infer
     end
   | _ -> error
 
@@ -3578,8 +3623,9 @@ and new_object
     let obj_ty = mk (r_witness, obj_ty_) in
     let c_ty =
       match cid with
-      | CIstatic -> mk (r_witness, TUtils.this_of obj_ty)
-      | CIexpr _ -> mk (r_witness, get_node c_ty)
+      | CIstatic
+      | CIexpr _ ->
+        mk (r_witness, get_node c_ty)
       | _ -> obj_ty
     in
     let (env, new_ty) =
@@ -3598,14 +3644,7 @@ and new_object
     let env = Env.set_tyvar_variance env new_ty in
     let (env, tel, typed_unpack_element, ctor_fty) =
       let env = check_expected_ty "New" env new_ty expected in
-      call_construct
-        p
-        env
-        class_info
-        (explicit_targs, params)
-        el
-        unpacked_element
-        cid
+      call_construct p env class_info params el unpacked_element cid new_ty
     in
     ( if equal_consistent_kind (snd (Cls.construct class_info)) Inconsistent then
       match cid with
@@ -4448,7 +4487,7 @@ and dispatch_call
         let (env, _tx, x) = expr env x in
         let (env, output_container) = build_output_container env x in
         begin
-          match get_akvarray_inst funty.ft_ret.et_type with
+          match get_varray_inst funty.ft_ret.et_type with
           | None -> (env, fty)
           | Some elem_ty ->
             let (env, elem_ty) = output_container env elem_ty in
@@ -4792,27 +4831,26 @@ and dispatch_call
         ~class_id:(CIexpr receiver)
         ~explicit_targs:(Some explicit_targs)
     in
-    (* Define the receiver type to use in LHS of subtyping *)
-    let (env, receiver_sub_ty) =
+    let env = Env.set_tyvar_variance env method_ty in
+    let (env, has_method_super_ty) =
       if Option.is_none nullsafe then
-        (env, receiver_ty)
+        (env, has_method_ty)
       else
-        (* If nullsafe, then check `receiver & nonnull <: Thas_member(...).
-           We want a bare `Thas_member(...)` on RHS of subtyping, to ensure
-           we call through to `Typing_object_get` without making any incomplete
-           steps in subtyping (e.g. with intersection on LHS) *)
-        let r = Reason.Rnone in
-        let nonnull_ty = MakeType.nonnull r in
-        let (env, inter_ty) = Inter.intersect ~r env receiver_ty nonnull_ty in
-        (env, with_reason inter_ty (get_reason receiver_ty))
+        (* If null-safe, then `receiver_ty` <: `?Thas_member(m, #1)`,
+           but *unlike* property access typing in `expr_`, we still use `#1` as
+           our "result" if `receiver_ty` is nullable  (as opposed to `?#1`),
+           deferring null-safety handling to after `call` *)
+        let r = Reason.Rnullsafe_op p in
+        let null_ty = MakeType.null r in
+        Union.union_i env r has_method_ty null_ty
     in
     let env =
       Type.sub_type_i
         (fst receiver)
         Reason.URnone
         env
-        (LoclType receiver_sub_ty)
-        has_method_ty
+        (LoclType receiver_ty)
+        has_method_super_ty
         Errors.unify_error
     in
     (* Perhaps solve for `method_ty`. Opening and closing a scope is too coarse
@@ -4821,7 +4859,6 @@ and dispatch_call
        Once we typecheck all function calls with a subtyping of function types,
        we should not need to solve early at all - transitive closure of
        subtyping should give enough information. *)
-    let env = Env.set_tyvar_variance env method_ty in
     let env =
       match get_var method_ty with
       | Some var ->
@@ -4864,7 +4901,7 @@ and dispatch_call
           Inter.intersect env ~r null_ty receiver_ty
         in
         let (env, ret_option_ty) = Union.union env null_or_nothing_ty ret_ty in
-        (env, with_reason ret_option_ty r)
+        (env, ret_option_ty)
       else
         (env, ret_ty)
     in
@@ -5006,6 +5043,7 @@ and dispatch_call
               ft_ret = { et_enforced = false; et_type = ft_ret };
               ft_reactive = Nonreactive;
               ft_flags = 0;
+              ft_ifc_decl = Typing_defs_core.default_ifc_fun_decl;
             }
           in
           let reason = Reason.Rwitness fpos in
@@ -5512,6 +5550,7 @@ and class_id_for_new
   let (env, tal, te, cid_ty) =
     static_class_id
       ~check_targs_well_kinded:true
+      ~check_explicit_targs:true
       ~exact
       ~check_constraints:false
       p
@@ -5785,22 +5824,12 @@ and static_class_id
     let (env, result_ty) = resolve_ety env ty in
     make_result env [] (Aast.CIexpr te) result_ty
 
-and call_construct p env class_ (explicit_targs, params) el unpacked_element cid
-    =
-  let cid =
+and call_construct p env class_ params el unpacked_element cid cid_ty =
+  let (cid, cid_ty) =
     if Nast.equal_class_id_ cid CIparent then
-      CIstatic
+      (CIstatic, mk (Reason.Rwitness p, TUtils.this_of (Env.get_self env)))
     else
-      cid
-  in
-  let (env, _tal, _tcid, cid_ty) =
-    static_class_id
-      ~check_constraints:false
-      ~check_explicit_targs:true
-      p
-      env
-      explicit_targs
-      cid
+      (cid, cid_ty)
   in
   let ety_env =
     {
@@ -6179,7 +6208,7 @@ and call
               let env_capability =
                 Env.get_local_check_defined
                   env
-                  (pos, Local_id.make_unscoped SN.Coeffects.capability)
+                  (pos, Typing_coeffects.capability_id)
               in
               Type.sub_type
                 pos
@@ -6322,13 +6351,20 @@ and call
           let mk_function_supertype
               env pos (type_of_el, type_of_unpacked_element) =
             let mk_fun_param ty =
-              let flags = 0 in
+              let flags =
+                (* Keep supertype as permissive as possible: *)
+                make_fp_flags
+                  ~mode:FPnormal (* TODO: deal with `inout` parameters *)
+                  ~accept_disposable:false (* TODO: deal with disposables *)
+                  ~mutability:(Some Param_maybe_mutable)
+                  ~has_default:false
+              in
               {
-                fp_pos = pos (* TODO *);
-                fp_name = None (* TODO? *);
+                fp_pos = pos;
+                fp_name = None;
                 fp_type = MakeType.enforced ty;
-                fp_rx_annotation = None (* TODO *);
-                fp_flags = flags (* TODO *);
+                fp_rx_annotation = None;
+                fp_flags = flags;
               }
             in
             let ft_arity =
@@ -6338,8 +6374,9 @@ and call
                 Fvariadic fun_param
               | None -> Fstandard
             in
-            let ft_tparams = [] (* TODO *) in
-            let ft_where_constraints = [] (* TODO *) in
+            (* TODO: ensure `ft_params`/`ft_where_constraints` don't affect subtyping *)
+            let ft_tparams = [] in
+            let ft_where_constraints = [] in
             let ft_params = List.map ~f:mk_fun_param type_of_el in
             let ft_implicit_params =
               let capability =
@@ -6356,7 +6393,16 @@ and call
             let ft_ret = MakeType.enforced return_ty in
             (* A non-reactive supertype is most permissive: *)
             let ft_reactive = Nonreactive in
-            let ft_flags = 0 (* TODO *) in
+            let ft_flags =
+              (* Keep supertype as permissive as possible: *)
+              make_ft_flags
+                Ast_defs.FSync (* `FSync` fun can still return `Awaitable<_>` *)
+                (Some Param_maybe_mutable)
+                ~return_disposable:false (* TODO: deal with disposable return *)
+                ~returns_mutable:false
+                ~returns_void_to_rx:false
+            in
+            let ft_ifc_decl = Typing_defs_core.default_ifc_fun_decl in
             let fun_locl_type =
               {
                 ft_arity;
@@ -6367,6 +6413,7 @@ and call
                 ft_ret;
                 ft_reactive;
                 ft_flags;
+                ft_ifc_decl;
               }
             in
             let fun_type = mk (r, Tfun fun_locl_type) in
@@ -6933,7 +6980,7 @@ and safely_refine_is_array env ty p pred_name arg_expr =
         | `HackVec -> MakeType.vec r tfresh
         | `HackKeyset -> MakeType.keyset r tarrkey
         | `PHPArray -> array_ty
-        | `AnyArray -> MakeType.keyed_container r tarrkey tfresh
+        | `AnyArray -> MakeType.any_array r tarrkey tfresh
         | `HackDictOrDArray ->
           MakeType.union
             r
