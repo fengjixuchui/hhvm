@@ -1,4 +1,4 @@
-/* rt.c: bcmath library file. */
+/* debug.c: bcmath library file. */
 /*
     Copyright (C) 1991, 1992, 1993, 1994, 1997 Free Software Foundation, Inc.
     Copyright (C) 2000 Philip A. Nelson
@@ -38,28 +38,29 @@
 #include "bcmath.h"
 #include "private.h"
 
+/* pn prints the number NUM in base 10. */
 
-void bc_rt_warn (char *mesg ,...)
+static void
+out_char (int c)
 {
-  va_list args;
-  char error_mesg [255];
-
-  va_start (args, mesg);
-  vsnprintf (error_mesg, sizeof(error_mesg), mesg, args);
-  va_end (args);
-
-  fprintf (stderr, "bc math warning: %s\n", error_mesg);
+  putchar(c);
 }
 
 
-void bc_rt_error (char *mesg ,...)
+void
+pn (bc_num num TSRMLS_DC)
 {
-  va_list args;
-  char error_mesg [255];
+  bc_out_num (num, 10, out_char, 0 TSRMLS_CC);
+  out_char ('\n');
+}
 
-  va_start (args, mesg);
-  vsnprintf (error_mesg, sizeof(error_mesg), mesg, args);
-  va_end (args);
 
-  fprintf (stderr, "bc math error: %s\n", error_mesg);
+/* pv prints a character array as if it was a string of bcd digits. */
+void
+pv (char* name, unsigned char* num, int len)
+{
+  int i;
+  printf ("%s=", name);
+  for (i=0; i<len; i++) printf ("%c",BCD_CHAR(num[i]));
+  printf ("\n");
 }

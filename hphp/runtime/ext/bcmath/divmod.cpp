@@ -1,4 +1,4 @@
-/* sub.c: bcmath library file. */
+/* divmod.c: bcmath library file. */
 /*
     Copyright (C) 1991, 1992, 1993, 1994, 1997 Free Software Foundation, Inc.
     Copyright (C) 2000 Philip A. Nelson
@@ -38,53 +38,50 @@
 #include "bcmath.h"
 #include "private.h"
 
+#include <folly/ScopeGuard.h>
 
-/* Here is the full subtract routine that takes care of negative numbers.
-   N2 is subtracted from N1 and the result placed in RESULT.  SCALE_MIN
-   is the minimum scale for the result. */
+/* Division *and* modulo for numbers.  This computes both NUM1 / NUM2 and
+   NUM1 % NUM2  and puts the results in QUOT and REM, except that if QUOT
+   is NULL then that store will be omitted.
+ */
 
-void
-bc_sub (n1, n2, result, scale_min)
-     bc_num n1, n2, *result;
-     int scale_min;
+int
+bc_divmod (bc_num num1, bc_num num2, bc_num *quot, bc_num *rem, int scale TSRMLS_DC)
 {
-  bc_num diff = NULL;
-  int cmp_res;
-  int res_scale;
+  bc_num quotient = NULL;
+  bc_num temp;
+  int rscale;
 
-  if (n1->n_sign != n2->n_sign)
+  /* Check for correct numbers. */
+  if (bc_is_zero (num2 TSRMLS_CC)) return -1;
+
+  /* Calculate final scale. */
+  rscale = MAX (num1->n_scale, num2->n_scale+scale);
+  bc_init_num(&temp TSRMLS_CC);
+  SCOPE_EXIT { bc_free_num(&temp); };
+
+  /* Calculate it. */
+  bc_divide (num1, num2, &temp, scale TSRMLS_CC);
+  if (quot)
+    quotient = bc_copy_num (temp);
+  bc_multiply (temp, num2, &temp, rscale TSRMLS_CC);
+  bc_sub (num1, temp, rem, rscale);
+
+  if (quot)
     {
-      diff = _bc_do_add (n1, n2, scale_min);
-      diff->n_sign = n1->n_sign;
-    }
-  else
-    {
-      /* subtraction must be done. */
-      /* Compare magnitudes. */
-      cmp_res = _bc_do_compare (n1, n2, FALSE, FALSE);
-      switch (cmp_res)
-	{
-	case -1:
-	  /* n1 is less than n2, subtract n1 from n2. */
-	  diff = _bc_do_sub (n2, n1, scale_min);
-	  diff->n_sign = (n2->n_sign == PLUS ? MINUS : PLUS);
-	  break;
-	case  0:
-	  /* They are equal! return zero! */
-	  res_scale = MAX (scale_min, MAX(n1->n_scale, n2->n_scale));
-	  diff = bc_new_num (1, res_scale);
-	  memset (diff->n_value, 0, res_scale+1);
-	  break;
-	case  1:
-	  /* n2 is less than n1, subtract n2 from n1. */
-	  diff = _bc_do_sub (n1, n2, scale_min);
-	  diff->n_sign = n1->n_sign;
-	  break;
-	}
+      bc_free_num (quot);
+      *quot = quotient;
     }
 
-  /* Clean up and return. */
-  bc_free_num (result);
-  *result = diff;
+  return 0;	/* Everything is OK. */
 }
 
+
+/* Modulo for numbers.  This computes NUM1 % NUM2  and puts the
+   result in RESULT.   */
+
+int
+bc_modulo (bc_num num1, bc_num num2, bc_num *result, int scale TSRMLS_DC)
+{
+  return bc_divmod (num1, num2, NULL, result, scale TSRMLS_CC);
+}

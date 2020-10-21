@@ -1,4 +1,4 @@
-/* divmod.c: bcmath library file. */
+/* nearzero.c: bcmath library file. */
 /*
     Copyright (C) 1991, 1992, 1993, 1994, 1997 Free Software Foundation, Inc.
     Copyright (C) 2000 Philip A. Nelson
@@ -38,50 +38,29 @@
 #include "bcmath.h"
 #include "private.h"
 
+/* In some places we need to check if the number NUM is almost zero.
+   Specifically, all but the last digit is 0 and the last digit is 1.
+   Last digit is defined by scale. */
 
-/* Division *and* modulo for numbers.  This computes both NUM1 / NUM2 and
-   NUM1 % NUM2  and puts the results in QUOT and REM, except that if QUOT
-   is NULL then that store will be omitted.
- */
-
-int
-bc_divmod (bc_num num1, bc_num num2, bc_num *quot, bc_num *rem, int scale TSRMLS_DC)
+char
+bc_is_near_zero (bc_num num, int scale)
 {
-  bc_num quotient = NULL;
-  bc_num temp;
-  int rscale;
+  int  count;
+  char *nptr;
 
-  /* Check for correct numbers. */
-  if (bc_is_zero (num2 TSRMLS_CC)) return -1;
+  /* Error checking */
+  if (scale > num->n_scale)
+    scale = num->n_scale;
 
-  /* Calculate final scale. */
-  rscale = MAX (num1->n_scale, num2->n_scale+scale);
-  bc_init_num(&temp TSRMLS_CC);
+  /* Initialize */
+  count = num->n_len + scale;
+  nptr = num->n_value;
 
-  /* Calculate it. */
-  bc_divide (num1, num2, &temp, scale TSRMLS_CC);
-  if (quot)
-    quotient = bc_copy_num (temp);
-  bc_multiply (temp, num2, &temp, rscale TSRMLS_CC);
-  bc_sub (num1, temp, rem, rscale);
-  bc_free_num (&temp);
+  /* The check */
+  while ((count > 0) && (*nptr++ == 0)) count--;
 
-  if (quot)
-    {
-      bc_free_num (quot);
-      *quot = quotient;
-    }
-
-  return 0;	/* Everything is OK. */
+  if (count != 0 && (count != 1 || *--nptr != 1))
+    return FALSE;
+  else
+    return TRUE;
 }
-
-
-/* Modulo for numbers.  This computes NUM1 % NUM2  and puts the
-   result in RESULT.   */
-
-int
-bc_modulo (bc_num num1, bc_num num2, bc_num *result, int scale TSRMLS_DC)
-{
-  return bc_divmod (num1, num2, NULL, result, scale TSRMLS_CC);
-}
-

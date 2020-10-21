@@ -1,4 +1,4 @@
-/* nearzero.c: bcmath library file. */
+/* num2str.c: bcmath library file. */
 /*
     Copyright (C) 1991, 1992, 1993, 1994, 1997 Free Software Foundation, Inc.
     Copyright (C) 2000 Philip A. Nelson
@@ -38,32 +38,43 @@
 #include "bcmath.h"
 #include "private.h"
 
-/* In some places we need to check if the number NUM is almost zero.
-   Specifically, all but the last digit is 0 and the last digit is 1.
-   Last digit is defined by scale. */
+#include <folly/ScopeGuard.h>
+
+/* Convert a numbers to a string.  Base 10 only.*/
 
 char
-bc_is_near_zero (num, scale)
-     bc_num num;
-     int scale;
+*bc_num2str (bc_num num)
 {
-  int  count;
+  char *str, *sptr;
   char *nptr;
+  int  index, signch;
 
-  /* Error checking */
-  if (scale > num->n_scale)
-    scale = num->n_scale;
-
-  /* Initialize */
-  count = num->n_len + scale;
-  nptr = num->n_value;
-
-  /* The check */
-  while ((count > 0) && (*nptr++ == 0)) count--;
-
-  if (count != 0 && (count != 1 || *--nptr != 1))
-    return FALSE;
+  /* Allocate the string memory. */
+  signch = ( num->n_sign == PLUS ? 0 : 1 );  /* Number of sign chars. */
+  if (num->n_scale > 0)
+    str = (char *)bc_malloc(num->n_len + num->n_scale + 2 + signch);
   else
-    return TRUE;
-}
+    str = (char *)bc_malloc(num->n_len + 1 + signch);
+  SCOPE_FAIL { bc_free(str); };
 
+  /* The negative sign if needed. */
+  sptr = str;
+  if (signch) *sptr++ = '-';
+
+  /* Load the whole number. */
+  nptr = num->n_value;
+  for (index=num->n_len; index>0; index--)
+    *sptr++ = BCD_CHAR(*nptr++);
+
+  /* Now the fraction. */
+  if (num->n_scale > 0)
+    {
+      *sptr++ = '.';
+      for (index=0; index<num->n_scale; index++)
+	*sptr++ = BCD_CHAR(*nptr++);
+    }
+
+  /* Terminate the string and return it! */
+  *sptr = '\0';
+  return (str);
+}

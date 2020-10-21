@@ -936,6 +936,7 @@ struct RuntimeOption {
   F(bool,     JitPGODumpCallGraph,     false)                           \
   F(bool,     JitPGOOptCodeCallGraph,  true)                            \
   F(bool,     JitPGORacyProfiling,     false)                           \
+  F(bool,     JitPGOHFSortPlus,        false)                           \
   F(uint32_t, JitLiveThreshold,       ServerExecutionMode() ? 1000 : 0) \
   F(uint32_t, JitProfileThreshold,     ServerExecutionMode() ? 200 : 0) \
   F(uint32_t, JitSrcKeyThreshold,      0)                               \
@@ -1100,8 +1101,8 @@ struct RuntimeOption {
   F(bool, HackArrCompatCastMarkedArrayNotices, false)                   \
   /* When this flag is on, d/varray constructions are marked. */        \
   F(bool, HackArrDVArrMark, false)                                      \
-  /* When this flag is on, var_dump outputs d/varrays. */               \
-  F(bool, HackArrDVArrVarDump, true)                                    \
+  /* When this flag is on, var_export outputs d/varrays. */             \
+  F(bool, HackArrDVArrVarExport, false)                                 \
   /* This is the flag for "unification", meaning that darrays are       \
    * replaced by dicts and varrays by vecs. */                          \
   F(bool, HackArrDVArrs, false)                                         \
