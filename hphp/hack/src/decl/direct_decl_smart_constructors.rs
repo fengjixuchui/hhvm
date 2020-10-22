@@ -4,6 +4,7 @@
 // LICENSE file in the "hack" directory of this source tree.
 
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use bstr::BStr;
@@ -30,9 +31,9 @@ use oxidized_by_ref::{
     typing_defs,
     typing_defs::{
         ConstDecl, EnumType, FunArity, FunElt, FunImplicitParams, FunParam, FunParams, FunType,
-        IfcFunDecl, ParamMode, ParamMutability, PossiblyEnforcedTy, Reactivity, ShapeFieldType,
-        ShapeKind, Tparam, Ty, Ty_, TypeconstAbstractKind, TypedefType, WhereConstraint,
-        XhpAttrTag,
+        IfcFunDecl, ParamMode, ParamMutability, PossiblyEnforcedTy, Reactivity, RecordFieldReq,
+        ShapeFieldType, ShapeKind, Tparam, Ty, Ty_, TypeconstAbstractKind, TypedefType,
+        WhereConstraint, XhpAttrTag,
     },
     typing_defs_flags::{FunParamFlags, FunTypeFlags},
     typing_reason::Reason,
@@ -50,10 +51,22 @@ type SK = SyntaxKind;
 
 type SSet<'a> = arena_collections::SortedSet<'a, &'a str>;
 
+type NamespaceMap = BTreeMap<std::string::String, std::string::String>;
+
 impl<'a> DirectDeclSmartConstructors<'a> {
-    pub fn new(src: &SourceText<'a>, file_mode: Mode, arena: &'a Bump) -> Self {
+    pub fn new(
+        src: &SourceText<'a>,
+        file_mode: Mode,
+        auto_namespace_map: &'a NamespaceMap,
+        arena: &'a Bump,
+    ) -> Self {
         Self {
-            state: State::new(IndexedSourceText::new(src.clone()), file_mode, arena),
+            state: State::new(
+                IndexedSourceText::new(src.clone()),
+                file_mode,
+                auto_namespace_map,
+                arena,
+            ),
             token_factory: SimpleTokenFactoryImpl::new(),
         }
     }
@@ -180,6 +193,7 @@ pub struct InProgressDecls<'a> {
     pub funs: List<'a, (&'a str, &'a typing_defs::FunElt<'a>)>,
     pub typedefs: List<'a, (&'a str, &'a typing_defs::TypedefType<'a>)>,
     pub consts: List<'a, (&'a str, &'a typing_defs::ConstDecl<'a>)>,
+    pub records: List<'a, (&'a str, &'a typing_defs::RecordDefType<'a>)>,
 }
 
 pub fn empty_decls() -> InProgressDecls<'static> {
@@ -188,6 +202,7 @@ pub fn empty_decls() -> InProgressDecls<'static> {
         funs: List::empty(),
         typedefs: List::empty(),
         consts: List::empty(),
+        records: List::empty(),
     }
 }
 
@@ -288,12 +303,19 @@ struct NamespaceBuilder<'a> {
 }
 
 impl<'a> NamespaceBuilder<'a> {
-    fn new_in(arena: &'a Bump) -> Self {
+    fn new_in(auto_ns_map: &'a NamespaceMap, arena: &'a Bump) -> Self {
+        let mut imports = AssocListMut::new_in(arena);
+        // TODO: This isn't enough to handle the auto namespace map correctly.
+        // We might benefit from an audit of our name elaboration logic and an
+        // effort to bring it in line with what hackc does (T76827745).
+        for (name, alias) in auto_ns_map.iter() {
+            imports.insert(name.as_str(), alias.as_str());
+        }
         NamespaceBuilder {
             arena,
             stack: bumpalo::vec![in arena; NamespaceInfo {
                 name: "\\",
-                imports: AssocListMut::new_in(arena),
+                imports,
             }],
         }
     }
@@ -457,7 +479,12 @@ pub struct State<'a> {
 }
 
 impl<'a> State<'a> {
-    pub fn new(source_text: IndexedSourceText<'a>, file_mode: Mode, arena: &'a Bump) -> State<'a> {
+    pub fn new(
+        source_text: IndexedSourceText<'a>,
+        file_mode: Mode,
+        auto_namespace_map: &'a NamespaceMap,
+        arena: &'a Bump,
+    ) -> State<'a> {
         let path = source_text.source_text().file_path();
         let prefix = path.prefix();
         let path = String::from_str_in(path.path_str(), arena).into_bump_str();
@@ -468,7 +495,7 @@ impl<'a> State<'a> {
             filename: arena.alloc(filename),
             file_mode,
             decls: empty_decls(),
-            namespace_builder: Rc::new(NamespaceBuilder::new_in(arena)),
+            namespace_builder: Rc::new(NamespaceBuilder::new_in(auto_namespace_map, arena)),
             classish_name_builder: ClassishNameBuilder::new(),
             type_parameters: Rc::new(Vec::new_in(arena)),
             // EndOfFile is used here as a None value (signifying "beginning of
@@ -635,6 +662,7 @@ pub enum Node<'a> {
     This(&'a Pos<'a>), // This needs a pos since it shows up in Taccess.
     TypeParameters(&'a &'a [&'a Tparam<'a>]),
     WhereConstraint(&'a WhereConstraint<'a>),
+    RecordField(&'a (Id<'a>, RecordFieldReq)),
 
     // For cases where the position of a node is included in some outer
     // position, but we do not need to track any further information about that
@@ -770,6 +798,8 @@ struct Attributes<'a> {
     returns_disposable: bool,
     php_std_lib: bool,
     policied: IfcFunDecl<'a>,
+    external: bool,
+    can_call: bool,
 }
 
 impl<'a> DirectDeclSmartConstructors<'a> {
@@ -787,6 +817,10 @@ impl<'a> DirectDeclSmartConstructors<'a> {
     fn add_const(&mut self, name: &'a str, decl: &'a typing_defs::ConstDecl<'a>) {
         self.state.decls.consts =
             List::cons((name, decl), self.state.decls.consts, self.state.arena);
+    }
+    fn add_record(&mut self, name: &'a str, decl: &'a typing_defs::RecordDefType<'a>) {
+        self.state.decls.records =
+            List::cons((name, decl), self.state.decls.records, self.state.arena);
     }
 
     #[inline(always)]
@@ -1013,6 +1047,8 @@ impl<'a> DirectDeclSmartConstructors<'a> {
             returns_disposable: false,
             php_std_lib: false,
             policied: default_ifc_fun_decl(),
+            external: false,
+            can_call: false,
         };
 
         // If we see the attribute `__OnlyRxIfImpl(Foo::class)`, set
@@ -1135,6 +1171,12 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                     }
                     "__InferFlows" => {
                         attributes.policied = IfcFunDecl::FDInferFlows;
+                    }
+                    "__External" => {
+                        attributes.external = true;
+                    }
+                    "__CanCall" => {
+                        attributes.can_call = true;
                     }
                     _ => {}
                 }
@@ -1425,6 +1467,12 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                             };
                             if attributes.accept_disposable {
                                 flags |= FunParamFlags::ACCEPT_DISPOSABLE
+                            }
+                            if attributes.external {
+                                flags |= FunParamFlags::IFC_EXTERNAL
+                            }
+                            if attributes.can_call {
+                                flags |= FunParamFlags::IFC_CAN_CALL
                             }
                             match kind {
                                 ParamMode::FPinout => {
@@ -2440,6 +2488,57 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                 }
             }
         }
+    }
+
+    fn make_record_declaration(
+        &mut self,
+        attribute_spec: Self::R,
+        modifier: Self::R,
+        _keyword: Self::R,
+        name: Self::R,
+        _extends_keyword: Self::R,
+        extends_opt: Self::R,
+        _left_brace: Self::R,
+        fields: Self::R,
+        right_brace: Self::R,
+    ) -> Self::R {
+        let name = match self.elaborate_name(name) {
+            Some(name) => name,
+            None => return Node::Ignored(SK::RecordDeclaration),
+        };
+        self.add_record(
+            name.1,
+            self.alloc(typing_defs::RecordDefType {
+                name,
+                extends: self.elaborate_name(extends_opt),
+                fields: self.slice(fields.iter().filter_map(|node| match node {
+                    Node::RecordField(&field) => Some(field),
+                    _ => None,
+                })),
+                abstract_: matches!(modifier, Node::Token(TokenKind::Abstract)),
+                pos: self.merge_positions(attribute_spec, right_brace),
+            }),
+        );
+        Node::Ignored(SK::RecordDeclaration)
+    }
+
+    fn make_record_field(
+        &mut self,
+        _type_: Self::R,
+        name: Self::R,
+        initializer: Self::R,
+        _semicolon: Self::R,
+    ) -> Self::R {
+        let name = match self.expect_name(name) {
+            Some(name) => name,
+            None => return Node::Ignored(SK::RecordField),
+        };
+        let field_req = if initializer.is_ignored() {
+            RecordFieldReq::ValueRequired
+        } else {
+            RecordFieldReq::HasDefaultValue
+        };
+        Node::RecordField(self.alloc((name, field_req)))
     }
 
     fn make_alias_declaration(

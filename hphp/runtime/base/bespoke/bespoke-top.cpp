@@ -27,7 +27,7 @@ namespace {
 BespokeTop* s_layout;
 }
 
-BespokeTop::BespokeTop(): Layout("BespokeTop", nullptr) {}
+BespokeTop::BespokeTop(): Layout("BespokeTop") {}
 
 void BespokeTop::InitializeLayouts() {
   s_layout = new BespokeTop();
@@ -35,6 +35,12 @@ void BespokeTop::InitializeLayouts() {
 
 LayoutIndex BespokeTop::GetLayoutIndex() {
   return s_layout->index();
+}
+
+SSATmp* BespokeTop::emitElem(
+    IRGS& env, SSATmp* lval, SSATmp* key, bool throwOnMissing) const {
+  auto const data = BespokeLayoutData { nullptr };
+  return gen(env, BespokeElem, TCell, data, lval, key, cns(env,throwOnMissing));
 }
 
 SSATmp* BespokeTop::emitGet(IRGS& env, SSATmp* arr, SSATmp* key,

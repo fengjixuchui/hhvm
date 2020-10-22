@@ -37,7 +37,9 @@ const BespokeArray* BespokeArray::asBespoke(const ArrayData* ad) {
 }
 
 BespokeLayout BespokeArray::layout() const {
-  return BespokeLayout{bespoke::Layout::FromIndex(layoutIndex())};
+  auto const layout =
+    bespoke::ConcreteLayout::FromConcreteIndex(layoutIndex());
+  return BespokeLayout{layout};
 }
 
 bespoke::LayoutIndex BespokeArray::layoutIndex() const {
@@ -45,7 +47,7 @@ bespoke::LayoutIndex BespokeArray::layoutIndex() const {
 }
 
 const bespoke::LayoutFunctions* BespokeArray::vtable() const {
-  return bespoke::Layout::FromIndex(layoutIndex())->vtable();
+  return bespoke::ConcreteLayout::FromConcreteIndex(layoutIndex())->vtable();
 }
 
 void BespokeArray::setLayoutIndex(bespoke::LayoutIndex index) {
@@ -185,11 +187,15 @@ arr_lval BespokeArray::LvalInt(ArrayData* ad, int64_t key) {
 arr_lval BespokeArray::LvalStr(ArrayData* ad, StringData* key) {
   return asBespoke(ad)->vtable()->fnLvalStr(ad, key);
 }
-arr_lval BespokeArray::ElemInt(ArrayData* ad, int64_t key) {
-  return asBespoke(ad)->vtable()->fnElemInt(ad, key);
+tv_lval BespokeArray::ElemInt(
+    tv_lval lvalIn, int64_t key, bool throwOnMissing) {
+  auto const ad = lvalIn.val().parr;
+  return asBespoke(ad)->vtable()->fnElemInt(lvalIn, key, throwOnMissing);
 }
-arr_lval BespokeArray::ElemStr(ArrayData* ad, StringData* key) {
-  return asBespoke(ad)->vtable()->fnElemStr(ad, key);
+tv_lval BespokeArray::ElemStr(
+    tv_lval lvalIn, StringData* key, bool throwOnMissing) {
+  auto const ad = lvalIn.val().parr;
+  return asBespoke(ad)->vtable()->fnElemStr(lvalIn, key, throwOnMissing);
 }
 
 // insertion

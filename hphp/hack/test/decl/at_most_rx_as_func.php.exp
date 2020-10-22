@@ -35,7 +35,8 @@ Parsed decls:
                          fp_flags =
                          (make_fp_flags ~mutability:None
                            ~accept_disposable:false ~has_default:false
-                           ~mode:Typing_defs_core.FPnormal);
+                           ~mode:Typing_defs_core.FPnormal
+                           ~ifc_external:false ~ifc_can_call:false);
                           }
                        ];
                      ft_implicit_params =
@@ -57,7 +58,8 @@ Parsed decls:
                };
               fp_flags =
               (make_fp_flags ~mutability:None ~accept_disposable:false
-                ~has_default:false ~mode:Typing_defs_core.FPnormal);
+                ~has_default:false ~mode:Typing_defs_core.FPnormal
+                ~ifc_external:false ~ifc_can_call:false);
                };
             { fp_pos = [6:5-7]; fp_name = (Some "$x");
               fp_type =
@@ -68,7 +70,8 @@ Parsed decls:
               };
             fp_flags =
             (make_fp_flags ~mutability:None ~accept_disposable:false
-              ~has_default:false ~mode:Typing_defs_core.FPnormal);
+              ~has_default:false ~mode:Typing_defs_core.FPnormal
+              ~ifc_external:false ~ifc_can_call:false);
              }];
        ft_implicit_params =
        { capability =
@@ -87,7 +90,7 @@ Parsed decls:
        ft_reactive = Reactive {}; ft_ifc_decl = FDPolicied {#PUBLIC} }));
     fe_pos = [4:10-11];
     fe_php_std_lib = false
-    } }; typedefs = {}; consts = {}
+    } }; typedefs = {}; consts = {}; records = {}
 }
 
 They matched!

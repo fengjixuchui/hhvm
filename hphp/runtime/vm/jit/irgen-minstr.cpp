@@ -292,12 +292,6 @@ SSATmp* propTvRefPtr(IRGS& env, SSATmp* base, const SSATmp* key) {
     : tvTempBasePtr(env);
 }
 
-SSATmp* ptrToInitNull(IRGS& env) {
-  // Nothing is allowed to write anything to the init null variant, so this
-  // inner type is always true.
-  return cns(env, Type::cns(&immutable_null_base, TLvalToOtherInitNull));
-}
-
 SSATmp* ptrToUninit(IRGS& env) {
   // Nothing can write to the uninit null variant either, so the inner type
   // here is also always true.
@@ -1178,16 +1172,6 @@ SSATmp* elemImpl(IRGS& env, MOpMode mode, SSATmp* key) {
   return baseValueToLval(env, value);
 }
 
-/*
- * Pop nDiscard elements from the stack, push the result (if present),
- * and mark the member operation as complete.
- */
-void mFinalImpl(IRGS& env, int32_t nDiscard, SSATmp* result) {
-  for (auto i = 0; i < nDiscard; ++i) popDecRef(env);
-  if (result) push(env, result);
-  gen(env, FinishMemberOp);
-}
-
 template<class Finish>
 SSATmp* cGetPropImpl(IRGS& env, SSATmp* base, SSATmp* key,
                      MOpMode mode, bool nullsafe, Finish finish) {
@@ -1351,45 +1335,13 @@ SSATmp* emitArrayLikeSet(IRGS& env, SSATmp* key, SSATmp* value) {
   }
 
   auto const baseLoc = ldMBase(env);
-  auto const canonicalBaseLoc = canonical(baseLoc);
-  assertx(canonicalBaseLoc);
-  switch (canonicalBaseLoc->inst()->op()) {
-    case LdLocAddr:
-    case LdStkAddr:
-      break;
-    default: {
-      auto const t = baseLoc->type();
-      if (t.maybe(TMemToFrameCell) ||
-          t.maybe(TMemToStkCell)) {
-        // We don't handle these, as anything simple would require killing all
-        // frame and stack info in frame state (currently framestate asserts we
-        // don't stmem to ptrs of this type for this reason).
-        return nullptr;
-      }
-      break;
-    }
-  }
+  if (!canUpdateCanonicalBase(baseLoc)) return nullptr;
 
   auto const op = isVec ? VecSet : DictSet;
   auto const newArr = gen(env, op, base, key, value);
 
   // Update the base's location with the new array.
-  switch (canonicalBaseLoc->inst()->op()) {
-    case LdLocAddr: {
-      auto const locID = canonicalBaseLoc->inst()->extra<LocalId>()->locId;
-      gen(env, StLoc, LocalId { locID }, fp(env), newArr);
-      break;
-    }
-    case LdStkAddr: {
-      auto const irSPRel =
-        canonicalBaseLoc->inst()->extra<IRSPRelOffsetData>()->offset;
-      gen(env, StStk, IRSPRelOffsetData{irSPRel}, sp(env), newArr);
-      break;
-    }
-    default:
-      gen(env, StMem, baseLoc, newArr);
-      break;
-  }
+  updateCanonicalBase(env, baseLoc, newArr);
   gen(env, IncRef, value);
   return value;
 }
@@ -1446,7 +1398,7 @@ SSATmp* setNewElemImpl(IRGS& env, uint32_t nDiscard) {
     value = convertClassKey(env, value);
     if (!value->isA(TInt | TStr)) {
       auto const base = extractBase(env);
-      gen(env, ThrowInvalidArrayKey, makeCatchSet(env, nDiscard), base, value);
+      gen(env, ThrowInvalidArrayKey, base, value);
     } else {
       gen(env, SetNewElemKeyset, makeCatchSet(env, nDiscard), basePtr, value);
     }
@@ -1538,8 +1490,64 @@ SSATmp* memberKey(IRGS& env, MemberKey mk) {
   return convertClassKey(env, res);
 }
 
+}
+
 //////////////////////////////////////////////////////////////////////
 
+SSATmp* ptrToInitNull(IRGS& env) {
+  // Nothing is allowed to write anything to the init null variant, so this
+  // inner type is always true.
+  return cns(env, Type::cns(&immutable_null_base, TLvalToOtherInitNull));
+}
+
+bool canUpdateCanonicalBase(SSATmp* baseLoc) {
+  auto const canonicalBaseLoc = canonical(baseLoc);
+  assertx(canonicalBaseLoc);
+  switch (canonicalBaseLoc->inst()->op()) {
+    case LdLocAddr:
+    case LdStkAddr:
+      break;
+    default: {
+      auto const t = baseLoc->type();
+      if (t.maybe(TMemToFrameCell) ||
+          t.maybe(TMemToStkCell)) {
+        // We don't handle these, as anything simple would require killing all
+        // frame and stack info in frame state (currently framestate asserts we
+        // don't stmem to ptrs of this type for this reason).
+        return false;
+      }
+      break;
+    }
+  }
+
+  return true;
+}
+
+void updateCanonicalBase(IRGS& env, SSATmp* baseLoc, SSATmp* newArr) {
+  auto const canonicalBaseLoc = canonical(baseLoc);
+  assertx(canonicalBaseLoc);
+  switch (canonicalBaseLoc->inst()->op()) {
+    case LdLocAddr: {
+      auto const locID = canonicalBaseLoc->inst()->extra<LocalId>()->locId;
+      gen(env, StLoc, LocalId { locID }, fp(env), newArr);
+      break;
+    }
+    case LdStkAddr: {
+      auto const irSPRel =
+        canonicalBaseLoc->inst()->extra<IRSPRelOffsetData>()->offset;
+      gen(env, StStk, IRSPRelOffsetData{irSPRel}, sp(env), newArr);
+      break;
+    }
+    default:
+      gen(env, StMem, baseLoc, newArr);
+      break;
+  }
+}
+
+void mFinalImpl(IRGS& env, int32_t nDiscard, SSATmp* result) {
+  for (auto i = 0; i < nDiscard; ++i) popDecRef(env);
+  if (result) push(env, result);
+  gen(env, FinishMemberOp);
 }
 
 //////////////////////////////////////////////////////////////////////

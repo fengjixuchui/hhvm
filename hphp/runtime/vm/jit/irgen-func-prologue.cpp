@@ -304,7 +304,7 @@ void emitPrologueEntry(IRGS& env, const Func* callee, uint32_t argc,
   // Increment profiling counter.
   if (isProfiling(env.context.kind)) {
     gen(env, IncProfCounter, TransIDData{transID});
-    profData()->setProfiling(callee->getFuncId());
+    profData()->setProfiling(callee);
   }
 }
 
@@ -340,7 +340,9 @@ void emitInitFuncInputs(IRGS& env, const Func* callee, uint32_t argc) {
 
   if (argc < callee->numParams()) {
     // Push an empty array for `...$args'.
-    ARRPROV_USE_RUNTIME_LOCATION();
+    arrprov::TagOverride _(RO::EvalArrayProvenance
+      ? arrprov::Tag::Param(callee, numParams)
+      : arrprov::Tag{});
     assertx(callee->hasVariadicCaptureParam());
     push(env, cns(env, ArrayData::CreateVArray()));
     ++argc;

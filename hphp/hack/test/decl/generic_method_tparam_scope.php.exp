@@ -35,7 +35,8 @@ Parsed decls:
                   };
                  fp_flags =
                  (make_fp_flags ~mutability:None ~accept_disposable:false
-                   ~has_default:false ~mode:Typing_defs_core.FPnormal);
+                   ~has_default:false ~mode:Typing_defs_core.FPnormal
+                   ~ifc_external:false ~ifc_can_call:false);
                   }
                ];
              ft_implicit_params =
@@ -79,7 +80,8 @@ Parsed decls:
                  };
                 fp_flags =
                 (make_fp_flags ~mutability:None ~accept_disposable:false
-                  ~has_default:false ~mode:Typing_defs_core.FPnormal);
+                  ~has_default:false ~mode:Typing_defs_core.FPnormal
+                  ~ifc_external:false ~ifc_can_call:false);
                  }
               ];
             ft_implicit_params =
@@ -100,7 +102,7 @@ Parsed decls:
     sm_visibility = Public; sm_deprecated = None }
     ];
   sc_user_attributes = []; sc_enum_type = None } }; funs = {}; typedefs = {};
-consts = {}
+consts = {}; records = {}
 }
 
 They matched!

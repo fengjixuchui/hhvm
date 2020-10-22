@@ -10,6 +10,7 @@ type decls = {
   funs: Typing_defs.fun_elt SMap.t;
   typedefs: Typing_defs.typedef_type SMap.t;
   consts: Typing_defs.const_decl SMap.t;
+  records: Typing_defs.record_def_type SMap.t;
 }
 [@@deriving show]
 
@@ -19,6 +20,7 @@ let empty_decls =
     funs = SMap.empty;
     typedefs = SMap.empty;
     consts = SMap.empty;
+    records = SMap.empty;
   }
 
 type decl_lists = {
@@ -26,11 +28,14 @@ type decl_lists = {
   dl_funs: (string * Typing_defs.fun_elt) list;
   dl_typedefs: (string * Typing_defs.typedef_type) list;
   dl_consts: (string * Typing_defs.const_decl) list;
+  dl_records: (string * Typing_defs.record_def_type) list;
 }
 
-external parse_decls_ffi : Relative_path.t -> string -> decls
-  = "parse_decls_ffi"
+type ns_map = (string * string) list
+
+external parse_decls_ffi : Relative_path.t -> string -> ns_map -> decls
+  = "hh_parse_decls_ffi"
 
 external parse_decl_lists_ffi :
-  Relative_path.t -> string -> decl_lists * FileInfo.mode option
-  = "parse_decl_lists_ffi"
+  Relative_path.t -> string -> ns_map -> decl_lists * FileInfo.mode option
+  = "hh_parse_decl_lists_ffi"

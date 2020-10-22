@@ -52,7 +52,7 @@ bool checkLayoutMatches(const bespoke::Layout* layout, SSATmp* arr) {
   auto const DEBUG_ONLY layoutType =
     arr->type().unspecialize().narrowToBespokeLayout(BespokeLayout(layout));
   // TODO(mcolavita): Once we have a type hierarchy, we don't need IMPLIES
-  assertx(IMPLIES(layout->vtable(), arr->type() <= layoutType));
+  assertx(IMPLIES(layout->isConcrete(), arr->type() <= layoutType));
 
   return true;
 }
@@ -62,6 +62,12 @@ SSATmp* BespokeLayout::emitGet(
     IRGS& env, SSATmp* arr, SSATmp* key, Block* taken) const {
   assertx(checkLayoutMatches(m_layout, arr));
   return m_layout->emitGet(env, arr, key, taken);
+}
+
+SSATmp* BespokeLayout::emitElem(
+    IRGS& env, SSATmp* arr, SSATmp* key, bool throwOnMissing) const {
+  assertx(checkLayoutMatches(m_layout, arr));
+  return m_layout->emitElem(env, arr, key, throwOnMissing);
 }
 
 SSATmp* BespokeLayout::emitSet(
