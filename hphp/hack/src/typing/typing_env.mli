@@ -21,7 +21,11 @@ val get_tcopt : env -> TypecheckerOptions.t
 
 val map_tcopt : env -> f:(TypecheckerOptions.t -> TypecheckerOptions.t) -> env
 
+val get_deps_mode : env -> Typing_deps_mode.t
+
 val get_ctx : env -> Provider_context.t
+
+val get_tracing_info : env -> Decl_counters.tracing_info option
 
 val fresh_type : env -> Pos.t -> env * locl_ty
 
@@ -59,6 +63,7 @@ val get_shape_field_name : Ast_defs.shape_field_name -> string
 val get_shape_field_name_pos : Ast_defs.shape_field_name -> Pos.t
 
 val empty :
+  ?origin:Decl_counters.origin ->
   ?mode:FileInfo.mode ->
   Provider_context.t ->
   Relative_path.t ->
@@ -70,6 +75,8 @@ val is_typedef : env -> typedef_key -> bool
 val get_enum : env -> class_key -> class_decl option
 
 val is_enum : env -> class_key -> bool
+
+val is_enum_class : env -> class_key -> bool
 
 val get_enum_constraint : env -> class_key -> decl_ty option
 
@@ -134,6 +141,11 @@ val log_env_change : string -> ?level:int -> env -> env -> env
 val clear_params : env -> env
 
 val with_env : env -> (env -> env * 'a) -> env * 'a
+
+val with_origin : env -> Decl_counters.origin -> (env -> env * 'a) -> env * 'a
+
+val with_origin2 :
+  env -> Decl_counters.origin -> (env -> env * 'a * 'b) -> env * 'a * 'b
 
 val is_static : env -> bool
 

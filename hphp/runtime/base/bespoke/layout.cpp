@@ -75,6 +75,13 @@ const Layout* Layout::FromIndex(LayoutIndex index) {
   return layout;
 }
 
+SSATmp* Layout::emitEscalateToVanilla(IRGS& env, SSATmp* arr,
+                                      const char* reason) const {
+  auto const data = BespokeLayoutData { nullptr };
+  auto const str = cns(env, makeStaticString(reason));
+  return gen(env, BespokeEscalateToVanilla, data, arr, str);
+}
+
 struct Layout::Initializer {
   Initializer() {
     assertx(s_layoutTableIndex.load(std::memory_order_relaxed) == 0);
@@ -126,6 +133,55 @@ SSATmp* ConcreteLayout::emitAppend(IRGS& env, SSATmp* arr, SSATmp* val) const {
   PUNT(unimpl_bespoke_emitAppend);
 }
 
+SSATmp* ConcreteLayout::emitEscalateToVanilla(IRGS& env, SSATmp* arr,
+                                              const char* reason) const {
+  auto const data = BespokeLayoutData { this };
+  auto const str = cns(env, makeStaticString(reason));
+  return gen(env, BespokeEscalateToVanilla, data, arr, str);
+}
+
+SSATmp* ConcreteLayout::emitIterFirstPos(IRGS& env, SSATmp* arr) const {
+  auto const data = BespokeLayoutData { this };
+  return gen(env, BespokeIterFirstPos, data, arr);
+}
+
+SSATmp* ConcreteLayout::emitIterLastPos(IRGS& env, SSATmp* arr) const {
+  auto const data = BespokeLayoutData { this };
+  return gen(env, BespokeIterLastPos, data, arr);
+}
+
+SSATmp* ConcreteLayout::emitIterPos(
+    IRGS& env, SSATmp* arr, SSATmp* idx) const {
+  PUNT(unimpl_bespoke_iterpos);
+}
+
+SSATmp* ConcreteLayout::emitIterAdvancePos(
+    IRGS& env, SSATmp* arr, SSATmp* pos) const {
+  auto const data = BespokeLayoutData { this };
+  return gen(env, BespokeIterAdvancePos, data, arr, pos);
+}
+
+SSATmp* ConcreteLayout::emitIterElm(IRGS& env, SSATmp* arr, SSATmp* pos) const {
+  return pos;
+}
+
+SSATmp* ConcreteLayout::emitIterGetKey(
+    IRGS& env, SSATmp* arr, SSATmp* elm) const {
+  auto const data = BespokeLayoutData { this };
+  auto const retType = arr->isA(TVec|TVArr) ? TInt : TInt|TStr;
+  return gen(env, BespokeIterGetKey, retType, data, arr, elm);
+}
+
+/**
+ * This default implementation invokes the layout-specific GetPosVal method
+ * without virtualization.
+ */
+SSATmp* ConcreteLayout::emitIterGetVal(
+    IRGS& env, SSATmp* arr, SSATmp* elm) const {
+  auto const data = BespokeLayoutData { this };
+  return gen(env, BespokeIterGetVal, TCell, data, arr, elm);
+}
+
 const ConcreteLayout* ConcreteLayout::FromConcreteIndex(LayoutIndex index) {
   auto const layout = s_layoutTable[index.raw];
   assertx(layout != nullptr);
@@ -145,8 +201,7 @@ void logBespokeDispatch(const ArrayData* ad, const char* fn) {
 
 namespace {
 ArrayData* maybeMonoify(ArrayData* ad) {
-  assertx(ad->isVanilla());
-  if (ad->isKeysetType()) return ad;
+  if (!ad->isVanilla() || ad->isKeysetType()) return ad;
 
   auto const et = EntryTypes::ForArray(ad);
   auto const monotype_keys =
@@ -179,24 +234,18 @@ ArrayData* maybeMonoify(ArrayData* ad) {
   }
 
   auto const dt = dt_modulo_persistence(et.valueDatatype);
-  if (ad->isDArray() || ad->isDictType()) {
-    return MakeMonotypeDictFromVanilla(ad, dt, et.keyTypes);
-  }
-
-  assertx(ad->isVArray() || ad->isVecType());
-  auto const hk = ad->isVecType() ? HeaderKind::BespokeVec
-                                  : HeaderKind::BespokeVArray;
-  return MonotypeVec::Make(dt, ad->size(), packedData(ad), hk,
-                           ad->isLegacyArray(), ad->isStatic());
+  return ad->isDArray() || ad->isDictType()
+    ? MakeMonotypeDictFromVanilla(ad, dt, et.keyTypes)
+    : MonotypeVec::MakeFromVanilla(ad, dt);
 }
 }
 
-ArrayData* makeBespokeForTesting(ArrayData* ad) {
+ArrayData* makeBespokeForTesting(ArrayData* ad, LoggingProfile* profile) {
   if (!jit::mcgen::retranslateAllEnabled()) {
-    return bespoke::maybeMakeLoggingArray(ad);
+    return bespoke::maybeMakeLoggingArray(ad, profile);
   }
   auto const mod = requestCount() % 3;
-  if (mod == 1) return bespoke::maybeMakeLoggingArray(ad);
+  if (mod == 1) return bespoke::maybeMakeLoggingArray(ad, profile);
   if (mod == 2) return bespoke::maybeMonoify(ad);
   return ad;
 }

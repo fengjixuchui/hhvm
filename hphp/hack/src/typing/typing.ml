@@ -430,7 +430,9 @@ and fun_implicit_return env pos ret = function
     let rty = MakeType.awaitable r (MakeType.void r) in
     Typing_return.implicit_return env pos ~expected:ret ~actual:rty
 
-and block env stl = List.map_env env stl ~f:stmt
+and block env stl =
+  Typing_env.with_origin env Decl_counters.Body @@ fun env ->
+  List.map_env env stl ~f:stmt
 
 (* Set a local; must not be already assigned if it is a using variable *)
 and set_local ?(is_using_clause = false) env (pos, x) ty =
@@ -489,29 +491,16 @@ and check_using_expr has_await env ((pos, content) as using_clause) =
 (* Check the using clause e in
  * `using (e) { ... }` statement (`has_await = false`) or
  * `await using (e) { ... }` statement (`has_await = true`).
- * The expression consists of a comma-separated list of expressions (Expr_list)
- * or a single expression.
+ * `using_clauses` is a list of expressions.
  * Return the typed expression, and any variables that must
  * be designated as "using variables" for avoiding escapes.
  *)
-and check_using_clause env has_await ((pos, content) as using_clause) =
-  match content with
-  | Expr_list using_clauses ->
-    let (env, pairs) =
-      List.map_env env using_clauses (check_using_expr has_await)
-    in
-    let (typed_using_clauses, vars_list) = List.unzip pairs in
-    let ty =
-      MakeType.tuple Reason.Rnone (List.map typed_using_clauses Tast.get_type)
-    in
-    ( env,
-      Tast.make_typed_expr pos ty (Aast.Expr_list typed_using_clauses),
-      List.concat vars_list )
-  | _ ->
-    let (env, (typed_using_clause, vars)) =
-      check_using_expr has_await env using_clause
-    in
-    (env, typed_using_clause, vars)
+and check_using_clause env has_await using_clauses =
+  let (env, pairs) =
+    List.map_env env using_clauses (check_using_expr has_await)
+  in
+  let (typed_using_clauses, vars) = List.unzip pairs in
+  (env, typed_using_clauses, List.concat vars)
 
 (* Require a new construct with disposable *)
 and enforce_return_disposable _env e =
@@ -793,7 +782,7 @@ and stmt_ env pos st =
   | Using
       {
         us_has_await = has_await;
-        us_expr = using_clause;
+        us_exprs = (loc, using_clause);
         us_block = using_block;
         us_is_block_scoped;
       } ->
@@ -809,7 +798,7 @@ and stmt_ env pos st =
         Aast.
           {
             us_has_await = has_await;
-            us_expr = typed_using_clause;
+            us_exprs = (loc, typed_using_clause);
             us_block = typed_using_block;
             us_is_block_scoped;
           } )
@@ -1751,7 +1740,7 @@ and expr_
       let ety_env =
         {
           (Phase.env_with_self env) with
-          substs = Subst.make_locl (Cls.tparams class_) tvarl;
+          substs = TUtils.make_locl_subst_for_class_tparams class_ tvarl;
         }
       in
       let (env, local_obj_ty) = Phase.localize ~ety_env env obj_type in
@@ -1776,7 +1765,10 @@ and expr_
                  : return_type_of(Class::meth_name)
          *)
         let ety_env =
-          { ety_env with substs = Subst.make_locl (Cls.tparams class_) tvarl }
+          {
+            ety_env with
+            substs = TUtils.make_locl_subst_for_class_tparams class_ tvarl;
+          }
         in
         let env =
           Phase.check_tparams_constraints
@@ -1894,7 +1886,7 @@ and expr_
         let ety_env =
           {
             type_expansions = [];
-            substs = Subst.make_locl (Cls.tparams class_) tyargs;
+            substs = TUtils.make_locl_subst_for_class_tparams class_ tyargs;
             this_ty = cid_ty;
             from_class = Some cid;
             quiet = true;
@@ -2556,7 +2548,7 @@ and expr_
     in
     let (env, ty) = Phase.localize_hint_with_self env hint in
     make_result env p (Aast.Cast (hint, te)) ty
-  | ExpressionTree (hint, e, e2) -> expression_tree env p hint e e2
+  | ExpressionTree et -> expression_tree env p et
   | Is (e, hint) ->
     Typing_kinding.Simple.check_well_kinded_hint env hint;
     let (env, te, _) = expr env e in
@@ -2608,6 +2600,10 @@ and expr_
     in
     (* Check type annotations on the lambda *)
     Typing_check_decls.fun_ env f;
+    (* Check attributes on the lambda *)
+    let env =
+      attributes_check_def env SN.AttributeKinds.lambda f.f_user_attributes
+    in
     (* This is the function type as declared on the lambda itself.
      * If type hints are absent then use Tany instead. *)
     let declared_fe =
@@ -3015,6 +3011,9 @@ and expr_
     Errors.pu_typing p "identifier" s;
     expr_error env (Reason.Rwitness p) outer
   | ET_Splice e -> et_splice env p e
+  | EnumAtom s ->
+    Errors.atom_as_expr p;
+    make_result env p (Aast.EnumAtom s) (mk (Reason.Rwitness p, Terr))
 
 (* let ty = err_witness env cst_pos in *)
 and class_const ?(incl_tc = false) env p ((cpos, cid), mid) =
@@ -3433,54 +3432,30 @@ and anon_make ?el ?ret_ty env lambda_pos f ft idl is_anon =
 (*****************************************************************************)
 (* Expression trees *)
 (*****************************************************************************)
-and expression_tree env p visitor_class e desugared_expr =
-  let (spliced_expressions, new_et) =
-    Typing_expression_trees.extract_spliced_expressions e
-  in
-  let (env, spliced_expression_map) =
-    List.fold
-      ~f:(fun (env, map) (id, e) ->
-        let (env, te, ty) = expr env e in
-        (env, IMap.add id (te, ty) map))
-      ~init:(env, IMap.empty)
-      spliced_expressions
-  in
-  let env = { env with et_spliced_types = Some spliced_expression_map } in
-  let (env, (te, ty)) =
-    Typing_lenv.stash_and_do env (Env.all_continuations env) (fun env ->
-        let env = Env.reinitialize_locals env in
-        let (env, te, ty) = expr env new_et in
-        (env, (te, ty)))
-  in
-  let env = { env with et_spliced_types = None } in
-  match desugared_expr with
-  | Some desugared_expr ->
-    let (env, te2, ty2) = expr env desugared_expr in
-    make_result env p (Aast.ExpressionTree (visitor_class, te, Some te2)) ty2
-  | None -> make_result env p (Aast.ExpressionTree (visitor_class, te, None)) ty
+and expression_tree env p et =
+  let (_, t_src_expr, _) = expr_any env p et.et_src_expr in
+  let (env, t_desugared_expr, ty_desugared) = expr env et.et_desugared_expr in
+  make_result
+    env
+    p
+    (Aast.ExpressionTree
+       {
+         et_hint = et.et_hint;
+         et_src_expr = t_src_expr;
+         et_desugared_expr = t_desugared_expr;
+       })
+    ty_desugared
 
 and et_splice env p e =
-  let error = expr_error env Reason.Rnone e in
-  match snd e with
-  | Id (_, id) ->
-    let id = int_of_string id in
-    let v =
-      IMap.find_opt id (Option.value env.et_spliced_types ~default:IMap.empty)
-    in
-    begin
-      match v with
-      | None -> error
-      | Some (te, ty) ->
-        let (env, ty_visitor) = Env.fresh_type env p in
-        let (env, ty_res) = Env.fresh_type env p in
-        let (env, ty_infer) = Env.fresh_type env p in
-        let expr_tree_type =
-          MakeType.expr_tree (Reason.Rsplice p) ty_visitor ty_res ty_infer
-        in
-        let env = SubType.sub_type env ty expr_tree_type Errors.unify_error in
-        make_result env p (Aast.ET_Splice te) ty_infer
-    end
-  | _ -> error
+  let (env, te, ty) = expr env e in
+  let (env, ty_visitor) = Env.fresh_type env p in
+  let (env, ty_res) = Env.fresh_type env p in
+  let (env, ty_infer) = Env.fresh_type env p in
+  let expr_tree_type =
+    MakeType.expr_tree (Reason.Rsplice p) ty_visitor ty_res ty_infer
+  in
+  let env = SubType.sub_type env ty expr_tree_type Errors.unify_error in
+  make_result env p (Aast.ET_Splice te) ty_infer
 
 (*****************************************************************************)
 (* End expression trees *)
@@ -3492,8 +3467,9 @@ and type_capability env cap unsafe_cap default_pos =
   let (env, cap_ty) =
     Option.value_map
       cap_hint_opt
-      ~default:(env, MakeType.default_capability (Reason.Rhint default_pos))
-      ~f:(Phase.localize_hint_with_self env)
+      ~default:(MakeType.default_capability (Reason.Rhint default_pos))
+      ~f:(Decl_hint.hint env.decl_env)
+    |> Phase.localize_with_self env
   in
   let unsafe_cap_hint_opt = hint_of_type_hint unsafe_cap in
   let (env, unsafe_cap_ty) =
@@ -3659,7 +3635,8 @@ and new_object
           let ety_env =
             {
               type_expansions = [];
-              substs = Subst.make_locl (Cls.tparams class_info) params;
+              substs =
+                TUtils.make_locl_subst_for_class_tparams class_info params;
               this_ty = obj_ty;
               from_class = None;
               quiet = false;
@@ -5016,6 +4993,10 @@ and dispatch_call
         (env, Tast.make_typed_expr epos tany Aast.Any, tany)
       | (env, Some (ety_env, et)) ->
         let (env, fty) =
+          let (env, capability) =
+            MakeType.default_capability (Reason.Rwitness fpos)
+            |> Phase.localize_with_self env
+          in
           let make_fty params ft_ret =
             {
               ft_arity = Fstandard;
@@ -5034,14 +5015,11 @@ and dispatch_call
                           ~mutability:None
                           ~has_default:false
                           ~ifc_external:false
-                          ~ifc_can_call:false;
+                          ~ifc_can_call:false
+                          ~is_atom:false;
                       fp_rx_annotation = None;
                     });
-              ft_implicit_params =
-                {
-                  capability =
-                    MakeType.default_capability (Reason.Rwitness fpos);
-                };
+              ft_implicit_params = { capability };
               ft_ret = { et_enforced = false; et_type = ft_ret };
               ft_reactive = Nonreactive;
               ft_flags = 0;
@@ -5351,7 +5329,7 @@ and class_get_
         {
           type_expansions = [];
           this_ty;
-          substs = Subst.make_locl (Cls.tparams class_) paraml;
+          substs = TUtils.make_locl_subst_for_class_tparams class_ paraml;
           from_class = Some cid;
           quiet = true;
           on_error = Errors.unify_error_at p;
@@ -5537,7 +5515,7 @@ and class_get_
   | ( _,
       ( Tvar _ | Tnonnull | Tvarray _ | Tdarray _ | Tvarray_or_darray _
       | Toption _ | Tprim _ | Tfun _ | Ttuple _ | Tobject | Tshape _ | Tpu _
-      | Tpu_type_access _ ) ) ->
+      | Tpu_type_access _ | Taccess _ ) ) ->
     Errors.non_class_member
       ~is_method
       mid
@@ -5817,7 +5795,7 @@ and static_class_id
       | ( _,
           ( Tany _ | Tnonnull | Tvarray _ | Tdarray _ | Tvarray_or_darray _
           | Toption _ | Tprim _ | Tfun _ | Ttuple _ | Tnewtype _ | Tdependent _
-          | Tobject | Tshape _ | Tpu _ | Tpu_type_access _ ) ) ->
+          | Tobject | Tshape _ | Tpu _ | Tpu_type_access _ | Taccess _ ) ) ->
         Errors.expected_class
           ~suffix:(", but got " ^ Typing_print.error env base_ty)
           p;
@@ -5837,7 +5815,7 @@ and call_construct p env class_ params el unpacked_element cid cid_ty =
     {
       type_expansions = [];
       this_ty = cid_ty;
-      substs = Subst.make_locl (Cls.tparams class_) params;
+      substs = TUtils.make_locl_subst_for_class_tparams class_ params;
       from_class = Some cid;
       quiet = true;
       on_error = Errors.unify_error_at p;
@@ -6124,21 +6102,79 @@ and call
             | param :: paraml -> (false, Some param, paraml)
             | [] -> (true, var_param, paraml)
           in
-          let check_arg env ((pos, _) as e) opt_param ~is_variadic =
+          (* TODO: We're using plain String at the moment, until we
+           * introduce actual atom notation (#A instead of "A")
+           *)
+          let expand_atom_in_enum enum_name atom_name expected_ty =
+            let cls = Env.get_class env enum_name in
+            let open Option in
+            cls >>= fun cls ->
+            let constants = Cls.consts cls in
+            if List.Assoc.mem ~equal:String.equal constants atom_name then
+              let hi = (pos, expected_ty) in
+              let te = (hi, EnumAtom atom_name) in
+              Some (te, expected_ty)
+            else (
+              Errors.atom_unknown pos atom_name enum_name;
+              None
+            )
+          in
+          let check_arg env ((pos, arg) as e) opt_param ~is_variadic =
             match opt_param with
             | Some param ->
+              (* First check if __Atom is used *)
+              let atom_type =
+                let is_atom = get_fp_is_atom param in
+                let ety = param.fp_type.et_type in
+                match arg with
+                | EnumAtom atom_name when is_atom ->
+                  (match get_node ety with
+                  (* Uncomment this if we want to support atoms for normal
+                   * enums
+                   *)
+                  (* | Tnewtype (enum_name, _, _) when Env.is_enum env enum_name -> *)
+                  (*   expand_atom_in_enum enum_name atom_name ety *)
+                  | Tclass ((_, name), _, [ty_enum; _ty_interface])
+                    when String.equal name SN.Classes.cElt ->
+                    (match get_node ty_enum with
+                    | Tclass ((_, enum_name), _, _)
+                      when Env.is_enum_class env enum_name ->
+                      expand_atom_in_enum enum_name atom_name ety
+                    | Tgeneric (name, _) ->
+                      let upper_bounds =
+                        Typing_utils.collect_enum_class_upper_bounds env name
+                      in
+                      SSet.fold
+                        (fun enum_name result ->
+                          if Option.is_none result then
+                            expand_atom_in_enum enum_name atom_name ety
+                          else
+                            result)
+                        upper_bounds
+                        None
+                    | _ ->
+                      (* Already reported, see Typing_check_decls *)
+                      None)
+                  | _ ->
+                    (* Already reported, see Typing_check_decls *)
+                    None)
+                | _ -> None
+              in
               let (env, te, ty) =
-                let expected =
-                  ExpectedTy.make_and_allow_coercion
-                    pos
-                    Reason.URparam
-                    param.fp_type
-                in
-                expr
-                  ~accept_using_var:(get_fp_accept_disposable param)
-                  ~expected
-                  env
-                  e
+                match atom_type with
+                | Some (te, ty) -> (env, te, ty)
+                | None ->
+                  let expected =
+                    ExpectedTy.make_and_allow_coercion
+                      pos
+                      Reason.URparam
+                      param.fp_type
+                  in
+                  expr
+                    ~accept_using_var:(get_fp_accept_disposable param)
+                    ~expected
+                    env
+                    e
               in
               let env = call_param env param (e, ty) ~is_variadic in
               (env, Some (te, ty))
@@ -6362,6 +6398,7 @@ and call
                   ~has_default:false
                   ~ifc_external:false
                   ~ifc_can_call:false
+                  ~is_atom:false
               in
               {
                 fp_pos = pos;
@@ -6382,12 +6419,11 @@ and call
             let ft_tparams = [] in
             let ft_where_constraints = [] in
             let ft_params = List.map ~f:mk_fun_param type_of_el in
-            let ft_implicit_params =
-              let capability =
-                Typing_make_type.default_capability Reason.Rnone
-              in
-              { capability }
+            let (env, capability) =
+              Typing_make_type.default_capability Reason.Rnone
+              |> Phase.localize_with_self env
             in
+            let ft_implicit_params = { capability } in
             let (env, return_ty) = Env.fresh_type env pos in
             let return_ty =
               match in_await with
@@ -7070,7 +7106,7 @@ and type_param env t =
     } )
 
 and typedef_def ctx typedef =
-  let env = EnvFromDef.typedef_env ctx typedef in
+  let env = EnvFromDef.typedef_env ~origin:Decl_counters.TopLevel ctx typedef in
   let env =
     Phase.localize_and_add_ast_generic_parameters_and_where_constraints
       (fst typedef.t_name)
@@ -7235,7 +7271,8 @@ and class_get_pu_ env cty name =
     (env, None)
   | Tintersection _ -> (env, None)
   | Tpu_type_access _
-  | Tpu _ ->
+  | Tpu _
+  | Taccess _ ->
     (env, None)
   | Tnewtype (_, _, ty)
   | Tdependent (_, ty) ->
@@ -7248,9 +7285,17 @@ and class_get_pu_ env cty name =
       | Some class_ ->
         (match Env.get_pu_enum env class_ name with
         | Some et ->
-          (env, Some (cty, Subst.make_locl (Cls.tparams class_) paraml, et))
+          ( env,
+            Some
+              (cty, TUtils.make_locl_subst_for_class_tparams class_ paraml, et)
+          )
         | None -> (env, None))
     end
 
 (* External API *)
-let expr ?expected env e = expr ?expected env e
+let expr ?expected env e =
+  Typing_env.with_origin2 env Decl_counters.Body (fun env ->
+      expr ?expected env e)
+
+let stmt env st =
+  Typing_env.with_origin env Decl_counters.Body (fun env -> stmt env st)

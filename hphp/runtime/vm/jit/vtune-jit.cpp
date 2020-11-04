@@ -36,7 +36,7 @@ void reportTraceletToVtune(const Unit* unit,
 
   if (!unit) return;
 
-  methodInfo.method_id = tr.src.funcID() + MIN_METHOD_ID;
+  methodInfo.method_id = tr.src.funcID().toInt() + MIN_METHOD_ID;
 
   if (func && func->fullName()) {
     char *name = const_cast<char *>(func->fullName()->data());
@@ -61,9 +61,7 @@ void reportTraceletToVtune(const Unit* unit,
   for (auto& mapping : tr.bcMapping) {
     LineNumberInfo info;
 
-    info.LineNumber = mapping.sk.prologue()
-      ? unit->getLineNumber(mapping.sk.func()->line1())
-      : unit->getLineNumber(mapping.sk.offset());
+    info.LineNumber = mapping.sk.lineNumber();
 
     // Note that main code may be generated in the cold code range (see
     // emitBlock in code-gen-x64 genCodeImpl()) so we need to explicitly check

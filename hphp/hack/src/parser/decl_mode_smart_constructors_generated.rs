@@ -17,34 +17,30 @@
  *
  */
 use parser_core_types::{
-  lexable_token::LexableToken,
-  syntax::{
-    Syntax,
-    SyntaxValueType,
-  },
-  token_factory::{SimpleTokenFactory, SimpleTokenFactoryImpl, TokenFactory},
+    lexable_token::LexableToken, syntax::SyntaxValueType, syntax_by_ref::syntax::Syntax,
+    token_factory::TokenFactory,
 };
-use crate::*;
 use smart_constructors::SmartConstructors;
 use syntax_smart_constructors::SyntaxSmartConstructors;
+use crate::*;
 
-impl<'src, Token, Value>
-SmartConstructors
-    for DeclModeSmartConstructors<'src, Syntax<Token, Value>, Token, Value>
+impl<'src, 'arena, Token, Value, TF> SmartConstructors
+    for DeclModeSmartConstructors<'src, 'arena, Syntax<'arena, Token, Value>, Token, Value, TF>
 where
-    Token: LexableToken + SimpleTokenFactory,
-    Value: SyntaxValueType<Token>,
+    TF: TokenFactory<Token = SyntaxToken<'src, 'arena, Token, Value>>,
+    Token: LexableToken + Copy,
+    Value: SyntaxValueType<Token> + Clone,
 {
-    type State = State<'src, Syntax<Token, Value>>;
-    type TF = SimpleTokenFactoryImpl<Token>;
-    type R = Syntax<Token, Value>;
+    type State = State<'src, 'arena, Syntax<'arena, Token, Value>>;
+    type TF = TF;
+    type R = Syntax<'arena, Token, Value>;
 
-    fn state_mut(&mut self) -> &mut State<'src, Syntax<Token, Value>> {
+    fn state_mut(&mut self) -> &mut State<'src, 'arena, Syntax<'arena, Token, Value>> {
         &mut self.state
     }
 
-    fn into_state(self) -> State<'src, Syntax<Token, Value>> {
-      self.state
+    fn into_state(self) -> State<'src, 'arena, Syntax<'arena, Token, Value>> {
+        self.state
     }
 
     fn token_factory(&mut self) -> &mut Self::TF {
@@ -733,6 +729,10 @@ where
 
     fn make_list_item(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {
         <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_list_item(self, arg0, arg1)
+    }
+
+    fn make_enum_atom_expression(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {
+        <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_enum_atom_expression(self, arg0, arg1)
     }
 
     fn make_pocket_atom_expression(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {

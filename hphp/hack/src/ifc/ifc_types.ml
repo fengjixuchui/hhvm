@@ -94,6 +94,11 @@ and cow_array = {
 }
 
 and shape_field_type = {
+  (* The policy of the field is essentially the PC at the time that it is
+     assigned. We need to keep track of this separately because for optional
+     fields, we may still learn information based on whether or not the value is
+     present. *)
+  sft_policy: policy;
   sft_optional: bool;
   sft_ty: ptype;
 }
@@ -107,6 +112,16 @@ and fun_ = {
   f_ret: ptype;
   f_exn: ptype;
 }
+
+type callable_name =
+  | Method of string * string (* Classname, method name *)
+  | StaticMethod of string * string (* Classname, static meth name *)
+  (* toplevel function *)
+  | Function of string
+
+type array =
+  | Aarray of cow_array
+  | Ashape of Type.shape_kind * shape_field_type Nast.ShapeMap.t
 
 type fun_proto = {
   fp_name: string;
@@ -206,7 +221,7 @@ type magic_decl = {
 }
 
 type fun_decl_kind =
-  | FDGovernedBy of policy option
+  | FDPolicied of policy option
   | FDInferFlows
 
 type arg_kind =
@@ -272,6 +287,8 @@ type 'ptype renv_ = {
   re_gpc: policy;
   (* Exception thrown from the callable *)
   re_exn: 'ptype;
+  (* Decl provider context for accessing the decl heap *)
+  re_ctx: Provider_context.t;
 }
 
 type proto_renv = unit renv_
@@ -302,5 +319,6 @@ type adjustment =
   | Aweaken
 
 type call_type =
-  | Cglobal of string
+  | Cglobal of (callable_name * Typing_defs.locl_ty)
+  | Cconstructor of callable_name
   | Clocal of fun_

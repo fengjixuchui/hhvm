@@ -96,7 +96,7 @@ and env_annot =
 and ('ex, 'fb, 'en, 'hi) using_stmt = {
   us_is_block_scoped: bool;
   us_has_await: bool;
-  us_expr: ('ex, 'fb, 'en, 'hi) expr;
+  us_exprs: pos * ('ex, 'fb, 'en, 'hi) expr list;
   us_block: ('ex, 'fb, 'en, 'hi) block;
 }
 
@@ -127,6 +127,12 @@ and 'hi collection_targ =
 and ('ex, 'fb, 'en, 'hi) function_ptr_id =
   | FP_id of sid
   | FP_class_const of ('ex, 'fb, 'en, 'hi) class_id * pstring
+
+and ('ex, 'fb, 'en, 'hi) expression_tree = {
+  et_hint: hint;
+  et_src_expr: ('ex, 'fb, 'en, 'hi) expr;
+  et_desugared_expr: ('ex, 'fb, 'en, 'hi) expr;
+}
 
 and ('ex, 'fb, 'en, 'hi) expr_ =
   | Darray of
@@ -206,8 +212,7 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
       (** TODO: T38184446 Consolidate collections in AAST *)
   | BracedExpr of ('ex, 'fb, 'en, 'hi) expr
   | ParenthesizedExpr of ('ex, 'fb, 'en, 'hi) expr
-  | ExpressionTree of
-      hint * ('ex, 'fb, 'en, 'hi) expr * ('ex, 'fb, 'en, 'hi) expr option
+  | ExpressionTree of ('ex, 'fb, 'en, 'hi) expression_tree
   (* None of these constructors exist in the AST *)
   | Lplaceholder of pos
   | Fun_id of sid
@@ -223,6 +228,7 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
   | PU_atom of string
   | PU_identifier of ('ex, 'fb, 'en, 'hi) class_id * pstring * pstring
   | ET_Splice of ('ex, 'fb, 'en, 'hi) expr
+  | EnumAtom of string
   | Any
 
 and ('ex, 'fb, 'en, 'hi) class_get_expr =
@@ -378,6 +384,7 @@ and ('ex, 'fb, 'en, 'hi) class_ = {
   c_xhp_category: (pos * pstring list) option;
   c_reqs: (class_hint * is_extends) list;
   c_implements: class_hint list;
+  c_implements_dynamic: bool;
   c_where_constraints: where_constraint_hint list;
   c_consts: ('ex, 'fb, 'en, 'hi) class_const list;
   c_typeconsts: ('ex, 'fb, 'en, 'hi) class_typeconst list;

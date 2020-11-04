@@ -77,6 +77,7 @@ where
     in_type: bool,
     token_factory: TF,
     cache: Rc<RefCell<Option<LexerCache<TF::Token>>>>,
+    disallow_hash_comments: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -113,7 +114,12 @@ where
         }
     }
 
-    pub fn make_at(source: &SourceText<'a>, offset: usize, token_factory: TF) -> Self {
+    pub fn make_at(
+        source: &SourceText<'a>,
+        offset: usize,
+        token_factory: TF,
+        disallow_hash_comments: bool,
+    ) -> Self {
         Self {
             source: source.clone(),
             start: offset,
@@ -122,11 +128,12 @@ where
             in_type: false,
             cache: Rc::new(RefCell::new(None)),
             token_factory,
+            disallow_hash_comments,
         }
     }
 
-    pub fn make(source: &SourceText<'a>, token_factory: TF) -> Self {
-        Self::make_at(source, 0, token_factory)
+    pub fn make(source: &SourceText<'a>, token_factory: TF, disallow_hash_comments: bool) -> Self {
+        Self::make_at(source, 0, token_factory, disallow_hash_comments)
     }
 
     fn continue_from(&mut self, l: Lexer<'a, TF>) {
@@ -1647,6 +1654,17 @@ where
                 self.advance(1);
                 TokenKind::Backslash
             }
+            '#' if self.disallow_hash_comments => {
+                self.advance(1);
+                let c = self.peek_char(0);
+                // Do we have a "alpha" function somewhere ?
+                if ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') {
+                    TokenKind::Hash
+                } else {
+                    self.with_error(Errors::error0006);
+                    TokenKind::ErrorToken
+                }
+            }
             'b' if {
                 let c1 = self.peek_char(1);
                 let c2 = self.peek_char(2);
@@ -1715,11 +1733,11 @@ where
             '\r' => {
                 let w = if self.peek_char(1) == '\n' { 2 } else { 1 };
                 self.advance(w);
-                Trivia::<TF>::make_eol(self.source(), self.start, w)
+                Trivia::<TF>::make_eol(self.start, w)
             }
             '\n' => {
                 self.advance(1);
-                Trivia::<TF>::make_eol(self.source(), self.start, 1)
+                Trivia::<TF>::make_eol(self.start, 1)
             }
             _ => panic!("scan_end_of_line called while not on end of line!"),
         }
@@ -1727,7 +1745,7 @@ where
 
     fn scan_hash_comment(&mut self) -> Trivium<TF> {
         self.skip_to_end_of_line();
-        Trivia::<TF>::make_single_line_comment(self.source(), self.start, self.width())
+        Trivia::<TF>::make_single_line_comment(self.start, self.width())
     }
 
     fn scan_single_line_comment(&mut self) -> Trivium<TF> {
@@ -1742,9 +1760,9 @@ where
         let w = self.width();
         let remainder = self.offset - lexer_ws.offset;
         if remainder >= 11 && lexer_ws.peek_string(11) == b"FALLTHROUGH" {
-            Trivia::<TF>::make_fallthrough(self.source(), self.start, w)
+            Trivia::<TF>::make_fallthrough(self.start, w)
         } else {
-            Trivia::<TF>::make_single_line_comment(self.source(), self.start, w)
+            Trivia::<TF>::make_single_line_comment(self.start, w)
         }
     }
 
@@ -1789,19 +1807,27 @@ where
         self.skip_to_end_of_delimited_comment();
         let w = self.width();
         if lexer_ws.match_string(b"HH_FIXME") {
-            Trivia::<TF>::make_fix_me(self.source(), self.start, w)
+            Trivia::<TF>::make_fix_me(self.start, w)
         } else if lexer_ws.match_string(b"HH_IGNORE_ERROR") {
-            Trivia::<TF>::make_ignore_error(self.source(), self.start, w)
+            Trivia::<TF>::make_ignore_error(self.start, w)
         } else {
-            Trivia::<TF>::make_delimited_comment(self.source(), self.start, w)
+            Trivia::<TF>::make_delimited_comment(self.start, w)
         }
     }
 
     fn scan_php_trivium(&mut self) -> Option<Trivium<TF>> {
         match self.peek_char(0) {
             '#' => {
-                self.start_new_lexeme();
-                Some(self.scan_hash_comment())
+                if !self.disallow_hash_comments || self.peek_char(1) == '!' {
+                    // We still support hash comments if the next character would make a hashbang
+
+                    self.start_new_lexeme();
+                    Some(self.scan_hash_comment())
+                } else {
+                    self.start_new_lexeme();
+                    // Not trivia
+                    None
+                }
             }
             '/' => {
                 self.start_new_lexeme();
@@ -1814,8 +1840,7 @@ where
             ' ' | '\t' => {
                 let new_end = Self::str_skip_whitespace(self.source_text_string(), self.offset);
                 let new_start = self.offset;
-                let new_trivia =
-                    Trivia::<TF>::make_whitespace(self.source(), new_start, new_end - new_start);
+                let new_trivia = Trivia::<TF>::make_whitespace(new_start, new_end - new_start);
                 self.with_start_offset(new_start, new_end);
                 Some(new_trivia)
             }
@@ -1840,12 +1865,12 @@ where
             ' ' | '\t' => {
                 let j = Self::str_skip_whitespace(self.source_text_string(), i);
                 self.with_start_offset(i, j);
-                Some(Trivia::<TF>::make_whitespace(self.source(), i, j - i))
+                Some(Trivia::<TF>::make_whitespace(i, j - i))
             }
             '\r' | '\n' => {
                 let j = Self::str_scan_end_of_line(self.source_text_string(), i);
                 self.with_start_offset(i, j);
-                Some(Trivia::<TF>::make_eol(self.source(), i, j - i))
+                Some(Trivia::<TF>::make_eol(i, j - i))
             }
             _ =>
             // Not trivia
@@ -1869,7 +1894,7 @@ where
     fn scan_leading_trivia(
         &mut self,
         scanner: impl Fn(&mut Self) -> Option<Trivium<TF>>,
-    ) -> <TF::Token as LexableToken>::Trivia {
+    ) -> Trivia<TF> {
         let mut acc = Trivia::<TF>::new();
         while let Some(t) = scanner(self) {
             acc.push(t)
@@ -1877,11 +1902,62 @@ where
         acc
     }
 
-    pub fn scan_leading_php_trivia(&mut self) -> <TF::Token as LexableToken>::Trivia {
+    fn scan_leading_trivia_with_width(
+        &mut self,
+        scanner: impl Fn(&mut Self) -> Option<Trivium<TF>>,
+        mut width: usize,
+    ) -> Trivia<TF> {
+        let mut acc = Trivia::<TF>::new();
+        let mut extra_token_error_width = 0;
+        let mut extra_token_error_offset = self.offset();
+        loop {
+            if width == 0 {
+                if extra_token_error_width > 0 {
+                    acc.push(Trivia::<TF>::make_extra_token_error(
+                        extra_token_error_offset,
+                        extra_token_error_width,
+                    ));
+                }
+                break acc;
+            }
+            if let Some(t) = scanner(self) {
+                if extra_token_error_width > 0 {
+                    acc.push(Trivia::<TF>::make_extra_token_error(
+                        extra_token_error_offset,
+                        extra_token_error_width,
+                    ));
+                    extra_token_error_width = 0;
+                    extra_token_error_offset = self.start();
+                }
+                width -= t.width();
+                acc.push(t);
+            } else {
+                self.advance(1);
+                width -= 1;
+                extra_token_error_width += 1;
+            }
+        }
+    }
+
+    pub fn scan_leading_php_trivia_with_width(
+        &mut self,
+        width: usize,
+    ) -> <TF::Token as LexableToken>::Trivia {
+        self.scan_leading_trivia_with_width(&Self::scan_php_trivium, width)
+    }
+
+    pub fn scan_leading_xhp_trivia_with_width(
+        &mut self,
+        width: usize,
+    ) -> <TF::Token as LexableToken>::Trivia {
+        self.scan_leading_trivia_with_width(&Self::scan_xhp_trivium, width)
+    }
+
+    pub(crate) fn scan_leading_php_trivia(&mut self) -> <TF::Token as LexableToken>::Trivia {
         self.scan_leading_trivia(&Self::scan_php_trivium)
     }
 
-    pub fn scan_leading_xhp_trivia(&mut self) -> <TF::Token as LexableToken>::Trivia {
+    pub(crate) fn scan_leading_xhp_trivia(&mut self) -> <TF::Token as LexableToken>::Trivia {
         self.scan_leading_trivia(&Self::scan_xhp_trivium)
     }
 

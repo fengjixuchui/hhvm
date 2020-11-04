@@ -54,7 +54,7 @@ struct CallTargetProfile {
 
  private:
   struct Entry {
-    FuncId   funcId{InvalidFuncId};
+    FuncId   funcId{FuncId::Invalid};
     uint32_t count{0};
   };
 

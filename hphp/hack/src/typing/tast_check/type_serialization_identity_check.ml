@@ -54,7 +54,8 @@ let rec strip_ty ty =
               ~mutability:None
               ~has_default:false
               ~ifc_external:false
-              ~ifc_can_call:false;
+              ~ifc_can_call:false
+              ~is_atom:false;
           (* Dummy values: these aren't currently serialized. *)
           fp_pos = Pos.none;
           fp_name = None;
@@ -85,7 +86,9 @@ let rec strip_ty ty =
       let shape_fields = Nast.ShapeMap.map strip_field shape_fields in
       Tshape (shape_kind, shape_fields)
     | Tpu (base, enum) -> Tpu (strip_ty base, enum)
-    | Tpu_type_access (_, _) -> ty
+    | Tpu_type_access (_, _)
+    | Taccess _ ->
+      ty
     | Tunapplied_alias _ ->
       Typing_defs.error_Tunapplied_alias_in_illegal_context ()
   in

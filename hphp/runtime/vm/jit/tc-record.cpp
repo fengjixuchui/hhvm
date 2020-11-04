@@ -49,26 +49,20 @@ TRACE_SET_MOD(mcg);
 namespace HPHP { namespace jit { namespace tc {
 
 void recordGdbTranslation(SrcKey sk, const CodeBlock& cb,
-                          const TCA start, const TCA end, bool exit,
-                          bool inPrologue) {
+                          const TCA start, const TCA end) {
   assertx(cb.contains(start, end));
   if (start != end) {
     assertOwnsCodeLock();
     if (!RuntimeOption::EvalJitNoGdb) {
       Debug::DebugInfo::Get()->recordTracelet(
         Debug::TCRange(start, end, &cb == &code().cold()),
-        sk.func(),
-        sk.pc(),
-        exit, inPrologue
+        sk
       );
     }
     if (RuntimeOption::EvalPerfPidMap) {
       Debug::DebugInfo::Get()->recordPerfMap(
         Debug::TCRange(start, end, &cb == &code().cold()),
-        sk,
-        sk.func(),
-        exit,
-        inPrologue
+        sk
       );
     }
   }
@@ -309,7 +303,7 @@ void logTranslation(const TransEnv& env, const TransRange& range) {
     case JitSerdesMode::DeserializeOrGenerate:
     case JitSerdesMode::DeserializeAndDelete:
     case JitSerdesMode::DeserializeAndExit:
-      cols.setInt("func_id", func->getFuncId());
+      cols.setInt("func_id", func->getFuncId().toInt());
       break;
     }
   }

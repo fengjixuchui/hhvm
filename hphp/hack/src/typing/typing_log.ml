@@ -74,7 +74,8 @@ let lastenv =
     (Env.empty
        (Provider_context.empty_for_debugging
           ~popt:ParserOptions.default
-          ~tcopt:TypecheckerOptions.default)
+          ~tcopt:TypecheckerOptions.default
+          ~deps_mode:Typing_deps_mode.SQLiteMode)
        Relative_path.default
        None)
 
@@ -553,11 +554,11 @@ let env_as_value env =
     lenv;
     genv;
     decl_env = _;
+    tracing_info = _;
     in_loop;
     in_try;
     in_case;
     inside_constructor;
-    et_spliced_types = _;
     global_tpenv;
     log_levels = _;
     allow_wildcards;

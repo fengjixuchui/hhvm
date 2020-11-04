@@ -38,11 +38,13 @@ namespace bespoke {
 // Hide Layout and its implementations to the rest of the codebase.
 struct Layout;
 struct LayoutFunctions;
+struct LoggingProfile;
 
 // Maybe wrap this array in a LoggingArray, based on runtime options.
 ArrayData* maybeMakeLoggingArray(ArrayData*);
 const ArrayData* maybeMakeLoggingArray(const ArrayData*);
-ArrayData* makeBespokeForTesting(ArrayData*);
+ArrayData* maybeMakeLoggingArray(ArrayData*, LoggingProfile*);
+ArrayData* makeBespokeForTesting(ArrayData*, LoggingProfile*);
 void setLoggingEnabled(bool);
 void exportProfiles();
 void waitOnExportProfiles();
@@ -161,7 +163,13 @@ public:
   static ArrayData* RemoveStr(ArrayData* ad, const StringData* key);
 
   // sorting
+  //
+  // To sort a bespoke array, EscalateForSort always returns a vanilla array,
+  // which we sort and pass back to PostSort. PostSort consumes an Rc on `vad`
+  // and produces an Rc on its (possibly bespoke) result.
+  //
   static ArrayData* EscalateForSort(ArrayData* ad, SortFunction sf);
+  static ArrayData* PostSort(ArrayData* ad, ArrayData* vad);
   static auto constexpr Sort   = UnsupportedOp<void, ArrayData*, int, bool>;
   static auto constexpr Asort  = UnsupportedOp<void, ArrayData*, int, bool>;
   static auto constexpr Ksort  = UnsupportedOp<void, ArrayData*, int, bool>;
@@ -171,6 +179,7 @@ public:
 
   // high-level ops
   static ArrayData* Append(ArrayData* ad, TypedValue v);
+  static ArrayData* AppendMove(ArrayData* ad, TypedValue v);
   static ArrayData* Pop(ArrayData* ad, Variant& out);
   static void OnSetEvalScalar(ArrayData* ad);
 

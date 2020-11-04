@@ -295,6 +295,8 @@ pub mod user_attributes {
 
     pub const ENUM_CLASS: &str = "__EnumClass";
 
+    pub const ATOM: &str = "__Atom";
+
     lazy_static! {
         static ref AS_SET: HashSet<&'static str> = vec![
             OVERRIDE,
@@ -341,6 +343,7 @@ pub mod user_attributes {
             NEVER_INLINE,
             ENABLE_UNSTABLE_FEATURES,
             ENUM_CLASS,
+            ATOM,
         ]
         .into_iter()
         .collect();
@@ -399,6 +402,8 @@ pub mod attribute_kinds {
 
     pub const TYPE_CONST: &str = "\\HH\\TypeConstantAttribute";
 
+    pub const LAMBDA: &str = "\\HH\\LambdaAttribute";
+
     pub static PLAIN_ENGLISH: &[(&str, &str)] = &[
         (CLS, "a class"),
         (ENUM, "an enum"),
@@ -410,7 +415,8 @@ pub mod attribute_kinds {
         (PARAMETER, "a parameter"),
         (TYPE_PARAM, "a type parameter"),
         (FILE, "a file"),
-        (TYPE_CONST, "a type pub constant"),
+        (TYPE_CONST, "a type constant"),
+        (LAMBDA, "a lambda expression"),
     ];
 
     lazy_static! {
@@ -967,4 +973,8 @@ mod test {
 
         assert!(is_namespace_with_reserved_hh_name("Anything\\Else\\void"));
     }
+}
+
+pub mod coeffects {
+    pub const DEFAULTS: &str = "\\HH\\Contexts\\defaults";
 }

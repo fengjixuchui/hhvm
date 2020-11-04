@@ -142,6 +142,9 @@ module Locl_Inst = struct
     | Tpu (ty, sid) ->
       let ty = instantiate subst ty in
       Tpu (ty, sid)
+    | Taccess (ty, ids) ->
+      let ty = instantiate subst ty in
+      Taccess (ty, ids)
 
   and instantiate_possibly_enforced_ty subst et =
     { et_type = instantiate subst et.et_type; et_enforced = et.et_enforced }
@@ -194,7 +197,7 @@ let check_typedef_usable_as_hk_type env use_pos typedef_name typedef_info =
     let decl_ty = Typing_make_type.apply r class_sid type_args in
     let (env, locl_ty) = TUtils.localize_with_self env decl_ty in
     match get_node (TUtils.get_base_type env locl_ty) with
-    | Tclass (cls_name, _, tyl) ->
+    | Tclass (cls_name, _, tyl) when not (List.is_empty tyl) ->
       (match Env.get_class env (snd cls_name) with
       | Some cls ->
         let tc_tparams = Cls.tparams cls in

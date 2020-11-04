@@ -79,6 +79,8 @@ val get_ctx : env -> Provider_context.t
 
 val get_file : env -> Relative_path.t
 
+val get_deps_mode : env -> Typing_deps_mode.t
+
 (* Return the {!Relative_path.t} of the file the env is from *)
 
 (** Expand a type variable ({!Typing_defs.Tvar}) to the type it refers to. *)
@@ -282,9 +284,3 @@ val set_allow_wildcards : env -> env
 val get_allow_wildcards : env -> bool
 
 val condition_type_matches : is_self:bool -> env -> Tast.ty -> Tast.ty -> bool
-
-val set_et : env -> env
-
-val unset_et : env -> env
-
-val in_et : env -> bool

@@ -2,17 +2,19 @@
 // Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 
 class C {
-  <<Policied("A")>>
+  <<__Policied("A")>>
   public int $a = 0;
 
-  <<Policied("B")>>
+  <<__Policied("B")>>
   public int $b = 0;
 }
 
+<<__InferFlows>>
 function basic_pipe(C $c): void {
   $c->a = $c->b |> $$;
 }
 
+<<__InferFlows>>
 function pc_pipe(C $c, Exception $e): void {
   $maybe_throw = (int $x) ==> {
     if ($x > 0) {
@@ -27,6 +29,7 @@ function pc_pipe(C $c, Exception $e): void {
   $maybe_throw($c->b) |> $write_a($$);
 }
 
+<<__InferFlows>>
 function chained_pipes(C $c): void {
   $ret_a = (int $_) ==> $c->a;
   $ret_b = (int $_) ==> $c->b;

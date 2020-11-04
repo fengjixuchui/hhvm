@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<84b4fb28cfbf7f50ca152922f471e85c>>
+// @generated SignedSource<<add3690cda30cfec03d00aeacaaa14d2>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
@@ -399,8 +399,6 @@ pub enum Ty_<'a> {
     Tthis,
     /// Either an object type or a type alias, ty list are the arguments
     Tapply(&'a (nast::Sid<'a>, &'a [&'a Ty<'a>])),
-    /// Name of class, name of type const, remaining names of type consts
-    Taccess(&'a TaccessType<'a>),
     /// The type of the various forms of "array":
     ///
     /// ```
@@ -496,6 +494,8 @@ pub enum Ty_<'a> {
     Tvarray(&'a Ty<'a>),
     /// Tvarray_or_darray (ty1, ty2) => "varray_or_darray<ty1, ty2>"
     TvarrayOrDarray(&'a (&'a Ty<'a>, &'a Ty<'a>)),
+    /// Name of class, name of type const, remaining names of type consts
+    Taccess(&'a TaccessType<'a>),
     /// This represents a type alias that lacks necessary type arguments. Given
     /// type Foo<T1,T2> = ...
     /// Tunappliedalias "Foo" stands for usages of plain Foo, without supplying
@@ -554,7 +554,7 @@ impl<'a> TrivialDrop for Ty_<'a> {}
     Serialize,
     ToOcamlRep
 )]
-pub struct TaccessType<'a>(pub &'a Ty<'a>, pub &'a [nast::Sid<'a>]);
+pub struct TaccessType<'a>(pub &'a Ty<'a>, pub nast::Sid<'a>);
 impl<'a> TrivialDrop for TaccessType<'a> {}
 
 /// represents reactivity of function

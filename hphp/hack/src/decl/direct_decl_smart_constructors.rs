@@ -3,7 +3,6 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
-use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
@@ -16,24 +15,26 @@ use bumpalo::{
 use hh_autoimport_rust as hh_autoimport;
 use naming_special_names_rust as naming_special_names;
 
-use arena_collections::{AssocListMut, List, MultiSetMut};
+use arena_collections::{AssocListMut, MultiSetMut};
 use flatten_smart_constructors::{FlattenOp, FlattenSmartConstructors};
 use oxidized_by_ref::{
     aast, aast_defs,
     ast_defs::{Bop, ClassKind, ConstraintKind, FunKind, Id, ShapeFieldName, Uop, Variance},
     decl_defs::MethodReactivity,
+    direct_decl_parser::Decls,
     file_info::Mode,
     nast,
     pos::Pos,
     relative_path::RelativePath,
-    shallow_decl_defs::{self, ShallowClassConst, ShallowMethod, ShallowProp, ShallowTypeconst},
+    shallow_decl_defs::{
+        self, Decl, ShallowClassConst, ShallowMethod, ShallowProp, ShallowTypeconst,
+    },
     shape_map::ShapeField,
-    typing_defs,
     typing_defs::{
-        ConstDecl, EnumType, FunArity, FunElt, FunImplicitParams, FunParam, FunParams, FunType,
-        IfcFunDecl, ParamMode, ParamMutability, PossiblyEnforcedTy, Reactivity, RecordFieldReq,
-        ShapeFieldType, ShapeKind, Tparam, Ty, Ty_, TypeconstAbstractKind, TypedefType,
-        WhereConstraint, XhpAttrTag,
+        self, ConstDecl, EnumType, FunArity, FunElt, FunImplicitParams, FunParam, FunParams,
+        FunType, IfcFunDecl, ParamMode, ParamMutability, ParamRxAnnotation, PossiblyEnforcedTy,
+        Reactivity, RecordFieldReq, ShapeFieldType, ShapeKind, TaccessType, Tparam, Ty, Ty_,
+        TypeconstAbstractKind, TypedefType, WhereConstraint, XhpAttrTag,
     },
     typing_defs_flags::{FunParamFlags, FunTypeFlags},
     typing_reason::Reason,
@@ -83,7 +84,8 @@ impl<'a> DirectDeclSmartConstructors<'a> {
         pos: &'a Pos<'a>,
     ) -> Id<'a> {
         // If the name is already fully qualified, don't prepend a namespace.
-        let fully_qualified = matches!(parts.first(), Some(Node::Backslash(_)));
+        let fully_qualified =
+            matches!(parts.first(), Some(Node::Token(t)) if t.kind() == TokenKind::Backslash);
         let namespace = if fully_qualified { "" } else { namespace };
         // Count the length of the qualified name, so that we can allocate
         // exactly the right amount of space for it in our arena.
@@ -91,10 +93,8 @@ impl<'a> DirectDeclSmartConstructors<'a> {
         for part in parts {
             match part {
                 Node::Name(&(name, _)) => len += name.len(),
-                Node::Backslash(_) => len += 1,
-                Node::ListItem(&(Node::Name(&(name, _)), Node::Backslash(_))) => {
-                    len += name.len() + 1
-                }
+                Node::Token(t) if t.kind() == TokenKind::Backslash => len += 1,
+                Node::ListItem(&(Node::Name(&(name, _)), _backslash)) => len += name.len() + 1,
                 _ => {}
             }
         }
@@ -112,9 +112,9 @@ impl<'a> DirectDeclSmartConstructors<'a> {
         for part in parts {
             match part {
                 Node::Name(&(name, _pos)) => qualified_name.push_str(&name),
-                Node::Backslash(_) => qualified_name.push('\\'),
+                Node::Token(t) if t.kind() == TokenKind::Backslash => qualified_name.push('\\'),
                 Node::ListItem(listitem) => {
-                    if let (Node::Name(&(name, _)), Node::Backslash(_)) = &**listitem {
+                    if let (Node::Name(&(name, _)), _backslash) = &**listitem {
                         qualified_name.push_str(&name);
                         qualified_name.push_str("\\");
                     } else {
@@ -187,25 +187,6 @@ impl<'a> DirectDeclSmartConstructors<'a> {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
-pub struct InProgressDecls<'a> {
-    pub classes: List<'a, (&'a str, &'a shallow_decl_defs::ShallowClass<'a>)>,
-    pub funs: List<'a, (&'a str, &'a typing_defs::FunElt<'a>)>,
-    pub typedefs: List<'a, (&'a str, &'a typing_defs::TypedefType<'a>)>,
-    pub consts: List<'a, (&'a str, &'a typing_defs::ConstDecl<'a>)>,
-    pub records: List<'a, (&'a str, &'a typing_defs::RecordDefType<'a>)>,
-}
-
-pub fn empty_decls() -> InProgressDecls<'static> {
-    InProgressDecls {
-        classes: List::empty(),
-        funs: List::empty(),
-        typedefs: List::empty(),
-        consts: List::empty(),
-        records: List::empty(),
-    }
-}
-
 fn prefix_slash<'a>(arena: &'a Bump, name: &str) -> &'a str {
     let mut s = String::with_capacity_in(1 + name.len(), arena);
     s.push('\\');
@@ -246,19 +227,18 @@ fn tany() -> &'static Ty<'static> {
     TANY
 }
 
-fn tarraykey<'a>(arena: &'a Bump) -> &'a Ty<'a> {
+fn default_capability<'a>(arena: &'a Bump, default_pos: &'a Pos<'a>) -> &'a Ty<'a> {
     arena.alloc(Ty(
-        Reason::none(),
-        Ty_::Tprim(arena.alloc(aast::Tprim::Tarraykey)),
+        arena.alloc(Reason::hint(default_pos)),
+        Ty_::Tapply(arena.alloc((
+            Id(default_pos, naming_special_names::coeffects::DEFAULTS),
+            &[][..],
+        ))),
     ))
 }
 
-fn default_capability<'a>(arena: &'a Bump, r: Reason<'a>) -> &'a Ty<'a> {
-    arena.alloc(Ty(arena.alloc(r), Ty_::Tunion(&[])))
-}
-
 fn default_ifc_fun_decl<'a>() -> IfcFunDecl<'a> {
-    IfcFunDecl::FDPolicied(Some("#PUBLIC"))
+    IfcFunDecl::FDPolicied(Some("PUBLIC"))
 }
 
 #[derive(Debug)]
@@ -280,10 +260,10 @@ fn read_member_modifiers<'a: 'b, 'b>(modifiers: impl Iterator<Item = &'b Node<'a
         if let Some(vis) = modifier.as_visibility() {
             ret.visibility = vis;
         }
-        match modifier {
-            Node::Token(TokenKind::Static) => ret.is_static = true,
-            Node::Token(TokenKind::Abstract) => ret.is_abstract = true,
-            Node::Token(TokenKind::Final) => ret.is_final = true,
+        match modifier.token_kind() {
+            Some(TokenKind::Static) => ret.is_static = true,
+            Some(TokenKind::Abstract) => ret.is_abstract = true,
+            Some(TokenKind::Final) => ret.is_final = true,
             _ => {}
         }
     }
@@ -468,7 +448,7 @@ impl<'a> ClassishNameBuilder<'a> {
 pub struct State<'a> {
     pub source_text: IndexedSourceText<'a>,
     pub arena: &'a bumpalo::Bump,
-    pub decls: InProgressDecls<'a>,
+    pub decls: Decls<'a>,
     filename: &'a RelativePath<'a>,
     file_mode: Mode,
     namespace_builder: Rc<NamespaceBuilder<'a>>,
@@ -494,7 +474,7 @@ impl<'a> State<'a> {
             arena,
             filename: arena.alloc(filename),
             file_mode,
-            decls: empty_decls(),
+            decls: Decls::empty(),
             namespace_builder: Rc::new(NamespaceBuilder::new_in(auto_namespace_map, arena)),
             classish_name_builder: ClassishNameBuilder::new(),
             type_parameters: Rc::new(Vec::new_in(arena)),
@@ -507,7 +487,7 @@ impl<'a> State<'a> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct FunParamDecl<'a> {
     attributes: Node<'a>,
     visibility: Node<'a>,
@@ -518,7 +498,7 @@ pub struct FunParamDecl<'a> {
     initializer: Node<'a>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct FunctionHeader<'a> {
     name: Node<'a>,
     modifiers: Node<'a>,
@@ -526,15 +506,16 @@ pub struct FunctionHeader<'a> {
     param_list: Node<'a>,
     capability: Node<'a>,
     ret_hint: Node<'a>,
+    where_constraints: Node<'a>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct RequireClause<'a> {
     require_type: Node<'a>,
     name: Node<'a>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct TypeParameterDecl<'a> {
     name: Node<'a>,
     reified: aast::ReifyKind,
@@ -544,43 +525,43 @@ pub struct TypeParameterDecl<'a> {
     user_attributes: &'a [&'a UserAttributeNode<'a>],
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ClosureTypeHint<'a> {
     args: Node<'a>,
     ret_hint: Node<'a>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct NamespaceUseClause<'a> {
     id: Id<'a>,
     as_: Option<&'a str>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ConstructorNode<'a> {
     method: &'a ShallowMethod<'a>,
     properties: &'a [ShallowProp<'a>],
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct MethodNode<'a> {
     method: &'a ShallowMethod<'a>,
     is_static: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct PropertyNode<'a> {
     decls: &'a [ShallowProp<'a>],
     is_static: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct XhpClassAttributeDeclarationNode<'a> {
     xhp_attr_decls: &'a [ShallowProp<'a>],
     xhp_attr_uses_decls: &'a [Node<'a>],
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct XhpClassAttributeNode<'a> {
     name: Id<'a>,
     tag: Option<XhpAttrTag>,
@@ -589,18 +570,73 @@ pub struct XhpClassAttributeNode<'a> {
     hint: Node<'a>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ShapeFieldNode<'a> {
     name: &'a ShapeField<'a>,
     type_: &'a ShapeFieldType<'a>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
+struct ClassNameParam<'a> {
+    name: Id<'a>,
+    full_pos: &'a Pos<'a>, // Position of the full expression `Foo::class`
+}
+
+#[derive(Debug)]
 pub struct UserAttributeNode<'a> {
     name: Id<'a>,
-    classname_params: &'a [Id<'a>],
+    classname_params: &'a [ClassNameParam<'a>],
     string_literal_params: &'a [&'a BStr], // this is only used for __Deprecated attribute message and Cipp parameters
 }
+
+mod fixed_width_token {
+    use parser_core_types::token_kind::TokenKind;
+    use std::convert::TryInto;
+
+    #[derive(Copy, Clone)]
+    pub struct FixedWidthToken(u64); // { offset: u56, kind: TokenKind }
+
+    const KIND_BITS: u8 = 8;
+    const KIND_MASK: u64 = u8::MAX as u64;
+    const MAX_OFFSET: u64 = !(KIND_MASK << (64 - KIND_BITS));
+
+    impl FixedWidthToken {
+        pub fn new(kind: TokenKind, offset: usize) -> Self {
+            // We don't want to spend bits tracking the width of fixed-width
+            // tokens. Since we don't track width, verify that this token kind
+            // is in fact a fixed-width kind.
+            debug_assert!(kind.fixed_width().is_some());
+
+            let offset: u64 = offset.try_into().unwrap();
+            if offset > MAX_OFFSET {
+                panic!("FixedWidthToken: offset too large");
+            }
+            Self(offset << KIND_BITS | kind as u8 as u64)
+        }
+
+        pub fn offset(self) -> usize {
+            (self.0 >> KIND_BITS).try_into().unwrap()
+        }
+
+        pub fn kind(self) -> TokenKind {
+            TokenKind::try_from_u8(self.0 as u8).unwrap()
+        }
+
+        pub fn width(self) -> usize {
+            self.kind().fixed_width().unwrap().get()
+        }
+    }
+
+    impl std::fmt::Debug for FixedWidthToken {
+        fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+            fmt.debug_struct("FixedWidthToken")
+                .field("kind", &self.kind())
+                .field("offset", &self.offset())
+                .finish()
+        }
+    }
+}
+use fixed_width_token::FixedWidthToken;
 
 #[derive(Copy, Clone, Debug)]
 pub enum Node<'a> {
@@ -624,17 +660,11 @@ pub enum Node<'a> {
     Name(&'a (&'a str, &'a Pos<'a>)),
     XhpName(&'a (&'a str, &'a Pos<'a>)),
     QualifiedName(&'a (&'a [Node<'a>], &'a Pos<'a>)),
-    Array(&'a Pos<'a>),
-    Darray(&'a Pos<'a>),
-    Varray(&'a Pos<'a>),
     StringLiteral(&'a (&'a BStr, &'a Pos<'a>)), // For shape keys and const expressions.
     IntLiteral(&'a (&'a str, &'a Pos<'a>)),     // For const expressions.
     FloatingLiteral(&'a (&'a str, &'a Pos<'a>)), // For const expressions.
     BooleanLiteral(&'a (&'a str, &'a Pos<'a>)), // For const expressions.
-    Null(&'a Pos<'a>),                          // For const expressions.
     Ty(&'a Ty<'a>),
-    TypeconstAccess(&'a (Cell<&'a Pos<'a>>, &'a Ty<'a>, RefCell<Vec<'a, Id<'a>>>)),
-    Backslash(&'a Pos<'a>), // This needs a pos since it shows up in names.
     ListItem(&'a (Node<'a>, Node<'a>)),
     Const(&'a ShallowClassConst<'a>),
     ConstInitializer(&'a (Node<'a>, Node<'a>)), // Name, initializer expression
@@ -648,7 +678,6 @@ pub enum Node<'a> {
     XhpClassAttributeDeclaration(&'a XhpClassAttributeDeclarationNode<'a>),
     XhpClassAttribute(&'a XhpClassAttributeNode<'a>),
     XhpAttributeUse(&'a Node<'a>),
-    XhpEnumType(&'a Node<'a>),
     TypeConstant(&'a ShallowTypeconst<'a>),
     RequireClause(&'a RequireClause<'a>),
     ClassishBody(&'a &'a [Node<'a>]),
@@ -657,20 +686,12 @@ pub enum Node<'a> {
     ShapeFieldSpecifier(&'a ShapeFieldNode<'a>),
     NamespaceUseClause(&'a NamespaceUseClause<'a>),
     Expr(&'a nast::Expr<'a>),
-    Operator(&'a (&'a Pos<'a>, TokenKind)),
-    Construct(&'a Pos<'a>),
-    This(&'a Pos<'a>), // This needs a pos since it shows up in Taccess.
     TypeParameters(&'a &'a [&'a Tparam<'a>]),
     WhereConstraint(&'a WhereConstraint<'a>),
     RecordField(&'a (Id<'a>, RecordFieldReq)),
 
-    // For cases where the position of a node is included in some outer
-    // position, but we do not need to track any further information about that
-    // node (for instance, the parentheses surrounding a tuple type).
-    Pos(&'a Pos<'a>),
-
-    // Simple keywords and tokens.
-    Token(TokenKind),
+    // Non-ignored, fixed-width tokens (e.g., keywords, operators, braces, etc.).
+    Token(FixedWidthToken),
 }
 
 impl<'a> smart_constructors::NodeType for Node<'a> {
@@ -681,7 +702,7 @@ impl<'a> smart_constructors::NodeType for Node<'a> {
     }
 
     fn is_abstract(&self) -> bool {
-        matches!(self, Node::Token(TokenKind::Abstract))
+        self.is_token(TokenKind::Abstract)
     }
     fn is_name(&self) -> bool {
         matches!(self, Node::Name(..))
@@ -722,6 +743,17 @@ impl<'a> smart_constructors::NodeType for Node<'a> {
 }
 
 impl<'a> Node<'a> {
+    fn is_token(self, kind: TokenKind) -> bool {
+        self.token_kind() == Some(kind)
+    }
+
+    fn token_kind(self) -> Option<TokenKind> {
+        match self {
+            Node::Token(token) => Some(token.kind()),
+            _ => None,
+        }
+    }
+
     fn as_slice(self, b: &'a Bump) -> &'a [Self] {
         match self {
             Node::List(&items) | Node::BracketedList(&(_, items, _)) => items,
@@ -754,10 +786,10 @@ impl<'a> Node<'a> {
     }
 
     fn as_visibility(&self) -> Option<aast::Visibility> {
-        match self {
-            Node::Token(TokenKind::Private) => Some(aast::Visibility::Private),
-            Node::Token(TokenKind::Protected) => Some(aast::Visibility::Protected),
-            Node::Token(TokenKind::Public) => Some(aast::Visibility::Public),
+        match self.token_kind() {
+            Some(TokenKind::Private) => Some(aast::Visibility::Private),
+            Some(TokenKind::Protected) => Some(aast::Visibility::Protected),
+            Some(TokenKind::Public) => Some(aast::Visibility::Public),
             _ => None,
         }
     }
@@ -781,6 +813,7 @@ impl<'a> Node<'a> {
 
 struct Attributes<'a> {
     reactivity: Reactivity<'a>,
+    reactivity_condition_type: Option<&'a Ty<'a>>,
     param_mutability: Option<ParamMutability>,
     deprecated: Option<&'a str>,
     reifiable: Option<&'a Pos<'a>>,
@@ -797,30 +830,37 @@ struct Attributes<'a> {
     dynamically_callable: bool,
     returns_disposable: bool,
     php_std_lib: bool,
-    policied: IfcFunDecl<'a>,
+    ifc_attribute: IfcFunDecl<'a>,
     external: bool,
     can_call: bool,
+    atom: bool,
 }
 
 impl<'a> DirectDeclSmartConstructors<'a> {
     fn add_class(&mut self, name: &'a str, decl: &'a shallow_decl_defs::ShallowClass<'a>) {
-        self.state.decls.classes =
-            List::cons((name, decl), self.state.decls.classes, self.state.arena);
+        self.state
+            .decls
+            .add(name, Decl::Class(decl), self.state.arena);
     }
     fn add_fun(&mut self, name: &'a str, decl: &'a typing_defs::FunElt<'a>) {
-        self.state.decls.funs = List::cons((name, decl), self.state.decls.funs, self.state.arena);
+        self.state
+            .decls
+            .add(name, Decl::Fun(decl), self.state.arena);
     }
     fn add_typedef(&mut self, name: &'a str, decl: &'a typing_defs::TypedefType<'a>) {
-        self.state.decls.typedefs =
-            List::cons((name, decl), self.state.decls.typedefs, self.state.arena);
+        self.state
+            .decls
+            .add(name, Decl::Typedef(decl), self.state.arena);
     }
     fn add_const(&mut self, name: &'a str, decl: &'a typing_defs::ConstDecl<'a>) {
-        self.state.decls.consts =
-            List::cons((name, decl), self.state.decls.consts, self.state.arena);
+        self.state
+            .decls
+            .add(name, Decl::Const(decl), self.state.arena);
     }
     fn add_record(&mut self, name: &'a str, decl: &'a typing_defs::RecordDefType<'a>) {
-        self.state.decls.records =
-            List::cons((name, decl), self.state.decls.records, self.state.arena);
+        self.state
+            .decls
+            .add(name, Decl::Record(decl), self.state.arena);
     }
 
     #[inline(always)]
@@ -865,7 +905,7 @@ impl<'a> DirectDeclSmartConstructors<'a> {
         self.merge(self.get_pos(node1), self.get_pos(node2))
     }
 
-    fn pos_from_slice(&self, nodes: &'a [Node<'a>]) -> &'a Pos<'a> {
+    fn pos_from_slice(&self, nodes: &[Node<'a>]) -> &'a Pos<'a> {
         nodes.iter().fold(Pos::none(), |acc, &node| {
             self.merge(acc, self.get_pos(node))
         })
@@ -875,22 +915,12 @@ impl<'a> DirectDeclSmartConstructors<'a> {
         match node {
             Node::Name(&(_, pos)) => pos,
             Node::Ty(ty) => ty.get_pos().unwrap_or(Pos::none()),
-            Node::TypeconstAccess((pos, _, _)) => pos.get(),
             Node::XhpName(&(_, pos)) => pos,
             Node::QualifiedName(&(_, pos)) => pos,
-            Node::Pos(pos)
-            | Node::Backslash(pos)
-            | Node::Construct(pos)
-            | Node::This(pos)
-            | Node::Array(pos)
-            | Node::Darray(pos)
-            | Node::Varray(pos)
-            | Node::IntLiteral(&(_, pos))
+            Node::IntLiteral(&(_, pos))
             | Node::FloatingLiteral(&(_, pos))
-            | Node::Null(pos)
             | Node::StringLiteral(&(_, pos))
-            | Node::BooleanLiteral(&(_, pos))
-            | Node::Operator(&(pos, _)) => pos,
+            | Node::BooleanLiteral(&(_, pos)) => pos,
             Node::ListItem(&(fst, snd)) => self.merge_positions(fst, snd),
             Node::List(items) => self.pos_from_slice(&items),
             Node::BracketedList(&(first_pos, inner_list, second_pos)) => self.merge(
@@ -898,8 +928,17 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                 self.merge(self.pos_from_slice(inner_list), second_pos),
             ),
             Node::Expr(&aast::Expr(pos, _)) => pos,
+            Node::Token(token) => self.token_pos(token),
             _ => Pos::none(),
         }
+    }
+
+    fn token_pos(&self, token: FixedWidthToken) -> &'a Pos<'a> {
+        let start = token.offset();
+        let end = start + token.width();
+        let start = self.state.source_text.offset_to_file_pos_triple(start);
+        let end = self.state.source_text.offset_to_file_pos_triple(end);
+        Pos::from_lnum_bol_cnum(self.state.arena, self.state.filename, start, end)
     }
 
     fn node_to_expr(&self, node: Node<'a>) -> Option<&'a nast::Expr<'a>> {
@@ -915,7 +954,7 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                     aast::Expr_::False
                 }
             }
-            Node::Null(_) => aast::Expr_::Null,
+            Node::Token(t) if t.kind() == TokenKind::NullLiteral => aast::Expr_::Null,
             Node::Name(..) | Node::QualifiedName(..) => {
                 aast::Expr_::Id(self.alloc(self.elaborate_name(node)?))
             }
@@ -928,22 +967,6 @@ impl<'a> DirectDeclSmartConstructors<'a> {
     fn node_to_ty(&self, node: Node<'a>) -> Option<&'a Ty<'a>> {
         match node {
             Node::Ty(ty) => Some(ty),
-            Node::TypeconstAccess((pos, ty, names)) => {
-                let pos = pos.get();
-                let names = self.slice(names.borrow().iter().copied());
-                Some(self.alloc(Ty(
-                    self.alloc(Reason::hint(pos)),
-                    Ty_::Taccess(self.alloc(typing_defs::TaccessType(*ty, names))),
-                )))
-            }
-            Node::Varray(pos) => {
-                Some(self.alloc(Ty(self.alloc(Reason::hint(pos)), Ty_::Tvarray(tany()))))
-            }
-            Node::Darray(pos) => Some(self.alloc(Ty(
-                self.alloc(Reason::hint(pos)),
-                Ty_::Tdarray(self.alloc((tany(), tany()))),
-            ))),
-            Node::This(pos) => Some(self.alloc(Ty(self.alloc(Reason::hint(pos)), Ty_::Tthis))),
             Node::Expr(expr) => {
                 fn expr_to_ty<'a>(arena: &'a Bump, expr: &'a nast::Expr<'a>) -> Option<Ty_<'a>> {
                     use aast::Expr_::*;
@@ -963,7 +986,7 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                         ArrayGet(_) | As(_) | Assert(_) | Await(_) | Binop(_) | BracedExpr(_)
                         | Call(_) | Callconv(_) | Cast(_) | ClassConst(_) | ClassGet(_)
                         | Clone(_) | Collection(_) | Darray(_) | Dollardollar(_) | Efun(_)
-                        | Eif(_) | ETSplice(_) | ExpressionTree(_) | ExprList(_)
+                        | Eif(_) | EnumAtom(_) | ETSplice(_) | ExpressionTree(_) | ExprList(_)
                         | FunctionPointer(_) | FunId(_) | Id(_) | Import(_) | Is(_)
                         | KeyValCollection(_) | Lfun(_) | List(_) | Lplaceholder(_) | Lvar(_)
                         | MethodCaller(_) | MethodId(_) | New(_) | ObjGet(_) | Omitted
@@ -994,12 +1017,28 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                 self.alloc(Reason::witness(pos)),
                 Ty_::Tprim(self.alloc(aast::Tprim::Tbool)),
             ))),
-            Node::Null(pos) => Some(self.alloc(Ty(
-                self.alloc(Reason::hint(pos)),
-                Ty_::Tprim(self.alloc(aast::Tprim::Tnull)),
-            ))),
-            Node::XhpEnumType(enum_values) => {
-                enum_values.iter().next().map(|x| self.node_to_ty(*x))?
+            Node::Token(t) if t.kind() == TokenKind::Varray => {
+                let pos = self.token_pos(t);
+                let tany = self.alloc(Ty(self.alloc(Reason::hint(pos)), TANY_));
+                Some(self.alloc(Ty(self.alloc(Reason::hint(pos)), Ty_::Tvarray(tany))))
+            }
+            Node::Token(t) if t.kind() == TokenKind::Darray => {
+                let pos = self.token_pos(t);
+                let tany = self.alloc(Ty(self.alloc(Reason::hint(pos)), TANY_));
+                Some(self.alloc(Ty(
+                    self.alloc(Reason::hint(pos)),
+                    Ty_::Tdarray(self.alloc((tany, tany))),
+                )))
+            }
+            Node::Token(t) if t.kind() == TokenKind::This => {
+                Some(self.alloc(Ty(self.alloc(Reason::hint(self.token_pos(t))), Ty_::Tthis)))
+            }
+            Node::Token(t) if t.kind() == TokenKind::NullLiteral => {
+                let pos = self.token_pos(t);
+                Some(self.alloc(Ty(
+                    self.alloc(Reason::hint(pos)),
+                    Ty_::Tprim(self.alloc(aast::Tprim::Tnull)),
+                )))
             }
             node => {
                 let Id(pos, name) = self.expect_name(node)?;
@@ -1013,7 +1052,9 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                         "nonnull" => Ty_::Tnonnull,
                         "dynamic" => Ty_::Tdynamic,
                         "varray_or_darray" => {
-                            Ty_::TvarrayOrDarray(self.alloc((tarraykey(self.state.arena), tany())))
+                            let key_type = self.varray_or_darray_key(pos);
+                            let value_type = self.alloc(Ty(self.alloc(Reason::hint(pos)), TANY_));
+                            Ty_::TvarrayOrDarray(self.alloc((key_type, value_type)))
                         }
                         _ => {
                             let name =
@@ -1030,6 +1071,7 @@ impl<'a> DirectDeclSmartConstructors<'a> {
     fn to_attributes(&self, node: Node<'a>) -> Attributes<'a> {
         let mut attributes = Attributes {
             reactivity: Reactivity::Nonreactive,
+            reactivity_condition_type: None,
             param_mutability: None,
             deprecated: None,
             reifiable: None,
@@ -1046,21 +1088,22 @@ impl<'a> DirectDeclSmartConstructors<'a> {
             dynamically_callable: false,
             returns_disposable: false,
             php_std_lib: false,
-            policied: default_ifc_fun_decl(),
+            ifc_attribute: default_ifc_fun_decl(),
             external: false,
             can_call: false,
+            atom: false,
         };
 
         // If we see the attribute `__OnlyRxIfImpl(Foo::class)`, set
         // `reactivity_condition_type` to `Foo`.
-        let reactivity_condition_type = node.iter().find_map(|attr| match attr {
+        attributes.reactivity_condition_type = node.iter().find_map(|attr| match attr {
             Node::Attribute(UserAttributeNode {
                 name: Id(_, "__OnlyRxIfImpl"),
-                classname_params: &[class_name],
+                classname_params: &[param],
                 ..
             }) => Some(self.alloc(Ty(
-                self.alloc(Reason::hint(class_name.0)),
-                Ty_::Tapply(self.alloc((class_name, &[][..]))),
+                self.alloc(Reason::hint(param.full_pos)),
+                Ty_::Tapply(self.alloc((param.name, &[][..]))),
             ))),
             _ => None,
         });
@@ -1070,8 +1113,9 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                 .string_literal_params
                 .first()
                 .map(|&x| self.str_from_utf8(x))
-                .or_else(|| attribute.classname_params.first().map(|x| x.1))
+                .or_else(|| attribute.classname_params.first().map(|x| x.name.1))
         };
+        let mut ifc_already_policied = false;
 
         for attribute in node.iter() {
             if let Node::Attribute(attribute) = attribute {
@@ -1080,16 +1124,20 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                     // __RxShallow, and __RxLocal, so to avoid cloning the
                     // condition type, we use Option::take here.
                     "__Rx" => {
-                        attributes.reactivity = Reactivity::Reactive(reactivity_condition_type)
+                        attributes.reactivity =
+                            Reactivity::Reactive(attributes.reactivity_condition_type)
                     }
                     "__RxShallow" => {
-                        attributes.reactivity = Reactivity::Shallow(reactivity_condition_type)
+                        attributes.reactivity =
+                            Reactivity::Shallow(attributes.reactivity_condition_type)
                     }
                     "__RxLocal" => {
-                        attributes.reactivity = Reactivity::Local(reactivity_condition_type)
+                        attributes.reactivity =
+                            Reactivity::Local(attributes.reactivity_condition_type)
                     }
                     "__Pure" => {
-                        attributes.reactivity = Reactivity::Pure(reactivity_condition_type);
+                        attributes.reactivity =
+                            Reactivity::Pure(attributes.reactivity_condition_type);
                     }
                     "__Cipp" => {
                         attributes.reactivity = Reactivity::Cipp(string_or_classname_arg(attribute))
@@ -1163,20 +1211,26 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                                 .map(|&x| self.str_from_utf8(x))
                         };
                         // Take the classname param by default
-                        attributes.policied =
+                        attributes.ifc_attribute =
                             IfcFunDecl::FDPolicied(attribute.classname_params.first().map_or_else(
                                 string_literal_params, // default
-                                |&x| Some(x.1),        // f
+                                |&x| Some(x.name.1),   // f
                             ));
+                        ifc_already_policied = true;
                     }
                     "__InferFlows" => {
-                        attributes.policied = IfcFunDecl::FDInferFlows;
+                        if !ifc_already_policied {
+                            attributes.ifc_attribute = IfcFunDecl::FDInferFlows;
+                        }
                     }
                     "__External" => {
                         attributes.external = true;
                     }
                     "__CanCall" => {
                         attributes.can_call = true;
+                    }
+                    "__Atom" => {
+                        attributes.atom = true;
                     }
                     _ => {}
                 }
@@ -1195,10 +1249,16 @@ impl<'a> DirectDeclSmartConstructors<'a> {
             | Node::BooleanLiteral(_)
             | Node::IntLiteral(_)
             | Node::FloatingLiteral(_)
-            | Node::Null(_)
             | Node::Expr(aast::Expr(_, aast::Expr_::Unop(&(Uop::Uminus, _))))
             | Node::Expr(aast::Expr(_, aast::Expr_::Unop(&(Uop::Uplus, _)))) => {
                 self.node_to_ty(node)
+            }
+            Node::Token(t) if t.kind() == TokenKind::NullLiteral => {
+                let pos = self.token_pos(t);
+                Some(self.alloc(Ty(
+                    self.alloc(Reason::witness(pos)),
+                    Ty_::Tprim(self.alloc(aast::Tprim::Tnull)),
+                )))
             }
             _ => Some(self.tany_with_pos(self.get_pos(name))),
         }
@@ -1276,10 +1336,9 @@ impl<'a> DirectDeclSmartConstructors<'a> {
         capability: Node<'a>,
         default_pos: &'a Pos<'a>,
     ) -> &'a FunImplicitParams<'a> {
-        let capability = self.node_to_ty(capability).unwrap_or(default_capability(
-            self.state.arena,
-            Reason::hint(default_pos),
-        ));
+        let capability = self
+            .node_to_ty(capability)
+            .unwrap_or_else(|| default_capability(self.state.arena, default_pos));
         self.alloc(FunImplicitParams { capability })
     }
 
@@ -1291,7 +1350,8 @@ impl<'a> DirectDeclSmartConstructors<'a> {
         body: Node,
     ) -> Option<(Id<'a>, &'a Ty<'a>, &'a [ShallowProp<'a>])> {
         let id_opt = match (is_method, header.name) {
-            (true, Node::Construct(pos)) => {
+            (true, Node::Token(t)) if t.kind() == TokenKind::Construct => {
+                let pos = self.token_pos(t);
                 Some(Id(pos, naming_special_names::members::__CONSTRUCT))
             }
             (true, _) => self.expect_name(header.name),
@@ -1303,10 +1363,13 @@ impl<'a> DirectDeclSmartConstructors<'a> {
         let implicit_params = self.as_fun_implicit_params(header.capability, f_pos);
 
         let type_ = match header.name {
-            Node::Construct(pos) => self.alloc(Ty(
-                self.alloc(Reason::witness(pos)),
-                Ty_::Tprim(self.alloc(aast::Tprim::Tvoid)),
-            )),
+            Node::Token(t) if t.kind() == TokenKind::Construct => {
+                let pos = self.token_pos(t);
+                self.alloc(Ty(
+                    self.alloc(Reason::witness(pos)),
+                    Ty_::Tprim(self.alloc(aast::Tprim::Tvoid)),
+                ))
+            }
             _ => self
                 .node_to_ty(header.ret_hint)
                 .unwrap_or_else(|| self.tany_with_pos(f_pos)),
@@ -1314,11 +1377,8 @@ impl<'a> DirectDeclSmartConstructors<'a> {
         let async_ = header
             .modifiers
             .iter()
-            .any(|n| matches!(n, Node::Token(TokenKind::Async)));
-        let fun_kind = if body.iter().any(|node| match node {
-            Node::Token(TokenKind::Yield) => true,
-            _ => false,
-        }) {
+            .any(|n| n.is_token(TokenKind::Async));
+        let fun_kind = if body.iter().any(|node| node.is_token(TokenKind::Yield)) {
             if async_ {
                 FunKind::FAsyncGenerator
             } else {
@@ -1354,15 +1414,22 @@ impl<'a> DirectDeclSmartConstructors<'a> {
         if attributes.returns_void_to_rx {
             flags |= FunTypeFlags::RETURNS_VOID_TO_RX;
         }
-        let ifc_decl = attributes.policied;
+        let ifc_decl = attributes.ifc_attribute;
 
         flags |= Self::param_mutability_to_fun_type_flags(attributes.param_mutability);
         // Pop the type params stack only after creating all inner types.
         let tparams = self.pop_type_params(header.type_params);
+
+        let where_constraints =
+            self.slice(header.where_constraints.iter().filter_map(|&x| match x {
+                Node::WhereConstraint(x) => Some(x),
+                _ => None,
+            }));
+
         let ft = self.alloc(FunType {
             arity,
             tparams,
-            where_constraints: &[],
+            where_constraints,
             params,
             implicit_params,
             ret: self.alloc(PossiblyEnforcedTy {
@@ -1419,7 +1486,7 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                                 properties.push(ShallowProp {
                                     const_: false,
                                     xhp_attr: None,
-                                    lateinit: attributes.late_init,
+                                    lateinit: false,
                                     lsb: false,
                                     name: Id(pos, name),
                                     needs_init: true,
@@ -1430,24 +1497,28 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                             }
 
                             let type_ = if hint.is_ignored() {
-                                tany()
+                                self.tany_with_pos(id.0)
                             } else {
                                 self.node_to_ty(hint).map(|ty| match ty {
-                                    Ty(r, Ty_::Tfun(fun_type)) if attributes.at_most_rx_as_func => {
-                                        let mut fun_type = (*fun_type).clone();
-                                        fun_type.reactive = Reactivity::RxVar(None);
-                                        self.alloc(Ty(r, Ty_::Tfun(self.alloc(fun_type))))
-                                    }
-                                    Ty(r, Ty_::Toption(Ty(r1, Ty_::Tfun(fun_type))))
+                                    &Ty(r, Ty_::Tfun(fun_type))
                                         if attributes.at_most_rx_as_func =>
                                     {
-                                        let mut fun_type = (*fun_type).clone();
-                                        fun_type.reactive = Reactivity::RxVar(None);
+                                        let fun_type = self.alloc(FunType {
+                                            reactive: Reactivity::RxVar(None),
+                                            ..*fun_type
+                                        });
+                                        self.alloc(Ty(r, Ty_::Tfun(fun_type)))
+                                    }
+                                    &Ty(r, Ty_::Toption(&Ty(r1, Ty_::Tfun(fun_type))))
+                                        if attributes.at_most_rx_as_func =>
+                                    {
+                                        let fun_type = self.alloc(FunType {
+                                            reactive: Reactivity::RxVar(None),
+                                            ..*fun_type
+                                        });
                                         self.alloc(Ty(
                                             r,
-                                            Ty_::Toption(
-                                                self.alloc(Ty(r1, Ty_::Tfun(self.alloc(fun_type)))),
-                                            ),
+                                            Ty_::Toption(self.alloc(Ty(r1, Ty_::Tfun(fun_type)))),
                                         ))
                                     }
                                     ty => ty,
@@ -1474,6 +1545,9 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                             if attributes.can_call {
                                 flags |= FunParamFlags::IFC_CAN_CALL
                             }
+                            if attributes.atom {
+                                flags |= FunParamFlags::ATOM
+                            }
                             match kind {
                                 ParamMode::FPinout => {
                                     flags |= FunParamFlags::INOUT;
@@ -1483,6 +1557,19 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                             if initializer.is_present() {
                                 flags |= FunParamFlags::HAS_DEFAULT;
                             }
+                            let variadic = initializer.is_ignored() && variadic;
+                            let type_ = if variadic {
+                                self.alloc(Ty(self.alloc(Reason::RvarParam(id.0)), type_.1))
+                            } else {
+                                type_
+                            };
+                            let rx_annotation = if attributes.at_most_rx_as_func {
+                                Some(ParamRxAnnotation::ParamRxVar)
+                            } else {
+                                attributes
+                                    .reactivity_condition_type
+                                    .map(|ty| ParamRxAnnotation::ParamRxIfImpl(ty))
+                            };
                             let param = self.alloc(FunParam {
                                 pos: id.0,
                                 name: Some(id.1),
@@ -1491,12 +1578,10 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                                     type_,
                                 }),
                                 flags,
-                                rx_annotation: None,
+                                rx_annotation,
                             });
                             arity = match arity {
-                                FunArity::Fstandard if initializer.is_ignored() && variadic => {
-                                    FunArity::Fvariadic(param)
-                                }
+                                FunArity::Fstandard if variadic => FunArity::Fvariadic(param),
                                 arity => {
                                     params.push(param);
                                     arity
@@ -1562,34 +1647,54 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                 .filter_map(|&node| self.node_to_ty(node)),
         );
 
+        let pos = self.merge(base_ty.0, pos_to_merge);
+
+        // OCaml decl creates a capability with a hint pointing to the entire
+        // type (i.e., pointing to `Rx<(function(): void)>` rather than just
+        // `(function(): void)`), so we extend the hint position similarly here.
+        let extend_capability_pos = |implicit_params: &'a FunImplicitParams| {
+            self.alloc(FunImplicitParams {
+                capability: self.alloc(Ty(
+                    self.alloc(Reason::hint(pos)),
+                    implicit_params.capability.1,
+                )),
+                ..*implicit_params
+            })
+        };
+
         let ty_ = match (base_ty, type_arguments) {
-            (Id(_, name), &[Ty(_, Ty_::Tfun(f))]) if name == "\\Pure" => {
+            (Id(_, name), &[&Ty(_, Ty_::Tfun(f))]) if name == "\\Pure" => {
                 Ty_::Tfun(self.alloc(FunType {
                     reactive: Reactivity::Pure(None),
-                    ..(*f).clone()
+                    implicit_params: extend_capability_pos(f.implicit_params),
+                    ..*f
                 }))
             }
-            (Id(_, name), &[Ty(_, Ty_::Tfun(f))]) if name == "\\Rx" => {
+            (Id(_, name), &[&Ty(_, Ty_::Tfun(f))]) if name == "\\Rx" => {
                 Ty_::Tfun(self.alloc(FunType {
                     reactive: Reactivity::Reactive(None),
-                    ..(*f).clone()
+                    implicit_params: extend_capability_pos(f.implicit_params),
+                    ..*f
                 }))
             }
-            (Id(_, name), &[Ty(_, Ty_::Tfun(f))]) if name == "\\RxShallow" => {
+            (Id(_, name), &[&Ty(_, Ty_::Tfun(f))]) if name == "\\RxShallow" => {
                 Ty_::Tfun(self.alloc(FunType {
                     reactive: Reactivity::Shallow(None),
-                    ..(*f).clone()
+                    implicit_params: extend_capability_pos(f.implicit_params),
+                    ..*f
                 }))
             }
-            (Id(_, name), &[Ty(_, Ty_::Tfun(f))]) if name == "\\RxLocal" => {
+            (Id(_, name), &[&Ty(_, Ty_::Tfun(f))]) if name == "\\RxLocal" => {
                 Ty_::Tfun(self.alloc(FunType {
                     reactive: Reactivity::Local(None),
-                    ..(*f).clone()
+                    implicit_params: extend_capability_pos(f.implicit_params),
+                    ..*f
                 }))
             }
             _ => Ty_::Tapply(self.alloc((base_ty, type_arguments))),
         };
-        self.hint_ty(self.merge(base_ty.0, pos_to_merge), ty_)
+
+        self.hint_ty(pos, ty_)
     }
 
     fn hint_ty(&self, pos: &'a Pos<'a>, ty_: Ty_<'a>) -> Node<'a> {
@@ -1602,6 +1707,14 @@ impl<'a> DirectDeclSmartConstructors<'a> {
 
     fn tany_with_pos(&self, pos: &'a Pos<'a>) -> &'a Ty<'a> {
         self.alloc(Ty(self.alloc(Reason::witness(pos)), TANY_))
+    }
+
+    /// The type used when a `varray_or_darray` typehint is missing its key type argument.
+    fn varray_or_darray_key(&self, pos: &'a Pos<'a>) -> &'a Ty<'a> {
+        self.alloc(Ty(
+            self.alloc(Reason::RvarrayOrDarrayKey(pos)),
+            Ty_::Tprim(self.alloc(aast::Tprim::Tarraykey)),
+        ))
     }
 
     fn source_text_at_pos(&self, pos: &'a Pos<'a>) -> &'a [u8] {
@@ -1658,7 +1771,6 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                     params,
                     implicit_params,
                     ret,
-                    reactive: fun_type.reactive.clone(),
                     ..*fun_type
                 }))
             }
@@ -1729,7 +1841,7 @@ impl<'a> DirectDeclSmartConstructors<'a> {
     ) -> &'a shallow_decl_defs::UserAttribute<'a> {
         self.alloc(shallow_decl_defs::UserAttribute {
             name: attr.name,
-            classname_params: self.slice(attr.classname_params.iter().map(|Id(_, s)| *s)),
+            classname_params: self.slice(attr.classname_params.iter().map(|p| p.name.1)),
         })
     }
 }
@@ -1795,7 +1907,7 @@ impl<'a> FlattenOp for DirectDeclSmartConstructors<'a> {
         let mut r = Vec::with_capacity_in(size, self.state.arena);
         for s in lst.into_iter() {
             match s {
-                Node::List(children) => r.extend(children.iter().cloned()),
+                Node::List(children) => r.extend(children.iter().copied()),
                 x => {
                     if !Self::is_zero(&x) {
                         r.push(x)
@@ -1816,9 +1928,10 @@ impl<'a> FlattenOp for DirectDeclSmartConstructors<'a> {
 
     fn is_zero(s: &Self::S) -> bool {
         match s {
-            Node::Token(TokenKind::Yield) => false,
-            Node::Token(TokenKind::Required) => false,
-            Node::Token(TokenKind::Lateinit) => false,
+            Node::Token(token) => match token.kind() {
+                TokenKind::Yield | TokenKind::Required | TokenKind::Lateinit => false,
+                _ => true,
+            },
             Node::List(inner) => inner.iter().all(Self::is_zero),
             _ => true,
         }
@@ -1913,7 +2026,6 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             TokenKind::FloatingLiteral => {
                 Node::FloatingLiteral(self.alloc((token_text(self), token_pos(self))))
             }
-            TokenKind::NullLiteral => Node::Null(token_pos(self)),
             TokenKind::BooleanLiteral => {
                 Node::BooleanLiteral(self.alloc((token_text(self), token_pos(self))))
             }
@@ -1936,18 +2048,19 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             TokenKind::Arraykey => self.prim_ty(aast::Tprim::Tarraykey, token_pos(self)),
             TokenKind::Noreturn => self.prim_ty(aast::Tprim::Tnoreturn, token_pos(self)),
             TokenKind::Resource => self.prim_ty(aast::Tprim::Tresource, token_pos(self)),
-            TokenKind::Darray => Node::Darray(token_pos(self)),
-            TokenKind::Varray => Node::Varray(token_pos(self)),
-            TokenKind::Backslash => Node::Backslash(token_pos(self)),
-            TokenKind::Construct => Node::Construct(token_pos(self)),
-            TokenKind::LeftParen
+            TokenKind::NullLiteral
+            | TokenKind::Darray
+            | TokenKind::Varray
+            | TokenKind::Backslash
+            | TokenKind::Construct
+            | TokenKind::LeftParen
             | TokenKind::RightParen
             | TokenKind::LeftBracket
             | TokenKind::RightBracket
             | TokenKind::Shape
-            | TokenKind::Question => Node::Pos(token_pos(self)),
-            TokenKind::This => Node::This(token_pos(self)),
-            TokenKind::Tilde
+            | TokenKind::Question
+            | TokenKind::This
+            | TokenKind::Tilde
             | TokenKind::Exclamation
             | TokenKind::Plus
             | TokenKind::Minus
@@ -1972,8 +2085,8 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             | TokenKind::GreaterThanGreaterThan
             | TokenKind::Percent
             | TokenKind::QuestionQuestion
-            | TokenKind::Equal => Node::Operator(self.alloc((token_pos(self), kind))),
-            TokenKind::Abstract
+            | TokenKind::Equal
+            | TokenKind::Abstract
             | TokenKind::As
             | TokenKind::Super
             | TokenKind::Async
@@ -1994,7 +2107,10 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             | TokenKind::Static
             | TokenKind::Trait
             | TokenKind::Lateinit
-            | TokenKind::Required => Node::Token(kind),
+            | TokenKind::RecordDec
+            | TokenKind::RightBrace
+            | TokenKind::Enum
+            | TokenKind::Required => Node::Token(FixedWidthToken::new(kind, token.start_offset())),
             TokenKind::EndOfFile
             | TokenKind::Attribute
             | TokenKind::Await
@@ -2019,7 +2135,6 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             | TokenKind::Endif
             | TokenKind::Endswitch
             | TokenKind::Endwhile
-            | TokenKind::Enum
             | TokenKind::Eval
             | TokenKind::Fallthrough
             | TokenKind::File
@@ -2048,7 +2163,6 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             | TokenKind::Print
             | TokenKind::Real
             | TokenKind::Record
-            | TokenKind::RecordDec
             | TokenKind::Require
             | TokenKind::Require_once
             | TokenKind::Return
@@ -2063,7 +2177,6 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             | TokenKind::Where
             | TokenKind::While
             | TokenKind::LeftBrace
-            | TokenKind::RightBrace
             | TokenKind::MinusGreaterThan
             | TokenKind::Dollar
             | TokenKind::LessThanEqualGreaterThan
@@ -2108,6 +2221,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             | TokenKind::XHPStringLiteral
             | TokenKind::XHPBody
             | TokenKind::XHPComment
+            | TokenKind::Hash
             | TokenKind::Hashbang => Node::Ignored(SK::Token(kind)),
         };
         self.state.previous_token_kind = kind;
@@ -2119,12 +2233,12 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
     }
 
     fn make_list(&mut self, items: std::vec::Vec<Self::R>, _: usize) -> Self::R {
-        if items
+        if let Some(&yield_) = items
             .iter()
             .flat_map(|node| node.iter())
-            .any(|node| matches!(node, Node::Token(TokenKind::Yield)))
+            .find(|node| node.is_token(TokenKind::Yield))
         {
-            Node::Token(TokenKind::Yield)
+            yield_
         } else {
             let size = items.iter().filter(|node| node.is_present()).count();
             let items_iter = items.into_iter();
@@ -2313,17 +2427,14 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
 
     fn make_prefix_unary_expression(&mut self, op: Self::R, value: Self::R) -> Self::R {
         let pos = self.merge_positions(op, value);
-        let op = match &op {
-            Node::Operator(&(_, op)) => match op {
-                TokenKind::Tilde => Uop::Utild,
-                TokenKind::Exclamation => Uop::Unot,
-                TokenKind::Plus => Uop::Uplus,
-                TokenKind::Minus => Uop::Uminus,
-                TokenKind::PlusPlus => Uop::Uincr,
-                TokenKind::MinusMinus => Uop::Udecr,
-                TokenKind::At => Uop::Usilence,
-                _ => return Node::Ignored(SK::PrefixUnaryExpression),
-            },
+        let op = match op.token_kind() {
+            Some(TokenKind::Tilde) => Uop::Utild,
+            Some(TokenKind::Exclamation) => Uop::Unot,
+            Some(TokenKind::Plus) => Uop::Uplus,
+            Some(TokenKind::Minus) => Uop::Uminus,
+            Some(TokenKind::PlusPlus) => Uop::Uincr,
+            Some(TokenKind::MinusMinus) => Uop::Udecr,
+            Some(TokenKind::At) => Uop::Usilence,
             _ => return Node::Ignored(SK::PrefixUnaryExpression),
         };
         let value = match self.node_to_expr(value) {
@@ -2335,12 +2446,9 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
 
     fn make_postfix_unary_expression(&mut self, value: Self::R, op: Self::R) -> Self::R {
         let pos = self.merge_positions(value, op);
-        let op = match &op {
-            Node::Operator(&(_, op)) => match op {
-                TokenKind::PlusPlus => Uop::Upincr,
-                TokenKind::MinusMinus => Uop::Updecr,
-                _ => return Node::Ignored(SK::PostfixUnaryExpression),
-            },
+        let op = match op.token_kind() {
+            Some(TokenKind::PlusPlus) => Uop::Upincr,
+            Some(TokenKind::MinusMinus) => Uop::Updecr,
             _ => return Node::Ignored(SK::PostfixUnaryExpression),
         };
         let value = match self.node_to_expr(value) {
@@ -2351,36 +2459,33 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
     }
 
     fn make_binary_expression(&mut self, lhs: Self::R, op_node: Self::R, rhs: Self::R) -> Self::R {
-        let op = match &op_node {
-            Node::Operator(&(_, op)) => match op {
-                TokenKind::Plus => Bop::Plus,
-                TokenKind::Minus => Bop::Minus,
-                TokenKind::Star => Bop::Star,
-                TokenKind::Slash => Bop::Slash,
-                TokenKind::Equal => Bop::Eq(None),
-                TokenKind::EqualEqual => Bop::Eqeq,
-                TokenKind::EqualEqualEqual => Bop::Eqeqeq,
-                TokenKind::StarStar => Bop::Starstar,
-                TokenKind::AmpersandAmpersand => Bop::Ampamp,
-                TokenKind::BarBar => Bop::Barbar,
-                TokenKind::LessThan => Bop::Lt,
-                TokenKind::LessThanEqual => Bop::Lte,
-                TokenKind::LessThanLessThan => Bop::Ltlt,
-                TokenKind::GreaterThan => Bop::Gt,
-                TokenKind::GreaterThanEqual => Bop::Gte,
-                TokenKind::GreaterThanGreaterThan => Bop::Gtgt,
-                TokenKind::Dot => Bop::Dot,
-                TokenKind::Ampersand => Bop::Amp,
-                TokenKind::Bar => Bop::Bar,
-                TokenKind::Percent => Bop::Percent,
-                TokenKind::QuestionQuestion => Bop::QuestionQuestion,
-                _ => return Node::Ignored(SK::BinaryExpression),
-            },
+        let op = match op_node.token_kind() {
+            Some(TokenKind::Plus) => Bop::Plus,
+            Some(TokenKind::Minus) => Bop::Minus,
+            Some(TokenKind::Star) => Bop::Star,
+            Some(TokenKind::Slash) => Bop::Slash,
+            Some(TokenKind::Equal) => Bop::Eq(None),
+            Some(TokenKind::EqualEqual) => Bop::Eqeq,
+            Some(TokenKind::EqualEqualEqual) => Bop::Eqeqeq,
+            Some(TokenKind::StarStar) => Bop::Starstar,
+            Some(TokenKind::AmpersandAmpersand) => Bop::Ampamp,
+            Some(TokenKind::BarBar) => Bop::Barbar,
+            Some(TokenKind::LessThan) => Bop::Lt,
+            Some(TokenKind::LessThanEqual) => Bop::Lte,
+            Some(TokenKind::LessThanLessThan) => Bop::Ltlt,
+            Some(TokenKind::GreaterThan) => Bop::Gt,
+            Some(TokenKind::GreaterThanEqual) => Bop::Gte,
+            Some(TokenKind::GreaterThanGreaterThan) => Bop::Gtgt,
+            Some(TokenKind::Dot) => Bop::Dot,
+            Some(TokenKind::Ampersand) => Bop::Amp,
+            Some(TokenKind::Bar) => Bop::Bar,
+            Some(TokenKind::Percent) => Bop::Percent,
+            Some(TokenKind::QuestionQuestion) => Bop::QuestionQuestion,
             _ => return Node::Ignored(SK::BinaryExpression),
         };
 
-        match (&op, rhs) {
-            (Bop::Eq(_), Node::Token(TokenKind::Yield)) => return rhs,
+        match (&op, rhs.is_token(TokenKind::Yield)) {
+            (Bop::Eq(_), true) => return rhs,
             _ => {}
         }
 
@@ -2447,17 +2552,25 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             None => return Node::Ignored(SK::GenericTypeSpecifier),
         };
         if class_id.1.trim_start_matches("\\") == "varray_or_darray" {
-            let pos = self.merge(class_id.0, self.get_pos(type_arguments));
+            let id_pos = class_id.0;
+            let pos = self.merge(id_pos, self.get_pos(type_arguments));
             let type_arguments = type_arguments.as_slice(self.state.arena);
             let ty_ = match type_arguments {
-                [tk, tv] => Ty_::TvarrayOrDarray(self.alloc((
-                    self.node_to_ty(*tk).unwrap_or_else(|| tany()),
-                    self.node_to_ty(*tv).unwrap_or_else(|| tany()),
-                ))),
-                [tv] => Ty_::TvarrayOrDarray(self.alloc((
-                    tarraykey(self.state.arena),
-                    self.node_to_ty(*tv).unwrap_or_else(|| tany()),
-                ))),
+                [tk, tv] => Ty_::TvarrayOrDarray(
+                    self.alloc((
+                        self.node_to_ty(*tk)
+                            .unwrap_or_else(|| self.tany_with_pos(id_pos)),
+                        self.node_to_ty(*tv)
+                            .unwrap_or_else(|| self.tany_with_pos(id_pos)),
+                    )),
+                ),
+                [tv] => Ty_::TvarrayOrDarray(
+                    self.alloc((
+                        self.varray_or_darray_key(pos),
+                        self.node_to_ty(*tv)
+                            .unwrap_or_else(|| self.tany_with_pos(id_pos)),
+                    )),
+                ),
                 _ => TANY_,
             };
             self.hint_ty(pos, ty_)
@@ -2465,6 +2578,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             let Id(pos, class_type) = class_id;
             match class_type.rsplit('\\').next() {
                 Some(name) if self.is_type_param_in_scope(name) => {
+                    let pos = self.merge(pos, self.get_pos(type_arguments));
                     let type_arguments = self.slice(
                         type_arguments
                             .iter()
@@ -2494,7 +2608,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         &mut self,
         attribute_spec: Self::R,
         modifier: Self::R,
-        _keyword: Self::R,
+        record_keyword: Self::R,
         name: Self::R,
         _extends_keyword: Self::R,
         extends_opt: Self::R,
@@ -2515,8 +2629,8 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                     Node::RecordField(&field) => Some(field),
                     _ => None,
                 })),
-                abstract_: matches!(modifier, Node::Token(TokenKind::Abstract)),
-                pos: self.merge_positions(attribute_spec, right_brace),
+                abstract_: modifier.is_token(TokenKind::Abstract),
+                pos: self.pos_from_slice(&[attribute_spec, modifier, record_keyword, right_brace]),
             }),
         );
         Node::Ignored(SK::RecordDeclaration)
@@ -2571,9 +2685,9 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         let tparams = self.pop_type_params(generic_params);
         let typedef = self.alloc(TypedefType {
             pos,
-            vis: match keyword {
-                Node::Token(TokenKind::Type) => aast::TypedefVisibility::Transparent,
-                Node::Token(TokenKind::Newtype) => aast::TypedefVisibility::Opaque,
+            vis: match keyword.token_kind() {
+                Some(TokenKind::Type) => aast::TypedefVisibility::Transparent,
+                Some(TokenKind::Newtype) => aast::TypedefVisibility::Opaque,
                 _ => aast::TypedefVisibility::Transparent,
             },
             tparams,
@@ -2587,9 +2701,9 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
     }
 
     fn make_type_constraint(&mut self, kind: Self::R, value: Self::R) -> Self::R {
-        let kind = match kind {
-            Node::Token(TokenKind::As) => ConstraintKind::ConstraintAs,
-            Node::Token(TokenKind::Super) => ConstraintKind::ConstraintSuper,
+        let kind = match kind.token_kind() {
+            Some(TokenKind::As) => ConstraintKind::ConstraintAs,
+            Some(TokenKind::Super) => ConstraintKind::ConstraintSuper,
             n => panic!("Expected either As or Super, but was {:?}", n),
         };
         Node::TypeConstraint(self.alloc((kind, value)))
@@ -2636,14 +2750,15 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
 
         Node::TypeParameter(self.alloc(TypeParameterDecl {
             name,
-            variance: match variance {
-                Node::Operator(&(_, TokenKind::Minus)) => Variance::Contravariant,
-                Node::Operator(&(_, TokenKind::Plus)) => Variance::Covariant,
+            variance: match variance.token_kind() {
+                Some(TokenKind::Minus) => Variance::Contravariant,
+                Some(TokenKind::Plus) => Variance::Covariant,
                 _ => Variance::Invariant,
             },
-            reified: match reify {
-                Node::Token(TokenKind::Reify) => aast::ReifyKind::Reified,
-                _ => aast::ReifyKind::Erased,
+            reified: if reify.is_token(TokenKind::Reify) {
+                aast::ReifyKind::Reified
+            } else {
+                aast::ReifyKind::Erased
             },
             constraints,
             tparam_params,
@@ -2719,10 +2834,8 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                     Some(id) => id,
                     None => return Node::Ignored(SK::ParameterDeclaration),
                 };
-                match ellipsis {
-                    Node::Token(TokenKind::DotDotDot) => (true, id),
-                    _ => (false, id),
-                }
+                let variadic = ellipsis.is_token(TokenKind::DotDotDot);
+                (variadic, id)
             }
             name => {
                 let name = match name.as_id() {
@@ -2732,9 +2845,10 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                 (false, name)
             }
         };
-        let kind = match inout {
-            Node::Token(TokenKind::Inout) => ParamMode::FPinout,
-            _ => ParamMode::FPnormal,
+        let kind = if inout.is_token(TokenKind::Inout) {
+            ParamMode::FPinout
+        } else {
+            ParamMode::FPnormal
         };
         Node::FunParam(self.alloc(FunParamDecl {
             attributes,
@@ -2827,7 +2941,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         capability_provisional: Self::R,
         _colon: Self::R,
         ret_hint: Self::R,
-        _where: Self::R,
+        where_constraints: Self::R,
     ) -> Self::R {
         // Use the position of the left paren if the name is missing.
         let name = if name.is_ignored() { left_paren } else { name };
@@ -2843,11 +2957,13 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             param_list,
             capability,
             ret_hint,
+            where_constraints,
         }))
     }
 
-    fn make_yield_expression(&mut self, _keyword: Self::R, _operand: Self::R) -> Self::R {
-        Node::Token(TokenKind::Yield)
+    fn make_yield_expression(&mut self, keyword: Self::R, _operand: Self::R) -> Self::R {
+        assert!(keyword.token_kind() == Some(TokenKind::Yield));
+        keyword
     }
 
     fn make_const_declaration(
@@ -2897,7 +3013,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                 let ty = self
                     .node_to_ty(hint)
                     .or_else(|| self.infer_const(name, initializer))
-                    .unwrap_or_else(|| tany());
+                    .unwrap_or_else(|| self.tany_with_pos(pos));
                 self.add_const(id, self.alloc(ConstDecl { pos, type_: ty }));
                 Node::Ignored(SK::ConstDeclaration)
             }
@@ -2995,7 +3111,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             Some(id) => id,
             None => return Node::Ignored(SK::NamespaceUseClause),
         };
-        let as_ = if let Node::Token(TokenKind::As) = as_ {
+        let as_ = if as_.is_token(TokenKind::As) {
             match aliased_name.as_id() {
                 Some(name) => Some(name.1),
                 None => return Node::Ignored(SK::NamespaceUseClause),
@@ -3018,10 +3134,9 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
     ) -> Self::R {
         Node::WhereConstraint(self.alloc(WhereConstraint(
             self.node_to_ty(left_type).unwrap_or_else(|| tany()),
-            match operator {
-                Node::Operator((_, TokenKind::Equal)) => ConstraintKind::ConstraintEq,
-                Node::Token(TokenKind::As) => ConstraintKind::ConstraintAs,
-                Node::Token(TokenKind::Super) => ConstraintKind::ConstraintSuper,
+            match operator.token_kind() {
+                Some(TokenKind::Equal) => ConstraintKind::ConstraintEq,
+                Some(TokenKind::Super) => ConstraintKind::ConstraintSuper,
                 _ => ConstraintKind::ConstraintAs,
             },
             self.node_to_ty(right_type).unwrap_or_else(|| tany()),
@@ -3053,25 +3168,23 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             (false, name)
         };
 
-        let mut class_kind = match class_keyword {
-            Node::Token(TokenKind::Interface) => ClassKind::Cinterface,
-            Node::Token(TokenKind::Trait) => ClassKind::Ctrait,
+        let mut class_kind = match class_keyword.token_kind() {
+            Some(TokenKind::Interface) => ClassKind::Cinterface,
+            Some(TokenKind::Trait) => ClassKind::Ctrait,
             _ => ClassKind::Cnormal,
         };
         let mut final_ = false;
 
         for modifier in modifiers.iter() {
-            match modifier {
-                Node::Token(TokenKind::Abstract) => class_kind = ClassKind::Cabstract,
-                Node::Token(TokenKind::Final) => final_ = true,
+            match modifier.token_kind() {
+                Some(TokenKind::Abstract) => class_kind = ClassKind::Cabstract,
+                Some(TokenKind::Final) => final_ = true,
                 _ => {}
             }
         }
 
         let where_constraints = self.slice(where_clause.iter().filter_map(|&x| match x {
-            Node::WhereConstraint(x) => {
-                Some(self.alloc(shallow_decl_defs::WhereConstraint(x.0, x.1, x.2)))
-            }
+            Node::WhereConstraint(x) => Some(x),
             _ => None,
         }));
 
@@ -3110,9 +3223,9 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                     xhp_attr_uses_len += xhp_attr_uses_decls.len();
                 }
                 Node::TypeConstant(..) => typeconsts_len += 1,
-                Node::RequireClause(require) => match require.require_type {
-                    Node::Token(TokenKind::Extends) => req_extends_len += 1,
-                    Node::Token(TokenKind::Implements) => req_implements_len += 1,
+                Node::RequireClause(require) => match require.require_type.token_kind() {
+                    Some(TokenKind::Extends) => req_extends_len += 1,
+                    Some(TokenKind::Implements) => req_implements_len += 1,
                     _ => {}
                 },
                 Node::List(consts @ [Node::Const(..), ..]) => consts_len += consts.len(),
@@ -3181,11 +3294,11 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                     )
                 }
                 Node::TypeConstant(constant) => typeconsts.push(constant),
-                Node::RequireClause(require) => match require.require_type {
-                    Node::Token(TokenKind::Extends) => {
+                Node::RequireClause(require) => match require.require_type.token_kind() {
+                    Some(TokenKind::Extends) => {
                         req_extends.extend(self.node_to_ty(require.name).iter())
                     }
-                    Node::Token(TokenKind::Implements) => {
+                    Some(TokenKind::Implements) => {
                         req_implements.extend(self.node_to_ty(require.name).iter())
                     }
                     _ => {}
@@ -3239,7 +3352,16 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
 
         let extends = self.slice(extends.iter().filter_map(|&node| self.node_to_ty(node)));
 
-        let implements = self.slice(implements.iter().filter_map(|&node| self.node_to_ty(node)));
+        let mut implements_dynamic = false;
+        let implements = self.slice(implements.iter().filter_map(
+            |&node| match self.node_to_ty(node) {
+                Some(Ty(_, Ty_::Tdynamic)) => {
+                    implements_dynamic = true;
+                    None
+                }
+                x => x,
+            },
+        ));
 
         // Pop the type params stack only after creating all inner types.
         let tparams = self.pop_type_params(tparams);
@@ -3248,10 +3370,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             mode: self.state.file_mode,
             final_,
             is_xhp,
-            has_xhp_keyword: match xhp_keyword {
-                Node::Token(TokenKind::XHP) => true,
-                _ => false,
-            },
+            has_xhp_keyword: xhp_keyword.is_token(TokenKind::XHP),
             kind: class_kind,
             name: Id(pos, name),
             tparams,
@@ -3262,6 +3381,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             req_extends,
             req_implements,
             implements,
+            implements_dynamic,
             consts,
             typeconsts,
             pu_enums: &[],
@@ -3376,12 +3496,19 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
 
     fn make_xhp_enum_type(
         &mut self,
-        _keyword: Self::R,
+        enum_keyword: Self::R,
         _left_brace: Self::R,
         xhp_enum_values: Self::R,
-        _right_brace: Self::R,
+        right_brace: Self::R,
     ) -> Self::R {
-        Node::XhpEnumType(self.alloc(xhp_enum_values))
+        let ty_opt = xhp_enum_values
+            .iter()
+            .next()
+            .and_then(|x| self.node_to_ty(*x));
+        match ty_opt {
+            Some(ty) => self.hint_ty(self.merge_positions(enum_keyword, right_brace), ty.1),
+            None => Node::Ignored(SK::XHPEnumType),
+        }
     }
 
     fn make_xhp_class_attribute(
@@ -3399,15 +3526,12 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             name,
             hint: type_,
             needs_init: !initializer.is_present(),
-            tag: match tag {
-                Node::Token(TokenKind::Required) => Some(XhpAttrTag::Required),
-                Node::Token(TokenKind::Lateinit) => Some(XhpAttrTag::Lateinit),
+            tag: match tag.token_kind() {
+                Some(TokenKind::Required) => Some(XhpAttrTag::Required),
+                Some(TokenKind::Lateinit) => Some(XhpAttrTag::Lateinit),
                 _ => None,
             },
-            nullable: match initializer {
-                Node::Null(_) => true,
-                _ => !initializer.is_present(),
-            },
+            nullable: initializer.is_token(TokenKind::NullLiteral) || !initializer.is_present(),
         }))
     }
 
@@ -3435,10 +3559,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         // indicates an abstract function.
         let body = if body.is_ignored() { closer } else { body };
         let modifiers = read_member_modifiers(header.modifiers.iter());
-        let is_constructor = match header.name {
-            Node::Construct(_) => true,
-            _ => false,
-        };
+        let is_constructor = header.name.is_token(TokenKind::Construct);
         let is_method = true;
         let (id, ty, properties) = match self.function_to_ty(is_method, attributes, header, body) {
             Some(tuple) => tuple,
@@ -3590,6 +3711,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             req_extends: &[],
             req_implements: &[],
             implements: &[],
+            implements_dynamic: false,
             consts,
             typeconsts: &[],
             pu_enums: &[],
@@ -3680,8 +3802,8 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
                 n => panic!("Expected a shape field specifier, but was {:?}", n),
             }
         }
-        let kind = match open {
-            Node::Token(TokenKind::DotDotDot) => ShapeKind::OpenShape,
+        let kind = match open.token_kind() {
+            Some(TokenKind::DotDotDot) => ShapeKind::OpenShape,
             _ => ShapeKind::ClosedShape,
         };
         let pos = self.merge_positions(shape, rparen);
@@ -3802,7 +3924,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
 
     fn make_varray_type_specifier(
         &mut self,
-        varray: Self::R,
+        varray_keyword: Self::R,
         _less_than: Self::R,
         tparam: Self::R,
         _trailing_comma: Self::R,
@@ -3810,10 +3932,10 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
     ) -> Self::R {
         let tparam = match self.node_to_ty(tparam) {
             Some(ty) => ty,
-            None => return Node::Ignored(SK::VarrayTypeSpecifier),
+            None => self.tany_with_pos(self.get_pos(varray_keyword)),
         };
         self.hint_ty(
-            self.merge_positions(varray, greater_than),
+            self.merge_positions(varray_keyword, greater_than),
             Ty_::Tvarray(tparam),
         )
     }
@@ -3872,12 +3994,12 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         };
         let classname_params = self.slice(args.iter().filter_map(|node| match node {
             Node::Expr(aast::Expr(
-                _,
+                full_pos,
                 aast::Expr_::ClassConst(&(
-                    aast::ClassId(_, aast::ClassId_::CI(&class_name)),
+                    aast::ClassId(_, aast::ClassId_::CI(&name)),
                     (_, "class"),
                 )),
-            )) => Some(class_name),
+            )) => Some(ClassNameParam { name, full_pos }),
             _ => None,
         }));
 
@@ -3978,7 +4100,7 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             };
 
             self.alloc(FunParam {
-                pos: self.get_pos(fp.hint),
+                pos: self.get_pos(hint),
                 name: None,
                 type_: self.alloc(PossiblyEnforcedTy {
                     enforced: false,
@@ -4035,9 +4157,10 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
     }
 
     fn make_closure_parameter_type_specifier(&mut self, inout: Self::R, hint: Self::R) -> Self::R {
-        let kind = match inout {
-            Node::Token(TokenKind::Inout) => ParamMode::FPinout,
-            _ => ParamMode::FPnormal,
+        let kind = if inout.is_token(TokenKind::Inout) {
+            ParamMode::FPinout
+        } else {
+            ParamMode::FPnormal
         };
         Node::FunParam(self.alloc(FunParamDecl {
             attributes: Node::Ignored(SK::Missing),
@@ -4064,10 +4187,9 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
         _semicolon: Self::R,
     ) -> Self::R {
         let attributes = self.to_attributes(attributes);
-        let has_abstract_keyword = modifiers.iter().fold(false, |abstract_, node| match node {
-            Node::Token(TokenKind::Abstract) => true,
-            _ => abstract_,
-        });
+        let has_abstract_keyword = modifiers
+            .iter()
+            .any(|node| node.is_token(TokenKind::Abstract));
         let constraint = match constraint {
             Node::TypeConstraint(innards) => self.node_to_ty(innards.1),
             _ => None,
@@ -4128,45 +4250,32 @@ impl<'a> FlattenSmartConstructors<'a, State<'a>> for DirectDeclSmartConstructors
             None => return Node::Ignored(SK::TypeConstant),
         };
         let pos = self.merge_positions(ty, constant_name);
-        match ty {
-            Node::TypeconstAccess(innards) => {
-                innards.0.set(pos);
-                // Nested typeconst accesses have to be collapsed.
-                innards.2.borrow_mut().push(id);
-                Node::TypeconstAccess(innards)
-            }
-            ty => {
-                let ty = match (
-                    ty,
-                    self.state.classish_name_builder.get_current_classish_name(),
-                ) {
-                    (Node::Name(("self", self_pos)), Some((name, class_name_pos))) => {
-                        // In classes, we modify the position when rewriting the
-                        // `self` keyword to point to the class name. In traits,
-                        // we don't (because traits are not types). We indicate
-                        // that the position shouldn't be rewritten with the
-                        // none Pos.
-                        let id_pos = if class_name_pos.is_none() {
-                            self_pos
-                        } else {
-                            class_name_pos
-                        };
-                        let reason = self.alloc(Reason::hint(self_pos));
-                        let ty_ = Ty_::Tapply(self.alloc((Id(id_pos, name), &[][..])));
-                        self.alloc(Ty(reason, ty_))
-                    }
-                    _ => match self.node_to_ty(ty) {
-                        Some(ty) => ty,
-                        None => return Node::Ignored(SK::TypeConstant),
-                    },
+        let ty = match (
+            ty,
+            self.state.classish_name_builder.get_current_classish_name(),
+        ) {
+            (Node::Name(("self", self_pos)), Some((name, class_name_pos))) => {
+                // In classes, we modify the position when rewriting the
+                // `self` keyword to point to the class name. In traits,
+                // we don't (because traits are not types). We indicate
+                // that the position shouldn't be rewritten with the
+                // none Pos.
+                let id_pos = if class_name_pos.is_none() {
+                    self_pos
+                } else {
+                    class_name_pos
                 };
-                Node::TypeconstAccess(self.alloc((
-                    Cell::new(pos),
-                    ty,
-                    RefCell::new(bumpalo::vec![in self.state.arena; id]),
-                )))
+                let reason = self.alloc(Reason::hint(self_pos));
+                let ty_ = Ty_::Tapply(self.alloc((Id(id_pos, name), &[][..])));
+                self.alloc(Ty(reason, ty_))
             }
-        }
+            _ => match self.node_to_ty(ty) {
+                Some(ty) => ty,
+                None => return Node::Ignored(SK::TypeConstant),
+            },
+        };
+        let reason = self.alloc(Reason::hint(pos));
+        Node::Ty(self.alloc(Ty(reason, Ty_::Taccess(self.alloc(TaccessType(ty, id))))))
     }
 
     fn make_soft_type_specifier(&mut self, at_token: Self::R, hint: Self::R) -> Self::R {

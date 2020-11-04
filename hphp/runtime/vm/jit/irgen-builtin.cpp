@@ -99,12 +99,12 @@ bool type_converts_to_number(Type ty) {
 
 Block* make_opt_catch(IRGS& env, const ParamPrep& params) {
   // The params have been popped and if we're inlining the ActRec is gone
-  env.irb->setCurMarker(makeMarker(env, nextBcOff(env)));
+  env.irb->setCurMarker(makeMarker(env, nextSrcKey(env)));
   env.irb->exceptionStackBoundary();
 
   assertx(!env.irb->fs().stublogue());
   auto const exit = defBlock(env, Block::Hint::Unlikely);
-  BlockPusher bp(*env.irb, makeMarker(env, nextBcOff(env)), exit);
+  BlockPusher bp(*env.irb, makeMarker(env, nextSrcKey(env)), exit);
   gen(env, BeginCatch);
   params.decRefParams(env);
   auto const data = EndCatchData {
@@ -1095,68 +1095,6 @@ SSATmp* opt_enum_coerce(IRGS& env, const ParamPrep& params) {
   );
 }
 
-SSATmp* opt_tag_provenance_here(IRGS& env, const ParamPrep& params) {
-
-  if (!(params.size() == 1 ||
-        (params.size() == 2 && params[1].value->isA(TInt)))) {
-    return nullptr;
-  }
-  auto const result = params[0].value;
-
-  auto emit_noop = [&]() {
-    gen(env, IncRef, result);
-    return result;
-  };
-
-  if (!RO::EvalArrayProvenance) {
-    return emit_noop();
-  }
-
-  if (!result->type().maybe(TArrLike)) {
-    return emit_noop();
-  }
-
-  return nullptr;
-}
-
-StaticString s_ARRAY_MARK_LEGACY_VEC(Strings::ARRAY_MARK_LEGACY_VEC);
-StaticString s_ARRAY_MARK_LEGACY_DICT(Strings::ARRAY_MARK_LEGACY_DICT);
-
-SSATmp* opt_array_mark_legacy(IRGS& env, const ParamPrep& params) {
-  if (params.size() != 1) return nullptr;
-  auto const value = params[0].value;
-  if (!RO::EvalHackArrDVArrs) {
-    if (value->isA(TVec)) {
-      gen(env,
-          RaiseWarning,
-          make_opt_catch(env, params),
-          cns(env, s_ARRAY_MARK_LEGACY_VEC.get()));
-    } else if (value->isA(TDict)) {
-      gen(env,
-          RaiseWarning,
-          make_opt_catch(env, params),
-          cns(env, s_ARRAY_MARK_LEGACY_DICT.get()));
-    }
-  }
-  if (value->isA(TVec)) {
-    return gen(env, SetLegacyVec, value);
-  } else if (value->isA(TDict)) {
-    return gen(env, SetLegacyDict, value);
-  }
-  return nullptr;
-}
-
-SSATmp* opt_array_unmark_legacy(IRGS& env, const ParamPrep& params) {
-  if (params.size() != 1) return nullptr;
-  auto const value = params[0].value;
-  if (value->isA(TVec)) {
-    return gen(env, UnsetLegacyVec, value);
-  } else if (value->isA(TDict)) {
-    return gen(env, UnsetLegacyDict, value);
-  }
-  return nullptr;
-}
-
 SSATmp* opt_is_meth_caller(IRGS& env, const ParamPrep& params) {
   if (params.size() != 1) return nullptr;
   auto const value = params[0].value;
@@ -1232,9 +1170,6 @@ const hphp_fast_string_imap<OptEmitFn> s_opt_emit_fns{
   {"HH\\BuiltinEnum::coerce", opt_enum_coerce},
   {"HH\\BuiltinEnum::isValid", opt_enum_is_valid},
   {"HH\\is_meth_caller", opt_is_meth_caller},
-  {"HH\\tag_provenance_here", opt_tag_provenance_here},
-  {"HH\\array_mark_legacy", opt_array_mark_legacy},
-  {"HH\\array_unmark_legacy", opt_array_unmark_legacy},
   {"HH\\meth_caller_get_class", opt_meth_caller_get_class},
   {"HH\\meth_caller_get_method", opt_meth_caller_get_method},
 };
@@ -1251,6 +1186,17 @@ const hphp_fast_string_imap<int> s_vanilla_params{
 };
 
 //////////////////////////////////////////////////////////////////////
+
+// If bespoke array-likes are enabled, we may encounter inlined NativeImpls
+// with optimized IR generation paths. In this case, we don't emit
+// layout-sensitive implementations to avoid making NativeImpl a
+// layout-sensitive bytecode. Therefore, when bespokes are enabled and we are
+// not at an FCallBuiltin bytecode, don't emit an optimized implementation if
+// it's layout-sensitive.
+bool skipLayoutSensitiveNativeImpl(IRGS& env, const StringData* fname) {
+  return allowBespokeArrayLikes() && curSrcKey(env).op() != Op::FCallBuiltin &&
+         s_vanilla_params.find(fname->data()) != s_vanilla_params.end();
+}
 
 SSATmp* optimizedFCallBuiltin(IRGS& env,
                               const Func* func,
@@ -1274,7 +1220,7 @@ SSATmp* optimizedFCallBuiltin(IRGS& env,
       // contents to their proper place on the stack.
       auto const ad = retVal->arrLikeVal();
       assertx(ad->isStatic());
-      assertx(ad->hasVanillaPackedLayout());
+      assertx(ad->isVecType() || ad->isVArray());
       assertx(ad->size() == numInOut + 1);
 
       size_t inOutIndex = 0;
@@ -1295,6 +1241,10 @@ SSATmp* optimizedFCallBuiltin(IRGS& env,
       // The first element of the tuple is always the actual function
       // return.
       return cns(env, ad->nvGetVal(0));
+    }
+
+    if (skipLayoutSensitiveNativeImpl(env, fname)) {
+      return nullptr;
     }
 
     auto const it = s_opt_emit_fns.find(fname->data());
@@ -1458,7 +1408,7 @@ struct CatchMaker {
   Block* makeUnusualCatch() const {
     assertx(!env.irb->fs().stublogue());
     auto const exit = defBlock(env, Block::Hint::Unlikely);
-    BlockPusher bp(*env.irb, makeMarker(env, bcOff(env)), exit);
+    BlockPusher bp(*env.irb, makeMarker(env, curSrcKey(env)), exit);
     gen(env, BeginCatch);
     decRefParams();
     prepareForCatch();
@@ -2308,7 +2258,9 @@ void implDictKeysetIdx(IRGS& env,
                        bool is_dict,
                        SSATmp* loaded_collection_dict) {
   auto const def = topC(env, BCSPRelOffset{0});
-  auto const key = convertClassKey(env, topC(env, BCSPRelOffset{1}));
+  auto const origKey = topC(env, BCSPRelOffset{1});
+  if (!origKey->type().isKnownDataType()) PUNT(Idx-KeyNotKnown);
+  auto const key = convertClassKey(env, origKey);
   auto const stack_base = topC(env, BCSPRelOffset{2});
 
   auto const finish = [&](SSATmp* elem) {
@@ -2385,6 +2337,81 @@ GuardConstraint idxBaseConstraint(Type baseType, Type keyType,
 
 }
 
+namespace {
+void implArrayMarkLegacy(IRGS& env, bool legacy) {
+  auto const recursive = topC(env, BCSPRelOffset{0});
+  auto const value     = topC(env, BCSPRelOffset{1});
+
+  if (!recursive->isA(TBool)) {
+    PUNT(ArrayMarkLegacy-RecursiveMustBeBool);
+  } else if (!value->type().isKnownDataType()) {
+    PUNT(ArrayMarkLegacy-ValueMustBeKnown);
+  }
+
+
+  if (!value->isA(TVec|TDict|TVArr|TDArr)) {
+    discard(env);
+    return;
+  }
+
+  auto const result = cond(
+    env,
+    [&](Block* taken) {
+      gen(env, JmpZero, taken, recursive);
+    },
+    [&]{
+      auto const op = legacy ? ArrayMarkLegacyRecursive
+                             : ArrayUnmarkLegacyRecursive;
+      return gen(env, op, value);
+    },
+    [&]{
+      auto const op = legacy ? ArrayMarkLegacyShallow
+                             : ArrayUnmarkLegacyShallow;
+      return gen(env, op, value);
+    }
+  );
+
+  discard(env, 2);
+  push(env, result);
+}
+}
+
+void emitArrayMarkLegacy(IRGS& env) {
+  implArrayMarkLegacy(env, true);
+}
+
+void emitArrayUnmarkLegacy(IRGS& env) {
+  implArrayMarkLegacy(env, false);
+}
+
+void emitTagProvenanceHere(IRGS& env) {
+  auto const flags = topC(env, BCSPRelOffset{0});
+  auto const value = topC(env, BCSPRelOffset{1});
+
+  // When arrprov is disabled, this bytecode should do nothing.
+  if (!RO::EvalArrayProvenance && flags->isA(TInt)) {
+    discard(env);
+    return;
+  }
+
+  if (!flags->isA(TInt)) {
+    PUNT(TagProvenanceHere-FlagsMustBeInt);
+  } else if (!value->type().isKnownDataType()) {
+    PUNT(TagProvenanceHere-ValueMustBeKnown);
+  }
+
+
+  if (!value->isA(TVec|TDict|TVArr|TDArr)) {
+    discard(env);
+    return;
+  }
+
+  auto const result = gen(env, TagProvenanceHere, value, flags);
+
+  discard(env, 2);
+  push(env, result);
+}
+
 void emitArrayIdx(IRGS& env) {
   auto const arrType = topC(env, BCSPRelOffset{2}, DataTypeGeneric)->type();
   if (arrType.subtypeOfAny(TVec, TVArr)) return implVecIdx(env, nullptr);
@@ -2445,7 +2472,9 @@ void emitIdx(IRGS& env) {
 
 void emitAKExists(IRGS& env) {
   auto const arr = popC(env);
-  auto key = convertClassKey(env, popC(env));
+  auto const origKey = popC(env);
+  if (!origKey->type().isKnownDataType()) PUNT(AKExists-KeyNotKnown);
+  auto const key = convertClassKey(env, origKey);
   if (key->isA(TFunc)) PUNT(AKExists_func_key);
   if (!arr->type().subtypeOfAny(TKeyset, TVec, TVArr, TDict, TDArr, TObj)) {
     PUNT(AKExists_unknown_array_or_obj_type);

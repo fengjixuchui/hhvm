@@ -101,7 +101,6 @@ type t = {
   po_enable_xhp_class_modifier: bool;
   po_disable_xhp_element_mangling: bool;
   po_disable_xhp_children_declarations: bool;
-  po_enable_first_class_function_pointers: bool;
   po_enable_enum_classes: bool;
   po_disable_modes: bool;
   po_disable_hh_ignore_error: bool;
@@ -112,6 +111,9 @@ type t = {
   tco_method_call_inference: bool;
   tco_report_pos_from_reason: bool;
   tco_typecheck_sample_rate: float;
+  tco_enable_sound_dynamic: bool;
+  po_disallow_hash_comments: bool;
+  po_disallow_fun_and_cls_meth_pseudo_funcs: bool;
 }
 [@@deriving eq, show]
 
@@ -165,6 +167,12 @@ let tco_experimental_ifc = "ifc_enabled"
 *)
 let tco_experimental_infer_flows = "ifc_infer_flows"
 
+(*
+* Allow typechecker to raise error when inheriting members
+* that differ only by case
+*)
+let tco_experimental_case_sensitive_inheritance = "case_sensitive_inheritance"
+
 let tco_experimental_all =
   SSet.empty
   |> List.fold_right
@@ -178,6 +186,7 @@ let tco_experimental_all =
          tco_experimental_abstract_type_const_with_default;
          tco_experimental_ifc;
          tco_experimental_infer_flows;
+         tco_experimental_case_sensitive_inheritance;
        ]
 
 let tco_migration_flags_all =
@@ -280,7 +289,6 @@ let default =
     po_enable_xhp_class_modifier = true;
     po_disable_xhp_element_mangling = true;
     po_disable_xhp_children_declarations = true;
-    po_enable_first_class_function_pointers = true;
     po_enable_enum_classes = false;
     po_disable_modes = false;
     po_disable_hh_ignore_error = false;
@@ -291,6 +299,9 @@ let default =
     tco_method_call_inference = false;
     tco_report_pos_from_reason = false;
     tco_typecheck_sample_rate = 1.0;
+    tco_enable_sound_dynamic = false;
+    po_disallow_hash_comments = false;
+    po_disallow_fun_and_cls_meth_pseudo_funcs = false;
   }
 
 let make
@@ -403,8 +414,6 @@ let make
     ?(po_disable_xhp_element_mangling = default.po_disable_xhp_element_mangling)
     ?(po_disable_xhp_children_declarations =
       default.po_disable_xhp_children_declarations)
-    ?(po_enable_first_class_function_pointers =
-      default.po_enable_first_class_function_pointers)
     ?(po_enable_enum_classes = default.po_enable_enum_classes)
     ?(po_disable_modes = default.po_disable_modes)
     ?(po_disable_hh_ignore_error = default.po_disable_hh_ignore_error)
@@ -417,6 +426,10 @@ let make
     ?(tco_method_call_inference = default.tco_method_call_inference)
     ?(tco_report_pos_from_reason = default.tco_report_pos_from_reason)
     ?(tco_typecheck_sample_rate = default.tco_typecheck_sample_rate)
+    ?(tco_enable_sound_dynamic = default.tco_enable_sound_dynamic)
+    ?(po_disallow_hash_comments = default.po_disallow_hash_comments)
+    ?(po_disallow_fun_and_cls_meth_pseudo_funcs =
+      default.po_disallow_fun_and_cls_meth_pseudo_funcs)
     () =
   {
     tco_experimental_features;
@@ -512,7 +525,6 @@ let make
     po_enable_xhp_class_modifier;
     po_disable_xhp_element_mangling;
     po_disable_xhp_children_declarations;
-    po_enable_first_class_function_pointers;
     po_enable_enum_classes;
     po_disable_modes;
     po_disable_hh_ignore_error;
@@ -523,6 +535,9 @@ let make
     tco_method_call_inference;
     tco_report_pos_from_reason;
     tco_typecheck_sample_rate;
+    tco_enable_sound_dynamic;
+    po_disallow_hash_comments;
+    po_disallow_fun_and_cls_meth_pseudo_funcs;
   }
 
 let tco_experimental_feature_enabled t s =
@@ -731,9 +746,6 @@ let po_disable_xhp_element_mangling t = t.po_disable_xhp_element_mangling
 let po_disable_xhp_children_declarations t =
   t.po_disable_xhp_children_declarations
 
-let po_enable_first_class_function_pointers t =
-  t.po_enable_first_class_function_pointers
-
 let po_enable_enum_classes t = t.po_enable_enum_classes
 
 let po_disable_modes t = t.po_disable_modes
@@ -753,3 +765,10 @@ let tco_method_call_inference t = t.tco_method_call_inference
 let tco_report_pos_from_reason t = t.tco_report_pos_from_reason
 
 let tco_typecheck_sample_rate t = t.tco_typecheck_sample_rate
+
+let tco_enable_sound_dynamic t = t.tco_enable_sound_dynamic
+
+let po_disallow_hash_comments t = t.po_disallow_hash_comments
+
+let po_disallow_fun_and_cls_meth_pseudo_funcs t =
+  t.po_disallow_fun_and_cls_meth_pseudo_funcs

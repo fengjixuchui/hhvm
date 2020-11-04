@@ -994,6 +994,7 @@ let rec class_ ctx c =
     N.c_xhp_category = c.Aast.c_xhp_category;
     N.c_reqs = req_extends @ req_implements;
     N.c_implements = implements;
+    N.c_implements_dynamic = c.Aast.c_implements_dynamic;
     N.c_where_constraints = where_constraints;
     N.c_consts = consts;
     N.c_typeconsts = typeconsts;
@@ -1603,14 +1604,14 @@ and fun_ ctx f =
   in
   named_fun
 
-and get_using_vars (_, e) =
-  match e with
-  | Aast.Expr_list using_clauses -> List.concat_map using_clauses get_using_vars
-  (* Simple assignment to local of form `$lvar = e` *)
-  | Aast.Binop (Ast_defs.Eq None, (_, Aast.Lvar (p, lid)), _) ->
-    [(p, Local_id.get_name lid)]
-  (* Arbitrary expression. This will be assigned to a temporary *)
-  | _ -> []
+and get_using_vars es =
+  List.concat_map es (fun (_, e) ->
+      match e with
+      (* Simple assignment to local of form `$lvar = e` *)
+      | Aast.Binop (Ast_defs.Eq None, (_, Aast.Lvar (p, lid)), _) ->
+        [(p, Local_id.get_name lid)]
+      (* Arbitrary expression. This will be assigned to a temporary *)
+      | _ -> [])
 
 and stmt env (pos, st) =
   let stmt =
@@ -1631,7 +1632,7 @@ and stmt env (pos, st) =
     | Aast.Do (b, e) -> do_stmt env b e
     | Aast.While (e, b) -> N.While (expr env e, block env b)
     | Aast.Using s ->
-      using_stmt env s.Aast.us_has_await s.Aast.us_expr s.Aast.us_block
+      using_stmt env s.Aast.us_has_await s.Aast.us_exprs s.Aast.us_block
     | Aast.For (st1, e, st2, b) -> for_stmt env st1 e st2 b
     | Aast.Switch (e, cl) -> switch_stmt env e cl
     | Aast.Foreach (e, ae, b) -> foreach_stmt env e ae b
@@ -1693,9 +1694,9 @@ and do_stmt env b e =
   N.Do (b, e)
 
 (* Scoping is essentially that of do: block is always executed *)
-and using_stmt env has_await e b =
+and using_stmt env has_await (loc, e) b =
   let vars = get_using_vars e in
-  let e = expr env e in
+  let e = List.map ~f:(expr env) e in
   let b = block ~new_scope:false env b in
   Env.remove_locals env vars;
   N.Using
@@ -1704,7 +1705,7 @@ and using_stmt env has_await e b =
         us_is_block_scoped = false;
         (* This isn't used for naming so provide a default *)
         us_has_await = has_await;
-        us_expr = e;
+        us_exprs = (loc, e);
         us_block = b;
       }
 
@@ -2198,8 +2199,14 @@ and expr_ env p (e : Nast.expr_) =
         h
     in
     N.Cast (ty, expr env e2)
-  | Aast.ExpressionTree (ty, e, e2) ->
-    N.ExpressionTree (hint env ty, expr env e, Option.map e2 (expr env))
+  | Aast.ExpressionTree et ->
+    N.ExpressionTree
+      N.
+        {
+          et_hint = hint env et.et_hint;
+          et_src_expr = expr env et.et_src_expr;
+          et_desugared_expr = expr env et.et_desugared_expr;
+        }
   | Aast.ET_Splice e -> N.ET_Splice (expr env e)
   | Aast.Unop (uop, e) -> N.Unop (uop, expr env e)
   | Aast.Binop ((Ast_defs.Eq None as op), lv, e2) ->
@@ -2302,6 +2309,7 @@ and expr_ env p (e : Nast.expr_) =
   | Aast.Import _ -> N.Any
   | Aast.Omitted -> N.Omitted
   | Aast.Callconv (kind, e) -> N.Callconv (kind, expr env e)
+  | Aast.EnumAtom x -> N.EnumAtom x
   (* The below were not found on the AST.ml so they are not implemented here *)
   | Aast.ValCollection _
   | Aast.KeyValCollection _

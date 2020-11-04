@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<1ef6697eb20ebf991abfe9978b74ec3b>>
+// @generated SignedSource<<66cc2e2eac7c2e0bf335d00e473a9925>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
@@ -79,6 +79,7 @@ pub struct ClassElt<'a> {
     /// identifies the class from which this elt originates
     pub origin: &'a str,
     pub deprecated: Option<&'a str>,
+    /// pos of the type of the elt
     pub pos: &'a lazy::Lazy<&'a pos::Pos<'a>>,
     pub flags: isize,
 }
@@ -244,6 +245,8 @@ pub struct ClassType<'a> {
     /// This includes all the classes, interfaces and traits this class is
     /// using.
     pub ancestors: s_map::SMap<'a, &'a Ty<'a>>,
+    /// Whether the class is coercible to dynamic
+    pub implements_dynamic: bool,
     pub req_ancestors: &'a [&'a Requirement<'a>],
     /// the extends of req_ancestors
     pub req_ancestors_extends: s_set::SSet<'a>,

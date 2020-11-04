@@ -73,6 +73,21 @@ void logEvent(const LoggingArray* lad, ArrayOp op, Ts&&... args) {
   logEvent(lad, lad->entryTypes, op, std::forward<Ts>(args)...);
 }
 
+// PRc|CRc method that returns a copy of the vanilla array `vad` with the
+// sampled bit set, operating in place whenever possible.
+ArrayData* makeSampledArray(ArrayData* vad) {
+  assertx(vad->isVanilla());
+  auto const result = [&]{
+    if (!vad->cowCheck()) return vad;
+    vad->decRefCount();
+    if (vad->hasVanillaPackedLayout()) return PackedArray::Copy(vad);
+    if (vad->hasVanillaMixedLayout())  return MixedArray::Copy(vad);
+    return SetArray::Copy(vad);
+  }();
+  result->setSampledArrayInPlace();
+  return result;
+}
+
 //////////////////////////////////////////////////////////////////////////////
 
 }
@@ -104,52 +119,45 @@ void setLoggingEnabled(bool val) {
 }
 
 ArrayData* maybeMakeLoggingArray(ArrayData* ad) {
-  assertx(ad->isVanilla());
   if (!g_emitLoggingArrays.load(std::memory_order_relaxed)) return ad;
-  auto const sk = getSrcKey();
-  if (!sk.valid()) {
-    FTRACE(5, "VMRegAnchor failed for maybleEnableLogging.\n");
+
+  auto const profile = getLoggingProfile(getSrcKey());
+  return profile ? maybeMakeLoggingArray(ad, profile) : ad;
+}
+
+const ArrayData* maybeMakeLoggingArray(const ArrayData* ad) {
+  return maybeMakeLoggingArray(const_cast<ArrayData*>(ad));
+}
+
+ArrayData* maybeMakeLoggingArray(ArrayData* ad, LoggingProfile* profile) {
+  if (!g_emitLoggingArrays.load(std::memory_order_relaxed)) return ad;
+
+  if (ad->isSampledArray() || !ad->isVanilla()) {
+    assertx(isArrLikeCastOp(profile->source.op()));
+    FTRACE(5, "Skipping logging for {} array.\n",
+           ad->isSampledArray() ? "sampled" : "bespoke");
     return ad;
   }
 
-  auto const op = sk.op();
-  auto const useStatic = op == Op::Array || op == Op::Vec ||
-                         op == Op::Dict || op == Op::Keyset;
-  assertx(IMPLIES(useStatic, ad->isStatic()));
-  assertx(IMPLIES(ad->isStatic(), useStatic || isArrLikeCastOp(op)));
+  auto const shouldEmitBespoke = [&]{
+    if (shouldTestBespokeArrayLikes()) return true;
+    if (RO::EvalEmitLoggingArraySampleRate == 0) return false;
 
-  // Don't profile static arrays used for TypeStruct tests. Rather than using
-  // these arrays, we almost always just do a DataType check on the value.
-  if ((op == Op::Array || op == Op::Dict) &&
-      sk.advanced().op() == Op::IsTypeStructC) {
-    FTRACE(5, "Skipping static array used for TypeStruct test.\n");
-    return ad;
-  }
-
-  auto const profile = getLoggingProfile(sk, useStatic ? ad : nullptr);
-  if (!profile) return ad;
-
-  auto const shouldEmitBespoke = [&] {
-    if (shouldTestBespokeArrayLikes()) {
-      FTRACE(5, "Observe rid: {}\n", requestCount());
-      return true;
-    } else {
-      if (RO::EvalEmitLoggingArraySampleRate == 0) return false;
-
-      auto const skCount = profile->sampleCount++;
-      FTRACE(5, "Observe SrcKey count: {}\n", skCount);
-      return (skCount - 1) % RO::EvalEmitLoggingArraySampleRate == 0;
-    }
+    auto const skCount = profile->sampleCount++;
+    FTRACE(5, "Observe SrcKey count: {}\n", skCount);
+    return (skCount - 1) % RO::EvalEmitLoggingArraySampleRate == 0;
   }();
 
   if (!shouldEmitBespoke) {
-    FTRACE(5, "Emit vanilla at {}\n", sk.getSymbol());
-    return ad;
+    FTRACE(5, "Emit vanilla at {}\n", profile->source.getSymbol());
+    auto const cached = profile->staticSampledArray;
+    return cached ? cached : makeSampledArray(ad);
   }
 
-  FTRACE(5, "Emit bespoke at {}\n", sk.getSymbol());
+  FTRACE(5, "Emit bespoke at {}\n", profile->source.getSymbol());
   profile->loggingArraysEmitted++;
-  if (useStatic) return profile->staticArray;
+  auto const cached = profile->staticLoggingArray;
+  if (cached) return cached;
 
   // Non-static array constructors are basically a sequence of sets or appends.
   // We already log these events at the correct granularity; re-use that logic.
@@ -158,10 +166,6 @@ ArrayData* maybeMakeLoggingArray(ArrayData* ad) {
                   : profile->logEvent(ArrayOp::ConstructInt, val(k).num, v);
   });
   return LoggingArray::Make(ad, profile, EntryTypes::ForArray(ad));
-}
-
-const ArrayData* maybeMakeLoggingArray(const ArrayData* ad) {
-  return maybeMakeLoggingArray(const_cast<ArrayData*>(ad));
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -214,11 +218,6 @@ LoggingArray* LoggingArray::MakeStatic(ArrayData* ad, LoggingProfile* profile) {
   lad->entryTypes = EntryTypes::ForArray(ad);
   assertx(lad->checkInvariants());
   return lad;
-}
-
-void LoggingArray::FreeStatic(LoggingArray* lad) {
-  assertx(lad->wrapped->isStatic());
-  RO::EvalLowStaticArrays ? low_free(lad) : uncounted_free(lad);
 }
 
 bool LoggingArray::checkInvariants() const {
@@ -289,6 +288,11 @@ void LoggingArray::Release(LoggingArray* lad) {
   tl_heap->objFreeIndex(lad, kSizeIndex);
 }
 
+void LoggingArray::ZombieRelease(LoggingArray* lad) {
+  logEvent(lad, ArrayOp::Release);
+  tl_heap->objFreeIndex(lad, kSizeIndex);
+}
+
 //////////////////////////////////////////////////////////////////////////////
 // Accessors
 
@@ -349,13 +353,13 @@ TypedValue countedValue(TypedValue val) {
   return val;
 }
 
-ArrayData* escalate(LoggingArray* lad, ArrayData* result) {
+LoggingArray* escalate(LoggingArray* lad, ArrayData* result) {
   lad->updateSize();
   if (result == lad->wrapped) return lad;
   return LoggingArray::Make(result, lad->profile, lad->entryTypes);
 }
 
-ArrayData* escalate(LoggingArray* lad, ArrayData* result, EntryTypes ms) {
+LoggingArray* escalate(LoggingArray* lad, ArrayData* result, EntryTypes ms) {
   lad->updateSize();
   if (result == lad->wrapped) {
     lad->entryTypes = ms;
@@ -398,6 +402,26 @@ tv_lval elem(tv_lval lvalIn, arr_lval result) {
   }
   return result;
 }
+
+template <typename F>
+LoggingArray* mutateMove(LoggingArray* lad, EntryTypes ms, F&& f) {
+  auto const cow = lad->cowCheck();
+  if (cow) lad->wrapped->incRefCount();
+  auto const res = f(lad->wrapped);
+  if (cow || res == lad->wrapped) {
+    auto const ladNew = escalate(lad, res, ms);
+    if (ladNew != lad && lad->decReleaseCheck()) {
+      LoggingArray::ZombieRelease(lad);
+    }
+    return ladNew;
+  }
+
+  auto const profile = lad->profile;
+  assertx(lad->decReleaseCheck());
+  LoggingArray::ZombieRelease(lad);
+  return LoggingArray::Make(res, profile, ms);
+}
+
 }
 
 // Lvals cannot insert new keys, so KeyTypes are unchanged. We must pessimize
@@ -451,11 +475,23 @@ ArrayData* LoggingArray::SetInt(LoggingArray* lad, int64_t k, TypedValue v) {
   logEvent(lad, ms, ArrayOp::SetInt, k, v);
   return mutate(lad, ms, [&](ArrayData* w) { return w->set(k, v); });
 }
+ArrayData* LoggingArray::SetIntMove(LoggingArray* lad, int64_t k, TypedValue v) {
+  if (type(v) == KindOfUninit) type(v) = KindOfNull;
+  auto const ms = lad->entryTypes.with(make_tv<KindOfInt64>(k), v);
+  logEvent(lad, ms, ArrayOp::SetInt, k, v);
+  return mutateMove(lad, ms, [&](ArrayData* w) { return w->setMove(k, v); });
+}
 ArrayData* LoggingArray::SetStr(LoggingArray* lad, StringData* k, TypedValue v) {
   if (type(v) == KindOfUninit) type(v) = KindOfNull;
   auto const ms = lad->entryTypes.with(make_tv<KindOfString>(k), v);
   logEvent(lad, ms, ArrayOp::SetStr, k, v);
   return mutate(lad, ms, [&](ArrayData* w) { return w->set(k, v); });
+}
+ArrayData* LoggingArray::SetStrMove(LoggingArray* lad, StringData* k, TypedValue v) {
+  if (type(v) == KindOfUninit) type(v) = KindOfNull;
+  auto const ms = lad->entryTypes.with(make_tv<KindOfString>(k), v);
+  logEvent(lad, ms, ArrayOp::SetStr, k, v);
+  return mutateMove(lad, ms, [&](ArrayData* w) { return w->setMove(k, v); });
 }
 ArrayData* LoggingArray::RemoveInt(LoggingArray* lad, int64_t k) {
   logEvent(lad, ArrayOp::RemoveInt, k);
@@ -473,6 +509,12 @@ ArrayData* LoggingArray::Append(LoggingArray* lad, TypedValue v) {
   auto const ms = lad->entryTypes.with(k, v);
   logEvent(lad, ms, ArrayOp::Append, v);
   return mutate(lad, ms, [&](ArrayData* w) { return w->append(v); });
+}
+ArrayData* LoggingArray::AppendMove(LoggingArray* lad, TypedValue v) {
+  auto const result = Append(lad, v);
+  if (result != lad && lad->decReleaseCheck()) Release(lad);
+  tvDecRefGen(v);
+  return result;
 }
 ArrayData* LoggingArray::Pop(LoggingArray* lad, Variant& ret) {
   logEvent(lad, ArrayOp::Pop);
@@ -500,6 +542,18 @@ ArrayData* LoggingArray::ToHackArr(LoggingArray* lad, bool copy) {
   logEvent(lad, ArrayOp::ToHackArr);
   auto const cow = copy || lad->wrapped->cowCheck();
   return convert(lad, lad->wrapped->toHackArr(cow));
+}
+ArrayData* LoggingArray::PreSort(LoggingArray* lad, SortFunction sf) {
+  logEvent(lad, ArrayOp::PreSort, makeStaticString(sortFunctionName(sf)));
+  auto const cow = lad->cowCheck();
+  if (cow) lad->wrapped->incRefCount();
+  auto const result = lad->wrapped->escalateForSort(sf);
+  if (cow) lad->wrapped->decRefCount();
+  return result;
+}
+ArrayData* LoggingArray::PostSort(LoggingArray* lad, ArrayData* vad) {
+  logEvent(lad, EntryTypes::ForArray(vad), ArrayOp::PostSort);
+  return convert(lad, vad);
 }
 ArrayData* LoggingArray::SetLegacyArray(
     LoggingArray* lad, bool copy, bool legacy) {

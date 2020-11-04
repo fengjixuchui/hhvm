@@ -74,6 +74,7 @@ void BespokeArray::logReachEvent(TransID transId, SrcKey sk) {
 bool BespokeArray::checkInvariants() const {
   assertx(!isVanilla());
   assertx(kindIsValid());
+  assertx(!isSampledArray());
   assertx(vtable() != nullptr);
   assertx(m_extra_hi16 & kExtraMagicBit.raw);
   return true;
@@ -205,17 +206,11 @@ ArrayData* BespokeArray::SetInt(ArrayData* ad, int64_t key, TypedValue v) {
 ArrayData* BespokeArray::SetStr(ArrayData* ad, StringData* key, TypedValue v) {
   return asBespoke(ad)->vtable()->fnSetStr(ad, key, v);
 }
-ArrayData* BespokeArray::SetIntMove(ArrayData* ad, int64_t key, TypedValue val) {
-  auto const result = SetInt(ad, key, val);
-  if (result != ad) decRefArr(ad);
-  tvDecRefGen(val);
-  return result;
+ArrayData* BespokeArray::SetIntMove(ArrayData* ad, int64_t key, TypedValue v) {
+  return asBespoke(ad)->vtable()->fnSetIntMove(ad, key, v);
 }
-ArrayData* BespokeArray::SetStrMove(ArrayData* ad, StringData* key, TypedValue val) {
-  auto const result = SetStr(ad, key, val);
-  if (result != ad) decRefArr(ad);
-  tvDecRefGen(val);
-  return result;
+ArrayData* BespokeArray::SetStrMove(ArrayData* ad, StringData* key, TypedValue v) {
+  return asBespoke(ad)->vtable()->fnSetStrMove(ad, key, v);
 }
 
 // deletion
@@ -228,15 +223,26 @@ ArrayData* BespokeArray::RemoveStr(ArrayData* ad, const StringData* key) {
 
 // sorting
 ArrayData* BespokeArray::EscalateForSort(ArrayData* ad, SortFunction sf) {
-  auto const vad = asBespoke(ad)->vtable()->fnEscalateToVanilla(
-    ad, sortFunctionName(sf)
-  );
-  return vad->escalateForSort(sf);
+  if (!isSortFamily(sf)) {
+    if (ad->isVArray())  return ad->toDArray(true);
+    if (ad->isVecType()) return ad->toDict(true);
+  }
+  assertx(!ad->empty());
+  return asBespoke(ad)->vtable()->fnPreSort(ad, sf);
+}
+ArrayData* BespokeArray::PostSort(ArrayData* ad, ArrayData* vad) {
+  assertx(vad->isVanilla());
+  if (ad->toDataType() != vad->toDataType()) return vad;
+  assertx(vad->hasExactlyOneRef());
+  return asBespoke(ad)->vtable()->fnPostSort(ad, vad);
 }
 
 // high-level ops
 ArrayData* BespokeArray::Append(ArrayData* ad, TypedValue v) {
   return asBespoke(ad)->vtable()->fnAppend(ad, v);
+}
+ArrayData* BespokeArray::AppendMove(ArrayData* ad, TypedValue v) {
+  return asBespoke(ad)->vtable()->fnAppendMove(ad, v);
 }
 ArrayData* BespokeArray::Pop(ArrayData* ad, Variant& out) {
   return asBespoke(ad)->vtable()->fnPop(ad, out);

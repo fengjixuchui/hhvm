@@ -77,6 +77,9 @@ let experimental_type_param_shadowing =
 let experimental_abstract_type_const_with_default =
   GlobalOptions.tco_experimental_abstract_type_const_with_default
 
+let experimental_case_sensitive_inheritance =
+  GlobalOptions.tco_experimental_case_sensitive_inheritance
+
 let experimental_all = GlobalOptions.tco_experimental_all
 
 let migration_flags_all = GlobalOptions.tco_migration_flags_all
@@ -151,3 +154,5 @@ let higher_kinded_types = GlobalOptions.tco_higher_kinded_types
 let method_call_inference = GlobalOptions.tco_method_call_inference
 
 let report_pos_from_reason = GlobalOptions.tco_report_pos_from_reason
+
+let enable_sound_dynamic = GlobalOptions.tco_enable_sound_dynamic

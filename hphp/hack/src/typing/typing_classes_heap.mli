@@ -9,25 +9,20 @@
 
 open Typing_defs
 
-module Classes : sig
-  type key = StringKey.t
+(* This entire file is "private". Its sole consumer is Decl_provider.ml. *)
 
-  type t
+type class_t
 
-  (** Implementation detail, do not use. For use in [Decl_provider] only. *)
-  val get_no_local_cache : Provider_context.t -> key -> t option
-
-  (** This is the preferred entry-point. It gets the class, and uses
-  a local-memory cache. *)
-  val get : Provider_context.t -> key -> t option
-
-  val mem : Provider_context.t -> key -> bool
-
-  val find_unsafe : Provider_context.t -> key -> t
-end
+val get : Provider_context.t -> string -> class_t option
 
 module Api : sig
-  type t = Classes.t
+  (** This type "t" is what all APIs operate upon. It includes
+  a "decl option". This provides context about how the specified
+  class_t was fetched in the first place. It's used solely for telemetry,
+  so that telemetry about APIs can be easily correlated with telemetry
+  to the original call to the [get] which fetched the class_t in the
+  first place. *)
+  type t = Decl_counters.decl option * class_t
 
   val need_init : t -> bool
 
@@ -84,6 +79,8 @@ module Api : sig
   val has_ancestor : t -> string -> bool
 
   val requires_ancestor : t -> string -> bool
+
+  val get_implements_dynamic : t -> bool
 
   val extends : t -> string -> bool
 

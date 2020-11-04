@@ -255,12 +255,13 @@ fn create_parser_options(opts: &Options) -> ParserOptions {
         hack_lang_flags(LangFlags::DISALLOW_FUNC_PTRS_IN_CONSTANTS);
     popt.po_enable_xhp_class_modifier = hack_lang_flags(LangFlags::ENABLE_XHP_CLASS_MODIFIER);
     popt.po_disable_xhp_element_mangling = hack_lang_flags(LangFlags::DISABLE_XHP_ELEMENT_MANGLING);
-    popt.po_enable_first_class_function_pointers =
-        hack_lang_flags(LangFlags::ENABLE_FIRST_CLASS_FUNCTION_POINTERS);
     popt.po_enable_enum_classes = hack_lang_flags(LangFlags::ENABLE_ENUM_CLASSES);
     popt.po_disable_array = hack_lang_flags(LangFlags::DISABLE_ARRAY);
     popt.po_disable_array_typehint = hack_lang_flags(LangFlags::DISABLE_ARRAY_TYPEHINT);
     popt.po_allow_unstable_features = hack_lang_flags(LangFlags::ALLOW_UNSTABLE_FEATURES);
+    popt.po_disallow_hash_comments = hack_lang_flags(LangFlags::DISALLOW_HASH_COMMENTS);
+    popt.po_disallow_fun_and_cls_meth_pseudo_funcs =
+        hack_lang_flags(LangFlags::DISALLOW_FUN_AND_CLS_METH_PSEUDO_FUNCS);
     popt
 }
 

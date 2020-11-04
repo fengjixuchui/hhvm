@@ -60,11 +60,11 @@ struct Vunit;
  */
 #define VASM_OPCODES\
   /* service requests */\
-  O(bindjmp, I(target) I(spOff) I(trflags), U(args), Dn)\
-  O(bindjcc, I(cc) I(target) I(spOff) I(trflags), U(sf) U(args), Dn)\
+  O(bindjmp, I(target) I(spOff), U(args), Dn)\
+  O(bindjcc, I(cc) I(target) I(spOff), U(sf) U(args), Dn)\
   O(bindaddr, I(addr) I(target) I(spOff), Un, Dn)\
-  O(fallback, I(target) I(spOff) I(trflags), U(args), Dn)\
-  O(fallbackcc, I(cc) I(target) I(spOff) I(trflags), U(sf) U(args), Dn)\
+  O(fallback, I(target) I(spOff), U(args), Dn)\
+  O(fallbackcc, I(cc) I(target) I(spOff), U(sf) U(args), Dn)\
   O(retransopt, I(sk) I(spOff), U(args), Dn)\
   /* vasm intrinsics */\
   O(copy, Inone, UH(s,d), DH(d,s))\
@@ -85,7 +85,6 @@ struct Vunit;
   O(phijmp, Inone, U(uses), Dn)\
   O(conjure, Inone, Un, D(c))\
   O(conjureuse, Inone, U(c), Dn)\
-  O(debugguardjmp, Inone, Un, Dn)\
   O(inlinestart, Inone, Un, Dn)\
   O(inlineend, Inone, Un, Dn)\
   O(pushframe, Inone, Un, Dn)\
@@ -391,17 +390,14 @@ struct Vunit;
 struct bindjmp {
   explicit bindjmp(SrcKey target,
                    FPInvOffset spOff,
-                   TransFlags trflags,
                    RegSet args)
     : target{target}
     , spOff(spOff)
-    , trflags{trflags}
     , args{args}
   {}
 
   SrcKey target;
   FPInvOffset spOff;
-  TransFlags trflags;
   RegSet args;
 };
 
@@ -410,13 +406,11 @@ struct bindjcc {
                    VregSF sf,
                    SrcKey target,
                    FPInvOffset spOff,
-                   TransFlags trflags,
                    RegSet args)
     : cc{cc}
     , sf{sf}
     , target{target}
     , spOff(spOff)
-    , trflags{trflags}
     , args{args}
   {}
 
@@ -424,7 +418,6 @@ struct bindjcc {
   VregSF sf;
   SrcKey target;
   FPInvOffset spOff;
-  TransFlags trflags;
   RegSet args;
 };
 
@@ -443,17 +436,14 @@ struct bindaddr {
 struct fallback {
   explicit fallback(SrcKey target,
                     FPInvOffset spOff,
-                    TransFlags trflags,
                     RegSet args)
     : target{target}
     , spOff(spOff)
-    , trflags{trflags}
     , args{args}
   {}
 
   SrcKey target;
   FPInvOffset spOff;
-  TransFlags trflags;
   RegSet args;
 };
 
@@ -462,13 +452,11 @@ struct fallbackcc {
                       VregSF sf,
                       SrcKey target,
                       FPInvOffset spOff,
-                      TransFlags trflags,
                       RegSet args)
     : cc{cc}
     , sf{sf}
     , target{target}
     , spOff(spOff)
-    , trflags{trflags}
     , args{args}
   {}
 
@@ -476,7 +464,6 @@ struct fallbackcc {
   VregSF sf;
   SrcKey target;
   FPInvOffset spOff;
-  TransFlags trflags;
   RegSet args;
 };
 
@@ -602,13 +589,6 @@ struct reload { Vreg s, d; };
  * (regardless of what definition d is dominated by).
  */
 struct ssaalias { Vreg s; Vreg d; };
-
-/*
- * Emit a smashable jmp to realCode.
- *
- * *watch will be set to the address of the smashable.
- */
-struct debugguardjmp { TCA realCode; TCA* watch; };
 
 /*
  * Marks the entry block of an inlined function, func, in the current unit,

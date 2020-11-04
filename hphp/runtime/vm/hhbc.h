@@ -315,6 +315,7 @@ inline bool isIncDecO(IncDecOp op) {
   ISTYPE_OP(Obj)                               \
   ISTYPE_OP(Scalar)                            \
   ISTYPE_OP(ArrLike)                           \
+  ISTYPE_OP(LegacyArrLike)                     \
   ISTYPE_OP(Res)                               \
   ISTYPE_OP(VArray)                            \
   ISTYPE_OP(DArray)                            \
@@ -561,6 +562,7 @@ constexpr uint32_t kMaxConcatN = 4;
   O(CnsE,            ONE(SA),          NOV,             ONE(CV),    NF) \
   O(ClsCns,          ONE(SA),          ONE(CV),         ONE(CV),    NF) \
   O(ClsCnsD,         TWO(SA,SA),       NOV,             ONE(CV),    NF) \
+  O(ClsCnsL,         ONE(LA),          ONE(CV),         ONE(CV),    NF) \
   O(ClassName,       NA,               ONE(CV),         ONE(CV),    NF) \
   O(File,            NA,               NOV,             ONE(CV),    NF) \
   O(Dir,             NA,               NOV,             ONE(CV),    NF) \
@@ -751,6 +753,9 @@ constexpr uint32_t kMaxConcatN = 4;
   O(AwaitAll,        ONE(LAR),         NOV,             ONE(CV),    CF) \
   O(Idx,             NA,               THREE(CV,CV,CV), ONE(CV),    NF) \
   O(ArrayIdx,        NA,               THREE(CV,CV,CV), ONE(CV),    NF) \
+  O(ArrayMarkLegacy,    NA,            TWO(CV,CV),      ONE(CV),    NF) \
+  O(ArrayUnmarkLegacy,  NA,            TWO(CV,CV),      ONE(CV),    NF) \
+  O(TagProvenanceHere,  NA,            TWO(CV,CV),      ONE(CV),    NF) \
   O(CheckProp,       ONE(SA),          NOV,             ONE(CV),    NF) \
   O(InitProp,        TWO(SA,                                            \
                        OA(InitPropOp)),ONE(CV),         NOV,        NF) \
@@ -1103,6 +1108,11 @@ constexpr bool isTypeAssert(Op op) {
   return op == OpAssertRATL || op == OpAssertRATStk;
 }
 
+constexpr bool isIteratorOp(Op op) {
+  return op == OpIterInit || op == Op::LIterInit ||
+         op == OpIterNext || op == Op::LIterNext;
+}
+
 inline bool isMemberBaseOp(Op op) {
   switch (op) {
     case Op::BaseGC:
@@ -1185,4 +1195,3 @@ struct hash<HPHP::Op> {
 }
 
 //////////////////////////////////////////////////////////////////////
-

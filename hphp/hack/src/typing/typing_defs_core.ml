@@ -21,9 +21,10 @@ type ce_visibility =
 type ifc_fun_decl =
   | FDPolicied of string option
   | FDInferFlows
+[@@deriving eq]
 
-(* The default policy is the public one, use a # to prevent class collisions *)
-let default_ifc_fun_decl = FDPolicied (Some "#PUBLIC")
+(* The default policy is the public one. PUBLIC is a keyword, so no need to prevent class collisions *)
+let default_ifc_fun_decl = FDPolicied (Some "PUBLIC")
 
 type exact =
   | Exact
@@ -170,8 +171,6 @@ and _ ty_ =
   | Tthis : decl_phase ty_  (** The late static bound type of a class *)
   | Tapply : Nast.sid * decl_ty list -> decl_phase ty_
       (** Either an object type or a type alias, ty list are the arguments *)
-  | Taccess : taccess_type -> decl_phase ty_
-      (** Name of class, name of type const, remaining names of type consts *)
   | Tarray : decl_ty option * decl_ty option -> decl_phase ty_
       (** The type of the various forms of "array":
        *
@@ -269,6 +268,8 @@ and _ ty_ =
   | Tvarray : 'phase ty -> 'phase ty_  (** Tvarray (ty) => "varray<ty>" *)
   | Tvarray_or_darray : 'phase ty * 'phase ty -> 'phase ty_
       (** Tvarray_or_darray (ty1, ty2) => "varray_or_darray<ty1, ty2>" *)
+  | Taccess : 'phase taccess_type -> 'phase ty_
+      (** Name of class, name of type const, remaining names of type consts *)
   (*========== Below Are Types That Cannot Be Declared In User Code ==========*)
   | Tunapplied_alias : string -> locl_phase ty_
       (** This represents a type alias that lacks necessary type arguments. Given
@@ -318,7 +319,7 @@ and _ ty_ =
        * - second parameter is the name of the type to project
        *)
 
-and taccess_type = decl_ty * Nast.sid list
+and 'phase taccess_type = 'phase ty * Nast.sid
 
 (** represents reactivity of function
    - None corresponds to non-reactive function
@@ -477,6 +478,8 @@ module Flags = struct
 
   let get_fp_ifc_can_call fp = is_set fp.fp_flags fp_flags_ifc_can_call
 
+  let get_fp_is_atom fp = is_set fp.fp_flags fp_flags_atom
+
   let fun_kind_to_flags kind =
     match kind with
     | Ast_defs.FSync -> 0
@@ -507,13 +510,15 @@ module Flags = struct
       ~mutability
       ~has_default
       ~ifc_external
-      ~ifc_can_call =
+      ~ifc_can_call
+      ~is_atom =
     let flags = mode_to_flags mode in
     let flags = Int.bit_or (to_mutable_flags mutability) flags in
     let flags = set_bit fp_flags_accept_disposable accept_disposable flags in
     let flags = set_bit fp_flags_has_default has_default flags in
     let flags = set_bit fp_flags_ifc_external ifc_external flags in
     let flags = set_bit fp_flags_ifc_can_call ifc_can_call flags in
+    let flags = set_bit fp_flags_atom is_atom flags in
     flags
 
   let get_fp_accept_disposable fp =
@@ -569,7 +574,7 @@ module Pp = struct
       Format.fprintf fmt "%S" a0;
       Format.fprintf fmt ",@ ";
       pp_ty_list fmt a1;
-      Format.fprintf fmt "@,)@]"
+      Format.fprintf fmt "@,)@])"
     | Tunapplied_alias a0 ->
       Format.fprintf fmt "(@[<2>Tunappliedalias@ ";
       Format.fprintf fmt "%S" a0;
@@ -674,10 +679,12 @@ module Pp = struct
       Format.fprintf fmt "@])"
     | Tunion tyl ->
       Format.fprintf fmt "(@[<2>Tunion@ ";
-      pp_ty_list fmt tyl
+      pp_ty_list fmt tyl;
+      Format.fprintf fmt "@])"
     | Tintersection tyl ->
       Format.fprintf fmt "(@[<2>Tintersection@ ";
-      pp_ty_list fmt tyl
+      pp_ty_list fmt tyl;
+      Format.fprintf fmt "@])"
     | Tobject -> Format.pp_print_string fmt "Tobject"
     | Tclass (a0, a2, a1) ->
       Format.fprintf fmt "(@[<2>Tclass (@,";
@@ -726,23 +733,15 @@ module Pp = struct
            true)
          ~init:false
          tyl);
-    Format.fprintf fmt "@,]@]";
-    Format.fprintf fmt "@])"
+    Format.fprintf fmt "@,]@]"
 
-  and pp_taccess_type : Format.formatter -> taccess_type -> unit =
+  and pp_taccess_type : type a. Format.formatter -> a taccess_type -> unit =
    fun fmt (a0, a1) ->
     Format.fprintf fmt "(@[";
     pp_ty fmt a0;
     Format.fprintf fmt ",@ ";
     Format.fprintf fmt "@[<2>[";
-    ignore
-      (List.fold_left
-         ~f:(fun sep x ->
-           if sep then Format.fprintf fmt ";@ ";
-           Aast.pp_sid fmt x;
-           true)
-         ~init:false
-         a1);
+    Aast.pp_sid fmt a1;
     Format.fprintf fmt "@,]@]";
     Format.fprintf fmt "@])"
 
@@ -993,6 +992,11 @@ module Pp = struct
       Format.fprintf fmt "@[~%s:" "ifc_can_call";
       Format.fprintf fmt "%B" (get_fp_ifc_can_call fp);
       Format.fprintf fmt "@]";
+      Format.fprintf fmt "@ ";
+
+      Format.fprintf fmt "@[~%s:" "is_atom";
+      Format.fprintf fmt "%B" (get_fp_is_atom fp);
+      Format.fprintf fmt "@]";
       Format.fprintf fmt ")@]"
     in
 
@@ -1019,6 +1023,16 @@ module Pp = struct
       Format.fprintf fmt "@]";
       Format.fprintf fmt ";@ ";
 
+      Format.fprintf fmt "@[%s =@ " "fp_rx_annotation";
+      (match x.fp_rx_annotation with
+      | None -> Format.pp_print_string fmt "None"
+      | Some x ->
+        Format.pp_print_string fmt "(Some ";
+        pp_param_rx_annotation fmt x;
+        Format.pp_print_string fmt ")");
+      Format.fprintf fmt "@]";
+      Format.fprintf fmt ";@ ";
+
       Format.fprintf fmt "@[%s =@ " "fp_flags";
       pp_fp_flags fmt x;
       Format.fprintf fmt "@]";
@@ -1038,6 +1052,15 @@ module Pp = struct
          ~init:false
          x);
     Format.fprintf fmt "@,]@]"
+
+  and pp_param_rx_annotation : Format.formatter -> param_rx_annotation -> unit =
+   fun fmt x ->
+    match x with
+    | Param_rx_var -> Format.pp_print_string fmt "Param_rx_var"
+    | Param_rx_if_impl ty ->
+      Format.pp_print_string fmt "(Param_rx_if_impl ";
+      pp_ty fmt ty;
+      Format.pp_print_string fmt ")"
 
   and pp_tparam_ : type a. Format.formatter -> a ty tparam -> unit =
    (fun fmt tparam -> pp_tparam pp_ty fmt tparam)

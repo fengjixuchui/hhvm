@@ -17,6 +17,8 @@
 
 #include "hphp/runtime/base/bespoke-array.h"
 #include "hphp/runtime/base/bespoke/logging-array.h"
+#include "hphp/runtime/base/bespoke/logging-profile.h"
+#include "hphp/runtime/base/type-structure-helpers-defs.h"
 
 #include "hphp/runtime/vm/jit/analysis.h"
 #include "hphp/runtime/vm/jit/irgen-builtin.h"
@@ -88,7 +90,7 @@ SSATmp* memberKey(IRGS& env, MemberKey mk) {
   return classConvertPuntOnRaise(env, res);
 }
 
-SSATmp* emitSetNewElem(IRGS& env, SSATmp* origValue, uint32_t nDiscard) {
+SSATmp* emitSetNewElem(IRGS& env, SSATmp* origValue) {
   auto const baseType = env.irb->fs().mbase().type;
   auto const base = extractBase(env);
   auto const value = [&] {
@@ -106,7 +108,10 @@ SSATmp* emitSetNewElem(IRGS& env, SSATmp* origValue, uint32_t nDiscard) {
   }
 
   auto const baseLoc = gen(env, LdMBase, TLvalToCell);
-  if (!canUpdateCanonicalBase(baseLoc)) PUNT(BespokeSetMFrameStkCell);
+  if (!canUpdateCanonicalBase(baseLoc)) {
+    gen(env, SetNewElem, baseLoc, value);
+    return value;
+  }
 
   auto const layout = baseType.arrSpec().bespokeLayout();
   auto const newArr = layout->emitAppend(env, base, value);
@@ -133,7 +138,10 @@ SSATmp* emitSetElem(IRGS& env, SSATmp* key, SSATmp* value) {
   }
 
   auto const baseLoc = gen(env, LdMBase, TLvalToCell);
-  if (!canUpdateCanonicalBase(baseLoc)) PUNT(BespokeSetMFrameStkCell);
+  if (!canUpdateCanonicalBase(baseLoc)) {
+    gen(env, SetElem, baseLoc, key, value);
+    return value;
+  }
 
   auto const layout = baseType.arrSpec().bespokeLayout();
   auto const newArr = layout->emitSet(env, base, key, value);
@@ -149,7 +157,7 @@ void emitBespokeSetM(IRGS& env, uint32_t nDiscard, MemberKey mk) {
   auto const result = [&] () -> SSATmp* {
     if (mcodeIsProp(mk.mcode)) PUNT(BespokeSetMProp);
     if (mk.mcode == MW) {
-      return emitSetNewElem(env, value, nDiscard);
+      return emitSetNewElem(env, value);
     }
 
     assertx(mcodeIsElem(mk.mcode));
@@ -399,8 +407,8 @@ void emitBespokeDim(IRGS& env, MOpMode mode, MemberKey mk) {
 }
 
 void emitBespokeAddElemC(IRGS& env) {
+  auto const keyType = topC(env, BCSPRelOffset{1})->type();
   auto const arrType = topC(env, BCSPRelOffset{2})->type();
-  auto const keyType = topC(env, BCSPRelOffset{2})->type();
   if (!arrType.subtypeOfAny(TDict, TDArr)) {
     PUNT(AddElemC-Bespoke-WrongType);
   } else if (!keyType.subtypeOfAny(TInt, TStr, TCls, TLazyCls)) {
@@ -428,7 +436,176 @@ void emitBespokeAddNewElemC(IRGS& env) {
   auto const layout = arrType.arrSpec().bespokeLayout();
   auto const newArr = layout->emitAppend(env, arr, value);
   push(env, newArr);
-  decRef(env, value);
+}
+
+void emitBespokeColFromArray(IRGS& env, CollectionType type) {
+  assertx(type != CollectionType::Pair);
+  auto const arr = popC(env);
+  auto const arrType = arr->type();
+  if (!arrType.subtypeOfAny(TVec, TDict)) PUNT(Bespoke-BadColType);
+  if (arrType <= TVec &&
+      !(type == CollectionType::Vector || type == CollectionType::ImmVector)) {
+    PUNT(Bespoke-ColTypeMismatch);
+  }
+  if (arrType <= TDict &&
+      (type == CollectionType::Vector || type == CollectionType::ImmVector)) {
+    PUNT(Bespoke-ColTypeMismatch);
+  }
+  auto const layout = arrType.arrSpec().bespokeLayout();
+  auto const vanilla = layout->emitEscalateToVanilla(env, arr, "ColFromArray");
+  auto const col = gen(env, NewColFromArray, NewColData { type }, vanilla);
+  decRef(env, arr);
+  push(env, col);
+}
+
+void emitBespokeClassGetTS(IRGS& env) {
+  auto const reqType = RO::EvalHackArrDVArrs ? TDict : TDArr;
+  auto const arr = topC(env);
+  auto const arrType = arr->type();
+  if (!(arrType <= reqType)) {
+    if (arrType.maybe(reqType)) {
+      PUNT(Bespoke-ClassGetTS-UnguardedTS);
+    } else {
+      gen(env, RaiseError, cns(env, s_reified_type_must_be_ts.get()));
+      return;
+    }
+  }
+
+  auto const layout = arrType.arrSpec().bespokeLayout();
+  ifElse(
+    env,
+    [&](Block* taken) {
+      layout->emitGet(env, arr, cns(env, s_generic_types.get()), taken);
+    },
+    [&] { gen(env, Jmp, makeExitSlow(env)); }
+  );
+
+  auto const classKey = cns(env, s_classname.get());
+  auto const classVal = cond(
+    env,
+    [&](Block* taken) {
+      return layout->emitGet(env, arr, classKey, taken);
+    },
+    [&] (SSATmp* val) { return val; },
+    [&] {
+      gen(env, ThrowArrayKeyException, arr, classKey);
+      return cns(env, TBottom);
+    }
+  );
+
+  auto const className = cond(
+    env,
+    [&] (Block* taken) {
+      return gen(env, CheckType, TStr, taken, classVal);
+    },
+    [&] (SSATmp* val) { return val; },
+    [&] {
+      hint(env, Block::Hint::Unlikely);
+      gen(env, RaiseError, cns(env, s_new_instance_of_not_string.get()));
+      return cns(env, TBottom);
+    }
+  );
+
+  auto const cls = ldCls(env, className);
+  popDecRef(env);
+  push(env, cls);
+  push(env, cns(env, TInitNull));
+}
+
+void emitBespokeShapesIdx(IRGS& env, uint32_t numArgs) {
+  if (numArgs != 2 && numArgs != 3) PUNT(Bespoke-ShapesIdx-BadArgs);
+
+  auto const def = [&] {
+    if (numArgs < 3) return cns(env, TInitNull);
+
+    auto const defVal = popC(env);
+    auto const defType = defVal->type();
+    if (!(defType <= TUninit) && defType.maybe(TUninit)) {
+      PUNT(Bespoke-ShapesIdx-BadDefault);
+    }
+    return defType <= TUninit ? cns(env, TInitNull) : defVal;
+  }();
+
+  auto const key = popC(env);
+  if (!key->type().subtypeOfAny(TInt, TStr)) {
+    PUNT(Bespoke-ShapesIdx-BadKey);
+  }
+
+  auto const arr = popC(env);
+  auto const arrType = arr->type();
+  if (!(arrType <= (RuntimeOption::EvalHackArrDVArrs ? TDict : TDArr))) {
+    if (arrType <= TNull) {
+      decRef(env, key);
+      push(env, def);
+      return;
+    } else {
+      PUNT(Bespoke-ShapesIdx-BadVal);
+    }
+  }
+
+  auto const res = cond(
+    env,
+    [&] (Block* taken) {
+      auto const layout = arrType.arrSpec().bespokeLayout();
+      return layout->emitGet(env, arr, key, taken);
+    },
+    [&] (SSATmp* val) {
+      // TODO(mcolavita): profiled type info
+      gen(env, IncRef, val);
+      decRef(env, def);
+      return val;
+    },
+    [&] {
+      return def;
+    }
+  );
+
+  decRef(env, key);
+  decRef(env, arr);
+  push(env, res);
+}
+
+template <bool isFirst, bool isKey>
+void emitBespokeFirstLast(IRGS& env, uint32_t numArgs) {
+  if (numArgs != 1) PUNT(Bespoke-FirstLast-BadArgs);
+  auto const arr = popC(env);
+  auto const arrType = arr->type();
+  auto const layout = arrType.arrSpec().bespokeLayout();
+  auto const size = gen(env, Count, arr);
+  auto const res = cond(
+    env,
+    [&](Block* taken) { gen(env, JmpZero, taken, size); },
+    [&] {
+      auto const pos = isFirst ? layout->emitIterFirstPos(env, arr)
+                               : layout->emitIterLastPos(env, arr);
+      auto const elm = layout->emitIterElm(env, arr, pos);
+      auto const result = isKey ? layout->emitIterGetKey(env, arr, elm)
+                                : layout->emitIterGetVal(env, arr, elm);
+      gen(env, IncRef, result);
+      return result;
+    },
+    [&] { return cns(env, TInitNull); }
+  );
+  push(env, res);
+  decRef(env, arr);
+}
+
+using BespokeOptEmitFn = void (*)(IRGS&, uint32_t);
+const hphp_fast_string_imap<BespokeOptEmitFn> s_bespoke_builtin_impls{
+  {"HH\\Shapes::idx", emitBespokeShapesIdx},
+  {"HH\\Lib\\_Private\\Native\\first", emitBespokeFirstLast<true, false>},
+  {"HH\\Lib\\_Private\\Native\\last", emitBespokeFirstLast<false, false>},
+  {"HH\\Lib\\_Private\\Native\\first_key", emitBespokeFirstLast<true, true>},
+  {"HH\\Lib\\_Private\\Native\\last_key", emitBespokeFirstLast<false, true>},
+};
+
+void emitBespokeFCallBuiltin(
+    IRGS& env, uint32_t numArgs, uint32_t numNonDefault, uint32_t numOut,
+    const StringData* funcName) {
+  auto const it = s_bespoke_builtin_impls.find(funcName->data());
+  assertx(it != s_bespoke_builtin_impls.end());
+  assertx(it->second);
+  it->second(env, numArgs);
 }
 
 void translateDispatchBespoke(IRGS& env,
@@ -460,15 +637,21 @@ void translateDispatchBespoke(IRGS& env,
     case Op::AddNewElemC:
       emitBespokeAddNewElemC(env);
       return;
-    case Op::FCallBuiltin:
-    case Op::NativeImpl:
-    case Op::ClassGetTS:
     case Op::ColFromArray:
+      emitBespokeColFromArray(env, (CollectionType) ni.imm[0].u_OA);
+      return;
+    case Op::ClassGetTS:
+      emitBespokeClassGetTS(env);
+      return;
+    case Op::FCallBuiltin:
+      emitBespokeFCallBuiltin(
+        env, ni.imm[0].u_IVA, ni.imm[1].u_IVA, ni.imm[2].u_IVA,
+        ni.unit()->lookupLitstrId(ni.imm[3].u_SA));
+      return;
     case Op::IterInit:
     case Op::LIterInit:
     case Op::LIterNext:
-      interpOne(env);
-      return;
+      always_assert(false);
     default:
       not_reached();
   }
@@ -476,31 +659,25 @@ void translateDispatchBespoke(IRGS& env,
 
 folly::Optional<Location> getVanillaLocationForBuiltin(const IRGS& env,
                                                         SrcKey sk) {
-  auto const op = sk.op();
   auto const soff = env.irb->fs().bcSPOff();
 
-  assertx(op == Op::FCallBuiltin || op == Op::NativeImpl);
-  auto const func = op == Op::FCallBuiltin
-    ? Func::lookupBuiltin(sk.unit()->lookupLitstrId(getImm(sk.pc(), 3).u_SA))
-    : curFunc(env);
+  assertx(sk.op() == Op::FCallBuiltin);
+  auto const func =
+    Func::lookupBuiltin(sk.unit()->lookupLitstrId(getImm(sk.pc(), 3).u_SA));
   if (!func) return folly::none;
   auto const param = getBuiltinVanillaParam(func->fullName()->data());
   if (param < 0) return folly::none;
 
-  if (op == Op::FCallBuiltin) {
-    if (getImm(sk.pc(), 0).u_IVA != func->numParams()) return folly::none;
-    if (getImm(sk.pc(), 2).u_IVA != func->numInOutParams()) return folly::none;
-    return {Location::Stack{soff - func->numParams() + 1 + param}};
-  } else {
-    return {Location::Local{safe_cast<uint32_t>(param)}};
-  }
+  if (getImm(sk.pc(), 0).u_IVA != func->numParams()) return folly::none;
+  if (getImm(sk.pc(), 2).u_IVA != func->numInOutParams()) return folly::none;
+  return {Location::Stack{soff - func->numParams() + 1 + param}};
 }
 
 folly::Optional<Location> getVanillaLocation(const IRGS& env, SrcKey sk) {
   auto const op = sk.op();
   auto const soff = env.irb->fs().bcSPOff();
 
-  if (op == Op::FCallBuiltin || op == Op::NativeImpl) {
+  if (op == Op::FCallBuiltin) {
     return getVanillaLocationForBuiltin(env, sk);
   } else if (isMemberDimOp(op) || (op == Op::QueryM || op == Op::SetM)) {
     return {Location::MBase{}};
@@ -533,32 +710,59 @@ folly::Optional<Location> getVanillaLocation(const IRGS& env, SrcKey sk) {
   always_assert(false);
 }
 
+// Returns a location that we should do some layout-sensitive guards for.
+// Unlike getVanillaLocation, this helper checks options, known types, etc.
+folly::Optional<Location> getLocationToGuard(const IRGS& env, SrcKey sk) {
+  if (!allowBespokeArrayLikes()) return folly::none;
+
+  // If this check fails, the bytecode is not layout-sensitive.
+  auto const loc = getVanillaLocation(env, sk);
+  if (!loc) return folly::none;
+
+  // Even if the bytecode is layout-sensitive, it may be applied to e.g. an
+  // object input, or our known types may be too general for us to guard.
+  auto const gc = isIteratorOp(sk.op()) ? DataTypeIterBase : DataTypeSpecific;
+  auto const type = env.irb->typeOf(*loc, gc);
+  auto const needsGuard = type != TBottom && type <= TArrLike &&
+                          typeFitsConstraint(type, gc);
+  FTRACE_MOD(Trace::hhir, 2, "At {}: {}: location {}: {} {} layout guard\n",
+             sk.offset(), opcodeToName(sk.op()), show(*loc), type,
+             needsGuard ? "needs" : "does not need");
+  return needsGuard ? loc : folly::none;
+}
+
 // Strengthen the guards for a layout-sensitive location prior to irgen for the
 // bytecode, returning false if standard vanilla translation should be used and
 // true if bespoke translation should be used.
 //
-// If the location does not have a known data type, it returns false.
-// Otherwise, it constrains the location to DataTypeSpecialized. If the
-// location has a bespoke layout, we return true. If it has a vanilla layout,
-// we return false. Otherwise, we emit a vanilla guard and return false.
-bool guardToLayout(IRGS& env, SrcKey sk, Location loc) {
+// Right now, we strengthen the guard based only on the type of the array-like
+// at that location. In the future, we'll still do that for live translations,
+// but we'll use profiling for optimized translations.
+bool guardToLayout(IRGS& env, SrcKey sk, Location loc, Type type) {
   assertx(env.context.kind != TransKind::Profile);
   assertx(!env.irb->guardFailBlock());
-  auto const& type = env.irb->typeOf(loc, DataTypeSpecific);
-  if (!(type.isKnownDataType() && type <= TArrLike)) return false;
 
-  auto const base = type.unspecialize();
   auto const layout = type.arrSpec().bespokeLayout();
-  auto const target_type = layout ? base.narrowToBespokeLayout(*layout)
-                                  : base.narrowToVanilla();
+  auto const target_type = layout ? TArrLike.narrowToBespokeLayout(*layout)
+                                  : TVanillaArrLike;
 
-  FTRACE_MOD(Trace::hhir, 2,
-             "At {}: {}: guard input {} to layout specific: {}\n",
+  FTRACE_MOD(Trace::hhir, 2, "At {}: {}: guard input {} to layout: {}\n",
              sk.offset(), opcodeToName(sk.op()), show(loc), target_type);
   auto const gc = GuardConstraint(DataTypeSpecialized).setArrayLayoutSensitive();
   env.irb->constrainLocation(loc, gc);
-  checkType(env, loc, target_type, -1);
+  checkType(env, loc, target_type, bcOff(env));
   return !target_type.arrSpec().vanilla();
+}
+
+void emitLogArrayReach(IRGS& env, Location loc, SrcKey sk) {
+  // We won't have a tracelet ID to use during tracelet-selection time.
+  // In profiling tracelets, we should have exactly one tracelet ID to log.
+  if (env.formingRegion || env.context.kind != TransKind::Profile) return;
+  assertx(env.context.transIDs.size() == 1);
+
+  auto const arr = loadLocation(env, loc);
+  auto const transID = *env.context.transIDs.begin();
+  gen(env, LogArrayReach, TransIDData(transID), arr);
 }
 
 // In a profiling tracelet, we don't want to guard on the array being vanilla,
@@ -568,42 +772,17 @@ void emitLoggingDiamond(
     std::function<void(IRGS&)> emitVanilla) {
   assertx(env.context.kind == TransKind::Profile);
   assertx(!env.irb->guardFailBlock());
-  auto const& type = env.irb->typeOf(loc, DataTypeSpecific);
-  FTRACE_MOD(Trace::hhir, 2, "At {}: {}: consider {}: {}\n",
-             ni.source.offset(), opcodeToName(ni.op()), show(loc), type);
-  if (!(type.isKnownDataType() && type <= TArrLike)) {
-    emitVanilla(env);
-    return;
-  }
 
-  FTRACE_MOD(Trace::hhir, 2, "At {}: {}: log when {} is bespoke: {}\n",
-             ni.source.offset(), opcodeToName(ni.op()), show(loc), type);
-
-  if (!env.formingRegion) {
-    // If we're not forming a region (and therefore have a ProfTransID), log
-    // that the array reached this bytecode. If the array is a LoggingArray,
-    // this will record a reach event. Once the ArraySampled bit is
-    // implemented, we will also use this helper to count how many sampled vs.
-    // unsampled arrays reach the usage site. This information can inform if a
-    // significant number of vanilla arrays origininating from unlogged sources
-    // (such as builtins) are reaching the site so we don't inappropriately
-    // specialize.
-    genLogArrayReach(env, loc, ni.source);
-  }
-
-  auto const dropVanilla = [&](Type type) {
-    return type.isKnownDataType() && type <= TArrLike
-      ? type.unspecialize()
-      : type;
+  auto const dropArrSpec = [&](Type type) {
+    return type <= TArrLike ? type.unspecialize() : type;
   };
   std::vector<Type> vanillaLocalTypes;
   std::vector<Type> vanillaStackTypes;
   ifThen(
     env,
     [&](Block* taken) {
-      auto const target_type = type.unspecialize().narrowToVanilla();
       env.irb->setGuardFailBlock(taken);
-      checkType(env, loc, target_type, -1);
+      checkType(env, loc, TVanillaArrLike, bcOff(env));
       env.irb->resetGuardFailBlock();
 
       emitVanilla(env);
@@ -618,19 +797,19 @@ void emitLoggingDiamond(
       vanillaStackTypes.reserve(pushed);
       for (uint32_t i = 0; i < locals; i ++) {
         auto const lType = env.irb->fs().local(i).type;
-        vanillaLocalTypes.push_back(dropVanilla(lType));
+        vanillaLocalTypes.push_back(dropArrSpec(lType));
       }
       for (int32_t i = 0; i < pushed; i ++) {
         auto const idx = BCSPRelOffset{-i};
         auto const sType = env.irb->fs().stack(offsetFromIRSP(env, idx)).type;
-        vanillaStackTypes.push_back(dropVanilla(sType));
+        vanillaStackTypes.push_back(dropArrSpec(sType));
       }
     },
     [&] {
       hint(env, Block::Hint::Unlikely);
 
       auto const topLayout = BespokeLayout::TopLayout();
-      auto const topType = type.unspecialize().narrowToBespokeLayout(topLayout);
+      auto const topType = TArrLike.narrowToBespokeLayout(topLayout);
       assertTypeLocation(env, loc, topType);
 
       try {
@@ -667,65 +846,51 @@ void emitLoggingDiamond(
 
 void handleBespokeInputs(IRGS& env, const NormalizedInstruction& ni,
                          std::function<void(IRGS&)> emitVanilla) {
-  if (!allowBespokeArrayLikes()) {
-    // No bespokes, just irgen for vanilla
-    emitVanilla(env);
-    return;
-  }
-
   auto const sk = ni.source;
-  auto const loc = getVanillaLocation(env, sk);
-  if (!loc) {
-    // No layout-sensitive inputs, just irgen for vanilla
+  auto const loc = getLocationToGuard(env, sk);
+  if (!loc) return emitVanilla(env);
+
+  auto const type = env.irb->typeOf(*loc, DataTypeGeneric);
+  assertx(type <= TArrLike);
+
+  emitLogArrayReach(env, *loc, sk);
+
+  if (isIteratorOp(sk.op())) {
     emitVanilla(env);
-    return;
-  }
-
-  if (env.context.kind == TransKind::Profile) {
-    // We are in a profiling tracelet. We most likely have a logging array in a
-    // profiling tracelet; emit a diamond to handle it. If it's another bespoke,
-    // side-exit.
-    emitLoggingDiamond(env, ni, *loc, emitVanilla);
-    return;
-  }
-
-  // We're not in a profiling tracelet; specialize for the observed layout.
-  // In the future, we will supply the layout we believe we should specialize
-  // the bytecode for.
-  auto const bespoke = guardToLayout(env, sk, *loc);
-  if (bespoke) {
-    // We have a bespoke type; dispatch to specialized irgen
-    translateDispatchBespoke(env, ni);
+  } else if (env.context.kind == TransKind::Profile) {
+    // In a profiling tracelet, we'll emit a diamond that handles vanilla
+    // array-likes on one side and bespoke array-likes on the other.
+    if (type.arrSpec().vanilla()) {
+      emitVanilla(env);
+    } else {
+      emitLoggingDiamond(env, ni, *loc, emitVanilla);
+    }
   } else {
-    // We have a vanilla type or unspecialized type; dispatch to normal irgen
-    emitVanilla(env);
+    // In an optimized or live translation, we guard to a specialized layout
+    // and then emit either vanilla or bespoke code.
+    auto const bespoke = guardToLayout(env, sk, *loc, type);
+    if (bespoke) {
+      translateDispatchBespoke(env, ni);
+    } else {
+      emitVanilla(env);
+    }
   }
 }
 
 void handleVanillaOutputs(IRGS& env, SrcKey sk) {
   if (!allowBespokeArrayLikes()) return;
-  if (env.context.kind != TransKind::Profile
-      && !shouldTestBespokeArrayLikes()) {
+  if (env.context.kind != TransKind::Profile &&
+      !shouldTestBespokeArrayLikes()) {
     return;
   }
   auto const op = sk.op();
   if (!isArrLikeConstructorOp(op) && !isArrLikeCastOp(op)) return;
 
-  // These SrcKeys are always skipped in maybeMakeLoggingArray. If we make
-  // this logic more complicated, we should expose a helper to share the code.
-  if ((op == Op::Array || op == Op::Dict) &&
-      sk.advanced().op() == Op::IsTypeStructC) {
-    return;
-  }
+  auto const profile = bespoke::getLoggingProfile(sk);
+  if (!profile) return;
 
-  auto const result = topC(env);
-  auto const vanilla = result->type().arrSpec().vanilla();
-  assertx(IMPLIES(isArrLikeConstructorOp(op), vanilla));
-  if (!vanilla) return;
-
-  auto const logging = gen(env, NewLoggingArray, result);
-  discard(env);
-  push(env, logging);
+  auto const data = LoggingProfileData(profile);
+  push(env, gen(env, NewLoggingArray, data, popC(env)));
 }
 
 ///////////////////////////////////////////////////////////////////////////////

@@ -2,16 +2,19 @@
 // Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 
 class X {
-  public function __construct(<<Policied("PRIVATE")>> public int $valuex) {}
+  <<__InferFlows>>
+  public function __construct(<<__Policied("PRIVATE")>> public int $valuex) {}
 }
 
 class Y {
-  public function __construct(<<Policied("PUBLIC")>> public int $valuey) {}
+  <<__InferFlows>>
+  public function __construct(<<__Policied("PUBLIC")>> public int $valuey) {}
 }
 
-function f(X $x, Y $y, Exception $e): void {
+<<__InferFlows>>
+function g(X $x, Y $y): void {
   if ($x->valuex > 10) {
-    throw $e;
+    throw new Exception("test", 5, null); // TODO: once we support default args, don't need the extra args
   }
   $y->valuey = 10;
 }

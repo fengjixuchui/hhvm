@@ -241,15 +241,6 @@ bool emit(Venv& env, const movqs& i) {
   return true;
 }
 
-bool emit(Venv& env, const debugguardjmp& i) {
-  auto const jmp = emitSmashableJmp(*env.cb, env.meta, i.realCode);
-  if (i.watch) {
-    *i.watch = jmp;
-    env.meta.watchpoints.push_back(i.watch);
-  }
-  return true;
-}
-
 bool emit(Venv& env, const jmps& i) {
   auto const jmp = emitSmashableJmp(*env.cb, env.meta, env.cb->frontier());
   env.jmps.push_back({jmp, i.targets[0]});
@@ -273,25 +264,22 @@ void emit_svcreq_stub(Venv& env, const Venv::SvcReqPatch& p) {
     case Vinstr::bindjmp:
       { auto const& i = p.svcreq.bindjmp_;
         assertx(p.jmp && !p.jcc);
-        stub = svcreq::emit_bindjmp_stub(frozen, env.text.data(),
-                                         env.meta, i.spOff, p.jmp,
-                                         i.target, i.trflags);
+        stub = svcreq::emit_bindjmp_stub(frozen, env.text.data(), env.meta,
+                                         i.spOff, p.jmp, i.target);
       } break;
 
     case Vinstr::bindjcc:
       { auto const& i = p.svcreq.bindjcc_;
         assertx(!p.jmp && p.jcc);
-        stub = svcreq::emit_bindjmp_stub(frozen, env.text.data(),
-                                         env.meta, i.spOff, p.jcc,
-                                         i.target, i.trflags);
+        stub = svcreq::emit_bindjmp_stub(frozen, env.text.data(), env.meta,
+                                         i.spOff, p.jcc, i.target);
       } break;
 
     case Vinstr::bindaddr:
       { auto const& i = p.svcreq.bindaddr_;
         assertx(!p.jmp && !p.jcc);
-        stub = svcreq::emit_bindaddr_stub(frozen, env.text.data(),
-                                          env.meta, i.spOff, i.addr.get(),
-                                          i.target, TransFlags{});
+        stub = svcreq::emit_bindaddr_stub(frozen, env.text.data(), env.meta,
+                                          i.spOff, i.addr.get(), i.target);
         // The bound pointer may not belong to the data segment, as is the case
         // with SSwitchMap (see #10347945)
         auto realAddr = env.text.data().contains((TCA)i.addr.get())
@@ -306,10 +294,7 @@ void emit_svcreq_stub(Venv& env, const Venv::SvcReqPatch& p) {
 
         auto const srcrec = tc::findSrcRec(i.target);
         always_assert(srcrec);
-        stub = i.trflags.packed
-          ? svcreq::emit_retranslate_stub(frozen, env.text.data(), env.meta,
-                                          i.spOff, i.target, i.trflags)
-          : srcrec->getFallbackTranslation();
+        stub = srcrec->getFallbackTranslation();
       } break;
 
     case Vinstr::fallbackcc:
@@ -318,10 +303,7 @@ void emit_svcreq_stub(Venv& env, const Venv::SvcReqPatch& p) {
 
         auto const srcrec = tc::findSrcRec(i.target);
         always_assert(srcrec);
-        stub = i.trflags.packed
-          ? svcreq::emit_retranslate_stub(frozen, env.text.data(), env.meta,
-                                          i.spOff, i.target, i.trflags)
-          : srcrec->getFallbackTranslation();
+        stub = srcrec->getFallbackTranslation();
       } break;
 
     default: always_assert(false);

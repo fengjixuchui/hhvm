@@ -30,14 +30,10 @@ namespace HPHP { namespace jit {
 std::string BCMarker::show() const {
   assertx(valid());
   return folly::format(
-    "--- bc {}{}{}{}, fp {}, spOff {} ({}){}",
-    m_sk.offset(),
-    resumeModeShortName(m_sk.resumeMode()),
-    m_sk.hasThis()  ? "t" : "",
-    m_sk.prologue() ? "p" : "",
+    "--- bc {}, fp {}, spOff {} {}",
+    showShort(m_sk),
     m_fp ? folly::to<std::string>(m_fp->id()) : "_",
     m_spOff.offset,
-    m_sk.func()->fullName(),
     m_profTransIDs.empty()
       ? ""
       : folly::sformat(" [profTrans={}]", folly::join(',', m_profTransIDs))
@@ -45,14 +41,10 @@ std::string BCMarker::show() const {
 }
 
 bool BCMarker::valid() const {
-  if (isDummy()) return true;
   // Note, we can't check stack bounds here because of inlining, and
   // instructions like idx, which can create php-level calls.
-  return
-    m_sk.valid() &&
-    m_sk.offset() >= m_sk.func()->base() &&
-    m_sk.offset() < m_sk.func()->past() &&
-    m_profTransIDs.find(kInvalidTransID) == m_profTransIDs.end();
+  assertx(m_profTransIDs.find(kInvalidTransID) == m_profTransIDs.end());
+  return m_sk.valid();
 }
 
 //////////////////////////////////////////////////////////////////////

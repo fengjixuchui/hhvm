@@ -160,8 +160,7 @@ void emit_svcreq(CodeBlock& cb,
 ///////////////////////////////////////////////////////////////////////////////
 
 TCA emit_bindjmp_stub(CodeBlock& cb, DataBlock& data, CGMeta& fixups,
-                      FPInvOffset spOff,
-                      TCA jmp, SrcKey target, TransFlags trflags) {
+                      FPInvOffset spOff, TCA jmp, SrcKey target) {
   return emit_ephemeral(
     cb,
     data,
@@ -171,14 +170,12 @@ TCA emit_bindjmp_stub(CodeBlock& cb, DataBlock& data, CGMeta& fixups,
       ? folly::none : folly::make_optional(spOff),
     REQ_BIND_JMP,
     jmp,
-    target.toAtomicInt(),
-    trflags.packed
+    target.toAtomicInt()
   );
 }
 
 TCA emit_bindaddr_stub(CodeBlock& cb, DataBlock& data, CGMeta& fixups,
-                       FPInvOffset spOff,
-                       TCA* addr, SrcKey target, TransFlags trflags) {
+                       FPInvOffset spOff, TCA* addr, SrcKey target) {
   // Right now it's possible that addr isn't PIC addressable, as it may be into
   // the heap (SSwitchMap binds addresses directly into its heap memory,
   // see #10347945). Passing a TCA generates an RIP relative address which can
@@ -194,8 +191,7 @@ TCA emit_bindaddr_stub(CodeBlock& cb, DataBlock& data, CGMeta& fixups,
         ? folly::none : folly::make_optional(spOff),
       REQ_BIND_ADDR,
       (TCA)addr, // needs to be RIP relative so that we can relocate it
-      target.toAtomicInt(),
-      trflags.packed
+      target.toAtomicInt()
     );
   }
 
@@ -208,29 +204,12 @@ TCA emit_bindaddr_stub(CodeBlock& cb, DataBlock& data, CGMeta& fixups,
       ? folly::none : folly::make_optional(spOff),
     REQ_BIND_ADDR,
     addr,
-    target.toAtomicInt(),
-    trflags.packed
-  );
-}
-
-TCA emit_retranslate_stub(CodeBlock& cb, DataBlock& data, CGMeta& fixups,
-                          FPInvOffset spOff,
-                          SrcKey target, TransFlags trflags) {
-  return emit_persistent(
-    cb,
-    data,
-    fixups,
-    target.resumeMode() != ResumeMode::None
-      ? folly::none : folly::make_optional(spOff),
-    REQ_RETRANSLATE,
-    target.offset(),
-    trflags.packed
+    target.toAtomicInt()
   );
 }
 
 TCA emit_retranslate_opt_stub(CodeBlock& cb, DataBlock& data, CGMeta& fixups,
-                              FPInvOffset spOff,
-                              SrcKey sk) {
+                              FPInvOffset spOff, SrcKey sk) {
   return emit_persistent(
     cb,
     data,
@@ -240,68 +219,6 @@ TCA emit_retranslate_opt_stub(CodeBlock& cb, DataBlock& data, CGMeta& fixups,
     REQ_RETRANSLATE_OPT,
     sk.toAtomicInt()
   );
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-FPInvOffset extract_spoff(TCA stub) {
-  switch (arch()) {
-    case Arch::X64: {
-      HPHP::jit::x64::DecodedInstruction instr(stub);
-
-      // If it's not a lea, vasm optimized a lea{rvmfp, rvmsp} to a mov, so
-      // the offset was 0.
-      if (!instr.isLea()) return FPInvOffset{0};
-
-      auto const offBytes = safe_cast<int32_t>(instr.offset());
-      always_assert((offBytes % sizeof(TypedValue)) == 0);
-      return FPInvOffset{-(offBytes / int32_t{sizeof(TypedValue)})};
-    }
-
-    case Arch::ARM: {
-      auto instr = reinterpret_cast<vixl::Instruction*>(stub);
-
-      if (instr->IsAddSubImmediate()) {
-        auto const offBytes = safe_cast<int32_t>(instr->ImmAddSub());
-        always_assert((offBytes % sizeof(TypedValue)) == 0);
-
-        if (instr->Mask(vixl::AddSubImmediateMask) == vixl::SUB_w_imm ||
-            instr->Mask(vixl::AddSubImmediateMask) == vixl::SUB_x_imm) {
-          return FPInvOffset{offBytes / int32_t{sizeof(TypedValue)}};
-        } else if (instr->Mask(vixl::AddSubImmediateMask) == vixl::ADD_w_imm ||
-                   instr->Mask(vixl::AddSubImmediateMask) == vixl::ADD_x_imm) {
-          return FPInvOffset{-(offBytes / int32_t{sizeof(TypedValue)})};
-        }
-      } else if (instr->IsMovn()) {
-        auto next = instr->NextInstruction();
-        always_assert(next->Mask(vixl::AddSubShiftedMask) == vixl::ADD_w_shift ||
-                      next->Mask(vixl::AddSubShiftedMask) == vixl::ADD_x_shift);
-        auto const offBytes = safe_cast<int32_t>(~instr->ImmMoveWide());
-        always_assert((offBytes % sizeof(TypedValue)) == 0);
-        return FPInvOffset{-(offBytes / int32_t{sizeof(TypedValue)})};
-      } else if (instr->IsMovz()) {
-        auto next = instr->NextInstruction();
-        always_assert(next->Mask(vixl::AddSubShiftedMask) == vixl::SUB_w_shift ||
-                      next->Mask(vixl::AddSubShiftedMask) == vixl::SUB_x_shift);
-        auto const offBytes = safe_cast<int32_t>(instr->ImmMoveWide());
-        always_assert((offBytes % sizeof(TypedValue)) == 0);
-        return FPInvOffset{offBytes / int32_t{sizeof(TypedValue)}};
-      } else {
-        always_assert(false && "Expected an instruction that offsets SP");
-      }
-    }
-
-    case Arch::PPC64: {
-      ppc64_asm::DecodedInstruction instr(stub);
-      if (!instr.isSpOffsetInstr()) {
-        return FPInvOffset{0};
-      } else {
-        auto const offBytes = safe_cast<int32_t>(instr.offset());
-        return FPInvOffset{-(offBytes / int32_t{sizeof(TypedValue)})};
-      }
-    }
-  }
-  not_reached();
 }
 
 ///////////////////////////////////////////////////////////////////////////////

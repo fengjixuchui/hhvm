@@ -25,14 +25,12 @@
   (name typing_heap)
   (wrapped false)
   (modules
-    typing_classes_heap
-    typing_heap
-    typing_lazy_heap)
+    typing_classes_heap)
   (libraries
     core_kernel
     decl
-    counters
     decl_ancestors
+    decl_counters
     decl_inheritance
     naming_provider
     shallow_decl_defs
@@ -58,10 +56,12 @@
     typing_coeffects
     typing_coercion
     typing_cont_key
+    typing_const_reifiable
     typing_continuations
     typing_deferred_members
     typing_dependent_type
     typing_enforceability
+    typing_enforceable_hint
     typing_enum
     typing_env
     typing_env_from_def
@@ -88,6 +88,7 @@
     typing_pocket_universes
     typing_print
     typing_reactivity
+    typing_reified_check
     typing_solver
     typing_solver_utils
     typing_special_fun
@@ -120,6 +121,7 @@
     type_mapper_generic
     typing_ast
     typing_defs
+    typing_heap
     global_config)
   (preprocess (pps ppx_deriving.std)))
 
@@ -148,7 +150,6 @@
     typing_check_decls
     typing_debug
     typing_disposable
-    typing_expression_trees
     typing_extends
     typing_exts
     typing_func_terminality
@@ -249,6 +250,7 @@
     typing_check_utils)
   (libraries
     core_kernel
+    decl_counters
     decl_service
     errors
     file_info

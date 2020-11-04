@@ -8,12 +8,13 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
+use bumpalo::Bump;
 use ocamlrep::{ptr::UnsafeOcamlPtr, FromOcamlRep};
 use ocamlrep_ocamlpool::ocaml_ffi;
 use oxidized::parser_options::ParserOptions;
 use parser_core_types::{
-    positioned_syntax::PositionedSyntax, source_text::SourceText, syntax_error::SyntaxError,
-    syntax_tree::SyntaxTree,
+    source_text::SourceText, syntax_by_ref::positioned_syntax::PositionedSyntax,
+    syntax_error::SyntaxError, syntax_tree::SyntaxTree,
 };
 
 // "only_for_parser_errors" because it sets only a subset of options relevant to parser errors,
@@ -39,13 +40,14 @@ unsafe fn parser_options_from_ocaml_only_for_parser_errors(
     let po_enable_xhp_class_modifier = bool::from_ocaml(*ocaml_opts.add(10)).unwrap();
     let po_disable_xhp_element_mangling = bool::from_ocaml(*ocaml_opts.add(11)).unwrap();
     let po_disable_xhp_children_declarations = bool::from_ocaml(*ocaml_opts.add(12)).unwrap();
-    let po_enable_first_class_function_pointers = bool::from_ocaml(*ocaml_opts.add(13)).unwrap();
-    let po_enable_enum_classes = bool::from_ocaml(*ocaml_opts.add(14)).unwrap();
-    let po_disable_modes = bool::from_ocaml(*ocaml_opts.add(15)).unwrap();
-    let po_disable_array = bool::from_ocaml(*ocaml_opts.add(16)).unwrap();
-    let po_const_default_lambda_args = bool::from_ocaml(*ocaml_opts.add(17)).unwrap();
-    let po_disable_array_typehint = bool::from_ocaml(*ocaml_opts.add(18)).unwrap();
-    let po_allow_unstable_features = bool::from_ocaml(*ocaml_opts.add(19)).unwrap();
+    let po_enable_enum_classes = bool::from_ocaml(*ocaml_opts.add(13)).unwrap();
+    let po_disable_modes = bool::from_ocaml(*ocaml_opts.add(14)).unwrap();
+    let po_disable_array = bool::from_ocaml(*ocaml_opts.add(15)).unwrap();
+    let po_const_default_lambda_args = bool::from_ocaml(*ocaml_opts.add(16)).unwrap();
+    let po_disable_array_typehint = bool::from_ocaml(*ocaml_opts.add(17)).unwrap();
+    let po_allow_unstable_features = bool::from_ocaml(*ocaml_opts.add(18)).unwrap();
+    let po_disallow_hash_comments = bool::from_ocaml(*ocaml_opts.add(19)).unwrap();
+    let po_disallow_fun_and_cls_meth_pseudo_funcs = bool::from_ocaml(*ocaml_opts.add(20)).unwrap();
 
     parser_options.po_disable_lval_as_an_expression = po_disable_lval_as_an_expression;
     parser_options.po_disable_legacy_soft_typehints = po_disable_legacy_soft_typehints;
@@ -58,45 +60,24 @@ unsafe fn parser_options_from_ocaml_only_for_parser_errors(
     parser_options.po_enable_xhp_class_modifier = po_enable_xhp_class_modifier;
     parser_options.po_disable_xhp_element_mangling = po_disable_xhp_element_mangling;
     parser_options.po_disable_xhp_children_declarations = po_disable_xhp_children_declarations;
-    parser_options.po_enable_first_class_function_pointers =
-        po_enable_first_class_function_pointers;
     parser_options.po_enable_enum_classes = po_enable_enum_classes;
     parser_options.po_disable_modes = po_disable_modes;
     parser_options.po_disable_array = po_disable_array;
     parser_options.po_disable_array_typehint = po_disable_array_typehint;
     parser_options.po_allow_unstable_features = po_allow_unstable_features;
-
+    parser_options.po_disallow_hash_comments = po_disallow_hash_comments;
+    parser_options.po_disallow_fun_and_cls_meth_pseudo_funcs =
+        po_disallow_fun_and_cls_meth_pseudo_funcs;
     (parser_options, (hhvm_compat_mode, hhi_mode, codegen))
-}
-
-// See similar method in rust_parser_errors::parse_errors for explanation.
-// TODO: factor this out to separate crate
-fn drop_tree<T, S>(tree: Box<SyntaxTree<T, S>>)
-where
-    S: Clone,
-{
-    match tree.required_stack_size() {
-        None => std::mem::drop(tree),
-        Some(stack_size) => {
-            let raw_pointer = Box::leak(tree) as *mut SyntaxTree<T, S> as usize;
-            std::thread::Builder::new()
-                .stack_size(stack_size)
-                .spawn(move || {
-                    let tree = unsafe { Box::from_raw(raw_pointer as *mut SyntaxTree<T, S>) };
-                    std::mem::drop(tree)
-                })
-                .expect("ERROR: thread::spawn")
-                .join()
-                .expect("ERROR: failed to wait on new thread")
-        }
-    }
 }
 
 ocaml_ffi! {
     fn drop_tree_positioned(ocaml_tree: usize) {
-        let tree_pointer = ocaml_tree as *mut SyntaxTree<PositionedSyntax, ()>;
-        let tree = unsafe { Box::from_raw(tree_pointer) };
-        drop_tree(tree);
+        unsafe {
+            let pair = Box::from_raw(ocaml_tree as *mut (usize, usize));
+            let _ = Box::from_raw(pair.0 as *mut SyntaxTree<PositionedSyntax, ()>);
+            let _ = Box::from_raw(pair.1 as *mut Bump);
+        }
     }
 
     fn rust_parser_errors_positioned(
@@ -106,8 +87,14 @@ ocaml_ffi! {
     ) -> Vec<SyntaxError> {
         let (parser_options, (hhvm_compat_mode, hhi_mode, codegen)) =
             unsafe { parser_options_from_ocaml_only_for_parser_errors(ocaml_parser_options) };
-        let tree = unsafe {
-            <SyntaxTree<PositionedSyntax, ()>>::ffi_pointer_into_boxed(ocaml_tree, &source_text)
+        let (tree, _arena) = unsafe {
+            // A rust pointer of (&SyntaxTree, &Arena) is passed to Ocaml in rust_parser_ffi::parse,
+            // Ocaml passes it back here
+            // PLEASE ENSURE TYPE SAFETY MANUALLY!!!
+            let pair = Box::from_raw(ocaml_tree as *mut (usize, usize));
+            let tree = <SyntaxTree<PositionedSyntax, ()>>::ffi_pointer_into_boxed(pair.0, &source_text);
+            let arena = Box::from_raw(pair.1 as *mut Bump);
+             (tree, arena)
         };
 
         let errors = rust_parser_errors::parse_errors(
@@ -117,7 +104,6 @@ ocaml_ffi! {
             hhi_mode,
             codegen,
         );
-        drop_tree(tree);
         errors
     }
 }

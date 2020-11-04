@@ -31,6 +31,7 @@
 
 #include "hphp/runtime/base/config.h"
 #include "hphp/runtime/base/typed-value.h"
+#include "hphp/runtime/base/types.h"
 #include "hphp/util/compilation-flags.h"
 #include "hphp/util/hash-map.h"
 #include "hphp/util/functional.h"
@@ -93,13 +94,14 @@ struct RepoOptions {
   H(bool,           DisallowFuncPtrsInConstants,      false)          \
   E(bool,           EmitInstMethPointers,             false)          \
   H(bool,           AllowUnstableFeatures,            false)          \
+  H(bool,           DisallowHashComments,             false)          \
   H(bool,           EnableXHPClassModifier,           true)           \
   H(bool,           DisableXHPElementMangling,        true)           \
   H(bool,           DisableArray,                     true)           \
   H(bool,           DisableArrayCast,                 true)           \
   H(bool,           DisableArrayTypehint,             true)           \
-  H(bool,           EnableFirstClassFunctionPointers, true)           \
   H(bool,           EnableEnumClasses,                false)          \
+  H(bool,           DisallowFunAndClsMethPseudoFuncs, false)          \
   /**/
 
   /**/
@@ -524,7 +526,6 @@ struct RuntimeOption {
   static int StackTraceTimeout;
   static std::string RemoteTraceOutputDir;
   static std::set<std::string, stdltistr> TraceFunctions;
-  static uint32_t TraceFuncId;
 
   static bool EnableStats;
   static bool EnableAPCStats;
@@ -585,7 +586,6 @@ struct RuntimeOption {
   static std::string EvalJitSerdesFile;
   static std::string ProfDataTag;
   static bool DumpPreciseProfData;
-  static bool EnableFirstClassFunctionPointers;
 
   // ENABLED (1) selects PHP7 behavior.
   static bool PHP7_NoHexNumerics;
@@ -823,6 +823,8 @@ struct RuntimeOption {
   F(double,   JitLayoutColdThreshold,  0.0005)                          \
   F(int32_t,  JitLayoutMainFactor,     1000)                            \
   F(int32_t,  JitLayoutColdFactor,     5)                               \
+  F(bool,     JitLayoutExtTSP,         false)                           \
+  F(double,   JitLayoutMaxMergeRatio,  1000000)                         \
   F(bool,     JitAHotSizeRoundUp,      true)                            \
   F(uint32_t, GdbSyncChunks,           128)                             \
   F(bool, JitKeepDbgFiles,             false)                           \
@@ -1077,7 +1079,7 @@ struct RuntimeOption {
    *     sample rate is 0, logging arrays are never constructed.        \
    *     Logging arrays are only created before RTA has begun. */       \
   F(int32_t, BespokeArrayLikeMode, 0)                                   \
-  F(uint64_t, EmitLoggingArraySampleRate, 0)                            \
+  F(uint64_t, EmitLoggingArraySampleRate, 1000)                         \
   F(string, ExportLoggingArrayDataPath, "")                             \
   /* Raise notices on various array operations which may present        \
    * compatibility issues with Hack arrays.                             \
@@ -1155,7 +1157,7 @@ struct RuntimeOption {
   F(bool, RxPretendIsEnabled, false)                                    \
   /* Raise warning when class pointers are used as strings. */          \
   F(bool, RaiseClassConversionWarning, false)                           \
-  F(bool, EmitClsMethPointers, false)                                   \
+  F(bool, EmitClsMethPointers, true)                                    \
   /* EmitClassPointers:
    * 0 => convert Foo::class to string "Foo"
    * 1 => convert Foo::class to class pointer

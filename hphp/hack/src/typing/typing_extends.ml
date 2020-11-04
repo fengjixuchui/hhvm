@@ -512,7 +512,10 @@ let check_members
           | `FromProp -> Dep.Prop (parent_class_elt.ce_origin, member_name)
           | `FromConstructor -> Dep.Cstr parent_class_elt.ce_origin
         in
-        Typing_deps.add_idep (Dep.Class (Cls.name class_)) dep;
+        Typing_deps.add_idep
+          (Env.get_deps_mode env)
+          (Dep.Class (Cls.name class_))
+          dep;
         check_override
           ~check_member_unique
           env
@@ -622,6 +625,7 @@ let check_constructors
         let parent_cstr = Inst.instantiate_ce psubst parent_cstr in
         let cstr = Inst.instantiate_ce subst cstr in
         Typing_deps.add_idep
+          (Env.get_deps_mode env)
           (Dep.Class (Cls.name class_))
           (Dep.Cstr parent_cstr.ce_origin);
         check_override
@@ -737,7 +741,7 @@ let tconst_subsumption env class_name parent_typeconst child_typeconst on_error
         let emit_error =
           Errors.invalid_enforceable_type "constant" (pos, name)
         in
-        Enforceable_hint_check.validator#validate_type
+        Typing_enforceable_hint.validator#validate_type
           tast_env
           (fst child_typeconst.ttc_name)
           ty
@@ -749,7 +753,8 @@ let tconst_subsumption env class_name parent_typeconst child_typeconst on_error
         | None -> ()
         | Some pos ->
           let tast_env = Tast_env.typing_env_as_tast_env env in
-          Type_const_check.check_reifiable tast_env child_typeconst pos) );
+          Typing_const_reifiable.check_reifiable tast_env child_typeconst pos)
+    );
 
     (* If the parent cannot be overridden, we unify the types otherwise we ensure
      * the child's assigned type is compatible with the parent's *)

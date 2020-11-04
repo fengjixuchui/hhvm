@@ -128,7 +128,7 @@ struct
     | Tlike x -> Tlike (ty x)
     | Tfun ft -> Tfun (fun_type ft)
     | Tapply (sid, xl) -> Tapply (string_id sid, List.map xl ty)
-    | Taccess (root_ty, ids) -> Taccess (ty root_ty, List.map ids string_id)
+    | Taccess (root_ty, id) -> Taccess (ty root_ty, string_id id)
     | Tshape (shape_kind, fdm) ->
       Tshape (shape_kind, ShapeFieldMap.map_and_rekey fdm shape_field_name ty)
     | Tpu_access (base, sid) -> Tpu_access (ty base, string_id sid)
@@ -299,6 +299,7 @@ struct
       dc_smethods = dc.dc_smethods;
       dc_construct = dc.dc_construct;
       dc_ancestors = SMap.map ty dc.dc_ancestors;
+      dc_implements_dynamic = dc.dc_implements_dynamic;
       dc_enum_type = Option.map dc.dc_enum_type enum_type;
       dc_decl_errors = None;
       dc_condition_types = dc.dc_condition_types;
@@ -339,6 +340,7 @@ struct
       sc_req_extends = List.map sc.sc_req_extends ty;
       sc_req_implements = List.map sc.sc_req_implements ty;
       sc_implements = List.map sc.sc_implements ty;
+      sc_implements_dynamic = sc.sc_implements_dynamic;
       sc_consts = List.map sc.sc_consts shallow_class_const;
       sc_typeconsts = List.map sc.sc_typeconsts shallow_typeconst;
       sc_pu_enums = List.map sc.sc_pu_enums shallow_pu_enum;

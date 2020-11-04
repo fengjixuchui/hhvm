@@ -336,16 +336,7 @@ module Full = struct
     | Tarray (x, y) -> tarray k x y
     | Tapply ((_, s), []) -> to_doc s
     | Tgeneric (s, []) -> to_doc s
-    | Taccess (root_ty, ids) ->
-      Concat
-        [
-          k root_ty;
-          to_doc
-            (List.fold_left
-               ids
-               ~f:(fun acc (_, sid) -> acc ^ "::" ^ sid)
-               ~init:"");
-        ]
+    | Taccess (root_ty, id) -> Concat [k root_ty; text "::"; to_doc (snd id)]
     | Toption x -> Concat [text "?"; k x]
     | Tlike x -> Concat [text "~"; k x]
     | Tprim x -> tprim x
@@ -586,6 +577,7 @@ module Full = struct
     | Tpu (base, (_, enum)) -> pu_concat k base enum
     | Tpu_type_access ((_, member), (_, tyname)) ->
       text member ^^ text (":@" ^ tyname)
+    | Taccess (root_ty, id) -> Concat [k root_ty; text "::"; to_doc (snd id)]
 
   let rec constraint_type_ to_doc st env x =
     let k lty = locl_ty to_doc st env lty in
@@ -827,6 +819,7 @@ module ErrorString = struct
          in a type argument position then, which inst below
          prints with a different function (namely Full.locl_ty)  *)
       failwith "Tunapplied_alias is not a type"
+    | Taccess (_ty, _id) -> "a type constant"
 
   and inst env tyl =
     if List.is_empty tyl then
@@ -1025,6 +1018,8 @@ module Json = struct
       @@ kind p "pocket_universe_type_access"
       @ name (snd member)
       @ name (snd typ)
+    (* TODO akenn *)
+    | (p, Taccess (ty, _id)) -> obj @@ kind p "type_constant" @ args [ty]
 
   type deserialized_result = (locl_ty, deserialization_error) result
 
@@ -1385,7 +1380,8 @@ module Json = struct
                         ~mutability:None
                         ~has_default:false
                         ~ifc_external:false
-                        ~ifc_can_call:false;
+                        ~ifc_can_call:false
+                        ~is_atom:false;
                     (* Dummy values: these aren't currently serialized. *)
                     fp_pos = Pos.none;
                     fp_name = None;
@@ -1402,7 +1398,8 @@ module Json = struct
                  ft_implicit_params =
                    {
                      capability =
-                       Typing_make_type.default_capability Reason.Rnone;
+                       (* TODO(coeffects) properly serialize implicit params *)
+                       Typing_make_type.nothing Reason.Rnone;
                    };
                  ft_ret = { et_type = ft_ret; et_enforced = false };
                  (* Dummy values: these aren't currently serialized. *)

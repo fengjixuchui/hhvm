@@ -76,9 +76,7 @@ struct SrcKey : private boost::totally_ordered<SrcKey> {
   /////////////////////////////////////////////////////////////////////////////
 
   /*
-   * Whether the SrcKey has a valid FuncId.
-   *
-   * Does not check for validity of any other fields.
+   * Whether this is the sentinel value of invalid SrcKey.
    */
   bool valid() const;
 
@@ -91,10 +89,19 @@ struct SrcKey : private boost::totally_ordered<SrcKey> {
   /*
    * Direct accessors.
    */
+
   FuncId funcID() const;
-  int offset() const;
-  bool prologue() const;
+
+  // Offset of the bytecode represented by this SrcKey.
+  // Valid only when !prologue().
+  Offset offset() const;
+
+  // Offset of the bytecode that will be used to enter the function.
+  // Valid only when prologue().
+  Offset entryOffset() const;
+
   ResumeMode resumeMode() const;
+  bool prologue() const;
   bool hasThis() const;
 
   /*
@@ -104,6 +111,11 @@ struct SrcKey : private boost::totally_ordered<SrcKey> {
   const Unit* unit() const;
   Op op() const;
   PC pc() const;
+  int lineNumber() const;
+
+  // Human readable offset of one of the above. Gives a std::string instead of
+  // an Offset, as this should be used only for debugging and tracing.
+  std::string printableOffset() const;
 
   /////////////////////////////////////////////////////////////////////////////
 
@@ -158,13 +170,16 @@ private:
 
   /////////////////////////////////////////////////////////////////////////////
 
+  static constexpr size_t kNumModeBits = 2;
+  static constexpr size_t kNumOffsetBits = 32 - kNumModeBits;
+
   union {
     AtomicInt m_atomicInt;
     struct {
       FuncId m_funcID;
-      uint32_t m_offset : 30;
-      uint32_t m_resumeModeAndPrologue : 2;
-    };
+      uint32_t m_offset : kNumOffsetBits;
+      uint32_t m_resumeModeAndTags : kNumModeBits;
+    } m_s;
   };
 };
 

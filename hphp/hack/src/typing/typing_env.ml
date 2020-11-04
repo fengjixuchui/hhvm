@@ -38,7 +38,13 @@ let map_tcopt env ~f =
   let genv = { env.genv with tcopt } in
   { env with genv }
 
+let get_deps_mode env = Provider_context.get_deps_mode env.decl_env.Decl_env.ctx
+
 let get_ctx env = env.decl_env.Decl_env.ctx
+
+let get_file env = env.genv.file
+
+let get_tracing_info env = env.tracing_info
 
 let set_log_level env key log_level =
   { env with log_levels = SMap.add key log_level env.log_levels }
@@ -556,7 +562,7 @@ let initial_local tpenv local_reactive =
     local_reactive;
   }
 
-let empty ?(mode = FileInfo.Mstrict) ctx file ~droot =
+let empty ?origin ?(mode = FileInfo.Mstrict) ctx file ~droot =
   {
     function_pos = Pos.none;
     fresh_typarams = SSet.empty;
@@ -565,8 +571,9 @@ let empty ?(mode = FileInfo.Mstrict) ctx file ~droot =
     in_try = false;
     in_case = false;
     inside_constructor = false;
-    et_spliced_types = None;
     decl_env = { mode; droot; ctx };
+    tracing_info =
+      Option.map origin ~f:(fun origin -> { Decl_counters.origin; file });
     genv =
       {
         tcopt = Provider_context.get_tcopt ctx;
@@ -637,7 +644,8 @@ let error_if_reactive_context env f =
 
 let make_depend_on_class env x =
   let dep = Dep.Class x in
-  Option.iter env.decl_env.droot (fun root -> Typing_deps.add_idep root dep);
+  Option.iter env.decl_env.droot (fun root ->
+      Typing_deps.add_idep (get_deps_mode env) root dep);
   ()
 
 let print_size _kind _name obj =
@@ -653,7 +661,13 @@ let print_size _kind _name obj =
 
 let get_typedef env x =
   make_depend_on_class env x;
-  print_size "type" x (Decl_provider.get_typedef (get_ctx env) x)
+  print_size
+    "type"
+    x
+    (Decl_provider.get_typedef
+       ?tracing_info:(get_tracing_info env)
+       (get_ctx env)
+       x)
 
 let is_typedef env x =
   match Naming_provider.get_type_kind (get_ctx env) x with
@@ -662,7 +676,13 @@ let is_typedef env x =
 
 let get_class (env : env) (name : string) : Cls.t option =
   make_depend_on_class env name;
-  print_size "class" name (Decl_provider.get_class (get_ctx env) name)
+  print_size
+    "class"
+    name
+    (Decl_provider.get_class
+       ?tracing_info:(get_tracing_info env)
+       (get_ctx env)
+       name)
 
 let get_class_dep env x =
   Decl_env.add_extends_dependency env.decl_env x;
@@ -671,8 +691,11 @@ let get_class_dep env x =
 let get_fun env x =
   let dep = Typing_deps.Dep.Fun x in
   Option.iter env.decl_env.Decl_env.droot (fun root ->
-      Typing_deps.add_idep root dep);
-  print_size "fun" x (Decl_provider.get_fun (get_ctx env) x)
+      Typing_deps.add_idep (get_deps_mode env) root dep);
+  print_size
+    "fun"
+    x
+    (Decl_provider.get_fun ?tracing_info:(get_tracing_info env) (get_ctx env) x)
 
 let get_enum_constraint env x =
   match get_class env x with
@@ -689,29 +712,42 @@ let get_env_mutability env = env.lenv.local_mutability
 
 let get_enum env x =
   make_depend_on_class env x;
-  match Decl_provider.get_class (get_ctx env) x with
+  match
+    Decl_provider.get_class ?tracing_info:(get_tracing_info env) (get_ctx env) x
+  with
   | Some tc when Option.is_some (Cls.enum_type tc) -> Some tc
   | _ -> None
 
 let is_enum env x = Option.is_some (get_enum env x)
 
+let is_enum_class env x =
+  match get_enum env x with
+  | Some cls ->
+    (match Cls.enum_type cls with
+    | Some enum_type -> enum_type.te_enum_class
+    | None -> false (* we know this is impossible due to get_enum *))
+  | None -> false
+
 let get_typeconst env class_ mid =
   make_depend_on_class env (Cls.name class_);
   let dep = Dep.Const (Cls.name class_, mid) in
-  Option.iter env.decl_env.droot (fun root -> Typing_deps.add_idep root dep);
+  Option.iter env.decl_env.droot (fun root ->
+      Typing_deps.add_idep (get_deps_mode env) root dep);
   Cls.get_typeconst class_ mid
 
 let get_pu_enum env class_ mid =
   make_depend_on_class env (Cls.name class_);
   let dep = Dep.Const (Cls.name class_, mid) in
-  Option.iter env.decl_env.droot (fun root -> Typing_deps.add_idep root dep);
+  Option.iter env.decl_env.droot (fun root ->
+      Typing_deps.add_idep (get_deps_mode env) root dep);
   Cls.get_pu_enum class_ mid
 
 (* Used to access class constants. *)
 let get_const env class_ mid =
   make_depend_on_class env (Cls.name class_);
   let dep = Dep.Const (Cls.name class_, mid) in
-  Option.iter env.decl_env.droot (fun root -> Typing_deps.add_idep root dep);
+  Option.iter env.decl_env.droot (fun root ->
+      Typing_deps.add_idep (get_deps_mode env) root dep);
   Cls.get_const class_ mid
 
 (* Used to access "global constants". That is constants that were
@@ -719,8 +755,12 @@ let get_const env class_ mid =
  *)
 let get_gconst env cst_name =
   let dep = Dep.GConst cst_name in
-  Option.iter env.decl_env.droot (fun root -> Typing_deps.add_idep root dep);
-  Decl_provider.get_gconst (get_ctx env) cst_name
+  Option.iter env.decl_env.droot (fun root ->
+      Typing_deps.add_idep (get_deps_mode env) root dep);
+  Decl_provider.get_gconst
+    ?tracing_info:(get_tracing_info env)
+    (get_ctx env)
+    cst_name
 
 let get_static_member is_method env class_ mid =
   make_depend_on_class env (Cls.name class_);
@@ -731,7 +771,8 @@ let get_static_member is_method env class_ mid =
       else
         Dep.SProp (x, mid)
     in
-    Option.iter env.decl_env.droot (fun root -> Typing_deps.add_idep root dep)
+    Option.iter env.decl_env.droot (fun root ->
+        Typing_deps.add_idep (get_deps_mode env) root dep)
   in
   add_dep (Cls.name class_);
 
@@ -789,7 +830,8 @@ let get_member is_method env class_ mid =
       else
         Dep.Prop (x, mid)
     in
-    Option.iter env.decl_env.droot (fun root -> Typing_deps.add_idep root dep)
+    Option.iter env.decl_env.droot (fun root ->
+        Typing_deps.add_idep (get_deps_mode env) root dep)
   in
   (* The type of a member is stored separately in the heap. This means that
    * any user of the member also has a dependency on the class where the member
@@ -821,7 +863,7 @@ let get_construct env class_ =
   let add_dep x =
     let dep = Dep.Cstr x in
     Option.iter env.decl_env.Decl_env.droot (fun root ->
-        Typing_deps.add_idep root dep)
+        Typing_deps.add_idep (get_deps_mode env) root dep)
   in
   add_dep (Cls.name class_);
   Option.iter (fst (Cls.construct class_)) (fun ce -> add_dep ce.ce_origin);
@@ -853,6 +895,22 @@ let with_env env f =
   let env = set_return env ret in
   (env, result)
 
+let with_origin env origin f =
+  let ti1 = env.tracing_info in
+  let ti2 = Option.map ti1 ~f:(fun ti -> { ti with Decl_counters.origin }) in
+  let env = { env with tracing_info = ti2 } in
+  let (env, result) = f env in
+  let env = { env with tracing_info = ti1 } in
+  (env, result)
+
+let with_origin2 env origin f =
+  let ti1 = env.tracing_info in
+  let ti2 = Option.map ti1 ~f:(fun ti -> { ti with Decl_counters.origin }) in
+  let env = { env with tracing_info = ti2 } in
+  let (env, r1, r2) = f env in
+  let env = { env with tracing_info = ti1 } in
+  (env, r1, r2)
+
 let is_static env = env.genv.static
 
 let get_val_kind env = env.genv.val_kind
@@ -879,8 +937,6 @@ let get_parent_class env =
   get_parent_id env >>= get_class_dep env
 
 let get_fn_kind env = env.genv.fun_kind
-
-let get_file env = env.genv.file
 
 let set_fn_kind env fn_type =
   let genv = env.genv in
@@ -1390,7 +1446,8 @@ and get_tyvars_i env (ty : internal_type) =
     | Tpu (base, _) -> get_tyvars env base
     | Tpu_type_access (_, _)
     | Tunapplied_alias _ ->
-      (env, ISet.empty, ISet.empty))
+      (env, ISet.empty, ISet.empty)
+    | Taccess (ty, _ids) -> get_tyvars env ty)
   | ConstraintType ty ->
     (match deref_constraint_type ty with
     | (_, Tdestructure { d_required; d_optional; d_variadic; d_kind = _ }) ->

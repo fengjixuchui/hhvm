@@ -148,9 +148,11 @@ let rec subtype ~pos t1 t2 acc =
         let preprocess shape_kind = function
           (* A missing field of an open shape becomes an optional field of type mixed *)
           | None when T.equal_shape_kind shape_kind T.Open_shape ->
-            Some { sft_optional = true; sft_ty = Tinter [] }
-          (* If a field is optional with type nothing, consider it missing *)
-          | Some { sft_ty = Tunion []; sft_optional = true } -> None
+            Some { sft_optional = true; sft_policy = pbot; sft_ty = Tinter [] }
+          (* If a field is optional with type nothing, consider it missing.
+             Since it has type nothing, it can never be assigned and therefore
+             we do not need to consider its policy *)
+          | Some { sft_ty = Tunion []; sft_optional = true; _ } -> None
           | sft -> sft
         in
         let process_field acc _ f1 f2 =
@@ -160,8 +162,9 @@ let rec subtype ~pos t1 t2 acc =
           | (Some { sft_optional = true; _ }, Some { sft_optional = false; _ })
             ->
             err "optional field cannot be subtype of required"
-          | (Some { sft_ty = t1; _ }, Some { sft_ty = t2; _ }) ->
-            (subtype t1 t2 acc, None)
+          | ( Some { sft_ty = t1; sft_policy = p1; _ },
+              Some { sft_ty = t2; sft_policy = p2; _ } ) ->
+            (L.(p1 < p2) ~pos acc |> subtype t1 t2, None)
           | (Some _, None) -> err "missing field"
           | (None, Some { sft_optional; _ }) ->
             if sft_optional then
@@ -529,7 +532,9 @@ let may_throw ~pos renv env pc_deps exn_ty =
 let call ~pos renv env call_type that_pty_opt args_pty ret_ty =
   let name =
     match call_type with
-    | Cglobal callable_name -> callable_name
+    | Cconstructor callable_name
+    | Cglobal (callable_name, _) ->
+      Decl.callable_name_to_string callable_name
     | Clocal _ -> "anonymous"
   in
   let callee = Env.new_policy_var renv (name ^ "_self") in
@@ -557,69 +562,105 @@ let call ~pos renv env call_type that_pty_opt args_pty ret_ty =
       f_exn = callee_exn;
     }
   in
+  let result_from_fun_decl fp callable_name = function
+    | { fd_kind = FDPolicied policy; fd_args } ->
+      let scheme = Decl.make_callable_scheme renv policy fp fd_args in
+      let prop =
+        (* because cipp_scheme is created after fp they cannot
+        mismatch and call_constraint will not fail *)
+        Option.value_exn (Solver.call_constraint ~subtype ~pos fp scheme)
+      in
+      (env, prop)
+    | { fd_kind = FDInferFlows; _ } ->
+      let env = Env.add_dep env (Decl.callable_name_to_string callable_name) in
+      (env, Chole (pos, fp))
+  in
   match call_type with
-  | Clocal fty ->
-    let env = Env.acc env @@ subtype ~pos (Tfun fty) (Tfun hole_ty) in
+  | Clocal fun_ ->
+    let env = Env.acc env @@ subtype ~pos (Tfun fun_) (Tfun hole_ty) in
     (env, ret_pty)
-  | Cglobal callable_name ->
-    let fp =
-      { fp_name = callable_name; fp_this = that_pty_opt; fp_type = hole_ty }
-    in
+  | Cglobal (callable_name, fty) ->
+    let fp = { fp_name = name; fp_this = that_pty_opt; fp_type = hole_ty } in
     let (env, call_constraint) =
-      match SMap.find_opt callable_name renv.re_decl.de_fun with
-      | Some { fd_kind = FDGovernedBy policy; fd_args } ->
-        let scheme = Decl.make_callable_scheme renv policy fp fd_args in
-        let prop =
-          (* because cipp_scheme is created after fp they cannot
-             mismatch and call_constraint will not fail *)
-          Option.value_exn (Solver.call_constraint ~subtype ~pos fp scheme)
-        in
-        (env, prop)
-      | Some { fd_kind = FDInferFlows; _ } ->
-        let env = Env.add_dep env callable_name in
-        (env, Chole (pos, fp))
-      | None -> fail "unknown function '%s'" callable_name
+      result_from_fun_decl fp callable_name (Decl.convert_fun_type fty)
+    in
+    let env = Env.acc env (fun acc -> call_constraint :: acc) in
+    (env, ret_pty)
+  | Cconstructor callable_name ->
+    (* We don't have the function type on the TAST with constructors, so grab it from
+      decl heap. *)
+    let fp = { fp_name = name; fp_this = that_pty_opt; fp_type = hole_ty } in
+    let (env, call_constraint) =
+      match Decl.get_callable_decl renv.re_ctx callable_name with
+      | Some decl -> result_from_fun_decl fp callable_name decl
+      | None -> fail "Could not find %s in declarations" name
     in
     let env = Env.acc env (fun acc -> call_constraint :: acc) in
     (env, ret_pty)
 
-let cow_array ~pos renv ty =
+(* Return either an array or a shape (anything that uses Array_get syntax for
+   reads/writes) *)
+let any_cow_array ~get_array ~mk_array ~pos renv ty =
   let rec f = function
-    | Tcow_array arry -> Some arry
+    | Tcow_array arry -> Some (Aarray arry)
+    | Tshape (k, s) -> Some (Ashape (k, s))
     | Tinter tys -> List.find_map tys f
     | _ -> None
   in
-  match f ty with
+  match Option.(f ty >>= get_array) with
   | Some arry -> arry
   | None ->
     Errors.unknown_information_flow pos "Hack array";
     (* The following CoW array is completely arbitrary. *)
-    {
-      a_kind = Adict;
-      a_key = Tprim (Env.new_policy_var renv "fake_key");
-      a_value = Tprim (Env.new_policy_var renv "fake_value");
-      a_length = Env.new_policy_var renv "fake_length";
-    }
+    mk_array
+      {
+        a_kind = Adict;
+        a_key = Tprim (Env.new_policy_var renv "fake_key");
+        a_value = Tprim (Env.new_policy_var renv "fake_value");
+        a_length = Env.new_policy_var renv "fake_length";
+      }
 
-(* Deals with a true assignment to either a local variable
-   or an object property *)
-let asn ~expr ~pos renv env ((_, lhs_ty), lhs_exp) rhs_pty =
+let array_or_shape =
+  let get_array a = Some a in
+  let mk_array a = Aarray a in
+  any_cow_array ~get_array ~mk_array
+
+let cow_array =
+  let get_array = function
+    | Aarray a -> Some a
+    | Ashape _ -> None
+  in
+  let mk_array a = a in
+  any_cow_array ~get_array ~mk_array
+
+(* Deals with an assignment to a local variable or an object property *)
+let assign_helper
+    ?(use_pc = true) ~expr ~pos renv env ((_, lhs_ty), lhs_exp) rhs_pty =
   match lhs_exp with
   | A.Lvar (_, lid) ->
     let prefix = Local_id.to_string lid in
     let lhs_pty = Lift.ty ~prefix renv lhs_ty in
-    (* set asn to true to mark the local as assigned in the
-       current code branch *)
     let env = Env.set_local_type env lid lhs_pty in
-    let deps = PSet.elements (Env.get_lpc env) in
-    let env = Env.acc env (add_dependencies ~pos deps lhs_pty) in
+    let env =
+      if use_pc then
+        let deps = PSet.elements (Env.get_lpc env) in
+        Env.acc env (add_dependencies ~pos deps lhs_pty)
+      else
+        env
+    in
     let env = Env.acc env (subtype ~pos rhs_pty lhs_pty) in
     env
   | A.Obj_get (obj, (_, A.Id (_, property)), _) ->
     let (env, obj_pty) = expr env obj in
     let obj_pol = (receiver_of_obj_get obj_pty property).c_self in
     let lhs_pty = property_ptype renv obj_pty property lhs_ty in
-    let deps = obj_pol :: PSet.elements (Env.get_gpc renv env) in
+    let pc =
+      if use_pc then
+        PSet.elements (Env.get_gpc renv env)
+      else
+        []
+    in
+    let deps = obj_pol :: pc in
     let env = Env.acc env (add_dependencies ~pos deps lhs_pty) in
     let env = Env.acc env (subtype ~pos rhs_pty lhs_pty) in
     env
@@ -639,60 +680,106 @@ let may_throw_out_of_bounds_exn ~pos renv env arry ix_pty =
   let pc_deps = PSet.add arry.a_length (object_policy ix_pty) in
   may_throw ~pos renv env pc_deps exn_ty
 
-(* A wrapper for asn that deals with Hack arrays' syntactic
-   sugar; it is important to get it right to account for the
-   CoW semantics of Hack arrays:
+let shape_field_name renv ix =
+  let ix =
+    (* The utility function does not expect a TAST *)
+    let ((p, _), e) = ix in
+    (p, e)
+  in
+  (* NOTE: This does not support late static binding *)
+  let this =
+    lazy
+      (match renv.re_this with
+      | Some (Tclass cls) -> Some (fst ix, cls.c_name)
+      | _ -> None)
+  in
+  match Typing_utils.shape_field_name_ this ix with
+  | Ok fld -> Some fld
+  | Error _ -> None
+
+(* A wrapper around assign_helper that deals with Hack arrays' syntactic
+   sugar; this accounts for the CoW semantics of Hack arrays:
 
      $x->p[4][] = "hi";
 
    does not mutate an array cell, but the property p of
    the object $x instead.  *)
-let rec asn_top ~expr ~pos renv env lhs rhs_pty =
+let rec assign ?(use_pc = true) ~expr ~pos renv env lhs rhs_pty =
   match snd lhs with
-  | A.Array_get (arry_exp, ix_opt) ->
+  | A.Array_get ((((_, arry_ty), _) as arry_exp), ix_opt) ->
     (* Evaluate the array *)
     let (env, arry_pty, arry) =
       let (env, old_arry_pty) = expr env arry_exp in
-      (* Here weakening achieves copy-on-write because any new flow we
-         register won't share the same flow destination as the earlier
-         assignments. *)
-      let (env, arry_pty) =
-        adjust_ptype ~pos ~adjustment:Aweaken renv env old_arry_pty
-      in
-      let arry = cow_array ~pos renv arry_pty in
+      let arry_pty = Lift.ty ~prefix:"arr" renv arry_ty in
+
+      (* Here we achieve two things:
+       * 1. CoW semantics by using a fresh array type that will be used from now on.
+       * 2. Account for the assignment destination type. This is the type the
+       *    LHS would receive _after_ the assignment.
+       *)
+      let env = Env.acc env (subtype ~pos old_arry_pty arry_pty) in
+
+      let arry = array_or_shape ~pos renv arry_pty in
       (env, arry_pty, arry)
     in
 
-    (* TODO(T68269878): track flows due to length changes *)
-    (* Evaluate the index *)
-    let (env, ix_pty_opt) =
-      match ix_opt with
-      | Some ix ->
-        let (env, ix_pty) = expr env ix in
-        (* The index flows to they key of the array *)
-        let env = Env.acc env (subtype ~pos ix_pty arry.a_key) in
-        (env, Some ix_pty)
-      | None -> (env, None)
+    let (env, arry_pty, use_pc) =
+      match arry with
+      | Aarray arry ->
+        (* TODO(T68269878): track flows due to length changes *)
+        (* Evaluate the index *)
+        let (env, ix_pty_opt) =
+          match ix_opt with
+          | Some ix ->
+            let (env, ix_pty) = expr env ix in
+            (* The index flows to they key of the array *)
+            let env = Env.acc env (subtype ~pos ix_pty arry.a_key) in
+            (env, Some ix_pty)
+          | None -> (env, None)
+        in
+
+        (* Potentially raise `OutOfBoundsException` *)
+        let env =
+          match ix_pty_opt with
+          (* When there is no index, we add a new element, hence no exception. *)
+          | None -> env
+          (* Dictionaries don't throw on assignment, they register a new key. *)
+          | Some _ when equal_array_kind arry.a_kind Adict -> env
+          | Some ix_pty -> may_throw_out_of_bounds_exn ~pos renv env arry ix_pty
+        in
+
+        (* Do the assignment *)
+        let env = Env.acc env (subtype ~pos rhs_pty arry.a_value) in
+        (env, arry_pty, true)
+      | Ashape (kind, fm) ->
+        begin
+          match Option.(ix_opt >>= shape_field_name renv) with
+          | Some key ->
+            (* The key can only be a literal (int, string) or class const, so
+              it is always public *)
+            let p = Env.new_policy_var renv "field" in
+            let pc = Env.get_lpc env |> PSet.elements in
+            let env = Env.acc env @@ L.(pc <* [p]) ~pos in
+            let fm =
+              Nast.ShapeMap.add
+                key
+                { sft_optional = false; sft_policy = p; sft_ty = rhs_pty }
+                fm
+            in
+            (env, Tshape (kind, fm), false)
+          | None ->
+            Errors.unknown_information_flow pos "shape key";
+            (env, Tshape (kind, fm), true)
+        end
     in
 
-    (* Potentially raise `OutOfBoundsException` *)
-    let env =
-      match ix_pty_opt with
-      (* When there is no index, we add a new element, hence no exception. *)
-      | None -> env
-      (* Dictionaries don't throw on assignment, they register a new key. *)
-      | Some _ when equal_array_kind arry.a_kind Adict -> env
-      | Some ix_pty -> may_throw_out_of_bounds_exn ~pos renv env arry ix_pty
-    in
+    (* assign the array/shape to itself *)
+    assign ~use_pc ~expr ~pos renv env arry_exp arry_pty
+  | _ -> assign_helper ~use_pc ~expr ~pos renv env lhs rhs_pty
 
-    (* Do the assignment *)
-    let env = Env.acc env (subtype ~pos rhs_pty arry.a_value) in
-
-    (* assign the vector itself *)
-    asn_top ~expr ~pos renv env arry_exp arry_pty
-  | _ -> asn ~expr ~pos renv env lhs rhs_pty
-
-let rec assign ~pos renv env op lhs_exp rhs_exp =
+(* Assignment helper that accounts for flows when there is an operator
+   attached to the assignment, e.g., `$x += 42`. *)
+let rec assign_with_op ~pos renv env op lhs_exp rhs_exp =
   let expr = expr ~pos renv in
   let (env, rhs_pty) =
     if Option.is_none op then
@@ -703,7 +790,7 @@ let rec assign ~pos renv env op lhs_exp rhs_exp =
       let (env, rhs_pty) = expr env rhs_exp in
       binop ~pos renv env lhs_pty rhs_pty
   in
-  let env = asn_top ~expr ~pos renv env lhs_exp rhs_pty in
+  let env = assign ~expr ~pos renv env lhs_exp rhs_pty in
   (env, rhs_pty)
 
 (* Generate flow constraints for an expression *)
@@ -718,7 +805,7 @@ and expr ~pos renv (env : Env.expr_env) (((_, ety), e) : Tast.expr) =
   | A.String _ ->
     (* literals are public *)
     (env, Tprim (Env.new_policy_var renv "lit"))
-  | A.Binop (Ast_defs.Eq op, e1, e2) -> assign ~pos renv env op e1 e2
+  | A.Binop (Ast_defs.Eq op, e1, e2) -> assign_with_op ~pos renv env op e1 e2
   | A.Binop (_, e1, e2) ->
     let (env, ty1) = expr env e1 in
     let (env, ty2) = expr env e2 in
@@ -731,7 +818,7 @@ and expr ~pos renv (env : Env.expr_env) (((_, ety), e) : Tast.expr) =
       | Ast_defs.Udecr
       | Ast_defs.Upincr
       | Ast_defs.Updecr ->
-        assign ~pos renv env None e e
+        assign_with_op ~pos renv env None e e
       (* Prim operators that don't mutate *)
       | Ast_defs.Utild
       | Ast_defs.Unot
@@ -758,29 +845,35 @@ and expr ~pos renv (env : Env.expr_env) (((_, ety), e) : Tast.expr) =
     | Some ptype -> (env, ptype)
     | None -> fail "encountered $this outside of a class context")
   | A.ET_Splice e
-  | A.ExpressionTree (_, e, _)
+  | A.ExpressionTree { A.et_src_expr = e; _ }
   | A.ParenthesizedExpr e ->
     expr env e
   (* TODO(T68414656): Support calls with type arguments *)
   | A.Call (e, _type_args, args, _extra_args) ->
+    let fty = Tast.get_type e in
     let (env, args_pty) = List.map_env ~f:expr env args in
     let call env call_type this_pty =
       call ~pos renv env call_type this_pty args_pty ety
     in
     begin
       match e with
+      (* Generally a function call *)
       | (_, A.Id (_, name)) ->
-        let call_id = Decl.make_callable_name None name in
-        call env (Cglobal call_id) None
+        let call_id = Decl.make_callable_name ~is_static:false None name in
+        call env (Cglobal (call_id, fty)) None
+      (* Regular method call *)
       | (_, A.Obj_get (obj, (_, A.Id (_, meth_name)), _)) ->
         let (env, obj_pty) = expr env obj in
         begin
           match obj_pty with
           | Tclass { c_name; _ } ->
-            let call_id = Decl.make_callable_name (Some c_name) meth_name in
-            call env (Cglobal call_id) (Some obj_pty)
+            let call_id =
+              Decl.make_callable_name ~is_static:false (Some c_name) meth_name
+            in
+            call env (Cglobal (call_id, fty)) (Some obj_pty)
           | _ -> fail "unhandled method call on %a" Pp.ptype obj_pty
         end
+      (* Static method call*)
       | (_, A.Class_const (((_, ty), cid), (_, meth_name))) ->
         let env =
           match cid with
@@ -798,7 +891,9 @@ and expr ~pos renv (env : Env.expr_env) (((_, ety), e) : Tast.expr) =
           | _ -> fail "unhandled method call on a non-class"
         in
         let class_name = find_class_name ty in
-        let call_id = Decl.make_callable_name (Some class_name) meth_name in
+        let call_id =
+          Decl.make_callable_name ~is_static:true (Some class_name) meth_name
+        in
         let this_pty =
           if String.equal meth_name Decl.construct_id then begin
             (* The only legal class id is `parent` which is invoked as if it
@@ -809,15 +904,15 @@ and expr ~pos renv (env : Env.expr_env) (((_, ety), e) : Tast.expr) =
           end else
             None
         in
-        call env (Cglobal call_id) this_pty
+        call env (Cglobal (call_id, fty)) this_pty
       | _ ->
         let (env, func_ty) = expr env e in
-        let fty =
+        let ifc_fty =
           match func_ty with
           | Tfun fty -> fty
           | _ -> failwith "calling something that is not a function"
         in
-        call env (Clocal fty) None
+        call env (Clocal ifc_fty) None
     end
   | A.ValCollection (((A.Vec | A.Keyset) as kind), _, exprs) ->
     (* Each element of the array is a subtype of the array's value parameter. *)
@@ -846,21 +941,43 @@ and expr ~pos renv (env : Env.expr_env) (((_, ety), e) : Tast.expr) =
   | A.Array_get (arry, ix_opt) ->
     (* Evaluate the array *)
     let (env, arry_pty) = expr env arry in
-    let arry = cow_array ~pos renv arry_pty in
+    let arry = array_or_shape ~pos renv arry_pty in
 
     (* Evaluate the index, it might have side-effects! *)
-    let (env, ix_pty) =
+    let (env, ix_exp, ix_pty) =
       match ix_opt with
-      | Some ix -> expr env ix
+      | Some ix ->
+        let (env, ty) = expr env ix in
+        (env, ix, ty)
       | None -> fail "cannot have an empty index when reading"
     in
+    begin
+      match arry with
+      | Aarray arry ->
+        (* The index flows into the array key which flows into the array value *)
+        let env = Env.acc env @@ subtype ~pos ix_pty arry.a_key in
 
-    (* The index flows into the array key which flows into the array value *)
-    let env = Env.acc env @@ subtype ~pos ix_pty arry.a_key in
+        let env = may_throw_out_of_bounds_exn ~pos renv env arry ix_pty in
 
-    let env = may_throw_out_of_bounds_exn ~pos renv env arry ix_pty in
-
-    (env, arry.a_value)
+        (env, arry.a_value)
+      | Ashape (_, fm) ->
+        let sft =
+          Option.(
+            shape_field_name renv ix_exp >>= fun f ->
+            Nast.ShapeMap.find_opt f fm)
+        in
+        begin
+          match sft with
+          | Some { sft_ty; sft_policy; _ } ->
+            let env =
+              Env.acc env @@ add_dependencies ~pos [sft_policy] sft_ty
+            in
+            (env, sft_ty)
+          | None ->
+            Errors.unknown_information_flow pos "nonexistent shape field";
+            (env, Lift.ty renv ety)
+        end
+    end
   | A.New (((_, lty), cid), _targs, args, _extra_args, _) ->
     (* TODO(T70139741): support variadic functions and constructors
      * TODO(T70139893): support classes with type parameters
@@ -879,10 +996,15 @@ and expr ~pos renv (env : Env.expr_env) (((_, ety), e) : Tast.expr) =
     begin
       match obj_pty with
       | Tclass { c_name; _ } ->
-        let call_id = Decl.make_callable_name (Some c_name) Decl.construct_id in
+        let call_id =
+          Decl.make_callable_name
+            ~is_static:false
+            (Some c_name)
+            Decl.construct_id
+        in
         let lty = T.mk (Typing_reason.Rnone, T.Tprim A.Tvoid) in
         let (env, _) =
-          call ~pos renv env (Cglobal call_id) (Some obj_pty) args_pty lty
+          call ~pos renv env (Cconstructor call_id) (Some obj_pty) args_pty lty
         in
         let pty = Lift.ty ~prefix:"constr" renv ety in
         (env, pty)
@@ -935,54 +1057,27 @@ and expr ~pos renv (env : Env.expr_env) (((_, ety), e) : Tast.expr) =
     (env, t2)
   | A.Dollardollar (_, lid) -> refresh_local_type ~pos renv env lid ety
   | A.Shape s ->
+    let p = Env.new_policy_var renv "field" in
+    let pc = Env.get_lpc env |> PSet.elements in
+    let env = Env.acc env @@ L.(pc <* [p]) ~pos in
     let f (env, m) (key, e) =
       let (env, t) = expr env e in
-      let sft = { sft_ty = t; sft_optional = false } in
+      let sft = { sft_ty = t; sft_optional = false; sft_policy = p } in
       (env, Nast.ShapeMap.add key sft m)
     in
     let (env, s) = List.fold ~f ~init:(env, Nast.ShapeMap.empty) s in
     (env, Tshape (T.Closed_shape, s))
-  (* --- expressions below are not yet supported *)
-  | A.Darray (_, _)
-  | A.Varray (_, _)
-  | A.ValCollection (_, _, _)
-  | A.KeyValCollection (_, _, _)
-  | A.Omitted
-  | A.Id _
-  | A.Clone _
-  | A.Obj_get (_, _, _)
-  | A.Class_get (_, _)
-  | A.Class_const (_, _)
-  | A.FunctionPointer (_, _)
-  | A.String2 _
-  | A.PrefixedString (_, _)
-  | A.Yield _
-  | A.Yield_break
-  | A.Suspend _
-  | A.Expr_list _
-  | A.Cast (_, _)
-  | A.Eif (_, _, _)
-  | A.Is (_, _)
-  | A.As (_, _, _)
-  | A.Record (_, _)
-  | A.Xml (_, _, _)
-  | A.Callconv (_, _)
-  | A.Lplaceholder _
-  | A.Fun_id _
-  | A.Method_id (_, _)
-  | A.Method_caller (_, _)
-  | A.Smethod_id (_, _)
-  | A.Pair _
-  | A.Assert _
-  | A.PU_atom _
-  | A.PU_identifier (_, _, _)
-  | A.Any ->
-    Errors.unknown_information_flow pos "expression";
-    (env, Lift.ty renv ety)
+  (* --- A valid AST does not contain these nodes *)
   | A.Import _
   | A.Collection _
   | A.BracedExpr _ ->
     failwith "AST should not contain these nodes"
+  (* --- expressions below are not yet supported *)
+  | _ ->
+    Errors.unknown_information_flow
+      pos
+      (sprintf "expression (%s)" (Utils.expr_name e));
+    (env, Lift.ty renv ety)
 
 and stmt renv (env : Env.stmt_env) ((pos, s) : Tast.stmt) =
   let expr_ = expr
@@ -1097,11 +1192,11 @@ and stmt renv (env : Env.stmt_env) ((pos, s) : Tast.stmt) =
       match as_exp with
       | Aast.As_v value
       | Aast.Await_as_v (_, value) ->
-        asn ~expr ~pos renv env value array.a_value
+        assign_helper ~expr ~pos renv env value array.a_value
       | Aast.As_kv (key, value)
       | Aast.Await_as_kv (_, key, value) ->
-        let env = asn ~expr ~pos renv env value array.a_value in
-        asn ~expr ~pos renv env key array.a_key
+        let env = assign_helper ~expr ~pos renv env value array.a_value in
+        assign_helper ~expr ~pos renv env key array.a_key
     in
 
     let pc_policies = PSet.singleton array.a_length in
@@ -1251,8 +1346,16 @@ and stmt renv (env : Env.stmt_env) ((pos, s) : Tast.stmt) =
     let out = clear_pc_deps out in
     (env, out)
   | A.Noop -> Env.close_stmt env K.Next
+  (* --- These nodes do not appear after naming *)
+  | A.Block _
+  | A.Markup _ ->
+    failwith
+      "Unexpected nodes in AST. These nodes should have been removed in naming."
+  (* --- These nodes are not yet supported *)
   | _ ->
-    Errors.unknown_information_flow pos "statement";
+    Errors.unknown_information_flow
+      pos
+      (sprintf "statement (%s)" (Utils.stmt_name s));
     Env.close_stmt env K.Next
 
 and block renv env (blk : Tast.block) =
@@ -1327,6 +1430,7 @@ let analyse_callable
     ~decl_env
     ~is_static
     ~saved_env
+    ~ctx
     name
     params
     body
@@ -1334,7 +1438,7 @@ let analyse_callable
   try
     (* Setup the read-only environment *)
     let scope = Scope.alloc () in
-    let renv = Env.new_renv scope decl_env saved_env in
+    let renv = Env.new_renv scope decl_env saved_env ctx in
 
     let global_pc = Env.new_policy_var renv "pc" in
     let exn = Lift.class_ty ~prefix:"exn" renv Decl.exception_id in
@@ -1375,12 +1479,12 @@ let analyse_callable
       Format.printf "@."
     end;
 
-    let callable_name = Decl.make_callable_name class_name name in
-    let f_self = Env.new_policy_var renv callable_name in
-
+    let callable_name = Decl.make_callable_name ~is_static class_name name in
+    let callable_name_str = Decl.callable_name_to_string callable_name in
+    let f_self = Env.new_policy_var renv callable_name_str in
     let proto =
       {
-        fp_name = callable_name;
+        fp_name = callable_name_str;
         fp_this = this_ty;
         fp_type =
           {
@@ -1394,8 +1498,8 @@ let analyse_callable
     in
 
     let entailment =
-      match SMap.find_opt callable_name decl_env.de_fun with
-      | Some { fd_kind = FDGovernedBy policy; fd_args } ->
+      match Decl.get_callable_decl renv.re_ctx callable_name with
+      | Some { fd_kind = FDPolicied policy; fd_args } ->
         let scheme = Decl.make_callable_scheme renv policy proto fd_args in
         fun prop ->
           let fun_scheme = Fscheme (scope, proto, prop) in
@@ -1419,7 +1523,7 @@ let analyse_callable
     Format.printf "Analyzing %s:@.  Failure: %s@.@." name s;
     None
 
-let walk_tast opts decl_env =
+let walk_tast opts decl_env ctx =
   let def = function
     | A.Fun
         {
@@ -1439,6 +1543,7 @@ let walk_tast opts decl_env =
           ~decl_env
           ~is_static
           ~saved_env
+          ~ctx
           name
           params
           body
@@ -1464,6 +1569,7 @@ let walk_tast opts decl_env =
           ~decl_env
           ~is_static
           ~saved_env
+          ~ctx
           name
           params
           body
@@ -1474,14 +1580,14 @@ let walk_tast opts decl_env =
   in
   (fun tast -> List.concat (List.filter_map ~f:def tast))
 
-let check opts tast =
+let check opts tast ctx =
   (* Declaration phase *)
-  let decl_env = Decl.collect_sigs tast in
+  let decl_env = Decl.collect_sigs ctx tast in
   if should_print ~user_mode:opts.opt_mode ~phase:Mdecl then
     Format.printf "%a@." Pp.decl_env decl_env;
 
   (* Flow analysis phase *)
-  let results = walk_tast opts decl_env tast in
+  let results = walk_tast opts decl_env ctx tast in
 
   (* Solver phase *)
   let results =
@@ -1566,55 +1672,3 @@ let check opts tast =
     end
   in
   SMap.iter check_valid_flow simplified_results
-
-let do_ opts files_info ctx =
-  ( if should_print ~user_mode:opts.opt_mode ~phase:Mlattice then
-    let lattice = opts.opt_security_lattice in
-    Format.printf "@[Lattice:@. %a@]\n\n" Pp.security_lattice lattice );
-
-  let handle_file path info errors =
-    match info.FileInfo.file_mode with
-    | Some FileInfo.Mstrict ->
-      let (ctx, entry) = Provider_context.add_entry_if_missing ~ctx ~path in
-      let { Tast_provider.Compute_tast.tast; _ } =
-        Tast_provider.compute_tast_unquarantined ~ctx ~entry
-      in
-      let check () = check opts tast in
-      let (new_errors, _) = Errors.do_with_context path Errors.Typing check in
-      errors @ Errors.get_error_list new_errors
-    | _ -> errors
-  in
-
-  Relative_path.Map.fold files_info ~init:[] ~f:handle_file
-
-let magic_builtins =
-  [|
-    ( "ifc_magic.hhi",
-      {|<?hh // strict
-class InferFlows
-  implements
-    HH\FunctionAttribute,
-    HH\MethodAttribute {}
-class Policied
-  implements
-    HH\InstancePropertyAttribute,
-    HH\ClassAttribute,
-    HH\ParameterAttribute,
-    HH\FunctionAttribute {
-  public function __construct(public string $purpose) { }
-}
-class Governed
- implements
-   HH\FunctionAttribute,
-   HH\MethodAttribute {
-  public function __construct(public string $purpose = "") { }
-}
-class External
-  implements
-    HH\ParameterAttribute {}
-class CanCall
-  implements
-    HH\ParameterAttribute {}
-|}
-    );
-  |]

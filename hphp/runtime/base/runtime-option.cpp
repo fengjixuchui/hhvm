@@ -785,7 +785,6 @@ std::string RuntimeOption::StackTraceFilename;
 int RuntimeOption::StackTraceTimeout = 0; // seconds; 0 means unlimited
 std::string RuntimeOption::RemoteTraceOutputDir = "/tmp";
 std::set<std::string, stdltistr> RuntimeOption::TraceFunctions;
-uint32_t RuntimeOption::TraceFuncId = InvalidFuncId;
 
 bool RuntimeOption::EnableStats = false;
 bool RuntimeOption::EnableAPCStats = false;
@@ -830,7 +829,6 @@ uint64_t RuntimeOption::DisableConstant = 0;
 bool RuntimeOption::DisableNontoplevelDeclarations = false;
 bool RuntimeOption::DisableStaticClosures = false;
 bool RuntimeOption::EnableClassLevelWhereClauses = false;
-bool RuntimeOption::EnableFirstClassFunctionPointers = true;
 
 #ifdef HHVM_DYNAMIC_EXTENSION_DIR
 std::string RuntimeOption::ExtensionDir = HHVM_DYNAMIC_EXTENSION_DIR;
@@ -2007,8 +2005,6 @@ void RuntimeOption::Load(
                  "Hack.Lang.CheckIntOverflow", 0);
     Config::Bind(StrictArrayFillKeys, ini, config,
                  "Hack.Lang.StrictArrayFillKeys", HackStrictOption::ON);
-    Config::Bind(EnableFirstClassFunctionPointers, ini, config,
-                 "Hack.Lang.EnableFirstClassFunctionPointers", 1);
 
     Config::Bind(LookForTypechecker, ini, config,
                  "Hack.Lang.LookForTypechecker", false);
@@ -2565,7 +2561,6 @@ void RuntimeOption::Load(
                  "Debug.RemoteTraceOutputDir", "/tmp");
     Config::Bind(TraceFunctions, ini, config,
                  "Debug.TraceFunctions", TraceFunctions);
-    Config::Bind(TraceFuncId, ini, config, "Debug.TraceFuncId", TraceFuncId);
   }
   {
     // Stats
@@ -2686,7 +2681,6 @@ void RuntimeOption::Load(
   // Run initializers depedent on options, e.g., resizing atomic maps/vectors.
   refineStaticStringTableSize();
   InitFiniNode::ProcessPostRuntimeOptions();
-  always_assert(Func::getFuncVec().size() == RuntimeOption::EvalFuncCountHint);
 
   // **************************************************************************
   //                                  DANGER
@@ -2817,8 +2811,12 @@ void RuntimeOption::Load(
   ExtensionRegistry::moduleLoad(ini, config);
   initialize_apc();
 
-  if (TraceFunctions.size() || TraceFuncId != InvalidFuncId) {
-    Trace::ensureInit(getTraceOutputFile());
+  if (TraceFunctions.size()) Trace::ensureInit(getTraceOutputFile());
+
+  // arrprov is only for dvarrays. It should be off if HADVAs is on.
+  if (RO::EvalHackArrDVArrs) {
+    RO::EvalArrayProvenance = false;
+    RO::EvalLogArrayProvenance = false;
   }
 
   // Bespoke array-likes

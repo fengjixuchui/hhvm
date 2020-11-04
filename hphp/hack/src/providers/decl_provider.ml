@@ -29,27 +29,95 @@ type typedef_decl = Typing_defs.typedef_type
 
 type gconst_decl = Typing_defs.decl_ty
 
-let prepare_for_typecheck
-    (ctx : Provider_context.t) (path : Relative_path.t) (content : string) :
-    unit =
+(** This cache caches the result of full class computations
+      (the class merged with all its inherited members.)  *)
+module Cache =
+  SharedMem.LocalCache
+    (StringKey)
+    (struct
+      type t = Typing_classes_heap.class_t
+
+      let prefix = Prefix.make ()
+
+      let description = "Decl_Typing_ClassType"
+    end)
+    (struct
+      let capacity = 1000
+    end)
+
+let get_class
+    ?(tracing_info : Decl_counters.tracing_info option)
+    (ctx : Provider_context.t)
+    (class_name : class_key) : class_decl option =
+  Decl_counters.count_decl ?tracing_info Decl_counters.Class class_name
+  @@ fun counter ->
+  (* There's a confusing matrix of possibilities:
+  SHALLOW - in this case, the Typing_classes_heap.class_t we get back is
+    just a small shim that does memoization; further accessors on it
+    like "get_method" will lazily call Linearization_provider and Shallow_classes_provider
+    to get more information
+  EAGER - in this case, the Typing_classes_heap.class_t we get back is
+    an "folded" object which keeps an intire index of all members, although
+    those members are fetched lazily via Lazy.t.
+
+  and
+
+  LOCAL BACKEND - the class_t is cached in the local backend.
+  SHAREDMEM BACKEND - the class_t is cached in the worker-local 'Cache' heap.
+    Note that in the case of eager, the class_t is really just a fairly simple
+    derivation of the decl_class_type that lives in shmem.
+  DECL BACKEND - the class_t is cached in the worker-local 'Cache' heap *)
   match Provider_context.get_backend ctx with
   | Provider_backend.Shared_memory
-  | Provider_backend.Local_memory _ ->
-    ()
-  (* When using the decl service, before typechecking the file, populate our
-     decl caches with the symbols declared within that file. If we leave this to
-     the decl service, then in longer files, the decls declared later in the
-     file may be evicted by the time we attempt to typecheck them, forcing the
-     decl service to re-parse the file. This can lead to many re-parses in
-     extreme cases. *)
-  | Provider_backend.Decl_service { decl; _ } ->
-    Decl_service_client.parse_and_cache_decls_in decl path content
+  | Provider_backend.Decl_service _ ->
+    begin
+      match Cache.get class_name with
+      | Some t -> Some (counter, t)
+      | None ->
+        begin
+          match Typing_classes_heap.get ctx class_name with
+          | None -> None
+          | Some v ->
+            Cache.add class_name v;
+            Some (counter, v)
+        end
+    end
+  | Provider_backend.Local_memory { Provider_backend.decl_cache; _ } ->
+    let result : Obj.t option =
+      Provider_backend.Decl_cache.find_or_add
+        decl_cache
+        ~key:(Provider_backend.Decl_cache_entry.Class_decl class_name)
+        ~default:(fun () ->
+          let v : Typing_classes_heap.class_t option =
+            Typing_classes_heap.get ctx class_name
+          in
+          Option.map v ~f:Obj.repr)
+    in
+    (match result with
+    | None -> None
+    | Some obj ->
+      let v : Typing_classes_heap.class_t = Obj.obj obj in
+      Some (counter, v))
 
-let get_fun (ctx : Provider_context.t) (fun_name : fun_key) : fun_decl option =
-  Counters.count Counters.Category.Decling @@ fun () ->
+let get_fun
+    ?(tracing_info : Decl_counters.tracing_info option)
+    (ctx : Provider_context.t)
+    (fun_name : fun_key) : fun_decl option =
+  Decl_counters.count_decl Decl_counters.Fun ?tracing_info fun_name
+  @@ fun _counter ->
   match Provider_context.get_backend ctx with
   | Provider_backend.Shared_memory ->
-    Typing_lazy_heap.get_fun ~sh:SharedMem.Uses ctx fun_name
+    (match Decl_heap.Funs.get fun_name with
+    | Some c -> Some c
+    | None ->
+      (match Naming_provider.get_fun_path ctx fun_name with
+      | Some filename ->
+        let ft =
+          Errors.run_in_decl_mode filename (fun () ->
+              Decl.declare_fun_in_file ~write_shmem:true ctx filename fun_name)
+        in
+        Some ft
+      | None -> None))
   | Provider_backend.Local_memory { Provider_backend.decl_cache; _ } ->
     Provider_backend.Decl_cache.find_or_add
       decl_cache
@@ -70,90 +138,35 @@ let get_fun (ctx : Provider_context.t) (fun_name : fun_key) : fun_decl option =
   | Provider_backend.Decl_service { decl; _ } ->
     Decl_service_client.rpc_get_fun decl fun_name
 
-let get_class (ctx : Provider_context.t) (class_name : class_key) :
-    class_decl option =
-  Counters.count Counters.Category.Decling @@ fun () ->
-  match Provider_context.get_backend ctx with
-  | Provider_backend.Shared_memory -> Typing_lazy_heap.get_class ctx class_name
-  | Provider_backend.Local_memory { Provider_backend.decl_cache; _ } ->
-    let result : Obj.t option =
-      Provider_backend.Decl_cache.find_or_add
-        decl_cache
-        ~key:(Provider_backend.Decl_cache_entry.Class_decl class_name)
-        ~default:(fun () ->
-          let result : class_decl option =
-            Typing_lazy_heap.get_class_no_local_cache ctx class_name
-          in
-          Option.map result ~f:Obj.repr)
-    in
-    let result : class_decl option = Option.map result ~f:Obj.obj in
-    result
-  | Provider_backend.Decl_service _ ->
-    (* The decl service caches shallow decls, so we communicate with it in
-       Shallow_classes_provider. Typing_lazy_heap lazily folds shallow decls to
-       provide a folded-decl API.  *)
-    Typing_lazy_heap.get_class ctx class_name
-
-let convert_class_elt_to_fun_decl class_elt_opt : fun_decl option =
-  Typing_defs.(
-    match class_elt_opt with
-    | Some { ce_type = (lazy ty); ce_deprecated; ce_pos = (lazy pos); _ } ->
-      Some
-        {
-          fe_pos = pos;
-          fe_type = ty;
-          fe_deprecated = ce_deprecated;
-          fe_php_std_lib = false;
-        }
-    | _ -> None)
-
-let get_class_constructor (ctx : Provider_context.t) (class_name : class_key) :
-    fun_decl option =
-  Counters.count Counters.Category.Decling @@ fun () ->
-  match get_class ctx class_name with
-  | None -> None
-  | Some cls ->
-    let (class_elt_option, _) = Typing_classes_heap.Api.construct cls in
-    convert_class_elt_to_fun_decl class_elt_option
-
-let get_class_method
-    (ctx : Provider_context.t) (class_name : class_key) (method_name : fun_key)
-    : fun_decl option =
-  Counters.count Counters.Category.Decling @@ fun () ->
-  match get_class ctx class_name with
-  | None -> None
-  | Some cls ->
-    let meth = Class.get_method cls method_name in
-    convert_class_elt_to_fun_decl meth
-
-let get_static_method
-    (ctx : Provider_context.t) (class_name : class_key) (method_name : fun_key)
-    : fun_decl option =
-  Counters.count Counters.Category.Decling @@ fun () ->
-  match get_class ctx class_name with
-  | None -> None
-  | Some cls ->
-    let smeth = Class.get_smethod cls method_name in
-    convert_class_elt_to_fun_decl smeth
-
-let get_type_id_filename ctx x expected_kind =
-  match Naming_provider.get_type_path_and_kind ctx x with
-  | Some (pos, kind) when Naming_types.equal_kind_of_type kind expected_kind ->
-    Some pos
-  | _ -> None
-
-let get_typedef (ctx : Provider_context.t) (typedef_name : string) :
-    typedef_decl option =
-  Counters.count Counters.Category.Decling @@ fun () ->
+let get_typedef
+    ?(tracing_info : Decl_counters.tracing_info option)
+    (ctx : Provider_context.t)
+    (typedef_name : string) : typedef_decl option =
+  Decl_counters.count_decl Decl_counters.Typedef ?tracing_info typedef_name
+  @@ fun _counter ->
   match Provider_context.get_backend ctx with
   | Provider_backend.Shared_memory ->
-    Typing_lazy_heap.get_typedef ~sh:SharedMem.Uses ctx typedef_name
+    (match Decl_heap.Typedefs.get typedef_name with
+    | Some c -> Some c
+    | None ->
+      (match Naming_provider.get_typedef_path ctx typedef_name with
+      | Some filename ->
+        let tdecl =
+          Errors.run_in_decl_mode filename (fun () ->
+              Decl.declare_typedef_in_file
+                ~write_shmem:true
+                ctx
+                filename
+                typedef_name)
+        in
+        Some tdecl
+      | None -> None))
   | Provider_backend.Local_memory { Provider_backend.decl_cache; _ } ->
     Provider_backend.Decl_cache.find_or_add
       decl_cache
       ~key:(Provider_backend.Decl_cache_entry.Typedef_decl typedef_name)
       ~default:(fun () ->
-        match get_type_id_filename ctx typedef_name Naming_types.TTypedef with
+        match Naming_provider.get_typedef_path ctx typedef_name with
         | Some filename ->
           let tdecl =
             Errors.run_in_decl_mode filename (fun () ->
@@ -168,12 +181,29 @@ let get_typedef (ctx : Provider_context.t) (typedef_name : string) :
   | Provider_backend.Decl_service { decl; _ } ->
     Decl_service_client.rpc_get_typedef decl typedef_name
 
-let get_record_def (ctx : Provider_context.t) (record_name : string) :
-    record_def_decl option =
-  Counters.count Counters.Category.Decling @@ fun () ->
+let get_record_def
+    ?(tracing_info : Decl_counters.tracing_info option)
+    (ctx : Provider_context.t)
+    (record_name : string) : record_def_decl option =
+  Decl_counters.count_decl Decl_counters.Record_def ?tracing_info record_name
+  @@ fun _counter ->
   match Provider_context.get_backend ctx with
   | Provider_backend.Shared_memory ->
-    Typing_lazy_heap.get_record_def ~sh:SharedMem.Uses ctx record_name
+    (match Decl_heap.RecordDefs.get record_name with
+    | Some c -> Some c
+    | None ->
+      (match Naming_provider.get_record_def_path ctx record_name with
+      | Some filename ->
+        let tdecl =
+          Errors.run_in_decl_mode filename (fun () ->
+              Decl.declare_record_def_in_file
+                ~write_shmem:true
+                ctx
+                filename
+                record_name)
+        in
+        Some tdecl
+      | None -> None))
   | Provider_backend.Local_memory { Provider_backend.decl_cache; _ } ->
     Provider_backend.Decl_cache.find_or_add
       decl_cache
@@ -194,12 +224,29 @@ let get_record_def (ctx : Provider_context.t) (record_name : string) :
   | Provider_backend.Decl_service { decl; _ } ->
     Decl_service_client.rpc_get_record_def decl record_name
 
-let get_gconst (ctx : Provider_context.t) (gconst_name : string) :
-    gconst_decl option =
-  Counters.count Counters.Category.Decling @@ fun () ->
+let get_gconst
+    ?(tracing_info : Decl_counters.tracing_info option)
+    (ctx : Provider_context.t)
+    (gconst_name : string) : gconst_decl option =
+  Decl_counters.count_decl Decl_counters.GConst ?tracing_info gconst_name
+  @@ fun _counter ->
   match Provider_context.get_backend ctx with
   | Provider_backend.Shared_memory ->
-    Typing_lazy_heap.get_gconst ~sh:SharedMem.Uses ctx gconst_name
+    (match Decl_heap.GConsts.get gconst_name with
+    | Some c -> Some c
+    | None ->
+      (match Naming_provider.get_const_path ctx gconst_name with
+      | Some filename ->
+        let gconst =
+          Errors.run_in_decl_mode filename (fun () ->
+              Decl.declare_const_in_file
+                ~write_shmem:true
+                ctx
+                filename
+                gconst_name)
+        in
+        Some gconst
+      | None -> None))
   | Provider_backend.Local_memory { Provider_backend.decl_cache; _ } ->
     Provider_backend.Decl_cache.find_or_add
       decl_cache
@@ -219,6 +266,22 @@ let get_gconst (ctx : Provider_context.t) (gconst_name : string) :
         | None -> None)
   | Provider_backend.Decl_service { decl; _ } ->
     Decl_service_client.rpc_get_gconst decl gconst_name
+
+let prepare_for_typecheck
+    (ctx : Provider_context.t) (path : Relative_path.t) (content : string) :
+    unit =
+  match Provider_context.get_backend ctx with
+  | Provider_backend.Shared_memory
+  | Provider_backend.Local_memory _ ->
+    ()
+  (* When using the decl service, before typechecking the file, populate our
+     decl caches with the symbols declared within that file. If we leave this to
+     the decl service, then in longer files, the decls declared later in the
+     file may be evicted by the time we attempt to typecheck them, forcing the
+     decl service to re-parse the file. This can lead to many re-parses in
+     extreme cases. *)
+  | Provider_backend.Decl_service { decl; _ } ->
+    Decl_service_client.parse_and_cache_decls_in decl path content
 
 let local_changes_push_sharedmem_stack () : unit =
   Decl_heap.Funs.LocalChanges.push_stack ();

@@ -1217,6 +1217,13 @@ void in(ISS& env, const bc::ClsCnsD& op) {
   push(env, TInitCell);
 }
 
+void in(ISS& env, const bc::ClsCnsL& op) {
+  //For now, just pop a stack value and push a TCell.
+  mayReadLocal(env, op.loc1);
+  popC(env);
+  push(env, TInitCell);
+}
+
 void in(ISS& env, const bc::File&)   { effect_free(env); push(env, TSStr); }
 void in(ISS& env, const bc::Dir&)    { effect_free(env); push(env, TSStr); }
 void in(ISS& env, const bc::Method&) { effect_free(env); push(env, TSStr); }
@@ -1890,7 +1897,7 @@ bool isTypeHelper(ISS& env,
                   LocalId location,
                   Op op,
                   const JmpOp& jmp) {
-  if (typeOp == IsTypeOp::Scalar) {
+  if (typeOp == IsTypeOp::Scalar || typeOp == IsTypeOp::LegacyArrLike) {
     return false;
   }
 
@@ -2909,6 +2916,7 @@ void isTypeLImpl(ISS& env, const Op& op) {
 
   switch (op.subop2) {
   case IsTypeOp::Scalar: return push(env, TBool);
+  case IsTypeOp::LegacyArrLike: return push(env, TBool);
   case IsTypeOp::Obj: return isTypeObj(env, loc);
   default: return isTypeImpl(env, loc, type_of_istype(op.subop2));
   }
@@ -2924,6 +2932,7 @@ void isTypeCImpl(ISS& env, const Op& op) {
 
   switch (op.subop1) {
   case IsTypeOp::Scalar: return push(env, TBool);
+  case IsTypeOp::LegacyArrLike: return push(env, TBool);
   case IsTypeOp::Obj: return isTypeObj(env, t1);
   default: return isTypeImpl(env, t1, type_of_istype(op.subop1));
   }
@@ -3002,6 +3011,7 @@ bool isValidTypeOpForIsAs(const IsTypeOp& op) {
     case IsTypeOp::VArray:
     case IsTypeOp::DArray:
     case IsTypeOp::ArrLike:
+    case IsTypeOp::LegacyArrLike:
     case IsTypeOp::Scalar:
     case IsTypeOp::ClsMeth:
     case IsTypeOp::Func:
@@ -5298,6 +5308,48 @@ void idxImpl(ISS& env, bool arraysOnly) {
 
 void in(ISS& env, const bc::Idx&)      { idxImpl(env, false); }
 void in(ISS& env, const bc::ArrayIdx&) { idxImpl(env, true);  }
+
+namespace {
+void implArrayMarkLegacy(ISS& env, bool legacy) {
+  auto const recursive = popC(env);
+  auto const value = popC(env);
+
+  if (auto const tv_recursive = tv(recursive)) {
+    if (auto const tv_value = tv(value)) {
+      if (tvIsBool(*tv_recursive)) {
+        auto const result = eval_cell([&]{
+          return val(*tv_recursive).num
+            ? arrprov::markTvRecursively(*tv_value, legacy)
+            : arrprov::markTvShallow(*tv_value, legacy);
+        });
+        if (result) {
+          push(env, *result);
+          effect_free(env);
+          constprop(env);
+          return;
+        }
+      }
+    }
+  }
+
+  // TODO(kshaunak): We could add some type info here.
+  push(env, TInitCell);
+}
+}
+
+void in(ISS& env, const bc::ArrayMarkLegacy&) {
+  implArrayMarkLegacy(env, true);
+}
+
+void in(ISS& env, const bc::ArrayUnmarkLegacy&) {
+  implArrayMarkLegacy(env, false);
+}
+
+void in(ISS& env, const bc::TagProvenanceHere&) {
+  popC(env);
+  popC(env);
+  push(env, TInitCell);
+}
 
 void in(ISS& env, const bc::CheckProp&) {
   if (env.ctx.cls->attrs & AttrNoOverride) {

@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<ccac7d8fee5119da2afd9d1064527cb2>>
+// @generated SignedSource<<9dd7ee8fce5f698202093749d1b481e8>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
@@ -153,7 +153,7 @@ impl TrivialDrop for EnvAnnot {}
 pub struct UsingStmt<Ex, Fb, En, Hi> {
     pub is_block_scoped: bool,
     pub has_await: bool,
-    pub expr: Expr<Ex, Fb, En, Hi>,
+    pub exprs: (Pos, Vec<Expr<Ex, Fb, En, Hi>>),
     pub block: Block<Ex, Fb, En, Hi>,
 }
 
@@ -286,6 +286,26 @@ pub enum FunctionPtrId<Ex, Fb, En, Hi> {
     Serialize,
     ToOcamlRep
 )]
+pub struct ExpressionTree<Ex, Fb, En, Hi> {
+    pub hint: Hint,
+    pub src_expr: Expr<Ex, Fb, En, Hi>,
+    pub desugared_expr: Expr<Ex, Fb, En, Hi>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    FromOcamlRep,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
 pub enum Expr_<Ex, Fb, En, Hi> {
     Darray(
         Box<(
@@ -377,7 +397,7 @@ pub enum Expr_<Ex, Fb, En, Hi> {
     Collection(Box<(Sid, Option<CollectionTarg<Hi>>, Vec<Afield<Ex, Fb, En, Hi>>)>),
     BracedExpr(Box<Expr<Ex, Fb, En, Hi>>),
     ParenthesizedExpr(Box<Expr<Ex, Fb, En, Hi>>),
-    ExpressionTree(Box<(Hint, Expr<Ex, Fb, En, Hi>, Option<Expr<Ex, Fb, En, Hi>>)>),
+    ExpressionTree(Box<ExpressionTree<Ex, Fb, En, Hi>>),
     Lplaceholder(Box<Pos>),
     FunId(Box<Sid>),
     MethodId(Box<(Expr<Ex, Fb, En, Hi>, Pstring)>),
@@ -395,6 +415,7 @@ pub enum Expr_<Ex, Fb, En, Hi> {
     PUAtom(String),
     PUIdentifier(Box<(ClassId<Ex, Fb, En, Hi>, Pstring, Pstring)>),
     ETSplice(Box<Expr<Ex, Fb, En, Hi>>),
+    EnumAtom(String),
     Any,
 }
 
@@ -835,6 +856,7 @@ pub struct Class_<Ex, Fb, En, Hi> {
     pub xhp_category: Option<(Pos, Vec<Pstring>)>,
     pub reqs: Vec<(ClassHint, IsExtends)>,
     pub implements: Vec<ClassHint>,
+    pub implements_dynamic: bool,
     pub where_constraints: Vec<WhereConstraintHint>,
     pub consts: Vec<ClassConst<Ex, Fb, En, Hi>>,
     pub typeconsts: Vec<ClassTypeconst<Ex, Fb, En, Hi>>,

@@ -49,15 +49,14 @@ bool branchesToItself(SrcKey sk) {
  *
  * In all other cases, a ReqBindJmp is generated.
  */
-void exitRequest(IRGS& env, TransFlags flags, SrcKey target) {
-  auto const curBCOff = bcOff(env);
+void exitRequest(IRGS& env, SrcKey target) {
   auto const irSP = spOffBCFromIRSP(env);
   auto const invSP = spOffBCFromFP(env);
-  if (env.firstBcInst && target.offset() == curBCOff) {
+  if (env.firstBcInst && target == curSrcKey(env)) {
     gen(
       env,
       ReqRetranslate,
-      ReqRetranslateData { irSP, flags },
+      IRSPRelOffsetData { irSP },
       sp(env),
       fp(env)
     );
@@ -66,30 +65,27 @@ void exitRequest(IRGS& env, TransFlags flags, SrcKey target) {
   gen(
     env,
     ReqBindJmp,
-    ReqBindJmpData { target, invSP, irSP, flags },
+    ReqBindJmpData { target, invSP, irSP },
     sp(env),
     fp(env)
   );
 }
 
-Block* implMakeExit(IRGS& env, TransFlags trflags, Offset targetBcOff,
-                    bool isGuard = false) {
-  auto const curBcOff = bcOff(env);
-  if (targetBcOff == -1) targetBcOff = curBcOff;
+Block* implMakeExit(IRGS& env, SrcKey targetSk) {
+  auto const curSk = curSrcKey(env);
 
-  // If the targetBcOff is to the same instruction, the instruction can also
-  // branch back to itself (e.g. IterNext w/ offset=0), and isGuard is false,
-  // then we can't distinguish whether the exit is due to a guard failure
-  // (i.e., no state advanced) or an actual control-flow transfer (i.e.,
-  // advancing state).  These are rare situations, and so we just punt to the
-  // interpreter.
-  if (!isGuard && targetBcOff == curBcOff && branchesToItself(curSrcKey(env))) {
+  // If the targetSk is to the same instruction, the instruction can also
+  // branch back to itself (e.g. IterNext w/ offset=0), then we can't
+  // distinguish whether the exit is due to a guard failure (i.e., no state
+  // advanced) or an actual control-flow transfer (i.e., advancing state).
+  // These are rare situations, and so we just punt to the interpreter.
+  if (targetSk == curSk && branchesToItself(curSrcKey(env))) {
     PUNT(MakeExitAtBranchToItself);
   }
 
   auto const exit = defBlock(env, Block::Hint::Unlikely);
-  BlockPusher bp(*env.irb, makeMarker(env, targetBcOff), exit);
-  exitRequest(env, trflags, SrcKey{curSrcKey(env), targetBcOff});
+  BlockPusher bp(*env.irb, makeMarker(env, targetSk), exit);
+  exitRequest(env, targetSk);
   return exit;
 }
 
@@ -97,41 +93,37 @@ Block* implMakeExit(IRGS& env, TransFlags trflags, Offset targetBcOff,
 
 }
 
-Block* makeExit(IRGS& env, Offset targetBcOff /* = -1 */) {
-  return implMakeExit(env, TransFlags{}, targetBcOff);
+Block* makeExit(IRGS& env) {
+  return implMakeExit(env, curSrcKey(env));
 }
 
-Block* makeExit(IRGS& env, TransFlags flags) {
-  return implMakeExit(env, flags, -1);
-}
-
-Block* makeGuardExit(IRGS& env, TransFlags flags) {
-  return implMakeExit(env, flags, -1, true);
+Block* makeExit(IRGS& env, SrcKey targetSk) {
+  return implMakeExit(env, targetSk);
 }
 
 Block* makeExitSlow(IRGS& env) {
   auto const exit = defBlock(env, Block::Hint::Unlikely);
-  BlockPusher bp(*env.irb, makeMarker(env, bcOff(env)), exit);
+  BlockPusher bp(*env.irb, makeMarker(env, curSrcKey(env)), exit);
   interpOne(env);
   // If it changes the PC, InterpOneCF will get us to the new location.
   if (!opcodeChangesPC(curSrcKey(env).op())) {
-    gen(env, Jmp, makeExit(env, nextBcOff(env)));
+    gen(env, Jmp, makeExit(env, nextSrcKey(env)));
   }
   return exit;
 }
 
-Block* makeExitSurprise(IRGS& env, Offset targetBcOff) {
+Block* makeExitSurprise(IRGS& env, SrcKey targetSk) {
   auto const exit = defBlock(env, Block::Hint::Unlikely);
-  BlockPusher bp(*env.irb, makeMarker(env, targetBcOff), exit);
+  BlockPusher bp(*env.irb, makeMarker(env, targetSk), exit);
   gen(env, HandleRequestSurprise);
-  exitRequest(env, TransFlags{}, SrcKey{curSrcKey(env), targetBcOff});
+  exitRequest(env, targetSk);
   return exit;
 }
 
 Block* makeExitOpt(IRGS& env) {
   always_assert(!isInlining(env));
   auto const exit = defBlock(env, Block::Hint::Unlikely);
-  BlockPusher blockPusher(*env.irb, makeMarker(env, bcOff(env)), exit);
+  BlockPusher bp(*env.irb, makeMarker(env, curSrcKey(env)), exit);
   auto const data = IRSPRelOffsetData{spOffBCFromIRSP(env)};
   gen(env, ReqRetranslateOpt, data, sp(env), fp(env));
   return exit;
@@ -139,7 +131,7 @@ Block* makeExitOpt(IRGS& env) {
 
 Block* makeUnreachable(IRGS& env, AssertReason reason) {
   auto const unreachable = defBlock(env, Block::Hint::Unlikely);
-  BlockPusher blockPusher(*env.irb, makeMarker(env, bcOff(env)), unreachable);
+  BlockPusher bp(*env.irb, makeMarker(env, curSrcKey(env)), unreachable);
   gen(env, Unreachable, reason);
   return unreachable;
 }

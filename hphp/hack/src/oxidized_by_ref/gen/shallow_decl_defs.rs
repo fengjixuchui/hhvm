@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<d59f8f75f3fb937b41b67405c69012ea>>
+// @generated SignedSource<<ec493ce5962648cf06cb3328906fb41c>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
@@ -18,6 +18,8 @@ use serde::Serialize;
 use crate::*;
 
 pub use typing_defs::*;
+
+pub use typing_defs::ConstDecl;
 
 #[derive(
     Clone,
@@ -185,6 +187,7 @@ pub struct ShallowClass<'a> {
     pub req_extends: &'a [&'a Ty<'a>],
     pub req_implements: &'a [&'a Ty<'a>],
     pub implements: &'a [&'a Ty<'a>],
+    pub implements_dynamic: bool,
     pub consts: &'a [&'a ShallowClassConst<'a>],
     pub typeconsts: &'a [&'a ShallowTypeconst<'a>],
     pub pu_enums: &'a [&'a ShallowPuEnum<'a>],
@@ -197,3 +200,34 @@ pub struct ShallowClass<'a> {
     pub enum_type: Option<&'a EnumType<'a>>,
 }
 impl<'a> TrivialDrop for ShallowClass<'a> {}
+
+pub type FunDecl<'a> = FunElt<'a>;
+
+pub type ClassDecl<'a> = ShallowClass<'a>;
+
+pub type RecordDecl<'a> = RecordDefType<'a>;
+
+pub type TypedefDecl<'a> = TypedefType<'a>;
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub enum Decl<'a> {
+    Class(&'a ClassDecl<'a>),
+    Fun(&'a FunDecl<'a>),
+    Record(&'a RecordDecl<'a>),
+    Typedef(&'a TypedefDecl<'a>),
+    Const(&'a ConstDecl<'a>),
+}
+impl<'a> TrivialDrop for Decl<'a> {}

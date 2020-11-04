@@ -6,7 +6,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open Format
 open Ifc_types
 module Env = Ifc_env
@@ -68,9 +68,9 @@ let rec ptype fmt ty =
     fprintf fmt "%a" array_kind a_kind;
     fprintf fmt "<%a => %a; |%a|>" ptype a_key ptype a_value policy a_length
   | Tshape (kind, m) ->
-    let field fmt f =
-      if f.sft_optional then fprintf fmt "?";
-      ptype fmt f.sft_ty
+    let field fmt { sft_policy; sft_optional; sft_ty } =
+      if sft_optional then fprintf fmt "?";
+      fprintf fmt "<%a, %a>" policy sft_policy ptype sft_ty
     in
     fprintf fmt "shape(";
     Nast.ShapeMap.pp field fmt m;
@@ -215,8 +215,8 @@ let class_decl fmt { cd_policied_properties = props; _ } =
 let fun_decl fmt decl =
   let kind =
     match decl.fd_kind with
-    | FDGovernedBy (Some policy) -> show_policy policy
-    | FDGovernedBy None -> "implicit"
+    | FDPolicied (Some policy) -> show_policy policy
+    | FDPolicied None -> "implicit"
     | FDInferFlows -> "infer"
   in
   fprintf fmt "{ kind = %s }" kind
@@ -225,10 +225,10 @@ let decl_env fmt de =
   let handle_class name decl =
     fprintf fmt "class %s: %a@ " name class_decl decl
   in
+  fprintf fmt "Decls:@.  @[<v>";
   let handle_fun name decl =
     fprintf fmt "function %s: %a@ " name fun_decl decl
   in
-  fprintf fmt "Decls:@.  @[<v>";
   SMap.iter handle_class de.de_class;
   SMap.iter handle_fun de.de_fun;
   fprintf fmt "@]"

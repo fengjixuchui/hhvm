@@ -254,10 +254,8 @@ void publishTranslationMeta(TransMetaInfo& info) {
     }
   }
 
-  recordGdbTranslation(sk, view.main(), loc.mainStart(),
-                       loc.mainEnd(), false, false);
-  recordGdbTranslation(sk, view.cold(), loc.coldCodeStart(),
-                       loc.coldEnd(), false, false);
+  recordGdbTranslation(sk, view.main(), loc.mainStart(), loc.mainEnd());
+  recordGdbTranslation(sk, view.cold(), loc.coldCodeStart(), loc.coldEnd());
 
   transdb::addTranslation(tr);
   FuncOrder::recordTranslation(tr);
@@ -819,8 +817,7 @@ void createSrcRec(SrcKey sk, FPInvOffset spOff) {
                                   codeView.data(),
                                   srcRecSPOff,
                                   REQ_RETRANSLATE,
-                                  sk.offset(),
-                                  TransFlags().packed);
+                                  sk.offset());
   } else {
     auto const stubsize = svcreq::stub_size();
     auto newStart = codeView.cold().allocInner(stubsize);
@@ -834,8 +831,7 @@ void createSrcRec(SrcKey sk, FPInvOffset spOff) {
                                  (TCA)newStart,
                                  srcRecSPOff,
                                  REQ_RETRANSLATE,
-                                 sk.offset(),
-                                 TransFlags().packed);
+                                 sk.offset());
   }
   SKTRACE(1, sk, "inserting anchor translation for (%p,%d) at %p\n",
           sk.unit(), sk.offset(), req);
@@ -846,8 +842,6 @@ void createSrcRec(SrcKey sk, FPInvOffset spOff) {
   if (RuntimeOption::EvalEnableReusableTC) {
     recordFuncSrcRec(sk.func(), sr);
   }
-
-  if (srcRecSPOff) always_assert(sr->nonResumedSPOff() == *srcRecSPOff);
 
   size_t asize      = codeView.main().frontier()   - astart;
   size_t coldSize   = codeView.cold().frontier()   - coldStart;

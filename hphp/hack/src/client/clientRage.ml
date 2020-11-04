@@ -311,7 +311,14 @@ let rage_hh_server_state (env : env) :
           (Printf.sprintf "unable to parse json: %s\n\n%s\n" msg stdout)
     end
 
-let rage_www (env : env) : ((string * string) option * string) Lwt.t =
+type www_results = {
+  hgdiff: (string * string) option;
+  instructions: string;
+  mergebase: string option;
+  patch_script: string option;
+}
+
+let rage_www (env : env) : www_results Lwt.t =
   let hgplain_env =
     Process.env_to_array (Process_types.Augment ["HGPLAIN=1"])
   in
@@ -332,7 +339,13 @@ let rage_www (env : env) : ((string * string) option * string) Lwt.t =
   in
   match www_result with
   | Error failure ->
-    Lwt.return (None, format_failure "Unable to determine mergebase" failure)
+    Lwt.return
+      {
+        hgdiff = None;
+        instructions = format_failure "Unable to determine mergebase" failure;
+        mergebase = None;
+        patch_script = None;
+      }
   | Ok { Lwt_utils.Process_success.stdout; _ } ->
     let mergebase = stdout in
     let%lwt www_diff_result =
@@ -342,13 +355,14 @@ let rage_www (env : env) : ((string * string) option * string) Lwt.t =
         ~timeout:60.0
         [| "diff"; "-r"; mergebase; "--cwd"; Path.to_string env.root |]
     in
-    let%lwt (patch_item, patch_instructions) =
+    let%lwt (patch_item, patch_instructions, patch_script) =
       match www_diff_result with
       | Error failure ->
-        Lwt.return (None, format_failure "Unable to determine diff" failure)
+        Lwt.return
+          (None, format_failure "Unable to determine diff" failure, None)
       | Ok { Lwt_utils.Process_success.stdout = hgdiff; _ } ->
         if String.is_empty hgdiff then
-          Lwt.return (None, "")
+          Lwt.return (None, "", None)
         else
           let%lwt clowder_result =
             Clowder_paste.clowder_upload_and_get_shellscript
@@ -361,11 +375,11 @@ let rage_www (env : env) : ((string * string) option * string) Lwt.t =
               ( Some ("www_hgdiff.txt", hgdiff),
                 Printf.sprintf
                   "hg patch --no-commit www_hgdiff.txt\n\nnote: clowder failed to put:\n%s"
-                  failure )
+                  failure,
+                None )
           | Ok clowder_script ->
-            Lwt.return
-              ( Some ("www_hgdiff.txt", hgdiff),
-                clowder_script ^ " | hg patch --no-commit -" ))
+            let script = clowder_script ^ " | patch -p1" in
+            Lwt.return (Some ("www_hgdiff.txt", hgdiff), script, Some script))
     in
     let%lwt hg_st_result =
       Lwt_utils.exec_checked
@@ -380,12 +394,17 @@ let rage_www (env : env) : ((string * string) option * string) Lwt.t =
       | Ok { Lwt_utils.Process_success.stdout; _ } -> "hg status:\n" ^ stdout
     in
     Lwt.return
-      ( patch_item,
-        Printf.sprintf
-          "hg update -C %s\n\n%s\n\n\n%s"
-          mergebase
-          patch_instructions
-          hg_st )
+      {
+        hgdiff = patch_item;
+        instructions =
+          Printf.sprintf
+            "hg update -C %s\n\n%s\n\n\n%s"
+            mergebase
+            patch_instructions
+            hg_st;
+        mergebase = Some mergebase;
+        patch_script;
+      }
 
 let rage_www_errors (env : env) : string Lwt.t =
   let%lwt www_errors_result =
@@ -545,6 +564,22 @@ let rage_experiments_and_config
     ( local_config.ServerLocalConfig.experiments,
       local_config.ServerLocalConfig.experiments_config_meta )
 
+let rage_repro (mergebase : string option) (patch_script : string option) :
+    (string * string) option Lwt.t =
+  match (mergebase, patch_script) with
+  | (None, _)
+  | (_, None) ->
+    Lwt.return_none
+  | (Some mergebase, Some patch_script) ->
+    let%lwt result = Extra_rage.create_repro mergebase patch_script in
+    let result =
+      match result with
+      | Some (Ok { Lwt_utils.Process_success.stdout; _ }) -> stdout
+      | Some (Error failure) -> format_failure "" failure
+      | None -> "not applicable"
+    in
+    Lwt.return_some ("repro", result)
+
 let main (env : env) : Exit_status.t Lwt.t =
   let start_time = Unix.gettimeofday () in
   Hh_logger.Level.set_min_level Hh_logger.Level.Error;
@@ -638,9 +673,9 @@ let main (env : env) : Exit_status.t Lwt.t =
 
   (* www *)
   eprintf "Getting current www state";
-  let%lwt (www_item, www_instructions) = rage_www env in
-  Option.iter www_item ~f:add;
-  add ("www", www_instructions);
+  let%lwt { hgdiff; instructions; mergebase; patch_script } = rage_www env in
+  Option.iter hgdiff ~f:add;
+  add ("www", instructions);
 
   (* www errors *)
   eprintf "Executing hh";
@@ -680,6 +715,10 @@ let main (env : env) : Exit_status.t Lwt.t =
   eprintf "Looking at hh_server tmp directory";
   let%lwt tmp_dir = rage_tmp_dir () in
   add ("hh_server tmp", tmp_dir);
+
+  (* repro *)
+  let%lwt repro = rage_repro mergebase patch_script in
+  Option.iter repro ~f:add;
 
   (* We've assembled everything! now log it. *)
   let%lwt result =

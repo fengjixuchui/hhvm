@@ -1397,6 +1397,24 @@ OPTBLD_INLINE void iopClsCnsD(const StringData* clsCnsName, Id classId) {
   tvDup(clsCns, *c1);
 }
 
+OPTBLD_INLINE void iopClsCnsL(tv_lval local) {
+  auto const clsTV = vmStack().topC();
+  if (!isClassType(clsTV->m_type)) {
+    raise_error("Attempting class constant access on non-class");
+  }
+  auto const cls = clsTV->m_data.pclass;
+  if (!isStringType(type(local))) {
+    raise_error("String expected for %s constant", cls->name()->data());
+  }
+  auto const clsCnsName = val(local).pstr;
+  auto const clsCns = cls->clsCnsGet(clsCnsName);
+  if (clsCns.m_type == KindOfUninit) {
+    raise_error("Couldn't find constant %s::%s",
+                cls->name()->data(), clsCnsName->data());
+  }
+  tvSet(clsCns, *clsTV);
+}
+
 OPTBLD_INLINE void iopConcat() {
   auto const c1 = vmStack().topC();
   auto const c2 = vmStack().indC(1);
@@ -1609,31 +1627,46 @@ OPTBLD_INLINE void iopCastString() {
   tvCastToStringInPlace(c1);
 }
 
+namespace {
+void maybeMakeLoggingArrayAfterCast(TypedValue* tv) {
+  auto const oldArr = val(tv).parr;
+  auto const newArr = bespoke::maybeMakeLoggingArray(oldArr);
+  if (newArr == oldArr) return;
+  val(tv).parr = newArr;
+  type(tv) = dt_with_rc(type(tv));
+}
+}
+
 OPTBLD_INLINE void iopCastDict() {
   TypedValue* c1 = vmStack().topC();
   tvCastToDictInPlace(c1);
+  maybeMakeLoggingArrayAfterCast(c1);
 }
 
 OPTBLD_INLINE void iopCastKeyset() {
   TypedValue* c1 = vmStack().topC();
   tvCastToKeysetInPlace(c1);
+  maybeMakeLoggingArrayAfterCast(c1);
 }
 
 OPTBLD_INLINE void iopCastVec() {
   TypedValue* c1 = vmStack().topC();
   tvCastToVecInPlace(c1);
+  maybeMakeLoggingArrayAfterCast(c1);
 }
 
 OPTBLD_INLINE void iopCastVArray() {
   assertx(!RuntimeOption::EvalHackArrDVArrs);
   TypedValue* c1 = vmStack().topC();
   tvCastToVArrayInPlace(c1);
+  maybeMakeLoggingArrayAfterCast(c1);
 }
 
 OPTBLD_INLINE void iopCastDArray() {
   assertx(!RuntimeOption::EvalHackArrDVArrs);
   TypedValue* c1 = vmStack().topC();
   tvCastToDArrayInPlace(c1);
+  maybeMakeLoggingArrayAfterCast(c1);
 }
 
 OPTBLD_INLINE void iopDblAsBits() {
@@ -3184,6 +3217,9 @@ OPTBLD_INLINE static bool isTypeHelper(TypedValue val, IsTypeOp op) {
   case IsTypeOp::Res:    return tvIsResource(val);
   case IsTypeOp::Scalar: return HHVM_FN(is_scalar)(tvAsCVarRef(val));
   case IsTypeOp::ArrLike: return is_any_array(&val);
+  case IsTypeOp::LegacyArrLike: {
+    return HHVM_FN(is_array_marked_legacy)(tvAsCVarRef(val));
+  }
   case IsTypeOp::ClsMeth: return is_clsmeth(&val);
   case IsTypeOp::Func: return is_fun(&val);
   case IsTypeOp::Class: return is_class(&val);
@@ -3343,6 +3379,48 @@ OPTBLD_INLINE void iopArrayIdx() {
   vmStack().popTV();
   tvDecRefGen(arr);
   *arr = result;
+}
+
+namespace {
+void implArrayMarkLegacy(bool legacy) {
+  auto const recursive = *vmStack().topTV();
+  if (!tvIsBool(recursive)) {
+    SystemLib::throwInvalidArgumentExceptionObject(
+      folly::sformat("$recursive must be a bool; got {}",
+                     getDataTypeString(type(recursive))));
+  }
+
+  auto const input = vmStack().indTV(1);
+  auto const output = val(recursive).num
+    ? arrprov::markTvRecursively(*input, legacy)
+    : arrprov::markTvShallow(*input, legacy);
+
+  vmStack().popTV();
+  tvMove(output, input);
+}
+}
+
+OPTBLD_INLINE void iopArrayMarkLegacy() {
+  implArrayMarkLegacy(true);
+}
+
+OPTBLD_INLINE void iopArrayUnmarkLegacy() {
+  implArrayMarkLegacy(false);
+}
+
+OPTBLD_INLINE void iopTagProvenanceHere() {
+  auto const flags = *vmStack().topTV();
+  if (!tvIsInt(flags)) {
+    SystemLib::throwInvalidArgumentExceptionObject(
+      folly::sformat("$flags must be an int; got {}",
+                     getDataTypeString(type(flags))));
+  }
+
+  auto const input = vmStack().indTV(1);
+  auto const output = arrprov::tagTvRecursively(*input, val(flags).num);
+
+  vmStack().popTV();
+  tvMove(output, input);
 }
 
 OPTBLD_INLINE void iopSetL(tv_lval to) {
@@ -3567,8 +3645,8 @@ bool doFCall(CallFlags callFlags, const Func* func, uint32_t numArgsInclUnpack,
   initFuncInputs(func, numArgsInclUnpack);
 
   ar->m_sfp = vmfp();
-  ar->setJitReturn(retAddr);
   ar->setFunc(func);
+  ar->setJitReturn(retAddr);
   ar->m_callOffAndFlags = ActRec::encodeCallOffsetAndFlags(
     callFlags.callOffset(),
     callFlags.asyncEagerReturn() ? (1 << ActRec::AsyncEagerRet) : 0

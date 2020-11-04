@@ -128,7 +128,8 @@ struct EmptyMonotypeDict : BespokeArray {
 template <typename Key>
 struct MonotypeDict : BespokeArray {
   static uint8_t ComputeSizeIndex(size_t size);
-  static MonotypeDict* MakeReserve(HeaderKind kind, size_t size, DataType dt);
+  static MonotypeDict* MakeReserve(
+      HeaderKind kind, bool legacy, size_t capacity, DataType dt);
   static MonotypeDict* MakeFromVanilla(ArrayData* ad, DataType dt);
 
   static MonotypeDict* As(ArrayData* ad);
@@ -141,12 +142,12 @@ struct MonotypeDict : BespokeArray {
 #undef X
 
 private:
-  using Index = int16_t;
+  using Index = uint16_t;
   using Self = MonotypeDict<Key>;
   struct Elm { Key key; Value val; };
 
-  static constexpr Index kEmptyIndex = -1;
-  static constexpr Index kTombstoneIndex = -2;
+  static constexpr Index kEmptyIndex = Index(-1);
+  static constexpr Index kTombstoneIndex = Index(-2);
 
   // Different modes for the core find() implementation.
   struct Add { Index* index; };
@@ -162,7 +163,12 @@ private:
   ssize_t getPosImpl(Key key) const;
   ArrayData* removeImpl(Key key);
   template <typename K> arr_lval elemImpl(Key key, K k, bool throwOnMissing);
-  template <typename K> ArrayData* setImpl(Key key, K k, TypedValue v);
+  arr_lval lvalDispatch(int64_t k);
+  arr_lval lvalDispatch(StringData* k);
+  template <bool Move>
+  ArrayData* appendImpl(TypedValue v);
+  template <bool Move, typename K>
+  ArrayData* setImpl(Key key, K k, TypedValue v);
 
   // Iterate over values of this MonotypeDict, calling these callbacks for
   // each element. `k` takes a Key; `c`, `m`, and `u` take a TypedValue.

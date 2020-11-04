@@ -89,6 +89,8 @@ let get_val_kind = Typing_env.get_val_kind
 
 let get_file = Typing_env.get_file
 
+let get_deps_mode = Typing_env.get_deps_mode
+
 let fully_expand = Typing_expand.fully_expand
 
 (*****************************************************************************)
@@ -222,28 +224,28 @@ let fun_env ctx f =
   let ctx =
     Provider_context.map_tcopt ctx ~f:(fun _tcopt -> f.f_annotation.tcopt)
   in
-  let env = EnvFromDef.fun_env ctx f in
+  let env = EnvFromDef.fun_env ~origin:Decl_counters.Tast ctx f in
   restore_fun_env env f
 
 let class_env ctx c =
   let ctx =
     Provider_context.map_tcopt ctx ~f:(fun _tcopt -> c.c_annotation.tcopt)
   in
-  let env = EnvFromDef.class_env ctx c in
+  let env = EnvFromDef.class_env ~origin:Decl_counters.Tast ctx c in
   restore_saved_env env c.c_annotation
 
 let typedef_env ctx t =
   let ctx =
     Provider_context.map_tcopt ctx ~f:(fun _tcopt -> t.t_annotation.tcopt)
   in
-  let env = EnvFromDef.typedef_env ctx t in
+  let env = EnvFromDef.typedef_env ~origin:Decl_counters.Tast ctx t in
   restore_saved_env env t.t_annotation
 
 let gconst_env ctx cst =
   let ctx =
     Provider_context.map_tcopt ctx ~f:(fun _tcopt -> cst.cst_annotation.tcopt)
   in
-  let env = EnvFromDef.gconst_env ctx cst in
+  let env = EnvFromDef.gconst_env ~origin:Decl_counters.Tast ctx cst in
   restore_saved_env env cst.cst_annotation
 
 let def_env ctx d =
@@ -297,14 +299,6 @@ let set_allow_wildcards env =
 let get_allow_wildcards env = env.Typing_env_types.allow_wildcards
 
 let condition_type_matches = Typing_reactivity.condition_type_matches
-
-(* We are in an Expression Tree *)
-let set_et env =
-  { env with Typing_env_types.et_spliced_types = Some IMap.empty }
-
-let unset_et env = { env with Typing_env_types.et_spliced_types = None }
-
-let in_et env = Option.is_some env.Typing_env_types.et_spliced_types
 
 (* ocaml being ocaml...
  * We need at least one explicit reference to the Typing_pocket_univereses

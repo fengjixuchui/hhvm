@@ -295,9 +295,9 @@ TypedValue HHVM_FUNCTION(array_count_values,
           )));
 }
 
-TypedValue HHVM_FUNCTION(array_fill_keys,
-                         const Variant& keys,
-                         const Variant& value) {
+Array HHVM_FUNCTION(array_fill_keys,
+                    const Variant& keys,
+                    const Variant& value) {
   folly::Optional<DArrayInit> ai;
   auto ok = IterateV(
     *keys.asTypedValue(),
@@ -323,12 +323,12 @@ TypedValue HHVM_FUNCTION(array_fill_keys,
   );
 
   if (!ok) {
-    raise_warning("Invalid operand type was used: array_fill_keys expects "
-                  "an array or collection");
-    return make_tv<KindOfNull>();
+    SystemLib::throwInvalidArgumentExceptionObject(
+      "Invalid operand type was used: array_fill_keys expects an array or "
+      "collection");
   }
   assertx(ai.has_value());
-  return tvReturn(ai->toVariant());
+  return ai->toArray();
 }
 
 TypedValue HHVM_FUNCTION(array_fill,
@@ -2550,20 +2550,25 @@ IMPLEMENT_STATIC_REQUEST_LOCAL(Collator, s_collator);
 
 namespace {
 struct ArraySortTmp {
-  ArraySortTmp(TypedValue* arr, SortFunction sf) : m_arr(arr) {
-    m_ad = arr->m_data.parr->escalateForSort(sf);
+  ArraySortTmp(TypedValue* tv, SortFunction sf) : m_tv(tv) {
+    m_ad = val(tv).parr->escalateForSort(sf);
     assertx(m_ad->empty() || m_ad->hasExactlyOneRef());
   }
   ~ArraySortTmp() {
-    if (m_ad != val(m_arr).parr) {
-      auto tmp = Array::attach(val(m_arr).parr);
-      val(m_arr).parr = m_ad;
-      type(m_arr) = m_ad->toDataType();
+    // We must call BespokeArray::PostSort before cleaning up the old array,
+    // because some bespoke arrays may move values from old -> m_ad at PreSort
+    // and move them back at PostSort. (LoggingArray moves the entire array.)
+    auto const old = val(m_tv).parr;
+    if (!old->isVanilla()) {
+      m_ad = BespokeArray::PostSort(old, m_ad);
+    }
+    if (m_ad != old) {
+      tvMove(make_array_like_tv(m_ad), m_tv);
     }
   }
   ArrayData* operator->() { return m_ad; }
  private:
-  TypedValue* m_arr;
+  TypedValue* m_tv;
   ArrayData* m_ad;
 };
 }
@@ -2571,6 +2576,9 @@ struct ArraySortTmp {
 static bool
 php_sort(Variant& container, int sort_flags, bool ascending) {
   if (container.isArray()) {
+    auto const ad = container.asTypedValue()->val().parr;
+    if (ad->size() == 1 && (ad->isVArray() || ad->isVecType())) return true;
+    if (ad->empty()) return true;
     SortFunction sf = getSortFunction(SORTFUNC_SORT, ascending);
     ArraySortTmp ast(container.asTypedValue(), sf);
     ast->sort(sort_flags, ascending);
@@ -2596,6 +2604,8 @@ php_sort(Variant& container, int sort_flags, bool ascending) {
 static bool
 php_asort(Variant& container, int sort_flags, bool ascending) {
   if (container.isArray()) {
+    auto const ad = container.asTypedValue()->val().parr;
+    if (ad->size() <= 1 && !(ad->isVArray() || ad->isVecType())) return true;
     SortFunction sf = getSortFunction(SORTFUNC_ASORT, ascending);
     ArraySortTmp ast(container.asTypedValue(), sf);
     ast->asort(sort_flags, ascending);
@@ -2621,7 +2631,8 @@ static bool
 php_ksort(Variant& container, int sort_flags, bool ascending) {
   if (container.isArray()) {
     auto const ad = container.asTypedValue()->val().parr;
-    if (ascending && (ad->isVArray() || ad->isVecType())) return true;
+    auto const vecish = ad->isVArray() || ad->isVecType();
+    if ((vecish && ascending) || (!vecish && ad->size() <= 1)) return true;
     SortFunction sf = getSortFunction(SORTFUNC_KSORT, ascending);
     ArraySortTmp ast(container.asTypedValue(), sf);
     ast->ksort(sort_flags, ascending);
@@ -2700,6 +2711,9 @@ bool HHVM_FUNCTION(usort,
                    const Variant& cmp_function) {
   if (checkIsClsMethAndRaise( __FUNCTION__+2, container)) return false;
   if (container.isArray()) {
+    auto const ad = container.asTypedValue()->val().parr;
+    if (ad->size() == 1 && (ad->isVArray() || ad->isVecType())) return true;
+    if (ad->empty()) return true;
     ArraySortTmp ast(container.asTypedValue(), SORTFUNC_USORT);
     return ast->usort(cmp_function);
   }
@@ -2724,6 +2738,8 @@ bool HHVM_FUNCTION(uasort,
                    const Variant& cmp_function) {
   if (checkIsClsMethAndRaise( __FUNCTION__+2, container)) return false;
   if (container.isArray()) {
+    auto const ad = container.asTypedValue()->val().parr;
+    if (ad->size() <= 1 && !(ad->isVArray() || ad->isVecType())) return true;
     ArraySortTmp ast(container.asTypedValue(), SORTFUNC_UASORT);
     return ast->uasort(cmp_function);
   }
@@ -2750,6 +2766,8 @@ bool HHVM_FUNCTION(uksort,
                    const Variant& cmp_function) {
   if (checkIsClsMethAndRaise( __FUNCTION__+2, container)) return false;
   if (container.isArray()) {
+    auto const ad = container.asTypedValue()->val().parr;
+    if (ad->size() <= 1 && !(ad->isVArray() || ad->isVecType())) return true;
     ArraySortTmp ast(container.asTypedValue(), SORTFUNC_UKSORT);
     return ast->uksort(cmp_function);
   }
@@ -3130,6 +3148,7 @@ String HHVM_FUNCTION(HH_get_provenance, const Variant& in) {
 }
 
 TypedValue HHVM_FUNCTION(HH_tag_provenance_here, TypedValue in, int64_t flags) {
+  auto force_cow = Variant::wrap(in);
   return arrprov::tagTvRecursively(in, flags);
 }
 

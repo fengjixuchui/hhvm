@@ -251,8 +251,6 @@ type t = {
   po_disable_xhp_element_mangling: bool;
   (* Disable `children (foo|bar+|pcdata)` declarations as they can be implemented without special syntax *)
   po_disable_xhp_children_declarations: bool;
-  (* Enables the special first class function pointer syntax foo<> *)
-  po_enable_first_class_function_pointers: bool;
   (* Enable enum class syntax *)
   po_enable_enum_classes: bool;
   (* Treats partial files as strict *)
@@ -275,6 +273,12 @@ type t = {
    * DO NOT set to any other value except for testing purposes.
    *)
   tco_typecheck_sample_rate: float;
+  (* Experimental implementation of a "sound" dynamic type *)
+  tco_enable_sound_dynamic: bool;
+  (* Disallow #-style comments, except hashbangs(#!) *)
+  po_disallow_hash_comments: bool;
+  (* Disable parsing of fun() and class_meth() *)
+  po_disallow_fun_and_cls_meth_pseudo_funcs: bool;
 }
 [@@deriving eq, show]
 
@@ -370,7 +374,6 @@ val make :
   ?po_enable_xhp_class_modifier:bool ->
   ?po_disable_xhp_element_mangling:bool ->
   ?po_disable_xhp_children_declarations:bool ->
-  ?po_enable_first_class_function_pointers:bool ->
   ?po_enable_enum_classes:bool ->
   ?po_disable_modes:bool ->
   ?po_disable_hh_ignore_error:bool ->
@@ -382,6 +385,9 @@ val make :
   ?tco_method_call_inference:bool ->
   ?tco_report_pos_from_reason:bool ->
   ?tco_typecheck_sample_rate:float ->
+  ?tco_enable_sound_dynamic:bool ->
+  ?po_disallow_hash_comments:bool ->
+  ?po_disallow_fun_and_cls_meth_pseudo_funcs:bool ->
   unit ->
   t
 
@@ -474,6 +480,8 @@ val tco_experimental_abstract_type_const_with_default : string
 val tco_experimental_ifc : string
 
 val tco_experimental_infer_flows : string
+
+val tco_experimental_case_sensitive_inheritance : string
 
 val tco_experimental_all : SSet.t
 
@@ -601,8 +609,6 @@ val po_disable_xhp_element_mangling : t -> bool
 
 val po_disable_xhp_children_declarations : t -> bool
 
-val po_enable_first_class_function_pointers : t -> bool
-
 val po_enable_enum_classes : t -> bool
 
 val po_disable_modes : t -> bool
@@ -622,3 +628,9 @@ val tco_method_call_inference : t -> bool
 val tco_report_pos_from_reason : t -> bool
 
 val tco_typecheck_sample_rate : t -> float
+
+val tco_enable_sound_dynamic : t -> bool
+
+val po_disallow_hash_comments : t -> bool
+
+val po_disallow_fun_and_cls_meth_pseudo_funcs : t -> bool

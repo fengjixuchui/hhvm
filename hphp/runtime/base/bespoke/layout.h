@@ -63,12 +63,17 @@ void logBespokeDispatch(const ArrayData* ad, const char* fn);
   X(tv_lval, ElemStr, tv_lval lval, StringData* k, bool) \
   X(ArrayData*, SetInt, T*, int64_t k, TypedValue v) \
   X(ArrayData*, SetStr, T*, StringData* k, TypedValue v)\
+  X(ArrayData*, SetIntMove, T*, int64_t k, TypedValue v) \
+  X(ArrayData*, SetStrMove, T*, StringData* k, TypedValue v)\
   X(ArrayData*, RemoveInt, T*, int64_t) \
   X(ArrayData*, RemoveStr, T*, const StringData*) \
   X(ArrayData*, Append, T*, TypedValue v) \
+  X(ArrayData*, AppendMove, T*, TypedValue v) \
   X(ArrayData*, Pop, T*, Variant&) \
   X(ArrayData*, ToDVArray, T*, bool copy) \
   X(ArrayData*, ToHackArr, T*, bool copy) \
+  X(ArrayData*, PreSort, T*, SortFunction sf) \
+  X(ArrayData*, PostSort, T*, ArrayData* vad) \
   X(ArrayData*, SetLegacyArray, T*, bool copy, bool legacy)
 
 struct LayoutFunctions {
@@ -159,6 +164,12 @@ struct LayoutFunctionDispatcher {
   static ArrayData* SetStr(ArrayData* ad, StringData* k, TypedValue v){
     return Array::SetStr(Cast(ad, __func__), k, v);
   }
+  static ArrayData* SetIntMove(ArrayData* ad, int64_t k, TypedValue v) {
+    return Array::SetIntMove(Cast(ad, __func__), k, v);
+  }
+  static ArrayData* SetStrMove(ArrayData* ad, StringData* k, TypedValue v){
+    return Array::SetStrMove(Cast(ad, __func__), k, v);
+  }
   static ArrayData* RemoveInt(ArrayData* ad, int64_t k) {
     return Array::RemoveInt(Cast(ad, __func__), k);
   }
@@ -183,6 +194,9 @@ struct LayoutFunctionDispatcher {
   static ArrayData* Append(ArrayData* ad, TypedValue v) {
     return Array::Append(Cast(ad, __func__), v);
   }
+  static ArrayData* AppendMove(ArrayData* ad, TypedValue v) {
+    return Array::AppendMove(Cast(ad, __func__), v);
+  }
   static ArrayData* Pop(ArrayData* ad, Variant& v) {
     return Array::Pop(Cast(ad, __func__), v);
   }
@@ -191,6 +205,12 @@ struct LayoutFunctionDispatcher {
   }
   static ArrayData* ToHackArr(ArrayData* ad, bool copy) {
     return Array::ToHackArr(Cast(ad, __func__), copy);
+  }
+  static ArrayData* PreSort(ArrayData* ad, SortFunction sf) {
+    return Array::PreSort(Cast(ad, __func__), sf);
+  }
+  static ArrayData* PostSort(ArrayData* ad, ArrayData* vad) {
+    return Array::PostSort(Cast(ad, __func__), vad);
   }
   static ArrayData* SetLegacyArray(ArrayData* ad, bool copy, bool legacy) {
     return Array::SetLegacyArray(Cast(ad, __func__), copy, legacy);
@@ -290,7 +310,55 @@ struct Layout {
    * needed. This op consumes a ref on `arr` and produces a ref on the result.
    */
   virtual SSATmp* emitAppend(
-    IRGS& env, SSATmp* arr, SSATmp* val) const = 0;
+      IRGS& env, SSATmp* arr, SSATmp* val) const = 0;
+
+  /*
+   * Escalate the bespoke array to vanilla. The default implementation invokes
+   * the general BespokeArray implementation. It performs no refcounting
+   * operations.
+   */
+  virtual SSATmp* emitEscalateToVanilla(
+      IRGS& env, SSATmp* arr, const char* reason) const;
+
+  /**
+   * Obtain the pos corresponding to the first valid element (i.e. not a
+   * tombstone).
+   */
+  virtual SSATmp* emitIterFirstPos(IRGS& env, SSATmp* arr) const = 0;
+
+  /**
+   * Obtain the pos in the array that corresponding to the last to a valid
+   * element (i.e. not a tombstone).
+   */
+  virtual SSATmp* emitIterLastPos(IRGS& env, SSATmp* arr) const = 0;
+
+  /**
+   * Obtain the pos in the array corresponding to the specified index. It
+   * assumes that the array contains no tombstones.
+   */
+  virtual SSATmp* emitIterPos(IRGS& env, SSATmp* arr, SSATmp* idx) const = 0;
+
+  /**
+   * Advance the supplied pos a single step forward.
+   */
+  virtual SSATmp* emitIterAdvancePos(
+      IRGS& env, SSATmp* arr, SSATmp* pos) const = 0;
+
+  /**
+   * Convert the supplied pos to an elm used to access the element.
+   */
+  virtual SSATmp* emitIterElm(IRGS& env, SSATmp* arr, SSATmp* pos) const = 0;
+
+  /**
+   * Obtain the key at the supplied elm.
+   */
+  virtual SSATmp* emitIterGetKey(IRGS& env, SSATmp* arr, SSATmp* elm) const = 0;
+
+  /**
+   * Obtain the value at the supplied elm.
+   */
+  virtual SSATmp* emitIterGetVal(IRGS& env, SSATmp* arr, SSATmp* elm) const = 0;
+
 
 protected:
   explicit Layout(const std::string& description);
@@ -352,7 +420,62 @@ struct ConcreteLayout : public Layout {
    * This default implementation punts.
    */
   virtual SSATmp* emitAppend(
-    IRGS& env, SSATmp* arr, SSATmp* val) const override;
+      IRGS& env, SSATmp* arr, SSATmp* val) const override;
+
+  /*
+   * This default implementation invokes the layout-specific EscalateToVanilla
+   * method without virtualization.
+   */
+  virtual SSATmp* emitEscalateToVanilla(
+      IRGS& env, SSATmp* arr, const char* reason) const override;
+
+  /**
+   * This default implementation invokes the layout-specific IterBegin method
+   * without virtualization.
+   */
+  virtual SSATmp* emitIterFirstPos(IRGS& env, SSATmp* arr) const override;
+
+  /**
+   * This default implementation invokes the layout-specific IterLast method
+   * without virtualization.
+   */
+  virtual SSATmp* emitIterLastPos(IRGS& env, SSATmp* arr) const override;
+
+  /**
+   * This default implementation punts.
+   */
+  virtual SSATmp* emitIterPos(
+      IRGS& env, SSATmp* arr, SSATmp* idx) const override;
+
+  /**
+   * This default implementation invokes the layout-specific IterAdvance method
+   * without virtualization.
+   */
+  virtual SSATmp* emitIterAdvancePos(
+      IRGS& env, SSATmp* arr, SSATmp* pos) const override;
+
+  /**
+   * This default implementation returns the supplied pos. In other words,
+   * elm = pos for all indices.
+   */
+  virtual SSATmp* emitIterElm(
+      IRGS& env, SSATmp* arr, SSATmp* pos) const override;
+
+  /**
+   * This default implementation invokes the layout-specific GetPosKey method
+   * without virtualization. If a non-default implementation of emitIterElm is
+   * provided, this will also have to be updated.
+   */
+  virtual SSATmp* emitIterGetKey(
+      IRGS& env, SSATmp* arr, SSATmp* elm) const override;
+
+  /**
+   * This default implementation invokes the layout-specific GetPosVal method
+   * without virtualization. If a non-default implementation of emitIterElm is
+   * provided, this will also have to be updated.
+   */
+  virtual SSATmp* emitIterGetVal(
+      IRGS& env, SSATmp* arr, SSATmp* elm) const override;
 
 private:
   const LayoutFunctions* m_vtable;

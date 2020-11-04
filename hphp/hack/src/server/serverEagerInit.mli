@@ -10,4 +10,8 @@
 open ServerInitTypes
 
 val init :
-  ServerEnv.genv -> lazy_level -> ServerEnv.env -> ServerEnv.env * float
+  ServerEnv.genv ->
+  lazy_level ->
+  ServerEnv.env ->
+  CgroupProfiler.Profiling.t ->
+  ServerEnv.env * float

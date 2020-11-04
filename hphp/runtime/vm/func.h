@@ -114,10 +114,11 @@ struct EHEnt {
 struct Func final {
   friend struct FuncEmitter;
 
+#ifndef USE_LOWPTR
   // DO NOT access it directly, instead use Func::getFuncVec()
   // Exposed in the header file for gdb python macros
   static AtomicLowPtrVector<const Func> s_funcVec;
-
+#endif
   /////////////////////////////////////////////////////////////////////////////
   // Types.
 
@@ -249,9 +250,9 @@ struct Func final {
   void setNewFuncId();
 
   /*
-   * The next available FuncId.  For observation only; does not reserve.
+   * The max FuncId num.
    */
-  static FuncId nextFuncId();
+  static FuncId::Int maxFuncIdNum();
 
   /*
    * Lookup a Func* by its ID.
@@ -881,9 +882,10 @@ struct Func final {
   // Other attributes.                                                  [const]
 
   /*
-   * Get the system attributes of the function.
+   * Get the system and coeffect attributes of the function.
    */
   Attr attrs() const;
+  CoeffectAttr coeffectAttrs() const;
 
   /*
    * Get the user-declared attributes of the function.
@@ -1069,6 +1071,7 @@ struct Func final {
    * Print function attributes to out.
    */
   static void print_attrs(std::ostream& out, Attr attrs);
+  static void print_attrs(std::ostream& out, CoeffectAttr attrs);
 
 
   /////////////////////////////////////////////////////////////////////////////
@@ -1088,12 +1091,6 @@ struct Func final {
    */
   int8_t& maybeIntercepted() const;
 
-  /*
-   * Access to the global vector of funcs.  This maps FuncID's back to Func*'s.
-   */
-  static const AtomicLowPtrVector<const Func>& getFuncVec();
-
-
   /////////////////////////////////////////////////////////////////////////////
   // Public setters.
   //
@@ -1104,6 +1101,7 @@ struct Func final {
   // Having public setters here should be avoided, so try not to add any.
 
   void setAttrs(Attr attrs);
+  void setCoeffectAttrs(CoeffectAttr attrs);
   void setBaseCls(Class* baseCls);
   void setFuncHandle(rds::Link<LowPtr<Func>, rds::Mode::NonLocal> l);
   void setHasPrivateAncestor(bool b);
@@ -1122,6 +1120,7 @@ struct Func final {
     return offsetof(Func, m_##f);       \
   }
   OFF(attrs)
+  OFF(coeffectAttrs)
   OFF(name)
   OFF(maxStackCells)
   OFF(maybeIntercepted)
@@ -1468,40 +1467,47 @@ private:
   // Profiling State.
 
 public:
-  enum ProfilingState : uint8_t {
+  enum Flags : uint8_t {
     None      = 0,
     Profiling = 1 << 0,
     Optimized = 1 << 1,
+    Locked    = 1 << 2,
   };
 
  /*
   * Wrapper around std::atomic<uint8_t> that enables it to be
   * copy constructable,
   */
-  struct AtomicProfilingState {
-    AtomicProfilingState() {}
+  struct AtomicFlags {
+    AtomicFlags() {}
 
-    AtomicProfilingState(const AtomicProfilingState&) {}
-    AtomicProfilingState& operator=(const AtomicProfilingState&) = delete;
+    AtomicFlags(const AtomicFlags&) {}
+    AtomicFlags& operator=(const AtomicFlags&) = delete;
 
-    bool set(ProfilingState state) {
-      auto const prev = m_state.fetch_or(state, std::memory_order_release);
-      return prev & state;
+    bool set(Flags flags) {
+      auto const prev = m_flags.fetch_or(flags, std::memory_order_release);
+      return prev & flags;
     }
 
-    bool check(ProfilingState state) const {
-      return m_state.load(std::memory_order_acquire) & state;
+    bool unset(Flags flags) {
+      auto const prev =
+        m_flags.fetch_and(~uint8_t(flags), std::memory_order_release);
+      return prev & flags;
     }
 
-    std::atomic<uint8_t> m_state{ProfilingState::None};
+    bool check(Flags flags) const {
+      return m_flags.load(std::memory_order_acquire) & flags;
+    }
+
+    std::atomic<uint8_t> m_flags{Flags::None};
   };
 
-  inline AtomicProfilingState& profilingState() const {
-    return m_profilingState;
+  inline AtomicFlags& atomicFlags() const {
+    return m_atomicFlags;
   }
 
-  inline AtomicProfilingState& profilingState() {
-    return m_profilingState;
+  inline AtomicFlags& atomicFlags() {
+    return m_atomicFlags;
   }
 
   /////////////////////////////////////////////////////////////////////////////
@@ -1534,7 +1540,7 @@ private:
 #endif
   AtomicLowPtr<uint8_t> m_funcBody{nullptr};
   mutable rds::Link<LowPtr<Func>, rds::Mode::NonLocal> m_cachedFunc;
-  FuncId m_funcId{InvalidFuncId};
+  FuncId m_funcId{FuncId::Invalid};
   mutable AtomicLowPtr<const StringData> m_fullName{nullptr};
   LowStringPtr m_name{nullptr};
 
@@ -1559,7 +1565,7 @@ private:
   // TODO(#1114385) intercept should work via invalidation.
   mutable int8_t m_maybeIntercepted;
   mutable ClonedFlag m_cloned;
-  mutable AtomicProfilingState m_profilingState;
+  mutable AtomicFlags m_atomicFlags;
   bool m_isPreFunc : 1;
   bool m_hasPrivateAncestor : 1;
   bool m_shouldSampleJit : 1;
@@ -1567,7 +1573,8 @@ private:
   bool m_hasForeignThis : 1;
   bool m_registeredInDataMap : 1;
   // 2 free bits
-  int m_maxStackCells{0};
+  CoeffectAttr m_coeffectAttrs{CEAttrNone};
+  int16_t m_maxStackCells{0};
   uint64_t m_inoutBitVal{0};
   Unit* const m_unit;
   AtomicSharedPtr<SharedData> m_shared;
@@ -1611,12 +1618,12 @@ struct PrologueID {
 
   struct Hasher {
     size_t operator()(PrologueID pid) const {
-      return pid.funcId() + (size_t(pid.nargs()) << 32);
+      return pid.funcId().toInt() + (size_t(pid.nargs()) << 32);
     }
   };
 
  private:
-  FuncId   m_funcId{InvalidFuncId};
+  FuncId   m_funcId{FuncId::Invalid};
   uint32_t m_nargs{0xffffffff};
 };
 

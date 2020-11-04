@@ -367,7 +367,7 @@ void sortTrans() {
     const auto trec = TREC(tid);
     if (trec->isValid() &&
         (selectedFuncId == INVALID_ID ||
-         selectedFuncId == trec->src.funcID()) &&
+         selectedFuncId == trec->src.funcID().toInt()) &&
         (kindFilter == "all" || kindFilter == show(trec->kind).c_str())) {
       transPrintOrder.push_back(tid);
     }
@@ -587,8 +587,9 @@ dynamic getTransRec(const TransRec* tRec,
                     const PerfEventsMap<TransID>& transPerfEvents) {
   auto const guards = dynamic(tRec->guards.begin(), tRec->guards.end());
 
+  auto const sk = tRec->src;
   auto const resumeMode = [&] {
-    switch (tRec->src.resumeMode()) {
+    switch (sk.resumeMode()) {
       case ResumeMode::None: return "None";
       case ResumeMode::Async: return "Async";
       case ResumeMode::GenIter: return "GenIter";
@@ -597,12 +598,12 @@ dynamic getTransRec(const TransRec* tRec,
   }();
 
   const dynamic src = dynamic::object("sha1", tRec->sha1.toString())
-                                     ("funcId", tRec->src.funcID())
+                                     ("funcId", sk.funcID().toInt())
                                      ("funcName", tRec->funcName)
                                      ("resumeMode", resumeMode)
-                                     ("hasThis", tRec->src.hasThis())
-                                     ("prologue", tRec->src.prologue())
-                                     ("bcStartOffset", tRec->src.offset())
+                                     ("hasThis", sk.hasThis())
+                                     ("prologue", sk.prologue())
+                                     ("bcStartOffset", sk.printableOffset())
                                      ("guards", guards);
 
   const dynamic result = dynamic::object("id", tRec->id)
@@ -826,8 +827,7 @@ void printCFGOutArcs(TransID transId) {
         TREC(targetId)->src.funcID() == srcFuncId &&
         TREC(targetId)->kind != TransKind::Anchor) {
 
-      bool retrans = (TREC(transId)->src.offset() ==
-                      TREC(targetId)->src.offset());
+      bool retrans = TREC(transId)->src == TREC(targetId)->src;
       const char* color;
       if (retrans) {
         color = "darkorange";
@@ -851,25 +851,30 @@ void printCFG() {
   g_transData->findFuncTrans(selectedFuncId, &inodes);
 
   // Print nodes
-  for (uint32_t i = 0; i < inodes.size(); i++) {
-    auto tid = inodes[i];
+  for (auto& tid : inodes) {
+    auto const sk = TREC(tid)->src;
+    if (sk.prologue()) {
+      g_logger->printGeneric(
+        "t%u [shape=invtrapezium,label=\"T: %u\\nprologue\","
+        "style=filled,color=blue];\n",
+        tid, tid
+      );
+      continue;
+    }
+
     uint32_t bcStart   = TREC(tid)->src.offset();
     uint32_t bcStop    = TREC(tid)->bcPast();
-    const auto kind = TREC(tid)->kind;
-    bool isPrologue = kind == TransKind::LivePrologue ||
-                      kind == TransKind::OptPrologue;
-    const char* shape = "box";
-    switch (TREC(tid)->kind) {
-      case TransKind::Optimize:     shape = "oval";         break;
-      case TransKind::Profile:      shape = "hexagon";      break;
-      case TransKind::LivePrologue:
-      case TransKind::ProfPrologue:
-      case TransKind::OptPrologue : shape = "invtrapezium"; break;
-      default:                      shape = "box";
-    }
-    g_logger->printGeneric("t%u [shape=%s,label=\"T: %u\\nbc: [0x%x-0x%x)\","
-                           "style=filled%s];\n", tid, shape, tid, bcStart,
-                           bcStop, (isPrologue ? ",color=blue" : ""));
+    auto const shape = [&] {
+      switch (TREC(tid)->kind) {
+        case TransKind::Optimize: return "oval";
+        case TransKind::Profile:  return "hexagon";
+        default:                  return "box";
+      }
+    }();
+    g_logger->printGeneric(
+      "t%u [shape=%s,label=\"T: %u\\nbc: [0x%x-0x%x)\",style=filled];\n",
+      tid, shape, tid, bcStart, bcStop
+    );
   }
 
   // Print arcs
@@ -904,30 +909,23 @@ void printTopFuncs() {
 }
 
 void printTopFuncsBySize() {
-  std::unordered_map<FuncId,size_t> funcSize;
-  FuncId maxFuncId = 0;
+  std::unordered_map<FuncId, size_t> funcSize;
   for (TransID t = 0; t < NTRANS; t++) {
     const auto trec = TREC(t);
     if (trec->isValid()) {
       const auto funcId = trec->src.funcID();
       funcSize[funcId] += trec->aLen;
-      if (funcId > maxFuncId) {
-        maxFuncId = funcId;
-      }
     }
   }
-  std::vector<FuncId> funcIds(maxFuncId+1);
-  for (FuncId fid = 0; fid <= maxFuncId; fid++) {
-    funcIds[fid] = fid;
-  }
-  std::sort(funcIds.begin(), funcIds.end(),
-            [&](FuncId fid1, FuncId fid2) {
-    return funcSize[fid1] > funcSize[fid2];
+  std::vector<std::pair<FuncId, size_t>> topN(nTopFuncs);
+  std::partial_sort_copy(funcSize.begin(), funcSize.end(),
+                         topN.begin(), topN.end(),
+    [&](auto const& a, auto const& b) {
+      return a.second > b.second;
   });
   g_logger->printGeneric("FuncID:   \tSize (total aLen in bytes):\n");
-  for (size_t i = 0; i < nTopFuncs; i++) {
-    const auto fid = funcIds[i];
-    g_logger->printGeneric("%10u\t%10lu\n", fid, funcSize[funcIds[i]]);
+  for (auto const& [fid, size] : topN) {
+    g_logger->printGeneric("%10u\t%10lu\n", fid.toInt(), size);
   }
 }
 

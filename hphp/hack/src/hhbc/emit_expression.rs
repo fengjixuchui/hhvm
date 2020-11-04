@@ -27,7 +27,7 @@ use naming_special_names_rust::{
     emitter_special_functions, fb, pseudo_consts, pseudo_functions, special_functions,
     special_idents, superglobals, typehints, user_attributes,
 };
-use options::{CompilerFlags, HhvmFlags, Options};
+use options::{CompilerFlags, HhvmFlags, LangFlags, Options};
 use oxidized::{
     aast, aast_defs,
     aast_visitor::{visit, visit_mut, AstParams, Node, NodeMut, Visitor, VisitorMut},
@@ -276,13 +276,9 @@ mod inout_locals {
 pub fn wrap_array_mark_legacy(e: &Emitter, ins: InstrSeq) -> InstrSeq {
     if mark_as_legacy(e.options()) {
         InstrSeq::gather(vec![
-            instr::nulluninit(),
-            instr::nulluninit(),
             ins,
-            instr::fcallfuncd(
-                FcallArgs::new(FcallFlags::default(), 1, vec![], None, 1, None),
-                function::from_raw_string("HH\\array_mark_legacy"),
-            ),
+            instr::false_(),
+            instr::instr(Instruct::IMisc(InstructMisc::ArrayMarkLegacy)),
         ])
     } else {
         ins
@@ -520,16 +516,7 @@ pub fn emit_expr(emitter: &mut Emitter, env: &Env, expression: &tast::Expr) -> R
         Expr_::PUAtom(_) | Expr_::PUIdentifier(_) => Err(unrecoverable(
             "TODO(T35357243): Pocket Universes syntax must be erased by now",
         )),
-        Expr_::ExpressionTree(et) => {
-            let desugared_expr = &et.2;
-            if let Some(expr) = desugared_expr {
-                emit_expr(emitter, env, expr)
-            } else {
-                Err(unrecoverable(
-                    "TODO(exprtrees): Expression Trees need to be desugared before emission",
-                ))
-            }
-        }
+        Expr_::ExpressionTree(et) => emit_expr(emitter, env, &et.desugared_expr),
         _ => unimplemented!("TODO(hrust)"),
     }
 }
@@ -1178,13 +1165,9 @@ fn emit_static_collection(
         if arrprov_enabled && env.scope.has_function_attribute("__ProvenanceSkipFrame") {
             InstrSeq::gather(vec![
                 emit_pos(pos),
-                instr::nulluninit(),
-                instr::nulluninit(),
                 instr::typedvalue(tv),
-                instr::fcallfuncd(
-                    FcallArgs::new(FcallFlags::default(), 1, vec![], None, 1, None),
-                    function::from_raw_string("HH\\tag_provenance_here"),
-                ),
+                instr::int(0),
+                instr::instr(Instruct::IMisc(InstructMisc::TagProvenanceHere)),
                 transform_instr,
             ])
         } else {
@@ -1645,6 +1628,46 @@ fn emit_call_isset_exprs(e: &mut Emitter, env: &Env, pos: &Pos, exprs: &[tast::E
             ]))
         }
     }
+}
+
+fn emit_tag_provenance_here(e: &mut Emitter, env: &Env, pos: &Pos, es: &[tast::Expr]) -> Result {
+    let default = if es.len() == 1 {
+        instr::int(0)
+    } else {
+        instr::empty()
+    };
+    let tag = instr::instr(Instruct::IMisc(InstructMisc::TagProvenanceHere));
+    Ok(InstrSeq::gather(vec![
+        emit_exprs(e, env, es)?,
+        emit_pos(pos),
+        default,
+        tag,
+    ]))
+}
+
+fn emit_array_mark_legacy(
+    e: &mut Emitter,
+    env: &Env,
+    pos: &Pos,
+    es: &[tast::Expr],
+    legacy: bool,
+) -> Result {
+    let default = if es.len() == 1 {
+        instr::false_()
+    } else {
+        instr::empty()
+    };
+    let mark = if legacy {
+        instr::instr(Instruct::IMisc(InstructMisc::ArrayMarkLegacy))
+    } else {
+        instr::instr(Instruct::IMisc(InstructMisc::ArrayUnmarkLegacy))
+    };
+    Ok(InstrSeq::gather(vec![
+        emit_exprs(e, env, es)?,
+        emit_pos(pos),
+        default,
+        mark,
+    ]))
 }
 
 fn emit_idx(e: &mut Emitter, env: &Env, pos: &Pos, es: &[tast::Expr]) -> Result {
@@ -2331,6 +2354,12 @@ fn emit_special_function(
 ) -> Result<Option<InstrSeq>> {
     use tast::{Expr as E, Expr_ as E_};
     let nargs = args.len() + uarg.map_or(0, |_| 1);
+    let fun_and_clsmeth_disabled = e
+        .options()
+        .hhvm
+        .hack_lang
+        .flags
+        .contains(LangFlags::DISALLOW_FUN_AND_CLS_METH_PSEUDO_FUNCS);
     match (lower_fq_name, args) {
         (id, _) if id == special_functions::ECHO => Ok(Some(InstrSeq::gather(
             args.iter()
@@ -2411,7 +2440,12 @@ fn emit_special_function(
             Ok(Some(emit_exit(e, env, args.first())?))
         }
         ("HH\\fun", _) => {
-            if nargs != 1 {
+            if fun_and_clsmeth_disabled {
+                Err(emit_fatal::raise_fatal_parse(
+                    pos,
+                    "`fun()` is disabled; switch to first-class references like `foo<>`",
+                ))
+            } else if nargs != 1 {
                 Err(emit_fatal::raise_fatal_runtime(
                     pos,
                     format!(
@@ -2498,6 +2532,10 @@ fn emit_special_function(
                 ),
             )),
         },
+        ("HH\\class_meth", _) if fun_and_clsmeth_disabled => Err(emit_fatal::raise_fatal_parse(
+            pos,
+            "`class_meth()` is disabled; switch to first-class references like `C::bar<>`",
+        )),
         ("HH\\class_meth", &[ref cls, ref meth, ..]) if nargs == 2 => {
             if meth.1.is_string() {
                 if cls.1.is_string()
@@ -2570,6 +2608,15 @@ fn emit_special_function(
         ("__hhvm_internal_getmemokeyl", &[E(_, E_::Lvar(ref param))]) if e.systemlib() => Ok(Some(
             instr::getmemokeyl(local::Type::Named(local_id::get_name(&param.1).into())),
         )),
+        ("HH\\array_mark_legacy", _) if args.len() == 1 || args.len() == 2 => {
+            Ok(Some(emit_array_mark_legacy(e, env, pos, args, true)?))
+        }
+        ("HH\\array_unmark_legacy", _) if args.len() == 1 || args.len() == 2 => {
+            Ok(Some(emit_array_mark_legacy(e, env, pos, args, false)?))
+        }
+        ("HH\\tag_provenance_here", _) if args.len() == 1 || args.len() == 2 => {
+            Ok(Some(emit_tag_provenance_here(e, env, pos, args)?))
+        }
         _ => Ok(
             match (
                 args,
@@ -2800,7 +2847,6 @@ fn get_call_builtin_func_info(opts: &Options, id: impl AsRef<str>) -> Option<(us
     }
 }
 
-// How do we make these work with reified generics?
 fn emit_function_pointer(
     e: &mut Emitter,
     env: &Env,
@@ -2808,18 +2854,19 @@ fn emit_function_pointer(
     fpid: &tast::FunctionPtrId,
     targs: &[tast::Targ],
 ) -> Result {
-    match fpid {
+    let instrs = match fpid {
         // This is a function name. Equivalent to HH\fun('str')
-        tast::FunctionPtrId::FPId(id) => emit_hh_fun(e, env, pos, targs, id.name()),
+        tast::FunctionPtrId::FPId(id) => emit_hh_fun(e, env, pos, targs, id.name())?,
         // class_meth
         tast::FunctionPtrId::FPClassConst(cid, method_id) => {
             // TODO(hrust) should accept `let method_id = method::Type::from_ast_name(&(cc.1).1);`
             let method_id: method::Type = string_utils::strip_global_ns(&method_id.1)
                 .to_string()
                 .into();
-            emit_class_meth_native(e, env, pos, cid, method_id, targs)
+            emit_class_meth_native(e, env, pos, cid, method_id, targs)?
         }
-    }
+    };
+    Ok(emit_pos_then(pos, instrs))
 }
 
 fn emit_hh_fun(
@@ -2888,7 +2935,12 @@ fn istype_op(opts: &Options, id: impl AsRef<str>) -> Option<IstypeOp> {
         "HH\\is_any_array" => Some(OpArrLike),
         "HH\\is_class_meth" => Some(OpClsMeth),
         "HH\\is_fun" => Some(OpFunc),
-        "HH\\is_php_array" => Some(OpPHPArr),
+        "HH\\is_php_array" => Some(if hack_arr_dv_arrs {
+            OpLegacyArrLike
+        } else {
+            OpPHPArr
+        }),
+        "HH\\is_array_marked_legacy" => Some(OpLegacyArrLike),
         "HH\\is_class" => Some(OpClass),
         _ => None,
     }
@@ -2997,7 +3049,7 @@ fn emit_call_expr(
     }
 }
 
-fn emit_reified_generic_instrs(pos: &Pos, is_fun: bool, index: usize) -> Result {
+pub fn emit_reified_generic_instrs(pos: &Pos, is_fun: bool, index: usize) -> Result {
     let base = if is_fun {
         instr::basel(
             local::Type::Named(string_utils::reified::GENERICS_LOCAL_NAME.into()),

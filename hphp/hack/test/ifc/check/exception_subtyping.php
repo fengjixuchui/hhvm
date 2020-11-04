@@ -3,14 +3,16 @@
 class MyException extends Exception {}
 
 class C {
+  <<__InferFlows>>
   public function __construct(
-    <<Policied("PRIVATE")>>
+    <<__Policied("PRIVATE")>>
     public int $private,
-    <<Policied("PUBLIC")>>
+    <<__Policied("PUBLIC")>>
     public int $public,
   ) { }
 }
 
+<<__InferFlows>>
 function leak_via_control(C $c, MyException $e): void {
   if ($c->private > 10) {
     throw $e;
@@ -18,6 +20,7 @@ function leak_via_control(C $c, MyException $e): void {
   $c->public = 10;
 }
 
+<<__InferFlows>>
 function leak_pc_in_catch(C $c, MyException $e): void {
   try {
     if ($c->private > 0)

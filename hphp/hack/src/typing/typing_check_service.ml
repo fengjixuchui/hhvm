@@ -150,7 +150,7 @@ let check_typedef (ctx : Provider_context.t) (fn : Relative_path.t) (x : string)
         let typedef = Naming.typedef ctx t in
         Nast_check.def ctx (Aast.Typedef typedef);
         let ret = Typing.typedef_def ctx typedef in
-        Typing_variance.typedef ctx x;
+        Typing_variance.typedef (Typing_variance.make_vgenv ctx fn) x;
         let def = Aast.Typedef ret in
         Tast_check.def ctx def;
         Some def)
@@ -204,34 +204,40 @@ let process_file
   let ignore_check_typedef opts fn name = ignore (check_typedef opts fn name) in
   let ignore_check_const opts fn name = ignore (check_const opts fn name) in
   try
-    let (errors', (tasts, global_tvenvs)) =
-      Errors.do_with_context fn Errors.Typing (fun () ->
-          let (fun_tasts, fun_global_tvenvs) =
-            List.map funs ~f:snd
-            |> List.filter_map ~f:(type_fun ctx fn)
-            |> List.unzip
-          in
-          let (class_tasts, class_global_tvenvs) =
-            List.map classes ~f:snd
-            |> List.filter_map ~f:(type_class ctx fn)
-            |> List.unzip
-          in
-          let class_global_tvenvs = List.concat class_global_tvenvs in
-          List.map record_defs ~f:snd
-          |> List.iter ~f:(ignore_type_record_def ctx fn);
-          List.map typedefs ~f:snd |> List.iter ~f:(ignore_check_typedef ctx fn);
-          List.map gconsts ~f:snd |> List.iter ~f:(ignore_check_const ctx fn);
-          (fun_tasts @ class_tasts, fun_global_tvenvs @ class_global_tvenvs))
+    let result =
+      let result =
+        Errors.do_with_context fn Errors.Typing (fun () ->
+            let (fun_tasts, fun_global_tvenvs) =
+              List.map funs ~f:snd
+              |> List.filter_map ~f:(type_fun ctx fn)
+              |> List.unzip
+            in
+            let (class_tasts, class_global_tvenvs) =
+              List.map classes ~f:snd
+              |> List.filter_map ~f:(type_class ctx fn)
+              |> List.unzip
+            in
+            let class_global_tvenvs = List.concat class_global_tvenvs in
+            List.map record_defs ~f:snd
+            |> List.iter ~f:(ignore_type_record_def ctx fn);
+            List.map typedefs ~f:snd
+            |> List.iter ~f:(ignore_check_typedef ctx fn);
+            List.map gconsts ~f:snd |> List.iter ~f:(ignore_check_const ctx fn);
+            (fun_tasts @ class_tasts, fun_global_tvenvs @ class_global_tvenvs))
+      in
+      match Deferred_decl.get_deferments ~f:(fun d -> Declare d) with
+      | [] -> Ok result
+      | deferred_files -> Error deferred_files
     in
-    if GlobalOptions.tco_global_inference opts then
-      Typing_global_inference.StateSubConstraintGraphs.build_and_save
-        ctx
-        tasts
-        global_tvenvs;
-    let deferred_files = Deferred_decl.get_deferments ~f:(fun d -> Declare d) in
-    match deferred_files with
-    | [] -> { errors = Errors.merge errors' errors; computation = [] }
-    | _ ->
+    match result with
+    | Ok (errors', (tasts, global_tvenvs)) ->
+      if GlobalOptions.tco_global_inference opts then
+        Typing_global_inference.StateSubConstraintGraphs.build_and_save
+          ctx
+          tasts
+          global_tvenvs;
+      { errors = Errors.merge errors' errors; computation = [] }
+    | Error deferred_files ->
       let computation =
         List.concat
           [
@@ -374,7 +380,7 @@ let process_files
         let categories = [] in
         let categories =
           if check_info.profile_log then
-            Decl_accessors :: Get_ast :: Disk_cat :: Typecheck :: categories
+            Get_ast :: Disk_cat :: Typecheck :: Decling :: categories
           else
             categories
         in
@@ -384,6 +390,7 @@ let process_files
           else
             categories
         in
+        Decl_counters.set_mode check_info.profile_decling;
         reset ~enabled_categories:(CategorySet.of_list categories)))
   in
   let (_start_time, start_counters) = read_counters () in
@@ -456,7 +463,9 @@ let process_files
          ~prev:start_counters)
   in
 
-  let new_dep_edges = Typing_deps.flush_ideps_batch () in
+  let new_dep_edges =
+    Typing_deps.flush_ideps_batch (Provider_context.get_deps_mode ctx)
+  in
   let dep_edges = Typing_deps.merge_dep_edges dep_edges new_dep_edges in
 
   TypingLogger.flush_buffers ();

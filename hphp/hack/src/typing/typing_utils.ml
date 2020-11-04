@@ -509,22 +509,29 @@ let reactivity_to_string env r =
 
 let get_printable_shape_field_name = Env.get_shape_field_name
 
-let shape_field_name_ env field =
+let shape_field_name_ this field =
   Aast.(
     match field with
     | (p, Int name) -> Ok (Ast_defs.SFlit_int (p, name))
     | (p, String name) -> Ok (Ast_defs.SFlit_str (p, name))
     | (p, PU_atom name) -> Ok (Ast_defs.SFlit_str (p, name))
+    | (p, EnumAtom name) -> Ok (Ast_defs.SFlit_str (p, name))
     | (_, Class_const ((_, CI x), y)) -> Ok (Ast_defs.SFclass_const (x, y))
     | (_, Class_const ((_, CIself), y)) ->
-      let c_ty = get_node (Env.get_self env) in
-      (match c_ty with
-      | Tclass (sid, _, _) -> Ok (Ast_defs.SFclass_const (sid, y))
-      | _ -> Error `Expected_class)
+      (match force this with
+      | Some sid -> Ok (Ast_defs.SFclass_const (sid, y))
+      | None -> Error `Expected_class)
     | _ -> Error `Invalid_shape_field_name)
 
 let shape_field_name env (p, field) =
-  match shape_field_name_ env (p, field) with
+  let this =
+    lazy
+      (let c_ty = get_node (Env.get_self env) in
+       match c_ty with
+       | Tclass (sid, _, _) -> Some sid
+       | _ -> None)
+  in
+  match shape_field_name_ this (p, field) with
   | Ok x -> Some x
   | Error `Expected_class ->
     Errors.expected_class p;
@@ -600,7 +607,8 @@ let default_fun_param ?(pos = Pos.none) ty : 'a fun_param =
         ~mutability:None
         ~has_default:false
         ~ifc_external:false
-        ~ifc_can_call:false;
+        ~ifc_can_call:false
+        ~is_atom:false;
     fp_rx_annotation = None;
   }
 
@@ -666,7 +674,8 @@ let rec class_get_pu_ env cty name =
   | Ttuple _
   | Tobject
   | Tshape _
-  | Tunapplied_alias _ ->
+  | Tunapplied_alias _
+  | Taccess _ ->
     (env, None)
   | Tintersection _ -> (env, None)
   | Tpu_type_access _
@@ -725,3 +734,26 @@ let class_get_pu_member_type ?from_class env ty enum member name =
   ( env,
     member >>= fun (ety_env, member) ->
     SMap.find_opt name member.tpum_types >>= fun dty -> Some (ety_env, dty) )
+
+let collect_enum_class_upper_bounds env name =
+  let rec collect seen result name =
+    let upper_bounds = Env.get_upper_bounds env name [] in
+    Typing_set.fold
+      (fun lty (seen, result) ->
+        match get_node lty with
+        | Tclass ((_, name), _, _) when Env.is_enum_class env name ->
+          (seen, SSet.add name result)
+        | Tgeneric (name, _) when not (SSet.mem name seen) ->
+          collect (SSet.add name seen) result name
+        | _ -> (seen, result))
+      upper_bounds
+      (seen, result)
+  in
+  let (_, upper_bounds) = collect SSet.empty SSet.empty name in
+  upper_bounds
+
+let make_locl_subst_for_class_tparams classdef tyl =
+  if List.is_empty tyl then
+    SMap.empty
+  else
+    Decl_subst.make_locl (Cls.tparams classdef) tyl

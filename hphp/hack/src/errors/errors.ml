@@ -2330,7 +2330,7 @@ let bad_method_override pos member_name msgl (on_error : typing_error_callback)
     ( pos,
       "The method "
       ^ (strip_ns member_name |> Markdown_lite.md_codify)
-      ^ " has the wrong type" )
+      ^ " is not compatible with the overridden method" )
   in
   (* This is a cascading error message *)
   on_error ~code:(Typing.err_code Typing.BadMethodOverride) (msg :: msgl)
@@ -3316,18 +3316,31 @@ let generic_static pos x =
     ^ Markdown_lite.md_codify x
     ^ "." )
 
-let fun_too_many_args pos1 pos2 (on_error : typing_error_callback) =
+let fun_too_many_args
+    required actual pos1 pos2 (on_error : typing_error_callback) =
   on_error
     ~code:(Typing.err_code Typing.FunTooManyArgs)
     [
-      (pos1, "Too many mandatory arguments");
+      ( pos1,
+        Printf.sprintf
+          "Too many mandatory arguments (expected %d but got %d)"
+          required
+          actual );
       (pos2, "Because of this definition");
     ]
 
-let fun_too_few_args pos1 pos2 (on_error : typing_error_callback) =
+let fun_too_few_args
+    required actual pos1 pos2 (on_error : typing_error_callback) =
   on_error
     ~code:(Typing.err_code Typing.FunTooFewArgs)
-    [(pos1, "Too few arguments"); (pos2, "Because of this definition")]
+    [
+      ( pos1,
+        Printf.sprintf
+          "Too few arguments (required %d but got %d)"
+          required
+          actual );
+      (pos2, "Because of this definition");
+    ]
 
 let fun_unexpected_nonvariadic pos1 pos2 (on_error : typing_error_callback) =
   on_error
@@ -4569,13 +4582,6 @@ let override_per_trait class_name id m_pos =
 let missing_assign pos =
   add (Typing.err_code Typing.MissingAssign) pos "Please assign a value"
 
-let private_override pos class_id id =
-  add
-    (Typing.err_code Typing.PrivateOverride)
-    pos
-    ( Markdown_lite.md_codify (strip_ns class_id ^ "::" ^ id)
-    ^ ": combining private and override is nonsensical" )
-
 let invalid_memoized_param pos ty_reason_msg =
   add_list
     (Typing.err_code Typing.InvalidMemoizedParam)
@@ -5586,6 +5592,102 @@ let unnecessary_attribute pos ~attr ~reason ~suggestion =
       (reason_pos, "It is unnecessary because " ^ reason_msg);
       (pos, suggestion);
     ]
+
+let inherited_class_member_with_different_case
+    member_type name name_prev p child_class prev_class prev_class_pos =
+  let name = strip_ns name in
+  let name_prev = strip_ns name_prev in
+  let child_class = strip_ns child_class in
+  let prev_class = strip_ns prev_class in
+  let errs =
+    [
+      ( p,
+        child_class
+        ^ " inherits a "
+        ^ member_type
+        ^ " named "
+        ^ Markdown_lite.md_codify name_prev
+        ^ " which differs from this one ("
+        ^ name
+        ^ ") only by case." );
+      ( prev_class_pos,
+        "It was inherited from "
+        ^ prev_class
+        ^ " as "
+        ^ (highlight_differences name name_prev |> Markdown_lite.md_codify)
+        ^ ". If you meant to override it, please use the same casing as the inherited "
+        ^ member_type
+        ^ "."
+        ^ " Otherwise, please choose a different name for the new method." );
+    ]
+  in
+  add_list (Typing.err_code Typing.InheritedMethodCaseDiffers) errs
+
+let multiple_inherited_class_member_with_different_case
+    ~member_type ~name1 ~name2 ~class1 ~class2 ~child_class ~child_p ~p1 ~p2 =
+  let name1 = strip_ns name1 in
+  let name2 = strip_ns name2 in
+  let class1 = strip_ns class1 in
+  let class2 = strip_ns class2 in
+  let child_class = strip_ns child_class in
+  let errs =
+    [
+      ( child_p,
+        Markdown_lite.md_codify child_class
+        ^ " inherited two versions of the "
+        ^ member_type
+        ^ " "
+        ^ Markdown_lite.md_codify name1
+        ^ " that differ only by case." );
+      ( p1,
+        "It inherited "
+        ^ Markdown_lite.md_codify name1
+        ^ " from "
+        ^ class1
+        ^ " here." );
+      ( p2,
+        "And "
+        ^ Markdown_lite.md_codify name2
+        ^ " from "
+        ^ class2
+        ^ " here. Please rename these methods to the same casing." );
+    ]
+  in
+  add_list (Typing.err_code Typing.InheritedMethodCaseDiffers) errs
+
+let atom_invalid_parameter pos =
+  add_list
+    (Typing.err_code Typing.AtomInvalidParameter)
+    [
+      ( pos,
+        "Attribute "
+        ^ Naming_special_names.UserAttributes.uaAtom
+        ^ " is only allowed on "
+        ^ Naming_special_names.Classes.cElt );
+    ]
+
+let atom_invalid_parameter_in_enum_class pos =
+  add_list
+    (Typing.err_code Typing.AtomInvalidParameter)
+    [
+      ( pos,
+        "When using "
+        ^ Naming_special_names.UserAttributes.uaAtom
+        ^ ", only type parameters bounded by enum classes and "
+        ^ "enum classes are allowed as the first parameters of "
+        ^ Naming_special_names.Classes.cElt );
+    ]
+
+let atom_unknown pos atom_name class_name =
+  let class_name = strip_ns class_name in
+  add_list
+    (Typing.err_code Typing.AtomUnknown)
+    [(pos, "Unknown constant " ^ atom_name ^ " in " ^ class_name)]
+
+let atom_as_expr pos =
+  add_list
+    (Typing.err_code Typing.AtomAsExpression)
+    [(pos, "Atoms are not allowed as single expressions")]
 
 (*****************************************************************************)
 (* Printing *)

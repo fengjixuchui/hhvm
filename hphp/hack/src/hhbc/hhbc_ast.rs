@@ -243,6 +243,7 @@ pub enum InstructLitConst {
     CnsE(ConstId),
     ClsCns(ConstId),
     ClsCnsD(ConstId, ClassId),
+    ClsCnsL(local::Type),
     File,
     Dir,
     Method,
@@ -378,6 +379,7 @@ pub enum IstypeOp {
     OpClsMeth,
     OpFunc,
     OpPHPArr,
+    OpLegacyArrLike,
     OpClass,
 }
 
@@ -561,6 +563,9 @@ pub enum InstructMisc {
     CreateCl(NumParams, ClassNum),
     Idx,
     ArrayIdx,
+    ArrayMarkLegacy,
+    ArrayUnmarkLegacy,
+    TagProvenanceHere,
     AssertRATL(local::Type, RepoAuthType),
     AssertRATStk(StackIndex, RepoAuthType),
     BreakTraceHint,

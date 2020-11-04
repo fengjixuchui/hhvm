@@ -1201,7 +1201,7 @@ SSATmp* cGetPropImpl(IRGS& env, SSATmp* base, SSATmp* key,
 Block* makeCatchSet(IRGS& env, uint32_t nDiscard) {
   auto block = defBlock(env, Block::Hint::Unused);
 
-  BlockPusher bp(*env.irb, makeMarker(env, bcOff(env)), block);
+  BlockPusher bp(*env.irb, makeMarker(env, curSrcKey(env)), block);
   gen(env, BeginCatch);
 
   ifThen(
@@ -1238,7 +1238,7 @@ Block* makeCatchSet(IRGS& env, uint32_t nDiscard) {
   // stores to MIState.
   gen(env, FinishMemberOp);
 
-  gen(env, Jmp, makeExit(env, nextBcOff(env)));
+  gen(env, Jmp, makeExit(env, nextSrcKey(env)));
   return block;
 }
 
@@ -1307,7 +1307,7 @@ void handleStrTestResult(IRGS& env, uint32_t nDiscard, SSATmp* strTestResult) {
       }
       push(env, str);
       gen(env, FinishMemberOp);
-      gen(env, Jmp, makeExit(env, nextBcOff(env)));
+      gen(env, Jmp, makeExit(env, nextSrcKey(env)));
     }
   );
 }
@@ -1335,7 +1335,10 @@ SSATmp* emitArrayLikeSet(IRGS& env, SSATmp* key, SSATmp* value) {
   }
 
   auto const baseLoc = ldMBase(env);
-  if (!canUpdateCanonicalBase(baseLoc)) return nullptr;
+  if (!canUpdateCanonicalBase(baseLoc)) {
+    gen(env, SetElem, baseLoc, key, value);
+    return value;
+  }
 
   auto const op = isVec ? VecSet : DictSet;
   auto const newArr = gen(env, op, base, key, value);
@@ -1370,7 +1373,7 @@ void setNewElemVecImpl(IRGS& env, uint32_t nDiscard, SSATmp* basePtr,
       gen(env, StMem, elemPtr, value);
     },
     [&] {
-      gen(env, SetNewElemVec, makeCatchSet(env, nDiscard), basePtr, value);
+      gen(env, SetNewElemVec, basePtr, value);
     }
   );
 
@@ -1389,7 +1392,7 @@ SSATmp* setNewElemImpl(IRGS& env, uint32_t nDiscard) {
     setNewElemVecImpl(env, nDiscard, basePtr, baseType, value);
   } else if (baseType.subtypeOfAny(TDArr, TDict)) {
     constrainBase(env);
-    gen(env, SetNewElemDict, makeCatchSet(env, nDiscard), basePtr, value);
+    gen(env, SetNewElemDict, basePtr, value);
   } else if (baseType <= TKeyset) {
     constrainBase(env);
     if (!value->type().isKnownDataType()) {
@@ -1400,7 +1403,7 @@ SSATmp* setNewElemImpl(IRGS& env, uint32_t nDiscard) {
       auto const base = extractBase(env);
       gen(env, ThrowInvalidArrayKey, base, value);
     } else {
-      gen(env, SetNewElemKeyset, makeCatchSet(env, nDiscard), basePtr, value);
+      gen(env, SetNewElemKeyset, basePtr, value);
     }
   } else {
     gen(env, SetNewElem, makeCatchSet(env, nDiscard), basePtr, value);
@@ -1436,10 +1439,7 @@ SSATmp* setElemImpl(IRGS& env, uint32_t nDiscard, SSATmp* key) {
     case SimpleOp::Vec:
     case SimpleOp::Dict:
     case SimpleOp::Keyset:
-      if (auto result = emitArrayLikeSet(env, key, value)) {
-        return result;
-      }
-      // If we couldn't emit a specialized op, fall through to the generic path.
+      return emitArrayLikeSet(env, key, value);
 
     case SimpleOp::Pair:
     case SimpleOp::None:
@@ -1922,10 +1922,9 @@ void logArrayAccessProfile(IRGS& env, SSATmp* arr, SSATmp* key,
   if (!RO::EvalLogArrayAccessProfile) return;
   if (env.inlineState.conjure) return;
 
-  auto const marker  = makeMarker(env, bcOff(env));
+  auto const marker  = makeMarker(env, curSrcKey(env));
   assertx(marker.hasFunc());
   auto const func = marker.func();
-  auto const unit = func->unit();
 
   std::vector<std::string> inline_state_string;
   std::vector<folly::StringPiece> inline_state;
@@ -1939,7 +1938,7 @@ void logArrayAccessProfile(IRGS& env, SSATmp* arr, SSATmp* key,
   entry.setStr("profile", profile.toString());
   entry.setStr("source_func", func->fullName()->data());
   entry.setStr("source_file", func->filename()->data());
-  entry.setInt("source_line", unit->getLineNumber(marker.bcOff()));
+  entry.setInt("source_line", marker.sk().lineNumber());
   entry.setInt("prof_count", curProfCount(env));
   entry.setInt("inline_depth", env.inlineState.depth);
   entry.setVec("inline_state", inline_state);

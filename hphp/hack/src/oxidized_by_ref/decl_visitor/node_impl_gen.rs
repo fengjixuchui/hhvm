@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<055a1881bb86c8ed7071c73d3e003154>>
+// @generated SignedSource<<20de78d0e6ed042ee655aa5e9e34e229>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
@@ -95,33 +95,27 @@ impl<'a> Node<'a> for ConstraintKind {
         }
     }
 }
+impl<'a> Node<'a> for Decl<'a> {
+    fn accept(&'a self, v: &mut dyn Visitor<'a>) {
+        v.visit_decl(self)
+    }
+    fn recurse(&'a self, v: &mut dyn Visitor<'a>) {
+        match self {
+            Decl::Class(ref __binding_0) => __binding_0.accept(v),
+            Decl::Fun(ref __binding_0) => __binding_0.accept(v),
+            Decl::Record(ref __binding_0) => __binding_0.accept(v),
+            Decl::Typedef(ref __binding_0) => __binding_0.accept(v),
+            Decl::Const(ref __binding_0) => __binding_0.accept(v),
+        }
+    }
+}
 impl<'a> Node<'a> for Decls<'a> {
     fn accept(&'a self, v: &mut dyn Visitor<'a>) {
         v.visit_decls(self)
     }
     fn recurse(&'a self, v: &mut dyn Visitor<'a>) {
         match self {
-            Decls {
-                classes: ref __binding_0,
-                funs: ref __binding_1,
-                typedefs: ref __binding_2,
-                consts: ref __binding_3,
-                records: ref __binding_4,
-            } => {
-                {
-                    __binding_0.accept(v)
-                }
-                {
-                    __binding_1.accept(v)
-                }
-                {
-                    __binding_2.accept(v)
-                }
-                {
-                    __binding_3.accept(v)
-                }
-                { __binding_4.accept(v) }
-            }
+            Decls(ref __binding_0) => __binding_0.accept(v),
         }
     }
 }
@@ -571,16 +565,17 @@ impl<'a> Node<'a> for ShallowClass<'a> {
                 req_extends: ref __binding_11,
                 req_implements: ref __binding_12,
                 implements: ref __binding_13,
-                consts: ref __binding_14,
-                typeconsts: ref __binding_15,
-                pu_enums: ref __binding_16,
-                props: ref __binding_17,
-                sprops: ref __binding_18,
-                constructor: ref __binding_19,
-                static_methods: ref __binding_20,
-                methods: ref __binding_21,
-                user_attributes: ref __binding_22,
-                enum_type: ref __binding_23,
+                implements_dynamic: ref __binding_14,
+                consts: ref __binding_15,
+                typeconsts: ref __binding_16,
+                pu_enums: ref __binding_17,
+                props: ref __binding_18,
+                sprops: ref __binding_19,
+                constructor: ref __binding_20,
+                static_methods: ref __binding_21,
+                methods: ref __binding_22,
+                user_attributes: ref __binding_23,
+                enum_type: ref __binding_24,
             } => {
                 {
                     __binding_0.accept(v)
@@ -651,7 +646,10 @@ impl<'a> Node<'a> for ShallowClass<'a> {
                 {
                     __binding_22.accept(v)
                 }
-                { __binding_23.accept(v) }
+                {
+                    __binding_23.accept(v)
+                }
+                { __binding_24.accept(v) }
             }
         }
     }
@@ -1003,7 +1001,6 @@ impl<'a> Node<'a> for Ty_<'a> {
         match self {
             Ty_::Tthis => {}
             Ty_::Tapply(ref __binding_0) => __binding_0.accept(v),
-            Ty_::Taccess(ref __binding_0) => __binding_0.accept(v),
             Ty_::Tarray(ref __binding_0) => __binding_0.accept(v),
             Ty_::Tmixed => {}
             Ty_::Tlike(ref __binding_0) => __binding_0.accept(v),
@@ -1024,6 +1021,7 @@ impl<'a> Node<'a> for Ty_<'a> {
             Ty_::Tdarray(ref __binding_0) => __binding_0.accept(v),
             Ty_::Tvarray(ref __binding_0) => __binding_0.accept(v),
             Ty_::TvarrayOrDarray(ref __binding_0) => __binding_0.accept(v),
+            Ty_::Taccess(ref __binding_0) => __binding_0.accept(v),
             Ty_::TunappliedAlias(ref __binding_0) => __binding_0.accept(v),
             Ty_::Tnewtype(ref __binding_0) => __binding_0.accept(v),
             Ty_::Tdependent(ref __binding_0) => __binding_0.accept(v),

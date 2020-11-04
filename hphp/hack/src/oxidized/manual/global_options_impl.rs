@@ -101,7 +101,6 @@ impl Default for GlobalOptions {
             symbol_write_ignore_paths: vec![],
             symbol_write_index_paths: vec![],
             symbol_write_include_hhi: true,
-            po_enable_first_class_function_pointers: true,
             po_enable_enum_classes: false,
             po_disable_modes: false,
             po_disable_hh_ignore_error: false,
@@ -112,6 +111,9 @@ impl Default for GlobalOptions {
             tco_method_call_inference: false,
             tco_report_pos_from_reason: false,
             tco_typecheck_sample_rate: 1.0,
+            tco_enable_sound_dynamic: false,
+            po_disallow_hash_comments: false,
+            po_disallow_fun_and_cls_meth_pseudo_funcs: false,
         }
     }
 }

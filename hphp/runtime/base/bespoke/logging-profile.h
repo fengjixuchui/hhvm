@@ -66,6 +66,8 @@ struct EntryTypes;
   X(Pop,                false) \
   X(ToDVArray,          true)  \
   X(ToHackArr,          true)  \
+  X(PreSort,            true)  \
+  X(PostSort,           true)  \
   X(SetLegacyArray,     true)
 
 enum class ArrayOp : uint8_t {
@@ -132,17 +134,17 @@ public:
   SrcKey source;
   std::atomic<uint64_t> sampleCount = 0;
   std::atomic<uint64_t> loggingArraysEmitted = 0;
-  LoggingArray* staticArray = nullptr;
+  LoggingArray* staticLoggingArray = nullptr;
+  ArrayData* staticSampledArray = nullptr;
   EventMap events;
   EntryTypesMap monotypeEvents;
   ReachMap reachedUsageSites;
 };
 
 // Return a profile for the given (valid) SrcKey. If no profile for the SrcKey
-// exists, a new one is created. `ad` may be null; if provided, it must be a
-// static array, and we will use *StaticLoggingArray to construct a matching
-// static LoggingArray. May return null after exportProfiles begins.
-LoggingProfile* getLoggingProfile(SrcKey sk, ArrayData* ad);
+// exists, a new one is made. If we're done profiling or it's not useful to
+// profile this bytecode, this function will return nullptr.
+LoggingProfile* getLoggingProfile(SrcKey sk);
 
 // Attempt to get the current SrcKey. May fail and return an invalid SrcKey.
 SrcKey getSrcKey();

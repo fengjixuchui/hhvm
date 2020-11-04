@@ -137,7 +137,11 @@ let rec ty ?prefix ?lump renv (t : T.locl_ty) =
     Tunion [tnull; ty t]
   | T.Tshape (sh_kind, sh_type_map) ->
     let lift sft =
-      { sft_optional = sft.T.sft_optional; sft_ty = ty sft.T.sft_ty }
+      {
+        sft_optional = sft.T.sft_optional;
+        sft_policy = get_policy ?prefix lump renv;
+        sft_ty = ty sft.T.sft_ty;
+      }
     in
     Tshape (sh_kind, Nast.ShapeMap.map lift sh_type_map)
   (* ---  types below are not yet supported *)
@@ -153,4 +157,5 @@ let rec ty ?prefix ?lump renv (t : T.locl_ty) =
   | T.Tobject -> fail "Tobject"
   | T.Tpu (_locl_ty, _sid) -> fail "Tpu"
   | T.Tpu_type_access (_sid1, _sid2) -> fail "Tpu_type_access"
+  | T.Taccess (_locl_ty, _ids) -> fail "Taccess"
   | T.Tunapplied_alias _ -> fail "Tunapplied_alias"

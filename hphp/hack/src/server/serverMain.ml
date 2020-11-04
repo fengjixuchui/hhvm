@@ -409,7 +409,7 @@ let query_notifier genv env query_kind start_time =
  * The above doesn't apply in presence of interruptions / cancellations -
  * it's possible for client to request current recheck to be stopped.
  *)
-let rec recheck_until_no_changes_left acc genv env select_outcome =
+let rec recheck_until_no_changes_left acc genv env select_outcome profiling =
   let start_time = Unix.gettimeofday () in
   (* this is telemetry for the current batch, i.e. iteration: *)
   let telemetry =
@@ -549,7 +549,7 @@ let rec recheck_until_no_changes_left acc genv env select_outcome =
       |> Telemetry.duration ~key:"type_check_start" ~start_time
     in
     let (env, res, type_check_telemetry) =
-      ServerTypeCheck.type_check genv env check_kind start_time
+      ServerTypeCheck.type_check genv env check_kind start_time profiling
     in
     let telemetry =
       telemetry
@@ -598,7 +598,7 @@ let rec recheck_until_no_changes_left acc genv env select_outcome =
     then
       (acc, env)
     else
-      recheck_until_no_changes_left acc genv env select_outcome
+      recheck_until_no_changes_left acc genv env select_outcome profiling
 
 let new_serve_iteration_id () = Random_id.short_string ()
 
@@ -739,13 +739,17 @@ let serve_one_iteration genv env client_provider =
   (* after that we'll be able to give an up-to-date answer to the client. *)
   (* Except: this might be stopped early in some cases, e.g. IDE checks. *)
   let t_start_recheck = Unix.gettimeofday () in
-  let (stats, env) =
-    recheck_until_no_changes_left
-      (empty_recheck_loop_stats ~recheck_id)
-      genv
-      env
-      select_outcome
+  let (recheck_loop_mem_stats, (stats, env)) =
+    CgroupProfiler.profile_memory
+      ~event:"recheck loop"
+      ~f:
+        (recheck_until_no_changes_left
+           (empty_recheck_loop_stats ~recheck_id)
+           genv
+           env
+           select_outcome)
   in
+  CgroupProfiler.print_summary_memory_table recheck_loop_mem_stats;
   let t_done_recheck = Unix.gettimeofday () in
   let did_work = stats.total_rechecked_count > 0 in
   let env =
@@ -1074,7 +1078,9 @@ let serve genv env in_fds =
    * take it into account, either by explcitely enabling reads (and being fine
    * with stale results), or declaring (in ServerCommand) that it requires full
    * check to be completed before being executed. *)
-  let (_ : bool) = Typing_deps.allow_dependency_table_reads false in
+  let (_ : bool) =
+    Typing_deps.allow_dependency_table_reads env.deps_mode false
+  in
   let () = Errors.set_allow_errors_in_default_path false in
   MultiThreadedCall.on_exception (fun (e, stack) ->
       ServerUtils.exit_on_exception e ~stack);
@@ -1175,14 +1181,18 @@ let program_init genv env =
   in
   let (init_approach, approach_name) = resolve_init_approach genv in
   Hh_logger.log "Initing with approach: %s" approach_name;
-  let (env, init_type, init_error, init_error_stack, state_distance) =
-    let (env, init_result) = ServerInit.init ~init_approach genv env in
+  let (env, mem_stats, init_type, init_error, init_error_stack, state_distance)
+      =
+    let (mem_stats, (env, init_result)) =
+      ServerInit.init ~init_approach genv env
+    in
     match init_approach with
-    | ServerInit.Remote_init _ -> (env, "remote", None, None, None)
+    | ServerInit.Remote_init _ -> (env, mem_stats, "remote", None, None, None)
     | ServerInit.Write_symbol_info
     | ServerInit.Full_init ->
-      (env, "fresh", None, None, None)
-    | ServerInit.Parse_only_init -> (env, "parse-only", None, None, None)
+      (env, mem_stats, "fresh", None, None, None)
+    | ServerInit.Parse_only_init ->
+      (env, mem_stats, "parse-only", None, None, None)
     | ServerInit.Saved_state_init _ ->
       begin
         match init_result with
@@ -1194,11 +1204,11 @@ let program_init genv env =
             | None -> "state_load_blob"
             | Some _ -> "state_load_sqlite"
           in
-          (env, init_type, None, None, distance)
+          (env, mem_stats, init_type, None, None, distance)
         | ServerInit.Load_state_failed (err, stack) ->
-          (env, "state_load_failed", Some err, Some stack, None)
+          (env, mem_stats, "state_load_failed", Some err, Some stack, None)
         | ServerInit.Load_state_declined reason ->
-          (env, "state_load_declined", Some reason, None, None)
+          (env, mem_stats, "state_load_declined", Some reason, None, None)
       end
   in
   let env =
@@ -1225,6 +1235,7 @@ let program_init genv env =
   in
   EventLogger.set_init_type init_type;
   let telemetry = ServerUtils.log_and_get_sharedmem_load_telemetry () in
+  CgroupProfiler.print_summary_memory_table mem_stats;
   HackEventLogger.init_lazy_end
     telemetry
     ~informant_use_xdb
@@ -1297,19 +1308,11 @@ let setup_server ~informant_managed ~monitor_pid options config local_config =
   let root = ServerArgs.root options in
   ServerDynamicView.toggle := ServerArgs.dynamic_view options;
 
-  (* We must set the dependency graph mode here, BEFORE we launch the workers
-   * that will involve saving and restoring the dependency graph mode. *)
-  let () =
-    let open Typing_deps in
-    match
-      (ServerArgs.with_dep_graph_v2 options, ServerArgs.save_64bit options)
-    with
-    | (Some graph, Some new_edges_dir) ->
-      set_mode @@ SaveCustomMode { graph = Some graph; new_edges_dir }
-    | (Some graph, None) -> Typing_deps.(set_mode @@ CustomMode graph)
-    | (None, Some new_edges_dir) ->
-      set_mode @@ SaveCustomMode { graph = None; new_edges_dir }
-    | (None, None) -> set_mode SQLiteMode
+  let deps_mode =
+    match ServerArgs.save_64bit options with
+    | Some new_edges_dir ->
+      Typing_deps_mode.SaveCustomMode { graph = None; new_edges_dir }
+    | None -> Typing_deps_mode.SQLiteMode
   in
 
   (* The OCaml default is 500, but we care about minimizing the memory
@@ -1448,7 +1451,7 @@ let setup_server ~informant_managed ~monitor_pid options config local_config =
       ~logging_init:worker_logging_init
   in
   let genv = ServerEnvBuild.make_genv options config local_config workers in
-  (genv, ServerEnvBuild.make_env genv.config ~init_id)
+  (genv, ServerEnvBuild.make_env genv.config ~init_id ~deps_mode)
 
 let run_once options config local_config =
   let (genv, env) =

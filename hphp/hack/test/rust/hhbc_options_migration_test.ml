@@ -1,4 +1,4 @@
-open Core_kernel
+open Hh_prelude
 open OUnit2
 
 (* Useful debugging, since no ppx printer for Hhbc_options.t *)
@@ -115,9 +115,6 @@ let assert_opts_equal caml rust =
     Hhbc_options.(check_int_overflow caml)
     Hhbc_options.(check_int_overflow rust);
   assert_equal
-    Hhbc_options.(enable_first_class_function_pointers caml)
-    Hhbc_options.(enable_first_class_function_pointers rust);
-  assert_equal
     Hhbc_options.(disable_xhp_element_mangling caml)
     Hhbc_options.(disable_xhp_element_mangling rust);
   assert_equal
@@ -126,6 +123,12 @@ let assert_opts_equal caml rust =
   assert_equal
     Hhbc_options.(allow_unstable_features caml)
     Hhbc_options.(allow_unstable_features rust);
+  assert_equal
+    Hhbc_options.(disallow_hash_comments caml)
+    Hhbc_options.(disallow_hash_comments rust);
+  assert_equal
+    Hhbc_options.(disallow_fun_and_cls_meth_pseudo_funcs caml)
+    Hhbc_options.(disallow_fun_and_cls_meth_pseudo_funcs rust);
   ()
 
 let json_override_2bools =
@@ -288,7 +291,7 @@ let test_all_overrides_json_only _ =
     \"global_value\": [\"f\", \"g\"]
   },
   \"hhvm.emit_cls_meth_pointers\": {
-    \"global_value\": false
+    \"global_value\": true
   },
  \"hhvm.emit_inst_meth_pointers\": {
     \"global_value\": false
@@ -320,6 +323,12 @@ let test_all_overrides_json_only _ =
   \"hhvm.hack.lang.const_default_lambda_args\": {
     \"global_value\": true
   },
+  \"hhvm.hack.lang.disallow_hash_comments\": {
+    \"global_value\": true
+  },
+  \"hhvm.hack.lang.disallow_fun_and_cls_meth_pseudo_funcs\": {
+    \"global_value\": true
+  },
   \"hhvm.hack.lang.const_static_props\": {
     \"global_value\": true
   },
@@ -346,9 +355,6 @@ let test_all_overrides_json_only _ =
   },
   \"hhvm.hack.lang.enable_coroutines\": {
     \"global_value\": false
-  },
-  \"hhvm.hack.lang.enable_first_class_function_pointers\": {
-    \"global_value\": true
   },
   \"hhvm.hack.lang.enable_xhp_class_modifier\": {
     \"global_value\": true
@@ -417,7 +423,7 @@ module CliArgOverrides = struct
 
   (* let hhvm'dynamic_invoke_functions = "UNSUPPORTED BY CLI" *)
 
-  let hhvm'emit_cls_meth_pointers = "-vhhvm.emit_cls_meth_pointers=0"
+  let hhvm'emit_cls_meth_pointers = "-vhhvm.emit_cls_meth_pointers=1"
 
   let hhvm'emit_inst_meth_pointers = "-vhhvm.emit_inst_meth_pointers=0"
 
@@ -471,9 +477,6 @@ module CliArgOverrides = struct
 
   let hhvm'hack'lang'enable_coroutines = "-vhack.lang.enablecoroutines=false"
 
-  let hhvm'hack'lang'enable_first_class_function_pointers =
-    "-vhhvm.hack.lang.enable_first_class_function_pointers=2"
-
   let hhvm'hack'lang'enable_xhp_class_modifier =
     "-vhhvm.hack.lang.enable_xhp_class_modifier=true"
 
@@ -496,6 +499,12 @@ module CliArgOverrides = struct
   let hhvm'php7'ltr_assign = "-vhhvm.php7.ltr_assign=true"
 
   let hhvm'php7'uvs = "-vhhvm.php7.ltr_assign=true"
+
+  let hhvm'hack'lang'disallow_hash_comments =
+    "-vhhvm.hack.lang.disallow_hash_comments=true"
+
+  let hhvm'hack'lang'disallow_fun_and_cls_meth_pseudo_funcs =
+    "-vhhvm.hack.lang.disallow_fun_and_cls_meth_pseudo_funcs=true"
 
   let hhvm'rx_is_enabled = "-vhhvm.rx_is_enabled=2"
 
@@ -536,7 +545,6 @@ let test_all_overrides_cli_only _ =
       hhvm'hack'lang'disallow_func_ptrs_in_constants;
       hhvm'hack'lang'enable_class_level_where_clauses;
       hhvm'hack'lang'enable_coroutines;
-      hhvm'hack'lang'enable_first_class_function_pointers;
       hhvm'hack'lang'enable_xhp_class_modifier;
       hhvm'hack'lang'phpism'disable_nontoplevel_declarations;
       hhvm'hack'lang'phpism'disable_static_closures;
@@ -550,6 +558,8 @@ let test_all_overrides_cli_only _ =
       hhvm'rx_is_enabled;
       (* hhvm'server'include_search_paths; *)
       hhvm'hack'lang'const_default_lambda_args;
+      hhvm'hack'lang'disallow_hash_comments;
+      hhvm'hack'lang'disallow_fun_and_cls_meth_pseudo_funcs;
     ]
   in
   let (caml_opts, _) = caml_from_configs ~jsons:[] ~args in

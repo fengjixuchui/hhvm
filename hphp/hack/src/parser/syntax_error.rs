@@ -295,8 +295,7 @@ pub const error2041: Error = Cow::Borrowed(concat!(
     "Unexpected method body: interfaces may contain only",
     " method signatures, and **not** method implementations."
 ));
-pub const error2042: Error = Cow::Borrowed("Interfaces may not be declared `abstract`.");
-pub const error2043: Error = Cow::Borrowed("Traits may not be declared `abstract`.");
+pub const error2042: Error = Cow::Borrowed("Only classes may be declared `abstract`.");
 pub fn error2046(method_type: &str) -> Error {
     Cow::Owned(format!(
         "`async` cannot be used on {}. Use an `Awaitable<...>` return type instead.",
@@ -946,8 +945,6 @@ pub const function_pointer_bad_recv: Error = Cow::Borrowed(concat!(
 pub const local_variable_with_type: Error =
     Cow::Borrowed("Local variables cannot have type annotations in Hack.");
 
-pub const function_pointers_disabled: Error = Cow::Borrowed("Function pointers are not enabled.");
-
 pub const empty_expression_illegal: Error =
     Cow::Borrowed("The `empty()` expression has been removed from Hack.");
 
@@ -981,3 +978,9 @@ pub const reserved_et_keyword: Error =
     Cow::Borrowed("This is a reserved keyword for expression trees that cannot be used");
 
 pub const invalid_enum_class_enumerator: Error = Cow::Borrowed("Invalid enum class constant");
+
+pub const fun_disabled: Error =
+    Cow::Borrowed("`fun()` is disabled; switch to first-class references like `foo<>`");
+
+pub const class_meth_disabled: Error =
+    Cow::Borrowed("`class_meth()` is disabled; switch to first-class references like `C::bar<>`");

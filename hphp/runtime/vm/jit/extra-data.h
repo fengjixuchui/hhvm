@@ -18,7 +18,6 @@
 
 #include "hphp/runtime/base/collections.h"
 #include "hphp/runtime/base/typed-value.h"
-#include "hphp/runtime/base/bespoke/layout.h"
 #include "hphp/runtime/vm/bytecode.h"
 #include "hphp/runtime/vm/iter.h"
 #include "hphp/runtime/vm/srckey.h"
@@ -525,7 +524,6 @@ struct ArrayAccessProfileData : RDSHandleData {
   bool cowCheck;
 };
 
-
 /*
  * Translation ID.
  *
@@ -538,26 +536,6 @@ struct TransIDData : IRExtraData {
 
   TransID transId;
 };
-
-/*
- * Translation ID and source key.
- *
- * Used to track the layout-sensitive bytecodes at which logging arrays arrive.
- */
-struct TransSrcKeyData : IRExtraData {
-  explicit TransSrcKeyData(TransID transId, SrcKey sk)
-    : transId(transId)
-    , sk(sk)
-  {}
-
-  std::string show() const {
-    return folly::sformat("transId={}, sk={}", transId, showShort(sk));
-  }
-
-  TransID transId;
-  SrcKey sk;
-};
-
 
 /*
  * FP-relative offset.
@@ -585,10 +563,8 @@ struct DefStackData : IRExtraData {
   {}
 
   std::string show() const {
-    return folly::to<std::string>(
-      "irSPOff={}, bcSPOff={}",
-      irSPOff.offset, bcSPOff.offset
-    );
+    return folly::sformat("irSPOff={}, bcSPOff={}",
+                          irSPOff.offset, bcSPOff.offset);
   }
 
   bool equals(DefStackData o) const {
@@ -732,40 +708,22 @@ struct LdTVAuxData : IRExtraData {
 struct ReqBindJmpData : IRExtraData {
   explicit ReqBindJmpData(const SrcKey& target,
                           FPInvOffset invSPOff,
-                          IRSPRelOffset irSPOff,
-                          TransFlags trflags)
+                          IRSPRelOffset irSPOff)
     : target(target)
     , invSPOff(invSPOff)
     , irSPOff(irSPOff)
-    , trflags(trflags)
   {}
 
   std::string show() const {
     return folly::sformat(
-      "{}, FPInv {}, IRSP {}, Flags {}",
-      target.offset(), invSPOff.offset, irSPOff.offset, trflags.packed
+      "{}, FPInv {}, IRSP {}",
+      target.offset(), invSPOff.offset, irSPOff.offset
     );
   }
 
   SrcKey target;
   FPInvOffset invSPOff;
   IRSPRelOffset irSPOff;
-  TransFlags trflags;
-};
-
-struct ReqRetranslateData : IRExtraData {
-  explicit ReqRetranslateData(IRSPRelOffset irSPOff,
-                              TransFlags trflags)
-    : irSPOff(irSPOff)
-    , trflags{trflags}
-  {}
-
-  std::string show() const {
-    return folly::to<std::string>(irSPOff.offset, ',', trflags.packed);
-  }
-
-  IRSPRelOffset irSPOff;
-  TransFlags trflags;
 };
 
 /*
@@ -1612,11 +1570,24 @@ struct BespokeLayoutData : IRExtraData {
   {}
 
   std::string show() const {
-    return layout ? folly::sformat("{}", layout->describe())
+    return layout ? folly::sformat("{}", BespokeLayout{layout}.describe())
                   : "Generic";
   }
 
   const bespoke::ConcreteLayout* layout;
+};
+
+struct LoggingProfileData : IRExtraData {
+  explicit LoggingProfileData(bespoke::LoggingProfile* profile)
+    : profile(profile)
+  {}
+
+  std::string show() const {
+    // profile->source is already printed in the instruction's marker.
+    return folly::sformat("{}", reinterpret_cast<void*>(profile));
+  }
+
+  bespoke::LoggingProfile* profile;
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -1685,12 +1656,13 @@ X(InlineCall,                   InlineCallData);
 X(StFrameMeta,                  StFrameMetaData);
 X(BeginInlining,                BeginInliningData);
 X(InlineReturn,                 FPRelOffsetData);
-X(ReqRetranslate,               ReqRetranslateData);
 X(ReqBindJmp,                   ReqBindJmpData);
+X(ReqRetranslate,               IRSPRelOffsetData);
 X(ReqRetranslateOpt,            IRSPRelOffsetData);
 X(CheckCold,                    TransIDData);
 X(IncProfCounter,               TransIDData);
-X(LogArrayReach,                TransSrcKeyData);
+X(LogArrayReach,                TransIDData);
+X(NewLoggingArray,              LoggingProfileData);
 X(DefFuncEntryFP,               FuncData);
 X(Call,                         CallData);
 X(CallBuiltin,                  CallBuiltinData);
@@ -1833,8 +1805,14 @@ X(LdRecDescCached,              RecNameData);
 X(LdRecDescCachedSafe,          RecNameData);
 X(BespokeGet,                   BespokeLayoutData);
 X(BespokeElem,                  BespokeLayoutData);
+X(BespokeEscalateToVanilla,     BespokeLayoutData);
 X(BespokeSet,                   BespokeLayoutData);
 X(BespokeAppend,                BespokeLayoutData);
+X(BespokeIterFirstPos,          BespokeLayoutData);
+X(BespokeIterLastPos,           BespokeLayoutData);
+X(BespokeIterAdvancePos,        BespokeLayoutData);
+X(BespokeIterGetKey,            BespokeLayoutData);
+X(BespokeIterGetVal,            BespokeLayoutData);
 X(LdUnitPerRequestFilepath,     RDSHandleData);
 
 #undef X

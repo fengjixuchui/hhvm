@@ -213,6 +213,8 @@ bool mayHaveData(trep bits) {
   case BOptLazyCls:
   case BClsMethLike:
   case BOptClsMethLike:
+  case BClsLike:
+  case BOptClsLike:
   case BInitCell:
   case BCell:
   case BTop:
@@ -253,6 +255,7 @@ bool canBeOptional(trep bits) {
   case BClsMeth:
   case BRClsMeth:
   case BClsMethLike:
+  case BClsLike:
   case BRecord:
   case BRFunc:
   case BLazyCls:
@@ -377,6 +380,7 @@ bool canBeOptional(trep bits) {
   case BOptClsMeth:
   case BOptRClsMeth:
   case BOptClsMethLike:
+  case BOptClsLike:
   case BOptRecord:
   case BOptLazyCls:
   case BOptArrLikeE:
@@ -535,10 +539,11 @@ trep combine_arr_like_bits(trep a, trep b) {
   if (check(a, BVArr) && check(b, BVArr)) return combine_varr_bits(a, b);
   if (check(a, BDArr) && check(b, BDArr)) return combine_darr_bits(a, b);
   // If they're all arrays, combine them and promote it to the right TArr union.
-  if (check(a, BArr))    return combine_dv_arrish_bits(a, b);
-  if (check(a, BVec))    return combine_vec_bits(a,       b);
-  if (check(a, BDict))   return combine_dict_bits(a,      b);
-  if (check(a, BKeyset)) return combine_keyset_bits(a,    b);
+  if (check(a, BArr))     return combine_dv_arrish_bits(a, b);
+  if (check(a, BVec))     return combine_vec_bits(a, b);
+  if (check(a, BDict))    return combine_dict_bits(a, b);
+  if (check(a, BKeyset))  return combine_keyset_bits(a, b);
+  if (check(a, BArrLike)) return combine_arrish_bits<BArrLike>(a, b);
   not_reached();
 }
 
@@ -551,12 +556,13 @@ trep combine_arr_like_bits(trep a, trep b) {
 trep combine_dv_arr_like_bits(trep a, trep b) {
   auto check = [] (trep a, trep x) { return (a & (x | BNull)) == a; };
   assert(isPredefined(a) && !check(a, BNull));
-  if (check(a, BVArr))   return combine_varr_bits(a,   b);
-  if (check(a, BDArr))   return combine_darr_bits(a,   b);
-  if (check(a, BArr))    return combine_arr_bits(a,    b);
-  if (check(a, BVec))    return combine_vec_bits(a,    b);
-  if (check(a, BDict))   return combine_dict_bits(a,   b);
-  if (check(a, BKeyset)) return combine_keyset_bits(a, b);
+  if (check(a, BVArr))    return combine_varr_bits(a,   b);
+  if (check(a, BDArr))    return combine_darr_bits(a,   b);
+  if (check(a, BArr))     return combine_arr_bits(a,    b);
+  if (check(a, BVec))     return combine_vec_bits(a,    b);
+  if (check(a, BDict))    return combine_dict_bits(a,   b);
+  if (check(a, BKeyset))  return combine_keyset_bits(a, b);
+  if (check(a, BArrLike)) return combine_arrish_bits<BArrLike>(a, b);
   not_reached();
 }
 
@@ -3908,12 +3914,13 @@ Type type_of_istype(IsTypeOp op) {
     assertx(!RO::EvalHackArrDVArrs);
     return TDArr;
   case IsTypeOp::ClsMeth: return TClsMeth;
-  case IsTypeOp::Class: return TCls;
+  case IsTypeOp::Class: return TClsLike;
   case IsTypeOp::Func:
     return TFunc;
   case IsTypeOp::ArrLike:
     return RO::EvalIsCompatibleClsMethType ? TArrLikeCompat : TArrLike;
   case IsTypeOp::Scalar: always_assert(0);
+  case IsTypeOp::LegacyArrLike: always_assert(0);
   }
   not_reached();
 }
@@ -3940,6 +3947,7 @@ folly::Optional<IsTypeOp> type_to_istypeop(const Type& t) {
   }
   if (t.subtypeOf(BClsMeth)) return IsTypeOp::ClsMeth;
   if (t.subtypeOf(BCls)) return IsTypeOp::Class;
+  if (t.subtypeOf(BLazyCls)) return IsTypeOp::Class;
   if (t.subtypeOf(BFunc)) return IsTypeOp::Func;
   return folly::none;
 }
@@ -3985,7 +3993,7 @@ folly::Optional<Type> type_of_type_structure(const Index& index,
         v.emplace_back(std::move(t.value()));
       }
       if (v.empty()) return folly::none;
-      auto const arrT = arr_packed_varray(v, ProvTag::Top);
+      auto const arrT = RO::EvalHackArrDVArrs ? vec(v) : arr_packed_varray(v);
       return is_nullable ? union_of(std::move(arrT), TNull) : arrT;
     }
     case TypeStructure::Kind::T_shape: {
@@ -4027,7 +4035,9 @@ folly::Optional<Type> type_of_type_structure(const Index& index,
           make_tv<KindOfPersistentString>(key), std::move(t.value()));
       }
       if (map.empty()) return folly::none;
-      auto const arrT = arr_map_darray(map);
+      auto const arrT = RO::EvalHackArrDVArrs
+        ? dict_map(map)
+        : arr_map_darray(map);
       return is_nullable ? union_of(std::move(arrT), TNull) : arrT;
     }
     case TypeStructure::Kind::T_vec_or_dict:
@@ -4576,10 +4586,18 @@ Type union_of(Type a, Type b) {
   Y(KeysetN)
   Y(Keyset)
 
+  Y(SArrLikeE)
+  Y(SArrLikeN)
+  Y(SArrLike)
+  Y(ArrLikeE)
+  Y(ArrLikeN)
+  Y(ArrLike)
+
   Y(UncArrKey)
   Y(ArrKey)
 
   Y(FuncLike)
+  Y(ClsLike)
 
   Y(UncStrLike)
   Y(StrLike)
@@ -4595,6 +4613,8 @@ Type union_of(Type a, Type b) {
 
   Y(ArrCompatSA)
   Y(ArrCompat)
+  Y(ArrLikeCompatSA)
+  Y(ArrLikeCompat)
 
   // non-optional types that contain other types above (and hence
   // must come after them).
@@ -4998,7 +5018,7 @@ Type loosen_likeness(Type t) {
     }
   }
 
-  if (t.couldBe(BCls)) t = union_of(std::move(t), TUncStrLike);
+  if (t.couldBe(BCls | BLazyCls)) t = union_of(std::move(t), TUncStrLike);
 
   switch (t.m_dataTag) {
   case DataTag::None:
@@ -5670,6 +5690,13 @@ Type arr_map_newelem(Type& map, const Type& val, ProvTag src) {
   return ival(lastK + 1);
 }
 
+std::pair<Type, ThrowMode>
+array_like_elem(const Type& arr, const Type& origKey) {
+  auto const key = disect_strict_key(origKey);
+  if (key.type == TBottom) return {TBottom, ThrowMode::BadOperation};
+  return array_like_elem(std::move(arr), key, TBottom);
+}
+
 std::pair<Type, ThrowMode> array_like_elem(const Type& arr,
                                            const ArrKey& key,
                                            const Type& defaultTy) {
@@ -5752,6 +5779,13 @@ array_elem(const Type& arr, const Type& undisectedKey, const Type& defaultTy) {
   assert(arr.subtypeOrNull(BArr));
   auto const key = disect_array_key(undisectedKey);
   return array_like_elem(arr, key, defaultTy);
+}
+
+std::pair<Type, ThrowMode>
+array_like_set(Type arr, const Type& origKey, const Type& val, ProvTag src) {
+  auto const key = disect_strict_key(origKey);
+  if (key.type == TBottom) return {TBottom, ThrowMode::BadOperation};
+  return array_like_set(std::move(arr), key, val, ProvTag::Top);
 }
 
 /*
@@ -6262,7 +6296,7 @@ bool is_type_might_raise(const Type& testTy, const Type& valTy) {
 
   if (is_opt(testTy)) return is_type_might_raise(unopt(testTy), valTy);
   if (testTy == TStrLike) {
-    return valTy.couldBe(BCls);
+    return valTy.couldBe(BCls | BLazyCls);
   } else if (testTy == TArr || testTy == TArrCompat) {
     return mayLogProv ||
            (RO::EvalIsVecNotices && !hackarr && valTy.couldBe(BClsMeth));
@@ -6289,8 +6323,8 @@ bool is_type_might_raise(const Type& testTy, const Type& valTy) {
 bool is_type_might_raise(IsTypeOp testOp, const Type& valTy) {
   switch (testOp) {
     case IsTypeOp::Scalar:
+    case IsTypeOp::LegacyArrLike:
       return false;
-      /* fallthrough */
     default:
       return is_type_might_raise(type_of_istype(testOp), valTy);
   }

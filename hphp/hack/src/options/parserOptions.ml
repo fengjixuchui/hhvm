@@ -115,12 +115,6 @@ let enable_xhp_class_modifier = GlobalOptions.po_enable_xhp_class_modifier
 let with_enable_xhp_class_modifier po b =
   { po with GlobalOptions.po_enable_xhp_class_modifier = b }
 
-let enable_first_class_function_pointers =
-  GlobalOptions.po_enable_first_class_function_pointers
-
-let with_enable_first_class_function_pointers po b =
-  { po with GlobalOptions.po_enable_first_class_function_pointers = b }
-
 let enable_enum_classes = GlobalOptions.po_enable_enum_classes
 
 let with_enable_enum_classes po b =
@@ -133,6 +127,17 @@ let disable_hh_ignore_error = GlobalOptions.po_disable_hh_ignore_error
 let disable_array = GlobalOptions.po_disable_array
 
 let disable_array_typehint = GlobalOptions.po_disable_array_typehint
+
+let disallow_hash_comments = GlobalOptions.po_disallow_hash_comments
+
+let with_disallow_hash_comments po b =
+  { po with GlobalOptions.po_disallow_hash_comments = b }
+
+let disallow_fun_and_cls_meth_pseudo_funcs =
+  GlobalOptions.po_disallow_fun_and_cls_meth_pseudo_funcs
+
+let with_disallow_fun_and_cls_meth_pseudo_funcs po b =
+  { po with GlobalOptions.po_disallow_fun_and_cls_meth_pseudo_funcs = b }
 
 let make
     ~auto_namespace_map
@@ -155,12 +160,13 @@ let make
     ~disable_xhp_element_mangling
     ~allow_unstable_features
     ~disable_xhp_children_declarations
-    ~enable_first_class_function_pointers
     ~enable_enum_classes
     ~disable_modes
     ~disable_hh_ignore_error
     ~disable_array
-    ~disable_array_typehint =
+    ~disable_array_typehint
+    ~disallow_hash_comments
+    ~disallow_fun_and_cls_meth_pseudo_funcs =
   GlobalOptions.
     {
       default with
@@ -184,18 +190,20 @@ let make
       po_disable_xhp_element_mangling = disable_xhp_element_mangling;
       po_allow_unstable_features = allow_unstable_features;
       po_disable_xhp_children_declarations = disable_xhp_children_declarations;
-      po_enable_first_class_function_pointers =
-        enable_first_class_function_pointers;
       po_enable_enum_classes = enable_enum_classes;
       po_disable_modes = disable_modes;
       po_disable_hh_ignore_error = disable_hh_ignore_error;
       po_disable_array = disable_array;
       po_disable_array_typehint = disable_array_typehint;
+      po_disallow_hash_comments = disallow_hash_comments;
+      po_disallow_fun_and_cls_meth_pseudo_funcs =
+        disallow_fun_and_cls_meth_pseudo_funcs;
     }
 
 (* Changes here need to be synchronized with rust_parser_errors_ffi.rs *)
 type ffi_t =
   bool
+  * bool
   * bool
   * bool
   * bool
@@ -230,10 +238,11 @@ let to_rust_ffi_t po ~hhvm_compat_mode ~hhi_mode ~codegen =
     enable_xhp_class_modifier po,
     disable_xhp_element_mangling po,
     disable_xhp_children_declarations po,
-    enable_first_class_function_pointers po,
     enable_enum_classes po,
     disable_modes po,
     disable_array po,
     const_default_lambda_args po,
     disable_array_typehint po,
-    allow_unstable_features po )
+    allow_unstable_features po,
+    disallow_hash_comments po,
+    disallow_fun_and_cls_meth_pseudo_funcs po )

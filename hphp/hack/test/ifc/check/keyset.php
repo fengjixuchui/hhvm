@@ -1,23 +1,26 @@
 <?hh
 
 class Basic {
-  <<Policied("S")>>
+  <<__Policied("S")>>
   public string $string = "string";
-  <<Policied("A")>>
+  <<__Policied("A")>>
   public arraykey $arraykey = "string";
-  <<Policied("K")>>
+  <<__Policied("K")>>
   public keyset<arraykey> $keyset = keyset[];
 
+  <<__InferFlows>>
   public function add(): void {
     // S flows into K
     $this->keyset[] = $this->string;
   }
 
+  <<__InferFlows>>
   public function collection(): void {
     // S flows into K
     $this->keyset = keyset[42, $this->string];
   }
 
+  <<__InferFlows>>
   public function access(): void {
     // K flows into A
     $this->arraykey = $this->keyset['key'];
@@ -25,15 +28,17 @@ class Basic {
 }
 
 class COW {
+  <<__InferFlows>>
   public function __construct(
-    <<Policied("X")>>
+    <<__Policied("X")>>
     public string $x,
-    <<Policied("Y")>>
+    <<__Policied("Y")>>
     public int $y,
-    <<Policied("KEYSET")>>
+    <<__Policied("KEYSET")>>
     public keyset<arraykey> $keyset,
   ) {}
 
+  <<__InferFlows>>
   public function copyOnWrite(keyset<arraykey> $keyset): void {
     $keyset[] = $this->x;
     // X flows into KEYSET through keyset value

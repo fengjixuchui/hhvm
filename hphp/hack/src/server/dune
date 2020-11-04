@@ -181,9 +181,7 @@
     decl_redecl_service
     fileutils
     hg
-    (select logging from
-      (facebook signed_source -> logging_fb)
-      (-> logging_stubs))
+    logging
     remote
     server_env
     sys_utils
@@ -249,6 +247,7 @@
     serverGlobalInference)
   (libraries
     buffered_line_reader
+    cgroup
     coverage_level
     decl_redecl_service
     dfind
@@ -283,14 +282,6 @@
   (preprocess (pps lwt_ppx ppx_deriving.std))) ; See T41851208
 
 (library
-  (name startup_initializer_stubs)
-  (wrapped false)
-  (modules
-    startup_initializer)
-  (preprocess
-    (pps lwt_ppx ppx_deriving.std)))
-
-(library
   (name hh_server_monitor)
   (wrapped false)
   (modules
@@ -312,6 +303,7 @@
   (libraries
     build
     ci_util
+    cgroup
     folly_stubs
     load_script
     lwt

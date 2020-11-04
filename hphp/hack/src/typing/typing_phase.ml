@@ -191,22 +191,14 @@ let rec localize ~ety_env env (dty : decl_ty) =
   | (r, Tgeneric (x, targs)) ->
     let localize_tgeneric ?replace_with name r =
       match (targs, replace_with, Env.get_pos_and_kind_of_generic env name) with
-      | (_, _, Some (def_pos, kind)) ->
+      | (_, _, Some (_def_pos, kind)) ->
         let arg_kinds : KindDefs.Simple.named_kind list =
           KindDefs.Simple.from_full_kind kind
           |> KindDefs.Simple.get_named_parameter_kinds
         in
-        let use_pos = Reason.to_pos r in
         begin
           match
-            ( localize_tparams_by_kind
-                ~ety_env
-                ~def_pos
-                ~use_pos
-                env
-                targs
-                arg_kinds,
-              replace_with )
+            (localize_tparams_by_kind ~ety_env env targs arg_kinds, replace_with)
           with
           | ((env, _), Some repl_ty) -> (env, mk (r, repl_ty))
           | ((env, locl_tyargs), None) ->
@@ -277,42 +269,36 @@ let rec localize ~ety_env env (dty : decl_ty) =
   | (r, Tintersection tyl) ->
     let (env, tyl) = List.map_env env tyl (localize ~ety_env) in
     (env, mk (r, Tintersection tyl))
-  | (r, Taccess (root_ty, ids)) ->
+  | (r, Taccess (root_ty, id)) ->
     (* Sometimes, Tthis and Tgeneric are not expanded to Tabstract, so we need
     to allow accessing abstract type constants here. *)
-    let allow_abstract_tconst =
-      match get_node root_ty with
+    let rec allow_abstract_tconst ty =
+      match get_node ty with
       | Tthis
       | Tgeneric _ ->
         true
+      | Taccess (ty, _) -> allow_abstract_tconst ty
       | _ -> false
     in
+    let allow_abstract_tconst = allow_abstract_tconst root_ty in
     let (env, root_ty) = localize ~ety_env env root_ty in
     let root_pos = get_pos root_ty in
-    let ((env, ty), _) =
-      List.fold
-        ids
-        ~init:((env, root_ty), root_pos)
-        ~f:(fun ((env, root_ty), root_pos) id ->
-          ( TUtils.expand_typeconst
-              ety_env
-              env
-              root_ty
-              id
-              ~root_pos
-              ~on_error:ety_env.on_error
-              ~allow_abstract_tconst,
-            fst id ))
+    let (env, ty) =
+      TUtils.expand_typeconst
+        ety_env
+        env
+        root_ty
+        id
+        ~root_pos
+        ~on_error:ety_env.on_error
+        ~allow_abstract_tconst
     in
     (* Elaborate reason with information about expression dependent types and
      * the original location of the Taccess type
      *)
     let elaborate_reason expand_reason =
-      (* First convert into a string of root_ty::ID1::ID2::IDn *)
       let taccess_string =
-        String.concat
-          ~sep:"::"
-          (Typing_print.full_strip_ns env root_ty :: List.map ~f:snd ids)
+        Typing_print.full_strip_ns env root_ty ^ "::" ^ snd id
       in
       (* If the root is an expression dependent type, change the primary
        * reason to be for the full Taccess type to preserve the position where
@@ -364,8 +350,6 @@ let rec localize ~ety_env env (dty : decl_ty) =
 (* Localize type arguments for something whose kinds is [kind] *)
 and localize_tparams_by_kind
     ~ety_env
-    ~def_pos:_
-    ~use_pos:_
     env
     (tyargs : decl_ty list)
     (nkinds : KindDefs.Simple.named_kind list) =
@@ -497,9 +481,7 @@ and localize_class_instantiation ~ety_env env r sid tyargs class_info =
            *)
           localize_missing_tparams_class env r sid class_info
         else
-          let def_pos = Cls.pos class_info in
-          let use_pos = Reason.to_pos r in
-          localize_tparams_by_kind ~ety_env ~def_pos ~use_pos env tyargs nkinds
+          localize_tparams_by_kind ~ety_env env tyargs nkinds
       in
       (env, mk (r, Tclass (sid, Nonexact, tyl))))
 
@@ -508,11 +490,7 @@ and localize_typedef_instantiation ~ety_env env r type_name tyargs =
   | Some typedef_info ->
     let tparams = typedef_info.Typing_defs.td_tparams in
     let nkinds = KindDefs.Simple.named_kinds_of_decl_tparams tparams in
-    let use_pos = Reason.to_pos r in
-    let def_pos = typedef_info.Typing_defs.td_pos in
-    let (env, tyargs) =
-      localize_tparams_by_kind ~ety_env ~use_pos ~def_pos env tyargs nkinds
-    in
+    let (env, tyargs) = localize_tparams_by_kind ~ety_env env tyargs nkinds in
     TUtils.expand_typedef ety_env env r type_name tyargs
   | None ->
     (* This must be unreachable. We only call localize_typedef_instantiation if we *know* that
@@ -1004,8 +982,9 @@ and localize_hint ~ety_env env hint =
 and localize_missing_tparams_class env r sid class_ =
   let use_pos = Reason.to_pos r in
   let use_name = Utils.strip_ns (snd sid) in
+  let tparams = Cls.tparams class_ in
   let ((env, _i), tyl) =
-    List.fold_map (Cls.tparams class_) ~init:(env, 0) ~f:(fun (env, i) tparam ->
+    List.fold_map tparams ~init:(env, 0) ~f:(fun (env, i) tparam ->
         let (env, ty) =
           Env.new_global_tyvar
             env
@@ -1020,23 +999,25 @@ and localize_missing_tparams_class env r sid class_ =
     {
       type_expansions = [];
       this_ty = c_ty;
-      substs = Subst.make_locl (Cls.tparams class_) tyl;
+      substs = Subst.make_locl tparams tyl;
       from_class = Some (Aast.CI sid);
       quiet = false;
       on_error = Errors.unify_error_at use_pos;
     }
   in
+  let env = check_tparams_constraints ~use_pos ~ety_env env tparams in
+  let constraints = Cls.where_constraints class_ in
   let env =
-    check_tparams_constraints ~use_pos ~ety_env env (Cls.tparams class_)
-  in
-  let env =
-    check_where_constraints
-      ~in_class:true
-      ~use_pos
-      ~definition_pos:(Cls.pos class_)
-      ~ety_env
+    if List.is_empty constraints then
       env
-      (Cls.where_constraints class_)
+    else
+      check_where_constraints
+        ~in_class:true
+        ~use_pos
+        ~definition_pos:(Cls.pos class_)
+        ~ety_env
+        env
+        constraints
   in
   (env, tyl)
 

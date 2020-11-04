@@ -2,13 +2,14 @@
 // Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 
 class A {
-  <<Policied("PUBLIC")>>
+  <<__Policied("PUBLIC")>>
   public int $pub = 0;
 
-  <<Policied("PRIVATE")>>
+  <<__Policied("PRIVATE")>>
   public int $priv = 1;
 }
 
+<<__InferFlows>>
 function f(A $a): void {
   $x = $a->priv;
 

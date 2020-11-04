@@ -202,6 +202,8 @@ module AttributeKinds = struct
 
   let typeconst = "\\HH\\TypeConstantAttribute"
 
+  let lambda = "\\HH\\LambdaAttribute"
+
   let plain_english_map =
     List.fold_left
       ~init:SMap.empty
@@ -218,6 +220,7 @@ module AttributeKinds = struct
         (typeparam, "a type parameter");
         (file, "a file");
         (typeconst, "a type constant");
+        (lambda, "a lambda expression");
       ]
 end
 
@@ -332,6 +335,8 @@ module UserAttributes = struct
 
   let uaCanCall = "__CanCall"
 
+  let uaAtom = "__Atom"
+
   let as_map =
     AttributeKinds.(
       SMap.of_list
@@ -342,38 +347,38 @@ module UserAttributes = struct
           (uaDeprecated, [fn; mthd]);
           (uaEntryPoint, [fn]);
           (uaMemoize, [fn; mthd]);
-          (uaMemoizeLSB, [fn; mthd]);
+          (uaMemoizeLSB, [mthd]);
           (uaPHPStdLib, [cls; fn; mthd]);
-          (uaHipHopSpecific, [cls]);
+          (uaHipHopSpecific, [cls; fn; mthd]);
           (uaAcceptDisposable, [parameter]);
-          (uaReturnDisposable, [fn; mthd]);
-          (uaPure, [fn; mthd]);
-          (uaCipp, [fn; mthd]);
-          (uaCippLocal, [fn; mthd]);
-          (uaCippGlobal, [fn; mthd]);
-          (uaCippRx, [fn; mthd]);
-          (uaReactive, [fn; mthd]);
-          (uaLocalReactive, [fn; mthd]);
+          (uaReturnDisposable, [fn; mthd; lambda]);
+          (uaPure, [fn; mthd; lambda]);
+          (uaCipp, [fn; mthd; lambda]);
+          (uaCippLocal, [fn; mthd; lambda]);
+          (uaCippGlobal, [fn; mthd; lambda]);
+          (uaCippRx, [fn; mthd; lambda]);
+          (uaReactive, [fn; mthd; lambda]);
+          (uaLocalReactive, [fn; mthd; lambda]);
           (uaMutable, [mthd; parameter]);
-          (uaMutableReturn, [fn; mthd]);
-          (uaShallowReactive, [fn; mthd]);
+          (uaMutableReturn, [fn; mthd; lambda]);
+          (uaShallowReactive, [fn; mthd; lambda]);
           (uaOnlyRxIfImpl, [parameter; mthd]);
           (uaLSB, [staticProperty]);
           (uaSealed, [cls]);
-          (uaReturnsVoidToRx, [fn; mthd]);
+          (uaReturnsVoidToRx, [fn; mthd; lambda]);
           (uaMaybeMutable, [mthd; parameter]);
-          (uaLateInit, [instProperty; parameter; staticProperty]);
+          (uaLateInit, [instProperty; staticProperty]);
           (uaAtMostRxAsFunc, [parameter]);
-          (uaAtMostRxAsArgs, [fn; mthd]);
+          (uaAtMostRxAsArgs, [fn; mthd; lambda]);
           (uaOwnedMutable, [parameter]);
-          (uaNonRx, [fn; mthd]);
+          (uaNonRx, [fn; mthd; lambda]);
           (uaNewable, [typeparam]);
           (uaEnforceable, [typeconst; typeparam]);
           (uaExplicit, [typeparam]);
           (uaSoft, [instProperty; parameter; staticProperty; typeparam]);
           (uaWarn, [typeparam]);
           (uaMockClass, [cls]);
-          (uaProvenanceSkipFrame, [fn; mthd]);
+          (uaProvenanceSkipFrame, [fn; mthd; lambda]);
           (uaDynamicallyCallable, [fn; mthd]);
           (uaDynamicallyConstructible, [cls]);
           (uaReifiable, [typeconst]);
@@ -382,10 +387,11 @@ module UserAttributes = struct
           (uaPu, [cls]);
           (uaEnableUnstableFeatures, [file]);
           (uaEnumClass, [cls; enum]);
-          (uaPolicied, [fn; mthd]);
+          (uaPolicied, [fn; mthd; instProperty; parameter]);
           (uaInferFlows, [fn; mthd]);
           (uaExternal, [parameter]);
           (uaCanCall, [parameter]);
+          (uaAtom, [parameter]);
         ])
 
   (* These are names which are allowed in the systemlib but not in normal programs *)
@@ -836,4 +842,6 @@ module Coeffects = struct
   let capability = "$#capability"
 
   let local_capability = "$#local_capability"
+
+  let defaults = "\\HH\\Contexts\\defaults"
 end

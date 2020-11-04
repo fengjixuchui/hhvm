@@ -480,9 +480,11 @@ val implement_abstract :
 
 val generic_static : Pos.t -> string -> unit
 
-val fun_too_many_args : Pos.t -> Pos.t -> typing_error_callback -> unit
+val fun_too_many_args :
+  int -> int -> Pos.t -> Pos.t -> typing_error_callback -> unit
 
-val fun_too_few_args : Pos.t -> Pos.t -> typing_error_callback -> unit
+val fun_too_few_args :
+  int -> int -> Pos.t -> Pos.t -> typing_error_callback -> unit
 
 val fun_unexpected_nonvariadic : Pos.t -> Pos.t -> typing_error_callback -> unit
 
@@ -682,8 +684,6 @@ val should_be_override : Pos.t -> string -> string -> unit
 val override_per_trait : Pos.t * string -> string -> Pos.t -> unit
 
 val missing_assign : Pos.t -> unit
-
-val private_override : Pos.t -> string -> string -> unit
 
 val invalid_memoized_param : Pos.t -> (Pos.t * string) list -> unit
 
@@ -1445,3 +1445,26 @@ val unnecessary_attribute :
   reason:Pos.t * string ->
   suggestion:string option ->
   unit
+
+val inherited_class_member_with_different_case :
+  string -> string -> string -> Pos.t -> string -> string -> Pos.t -> unit
+
+val multiple_inherited_class_member_with_different_case :
+  member_type:string ->
+  name1:string ->
+  name2:string ->
+  class1:string ->
+  class2:string ->
+  child_class:string ->
+  child_p:Pos.t ->
+  p1:Pos.t ->
+  p2:Pos.t ->
+  unit
+
+val atom_invalid_parameter : Pos.t -> unit
+
+val atom_invalid_parameter_in_enum_class : Pos.t -> unit
+
+val atom_unknown : Pos.t -> string -> string -> unit
+
+val atom_as_expr : Pos.t -> unit

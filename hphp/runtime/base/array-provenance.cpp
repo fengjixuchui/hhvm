@@ -238,7 +238,7 @@ bool arrayWantsTag(const ArrayData* ad) {
 }
 
 bool arrayWantsTag(const APCArray* a) {
-  return RO::EvalArrayProvenance && (a->isVArray() || a->isDArray());
+  return RO::EvalArrayProvenance && a->isUnmarkedDVArray();
 }
 
 bool arrayWantsTag(const AsioExternalThreadEvent* ev) {
@@ -325,16 +325,19 @@ thread_local folly::Optional<Tag> tl_tag_override = folly::none;
 Tag getTag(const ArrayData* ad) {
   assertx(RO::EvalArrayProvenance);
   if (tl_tag_override) return *tl_tag_override;
+  // We ensure that arrays that don't want a tag have an invalid tag set.
   return Tag::get(ad);
 }
 
 Tag getTag(const APCArray* a) {
   assertx(RO::EvalArrayProvenance);
+  if (!arrayWantsTag(a)) return {};
   return Tag::get(a);
 }
 
 Tag getTag(const AsioExternalThreadEvent* ev) {
   assertx(RO::EvalArrayProvenance);
+  // We ensure that Asio events that don't want a tag have an invalid tag set.
   return Tag::get(ev);
 }
 
@@ -386,6 +389,7 @@ void reassignTag(ArrayData* ad) {
 }
 
 ArrayData* tagStaticArr(ArrayData* ad, Tag tag /* = {} */) {
+  assertx(!RO::EvalHackArrDVArrs);
   assertx(RO::EvalArrayProvenance);
   assertx(ad->isStatic());
   assertx(arrayWantsTag(ad));
@@ -435,7 +439,7 @@ Tag tagFromPC() {
       StructuredLogEntry sle;
       sle.setStr("reason", why);
       sle.setStackTrace("stack", StackTrace{StackTrace::Force{}});
-      FTRACE_MOD(Trace::runtime, 2, "arrprov {} {}\n", why, show(sle));
+      FTRACE(2, "arrprov {} {}\n", why, show(sle));
       StructuredLog::log("hphp_arrprov_diagnostics", sle);
     }
   };
@@ -518,6 +522,7 @@ ArrayData* apply_mutation_fast(ArrayData* in, ArrayData* result,
     assertx(Array::IterEnd(result) == Array::IterEnd(in));
     tvMove(next, LvalAtIterPos<Array>(result, pos));
   }
+  FTRACE(1, "Depth {}: {}\n", depth, result && result != in ? "copy" : "reuse");
   return result == in ? nullptr : result;
 }
 
@@ -543,6 +548,7 @@ ArrayData* apply_mutation_slow(ArrayData* in, ArrayData* result,
       assertx(result->hasExactlyOneRef());
     }
   });
+  FTRACE(1, "Depth {}: {}\n", depth, result && result != in ? "copy" : "reuse");
   return result == in ? nullptr : result;
 }
 
@@ -582,7 +588,10 @@ ArrayData* apply_mutation(TypedValue tv, State& state,
   auto const in = val(tv).parr;
   cow |= in->cowCheck();
   auto result = state.mutation(in, cow);
-  if (!state.recursive) return result;
+  if (!state.recursive) {
+    FTRACE(1, "Depth {}: {}\n", depth, result ? "copy" : "reuse");
+    return result;
+  }
 
   // Recursively apply the mutation to the array's contents. For efficiency,
   // we do the layout check outside of the iteration loop.

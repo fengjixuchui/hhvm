@@ -2,13 +2,14 @@
 // Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 
 class X {
-  <<Policied("A")>>
+  <<__Policied("A")>>
   public int $a = 0;
 
-  <<Policied("B")>>
+  <<__Policied("B")>>
   public int $b = 1;
 }
 
+<<__InferFlows>>
 function leak_pc_in_catch(X $x, Exception $e): void {
   try {
     if ($x->a > 0)
@@ -19,6 +20,7 @@ function leak_pc_in_catch(X $x, Exception $e): void {
   }
 }
 
+<<__InferFlows>>
 function do_not_leak_pc_after_catch(X $x, Exception $e): void {
   try {
     if ($x->a > 0) throw $e;
@@ -28,6 +30,7 @@ function do_not_leak_pc_after_catch(X $x, Exception $e): void {
   $x->b = 1;
 }
 
+<<__InferFlows>>
 function nested_try(X $x, Exception $e): void {
   try {
     if ($x->a > 0) throw $e;
@@ -38,6 +41,7 @@ function nested_try(X $x, Exception $e): void {
   }
 }
 
+<<__InferFlows>>
 function throw_in_catch(X $x, Exception $e): void {
   try {
     throw $e;

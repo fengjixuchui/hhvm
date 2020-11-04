@@ -84,6 +84,7 @@ type shallow_class = {
   sc_req_extends: decl_ty list;
   sc_req_implements: decl_ty list;
   sc_implements: decl_ty list;
+  sc_implements_dynamic: bool;
   sc_consts: shallow_class_const list;
   sc_typeconsts: shallow_typeconst list;
   sc_pu_enums: shallow_pu_enum list;
@@ -96,3 +97,21 @@ type shallow_class = {
   sc_enum_type: enum_type option;
 }
 [@@deriving eq, show]
+
+type fun_decl = fun_elt [@@deriving show]
+
+type class_decl = shallow_class [@@deriving show]
+
+type record_decl = record_def_type [@@deriving show]
+
+type typedef_decl = typedef_type [@@deriving show]
+
+type const_decl = Typing_defs.const_decl [@@deriving show]
+
+type decl =
+  | Class of class_decl
+  | Fun of fun_decl
+  | Record of record_decl
+  | Typedef of typedef_decl
+  | Const of const_decl
+[@@deriving show]

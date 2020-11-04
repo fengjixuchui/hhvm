@@ -1,4 +1,4 @@
-open Core_kernel
+open Hh_prelude
 open IndexBuilderTypes
 open SearchUtils
 open Test_harness
@@ -31,7 +31,7 @@ let assert_ns_matches (expected_ns : string) (actual : SearchUtils.si_results) :
     unit =
   let found =
     List.fold actual ~init:false ~f:(fun acc item ->
-        item.si_name = expected_ns || acc)
+        String.equal item.si_name expected_ns || acc)
   in
   ( if not found then
     let results_str =
@@ -195,7 +195,12 @@ let test_sqlite_plus_local (harness : Test_harness.t) : bool =
     ]
   in
   let init_id = Random_id.short_string () in
-  let env = ServerEnvBuild.make_env ~init_id ServerConfig.default_config in
+  let env =
+    ServerEnvBuild.make_env
+      ~init_id
+      ~deps_mode:Typing_deps_mode.SQLiteMode
+      ServerConfig.default_config
+  in
   let ctx = Provider_utils.ctx_from_server_env env in
   let sienv = SymbolIndex.update_files ~ctx ~sienv ~paths:changelist in
   let n = LocalSearchService.count_local_fileinfos sienv in
@@ -361,7 +366,12 @@ let test_namespace_map (harness : Test_harness.t) : bool =
 let test_docblock_finder (harness : Test_harness.t) : bool =
   let _ = harness in
   let init_id = Random_id.short_string () in
-  let env = ServerEnvBuild.make_env ~init_id ServerConfig.default_config in
+  let env =
+    ServerEnvBuild.make_env
+      ~init_id
+      ~deps_mode:Typing_deps_mode.SQLiteMode
+      ServerConfig.default_config
+  in
   let handle = SharedMem.init ~num_workers:0 SharedMem.default_config in
   ignore (handle : SharedMem.handle);
 

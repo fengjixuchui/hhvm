@@ -7,7 +7,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 open File_content
 open String_utils
 open Sys_utils
@@ -118,7 +118,7 @@ let write_error_list format errors oc max_errors =
     | Some max_errors -> List.split_n errors max_errors
     | None -> (errors, [])
   in
-  if errors <> [] then (
+  if not (List.is_empty errors) then (
     List.iter ~f:(print_error format ~oc) shown_errors;
     match
       Errors.format_summary
@@ -139,7 +139,7 @@ let print_error_list format errors max_errors =
     | Some max_errors -> List.split_n errors max_errors
     | None -> (errors, [])
   in
-  if errors <> [] then (
+  if not (List.is_empty errors) then (
     List.iter ~f:(print_error format) shown_errors;
     match
       Errors.format_summary
@@ -175,10 +175,9 @@ let parse_options () =
   let max_errors = ref None in
   let batch_mode = ref false in
   let set_mode x () =
-    if !mode <> Errors then
-      raise (Arg.Bad "only a single mode should be specified")
-    else
-      mode := x
+    match !mode with
+    | Errors -> mode := x
+    | _ -> raise (Arg.Bad "only a single mode should be specified")
   in
   let ifc_mode = ref "" in
   let set_ifc lattice =
@@ -254,6 +253,9 @@ let parse_options () =
   let allowed_decl_fixme_codes = ref ISet.empty in
   let method_call_inference = ref false in
   let report_pos_from_reason = ref false in
+  let enable_sound_dynamic = ref false in
+  let disallow_hash_comments = ref false in
+  let disallow_fun_and_cls_meth_pseudo_funcs = ref false in
   let options =
     [
       ( "--ifc",
@@ -599,6 +601,15 @@ let parse_options () =
         Arg.Set report_pos_from_reason,
         " Flag errors whose position is derived from reason information in types."
       );
+      ( "--enable-sound-dynamic-type",
+        Arg.Set enable_sound_dynamic,
+        "Enforce sound dynamic types.  Experimental." );
+      ( "--disallow-hash-comments",
+        Arg.Set disallow_hash_comments,
+        "Disallow #-style comments (besides hashbangs)." );
+      ( "--disallow-fun-and-cls-meth-pseudo-funcs",
+        Arg.Set disallow_fun_and_cls_meth_pseudo_funcs,
+        "Disable parsing of fun() and class_meth()." );
     ]
   in
   let options = Arg.align ~limit:25 options in
@@ -676,6 +687,10 @@ let parse_options () =
       ~po_allow_unstable_features:true
       ~tco_method_call_inference:!method_call_inference
       ~tco_report_pos_from_reason:!report_pos_from_reason
+      ~tco_enable_sound_dynamic:!enable_sound_dynamic
+      ~po_disallow_hash_comments:!disallow_hash_comments
+      ~po_disallow_fun_and_cls_meth_pseudo_funcs:
+        !disallow_fun_and_cls_meth_pseudo_funcs
       ()
   in
   Errors.allowed_fixme_codes_strict :=
@@ -693,7 +708,9 @@ let parse_options () =
         SSet.filter
           begin
             fun x ->
-            if x = GlobalOptions.tco_experimental_forbid_nullable_cast then
+            if
+              String.equal x GlobalOptions.tco_experimental_forbid_nullable_cast
+            then
               !forbid_nullable_cast
             else
               true
@@ -1010,7 +1027,7 @@ let add_newline contents =
   let after_header =
     if
       String.length contents > after_shebang + 2
-      && String.sub contents after_shebang 2 = "<?"
+      && String.equal (String.sub contents after_shebang 2) "<?"
     then
       String.index_from_exn contents after_shebang '\n' + 1
     else
@@ -1044,31 +1061,34 @@ let fail_comparison s =
 let compare_typedefs t1 t2 =
   let t1 = Decl_pos_utils.NormalizeSig.typedef t1 in
   let t2 = Decl_pos_utils.NormalizeSig.typedef t2 in
-  if t1 <> t2 then fail_comparison "typedefs"
+  if Poly.(t1 <> t2) then fail_comparison "typedefs"
 
 let compare_funs f1 f2 =
   let f1 = Decl_pos_utils.NormalizeSig.fun_elt f1 in
   let f2 = Decl_pos_utils.NormalizeSig.fun_elt f2 in
-  if f1 <> f2 then fail_comparison "funs"
+  if Poly.(f1 <> f2) then fail_comparison "funs"
 
-let compare_classes c1 c2 =
+let compare_classes mode c1 c2 =
   if Decl_compare.class_big_diff c1 c2 then fail_comparison "class_big_diff";
 
   let c1 = Decl_pos_utils.NormalizeSig.class_type c1 in
   let c2 = Decl_pos_utils.NormalizeSig.class_type c2 in
   let (_, is_unchanged) =
-    Decl_compare.ClassDiff.compare c1.Decl_defs.dc_name c1 c2
+    Decl_compare.ClassDiff.compare mode c1.Decl_defs.dc_name c1 c2
   in
   if not is_unchanged then fail_comparison "ClassDiff";
 
-  let (_, is_unchanged) = Decl_compare.ClassEltDiff.compare c1 c2 in
-  if is_unchanged = `Changed then fail_comparison "ClassEltDiff"
+  let (_, is_unchanged) = Decl_compare.ClassEltDiff.compare mode c1 c2 in
+  match is_unchanged with
+  | `Changed -> fail_comparison "ClassEltDiff"
+  | _ -> ()
 
 let test_decl_compare ctx filenames builtins files_contents files_info =
   (* skip some edge cases that we don't handle now... ugly! *)
-  if Relative_path.suffix filenames = "capitalization3.php" then
+  if String.equal (Relative_path.suffix filenames) "capitalization3.php" then
     ()
-  else if Relative_path.suffix filenames = "capitalization4.php" then
+  else if String.equal (Relative_path.suffix filenames) "capitalization4.php"
+  then
     ()
   else
     (* do not analyze builtins over and over *)
@@ -1120,9 +1140,10 @@ let test_decl_compare ctx filenames builtins files_contents files_info =
     let files_contents = Relative_path.Map.map files_contents ~f:add_newline in
     let (_, _) = parse_name_and_decl ctx files_contents in
     let (typedefs2, funs2, classes2) = get_decls defs in
+    let deps_mode = Provider_context.get_deps_mode ctx in
     List.iter2_exn typedefs1 typedefs2 compare_typedefs;
     List.iter2_exn funs1 funs2 compare_funs;
-    List.iter2_exn classes1 classes2 compare_classes;
+    List.iter2_exn classes1 classes2 (compare_classes deps_mode);
     ()
 
 (* Returns a list of Tast defs, along with associated type environments. *)
@@ -1333,7 +1354,7 @@ let handle_mode
         print_errors check_errors
       else
         try
-          let ifc_errors = time @@ lazy (Ifc.do_ ifc_opts file_info ctx) in
+          let ifc_errors = time @@ lazy (Ifc_main.do_ ifc_opts file_info ctx) in
           if not (List.is_empty ifc_errors) then print_errors ifc_errors
         with exc ->
           (* get the backtrace before doing anything else to be sure
@@ -1380,7 +1401,11 @@ let handle_mode
         (String.length contents)
     in
     let pos = File_content.offset_to_position contents offset in
-    let is_manually_invoked = mode = Autocomplete_manually_invoked in
+    let is_manually_invoked =
+      match mode with
+      | Autocomplete_manually_invoked -> true
+      | _ -> false
+    in
     let (ctx, entry) =
       Provider_context.add_or_overwrite_entry_contents ~ctx ~path ~contents
     in
@@ -1501,7 +1526,7 @@ let handle_mode
           lint_errors
           @ fst (Lint.do_ (fun () -> Linting_service.lint ctx fn content)))
     in
-    if lint_errors <> [] then (
+    if not (List.is_empty lint_errors) then (
       let lint_errors =
         List.sort
           ~compare:
@@ -1526,8 +1551,9 @@ let handle_mode
     dump_debug_glean_deps dbg_glean_deps
   | Dump_inheritance ->
     let open ServerCommandTypes.Method_jumps in
+    let deps_mode = Provider_context.get_deps_mode ctx in
     let naming_table = Naming_table.create files_info in
-    Naming_table.iter naming_table Typing_deps.Files.update_file;
+    Naming_table.iter naming_table (Typing_deps.Files.update_file deps_mode);
     Naming_table.iter naming_table (fun fn fileinfo ->
         if Relative_path.Map.mem builtins fn then
           ()
@@ -1610,7 +1636,8 @@ let handle_mode
   | Check_tast ->
     iter_over_files (fun filename ->
         let files_contents =
-          Relative_path.Map.filter files_contents ~f:(fun k _v -> k = filename)
+          Relative_path.Map.filter files_contents ~f:(fun k _v ->
+              Relative_path.equal k filename)
         in
         let (errors, tasts, _gi_solved) =
           compute_tasts_expand_types ctx ~verbosity files_info files_contents
@@ -1623,11 +1650,12 @@ let handle_mode
         ) else
           let tast_check_errors = typecheck_tasts tasts ctx filename in
           print_error_list error_format tast_check_errors max_errors;
-          if tast_check_errors <> [] then exit 2)
+          if not (List.is_empty tast_check_errors) then exit 2)
   | Dump_stripped_tast ->
     iter_over_files (fun filename ->
         let files_contents =
-          Relative_path.Map.filter files_contents ~f:(fun k _v -> k = filename)
+          Relative_path.Map.filter files_contents ~f:(fun k _v ->
+              Relative_path.equal k filename)
         in
         let (_, (tasts, _gienvs)) =
           compute_tasts ctx files_info files_contents
@@ -1672,13 +1700,19 @@ let handle_mode
           patched)
   | Find_refs (line, column) ->
     let path = expect_single_file () in
+    let deps_mode = Provider_context.get_deps_mode ctx in
     let naming_table = Naming_table.create files_info in
-    Naming_table.iter naming_table Typing_deps.Files.update_file;
+    Naming_table.iter naming_table (Typing_deps.Files.update_file deps_mode);
     let genv = ServerEnvBuild.default_genv in
     let init_id = Random_id.short_string () in
+    (* TODO(hverr): Figure out 64-bit *)
     let env =
       {
-        (ServerEnvBuild.make_env ~init_id genv.ServerEnv.config) with
+        (ServerEnvBuild.make_env
+           ~init_id
+           ~deps_mode:Typing_deps_mode.SQLiteMode
+           genv.ServerEnv.config)
+        with
         ServerEnv.naming_table;
         ServerEnv.tcopt = Provider_context.get_tcopt ctx;
       }
@@ -1708,13 +1742,19 @@ let handle_mode
     ClientFindRefs.print_ide_readable results
   | Go_to_impl (line, column) ->
     let filename = expect_single_file () in
+    let deps_mode = Provider_context.get_deps_mode ctx in
     let naming_table = Naming_table.create files_info in
-    Naming_table.iter naming_table Typing_deps.Files.update_file;
+    Naming_table.iter naming_table (Typing_deps.Files.update_file deps_mode);
     let genv = ServerEnvBuild.default_genv in
     let init_id = Random_id.short_string () in
+    (* TODO(hverr): Figure out 64-bit mode *)
     let env =
       {
-        (ServerEnvBuild.make_env ~init_id genv.ServerEnv.config) with
+        (ServerEnvBuild.make_env
+           ~init_id
+           ~deps_mode:Typing_deps_mode.SQLiteMode
+           genv.ServerEnv.config)
+        with
         ServerEnv.naming_table;
         ServerEnv.tcopt = Provider_context.get_tcopt ctx;
       }
@@ -1758,7 +1798,7 @@ let handle_mode
           Out_channel.create (Relative_path.to_absolute filename ^ out_extension)
         in
         (* This means builtins had errors, so lets just print those if we see them *)
-        if parse_errors <> [] then
+        if not (List.is_empty parse_errors) then
           (* This closes the out channel *)
           write_error_list error_format parse_errors oc max_errors
         else (
@@ -1791,7 +1831,7 @@ let handle_mode
         Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
             let files_contents =
               Relative_path.Map.filter files_contents ~f:(fun k _v ->
-                  k = filename)
+                  Relative_path.equal k filename)
             in
             let (_, individual_file_info) =
               parse_name_and_decl ctx files_contents
@@ -1814,7 +1854,7 @@ let handle_mode
       check_file ctx ~verbosity parse_errors files_info error_format max_errors
     in
     print_error_list error_format errors max_errors;
-    if errors <> [] then exit 2
+    if not (List.is_empty errors) then exit 2
   | Decl_compare ->
     let filename = expect_single_file () in
     test_decl_compare ctx filename builtins files_contents files_info
@@ -1823,7 +1863,7 @@ let handle_mode
     let filename = expect_single_file () in
     test_shallow_class_diff ctx filename
   | Linearization ->
-    if parse_errors <> [] then (
+    if not (List.is_empty parse_errors) then (
       print_error error_format (List.hd_exn parse_errors);
       exit 2
     );
@@ -1852,7 +1892,7 @@ let handle_mode
                       (Typing_print.full_decl ctx)
                   in
                   let targs =
-                    if targs = [] then
+                    if List.is_empty targs then
                       ""
                     else
                       "<" ^ String.concat ~sep:"," targs ^ ">"
@@ -1936,7 +1976,7 @@ let decl_and_run_mode
       let magic_builtins =
         match mode with
         | Ai _ -> Array.append magic_builtins Ai.magic_builtins
-        | Ifc _ -> Array.append magic_builtins Ifc.magic_builtins
+        | Ifc _ -> magic_builtins
         | _ -> magic_builtins
       in
       Array.iter magic_builtins ~f:(fun (file_name, file_contents) ->
@@ -1986,7 +2026,8 @@ let decl_and_run_mode
       files_contents_with_builtins
   in
   let dbg_deps = Hashtbl.Poly.create () in
-  ( if mode = Dump_deps then
+  (match mode with
+  | Dump_deps ->
     (* In addition to actually recording the dependencies in shared memory,
      we build a non-hashed respresentation of the dependency graph
      for printing. *)
@@ -2000,17 +2041,26 @@ let decl_and_run_mode
         HashSet.add set root;
         Hashtbl.set dbg_deps obj set
     in
-    Typing_deps.add_dependency_callback "get_debug_trace" get_debug_trace );
+    Typing_deps.add_dependency_callback "get_debug_trace" get_debug_trace
+  | _ -> ());
   let dbg_glean_deps = HashSet.create () in
-  ( if mode = Dump_glean_deps then
+  (match mode with
+  | Dump_glean_deps ->
     (* In addition to actually recording the dependencies in shared memory,
      we build a non-hashed respresentation of the dependency graph
      for printing. In the callback we receive this as dep_right uses dep_left. *)
     let get_debug_trace dep_right dep_left =
       HashSet.add dbg_glean_deps (dep_left, dep_right)
     in
-    Typing_deps.add_dependency_callback "get_debug_trace" get_debug_trace );
-  let ctx = Provider_context.empty_for_test ~popt ~tcopt in
+    Typing_deps.add_dependency_callback "get_debug_trace" get_debug_trace
+  | _ -> ());
+  (* TODO(hverr): Should we switch this to 64-bit *)
+  let ctx =
+    Provider_context.empty_for_test
+      ~popt
+      ~tcopt
+      ~deps_mode:Typing_deps_mode.SQLiteMode
+  in
   let (errors, files_info) = parse_name_and_decl ctx to_decl in
   handle_mode
     mode

@@ -1,15 +1,17 @@
 <?hh
 
 class C {
+  <<__InferFlows>>
   public function __construct(
-    <<Policied("PRIVATE")>>
+    <<__Policied("PRIVATE")>>
     public int $private,
   ) { }
 }
 
 class D extends C {
+  <<__InferFlows>>
   public function __construct(
-    <<Policied("PUBLIC")>>
+    <<__Policied("PUBLIC")>>
     public int $public,
     public int $private,
   ) {
@@ -17,6 +19,7 @@ class D extends C {
   }
 }
 
+<<__InferFlows>>
 function test(): void {
   $d = new D(42,24);
 

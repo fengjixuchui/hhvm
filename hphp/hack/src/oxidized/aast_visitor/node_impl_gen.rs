@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<fa2493096c289cdd6ec164534c81366a>>
+// @generated SignedSource<<f84354d28536f98597af09e47ea82cfd>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
@@ -453,6 +453,7 @@ impl<P: Params> Node<P> for Class_<P::Ex, P::Fb, P::En, P::Hi> {
         self.xhp_category.accept(c, v)?;
         self.reqs.accept(c, v)?;
         self.implements.accept(c, v)?;
+        self.implements_dynamic.accept(c, v)?;
         self.where_constraints.accept(c, v)?;
         self.consts.accept(c, v)?;
         self.typeconsts.accept(c, v)?;
@@ -899,10 +900,8 @@ impl<P: Params> Node<P> for Expr_<P::Ex, P::Fb, P::En, P::Hi> {
                 a0.accept(c, v)?;
                 Ok(())
             }
-            Expr_::ExpressionTree(a) => {
-                a.0.accept(c, v)?;
-                a.1.accept(c, v)?;
-                a.2.accept(c, v)?;
+            Expr_::ExpressionTree(a0) => {
+                a0.accept(c, v)?;
                 Ok(())
             }
             Expr_::Lplaceholder(a0) => {
@@ -952,8 +951,31 @@ impl<P: Params> Node<P> for Expr_<P::Ex, P::Fb, P::En, P::Hi> {
                 a0.accept(c, v)?;
                 Ok(())
             }
+            Expr_::EnumAtom(a0) => {
+                a0.accept(c, v)?;
+                Ok(())
+            }
             Expr_::Any => Ok(()),
         }
+    }
+}
+impl<P: Params> Node<P> for ExpressionTree<P::Ex, P::Fb, P::En, P::Hi> {
+    fn accept<'node>(
+        &'node self,
+        c: &mut P::Context,
+        v: &mut dyn Visitor<'node, P = P>,
+    ) -> Result<(), P::Error> {
+        v.visit_expression_tree(c, self)
+    }
+    fn recurse<'node>(
+        &'node self,
+        c: &mut P::Context,
+        v: &mut dyn Visitor<'node, P = P>,
+    ) -> Result<(), P::Error> {
+        self.hint.accept(c, v)?;
+        self.src_expr.accept(c, v)?;
+        self.desugared_expr.accept(c, v)?;
+        Ok(())
     }
 }
 impl<P: Params> Node<P> for Field<P::Ex, P::Fb, P::En, P::Hi> {
@@ -2088,7 +2110,7 @@ impl<P: Params> Node<P> for UsingStmt<P::Ex, P::Fb, P::En, P::Hi> {
     ) -> Result<(), P::Error> {
         self.is_block_scoped.accept(c, v)?;
         self.has_await.accept(c, v)?;
-        self.expr.accept(c, v)?;
+        self.exprs.accept(c, v)?;
         self.block.accept(c, v)?;
         Ok(())
     }

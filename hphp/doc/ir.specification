@@ -1084,6 +1084,11 @@ To string conversions:
   Load the constant 'constantName' for the class 'className'. If not
   initialized, branch to B.
 
+| LookupClsCns, D(Cell), S(Cls) S(Str), NF
+
+  Lookup a class constant. May raise errors if either the class or constant are
+  not defined.
+
 | LdSubClsCns<constantName,slot>, D(Uncounted), S(Cls), NF
 
   Load the constant 'constantName' for the class S0. The constant is known to
@@ -1422,7 +1427,7 @@ To string conversions:
 
   Clear the IsBeingConstructed flag on the object.
 
-| NewLoggingArray, DLoggingArrLike, S(VArr,DArr,Vec,Dict,Keyset), PRc|CRc
+| NewLoggingArray, DLoggingArrLike, S(VArr,DArr,Vec,Dict,Keyset), PRc|CRc|LA
 
   Maybe create a LoggingArray wrapping the vanilla array-like S0. The decision
   may be based on flags or sampling. If we don't create an array, we return S0
@@ -2185,9 +2190,9 @@ To string conversions:
 
   Concatenate S0, S1, S2, and S3.
 
-| AddNewElemKeyset, D(Keyset), S(Keyset) S(Cell), CRc|PRc
+| AddNewElemKeyset, D(Keyset),    S(Keyset) S(Cell),   CRc|PRc
 
-| AddNewElemVec,    DVecSet,   S(VArr,Vec) S(Cell),    CRc|PRc
+| AddNewElemVec,    DModified(0), S(VArr,Vec) S(Cell), CRc|PRc
 
   Add S1 as a new element to the array/keyset/vec S0.  (Note: S1 must actually
   be a subtype of InitCell for array invariants, but we can't assert this yet
@@ -2557,13 +2562,13 @@ To string conversions:
 
 16. Iterators
 
-| IterInit<IterData>,   D(Bool), S(ArrLike,Obj) S(FramePtr), CRc
+| IterInit<IterData>,   D(Bool), S(ArrLike,Obj) S(FramePtr), CRc|LA
 
-| IterInitK<IterData>,  D(Bool), S(ArrLike,Obj) S(FramePtr), CRc
+| IterInitK<IterData>,  D(Bool), S(ArrLike,Obj) S(FramePtr), CRc|LA
 
-| LIterInit<IterData>,  D(Bool), S(ArrLike) S(FramePtr),     NF
+| LIterInit<IterData>,  D(Bool), S(ArrLike) S(FramePtr),     LA
 
-| LIterInitK<IterData>, D(Bool), S(ArrLike) S(FramePtr),     NF
+| LIterInitK<IterData>, D(Bool), S(ArrLike) S(FramePtr),     LA
 
   <IterData> consists of three indices, iterId, keyId and valId. iterId is
   the index of the iterator variable, keyId and valId are indices of local
@@ -2582,13 +2587,9 @@ To string conversions:
   value (and key) into the local variable with index valId (and keyId,
   respectively).
 
-  The IterInit and IterInitK instructions always copy the array element by
-  value.
-
   The LIter variations only accept arrays and do not take ownership of their
-  base. Instead the base is provided on each operation on the iterator. This
-  avoids having to raise the ref-count of the base (in situations where this is
-  safe).
+  base. Instead, the base is provided on each operation on the iterator, so
+  that we can avoid inc-ref-ing the base (in cases where that's safe).
 
   This instruction has the ConsumesRC property because it either decrements the
   reference count of S0 or stores a reference to S0 into the new iterator.
@@ -2597,9 +2598,9 @@ To string conversions:
 
 | IterNextK<IterData>,  D(Bool), S(FramePtr), NF
 
-| LIterNext<IterData>,  D(Bool), S(ArrLike) S(FramePtr), NF
+| LIterNext<IterData>,  D(Bool), S(ArrLike) S(FramePtr), LA
 
-| LIterNextK<IterData>, D(Bool), S(ArrLike) S(FramePtr), NF
+| LIterNextK<IterData>, D(Bool), S(ArrLike) S(FramePtr), LA
 
   <IterData> consists of three indices, iterId, keyId and valId. iterId is
   the index of the iterator variable, keyId and valId are indices of local
@@ -2612,9 +2613,6 @@ To string conversions:
   variable and returns false; otherwise, it returns true. If the iterator has
   not reached its end, then this instruction stores the iterator's next value
   (and key) into the local variable with index valId (and keyId, respectively).
-
-  The IterInit and IterInitK instructions always copy the array element by
-  value.
 
 | IterFree<iterId>, ND, S(FramePtr), NF
 
@@ -2986,12 +2984,12 @@ fields of that struct for holding intermediate values.
 
   Initialize the memoization instance slots for object S0 of the given class.
 
-| VecSet, DVecSet, S(VArr,Vec) S(Int) S(Cell), PRc|CRc
+| VecSet, DModified(0), S(VArr,Vec) S(Int) S(Cell), PRc|CRc
 
   Set element with key S1 in S0 to S2. The dest will be a new Vec that should
   replace S0.
 
-| DictSet, DDictSet, S(DArr,Dict) S(Int,Str) S(Cell), PRc|CRc
+| DictSet, DModified(0), S(DArr,Dict) S(Int,Str) S(Cell), PRc|CRc
 
   Set element with key S1 in S0 to S2. The dest will be a new Dict that should
   replace S0.
@@ -3012,12 +3010,9 @@ fields of that struct for holding intermediate values.
 
 | BespokeSet<T,Layout>, DParam(ArrLike), SBespokeArr S(Int,Str) S(Cell), PRc|CRc
 
-  Set element with key S1 in bespoke array S0 to S2, returning an array of type
-  T.
-
-  NB: Currently, the layout provided is unused and generic BespokeArray
-  dispatch is performed. This will be rectified when a suitable
-  SetIntMove/SetStrMove layout method is available.
+  Set element with key S1 in bespoke array S0 to S2 using the SetMove
+  implementation on the layout provided, returning an array of type T. If no
+  layout is provided, the general BespokeArray dispatch is used.
 
 | BespokeAppend<T,Layout>, DParam(ArrLike), SBespokeArr S(Cell), PRc|CRc
 
@@ -3025,6 +3020,33 @@ fields of that struct for holding intermediate values.
   layout provided, returning an array of type T. If no layout is provided, the
   general BespokeArray dispatch is used.
 
+| BespokeIterFirstPos<Layout>, D(Int), SBespokeArr, NF
+
+  Obtain the pos coresponding to the first valid element in bespoke array S0
+  using the IterBegin implementation on the layout provided.
+
+| BespokeIterLastPos<Layout>, D(Int), SBespokeArr, NF
+
+  Obtain the pos coresponding to the last valid element in bespoke array S0
+  using the IterLast implementation on the layout provided.
+
+| BespokeIterAdvancePos<Layout>, D(Int), SBespokeArr S(Int), NF
+
+  Advance the pos S1 for bespoke array S0 forward, returning the result.
+
+| BespokeIterGetKey<T, Layout>, DParam(Int|Str), SBespokeArr S(Int), NF
+
+  Obtain the key at pos S1 in bespoke array S0.
+
+| BespokeIterGetVal<T, Layout>, DParam(Cell), SBespokeArr S(Int), NF
+
+  Obtain the value at pos S1 in bespoke array S0.
+
+| BespokeEscalateToVanilla<Layout>, DEscalateToVanilla, SBespokeArr CStr, NF
+
+  Escalate bespoke array S0 to a vanilla array for the reason S1 using the
+  EscalateToVanilla implementation on the layout provided. If no layout is
+  provided, the general BespokeArray dispatch is used.
 
 | MapSet, ND, S(Obj) S(Int,Str) S(Cell), CRc
 
@@ -3112,7 +3134,7 @@ fields of that struct for holding intermediate values.
 
   Throws an OutOfBoundsException if S0 is an undefined index for an array.
 
-| ThrowArrayKeyException, ND, S(DArr,Dict) S(Str), T
+| ThrowArrayKeyException, ND, S(DArr,Dict) S(Str), T|LA
 
   Throws an OutOfBoundsException if S0 is an undefined key for a darray or dict.
 
@@ -3240,16 +3262,26 @@ fields of that struct for holding intermediate values.
   Returns the first value(key) from the keyset in S0.
   If the array is empty, it will return NULL.
 
-| SetLegacyVec, D(Vec), S(Vec), CRc|PRc
+| IsLegacyArrLike, D(Bool), S(Vec|Dict,VArr|DArr), LA
 
-| SetLegacyDict, D(Dict), S(Dict), CRc|PRc
+  Returns true iff the given array has the legacy bit set.
 
-| UnsetLegacyVec, D(Vec), S(Vec), CRc|PRc
+| ArrayMarkLegacyShallow,     DModified(0), S(Vec,Dict,VArr,DArr), CRc|PRc|LA
 
-| UnsetLegacyDict, D(Dict), S(Dict), CRc|PRc
+| ArrayMarkLegacyRecursive,   DModified(0), S(Vec,Dict,VArr,DArr), CRc|PRc|LA
 
-  Enable/disable the legacy bit on the vec/dict in S0, copying it if necessary
-  and returning the tagged array.
+| ArrayUnmarkLegacyShallow,   DModified(0), S(Vec,Dict,VArr,DArr), CRc|PRc|LA
+
+| ArrayUnmarkLegacyRecursive, DModified(0), S(Vec,Dict,VArr,DArr), CRc|PRc|LA
+
+  Set or unset the legacy bit on the array-like in S0, copying it if needed.
+  The recursive variants traverse through the array-like's transitive elements
+  but stop traversal at any non-array-like.
+
+| TagProvenanceHere, DModified(0), S(Vec,Dict,VArr,DArr) S(Int), CRc|PRc|LA
+
+  Tag the dvarray S0 with provenance information, using flags S1, skipping
+  over any stack frames with ProvenanceSkipFrame annotations.
 
 
 18. Exception/unwinding support

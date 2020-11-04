@@ -8,7 +8,7 @@
  *
  *)
 
-open Core_kernel
+open Hh_prelude
 
 let tcopt_with_defer =
   GlobalOptions.{ default with tco_defer_class_declaration_threshold = Some 1 }
@@ -119,11 +119,12 @@ let test_process_file_deferring () =
   let errors = Errors.empty in
 
   (* Finally, this is what all the setup was for: process this file *)
+  Decl_counters.set_mode Typing_service_types.DeclingTopCounts;
   let prev_counter_state =
     Counters.(
       reset
         ~enabled_categories:
-          (CategorySet.of_list Category.[Decl_accessors; Disk_cat; Get_ast]))
+          (CategorySet.of_list Category.[Decling; Disk_cat; Get_ast]))
   in
   let { Typing_check_service.computation; _ } =
     Typing_check_service.process_file dynamic_view_files ctx errors file
@@ -138,7 +139,7 @@ let test_process_file_deferring () =
   (* this test doesn't write back to cache, so num of decl_fetches isn't solid *)
   Asserter.Bool_asserter.assert_equals
     true
-    (Telemetry_test_utils.int_exn counters "decl_accessors.count" > 0)
+    (Telemetry_test_utils.int_exn counters "decling.count" > 0)
     "Should be at least one decl fetched";
 
   (* Validate the deferred type check computation *)
@@ -199,9 +200,9 @@ let test_compute_tast_counting () =
   in
 
   Asserter.Int_asserter.assert_equals
-    111
-    (Telemetry_test_utils.int_exn telemetry "decl_accessors.count")
-    "There should be this many decl_accessor_count for shared_mem provider";
+    41
+    (Telemetry_test_utils.int_exn telemetry "decling.count")
+    "There should be this many decling_count for shared_mem provider";
   Asserter.Int_asserter.assert_equals
     0
     (Telemetry_test_utils.int_exn telemetry "disk_cat.count")
@@ -220,6 +221,7 @@ let test_compute_tast_counting () =
           ~popt:ParserOptions.default
           ~tcopt:TypecheckerOptions.default
           ~backend:(Provider_backend.get ())
+          ~deps_mode:Typing_deps_mode.SQLiteMode
       in
       let (ctx, entry) =
         Provider_context.add_entry_if_missing ~ctx ~path:foo_path
@@ -228,9 +230,9 @@ let test_compute_tast_counting () =
         Tast_provider.compute_tast_and_errors_unquarantined ~ctx ~entry
       in
       Asserter.Int_asserter.assert_equals
-        75
-        (Telemetry_test_utils.int_exn telemetry "decl_accessors.count")
-        "There should be this many decl_accessor_count for local_memory provider";
+        41
+        (Telemetry_test_utils.int_exn telemetry "decling.count")
+        "There should be this many decling_count for local_memory provider";
       Asserter.Int_asserter.assert_equals
         1
         (Telemetry_test_utils.int_exn telemetry "disk_cat.count")

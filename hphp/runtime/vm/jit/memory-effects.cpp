@@ -488,7 +488,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ReqRetranslate:
     return ExitEffects {
       AUnknown,
-      stack_below(inst.src(0), inst.extra<ReqRetranslate>()->irSPOff - 1)
+      stack_below(inst.src(0), inst.extra<ReqRetranslate>()->offset - 1)
     };
   case ReqRetranslateOpt:
     return ExitEffects {
@@ -1068,14 +1068,16 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   }
 
   case BespokeGet: {
+    // TODO(mcolavita): This should be PureLoad once it no longer branches
     auto const base = inst.src(0);
     auto const key  = inst.src(1);
     if (key->isA(TInt)) {
-      return PureLoad {
-        key->hasConstVal() ? AElemI { base, key->intVal() } : AElemIAny
-      };
+      return may_load_store(
+        key->hasConstVal() ? AElemI { base, key->intVal() } : AElemIAny,
+        AEmpty
+      );
     } else {
-      return PureLoad { AElemAny };
+      return may_load_store(AElemAny, AEmpty);
     }
   }
 
@@ -1203,6 +1205,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     return PureLoad { AElemAny };
   }
 
+  case BespokeIterGetKey:
   case LdPtrIterKey:
     // Array element keys are not tracked by memory effects right now.
     return may_load_store(AEmpty, AEmpty);
@@ -1213,6 +1216,9 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     if (inst.typeParam() <= TStr) return PureLoad { AElemSAny };
     return PureLoad { AElemAny };
   }
+
+  case BespokeIterGetVal:
+    return may_load_store(AElemAny, AEmpty);
 
   case ElemMixedArrayK:
   case ElemDictK:
@@ -1486,6 +1492,9 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case AssertLoc:
   case AssertStk:
   case AssertMBase:
+  case BespokeIterAdvancePos:
+  case BespokeIterFirstPos:
+  case BespokeIterLastPos:
   case DefFrameRelSP:
   case DefRegSP:
   case DefCallFlags:
@@ -1608,6 +1617,9 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     if (!RO::EvalRaiseOnCaseInsensitiveLookup) return IrrelevantEffects {};
     return may_load_store(AHeapAny, AHeapAny);
 
+  case LookupClsCns:
+    return may_load_store(AEmpty, AEmpty);
+
   case StClosureArg:
     return PureStore {
       AProp {
@@ -1694,6 +1706,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case InterfaceSupportsDbl:
   case InterfaceSupportsInt:
   case InterfaceSupportsStr:
+  case IsLegacyArrLike:
   case IsWaitHandle:
   case IsCol:
   case HasToString:
@@ -1909,15 +1922,17 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ThrowParameterWrongType:
   case ThrowParamInOutMismatch:
   case ThrowParamInOutMismatchRange:
-  case SetLegacyDict:
-  case SetLegacyVec:
-  case UnsetLegacyDict:
-  case UnsetLegacyVec:
+  case ArrayMarkLegacyShallow:
+  case ArrayMarkLegacyRecursive:
+  case ArrayUnmarkLegacyShallow:
+  case ArrayUnmarkLegacyRecursive:
+  case TagProvenanceHere:
   case SetOpTV:
   case OutlineSetOp:
   case ThrowAsTypeStructException:
   case PropTypeRedefineCheck: // Can raise and autoload
   case HandleRequestSurprise:
+  case BespokeEscalateToVanilla:
     return may_load_store(AHeapAny, AHeapAny);
 
   case AddNewElemVec:

@@ -70,8 +70,7 @@ struct Env {
     , prevBlocks()
     // TODO(#5703534): this is using a different TransContext than actual
     // translation will use.
-    , unit(TransContext{TransIDSet{}, 0 /* optIndex */, kind, TransFlags{}, sk,
-                        nullptr},
+    , unit(TransContext{TransIDSet{}, 0 /* optIndex */, kind, sk, nullptr},
            std::make_unique<AnnotationData>())
     , irgs(unit, nullptr, 0, nullptr)
     , numJmps(0)
@@ -479,6 +478,9 @@ RegionDescPtr form_region(Env& env) {
 
     if (instructionEndsRegion(env)) {
       FTRACE(1, "selectTracelet: tracelet broken after {}\n", env.inst);
+      break;
+    } else if (isIteratorOp(env.sk.op())) {
+      FTRACE(1, "selectTracelet: tracelet broken before iterator op\n");
       break;
     } else {
       assertx(env.sk.func() == curFunc(env));

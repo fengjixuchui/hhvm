@@ -74,6 +74,9 @@ let find_policied_attribute user_attributes : ifc_fun_decl =
     (match get_classname_or_literal_attribute_param ua_params with
     | Some s -> FDPolicied (Some s)
     | None -> FDPolicied None)
+  | None
+    when Naming_attributes.mem SN.UserAttributes.uaInferFlows user_attributes ->
+    FDInferFlows
   | None -> default_ifc_fun_decl
 
 let has_accept_disposable_attribute user_attributes =
@@ -84,6 +87,9 @@ let has_external_attribute user_attributes =
 
 let has_can_call_attribute user_attributes =
   Naming_attributes.mem SN.UserAttributes.uaCanCall user_attributes
+
+let has_atom_attribute user_attributes =
+  Naming_attributes.mem SN.UserAttributes.uaAtom user_attributes
 
 let has_return_disposable_attribute user_attributes =
   Naming_attributes.mem SN.UserAttributes.uaReturnDisposable user_attributes
@@ -132,9 +138,9 @@ let rec reinfer_type_to_string_exn ty =
     | Tbool -> "bool"
     | Tatom _id -> "atom")
   | Tapply ((_p, id), _tyl) -> cut_namespace id
-  | Taccess (ty, ids) ->
+  | Taccess (ty, id) ->
     let s = reinfer_type_to_string_exn (get_node ty) in
-    List.fold ids ~init:s ~f:(fun s (_p, id) -> Printf.sprintf "%s::%s" s id)
+    Printf.sprintf "%s::%s" s (snd id)
   | _ -> raise Gi_reinfer_type_not_supported
 
 let reinfer_type_to_string_opt ty =
@@ -248,7 +254,8 @@ let make_param_ty env ~is_lambda param =
           (has_accept_disposable_attribute param.param_user_attributes)
         ~has_default:(Option.is_some param.param_expr)
         ~ifc_external:(has_external_attribute param.param_user_attributes)
-        ~ifc_can_call:(has_can_call_attribute param.param_user_attributes);
+        ~ifc_can_call:(has_can_call_attribute param.param_user_attributes)
+        ~is_atom:(has_atom_attribute param.param_user_attributes);
     fp_rx_annotation = rx_annotation;
   }
 
@@ -267,7 +274,8 @@ let make_ellipsis_param_ty pos =
         ~accept_disposable:false
         ~has_default:false
         ~ifc_external:false
-        ~ifc_can_call:false;
+        ~ifc_can_call:false
+        ~is_atom:false;
     fp_rx_annotation = None;
   }
 

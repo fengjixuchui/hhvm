@@ -1,30 +1,31 @@
 <?hh
 
 class C {
+  <<__InferFlows>>
   public function __construct(
-    <<Policied("PUBLIC")>>
+    <<__Policied("PUBLIC")>>
     public int $public,
-    <<Policied("PRIVATE")>>
+    <<__Policied("PRIVATE")>>
     public int $private,
     public int $unrelated,
   ) {}
 }
 
-<<InferFlows>>
+<<__InferFlows>>
 function intermediate(C $obj, int $data): void {
   $obj->unrelated = $obj->private;
   $obj->public = $data;
   $obj->unrelated = $obj->private;
 }
 
-<<InferFlows>>
+<<__InferFlows>>
 function writeToPublic(C $obj, int $data): void {
   $obj->unrelated = $obj->private;
   intermediate($obj, $data);
   $obj->unrelated = $obj->private;
 }
 
-<<InferFlows>>
+<<__InferFlows>>
 function getPrivate(C $obj): int {
   $obj->unrelated = $obj->private;
   $tmp = $obj->private;
@@ -32,6 +33,7 @@ function getPrivate(C $obj): int {
   return $tmp;
 }
 
+<<__InferFlows>>
 function test(C $obj): void {
   $obj->unrelated = $obj->private;
   $private = getPrivate($obj);

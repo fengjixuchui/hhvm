@@ -29,7 +29,7 @@ type class_elt = {
   ce_type: decl_ty Lazy.t;
   ce_origin: string;  (** identifies the class from which this elt originates *)
   ce_deprecated: string option;
-  ce_pos: Pos.t Lazy.t;
+  ce_pos: Pos.t Lazy.t;  (** pos of the type of the elt *)
   ce_flags: int;
 }
 [@@deriving show]
@@ -113,6 +113,7 @@ and class_type = {
   tc_ancestors: decl_ty SMap.t;
       (** This includes all the classes, interfaces and traits this class is
        * using. *)
+  tc_implements_dynamic: bool;  (** Whether the class is coercible to dynamic *)
   tc_req_ancestors: requirement list;
   tc_req_ancestors_extends: SSet.t;  (** the extends of req_ancestors *)
   tc_extends: SSet.t;
@@ -331,7 +332,8 @@ let is_union_or_inter_type (ty : locl_ty) =
   | Tvarray _
   | Tdarray _
   | Tunapplied_alias _
-  | Tvarray_or_darray _ ->
+  | Tvarray_or_darray _
+  | Taccess _ ->
     false
 
 module InternalType = struct
@@ -450,6 +452,7 @@ let ty_con_ordinal ty_ =
   | Tdarray _ -> 21
   | Tvarray_or_darray _ -> 22
   | Tunapplied_alias _ -> 23
+  | Taccess _ -> 24
 
 (* Ordinal value for type constructor, for decl types *)
 let decl_ty_con_ordinal ty_ =
@@ -774,9 +777,8 @@ let rec equal_decl_ty_ ty_1 ty_2 =
     String.equal s1 s2 && equal_decl_tyl tyl1 tyl2
   | (Tgeneric (s1, argl1), Tgeneric (s2, argl2)) ->
     String.equal s1 s2 && equal_decl_tyl argl1 argl2
-  | (Taccess (ty1, idl1), Taccess (ty2, idl2)) ->
-    equal_decl_ty ty1 ty2
-    && List.equal (fun (_, s1) (_, s2) -> String.equal s1 s2) idl1 idl2
+  | (Taccess (ty1, (_, s1)), Taccess (ty2, (_, s2))) ->
+    equal_decl_ty ty1 ty2 && String.equal s1 s2
   | (Tarray (tk1, tv1), Tarray (tk2, tv2)) ->
     Option.equal equal_decl_ty tk1 tk2 && Option.equal equal_decl_ty tv1 tv2
   | (Tdarray (tk1, tv1), Tdarray (tk2, tv2)) ->

@@ -214,10 +214,10 @@ void logArrayIterProfile(IRGS& env, const IterArgs& data,
   // We don't want production webservers to log when they do so.
   if (!RO::EvalLogArrayIterProfile) return;
 
-  auto const marker  = makeMarker(env, bcOff(env));
+  auto const marker  = makeMarker(env, curSrcKey(env));
   auto const profile = TargetProfile<ArrayIterProfile>(
     env.context,
-    makeMarker(env, bcOff(env)),
+    makeMarker(env, curSrcKey(env)),
     s_ArrayIterProfile.get()
   );
   if (!profile.optimizing()) return;
@@ -230,7 +230,7 @@ void logArrayIterProfile(IRGS& env, const IterArgs& data,
     auto const func = marker.func();
     func_str = func->fullName()->data();
     file_str = func->filename()->data();
-    line_int = func->unit()->getLineNumber(marker.bcOff());
+    line_int = marker.sk().lineNumber();
   }
 
   std::vector<std::string> inline_state_string;
@@ -278,7 +278,7 @@ ArrayIterProfile::Result getProfileResult(IRGS& env, const SSATmp* base) {
 
   auto const profile = TargetProfile<ArrayIterProfile>(
     env.context,
-    makeMarker(env, bcOff(env)),
+    makeMarker(env, curSrcKey(env)),
     s_ArrayIterProfile.get()
   );
   if (!profile.optimizing()) return generic;
@@ -623,7 +623,7 @@ void emitSpecializedHeader(IRGS& env, const Accessor& accessor,
     },
     [&]{
       finish(elm, val);
-      gen(env, Jmp, makeExit(env, nextBcOff(env)));
+      gen(env, Jmp, makeExit(env, nextSrcKey(env)));
     }
   );
   finish(elm, guarded_val);
@@ -686,9 +686,9 @@ void emitSpecializedFooter(IRGS& env, const Accessor& accessor,
 // Speculatively generate specialized code for this IterInit.
 void specializeIterInit(IRGS& env, Offset doneOffset,
                         const IterArgs& data, uint32_t baseLocalId) {
-  auto const gc = DataTypeSpecific;
   auto const local = baseLocalId != kInvalidId;
-  auto const base = local ? ldLoc(env, baseLocalId, nullptr, gc) : topC(env);
+  auto const base = local ? ldLoc(env, baseLocalId, nullptr, DataTypeIterBase)
+                          : topC(env, BCSPRelOffset{0}, DataTypeIterBase);
   profileDecRefs(env, data, base, local, /*init=*/true);
 
   // `body` and `done` are at a different stack depth for non-local IterInits.

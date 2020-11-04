@@ -375,8 +375,11 @@ enum trep : uint64_t {
   BClsMethLike    = BClsMeth | BRClsMeth,
   BOptClsMethLike = BInitNull | BClsMethLike,
 
-  BStrLike    = BCls | BStr,
-  BUncStrLike = BCls | BSStr,
+  BClsLike    = BCls | BLazyCls,
+  BOptClsLike = BInitNull | BClsLike,
+
+  BStrLike    = BCls | BLazyCls | BStr,
+  BUncStrLike = BCls | BLazyCls | BSStr,
 
   BOptStrLike    = BInitNull | BStrLike,
   BOptUncStrLike = BInitNull | BUncStrLike,
@@ -1054,6 +1057,7 @@ X(UncArrKey)                                    \
 X(ArrKey)                                       \
 X(FuncLike)                                     \
 X(ClsMethLike)                                  \
+X(ClsLike)                                      \
 X(UncStrLike)                                   \
 X(StrLike)                                      \
 X(UncArrKeyCompat)                              \
@@ -1124,6 +1128,7 @@ X(OptUncArrKey)                                 \
 X(OptArrKey)                                    \
 X(OptFuncLike)                                  \
 X(OptClsMethLike)                               \
+X(OptClsLike)                                   \
 X(OptUncStrLike)                                \
 X(OptStrLike)                                   \
 X(OptUncArrKeyCompat)                           \
@@ -1712,7 +1717,7 @@ Type loosen_values(Type t);
 Type loosen_emptiness(Type t);
 
 /*
- * Force all TFunc and TCls types to TUncStrLike, and all TClsMeth to either
+ * Force all TCls and TLazyCls types to TUncStrLike, and all TClsMeth to either
  * TVArrLike or TVecLike.
  */
 Type loosen_likeness(Type t);
@@ -1775,6 +1780,7 @@ std::pair<Type, ThrowMode> dict_elem(const Type& dict, const Type& key,
                                      const Type& defaultTy = TBottom);
 std::pair<Type, ThrowMode> keyset_elem(const Type& keyset, const Type& key,
                                        const Type& defaultTy = TBottom);
+std::pair<Type,ThrowMode> array_like_elem(const Type& arr, const Type& key);
 
 /*
  * (array|vec|dict|keyset)_set
@@ -1792,6 +1798,8 @@ std::pair<Type, ThrowMode> array_set(Type arr, const Type& key,
 std::pair<Type, ThrowMode> vec_set(Type vec, const Type& key, const Type& val);
 std::pair<Type, ThrowMode> dict_set(Type dict, const Type& key, const Type& val);
 std::pair<Type, ThrowMode> keyset_set(Type keyset, const Type& key, const Type& val);
+std::pair<Type,ThrowMode> array_like_set(Type arr, const Type& key, const Type& val,
+                                         ProvTag src = ProvTag::Top);
 
 /*
  * (array|vec|dict|keyset)_newelem
@@ -1807,6 +1815,8 @@ std::pair<Type,Type> array_newelem(Type arr, const Type& val, ProvTag src);
 std::pair<Type,Type> vec_newelem(Type vec, const Type& val);
 std::pair<Type,Type> dict_newelem(Type dict, const Type& val);
 std::pair<Type,Type> keyset_newelem(Type keyset, const Type& val);
+std::pair<Type,Type> array_like_newelem(Type arr, const Type& val,
+                                        ProvTag src = ProvTag::Top);
 
 /*
  * Return the best known information for iteration of the supplied type. This is

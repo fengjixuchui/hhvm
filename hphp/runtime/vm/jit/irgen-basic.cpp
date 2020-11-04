@@ -31,15 +31,6 @@
 
 namespace HPHP { namespace jit { namespace irgen {
 
-namespace {
-
-const StaticString s_reified_type_must_be_ts(
-  "Reified type must be a type structure");
-const StaticString s_new_instance_of_not_string(
-  "You cannot create a new instance of this type as it is not a string");
-
-} // namespace
-
 void emitClassGetC(IRGS& env) {
   auto const name = topC(env);
   if (!name->type().subtypeOfAny(TObj, TCls, TStr, TLazyCls)) {
@@ -176,7 +167,7 @@ void emitCGetL2(IRGS& env, NamedLocal loc) {
 }
 
 void emitUnsetL(IRGS& env, int32_t id) {
-  auto const prev = ldLoc(env, id, makeExit(env), DataTypeCountnessInit);
+  auto const prev = ldLoc(env, id, makeExit(env), DataTypeGeneric);
   stLocRaw(env, id, fp(env), cns(env, TUninit));
   decRef(env, prev);
 }

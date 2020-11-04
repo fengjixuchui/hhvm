@@ -425,6 +425,8 @@ type t = {
    * redeclare any files when a function or global constant changes.
    *)
   disable_conservative_redecl: bool;
+  (* forces Hulk *)
+  force_remote_type_check: bool;
   ide_parser_cache: bool;
   ide_tast_cache: bool;
   (* When enabled, save hot class declarations (for now, specified in a special
@@ -486,6 +488,8 @@ type t = {
   profile_type_check_duration_threshold: float;
   (* The flag "--config profile_type_check_twice=true" causes each file to be typechecked twice in succession. If --profile-log then both times are logged. *)
   profile_type_check_twice: bool;
+  (* The flag "--config profile_decling=..." says what kind of instrumentation we want for each decl *)
+  profile_decling: Typing_service_types.profile_decling;
   (* If --profile-log, we can use "--config profile_owner=<str>" to send an arbitrary "owner" along with the telemetry *)
   profile_owner: string option;
   (* If --profile-log, we can use "--config profile_desc=<str>" to send an arbitrary "desc" along with telemetry *)
@@ -504,6 +508,7 @@ let default =
     log_categories = [];
     experiments = [];
     experiments_config_meta = "";
+    force_remote_type_check = false;
     use_saved_state = false;
     require_saved_state = false;
     load_state_script_timeout = 20;
@@ -569,6 +574,7 @@ let default =
     tico_invalidate_smart = false;
     profile_type_check_duration_threshold = 0.05;
     profile_type_check_twice = false;
+    profile_decling = Typing_service_types.DeclingOff;
     profile_owner = None;
     profile_desc = "";
     (* seconds *)
@@ -729,6 +735,12 @@ let load_ fn ~silent ~current_version overrides =
     bool_if_version
       "enable_fuzzy_search"
       ~default:default.enable_fuzzy_search
+      config
+  in
+  let force_remote_type_check =
+    bool_if_version
+      "force_remote_type_check"
+      ~default:default.force_remote_type_check
       config
   in
   let lazy_parse =
@@ -1001,6 +1013,18 @@ let load_ fn ~silent ~current_version overrides =
       ~default:default.profile_type_check_twice
       config
   in
+  let profile_decling =
+    match string_ "profile_decling" ~default:"off" config with
+    | "off" -> Typing_service_types.DeclingOff
+    | "top_counts" -> Typing_service_types.DeclingTopCounts
+    | "all_telemetry" ->
+      Typing_service_types.DeclingAllTelemetry { callstacks = false }
+    | "all_telemetry_callstacks" ->
+      Typing_service_types.DeclingAllTelemetry { callstacks = true }
+    | _ ->
+      failwith
+        "profile_decling: off | top_counts | all_telemetry | all_telemetry_callstacks"
+  in
   let profile_owner = string_opt "profile_owner" config in
   let profile_desc =
     string_ "profile_desc" ~default:default.profile_desc config
@@ -1088,11 +1112,13 @@ let load_ fn ~silent ~current_version overrides =
     tico_invalidate_smart;
     profile_type_check_duration_threshold;
     profile_type_check_twice;
+    profile_decling;
     profile_owner;
     profile_desc;
     go_to_implementation;
     allow_unstable_features;
     watchman;
+    force_remote_type_check;
   }
 
 let load ~silent ~current_version config_overrides =

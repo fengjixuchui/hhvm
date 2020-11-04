@@ -17,8 +17,9 @@
 
 #include "hphp/runtime/base/bespoke/logging-profile.h"
 
-#include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/bespoke/logging-array.h"
+#include "hphp/runtime/base/memory-manager-defs.h"
+#include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/server/memory-stats.h"
 #include "hphp/runtime/vm/jit/mcgen-translate.h"
 #include "hphp/runtime/vm/vm-regs.h"
@@ -65,6 +66,13 @@ ARRAY_OPS
 #undef X
   }
   not_reached();
+}
+
+// SrcKey includes more information than just the (Func, Offset) pair,
+// but we want all our logging to be grouped by these two fields alone.
+SrcKey canonicalize(SrcKey sk) {
+  assertx(sk.valid());
+  return SrcKey(sk.func(), sk.offset(), ResumeMode::None);
 }
 
 }
@@ -209,20 +217,21 @@ double LoggingProfile::getProfileWeight() const {
   return getTotalEvents() * getSampleCountMultiplier();
 }
 
-void LoggingProfile::logReach(TransID transId, SrcKey sk) {
+void LoggingProfile::logReach(TransID transId, SrcKey skRaw) {
   // Hold the read mutex for the duration of the mutation so that export cannot
   // begin until the mutation is complete.
   folly::SharedMutex::ReadHolder lock{s_exportStartedLock};
   if (s_exportStarted.load(std::memory_order_relaxed)) return;
 
   ReachMap::accessor it;
+  auto const sk = canonicalize(skRaw);
   if (reachedUsageSites.insert(it, {transId, sk})) {
     it->second = 1;
   } else {
     it->second++;
   }
-  FTRACE(6, "{} reached tracelet {}, srckey {} [count={}]\n", source.getSymbol(),
-         transId, showShort(sk), it->second);
+  FTRACE(6, "{} reached tracelet {}, srckey {} [count={}]\n",
+         source.getSymbol(), transId, showShort(sk), it->second);
 }
 
 void LoggingProfile::logEvent(ArrayOp op) {
@@ -649,7 +658,37 @@ void waitOnExportProfiles() {
 
 //////////////////////////////////////////////////////////////////////////////
 
-LoggingProfile* getLoggingProfile(SrcKey sk, ArrayData* ad) {
+namespace {
+void freeStaticArray(ArrayData* ad) {
+  assertx(ad->isStatic());
+  auto const alloc = ad->hasStrKeyTable()
+    ? reinterpret_cast<char*>(ad->mutableStrKeyTable())
+    : reinterpret_cast<char*>(ad);
+ RO::EvalLowStaticArrays ? low_free(alloc) : uncounted_free(alloc);
+}
+
+bool shouldLogAtSrcKey(SrcKey sk) {
+  if (!sk.valid()) {
+    FTRACE(5, "VMRegAnchor failed for maybeMakeLoggingArray.\n");
+    return false;
+  }
+
+  // Don't profile static arrays used for TypeStruct tests. Rather than using
+  // these arrays, we almost always just do a DataType check on the value.
+  if ((sk.op() == Op::Array || sk.op() == Op::Dict) &&
+      sk.advanced().op() == Op::IsTypeStructC) {
+    FTRACE(5, "Skipping static array used for TypeStruct test.\n");
+    return false;
+  }
+
+  return true;
+}
+}
+
+LoggingProfile* getLoggingProfile(SrcKey skRaw) {
+  if (!shouldLogAtSrcKey(skRaw)) return nullptr;
+
+  auto const sk = canonicalize(skRaw);
   {
     ProfileMap::const_accessor it;
     if (s_profileMap.find(it, sk)) return it->second;
@@ -660,18 +699,44 @@ LoggingProfile* getLoggingProfile(SrcKey sk, ArrayData* ad) {
   folly::SharedMutex::ReadHolder lock{s_exportStartedLock};
   if (s_exportStarted.load(std::memory_order_relaxed)) return nullptr;
 
-  auto prof = std::make_unique<LoggingProfile>(sk);
-  if (ad) prof->staticArray = LoggingArray::MakeStatic(ad, prof.get());
+  auto const ad = [&]() -> ArrayData* {
+    auto const op = sk.op();
+    if (op != Op::Array && op != Op::Vec &&
+        op != Op::Dict && op != Op::Keyset) {
+      return nullptr;
+    }
+    auto const unit = sk.func()->unit();
+    auto const result = unit->lookupArrayId(getImm(sk.pc(), 0).u_AA);
+    return const_cast<ArrayData*>(result);
+  }();
 
-  ProfileMap::accessor insert;
-  if (s_profileMap.insert(insert, sk)) {
-    insert->second = prof.release();
-    MemoryStats::LogAlloc(AllocKind::StaticArray, sizeof(LoggingArray));
-  } else if (ad) {
-    LoggingArray::FreeStatic(prof->staticArray);
+  auto profile = std::make_unique<LoggingProfile>(sk);
+  if (ad) {
+    profile->staticLoggingArray = LoggingArray::MakeStatic(ad, profile.get());
+    profile->staticSampledArray = ad->makeSampledStaticArray();
   }
 
-  return insert->second;
+  auto const result = [&]{
+    ProfileMap::accessor insert;
+    if (s_profileMap.insert(insert, sk)) {
+      insert->second = profile.release();
+    }
+    return insert->second;
+  }();
+
+  if (ad) {
+    if (profile) {
+      // We lost the race to set profile. Free the static arrays we allocated.
+      // We do so in reverse order in case we're using a static bump allocator.
+      freeStaticArray(profile->staticSampledArray);
+      freeStaticArray(profile->staticLoggingArray);
+    } else {
+      // We won the race to set profile, so we log the new static allocations.
+      MemoryStats::LogAlloc(AllocKind::StaticArray, sizeof(LoggingArray));
+      MemoryStats::LogAlloc(AllocKind::StaticArray, allocSize(ad));
+    }
+  }
+  return result;
 }
 
 SrcKey getSrcKey() {
@@ -685,7 +750,10 @@ SrcKey getSrcKey() {
   auto const fp = vmfp();
   auto const func = fp->func();
   if (!func->contains(vmpc())) return SrcKey();
-  return SrcKey(func, vmpc(), resumeModeFromActRec(fp));
+
+  auto const result = SrcKey(func, vmpc(), ResumeMode::None);
+  assertx(canonicalize(result) == result);
+  return result;
 }
 
 //////////////////////////////////////////////////////////////////////////////

@@ -19,7 +19,6 @@
 
 #include "hphp/runtime/base/array-data-defs.h"
 #include "hphp/runtime/base/bespoke-array.h"
-#include "hphp/runtime/base/bespoke/logging-profile.h"
 #include "hphp/runtime/base/memory-manager.h"
 #include "hphp/runtime/base/memory-manager-defs.h"
 #include "hphp/runtime/base/mixed-array-defs.h"
@@ -167,9 +166,10 @@ ssize_t EmptyMonotypeDict::IterRewind(const Self* ad, ssize_t prev) {
 
 namespace {
 template <typename Key>
-ArrayData* makeStrMonotypeDict(HeaderKind kind, StringData* k, TypedValue v) {
+ArrayData* makeStrMonotypeDict(
+    HeaderKind kind, bool legacy, StringData* k, TypedValue v) {
   auto const dt = dt_modulo_persistence(type(v));
-  auto const mad = MonotypeDict<Key>::MakeReserve(kind, 1, dt);
+  auto const mad = MonotypeDict<Key>::MakeReserve(kind, legacy, 1, dt);
   auto const result = MonotypeDict<Key>::SetStr(mad, k, v);
   assertx(result == mad);
   return result;
@@ -195,14 +195,27 @@ tv_lval EmptyMonotypeDict::ElemStr(
 
 ArrayData* EmptyMonotypeDict::SetInt(Self* ad, int64_t k, TypedValue v) {
   auto const dt = dt_modulo_persistence(type(v));
-  auto const mad = MonotypeDict<int64_t>::MakeReserve(ad->m_kind, 1, dt);
+  auto const mad = MonotypeDict<int64_t>::MakeReserve(
+      ad->m_kind, ad->isLegacyArray(), 1, dt);
   auto const result = MonotypeDict<int64_t>::SetInt(mad, k, v);
   assertx(result == mad);
   return result;
 }
+ArrayData* EmptyMonotypeDict::SetIntMove(Self* ad, int64_t k, TypedValue v) {
+  auto const mad = SetInt(ad, k, v);
+  tvDecRefGen(v);
+  return mad;
+}
 ArrayData* EmptyMonotypeDict::SetStr(Self* ad, StringData* k, TypedValue v) {
-  return k->isStatic() ? makeStrMonotypeDict<LowStringPtr>(ad->m_kind, k, v)
-                       : makeStrMonotypeDict<StringData*>(ad->m_kind, k, v);
+  auto const legacy = ad->isLegacyArray();
+  return k->isStatic()
+    ? makeStrMonotypeDict<LowStringPtr>(ad->m_kind, legacy, k, v)
+    : makeStrMonotypeDict<StringData*>(ad->m_kind, legacy, k, v);
+}
+ArrayData* EmptyMonotypeDict::SetStrMove(Self* ad, StringData* k, TypedValue v) {
+  auto const mad = SetStr(ad, k, v);
+  tvDecRefGen(v);
+  return mad;
 }
 ArrayData* EmptyMonotypeDict::RemoveInt(Self* ad, int64_t k) {
   return ad;
@@ -213,6 +226,9 @@ ArrayData* EmptyMonotypeDict::RemoveStr(Self* ad, const StringData* k) {
 
 ArrayData* EmptyMonotypeDict::Append(Self* ad, TypedValue v) {
   return SetInt(ad, 0, v);
+}
+ArrayData* EmptyMonotypeDict::AppendMove(Self* ad, TypedValue v) {
+  return SetIntMove(ad, 0, v);
 }
 ArrayData* EmptyMonotypeDict::Pop(Self* ad, Variant& ret) {
   ret = uninit_null();
@@ -226,6 +242,12 @@ ArrayData* EmptyMonotypeDict::ToDVArray(Self* ad, bool copy) {
 }
 ArrayData* EmptyMonotypeDict::ToHackArr(Self* ad, bool copy) {
   return GetDict(false);
+}
+ArrayData* EmptyMonotypeDict::PreSort(Self* ead, SortFunction sf) {
+  always_assert(false);
+}
+ArrayData* EmptyMonotypeDict::PostSort(Self* ead, ArrayData* vad) {
+  always_assert(false);
 }
 ArrayData* EmptyMonotypeDict::SetLegacyArray(Self* ad, bool copy, bool legacy) {
   return ad->isDArray() ? GetDArray(legacy) : GetDict(legacy);
@@ -359,12 +381,13 @@ uint8_t MonotypeDict<Key>::ComputeSizeIndex(size_t size) {
 
 template <typename Key>
 MonotypeDict<Key>* MonotypeDict<Key>::MakeReserve(
-    HeaderKind kind, size_t size, DataType dt) {
+    HeaderKind kind, bool legacy, size_t size, DataType dt) {
   auto const index = ComputeSizeIndex(size);
   auto const mem = tl_heap->objMallocIndex(index);
   auto const ad = reinterpret_cast<MonotypeDict<Key>*>(mem);
 
-  auto const aux = packSizeIndexAndAuxBits(index, 0);
+  auto const aux = packSizeIndexAndAuxBits(
+      index, legacy ? ArrayData::kLegacyArray : 0);
   ad->initHeader_16(kind, OneReference, aux);
   ad->setLayoutIndex(getLayoutIndex<Key>(dt));
   ad->m_extra_lo16 = 0;
@@ -382,10 +405,9 @@ MonotypeDict<Key>* MonotypeDict<Key>::MakeFromVanilla(
   assertx(ad->hasVanillaMixedLayout());
   auto const kind = ad->isDArray() ? HeaderKind::BespokeDArray
                                    : HeaderKind::BespokeDict;
-  auto result = MakeReserve(kind, ad->size(), dt);
-  result->setLegacyArrayInPlace(ad->isLegacyArray());
+  auto result = MakeReserve(kind, ad->isLegacyArray(), ad->size(), dt);
 
-  IterateKVNoInc(ad, [&](auto k, auto v) {
+  MixedArray::IterateKV(MixedArray::asMixed(ad), [&](auto k, auto v) {
     auto const next = tvIsString(k) ? SetStr(result, val(k).pstr, v)
                                     : SetInt(result, val(k).num, v);
     assertx(result == next);
@@ -511,7 +533,7 @@ ArrayData* MonotypeDict<Key>::removeImpl(Key key) {
 
   auto const mad = cowCheck() ? copy() : this;
   auto& index = mad->indices()[hash_pos];
-  auto const elm = mad->elmAtIndex(mad->indices()[hash_pos]);
+  auto const elm = mad->elmAtIndex(index);
   assertx(keysEqual(elm->key, key));
 
   decRefKey(elm->key);
@@ -521,12 +543,26 @@ ArrayData* MonotypeDict<Key>::removeImpl(Key key) {
   mad->m_size--;
   return mad;
 }
+template <typename Key>
+arr_lval MonotypeDict<Key>::lvalDispatch(int64_t k) {
+  return LvalInt(this, k);
+}
+
+template <typename Key>
+arr_lval MonotypeDict<Key>::lvalDispatch(StringData* k) {
+  return LvalStr(this, k);
+}
 
 template <typename Key> template <typename K>
 arr_lval MonotypeDict<Key>::elemImpl(Key key, K k, bool throwOnMissing) {
   if (key == getTombstone<Key>()) {
     if (throwOnMissing) throwOOBArrayKeyException(k, this);
     return {this, const_cast<TypedValue*>(&immutable_null_base)};
+  }
+  if (type() == KindOfClsMeth) {
+    // If we have a ClsMeth, we need to return a proper lval, so we escalate to
+    // vanilla.
+    return lvalDispatch(k);
   }
   auto const old = findForGet(key, getHash(key));
   if (old == nullptr) {
@@ -544,16 +580,22 @@ arr_lval MonotypeDict<Key>::elemImpl(Key key, K k, bool throwOnMissing) {
   return arr_lval{mad, type_ptr, const_cast<Value*>(&elm->val)};
 }
 
-template <typename Key> template <typename K>
+template <typename Key> template <bool Move, typename K>
 ArrayData* MonotypeDict<Key>::setImpl(Key key, K k, TypedValue v) {
   if (key == getTombstone<Key>() || used() == kMaxNumElms ||
       dt_modulo_persistence(v.type()) != type()) {
     auto const ad = escalateWithCapacity(size() + 1);
     auto const result = ad->set(k, v);
     assertx(ad == result);
+    if constexpr (Move) {
+      if (decReleaseCheck()) Release(this);
+      tvDecRefGen(v);
+    }
     return result;
   }
-  tvIncRefGen(v);
+  if constexpr (!Move) {
+    tvIncRefGen(v);
+  }
   auto const result = prepareForInsert();
   auto const update = result->template find<Update>(key, getHash(key));
   if (update.elm != nullptr) {
@@ -565,6 +607,9 @@ ArrayData* MonotypeDict<Key>::setImpl(Key key, K k, TypedValue v) {
     *result->elmAtIndex(*update.index) = { key, v.val() };
     result->m_extra_lo16++;
     result->m_size++;
+  }
+  if constexpr (Move) {
+    if (result != this && decReleaseCheck()) Release(this);
   }
   return result;
 }
@@ -676,7 +721,7 @@ void MonotypeDict<Key>::copyHash(const Self* other) {
 
 template <typename Key>
 void MonotypeDict<Key>::initHash() {
-  static_assert(kEmptyIndex == -1);
+  static_assert(kEmptyIndex == Index(-1));
   static_assert(kMinNumIndices * sizeof(Index) % 16 == 0);
   assertx(uintptr_t(indices()) % 16 == 0);
 
@@ -745,14 +790,21 @@ MonotypeDict<Key>* MonotypeDict<Key>::resize(uint8_t index, bool copy) {
 template <typename Key>
 ArrayData* MonotypeDict<Key>::escalateWithCapacity(size_t capacity) const {
   assertx(capacity >= size());
-  auto ad = isDictType() ? MixedArray::MakeReserveDict(capacity)
-                         : MixedArray::MakeReserveDArray(capacity);
+  auto const space = capacity - size() + used();
+  auto ad = isDictType() ? MixedArray::MakeReserveDict(space)
+                         : MixedArray::MakeReserveDArray(space);
   ad->setLegacyArrayInPlace(isLegacyArray());
 
   auto const dt = type();
-  forEachElm([&](auto i, auto elm) {
+  for (auto elm = elms(), end = elm + used(); elm < end; elm++) {
+    // To support local iteration (where the base is not const), iterator
+    // indices must match between this array and its vanilla counterpart.
+    if (elm->key == getTombstone<Key>()) {
+      MixedArray::AppendTombstoneInPlace(ad);
+      continue;
+    }
+
     auto const tv = TypedValue { elm->val, dt };
-    tvIncRefGen(tv);
     auto const result = [&]{
       if constexpr (std::is_same<Key, int64_t>::value) {
         return MixedArray::SetInt(ad, elm->key, tv);
@@ -766,7 +818,10 @@ ArrayData* MonotypeDict<Key>::escalateWithCapacity(size_t capacity) const {
     }();
     assertx(ad == result);
     ad = result;
-  });
+  }
+
+  assertx(ad->size() == size());
+  assertx(ad->iter_end() == iter_end());
 
   return ad;
 }
@@ -872,8 +927,9 @@ void MonotypeDict<Key>::ConvertToUncounted(
   mad->forEachElm([&](auto i, auto elm) {
     auto const elm_mut = const_cast<Elm*>(elm);
     if constexpr (std::is_same<Key, StringData*>::value) {
-      auto dt_mut = KindOfString;
-      ConvertTvToUncounted(tv_lval(&dt_mut, &elm_mut->val), seen);
+      auto tv = make_tv<KindOfString>(elm_mut->key);
+      ConvertTvToUncounted(&tv, seen);
+      elm_mut->key = val(tv).pstr;
     }
     auto dt_mut = dt;
     ConvertTvToUncounted(tv_lval(&dt_mut, &elm_mut->val), seen);
@@ -1038,12 +1094,22 @@ tv_lval MonotypeDict<Key>::ElemStr(
 
 template <typename Key>
 ArrayData* MonotypeDict<Key>::SetInt(Self* mad, int64_t k, TypedValue v) {
-  return mad->setImpl(coerceKey<Key>(k), k, v);
+  return mad->setImpl<false>(coerceKey<Key>(k), k, v);
+}
+
+template <typename Key>
+ArrayData* MonotypeDict<Key>::SetIntMove(Self* mad, int64_t k, TypedValue v) {
+  return mad->setImpl<true>(coerceKey<Key>(k), k, v);
 }
 
 template <typename Key>
 ArrayData* MonotypeDict<Key>::SetStr(Self* mad, StringData* k, TypedValue v) {
-  return mad->setImpl(coerceKey<Key>(k), k, v);
+  return mad->setImpl<false>(coerceKey<Key>(k), k, v);
+}
+
+template <typename Key>
+ArrayData* MonotypeDict<Key>::SetStrMove(Self* mad, StringData* k, TypedValue v) {
+  return mad->setImpl<true>(coerceKey<Key>(k), k, v);
 }
 
 template <typename Key>
@@ -1056,17 +1122,32 @@ ArrayData* MonotypeDict<Key>::RemoveStr(Self* mad, const StringData* k) {
   return mad->removeImpl(coerceKey<Key>(k));
 }
 
-template <typename Key>
-ArrayData* MonotypeDict<Key>::Append(Self* mad, TypedValue v) {
+template <typename Key> template <bool Move>
+ArrayData* MonotypeDict<Key>::appendImpl(TypedValue v) {
   auto nextKI = int64_t{0};
   if constexpr (std::is_same<Key, int64_t>::value) {
-    mad->forEachElm([&](auto i, auto elm) {
+    forEachElm([&](auto i, auto elm) {
       if (elm->key >= nextKI && nextKI >= 0) {
         nextKI = static_cast<uint64_t>(elm->key) + 1;
       }
     });
   }
-  return nextKI < 0 ? mad : SetInt(mad, nextKI, v);
+  if (UNLIKELY(nextKI < 0)) {
+    raise_warning("Cannot add element to the array as the next element is "
+                  "already occupied");
+    return this;
+  }
+  return Move ? SetIntMove(this, nextKI, v) : SetInt(this, nextKI, v);
+}
+
+template <typename Key>
+ArrayData* MonotypeDict<Key>::Append(Self* mad, TypedValue v) {
+  return mad->appendImpl<false>(v);
+}
+
+template <typename Key>
+ArrayData* MonotypeDict<Key>::AppendMove(Self* mad, TypedValue v) {
+  return mad->appendImpl<true>(v);
 }
 
 template <typename Key>
@@ -1099,6 +1180,36 @@ ArrayData* MonotypeDict<Key>::ToHackArr(Self* madIn, bool copy) {
   mad->setLegacyArrayInPlace(false);
   assertx(mad->checkInvariants());
   return mad;
+}
+
+template <typename Key>
+ArrayData* MonotypeDict<Key>::PreSort(Self* mad, SortFunction sf) {
+  return mad->escalateWithCapacity(mad->size());
+}
+
+// Some sort types can change the keys of a dict or darray.
+namespace {
+ArrayData* MonotypeDictPostSort(MixedArray* mad, DataType dt) {
+  auto const keys = mad->keyTypes();
+  auto const result = [&]() -> ArrayData* {
+    if (keys.mustBeStaticStrs()) {
+      return MonotypeDict<LowStringPtr>::MakeFromVanilla(mad, dt);
+    } else if (keys.mustBeStrs()) {
+      return MonotypeDict<StringData*>::MakeFromVanilla(mad, dt);
+    } else if (keys.mustBeInts()) {
+      return MonotypeDict<int64_t>::MakeFromVanilla(mad, dt);
+    }
+    return nullptr;
+  }();
+  if (!result) return mad;
+  MixedArray::Release(mad);
+  return result;
+}
+}
+
+template <typename Key>
+ArrayData* MonotypeDict<Key>::PostSort(Self* mad, ArrayData* vad) {
+  return MonotypeDictPostSort(MixedArray::asMixed(vad), mad->type());
 }
 
 template <typename Key>

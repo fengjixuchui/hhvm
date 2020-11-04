@@ -102,35 +102,77 @@ void cgCheckVecBoundsLA(IRLS& env, const IRInstruction* inst) {
 
 namespace {
 
-ArrayData* setLegacyHelper(ArrayData* ad, bool legacy) {
-  auto const result = ad->setLegacyArray(ad->cowCheck(), legacy);
-  if (result != ad) decRefArr(ad);
-  return result;
+static ArrayData* markLegacyShallowHelper(ArrayData* ad, bool legacy) {
+  auto const tv = make_array_like_tv(ad);
+  auto const result = arrprov::markTvShallow(tv, legacy);
+  decRefArr(ad);
+  assertx(tvIsArrayLike(result));
+  return val(result).parr;
 }
 
-void setLegacyImpl(IRLS& env, const IRInstruction* inst, bool set) {
-  auto const args = argGroup(env, inst).ssa(0).imm(set);
-  auto const target = CallSpec::direct(setLegacyHelper);
+static ArrayData* markLegacyRecursiveHelper(ArrayData* ad, bool legacy) {
+  auto const tv = make_array_like_tv(ad);
+  auto const result = arrprov::markTvRecursively(tv, legacy);
+  decRefArr(ad);
+  assertx(tvIsArrayLike(result));
+  return val(result).parr;
+}
+
+static ArrayData* tagProvenanceHelper(ArrayData* ad, int64_t flags) {
+  auto const tv = make_array_like_tv(ad);
+  auto const result = arrprov::tagTvRecursively(tv, flags);
+  decRefArr(ad);
+  assertx(tvIsArrayLike(result));
+  return val(result).parr;
+}
+
+void markLegacyShallow(IRLS& env, const IRInstruction* inst, bool legacy) {
+  auto const args = argGroup(env, inst).ssa(0).imm(legacy);
+  auto const target = CallSpec::direct(markLegacyShallowHelper);
   cgCallHelper(vmain(env), env, target, callDest(env, inst),
-               SyncOptions::None, args);
+               SyncOptions::Sync, args);
+}
+
+void markLegacyRecursive(IRLS& env, const IRInstruction* inst, bool legacy) {
+  auto const args = argGroup(env, inst).ssa(0).imm(legacy);
+  auto const target = CallSpec::direct(markLegacyRecursiveHelper);
+  cgCallHelper(vmain(env), env, target, callDest(env, inst),
+               SyncOptions::Sync, args);
 }
 
 }
 
-void cgSetLegacyVec(IRLS& env, const IRInstruction* inst) {
-  setLegacyImpl(env, inst, true);
+void cgArrayMarkLegacyShallow(IRLS& env, const IRInstruction* inst) {
+  markLegacyShallow(env, inst, true);
 }
 
-void cgSetLegacyDict(IRLS& env, const IRInstruction* inst) {
-  setLegacyImpl(env, inst, true);
+void cgArrayMarkLegacyRecursive(IRLS& env, const IRInstruction* inst) {
+  markLegacyRecursive(env, inst, true);
 }
 
-void cgUnsetLegacyVec(IRLS& env, const IRInstruction* inst) {
-  setLegacyImpl(env, inst, false);
+void cgArrayUnmarkLegacyShallow(IRLS& env, const IRInstruction* inst) {
+  markLegacyShallow(env, inst, false);
 }
 
-void cgUnsetLegacyDict(IRLS& env, const IRInstruction* inst) {
-  setLegacyImpl(env, inst, false);
+void cgArrayUnmarkLegacyRecursive(IRLS& env, const IRInstruction* inst) {
+  markLegacyRecursive(env, inst, false);
+}
+
+void cgTagProvenanceHere(IRLS& env, const IRInstruction* inst) {
+  auto const args = argGroup(env, inst).ssa(0).ssa(1);
+  auto const target = CallSpec::direct(tagProvenanceHelper);
+  cgCallHelper(vmain(env), env, target, callDest(env, inst),
+               SyncOptions::Sync, args);
+}
+
+void cgIsLegacyArrLike(IRLS& env, const IRInstruction* inst) {
+  auto const arr = srcLoc(env, inst, 0).reg();
+  auto const dst = dstLoc(env, inst, 0).reg();
+  auto& v = vmain(env);
+
+  auto const sf = v.makeReg();
+  v << testbim{ArrayData::kLegacyArray, arr[HeaderAuxOffset], sf};
+  v << cmovb{CC_E, sf, v.cns(1), v.cns(0), dst};
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -221,20 +263,6 @@ void cgAKExistsObj(IRLS& env, const IRInstruction* inst) {
 
 ///////////////////////////////////////////////////////////////////////////////
 // Array creation.
-
-void cgNewLoggingArray(IRLS& env, const IRInstruction* inst) {
-  auto const target = [&] {
-    if (shouldTestBespokeArrayLikes()) {
-      return CallSpec::direct(
-        static_cast<ArrayData*(*)(ArrayData*)>(bespoke::makeBespokeForTesting));
-    } else {
-      return CallSpec::direct(
-        static_cast<ArrayData*(*)(ArrayData*)>(bespoke::maybeMakeLoggingArray));
-    }
-  }();
-  cgCallHelper(vmain(env), env, target, callDest(env, inst),
-               SyncOptions::Sync, argGroup(env, inst).ssa(0));
-}
 
 namespace {
 
@@ -526,24 +554,6 @@ void newRecordImpl(IRLS& env, const IRInstruction* inst, Fn creatorFn) {
 
 void cgNewRecord(IRLS& env, const IRInstruction* inst) {
   newRecordImpl(env, inst, RecordData::newRecord);
-}
-
-namespace {
-void arrayReach(ArrayData* ad, TransID transId, uint64_t sk) {
-  if (LIKELY(ad->isVanilla())) return;
-  BespokeArray::asBespoke(ad)->logReachEvent(transId, SrcKey(sk));
-}
-}
-
-void cgLogArrayReach(IRLS& env, const IRInstruction* inst) {
-  auto data = inst->extra<LogArrayReach>();
-
-  auto& v = vmain(env);
-  auto const args = argGroup(env, inst)
-    .ssa(0).imm(data->transId).imm(data->sk.toAtomicInt());
-
-  auto const target = CallSpec::direct(arrayReach);
-  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
 }
 
 ///////////////////////////////////////////////////////////////////////////////

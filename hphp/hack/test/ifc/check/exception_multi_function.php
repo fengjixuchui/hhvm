@@ -2,23 +2,26 @@
 // Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 
 class C {
-  <<Policied("A")>>
+  <<__Policied("A")>>
   public int $a = 0;
 
-  <<Policied("B")>>
+  <<__Policied("B")>>
   public int $b = 0;
 }
 
+<<__InferFlows>>
 function f(C $x, Exception $e): void {
   if ($x->a > 0) {
     throw $e;
   }
 }
 
+<<__InferFlows>>
 function f2(C $x, Exception $e): void {
   f($x, $e);
 }
 
+<<__InferFlows>>
 function g(C $x, Exception $e): void {
   try {
     // f() may throw depending on the the value A
@@ -29,6 +32,7 @@ function g(C $x, Exception $e): void {
   }
 }
 
+<<__InferFlows>>
 function g2(C $x, Exception $e): void {
   try {
     // f2() may throw depending on the the value A

@@ -35,16 +35,15 @@ namespace irgen { struct IRGS; }
 
 } // namespace jit
 
-namespace bespoke { struct Layout; }
+namespace bespoke { struct Layout; struct ConcreteLayout; }
 
 /*
  * Identifies information about a bespoke layout necessary to JIT code handling
  * arrays of that layout
  */
 struct BespokeLayout {
-  explicit BespokeLayout(const bespoke::Layout* layout) : m_layout(layout) {
-    assertx(layout);
-  }
+  explicit BespokeLayout(const bespoke::Layout* layout);
+  explicit BespokeLayout(const bespoke::ConcreteLayout* layout);
 
   bool operator==(const BespokeLayout& o) const {
     return o.m_layout == m_layout;
@@ -79,6 +78,13 @@ struct BespokeLayout {
   SSATmp* emitElem(IRGS& env, SSATmp* arr, SSATmp* key, bool throwOnMissing) const;
   SSATmp* emitSet(IRGS& env, SSATmp* arr, SSATmp* key, SSATmp* val) const;
   SSATmp* emitAppend(IRGS& env, SSATmp* arr, SSATmp* val) const;
+  SSATmp* emitEscalateToVanilla(IRGS& env, SSATmp* arr, const char* reason) const;
+  SSATmp* emitIterFirstPos(IRGS& env, SSATmp* arr) const;
+  SSATmp* emitIterLastPos(IRGS& env, SSATmp* arr) const;
+  SSATmp* emitIterPos(IRGS& env, SSATmp* arr, SSATmp* idx) const;
+  SSATmp* emitIterElm(IRGS& env, SSATmp* arr, SSATmp* pos) const;
+  SSATmp* emitIterGetKey(IRGS& env, SSATmp* arr, SSATmp* elm) const;
+  SSATmp* emitIterGetVal(IRGS& env, SSATmp* arr, SSATmp* elm) const;
 
 private:
   const bespoke::Layout* m_layout{nullptr};

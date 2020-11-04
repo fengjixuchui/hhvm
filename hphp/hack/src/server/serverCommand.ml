@@ -119,7 +119,7 @@ let commands_needs_writes = function
   | Rpc (_metadata, x) -> rpc_command_needs_writes x
   | _ -> false
 
-let full_recheck_if_needed' genv env reason =
+let full_recheck_if_needed' genv env reason profiling =
   if
     ServerEnv.(is_full_check_done env.full_check)
     && Relative_path.Set.is_empty env.ServerEnv.ide_needs_parsing
@@ -130,7 +130,7 @@ let full_recheck_if_needed' genv env reason =
     let start_time = Unix.gettimeofday () in
     let env = { env with ServerEnv.can_interrupt = false } in
     let (env, _res, _telemetry) =
-      ServerTypeCheck.(type_check genv env Full_check start_time)
+      ServerTypeCheck.(type_check genv env Full_check start_time profiling)
     in
     let env = { env with ServerEnv.can_interrupt = true } in
     assert (ServerEnv.(is_full_check_done env.full_check));
@@ -162,11 +162,14 @@ let full_recheck_if_needed genv env msg =
   if ignore_ide msg then
     let (ide, disk) = get_unsaved_changes env in
     let env = apply_changes env disk in
-    let env =
-      full_recheck_if_needed'
-        genv
-        { env with ServerEnv.remote = force_remote msg }
-        (reason msg)
+    let (_, env) =
+      CgroupProfiler.profile_memory
+        ~event:"full recheck"
+        ~f:
+          (full_recheck_if_needed'
+             genv
+             { env with ServerEnv.remote = force_remote msg }
+             (reason msg))
     in
     apply_changes env ide
   else
@@ -179,17 +182,18 @@ let full_recheck_if_needed genv env msg =
 (* Only grant access to dependency table to commands that declared that they
  * need full check - without full check, there are no guarantees about
  * dependency table being up to date. *)
-let with_dependency_table_reads full_recheck_needed f =
+let with_dependency_table_reads mode full_recheck_needed f =
   let deptable_unlocked =
     if full_recheck_needed then
-      Some (Typing_deps.allow_dependency_table_reads true)
+      Some (Typing_deps.allow_dependency_table_reads mode true)
     else
       None
   in
   try_finally ~f ~finally:(fun () ->
       Option.iter deptable_unlocked ~f:(fun deptable_unlocked ->
           ignore
-            (Typing_deps.allow_dependency_table_reads deptable_unlocked : bool)))
+            ( Typing_deps.allow_dependency_table_reads mode deptable_unlocked
+              : bool )))
 
 (* Given a set of declaration names, put them in shared memory. We do it here, because
  * declarations computed while handling IDE commands will likely be useful for subsequent IDE
@@ -256,7 +260,8 @@ let with_decl_tracking f =
  * available, when current recheck is cancelled... *)
 let actually_handle genv client msg full_recheck_needed ~is_stale env =
   Hh_logger.debug "SeverCommand.actually_handle preamble";
-  with_dependency_table_reads full_recheck_needed @@ fun () ->
+  with_dependency_table_reads env.ServerEnv.deps_mode full_recheck_needed
+  @@ fun () ->
   Errors.ignore_ @@ fun () ->
   assert (
     (not full_recheck_needed) || ServerEnv.(is_full_check_done env.full_check)

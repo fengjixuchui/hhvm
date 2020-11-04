@@ -257,7 +257,7 @@ void OfflineTransData::findFuncTrans(uint32_t selectedFuncId,
   for (uint32_t tid = 0; tid < nTranslations; tid++) {
     if (!translations[tid].isValid() ||
         translations[tid].kind == TransKind::Anchor ||
-        translations[tid].src.funcID() != selectedFuncId) continue;
+        translations[tid].src.funcID().toInt() != selectedFuncId) continue;
     inodes->push_back(tid);
   }
 }
@@ -312,7 +312,7 @@ void OfflineTransData::printTransRec(TransID transId,
     tRec->funcName,
     static_cast<int32_t>(tRec->src.resumeMode()),
     tRec->src.prologue(),
-    tRec->src.offset(),
+    tRec->src.printableOffset(),
     tRec->guards.size());
 
   for (auto& guard : tRec->guards) {

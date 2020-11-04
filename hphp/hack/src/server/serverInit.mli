@@ -52,4 +52,5 @@ val init :
   init_approach:init_approach ->
   ServerEnv.genv ->
   ServerEnv.env ->
-  ServerEnv.env * (* If the script failed, the error message *) init_result
+  CgroupProfiler.Profiling.t
+  * (ServerEnv.env * (* If the script failed, the error message *) init_result)

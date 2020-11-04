@@ -137,27 +137,27 @@ SharedMemoCacheSetter sharedMemoCacheSetForKeyCount(size_t count);
  */
 struct GenericMemoId {
   GenericMemoId(FuncId funcId, uint32_t keyCount)
-    : funcId{funcId}
-    , keyCount{keyCount} {}
+    : m_s{funcId, keyCount}
+  {}
 
   using Param = uint64_t;
 
   explicit GenericMemoId(Param combined)
     : combined{combined} {}
 
-  FuncId getFuncId() const { return funcId; }
-  uint32_t getKeyCount() const { return keyCount; }
+  FuncId getFuncId() const { return m_s.funcId; }
+  uint32_t getKeyCount() const { return m_s.keyCount; }
 
   Param asParam() const { return combined; }
 
-  void setKeyCount(uint32_t c) { keyCount = c; }
+  void setKeyCount(uint32_t c) { m_s.keyCount = c; }
 
 private:
   union {
     struct {
       FuncId funcId;
       uint32_t keyCount;
-    };
+    } m_s;
     uint64_t combined;
   };
 };
@@ -187,7 +187,7 @@ inline SharedOnlyKey makeSharedOnlyKey(FuncId funcId) {
   // This is a pseudo-random permutation, so it can be used as both a hash and a
   // key (different FuncIds will never map to the same SharedOnlyKey).
   return folly::hash::twang_mix64(
-    (static_cast<uint64_t>(funcId) << 32) + funcId
+    (static_cast<uint64_t>(funcId.toInt()) << 32) + funcId.toInt()
   );
 }
 

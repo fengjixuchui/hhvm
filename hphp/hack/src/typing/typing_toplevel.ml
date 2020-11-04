@@ -336,7 +336,7 @@ let rec fun_def ctx f :
     (Tast.fun_def * Typing_inference_env.t_global_with_pos) option =
   Counters.count_typecheck @@ fun () ->
   Errors.run_with_span f.f_span @@ fun () ->
-  let env = EnvFromDef.fun_env ctx f in
+  let env = EnvFromDef.fun_env ~origin:Decl_counters.TopLevel ctx f in
   with_timeout env f.f_name ~do_:(fun env ->
       (* reset the expression dependent display ids for each function body *)
       Reason.expr_display_id_map := IMap.empty;
@@ -883,7 +883,7 @@ let class_type_param env ct =
 let rec class_def ctx c =
   Counters.count_typecheck @@ fun () ->
   Errors.run_with_span c.c_span @@ fun () ->
-  let env = EnvFromDef.class_env ctx c in
+  let env = EnvFromDef.class_env ~origin:Decl_counters.TopLevel ctx c in
   let tc = Env.get_class env (snd c.c_name) in
   let env = Env.set_env_pessimize env in
   Typing_helpers.add_decl_errors (Option.bind tc Cls.decl_errors);
@@ -1004,7 +1004,11 @@ and class_def_ env c tc =
       env
       (Cls.where_constraints tc)
   in
-  Typing_variance.class_ (Env.get_ctx env) (snd c.c_name) tc impl;
+  Typing_variance.class_
+    (Typing_variance.make_vgenv (Env.get_ctx env) (Env.get_file env))
+    (snd c.c_name)
+    tc
+    impl;
   let check_where_constraints env ht =
     let (_, (p, _), _) = TUtils.unwrap_class_type ht in
     let (env, locl_ty) = Phase.localize_with_self env ht in
@@ -1130,6 +1134,7 @@ and class_def_ env c tc =
       Aast.c_xhp_category = c.c_xhp_category;
       Aast.c_reqs = c.c_reqs;
       Aast.c_implements = c.c_implements;
+      Aast.c_implements_dynamic = c.c_implements_dynamic;
       Aast.c_where_constraints = c.c_where_constraints;
       Aast.c_consts = typed_consts;
       Aast.c_typeconsts = typed_typeconsts;
@@ -1659,7 +1664,7 @@ and class_var_def ~is_static cls env cv =
 let gconst_def ctx cst =
   Counters.count_typecheck @@ fun () ->
   Errors.run_with_span cst.cst_span @@ fun () ->
-  let env = EnvFromDef.gconst_env ctx cst in
+  let env = EnvFromDef.gconst_env ~origin:Decl_counters.TopLevel ctx cst in
   let env = Env.set_env_pessimize env in
   let (typed_cst_value, env) =
     let value = cst.cst_value in
@@ -1777,7 +1782,7 @@ let check_record_inheritance_cycle env ((rd_pos, rd_name) : Aast.sid) : unit =
 
 let record_def_def ctx rd =
   Counters.count_typecheck @@ fun () ->
-  let env = EnvFromDef.record_def_env ctx rd in
+  let env = EnvFromDef.record_def_env ~origin:Decl_counters.TopLevel ctx rd in
   (match rd.rd_extends with
   | Some parent -> record_def_parent env rd parent
   | None -> ());

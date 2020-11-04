@@ -1490,6 +1490,7 @@ bool FuncChecker::checkRxOp(State* cur, PC pc, Op op, bool pure) {
     case Op::CnsE:
     case Op::ClsCns:
     case Op::ClsCnsD:
+    case Op::ClsCnsL:
     case Op::File:
     case Op::Dir:
     case Op::Method:
@@ -1583,6 +1584,9 @@ bool FuncChecker::checkRxOp(State* cur, PC pc, Op op, bool pure) {
     case Op::AKExists:
     case Op::Idx:
     case Op::ArrayIdx:
+    case Op::ArrayMarkLegacy:
+    case Op::ArrayUnmarkLegacy:
+    case Op::TagProvenanceHere:
       return true;
 
     // this
@@ -1934,12 +1938,12 @@ bool FuncChecker::checkExnEdge(State cur, Op op, Block* b) {
 bool FuncChecker::checkBlock(State& cur, Block* b) {
   bool ok = true;
   auto const verify_rx = (RuntimeOption::EvalRxVerifyBody > 0) &&
-                         funcAttrIsAnyRx(m_func->attrs) &&
+                         funcAttrIsAnyRx(m_func->coeffectAttrs) &&
                          // defer this to next check
-                         !funcAttrIsPure(m_func->attrs) &&
+                         !funcAttrIsPure(m_func->coeffectAttrs) &&
                          !m_func->isRxDisabled;
   auto const verify_pure = (RuntimeOption::EvalPureVerifyBody > 0) &&
-                            funcAttrIsPure(m_func->attrs);
+                            funcAttrIsPure(m_func->coeffectAttrs);
   if (m_errmode == kVerbose) {
     std::cout << blockToString(b, m_graph, m_func) << std::endl;
   }

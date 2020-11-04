@@ -54,6 +54,7 @@
 #include "hphp/runtime/vm/jit/irgen-bespoke.h"
 #include "hphp/runtime/vm/jit/irgen-control.h"
 #include "hphp/runtime/vm/jit/irgen-exit.h"
+#include "hphp/runtime/vm/jit/irgen-internal.h"
 #include "hphp/runtime/vm/jit/irgen-interpone.h"
 #include "hphp/runtime/vm/jit/irgen.h"
 #include "hphp/runtime/vm/jit/normalized-instruction.h"
@@ -126,6 +127,7 @@ static const struct {
   { OpCnsE,        {None,             Stack1,       OutCns          }},
   { OpClsCns,      {Stack1,           Stack1,       OutUnknown      }},
   { OpClsCnsD,     {None,             Stack1,       OutUnknown      }},
+  { OpClsCnsL,     {Stack1|Local,     Stack1,       OutUnknown      }},
   { OpFile,        {None,             Stack1,       OutString       }},
   { OpDir,         {None,             Stack1,       OutString       }},
   { OpMethod,      {None,             Stack1,       OutString       }},
@@ -336,6 +338,9 @@ static const struct {
   { OpCreateCl,    {BStackN,          Stack1,       OutObject       }},
   { OpIdx,         {StackTop3,        Stack1,       OutUnknown      }},
   { OpArrayIdx,    {StackTop3,        Stack1,       OutUnknown      }},
+  { OpArrayMarkLegacy,   {StackTop2,  Stack1,       OutUnknown      }},
+  { OpArrayUnmarkLegacy, {StackTop2,  Stack1,       OutUnknown      }},
+  { OpTagProvenanceHere, {StackTop2,  Stack1,       OutUnknown      }},
   { OpCheckProp,   {None,             Stack1,       OutBoolean      }},
   { OpInitProp,    {Stack1,           None,         OutNone         }},
   { OpSilence,     {Local|DontGuardAny,
@@ -883,6 +888,9 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::Keyset:
   case Op::Vec:
   case Op::ArrayIdx:
+  case Op::ArrayMarkLegacy:
+  case Op::ArrayUnmarkLegacy:
+  case Op::TagProvenanceHere:
   case Op::BareThis:
   case Op::BitNot:
   case Op::CGetG:
@@ -1031,6 +1039,7 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::RetM:
   case Op::Select:
   case Op::LockObj:
+  case Op::ClsCnsL:
     return false;
 
   // These are instructions that are always interp-one'd, or are always no-ops.

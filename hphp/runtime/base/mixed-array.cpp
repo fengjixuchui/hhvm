@@ -471,10 +471,6 @@ MixedArray* MixedArray::CopyMixed(const MixedArray& other, AllocMode mode) {
   // work correctly, which assumes the position is the same in the original and
   // in the copy of the array, in case copying is needed.
 #ifdef USE_JEMALLOC
-  // Copy elements and hashes separately, because the array may not be very
-  // full.
-  assertx(reinterpret_cast<uintptr_t>(ad) % 16 == 0);
-  assertx(reinterpret_cast<uintptr_t>(&other) % 16 == 0);
   // Adding 24 bytes so that we can copy in 32-byte groups. This might
   // overwrite the hash table, but won't overrun the allocated space as long as
   // `malloc' returns multiple of 16 bytes.
@@ -1104,6 +1100,15 @@ arr_lval MixedArray::LvalSilentStr(ArrayData* ad, StringData* k) {
   if (UNLIKELY(!validPos(pos))) return arr_lval { a, nullptr };
   if (a->cowCheck()) a = a->copyMixed();
   return arr_lval { a, &a->data()[pos].data };
+}
+
+void MixedArray::AppendTombstoneInPlace(ArrayData* ad) {
+  auto a = asMixed(ad);
+  assertx(!a->isFull());
+  assertx(!a->cowCheck());
+  a->mutableKeyTypes()->recordTombstone();
+  a->data()[a->m_used].setTombstone();
+  a->m_used++;
 }
 
 ArrayData* MixedArray::SetInt(ArrayData* ad, int64_t k, TypedValue v) {

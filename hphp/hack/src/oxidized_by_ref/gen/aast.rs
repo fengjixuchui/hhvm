@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<2b2fedb77f0cfa5d8246f2a1f3cced66>>
+// @generated SignedSource<<c4709db09807a2621172f47ddcd18b23>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
@@ -137,7 +137,7 @@ pub use oxidized::aast::EnvAnnot;
 pub struct UsingStmt<'a, Ex, Fb, En, Hi> {
     pub is_block_scoped: bool,
     pub has_await: bool,
-    pub expr: &'a Expr<'a, Ex, Fb, En, Hi>,
+    pub exprs: (&'a Pos<'a>, &'a [&'a Expr<'a, Ex, Fb, En, Hi>]),
     pub block: &'a Block<'a, Ex, Fb, En, Hi>,
 }
 impl<'a, Ex: TrivialDrop, Fb: TrivialDrop, En: TrivialDrop, Hi: TrivialDrop> TrivialDrop
@@ -282,6 +282,29 @@ pub enum FunctionPtrId<'a, Ex, Fb, En, Hi> {
 }
 impl<'a, Ex: TrivialDrop, Fb: TrivialDrop, En: TrivialDrop, Hi: TrivialDrop> TrivialDrop
     for FunctionPtrId<'a, Ex, Fb, En, Hi>
+{
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub struct ExpressionTree<'a, Ex, Fb, En, Hi> {
+    pub hint: &'a Hint<'a>,
+    pub src_expr: &'a Expr<'a, Ex, Fb, En, Hi>,
+    pub desugared_expr: &'a Expr<'a, Ex, Fb, En, Hi>,
+}
+impl<'a, Ex: TrivialDrop, Fb: TrivialDrop, En: TrivialDrop, Hi: TrivialDrop> TrivialDrop
+    for ExpressionTree<'a, Ex, Fb, En, Hi>
 {
 }
 
@@ -435,13 +458,7 @@ pub enum Expr_<'a, Ex, Fb, En, Hi> {
     ),
     BracedExpr(&'a Expr<'a, Ex, Fb, En, Hi>),
     ParenthesizedExpr(&'a Expr<'a, Ex, Fb, En, Hi>),
-    ExpressionTree(
-        &'a (
-            &'a Hint<'a>,
-            &'a Expr<'a, Ex, Fb, En, Hi>,
-            Option<&'a Expr<'a, Ex, Fb, En, Hi>>,
-        ),
-    ),
+    ExpressionTree(&'a ExpressionTree<'a, Ex, Fb, En, Hi>),
     Lplaceholder(&'a Pos<'a>),
     FunId(&'a Sid<'a>),
     MethodId(&'a (&'a Expr<'a, Ex, Fb, En, Hi>, &'a Pstring<'a>)),
@@ -465,6 +482,7 @@ pub enum Expr_<'a, Ex, Fb, En, Hi> {
         ),
     ),
     ETSplice(&'a Expr<'a, Ex, Fb, En, Hi>),
+    EnumAtom(&'a str),
     Any,
 }
 impl<'a, Ex: TrivialDrop, Fb: TrivialDrop, En: TrivialDrop, Hi: TrivialDrop> TrivialDrop
@@ -944,6 +962,7 @@ pub struct Class_<'a, Ex, Fb, En, Hi> {
     pub xhp_category: Option<&'a (&'a Pos<'a>, &'a [&'a Pstring<'a>])>,
     pub reqs: &'a [(&'a ClassHint<'a>, &'a oxidized::aast::IsExtends)],
     pub implements: &'a [&'a ClassHint<'a>],
+    pub implements_dynamic: bool,
     pub where_constraints: &'a [&'a WhereConstraintHint<'a>],
     pub consts: &'a [&'a ClassConst<'a, Ex, Fb, En, Hi>],
     pub typeconsts: &'a [&'a ClassTypeconst<'a, Ex, Fb, En, Hi>],

@@ -1668,6 +1668,7 @@ fn print_istype_op<W: Write>(w: &mut W, op: &IstypeOp) -> Result<(), W::Error> {
         Op::OpDict => w.write("Dict"),
         Op::OpVec => w.write("Vec"),
         Op::OpArrLike => w.write("ArrLike"),
+        Op::OpLegacyArrLike => w.write("LegacyArrLike"),
         Op::OpVArray => w.write("VArray"),
         Op::OpDArray => w.write("DArray"),
         Op::OpClsMeth => w.write("ClsMeth"),
@@ -1820,6 +1821,9 @@ fn print_misc<W: Write>(w: &mut W, misc: &InstructMisc) -> Result<(), W::Error> 
         M::AKExists => w.write("AKExists"),
         M::Idx => w.write("Idx"),
         M::ArrayIdx => w.write("ArrayIdx"),
+        M::ArrayMarkLegacy => w.write("ArrayMarkLegacy"),
+        M::ArrayUnmarkLegacy => w.write("ArrayUnmarkLegacy"),
+        M::TagProvenanceHere => w.write("TagProvenanceHere"),
         M::BreakTraceHint => w.write("BreakTraceHint"),
         M::CGetCUNop => w.write("CGetCUNop"),
         M::UGetCUNop => w.write("UGetCUNop"),
@@ -2076,6 +2080,10 @@ fn print_lit_const<W: Write>(w: &mut W, lit: &InstructLitConst) -> Result<(), W:
             print_const_id(w, const_id)?;
             w.write(" ")?;
             print_class_id(w, cid)
+        }
+        LC::ClsCnsL(id) => {
+            w.write("ClsCnsL ")?;
+            print_local(w, id)
         }
         LC::NewCol(ct) => {
             w.write("NewCol ")?;

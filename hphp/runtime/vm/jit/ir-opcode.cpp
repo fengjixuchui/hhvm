@@ -53,8 +53,7 @@ TRACE_SET_MOD(hhir);
 #define DAllocObj      HasDest
 #define DVecElem       HasDest
 #define DDictElem      HasDest
-#define DDictSet       HasDest
-#define DVecSet        HasDest
+#define DModified(n)   HasDest
 #define DKeysetElem    HasDest
 #define DLvalToElemParam  HasDest
 #define DVecFirstElem     HasDest
@@ -83,6 +82,7 @@ TRACE_SET_MOD(hhir);
 #define DLvalOfPtr     HasDest
 #define DPtrIter       HasDest
 #define DPtrIterVal    HasDest
+#define DEscalateToVanilla HasDest
 
 namespace {
 template<Opcode op, uint64_t flags>
@@ -127,9 +127,8 @@ OpInfo g_opInfo[] = {
 #undef DLdObjCls
 #undef DVecElem
 #undef DDictElem
-#undef DDictSet
-#undef DVecSet
 #undef DKeysetElem
+#undef DEscalateToVanilla
 #undef DLvalToElemParam
 #undef DVecFirstElem
 #undef DVecLastElem
@@ -279,6 +278,10 @@ bool opcodeMayRaise(Opcode opc) {
   case AKExistsObj:
   case AllocObj:
   case AllocObjReified:
+  case ArrayMarkLegacyShallow:
+  case ArrayMarkLegacyRecursive:
+  case ArrayUnmarkLegacyShallow:
+  case ArrayUnmarkLegacyRecursive:
   case BaseG:
   case BespokeAppend:
   case BespokeElem:
@@ -376,6 +379,7 @@ bool opcodeMayRaise(Opcode opc) {
   case LdObjMethodS:
   case LdSSwitchDestSlow:
   case LdSwitchObjIndex:
+  case LookupClsCns:
   case LookupClsMethod:
   case LookupClsMethodCache:
   case LookupClsMethodFCache:
@@ -437,6 +441,7 @@ bool opcodeMayRaise(Opcode opc) {
   case SuspendHookAwaitR:
   case SuspendHookCreateCont:
   case SuspendHookYield:
+  case TagProvenanceHere:
   case ThrowAsTypeStructException:
   case ThrowArrayIndexException:
   case ThrowArrayKeyException:
@@ -504,7 +509,13 @@ bool opcodeMayRaise(Opcode opc) {
   case AsyncSwitchFast:
   case BeginCatch:
   case BeginInlining:
+  case BespokeEscalateToVanilla:
   case BespokeGet:
+  case BespokeIterFirstPos:
+  case BespokeIterLastPos:
+  case BespokeIterAdvancePos:
+  case BespokeIterGetKey:
+  case BespokeIterGetVal:
   case Ceil:
   case CheckArrayCOW:
   case CheckCold:
@@ -685,6 +696,7 @@ bool opcodeMayRaise(Opcode opc) {
   case IsFunReifiedGenericsMatched:
   case IsNType:
   case IsNTypeMem:
+  case IsLegacyArrLike:
   case IsType:
   case IsTypeMem:
   case IsTypeStructCached:
@@ -869,8 +881,6 @@ bool opcodeMayRaise(Opcode opc) {
   case SameObj:
   case SameStr:
   case Select:
-  case SetLegacyDict:
-  case SetLegacyVec:
   case Shl:
   case Shr:
   case Sqrt:
@@ -901,8 +911,6 @@ bool opcodeMayRaise(Opcode opc) {
   case SubIntO:
   case Unreachable:
   case UnwindCheckSideExit:
-  case UnsetLegacyDict:
-  case UnsetLegacyVec:
   case VecFirst:
   case VecLast:
   case VectorIsset:

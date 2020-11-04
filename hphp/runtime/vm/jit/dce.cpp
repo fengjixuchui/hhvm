@@ -150,6 +150,7 @@ bool canDCE(IRInstruction* inst) {
   case IsNType:
   case IsTypeMem:
   case IsNTypeMem:
+  case IsLegacyArrLike:
   case IsWaitHandle:
   case IsCol:
   case LdStk:
@@ -267,10 +268,6 @@ bool canDCE(IRInstruction* inst) {
   case IsClsDynConstructible:
   case LdFuncRxLevel:
   case StrictlyIntegerConv:
-  case SetLegacyDict:
-  case SetLegacyVec:
-  case UnsetLegacyDict:
-  case UnsetLegacyVec:
   case GetMemoKeyScalar:
   case LookupSPropSlot:
   case ConstructClosure:
@@ -287,6 +284,11 @@ bool canDCE(IRInstruction* inst) {
   case EqPtrIter:
   case LdUnitPerRequestFilepath:
   case DirFromFilepath:
+  case BespokeIterFirstPos:
+  case BespokeIterLastPos:
+  case BespokeIterAdvancePos:
+  case BespokeIterGetKey:
+  case BespokeIterGetVal:
     assertx(!inst->isControlFlow());
     return true;
 
@@ -638,6 +640,7 @@ bool canDCE(IRInstruction* inst) {
   case CheckVecBoundsLA:
   case BespokeElem:
   case BespokeGet:
+  case BespokeEscalateToVanilla:
   case LdVectorSize:
   case BeginCatch:
   case EndCatch:
@@ -695,6 +698,12 @@ bool canDCE(IRInstruction* inst) {
   case StFrameCtx:
   case StFrameFunc:
   case StFrameMeta:
+  case LookupClsCns:
+  case ArrayMarkLegacyShallow:
+  case ArrayMarkLegacyRecursive:
+  case ArrayUnmarkLegacyShallow:
+  case ArrayUnmarkLegacyRecursive:
+  case TagProvenanceHere:
     return false;
 
   case IsTypeStruct:

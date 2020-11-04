@@ -1,23 +1,27 @@
 <?hh // strict
 
 class Basic {
-  <<Policied("I")>>
+  <<__Policied("I")>>
   public int $i = 0;
-  <<Policied("V")>>
+  <<__Policied("V")>>
   public vec<int> $v = vec[];
 
+  <<__InferFlows>>
   public function set(): void {
     $this->v[] = $this->i;
   }
 
+  <<__InferFlows>>
   public function mutation(): void {
     $this->v[0] += $this->i;
   }
 
+  <<__InferFlows>>
   public function mutationKeyLeak(): void {
     $this->v[$this->i] = 42; // I leaks to V through the key
   }
 
+  <<__InferFlows>>
   public function nested(vec<vec<int>> $vv): void {
     $vv[42][] = $this->v[0];
 
@@ -26,12 +30,13 @@ class Basic {
 }
 
 class COW {
+  <<__InferFlows>>
   public function __construct(
-    <<Policied("X")>>
+    <<__Policied("X")>>
     public int $x,
-    <<Policied("Y")>>
+    <<__Policied("Y")>>
     public int $y,
-    <<Policied("VX")>>
+    <<__Policied("VX")>>
     public vec<int> $vx,
   ) {}
 
@@ -40,6 +45,7 @@ class COW {
   //
   // This test currently does not pass; the analysis detects the
   // spurious flow
+  <<__InferFlows>>
   public function copyOnWrite(vec<int> $v): void {
     $v[] = $this->x;
     $this->vx = $v;

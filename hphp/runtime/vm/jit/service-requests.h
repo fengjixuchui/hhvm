@@ -50,7 +50,7 @@ struct CGMeta;
  */
 #define SERVICE_REQUESTS  \
   /*
-   * bind_jmp(TCA jmp, SrcKey target, TransFlags trflags)
+   * bind_jmp(TCA jmp, SrcKey target)
    *
    * A jmp to the potentially untranslated code for `target'.
    *
@@ -62,7 +62,7 @@ struct CGMeta;
   REQ(BIND_JMP)           \
                           \
   /*
-   * bind_addr(TCA* addr, SrcKey target, TransFlags trflags)
+   * bind_addr(TCA* addr, SrcKey target)
    *
    * A code pointer to the potentially untranslated `target'; used for
    * just-in-time indirect call translations.
@@ -75,7 +75,7 @@ struct CGMeta;
   REQ(BIND_ADDR)          \
                           \
   /*
-   * retranslate(Offset off, TransFlags trflags)
+   * retranslate(Offset off)
    *
    * A request to retranslate the current function at bytecode offset `off',
    * for when no existing translations support the incoming types.
@@ -223,13 +223,9 @@ TCA emit_ephemeral(CodeBlock& cb,
  * Helpers for emitting specific service requests.
  */
 TCA emit_bindjmp_stub(CodeBlock& cb, DataBlock& data, CGMeta& fixups,
-                      FPInvOffset spOff,
-                      TCA jmp, SrcKey target, TransFlags trflags);
+                      FPInvOffset spOff, TCA jmp, SrcKey target);
 TCA emit_bindaddr_stub(CodeBlock& cb, DataBlock& data, CGMeta& fixups,
-                       FPInvOffset spOff, TCA* addr, SrcKey target,
-                       TransFlags trflags);
-TCA emit_retranslate_stub(CodeBlock& cb, DataBlock& data, CGMeta& fixups,
-                          FPInvOffset spOff, SrcKey target, TransFlags trflags);
+                       FPInvOffset spOff, TCA* addr, SrcKey target);
 TCA emit_retranslate_opt_stub(CodeBlock& cb, DataBlock& data, CGMeta& fixups,
                               FPInvOffset spOff, SrcKey sk);
 
@@ -302,17 +298,6 @@ constexpr size_t stub_size() {
   return 0;
 }
 
-
-/*
- * Extract the VM stack offset associated with a service request stub.
- *
- * When we emit service requests stubs for non-resumed TC contexts, we first
- * emit code that rematerializes the VM stack pointer.  Sometimes, we want to
- * replace a stub with a different service request (e.g., bind_jcc_1st), so we
- * have to fish the offset out of the stub first.
- */
-FPInvOffset extract_spoff(TCA stub);
-
 ///////////////////////////////////////////////////////////////////////////////
 
 /*
@@ -343,7 +328,6 @@ struct ReqInfo {
     TCA tca;
     Offset offset;
     SrcKey::AtomicInt sk;
-    TransFlags trflags;
     TransID transID;
     bool boolVal;
     ActRec* ar;

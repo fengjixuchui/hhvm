@@ -13,7 +13,7 @@
  * as stripped down to just the basics as possible to make finding the root
  * cause of test failures easier. *)
 
-open Core_kernel
+open Hh_prelude
 
 module Types_pos_asserter = Asserter.Make_asserter (struct
   type t = FileInfo.pos * Naming_types.kind_of_type
@@ -24,7 +24,7 @@ module Types_pos_asserter = Asserter.Make_asserter (struct
       (FileInfo.show_pos pos)
       (Naming_types.kind_of_type_to_enum type_of_type)
 
-  let is_equal = ( = )
+  let is_equal = Poly.( = )
 end)
 
 module Pos_asserter = Asserter.Make_asserter (struct
@@ -32,7 +32,7 @@ module Pos_asserter = Asserter.Make_asserter (struct
 
   let to_string pos = Printf.sprintf "(%s)" (FileInfo.show_pos pos)
 
-  let is_equal = ( = )
+  let is_equal = FileInfo.equal_pos
 end)
 
 let files =
@@ -77,7 +77,7 @@ let write_and_parse_test_files () =
       errors;
     failwith "Expected no errors from parsing."
   );
-  if failed_parsing <> Relative_path.Set.empty then
+  if not (Relative_path.Set.is_empty failed_parsing) then
     failwith "Expected all files to pass parsing.";
   Naming_table.create file_infos
 
@@ -104,6 +104,7 @@ let run_test f =
         Provider_context.empty_for_test
           ~popt:ParserOptions.default
           ~tcopt:TypecheckerOptions.default
+          ~deps_mode:Typing_deps_mode.SQLiteMode
       in
 
       let unbacked_naming_table = write_and_parse_test_files () in
@@ -136,10 +137,14 @@ let test_dep_graph_blob () =
             profile_total_typecheck_duration = false;
             profile_type_check_duration_threshold = 0.0;
             profile_type_check_twice = false;
+            profile_decling = Typing_service_types.DeclingOff;
           }
       in
       let ctx =
-        Provider_context.empty_for_test ~popt:ParserOptions.default ~tcopt:opts
+        Provider_context.empty_for_test
+          ~popt:ParserOptions.default
+          ~tcopt:opts
+          ~deps_mode:Typing_deps_mode.SQLiteMode
       in
 
       (* Check reentrancy *)

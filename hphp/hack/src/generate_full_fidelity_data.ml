@@ -686,7 +686,7 @@ module GenerateSyntaxTypeImpl = struct
         let syntax = SyntaxVariant::%s(ctx.get_arena().alloc(%sChildren {
             %s,
         }));
-        let value = PositionedValue::from_values(syntax.iter_children().map(|child| &child.value));
+        let value = V::from_values(syntax.iter_children().map(|child| &child.value));
         Self::make(syntax, value)
     }\n\n"
       x.type_name
@@ -699,16 +699,18 @@ module GenerateSyntaxTypeImpl = struct
     make_header CStyle ""
     ^ "
 use super::{
-    syntax::*,
-    syntax_variant_generated::*,
     has_arena::HasArena,
-    positioned_token::PositionedToken,
-    positioned_value::PositionedValue
+    syntax::*, syntax_variant_generated::*,
 };
-use crate::syntax::{SyntaxType, SyntaxValueType};
+use crate::{
+    lexable_token::LexableToken,
+    syntax::{SyntaxType, SyntaxValueType},
+};
 
-impl<'a, C> SyntaxType<C> for Syntax<'a, PositionedToken<'a>, PositionedValue<'a>>
+impl<'a, C, T, V> SyntaxType<C> for Syntax<'a, T, V>
 where
+    T: LexableToken + Copy,
+    V: SyntaxValueType<T>,
     C: HasArena<'a>,
 {
 SYNTAX_CONSTRUCTORS }
@@ -1774,34 +1776,30 @@ module GenerateFFRustDeclModeSmartConstructors = struct
     make_header CStyle ""
     ^ "
 use parser_core_types::{
-  lexable_token::LexableToken,
-  syntax::{
-    Syntax,
-    SyntaxValueType,
-  },
-  token_factory::{SimpleTokenFactory, SimpleTokenFactoryImpl, TokenFactory},
+    lexable_token::LexableToken, syntax::SyntaxValueType, syntax_by_ref::syntax::Syntax,
+    token_factory::TokenFactory,
 };
-use crate::*;
 use smart_constructors::SmartConstructors;
 use syntax_smart_constructors::SyntaxSmartConstructors;
+use crate::*;
 
-impl<'src, Token, Value>
-SmartConstructors
-    for DeclModeSmartConstructors<'src, Syntax<Token, Value>, Token, Value>
+impl<'src, 'arena, Token, Value, TF> SmartConstructors
+    for DeclModeSmartConstructors<'src, 'arena, Syntax<'arena, Token, Value>, Token, Value, TF>
 where
-    Token: LexableToken + SimpleTokenFactory,
-    Value: SyntaxValueType<Token>,
+    TF: TokenFactory<Token = SyntaxToken<'src, 'arena, Token, Value>>,
+    Token: LexableToken + Copy,
+    Value: SyntaxValueType<Token> + Clone,
 {
-    type State = State<'src, Syntax<Token, Value>>;
-    type TF = SimpleTokenFactoryImpl<Token>;
-    type R = Syntax<Token, Value>;
+    type State = State<'src, 'arena, Syntax<'arena, Token, Value>>;
+    type TF = TF;
+    type R = Syntax<'arena, Token, Value>;
 
-    fn state_mut(&mut self) -> &mut State<'src, Syntax<Token, Value>> {
+    fn state_mut(&mut self) -> &mut State<'src, 'arena, Syntax<'arena, Token, Value>> {
         &mut self.state
     }
 
-    fn into_state(self) -> State<'src, Syntax<Token, Value>> {
-      self.state
+    fn into_state(self) -> State<'src, 'arena, Syntax<'arena, Token, Value>> {
+        self.state
     }
 
     fn token_factory(&mut self) -> &mut Self::TF {
@@ -2998,7 +2996,11 @@ module GenerateFFRustTokenKind = struct
       guard
       (token_kind x)
 
-  let to_kind_declaration x = sprintf "    %s,\n" (token_kind x)
+  let rust_tag = ref (-1)
+
+  let to_kind_declaration x =
+    incr rust_tag;
+    sprintf "    %s = %d,\n" (token_kind x) !rust_tag
 
   let token_text x = escape_token_text x.token_text
 
@@ -3014,14 +3016,39 @@ module GenerateFFRustTokenKind = struct
     incr ocaml_tag;
     sprintf "            TokenKind::%s => %d,\n" (token_kind x) !ocaml_tag
 
+  let from_u8_tag = ref (-1)
+
+  let to_try_from_u8 x =
+    incr from_u8_tag;
+    sprintf
+      "            %d => Some(TokenKind::%s),\n"
+      !from_u8_tag
+      (token_kind x)
+
+  let to_width x =
+    let len =
+      if String.equal (token_kind x) "Backslash" then
+        1
+      else
+        String.length (token_text x)
+    in
+    assert (len > 0);
+    sprintf
+      "            TokenKind::%s => Some(unsafe { NonZeroUsize::new_unchecked(%d) }),\n"
+      (token_kind x)
+      len
+
   let full_fidelity_rust_token_kind_template =
     make_header CStyle ""
     ^ "
+
+use std::num::NonZeroUsize;
 
 use ocamlrep_derive::{FromOcamlRep, ToOcamlRep};
 
 #[allow(non_camel_case_types)] // allow Include_once and Require_once
 #[derive(Debug, Copy, Clone, PartialEq, Ord, Eq, PartialOrd, FromOcamlRep, ToOcamlRep)]
+#[repr(u8)]
 pub enum TokenKind {
     // No text tokens
 KIND_DECLARATIONS_NO_TEXT    // Given text tokens
@@ -3029,7 +3056,7 @@ KIND_DECLARATIONS_GIVEN_TEXT    // Variable text tokens
 KIND_DECLARATIONS_VARIABLE_TEXT}
 
 impl TokenKind {
-    pub fn to_string(&self) -> &str {
+    pub fn to_string(self) -> &'static str {
         match self {
             // No text tokens
 TO_STRING_NO_TEXT            // Given text tokens
@@ -3053,6 +3080,18 @@ FROM_STRING_GIVEN_TEXT            _ => None,
         match self {
 OCAML_TAG_NO_TEXTOCAML_TAG_GIVEN_TEXTOCAML_TAG_VARIABLE_TEXT        }
     }
+
+    pub fn try_from_u8(tag: u8) -> Option<Self> {
+        match tag {
+FROM_U8_NO_TEXTFROM_U8_GIVEN_TEXTFROM_U8_VARIABLE_TEXT            _ => None,
+        }
+    }
+
+    pub fn fixed_width(self) -> Option<NonZeroUsize> {
+        match self {
+WIDTH_GIVEN_TEXT            _ => None,
+        }
+    }
 }
 "
 
@@ -3071,6 +3110,10 @@ OCAML_TAG_NO_TEXTOCAML_TAG_GIVEN_TEXTOCAML_TAG_VARIABLE_TEXT        }
           {
             token_pattern = "OCAML_TAG_NO_TEXT";
             token_func = map_and_concat to_ocaml_tag;
+          };
+          {
+            token_pattern = "FROM_U8_NO_TEXT";
+            token_func = map_and_concat to_try_from_u8;
           };
         ]
       ~token_given_text_transformations:
@@ -3091,6 +3134,14 @@ OCAML_TAG_NO_TEXTOCAML_TAG_GIVEN_TEXTOCAML_TAG_VARIABLE_TEXT        }
             token_pattern = "OCAML_TAG_GIVEN_TEXT";
             token_func = map_and_concat to_ocaml_tag;
           };
+          {
+            token_pattern = "FROM_U8_GIVEN_TEXT";
+            token_func = map_and_concat to_try_from_u8;
+          };
+          {
+            token_pattern = "WIDTH_GIVEN_TEXT";
+            token_func = map_and_concat to_width;
+          };
         ]
       ~token_variable_text_transformations:
         [
@@ -3105,6 +3156,10 @@ OCAML_TAG_NO_TEXTOCAML_TAG_GIVEN_TEXTOCAML_TAG_VARIABLE_TEXT        }
           {
             token_pattern = "OCAML_TAG_VARIABLE_TEXT";
             token_func = map_and_concat to_ocaml_tag;
+          };
+          {
+            token_pattern = "FROM_U8_VARIABLE_TEXT";
+            token_func = map_and_concat to_try_from_u8;
           };
         ]
       ~filename:(full_fidelity_path_prefix ^ "token_kind.rs")

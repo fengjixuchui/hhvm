@@ -358,15 +358,6 @@ void freeTCStub(TCA stub);
 
 ////////////////////////////////////////////////////////////////////////////////
 
-/*
- * Emit checks for (and hooks into) an attached debugger in front of each
- * translation in `unit' or for `SrcKey{func, offset, resumed}'.
- */
-bool addDbgGuards(const Func* func);
-bool addDbgGuard(const Func* func, Offset offset, ResumeMode resumeMode);
-
-////////////////////////////////////////////////////////////////////////////////
-
 struct UsageInfo {
   std::string name;
   size_t used;
@@ -484,13 +475,13 @@ void recordJump(TCA toSmash, SrcRec* sr);
  * no action is performed. On return, the value of smashed indicated whether a
  * new address was written into the TC.
  */
-TCA bindJmp(TCA toSmash, SrcKey destSk, TransFlags trflags, bool& smashed);
+TCA bindJmp(TCA toSmash, SrcKey destSk, bool& smashed);
 
 /*
  * Insert the address for branches to destSk at toSmash. Upon return, the value
  * of smashed indicates whether an address was written into the TC.
  */
-TCA bindAddr(TCA toSmash, SrcKey destSk, TransFlags trflags, bool& smashed);
+TCA bindAddr(TCA toSmash, SrcKey destSk, bool& smashed);
 
 /*
  * Bind a call to start at toSmash, where start is the prologue for callee, when
