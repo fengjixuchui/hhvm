@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<bfb69e0d5c45c9fdd94eb09faa4edae6>>
+// @generated SignedSource<<e8cb482ca8642295e97e17b8114a5e57>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
@@ -31,7 +31,9 @@ pub struct GlobalOptions<'a> {
     pub tco_dynamic_view: bool,
     pub tco_num_local_workers: Option<isize>,
     pub tco_parallel_type_checking_threshold: isize,
+    pub tco_max_typechecker_worker_memory_mb: Option<isize>,
     pub tco_defer_class_declaration_threshold: Option<isize>,
+    pub tco_defer_class_memory_mb_threshold: Option<isize>,
     pub tco_max_times_to_defer_type_checking: Option<isize>,
     pub tco_prefetch_deferred_files: bool,
     pub tco_remote_type_check_threshold: Option<isize>,
@@ -71,12 +73,12 @@ pub struct GlobalOptions<'a> {
     pub po_rust_parser_errors: bool,
     pub profile_type_check_duration_threshold: f64,
     pub profile_type_check_twice: bool,
-    pub profile_total_typecheck_duration: bool,
     pub profile_owner: Option<&'a str>,
     pub profile_desc: &'a str,
     pub tco_like_type_hints: bool,
     pub tco_union_intersection_type_hints: bool,
     pub tco_coeffects: bool,
+    pub tco_coeffects_local: bool,
     pub tco_like_casts: bool,
     pub tco_simple_pessimize: f64,
     pub tco_complex_coercion: bool,
@@ -132,5 +134,8 @@ pub struct GlobalOptions<'a> {
     pub tco_enable_sound_dynamic: bool,
     pub po_disallow_hash_comments: bool,
     pub po_disallow_fun_and_cls_meth_pseudo_funcs: bool,
+    pub tco_use_direct_decl_parser: bool,
+    pub tco_ifc_enabled: bool,
+    pub po_enable_coeffects: bool,
 }
 impl<'a> TrivialDrop for GlobalOptions<'a> {}

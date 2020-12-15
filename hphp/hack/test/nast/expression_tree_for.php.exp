@@ -119,6 +119,28 @@
                                              [], [([4:45-46], (Int "1"))],
                                              None)))
                                          )))));
+                                 ([4:50-55],
+                                  (Expr
+                                     ([4:50-55],
+                                      (Binop ((Eq None),
+                                         ([4:50-55], (Lvar ([4:50-55], $__3))),
+                                         ([4:50-55],
+                                          (Call (
+                                             ([4:50-55],
+                                              (Class_const (
+                                                 ([4:50-55],
+                                                  (CI ([4:50-55], "\\Code"))),
+                                                 ([4:50-55], "symbol")))),
+                                             [],
+                                             [([Pos.none], (String "foo"));
+                                               ([4:50-55],
+                                                (FunctionPointer (
+                                                   (FP_id
+                                                      ([4:50-53], "\\foo")),
+                                                   [])))
+                                               ],
+                                             None)))
+                                         )))));
                                  ([4:8-60],
                                   (Return
                                      (Some ([4:8-60],
@@ -143,6 +165,31 @@
                                                   (Id
                                                      ([Pos.none],
                                                       "\\__FILE__")));
+                                                 ([Pos.none],
+                                                  (KeyValCollection (Dict,
+                                                     None,
+                                                     [(([Pos.none],
+                                                        (String "$__0")),
+                                                       ([Pos.none],
+                                                        (Lvar
+                                                           ([Pos.none], $__0))));
+                                                       (([Pos.none],
+                                                         (String "$__1")),
+                                                        ([Pos.none],
+                                                         (Lvar
+                                                            ([Pos.none], $__1))));
+                                                       (([Pos.none],
+                                                         (String "$__2")),
+                                                        ([Pos.none],
+                                                         (Lvar
+                                                            ([Pos.none], $__2))));
+                                                       (([Pos.none],
+                                                         (String "$__3")),
+                                                        ([Pos.none],
+                                                         (Lvar
+                                                            ([Pos.none], $__3))))
+                                                       ]
+                                                     )));
                                                  ([4:8-60],
                                                   (Lfun (
                                                      { f_span = [4:8-60];
@@ -199,8 +246,8 @@
                                                                     (Id
                                                                     ([4:8-60],
                                                                     "lambdaLiteral"))),
-                                                                    OG_nullthrows
-                                                                    ))),
+                                                                    OG_nullthrows,
+                                                                    false))),
                                                                  [],
                                                                  [([4:8-60],
                                                                    (New (
@@ -243,8 +290,8 @@
                                                                     (Id
                                                                     ([4:17-58],
                                                                     "forStatement"))),
-                                                                    OG_nullthrows
-                                                                    ))), 
+                                                                    OG_nullthrows,
+                                                                    false))),
                                                                     [],
                                                                     [([4:17-58],
                                                                     (New (
@@ -280,8 +327,8 @@
                                                                     (Id
                                                                     ([4:21-27],
                                                                     "assign"))),
-                                                                    OG_nullthrows
-                                                                    ))), 
+                                                                    OG_nullthrows,
+                                                                    false))),
                                                                     [],
                                                                     [([4:21-27],
                                                                     (New (
@@ -313,8 +360,8 @@
                                                                     (Id
                                                                     ([4:21-23],
                                                                     "localVar"))),
-                                                                    OG_nullthrows
-                                                                    ))), 
+                                                                    OG_nullthrows,
+                                                                    false))),
                                                                     [],
                                                                     [([4:21-23],
                                                                     (New (
@@ -350,8 +397,8 @@
                                                                     (Id
                                                                     ([4:26-27],
                                                                     "splice"))),
-                                                                    OG_nullthrows
-                                                                    ))), 
+                                                                    OG_nullthrows,
+                                                                    false))),
                                                                     [],
                                                                     [([4:26-27],
                                                                     (New (
@@ -371,6 +418,9 @@
                                                                     ], None,
                                                                     [4:26-27]
                                                                     )));
+                                                                    ([Pos.none],
+                                                                    (String
+                                                                    "$__0"));
                                                                     ([4:26-27],
                                                                     (Lvar
                                                                     ([4:26-27],
@@ -389,9 +439,9 @@
                                                                     ([4:29-33],
                                                                     (Id
                                                                     ([4:29-33],
-                                                                    "splice"))),
-                                                                    OG_nullthrows
-                                                                    ))), 
+                                                                    "methCall"))),
+                                                                    OG_nullthrows,
+                                                                    false))),
                                                                     [],
                                                                     [([4:29-33],
                                                                     (New (
@@ -412,9 +462,54 @@
                                                                     [4:29-33]
                                                                     )));
                                                                     ([4:29-33],
+                                                                    (Call (
+                                                                    ([4:29-33],
+                                                                    (Obj_get (
+                                                                    ([4:29-33],
+                                                                    (Lvar
+                                                                    ([4:29-33],
+                                                                    $v))),
+                                                                    ([4:29-33],
+                                                                    (Id
+                                                                    ([4:29-33],
+                                                                    "splice"))),
+                                                                    OG_nullthrows,
+                                                                    false))),
+                                                                    [],
+                                                                    [([4:29-33],
+                                                                    (New (
+                                                                    ([4:29-33],
+                                                                    (CI
+                                                                    ([4:29-33],
+                                                                    "\\ExprPos"))),
+                                                                    [],
+                                                                    [([Pos.none],
+                                                                    (Int "4"));
+                                                                    ([Pos.none],
+                                                                    (Int "28"));
+                                                                    ([Pos.none],
+                                                                    (Int "4"));
+                                                                    ([Pos.none],
+                                                                    (Int "32"))
+                                                                    ], None,
+                                                                    [4:29-33]
+                                                                    )));
+                                                                    ([Pos.none],
+                                                                    (String
+                                                                    "$__1"));
+                                                                    ([4:29-33],
                                                                     (Lvar
                                                                     ([4:29-33],
                                                                     $__1)))],
+                                                                    None)));
+                                                                    ([Pos.none],
+                                                                    (String
+                                                                    "__bool"));
+                                                                    ([Pos.none],
+                                                                    (ValCollection (
+                                                                    Vec,
+                                                                    None, 
+                                                                    [])))],
                                                                     None)));
                                                                     ([4:35-46],
                                                                     (ValCollection (
@@ -432,8 +527,8 @@
                                                                     (Id
                                                                     ([4:35-46],
                                                                     "assign"))),
-                                                                    OG_nullthrows
-                                                                    ))), 
+                                                                    OG_nullthrows,
+                                                                    false))),
                                                                     [],
                                                                     [([4:35-46],
                                                                     (New (
@@ -465,8 +560,8 @@
                                                                     (Id
                                                                     ([4:35-37],
                                                                     "localVar"))),
-                                                                    OG_nullthrows
-                                                                    ))), 
+                                                                    OG_nullthrows,
+                                                                    false))),
                                                                     [],
                                                                     [([4:35-37],
                                                                     (New (
@@ -501,9 +596,9 @@
                                                                     ([4:40-46],
                                                                     (Id
                                                                     ([4:40-46],
-                                                                    "plus"))),
-                                                                    OG_nullthrows
-                                                                    ))), 
+                                                                    "methCall"))),
+                                                                    OG_nullthrows,
+                                                                    false))),
                                                                     [],
                                                                     [([4:40-46],
                                                                     (New (
@@ -535,8 +630,8 @@
                                                                     (Id
                                                                     ([4:40-42],
                                                                     "localVar"))),
-                                                                    OG_nullthrows
-                                                                    ))), 
+                                                                    OG_nullthrows,
+                                                                    false))),
                                                                     [],
                                                                     [([4:40-42],
                                                                     (New (
@@ -560,7 +655,14 @@
                                                                     (String
                                                                     "$i"))],
                                                                     None)));
+                                                                    ([Pos.none],
+                                                                    (String
+                                                                    "__plus"));
                                                                     ([4:45-46],
+                                                                    (ValCollection (
+                                                                    Vec,
+                                                                    None,
+                                                                    [([4:45-46],
                                                                     (Call (
                                                                     ([4:45-46],
                                                                     (Obj_get (
@@ -572,8 +674,8 @@
                                                                     (Id
                                                                     ([4:45-46],
                                                                     "splice"))),
-                                                                    OG_nullthrows
-                                                                    ))), 
+                                                                    OG_nullthrows,
+                                                                    false))),
                                                                     [],
                                                                     [([4:45-46],
                                                                     (New (
@@ -593,11 +695,15 @@
                                                                     ], None,
                                                                     [4:45-46]
                                                                     )));
+                                                                    ([Pos.none],
+                                                                    (String
+                                                                    "$__2"));
                                                                     ([4:45-46],
                                                                     (Lvar
                                                                     ([4:45-46],
                                                                     $__2)))],
-                                                                    None)))],
+                                                                    None)))]
+                                                                    )))],
                                                                     None)))],
                                                                     None)))]
                                                                     )));
@@ -617,8 +723,41 @@
                                                                     (Id
                                                                     ([4:50-55],
                                                                     "call"))),
-                                                                    OG_nullthrows
-                                                                    ))), 
+                                                                    OG_nullthrows,
+                                                                    false))),
+                                                                    [],
+                                                                    [([4:50-55],
+                                                                    (New (
+                                                                    ([4:50-55],
+                                                                    (CI
+                                                                    ([4:50-55],
+                                                                    "\\ExprPos"))),
+                                                                    [],
+                                                                    [([Pos.none],
+                                                                    (Int "4"));
+                                                                    ([Pos.none],
+                                                                    (Int "49"));
+                                                                    ([Pos.none],
+                                                                    (Int "4"));
+                                                                    ([Pos.none],
+                                                                    (Int "54"))
+                                                                    ], None,
+                                                                    [4:50-55]
+                                                                    )));
+                                                                    ([4:50-55],
+                                                                    (Call (
+                                                                    ([4:50-55],
+                                                                    (Obj_get (
+                                                                    ([4:50-55],
+                                                                    (Lvar
+                                                                    ([4:50-55],
+                                                                    $v))),
+                                                                    ([4:50-55],
+                                                                    (Id
+                                                                    ([4:50-55],
+                                                                    "splice"))),
+                                                                    OG_nullthrows,
+                                                                    false))),
                                                                     [],
                                                                     [([4:50-55],
                                                                     (New (
@@ -640,7 +779,12 @@
                                                                     )));
                                                                     ([Pos.none],
                                                                     (String
-                                                                    "foo"));
+                                                                    "$__3"));
+                                                                    ([4:50-55],
+                                                                    (Lvar
+                                                                    ([4:50-55],
+                                                                    $__3)))],
+                                                                    None)));
                                                                     ([Pos.none],
                                                                     (ValCollection (
                                                                     Vec,
@@ -678,7 +822,8 @@
                                                          false };
                                                        f_doc_comment = None;
                                                        f_static = false },
-                                                     [([4:45-46], $__2);
+                                                     [([4:50-55], $__3);
+                                                       ([4:45-46], $__2);
                                                        ([4:29-33], $__1);
                                                        ([4:26-27], $__0)]
                                                      )));
@@ -751,11 +896,24 @@
                                                                     (Some (
                                                                     [4:29-33],
                                                                     (
-                                                                    ET_Splice
+                                                                    Call (
+                                                                    ([4:29-33],
+                                                                    (Obj_get (
+                                                                    ([4:29-33],
+                                                                    (ET_Splice
                                                                     ([4:29-33],
                                                                     (Lvar
                                                                     ([4:29-33],
-                                                                    $__1)))))),
+                                                                    $__1))))),
+                                                                    ([4:29-33],
+                                                                    (Id
+                                                                    ([4:29-33],
+                                                                    "__bool"))),
+                                                                    OG_nullthrows,
+                                                                    false))),
+                                                                    [], 
+                                                                    [], None
+                                                                    )))),
                                                                     [([4:35-46],
                                                                     (Binop (
                                                                     (Eq None),
@@ -764,27 +922,38 @@
                                                                     ([4:35-37],
                                                                     $i))),
                                                                     ([4:40-46],
-                                                                    (Binop (
-                                                                    Plus,
+                                                                    (Call (
+                                                                    ([4:40-46],
+                                                                    (Obj_get (
                                                                     ([4:40-42],
                                                                     (Lvar
                                                                     ([4:40-42],
                                                                     $i))),
-                                                                    ([4:45-46],
+                                                                    ([4:40-46],
+                                                                    (Id
+                                                                    ([4:40-46],
+                                                                    "__plus"))),
+                                                                    OG_nullthrows,
+                                                                    false))),
+                                                                    [],
+                                                                    [([4:45-46],
                                                                     (ET_Splice
                                                                     ([4:45-46],
                                                                     (Lvar
                                                                     ([4:45-46],
                                                                     $__2)))))
-                                                                    ))))))],
+                                                                    ], None)))
+                                                                    )))],
                                                                     [([4:50-56],
                                                                     (Expr
                                                                     ([4:50-55],
                                                                     (Call (
-                                                                    ([4:50-53],
-                                                                    (Id
-                                                                    ([4:50-53],
-                                                                    "\\foo"))),
+                                                                    ([4:50-55],
+                                                                    (ET_Splice
+                                                                    ([4:50-55],
+                                                                    (Lvar
+                                                                    ([4:50-55],
+                                                                    $__3))))),
                                                                     [], 
                                                                     [], None
                                                                     )))))])))
@@ -824,6 +993,8 @@
                                                                    false },
                                                                  [([4:45-46],
                                                                    $__2);
+                                                                   ([4:50-55],
+                                                                    $__3);
                                                                    ([4:29-33],
                                                                     $__1);
                                                                    ([4:26-27],
@@ -857,6 +1028,7 @@
                                                        f_doc_comment = None;
                                                        f_static = false },
                                                      [([4:45-46], $__2);
+                                                       ([4:50-55], $__3);
                                                        ([4:29-33], $__1);
                                                        ([4:26-27], $__0)]
                                                      )))

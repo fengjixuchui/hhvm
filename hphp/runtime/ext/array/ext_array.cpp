@@ -176,7 +176,7 @@ static inline bool array_column_coerce_key(Variant &key, const char *name) {
   if (key.isInteger() || key.isDouble()) {
     key = key.toInt64();
     return true;
-  } else if (key.isString() || key.isObject() || key.isFunc() ||
+  } else if (key.isString() || key.isObject() || key.isLazyClass() ||
     key.isClass()) {
     key = key.toString();
     return true;
@@ -371,9 +371,10 @@ TypedValue HHVM_FUNCTION(array_flip,
   ArrayInit ret(getClsMethCompactContainerSize(transCell), ArrayInit::Mixed{});
   for (ArrayIter iter(transCell); iter; ++iter) {
     auto const inner = iter.secondValPlus();
-    if (isIntType(type(inner)) || isStringType(type(inner)) ||
-        isFuncType(type(inner))|| isClassType(type(inner))) {
+    if (isIntType(type(inner)) || isStringType(type(inner))) {
       ret.setUnknownKey<IntishCast::Cast>(VarNR(inner), iter.first());
+    } else if (isLazyClassType(type(inner)) || isClassType(type(inner))) {
+      ret.setValidKey(tvAsCVarRef(tvClassToString(inner)), iter.first());
     } else {
       raise_warning("Can only flip STRING and INTEGER values!");
     }
@@ -397,7 +398,8 @@ bool HHVM_FUNCTION(array_key_exists,
       return false;
     }
     return HHVM_FN(array_key_exists)(key, obj->toArray(false, true));
-  } else if (isClsMethType(searchCell->m_type)) {
+  } else if (isClsMethType(searchCell->m_type) &&
+             RO::EvalIsCompatibleClsMethType) {
     raiseClsMethToVecWarningHelper(__FUNCTION__+2);
     ad = clsMethToVecHelper(searchCell->m_data.pclsmeth).detach();
   } else {
@@ -414,8 +416,6 @@ bool HHVM_FUNCTION(array_key_exists,
       throwInvalidArrayKeyException(cell, ad);
 
     case KindOfClsMeth:
-      raiseClsMethToVecWarningHelper(__FUNCTION__+2);
-      // fallthrough
     case KindOfRClsMeth:
     case KindOfBoolean:
     case KindOfDouble:
@@ -768,10 +768,6 @@ TypedValue HHVM_FUNCTION(array_pop,
 
 TypedValue HHVM_FUNCTION(array_product,
                          const Variant& input) {
-  if (input.isClsMeth()) {
-    raiseClsMethToVecWarningHelper(__FUNCTION__+2);
-    return make_tv<KindOfNull>();
-  }
   if (UNLIKELY(!isContainer(input))) {
     raise_warning("Invalid operand type was used: %s expects "
                   "an array or collection as argument 1",
@@ -863,8 +859,8 @@ TypedValue HHVM_FUNCTION(array_push,
                          Variant& container,
                          const Variant& var,
                          const Array& args /* = null array */) {
-  if (LIKELY(container.isArray()) || container.isClsMeth()) {
-    castClsmethToContainerInplace(container.asTypedValue());
+  castClsmethToContainerInplace(container.asTypedValue());
+  if (LIKELY(container.isArray())) {
     /*
      * Important note: this *must* cast the parr in the inner cell to
      * the Array&---we can't copy it to the stack or anything because we
@@ -1012,7 +1008,7 @@ TypedValue HHVM_FUNCTION(array_slice,
     if (isArrayType(cell_input.m_type)) {
       return tvReturn(Variant{cell_input.m_data.parr});
     }
-    if (isClsMethType(cell_input.m_type)) {
+    if (isClsMethType(cell_input.m_type) && RO::EvalIsCompatibleClsMethType) {
       raiseClsMethToVecWarningHelper(__FUNCTION__+2);
       return tvReturn(clsMethToVecHelper(cell_input.m_data.pclsmeth));
     }
@@ -1074,10 +1070,6 @@ TypedValue HHVM_FUNCTION(array_splice,
 
 TypedValue HHVM_FUNCTION(array_sum,
                          const Variant& input) {
-  if (input.isClsMeth()) {
-    raiseClsMethToVecWarningHelper(__FUNCTION__+2);
-    return make_tv<KindOfNull>();
-  }
   if (UNLIKELY(!isContainer(input))) {
     raise_warning("Invalid operand type was used: %s expects "
                   "an array or collection as argument 1",
@@ -1284,10 +1276,6 @@ static int php_count_recursive(const Array& array) {
 
 bool HHVM_FUNCTION(shuffle,
                    Variant& array) {
-  if (array.isClsMeth()) {
-    raiseClsMethToVecWarningHelper(__FUNCTION__+2);
-    return false;
-  }
   if (!array.isArray()) {
     raise_expected_array_warning("shuffle");
     return false;
@@ -1339,6 +1327,9 @@ int64_t HHVM_FUNCTION(count,
       return var.getArrayData()->size();
 
     case KindOfClsMeth:
+      if (!RO::EvalIsCompatibleClsMethType) {
+        return 1;
+      }
       raiseClsMethToVecWarningHelper();
       return 2;
 
@@ -2887,7 +2878,7 @@ bool array_multisort_impl(
     Variant* arg8 = nullptr,
     Variant* arg9 = nullptr
 ) {
-  if (!arg1->isPHPArray()) {
+  if (!arg1->isArray()) {
     if (arg1->isClsMeth()) {
       raiseIsClsMethWarning("array_multisort", 1);
       return false;
@@ -3227,10 +3218,8 @@ struct ArrayExtension final : Extension {
     HHVM_RC_INT_SAME(SORT_REGULAR);
     HHVM_RC_INT_SAME(SORT_STRING);
 
-    HHVM_RC_INT(
-        TAG_PROVENANCE_HERE_DONT_WARN_ON_OBJECTS,
-        1
-    );
+    HHVM_RC_INT(TAG_PROVENANCE_HERE_MUTATE_COLLECTIONS,
+                arrprov::TagTVFlags::TAG_PROVENANCE_HERE_MUTATE_COLLECTIONS);
 
     HHVM_FE(array_change_key_case);
     HHVM_FE(array_chunk);

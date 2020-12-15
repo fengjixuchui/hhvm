@@ -51,7 +51,8 @@ type format =
   | Raw
   | Highlighted
 
-type typing_error_callback = ?code:int -> (Pos.t * string) list -> unit
+type typing_error_callback =
+  ?code:int -> Pos.t * string -> (Pos.t * string) list -> unit
 
 type name_context =
   | FunctionNamespace
@@ -107,7 +108,7 @@ val get_severity : 'a error_ -> severity
 
 val get_messages : 'a error_ -> 'a message list
 
-val make_error : int -> (Pos.t * string) list -> error
+val make_error : int -> Pos.t * string -> (Pos.t * string) list -> error
 
 val make_absolute_error :
   int -> (Pos.absolute * string) list -> Pos.absolute error_
@@ -144,6 +145,7 @@ val explain_constraint :
   use_pos:Pos.t ->
   definition_pos:Pos.t ->
   param_name:string ->
+  Pos.t * string ->
   (Pos.t * string) list ->
   unit
 
@@ -151,6 +153,7 @@ val explain_where_constraint :
   in_class:bool ->
   use_pos:Pos.t ->
   definition_pos:Pos.t ->
+  Pos.t * string ->
   (Pos.t * string) list ->
   unit
 
@@ -290,7 +293,7 @@ val class_meth_non_final_self : Pos.t -> string -> unit
 
 val class_meth_non_final_CLASS : Pos.t -> bool -> string -> unit
 
-val assert_arity : Pos.t -> unit
+val assert_banned : Pos.t -> unit
 
 val unexpected_ty_in_tast :
   Pos.t -> actual_ty:string -> expected_ty:string -> unit
@@ -449,6 +452,8 @@ val member_not_found :
   typing_error_callback ->
   unit
 
+val expr_tree_unsupported_operator : string -> string -> Pos.t -> unit
+
 val parent_in_trait : Pos.t -> unit
 
 val parent_undefined : Pos.t -> unit
@@ -555,8 +560,6 @@ val class_constant_value_does_not_match_hint : typing_error_callback
 val class_property_initializer_type_does_not_match_hint : typing_error_callback
 
 val xhp_attribute_does_not_match_hint : typing_error_callback
-
-val pocket_universes_typing : typing_error_callback
 
 val record_init_value_does_not_match_hint : typing_error_callback
 
@@ -669,9 +672,6 @@ val invalid_newable_type_param_constraints :
 val override_final :
   parent:Pos.t -> child:Pos.t -> on_error:typing_error_callback option -> unit
 
-val override_memoizelsb :
-  parent:Pos.t -> child:Pos.t -> typing_error_callback -> unit
-
 val override_lsb :
   member_name:string ->
   parent:Pos.t ->
@@ -681,7 +681,7 @@ val override_lsb :
 
 val should_be_override : Pos.t -> string -> string -> unit
 
-val override_per_trait : Pos.t * string -> string -> Pos.t -> unit
+val override_per_trait : Pos.t * string -> string -> string -> Pos.t -> unit
 
 val missing_assign : Pos.t -> unit
 
@@ -716,8 +716,6 @@ val toplevel_continue : Pos.t -> unit
 val continue_in_switch : Pos.t -> unit
 
 val await_in_sync_function : Pos.t -> unit
-
-val suspend_in_finally : Pos.t -> unit
 
 val static_memoized_function : Pos.t -> unit
 
@@ -910,19 +908,25 @@ val format_summary :
 
 val try_ : (unit -> 'a) -> (error -> 'a) -> 'a
 
-val try_with_result : (unit -> 'a) -> ('a -> error -> 'a) -> 'a
-
 val try_with_error : (unit -> 'a) -> (unit -> 'a) -> 'a
 
 (* The type of collections of errors *)
 type t [@@deriving eq]
 
+(** Return the list of errors caused by the function passed as parameter
+    along with its result. *)
 val do_ : (unit -> 'a) -> t * 'a
 
+(** Return the list of errors caused by the function passed as parameter
+    along with its result.
+    The phase parameter determine the phase of the returned errors. *)
 val do_with_context : Relative_path.t -> phase -> (unit -> 'a) -> t * 'a
 
 val run_in_context : Relative_path.t -> phase -> (unit -> 'a) -> 'a
 
+(** Turn on lazy decl mode for the duration of the closure.
+    This runs without returning the original state,
+    since we collect it later in do_with_lazy_decls_ *)
 val run_in_decl_mode : Relative_path.t -> (unit -> 'a) -> 'a
 
 (* Run this function with span for the definition being checked.
@@ -992,14 +996,6 @@ val required_field_is_optional :
 
 val array_get_with_optional_field : Pos.t -> Pos.t -> string -> unit
 
-val goto_label_already_defined : string -> Pos.t -> Pos.t -> unit
-
-val goto_label_undefined : Pos.t -> string -> unit
-
-val goto_label_defined_in_finally : Pos.t -> unit
-
-val goto_invoked_in_finally : Pos.t -> unit
-
 val method_needs_visibility : Pos.t -> unit
 
 val mk_method_needs_visibility : Pos.t -> error
@@ -1032,36 +1028,6 @@ val mutable_methods_must_be_reactive : Pos.t -> string -> unit
 val mutable_return_annotated_decls_must_be_reactive :
   string -> Pos.t -> string -> unit
 
-val pu_expansion : Pos.t -> string -> string -> unit
-
-val pu_typing : Pos.t -> string -> string -> unit
-
-val pu_typing_not_supported : Pos.t -> unit
-
-val pu_typing_invalid_upper_bounds : Pos.t -> unit
-
-val pu_typing_refinement : Pos.t -> unit
-
-val pu_atom_missing : Pos.t -> string -> string -> string -> string -> unit
-
-val pu_atom_unknown : Pos.t -> string -> string -> string -> string -> unit
-
-val pu_localize : Pos.t -> string -> string -> unit
-
-val pu_invalid_access : Pos.t -> string -> unit
-
-val pu_case_in_trait : Pos.t -> string -> unit
-
-val pu_attribute_invalid : Pos.t -> unit
-
-val pu_attribute_err : Pos.t -> string -> string -> string -> string -> unit
-
-val pu_attribute_dup : Pos.t -> string -> string -> unit
-
-val pu_attribute_suggestion : Pos.t -> string -> string -> unit
-
-val pu_attribute_not_necessary : Pos.t -> string -> unit
-
 val lvar_in_obj_get : Pos.t -> unit
 
 val invalid_freeze_target : Pos.t -> Pos.t -> string -> unit
@@ -1089,13 +1055,13 @@ val must_extend_disposable : Pos.t -> unit
 val accept_disposable_invariant :
   Pos.t -> Pos.t -> typing_error_callback -> unit
 
+val ifc_external_contravariant : Pos.t -> Pos.t -> typing_error_callback -> unit
+
 val inout_params_special : Pos.t -> unit
 
 val inout_params_memoize : Pos.t -> Pos.t -> unit
 
 val obj_set_reactive : Pos.t -> unit
-
-val static_property_in_reactive_context : Pos.t -> unit
 
 val inout_annotation_missing : Pos.t -> Pos.t -> unit
 
@@ -1138,8 +1104,6 @@ val multiple_conditionally_reactive_annotations : Pos.t -> string -> unit
 val conditionally_reactive_annotation_invalid_arguments :
   is_method:bool -> Pos.t -> unit
 
-val echo_in_reactive_context : Pos.t -> unit
-
 val superglobal_in_reactive_context : Pos.t -> string -> unit
 
 val rx_is_enabled_invalid_location : Pos.t -> unit
@@ -1156,12 +1120,6 @@ val decl_override_missing_hint : Pos.t -> typing_error_callback -> unit
 val atmost_rx_as_rxfunc_invalid_location : Pos.t -> unit
 
 val no_atmost_rx_as_rxfunc_for_rx_if_args : Pos.t -> unit
-
-val pu_duplication : Pos.t -> string -> string -> string -> unit
-
-val pu_duplication_in_instance : Pos.t -> string -> string -> string -> unit
-
-val pu_not_in_class : Pos.t -> string -> string -> unit
 
 val illegal_use_of_dynamically_callable : Pos.t -> Pos.t -> string -> unit
 
@@ -1435,7 +1393,32 @@ val incompatible_enum_inclusion_constraint : Pos.t -> string -> string -> unit
 
 val enum_inclusion_not_enum : Pos.t -> string -> string -> unit
 
-val call_coeffect_error : Pos.t -> Pos.t -> string -> Pos.t -> string -> unit
+val call_coeffect_error :
+  available_incl_unsafe:string ->
+  available_pos:Pos.t ->
+  required:string ->
+  required_pos:Pos.t ->
+  Pos.t ->
+  unit
+
+val op_coeffect_error :
+  locally_available:string ->
+  available_pos:Pos.t ->
+  err_code:int ->
+  required:string ->
+  string ->
+  Pos.t ->
+  unit
+
+module CoeffectEnforcedOp : sig
+  (* Note: All these errors will be migrated to use `op_coeffect_error` once
+  coeffects are globally enabled and Rx/Pure attributes desugar to contexts.
+  The respective error code enum values have the suffix `InWrongContext`. *)
+
+  val output : Pos.t -> unit
+
+  val static_property_access : Pos.t -> unit
+end
 
 val abstract_function_pointer : string -> string -> Pos.t -> Pos.t -> unit
 
@@ -1465,6 +1448,19 @@ val atom_invalid_parameter : Pos.t -> unit
 
 val atom_invalid_parameter_in_enum_class : Pos.t -> unit
 
+val atom_invalid_generic : Pos.t -> string -> unit
+
 val atom_unknown : Pos.t -> string -> string -> unit
 
 val atom_as_expr : Pos.t -> unit
+
+val atom_invalid_argument : Pos.t -> unit
+
+val ifc_internal_error : Pos.t -> string -> unit
+
+val ifc_policy_mismatch :
+  Pos.t -> Pos.t -> string -> string -> typing_error_callback -> unit
+
+val parent_implements_dynamic : Pos.t -> string -> string -> bool -> unit
+
+val method_is_not_dynamically_callable : Pos.t -> string -> string -> unit

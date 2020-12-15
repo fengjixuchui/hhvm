@@ -63,7 +63,14 @@ let rec strip_ty ty =
         }
       in
       let ft_params = List.map ft_params ~f:strip_param in
-      let ft_implicit_params = { capability = strip_ty capability } in
+      let ft_implicit_params =
+        {
+          capability =
+            (match capability with
+            | CapTy cap -> CapTy (strip_ty cap)
+            | CapDefaults p -> CapDefaults p);
+        }
+      in
       let ft_ret = strip_possibly_enforced_ty ft_ret in
       Tfun
         {
@@ -85,10 +92,7 @@ let rec strip_ty ty =
       in
       let shape_fields = Nast.ShapeMap.map strip_field shape_fields in
       Tshape (shape_kind, shape_fields)
-    | Tpu (base, enum) -> Tpu (strip_ty base, enum)
-    | Tpu_type_access (_, _)
-    | Taccess _ ->
-      ty
+    | Taccess _ -> ty
     | Tunapplied_alias _ ->
       Typing_defs.error_Tunapplied_alias_in_illegal_context ()
   in

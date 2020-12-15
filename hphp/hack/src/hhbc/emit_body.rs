@@ -237,13 +237,8 @@ fn make_body_instrs(
         env.do_function(emitter, &body, emit_ast_body)?
     };
 
-    let (begin_label, default_value_setters) = emit_param::emit_param_default_value_setter(
-        emitter,
-        env,
-        flags.contains(Flags::NATIVE),
-        pos,
-        params,
-    )?;
+    let (begin_label, default_value_setters) =
+        emit_param::emit_param_default_value_setter(emitter, env, pos, params)?;
 
     let header_content = make_header_content(
         emitter,
@@ -1133,11 +1128,9 @@ fn set_function_jmp_targets(emitter: &mut Emitter, env: &mut Env) -> bool {
     let global_state = emitter.emit_state();
     match global_state.function_to_labels_map.get(&function_state_key) {
         Some(labels) => {
-            env.jump_targets_gen.set_function_has_goto(true);
             env.jump_targets_gen.set_labels_in_function(labels.clone());
         }
         None => {
-            env.jump_targets_gen.set_function_has_goto(false);
             env.jump_targets_gen
                 .set_labels_in_function(<env::SMap<bool>>::new());
         }

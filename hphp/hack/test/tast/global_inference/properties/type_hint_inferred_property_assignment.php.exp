@@ -31,7 +31,7 @@
             param_user_attributes = []; param_visibility = None }
            ];
          m_cap =
-         (((HH\Capabilities\RxLocal & HH\Capabilities\IO & HH\Capabilities\CippGlobal & HH\Capabilities\Globals & HH\Capabilities\UnrestrictedMutation)),
+         (((HH\Capabilities\AccessStaticVariable & HH\Capabilities\WriteProperty & HH\Capabilities\Output)),
           None);
          m_unsafe_cap = ((mixed), None);
          m_body =
@@ -43,7 +43,7 @@
                     (([8:5-13], string),
                      (Obj_get ((([8:5-10], this), This),
                         (([8:12-13], string), (Id ([8:12-13], "y"))),
-                        OG_nullthrows))),
+                        OG_nullthrows, false))),
                     (([8:16-18], string), (Lvar ([8:16-18], $y))))))))
              ];
            fb_annotation = () };
@@ -62,7 +62,7 @@
              param_user_attributes = []; param_visibility = None }
             ];
           m_cap =
-          (((HH\Capabilities\RxLocal & HH\Capabilities\IO & HH\Capabilities\CippGlobal & HH\Capabilities\Globals & HH\Capabilities\UnrestrictedMutation)),
+          (((HH\Capabilities\AccessStaticVariable & HH\Capabilities\WriteProperty & HH\Capabilities\Output)),
            None);
           m_unsafe_cap = ((mixed), None);
           m_body =
@@ -73,7 +73,7 @@
                   (Binop ((Eq None),
                      (([12:5-10], int),
                       (Class_get ((([12:5-6], A), (CI ([12:5-6], "\\A"))),
-                         (CGstring ([12:8-10], "$x"))))),
+                         (CGstring ([12:8-10], "$x")), false))),
                      (([12:13-15], int), (Lvar ([12:13-15], $x))))))))
               ];
             fb_annotation = () };
@@ -88,5 +88,5 @@
         ns_const_uses = <opaque>; ns_name = None; ns_auto_ns_map = [];
         ns_is_codegen = false; ns_disable_xhp_element_mangling = false };
       c_user_attributes = []; c_file_attributes = []; c_enum = None;
-      c_pu_enums = []; c_doc_comment = None; c_emit_id = None })
+      c_doc_comment = None; c_emit_id = None })
   ]

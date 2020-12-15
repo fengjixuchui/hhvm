@@ -144,7 +144,7 @@ module Env = struct
     (let open Shallow_decl_defs in
     let has_own_cstr =
       match sc.sc_constructor with
-      | Some s -> not s.sm_abstract
+      | Some s -> not (sm_abstract s)
       | None -> false
     in
     let (private_props, _) =
@@ -387,7 +387,7 @@ and assign _env acc x = S.add x acc
 
 and assign_expr env acc e1 =
   match e1 with
-  | (_, Obj_get ((_, This), (_, Id (_, y)), _)) -> assign env acc y
+  | (_, Obj_get ((_, This), (_, Id (_, y)), _, false)) -> assign env acc y
   | (_, List el) -> List.fold_left ~f:(assign_expr env) ~init:acc el
   | _ -> acc
 
@@ -406,10 +406,7 @@ and stmt env acc st =
       S.Top
     else
       expr acc e
-  | GotoLabel _
-  | Goto _
-  | Break ->
-    acc
+  | Break -> acc
   | Continue -> acc
   | Throw _ -> S.Top
   | Return None ->
@@ -509,23 +506,23 @@ and expr_ env acc p e =
   | Smethod_id _
   | Method_caller _
   | EnumAtom _
-  | PU_atom _
   | Id _ ->
     acc
   | Lvar _
   | Lplaceholder _
   | Dollardollar _ ->
     acc
-  | Obj_get ((_, This), (_, Id ((_, vx) as v)), _) ->
+  | Obj_get ((_, This), (_, Id ((_, vx) as v)), _, false) ->
     if SMap.mem vx env.props && not (S.mem vx acc) then (
       Errors.read_before_write v;
       acc
     ) else
       acc
   | Clone e -> expr acc e
-  | Obj_get (e1, e2, _) ->
+  | Obj_get (e1, e2, _, false) ->
     let acc = expr acc e1 in
     expr acc e2
+  | Obj_get _ -> acc
   | Array_get (e, eo) ->
     let acc = expr acc e in
     (match eo with
@@ -534,7 +531,7 @@ and expr_ env acc p e =
   | Class_const _
   | Class_get _ ->
     acc
-  | Call ((p, Obj_get ((_, This), (_, Id (_, f)), _)), _, _, _) ->
+  | Call ((p, Obj_get ((_, This), (_, Id (_, f)), _, false)), _, _, _) ->
     let method_ = Env.get_method env f in
     (match method_ with
     | None ->
@@ -568,15 +565,12 @@ and expr_ env acc p e =
   | String2 _
   | PrefixedString _ ->
     acc
-  | Assert (AE_assert e) -> expr acc e
   | Yield e -> afield acc e
   | Yield_break -> acc
   | Await e -> expr acc e
-  | Suspend e -> expr acc e
   | List _ ->
     (* List is always an lvalue *)
     acc
-  | Expr_list el -> exprl acc el
   | New (_, _, el, unpacked_element, _) ->
     let acc = exprl acc el in
     let acc = Option.value_map ~default:acc ~f:(expr acc) unpacked_element in
@@ -632,9 +626,6 @@ and expr_ env acc p e =
   | Omitted -> acc
   | Import _ -> acc
   | Collection _ -> acc
-  | BracedExpr _ -> acc
-  | ParenthesizedExpr _ -> acc
-  | PU_identifier _ -> acc
   | FunctionPointer _ -> acc
   | ET_Splice e -> expr acc e
 

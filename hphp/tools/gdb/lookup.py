@@ -31,16 +31,19 @@ LookupCommand()
 
 def lookup_func(val):
     funcid = val.cast(T('HPHP::FuncId'))
-    result = idx.atomic_low_ptr_vector_at(V('HPHP::Func::s_funcVec'), funcid)
-    return result.cast(T('HPHP::Func').pointer())
+    try:
+        # Not LowPtr
+        result = idx.atomic_low_ptr_vector_at(V('HPHP::Func::s_funcVec'), funcid['m_id'])
+        return result.cast(T('HPHP::Func').pointer())
+    except gdb.MemoryError:
+        raise
+    except:
+        # LowPtr
+        return rawptr(funcid).cast(T('HPHP::Func').pointer())
 
 
 def lookup_func_from_fp(fp):
-    try:
-        # if not lowptr, this should succeed
-        return lookup_func(fp['m_funcId'])
-    except:
-        return rawptr(fp['m_func'])
+    return lookup_func(fp['m_funcId'])
 
 
 class LookupFuncCommand(gdb.Command):

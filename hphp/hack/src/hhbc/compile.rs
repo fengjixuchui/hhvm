@@ -9,7 +9,6 @@ use aast_parser::{
 use anyhow::{anyhow, *};
 use bitflags::bitflags;
 use emit_program_rust::{self as emit_program, emit_program, FromAstFlags};
-use emit_pu_rust;
 use env::emitter::Emitter;
 use hhas_program_rust::HhasProgram;
 use hhbc_ast_rust::FatalOp;
@@ -26,6 +25,7 @@ use oxidized::{
 use parser_core_types::{
     indexed_source_text::IndexedSourceText, source_text::SourceText, syntax_error::ErrorType,
 };
+use rewrite_program::rewrite_program;
 use stack_limit::StackLimit;
 
 /// Common input needed for compilation.  Extra care is taken
@@ -160,9 +160,8 @@ where
             ));
             // TODO(shiqicao): change opts to Rc<Option> to avoid cloning
             elaborate_namespaces_visitor::elaborate_program(RcOc::clone(&namespace), ast);
-            emit_pu_rust::translate(ast);
             let e = &mut emitter;
-            time(move || emit(e, &env, namespace, ast))
+            time(move || rewrite_and_emit(e, &env, namespace, ast))
         }
         Either::Left((pos, msg, is_runtime_error)) => {
             time(|| emit_fatal(*is_runtime_error, pos, msg))
@@ -193,6 +192,30 @@ where
     } else {
         Ok(None)
     }
+}
+
+fn rewrite_and_emit<'p, S: AsRef<str>>(
+    emitter: &mut Emitter,
+    env: &Env<S>,
+    namespace: RcOc<NamespaceEnv>,
+    ast: &'p mut Tast::Program,
+) -> Result<HhasProgram<'p>, Error> {
+    // First rewrite.
+    let result = rewrite(emitter, ast); // Modifies `ast` in place.
+    match result {
+        Ok(()) => {
+            // Rewrite ok, now emit.
+            emit(emitter, &env, namespace, ast)
+        }
+        Err(Error::IncludeTimeFatalException(op, pos, msg)) => {
+            emit_program::emit_fatal_program(op, &pos, msg)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn rewrite<'p>(emitter: &mut Emitter, ast: &'p mut Tast::Program) -> Result<(), Error> {
+    rewrite_program(emitter, ast)
 }
 
 fn emit<'p, S: AsRef<str>>(
@@ -262,6 +285,7 @@ fn create_parser_options(opts: &Options) -> ParserOptions {
     popt.po_disallow_hash_comments = hack_lang_flags(LangFlags::DISALLOW_HASH_COMMENTS);
     popt.po_disallow_fun_and_cls_meth_pseudo_funcs =
         hack_lang_flags(LangFlags::DISALLOW_FUN_AND_CLS_METH_PSEUDO_FUNCS);
+    popt.po_enable_coeffects = hack_lang_flags(LangFlags::ENABLE_COEFFECTS);
     popt
 }
 
@@ -285,11 +309,6 @@ fn parse_file(
     aast_env.keep_errors = false;
     aast_env.elaborate_namespaces = elaborate_namespaces;
     aast_env.parser_options = create_parser_options(opts);
-    aast_env.lower_coroutines = opts
-        .hhvm
-        .hack_lang
-        .flags
-        .contains(LangFlags::ENABLE_COROUTINES);
 
     let indexed_source_text = IndexedSourceText::new(source_text);
     let ast_result = AastParser::from_text(&aast_env, &indexed_source_text, Some(stack_limit));

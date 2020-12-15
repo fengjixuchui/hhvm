@@ -1,4 +1,5 @@
-<?hh // partial
+<?hh
+<<file: __EnableUnstableFeatures('coeffects_provisional')>>
 
 function f(): void {
   // ERROR

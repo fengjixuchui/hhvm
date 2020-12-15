@@ -18,6 +18,7 @@
 #include "hphp/runtime/base/bespoke/logging-profile.h"
 
 #include "hphp/runtime/base/bespoke/logging-array.h"
+#include "hphp/runtime/base/bespoke/layout.h"
 #include "hphp/runtime/base/memory-manager-defs.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/server/memory-stats.h"
@@ -47,8 +48,11 @@ bool fits(U u) {
 }
 constexpr int8_t kInt8Min = std::numeric_limits<int8_t>::min();
 
-folly::SharedMutex s_exportStartedLock;
-std::atomic<bool> s_exportStarted{false};
+// The number of events we render inline before dropping key specializations.
+constexpr size_t kMaxNumDetailedEvents = 32;
+
+folly::SharedMutex s_profilingLock;
+std::atomic<bool> s_profiling{true};
 
 std::string arrayOpToString(ArrayOp op) {
   switch (op) {
@@ -75,6 +79,39 @@ SrcKey canonicalize(SrcKey sk) {
   return SrcKey(sk.func(), sk.offset(), ResumeMode::None);
 }
 
+// If the given source always produces a particular static array, return it.
+ArrayData* getStaticArray(LoggingProfileKey key) {
+  if (key.slot != kInvalidSlot) {
+    auto const index = key.cls->propSlotToIndex(key.slot);
+    auto const tv = key.cls->declPropInit()[index].val.tv();
+    return tvIsArrayLike(tv) ? tv.val().parr : nullptr;
+  }
+  auto const op = key.sk.op();
+  if (op != Op::Array && op != Op::Vec &&
+      op != Op::Dict && op != Op::Keyset) {
+    return nullptr;
+  }
+  auto const unit = key.sk.func()->unit();
+  auto const result = unit->lookupArrayId(getImm(key.sk.pc(), 0).u_AA);
+  return const_cast<ArrayData*>(result);
+}
+
+template <typename M, typename L, typename K>
+size_t incrementCounter(M& map, L& mutex, K key) {
+  {
+    folly::SharedMutex::ReadHolder lock{mutex};
+    auto it = map.find(key);
+    if (it != map.end()) {
+      it->second.value++;
+      return it->second;
+    }
+  }
+  folly::SharedMutex::WriteHolder lock{mutex};
+  auto [it, didInsert] = map.emplace(key, 0);
+  it->second.value++;
+  return it->second;
+}
+
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -94,11 +131,19 @@ struct alignas(8) EventKey {
     static_assert(sizeof(EventKey) == sizeof(uint64_t), "");
     memmove(this, &value, sizeof(EventKey));
   }
+
+  EventKey dropKeySpecialization() const {
+    auto result = *this;
+    result.m_key = kInvalidId;
+    return result;
+  }
+
   uint64_t toUInt64() const {
     uint64_t value;
     memmove(&value, this, sizeof(EventKey));
     return value;
   }
+
   ArrayOp getOp() const {
     return m_op;
   }
@@ -149,7 +194,7 @@ private:
   Spec m_key_spec = Spec::None;
   Spec m_val_spec = Spec::None;
   DataType m_val_type = kInvalidDataType;
-  uint32_t m_key = 0; // Set for Spec::Int8 and Spec::Str32
+  uint32_t m_key = kInvalidId; // May be set for Spec::Int8 and Spec::Str32
 };
 
 // Dispatch to the setters above. There must be a better way...
@@ -179,13 +224,15 @@ std::string EventKey::toString() const {
   auto const key = [&]() -> std::string {
     auto const spec = m_key_spec;
     if (spec == Spec::None) return "";
-    if (spec == Spec::Int8) {
-      auto const i = safe_cast<int8_t>(safe_cast<int16_t>(m_key) + kInt8Min);
-      return folly::sformat(" key=[i8:{}]", i);
-    }
-    if (spec == Spec::Str32) {
-      auto const s = ((StringData*)safe_cast<uintptr_t>(m_key))->data();
-      return folly::sformat(" key=[s32:\"{}\"]", folly::cEscape<std::string>(s));
+    if (m_key != kInvalidId) {
+      assertx(spec == Spec::Int8 || spec == Spec::Str32);
+      if (spec == Spec::Int8) {
+        auto const i = safe_cast<int8_t>(safe_cast<int16_t>(m_key) + kInt8Min);
+        return folly::sformat(" key=[i8:{}]", i);
+      } else {
+        auto const s = ((StringData*)safe_cast<uintptr_t>(m_key))->data();
+        return folly::sformat(" key=[s32:\"{}\"]", folly::cEscape<std::string>(s));
+      }
     }
     return folly::sformat(" key=[{}]", specToStr(spec));
   }();
@@ -200,38 +247,41 @@ std::string EventKey::toString() const {
 
 //////////////////////////////////////////////////////////////////////////////
 
-double LoggingProfile::getSampleCountMultiplier() const {
-  if (loggingArraysEmitted == 0) return 0;
+LoggingProfile::LoggingProfile(LoggingProfileKey key)
+  : key(key)
+  , data(std::make_unique<LoggingProfileData>())
+{
+  assertx(s_profiling.load(std::memory_order_acquire));
+}
 
-  return sampleCount / (double) loggingArraysEmitted;
+LoggingProfile::LoggingProfile(LoggingProfileKey key, jit::ArrayLayout layout)
+  : key(key)
+  , layout(layout)
+  , staticBespokeArray(nullptr)
+{
+  if (layout.vanilla()) return;
+  if (auto const ad = getStaticArray(key)) {
+    setStaticBespokeArray(BespokeArray::asBespoke(layout.apply(ad)));
+  }
+}
+
+double LoggingProfile::getSampleCountMultiplier() const {
+  assertx(data);
+  if (data->loggingArraysEmitted == 0) return 0;
+
+  return data->sampleCount / (double) data->loggingArraysEmitted;
 }
 
 uint64_t LoggingProfile::getTotalEvents() const {
+  assertx(data);
   size_t total = 0;
-  for (auto const& event : events) total += event.second;
+  for (auto const& event : data->events) total += event.second;
 
   return total;
 }
 
 double LoggingProfile::getProfileWeight() const {
   return getTotalEvents() * getSampleCountMultiplier();
-}
-
-void LoggingProfile::logReach(TransID transId, SrcKey skRaw) {
-  // Hold the read mutex for the duration of the mutation so that export cannot
-  // begin until the mutation is complete.
-  folly::SharedMutex::ReadHolder lock{s_exportStartedLock};
-  if (s_exportStarted.load(std::memory_order_relaxed)) return;
-
-  ReachMap::accessor it;
-  auto const sk = canonicalize(skRaw);
-  if (reachedUsageSites.insert(it, {transId, sk})) {
-    it->second = 1;
-  } else {
-    it->second++;
-  }
-  FTRACE(6, "{} reached tracelet {}, srckey {} [count={}]\n",
-         source.getSymbol(), transId, showShort(sk), it->second);
 }
 
 void LoggingProfile::logEvent(ArrayOp op) {
@@ -254,39 +304,113 @@ void LoggingProfile::logEvent(ArrayOp op, const StringData* k, TypedValue v) {
 }
 
 void LoggingProfile::logEventImpl(const EventKey& key) {
-  // Hold the read mutex for the duration of the mutation so that export cannot
-  // begin until the mutation is complete.
-  folly::SharedMutex::ReadHolder lock{s_exportStartedLock};
-  if (s_exportStarted.load(std::memory_order_relaxed)) return;
+  // Hold the read mutex for the duration of the mutation so that profiling
+  // cannot be interrupted until the mutation is complete.
+  folly::SharedMutex::ReadHolder lock{s_profilingLock};
+  if (!s_profiling.load(std::memory_order_acquire)) return;
 
-  EventMap::accessor it;
-  auto const has_sink = key.getOp() != ArrayOp::ReleaseUncounted;
-  auto const sink = has_sink ? getSrcKey() : SrcKey{};
-  if (events.insert(it, {sink, key.toUInt64()})) {
-    it->second = 1;
-  } else {
-    it->second++;
-  }
-  FTRACE(6, "{} -> {}: {} [count={}]\n", source.getSymbol(),
+  assertx(data);
+
+  DEBUG_ONLY auto const count =
+    incrementCounter(data->events, data->mapLock, key.toUInt64());
+  DEBUG_ONLY auto const has_sink = key.getOp() != ArrayOp::ReleaseUncounted;
+  DEBUG_ONLY auto const sink = has_sink ? getSrcKey() : SrcKey{};
+  FTRACE(6, "{} -> {}: {} [count={}]\n", key.toString(),
          (sink.valid() ? sink.getSymbol() : "<unknown>"),
-         EventKey(key).toString(), it->second);
+         EventKey(key).toString(), count);
 }
 
 void LoggingProfile::logEntryTypes(EntryTypes before, EntryTypes after) {
-  // Hold the read mutex for the duration of the mutation so that export cannot
-  // begin until the mutation is complete.
-  folly::SharedMutex::ReadHolder lock{s_exportStartedLock};
-  if (s_exportStarted.load(std::memory_order_relaxed)) return;
+  // Hold the read mutex for the duration of the mutation so that profiling
+  // cannot be interrupted until the mutation is complete.
+  folly::SharedMutex::ReadHolder lock{s_profilingLock};
+  if (!s_profiling.load(std::memory_order_acquire)) return;
 
-  EntryTypesMap::accessor it;
-  if (monotypeEvents.insert(it, {before.asInt16(), after.asInt16()})) {
-    it->second = 1;
-  } else {
-    it->second++;
+  assertx(data);
+
+  auto const key = std::make_pair(before.asInt16(), after.asInt16());
+  incrementCounter(data->entryTypes, data->mapLock, key);
+}
+
+BespokeArray* LoggingProfile::getStaticBespokeArray() const {
+  return staticBespokeArray;
+}
+
+void LoggingProfile::setStaticBespokeArray(BespokeArray* bad) {
+  assertx(bad != nullptr);
+  assertx(staticBespokeArray == nullptr);
+  assertx(getStaticArray(key) != nullptr);
+
+  staticBespokeArray = bad;
+
+  if (key.slot != kInvalidSlot) {
+    auto const index = key.cls->propSlotToIndex(key.slot);
+    auto props = const_cast<Class::PropInitVec*>(&key.cls->declPropInit());
+    auto const lval = (*props)[index].val;
+    assertx(tvIsArrayLike(lval));
+    lval.val().parr = bad;
+  }
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+SinkProfile::SinkProfile(SinkProfileKey key)
+  : key(key)
+  , data(std::make_unique<SinkProfileData>())
+{
+  assertx(s_profiling.load(std::memory_order_acquire));
+}
+
+SinkProfile::SinkProfile(SinkProfileKey key, jit::ArrayLayout layout)
+  : key(key)
+  , layout(layout)
+{}
+
+void SinkProfile::update(const ArrayData* ad) {
+  folly::SharedMutex::ReadHolder lock{s_profilingLock};
+  if (!s_profiling.load(std::memory_order_acquire)) return;
+
+  assertx(data);
+
+  // Because profiling hasn't stopped yet, any bespoke arrays should be
+  // LoggingArrays at this point. Bail out if we get a non-logging bespoke.
+  const LoggingArray* lad = nullptr;
+  if (!ad->isVanilla()) {
+    auto const index = BespokeArray::asBespoke(ad)->layoutIndex();
+    if (index != LoggingArray::GetLayoutIndex()) return;
+    lad = LoggingArray::As(ad);
   }
 
-  FTRACE(6, "EntryTypes escalation {} -> {} [count={}]\n", before.toString(),
-         after.toString(), it->second);
+  // Update array-like-generic fields: the sampled bit and the array type.
+
+  if (lad != nullptr || ad->isSampledArray()) {
+    data->sampledCount++;
+  } else {
+    data->unsampledCount++;
+  }
+
+  auto const kind = ad->kind() / 2;
+  assertx(kind < kNumArrTypes);
+  data->arrCounts[kind]++;
+
+  if (lad == nullptr) return;
+
+  // Update LoggingArray-only fields: key type, val type, and array source.
+  auto const& et = lad->entryTypes;
+  auto const key = size_t(et.keyTypes);
+  auto const val = [&]{
+    if (et.valueTypes == ValueTypes::Empty) return kNoValTypes;
+    if (et.valueTypes != ValueTypes::Monotype) return kAnyValType;
+    auto const dt = dt_modulo_persistence(et.valueDatatype);
+    return size_t(static_cast<data_type_t>(dt) - kMinDataType);
+  }();
+
+  assertx(key < kNumKeyTypes);
+  assertx(val < kNumValTypes);
+  data->keyCounts[key]++;
+  data->valCounts[val]++;
+
+  incrementCounter(data->sources, data->mapLock, lad->profile);
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -319,26 +443,22 @@ struct OperationOutputData {
     totalCount += count;
   }
 
-  void sortEvents() {
+  void formatEvents() {
+    if (events.size() > kMaxNumDetailedEvents) {
+      std::map<uint64_t, uint64_t> deduped;
+      for (auto const& event : events) {
+        deduped[event.event.dropKeySpecialization().toUInt64()] += event.count;
+      }
+      events.clear();
+      for (auto const& pair : deduped) {
+        events.emplace_back(EventKey(pair.first), pair.second);
+      }
+    }
     std::sort(events.begin(), events.end());
   }
 
   ArrayOp operation;
   std::vector<EventOutputData> events;
-  uint64_t totalCount;
-};
-
-struct SinkOutputData {
-  SinkOutputData(SrcKey sink, uint64_t totalCount)
-    : sink(sink)
-    , totalCount(totalCount)
-  {}
-
-  bool operator<(const SinkOutputData& other) const {
-    return totalCount > other.totalCount;
-  }
-
-  SrcKey sink;
   uint64_t totalCount;
 };
 
@@ -373,40 +493,78 @@ struct EntryTypesEscalationOutputData {
   uint64_t count;
 };
 
-struct ReachOutputData {
-  ReachOutputData(TransID tid, SrcKey sk, uint64_t count)
-    : tid(tid)
-    , sk(sk)
-    , count(count)
-  {}
+struct SourceFrequencyData {
+  SourceFrequencyData(const std::string& source, uint64_t count)
+    : source(source), count(count) {}
 
-  bool operator<(const ReachOutputData& other) const {
+  bool operator<(const SourceFrequencyData& other) const {
     return count > other.count;
   }
 
-  TransID tid;
-  SrcKey sk;
+  std::string source;
   uint64_t count;
 };
+
+struct SinkTypeData {
+  SinkTypeData(const char* name, uint64_t count) : name(name), count(count) {}
+
+  bool operator<(const SinkTypeData& other) const {
+    return count > other.count;
+  }
+
+  const char* name;
+  uint64_t count;
+};
+
+// NOTE: These helpers undo the transformations in SinkProfile::update.
+
+const char* getArrTypeStr(size_t type) {
+  assertx(type <= SinkProfile::kNumArrTypes);
+  return ArrayData::kindToString(ArrayData::ArrayKind(type * 2));
+}
+
+const char* getKeyTypeStr(size_t type) {
+  assertx(type <= SinkProfile::kNumKeyTypes);
+  return show(KeyTypes(type));
+}
+
+const char* getValTypeStr(size_t type) {
+  assertx(type <= SinkProfile::kNumValTypes);
+  if (type == SinkProfile::kNoValTypes) return "Empty";
+  if (type == SinkProfile::kAnyValType) return "Any";
+  auto const dt = DataType(safe_cast<int8_t>(type) + kMinDataType);
+  switch (dt) {
+#define DT(name, ...) case KindOf##name: return #name;
+DATATYPES
+#undef DT
+  }
+  always_assert(false);
+}
+
+template <size_t N, typename Fn>
+std::vector<SinkTypeData> populateSortedCounts(
+    const std::atomic<uint64_t> (&counts)[N], Fn fn) {
+  std::vector<SinkTypeData> result;
+  for (auto i = 0; i < N; i++) {
+    auto const count = counts[i].load(std::memory_order_relaxed);
+    if (count) result.push_back({fn(i), count});
+  }
+  std::sort(result.begin(), result.end());
+  return result;
+}
 
 struct SourceOutputData {
   SourceOutputData(const LoggingProfile* profile,
                    std::vector<OperationOutputData>&& operations,
-                   std::vector<SinkOutputData>&& sinkData,
                    std::vector<EntryTypesEscalationOutputData>&& monoEscalations,
-                   std::vector<EntryTypesUseOutputData>&& monoUses,
-                   std::vector<ReachOutputData>&& reachData)
+                   std::vector<EntryTypesUseOutputData>&& monoUses)
     : profile(profile)
     , monotypeEscalations(std::move(monoEscalations))
     , monotypeUses(std::move(monoUses))
-    , sinks(std::move(sinkData))
-    , reach(std::move(reachData))
   {
-    std::sort(sinks.begin(), sinks.end());
     std::sort(monotypeEscalations.begin(), monotypeEscalations.end());
     std::sort(monotypeUses.begin(), monotypeUses.end());
     std::sort(operations.begin(), operations.end());
-    std::sort(reach.begin(), reach.end());
 
     readCount = 0;
     writeCount = 0;
@@ -432,18 +590,63 @@ struct SourceOutputData {
   std::vector<OperationOutputData> writeOperations;
   std::vector<EntryTypesEscalationOutputData> monotypeEscalations;
   std::vector<EntryTypesUseOutputData> monotypeUses;
-  std::vector<SinkOutputData> sinks;
-  std::vector<ReachOutputData> reach;
   uint64_t readCount;
   uint64_t writeCount;
   double weight;
 };
 
+struct SinkOutputData {
+  explicit SinkOutputData(const SinkProfile* profile)
+    : profile(profile)
+  {
+    assertx(profile->data);
+
+    std::map<std::string, uint64_t> sourceCounts;
+    for (auto const& it : profile->data->sources) {
+      sourceCounts[it.first->key.toString()] += it.second;
+      loggedCount += it.second;
+    }
+    for (auto const& it : sourceCounts) {
+      sources.push_back({it.first, it.second});
+    }
+    std::sort(sources.begin(), sources.end());
+
+    arrCounts = populateSortedCounts(profile->data->arrCounts, getArrTypeStr);
+    keyCounts = populateSortedCounts(profile->data->keyCounts, getKeyTypeStr);
+    valCounts = populateSortedCounts(profile->data->valCounts, getValTypeStr);
+
+    sampledCount = profile->data->sampledCount.load(std::memory_order_relaxed);
+    unsampledCount = profile->data->unsampledCount.load(std::memory_order_relaxed);
+
+    weight = sampledCount + unsampledCount;
+  }
+
+  bool operator<(const SinkOutputData& other) const {
+    return weight > other.weight;
+  }
+
+  const SinkProfile* profile;
+  std::vector<SinkTypeData> arrCounts;
+  std::vector<SinkTypeData> keyCounts;
+  std::vector<SinkTypeData> valCounts;
+  std::vector<SourceFrequencyData> sources;
+  uint64_t loggedCount = 0;
+  uint64_t sampledCount = 0;
+  uint64_t unsampledCount = 0;
+  uint64_t weight = 0;
+};
+
 using ProfileOutputData = std::vector<SourceOutputData>;
-using ProfileMap = tbb::concurrent_hash_map<SrcKey, LoggingProfile*,
-                                            SrcKey::TbbHashCompare>;
+using ProfileMap = tbb::concurrent_hash_map<LoggingProfileKey, LoggingProfile*,
+                                            LoggingProfileKey::TbbHashCompare>;
+
+using SinkProfileKeyHashCompare = pairHashCompare<
+  TransID, SrcKey, integralHashCompare<TransID>, SrcKey::TbbHashCompare>;
+using SinkMap = tbb::concurrent_hash_map<
+  SinkProfileKey, SinkProfile*, SinkProfileKeyHashCompare>;
 
 ProfileMap s_profileMap;
+SinkMap s_sinkMap;
 std::thread s_exportProfilesThread;
 
 template<typename... Ts>
@@ -478,19 +681,32 @@ bool exportOperationSet(FILE* file,
   return true;
 }
 
+bool exportTypeCounts(FILE* file, const char* label,
+                      const std::vector<SinkTypeData>& counts) {
+  LOG_OR_RETURN(file, "  {} Type Counts:\n", label);
+  for (auto const& count : counts) {
+    LOG_OR_RETURN(file, "  {: >6}x {}\n", count.count, count.name);
+  }
+  return true;
+}
+
 bool exportSortedProfiles(FILE* file, const ProfileOutputData& profileData) {
+  LOG_OR_RETURN(file, "========================================================================\n");
+  LOG_OR_RETURN(file, "Sources:\n\n");
+
   for (auto const& sourceData : profileData) {
     auto const sourceProfile = sourceData.profile;
-    auto const sourceSk = sourceProfile->source;
+    assertx(sourceProfile->data);
 
     LOG_OR_RETURN(file, "{} [{}/{} sampled, {:.2f} weight]\n",
-                  sourceSk.getSymbol(),
-                  sourceProfile->loggingArraysEmitted.load(),
-                  sourceProfile->sampleCount.load(), sourceData.weight);
-    LOG_OR_RETURN(file, "  {}\n", sourceSk.showInst());
-    LOG_OR_RETURN(file, "  {} reads, {} writes, {} distinct sinks\n",
-                  sourceData.readCount, sourceData.writeCount,
-                  sourceData.sinks.size());
+                  sourceProfile->key.toString(),
+                  sourceProfile->data->loggingArraysEmitted.load(),
+                  sourceProfile->data->sampleCount.load(), sourceData.weight);
+    LOG_OR_RETURN(file, "  {}\n", sourceProfile->key.toStringDetail());
+    LOG_OR_RETURN(file, "  Selected Layout: {}\n",
+                  sourceProfile->layout.describe());
+    LOG_OR_RETURN(file, "  {} reads, {} writes\n",
+                  sourceData.readCount, sourceData.writeCount);
 
     LOG_OR_RETURN(file, "  Read operations:\n");
     if (!exportOperationSet(file, sourceData.readOperations)) return false;
@@ -510,10 +726,32 @@ bool exportSortedProfiles(FILE* file, const ProfileOutputData& profileData) {
                     useData.state.toString());
     }
 
-    LOG_OR_RETURN(file, "  Reached usage sites:\n");
-    for (auto const& reachData : sourceData.reach) {
-      LOG_OR_RETURN(file, "  {: >6}x tracelet {}, srckey {}\n", reachData.count,
-                    reachData.tid, showShort(reachData.sk));
+    LOG_OR_RETURN(file, "\n");
+  }
+
+  return true;
+}
+
+bool exportSortedSinks(FILE* file, const std::vector<SinkOutputData>& sinks) {
+  LOG_OR_RETURN(file, "========================================================================\n");
+  LOG_OR_RETURN(file, "Sinks:\n\n");
+
+  for (auto const& sink : sinks) {
+    auto const sk = sink.profile->key.second;
+    LOG_OR_RETURN(file, "{} [{}/{} sampled, {} logged]\n",
+                  sk.getSymbol(), sink.sampledCount,
+                  sink.weight, sink.loggedCount);
+    LOG_OR_RETURN(file, "  {}\n", sk.showInst());
+    LOG_OR_RETURN(file, "  Selected Layout: {}\n",
+                  sink.profile->layout.describe());
+
+    if (!exportTypeCounts(file, "Array", sink.arrCounts)) return false;
+    if (!exportTypeCounts(file, "Key",   sink.keyCounts)) return false;
+    if (!exportTypeCounts(file, "Value", sink.valCounts)) return false;
+
+    LOG_OR_RETURN(file, "  Sources:\n");
+    for (auto const& edge : sink.sources) {
+      LOG_OR_RETURN(file, "  {: >6}x {}\n", edge.count, edge.source);
     }
 
     LOG_OR_RETURN(file, "\n");
@@ -522,21 +760,19 @@ bool exportSortedProfiles(FILE* file, const ProfileOutputData& profileData) {
   return true;
 }
 
+bool exportLayouts(FILE* file) {
+  LOG_OR_RETURN(file, "========================================================================\n");
+  LOG_OR_RETURN(file, "Layouts:\n\n");
+  LOG_OR_RETURN(file, "{}", Layout::dumpAllLayouts());
+
+  return true;
+}
+
 SourceOutputData sortSourceData(const LoggingProfile* profile) {
-  // Aggregate total events by event key
-  std::map<uint64_t, uint64_t> eventCounts;
-  std::map<SrcKey, uint64_t> sinkCounts;
-  for (auto const& eventRecord : profile->events) {
-    auto const count = eventRecord.second;
-    auto const eventKey = eventRecord.first.second;
-
-    eventCounts[eventKey] += count;
-    sinkCounts[eventRecord.first.first] += count;
-  }
-
+  assertx(profile->data);
   // Group events by their operation
   std::map<ArrayOp, OperationOutputData> opsGrouped;
-  for (auto const& eventAndCount : eventCounts) {
+  for (auto const& eventAndCount : profile->data->events) {
     auto const event = EventKey(eventAndCount.first);
     auto const count = eventAndCount.second;
 
@@ -546,7 +782,7 @@ SourceOutputData sortSourceData(const LoggingProfile* profile) {
   }
 
   for (auto& operation : opsGrouped) {
-    operation.second.sortEvents();
+    operation.second.formatEvents();
   }
 
   // Flatten to vectors
@@ -559,19 +795,10 @@ SourceOutputData sortSourceData(const LoggingProfile* profile) {
     }
   );
 
-  std::vector<SinkOutputData> sinks;
-  sinks.reserve(sinkCounts.size());
-  std::transform(
-    sinkCounts.begin(), sinkCounts.end(), std::back_inserter(sinks),
-    [](const std::pair<SrcKey, uint64_t>& sinkData) {
-      return SinkOutputData(sinkData.first, sinkData.second);
-    }
-  );
-
   // Determine monotype operations
   std::vector<EntryTypesEscalationOutputData> escalations;
   std::map<uint16_t, uint64_t> usesMap;
-  for (auto const& statesAndCount : profile->monotypeEvents) {
+  for (auto const& statesAndCount : profile->data->entryTypes) {
     auto const before = statesAndCount.first.first;
     auto const after = statesAndCount.first.second;
     auto const count = statesAndCount.second;
@@ -594,64 +821,86 @@ SourceOutputData sortSourceData(const LoggingProfile* profile) {
     }
   );
 
-  std::vector<ReachOutputData> reaches;
-  reaches.reserve(profile->reachedUsageSites.size());
-  std::transform(
-    profile->reachedUsageSites.begin(), profile->reachedUsageSites.end(),
-    std::back_inserter(reaches),
-    [](const std::pair<LoggingProfile::ReachLocation, size_t>& reachData) {
-      return ReachOutputData(reachData.first.first, reachData.first.second,
-                             reachData.second);
-    }
-  );
-
-  return SourceOutputData(profile, std::move(operations), std::move(sinks),
-                          std::move(escalations), std::move(uses),
-                          std::move(reaches));
+  return SourceOutputData(profile, std::move(operations),
+                          std::move(escalations), std::move(uses));
 }
 
 ProfileOutputData sortProfileData() {
   ProfileOutputData profileData;
   profileData.reserve(s_profileMap.size());
 
-  // Process each profile, then sort the results
   std::transform(
     s_profileMap.begin(), s_profileMap.end(), std::back_inserter(profileData),
-    [](const std::pair<SrcKey, LoggingProfile*>& sourceData) {
-      return sortSourceData(sourceData.second);
-    }
+    [](auto const& pair) { return sortSourceData(pair.second); }
   );
-
   std::sort(profileData.begin(), profileData.end());
 
   return profileData;
 }
 
+std::vector<SinkOutputData> sortSinkData() {
+  std::vector<SinkOutputData> sinkData;
+  sinkData.reserve(s_sinkMap.size());
+
+  for (auto const& it : s_sinkMap) {
+    sinkData.push_back(SinkOutputData(it.second));
+  }
+  std::sort(sinkData.begin(), sinkData.end());
+
+  return sinkData;
 }
 
-void exportProfiles() {
-  assertx(allowBespokeArrayLikes());
+}
 
-  if (RO::EvalExportLoggingArrayDataPath.empty()) return;
+void stopProfiling() {
+  assertx(allowBespokeArrayLikes());
+  assertx(s_profiling.load(std::memory_order_relaxed));
 
   {
-    folly::SharedMutex::WriteHolder lock{s_exportStartedLock};
-    s_exportStarted.store(true, std::memory_order_relaxed);
+    auto expected = true;
+    folly::SharedMutex::WriteHolder lock{s_profilingLock};
+    if (!s_profiling.compare_exchange_strong(expected, false)) return;
+  }
+}
+
+namespace {
+void freeProfileData() {
+  if (shouldTestBespokeArrayLikes()) {
+    // When testing bespoke array-likes, we use the data struct to cache
+    // logging and monotype arrays. Therefore, we do not free them after layout
+    // selection.
+    return;
+  }
+
+  eachSource([](auto& x) { x.releaseData(); });
+  eachSink([](auto& x) { x.releaseData(); });
+}
+}
+
+void startExportProfiles() {
+  if (RO::EvalExportLoggingArrayDataPath.empty()) {
+    freeProfileData();
+    return;
   }
 
   s_exportProfilesThread = std::thread([] {
+    SCOPE_EXIT { freeProfileData(); };
+
     auto const sources = sortProfileData();
+    auto const sinks = sortSinkData();
     auto const file = fopen(RO::EvalExportLoggingArrayDataPath.c_str(), "w");
     if (!file) return;
 
     SCOPE_EXIT { fclose(file); };
 
+    exportLayouts(file);
     exportSortedProfiles(file, sources);
+    exportSortedSinks(file, sinks);
   });
 }
 
 void waitOnExportProfiles() {
-  if (s_exportStarted.load(std::memory_order_relaxed)) {
+  if (s_exportProfilesThread.joinable()) {
     s_exportProfilesThread.join();
   }
 }
@@ -660,11 +909,14 @@ void waitOnExportProfiles() {
 
 namespace {
 void freeStaticArray(ArrayData* ad) {
+  // TODO(T80237666): Make this code less fragile by moving this logic next
+  // to the corresponding allocation logic in HashTable::staticAlloc().
   assertx(ad->isStatic());
-  auto const alloc = ad->hasStrKeyTable()
-    ? reinterpret_cast<char*>(ad->mutableStrKeyTable())
-    : reinterpret_cast<char*>(ad);
- RO::EvalLowStaticArrays ? low_free(alloc) : uncounted_free(alloc);
+  auto const extra = ad->hasStrKeyTable()
+    ? (sizeof(StrKeyTable) + 15) & ~15ull
+    : 0;
+  auto const alloc = reinterpret_cast<char*>(ad) - extra;
+  RO::EvalLowStaticArrays ? low_free(alloc) : uncounted_free(alloc);
 }
 
 bool shouldLogAtSrcKey(SrcKey sk) {
@@ -683,59 +935,85 @@ bool shouldLogAtSrcKey(SrcKey sk) {
 
   return true;
 }
-}
 
-LoggingProfile* getLoggingProfile(SrcKey skRaw) {
-  if (!shouldLogAtSrcKey(skRaw)) return nullptr;
-
-  auto const sk = canonicalize(skRaw);
+LoggingProfile* getLoggingProfile(LoggingProfileKey key) {
+  assertx(allowBespokeArrayLikes());
   {
     ProfileMap::const_accessor it;
-    if (s_profileMap.find(it, sk)) return it->second;
+    if (s_profileMap.find(it, key)) return it->second;
   }
 
-  // Hold the read mutex for the duration of the mutation so that export cannot
-  // begin until the mutation is complete.
-  folly::SharedMutex::ReadHolder lock{s_exportStartedLock};
-  if (s_exportStarted.load(std::memory_order_relaxed)) return nullptr;
+  // Hold the read mutex for the duration of the mutation so that export
+  // cannot begin until the mutation is complete.
+  folly::SharedMutex::ReadHolder lock{s_profilingLock};
+  if (!s_profiling.load(std::memory_order_acquire)) return nullptr;
 
-  auto const ad = [&]() -> ArrayData* {
-    auto const op = sk.op();
-    if (op != Op::Array && op != Op::Vec &&
-        op != Op::Dict && op != Op::Keyset) {
-      return nullptr;
-    }
-    auto const unit = sk.func()->unit();
-    auto const result = unit->lookupArrayId(getImm(sk.pc(), 0).u_AA);
-    return const_cast<ArrayData*>(result);
-  }();
-
-  auto profile = std::make_unique<LoggingProfile>(sk);
+  auto profile = std::make_unique<LoggingProfile>(key);
+  auto const ad = getStaticArray(key);
   if (ad) {
-    profile->staticLoggingArray = LoggingArray::MakeStatic(ad, profile.get());
-    profile->staticSampledArray = ad->makeSampledStaticArray();
+    profile->data->staticLoggingArray = LoggingArray::MakeStatic(ad, profile.get());
+    profile->data->staticSampledArray = ad->makeSampledStaticArray();
   }
 
   auto const result = [&]{
     ProfileMap::accessor insert;
-    if (s_profileMap.insert(insert, sk)) {
+    if (s_profileMap.insert(insert, key)) {
       insert->second = profile.release();
     }
     return insert->second;
   }();
 
+  // If the array was static, we must either log the new static memory we used
+  // or free that memory, depending on whether we won the race to set profile.
   if (ad) {
     if (profile) {
-      // We lost the race to set profile. Free the static arrays we allocated.
-      // We do so in reverse order in case we're using a static bump allocator.
-      freeStaticArray(profile->staticSampledArray);
-      freeStaticArray(profile->staticLoggingArray);
+      freeStaticArray(profile->data->staticSampledArray);
+      freeStaticArray(profile->data->staticLoggingArray);
     } else {
-      // We won the race to set profile, so we log the new static allocations.
       MemoryStats::LogAlloc(AllocKind::StaticArray, sizeof(LoggingArray));
       MemoryStats::LogAlloc(AllocKind::StaticArray, allocSize(ad));
     }
   }
+  return result;
+}
+}
+
+LoggingProfile* getLoggingProfile(SrcKey sk) {
+  if (!shouldLogAtSrcKey(sk)) return nullptr;
+  return getLoggingProfile(LoggingProfileKey(canonicalize(sk)));
+}
+
+LoggingProfile* getLoggingProfile(const Class* cls, Slot slot) {
+  if (cls->declProperties()[slot].name == s_86reified_prop.get()) {
+    return nullptr;
+  }
+  return getLoggingProfile(LoggingProfileKey(cls, slot));
+}
+
+SinkProfile* getSinkProfile(TransID id, SrcKey skRaw) {
+  assertx(allowBespokeArrayLikes());
+  auto const key = SinkProfileKey { id, canonicalize(skRaw) };
+  {
+    SinkMap::const_accessor it;
+    if (s_sinkMap.find(it, key)) return it->second;
+  }
+
+  // Hold the read mutex for the duration of the mutation so that export cannot
+  // begin until the mutation is complete.
+  folly::SharedMutex::ReadHolder lock{s_profilingLock};
+  if (!s_profiling.load(std::memory_order_acquire)) return nullptr;
+
+  auto profile = std::make_unique<SinkProfile>(key);
+
+  auto const result = [&]{
+    SinkMap::accessor insert;
+    if (s_sinkMap.insert(insert, key)) {
+      insert->second = profile.release();
+    }
+    return insert->second;
+  }();
+
+  // Don't hold the lock while we free profile.
   return result;
 }
 
@@ -754,6 +1032,40 @@ SrcKey getSrcKey() {
   auto const result = SrcKey(func, vmpc(), ResumeMode::None);
   assertx(canonicalize(result) == result);
   return result;
+}
+
+void eachSource(std::function<void(LoggingProfile& profile)> fn) {
+  assertx(!s_profiling.load(std::memory_order_acquire));
+  for (auto& it : s_profileMap) fn(*it.second);
+}
+
+void eachSink(std::function<void(SinkProfile& profile)> fn) {
+  assertx(!s_profiling.load(std::memory_order_acquire));
+  for (auto& it : s_sinkMap) fn(*it.second);
+}
+
+void deserializeSource(LoggingProfileKey key, jit::ArrayLayout layout) {
+  ProfileMap::accessor insert;
+  always_assert(s_profileMap.insert(insert, key));
+  insert->second = new LoggingProfile(key, layout);
+}
+
+void deserializeSink(SinkProfileKey key, jit::ArrayLayout layout) {
+  SinkMap::accessor insert;
+  always_assert(s_sinkMap.insert(insert, key));
+  insert->second = new SinkProfile(key, layout);
+}
+
+size_t countSources() {
+  return s_profileMap.size();
+}
+
+size_t countSinks() {
+  return s_sinkMap.size();
+}
+
+ArrayOp getArrayOp(uint64_t key) {
+  return EventKey(key).getOp();
 }
 
 //////////////////////////////////////////////////////////////////////////////

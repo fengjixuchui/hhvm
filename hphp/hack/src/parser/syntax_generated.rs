@@ -320,7 +320,7 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_function_declaration_header(_: &C, function_modifiers: Self, function_keyword: Self, function_name: Self, function_type_parameter_list: Self, function_left_paren: Self, function_parameter_list: Self, function_right_paren: Self, function_capability: Self, function_capability_provisional: Self, function_colon: Self, function_type: Self, function_where_clause: Self) -> Self {
+    fn make_function_declaration_header(_: &C, function_modifiers: Self, function_keyword: Self, function_name: Self, function_type_parameter_list: Self, function_left_paren: Self, function_parameter_list: Self, function_right_paren: Self, function_capability: Self, function_colon: Self, function_type: Self, function_where_clause: Self) -> Self {
         let syntax = SyntaxVariant::FunctionDeclarationHeader(Box::new(FunctionDeclarationHeaderChildren {
             function_modifiers,
             function_keyword,
@@ -330,7 +330,6 @@ where
             function_parameter_list,
             function_right_paren,
             function_capability,
-            function_capability_provisional,
             function_colon,
             function_type,
             function_where_clause,
@@ -344,19 +343,6 @@ where
             capability_left_bracket,
             capability_types,
             capability_right_bracket,
-        }));
-        let value = V::from_values(syntax.iter_children().map(|child| &child.value));
-        Self::make(syntax, value)
-    }
-
-    fn make_capability_provisional(_: &C, capability_provisional_at: Self, capability_provisional_left_brace: Self, capability_provisional_type: Self, capability_provisional_unsafe_plus: Self, capability_provisional_unsafe_type: Self, capability_provisional_right_brace: Self) -> Self {
-        let syntax = SyntaxVariant::CapabilityProvisional(Box::new(CapabilityProvisionalChildren {
-            capability_provisional_at,
-            capability_provisional_left_brace,
-            capability_provisional_type,
-            capability_provisional_unsafe_plus,
-            capability_provisional_unsafe_type,
-            capability_provisional_right_brace,
         }));
         let value = V::from_values(syntax.iter_children().map(|child| &child.value));
         Self::make(syntax, value)
@@ -520,6 +506,22 @@ where
             type_const_equal,
             type_const_type_specifier,
             type_const_semicolon,
+        }));
+        let value = V::from_values(syntax.iter_children().map(|child| &child.value));
+        Self::make(syntax, value)
+    }
+
+    fn make_context_const_declaration(_: &C, context_const_modifiers: Self, context_const_const_keyword: Self, context_const_ctx_keyword: Self, context_const_name: Self, context_const_type_parameters: Self, context_const_constraint: Self, context_const_equal: Self, context_const_ctx_list: Self, context_const_semicolon: Self) -> Self {
+        let syntax = SyntaxVariant::ContextConstDeclaration(Box::new(ContextConstDeclarationChildren {
+            context_const_modifiers,
+            context_const_const_keyword,
+            context_const_ctx_keyword,
+            context_const_name,
+            context_const_type_parameters,
+            context_const_constraint,
+            context_const_equal,
+            context_const_ctx_list,
+            context_const_semicolon,
         }));
         let value = V::from_values(syntax.iter_children().map(|child| &child.value));
         Self::make(syntax, value)
@@ -859,25 +861,6 @@ where
             return_keyword,
             return_expression,
             return_semicolon,
-        }));
-        let value = V::from_values(syntax.iter_children().map(|child| &child.value));
-        Self::make(syntax, value)
-    }
-
-    fn make_goto_label(_: &C, goto_label_name: Self, goto_label_colon: Self) -> Self {
-        let syntax = SyntaxVariant::GotoLabel(Box::new(GotoLabelChildren {
-            goto_label_name,
-            goto_label_colon,
-        }));
-        let value = V::from_values(syntax.iter_children().map(|child| &child.value));
-        Self::make(syntax, value)
-    }
-
-    fn make_goto_statement(_: &C, goto_statement_keyword: Self, goto_statement_label_name: Self, goto_statement_semicolon: Self) -> Self {
-        let syntax = SyntaxVariant::GotoStatement(Box::new(GotoStatementChildren {
-            goto_statement_keyword,
-            goto_statement_label_name,
-            goto_statement_semicolon,
         }));
         let value = V::from_values(syntax.iter_children().map(|child| &child.value));
         Self::make(syntax, value)
@@ -1528,16 +1511,6 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_pu_access(_: &C, pu_access_left_type: Self, pu_access_separator: Self, pu_access_right_type: Self) -> Self {
-        let syntax = SyntaxVariant::PUAccess(Box::new(PUAccessChildren {
-            pu_access_left_type,
-            pu_access_separator,
-            pu_access_right_type,
-        }));
-        let value = V::from_values(syntax.iter_children().map(|child| &child.value));
-        Self::make(syntax, value)
-    }
-
     fn make_vector_type_specifier(_: &C, vector_type_keyword: Self, vector_type_left_angle: Self, vector_type_type: Self, vector_type_trailing_comma: Self, vector_type_right_angle: Self) -> Self {
         let syntax = SyntaxVariant::VectorTypeSpecifier(Box::new(VectorTypeSpecifierChildren {
             vector_type_keyword,
@@ -1585,6 +1558,15 @@ where
         Self::make(syntax, value)
     }
 
+    fn make_function_ctx_type_specifier(_: &C, function_ctx_type_keyword: Self, function_ctx_type_variable: Self) -> Self {
+        let syntax = SyntaxVariant::FunctionCtxTypeSpecifier(Box::new(FunctionCtxTypeSpecifierChildren {
+            function_ctx_type_keyword,
+            function_ctx_type_variable,
+        }));
+        let value = V::from_values(syntax.iter_children().map(|child| &child.value));
+        Self::make(syntax, value)
+    }
+
     fn make_type_parameter(_: &C, type_attribute_spec: Self, type_reified: Self, type_variance: Self, type_name: Self, type_param_params: Self, type_constraints: Self) -> Self {
         let syntax = SyntaxVariant::TypeParameter(Box::new(TypeParameterChildren {
             type_attribute_spec,
@@ -1602,6 +1584,15 @@ where
         let syntax = SyntaxVariant::TypeConstraint(Box::new(TypeConstraintChildren {
             constraint_keyword,
             constraint_type,
+        }));
+        let value = V::from_values(syntax.iter_children().map(|child| &child.value));
+        Self::make(syntax, value)
+    }
+
+    fn make_context_constraint(_: &C, ctx_constraint_keyword: Self, ctx_constraint_ctx_list: Self) -> Self {
+        let syntax = SyntaxVariant::ContextConstraint(Box::new(ContextConstraintChildren {
+            ctx_constraint_keyword,
+            ctx_constraint_ctx_list,
         }));
         let value = V::from_values(syntax.iter_children().map(|child| &child.value));
         Self::make(syntax, value)
@@ -1854,96 +1845,6 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_pocket_atom_expression(_: &C, pocket_atom_glyph: Self, pocket_atom_expression: Self) -> Self {
-        let syntax = SyntaxVariant::PocketAtomExpression(Box::new(PocketAtomExpressionChildren {
-            pocket_atom_glyph,
-            pocket_atom_expression,
-        }));
-        let value = V::from_values(syntax.iter_children().map(|child| &child.value));
-        Self::make(syntax, value)
-    }
-
-    fn make_pocket_identifier_expression(_: &C, pocket_identifier_qualifier: Self, pocket_identifier_pu_operator: Self, pocket_identifier_field: Self, pocket_identifier_operator: Self, pocket_identifier_name: Self) -> Self {
-        let syntax = SyntaxVariant::PocketIdentifierExpression(Box::new(PocketIdentifierExpressionChildren {
-            pocket_identifier_qualifier,
-            pocket_identifier_pu_operator,
-            pocket_identifier_field,
-            pocket_identifier_operator,
-            pocket_identifier_name,
-        }));
-        let value = V::from_values(syntax.iter_children().map(|child| &child.value));
-        Self::make(syntax, value)
-    }
-
-    fn make_pocket_atom_mapping_declaration(_: &C, pocket_atom_mapping_glyph: Self, pocket_atom_mapping_name: Self, pocket_atom_mapping_left_paren: Self, pocket_atom_mapping_mappings: Self, pocket_atom_mapping_right_paren: Self, pocket_atom_mapping_semicolon: Self) -> Self {
-        let syntax = SyntaxVariant::PocketAtomMappingDeclaration(Box::new(PocketAtomMappingDeclarationChildren {
-            pocket_atom_mapping_glyph,
-            pocket_atom_mapping_name,
-            pocket_atom_mapping_left_paren,
-            pocket_atom_mapping_mappings,
-            pocket_atom_mapping_right_paren,
-            pocket_atom_mapping_semicolon,
-        }));
-        let value = V::from_values(syntax.iter_children().map(|child| &child.value));
-        Self::make(syntax, value)
-    }
-
-    fn make_pocket_enum_declaration(_: &C, pocket_enum_attributes: Self, pocket_enum_modifiers: Self, pocket_enum_enum: Self, pocket_enum_name: Self, pocket_enum_left_brace: Self, pocket_enum_fields: Self, pocket_enum_right_brace: Self) -> Self {
-        let syntax = SyntaxVariant::PocketEnumDeclaration(Box::new(PocketEnumDeclarationChildren {
-            pocket_enum_attributes,
-            pocket_enum_modifiers,
-            pocket_enum_enum,
-            pocket_enum_name,
-            pocket_enum_left_brace,
-            pocket_enum_fields,
-            pocket_enum_right_brace,
-        }));
-        let value = V::from_values(syntax.iter_children().map(|child| &child.value));
-        Self::make(syntax, value)
-    }
-
-    fn make_pocket_field_type_expr_declaration(_: &C, pocket_field_type_expr_case: Self, pocket_field_type_expr_type: Self, pocket_field_type_expr_name: Self, pocket_field_type_expr_semicolon: Self) -> Self {
-        let syntax = SyntaxVariant::PocketFieldTypeExprDeclaration(Box::new(PocketFieldTypeExprDeclarationChildren {
-            pocket_field_type_expr_case,
-            pocket_field_type_expr_type,
-            pocket_field_type_expr_name,
-            pocket_field_type_expr_semicolon,
-        }));
-        let value = V::from_values(syntax.iter_children().map(|child| &child.value));
-        Self::make(syntax, value)
-    }
-
-    fn make_pocket_field_type_declaration(_: &C, pocket_field_type_case: Self, pocket_field_type_type: Self, pocket_field_type_type_parameter: Self, pocket_field_type_semicolon: Self) -> Self {
-        let syntax = SyntaxVariant::PocketFieldTypeDeclaration(Box::new(PocketFieldTypeDeclarationChildren {
-            pocket_field_type_case,
-            pocket_field_type_type,
-            pocket_field_type_type_parameter,
-            pocket_field_type_semicolon,
-        }));
-        let value = V::from_values(syntax.iter_children().map(|child| &child.value));
-        Self::make(syntax, value)
-    }
-
-    fn make_pocket_mapping_id_declaration(_: &C, pocket_mapping_id_name: Self, pocket_mapping_id_initializer: Self) -> Self {
-        let syntax = SyntaxVariant::PocketMappingIdDeclaration(Box::new(PocketMappingIdDeclarationChildren {
-            pocket_mapping_id_name,
-            pocket_mapping_id_initializer,
-        }));
-        let value = V::from_values(syntax.iter_children().map(|child| &child.value));
-        Self::make(syntax, value)
-    }
-
-    fn make_pocket_mapping_type_declaration(_: &C, pocket_mapping_type_keyword: Self, pocket_mapping_type_name: Self, pocket_mapping_type_equal: Self, pocket_mapping_type_type: Self) -> Self {
-        let syntax = SyntaxVariant::PocketMappingTypeDeclaration(Box::new(PocketMappingTypeDeclarationChildren {
-            pocket_mapping_type_keyword,
-            pocket_mapping_type_name,
-            pocket_mapping_type_equal,
-            pocket_mapping_type_type,
-        }));
-        let value = V::from_values(syntax.iter_children().map(|child| &child.value));
-        Self::make(syntax, value)
-    }
-
  }
 
 impl<T, V> Syntax<T, V>
@@ -2180,7 +2081,7 @@ where
                 acc
             },
             SyntaxVariant::FunctionDeclarationHeader(x) => {
-                let FunctionDeclarationHeaderChildren { function_modifiers, function_keyword, function_name, function_type_parameter_list, function_left_paren, function_parameter_list, function_right_paren, function_capability, function_capability_provisional, function_colon, function_type, function_where_clause } = *x;
+                let FunctionDeclarationHeaderChildren { function_modifiers, function_keyword, function_name, function_type_parameter_list, function_left_paren, function_parameter_list, function_right_paren, function_capability, function_colon, function_type, function_where_clause } = *x;
                 let acc = f(function_modifiers, acc);
                 let acc = f(function_keyword, acc);
                 let acc = f(function_name, acc);
@@ -2189,7 +2090,6 @@ where
                 let acc = f(function_parameter_list, acc);
                 let acc = f(function_right_paren, acc);
                 let acc = f(function_capability, acc);
-                let acc = f(function_capability_provisional, acc);
                 let acc = f(function_colon, acc);
                 let acc = f(function_type, acc);
                 let acc = f(function_where_clause, acc);
@@ -2200,16 +2100,6 @@ where
                 let acc = f(capability_left_bracket, acc);
                 let acc = f(capability_types, acc);
                 let acc = f(capability_right_bracket, acc);
-                acc
-            },
-            SyntaxVariant::CapabilityProvisional(x) => {
-                let CapabilityProvisionalChildren { capability_provisional_at, capability_provisional_left_brace, capability_provisional_type, capability_provisional_unsafe_plus, capability_provisional_unsafe_type, capability_provisional_right_brace } = *x;
-                let acc = f(capability_provisional_at, acc);
-                let acc = f(capability_provisional_left_brace, acc);
-                let acc = f(capability_provisional_type, acc);
-                let acc = f(capability_provisional_unsafe_plus, acc);
-                let acc = f(capability_provisional_unsafe_type, acc);
-                let acc = f(capability_provisional_right_brace, acc);
                 acc
             },
             SyntaxVariant::WhereClause(x) => {
@@ -2331,6 +2221,19 @@ where
                 let acc = f(type_const_equal, acc);
                 let acc = f(type_const_type_specifier, acc);
                 let acc = f(type_const_semicolon, acc);
+                acc
+            },
+            SyntaxVariant::ContextConstDeclaration(x) => {
+                let ContextConstDeclarationChildren { context_const_modifiers, context_const_const_keyword, context_const_ctx_keyword, context_const_name, context_const_type_parameters, context_const_constraint, context_const_equal, context_const_ctx_list, context_const_semicolon } = *x;
+                let acc = f(context_const_modifiers, acc);
+                let acc = f(context_const_const_keyword, acc);
+                let acc = f(context_const_ctx_keyword, acc);
+                let acc = f(context_const_name, acc);
+                let acc = f(context_const_type_parameters, acc);
+                let acc = f(context_const_constraint, acc);
+                let acc = f(context_const_equal, acc);
+                let acc = f(context_const_ctx_list, acc);
+                let acc = f(context_const_semicolon, acc);
                 acc
             },
             SyntaxVariant::DecoratedExpression(x) => {
@@ -2577,19 +2480,6 @@ where
                 let acc = f(return_keyword, acc);
                 let acc = f(return_expression, acc);
                 let acc = f(return_semicolon, acc);
-                acc
-            },
-            SyntaxVariant::GotoLabel(x) => {
-                let GotoLabelChildren { goto_label_name, goto_label_colon } = *x;
-                let acc = f(goto_label_name, acc);
-                let acc = f(goto_label_colon, acc);
-                acc
-            },
-            SyntaxVariant::GotoStatement(x) => {
-                let GotoStatementChildren { goto_statement_keyword, goto_statement_label_name, goto_statement_semicolon } = *x;
-                let acc = f(goto_statement_keyword, acc);
-                let acc = f(goto_statement_label_name, acc);
-                let acc = f(goto_statement_semicolon, acc);
                 acc
             },
             SyntaxVariant::ThrowStatement(x) => {
@@ -3054,13 +2944,6 @@ where
                 let acc = f(type_constant_right_type, acc);
                 acc
             },
-            SyntaxVariant::PUAccess(x) => {
-                let PUAccessChildren { pu_access_left_type, pu_access_separator, pu_access_right_type } = *x;
-                let acc = f(pu_access_left_type, acc);
-                let acc = f(pu_access_separator, acc);
-                let acc = f(pu_access_right_type, acc);
-                acc
-            },
             SyntaxVariant::VectorTypeSpecifier(x) => {
                 let VectorTypeSpecifierChildren { vector_type_keyword, vector_type_left_angle, vector_type_type, vector_type_trailing_comma, vector_type_right_angle } = *x;
                 let acc = f(vector_type_keyword, acc);
@@ -3096,6 +2979,12 @@ where
                 let acc = f(varray_right_angle, acc);
                 acc
             },
+            SyntaxVariant::FunctionCtxTypeSpecifier(x) => {
+                let FunctionCtxTypeSpecifierChildren { function_ctx_type_keyword, function_ctx_type_variable } = *x;
+                let acc = f(function_ctx_type_keyword, acc);
+                let acc = f(function_ctx_type_variable, acc);
+                acc
+            },
             SyntaxVariant::TypeParameter(x) => {
                 let TypeParameterChildren { type_attribute_spec, type_reified, type_variance, type_name, type_param_params, type_constraints } = *x;
                 let acc = f(type_attribute_spec, acc);
@@ -3110,6 +2999,12 @@ where
                 let TypeConstraintChildren { constraint_keyword, constraint_type } = *x;
                 let acc = f(constraint_keyword, acc);
                 let acc = f(constraint_type, acc);
+                acc
+            },
+            SyntaxVariant::ContextConstraint(x) => {
+                let ContextConstraintChildren { ctx_constraint_keyword, ctx_constraint_ctx_list } = *x;
+                let acc = f(ctx_constraint_keyword, acc);
+                let acc = f(ctx_constraint_ctx_list, acc);
                 acc
             },
             SyntaxVariant::DarrayTypeSpecifier(x) => {
@@ -3287,72 +3182,6 @@ where
                 let acc = f(enum_atom_expression, acc);
                 acc
             },
-            SyntaxVariant::PocketAtomExpression(x) => {
-                let PocketAtomExpressionChildren { pocket_atom_glyph, pocket_atom_expression } = *x;
-                let acc = f(pocket_atom_glyph, acc);
-                let acc = f(pocket_atom_expression, acc);
-                acc
-            },
-            SyntaxVariant::PocketIdentifierExpression(x) => {
-                let PocketIdentifierExpressionChildren { pocket_identifier_qualifier, pocket_identifier_pu_operator, pocket_identifier_field, pocket_identifier_operator, pocket_identifier_name } = *x;
-                let acc = f(pocket_identifier_qualifier, acc);
-                let acc = f(pocket_identifier_pu_operator, acc);
-                let acc = f(pocket_identifier_field, acc);
-                let acc = f(pocket_identifier_operator, acc);
-                let acc = f(pocket_identifier_name, acc);
-                acc
-            },
-            SyntaxVariant::PocketAtomMappingDeclaration(x) => {
-                let PocketAtomMappingDeclarationChildren { pocket_atom_mapping_glyph, pocket_atom_mapping_name, pocket_atom_mapping_left_paren, pocket_atom_mapping_mappings, pocket_atom_mapping_right_paren, pocket_atom_mapping_semicolon } = *x;
-                let acc = f(pocket_atom_mapping_glyph, acc);
-                let acc = f(pocket_atom_mapping_name, acc);
-                let acc = f(pocket_atom_mapping_left_paren, acc);
-                let acc = f(pocket_atom_mapping_mappings, acc);
-                let acc = f(pocket_atom_mapping_right_paren, acc);
-                let acc = f(pocket_atom_mapping_semicolon, acc);
-                acc
-            },
-            SyntaxVariant::PocketEnumDeclaration(x) => {
-                let PocketEnumDeclarationChildren { pocket_enum_attributes, pocket_enum_modifiers, pocket_enum_enum, pocket_enum_name, pocket_enum_left_brace, pocket_enum_fields, pocket_enum_right_brace } = *x;
-                let acc = f(pocket_enum_attributes, acc);
-                let acc = f(pocket_enum_modifiers, acc);
-                let acc = f(pocket_enum_enum, acc);
-                let acc = f(pocket_enum_name, acc);
-                let acc = f(pocket_enum_left_brace, acc);
-                let acc = f(pocket_enum_fields, acc);
-                let acc = f(pocket_enum_right_brace, acc);
-                acc
-            },
-            SyntaxVariant::PocketFieldTypeExprDeclaration(x) => {
-                let PocketFieldTypeExprDeclarationChildren { pocket_field_type_expr_case, pocket_field_type_expr_type, pocket_field_type_expr_name, pocket_field_type_expr_semicolon } = *x;
-                let acc = f(pocket_field_type_expr_case, acc);
-                let acc = f(pocket_field_type_expr_type, acc);
-                let acc = f(pocket_field_type_expr_name, acc);
-                let acc = f(pocket_field_type_expr_semicolon, acc);
-                acc
-            },
-            SyntaxVariant::PocketFieldTypeDeclaration(x) => {
-                let PocketFieldTypeDeclarationChildren { pocket_field_type_case, pocket_field_type_type, pocket_field_type_type_parameter, pocket_field_type_semicolon } = *x;
-                let acc = f(pocket_field_type_case, acc);
-                let acc = f(pocket_field_type_type, acc);
-                let acc = f(pocket_field_type_type_parameter, acc);
-                let acc = f(pocket_field_type_semicolon, acc);
-                acc
-            },
-            SyntaxVariant::PocketMappingIdDeclaration(x) => {
-                let PocketMappingIdDeclarationChildren { pocket_mapping_id_name, pocket_mapping_id_initializer } = *x;
-                let acc = f(pocket_mapping_id_name, acc);
-                let acc = f(pocket_mapping_id_initializer, acc);
-                acc
-            },
-            SyntaxVariant::PocketMappingTypeDeclaration(x) => {
-                let PocketMappingTypeDeclarationChildren { pocket_mapping_type_keyword, pocket_mapping_type_name, pocket_mapping_type_equal, pocket_mapping_type_type } = *x;
-                let acc = f(pocket_mapping_type_keyword, acc);
-                let acc = f(pocket_mapping_type_name, acc);
-                let acc = f(pocket_mapping_type_equal, acc);
-                let acc = f(pocket_mapping_type_type, acc);
-                acc
-            },
 
         }
     }
@@ -3391,7 +3220,6 @@ where
             SyntaxVariant::FunctionDeclaration {..} => SyntaxKind::FunctionDeclaration,
             SyntaxVariant::FunctionDeclarationHeader {..} => SyntaxKind::FunctionDeclarationHeader,
             SyntaxVariant::Capability {..} => SyntaxKind::Capability,
-            SyntaxVariant::CapabilityProvisional {..} => SyntaxKind::CapabilityProvisional,
             SyntaxVariant::WhereClause {..} => SyntaxKind::WhereClause,
             SyntaxVariant::WhereConstraint {..} => SyntaxKind::WhereConstraint,
             SyntaxVariant::MethodishDeclaration {..} => SyntaxKind::MethodishDeclaration,
@@ -3406,6 +3234,7 @@ where
             SyntaxVariant::ConstDeclaration {..} => SyntaxKind::ConstDeclaration,
             SyntaxVariant::ConstantDeclarator {..} => SyntaxKind::ConstantDeclarator,
             SyntaxVariant::TypeConstDeclaration {..} => SyntaxKind::TypeConstDeclaration,
+            SyntaxVariant::ContextConstDeclaration {..} => SyntaxKind::ContextConstDeclaration,
             SyntaxVariant::DecoratedExpression {..} => SyntaxKind::DecoratedExpression,
             SyntaxVariant::ParameterDeclaration {..} => SyntaxKind::ParameterDeclaration,
             SyntaxVariant::VariadicParameter {..} => SyntaxKind::VariadicParameter,
@@ -3437,8 +3266,6 @@ where
             SyntaxVariant::CaseLabel {..} => SyntaxKind::CaseLabel,
             SyntaxVariant::DefaultLabel {..} => SyntaxKind::DefaultLabel,
             SyntaxVariant::ReturnStatement {..} => SyntaxKind::ReturnStatement,
-            SyntaxVariant::GotoLabel {..} => SyntaxKind::GotoLabel,
-            SyntaxVariant::GotoStatement {..} => SyntaxKind::GotoStatement,
             SyntaxVariant::ThrowStatement {..} => SyntaxKind::ThrowStatement,
             SyntaxVariant::BreakStatement {..} => SyntaxKind::BreakStatement,
             SyntaxVariant::ContinueStatement {..} => SyntaxKind::ContinueStatement,
@@ -3500,13 +3327,14 @@ where
             SyntaxVariant::XHPExpression {..} => SyntaxKind::XHPExpression,
             SyntaxVariant::XHPClose {..} => SyntaxKind::XHPClose,
             SyntaxVariant::TypeConstant {..} => SyntaxKind::TypeConstant,
-            SyntaxVariant::PUAccess {..} => SyntaxKind::PUAccess,
             SyntaxVariant::VectorTypeSpecifier {..} => SyntaxKind::VectorTypeSpecifier,
             SyntaxVariant::KeysetTypeSpecifier {..} => SyntaxKind::KeysetTypeSpecifier,
             SyntaxVariant::TupleTypeExplicitSpecifier {..} => SyntaxKind::TupleTypeExplicitSpecifier,
             SyntaxVariant::VarrayTypeSpecifier {..} => SyntaxKind::VarrayTypeSpecifier,
+            SyntaxVariant::FunctionCtxTypeSpecifier {..} => SyntaxKind::FunctionCtxTypeSpecifier,
             SyntaxVariant::TypeParameter {..} => SyntaxKind::TypeParameter,
             SyntaxVariant::TypeConstraint {..} => SyntaxKind::TypeConstraint,
+            SyntaxVariant::ContextConstraint {..} => SyntaxKind::ContextConstraint,
             SyntaxVariant::DarrayTypeSpecifier {..} => SyntaxKind::DarrayTypeSpecifier,
             SyntaxVariant::DictionaryTypeSpecifier {..} => SyntaxKind::DictionaryTypeSpecifier,
             SyntaxVariant::ClosureTypeSpecifier {..} => SyntaxKind::ClosureTypeSpecifier,
@@ -3531,14 +3359,6 @@ where
             SyntaxVariant::ErrorSyntax {..} => SyntaxKind::ErrorSyntax,
             SyntaxVariant::ListItem {..} => SyntaxKind::ListItem,
             SyntaxVariant::EnumAtomExpression {..} => SyntaxKind::EnumAtomExpression,
-            SyntaxVariant::PocketAtomExpression {..} => SyntaxKind::PocketAtomExpression,
-            SyntaxVariant::PocketIdentifierExpression {..} => SyntaxKind::PocketIdentifierExpression,
-            SyntaxVariant::PocketAtomMappingDeclaration {..} => SyntaxKind::PocketAtomMappingDeclaration,
-            SyntaxVariant::PocketEnumDeclaration {..} => SyntaxKind::PocketEnumDeclaration,
-            SyntaxVariant::PocketFieldTypeExprDeclaration {..} => SyntaxKind::PocketFieldTypeExprDeclaration,
-            SyntaxVariant::PocketFieldTypeDeclaration {..} => SyntaxKind::PocketFieldTypeDeclaration,
-            SyntaxVariant::PocketMappingIdDeclaration {..} => SyntaxKind::PocketMappingIdDeclaration,
-            SyntaxVariant::PocketMappingTypeDeclaration {..} => SyntaxKind::PocketMappingTypeDeclaration,
         }
     }
 
@@ -3733,11 +3553,10 @@ where
                  function_attribute_spec: ts.pop().unwrap(),
                  
              })),
-             (SyntaxKind::FunctionDeclarationHeader, 12) => SyntaxVariant::FunctionDeclarationHeader(Box::new(FunctionDeclarationHeaderChildren {
+             (SyntaxKind::FunctionDeclarationHeader, 11) => SyntaxVariant::FunctionDeclarationHeader(Box::new(FunctionDeclarationHeaderChildren {
                  function_where_clause: ts.pop().unwrap(),
                  function_type: ts.pop().unwrap(),
                  function_colon: ts.pop().unwrap(),
-                 function_capability_provisional: ts.pop().unwrap(),
                  function_capability: ts.pop().unwrap(),
                  function_right_paren: ts.pop().unwrap(),
                  function_parameter_list: ts.pop().unwrap(),
@@ -3752,15 +3571,6 @@ where
                  capability_right_bracket: ts.pop().unwrap(),
                  capability_types: ts.pop().unwrap(),
                  capability_left_bracket: ts.pop().unwrap(),
-                 
-             })),
-             (SyntaxKind::CapabilityProvisional, 6) => SyntaxVariant::CapabilityProvisional(Box::new(CapabilityProvisionalChildren {
-                 capability_provisional_right_brace: ts.pop().unwrap(),
-                 capability_provisional_unsafe_type: ts.pop().unwrap(),
-                 capability_provisional_unsafe_plus: ts.pop().unwrap(),
-                 capability_provisional_type: ts.pop().unwrap(),
-                 capability_provisional_left_brace: ts.pop().unwrap(),
-                 capability_provisional_at: ts.pop().unwrap(),
                  
              })),
              (SyntaxKind::WhereClause, 2) => SyntaxVariant::WhereClause(Box::new(WhereClauseChildren {
@@ -3868,6 +3678,18 @@ where
                  type_const_keyword: ts.pop().unwrap(),
                  type_const_modifiers: ts.pop().unwrap(),
                  type_const_attribute_spec: ts.pop().unwrap(),
+                 
+             })),
+             (SyntaxKind::ContextConstDeclaration, 9) => SyntaxVariant::ContextConstDeclaration(Box::new(ContextConstDeclarationChildren {
+                 context_const_semicolon: ts.pop().unwrap(),
+                 context_const_ctx_list: ts.pop().unwrap(),
+                 context_const_equal: ts.pop().unwrap(),
+                 context_const_constraint: ts.pop().unwrap(),
+                 context_const_type_parameters: ts.pop().unwrap(),
+                 context_const_name: ts.pop().unwrap(),
+                 context_const_ctx_keyword: ts.pop().unwrap(),
+                 context_const_const_keyword: ts.pop().unwrap(),
+                 context_const_modifiers: ts.pop().unwrap(),
                  
              })),
              (SyntaxKind::DecoratedExpression, 2) => SyntaxVariant::DecoratedExpression(Box::new(DecoratedExpressionChildren {
@@ -4083,17 +3905,6 @@ where
                  return_semicolon: ts.pop().unwrap(),
                  return_expression: ts.pop().unwrap(),
                  return_keyword: ts.pop().unwrap(),
-                 
-             })),
-             (SyntaxKind::GotoLabel, 2) => SyntaxVariant::GotoLabel(Box::new(GotoLabelChildren {
-                 goto_label_colon: ts.pop().unwrap(),
-                 goto_label_name: ts.pop().unwrap(),
-                 
-             })),
-             (SyntaxKind::GotoStatement, 3) => SyntaxVariant::GotoStatement(Box::new(GotoStatementChildren {
-                 goto_statement_semicolon: ts.pop().unwrap(),
-                 goto_statement_label_name: ts.pop().unwrap(),
-                 goto_statement_keyword: ts.pop().unwrap(),
                  
              })),
              (SyntaxKind::ThrowStatement, 3) => SyntaxVariant::ThrowStatement(Box::new(ThrowStatementChildren {
@@ -4497,12 +4308,6 @@ where
                  type_constant_left_type: ts.pop().unwrap(),
                  
              })),
-             (SyntaxKind::PUAccess, 3) => SyntaxVariant::PUAccess(Box::new(PUAccessChildren {
-                 pu_access_right_type: ts.pop().unwrap(),
-                 pu_access_separator: ts.pop().unwrap(),
-                 pu_access_left_type: ts.pop().unwrap(),
-                 
-             })),
              (SyntaxKind::VectorTypeSpecifier, 5) => SyntaxVariant::VectorTypeSpecifier(Box::new(VectorTypeSpecifierChildren {
                  vector_type_right_angle: ts.pop().unwrap(),
                  vector_type_trailing_comma: ts.pop().unwrap(),
@@ -4534,6 +4339,11 @@ where
                  varray_keyword: ts.pop().unwrap(),
                  
              })),
+             (SyntaxKind::FunctionCtxTypeSpecifier, 2) => SyntaxVariant::FunctionCtxTypeSpecifier(Box::new(FunctionCtxTypeSpecifierChildren {
+                 function_ctx_type_variable: ts.pop().unwrap(),
+                 function_ctx_type_keyword: ts.pop().unwrap(),
+                 
+             })),
              (SyntaxKind::TypeParameter, 6) => SyntaxVariant::TypeParameter(Box::new(TypeParameterChildren {
                  type_constraints: ts.pop().unwrap(),
                  type_param_params: ts.pop().unwrap(),
@@ -4546,6 +4356,11 @@ where
              (SyntaxKind::TypeConstraint, 2) => SyntaxVariant::TypeConstraint(Box::new(TypeConstraintChildren {
                  constraint_type: ts.pop().unwrap(),
                  constraint_keyword: ts.pop().unwrap(),
+                 
+             })),
+             (SyntaxKind::ContextConstraint, 2) => SyntaxVariant::ContextConstraint(Box::new(ContextConstraintChildren {
+                 ctx_constraint_ctx_list: ts.pop().unwrap(),
+                 ctx_constraint_keyword: ts.pop().unwrap(),
                  
              })),
              (SyntaxKind::DarrayTypeSpecifier, 7) => SyntaxVariant::DarrayTypeSpecifier(Box::new(DarrayTypeSpecifierChildren {
@@ -4697,64 +4512,6 @@ where
              (SyntaxKind::EnumAtomExpression, 2) => SyntaxVariant::EnumAtomExpression(Box::new(EnumAtomExpressionChildren {
                  enum_atom_expression: ts.pop().unwrap(),
                  enum_atom_hash: ts.pop().unwrap(),
-                 
-             })),
-             (SyntaxKind::PocketAtomExpression, 2) => SyntaxVariant::PocketAtomExpression(Box::new(PocketAtomExpressionChildren {
-                 pocket_atom_expression: ts.pop().unwrap(),
-                 pocket_atom_glyph: ts.pop().unwrap(),
-                 
-             })),
-             (SyntaxKind::PocketIdentifierExpression, 5) => SyntaxVariant::PocketIdentifierExpression(Box::new(PocketIdentifierExpressionChildren {
-                 pocket_identifier_name: ts.pop().unwrap(),
-                 pocket_identifier_operator: ts.pop().unwrap(),
-                 pocket_identifier_field: ts.pop().unwrap(),
-                 pocket_identifier_pu_operator: ts.pop().unwrap(),
-                 pocket_identifier_qualifier: ts.pop().unwrap(),
-                 
-             })),
-             (SyntaxKind::PocketAtomMappingDeclaration, 6) => SyntaxVariant::PocketAtomMappingDeclaration(Box::new(PocketAtomMappingDeclarationChildren {
-                 pocket_atom_mapping_semicolon: ts.pop().unwrap(),
-                 pocket_atom_mapping_right_paren: ts.pop().unwrap(),
-                 pocket_atom_mapping_mappings: ts.pop().unwrap(),
-                 pocket_atom_mapping_left_paren: ts.pop().unwrap(),
-                 pocket_atom_mapping_name: ts.pop().unwrap(),
-                 pocket_atom_mapping_glyph: ts.pop().unwrap(),
-                 
-             })),
-             (SyntaxKind::PocketEnumDeclaration, 7) => SyntaxVariant::PocketEnumDeclaration(Box::new(PocketEnumDeclarationChildren {
-                 pocket_enum_right_brace: ts.pop().unwrap(),
-                 pocket_enum_fields: ts.pop().unwrap(),
-                 pocket_enum_left_brace: ts.pop().unwrap(),
-                 pocket_enum_name: ts.pop().unwrap(),
-                 pocket_enum_enum: ts.pop().unwrap(),
-                 pocket_enum_modifiers: ts.pop().unwrap(),
-                 pocket_enum_attributes: ts.pop().unwrap(),
-                 
-             })),
-             (SyntaxKind::PocketFieldTypeExprDeclaration, 4) => SyntaxVariant::PocketFieldTypeExprDeclaration(Box::new(PocketFieldTypeExprDeclarationChildren {
-                 pocket_field_type_expr_semicolon: ts.pop().unwrap(),
-                 pocket_field_type_expr_name: ts.pop().unwrap(),
-                 pocket_field_type_expr_type: ts.pop().unwrap(),
-                 pocket_field_type_expr_case: ts.pop().unwrap(),
-                 
-             })),
-             (SyntaxKind::PocketFieldTypeDeclaration, 4) => SyntaxVariant::PocketFieldTypeDeclaration(Box::new(PocketFieldTypeDeclarationChildren {
-                 pocket_field_type_semicolon: ts.pop().unwrap(),
-                 pocket_field_type_type_parameter: ts.pop().unwrap(),
-                 pocket_field_type_type: ts.pop().unwrap(),
-                 pocket_field_type_case: ts.pop().unwrap(),
-                 
-             })),
-             (SyntaxKind::PocketMappingIdDeclaration, 2) => SyntaxVariant::PocketMappingIdDeclaration(Box::new(PocketMappingIdDeclarationChildren {
-                 pocket_mapping_id_initializer: ts.pop().unwrap(),
-                 pocket_mapping_id_name: ts.pop().unwrap(),
-                 
-             })),
-             (SyntaxKind::PocketMappingTypeDeclaration, 4) => SyntaxVariant::PocketMappingTypeDeclaration(Box::new(PocketMappingTypeDeclarationChildren {
-                 pocket_mapping_type_type: ts.pop().unwrap(),
-                 pocket_mapping_type_equal: ts.pop().unwrap(),
-                 pocket_mapping_type_name: ts.pop().unwrap(),
-                 pocket_mapping_type_keyword: ts.pop().unwrap(),
                  
              })),
              _ => panic!("from_children called with wrong number of children"),
@@ -4986,7 +4743,6 @@ pub struct FunctionDeclarationHeaderChildren<T, V> {
     pub function_parameter_list: Syntax<T, V>,
     pub function_right_paren: Syntax<T, V>,
     pub function_capability: Syntax<T, V>,
-    pub function_capability_provisional: Syntax<T, V>,
     pub function_colon: Syntax<T, V>,
     pub function_type: Syntax<T, V>,
     pub function_where_clause: Syntax<T, V>,
@@ -4997,16 +4753,6 @@ pub struct CapabilityChildren<T, V> {
     pub capability_left_bracket: Syntax<T, V>,
     pub capability_types: Syntax<T, V>,
     pub capability_right_bracket: Syntax<T, V>,
-}
-
-#[derive(Debug, Clone)]
-pub struct CapabilityProvisionalChildren<T, V> {
-    pub capability_provisional_at: Syntax<T, V>,
-    pub capability_provisional_left_brace: Syntax<T, V>,
-    pub capability_provisional_type: Syntax<T, V>,
-    pub capability_provisional_unsafe_plus: Syntax<T, V>,
-    pub capability_provisional_unsafe_type: Syntax<T, V>,
-    pub capability_provisional_right_brace: Syntax<T, V>,
 }
 
 #[derive(Debug, Clone)]
@@ -5128,6 +4874,19 @@ pub struct TypeConstDeclarationChildren<T, V> {
     pub type_const_equal: Syntax<T, V>,
     pub type_const_type_specifier: Syntax<T, V>,
     pub type_const_semicolon: Syntax<T, V>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContextConstDeclarationChildren<T, V> {
+    pub context_const_modifiers: Syntax<T, V>,
+    pub context_const_const_keyword: Syntax<T, V>,
+    pub context_const_ctx_keyword: Syntax<T, V>,
+    pub context_const_name: Syntax<T, V>,
+    pub context_const_type_parameters: Syntax<T, V>,
+    pub context_const_constraint: Syntax<T, V>,
+    pub context_const_equal: Syntax<T, V>,
+    pub context_const_ctx_list: Syntax<T, V>,
+    pub context_const_semicolon: Syntax<T, V>,
 }
 
 #[derive(Debug, Clone)]
@@ -5374,19 +5133,6 @@ pub struct ReturnStatementChildren<T, V> {
     pub return_keyword: Syntax<T, V>,
     pub return_expression: Syntax<T, V>,
     pub return_semicolon: Syntax<T, V>,
-}
-
-#[derive(Debug, Clone)]
-pub struct GotoLabelChildren<T, V> {
-    pub goto_label_name: Syntax<T, V>,
-    pub goto_label_colon: Syntax<T, V>,
-}
-
-#[derive(Debug, Clone)]
-pub struct GotoStatementChildren<T, V> {
-    pub goto_statement_keyword: Syntax<T, V>,
-    pub goto_statement_label_name: Syntax<T, V>,
-    pub goto_statement_semicolon: Syntax<T, V>,
 }
 
 #[derive(Debug, Clone)]
@@ -5852,13 +5598,6 @@ pub struct TypeConstantChildren<T, V> {
 }
 
 #[derive(Debug, Clone)]
-pub struct PUAccessChildren<T, V> {
-    pub pu_access_left_type: Syntax<T, V>,
-    pub pu_access_separator: Syntax<T, V>,
-    pub pu_access_right_type: Syntax<T, V>,
-}
-
-#[derive(Debug, Clone)]
 pub struct VectorTypeSpecifierChildren<T, V> {
     pub vector_type_keyword: Syntax<T, V>,
     pub vector_type_left_angle: Syntax<T, V>,
@@ -5894,6 +5633,12 @@ pub struct VarrayTypeSpecifierChildren<T, V> {
 }
 
 #[derive(Debug, Clone)]
+pub struct FunctionCtxTypeSpecifierChildren<T, V> {
+    pub function_ctx_type_keyword: Syntax<T, V>,
+    pub function_ctx_type_variable: Syntax<T, V>,
+}
+
+#[derive(Debug, Clone)]
 pub struct TypeParameterChildren<T, V> {
     pub type_attribute_spec: Syntax<T, V>,
     pub type_reified: Syntax<T, V>,
@@ -5907,6 +5652,12 @@ pub struct TypeParameterChildren<T, V> {
 pub struct TypeConstraintChildren<T, V> {
     pub constraint_keyword: Syntax<T, V>,
     pub constraint_type: Syntax<T, V>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContextConstraintChildren<T, V> {
+    pub ctx_constraint_keyword: Syntax<T, V>,
+    pub ctx_constraint_ctx_list: Syntax<T, V>,
 }
 
 #[derive(Debug, Clone)]
@@ -6084,72 +5835,6 @@ pub struct EnumAtomExpressionChildren<T, V> {
     pub enum_atom_expression: Syntax<T, V>,
 }
 
-#[derive(Debug, Clone)]
-pub struct PocketAtomExpressionChildren<T, V> {
-    pub pocket_atom_glyph: Syntax<T, V>,
-    pub pocket_atom_expression: Syntax<T, V>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PocketIdentifierExpressionChildren<T, V> {
-    pub pocket_identifier_qualifier: Syntax<T, V>,
-    pub pocket_identifier_pu_operator: Syntax<T, V>,
-    pub pocket_identifier_field: Syntax<T, V>,
-    pub pocket_identifier_operator: Syntax<T, V>,
-    pub pocket_identifier_name: Syntax<T, V>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PocketAtomMappingDeclarationChildren<T, V> {
-    pub pocket_atom_mapping_glyph: Syntax<T, V>,
-    pub pocket_atom_mapping_name: Syntax<T, V>,
-    pub pocket_atom_mapping_left_paren: Syntax<T, V>,
-    pub pocket_atom_mapping_mappings: Syntax<T, V>,
-    pub pocket_atom_mapping_right_paren: Syntax<T, V>,
-    pub pocket_atom_mapping_semicolon: Syntax<T, V>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PocketEnumDeclarationChildren<T, V> {
-    pub pocket_enum_attributes: Syntax<T, V>,
-    pub pocket_enum_modifiers: Syntax<T, V>,
-    pub pocket_enum_enum: Syntax<T, V>,
-    pub pocket_enum_name: Syntax<T, V>,
-    pub pocket_enum_left_brace: Syntax<T, V>,
-    pub pocket_enum_fields: Syntax<T, V>,
-    pub pocket_enum_right_brace: Syntax<T, V>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PocketFieldTypeExprDeclarationChildren<T, V> {
-    pub pocket_field_type_expr_case: Syntax<T, V>,
-    pub pocket_field_type_expr_type: Syntax<T, V>,
-    pub pocket_field_type_expr_name: Syntax<T, V>,
-    pub pocket_field_type_expr_semicolon: Syntax<T, V>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PocketFieldTypeDeclarationChildren<T, V> {
-    pub pocket_field_type_case: Syntax<T, V>,
-    pub pocket_field_type_type: Syntax<T, V>,
-    pub pocket_field_type_type_parameter: Syntax<T, V>,
-    pub pocket_field_type_semicolon: Syntax<T, V>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PocketMappingIdDeclarationChildren<T, V> {
-    pub pocket_mapping_id_name: Syntax<T, V>,
-    pub pocket_mapping_id_initializer: Syntax<T, V>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PocketMappingTypeDeclarationChildren<T, V> {
-    pub pocket_mapping_type_keyword: Syntax<T, V>,
-    pub pocket_mapping_type_name: Syntax<T, V>,
-    pub pocket_mapping_type_equal: Syntax<T, V>,
-    pub pocket_mapping_type_type: Syntax<T, V>,
-}
-
 
 #[derive(Debug, Clone)]
 pub enum SyntaxVariant<T, V> {
@@ -6185,7 +5870,6 @@ pub enum SyntaxVariant<T, V> {
     FunctionDeclaration(Box<FunctionDeclarationChildren<T, V>>),
     FunctionDeclarationHeader(Box<FunctionDeclarationHeaderChildren<T, V>>),
     Capability(Box<CapabilityChildren<T, V>>),
-    CapabilityProvisional(Box<CapabilityProvisionalChildren<T, V>>),
     WhereClause(Box<WhereClauseChildren<T, V>>),
     WhereConstraint(Box<WhereConstraintChildren<T, V>>),
     MethodishDeclaration(Box<MethodishDeclarationChildren<T, V>>),
@@ -6200,6 +5884,7 @@ pub enum SyntaxVariant<T, V> {
     ConstDeclaration(Box<ConstDeclarationChildren<T, V>>),
     ConstantDeclarator(Box<ConstantDeclaratorChildren<T, V>>),
     TypeConstDeclaration(Box<TypeConstDeclarationChildren<T, V>>),
+    ContextConstDeclaration(Box<ContextConstDeclarationChildren<T, V>>),
     DecoratedExpression(Box<DecoratedExpressionChildren<T, V>>),
     ParameterDeclaration(Box<ParameterDeclarationChildren<T, V>>),
     VariadicParameter(Box<VariadicParameterChildren<T, V>>),
@@ -6231,8 +5916,6 @@ pub enum SyntaxVariant<T, V> {
     CaseLabel(Box<CaseLabelChildren<T, V>>),
     DefaultLabel(Box<DefaultLabelChildren<T, V>>),
     ReturnStatement(Box<ReturnStatementChildren<T, V>>),
-    GotoLabel(Box<GotoLabelChildren<T, V>>),
-    GotoStatement(Box<GotoStatementChildren<T, V>>),
     ThrowStatement(Box<ThrowStatementChildren<T, V>>),
     BreakStatement(Box<BreakStatementChildren<T, V>>),
     ContinueStatement(Box<ContinueStatementChildren<T, V>>),
@@ -6294,13 +5977,14 @@ pub enum SyntaxVariant<T, V> {
     XHPExpression(Box<XHPExpressionChildren<T, V>>),
     XHPClose(Box<XHPCloseChildren<T, V>>),
     TypeConstant(Box<TypeConstantChildren<T, V>>),
-    PUAccess(Box<PUAccessChildren<T, V>>),
     VectorTypeSpecifier(Box<VectorTypeSpecifierChildren<T, V>>),
     KeysetTypeSpecifier(Box<KeysetTypeSpecifierChildren<T, V>>),
     TupleTypeExplicitSpecifier(Box<TupleTypeExplicitSpecifierChildren<T, V>>),
     VarrayTypeSpecifier(Box<VarrayTypeSpecifierChildren<T, V>>),
+    FunctionCtxTypeSpecifier(Box<FunctionCtxTypeSpecifierChildren<T, V>>),
     TypeParameter(Box<TypeParameterChildren<T, V>>),
     TypeConstraint(Box<TypeConstraintChildren<T, V>>),
+    ContextConstraint(Box<ContextConstraintChildren<T, V>>),
     DarrayTypeSpecifier(Box<DarrayTypeSpecifierChildren<T, V>>),
     DictionaryTypeSpecifier(Box<DictionaryTypeSpecifierChildren<T, V>>),
     ClosureTypeSpecifier(Box<ClosureTypeSpecifierChildren<T, V>>),
@@ -6325,14 +6009,6 @@ pub enum SyntaxVariant<T, V> {
     ErrorSyntax(Box<ErrorSyntaxChildren<T, V>>),
     ListItem(Box<ListItemChildren<T, V>>),
     EnumAtomExpression(Box<EnumAtomExpressionChildren<T, V>>),
-    PocketAtomExpression(Box<PocketAtomExpressionChildren<T, V>>),
-    PocketIdentifierExpression(Box<PocketIdentifierExpressionChildren<T, V>>),
-    PocketAtomMappingDeclaration(Box<PocketAtomMappingDeclarationChildren<T, V>>),
-    PocketEnumDeclaration(Box<PocketEnumDeclarationChildren<T, V>>),
-    PocketFieldTypeExprDeclaration(Box<PocketFieldTypeExprDeclarationChildren<T, V>>),
-    PocketFieldTypeDeclaration(Box<PocketFieldTypeDeclarationChildren<T, V>>),
-    PocketMappingIdDeclaration(Box<PocketMappingIdDeclarationChildren<T, V>>),
-    PocketMappingTypeDeclaration(Box<PocketMappingTypeDeclarationChildren<T, V>>),
 }
 
 impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
@@ -6624,7 +6300,7 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                 })
             },
             FunctionDeclarationHeader(x) => {
-                get_index(12).and_then(|index| { match index {
+                get_index(11).and_then(|index| { match index {
                         0 => Some(&x.function_modifiers),
                     1 => Some(&x.function_keyword),
                     2 => Some(&x.function_name),
@@ -6633,10 +6309,9 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                     5 => Some(&x.function_parameter_list),
                     6 => Some(&x.function_right_paren),
                     7 => Some(&x.function_capability),
-                    8 => Some(&x.function_capability_provisional),
-                    9 => Some(&x.function_colon),
-                    10 => Some(&x.function_type),
-                    11 => Some(&x.function_where_clause),
+                    8 => Some(&x.function_colon),
+                    9 => Some(&x.function_type),
+                    10 => Some(&x.function_where_clause),
                         _ => None,
                     }
                 })
@@ -6646,18 +6321,6 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                         0 => Some(&x.capability_left_bracket),
                     1 => Some(&x.capability_types),
                     2 => Some(&x.capability_right_bracket),
-                        _ => None,
-                    }
-                })
-            },
-            CapabilityProvisional(x) => {
-                get_index(6).and_then(|index| { match index {
-                        0 => Some(&x.capability_provisional_at),
-                    1 => Some(&x.capability_provisional_left_brace),
-                    2 => Some(&x.capability_provisional_type),
-                    3 => Some(&x.capability_provisional_unsafe_plus),
-                    4 => Some(&x.capability_provisional_unsafe_type),
-                    5 => Some(&x.capability_provisional_right_brace),
                         _ => None,
                     }
                 })
@@ -6807,6 +6470,21 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                     7 => Some(&x.type_const_equal),
                     8 => Some(&x.type_const_type_specifier),
                     9 => Some(&x.type_const_semicolon),
+                        _ => None,
+                    }
+                })
+            },
+            ContextConstDeclaration(x) => {
+                get_index(9).and_then(|index| { match index {
+                        0 => Some(&x.context_const_modifiers),
+                    1 => Some(&x.context_const_const_keyword),
+                    2 => Some(&x.context_const_ctx_keyword),
+                    3 => Some(&x.context_const_name),
+                    4 => Some(&x.context_const_type_parameters),
+                    5 => Some(&x.context_const_constraint),
+                    6 => Some(&x.context_const_equal),
+                    7 => Some(&x.context_const_ctx_list),
+                    8 => Some(&x.context_const_semicolon),
                         _ => None,
                     }
                 })
@@ -7115,23 +6793,6 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                         0 => Some(&x.return_keyword),
                     1 => Some(&x.return_expression),
                     2 => Some(&x.return_semicolon),
-                        _ => None,
-                    }
-                })
-            },
-            GotoLabel(x) => {
-                get_index(2).and_then(|index| { match index {
-                        0 => Some(&x.goto_label_name),
-                    1 => Some(&x.goto_label_colon),
-                        _ => None,
-                    }
-                })
-            },
-            GotoStatement(x) => {
-                get_index(3).and_then(|index| { match index {
-                        0 => Some(&x.goto_statement_keyword),
-                    1 => Some(&x.goto_statement_label_name),
-                    2 => Some(&x.goto_statement_semicolon),
                         _ => None,
                     }
                 })
@@ -7720,15 +7381,6 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                     }
                 })
             },
-            PUAccess(x) => {
-                get_index(3).and_then(|index| { match index {
-                        0 => Some(&x.pu_access_left_type),
-                    1 => Some(&x.pu_access_separator),
-                    2 => Some(&x.pu_access_right_type),
-                        _ => None,
-                    }
-                })
-            },
             VectorTypeSpecifier(x) => {
                 get_index(5).and_then(|index| { match index {
                         0 => Some(&x.vector_type_keyword),
@@ -7772,6 +7424,14 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                     }
                 })
             },
+            FunctionCtxTypeSpecifier(x) => {
+                get_index(2).and_then(|index| { match index {
+                        0 => Some(&x.function_ctx_type_keyword),
+                    1 => Some(&x.function_ctx_type_variable),
+                        _ => None,
+                    }
+                })
+            },
             TypeParameter(x) => {
                 get_index(6).and_then(|index| { match index {
                         0 => Some(&x.type_attribute_spec),
@@ -7788,6 +7448,14 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                 get_index(2).and_then(|index| { match index {
                         0 => Some(&x.constraint_keyword),
                     1 => Some(&x.constraint_type),
+                        _ => None,
+                    }
+                })
+            },
+            ContextConstraint(x) => {
+                get_index(2).and_then(|index| { match index {
+                        0 => Some(&x.ctx_constraint_keyword),
+                    1 => Some(&x.ctx_constraint_ctx_list),
                         _ => None,
                     }
                 })
@@ -8011,88 +7679,6 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                 get_index(2).and_then(|index| { match index {
                         0 => Some(&x.enum_atom_hash),
                     1 => Some(&x.enum_atom_expression),
-                        _ => None,
-                    }
-                })
-            },
-            PocketAtomExpression(x) => {
-                get_index(2).and_then(|index| { match index {
-                        0 => Some(&x.pocket_atom_glyph),
-                    1 => Some(&x.pocket_atom_expression),
-                        _ => None,
-                    }
-                })
-            },
-            PocketIdentifierExpression(x) => {
-                get_index(5).and_then(|index| { match index {
-                        0 => Some(&x.pocket_identifier_qualifier),
-                    1 => Some(&x.pocket_identifier_pu_operator),
-                    2 => Some(&x.pocket_identifier_field),
-                    3 => Some(&x.pocket_identifier_operator),
-                    4 => Some(&x.pocket_identifier_name),
-                        _ => None,
-                    }
-                })
-            },
-            PocketAtomMappingDeclaration(x) => {
-                get_index(6).and_then(|index| { match index {
-                        0 => Some(&x.pocket_atom_mapping_glyph),
-                    1 => Some(&x.pocket_atom_mapping_name),
-                    2 => Some(&x.pocket_atom_mapping_left_paren),
-                    3 => Some(&x.pocket_atom_mapping_mappings),
-                    4 => Some(&x.pocket_atom_mapping_right_paren),
-                    5 => Some(&x.pocket_atom_mapping_semicolon),
-                        _ => None,
-                    }
-                })
-            },
-            PocketEnumDeclaration(x) => {
-                get_index(7).and_then(|index| { match index {
-                        0 => Some(&x.pocket_enum_attributes),
-                    1 => Some(&x.pocket_enum_modifiers),
-                    2 => Some(&x.pocket_enum_enum),
-                    3 => Some(&x.pocket_enum_name),
-                    4 => Some(&x.pocket_enum_left_brace),
-                    5 => Some(&x.pocket_enum_fields),
-                    6 => Some(&x.pocket_enum_right_brace),
-                        _ => None,
-                    }
-                })
-            },
-            PocketFieldTypeExprDeclaration(x) => {
-                get_index(4).and_then(|index| { match index {
-                        0 => Some(&x.pocket_field_type_expr_case),
-                    1 => Some(&x.pocket_field_type_expr_type),
-                    2 => Some(&x.pocket_field_type_expr_name),
-                    3 => Some(&x.pocket_field_type_expr_semicolon),
-                        _ => None,
-                    }
-                })
-            },
-            PocketFieldTypeDeclaration(x) => {
-                get_index(4).and_then(|index| { match index {
-                        0 => Some(&x.pocket_field_type_case),
-                    1 => Some(&x.pocket_field_type_type),
-                    2 => Some(&x.pocket_field_type_type_parameter),
-                    3 => Some(&x.pocket_field_type_semicolon),
-                        _ => None,
-                    }
-                })
-            },
-            PocketMappingIdDeclaration(x) => {
-                get_index(2).and_then(|index| { match index {
-                        0 => Some(&x.pocket_mapping_id_name),
-                    1 => Some(&x.pocket_mapping_id_initializer),
-                        _ => None,
-                    }
-                })
-            },
-            PocketMappingTypeDeclaration(x) => {
-                get_index(4).and_then(|index| { match index {
-                        0 => Some(&x.pocket_mapping_type_keyword),
-                    1 => Some(&x.pocket_mapping_type_name),
-                    2 => Some(&x.pocket_mapping_type_equal),
-                    3 => Some(&x.pocket_mapping_type_type),
                         _ => None,
                     }
                 })

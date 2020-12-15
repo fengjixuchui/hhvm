@@ -281,6 +281,7 @@ void verifyTypeImpl(IRGS& env,
       if (!lazyClassToStr(val)) return genFail();
       return;
     case AnnotAction::ClsMethCheck:
+      assertx(RO::EvalIsCompatibleClsMethType);
       assertx(valType <= TClsMeth);
       if (!clsMethToVec(val)) return genFail();
       return;
@@ -647,7 +648,7 @@ SSATmp* implInstanceOfD(IRGS& env, SSATmp* src, const StringData* className) {
       return cns(env, true);
     }
 
-    if (src->isA(TClsMeth)) {
+    if (RO::EvalIsCompatibleClsMethType && src->isA(TClsMeth)) {
       if (!interface_supports_arrlike(className)) {
         return cns(env, false);
       }
@@ -1008,7 +1009,7 @@ bool emitIsTypeStructWithoutResolvingIfPossible(
       return unionOf(TInt, TStr, TLazyCls, TCls);
     }
     case TypeStructure::Kind::T_any_array:
-      if (t->type().maybe(TClsMeth)) {
+      if (RO::EvalIsCompatibleClsMethType && t->type().maybe(TClsMeth)) {
         if (t->isA(TClsMeth)) {
           if (RuntimeOption::EvalIsVecNotices) {
             gen(env, RaiseNotice,
@@ -1021,7 +1022,7 @@ bool emitIsTypeStructWithoutResolvingIfPossible(
       }
       return unionOf(TArr, TVec, TDict, TKeyset);
     case TypeStructure::Kind::T_vec_or_dict:
-      if (t->type().maybe(TClsMeth)) {
+      if (RO::EvalIsCompatibleClsMethType && t->type().maybe(TClsMeth)) {
         if (t->isA(TClsMeth)) {
           if (RuntimeOption::EvalHackArrDVArrs) {
             if (RuntimeOption::EvalIsVecNotices) {
@@ -1308,6 +1309,7 @@ void verifyRetTypeImpl(IRGS& env, int32_t id, int32_t ind,
         return true;
       },
       [&] (SSATmp* val) { // clsmeth to varray/vec conversions
+        assertx(RO::EvalIsCompatibleClsMethType);
         if (RuntimeOption::EvalVecHintNotices) {
           raiseClsmethCompatTypeHint(env, id, func, tc);
         }
@@ -1396,7 +1398,7 @@ void verifyParamTypeImpl(IRGS& env, int32_t id) {
       false,
       nullptr,
       [&] { // Get value to test
-        return ldLoc(env, id, nullptr, DataTypeSpecific);
+        return ldLoc(env, id, DataTypeSpecific);
       },
       [&] (SSATmp* val) { // func to string conversions
         auto const str = gen(env, LdFuncName, val);
@@ -1414,6 +1416,7 @@ void verifyParamTypeImpl(IRGS& env, int32_t id) {
         return true;
       },
       [&] (SSATmp* val) { // clsmeth to varray/vec conversions
+        assertx(RO::EvalIsCompatibleClsMethType);
         if (RuntimeOption::EvalVecHintNotices) {
           raiseClsmethCompatTypeHint(env, id, func, tc);
         }
@@ -1524,6 +1527,7 @@ void verifyPropType(IRGS& env,
         return true;
       },
       [&] (SSATmp* val) {
+        assertx(RO::EvalIsCompatibleClsMethType);
         if (!coerce) return false;
         // If we're not hard enforcing property type mismatches don't coerce
         if (RO::EvalCheckPropTypeHints < 3) return false;
@@ -1670,7 +1674,7 @@ void emitVerifyParamType(IRGS& env, int32_t paramId) {
 void emitVerifyParamTypeTS(IRGS& env, int32_t paramId) {
   verifyParamTypeImpl(env, paramId);
   auto const ts = popC(env);
-  auto const cell = ldLoc(env, paramId, nullptr, DataTypeSpecific);
+  auto const cell = ldLoc(env, paramId, DataTypeSpecific);
   auto const reified = tcCouldBeReified(curFunc(env), paramId);
   if (cell->isA(TObj) || reified) {
     cond(
@@ -1725,15 +1729,12 @@ void emitOODeclExists(IRGS& env, OODeclExistsOp subop) {
 }
 
 void emitIssetL(IRGS& env, int32_t id) {
-  auto const ld = ldLoc(env, id, nullptr, DataTypeSpecific);
-  if (ld->isA(TClsMeth)) {
-    PUNT(IssetL_is_ClsMeth);
-  }
+  auto const ld = ldLoc(env, id, DataTypeSpecific);
   push(env, gen(env, IsNType, TNull, ld));
 }
 
 void emitIsUnsetL(IRGS& env, int32_t id) {
-  auto const ld = ldLoc(env, id, nullptr, DataTypeSpecific);
+  auto const ld = ldLoc(env, id, DataTypeSpecific);
   push(env, gen(env, IsType, TUninit, ld));
 }
 
@@ -1763,7 +1764,7 @@ void emitIsTypeC(IRGS& env, IsTypeOp subop) {
 }
 
 void emitIsTypeL(IRGS& env, NamedLocal loc, IsTypeOp subop) {
-  auto const val = ldLocWarn(env, loc, nullptr, DataTypeSpecific);
+  auto const val = ldLocWarn(env, loc, DataTypeSpecific);
   push(env, isTypeHelper(env, subop, val));
 }
 

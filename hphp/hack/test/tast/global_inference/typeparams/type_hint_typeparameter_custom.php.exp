@@ -35,7 +35,7 @@ Errors:
             param_user_attributes = []; param_visibility = None }
            ];
          m_cap =
-         (((HH\Capabilities\RxLocal & HH\Capabilities\IO & HH\Capabilities\CippGlobal & HH\Capabilities\Globals & HH\Capabilities\UnrestrictedMutation)),
+         (((HH\Capabilities\AccessStaticVariable & HH\Capabilities\WriteProperty & HH\Capabilities\Output)),
           None);
          m_unsafe_cap = ((mixed), None);
          m_body =
@@ -47,7 +47,7 @@ Errors:
                     (([6:5-13], T),
                      (Obj_get ((([6:5-10], this), This),
                         (([6:12-13], T), (Id ([6:12-13], "y"))),
-                        OG_nullthrows))),
+                        OG_nullthrows, false))),
                     (([6:16-18], T), (Lvar ([6:16-18], $x))))))))
              ];
            fb_annotation = () };
@@ -62,7 +62,7 @@ Errors:
         ns_const_uses = <opaque>; ns_name = None; ns_auto_ns_map = [];
         ns_is_codegen = false; ns_disable_xhp_element_mangling = false };
       c_user_attributes = []; c_file_attributes = []; c_enum = None;
-      c_pu_enums = []; c_doc_comment = None; c_emit_id = None });
+      c_doc_comment = None; c_emit_id = None });
   (Fun
      { f_span = [10:1-12:2]; f_annotation = (); f_mode = Mpartial;
        f_ret = ((void), None); f_name = ([10:10-13], "\\foo");
@@ -76,7 +76,7 @@ Errors:
           param_user_attributes = []; param_visibility = None }
          ];
        f_cap =
-       (((HH\Capabilities\RxLocal & HH\Capabilities\IO & HH\Capabilities\CippGlobal & HH\Capabilities\Globals & HH\Capabilities\UnrestrictedMutation)),
+       (((HH\Capabilities\AccessStaticVariable & HH\Capabilities\WriteProperty & HH\Capabilities\Output)),
         None);
        f_unsafe_cap = ((mixed), None);
        f_body =
@@ -87,8 +87,8 @@ Errors:
                (Binop ((Eq None),
                   (([11:3-8], int),
                    (Obj_get ((([11:3-5], C<int>), (Lvar ([11:3-5], $x))),
-                      (([11:7-8], int), (Id ([11:7-8], "y"))), OG_nullthrows
-                      ))),
+                      (([11:7-8], int), (Id ([11:7-8], "y"))), OG_nullthrows,
+                      false))),
                   (([11:11-12], int), (Int "4")))))))
            ];
          fb_annotation = () };

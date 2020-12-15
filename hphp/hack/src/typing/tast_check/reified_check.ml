@@ -27,11 +27,11 @@ let valid_newable_hint env tp (pos, hint) =
   match hint with
   | Aast.Happly ((p, h), _) ->
     begin
-      match Env.get_class env h with
-      | Some cls ->
+      match Env.get_class_or_typedef env h with
+      | Some (Env.ClassResult cls) ->
         if not Ast_defs.(equal_class_kind (Cls.kind cls) Cnormal) then
           Errors.invalid_newable_type_argument tp p
-      | None ->
+      | _ ->
         (* This case should never happen *)
         Errors.invalid_newable_type_argument tp p
     end
@@ -119,7 +119,7 @@ let handler =
     method! at_expr env x =
       (* only considering functions where one or more params are reified *)
       match x with
-      | ((call_pos, _), Class_get ((_, CI (_, t)), _)) ->
+      | ((call_pos, _), Class_get ((_, CI (_, t)), _, _)) ->
         if equal_reify_kind (Env.get_reified env t) Reified then
           Errors.class_get_reified call_pos
       | ((pos, fun_ty), Method_caller _)
@@ -207,12 +207,16 @@ let handler =
     method! at_hint env =
       function
       | (_pos, Aast.Happly ((_, class_id), hints)) ->
-        let tc = Env.get_class env class_id in
-        Option.iter tc ~f:(fun tc ->
+        let tc = Env.get_class_or_typedef env class_id in
+        begin
+          match tc with
+          | Some (Env.ClassResult tc) ->
             let tparams = Cls.tparams tc in
             ignore
               (List.iter2 tparams hints ~f:(fun tp hint ->
-                   verify_targ_valid env Unresolved tp ((), hint))))
+                   verify_targ_valid env Unresolved tp ((), hint)))
+          | _ -> ()
+        end
       | _ -> ()
 
     method! at_tparam env tparam =

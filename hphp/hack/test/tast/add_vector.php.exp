@@ -29,7 +29,7 @@
          m_name = ([15:19-30], "__construct"); m_tparams = [];
          m_where_constraints = []; m_variadic = FVnonVariadic; m_params = [];
          m_cap =
-         (((HH\Capabilities\RxLocal & HH\Capabilities\IO & HH\Capabilities\CippGlobal & HH\Capabilities\Globals & HH\Capabilities\UnrestrictedMutation)),
+         (((HH\Capabilities\AccessStaticVariable & HH\Capabilities\WriteProperty & HH\Capabilities\Output)),
           None);
          m_unsafe_cap = ((mixed), None);
          m_body =
@@ -41,7 +41,7 @@
                     (([16:5-13], Vector<T>),
                      (Obj_get ((([16:5-10], this), This),
                         (([16:12-13], Vector<T>), (Id ([16:12-13], "x"))),
-                        OG_nullthrows))),
+                        OG_nullthrows, false))),
                     (([16:16-25], Vector<T>),
                      (ValCollection (Vector, None, [])))
                     )))))
@@ -62,7 +62,7 @@
              param_user_attributes = []; param_visibility = None }
             ];
           m_cap =
-          (((HH\Capabilities\RxLocal & HH\Capabilities\IO & HH\Capabilities\CippGlobal & HH\Capabilities\Globals & HH\Capabilities\UnrestrictedMutation)),
+          (((HH\Capabilities\AccessStaticVariable & HH\Capabilities\WriteProperty & HH\Capabilities\Output)),
            None);
           m_unsafe_cap = ((mixed), None);
           m_body =
@@ -76,7 +76,7 @@
                          (([20:5-13], Vector<T>),
                           (Obj_get ((([20:5-10], this), This),
                              (([20:12-13], Vector<T>), (Id ([20:12-13], "x"))),
-                             OG_nullthrows))),
+                             OG_nullthrows, false))),
                          None))),
                      (([20:18-20], T), (Lvar ([20:18-20], $x))))))))
               ];
@@ -96,7 +96,7 @@
              param_user_attributes = []; param_visibility = None }
             ];
           m_cap =
-          (((HH\Capabilities\RxLocal & HH\Capabilities\IO & HH\Capabilities\CippGlobal & HH\Capabilities\Globals & HH\Capabilities\UnrestrictedMutation)),
+          (((HH\Capabilities\AccessStaticVariable & HH\Capabilities\WriteProperty & HH\Capabilities\Output)),
            None);
           m_unsafe_cap = ((mixed), None);
           m_body =
@@ -109,7 +109,7 @@
                             (Obj_get ((([24:12-17], this), This),
                                (([24:19-20], Vector<T>),
                                 (Id ([24:19-20], "x"))),
-                               OG_nullthrows))),
+                               OG_nullthrows, false))),
                            (Some (([24:21-22], int), (Int "0")))))))))
               ];
             fb_annotation = () };
@@ -124,7 +124,6 @@
         ns_const_uses = <opaque>; ns_name = None; ns_auto_ns_map = [];
         ns_is_codegen = false; ns_disable_xhp_element_mangling = false };
       c_user_attributes = []; c_file_attributes = []; c_enum = None;
-      c_pu_enums = [];
       c_doc_comment =
       (Some ([2:1-10:4],
              "/**\n * Copyright (c) 2014, Facebook, Inc.\n * All rights reserved.\n *\n * This source code is licensed under the MIT license found in the\n * LICENSE file in the \"hack\" directory of this source tree.\n *\n *\n */"));
@@ -145,7 +144,7 @@
          ns_const_uses = <opaque>; ns_name = None; ns_auto_ns_map = [];
          ns_is_codegen = false; ns_disable_xhp_element_mangling = false };
        c_user_attributes = []; c_file_attributes = []; c_enum = None;
-       c_pu_enums = []; c_doc_comment = None; c_emit_id = None });
+       c_doc_comment = None; c_emit_id = None });
   (Class
      { c_span = [29:1-21]; c_annotation = (); c_mode = Mstrict;
        c_final = false; c_is_xhp = false; c_has_xhp_keyword = false;
@@ -163,7 +162,7 @@
          ns_const_uses = <opaque>; ns_name = None; ns_auto_ns_map = [];
          ns_is_codegen = false; ns_disable_xhp_element_mangling = false };
        c_user_attributes = []; c_file_attributes = []; c_enum = None;
-       c_pu_enums = []; c_doc_comment = None; c_emit_id = None });
+       c_doc_comment = None; c_emit_id = None });
   (Class
      { c_span = [30:1-21]; c_annotation = (); c_mode = Mstrict;
        c_final = false; c_is_xhp = false; c_has_xhp_keyword = false;
@@ -181,7 +180,7 @@
          ns_const_uses = <opaque>; ns_name = None; ns_auto_ns_map = [];
          ns_is_codegen = false; ns_disable_xhp_element_mangling = false };
        c_user_attributes = []; c_file_attributes = []; c_enum = None;
-       c_pu_enums = []; c_doc_comment = None; c_emit_id = None });
+       c_doc_comment = None; c_emit_id = None });
   (Fun
      { f_span = [32:1-37:2]; f_annotation = (); f_mode = Mstrict;
        f_ret = ((void), (Some ([32:37-41], (Hprim Tvoid))));
@@ -199,7 +198,7 @@
           param_user_attributes = []; param_visibility = None }
          ];
        f_cap =
-       (((HH\Capabilities\RxLocal & HH\Capabilities\IO & HH\Capabilities\CippGlobal & HH\Capabilities\Globals & HH\Capabilities\UnrestrictedMutation)),
+       (((HH\Capabilities\AccessStaticVariable & HH\Capabilities\WriteProperty & HH\Capabilities\Output)),
         None);
        f_unsafe_cap = ((mixed), None);
        f_body =
@@ -225,7 +224,7 @@
                        (([34:3-5], MyPhonyVector<X>), (Lvar ([34:3-5], $x))),
                        (([34:7-10], (function(X $x): void)),
                         (Id ([34:7-10], "add"))),
-                       OG_nullthrows))),
+                       OG_nullthrows, false))),
                    [],
                    [(([34:11-18], B),
                      (New ((([34:15-16], B), (CI ([34:15-16], "\\B"))), 
@@ -241,7 +240,7 @@
                        (([35:3-5], MyPhonyVector<X>), (Lvar ([35:3-5], $x))),
                        (([35:7-10], (function(X $x): void)),
                         (Id ([35:7-10], "add"))),
-                       OG_nullthrows))),
+                       OG_nullthrows, false))),
                    [],
                    [(([35:11-18], A),
                      (New ((([35:15-16], A), (CI ([35:15-16], "\\A"))), 

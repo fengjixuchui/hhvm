@@ -4,10 +4,7 @@
 // LICENSE file in the "hack" directory of this source tree.
 
 use itertools::{Either, EitherOrBoth::*, Itertools};
-use std::{
-    collections::{BTreeMap, HashSet},
-    mem,
-};
+use std::{collections::HashSet, mem};
 
 use ast_constant_folder_rust as ast_constant_folder;
 use ast_scope_rust::{
@@ -78,8 +75,6 @@ struct Env<'a> {
 #[derive(Default, Clone)]
 struct PerFunctionState {
     pub has_finally: bool,
-    pub has_goto: bool,
-    pub labels: BTreeMap<String, bool>,
 }
 
 impl<'a> Env<'a> {
@@ -282,12 +277,6 @@ impl State {
     ) {
         if fun.has_finally {
             self.global_state.functions_with_finally.insert(key.clone());
-        }
-
-        if !fun.labels.is_empty() {
-            self.global_state
-                .function_to_labels_map
-                .insert(key.clone(), fun.labels);
         }
 
         if rx_of_scope != rx::Level::NonRx {
@@ -530,7 +519,6 @@ fn make_closure(
         namespace: RcOc::clone(&st.empty_namespace),
         enum_: None,
         doc_comment: None,
-        pu_enums: vec![],
         emit_id: Some(EmitId::Anonymous),
     };
 
@@ -890,6 +878,7 @@ fn convert_meth_caller_to_func_ptr<'a>(
                     obj_lvar,
                     Expr(pos(), Expr_::mk_id(Id(pf.clone(), fname.to_owned()))),
                     OgNullFlavor::OGNullthrows,
+                    false,
                 ))),
             ),
             vec![],
@@ -935,18 +924,105 @@ fn convert_meth_caller_to_func_ptr<'a>(
     return fun_handle;
 }
 
+fn make_dyn_meth_caller_lambda(
+    env: &Env,
+    st: &mut ClosureConvertVisitor,
+    pos: &Pos,
+    cexpr: &Expr,
+    fexpr: &Expr,
+) -> Expr_ {
+    fn get_scope_fmode(scope: &Scope) -> Mode {
+        scope
+            .iter()
+            .find_map(|item| match item {
+                ScopeItem::Class(cd) => Some(cd.get_mode()),
+                ScopeItem::Function(fd) => Some(fd.get_mode()),
+                _ => None,
+            })
+            .unwrap_or(Mode::Mstrict)
+    }
+    // TODO: Move dummy variable to tasl.rs once it exists.
+    let dummy_saved_env = ();
+    let pos = || pos.clone();
+    let obj_var = Box::new(Lid(pos(), local_id::make_unscoped("$o")));
+    let meth_var = Box::new(Lid(pos(), local_id::make_unscoped("$m")));
+    let obj_lvar = Expr(pos(), Expr_::Lvar(obj_var.clone()));
+    let meth_lvar = Expr(pos(), Expr_::Lvar(meth_var.clone()));
+    // AST for: return $o-><func>(...$args);
+    let args_var = Box::new(Lid(pos(), local_id::make_unscoped("$args")));
+    let variadic_param = make_fn_param(pos(), &args_var.1, true, false);
+    let invoke_method = Expr(
+        pos(),
+        Expr_::mk_call(
+            Expr(
+                pos(),
+                Expr_::ObjGet(Box::new((
+                    obj_lvar,
+                    meth_lvar,
+                    OgNullFlavor::OGNullthrows,
+                    false,
+                ))),
+            ),
+            vec![],
+            vec![],
+            Some(Expr(pos(), Expr_::Lvar(args_var))),
+        ),
+    );
+
+    let fd = Fun_ {
+        span: pos(),
+        annotation: dummy_saved_env,
+        mode: get_scope_fmode(&env.scope),
+        ret: TypeHint((), None),
+        name: Id(pos(), ";anonymous".to_string()),
+        tparams: vec![],
+        where_constraints: vec![],
+        variadic: FunVariadicity::FVvariadicArg(variadic_param.clone()),
+        params: vec![
+            make_fn_param(pos(), &obj_var.1, false, false),
+            make_fn_param(pos(), &meth_var.1, false, false),
+            variadic_param,
+        ],
+        cap: TypeHint((), None),        // TODO(T70095684)
+        unsafe_cap: TypeHint((), None), // TODO(T70095684)
+        body: FuncBody {
+            ast: vec![Stmt(pos(), Stmt_::Return(Box::new(Some(invoke_method))))],
+            annotation: (),
+        },
+        fun_kind: FunKind::FSync,
+        user_attributes: vec![],
+        file_attributes: vec![],
+        external: false,
+        namespace: RcOc::clone(&st.state.empty_namespace),
+        doc_comment: None,
+        static_: false,
+    };
+    let expr_id = |name: String| Expr(pos(), Expr_::mk_id(Id(pos(), name)));
+    let fun_handle: Expr_ = Expr_::mk_call(
+        expr_id("\\__systemlib\\dynamic_meth_caller".into()),
+        vec![],
+        vec![
+            cexpr.clone(),
+            fexpr.clone(),
+            Expr(pos(), Expr_::mk_efun(fd, vec![])),
+        ],
+        None,
+    );
+    fun_handle
+}
+
 fn convert_function_like_body<'a>(
     self_: &mut ClosureConvertVisitor<'a>,
     env: &mut Env<'a>,
     body: &mut FuncBody,
 ) -> Result<PerFunctionState> {
-    // reset has_finally/goto_state values on the state
+    // reset has_finally values on the state
     let old_state = std::mem::replace(
         &mut self_.state.current_function_state,
         PerFunctionState::default(),
     );
     body.recurse(env, self_.object())?;
-    // restore old has_finally/goto_state values
+    // restore old has_finally values
     let function_state = std::mem::replace(&mut self_.state.current_function_state, old_state);
     Ok(function_state)
 }
@@ -1116,15 +1192,6 @@ impl<'ast, 'a> VisitorMut<'ast> for ClosureConvertVisitor<'a> {
                 env.with_in_using(true, |env| visit_mut(self, env, &mut x.block))?;
                 Ok(self.state.current_function_state.has_finally = true)
             }
-            Stmt_::GotoLabel(x) => {
-                let label = &x.1;
-                // record known label in function
-                self.state
-                    .current_function_state
-                    .labels
-                    .insert(label.clone(), env.in_using);
-                Ok(())
-            }
             _ => stmt.recurse(env, self.object()),
         }
     }
@@ -1156,6 +1223,25 @@ impl<'ast, 'a> VisitorMut<'ast> for ClosureConvertVisitor<'a> {
             Expr_::Id(id) => {
                 add_generic(env, &mut self.state, id.name());
                 convert_id(env, *id)
+            }
+            Expr_::Call(mut x)
+                if {
+                    if let Expr_::Id(ref id) = (x.0).1 {
+                        strip_id(id).eq_ignore_ascii_case("hh\\dynamic_meth_caller")
+                    } else {
+                        false
+                    }
+                } =>
+            {
+                if let [cexpr, fexpr] = &mut *x.2 {
+                    let mut res = make_dyn_meth_caller_lambda(env, self, &*pos, &cexpr, &fexpr);
+                    res.recurse(env, self.object())?;
+                    res
+                } else {
+                    let mut res = Expr_::Call(x);
+                    res.recurse(env, self.object())?;
+                    res
+                }
             }
             Expr_::Call(mut x)
                 if {
@@ -1252,7 +1338,7 @@ impl<'ast, 'a> VisitorMut<'ast> for ClosureConvertVisitor<'a> {
             Expr_::Call(x)
                 if (x.0)
                     .as_class_get()
-                    .and_then(|(id, _)| id.as_ciexpr())
+                    .and_then(|(id, _, _)| id.as_ciexpr())
                     .and_then(|x| x.as_id())
                     .map(string_utils::is_parent)
                     .unwrap_or(false)
@@ -1279,14 +1365,6 @@ impl<'ast, 'a> VisitorMut<'ast> for ClosureConvertVisitor<'a> {
                 let mut res = Expr_::mk_varray(None, call_args);
                 res.recurse(env, self.object())?;
                 res
-            }
-            Expr_::BracedExpr(mut x) => {
-                x.recurse(env, self.object())?;
-                match x.1 {
-                    Expr_::Lvar(_) => x.1,
-                    Expr_::String(_) => x.1,
-                    _ => Expr_::BracedExpr(x),
-                }
             }
             Expr_::As(x) if (x.1).is_hlike() => {
                 let mut res = x.0;
@@ -1322,6 +1400,10 @@ impl<'ast, 'a> VisitorMut<'ast> for ClosureConvertVisitor<'a> {
                 env.check_if_in_async_context()?;
                 x.recurse(env, self.object())?;
                 Expr_::Await(x)
+            }
+            Expr_::ExpressionTree(mut x) => {
+                x.desugared_expr.recurse(env, self.object())?;
+                Expr_::ExpressionTree(x)
             }
             mut x => {
                 x.recurse(env, self.object())?;

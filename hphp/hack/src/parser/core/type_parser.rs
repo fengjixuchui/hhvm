@@ -265,35 +265,6 @@ where
         }
     }
 
-    //  SPEC
-    // pocket-universe-access:
-    //   name  :@  name
-    //   self  :@  name
-    //   this  :@  name
-    //   parent  :@  name
-    //   pocket-universe-access :@  name
-    fn parse_remaining_pocket_universe_access(&mut self, left: S::R) -> S::R {
-        let separator = self.fetch_token();
-        let right = self.next_token_as_name();
-        if right.kind() == TokenKind::Name {
-            let right = S!(make_token, self, right);
-            let syntax = S!(make_pu_access, self, left, separator, right);
-            let token = self.peek_token();
-            if token.kind() == TokenKind::ColonAt {
-                self.parse_remaining_pocket_universe_access(syntax)
-            } else {
-                syntax
-            }
-        } else {
-            // ERROR RECOVERY: Assume that the thing following the :@
-            // that is not a name belongs to the next thing to be
-            // parsed; treat the name as missing.
-            self.with_error(Errors::error1004);
-            let missing = S!(make_missing, self, self.pos());
-            S!(make_pu_access, self, left, separator, missing)
-        }
-    }
-
     fn parse_remaining_generic(&mut self, name: S::R) -> S::R {
         let (arguments, _) = self.parse_generic_type_argument_list();
         S!(make_generic_type_specifier, self, name, arguments)
@@ -313,7 +284,6 @@ where
         let token = self.peek_token();
         match token.kind() {
             TokenKind::ColonColon => self.parse_remaining_type_constant(name),
-            TokenKind::ColonAt => self.parse_remaining_pocket_universe_access(name),
             _ => S!(make_simple_type_specifier, self, name),
         }
     }
@@ -777,7 +747,23 @@ where
         if self.peek_token_kind() == TokenKind::LeftBracket {
             let (left_bracket, types, right_bracket) = self
                 .parse_bracketted_comma_list_opt_allow_trailing(|x: &mut Self| {
-                    x.parse_type_specifier(false, false)
+                    match x.peek_token_kind() {
+                        TokenKind::Ctx => {
+                            let ctx = x.assert_token(TokenKind::Ctx);
+                            let var = x.with_expression_parser(|p: &mut ExpressionParser<'a, S>| {
+                                p.parse_simple_variable()
+                            });
+                            S!(make_function_ctx_type_specifier, x, ctx, var)
+                        }
+                        TokenKind::Variable => {
+                            /* Keeping this isolated from the type constant parsing code for now */
+                            let var = x.assert_token(TokenKind::Variable);
+                            let colcol = x.require_coloncolon();
+                            let name = x.require_name();
+                            S!(make_type_constant, x, var, colcol, name)
+                        }
+                        _ => x.parse_type_specifier(false, false),
+                    }
                 });
             S!(make_capability, self, left_bracket, types, right_bracket)
         } else {
@@ -1080,6 +1066,27 @@ where
             S!(make_type_constraint, self, constraint_as, constraint_type)
         } else {
             S!(make_missing, self, self.pos())
+        }
+    }
+
+    pub fn parse_context_constraint_opt(&mut self) -> Option<S::R> {
+        // SPEC
+        // context-constraint:
+        //   as  context-list
+        //   super  context-list
+        match self.peek_token_kind() {
+            TokenKind::As | TokenKind::Super => {
+                let constraint_token = self.next_token();
+                let constraint_token = S!(make_token, self, constraint_token);
+                let constraint_ctx = self.parse_capability_opt();
+                Some(S!(
+                    make_type_constraint,
+                    self,
+                    constraint_token,
+                    constraint_ctx
+                ))
+            }
+            _ => None,
         }
     }
 

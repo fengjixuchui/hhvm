@@ -14,14 +14,15 @@
   +----------------------------------------------------------------------+
 */
 
-// don't mix this file up with runtime/base/bespoke-layout.h !
-#ifndef HPHP_BESPOKEDIR_LAYOUT_H_
-#define HPHP_BESPOKEDIR_LAYOUT_H_
+#pragma once
 
 #include "hphp/runtime/base/array-data.h"
 #include "hphp/runtime/base/bespoke-array.h"
+#include "hphp/runtime/base/req-tiny-vector.h"
 #include "hphp/runtime/vm/hhbc.h"
 #include "hphp/util/type-scan.h"
+
+#include <set>
 
 namespace HPHP {
 
@@ -38,6 +39,9 @@ namespace bespoke {
 
 void logBespokeDispatch(const ArrayData* ad, const char* fn);
 
+// Return a monotype copy of a vanilla array, or nullptr if it's not monotype.
+BespokeArray* maybeMonoify(ArrayData*);
+
 #define BESPOKE_LAYOUT_FUNCTIONS(T) \
   X(size_t, HeapSize, const T* ad) \
   X(void, Scan, const T* ad, type_scan::Scanner& scanner) \
@@ -46,10 +50,10 @@ void logBespokeDispatch(const ArrayData* ad, const char* fn);
   X(void, ReleaseUncounted, T*) \
   X(void, Release, T*) \
   X(bool, IsVectorData, const T*) \
-  X(TypedValue, GetInt, const T*, int64_t) \
-  X(TypedValue, GetStr, const T*, const StringData*) \
-  X(TypedValue, GetKey, const T*, ssize_t pos) \
-  X(TypedValue, GetVal, const T*, ssize_t pos) \
+  X(TypedValue, NvGetInt, const T*, int64_t) \
+  X(TypedValue, NvGetStr, const T*, const StringData*) \
+  X(TypedValue, GetPosKey, const T*, ssize_t pos) \
+  X(TypedValue, GetPosVal, const T*, ssize_t pos) \
   X(ssize_t, GetIntPos, const T*, int64_t) \
   X(ssize_t, GetStrPos, const T*, const StringData*) \
   X(ssize_t, IterBegin, const T*) \
@@ -126,17 +130,17 @@ struct LayoutFunctionDispatcher {
   static bool IsVectorData(const ArrayData* ad) {
     return Array::IsVectorData(Cast(ad, __func__));
   }
-  static TypedValue GetInt(const ArrayData* ad, int64_t k) {
-    return Array::GetInt(Cast(ad, __func__), k);
+  static TypedValue NvGetInt(const ArrayData* ad, int64_t k) {
+    return Array::NvGetInt(Cast(ad, __func__), k);
   }
-  static TypedValue GetStr(const ArrayData* ad, const StringData* k) {
-    return Array::GetStr(Cast(ad, __func__), k);
+  static TypedValue NvGetStr(const ArrayData* ad, const StringData* k) {
+    return Array::NvGetStr(Cast(ad, __func__), k);
   }
-  static TypedValue GetKey(const ArrayData* ad, ssize_t pos) {
-    return Array::GetKey(Cast(ad, __func__), pos);
+  static TypedValue GetPosKey(const ArrayData* ad, ssize_t pos) {
+    return Array::GetPosKey(Cast(ad, __func__), pos);
   }
-  static TypedValue GetVal(const ArrayData* ad, ssize_t pos) {
-    return Array::GetVal(Cast(ad, __func__), pos);
+  static TypedValue GetPosVal(const ArrayData* ad, ssize_t pos) {
+    return Array::GetPosVal(Cast(ad, __func__), pos);
   }
   static ssize_t GetIntPos(const ArrayData* ad, int64_t k) {
     return Array::GetIntPos(Cast(ad, __func__), k);
@@ -237,8 +241,55 @@ constexpr LayoutFunctions fromArray() {
 /*
  * A bespoke::Layout can represent either both the concrete layout of a given
  * BespokeArray or some abstract type that's a union of concrete layouts.
+ *
+ * bespoke::Layout also maintains the type hierarchy of bespoke layouts.
+ * Bespoke layouts form a lattice, with BespokeTop as the top type and the null
+ * layout as the bottom type. Each layout specifies its set of immediate
+ * parents and whether or not it is "liveable"--whether it is sufficiently
+ * general to be used as a guard type for a live translation. The type
+ * hierarchy satisfies the following constraints:
+ *
+ *   1) When a layout is initialized, all of its parents must have already been
+ *   initialized. This ensures that the type hierarchy is a DAG. Each layout
+ *   other than BespokeTop must have at least one parent.
+ *
+ *   2) The supplied parents of each node are immediate parents. That is, no
+ *   supplied parent can be an ancestor of another supplied parent. This
+ *   ensures that the parent edges form a covering relation and simplifies the
+ *   process of computing joins and meets.
+ *
+ *   3) The type hierarchy forms a join semilattice. That is, the least upper
+ *   bound of every pair of layouts exists (this is trivial as we have
+ *   BespokeTop) and is unique. Together with our bottom type, this implies
+ *   that the type hierarchy is a lattice in which both least upper bounds and
+ *   greatest lower bounds are unique.
+ *
+ *   4) Each layout has a distinct least liveable ancestor. This is equivalent
+ *   to the constraint that each liveable layout is the unique parent of each
+ *   of its non-liveable immediate children. This makes the process of
+ *   converting a layout to a liveable layout unambiguous.
+ *
+ * These constraints are validated upon the creation of each layout in debug
+ * mode. If the constraints are satisfied, we are left with a DAG corresponding
+ * to the covering relation of a valid lattice, in which join and meet can be
+ * implemented by simple BFS.
+ *
+ * Once the type hierarchy has been created, we supply the standard <=, meet
+ * (&), and join (|) operations for the layouts, which are used from ArraySpec
+ * for type operations.
+ *
+ * When the layout hierarchy is final, all type operations are valid. Before
+ * the layout hierarchy is final, only type operations on BespokeTop are
+ * permitted. This enables us to use BespokeTop and normal type operations in
+ * profiling tracelets while disallowing more specific type operations that
+ * require knowledge of the bespoke hierarchy.
  */
 struct Layout {
+  using LayoutSet = std::set<LayoutIndex>;
+
+  Layout(const Layout& l) = delete;
+  Layout& operator=(const Layout&) = delete;
+
   virtual ~Layout() {}
 
   /*
@@ -250,6 +301,7 @@ struct Layout {
 
   LayoutIndex index() const { return m_index; }
   const std::string& describe() const { return m_description; }
+  std::string dumpInformation() const;
   virtual bool isConcrete() const { return false; }
 
   /*
@@ -260,117 +312,68 @@ struct Layout {
    *   @postcondition: The result is a multiple of size.
    */
   static LayoutIndex ReserveIndices(size_t size);
-
   static const Layout* FromIndex(LayoutIndex index);
+  static std::string dumpAllLayouts();
+
+  /*
+   * Seals the bespoke type hierarchy. Before this is invoked, type operations
+   * on bespoke layouts other than BespokeTop are invalid. After it is invoked,
+   * all type operations are valid but no new layouts can be created.
+   */
+  static void FinalizeHierarchy();
+
+  bool operator<=(const Layout& other) const;
+  const Layout* operator|(const Layout& other) const;
+  const Layout* operator&(const Layout& other) const;
 
   ///////////////////////////////////////////////////////////////////////////
 
-  /*
-   * JIT support
-   *
-   * In all the irgen emit helpers below, `arr` is guaranteed to be an array
-   * matching this BespokeLayout's type class.
-   *
-   * For those methods that take `key`, it is guaranteed to be a valid key
-   * for the base's type. For example, if `arr` is a dict, then `key` is an
-   * arraykey, and if `arr` is a vec, `key` is an int. (We make no claims
-   * about whether `key` matches tighter per-layout type constraints.)
-   */
-
-  using SSATmp = jit::SSATmp;
-  using Block = jit::Block;
-  using IRGS = jit::irgen::IRGS;
-
-  /*
-   * Return the value at `key` in `arr`, branching to `taken` if the key is
-   * not present. This operation does no refcounting.
-   */
-  virtual SSATmp* emitGet(
-      IRGS& env, SSATmp* arr, SSATmp* key, Block* taken) const = 0;
-
-  /*
-   * Return a half-lval (immutable type pointer) to the value at `key` in the
-   * array at `lval`. If escalation or copying is performed, the array at
-   * `lval` is updated.  If the key is not present, it throws if
-   * `throwOnMissing` is true.  Otherwise, it returns an lval to
-   * immutable_null_base. This operation does no refcounting.
-   */
-  virtual SSATmp* emitElem(
-      IRGS& env, SSATmp* lval, SSATmp* key, bool throwOnMissing) const = 0;
-
-  /*
-   * Create a new array by setting `arr[key] = val`, CoWing or escalating as
-   * needed. This op consumes a ref on `arr` and produces a ref on the result.
-   */
-  virtual SSATmp* emitSet(
-      IRGS& env, SSATmp* arr, SSATmp* key, SSATmp* val) const = 0;
-
-  /*
-   * Create a new array by setting `arr[] = val`, CoWing or escalating as
-   * needed. This op consumes a ref on `arr` and produces a ref on the result.
-   */
-  virtual SSATmp* emitAppend(
-      IRGS& env, SSATmp* arr, SSATmp* val) const = 0;
-
-  /*
-   * Escalate the bespoke array to vanilla. The default implementation invokes
-   * the general BespokeArray implementation. It performs no refcounting
-   * operations.
-   */
-  virtual SSATmp* emitEscalateToVanilla(
-      IRGS& env, SSATmp* arr, const char* reason) const;
-
   /**
-   * Obtain the pos corresponding to the first valid element (i.e. not a
-   * tombstone).
+   * Retrieve the set of masks and compares to use for a type test for this
+   * layout.
    */
-  virtual SSATmp* emitIterFirstPos(IRGS& env, SSATmp* arr) const = 0;
-
-  /**
-   * Obtain the pos in the array that corresponding to the last to a valid
-   * element (i.e. not a tombstone).
-   */
-  virtual SSATmp* emitIterLastPos(IRGS& env, SSATmp* arr) const = 0;
-
-  /**
-   * Obtain the pos in the array corresponding to the specified index. It
-   * assumes that the array contains no tombstones.
-   */
-  virtual SSATmp* emitIterPos(IRGS& env, SSATmp* arr, SSATmp* idx) const = 0;
-
-  /**
-   * Advance the supplied pos a single step forward.
-   */
-  virtual SSATmp* emitIterAdvancePos(
-      IRGS& env, SSATmp* arr, SSATmp* pos) const = 0;
-
-  /**
-   * Convert the supplied pos to an elm used to access the element.
-   */
-  virtual SSATmp* emitIterElm(IRGS& env, SSATmp* arr, SSATmp* pos) const = 0;
-
-  /**
-   * Obtain the key at the supplied elm.
-   */
-  virtual SSATmp* emitIterGetKey(IRGS& env, SSATmp* arr, SSATmp* elm) const = 0;
-
-  /**
-   * Obtain the value at the supplied elm.
-   */
-  virtual SSATmp* emitIterGetVal(IRGS& env, SSATmp* arr, SSATmp* elm) const = 0;
-
+  MaskAndCompare maskAndCompare() const;
 
 protected:
-  explicit Layout(const std::string& description);
-  Layout(LayoutIndex index, const std::string& description);
+  Layout(LayoutIndex index, std::string description, LayoutSet parents);
 
 private:
+  bool checkInvariants() const;
+  LayoutSet computeAncestors() const;
+  LayoutSet computeDescendants() const;
+  MaskAndCompare computeMaskAndCompare() const;
+
+  bool isDescendantOfDebug(const Layout* other) const;
+  const Layout* nearestBoundDebug(bool upward, const Layout* other) const;
+
   struct Initializer;
   static Initializer s_initializer;
+  struct BFSWalker;
 
   LayoutIndex m_index;
+  size_t m_topoIndex;
   std::string m_description;
   const LayoutFunctions* m_vtable;
+  LayoutSet m_parents;
+  LayoutSet m_children;
+  std::vector<Layout*> m_descendants;
+  std::vector<Layout*> m_ancestors;
+  MaskAndCompare m_maskAndCompare;
+
+  struct DescendantOrdering;
+  struct AncestorOrdering;
+};
+
+/*
+ * An abstract bespoke layout, providing precious little on top of Layout.
+ */
+struct AbstractLayout : public Layout {
+  AbstractLayout(LayoutIndex index, std::string description, LayoutSet parents);
+  virtual ~AbstractLayout() {}
+
+  static void InitializeLayouts();
+
+  static LayoutIndex GetBespokeTopIndex();
 };
 
 /*
@@ -379,10 +382,8 @@ private:
  * various JIT helpers in terms of the vtable methods.
  */
 struct ConcreteLayout : public Layout {
-  ConcreteLayout(const std::string& description,
-                 const LayoutFunctions* vtable);
-  ConcreteLayout(LayoutIndex index, const std::string& description,
-                 const LayoutFunctions* vtable);
+  ConcreteLayout(LayoutIndex index, std::string description,
+                 const LayoutFunctions* vtable, LayoutSet parents);
   virtual ~ConcreteLayout() {}
 
   const LayoutFunctions* vtable() const { return m_vtable; }
@@ -390,97 +391,8 @@ struct ConcreteLayout : public Layout {
 
   static const ConcreteLayout* FromConcreteIndex(LayoutIndex index);
 
-  ///////////////////////////////////////////////////////////////////////////
-
-  using SSATmp = jit::SSATmp;
-  using Block = jit::Block;
-  using IRGS = jit::irgen::IRGS;
-
-  /*
-   * This default implementation invokes the layout-specific GetInt/GetStr
-   * methods without virtualization.
-   */
-  virtual SSATmp* emitGet(
-      IRGS& env, SSATmp* arr, SSATmp* key, Block* taken) const override;
-
-  /*
-   * This default implementation invokes the layout-specific ElemInt/ElemStr
-   * methods without virtualization.
-   */
-  virtual SSATmp* emitElem(
-      IRGS& env, SSATmp* lval, SSATmp* key, bool throwOnMissing) const override;
-
-  /*
-   * This default implementation punts.
-   */
-  virtual SSATmp* emitSet(
-      IRGS& env, SSATmp* arr, SSATmp* key, SSATmp* val) const override;
-
-  /*
-   * This default implementation punts.
-   */
-  virtual SSATmp* emitAppend(
-      IRGS& env, SSATmp* arr, SSATmp* val) const override;
-
-  /*
-   * This default implementation invokes the layout-specific EscalateToVanilla
-   * method without virtualization.
-   */
-  virtual SSATmp* emitEscalateToVanilla(
-      IRGS& env, SSATmp* arr, const char* reason) const override;
-
-  /**
-   * This default implementation invokes the layout-specific IterBegin method
-   * without virtualization.
-   */
-  virtual SSATmp* emitIterFirstPos(IRGS& env, SSATmp* arr) const override;
-
-  /**
-   * This default implementation invokes the layout-specific IterLast method
-   * without virtualization.
-   */
-  virtual SSATmp* emitIterLastPos(IRGS& env, SSATmp* arr) const override;
-
-  /**
-   * This default implementation punts.
-   */
-  virtual SSATmp* emitIterPos(
-      IRGS& env, SSATmp* arr, SSATmp* idx) const override;
-
-  /**
-   * This default implementation invokes the layout-specific IterAdvance method
-   * without virtualization.
-   */
-  virtual SSATmp* emitIterAdvancePos(
-      IRGS& env, SSATmp* arr, SSATmp* pos) const override;
-
-  /**
-   * This default implementation returns the supplied pos. In other words,
-   * elm = pos for all indices.
-   */
-  virtual SSATmp* emitIterElm(
-      IRGS& env, SSATmp* arr, SSATmp* pos) const override;
-
-  /**
-   * This default implementation invokes the layout-specific GetPosKey method
-   * without virtualization. If a non-default implementation of emitIterElm is
-   * provided, this will also have to be updated.
-   */
-  virtual SSATmp* emitIterGetKey(
-      IRGS& env, SSATmp* arr, SSATmp* elm) const override;
-
-  /**
-   * This default implementation invokes the layout-specific GetPosVal method
-   * without virtualization. If a non-default implementation of emitIterElm is
-   * provided, this will also have to be updated.
-   */
-  virtual SSATmp* emitIterGetVal(
-      IRGS& env, SSATmp* arr, SSATmp* elm) const override;
-
 private:
   const LayoutFunctions* m_vtable;
 };
 
 }}
-
-#endif // HPHP_BESPOKEDIR_LAYOUT_H_

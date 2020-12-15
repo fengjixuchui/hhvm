@@ -54,6 +54,7 @@
 #include "hphp/util/gzip.h"
 #include "hphp/util/hardware-counter.h"
 #include "hphp/util/hdf.h"
+#include "hphp/util/light-process.h"
 #include "hphp/util/log-file-flusher.h"
 #include "hphp/util/logger.h"
 #include "hphp/util/network.h"
@@ -115,17 +116,18 @@ std::vector<std::string> s_RelativeConfigs;
 
 ////////////////////////////////////////////////////////////////////////////////
 
-char mangleForKey(bool b) { return b ? '1' : '0'; }
-std::string mangleForKey(const RepoOptions::StringMap& map) {
-  std::string s;
+void mangleForKey(bool b, std::string& s) { s += (b ? '1' : '0'); }
+void mangleForKey(const RepoOptions::StringMap& map, std::string& s) {
   s += folly::to<std::string>(map.size());
   s += '\0';
-  for (auto& par : map) {
-    s += par.first + '\0' + par.second + '\0';
+  for (auto const& par : map) {
+    s += par.first;
+    s += '\0';
+    s += par.second;
+    s += '\0';
   }
-  return s;
 }
-std::string mangleForKey(std::string s) { return s; }
+void mangleForKey(const std::string& s1, std::string& s2) { s2 += s1; }
 void hdfExtract(const Hdf& hdf, const char* name, bool& val, bool dv) {
   val = hdf[name].configGetBool(dv);
 }
@@ -340,22 +342,19 @@ const RepoOptions& RepoOptions::forFile(const char* path) {
   return ret ? *ret : defaults();
 }
 
-std::string RepoOptions::cacheKeyRaw() const {
-  return std::string("")
-#define N(_, n, ...) + mangleForKey(n)
-#define P(_, n, ...) + mangleForKey(n)
-#define H(_, n, ...) + mangleForKey(n)
-#define E(_, n, ...) + mangleForKey(n)
+void RepoOptions::calcCacheKey() {
+  std::string raw;
+#define N(_, n, ...) mangleForKey(n, raw);
+#define P(_, n, ...) mangleForKey(n, raw);
+#define H(_, n, ...) mangleForKey(n, raw);
+#define E(_, n, ...) mangleForKey(n, raw);
 PARSERFLAGS()
-AUTOLOADFLAGS();
+AUTOLOADFLAGS()
 #undef N
 #undef P
 #undef H
 #undef E
-}
-
-std::string RepoOptions::cacheKeySha1() const {
-  return string_sha1(cacheKeyRaw());
+  m_sha1 = SHA1{string_sha1(raw)};
 }
 
 std::string RepoOptions::toJSON() const {
@@ -389,20 +388,6 @@ AUTOLOADFLAGS();
 #undef OUT
 
   return json;
-}
-
-bool RepoOptions::operator==(const RepoOptions& o) const {
-#define N(_, n, ...) if (n != o.n) return false;
-#define P(_, n, ...) if (n != o.n) return false;
-#define H(_, n, ...) if (n != o.n) return false;
-#define E(_, n, ...) if (n != o.n) return false;
-PARSERFLAGS()
-AUTOLOADFLAGS();
-#undef N
-#undef P
-#undef H
-#undef E
-  return true;
 }
 
 const RepoOptions& RepoOptions::defaults() {
@@ -455,6 +440,7 @@ AUTOLOADFLAGS();
 #undef E
 
   filterNamespaces();
+  calcCacheKey();
 }
 
 void RepoOptions::initDefaults(const Hdf& hdf, const IniSettingMap& ini) {
@@ -471,6 +457,7 @@ AUTOLOADFLAGS()
 
   filterNamespaces();
   m_path.clear();
+  calcCacheKey();
 }
 
 void RepoOptions::setDefaults(const Hdf& hdf, const IniSettingMap& ini) {
@@ -754,6 +741,7 @@ bool RuntimeOption::AdminServerStatsNeedPassword = true;
 std::string RuntimeOption::AdminPassword;
 std::set<std::string> RuntimeOption::AdminPasswords;
 std::set<std::string> RuntimeOption::HashedAdminPasswords;
+std::string RuntimeOption::AdminDumpPath;
 
 std::string RuntimeOption::ProxyOriginRaw;
 int RuntimeOption::ProxyPercentageRaw = 0;
@@ -1246,11 +1234,20 @@ static String todayDate() {
 }
 
 static bool matchShard(
+  bool enableShards,
   const std::string& hostname,
   const IniSetting::Map& ini, Hdf hdfPattern,
   std::vector<std::string>& messages
 ) {
   if (!hdfPattern.exists("Shard")) return true;
+
+  if (!enableShards) {
+    hdfPattern["Shard"].setVisited();
+    hdfPattern["ShardCount"].setVisited();
+    hdfPattern["ShardSalt"].setVisited();
+    return false;
+  }
+
   auto const shard = Config::GetInt64(ini, hdfPattern, "Shard", -1, false);
 
   auto const nshards =
@@ -1338,6 +1335,8 @@ static std::vector<std::string> getTierOverwrites(IniSetting::Map& ini,
   };
 
   std::vector<std::string> messages;
+  auto enableShards = true;
+
   // Tier overwrites
   {
     for (Hdf hdf = config["Tiers"].firstChild(); hdf.exists();
@@ -1354,9 +1353,13 @@ static std::vector<std::string> getTierOverwrites(IniSetting::Map& ini,
       // one fails to match, the later one is reported as unused.
       if (checkPatterns(hdf) &
           (!hdf.exists("exclude") || !checkPatterns(hdf["exclude"])) &
-          matchShard(hostname, ini, hdf, messages)) {
+          matchShard(enableShards, hostname, ini, hdf, messages)) {
         messages.emplace_back(folly::sformat(
                                 "Matched tier: {}", hdf.getName()));
+        if (enableShards && hdf["DisableShards"].configGetBool()) {
+          messages.emplace_back("Sharding is disabled.");
+          enableShards = false;
+        }
         if (hdf.exists("clear")) {
           std::vector<std::string> list;
           hdf["clear"].configGet(list);
@@ -1367,12 +1370,10 @@ static std::vector<std::string> getTierOverwrites(IniSetting::Map& ini,
         config.copy(hdf["overwrite"]);
         // no break here, so we can continue to match more overwrites
       }
-      hdf["overwrite"].setVisited(); // avoid lint complaining
-      if (hdf.exists("clear")) {
-        // when the tier does not match, "clear" is not accessed
-        // mark it visited, so the linter does not complain
-        hdf["clear"].setVisited();
-      }
+      // Avoid lint errors about unvisited nodes when the tier does not match.
+      hdf["DisableShards"].setVisited();
+      hdf["clear"].setVisited();
+      hdf["overwrite"].setVisited();
     }
   }
   return messages;
@@ -2398,6 +2399,8 @@ void RuntimeOption::Load(
                  "Server.LightProcessFilePrefix", "./lightprocess");
     Config::Bind(LightProcessCount, ini, config,
                  "Server.LightProcessCount", 0);
+    Config::Bind(LightProcess::g_strictUser, ini, config,
+                 "Server.LightProcessStrictUser", false);
     Config::Bind(ForceServerNameToHeader, ini, config,
                  "Server.ForceServerNameToHeader");
     Config::Bind(AllowDuplicateCookies, ini, config,
@@ -2513,6 +2516,8 @@ void RuntimeOption::Load(
     AdminPasswords = Config::GetSet(ini, config, "AdminServer.Passwords");
     HashedAdminPasswords =
       Config::GetSet(ini, config, "AdminServer.HashedPasswords");
+    Config::Bind(AdminDumpPath, ini, config,
+                 "AdminServer.DumpPath", "/tmp/hhvm_admin_dump");
   }
   {
     // Proxy
@@ -2835,7 +2840,8 @@ void RuntimeOption::Load(
     specializeVanillaDestructors();
     bespoke::setLoggingEnabled(false);
   } else {
-    bespoke::setLoggingEnabled(true);
+    auto const log = !isJitDeserializing();
+    bespoke::setLoggingEnabled(log);
   }
 
   // Hack Array Compats
@@ -2860,4 +2866,11 @@ void RuntimeOption::Load(
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+
+uintptr_t lowArenaMinAddr() {
+  return RuntimeOption::EvalLowArenaMinAddr;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
 }

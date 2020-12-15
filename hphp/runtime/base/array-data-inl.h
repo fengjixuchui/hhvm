@@ -85,36 +85,36 @@ ALWAYS_INLINE ArrayData* staticEmptyKeysetArray() {
 ///////////////////////////////////////////////////////////////////////////////
 // Creation and destruction.
 
-ALWAYS_INLINE ArrayData* ArrayData::Create() {
-  return ArrayData::CreateDArray();
+ALWAYS_INLINE ArrayData* ArrayData::Create(bool legacy) {
+  return ArrayData::CreateDArray(arrprov::Tag{}, legacy);
 }
 
-ALWAYS_INLINE ArrayData* ArrayData::CreateVArray(arrprov::Tag tag /* = {} */) {
-  auto const ad = RuntimeOption::EvalHackArrDVArrs ?
-    (RuntimeOption::EvalHackArrDVArrMark ?
-     staticEmptyMarkedVec() : staticEmptyVec()) :
-    staticEmptyVArray();
-  return RO::EvalArrayProvenance
-    ? arrprov::tagStaticArr(ad, tag)
-    : ad;
+ALWAYS_INLINE ArrayData* ArrayData::CreateVArray(arrprov::Tag tag, /* = {} */
+                                                 bool legacy /* = false */) {
+  if (RO::EvalHackArrDVArrs) {
+    return CreateVec(RO::EvalHackArrDVArrMark || legacy);
+  }
+  if (legacy) return staticEmptyMarkedVArray();
+  auto const ad = staticEmptyVArray();
+  return RO::EvalArrayProvenance ? arrprov::tagStaticArr(ad, tag) : ad;
 }
 
-ALWAYS_INLINE ArrayData* ArrayData::CreateDArray(arrprov::Tag tag /* = {} */) {
-  auto const ad = RuntimeOption::EvalHackArrDVArrs ?
-    (RuntimeOption::EvalHackArrDVArrMark ?
-     staticEmptyMarkedDictArray() : staticEmptyDictArray()) :
-    staticEmptyDArray();
-  return RO::EvalArrayProvenance
-    ? arrprov::tagStaticArr(ad, tag)
-    : ad;
+ALWAYS_INLINE ArrayData* ArrayData::CreateDArray(arrprov::Tag tag, /* = {} */
+                                                 bool legacy /* = false */) {
+  if (RO::EvalHackArrDVArrs) {
+    return CreateDict(RO::EvalHackArrDVArrMark || legacy);
+  }
+  if (legacy) return staticEmptyMarkedDArray();
+  auto const ad = staticEmptyDArray();
+  return RO::EvalArrayProvenance ? arrprov::tagStaticArr(ad, tag) : ad;
 }
 
-ALWAYS_INLINE ArrayData* ArrayData::CreateVec(arrprov::Tag tag /* = {} */) {
-  return staticEmptyVec();
+ALWAYS_INLINE ArrayData* ArrayData::CreateVec(bool legacy) {
+  return legacy ? staticEmptyMarkedVec() : staticEmptyVec();
 }
 
-ALWAYS_INLINE ArrayData* ArrayData::CreateDict(arrprov::Tag tag /* = {} */) {
-  return staticEmptyDictArray();
+ALWAYS_INLINE ArrayData* ArrayData::CreateDict(bool legacy) {
+  return legacy ? staticEmptyMarkedDictArray() : staticEmptyDictArray();
 }
 
 ALWAYS_INLINE ArrayData* ArrayData::CreateKeyset() {

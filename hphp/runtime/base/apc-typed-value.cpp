@@ -52,8 +52,13 @@ bool APCTypedValue::checkInvariants() const {
     case APCKind::Int:
     case APCKind::Double: break;
     case APCKind::PersistentFunc: assertx(m_data.func->isPersistent()); break;
+    case APCKind::PersistentClass: assertx(m_data.cls->isPersistent()); break;
+    case APCKind::PersistentClsMeth:
+      assertx(use_lowptr);
+      assertx(m_data.pclsmeth->getCls()->isPersistent()); break;
     case APCKind::StaticString: assertx(m_data.str->isStatic()); break;
     case APCKind::UncountedString: assertx(m_data.str->isUncounted()); break;
+    case APCKind::LazyClass: assertx(m_data.str->isStatic()); break;
     case APCKind::StaticArray:
       assertx(m_data.arr->isPHPArrayType());
       assertx(m_data.arr->isStatic());
@@ -87,6 +92,8 @@ bool APCTypedValue::checkInvariants() const {
       assertx(m_data.arr->isUncounted());
       break;
     case APCKind::FuncEntity:
+    case APCKind::ClassEntity:
+    case APCKind::ClsMeth:
     case APCKind::RFunc:
     case APCKind::RClsMeth:
     case APCKind::SharedString:

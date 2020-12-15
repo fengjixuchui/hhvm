@@ -119,7 +119,11 @@ inline bool Func::validate() const {
 inline FuncId Func::getFuncId() const {
   assertx(!m_funcId.isInvalid());
   assertx(fromFuncId(m_funcId) == this);
+#ifdef USE_LOWPTR
+  return FuncId{this};
+#else
   return m_funcId;
+#endif
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -554,10 +558,6 @@ inline RxLevel Func::rxLevel() const {
 
 inline bool Func::isRxDisabled() const {
   return shared()->m_allFlags.m_isRxDisabled;
-}
-
-inline bool Func::isRxConditional() const {
-  return rxConditionalFromAttr(m_coeffectAttrs);
 }
 
 inline bool Func::hasCoeffectRules() const {

@@ -49,17 +49,15 @@ let compute_tast_and_errors_unquarantined_internal
     { Compute_tast_and_errors.tast; errors; telemetry = Telemetry.create () }
   | (mode, _, _) ->
     (* prepare logging *)
-    Deferred_decl.reset ~enable:false ~threshold_opt:None;
+    Deferred_decl.reset
+      ~enable:false
+      ~declaration_threshold_opt:None
+      ~memory_mb_threshold_opt:None;
     Provider_context.reset_telemetry ctx;
     let prev_ctx_telemetry = Provider_context.get_telemetry ctx in
     let prev_gc_telemetry = Telemetry.quick_gc_stat () in
     Decl_counters.set_mode Typing_service_types.DeclingTopCounts;
-    let prev_tally_state =
-      Counters.(
-        reset
-          ~enabled_categories:
-            (CategorySet.of_list Category.[Decling; Disk_cat; Get_ast]))
-    in
+    let prev_tally_state = Counters.reset () in
     let t = Unix.gettimeofday () in
 
     (* do the work *)

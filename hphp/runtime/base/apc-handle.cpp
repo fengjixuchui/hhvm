@@ -23,6 +23,7 @@
 #include "hphp/runtime/base/apc-named-entity.h"
 #include "hphp/runtime/base/apc-rclass-meth.h"
 #include "hphp/runtime/base/apc-rfunc.h"
+#include "hphp/runtime/base/apc-clsmeth.h"
 #include "hphp/runtime/base/mixed-array.h"
 #include "hphp/runtime/ext/apc/ext_apc.h"
 #include "hphp/runtime/vm/class-meth-data-ref.h"
@@ -78,16 +79,22 @@ APCHandle::Pair APCHandle::Create(const_variant_ref source,
       }
       invalidFuncConversion("string");
     }
-    case KindOfClass:
-    case KindOfLazyClass:
+    case KindOfClass: {
+      auto const cls = val(cell).pclass;
+      if (cls->isPersistent()) {
+        auto const value = new APCTypedValue(cls);
+        return {value->getHandle(), sizeof(APCTypedValue)};
+      }
+      auto const value = new APCNamedEntity(cls);
+      return {value->getHandle(), sizeof(APCNamedEntity)};
+    }
+    case KindOfLazyClass: {
+      auto const value = new APCTypedValue(val(cell).plazyclass);
+      return {value->getHandle(), sizeof(APCTypedValue)};
+    }
     case KindOfPersistentString:
     case KindOfString: {
-      auto const s =
-        isClassType(cell.type())
-          ? const_cast<StringData*>(classToStringHelper(val(cell).pclass)) :
-        isLazyClassType(cell.type())
-          ? const_cast<StringData*>(lazyClassToStringHelper(val(cell).plazyclass))
-          : val(cell).pstr;
+      auto const s = val(cell).pstr;
       if (serialized) {
         // It is priming, and there might not be the right class definitions
         // for unserialization.
@@ -155,6 +162,15 @@ APCHandle::Pair APCHandle::Create(const_variant_ref source,
       // which does not match Zend behavior. We should fix this.
       return APCArray::MakeSharedEmptyArray();
     case KindOfClsMeth: {
+      if (RO::EvalAPCSerializeClsMeth) {
+        auto const meth = val(cell).pclsmeth;
+        if (use_lowptr && meth->getCls()->isPersistent()) {
+          auto const value = new APCTypedValue(meth);
+          return {value->getHandle(), sizeof(APCTypedValue)};
+        }
+        auto const value = new APCClsMeth(meth->getCls(), meth->getFunc());
+        return {value->getHandle(), sizeof(APCClsMeth)};
+      }
       raiseClsMethToVecWarningHelper();
       auto arr = clsMethToVecHelper(val(cell).pclsmeth);
       if (RuntimeOption::EvalHackArrDVArrs) {
@@ -184,6 +200,9 @@ Variant APCHandle::toLocalHelper() const {
     case APCKind::Int:
     case APCKind::Double:
     case APCKind::PersistentFunc:
+    case APCKind::PersistentClass:
+    case APCKind::LazyClass:
+    case APCKind::PersistentClsMeth:
     case APCKind::StaticString:
     case APCKind::UncountedString:
     case APCKind::StaticArray:
@@ -198,6 +217,12 @@ Variant APCHandle::toLocalHelper() const {
 
     case APCKind::FuncEntity:
       return APCNamedEntity::fromHandle(this)->getEntityOrNull();
+
+    case APCKind::ClassEntity:
+      return APCNamedEntity::fromHandle(this)->getEntityOrNull();
+
+    case APCKind::ClsMeth:
+      return APCClsMeth::fromHandle(this)->getEntityOrNull();
 
     case APCKind::SharedString:
       return Variant::attach(
@@ -303,10 +328,21 @@ void APCHandle::deleteShared() {
     case APCKind::StaticDict:
     case APCKind::StaticKeyset:
     case APCKind::PersistentFunc:
+    case APCKind::PersistentClass:
+    case APCKind::LazyClass:
+    case APCKind::PersistentClsMeth:
       delete APCTypedValue::fromHandle(this);
       return;
 
+    case APCKind::ClsMeth:
+      delete APCClsMeth::fromHandle(this);
+      return;
+
     case APCKind::FuncEntity:
+      delete APCNamedEntity::fromHandle(this);
+      return;
+
+    case APCKind::ClassEntity:
       delete APCNamedEntity::fromHandle(this);
       return;
 
@@ -381,6 +417,16 @@ bool APCHandle::checkInvariants() const {
     case APCKind::PersistentFunc:
       assertx(m_type == KindOfFunc);
       return true;
+    case APCKind::PersistentClass:
+      assertx(m_type == KindOfClass);
+      return true;
+    case APCKind::LazyClass:
+      assertx(m_type == KindOfLazyClass);
+      return true;
+    case APCKind::PersistentClsMeth:
+      assertx(m_type == KindOfClsMeth);
+      assertx(use_lowptr);
+      return true;
     case APCKind::StaticString:
     case APCKind::UncountedString:
       assertx(m_type == KindOfPersistentString);
@@ -408,6 +454,8 @@ bool APCHandle::checkInvariants() const {
     case APCKind::SharedMarkedDArray:
       assertx(!RuntimeOption::EvalHackArrDVArrs);
     case APCKind::FuncEntity:
+    case APCKind::ClassEntity:
+    case APCKind::ClsMeth:
     case APCKind::RFunc:
     case APCKind::RClsMeth:
     case APCKind::SharedString:

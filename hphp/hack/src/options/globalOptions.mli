@@ -28,9 +28,17 @@ type t = {
     will be type checked sequentially (in the master process). Otherwise,
     the files will be type checked in parallel (in MultiWorker workers). *)
   tco_parallel_type_checking_threshold: int;
+  (* If set, typechecker workers will quit after they exceed this limit *)
+  tco_max_typechecker_worker_memory_mb: int option;
   (* If set, defers class declarations after N lazy declarations; if not set,
     always lazily declares classes not already in cache. *)
   tco_defer_class_declaration_threshold: int option;
+  (* If set, defers class declarations if worker memory exceeds threshold.
+    This prevents OOMs due to a single file fetching a lot of decls, which would
+    not be prevented by [tco_max_typechecker_worker_memory_mb] which is checked
+    only after each file. It doesn't make sense to set this higher
+    than [tco_max_typechecker_worker_memory_mb]. *)
+  tco_defer_class_memory_mb_threshold: int option;
   (* If set, prevents type checking of files from being deferred more than
     the number of times greater than or equal to the threshold. If not set,
     defers class declarations indefinitely. *)
@@ -145,9 +153,6 @@ type t = {
   (* Two more profile options, used solely to send to logging backend. These allow
       the person who launches hack, to provide unique identifying keys that get
       sent to logging, so they can correlate/sort/filter their logs as they want. *)
-  profile_total_typecheck_duration: bool;
-      (** accumulate total duration of typechecking phase across workers.
-          This is user time, not wall clock time. *)
   profile_owner: string option;
   profile_desc: string;
   (* Enables like type hints *)
@@ -156,6 +161,8 @@ type t = {
   tco_union_intersection_type_hints: bool;
   (* Enables checking of coeffects *)
   tco_coeffects: bool;
+  (* Enables checking of coeffects for local operations (not calls) *)
+  tco_coeffects_local: bool;
   (* Enables like casts *)
   tco_like_casts: bool;
   (* A simpler form of pessimization, only wraps the outermost type in like
@@ -279,6 +286,11 @@ type t = {
   po_disallow_hash_comments: bool;
   (* Disable parsing of fun() and class_meth() *)
   po_disallow_fun_and_cls_meth_pseudo_funcs: bool;
+  (* Enable use of the direct decl parser for parsing type signatures. *)
+  tco_use_direct_decl_parser: bool;
+  (* Enable ifc *)
+  tco_ifc_enabled: bool;
+  po_enable_coeffects: bool;
 }
 [@@deriving eq, show]
 
@@ -294,7 +306,9 @@ val make :
   ?tco_dynamic_view:bool ->
   ?tco_num_local_workers:int ->
   ?tco_parallel_type_checking_threshold:int ->
+  ?tco_max_typechecker_worker_memory_mb:int ->
   ?tco_defer_class_declaration_threshold:int ->
+  ?tco_defer_class_memory_mb_threshold:int ->
   ?tco_max_times_to_defer_type_checking:int ->
   ?tco_prefetch_deferred_files:bool ->
   ?tco_remote_type_check_threshold:int ->
@@ -326,12 +340,12 @@ val make :
   ?po_rust_parser_errors:bool ->
   ?profile_type_check_duration_threshold:float ->
   ?profile_type_check_twice:bool ->
-  ?profile_total_typecheck_duration:bool ->
   ?profile_owner:string ->
   ?profile_desc:string ->
   ?tco_like_type_hints:bool ->
   ?tco_union_intersection_type_hints:bool ->
   ?tco_coeffects:bool ->
+  ?tco_coeffects_local:bool ->
   ?tco_like_casts:bool ->
   ?tco_simple_pessimize:float ->
   ?tco_complex_coercion:bool ->
@@ -388,6 +402,9 @@ val make :
   ?tco_enable_sound_dynamic:bool ->
   ?po_disallow_hash_comments:bool ->
   ?po_disallow_fun_and_cls_meth_pseudo_funcs:bool ->
+  ?tco_use_direct_decl_parser:bool ->
+  ?tco_ifc_enabled:bool ->
+  ?po_enable_coeffects:bool ->
   unit ->
   t
 
@@ -401,7 +418,11 @@ val tco_num_local_workers : t -> int option
 
 val tco_parallel_type_checking_threshold : t -> int
 
+val tco_max_typechecker_worker_memory_mb : t -> int option
+
 val tco_defer_class_declaration_threshold : t -> int option
+
+val tco_defer_class_memory_mb_threshold : t -> int option
 
 val tco_max_times_to_defer_type_checking : t -> int option
 
@@ -469,15 +490,11 @@ val tco_experimental_generics_arity : string
 
 val tco_experimental_forbid_nullable_cast : string
 
-val tco_experimental_coroutines : string
-
 val tco_experimental_disallow_static_memoized : string
 
 val tco_experimental_type_param_shadowing : string
 
 val tco_experimental_abstract_type_const_with_default : string
-
-val tco_experimental_ifc : string
 
 val tco_experimental_infer_flows : string
 
@@ -505,8 +522,6 @@ val profile_type_check_duration_threshold : t -> float
 
 val profile_type_check_twice : t -> bool
 
-val profile_total_typecheck_duration : t -> bool
-
 val profile_owner : t -> string option
 
 val profile_desc : t -> string
@@ -515,9 +530,13 @@ val tco_like_type_hints : t -> bool
 
 val tco_union_intersection_type_hints : t -> bool
 
-val coeffects : t -> bool
+val tco_call_coeffects : t -> bool
 
-val set_coeffects : t -> t
+val tco_local_coeffects : t -> bool
+
+val ifc_enabled : t -> bool
+
+val enable_ifc : t -> t
 
 val tco_like_casts : t -> bool
 
@@ -611,6 +630,8 @@ val po_disable_xhp_children_declarations : t -> bool
 
 val po_enable_enum_classes : t -> bool
 
+val po_enable_coeffects : t -> bool
+
 val po_disable_modes : t -> bool
 
 val po_disable_hh_ignore_error : t -> bool
@@ -634,3 +655,5 @@ val tco_enable_sound_dynamic : t -> bool
 val po_disallow_hash_comments : t -> bool
 
 val po_disallow_fun_and_cls_meth_pseudo_funcs : t -> bool
+
+val tco_use_direct_decl_parser : t -> bool

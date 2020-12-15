@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<9dd7ee8fce5f698202093749d1b481e8>>
+// @generated SignedSource<<3122311ac53b7b29aec0255a273072df>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
@@ -67,8 +67,6 @@ pub enum Stmt_<Ex, Fb, En, Hi> {
     Continue,
     Throw(Box<Expr<Ex, Fb, En, Hi>>),
     Return(Box<Option<Expr<Ex, Fb, En, Hi>>>),
-    GotoLabel(Box<Pstring>),
-    Goto(Box<Pstring>),
     Awaitall(
         Box<(
             Vec<(Option<Lid>, Expr<Ex, Fb, En, Hi>)>,
@@ -334,9 +332,16 @@ pub enum Expr_<Ex, Fb, En, Hi> {
     Lvar(Box<Lid>),
     Dollardollar(Box<Lid>),
     Clone(Box<Expr<Ex, Fb, En, Hi>>),
-    ObjGet(Box<(Expr<Ex, Fb, En, Hi>, Expr<Ex, Fb, En, Hi>, OgNullFlavor)>),
     ArrayGet(Box<(Expr<Ex, Fb, En, Hi>, Option<Expr<Ex, Fb, En, Hi>>)>),
-    ClassGet(Box<(ClassId<Ex, Fb, En, Hi>, ClassGetExpr<Ex, Fb, En, Hi>)>),
+    ObjGet(
+        Box<(
+            Expr<Ex, Fb, En, Hi>,
+            Expr<Ex, Fb, En, Hi>,
+            OgNullFlavor,
+            bool,
+        )>,
+    ),
+    ClassGet(Box<(ClassId<Ex, Fb, En, Hi>, ClassGetExpr<Ex, Fb, En, Hi>, bool)>),
     ClassConst(Box<(ClassId<Ex, Fb, En, Hi>, Pstring)>),
     Call(
         Box<(
@@ -355,9 +360,7 @@ pub enum Expr_<Ex, Fb, En, Hi> {
     Yield(Box<Afield<Ex, Fb, En, Hi>>),
     YieldBreak,
     Await(Box<Expr<Ex, Fb, En, Hi>>),
-    Suspend(Box<Expr<Ex, Fb, En, Hi>>),
     List(Vec<Expr<Ex, Fb, En, Hi>>),
-    ExprList(Vec<Expr<Ex, Fb, En, Hi>>),
     Cast(Box<(Hint, Expr<Ex, Fb, En, Hi>)>),
     Unop(Box<(ast_defs::Uop, Expr<Ex, Fb, En, Hi>)>),
     Binop(Box<(ast_defs::Bop, Expr<Ex, Fb, En, Hi>, Expr<Ex, Fb, En, Hi>)>),
@@ -395,8 +398,6 @@ pub enum Expr_<Ex, Fb, En, Hi> {
     Import(Box<(ImportFlavor, Expr<Ex, Fb, En, Hi>)>),
     /// TODO: T38184446 Consolidate collections in AAST
     Collection(Box<(Sid, Option<CollectionTarg<Hi>>, Vec<Afield<Ex, Fb, En, Hi>>)>),
-    BracedExpr(Box<Expr<Ex, Fb, En, Hi>>),
-    ParenthesizedExpr(Box<Expr<Ex, Fb, En, Hi>>),
     ExpressionTree(Box<ExpressionTree<Ex, Fb, En, Hi>>),
     Lplaceholder(Box<Pos>),
     FunId(Box<Sid>),
@@ -411,9 +412,6 @@ pub enum Expr_<Ex, Fb, En, Hi> {
             Expr<Ex, Fb, En, Hi>,
         )>,
     ),
-    Assert(Box<AssertExpr<Ex, Fb, En, Hi>>),
-    PUAtom(String),
-    PUIdentifier(Box<(ClassId<Ex, Fb, En, Hi>, Pstring, Pstring)>),
     ETSplice(Box<Expr<Ex, Fb, En, Hi>>),
     EnumAtom(String),
     Any,
@@ -436,24 +434,6 @@ pub enum Expr_<Ex, Fb, En, Hi> {
 pub enum ClassGetExpr<Ex, Fb, En, Hi> {
     CGstring(Pstring),
     CGexpr(Expr<Ex, Fb, En, Hi>),
-}
-
-#[derive(
-    Clone,
-    Debug,
-    Deserialize,
-    Eq,
-    FromOcamlRep,
-    Hash,
-    NoPosHash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-    ToOcamlRep
-)]
-pub enum AssertExpr<Ex, Fb, En, Hi> {
-    AEAssert(Expr<Ex, Fb, En, Hi>),
 }
 
 #[derive(
@@ -869,7 +849,6 @@ pub struct Class_<Ex, Fb, En, Hi> {
     pub user_attributes: Vec<UserAttribute<Ex, Fb, En, Hi>>,
     pub file_attributes: Vec<FileAttribute<Ex, Fb, En, Hi>>,
     pub enum_: Option<Enum_>,
-    pub pu_enums: Vec<PuEnum<Ex, Fb, En, Hi>>,
     pub doc_comment: Option<DocComment>,
     pub emit_id: Option<EmitId>,
 }
@@ -1223,92 +1202,6 @@ pub struct RecordDef<Ex, Fb, En, Hi> {
 }
 
 pub type RecordHint = Hint;
-
-/// Pocket Universe Enumeration, e.g.
-///
-/// ```
-///   enum Foo { // pu_name
-///     // pu_case_types
-///     case type T0;
-///     case type T1;
-///
-///     // pu_case_values
-///     case ?T0 default_value;
-///     case T1 foo;
-///
-///     // pu_members
-///     :@A( // pum_atom
-///       // pum_types
-///       type T0 = string,
-///       type T1 = int,
-///
-///       // pum_exprs
-///       default_value = null,
-///       foo = 42,
-///     );
-///     :@B( ... )
-///     ...
-///   }
-/// ```
-#[derive(
-    Clone,
-    Debug,
-    Deserialize,
-    Eq,
-    FromOcamlRep,
-    Hash,
-    NoPosHash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-    ToOcamlRep
-)]
-pub struct PuEnum<Ex, Fb, En, Hi> {
-    pub annotation: En,
-    pub name: Sid,
-    pub user_attributes: Vec<UserAttribute<Ex, Fb, En, Hi>>,
-    pub is_final: bool,
-    pub case_types: Vec<Tparam<Ex, Fb, En, Hi>>,
-    pub case_values: Vec<PuCaseValue>,
-    pub members: Vec<PuMember<Ex, Fb, En, Hi>>,
-}
-
-#[derive(
-    Clone,
-    Debug,
-    Deserialize,
-    Eq,
-    FromOcamlRep,
-    Hash,
-    NoPosHash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-    ToOcamlRep
-)]
-pub struct PuCaseValue(pub Sid, pub Hint);
-
-#[derive(
-    Clone,
-    Debug,
-    Deserialize,
-    Eq,
-    FromOcamlRep,
-    Hash,
-    NoPosHash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-    ToOcamlRep
-)]
-pub struct PuMember<Ex, Fb, En, Hi> {
-    pub atom: Sid,
-    pub types: Vec<(Sid, Hint)>,
-    pub exprs: Vec<(Sid, Expr<Ex, Fb, En, Hi>)>,
-}
 
 pub type FunDef<Ex, Fb, En, Hi> = Fun_<Ex, Fb, En, Hi>;
 

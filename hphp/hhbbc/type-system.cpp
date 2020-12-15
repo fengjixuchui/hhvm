@@ -84,9 +84,8 @@ bool mayHaveData(trep bits) {
   switch (bits) {
   case BSStr:    case BStr:
   case BOptSStr: case BOptStr:
-  case BObj:     case BInt:    case BDbl:     case BRecord:
-  case BOptObj:  case BOptInt: case BOptDbl:  case BOptRecord:
-  case BCls:
+  case BObj:     case BInt:    case BDbl:     case BRecord: case BCls:
+  case BOptObj:  case BOptInt: case BOptDbl:  case BOptRecord: case BOptCls:
   case BArr:     case BSArr:     case BCArr:
   case BArrN:    case BSArrN:    case BCArrN:
   case BOptArr:  case BOptSArr:  case BOptCArr:
@@ -204,7 +203,6 @@ bool mayHaveData(trep bits) {
   case BOptArrKeyCompat:
   case BOptUncArrKeyCompat:
   case BOptFunc:
-  case BOptCls:
   case BClsMeth:
   case BOptClsMeth:
   case BRClsMeth:
@@ -3974,7 +3972,7 @@ folly::Optional<Type> type_of_type_structure(const Index& index,
     case TypeStructure::Kind::T_dict:
       return is_nullable ? TOptDict : TDict;
     case TypeStructure::Kind::T_vec:
-      if (RuntimeOption::EvalHackArrDVArrs) {
+      if (RO::EvalHackArrDVArrs && RO::EvalIsCompatibleClsMethType) {
         return is_nullable ? TOptVecCompat : TVecCompat;
       }
       return is_nullable ? TOptVec : TVec;
@@ -4186,10 +4184,7 @@ Type from_DataType(DataType dt) {
   case KindOfRFunc:    return TRFunc;
   case KindOfFunc:     return TFunc;
   case KindOfClass:    return TCls;
-  case KindOfLazyClass: {
-    always_assert(false);
-    return TCls; // TODO (T68823001)
-  }
+  case KindOfLazyClass:  return TLazyCls;
   case KindOfClsMeth:  return TClsMeth;
   case KindOfRClsMeth: return TRClsMeth;
   }
@@ -4962,7 +4957,9 @@ Type loosen_arrays(Type a) {
   if (a.couldBe(BVec))     a |= TVec;
   if (a.couldBe(BDict))    a |= TDict;
   if (a.couldBe(BKeyset))  a |= TKeyset;
-  if (a.couldBe(BClsMeth)) a |= RO::EvalHackArrDVArrs ? TVecCompat : TArrCompat;
+  if (RO::EvalIsCompatibleClsMethType && a.couldBe(BClsMeth)) {
+    a |= RO::EvalHackArrDVArrs ? TVecCompat : TArrCompat;
+  }
   return a;
 }
 
@@ -5963,7 +5960,7 @@ std::pair<Type,Type> array_like_newelem(Type arr,
                                         const Type& val,
                                         ProvTag src) {
 
-  if (arr.couldBe(BKeyset)) {
+  if (arr.subtypeOrNull(BKeyset)) {
     auto const key = disect_strict_key(val);
     if (key.type == TBottom) return { TBottom, TInitCell };
     return { array_like_set(std::move(arr), key, key.type, src).first, val };
@@ -5972,10 +5969,13 @@ std::pair<Type,Type> array_like_newelem(Type arr,
   const bool maybeEmpty = arr.couldBe(BArrLikeE);
   const bool isVector = arr.subtypeOrNull(BVec);
   const bool isVArray = arr.subtypeOrNull(BVArr);
-  assertx(isVector == arr.couldBe(BVec));
 
   trep bits = combine_dv_arr_like_bits(arr.bits(), BArrLikeN);
   bits &= ~BArrLikeE;
+
+  // Right now, we always pessimize appends to TArrLike. We can probably do
+  // better if we have a non-trivial DataTag.
+  if (bits & BKeyset) return { Type(bits), TArrKey };
 
   if (!arr.couldBe(BArrLikeN)) {
     assert(maybeEmpty);
@@ -6278,7 +6278,7 @@ bool could_copy_on_write(const Type& t) {
 }
 
 bool is_type_might_raise(const Type& testTy, const Type& valTy) {
-  auto const hackarr = RO::EvalHackArrDVArrs;
+  auto const UNUSED hackarr = RO::EvalHackArrDVArrs;
 
   // Explanation for the array-like type test behaviors:
   //
@@ -6294,28 +6294,43 @@ bool is_type_might_raise(const Type& testTy, const Type& valTy) {
 
   auto const mayLogProv = RO::EvalArrayProvenance && valTy.couldBe(kProvBits);
 
+  auto const mayLogClsMeth =
+    RO::EvalIsVecNotices &&
+    (testTy == TArrCompat || testTy == TVArrCompat || testTy == TVecCompat ||
+     testTy == TArrLikeCompat) &&
+    valTy.couldBe(BClsMeth);
+
+  assertx(
+    !RO::EvalIsCompatibleClsMethType ||
+    (testTy != TVArr && testTy != (hackarr ? TVec : TArr))
+  );
+  assertx(
+    RO::EvalIsCompatibleClsMethType ||
+    (testTy != TVArrCompat && testTy != (hackarr ? TVecCompat : TArrCompat))
+  );
+  assertx(testTy != (hackarr ? TArrCompat : TVecCompat));
+  assertx(!mayLogClsMeth || RO::EvalIsCompatibleClsMethType);
+
   if (is_opt(testTy)) return is_type_might_raise(unopt(testTy), valTy);
   if (testTy == TStrLike) {
     return valTy.couldBe(BCls | BLazyCls);
   } else if (testTy == TArr || testTy == TArrCompat) {
-    return mayLogProv ||
-           (RO::EvalIsVecNotices && !hackarr && valTy.couldBe(BClsMeth));
+    return mayLogProv || mayLogClsMeth;
   } else if (testTy == TVArr || testTy == TVArrCompat) {
-    return mayLogProv ||
-           (RO::EvalIsVecNotices && valTy.couldBe(BClsMeth)) ||
+    return mayLogProv || mayLogClsMeth ||
            (RO::EvalHackArrCompatIsVecDictNotices && valTy.couldBe(BVec));
   } else if (testTy == TDArr) {
     return mayLogProv ||
            (RO::EvalHackArrCompatIsVecDictNotices && valTy.couldBe(BDict));
   } else if (testTy == TVec || testTy == TVecCompat) {
-    return mayLogProv ||
-           (RO::EvalIsVecNotices && hackarr && valTy.couldBe(BClsMeth)) ||
+    return mayLogProv || mayLogClsMeth ||
            (RO::EvalHackArrCompatIsVecDictNotices && valTy.couldBe(BVec));
   } else if (testTy == TDict) {
     return mayLogProv ||
            (RO::EvalHackArrCompatIsVecDictNotices && valTy.couldBe(BDArr));
   } else if (testTy == TArrLikeCompat) {
-    return RO::EvalIsVecNotices && valTy.couldBe(BClsMeth);
+    assertx(RO::EvalIsCompatibleClsMethType);
+    return mayLogClsMeth;
   }
   return false;
 }
@@ -6440,7 +6455,8 @@ bool inner_types_might_raise(const Type& t1, const Type& t2) {
 
 bool compare_might_raise(const Type& t1, const Type& t2) {
   if (!RuntimeOption::EvalHackArrCompatNotices &&
-      !RuntimeOption::EvalEmitClsMethPointers) {
+      !RuntimeOption::EvalEmitClsMethPointers &&
+      !RuntimeOption::EvalRaiseClassConversionWarning) {
     return false;
   }
 
@@ -6466,6 +6482,13 @@ bool compare_might_raise(const Type& t1, const Type& t2) {
       if (t1.couldBe(TClsMeth) && t2.couldBe(TVec))     return true;
       if (t1.couldBe(TVec)     && t2.couldBe(TClsMeth)) return true;
     }
+  }
+
+  if (RuntimeOption::EvalRaiseClassConversionWarning) {
+    if (t1.couldBe(TStr) && t2.couldBe(TLazyCls)) return true;
+    if (t1.couldBe(TStr) && t2.couldBe(TCls)) return true;
+    if (t1.couldBe(TLazyCls) && t2.couldBe(TStr)) return true;
+    if (t1.couldBe(TCls) && t2.couldBe(TStr)) return true;
   }
 
   return t1.couldBe(BObj) && t2.couldBe(BObj);

@@ -770,7 +770,8 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case CallBuiltin:
     {
       AliasClass out_stk = AEmpty;
-      auto const callee = inst.extra<CallBuiltin>()->callee;
+      auto const extra = inst.extra<CallBuiltin>();
+      auto const callee = extra->callee;
       auto const stk = [&] () -> AliasClass {
         AliasClass ret = AEmpty;
         for (auto i = uint32_t{2}; i < inst.numSrcs(); ++i) {
@@ -787,17 +788,12 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
         }
         return ret;
       }();
-      if (callee->isFoldable()) {
-        return may_load_store_kill(
-          stk | AHeapAny, out_stk | AHeapAny, AMIStateAny
-        );
-      } else {
-        return may_load_store_kill(
-          stk | AHeapAny | ARdsAny,
-          out_stk | AHeapAny | ARdsAny,
-          AMIStateAny
-        );
-      }
+      auto const foldable = callee->isFoldable() ? AEmpty : ARdsAny;
+      return may_load_store_kill(
+        stk | AHeapAny | foldable,
+        out_stk | AHeapAny | foldable,
+        stack_below(inst.src(1), extra->spOffset - 1) | AMIStateAny
+      );
     }
 
   // Resumable suspension takes everything from the frame and moves it into the
@@ -1059,6 +1055,13 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     return PureStore { AElemS { arr, key }, val, arr };
   }
 
+  case LdMonotypeDictVal: {
+    // TODO(mcolavita): When we have a type-array-elem method to get the key
+    // of an arbitrary array-like type, use that to narrow this load.
+    return PureLoad { AElemAny };
+  }
+
+  case LdMonotypeVecElem:
   case LdVecElem: {
     auto const base = inst.src(0);
     auto const key  = inst.src(1);
@@ -1068,16 +1071,17 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   }
 
   case BespokeGet: {
-    // TODO(mcolavita): This should be PureLoad once it no longer branches
     auto const base = inst.src(0);
     auto const key  = inst.src(1);
+    assertx(key->type().subtypeOfAny(TInt, TStr));
     if (key->isA(TInt)) {
-      return may_load_store(
+      return PureLoad {
         key->hasConstVal() ? AElemI { base, key->intVal() } : AElemIAny,
-        AEmpty
-      );
+      };
     } else {
-      return may_load_store(AElemAny, AEmpty);
+      return PureLoad {
+        key->hasConstVal() ? AElemS { base, key->strVal() } : AElemSAny,
+      };
     }
   }
 
@@ -1093,7 +1097,9 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     }
 
   case NewLoggingArray:
-    // May read any data referenced by the input array, but not locals/stack.
+  case ProfileArrLikeProps:
+    // These ops may read anything referenced by the input array or object,
+    // but not any of the locals or stack frame slots.
     return may_load_store(AHeapAny | livefp(inst), AEmpty);
 
   case NewKeysetArray:
@@ -1245,6 +1251,8 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
 
   case DictFirstKey:
   case DictLastKey:
+  case LdMonotypeDictEnd:
+  case LdMonotypeDictKey:
     return may_load_store(AEmpty, AEmpty);
 
   case CheckDictKeys:
@@ -1492,7 +1500,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case AssertLoc:
   case AssertStk:
   case AssertMBase:
-  case BespokeIterAdvancePos:
+  case BespokeIterEnd:
   case BespokeIterFirstPos:
   case BespokeIterLastPos:
   case DefFrameRelSP:
@@ -1505,6 +1513,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case EnterPrologue:
   case EqBool:
   case EqCls:
+  case EqLazyCls:
   case EqRecDesc:
   case EqFunc:
   case EqStrPtr:

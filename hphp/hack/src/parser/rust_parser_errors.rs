@@ -79,11 +79,11 @@ enum UnstableFeatures {
     UnionIntersectionTypeHints,
     ClassLevelWhere,
     ExpressionTrees,
-    PocketUniverses,
     CoeffectsProvisional,
     EnumSupertyping,
     EnumClass,
     EnumAtom,
+    IFC,
 }
 
 use BinopAllowsAwaitInPositions::*;
@@ -436,6 +436,8 @@ where
                 parser_options.tco_union_intersection_type_hints
             }
             UnstableFeatures::ClassLevelWhere => parser_options.po_enable_class_level_where_clauses,
+            UnstableFeatures::IFC => parser_options.tco_ifc_enabled,
+            UnstableFeatures::CoeffectsProvisional => parser_options.po_enable_coeffects,
             _ => false,
         } || self.env.context.active_unstable_features.contains(feature);
         if !enabled {
@@ -1500,6 +1502,12 @@ where
         }
     }
 
+    fn is_ifc_attribute(&self, name: &str) -> bool {
+        name == sn::user_attributes::POLICIED
+            || name == sn::user_attributes::INFERFLOWS
+            || name == sn::user_attributes::EXTERNAL
+    }
+
     fn attribute_first_reactivity_annotation(
         &self,
         node: S<'a, Token, Value>,
@@ -1522,6 +1530,17 @@ where
         !(self.attribute_has_reactivity_annotation(attr_spec))
             && (has_attr(sn::user_attributes::ONLY_RX_IF_IMPL)
                 || has_attr(sn::user_attributes::AT_MOST_RX_AS_ARGS))
+    }
+
+    fn check_ifc_enabled(&mut self, attrs: S<'a, Token, Value>) {
+        for node in Self::attr_spec_to_node_list(attrs) {
+            match self.attr_name(node) {
+                Some(n) if self.is_ifc_attribute(n) => {
+                    self.check_can_use_feature(node, &UnstableFeatures::IFC)
+                }
+                _ => {}
+            }
+        }
     }
 
     fn error_if_memoize_function_returns_mutable(&mut self, attrs: S<'a, Token, Value>) {
@@ -1776,6 +1795,7 @@ where
                     function_attrs,
                 );
                 self.error_if_memoize_function_returns_mutable(function_attrs);
+                self.check_ifc_enabled(function_attrs);
 
                 self.check_nonrx_annotation(node);
 
@@ -1799,6 +1819,7 @@ where
                     .unwrap_or("");
                 let method_attrs = &md.attribute;
                 self.error_if_memoize_function_returns_mutable(method_attrs);
+                self.check_ifc_enabled(method_attrs);
                 self.produce_error(
                     |self_, x| self_.methodish_contains_memoize(x),
                     node,
@@ -2014,6 +2035,15 @@ where
             || errors::double_variadic,
             node,
         );
+    }
+
+    fn check_parameter_ifc(&mut self, node: S<'a, Token, Value>) {
+        if let ParameterDeclaration(x) = &node.children {
+            let attr = &x.attribute;
+            if self.attribute_specification_contains(attr, sn::user_attributes::EXTERNAL) {
+                self.check_can_use_feature(attr, &UnstableFeatures::IFC);
+            }
+        }
     }
 
     fn parameter_rx_errors(&mut self, node: S<'a, Token, Value>) {
@@ -2253,7 +2283,8 @@ where
     fn parameter_errors(&mut self, node: S<'a, Token, Value>) {
         let param_errors = |self_: &mut Self, params| {
             for x in Self::syntax_to_list_no_separators(params) {
-                self_.parameter_rx_errors(x)
+                self_.parameter_rx_errors(x);
+                self_.check_parameter_ifc(x);
             }
             self_.params_errors(params)
         };
@@ -2265,6 +2296,7 @@ where
                 });
                 self.parameter_rx_errors(node);
                 self.check_type_hint(&p.type_);
+                self.check_parameter_ifc(node);
 
                 if let Some(inout_modifier) = Self::parameter_callconv(node) {
                     if self.is_inside_async_method() {
@@ -4444,7 +4476,7 @@ where
                 use TokenKind::*;
                 match token.kind() {
                     Name | Trait | Extends | Implements | Static | Abstract | Final | Private
-                    | Protected | Public | Global | Goto | Instanceof | Insteadof | Interface
+                    | Protected | Public | Global | Instanceof | Insteadof | Interface
                     | Namespace | New | Try | Use | Var | List | Clone | Include | Include_once
                     | Throw | Tuple | Print | Echo | Require | Require_once | Return | Else
                     | Elseif | Default | Break | Continue | Switch | Yield | Function | If
@@ -5001,7 +5033,6 @@ where
             DecoratedExpression(x) => match Self::token_kind(&x.decorator) {
                 Some(TokenKind::Clone) => err(self, errors::not_allowed_in_write("`clone`")),
                 Some(TokenKind::Await) => err(self, errors::not_allowed_in_write("`await`")),
-                Some(TokenKind::Suspend) => err(self, errors::not_allowed_in_write("`suspend`")),
                 Some(TokenKind::QuestionQuestion) => {
                     err(self, errors::not_allowed_in_write("`??` operator"))
                 }
@@ -5568,18 +5599,8 @@ where
             UnionTypeSpecifier(_) | IntersectionTypeSpecifier(_) => {
                 self.check_can_use_feature(node, &UnstableFeatures::UnionIntersectionTypeHints)
             }
-            Capability(_) | CapabilityProvisional(_) => {
+            Capability(_) => {
                 self.check_can_use_feature(node, &UnstableFeatures::CoeffectsProvisional)
-            }
-            PocketAtomExpression(_)
-            | PocketIdentifierExpression(_)
-            | PocketAtomMappingDeclaration(_)
-            | PocketEnumDeclaration(_)
-            | PocketFieldTypeExprDeclaration(_)
-            | PocketFieldTypeDeclaration(_)
-            | PocketMappingIdDeclaration(_)
-            | PocketMappingTypeDeclaration(_) => {
-                self.check_can_use_feature(node, &UnstableFeatures::PocketUniverses)
             }
             ClassishDeclaration(x) => match &x.where_clause.children {
                 WhereClause(_) => {

@@ -106,6 +106,8 @@ let err r = mk (r, Terr)
 
 let taccess r ty id = mk (r, Taccess (ty, id))
 
+let new_type r name tyl = mk (r, Tnewtype (name, tyl, mixed r))
+
 let nullable_decl r ty =
   (* Cheap avoidance of double nullable *)
   match get_node ty with
@@ -176,5 +178,14 @@ let simple_variadic_splat r ty =
              d_kind = SplatUnpack;
            } ))
 
-let default_capability r =
-  apply r (Reason.to_pos r, Naming_special_names.Coeffects.defaults) []
+let default_capability =
+  intersection
+    Reason.Rnone
+    [
+      class_type
+        Reason.Rnone
+        Naming_special_names.Capabilities.accessStaticVariable
+        [];
+      class_type Reason.Rnone Naming_special_names.Capabilities.writeProperty [];
+      class_type Reason.Rnone Naming_special_names.Capabilities.output [];
+    ]

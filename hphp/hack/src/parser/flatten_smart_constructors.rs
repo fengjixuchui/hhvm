@@ -261,11 +261,11 @@ pub trait FlattenSmartConstructors<'src, State>
         }
     }
 
-    fn make_function_declaration_header(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R, arg10: Self::R, arg11: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) && Self::is_zero(&arg5) && Self::is_zero(&arg6) && Self::is_zero(&arg7) && Self::is_zero(&arg8) && Self::is_zero(&arg9) && Self::is_zero(&arg10) && Self::is_zero(&arg11) {
+    fn make_function_declaration_header(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R, arg10: Self::R) -> Self::R {
+        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) && Self::is_zero(&arg5) && Self::is_zero(&arg6) && Self::is_zero(&arg7) && Self::is_zero(&arg8) && Self::is_zero(&arg9) && Self::is_zero(&arg10) {
           Self::zero(SyntaxKind::FunctionDeclarationHeader)
         } else {
-          self.flatten(SyntaxKind::FunctionDeclarationHeader, vec!(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11))
+          self.flatten(SyntaxKind::FunctionDeclarationHeader, vec!(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10))
         }
     }
 
@@ -274,14 +274,6 @@ pub trait FlattenSmartConstructors<'src, State>
           Self::zero(SyntaxKind::Capability)
         } else {
           self.flatten(SyntaxKind::Capability, vec!(arg0, arg1, arg2))
-        }
-    }
-
-    fn make_capability_provisional(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) && Self::is_zero(&arg5) {
-          Self::zero(SyntaxKind::CapabilityProvisional)
-        } else {
-          self.flatten(SyntaxKind::CapabilityProvisional, vec!(arg0, arg1, arg2, arg3, arg4, arg5))
         }
     }
 
@@ -394,6 +386,14 @@ pub trait FlattenSmartConstructors<'src, State>
           Self::zero(SyntaxKind::TypeConstDeclaration)
         } else {
           self.flatten(SyntaxKind::TypeConstDeclaration, vec!(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9))
+        }
+    }
+
+    fn make_context_const_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R) -> Self::R {
+        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) && Self::is_zero(&arg5) && Self::is_zero(&arg6) && Self::is_zero(&arg7) && Self::is_zero(&arg8) {
+          Self::zero(SyntaxKind::ContextConstDeclaration)
+        } else {
+          self.flatten(SyntaxKind::ContextConstDeclaration, vec!(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8))
         }
     }
 
@@ -642,22 +642,6 @@ pub trait FlattenSmartConstructors<'src, State>
           Self::zero(SyntaxKind::ReturnStatement)
         } else {
           self.flatten(SyntaxKind::ReturnStatement, vec!(arg0, arg1, arg2))
-        }
-    }
-
-    fn make_goto_label(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) {
-          Self::zero(SyntaxKind::GotoLabel)
-        } else {
-          self.flatten(SyntaxKind::GotoLabel, vec!(arg0, arg1))
-        }
-    }
-
-    fn make_goto_statement(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) {
-          Self::zero(SyntaxKind::GotoStatement)
-        } else {
-          self.flatten(SyntaxKind::GotoStatement, vec!(arg0, arg1, arg2))
         }
     }
 
@@ -1149,14 +1133,6 @@ pub trait FlattenSmartConstructors<'src, State>
         }
     }
 
-    fn make_pu_access(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) {
-          Self::zero(SyntaxKind::PUAccess)
-        } else {
-          self.flatten(SyntaxKind::PUAccess, vec!(arg0, arg1, arg2))
-        }
-    }
-
     fn make_vector_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R) -> Self::R {
         if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) {
           Self::zero(SyntaxKind::VectorTypeSpecifier)
@@ -1189,6 +1165,14 @@ pub trait FlattenSmartConstructors<'src, State>
         }
     }
 
+    fn make_function_ctx_type_specifier(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {
+        if Self::is_zero(&arg0) && Self::is_zero(&arg1) {
+          Self::zero(SyntaxKind::FunctionCtxTypeSpecifier)
+        } else {
+          self.flatten(SyntaxKind::FunctionCtxTypeSpecifier, vec!(arg0, arg1))
+        }
+    }
+
     fn make_type_parameter(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
         if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) && Self::is_zero(&arg5) {
           Self::zero(SyntaxKind::TypeParameter)
@@ -1202,6 +1186,14 @@ pub trait FlattenSmartConstructors<'src, State>
           Self::zero(SyntaxKind::TypeConstraint)
         } else {
           self.flatten(SyntaxKind::TypeConstraint, vec!(arg0, arg1))
+        }
+    }
+
+    fn make_context_constraint(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {
+        if Self::is_zero(&arg0) && Self::is_zero(&arg1) {
+          Self::zero(SyntaxKind::ContextConstraint)
+        } else {
+          self.flatten(SyntaxKind::ContextConstraint, vec!(arg0, arg1))
         }
     }
 
@@ -1394,70 +1386,6 @@ pub trait FlattenSmartConstructors<'src, State>
           Self::zero(SyntaxKind::EnumAtomExpression)
         } else {
           self.flatten(SyntaxKind::EnumAtomExpression, vec!(arg0, arg1))
-        }
-    }
-
-    fn make_pocket_atom_expression(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) {
-          Self::zero(SyntaxKind::PocketAtomExpression)
-        } else {
-          self.flatten(SyntaxKind::PocketAtomExpression, vec!(arg0, arg1))
-        }
-    }
-
-    fn make_pocket_identifier_expression(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) {
-          Self::zero(SyntaxKind::PocketIdentifierExpression)
-        } else {
-          self.flatten(SyntaxKind::PocketIdentifierExpression, vec!(arg0, arg1, arg2, arg3, arg4))
-        }
-    }
-
-    fn make_pocket_atom_mapping_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) && Self::is_zero(&arg5) {
-          Self::zero(SyntaxKind::PocketAtomMappingDeclaration)
-        } else {
-          self.flatten(SyntaxKind::PocketAtomMappingDeclaration, vec!(arg0, arg1, arg2, arg3, arg4, arg5))
-        }
-    }
-
-    fn make_pocket_enum_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) && Self::is_zero(&arg5) && Self::is_zero(&arg6) {
-          Self::zero(SyntaxKind::PocketEnumDeclaration)
-        } else {
-          self.flatten(SyntaxKind::PocketEnumDeclaration, vec!(arg0, arg1, arg2, arg3, arg4, arg5, arg6))
-        }
-    }
-
-    fn make_pocket_field_type_expr_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) {
-          Self::zero(SyntaxKind::PocketFieldTypeExprDeclaration)
-        } else {
-          self.flatten(SyntaxKind::PocketFieldTypeExprDeclaration, vec!(arg0, arg1, arg2, arg3))
-        }
-    }
-
-    fn make_pocket_field_type_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) {
-          Self::zero(SyntaxKind::PocketFieldTypeDeclaration)
-        } else {
-          self.flatten(SyntaxKind::PocketFieldTypeDeclaration, vec!(arg0, arg1, arg2, arg3))
-        }
-    }
-
-    fn make_pocket_mapping_id_declaration(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) {
-          Self::zero(SyntaxKind::PocketMappingIdDeclaration)
-        } else {
-          self.flatten(SyntaxKind::PocketMappingIdDeclaration, vec!(arg0, arg1))
-        }
-    }
-
-    fn make_pocket_mapping_type_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) {
-          Self::zero(SyntaxKind::PocketMappingTypeDeclaration)
-        } else {
-          self.flatten(SyntaxKind::PocketMappingTypeDeclaration, vec!(arg0, arg1, arg2, arg3))
         }
     }
 

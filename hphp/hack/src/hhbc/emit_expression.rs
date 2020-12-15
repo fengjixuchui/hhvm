@@ -285,6 +285,18 @@ pub fn wrap_array_mark_legacy(e: &Emitter, ins: InstrSeq) -> InstrSeq {
     }
 }
 
+pub fn wrap_array_unmark_legacy(e: &Emitter, ins: InstrSeq) -> InstrSeq {
+    if mark_as_legacy(e.options()) {
+        InstrSeq::gather(vec![
+            ins,
+            instr::false_(),
+            instr::instr(Instruct::IMisc(InstructMisc::ArrayUnmarkLegacy)),
+        ])
+    } else {
+        ins
+    }
+}
+
 pub fn get_type_structure_for_hint(
     e: &mut Emitter,
     tparams: &[&str],
@@ -384,6 +396,7 @@ pub fn emit_expr(emitter: &mut Emitter, env: &Env, expression: &tast::Expr) -> R
     let tast::Expr(pos, expr) = expression;
     match expr {
         Expr_::Float(_)
+        | Expr_::EnumAtom(_)
         | Expr_::String(_)
         | Expr_::Int(_)
         | Expr_::Null
@@ -394,7 +407,6 @@ pub fn emit_expr(emitter: &mut Emitter, env: &Env, expression: &tast::Expr) -> R
             Ok(emit_pos_then(pos, instr::typedvalue(v)))
         }
         Expr_::PrefixedString(e) => emit_expr(emitter, env, &e.1),
-        Expr_::ParenthesizedExpr(e) => emit_expr(emitter, env, e),
         Expr_::Lvar(e) => {
             let Lid(pos, _) = &**e;
             Ok(InstrSeq::gather(vec![
@@ -414,11 +426,6 @@ pub fn emit_expr(emitter: &mut Emitter, env: &Env, expression: &tast::Expr) -> R
         Expr_::As(e) => emit_as(emitter, env, pos, e),
         Expr_::Cast(e) => emit_cast(emitter, env, pos, &(e.0).1, &e.1),
         Expr_::Eif(e) => emit_conditional_expr(emitter, env, pos, &e.0, &e.1, &e.2),
-        Expr_::ExprList(es) => Ok(InstrSeq::gather(
-            es.iter()
-                .map(|e| emit_expr(emitter, env, e))
-                .collect::<Result<Vec<_>>>()?,
-        )),
         Expr_::ArrayGet(e) => {
             let (base_expr, opt_elem_expr) = &**e;
             Ok(emit_array_get(
@@ -435,7 +442,17 @@ pub fn emit_expr(emitter: &mut Emitter, env: &Env, expression: &tast::Expr) -> R
             .0)
         }
         Expr_::ObjGet(e) => {
-            Ok(emit_obj_get(emitter, env, pos, QueryOp::CGet, &e.0, &e.1, &e.2, false)?.0)
+            if e.3 {
+                // Case ($x->foo).
+                let e = tast::Expr(
+                    pos.clone(),
+                    Expr_::ObjGet(Box::new((e.0.clone(), e.1.clone(), e.2.clone(), false))),
+                );
+                emit_expr(emitter, env, &e)
+            } else {
+                // Case $x->foo.
+                Ok(emit_obj_get(emitter, env, pos, QueryOp::CGet, &e.0, &e.1, &e.2, e.3)?.0)
+            }
         }
         Expr_::Call(c) => emit_call_expr(emitter, env, pos, None, c),
         Expr_::New(e) => emit_new(emitter, env, pos, e),
@@ -488,11 +505,24 @@ pub fn emit_expr(emitter: &mut Emitter, env: &Env, expression: &tast::Expr) -> R
         Expr_::Await(e) => emit_await(emitter, env, pos, e),
         Expr_::Yield(e) => emit_yield(emitter, env, pos, e),
         Expr_::Efun(e) => Ok(emit_pos_then(pos, emit_lambda(emitter, env, &e.0, &e.1)?)),
-        Expr_::ClassGet(e) => emit_class_get(emitter, env, QueryOp::CGet, &e.0, &e.1),
+
+        Expr_::ClassGet(e) => {
+            if !e.2 {
+                emit_class_get(emitter, env, QueryOp::CGet, &e.0, &e.1)
+            } else {
+                let e = tast::Expr(
+                    pos.clone(),
+                    Expr_::ClassGet(Box::new((e.0.clone(), e.1.clone(), false))),
+                );
+                emit_expr(emitter, env, &e)
+            }
+        }
+
         Expr_::String2(es) => emit_string2(emitter, env, pos, es),
-        Expr_::BracedExpr(e) => emit_expr(emitter, env, e),
         Expr_::Id(e) => Ok(emit_pos_then(pos, emit_id(emitter, env, e)?)),
-        Expr_::Xml(e) => emit_xhp(emitter, env, pos, e),
+        Expr_::Xml(_) => Err(unrecoverable(
+            "emit_xhp: syntax should have been converted during rewriting",
+        )),
         Expr_::Callconv(_) => Err(unrecoverable(
             "emit_callconv: This should have been caught at emit_arg",
         )),
@@ -502,9 +532,6 @@ pub fn emit_expr(emitter: &mut Emitter, env: &Env, expression: &tast::Expr) -> R
         Expr_::Lfun(_) => Err(unrecoverable(
             "expected Lfun to be converted to Efun during closure conversion emit_expr",
         )),
-        Expr_::Suspend(_) => Err(unrecoverable(
-            "Codegen for 'suspend' operator is not supported",
-        )),
         Expr_::List(_) => Err(emit_fatal::raise_fatal_parse(
             pos,
             "list() can only be used as an lvar. Did you mean to use tuple()?",
@@ -513,9 +540,6 @@ pub fn emit_expr(emitter: &mut Emitter, env: &Env, expression: &tast::Expr) -> R
         Expr_::This | Expr_::Lplaceholder(_) | Expr_::Dollardollar(_) => {
             unimplemented!("TODO(hrust) Codegen after naming pass on AAST")
         }
-        Expr_::PUAtom(_) | Expr_::PUIdentifier(_) => Err(unrecoverable(
-            "TODO(T35357243): Pocket Universes syntax must be erased by now",
-        )),
         Expr_::ExpressionTree(et) => emit_expr(emitter, env, &et.desugared_expr),
         _ => unimplemented!("TODO(hrust)"),
     }
@@ -567,74 +591,6 @@ fn emit_exit(emitter: &mut Emitter, env: &Env, expr_opt: Option<&tast::Expr>) ->
         expr_opt.map_or_else(|| Ok(instr::int(0)), |e| emit_expr(emitter, env, e))?,
         instr::exit(),
     ]))
-}
-
-// Translate into a constructor call. The arguments are:
-// 1) struct-like array of attributes
-// 2) vec-like array of children
-// 3) filename, for debugging
-// 4) line number, for debugging
-// Spread operators are injected into the attributes array with placeholder
-// keys that the runtime will interpret as a spread. These keys are not
-// parseable as user-specified attributes, so they will never collide.
-fn emit_xhp(
-    e: &mut Emitter,
-    env: &Env,
-    pos: &Pos,
-    (id, attributes, children): &(tast::Sid, Vec<tast::XhpAttribute>, Vec<tast::Expr>),
-) -> Result {
-    use ast_defs::{Id, ShapeFieldName as SF};
-    use tast::{ClassId, ClassId_, Expr as E, Expr_ as E_, XhpAttribute};
-    // TODO(hrust): avoid clone
-    let (_, attributes) =
-        attributes
-            .iter()
-            .fold((0, vec![]), |(mut spread_id, mut attrs), attr| {
-                match attr {
-                    XhpAttribute::XhpSimple((pos, name), v) => {
-                        attrs.push((SF::SFlitStr((pos.clone(), name.clone().into())), v.clone()));
-                    }
-                    XhpAttribute::XhpSpread(expr) => {
-                        attrs.push((
-                            SF::SFlitStr((
-                                expr.0.clone(),
-                                format!("...${}", spread_id.to_string()).into(),
-                            )),
-                            expr.clone(),
-                        ));
-                        spread_id += 1;
-                    }
-                }
-                (spread_id, attrs)
-            });
-    let attribute_map = E(pos.clone(), E_::mk_shape(attributes));
-    let children_vec = E(pos.clone(), E_::mk_varray(None, children.clone()));
-    let filename = E(
-        pos.clone(),
-        E_::mk_id(Id(pos.clone(), pseudo_consts::G__FILE__.into())),
-    );
-    let line = E(
-        pos.clone(),
-        E_::mk_id(Id(pos.clone(), pseudo_consts::G__LINE__.into())),
-    );
-    let renamed_id = class::Type::from_ast_name_and_mangle(&id.1);
-    let cid = ClassId(
-        pos.clone(),
-        ClassId_::CI(Id(id.0.clone(), renamed_id.to_raw_string().into())),
-    );
-    emit_symbol_refs::State::add_class(e, renamed_id);
-    emit_new(
-        e,
-        env,
-        pos,
-        &(
-            cid,
-            vec![],
-            vec![attribute_map, children_vec, filename, line],
-            None,
-            pos.clone(),
-        ),
-    )
 }
 
 fn emit_yield(e: &mut Emitter, env: &Env, pos: &Pos, af: &tast::Afield) -> Result {
@@ -1560,10 +1516,10 @@ fn emit_call_isset_expr(e: &mut Emitter, env: &Env, outer_pos: &Pos, expr: &tast
         )?
         .0);
     }
-    if let Some((cid, id)) = expr.1.as_class_get() {
+    if let Some((cid, id, _)) = expr.1.as_class_get() {
         return emit_class_get(e, env, QueryOp::Isset, cid, id);
     }
-    if let Some((expr_, prop, nullflavor)) = expr.1.as_obj_get() {
+    if let Some((expr_, prop, nullflavor, _)) = expr.1.as_obj_get() {
         return Ok(emit_obj_get(e, env, pos, QueryOp::Isset, expr_, prop, nullflavor, false)?.0);
     }
     if let Some(lid) = expr.1.as_lvar() {
@@ -1800,7 +1756,10 @@ pub fn emit_reified_targs(e: &mut Emitter, env: &Env, pos: &Pos, targs: &[&tast:
         tparams.len() == targs.len()
             && tparams.iter().zip(targs).all(|(tp, ta)| {
                 ta.1.as_happly().map_or(false, |(id, hs)| {
-                    id.1 == tp.name.1 && hs.is_empty() && !is_soft(&tp.user_attributes)
+                    id.1 == tp.name.1
+                        && hs.is_empty()
+                        && !is_soft(&tp.user_attributes)
+                        && tp.reified.is_reified()
                 })
             })
     };
@@ -1909,54 +1868,83 @@ fn emit_call_lhs_and_fcall(
         }
     };
 
+    let emit_fcall_func = |
+        e: &mut Emitter,
+        env,
+        expr: &tast::Expr,
+        fcall_args: FcallArgs,
+    | -> Result<(InstrSeq, InstrSeq)> {
+        let tmp = e.local_gen_mut().get_unnamed();
+        Ok((
+            InstrSeq::gather(vec![
+                instr::nulluninit(),
+                instr::nulluninit(),
+                emit_expr(e, env, expr)?,
+                instr::popl(tmp.clone()),
+            ]),
+            InstrSeq::gather(vec![instr::pushl(tmp), instr::fcallfunc(fcall_args)]),
+        ))
+    };
+
     match expr_ {
         E_::ObjGet(o) => {
-            let emit_id =
-                |e: &mut Emitter, obj, id, null_flavor: &tast::OgNullFlavor, mut fcall_args| {
-                    // TODO(hrust): enable let name = method::Type::from_ast_name(id);
-                    let name: method::Type = string_utils::strip_global_ns(id).to_string().into();
-                    let obj = emit_object_expr(e, env, obj)?;
-                    let generics = emit_generics(e, env, &mut fcall_args)?;
-                    let null_flavor = from_ast_null_flavor(*null_flavor);
-                    Ok((
-                        InstrSeq::gather(vec![obj, instr::nulluninit()]),
-                        InstrSeq::gather(vec![
-                            generics,
-                            instr::fcallobjmethodd(fcall_args, name, null_flavor),
-                        ]),
-                    ))
-                };
-            match o.as_ref() {
-                (obj, E(_, E_::String(id)), null_flavor) => {
-                    emit_id(
-                        e,
-                        obj,
-                        // FIXME: This is not safe--string literals are binary strings.
-                        // There's no guarantee that they're valid UTF-8.
-                        unsafe { std::str::from_utf8_unchecked(id.as_slice().into()) },
-                        null_flavor,
-                        fcall_args,
-                    )
-                }
-                (obj, E(_, E_::Id(id)), null_flavor) => {
-                    emit_id(e, obj, &id.1, null_flavor, fcall_args)
-                }
-                (obj, method_expr, null_flavor) => {
-                    let obj = emit_object_expr(e, env, obj)?;
-                    let tmp = e.local_gen_mut().get_unnamed();
-                    let null_flavor = from_ast_null_flavor(*null_flavor);
-                    Ok((
-                        InstrSeq::gather(vec![
+            if o.as_ref().3 {
+                // Case ($x->foo)(...).
+                let expr = E(
+                    pos.clone(),
+                    E_::ObjGet(Box::new((o.0.clone(), o.1.clone(), o.2.clone(), false))),
+                );
+                emit_fcall_func(e, env, &expr, fcall_args)
+            } else {
+                // Case $x->foo(...).
+                let emit_id =
+                    |e: &mut Emitter, obj, id, null_flavor: &tast::OgNullFlavor, mut fcall_args| {
+                        // TODO(hrust): enable let name = method::Type::from_ast_name(id);
+                        let name: method::Type =
+                            string_utils::strip_global_ns(id).to_string().into();
+                        let obj = emit_object_expr(e, env, obj)?;
+                        let generics = emit_generics(e, env, &mut fcall_args)?;
+                        let null_flavor = from_ast_null_flavor(*null_flavor);
+                        Ok((
+                            InstrSeq::gather(vec![obj, instr::nulluninit()]),
+                            InstrSeq::gather(vec![
+                                generics,
+                                instr::fcallobjmethodd(fcall_args, name, null_flavor),
+                            ]),
+                        ))
+                    };
+                match o.as_ref() {
+                    (obj, E(_, E_::String(id)), null_flavor, _) => {
+                        emit_id(
+                            e,
                             obj,
-                            instr::nulluninit(),
-                            emit_expr(e, env, method_expr)?,
-                            instr::popl(tmp.clone()),
-                        ]),
-                        InstrSeq::gather(vec![
-                            instr::pushl(tmp),
-                            instr::fcallobjmethod(fcall_args, null_flavor),
-                        ]),
-                    ))
+                            // FIXME: This is not safe--string literals are binary strings.
+                            // There's no guarantee that they're valid UTF-8.
+                            unsafe { std::str::from_utf8_unchecked(id.as_slice().into()) },
+                            null_flavor,
+                            fcall_args,
+                        )
+                    }
+                    (obj, E(_, E_::Id(id)), null_flavor, _) => {
+                        emit_id(e, obj, &id.1, null_flavor, fcall_args)
+                    }
+                    (obj, method_expr, null_flavor, _) => {
+                        let obj = emit_object_expr(e, env, obj)?;
+                        let tmp = e.local_gen_mut().get_unnamed();
+                        let null_flavor = from_ast_null_flavor(*null_flavor);
+                        Ok((
+                            InstrSeq::gather(vec![
+                                obj,
+                                instr::nulluninit(),
+                                emit_expr(e, env, method_expr)?,
+                                instr::popl(tmp.clone()),
+                            ]),
+                            InstrSeq::gather(vec![
+                                instr::pushl(tmp),
+                                instr::fcallobjmethod(fcall_args, null_flavor),
+                            ]),
+                        ))
+                    }
                 }
             }
         }
@@ -2033,103 +2021,113 @@ fn emit_call_lhs_and_fcall(
                 }
             })
         }
-        E_::ClassGet(class_get) => {
-            let (cid, cls_get_expr) = &**class_get;
-            let mut cexpr = ClassExpr::class_id_to_class_expr(e, false, false, &env.scope, cid);
-            if let ClassExpr::Id(ast_defs::Id(_, name)) = &cexpr {
-                if let Some(reified_var_cexpr) = get_reified_var_cexpr(env, pos, &name)? {
-                    cexpr = reified_var_cexpr;
+        E_::ClassGet(c) => {
+            if c.as_ref().2 {
+                // Case (Foo::$bar)(...).
+                let expr = E(
+                    pos.clone(),
+                    E_::ClassGet(Box::new((c.0.clone(), c.1.clone(), false))),
+                );
+                emit_fcall_func(e, env, &expr, fcall_args)
+            } else {
+                // Case Foo::bar(...).
+                let (cid, cls_get_expr, _) = &**c;
+                let mut cexpr = ClassExpr::class_id_to_class_expr(e, false, false, &env.scope, cid);
+                if let ClassExpr::Id(ast_defs::Id(_, name)) = &cexpr {
+                    if let Some(reified_var_cexpr) = get_reified_var_cexpr(env, pos, &name)? {
+                        cexpr = reified_var_cexpr;
+                    }
                 }
+                let emit_meth_name = |e: &mut Emitter| match &cls_get_expr {
+                    tast::ClassGetExpr::CGstring((pos, id)) => Ok(emit_pos_then(
+                        pos,
+                        instr::cgetl(local::Type::Named(id.clone())),
+                    )),
+                    tast::ClassGetExpr::CGexpr(expr) => emit_expr(e, env, expr),
+                };
+                Ok(match cexpr {
+                    ClassExpr::Id(cid) => {
+                        let tmp = e.local_gen_mut().get_unnamed();
+                        (
+                            InstrSeq::gather(vec![
+                                instr::nulluninit(),
+                                instr::nulluninit(),
+                                emit_meth_name(e)?,
+                                instr::popl(tmp.clone()),
+                            ]),
+                            InstrSeq::gather(vec![
+                                instr::pushl(tmp),
+                                emit_known_class_id(e, &cid),
+                                instr::fcallclsmethod(
+                                    IsLogAsDynamicCallOp::LogAsDynamicCall,
+                                    fcall_args,
+                                ),
+                            ]),
+                        )
+                    }
+                    ClassExpr::Special(clsref) => {
+                        let tmp = e.local_gen_mut().get_unnamed();
+                        (
+                            InstrSeq::gather(vec![
+                                instr::nulluninit(),
+                                instr::nulluninit(),
+                                emit_meth_name(e)?,
+                                instr::popl(tmp.clone()),
+                            ]),
+                            InstrSeq::gather(vec![
+                                instr::pushl(tmp),
+                                instr::fcallclsmethods(fcall_args, clsref),
+                            ]),
+                        )
+                    }
+                    ClassExpr::Expr(expr) => {
+                        let cls = e.local_gen_mut().get_unnamed();
+                        let meth = e.local_gen_mut().get_unnamed();
+                        (
+                            InstrSeq::gather(vec![
+                                instr::nulluninit(),
+                                instr::nulluninit(),
+                                emit_expr(e, env, &expr)?,
+                                instr::popl(cls.clone()),
+                                emit_meth_name(e)?,
+                                instr::popl(meth.clone()),
+                            ]),
+                            InstrSeq::gather(vec![
+                                instr::pushl(meth),
+                                instr::pushl(cls),
+                                instr::classgetc(),
+                                instr::fcallclsmethod(
+                                    IsLogAsDynamicCallOp::LogAsDynamicCall,
+                                    fcall_args,
+                                ),
+                            ]),
+                        )
+                    }
+                    ClassExpr::Reified(instrs) => {
+                        let cls = e.local_gen_mut().get_unnamed();
+                        let meth = e.local_gen_mut().get_unnamed();
+                        (
+                            InstrSeq::gather(vec![
+                                instr::nulluninit(),
+                                instr::nulluninit(),
+                                instrs,
+                                instr::popl(cls.clone()),
+                                emit_meth_name(e)?,
+                                instr::popl(meth.clone()),
+                            ]),
+                            InstrSeq::gather(vec![
+                                instr::pushl(meth),
+                                instr::pushl(cls),
+                                instr::classgetc(),
+                                instr::fcallclsmethod(
+                                    IsLogAsDynamicCallOp::LogAsDynamicCall,
+                                    fcall_args,
+                                ),
+                            ]),
+                        )
+                    }
+                })
             }
-            let emit_meth_name = |e: &mut Emitter| match &cls_get_expr {
-                tast::ClassGetExpr::CGstring((pos, id)) => Ok(emit_pos_then(
-                    pos,
-                    instr::cgetl(local::Type::Named(id.clone())),
-                )),
-                tast::ClassGetExpr::CGexpr(expr) => emit_expr(e, env, expr),
-            };
-            Ok(match cexpr {
-                ClassExpr::Id(cid) => {
-                    let tmp = e.local_gen_mut().get_unnamed();
-                    (
-                        InstrSeq::gather(vec![
-                            instr::nulluninit(),
-                            instr::nulluninit(),
-                            emit_meth_name(e)?,
-                            instr::popl(tmp.clone()),
-                        ]),
-                        InstrSeq::gather(vec![
-                            instr::pushl(tmp),
-                            emit_known_class_id(e, &cid),
-                            instr::fcallclsmethod(
-                                IsLogAsDynamicCallOp::LogAsDynamicCall,
-                                fcall_args,
-                            ),
-                        ]),
-                    )
-                }
-                ClassExpr::Special(clsref) => {
-                    let tmp = e.local_gen_mut().get_unnamed();
-                    (
-                        InstrSeq::gather(vec![
-                            instr::nulluninit(),
-                            instr::nulluninit(),
-                            emit_meth_name(e)?,
-                            instr::popl(tmp.clone()),
-                        ]),
-                        InstrSeq::gather(vec![
-                            instr::pushl(tmp),
-                            instr::fcallclsmethods(fcall_args, clsref),
-                        ]),
-                    )
-                }
-                ClassExpr::Expr(expr) => {
-                    let cls = e.local_gen_mut().get_unnamed();
-                    let meth = e.local_gen_mut().get_unnamed();
-                    (
-                        InstrSeq::gather(vec![
-                            instr::nulluninit(),
-                            instr::nulluninit(),
-                            emit_expr(e, env, &expr)?,
-                            instr::popl(cls.clone()),
-                            emit_meth_name(e)?,
-                            instr::popl(meth.clone()),
-                        ]),
-                        InstrSeq::gather(vec![
-                            instr::pushl(meth),
-                            instr::pushl(cls),
-                            instr::classgetc(),
-                            instr::fcallclsmethod(
-                                IsLogAsDynamicCallOp::LogAsDynamicCall,
-                                fcall_args,
-                            ),
-                        ]),
-                    )
-                }
-                ClassExpr::Reified(instrs) => {
-                    let cls = e.local_gen_mut().get_unnamed();
-                    let meth = e.local_gen_mut().get_unnamed();
-                    (
-                        InstrSeq::gather(vec![
-                            instr::nulluninit(),
-                            instr::nulluninit(),
-                            instrs,
-                            instr::popl(cls.clone()),
-                            emit_meth_name(e)?,
-                            instr::popl(meth.clone()),
-                        ]),
-                        InstrSeq::gather(vec![
-                            instr::pushl(meth),
-                            instr::pushl(cls),
-                            instr::classgetc(),
-                            instr::fcallclsmethod(
-                                IsLogAsDynamicCallOp::LogAsDynamicCall,
-                                fcall_args,
-                            ),
-                        ]),
-                    )
-                }
-            })
         }
         E_::Id(id) => {
             let FcallArgs(flags, num_args, _, _, _, _) = fcall_args;
@@ -2160,18 +2158,7 @@ fn emit_call_lhs_and_fcall(
                 InstrSeq::gather(vec![generics, instr::fcallfuncd(fcall_args, fq_id)]),
             ))
         }
-        _ => {
-            let tmp = e.local_gen_mut().get_unnamed();
-            Ok((
-                InstrSeq::gather(vec![
-                    instr::nulluninit(),
-                    instr::nulluninit(),
-                    emit_expr(e, env, &expr)?,
-                    instr::popl(tmp.clone()),
-                ]),
-                InstrSeq::gather(vec![instr::pushl(tmp), instr::fcallfunc(fcall_args)]),
-            ))
-        }
+        _ => emit_fcall_func(e, env, expr, fcall_args),
     }
 }
 
@@ -2463,7 +2450,7 @@ fn emit_special_function(
                             &vec![ /* targs */ ],
                             // FIXME: This is not safe--string literals are binary strings.
                             // There's no guarantee that they're valid UTF-8.
-                            unsafe { std::str::from_utf8_unchecked(func_name.as_slice().into()) },
+                            unsafe { std::str::from_utf8_unchecked(func_name.as_slice()) },
                         )?))
                     }
                     _ => Err(emit_fatal::raise_fatal_runtime(
@@ -2652,11 +2639,13 @@ fn emit_special_function(
                 ])),
                 _ => match get_call_builtin_func_info(e.options(), lower_fq_name) {
                     Some((nargs, i)) if nargs == args.len() => {
-                        let instrs = InstrSeq::gather(vec![
-                            emit_exprs(e, env, args)?,
-                            emit_pos(pos),
-                            instr::instr(i),
-                        ]);
+                        let inner = emit_exprs(e, env, args)?;
+                        let unmarked_inner = match lower_fq_name {
+                            "HH\\dict" | "HH\\vec" => wrap_array_unmark_legacy(e, inner),
+                            _ => inner,
+                        };
+                        let instrs =
+                            InstrSeq::gather(vec![unmarked_inner, emit_pos(pos), instr::instr(i)]);
                         match lower_fq_name {
                             "HH\\varray" | "HH\\darray" => Some(wrap_array_mark_legacy(e, instrs)),
                             _ => Some(instrs),
@@ -2974,6 +2963,18 @@ fn emit_eval(e: &mut Emitter, env: &Env, pos: &Pos, expr: &tast::Expr) -> Result
     ]))
 }
 
+fn has_reified_types(env: &Env) -> bool {
+    for param in env.scope.get_tparams() {
+        match param.reified {
+            oxidized::ast::ReifyKind::Reified => {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 fn emit_call_expr(
     e: &mut Emitter,
     env: &Env,
@@ -3032,6 +3033,22 @@ fn emit_call_expr(
         {
             let exit = emit_exit(e, env, Some(arg1))?;
             Ok(emit_pos_then(pos, exit))
+        }
+        (E_::Id(id), [], _)
+            if id.1 == emitter_special_functions::SYSTEMLIB_REIFIED_GENERICS
+                && e.systemlib()
+                && has_reified_types(env) =>
+        {
+            // Rewrite __systemlib_reified_generics() to $0ReifiedGenerics,
+            // but only in systemlib functions that take a reified generic.
+            let lvar = E::new(
+                pos.clone(),
+                E_::Lvar(Box::new(tast::Lid(
+                    pos.clone(),
+                    local_id::make_unscoped(string_utils::reified::GENERICS_LOCAL_NAME),
+                ))),
+            );
+            emit_expr(e, env, &lvar)
         }
         (_, _, _) => {
             let instrs = emit_call(
@@ -3426,6 +3443,7 @@ fn emit_xhp_obj_get(
                 E_::mk_id(ast_defs::Id(pos.clone(), "getAttribute".into())),
             ),
             nullflavor.clone(),
+            false,
         ),
     );
     let args = vec![E(pos.clone(), E_::mk_string(string_utils::clean(s).into()))];
@@ -4211,16 +4229,22 @@ fn emit_quiet_expr(
             false,
             null_coalesce_assignment,
         ),
-        tast::Expr_::ObjGet(x) => emit_obj_get(
-            e,
-            env,
-            pos,
-            QueryOp::CGetQuiet,
-            &x.0,
-            &x.1,
-            &x.2,
-            null_coalesce_assignment,
-        ),
+        tast::Expr_::ObjGet(x) => {
+            if x.as_ref().3 {
+                Ok((emit_expr(e, env, expr)?, None))
+            } else {
+                emit_obj_get(
+                    e,
+                    env,
+                    pos,
+                    QueryOp::CGetQuiet,
+                    &x.0,
+                    &x.1,
+                    &x.2,
+                    null_coalesce_assignment,
+                )
+            }
+        }
         _ => Ok((emit_expr(e, env, expr)?, None)),
     }
 }
@@ -4690,6 +4714,19 @@ fn emit_base_(
             }),
         }
     };
+
+    let emit_expr_default = |e: &mut Emitter, env, expr: &tast::Expr| -> Result<ArrayGetBase> {
+        let base_expr_instrs = emit_expr(e, env, expr)?;
+        Ok(emit_default(
+            e,
+            base_expr_instrs,
+            instr::empty(),
+            emit_pos_then(pos, instr::basec(base_offset, base_mode)),
+            1,
+            0,
+        ))
+    };
+
     use tast::Expr_ as E_;
     match expr_ {
         E_::Lvar(x) if superglobals::is_superglobal(&(x.1).1) => {
@@ -4897,91 +4934,90 @@ fn emit_base_(
             }
         },
         E_::ObjGet(x) => {
-            let (base_expr, prop_expr, null_flavor) = &**x;
-            Ok(match prop_expr.1.as_id() {
-                Some(ast_defs::Id(_, s)) if string_utils::is_xhp(&s) => {
-                    let base_instrs = emit_xhp_obj_get(e, env, pos, base_expr, &s, null_flavor)?;
-                    emit_default(
-                        e,
-                        base_instrs,
-                        instr::empty(),
-                        instr::basec(base_offset, base_mode),
-                        1,
-                        0,
-                    )
-                }
-                _ => {
-                    let prop_stack_size = emit_prop_expr(
-                        e,
-                        env,
-                        null_flavor,
-                        0,
-                        prop_expr,
-                        null_coalesce_assignment,
-                    )?
-                    .2;
-                    let (
-                        base_expr_instrs_begin,
-                        base_expr_instrs_end,
-                        base_setup_instrs,
-                        base_stack_size,
-                        cls_stack_size,
-                    ) = emit_base(
-                        e,
-                        env,
-                        base_expr,
-                        mode,
-                        true,
-                        BareThisOp::Notice,
-                        null_coalesce_assignment,
-                        base_offset + prop_stack_size,
-                        rhs_stack_size,
-                    )?;
-                    let (mk, prop_instrs, _) = emit_prop_expr(
-                        e,
-                        env,
-                        null_flavor,
-                        base_offset + cls_stack_size,
-                        prop_expr,
-                        null_coalesce_assignment,
-                    )?;
-                    let total_stack_size = prop_stack_size + base_stack_size;
-                    let final_instr = instr::dim(mode, mk);
-                    emit_default(
-                        e,
-                        InstrSeq::gather(vec![base_expr_instrs_begin, prop_instrs]),
-                        base_expr_instrs_end,
-                        InstrSeq::gather(vec![base_setup_instrs, final_instr]),
-                        total_stack_size,
-                        cls_stack_size,
-                    )
-                }
-            })
+            if x.as_ref().3 {
+                emit_expr_default(e, env, expr)
+            } else {
+                let (base_expr, prop_expr, null_flavor, _) = &**x;
+                Ok(match prop_expr.1.as_id() {
+                    Some(ast_defs::Id(_, s)) if string_utils::is_xhp(&s) => {
+                        let base_instrs =
+                            emit_xhp_obj_get(e, env, pos, base_expr, &s, null_flavor)?;
+                        emit_default(
+                            e,
+                            base_instrs,
+                            instr::empty(),
+                            instr::basec(base_offset, base_mode),
+                            1,
+                            0,
+                        )
+                    }
+                    _ => {
+                        let prop_stack_size = emit_prop_expr(
+                            e,
+                            env,
+                            null_flavor,
+                            0,
+                            prop_expr,
+                            null_coalesce_assignment,
+                        )?
+                        .2;
+                        let (
+                            base_expr_instrs_begin,
+                            base_expr_instrs_end,
+                            base_setup_instrs,
+                            base_stack_size,
+                            cls_stack_size,
+                        ) = emit_base(
+                            e,
+                            env,
+                            base_expr,
+                            mode,
+                            true,
+                            BareThisOp::Notice,
+                            null_coalesce_assignment,
+                            base_offset + prop_stack_size,
+                            rhs_stack_size,
+                        )?;
+                        let (mk, prop_instrs, _) = emit_prop_expr(
+                            e,
+                            env,
+                            null_flavor,
+                            base_offset + cls_stack_size,
+                            prop_expr,
+                            null_coalesce_assignment,
+                        )?;
+                        let total_stack_size = prop_stack_size + base_stack_size;
+                        let final_instr = instr::dim(mode, mk);
+                        emit_default(
+                            e,
+                            InstrSeq::gather(vec![base_expr_instrs_begin, prop_instrs]),
+                            base_expr_instrs_end,
+                            InstrSeq::gather(vec![base_setup_instrs, final_instr]),
+                            total_stack_size,
+                            cls_stack_size,
+                        )
+                    }
+                })
+            }
         }
         E_::ClassGet(x) => {
-            let (cid, prop) = &**x;
-            let cexpr = ClassExpr::class_id_to_class_expr(e, false, false, &env.scope, cid);
-            let (cexpr_begin, cexpr_end) = emit_class_expr(e, env, cexpr, prop)?;
-            Ok(emit_default(
-                e,
-                cexpr_begin,
-                cexpr_end,
-                instr::basesc(base_offset + 1, rhs_stack_size, base_mode),
-                1,
-                1,
-            ))
+            if x.2 {
+                emit_expr_default(e, env, expr)
+            } else {
+                let (cid, prop, _) = &**x;
+                let cexpr = ClassExpr::class_id_to_class_expr(e, false, false, &env.scope, cid);
+                let (cexpr_begin, cexpr_end) = emit_class_expr(e, env, cexpr, prop)?;
+                Ok(emit_default(
+                    e,
+                    cexpr_begin,
+                    cexpr_end,
+                    instr::basesc(base_offset + 1, rhs_stack_size, base_mode),
+                    1,
+                    1,
+                ))
+            }
         }
-        _ => {
-            let base_expr_instrs = emit_expr(e, env, expr)?;
-            Ok(emit_default(
-                e,
-                base_expr_instrs,
-                instr::empty(),
-                emit_pos_then(pos, instr::basec(base_offset, base_mode)),
-                1,
-                0,
-            ))
-        }
+        _ => emit_expr_default(e, env, expr),
     }
 }
 
@@ -5000,14 +5036,10 @@ pub fn emit_ignored_exprs(
 
 // TODO(hrust): change pos from &Pos to Option<&Pos>, since Pos::make_none() still allocate mem.
 pub fn emit_ignored_expr(emitter: &mut Emitter, env: &Env, pos: &Pos, expr: &tast::Expr) -> Result {
-    if let Some(es) = expr.1.as_expr_list() {
-        emit_ignored_exprs(emitter, env, pos, es)
-    } else {
-        Ok(InstrSeq::gather(vec![
-            emit_expr(emitter, env, expr)?,
-            emit_pos_then(pos, instr::popc()),
-        ]))
-    }
+    Ok(InstrSeq::gather(vec![
+        emit_expr(emitter, env, expr)?,
+        emit_pos_then(pos, instr::popc()),
+    ]))
 }
 
 pub fn emit_lval_op(
@@ -5083,16 +5115,14 @@ fn can_use_as_rhs_in_list_assignment(expr: &tast::Expr_) -> Result<bool> {
         {
             false
         }
+        E_::ObjGet(o) if !o.as_ref().3 => true,
+        E_::ClassGet(c) if !c.as_ref().2 => true,
         E_::Lvar(_)
         | E_::ArrayGet(_)
-        | E_::ObjGet(_)
-        | E_::ClassGet(_)
-        | E_::PUAtom(_)
         | E_::Call(_)
         | E_::FunctionPointer(_)
         | E_::New(_)
         | E_::Record(_)
-        | E_::ExprList(_)
         | E_::Yield(_)
         | E_::Cast(_)
         | E_::Eif(_)
@@ -5112,11 +5142,6 @@ fn can_use_as_rhs_in_list_assignment(expr: &tast::Expr_) -> Result<bool> {
                 }
             }
             b.0.is_plus() || b.0.is_question_question() || b.0.is_any_eq()
-        }
-        E_::PUIdentifier(_) => {
-            return Err(Unrecoverable(
-                "TODO(T35357243): Pocket Universes syntax must be erased by now".into(),
-            ));
         }
         _ => false,
     })
@@ -5444,8 +5469,8 @@ pub fn emit_lval_op_nonlist_steps(
                     )
                 }
             },
-            E_::ObjGet(x) => {
-                let (e1, e2, nullflavor) = &**x;
+            E_::ObjGet(x) if !x.as_ref().3 => {
+                let (e1, e2, nullflavor, _) = &**x;
                 if nullflavor.eq(&ast_defs::OgNullFlavor::OGNullsafe) {
                     return Err(emit_fatal::raise_fatal_parse(
                         pos,
@@ -5504,8 +5529,8 @@ pub fn emit_lval_op_nonlist_steps(
                     InstrSeq::gather(vec![base_setup_instrs, final_instr]),
                 )
             }
-            E_::ClassGet(x) => {
-                let (cid, prop) = &**x;
+            E_::ClassGet(x) if !x.as_ref().2 => {
+                let (cid, prop, _) = &**x;
                 let cexpr = ClassExpr::class_id_to_class_expr(e, false, false, &env.scope, cid);
                 let final_instr_ = emit_final_static_op(cid, prop, op)?;
                 let final_instr = emit_pos_then(pos, final_instr_);
@@ -5563,8 +5588,7 @@ fn emit_class_expr(
     };
     Ok(match &cexpr {
         ClassExpr::Expr(expr)
-            if expr.1.is_braced_expr()
-                || expr.1.is_call()
+            if expr.1.is_call()
                 || expr.1.is_binop()
                 || expr.1.is_class_get()
                 || expr

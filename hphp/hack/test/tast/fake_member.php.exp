@@ -22,7 +22,7 @@
          m_name = ([6:19-22], "get"); m_tparams = [];
          m_where_constraints = []; m_variadic = FVnonVariadic; m_params = [];
          m_cap =
-         (((HH\Capabilities\RxLocal & HH\Capabilities\IO & HH\Capabilities\CippGlobal & HH\Capabilities\Globals & HH\Capabilities\UnrestrictedMutation)),
+         (((HH\Capabilities\AccessStaticVariable & HH\Capabilities\WriteProperty & HH\Capabilities\Output)),
           None);
          m_unsafe_cap = ((mixed), None);
          m_body =
@@ -32,14 +32,14 @@
                 (([7:9-19], ?int),
                  (Obj_get ((([7:9-14], this), This),
                     (([7:16-19], ?int), (Id ([7:16-19], "foo"))),
-                    OG_nullthrows))),
+                    OG_nullthrows, false))),
                 [([7:5-9:6], (AssertEnv (Refinement, {$this->foo})));
                   ([8:7-18],
                    (Expr
                       (([8:7-17], int),
                        (Obj_get ((([8:7-12], this), This),
                           (([8:14-17], int), (Id ([8:14-17], "foo"))),
-                          OG_nullthrows)))))
+                          OG_nullthrows, false)))))
                   ],
                 [([7:5-9:6], (AssertEnv (Refinement, {$this->foo})));
                   ([Pos.none], Noop)]
@@ -57,5 +57,5 @@
         ns_const_uses = <opaque>; ns_name = None; ns_auto_ns_map = [];
         ns_is_codegen = false; ns_disable_xhp_element_mangling = false };
       c_user_attributes = []; c_file_attributes = []; c_enum = None;
-      c_pu_enums = []; c_doc_comment = None; c_emit_id = None })
+      c_doc_comment = None; c_emit_id = None })
   ]

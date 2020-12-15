@@ -38,34 +38,28 @@ module Category = struct
 end
 
 module CategorySet = Caml.Set.Make (Category)
-module C = Category
 
 type time_in_sec = float
 
 type counter = {
   count: int;  (** how many times did 'count' get called? *)
   time: time_in_sec;  (** cumulative duration of all calls to 'count' *)
-  enabled: bool;  (** 'enabled' controls whether any counting is done at all *)
 }
 
-let empty ~enabled = { count = 0; time = 0.; enabled }
+let empty = { count = 0; time = 0. }
 
 (** here we store each individual counter. *)
 type t =
   (* Making this a map causes 1% typing time regression. *)
   counter Array.t
 
-let counters : t ref =
-  ref (Array.create ~len:Category.count (empty ~enabled:false))
+let counters : t ref = ref (Array.create ~len:Category.count empty)
 
 let restore_state (new_state : t) : unit = counters := new_state
 
-let reset ~(enabled_categories : CategorySet.t) : t =
+let reset () : t =
   let old_counters = !counters in
-  counters :=
-    Array.init Category.count ~f:(fun i ->
-        empty
-          ~enabled:(CategorySet.mem (Category.of_enum_exn i) enabled_categories));
+  counters := Array.create ~len:Category.count empty;
   old_counters
 
 let get_counter (category : Category.t) : counter =
@@ -92,24 +86,14 @@ let get_time (category : Category.t) : unit -> time_in_sec =
 let count (category : Category.t) (f : unit -> 'a) : 'a =
   let get_time = get_time category in
   let tally = get_counter category in
-  if not tally.enabled then
-    f ()
-  else
-    let start_time = get_time () in
-    Utils.try_finally ~f ~finally:(fun () ->
-        set_counter
-          category
-          {
-            count = tally.count + 1;
-            time = tally.time +. get_time () -. start_time;
-            enabled = tally.enabled;
-          })
-
-let count_disk_cat (f : unit -> 'a) : 'a = count C.Disk_cat f
-
-let count_get_ast (f : unit -> 'a) : 'a = count C.Get_ast f
-
-let count_typecheck (f : unit -> 'a) : 'a = count C.Typecheck f
+  let start_time = get_time () in
+  Utils.try_finally ~f ~finally:(fun () ->
+      set_counter
+        category
+        {
+          count = tally.count + 1;
+          time = tally.time +. get_time () -. start_time;
+        })
 
 let read_time (category : Category.t) : time_in_sec =
   (get_counter category).time

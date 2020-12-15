@@ -200,7 +200,6 @@ module type Syntax_S = sig
     ; function_parameter_list                            : t
     ; function_right_paren                               : t
     ; function_capability                                : t
-    ; function_capability_provisional                    : t
     ; function_colon                                     : t
     ; function_type                                      : t
     ; function_where_clause                              : t
@@ -209,14 +208,6 @@ module type Syntax_S = sig
     { capability_left_bracket                            : t
     ; capability_types                                   : t
     ; capability_right_bracket                           : t
-    }
-  | CapabilityProvisional             of
-    { capability_provisional_at                          : t
-    ; capability_provisional_left_brace                  : t
-    ; capability_provisional_type                        : t
-    ; capability_provisional_unsafe_plus                 : t
-    ; capability_provisional_unsafe_type                 : t
-    ; capability_provisional_right_brace                 : t
     }
   | WhereClause                       of
     { where_clause_keyword                               : t
@@ -310,6 +301,17 @@ module type Syntax_S = sig
     ; type_const_equal                                   : t
     ; type_const_type_specifier                          : t
     ; type_const_semicolon                               : t
+    }
+  | ContextConstDeclaration           of
+    { context_const_modifiers                            : t
+    ; context_const_const_keyword                        : t
+    ; context_const_ctx_keyword                          : t
+    ; context_const_name                                 : t
+    ; context_const_type_parameters                      : t
+    ; context_const_constraint                           : t
+    ; context_const_equal                                : t
+    ; context_const_ctx_list                             : t
+    ; context_const_semicolon                            : t
     }
   | DecoratedExpression               of
     { decorated_expression_decorator                     : t
@@ -494,15 +496,6 @@ module type Syntax_S = sig
     { return_keyword                                     : t
     ; return_expression                                  : t
     ; return_semicolon                                   : t
-    }
-  | GotoLabel                         of
-    { goto_label_name                                    : t
-    ; goto_label_colon                                   : t
-    }
-  | GotoStatement                     of
-    { goto_statement_keyword                             : t
-    ; goto_statement_label_name                          : t
-    ; goto_statement_semicolon                           : t
     }
   | ThrowStatement                    of
     { throw_keyword                                      : t
@@ -844,11 +837,6 @@ module type Syntax_S = sig
     ; type_constant_separator                            : t
     ; type_constant_right_type                           : t
     }
-  | PUAccess                          of
-    { pu_access_left_type                                : t
-    ; pu_access_separator                                : t
-    ; pu_access_right_type                               : t
-    }
   | VectorTypeSpecifier               of
     { vector_type_keyword                                : t
     ; vector_type_left_angle                             : t
@@ -876,6 +864,10 @@ module type Syntax_S = sig
     ; varray_trailing_comma                              : t
     ; varray_right_angle                                 : t
     }
+  | FunctionCtxTypeSpecifier          of
+    { function_ctx_type_keyword                          : t
+    ; function_ctx_type_variable                         : t
+    }
   | TypeParameter                     of
     { type_attribute_spec                                : t
     ; type_reified                                       : t
@@ -887,6 +879,10 @@ module type Syntax_S = sig
   | TypeConstraint                    of
     { constraint_keyword                                 : t
     ; constraint_type                                    : t
+    }
+  | ContextConstraint                 of
+    { ctx_constraint_keyword                             : t
+    ; ctx_constraint_ctx_list                            : t
     }
   | DarrayTypeSpecifier               of
     { darray_keyword                                     : t
@@ -1015,56 +1011,6 @@ module type Syntax_S = sig
     { enum_atom_hash                                     : t
     ; enum_atom_expression                               : t
     }
-  | PocketAtomExpression              of
-    { pocket_atom_glyph                                  : t
-    ; pocket_atom_expression                             : t
-    }
-  | PocketIdentifierExpression        of
-    { pocket_identifier_qualifier                        : t
-    ; pocket_identifier_pu_operator                      : t
-    ; pocket_identifier_field                            : t
-    ; pocket_identifier_operator                         : t
-    ; pocket_identifier_name                             : t
-    }
-  | PocketAtomMappingDeclaration      of
-    { pocket_atom_mapping_glyph                          : t
-    ; pocket_atom_mapping_name                           : t
-    ; pocket_atom_mapping_left_paren                     : t
-    ; pocket_atom_mapping_mappings                       : t
-    ; pocket_atom_mapping_right_paren                    : t
-    ; pocket_atom_mapping_semicolon                      : t
-    }
-  | PocketEnumDeclaration             of
-    { pocket_enum_attributes                             : t
-    ; pocket_enum_modifiers                              : t
-    ; pocket_enum_enum                                   : t
-    ; pocket_enum_name                                   : t
-    ; pocket_enum_left_brace                             : t
-    ; pocket_enum_fields                                 : t
-    ; pocket_enum_right_brace                            : t
-    }
-  | PocketFieldTypeExprDeclaration    of
-    { pocket_field_type_expr_case                        : t
-    ; pocket_field_type_expr_type                        : t
-    ; pocket_field_type_expr_name                        : t
-    ; pocket_field_type_expr_semicolon                   : t
-    }
-  | PocketFieldTypeDeclaration        of
-    { pocket_field_type_case                             : t
-    ; pocket_field_type_type                             : t
-    ; pocket_field_type_type_parameter                   : t
-    ; pocket_field_type_semicolon                        : t
-    }
-  | PocketMappingIdDeclaration        of
-    { pocket_mapping_id_name                             : t
-    ; pocket_mapping_id_initializer                      : t
-    }
-  | PocketMappingTypeDeclaration      of
-    { pocket_mapping_type_keyword                        : t
-    ; pocket_mapping_type_name                           : t
-    ; pocket_mapping_type_equal                          : t
-    ; pocket_mapping_type_type                           : t
-    }
 
 
   val rust_parse :
@@ -1128,9 +1074,8 @@ module type Syntax_S = sig
   val make_namespace_group_use_declaration : t -> t -> t -> t -> t -> t -> t -> t
   val make_namespace_use_clause : t -> t -> t -> t -> t
   val make_function_declaration : t -> t -> t -> t
-  val make_function_declaration_header : t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t
+  val make_function_declaration_header : t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t
   val make_capability : t -> t -> t -> t
-  val make_capability_provisional : t -> t -> t -> t -> t -> t -> t
   val make_where_clause : t -> t -> t
   val make_where_constraint : t -> t -> t -> t
   val make_methodish_declaration : t -> t -> t -> t -> t
@@ -1145,6 +1090,7 @@ module type Syntax_S = sig
   val make_const_declaration : t -> t -> t -> t -> t -> t
   val make_constant_declarator : t -> t -> t
   val make_type_const_declaration : t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t
+  val make_context_const_declaration : t -> t -> t -> t -> t -> t -> t -> t -> t -> t
   val make_decorated_expression : t -> t -> t
   val make_parameter_declaration : t -> t -> t -> t -> t -> t -> t
   val make_variadic_parameter : t -> t -> t -> t
@@ -1176,8 +1122,6 @@ module type Syntax_S = sig
   val make_case_label : t -> t -> t -> t
   val make_default_label : t -> t -> t
   val make_return_statement : t -> t -> t -> t
-  val make_goto_label : t -> t -> t
-  val make_goto_statement : t -> t -> t -> t
   val make_throw_statement : t -> t -> t -> t
   val make_break_statement : t -> t -> t
   val make_continue_statement : t -> t -> t
@@ -1239,13 +1183,14 @@ module type Syntax_S = sig
   val make_xhp_expression : t -> t -> t -> t
   val make_xhp_close : t -> t -> t -> t
   val make_type_constant : t -> t -> t -> t
-  val make_pu_access : t -> t -> t -> t
   val make_vector_type_specifier : t -> t -> t -> t -> t -> t
   val make_keyset_type_specifier : t -> t -> t -> t -> t -> t
   val make_tuple_type_explicit_specifier : t -> t -> t -> t -> t
   val make_varray_type_specifier : t -> t -> t -> t -> t -> t
+  val make_function_ctx_type_specifier : t -> t -> t
   val make_type_parameter : t -> t -> t -> t -> t -> t -> t
   val make_type_constraint : t -> t -> t
+  val make_context_constraint : t -> t -> t
   val make_darray_type_specifier : t -> t -> t -> t -> t -> t -> t -> t
   val make_dictionary_type_specifier : t -> t -> t -> t -> t
   val make_closure_type_specifier : t -> t -> t -> t -> t -> t -> t -> t -> t -> t
@@ -1270,14 +1215,6 @@ module type Syntax_S = sig
   val make_error : t -> t
   val make_list_item : t -> t -> t
   val make_enum_atom_expression : t -> t -> t
-  val make_pocket_atom_expression : t -> t -> t
-  val make_pocket_identifier_expression : t -> t -> t -> t -> t -> t
-  val make_pocket_atom_mapping_declaration : t -> t -> t -> t -> t -> t -> t
-  val make_pocket_enum_declaration : t -> t -> t -> t -> t -> t -> t -> t
-  val make_pocket_field_type_expr_declaration : t -> t -> t -> t -> t
-  val make_pocket_field_type_declaration : t -> t -> t -> t -> t
-  val make_pocket_mapping_id_declaration : t -> t -> t
-  val make_pocket_mapping_type_declaration : t -> t -> t -> t -> t
 
 
   val position : Relative_path.t -> t -> Pos.t option
@@ -1313,7 +1250,6 @@ module type Syntax_S = sig
   val is_function_declaration : t -> bool
   val is_function_declaration_header : t -> bool
   val is_capability : t -> bool
-  val is_capability_provisional : t -> bool
   val is_where_clause : t -> bool
   val is_where_constraint : t -> bool
   val is_methodish_declaration : t -> bool
@@ -1328,6 +1264,7 @@ module type Syntax_S = sig
   val is_const_declaration : t -> bool
   val is_constant_declarator : t -> bool
   val is_type_const_declaration : t -> bool
+  val is_context_const_declaration : t -> bool
   val is_decorated_expression : t -> bool
   val is_parameter_declaration : t -> bool
   val is_variadic_parameter : t -> bool
@@ -1359,8 +1296,6 @@ module type Syntax_S = sig
   val is_case_label : t -> bool
   val is_default_label : t -> bool
   val is_return_statement : t -> bool
-  val is_goto_label : t -> bool
-  val is_goto_statement : t -> bool
   val is_throw_statement : t -> bool
   val is_break_statement : t -> bool
   val is_continue_statement : t -> bool
@@ -1422,13 +1357,14 @@ module type Syntax_S = sig
   val is_xhp_expression : t -> bool
   val is_xhp_close : t -> bool
   val is_type_constant : t -> bool
-  val is_pu_access : t -> bool
   val is_vector_type_specifier : t -> bool
   val is_keyset_type_specifier : t -> bool
   val is_tuple_type_explicit_specifier : t -> bool
   val is_varray_type_specifier : t -> bool
+  val is_function_ctx_type_specifier : t -> bool
   val is_type_parameter : t -> bool
   val is_type_constraint : t -> bool
+  val is_context_constraint : t -> bool
   val is_darray_type_specifier : t -> bool
   val is_dictionary_type_specifier : t -> bool
   val is_closure_type_specifier : t -> bool
@@ -1453,14 +1389,6 @@ module type Syntax_S = sig
   val is_error : t -> bool
   val is_list_item : t -> bool
   val is_enum_atom_expression : t -> bool
-  val is_pocket_atom_expression : t -> bool
-  val is_pocket_identifier_expression : t -> bool
-  val is_pocket_atom_mapping_declaration : t -> bool
-  val is_pocket_enum_declaration : t -> bool
-  val is_pocket_field_type_expr_declaration : t -> bool
-  val is_pocket_field_type_declaration : t -> bool
-  val is_pocket_mapping_id_declaration : t -> bool
-  val is_pocket_mapping_type_declaration : t -> bool
 
 
   val is_specific_token : TokenKind.t -> t -> bool

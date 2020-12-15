@@ -132,6 +132,73 @@ inline Vreg materialize(Vout& v, Vptr data) {
 }
 inline Vreg materialize(Vout&, Vreg data) { return data; }
 
+template <class JmpFn>
+void emitBespokeLayoutTest(Vout& v, ArrayLayout layout, Vreg r, JmpFn doJcc) {
+  auto const check = layout.bespokeMaskAndCompare();
+  auto const extra = BespokeArray::kExtraMagicBit.raw;
+  const int16_t xorVal = static_cast<int16_t>(extra | check.xorVal);
+  const int16_t andVal = static_cast<int16_t>(extra | check.andVal);
+  const int16_t cmpVal = static_cast<int16_t>(check.cmpVal);
+
+  auto const bits = v.makeReg();
+  v << loadw{r[ArrayData::offsetOfBespokeIndex()], bits};
+
+  auto const [cmpOp, sf] = [&] {
+    auto const andUnnecessary = andVal == -1;
+    auto const cmpUnnecessary = cmpVal == 0;
+
+    if (andUnnecessary && cmpUnnecessary) {
+      auto const sf = v.makeReg();
+      v << cmpwi{xorVal, bits, sf};
+      return std::make_pair(CC_Z, sf);
+    }
+
+    {
+      // If our test can be reduced to a single bit test, do so.
+      const int16_t andXor = andVal & xorVal;
+      const int16_t andNotXor = andVal & ~xorVal;
+
+      if (andNotXor == 0 && folly::popcount(andXor) == 1 &&
+          (cmpVal == 0 || cmpVal == andXor)) {
+        auto const sf = v.makeReg();
+        v << testwi{andXor, bits, sf};
+        return std::make_pair(cmpVal == 0 ? CC_NZ : CC_Z, sf);
+      }
+    }
+
+    auto const xoredBits = v.makeReg();
+    auto const xoredSf = v.makeReg();
+    v << xorwi{xorVal, bits, xoredBits, xoredSf};
+
+    auto const [maskedBits, maskedSf] = [&] {
+      if (andUnnecessary) {
+        // If we are not masking the result, and will not change the value or any
+        // flags.
+        return std::make_pair(xoredBits, xoredSf);
+      }
+      auto const res = v.makeReg();
+      auto const resSf = v.makeReg();
+      v << andwi{andVal, xoredBits, res, resSf};
+      return std::make_pair(res, resSf);
+    }();
+
+    if (cmpUnnecessary) {
+      // If we are comparing to 0, just use the zero flag from the result of the
+      // previous ops.
+      return std::make_pair(CC_Z, maskedSf);
+    } else {
+      auto const csf = v.makeReg();
+      v << cmpwi{cmpVal, maskedBits, csf};
+      return std::make_pair(CC_BE, csf);
+    }
+  }();
+
+  doJcc(cmpOp, sf);
+  auto const doneBlock = v.makeBlock();
+  v << jmp{doneBlock};
+  v = doneBlock;
+}
+
 /*
  * Test whether the value given by `dataSrc' has the same type specialization
  * as `type' does.
@@ -140,7 +207,7 @@ inline Vreg materialize(Vout&, Vreg data) { return data; }
  */
 template <class Loc, class JmpFn>
 void emitSpecializedTypeTest(Vout& v, IRLS& /*env*/, Type type, Loc dataSrc,
-                             Vreg sf, JmpFn doJcc) {
+                             JmpFn doJcc) {
   if (type < TRes) {
     // No cls field in Resource.
     always_assert(false && "unexpected guard on specialized Resource");
@@ -159,6 +226,7 @@ void emitSpecializedTypeTest(Vout& v, IRLS& /*env*/, Type type, Loc dataSrc,
             type.clsSpec().cls()->attrs() & AttrNoOverride);
 
     auto const data = materialize(v, dataSrc);
+    auto const sf = v.makeReg();
     if (type < TObj) {
       emitCmpLowPtr(v, sf, type.clsSpec().cls(),
                     data[ObjectData::getVMClassOffset()]);
@@ -169,21 +237,17 @@ void emitSpecializedTypeTest(Vout& v, IRLS& /*env*/, Type type, Loc dataSrc,
     return;
   }
 
-  DEBUG_ONLY auto const arrSpec = type.arrSpec();
+  auto const spec = type.arrSpec();
   assertx(allowBespokeArrayLikes());
-  assertx(!arrSpec.type());
+  assertx(!spec.type());
 
   auto const r = materialize(v, dataSrc);
-  if (arrSpec.vanilla()) {
+  if (spec.vanilla()) {
+    auto const sf = v.makeReg();
     v << testbim{ArrayData::kBespokeKindMask, r[HeaderKindOffset], sf};
     doJcc(CC_Z, sf);
-  } else if (auto const layout = arrSpec.bespokeLayout()) {
-    v << cmpwim{
-      static_cast<int16_t>((1 << 15) | layout->index()),
-      r[ArrayData::offsetOfBespokeIndex()],
-      sf
-    };
-    doJcc(CC_Z, sf);
+  } else if (spec.bespoke()) {
+    emitBespokeLayoutTest(v, spec.layout(), r, doJcc);
   } else {
     always_assert(false);
   }
@@ -284,8 +348,7 @@ void emitTypeTest(Vout& v, IRLS& env, Type type,
   doJcc(cc, sf);
 
   if (type.isSpecialized() || type == TStaticStr) {
-    auto const sf2 = v.makeReg();
-    detail::emitSpecializedTypeTest(v, env, type, dataSrc, sf2, doJcc);
+    detail::emitSpecializedTypeTest(v, env, type, dataSrc, doJcc);
   }
 }
 

@@ -21,13 +21,10 @@ struct Checker {
 }
 
 impl Checker {
-    fn syntax_error_at(&mut self, p: &Pos) {
+    fn syntax_error_at(&mut self, p: &Pos, msg: &'static str) {
         let (start_offset, end_offset) = p.info_raw();
-        self.errors.push(SyntaxError::make(
-            start_offset,
-            end_offset,
-            "Unsupported syntax for expression trees.".into(),
-        ));
+        self.errors
+            .push(SyntaxError::make(start_offset, end_offset, msg.into()));
     }
 }
 
@@ -58,7 +55,10 @@ impl<'ast> Visitor<'ast> for Checker {
             // Ban any other statement syntax inside expression trees.
             _ => {
                 if c.in_expression_tree {
-                    self.syntax_error_at(&s.0);
+                    self.syntax_error_at(
+                        &s.0,
+                        "Expression trees do not support this statement syntax.",
+                    );
                     // Don't recurse, so we don't also produce syntax errors for child nodes.
                     return Ok(());
                 }
@@ -99,39 +99,46 @@ impl<'ast> Visitor<'ast> for Checker {
         }
 
         if c.in_expression_tree {
-            let valid_syntax = match &e.1 {
-                // Allow integer, string, boolean and null literals.
-                Int(_) => true,
-                String(_) => true,
-                True | False | Null => true,
+            let syntax_err_msg = match &e.1 {
+                // Allow integer, float, string, boolean and null literals.
+                Int(_) => None,
+                Float(_) => None,
+                String(_) => None,
+                True | False | Null => None,
                 // Allow local variables $foo.
-                Lvar(_) => true,
-                Binop(bop) => match **bop {
-                    // Allow the addition operator.
-                    (Bop::Plus, _, _) => true,
+                Lvar(_) => None,
+                Binop(bop) => match bop.0 {
+                    // Allow arithmetic operators
+                    Bop::Plus | Bop::Minus | Bop::Star | Bop::Slash => None,
                     // Allow $x = 1, but not $x += 1.
-                    (Bop::Eq(None), _, _) => true,
-                    // Allow boolean && operator
-                    (Bop::Ampamp, _, _) => true,
-                    // Allow boolean || operator
-                    (Bop::Barbar, _, _) => true,
-                    _ => false,
+                    Bop::Eq(None) => None,
+                    // Allow boolean &&, || operators
+                    Bop::Ampamp | Bop::Barbar => None,
+                    // Allow comparison operators
+                    Bop::Lt | Bop::Lte | Bop::Gt | Bop::Gte | Bop::Eqeqeq | Bop::Diff2 => None,
+                    _ => Some(
+                        "Expression trees only support comparison (`<`, `===` etc) and basic arithmetic operators (`+` etc).",
+                    ),
                 },
                 Unop(uop) => match **uop {
                     // Allow boolean not operator !$x
-                    (Uop::Unot, _) => true,
-                    _ => false,
+                    (Uop::Unot, _) => None,
+                    _ => Some("Expression trees do not support this operator."),
                 },
+                // Allow ternary _ ? _ : _, but not Elvis operator _ ?: _
+                Eif(eif) if eif.1.is_some() => None,
                 // Allow simple function calls.
                 Call(call) => match &**call {
                     // Ban variadic calls foo(...$x);
-                    (_, _, _, Some(_)) => false,
+                    (_, _, _, Some(_)) => Some("Expression trees do not support variadic calls."),
                     // Ban generic type arguments foo<X, Y>();
-                    (_, targs, _, _) if !targs.is_empty() => false,
+                    (_, targs, _, _) if !targs.is_empty() => {
+                        Some("Expression trees do not support function calls with generics.")
+                    }
                     (recv, _targs, args, _variadic) => {
                         // Only allow direct function calls, so allow
                         // foo(), but don't allow (foo())().
-                        match recv.1 {
+                        match &recv.1 {
                             Id(_) => {
                                 // Recurse on the arguments manually,
                                 // so we don't end up visiting the
@@ -141,7 +148,30 @@ impl<'ast> Visitor<'ast> for Checker {
                                 args.accept(c, self)?;
                                 return Ok(());
                             }
-                            _ => false,
+                            ClassConst(cc) => match (cc.0).1 {
+                                aast::ClassId_::CIexpr(aast::Expr(_, Id(ref id))) => {
+                                    if id.1 == naming_special_names_rust::classes::PARENT
+                                        || id.1 == naming_special_names_rust::classes::SELF
+                                        || id.1 == naming_special_names_rust::classes::STATIC
+                                    {
+                                        Some(
+                                            "Static method calls in expression trees require explicit class names.",
+                                        )
+                                    } else {
+                                        args.accept(c, self)?;
+                                        return Ok(());
+                                    }
+                                }
+                                _ => Some(
+                                    "Expression trees only support function calls and static method calls on named classes.",
+                                ),
+                            },
+                            _ => {
+                                // Recurse on the callee and only allow calls to valid expressions
+                                recv.accept(c, self)?;
+                                args.accept(c, self)?;
+                                return Ok(());
+                            }
                         }
                     }
                 },
@@ -150,22 +180,26 @@ impl<'ast> Visitor<'ast> for Checker {
                     // Don't allow parameters with default values.
                     for param in &lf.0.params {
                         if param.expr.is_some() {
-                            self.syntax_error_at(&param.pos);
+                            self.syntax_error_at(
+                                &param.pos,
+                                "Expression trees do not support parameters with default values.",
+                            );
                             return Ok(());
                         }
                     }
-                    true
+                    None
                 }
                 // Ban all other expression syntax possibilities.
-                _ => false,
+                _ => Some("Unsupported syntax for expression trees."),
             };
 
-            if valid_syntax {
-                e.recurse(c, self)
-            } else {
-                self.syntax_error_at(&e.0);
-                // Don't recurse, so we don't also produce syntax errors for child nodes.
-                Ok(())
+            match syntax_err_msg {
+                None => e.recurse(c, self),
+                Some(msg) => {
+                    self.syntax_error_at(&e.0, msg);
+                    // Don't recurse, so we don't also produce syntax errors for child nodes.
+                    Ok(())
+                }
             }
         } else {
             e.recurse(c, self)

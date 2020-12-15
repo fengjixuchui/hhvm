@@ -80,6 +80,7 @@ struct
     | Rusing p -> Rusing (pos p)
     | Rdynamic_prop p -> Rdynamic_prop (pos p)
     | Rdynamic_call p -> Rdynamic_call (pos p)
+    | Rdynamic_construct p -> Rdynamic_construct (pos p)
     | Ridx_dict p -> Ridx_dict (pos p)
     | Rmissing_required_field (p, n) -> Rmissing_required_field (pos p, n)
     | Rmissing_optional_field (p, n) -> Rmissing_optional_field (pos p, n)
@@ -108,6 +109,7 @@ struct
     | Rglobal_fun_ret p -> Rglobal_fun_ret (pos p)
     | Rsplice p -> Rsplice (pos p)
     | Ret_boolean p -> Ret_boolean (pos p)
+    | Rdefault_capability p -> Rdefault_capability (pos p)
 
   let rec ty t =
     let (p, x) = deref t in
@@ -131,7 +133,6 @@ struct
     | Taccess (root_ty, id) -> Taccess (ty root_ty, string_id id)
     | Tshape (shape_kind, fdm) ->
       Tshape (shape_kind, ShapeFieldMap.map_and_rekey fdm shape_field_name ty)
-    | Tpu_access (base, sid) -> Tpu_access (ty base, string_id sid)
 
   and ty_opt x = Option.map x ty
 
@@ -145,7 +146,12 @@ struct
 
   and possibly_enforced_ty et = { et with et_type = ty et.et_type }
 
-  and fun_implicit_params implicit = { capability = ty implicit.capability }
+  and capability = function
+    | CapTy cap -> CapTy (ty cap)
+    | CapDefaults p -> CapDefaults (pos p)
+
+  and fun_implicit_params implicit =
+    { capability = capability implicit.capability }
 
   and fun_type ft =
     {
@@ -211,44 +217,6 @@ struct
       ttc_reifiable = Option.map tc.ttc_reifiable pos;
     }
 
-  and pu_enum_member pum =
-    {
-      tpum_atom = string_id pum.tpum_atom;
-      tpum_origin = pum.tpum_origin;
-      tpum_types =
-        SMap.map
-          begin
-            fun (origin, id, t) ->
-            (origin, string_id id, ty t)
-          end
-          pum.tpum_types;
-      tpum_exprs =
-        SMap.map
-          begin
-            fun (origin, id) ->
-            (origin, string_id id)
-          end
-          pum.tpum_exprs;
-    }
-
-  and pu_enum pu =
-    {
-      tpu_name = string_id pu.tpu_name;
-      tpu_is_final = pu.tpu_is_final;
-      tpu_case_types =
-        SMap.map
-          (fun (origin, tparam) -> (origin, type_param tparam))
-          pu.tpu_case_types;
-      tpu_case_values =
-        SMap.map
-          begin
-            fun (origin, id, declty) ->
-            (origin, string_id id, ty declty)
-          end
-          pu.tpu_case_values;
-      tpu_members = SMap.map pu_enum_member pu.tpu_members;
-    }
-
   and user_attribute { ua_name; ua_classname_params } =
     { ua_name = string_id ua_name; ua_classname_params }
 
@@ -292,7 +260,6 @@ struct
           dc.dc_substs;
       dc_consts = SMap.map class_const dc.dc_consts;
       dc_typeconsts = SMap.map typeconst dc.dc_typeconsts;
-      dc_pu_enums = SMap.map pu_enum dc.dc_pu_enums;
       dc_props = dc.dc_props;
       dc_sprops = dc.dc_sprops;
       dc_methods = dc.dc_methods;
@@ -343,7 +310,6 @@ struct
       sc_implements_dynamic = sc.sc_implements_dynamic;
       sc_consts = List.map sc.sc_consts shallow_class_const;
       sc_typeconsts = List.map sc.sc_typeconsts shallow_typeconst;
-      sc_pu_enums = List.map sc.sc_pu_enums shallow_pu_enum;
       sc_props = List.map sc.sc_props shallow_prop;
       sc_sprops = List.map sc.sc_sprops shallow_prop;
       sc_constructor = Option.map sc.sc_constructor shallow_method;
@@ -370,48 +336,23 @@ struct
       stc_reifiable = Option.map stc.stc_reifiable pos;
     }
 
-  and shallow_pu_member spum =
-    {
-      spum_atom = string_id spum.spum_atom;
-      spum_types = List.map spum.spum_types (fun (s, t) -> (string_id s, ty t));
-      spum_exprs = List.map spum.spum_exprs string_id;
-    }
-
-  and shallow_pu_enum spu =
-    {
-      spu_name = string_id spu.spu_name;
-      spu_is_final = spu.spu_is_final;
-      spu_case_types = List.map ~f:type_param spu.spu_case_types;
-      spu_case_values =
-        List.map spu.spu_case_values (fun (s, t) -> (string_id s, ty t));
-      spu_members = List.map spu.spu_members shallow_pu_member;
-    }
-
   and shallow_prop sp =
     {
-      sp_const = sp.sp_const;
-      sp_xhp_attr = sp.sp_xhp_attr;
-      sp_lateinit = sp.sp_lateinit;
-      sp_lsb = sp.sp_lsb;
       sp_name = string_id sp.sp_name;
-      sp_needs_init = sp.sp_needs_init;
+      sp_xhp_attr = sp.sp_xhp_attr;
       sp_type = Option.map sp.sp_type ty;
-      sp_abstract = sp.sp_abstract;
       sp_visibility = sp.sp_visibility;
+      sp_flags = sp.sp_flags;
     }
 
   and shallow_method sm =
     {
-      sm_abstract = sm.sm_abstract;
-      sm_final = sm.sm_final;
-      sm_memoizelsb = sm.sm_memoizelsb;
       sm_name = string_id sm.sm_name;
-      sm_override = sm.sm_override;
-      sm_dynamicallycallable = sm.sm_dynamicallycallable;
       sm_reactivity = sm.sm_reactivity;
       sm_type = ty sm.sm_type;
       sm_visibility = sm.sm_visibility;
       sm_deprecated = sm.sm_deprecated;
+      sm_flags = sm.sm_flags;
     }
 end
 

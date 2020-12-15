@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<20de78d0e6ed042ee655aa5e9e34e229>>
+// @generated SignedSource<<b73ebbdc4ddbef51f88ff14d5d26a24a>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
@@ -48,6 +48,17 @@ impl<'a> Node<'a> for BlameSource {
             BlameSource::BSlambda => {}
             BlameSource::BSassignment => {}
             BlameSource::BSoutOfScope => {}
+        }
+    }
+}
+impl<'a> Node<'a> for Capability<'a> {
+    fn accept(&'a self, v: &mut dyn Visitor<'a>) {
+        v.visit_capability(self)
+    }
+    fn recurse(&'a self, v: &mut dyn Visitor<'a>) {
+        match self {
+            Capability::CapDefaults(ref __binding_0) => __binding_0.accept(v),
+            Capability::CapTy(ref __binding_0) => __binding_0.accept(v),
         }
     }
 }
@@ -241,7 +252,6 @@ impl<'a> Node<'a> for FunKind {
             FunKind::FAsync => {}
             FunKind::FGenerator => {}
             FunKind::FAsyncGenerator => {}
-            FunKind::FCoroutine => {}
         }
     }
 }
@@ -466,6 +476,7 @@ impl<'a> Node<'a> for Reason<'a> {
             Reason::Rusing(ref __binding_0) => __binding_0.accept(v),
             Reason::RdynamicProp(ref __binding_0) => __binding_0.accept(v),
             Reason::RdynamicCall(ref __binding_0) => __binding_0.accept(v),
+            Reason::RdynamicConstruct(ref __binding_0) => __binding_0.accept(v),
             Reason::RidxDict(ref __binding_0) => __binding_0.accept(v),
             Reason::RmissingRequiredField(ref __binding_0) => __binding_0.accept(v),
             Reason::RmissingOptionalField(ref __binding_0) => __binding_0.accept(v),
@@ -488,6 +499,7 @@ impl<'a> Node<'a> for Reason<'a> {
             Reason::RglobalFunRet(ref __binding_0) => __binding_0.accept(v),
             Reason::Rsplice(ref __binding_0) => __binding_0.accept(v),
             Reason::RetBoolean(ref __binding_0) => __binding_0.accept(v),
+            Reason::RdefaultCapability(ref __binding_0) => __binding_0.accept(v),
         }
     }
 }
@@ -568,14 +580,13 @@ impl<'a> Node<'a> for ShallowClass<'a> {
                 implements_dynamic: ref __binding_14,
                 consts: ref __binding_15,
                 typeconsts: ref __binding_16,
-                pu_enums: ref __binding_17,
-                props: ref __binding_18,
-                sprops: ref __binding_19,
-                constructor: ref __binding_20,
-                static_methods: ref __binding_21,
-                methods: ref __binding_22,
-                user_attributes: ref __binding_23,
-                enum_type: ref __binding_24,
+                props: ref __binding_17,
+                sprops: ref __binding_18,
+                constructor: ref __binding_19,
+                static_methods: ref __binding_20,
+                methods: ref __binding_21,
+                user_attributes: ref __binding_22,
+                enum_type: ref __binding_23,
             } => {
                 {
                     __binding_0.accept(v)
@@ -646,10 +657,7 @@ impl<'a> Node<'a> for ShallowClass<'a> {
                 {
                     __binding_22.accept(v)
                 }
-                {
-                    __binding_23.accept(v)
-                }
-                { __binding_24.accept(v) }
+                { __binding_23.accept(v) }
             }
         }
     }
@@ -683,16 +691,12 @@ impl<'a> Node<'a> for ShallowMethod<'a> {
     fn recurse(&'a self, v: &mut dyn Visitor<'a>) {
         match self {
             ShallowMethod {
-                abstract_: ref __binding_0,
-                final_: ref __binding_1,
-                memoizelsb: ref __binding_2,
-                name: ref __binding_3,
-                override_: ref __binding_4,
-                dynamicallycallable: ref __binding_5,
-                reactivity: ref __binding_6,
-                type_: ref __binding_7,
-                visibility: ref __binding_8,
-                deprecated: ref __binding_9,
+                name: ref __binding_0,
+                reactivity: ref __binding_1,
+                type_: ref __binding_2,
+                visibility: ref __binding_3,
+                deprecated: ref __binding_4,
+                flags: ref __binding_5,
             } => {
                 {
                     __binding_0.accept(v)
@@ -709,19 +713,7 @@ impl<'a> Node<'a> for ShallowMethod<'a> {
                 {
                     __binding_4.accept(v)
                 }
-                {
-                    __binding_5.accept(v)
-                }
-                {
-                    __binding_6.accept(v)
-                }
-                {
-                    __binding_7.accept(v)
-                }
-                {
-                    __binding_8.accept(v)
-                }
-                { __binding_9.accept(v) }
+                { __binding_5.accept(v) }
             }
         }
     }
@@ -733,57 +725,11 @@ impl<'a> Node<'a> for ShallowProp<'a> {
     fn recurse(&'a self, v: &mut dyn Visitor<'a>) {
         match self {
             ShallowProp {
-                const_: ref __binding_0,
-                xhp_attr: ref __binding_1,
-                lateinit: ref __binding_2,
-                lsb: ref __binding_3,
-                name: ref __binding_4,
-                needs_init: ref __binding_5,
-                type_: ref __binding_6,
-                abstract_: ref __binding_7,
-                visibility: ref __binding_8,
-            } => {
-                {
-                    __binding_0.accept(v)
-                }
-                {
-                    __binding_1.accept(v)
-                }
-                {
-                    __binding_2.accept(v)
-                }
-                {
-                    __binding_3.accept(v)
-                }
-                {
-                    __binding_4.accept(v)
-                }
-                {
-                    __binding_5.accept(v)
-                }
-                {
-                    __binding_6.accept(v)
-                }
-                {
-                    __binding_7.accept(v)
-                }
-                { __binding_8.accept(v) }
-            }
-        }
-    }
-}
-impl<'a> Node<'a> for ShallowPuEnum<'a> {
-    fn accept(&'a self, v: &mut dyn Visitor<'a>) {
-        v.visit_shallow_pu_enum(self)
-    }
-    fn recurse(&'a self, v: &mut dyn Visitor<'a>) {
-        match self {
-            ShallowPuEnum {
                 name: ref __binding_0,
-                is_final: ref __binding_1,
-                case_types: ref __binding_2,
-                case_values: ref __binding_3,
-                members: ref __binding_4,
+                xhp_attr: ref __binding_1,
+                type_: ref __binding_2,
+                visibility: ref __binding_3,
+                flags: ref __binding_4,
             } => {
                 {
                     __binding_0.accept(v)
@@ -798,28 +744,6 @@ impl<'a> Node<'a> for ShallowPuEnum<'a> {
                     __binding_3.accept(v)
                 }
                 { __binding_4.accept(v) }
-            }
-        }
-    }
-}
-impl<'a> Node<'a> for ShallowPuMember<'a> {
-    fn accept(&'a self, v: &mut dyn Visitor<'a>) {
-        v.visit_shallow_pu_member(self)
-    }
-    fn recurse(&'a self, v: &mut dyn Visitor<'a>) {
-        match self {
-            ShallowPuMember {
-                atom: ref __binding_0,
-                types: ref __binding_1,
-                exprs: ref __binding_2,
-            } => {
-                {
-                    __binding_0.accept(v)
-                }
-                {
-                    __binding_1.accept(v)
-                }
-                { __binding_2.accept(v) }
             }
         }
     }
@@ -958,7 +882,7 @@ impl<'a> Node<'a> for Tparam<'a> {
         }
     }
 }
-impl<'a> Node<'a> for Tprim<'a> {
+impl<'a> Node<'a> for Tprim {
     fn accept(&'a self, v: &mut dyn Visitor<'a>) {
         v.visit_tprim(self)
     }
@@ -974,7 +898,6 @@ impl<'a> Node<'a> for Tprim<'a> {
             Tprim::Tnum => {}
             Tprim::Tarraykey => {}
             Tprim::Tnoreturn => {}
-            Tprim::Tatom(ref __binding_0) => __binding_0.accept(v),
         }
     }
 }
@@ -1004,7 +927,6 @@ impl<'a> Node<'a> for Ty_<'a> {
             Ty_::Tarray(ref __binding_0) => __binding_0.accept(v),
             Ty_::Tmixed => {}
             Ty_::Tlike(ref __binding_0) => __binding_0.accept(v),
-            Ty_::TpuAccess(ref __binding_0) => __binding_0.accept(v),
             Ty_::Tany(ref __binding_0) => __binding_0.accept(v),
             Ty_::Terr => {}
             Ty_::Tnonnull => {}
@@ -1027,8 +949,6 @@ impl<'a> Node<'a> for Ty_<'a> {
             Ty_::Tdependent(ref __binding_0) => __binding_0.accept(v),
             Ty_::Tobject => {}
             Ty_::Tclass(ref __binding_0) => __binding_0.accept(v),
-            Ty_::Tpu(ref __binding_0) => __binding_0.accept(v),
-            Ty_::TpuTypeAccess(ref __binding_0) => __binding_0.accept(v),
         }
     }
 }

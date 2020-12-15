@@ -6,23 +6,17 @@
        sc_where_constraints = []; sc_extends = []; sc_uses = [];
        sc_xhp_attr_uses = []; sc_req_extends = []; sc_req_implements = [];
        sc_implements = []; sc_implements_dynamic = false; sc_consts = [];
-       sc_typeconsts = []; sc_pu_enums = []; sc_props = []; sc_sprops = [];
+       sc_typeconsts = []; sc_props = []; sc_sprops = [];
        sc_constructor = None; sc_static_methods = [];
        sc_methods =
-       [{ Shallow_decl_defs.sm_abstract = false; sm_final = false;
-          sm_memoizelsb = false; sm_name = ([5:19-30], "cipp_method");
-          sm_override = false; sm_dynamicallycallable = false;
+       [{ Shallow_decl_defs.sm_name = ([5:19-30], "cipp_method");
           sm_reactivity = None;
           sm_type =
           (Rwitness (root|cipp.php line 5, characters 19-29),
            (Tfun
               { ft_arity = (Fstandard ()); ft_tparams = [];
                 ft_where_constraints = []; ft_params = [];
-                ft_implicit_params =
-                { capability =
-                  (Rhint (root|cipp.php line 5, characters 19-29),
-                   (Tapply (([5:19-30], "\\HH\\Contexts\\defaults"), [])))
-                  };
+                ft_implicit_params = { capability = (CapDefaults [5:19-30]) };
                 ft_ret =
                 { et_enforced = false;
                   et_type =
@@ -33,21 +27,16 @@
                 (make_ft_flags FSync None ~return_disposable:false
                   ~returns_mutable:false ~returns_void_to_rx:false);
                 ft_reactive = Cipp {\C}; ft_ifc_decl = FDPolicied {PUBLIC} }));
-          sm_visibility = Public; sm_deprecated = None };
-         { Shallow_decl_defs.sm_abstract = false; sm_final = false;
-           sm_memoizelsb = false;
-           sm_name = ([8:19-37], "cipp_global_method"); sm_override = false;
-           sm_dynamicallycallable = false; sm_reactivity = None;
+          sm_visibility = Public; sm_deprecated = None; sm_flags = (empty) };
+         { Shallow_decl_defs.sm_name = ([8:19-37], "cipp_global_method");
+           sm_reactivity = None;
            sm_type =
            (Rwitness (root|cipp.php line 8, characters 19-36),
             (Tfun
                { ft_arity = (Fstandard ()); ft_tparams = [];
                  ft_where_constraints = []; ft_params = [];
                  ft_implicit_params =
-                 { capability =
-                   (Rhint (root|cipp.php line 8, characters 19-36),
-                    (Tapply (([8:19-37], "\\HH\\Contexts\\defaults"), [])))
-                   };
+                 { capability = (CapDefaults [8:19-37]) };
                  ft_ret =
                  { et_enforced = false;
                    et_type =
@@ -59,21 +48,16 @@
                    ~returns_mutable:false ~returns_void_to_rx:false);
                  ft_reactive = CippGlobal; ft_ifc_decl = FDPolicied {PUBLIC}
                  }));
-           sm_visibility = Public; sm_deprecated = None };
-         { Shallow_decl_defs.sm_abstract = false; sm_final = false;
-           sm_memoizelsb = false;
-           sm_name = ([11:19-36], "cipp_local_method"); sm_override = false;
-           sm_dynamicallycallable = false; sm_reactivity = None;
+           sm_visibility = Public; sm_deprecated = None; sm_flags = (empty) };
+         { Shallow_decl_defs.sm_name = ([11:19-36], "cipp_local_method");
+           sm_reactivity = None;
            sm_type =
            (Rwitness (root|cipp.php line 11, characters 19-35),
             (Tfun
                { ft_arity = (Fstandard ()); ft_tparams = [];
                  ft_where_constraints = []; ft_params = [];
                  ft_implicit_params =
-                 { capability =
-                   (Rhint (root|cipp.php line 11, characters 19-35),
-                    (Tapply (([11:19-36], "\\HH\\Contexts\\defaults"), [])))
-                   };
+                 { capability = (CapDefaults [11:19-36]) };
                  ft_ret =
                  { et_enforced = false;
                    et_type =
@@ -85,10 +69,8 @@
                    ~returns_mutable:false ~returns_void_to_rx:false);
                  ft_reactive = CippLocal {a};
                  ft_ifc_decl = FDPolicied {PUBLIC} }));
-           sm_visibility = Public; sm_deprecated = None };
-         { Shallow_decl_defs.sm_abstract = false; sm_final = false;
-           sm_memoizelsb = false; sm_name = ([14:19-33], "cipp_rx_method");
-           sm_override = false; sm_dynamicallycallable = false;
+           sm_visibility = Public; sm_deprecated = None; sm_flags = (empty) };
+         { Shallow_decl_defs.sm_name = ([14:19-33], "cipp_rx_method");
            sm_reactivity = None;
            sm_type =
            (Rwitness (root|cipp.php line 14, characters 19-32),
@@ -96,10 +78,7 @@
                { ft_arity = (Fstandard ()); ft_tparams = [];
                  ft_where_constraints = []; ft_params = [];
                  ft_implicit_params =
-                 { capability =
-                   (Rhint (root|cipp.php line 14, characters 19-32),
-                    (Tapply (([14:19-33], "\\HH\\Contexts\\defaults"), [])))
-                   };
+                 { capability = (CapDefaults [14:19-33]) };
                  ft_ret =
                  { et_enforced = false;
                    et_type =
@@ -110,7 +89,7 @@
                  (make_ft_flags FSync None ~return_disposable:false
                    ~returns_mutable:false ~returns_void_to_rx:false);
                  ft_reactive = CippRx; ft_ifc_decl = FDPolicied {PUBLIC} }));
-           sm_visibility = Public; sm_deprecated = None }
+           sm_visibility = Public; sm_deprecated = None; sm_flags = (empty) }
          ];
        sc_user_attributes = []; sc_enum_type = None }));
   ("\\cipp_function",
@@ -121,11 +100,7 @@
          (Tfun
             { ft_arity = (Fstandard ()); ft_tparams = [];
               ft_where_constraints = []; ft_params = [];
-              ft_implicit_params =
-              { capability =
-                (Rhint (root|cipp.php line 18, characters 10-22),
-                 (Tapply (([18:10-23], "\\HH\\Contexts\\defaults"), [])))
-                };
+              ft_implicit_params = { capability = (CapDefaults [18:10-23]) };
               ft_ret =
               { et_enforced = false;
                 et_type =
@@ -145,11 +120,7 @@
          (Tfun
             { ft_arity = (Fstandard ()); ft_tparams = [];
               ft_where_constraints = []; ft_params = [];
-              ft_implicit_params =
-              { capability =
-                (Rhint (root|cipp.php line 21, characters 10-29),
-                 (Tapply (([21:10-30], "\\HH\\Contexts\\defaults"), [])))
-                };
+              ft_implicit_params = { capability = (CapDefaults [21:10-30]) };
               ft_ret =
               { et_enforced = false;
                 et_type =
@@ -169,11 +140,7 @@
          (Tfun
             { ft_arity = (Fstandard ()); ft_tparams = [];
               ft_where_constraints = []; ft_params = [];
-              ft_implicit_params =
-              { capability =
-                (Rhint (root|cipp.php line 24, characters 10-28),
-                 (Tapply (([24:10-29], "\\HH\\Contexts\\defaults"), [])))
-                };
+              ft_implicit_params = { capability = (CapDefaults [24:10-29]) };
               ft_ret =
               { et_enforced = false;
                 et_type =
@@ -194,11 +161,7 @@
          (Tfun
             { ft_arity = (Fstandard ()); ft_tparams = [];
               ft_where_constraints = []; ft_params = [];
-              ft_implicit_params =
-              { capability =
-                (Rhint (root|cipp.php line 27, characters 10-25),
-                 (Tapply (([27:10-26], "\\HH\\Contexts\\defaults"), [])))
-                };
+              ft_implicit_params = { capability = (CapDefaults [27:10-26]) };
               ft_ret =
               { et_enforced = false;
                 et_type =

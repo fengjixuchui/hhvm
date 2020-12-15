@@ -123,10 +123,10 @@ module Naming = struct
     | DollardollarUnused [@value 2069]
     | IllegalMemberVariableClass [@value 2070]
     | TooFewTypeArguments [@value 2071]
-    | GotoLabelAlreadyDefined [@value 2072]
-    | GotoLabelUndefined [@value 2073]
-    | GotoLabelDefinedInFinally [@value 2074]
-    | GotoInvokedInFinally [@value 2075]
+    (* | GotoLabelAlreadyDefinedDEPRECATED [@value 2072]
+    | GotoLabelUndefinedDEPRECATED [@value 2073]
+    | GotoLabelDefinedInFinallyDEPRECATED [@value 2074]
+    | GotoInvokedInFinallyDEPRECATED [@value 2075] *)
     (* | DynamicClassPropertyNameInStrictModeDEPRECATED [@value 2076] *)
     | ThisAsLexicalVariable [@value 2077]
     | DynamicClassNameInStrictMode [@value 2078]
@@ -152,21 +152,22 @@ module Naming = struct
     | MutabilityHintInNonRx [@value 2098]
     | InvalidReturnMutableHint [@value 2099]
     (* | NoTparamsOnTypeConstsDEPRECATED [@value 2100] *)
-    | PocketUniversesDuplication [@value 2101]
+    (* | PocketUniversesDuplicationDEPRECATED [@value 2101] *)
     | UnsupportedTraitUseAs [@value 2102]
     | UnsupportedInsteadOf [@value 2103]
     | InvalidTraitUseAsVisibility [@value 2104]
     | InvalidFunPointer [@value 2105]
     | IllegalUseOfDynamicallyCallable [@value 2106]
-    | PocketUniversesNotInClass [@value 2107]
-    | PocketUniversesAtomMissing [@value 2108]
-    | PocketUniversesAtomUnknown [@value 2109]
-    | PocketUniversesLocalization [@value 2110]
+    (* | PocketUniversesNotInClassDEPRECATED [@value 2107] *)
+    (* | PocketUniversesAtomMissingDEPRECATED [@value 2108] *)
+    (* | PocketUniversesAtomUnknownDEPRECATED [@value 2109] *)
+    (* | PocketUniversesLocalizationDEPRECATED [@value 2110] *)
     | ClassMethNonFinalSelf [@value 2111]
     | ParentInFunctionPointer [@value 2112]
     | SelfInNonFinalFunctionPointer [@value 2113]
     | ClassMethNonFinalCLASS [@value 2114]
-    | WildcardTypeParamDisallowed [@value 2115] (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
+    | WildcardTypeParamDisallowed [@value 2115]
+    | CallingAssert [@value 2116] (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
   [@@deriving enum, show { with_path = false }]
 
   let err_code = to_enum
@@ -211,8 +212,8 @@ module NastCheck = struct
     (* | AsyncInInterfaceDEPRECATED [@value 3035] *)
     | AwaitInCoroutine [@value 3036]
     | YieldInCoroutine [@value 3037]
-    | SuspendOutsideOfCoroutine [@value 3038]
-    | SuspendInFinally [@value 3039]
+    (* | SuspendOutsideOfCoroutine [@value 3038] *)
+    (* | SuspendInFinally [@value 3039] *)
     (* | BreakContinueNNotSupportedDEPRECATED [@value 3040] *)
     | StaticMemoizedFunction [@value 3041]
     | InoutParamsInCoroutine [@value 3042]
@@ -438,9 +439,9 @@ module Typing = struct
     | UnknownFieldDisallowedInShape [@value 4166]
     | NullableCast [@value 4167]
     (* | PassByRefAnnotationMissingDEPRECATED [@value 4168] *)
-    | NonCallArgumentInSuspend [@value 4169]
-    | NonCoroutineCallInSuspend [@value 4170]
-    | CoroutineCallOutsideOfSuspend [@value 4171]
+    (* | NonCallArgumentInSuspend [@value 4169] *)
+    (* | NonCoroutineCallInSuspend [@value 4170] *)
+    (* | CoroutineCallOutsideOfSuspend [@value 4171] *)
     | FunctionIsNotCoroutine [@value 4172]
     | CoroutinnessMismatch [@value 4173]
     | ExpectingAwaitableReturnTypeHint [@value 4174]
@@ -495,9 +496,9 @@ module Typing = struct
     | EllipsisStrictMode [@value 4223]
     | UntypedLambdaStrictMode [@value 4224]
     (* | BindingRefInArrayDEPRECATED [@value 4225] *)
-    | EchoInReactiveContext [@value 4226]
+    | OutputInWrongContext [@value 4226]
     | SuperglobalInReactiveContext [@value 4227]
-    | StaticPropertyInReactiveContext [@value 4228]
+    | StaticPropertyInWrongContext [@value 4228]
     (* | StaticInReactiveContextDEPRECATED [@value 4229] *)
     (* | GlobalInReactiveContextDEPRECATED [@value 4230] *)
     | WrongExpressionKindAttribute [@value 4231]
@@ -618,8 +619,8 @@ module Typing = struct
     | ClassGetReified [@value 4346]
     | RequireGenericExplicit [@value 4347]
     | ClassConstantTypeMismatch [@value 4348]
-    | PocketUniversesExpansion [@value 4349]
-    | PocketUniversesTyping [@value 4350]
+    (* | PocketUniversesExpansionDEPRECATED [@value 4349] *)
+    (* | PocketUniversesTypingDEPRECATED [@value 4350] *)
     | RecordInitValueDoesNotMatchHint [@value 4351]
     | AbstractTconstNotAllowed [@value 4352]
     | NewAbstractRecord [@value 4353]
@@ -636,8 +637,8 @@ module Typing = struct
     | NotARecord [@value 4364]
     | TraitReuseInsideClass [@value 4365]
     | RedundantGeneric [@value 4366]
-    | PocketUniversesInvalidUpperBounds [@value 4367]
-    | PocketUniversesRefinement [@value 4368]
+    (* | PocketUniversesInvalidUpperBoundsDEPRECATED [@value 4367] *)
+    (* | PocketUniversesRefinementDEPRECATED [@value 4368] *)
     (* | PocketUniversesReservedSyntaxDEPRECATED [@value 4369] *)
     | ArrayAccessWrite [@value 4370]
     | InvalidArrayKeyWrite [@value 4371]
@@ -645,7 +646,7 @@ module Typing = struct
     | NonObjectMemberWrite [@value 4373]
     | ConcreteConstInterfaceOverride [@value 4374]
     | MethCallerTrait [@value 4375]
-    | PocketUniversesAttributes [@value 4376]
+    (* | PocketUniversesAttributesDEPRECATED [@value 4376] *)
     | DuplicateInterface [@value 4377]
     | TypeParameterNameAlreadyUsedNonShadow [@value 4378]
     | IllegalInformationFlow [@value 4379]
@@ -665,7 +666,13 @@ module Typing = struct
     | InheritedMethodCaseDiffers [@value 4393]
     | AtomUnknown [@value 4394]
     | AtomInvalidParameter [@value 4395]
-    | AtomAsExpression [@value 4396] (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
+    | AtomAsExpression [@value 4396]
+    | AtomInvalidArgument [@value 4397]
+    | IFCInternalError [@value 4398]
+    | IFCExternalContravariant [@value 4399]
+    | IFCPolicyMismatch [@value 4400]
+    | OpCoeffects [@value 4401]
+    | ImplementsDynamic [@value 4402] (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
   [@@deriving enum, show { with_path = false }]
 
   let err_code = to_enum

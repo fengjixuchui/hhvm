@@ -245,6 +245,7 @@ bool supportsGVN(const IRInstruction* inst) {
   case NeqRes:
   case CmpRes:
   case EqCls:
+  case EqLazyCls:
   case EqFunc:
   case EqStrPtr:
   case InstanceOf:
@@ -293,6 +294,11 @@ bool supportsGVN(const IRInstruction* inst) {
   case CountVec:
   case CountDict:
   case CountKeyset:
+  case BespokeIterEnd:
+  case LdMonotypeDictEnd:
+  case LdMonotypeDictKey:
+  case LdMonotypeDictVal:
+  case LdMonotypeVecElem:
   case Select:
   case StrictlyIntegerConv:
   case LookupSPropSlot:

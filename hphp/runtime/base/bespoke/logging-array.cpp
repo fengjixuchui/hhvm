@@ -51,8 +51,8 @@ static_assert(kSizeIndex == 0 ||
               kSizeIndex2Size[kSizeIndex - 1] < sizeof(LoggingArray),
               "kSizeIndex must be the smallest size for LoggingArray");
 
-constexpr LayoutIndex kLayoutIndex = {0};
-auto const s_vtable = fromArray<LoggingArray>();
+constexpr LayoutIndex kLayoutIndex = {1};
+
 std::atomic<bool> g_emitLoggingArrays;
 
 // The bespoke kind for a vanilla kind.
@@ -94,32 +94,13 @@ ArrayData* makeSampledArray(ArrayData* vad) {
 
 //////////////////////////////////////////////////////////////////////////////
 
-LoggingLayout::LoggingLayout(): ConcreteLayout("LoggingLayout", &s_vtable) {};
-
-using namespace jit;
-using namespace jit::irgen;
-
-SSATmp* LoggingLayout::emitSet(IRGS& env, SSATmp* base, SSATmp* key,
-                               SSATmp* val) const {
-  auto const outputType = base->type().modified();
-  return gen(env, BespokeSet, outputType, BespokeLayoutData { this }, base,
-             key, val);
-}
-
-SSATmp* LoggingLayout::emitAppend(IRGS& env, SSATmp* base, SSATmp* val) const {
-  auto const outputType = base->type().modified();
-  return gen(env, BespokeAppend, outputType, BespokeLayoutData { this }, base,
-             val);
-}
-
-//////////////////////////////////////////////////////////////////////////////
-
-void setLoggingEnabled(bool val) {
-  g_emitLoggingArrays.store(val, std::memory_order_relaxed);
+void setLoggingEnabled(bool value) {
+  if (!value && allowBespokeArrayLikes()) stopProfiling();
+  g_emitLoggingArrays.store(value, std::memory_order_release);
 }
 
 ArrayData* maybeMakeLoggingArray(ArrayData* ad) {
-  if (!g_emitLoggingArrays.load(std::memory_order_relaxed)) return ad;
+  if (!g_emitLoggingArrays.load(std::memory_order_acquire)) return ad;
 
   auto const profile = getLoggingProfile(getSrcKey());
   return profile ? maybeMakeLoggingArray(ad, profile) : ad;
@@ -130,12 +111,19 @@ const ArrayData* maybeMakeLoggingArray(const ArrayData* ad) {
 }
 
 ArrayData* maybeMakeLoggingArray(ArrayData* ad, LoggingProfile* profile) {
-  if (!g_emitLoggingArrays.load(std::memory_order_relaxed)) return ad;
+  if (!g_emitLoggingArrays.load(std::memory_order_acquire)) return ad;
+  assertx(profile->data);
 
   if (ad->isSampledArray() || !ad->isVanilla()) {
-    assertx(isArrLikeCastOp(profile->source.op()));
+    DEBUG_ONLY auto const op = profile->key.op();
+    assertx(isArrLikeCastOp(op) || op == Op::NewObjD);
     FTRACE(5, "Skipping logging for {} array.\n",
            ad->isSampledArray() ? "sampled" : "bespoke");
+    return ad;
+  }
+
+  if (!arrayTypeMaybeBespoke(ad->toDataType())) {
+    FTRACE(5, "Skipping logging for ineligible array type.\n");
     return ad;
   }
 
@@ -143,20 +131,20 @@ ArrayData* maybeMakeLoggingArray(ArrayData* ad, LoggingProfile* profile) {
     if (shouldTestBespokeArrayLikes()) return true;
     if (RO::EvalEmitLoggingArraySampleRate == 0) return false;
 
-    auto const skCount = profile->sampleCount++;
+    auto const skCount = profile->data->sampleCount++;
     FTRACE(5, "Observe SrcKey count: {}\n", skCount);
     return (skCount - 1) % RO::EvalEmitLoggingArraySampleRate == 0;
   }();
 
   if (!shouldEmitBespoke) {
-    FTRACE(5, "Emit vanilla at {}\n", profile->source.getSymbol());
-    auto const cached = profile->staticSampledArray;
+    FTRACE(5, "Emit vanilla at {}\n", profile->key.toString());
+    auto const cached = profile->data->staticSampledArray;
     return cached ? cached : makeSampledArray(ad);
   }
 
-  FTRACE(5, "Emit bespoke at {}\n", profile->source.getSymbol());
-  profile->loggingArraysEmitted++;
-  auto const cached = profile->staticLoggingArray;
+  FTRACE(5, "Emit bespoke at {}\n", profile->key.toString());
+  profile->data->loggingArraysEmitted++;
+  auto const cached = profile->data->staticLoggingArray;
   if (cached) return cached;
 
   // Non-static array constructors are basically a sequence of sets or appends.
@@ -168,11 +156,31 @@ ArrayData* maybeMakeLoggingArray(ArrayData* ad, LoggingProfile* profile) {
   return LoggingArray::Make(ad, profile, EntryTypes::ForArray(ad));
 }
 
+void profileArrLikeProps(ObjectData* obj) {
+  if (!g_emitLoggingArrays.load(std::memory_order_acquire)) return;
+
+  auto const cls = obj->getVMClass();
+  if (cls->needsInitThrowable()) return;
+
+  for (auto slot = 0; slot < cls->numDeclProperties(); slot++) {
+    if (cls->declProperties()[slot].attrs & AttrIsConst) continue;
+    auto lval = obj->propLvalAtOffset(slot);
+    if (!tvIsArrayLike(lval)) continue;
+    auto const profile = getLoggingProfile(cls, slot);
+    if (!profile) continue;
+    auto const arr = maybeMakeLoggingArray(lval.val().parr, profile);
+    tvCopy(make_array_like_tv(arr), lval);
+  }
+}
+
 //////////////////////////////////////////////////////////////////////////////
 
 void LoggingArray::InitializeLayouts() {
-  auto const layout = new LoggingLayout();
-  always_assert(layout->index() == kLayoutIndex);
+  auto const index = Layout::ReserveIndices(1);
+  always_assert(index == kLayoutIndex);
+  static auto const s_vtable = fromArray<LoggingArray>();
+  new ConcreteLayout(index, "LoggingLayout", &s_vtable,
+                     {AbstractLayout::GetBespokeTopIndex()});
 }
 
 bespoke::LayoutIndex LoggingArray::GetLayoutIndex() {
@@ -229,10 +237,6 @@ bool LoggingArray::checkInvariants() const {
   assertx(m_kind == getBespokeKind(wrapped->kind()));
   assertx(isLegacyArray() == wrapped->isLegacyArray());
   return true;
-}
-
-void LoggingArray::logReachEvent(TransID transId, SrcKey sk) {
-  profile->logReach(transId, sk);
 }
 
 void LoggingArray::updateKindAndLegacy() {
@@ -300,18 +304,18 @@ bool LoggingArray::IsVectorData(const LoggingArray* lad) {
   logEvent(lad, ArrayOp::IsVectorData);
   return lad->wrapped->isVectorData();
 }
-TypedValue LoggingArray::GetInt(const LoggingArray* lad, int64_t k) {
+TypedValue LoggingArray::NvGetInt(const LoggingArray* lad, int64_t k) {
   logEvent(lad, ArrayOp::GetInt, k);
   return lad->wrapped->get(k);
 }
-TypedValue LoggingArray::GetStr(const LoggingArray* lad, const StringData* k) {
+TypedValue LoggingArray::NvGetStr(const LoggingArray* lad, const StringData* k) {
   logEvent(lad, ArrayOp::GetStr, k);
   return lad->wrapped->get(k);
 }
-TypedValue LoggingArray::GetKey(const LoggingArray* lad, ssize_t pos) {
+TypedValue LoggingArray::GetPosKey(const LoggingArray* lad, ssize_t pos) {
   return lad->wrapped->nvGetKey(pos);
 }
-TypedValue LoggingArray::GetVal(const LoggingArray* lad, ssize_t pos) {
+TypedValue LoggingArray::GetPosVal(const LoggingArray* lad, ssize_t pos) {
   return lad->wrapped->nvGetVal(pos);
 }
 ssize_t LoggingArray::GetIntPos(const LoggingArray* lad, int64_t k) {

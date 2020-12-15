@@ -318,11 +318,8 @@ let parsing genv env to_check ~stop_at_errors profiling =
     MultiWorker.next genv.workers (Relative_path.Set.elements disk_files)
   in
   let (fast, errors, failed_parsing) =
-    CgroupProfiler.collect_cgroup_stats
-      ~profiling
-      ~stage:"parsing"
-      ~f:(fun () ->
-        Parsing_service.go genv.workers ide_files ~get_next env.popt ~trace:true)
+    CgroupProfiler.collect_cgroup_stats ~profiling ~stage:"parsing" @@ fun () ->
+    Parsing_service.go genv.workers ide_files ~get_next env.popt ~trace:true
   in
   SearchServiceRunner.update_fileinfo_map
     (Naming_table.create fast)
@@ -383,18 +380,13 @@ let parsing genv env to_check ~stop_at_errors profiling =
 
 let update_naming_table env fast_parsed profiling =
   let naming_table =
-    CgroupProfiler.collect_cgroup_stats
-      ~profiling
-      ~stage:"update_deps"
-      ~f:(fun () ->
-        let ctx = Provider_utils.ctx_from_server_env env in
-        let deps_mode = Provider_context.get_deps_mode ctx in
-        Relative_path.Map.iter
-          fast_parsed
-          (Typing_deps.Files.update_file deps_mode);
-        Naming_table.update_many env.naming_table fast_parsed)
+    CgroupProfiler.collect_cgroup_stats ~profiling ~stage:"update_deps"
+    @@ fun () ->
+    let ctx = Provider_utils.ctx_from_server_env env in
+    let deps_mode = Provider_context.get_deps_mode ctx in
+    Relative_path.Map.iter fast_parsed (Typing_deps.Files.update_file deps_mode);
+    Naming_table.update_many env.naming_table fast_parsed
   in
-  CgroupProfiler.log_to_scuba ~stage:"update_deps" ~profiling;
   naming_table
 
 (*****************************************************************************)
@@ -573,15 +565,16 @@ module FullCheckKind : CheckKindType = struct
 
   let get_env_after_typing
       ~old_env ~errorl ~needs_phase2_redecl:_ ~needs_recheck ~diag_subscribe =
-    let (full_check, remote) =
+    let (full_check_status, remote) =
       if Relative_path.Set.is_empty needs_recheck then
         (Full_check_done, false)
       else
-        (old_env.full_check, old_env.remote)
+        (old_env.full_check_status, old_env.remote)
     in
     let why_needed_full_init =
       match old_env.init_env.why_needed_full_init with
-      | Some why_needed_full_init when not (is_full_check_done full_check) ->
+      | Some why_needed_full_init
+        when not (is_full_check_done full_check_status) ->
         Some why_needed_full_init
       | _ -> None
     in
@@ -596,7 +589,7 @@ module FullCheckKind : CheckKindType = struct
       errorl;
       needs_phase2_redecl = Relative_path.Set.empty;
       needs_recheck;
-      full_check;
+      full_check_status;
       remote;
       init_env = { old_env.init_env with why_needed_full_init };
       diag_subscribe;
@@ -691,8 +684,8 @@ module LazyCheckKind : CheckKindType = struct
   let get_env_after_typing
       ~old_env ~errorl ~needs_phase2_redecl ~needs_recheck ~diag_subscribe =
     (* If it was started, it's still started, otherwise it needs starting *)
-    let full_check =
-      match old_env.full_check with
+    let full_check_status =
+      match old_env.full_check_status with
       | Full_check_started -> Full_check_started
       | _ -> Full_check_needed
     in
@@ -708,7 +701,7 @@ module LazyCheckKind : CheckKindType = struct
       ide_needs_parsing = Relative_path.Set.empty;
       needs_phase2_redecl;
       needs_recheck;
-      full_check;
+      full_check_status;
       diag_subscribe;
     }
 
@@ -790,7 +783,6 @@ functor
       let (env, fast_parsed, errorl, failed_parsing) =
         parsing genv env files_to_parse ~stop_at_errors profiling
       in
-      CgroupProfiler.log_to_scuba ~stage:"parsing" ~profiling;
       let errors = env.errorl in
       let errors =
         Errors.(incremental_update_set errors errorl files_to_parse Parsing)
@@ -815,29 +807,24 @@ functor
         ~(stop_at_errors : bool)
         ~(profiling : CgroupProfiler.Profiling.t) : naming_result =
       let (errors, failed_naming, fast) =
-        CgroupProfiler.collect_cgroup_stats
-          ~profiling
-          ~stage:"naming"
-          ~f:(fun () ->
-            let (errorl', failed_naming, fast) =
-              declare_names env fast_parsed
-            in
-            let errors =
-              Errors.(incremental_update_map errors errorl' fast Naming)
-            in
-            (* failed_naming can be a superset of keys in fast - see comment in
-             * Naming_global.ndecl_file *)
-            let fast = extend_fast genv fast naming_table failed_naming in
-            (* COMPUTES WHAT MUST BE REDECLARED  *)
-            let failed_decl = CheckKind.get_defs_to_redecl files_to_parse env in
-            let fast = extend_fast genv fast naming_table failed_decl in
-            let fast = add_old_decls env.naming_table fast in
-            let fast =
-              remove_failed_parsing_map fast stop_at_errors env failed_parsing
-            in
-            (errors, failed_naming, fast))
+        CgroupProfiler.collect_cgroup_stats ~profiling ~stage:"naming"
+        @@ fun () ->
+        let (errorl', failed_naming, fast) = declare_names env fast_parsed in
+        let errors =
+          Errors.(incremental_update_map errors errorl' fast Naming)
+        in
+        (* failed_naming can be a superset of keys in fast - see comment in
+         * Naming_global.ndecl_file *)
+        let fast = extend_fast genv fast naming_table failed_naming in
+        (* COMPUTES WHAT MUST BE REDECLARED  *)
+        let failed_decl = CheckKind.get_defs_to_redecl files_to_parse env in
+        let fast = extend_fast genv fast naming_table failed_decl in
+        let fast = add_old_decls env.naming_table fast in
+        let fast =
+          remove_failed_parsing_map fast stop_at_errors env failed_parsing
+        in
+        (errors, failed_naming, fast)
       in
-      CgroupProfiler.log_to_scuba ~stage:"naming" ~profiling;
       { errors_after_naming = errors; failed_naming; fast }
 
     type redecl_phase1_result = {
@@ -863,23 +850,19 @@ functor
         to_redecl = to_redecl_phase2_deps;
         to_recheck = to_recheck1;
       } =
-        CgroupProfiler.collect_cgroup_stats
-          ~profiling
-          ~stage:"redecl phase 1"
-          ~f:(fun () ->
-            Decl_redecl_service.redo_type_decl
-              ~conservative_redecl:
-                (not
-                   genv.local_config
-                     .ServerLocalConfig.disable_conservative_redecl)
-              ~bucket_size
-              ctx
-              genv.workers
-              (get_classes naming_table)
-              ~previously_oldified_defs:oldified_defs
-              ~defs:fast)
+        CgroupProfiler.collect_cgroup_stats ~profiling ~stage:"redecl phase 1"
+        @@ fun () ->
+        Decl_redecl_service.redo_type_decl
+          ~conservative_redecl:
+            (not
+               genv.local_config.ServerLocalConfig.disable_conservative_redecl)
+          ~bucket_size
+          ctx
+          genv.workers
+          (get_classes naming_table)
+          ~previously_oldified_defs:oldified_defs
+          ~defs:fast
       in
-      CgroupProfiler.log_to_scuba ~stage:"redecl phase 1" ~profiling;
       (* Things that were redeclared are no longer in old heap, so we substract
        * defs_ro_redecl from oldified_defs *)
       let oldified_defs =
@@ -921,21 +904,18 @@ functor
         to_redecl = _;
         to_recheck = to_recheck2;
       } =
-        CgroupProfiler.collect_cgroup_stats
-          ~profiling
-          ~stage:"redecl phase 2"
-          ~f:(fun () ->
-            Decl_redecl_service.redo_type_decl
-              ~conservative_redecl:
-                (not
-                   genv.local_config
-                     .ServerLocalConfig.disable_conservative_redecl)
-              ~bucket_size
-              ctx
-              genv.workers
-              (get_classes naming_table)
-              ~previously_oldified_defs:oldified_defs
-              ~defs:fast_redecl_phase2_now)
+        CgroupProfiler.collect_cgroup_stats ~profiling ~stage:"redecl phase 2"
+        @@ fun () ->
+        Decl_redecl_service.redo_type_decl
+          ~conservative_redecl:
+            (not
+               genv.local_config.ServerLocalConfig.disable_conservative_redecl)
+          ~bucket_size
+          ctx
+          genv.workers
+          (get_classes naming_table)
+          ~previously_oldified_defs:oldified_defs
+          ~defs:fast_redecl_phase2_now
       in
       let errors =
         Errors.(
@@ -957,7 +937,6 @@ functor
              env
              ctx)
       in
-      CgroupProfiler.log_to_scuba ~stage:"redecl phase 2" ~profiling;
       { errors_after_phase2 = errors; needs_phase2_redecl; to_recheck2 }
 
     (** Merge the results of the two redecl phases. *)
@@ -1010,22 +989,19 @@ functor
       let fnl = Relative_path.Set.elements files_to_check in
       let (errorl', delegate_state, telemetry, env', cancelled) =
         let ctx = Provider_utils.ctx_from_server_env env in
-        CgroupProfiler.collect_cgroup_stats
-          ~profiling
-          ~stage:"type check"
-          ~f:(fun () ->
-            Typing_check_service.go_with_interrupt
-              ctx
-              genv.workers
-              env.typing_service.delegate_state
-              telemetry
-              dynamic_view_files
-              fnl
-              ~interrupt
-              ~memory_cap
-              ~check_info:(get_check_info genv env))
+        CgroupProfiler.collect_cgroup_stats ~profiling ~stage:"type check"
+        @@ fun () ->
+        Typing_check_service.go_with_interrupt
+          ctx
+          genv.workers
+          env.typing_service.delegate_state
+          telemetry
+          dynamic_view_files
+          fnl
+          ~interrupt
+          ~memory_cap
+          ~check_info:(get_check_info genv env)
       in
-      CgroupProfiler.log_to_scuba ~stage:"type check" ~profiling;
       log_if_diag_subscribe_changed
         "type_checking.go_with_interrupt"
         ~before:env.diag_subscribe
@@ -1113,7 +1089,7 @@ functor
       let telemetry = Telemetry.create () in
       let env =
         if CheckKind.is_full then
-          { env with full_check = Full_check_started }
+          { env with full_check_status = Full_check_started }
         else
           env
       in
@@ -1524,7 +1500,7 @@ functor
         errors;
         telemetry = typecheck_telemetry;
         files_checked;
-        full_check_done;
+        full_check_done = _;
         needs_recheck;
         total_rechecked_count;
       } =
@@ -1580,6 +1556,21 @@ functor
         |> Telemetry.int_
              ~key:"typecheck_lazy_check_later_count"
              ~value:(Relative_path.Set.cardinal lazy_check_later)
+        |> Telemetry.int_opt
+             ~key:"typecheck_mem_cap"
+             ~value:
+               genv.local_config
+                 .ServerLocalConfig.max_typechecker_worker_memory_mb
+        |> Telemetry.int_opt
+             ~key:"typecheck_defer_decl_threshold"
+             ~value:
+               genv.local_config
+                 .ServerLocalConfig.defer_class_declaration_threshold
+        |> Telemetry.int_opt
+             ~key:"typecheck_defer_mem_threshold"
+             ~value:
+               genv.local_config
+                 .ServerLocalConfig.defer_class_memory_mb_threshold
       in
 
       (* INVALIDATE FILES (EXPERIMENTAL TYPES IN CODEGEN) **********************)
@@ -1600,30 +1591,18 @@ functor
       in
 
       (* STATS LOGGING *********************************************************)
+      if SharedMem.hh_log_level () > 0 then begin
+        Measure.print_stats ();
+        Measure.print_distributions ()
+      end;
       let telemetry =
-        if
-          SharedMem.hh_log_level () = 0
-          && not (GlobalOptions.tco_language_feature_logging env.tcopt)
-        then
-          telemetry
-        else begin
-          Measure.print_stats ();
-          Measure.print_distributions ();
-
-          (* Log lambda counts for full checks where we don't load from a saved state *)
-          if
-            genv.ServerEnv.options |> ServerArgs.no_load
-            && full_check_done
-            && reparse_count = 0
-            (* Ignore incremental updates *)
-          then
-            TypingLogger.log_lambda_counts ();
-
+        if SharedMem.hh_log_level () > 0 then
           Telemetry.object_
             telemetry
             ~key:"shmem"
             ~value:(SharedMem.get_telemetry ())
-        end
+        else
+          telemetry
       in
       ServerDebug.info genv "incremental_done";
 
@@ -1675,6 +1654,7 @@ functor
         Telemetry.duration telemetry ~key:"stop_typing_service" ~start_time
       in
 
+      (* CAUTION! Lots of alerts/dashboards depend on this event, particularly start_t  *)
       HackEventLogger.type_check_end
         (Option.some_if CheckKind.is_full telemetry)
         ~heap_size
@@ -1691,6 +1671,7 @@ functor
     - the `type_check_unsafe` function below:
       - logs the names into the server log
       - uses HackEventLogger to log the names as the check_kind column value
+      - lots of dashboards depend on it
     - serverMain writes it into telemetry
     - HhMonitorInformant greps for it in the server log in order to set
         HackEventLogger's is_lazy_incremental column to true/false
@@ -1713,6 +1694,7 @@ let type_check_unsafe genv env kind start_time profiling =
   | Lazy_check -> HackEventLogger.set_lazy_incremental ()
   | Full_check -> ());
 
+  (* CAUTION! Lots of alerts/dashboards depend on the exact string of check_kind *)
   HackEventLogger.with_check_kind check_kind @@ fun () ->
   Printf.eprintf "******************************************\n";
   match kind with
@@ -1754,7 +1736,7 @@ let type_check_unsafe genv env kind start_time profiling =
       |> Telemetry.duration ~key:"core_end" ~start_time
       |> Telemetry.object_ ~key:"core" ~value:core_telemetry
     in
-    ( if is_full_check_done env.full_check then
+    ( if is_full_check_done env.full_check_status then
       let total = Errors.count env.ServerEnv.errorl in
       let (is_truncated, shown) =
         match env.ServerEnv.diag_subscribe with

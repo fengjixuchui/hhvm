@@ -27,7 +27,7 @@
             param_visibility = (Some Public) }
            ];
          m_cap =
-         (((HH\Capabilities\RxLocal & HH\Capabilities\IO & HH\Capabilities\CippGlobal & HH\Capabilities\Globals & HH\Capabilities\UnrestrictedMutation)),
+         (((HH\Capabilities\AccessStaticVariable & HH\Capabilities\WriteProperty & HH\Capabilities\Output)),
           None);
          m_unsafe_cap = ((mixed), None);
          m_body =
@@ -39,7 +39,7 @@
                     (([4:38-40], int),
                      (Obj_get ((([4:38-40], this), This),
                         (([4:38-40], int), (Id ([4:38-40], "x"))),
-                        OG_nullthrows))),
+                        OG_nullthrows, false))),
                     (([4:38-40], int), (Lvar ([4:38-40], $x))))))));
              ([Pos.none], Noop)];
            fb_annotation = () };
@@ -54,7 +54,7 @@
         ns_const_uses = <opaque>; ns_name = None; ns_auto_ns_map = [];
         ns_is_codegen = false; ns_disable_xhp_element_mangling = false };
       c_user_attributes = []; c_file_attributes = []; c_enum = None;
-      c_pu_enums = []; c_doc_comment = None; c_emit_id = None });
+      c_doc_comment = None; c_emit_id = None });
   (Fun
      { f_span = [7:1-30]; f_annotation = (); f_mode = Mpartial;
        f_ret = ((void), (Some ([7:23-27], (Hprim Tvoid))));
@@ -68,7 +68,7 @@
           param_user_attributes = []; param_visibility = None }
          ];
        f_cap =
-       (((HH\Capabilities\RxLocal & HH\Capabilities\IO & HH\Capabilities\CippGlobal & HH\Capabilities\Globals & HH\Capabilities\UnrestrictedMutation)),
+       (((HH\Capabilities\AccessStaticVariable & HH\Capabilities\WriteProperty & HH\Capabilities\Output)),
         None);
        f_unsafe_cap = ((mixed), None);
        f_body = { fb_ast = [([Pos.none], Noop)]; fb_annotation = () };
@@ -86,7 +86,7 @@
        f_name = ([9:10-13], "\\bar"); f_tparams = [];
        f_where_constraints = []; f_variadic = FVnonVariadic; f_params = [];
        f_cap =
-       (((HH\Capabilities\RxLocal & HH\Capabilities\IO & HH\Capabilities\CippGlobal & HH\Capabilities\Globals & HH\Capabilities\UnrestrictedMutation)),
+       (((HH\Capabilities\AccessStaticVariable & HH\Capabilities\WriteProperty & HH\Capabilities\Output)),
         None);
        f_unsafe_cap = ((mixed), None);
        f_body =
@@ -107,7 +107,7 @@
                    (([11:8-15], int),
                     (Obj_get ((([11:8-12], A), (Lvar ([11:8-12], $obj))),
                        (([11:14-15], int), (Id ([11:14-15], "x"))),
-                       OG_nullthrows)))
+                       OG_nullthrows, false)))
                    )))));
            ([12:3-11],
             (Expr

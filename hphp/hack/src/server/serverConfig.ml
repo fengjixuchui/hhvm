@@ -35,8 +35,6 @@ type t = {
   ignored_paths: string list;
   (* A list of extra paths to search for declarations *)
   extra_paths: Path.t list;
-  (* A list of regexps for paths to ignore for typechecking coroutines *)
-  coroutine_whitelist_paths: string list;
   warn_on_non_opt_build: bool;
 }
 [@@deriving show]
@@ -166,10 +164,6 @@ let process_extra_paths config =
   | Some s -> Str.split config_list_regexp s |> List.map ~f:maybe_relative_path
   | _ -> []
 
-let process_coroutine_whitelist_paths config =
-  SMap.find_opt config "coroutine_whitelist_paths"
-  |> Option.value_map ~f:convert_paths ~default:[]
-
 let process_untrusted_mode config =
   match SMap.find_opt config "untrusted_mode" with
   | Some s ->
@@ -275,7 +269,6 @@ let load ~silent config_filename options : t * ServerLocalConfig.t =
   in
   let ignored_paths = process_ignored_paths config in
   let extra_paths = process_extra_paths config in
-  let coroutine_whitelist_paths = process_coroutine_whitelist_paths config in
   (* Since we use the unix alarm() for our timeouts, a timeout value of 0 means
    * to wait indefinitely *)
   let load_script_timeout = int_ "load_script_timeout" ~default:0 config in
@@ -288,7 +281,6 @@ let load ~silent config_filename options : t * ServerLocalConfig.t =
   let global_opts =
     GlobalOptions.make
       ?po_deregister_php_stdlib:(bool_opt "deregister_php_stdlib" config)
-      ?po_allow_goto:(Option.map ~f:not (bool_opt "disallow_goto" config))
       ?po_disable_static_closures:(bool_opt "disable_static_closures" config)
       ?po_disable_array_typehint:
         (bool_opt "disable_parse_array_typehint" config)
@@ -297,8 +289,12 @@ let load ~silent config_filename options : t * ServerLocalConfig.t =
       ?tco_num_local_workers:local_config.num_local_workers
       ~tco_parallel_type_checking_threshold:
         local_config.parallel_type_checking_threshold
+      ?tco_max_typechecker_worker_memory_mb:
+        local_config.max_typechecker_worker_memory_mb
       ?tco_defer_class_declaration_threshold:
         local_config.defer_class_declaration_threshold
+      ?tco_defer_class_memory_mb_threshold:
+        local_config.defer_class_memory_mb_threshold
       ?tco_max_times_to_defer_type_checking:
         local_config.max_times_to_defer_type_checking
       ?tco_prefetch_deferred_files:(Some local_config.prefetch_deferred_files)
@@ -354,14 +350,13 @@ let load ~silent config_filename options : t * ServerLocalConfig.t =
         local_config.ServerLocalConfig.profile_type_check_duration_threshold
       ~profile_type_check_twice:
         local_config.ServerLocalConfig.profile_type_check_twice
-      ?profile_total_typecheck_duration:
-        (bool_opt "profile_total_typecheck_duration" config)
       ?profile_owner:local_config.ServerLocalConfig.profile_owner
       ~profile_desc:local_config.ServerLocalConfig.profile_desc
       ?tco_like_type_hints:(bool_opt "like_type_hints" config)
       ?tco_union_intersection_type_hints:
         (bool_opt "union_intersection_type_hints" config)
-      ?tco_coeffects:(bool_opt "coeffects" config)
+      ?tco_coeffects:(bool_opt "call_coeffects" config)
+      ?tco_coeffects_local:(bool_opt "local_coeffects" config)
       ?tco_like_casts:(bool_opt "like_casts" config)
       ?tco_simple_pessimize:(float_opt "simple_pessimize" config)
       ?tco_complex_coercion:(bool_opt "complex_coercion" config)
@@ -432,6 +427,8 @@ let load ~silent config_filename options : t * ServerLocalConfig.t =
       ?po_disallow_hash_comments:(bool_opt "disallow_hash_comments" config)
       ?po_disallow_fun_and_cls_meth_pseudo_funcs:
         (bool_opt "disallow_fun_and_cls_meth_pseudo_funcs" config)
+      ~tco_use_direct_decl_parser:
+        local_config.ServerLocalConfig.use_direct_decl_parser
       ()
   in
   Errors.allowed_fixme_codes_strict :=
@@ -457,7 +454,6 @@ let load ~silent config_filename options : t * ServerLocalConfig.t =
       config_hash = Some config_hash;
       ignored_paths;
       extra_paths;
-      coroutine_whitelist_paths;
       warn_on_non_opt_build;
     },
     local_config )
@@ -477,7 +473,6 @@ let default_config =
     config_hash = None;
     ignored_paths = [];
     extra_paths = [];
-    coroutine_whitelist_paths = [];
     warn_on_non_opt_build = false;
   }
 
@@ -509,8 +504,6 @@ let config_hash config = config.config_hash
 let ignored_paths config = config.ignored_paths
 
 let extra_paths config = config.extra_paths
-
-let coroutine_whitelist_paths config = config.coroutine_whitelist_paths
 
 let version config = config.version
 

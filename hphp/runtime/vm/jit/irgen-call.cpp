@@ -103,7 +103,8 @@ void emitCallerInOutChecksUnknown(IRGS& env, SSATmp* callee,
 
 void emitCallerDynamicCallChecksKnown(IRGS& env, const Func* callee) {
   assertx(callee);
-  if (callee->isDynamicallyCallable() && !RO::EvalForbidDynamicCallsWithAttr) {
+  auto const dynCallable = callee->isDynamicallyCallable();
+  if (dynCallable && !RO::EvalForbidDynamicCallsWithAttr) {
     return;
   }
   auto const level = callee->isMethod()
@@ -112,6 +113,7 @@ void emitCallerDynamicCallChecksKnown(IRGS& env, const Func* callee) {
         : RO::EvalForbidDynamicCallsToInstMeth)
     : RO::EvalForbidDynamicCallsToFunc;
   if (level <= 0) return;
+  if (dynCallable && level < 2) return;
   gen(env, RaiseForbiddenDynCall, cns(env, callee));
 }
 
@@ -1791,7 +1793,9 @@ Type callReturnType(const Func* callee) {
 
   if (callee->takesInOutParams()) {
     auto const ty = typeFromRAT(callee->repoReturnType(), callee->cls());
-    if (ty <= TVec) return vecElemType(ty, Type::cns(0), callee->cls()).first;
+    if (ty <= TVec) {
+      return arrLikeElemType(ty, Type::cns(0), callee->cls()).first;
+    }
     return TInitCell;
   }
 
@@ -1826,7 +1830,7 @@ Type callOutType(const Func* callee, uint32_t index) {
   auto const ty = typeFromRAT(callee->repoReturnType(), callee->cls());
   if (ty <= TVec) {
     auto const off = callee->numInOutParams() - index - 1;
-    return vecElemType(ty, Type::cns(off + 1), callee->cls()).first;
+    return arrLikeElemType(ty, Type::cns(off + 1), callee->cls()).first;
   }
   return TInitCell;
 }

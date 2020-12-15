@@ -1,6 +1,6 @@
 { "description" :
   "@generated JSON schema of the Hack Full Fidelity Parser AST",
-  "version" : "2020-10-29-0001",
+  "version" : "2020-12-09-0001",
   "trivia" : [
     { "trivia_kind_name" : "WhiteSpace",
       "trivia_type_name" : "whitespace" },
@@ -61,6 +61,8 @@
       "token_text" : "__construct" },
     { "token_kind" : "Continue",
       "token_text" : "continue" },
+    { "token_kind" : "Ctx",
+      "token_text" : "ctx" },
     { "token_kind" : "Darray",
       "token_text" : "darray" },
     { "token_kind" : "Default",
@@ -119,8 +121,6 @@
       "token_text" : "global" },
     { "token_kind" : "Concurrent",
       "token_text" : "concurrent" },
-    { "token_kind" : "Goto",
-      "token_text" : "goto" },
     { "token_kind" : "If",
       "token_text" : "if" },
     { "token_kind" : "Implements",
@@ -205,8 +205,6 @@
       "token_text" : "string" },
     { "token_kind" : "Super",
       "token_text" : "super" },
-    { "token_kind" : "Suspend",
-      "token_text" : "suspend" },
     { "token_kind" : "Switch",
       "token_text" : "switch" },
     { "token_kind" : "This",
@@ -377,8 +375,6 @@
       "token_text" : "</" },
     { "token_kind" : "LessThanQuestion",
       "token_text" : "<?" },
-    { "token_kind" : "ColonAt",
-      "token_text" : ":@" },
     { "token_kind" : "Backtick",
       "token_text" : "`" },
     { "token_kind" : "XHP",
@@ -721,7 +717,6 @@
         { "field_name" : "parameter_list" },
         { "field_name" : "right_paren" },
         { "field_name" : "capability" },
-        { "field_name" : "capability_provisional" },
         { "field_name" : "colon" },
         { "field_name" : "type" },
         { "field_name" : "where_clause" }
@@ -734,18 +729,6 @@
         { "field_name" : "left_bracket" },
         { "field_name" : "types" },
         { "field_name" : "right_bracket" }
-      ] },
-    { "kind_name" : "CapabilityProvisional",
-      "type_name" : "capability_provisional",
-      "description" : "capability_provisional",
-      "prefix" : "capability_provisional",
-      "fields" : [
-        { "field_name" : "at" },
-        { "field_name" : "left_brace" },
-        { "field_name" : "type" },
-        { "field_name" : "unsafe_plus" },
-        { "field_name" : "unsafe_type" },
-        { "field_name" : "right_brace" }
       ] },
     { "kind_name" : "WhereClause",
       "type_name" : "where_clause",
@@ -894,6 +877,21 @@
         { "field_name" : "type_constraint" },
         { "field_name" : "equal" },
         { "field_name" : "type_specifier" },
+        { "field_name" : "semicolon" }
+      ] },
+    { "kind_name" : "ContextConstDeclaration",
+      "type_name" : "context_const_declaration",
+      "description" : "context_const_declaration",
+      "prefix" : "context_const",
+      "fields" : [
+        { "field_name" : "modifiers" },
+        { "field_name" : "const_keyword" },
+        { "field_name" : "ctx_keyword" },
+        { "field_name" : "name" },
+        { "field_name" : "type_parameters" },
+        { "field_name" : "constraint" },
+        { "field_name" : "equal" },
+        { "field_name" : "ctx_list" },
         { "field_name" : "semicolon" }
       ] },
     { "kind_name" : "DecoratedExpression",
@@ -1202,23 +1200,6 @@
       "fields" : [
         { "field_name" : "keyword" },
         { "field_name" : "expression" },
-        { "field_name" : "semicolon" }
-      ] },
-    { "kind_name" : "GotoLabel",
-      "type_name" : "goto_label",
-      "description" : "goto_label",
-      "prefix" : "goto_label",
-      "fields" : [
-        { "field_name" : "name" },
-        { "field_name" : "colon" }
-      ] },
-    { "kind_name" : "GotoStatement",
-      "type_name" : "goto_statement",
-      "description" : "goto_statement",
-      "prefix" : "goto_statement",
-      "fields" : [
-        { "field_name" : "keyword" },
-        { "field_name" : "label_name" },
         { "field_name" : "semicolon" }
       ] },
     { "kind_name" : "ThrowStatement",
@@ -1805,15 +1786,6 @@
         { "field_name" : "separator" },
         { "field_name" : "right_type" }
       ] },
-    { "kind_name" : "PUAccess",
-      "type_name" : "pu_access",
-      "description" : "pu_access",
-      "prefix" : "pu_access",
-      "fields" : [
-        { "field_name" : "left_type" },
-        { "field_name" : "separator" },
-        { "field_name" : "right_type" }
-      ] },
     { "kind_name" : "VectorTypeSpecifier",
       "type_name" : "vector_type_specifier",
       "description" : "vector_type_specifier",
@@ -1857,6 +1829,14 @@
         { "field_name" : "trailing_comma" },
         { "field_name" : "right_angle" }
       ] },
+    { "kind_name" : "FunctionCtxTypeSpecifier",
+      "type_name" : "function_ctx_type_specifier",
+      "description" : "function_ctx_type_specifier",
+      "prefix" : "function_ctx_type",
+      "fields" : [
+        { "field_name" : "keyword" },
+        { "field_name" : "variable" }
+      ] },
     { "kind_name" : "TypeParameter",
       "type_name" : "type_parameter",
       "description" : "type_parameter",
@@ -1876,6 +1856,14 @@
       "fields" : [
         { "field_name" : "keyword" },
         { "field_name" : "type" }
+      ] },
+    { "kind_name" : "ContextConstraint",
+      "type_name" : "context_constraint",
+      "description" : "context_constraint",
+      "prefix" : "ctx_constraint",
+      "fields" : [
+        { "field_name" : "keyword" },
+        { "field_name" : "ctx_list" }
       ] },
     { "kind_name" : "DarrayTypeSpecifier",
       "type_name" : "darray_type_specifier",
@@ -2099,88 +2087,6 @@
       "fields" : [
         { "field_name" : "hash" },
         { "field_name" : "expression" }
-      ] },
-    { "kind_name" : "PocketAtomExpression",
-      "type_name" : "pocket_atom_expression",
-      "description" : "pocket_atom",
-      "prefix" : "pocket_atom",
-      "fields" : [
-        { "field_name" : "glyph" },
-        { "field_name" : "expression" }
-      ] },
-    { "kind_name" : "PocketIdentifierExpression",
-      "type_name" : "pocket_identifier_expression",
-      "description" : "pocket_identifier",
-      "prefix" : "pocket_identifier",
-      "fields" : [
-        { "field_name" : "qualifier" },
-        { "field_name" : "pu_operator" },
-        { "field_name" : "field" },
-        { "field_name" : "operator" },
-        { "field_name" : "name" }
-      ] },
-    { "kind_name" : "PocketAtomMappingDeclaration",
-      "type_name" : "pocket_atom_mapping_declaration",
-      "description" : "pocket_atom_mapping",
-      "prefix" : "pocket_atom_mapping",
-      "fields" : [
-        { "field_name" : "glyph" },
-        { "field_name" : "name" },
-        { "field_name" : "left_paren" },
-        { "field_name" : "mappings" },
-        { "field_name" : "right_paren" },
-        { "field_name" : "semicolon" }
-      ] },
-    { "kind_name" : "PocketEnumDeclaration",
-      "type_name" : "pocket_enum_declaration",
-      "description" : "pocket_enum_declaration",
-      "prefix" : "pocket_enum",
-      "fields" : [
-        { "field_name" : "attributes" },
-        { "field_name" : "modifiers" },
-        { "field_name" : "enum" },
-        { "field_name" : "name" },
-        { "field_name" : "left_brace" },
-        { "field_name" : "fields" },
-        { "field_name" : "right_brace" }
-      ] },
-    { "kind_name" : "PocketFieldTypeExprDeclaration",
-      "type_name" : "pocket_field_type_expr_declaration",
-      "description" : "pocket_field_type_expr_declaration",
-      "prefix" : "pocket_field_type_expr",
-      "fields" : [
-        { "field_name" : "case" },
-        { "field_name" : "type" },
-        { "field_name" : "name" },
-        { "field_name" : "semicolon" }
-      ] },
-    { "kind_name" : "PocketFieldTypeDeclaration",
-      "type_name" : "pocket_field_type_declaration",
-      "description" : "pocket_field_type_declaration",
-      "prefix" : "pocket_field_type",
-      "fields" : [
-        { "field_name" : "case" },
-        { "field_name" : "type" },
-        { "field_name" : "type_parameter" },
-        { "field_name" : "semicolon" }
-      ] },
-    { "kind_name" : "PocketMappingIdDeclaration",
-      "type_name" : "pocket_mapping_id_declaration",
-      "description" : "pocket_mapping_id_declaration",
-      "prefix" : "pocket_mapping_id",
-      "fields" : [
-        { "field_name" : "name" },
-        { "field_name" : "initializer" }
-      ] },
-    { "kind_name" : "PocketMappingTypeDeclaration",
-      "type_name" : "pocket_mapping_type_declaration",
-      "description" : "pocket_mapping_type_declaration",
-      "prefix" : "pocket_mapping_type",
-      "fields" : [
-        { "field_name" : "keyword" },
-        { "field_name" : "name" },
-        { "field_name" : "equal" },
-        { "field_name" : "type" }
       ] },
 
     { "kind_name" : "Token",

@@ -119,6 +119,7 @@ let parse_check_args cmd =
   let client_logname = ref false in
   let ide_logname = ref false in
   let lsp_logname = ref false in
+  let lock_file = ref false in
   let no_load = ref false in
   let output_json = ref false in
   let prechecked = ref None in
@@ -508,6 +509,7 @@ let parse_check_args cmd =
       ( "--list-files",
         Arg.Unit (fun () -> set_mode MODE_LIST_FILES),
         " (mode) list files with errors" );
+      ("--lock-file", Arg.Set lock_file, " (mode) show lock file name and exit");
       ( "--log-inference-constraints",
         Arg.Set log_inference_constraints,
         "  (for hh debugging purpose only) log type"
@@ -752,6 +754,13 @@ let parse_check_args cmd =
         "Error: please provide at most one www directory\n%!";
       exit 1
   in
+
+  if !lock_file then (
+    let lock_file_link = ServerFiles.lock_file root in
+    Printf.printf "%s\n%!" lock_file_link;
+    exit 0
+  );
+
   if !ide_logname then (
     let ide_log_link = ServerFiles.client_ide_log root in
     Printf.printf "%s\n%!" ide_log_link;
@@ -1060,9 +1069,10 @@ let parse_rage_args () =
           ("hh stuck in infinite loop", `Verbose_hh_start)
         else if String.equal response "3" then
           ("hh monitor problem", `Verbose_hh_start)
-        else if String.equal response "4" then
+        else if String.equal response "4" then begin
+          Extra_rage.verify_typechecker_err_src ();
           ("internal typecheck bug", `No_info)
-        else if String.equal response "5" then
+        end else if String.equal response "5" then
           let () =
             Printf.printf
               "Please elaborate on which errors are incorrect...\nrage> %!"

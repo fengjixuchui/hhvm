@@ -135,8 +135,7 @@ let rec reinfer_type_to_string_exn ty =
     | Tarraykey -> "arraykey"
     | Tresource -> "resource"
     | Tnoreturn -> "noreturn"
-    | Tbool -> "bool"
-    | Tatom _id -> "atom")
+    | Tbool -> "bool")
   | Tapply ((_p, id), _tyl) -> cut_namespace id
   | Taccess (ty, id) ->
     let s = reinfer_type_to_string_exn (get_node ty) in
@@ -306,9 +305,7 @@ let ret_from_fun_kind ?(is_constructor = false) ~is_lambda env pos kind hint =
     | Ast_defs.FAsync ->
       let r = Reason.Rret_fun_kind (pos, kind) in
       mk (r, Tapply ((pos, SN.Classes.cAwaitable), [ret_ty ()]))
-    | Ast_defs.FSync
-    | Ast_defs.FCoroutine ->
-      ret_ty ())
+    | Ast_defs.FSync -> ret_ty ())
   | Some _ -> ret_ty ()
 
 let type_param = Decl_hint.aast_tparam_to_decl_tparam

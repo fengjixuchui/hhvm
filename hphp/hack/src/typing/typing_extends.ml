@@ -140,13 +140,6 @@ let check_final_method parent_class_elt class_elt on_error =
       ~child:pos
       ~on_error:(Some on_error)
 
-let check_memoizelsb_method parent_class_elt class_elt on_error =
-  if get_ce_memoizelsb class_elt then
-    (* we have a __MemoizeLSB method which is overriding something else *)
-    let (lazy parent_pos) = parent_class_elt.ce_pos in
-    let (lazy pos) = class_elt.ce_pos in
-    Errors.override_memoizelsb parent_pos pos on_error
-
 let check_dynamically_callable member_name parent_class_elt class_elt on_error =
   if
     get_ce_dynamicallycallable parent_class_elt
@@ -250,7 +243,6 @@ let check_override
     (* we don't check constructors, as they are already checked
      * in the decl phase *)
     check_final_method parent_class_elt class_elt on_error;
-    check_memoizelsb_method parent_class_elt class_elt on_error;
     check_dynamically_callable member_name parent_class_elt class_elt on_error
   end;
 
@@ -292,14 +284,14 @@ let check_override
       else
         `property );
   if check_params then (
-    let on_error ?code:_ errorl =
+    let on_error ?code:_ claim reasons =
       ( if is_method then
         Errors.bad_method_override
       else
         Errors.bad_prop_override )
         pos
         member_name
-        errorl
+        (claim :: reasons)
         on_error
     in
     let (lazy fty_child) = class_elt.ce_type in
@@ -512,10 +504,11 @@ let check_members
           | `FromProp -> Dep.Prop (parent_class_elt.ce_origin, member_name)
           | `FromConstructor -> Dep.Cstr parent_class_elt.ce_origin
         in
-        Typing_deps.add_idep
-          (Env.get_deps_mode env)
-          (Dep.Class (Cls.name class_))
-          dep;
+        if not (Pos.is_hhi (Cls.pos parent_class)) then
+          Typing_deps.add_idep
+            (Env.get_deps_mode env)
+            (Dep.Class (Cls.name class_))
+            dep;
         check_override
           ~check_member_unique
           env
@@ -568,8 +561,7 @@ let default_constructor_ce class_ =
       ft_tparams = [];
       ft_where_constraints = [];
       ft_params = [];
-      ft_implicit_params = { capability = MakeType.default_capability r };
-      (* TODO(coeffects) relate constructor caps to class caps? *)
+      ft_implicit_params = { capability = CapDefaults pos };
       ft_ret = { et_type = MakeType.void r; et_enforced = false };
       ft_flags = 0;
       ft_reactive = Nonreactive;
@@ -591,7 +583,6 @@ let default_constructor_ce class_ =
         ~lateinit:false
         ~override:false
         ~lsb:false
-        ~memoizelsb:false
         ~synthesized:true
         ~dynamicallycallable:false;
   }
@@ -624,10 +615,11 @@ let check_constructors
       if String.( <> ) parent_cstr.ce_origin cstr.ce_origin then begin
         let parent_cstr = Inst.instantiate_ce psubst parent_cstr in
         let cstr = Inst.instantiate_ce subst cstr in
-        Typing_deps.add_idep
-          (Env.get_deps_mode env)
-          (Dep.Class (Cls.name class_))
-          (Dep.Cstr parent_cstr.ce_origin);
+        if not (Pos.is_hhi (Cls.pos parent_class)) then
+          Typing_deps.add_idep
+            (Env.get_deps_mode env)
+            (Dep.Class (Cls.name class_))
+            (Dep.Cstr parent_cstr.ce_origin);
         check_override
           env
           ~check_member_unique:false
@@ -909,15 +901,15 @@ let check_implements env parent_type type_to_be_checked =
       env
       (parent_class, parent_type)
       (class_, type_to_be_checked)
-      (fun ?code:_ errorl ->
+      (fun ?code:_ claim reasons ->
         (* sadly, enum error reporting requires this to keep the error in the file
            with the enum *)
         if String.equal parent_name_str SN.Classes.cHH_BuiltinEnum then
-          Errors.bad_enum_decl name_pos errorl
+          Errors.bad_enum_decl name_pos (claim :: reasons)
         else
           Errors.bad_decl_override
             parent_name_pos
             parent_name_str
             name_pos
             name_str
-            errorl)
+            (claim :: reasons))

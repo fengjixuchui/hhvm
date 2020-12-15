@@ -187,6 +187,7 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
     | Syntax.GenericTypeSpecifier _
     | Syntax.NullableTypeSpecifier _
     | Syntax.LikeTypeSpecifier _
+    | Syntax.FunctionCtxTypeSpecifier _
     | Syntax.SoftTypeSpecifier _
     | Syntax.ListItem _ ->
       transform_simple env node
@@ -523,7 +524,6 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           function_parameter_list = params;
           function_right_paren = rightp;
           function_capability = cap;
-          function_capability_provisional = cap_provisional;
           function_colon = colon;
           function_type = ret_type;
           function_where_clause = where;
@@ -533,7 +533,6 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           Span (transform_fn_decl_name env modifiers kw name type_params leftp);
           transform_fn_decl_args env params rightp;
           t env cap;
-          t env cap_provisional;
           t env colon;
           when_present colon space;
           t env ret_type;
@@ -563,28 +562,6 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           capability_right_bracket = rb;
         } ->
       Concat [t env lb; t env tys; t env rb]
-    | Syntax.CapabilityProvisional
-        {
-          capability_provisional_at = at;
-          capability_provisional_left_brace = lb;
-          capability_provisional_type = cap;
-          capability_provisional_unsafe_plus = plus;
-          capability_provisional_unsafe_type = unsafe_cap;
-          capability_provisional_right_brace = rb;
-        } ->
-      Concat
-        [
-          t env at;
-          t env lb;
-          Space;
-          t env cap;
-          Space;
-          t env plus;
-          Space;
-          t env unsafe_cap;
-          Space;
-          t env rb;
-        ]
     | Syntax.MethodishDeclaration
         {
           methodish_attribute = attr;
@@ -879,6 +856,37 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           t env eq;
           when_present type_spec (fun _ ->
               Concat [Space; SplitWith Cost.Base; Nest [t env type_spec]]);
+          t env semi;
+          Newline;
+        ]
+    | Syntax.ContextConstDeclaration
+        {
+          context_const_modifiers = modifiers;
+          context_const_const_keyword = kw;
+          context_const_ctx_keyword = ctx_kw;
+          context_const_name = name;
+          context_const_type_parameters = type_params;
+          context_const_constraint = constraint_;
+          context_const_equal = eq;
+          context_const_ctx_list = ctx_list;
+          context_const_semicolon = semi;
+        } ->
+      Concat
+        [
+          handle_possible_list env ~after_each:(fun _ -> Space) modifiers;
+          Space;
+          t env kw;
+          Space;
+          t env ctx_kw;
+          Space;
+          t env name;
+          t env type_params;
+          when_present constraint_ space;
+          t env constraint_;
+          when_present eq space;
+          t env eq;
+          when_present ctx_list (fun _ ->
+              Concat [Space; SplitWith Cost.Base; Nest [t env ctx_list]]);
           t env semi;
           Newline;
         ]
@@ -1330,22 +1338,6 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           return_semicolon = semi;
         } ->
       transform_keyword_expression_statement env kw expr semi
-    | Syntax.GotoLabel { goto_label_name; goto_label_colon } ->
-      Concat [t env goto_label_name; t env goto_label_colon; Newline]
-    | Syntax.GotoStatement
-        {
-          goto_statement_keyword;
-          goto_statement_label_name;
-          goto_statement_semicolon;
-        } ->
-      Concat
-        [
-          t env goto_statement_keyword;
-          Space;
-          t env goto_statement_label_name;
-          t env goto_statement_semicolon;
-          Newline;
-        ]
     | Syntax.ThrowStatement
         { throw_keyword = kw; throw_expression = expr; throw_semicolon = semi }
       ->
@@ -1479,8 +1471,7 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
             TokenKind.(
               (match Token.kind x with
               | Await
-              | Clone
-              | Suspend ->
+              | Clone ->
                 Space
               | Print ->
                 if is_parenthesized then
@@ -2152,6 +2143,9 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
         ]
     | Syntax.TypeConstraint { constraint_keyword = kw; constraint_type } ->
       Concat [t env kw; Space; t env constraint_type]
+    | Syntax.ContextConstraint
+        { ctx_constraint_keyword = kw; ctx_constraint_ctx_list = ctx_list } ->
+      Concat [t env kw; Space; t env ctx_list]
     | Syntax.DarrayTypeSpecifier
         {
           darray_keyword = kw;
@@ -2395,108 +2389,6 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
             | _ -> Nothing
           end;
           t env expr;
-        ]
-    | Syntax.PUAccess _
-    | Syntax.PocketAtomExpression _
-    | Syntax.PocketIdentifierExpression _
-    | Syntax.PocketMappingIdDeclaration _ ->
-      transform_simple env node
-    | Syntax.PocketEnumDeclaration
-        {
-          pocket_enum_attributes = attr;
-          pocket_enum_modifiers = modifiers;
-          pocket_enum_enum = enum_keyword;
-          pocket_enum_name = name;
-          pocket_enum_left_brace = left_brace;
-          pocket_enum_fields = fields;
-          pocket_enum_right_brace = right_brace;
-        } ->
-      Concat
-        [
-          t env attr;
-          when_present attr newline;
-          handle_possible_list env ~after_each:(fun _ -> Space) modifiers;
-          t env enum_keyword;
-          when_present enum_keyword space;
-          t env name;
-          when_present name space;
-          braced_block_nest
-            env
-            left_brace
-            right_brace
-            [handle_possible_list env ~after_each:(fun _ -> Newline) fields];
-          Newline;
-        ]
-    | Syntax.PocketFieldTypeDeclaration
-        {
-          pocket_field_type_case = case_keyword;
-          pocket_field_type_type = type_keyword;
-          pocket_field_type_type_parameter = type_parameter;
-          pocket_field_type_semicolon = semicolon;
-        } ->
-      Concat
-        [
-          t env case_keyword;
-          when_present case_keyword space;
-          t env type_keyword;
-          when_present type_keyword space;
-          t env type_parameter;
-          t env semicolon;
-        ]
-    | Syntax.PocketFieldTypeExprDeclaration
-        {
-          pocket_field_type_expr_case = case_keyword;
-          pocket_field_type_expr_type = type_specifier;
-          pocket_field_type_expr_name = name;
-          pocket_field_type_expr_semicolon = semicolon;
-        } ->
-      Concat
-        [
-          t env case_keyword;
-          when_present case_keyword space;
-          t env type_specifier;
-          when_present type_specifier space;
-          t env name;
-          t env semicolon;
-        ]
-    | Syntax.PocketAtomMappingDeclaration
-        {
-          pocket_atom_mapping_glyph = glyph;
-          pocket_atom_mapping_name = name;
-          pocket_atom_mapping_left_paren = left_paren;
-          pocket_atom_mapping_mappings = mappings;
-          pocket_atom_mapping_right_paren = right_paren;
-          pocket_atom_mapping_semicolon = semicolon;
-        } ->
-      Concat
-        [
-          t env glyph;
-          t env name;
-          braced_block_nest
-            env
-            ~allow_collapse:true
-            left_paren
-            right_paren
-            [handle_possible_list env ~after_each:(fun _ -> Newline) mappings];
-          t env semicolon;
-        ]
-    | Syntax.PocketMappingTypeDeclaration
-        {
-          pocket_mapping_type_keyword = type_keyword;
-          pocket_mapping_type_name = name;
-          pocket_mapping_type_equal = equal_operator;
-          pocket_mapping_type_type = type_specifier;
-        } ->
-      Concat
-        [
-          t env type_keyword;
-          when_present type_keyword space;
-          t env name;
-          when_present name space;
-          t env equal_operator;
-          when_present equal_operator space;
-          SplitWith Cost.Base;
-          Nest [t env type_specifier];
         ]
     | Syntax.ErrorSyntax _ -> raise Hackfmt_error.InvalidSyntax
     | Syntax.EnumClassDeclaration

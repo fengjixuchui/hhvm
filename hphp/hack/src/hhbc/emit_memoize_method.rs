@@ -138,7 +138,7 @@ fn make_memoize_wrapper_method<'a>(
         .tparams
         .iter()
         .any(|tp| tp.reified.is_reified() || tp.reified.is_soft_reified());
-    let is_interceptable = is_method_interceptable(class, &name, emitter.options());
+    let is_interceptable = is_method_interceptable(emitter.options());
     let mut arg_flags = Flags::empty();
     arg_flags.set(Flags::IS_ASYNC, is_async);
     arg_flags.set(Flags::IS_REFIED, is_reified);
@@ -248,7 +248,7 @@ fn make_memoize_method_with_params_code(
         emit_body::emit_deprecation_info(args.scope, args.deprecation_info, emitter.systemlib())?;
     let (begin_label, default_value_setters) =
     // Default value setters belong in the wrapper method not in the original method
-     emit_param::emit_param_default_value_setter(emitter, env, false, pos, hhas_params)?;
+     emit_param::emit_param_default_value_setter(emitter, env, pos, hhas_params)?;
     let fcall_args = {
         let mut fcall_flags = FcallFlags::default();
         if args.flags.contains(Flags::IS_REFIED) {
@@ -444,22 +444,10 @@ fn make_wrapper<'a>(
     )
 }
 
-fn is_method_interceptable(
-    ast_class: &T::Class_,
-    original_id: &method::Type,
-    opts: &Options,
-) -> bool {
-    let difs = opts.hhvm.dynamic_invoke_functions.get();
+fn is_method_interceptable(opts: &Options) -> bool {
     opts.hhvm
         .flags
         .contains(HhvmFlags::JIT_ENABLE_RENAME_FUNCTION)
-        || (!difs.is_empty() && {
-            let class_id = class::Type::from_ast_name(&ast_class.name.1);
-            let class_name = class::Type::to_unmangled_str(&class_id);
-            let method_name = method::Type::to_raw_string(original_id);
-            let name = format!("{}::{}", class_name, method_name).to_ascii_lowercase();
-            difs.contains(&name)
-        })
 }
 
 fn call_cls_method(fcall_args: FcallArgs, args: &Args) -> InstrSeq {

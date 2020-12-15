@@ -81,14 +81,6 @@ module Env : sig
 
   val lvar : genv * lenv -> Ast_defs.id -> positioned_ident
 
-  val goto_label : genv * lenv -> string -> Pos.t option
-
-  val new_goto_label : genv * lenv -> Aast.pstring -> unit
-
-  val new_goto_target : genv * lenv -> Aast.pstring -> unit
-
-  val check_goto_references : genv * lenv -> unit
-
   val scope : genv * lenv -> (genv * lenv -> 'a) -> 'a
 
   val remove_locals : genv * lenv -> Ast_defs.id list -> unit
@@ -107,15 +99,6 @@ end = struct
      * See expr_lambda for details.
      *)
     unbound_handler: unbound_handler option;
-    (*
-     * A map from goto label strings to named labels.
-     *)
-    goto_labels: Pos.t SMap.t ref;
-    (*
-     * A map from goto label used in a goto statement to the position of that
-     * goto label usage.
-     *)
-    goto_targets: Pos.t SMap.t ref;
   }
 
   let get_tparam_names paraml =
@@ -124,13 +107,7 @@ end = struct
       ~f:(fun { Aast.tp_name = (_, x); _ } acc -> SSet.add x acc)
       paraml
 
-  let empty_local unbound_handler =
-    {
-      locals = ref SMap.empty;
-      unbound_handler;
-      goto_labels = ref SMap.empty;
-      goto_targets = ref SMap.empty;
-    }
+  let empty_local unbound_handler = { locals = ref SMap.empty; unbound_handler }
 
   let make_class_genv ctx tparams mode (cid, ckind) namespace final =
     {
@@ -264,7 +241,7 @@ end = struct
   let lvar (genv, env) (p, x) =
     let (p, ident) =
       if
-        String.(SN.Superglobals.globals = x || SN.Superglobals.is_superglobal x)
+        SN.Superglobals.is_superglobal x
         && FileInfo.equal_mode genv.in_mode FileInfo.Mpartial
       then
         (p, Local_id.make_unscoped x)
@@ -275,35 +252,6 @@ end = struct
         | None -> handle_undefined_variable (genv, env) (p, x)
     in
     (p, ident)
-
-  (**
-   * Returns the position of the goto label declaration, if it exists.
-   *)
-  let goto_label (_, { goto_labels; _ }) label =
-    SMap.find_opt label !goto_labels
-
-  (**
-   * Adds a goto label and the position of its declaration to the known labels.
-   *)
-  let new_goto_label (_, { goto_labels; _ }) (pos, label) =
-    goto_labels := SMap.add label pos !goto_labels
-
-  (**
-   * Adds a goto target and its reference position to the known targets.
-   *)
-  let new_goto_target (_, { goto_targets; _ }) (pos, label) =
-    goto_targets := SMap.add label pos !goto_targets
-
-  (**
-   * Ensures that goto statements do not reference goto labels that are not
-   * known within the current lenv.
-   *)
-  let check_goto_references (_, { goto_labels; goto_targets; _ }) =
-    let check_label referenced_label referenced_label_pos =
-      if not (SMap.mem referenced_label !goto_labels) then
-        Errors.goto_label_undefined referenced_label_pos referenced_label
-    in
-    SMap.iter check_label !goto_targets
 
   (* Scope, keep the locals, go and name the body, and leave the
    * local environment intact
@@ -645,9 +593,9 @@ and hint_
         nsi_field_map
     in
     N.Hshape { N.nsi_allows_unknown_fields; nsi_field_map }
+  | Aast.Hmixed -> N.Hmixed
   | Aast.Herr
   | Aast.Hany
-  | Aast.Hmixed
   | Aast.Hnonnull
   | Aast.Habstr _
   | Aast.Hdarray _
@@ -659,7 +607,6 @@ and hint_
   | Aast.Hnothing ->
     Errors.internal_error Pos.none "Unexpected hint not present on legacy AST";
     N.Herr
-  | Aast.Hpu_access (h, id) -> N.Hpu_access (hint ~allow_retonly env h, id)
 
 and hint_id
     ~forbid_this ~allow_retonly ~allow_wildcard ~tp_depth env ((p, x) as id) hl
@@ -933,7 +880,6 @@ let rec class_ ctx c =
   in
   let methods = List.map ~f:(method_ (fst env)) methods in
   let uses = List.map ~f:(hint env) c.Aast.c_uses in
-  let pu_enums = List.map ~f:(class_pu_enum env) c.Aast.c_pu_enums in
   let xhp_attr_uses = List.map ~f:(hint env) c.Aast.c_xhp_attr_uses in
   let (c_req_extends, c_req_implements) = Aast.split_reqs c in
   if
@@ -1005,7 +951,6 @@ let rec class_ ctx c =
     N.c_namespace = c.Aast.c_namespace;
     N.c_enum = enum;
     N.c_doc_comment = c.Aast.c_doc_comment;
-    N.c_pu_enums = pu_enums;
     N.c_xhp_children = c.Aast.c_xhp_children;
     (* Naming and typechecking shouldn't use these fields *)
     N.c_attributes = [];
@@ -1129,7 +1074,8 @@ and enum_ env enum_name e =
     if is_enum_class then
       (* Turn the base type of the enum class into Elt<E, base> *)
       let elt = (pos, SN.Classes.cElt) in
-      (pos, Happly (elt, [enum_hint; old_base]))
+      let h = (pos, Happly (elt, [enum_hint; old_base])) in
+      hint env h
     else
       enum_hint
   in
@@ -1438,7 +1384,7 @@ and method_ genv m =
       { N.fb_ast = []; fb_annotation = Nast.NamedWithUnsafeBlocks }
     | FileInfo.Mstrict
     | FileInfo.Mpartial ->
-      if Nast.is_body_named m.Aast.m_body then (
+      if Nast.is_body_named m.Aast.m_body then
         let env = List.fold_left ~f:Env.add_param m.N.m_params ~init:env in
         let env =
           match m.N.m_variadic with
@@ -1449,9 +1395,8 @@ and method_ genv m =
         in
         let fub_ast = block env m.N.m_body.N.fb_ast in
         let annotation = Nast.Named in
-        Env.check_goto_references env;
         { N.fb_ast = fub_ast; fb_annotation = annotation }
-      ) else
+      else
         failwith "ast_to_nast error unnamedbody in method_"
   in
   let attrs = user_attributes env m.Aast.m_user_attributes in
@@ -1566,7 +1511,6 @@ and fun_ ctx f =
         in
         let fb_ast = block env f.Aast.f_body.Aast.fb_ast in
         let annotation = Nast.Named in
-        let _ = Env.check_goto_references env in
         { N.fb_ast; fb_annotation = annotation }
       else
         failwith "ast_to_nast error unnamedbody in fun_"
@@ -1625,8 +1569,6 @@ and stmt env (pos, st) =
     | Aast.Continue -> Aast.Continue
     | Aast.Throw e -> N.Throw (expr env e)
     | Aast.Return e -> N.Return (Option.map e (expr env))
-    | Aast.GotoLabel label -> name_goto_label env label
-    | Aast.Goto label -> name_goto env label
     | Aast.Awaitall (el, b) -> awaitall_stmt env el b
     | Aast.If (e, b1, b2) -> if_stmt env e b1 b2
     | Aast.Do (b, e) -> do_stmt env b e
@@ -1803,33 +1745,6 @@ and block ?(new_scope = true) env stl =
 
 and branch env stmt_l = Env.scope env (stmt_list stmt_l)
 
-(**
- * Names a goto label.
- *
- * The goto label is added to the local labels if it is not already there.
- * Otherwise, an error is produced.
- *
- *)
-and name_goto_label env ((label_pos, label_name) as label) =
-  (match Env.goto_label env label_name with
-  | Some original_declaration_pos ->
-    Errors.goto_label_already_defined
-      label_name
-      label_pos
-      original_declaration_pos
-  | None -> Env.new_goto_label env label);
-  N.GotoLabel label
-
-(**
- * Names a goto target.
- *
- * The goto statement's target label is added to the local goto targets.
- *
- *)
-and name_goto env label =
-  Env.new_goto_target env label;
-  N.Goto label
-
 and awaitall_stmt env el b =
   let el =
     List.map
@@ -1863,7 +1778,6 @@ and expr env (p, e) = (p, expr_ env p e)
 
 and expr_ env p (e : Nast.expr_) =
   match e with
-  | Aast.ParenthesizedExpr e -> N.ParenthesizedExpr (expr env e)
   | Aast.Varray (ta, l) ->
     N.Varray (Option.map ~f:(targ env) ta, List.map l (expr env))
   | Aast.Darray (tap, l) ->
@@ -1944,27 +1858,27 @@ and expr_ env p (e : Nast.expr_) =
   | Aast.Lvar x ->
     let x = (fst x, Local_id.to_string @@ snd x) in
     N.Lvar (Env.lvar env x)
-  | Aast.PU_atom x -> N.PU_atom x
-  | Aast.Obj_get (e1, e2, nullsafe) ->
+  | Aast.Obj_get (e1, e2, nullsafe, in_parens) ->
     (* If we encounter Obj_get(_,_,true) by itself, then it means "?->"
        is being used for instance property access; see the case below for
        handling nullsafe instance method calls to see how this works *)
-    N.Obj_get (expr env e1, expr_obj_get_name env e2, nullsafe)
+    N.Obj_get (expr env e1, expr_obj_get_name env e2, nullsafe, in_parens)
   | Aast.Array_get ((p, Aast.Lvar x), None) ->
     let x = (fst x, Local_id.to_string @@ snd x) in
     let id = (p, N.Lvar (Env.lvar env x)) in
     N.Array_get (id, None)
   | Aast.Array_get (e1, e2) -> N.Array_get (expr env e1, oexpr env e2)
-  | Aast.Class_get ((_, Aast.CIexpr (_, Aast.Id x1)), Aast.CGstring x2) ->
-    N.Class_get (make_class_id env x1, N.CGstring x2)
-  | Aast.Class_get ((_, Aast.CIexpr (_, Aast.Lvar (p, lid))), Aast.CGstring x2)
-    ->
+  | Aast.Class_get
+      ((_, Aast.CIexpr (_, Aast.Id x1)), Aast.CGstring x2, in_parens) ->
+    N.Class_get (make_class_id env x1, N.CGstring x2, in_parens)
+  | Aast.Class_get
+      ((_, Aast.CIexpr (_, Aast.Lvar (p, lid))), Aast.CGstring x2, in_parens) ->
     let x1 = (p, Local_id.to_string lid) in
-    N.Class_get (make_class_id env x1, N.CGstring x2)
-  | Aast.Class_get ((_, Aast.CIexpr x1), Aast.CGstring _) ->
+    N.Class_get (make_class_id env x1, N.CGstring x2, in_parens)
+  | Aast.Class_get ((_, Aast.CIexpr x1), Aast.CGstring _, _) ->
     ensure_name_not_dynamic env x1;
     N.Any
-  | Aast.Class_get ((_, Aast.CIexpr x1), Aast.CGexpr x2) ->
+  | Aast.Class_get ((_, Aast.CIexpr x1), Aast.CGexpr x2, _) ->
     ensure_name_not_dynamic env x1;
     ensure_name_not_dynamic env x2;
     N.Any
@@ -1978,13 +1892,6 @@ and expr_ env p (e : Nast.expr_) =
     let x1 = (p, Local_id.to_string lid) in
     N.Class_const (make_class_id env x1, x2)
   | Aast.Class_const _ -> (* TODO: report error in strict mode *) N.Any
-  | Aast.PU_identifier ((_, c), s1, s2) ->
-    begin
-      match c with
-      | Aast.CIexpr (_, Aast.Id x1) ->
-        N.PU_identifier (make_class_id env x1, s1, s2)
-      | _ -> failwith "TODO(T35357243): Error during parsing of PU_identifier"
-    end
   | Aast.Call ((_, Aast.Id (p, pseudo_func)), tal, el, unpacked_element)
     when String.equal pseudo_func SN.SpecialFunctions.echo ->
     arg_unpack_unexpected unpacked_element;
@@ -2131,13 +2038,6 @@ and expr_ env p (e : Nast.expr_) =
         N.Any
     end
   | Aast.Call ((p, Aast.Id (_, cn)), _, el, unpacked_element)
-    when String.equal cn SN.SpecialFunctions.assert_ ->
-    arg_unpack_unexpected unpacked_element;
-    if List.length el <> 1 then Errors.assert_arity p;
-    N.Assert
-      (N.AE_assert
-         (Option.value_map (List.hd el) ~default:(p, N.Any) ~f:(expr env)))
-  | Aast.Call ((p, Aast.Id (_, cn)), _, el, unpacked_element)
     when String.equal cn SN.SpecialFunctions.tuple ->
     arg_unpack_unexpected unpacked_element;
     (match el with
@@ -2154,10 +2054,14 @@ and expr_ env p (e : Nast.expr_) =
      to match the entire "Call(Obj_get(..), ..)" pattern here so that we
      only match instance method calls *)
   | Aast.Call
-      ((p, Aast.Obj_get (e1, e2, Aast.OG_nullsafe)), tal, el, unpacked_element)
-    ->
+      ( (p, Aast.Obj_get (e1, e2, Aast.OG_nullsafe, in_parens)),
+        tal,
+        el,
+        unpacked_element ) ->
     N.Call
-      ( (p, N.Obj_get (expr env e1, expr_obj_get_name env e2, N.OG_nullsafe)),
+      ( ( p,
+          N.Obj_get
+            (expr env e1, expr_obj_get_name env e2, N.OG_nullsafe, in_parens) ),
         targl env p tal,
         exprl env el,
         oexpr env unpacked_element )
@@ -2181,9 +2085,7 @@ and expr_ env p (e : Nast.expr_) =
   | Aast.Yield_break -> N.Yield_break
   | Aast.Yield e -> N.Yield (afield env e)
   | Aast.Await e -> N.Await (expr env e)
-  | Aast.Suspend e -> N.Suspend (expr env e)
   | Aast.List el -> N.List (exprl env el)
-  | Aast.Expr_list el -> N.Expr_list (exprl env el)
   | Aast.Cast (ty, e2) ->
     let ((p, x), hl) =
       match ty with
@@ -2305,7 +2207,6 @@ and expr_ env p (e : Nast.expr_) =
           (convert_shape_name env pname, expr env value))
     in
     N.Shape shp
-  | Aast.BracedExpr _ -> N.Any
   | Aast.Import _ -> N.Any
   | Aast.Omitted -> N.Omitted
   | Aast.Callconv (kind, e) -> N.Callconv (kind, expr env e)
@@ -2321,7 +2222,6 @@ and expr_ env p (e : Nast.expr_) =
   | Aast.Method_caller _
   | Aast.Smethod_id _
   | Aast.Pair _
-  | Aast.Assert _
   | Aast.Any ->
     Errors.internal_error
       p
@@ -2461,71 +2361,6 @@ and attr env at =
   | Aast.Xhp_spread e -> N.Xhp_spread (expr env e)
 
 and string2 env idl = List.map idl (expr env)
-
-and class_pu_enum env pu_enum =
-  let open Aast in
-  (* Erase the variance information, we don't need it *)
-  let pu_case_types =
-    List.map
-      ~f:(fun tp -> { tp with tp_variance = Ast_defs.Invariant })
-      pu_enum.pu_case_types
-  in
-  (* We create here an extended environment to type the abstract part
-     of a PU enumeration (namely `case type` and `case` statement).
-     Since we are typing the abstract part (`case type/ case`), we only
-     add their name, without hints.
-  *)
-  let env_with_case_types =
-    let (genv, lenv) = env in
-    (extend_tparams genv pu_case_types, lenv)
-  in
-  let pu_case_values =
-    List.map
-      ~f:(fun (sid, h) -> (sid, hint ~forbid_this:true env_with_case_types h))
-      pu_enum.pu_case_values
-  in
-  let pu_members =
-    let member { pum_atom; pum_types; pum_exprs } =
-      let pum_types =
-        List.map pum_types ~f:(fun (id, h) ->
-            (id, hint ~forbid_this:true env h))
-      in
-      (* Now that the abstract part is translated, we are going to do the same
-         for each atom declaration (namely `:@A (type T = ..., foo = bar)`).
-         This time, the original environment is extended with the PU types
-         _and_ their specific hints since we have everything at hand
-      *)
-      let env_with_mapped_types =
-        let make_tparam (sid, hint) =
-          {
-            tp_variance = Ast_defs.Invariant;
-            tp_name = sid;
-            tp_parameters = [];
-            tp_constraints = [(Ast_defs.Constraint_eq, hint)];
-            tp_reified = Erased;
-            tp_user_attributes = [];
-          }
-        in
-        let (genv, lenv) = env in
-        (extend_tparams genv (List.map ~f:make_tparam pum_types), lenv)
-      in
-      let pum_exprs =
-        List.map ~f:(fun (s, e) -> (s, expr env_with_mapped_types e)) pum_exprs
-      in
-      { pum_atom; pum_types; pum_exprs }
-    in
-    List.map ~f:member pu_enum.pu_members
-  in
-  let pu_case_types = type_paraml env pu_case_types in
-  {
-    pu_annotation = ();
-    pu_name = pu_enum.pu_name;
-    pu_user_attributes = pu_enum.pu_user_attributes;
-    pu_is_final = pu_enum.pu_is_final;
-    pu_case_types;
-    pu_case_values;
-    pu_members;
-  }
 
 let record_field env rf =
   let (id, h, e) = rf in

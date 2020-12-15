@@ -11,8 +11,8 @@ function handler($signo) {
       exit;
     } else {
       echo "parent: I received SIGUSR2, switching to new handler\n";
-      pcntl_signal(SIGUSR1, "newhandler");
-      pcntl_signal(SIGUSR2, "newhandler");
+      pcntl_signal(SIGUSR1, newhandler<>);
+      pcntl_signal(SIGUSR2, newhandler<>);
       echo "parent: sending SIGUSR2 to child as ack\n";
       posix_kill(SignalChangeHandlerAfterForkPhp::$child, SIGUSR2);
     }
@@ -42,10 +42,13 @@ function waitForSignal($nsec) {
 }
 
 function main() {
-  pcntl_signal(SIGUSR1, fun("handler"));
-  pcntl_signal(SIGUSR2, fun("handler"));
+  pcntl_signal(SIGUSR1, handler<>);
+  pcntl_signal(SIGUSR2, handler<>);
 
   SignalChangeHandlerAfterForkPhp::$child = pcntl_fork();  // 0 in the child process
+
+  // FIXME(T80291213): fix race condition in dbgo mode
+  sleep(1);
 
   if (SignalChangeHandlerAfterForkPhp::$child == 0) {
     echo "do some work in child process\n";

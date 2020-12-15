@@ -44,6 +44,7 @@ type subdecl_kind =
   | Decl_errors
   | Implements_dynamic
   (* Lazy *)
+  | Linearization
   | Construct
   | Need_init
   | Get_ancestor of string [@printer (fun fmt _s -> fprintf fmt "Get_ancestor")]
@@ -73,10 +74,8 @@ type subdecl_kind =
   | All_ancestors
   | All_ancestor_names
   | All_ancestor_reqs
-  | Get_pu_enum of string [@printer (fun fmt _s -> fprintf fmt "Get_pu_enum")]
   | Consts
   | Typeconsts
-  | Pu_enums
   | Props
   | SProps
   | Methods
@@ -109,8 +108,7 @@ let subdecl_member_name (subdecl_kind : subdecl_kind) : string option =
   | Get_method s
   | Has_method s
   | Get_smethod s
-  | Has_smethod s
-  | Get_pu_enum s ->
+  | Has_smethod s ->
     Some s
   | _ -> None
 
@@ -131,6 +129,7 @@ let subdecl_eagerness (subdecl_kind : subdecl_kind) : string =
   | Decl_errors
   | Implements_dynamic ->
     "shallow"
+  | Linearization
   | Construct
   | Need_init
   | Get_ancestor _
@@ -157,10 +156,8 @@ let subdecl_eagerness (subdecl_kind : subdecl_kind) : string =
   | All_ancestors
   | All_ancestor_names
   | All_ancestor_reqs
-  | Get_pu_enum _
   | Consts
   | Typeconsts
-  | Pu_enums
   | Props
   | SProps
   | Methods

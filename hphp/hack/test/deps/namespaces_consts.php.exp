@@ -1,2 +1,2 @@
-Class HH\Contexts\defaults -> Fun NS\bar
+Class HH\Capabilities\AccessStaticVariable -> Fun NS\bar
 GConst NS\C -> Fun NS\bar

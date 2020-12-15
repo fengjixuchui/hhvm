@@ -13,7 +13,9 @@ type t = {
   tco_dynamic_view: bool;
   tco_num_local_workers: int option;
   tco_parallel_type_checking_threshold: int;
+  tco_max_typechecker_worker_memory_mb: int option;
   tco_defer_class_declaration_threshold: int option;
+  tco_defer_class_memory_mb_threshold: int option;
   tco_max_times_to_defer_type_checking: int option;
   tco_prefetch_deferred_files: bool;
   tco_remote_type_check_threshold: int option;
@@ -53,12 +55,12 @@ type t = {
   po_rust_parser_errors: bool;
   profile_type_check_duration_threshold: float;
   profile_type_check_twice: bool;
-  profile_total_typecheck_duration: bool;
   profile_owner: string option;
   profile_desc: string;
   tco_like_type_hints: bool;
   tco_union_intersection_type_hints: bool;
   tco_coeffects: bool;
+  tco_coeffects_local: bool;
   tco_like_casts: bool;
   tco_simple_pessimize: float;
   tco_complex_coercion: bool;
@@ -114,6 +116,9 @@ type t = {
   tco_enable_sound_dynamic: bool;
   po_disallow_hash_comments: bool;
   po_disallow_fun_and_cls_meth_pseudo_funcs: bool;
+  tco_use_direct_decl_parser: bool;
+  tco_ifc_enabled: bool;
+  po_enable_coeffects: bool;
 }
 [@@deriving eq, show]
 
@@ -137,11 +142,6 @@ let tco_experimental_forbid_nullable_cast = "forbid_nullable_cast"
 
 let tco_experimental_disallow_static_memoized = "disallow_static_memoized"
 
-(*
- * Allows parsing of coroutine functions/suspend operator
- *)
-let tco_experimental_coroutines = "coroutines"
-
 (**
  * Prevent type param names from shadowing class names
  *)
@@ -153,12 +153,6 @@ let tco_experimental_type_param_shadowing = "type_param_shadowing"
  *)
 let tco_experimental_abstract_type_const_with_default =
   "abstract_type_const_with_default"
-
-(*
-* Turn on information flow control attributes (i.e. Governed) in
-* the typechecker
-*)
-let tco_experimental_ifc = "ifc_enabled"
 
 (*
 * Allow typechecker to do global inference and infer IFC flows
@@ -181,10 +175,8 @@ let tco_experimental_all =
          tco_experimental_isarray;
          tco_experimental_generics_arity;
          tco_experimental_forbid_nullable_cast;
-         tco_experimental_coroutines;
          tco_experimental_disallow_static_memoized;
          tco_experimental_abstract_type_const_with_default;
-         tco_experimental_ifc;
          tco_experimental_infer_flows;
          tco_experimental_case_sensitive_inheritance;
        ]
@@ -201,7 +193,9 @@ let default =
     tco_dynamic_view = false;
     tco_num_local_workers = None;
     tco_parallel_type_checking_threshold = 10;
+    tco_max_typechecker_worker_memory_mb = None;
     tco_defer_class_declaration_threshold = None;
+    tco_defer_class_memory_mb_threshold = None;
     tco_max_times_to_defer_type_checking = None;
     tco_prefetch_deferred_files = false;
     tco_remote_type_check_threshold = None;
@@ -241,12 +235,12 @@ let default =
     po_rust_parser_errors = false;
     profile_type_check_duration_threshold = 0.05;
     profile_type_check_twice = false;
-    profile_total_typecheck_duration = false;
     profile_owner = None;
     profile_desc = "";
     tco_like_type_hints = false;
     tco_union_intersection_type_hints = false;
     tco_coeffects = false;
+    tco_coeffects_local = false;
     tco_like_casts = false;
     tco_simple_pessimize = 0.0;
     tco_complex_coercion = false;
@@ -302,6 +296,9 @@ let default =
     tco_enable_sound_dynamic = false;
     po_disallow_hash_comments = false;
     po_disallow_fun_and_cls_meth_pseudo_funcs = false;
+    tco_use_direct_decl_parser = false;
+    tco_ifc_enabled = false;
+    po_enable_coeffects = false;
   }
 
 let make
@@ -318,7 +315,9 @@ let make
     ?tco_num_local_workers
     ?(tco_parallel_type_checking_threshold =
       default.tco_parallel_type_checking_threshold)
+    ?tco_max_typechecker_worker_memory_mb
     ?tco_defer_class_declaration_threshold
+    ?tco_defer_class_memory_mb_threshold
     ?tco_max_times_to_defer_type_checking
     ?(tco_prefetch_deferred_files = default.tco_prefetch_deferred_files)
     ?tco_remote_type_check_threshold
@@ -355,14 +354,13 @@ let make
     ?(profile_type_check_duration_threshold =
       default.profile_type_check_duration_threshold)
     ?(profile_type_check_twice = default.profile_type_check_twice)
-    ?(profile_total_typecheck_duration =
-      default.profile_total_typecheck_duration)
     ?profile_owner
     ?(profile_desc = default.profile_desc)
     ?(tco_like_type_hints = default.tco_like_type_hints)
     ?(tco_union_intersection_type_hints =
       default.tco_union_intersection_type_hints)
     ?(tco_coeffects = default.tco_coeffects)
+    ?(tco_coeffects_local = default.tco_coeffects_local)
     ?(tco_like_casts = default.tco_like_casts)
     ?(tco_simple_pessimize = default.tco_simple_pessimize)
     ?(tco_complex_coercion = default.tco_complex_coercion)
@@ -430,6 +428,9 @@ let make
     ?(po_disallow_hash_comments = default.po_disallow_hash_comments)
     ?(po_disallow_fun_and_cls_meth_pseudo_funcs =
       default.po_disallow_fun_and_cls_meth_pseudo_funcs)
+    ?(tco_use_direct_decl_parser = default.tco_use_direct_decl_parser)
+    ?(tco_ifc_enabled = default.tco_ifc_enabled)
+    ?(po_enable_coeffects = default.po_enable_coeffects)
     () =
   {
     tco_experimental_features;
@@ -437,7 +438,9 @@ let make
     tco_dynamic_view;
     tco_num_local_workers;
     tco_parallel_type_checking_threshold;
+    tco_max_typechecker_worker_memory_mb;
     tco_defer_class_declaration_threshold;
+    tco_defer_class_memory_mb_threshold;
     tco_max_times_to_defer_type_checking;
     tco_prefetch_deferred_files;
     tco_remote_type_check_threshold;
@@ -477,12 +480,12 @@ let make
     po_rust_parser_errors;
     profile_type_check_duration_threshold;
     profile_type_check_twice;
-    profile_total_typecheck_duration;
     profile_owner;
     profile_desc;
     tco_like_type_hints;
     tco_union_intersection_type_hints;
     tco_coeffects;
+    tco_coeffects_local;
     tco_like_casts;
     tco_simple_pessimize;
     tco_complex_coercion;
@@ -538,6 +541,9 @@ let make
     tco_enable_sound_dynamic;
     po_disallow_hash_comments;
     po_disallow_fun_and_cls_meth_pseudo_funcs;
+    tco_use_direct_decl_parser;
+    tco_ifc_enabled;
+    po_enable_coeffects;
   }
 
 let tco_experimental_feature_enabled t s =
@@ -552,8 +558,14 @@ let tco_num_local_workers t = t.tco_num_local_workers
 let tco_parallel_type_checking_threshold t =
   t.tco_parallel_type_checking_threshold
 
+let tco_max_typechecker_worker_memory_mb t =
+  t.tco_max_typechecker_worker_memory_mb
+
 let tco_defer_class_declaration_threshold t =
   t.tco_defer_class_declaration_threshold
+
+let tco_defer_class_memory_mb_threshold t =
+  t.tco_defer_class_memory_mb_threshold
 
 let tco_max_times_to_defer_type_checking t =
   t.tco_max_times_to_defer_type_checking
@@ -639,8 +651,6 @@ let profile_type_check_duration_threshold t =
 
 let profile_type_check_twice t = t.profile_type_check_twice
 
-let profile_total_typecheck_duration t = t.profile_total_typecheck_duration
-
 let profile_owner t = t.profile_owner
 
 let profile_desc t = t.profile_desc
@@ -649,9 +659,13 @@ let tco_like_type_hints t = t.tco_like_type_hints
 
 let tco_union_intersection_type_hints t = t.tco_union_intersection_type_hints
 
-let coeffects t = t.tco_coeffects
+let tco_call_coeffects t = t.tco_coeffects
 
-let set_coeffects t = { t with tco_coeffects = true }
+let tco_local_coeffects t = t.tco_coeffects_local
+
+let ifc_enabled t = t.tco_ifc_enabled
+
+let enable_ifc t = { t with tco_ifc_enabled = true }
 
 let tco_like_casts t = t.tco_like_casts
 
@@ -748,6 +762,8 @@ let po_disable_xhp_children_declarations t =
 
 let po_enable_enum_classes t = t.po_enable_enum_classes
 
+let po_enable_coeffects t = t.po_enable_coeffects
+
 let po_disable_modes t = t.po_disable_modes
 
 let po_disable_hh_ignore_error t = t.po_disable_hh_ignore_error
@@ -772,3 +788,5 @@ let po_disallow_hash_comments t = t.po_disallow_hash_comments
 
 let po_disallow_fun_and_cls_meth_pseudo_funcs t =
   t.po_disallow_fun_and_cls_meth_pseudo_funcs
+
+let tco_use_direct_decl_parser t = t.tco_use_direct_decl_parser

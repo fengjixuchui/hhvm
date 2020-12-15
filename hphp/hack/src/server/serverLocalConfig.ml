@@ -121,6 +121,14 @@ module RemoteTypeCheck = struct
     worker_vfs_checkout_threshold: int;
     (* File system mode used by ArtifactStore *)
     file_system_mode: ArtifactStore.file_system_mode;
+    (* Max artifact size to use CAS; otherwise use everstore *)
+    max_cas_bytes: int;
+    (* Max artifact size to inline into transport channel *)
+    max_artifact_inline_bytes: int;
+    (* [0.0 - 1.0] ratio that specifies how much portion of the total payload
+    should be used in remote workers initial payload. Default is 0.0 which means
+    one bucket and no special bundling for initial payload *)
+    remote_initial_payload_ratio: float;
   }
 
   let default =
@@ -140,6 +148,9 @@ module RemoteTypeCheck = struct
       worker_min_log_level = Hh_logger.Level.Info;
       worker_vfs_checkout_threshold = 10_000;
       file_system_mode = ArtifactStore.Distributed;
+      max_cas_bytes = 50_000_000;
+      max_artifact_inline_bytes = 2000;
+      remote_initial_payload_ratio = 0.0;
     }
 
   let load ~current_version ~default config =
@@ -165,6 +176,19 @@ module RemoteTypeCheck = struct
       | Some mode -> mode
       | None -> Distributed
     in
+
+    let max_cas_bytes =
+      int_ "max_cas_bytes" ~prefix ~default:default.max_cas_bytes config
+    in
+
+    let max_artifact_inline_bytes =
+      int_
+        "max_artifact_inline_bytes"
+        ~prefix
+        ~default:default.max_artifact_inline_bytes
+        config
+    in
+
     let enabled_on_errors =
       string_list
         "enabled_on_errors"
@@ -206,6 +230,13 @@ module RemoteTypeCheck = struct
         config
     in
     let recheck_threshold = int_opt "recheck_threshold" ~prefix config in
+    let remote_initial_payload_ratio =
+      float_
+        "remote_initial_payload_ratio"
+        ~prefix
+        ~default:default.remote_initial_payload_ratio
+        config
+    in
     let load_naming_table_on_full_init =
       bool_if_min_version
         "load_naming_table_on_full_init"
@@ -266,6 +297,9 @@ module RemoteTypeCheck = struct
       worker_min_log_level;
       worker_vfs_checkout_threshold;
       file_system_mode;
+      max_cas_bytes;
+      max_artifact_inline_bytes;
+      remote_initial_payload_ratio;
     }
 end
 
@@ -451,6 +485,8 @@ type t = {
   (* If set, defers class declarations after N lazy declarations; if not set,
     always lazily declares classes not already in cache. *)
   defer_class_declaration_threshold: int option;
+  (* If set, defers class declaration if worker memory exceeds threshold. *)
+  defer_class_memory_mb_threshold: int option;
   (* If set, prevents type checking of files from being deferred more than
     the number of times greater than or equal to the threshold. If not set,
     defers class declarations indefinitely. *)
@@ -484,6 +520,8 @@ type t = {
   tico_invalidate_files: bool;
   (* Use finer grain hh_server dependencies *)
   tico_invalidate_smart: bool;
+  (* Enable use of the direct decl parser for parsing type signatures. *)
+  use_direct_decl_parser: bool;
   (* If --profile-log, we'll record telemetry on typechecks that took longer than the threshold. In case of profile_type_check_twice we judge by the second type check. *)
   profile_type_check_duration_threshold: float;
   (* The flag "--config profile_type_check_twice=true" causes each file to be typechecked twice in succession. If --profile-log then both times are logged. *)
@@ -499,6 +537,8 @@ type t = {
   (* Allows unstabled features to be enabled within a file via the '__EnableUnstableFeatures' attribute *)
   allow_unstable_features: bool;
   watchman: Watchman.t;
+  (* If enabled, saves naming table into a temp folder and uploads it to the remote typechecker *)
+  save_and_upload_naming_table: bool;
 }
 
 let default =
@@ -555,6 +595,7 @@ let default =
     num_local_workers = None;
     parallel_type_checking_threshold = 10;
     defer_class_declaration_threshold = None;
+    defer_class_memory_mb_threshold = None;
     max_times_to_defer_type_checking = None;
     prefetch_deferred_files = false;
     recheck_capture = RecheckCapture.default;
@@ -572,6 +613,7 @@ let default =
     symbolindex_file = None;
     tico_invalidate_files = false;
     tico_invalidate_smart = false;
+    use_direct_decl_parser = false;
     profile_type_check_duration_threshold = 0.05;
     profile_type_check_twice = false;
     profile_decling = Typing_service_types.DeclingOff;
@@ -581,6 +623,7 @@ let default =
     go_to_implementation = true;
     allow_unstable_features = false;
     watchman = Watchman.default;
+    save_and_upload_naming_table = false;
   }
 
 let path =
@@ -927,6 +970,9 @@ let load_ fn ~silent ~current_version overrides =
   let defer_class_declaration_threshold =
     int_opt "defer_class_declaration_threshold" config
   in
+  let defer_class_memory_mb_threshold =
+    int_opt "defer_class_memory_mb_threshold" config
+  in
   let max_times_to_defer_type_checking =
     int_opt "max_times_to_defer_type_checking" config
   in
@@ -1001,6 +1047,12 @@ let load_ fn ~silent ~current_version overrides =
       ~default:default.tico_invalidate_smart
       config
   in
+  let use_direct_decl_parser =
+    bool_if_version
+      "use_direct_decl_parser"
+      ~default:default.use_direct_decl_parser
+      config
+  in
   let profile_type_check_duration_threshold =
     float_
       "profile_type_check_duration_threshold"
@@ -1039,6 +1091,12 @@ let load_ fn ~silent ~current_version overrides =
     bool_if_version
       "allow_unstable_features"
       ~default:default.allow_unstable_features
+      config
+  in
+  let save_and_upload_naming_table =
+    bool_if_version
+      "save_and_upload_naming_table"
+      ~default:default.save_and_upload_naming_table
       config
   in
   {
@@ -1093,6 +1151,7 @@ let load_ fn ~silent ~current_version overrides =
     num_local_workers;
     parallel_type_checking_threshold;
     defer_class_declaration_threshold;
+    defer_class_memory_mb_threshold;
     max_times_to_defer_type_checking;
     prefetch_deferred_files;
     recheck_capture;
@@ -1110,6 +1169,7 @@ let load_ fn ~silent ~current_version overrides =
     symbolindex_file;
     tico_invalidate_files;
     tico_invalidate_smart;
+    use_direct_decl_parser;
     profile_type_check_duration_threshold;
     profile_type_check_twice;
     profile_decling;
@@ -1119,6 +1179,7 @@ let load_ fn ~silent ~current_version overrides =
     allow_unstable_features;
     watchman;
     force_remote_type_check;
+    save_and_upload_naming_table;
   }
 
 let load ~silent ~current_version config_overrides =

@@ -13,7 +13,14 @@ open Typing_defs
 
 type class_t
 
-val get : Provider_context.t -> string -> class_t option
+val get :
+  Provider_context.t ->
+  string ->
+  (Provider_context.t ->
+  Relative_path.t ->
+  string ->
+  Decl_defs.decl_class_type * Decl_heap.class_members option) ->
+  class_t option
 
 module Api : sig
   (** This type "t" is what all APIs operate upon. It includes
@@ -27,6 +34,9 @@ module Api : sig
   val need_init : t -> bool
 
   val members_fully_known : t -> bool
+
+  val linearization :
+    t -> Decl_defs.linearization_kind -> Decl_defs.mro_element list
 
   val abstract : t -> bool
 
@@ -98,8 +108,6 @@ module Api : sig
 
   val get_typeconst : t -> string -> typeconst_type option
 
-  val get_pu_enum : t -> string -> pu_enum_type option
-
   val get_prop : t -> string -> class_elt option
 
   val get_sprop : t -> string -> class_elt option
@@ -125,8 +133,6 @@ module Api : sig
   val consts : t -> (string * class_const) list
 
   val typeconsts : t -> (string * typeconst_type) list
-
-  val pu_enums : t -> (string * pu_enum_type) list
 
   val props : t -> (string * class_elt) list
 

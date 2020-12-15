@@ -13,11 +13,6 @@ class A {
 function f(A $a): void {
   $x = $a->priv;
 
-  // IFC cannot analyze any of this
-  for ($i = 0; $i < 10; $i++) {
-    $x++;
-  }
-
   // We still get a flow error here
   $a->pub = $x;
 }

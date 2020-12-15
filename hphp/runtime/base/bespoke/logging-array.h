@@ -41,9 +41,6 @@ struct LoggingArray : BespokeArray {
 
   bool checkInvariants() const;
 
-  // Record that this array reached a given profiling tracelet.
-  void logReachEvent(TransID transId, SrcKey sk);
-
   // Update synced fields after doing a mutation on the wrapped array.
   void updateKindAndLegacy();
   void updateSize();
@@ -55,13 +52,6 @@ struct LoggingArray : BespokeArray {
   ArrayData* wrapped;
   LoggingProfile* profile;
   EntryTypes entryTypes;
-};
-
-struct LoggingLayout : ConcreteLayout {
-  LoggingLayout();
-
-  SSATmp* emitSet(IRGS& env, SSATmp* base, SSATmp* key, SSATmp* val) const override;
-  SSATmp* emitAppend(IRGS& env, SSATmp* base, SSATmp* val) const override;
 };
 
 }}

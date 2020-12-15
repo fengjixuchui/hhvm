@@ -66,7 +66,7 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, bool val) {
   if (UNLIKELY(isHackArrayType(cell.m_type))) {
     return op(cell.m_data.parr, val);
   } else if (UNLIKELY(isClsMethType(cell.m_type))) {
-    if (RuntimeOption::EvalHackArrDVArrs) {
+    if (RuntimeOption::EvalHackArrDVArrs || !RO::EvalIsCompatibleClsMethType) {
       return op.clsmethVsNonClsMeth();
     } else {
       if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
@@ -154,7 +154,8 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, int64_t val) {
                       lazyClassToStringHelper(cell.m_data.plazyclass));
 
     case KindOfClsMeth:
-      if (RuntimeOption::EvalHackArrDVArrs) {
+      if (RuntimeOption::EvalHackArrDVArrs ||
+          !RO::EvalIsCompatibleClsMethType) {
         return op.clsmethVsNonClsMeth();
       } else {
         if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
@@ -234,7 +235,8 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, double val) {
                       lazyClassToStringHelper(cell.m_data.plazyclass));
 
     case KindOfClsMeth:
-      if (RuntimeOption::EvalHackArrDVArrs) {
+      if (RuntimeOption::EvalHackArrDVArrs ||
+          !RO::EvalIsCompatibleClsMethType) {
         return op.clsmethVsNonClsMeth();
       } else {
         if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
@@ -328,7 +330,8 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const StringData* val) {
       return op(lazyClassToStringHelper(cell.m_data.plazyclass), val);
 
     case KindOfClsMeth:
-      if (RuntimeOption::EvalHackArrDVArrs) {
+      if (RuntimeOption::EvalHackArrDVArrs ||
+          !RO::EvalIsCompatibleClsMethType) {
         return op.clsmethVsNonClsMeth();
       } else {
         if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
@@ -405,7 +408,8 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const ArrayData* ad) {
     }
 
     case KindOfClsMeth:
-      if (RuntimeOption::EvalHackArrDVArrs) {
+      if (RuntimeOption::EvalHackArrDVArrs ||
+          !RO::EvalIsCompatibleClsMethType) {
         return op.clsmethVsNonClsMeth();
       } else {
         raiseClsMethToVecWarningHelper();
@@ -492,7 +496,8 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const ObjectData* od) {
       return strRelOp(lazyClassToStringHelper(cell.m_data.plazyclass));
 
     case KindOfClsMeth:
-      if (RuntimeOption::EvalHackArrDVArrs) {
+      if (RuntimeOption::EvalHackArrDVArrs ||
+          !RO::EvalIsCompatibleClsMethType) {
         return op.clsmethVsNonClsMeth();
       } else {
         if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
@@ -584,7 +589,8 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const ResourceData* rd) {
     }
 
     case KindOfClsMeth:
-      if (RuntimeOption::EvalHackArrDVArrs) {
+      if (RuntimeOption::EvalHackArrDVArrs ||
+          !RO::EvalIsCompatibleClsMethType) {
         return op.clsmethVsNonClsMeth();
       } else {
         if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
@@ -614,7 +620,7 @@ typename Op::RetType tvRelOpVec(Op op, TypedValue cell, const ArrayData* a) {
   assertx(tvIsPlausible(cell));
   assertx(a->isVecType());
 
-  if (isClsMethType(cell.m_type)) {
+  if (isClsMethType(cell.m_type) && RO::EvalIsCompatibleClsMethType) {
     if (RuntimeOption::EvalHackArrDVArrs) {
       raiseClsMethToVecWarningHelper();
       return op.vec(clsMethToVecHelper(cell.m_data.pclsmeth).get(), a);
@@ -693,7 +699,8 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, ClsMethDataRef clsMeth) {
     case KindOfClass:
     case KindOfLazyClass:
     case KindOfResource:
-      if (RuntimeOption::EvalHackArrDVArrs) {
+      if (RuntimeOption::EvalHackArrDVArrs ||
+          !RO::EvalIsCompatibleClsMethType) {
         return op.clsmethVsNonClsMeth();
       } else {
         if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
@@ -703,7 +710,8 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, ClsMethDataRef clsMeth) {
       }
 
     case KindOfBoolean:
-      if (RuntimeOption::EvalHackArrDVArrs) {
+      if (RuntimeOption::EvalHackArrDVArrs ||
+          !RO::EvalIsCompatibleClsMethType) {
         return op.clsmethVsNonClsMeth();
       } else {
         if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
@@ -719,7 +727,8 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, ClsMethDataRef clsMeth) {
 
     case KindOfPersistentDict:
     case KindOfDict:
-      if (RuntimeOption::EvalHackArrDVArrs) {
+      if (RuntimeOption::EvalHackArrDVArrs ||
+          !RO::EvalIsCompatibleClsMethType) {
         return op.clsmethVsNonClsMeth();
       } else {
         if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
@@ -730,7 +739,8 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, ClsMethDataRef clsMeth) {
 
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-      if (RuntimeOption::EvalHackArrDVArrs) {
+      if (RuntimeOption::EvalHackArrDVArrs ||
+          !RO::EvalIsCompatibleClsMethType) {
         return op.clsmethVsNonClsMeth();
       } else {
         if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
@@ -743,7 +753,8 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, ClsMethDataRef clsMeth) {
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray: {
-      if (RuntimeOption::EvalHackArrDVArrs) {
+      if (RuntimeOption::EvalHackArrDVArrs ||
+          !RO::EvalIsCompatibleClsMethType) {
         return op.clsmethVsNonClsMeth();
       } else {
         raiseClsMethToVecWarningHelper();
@@ -753,7 +764,9 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, ClsMethDataRef clsMeth) {
 
     case KindOfPersistentVec:
     case KindOfVec: {
-      if (RuntimeOption::EvalHackArrDVArrs) {
+      if (!RO::EvalIsCompatibleClsMethType) {
+        return op.clsmethVsNonClsMeth();
+      } else if (RuntimeOption::EvalHackArrDVArrs) {
         raiseClsMethToVecWarningHelper();
         return op.vec(cell.m_data.parr, clsMethToVecHelper(clsMeth).get());
       } else {
@@ -766,7 +779,8 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, ClsMethDataRef clsMeth) {
     }
 
     case KindOfObject: {
-      if (RuntimeOption::EvalHackArrDVArrs) {
+      if (RuntimeOption::EvalHackArrDVArrs ||
+          !RO::EvalIsCompatibleClsMethType) {
         return op.clsmethVsNonClsMeth();
       } else {
         if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
@@ -878,8 +892,100 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const Func* val) {
 }
 
 template<class Op>
-typename Op::RetType tvRelOp(Op, TypedValue, LazyClassData) {
-  not_reached(); //TODO (T68823357)
+typename Op::RetType tvRelOp(Op op, TypedValue cell, LazyClassData val) {
+  assertx(tvIsPlausible(cell));
+  assertx(val.name() != nullptr && val.name()->isStatic());
+
+  switch (cell.m_type) {
+    case KindOfUninit:
+    case KindOfNull:
+      return op(staticEmptyString(), lazyClassToStringHelper(val));
+
+    case KindOfInt64: {
+      auto const num = stringToNumeric(lazyClassToStringHelper(val));
+      return num.m_type == KindOfInt64  ? op(cell.m_data.num, num.m_data.num) :
+             num.m_type == KindOfDouble ? op(cell.m_data.num, num.m_data.dbl) :
+             op(cell.m_data.num, 0);
+    }
+    case KindOfBoolean:
+      return op(!!cell.m_data.num, true);
+
+    case KindOfDouble: {
+      auto const num = stringToNumeric(lazyClassToStringHelper(val));
+      return num.m_type == KindOfInt64  ? op(cell.m_data.dbl, num.m_data.num) :
+             num.m_type == KindOfDouble ? op(cell.m_data.dbl, num.m_data.dbl) :
+             op(cell.m_data.dbl, 0);
+    }
+
+    case KindOfPersistentString:
+    case KindOfString:
+      return op(cell.m_data.pstr, lazyClassToStringHelper(val));
+
+    case KindOfPersistentVec:
+    case KindOfVec:
+      return op.vecVsNonVec();
+
+    case KindOfPersistentDict:
+    case KindOfDict:
+      return op.dictVsNonDict();
+
+    case KindOfPersistentKeyset:
+    case KindOfKeyset:
+      return op.keysetVsNonKeyset();
+
+    case KindOfPersistentDArray:
+    case KindOfDArray:
+    case KindOfPersistentVArray:
+    case KindOfVArray:
+      lazyClassToStringHelper(val); // warn
+      return op.phpArrVsNonArr();
+
+    case KindOfObject: {
+      auto od = cell.m_data.pobj;
+      if (od->isCollection()) return op.collectionVsNonObj();
+      if (od->hasToString()) {
+        String str(od->invokeToString());
+        return op(str.get(), lazyClassToStringHelper(val));
+      }
+      return op(true, false);
+    }
+
+    case KindOfResource: {
+      auto const rd = cell.m_data.pres;
+      return op(rd->data()->o_toDouble(),
+                lazyClassToStringHelper(val)->toDouble());
+    }
+
+    case KindOfFunc:
+      return op.funcVsNonFunc();
+
+    case KindOfClass:
+      return op(cell.m_data.pclass, val);
+
+    case KindOfLazyClass:
+      return op(cell.m_data.plazyclass.name(), val.name());
+
+    case KindOfClsMeth:
+      if (RuntimeOption::EvalHackArrDVArrs) {
+        return op.clsmethVsNonClsMeth();
+      } else {
+        if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
+          raiseClsMethNonClsMethRelCompareWarning();
+        }
+        lazyClassToStringHelper(val); // warn
+        return op(true, false);
+      }
+
+    case KindOfRClsMeth:
+      return op.rclsMethVsNonRClsMeth();
+
+    case KindOfRFunc:
+      return op.rfuncVsNonRFunc();
+
+    case KindOfRecord:
+      return op.recordVsNonRecord();
+  }
+  not_reached();
 }
 
 template<class Op>
@@ -953,11 +1059,11 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const Class* val) {
       return op(cell.m_data.pclass, val);
 
     case KindOfLazyClass:
-      return op(lazyClassToStringHelper(cell.m_data.plazyclass),
-                classToStringHelper(val));
+      return op(cell.m_data.plazyclass, val);
 
     case KindOfClsMeth:
-      if (RuntimeOption::EvalHackArrDVArrs) {
+      if (RuntimeOption::EvalHackArrDVArrs ||
+          !RO::EvalIsCompatibleClsMethType) {
         return op.clsmethVsNonClsMeth();
       } else {
         if (UNLIKELY(op.warnOnClsMethNonClsMeth())) {
@@ -1061,6 +1167,13 @@ struct Eq {
 
   bool operator()(const Func* f1, const Func* f2) const { return f1 == f2; }
   bool operator()(const Class* c1, const Class* c2) const { return c1 == c2; }
+
+  bool operator()(const Class* c1, LazyClassData c2) const {
+    return c1->name() == c2.name();
+  }
+  bool operator()(LazyClassData c1, const Class* c2) const {
+    return c1.name() == c2->name();
+  }
 
   bool operator()(const ObjectData* od1, const ObjectData* od2) const {
     assertx(od1);
@@ -1177,6 +1290,13 @@ struct CompareBase {
     return operator()(rd1->data()->o_toInt64(), rd2->data()->o_toInt64());
   }
 
+  RetType operator()(const Class* c1, LazyClassData c2) const {
+    return operator()(classToStringHelper(c1), lazyClassToStringHelper(c2));
+  }
+  RetType operator()(LazyClassData c1, const Class* c2) const {
+    return operator()(lazyClassToStringHelper(c1), classToStringHelper(c2));
+  }
+
   RetType dict(const ArrayData* ad1, const ArrayData* ad2) const {
     assertx(ad1->isDictType());
     assertx(ad2->isDictType());
@@ -1235,6 +1355,12 @@ struct CompareBase {
   }
 
   RetType operator()(ClsMethDataRef c1, ClsMethDataRef c2) const {
+    if (!RO::EvalIsCompatibleClsMethType) {
+      throw_clsmeth_compare_exception();
+    }
+    if (RO::EvalRaiseClsMethComparisonWarning) {
+      raiseClsMethClsMethRelCompareWarning();
+    }
     auto const cls1 = c1->getClsStr().get();
     auto const cls2 = c2->getClsStr().get();
     auto const cmp = cls1->compare(cls2);
@@ -1428,6 +1554,10 @@ bool tvSame(TypedValue c1, TypedValue c2) {
       if (isClassType(c2.m_type)) {
         return c1.m_data.pstr->same(classToStringHelper(c2.m_data.pclass));
       }
+      if (isLazyClassType(c2.m_type)) {
+        return
+          c1.m_data.pstr->same(lazyClassToStringHelper(c2.m_data.plazyclass));
+      }
       if (!isStringType(c2.m_type)) return false;
       return c1.m_data.pstr->same(c2.m_data.pstr);
 
@@ -1443,24 +1573,26 @@ bool tvSame(TypedValue c1, TypedValue c2) {
       if (isStringType(c2.m_type)) {
         return classToStringHelper(c1.m_data.pclass)->same(c2.m_data.pstr);
       }
+      if (isLazyClassType(c2.m_type)) {
+        return c1.m_data.pclass->name()->same(c2.m_data.plazyclass.name());
+      }
       if (c2.m_type != KindOfClass) return false;
       return c1.m_data.pclass == c2.m_data.pclass;
 
     case KindOfLazyClass:
       if (isStringType(c2.m_type)) {
-        return lazyClassToStringHelper(c1.m_data.plazyclass)->same(c2.m_data.pstr);
+        return
+          lazyClassToStringHelper(c1.m_data.plazyclass)->same(c2.m_data.pstr);
       }
       if (isClassType(c2.m_type)) {
-        return
-          lazyClassToStringHelper(c1.m_data.plazyclass)
-            ->same(classToStringHelper(c2.m_data.pclass));
+        return c1.m_data.plazyclass.name()->same(c2.m_data.pclass->name());
       }
       if (c2.m_type != KindOfLazyClass) return false;
       return c1.m_data.plazyclass.name() == c2.m_data.plazyclass.name();
 
     case KindOfPersistentVec:
     case KindOfVec:
-      if (isClsMethType(c2.m_type)) {
+      if (isClsMethType(c2.m_type) && RO::EvalIsCompatibleClsMethType) {
         if (RuntimeOption::EvalHackArrDVArrs) {
           raiseClsMethToVecWarningHelper();
           return vecSameHelper(
@@ -1509,7 +1641,7 @@ bool tvSame(TypedValue c1, TypedValue c2) {
     case KindOfDArray:
     case KindOfPersistentVArray:
     case KindOfVArray:
-      if (isClsMethType(c2.m_type)) {
+      if (isClsMethType(c2.m_type) && RO::EvalIsCompatibleClsMethType) {
         if (RuntimeOption::EvalHackArrDVArrs) return false;
         raiseClsMethToVecWarningHelper();
         return ArrayData::Same(
@@ -1532,22 +1664,24 @@ bool tvSame(TypedValue c1, TypedValue c2) {
         c1.m_data.pres == c2.m_data.pres;
 
     case KindOfClsMeth:
-      if (RuntimeOption::EvalHackArrDVArrs) {
-        if (isVecType(c2.m_type)) {
-          raiseClsMethToVecWarningHelper();
-          return vecSameHelper(
-            clsMethToVecHelper(c1.m_data.pclsmeth).get(), c2.m_data.parr);
-        }
-      } else {
-        if (isVecType(c2.m_type)) {
-          if (UNLIKELY(checkHACCompare())) {
-            raiseHackArrCompatArrHackArrCmp();
+      if (RO::EvalIsCompatibleClsMethType) {
+        if (RuntimeOption::EvalHackArrDVArrs) {
+          if (isVecType(c2.m_type)) {
+            raiseClsMethToVecWarningHelper();
+            return vecSameHelper(
+              clsMethToVecHelper(c1.m_data.pclsmeth).get(), c2.m_data.parr);
           }
-          raiseClsMethVecCompareWarningHelper();
-        } else if (isArrayType(c2.m_type)) {
-          raiseClsMethToVecWarningHelper();
-          return ArrayData::Same(
-            clsMethToVecHelper(c1.m_data.pclsmeth).get(), c2.m_data.parr);
+        } else {
+          if (isVecType(c2.m_type)) {
+            if (UNLIKELY(checkHACCompare())) {
+              raiseHackArrCompatArrHackArrCmp();
+            }
+            raiseClsMethVecCompareWarningHelper();
+          } else if (isArrayType(c2.m_type)) {
+            raiseClsMethToVecWarningHelper();
+            return ArrayData::Same(
+              clsMethToVecHelper(c1.m_data.pclsmeth).get(), c2.m_data.parr);
+          }
         }
       }
       if (!isClsMethType(c2.m_type)) {

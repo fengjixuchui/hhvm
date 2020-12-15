@@ -89,6 +89,7 @@ type t =
   | Rusing of Pos.t
   | Rdynamic_prop of Pos.t
   | Rdynamic_call of Pos.t
+  | Rdynamic_construct of Pos.t
   | Ridx_dict of Pos.t
   | Rmissing_required_field of Pos.t * string
   | Rmissing_optional_field of Pos.t * string
@@ -111,6 +112,7 @@ type t =
   | Rglobal_fun_ret of Pos.t
   | Rsplice of Pos.t
   | Ret_boolean of Pos.t
+  | Rdefault_capability of Pos.t
 [@@deriving eq]
 
 (** Translate a reason to a (pos, string) list, suitable for error_l. This
@@ -177,4 +179,4 @@ val none : t
 val compare : t -> t -> int
 
 val explain_generic_constraint :
-  Pos.t -> t -> string -> (Pos.t * string) list -> unit
+  Pos.t -> t -> string -> Pos.t * string -> (Pos.t * string) list -> unit

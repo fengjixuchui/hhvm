@@ -1,4 +1,5 @@
-<?hh // partial
+<?hh
+<<file: __EnableUnstableFeatures('coeffects_provisional')>>
 
 <<__RxLocal, __AtMostRxAsArgs>>
 async function f(
@@ -9,6 +10,6 @@ async function f(
   return g($r);
 }
 
-function g(int $a) {
+function g(int $a): int {
   return $a;
 }

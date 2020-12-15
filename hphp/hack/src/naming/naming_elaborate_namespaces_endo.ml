@@ -111,6 +111,18 @@ class ['a, 'b, 'c, 'd] generic_elaborator =
 
     method on_'hi _ hi = hi
 
+    method private on_capabilities env (cap, unsafe_cap) =
+      let open Namespace_env in
+      let namespace =
+        { empty_with_default with ns_name = Some "HH\\Contexts" }
+      in
+      let cap = super#on_type_hint { env with namespace } cap in
+      let namespace =
+        { empty_with_default with ns_name = Some "HH\\Contexts\\Unsafe" }
+      in
+      let unsafe_cap = super#on_type_hint { env with namespace } unsafe_cap in
+      (cap, unsafe_cap)
+
     (* Namespaces were already precomputed by ElaborateDefs
      * The following functions just set the namespace env correctly
      *)
@@ -131,23 +143,17 @@ class ['a, 'b, 'c, 'd] generic_elaborator =
       super#on_fun_def env f
 
     method! on_fun_ env f =
-      let open Namespace_env in
-      let namespace =
-        { empty_with_default with ns_name = Some "HH\\Contexts" }
+      let (f_cap, f_unsafe_cap) =
+        self#on_capabilities env (f.f_cap, f.f_unsafe_cap)
       in
-      let f_cap = super#on_type_hint { env with namespace } f.f_cap in
-      let namespace =
-        { empty_with_default with ns_name = Some "HH\\Contexts\\Unsafe" }
-      in
-      let f_unsafe_cap =
-        super#on_type_hint { env with namespace } f.f_unsafe_cap
-      in
-      let f = super#on_fun_ env f in
-      { f with f_cap; f_unsafe_cap }
+      { (super#on_fun_ env f) with f_cap; f_unsafe_cap }
 
     method! on_method_ env m =
       let env = extend_tparams env m.m_tparams in
-      super#on_method_ env m
+      let (m_cap, m_unsafe_cap) =
+        self#on_capabilities env (m.m_cap, m.m_unsafe_cap)
+      in
+      { (super#on_method_ env m) with m_cap; m_unsafe_cap }
 
     method! on_tparam env tparam =
       (* Make sure that the nested tparams are in scope while traversing the rest
@@ -155,16 +161,6 @@ class ['a, 'b, 'c, 'd] generic_elaborator =
         See Naming.type_param for description of nested tparam scoping *)
       let env_with_nested = extend_tparams env tparam.tp_parameters in
       super#on_tparam env_with_nested tparam
-
-    method! on_pu_enum env pue =
-      let type_params =
-        List.fold
-          pue.pu_case_types
-          ~f:(fun acc { tp_name = sid; _ } -> SSet.add (snd sid) acc)
-          ~init:env.type_params
-      in
-      let env = { env with type_params } in
-      super#on_pu_enum env pue
 
     method! on_gconst env gc =
       let env = { env with namespace = gc.cst_namespace } in
@@ -260,8 +256,8 @@ class ['a, 'b, 'c, 'd] generic_elaborator =
         let targs = List.map targs ~f:(self#on_targ env) in
         FunctionPointer
           (FP_class_const ((p1, CIexpr (p2, Id name)), meth_name), targs)
-      | Obj_get (e1, (p, Id x), null_safe) ->
-        Obj_get (self#on_expr env e1, (p, Id x), null_safe)
+      | Obj_get (e1, (p, Id x), null_safe, in_parens) ->
+        Obj_get (self#on_expr env e1, (p, Id x), null_safe, in_parens)
       | Id ((_, name) as sid) ->
         if
           (String.equal name "NAN" || String.equal name "INF") && in_codegen env
@@ -269,9 +265,6 @@ class ['a, 'b, 'c, 'd] generic_elaborator =
           expr
         else
           Id (NS.elaborate_id env.namespace NS.ElaborateConst sid)
-      | PU_identifier ((p1, CIexpr (p2, Id x1)), s1, s2) ->
-        let x1 = elaborate_type_name env x1 in
-        PU_identifier ((p1, CIexpr (p2, Id x1)), s1, s2)
       | New ((p1, CIexpr (p2, Id x)), tal, el, unpacked_element, ex) ->
         let x = elaborate_type_name env x in
         New
@@ -290,9 +283,10 @@ class ['a, 'b, 'c, 'd] generic_elaborator =
       | Class_const ((p1, CIexpr (p2, Id x1)), pstr) ->
         let name = elaborate_type_name env x1 in
         Class_const ((p1, CIexpr (p2, Id name)), pstr)
-      | Class_get ((p1, CIexpr (p2, Id x1)), cge) ->
+      | Class_get ((p1, CIexpr (p2, Id x1)), cge, in_parens) ->
         let x1 = elaborate_type_name env x1 in
-        Class_get ((p1, CIexpr (p2, Id x1)), self#on_class_get_expr env cge)
+        Class_get
+          ((p1, CIexpr (p2, Id x1)), self#on_class_get_expr env cge, in_parens)
       | Xml (id, al, el) ->
         let id =
           (* if XHP element mangling is disabled, namespaces are supported *)

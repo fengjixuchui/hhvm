@@ -803,11 +803,6 @@ struct Func final {
   bool isRxDisabled() const;
 
   /*
-   * Is this function conditionally reactive?
-   */
-  bool isRxConditional() const;
-
-  /*
    * Does this function have coeffect rules?
    */
   bool hasCoeffectRules() const;
@@ -1111,6 +1106,9 @@ struct Func final {
   // Return true, and set the m_serialized flag, iff this Func hasn't
   // been serialized yet (see prof-data-serialize.cpp).
   bool serialize() const;
+
+  // Returns true if this function has already been serialized.
+  bool wasSerialized() const { return m_serialized; }
 
   /////////////////////////////////////////////////////////////////////////////
   // Offset accessors.                                                 [static]
@@ -1464,14 +1462,13 @@ private:
   }
 
   /////////////////////////////////////////////////////////////////////////////
-  // Profiling State.
+  // Atomic Flags.
 
 public:
   enum Flags : uint8_t {
     None      = 0,
-    Profiling = 1 << 0,
-    Optimized = 1 << 1,
-    Locked    = 1 << 2,
+    Optimized = 1 << 0,
+    Locked    = 1 << 1,
   };
 
  /*
@@ -1652,4 +1649,3 @@ inline tracing::Props traceProps(const Func* f) {
 #define incl_HPHP_VM_FUNC_INL_H_
 #include "hphp/runtime/vm/func-inl.h"
 #undef incl_HPHP_VM_FUNC_INL_H_
-

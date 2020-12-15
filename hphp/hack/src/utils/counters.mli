@@ -26,18 +26,12 @@ type t
     in case your caller had been doing their own count.
     Categories from [enabled_categories] will be enabled
     and all others will be disabled. *)
-val reset : enabled_categories:CategorySet.t -> t
+val reset : unit -> t
 
 (** restores global mutable state to what it was before you called 'reset' *)
 val restore_state : t -> unit
 
 val count : Category.t -> (unit -> 'a) -> 'a
-
-val count_disk_cat : (unit -> 'a) -> 'a
-
-val count_get_ast : (unit -> 'a) -> 'a
-
-val count_typecheck : (unit -> 'a) -> 'a
 
 val get_counters : unit -> Telemetry.t
 

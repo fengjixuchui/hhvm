@@ -26,7 +26,6 @@ type Hi = ();
 
 pub type Afield<'a> = aast::Afield<'a, Ex<'a>, Fb, En, Hi>;
 pub type AsExpr<'a> = aast::AsExpr<'a, Ex<'a>, Fb, En, Hi>;
-pub type AssertExpr<'a> = aast::AssertExpr<'a, Ex<'a>, Fb, En, Hi>;
 pub type Block<'a> = aast::Block<'a, Ex<'a>, Fb, En, Hi>;
 pub type CaField<'a> = aast::CaField<'a, Ex<'a>, Fb, En, Hi>;
 pub type Case<'a> = aast::Case<'a, Ex<'a>, Fb, En, Hi>;
@@ -53,8 +52,6 @@ pub type FunVariadicity<'a> = aast::FunVariadicity<'a, Ex<'a>, Fb, En, Hi>;
 pub type Gconst<'a> = aast::Gconst<'a, Ex<'a>, Fb, En, Hi>;
 pub type Method_<'a> = aast::Method_<'a, Ex<'a>, Fb, En, Hi>;
 pub type Program<'a> = aast::Program<'a, Ex<'a>, Fb, En, Hi>;
-pub type PuEnum<'a> = aast::PuEnum<'a, Ex<'a>, Fb, En, Hi>;
-pub type PuMember<'a> = aast::PuMember<'a, Ex<'a>, Fb, En, Hi>;
 pub type RecordDef<'a> = aast::RecordDef<'a, Ex<'a>, Fb, En, Hi>;
 pub type Stmt<'a> = aast::Stmt<'a, Ex<'a>, Fb, En, Hi>;
 pub type Stmt_<'a> = aast::Stmt_<'a, Ex<'a>, Fb, En, Hi>;

@@ -52,6 +52,7 @@ const StaticString
 //////////////////////////////////////////////////////////////////////
 
 std::string show(IterSpecialization type) {
+  if (!type.specialized) return "Unspecialized";
   auto const base_const = type.base_const ? "BaseConst" : "BaseMutable";
   auto const base_type  = show((IterSpecialization::BaseType)type.base_type);
   if (type.output_key) {
@@ -103,15 +104,13 @@ bool IterImpl::checkInvariants(const ArrayData* ad /* = nullptr */) const {
         uintptr_t(m_data), size_t(m_typeFields), m_pos, m_end, uintptr_t(ad));
 
   // We can't make many assertions for iterators over objects.
-  if (m_itype == IterImpl::TypeIterator) {
+  if (!hasArrayData()) {
     assertx(ad == nullptr);
-    assertx(!hasArrayData());
     assertx(m_nextHelperIdx == IterNextIndex::Object);
     return true;
   }
 
   // Exactly one of the ArrayData pointers {ad, m_data} should be nullptr.
-  assertx(m_itype == IterImpl::TypeArray);
   assertx((ad == nullptr) != (m_data == nullptr));
   DEBUG_ONLY auto const arr = ad ? ad : m_data;
 
@@ -315,14 +314,7 @@ void Iter::free() {
 }
 
 std::string Iter::toString() const {
-  switch (m_iter.getIterType()) {
-    case IterImpl::TypeArray:
-      return "I:Array";
-    case IterImpl::TypeIterator:
-      return "I:Iterator";
-    default:
-      return "I:Trash";
-  }
+  return m_iter.hasArrayData() ? "I:Array" : "I:Iterator";
 }
 
 /*
@@ -349,8 +341,7 @@ static inline void iter_value_cell_local_impl(Iter* iter, TypedValue* out) {
   TRACE(2, "%s: typeArray: %s, I %p, out %p\n",
            __func__, typeArray ? "true" : "false", iter, out);
   auto& arrIter = *unwrap(iter);
-  assertx((typeArray && arrIter.getIterType() == IterImpl::TypeArray) ||
-         (!typeArray && arrIter.getIterType() == IterImpl::TypeIterator));
+  assertx(typeArray == arrIter.hasArrayData());
   if (typeArray) {
     tvDup(arrIter.nvSecond(), *out);
   } else {
@@ -365,8 +356,7 @@ static inline void iter_key_cell_local_impl(Iter* iter, TypedValue* out) {
   auto const oldVal = *out;
   TRACE(2, "%s: I %p, out %p\n", __func__, iter, out);
   auto& arrIter = *unwrap(iter);
-  assertx((typeArray && arrIter.getIterType() == IterImpl::TypeArray) ||
-         (!typeArray && arrIter.getIterType() == IterImpl::TypeIterator));
+  assertx(typeArray == arrIter.hasArrayData());
   if (typeArray) {
     tvDup(arrIter.nvFirst(), *out);
   } else {
@@ -381,7 +371,7 @@ inline void liter_value_cell_local_impl(Iter* iter,
                                         const ArrayData* ad) {
   auto const oldVal = *out;
   auto const& arrIter = *unwrap(iter);
-  assertx(arrIter.getIterType() == IterImpl::TypeArray);
+  assertx(arrIter.hasArrayData());
   assertx(!arrIter.getArrayData());
   tvDup(arrIter.nvSecondLocal(ad), *out);
   tvDecRefGen(oldVal);
@@ -392,12 +382,15 @@ inline void liter_key_cell_local_impl(Iter* iter,
                                       const ArrayData* ad) {
   auto const oldVal = *out;
   auto const& arrIter = *unwrap(iter);
-  assertx(arrIter.getIterType() == IterImpl::TypeArray);
+  assertx(arrIter.hasArrayData());
   assertx(!arrIter.getArrayData());
   tvDup(arrIter.nvFirstLocal(ad), *out);
   tvDecRefGen(oldVal);
 }
 
+NEVER_INLINE void clearOutputLocal(TypedValue* local) {
+  tvDecRefCountable(local);
+  local->m_type = KindOfNull;
 }
 
 // These release methods are called by the iter_next_* implementations below
@@ -408,7 +401,6 @@ inline void liter_key_cell_local_impl(Iter* iter,
 // These methods all return false (= 0) to signify that iteration is over.
 
 NEVER_INLINE int64_t iter_next_free_packed(Iter* iter, ArrayData* arr) {
-  assertx(arr->decWillRelease());
   assertx(arr->hasVanillaPackedLayout());
   PackedArray::Release(arr);
   iter->kill();
@@ -417,10 +409,11 @@ NEVER_INLINE int64_t iter_next_free_packed(Iter* iter, ArrayData* arr) {
 
 NEVER_INLINE int64_t iter_next_free_mixed(Iter* iter, ArrayData* arr) {
   assertx(arr->hasVanillaMixedLayout());
-  assertx(arr->decWillRelease());
   MixedArray::Release(arr);
   iter->kill();
   return 0;
+}
+
 }
 
 /*
@@ -471,8 +464,8 @@ int64_t new_iter_array(Iter* dest, ArrayData* ad, TypedValue* valOut) {
     dest->kill();
     return 0;
   }
-  if (UNLIKELY(isRefcountedType(valOut->m_type))) {
-    return new_iter_array_cold<Local>(dest, ad, valOut, nullptr);
+  if (UNLIKELY(isRefcountedType(valOut->type()))) {
+    clearOutputLocal(valOut);
   }
 
   // We are transferring ownership of the array to the iterator, therefore
@@ -540,15 +533,11 @@ int64_t new_iter_array_key(Iter*       dest,
     dest->kill();
     return 0;
   }
-  if (UNLIKELY(isRefcountedType(valOut->m_type))) {
-    return new_iter_array_cold<Local>(
-      dest, ad, valOut, keyOut
-    );
+  if (UNLIKELY(isRefcountedType(valOut->type()))) {
+    clearOutputLocal(valOut);
   }
-  if (UNLIKELY(isRefcountedType(keyOut->m_type))) {
-    return new_iter_array_cold<Local>(
-      dest, ad, valOut, keyOut
-    );
+  if (UNLIKELY(isRefcountedType(keyOut->type()))) {
+    clearOutputLocal(keyOut);
   }
 
   // We are transferring ownership of the array to the iterator, therefore
@@ -617,15 +606,14 @@ struct FreeObj {
  */
 static int64_t new_iter_object_any(Iter* dest, ObjectData* obj, Class* ctx,
                                    TypedValue* valOut, TypedValue* keyOut) {
-  IterImpl::Type itType;
   auto const iter = unwrap(dest);
+  auto object_base = true;
   {
     FreeObj fo;
     if (obj->isIterator()) {
       TRACE(2, "%s: I %p, obj %p, ctx %p, collection or Iterator\n",
             __func__, dest, obj, ctx);
       new (iter) IterImpl(obj, IterImpl::noInc);
-      itType = IterImpl::TypeIterator;
     } else {
       bool isIteratorAggregate;
       /*
@@ -643,7 +631,6 @@ static int64_t new_iter_object_any(Iter* dest, ObjectData* obj, Class* ctx,
         TRACE(2, "%s: I %p, obj %p, ctx %p, IteratorAggregate\n",
               __func__, dest, obj, ctx);
         new (iter) IterImpl(itObj.detach(), IterImpl::noInc);
-        itType = IterImpl::TypeIterator;
       } else {
         TRACE(2, "%s: I %p, obj %p, ctx %p, iterate as array\n",
               __func__, dest, obj, ctx);
@@ -651,7 +638,7 @@ static int64_t new_iter_object_any(Iter* dest, ObjectData* obj, Class* ctx,
         Array iterArray(itObj->o_toIterArray(ctxStr));
         ArrayData* ad = iterArray.get();
         new (iter) IterImpl(ad);
-        itType = IterImpl::TypeArray;
+        object_base = false;
       }
     }
     try {
@@ -667,7 +654,7 @@ static int64_t new_iter_object_any(Iter* dest, ObjectData* obj, Class* ctx,
     }
   }
 
-  if (itType == IterImpl::TypeIterator) {
+  if (object_base) {
     iter_value_cell_local_impl<false>(dest, valOut);
     if (keyOut) {
       iter_key_cell_local_impl<false>(dest, keyOut);
@@ -710,8 +697,6 @@ int64_t new_iter_object(Iter* dest, ObjectData* obj, Class* ctx,
 NEVER_INLINE
 int64_t iter_next_cold(Iter* iter, TypedValue* valOut, TypedValue* keyOut) {
   auto const ai = unwrap(iter);
-  assertx(ai->getIterType() == IterImpl::TypeArray ||
-          ai->getIterType() == IterImpl::TypeIterator);
   assertx(ai->hasArrayData() || !ai->getObject()->isCollection());
   ai->next();
   if (ai->end()) {
@@ -719,7 +704,7 @@ int64_t iter_next_cold(Iter* iter, TypedValue* valOut, TypedValue* keyOut) {
     ai->~IterImpl();
     return 0;
   }
-  if (unwrap(iter)->getIterType() == IterImpl::TypeArray) {
+  if (ai->hasArrayData()) {
     iter_value_cell_local_impl<true>(iter, valOut);
     if (keyOut) {
       iter_key_cell_local_impl<true>(iter, keyOut);
@@ -744,7 +729,7 @@ int64_t liter_next_cold(Iter* iter,
                         TypedValue* valOut,
                         TypedValue* keyOut) {
   auto const ai = unwrap(iter);
-  assertx(ai->getIterType() == IterImpl::TypeArray);
+  assertx(ai->hasArrayData());
   assertx(!ai->getArrayData());
   if (ai->nextLocal(ad)) {
     ai->~IterImpl();
@@ -760,90 +745,22 @@ int64_t liter_next_cold(Iter* iter,
 
 namespace {
 
-NEVER_INLINE
-int64_t iter_next_cold_inc_val(Iter* it, TypedValue* valOut, TypedValue* keyOut) {
-  /*
-   * If this function is executing then valOut was already decrefed
-   * during iter_next_mixed_impl.  That decref can't have had side
-   * effects, because iter_next_cold would have been called otherwise.
-   * So it's safe to just bump the refcount back up here, and pretend
-   * like nothing ever happened.
-   */
-  tvIncRefGen(*valOut);
-  return iter_next_cold(it, valOut, keyOut);
+// Destroy the given local. Does not do refcounting ops.
+NEVER_INLINE void destroyOutputLocal(TypedValue* out) {
+  destructorForType(type(out))(val(out).pcnt);
 }
 
-NEVER_INLINE
-int64_t liter_next_cold_inc_val(Iter* it,
-                                TypedValue* valOut,
-                                TypedValue* keyOut,
-                                const ArrayData* ad) {
-  /*
-   * If this function is executing then valOut was already decrefed
-   * during iter_next_mixed_impl.  That decref can't have had side
-   * effects, because iter_next_cold would have been called otherwise.
-   * So it's safe to just bump the refcount back up here, and pretend
-   * like nothing ever happened.
-   */
-  tvIncRefGen(*valOut);
-  return liter_next_cold(it, ad, valOut, keyOut);
-}
-
-// We call this function if valOut->decWillRelease(). It should be relatively
-// cold but it happens if the value is an array which gets COWed in the loop.
-// Not releasing the value here can cause a significant memory regression.
-//
-// This method return trues (= 1) because we only call it after advancing the
-// iterator's position and checking that the new position is in bounds.
-NEVER_INLINE
-int64_t iter_next_packed_pointer_cold(Iter* it,
-                                      TypedValue* valOut,
-                                      TypedValue* elm) {
-  auto const oldVal = *valOut;
-  tvDup(*elm, *valOut);
-  tvDecRefGen(oldVal);
-  return 1;
-}
-
-// We call this function if valOut->decWillRelease(). It should be relatively
-// cold but it happens if the value is an array which gets COWed in the loop.
-// Not releasing the value here can cause a significant memory regression.
-//
-// This method return trues (= 1) because we only call it after advancing the
-// iterator's position and checking that the new position is in bounds.
-NEVER_INLINE
-int64_t iter_next_mixed_pointer_cold(Iter* it,
-                                     TypedValue* valOut,
-                                     TypedValue* keyOut,
-                                     MixedArrayElm* elm) {
-  auto const oldVal = *valOut;
-  tvDup(*elm->datatv(), *valOut);
-  tvDecRefGen(oldVal);
-  if (keyOut != nullptr) {
-    auto const oldKey = *keyOut;
-    tvDup(elm->getKey(), *keyOut);
-    tvDecRefGen(oldKey);
+// Dec-ref the given local, and destroy it if we dec-ref to zero.
+ALWAYS_INLINE void decRefOutputLocal(TypedValue* out) {
+  if (isRefcountedType(type(out)) && val(out).pcnt->decReleaseCheck()) {
+    destroyOutputLocal(out);
   }
-  return 1;
 }
 
-// We call this function if keyOut->decWillRelease() and we've dec-ref-ed
-// valOut already. It should be *very* cold, because the key is rarely changed.
-//
-// This method return trues (= 1) because we only call it after advancing the
-// iterator's position and checking that the new position is in bounds.
-NEVER_INLINE
-int64_t iter_next_mixed_pointer_cold_key(Iter* it,
-                                         TypedValue* valOut,
-                                         TypedValue* keyOut,
-                                         MixedArrayElm* elm) {
-  tvDup(*elm->datatv(), *valOut);
-  if (keyOut != nullptr) {
-    auto const oldKey = *keyOut;
-    tvDup(elm->getKey(), *keyOut);
-    tvDecRefGen(oldKey);
-  }
-  return 1;
+// Store `tv` to the given local, dec-ref-ing and releasing the old val.
+ALWAYS_INLINE void setOutputLocal(TypedValue tv, TypedValue* out) {
+  decRefOutputLocal(out);
+  tvDup(tv, out);
 }
 
 }
@@ -856,30 +773,19 @@ int64_t iter_next_mixed_pointer_cold_key(Iter* it,
 //
 // The result is false (= 0) if iteration is done, or true (= 1) otherwise.
 template<bool Local>
-ALWAYS_INLINE
 int64_t iter_next_packed_pointer(Iter* it, TypedValue* valOut, ArrayData* arr) {
   auto& iter = *unwrap(it);
   auto const elm = iter.m_packed_elm + 1;
   if (elm == iter.m_packed_end) {
-    if (!Local) {
-      if (UNLIKELY(arr->decWillRelease())) {
-        return iter_next_free_packed(it, arr);
-      }
-      arr->decRefCount();
+    if (!Local && arr->decReleaseCheck()) {
+      return iter_next_free_packed(it, arr);
     }
     iter.kill();
     return 0;
   }
+
   iter.m_packed_elm = elm;
-
-  if (isRefcountedType(valOut->m_type)) {
-    if (UNLIKELY(valOut->m_data.pcnt->decWillRelease())) {
-      return iter_next_packed_pointer_cold(it, valOut, elm);
-    }
-    valOut->m_data.pcnt->decRefCount();
-  }
-
-  tvDup(*elm, *valOut);
+  setOutputLocal(*elm, valOut);
   return 1;
 }
 
@@ -893,40 +799,21 @@ int64_t iter_next_packed_pointer(Iter* it, TypedValue* valOut, ArrayData* arr) {
 //
 // The result is false (= 0) if iteration is done, or true (= 1) otherwise.
 template<bool HasKey, bool Local>
-ALWAYS_INLINE
-int64_t iter_next_mixed_pointer(Iter* it,
-                                TypedValue* valOut,
-                                TypedValue* keyOut,
-                                ArrayData* arr) {
+int64_t iter_next_mixed_pointer(Iter* it, TypedValue* valOut,
+                                TypedValue* keyOut, ArrayData* arr) {
   auto& iter = *unwrap(it);
   auto const elm = iter.m_mixed_elm + 1;
   if (elm == iter.m_mixed_end) {
-    if (!Local) {
-      if (UNLIKELY(arr->decWillRelease())) {
-        return iter_next_free_mixed(it, arr);
-      }
-      arr->decRefCount();
+    if (!Local && arr->decReleaseCheck()) {
+      return iter_next_free_mixed(it, arr);
     }
     iter.kill();
     return 0;
   }
+
   iter.m_mixed_elm = elm;
-
-  if (isRefcountedType(valOut->m_type)) {
-    if (UNLIKELY(valOut->m_data.pcnt->decWillRelease())) {
-      return iter_next_mixed_pointer_cold(it, valOut, keyOut, elm);
-    }
-    valOut->m_data.pcnt->decRefCount();
-  }
-  if (HasKey && isRefcountedType(keyOut->m_type)) {
-    if (UNLIKELY(keyOut->m_data.pcnt->decWillRelease())) {
-      return iter_next_mixed_pointer_cold_key(it, valOut, keyOut, elm);
-    }
-    keyOut->m_data.pcnt->decRefCount();
-  }
-
-  tvDup(*elm->datatv(), *valOut);
-  if (HasKey) tvDup(elm->getKey(), *keyOut);
+  setOutputLocal(*elm->datatv(), valOut);
+  if (HasKey) setOutputLocal(elm->getKey(), keyOut);
   return 1;
 }
 
@@ -942,47 +829,27 @@ namespace {
 //
 // The result is false (= 0) if iteration is done, or true (= 1) otherwise.
 template<bool HasKey, bool Local>
-ALWAYS_INLINE
-int64_t iter_next_mixed_impl(Iter* it,
-                             TypedValue* valOut,
-                             TypedValue* keyOut,
-                             ArrayData* arrData) {
-  auto& iter         = *unwrap(it);
-  auto const arr     = MixedArray::asMixed(arrData);
-  ssize_t pos        = iter.getPos();
+int64_t iter_next_mixed_impl(Iter* it, TypedValue* valOut,
+                             TypedValue* keyOut, ArrayData* arrData) {
+  auto& iter     = *unwrap(it);
+  ssize_t pos    = iter.getPos();
+  auto const arr = MixedArray::asMixed(arrData);
 
   do {
     if ((++pos) == iter.getEnd()) {
-      if (!Local) {
-        if (UNLIKELY(arr->decWillRelease())) {
-          return iter_next_free_mixed(it, arr->asArrayData());
-        }
-        arr->decRefCount();
+      if (!Local && arr->decReleaseCheck()) {
+        return iter_next_free_mixed(it, arr);
       }
       iter.kill();
       return 0;
     }
   } while (UNLIKELY(arr->isTombstone(pos)));
 
-  if (isRefcountedType(valOut->m_type)) {
-    if (UNLIKELY(valOut->m_data.pcnt->decWillRelease())) {
-      return Local
-        ? liter_next_cold(it, arrData, valOut, keyOut)
-        : iter_next_cold(it, valOut, keyOut);
-    }
-    valOut->m_data.pcnt->decRefCount();
-  }
-  if (HasKey && isRefcountedType(keyOut->m_type)) {
-    if (UNLIKELY(keyOut->m_data.pcnt->decWillRelease())) {
-      return Local
-        ? liter_next_cold_inc_val(it, valOut, keyOut, arrData)
-        : iter_next_cold_inc_val(it, valOut, keyOut);
-    }
-    keyOut->m_data.pcnt->decRefCount();
-  }
-
   iter.setPos(pos);
-  if (HasKey) {
+  decRefOutputLocal(valOut);
+
+  if constexpr (HasKey) {
+    decRefOutputLocal(keyOut);
     arr->getArrayElm(pos, valOut, keyOut);
   } else {
     arr->getArrayElm(pos, valOut);
@@ -1000,49 +867,24 @@ int64_t iter_next_mixed_impl(Iter* it,
 //
 // The result is false (= 0) if iteration is done, or true (= 1) otherwise.
 template<bool HasKey, bool Local>
-int64_t iter_next_packed_impl(Iter* it,
-                              TypedValue* valOut,
-                              TypedValue* keyOut,
-                              ArrayData* ad) {
+int64_t iter_next_packed_impl(Iter* it, TypedValue* valOut,
+                              TypedValue* keyOut, ArrayData* ad) {
   auto& iter = *unwrap(it);
   assertx(PackedArray::checkInvariants(ad));
 
   ssize_t pos = iter.getPos() + 1;
-  if (LIKELY(pos < iter.getEnd())) {
-    if (isRefcountedType(valOut->m_type)) {
-      if (UNLIKELY(valOut->m_data.pcnt->decWillRelease())) {
-        return Local
-          ? liter_next_cold(it, ad, valOut, keyOut)
-          : iter_next_cold(it, valOut, keyOut);
-      }
-      valOut->m_data.pcnt->decRefCount();
-    }
-    if (HasKey && UNLIKELY(isRefcountedType(keyOut->m_type))) {
-      if (UNLIKELY(keyOut->m_data.pcnt->decWillRelease())) {
-        return Local
-          ? liter_next_cold_inc_val(it, valOut, keyOut, ad)
-          : iter_next_cold_inc_val(it, valOut, keyOut);
-      }
-      keyOut->m_data.pcnt->decRefCount();
-    }
-    iter.setPos(pos);
-    tvDup(PackedArray::GetPosVal(ad, pos), *valOut);
-    if (HasKey) {
-      keyOut->m_data.num = pos;
-      keyOut->m_type = KindOfInt64;
-    }
-    return 1;
-  }
-
-  // Finished iterating---we need to free the array.
-  if (!Local) {
-    if (UNLIKELY(ad->decWillRelease())) {
+  if (UNLIKELY(pos == iter.getEnd())) {
+    if (!Local && ad->decReleaseCheck()) {
       return iter_next_free_packed(it, ad);
     }
-    ad->decRefCount();
+    iter.kill();
+    return 0;
   }
-  iter.kill();
-  return 0;
+
+  iter.setPos(pos);
+  setOutputLocal(PackedArray::GetPosVal(ad, pos), valOut);
+  if constexpr (HasKey) setOutputLocal(make_tv<KindOfInt64>(pos), keyOut);
+  return 1;
 }
 
 }

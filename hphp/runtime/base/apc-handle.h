@@ -38,6 +38,9 @@ enum class APCKind: uint8_t {
   Uninit, Null, Bool,  // see APCHandle::isSingletonKind before updating
   Int, Double,
   PersistentFunc,
+  PersistentClass,
+  LazyClass,
+  PersistentClsMeth,
   UncountedString,
   UncountedArray,
   UncountedVec,
@@ -61,6 +64,8 @@ enum class APCKind: uint8_t {
   SerializedKeyset,
   SerializedObject,
   FuncEntity,
+  ClassEntity,
+  ClsMeth,
   RFunc,
   RClsMeth
 };

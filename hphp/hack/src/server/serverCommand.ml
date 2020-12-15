@@ -121,7 +121,7 @@ let commands_needs_writes = function
 
 let full_recheck_if_needed' genv env reason profiling =
   if
-    ServerEnv.(is_full_check_done env.full_check)
+    ServerEnv.(is_full_check_done env.full_check_status)
     && Relative_path.Set.is_empty env.ServerEnv.ide_needs_parsing
   then
     env
@@ -133,7 +133,7 @@ let full_recheck_if_needed' genv env reason profiling =
       ServerTypeCheck.(type_check genv env Full_check start_time profiling)
     in
     let env = { env with ServerEnv.can_interrupt = true } in
-    assert (ServerEnv.(is_full_check_done env.full_check));
+    assert (ServerEnv.(is_full_check_done env.full_check_status));
     env
 
 let force_remote = function
@@ -162,14 +162,12 @@ let full_recheck_if_needed genv env msg =
   if ignore_ide msg then
     let (ide, disk) = get_unsaved_changes env in
     let env = apply_changes env disk in
-    let (_, env) =
-      CgroupProfiler.profile_memory
-        ~event:"full recheck"
-        ~f:
-          (full_recheck_if_needed'
-             genv
-             { env with ServerEnv.remote = force_remote msg }
-             (reason msg))
+    let env =
+      CgroupProfiler.profile_memory ~event:`Recheck
+      @@ full_recheck_if_needed'
+           genv
+           { env with ServerEnv.remote = force_remote msg }
+           (reason msg)
     in
     apply_changes env ide
   else
@@ -243,17 +241,6 @@ let predeclare_ide_deps
           File_provider.local_changes_pop_sharedmem_stack ()
         end
 
-(* Run f while collecting all declarations that it caused. *)
-let with_decl_tracking f =
-  try
-    Decl.start_tracking ();
-    let res = f () in
-    (res, Decl.stop_tracking ())
-  with e ->
-    let stack = Caml.Printexc.get_raw_backtrace () in
-    let (_ : FileInfo.names) = Decl.stop_tracking () in
-    Caml.Printexc.raise_with_backtrace e stack
-
 (* Construct a continuation that will finish handling the command and update
  * the environment. Server can execute the continuation immediately, or store it
  * to be completed later (when full recheck is completed, when workers are
@@ -264,8 +251,8 @@ let actually_handle genv client msg full_recheck_needed ~is_stale env =
   @@ fun () ->
   Errors.ignore_ @@ fun () ->
   assert (
-    (not full_recheck_needed) || ServerEnv.(is_full_check_done env.full_check)
-  );
+    (not full_recheck_needed)
+    || ServerEnv.(is_full_check_done env.full_check_status) );
 
   (* There might be additional rechecking required when there are unsaved IDE
    * changes and we asked for an answer that requires ignoring those.
@@ -290,7 +277,8 @@ let actually_handle genv client msg full_recheck_needed ~is_stale env =
     Full_fidelity_parser_profiling.start_profiling ();
     let ((new_env, response), declared_names) =
       try
-        with_decl_tracking @@ fun () -> ServerRpc.handle ~is_stale genv env cmd
+        Decl_provider.with_decl_tracking @@ fun () ->
+        ServerRpc.handle ~is_stale genv env cmd
       with e ->
         let stack = Caml.Printexc.get_raw_backtrace () in
         if ServerCommandTypes.is_critical_rpc cmd then
@@ -362,7 +350,7 @@ let handle
      * by time sensitivie queries (like autocomplete). There is a constant cost
      * to stopping and resuming the global typechecking jobs, which leads to
      * flaky experience. To avoid this, we don't restart the global rechecking
-     * after IDE edits - you need to save the file againg to restart it. *)
+     * after IDE edits - you need to save the file again to restart it. *)
     ServerUtils.Needs_writes
       ( env,
         continuation,

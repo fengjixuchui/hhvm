@@ -1,8 +1,9 @@
-<?hh // partial
+<?hh
+<<file: __EnableUnstableFeatures('coeffects_provisional')>>
 
 // OK
 <<__Rx>>
-function f(<<__OwnedMutable>> A $a) {
+function f(<<__OwnedMutable>> A $a): void {
   // OK
   $x = <<__Rx>>(<<__OwnedMutable>> A $c) ==> {};
   // OK
@@ -12,6 +13,6 @@ function f(<<__OwnedMutable>> A $a) {
 class A {
   // OK
   <<__Rx>>
-  public function f(<<__OwnedMutable>> A $a) {
+  public function f(<<__OwnedMutable>> A $a): void {
   }
 }

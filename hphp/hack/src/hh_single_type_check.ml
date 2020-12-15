@@ -204,7 +204,8 @@ let parse_options () =
   let out_extension = ref ".out" in
   let like_type_hints = ref false in
   let union_intersection_type_hints = ref false in
-  let coeffects = ref false in
+  let call_coeffects = ref false in
+  let local_coeffects = ref false in
   let like_casts = ref false in
   let simple_pessimize = ref 0.0 in
   let complex_coercion = ref false in
@@ -245,7 +246,6 @@ let parse_options () =
   let disable_modes = ref false in
   let disable_hh_ignore_error = ref false in
   let enable_systemlib_annotations = ref false in
-  let enable_pocket_universes_syntax = ref false in
   let enable_higher_kinded_types = ref false in
   let allowed_fixme_codes_strict = ref ISet.empty in
   let allowed_fixme_codes_partial = ref ISet.empty in
@@ -282,6 +282,8 @@ let parse_options () =
         Arg.Unit (set_mode Ffp_autocomplete),
         " Produce autocomplete suggestions using the full-fidelity parse tree"
       );
+      ("--call-coeffects", Arg.Set call_coeffects, "Turns on call coeffects");
+      ("--local-coeffects", Arg.Set local_coeffects, "Turns on local coeffects");
       ("--colour", Arg.Unit (set_mode Color), " Produce colour output");
       ("--color", Arg.Unit (set_mode Color), " Produce color output");
       ("--coverage", Arg.Unit (set_mode Coverage), " Produce coverage output");
@@ -555,9 +557,6 @@ let parse_options () =
       ( "--enable-systemlib-annotations",
         Arg.Set enable_systemlib_annotations,
         "Enable systemlib annotations" );
-      ( "--enable-pocket-universes-syntax",
-        Arg.Set enable_pocket_universes_syntax,
-        "Enable the pocket universes syntax" );
       ( "--enable-higher-kinded-types",
         Arg.Set enable_higher_kinded_types,
         "Enable support for higher-kinded types" );
@@ -619,6 +618,12 @@ let parse_options () =
     | [] -> die usage
     | x -> x
   in
+  let is_ifc_mode =
+    match !mode with
+    | Ifc _ -> true
+    | _ -> false
+  in
+
   let tcopt =
     GlobalOptions.make
       ?po_disable_array_typehint:(Some false)
@@ -643,7 +648,8 @@ let parse_options () =
       ~tco_shallow_class_decl:!shallow_class_decl
       ~tco_like_type_hints:!like_type_hints
       ~tco_union_intersection_type_hints:!union_intersection_type_hints
-      ~tco_coeffects:!coeffects
+      ~tco_coeffects:!call_coeffects
+      ~tco_coeffects_local:!local_coeffects
       ~tco_like_casts:!like_casts
       ~tco_simple_pessimize:!simple_pessimize
       ~tco_complex_coercion:!complex_coercion
@@ -691,6 +697,7 @@ let parse_options () =
       ~po_disallow_hash_comments:!disallow_hash_comments
       ~po_disallow_fun_and_cls_meth_pseudo_funcs:
         !disallow_fun_and_cls_meth_pseudo_funcs
+      ~tco_ifc_enabled:is_ifc_mode
       ()
   in
   Errors.allowed_fixme_codes_strict :=
@@ -712,6 +719,10 @@ let parse_options () =
               String.equal x GlobalOptions.tco_experimental_forbid_nullable_cast
             then
               !forbid_nullable_cast
+            (* Only enable infer flows in IFC mode *)
+            else if String.equal x GlobalOptions.tco_experimental_infer_flows
+            then
+              is_ifc_mode
             else
               true
           end
@@ -1807,6 +1818,8 @@ let handle_mode
             ~ctx
             ~f:(fun () ->
               let files_contents = Multifile.file_to_files filename in
+              Relative_path.Map.iter files_contents ~f:(fun filename contents ->
+                  File_provider.(provide_file filename (Disk contents)));
               let (parse_errors, individual_file_info) =
                 parse_name_and_decl ctx files_contents
               in
@@ -1881,10 +1894,11 @@ let handle_mode
         let { FileInfo.classes; _ } = info in
         List.iter classes ~f:(fun (_, classname) ->
             Printf.printf "Linearization for class %s:\n" classname;
-            let key = (classname, Decl_defs.Member_resolution) in
-            let linearization = Decl_linearize.get_linearization ctx key in
+            let { Decl_linearize.lin_members; _ } =
+              Decl_linearize.get_linearizations ctx classname
+            in
             let linearization =
-              Sequence.map linearization (fun mro ->
+              Sequence.map lin_members (fun mro ->
                   let name = mro.Decl_defs.mro_name in
                   let targs =
                     List.map
@@ -2018,6 +2032,8 @@ let decl_and_run_mode
         end
       ~init:files_contents
   in
+  Relative_path.Map.iter files_contents ~f:(fun filename contents ->
+      File_provider.(provide_file filename (Disk contents)));
   (* Don't declare all the filenames in batch_errors mode *)
   let to_decl =
     if batch_mode then

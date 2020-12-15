@@ -285,56 +285,9 @@ let merge_decl_header_with_hints ~params ~ret ~variadic decl_header env =
   in
   (ret_decl_ty, params_decl_ty, variadicity_decl_ty)
 
-(* Given a locl_ty type of params, check, in case it is a Tpu or a
- * Tpu_type_access, if the invocation is correct:
- * - Tpu(base, enum): enum must be a valid PU in base or its upper bounds
- * - Tpu_type_acces(tp, name): name must be a valid PU type name in tp's
- *   upper bounds
- *)
-let check_pu_in_locl_ty env lty =
-  let check env tp candidate =
-    (* TODO(T70090664): added dummy [] here as type arguments *)
-    let upper_bounds = Env.get_upper_bounds env tp [] in
-    Typing_set.fold
-      (fun bound (env, is_pu, is_pu_type_access) ->
-        match get_node bound with
-        | Tpu (lty, (_, enum)) ->
-          let (env, puaccess) =
-            Typing_utils.class_get_pu_type env lty enum candidate
-          in
-          let res = Option.is_some puaccess in
-          (env, is_pu, res || is_pu_type_access)
-        | _ ->
-          let (env, pu) = TUtils.class_get_pu env bound candidate in
-          let res = Option.is_some pu in
-          (env, res || is_pu, is_pu_type_access))
-      upper_bounds
-      (env, false, false)
-  in
-  let check_pu_visitor =
-    object
-      inherit [env] Type_visitor.locl_type_visitor as super
-
-      method! on_tpu env r base enum =
-        let (env, res) = Typing_utils.class_get_pu env base (snd enum) in
-        if Option.is_none res then Errors.pu_invalid_access (Reason.to_pos r) "";
-        super#on_type env base
-
-      method! on_tpu_type_access env r tp name =
-        let (env, is_pu, is_pu_type_access) = check env (snd tp) (snd name) in
-        let p = Reason.to_pos r in
-        if is_pu && is_pu_type_access then
-          Errors.pu_invalid_access p ": type is ambiguous"
-        else if not (is_pu || is_pu_type_access) then
-          Errors.pu_invalid_access p ": type is unknown";
-        env
-    end
-  in
-  check_pu_visitor#on_type env lty
-
 let rec fun_def ctx f :
     (Tast.fun_def * Typing_inference_env.t_global_with_pos) option =
-  Counters.count_typecheck @@ fun () ->
+  Counters.count Counters.Category.Typecheck @@ fun () ->
   Errors.run_with_span f.f_span @@ fun () ->
   let env = EnvFromDef.fun_env ~origin:Decl_counters.TopLevel ctx f in
   with_timeout env f.f_name ~do_:(fun env ->
@@ -380,7 +333,6 @@ let rec fun_def ctx f :
           let localize env ty = Phase.localize_with_self env ty in
           Typing_return.make_return_type localize env ty
       in
-      let env = check_pu_in_locl_ty env return_ty in
       let return =
         Typing_return.make_info
           f.f_fun_kind
@@ -402,7 +354,6 @@ let rec fun_def ctx f :
       let (env, typed_params) =
         let bind_param_and_check env param =
           let (env, fun_param) = Typing.bind_param env param in
-          let env = check_pu_in_locl_ty env (fst fun_param.param_type_hint) in
           (env, fun_param)
         in
         List.map_env
@@ -446,7 +397,7 @@ let rec fun_def ctx f :
         match hint_of_type_hint f.f_ret with
         | None ->
           if partial_callback 4030 then Errors.expecting_return_type_hint pos
-        | Some hint -> Typing_return.async_suggest_return f.f_fun_kind hint pos
+        | Some hint -> Typing_return.async_suggest_return f.f_fun_kind hint
       end;
       let (env, tparams) = List.map_env env f.f_tparams Typing.type_param in
       let (env, user_attributes) =
@@ -568,7 +519,6 @@ and method_def env cls m =
           in
           Typing_return.make_return_type (Phase.localize ~ety_env) env ret
       in
-      let env = check_pu_in_locl_ty env locl_ty in
       let return =
         Typing_return.make_info
           m.m_fun_kind
@@ -590,7 +540,6 @@ and method_def env cls m =
       let (env, typed_params) =
         let bind_param_and_check env param =
           let (env, fun_param) = Typing.bind_param env param in
-          let env = check_pu_in_locl_ty env (fst fun_param.param_type_hint) in
           (env, fun_param)
         in
         List.map_env
@@ -645,7 +594,7 @@ and method_def env cls m =
           if partial_callback 4030 then Errors.expecting_return_type_hint pos;
           None
         | Some hint ->
-          Typing_return.async_suggest_return m.m_fun_kind hint (fst m.m_name);
+          Typing_return.async_suggest_return m.m_fun_kind hint;
           hint_of_type_hint m.m_ret
       in
       let m = { m with m_ret = (fst m.m_ret, type_hint') } in
@@ -659,6 +608,36 @@ and method_def env cls m =
       let env =
         Typing_solver.solve_all_unsolved_tyvars env Errors.bad_method_typevar
       in
+      (* if the class implements dynamic, then check that its methods are dynamically callable *)
+      if
+        TypecheckerOptions.enable_sound_dynamic
+          (Provider_context.get_tcopt (Env.get_ctx env))
+        && Cls.get_implements_dynamic cls
+      then begin
+        (* 1. check if all the parameters of the method are enforceable *)
+        List.iter params_decl_ty ~f:(fun dtyopt ->
+            match dtyopt with
+            | Some dty ->
+              let te_check = Typing_enforceability.is_enforceable env dty in
+              if not te_check then
+                Errors.method_is_not_dynamically_callable
+                  (fst m.m_name)
+                  (snd m.m_name)
+                  (Cls.name cls)
+            | None -> ());
+        (* 2. check if the return type is coercible *)
+        if
+          not
+            (Typing_subtype.is_sub_type_for_coercion
+               env
+               locl_ty
+               (mk (Reason.Rnone, Tdynamic)))
+        then
+          Errors.method_is_not_dynamically_callable
+            (fst m.m_name)
+            (snd m.m_name)
+            (Cls.name cls)
+      end;
       let method_def =
         {
           Aast.m_annotation = Env.save local_tpenv env;
@@ -881,7 +860,7 @@ let class_type_param env ct =
   (env, tparam_list)
 
 let rec class_def ctx c =
-  Counters.count_typecheck @@ fun () ->
+  Counters.count Counters.Category.Typecheck @@ fun () ->
   Errors.run_with_span c.c_span @@ fun () ->
   let env = EnvFromDef.class_env ~origin:Decl_counters.TopLevel ctx c in
   let tc = Env.get_class env (snd c.c_name) in
@@ -952,7 +931,7 @@ and class_def_ env c tc =
             then
               ()
             else
-              Errors.override_per_trait c.c_name id pos
+              Errors.override_per_trait c.c_name id ce.ce_origin pos
     in
 
     List.iter (Cls.methods tc) (check_override ~is_static:false);
@@ -1004,11 +983,7 @@ and class_def_ env c tc =
       env
       (Cls.where_constraints tc)
   in
-  Typing_variance.class_
-    (Typing_variance.make_vgenv (Env.get_ctx env) (Env.get_file env))
-    (snd c.c_name)
-    tc
-    impl;
+  Typing_variance.class_def env tc impl;
   let check_where_constraints env ht =
     let (_, (p, _), _) = TUtils.unwrap_class_type ht in
     let (env, locl_ty) = Phase.localize_with_self env ht in
@@ -1102,10 +1077,6 @@ and class_def_ env c tc =
     | Some (m, global_inference_env) ->
       ((m :: typed_static_methods) @ typed_methods, [global_inference_env])
   in
-  let pu_enums =
-    try List.map c.c_pu_enums ~f:(pu_enum_def env (snd c.c_name))
-    with InvalidPocketUniverse -> []
-  in
   let (env, tparams) = class_type_param env c.c_tparams in
   let (env, user_attributes) =
     List.map_env env c.c_user_attributes Typing.user_attribute
@@ -1113,6 +1084,39 @@ and class_def_ env c tc =
   let env =
     Typing_solver.solve_all_unsolved_tyvars env Errors.bad_class_typevar
   in
+
+  let check_parent_implement_dynamic env child =
+    let parents =
+      (* for now, interfaces and traits are ignored *)
+      child.c_extends
+    in
+    List.iter parents (function
+        | (_, Happly ((_, name), _)) ->
+          begin
+            match Env.get_class_dep env name with
+            | Some parent_type ->
+              if
+                not
+                  (Bool.equal
+                     (Cls.get_implements_dynamic parent_type)
+                     c.c_implements_dynamic)
+              then
+                Errors.parent_implements_dynamic
+                  (fst child.c_name)
+                  (snd child.c_name)
+                  (Cls.name parent_type)
+                  c.c_implements_dynamic
+            | None -> ()
+          end
+        | _ -> ())
+  in
+  if TypecheckerOptions.enable_sound_dynamic (Provider_context.get_tcopt ctx)
+  then
+    (* two well-formedness checks are required: *)
+    (*  - a class that does not implements dynamic cannot extends a class that implement dynamic *)
+    (*  - if the superclass implements dynamic, then the class itself should implement dynamic *)
+    check_parent_implement_dynamic env c;
+
   ( {
       Aast.c_span = c.c_span;
       Aast.c_annotation = Env.save (Env.get_tpenv env) env;
@@ -1148,7 +1152,6 @@ and class_def_ env c tc =
       Aast.c_attributes = [];
       Aast.c_xhp_children = c.c_xhp_children;
       Aast.c_xhp_attrs = [];
-      Aast.c_pu_enums = pu_enums;
       Aast.c_emit_id = c.c_emit_id;
     },
     methods_global_inference_envs
@@ -1312,177 +1315,6 @@ and typeconst_def
       Aast.c_tconst_span;
       Aast.c_tconst_doc_comment;
     } )
-
-and pu_enum_def
-    env
-    c_name
-    {
-      pu_name;
-      pu_user_attributes;
-      pu_is_final;
-      pu_case_types;
-      pu_case_values;
-      pu_members;
-      _;
-    } =
-  (* What is a well-formed pocket universe?
-    - pu_name is unique
-    - pu_case_types are well-formed if all names are unique
-    - pu_case_values are well-formed if all types are well-formed in an
-       environment where all names in pu_case_types are bound to abstract types
-    - pu_members are well-formed if:
-      - each name is unique
-      - all types are defined one and only one times in pum_types, and
-        are well-formed in an environment
-      - all values are defined one and only one times in pum_types, and
-        are correctly typed according to pum_types instances.
-      - all types satisfy their case type constraints. This is actually
-        done in Typing_check_decls
-
-    Note: Structural correctness (mostly uniqueness and exhaustivity)
-    is checked during Nast check.
-    If the Nast check fails, this function might raise InvalidPocketUniverse,
-    that we silently ignore not to spam with duplicated errors.
-
-    Here we check that all definitions are well-typed.
- *)
-  let pos = fst pu_name in
-  (* Query the decl provider to get all case type and case expressions
-   * from the parent hierarchy, flattened
-   *)
-  let cls = Decl_provider.get_class (Env.get_ctx env) c_name in
-  let pu_enum =
-    Option.bind cls ~f:(fun cls -> Cls.get_pu_enum cls (snd pu_name))
-  in
-  let (pu_enum_case_types, pu_enum_case_values) =
-    match pu_enum with
-    | None ->
-      Errors.internal_error pos "Missing PU decl in provider";
-      (SMap.empty, SMap.empty)
-    | Some pu_enum -> (pu_enum.tpu_case_types, pu_enum.tpu_case_values)
-  in
-  let (env, pu_user_attributes) =
-    List.map_env env pu_user_attributes Typing.user_attribute
-  in
-  (* Adds all of the PU case types (not just the local one) as generics in the environment. *)
-  let case_types =
-    SMap.fold (fun _ (_, case_ty) acc -> case_ty :: acc) pu_enum_case_types []
-  in
-  let env = Phase.localize_and_add_generic_parameters pos env case_types in
-  (* Localize local case values, to check they are correct types *)
-  let () =
-    List.iter pu_case_values ~f:(fun (_sid, hint) ->
-        let (_ : env * locl_ty) = Phase.localize_hint_with_self env hint in
-        ())
-  in
-  (* Localize all case values once, since checking members might need non
-   * local information *)
-  let (env, pu_enum_case_values) =
-    SMap.map_env
-      (fun env _key (_, sid, decl_ty) ->
-        let (env, locl_ty) = Phase.localize_with_self env decl_ty in
-        (env, (sid, locl_ty)))
-      env
-      pu_enum_case_values
-  in
-  (* Now we are going to check that each member is well-typed. *)
-  let (_, members) =
-    let process_member env pum =
-      (* As mentioned above, we only check that the expressions have the
-       * right type. Types constraints have already been validated in
-       * Typing_check_decls
-       *)
-      (* Check that case expression are correctly typed *)
-      let make_aast_tparam (sid, hint) =
-        let hint_ty = Decl_hint.hint env.decl_env hint in
-        {
-          tp_variance = Ast_defs.Invariant;
-          tp_name = sid;
-          tp_tparams = [];
-          tp_constraints = [(Ast_defs.Constraint_eq, hint_ty)];
-          tp_reified = Aast.Erased;
-          tp_user_attributes = [];
-        }
-      in
-      let pum_types = List.map ~f:make_aast_tparam pum.pum_types in
-      let env =
-        Phase.localize_and_add_generic_parameters
-          (fst pum.pum_atom)
-          env
-          pum_types
-      in
-      let process_mapping env (sid, map_expr) =
-        (* Fetch expected type from the case types map *)
-        let (ty, expected) =
-          let ty =
-            match SMap.find_opt (snd sid) pu_enum_case_values with
-            | None -> raise InvalidPocketUniverse
-            | Some (_, locl_ty) -> locl_ty
-          in
-          (ty, Some (ExpectedTy.make (fst sid) Reason.URhint ty))
-        in
-        (* Infer the type of the expression *)
-        let (env, expr, ty') = Typing.expr ?expected env map_expr in
-        (* Type checking *)
-        let env =
-          Typing_ops.sub_type
-            (fst sid)
-            Reason.URhint
-            env
-            ty'
-            ty
-            Errors.pocket_universes_typing
-        in
-        (env, (sid, expr))
-      in
-      let (env, pum_exprs) = List.map_env env pum.pum_exprs process_mapping in
-      let members =
-        {
-          Aast.pum_atom = pum.pum_atom;
-          Aast.pum_types = pum.pum_types;
-          Aast.pum_exprs;
-        }
-      in
-      (env, members)
-    in
-    List.fold_map ~init:env ~f:process_member pu_members
-  in
-  (* Localize local case types *)
-  let (env, locl_case_types) =
-    List.map_env env pu_case_types Typing.type_param
-  in
-  let local_tpenv = Env.get_tpenv env in
-  let local_tpenv =
-    List.fold
-      ~init:local_tpenv
-      ~f:(fun tpenv { tp_name; tp_reified; _ } ->
-        let (def_pos, name) = tp_name in
-        let tpinfo =
-          Typing_kinding_defs.
-            {
-              lower_bounds = TySet.empty;
-              upper_bounds = TySet.empty;
-              reified = tp_reified;
-              enforceable = false;
-              (* TODO(T35357243) improve to support that *)
-              newable = false (* TODO(T35357243) improve to support that *);
-              (* TODO(T70090664) Is this correct? *)
-              parameters = [];
-            }
-        in
-        TPEnv.add ~def_pos name tpinfo tpenv)
-      pu_case_types
-  in
-  Aast.
-    {
-      pu_annotation = Env.save local_tpenv env;
-      pu_name;
-      pu_user_attributes;
-      pu_is_final;
-      pu_case_types = locl_case_types;
-      pu_case_values;
-      pu_members = members;
-    }
 
 (* This should agree with the set of expressions whose type can be inferred in
  * Decl_utils.infer_const
@@ -1662,7 +1494,7 @@ and class_var_def ~is_static cls env cv =
       (cv.cv_span, global_inference_env) ) )
 
 let gconst_def ctx cst =
-  Counters.count_typecheck @@ fun () ->
+  Counters.count Counters.Category.Typecheck @@ fun () ->
   Errors.run_with_span cst.cst_span @@ fun () ->
   let env = EnvFromDef.gconst_env ~origin:Decl_counters.TopLevel ctx cst in
   let env = Env.set_env_pessimize env in
@@ -1781,7 +1613,7 @@ let check_record_inheritance_cycle env ((rd_pos, rd_name) : Aast.sid) : unit =
   worker rd_name [rd_name] (SSet.singleton rd_name)
 
 let record_def_def ctx rd =
-  Counters.count_typecheck @@ fun () ->
+  Counters.count Counters.Category.Typecheck @@ fun () ->
   let env = EnvFromDef.record_def_env ~origin:Decl_counters.TopLevel ctx rd in
   (match rd.rd_extends with
   | Some parent -> record_def_parent env rd parent

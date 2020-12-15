@@ -360,6 +360,17 @@ struct FuncArgTypeData : IRExtraData {
   const StringData* type;
 };
 
+struct LdClsTypeCnsData : IRExtraData {
+  explicit LdClsTypeCnsData(bool no_throw) : noThrow(no_throw) {}
+
+  std::string show() const { return folly::to<std::string>(noThrow); }
+
+  bool equals(LdClsTypeCnsData o) const { return noThrow == o.noThrow; }
+  size_t hash() const { return noThrow ? 1 : 0; }
+
+  bool noThrow;
+};
+
 /*
  * Local variable ID.
  */
@@ -465,19 +476,23 @@ struct IterData : IRExtraData {
 };
 
 struct IterTypeData : IRExtraData {
-  IterTypeData(uint32_t iterId, IterSpecialization type)
+  IterTypeData(uint32_t iterId, IterSpecialization type, ArrayLayout layout)
     : iterId{iterId}
     , type{type}
+    , layout{layout}
   {
     always_assert(type.specialized);
   }
 
   std::string show() const {
-    return folly::format("{}::{}", iterId, HPHP::show(type)).str();
+    auto const type_str = HPHP::show(type);
+    auto const layout_str = layout.describe();
+    return folly::format("{}::{}::{}", iterId, type_str, layout_str).str();
   }
 
   uint32_t iterId;
   IterSpecialization type;
+  ArrayLayout layout;
 };
 
 struct IterOffsetData : IRExtraData {
@@ -757,27 +772,23 @@ struct StFrameMetaData : IRExtraData {
 struct CallBuiltinData : IRExtraData {
   explicit CallBuiltinData(IRSPRelOffset spOffset,
                            folly::Optional<IRSPRelOffset> retSpOffset,
-                           const Func* callee,
-                           int32_t numNonDefault)
+                           const Func* callee)
     : spOffset(spOffset)
     , retSpOffset(retSpOffset)
     , callee{callee}
-    , numNonDefault{numNonDefault}
   {}
 
   std::string show() const {
     return folly::to<std::string>(
       spOffset.offset, ',',
       retSpOffset ? folly::to<std::string>(retSpOffset->offset) : "*", ',',
-      callee->fullName()->data(), ',',
-      numNonDefault
+      callee->fullName()->data()
     );
   }
 
   IRSPRelOffset spOffset; // offset from StkPtr to last passed arg
   folly::Optional<IRSPRelOffset> retSpOffset; // offset from StkPtr after a return
   const Func* callee;
-  int32_t numNonDefault;
 };
 
 struct CallData : IRExtraData {
@@ -1564,19 +1575,6 @@ struct MethCallerData : IRExtraData {
   bool isCls;
 };
 
-struct BespokeLayoutData : IRExtraData {
-  explicit BespokeLayoutData(const bespoke::ConcreteLayout* layout)
-    : layout(layout)
-  {}
-
-  std::string show() const {
-    return layout ? folly::sformat("{}", BespokeLayout{layout}.describe())
-                  : "Generic";
-  }
-
-  const bespoke::ConcreteLayout* layout;
-};
-
 struct LoggingProfileData : IRExtraData {
   explicit LoggingProfileData(bespoke::LoggingProfile* profile)
     : profile(profile)
@@ -1588,6 +1586,35 @@ struct LoggingProfileData : IRExtraData {
   }
 
   bespoke::LoggingProfile* profile;
+};
+
+struct SinkProfileData : IRExtraData {
+  explicit SinkProfileData(bespoke::SinkProfile* profile)
+    : profile(profile)
+  {}
+
+  std::string show() const {
+    // profile->sink is already printed in the instruction's marker.
+    return folly::sformat("{}", reinterpret_cast<void*>(profile));
+  }
+
+  bespoke::SinkProfile* profile;
+};
+
+struct BespokeGetData : IRExtraData {
+  enum class KeyState { Present, Unknown };
+
+  explicit BespokeGetData(KeyState state) : state(state) {}
+
+  std::string show() const {
+    switch (state) {
+      case KeyState::Present: return "Present";
+      case KeyState::Unknown: return "Unknown";
+    }
+    always_assert(false);
+  }
+
+  KeyState state;
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -1661,8 +1688,9 @@ X(ReqRetranslate,               IRSPRelOffsetData);
 X(ReqRetranslateOpt,            IRSPRelOffsetData);
 X(CheckCold,                    TransIDData);
 X(IncProfCounter,               TransIDData);
-X(LogArrayReach,                TransIDData);
+X(LogArrayReach,                SinkProfileData);
 X(NewLoggingArray,              LoggingProfileData);
+X(BespokeGet,                   BespokeGetData);
 X(DefFuncEntryFP,               FuncData);
 X(Call,                         CallData);
 X(CallBuiltin,                  CallBuiltinData);
@@ -1803,17 +1831,8 @@ X(FuncHasAttr,                  AttrData);
 X(LdMethCallerName,             MethCallerData);
 X(LdRecDescCached,              RecNameData);
 X(LdRecDescCachedSafe,          RecNameData);
-X(BespokeGet,                   BespokeLayoutData);
-X(BespokeElem,                  BespokeLayoutData);
-X(BespokeEscalateToVanilla,     BespokeLayoutData);
-X(BespokeSet,                   BespokeLayoutData);
-X(BespokeAppend,                BespokeLayoutData);
-X(BespokeIterFirstPos,          BespokeLayoutData);
-X(BespokeIterLastPos,           BespokeLayoutData);
-X(BespokeIterAdvancePos,        BespokeLayoutData);
-X(BespokeIterGetKey,            BespokeLayoutData);
-X(BespokeIterGetVal,            BespokeLayoutData);
 X(LdUnitPerRequestFilepath,     RDSHandleData);
+X(LdClsTypeCns,                 LdClsTypeCnsData);
 
 #undef X
 

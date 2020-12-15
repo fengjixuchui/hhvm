@@ -128,14 +128,48 @@ struct EmptyMonotypeDict : BespokeArray {
 template <typename Key>
 struct MonotypeDict : BespokeArray {
   static uint8_t ComputeSizeIndex(size_t size);
+
+  // Create a new, empty MonotypeDict with the given capacity. The result will
+  // have a refcount of 1, but if Static is true, it will be in static memory.
+  template <bool Static = false>
   static MonotypeDict* MakeReserve(
       HeaderKind kind, bool legacy, size_t capacity, DataType dt);
+
   static MonotypeDict* MakeFromVanilla(ArrayData* ad, DataType dt);
 
   static MonotypeDict* As(ArrayData* ad);
   static const MonotypeDict* As(const ArrayData* ad);
 
   bool checkInvariants() const;
+
+  // Helpers used to JIT fast accessors for these array-likes. We can call
+  // these helpers on a MonotypeDict<Key> for any Key type.
+  static constexpr size_t entriesOffset() {
+    return sizeof(Self);
+  }
+  static constexpr size_t elmSize() {
+    return sizeof(Elm);
+  }
+  static constexpr size_t elmKeyOffset() {
+    return offsetof(Elm, key);
+  }
+  static constexpr size_t elmValOffset() {
+    return offsetof(Elm, val);
+  }
+  static constexpr size_t usedOffset() {
+    return offsetof(Self, m_extra_lo16);
+  }
+  static constexpr size_t usedSize() {
+    return sizeof(m_extra_lo16);
+  }
+  static constexpr size_t typeOffset() {
+    static_assert(folly::kIsLittleEndian);
+    return offsetof(Self, m_extra_hi16);
+  }
+  // This bit is set in our layout index iff we have int keys.
+  static constexpr LayoutIndex intKeyMask() {
+    return {0x0200};
+  }
 
 #define X(Return, Name, Args...) static Return Name(Args);
   BESPOKE_LAYOUT_FUNCTIONS(MonotypeDict<Key>)
@@ -150,13 +184,13 @@ private:
   static constexpr Index kTombstoneIndex = Index(-2);
 
   // Different modes for the core find() implementation.
-  struct Add { Index* index; };
+  struct Add { Index* index; size_t chain_length; };
   struct Get { const Elm* elm; };
   struct Remove { ssize_t hash_pos; };
   struct Update { Elm* elm; Index* index; };
   template <typename Result> Result find(Key key, strhash_t hash);
 
-  Index* findForAdd(strhash_t hash);
+  Add findForAdd(strhash_t hash);
   const Elm* findForGet(Key key, strhash_t hash) const;
 
   TypedValue getImpl(Key key) const;
@@ -204,6 +238,34 @@ private:
   bool isZombie() const;
 };
 
-ArrayData* MakeMonotypeDictFromVanilla(ArrayData* ad, DataType dt, KeyTypes kt);
+struct TopMonotypeDictLayout : public AbstractLayout {
+  explicit TopMonotypeDictLayout(KeyTypes kt);
+  static LayoutIndex Index(KeyTypes kt);
+  KeyTypes m_keyType;
+};
+
+struct EmptyOrMonotypeDictLayout : public AbstractLayout {
+  EmptyOrMonotypeDictLayout(KeyTypes kt, DataType type);
+  static LayoutIndex Index(KeyTypes kt, DataType type);
+  KeyTypes m_keyType;
+  DataType m_valType;
+};
+
+struct EmptyMonotypeDictLayout : public ConcreteLayout {
+  explicit EmptyMonotypeDictLayout();
+  static LayoutIndex Index();
+};
+
+struct MonotypeDictLayout : public ConcreteLayout {
+  MonotypeDictLayout(KeyTypes kt, DataType type);
+  static LayoutIndex Index(KeyTypes kt, DataType type);
+  KeyTypes m_keyType;
+  DataType m_valType;
+};
+
+bool isMonotypeDictLayout(LayoutIndex index);
+
+// Returns nullptr on failure (e.g. on exceeding the max MonotypeDict size).
+BespokeArray* MakeMonotypeDictFromVanilla(ArrayData*, DataType, KeyTypes);
 
 }}

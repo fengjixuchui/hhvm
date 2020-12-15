@@ -7,6 +7,8 @@
  *
  *)
 
+val hh_log_heap : unit -> unit
+
 val indexing : ServerEnv.genv -> Relative_path.t list Bucket.next * float
 
 val parsing :
@@ -26,6 +28,7 @@ val update_files :
   Naming_table.t ->
   Provider_context.t ->
   float ->
+  profile_label:string ->
   profiling:CgroupProfiler.Profiling.t ->
   float
 

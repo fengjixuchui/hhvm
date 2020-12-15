@@ -72,8 +72,6 @@ let rec is_byval_collection_or_string_or_any_type env ty =
     | Tobject
     | Tfun _
     | Tvar _
-    | Tpu _
-    | Tpu_type_access _
     | Taccess _ ->
       false
     | Tunapplied_alias _ ->
@@ -89,7 +87,7 @@ let rec is_valid_mutable_subscript_expression_target env v =
   | ((_, ty), Array_get (e, _)) ->
     is_byval_collection_or_string_or_any_type env ty
     && is_valid_mutable_subscript_expression_target env e
-  | ((_, ty), Obj_get (e, _, _)) ->
+  | ((_, ty), Obj_get (e, _, _, _)) ->
     is_byval_collection_or_string_or_any_type env ty
     && ( is_valid_mutable_subscript_expression_target env e
        || expr_is_valid_borrowed_arg env e )
@@ -114,7 +112,7 @@ let check_assignment_or_unset_target
   let p = get_position te1 in
   match snd te1 with
   (* Setting mutable locals is okay *)
-  | Obj_get (e1, _, _) when expr_is_valid_borrowed_arg env e1 -> ()
+  | Obj_get (e1, _, _, _) when expr_is_valid_borrowed_arg env e1 -> ()
   | Array_get (e1, i)
     when is_assignment && not (is_valid_append_target env (get_type e1)) ->
     Errors.nonreactive_indexing
@@ -381,7 +379,7 @@ let enforce_mutable_call (env : Env.env) (te : expr) =
     let (env, efun_ty) = Env.expand_type env fun_ty in
     check_mutability_fun_params env Borrowable_args.empty efun_ty el
   (* $x->method() where method is mutable *)
-  | Call (((pos, fun_ty), Obj_get (expr, _, _)), _, el, _) ->
+  | Call (((pos, fun_ty), Obj_get (expr, _, _, _)), _, el, _) ->
     let (env, efun_ty) = Env.expand_type env fun_ty in
     begin
       match get_node efun_ty with
@@ -672,13 +670,11 @@ let check =
             match e with
             | (_, Lvar (p, id)) ->
               let local_id = Local_id.to_string id in
-              if
-                SN.Superglobals.is_superglobal local_id
-                || String.equal local_id SN.Superglobals.globals
-              then
+              if SN.Superglobals.is_superglobal local_id then
                 Errors.superglobal_in_reactive_context p local_id
             | (_, Class_get _) ->
-              Errors.static_property_in_reactive_context (get_position expr);
+              Errors.CoeffectEnforcedOp.static_property_access
+                (get_position expr);
 
               (* dive into subnodes *)
               super#on_expr (env, ctx) expr
@@ -739,7 +735,7 @@ let check =
               super#on_expr (env, ctx) expr
             | (_, Call ((_, Id (p, f)), _, _, None))
               when String.equal f SN.SpecialFunctions.echo ->
-              Errors.echo_in_reactive_context p;
+              Errors.CoeffectEnforcedOp.output p;
               super#on_expr (env, ctx) expr
             | (_, Call (f, _, _, _)) ->
               enforce_mutable_call env expr;

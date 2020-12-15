@@ -293,6 +293,7 @@ let return_info_as_value env return_info =
           return_mutable;
           return_explicit;
           return_void_to_rx;
+          return_dynamically_callable;
         } =
     return_info
   in
@@ -303,6 +304,7 @@ let return_info_as_value env return_info =
       ("return_mutable", Bool return_mutable);
       ("return_explicit", Bool return_explicit);
       ("return_void_to_rx", Bool return_void_to_rx);
+      ("return_dynamically_callable", Bool return_dynamically_callable);
     ]
 
 let local_id_map_as_value f m =
@@ -438,7 +440,6 @@ let fun_kind_to_string k =
   | Ast_defs.FAsync -> "async"
   | Ast_defs.FGenerator -> "generator"
   | Ast_defs.FAsyncGenerator -> "async generator"
-  | Ast_defs.FCoroutine -> "coroutine"
 
 let val_kind_to_string k =
   match k with
@@ -558,6 +559,7 @@ let env_as_value env =
     in_loop;
     in_try;
     in_case;
+    in_expr_tree;
     inside_constructor;
     global_tpenv;
     log_levels = _;
@@ -577,6 +579,7 @@ let env_as_value env =
       ("in_loop", bool_as_value in_loop);
       ("in_try", bool_as_value in_try);
       ("in_case", bool_as_value in_case);
+      ("in_expr_tree", bool_as_value in_expr_tree);
       ("inside_constructor", bool_as_value inside_constructor);
       ("global_tpenv", tpenv_as_value env global_tpenv);
       ("allow_wildcards", bool_as_value allow_wildcards);

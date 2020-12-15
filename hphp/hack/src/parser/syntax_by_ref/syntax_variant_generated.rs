@@ -55,7 +55,6 @@ pub enum SyntaxVariant<'a, T, V> {
     FunctionDeclaration(&'a FunctionDeclarationChildren<'a, T, V>),
     FunctionDeclarationHeader(&'a FunctionDeclarationHeaderChildren<'a, T, V>),
     Capability(&'a CapabilityChildren<'a, T, V>),
-    CapabilityProvisional(&'a CapabilityProvisionalChildren<'a, T, V>),
     WhereClause(&'a WhereClauseChildren<'a, T, V>),
     WhereConstraint(&'a WhereConstraintChildren<'a, T, V>),
     MethodishDeclaration(&'a MethodishDeclarationChildren<'a, T, V>),
@@ -70,6 +69,7 @@ pub enum SyntaxVariant<'a, T, V> {
     ConstDeclaration(&'a ConstDeclarationChildren<'a, T, V>),
     ConstantDeclarator(&'a ConstantDeclaratorChildren<'a, T, V>),
     TypeConstDeclaration(&'a TypeConstDeclarationChildren<'a, T, V>),
+    ContextConstDeclaration(&'a ContextConstDeclarationChildren<'a, T, V>),
     DecoratedExpression(&'a DecoratedExpressionChildren<'a, T, V>),
     ParameterDeclaration(&'a ParameterDeclarationChildren<'a, T, V>),
     VariadicParameter(&'a VariadicParameterChildren<'a, T, V>),
@@ -101,8 +101,6 @@ pub enum SyntaxVariant<'a, T, V> {
     CaseLabel(&'a CaseLabelChildren<'a, T, V>),
     DefaultLabel(&'a DefaultLabelChildren<'a, T, V>),
     ReturnStatement(&'a ReturnStatementChildren<'a, T, V>),
-    GotoLabel(&'a GotoLabelChildren<'a, T, V>),
-    GotoStatement(&'a GotoStatementChildren<'a, T, V>),
     ThrowStatement(&'a ThrowStatementChildren<'a, T, V>),
     BreakStatement(&'a BreakStatementChildren<'a, T, V>),
     ContinueStatement(&'a ContinueStatementChildren<'a, T, V>),
@@ -164,13 +162,14 @@ pub enum SyntaxVariant<'a, T, V> {
     XHPExpression(&'a XHPExpressionChildren<'a, T, V>),
     XHPClose(&'a XHPCloseChildren<'a, T, V>),
     TypeConstant(&'a TypeConstantChildren<'a, T, V>),
-    PUAccess(&'a PUAccessChildren<'a, T, V>),
     VectorTypeSpecifier(&'a VectorTypeSpecifierChildren<'a, T, V>),
     KeysetTypeSpecifier(&'a KeysetTypeSpecifierChildren<'a, T, V>),
     TupleTypeExplicitSpecifier(&'a TupleTypeExplicitSpecifierChildren<'a, T, V>),
     VarrayTypeSpecifier(&'a VarrayTypeSpecifierChildren<'a, T, V>),
+    FunctionCtxTypeSpecifier(&'a FunctionCtxTypeSpecifierChildren<'a, T, V>),
     TypeParameter(&'a TypeParameterChildren<'a, T, V>),
     TypeConstraint(&'a TypeConstraintChildren<'a, T, V>),
+    ContextConstraint(&'a ContextConstraintChildren<'a, T, V>),
     DarrayTypeSpecifier(&'a DarrayTypeSpecifierChildren<'a, T, V>),
     DictionaryTypeSpecifier(&'a DictionaryTypeSpecifierChildren<'a, T, V>),
     ClosureTypeSpecifier(&'a ClosureTypeSpecifierChildren<'a, T, V>),
@@ -195,14 +194,6 @@ pub enum SyntaxVariant<'a, T, V> {
     ErrorSyntax(&'a ErrorSyntaxChildren<'a, T, V>),
     ListItem(&'a ListItemChildren<'a, T, V>),
     EnumAtomExpression(&'a EnumAtomExpressionChildren<'a, T, V>),
-    PocketAtomExpression(&'a PocketAtomExpressionChildren<'a, T, V>),
-    PocketIdentifierExpression(&'a PocketIdentifierExpressionChildren<'a, T, V>),
-    PocketAtomMappingDeclaration(&'a PocketAtomMappingDeclarationChildren<'a, T, V>),
-    PocketEnumDeclaration(&'a PocketEnumDeclarationChildren<'a, T, V>),
-    PocketFieldTypeExprDeclaration(&'a PocketFieldTypeExprDeclarationChildren<'a, T, V>),
-    PocketFieldTypeDeclaration(&'a PocketFieldTypeDeclarationChildren<'a, T, V>),
-    PocketMappingIdDeclaration(&'a PocketMappingIdDeclarationChildren<'a, T, V>),
-    PocketMappingTypeDeclaration(&'a PocketMappingTypeDeclarationChildren<'a, T, V>),
 }
 
 #[derive(Debug, Clone)]
@@ -429,7 +420,6 @@ pub struct FunctionDeclarationHeaderChildren<'a, T, V> {
     pub parameter_list: Syntax<'a, T, V>,
     pub right_paren: Syntax<'a, T, V>,
     pub capability: Syntax<'a, T, V>,
-    pub capability_provisional: Syntax<'a, T, V>,
     pub colon: Syntax<'a, T, V>,
     pub type_: Syntax<'a, T, V>,
     pub where_clause: Syntax<'a, T, V>,
@@ -440,16 +430,6 @@ pub struct CapabilityChildren<'a, T, V> {
     pub left_bracket: Syntax<'a, T, V>,
     pub types: Syntax<'a, T, V>,
     pub right_bracket: Syntax<'a, T, V>,
-}
-
-#[derive(Debug, Clone)]
-pub struct CapabilityProvisionalChildren<'a, T, V> {
-    pub at: Syntax<'a, T, V>,
-    pub left_brace: Syntax<'a, T, V>,
-    pub type_: Syntax<'a, T, V>,
-    pub unsafe_plus: Syntax<'a, T, V>,
-    pub unsafe_type: Syntax<'a, T, V>,
-    pub right_brace: Syntax<'a, T, V>,
 }
 
 #[derive(Debug, Clone)]
@@ -570,6 +550,19 @@ pub struct TypeConstDeclarationChildren<'a, T, V> {
     pub type_constraint: Syntax<'a, T, V>,
     pub equal: Syntax<'a, T, V>,
     pub type_specifier: Syntax<'a, T, V>,
+    pub semicolon: Syntax<'a, T, V>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContextConstDeclarationChildren<'a, T, V> {
+    pub modifiers: Syntax<'a, T, V>,
+    pub const_keyword: Syntax<'a, T, V>,
+    pub ctx_keyword: Syntax<'a, T, V>,
+    pub name: Syntax<'a, T, V>,
+    pub type_parameters: Syntax<'a, T, V>,
+    pub constraint: Syntax<'a, T, V>,
+    pub equal: Syntax<'a, T, V>,
+    pub ctx_list: Syntax<'a, T, V>,
     pub semicolon: Syntax<'a, T, V>,
 }
 
@@ -816,19 +809,6 @@ pub struct DefaultLabelChildren<'a, T, V> {
 pub struct ReturnStatementChildren<'a, T, V> {
     pub keyword: Syntax<'a, T, V>,
     pub expression: Syntax<'a, T, V>,
-    pub semicolon: Syntax<'a, T, V>,
-}
-
-#[derive(Debug, Clone)]
-pub struct GotoLabelChildren<'a, T, V> {
-    pub name: Syntax<'a, T, V>,
-    pub colon: Syntax<'a, T, V>,
-}
-
-#[derive(Debug, Clone)]
-pub struct GotoStatementChildren<'a, T, V> {
-    pub keyword: Syntax<'a, T, V>,
-    pub label_name: Syntax<'a, T, V>,
     pub semicolon: Syntax<'a, T, V>,
 }
 
@@ -1295,13 +1275,6 @@ pub struct TypeConstantChildren<'a, T, V> {
 }
 
 #[derive(Debug, Clone)]
-pub struct PUAccessChildren<'a, T, V> {
-    pub left_type: Syntax<'a, T, V>,
-    pub separator: Syntax<'a, T, V>,
-    pub right_type: Syntax<'a, T, V>,
-}
-
-#[derive(Debug, Clone)]
 pub struct VectorTypeSpecifierChildren<'a, T, V> {
     pub keyword: Syntax<'a, T, V>,
     pub left_angle: Syntax<'a, T, V>,
@@ -1337,6 +1310,12 @@ pub struct VarrayTypeSpecifierChildren<'a, T, V> {
 }
 
 #[derive(Debug, Clone)]
+pub struct FunctionCtxTypeSpecifierChildren<'a, T, V> {
+    pub keyword: Syntax<'a, T, V>,
+    pub variable: Syntax<'a, T, V>,
+}
+
+#[derive(Debug, Clone)]
 pub struct TypeParameterChildren<'a, T, V> {
     pub attribute_spec: Syntax<'a, T, V>,
     pub reified: Syntax<'a, T, V>,
@@ -1350,6 +1329,12 @@ pub struct TypeParameterChildren<'a, T, V> {
 pub struct TypeConstraintChildren<'a, T, V> {
     pub keyword: Syntax<'a, T, V>,
     pub type_: Syntax<'a, T, V>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContextConstraintChildren<'a, T, V> {
+    pub keyword: Syntax<'a, T, V>,
+    pub ctx_list: Syntax<'a, T, V>,
 }
 
 #[derive(Debug, Clone)]
@@ -1525,72 +1510,6 @@ pub struct ListItemChildren<'a, T, V> {
 pub struct EnumAtomExpressionChildren<'a, T, V> {
     pub hash: Syntax<'a, T, V>,
     pub expression: Syntax<'a, T, V>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PocketAtomExpressionChildren<'a, T, V> {
-    pub glyph: Syntax<'a, T, V>,
-    pub expression: Syntax<'a, T, V>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PocketIdentifierExpressionChildren<'a, T, V> {
-    pub qualifier: Syntax<'a, T, V>,
-    pub pu_operator: Syntax<'a, T, V>,
-    pub field: Syntax<'a, T, V>,
-    pub operator: Syntax<'a, T, V>,
-    pub name: Syntax<'a, T, V>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PocketAtomMappingDeclarationChildren<'a, T, V> {
-    pub glyph: Syntax<'a, T, V>,
-    pub name: Syntax<'a, T, V>,
-    pub left_paren: Syntax<'a, T, V>,
-    pub mappings: Syntax<'a, T, V>,
-    pub right_paren: Syntax<'a, T, V>,
-    pub semicolon: Syntax<'a, T, V>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PocketEnumDeclarationChildren<'a, T, V> {
-    pub attributes: Syntax<'a, T, V>,
-    pub modifiers: Syntax<'a, T, V>,
-    pub enum_: Syntax<'a, T, V>,
-    pub name: Syntax<'a, T, V>,
-    pub left_brace: Syntax<'a, T, V>,
-    pub fields: Syntax<'a, T, V>,
-    pub right_brace: Syntax<'a, T, V>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PocketFieldTypeExprDeclarationChildren<'a, T, V> {
-    pub case: Syntax<'a, T, V>,
-    pub type_: Syntax<'a, T, V>,
-    pub name: Syntax<'a, T, V>,
-    pub semicolon: Syntax<'a, T, V>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PocketFieldTypeDeclarationChildren<'a, T, V> {
-    pub case: Syntax<'a, T, V>,
-    pub type_: Syntax<'a, T, V>,
-    pub type_parameter: Syntax<'a, T, V>,
-    pub semicolon: Syntax<'a, T, V>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PocketMappingIdDeclarationChildren<'a, T, V> {
-    pub name: Syntax<'a, T, V>,
-    pub initializer: Syntax<'a, T, V>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PocketMappingTypeDeclarationChildren<'a, T, V> {
-    pub keyword: Syntax<'a, T, V>,
-    pub name: Syntax<'a, T, V>,
-    pub equal: Syntax<'a, T, V>,
-    pub type_: Syntax<'a, T, V>,
 }
 
 

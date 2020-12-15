@@ -782,25 +782,6 @@ module Superglobals = struct
     (fun x -> HashSet.mem superglobals x)
 end
 
-module PPLFunctions = struct
-  let all_reserved =
-    HashSet.of_list
-      [
-        "sample";
-        "\\sample";
-        "factor";
-        "\\factor";
-        "observe";
-        "\\observe";
-        "condition";
-        "\\condition";
-        "sample_model";
-        "\\sample_model";
-      ]
-
-  let is_reserved name = HashSet.mem all_reserved name
-end
-
 module Regex = struct
   let tPattern = "\\HH\\Lib\\Regex\\Pattern"
 end
@@ -813,10 +794,8 @@ module EmitterSpecialFunctions = struct
   let eval = "\\eval"
 
   let set_frame_metadata = "\\HH\\set_frame_metadata"
-end
 
-module PocketUniverses = struct
-  let members = "Members"
+  let systemlib_reified_generics = "\\__systemlib_reified_generics"
 end
 
 module XHP = struct
@@ -836,12 +815,24 @@ end
  * to the typechecker *)
 module UnstableFeatures = struct
   let coeffects_provisional = "coeffects_provisional"
+
+  let ifc = "ifc"
 end
 
 module Coeffects = struct
   let capability = "$#capability"
 
   let local_capability = "$#local_capability"
+end
 
+module Capabilities = struct
   let defaults = "\\HH\\Contexts\\defaults"
+
+  let prefix = "\\HH\\Capabilities\\"
+
+  let writeProperty = prefix ^ "WriteProperty"
+
+  let accessStaticVariable = prefix ^ "AccessStaticVariable"
+
+  let output = prefix ^ "Output"
 end

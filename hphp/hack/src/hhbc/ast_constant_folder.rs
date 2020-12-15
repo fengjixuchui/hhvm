@@ -242,8 +242,14 @@ fn key_expr_to_typed_value(
     expr: &tast::Expr,
 ) -> Result<TypedValue, Error> {
     let tv = expr_to_typed_value(emitter, ns, expr)?;
+    let fold_lc = emitter
+        .options()
+        .hhvm
+        .flags
+        .contains(HhvmFlags::FOLD_LAZY_CLASS_KEYS);
     match tv {
         TypedValue::Int(_) | TypedValue::String(_) => Ok(tv),
+        TypedValue::LazyClass(_) if fold_lc => Ok(tv),
         _ => Err(Error::NotLiteral),
     }
 }
@@ -254,8 +260,14 @@ fn keyset_value_afield_to_typed_value(
     afield: &tast::Afield,
 ) -> Result<TypedValue, Error> {
     let tv = value_afield_to_typed_value(emitter, ns, afield)?;
+    let fold_lc = emitter
+        .options()
+        .hhvm
+        .flags
+        .contains(HhvmFlags::FOLD_LAZY_CLASS_KEYS);
     match tv {
         TypedValue::Int(_) | TypedValue::String(_) => Ok(tv),
+        TypedValue::LazyClass(_) if fold_lc => Ok(tv),
         _ => Err(Error::NotLiteral),
     }
 }
@@ -348,6 +360,7 @@ pub fn expr_to_typed_value_(
                 std::string::String::from_utf8_unchecked(s.clone().into())
             }))
         }
+        EnumAtom(s) => Ok(TypedValue::String(s.clone())),
         Float(s) => {
             if s == math::INF {
                 Ok(TypedValue::float(std::f64::INFINITY))
@@ -442,6 +455,15 @@ pub fn expr_to_typed_value_(
                 .map(|e| {
                     expr_to_typed_value(emitter, ns, e).and_then(|tv| match tv {
                         TypedValue::Int(_) | TypedValue::String(_) => Ok(tv),
+                        TypedValue::LazyClass(_)
+                            if emitter
+                                .options()
+                                .hhvm
+                                .flags
+                                .contains(HhvmFlags::FOLD_LAZY_CLASS_KEYS) =>
+                        {
+                            Ok(tv)
+                        }
                         _ => Err(Error::NotLiteral),
                     })
                 })
@@ -482,7 +504,6 @@ pub fn expr_to_typed_value_(
                 class_const_to_typed_value(emitter, &x.0, &x.1)
             }
         }
-        BracedExpr(x) => expr_to_typed_value_(emitter, ns, x, allow_maps, false),
         ClassGet(_) => Err(Error::UserDefinedConstant),
         As(x) if (x.1).1.is_hlike() => expr_to_typed_value_(emitter, ns, &x.0, allow_maps, false),
         _ => Err(Error::NotLiteral),

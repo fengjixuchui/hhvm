@@ -74,12 +74,12 @@ let rec collect_legacy_class
             (* NOTE: the following relies on the fact that declaring a class puts
              * the inheritance hierarchy into the shared memory heaps. When that
              * invariant no longer holds, the following will no longer work. *)
-            let (_ : Decl_defs.decl_class_type) =
-              Decl.declare_folded_class_in_file
-                ~sh:SharedMem.Uses
-                ctx
-                filename
-                cid
+            let (_ : (_ * _) option) =
+              Errors.run_in_decl_mode filename (fun () ->
+                  Decl_folded_class.class_decl_if_missing
+                    ~sh:SharedMem.Uses
+                    ctx
+                    cid)
             in
             collect_legacy_class
               ctx
@@ -204,6 +204,10 @@ let collect_legacy_decls ctx classes =
 type saved_shallow_decls = { classes: Shallow_decl_defs.shallow_class SMap.t }
 [@@deriving show]
 
+let class_naming_and_decl ctx c =
+  let c = Errors.ignore_ (fun () -> Naming.class_ ctx c) in
+  Shallow_decl.class_ ctx c
+
 let collect_shallow_decls ctx workers classnames =
   let classnames = SSet.elements classnames in
   (* We're only going to fetch the shallow-decls that were explicitly listed;
@@ -220,7 +224,7 @@ let collect_shallow_decls ctx workers classnames =
           Hh_logger.log "Missing shallow requested class %s" cid;
           acc
         | Some ast ->
-          let data = Shallow_classes_heap.class_naming_and_decl ctx ast in
+          let data = class_naming_and_decl ctx ast in
           SMap.add acc ~key:cid ~data)
   in
   (* The 'classnames' came from a SSet, and therefore all elements are unique.

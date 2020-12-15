@@ -11,7 +11,9 @@ const DEFAULT: GlobalOptions<'_> = GlobalOptions {
     tco_dynamic_view: false,
     tco_num_local_workers: None,
     tco_parallel_type_checking_threshold: 10,
+    tco_max_typechecker_worker_memory_mb: None,
     tco_defer_class_declaration_threshold: None,
+    tco_defer_class_memory_mb_threshold: None,
     tco_max_times_to_defer_type_checking: None,
     tco_prefetch_deferred_files: false,
     tco_remote_type_check_threshold: None,
@@ -51,12 +53,12 @@ const DEFAULT: GlobalOptions<'_> = GlobalOptions {
     po_rust_parser_errors: false,
     profile_type_check_duration_threshold: 0.0,
     profile_type_check_twice: false,
-    profile_total_typecheck_duration: false,
     profile_owner: None,
     profile_desc: "",
     tco_like_type_hints: false,
     tco_union_intersection_type_hints: false,
     tco_coeffects: false,
+    tco_coeffects_local: false,
     tco_like_casts: false,
     tco_simple_pessimize: 0.0,
     tco_complex_coercion: false,
@@ -112,6 +114,9 @@ const DEFAULT: GlobalOptions<'_> = GlobalOptions {
     tco_enable_sound_dynamic: false,
     po_disallow_hash_comments: false,
     po_disallow_fun_and_cls_meth_pseudo_funcs: false,
+    tco_use_direct_decl_parser: false,
+    tco_ifc_enabled: false,
+    po_enable_coeffects: false,
 };
 
 impl GlobalOptions<'static> {

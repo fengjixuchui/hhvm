@@ -71,6 +71,7 @@ impl<'a> Reason<'a> {
             | Rusing(p)
             | RdynamicProp(p)
             | RdynamicCall(p)
+            | RdynamicConstruct(p)
             | RidxDict(p)
             | RmissingRequiredField((p, _))
             | RmissingOptionalField((p, _))
@@ -95,7 +96,8 @@ impl<'a> Reason<'a> {
             | RglobalFunParam(p)
             | RglobalFunRet(p)
             | Rsplice(p)
-            | RetBoolean(p) => Some(p),
+            | RetBoolean(p)
+            | RdefaultCapability(p) => Some(p),
             RlostInfo((_, r, _))
             | Rinstantiate((_, _, r))
             | Rtypeconst((r, _, _, _))

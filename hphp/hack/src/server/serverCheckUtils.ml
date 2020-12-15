@@ -92,25 +92,14 @@ let global_typecheck_kind genv env =
   else
     ServerCommandTypes.Blocking
 
-let get_check_info genv env : Typing_check_service.check_info =
-  ServerEnv.(
-    let init_id = env.init_env.init_id in
-    let recheck_id = env.init_env.recheck_id in
-    let profile_log = ServerArgs.profile_log genv.options in
-    let profile_type_check_twice =
-      genv.local_config.ServerLocalConfig.profile_type_check_twice
-    in
-    let profile_type_check_duration_threshold =
-      genv.local_config.ServerLocalConfig.profile_type_check_duration_threshold
-    in
-    {
-      Typing_check_service.init_id;
-      recheck_id;
-      profile_log;
-      profile_total_typecheck_duration =
-        GlobalOptions.profile_total_typecheck_duration
-          (ServerConfig.typechecker_options genv.config);
-      profile_decling = genv.local_config.ServerLocalConfig.profile_decling;
-      profile_type_check_twice;
-      profile_type_check_duration_threshold;
-    })
+let get_check_info genv env : Typing_service_types.check_info =
+  {
+    Typing_service_types.init_id = env.init_env.init_id;
+    recheck_id = env.init_env.recheck_id;
+    profile_log = ServerArgs.profile_log genv.options;
+    profile_decling = genv.local_config.ServerLocalConfig.profile_decling;
+    profile_type_check_twice =
+      genv.local_config.ServerLocalConfig.profile_type_check_twice;
+    profile_type_check_duration_threshold =
+      genv.local_config.ServerLocalConfig.profile_type_check_duration_threshold;
+  }

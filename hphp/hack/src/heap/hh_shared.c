@@ -1141,6 +1141,14 @@ value hh_get_handle(void) {
   CAMLreturn(connector);
 }
 
+/* Master is 0, workers start at 1 */
+value hh_get_worker_id() {
+  CAMLparam0();
+  CAMLlocal1(result);
+  result = Val_long(worker_id);
+  CAMLreturn(result);
+}
+
 /*****************************************************************************/
 /* Counter
  *
@@ -2370,6 +2378,7 @@ size_t hh_save_dep_table_blob_helper(
 
   // Allocate space for all the values
   FILE* dep_table_blob_file = fopen(out_filename, "wb+");
+  assert(dep_table_blob_file != NULL);
 
   // TODO: T38685427 - write MAGIC_CONSTANT
   // TODO: write the format version

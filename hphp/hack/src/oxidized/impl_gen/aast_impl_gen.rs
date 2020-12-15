@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<13e7258747b62db1ee99b7ce44cfeadb>>
+// @generated SignedSource<<e28ff1dd978e8a394dbcfd56291cd0a4>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
@@ -29,12 +29,6 @@ impl<Ex, Fb, En, Hi> Stmt_<Ex, Fb, En, Hi> {
     }
     pub fn mk_return(p0: Option<Expr<Ex, Fb, En, Hi>>) -> Self {
         Stmt_::Return(Box::new(p0))
-    }
-    pub fn mk_goto_label(p0: Pstring) -> Self {
-        Stmt_::GotoLabel(Box::new(p0))
-    }
-    pub fn mk_goto(p0: Pstring) -> Self {
-        Stmt_::Goto(Box::new(p0))
     }
     pub fn mk_awaitall(
         p0: Vec<(Option<Lid>, Expr<Ex, Fb, En, Hi>)>,
@@ -131,18 +125,6 @@ impl<Ex, Fb, En, Hi> Stmt_<Ex, Fb, En, Hi> {
             _ => false,
         }
     }
-    pub fn is_goto_label(&self) -> bool {
-        match self {
-            Stmt_::GotoLabel(..) => true,
-            _ => false,
-        }
-    }
-    pub fn is_goto(&self) -> bool {
-        match self {
-            Stmt_::Goto(..) => true,
-            _ => false,
-        }
-    }
     pub fn is_awaitall(&self) -> bool {
         match self {
             Stmt_::Awaitall(..) => true,
@@ -236,18 +218,6 @@ impl<Ex, Fb, En, Hi> Stmt_<Ex, Fb, En, Hi> {
     pub fn as_return(&self) -> Option<&Option<Expr<Ex, Fb, En, Hi>>> {
         match self {
             Stmt_::Return(p0) => Some(&p0),
-            _ => None,
-        }
-    }
-    pub fn as_goto_label(&self) -> Option<&Pstring> {
-        match self {
-            Stmt_::GotoLabel(p0) => Some(&p0),
-            _ => None,
-        }
-    }
-    pub fn as_goto(&self) -> Option<&Pstring> {
-        match self {
-            Stmt_::Goto(p0) => Some(&p0),
             _ => None,
         }
     }
@@ -368,18 +338,6 @@ impl<Ex, Fb, En, Hi> Stmt_<Ex, Fb, En, Hi> {
     pub fn as_return_mut(&mut self) -> Option<&mut Option<Expr<Ex, Fb, En, Hi>>> {
         match self {
             Stmt_::Return(p0) => Some(p0.as_mut()),
-            _ => None,
-        }
-    }
-    pub fn as_goto_label_mut(&mut self) -> Option<&mut Pstring> {
-        match self {
-            Stmt_::GotoLabel(p0) => Some(p0.as_mut()),
-            _ => None,
-        }
-    }
-    pub fn as_goto_mut(&mut self) -> Option<&mut Pstring> {
-        match self {
-            Stmt_::Goto(p0) => Some(p0.as_mut()),
             _ => None,
         }
     }
@@ -504,18 +462,6 @@ impl<Ex, Fb, En, Hi> Stmt_<Ex, Fb, En, Hi> {
     pub fn as_return_into(self) -> Option<Option<Expr<Ex, Fb, En, Hi>>> {
         match self {
             Stmt_::Return(p0) => Some(*p0),
-            _ => None,
-        }
-    }
-    pub fn as_goto_label_into(self) -> Option<Pstring> {
-        match self {
-            Stmt_::GotoLabel(p0) => Some(*p0),
-            _ => None,
-        }
-    }
-    pub fn as_goto_into(self) -> Option<Pstring> {
-        match self {
-            Stmt_::Goto(p0) => Some(*p0),
             _ => None,
         }
     }
@@ -1009,18 +955,23 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
     pub fn mk_clone(p0: Expr<Ex, Fb, En, Hi>) -> Self {
         Expr_::Clone(Box::new(p0))
     }
+    pub fn mk_array_get(p0: Expr<Ex, Fb, En, Hi>, p1: Option<Expr<Ex, Fb, En, Hi>>) -> Self {
+        Expr_::ArrayGet(Box::new((p0, p1)))
+    }
     pub fn mk_obj_get(
         p0: Expr<Ex, Fb, En, Hi>,
         p1: Expr<Ex, Fb, En, Hi>,
         p2: OgNullFlavor,
+        p3: bool,
     ) -> Self {
-        Expr_::ObjGet(Box::new((p0, p1, p2)))
+        Expr_::ObjGet(Box::new((p0, p1, p2, p3)))
     }
-    pub fn mk_array_get(p0: Expr<Ex, Fb, En, Hi>, p1: Option<Expr<Ex, Fb, En, Hi>>) -> Self {
-        Expr_::ArrayGet(Box::new((p0, p1)))
-    }
-    pub fn mk_class_get(p0: ClassId<Ex, Fb, En, Hi>, p1: ClassGetExpr<Ex, Fb, En, Hi>) -> Self {
-        Expr_::ClassGet(Box::new((p0, p1)))
+    pub fn mk_class_get(
+        p0: ClassId<Ex, Fb, En, Hi>,
+        p1: ClassGetExpr<Ex, Fb, En, Hi>,
+        p2: bool,
+    ) -> Self {
+        Expr_::ClassGet(Box::new((p0, p1, p2)))
     }
     pub fn mk_class_const(p0: ClassId<Ex, Fb, En, Hi>, p1: Pstring) -> Self {
         Expr_::ClassConst(Box::new((p0, p1)))
@@ -1060,14 +1011,8 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
     pub fn mk_await(p0: Expr<Ex, Fb, En, Hi>) -> Self {
         Expr_::Await(Box::new(p0))
     }
-    pub fn mk_suspend(p0: Expr<Ex, Fb, En, Hi>) -> Self {
-        Expr_::Suspend(Box::new(p0))
-    }
     pub fn mk_list(p0: Vec<Expr<Ex, Fb, En, Hi>>) -> Self {
         Expr_::List(p0)
-    }
-    pub fn mk_expr_list(p0: Vec<Expr<Ex, Fb, En, Hi>>) -> Self {
-        Expr_::ExprList(p0)
     }
     pub fn mk_cast(p0: Hint, p1: Expr<Ex, Fb, En, Hi>) -> Self {
         Expr_::Cast(Box::new((p0, p1)))
@@ -1132,12 +1077,6 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
     ) -> Self {
         Expr_::Collection(Box::new((p0, p1, p2)))
     }
-    pub fn mk_braced_expr(p0: Expr<Ex, Fb, En, Hi>) -> Self {
-        Expr_::BracedExpr(Box::new(p0))
-    }
-    pub fn mk_parenthesized_expr(p0: Expr<Ex, Fb, En, Hi>) -> Self {
-        Expr_::ParenthesizedExpr(Box::new(p0))
-    }
     pub fn mk_expression_tree(p0: ExpressionTree<Ex, Fb, En, Hi>) -> Self {
         Expr_::ExpressionTree(Box::new(p0))
     }
@@ -1162,15 +1101,6 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
         p2: Expr<Ex, Fb, En, Hi>,
     ) -> Self {
         Expr_::Pair(Box::new((p0, p1, p2)))
-    }
-    pub fn mk_assert(p0: AssertExpr<Ex, Fb, En, Hi>) -> Self {
-        Expr_::Assert(Box::new(p0))
-    }
-    pub fn mk_puatom(p0: String) -> Self {
-        Expr_::PUAtom(p0)
-    }
-    pub fn mk_puidentifier(p0: ClassId<Ex, Fb, En, Hi>, p1: Pstring, p2: Pstring) -> Self {
-        Expr_::PUIdentifier(Box::new((p0, p1, p2)))
     }
     pub fn mk_etsplice(p0: Expr<Ex, Fb, En, Hi>) -> Self {
         Expr_::ETSplice(Box::new(p0))
@@ -1265,15 +1195,15 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
             _ => false,
         }
     }
-    pub fn is_obj_get(&self) -> bool {
-        match self {
-            Expr_::ObjGet(..) => true,
-            _ => false,
-        }
-    }
     pub fn is_array_get(&self) -> bool {
         match self {
             Expr_::ArrayGet(..) => true,
+            _ => false,
+        }
+    }
+    pub fn is_obj_get(&self) -> bool {
+        match self {
+            Expr_::ObjGet(..) => true,
             _ => false,
         }
     }
@@ -1349,21 +1279,9 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
             _ => false,
         }
     }
-    pub fn is_suspend(&self) -> bool {
-        match self {
-            Expr_::Suspend(..) => true,
-            _ => false,
-        }
-    }
     pub fn is_list(&self) -> bool {
         match self {
             Expr_::List(..) => true,
-            _ => false,
-        }
-    }
-    pub fn is_expr_list(&self) -> bool {
-        match self {
-            Expr_::ExprList(..) => true,
             _ => false,
         }
     }
@@ -1457,18 +1375,6 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
             _ => false,
         }
     }
-    pub fn is_braced_expr(&self) -> bool {
-        match self {
-            Expr_::BracedExpr(..) => true,
-            _ => false,
-        }
-    }
-    pub fn is_parenthesized_expr(&self) -> bool {
-        match self {
-            Expr_::ParenthesizedExpr(..) => true,
-            _ => false,
-        }
-    }
     pub fn is_expression_tree(&self) -> bool {
         match self {
             Expr_::ExpressionTree(..) => true,
@@ -1508,24 +1414,6 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
     pub fn is_pair(&self) -> bool {
         match self {
             Expr_::Pair(..) => true,
-            _ => false,
-        }
-    }
-    pub fn is_assert(&self) -> bool {
-        match self {
-            Expr_::Assert(..) => true,
-            _ => false,
-        }
-    }
-    pub fn is_puatom(&self) -> bool {
-        match self {
-            Expr_::PUAtom(..) => true,
-            _ => false,
-        }
-    }
-    pub fn is_puidentifier(&self) -> bool {
-        match self {
-            Expr_::PUIdentifier(..) => true,
             _ => false,
         }
     }
@@ -1614,25 +1502,34 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
             _ => None,
         }
     }
-    pub fn as_obj_get(
-        &self,
-    ) -> Option<(&Expr<Ex, Fb, En, Hi>, &Expr<Ex, Fb, En, Hi>, &OgNullFlavor)> {
-        match self {
-            Expr_::ObjGet(p0) => Some((&p0.0, &p0.1, &p0.2)),
-            _ => None,
-        }
-    }
     pub fn as_array_get(&self) -> Option<(&Expr<Ex, Fb, En, Hi>, &Option<Expr<Ex, Fb, En, Hi>>)> {
         match self {
             Expr_::ArrayGet(p0) => Some((&p0.0, &p0.1)),
             _ => None,
         }
     }
+    pub fn as_obj_get(
+        &self,
+    ) -> Option<(
+        &Expr<Ex, Fb, En, Hi>,
+        &Expr<Ex, Fb, En, Hi>,
+        &OgNullFlavor,
+        &bool,
+    )> {
+        match self {
+            Expr_::ObjGet(p0) => Some((&p0.0, &p0.1, &p0.2, &p0.3)),
+            _ => None,
+        }
+    }
     pub fn as_class_get(
         &self,
-    ) -> Option<(&ClassId<Ex, Fb, En, Hi>, &ClassGetExpr<Ex, Fb, En, Hi>)> {
+    ) -> Option<(
+        &ClassId<Ex, Fb, En, Hi>,
+        &ClassGetExpr<Ex, Fb, En, Hi>,
+        &bool,
+    )> {
         match self {
-            Expr_::ClassGet(p0) => Some((&p0.0, &p0.1)),
+            Expr_::ClassGet(p0) => Some((&p0.0, &p0.1, &p0.2)),
             _ => None,
         }
     }
@@ -1703,21 +1600,9 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
             _ => None,
         }
     }
-    pub fn as_suspend(&self) -> Option<&Expr<Ex, Fb, En, Hi>> {
-        match self {
-            Expr_::Suspend(p0) => Some(&p0),
-            _ => None,
-        }
-    }
     pub fn as_list(&self) -> Option<&Vec<Expr<Ex, Fb, En, Hi>>> {
         match self {
             Expr_::List(p0) => Some(p0),
-            _ => None,
-        }
-    }
-    pub fn as_expr_list(&self) -> Option<&Vec<Expr<Ex, Fb, En, Hi>>> {
-        match self {
-            Expr_::ExprList(p0) => Some(p0),
             _ => None,
         }
     }
@@ -1839,18 +1724,6 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
             _ => None,
         }
     }
-    pub fn as_braced_expr(&self) -> Option<&Expr<Ex, Fb, En, Hi>> {
-        match self {
-            Expr_::BracedExpr(p0) => Some(&p0),
-            _ => None,
-        }
-    }
-    pub fn as_parenthesized_expr(&self) -> Option<&Expr<Ex, Fb, En, Hi>> {
-        match self {
-            Expr_::ParenthesizedExpr(p0) => Some(&p0),
-            _ => None,
-        }
-    }
     pub fn as_expression_tree(&self) -> Option<&ExpressionTree<Ex, Fb, En, Hi>> {
         match self {
             Expr_::ExpressionTree(p0) => Some(&p0),
@@ -1896,24 +1769,6 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
     )> {
         match self {
             Expr_::Pair(p0) => Some((&p0.0, &p0.1, &p0.2)),
-            _ => None,
-        }
-    }
-    pub fn as_assert(&self) -> Option<&AssertExpr<Ex, Fb, En, Hi>> {
-        match self {
-            Expr_::Assert(p0) => Some(&p0),
-            _ => None,
-        }
-    }
-    pub fn as_puatom(&self) -> Option<&String> {
-        match self {
-            Expr_::PUAtom(p0) => Some(p0),
-            _ => None,
-        }
-    }
-    pub fn as_puidentifier(&self) -> Option<(&ClassId<Ex, Fb, En, Hi>, &Pstring, &Pstring)> {
-        match self {
-            Expr_::PUIdentifier(p0) => Some((&p0.0, &p0.1, &p0.2)),
             _ => None,
         }
     }
@@ -2004,18 +1859,6 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
             _ => None,
         }
     }
-    pub fn as_obj_get_mut(
-        &mut self,
-    ) -> Option<(
-        &mut Expr<Ex, Fb, En, Hi>,
-        &mut Expr<Ex, Fb, En, Hi>,
-        &mut OgNullFlavor,
-    )> {
-        match self {
-            Expr_::ObjGet(p0) => Some((&mut p0.0, &mut p0.1, &mut p0.2)),
-            _ => None,
-        }
-    }
     pub fn as_array_get_mut(
         &mut self,
     ) -> Option<(&mut Expr<Ex, Fb, En, Hi>, &mut Option<Expr<Ex, Fb, En, Hi>>)> {
@@ -2024,14 +1867,28 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
             _ => None,
         }
     }
+    pub fn as_obj_get_mut(
+        &mut self,
+    ) -> Option<(
+        &mut Expr<Ex, Fb, En, Hi>,
+        &mut Expr<Ex, Fb, En, Hi>,
+        &mut OgNullFlavor,
+        &mut bool,
+    )> {
+        match self {
+            Expr_::ObjGet(p0) => Some((&mut p0.0, &mut p0.1, &mut p0.2, &mut p0.3)),
+            _ => None,
+        }
+    }
     pub fn as_class_get_mut(
         &mut self,
     ) -> Option<(
         &mut ClassId<Ex, Fb, En, Hi>,
         &mut ClassGetExpr<Ex, Fb, En, Hi>,
+        &mut bool,
     )> {
         match self {
-            Expr_::ClassGet(p0) => Some((&mut p0.0, &mut p0.1)),
+            Expr_::ClassGet(p0) => Some((&mut p0.0, &mut p0.1, &mut p0.2)),
             _ => None,
         }
     }
@@ -2104,21 +1961,9 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
             _ => None,
         }
     }
-    pub fn as_suspend_mut(&mut self) -> Option<&mut Expr<Ex, Fb, En, Hi>> {
-        match self {
-            Expr_::Suspend(p0) => Some(p0.as_mut()),
-            _ => None,
-        }
-    }
     pub fn as_list_mut(&mut self) -> Option<&mut Vec<Expr<Ex, Fb, En, Hi>>> {
         match self {
             Expr_::List(p0) => Some(p0),
-            _ => None,
-        }
-    }
-    pub fn as_expr_list_mut(&mut self) -> Option<&mut Vec<Expr<Ex, Fb, En, Hi>>> {
-        match self {
-            Expr_::ExprList(p0) => Some(p0),
             _ => None,
         }
     }
@@ -2257,18 +2102,6 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
             _ => None,
         }
     }
-    pub fn as_braced_expr_mut(&mut self) -> Option<&mut Expr<Ex, Fb, En, Hi>> {
-        match self {
-            Expr_::BracedExpr(p0) => Some(p0.as_mut()),
-            _ => None,
-        }
-    }
-    pub fn as_parenthesized_expr_mut(&mut self) -> Option<&mut Expr<Ex, Fb, En, Hi>> {
-        match self {
-            Expr_::ParenthesizedExpr(p0) => Some(p0.as_mut()),
-            _ => None,
-        }
-    }
     pub fn as_expression_tree_mut(&mut self) -> Option<&mut ExpressionTree<Ex, Fb, En, Hi>> {
         match self {
             Expr_::ExpressionTree(p0) => Some(p0.as_mut()),
@@ -2314,26 +2147,6 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
     )> {
         match self {
             Expr_::Pair(p0) => Some((&mut p0.0, &mut p0.1, &mut p0.2)),
-            _ => None,
-        }
-    }
-    pub fn as_assert_mut(&mut self) -> Option<&mut AssertExpr<Ex, Fb, En, Hi>> {
-        match self {
-            Expr_::Assert(p0) => Some(p0.as_mut()),
-            _ => None,
-        }
-    }
-    pub fn as_puatom_mut(&mut self) -> Option<&mut String> {
-        match self {
-            Expr_::PUAtom(p0) => Some(p0),
-            _ => None,
-        }
-    }
-    pub fn as_puidentifier_mut(
-        &mut self,
-    ) -> Option<(&mut ClassId<Ex, Fb, En, Hi>, &mut Pstring, &mut Pstring)> {
-        match self {
-            Expr_::PUIdentifier(p0) => Some((&mut p0.0, &mut p0.1, &mut p0.2)),
             _ => None,
         }
     }
@@ -2416,25 +2229,30 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
             _ => None,
         }
     }
-    pub fn as_obj_get_into(
-        self,
-    ) -> Option<(Expr<Ex, Fb, En, Hi>, Expr<Ex, Fb, En, Hi>, OgNullFlavor)> {
-        match self {
-            Expr_::ObjGet(p0) => Some(((*p0).0, (*p0).1, (*p0).2)),
-            _ => None,
-        }
-    }
     pub fn as_array_get_into(self) -> Option<(Expr<Ex, Fb, En, Hi>, Option<Expr<Ex, Fb, En, Hi>>)> {
         match self {
             Expr_::ArrayGet(p0) => Some(((*p0).0, (*p0).1)),
             _ => None,
         }
     }
+    pub fn as_obj_get_into(
+        self,
+    ) -> Option<(
+        Expr<Ex, Fb, En, Hi>,
+        Expr<Ex, Fb, En, Hi>,
+        OgNullFlavor,
+        bool,
+    )> {
+        match self {
+            Expr_::ObjGet(p0) => Some(((*p0).0, (*p0).1, (*p0).2, (*p0).3)),
+            _ => None,
+        }
+    }
     pub fn as_class_get_into(
         self,
-    ) -> Option<(ClassId<Ex, Fb, En, Hi>, ClassGetExpr<Ex, Fb, En, Hi>)> {
+    ) -> Option<(ClassId<Ex, Fb, En, Hi>, ClassGetExpr<Ex, Fb, En, Hi>, bool)> {
         match self {
-            Expr_::ClassGet(p0) => Some(((*p0).0, (*p0).1)),
+            Expr_::ClassGet(p0) => Some(((*p0).0, (*p0).1, (*p0).2)),
             _ => None,
         }
     }
@@ -2507,21 +2325,9 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
             _ => None,
         }
     }
-    pub fn as_suspend_into(self) -> Option<Expr<Ex, Fb, En, Hi>> {
-        match self {
-            Expr_::Suspend(p0) => Some(*p0),
-            _ => None,
-        }
-    }
     pub fn as_list_into(self) -> Option<Vec<Expr<Ex, Fb, En, Hi>>> {
         match self {
             Expr_::List(p0) => Some(p0),
-            _ => None,
-        }
-    }
-    pub fn as_expr_list_into(self) -> Option<Vec<Expr<Ex, Fb, En, Hi>>> {
-        match self {
-            Expr_::ExprList(p0) => Some(p0),
             _ => None,
         }
     }
@@ -2641,18 +2447,6 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
             _ => None,
         }
     }
-    pub fn as_braced_expr_into(self) -> Option<Expr<Ex, Fb, En, Hi>> {
-        match self {
-            Expr_::BracedExpr(p0) => Some(*p0),
-            _ => None,
-        }
-    }
-    pub fn as_parenthesized_expr_into(self) -> Option<Expr<Ex, Fb, En, Hi>> {
-        match self {
-            Expr_::ParenthesizedExpr(p0) => Some(*p0),
-            _ => None,
-        }
-    }
     pub fn as_expression_tree_into(self) -> Option<ExpressionTree<Ex, Fb, En, Hi>> {
         match self {
             Expr_::ExpressionTree(p0) => Some(*p0),
@@ -2698,24 +2492,6 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
     )> {
         match self {
             Expr_::Pair(p0) => Some(((*p0).0, (*p0).1, (*p0).2)),
-            _ => None,
-        }
-    }
-    pub fn as_assert_into(self) -> Option<AssertExpr<Ex, Fb, En, Hi>> {
-        match self {
-            Expr_::Assert(p0) => Some(*p0),
-            _ => None,
-        }
-    }
-    pub fn as_puatom_into(self) -> Option<String> {
-        match self {
-            Expr_::PUAtom(p0) => Some(p0),
-            _ => None,
-        }
-    }
-    pub fn as_puidentifier_into(self) -> Option<(ClassId<Ex, Fb, En, Hi>, Pstring, Pstring)> {
-        match self {
-            Expr_::PUIdentifier(p0) => Some(((*p0).0, (*p0).1, (*p0).2)),
             _ => None,
         }
     }
@@ -2785,29 +2561,6 @@ impl<Ex, Fb, En, Hi> ClassGetExpr<Ex, Fb, En, Hi> {
         match self {
             ClassGetExpr::CGexpr(p0) => Some(p0),
             _ => None,
-        }
-    }
-}
-impl<Ex, Fb, En, Hi> AssertExpr<Ex, Fb, En, Hi> {
-    pub fn mk_aeassert(p0: Expr<Ex, Fb, En, Hi>) -> Self {
-        AssertExpr::AEAssert(p0)
-    }
-    pub fn is_aeassert(&self) -> bool {
-        true
-    }
-    pub fn as_aeassert(&self) -> Option<&Expr<Ex, Fb, En, Hi>> {
-        match self {
-            AssertExpr::AEAssert(p0) => Some(p0),
-        }
-    }
-    pub fn as_aeassert_mut(&mut self) -> Option<&mut Expr<Ex, Fb, En, Hi>> {
-        match self {
-            AssertExpr::AEAssert(p0) => Some(p0),
-        }
-    }
-    pub fn as_aeassert_into(self) -> Option<Expr<Ex, Fb, En, Hi>> {
-        match self {
-            AssertExpr::AEAssert(p0) => Some(p0),
         }
     }
 }

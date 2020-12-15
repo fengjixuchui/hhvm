@@ -56,15 +56,11 @@ TRACE_SET_MOD(hhir);
 #define DModified(n)   HasDest
 #define DKeysetElem    HasDest
 #define DLvalToElemParam  HasDest
-#define DVecFirstElem     HasDest
-#define DVecLastElem      HasDest
 #define DVecKey           HasDest
-#define DDictFirstElem    HasDest
-#define DDictLastElem     HasDest
-#define DDictFirstKey     HasDest
-#define DDictLastKey      HasDest
-#define DKeysetFirstElem  HasDest
-#define DKeysetLastElem   HasDest
+#define DFirstElem        HasDest
+#define DLastElem         HasDest
+#define DFirstKey         HasDest
+#define DLastKey          HasDest
 #define DLoggingArrLike   HasDest
 #define DVArr          HasDest
 #define DDArr          HasDest
@@ -513,7 +509,7 @@ bool opcodeMayRaise(Opcode opc) {
   case BespokeGet:
   case BespokeIterFirstPos:
   case BespokeIterLastPos:
-  case BespokeIterAdvancePos:
+  case BespokeIterEnd:
   case BespokeIterGetKey:
   case BespokeIterGetVal:
   case Ceil:
@@ -635,6 +631,7 @@ bool opcodeMayRaise(Opcode opc) {
   case EqArrayDataPtr:
   case EqBool:
   case EqCls:
+  case EqLazyCls:
   case EqDbl:
   case EqFunc:
   case EqInt:
@@ -790,6 +787,10 @@ bool opcodeMayRaise(Opcode opc) {
   case LdTypeCns:
   case LdUnitPerRequestFilepath:
   case LdUnwinderValue:
+  case LdMonotypeDictEnd:
+  case LdMonotypeDictKey:
+  case LdMonotypeDictVal:
+  case LdMonotypeVecElem:
   case LdVecElem:
   case LdVecElemAddr:
   case LdVectorSize:
@@ -861,6 +862,7 @@ bool opcodeMayRaise(Opcode opc) {
   case OrdStr:
   case OrInt:
   case PairIsset:
+  case ProfileArrLikeProps:
   case ProfileCall:
   case ProfileDecRef:
   case ProfileDictAccess:

@@ -1,12 +1,17 @@
+aast_defs::Tprim
+aast::Tprim
 decl_defs::ConsistentKind
 decl_defs::LinearizationKind
 decl_defs::SourceType
 decl_defs::XhpAttr
 ident::Ident
 lazy::Lazy
+method_flags::MethodFlags
+prop_flags::PropFlags
 shallow_decl_defs::Visibility
 shallow_decl_defs::XhpAttr
 tany_sentinel::TanySentinel
+typing_cont_key::TypingContKey
 typing_defs_core::ConsistentKind
 typing_defs_core::DependentType
 typing_defs_core::DestructureKind
@@ -14,7 +19,6 @@ typing_defs_core::Exact
 typing_defs_core::FunTparamsKind
 typing_defs_core::ParamMode
 typing_defs_core::ParamMutability
-typing_defs_core::PuLoc
 typing_defs_core::ShapeKind
 typing_defs_core::ValKind
 typing_defs_core::XhpAttr
@@ -27,7 +31,6 @@ typing_defs::Exact
 typing_defs::FunTparamsKind
 typing_defs::ParamMode
 typing_defs::ParamMutability
-typing_defs::PuLoc
 typing_defs::RecordFieldReq
 typing_defs::ShapeKind
 typing_defs::TypedefVisibility

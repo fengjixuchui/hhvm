@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<f84354d28536f98597af09e47ea82cfd>>
+// @generated SignedSource<<b201a7bd4d85b1f62ae5401d54204623>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
@@ -71,27 +71,6 @@ impl<P: Params> Node<P> for AsExpr<P::Ex, P::Fb, P::En, P::Hi> {
                 a0.accept(c, v)?;
                 a1.accept(c, v)?;
                 a2.accept(c, v)?;
-                Ok(())
-            }
-        }
-    }
-}
-impl<P: Params> Node<P> for AssertExpr<P::Ex, P::Fb, P::En, P::Hi> {
-    fn accept<'node>(
-        &'node self,
-        c: &mut P::Context,
-        v: &mut dyn Visitor<'node, P = P>,
-    ) -> Result<(), P::Error> {
-        v.visit_assert_expr(c, self)
-    }
-    fn recurse<'node>(
-        &'node self,
-        c: &mut P::Context,
-        v: &mut dyn Visitor<'node, P = P>,
-    ) -> Result<(), P::Error> {
-        match self {
-            AssertExpr::AEAssert(a0) => {
-                a0.accept(c, v)?;
                 Ok(())
             }
         }
@@ -466,7 +445,6 @@ impl<P: Params> Node<P> for Class_<P::Ex, P::Fb, P::En, P::Hi> {
         self.user_attributes.accept(c, v)?;
         self.file_attributes.accept(c, v)?;
         self.enum_.accept(c, v)?;
-        self.pu_enums.accept(c, v)?;
         self.doc_comment.accept(c, v)?;
         self.emit_id.accept(c, v)?;
         Ok(())
@@ -733,20 +711,22 @@ impl<P: Params> Node<P> for Expr_<P::Ex, P::Fb, P::En, P::Hi> {
                 a0.accept(c, v)?;
                 Ok(())
             }
-            Expr_::ObjGet(a) => {
-                a.0.accept(c, v)?;
-                a.1.accept(c, v)?;
-                a.2.accept(c, v)?;
-                Ok(())
-            }
             Expr_::ArrayGet(a) => {
                 a.0.accept(c, v)?;
                 a.1.accept(c, v)?;
                 Ok(())
             }
+            Expr_::ObjGet(a) => {
+                a.0.accept(c, v)?;
+                a.1.accept(c, v)?;
+                a.2.accept(c, v)?;
+                a.3.accept(c, v)?;
+                Ok(())
+            }
             Expr_::ClassGet(a) => {
                 a.0.accept(c, v)?;
                 a.1.accept(c, v)?;
+                a.2.accept(c, v)?;
                 Ok(())
             }
             Expr_::ClassConst(a) => {
@@ -796,15 +776,7 @@ impl<P: Params> Node<P> for Expr_<P::Ex, P::Fb, P::En, P::Hi> {
                 a0.accept(c, v)?;
                 Ok(())
             }
-            Expr_::Suspend(a0) => {
-                a0.accept(c, v)?;
-                Ok(())
-            }
             Expr_::List(a0) => {
-                a0.accept(c, v)?;
-                Ok(())
-            }
-            Expr_::ExprList(a0) => {
                 a0.accept(c, v)?;
                 Ok(())
             }
@@ -892,14 +864,6 @@ impl<P: Params> Node<P> for Expr_<P::Ex, P::Fb, P::En, P::Hi> {
                 a.2.accept(c, v)?;
                 Ok(())
             }
-            Expr_::BracedExpr(a0) => {
-                a0.accept(c, v)?;
-                Ok(())
-            }
-            Expr_::ParenthesizedExpr(a0) => {
-                a0.accept(c, v)?;
-                Ok(())
-            }
             Expr_::ExpressionTree(a0) => {
                 a0.accept(c, v)?;
                 Ok(())
@@ -928,20 +892,6 @@ impl<P: Params> Node<P> for Expr_<P::Ex, P::Fb, P::En, P::Hi> {
                 Ok(())
             }
             Expr_::Pair(a) => {
-                a.0.accept(c, v)?;
-                a.1.accept(c, v)?;
-                a.2.accept(c, v)?;
-                Ok(())
-            }
-            Expr_::Assert(a0) => {
-                a0.accept(c, v)?;
-                Ok(())
-            }
-            Expr_::PUAtom(a0) => {
-                a0.accept(c, v)?;
-                Ok(())
-            }
-            Expr_::PUIdentifier(a) => {
                 a.0.accept(c, v)?;
                 a.1.accept(c, v)?;
                 a.2.accept(c, v)?;
@@ -1032,7 +982,6 @@ impl<P: Params> Node<P> for FunKind {
             FunKind::FAsync => Ok(()),
             FunKind::FGenerator => Ok(()),
             FunKind::FAsyncGenerator => Ok(()),
-            FunKind::FCoroutine => Ok(()),
         }
     }
 }
@@ -1332,11 +1281,6 @@ impl<P: Params> Node<P> for Hint_ {
             Hint_::Hthis => Ok(()),
             Hint_::Hdynamic => Ok(()),
             Hint_::Hnothing => Ok(()),
-            Hint_::HpuAccess(a0, a1) => {
-                a0.accept(c, v)?;
-                a1.accept(c, v)?;
-                Ok(())
-            }
             Hint_::Hunion(a0) => {
                 a0.accept(c, v)?;
                 Ok(())
@@ -1576,66 +1520,6 @@ impl<P: Params> Node<P> for ParamMutability {
         }
     }
 }
-impl<P: Params> Node<P> for PuCaseValue {
-    fn accept<'node>(
-        &'node self,
-        c: &mut P::Context,
-        v: &mut dyn Visitor<'node, P = P>,
-    ) -> Result<(), P::Error> {
-        v.visit_pu_case_value(c, self)
-    }
-    fn recurse<'node>(
-        &'node self,
-        c: &mut P::Context,
-        v: &mut dyn Visitor<'node, P = P>,
-    ) -> Result<(), P::Error> {
-        self.0.accept(c, v)?;
-        self.1.accept(c, v)?;
-        Ok(())
-    }
-}
-impl<P: Params> Node<P> for PuEnum<P::Ex, P::Fb, P::En, P::Hi> {
-    fn accept<'node>(
-        &'node self,
-        c: &mut P::Context,
-        v: &mut dyn Visitor<'node, P = P>,
-    ) -> Result<(), P::Error> {
-        v.visit_pu_enum(c, self)
-    }
-    fn recurse<'node>(
-        &'node self,
-        c: &mut P::Context,
-        v: &mut dyn Visitor<'node, P = P>,
-    ) -> Result<(), P::Error> {
-        v.visit_en(c, &self.annotation)?;
-        self.name.accept(c, v)?;
-        self.user_attributes.accept(c, v)?;
-        self.is_final.accept(c, v)?;
-        self.case_types.accept(c, v)?;
-        self.case_values.accept(c, v)?;
-        self.members.accept(c, v)?;
-        Ok(())
-    }
-}
-impl<P: Params> Node<P> for PuMember<P::Ex, P::Fb, P::En, P::Hi> {
-    fn accept<'node>(
-        &'node self,
-        c: &mut P::Context,
-        v: &mut dyn Visitor<'node, P = P>,
-    ) -> Result<(), P::Error> {
-        v.visit_pu_member(c, self)
-    }
-    fn recurse<'node>(
-        &'node self,
-        c: &mut P::Context,
-        v: &mut dyn Visitor<'node, P = P>,
-    ) -> Result<(), P::Error> {
-        self.atom.accept(c, v)?;
-        self.types.accept(c, v)?;
-        self.exprs.accept(c, v)?;
-        Ok(())
-    }
-}
 impl<P: Params> Node<P> for RecordDef<P::Ex, P::Fb, P::En, P::Hi> {
     fn accept<'node>(
         &'node self,
@@ -1778,14 +1662,6 @@ impl<P: Params> Node<P> for Stmt_<P::Ex, P::Fb, P::En, P::Hi> {
                 a0.accept(c, v)?;
                 Ok(())
             }
-            Stmt_::GotoLabel(a0) => {
-                a0.accept(c, v)?;
-                Ok(())
-            }
-            Stmt_::Goto(a0) => {
-                a0.accept(c, v)?;
-                Ok(())
-            }
             Stmt_::Awaitall(a) => {
                 a.0.accept(c, v)?;
                 a.1.accept(c, v)?;
@@ -1916,10 +1792,6 @@ impl<P: Params> Node<P> for Tprim {
             Tprim::Tnum => Ok(()),
             Tprim::Tarraykey => Ok(()),
             Tprim::Tnoreturn => Ok(()),
-            Tprim::Tatom(a0) => {
-                a0.accept(c, v)?;
-                Ok(())
-            }
         }
     }
 }
@@ -2154,7 +2026,6 @@ impl<P: Params> Node<P> for VcKind {
             VcKind::Vec => Ok(()),
             VcKind::Set => Ok(()),
             VcKind::ImmSet => Ok(()),
-            VcKind::Pair_ => Ok(()),
             VcKind::Keyset => Ok(()),
         }
     }

@@ -70,13 +70,8 @@ BTContext::BTContext() {
 }
 
 const ActRec* BTContext::clone(const BTContext& src, const ActRec* fp) {
-#ifdef USE_LOWPTR
-  fakeAR[0].m_func = src.fakeAR[0].m_func;
-  fakeAR[1].m_func = src.fakeAR[1].m_func;
-#else
   fakeAR[0].m_funcId = src.fakeAR[0].m_funcId;
   fakeAR[1].m_funcId = src.fakeAR[1].m_funcId;
-#endif
 
   fakeAR[0].m_callOffAndFlags = src.fakeAR[0].m_callOffAndFlags;
   fakeAR[1].m_callOffAndFlags = src.fakeAR[1].m_callOffAndFlags;
@@ -197,7 +192,7 @@ BTFrame initBTContextAt(BTContext& ctx, jit::CTCA ip, BTFrame frm) {
     auto const pc = func->unit()->entry() + frm.pc;
     if (peek_op(pc) != OpFCallBuiltin) return nullptr;
 
-    auto const ne = func->unit()->lookupNamedEntityId(getImm(pc, 3).u_SA);
+    auto const ne = func->unit()->lookupNamedEntityId(getImm(pc, 2).u_SA);
     return Func::lookup(ne);
   };
 

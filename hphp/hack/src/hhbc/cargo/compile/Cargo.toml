@@ -12,7 +12,6 @@ path = "../../compile.rs"
 aast_parser = { path = "../../../parser/cargo/aast_parser" }
 elaborate_namespaces_visitor = { path = "../../../naming/cargo/elaborate_namespaces" }
 emit_program_rust = { path = "../emit_program" }
-emit_pu_rust = { path = "../emit_pu" }
 env = { path = "../env" }
 hhas_program_rust = { path = "../hhas_program" }
 hhbc_ast_rust = { path = "../hhbc_ast" }
@@ -24,6 +23,7 @@ options = { path = "../options" }
 oxidized = { path = "../../../oxidized" }
 parser_core_types = { path = "../../../parser/cargo/core_types" }
 profile_rust = { path = "../../../utils/perf/cargo/profile" }
+rewrite_program = { path = "../rewrite_program" }
 stack_limit = { path = "../../../utils/stack_limit" }
 anyhow = "1.0"
 bitflags = "1.2"

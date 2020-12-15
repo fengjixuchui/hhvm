@@ -105,7 +105,8 @@ bool tvInstanceOfImpl(const TypedValue* tv, F lookupClass) {
 
     case KindOfClsMeth: {
       auto const cls = lookupClass();
-      if (cls && interface_supports_arrlike(cls->name())) {
+      if (cls && interface_supports_arrlike(cls->name()) &&
+          RO::EvalIsCompatibleClsMethType) {
         if (RO::EvalIsVecNotices) {
           raise_notice("Implicit clsmeth to %s conversion",
                        cls->name()->data());
@@ -626,7 +627,7 @@ bool checkTypeStructureMatchesTVImpl(
       return is_keyset(&c1);
 
     case TypeStructure::Kind::T_any_array:
-      if (isClsMethType(type)) {
+      if (isClsMethType(type) && RO::EvalIsCompatibleClsMethType) {
         if (RuntimeOption::EvalIsVecNotices) {
           raise_notice(Strings::CLSMETH_COMPAT_IS_ANY_ARR);
         }
@@ -694,12 +695,13 @@ bool checkTypeStructureMatchesTVImpl(
        */
       auto const ad = data.parr;
       auto const maybe_raise_notice = [&] (bool const result) {
+        if (RO::EvalHackArrDVArrs) return result;
         if (!gen_error /* avoid double logging */ && result &&
             RO::EvalHackArrIsShapeTupleNotices && !ad->isVArray()) {
           auto const dt = getDataTypeString(ad->toDataType());
           raise_hackarr_compat_notice(folly::sformat("{} is tuple", dt));
         }
-        return result && (isArrayType(type) || RO::EvalHackArrDVArrs);
+        return result && isArrayType(type);
       };
 
       if (!ad->isVArray() && !ad->isVecType()) return false;
@@ -779,12 +781,13 @@ bool checkTypeStructureMatchesTVImpl(
        */
       auto const ad = data.parr;
       auto const maybe_raise_notice = [&] (bool const result) {
+        if (RO::EvalHackArrDVArrs) return result;
         if (!gen_error /* avoid double logging */ && result &&
             RO::EvalHackArrIsShapeTupleNotices && !ad->isDArray()) {
           auto const dt = getDataTypeString(ad->toDataType());
           raise_hackarr_compat_notice(folly::sformat("{} is shape", dt));
         }
-        return result && (isArrayType(type) || RO::EvalHackArrDVArrs);
+        return result && isArrayType(type);
       };
 
       if (!ad->isDArray() && !ad->isDictType()) return false;

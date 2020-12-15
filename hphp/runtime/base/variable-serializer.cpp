@@ -17,6 +17,7 @@
 #include "hphp/runtime/base/variable-serializer.h"
 
 #include "hphp/runtime/base/array-iterator.h"
+#include "hphp/runtime/base/array-provenance.h"
 #include "hphp/runtime/base/backtrace.h"
 #include "hphp/runtime/base/collections.h"
 #include "hphp/runtime/base/comparisons.h"
@@ -1512,15 +1513,16 @@ void VariableSerializer::serializeClass(const Class* cls) {
   switch (getType()) {
     case Type::VarExport:
     case Type::PHPOutput:
-      m_buf->append("class(");
-      write(cls->name()->data(), cls->name()->size());
-      m_buf->append(')');
+      m_buf->append(cls->name());
+      m_buf->append("::class");
       break;
     case Type::VarDump:
+      if (RuntimeOption::EvalClassAsStringVarDump) {
+        write(StrNR(cls->name()));
+        break;
+      }
+      // fall-through
     case Type::DebugDump:
-      // TODO (T29639296)
-      // For now we use function(foo) to dump function pointers in most cases,
-      // and this can be changed in the future.
       indent();
       m_buf->append("class(");
       m_buf->append(cls->name());
@@ -1548,11 +1550,15 @@ void VariableSerializer::serializeLazyClass(LazyClassData lcls) {
   switch (getType()) {
     case Type::VarExport:
     case Type::PHPOutput:
-      m_buf->append("class(");
-      write(lcls.name()->data(), lcls.name()->size());
-      m_buf->append(')');
+      m_buf->append(lcls.name());
+      m_buf->append("::class");
       break;
     case Type::VarDump:
+      if (RuntimeOption::EvalClassAsStringVarDump) {
+        write(StrNR(lcls.name()));
+        break;
+      }
+      // fall-through
     case Type::DebugDump:
       indent();
       m_buf->append("class(");
@@ -1620,6 +1626,11 @@ void VariableSerializer::serializeClsMeth(
     case Type::APCSerialize:
     case Type::DebuggerSerialize:
     case Type::JSON: {
+      if (!RO::EvalIsCompatibleClsMethType) {
+        SystemLib::throwInvalidOperationExceptionObject(
+          "Unable to serialize class meth pointer"
+        );
+      }
       raiseClsMethToVecWarningHelper();
       auto const vec = clsMethToVecHelper(clsMeth);
       serializeArray(vec.get(), skipNestCheck);
@@ -1752,8 +1763,10 @@ void VariableSerializer::serializeResource(const ResourceData* res) {
   if (UNLIKELY(incNestedLevel(&tv))) {
     writeOverflow(&tv);
   } else if (auto trace = dynamic_cast<const CompactTrace*>(res)) {
-    auto const trace_array = trace->extract();
-    serializeArray(trace_array.get());
+    auto const trace_array = Variant(trace->extract());
+    auto const raw = *trace_array.asTypedValue();
+    auto const marked = Variant::attach(arrprov::markTvRecursively(raw, true));
+    serializeArray(marked.toArray().get());
   } else {
     serializeResourceImpl(res);
   }

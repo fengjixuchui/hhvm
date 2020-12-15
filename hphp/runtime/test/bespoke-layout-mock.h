@@ -27,66 +27,34 @@ namespace bespoke {
 namespace testing {
 
 struct MockLayout : public Layout {
-  MockLayout(const std::string& description): Layout(description) {}
+  MockLayout(const std::string& description, LayoutSet&& parents,
+             LayoutIndex idx, bool concrete)
+    : Layout(idx, description, std::move(parents))
+    , m_concrete(concrete)
+  {}
 
-  virtual SSATmp* emitGet(
-      IRGS& env, SSATmp* arr, SSATmp* key, Block* taken) const override {
-    return nullptr;
-  }
+  bool isConcrete() const override { return m_concrete; }
 
-  virtual SSATmp* emitElem(
-      IRGS& env, SSATmp* lval, SSATmp* key, bool) const override {
-    return nullptr;
-  }
-
-  virtual SSATmp* emitSet(
-      IRGS& env, SSATmp* arr, SSATmp* key, SSATmp* val) const override {
-    return nullptr;
-  }
-
-  virtual SSATmp* emitAppend(
-    IRGS& env, SSATmp* arr, SSATmp* val) const override {
-    return nullptr;
-  }
-
-  virtual SSATmp* emitIterFirstPos(IRGS& env, SSATmp* arr) const override {
-    return nullptr;
-  }
-
-  virtual SSATmp* emitIterLastPos(IRGS& env, SSATmp* arr) const override {
-    return nullptr;
-  }
-
-  virtual SSATmp* emitIterPos(
-      IRGS& env, SSATmp* arr, SSATmp* idx) const override {
-    return nullptr;
-  }
-
-  virtual SSATmp* emitIterAdvancePos(
-      IRGS& env, SSATmp* arr, SSATmp* pos) const override {
-    return nullptr;
-  }
-
-  virtual SSATmp* emitIterElm(
-      IRGS& env, SSATmp* arr, SSATmp* pos) const override {
-    return nullptr;
-  }
-
-  virtual SSATmp* emitIterGetKey(
-      IRGS& env, SSATmp* arr, SSATmp* elm) const override {
-    return nullptr;
-  }
-
-  virtual SSATmp* emitIterGetVal(
-      IRGS& env, SSATmp* arr, SSATmp* elm) const override {
-    return nullptr;
-  }
+private:
+  bool m_concrete;
 };
 
-inline Layout* makeDummyLayout(const std::string& name) {
+inline Layout* makeDummyLayout(const std::string& name,
+                               std::vector<jit::ArrayLayout> parents,
+                               bespoke::LayoutIndex idx,
+                               bool concrete = true) {
   using ::testing::Mock;
 
-  auto const ret = new MockLayout(name);
+  Layout::LayoutSet indices;
+  std::transform(
+    parents.cbegin(), parents.cend(),
+    std::inserter(indices, indices.end()),
+    [&](jit::ArrayLayout parent) {
+      always_assert(parent.bespoke());
+      return *parent.layoutIndex();
+    }
+  );
+  auto const ret = new MockLayout(name, std::move(indices), idx, concrete);
   Mock::AllowLeak(ret);
   return ret;
 }

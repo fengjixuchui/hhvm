@@ -16,7 +16,7 @@
           param_visibility = None }
         ];
       f_cap =
-      (((HH\Capabilities\RxLocal & HH\Capabilities\IO & HH\Capabilities\CippGlobal & HH\Capabilities\Globals & HH\Capabilities\UnrestrictedMutation)),
+      (((HH\Capabilities\AccessStaticVariable & HH\Capabilities\WriteProperty & HH\Capabilities\Output)),
        None);
       f_unsafe_cap = ((mixed), None);
       f_body =

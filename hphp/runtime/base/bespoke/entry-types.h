@@ -62,6 +62,7 @@ struct EntryTypes {
 
   EntryTypes with(TypedValue k, TypedValue v) const;
   EntryTypes pessimizeValueTypes() const;
+  bool isMonotypeState() const;
   std::string toString() const;
 
   uint16_t asInt16() const {
@@ -86,6 +87,8 @@ struct EntryTypes {
   ValueTypes valueTypes;
   DataType valueDatatype;
 };
+
+const char* show(KeyTypes kt);
 
 }}
 

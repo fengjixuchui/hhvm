@@ -505,7 +505,7 @@ namespace HH\ReifiedGenerics {
    */
   <<__Pure>>
   function get_type_structure<reify T>(): mixed {
-    return ${'0ReifiedGenerics'}[0];
+    return \__systemlib_reified_generics()[0];
   }
 
   /**
@@ -521,5 +521,15 @@ namespace HH\ReifiedGenerics {
     }
     return $clsname;
   }
+
+}
+
+namespace __SystemLib {
+
+<<__Native, __IsFoldable, __Pure>>
+function is_dynamically_callable_inst_method(
+    string $class,
+    string $method
+): bool;
 
 }

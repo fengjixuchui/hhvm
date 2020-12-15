@@ -39,10 +39,24 @@ impl Job {
     /// and corresponds to the current thread in the first attempt, or a number number
     /// between `self.nonmain_stack_min` and `self.nonmain_stack_max`.  It is `FnMut`
     /// so that the caller can easily report progress (stateful in general).
+    ///
+    /// `compute_stack_slack` is a function which takes actual stack size and
+    /// returns a "slack" stack size. slack stack must be
+    /// larger than stack increase between two consecutive calls of `check_exceeded`.
+    /// For example, `compute_stack_slack` should return a value which is greater than
+    /// `std::mem_size_of<A_0>()` + ... + `std::mem_size_of<A_n>()`.
+    /// ```
+    /// fn foo(sl: &StackLimit) -> {
+    ///     sl.check_exceeded();
+    ///     let _: A_0 = ...;
+    ///     ...
+    ///     let _: A_n = ...;
+    /// }
+    /// ```
     pub fn with_elastic_stack<'a, F, T>(
         &self,
-        make_retryable: &dyn Fn() -> Box<F>,
-        on_retry: &mut dyn FnMut(usize),
+        make_retryable: impl Fn() -> F,
+        on_retry: &mut impl FnMut(usize),
         compute_stack_slack: StackSlackFunction,
     ) -> Result<T, JobFailed>
     where
@@ -71,7 +85,7 @@ impl Job {
                 stack_limit.reset();
                 let stack_limit_ref = &stack_limit;
                 match std::panic::catch_unwind(move || {
-                    (*retryable)(stack_limit_ref, nonmain_stack_size)
+                    retryable(stack_limit_ref, nonmain_stack_size)
                 }) {
                     Ok(result) => Some(result),
                     Err(_) if stack_limit.exceeded() => None,

@@ -165,16 +165,12 @@ impl<'src> SmartConstructors for DirectDeclSmartConstructors<'src> {
         <Self as FlattenSmartConstructors<'src, State<'src>>>::make_function_declaration(self, attribute_spec, declaration_header, body)
     }
 
-    fn make_function_declaration_header(&mut self, modifiers: Self::R, keyword: Self::R, name: Self::R, type_parameter_list: Self::R, left_paren: Self::R, parameter_list: Self::R, right_paren: Self::R, capability: Self::R, capability_provisional: Self::R, colon: Self::R, type_: Self::R, where_clause: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_function_declaration_header(self, modifiers, keyword, name, type_parameter_list, left_paren, parameter_list, right_paren, capability, capability_provisional, colon, type_, where_clause)
+    fn make_function_declaration_header(&mut self, modifiers: Self::R, keyword: Self::R, name: Self::R, type_parameter_list: Self::R, left_paren: Self::R, parameter_list: Self::R, right_paren: Self::R, capability: Self::R, colon: Self::R, type_: Self::R, where_clause: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_function_declaration_header(self, modifiers, keyword, name, type_parameter_list, left_paren, parameter_list, right_paren, capability, colon, type_, where_clause)
     }
 
     fn make_capability(&mut self, left_bracket: Self::R, types: Self::R, right_bracket: Self::R) -> Self::R {
         <Self as FlattenSmartConstructors<'src, State<'src>>>::make_capability(self, left_bracket, types, right_bracket)
-    }
-
-    fn make_capability_provisional(&mut self, at: Self::R, left_brace: Self::R, type_: Self::R, unsafe_plus: Self::R, unsafe_type: Self::R, right_brace: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_capability_provisional(self, at, left_brace, type_, unsafe_plus, unsafe_type, right_brace)
     }
 
     fn make_where_clause(&mut self, keyword: Self::R, constraints: Self::R) -> Self::R {
@@ -231,6 +227,10 @@ impl<'src> SmartConstructors for DirectDeclSmartConstructors<'src> {
 
     fn make_type_const_declaration(&mut self, attribute_spec: Self::R, modifiers: Self::R, keyword: Self::R, type_keyword: Self::R, name: Self::R, type_parameters: Self::R, type_constraint: Self::R, equal: Self::R, type_specifier: Self::R, semicolon: Self::R) -> Self::R {
         <Self as FlattenSmartConstructors<'src, State<'src>>>::make_type_const_declaration(self, attribute_spec, modifiers, keyword, type_keyword, name, type_parameters, type_constraint, equal, type_specifier, semicolon)
+    }
+
+    fn make_context_const_declaration(&mut self, modifiers: Self::R, const_keyword: Self::R, ctx_keyword: Self::R, name: Self::R, type_parameters: Self::R, constraint: Self::R, equal: Self::R, ctx_list: Self::R, semicolon: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_context_const_declaration(self, modifiers, const_keyword, ctx_keyword, name, type_parameters, constraint, equal, ctx_list, semicolon)
     }
 
     fn make_decorated_expression(&mut self, decorator: Self::R, expression: Self::R) -> Self::R {
@@ -355,14 +355,6 @@ impl<'src> SmartConstructors for DirectDeclSmartConstructors<'src> {
 
     fn make_return_statement(&mut self, keyword: Self::R, expression: Self::R, semicolon: Self::R) -> Self::R {
         <Self as FlattenSmartConstructors<'src, State<'src>>>::make_return_statement(self, keyword, expression, semicolon)
-    }
-
-    fn make_goto_label(&mut self, name: Self::R, colon: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_goto_label(self, name, colon)
-    }
-
-    fn make_goto_statement(&mut self, keyword: Self::R, label_name: Self::R, semicolon: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_goto_statement(self, keyword, label_name, semicolon)
     }
 
     fn make_throw_statement(&mut self, keyword: Self::R, expression: Self::R, semicolon: Self::R) -> Self::R {
@@ -609,10 +601,6 @@ impl<'src> SmartConstructors for DirectDeclSmartConstructors<'src> {
         <Self as FlattenSmartConstructors<'src, State<'src>>>::make_type_constant(self, left_type, separator, right_type)
     }
 
-    fn make_pu_access(&mut self, left_type: Self::R, separator: Self::R, right_type: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_pu_access(self, left_type, separator, right_type)
-    }
-
     fn make_vector_type_specifier(&mut self, keyword: Self::R, left_angle: Self::R, type_: Self::R, trailing_comma: Self::R, right_angle: Self::R) -> Self::R {
         <Self as FlattenSmartConstructors<'src, State<'src>>>::make_vector_type_specifier(self, keyword, left_angle, type_, trailing_comma, right_angle)
     }
@@ -629,12 +617,20 @@ impl<'src> SmartConstructors for DirectDeclSmartConstructors<'src> {
         <Self as FlattenSmartConstructors<'src, State<'src>>>::make_varray_type_specifier(self, keyword, left_angle, type_, trailing_comma, right_angle)
     }
 
+    fn make_function_ctx_type_specifier(&mut self, keyword: Self::R, variable: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_function_ctx_type_specifier(self, keyword, variable)
+    }
+
     fn make_type_parameter(&mut self, attribute_spec: Self::R, reified: Self::R, variance: Self::R, name: Self::R, param_params: Self::R, constraints: Self::R) -> Self::R {
         <Self as FlattenSmartConstructors<'src, State<'src>>>::make_type_parameter(self, attribute_spec, reified, variance, name, param_params, constraints)
     }
 
     fn make_type_constraint(&mut self, keyword: Self::R, type_: Self::R) -> Self::R {
         <Self as FlattenSmartConstructors<'src, State<'src>>>::make_type_constraint(self, keyword, type_)
+    }
+
+    fn make_context_constraint(&mut self, keyword: Self::R, ctx_list: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_context_constraint(self, keyword, ctx_list)
     }
 
     fn make_darray_type_specifier(&mut self, keyword: Self::R, left_angle: Self::R, key: Self::R, comma: Self::R, value: Self::R, trailing_comma: Self::R, right_angle: Self::R) -> Self::R {
@@ -731,38 +727,6 @@ impl<'src> SmartConstructors for DirectDeclSmartConstructors<'src> {
 
     fn make_enum_atom_expression(&mut self, hash: Self::R, expression: Self::R) -> Self::R {
         <Self as FlattenSmartConstructors<'src, State<'src>>>::make_enum_atom_expression(self, hash, expression)
-    }
-
-    fn make_pocket_atom_expression(&mut self, glyph: Self::R, expression: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_pocket_atom_expression(self, glyph, expression)
-    }
-
-    fn make_pocket_identifier_expression(&mut self, qualifier: Self::R, pu_operator: Self::R, field: Self::R, operator: Self::R, name: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_pocket_identifier_expression(self, qualifier, pu_operator, field, operator, name)
-    }
-
-    fn make_pocket_atom_mapping_declaration(&mut self, glyph: Self::R, name: Self::R, left_paren: Self::R, mappings: Self::R, right_paren: Self::R, semicolon: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_pocket_atom_mapping_declaration(self, glyph, name, left_paren, mappings, right_paren, semicolon)
-    }
-
-    fn make_pocket_enum_declaration(&mut self, attributes: Self::R, modifiers: Self::R, enum_: Self::R, name: Self::R, left_brace: Self::R, fields: Self::R, right_brace: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_pocket_enum_declaration(self, attributes, modifiers, enum_, name, left_brace, fields, right_brace)
-    }
-
-    fn make_pocket_field_type_expr_declaration(&mut self, case: Self::R, type_: Self::R, name: Self::R, semicolon: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_pocket_field_type_expr_declaration(self, case, type_, name, semicolon)
-    }
-
-    fn make_pocket_field_type_declaration(&mut self, case: Self::R, type_: Self::R, type_parameter: Self::R, semicolon: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_pocket_field_type_declaration(self, case, type_, type_parameter, semicolon)
-    }
-
-    fn make_pocket_mapping_id_declaration(&mut self, name: Self::R, initializer: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_pocket_mapping_id_declaration(self, name, initializer)
-    }
-
-    fn make_pocket_mapping_type_declaration(&mut self, keyword: Self::R, name: Self::R, equal: Self::R, type_: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, State<'src>>>::make_pocket_mapping_type_declaration(self, keyword, name, equal, type_)
     }
 
 }

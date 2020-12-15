@@ -1448,7 +1448,8 @@ std::pair<Type,bool> resolveSame(ISS& env) {
   // arrays inside these arrays.
   auto warningsEnabled =
     (RuntimeOption::EvalHackArrCompatNotices ||
-     RuntimeOption::EvalEmitClsMethPointers);
+     RuntimeOption::EvalEmitClsMethPointers ||
+     RuntimeOption::EvalRaiseClassConversionWarning);
 
   auto const result = [&] {
     auto const v1 = tv(t1);
@@ -1550,6 +1551,8 @@ bool sameJmpImpl(ISS& env, Op sameOp, const JmpOp& jmp) {
   // Same currently lies about the distinction between Func/Cls/Str
   if (ty0.couldBe(BCls) && ty1.couldBe(BStr)) return false;
   if (ty1.couldBe(BCls) && ty0.couldBe(BStr)) return false;
+  if (ty0.couldBe(BLazyCls) && ty1.couldBe(BStr)) return false;
+  if (ty1.couldBe(BLazyCls) && ty0.couldBe(BStr)) return false;
 
   // We need to loosen provenance here because it doesn't affect same / equal.
   auto isect = intersection_of(loosen_provenance(ty0), loosen_provenance(ty1));
@@ -3232,6 +3235,8 @@ bool canReduceToDontResolveList(SArray tsList, bool checkArrays) {
   return result;
 }
 
+const StaticString s_hh_type_structure_no_throw("HH\\type_structure_no_throw");
+
 } // namespace
 
 void in(ISS& env, const bc::IsLateBoundCls& op) {
@@ -3254,9 +3259,27 @@ void in(ISS& env, const bc::IsTypeStructC& op) {
     popC(env);
     return push(env, TBool);
   }
-  if (op.subop1 == TypeStructResolveOp::Resolve &&
-      canReduceToDontResolve(a->m_data.parr, false)) {
-    return reduce(env, bc::IsTypeStructC { TypeStructResolveOp::DontResolve });
+  if (op.subop1 == TypeStructResolveOp::Resolve) {
+    if (canReduceToDontResolve(a->m_data.parr, false)) {
+      return reduce(
+        env,
+        bc::IsTypeStructC { TypeStructResolveOp::DontResolve }
+      );
+    }
+    if (auto const val = get_ts_this_type_access(a->m_data.parr)) {
+      // Convert `$x is this::T` into
+      // `$x is type_structure_no_throw(static::class, 'T')`
+      // to take advantage of the caching that comes with the type_structure
+      return reduce(
+        env,
+        bc::PopC {},
+        bc::LateBoundCls {},
+        bc::ClassName {},
+        bc::String {val},
+        bc::FCallBuiltin {2, 0, s_hh_type_structure_no_throw.get()},
+        bc::IsTypeStructC { TypeStructResolveOp::DontResolve }
+      );
+    }
   }
   isTypeStructImpl(env, a->m_data.parr);
 }
@@ -3715,6 +3738,15 @@ bool fcallTryFold(
       repl.push_back(bc::PopU {});
     }
     repl.push_back(gen_constant(*v));
+
+    auto const needsRuntimeProvenance =
+      RO::EvalArrayProvenance &&
+      foldableFunc->attrs & AttrProvenanceSkipFrame;
+    if (needsRuntimeProvenance) {
+      repl.push_back(bc::Int { 0 });
+      repl.push_back(bc::TagProvenanceHere {});
+    }
+
     reduce(env, std::move(repl));
     return true;
   }
@@ -3868,9 +3900,7 @@ void in(ISS& env, const bc::FCallFuncD& op) {
   }
 
   if (auto const func = rfunc.exactFunc()) {
-    if (can_emit_builtin(env, func, op.fca)) {
-      return finish_builtin(env, func, op.fca);
-    }
+    if (optimize_builtin(env, func, op.fca)) return;
   }
 
   fcallKnownImpl(env, op.fca, rfunc, TBottom, false, 0, updateBC);
@@ -4243,13 +4273,14 @@ void in(ISS& env, const bc::FCallClsMethodD& op) {
 
   if (auto const func = rfunc.exactFunc()) {
     assertx(func->cls != nullptr);
-    if (func->cls->name->same(op.str3) && can_emit_builtin(env, func, op.fca)) {
+    if (func->cls->name->same(op.str3) &&
+        optimize_builtin(env, func, op.fca)) {
       // When we use FCallBuiltin to call a static method, the litstr method
       // name will be a fully qualified cls::fn (e.g. "HH\Map::fromItems").
       //
       // As a result, we can only do this optimization if the name of the
       // builtin function's class matches this op's class name immediate.
-      return finish_builtin(env, func, op.fca);
+      return;
     }
   }
 
@@ -4932,7 +4963,7 @@ void verifyRetImpl(ISS& env, const TCVec& tcs,
     }
 
     // VerifyRetType will convert TClsMeth to TVec/TVArr/TArr implicitly
-    if (stackT.couldBe(BClsMeth)) {
+    if (stackT.couldBe(BClsMeth) && RO::EvalIsCompatibleClsMethType) {
       if (tcT.couldBe(BVec)) {
         stackT |= TVec;
         dont_reduce = true;
@@ -5346,9 +5377,12 @@ void in(ISS& env, const bc::ArrayUnmarkLegacy&) {
 }
 
 void in(ISS& env, const bc::TagProvenanceHere&) {
+  auto in = topC(env, 1);
+  auto out = loosen_provenance(loosen_staticness(loosen_values(std::move(in))));
+
   popC(env);
   popC(env);
-  push(env, TInitCell);
+  push(env, std::move(out));
 }
 
 void in(ISS& env, const bc::CheckProp&) {
@@ -5598,6 +5632,14 @@ void interpStep(ISS& env, const Bytecode& bc) {
     if (!env.flags.effectFree) {
       ITRACE(2, "   effect_free (due to constprop)\n");
       env.flags.effectFree = true;
+    }
+
+    // If we're doing inline interp, don't actually perform the
+    // constprop. If we do, we can infer static types that won't
+    // actually exist at runtime.
+    if (any(env.collect.opts & CollectionOpts::Inlining)) {
+      ITRACE(2, "   inlining, skipping actual constprop\n");
+      return false;
     }
 
     rewind(env, bc);

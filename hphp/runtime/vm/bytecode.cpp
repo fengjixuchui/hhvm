@@ -4377,6 +4377,7 @@ void newObjDImpl(Id id, ArrayData* reified_types) {
   auto this_ = newObjImpl(cls, reified_types);
   if (reified_types) vmStack().popC();
   vmStack().pushObjectNoRc(this_);
+  bespoke::profileArrLikeProps(this_);
 }
 
 } // namespace
@@ -4473,9 +4474,7 @@ OPTBLD_INLINE void iopLockObj() {
 }
 
 OPTBLD_INLINE
-void iopFCallBuiltin(
-  uint32_t numArgs, uint32_t numNonDefault, uint32_t numOut, Id id
-) {
+void iopFCallBuiltin(uint32_t numArgs, uint32_t numOut, Id id) {
   auto const ne = vmfp()->func()->unit()->lookupNamedEntityId(id);
   auto const func = ne->uniqueFunc();
   if (func == nullptr || !func->isBuiltin()) {
@@ -4502,7 +4501,7 @@ void iopFCallBuiltin(
   }
   Native::callFunc(func, vmfp(), ctx, args, ret, true);
 
-  frame_free_args(args, numNonDefault);
+  frame_free_args(args, numArgs);
   vmStack().ndiscard(numArgs);
   tvCopy(ret, *vmStack().allocTV());
 }

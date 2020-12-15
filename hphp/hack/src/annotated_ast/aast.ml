@@ -58,8 +58,6 @@ and ('ex, 'fb, 'en, 'hi) stmt_ =
   | Continue
   | Throw of ('ex, 'fb, 'en, 'hi) expr
   | Return of ('ex, 'fb, 'en, 'hi) expr option
-  | GotoLabel of pstring
-  | Goto of pstring
   | Awaitall of
       (lid option * ('ex, 'fb, 'en, 'hi) expr) list * ('ex, 'fb, 'en, 'hi) block
   | If of
@@ -154,11 +152,28 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
   | Lvar of lid
   | Dollardollar of lid
   | Clone of ('ex, 'fb, 'en, 'hi) expr
-  | Obj_get of
-      ('ex, 'fb, 'en, 'hi) expr * ('ex, 'fb, 'en, 'hi) expr * og_null_flavor
   | Array_get of ('ex, 'fb, 'en, 'hi) expr * ('ex, 'fb, 'en, 'hi) expr option
+  | Obj_get of
+      ('ex, 'fb, 'en, 'hi) expr
+      * ('ex, 'fb, 'en, 'hi) expr
+      * og_null_flavor
+      * (* is prop call *) bool
+  (* This flag can only ever be true when the expression is in a call
+     position. If the expression is not in a call position it will
+     always be false. If in a call position then:
+     - `false` => `$x->foo(...)` (object method call);
+     - `true` => `($x->foo)(...)` (function call through an object property).
+   *)
   | Class_get of
-      ('ex, 'fb, 'en, 'hi) class_id * ('ex, 'fb, 'en, 'hi) class_get_expr
+      ('ex, 'fb, 'en, 'hi) class_id
+      * ('ex, 'fb, 'en, 'hi) class_get_expr
+      * (* is prop call *) bool
+  (* This flag can only ever be true when the expression is in a call
+     position. If the expression is not in a call position it will
+     always be false. If in a call position then:
+     - `false` => `Foo::bar(...)` (static method call);
+     - `true` => `(Foo::$bar)(...)` (function call through a static property).
+   *)
   | Class_const of ('ex, 'fb, 'en, 'hi) class_id * pstring
   | Call of
       ('ex, 'fb, 'en, 'hi) expr
@@ -177,9 +192,7 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
   | Yield of ('ex, 'fb, 'en, 'hi) afield
   | Yield_break
   | Await of ('ex, 'fb, 'en, 'hi) expr
-  | Suspend of ('ex, 'fb, 'en, 'hi) expr
   | List of ('ex, 'fb, 'en, 'hi) expr list
-  | Expr_list of ('ex, 'fb, 'en, 'hi) expr list
   | Cast of hint * ('ex, 'fb, 'en, 'hi) expr
   | Unop of Ast_defs.uop * ('ex, 'fb, 'en, 'hi) expr
   | Binop of
@@ -210,8 +223,6 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
   | Collection of
       sid * 'hi collection_targ option * ('ex, 'fb, 'en, 'hi) afield list
       (** TODO: T38184446 Consolidate collections in AAST *)
-  | BracedExpr of ('ex, 'fb, 'en, 'hi) expr
-  | ParenthesizedExpr of ('ex, 'fb, 'en, 'hi) expr
   | ExpressionTree of ('ex, 'fb, 'en, 'hi) expression_tree
   (* None of these constructors exist in the AST *)
   | Lplaceholder of pos
@@ -224,9 +235,6 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
       ('hi targ * 'hi targ) option
       * ('ex, 'fb, 'en, 'hi) expr
       * ('ex, 'fb, 'en, 'hi) expr
-  | Assert of ('ex, 'fb, 'en, 'hi) assert_expr
-  | PU_atom of string
-  | PU_identifier of ('ex, 'fb, 'en, 'hi) class_id * pstring * pstring
   | ET_Splice of ('ex, 'fb, 'en, 'hi) expr
   | EnumAtom of string
   | Any
@@ -234,14 +242,6 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
 and ('ex, 'fb, 'en, 'hi) class_get_expr =
   | CGstring of pstring
   | CGexpr of ('ex, 'fb, 'en, 'hi) expr
-
-(* These are "very special" constructs that we look for in, among
- * other places, terminality checks. invariant does not appear here
- * because it gets rewritten to If + AE_invariant_violation.
- *
- * TODO: get rid of assert_expr entirely in favor of rewriting to if
- * and noreturn *)
-and ('ex, 'fb, 'en, 'hi) assert_expr = AE_assert of ('ex, 'fb, 'en, 'hi) expr
 
 and ('ex, 'fb, 'en, 'hi) case =
   | Default of pos * ('ex, 'fb, 'en, 'hi) block
@@ -397,7 +397,6 @@ and ('ex, 'fb, 'en, 'hi) class_ = {
   c_user_attributes: ('ex, 'fb, 'en, 'hi) user_attribute list;
   c_file_attributes: ('ex, 'fb, 'en, 'hi) file_attribute list;
   c_enum: enum_ option;
-  c_pu_enums: ('ex, 'fb, 'en, 'hi) pu_enum list;
   c_doc_comment: doc_comment option;
   c_emit_id: emit_id option;
 }
@@ -544,51 +543,6 @@ and ('ex, 'fb, 'en, 'hi) record_def = {
 }
 
 and record_hint = hint
-
-(** Pocket Universe Enumeration, e.g.
-
-```
-   enum Foo { // pu_name
-     // pu_case_types
-     case type T0;
-     case type T1;
-
-     // pu_case_values
-     case ?T0 default_value;
-     case T1 foo;
-
-     // pu_members
-     :@A( // pum_atom
-       // pum_types
-       type T0 = string,
-       type T1 = int,
-
-       // pum_exprs
-       default_value = null,
-       foo = 42,
-     );
-     :@B( ... )
-     ...
-   }
-```
-*)
-and ('ex, 'fb, 'en, 'hi) pu_enum = {
-  pu_annotation: 'en;
-  pu_name: sid;
-  pu_user_attributes: ('ex, 'fb, 'en, 'hi) user_attribute list;
-  pu_is_final: bool;
-  pu_case_types: ('ex, 'fb, 'en, 'hi) tparam list;
-  pu_case_values: pu_case_value list;
-  pu_members: ('ex, 'fb, 'en, 'hi) pu_member list;
-}
-
-and pu_case_value = sid * hint
-
-and ('ex, 'fb, 'en, 'hi) pu_member = {
-  pum_atom: sid;
-  pum_types: (sid * hint) list;
-  pum_exprs: (sid * ('ex, 'fb, 'en, 'hi) expr) list;
-}
 
 and ('ex, 'fb, 'en, 'hi) fun_def = ('ex, 'fb, 'en, 'hi) fun_
 

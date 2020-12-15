@@ -113,10 +113,9 @@ and hint_ p env = function
     let paraml = List.map3_exn hl kl muts ~f:make_param in
     let implicit_params =
       let capability =
-        Option.value_map
-          cap_opt
-          ~default:(Typing_make_type.default_capability (Reason.Rhint p))
-          ~f:(hint env)
+        match cap_opt with
+        | Some cap -> CapTy (hint env cap)
+        | None -> CapDefaults p
       in
       { capability }
     in
@@ -153,8 +152,7 @@ and hint_ p env = function
         (* TODO: handle function parameters with <<CanCall>> *)
         ft_ifc_decl = default_ifc_fun_decl;
       }
-  | Happly (((_p, c) as id), argl) ->
-    Decl_env.add_wclass env c;
+  | Happly (id, argl) ->
     let argl = List.map argl (hint env) in
     Tapply (id, argl)
   | Haccess (root_ty, ids) ->
@@ -194,7 +192,6 @@ and hint_ p env = function
     in
     Tshape (shape_kind, fdm)
   | Hsoft (p, h_) -> hint_ p env h_
-  | Hpu_access (base, sid) -> Tpu_access (hint env base, sid)
 
 and possibly_enforced_hint env h =
   (* Initially we assume that a type is not enforced at runtime.

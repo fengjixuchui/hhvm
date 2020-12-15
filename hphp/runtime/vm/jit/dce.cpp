@@ -130,6 +130,7 @@ bool canDCE(IRInstruction* inst) {
   case CmpRes:
   case EqRecDesc:
   case EqCls:
+  case EqLazyCls:
   case EqFunc:
   case EqStrPtr:
   case EqArrayDataPtr:
@@ -194,6 +195,10 @@ bool canDCE(IRInstruction* inst) {
   case LdFuncName:
   case LdMethCallerName:
   case LdStrLen:
+  case LdMonotypeDictEnd:
+  case LdMonotypeDictKey:
+  case LdMonotypeDictVal:
+  case LdMonotypeVecElem:
   case LdVecElem:
   case LdVecElemAddr:
   case NewInstanceRaw:
@@ -286,7 +291,7 @@ bool canDCE(IRInstruction* inst) {
   case DirFromFilepath:
   case BespokeIterFirstPos:
   case BespokeIterLastPos:
-  case BespokeIterAdvancePos:
+  case BespokeIterEnd:
   case BespokeIterGetKey:
   case BespokeIterGetVal:
     assertx(!inst->isControlFlow());
@@ -704,6 +709,7 @@ bool canDCE(IRInstruction* inst) {
   case ArrayUnmarkLegacyShallow:
   case ArrayUnmarkLegacyRecursive:
   case TagProvenanceHere:
+  case ProfileArrLikeProps:
     return false;
 
   case IsTypeStruct:

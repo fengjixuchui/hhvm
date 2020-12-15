@@ -6,7 +6,7 @@
        sc_where_constraints = []; sc_extends = []; sc_uses = [];
        sc_xhp_attr_uses = []; sc_req_extends = []; sc_req_implements = [];
        sc_implements = []; sc_implements_dynamic = false; sc_consts = [];
-       sc_typeconsts = []; sc_pu_enums = []; sc_props = []; sc_sprops = [];
+       sc_typeconsts = []; sc_props = []; sc_sprops = [];
        sc_constructor = None; sc_static_methods = []; sc_methods = [];
        sc_user_attributes = []; sc_enum_type = None }));
   ("\\my_partial_function",
@@ -17,11 +17,7 @@
          (Tfun
             { ft_arity = (Fstandard ()); ft_tparams = [];
               ft_where_constraints = []; ft_params = [];
-              ft_implicit_params =
-              { capability =
-                (Rhint (root|file_mode.php line 5, characters 10-28),
-                 (Tapply (([5:10-29], "\\HH\\Contexts\\defaults"), [])))
-                };
+              ft_implicit_params = { capability = (CapDefaults [5:10-29]) };
               ft_ret =
               { et_enforced = false;
                 et_type =

@@ -20,8 +20,8 @@
 #include "hphp/runtime/base/array-data.h"
 #include "hphp/runtime/base/datatype.h"
 #include "hphp/runtime/base/data-walker.h"
+#include "hphp/runtime/base/req-tiny-vector.h"
 #include "hphp/runtime/base/typed-value.h"
-#include "hphp/runtime/base/bespoke-layout.h"
 
 namespace HPHP {
 
@@ -33,26 +33,54 @@ inline bool shouldTestBespokeArrayLikes() {
   return RO::EvalBespokeArrayLikeMode == 1;
 }
 
+inline bool arrayTypeMaybeBespoke(DataType t) {
+  return shouldTestBespokeArrayLikes() || !isKeysetType(t);
+}
+
+/**
+ * A MaskAndCompare consists of a base and a mask. A value v is considered to
+ * be pass the check if (v & mask) == base.
+ */
+struct MaskAndCompare {
+  uint16_t xorVal;
+  uint16_t andVal;
+  uint16_t cmpVal;
+
+  static MaskAndCompare fullCompare(uint16_t val) {
+    return {val, 0xffff, 0};
+  }
+
+  bool accepts(uint16_t val) const {
+    return ((val ^ xorVal) & andVal) <= cmpVal;
+  }
+};
+
 namespace bespoke {
 
 // Hide Layout and its implementations to the rest of the codebase.
+struct ConcreteLayout;
 struct Layout;
 struct LayoutFunctions;
 struct LoggingProfile;
+struct SinkProfile;
 
 // Maybe wrap this array in a LoggingArray, based on runtime options.
 ArrayData* maybeMakeLoggingArray(ArrayData*);
 const ArrayData* maybeMakeLoggingArray(const ArrayData*);
 ArrayData* maybeMakeLoggingArray(ArrayData*, LoggingProfile*);
 ArrayData* makeBespokeForTesting(ArrayData*, LoggingProfile*);
+void profileArrLikeProps(ObjectData*);
 void setLoggingEnabled(bool);
-void exportProfiles();
+void selectBespokeLayouts();
 void waitOnExportProfiles();
 
 // Type-safe layout index, so that we can't mix it up with other ints.
 struct LayoutIndex {
   bool operator==(LayoutIndex o) const { return raw == o.raw; }
   bool operator!=(LayoutIndex o) const { return raw != o.raw; }
+  bool operator<(LayoutIndex o) const { return raw < o.raw; }
+
+public:
   uint16_t raw;
 };
 
@@ -80,10 +108,9 @@ struct BespokeArray : ArrayData {
   static BespokeArray* asBespoke(ArrayData*);
   static const BespokeArray* asBespoke(const ArrayData*);
 
-  BespokeLayout layout() const;
+  bespoke::LayoutIndex layoutIndex() const;
 
 protected:
-  bespoke::LayoutIndex layoutIndex() const;
   const bespoke::LayoutFunctions* vtable() const;
   void setLayoutIndex(bespoke::LayoutIndex index);
 
@@ -101,9 +128,6 @@ public:
   static ArrayData* MakeUncounted(ArrayData* array, bool hasApcTv,
                                   DataWalker::PointerMap* seen);
   static void ReleaseUncounted(ArrayData*);
-
-  // Log that a bespoke array made it to a particular profiling translation.
-  void logReachEvent(TransID transId, SrcKey sk);
 
 private:
   template <typename T, typename ... Args>
@@ -143,7 +167,8 @@ public:
   //    (i.e. KindOfPersistentString, or any of the persistent array-likes).
   //
   //  * The caller using this method may *never* change the value of the type
-  //    the resulting lval points to. (It may store to it with the same type.)
+  //    the resulting lval points to, except for ClsMeth -> Vec escalation.
+  //    (The caller may store to it with the same type.)
   //
   // Furthermore, Elem methods accept the tv_lval of the array being operated
   // on. This lval is updated accordingly if the array is escalated or copied.

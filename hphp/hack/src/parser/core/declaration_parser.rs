@@ -350,16 +350,28 @@ where
         // proceed successfully if we've consumed <?..., or dont need it
         // We purposefully ignore leading trivia before the <?hh, and handle
         // the error on a later pass
+        let file_path = self.lexer().source().file_path();
         if has_suffix {
             self.continue_from(parser1);
             Some(markup_section)
         } else {
-            if self.lexer().source().length() > 0
-                && self.lexer().source().file_path().has_extension("php")
-            {
-                self.with_error(Errors::error1001);
+            if self.lexer().source().length() > 0 {
+                if file_path.has_extension("php") {
+                    self.with_error(Errors::error1001);
+                    None
+                } else if file_path.has_extension("hack") || file_path.has_extension("hackpartial")
+                {
+                    // a .hack or .hackpartial file with a hashbang
+                    // parse the hashbang correctly and continue
+                    self.continue_from(parser1);
+                    Some(markup_section)
+                } else {
+                    // Otherwise it's a non .php file with no <?
+                    None
+                }
+            } else {
+                None
             }
-            None
         }
     }
 
@@ -1183,10 +1195,7 @@ where
     // Having this function prevents constants from having attributes as
     // this cannot be checked in parser_errors as there is no field in constant
     // declaration to store 'attributes'.
-    fn parse_methodish_or_property_or_type_constant_or_pu_enum(
-        &mut self,
-        attribute_spec: S::R,
-    ) -> S::R {
+    fn parse_methodish_or_property_or_type_constant(&mut self, attribute_spec: S::R) -> S::R {
         let mut parser1 = self.clone();
         let modifiers = parser1.parse_modifiers();
         let current_token_kind = parser1.peek_token_kind();
@@ -1198,11 +1207,16 @@ where
                 let const_ = self.assert_token(TokenKind::Const);
                 self.parse_type_const_declaration(attribute_spec, modifiers, const_)
             }
-            _ => self.parse_methodish_or_property_or_pu_enum(attribute_spec),
+            (TokenKind::Const, TokenKind::Ctx) => {
+                self.continue_from(parser1);
+                let const_ = self.assert_token(TokenKind::Const);
+                self.parse_context_const_declaration(modifiers, const_)
+            }
+            _ => self.parse_methodish_or_property(attribute_spec),
         }
     }
 
-    fn parse_methodish_or_property_or_pu_enum(&mut self, attribute_spec: S::R) -> S::R {
+    fn parse_methodish_or_property(&mut self, attribute_spec: S::R) -> S::R {
         let modifiers = self.parse_modifiers();
         // ERROR RECOVERY: match against two tokens, because if one token is
         // in error but the next isn't, then it's likely that the user is
@@ -1228,8 +1242,6 @@ where
                 self.skip_and_log_unexpected_token(false);
                 self.parse_methodish(attribute_spec, modifiers)
             }
-            // Pocket Universe declaration
-            (TokenKind::Enum, _) => self.parse_class_enum(attribute_spec, modifiers),
             // Otherwise, continue parsing as a property (which might be a lambda).
             _ => self.parse_property_declaration(attribute_spec, modifiers),
         }
@@ -1527,6 +1539,48 @@ where
         )
     }
 
+    fn parse_context_const_declaration(&mut self, modifiers: S::R, const_: S::R) -> S::R {
+        // SPEC
+        // context-constant-declaration:
+        //   abstract-context-constant-declaration
+        //   concrete-context-constant-declaration
+        // abstract-context-constant-declaration:
+        //   abstract  const  ctx  name  context-constraint*  ;
+        // concrete-context-constant-declaration:
+        //   const  ctx  name  context-constraint*  =  context-list  ;
+        let ctx_keyword = self.assert_token(TokenKind::Ctx);
+        let name = self.require_name_allow_non_reserved();
+        let (tparam_list, ctx_constraints) = self.with_type_parser(|p| {
+            (
+                p.parse_generic_type_parameter_list_opt(),
+                p.parse_list_until_none(|p| p.parse_context_constraint_opt()),
+            )
+        });
+        let (equal, ctx_list) = if self.peek_token_kind() == TokenKind::Equal {
+            let equal = self.assert_token(TokenKind::Equal);
+            let ctx_list = self.with_type_parser(|p| p.parse_capability_opt());
+            (equal, ctx_list)
+        } else {
+            let missing1 = S!(make_missing, self, self.pos());
+            let missing2 = S!(make_missing, self, self.pos());
+            (missing1, missing2)
+        };
+        let semicolon = self.require_semicolon();
+        S!(
+            make_context_const_declaration,
+            self,
+            modifiers,
+            const_,
+            ctx_keyword,
+            name,
+            tparam_list,
+            ctx_constraints,
+            equal,
+            ctx_list,
+            semicolon,
+        )
+    }
+
     // SPEC:
     // attribute_specification :=
     //   attribute_list
@@ -1599,43 +1653,6 @@ where
             let missing1 = S!(make_missing, self, self.pos());
             let missing2 = S!(make_missing, self, self.pos());
             (missing1, missing2)
-        }
-    }
-
-    fn parse_capability_provisional_opt(&mut self) -> S::R {
-        let token_kind = self.peek_token_kind();
-        if token_kind == TokenKind::At {
-            let token = self.next_token();
-            let at = S!(make_token, self, token);
-            let cap_lb = self.require_token(TokenKind::LeftBrace, Errors::error1034);
-            let cap_type = self
-                .with_type_parser(|p: &mut TypeParser<'a, S>| p.parse_type_specifier(false, false));
-            let maybe_plus = self.peek_token_kind();
-            let (unsafe_cap_plus, unsafe_cap_type) = if maybe_plus == TokenKind::Plus {
-                let token = self.next_token();
-                let unsafe_cap_plus = S!(make_token, self, token);
-                let unsafe_cap_type = self.with_type_parser(|p: &mut TypeParser<'a, S>| {
-                    p.parse_type_specifier(false, false)
-                });
-                (unsafe_cap_plus, unsafe_cap_type)
-            } else {
-                let missing1 = S!(make_missing, self, self.pos());
-                let missing2 = S!(make_missing, self, self.pos());
-                (missing1, missing2)
-            };
-            let cap_rb = self.require_token(TokenKind::RightBrace, Errors::error1006);
-            S!(
-                make_capability_provisional,
-                self,
-                at,
-                cap_lb,
-                cap_type,
-                unsafe_cap_plus,
-                unsafe_cap_type,
-                cap_rb,
-            )
-        } else {
-            S!(make_missing, self, self.pos())
         }
     }
 
@@ -1915,7 +1932,6 @@ where
         let (left_paren_token, parameter_list, right_paren_token) = self.parse_parameter_list_opt();
         let capability =
             self.with_type_parser(|p: &mut TypeParser<'a, S>| p.parse_capability_opt());
-        let capability_provisional = self.parse_capability_provisional_opt();
         let (colon_token, return_type) = self.parse_return_type_hint_opt();
         let where_clause = self.parse_where_clause_opt();
         S!(
@@ -1929,7 +1945,6 @@ where
             parameter_list,
             right_paren_token,
             capability,
-            capability_provisional,
             colon_token,
             return_type,
             where_clause,
@@ -2031,6 +2046,11 @@ where
                 let const_ = self.assert_token(TokenKind::Const);
                 self.parse_type_const_declaration(attributes, modifiers, const_)
             }
+            (TokenKind::Const, TokenKind::Ctx, _) if kind2 != TokenKind::Equal => {
+                let modifiers = self.parse_modifiers();
+                let const_ = self.assert_token(TokenKind::Const);
+                self.parse_context_const_declaration(modifiers, const_)
+            }
             (TokenKind::Const, _, _) => {
                 self.continue_from(parser1);
                 let const_ = self.assert_token(TokenKind::Const);
@@ -2038,7 +2058,7 @@ where
             }
             _ => {
                 let missing = S!(make_missing, self, self.pos());
-                self.parse_methodish_or_property_or_pu_enum(missing)
+                self.parse_methodish_or_property(missing)
             }
         }
     }
@@ -2243,9 +2263,6 @@ where
         //
         // // XHP children declaration
         // children ... ;
-        //
-        // // Pocket Universe Enumeration
-        // final? enum id { ... (pocket-field ;) * }
         match self.peek_token_kind() {
             TokenKind::Children => self.parse_xhp_children_declaration(),
             TokenKind::Category => self.parse_xhp_category_declaration(),
@@ -2256,19 +2273,14 @@ where
             | TokenKind::Protected
             | TokenKind::Private
             | TokenKind::Static => self.parse_methodish_or_property_or_const_or_type_const(),
-            TokenKind::Enum => {
-                let missing1 = S!(make_missing, self, self.pos());
-                let missing2 = S!(make_missing, self, self.pos());
-                self.parse_class_enum(missing1, missing2)
-            }
             TokenKind::Async | TokenKind::Final | TokenKind::LessThanLessThan => {
-                // Parse methods, constructors, properties, type constants, or Pocket Universe enums
+                // Parse methods, constructors, properties, type constants,
                 let attr = self.parse_attribute_specification_opt();
-                self.parse_methodish_or_property_or_type_constant_or_pu_enum(attr)
+                self.parse_methodish_or_property_or_type_constant(attr)
             }
             TokenKind::At if self.env.allow_new_attribute_syntax => {
                 let attr = self.parse_attribute_specification_opt();
-                self.parse_methodish_or_property_or_type_constant_or_pu_enum(attr)
+                self.parse_methodish_or_property_or_type_constant(attr)
             }
             TokenKind::Require => {
                 // We give an error if these are found where they should not be,
@@ -2503,151 +2515,7 @@ where
         result
     }
 
-    fn parse_pocket_mapping(&mut self) -> S::R {
-        // SPEC
-        // pocket-mapping ::=
-        //   | 'type' identifier '=' type-expression
-        //   | identifier '=' expression
-        match self.peek_token_kind() {
-            TokenKind::Type => {
-                let typ = self.require_token(TokenKind::Type, Errors::type_keyword);
-                let tyname = self.require_name();
-                let equal = self.require_equal();
-                let ty = self.parse_type_specifier(false, true);
-                S!(
-                    make_pocket_mapping_type_declaration,
-                    self,
-                    typ,
-                    tyname,
-                    equal,
-                    ty
-                )
-            }
-            TokenKind::Name => {
-                let id = self.require_name();
-                let equal = self.require_equal();
-                let simple_init = self.parse_expression();
-                let sc_init = S!(make_simple_initializer, self, equal, simple_init);
-                S!(make_pocket_mapping_id_declaration, self, id, sc_init)
-            }
-            _ => {
-                self.with_error(Errors::pocket_universe_invalid_field);
-                S!(make_missing, self, self.pos())
-            }
-        }
-    }
-
-    fn parse_pocket_field(&mut self) -> S::R {
-        // SPEC
-        // pocket-mapping-list ::=
-        //   | pocket-mapping
-        //   | pocket-mapping-list ',' pocket-mapping
-        //
-        // pocket-field ::=
-        //   | enum-member ;
-        //   | enum-member '(' pocket-mapping-list ','-opt ')' ;
-        //   | 'case' type-expression identifier ;
-        //   | 'case' 'type' identifier ;
-        //   | 'case' 'type' 'reify' identifier ;
-        //
-        // enum-member ::= ':@' name
-        match self.peek_token_kind() {
-            TokenKind::ColonAt => {
-                let glyph = self.assert_token(TokenKind::ColonAt);
-                let enum_name = self.require_name();
-                let (left_paren, mappings, right_paren) = match self.peek_token_kind() {
-                    TokenKind::LeftParen => {
-                        self.parse_parenthesized_comma_list_opt_allow_trailing(|x| {
-                            x.parse_pocket_mapping()
-                        })
-                    }
-                    _ => (
-                        S!(make_missing, self, self.pos()),
-                        S!(make_missing, self, self.pos()),
-                        S!(make_missing, self, self.pos()),
-                    ),
-                };
-                let semi = self.require_semicolon();
-                S!(
-                    make_pocket_atom_mapping_declaration,
-                    self,
-                    glyph,
-                    enum_name,
-                    left_paren,
-                    mappings,
-                    right_paren,
-                    semi,
-                )
-            }
-            TokenKind::Case => {
-                let case_tok = self.assert_token(TokenKind::Case);
-                match self.peek_token_kind() {
-                    TokenKind::Type => {
-                        let type_tok = self.assert_token(TokenKind::Type);
-                        let type_param = self
-                            .with_type_parser(|p: &mut TypeParser<'a, S>| p.parse_type_parameter());
-                        let semi = self.require_semicolon();
-                        S!(
-                            make_pocket_field_type_declaration,
-                            self,
-                            case_tok,
-                            type_tok,
-                            type_param,
-                            semi
-                        )
-                    }
-                    _ => {
-                        let ty = self.parse_type_specifier(false, true);
-                        let name = self.require_name();
-                        let semi = self.require_semicolon();
-                        S!(
-                            make_pocket_field_type_expr_declaration,
-                            self,
-                            case_tok,
-                            ty,
-                            name,
-                            semi
-                        )
-                    }
-                }
-            }
-            _ => {
-                self.with_error(Errors::pocket_universe_invalid_field);
-                S!(make_missing, self, self.pos())
-            }
-        }
-    }
-
-    fn parse_pocket_fields_opt(&mut self) -> S::R {
-        // SPEC
-        // pocket-field-list:
-        //   pocket-field
-        //   pocket-field-list pocket-field
-        self.parse_terminated_list(|x| x.parse_pocket_field(), TokenKind::RightBrace)
-    }
-
-    fn parse_class_enum(&mut self, attribute_spec: S::R, modifiers: S::R) -> S::R {
-        // SPEC
-        // 'final'? 'enum' identifier '{' pocket-field-list '}'
-        let enum_tok = self.require_token(TokenKind::Enum, Errors::pocket_universe_enum_expected);
-        let name = self.require_name();
-        let (left_brace, pocket_fields, right_brace) =
-            self.parse_braced_list(|x| x.parse_pocket_fields_opt());
-        S!(
-            make_pocket_enum_declaration,
-            self,
-            attribute_spec,
-            modifiers,
-            enum_tok,
-            name,
-            left_brace,
-            pocket_fields,
-            right_brace,
-        )
-    }
-
     pub fn parse_script(&mut self) -> S::R {
-        // TODO(kasper): no_markup for ".hack" files
         let header = self.parse_leading_markup_section();
         let mut declarations = vec![];
         if let Some(x) = header {

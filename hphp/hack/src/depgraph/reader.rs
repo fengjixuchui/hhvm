@@ -145,6 +145,14 @@ impl<'bytes> DepGraph<'bytes> {
         }
     }
 
+    /// Return whether the given dependent-to-dependency edge is in the graph.
+    pub fn dependent_dependency_edge_exists(&self, dependent: Dep, dependency: Dep) -> bool {
+        match self.hash_list_for(dependency) {
+            Some(hash_list) => self.hash_list_contains(hash_list, dependent),
+            None => false,
+        }
+    }
+
     /// Add the direct typing dependencies for one dependency.
     pub fn add_typing_deps_for_dep(&self, acc: &mut OrdSet<Dep>, dep: Dep) {
         if let Some(dept_hash_list) = self.hash_list_for(dep) {
@@ -161,6 +169,13 @@ impl<'bytes> DepGraph<'bytes> {
             self.add_typing_deps_for_dep(&mut acc, *dep);
         }
         acc
+    }
+
+    /// A slice that contains all unique dependency hashes in the graph.
+    ///
+    /// This gives direct access to the `indexer` table.
+    pub fn all_hashes(&self) -> &'bytes [u64] {
+        self.indexer.hashes
     }
 }
 
@@ -380,6 +395,13 @@ impl<'bytes> HashList<'bytes> {
     #[inline]
     fn has_index(self, index: u32) -> bool {
         self.indices.binary_search(&index).is_ok()
+    }
+
+    /// Return all raw hash indices in this list.
+    ///
+    /// Provides raw access to the underlying list.
+    pub fn hash_indices(&self) -> &'bytes [u32] {
+        self.indices
     }
 }
 

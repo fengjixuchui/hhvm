@@ -210,13 +210,6 @@ and _ ty_ =
        * during the localization phase.
        *)
   | Tlike : decl_ty -> decl_phase ty_
-  | Tpu_access : decl_ty * Nast.sid -> decl_phase ty_
-      (** Access to a Pocket Universe or Pocket Universes dependent type,
-       * denoted by Foo:@Bar.
-       * It might be unresolved at first (e.g. if Foo is a generic variable).
-       * Will be refined to Tpu, or to the actual type associated with an
-       * atom, once typechecking is successful.
-       *)
   (*========== Following Types Exist in Both Phases ==========*)
   | Tany : TanySentinel.t -> 'phase ty_
   | Terr
@@ -308,16 +301,6 @@ and _ ty_ =
        * If exact=Exact, then this represents instances of *exactly* this class
        * If exact=Nonexact, this also includes subclasses
        *)
-  | Tpu : locl_ty * Nast.sid -> locl_phase ty_
-      (** Typing of Pocket Universe Expressions
-       * - first parameter is the enclosing class
-       * - second parameter is the name of the Pocket Universe Enumeration
-       *)
-  | Tpu_type_access : Nast.sid * Nast.sid -> locl_phase ty_
-      (** Typing of Pocket Universes type projections
-       * - first parameter is the Tgeneric in place of the member name
-       * - second parameter is the name of the type to project
-       *)
 
 and 'phase taccess_type = 'phase ty * Nast.sid
 
@@ -350,9 +333,13 @@ and reactivity =
   | CippGlobal
   | CippRx
 
+and 'ty capability =
+  | CapDefaults of Pos.t
+  | CapTy of 'ty
+
 (** Companion to fun_params type, intended to consolidate checking of
  * implicit params for functions. *)
-and 'ty fun_implicit_params = { capability: 'ty }
+and 'ty fun_implicit_params = { capability: 'ty capability }
 
 (** The type of a function AND a method.
  * A function has a min and max arity because of optional arguments *)
@@ -443,14 +430,11 @@ module Flags = struct
     is_set ft.ft_flags ft_flags_is_function_pointer
 
   let get_ft_fun_kind ft =
-    if get_ft_is_coroutine ft then
-      Ast_defs.FCoroutine
-    else
-      match (get_ft_async ft, get_ft_generator ft) with
-      | (false, false) -> Ast_defs.FSync
-      | (true, false) -> Ast_defs.FAsync
-      | (false, true) -> Ast_defs.FGenerator
-      | (true, true) -> Ast_defs.FAsyncGenerator
+    match (get_ft_async ft, get_ft_generator ft) with
+    | (false, false) -> Ast_defs.FSync
+    | (true, false) -> Ast_defs.FAsync
+    | (false, true) -> Ast_defs.FGenerator
+    | (true, true) -> Ast_defs.FAsyncGenerator
 
   let from_mutable_flags flags =
     let masked = Int.bit_and flags mutable_flags_mask in
@@ -486,7 +470,6 @@ module Flags = struct
     | Ast_defs.FAsync -> ft_flags_async
     | Ast_defs.FGenerator -> ft_flags_generator
     | Ast_defs.FAsyncGenerator -> Int.bit_or ft_flags_async ft_flags_generator
-    | Ast_defs.FCoroutine -> ft_flags_is_coroutine
 
   let make_ft_flags
       kind param_mutable ~return_disposable ~returns_mutable ~returns_void_to_rx
@@ -703,24 +686,6 @@ module Pp = struct
            a1);
       Format.fprintf fmt "@,]@]";
       Format.fprintf fmt "@,))@]"
-    | Tpu (base, enum) ->
-      Format.fprintf fmt "(@[<2>Tpu (%a@,,%a)@])" pp_ty base Aast.pp_sid enum;
-      Format.fprintf fmt "@])"
-    | Tpu_access (base, sid) ->
-      Format.fprintf fmt "(@[<2>Tpu_access (@,";
-      pp_ty fmt base;
-      Format.fprintf fmt ",@ ";
-      Aast.pp_sid fmt sid;
-      Format.fprintf fmt "@,))@]"
-    | Tpu_type_access (member, tyname) ->
-      Format.fprintf
-        fmt
-        "(@[<2>Tpu_type_access (%a@,,%a)@])"
-        Aast.pp_sid
-        member
-        Aast.pp_sid
-        tyname;
-      Format.fprintf fmt "@])"
 
   and pp_ty_list : type a. Format.formatter -> a ty list -> unit =
    fun fmt tyl ->
@@ -807,13 +772,24 @@ module Pp = struct
     Format.fprintf fmt "@]";
     Format.fprintf fmt "@ }@]"
 
+  and pp_capability : type a. Format.formatter -> a ty capability -> unit =
+   fun fmt -> function
+    | CapTy ty ->
+      Format.pp_print_string fmt "(CapTy ";
+      pp_ty fmt ty;
+      Format.pp_print_string fmt ")"
+    | CapDefaults pos ->
+      Format.pp_print_string fmt "(CapDefaults ";
+      Pos.pp fmt pos;
+      Format.pp_print_string fmt ")"
+
   and pp_fun_implicit_params :
       type a. Format.formatter -> a ty fun_implicit_params -> unit =
    fun fmt x ->
     Format.fprintf fmt "@[<2>{ ";
 
     Format.fprintf fmt "@[%s =@ " "capability";
-    pp_ty fmt x.capability;
+    pp_capability fmt x.capability;
     Format.fprintf fmt "@]";
 
     Format.fprintf fmt "@ }@]"

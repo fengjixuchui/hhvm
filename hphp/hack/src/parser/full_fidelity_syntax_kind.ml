@@ -50,7 +50,6 @@ type t =
   | FunctionDeclaration
   | FunctionDeclarationHeader
   | Capability
-  | CapabilityProvisional
   | WhereClause
   | WhereConstraint
   | MethodishDeclaration
@@ -65,6 +64,7 @@ type t =
   | ConstDeclaration
   | ConstantDeclarator
   | TypeConstDeclaration
+  | ContextConstDeclaration
   | DecoratedExpression
   | ParameterDeclaration
   | VariadicParameter
@@ -96,8 +96,6 @@ type t =
   | CaseLabel
   | DefaultLabel
   | ReturnStatement
-  | GotoLabel
-  | GotoStatement
   | ThrowStatement
   | BreakStatement
   | ContinueStatement
@@ -159,13 +157,14 @@ type t =
   | XHPExpression
   | XHPClose
   | TypeConstant
-  | PUAccess
   | VectorTypeSpecifier
   | KeysetTypeSpecifier
   | TupleTypeExplicitSpecifier
   | VarrayTypeSpecifier
+  | FunctionCtxTypeSpecifier
   | TypeParameter
   | TypeConstraint
+  | ContextConstraint
   | DarrayTypeSpecifier
   | DictionaryTypeSpecifier
   | ClosureTypeSpecifier
@@ -190,14 +189,6 @@ type t =
   | ErrorSyntax
   | ListItem
   | EnumAtomExpression
-  | PocketAtomExpression
-  | PocketIdentifierExpression
-  | PocketAtomMappingDeclaration
-  | PocketEnumDeclaration
-  | PocketFieldTypeExprDeclaration
-  | PocketFieldTypeDeclaration
-  | PocketMappingIdDeclaration
-  | PocketMappingTypeDeclaration
 
   [@@deriving show, eq]
 
@@ -235,7 +226,6 @@ let to_string kind =
   | FunctionDeclaration               -> "function_declaration"
   | FunctionDeclarationHeader         -> "function_declaration_header"
   | Capability                        -> "capability"
-  | CapabilityProvisional             -> "capability_provisional"
   | WhereClause                       -> "where_clause"
   | WhereConstraint                   -> "where_constraint"
   | MethodishDeclaration              -> "methodish_declaration"
@@ -250,6 +240,7 @@ let to_string kind =
   | ConstDeclaration                  -> "const_declaration"
   | ConstantDeclarator                -> "constant_declarator"
   | TypeConstDeclaration              -> "type_const_declaration"
+  | ContextConstDeclaration           -> "context_const_declaration"
   | DecoratedExpression               -> "decorated_expression"
   | ParameterDeclaration              -> "parameter_declaration"
   | VariadicParameter                 -> "variadic_parameter"
@@ -281,8 +272,6 @@ let to_string kind =
   | CaseLabel                         -> "case_label"
   | DefaultLabel                      -> "default_label"
   | ReturnStatement                   -> "return_statement"
-  | GotoLabel                         -> "goto_label"
-  | GotoStatement                     -> "goto_statement"
   | ThrowStatement                    -> "throw_statement"
   | BreakStatement                    -> "break_statement"
   | ContinueStatement                 -> "continue_statement"
@@ -344,13 +333,14 @@ let to_string kind =
   | XHPExpression                     -> "xhp_expression"
   | XHPClose                          -> "xhp_close"
   | TypeConstant                      -> "type_constant"
-  | PUAccess                          -> "pu_access"
   | VectorTypeSpecifier               -> "vector_type_specifier"
   | KeysetTypeSpecifier               -> "keyset_type_specifier"
   | TupleTypeExplicitSpecifier        -> "tuple_type_explicit_specifier"
   | VarrayTypeSpecifier               -> "varray_type_specifier"
+  | FunctionCtxTypeSpecifier          -> "function_ctx_type_specifier"
   | TypeParameter                     -> "type_parameter"
   | TypeConstraint                    -> "type_constraint"
+  | ContextConstraint                 -> "context_constraint"
   | DarrayTypeSpecifier               -> "darray_type_specifier"
   | DictionaryTypeSpecifier           -> "dictionary_type_specifier"
   | ClosureTypeSpecifier              -> "closure_type_specifier"
@@ -375,11 +365,3 @@ let to_string kind =
   | ErrorSyntax                       -> "error"
   | ListItem                          -> "list_item"
   | EnumAtomExpression                -> "enum_atom"
-  | PocketAtomExpression              -> "pocket_atom"
-  | PocketIdentifierExpression        -> "pocket_identifier"
-  | PocketAtomMappingDeclaration      -> "pocket_atom_mapping"
-  | PocketEnumDeclaration             -> "pocket_enum_declaration"
-  | PocketFieldTypeExprDeclaration    -> "pocket_field_type_expr_declaration"
-  | PocketFieldTypeDeclaration        -> "pocket_field_type_declaration"
-  | PocketMappingIdDeclaration        -> "pocket_mapping_id_declaration"
-  | PocketMappingTypeDeclaration      -> "pocket_mapping_type_declaration"

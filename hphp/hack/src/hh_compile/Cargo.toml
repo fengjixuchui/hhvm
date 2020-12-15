@@ -10,7 +10,9 @@ name = "hh_compile"
 path = "hh_compile.rs"
 
 [dependencies]
+aast_parser = { path = "../parser/cargo/aast_parser" }
 compile_rust = { path = "../hhbc/cargo/compile" }
+direct_decl_parser = { path = "../parser/api/cargo/direct_decl_parser" }
 minimal_parser = { path = "../parser/api/cargo/minimal_parser" }
 multifile_rust = { path = "../utils/multifile" }
 ocamlrep = { path = "../ocamlrep" }
@@ -25,5 +27,5 @@ atty = "0.2"
 bumpalo = { version = "3.2.1", features = ["collections"] }
 rayon = "1.2"
 structopt = "0.3.7"
-strum = "0.17"
-strum_macros = "0.17"
+strum = "0.19"
+strum_macros = "0.19"

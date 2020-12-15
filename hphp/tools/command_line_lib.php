@@ -4,7 +4,7 @@
  */
 
 function error(string $message): void {
-  error_unsafe($message);
+  throw new Error($message);
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -254,7 +254,7 @@ function display_help(string $message, OptionInfoMap $optmap): void {
     }
   }
 
-  $longest_col = max($first_cols->values()->map(fun('strlen')));
+  $longest_col = max($first_cols->values()->map(strlen<>));
 
   foreach ($first_cols as $long => $col) {
     $pad = str_repeat(' ', $longest_col - strlen($col) + 5);

@@ -28,6 +28,8 @@ class Baz {
     var_dump(self::$mm[self::$c]);
     var_dump(array_key_exists(static::class, self::$mm));
     var_dump(idx(self::$mm, self::$c));
+    self::$mm->set(Bar::class, 10);
+    var_dump(self::$mm->get(Bar::class));
   }
 
   public static function Vector_fun() {
@@ -58,6 +60,8 @@ function Set_fun() {
   var_dump(array_key_exists(Bar::class, $s));
   var_dump($s[Foo::class]);
   var_dump(idx($s, Foo::class));
+  $s->add(Bar::class);
+  var_dump($s->contains(Bar::class));
 }
 
 function vec_fun() {
@@ -90,6 +94,7 @@ function shape_fun() {
   $x[Fizz::class] = 4;
   var_dump($x);
   var_dump(idx($x, Foo::class));
+  var_dump(Shapes::idx(__hhvm_intrinsics\launder_value($x), Foo::class, true));
 }
 
 function convert_key() {

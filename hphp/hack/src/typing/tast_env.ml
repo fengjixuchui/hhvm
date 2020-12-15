@@ -10,6 +10,10 @@
 open Hh_prelude
 open Aast
 
+type class_or_typedef_result =
+  | ClassResult of Decl_provider.class_decl
+  | TypedefResult of Typing_defs.typedef_type
+
 (** {!Tast_env.env} is just an alias to {!Typing_env.env}, and the functions we
     provide for it are largely just aliases to functions that take a
     {!Typing_env.env}.
@@ -61,6 +65,12 @@ let get_self_ty_exn env =
   | None -> raise Not_in_class
 
 let get_class = Typing_env.get_class
+
+let get_class_or_typedef env x =
+  match Typing_env.get_class_or_typedef env x with
+  | Some (Typing_env.ClassResult cd) -> Some (ClassResult cd)
+  | Some (Typing_env.TypedefResult td) -> Some (TypedefResult td)
+  | None -> None
 
 let is_static = Typing_env.is_static
 
@@ -218,8 +228,6 @@ let restore_method_env env m = restore_saved_env env m.m_annotation
 
 let restore_fun_env env f = restore_saved_env env f.f_annotation
 
-let restore_pu_enum_env env pu = restore_saved_env env pu.pu_annotation
-
 let fun_env ctx f =
   let ctx =
     Provider_context.map_tcopt ctx ~f:(fun _tcopt -> f.f_annotation.tcopt)
@@ -299,14 +307,3 @@ let set_allow_wildcards env =
 let get_allow_wildcards env = env.Typing_env_types.allow_wildcards
 
 let condition_type_matches = Typing_reactivity.condition_type_matches
-
-(* ocaml being ocaml...
- * We need at least one explicit reference to the Typing_pocket_univereses
- * module otherwise the compiler will not include it in the resulting binary.
- * Because of cyclic module dependencies, this is never done directly (we
- * rely on references in Typing_utils), so I need this dummy occurence just
- * to make sure the code is present.
- *)
-let _ =
-  let _ = Typing_pocket_universes.expand_pocket_universes in
-  ()

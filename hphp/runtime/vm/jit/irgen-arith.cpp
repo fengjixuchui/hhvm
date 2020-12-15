@@ -530,6 +530,7 @@ SSATmp* emitMixedClsMethCmp(IRGS& env, Op op) {
 namespace {
 
 void raiseClsMethCompareWarningHelper(IRGS& env, Op op) {
+  assertx(RO::EvalIsCompatibleClsMethType);
   if (!RuntimeOption::EvalRaiseClsMethComparisonWarning) return;
   switch (op) {
     case Op::Gt:
@@ -585,7 +586,7 @@ void implNullCmp(IRGS& env, Op op, SSATmp* left, SSATmp* right) {
       )
     );
   } else if (rightTy <= TClsMeth) {
-    if (RuntimeOption::EvalHackArrDVArrs) {
+    if (RuntimeOption::EvalHackArrDVArrs || !RO::EvalIsCompatibleClsMethType) {
       push(env, emitMixedClsMethCmp(env, op));
     } else {
       raiseClsMethCompareWarningHelper(env, op);
@@ -621,7 +622,7 @@ void implBoolCmp(IRGS& env, Op op, SSATmp* left, SSATmp* right) {
       )
     );
   } else if (rightTy <= TClsMeth) {
-    if (RuntimeOption::EvalHackArrDVArrs) {
+    if (RuntimeOption::EvalHackArrDVArrs || !RO::EvalIsCompatibleClsMethType) {
       push(env, emitMixedClsMethCmp(env, op));
     } else {
       raiseClsMethCompareWarningHelper(env, op);
@@ -704,7 +705,7 @@ void implIntCmp(IRGS& env, Op op, SSATmp* left, SSATmp* right) {
       )
     );
   } else if (rightTy <= TClsMeth) {
-    if (RuntimeOption::EvalHackArrDVArrs) {
+    if (RuntimeOption::EvalHackArrDVArrs || !RO::EvalIsCompatibleClsMethType) {
       push(env, emitMixedClsMethCmp(env, op));
     } else {
       raiseClsMethCompareWarningHelper(env, op);
@@ -769,7 +770,7 @@ void implDblCmp(IRGS& env, Op op, SSATmp* left, SSATmp* right) {
       )
     );
   } else if (rightTy <= TClsMeth) {
-    if (RuntimeOption::EvalHackArrDVArrs) {
+    if (RuntimeOption::EvalHackArrDVArrs || !RO::EvalIsCompatibleClsMethType) {
       push(env, emitMixedClsMethCmp(env, op));
     } else {
       raiseClsMethCompareWarningHelper(env, op);
@@ -824,6 +825,7 @@ SSATmp* equalClsMeth(IRGS& env, SSATmp* left, SSATmp* right) {
 }
 
 void raiseClsMethToVecWarningHelper(IRGS& env) {
+  assertx(RO::EvalIsCompatibleClsMethType);
   if (RuntimeOption::EvalRaiseClsMethConversionWarning) {
     gen(env, RaiseNotice, cns(env, makeStaticString(
       folly::sformat("Implicit clsmeth to {} conversion",
@@ -877,7 +879,7 @@ void implArrCmp(IRGS& env, Op op, SSATmp* left, SSATmp* right) {
   } else if (rightTy <= TKeyset) {
     push(env, emitMixedKeysetCmp(env, op));
   } else if (rightTy <= TClsMeth) {
-    if (RuntimeOption::EvalHackArrDVArrs) {
+    if (RuntimeOption::EvalHackArrDVArrs || !RO::EvalIsCompatibleClsMethType) {
       push(env, emitMixedClsMethCmp(env, op));
     } else {
       raiseClsMethToVecWarningHelper(env);
@@ -900,7 +902,7 @@ void implVecCmp(IRGS& env, Op op, SSATmp* left, SSATmp* right) {
     push(env, emitHackArrBoolCmp(env, op, left, gen(env, ConvTVToBool, right)));
   } else if (rightTy <= TVec) {
     push(env, gen(env, toArrLikeCmpOpcode(op), left, right));
-  } else if (rightTy <= TClsMeth) {
+  } else if (rightTy <= TClsMeth && RO::EvalIsCompatibleClsMethType) {
     if (RuntimeOption::EvalHackArrDVArrs) {
       raiseClsMethToVecWarningHelper(env);
       auto const arr = convertClsMethToVec(env, right);
@@ -999,6 +1001,12 @@ void implStrCmp(IRGS& env, Op op, SSATmp* left, SSATmp* right) {
     }
     right = gen(env, LdClsName, right);
   }
+  if (right->isA(TLazyCls)) {
+    if (RuntimeOption::EvalRaiseClassConversionWarning) {
+      gen(env, RaiseWarning, cns(env, s_clsToStringWarning.get()));
+    }
+    right = gen(env, LdLazyClsName, right);
+  }
 
   auto const rightTy = right->type();
 
@@ -1077,7 +1085,7 @@ void implStrCmp(IRGS& env, Op op, SSATmp* left, SSATmp* right) {
   } else if (rightTy <= TRClsMeth) {
     PUNT(RClsMeth-cmp);
   } else if (rightTy <= TClsMeth) {
-    if (RuntimeOption::EvalHackArrDVArrs) {
+    if (RuntimeOption::EvalHackArrDVArrs || !RO::EvalIsCompatibleClsMethType) {
       push(env, emitMixedClsMethCmp(env, op));
     } else {
       raiseClsMethCompareWarningHelper(env, op);
@@ -1174,6 +1182,21 @@ void implObjCmp(IRGS& env, Op op, SSATmp* left, SSATmp* right) {
         [&]{ return emitObjStrCmp(env, op, left, gen(env, LdClsName, right)); }
       )
     );
+  } else if (rightTy <= TLazyCls) {
+    if (RuntimeOption::EvalRaiseClassConversionWarning) {
+      gen(env, RaiseWarning, cns(env, s_clsToStringWarning.get()));
+    }
+    push(
+      env,
+      emitCollectionCheck(
+        env,
+        op,
+        left,
+        [&]{
+          return emitObjStrCmp(env, op, left, gen(env, LdLazyClsName, right));
+        }
+      )
+    );
   } else if (rightTy <= TArr) {
     // Object is always greater than array, but we need a collection check
     // first.
@@ -1193,7 +1216,7 @@ void implObjCmp(IRGS& env, Op op, SSATmp* left, SSATmp* right) {
   } else if (rightTy <= TKeyset) {
     push(env, emitMixedKeysetCmp(env, op));
   } else if (rightTy <= TClsMeth) {
-    if (RuntimeOption::EvalHackArrDVArrs) {
+    if (RuntimeOption::EvalHackArrDVArrs || !RO::EvalIsCompatibleClsMethType) {
       push(env, emitMixedClsMethCmp(env, op));
     } else {
       raiseClsMethCompareWarningHelper(env, op);
@@ -1267,7 +1290,7 @@ void implResCmp(IRGS& env, Op op, SSATmp* left, SSATmp* right) {
   } else if (rightTy <= TRClsMeth) {
     PUNT(RClsMeth-cmp);
   } else if (rightTy <= TClsMeth) {
-    if (RuntimeOption::EvalHackArrDVArrs) {
+    if (RuntimeOption::EvalHackArrDVArrs || !RO::EvalIsCompatibleClsMethType) {
       push(env, emitMixedClsMethCmp(env, op));
     } else {
       raiseClsMethCompareWarningHelper(env, op);
@@ -1301,7 +1324,8 @@ void implFunCmp(IRGS& env, Op op, SSATmp* left, SSATmp* right) {
     push(env, emitMixedDictCmp(env, op));
   } else if (rightTy <= TKeyset) {
     push(env, emitMixedKeysetCmp(env, op));
-  } else if (rightTy <= TClsMeth && RuntimeOption::EvalHackArrDVArrs) {
+  } else if (rightTy <= TClsMeth && RuntimeOption::EvalHackArrDVArrs &&
+             RO::EvalIsCompatibleClsMethType) {
     push(env, emitMixedClsMethCmp(env, op));
   } else if (rightTy <= TRFunc) {
     PUNT(RFunc-cmp);
@@ -1311,6 +1335,44 @@ void implFunCmp(IRGS& env, Op op, SSATmp* left, SSATmp* right) {
     push(env, emitMixedFuncCmp(env, op));
   }
   return;
+}
+
+void implLazyClsCmp(IRGS& env, Op op, SSATmp* left, SSATmp* right) {
+  auto const rightTy = right->type();
+
+  if (rightTy <= TLazyCls) {
+    if (op == Op::Eq || op == Op::Same) {
+      push(env, gen(env, EqLazyCls, left, right));
+      return;
+    }
+    if (op == Op::Neq || op == Op::NSame) {
+      push(
+        env,
+        gen(env, XorBool, gen(env, EqLazyCls, left, right), cns(env, true))
+      );
+      return;
+    }
+  }
+
+  if (rightTy <= TStr) {
+    if (RuntimeOption::EvalRaiseClassConversionWarning) {
+      gen(env, RaiseWarning, cns(env, s_clsToStringWarning.get()));
+    }
+    auto const str = gen(env, LdLazyClsName, left);
+    implStrCmp(env, op, str, right);
+    return;
+  }
+
+  if (rightTy <= TCls) {
+    if (op == Op::Eq || op == Op::Neq || op == Op::Same || op == Op::NSame) {
+      auto const lstr = gen(env, LdLazyClsName, left);
+      auto const rstr = gen(env, LdClsName, right);
+      implStrCmp(env, op, lstr, rstr);
+      return;
+    }
+  }
+
+  PUNT(LazyCls-cmp);
 }
 
 void implClsCmp(IRGS& env, Op op, SSATmp* left, SSATmp* right) {
@@ -1337,6 +1399,15 @@ void implClsCmp(IRGS& env, Op op, SSATmp* left, SSATmp* right) {
     return;
   }
 
+  if (rightTy <= TLazyCls) {
+    if (op == Op::Eq || op == Op::Neq || op == Op::Same || op == Op::NSame) {
+      auto const lstr = gen(env, LdClsName, left);
+      auto const rstr = gen(env, LdLazyClsName, right);
+      implStrCmp(env, op, lstr, rstr);
+      return;
+    }
+  }
+
   PUNT(Cls-cmp);
 }
 
@@ -1353,6 +1424,11 @@ void implClsMethCmp(IRGS& env, Op op, SSATmp* left, SSATmp* right) {
       return;
     }
     PUNT(ClsMeth-ClsMeth-cmp);
+  }
+
+  if (!RO::EvalIsCompatibleClsMethType) {
+    push(env, emitMixedClsMethCmp(env, op));
+    return;
   }
 
   if (RuntimeOption::EvalHackArrDVArrs) {
@@ -1464,9 +1540,12 @@ void implCmp(IRGS& env, Op op) {
     case Op::Cmp:
       if (is_php_arr_hack_arr_cmp) raiseHACCompareWarningHelper(env);
       else {
+        auto const arrLike = RO::EvalIsCompatibleClsMethType
+          ? TArr | TClsMeth
+          : TArr;
         auto const is_php_arr_non_arr_cmp =
-          ((leftTy <= TArr) != (rightTy <= (TArr|TClsMeth))) &&
-          ((leftTy <= (TArr|TClsMeth)) != (rightTy <= TArr));
+          ((leftTy <= TArr) != (rightTy <= arrLike)) &&
+          ((leftTy <= arrLike) != (rightTy <= TArr));
         if (is_php_arr_non_arr_cmp) {
           auto const nonArr = [&]{
             gen(
@@ -1500,17 +1579,23 @@ void implCmp(IRGS& env, Op op) {
     return
       equivDataTypes(leftTy.toDataType(), rightTy.toDataType()) ||
       (isArrayType(leftTy.toDataType()) && isArrayType(rightTy.toDataType())) ||
-      (isFuncType(leftTy.toDataType()) && isClassType(rightTy.toDataType())) ||
-      (isClassType(leftTy.toDataType()) && isFuncType(rightTy.toDataType())) ||
-      (isFuncType(leftTy.toDataType()) && isStringType(rightTy.toDataType())) ||
-      (isStringType(leftTy.toDataType()) && isFuncType(rightTy.toDataType())) ||
       (isClassType(leftTy.toDataType()) && isStringType(rightTy.toDataType()))||
+      (isClassType(leftTy.toDataType()) &&
+       isLazyClassType(rightTy.toDataType()))||
+      (isLazyClassType(leftTy.toDataType()) &&
+       isClassType(rightTy.toDataType()))||
+      (isLazyClassType(leftTy.toDataType()) &&
+       isStringType(rightTy.toDataType()))||
       (isStringType(leftTy.toDataType()) &&
         isClassType(rightTy.toDataType())) ||
+      (isStringType(leftTy.toDataType()) &&
+        isLazyClassType(rightTy.toDataType())) ||
       (isClsMethType(leftTy.toDataType()) &&
-        isArrayLikeType(rightTy.toDataType())) ||
+        isArrayLikeType(rightTy.toDataType()) &&
+        RO::EvalIsCompatibleClsMethType) ||
       (isArrayLikeType(leftTy.toDataType()) &&
-        isClsMethType(rightTy.toDataType()));
+        isClsMethType(rightTy.toDataType()) &&
+        RO::EvalIsCompatibleClsMethType);
   };
 
   // If it's a same-ish comparison and the types don't match (taking into
@@ -1532,6 +1617,7 @@ void implCmp(IRGS& env, Op op) {
   else if (leftTy <= TRes) implResCmp(env, op, left, right);
   else if (leftTy <= TFunc) implFunCmp(env, op, left, right);
   else if (leftTy <= TCls) implClsCmp(env, op, left, right);
+  else if (leftTy <= TLazyCls) implLazyClsCmp(env, op, left, right);
   else if (leftTy <= TClsMeth) implClsMethCmp(env, op, left, right);
   else if (leftTy <= TRecord) implRecordCmp(env, op, left, right);
   else if (leftTy <= TRFunc) implRFuncCmp(env, op, left, right);
@@ -1656,7 +1742,7 @@ void emitSetOpL(IRGS& env, int32_t id, SetOpOp subop) {
   }();
   if (!subOpc) PUNT(SetOpL-Unsupported);
 
-  auto loc = ldLoc(env, id, nullptr, DataTypeGeneric);
+  auto loc = ldLoc(env, id, DataTypeGeneric);
 
   if (*subOpc == Op::Concat) {
     /*
@@ -1666,7 +1752,7 @@ void emitSetOpL(IRGS& env, int32_t id, SetOpOp subop) {
     auto const val    = popC(env);
     env.irb->constrainValue(loc, DataTypeSpecific);
     implConcat(env, val, loc, [&] (SSATmp* result) {
-      pushIncRef(env, stLocNRC(env, id, nullptr, result));
+      pushIncRef(env, stLocNRC(env, id, result));
     });
     return;
   }
@@ -1690,22 +1776,17 @@ void emitSetOpL(IRGS& env, int32_t id, SetOpOp subop) {
   auto const result = opc == AddIntO || opc == SubIntO || opc == MulIntO
     ? gen(env, opc, exitSlow, loc, val)
     : gen(env, opc, loc, val);
-  pushStLoc(env, id, nullptr, result);
+  pushStLoc(env, id, result);
 }
 
 void emitIncDecL(IRGS& env, NamedLocal loc, IncDecOp subop) {
-  auto const src = ldLocWarn(
-    env,
-    loc,
-    nullptr,
-    DataTypeSpecific
-  );
+  auto const src = ldLocWarn(env, loc, DataTypeSpecific);
 
   if (auto const result = incDec(env, subop, src)) {
     pushIncRef(env, isPre(subop) ? result : src);
     // Update marker to ensure newly-pushed value isn't clobbered by DecRef.
     updateMarker(env);
-    stLoc(env, loc.id, nullptr, result);
+    stLoc(env, loc.id, result);
     return;
   }
 
@@ -1751,23 +1832,46 @@ void emitPow(IRGS& env) {
   // Special-case exponent of 2 or 3, i.e.
   // $x**2 becomes $x*$x,
   // $x**3 becomes ($x*$x)*$x
-  // TODO(t14096669) if input will result in integer overflow,
-  // compute double result and return instead of slow exit path.
   auto exponent = topC(env);
   auto base = topC(env, BCSPRelOffset{1});
   if ((exponent->hasConstVal(2) || exponent->hasConstVal(3)) &&
       (base->isA(TDbl) || base->isA(TInt))) {
-    auto intVal = exponent->intVal();
+    auto const intVal = exponent->intVal();
+    auto const isCube = intVal == 3;
+
+    auto makeExitPow = [&] (SSATmp* src, bool computeSquare) {
+      auto const exit = defBlock(env, Block::Hint::Unlikely);
+      BlockPusher bp(*env.irb, makeMarker(env, curSrcKey(env)), exit);
+      assertx(src->isA(TInt));
+      src = gen(env, ConvIntToDbl, src);
+      SSATmp* genPowResult;
+      if (computeSquare) {
+        genPowResult = gen(env, MulDbl, src, src);
+        if (isCube) {
+          genPowResult = gen(env, MulDbl, genPowResult, src);
+        }
+      } else {
+        assertx(base->isA(TInt));
+        auto const src1 = gen(env, ConvIntToDbl, base);
+        genPowResult = gen(env, MulDbl, src, src1);
+      }
+      discard(env, 2);
+      push(env, genPowResult);
+      gen(env, Jmp, makeExit(env, nextSrcKey(env)));
+      return exit;
+    };
+
     SSATmp* genPowResult;
-    auto const exitSlow = makeExitSlow(env);
     if (base->isA(TInt)) {
-      genPowResult = gen(env, MulIntO, exitSlow, base, base);
+      auto const exitPow = makeExitPow(base, true);
+      genPowResult = gen(env, MulIntO, exitPow, base, base);
     } else {
       genPowResult = gen(env, MulDbl, base, base);
     }
-    if (intVal == 3) {
+    if (isCube) {
       if (genPowResult->isA(TInt)) {
-        genPowResult = gen(env, MulIntO, exitSlow, genPowResult, base);
+        auto const exitPow = makeExitPow(genPowResult, false);
+        genPowResult = gen(env, MulIntO, exitPow, genPowResult, base);
       } else {
         genPowResult = gen(env, MulDbl, genPowResult, base);
       }

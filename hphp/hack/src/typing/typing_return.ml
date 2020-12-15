@@ -81,14 +81,13 @@ let make_info fun_kind attributes env ~is_explicit locl_ty decl_ty =
     return_mutable;
     return_explicit = is_explicit;
     return_void_to_rx;
+    return_dynamically_callable = false;
   }
 
 (* For async functions, wrap Awaitable<_> around the return type *)
 let wrap_awaitable env p rty =
   match Env.get_fn_kind env with
-  | Ast_defs.FCoroutine
-  | Ast_defs.FSync ->
-    rty
+  | Ast_defs.FSync -> rty
   | Ast_defs.FGenerator
   (* Is an error, but caught in Nast_check. *)
   | Ast_defs.FAsyncGenerator ->
@@ -141,11 +140,11 @@ let make_default_return ~is_method env name =
   else
     mk (r, Typing_utils.tany env)
 
-let async_suggest_return fkind hint pos =
+let async_suggest_return fkind (pos, hint) =
   let is_async = Ast_defs.(equal_fun_kind FAsync fkind) in
   if is_async then
     let e_func = Errors.expecting_awaitable_return_type_hint in
-    match snd hint with
+    match hint with
     | Aast.Hlike (_, Aast.Happly (s, _))
     | Aast.Happly (s, _) ->
       if String.( <> ) (snd s) Naming_special_names.Classes.cAwaitable then

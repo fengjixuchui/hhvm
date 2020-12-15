@@ -194,12 +194,10 @@ void ConvertTvToUncounted(
     }
     invalidFuncConversion("string");
     case KindOfClass:
-      // Fall-through
-    case KindOfLazyClass:
-      data.pstr = isClassType(type)
-          ? const_cast<StringData*>(classToStringHelper(data.pclass))
-          : const_cast<StringData*>(lazyClassToStringHelper(data.plazyclass));
-      // Fall-through
+      if (data.pclass->isPersistent()) break;
+      data.plazyclass = LazyClassData::create(data.pclass->name());
+      type = KindOfLazyClass;
+      break;
     case KindOfString:
       type = KindOfPersistentString;
       // Fall-through.
@@ -232,7 +230,7 @@ void ConvertTvToUncounted(
       assertx(ad->isVecType());
       if (handlePersistent(ad)) break;
       if (ad->empty()) {
-        ad = ArrayData::CreateVec();
+        ad = ArrayData::CreateVec(ad->isLegacyArray());
       } else if (ad->isVanilla()) {
         ad = PackedArray::MakeUncounted(ad, false, seen);
       } else {
@@ -249,7 +247,7 @@ void ConvertTvToUncounted(
       assertx(ad->isDictType());
       if (handlePersistent(ad)) break;
       if (ad->empty()) {
-        ad = ArrayData::CreateDict();
+        ad = ArrayData::CreateDict(ad->isLegacyArray());
       } else if (ad->isVanilla()) {
         ad = MixedArray::MakeUncounted(ad, false, seen);
       } else {
@@ -286,9 +284,13 @@ void ConvertTvToUncounted(
       assertx(!RuntimeOption::EvalHackArrDVArrs || ad->isNotDVArray());
       if (handlePersistent(ad)) break;
       if (ad->empty()) {
-        if (ad->isVArray()) ad = ArrayData::CreateVArray();
-        else if (ad->isDArray()) ad = ArrayData::CreateDArray();
-        else ad = ArrayData::Create();
+        auto const tag = RO::EvalArrayProvenance ? arrprov::getTag(ad) : arrprov::Tag{};
+        assertx(ad->isDVArray());
+        if (ad->isVArray()) {
+          ad = ArrayData::CreateVArray(tag, ad->isLegacyArray());
+        } else {
+          ad = ArrayData::CreateDArray(tag, ad->isLegacyArray());
+        }
       } else if (ad->hasVanillaPackedLayout()) {
         ad = PackedArray::MakeUncounted(ad, false, seen);
       } else if (ad->hasVanillaMixedLayout()) {
@@ -303,6 +305,11 @@ void ConvertTvToUncounted(
       break;
     }
     case KindOfClsMeth: {
+      if (RO::EvalAPCSerializeClsMeth) {
+        assertx(use_lowptr);
+        assertx(data.pclsmeth->getCls()->isPersistent());
+        break;
+      }
       if (RuntimeOption::EvalHackArrDVArrs) {
         tvCastToVecInPlace(source);
         tvSetLegacyArrayInPlace(source, RuntimeOption::EvalHackArrDVArrMark);
@@ -324,6 +331,7 @@ void ConvertTvToUncounted(
         break;
       }
     }
+    case KindOfLazyClass:
     case KindOfNull:
     case KindOfBoolean:
     case KindOfInt64:

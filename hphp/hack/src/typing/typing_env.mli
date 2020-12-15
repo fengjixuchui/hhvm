@@ -11,6 +11,10 @@ open Decl_provider
 open Typing_defs
 module TPEnv = Type_parameter_env
 
+type class_or_typedef_result =
+  | ClassResult of Typing_classes_heap.Api.t
+  | TypedefResult of Typing_defs.typedef_type
+
 val simplify_unions_ref : (env -> locl_ty -> env * locl_ty) ref
 
 val show_env : env -> string
@@ -80,9 +84,6 @@ val is_enum_class : env -> class_key -> bool
 
 val get_enum_constraint : env -> class_key -> decl_ty option
 
-(** Add a dependency on specified class of the declaration being checked in the dependency graph. *)
-val make_depend_on_class : env -> string -> unit
-
 (** Get class declaration from the appropriate backend and add dependency. *)
 val get_class : env -> class_key -> class_decl option
 
@@ -94,14 +95,13 @@ val get_fun : env -> Decl_provider.fun_key -> Decl_provider.fun_decl option
 (** Get type alias declaration from the appropriate backend and add dependency. *)
 val get_typedef : env -> typedef_key -> typedef_decl option
 
+val get_class_or_typedef : env -> class_key -> class_or_typedef_result option
+
 (** Get class constant declaration from the appropriate backend and add dependency. *)
 val get_const : env -> class_decl -> string -> class_const option
 
 (** Get type constant declaration from the appropriate backend and add dependency. *)
 val get_typeconst : env -> class_decl -> string -> typeconst_type option
-
-(** Get PU enum declaration from the appropriate backend and add dependency. *)
-val get_pu_enum : env -> class_decl -> string -> pu_enum_type option
 
 (** Get global constant declaration from the appropriate backend and add dependency. *)
 val get_gconst : env -> gconst_key -> gconst_decl option
@@ -374,13 +374,7 @@ val get_tyvar_eager_solve_fail : env -> Ident.t -> bool
 
 val get_tyvar_type_const : env -> int -> Aast.sid -> (Aast.sid * locl_ty) option
 
-val get_tyvar_pu_access : env -> int -> Aast.sid -> (Aast.sid * locl_ty) option
-
-val get_tyvar_pu_accesses : env -> int -> (Aast.sid * locl_ty) SMap.t
-
 val set_tyvar_type_const : env -> int -> Aast.sid -> locl_ty -> env
-
-val set_tyvar_pu_access : env -> int -> Aast.sid -> locl_ty -> env
 
 val get_tyvar_type_consts : env -> int -> (Aast.sid * locl_ty) SMap.t
 
@@ -432,11 +426,7 @@ val env_with_locals : env -> Typing_per_cont_env.t -> env
 
 val reinitialize_locals : env -> env
 
-val anon :
-  local_env ->
-  env ->
-  (env -> env * Tast.expr * locl_ty) ->
-  env * Tast.expr * locl_ty
+val anon : local_env -> env -> (env -> env * 'a) -> env * 'a
 
 val in_try : env -> (env -> env * 'a) -> env * 'a
 

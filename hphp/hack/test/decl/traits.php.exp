@@ -6,23 +6,17 @@
        sc_where_constraints = []; sc_extends = []; sc_uses = [];
        sc_xhp_attr_uses = []; sc_req_extends = []; sc_req_implements = [];
        sc_implements = []; sc_implements_dynamic = false; sc_consts = [];
-       sc_typeconsts = []; sc_pu_enums = []; sc_props = []; sc_sprops = [];
+       sc_typeconsts = []; sc_props = []; sc_sprops = [];
        sc_constructor = None; sc_static_methods = [];
        sc_methods =
-       [{ Shallow_decl_defs.sm_abstract = false; sm_final = false;
-          sm_memoizelsb = false; sm_name = ([4:19-28], "doNothing");
-          sm_override = false; sm_dynamicallycallable = false;
+       [{ Shallow_decl_defs.sm_name = ([4:19-28], "doNothing");
           sm_reactivity = None;
           sm_type =
           (Rwitness (root|traits.php line 4, characters 19-27),
            (Tfun
               { ft_arity = (Fstandard ()); ft_tparams = [];
                 ft_where_constraints = []; ft_params = [];
-                ft_implicit_params =
-                { capability =
-                  (Rhint (root|traits.php line 4, characters 19-27),
-                   (Tapply (([4:19-28], "\\HH\\Contexts\\defaults"), [])))
-                  };
+                ft_implicit_params = { capability = (CapDefaults [4:19-28]) };
                 ft_ret =
                 { et_enforced = false;
                   et_type =
@@ -34,7 +28,7 @@
                   ~returns_mutable:false ~returns_void_to_rx:false);
                 ft_reactive = Nonreactive; ft_ifc_decl = FDPolicied {PUBLIC}
                 }));
-          sm_visibility = Public; sm_deprecated = None }
+          sm_visibility = Public; sm_deprecated = None; sm_flags = (empty) }
          ];
        sc_user_attributes = []; sc_enum_type = None }));
   ("\\TMyTrait2",
@@ -48,12 +42,10 @@
           (Tapply (([8:7-15], "\\TMyTrait"), [])))];
         sc_xhp_attr_uses = []; sc_req_extends = []; sc_req_implements = [];
         sc_implements = []; sc_implements_dynamic = false; sc_consts = [];
-        sc_typeconsts = []; sc_pu_enums = []; sc_props = []; sc_sprops = [];
+        sc_typeconsts = []; sc_props = []; sc_sprops = [];
         sc_constructor = None; sc_static_methods = [];
         sc_methods =
-        [{ Shallow_decl_defs.sm_abstract = false; sm_final = false;
-           sm_memoizelsb = false; sm_name = ([10:19-32], "doMoreNothing");
-           sm_override = false; sm_dynamicallycallable = false;
+        [{ Shallow_decl_defs.sm_name = ([10:19-32], "doMoreNothing");
            sm_reactivity = None;
            sm_type =
            (Rwitness (root|traits.php line 10, characters 19-31),
@@ -61,10 +53,7 @@
                { ft_arity = (Fstandard ()); ft_tparams = [];
                  ft_where_constraints = []; ft_params = [];
                  ft_implicit_params =
-                 { capability =
-                   (Rhint (root|traits.php line 10, characters 19-31),
-                    (Tapply (([10:19-32], "\\HH\\Contexts\\defaults"), [])))
-                   };
+                 { capability = (CapDefaults [10:19-32]) };
                  ft_ret =
                  { et_enforced = false;
                    et_type =
@@ -76,7 +65,7 @@
                    ~returns_mutable:false ~returns_void_to_rx:false);
                  ft_reactive = Nonreactive; ft_ifc_decl = FDPolicied {PUBLIC}
                  }));
-           sm_visibility = Public; sm_deprecated = None }
+           sm_visibility = Public; sm_deprecated = None; sm_flags = (empty) }
           ];
         sc_user_attributes = []; sc_enum_type = None }));
   ("\\TMyTrait3",
@@ -87,12 +76,10 @@
         sc_where_constraints = []; sc_extends = []; sc_uses = [];
         sc_xhp_attr_uses = []; sc_req_extends = []; sc_req_implements = [];
         sc_implements = []; sc_implements_dynamic = false; sc_consts = [];
-        sc_typeconsts = []; sc_pu_enums = []; sc_props = []; sc_sprops = [];
+        sc_typeconsts = []; sc_props = []; sc_sprops = [];
         sc_constructor = None; sc_static_methods = [];
         sc_methods =
-        [{ Shallow_decl_defs.sm_abstract = false; sm_final = false;
-           sm_memoizelsb = false; sm_name = ([14:19-35], "doYetMoreNothing");
-           sm_override = false; sm_dynamicallycallable = false;
+        [{ Shallow_decl_defs.sm_name = ([14:19-35], "doYetMoreNothing");
            sm_reactivity = None;
            sm_type =
            (Rwitness (root|traits.php line 14, characters 19-34),
@@ -100,10 +87,7 @@
                { ft_arity = (Fstandard ()); ft_tparams = [];
                  ft_where_constraints = []; ft_params = [];
                  ft_implicit_params =
-                 { capability =
-                   (Rhint (root|traits.php line 14, characters 19-34),
-                    (Tapply (([14:19-35], "\\HH\\Contexts\\defaults"), [])))
-                   };
+                 { capability = (CapDefaults [14:19-35]) };
                  ft_ret =
                  { et_enforced = false;
                    et_type =
@@ -115,7 +99,7 @@
                    ~returns_mutable:false ~returns_void_to_rx:false);
                  ft_reactive = Nonreactive; ft_ifc_decl = FDPolicied {PUBLIC}
                  }));
-           sm_visibility = Public; sm_deprecated = None }
+           sm_visibility = Public; sm_deprecated = None; sm_flags = (empty) }
           ];
         sc_user_attributes = []; sc_enum_type = None }));
   ("\\MyTraitUsingClass",
@@ -132,7 +116,7 @@
           ];
         sc_xhp_attr_uses = []; sc_req_extends = []; sc_req_implements = [];
         sc_implements = []; sc_implements_dynamic = false; sc_consts = [];
-        sc_typeconsts = []; sc_pu_enums = []; sc_props = []; sc_sprops = [];
+        sc_typeconsts = []; sc_props = []; sc_sprops = [];
         sc_constructor = None; sc_static_methods = []; sc_methods = [];
         sc_user_attributes = []; sc_enum_type = None }))
   ]

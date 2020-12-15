@@ -25,12 +25,10 @@ module SN = Naming_special_names
 (* Section declaring the type of a function *)
 (*****************************************************************************)
 
-let rec fun_naming_and_decl
-    ~(write_shmem : bool) (ctx : Provider_context.t) (f : Nast.fun_) :
+let rec fun_naming_and_decl (ctx : Provider_context.t) (f : Nast.fun_) :
     string * Typing_defs.fun_elt =
   let f = Errors.ignore_ (fun () -> Naming.fun_ ctx f) in
   let fe = fun_decl ctx f in
-  if write_shmem then Decl_heap.Funs.add (snd f.f_name) fe;
   (snd f.f_name, fe)
 
 and fun_decl (ctx : Provider_context.t) (f : Nast.fun_) : Typing_defs.fun_elt =
@@ -48,13 +46,10 @@ and fun_decl_in_env (env : Decl_env.env) ~(is_lambda : bool) (f : Nast.fun_) :
   let return_disposable = has_return_disposable_attribute f.f_user_attributes in
   let params = make_params env ~is_lambda f.f_params in
   let capability =
-    hint_to_type
-      ~is_lambda:false
-      ~default:
-        (Typing_make_type.default_capability (Reason.Rhint (fst f.f_name)))
-      env
-      (Reason.Rwitness (fst f.f_name))
+    Option.value_map
       (hint_of_type_hint f.f_cap)
+      ~f:(fun h -> CapTy (Decl_hint.hint env h))
+      ~default:(CapDefaults (fst f.f_name))
   in
   let ret_ty =
     ret_from_fun_kind
@@ -136,41 +131,17 @@ let record_def_decl (rd : Nast.record_def) : Typing_defs.record_def_type =
     rdt_pos = rd.rd_span;
   }
 
-let record_def_naming_and_decl
-    ~(write_shmem : bool) (ctx : Provider_context.t) (rd : Nast.record_def) :
-    string * Typing_defs.record_def_type =
+let record_def_naming_and_decl (ctx : Provider_context.t) (rd : Nast.record_def)
+    : string * Typing_defs.record_def_type =
   let rd = Errors.ignore_ (fun () -> Naming.record_def ctx rd) in
   let tdecl = record_def_decl rd in
-  if write_shmem then Decl_heap.RecordDefs.add (snd rd.rd_name) tdecl;
   (snd rd.rd_name, tdecl)
-
-let record_def_decl_if_missing
-    ~(sh : SharedMem.uses) (ctx : Provider_context.t) (rd : Nast.record_def) :
-    unit =
-  let SharedMem.Uses = sh in
-  let (_, rdid) = rd.rd_name in
-  if not (Decl_heap.RecordDefs.mem rdid) then
-    let (_ : string * Typing_defs.record_def_type) =
-      record_def_naming_and_decl ~write_shmem:true ctx rd
-    in
-    ()
 
 (*****************************************************************************)
 (* Dealing with typedefs *)
 (*****************************************************************************)
 
-let rec typedef_decl_if_missing
-    ~(sh : SharedMem.uses) (ctx : Provider_context.t) (typedef : Nast.typedef) :
-    unit =
-  let SharedMem.Uses = sh in
-  let (_, name) = typedef.t_name in
-  if not (Decl_heap.Typedefs.mem name) then
-    let (_ : string * typedef_type) =
-      typedef_naming_and_decl ~write_shmem:true ctx typedef
-    in
-    ()
-
-and typedef_decl (ctx : Provider_context.t) (tdef : Nast.typedef) :
+let typedef_decl (ctx : Provider_context.t) (tdef : Nast.typedef) :
     Typing_defs.typedef_type =
   let {
     t_annotation = ();
@@ -194,12 +165,10 @@ and typedef_decl (ctx : Provider_context.t) (tdef : Nast.typedef) :
   let td_constraint = Option.map tcstr (Decl_hint.hint env) in
   { td_vis; td_tparams; td_constraint; td_type; td_pos }
 
-and typedef_naming_and_decl
-    ~(write_shmem : bool) (ctx : Provider_context.t) (tdef : Nast.typedef) :
+let typedef_naming_and_decl (ctx : Provider_context.t) (tdef : Nast.typedef) :
     string * Typing_defs.typedef_type =
   let tdef = Errors.ignore_ (fun () -> Naming.typedef ctx tdef) in
   let tdecl = typedef_decl ctx tdef in
-  if write_shmem then Decl_heap.Typedefs.add (snd tdef.t_name) tdecl;
   (snd tdef.t_name, tdecl)
 
 (*****************************************************************************)
@@ -220,10 +189,8 @@ let const_decl (ctx : Provider_context.t) (cst : Nast.gconst) :
      * an initializer nor a literal initializer *)
     | None -> mk (Reason.Rwitness cst_pos, Typing_defs.make_tany ()))
 
-let const_naming_and_decl
-    ~(write_shmem : bool) (ctx : Provider_context.t) (cst : Nast.gconst) :
+let const_naming_and_decl (ctx : Provider_context.t) (cst : Nast.gconst) :
     string * Typing_defs.decl_ty =
   let cst = Errors.ignore_ (fun () -> Naming.global_const ctx cst) in
   let hint_ty = const_decl ctx cst in
-  if write_shmem then Decl_heap.GConsts.add (snd cst.cst_name) hint_ty;
   (snd cst.cst_name, hint_ty)

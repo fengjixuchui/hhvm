@@ -82,12 +82,6 @@ type afield = (Pos.t, func_body_ann, unit, unit) Aast.afield
 
 type expression_tree = (Pos.t, func_body_ann, unit, unit) Aast.expression_tree
 
-type pu_enum = (Pos.t, func_body_ann, unit, unit) Aast.pu_enum
-
-type pu_member = (Pos.t, func_body_ann, unit, unit) Aast.pu_member
-
-type pu_case_value = Aast.pu_case_value
-
 type targ = unit Aast.targ
 
 type sid = Aast.sid [@@deriving show]
@@ -185,7 +179,6 @@ let vc_kind_to_name kind =
   | Set -> SN.Collections.cSet
   | ImmSet -> SN.Collections.cImmSet
   | Keyset -> SN.Collections.cKeyset
-  | Pair_ -> SN.Collections.cPair
 
 (* XHP attribute helpers *)
 let map_xhp_attr (f : pstring -> pstring) (g : expr -> expr) = function
@@ -433,10 +426,6 @@ module Visitor_DEPRECATED = struct
 
       method on_return : 'a -> expr option -> 'a
 
-      method on_goto_label : 'a -> pstring -> 'a
-
-      method on_goto : 'a -> pstring -> 'a
-
       method on_awaitall : 'a -> (id option * expr) list -> block -> 'a
 
       method on_stmt : 'a -> stmt -> 'a
@@ -522,13 +511,9 @@ module Visitor_DEPRECATED = struct
 
       method on_await : 'a -> expr -> 'a
 
-      method on_suspend : 'a -> expr -> 'a
-
       method on_list : 'a -> expr list -> 'a
 
       method on_pair : 'a -> (targ * targ) option -> expr -> expr -> 'a
-
-      method on_expr_list : 'a -> expr list -> 'a
 
       method on_cast : 'a -> hint -> expr -> 'a
 
@@ -568,9 +553,6 @@ module Visitor_DEPRECATED = struct
       method on_param_kind : 'a -> Ast_defs.param_kind -> 'a
 
       method on_callconv : 'a -> Ast_defs.param_kind -> expr -> 'a
-
-      method on_assert :
-        'a -> (Pos.t, func_body_ann, unit, unit) assert_expr -> 'a
 
       method on_clone : 'a -> expr -> 'a
 
@@ -620,11 +602,7 @@ module Visitor_DEPRECATED = struct
 
       method on_markup : 'a -> pstring -> 'a
 
-      method on_pu_atom : 'a -> string -> 'a
-
       method on_enum_atom : 'a -> string -> 'a
-
-      method on_pu_identifier : 'a -> class_id -> pstring -> pstring -> 'a
 
       method on_function_ptr_id :
         'a -> (Pos.t, func_body_ann, unit, unit) function_ptr_id -> 'a
@@ -645,10 +623,6 @@ module Visitor_DEPRECATED = struct
       method on_noop acc = acc
 
       method on_fallthrough acc = acc
-
-      method on_goto_label acc _ = acc
-
-      method on_goto acc _ = acc
 
       method on_markup acc _ = acc
 
@@ -764,8 +738,6 @@ module Visitor_DEPRECATED = struct
         | Continue -> this#on_continue acc
         | Throw e -> this#on_throw acc e
         | Return eopt -> this#on_return acc eopt
-        | GotoLabel label -> this#on_goto_label acc label
-        | Goto label -> this#on_goto acc label
         | If (e, b1, b2) -> this#on_if acc e b1 b2
         | Do (b, e) -> this#on_do acc b e
         | While (e, b) -> this#on_while acc e b
@@ -807,14 +779,11 @@ module Visitor_DEPRECATED = struct
         | Yield_break -> this#on_yield_break acc
         | Yield e -> this#on_yield acc e
         | Await e -> this#on_await acc e
-        | Suspend e -> this#on_suspend acc e
         | List el -> this#on_list acc el
-        | Assert ae -> this#on_assert acc ae
         | Clone e -> this#on_clone acc e
-        | Expr_list el -> this#on_expr_list acc el
-        | Obj_get (e1, e2, _) -> this#on_obj_get acc e1 e2
+        | Obj_get (e1, e2, _, _) -> this#on_obj_get acc e1 e2
         | Array_get (e1, e2) -> this#on_array_get acc e1 e2
-        | Class_get (cid, e) -> this#on_class_get acc cid e
+        | Class_get (cid, e, _) -> this#on_class_get acc cid e
         | Class_const (cid, id) -> this#on_class_const acc cid id
         | Call (e, _, el, unpacked_element) ->
           this#on_call acc e el unpacked_element
@@ -843,10 +812,6 @@ module Visitor_DEPRECATED = struct
         | Lfun (f, idl) -> this#on_lfun acc f idl
         | Import (_, e) -> this#on_expr acc e
         | Collection (_, tal, fl) -> this#on_collection acc tal fl
-        | BracedExpr e -> this#on_expr acc e
-        | ParenthesizedExpr e -> this#on_expr acc e
-        | PU_atom sid -> this#on_pu_atom acc sid
-        | PU_identifier (e, s1, s2) -> this#on_pu_identifier acc e s1 s2
         | ET_Splice e -> this#on_et_splice acc e
         | EnumAtom sid -> this#on_enum_atom acc sid
 
@@ -984,8 +949,6 @@ module Visitor_DEPRECATED = struct
 
       method on_await acc e = this#on_expr acc e
 
-      method on_suspend acc e = this#on_expr acc e
-
       method on_list acc el = List.fold_left el ~f:this#on_expr ~init:acc
 
       method on_pair acc tap e1 e2 =
@@ -999,10 +962,6 @@ module Visitor_DEPRECATED = struct
         in
         let acc = this#on_expr acc e1 in
         let acc = this#on_expr acc e2 in
-        acc
-
-      method on_expr_list acc el =
-        let acc = List.fold_left el ~f:this#on_expr ~init:acc in
         acc
 
       method on_cast acc _ e = this#on_expr acc e
@@ -1087,10 +1046,6 @@ module Visitor_DEPRECATED = struct
         let acc = this#on_param_kind acc kind in
         let acc = this#on_expr acc e in
         acc
-
-      method on_assert acc =
-        function
-        | AE_assert e -> this#on_expr acc e
 
       method on_clone acc e = this#on_expr acc e
 
@@ -1215,10 +1170,6 @@ module Visitor_DEPRECATED = struct
           | None -> acc
         in
         acc
-
-      method on_pu_identifier acc cid _ _ = this#on_class_id acc cid
-
-      method on_pu_atom acc s = this#on_string acc s
 
       method on_enum_atom acc s = this#on_string acc s
 

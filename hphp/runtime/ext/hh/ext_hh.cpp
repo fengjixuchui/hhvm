@@ -209,7 +209,7 @@ namespace {
  * 10 (CONTAINER): any PHP array, collection, or hack array; data is the
  *                 keys and values of the container in insertion order,
  *                 serialized as above, followed by the STOP code
- * 11 (STOP): terminates a CONTAINER encoding
+ * 16 (STOP): terminates a CONTAINER encoding
  */
 
 enum SerializeMemoizeCode {
@@ -397,6 +397,11 @@ void serialize_memoize_tv(StringBuffer& sb, int depth, TypedValue tv) {
       serialize_memoize_string_data(sb, tv.m_data.pclass->name());
       break;
 
+    case KindOfLazyClass:
+      serialize_memoize_code(sb, SER_MC_CLS);
+      serialize_memoize_string_data(sb, tv.m_data.plazyclass.name());
+      break;
+
     case KindOfPersistentString:
     case KindOfString:
       serialize_memoize_code(sb, SER_MC_STRING);
@@ -438,7 +443,6 @@ void serialize_memoize_tv(StringBuffer& sb, int depth, TypedValue tv) {
       break;
 
     case KindOfResource:
-    case KindOfLazyClass: // TODO(T68810726)
     case KindOfRecord: { // TODO(T41025646)
       auto msg = folly::format(
         "Cannot Serialize unexpected type {}",
@@ -1131,6 +1135,16 @@ int64_t HHVM_FUNCTION(set_implicit_context_by_index, int64_t index) {
   return prev_index;
 }
 
+bool HHVM_FUNCTION(is_dynamically_callable_inst_method, StringArg cls,
+                                                        StringArg meth) {
+  if (auto const c = Class::load(cls.get())) {
+    if (auto const m = c->lookupMethod(meth.get(), false)) {
+      return !m->isStatic() && m->isDynamicallyCallable();
+    }
+  }
+  return false;
+}
+
 static struct HHExtension final : Extension {
   HHExtension(): Extension("hh", NO_EXTENSION_VERSION_YET) { }
   void moduleInit() override {
@@ -1183,6 +1197,9 @@ static struct HHExtension final : Extension {
     X(AUTOLOAD_MAP_KIND_OF_CONSTANT, Constant);
     X(AUTOLOAD_MAP_KIND_OF_TYPE_ALIAS, TypeAlias);
 #undef X
+
+    HHVM_NAMED_FE(__SystemLib\\is_dynamically_callable_inst_method,
+                  HHVM_FN(is_dynamically_callable_inst_method));
 
     loadSystemlib();
   }

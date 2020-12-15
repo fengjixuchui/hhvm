@@ -484,7 +484,7 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState, UnitEmitter& ue,
 #define POP_SMANY      pop(data.keys.size());
 #define POP_CUMANY     pop(data.arg##1);
 #define POP_CMANY_U2   pop(data.arg1 + 2);
-#define POP_CALLNATIVE pop(data.arg1 + data.arg3);
+#define POP_CALLNATIVE pop(data.arg1 + data.arg2);
 #define POP_FCALL(nin, nobj) \
                        pop(nin + data.fca.numInputs() + 1 + data.fca.numRets());
 
@@ -494,18 +494,19 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState, UnitEmitter& ue,
 #define PUSH_THREE(x, y, z)    push(3);
 #define PUSH_CMANY             push(data.arg1);
 #define PUSH_FCALL             push(data.fca.numRets());
-#define PUSH_CALLNATIVE        push(data.arg3 + 1);
+#define PUSH_CALLNATIVE        push(data.arg2 + 1);
 
 #define O(opcode, imms, inputs, outputs, flags)                 \
     auto emit_##opcode = [&] (OpInfo<bc::opcode> data) {        \
       if (RuntimeOption::EnableIntrinsicsExtension) {           \
-        if (Op::opcode == Op::FCallBuiltin &&                   \
-            inst.FCallBuiltin.str4->isame(                      \
+        if (Op::opcode == Op::FCallFuncD &&                     \
+            inst.FCallFuncD.str2->isame(                        \
               s_hhbbc_fail_verification.get())) {               \
           ue.emitOp(Op::CheckProp);                             \
           ue.emitInt32(                                         \
-            ue.mergeLitstr(inst.FCallBuiltin.str4));            \
+            ue.mergeLitstr(inst.FCallFuncD.str2));              \
           ue.emitOp(Op::PopC);                                  \
+          ret.maxStackDepth++;                                  \
         }                                                       \
       }                                                         \
       caller<Op::CreateCl>(createcl, data);                     \

@@ -17,6 +17,7 @@
 #include "hphp/runtime/vm/jit/translator-runtime.h"
 
 #include "hphp/runtime/base/array-common.h"
+#include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/autoload-handler.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/collections.h"
@@ -165,6 +166,7 @@ ArrayData* convArrLikeToDArrHelper(ArrayData* adIn) {
 }
 
 ArrayData* convClsMethToVArrHelper(ClsMethDataRef clsmeth) {
+  assertx(RO::EvalIsCompatibleClsMethType);
   raiseClsMethConvertWarningHelper("varray");
   auto a = make_varray(clsmeth->getClsStr(), clsmeth->getFuncStr()).detach();
   decRefClsMeth(clsmeth);
@@ -172,6 +174,7 @@ ArrayData* convClsMethToVArrHelper(ClsMethDataRef clsmeth) {
 }
 
 ArrayData* convClsMethToVecHelper(ClsMethDataRef clsmeth) {
+  assertx(RO::EvalIsCompatibleClsMethType);
   raiseClsMethConvertWarningHelper("vec");
   auto a = make_vec_array(clsmeth->getClsStr(), clsmeth->getFuncStr()).detach();
   decRefClsMeth(clsmeth);
@@ -179,6 +182,7 @@ ArrayData* convClsMethToVecHelper(ClsMethDataRef clsmeth) {
 }
 
 ArrayData* convClsMethToDArrHelper(ClsMethDataRef clsmeth) {
+  assertx(RO::EvalIsCompatibleClsMethType);
   raiseClsMethConvertWarningHelper("darray");
   auto a = make_darray(
     0, clsmeth->getClsStr(), 1, clsmeth->getFuncStr()).detach();
@@ -187,6 +191,7 @@ ArrayData* convClsMethToDArrHelper(ClsMethDataRef clsmeth) {
 }
 
 ArrayData* convClsMethToDictHelper(ClsMethDataRef clsmeth) {
+  assertx(RO::EvalIsCompatibleClsMethType);
   raiseClsMethConvertWarningHelper("dict");
   auto a = make_dict_array(
     0, clsmeth->getClsStr(), 1, clsmeth->getFuncStr()).detach();
@@ -195,6 +200,7 @@ ArrayData* convClsMethToDictHelper(ClsMethDataRef clsmeth) {
 }
 
 ArrayData* convClsMethToKeysetHelper(ClsMethDataRef clsmeth) {
+  assertx(RO::EvalIsCompatibleClsMethType);
   raiseClsMethConvertWarningHelper("keyset");
   auto a = make_keyset_array(
     clsmeth->getClsStr(), clsmeth->getFuncStr()).detach();
@@ -246,6 +252,7 @@ void raiseClsMethPropConvertNotice(const TypeConstraint* tc,
                                    bool isSProp,
                                    const Class* cls,
                                    const StringData* name) {
+  assertx(RO::EvalIsCompatibleClsMethType);
   raise_notice(
     "class_meth Compat: %s '%s::%s' declared as type %s, clsmeth "
     "assigned",
@@ -739,6 +746,54 @@ ArrayData* recordReifiedGenericsAndGetTSList(ArrayData* tsList) {
   auto const mangledName = makeStaticString(mangleReifiedGenericsName(tsList));
   auto result = addToReifiedGenericsTable(mangledName, tsList);
   return result;
+}
+
+const StaticString s_classname("classname");
+const StaticString s_kind("kind");
+const StaticString s_type_structure_non_existant_class(
+  "hh\\__internal\\type_structure_non_existant_class");
+
+ArrayData* loadClsTypeCnsHelper(
+  const Class* cls, const StringData* name, bool no_throw_on_undefined
+) {
+  auto const getFake = [&] {
+    DArrayInit arr(2);
+    arr.add(s_kind,
+            Variant(static_cast<uint8_t>(TypeStructure::Kind::T_class)));
+    arr.add(s_classname,
+            Variant(s_type_structure_non_existant_class));
+    return arr.create();
+  };
+  TypedValue typeCns;
+  if (no_throw_on_undefined) {
+    try {
+      typeCns = cls->clsCnsGet(name, ClsCnsLookup::IncludeTypes);
+    } catch (Exception& e) {
+      return getFake();
+    } catch (Object& e) {
+      return getFake();
+    }
+  } else {
+    typeCns = cls->clsCnsGet(name, ClsCnsLookup::IncludeTypes);
+  }
+  if (typeCns.m_type == KindOfUninit) {
+    if (no_throw_on_undefined) {
+      return getFake();
+    } else {
+      if (cls->hasTypeConstant(name, true)) {
+        raise_error("Type constant %s::%s is abstract",
+                    cls->name()->data(), name->data());
+      } else {
+        raise_error("Non-existent type constant %s::%s",
+                    cls->name()->data(), name->data());
+      }
+    }
+  }
+
+  assertx(isArrayLikeType(typeCns.m_type));
+  assertx(typeCns.m_data.parr->isHAMSafeDArray());
+  assertx(typeCns.m_data.parr->isStatic());
+  return typeCns.m_data.parr;
 }
 
 void throwOOBException(TypedValue base, TypedValue key) {

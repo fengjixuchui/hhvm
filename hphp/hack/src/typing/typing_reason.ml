@@ -70,6 +70,7 @@ type t =
   | Rusing of Pos.t
   | Rdynamic_prop of Pos.t
   | Rdynamic_call of Pos.t
+  | Rdynamic_construct of Pos.t
   | Ridx_dict of Pos.t
   | Rmissing_required_field of Pos.t * string
   | Rmissing_optional_field of Pos.t * string
@@ -92,6 +93,7 @@ type t =
   | Rglobal_fun_ret of Pos.t
   | Rsplice of Pos.t
   | Ret_boolean of Pos.t
+  | Rdefault_capability of Pos.t
 
 and arg_position =
   | Aonly
@@ -238,9 +240,7 @@ let rec to_string prefix r =
         | Ast_defs.FGenerator ->
           prefix ^ " (result of function containing a `yield`)"
         | Ast_defs.FAsync -> prefix ^ " (result of an `async` function)"
-        | Ast_defs.FCoroutine
-        | Ast_defs.FSync ->
-          prefix );
+        | Ast_defs.FSync -> prefix );
     ]
   | Rhint _ -> [(p, prefix)]
   | Rthrow _ -> [(p, prefix ^ " because it is used as an exception")]
@@ -388,9 +388,15 @@ let rec to_string prefix r =
     ]
   | Rusing p -> [(p, prefix ^ " because it was assigned in a `using` clause")]
   | Rdynamic_prop p ->
-    [(p, prefix ^ ", the result of accessing a property of a dynamic type")]
+    [(p, prefix ^ ", the result of accessing a property of a `dynamic` type")]
   | Rdynamic_call p ->
-    [(p, prefix ^ ", the result of calling a dynamic type as a function")]
+    [(p, prefix ^ ", the result of calling a `dynamic` type as a function")]
+  | Rdynamic_construct p ->
+    [
+      ( p,
+        prefix ^ ", the result of constructing an object with a `dynamic` type"
+      );
+    ]
   | Ridx_dict _ ->
     [
       ( p,
@@ -490,6 +496,8 @@ let rec to_string prefix r =
         prefix
         ^ " because Expression Trees do not allow coercion of truthy values" );
     ]
+  | Rdefault_capability p ->
+    [(p, prefix ^ " because the function did not have an explicit context")]
 
 and to_pos r =
   if !Errors.report_pos_from_reason then
@@ -548,6 +556,7 @@ and to_raw_pos r =
   | Rusing p -> p
   | Rdynamic_prop p -> p
   | Rdynamic_call p -> p
+  | Rdynamic_construct p -> p
   | Ridx_dict p -> p
   | Rmissing_required_field (p, _) -> p
   | Rmissing_optional_field (p, _) -> p
@@ -575,6 +584,7 @@ and to_raw_pos r =
   | Rglobal_fun_ret p -> p
   | Rsplice p -> p
   | Ret_boolean p -> p
+  | Rdefault_capability p -> p
 
 (* This is a mapping from internal expression ids to a standardized int.
  * Used for outputting cleaner error messages to users
@@ -662,6 +672,7 @@ let to_constructor_string r =
   | Rusing _ -> "Rusing"
   | Rdynamic_prop _ -> "Rdynamic_prop"
   | Rdynamic_call _ -> "Rdynamic_call"
+  | Rdynamic_construct _ -> "Rdynamic_construct"
   | Ridx_dict _ -> "Ridx_dict"
   | Rmissing_required_field _ -> "Rmissing_required_field"
   | Rmissing_optional_field _ -> "Rmissing_optional_field"
@@ -690,6 +701,7 @@ let to_constructor_string r =
   | Rglobal_fun_ret _ -> "Rglobal_fun_ret"
   | Rsplice _ -> "Rsplice"
   | Ret_boolean _ -> "Ret_boolean"
+  | Rdefault_capability _ -> "Rdefault_capability"
 
 let pp fmt r =
   let pos = to_raw_pos r in

@@ -24,12 +24,11 @@ module K = Typing_cont_key
 module LSet = Local_id.Set
 module TClass = Decl_provider.Class
 
-exception FlowInference of string
-
 let should_print ~user_mode ~phase =
   equal_mode user_mode Mdebug || equal_mode user_mode phase
 
-let fail fmt = Format.kasprintf (fun s -> raise (FlowInference s)) fmt
+let fail fmt =
+  Format.kasprintf (fun s -> raise (IFCError (FlowInference s))) fmt
 
 (* Returns the policies appearing in a type split in three sets
    of occurrences (covariant, invariant, contravariant) *)
@@ -41,8 +40,12 @@ let rec policy_occurrences pty =
         (PSet.union s1 t1, PSet.union s2 t2, PSet.union s3 t3))
   in
   match pty with
-  | Tprim p -> (pol p, emp, emp)
+  | Tnull p
+  | Tprim p ->
+    (pol p, emp, emp)
+  | Tnonnull (pself, plump) -> (pol pself, pol plump, emp)
   | Tgeneric p -> (emp, pol p, emp)
+  | Tdynamic p -> (emp, pol p, emp)
   | Tinter tl
   | Tunion tl
   | Ttuple tl ->
@@ -65,9 +68,16 @@ let rec policy_occurrences pty =
         policy_occurrences a_key;
         policy_occurrences a_value;
       ]
-  | Tshape (_, m) ->
-    let f sft = policy_occurrences sft.sft_ty in
-    Nast.ShapeMap.values m |> List.map ~f |> on_list
+  | Tshape { sh_kind; sh_fields } ->
+    let f acc { sft_ty; sft_policy; _ } =
+      (pol sft_policy, emp, emp) :: policy_occurrences sft_ty :: acc
+    in
+    let init =
+      match sh_kind with
+      | Closed_shape -> []
+      | Open_shape ty -> [policy_occurrences ty]
+    in
+    Nast.ShapeMap.values sh_fields |> List.fold ~f ~init |> on_list
 
 exception SubtypeFailure of string * ptype * ptype
 
@@ -84,21 +94,30 @@ let rec subtype ~pos t1 t2 acc =
       end
   in
   match (t1, t2) with
-  | (Tprim p1, Tprim p2) -> L.(p1 < p2) ~pos acc
-  | (Tgeneric p1, _) ->
-    let (cv, inv, cn) = policy_occurrences t2 in
+  | (Tnull p1, Tnull p2)
+  | (Tprim p1, Tprim p2) ->
+    L.(p1 < p2) ~pos acc
+  | (Tnull _, Tnonnull _) -> err "null is not a subtype of nonnull"
+  | (_, Tnonnull (pself, plump)) ->
+    let (cov, inv, _cnt) = policy_occurrences t1 in
+    (* we leave contravariant policies unconstrained;
+       that is sound and should not pose precision problems
+       since function types are seldom refined from `mixed` *)
+    L.(PSet.elements cov <* [pself] && [plump] =* PSet.elements inv) ~pos acc
+  | ((Tgeneric p1 | Tdynamic p1), _) ->
+    let (cov, inv, cnt) = policy_occurrences t2 in
     L.(
-      [p1] <* PSet.elements cv
-      && PSet.elements cn <* [p1]
-      && [p1] =* PSet.elements inv)
+      [p1] <* PSet.elements cov
+      && [p1] =* PSet.elements inv
+      && PSet.elements cnt <* [p1])
       ~pos
       acc
-  | (_, Tgeneric p2) ->
-    let (cv, inv, cn) = policy_occurrences t1 in
+  | (_, (Tgeneric p2 | Tdynamic p2)) ->
+    let (cov, inv, cnt) = policy_occurrences t1 in
     L.(
-      PSet.elements cv <* [p2]
-      && [p2] <* PSet.elements cn
-      && [p2] =* PSet.elements inv)
+      PSet.elements cov <* [p2]
+      && [p2] =* PSet.elements inv
+      && [p2] <* PSet.elements cnt)
       ~pos
       acc
   | (Ttuple tl1, Ttuple tl2) ->
@@ -114,8 +133,16 @@ let rec subtype ~pos t1 t2 acc =
        simple for now. *)
     L.(cl1.c_lump = cl2.c_lump && cl1.c_self < cl2.c_self) ~pos acc
   | (Tfun f1, Tfun f2) ->
+    (* TODO(T70139741): Account for variadic argument lists. *)
+    (* Truncate argument list on the right, in case the left one is shorter
+       due to omitted arguments to functions with default values.
+       TODO(T79395145): Default values can be arbitrary expressions and hence
+       they need to be conditionally executed and joined with the
+       environment. *)
+    let truncated_size = List.length f2.f_args in
+    let truncated_f1_args = List.take f1.f_args truncated_size in
     let zipped_args =
-      match List.zip f1.f_args f2.f_args with
+      match List.zip truncated_f1_args f2.f_args with
       | List.Or_unequal_lengths.Ok zip -> zip
       | List.Or_unequal_lengths.Unequal_lengths ->
         err "functions have different number of arguments"
@@ -139,45 +166,50 @@ let rec subtype ~pos t1 t2 acc =
     acc
     |> L.(PSet.elements cov <* [cl.c_self]) ~pos
     |> L.(PSet.elements inv =* [cl.c_lump]) ~pos
-  | (Tshape (k1, s1), Tshape (k2, s2)) ->
-    begin
-      match (k1, k2) with
-      | (T.Open_shape, T.Closed_shape) ->
+  | (Tshape s1, Tshape s2) ->
+    let acc =
+      match (s1.sh_kind, s2.sh_kind) with
+      | (Open_shape _, Closed_shape) ->
         err "An open shape cannot subtype a closed shape"
-      | _ ->
-        let preprocess shape_kind = function
-          (* A missing field of an open shape becomes an optional field of type mixed *)
-          | None when T.equal_shape_kind shape_kind T.Open_shape ->
-            Some { sft_optional = true; sft_policy = pbot; sft_ty = Tinter [] }
-          (* If a field is optional with type nothing, consider it missing.
-             Since it has type nothing, it can never be assigned and therefore
-             we do not need to consider its policy *)
-          | Some { sft_ty = Tunion []; sft_optional = true; _ } -> None
-          | sft -> sft
-        in
-        let process_field acc _ f1 f2 =
-          let f1 = preprocess k1 f1 in
-          let f2 = preprocess k2 f2 in
-          match (f1, f2) with
-          | (Some { sft_optional = true; _ }, Some { sft_optional = false; _ })
-            ->
-            err "optional field cannot be subtype of required"
-          | ( Some { sft_ty = t1; sft_policy = p1; _ },
-              Some { sft_ty = t2; sft_policy = p2; _ } ) ->
-            (L.(p1 < p2) ~pos acc |> subtype t1 t2, None)
-          | (Some _, None) -> err "missing field"
-          | (None, Some { sft_optional; _ }) ->
-            if sft_optional then
-              (acc, None)
-            else
-              err "missing field"
-          | (None, None) -> (acc, None)
-        in
-        let (acc, _) =
-          Nast.ShapeMap.merge_env ~combine:process_field acc s1 s2
-        in
-        acc
-    end
+      | (Open_shape t1, Open_shape t2) -> subtype t1 t2 acc
+      | _ -> acc
+    in
+    let preprocess kind = function
+      (* A missing field of an open shape becomes an optional field of type mixed *)
+      | None ->
+        begin
+          match kind with
+          | Open_shape sft_ty ->
+            Some { sft_optional = true; sft_policy = pbot; sft_ty }
+          | Closed_shape -> None
+        end
+      (* If a field is optional with type nothing, consider it missing.
+          Since it has type nothing, it can never be assigned and therefore
+          we do not need to consider its policy *)
+      | Some { sft_ty = Tunion []; sft_optional = true; _ } -> None
+      | sft -> sft
+    in
+    let combine acc _ f1 f2 =
+      let f1 = preprocess s1.sh_kind f1 in
+      let f2 = preprocess s2.sh_kind f2 in
+      match (f1, f2) with
+      | (Some { sft_optional = true; _ }, Some { sft_optional = false; _ }) ->
+        err "optional field cannot be subtype of required"
+      | ( Some { sft_ty = t1; sft_policy = p1; _ },
+          Some { sft_ty = t2; sft_policy = p2; _ } ) ->
+        (L.(p1 < p2) ~pos acc |> subtype t1 t2, None)
+      | (Some _, None) -> err "missing field"
+      | (None, Some { sft_optional; _ }) ->
+        if sft_optional then
+          (acc, None)
+        else
+          err "missing field"
+      | (None, None) -> (acc, None)
+    in
+    let (acc, _) =
+      Nast.ShapeMap.merge_env ~combine acc s1.sh_fields s2.sh_fields
+    in
+    acc
   | (Tunion tl, _) ->
     List.fold tl ~init:acc ~f:(fun acc t1 -> subtype t1 t2 acc)
   | (_, Tinter tl) ->
@@ -382,8 +414,13 @@ let adjust_ptype ?prefix ~pos ~adjustment renv env ty =
       (env, mk tl')
     in
     match ty with
+    | Tnull p -> simple_freshen env (fun p -> Tnull p) p
     | Tprim p -> simple_freshen env (fun p -> Tprim p) p
-    | Tgeneric p -> simple_freshen env (fun p -> Tgeneric p) p
+    | Tnonnull (pself, plump) ->
+      (* plump is invariant, so we do not adjust it *)
+      simple_freshen env (fun pself -> Tnonnull (pself, plump)) pself
+    | Tgeneric p -> (env, Tgeneric p)
+    | Tdynamic p -> (env, Tdynamic p)
     | Ttuple tl -> on_list env (fun l -> Ttuple l) tl
     | Tunion tl -> on_list env (fun l -> Tunion l) tl
     | Tinter tl -> on_list env (fun l -> Tinter l) tl
@@ -402,21 +439,32 @@ let adjust_ptype ?prefix ~pos ~adjustment renv env ty =
       let (env, a_value) = freshen_cov env arr.a_value in
       let (env, a_length) = freshen_pol_cov env arr.a_length in
       (env, Tcow_array { a_kind = arr.a_kind; a_key; a_value; a_length })
-    | Tshape (k, s) ->
+    | Tshape { sh_kind; sh_fields } ->
       let f env _ sft =
         let (env, ty) = freshen_cov env sft.sft_ty in
-        (env, { sft with sft_ty = ty })
+        let (env, p) = freshen_pol_cov env sft.sft_policy in
+        (env, { sft_ty = ty; sft_policy = p; sft_optional = sft.sft_optional })
       in
-      let (env, s) = Nast.ShapeMap.map_env f env s in
-      (env, Tshape (k, s))
+      let (env, sh_fields) = Nast.ShapeMap.map_env f env sh_fields in
+      let (env, sh_kind) =
+        match sh_kind with
+        | Open_shape ty ->
+          let (env, ty) = freshen_cov env ty in
+          (env, Open_shape ty)
+        | Closed_shape -> (env, Closed_shape)
+      in
+      (env, Tshape { sh_kind; sh_fields })
   in
   freshen adjustment env ty
 
 (* Returns the set of policies, to be understood as a join,
    that governs an object with the argument type *)
 let rec object_policy = function
+  | Tnull pol
   | Tprim pol
+  | Tnonnull (pol, _)
   | Tgeneric pol
+  | Tdynamic pol
   | Tclass { c_self = pol; _ }
   | Tfun { f_self = pol; _ } ->
     PSet.singleton pol
@@ -428,32 +476,43 @@ let rec object_policy = function
   | Tcow_array { a_key; a_value; a_length; _ } ->
     PSet.union (object_policy a_key) (object_policy a_value)
     |> PSet.add a_length
-  | Tshape (_, s) ->
-    let f _ sft acc = PSet.union (object_policy sft.sft_ty) acc in
-    Nast.ShapeMap.fold f s PSet.empty
+  | Tshape { sh_kind; sh_fields; _ } ->
+    let f _ { sft_ty; sft_policy; _ } acc =
+      acc |> PSet.add sft_policy |> PSet.union (object_policy sft_ty)
+    in
+    let pols =
+      match sh_kind with
+      | Open_shape ty -> object_policy ty
+      | Closed_shape -> PSet.empty
+    in
+    Nast.ShapeMap.fold f sh_fields pols
 
 let add_dependencies pl t = L.(pl <* PSet.elements (object_policy t))
 
-(* TODO: make a list version of it *)
-let policy_join ?(prefix = "join") renv p1 p2 =
-  let id ~pos:_ acc = acc in
-  match Logic.policy_join p1 p2 with
-  | Some p -> (id, p)
-  | None when equal_policy p1 p2 -> (id, p1)
-  | _ ->
+let join_policies ?(prefix = "join") ~pos renv env pl =
+  let drop_pbot (Pbot _ :: pl | pl) = pl in
+  match drop_pbot (List.dedup_and_sort ~compare:compare_policy pl) with
+  | [] -> (env, pbot)
+  | [p] -> (env, p)
+  | (Ptop _ as ptop) :: _ -> (env, ptop)
+  | pl ->
     let pv = Env.new_policy_var renv prefix in
-    (L.(p1 < pv && p2 < pv), pv)
+    let env = Env.acc env (L.(pl <* [pv]) ~pos) in
+    (env, pv)
 
-let policy_join_env ?prefix ~pos renv env p1 p2 =
-  let (facc, p) = policy_join ?prefix renv p1 p2 in
-  (Env.acc env (facc ~pos), p)
+let is_special_var =
+  (* skip co-effect magic variables and fake members *)
+  (* the $this local used in the Hack typechecker is
+     not used in Hack IFC, instead the type of $this is
+     in renv.re_this *)
+  let re = Str.regexp "^\\$\\(#\\|.*->\\|this\\)" in
+  (fun s -> Str.string_match re s 0)
 
 let get_local_type ~pos env lid =
   match Env.get_local_type env lid with
   | None ->
     let name = Local_id.get_name lid in
-    (* TODO: deal with co-effect thingies *)
-    ( if not (String.equal (String.sub name ~pos:0 ~len:2) "$#") then
+    ( if not (is_special_var name) then
       let msg = "local " ^ name ^ " missing from env" in
       Errors.unknown_information_flow pos msg );
     None
@@ -495,22 +554,33 @@ let lift_params renv =
 let set_local_types env =
   List.fold ~init:env ~f:(fun env (lid, pty) -> Env.set_local_type env lid pty)
 
-let binop ~pos renv env ty1 ty2 =
-  match (ty1, ty2) with
-  | (Tprim p1, Tprim p2) ->
-    let (env, pj) = policy_join_env ~pos renv env ~prefix:"bop" p1 p2 in
-    (env, Tprim pj)
-  | _ -> fail "unexpected Binop types"
+let class_ pos msg ty =
+  let rec find_class = function
+    | Tclass class_ -> Some class_
+    | Tdynamic pol ->
+      (* While it is sound to set the class's lump policy to be the dynamic's
+       (invariant) policy, we do not know if the property we are looking for
+       is policied, therefore we guess that it has the lump policy and emit an
+       error in case we are wrong *)
+      Errors.unknown_information_flow pos "dynamic";
+      Some { c_name = "<dynamic>"; c_self = pol; c_lump = pol }
+    | Tinter tys -> List.find_map ~f:find_class tys
+    | _ -> None
+  in
+  match find_class ty with
+  | Some pty -> pty
+  | None -> fail "%s" msg
 
-let receiver_of_obj_get obj_ptype property =
-  match obj_ptype with
-  | Tclass class_ -> class_
-  | _ -> fail "couldn't find a class for the property '%s'" property
+let receiver_of_obj_get pos obj_ptype property =
+  let msg =
+    Format.asprintf "couldn't find a class for the property '%s'" property
+  in
+  class_ pos msg obj_ptype
 
 (* We generate a ptype out of the property type and fill it with either the
  * purpose of property or the lump policy of some object root. *)
-let property_ptype renv obj_ptype property property_ty =
-  let class_ = receiver_of_obj_get obj_ptype property in
+let property_ptype pos renv obj_ptype property property_ty =
+  let class_ = receiver_of_obj_get pos obj_ptype property in
   let prop_pol =
     match Decl.property_policy renv.re_decl class_.c_name property with
     | Some policy -> policy
@@ -529,16 +599,61 @@ let may_throw ~pos renv env pc_deps exn_ty =
   let env = Env.acc env (add_dependencies deps renv.re_exn ~pos) in
   env
 
-let call ~pos renv env call_type that_pty_opt args_pty ret_ty =
-  let name =
-    match call_type with
-    | Cconstructor callable_name
-    | Cglobal (callable_name, _) ->
-      Decl.callable_name_to_string callable_name
-    | Clocal _ -> "anonymous"
+let shape_field_name renv ix =
+  let ix =
+    (* The utility function does not expect a TAST *)
+    let ((p, _), e) = ix in
+    (p, e)
   in
+  (* TODO(T72024862): This does not support late static binding *)
+  let this =
+    lazy
+      (match renv.re_this with
+      | Some (Tclass cls) -> Some (fst ix, cls.c_name)
+      | _ -> None)
+  in
+  match Typing_utils.shape_field_name_ this ix with
+  | Ok fld -> Some fld
+  | Error _ -> None
+
+let call_special ~pos renv env args ret = function
+  | StaticMethod ("\\HH\\Shapes", "idx") ->
+    let (ty, key, def) =
+      match args with
+      | [(ty, _); (_, key)] -> (ty, key, None)
+      | [(ty, _); (_, key); (def, _)] -> (ty, key, Some def)
+      | _ -> fail "incorrect arguments to Shapes::idx"
+    in
+    let key =
+      match shape_field_name renv key with
+      | Some k -> k
+      | None -> fail "invalid shape key"
+    in
+    let field =
+      {
+        sft_policy = Env.new_policy_var renv "shape";
+        sft_ty = ret;
+        sft_optional = true;
+      }
+    in
+    let tshape =
+      let sh_fields = Nast.ShapeMap.singleton key field in
+      Tshape { sh_fields; sh_kind = Open_shape (Tinter []) }
+    in
+    let env =
+      Env.acc env
+      @@ L.(subtype ty tshape && add_dependencies [field.sft_policy] ret) ~pos
+    in
+    let env =
+      match def with
+      | None -> env
+      | Some def -> Env.acc env @@ subtype ~pos def ret
+    in
+    Some (env, ret)
+  | _ -> None
+
+let call_regular ~pos renv env call_type name that_pty_opt args_pty ret_pty =
   let callee = Env.new_policy_var renv (name ^ "_self") in
-  let ret_pty = Lift.ty ~prefix:(name ^ "_ret") renv ret_ty in
   let env = Env.acc env (add_dependencies ~pos [callee] ret_pty) in
   let (env, callee_exn) =
     let exn = Lift.class_ty ~prefix:(name ^ "_exn") renv Decl.exception_id in
@@ -548,10 +663,8 @@ let call ~pos renv env call_type that_pty_opt args_pty ret_ty =
   (* The PC of the function being called depends on the join of the current
    * PC dependencies, as well as the function's own self policy *)
   let (env, pc_joined) =
-    let join pc' (env, pc) =
-      policy_join_env ~pos renv env ~prefix:"pcjoin" pc pc'
-    in
-    PSet.fold join (Env.get_gpc renv env) (env, callee)
+    let pc_list = PSet.elements (Env.get_gpc renv env) in
+    join_policies ~pos renv env ~prefix:"pcjoin" pc_list
   in
   let hole_ty =
     {
@@ -598,40 +711,81 @@ let call ~pos renv env call_type that_pty_opt args_pty ret_ty =
     let env = Env.acc env (fun acc -> call_constraint :: acc) in
     (env, ret_pty)
 
-(* Return either an array or a shape (anything that uses Array_get syntax for
-   reads/writes) *)
-let any_cow_array ~get_array ~mk_array ~pos renv ty =
-  let rec f = function
-    | Tcow_array arry -> Some (Aarray arry)
-    | Tshape (k, s) -> Some (Ashape (k, s))
-    | Tinter tys -> List.find_map tys f
+let call ~pos renv env call_type that_pty_opt args ret_ty =
+  let name =
+    match call_type with
+    | Cconstructor callable_name
+    | Cglobal (callable_name, _) ->
+      Decl.callable_name_to_string callable_name
+    | Clocal _ -> "anonymous"
+  in
+  let ret_pty = Lift.ty ~prefix:(name ^ "_ret") renv ret_ty in
+  let special =
+    match call_type with
+    | Cglobal (cn, _) -> call_special ~pos renv env args ret_pty cn
     | _ -> None
   in
-  match Option.(f ty >>= get_array) with
-  | Some arry -> arry
+  match special with
+  | Some res -> res
+  | None ->
+    let args_pty = List.map ~f:fst args in
+    call_regular ~pos renv env call_type name that_pty_opt args_pty ret_pty
+
+let array_like ~cow ~shape ~klass ~tuple ty =
+  let rec search ty =
+    match ty with
+    | Tcow_array _ when cow -> Some ty
+    | Tshape _ when shape -> Some ty
+    | Tclass _ when klass -> Some ty
+    | Ttuple _ when tuple -> Some ty
+    | Tinter tys -> List.find_map tys search
+    | _ -> None
+  in
+  search ty
+
+let array_like_with_default ~cow ~shape ~klass ~tuple ~pos renv ty =
+  match array_like ~cow ~shape ~klass ~tuple ty with
+  | Some ty -> ty
   | None ->
     Errors.unknown_information_flow pos "Hack array";
-    (* The following CoW array is completely arbitrary. *)
-    mk_array
-      {
-        a_kind = Adict;
-        a_key = Tprim (Env.new_policy_var renv "fake_key");
-        a_value = Tprim (Env.new_policy_var renv "fake_value");
-        a_length = Env.new_policy_var renv "fake_length";
-      }
+    (* The default is completely arbitrary but it should be the least
+       precisely handled array structure given the search options. *)
+    if klass then
+      Tclass
+        {
+          c_name = "fake";
+          c_self = Env.new_policy_var renv "fake_self";
+          c_lump = Env.new_policy_var renv "fake_lump";
+        }
+    else if cow then
+      Tcow_array
+        {
+          a_kind = Adict;
+          a_key = Tprim (Env.new_policy_var renv "fake_key");
+          a_value = Tprim (Env.new_policy_var renv "fake_value");
+          a_length = Env.new_policy_var renv "fake_length";
+        }
+    else if shape then
+      Tshape { sh_kind = Closed_shape; sh_fields = A.ShapeMap.empty }
+    else if tuple then
+      Ttuple []
+    else
+      fail "`array_like_with_default` has no options turned on"
 
-let array_or_shape =
-  let get_array a = Some a in
-  let mk_array a = Aarray a in
-  any_cow_array ~get_array ~mk_array
-
-let cow_array =
-  let get_array = function
-    | Aarray a -> Some a
-    | Ashape _ -> None
+let cow_array ~pos renv ty =
+  let cow_array =
+    array_like_with_default
+      ~cow:true
+      ~shape:false
+      ~klass:false
+      ~tuple:false
+      ~pos
+      renv
+      ty
   in
-  let mk_array a = a in
-  any_cow_array ~get_array ~mk_array
+  match cow_array with
+  | Tcow_array arry -> arry
+  | _ -> fail "expected Hack array"
 
 (* Deals with an assignment to a local variable or an object property *)
 let assign_helper
@@ -650,10 +804,10 @@ let assign_helper
     in
     let env = Env.acc env (subtype ~pos rhs_pty lhs_pty) in
     env
-  | A.Obj_get (obj, (_, A.Id (_, property)), _) ->
+  | A.Obj_get (obj, (_, A.Id (_, property)), _, _) ->
     let (env, obj_pty) = expr env obj in
-    let obj_pol = (receiver_of_obj_get obj_pty property).c_self in
-    let lhs_pty = property_ptype renv obj_pty property lhs_ty in
+    let obj_pol = (receiver_of_obj_get pos obj_pty property).c_self in
+    let lhs_pty = property_ptype pos renv obj_pty property lhs_ty in
     let pc =
       if use_pc then
         PSet.elements (Env.get_gpc renv env)
@@ -680,22 +834,24 @@ let may_throw_out_of_bounds_exn ~pos renv env arry ix_pty =
   let pc_deps = PSet.add arry.a_length (object_policy ix_pty) in
   may_throw ~pos renv env pc_deps exn_ty
 
-let shape_field_name renv ix =
-  let ix =
-    (* The utility function does not expect a TAST *)
-    let ((p, _), e) = ix in
-    (p, e)
-  in
-  (* NOTE: This does not support late static binding *)
-  let this =
-    lazy
-      (match renv.re_this with
-      | Some (Tclass cls) -> Some (fst ix, cls.c_name)
-      | _ -> None)
-  in
-  match Typing_utils.shape_field_name_ this ix with
-  | Ok fld -> Some fld
-  | Error _ -> None
+let int_of_exp ix_exp =
+  match ix_exp with
+  | (_, A.Int i) -> int_of_string i
+  | _ -> fail "expected an integer literal while indexing a tuple"
+
+let nth_tuple_pty ptys ix_exp =
+  let ix = int_of_exp ix_exp in
+  match List.nth ptys ix with
+  | Some pty -> pty
+  | None -> fail "tuple arity is too little"
+
+let overwrite_nth_pty tuple_pty ix_exp pty =
+  let ix = int_of_exp ix_exp in
+  match tuple_pty with
+  | Ttuple ptys ->
+    let ptys = List.take ptys ix @ (pty :: List.drop ptys (ix + 1)) in
+    Ttuple ptys
+  | _ -> fail "policy type overwrite expected a tuple"
 
 (* A wrapper around assign_helper that deals with Hack arrays' syntactic
    sugar; this accounts for the CoW semantics of Hack arrays:
@@ -708,25 +864,31 @@ let rec assign ?(use_pc = true) ~expr ~pos renv env lhs rhs_pty =
   match snd lhs with
   | A.Array_get ((((_, arry_ty), _) as arry_exp), ix_opt) ->
     (* Evaluate the array *)
-    let (env, arry_pty, arry) =
-      let (env, old_arry_pty) = expr env arry_exp in
-      let arry_pty = Lift.ty ~prefix:"arr" renv arry_ty in
-
-      (* Here we achieve two things:
-       * 1. CoW semantics by using a fresh array type that will be used from now on.
-       * 2. Account for the assignment destination type. This is the type the
-       *    LHS would receive _after_ the assignment.
-       *)
-      let env = Env.acc env (subtype ~pos old_arry_pty arry_pty) in
-
-      let arry = array_or_shape ~pos renv arry_pty in
-      (env, arry_pty, arry)
+    let (env, old_arry_pty) = expr env arry_exp in
+    let new_arry_pty = Lift.ty ~prefix:"arr" renv arry_ty in
+    let arry =
+      array_like_with_default
+        ~cow:true
+        ~shape:true
+        ~klass:false
+        ~tuple:true
+        ~pos
+        renv
+        new_arry_pty
     in
 
-    let (env, arry_pty, use_pc) =
+    let (env, use_pc) =
       match arry with
-      | Aarray arry ->
+      | Tcow_array _ ->
         (* TODO(T68269878): track flows due to length changes *)
+        let arry = cow_array ~pos renv new_arry_pty in
+        (* Here we achieve two things:
+         * 1. CoW semantics by using a fresh array type that will be used from now on.
+         * 2. Account for the assignment destination type. This is the type the
+         *    LHS would receive _after_ the assignment.
+         *)
+        let env = Env.acc env (subtype ~pos old_arry_pty new_arry_pty) in
+
         (* Evaluate the index *)
         let (env, ix_pty_opt) =
           match ix_opt with
@@ -750,8 +912,8 @@ let rec assign ?(use_pc = true) ~expr ~pos renv env lhs rhs_pty =
 
         (* Do the assignment *)
         let env = Env.acc env (subtype ~pos rhs_pty arry.a_value) in
-        (env, arry_pty, true)
-      | Ashape (kind, fm) ->
+        (env, true)
+      | Tshape { sh_kind; sh_fields } ->
         begin
           match Option.(ix_opt >>= shape_field_name renv) with
           | Some key ->
@@ -759,45 +921,150 @@ let rec assign ?(use_pc = true) ~expr ~pos renv env lhs rhs_pty =
               it is always public *)
             let p = Env.new_policy_var renv "field" in
             let pc = Env.get_lpc env |> PSet.elements in
-            let env = Env.acc env @@ L.(pc <* [p]) ~pos in
-            let fm =
+            let env =
+              Env.acc env @@ L.(pc <* [p] && add_dependencies pc rhs_pty) ~pos
+            in
+            let sh_fields =
               Nast.ShapeMap.add
                 key
                 { sft_optional = false; sft_policy = p; sft_ty = rhs_pty }
-                fm
+                sh_fields
             in
-            (env, Tshape (kind, fm), false)
+            let tshape = Tshape { sh_kind; sh_fields } in
+            let env = Env.acc env (subtype ~pos tshape new_arry_pty) in
+            (env, false)
           | None ->
             Errors.unknown_information_flow pos "shape key";
-            (env, Tshape (kind, fm), true)
+            (env, true)
         end
+      | Ttuple _ ->
+        let ix =
+          match ix_opt with
+          | Some ix_exp -> ix_exp
+          | _ -> fail "indexed tuple assignment requires an index"
+        in
+        let tuple_pty = overwrite_nth_pty old_arry_pty ix rhs_pty in
+        let env = Env.acc env (subtype ~pos tuple_pty new_arry_pty) in
+        (env, true)
+      | _ -> fail "the default type for array assignment is not handled"
     in
 
     (* assign the array/shape to itself *)
-    assign ~use_pc ~expr ~pos renv env arry_exp arry_pty
+    assign ~use_pc ~expr ~pos renv env arry_exp new_arry_pty
   | _ -> assign_helper ~use_pc ~expr ~pos renv env lhs rhs_pty
 
-(* Assignment helper that accounts for flows when there is an operator
-   attached to the assignment, e.g., `$x += 42`. *)
-let rec assign_with_op ~pos renv env op lhs_exp rhs_exp =
-  let expr = expr ~pos renv in
-  let (env, rhs_pty) =
-    if Option.is_none op then
-      expr env rhs_exp
-    else
-      (* increment-like operations (e.g., $a += $b) *)
-      let (env, lhs_pty) = expr env lhs_exp in
-      let (env, rhs_pty) = expr env rhs_exp in
-      binop ~pos renv env lhs_pty rhs_pty
-  in
-  let env = assign ~expr ~pos renv env lhs_exp rhs_pty in
-  (env, rhs_pty)
+let seq ~run (env, out) x =
+  let (out, next_opt) = Env.strip_cont out K.Next in
+  match next_opt with
+  | None ->
+    (* we are looking at dead code *)
+    (env, out)
+  | Some cont ->
+    let env = Env.prep_stmt env cont in
+    let (env, out_exceptional) = run env x in
+    (* we have to merge the exceptional outcomes from
+        before `x` with the ones after `x` *)
+    (env, Env.merge_out out_exceptional out)
 
 (* Generate flow constraints for an expression *)
-and expr ~pos renv (env : Env.expr_env) (((_, ety), e) : Tast.expr) =
+let rec expr ~pos renv (env : Env.expr_env) (((epos, ety), e) : Tast.expr) =
   let expr = expr ~pos renv in
+  let expr_with_deps env deps e =
+    Env.expr_with_pc_deps env deps (fun env -> expr env e)
+  in
+  let add_element_dependencies env exprs element_pty =
+    let mk_element_subtype env exp =
+      let (env, pty) = expr env exp in
+      Env.acc env (subtype ~pos pty element_pty)
+    in
+    List.fold ~f:mk_element_subtype ~init:env exprs
+  in
+  (* Any copy-on-write collection with only values such as vec, keyset,
+     ImmVector. *)
+  let cow_array_literal ~prefix exprs =
+    let arry_pty = Lift.ty ~prefix renv ety in
+    let element_pty = (cow_array ~pos renv arry_pty).a_value in
+    (* Each element is a subtype of the collection's value. *)
+    let env = add_element_dependencies env exprs element_pty in
+    (env, arry_pty)
+  in
+  (* Anything class that is a Collection, but in particular Vector and Set. *)
+  let mut_array_literal ~prefix exprs =
+    let class_pty = Lift.ty ~prefix renv ety in
+    let class_ = class_ pos "mutable array literal is not a class" class_pty in
+    let rec find_element_ty ty =
+      match T.get_node ty with
+      | T.Tclass (_, _, [element_ty]) -> Some element_ty
+      | T.Tintersection tys -> List.find_map tys find_element_ty
+      | _ -> None
+    in
+    let element_pty =
+      match find_element_ty ety with
+      | Some element_ty -> Lift.ty ~lump:class_.c_lump renv element_ty
+      | None ->
+        Errors.unknown_information_flow pos "mutable collection literal";
+        Tprim (Env.new_policy_var renv "fake_element")
+    in
+    let env = Env.acc env (add_dependencies ~pos [class_.c_self] element_pty) in
+    (* Each element is a subtype of the collection's value. *)
+    let env = add_element_dependencies env exprs element_pty in
+    (env, class_pty)
+  in
+  let add_key_value_dependencies env fields key_pty value_pty =
+    let mk_field_subtype env (key, value) =
+      let subtype = subtype ~pos in
+      let (env, key_pty') = expr env key in
+      let (env, value_pty') = expr env value in
+      Env.acc env @@ fun acc ->
+      acc |> subtype key_pty' key_pty |> subtype value_pty' value_pty
+    in
+    List.fold ~f:mk_field_subtype ~init:env fields
+  in
+  (* Any copy-on-write collection with keys and values such as dict, ImmMap,
+     ConstMap. *)
+  let cow_keyed_array_literal ~prefix fields =
+    let dict_pty = Lift.ty ~prefix renv ety in
+    let arr = cow_array ~pos renv dict_pty in
+    (* Each field is a subtype of collection keys and values. *)
+    let env = add_key_value_dependencies env fields arr.a_key arr.a_value in
+    (env, dict_pty)
+  in
+  (* Any class that is a KeyedCollection, but in particular Map. *)
+  let mut_keyed_array_literal ~prefix fields =
+    (* Each element of the array is a subtype of the array's value parameter. *)
+    let class_pty = Lift.ty ~prefix renv ety in
+    let class_ = class_ pos "mutable array literal is not a class" class_pty in
+    let rec find_key_value_tys ty =
+      match T.get_node ty with
+      | T.Tclass (_, _, [key_ty; value_ty]) -> Some (key_ty, value_ty)
+      | T.Tintersection tys -> List.find_map tys find_key_value_tys
+      | _ -> None
+    in
+    let (key_pty, value_pty) =
+      match find_key_value_tys ety with
+      | Some (key_ty, value_ty) ->
+        ( Lift.ty ~lump:class_.c_lump renv key_ty,
+          Lift.ty ~lump:class_.c_lump renv value_ty )
+      | None ->
+        Errors.unknown_information_flow pos "mutable collection literal";
+        ( Tprim (Env.new_policy_var renv "fake_key"),
+          Tprim (Env.new_policy_var renv "fake_value") )
+    in
+    let env = Env.acc env (add_dependencies ~pos [class_.c_self] key_pty) in
+    let env = Env.acc env (add_dependencies ~pos [class_.c_self] value_pty) in
+    (* Each field is a subtype of collection keys and values. *)
+    let env = add_key_value_dependencies env fields key_pty value_pty in
+    (env, class_pty)
+  in
+  let funargs env =
+    let f env e =
+      let (env, ty) = expr env e in
+      (env, (ty, e))
+    in
+    List.map_env env ~f
+  in
   match e with
-  | A.Null
+  | A.Null -> (env, Tnull (Env.new_policy_var renv "null"))
   | A.True
   | A.False
   | A.Int _
@@ -805,11 +1072,88 @@ and expr ~pos renv (env : Env.expr_env) (((_, ety), e) : Tast.expr) =
   | A.String _ ->
     (* literals are public *)
     (env, Tprim (Env.new_policy_var renv "lit"))
-  | A.Binop (Ast_defs.Eq op, e1, e2) -> assign_with_op ~pos renv env op e1 e2
-  | A.Binop (_, e1, e2) ->
+  | A.Binop (Ast_defs.Eq None, e1, e2) ->
+    let (env, ty2) = expr env e2 in
+    let env = assign ~expr ~pos renv env e1 ty2 in
+    (env, ty2)
+  | A.Binop (Ast_defs.Eq (Some op), e1, e2) ->
+    (* it is simpler to create a fake expression e1 = e1 op e2 to
+       make sure all operations (e.g., ??) are handled correctly *)
+    expr
+      env
+      ( (epos, ety),
+        A.Binop (Ast_defs.Eq None, e1, ((epos, ety), A.Binop (op, e1, e2))) )
+  | A.Binop (Ast_defs.QuestionQuestion, e1, e2)
+  | A.Eif (e1, None, e2) ->
+    let (env, ty1) = expr env e1 in
+    let (env, ty2) = expr_with_deps env (object_policy ty1) e2 in
+    let ty = Lift.ty ~prefix:"qq" renv ety in
+    let null_policy = Env.new_policy_var renv "nullqq" in
+    let env =
+      Env.acc env
+      @@ L.(
+           subtype ty1 (Tunion [ty; Tnull null_policy])
+           && subtype ty2 ty
+           && add_dependencies [null_policy] ty)
+           ~pos
+    in
+    (env, ty)
+  | A.Eif (e1, Some e2, e3) ->
+    let (env, ty1) = expr env e1 in
+    let (env, ty2) = expr_with_deps env (object_policy ty1) e2 in
+    let (env, ty3) = expr_with_deps env (object_policy ty1) e3 in
+    let ty = Lift.ty ~prefix:"eif" renv ety in
+    let env = Env.acc env (L.(subtype ty2 ty && subtype ty3 ty) ~pos) in
+    (env, ty)
+  | A.Binop
+      ( Ast_defs.(
+          ( Plus | Minus | Star | Slash | Starstar | Percent | Ltlt | Gtgt | Xor
+          | Amp | Bar | Dot )),
+        e1,
+        e2 ) ->
+    (* arithmetic and bitwise operations all take primitive types
+       and return a primitive type; string concatenation (Dot) is
+       also handled here although it might need special casing
+       because of HH\FormatString<T> (TODO) *)
     let (env, ty1) = expr env e1 in
     let (env, ty2) = expr env e2 in
-    binop ~pos renv env ty1 ty2
+    let ty = Tprim (Env.new_policy_var renv "arith") in
+    let env = Env.acc env (subtype ~pos ty1 ty) in
+    let env = Env.acc env (subtype ~pos ty2 ty) in
+    (env, ty)
+  | A.Binop
+      ( ( Ast_defs.(
+            ( Eqeqeq | Diff2 | Barbar | Ampamp | LogXor | Eqeq | Diff | Lt | Lte
+            | Gt | Gte | Cmp )) as op ),
+        e1,
+        e2 ) ->
+    let (env, ty1) = expr env e1 in
+    let (env, ty2) = expr env e2 in
+    let deps =
+      let gather_policies =
+        match op with
+        | Ast_defs.(Eqeqeq | Diff2 | Barbar | Ampamp | LogXor) ->
+          (* === and !== check for object identity, the resulting
+             boolean is thus governed by the object policies of
+             the two operands
+             || and && are also safely handled by object_policy
+             since they either look at a boolean value or test
+             if an object is null *)
+          object_policy
+        | _ ->
+          (* other comparison operators can inspect mutable fields
+             when applied to DateTime objects, so we conservatively
+             use all policies of both arguments *)
+          fun t ->
+           let (cov, inv, cnt) = policy_occurrences t in
+           PSet.union cov (PSet.union inv cnt)
+      in
+      PSet.union (gather_policies ty1) (gather_policies ty2)
+    in
+    let (env, cmp_policy) =
+      join_policies ~pos ~prefix:"cmp" renv env (PSet.elements deps)
+    in
+    (env, Tprim cmp_policy)
   | A.Unop (op, e) ->
     begin
       match op with
@@ -818,10 +1162,26 @@ and expr ~pos renv (env : Env.expr_env) (((_, ety), e) : Tast.expr) =
       | Ast_defs.Udecr
       | Ast_defs.Upincr
       | Ast_defs.Updecr ->
-        assign_with_op ~pos renv env None e e
+        (* register constraints that'd be generated if
+           e = e +/- 1 were being analyzed *)
+        let (env, tye) = expr env e in
+        let env = assign ~expr ~pos renv env e tye in
+        (env, tye)
       (* Prim operators that don't mutate *)
+      | Ast_defs.Unot ->
+        let (env, tye) = expr env e in
+        (* use object_policy to account for both booleans
+           and null checks *)
+        let (env, not_policy) =
+          join_policies
+            ~prefix:"not"
+            ~pos
+            renv
+            env
+            (PSet.elements (object_policy tye))
+        in
+        (env, Tprim not_policy)
       | Ast_defs.Utild
-      | Ast_defs.Unot
       | Ast_defs.Uplus
       | Ast_defs.Uminus ->
         expr env e
@@ -830,14 +1190,14 @@ and expr ~pos renv (env : Env.expr_env) (((_, ety), e) : Tast.expr) =
         expr env e
     end
   | A.Lvar (_pos, lid) -> refresh_local_type ~pos renv env lid ety
-  | A.Obj_get (obj, (_, A.Id (_, property)), _) ->
+  | A.Obj_get (obj, (_, A.Id (_, property)), _, _) ->
     let (env, obj_ptype) = expr env obj in
-    let prop_pty = property_ptype renv obj_ptype property ety in
+    let prop_pty = property_ptype pos renv obj_ptype property ety in
     let prefix = "." ^ property in
     let (env, super_pty) =
       adjust_ptype ~pos ~prefix ~adjustment:Aweaken renv env prop_pty
     in
-    let obj_pol = (receiver_of_obj_get obj_ptype property).c_self in
+    let obj_pol = (receiver_of_obj_get pos obj_ptype property).c_self in
     let env = Env.acc env (add_dependencies ~pos [obj_pol] super_pty) in
     (env, super_pty)
   | A.This ->
@@ -845,13 +1205,12 @@ and expr ~pos renv (env : Env.expr_env) (((_, ety), e) : Tast.expr) =
     | Some ptype -> (env, ptype)
     | None -> fail "encountered $this outside of a class context")
   | A.ET_Splice e
-  | A.ExpressionTree { A.et_src_expr = e; _ }
-  | A.ParenthesizedExpr e ->
+  | A.ExpressionTree { A.et_src_expr = e; _ } ->
     expr env e
   (* TODO(T68414656): Support calls with type arguments *)
   | A.Call (e, _type_args, args, _extra_args) ->
     let fty = Tast.get_type e in
-    let (env, args_pty) = List.map_env ~f:expr env args in
+    let (env, args_pty) = funargs env args in
     let call env call_type this_pty =
       call ~pos renv env call_type this_pty args_pty ety
     in
@@ -862,7 +1221,7 @@ and expr ~pos renv (env : Env.expr_env) (((_, ety), e) : Tast.expr) =
         let call_id = Decl.make_callable_name ~is_static:false None name in
         call env (Cglobal (call_id, fty)) None
       (* Regular method call *)
-      | (_, A.Obj_get (obj, (_, A.Id (_, meth_name)), _)) ->
+      | (_, A.Obj_get (obj, (_, A.Id (_, meth_name)), _, _)) ->
         let (env, obj_pty) = expr env obj in
         begin
           match obj_pty with
@@ -914,34 +1273,34 @@ and expr ~pos renv (env : Env.expr_env) (((_, ety), e) : Tast.expr) =
         in
         call env (Clocal ifc_fty) None
     end
-  | A.ValCollection (((A.Vec | A.Keyset) as kind), _, exprs) ->
-    (* Each element of the array is a subtype of the array's value parameter. *)
-    let arry_pty = Lift.ty ~prefix:(A.show_vc_kind kind) renv ety in
-    let element_pty = (cow_array ~pos renv arry_pty).a_value in
-    let mk_element_subtype env exp =
-      let (env, pty) = expr env exp in
-      Env.acc env (subtype ~pos pty element_pty)
-    in
-    let env = List.fold ~f:mk_element_subtype ~init:env exprs in
-    (env, arry_pty)
-  | A.KeyValCollection (A.Dict, _, fields) ->
-    (* Each field's key and value are subtypes of the array key and value
-       policy types. *)
-    let dict_pty = Lift.ty ~prefix:"dict" renv ety in
-    let arr = cow_array ~pos renv dict_pty in
-    let mk_element_subtype env (key, value) =
-      let subtype = subtype ~pos in
-      let (env, key_pty) = expr env key in
-      let (env, value_pty) = expr env value in
-      Env.acc env @@ fun acc ->
-      acc |> subtype key_pty arr.a_key |> subtype value_pty arr.a_value
-    in
-    let env = List.fold ~f:mk_element_subtype ~init:env fields in
-    (env, dict_pty)
+  | A.Varray (_, exprs) -> cow_array_literal ~prefix:"varray" exprs
+  | A.ValCollection
+      (((A.Vec | A.Keyset | A.ImmSet | A.ImmVector) as kind), _, exprs) ->
+    let prefix = A.show_vc_kind kind in
+    cow_array_literal ~prefix exprs
+  | A.ValCollection (((A.Vector | A.Set) as kind), _, exprs) ->
+    let prefix = A.show_vc_kind kind in
+    mut_array_literal ~prefix exprs
+  | A.Darray (_, fields) -> cow_keyed_array_literal ~prefix:"darray" fields
+  | A.KeyValCollection (((A.Dict | A.ImmMap) as kind), _, fields) ->
+    let prefix = A.show_kvc_kind kind in
+    cow_keyed_array_literal ~prefix fields
+  | A.KeyValCollection ((A.Map as kind), _, fields) ->
+    let prefix = A.show_kvc_kind kind in
+    mut_keyed_array_literal ~prefix fields
   | A.Array_get (arry, ix_opt) ->
     (* Evaluate the array *)
     let (env, arry_pty) = expr env arry in
-    let arry = array_or_shape ~pos renv arry_pty in
+    let arry =
+      array_like_with_default
+        ~cow:true
+        ~shape:true
+        ~klass:false
+        ~tuple:true
+        ~pos
+        renv
+        arry_pty
+    in
 
     (* Evaluate the index, it might have side-effects! *)
     let (env, ix_exp, ix_pty) =
@@ -953,36 +1312,36 @@ and expr ~pos renv (env : Env.expr_env) (((_, ety), e) : Tast.expr) =
     in
     begin
       match arry with
-      | Aarray arry ->
+      | Tcow_array arry ->
         (* The index flows into the array key which flows into the array value *)
         let env = Env.acc env @@ subtype ~pos ix_pty arry.a_key in
 
         let env = may_throw_out_of_bounds_exn ~pos renv env arry ix_pty in
 
         (env, arry.a_value)
-      | Ashape (_, fm) ->
+      | Tshape { sh_fields; _ } ->
         let sft =
           Option.(
             shape_field_name renv ix_exp >>= fun f ->
-            Nast.ShapeMap.find_opt f fm)
+            Nast.ShapeMap.find_opt f sh_fields)
         in
         begin
           match sft with
-          | Some { sft_ty; sft_policy; _ } ->
-            let env =
-              Env.acc env @@ add_dependencies ~pos [sft_policy] sft_ty
-            in
-            (env, sft_ty)
+          | Some { sft_ty; _ } -> (env, sft_ty)
           | None ->
             Errors.unknown_information_flow pos "nonexistent shape field";
             (env, Lift.ty renv ety)
         end
+      | Ttuple ptys ->
+        let indexed_pty = nth_tuple_pty ptys ix_exp in
+        (env, indexed_pty)
+      | _ -> fail "the default type for array access is not handled"
     end
   | A.New (((_, lty), cid), _targs, args, _extra_args, _) ->
     (* TODO(T70139741): support variadic functions and constructors
      * TODO(T70139893): support classes with type parameters
      *)
-    let (env, args_pty) = List.map_env ~f:expr env args in
+    let (env, args_pty) = funargs env args in
     let env =
       match cid with
       | A.CIexpr e -> fst @@ expr env e
@@ -1045,8 +1404,11 @@ and expr ~pos renv (env : Env.expr_env) (((_, ety), e) : Tast.expr) =
     in
     (env, ty)
   | A.Await e -> expr env e
+  | A.Pair (_, e0, e1) ->
+    let (env, ptys) = List.map_env env [e0; e1] ~f:expr in
+    (env, Ttuple ptys)
   | A.List es ->
-    let (env, ptys) = List.map_env env es ~f:(fun env e -> expr env e) in
+    let (env, ptys) = List.map_env env es ~f:expr in
     (env, Ttuple ptys)
   | A.Pipe ((_, dollardollar), e1, e2) ->
     let (env, t1) = expr env e1 in
@@ -1065,12 +1427,46 @@ and expr ~pos renv (env : Env.expr_env) (((_, ety), e) : Tast.expr) =
       let sft = { sft_ty = t; sft_optional = false; sft_policy = p } in
       (env, Nast.ShapeMap.add key sft m)
     in
-    let (env, s) = List.fold ~f ~init:(env, Nast.ShapeMap.empty) s in
-    (env, Tshape (T.Closed_shape, s))
+    let (env, sh_fields) = List.fold ~f ~init:(env, Nast.ShapeMap.empty) s in
+    (env, Tshape { sh_kind = Closed_shape; sh_fields })
+  | A.Is (e, _hint) ->
+    let (env, ety) = expr env e in
+    (* whether an object has one tag or another is governed
+       by its object policy *)
+    let (env, tag_policy) =
+      let tag_policy_list = PSet.elements (object_policy ety) in
+      join_policies ~pos ~prefix:"tag" renv env tag_policy_list
+    in
+    (env, Tprim tag_policy)
+  | A.As (e, _hint, is_nullable) ->
+    let (env, ty) = expr env e in
+    let tag_policies = object_policy ty in
+    let (env, tag_test_ty) =
+      if is_nullable then
+        (* The 'e ?as Thint' construct can be seen as
+             ((e is Thint) ? e : null) as ?Thint
+           that is, we can see the construct as *first* setting e's
+           value to null if it is not a subtype of Thint, *then*
+           performing a refinement with ?Thint. Note that the 'as'
+           refinement above will always succeed because the ternary
+           evaluates either to e that has type Thint (<: ?Thint), or
+           null that has type null (<: ?Thint).
+
+           The result of this as refinement is in ety, so here, we
+           construct the type of ternary expression. *)
+        let (env, tag_policy) =
+          join_policies ~pos ~prefix:"tag" renv env (PSet.elements tag_policies)
+        in
+        (env, Tunion [ty; Tnull tag_policy])
+      else
+        let exn = Lift.class_ty ~prefix:"as" renv Decl.exception_id in
+        let env = may_throw ~pos renv env tag_policies exn in
+        (env, ty)
+    in
+    (env, refine renv tag_test_ty (pos, ety))
   (* --- A valid AST does not contain these nodes *)
   | A.Import _
-  | A.Collection _
-  | A.BracedExpr _ ->
+  | A.Collection _ ->
     failwith "AST should not contain these nodes"
   (* --- expressions below are not yet supported *)
   | _ ->
@@ -1136,6 +1532,22 @@ and stmt renv (env : Env.stmt_env) ((pos, s) : Tast.stmt) =
         env
     in
     Env.close_stmt env K.Next
+  | A.Awaitall (el, b) ->
+    let (env, out) =
+      List.fold_left el ~init:(env, KMap.empty) ~f:(fun (env, out) (lvar, e) ->
+          let expr = expr_ ~pos renv in
+          let (env, ety) = expr (Env.prep_expr env) e in
+          let env =
+            match lvar with
+            | Some lid -> assign ~expr ~pos renv env (fst e, A.Lvar lid) ety
+            | None -> env
+          in
+          let (env, ethrow) = Env.close_expr env in
+          (env, Env.merge_out out ethrow))
+    in
+    let (env, out1) = block renv env b in
+    let out = Env.merge_out out out1 in
+    (env, out)
   | A.Expr e ->
     let (env, _ety, ethrow) = expr renv env e in
     Env.close_stmt ~merge:ethrow env K.Next
@@ -1176,6 +1588,59 @@ and stmt renv (env : Env.stmt_env) ((pos, s) : Tast.stmt) =
     in
     let out = clear_pc_deps out in
     (env, out)
+  | A.For (inits, cond_opt, incrs, (_, A.AssertEnv (A.Join, tymap)) :: blk) ->
+    (* Helper that evaluates an expression, but discards its type *)
+    let discarding_expr env (((pos, _), _) as exp) =
+      let (env, _, out_exceptional) = expr ~pos renv env exp in
+      Env.close_stmt ~merge:out_exceptional env K.Next
+    in
+
+    (* Evaluate the initialisers of the loop *)
+    let init = Env.close_stmt env K.Next in
+    let (env, out) = List.fold_left ~f:(seq ~run:discarding_expr) ~init inits in
+    let env = Env.prep_stmt env (KMap.find K.Next out) in
+
+    (* Use the position of the condition if awailable; entire loop's position
+       otherwise. *)
+    let pos =
+      match cond_opt with
+      | Some ((cond_pos, _), _) -> cond_pos
+      | None -> pos
+    in
+
+    let env = refresh_with_tymap ~pos renv env tymap in
+    let beg_locals = Env.get_locals env in
+
+    (* TODO: pc_pols should also flow into cty because the condition is evaluated
+       unconditionally only the first time around the loop. *)
+    let (env, pc_policies, cthrow) =
+      match cond_opt with
+      | Some cond ->
+        let (env, cty, cthrow) = expr ~pos renv env cond in
+        (env, object_policy cty, cthrow)
+      | None -> (env, PSet.empty, KMap.empty)
+    in
+
+    Env.with_pc_deps env pc_policies @@ fun env ->
+    let tainted_lpc = Env.get_lpc env in
+    let (env, out_blk) = block renv env blk in
+    let out_blk = Env.merge_out out_blk cthrow in
+    let out_blk = Env.merge_in_next out_blk K.Continue in
+
+    (* Handle loop increments *)
+    let init = (env, out_blk) in
+    let (env, out) = List.fold_left ~f:(seq ~run:discarding_expr) ~init incrs in
+
+    let env = loop_the_env ~pos env out beg_locals in
+    let out =
+      (* overwrite the Next outcome to use the type for local
+         variables as they are at the beginning of the loop,
+         then merge the Break outcome in Next *)
+      let next = { k_pc = tainted_lpc; k_vars = beg_locals } in
+      Env.merge_in_next (KMap.add K.Next next out_blk) K.Break
+    in
+    let out = clear_pc_deps out in
+    (env, out)
   | A.Foreach (collection, as_exp, (_, A.AssertEnv (A.Join, tymap)) :: blk) ->
     let pos = fst (fst collection) in
     let env = refresh_with_tymap ~pos renv env tymap in
@@ -1183,23 +1648,68 @@ and stmt renv (env : Env.stmt_env) ((pos, s) : Tast.stmt) =
 
     (* TODO: pc should also flow into cty because the condition is evaluated
        unconditionally only the first time around the loop. *)
-    let (env, array_pty, cthrow) = expr ~pos renv env collection in
-    let array = cow_array ~pos renv array_pty in
-
+    let (env, collection_pty, cthrow) = expr ~pos renv env collection in
+    let collection_pty =
+      array_like_with_default
+        ~cow:true
+        ~shape:false
+        ~klass:true
+        ~tuple:false
+        ~pos
+        renv
+        collection_pty
+    in
     let env = Env.prep_expr env in
     let expr = expr_ ~pos renv in
-    let env =
+    let (env, pc_policies) =
       match as_exp with
-      | Aast.As_v value
-      | Aast.Await_as_v (_, value) ->
-        assign_helper ~expr ~pos renv env value array.a_value
-      | Aast.As_kv (key, value)
-      | Aast.Await_as_kv (_, key, value) ->
-        let env = assign_helper ~expr ~pos renv env value array.a_value in
-        assign_helper ~expr ~pos renv env key array.a_key
+      | Aast.As_v (((_, value_ty), _) as value)
+      | Aast.Await_as_v (_, (((_, value_ty), _) as value)) ->
+        let (env, value_pty, pc_policies) =
+          match collection_pty with
+          | Tcow_array arry -> (env, arry.a_value, PSet.singleton arry.a_length)
+          | Tclass class_ ->
+            (* TODO(T80403715): Ensure during class definition that Iterable
+               instances behave sensibly. Otherwise, this treatment is unsound. *)
+            (* Value is, in effect, a field access, hence governed by the
+            lump policy of the class. *)
+            let value_pty = Lift.ty ~lump:class_.c_lump renv value_ty in
+            (* Length, key, and value are governed by the self policy if the
+               class is in fact a Hack array and by the lump policy otherwise. *)
+            let cl_pols = [class_.c_self; class_.c_lump] in
+            let env = Env.acc env (add_dependencies ~pos cl_pols value_pty) in
+            (env, value_pty, PSet.of_list cl_pols)
+          | _ -> fail "Collection is neither a class nor a cow array"
+        in
+        let env = assign_helper ~expr ~pos renv env value value_pty in
+        (env, pc_policies)
+      | Aast.As_kv ((((_, key_ty), _) as key), (((_, value_ty), _) as value))
+      | Aast.Await_as_kv
+          (_, (((_, key_ty), _) as key), (((_, value_ty), _) as value)) ->
+        let (env, key_pty, value_pty, pc_policies) =
+          match collection_pty with
+          | Tcow_array arry ->
+            (env, arry.a_key, arry.a_value, PSet.singleton arry.a_length)
+          | Tclass class_ ->
+            (* TODO(T80403715): Ensure during class definition that Iterable
+               instances behave sensibly. Otherwise, this treatment is unsound. *)
+            (* Key and value are, in effect, a field accesses, hence governed
+            by the lump policy of the class. *)
+            let key_pty = Lift.ty ~lump:class_.c_lump renv key_ty in
+            let value_pty = Lift.ty ~lump:class_.c_lump renv value_ty in
+            (* Length, key, and value are governed by the self policy if the
+               class is in fact a Hack array and by the lump policy otherwise. *)
+            let cl_pols = [class_.c_self; class_.c_lump] in
+            let env = Env.acc env (add_dependencies ~pos cl_pols value_pty) in
+            let env = Env.acc env (add_dependencies ~pos cl_pols key_pty) in
+            (env, key_pty, value_pty, PSet.of_list cl_pols)
+          | _ -> fail "Collection is neither a class nor a cow array"
+        in
+        let env = assign_helper ~expr ~pos renv env key key_pty in
+        let env = assign_helper ~expr ~pos renv env value value_pty in
+        (env, pc_policies)
     in
 
-    let pc_policies = PSet.singleton array.a_length in
     let (env, ethrow) = Env.close_expr env in
     if not @@ KMap.is_empty ethrow then fail "foreach collection threw";
     Env.with_pc_deps env pc_policies @@ fun env ->
@@ -1359,21 +1869,8 @@ and stmt renv (env : Env.stmt_env) ((pos, s) : Tast.stmt) =
     Env.close_stmt env K.Next
 
 and block renv env (blk : Tast.block) =
-  let seq (env, out) s =
-    let (out, next_opt) = Env.strip_cont out K.Next in
-    match next_opt with
-    | None ->
-      (* we are looking at dead code; skip the statement *)
-      (env, out)
-    | Some cont ->
-      let env = Env.prep_stmt env cont in
-      let (env, out_pst) = stmt renv env s in
-      (* we have to merge the exceptional outcomes from
-         before 's' with the ones after 's' *)
-      (env, Env.merge_out out_pst out)
-  in
   let init = Env.close_stmt env K.Next in
-  List.fold_left ~f:seq ~init blk
+  List.fold_left ~f:(seq ~run:(stmt renv)) ~init blk
 
 (* Checks that two type schemes are in a subtyping relationship. The
  * skeletons of the two input type schemes are expected to be same.
@@ -1519,7 +2016,7 @@ let analyse_callable
       }
     in
     Some res
-  with FlowInference s ->
+  with IFCError (FlowInference s) ->
     Format.printf "Analyzing %s:@.  Failure: %s@.@." name s;
     None
 
@@ -1580,9 +2077,74 @@ let walk_tast opts decl_env ctx =
   in
   (fun tast -> List.concat (List.filter_map ~f:def tast))
 
+let check_valid_flow opts _ (result, implicit, simple) =
+  let simple_illegal_flows =
+    Logic.entailment_violations opts.opt_security_lattice simple
+  in
+  let to_err node =
+    ( PosSet.elements (pos_set_of_policy node),
+      Format.asprintf "%a" Pp.policy node )
+  in
+  let illegal_information_flow (poss, source, sink) =
+    (* Separate error positions that are not in the result and filter out
+         unknown positions *)
+    let (primary_poss, other_poss) =
+      PosSet.filter (fun p -> not @@ Pos.equal Pos.none p) poss
+      |> PosSet.elements
+      |> List.partition_tf ~f:(Pos.overlaps result.res_span)
+    in
+    (* Make sure the primary error position is the latest position in the
+         callable being analysed *)
+    let (primary_pos, other_poss) =
+      match List.sort ~compare:Pos.compare primary_poss |> List.rev with
+      | [] -> (result.res_span, other_poss)
+      | primary :: primary_poss ->
+        (primary, List.unordered_append primary_poss other_poss)
+    in
+
+    let (source, sink) = (to_err source, to_err sink) in
+    Errors.illegal_information_flow primary_pos other_poss source sink
+  in
+
+  let context_implicit_policy_leakage (pos, source, sink) =
+    (* The latest program point contributing to the violation is the
+         primary error *)
+    let (primary, secondaries) =
+      let poss =
+        PosSet.elements pos |> List.sort ~compare:Pos.compare |> List.rev
+      in
+      match poss with
+      | [] -> (result.res_span, [])
+      | primary :: secondaries -> (primary, secondaries)
+    in
+    let (source, sink) = (to_err source, to_err sink) in
+    Errors.context_implicit_policy_leakage primary secondaries source sink
+  in
+
+  if should_print ~user_mode:opts.opt_mode ~phase:Mcheck then begin
+    List.iter ~f:illegal_information_flow simple_illegal_flows;
+    List.iter ~f:context_implicit_policy_leakage implicit
+  end
+
+let simplify result =
+  let pred = const true in
+  ( result,
+    result.res_entailment result.res_constraint,
+    Logic.simplify @@ Logic.quantify ~pred ~quant:Qexists result.res_constraint
+  )
+
+let get_solver_result results =
+  try Ifc_solver.global_exn ~subtype results with
+  | Ifc_solver.Error Ifc_solver.RecursiveCycle ->
+    fail "solver error: cyclic call graph"
+  | Ifc_solver.Error (Ifc_solver.MissingResults callable) ->
+    fail "solver error: missing results for callable '%s'" callable
+  | Ifc_solver.Error (Ifc_solver.InvalidCall (caller, callee)) ->
+    fail "solver error: invalid call to '%s' in '%s'" callee caller
+
 let check opts tast ctx =
   (* Declaration phase *)
-  let decl_env = Decl.collect_sigs ctx tast in
+  let decl_env = Decl.collect_sigs tast in
   if should_print ~user_mode:opts.opt_mode ~phase:Mdecl then
     Format.printf "%a@." Pp.decl_env decl_env;
 
@@ -1590,25 +2152,9 @@ let check opts tast ctx =
   let results = walk_tast opts decl_env ctx tast in
 
   (* Solver phase *)
-  let results =
-    try Solver.global_exn ~subtype results with
-    | Solver.Error Solver.RecursiveCycle ->
-      fail "solver error: cyclic call graph"
-    | Solver.Error (Solver.MissingResults callable) ->
-      fail "solver error: missing results for callable '%s'" callable
-    | Solver.Error (Solver.InvalidCall (caller, callee)) ->
-      fail "solver error: invalid call to '%s' in '%s'" callee caller
-  in
+  let results = get_solver_result results in
 
-  let simplify result =
-    let pred = const true in
-    ( result,
-      result.res_entailment result.res_constraint,
-      Logic.simplify
-      @@ Logic.quantify ~pred ~quant:Qexists result.res_constraint )
-  in
   let simplified_results = SMap.map simplify results in
-
   let log_solver name (result, _, simplified) =
     Format.printf "@[<v>";
     Format.printf "Flow constraints for %s:@.  @[<v>" name;
@@ -1621,54 +2167,4 @@ let check opts tast ctx =
   if should_print ~user_mode:opts.opt_mode ~phase:Msolve then
     SMap.iter log_solver simplified_results;
 
-  (* Checking phase *)
-  let check_valid_flow _ (result, implicit, simple) =
-    let simple_illegal_flows =
-      Logic.entailment_violations opts.opt_security_lattice simple
-    in
-    let to_err node =
-      ( PosSet.elements (pos_set_of_policy node),
-        Format.asprintf "%a" Pp.policy node )
-    in
-    let illegal_information_flow (poss, source, sink) =
-      (* Separate error positions that are not in the result and filter out
-         unknown positions *)
-      let (primary_poss, other_poss) =
-        PosSet.filter (fun p -> not @@ Pos.equal Pos.none p) poss
-        |> PosSet.elements
-        |> List.partition_tf ~f:(Pos.overlaps result.res_span)
-      in
-      (* Make sure the primary error position is the latest position in the
-         callable being analysed *)
-      let (primary_pos, other_poss) =
-        match List.sort ~compare:Pos.compare primary_poss |> List.rev with
-        | [] -> (result.res_span, other_poss)
-        | primary :: primary_poss ->
-          (primary, List.unordered_append primary_poss other_poss)
-      in
-
-      let (source, sink) = (to_err source, to_err sink) in
-      Errors.illegal_information_flow primary_pos other_poss source sink
-    in
-
-    let context_implicit_policy_leakage (pos, source, sink) =
-      (* The latest program point contributing to the violation is the
-         primary error *)
-      let (primary, secondaries) =
-        let poss =
-          PosSet.elements pos |> List.sort ~compare:Pos.compare |> List.rev
-        in
-        match poss with
-        | [] -> (result.res_span, [])
-        | primary :: secondaries -> (primary, secondaries)
-      in
-      let (source, sink) = (to_err source, to_err sink) in
-      Errors.context_implicit_policy_leakage primary secondaries source sink
-    in
-
-    if should_print ~user_mode:opts.opt_mode ~phase:Mcheck then begin
-      List.iter ~f:illegal_information_flow simple_illegal_flows;
-      List.iter ~f:context_implicit_policy_leakage implicit
-    end
-  in
-  SMap.iter check_valid_flow simplified_results
+  SMap.iter (check_valid_flow opts) simplified_results

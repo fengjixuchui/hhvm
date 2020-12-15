@@ -452,6 +452,8 @@ function get_options($argv) {
     '*hh_single_type_check:' => '',
     'write-to-checkout' => '',
     'bespoke' => '',
+    'hadva' => '',
+    'lazyclass' => '',
   ];
   $options = darray[];
   $files = varray[];
@@ -655,7 +657,7 @@ function serial_only_tests($tests) {
 function exec_find(mixed $files, string $extra): mixed {
   $results = varray[];
   foreach (array_chunk($files, 500) as $chunk) {
-    $efa = implode(' ', array_map(fun('escapeshellarg'), $chunk));
+    $efa = implode(' ', array_map(escapeshellarg<>, $chunk));
     $output = shell_exec("find $efa $extra");
     foreach (explode("\n", $output) as $result) {
       // Collect the (non-empty) results, which should all be file paths.
@@ -829,6 +831,15 @@ function extra_args($options): string {
     $args .= ' -d auto_prepend_file=';
     $args .= escapeshellarg($vendor.'/hh_autoload.php');
   }
+
+  if (isset($options['hadva'])) {
+    $args .= ' -vEval.HackArrDVArrs=true';
+    $args .= ' -vEval.HackArrDVArrMark=true';
+  }
+
+  if (isset($options['lazyclass'])) {
+    $args .= ' -vEval.EmitClassPointers=2';
+  }
   return $args;
 }
 
@@ -851,6 +862,7 @@ function hhvm_cmd_impl(
       '-vEval.EnableIntrinsicsExtension=true',
       '-vEval.HHIRInliningIgnoreHints=false',
       '-vEval.HHIRAlwaysInterpIgnoreHint=false',
+      '-vEval.FoldLazyClassKeys=false',
       $mode,
       isset($options['wholecfg']) ? '-vEval.JitPGORegionSelector=wholecfg' : '',
 
@@ -1082,6 +1094,7 @@ function hphp_cmd($options, $test, $program): string {
     '-vRuntime.ResourceLimit.CoreFileSize=0',
     '-vRuntime.Eval.EnableIntrinsicsExtension=true',
     '-vRuntime.Eval.EnableArgsInBacktraces=true',
+    '-vRuntime.Eval.FoldLazyClassKeys=false',
     '-vRuntime.Eval.HackCompilerExtractPath='
       .escapeshellarg(bin_root().'/hackc_%{schema}'),
     '-vParserThreadCount=' . ($options['repo-threads'] ?? 1),
@@ -1397,7 +1410,7 @@ enum TempDirRemove: int {
   NEVER = 2;
 }
 
-class Status {
+final class Status {
   private static $results = varray[];
   private static $mode = 0;
 
@@ -1602,9 +1615,9 @@ class Status {
     } else {
       self::$temp_dir_remove = TempDirRemove::ON_RUN_SUCCESS;
     }
-    register_shutdown_function(class_meth(self::class, 'destroy'));
-    pcntl_signal(SIGTERM, class_meth(self::class, 'destroyFromSignal'));
-    pcntl_signal(SIGINT, class_meth(self::class, 'destroyFromSignal'));
+    register_shutdown_function(self::destroy<>);
+    pcntl_signal(SIGTERM, self::destroyFromSignal<>);
+    pcntl_signal(SIGINT, self::destroyFromSignal<>);
   }
 
   public static function serverRestarted() {
@@ -2017,6 +2030,17 @@ function skip_test($options, $test, $run_skipif = true): ?string {
       file_exists("$test.$no_bespoke_tag")) {
       // Skip due to changes in array identity
       return 'skip-bespoke';
+  }
+
+  $no_hadva_tag = "nohadva";
+  if (isset($options['hadva']) &&
+      file_exists("$test.$no_hadva_tag")) {
+      return 'skip-hadva';
+  }
+  $no_lazyclass_tag = "nolazyclass";
+  if (isset($options['lazyclass']) &&
+      file_exists("$test.$no_lazyclass_tag")) {
+      return 'skip-lazyclass';
   }
 
   if (!$run_skipif) return null;

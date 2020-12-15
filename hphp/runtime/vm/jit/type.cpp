@@ -17,7 +17,6 @@
 #include "hphp/runtime/vm/jit/type.h"
 
 #include "hphp/runtime/base/bespoke-array.h"
-#include "hphp/runtime/base/bespoke-layout.h"
 #include "hphp/runtime/base/repo-auth-type-array.h"
 #include "hphp/runtime/base/tv-type.h"
 #include "hphp/runtime/vm/jit/guard-constraint.h"
@@ -72,19 +71,15 @@ constexpr Type::bits_t Type::kClsSpecBits;
 // Vanilla array-spec manipulation.
 
 Type Type::narrowToVanilla() const {
-  if (!supports(SpecKind::Array)) return *this;
-  if (supports(SpecKind::Class) || supports(SpecKind::Record)) return *this;
-  auto const newSpec = arrSpec().narrowToVanilla();
-  if (newSpec == ArraySpec::Bottom()) return TBottom;
-  return Type(*this, newSpec);
+  return narrowToLayout(ArrayLayout::Vanilla());
 }
 
-Type Type::narrowToBespokeLayout(BespokeLayout layout) const {
+Type Type::narrowToLayout(ArrayLayout layout) const {
   if (!supports(SpecKind::Array)) return *this;
   if (supports(SpecKind::Class) || supports(SpecKind::Record)) return *this;
-  auto const newSpec = arrSpec().narrowToBespokeLayout(layout);
-  if (newSpec == ArraySpec::Bottom()) return TBottom;
-  return Type(*this, newSpec);
+  auto const spec = arrSpec().narrowToLayout(layout);
+  if (spec == ArraySpec::Bottom()) return TBottom;
+  return Type(*this, spec);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -122,26 +117,12 @@ std::string Type::constValString() const {
     return folly::format("\"{}\"", escapeStringForCPP(str->data(),
                                                       str->size())).str();
   }
-  if (*this <= TStaticArr) {
-    if (m_arrVal->empty()) {
-      return m_arrVal->isVArray() ? "varray[]" :
-             m_arrVal->isDArray() ? "darray[]" : "array()";
-    }
-    auto const format = m_arrVal->isVArray() ? "varray({})" :
-                        m_arrVal->isDArray() ? "darray({})" : "array({})";
-    return folly::format(format, m_arrVal).str();
-  }
-  if (*this <= TStaticVec) {
-    if (m_vecVal->empty()) return "vec[]";
-    return folly::format("Vec({})", m_vecVal).str();
-  }
-  if (*this <= TStaticDict) {
-    if (m_dictVal->empty()) return "dict[]";
-    return folly::format("Dict({})", m_dictVal).str();
-  }
-  if (*this <= TStaticKeyset) {
-    if (m_keysetVal->empty()) return "keyset[]";
-    return folly::format("Keyset({})", m_keysetVal).str();
+  if (*this <= TArrLike) {
+    auto const type = getDataTypeString(m_arrVal->toDataType());
+    auto const layout = arrSpec().layout().describe();
+    return m_arrVal->empty()
+      ? folly::sformat("{}[]={}", type, layout)
+      : folly::sformat("{}({})={}", type, m_arrVal, layout);
   }
   if (*this <= TFunc) {
     return folly::format("Func({})", m_funcVal->fullName()->data()).str();
@@ -628,7 +609,7 @@ Type Type::modified() const {
   if (t.maybe(TDict))   t |= TDict;
   if (t.maybe(TKeyset)) t |= TKeyset;
   if (t.maybe(TStr))    t |= TStr;
-  auto const spec = ArraySpec(ArraySpec::LayoutTag::Vanilla);
+  auto const spec = ArraySpec(ArrayLayout::Vanilla());
   return arrSpec().vanilla() ? Type(t, spec) : t;
 }
 
@@ -640,12 +621,8 @@ static bool arrayFitsSpec(const ArrayData* arr, ArraySpec spec) {
   if (spec == ArraySpec::Top()) return true;
   if (spec == ArraySpec::Bottom()) return false;
 
-  if (spec.vanilla() && !arr->isVanilla()) {
+  if (!(ArrayLayout::FromArray(arr) <= spec.layout())) {
     return false;
-  } else if (auto const layout = spec.bespokeLayout()) {
-    if (arr->isVanilla()) return false;
-    auto const bad = BespokeArray::asBespoke(arr);
-    if (bad->layout() != *layout) return false;
   }
 
   if (!spec.type()) return true;
@@ -921,12 +898,7 @@ Type typeFromTV(tv_rval tv, const Class* ctx) {
   auto const result = Type(dt_modulo_persistence(type(tv)));
 
   if (isArrayLikeType(type(tv))) {
-    if (val(tv).parr->isVanilla()) {
-      return result.narrowToVanilla();
-    } else {
-      auto const bad = BespokeArray::asBespoke(val(tv).parr);
-      return result.narrowToBespokeLayout(bad->layout());
-    }
+    return allowBespokeArrayLikes() ? result : result.narrowToVanilla();
   }
 
   return result;

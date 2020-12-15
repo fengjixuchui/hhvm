@@ -52,11 +52,7 @@ use serde_derive::{Deserialize, Serialize};
 use serde_json::{json, value::Value as Json};
 
 use itertools::Either;
-use std::{
-    cell::RefCell,
-    collections::{BTreeMap, BTreeSet},
-    iter::empty,
-};
+use std::{cell::RefCell, collections::BTreeMap, iter::empty};
 
 /// Provides uniform access to bitflags-generated structs in JSON SerDe
 trait PrefixedFlags:
@@ -165,6 +161,7 @@ prefixed_flags!(
     EMIT_INST_METH_POINTERS,
     EMIT_METH_CALLER_FUNC_POINTERS,
     ENABLE_INTRINSICS_EXTENSION,
+    FOLD_LAZY_CLASS_KEYS,
     HACK_ARR_COMPAT_NOTICES,
     HACK_ARR_DV_ARR_MARK,
     HACK_ARR_DV_ARRS,
@@ -177,6 +174,7 @@ impl Default for HhvmFlags {
         HhvmFlags::EMIT_CLS_METH_POINTERS
             | HhvmFlags::EMIT_INST_METH_POINTERS
             | HhvmFlags::EMIT_METH_CALLER_FUNC_POINTERS
+            | HhvmFlags::FOLD_LAZY_CLASS_KEYS
     }
 }
 
@@ -185,9 +183,6 @@ impl Default for HhvmFlags {
 pub struct Hhvm {
     #[serde(default)]
     pub aliased_namespaces: Arg<BTreeMapOrEmptyVec<String, String>>,
-
-    #[serde(default)]
-    pub dynamic_invoke_functions: Arg<BTreeSet<String>>,
 
     #[serde(default)]
     pub include_roots: Arg<BTreeMap<String, String>>, // TODO(leoo) change to HashMap if order doesn't matter
@@ -210,7 +205,6 @@ impl Default for Hhvm {
     fn default() -> Self {
         Self {
             aliased_namespaces: Default::default(),
-            dynamic_invoke_functions: Default::default(),
             include_roots: Default::default(),
             emit_class_pointers: defaults::emit_class_pointers(),
             flags: Default::default(),
@@ -278,6 +272,7 @@ prefixed_flags!(
     DISABLE_ARRAY_TYPEHINT,
     DISABLE_ARRAY,
     RUST_EMITTER,
+    ENABLE_COEFFECTS,
 );
 impl Default for LangFlags {
     fn default() -> LangFlags {
@@ -673,9 +668,6 @@ mod tests {
   "hhvm.array_provenance": {
     "global_value": false
   },
-  "hhvm.dynamic_invoke_functions": {
-    "global_value": []
-  },
   "hhvm.emit_class_pointers": {
     "global_value": "0"
   },
@@ -690,6 +682,9 @@ mod tests {
   },
   "hhvm.enable_intrinsics_extension": {
     "global_value": false
+  },
+  "hhvm.fold_lazy_class_keys": {
+    "global_value": true
   },
   "hhvm.hack.lang.abstract_static_props": {
     "global_value": false
@@ -748,6 +743,9 @@ mod tests {
   "hhvm.hack.lang.enable_class_level_where_clauses": {
     "global_value": false
   },
+  "hhvm.hack.lang.enable_coeffects": {
+    "global_value": false
+  },
   "hhvm.hack.lang.enable_coroutines": {
     "global_value": true
   },
@@ -793,7 +791,7 @@ mod tests {
                 m.insert("bar".to_owned(), "baz".to_owned());
                 m.into()
             }),
-            flags: HhvmFlags::EMIT_METH_CALLER_FUNC_POINTERS,
+            flags: HhvmFlags::EMIT_METH_CALLER_FUNC_POINTERS | HhvmFlags::FOLD_LAZY_CLASS_KEYS,
             ..Default::default()
         });
         assert_eq!(HHVM_1, serde_json::to_string_pretty(&hhvm).unwrap(),);
@@ -923,22 +921,6 @@ mod tests {
     }
 
     #[test]
-    fn test_options_set_str_json_de() {
-        let act: Options = serde_json::value::from_value(json!({
-            "hhvm.dynamic_invoke_functions": { "global_value": ["f", "g", "h"] }
-        }))
-        .unwrap();
-        assert_eq!(
-            act.hhvm
-                .dynamic_invoke_functions
-                .get()
-                .iter()
-                .collect::<Vec<&String>>(),
-            vec!["f", "g", "h"],
-        );
-    }
-
-    #[test]
     fn test_options_merge() {
         let mut dst = json!({
             "uniqueAtDst": "DST",
@@ -1047,19 +1029,6 @@ mod tests {
         });
         let act = Options::from_configs_(&[json.to_string()], &cli_args).unwrap();
         assert!(act.hhvm.flags.contains(HhvmFlags::HACK_ARR_COMPAT_NOTICES));
-    }
-
-    #[test]
-    fn test_options_de_from_cli_comma_separated_strings() {
-        let mut exp_dynamic_invoke_functions = BTreeSet::<String>::new();
-        exp_dynamic_invoke_functions.insert("foo".into());
-        exp_dynamic_invoke_functions.insert("bar".into());
-        let act = Options::from_configs_(&EMPTY_STRS, &["hhvm.dynamic_invoke_functions=foo,bar"])
-            .unwrap();
-        assert_eq!(
-            act.hhvm.dynamic_invoke_functions.global_value,
-            exp_dynamic_invoke_functions,
-        );
     }
 
     #[test]
@@ -1209,5 +1178,7 @@ bitflags! {
         const ALLOW_UNSTABLE_FEATURES = 1 << 55;
         const DISALLOW_HASH_COMMENTS = 1 << 56;
         const DISALLOW_FUN_AND_CLS_METH_PSEUDO_FUNCS = 1 << 57;
+        const FOLD_LAZY_CLASS_KEYS = 1 << 58;
+        const ENABLE_COEFFECTS = 1 << 59;
     }
 }

@@ -155,14 +155,11 @@ where S: SmartConstructors<State = State>,
     fn make_function_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
         compose(SyntaxKind::FunctionDeclaration, self.s.make_function_declaration(arg0.1, arg1.1, arg2.1))
     }
-    fn make_function_declaration_header(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R, arg9 : Self::R, arg10 : Self::R, arg11 : Self::R) -> Self::R {
-        compose(SyntaxKind::FunctionDeclarationHeader, self.s.make_function_declaration_header(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1, arg6.1, arg7.1, arg8.1, arg9.1, arg10.1, arg11.1))
+    fn make_function_declaration_header(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R, arg9 : Self::R, arg10 : Self::R) -> Self::R {
+        compose(SyntaxKind::FunctionDeclarationHeader, self.s.make_function_declaration_header(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1, arg6.1, arg7.1, arg8.1, arg9.1, arg10.1))
     }
     fn make_capability(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
         compose(SyntaxKind::Capability, self.s.make_capability(arg0.1, arg1.1, arg2.1))
-    }
-    fn make_capability_provisional(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R) -> Self::R {
-        compose(SyntaxKind::CapabilityProvisional, self.s.make_capability_provisional(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1))
     }
     fn make_where_clause(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R {
         compose(SyntaxKind::WhereClause, self.s.make_where_clause(arg0.1, arg1.1))
@@ -205,6 +202,9 @@ where S: SmartConstructors<State = State>,
     }
     fn make_type_const_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R, arg9 : Self::R) -> Self::R {
         compose(SyntaxKind::TypeConstDeclaration, self.s.make_type_const_declaration(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1, arg6.1, arg7.1, arg8.1, arg9.1))
+    }
+    fn make_context_const_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R) -> Self::R {
+        compose(SyntaxKind::ContextConstDeclaration, self.s.make_context_const_declaration(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1, arg6.1, arg7.1, arg8.1))
     }
     fn make_decorated_expression(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R {
         compose(SyntaxKind::DecoratedExpression, self.s.make_decorated_expression(arg0.1, arg1.1))
@@ -298,12 +298,6 @@ where S: SmartConstructors<State = State>,
     }
     fn make_return_statement(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
         compose(SyntaxKind::ReturnStatement, self.s.make_return_statement(arg0.1, arg1.1, arg2.1))
-    }
-    fn make_goto_label(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R {
-        compose(SyntaxKind::GotoLabel, self.s.make_goto_label(arg0.1, arg1.1))
-    }
-    fn make_goto_statement(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
-        compose(SyntaxKind::GotoStatement, self.s.make_goto_statement(arg0.1, arg1.1, arg2.1))
     }
     fn make_throw_statement(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
         compose(SyntaxKind::ThrowStatement, self.s.make_throw_statement(arg0.1, arg1.1, arg2.1))
@@ -488,9 +482,6 @@ where S: SmartConstructors<State = State>,
     fn make_type_constant(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
         compose(SyntaxKind::TypeConstant, self.s.make_type_constant(arg0.1, arg1.1, arg2.1))
     }
-    fn make_pu_access(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
-        compose(SyntaxKind::PUAccess, self.s.make_pu_access(arg0.1, arg1.1, arg2.1))
-    }
     fn make_vector_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R) -> Self::R {
         compose(SyntaxKind::VectorTypeSpecifier, self.s.make_vector_type_specifier(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1))
     }
@@ -503,11 +494,17 @@ where S: SmartConstructors<State = State>,
     fn make_varray_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R) -> Self::R {
         compose(SyntaxKind::VarrayTypeSpecifier, self.s.make_varray_type_specifier(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1))
     }
+    fn make_function_ctx_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R {
+        compose(SyntaxKind::FunctionCtxTypeSpecifier, self.s.make_function_ctx_type_specifier(arg0.1, arg1.1))
+    }
     fn make_type_parameter(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R) -> Self::R {
         compose(SyntaxKind::TypeParameter, self.s.make_type_parameter(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1))
     }
     fn make_type_constraint(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R {
         compose(SyntaxKind::TypeConstraint, self.s.make_type_constraint(arg0.1, arg1.1))
+    }
+    fn make_context_constraint(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R {
+        compose(SyntaxKind::ContextConstraint, self.s.make_context_constraint(arg0.1, arg1.1))
     }
     fn make_darray_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R) -> Self::R {
         compose(SyntaxKind::DarrayTypeSpecifier, self.s.make_darray_type_specifier(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1, arg6.1))
@@ -580,30 +577,6 @@ where S: SmartConstructors<State = State>,
     }
     fn make_enum_atom_expression(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R {
         compose(SyntaxKind::EnumAtomExpression, self.s.make_enum_atom_expression(arg0.1, arg1.1))
-    }
-    fn make_pocket_atom_expression(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R {
-        compose(SyntaxKind::PocketAtomExpression, self.s.make_pocket_atom_expression(arg0.1, arg1.1))
-    }
-    fn make_pocket_identifier_expression(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R) -> Self::R {
-        compose(SyntaxKind::PocketIdentifierExpression, self.s.make_pocket_identifier_expression(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1))
-    }
-    fn make_pocket_atom_mapping_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R) -> Self::R {
-        compose(SyntaxKind::PocketAtomMappingDeclaration, self.s.make_pocket_atom_mapping_declaration(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1))
-    }
-    fn make_pocket_enum_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R) -> Self::R {
-        compose(SyntaxKind::PocketEnumDeclaration, self.s.make_pocket_enum_declaration(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1, arg6.1))
-    }
-    fn make_pocket_field_type_expr_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R {
-        compose(SyntaxKind::PocketFieldTypeExprDeclaration, self.s.make_pocket_field_type_expr_declaration(arg0.1, arg1.1, arg2.1, arg3.1))
-    }
-    fn make_pocket_field_type_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R {
-        compose(SyntaxKind::PocketFieldTypeDeclaration, self.s.make_pocket_field_type_declaration(arg0.1, arg1.1, arg2.1, arg3.1))
-    }
-    fn make_pocket_mapping_id_declaration(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R {
-        compose(SyntaxKind::PocketMappingIdDeclaration, self.s.make_pocket_mapping_id_declaration(arg0.1, arg1.1))
-    }
-    fn make_pocket_mapping_type_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R {
-        compose(SyntaxKind::PocketMappingTypeDeclaration, self.s.make_pocket_mapping_type_declaration(arg0.1, arg1.1, arg2.1, arg3.1))
     }
 
 }

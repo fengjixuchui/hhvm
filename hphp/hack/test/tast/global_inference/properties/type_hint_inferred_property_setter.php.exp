@@ -26,7 +26,7 @@
             param_visibility = None }
            ];
          m_cap =
-         (((HH\Capabilities\RxLocal & HH\Capabilities\IO & HH\Capabilities\CippGlobal & HH\Capabilities\Globals & HH\Capabilities\UnrestrictedMutation)),
+         (((HH\Capabilities\AccessStaticVariable & HH\Capabilities\WriteProperty & HH\Capabilities\Output)),
           None);
          m_unsafe_cap = ((mixed), None);
          m_body =
@@ -38,7 +38,7 @@
                     (([7:5-13], int),
                      (Obj_get ((([7:5-10], this), This),
                         (([7:12-13], int), (Id ([7:12-13], "x"))),
-                        OG_nullthrows))),
+                        OG_nullthrows, false))),
                     (([7:16-18], int), (Lvar ([7:16-18], $x))))))))
              ];
            fb_annotation = () };
@@ -51,7 +51,7 @@
           m_where_constraints = []; m_variadic = FVnonVariadic;
           m_params = [];
           m_cap =
-          (((HH\Capabilities\RxLocal & HH\Capabilities\IO & HH\Capabilities\CippGlobal & HH\Capabilities\Globals & HH\Capabilities\UnrestrictedMutation)),
+          (((HH\Capabilities\AccessStaticVariable & HH\Capabilities\WriteProperty & HH\Capabilities\Output)),
            None);
           m_unsafe_cap = ((mixed), None);
           m_body =
@@ -61,7 +61,7 @@
                  (Some (([13:12-20], int),
                         (Obj_get ((([13:12-17], this), This),
                            (([13:19-20], int), (Id ([13:19-20], "x"))),
-                           OG_nullthrows))))))
+                           OG_nullthrows, false))))))
               ];
             fb_annotation = () };
           m_fun_kind = FSync; m_user_attributes = []; m_ret = ((int), None);
@@ -74,14 +74,14 @@
         ns_const_uses = <opaque>; ns_name = None; ns_auto_ns_map = [];
         ns_is_codegen = false; ns_disable_xhp_element_mangling = false };
       c_user_attributes = []; c_file_attributes = []; c_enum = None;
-      c_pu_enums = []; c_doc_comment = None; c_emit_id = None });
+      c_doc_comment = None; c_emit_id = None });
   (Fun
      { f_span = [17:1-19:2]; f_annotation = (); f_mode = Mpartial;
        f_ret = ((void), (Some ([17:17-21], (Hprim Tvoid))));
        f_name = ([17:10-13], "\\foo"); f_tparams = [];
        f_where_constraints = []; f_variadic = FVnonVariadic; f_params = [];
        f_cap =
-       (((HH\Capabilities\RxLocal & HH\Capabilities\IO & HH\Capabilities\CippGlobal & HH\Capabilities\Globals & HH\Capabilities\UnrestrictedMutation)),
+       (((HH\Capabilities\AccessStaticVariable & HH\Capabilities\WriteProperty & HH\Capabilities\Output)),
         None);
        f_unsafe_cap = ((mixed), None);
        f_body =

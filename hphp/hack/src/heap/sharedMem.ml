@@ -231,10 +231,14 @@ external connect : handle -> worker_id:int -> unit = "hh_connect"
 
 external get_handle : unit -> handle = "hh_get_handle"
 
+external get_worker_id : unit -> int = "hh_get_worker_id" [@@noalloc]
+
 (*****************************************************************************)
 (* Raw access for proxying across network.
  *)
 (*****************************************************************************)
+external mem_raw : string -> bool = "hh_mem"
+
 external get_raw : string -> 'a heap_entry = "hh_get_raw"
 
 external add_raw : string -> 'a heap_entry -> unit = "hh_add_raw"
@@ -674,7 +678,8 @@ end = struct
           t
       in
       let value = List.fold ~f:make_obj ~init:(Telemetry.create ()) metrics in
-      telemetry |> Telemetry.object_ ~key:(Value.description ^ ".shared") ~value
+      telemetry
+      |> Telemetry.object_ ~key:(Value.description ^ "__shared") ~value
 
   let () =
     get_telemetry_list := get_telemetry :: !get_telemetry_list;
@@ -972,7 +977,7 @@ functor
         else
           telemetry
           |> Telemetry.object_
-               ~key:(Value.description ^ ".stack")
+               ~key:(Value.description ^ "__stack")
                ~value:
                  ( Telemetry.create ()
                  |> Telemetry.int_ ~key:"actions" ~value:actions
@@ -1579,7 +1584,7 @@ struct
       in
       telemetry
       |> Telemetry.object_
-           ~key:(Value.description ^ ".local")
+           ~key:(Value.description ^ "__local")
            ~value:
              ( Telemetry.create ()
              |> Telemetry.int_ ~key:"count" ~value:count
@@ -1611,7 +1616,7 @@ struct
   module ValueForCache = struct
     include Value
 
-    let description = Value.description ^ ":cache"
+    let description = Value.description ^ "__cache"
   end
 
   module Direct = NoCache (Raw) (UserKeyType) (Value)

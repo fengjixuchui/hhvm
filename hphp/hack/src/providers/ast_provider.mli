@@ -49,12 +49,8 @@ val find_gconst_in_file :
 val get_ast :
   ?full:bool -> Provider_context.t -> Relative_path.t -> Nast.program
 
-val parse :
-  ParserOptions.t ->
-  full:bool ->
-  keep_errors:bool ->
-  source_text:Full_fidelity_source_text.t ->
-  Parser_return.t
+val get_ast_with_error :
+  ?full:bool -> Provider_context.t -> Relative_path.t -> Errors.t * Nast.program
 
 (** Compute the AST for the given [Provider_context.entry]. *)
 val compute_ast :
@@ -102,3 +98,5 @@ val provide_ast_hint : Relative_path.t -> Nast.program -> parse_type -> unit
 val remove_batch : Relative_path.Set.t -> unit
 
 val has_for_test : Relative_path.t -> bool
+
+val clear_parser_cache : unit -> unit

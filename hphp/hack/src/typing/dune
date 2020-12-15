@@ -73,6 +73,7 @@
     typing_generic
     typing_generic_constraint
     typing_generic_rules
+    typing_local_ops
     typing_local_types
     typing_intersection
     typing_kinding
@@ -85,7 +86,6 @@
     typing_per_cont_env
     typing_per_cont_ops
     typing_phase
-    typing_pocket_universes
     typing_print
     typing_reactivity
     typing_reified_check
@@ -96,7 +96,6 @@
     typing_subtype
     typing_subtype_method
     typing_subtype_tconst
-    typing_subtype_pocket_universes
     typing_taccess
     typing_tdef
     typing_unify
@@ -249,6 +248,7 @@
     typing_check_service
     typing_check_utils)
   (libraries
+    biglist
     core_kernel
     decl_counters
     decl_service

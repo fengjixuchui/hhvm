@@ -30,9 +30,6 @@ let assert_opts_equal caml rust =
     Hhbc_options.(hack_arr_dv_arrs caml)
     Hhbc_options.(hack_arr_dv_arrs rust);
   assert_equal
-    Hhbc_options.(dynamic_invoke_functions caml)
-    Hhbc_options.(dynamic_invoke_functions rust);
-  assert_equal
     Hhbc_options.(repo_authoritative caml)
     Hhbc_options.(repo_authoritative rust);
   assert_equal
@@ -72,6 +69,9 @@ let assert_opts_equal caml rust =
   assert_equal
     Hhbc_options.(emit_class_pointers caml)
     Hhbc_options.(emit_class_pointers rust);
+  assert_equal
+    Hhbc_options.(fold_lazy_class_keys caml)
+    Hhbc_options.(fold_lazy_class_keys rust);
   assert_equal
     Hhbc_options.(rx_is_enabled caml)
     Hhbc_options.(rx_is_enabled rust);
@@ -287,9 +287,6 @@ let test_all_overrides_json_only _ =
   \"hhvm.array_provenance\": {
     \"global_value\": true
   },
-  \"hhvm.dynamic_invoke_functions\": {
-    \"global_value\": [\"f\", \"g\"]
-  },
   \"hhvm.emit_cls_meth_pointers\": {
     \"global_value\": true
   },
@@ -303,6 +300,9 @@ let test_all_overrides_json_only _ =
     \"global_value\": \"0\"
   },
   \"hhvm.enable_intrinsics_extension\": {
+    \"global_value\": true
+  },
+ \"hhvm.fold_lazy_class_keys\": {
     \"global_value\": true
   },
   \"hhvm.hack.lang.abstract_static_props\": {
@@ -421,8 +421,6 @@ module CliArgOverrides = struct
 
   let hhvm'array_provenance = "-vhhvm.array_provenance=true"
 
-  (* let hhvm'dynamic_invoke_functions = "UNSUPPORTED BY CLI" *)
-
   let hhvm'emit_cls_meth_pointers = "-vhhvm.emit_cls_meth_pointers=1"
 
   let hhvm'emit_inst_meth_pointers = "-vhhvm.emit_inst_meth_pointers=0"
@@ -433,6 +431,8 @@ module CliArgOverrides = struct
   let hhvm'emit_class_pointers = "-vhhvm.emit_class_pointers=0"
 
   let hhvm'enable_intrinsics_extension = "-veval.enableintrinsicsextension=true"
+
+  let hhvm'fold_lazy_class_keys = "-vhhvm.fold_lazy_class_keys=0"
 
   let hhvm'hack'lang'abstract_static_props =
     "-vhhvm.lang.abstractstaticprops=true"
@@ -525,12 +525,12 @@ let test_all_overrides_cli_only _ =
       hack'compiler'optimize_null_checks;
       (* hhvm'aliased_namespaces; *)
       hhvm'array_provenance;
-      (* hhvm'dynamic_invoke_functions; *)
       hhvm'emit_cls_meth_pointers;
       hhvm'emit_inst_meth_pointers;
       hhvm'emit_meth_caller_func_pointers;
       hhvm'emit_class_pointers;
       hhvm'enable_intrinsics_extension;
+      hhvm'fold_lazy_class_keys;
       hhvm'hack'lang'abstract_static_props;
       hhvm'hack'lang'allow_new_attribute_syntax;
       hhvm'hack'lang'allow_unstable_features;

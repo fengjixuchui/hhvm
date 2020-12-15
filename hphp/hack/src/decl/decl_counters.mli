@@ -47,6 +47,7 @@ type subdecl_kind =
   | Decl_errors
   | Implements_dynamic
   (* Lazy *)
+  | Linearization
   | Construct
   | Need_init
   | Get_ancestor of string
@@ -73,10 +74,8 @@ type subdecl_kind =
   | All_ancestors
   | All_ancestor_names
   | All_ancestor_reqs
-  | Get_pu_enum of string
   | Consts
   | Typeconsts
-  | Pu_enums
   | Props
   | SProps
   | Methods

@@ -18,6 +18,7 @@
 
 #include "hphp/runtime/base/type-string.h"
 
+#include <folly/File.h>
 #include <folly/Optional.h>
 
 #include <cstdint>
@@ -45,7 +46,8 @@ enum {
   PHP_PCRE_BACKTRACK_LIMIT_ERROR,
   PHP_PCRE_RECURSION_LIMIT_ERROR,
   PHP_PCRE_BAD_UTF8_ERROR,
-  PHP_PCRE_BAD_UTF8_OFFSET_ERROR
+  PHP_PCRE_BAD_UTF8_OFFSET_ERROR,
+  PHP_PCRE_BAD_REGEX_ERROR
 };
 
 namespace HPHP {
@@ -111,9 +113,9 @@ void pcre_reinit();
 void pcre_session_exit();
 
 /*
- * Dump the contents of the PCRE cache to filename.
+ * Dump the contents of the PCRE cache to the given file.
  */
-void pcre_dump_cache(const std::string& filename);
+void pcre_dump_cache(folly::File& file);
 
 ///////////////////////////////////////////////////////////////////////////////
 // PHP API
@@ -149,11 +151,6 @@ int preg_replace_callback(Variant& result,
                           const Variant& callback,
                           const Variant& subject,
                           int limit = -1);
-int preg_filter(Variant& result,
-                const Variant& pattern,
-                const Variant& replacement,
-                const Variant& subject,
-                int limit = -1);
 
 Variant preg_split(const String& pattern,
                    const String& subject,

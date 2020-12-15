@@ -186,7 +186,6 @@ pub fn error1060(extension: &str) -> Error {
         kind.to_string()
     ))
 }
-pub const error1061: Error = Cow::Borrowed("A Pocket Universes operator `:@` is expected here.");
 pub const error1063: Error = Cow::Borrowed("Expected matching separator here.");
 pub const error1064: Error = Cow::Borrowed("XHP children declarations are no longer supported.");
 pub const error1065: Error = Cow::Borrowed("A backtick ``` is expected here.");
@@ -362,20 +361,14 @@ pub const inline_function_def: Error =
     Cow::Borrowed("Inline function definitions are not supported in Hack");
 pub const decl_outside_global_scope: Error =
     Cow::Borrowed("Declarations are not supported outside global scope");
-pub const pocket_universe_final_expected: Error =
-    Cow::Borrowed("The `final` keyword is expected here.");
-pub const pocket_universe_enum_expected: Error =
-    Cow::Borrowed("The `enum` keyword is expected here.");
-pub const pocket_universe_invalid_field: Error =
-    Cow::Borrowed("Invalid pocket universe field syntax.");
 pub const type_keyword: Error = Cow::Borrowed("The `type` keyword is expected here.");
 pub const expected_simple_offset_expression: Error =
     Cow::Borrowed("A simple offset expression is expected here");
 pub const expected_user_attribute: Error = Cow::Borrowed("A user attribute is expected here.");
 pub const expected_as_or_insteadof: Error =
     Cow::Borrowed("The `as` keyword or the `insteadof` keyword is expected here.");
-pub const missing_double_quote : Error = /* error0010 analogue */ Cow::Borrowed(
-  "A double quote is expected here.");
+pub const missing_double_quote: Error = /* error0010 analogue */
+    Cow::Borrowed("A double quote is expected here.");
 pub const instanceof_disabled: Error = Cow::Borrowed(
     "The `instanceof` operator is not supported in Hack; use the `is` operator or `is_a()`",
 );
@@ -417,7 +410,6 @@ pub const invalid_scope_resolution_qualifier: Error =
 pub const invalid_variable_name: Error = Cow::Borrowed(
     "A valid variable name starts with a letter or underscore, followed by any number of letters, numbers, or underscores",
 );
-pub const invalid_variable_variable: Error = Cow::Borrowed("Variable Variables are not legal");
 pub const invalid_yield: Error =
     Cow::Borrowed("`yield` can only appear as a statement or on the right of an assignment");
 pub const invalid_class_in_collection_initializer: Error =
@@ -444,9 +436,6 @@ pub const alternate_control_flow: Error =
     Cow::Borrowed("Alternate control flow syntax is not allowed in Hack files");
 pub const execution_operator: Error =
     Cow::Borrowed("The execution operator is not allowed in Hack files");
-pub const goto: Error = Cow::Borrowed("The `goto` operator is not allowed in Hack files");
-pub const goto_label: Error =
-    Cow::Borrowed("Labels are used only for `goto`, which is not allowed in Hack files");
 pub const non_re_prefix: Error = Cow::Borrowed("Only `re`-prefixed strings allowed.");
 pub const collection_intrinsic_generic: Error =
     Cow::Borrowed("Cannot initialize collection builtins with type parameters");

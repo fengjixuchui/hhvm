@@ -11,6 +11,12 @@ module LMap = Local_id.Map
 module Scope = Ifc_scope
 module Type = Typing_defs
 
+type ifc_error_ty =
+  | LiftError of string
+  | FlowInference of string
+
+exception IFCError of ifc_error_ty
+
 (* Most types should live here. *)
 
 type purpose = string [@@deriving ord, eq, show]
@@ -26,6 +32,10 @@ module PosSet = Set.Make (Pos)
    a name. The scope in a Pvar is used to store inline the
    creation point of a purpose variable. *)
 type policy =
+  (* Bottom policy; public *)
+  | Pbot of (PosSet.t[@equal (fun _ _ -> true)] [@compare (fun _ _ -> 0)])
+  (* Top policy; private *)
+  | Ptop of (PosSet.t[@equal (fun _ _ -> true)] [@compare (fun _ _ -> 0)])
   (* Bound variable; represented with a de Bruijn index *)
   | Pbound_var of int
   (* Free variable; relative to a scope *)
@@ -33,10 +43,6 @@ type policy =
   (* A policy allowing use for a single purpose *)
   | Ppurpose of
       (PosSet.t[@equal (fun _ _ -> true)] [@compare (fun _ _ -> 0)]) * purpose
-  (* Bottom policy; public *)
-  | Pbot of (PosSet.t[@equal (fun _ _ -> true)] [@compare (fun _ _ -> 0)])
-  (* Top policy; private *)
-  | Ptop of (PosSet.t[@equal (fun _ _ -> true)] [@compare (fun _ _ -> 0)])
 [@@deriving eq, ord]
 
 let pbot = Pbot PosSet.empty
@@ -74,7 +80,9 @@ type array_kind =
 
 (* Types with policies *)
 type ptype =
+  | Tnull of policy
   | Tprim of policy
+  | Tnonnull of policy * policy (* self(covariant), lump(invariant) *)
   | Tgeneric of policy
   | Ttuple of ptype list
   | Tunion of ptype list
@@ -82,16 +90,28 @@ type ptype =
   | Tclass of class_
   | Tfun of fun_
   | Tcow_array of cow_array
-  | Tshape of Type.shape_kind * shape_field_type Nast.ShapeMap.t
+  | Tshape of shape
+  | Tdynamic of policy
 
-(* Copy-on-write indexed collection used for Hack arrays i.e. vec, dict, and
-   keyset *)
+(* Copy-on-write indexed collection used for Hack containers i.e. vec, dict,
+   keyset, varray, and darray *)
 and cow_array = {
   a_kind: array_kind;
   a_key: ptype;
   a_value: ptype;
   a_length: policy;
 }
+
+and shape = {
+  sh_kind: shape_kind;
+  sh_fields: shape_field_type Nast.ShapeMap.t;
+}
+
+and shape_kind =
+  (* An open shape has a "magic" field of type mixed that holds the policy of
+     all the unnamed data *)
+  | Open_shape of ptype
+  | Closed_shape
 
 and shape_field_type = {
   (* The policy of the field is essentially the PC at the time that it is
@@ -119,10 +139,6 @@ type callable_name =
   (* toplevel function *)
   | Function of string
 
-type array =
-  | Aarray of cow_array
-  | Ashape of Type.shape_kind * shape_field_type Nast.ShapeMap.t
-
 type fun_proto = {
   fp_name: string;
   fp_this: ptype option;
@@ -143,6 +159,10 @@ type prop =
   (* holes are introduced by calls to functions for which
      we do not have a flow type at hand *)
   | Chole of (Pos.t * fun_proto)
+
+let is_open = function
+  | Open_shape _ -> true
+  | Closed_shape -> false
 
 let unique_pos_of_prop =
   let is_real pos = not @@ Pos.equal pos Pos.none in
@@ -237,8 +257,6 @@ type fun_decl = {
 type decl_env = {
   (* policy decls for classes indexed by class name *)
   de_class: class_decl SMap.t;
-  (* policy decls for functions indexed by function name *)
-  de_fun: fun_decl SMap.t;
 }
 
 (* Mode of operation.

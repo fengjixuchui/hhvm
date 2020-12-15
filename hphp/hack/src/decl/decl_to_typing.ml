@@ -37,16 +37,12 @@ let base_visibility origin_class_name = function
 
 let shallow_method_to_class_elt child_class mro subst meth : class_elt =
   let {
-    sm_abstract = abstract;
-    sm_final = final;
-    sm_memoizelsb = memoizelsb;
     sm_name = (pos, _);
-    sm_dynamicallycallable = dynamicallycallable;
-    sm_override = override;
     sm_reactivity = _;
     sm_type = ty;
     sm_visibility;
     sm_deprecated;
+    sm_flags = _;
   } =
     meth
   in
@@ -70,14 +66,13 @@ let shallow_method_to_class_elt child_class mro subst meth : class_elt =
       make_ce_flags
         ~xhp_attr:None
         ~synthesized:(is_set mro_via_req_extends mro.mro_flags)
-        ~abstract
-        ~final
+        ~abstract:(sm_abstract meth)
+        ~final:(sm_final meth)
         ~const:false
         ~lateinit:false
         ~lsb:false
-        ~override
-        ~memoizelsb
-        ~dynamicallycallable;
+        ~override:(sm_override meth)
+        ~dynamicallycallable:(sm_dynamicallycallable meth);
   }
 
 let shallow_method_to_telt child_class mro subst meth : tagged_elt =
@@ -88,17 +83,8 @@ let shallow_method_to_telt child_class mro subst meth : tagged_elt =
   }
 
 let shallow_prop_to_telt child_class mro subst prop : tagged_elt =
-  let {
-    sp_const = const;
-    sp_xhp_attr = xhp_attr;
-    sp_lateinit = lateinit;
-    sp_lsb = lsb;
-    sp_name;
-    sp_needs_init = _;
-    sp_type;
-    sp_abstract;
-    sp_visibility;
-  } =
+  let { sp_xhp_attr = xhp_attr; sp_name; sp_type; sp_visibility; sp_flags = _ }
+      =
     prop
   in
   let visibility = base_visibility mro.mro_name sp_visibility in
@@ -129,13 +115,12 @@ let shallow_prop_to_telt child_class mro subst prop : tagged_elt =
         ce_flags =
           make_ce_flags
             ~xhp_attr
-            ~lsb
-            ~const
-            ~lateinit
-            ~abstract:sp_abstract
+            ~lsb:(sp_lsb prop)
+            ~const:(sp_const prop)
+            ~lateinit:(sp_lateinit prop)
+            ~abstract:(sp_abstract prop)
             ~final:true
             ~override:false
-            ~memoizelsb:false
             ~synthesized:false
             ~dynamicallycallable:false;
       };
@@ -260,66 +245,3 @@ let shallow_typeconst_to_typeconst_type child_class mro subst stc =
       }
   in
   (snd ttc_name, typeconst)
-
-let shallow_pu_enum_to_pu_enum_type origin spu =
-  let to_member origin { spum_atom; spum_types; spum_exprs } =
-    {
-      tpum_atom = spum_atom;
-      tpum_origin = origin;
-      tpum_types =
-        List.fold
-          ~init:SMap.empty
-          ~f:
-            begin
-              fun acc (k, t) ->
-              SMap.add (snd k) (origin, k, t) acc
-            end
-          spum_types;
-      tpum_exprs =
-        List.fold
-          ~init:SMap.empty
-          ~f:
-            begin
-              fun acc k ->
-              SMap.add (snd k) (origin, k) acc
-            end
-          spum_exprs;
-    }
-  in
-  let { spu_name; spu_is_final; spu_case_types; spu_case_values; spu_members } =
-    spu
-  in
-  let enum_name = snd spu_name in
-  let origin = { pu_class = origin; pu_enum = enum_name } in
-  {
-    tpu_name = spu_name;
-    tpu_is_final = spu_is_final;
-    tpu_case_types =
-      List.fold
-        ~init:SMap.empty
-        ~f:
-          begin
-            fun acc tp ->
-            let sid = snd tp.tp_name in
-            SMap.add sid (origin, tp) acc
-          end
-        spu_case_types;
-    tpu_case_values =
-      List.fold
-        ~init:SMap.empty
-        ~f:
-          begin
-            fun acc (k, t) ->
-            SMap.add (snd k) (origin, k, t) acc
-          end
-        spu_case_values;
-    tpu_members =
-      List.fold
-        ~init:SMap.empty
-        ~f:
-          begin
-            fun acc pum ->
-            SMap.add (snd pum.spum_atom) (to_member origin pum) acc
-          end
-        spu_members;
-  }

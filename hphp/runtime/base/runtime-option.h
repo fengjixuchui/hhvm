@@ -32,9 +32,11 @@
 #include "hphp/runtime/base/config.h"
 #include "hphp/runtime/base/typed-value.h"
 #include "hphp/runtime/base/types.h"
+
 #include "hphp/util/compilation-flags.h"
-#include "hphp/util/hash-map.h"
 #include "hphp/util/functional.h"
+#include "hphp/util/hash-map.h"
+#include "hphp/util/sha1.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
@@ -102,6 +104,7 @@ struct RepoOptions {
   H(bool,           DisableArrayTypehint,             true)           \
   H(bool,           EnableEnumClasses,                false)          \
   H(bool,           DisallowFunAndClsMethPseudoFuncs, false)          \
+  H(bool,           EnableCoeffects,                  false)          \
   /**/
 
   /**/
@@ -112,15 +115,18 @@ struct RepoOptions {
   /**/
 
   std::string path() const { return m_path; }
-  std::string cacheKeyRaw() const;
-  std::string cacheKeySha1() const;
+  SHA1 cacheKeySha1() const { return m_sha1; }
   std::string toJSON() const;
   folly::dynamic toDynamic() const;
   struct stat stat() const { return m_stat; }
   std::string autoloadQuery() const noexcept { return Query; }
   std::string trustedDBPath() const noexcept { return TrustedDBPath; }
 
-  bool operator==(const RepoOptions& o) const;
+  bool operator==(const RepoOptions& o) const {
+    // If we have hash collisions of unequal RepoOptions, we have
+    // bigger problems.
+    return m_sha1 == o.m_sha1;
+  }
 
   static const RepoOptions& defaults();
   static void setDefaults(const Hdf& hdf, const IniSettingMap& ini);
@@ -133,6 +139,7 @@ private:
 
   void filterNamespaces();
   void initDefaults(const Hdf& hdf, const IniSettingMap& ini);
+  void calcCacheKey();
 
 #define N(t, n, ...) t n;
 #define P(t, n, ...) t n;
@@ -147,6 +154,8 @@ AUTOLOADFLAGS()
 
   std::string m_path;
   struct stat m_stat;
+
+  SHA1 m_sha1;
 
   static bool s_init;
   static RepoOptions s_defaults;
@@ -496,6 +505,8 @@ struct RuntimeOption {
   static std::set<std::string> AdminPasswords;
   static std::set<std::string> HashedAdminPasswords;
 
+  static std::string AdminDumpPath;
+
   /*
    * Options related to reverse proxying. ProxyOriginRaw and ProxyPercentageRaw
    * may be mutated by background threads and should only be read or written
@@ -823,8 +834,9 @@ struct RuntimeOption {
   F(double,   JitLayoutColdThreshold,  0.0005)                          \
   F(int32_t,  JitLayoutMainFactor,     1000)                            \
   F(int32_t,  JitLayoutColdFactor,     5)                               \
-  F(bool,     JitLayoutExtTSP,         false)                           \
+  F(bool,     JitLayoutExtTSP,         true)                            \
   F(double,   JitLayoutMaxMergeRatio,  1000000)                         \
+  F(bool,     JitLayoutPruneCatchArcs, true)                            \
   F(bool,     JitAHotSizeRoundUp,      true)                            \
   F(uint32_t, GdbSyncChunks,           128)                             \
   F(bool, JitKeepDbgFiles,             false)                           \
@@ -882,7 +894,7 @@ struct RuntimeOption {
   F(bool, HHIRPredictionOpts,          true)                            \
   F(bool, HHIRMemoryOpts,              true)                            \
   F(bool, AssemblerFoldDefaultValues,  true)                            \
-  F(uint64_t, AssemblerMaxScalarSize,  1073741824) /* 1GB */            \
+  F(uint64_t, AssemblerMaxScalarSize,  2147483648) /* 2GB */            \
   F(uint32_t, HHIRLoadElimMaxIters,    10)                              \
   /* Temporarily only enable in debug builds so the optimizations get
    * tested */                                                          \
@@ -969,6 +981,7 @@ struct RuntimeOption {
   F(bool, NewTHPHotText,               false)                           \
   F(bool, FileBackedColdArena,         useFileBackedArenaDefault())     \
   F(string, ColdArenaFileDir,          "/tmp")                          \
+  F(uint32_t, LowArenaMinAddr,         1u << 30)                        \
   F(uint32_t, MaxHotTextHugePages,     hotTextHugePagesDefault())       \
   F(uint32_t, MaxLowMemHugePages,      hugePagesSoundNice() ? 8 : 0)    \
   F(uint32_t, MaxHighArenaHugePages,   0)                               \
@@ -995,6 +1008,8 @@ struct RuntimeOption {
   F(uint32_t, HeapAllocSampleRequests, 0)                               \
   F(uint32_t, HeapAllocSampleBytes,    256 * 1024)                      \
   F(uint32_t, SlabAllocAlign,          64)                              \
+  F(uint32_t, MemTrackStart,           3500)                            \
+  F(uint32_t, MemTrackEnd,             3700)                            \
   F(int64_t, GCMinTrigger,             64L<<20)                         \
   F(double, GCTriggerPct,              0.5)                             \
   F(bool, TwoPhaseGC,                  false)                           \
@@ -1081,12 +1096,23 @@ struct RuntimeOption {
   F(int32_t, BespokeArrayLikeMode, 0)                                   \
   F(uint64_t, EmitLoggingArraySampleRate, 1000)                         \
   F(string, ExportLoggingArrayDataPath, "")                             \
+  /* Choice of layout selection algorithms:                             \
+   *                                                                    \
+   * 0 - Default layout selection algorithm based on profiling.         \
+   *     May use a mix of vanilla and bespoke array-likes.              \
+   * 1 - Specialize all sources and sinks on vanilla layouts.           \
+   * 2 - Specialize sources on vanilla, but sinks on top. */            \
+  F(int32_t, BespokeArraySpecializationMode, 0)                         \
+  /* We will use specialized layouts for a given array if they cover    \
+   * the given percent of operations logged during profiling. */        \
+  F(double, BespokeArraySourceSpecializationThreshold, 95.0)            \
+  F(double, BespokeArraySinkSpecializationThreshold,   99.0)            \
   /* Raise notices on various array operations which may present        \
    * compatibility issues with Hack arrays.                             \
    *                                                                    \
    * The various *Notices options independently control separate        \
    * subsets of notices.  The Check* options are subordinate to the     \
-   * HackArrCompatNotices option, and control whether various runtime
+   * HackArrCompatNotices option, and control whether various runtime   \
    * checks are made; they do not affect any optimizations. */          \
   F(bool, HackArrCompatNotices, false)                                  \
   F(bool, HackArrCompatCheckCompare, false)                             \
@@ -1158,11 +1184,18 @@ struct RuntimeOption {
   /* Raise warning when class pointers are used as strings. */          \
   F(bool, RaiseClassConversionWarning, false)                           \
   F(bool, EmitClsMethPointers, true)                                    \
+  F(bool, FoldLazyClassKeys, true)                                      \
   /* EmitClassPointers:
    * 0 => convert Foo::class to string "Foo"
    * 1 => convert Foo::class to class pointer
    * 2 => convert Foo::class to lazy class */                           \
   F(int32_t, EmitClassPointers, 0)                                      \
+  /* When this flag is on, var_dump for
+   * classes and lazy classes outputs string(...). */                   \
+  F(bool, ClassAsStringVarDump, true)                                   \
+  /* When this flag is on, gettype for
+   * classes and lazy classes outputs string. */                        \
+  F(bool, ClassAsStringGetType, true)                                   \
   /* false to skip type refinement for ClsMeth type at HHBBC. */        \
   F(bool, IsCompatibleClsMethType, false)                               \
   /* Raise warning if a ClsMeth type is compared to other types. */     \
@@ -1184,24 +1217,23 @@ struct RuntimeOption {
    * Control dynamic calls to functions and dynamic constructs of       \
    * classes which haven't opted into being called that way.            \
    *                                                                    \
-   * 0 - Nothing                                                        \
-   * 1 - Warn if target is not annotated or dynamic callsite is using   \
-   *     a raw string or array                                          \
-   *     (depending on ForbidDynamicCallsWithAttr setting)              \
-   * 2 - Throw exception if target is not annotated, and warn if        \
-   *     dynamic callsite is using a raw string or array                \
+   * 0 - Do nothing                                                     \
+   * 1 - Warn if target is not annotated                                \
+   * 2 - Throw exception if target is not annotated; warn if dynamic    \
+   *     callsite is using a raw string or array (depending on          \
+   *     ForbidDynamicCallsWithAttr setting)                            \
    * 3 - Throw exception                                                \
-   *                                                                    \
    */                                                                   \
   F(int32_t, ForbidDynamicCallsToFunc, 0)                               \
   F(int32_t, ForbidDynamicCallsToClsMeth, 0)                            \
   F(int32_t, ForbidDynamicCallsToInstMeth, 0)                           \
+  F(int32_t, ForbidDynamicCallsToMethCaller, 0)                         \
   F(int32_t, ForbidDynamicConstructs, 0)                                \
   /*                                                                    \
    * Keep logging dynamic calls according to options above even if      \
    * __DynamicallyCallable attribute is present at declaration.         \
    */                                                                   \
-  F(bool, ForbidDynamicCallsWithAttr, false)                            \
+  F(bool, ForbidDynamicCallsWithAttr, true)                             \
   /* Toggles logging for expressions of type $var::name() */            \
   F(bool, LogKnownMethodsAsDynamicCalls, true)                          \
   /*                                                                    \
@@ -1299,6 +1331,7 @@ struct RuntimeOption {
      2 - throw */                                                       \
   F(uint64_t, DynamicClsMethLevel, 1)                                   \
   F(bool, APCSerializeFuncs, true)                                      \
+  F(bool, APCSerializeClsMeth, true)                                    \
   /* When set:
    * - `is_array` becomes equivalent to `is_any_array` or
    *  `isTvArrayLike` instead of being a strict PHP array check.
@@ -1444,6 +1477,8 @@ inline bool isJitSerializing() {
 inline bool unitPrefetchingEnabled() {
   return RO::EvalUnitPrefetcherMaxThreads > 0;
 }
+
+uintptr_t lowArenaMinAddr();
 
 ///////////////////////////////////////////////////////////////////////////////
 }

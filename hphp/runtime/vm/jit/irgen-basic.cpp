@@ -114,7 +114,7 @@ void emitClassGetTS(IRGS& env) {
 }
 
 void emitCGetL(IRGS& env, NamedLocal loc) {
-  auto const value = ldLocWarn(env, loc, nullptr, DataTypeCountnessInit);
+  auto const value = ldLocWarn(env, loc, DataTypeCountnessInit);
   pushIncRef(env, value);
 }
 
@@ -122,7 +122,7 @@ void emitCGetQuietL(IRGS& env, int32_t id) {
   pushIncRef(
     env,
     [&] {
-      auto const loc = ldLoc(env, id, nullptr, DataTypeCountnessInit);
+      auto const loc = ldLoc(env, id, DataTypeCountnessInit);
 
       if (loc->type() <= TUninit) {
         return cns(env, TInitNull);
@@ -149,25 +149,25 @@ void emitCGetQuietL(IRGS& env, int32_t id) {
 }
 
 void emitCUGetL(IRGS& env, int32_t id) {
-  pushIncRef(env, ldLoc(env, id, nullptr, DataTypeGeneric));
+  pushIncRef(env, ldLoc(env, id, DataTypeGeneric));
 }
 
 void emitPushL(IRGS& env, int32_t id) {
   assertTypeLocal(env, id, TInitCell);  // bytecode invariant
-  auto* locVal = ldLoc(env, id, makeExit(env), DataTypeGeneric);
+  auto* locVal = ldLoc(env, id, DataTypeGeneric);
   push(env, locVal);
   stLocRaw(env, id, fp(env), cns(env, TUninit));
 }
 
 void emitCGetL2(IRGS& env, NamedLocal loc) {
   auto const oldTop = pop(env, DataTypeGeneric);
-  auto const val = ldLocWarn(env, loc, nullptr, DataTypeCountnessInit);
+  auto const val = ldLocWarn(env, loc, DataTypeCountnessInit);
   pushIncRef(env, val);
   push(env, oldTop);
 }
 
 void emitUnsetL(IRGS& env, int32_t id) {
-  auto const prev = ldLoc(env, id, makeExit(env), DataTypeGeneric);
+  auto const prev = ldLoc(env, id, DataTypeGeneric);
   stLocRaw(env, id, fp(env), cns(env, TUninit));
   decRef(env, prev);
 }
@@ -177,7 +177,7 @@ void emitSetL(IRGS& env, int32_t id) {
   // about the type of the value. stLoc needs to IncRef the value so it may
   // constrain it further.
   auto const src = popC(env, DataTypeGeneric);
-  pushStLoc(env, id, nullptr, src);
+  pushStLoc(env, id, src);
 }
 
 void emitPrint(IRGS& env) {
@@ -295,7 +295,10 @@ void emitCastVArray(IRGS& env) {
     [&] {
       if (src->isA(TVArr))   return src;
       if (src->isA(TArrLike)) return gen(env, ConvArrLikeToVArr, src);
-      if (src->isA(TClsMeth)) return gen(env, ConvClsMethToVArr, src);
+      if (src->isA(TClsMeth)) {
+        if (!RO::EvalIsCompatibleClsMethType) return raise("ClsMeth");
+        return gen(env, ConvClsMethToVArr, src);
+      }
       if (src->isA(TObj))    return gen(env, ConvObjToVArr, src);
       if (src->isA(TRecord)) PUNT(CastVArrayRecord); // TODO: T53309767
       if (src->isA(TNull))   return raise("Null");
@@ -332,7 +335,10 @@ void emitCastDArray(IRGS& env) {
     [&] {
       if (src->isA(TDArr))   return src;
       if (src->isA(TArrLike)) return gen(env, ConvArrLikeToDArr, src);
-      if (src->isA(TClsMeth)) return gen(env, ConvClsMethToDArr, src);
+      if (src->isA(TClsMeth)) {
+        if (!RO::EvalIsCompatibleClsMethType) return raise("ClsMeth");
+        return gen(env, ConvClsMethToDArr, src);
+      }
       if (src->isA(TObj))    return gen(env, ConvObjToDArr, src);
       if (src->isA(TRecord)) PUNT(CastDArrayRecord); // TODO: T53309767
       if (src->isA(TNull))   return raise("Null");
@@ -367,7 +373,10 @@ void emitCastVec(IRGS& env) {
     [&] {
       if (src->isA(TVec))     return src;
       if (src->isA(TArrLike)) return gen(env, ConvArrLikeToVec, src);
-      if (src->isA(TClsMeth)) return gen(env, ConvClsMethToVec, src);
+      if (src->isA(TClsMeth)) {
+        if (!RO::EvalIsCompatibleClsMethType) return raise("ClsMeth");
+        return gen(env, ConvClsMethToVec, src);
+      }
       if (src->isA(TObj))     return gen(env, ConvObjToVec, src);
       if (src->isA(TRecord))  PUNT(CastVecRecord); // TODO: T53309767
       if (src->isA(TNull))    return raise("Null");
@@ -402,7 +411,10 @@ void emitCastDict(IRGS& env) {
     [&] {
       if (src->isA(TDict))    return src;
       if (src->isA(TArrLike)) return gen(env, ConvArrLikeToDict, src);
-      if (src->isA(TClsMeth)) return gen(env, ConvClsMethToDict, src);
+      if (src->isA(TClsMeth)) {
+        if (!RO::EvalIsCompatibleClsMethType) return raise("ClsMeth");
+        return gen(env, ConvClsMethToDict, src);
+      }
       if (src->isA(TObj))     return gen(env, ConvObjToDict, src);
       if (src->isA(TRecord))  PUNT(CastDictRecord); // TODO: T53309767
       if (src->isA(TNull))    return raise("Null");
@@ -437,7 +449,10 @@ void emitCastKeyset(IRGS& env) {
     [&] {
       if (src->isA(TKeyset))  return src;
       if (src->isA(TArrLike)) return gen(env, ConvArrLikeToKeyset, src);
-      if (src->isA(TClsMeth)) return gen(env, ConvClsMethToKeyset, src);
+      if (src->isA(TClsMeth)) {
+        if (!RO::EvalIsCompatibleClsMethType) return raise("ClsMeth");
+        return gen(env, ConvClsMethToKeyset, src);
+      }
       if (src->isA(TObj))     return gen(env, ConvObjToKeyset, src);
       if (src->isA(TRecord))  PUNT(CastKeysetRecord); // TODO: T53309767
       if (src->isA(TNull))    return raise("Null");
@@ -506,7 +521,7 @@ void emitPopU2(IRGS& env) {
 
 void emitPopL(IRGS& env, int32_t id) {
   auto const src = popC(env, DataTypeGeneric);
-  stLocMove(env, id, nullptr, src);
+  stLocMove(env, id, src);
 }
 
 void emitPopFrame(IRGS& env, uint32_t nout) {

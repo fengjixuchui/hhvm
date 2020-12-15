@@ -37,16 +37,15 @@ let validate_classname (pos, hint) =
   | Aast.Hprim _
   | Aast.Hoption _
   | Aast.Hfun _
-  | Aast.Hshape _
-  | Aast.Hpu_access _ ->
+  | Aast.Hshape _ ->
     Errors.invalid_classname pos
 
 let rec check_hint env (pos, hint) =
   match hint with
   | Aast.Happly ((_, class_id), tal) ->
     begin
-      match Tast_env.get_class env class_id with
-      | Some cls
+      match Tast_env.get_class_or_typedef env class_id with
+      | Some (Tast_env.ClassResult cls)
         when let kind = Cls.kind cls in
              let tc_name = Cls.name cls in
              ( Ast_defs.(equal_class_kind kind Ctrait)
@@ -105,7 +104,6 @@ let rec check_hint env (pos, hint) =
   | Aast.Hunion hl
   | Aast.Hintersection hl ->
     List.iter hl (check_hint env)
-  | Aast.Hpu_access (h, _) -> check_hint env h
 
 and check_shape env Aast.{ nsi_allows_unknown_fields = _; nsi_field_map } =
   List.iter ~f:(fun v -> check_hint env v.Aast.sfi_hint) nsi_field_map

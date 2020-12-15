@@ -164,12 +164,12 @@ public:
   /*
    * Create a new empty ArrayData with the appropriate ArrayKind.
    */
-  static ArrayData* Create();
-  static ArrayData* CreateVec(arrprov::Tag tag = {});
-  static ArrayData* CreateDict(arrprov::Tag tag = {});
+  static ArrayData* Create(bool legacy = false);
+  static ArrayData* CreateVec(bool legacy = false);
+  static ArrayData* CreateDict(bool legacy = false);
   static ArrayData* CreateKeyset();
-  static ArrayData* CreateVArray(arrprov::Tag tag = {});
-  static ArrayData* CreateDArray(arrprov::Tag tag = {});
+  static ArrayData* CreateVArray(arrprov::Tag tag = {}, bool legacy = false);
+  static ArrayData* CreateDArray(arrprov::Tag tag = {}, bool legacy = false);
 
   /*
    * Create a new kPackedKind ArrayData with a single element, `value'.
@@ -381,10 +381,8 @@ public:
   ssize_t nvGetStrPos(const StringData* k) const;
 
   /*
-   * Get the value or key for the element at raw position `pos'.
-   *
-   * nvGetKey will inc-ref the key before returning it, but nvGetVal will not
-   * do any refcount ops. TODO(kshaunak): Eliminate this discrepancy.
+   * Get the value or key for the element at raw position `pos'. This op
+   * never does any ref-counting on the key.
    *
    * @requires: `pos' refers to a valid array element.
    */
@@ -450,8 +448,12 @@ public:
   /**
    * Append `v' to the array, making a copy first if necessary. Returns `this`
    * if copy/escalation are not needed, or a copied/escalated ArrayData.
+   *
+   * appendMove dec-refs the old array if we needed copy / escalation, and
+   * does not do any refcounting ops on the value.
    */
   ArrayData* append(TypedValue v);
+  ArrayData* appendMove(TypedValue v);
 
   /////////////////////////////////////////////////////////////////////////////
   // Iteration.
@@ -810,6 +812,7 @@ struct ArrayFunctions {
   bool (*uasort[NK])(ArrayData* ad, const Variant& cmp_function);
   ArrayData* (*copyStatic[NK])(const ArrayData*);
   ArrayData* (*append[NK])(ArrayData*, TypedValue v);
+  ArrayData* (*appendMove[NK])(ArrayData*, TypedValue v);
   ArrayData* (*pop[NK])(ArrayData*, Variant& value);
   ArrayData* (*toDVArray[NK])(ArrayData*, bool copy);
   ArrayData* (*toHackArr[NK])(ArrayData*, bool copy);

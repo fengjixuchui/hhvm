@@ -14,8 +14,14 @@ let num_local_workers = GlobalOptions.tco_num_local_workers
 let parallel_type_checking_threshold =
   GlobalOptions.tco_parallel_type_checking_threshold
 
+let max_typechecker_worker_memory_mb =
+  GlobalOptions.tco_max_typechecker_worker_memory_mb
+
 let defer_class_declaration_threshold =
   GlobalOptions.tco_defer_class_declaration_threshold
+
+let defer_class_memory_mb_threshold =
+  GlobalOptions.tco_defer_class_memory_mb_threshold
 
 let max_times_to_defer_type_checking =
   GlobalOptions.tco_max_times_to_defer_type_checking
@@ -62,10 +68,6 @@ let experimental_generics_arity = GlobalOptions.tco_experimental_generics_arity
 let experimental_forbid_nullable_cast =
   GlobalOptions.tco_experimental_forbid_nullable_cast
 
-let experimental_coroutines = GlobalOptions.tco_experimental_coroutines
-
-let experimental_ifc = GlobalOptions.tco_experimental_ifc
-
 let experimental_infer_flows = GlobalOptions.tco_experimental_infer_flows
 
 let experimental_disallow_static_memoized =
@@ -102,9 +104,15 @@ let log_levels = GlobalOptions.log_levels
 
 let shallow_class_decl = GlobalOptions.tco_shallow_class_decl
 
-let coeffects = GlobalOptions.coeffects
+let call_coeffects = GlobalOptions.tco_call_coeffects
 
-let set_coeffects = GlobalOptions.set_coeffects
+let local_coeffects = GlobalOptions.tco_local_coeffects
+
+let any_coeffects t = call_coeffects t || local_coeffects t
+
+let enable_ifc = GlobalOptions.enable_ifc
+
+let ifc_enabled = GlobalOptions.ifc_enabled
 
 let like_type_hints = GlobalOptions.tco_like_type_hints
 
@@ -156,3 +164,5 @@ let method_call_inference = GlobalOptions.tco_method_call_inference
 let report_pos_from_reason = GlobalOptions.tco_report_pos_from_reason
 
 let enable_sound_dynamic = GlobalOptions.tco_enable_sound_dynamic
+
+let use_direct_decl_parser = GlobalOptions.tco_use_direct_decl_parser

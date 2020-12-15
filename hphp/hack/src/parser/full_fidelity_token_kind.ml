@@ -42,6 +42,7 @@ type t =
   | Const
   | Construct
   | Continue
+  | Ctx
   | Darray
   | Default
   | Define
@@ -71,7 +72,6 @@ type t =
   | Function
   | Global
   | Concurrent
-  | Goto
   | If
   | Implements
   | Include
@@ -114,7 +114,6 @@ type t =
   | Static
   | String
   | Super
-  | Suspend
   | Switch
   | This
   | Throw
@@ -200,7 +199,6 @@ type t =
   | SlashGreaterThan
   | LessThanSlash
   | LessThanQuestion
-  | ColonAt
   | Backtick
   | XHP
   | Hash
@@ -258,6 +256,7 @@ let from_string keyword ~only_reserved =
   | "const"                               -> Some Const
   | "__construct"                         -> Some Construct
   | "continue"                            -> Some Continue
+  | "ctx"                                 -> Some Ctx
   | "darray"       when not only_reserved -> Some Darray
   | "default"                             -> Some Default
   | "define"       when not only_reserved -> Some Define
@@ -287,7 +286,6 @@ let from_string keyword ~only_reserved =
   | "function"                            -> Some Function
   | "global"                              -> Some Global
   | "concurrent"                          -> Some Concurrent
-  | "goto"                                -> Some Goto
   | "if"                                  -> Some If
   | "implements"                          -> Some Implements
   | "include"                             -> Some Include
@@ -330,7 +328,6 @@ let from_string keyword ~only_reserved =
   | "static"                              -> Some Static
   | "string"       when not only_reserved -> Some String
   | "super"        when not only_reserved -> Some Super
-  | "suspend"      when not only_reserved -> Some Suspend
   | "switch"                              -> Some Switch
   | "this"         when not only_reserved -> Some This
   | "throw"                               -> Some Throw
@@ -416,7 +413,6 @@ let from_string keyword ~only_reserved =
   | "/>"                                  -> Some SlashGreaterThan
   | "</"                                  -> Some LessThanSlash
   | "<?"                                  -> Some LessThanQuestion
-  | ":@"                                  -> Some ColonAt
   | "`"                                   -> Some Backtick
   | "xhp"          when not only_reserved -> Some XHP
   | "#"                                   -> Some Hash
@@ -448,6 +444,7 @@ let to_string kind =
   | Const                         -> "const"
   | Construct                     -> "__construct"
   | Continue                      -> "continue"
+  | Ctx                           -> "ctx"
   | Darray                        -> "darray"
   | Default                       -> "default"
   | Define                        -> "define"
@@ -477,7 +474,6 @@ let to_string kind =
   | Function                      -> "function"
   | Global                        -> "global"
   | Concurrent                    -> "concurrent"
-  | Goto                          -> "goto"
   | If                            -> "if"
   | Implements                    -> "implements"
   | Include                       -> "include"
@@ -520,7 +516,6 @@ let to_string kind =
   | Static                        -> "static"
   | String                        -> "string"
   | Super                         -> "super"
-  | Suspend                       -> "suspend"
   | Switch                        -> "switch"
   | This                          -> "this"
   | Throw                         -> "throw"
@@ -606,7 +601,6 @@ let to_string kind =
   | SlashGreaterThan              -> "/>"
   | LessThanSlash                 -> "</"
   | LessThanQuestion              -> "<?"
-  | ColonAt                       -> ":@"
   | Backtick                      -> "`"
   | XHP                           -> "xhp"
   | Hash                          -> "#"

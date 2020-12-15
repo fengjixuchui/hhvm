@@ -167,16 +167,12 @@ where
         <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_function_declaration(self, arg0, arg1, arg2)
     }
 
-    fn make_function_declaration_header(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R, arg10: Self::R, arg11: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_function_declaration_header(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11)
+    fn make_function_declaration_header(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R, arg10: Self::R) -> Self::R {
+        <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_function_declaration_header(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10)
     }
 
     fn make_capability(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
         <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_capability(self, arg0, arg1, arg2)
-    }
-
-    fn make_capability_provisional(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_capability_provisional(self, arg0, arg1, arg2, arg3, arg4, arg5)
     }
 
     fn make_where_clause(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {
@@ -233,6 +229,10 @@ where
 
     fn make_type_const_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R) -> Self::R {
         <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_type_const_declaration(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9)
+    }
+
+    fn make_context_const_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R) -> Self::R {
+        <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_context_const_declaration(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8)
     }
 
     fn make_decorated_expression(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {
@@ -357,14 +357,6 @@ where
 
     fn make_return_statement(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
         <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_return_statement(self, arg0, arg1, arg2)
-    }
-
-    fn make_goto_label(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_goto_label(self, arg0, arg1)
-    }
-
-    fn make_goto_statement(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_goto_statement(self, arg0, arg1, arg2)
     }
 
     fn make_throw_statement(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
@@ -611,10 +603,6 @@ where
         <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_type_constant(self, arg0, arg1, arg2)
     }
 
-    fn make_pu_access(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_pu_access(self, arg0, arg1, arg2)
-    }
-
     fn make_vector_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R) -> Self::R {
         <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_vector_type_specifier(self, arg0, arg1, arg2, arg3, arg4)
     }
@@ -631,12 +619,20 @@ where
         <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_varray_type_specifier(self, arg0, arg1, arg2, arg3, arg4)
     }
 
+    fn make_function_ctx_type_specifier(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {
+        <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_function_ctx_type_specifier(self, arg0, arg1)
+    }
+
     fn make_type_parameter(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
         <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_type_parameter(self, arg0, arg1, arg2, arg3, arg4, arg5)
     }
 
     fn make_type_constraint(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {
         <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_type_constraint(self, arg0, arg1)
+    }
+
+    fn make_context_constraint(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {
+        <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_context_constraint(self, arg0, arg1)
     }
 
     fn make_darray_type_specifier(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R) -> Self::R {
@@ -733,38 +729,6 @@ where
 
     fn make_enum_atom_expression(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {
         <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_enum_atom_expression(self, arg0, arg1)
-    }
-
-    fn make_pocket_atom_expression(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_pocket_atom_expression(self, arg0, arg1)
-    }
-
-    fn make_pocket_identifier_expression(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_pocket_identifier_expression(self, arg0, arg1, arg2, arg3, arg4)
-    }
-
-    fn make_pocket_atom_mapping_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_pocket_atom_mapping_declaration(self, arg0, arg1, arg2, arg3, arg4, arg5)
-    }
-
-    fn make_pocket_enum_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_pocket_enum_declaration(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6)
-    }
-
-    fn make_pocket_field_type_expr_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_pocket_field_type_expr_declaration(self, arg0, arg1, arg2, arg3)
-    }
-
-    fn make_pocket_field_type_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_pocket_field_type_declaration(self, arg0, arg1, arg2, arg3)
-    }
-
-    fn make_pocket_mapping_id_declaration(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_pocket_mapping_id_declaration(self, arg0, arg1)
-    }
-
-    fn make_pocket_mapping_type_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<Self::R, Self::TF, State<Self::R>>>::make_pocket_mapping_type_declaration(self, arg0, arg1, arg2, arg3)
     }
 
 }

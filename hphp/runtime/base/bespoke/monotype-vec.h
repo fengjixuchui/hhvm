@@ -35,8 +35,10 @@ struct MonotypeVec : public BespokeArray {
   static void InitializeLayouts();
 
   /**
-   * Create a new, empty MonotypeVec with the given capacity.
+   * Create a new, empty MonotypeVec with the given capacity. The result will
+   * have a refcount of 1, but if Static is true, it will be in static memory.
    */
+  template <bool Static = false>
   static MonotypeVec* MakeReserve(
       HeaderKind hk, bool legacy, uint32_t capacity, DataType dt);
 
@@ -49,6 +51,12 @@ struct MonotypeVec : public BespokeArray {
 
   static MonotypeVec* As(ArrayData* ad);
   static const MonotypeVec* As(const ArrayData* ad);
+
+  static uint64_t entriesOffset() { return sizeof(MonotypeVec); }
+  static uint64_t typeOffset() {
+    static_assert(folly::kIsLittleEndian);
+    return offsetof(MonotypeVec, m_extra_hi16);
+  }
 
 #define X(Return, Name, Args...) static Return Name(Args);
   BESPOKE_LAYOUT_FUNCTIONS(MonotypeVec)
@@ -107,14 +115,40 @@ private:
 };
 
 struct EmptyMonotypeVecLayout : public ConcreteLayout {
-  explicit EmptyMonotypeVecLayout(LayoutIndex index);
+  EmptyMonotypeVecLayout();
+  static LayoutIndex Index();
 };
 
 struct MonotypeVecLayout : public ConcreteLayout {
-  MonotypeVecLayout(LayoutIndex index, DataType type);
-  static std::string makeDescription(DataType type);
+  explicit MonotypeVecLayout(DataType type);
+  static LayoutIndex Index(DataType type);
+
   DataType m_fixedType;
 };
+
+struct EmptyOrMonotypeVecLayout : public AbstractLayout {
+  explicit EmptyOrMonotypeVecLayout(DataType type);
+  static LayoutIndex Index(DataType type);
+  const MonotypeVecLayout* getNonEmptyLayout() const {
+    auto const layout =
+      Layout::FromIndex(MonotypeVecLayout::Index(m_fixedType));
+    if (debug) {
+      auto const mlayout = dynamic_cast<const MonotypeVecLayout*>(layout);
+      assertx(mlayout != nullptr);
+      return mlayout;
+    }
+    return static_cast<const MonotypeVecLayout*>(layout);
+  }
+
+  DataType m_fixedType;
+};
+
+struct TopMonotypeVecLayout : public AbstractLayout {
+  TopMonotypeVecLayout();
+  static LayoutIndex Index();
+};
+
+bool isMonotypeVecLayout(LayoutIndex index);
 
 }}
 

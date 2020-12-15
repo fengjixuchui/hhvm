@@ -34,6 +34,7 @@
 #include "hphp/runtime/vm/instance-bits.h"
 #include "hphp/runtime/vm/jit/array-access-profile.h"
 #include "hphp/runtime/vm/jit/array-iter-profile.h"
+#include "hphp/runtime/vm/jit/array-layout.h"
 #include "hphp/runtime/vm/jit/call-target-profile.h"
 #include "hphp/runtime/vm/jit/cls-cns-profile.h"
 #include "hphp/runtime/vm/jit/containers.h"
@@ -196,8 +197,8 @@ void write_units_preload(ProfDataSerializer& ser) {
     };
   auto const pd = profData();
   assertx(pd);
-  pd->getProfilingFuncs().foreach([&](auto const& func) {
-    if (!func) return;
+  pd->forEachProfilingFunc([&](auto const& func) {
+    always_assert(func);
     auto const u = func->unit();
     if (!check_unit(u)) return;
     if (seen.insert(u).second) units.push_back(u);
@@ -222,32 +223,6 @@ void read_units_preload(ProfDataDeserializer& ser) {
     s_preload_dispatcher->start();
   }
   read_container(ser, [&] { read_unit_preload(ser); });
-}
-
-void write_srckey(ProfDataSerializer& ser, SrcKey sk) {
-  ITRACE(2, "SrcKey>\n");
-  if (ser.serialize(sk.func())) {
-    Trace::Indent _i;
-    write_raw(ser, uintptr_t(-1));
-    write_func(ser, sk.func());
-  }
-  write_raw(ser, sk.toAtomicInt());
-  ITRACE(2, "SrcKey: {}\n", show(sk));
-}
-
-SrcKey read_srckey(ProfDataDeserializer& ser) {
-  ITRACE(2, "SrcKey>\n");
-  auto orig = read_raw<SrcKey::AtomicInt>(ser);
-  if (orig == uintptr_t(-1)) {
-    Trace::Indent _i;
-    read_func(ser);
-    orig = read_raw<SrcKey::AtomicInt>(ser);
-  }
-  auto const id = SrcKey::fromAtomicInt(orig).funcID().toInt();
-  assertx(uint32_t(orig) == id);
-  auto const sk = SrcKey::fromAtomicInt(orig - id + ser.getFid(id));
-  ITRACE(2, "SrcKey: {}\n", show(sk));
-  return sk;
 }
 
 void write_type(ProfDataSerializer& ser, Type t) {
@@ -691,8 +666,8 @@ bool read_named_type(ProfDataDeserializer& ser) {
 }
 
 void write_profiled_funcs(ProfDataSerializer& ser, ProfData* pd) {
-  pd->getProfilingFuncs().foreach([&](auto const& func) {
-    if (!func) return;
+  pd->forEachProfilingFunc([&](auto const& func) {
+    always_assert(func);
     write_func(ser, func);
   });
   write_raw(ser, uintptr_t{});
@@ -707,8 +682,8 @@ void read_profiled_funcs(ProfDataDeserializer& ser, ProfData* pd) {
 void write_named_types(ProfDataSerializer& ser, ProfData* pd) {
   // in an attempt to get a sensible order for these, start with the
   // ones referenced by params and return constraints.
-  pd->getProfilingFuncs().foreach([&](auto const& func) {
-    if (!func) return;
+  pd->forEachProfilingFunc([&](auto const& func) {
+    always_assert(func);
     for (auto const& p : func->params()) {
       write_named_type(ser, p.typeConstraint.namedEntity());
     }
@@ -1278,6 +1253,9 @@ void write_array(ProfDataSerializer& ser, const ArrayData* arr) {
   uint32_t sz = str.size();
   write_raw(ser, sz);
   write_raw(ser, str.data(), sz);
+
+  if (!allowBespokeArrayLikes()) return;
+  write_layout(ser, ArrayLayout::FromArray(arr));
 }
 
 ArrayData* read_array(ProfDataDeserializer& ser) {
@@ -1295,7 +1273,10 @@ ArrayData* read_array(ProfDataDeserializer& ser) {
         s.size(),
         VariableUnserializer::Type::Internal
       );
-      return ArrayData::GetScalarArray(std::move(v));
+      auto const result = ArrayData::GetScalarArray(std::move(v));
+
+      if (!allowBespokeArrayLikes()) return result;
+      return read_layout(ser).apply(result);
     }
   );
 }
@@ -1545,12 +1526,12 @@ void write_clsmeth(ProfDataSerializer& ser, ClsMethDataRef clsMeth) {
     );
   };
   ITRACE(2, "ClsMeth>\n");
-  if (ser.serialize(clsMeth->getCls())) {
+  if (!clsMeth->getCls()->wasSerialized()) {
     Trace::Indent _i;
     write_raw(ser, uintptr_t(-1));
     write_class(ser, clsMeth->getCls());
   }
-  if (ser.serialize(clsMeth->getFunc())) {
+  if (!clsMeth->getFunc()->wasSerialized()) {
     Trace::Indent _i;
     write_raw(ser, uintptr_t(-1));
     write_func(ser, clsMeth->getFunc());
@@ -1580,6 +1561,40 @@ RegionEntryKey read_regionkey(ProfDataDeserializer& des) {
                    guards.push_back(read_guarded_location(des));
                  });
   return RegionEntryKey(srcKey, guards);
+}
+
+void write_srckey(ProfDataSerializer& ser, SrcKey sk) {
+  ITRACE(2, "SrcKey>\n");
+  if (!sk.func()->wasSerialized()) {
+    Trace::Indent _i;
+    write_raw(ser, uintptr_t(-1));
+    write_func(ser, sk.func());
+  }
+  write_raw(ser, sk.toAtomicInt());
+  ITRACE(2, "SrcKey: {}\n", show(sk));
+}
+
+SrcKey read_srckey(ProfDataDeserializer& ser) {
+  ITRACE(2, "SrcKey>\n");
+  auto orig = read_raw<SrcKey::AtomicInt>(ser);
+  if (orig == uintptr_t(-1)) {
+    Trace::Indent _i;
+    read_func(ser);
+    orig = read_raw<SrcKey::AtomicInt>(ser);
+  }
+  auto const id = SrcKey::fromAtomicInt(orig).funcID().toInt();
+  assertx(uint32_t(orig) == id);
+  auto const sk = SrcKey::fromAtomicInt(orig - id + ser.getFid(id));
+  ITRACE(2, "SrcKey: {}\n", show(sk));
+  return sk;
+}
+
+void write_layout(ProfDataSerializer& ser, ArrayLayout layout) {
+  write_raw(ser, layout.toUint16());
+}
+
+ArrayLayout read_layout(ProfDataDeserializer& ser) {
+  return ArrayLayout::FromUint16(read_raw<uint16_t>(ser));
 }
 
 std::string serializeProfData(const std::string& filename) {
@@ -1628,6 +1643,10 @@ std::string serializeProfData(const std::string& filename) {
     // that haven't been otherwise mentioned (eg VerifyParamType,
     // InstanceOfD etc).
     write_named_types(ser, pd);
+
+    if (allowBespokeArrayLikes()) {
+      serializeBespokeLayouts(ser);
+    }
 
     ser.finalize();
 
@@ -1724,6 +1743,10 @@ std::string deserializeProfData(const std::string& filename, int numWorkers) {
     read_target_profiles(ser);
 
     read_named_types(ser);
+
+    if (allowBespokeArrayLikes()) {
+      deserializeBespokeLayouts(ser);
+    }
 
     if (!ser.done()) {
       // We have profile data for the optimized code, so deserialize it too.

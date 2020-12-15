@@ -11,7 +11,7 @@
          param_user_attributes = []; param_visibility = None }
         ];
       f_cap =
-      (((HH\Capabilities\RxLocal & HH\Capabilities\IO & HH\Capabilities\CippGlobal & HH\Capabilities\Globals & HH\Capabilities\UnrestrictedMutation)),
+      (((HH\Capabilities\AccessStaticVariable & HH\Capabilities\WriteProperty & HH\Capabilities\Output)),
        None);
       f_unsafe_cap = ((mixed), None);
       f_body =
@@ -25,7 +25,7 @@
                            (([5:10-12], A<string>), (Lvar ([5:10-12], $x))),
                            (([5:14-17], (function(): ?string)),
                             (Id ([5:14-17], "get"))),
-                           OG_nullthrows))),
+                           OG_nullthrows, false))),
                        [], [], None))))))
           ];
         fb_annotation = () };
@@ -59,7 +59,7 @@
          m_name = ([4:19-22], "get"); m_tparams = [];
          m_where_constraints = []; m_variadic = FVnonVariadic; m_params = [];
          m_cap =
-         (((HH\Capabilities\RxLocal & HH\Capabilities\IO & HH\Capabilities\CippGlobal & HH\Capabilities\Globals & HH\Capabilities\UnrestrictedMutation)),
+         (((HH\Capabilities\AccessStaticVariable & HH\Capabilities\WriteProperty & HH\Capabilities\Output)),
           None);
          m_unsafe_cap = ((mixed), None);
          m_body =
@@ -77,5 +77,5 @@
         ns_const_uses = <opaque>; ns_name = None; ns_auto_ns_map = [];
         ns_is_codegen = false; ns_disable_xhp_element_mangling = false };
       c_user_attributes = []; c_file_attributes = []; c_enum = None;
-      c_pu_enums = []; c_doc_comment = None; c_emit_id = None })
+      c_doc_comment = None; c_emit_id = None })
   ]

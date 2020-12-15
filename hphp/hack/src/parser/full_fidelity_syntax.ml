@@ -89,7 +89,6 @@ module WithToken(Token: TokenType) = struct
       | FunctionDeclaration               _ -> SyntaxKind.FunctionDeclaration
       | FunctionDeclarationHeader         _ -> SyntaxKind.FunctionDeclarationHeader
       | Capability                        _ -> SyntaxKind.Capability
-      | CapabilityProvisional             _ -> SyntaxKind.CapabilityProvisional
       | WhereClause                       _ -> SyntaxKind.WhereClause
       | WhereConstraint                   _ -> SyntaxKind.WhereConstraint
       | MethodishDeclaration              _ -> SyntaxKind.MethodishDeclaration
@@ -104,6 +103,7 @@ module WithToken(Token: TokenType) = struct
       | ConstDeclaration                  _ -> SyntaxKind.ConstDeclaration
       | ConstantDeclarator                _ -> SyntaxKind.ConstantDeclarator
       | TypeConstDeclaration              _ -> SyntaxKind.TypeConstDeclaration
+      | ContextConstDeclaration           _ -> SyntaxKind.ContextConstDeclaration
       | DecoratedExpression               _ -> SyntaxKind.DecoratedExpression
       | ParameterDeclaration              _ -> SyntaxKind.ParameterDeclaration
       | VariadicParameter                 _ -> SyntaxKind.VariadicParameter
@@ -135,8 +135,6 @@ module WithToken(Token: TokenType) = struct
       | CaseLabel                         _ -> SyntaxKind.CaseLabel
       | DefaultLabel                      _ -> SyntaxKind.DefaultLabel
       | ReturnStatement                   _ -> SyntaxKind.ReturnStatement
-      | GotoLabel                         _ -> SyntaxKind.GotoLabel
-      | GotoStatement                     _ -> SyntaxKind.GotoStatement
       | ThrowStatement                    _ -> SyntaxKind.ThrowStatement
       | BreakStatement                    _ -> SyntaxKind.BreakStatement
       | ContinueStatement                 _ -> SyntaxKind.ContinueStatement
@@ -198,13 +196,14 @@ module WithToken(Token: TokenType) = struct
       | XHPExpression                     _ -> SyntaxKind.XHPExpression
       | XHPClose                          _ -> SyntaxKind.XHPClose
       | TypeConstant                      _ -> SyntaxKind.TypeConstant
-      | PUAccess                          _ -> SyntaxKind.PUAccess
       | VectorTypeSpecifier               _ -> SyntaxKind.VectorTypeSpecifier
       | KeysetTypeSpecifier               _ -> SyntaxKind.KeysetTypeSpecifier
       | TupleTypeExplicitSpecifier        _ -> SyntaxKind.TupleTypeExplicitSpecifier
       | VarrayTypeSpecifier               _ -> SyntaxKind.VarrayTypeSpecifier
+      | FunctionCtxTypeSpecifier          _ -> SyntaxKind.FunctionCtxTypeSpecifier
       | TypeParameter                     _ -> SyntaxKind.TypeParameter
       | TypeConstraint                    _ -> SyntaxKind.TypeConstraint
+      | ContextConstraint                 _ -> SyntaxKind.ContextConstraint
       | DarrayTypeSpecifier               _ -> SyntaxKind.DarrayTypeSpecifier
       | DictionaryTypeSpecifier           _ -> SyntaxKind.DictionaryTypeSpecifier
       | ClosureTypeSpecifier              _ -> SyntaxKind.ClosureTypeSpecifier
@@ -229,14 +228,6 @@ module WithToken(Token: TokenType) = struct
       | ErrorSyntax                       _ -> SyntaxKind.ErrorSyntax
       | ListItem                          _ -> SyntaxKind.ListItem
       | EnumAtomExpression                _ -> SyntaxKind.EnumAtomExpression
-      | PocketAtomExpression              _ -> SyntaxKind.PocketAtomExpression
-      | PocketIdentifierExpression        _ -> SyntaxKind.PocketIdentifierExpression
-      | PocketAtomMappingDeclaration      _ -> SyntaxKind.PocketAtomMappingDeclaration
-      | PocketEnumDeclaration             _ -> SyntaxKind.PocketEnumDeclaration
-      | PocketFieldTypeExprDeclaration    _ -> SyntaxKind.PocketFieldTypeExprDeclaration
-      | PocketFieldTypeDeclaration        _ -> SyntaxKind.PocketFieldTypeDeclaration
-      | PocketMappingIdDeclaration        _ -> SyntaxKind.PocketMappingIdDeclaration
-      | PocketMappingTypeDeclaration      _ -> SyntaxKind.PocketMappingTypeDeclaration
 
 
     let kind node =
@@ -284,7 +275,6 @@ module WithToken(Token: TokenType) = struct
     let is_function_declaration                 = has_kind SyntaxKind.FunctionDeclaration
     let is_function_declaration_header          = has_kind SyntaxKind.FunctionDeclarationHeader
     let is_capability                           = has_kind SyntaxKind.Capability
-    let is_capability_provisional               = has_kind SyntaxKind.CapabilityProvisional
     let is_where_clause                         = has_kind SyntaxKind.WhereClause
     let is_where_constraint                     = has_kind SyntaxKind.WhereConstraint
     let is_methodish_declaration                = has_kind SyntaxKind.MethodishDeclaration
@@ -299,6 +289,7 @@ module WithToken(Token: TokenType) = struct
     let is_const_declaration                    = has_kind SyntaxKind.ConstDeclaration
     let is_constant_declarator                  = has_kind SyntaxKind.ConstantDeclarator
     let is_type_const_declaration               = has_kind SyntaxKind.TypeConstDeclaration
+    let is_context_const_declaration            = has_kind SyntaxKind.ContextConstDeclaration
     let is_decorated_expression                 = has_kind SyntaxKind.DecoratedExpression
     let is_parameter_declaration                = has_kind SyntaxKind.ParameterDeclaration
     let is_variadic_parameter                   = has_kind SyntaxKind.VariadicParameter
@@ -330,8 +321,6 @@ module WithToken(Token: TokenType) = struct
     let is_case_label                           = has_kind SyntaxKind.CaseLabel
     let is_default_label                        = has_kind SyntaxKind.DefaultLabel
     let is_return_statement                     = has_kind SyntaxKind.ReturnStatement
-    let is_goto_label                           = has_kind SyntaxKind.GotoLabel
-    let is_goto_statement                       = has_kind SyntaxKind.GotoStatement
     let is_throw_statement                      = has_kind SyntaxKind.ThrowStatement
     let is_break_statement                      = has_kind SyntaxKind.BreakStatement
     let is_continue_statement                   = has_kind SyntaxKind.ContinueStatement
@@ -393,13 +382,14 @@ module WithToken(Token: TokenType) = struct
     let is_xhp_expression                       = has_kind SyntaxKind.XHPExpression
     let is_xhp_close                            = has_kind SyntaxKind.XHPClose
     let is_type_constant                        = has_kind SyntaxKind.TypeConstant
-    let is_pu_access                            = has_kind SyntaxKind.PUAccess
     let is_vector_type_specifier                = has_kind SyntaxKind.VectorTypeSpecifier
     let is_keyset_type_specifier                = has_kind SyntaxKind.KeysetTypeSpecifier
     let is_tuple_type_explicit_specifier        = has_kind SyntaxKind.TupleTypeExplicitSpecifier
     let is_varray_type_specifier                = has_kind SyntaxKind.VarrayTypeSpecifier
+    let is_function_ctx_type_specifier          = has_kind SyntaxKind.FunctionCtxTypeSpecifier
     let is_type_parameter                       = has_kind SyntaxKind.TypeParameter
     let is_type_constraint                      = has_kind SyntaxKind.TypeConstraint
+    let is_context_constraint                   = has_kind SyntaxKind.ContextConstraint
     let is_darray_type_specifier                = has_kind SyntaxKind.DarrayTypeSpecifier
     let is_dictionary_type_specifier            = has_kind SyntaxKind.DictionaryTypeSpecifier
     let is_closure_type_specifier               = has_kind SyntaxKind.ClosureTypeSpecifier
@@ -424,14 +414,6 @@ module WithToken(Token: TokenType) = struct
     let is_error                                = has_kind SyntaxKind.ErrorSyntax
     let is_list_item                            = has_kind SyntaxKind.ListItem
     let is_enum_atom_expression                 = has_kind SyntaxKind.EnumAtomExpression
-    let is_pocket_atom_expression               = has_kind SyntaxKind.PocketAtomExpression
-    let is_pocket_identifier_expression         = has_kind SyntaxKind.PocketIdentifierExpression
-    let is_pocket_atom_mapping_declaration      = has_kind SyntaxKind.PocketAtomMappingDeclaration
-    let is_pocket_enum_declaration              = has_kind SyntaxKind.PocketEnumDeclaration
-    let is_pocket_field_type_expr_declaration   = has_kind SyntaxKind.PocketFieldTypeExprDeclaration
-    let is_pocket_field_type_declaration        = has_kind SyntaxKind.PocketFieldTypeDeclaration
-    let is_pocket_mapping_id_declaration        = has_kind SyntaxKind.PocketMappingIdDeclaration
-    let is_pocket_mapping_type_declaration      = has_kind SyntaxKind.PocketMappingTypeDeclaration
 
 
     let is_loop_statement node =
@@ -811,7 +793,6 @@ module WithToken(Token: TokenType) = struct
         function_parameter_list;
         function_right_paren;
         function_capability;
-        function_capability_provisional;
         function_colon;
         function_type;
         function_where_clause;
@@ -824,7 +805,6 @@ module WithToken(Token: TokenType) = struct
          let acc = f acc function_parameter_list in
          let acc = f acc function_right_paren in
          let acc = f acc function_capability in
-         let acc = f acc function_capability_provisional in
          let acc = f acc function_colon in
          let acc = f acc function_type in
          let acc = f acc function_where_clause in
@@ -837,21 +817,6 @@ module WithToken(Token: TokenType) = struct
          let acc = f acc capability_left_bracket in
          let acc = f acc capability_types in
          let acc = f acc capability_right_bracket in
-         acc
-      | CapabilityProvisional {
-        capability_provisional_at;
-        capability_provisional_left_brace;
-        capability_provisional_type;
-        capability_provisional_unsafe_plus;
-        capability_provisional_unsafe_type;
-        capability_provisional_right_brace;
-      } ->
-         let acc = f acc capability_provisional_at in
-         let acc = f acc capability_provisional_left_brace in
-         let acc = f acc capability_provisional_type in
-         let acc = f acc capability_provisional_unsafe_plus in
-         let acc = f acc capability_provisional_unsafe_type in
-         let acc = f acc capability_provisional_right_brace in
          acc
       | WhereClause {
         where_clause_keyword;
@@ -1024,6 +989,27 @@ module WithToken(Token: TokenType) = struct
          let acc = f acc type_const_equal in
          let acc = f acc type_const_type_specifier in
          let acc = f acc type_const_semicolon in
+         acc
+      | ContextConstDeclaration {
+        context_const_modifiers;
+        context_const_const_keyword;
+        context_const_ctx_keyword;
+        context_const_name;
+        context_const_type_parameters;
+        context_const_constraint;
+        context_const_equal;
+        context_const_ctx_list;
+        context_const_semicolon;
+      } ->
+         let acc = f acc context_const_modifiers in
+         let acc = f acc context_const_const_keyword in
+         let acc = f acc context_const_ctx_keyword in
+         let acc = f acc context_const_name in
+         let acc = f acc context_const_type_parameters in
+         let acc = f acc context_const_constraint in
+         let acc = f acc context_const_equal in
+         let acc = f acc context_const_ctx_list in
+         let acc = f acc context_const_semicolon in
          acc
       | DecoratedExpression {
         decorated_expression_decorator;
@@ -1361,22 +1347,6 @@ module WithToken(Token: TokenType) = struct
          let acc = f acc return_keyword in
          let acc = f acc return_expression in
          let acc = f acc return_semicolon in
-         acc
-      | GotoLabel {
-        goto_label_name;
-        goto_label_colon;
-      } ->
-         let acc = f acc goto_label_name in
-         let acc = f acc goto_label_colon in
-         acc
-      | GotoStatement {
-        goto_statement_keyword;
-        goto_statement_label_name;
-        goto_statement_semicolon;
-      } ->
-         let acc = f acc goto_statement_keyword in
-         let acc = f acc goto_statement_label_name in
-         let acc = f acc goto_statement_semicolon in
          acc
       | ThrowStatement {
         throw_keyword;
@@ -1997,15 +1967,6 @@ module WithToken(Token: TokenType) = struct
          let acc = f acc type_constant_separator in
          let acc = f acc type_constant_right_type in
          acc
-      | PUAccess {
-        pu_access_left_type;
-        pu_access_separator;
-        pu_access_right_type;
-      } ->
-         let acc = f acc pu_access_left_type in
-         let acc = f acc pu_access_separator in
-         let acc = f acc pu_access_right_type in
-         acc
       | VectorTypeSpecifier {
         vector_type_keyword;
         vector_type_left_angle;
@@ -2056,6 +2017,13 @@ module WithToken(Token: TokenType) = struct
          let acc = f acc varray_trailing_comma in
          let acc = f acc varray_right_angle in
          acc
+      | FunctionCtxTypeSpecifier {
+        function_ctx_type_keyword;
+        function_ctx_type_variable;
+      } ->
+         let acc = f acc function_ctx_type_keyword in
+         let acc = f acc function_ctx_type_variable in
+         acc
       | TypeParameter {
         type_attribute_spec;
         type_reified;
@@ -2077,6 +2045,13 @@ module WithToken(Token: TokenType) = struct
       } ->
          let acc = f acc constraint_keyword in
          let acc = f acc constraint_type in
+         acc
+      | ContextConstraint {
+        ctx_constraint_keyword;
+        ctx_constraint_ctx_list;
+      } ->
+         let acc = f acc ctx_constraint_keyword in
+         let acc = f acc ctx_constraint_ctx_list in
          acc
       | DarrayTypeSpecifier {
         darray_keyword;
@@ -2307,98 +2282,6 @@ module WithToken(Token: TokenType) = struct
       } ->
          let acc = f acc enum_atom_hash in
          let acc = f acc enum_atom_expression in
-         acc
-      | PocketAtomExpression {
-        pocket_atom_glyph;
-        pocket_atom_expression;
-      } ->
-         let acc = f acc pocket_atom_glyph in
-         let acc = f acc pocket_atom_expression in
-         acc
-      | PocketIdentifierExpression {
-        pocket_identifier_qualifier;
-        pocket_identifier_pu_operator;
-        pocket_identifier_field;
-        pocket_identifier_operator;
-        pocket_identifier_name;
-      } ->
-         let acc = f acc pocket_identifier_qualifier in
-         let acc = f acc pocket_identifier_pu_operator in
-         let acc = f acc pocket_identifier_field in
-         let acc = f acc pocket_identifier_operator in
-         let acc = f acc pocket_identifier_name in
-         acc
-      | PocketAtomMappingDeclaration {
-        pocket_atom_mapping_glyph;
-        pocket_atom_mapping_name;
-        pocket_atom_mapping_left_paren;
-        pocket_atom_mapping_mappings;
-        pocket_atom_mapping_right_paren;
-        pocket_atom_mapping_semicolon;
-      } ->
-         let acc = f acc pocket_atom_mapping_glyph in
-         let acc = f acc pocket_atom_mapping_name in
-         let acc = f acc pocket_atom_mapping_left_paren in
-         let acc = f acc pocket_atom_mapping_mappings in
-         let acc = f acc pocket_atom_mapping_right_paren in
-         let acc = f acc pocket_atom_mapping_semicolon in
-         acc
-      | PocketEnumDeclaration {
-        pocket_enum_attributes;
-        pocket_enum_modifiers;
-        pocket_enum_enum;
-        pocket_enum_name;
-        pocket_enum_left_brace;
-        pocket_enum_fields;
-        pocket_enum_right_brace;
-      } ->
-         let acc = f acc pocket_enum_attributes in
-         let acc = f acc pocket_enum_modifiers in
-         let acc = f acc pocket_enum_enum in
-         let acc = f acc pocket_enum_name in
-         let acc = f acc pocket_enum_left_brace in
-         let acc = f acc pocket_enum_fields in
-         let acc = f acc pocket_enum_right_brace in
-         acc
-      | PocketFieldTypeExprDeclaration {
-        pocket_field_type_expr_case;
-        pocket_field_type_expr_type;
-        pocket_field_type_expr_name;
-        pocket_field_type_expr_semicolon;
-      } ->
-         let acc = f acc pocket_field_type_expr_case in
-         let acc = f acc pocket_field_type_expr_type in
-         let acc = f acc pocket_field_type_expr_name in
-         let acc = f acc pocket_field_type_expr_semicolon in
-         acc
-      | PocketFieldTypeDeclaration {
-        pocket_field_type_case;
-        pocket_field_type_type;
-        pocket_field_type_type_parameter;
-        pocket_field_type_semicolon;
-      } ->
-         let acc = f acc pocket_field_type_case in
-         let acc = f acc pocket_field_type_type in
-         let acc = f acc pocket_field_type_type_parameter in
-         let acc = f acc pocket_field_type_semicolon in
-         acc
-      | PocketMappingIdDeclaration {
-        pocket_mapping_id_name;
-        pocket_mapping_id_initializer;
-      } ->
-         let acc = f acc pocket_mapping_id_name in
-         let acc = f acc pocket_mapping_id_initializer in
-         acc
-      | PocketMappingTypeDeclaration {
-        pocket_mapping_type_keyword;
-        pocket_mapping_type_name;
-        pocket_mapping_type_equal;
-        pocket_mapping_type_type;
-      } ->
-         let acc = f acc pocket_mapping_type_keyword in
-         let acc = f acc pocket_mapping_type_name in
-         let acc = f acc pocket_mapping_type_equal in
-         let acc = f acc pocket_mapping_type_type in
          acc
 
 
@@ -2711,7 +2594,6 @@ module WithToken(Token: TokenType) = struct
         function_parameter_list;
         function_right_paren;
         function_capability;
-        function_capability_provisional;
         function_colon;
         function_type;
         function_where_clause;
@@ -2724,7 +2606,6 @@ module WithToken(Token: TokenType) = struct
         function_parameter_list;
         function_right_paren;
         function_capability;
-        function_capability_provisional;
         function_colon;
         function_type;
         function_where_clause;
@@ -2737,21 +2618,6 @@ module WithToken(Token: TokenType) = struct
         capability_left_bracket;
         capability_types;
         capability_right_bracket;
-      ]
-      | CapabilityProvisional {
-        capability_provisional_at;
-        capability_provisional_left_brace;
-        capability_provisional_type;
-        capability_provisional_unsafe_plus;
-        capability_provisional_unsafe_type;
-        capability_provisional_right_brace;
-      } -> [
-        capability_provisional_at;
-        capability_provisional_left_brace;
-        capability_provisional_type;
-        capability_provisional_unsafe_plus;
-        capability_provisional_unsafe_type;
-        capability_provisional_right_brace;
       ]
       | WhereClause {
         where_clause_keyword;
@@ -2924,6 +2790,27 @@ module WithToken(Token: TokenType) = struct
         type_const_equal;
         type_const_type_specifier;
         type_const_semicolon;
+      ]
+      | ContextConstDeclaration {
+        context_const_modifiers;
+        context_const_const_keyword;
+        context_const_ctx_keyword;
+        context_const_name;
+        context_const_type_parameters;
+        context_const_constraint;
+        context_const_equal;
+        context_const_ctx_list;
+        context_const_semicolon;
+      } -> [
+        context_const_modifiers;
+        context_const_const_keyword;
+        context_const_ctx_keyword;
+        context_const_name;
+        context_const_type_parameters;
+        context_const_constraint;
+        context_const_equal;
+        context_const_ctx_list;
+        context_const_semicolon;
       ]
       | DecoratedExpression {
         decorated_expression_decorator;
@@ -3261,22 +3148,6 @@ module WithToken(Token: TokenType) = struct
         return_keyword;
         return_expression;
         return_semicolon;
-      ]
-      | GotoLabel {
-        goto_label_name;
-        goto_label_colon;
-      } -> [
-        goto_label_name;
-        goto_label_colon;
-      ]
-      | GotoStatement {
-        goto_statement_keyword;
-        goto_statement_label_name;
-        goto_statement_semicolon;
-      } -> [
-        goto_statement_keyword;
-        goto_statement_label_name;
-        goto_statement_semicolon;
       ]
       | ThrowStatement {
         throw_keyword;
@@ -3897,15 +3768,6 @@ module WithToken(Token: TokenType) = struct
         type_constant_separator;
         type_constant_right_type;
       ]
-      | PUAccess {
-        pu_access_left_type;
-        pu_access_separator;
-        pu_access_right_type;
-      } -> [
-        pu_access_left_type;
-        pu_access_separator;
-        pu_access_right_type;
-      ]
       | VectorTypeSpecifier {
         vector_type_keyword;
         vector_type_left_angle;
@@ -3956,6 +3818,13 @@ module WithToken(Token: TokenType) = struct
         varray_trailing_comma;
         varray_right_angle;
       ]
+      | FunctionCtxTypeSpecifier {
+        function_ctx_type_keyword;
+        function_ctx_type_variable;
+      } -> [
+        function_ctx_type_keyword;
+        function_ctx_type_variable;
+      ]
       | TypeParameter {
         type_attribute_spec;
         type_reified;
@@ -3977,6 +3846,13 @@ module WithToken(Token: TokenType) = struct
       } -> [
         constraint_keyword;
         constraint_type;
+      ]
+      | ContextConstraint {
+        ctx_constraint_keyword;
+        ctx_constraint_ctx_list;
+      } -> [
+        ctx_constraint_keyword;
+        ctx_constraint_ctx_list;
       ]
       | DarrayTypeSpecifier {
         darray_keyword;
@@ -4207,98 +4083,6 @@ module WithToken(Token: TokenType) = struct
       } -> [
         enum_atom_hash;
         enum_atom_expression;
-      ]
-      | PocketAtomExpression {
-        pocket_atom_glyph;
-        pocket_atom_expression;
-      } -> [
-        pocket_atom_glyph;
-        pocket_atom_expression;
-      ]
-      | PocketIdentifierExpression {
-        pocket_identifier_qualifier;
-        pocket_identifier_pu_operator;
-        pocket_identifier_field;
-        pocket_identifier_operator;
-        pocket_identifier_name;
-      } -> [
-        pocket_identifier_qualifier;
-        pocket_identifier_pu_operator;
-        pocket_identifier_field;
-        pocket_identifier_operator;
-        pocket_identifier_name;
-      ]
-      | PocketAtomMappingDeclaration {
-        pocket_atom_mapping_glyph;
-        pocket_atom_mapping_name;
-        pocket_atom_mapping_left_paren;
-        pocket_atom_mapping_mappings;
-        pocket_atom_mapping_right_paren;
-        pocket_atom_mapping_semicolon;
-      } -> [
-        pocket_atom_mapping_glyph;
-        pocket_atom_mapping_name;
-        pocket_atom_mapping_left_paren;
-        pocket_atom_mapping_mappings;
-        pocket_atom_mapping_right_paren;
-        pocket_atom_mapping_semicolon;
-      ]
-      | PocketEnumDeclaration {
-        pocket_enum_attributes;
-        pocket_enum_modifiers;
-        pocket_enum_enum;
-        pocket_enum_name;
-        pocket_enum_left_brace;
-        pocket_enum_fields;
-        pocket_enum_right_brace;
-      } -> [
-        pocket_enum_attributes;
-        pocket_enum_modifiers;
-        pocket_enum_enum;
-        pocket_enum_name;
-        pocket_enum_left_brace;
-        pocket_enum_fields;
-        pocket_enum_right_brace;
-      ]
-      | PocketFieldTypeExprDeclaration {
-        pocket_field_type_expr_case;
-        pocket_field_type_expr_type;
-        pocket_field_type_expr_name;
-        pocket_field_type_expr_semicolon;
-      } -> [
-        pocket_field_type_expr_case;
-        pocket_field_type_expr_type;
-        pocket_field_type_expr_name;
-        pocket_field_type_expr_semicolon;
-      ]
-      | PocketFieldTypeDeclaration {
-        pocket_field_type_case;
-        pocket_field_type_type;
-        pocket_field_type_type_parameter;
-        pocket_field_type_semicolon;
-      } -> [
-        pocket_field_type_case;
-        pocket_field_type_type;
-        pocket_field_type_type_parameter;
-        pocket_field_type_semicolon;
-      ]
-      | PocketMappingIdDeclaration {
-        pocket_mapping_id_name;
-        pocket_mapping_id_initializer;
-      } -> [
-        pocket_mapping_id_name;
-        pocket_mapping_id_initializer;
-      ]
-      | PocketMappingTypeDeclaration {
-        pocket_mapping_type_keyword;
-        pocket_mapping_type_name;
-        pocket_mapping_type_equal;
-        pocket_mapping_type_type;
-      } -> [
-        pocket_mapping_type_keyword;
-        pocket_mapping_type_name;
-        pocket_mapping_type_equal;
-        pocket_mapping_type_type;
       ]
 
 
@@ -4612,7 +4396,6 @@ module WithToken(Token: TokenType) = struct
         function_parameter_list;
         function_right_paren;
         function_capability;
-        function_capability_provisional;
         function_colon;
         function_type;
         function_where_clause;
@@ -4625,7 +4408,6 @@ module WithToken(Token: TokenType) = struct
         "function_parameter_list";
         "function_right_paren";
         "function_capability";
-        "function_capability_provisional";
         "function_colon";
         "function_type";
         "function_where_clause";
@@ -4638,21 +4420,6 @@ module WithToken(Token: TokenType) = struct
         "capability_left_bracket";
         "capability_types";
         "capability_right_bracket";
-      ]
-      | CapabilityProvisional {
-        capability_provisional_at;
-        capability_provisional_left_brace;
-        capability_provisional_type;
-        capability_provisional_unsafe_plus;
-        capability_provisional_unsafe_type;
-        capability_provisional_right_brace;
-      } -> [
-        "capability_provisional_at";
-        "capability_provisional_left_brace";
-        "capability_provisional_type";
-        "capability_provisional_unsafe_plus";
-        "capability_provisional_unsafe_type";
-        "capability_provisional_right_brace";
       ]
       | WhereClause {
         where_clause_keyword;
@@ -4825,6 +4592,27 @@ module WithToken(Token: TokenType) = struct
         "type_const_equal";
         "type_const_type_specifier";
         "type_const_semicolon";
+      ]
+      | ContextConstDeclaration {
+        context_const_modifiers;
+        context_const_const_keyword;
+        context_const_ctx_keyword;
+        context_const_name;
+        context_const_type_parameters;
+        context_const_constraint;
+        context_const_equal;
+        context_const_ctx_list;
+        context_const_semicolon;
+      } -> [
+        "context_const_modifiers";
+        "context_const_const_keyword";
+        "context_const_ctx_keyword";
+        "context_const_name";
+        "context_const_type_parameters";
+        "context_const_constraint";
+        "context_const_equal";
+        "context_const_ctx_list";
+        "context_const_semicolon";
       ]
       | DecoratedExpression {
         decorated_expression_decorator;
@@ -5162,22 +4950,6 @@ module WithToken(Token: TokenType) = struct
         "return_keyword";
         "return_expression";
         "return_semicolon";
-      ]
-      | GotoLabel {
-        goto_label_name;
-        goto_label_colon;
-      } -> [
-        "goto_label_name";
-        "goto_label_colon";
-      ]
-      | GotoStatement {
-        goto_statement_keyword;
-        goto_statement_label_name;
-        goto_statement_semicolon;
-      } -> [
-        "goto_statement_keyword";
-        "goto_statement_label_name";
-        "goto_statement_semicolon";
       ]
       | ThrowStatement {
         throw_keyword;
@@ -5798,15 +5570,6 @@ module WithToken(Token: TokenType) = struct
         "type_constant_separator";
         "type_constant_right_type";
       ]
-      | PUAccess {
-        pu_access_left_type;
-        pu_access_separator;
-        pu_access_right_type;
-      } -> [
-        "pu_access_left_type";
-        "pu_access_separator";
-        "pu_access_right_type";
-      ]
       | VectorTypeSpecifier {
         vector_type_keyword;
         vector_type_left_angle;
@@ -5857,6 +5620,13 @@ module WithToken(Token: TokenType) = struct
         "varray_trailing_comma";
         "varray_right_angle";
       ]
+      | FunctionCtxTypeSpecifier {
+        function_ctx_type_keyword;
+        function_ctx_type_variable;
+      } -> [
+        "function_ctx_type_keyword";
+        "function_ctx_type_variable";
+      ]
       | TypeParameter {
         type_attribute_spec;
         type_reified;
@@ -5878,6 +5648,13 @@ module WithToken(Token: TokenType) = struct
       } -> [
         "constraint_keyword";
         "constraint_type";
+      ]
+      | ContextConstraint {
+        ctx_constraint_keyword;
+        ctx_constraint_ctx_list;
+      } -> [
+        "ctx_constraint_keyword";
+        "ctx_constraint_ctx_list";
       ]
       | DarrayTypeSpecifier {
         darray_keyword;
@@ -6108,98 +5885,6 @@ module WithToken(Token: TokenType) = struct
       } -> [
         "enum_atom_hash";
         "enum_atom_expression";
-      ]
-      | PocketAtomExpression {
-        pocket_atom_glyph;
-        pocket_atom_expression;
-      } -> [
-        "pocket_atom_glyph";
-        "pocket_atom_expression";
-      ]
-      | PocketIdentifierExpression {
-        pocket_identifier_qualifier;
-        pocket_identifier_pu_operator;
-        pocket_identifier_field;
-        pocket_identifier_operator;
-        pocket_identifier_name;
-      } -> [
-        "pocket_identifier_qualifier";
-        "pocket_identifier_pu_operator";
-        "pocket_identifier_field";
-        "pocket_identifier_operator";
-        "pocket_identifier_name";
-      ]
-      | PocketAtomMappingDeclaration {
-        pocket_atom_mapping_glyph;
-        pocket_atom_mapping_name;
-        pocket_atom_mapping_left_paren;
-        pocket_atom_mapping_mappings;
-        pocket_atom_mapping_right_paren;
-        pocket_atom_mapping_semicolon;
-      } -> [
-        "pocket_atom_mapping_glyph";
-        "pocket_atom_mapping_name";
-        "pocket_atom_mapping_left_paren";
-        "pocket_atom_mapping_mappings";
-        "pocket_atom_mapping_right_paren";
-        "pocket_atom_mapping_semicolon";
-      ]
-      | PocketEnumDeclaration {
-        pocket_enum_attributes;
-        pocket_enum_modifiers;
-        pocket_enum_enum;
-        pocket_enum_name;
-        pocket_enum_left_brace;
-        pocket_enum_fields;
-        pocket_enum_right_brace;
-      } -> [
-        "pocket_enum_attributes";
-        "pocket_enum_modifiers";
-        "pocket_enum_enum";
-        "pocket_enum_name";
-        "pocket_enum_left_brace";
-        "pocket_enum_fields";
-        "pocket_enum_right_brace";
-      ]
-      | PocketFieldTypeExprDeclaration {
-        pocket_field_type_expr_case;
-        pocket_field_type_expr_type;
-        pocket_field_type_expr_name;
-        pocket_field_type_expr_semicolon;
-      } -> [
-        "pocket_field_type_expr_case";
-        "pocket_field_type_expr_type";
-        "pocket_field_type_expr_name";
-        "pocket_field_type_expr_semicolon";
-      ]
-      | PocketFieldTypeDeclaration {
-        pocket_field_type_case;
-        pocket_field_type_type;
-        pocket_field_type_type_parameter;
-        pocket_field_type_semicolon;
-      } -> [
-        "pocket_field_type_case";
-        "pocket_field_type_type";
-        "pocket_field_type_type_parameter";
-        "pocket_field_type_semicolon";
-      ]
-      | PocketMappingIdDeclaration {
-        pocket_mapping_id_name;
-        pocket_mapping_id_initializer;
-      } -> [
-        "pocket_mapping_id_name";
-        "pocket_mapping_id_initializer";
-      ]
-      | PocketMappingTypeDeclaration {
-        pocket_mapping_type_keyword;
-        pocket_mapping_type_name;
-        pocket_mapping_type_equal;
-        pocket_mapping_type_type;
-      } -> [
-        "pocket_mapping_type_keyword";
-        "pocket_mapping_type_name";
-        "pocket_mapping_type_equal";
-        "pocket_mapping_type_type";
       ]
 
 
@@ -6595,7 +6280,6 @@ module WithToken(Token: TokenType) = struct
           function_parameter_list;
           function_right_paren;
           function_capability;
-          function_capability_provisional;
           function_colon;
           function_type;
           function_where_clause;
@@ -6609,7 +6293,6 @@ module WithToken(Token: TokenType) = struct
           function_parameter_list;
           function_right_paren;
           function_capability;
-          function_capability_provisional;
           function_colon;
           function_type;
           function_where_clause;
@@ -6623,22 +6306,6 @@ module WithToken(Token: TokenType) = struct
           capability_left_bracket;
           capability_types;
           capability_right_bracket;
-        }
-      | (SyntaxKind.CapabilityProvisional, [
-          capability_provisional_at;
-          capability_provisional_left_brace;
-          capability_provisional_type;
-          capability_provisional_unsafe_plus;
-          capability_provisional_unsafe_type;
-          capability_provisional_right_brace;
-        ]) ->
-        CapabilityProvisional {
-          capability_provisional_at;
-          capability_provisional_left_brace;
-          capability_provisional_type;
-          capability_provisional_unsafe_plus;
-          capability_provisional_unsafe_type;
-          capability_provisional_right_brace;
         }
       | (SyntaxKind.WhereClause, [
           where_clause_keyword;
@@ -6825,6 +6492,28 @@ module WithToken(Token: TokenType) = struct
           type_const_equal;
           type_const_type_specifier;
           type_const_semicolon;
+        }
+      | (SyntaxKind.ContextConstDeclaration, [
+          context_const_modifiers;
+          context_const_const_keyword;
+          context_const_ctx_keyword;
+          context_const_name;
+          context_const_type_parameters;
+          context_const_constraint;
+          context_const_equal;
+          context_const_ctx_list;
+          context_const_semicolon;
+        ]) ->
+        ContextConstDeclaration {
+          context_const_modifiers;
+          context_const_const_keyword;
+          context_const_ctx_keyword;
+          context_const_name;
+          context_const_type_parameters;
+          context_const_constraint;
+          context_const_equal;
+          context_const_ctx_list;
+          context_const_semicolon;
         }
       | (SyntaxKind.DecoratedExpression, [
           decorated_expression_decorator;
@@ -7193,24 +6882,6 @@ module WithToken(Token: TokenType) = struct
           return_keyword;
           return_expression;
           return_semicolon;
-        }
-      | (SyntaxKind.GotoLabel, [
-          goto_label_name;
-          goto_label_colon;
-        ]) ->
-        GotoLabel {
-          goto_label_name;
-          goto_label_colon;
-        }
-      | (SyntaxKind.GotoStatement, [
-          goto_statement_keyword;
-          goto_statement_label_name;
-          goto_statement_semicolon;
-        ]) ->
-        GotoStatement {
-          goto_statement_keyword;
-          goto_statement_label_name;
-          goto_statement_semicolon;
         }
       | (SyntaxKind.ThrowStatement, [
           throw_keyword;
@@ -7892,16 +7563,6 @@ module WithToken(Token: TokenType) = struct
           type_constant_separator;
           type_constant_right_type;
         }
-      | (SyntaxKind.PUAccess, [
-          pu_access_left_type;
-          pu_access_separator;
-          pu_access_right_type;
-        ]) ->
-        PUAccess {
-          pu_access_left_type;
-          pu_access_separator;
-          pu_access_right_type;
-        }
       | (SyntaxKind.VectorTypeSpecifier, [
           vector_type_keyword;
           vector_type_left_angle;
@@ -7956,6 +7617,14 @@ module WithToken(Token: TokenType) = struct
           varray_trailing_comma;
           varray_right_angle;
         }
+      | (SyntaxKind.FunctionCtxTypeSpecifier, [
+          function_ctx_type_keyword;
+          function_ctx_type_variable;
+        ]) ->
+        FunctionCtxTypeSpecifier {
+          function_ctx_type_keyword;
+          function_ctx_type_variable;
+        }
       | (SyntaxKind.TypeParameter, [
           type_attribute_spec;
           type_reified;
@@ -7979,6 +7648,14 @@ module WithToken(Token: TokenType) = struct
         TypeConstraint {
           constraint_keyword;
           constraint_type;
+        }
+      | (SyntaxKind.ContextConstraint, [
+          ctx_constraint_keyword;
+          ctx_constraint_ctx_list;
+        ]) ->
+        ContextConstraint {
+          ctx_constraint_keyword;
+          ctx_constraint_ctx_list;
         }
       | (SyntaxKind.DarrayTypeSpecifier, [
           darray_keyword;
@@ -8233,106 +7910,6 @@ module WithToken(Token: TokenType) = struct
         EnumAtomExpression {
           enum_atom_hash;
           enum_atom_expression;
-        }
-      | (SyntaxKind.PocketAtomExpression, [
-          pocket_atom_glyph;
-          pocket_atom_expression;
-        ]) ->
-        PocketAtomExpression {
-          pocket_atom_glyph;
-          pocket_atom_expression;
-        }
-      | (SyntaxKind.PocketIdentifierExpression, [
-          pocket_identifier_qualifier;
-          pocket_identifier_pu_operator;
-          pocket_identifier_field;
-          pocket_identifier_operator;
-          pocket_identifier_name;
-        ]) ->
-        PocketIdentifierExpression {
-          pocket_identifier_qualifier;
-          pocket_identifier_pu_operator;
-          pocket_identifier_field;
-          pocket_identifier_operator;
-          pocket_identifier_name;
-        }
-      | (SyntaxKind.PocketAtomMappingDeclaration, [
-          pocket_atom_mapping_glyph;
-          pocket_atom_mapping_name;
-          pocket_atom_mapping_left_paren;
-          pocket_atom_mapping_mappings;
-          pocket_atom_mapping_right_paren;
-          pocket_atom_mapping_semicolon;
-        ]) ->
-        PocketAtomMappingDeclaration {
-          pocket_atom_mapping_glyph;
-          pocket_atom_mapping_name;
-          pocket_atom_mapping_left_paren;
-          pocket_atom_mapping_mappings;
-          pocket_atom_mapping_right_paren;
-          pocket_atom_mapping_semicolon;
-        }
-      | (SyntaxKind.PocketEnumDeclaration, [
-          pocket_enum_attributes;
-          pocket_enum_modifiers;
-          pocket_enum_enum;
-          pocket_enum_name;
-          pocket_enum_left_brace;
-          pocket_enum_fields;
-          pocket_enum_right_brace;
-        ]) ->
-        PocketEnumDeclaration {
-          pocket_enum_attributes;
-          pocket_enum_modifiers;
-          pocket_enum_enum;
-          pocket_enum_name;
-          pocket_enum_left_brace;
-          pocket_enum_fields;
-          pocket_enum_right_brace;
-        }
-      | (SyntaxKind.PocketFieldTypeExprDeclaration, [
-          pocket_field_type_expr_case;
-          pocket_field_type_expr_type;
-          pocket_field_type_expr_name;
-          pocket_field_type_expr_semicolon;
-        ]) ->
-        PocketFieldTypeExprDeclaration {
-          pocket_field_type_expr_case;
-          pocket_field_type_expr_type;
-          pocket_field_type_expr_name;
-          pocket_field_type_expr_semicolon;
-        }
-      | (SyntaxKind.PocketFieldTypeDeclaration, [
-          pocket_field_type_case;
-          pocket_field_type_type;
-          pocket_field_type_type_parameter;
-          pocket_field_type_semicolon;
-        ]) ->
-        PocketFieldTypeDeclaration {
-          pocket_field_type_case;
-          pocket_field_type_type;
-          pocket_field_type_type_parameter;
-          pocket_field_type_semicolon;
-        }
-      | (SyntaxKind.PocketMappingIdDeclaration, [
-          pocket_mapping_id_name;
-          pocket_mapping_id_initializer;
-        ]) ->
-        PocketMappingIdDeclaration {
-          pocket_mapping_id_name;
-          pocket_mapping_id_initializer;
-        }
-      | (SyntaxKind.PocketMappingTypeDeclaration, [
-          pocket_mapping_type_keyword;
-          pocket_mapping_type_name;
-          pocket_mapping_type_equal;
-          pocket_mapping_type_type;
-        ]) ->
-        PocketMappingTypeDeclaration {
-          pocket_mapping_type_keyword;
-          pocket_mapping_type_name;
-          pocket_mapping_type_equal;
-          pocket_mapping_type_type;
         }
       | (SyntaxKind.Missing, []) -> Missing
       | (SyntaxKind.SyntaxList, items) -> SyntaxList items
@@ -8793,7 +8370,6 @@ module WithToken(Token: TokenType) = struct
         function_parameter_list
         function_right_paren
         function_capability
-        function_capability_provisional
         function_colon
         function_type
         function_where_clause
@@ -8807,7 +8383,6 @@ module WithToken(Token: TokenType) = struct
           function_parameter_list;
           function_right_paren;
           function_capability;
-          function_capability_provisional;
           function_colon;
           function_type;
           function_where_clause;
@@ -8824,25 +8399,6 @@ module WithToken(Token: TokenType) = struct
           capability_left_bracket;
           capability_types;
           capability_right_bracket;
-        } in
-        let value = ValueBuilder.value_from_syntax syntax in
-        make syntax value
-
-      let make_capability_provisional
-        capability_provisional_at
-        capability_provisional_left_brace
-        capability_provisional_type
-        capability_provisional_unsafe_plus
-        capability_provisional_unsafe_type
-        capability_provisional_right_brace
-      =
-        let syntax = CapabilityProvisional {
-          capability_provisional_at;
-          capability_provisional_left_brace;
-          capability_provisional_type;
-          capability_provisional_unsafe_plus;
-          capability_provisional_unsafe_type;
-          capability_provisional_right_brace;
         } in
         let value = ValueBuilder.value_from_syntax syntax in
         make syntax value
@@ -9071,6 +8627,31 @@ module WithToken(Token: TokenType) = struct
           type_const_equal;
           type_const_type_specifier;
           type_const_semicolon;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_context_const_declaration
+        context_const_modifiers
+        context_const_const_keyword
+        context_const_ctx_keyword
+        context_const_name
+        context_const_type_parameters
+        context_const_constraint
+        context_const_equal
+        context_const_ctx_list
+        context_const_semicolon
+      =
+        let syntax = ContextConstDeclaration {
+          context_const_modifiers;
+          context_const_const_keyword;
+          context_const_ctx_keyword;
+          context_const_name;
+          context_const_type_parameters;
+          context_const_constraint;
+          context_const_equal;
+          context_const_ctx_list;
+          context_const_semicolon;
         } in
         let value = ValueBuilder.value_from_syntax syntax in
         make syntax value
@@ -9532,30 +9113,6 @@ module WithToken(Token: TokenType) = struct
           return_keyword;
           return_expression;
           return_semicolon;
-        } in
-        let value = ValueBuilder.value_from_syntax syntax in
-        make syntax value
-
-      let make_goto_label
-        goto_label_name
-        goto_label_colon
-      =
-        let syntax = GotoLabel {
-          goto_label_name;
-          goto_label_colon;
-        } in
-        let value = ValueBuilder.value_from_syntax syntax in
-        make syntax value
-
-      let make_goto_statement
-        goto_statement_keyword
-        goto_statement_label_name
-        goto_statement_semicolon
-      =
-        let syntax = GotoStatement {
-          goto_statement_keyword;
-          goto_statement_label_name;
-          goto_statement_semicolon;
         } in
         let value = ValueBuilder.value_from_syntax syntax in
         make syntax value
@@ -10423,19 +9980,6 @@ module WithToken(Token: TokenType) = struct
         let value = ValueBuilder.value_from_syntax syntax in
         make syntax value
 
-      let make_pu_access
-        pu_access_left_type
-        pu_access_separator
-        pu_access_right_type
-      =
-        let syntax = PUAccess {
-          pu_access_left_type;
-          pu_access_separator;
-          pu_access_right_type;
-        } in
-        let value = ValueBuilder.value_from_syntax syntax in
-        make syntax value
-
       let make_vector_type_specifier
         vector_type_keyword
         vector_type_left_angle
@@ -10502,6 +10046,17 @@ module WithToken(Token: TokenType) = struct
         let value = ValueBuilder.value_from_syntax syntax in
         make syntax value
 
+      let make_function_ctx_type_specifier
+        function_ctx_type_keyword
+        function_ctx_type_variable
+      =
+        let syntax = FunctionCtxTypeSpecifier {
+          function_ctx_type_keyword;
+          function_ctx_type_variable;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
       let make_type_parameter
         type_attribute_spec
         type_reified
@@ -10528,6 +10083,17 @@ module WithToken(Token: TokenType) = struct
         let syntax = TypeConstraint {
           constraint_keyword;
           constraint_type;
+        } in
+        let value = ValueBuilder.value_from_syntax syntax in
+        make syntax value
+
+      let make_context_constraint
+        ctx_constraint_keyword
+        ctx_constraint_ctx_list
+      =
+        let syntax = ContextConstraint {
+          ctx_constraint_keyword;
+          ctx_constraint_ctx_list;
         } in
         let value = ValueBuilder.value_from_syntax syntax in
         make syntax value
@@ -10858,130 +10424,6 @@ module WithToken(Token: TokenType) = struct
         let value = ValueBuilder.value_from_syntax syntax in
         make syntax value
 
-      let make_pocket_atom_expression
-        pocket_atom_glyph
-        pocket_atom_expression
-      =
-        let syntax = PocketAtomExpression {
-          pocket_atom_glyph;
-          pocket_atom_expression;
-        } in
-        let value = ValueBuilder.value_from_syntax syntax in
-        make syntax value
-
-      let make_pocket_identifier_expression
-        pocket_identifier_qualifier
-        pocket_identifier_pu_operator
-        pocket_identifier_field
-        pocket_identifier_operator
-        pocket_identifier_name
-      =
-        let syntax = PocketIdentifierExpression {
-          pocket_identifier_qualifier;
-          pocket_identifier_pu_operator;
-          pocket_identifier_field;
-          pocket_identifier_operator;
-          pocket_identifier_name;
-        } in
-        let value = ValueBuilder.value_from_syntax syntax in
-        make syntax value
-
-      let make_pocket_atom_mapping_declaration
-        pocket_atom_mapping_glyph
-        pocket_atom_mapping_name
-        pocket_atom_mapping_left_paren
-        pocket_atom_mapping_mappings
-        pocket_atom_mapping_right_paren
-        pocket_atom_mapping_semicolon
-      =
-        let syntax = PocketAtomMappingDeclaration {
-          pocket_atom_mapping_glyph;
-          pocket_atom_mapping_name;
-          pocket_atom_mapping_left_paren;
-          pocket_atom_mapping_mappings;
-          pocket_atom_mapping_right_paren;
-          pocket_atom_mapping_semicolon;
-        } in
-        let value = ValueBuilder.value_from_syntax syntax in
-        make syntax value
-
-      let make_pocket_enum_declaration
-        pocket_enum_attributes
-        pocket_enum_modifiers
-        pocket_enum_enum
-        pocket_enum_name
-        pocket_enum_left_brace
-        pocket_enum_fields
-        pocket_enum_right_brace
-      =
-        let syntax = PocketEnumDeclaration {
-          pocket_enum_attributes;
-          pocket_enum_modifiers;
-          pocket_enum_enum;
-          pocket_enum_name;
-          pocket_enum_left_brace;
-          pocket_enum_fields;
-          pocket_enum_right_brace;
-        } in
-        let value = ValueBuilder.value_from_syntax syntax in
-        make syntax value
-
-      let make_pocket_field_type_expr_declaration
-        pocket_field_type_expr_case
-        pocket_field_type_expr_type
-        pocket_field_type_expr_name
-        pocket_field_type_expr_semicolon
-      =
-        let syntax = PocketFieldTypeExprDeclaration {
-          pocket_field_type_expr_case;
-          pocket_field_type_expr_type;
-          pocket_field_type_expr_name;
-          pocket_field_type_expr_semicolon;
-        } in
-        let value = ValueBuilder.value_from_syntax syntax in
-        make syntax value
-
-      let make_pocket_field_type_declaration
-        pocket_field_type_case
-        pocket_field_type_type
-        pocket_field_type_type_parameter
-        pocket_field_type_semicolon
-      =
-        let syntax = PocketFieldTypeDeclaration {
-          pocket_field_type_case;
-          pocket_field_type_type;
-          pocket_field_type_type_parameter;
-          pocket_field_type_semicolon;
-        } in
-        let value = ValueBuilder.value_from_syntax syntax in
-        make syntax value
-
-      let make_pocket_mapping_id_declaration
-        pocket_mapping_id_name
-        pocket_mapping_id_initializer
-      =
-        let syntax = PocketMappingIdDeclaration {
-          pocket_mapping_id_name;
-          pocket_mapping_id_initializer;
-        } in
-        let value = ValueBuilder.value_from_syntax syntax in
-        make syntax value
-
-      let make_pocket_mapping_type_declaration
-        pocket_mapping_type_keyword
-        pocket_mapping_type_name
-        pocket_mapping_type_equal
-        pocket_mapping_type_type
-      =
-        let syntax = PocketMappingTypeDeclaration {
-          pocket_mapping_type_keyword;
-          pocket_mapping_type_name;
-          pocket_mapping_type_equal;
-          pocket_mapping_type_type;
-        } in
-        let value = ValueBuilder.value_from_syntax syntax in
-        make syntax value
-
 
 
      let from_function_declaration {
@@ -11002,7 +10444,6 @@ module WithToken(Token: TokenType) = struct
           function_parameter_list;
           function_right_paren;
           function_capability;
-          function_capability_provisional;
           function_colon;
           function_type;
           function_where_clause;
@@ -11015,7 +10456,6 @@ module WithToken(Token: TokenType) = struct
           function_parameter_list;
           function_right_paren;
           function_capability;
-          function_capability_provisional;
           function_colon;
           function_type;
           function_where_clause;
@@ -11130,7 +10570,6 @@ module WithToken(Token: TokenType) = struct
           function_parameter_list;
           function_right_paren;
           function_capability;
-          function_capability_provisional;
           function_colon;
           function_type;
           function_where_clause;
@@ -11143,7 +10582,6 @@ module WithToken(Token: TokenType) = struct
           function_parameter_list;
           function_right_paren;
           function_capability;
-          function_capability_provisional;
           function_colon;
           function_type;
           function_where_clause;

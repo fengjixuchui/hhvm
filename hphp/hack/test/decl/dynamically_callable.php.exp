@@ -6,12 +6,10 @@
        sc_where_constraints = []; sc_extends = []; sc_uses = [];
        sc_xhp_attr_uses = []; sc_req_extends = []; sc_req_implements = [];
        sc_implements = []; sc_implements_dynamic = false; sc_consts = [];
-       sc_typeconsts = []; sc_pu_enums = []; sc_props = []; sc_sprops = [];
+       sc_typeconsts = []; sc_props = []; sc_sprops = [];
        sc_constructor = None; sc_static_methods = [];
        sc_methods =
-       [{ Shallow_decl_defs.sm_abstract = false; sm_final = false;
-          sm_memoizelsb = false; sm_name = ([14:19-22], "pub");
-          sm_override = false; sm_dynamicallycallable = true;
+       [{ Shallow_decl_defs.sm_name = ([14:19-22], "pub");
           sm_reactivity = None;
           sm_type =
           (Rwitness (root|dynamically_callable.php line 14, characters 19-21),
@@ -19,10 +17,7 @@
               { ft_arity = (Fstandard ()); ft_tparams = [];
                 ft_where_constraints = []; ft_params = [];
                 ft_implicit_params =
-                { capability =
-                  (Rhint (root|dynamically_callable.php line 14, characters 19-21),
-                   (Tapply (([14:19-22], "\\HH\\Contexts\\defaults"), [])))
-                  };
+                { capability = (CapDefaults [14:19-22]) };
                 ft_ret =
                 { et_enforced = false;
                   et_type =
@@ -34,7 +29,8 @@
                   ~returns_mutable:false ~returns_void_to_rx:false);
                 ft_reactive = Nonreactive; ft_ifc_decl = FDPolicied {PUBLIC}
                 }));
-          sm_visibility = Public; sm_deprecated = None }
+          sm_visibility = Public; sm_deprecated = None;
+          sm_flags = dynamicallycallable }
          ];
        sc_user_attributes = []; sc_enum_type = None }))
   ]

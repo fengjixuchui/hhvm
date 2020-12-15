@@ -222,6 +222,8 @@ void apcExtension::moduleInit() {
     s_apc_file_storage.enable(FileStoragePrefix, FileStorageChunkSize);
   }
 
+  apc_store().init();
+
   HHVM_RC_INT(APC_ITER_TYPE, 0x1);
   HHVM_RC_INT(APC_ITER_KEY, 0x2);
   HHVM_RC_INT(APC_ITER_FILENAME, 0x4);
@@ -277,7 +279,7 @@ std::string apcExtension::serialize() {
 void apcExtension::deserialize(std::string data) {
   auto sd = StringData::MakeUncounted(data);
   data.clear();
-  apc_store().set(s_internal_preload, Variant{sd}, 0);
+  apc_store().set(s_internal_preload, Variant{sd}, 0, 0);
   StringData::ReleaseUncounted(sd);     // a copy was made in APC
 }
 
@@ -327,7 +329,8 @@ static apcExtension s_apc_extension;
 Variant HHVM_FUNCTION(apc_store,
                       const Variant& key_or_array,
                       const Variant& var /* = null */,
-                      int64_t ttl /* = 0 */) {
+                      int64_t ttl /* = 0 */,
+                      int64_t bump_ttl /* = 0 */) {
   if (!apcExtension::Enable) return Variant(false);
 
   ARRPROV_USE_RUNTIME_LOCATION();
@@ -344,11 +347,15 @@ Variant HHVM_FUNCTION(apc_store,
       Variant v = iter.second();
 
       auto const& strKey = key.asCStrRef();
+      if (strKey.empty()) {
+        raise_invalid_argument_warning("apc key: (empty string)");
+        return false;
+      }
       if (isKeyInvalid(strKey)) {
         raise_invalid_argument_warning("apc key: (contains invalid characters)");
         return Variant(false);
       }
-      apc_store().set(strKey, v, ttl);
+      apc_store().set(strKey, v, ttl, bump_ttl);
       if (RuntimeOption::EnableAPCStats) {
         ServerStats::Log("apc.write", 1);
       }
@@ -362,11 +369,15 @@ Variant HHVM_FUNCTION(apc_store,
   }
   String strKey = key_or_array.toString();
 
+  if (strKey.empty()) {
+    raise_invalid_argument_warning("apc key: (empty string)");
+    return false;
+  }
   if (isKeyInvalid(strKey)) {
     raise_invalid_argument_warning("apc key: (contains invalid characters)");
     return Variant(false);
   }
-  apc_store().set(strKey, var, ttl);
+  apc_store().set(strKey, var, ttl, bump_ttl);
   if (RuntimeOption::EnableAPCStats) {
     ServerStats::Log("apc.write", 1);
   }
@@ -381,6 +392,10 @@ bool HHVM_FUNCTION(apc_store_as_primed_do_not_use,
                    const String& key,
                    const Variant& var) {
   if (!apcExtension::Enable) return false;
+  if (key.empty()) {
+    raise_invalid_argument_warning("apc key: (empty string)");
+    return false;
+  }
   if (isKeyInvalid(key)) {
     raise_invalid_argument_warning("apc key: (contains invalid characters)");
     return false;
@@ -395,7 +410,8 @@ bool HHVM_FUNCTION(apc_store_as_primed_do_not_use,
 Variant HHVM_FUNCTION(apc_add,
                       const Variant& key_or_array,
                       const Variant& var /* = null */,
-                      int64_t ttl /* = 0 */) {
+                      int64_t ttl /* = 0 */,
+                      int64_t bump_ttl /* = 0 */) {
   if (!apcExtension::Enable) return false;
 
   ARRPROV_USE_RUNTIME_LOCATION();
@@ -415,12 +431,16 @@ Variant HHVM_FUNCTION(apc_add,
       Variant v = iter.second();
 
       auto const& strKey = key.asCStrRef();
+      if (strKey.empty()) {
+        raise_invalid_argument_warning("apc key: (empty string)");
+        return false;
+      }
       if (isKeyInvalid(strKey)) {
         raise_invalid_argument_warning("apc key: (contains invalid characters)");
         return false;
       }
 
-      if (!apc_store().add(strKey, v, ttl)) {
+      if (!apc_store().add(strKey, v, ttl, bump_ttl)) {
         errors.add(strKey, -1);
       }
     }
@@ -432,6 +452,10 @@ Variant HHVM_FUNCTION(apc_add,
     return false;
   }
   auto strKey = key_or_array.asCStrRef();
+  if (strKey.empty()) {
+    raise_invalid_argument_warning("apc key: (empty string)");
+    return false;
+  }
   if (isKeyInvalid(strKey)) {
     raise_invalid_argument_warning("apc key: (contains invalid characters)");
     return false;
@@ -439,7 +463,7 @@ Variant HHVM_FUNCTION(apc_add,
   if (RuntimeOption::EnableAPCStats) {
     ServerStats::Log("apc.write", 1);
   }
-  return apc_store().add(strKey, var, ttl);
+  return apc_store().add(strKey, var, ttl, bump_ttl);
 }
 
 bool HHVM_FUNCTION(apc_extend_ttl, const String& key, int64_t new_ttl) {
@@ -609,7 +633,9 @@ const StaticString s_in_memory("in_memory");
 const StaticString s_mem_size("mem_size");
 const StaticString s_type("type");
 const StaticString s_c_time("creation_time");
-const StaticString s_mtime("mtime");
+const StaticString s_max_ttl("max_ttl");
+const StaticString s_bump_ttl("bump_ttl");
+const StaticString s_in_hotcache("in_hotcache");
 
 // This is a guess to the size of the info array. It is significantly
 // bigger than what we need but hard to control all the info that we
@@ -617,7 +643,7 @@ const StaticString s_mtime("mtime");
 // Try to keep it such that we do not have to resize the array
 const uint32_t kCacheInfoSize = 40;
 // Number of elements in the entry array
-const int32_t kEntryInfoSize = 7;
+const int32_t kEntryInfoSize = 10;
 
 Array HHVM_FUNCTION(
   apc_cache_info,
@@ -649,7 +675,9 @@ Array HHVM_FUNCTION(
       ent.add(s_mem_size, entry.size);
       ent.add(s_type, static_cast<int64_t>(entry.type));
       ent.add(s_c_time, entry.c_time);
-      ent.add(s_mtime, entry.mtime);
+      ent.add(s_max_ttl, entry.maxTTL);
+      ent.add(s_bump_ttl, entry.bumpTTL);
+      ent.add(s_in_hotcache, entry.inHotCache);
       ents.append(ent.toArray());
     }
     info.add(s_cache_list, ents.toArray(), false);
@@ -1057,7 +1085,7 @@ int apc_rfc1867_progress(apc_rfc1867_data* rfc1867ApcData, unsigned int event,
       track.set(s_name, rfc1867ApcData->name);
       track.set(s_done, 0);
       track.set(s_start_time, rfc1867ApcData->start_time);
-      HHVM_FN(apc_store)(rfc1867ApcData->tracking_key, track.toVariant(), 3600);
+      HHVM_FN(apc_store)(rfc1867ApcData->tracking_key, track.toVariant(), 3600, 0);
     }
     break;
 
@@ -1079,8 +1107,7 @@ int apc_rfc1867_progress(apc_rfc1867_data* rfc1867ApcData, unsigned int event,
             track.set(s_name, rfc1867ApcData->name);
             track.set(s_done, 0);
             track.set(s_start_time, rfc1867ApcData->start_time);
-            HHVM_FN(apc_store)(rfc1867ApcData->tracking_key, track.toVariant(),
-                               3600);
+            HHVM_FN(apc_store)(rfc1867ApcData->tracking_key, track.toVariant(), 3600, 0);
           }
           rfc1867ApcData->prev_bytes_processed =
             rfc1867ApcData->bytes_processed;
@@ -1105,7 +1132,7 @@ int apc_rfc1867_progress(apc_rfc1867_data* rfc1867ApcData, unsigned int event,
       track.set(s_cancel_upload, rfc1867ApcData->cancel_upload);
       track.set(s_done, 0);
       track.set(s_start_time, rfc1867ApcData->start_time);
-      HHVM_FN(apc_store)(rfc1867ApcData->tracking_key, track.toVariant(), 3600);
+      HHVM_FN(apc_store)(rfc1867ApcData->tracking_key, track.toVariant(), 3600, 0);
     }
     break;
 
@@ -1129,8 +1156,7 @@ int apc_rfc1867_progress(apc_rfc1867_data* rfc1867ApcData, unsigned int event,
         track.set(s_cancel_upload, rfc1867ApcData->cancel_upload);
         track.set(s_done, 1);
         track.set(s_start_time, rfc1867ApcData->start_time);
-        HHVM_FN(apc_store)(rfc1867ApcData->tracking_key, track.toVariant(),
-                           3600);
+        HHVM_FN(apc_store)(rfc1867ApcData->tracking_key, track.toVariant(), 3600, 0);
       }
     }
     break;

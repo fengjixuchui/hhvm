@@ -7,7 +7,11 @@
  *
  *)
 
-val get_linearization :
-  Provider_context.t ->
-  string * Decl_defs.linearization_kind ->
-  Decl_defs.linearization
+type class_name = string
+
+type linearizations = {
+  lin_members: Decl_defs.linearization;
+  lin_ancestors: Decl_defs.linearization;
+}
+
+val get_linearizations : Provider_context.t -> class_name -> linearizations

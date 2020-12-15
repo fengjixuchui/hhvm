@@ -6,23 +6,17 @@
        sc_where_constraints = []; sc_extends = []; sc_uses = [];
        sc_xhp_attr_uses = []; sc_req_extends = []; sc_req_implements = [];
        sc_implements = []; sc_implements_dynamic = false; sc_consts = [];
-       sc_typeconsts = []; sc_pu_enums = []; sc_props = []; sc_sprops = [];
+       sc_typeconsts = []; sc_props = []; sc_sprops = [];
        sc_constructor = None; sc_static_methods = [];
        sc_methods =
-       [{ Shallow_decl_defs.sm_abstract = false; sm_final = false;
-          sm_memoizelsb = false; sm_name = ([5:19-22], "foo");
-          sm_override = false; sm_dynamicallycallable = false;
+       [{ Shallow_decl_defs.sm_name = ([5:19-22], "foo");
           sm_reactivity = None;
           sm_type =
           (Rwitness (root|deprecated.php line 5, characters 19-21),
            (Tfun
               { ft_arity = (Fstandard ()); ft_tparams = [];
                 ft_where_constraints = []; ft_params = [];
-                ft_implicit_params =
-                { capability =
-                  (Rhint (root|deprecated.php line 5, characters 19-21),
-                   (Tapply (([5:19-22], "\\HH\\Contexts\\defaults"), [])))
-                  };
+                ft_implicit_params = { capability = (CapDefaults [5:19-22]) };
                 ft_ret =
                 { et_enforced = false;
                   et_type =
@@ -36,10 +30,9 @@
                 }));
           sm_visibility = Public;
           sm_deprecated =
-          (Some "The method foo is deprecated: use bar() instead") };
-         { Shallow_decl_defs.sm_abstract = false; sm_final = false;
-           sm_memoizelsb = false; sm_name = ([8:19-22], "bar");
-           sm_override = false; sm_dynamicallycallable = false;
+          (Some "The method foo is deprecated: use bar() instead");
+          sm_flags = (empty) };
+         { Shallow_decl_defs.sm_name = ([8:19-22], "bar");
            sm_reactivity = None;
            sm_type =
            (Rwitness (root|deprecated.php line 8, characters 19-21),
@@ -47,10 +40,7 @@
                { ft_arity = (Fstandard ()); ft_tparams = [];
                  ft_where_constraints = []; ft_params = [];
                  ft_implicit_params =
-                 { capability =
-                   (Rhint (root|deprecated.php line 8, characters 19-21),
-                    (Tapply (([8:19-22], "\\HH\\Contexts\\defaults"), [])))
-                   };
+                 { capability = (CapDefaults [8:19-22]) };
                  ft_ret =
                  { et_enforced = false;
                    et_type =
@@ -62,10 +52,8 @@
                    ~returns_mutable:false ~returns_void_to_rx:false);
                  ft_reactive = Nonreactive; ft_ifc_decl = FDPolicied {PUBLIC}
                  }));
-           sm_visibility = Public; sm_deprecated = None };
-         { Shallow_decl_defs.sm_abstract = false; sm_final = false;
-           sm_memoizelsb = false; sm_name = ([11:19-22], "baz");
-           sm_override = false; sm_dynamicallycallable = false;
+           sm_visibility = Public; sm_deprecated = None; sm_flags = (empty) };
+         { Shallow_decl_defs.sm_name = ([11:19-22], "baz");
            sm_reactivity = None;
            sm_type =
            (Rwitness (root|deprecated.php line 11, characters 19-21),
@@ -73,10 +61,7 @@
                { ft_arity = (Fstandard ()); ft_tparams = [];
                  ft_where_constraints = []; ft_params = [];
                  ft_implicit_params =
-                 { capability =
-                   (Rhint (root|deprecated.php line 11, characters 19-21),
-                    (Tapply (([11:19-22], "\\HH\\Contexts\\defaults"), [])))
-                   };
+                 { capability = (CapDefaults [11:19-22]) };
                  ft_ret =
                  { et_enforced = false;
                    et_type =
@@ -88,10 +73,8 @@
                    ~returns_mutable:false ~returns_void_to_rx:false);
                  ft_reactive = Nonreactive; ft_ifc_decl = FDPolicied {PUBLIC}
                  }));
-           sm_visibility = Public; sm_deprecated = None };
-         { Shallow_decl_defs.sm_abstract = false; sm_final = false;
-           sm_memoizelsb = false; sm_name = ([14:19-23], "foo2");
-           sm_override = false; sm_dynamicallycallable = false;
+           sm_visibility = Public; sm_deprecated = None; sm_flags = (empty) };
+         { Shallow_decl_defs.sm_name = ([14:19-23], "foo2");
            sm_reactivity = None;
            sm_type =
            (Rwitness (root|deprecated.php line 14, characters 19-22),
@@ -99,10 +82,7 @@
                { ft_arity = (Fstandard ()); ft_tparams = [];
                  ft_where_constraints = []; ft_params = [];
                  ft_implicit_params =
-                 { capability =
-                   (Rhint (root|deprecated.php line 14, characters 19-22),
-                    (Tapply (([14:19-23], "\\HH\\Contexts\\defaults"), [])))
-                   };
+                 { capability = (CapDefaults [14:19-23]) };
                  ft_ret =
                  { et_enforced = false;
                    et_type =
@@ -116,7 +96,8 @@
                  }));
            sm_visibility = Public;
            sm_deprecated =
-           (Some "The method foo2 is deprecated: use bar2() instead") }
+           (Some "The method foo2 is deprecated: use bar2() instead");
+           sm_flags = (empty) }
          ];
        sc_user_attributes = []; sc_enum_type = None }));
   ("\\foo",
@@ -128,11 +109,7 @@
          (Tfun
             { ft_arity = (Fstandard ()); ft_tparams = [];
               ft_where_constraints = []; ft_params = [];
-              ft_implicit_params =
-              { capability =
-                (Rhint (root|deprecated.php line 18, characters 10-12),
-                 (Tapply (([18:10-13], "\\HH\\Contexts\\defaults"), [])))
-                };
+              ft_implicit_params = { capability = (CapDefaults [18:10-13]) };
               ft_ret =
               { et_enforced = false;
                 et_type =
@@ -152,11 +129,7 @@
          (Tfun
             { ft_arity = (Fstandard ()); ft_tparams = [];
               ft_where_constraints = []; ft_params = [];
-              ft_implicit_params =
-              { capability =
-                (Rhint (root|deprecated.php line 21, characters 10-12),
-                 (Tapply (([21:10-13], "\\HH\\Contexts\\defaults"), [])))
-                };
+              ft_implicit_params = { capability = (CapDefaults [21:10-13]) };
               ft_ret =
               { et_enforced = false;
                 et_type =
@@ -176,11 +149,7 @@
          (Tfun
             { ft_arity = (Fstandard ()); ft_tparams = [];
               ft_where_constraints = []; ft_params = [];
-              ft_implicit_params =
-              { capability =
-                (Rhint (root|deprecated.php line 24, characters 10-12),
-                 (Tapply (([24:10-13], "\\HH\\Contexts\\defaults"), [])))
-                };
+              ft_implicit_params = { capability = (CapDefaults [24:10-13]) };
               ft_ret =
               { et_enforced = false;
                 et_type =
@@ -201,11 +170,7 @@
          (Tfun
             { ft_arity = (Fstandard ()); ft_tparams = [];
               ft_where_constraints = []; ft_params = [];
-              ft_implicit_params =
-              { capability =
-                (Rhint (root|deprecated.php line 27, characters 10-13),
-                 (Tapply (([27:10-14], "\\HH\\Contexts\\defaults"), [])))
-                };
+              ft_implicit_params = { capability = (CapDefaults [27:10-14]) };
               ft_ret =
               { et_enforced = false;
                 et_type =

@@ -297,6 +297,12 @@ pub mod user_attributes {
 
     pub const ATOM: &str = "__Atom";
 
+    pub const POLICIED: &str = "__Policied";
+
+    pub const INFERFLOWS: &str = "__InferFlows";
+
+    pub const EXTERNAL: &str = "__External";
+
     lazy_static! {
         static ref AS_SET: HashSet<&'static str> = vec![
             OVERRIDE,
@@ -344,6 +350,9 @@ pub mod user_attributes {
             ENABLE_UNSTABLE_FEATURES,
             ENUM_CLASS,
             ATOM,
+            POLICIED,
+            INFERFLOWS,
+            EXTERNAL,
         ]
         .into_iter()
         .collect();
@@ -914,16 +923,13 @@ pub mod regex {
 pub mod emitter_special_functions {
     pub const EVAL: &str = "\\eval";
     pub const SET_FRAME_METADATA: &str = "\\HH\\set_frame_metadata";
+    pub const SYSTEMLIB_REIFIED_GENERICS: &str = "\\__systemlib_reified_generics";
 }
 
 pub mod math {
     pub const NAN: &str = "NAN";
     pub const INF: &str = "INF";
     pub const NEG_INF: &str = "-INF";
-}
-
-pub mod pocket_universes {
-    pub const MEMBERS: &str = "Members";
 }
 
 #[cfg(test)]
@@ -973,8 +979,4 @@ mod test {
 
         assert!(is_namespace_with_reserved_hh_name("Anything\\Else\\void"));
     }
-}
-
-pub mod coeffects {
-    pub const DEFAULTS: &str = "\\HH\\Contexts\\defaults";
 }

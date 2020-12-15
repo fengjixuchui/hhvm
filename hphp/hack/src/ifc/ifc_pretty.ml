@@ -14,6 +14,11 @@ module Logic = Ifc_logic
 module Utils = Ifc_utils
 module T = Typing_defs
 
+let ifc_error_to_string (e : ifc_error_ty) : string =
+  match e with
+  | LiftError s -> "LiftError: " ^ s
+  | FlowInference s -> "FlowInference: " ^ s
+
 let comma_sep fmt () = fprintf fmt ",@ "
 
 let blank_sep fmt () = fprintf fmt "@ "
@@ -54,9 +59,13 @@ let rec ptype fmt ty =
     fprintf fmt "(@[<hov2>%a@])" (list pp_sep ptype) l
   in
   match ty with
+  | Tnull p -> fprintf fmt "null<%a>" policy p
   | Tprim p
-  | Tgeneric p ->
+  | Tgeneric p
+  | Tdynamic p ->
     fprintf fmt "<%a>" policy p
+  | Tnonnull (pself, plump) ->
+    fprintf fmt "nonnull<%a,%a>" policy pself policy plump
   | Ttuple tl -> list' "," tl
   | Tunion [] -> fprintf fmt "nothing"
   | Tunion tl -> list' " |" tl
@@ -67,16 +76,16 @@ let rec ptype fmt ty =
   | Tcow_array { a_key; a_value; a_length; a_kind } ->
     fprintf fmt "%a" array_kind a_kind;
     fprintf fmt "<%a => %a; |%a|>" ptype a_key ptype a_value policy a_length
-  | Tshape (kind, m) ->
+  | Tshape { sh_kind; sh_fields } ->
     let field fmt { sft_policy; sft_optional; sft_ty } =
       if sft_optional then fprintf fmt "?";
       fprintf fmt "<%a, %a>" policy sft_policy ptype sft_ty
     in
     fprintf fmt "shape(";
-    Nast.ShapeMap.pp field fmt m;
-    (match kind with
-    | T.Closed_shape -> fprintf fmt ")"
-    | T.Open_shape -> fprintf fmt ", ...)")
+    Nast.ShapeMap.pp field fmt sh_fields;
+    (match sh_kind with
+    | Closed_shape -> fprintf fmt ")"
+    | Open_shape ty -> fprintf fmt ", <%a>)" ptype ty)
 
 (* Format: <pc, self>(arg1, arg2, ...): ret [exn] *)
 and fun_ fmt fn =
@@ -212,25 +221,12 @@ let class_decl fmt { cd_policied_properties = props; _ } =
   let properties fmt = list comma_sep policied_property fmt in
   fprintf fmt "{ policied_props = [@[<hov>%a@]] }" properties props
 
-let fun_decl fmt decl =
-  let kind =
-    match decl.fd_kind with
-    | FDPolicied (Some policy) -> show_policy policy
-    | FDPolicied None -> "implicit"
-    | FDInferFlows -> "infer"
-  in
-  fprintf fmt "{ kind = %s }" kind
-
 let decl_env fmt de =
   let handle_class name decl =
     fprintf fmt "class %s: %a@ " name class_decl decl
   in
   fprintf fmt "Decls:@.  @[<v>";
-  let handle_fun name decl =
-    fprintf fmt "function %s: %a@ " name fun_decl decl
-  in
   SMap.iter handle_class de.de_class;
-  SMap.iter handle_fun de.de_fun;
   fprintf fmt "@]"
 
 let implicit_violation fmt (l, r) =

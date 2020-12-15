@@ -46,8 +46,6 @@ pub type Afield<A> =
     aast::Afield<<A as Annot>::Ex, <A as Annot>::Fb, <A as Annot>::En, <A as Annot>::Hi>;
 pub type AsExpr<A> =
     aast::AsExpr<<A as Annot>::Ex, <A as Annot>::Fb, <A as Annot>::En, <A as Annot>::Hi>;
-pub type AssertExpr<A> =
-    aast::AssertExpr<<A as Annot>::Ex, <A as Annot>::Fb, <A as Annot>::En, <A as Annot>::Hi>;
 pub type Block<A> =
     aast::Block<<A as Annot>::Ex, <A as Annot>::Fb, <A as Annot>::En, <A as Annot>::Hi>;
 pub type CaField<A> =
@@ -98,10 +96,6 @@ pub type Method_<A> =
     aast::Method_<<A as Annot>::Ex, <A as Annot>::Fb, <A as Annot>::En, <A as Annot>::Hi>;
 pub type Program<A> =
     aast::Program<<A as Annot>::Ex, <A as Annot>::Fb, <A as Annot>::En, <A as Annot>::Hi>;
-pub type PuEnum<A> =
-    aast::PuEnum<<A as Annot>::Ex, <A as Annot>::Fb, <A as Annot>::En, <A as Annot>::Hi>;
-pub type PuMember<A> =
-    aast::PuMember<<A as Annot>::Ex, <A as Annot>::Fb, <A as Annot>::En, <A as Annot>::Hi>;
 pub type RecordDef<A> =
     aast::RecordDef<<A as Annot>::Ex, <A as Annot>::Fb, <A as Annot>::En, <A as Annot>::Hi>;
 pub type Stmt<A> =

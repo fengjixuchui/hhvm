@@ -18,20 +18,23 @@
 #include "hphp/runtime/base/bespoke/monotype-vec.h"
 
 #include "hphp/runtime/base/bespoke/entry-types.h"
-
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/memory-manager.h"
 #include "hphp/runtime/base/mixed-array-defs.h"
 #include "hphp/runtime/base/type-variant.h"
 #include "hphp/runtime/base/tv-refcount.h"
 
+#include "hphp/runtime/vm/jit/irgen.h"
+#include "hphp/runtime/vm/jit/irgen-state.h"
+#include "hphp/runtime/vm/jit/ssa-tmp.h"
+
 #include "hphp/util/word-mem.h"
 
 namespace HPHP { namespace bespoke {
 
-TRACE_SET_MOD(bespoke);
-
 namespace {
+
+//////////////////////////////////////////////////////////////////////////////
 
 uint16_t packSizeIndexAndAuxBits(uint8_t idx, uint8_t aux) {
   return (static_cast<uint16_t>(idx) << 8) | aux;
@@ -59,8 +62,8 @@ alignas(64) constexpr uint32_t kSizeIndex2MonotypeVecCapacity[] = {
 };
 
 //////////////////////////////////////////////////////////////////////////////
+
 }
-//////////////////////////////////////////////////////////////////////////////
 
 //////////////////////////////////////////////////////////////////////////////
 // Static initialization
@@ -76,57 +79,43 @@ StaticVec s_emptyMonotypeVecMarked;
 StaticVec s_emptyMonotypeVArrayMarked;
 
 static_assert(sizeof(DataType) == 1);
-constexpr LayoutIndex kBaseLayoutIndex = {1 << 8};
+constexpr LayoutIndex kBaseLayoutIndex = {1 << 9};
 auto const s_monotypeVecVtable = fromArray<MonotypeVec>();
 auto const s_emptyMonotypeVecVtable = fromArray<EmptyMonotypeVec>();
+
+constexpr DataType kEmptyDataType = static_cast<DataType>(1);
+constexpr DataType kAbstractDataTypeMask = static_cast<DataType>(0x80);
 
 constexpr LayoutIndex getLayoutIndex(DataType type) {
   return LayoutIndex{uint16_t(kBaseLayoutIndex.raw + uint8_t(type))};
 }
 
 constexpr LayoutIndex getEmptyLayoutIndex() {
-  return getLayoutIndex(kInvalidDataType);
+  auto constexpr offset = (1 << 8);
+  return LayoutIndex{uint16_t(kBaseLayoutIndex.raw) + offset};
 }
 
-}
-
-MonotypeVecLayout::MonotypeVecLayout(LayoutIndex index, DataType type)
-  : ConcreteLayout(index, makeDescription(type), &s_monotypeVecVtable)
-  , m_fixedType(type)
-{}
-
-std::string MonotypeVecLayout::makeDescription(DataType type) {
-  return folly::sformat("MonotypeVec<{}>", tname(type));
-}
-
-EmptyMonotypeVecLayout::EmptyMonotypeVecLayout(LayoutIndex index)
-  : ConcreteLayout(index, "MonotypeVec<Empty>", &s_emptyMonotypeVecVtable)
-{}
-
-void MonotypeVec::InitializeLayouts() {
-  auto const base = Layout::ReserveIndices(1 << 8);
-  always_assert(base == kBaseLayoutIndex);
-  new EmptyMonotypeVecLayout(getEmptyLayoutIndex());
-#define DT(name, value)                                                \
-  if (dt_modulo_persistence(KindOf##name) == KindOf##name) {           \
-    new MonotypeVecLayout(getLayoutIndex(KindOf##name), KindOf##name); \
+Layout::LayoutSet getAllEmptyOrMonotypeVecLayouts() {
+  Layout::LayoutSet result;
+#define DT(name, value) {                                   \
+    auto const type = KindOf##name;                         \
+    if (type == dt_modulo_persistence(type)) {              \
+      result.insert(EmptyOrMonotypeVecLayout::Index(type)); \
+    }                                                       \
   }
   DATATYPES
 #undef DT
+  return result;
+}
 
-  auto const init = [&](EmptyMonotypeVec* ead, HeaderKind hk, bool legacy) {
-    auto const aux =
-      packSizeIndexAndAuxBits(0, legacy ? ArrayData::kLegacyArray : 0);
-    ead->initHeader_16(hk, StaticValue, aux);
-    ead->m_size = 0;
-    ead->setLayoutIndex(getEmptyLayoutIndex());
-    assertx(ead->checkInvariants());
-  };
+LayoutIndex getMonotypeParentLayout(DataType dt) {
+  if (!hasPersistentFlavor(dt) || isRefcountedType(dt)) {
+    return EmptyOrMonotypeVecLayout::Index(dt_modulo_persistence(dt));
+  }
 
-  init(EmptyMonotypeVec::GetVec(false), HeaderKind::BespokeVec, false);
-  init(EmptyMonotypeVec::GetVArray(false), HeaderKind::BespokeVArray, false);
-  init(EmptyMonotypeVec::GetVec(true), HeaderKind::BespokeVec, true);
-  init(EmptyMonotypeVec::GetVArray(true), HeaderKind::BespokeVArray, true);
+  return MonotypeVecLayout::Index(dt_modulo_persistence(dt));
+}
+
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -195,20 +184,20 @@ bool EmptyMonotypeVec::IsVectorData(const EmptyMonotypeVec*) {
   return true;
 }
 
-TypedValue EmptyMonotypeVec::GetInt(const EmptyMonotypeVec*, int64_t) {
+TypedValue EmptyMonotypeVec::NvGetInt(const EmptyMonotypeVec*, int64_t) {
   return make_tv<KindOfUninit>();
 }
 
-TypedValue EmptyMonotypeVec::GetStr(const EmptyMonotypeVec*,
+TypedValue EmptyMonotypeVec::NvGetStr(const EmptyMonotypeVec*,
                                     const StringData*) {
   return make_tv<KindOfUninit>();
 }
 
-TypedValue EmptyMonotypeVec::GetKey(const EmptyMonotypeVec*, ssize_t) {
+TypedValue EmptyMonotypeVec::GetPosKey(const EmptyMonotypeVec*, ssize_t) {
   always_assert(false);
 }
 
-TypedValue EmptyMonotypeVec::GetVal(const EmptyMonotypeVec*, ssize_t) {
+TypedValue EmptyMonotypeVec::GetPosVal(const EmptyMonotypeVec*, ssize_t) {
   always_assert(false);
 }
 
@@ -291,18 +280,16 @@ ssize_t EmptyMonotypeVec::IterRewind(const EmptyMonotypeVec*, ssize_t pos) {
 }
 
 ArrayData* EmptyMonotypeVec::Append(EmptyMonotypeVec* ead, TypedValue v) {
-  auto const dt = dt_modulo_persistence(type(v));
   auto const mad = MonotypeVec::MakeReserve(
-      ead->m_kind, ead->isLegacyArray(), 1, dt);
+      ead->m_kind, ead->isLegacyArray(), 1, type(v));
   auto const res = MonotypeVec::Append(mad, v);
   assertx(mad == res);
   return res;
 }
 
 ArrayData* EmptyMonotypeVec::AppendMove(EmptyMonotypeVec* ead, TypedValue v) {
-  auto const dt = dt_modulo_persistence(type(v));
   auto const mad = MonotypeVec::MakeReserve(
-      ead->m_kind, ead->isLegacyArray(), 1, dt);
+      ead->m_kind, ead->isLegacyArray(), 1, type(v));
   auto const res = MonotypeVec::AppendMove(mad, v);
   assertx(mad == res);
   return res;
@@ -351,14 +338,15 @@ ArrayData* EmptyMonotypeVec::SetLegacyArray(EmptyMonotypeVec* eadIn,
 template <typename CountableFn, typename MaybeCountableFn>
 void MonotypeVec::forEachCountableValue(CountableFn c, MaybeCountableFn mc) {
   auto const dt = type();
-  if (static_cast<data_type_t>(dt) & kHasPersistentMask) {
-    assertx(isRefcountedType(dt));
-    for (auto i = 0; i < m_size; i++) {
-      mc(dt, valueRefUnchecked(i).pcnt);
-    }
-  } else if (isRefcountedType(dt)) {
-    for (auto i = 0; i < m_size; i++) {
-      c(dt, reinterpret_cast<Countable*>(valueRefUnchecked(i).pcnt));
+  if (isRefcountedType(dt)) {
+    if (hasPersistentFlavor(dt)) {
+      for (auto i = 0; i < m_size; i++) {
+        mc(dt, valueRefUnchecked(i).pcnt);
+      }
+    } else {
+      for (auto i = 0; i < m_size; i++) {
+        c(dt, reinterpret_cast<Countable*>(valueRefUnchecked(i).pcnt));
+      }
     }
   }
 }
@@ -377,12 +365,18 @@ void MonotypeVec::incRefValues() {
   );
 }
 
+template <bool Static>
 MonotypeVec* MonotypeVec::MakeReserve(
     HeaderKind hk, bool legacy, uint32_t capacity, DataType dt) {
   auto const bytes = sizeof(MonotypeVec) + capacity * sizeof(Value);
   auto const index = std::max(MemoryManager::size2Index(bytes), kMinSizeIndex);
+  auto const alloc = [&]{
+    if (!Static) return tl_heap->objMallocIndex(index);
+    auto const size = MemoryManager::sizeIndex2Size(index);
+    return RO::EvalLowStaticArrays ? low_malloc(size) : uncounted_malloc(size);
+  }();
 
-  auto const mad = static_cast<MonotypeVec*>(tl_heap->objMallocIndex(index));
+  auto const mad = static_cast<MonotypeVec*>(alloc);
   auto const aux = packSizeIndexAndAuxBits(
       index, legacy ? ArrayData::kLegacyArray : 0);
 
@@ -398,7 +392,9 @@ MonotypeVec* MonotypeVec::MakeFromVanilla(ArrayData* ad, DataType dt) {
   assertx(ad->hasVanillaPackedLayout());
   auto const kind = ad->isVArray() ? HeaderKind::BespokeVArray
                                    : HeaderKind::BespokeVec;
-  auto result = MakeReserve(kind, ad->isLegacyArray(), ad->size(), dt);
+  auto result = ad->isStatic()
+    ? MakeReserve<true>(kind, ad->isLegacyArray(), ad->size(), dt)
+    : MakeReserve<false>(kind, ad->isLegacyArray(), ad->size(), dt);
 
   PackedArray::IterateVNoInc(ad, [&](auto v) {
     auto const next = Append(result, v);
@@ -407,15 +403,9 @@ MonotypeVec* MonotypeVec::MakeFromVanilla(ArrayData* ad, DataType dt) {
   });
 
   if (ad->isStatic()) {
-    auto const size = HeapSize(result);
-    auto const copy = static_cast<MonotypeVec*>(
-        RO::EvalLowStaticArrays ? low_malloc(size) : uncounted_malloc(size));
-    memcpy16_inline(copy, result, size);
     auto const aux = packSizeIndexAndAuxBits(
       result->sizeIndex(), result->auxBits());
-    copy->initHeader_16(kind, StaticValue, aux);
-    Release(result);
-    result = copy;
+    result->initHeader_16(kind, StaticValue, aux);
   }
 
   assertx(result->checkInvariants());
@@ -516,7 +506,6 @@ bool MonotypeVec::checkInvariants() const {
   assertx(layoutIndex() != getEmptyLayoutIndex());
   assertx(layoutIndex() == getLayoutIndex(type()));
   assertx(isRealType(type()));
-  assertx(type() == dt_modulo_persistence(type()));
   if (size() > 0) {
     assertx(tvIsPlausible(typedValueUnchecked(0)));
   }
@@ -561,6 +550,10 @@ void MonotypeVec::ConvertToUncounted(MonotypeVec* madIn,
     ConvertTvToUncounted(lval, seen);
     assertx(equivDataTypes(dt, madIn->type()));
   }
+  auto const newType = hasPersistentFlavor(oldType)
+    ? dt_with_persistence(oldType)
+    : oldType;
+  madIn->setLayoutIndex(getLayoutIndex(newType));
 }
 
 void MonotypeVec::ReleaseUncounted(MonotypeVec* mad) {
@@ -582,21 +575,21 @@ bool MonotypeVec::IsVectorData(const MonotypeVec* mad) {
   return true;
 }
 
-TypedValue MonotypeVec::GetInt(const MonotypeVec* mad, int64_t k) {
+TypedValue MonotypeVec::NvGetInt(const MonotypeVec* mad, int64_t k) {
   if (size_t(k) >= mad->size()) return make_tv<KindOfUninit>();
   return mad->typedValueUnchecked(k);
 }
 
-TypedValue MonotypeVec::GetStr(const MonotypeVec* mad, const StringData*) {
+TypedValue MonotypeVec::NvGetStr(const MonotypeVec* mad, const StringData*) {
   return make_tv<KindOfUninit>();
 }
 
-TypedValue MonotypeVec::GetKey(const MonotypeVec* mad, ssize_t pos) {
+TypedValue MonotypeVec::GetPosKey(const MonotypeVec* mad, ssize_t pos) {
   assertx(pos < mad->size());
   return make_tv<KindOfInt64>(pos);
 }
 
-TypedValue MonotypeVec::GetVal(const MonotypeVec* mad, ssize_t pos) {
+TypedValue MonotypeVec::GetPosVal(const MonotypeVec* mad, ssize_t pos) {
   assertx(size_t(pos) < mad->size());
   return mad->typedValueUnchecked(pos);
 }
@@ -625,13 +618,14 @@ arr_lval MonotypeVec::elemImpl(int64_t k, bool throwOnMissing) {
     if (throwOnMissing) throwOOBArrayKeyException(k, this);
     return {this, const_cast<TypedValue*>(&immutable_null_base)};
   }
-  if (type() == KindOfClsMeth) {
-    // If we have a ClsMeth, we need to return a proper lval, so we escalate to
-    // vanilla.
-    return LvalInt(this, k);
-  }
+
+  auto const dt = type();
+  if (dt == KindOfClsMeth) return LvalInt(this, k);
+
   auto const cow = cowCheck();
   auto const mad = cow ? copy() : this;
+  mad->setLayoutIndex(getLayoutIndex(dt_modulo_persistence(dt)));
+
   static_assert(folly::kIsLittleEndian);
   auto const type_ptr = reinterpret_cast<DataType*>(&mad->m_extra_hi16);
   assertx(*type_ptr == mad->type());
@@ -662,7 +656,8 @@ ArrayData* MonotypeVec::setIntImpl(int64_t k, TypedValue v) {
     throwOOBArrayKeyException(k, this);
   }
 
-  if (type() != dt_modulo_persistence(v.m_type)) {
+  auto const dt = type();
+  if (!equivDataTypes(dt, v.type())) {
     auto const vad = EscalateToVanilla(this, __func__);
     auto const res = vad->set(k, v);
     assertx(vad == res);
@@ -678,11 +673,13 @@ ArrayData* MonotypeVec::setIntImpl(int64_t k, TypedValue v) {
   }
   auto const cow = cowCheck();
   auto const mad = cow ? copy() : this;
+  if (dt != v.type()) {
+    mad->setLayoutIndex(getLayoutIndex(dt_with_rc(dt)));
+  }
   mad->valueRefUnchecked(k) = val(v);
   if constexpr (Move) {
     if (cow && decReleaseCheck()) Release(this);
   }
-
   return mad;
 }
 
@@ -744,15 +741,18 @@ ssize_t MonotypeVec::IterRewind(const MonotypeVec* mad, ssize_t pos) {
 
 template <bool Move>
 ArrayData* MonotypeVec::appendImpl(TypedValue v) {
-  if (type() != dt_modulo_persistence(v.type())) {
-    // Type doesn't match; escalate to vanilla
+  auto const dt = type();
+  if (!equivDataTypes(dt, v.type())) {
     auto const ad = escalateWithCapacity(size() + 1);
-    auto const res = PackedArray::Append(ad, v);
-    assertx(ad == res);
-    return res;
+    auto const result = PackedArray::Append(ad, v);
+    assertx(ad == result);
+    return result;
   }
 
   auto const mad = prepareForInsert();
+  if (dt != v.type()) {
+    mad->setLayoutIndex(getLayoutIndex(dt_with_rc(dt)));
+  }
   mad->valueRefUnchecked(mad->m_size++) = val(v);
 
   if constexpr (Move) {
@@ -824,6 +824,113 @@ ArrayData* MonotypeVec::SetLegacyArray(MonotypeVec* madIn,
   auto const mad = copy ? madIn->copy() : madIn;
   mad->setLegacyArrayInPlace(legacy);
   return mad;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+// Layout creation and usage API
+//////////////////////////////////////////////////////////////////////////////
+
+void MonotypeVec::InitializeLayouts() {
+  auto const base = Layout::ReserveIndices(1 << 9);
+  always_assert(base == kBaseLayoutIndex);
+
+  new TopMonotypeVecLayout();
+
+#define DT(name, value) {                      \
+    auto const type = KindOf##name;            \
+    if (type == dt_modulo_persistence(type)) { \
+      new EmptyOrMonotypeVecLayout(type);      \
+    }                                          \
+  }
+  DATATYPES
+#undef DT
+
+  new EmptyMonotypeVecLayout();
+
+  // Create all the potentially internal concrete layouts first
+#define DT(name, value) {                      \
+    auto const type = KindOf##name;            \
+    if (type == dt_modulo_persistence(type)) { \
+      new MonotypeVecLayout(type);             \
+    }                                          \
+  }
+  DATATYPES
+#undef DT
+
+#define DT(name, value) {                      \
+    auto const type = KindOf##name;            \
+    if (type != dt_modulo_persistence(type)) { \
+      new MonotypeVecLayout(type);             \
+    }                                          \
+  }
+  DATATYPES
+#undef DT
+
+  auto const init = [&](EmptyMonotypeVec* ead, HeaderKind hk, bool legacy) {
+    auto const aux =
+      packSizeIndexAndAuxBits(0, legacy ? ArrayData::kLegacyArray : 0);
+    ead->initHeader_16(hk, StaticValue, aux);
+    ead->m_size = 0;
+    ead->setLayoutIndex(getEmptyLayoutIndex());
+    assertx(ead->checkInvariants());
+  };
+
+  init(EmptyMonotypeVec::GetVec(false), HeaderKind::BespokeVec, false);
+  init(EmptyMonotypeVec::GetVArray(false), HeaderKind::BespokeVArray, false);
+  init(EmptyMonotypeVec::GetVec(true), HeaderKind::BespokeVec, true);
+  init(EmptyMonotypeVec::GetVArray(true), HeaderKind::BespokeVArray, true);
+}
+
+TopMonotypeVecLayout::TopMonotypeVecLayout()
+  : AbstractLayout(
+      Index(), "MonotypeVec<Top>",
+      {AbstractLayout::GetBespokeTopIndex()})
+{}
+
+LayoutIndex TopMonotypeVecLayout::Index() {
+  auto const t = int8_t(kEmptyDataType) ^ int8_t(kAbstractDataTypeMask);
+  return MonotypeVecLayout::Index(static_cast<DataType>(t));
+}
+
+EmptyOrMonotypeVecLayout::EmptyOrMonotypeVecLayout(DataType type)
+  : AbstractLayout(
+      Index(type), folly::sformat("MonotypeVec<Empty|{}>", tname(type)),
+      {TopMonotypeVecLayout::Index()}),
+    m_fixedType(type)
+{}
+
+LayoutIndex EmptyOrMonotypeVecLayout::Index(DataType type) {
+  assertx(type == dt_modulo_persistence(type));
+  auto const t = int8_t(type) ^ int8_t(kAbstractDataTypeMask);
+  return MonotypeVecLayout::Index(static_cast<DataType>(t));
+}
+
+EmptyMonotypeVecLayout::EmptyMonotypeVecLayout()
+  : ConcreteLayout(
+      Index(), "MonotypeVec<Empty>", &s_emptyMonotypeVecVtable,
+      {getAllEmptyOrMonotypeVecLayouts()})
+{}
+
+LayoutIndex EmptyMonotypeVecLayout::Index() {
+  return getEmptyLayoutIndex();
+}
+
+MonotypeVecLayout::MonotypeVecLayout(DataType type)
+  : ConcreteLayout(
+      Index(type),
+      folly::sformat("MonotypeVec<{}>", tname(type)),
+      &s_monotypeVecVtable,
+      {getMonotypeParentLayout(type)})
+  , m_fixedType(type)
+{}
+
+LayoutIndex MonotypeVecLayout::Index(DataType type) {
+  return getLayoutIndex(type);
+}
+
+bool isMonotypeVecLayout(LayoutIndex index) {
+  return kBaseLayoutIndex.raw <= index.raw &&
+         index.raw < 2 * kBaseLayoutIndex.raw;
 }
 
 }}

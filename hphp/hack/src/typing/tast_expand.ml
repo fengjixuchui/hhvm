@@ -9,7 +9,6 @@
 
 open Hh_prelude
 open Typing_defs
-module T = Aast
 module MakeType = Typing_make_type
 
 (* Eliminate residue of type inference:
@@ -58,8 +57,6 @@ let expand_ty ?var_hook ?pos env ty =
           mk (p, Tvar v))
       | (p, Terr) -> MakeType.err p
       (* TODO(T36532263) see if that needs updating *)
-      | (p, Tpu (base, enum)) -> mk (p, Tpu (exp_ty base, enum))
-      | (_, Tpu_type_access (_, _)) -> ety
       | (_, Taccess _) -> ety
       | (_, Tunapplied_alias _) -> ety
     in
@@ -98,7 +95,12 @@ let expand_ty ?var_hook ?pos env ty =
       fp_flags;
     }
   and exp_fun_implicit_params { capability } =
-    { capability = exp_ty capability }
+    let capability =
+      match capability with
+      | CapTy ty -> CapTy (exp_ty ty)
+      | CapDefaults p -> CapDefaults p
+    in
+    { capability }
   and exp_possibly_enforced_ty { et_type; et_enforced } =
     { et_type = exp_ty et_type; et_enforced }
   and exp_sft { sft_optional; sft_ty } =

@@ -94,6 +94,16 @@
                                                   (Id
                                                      ([Pos.none],
                                                       "\\__FILE__")));
+                                                 ([Pos.none],
+                                                  (KeyValCollection (Dict,
+                                                     None,
+                                                     [(([Pos.none],
+                                                        (String "$__0")),
+                                                       ([Pos.none],
+                                                        (Lvar
+                                                           ([Pos.none], $__0))))
+                                                       ]
+                                                     )));
                                                  ([4:8-26],
                                                   (Lfun (
                                                      { f_span = [4:8-26];
@@ -150,8 +160,8 @@
                                                                     (Id
                                                                     ([4:8-26],
                                                                     "lambdaLiteral"))),
-                                                                    OG_nullthrows
-                                                                    ))),
+                                                                    OG_nullthrows,
+                                                                    false))),
                                                                  [],
                                                                  [([4:8-26],
                                                                    (New (
@@ -194,8 +204,8 @@
                                                                     (Id
                                                                     ([4:17-23],
                                                                     "assign"))),
-                                                                    OG_nullthrows
-                                                                    ))), 
+                                                                    OG_nullthrows,
+                                                                    false))),
                                                                     [],
                                                                     [([4:17-23],
                                                                     (New (
@@ -227,8 +237,8 @@
                                                                     (Id
                                                                     ([4:17-19],
                                                                     "localVar"))),
-                                                                    OG_nullthrows
-                                                                    ))), 
+                                                                    OG_nullthrows,
+                                                                    false))),
                                                                     [],
                                                                     [([4:17-19],
                                                                     (New (
@@ -264,8 +274,8 @@
                                                                     (Id
                                                                     ([4:22-23],
                                                                     "splice"))),
-                                                                    OG_nullthrows
-                                                                    ))), 
+                                                                    OG_nullthrows,
+                                                                    false))),
                                                                     [],
                                                                     [([4:22-23],
                                                                     (New (
@@ -285,6 +295,9 @@
                                                                     ], None,
                                                                     [4:22-23]
                                                                     )));
+                                                                    ([Pos.none],
+                                                                    (String
+                                                                    "$__0"));
                                                                     ([4:22-23],
                                                                     (Lvar
                                                                     ([4:22-23],

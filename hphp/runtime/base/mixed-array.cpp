@@ -372,7 +372,9 @@ MixedArray* MixedArray::MakeMixedImpl(uint32_t size, const TypedValue* kvs) {
 MixedArray* MixedArray::MakeDArray(uint32_t size, const TypedValue* kvs) {
   if (RuntimeOption::EvalHackArrDVArrs) {
     auto const ad = MakeDict(size, kvs);
-    ad->setLegacyArrayInPlace(RO::EvalHackArrDVArrMark);
+    if (RO::EvalHackArrDVArrMark && ad != nullptr) {
+      ad->setLegacyArrayInPlace(true);
+    }
     return ad;
   }
 
@@ -1264,6 +1266,13 @@ ArrayData* MixedArray::AppendImpl(ArrayData* ad, TypedValue v, bool copy) {
 
 ArrayData* MixedArray::Append(ArrayData* ad, TypedValue v) {
   return AppendImpl(ad, v, ad->cowCheck());
+}
+
+ArrayData* MixedArray::AppendMove(ArrayData* ad, TypedValue v) {
+  auto const result = AppendImpl(ad, v, ad->cowCheck());
+  if (ad != result && ad->decReleaseCheck()) Release(ad);
+  tvDecRefGen(v);
+  return result;
 }
 
 /*

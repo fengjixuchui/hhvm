@@ -618,7 +618,7 @@ where
       Self { syntax, value }
     }
 
-    fn make_function_declaration_header(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self, arg4: Self, arg5: Self, arg6: Self, arg7: Self, arg8: Self, arg9: Self, arg10: Self, arg11: Self) -> Self {
+    fn make_function_declaration_header(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self, arg4: Self, arg5: Self, arg6: Self, arg7: Self, arg8: Self, arg9: Self, arg10: Self) -> Self {
       let children = &[
           arg0.value, 
           arg1.value, 
@@ -630,8 +630,7 @@ where
           arg7.value, 
           arg8.value, 
           arg9.value, 
-          arg10.value, 
-          arg11.value
+          arg10.value
       ];
       let value = V::from_values(children.iter());
       let syntax = Self::make(
@@ -649,8 +648,7 @@ where
               arg7.syntax, 
               arg8.syntax, 
               arg9.syntax, 
-              arg10.syntax, 
-              arg11.syntax
+              arg10.syntax
           ],
       );
       Self { syntax, value }
@@ -671,32 +669,6 @@ where
               arg0.syntax, 
               arg1.syntax, 
               arg2.syntax
-          ],
-      );
-      Self { syntax, value }
-    }
-
-    fn make_capability_provisional(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self, arg4: Self, arg5: Self) -> Self {
-      let children = &[
-          arg0.value, 
-          arg1.value, 
-          arg2.value, 
-          arg3.value, 
-          arg4.value, 
-          arg5.value
-      ];
-      let value = V::from_values(children.iter());
-      let syntax = Self::make(
-          ctx,
-          SyntaxKind::CapabilityProvisional,
-          &value,
-          &[
-              arg0.syntax, 
-              arg1.syntax, 
-              arg2.syntax, 
-              arg3.syntax, 
-              arg4.syntax, 
-              arg5.syntax
           ],
       );
       Self { syntax, value }
@@ -1023,6 +995,38 @@ where
               arg7.syntax, 
               arg8.syntax, 
               arg9.syntax
+          ],
+      );
+      Self { syntax, value }
+    }
+
+    fn make_context_const_declaration(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self, arg4: Self, arg5: Self, arg6: Self, arg7: Self, arg8: Self) -> Self {
+      let children = &[
+          arg0.value, 
+          arg1.value, 
+          arg2.value, 
+          arg3.value, 
+          arg4.value, 
+          arg5.value, 
+          arg6.value, 
+          arg7.value, 
+          arg8.value
+      ];
+      let value = V::from_values(children.iter());
+      let syntax = Self::make(
+          ctx,
+          SyntaxKind::ContextConstDeclaration,
+          &value,
+          &[
+              arg0.syntax, 
+              arg1.syntax, 
+              arg2.syntax, 
+              arg3.syntax, 
+              arg4.syntax, 
+              arg5.syntax, 
+              arg6.syntax, 
+              arg7.syntax, 
+              arg8.syntax
           ],
       );
       Self { syntax, value }
@@ -1696,44 +1700,6 @@ where
       let syntax = Self::make(
           ctx,
           SyntaxKind::ReturnStatement,
-          &value,
-          &[
-              arg0.syntax, 
-              arg1.syntax, 
-              arg2.syntax
-          ],
-      );
-      Self { syntax, value }
-    }
-
-    fn make_goto_label(ctx: &C, arg0: Self, arg1: Self) -> Self {
-      let children = &[
-          arg0.value, 
-          arg1.value
-      ];
-      let value = V::from_values(children.iter());
-      let syntax = Self::make(
-          ctx,
-          SyntaxKind::GotoLabel,
-          &value,
-          &[
-              arg0.syntax, 
-              arg1.syntax
-          ],
-      );
-      Self { syntax, value }
-    }
-
-    fn make_goto_statement(ctx: &C, arg0: Self, arg1: Self, arg2: Self) -> Self {
-      let children = &[
-          arg0.value, 
-          arg1.value, 
-          arg2.value
-      ];
-      let value = V::from_values(children.iter());
-      let syntax = Self::make(
-          ctx,
-          SyntaxKind::GotoStatement,
           &value,
           &[
               arg0.syntax, 
@@ -3034,26 +3000,6 @@ where
       Self { syntax, value }
     }
 
-    fn make_pu_access(ctx: &C, arg0: Self, arg1: Self, arg2: Self) -> Self {
-      let children = &[
-          arg0.value, 
-          arg1.value, 
-          arg2.value
-      ];
-      let value = V::from_values(children.iter());
-      let syntax = Self::make(
-          ctx,
-          SyntaxKind::PUAccess,
-          &value,
-          &[
-              arg0.syntax, 
-              arg1.syntax, 
-              arg2.syntax
-          ],
-      );
-      Self { syntax, value }
-    }
-
     fn make_vector_type_specifier(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self, arg4: Self) -> Self {
       let children = &[
           arg0.value, 
@@ -3148,6 +3094,24 @@ where
       Self { syntax, value }
     }
 
+    fn make_function_ctx_type_specifier(ctx: &C, arg0: Self, arg1: Self) -> Self {
+      let children = &[
+          arg0.value, 
+          arg1.value
+      ];
+      let value = V::from_values(children.iter());
+      let syntax = Self::make(
+          ctx,
+          SyntaxKind::FunctionCtxTypeSpecifier,
+          &value,
+          &[
+              arg0.syntax, 
+              arg1.syntax
+          ],
+      );
+      Self { syntax, value }
+    }
+
     fn make_type_parameter(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self, arg4: Self, arg5: Self) -> Self {
       let children = &[
           arg0.value, 
@@ -3183,6 +3147,24 @@ where
       let syntax = Self::make(
           ctx,
           SyntaxKind::TypeConstraint,
+          &value,
+          &[
+              arg0.syntax, 
+              arg1.syntax
+          ],
+      );
+      Self { syntax, value }
+    }
+
+    fn make_context_constraint(ctx: &C, arg0: Self, arg1: Self) -> Self {
+      let children = &[
+          arg0.value, 
+          arg1.value
+      ];
+      let value = V::from_values(children.iter());
+      let syntax = Self::make(
+          ctx,
+          SyntaxKind::ContextConstraint,
           &value,
           &[
               arg0.syntax, 
@@ -3681,186 +3663,6 @@ where
           &[
               arg0.syntax, 
               arg1.syntax
-          ],
-      );
-      Self { syntax, value }
-    }
-
-    fn make_pocket_atom_expression(ctx: &C, arg0: Self, arg1: Self) -> Self {
-      let children = &[
-          arg0.value, 
-          arg1.value
-      ];
-      let value = V::from_values(children.iter());
-      let syntax = Self::make(
-          ctx,
-          SyntaxKind::PocketAtomExpression,
-          &value,
-          &[
-              arg0.syntax, 
-              arg1.syntax
-          ],
-      );
-      Self { syntax, value }
-    }
-
-    fn make_pocket_identifier_expression(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self, arg4: Self) -> Self {
-      let children = &[
-          arg0.value, 
-          arg1.value, 
-          arg2.value, 
-          arg3.value, 
-          arg4.value
-      ];
-      let value = V::from_values(children.iter());
-      let syntax = Self::make(
-          ctx,
-          SyntaxKind::PocketIdentifierExpression,
-          &value,
-          &[
-              arg0.syntax, 
-              arg1.syntax, 
-              arg2.syntax, 
-              arg3.syntax, 
-              arg4.syntax
-          ],
-      );
-      Self { syntax, value }
-    }
-
-    fn make_pocket_atom_mapping_declaration(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self, arg4: Self, arg5: Self) -> Self {
-      let children = &[
-          arg0.value, 
-          arg1.value, 
-          arg2.value, 
-          arg3.value, 
-          arg4.value, 
-          arg5.value
-      ];
-      let value = V::from_values(children.iter());
-      let syntax = Self::make(
-          ctx,
-          SyntaxKind::PocketAtomMappingDeclaration,
-          &value,
-          &[
-              arg0.syntax, 
-              arg1.syntax, 
-              arg2.syntax, 
-              arg3.syntax, 
-              arg4.syntax, 
-              arg5.syntax
-          ],
-      );
-      Self { syntax, value }
-    }
-
-    fn make_pocket_enum_declaration(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self, arg4: Self, arg5: Self, arg6: Self) -> Self {
-      let children = &[
-          arg0.value, 
-          arg1.value, 
-          arg2.value, 
-          arg3.value, 
-          arg4.value, 
-          arg5.value, 
-          arg6.value
-      ];
-      let value = V::from_values(children.iter());
-      let syntax = Self::make(
-          ctx,
-          SyntaxKind::PocketEnumDeclaration,
-          &value,
-          &[
-              arg0.syntax, 
-              arg1.syntax, 
-              arg2.syntax, 
-              arg3.syntax, 
-              arg4.syntax, 
-              arg5.syntax, 
-              arg6.syntax
-          ],
-      );
-      Self { syntax, value }
-    }
-
-    fn make_pocket_field_type_expr_declaration(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self) -> Self {
-      let children = &[
-          arg0.value, 
-          arg1.value, 
-          arg2.value, 
-          arg3.value
-      ];
-      let value = V::from_values(children.iter());
-      let syntax = Self::make(
-          ctx,
-          SyntaxKind::PocketFieldTypeExprDeclaration,
-          &value,
-          &[
-              arg0.syntax, 
-              arg1.syntax, 
-              arg2.syntax, 
-              arg3.syntax
-          ],
-      );
-      Self { syntax, value }
-    }
-
-    fn make_pocket_field_type_declaration(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self) -> Self {
-      let children = &[
-          arg0.value, 
-          arg1.value, 
-          arg2.value, 
-          arg3.value
-      ];
-      let value = V::from_values(children.iter());
-      let syntax = Self::make(
-          ctx,
-          SyntaxKind::PocketFieldTypeDeclaration,
-          &value,
-          &[
-              arg0.syntax, 
-              arg1.syntax, 
-              arg2.syntax, 
-              arg3.syntax
-          ],
-      );
-      Self { syntax, value }
-    }
-
-    fn make_pocket_mapping_id_declaration(ctx: &C, arg0: Self, arg1: Self) -> Self {
-      let children = &[
-          arg0.value, 
-          arg1.value
-      ];
-      let value = V::from_values(children.iter());
-      let syntax = Self::make(
-          ctx,
-          SyntaxKind::PocketMappingIdDeclaration,
-          &value,
-          &[
-              arg0.syntax, 
-              arg1.syntax
-          ],
-      );
-      Self { syntax, value }
-    }
-
-    fn make_pocket_mapping_type_declaration(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self) -> Self {
-      let children = &[
-          arg0.value, 
-          arg1.value, 
-          arg2.value, 
-          arg3.value
-      ];
-      let value = V::from_values(children.iter());
-      let syntax = Self::make(
-          ctx,
-          SyntaxKind::PocketMappingTypeDeclaration,
-          &value,
-          &[
-              arg0.syntax, 
-              arg1.syntax, 
-              arg2.syntax, 
-              arg3.syntax
           ],
       );
       Self { syntax, value }

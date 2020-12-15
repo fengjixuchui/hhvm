@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<ec493ce5962648cf06cb3328906fb41c>>
+// @generated SignedSource<<5eb2b64060dc4be6340e130da5650163>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
@@ -77,58 +77,12 @@ impl<'a> TrivialDrop for ShallowTypeconst<'a> {}
     Serialize,
     ToOcamlRep
 )]
-pub struct ShallowPuMember<'a> {
-    pub atom: ast_defs::Id<'a>,
-    pub types: &'a [(ast_defs::Id<'a>, &'a Ty<'a>)],
-    pub exprs: &'a [ast_defs::Id<'a>],
-}
-impl<'a> TrivialDrop for ShallowPuMember<'a> {}
-
-#[derive(
-    Clone,
-    Debug,
-    Eq,
-    FromOcamlRepIn,
-    Hash,
-    NoPosHash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-    ToOcamlRep
-)]
-pub struct ShallowPuEnum<'a> {
-    pub name: ast_defs::Id<'a>,
-    pub is_final: bool,
-    pub case_types: &'a [&'a Tparam<'a>],
-    pub case_values: &'a [(ast_defs::Id<'a>, &'a Ty<'a>)],
-    pub members: &'a [&'a ShallowPuMember<'a>],
-}
-impl<'a> TrivialDrop for ShallowPuEnum<'a> {}
-
-#[derive(
-    Clone,
-    Debug,
-    Eq,
-    FromOcamlRepIn,
-    Hash,
-    NoPosHash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-    ToOcamlRep
-)]
 pub struct ShallowProp<'a> {
-    pub const_: bool,
-    pub xhp_attr: Option<XhpAttr>,
-    pub lateinit: bool,
-    pub lsb: bool,
     pub name: ast_defs::Id<'a>,
-    pub needs_init: bool,
+    pub xhp_attr: Option<XhpAttr>,
     pub type_: Option<&'a Ty<'a>>,
-    pub abstract_: bool,
     pub visibility: oxidized::ast_defs::Visibility,
+    pub flags: prop_flags::PropFlags,
 }
 impl<'a> TrivialDrop for ShallowProp<'a> {}
 
@@ -146,16 +100,12 @@ impl<'a> TrivialDrop for ShallowProp<'a> {}
     ToOcamlRep
 )]
 pub struct ShallowMethod<'a> {
-    pub abstract_: bool,
-    pub final_: bool,
-    pub memoizelsb: bool,
     pub name: ast_defs::Id<'a>,
-    pub override_: bool,
-    pub dynamicallycallable: bool,
     pub reactivity: Option<decl_defs::MethodReactivity<'a>>,
     pub type_: &'a Ty<'a>,
     pub visibility: oxidized::ast_defs::Visibility,
     pub deprecated: Option<&'a str>,
+    pub flags: method_flags::MethodFlags,
 }
 impl<'a> TrivialDrop for ShallowMethod<'a> {}
 
@@ -190,7 +140,6 @@ pub struct ShallowClass<'a> {
     pub implements_dynamic: bool,
     pub consts: &'a [&'a ShallowClassConst<'a>],
     pub typeconsts: &'a [&'a ShallowTypeconst<'a>],
-    pub pu_enums: &'a [&'a ShallowPuEnum<'a>],
     pub props: &'a [&'a ShallowProp<'a>],
     pub sprops: &'a [&'a ShallowProp<'a>],
     pub constructor: Option<&'a ShallowMethod<'a>>,

@@ -34,6 +34,7 @@
 #include "hphp/runtime/base/type-array.h"
 #include "hphp/runtime/base/type-string.h"
 #include "hphp/runtime/vm/runtime.h"
+#include "hphp/runtime/vm/type-constraint.h"
 #include "hphp/system/systemlib.h"
 
 #include <folly/tracing/StaticTracepoint.h>
@@ -170,6 +171,7 @@ inline void raiseEmptyObject() {
 }
 
 ALWAYS_INLINE void promoteClsMeth(tv_lval base) {
+  assertx(RO::EvalIsCompatibleClsMethType);
   raiseClsMethToVecWarningHelper();
   val(base).parr = clsMethToVecHelper(val(base).pclsmeth).detach();
   type(base) = val(base).parr->toDataType();
@@ -388,12 +390,16 @@ inline int64_t ElemStringPre(StringData* key) {
 inline int64_t ElemStringPre(TypedValue key) {
   if (LIKELY(isIntType(key.m_type))) {
     return key.m_data.num;
-  } else if (LIKELY(isStringType(key.m_type))) {
-    return key.m_data.pstr->toInt64(10);
-  } else {
-    raise_notice("String offset cast occurred");
-    return tvAsCVarRef(key).toInt64();
   }
+  if (LIKELY(isStringType(key.m_type))) {
+    return key.m_data.pstr->toInt64(10);
+  }
+  SystemLib::throwInvalidArgumentExceptionObject(
+    folly::sformat(
+      "Invalid string key: expected a key of type int or string, {} given",
+      describe_actual_type(&key)
+    )
+  );
 }
 
 /**
@@ -491,6 +497,7 @@ NEVER_INLINE TypedValue ElemSlow(tv_rval base, key_type<keyType> key) {
       return ElemObject<mode, keyType>(base.val().pobj, key);
 
     case KindOfClsMeth: {
+      if (!RO::EvalIsCompatibleClsMethType) return ElemScalar();
       raiseClsMethToVecWarningHelper();
       return ElemClsMeth<mode, keyType>(base.val().pclsmeth, key);
     }
@@ -535,44 +542,29 @@ inline void ElemDBespokeUpdateBase(tv_lval base, arr_lval result) {
   }
 }
 
-template <bool Elem>
 inline tv_lval ElemDBespokePre(tv_lval base, int64_t key) {
-  if constexpr (Elem) {
-    return BespokeArray::ElemInt(base, key, true);
-  } else {
-    auto const result = BespokeArray::LvalInt(base.val().parr, key);
-    ElemDBespokeUpdateBase(base, result);
-    return result;
-  }
+  return BespokeArray::ElemInt(base, key, true);
 }
 
-template <bool Elem>
 inline tv_lval ElemDBespokePre(tv_lval base, StringData* key) {
-  if constexpr (Elem) {
-    return BespokeArray::ElemStr(base, key, true);
-  } else {
-    auto const result = BespokeArray::LvalStr(base.val().parr, key);
-    ElemDBespokeUpdateBase(base, result);
-    return result;
-  }
+  return BespokeArray::ElemStr(base, key, true);
 }
 
-template <bool Elem>
 inline tv_lval ElemDBespokePre(tv_lval base, TypedValue key) {
   auto const dt = key.m_type;
-  if (isIntType(dt))    return ElemDBespokePre<Elem>(base, key.m_data.num);
-  if (isStringType(dt)) return ElemDBespokePre<Elem>(base, key.m_data.pstr);
+  if (isIntType(dt))    return ElemDBespokePre(base, key.m_data.num);
+  if (isStringType(dt)) return ElemDBespokePre(base, key.m_data.pstr);
   throwInvalidArrayKeyException(&key, base.val().parr);
 }
 
-template <KeyType keyType, bool Elem = true>
+template <KeyType keyType>
 inline tv_lval ElemDBespoke(tv_lval base, key_type<keyType> key) {
   assertx(tvIsArrayLike(base));
   assertx(tvIsPlausible(*base));
 
   assertx(!base.val().parr->isVanilla());
-  auto const result = ElemDBespokePre<Elem>(base, key);
-  assertx(IMPLIES(Elem, result.type() == dt_modulo_persistence(result.type())));
+  auto const result = ElemDBespokePre(base, key);
+  assertx(result.type() == dt_modulo_persistence(result.type()));
   assertx(tvIsPlausible(*base));
   assertx(result.type() != KindOfUninit);
   return result;
@@ -788,9 +780,7 @@ tv_lval ElemD(tv_lval base, key_type<keyType> key) {
   assertx(type(immutable_null_base) == KindOfNull);
 
   if (tvIsArrayLike(base) && !base.val().parr->isVanilla()) {
-    auto const result = ElemDBespoke<keyType>(base, key);
-    auto const dt_may_change = result.type() == KindOfClsMeth;
-    return dt_may_change ? ElemDBespoke<keyType, false>(base, key) : result;
+    return ElemDBespoke<keyType>(base, key);
   }
 
   switch (base.type()) {
@@ -827,6 +817,7 @@ tv_lval ElemD(tv_lval base, key_type<keyType> key) {
     case KindOfObject:
       return ElemDObject<keyType>(base, key);
     case KindOfClsMeth:
+      if (!RO::EvalIsCompatibleClsMethType) return ElemDScalar();
       detail::promoteClsMeth(base);
       return ElemDVec<keyType>(base, key);
     case KindOfRecord:
@@ -1052,6 +1043,9 @@ tv_lval ElemU(tv_lval base, key_type<keyType> key) {
       raise_error(Strings::OP_NOT_SUPPORTED_STRING);
       return nullptr;
     case KindOfClsMeth:
+      if (!RO::EvalIsCompatibleClsMethType) {
+        raise_error(Strings::CLS_METH_NOT_SUPPORTED);
+      }
       detail::promoteClsMeth(base);
       return ElemUVec<keyType>(base, key);
     case KindOfRClsMeth:
@@ -1491,6 +1485,10 @@ StringData* SetElemSlow(tv_lval base, key_type<keyType> key,
       SetElemObject<keyType>(base, key, value);
       return nullptr;
     case KindOfClsMeth:
+      if (!RO::EvalIsCompatibleClsMethType) {
+        SetElemScalar<setResult>(value);
+        return nullptr;
+      }
       detail::promoteClsMeth(base);
       SetElemVec<keyType>(base, key, value);
       return nullptr;
@@ -1607,8 +1605,6 @@ inline void SetNewElemVecMove(tv_lval base, TypedValue* value) {
   if (a2 != a) {
     type(base) = dt_with_rc(type(base));
     val(base).parr = a2;
-    assertx(tvIsPlausible(*base));
-    a->decRefAndRelease();
   }
 }
 
@@ -1699,6 +1695,9 @@ inline void SetNewElem(tv_lval base, TypedValue* value) {
     case KindOfObject:
       return SetNewElemObject(base, value);
     case KindOfClsMeth:
+      if (!RO::EvalIsCompatibleClsMethType) {
+        return SetNewElemScalar<setResult>(value);
+      }
       detail::promoteClsMeth(base);
       return SetNewElemVec(base, value);
     case KindOfRecord:
@@ -1825,6 +1824,9 @@ inline TypedValue SetOpElem(SetOpOp op, tv_lval base,
     }
 
     case KindOfClsMeth:
+      if (!RO::EvalIsCompatibleClsMethType) {
+        return SetOpElemScalar();
+      }
       detail::promoteClsMeth(base);
       return handleVec();
 
@@ -2007,6 +2009,9 @@ inline TypedValue IncDecElem(IncDecOp op, tv_lval base, TypedValue key) {
     }
 
     case KindOfClsMeth:
+      if (!RO::EvalIsCompatibleClsMethType) {
+        return IncDecElemScalar();
+      }
       detail::promoteClsMeth(base);
       return IncDecBody(op, ElemDVec<KeyType::Any>(base, key));
 
@@ -2277,6 +2282,10 @@ void UnsetElemSlow(tv_lval base, key_type<keyType> key) {
     }
 
     case KindOfClsMeth:
+      if (!RO::EvalIsCompatibleClsMethType) {
+        raise_error("Cannot unset a class method pointer");
+        return;
+      }
       detail::promoteClsMeth(base);
       UnsetElemVec<keyType>(base, key);
       return;
@@ -2459,6 +2468,7 @@ NEVER_INLINE bool IssetElemSlow(tv_rval base, key_type<keyType> key) {
       return IssetElemObj<keyType>(val(base).pobj, key);
 
     case KindOfClsMeth: {
+      if (!RO::EvalIsCompatibleClsMethType) return false;
       raiseClsMethToVecWarningHelper();
       return IssetElemClsMeth<keyType>(val(base).pclsmeth, key);
     }

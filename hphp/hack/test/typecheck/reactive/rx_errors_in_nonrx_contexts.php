@@ -1,4 +1,5 @@
-<?hh // partial
+<?hh
+<<file: __EnableUnstableFeatures('coeffects_provisional')>>
 class A {
   public function __construct(public int $a) {}
 
@@ -8,12 +9,12 @@ class A {
   }
 
   <<__Rx>>
-  public static function g(<<__Mutable>>A $a) {
+  public static function g(<<__Mutable>>A $a): void {
     $a->a = 5;
   }
 }
 
-function f() {
+function f(): void {
   $a = new A(1);
   // OK - non-rx context
   $a->f();
@@ -22,7 +23,7 @@ function f() {
 }
 
 <<__Rx>>
-function g() {
+function g(): void {
   // non reactive lambda - ok since it is not called
   $a = <<__NonRx>>() ==> {
     $a = new A(1);

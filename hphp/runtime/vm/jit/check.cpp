@@ -413,27 +413,18 @@ bool checkOperandTypes(const IRInstruction* inst, const IRUnit* /*unit*/) {
     return true;
   };
 
-  auto const checkBespokeArr = [&] (bool lval) {
-    auto const tRaw = src()->type();
-    if (lval) check(tRaw <= TLvalToCell, tRaw, "Lval");
-    auto const t = lval ? tRaw.deref() : tRaw;
-    if (t == TBottom) {
-      ++curSrc;
-      return;
+  auto checkBespokeArr = [&] {
+    auto const t = src()->type();
+    if (t != TBottom) check(t.arrSpec().bespoke(), Type(), "TArrLike=Bespoke");
+    ++curSrc;
+  };
+
+  auto checkMonotypeArr = [&](Type type) {
+    auto const t = src()->type();
+    if (t != TBottom) {
+      check(t <= type, type, "");
+      check(t.arrSpec().monotype(), Type(), "TArrLike=Monotype");
     }
-    check(t.isKnownDataType() && t <= TArrLike, t, "Known ArrLike");
-
-    auto const srcLayout = t.arrSpec().bespokeLayout();
-    check(srcLayout.has_value(), t, "Bespoke ArrLike");
-
-    auto const givenLayout = inst->extra<BespokeLayoutData>()->layout;
-    if (givenLayout) {
-      auto const expected = BespokeLayout(givenLayout);
-      auto const errMsg =
-        folly::sformat("Bespoke with Layout={}", expected.describe()).c_str();
-      check(expected == *srcLayout, t, errMsg);
-    }
-
     ++curSrc;
   };
 
@@ -518,10 +509,12 @@ using TypeNames::TCA;
                           checkMultiple(src(), types, names);               \
                         }                                                   \
                       }
-#define SVArr               checkArr(false /* is_kv */, false /* is_const */);
-#define SDArr               checkArr(true  /* is_kv */, false /* is_const */);
-#define SBespokeArr         checkBespokeArr(false /* lval */);
-#define SLvalToBespokeArr   checkBespokeArr(true /* lval */);
+#define SBespokeArr   checkBespokeArr();
+#define SMonotypeVec  checkMonotypeArr(TVArr|TVec);
+#define SMonotypeDict checkMonotypeArr(TDArr|TDict);
+#define SKnownArrLike S(VArr,DArr,Vec,Dict,Keyset)
+#define SVArr         checkArr(false /* is_kv */, false /* is_const */);
+#define SDArr         checkArr(true  /* is_kv */, false /* is_const */);
 #define CDArr         checkArr(true  /* is_kv */, true  /* is_const */);
 #define ND
 #define DMulti
@@ -552,15 +545,11 @@ using TypeNames::TCA;
 #define DDictElem
 #define DModified(n)
 #define DKeysetElem
-#define DVecFirstElem
-#define DVecLastElem
 #define DVecKey
-#define DDictFirstElem
-#define DDictLastElem
-#define DDictFirstKey
-#define DDictLastKey
-#define DKeysetFirstElem
-#define DKeysetLastElem
+#define DFirstElem
+#define DLastElem
+#define DFirstKey
+#define DLastKey
 #define DLoggingArrLike
 #define DVArr
 #define DDArr
@@ -590,9 +579,11 @@ using TypeNames::TCA;
 #undef SVArr
 #undef SVArrOrNull
 #undef SDArr
-#undef SBespokeArr
-#undef SLvalToBespokeArr
 #undef CDArr
+#undef SBespokeArr
+#undef SMonotypeVec
+#undef SMonotypeDict
+#undef SKnownArrLike
 
 #undef ND
 #undef D

@@ -989,21 +989,6 @@ where
                     _ => Self::missing_syntax("type constant base", node, env),
                 }
             }
-            PUAccess(c) => {
-                let pos = Self::p_pos(&c.left_type, env);
-                let child = Self::pos_name(&c.right_type, env)?;
-                match Self::p_hint_(&c.left_type, env)? {
-                    h @ HpuAccess(_, _) => Ok(HpuAccess(ast::Hint::new(pos, h), child)),
-                    Happly(id, hints) => {
-                        if hints.is_empty() {
-                            Ok(HpuAccess(ast::Hint::new(pos, Happly(id, hints)), child))
-                        } else {
-                            Self::missing_syntax("pocket universe access base", node, env)
-                        }
-                    }
-                    _ => Self::missing_syntax("pocket universe access base", node, env),
-                }
-            }
             ReifiedTypeArgument(_) => {
                 Self::raise_parsing_error(node, env, &syntax_error::invalid_reified);
                 Self::missing_syntax("refied type", node, env)
@@ -1302,20 +1287,6 @@ where
         Self::could_map(p_expr, node, env)
     }
 
-    fn p_expr_l_with_loc(
-        loc: ExprLocation,
-        node: S<'a, T, V>,
-        env: &mut Env<'a, TF>,
-    ) -> Result<ast::Expr> {
-        let p_expr = |n: S<'a, T, V>, e: &mut Env<'a, TF>| -> Result<ast::Expr> {
-            Self::p_expr_with_loc(loc, n, e)
-        };
-        Ok(ast::Expr::new(
-            Self::p_pos(node, env),
-            E_::ExprList(Self::could_map(p_expr, node, env)?),
-        ))
-    }
-
     fn p_expr(node: S<'a, T, V>, env: &mut Env<'a, TF>) -> Result<ast::Expr> {
         Self::p_expr_with_loc(ExprLocation::TopLevel, node, env)
     }
@@ -1336,15 +1307,12 @@ where
     ) -> Result<ast::Expr> {
         match &node.children {
             BracedExpression(c) => {
-                let expr = &c.expression;
-                let inner = Self::p_expr_impl(location, expr, env, parent_pos)?;
-                let inner_pos = &inner.0;
-                let inner_expr_ = &inner.1;
-                use aast::Expr_::*;
-                match inner_expr_ {
-                    Lvar(_) | String(_) | Int(_) | Float(_) => Ok(inner),
-                    _ => Ok(ast::Expr::new(inner_pos.clone(), E_::mk_braced_expr(inner))),
-                }
+                // Either a dynamic method lookup on a dynamic value:
+                //   $foo->{$meth_name}();
+                // or an XHP splice.
+                //   <p id={$id}>hello</p>;
+                // In both cases, unwrap, consistent with parentheses.
+                Self::p_expr_impl(location, &c.expression, env, parent_pos)
             }
             ParenthesizedExpression(c) => {
                 Self::p_expr_impl(location, &c.expression, env, parent_pos)
@@ -1504,8 +1472,17 @@ where
                 };
                 let recv = Self::p_expr(recv, e)?;
                 let recv = match (&recv.1, pos_if_has_parens) {
-                    (E_::ObjGet(_), Some(p)) => E::new(p, E_::mk_parenthesized_expr(recv)),
-                    (E_::ClassGet(_), Some(p)) => E::new(p, E_::mk_parenthesized_expr(recv)),
+                    (E_::ObjGet(t), Some(ref _p)) => {
+                        let (a, b, c, _false) = &**t;
+                        E::new(
+                            recv.0.clone(),
+                            E_::mk_obj_get(a.clone(), b.clone(), c.clone(), true),
+                        )
+                    }
+                    (E_::ClassGet(c), Some(ref _p)) => {
+                        let (a, b, _false) = &**c;
+                        E::new(recv.0.clone(), E_::mk_class_get(a.clone(), b.clone(), true))
+                    }
                     _ => recv,
                 };
                 let (args, varargs) = split_args_vararg(args, e)?;
@@ -1523,7 +1500,7 @@ where
             let recv = Self::p_expr(recv, e)?;
             let name = Self::p_expr_with_loc(ExprLocation::MemberSelect, name, e)?;
             let op = Self::p_null_flavor(op, e)?;
-            Ok(E_::mk_obj_get(recv, name, op))
+            Ok(E_::mk_obj_get(recv, name, op, false))
         };
         let pos = match parent_pos {
             None => Self::p_pos(node, env),
@@ -1721,9 +1698,16 @@ where
                         let is_splice = Self::text_str(recv, env) == special_functions::SPLICE;
                         let recv = Self::p_expr(recv, env)?;
                         let recv = match (&recv.1, pos_if_has_parens) {
-                            (E_::ObjGet(_), Some(p)) => E::new(p, E_::mk_parenthesized_expr(recv)),
-                            (E_::ClassGet(_), Some(p)) => {
-                                E::new(p, E_::mk_parenthesized_expr(recv))
+                            (E_::ObjGet(t), Some(ref _p)) => {
+                                let (a, b, c, _false) = &**t;
+                                E::new(
+                                    recv.0.clone(),
+                                    E_::mk_obj_get(a.clone(), b.clone(), c.clone(), true),
+                                )
+                            }
+                            (E_::ClassGet(c), Some(ref _p)) => {
+                                let (a, b, _false) = &**c;
+                                E::new(recv.0.clone(), E_::mk_class_get(a.clone(), b.clone(), true))
                             }
                             _ => recv,
                         };
@@ -1842,7 +1826,6 @@ where
                         Some(TK::Minus) => mk_unop(Uminus, expr),
                         Some(TK::Inout) => Ok(E_::mk_callconv(ast::ParamKind::Pinout, expr)),
                         Some(TK::Await) => Self::lift_await(pos, expr, env, location),
-                        Some(TK::Suspend) => Ok(E_::mk_suspend(expr)),
                         Some(TK::Clone) => Ok(E_::mk_clone(expr)),
                         Some(TK::Print) => Ok(E_::mk_call(
                             E::new(
@@ -1854,43 +1837,12 @@ where
                             None,
                         )),
                         Some(TK::Dollar) => {
-                            let E(_, expr_) = expr;
-                            match expr_ {
-                                E_::String(s) => {
-                                    if !env.codegen() {
-                                        Self::raise_parsing_error(
-                                            op,
-                                            env,
-                                            &syntax_error::invalid_variable_name,
-                                        )
-                                    }
-                                    let id = String::with_capacity(1 + s.len())
-                                        + "$"
-                                        + s.to_str().map_err(|e| Error::Failwith(e.to_string()))?;
-                                    let lid = ast::Lid(pos, (0, id));
-                                    Ok(E_::mk_lvar(lid))
-                                }
-                                E_::Int(s) | E_::Float(s) => {
-                                    if !env.codegen() {
-                                        Self::raise_parsing_error(
-                                            op,
-                                            env,
-                                            &syntax_error::invalid_variable_name,
-                                        )
-                                    }
-                                    let id = String::with_capacity(1 + s.len()) + "$" + &s;
-                                    let lid = ast::Lid(pos, (0, id));
-                                    Ok(E_::mk_lvar(lid))
-                                }
-                                _ => {
-                                    Self::raise_parsing_error(
-                                        op,
-                                        env,
-                                        &syntax_error::invalid_variable_variable,
-                                    );
-                                    Ok(E_::Omitted)
-                                }
-                            }
+                            Self::raise_parsing_error(
+                                op,
+                                env,
+                                &syntax_error::invalid_variable_name,
+                            );
+                            Ok(E_::Omitted)
                         }
                         _ => Self::missing_syntax("unary operator", node, env),
                     }
@@ -1981,6 +1933,7 @@ where
                         Ok(E_::mk_class_get(
                             ast::ClassId(pos, ast::ClassId_::CIexpr(qual)),
                             ast::ClassGetExpr::CGstring((p, name)),
+                            false,
                         ))
                     }
                     _ => {
@@ -2006,11 +1959,13 @@ where
                                 Ok(E_::mk_class_get(
                                     ast::ClassId(pos, ast::ClassId_::CIexpr(qual)),
                                     ast::ClassGetExpr::CGstring((p, n)),
+                                    false,
                                 ))
                             }
                             _ => Ok(E_::mk_class_get(
                                 ast::ClassId(pos, ast::ClassId_::CIexpr(qual)),
                                 ast::ClassGetExpr::CGexpr(E(p, expr_)),
+                                false,
                             )),
                         }
                     }
@@ -2250,45 +2205,6 @@ where
                     Self::failwith("expect xhp open")
                 }
             }
-            PocketAtomExpression(c) => Ok(E_::PUAtom(Self::pos_name(&c.expression, env)?.1)),
-            PocketIdentifierExpression(c) => {
-                let mk_class_id = |e: ast::Expr| ast::ClassId(pos, ast::ClassId_::CIexpr(e));
-                let qual = Self::p_expr(&c.qualifier, env)?;
-                let qual = if env.codegen() {
-                    mk_class_id(qual)
-                } else if let E_::Lvar(a) = qual.1 {
-                    let p = qual.0;
-                    let expr = E::new(p.clone(), E_::mk_id(ast::Id(p, (a.1).1)));
-                    mk_class_id(expr)
-                } else {
-                    mk_class_id(qual)
-                };
-                let E(p, expr_) = Self::p_expr(&c.field, env)?;
-                let field = match expr_ {
-                    E_::String(id) => (
-                        p,
-                        String::from_utf8(id.into()).map_err(|e| Error::Failwith(e.to_string()))?,
-                    ),
-                    E_::Id(id) => {
-                        let ast::Id(p, n) = *id;
-                        (p, n)
-                    }
-                    _ => Self::missing_syntax("PocketIdentifierExpression field", node, env)?,
-                };
-                let E(p, expr_) = Self::p_expr(&c.name, env)?;
-                let name = match expr_ {
-                    E_::String(id) => (
-                        p,
-                        String::from_utf8(id.into()).map_err(|e| Error::Failwith(e.to_string()))?,
-                    ),
-                    E_::Id(id) => {
-                        let ast::Id(p, n) = *id;
-                        (p, n)
-                    }
-                    _ => Self::missing_syntax("PocketIdentifierExpression name", node, env)?,
-                };
-                Ok(E_::mk_puidentifier(qual, field, name))
-            }
             EnumAtomExpression(c) => Ok(E_::EnumAtom(Self::pos_name(&c.expression, env)?.1)),
             _ => Self::missing_syntax_(Some(E_::Null), "expression", node, env),
         }
@@ -2298,15 +2214,21 @@ where
         use aast::Expr_::*;
         let mut raise = |s| Self::raise_parsing_error_pos(p, env, s);
         match expr_ {
-            ObjGet(og) => match og.as_ref() {
-                (_, ast::Expr(_, Id(_)), ast::OgNullFlavor::OGNullsafe) => {
-                    raise("?-> syntax is not supported for lvalues")
+            ObjGet(og) => {
+                if og.as_ref().3 {
+                    raise("Invalid lvalue")
+                } else {
+                    match og.as_ref() {
+                        (_, ast::Expr(_, Id(_)), ast::OgNullFlavor::OGNullsafe, _) => {
+                            raise("?-> syntax is not supported for lvalues")
+                        }
+                        (_, ast::Expr(_, Id(sid)), _, _) if sid.1.as_bytes()[0] == b':' => {
+                            raise("->: syntax is not supported for lvalues")
+                        }
+                        _ => {}
+                    }
                 }
-                (_, ast::Expr(_, Id(sid)), _) if sid.1.as_bytes()[0] == b':' => {
-                    raise("->: syntax is not supported for lvalues")
-                }
-                _ => {}
-            },
+            }
             ArrayGet(ag) => {
                 if let ClassConst(_) = (ag.0).1 {
                     raise("Array-like class consts are not valid lvalues");
@@ -2325,10 +2247,9 @@ where
             }
             Darray(_) | Varray(_) | Shape(_) | Collection(_) | Record(_) | Null | True | False
             | Id(_) | Clone(_) | ClassConst(_) | Int(_) | Float(_) | PrefixedString(_)
-            | String(_) | String2(_) | Yield(_) | YieldBreak | Await(_) | Suspend(_)
-            | ExprList(_) | Cast(_) | Unop(_) | Binop(_) | Eif(_) | New(_) | Efun(_) | Lfun(_)
-            | Xml(_) | Import(_) | Pipe(_) | Callconv(_) | Is(_) | As(_) | ParenthesizedExpr(_)
-            | PUIdentifier(_) => raise("Invalid lvalue"),
+            | String(_) | String2(_) | Yield(_) | YieldBreak | Await(_) | Cast(_) | Unop(_)
+            | Binop(_) | Eif(_) | New(_) | Efun(_) | Lfun(_) | Xml(_) | Import(_) | Pipe(_)
+            | Callconv(_) | Is(_) | As(_) => raise("Invalid lvalue"),
             _ => {}
         }
     }
@@ -2358,11 +2279,7 @@ where
                 Ok(ast::Expr::new(p, E_::make_string(s)))
             }
         } else {
-            let expr = Self::p_expr(node, env)?;
-            match expr.1 {
-                E_::BracedExpr(e) => Ok(*e),
-                _ => Ok(expr),
-            }
+            Self::p_expr(node, env)
         }
     }
 
@@ -2935,21 +2852,6 @@ where
                     Self::lift_awaits_in_statement(f, node, env)
                 }
             }
-            GotoLabel(c) => {
-                if env.is_typechecker() && !env.parser_options.po_allow_goto {
-                    Self::raise_parsing_error(node, env, &syntax_error::goto_label);
-                }
-                Ok(new(
-                    pos,
-                    S_::mk_goto_label((Self::p_pos(&c.name, env), Self::text(&c.name, env))),
-                ))
-            }
-            GotoStatement(c) => {
-                if env.is_typechecker() && !env.parser_options.po_allow_goto {
-                    Self::raise_parsing_error(node, env, &syntax_error::goto);
-                }
-                Ok(new(pos, S_::mk_goto(Self::p_pstring(&c.label_name, env)?)))
-            }
             EchoStatement(c) => {
                 let f = |e: &mut Env<'a, TF>| -> Result<ast::Stmt> {
                     let echo = match &c.keyword.children {
@@ -3096,7 +2998,9 @@ where
                 let markup_hashbang = &c.hashbang;
                 let pos = Self::p_pos(node, env);
                 let f = pos.filename();
-                if f.has_extension("hack") || f.has_extension("hackpartial") {
+                if (f.has_extension("hack") || f.has_extension("hackpartial"))
+                    && !(&c.suffix.is_missing())
+                {
                     let ext = f.path().extension().unwrap(); // has_extension ensures this is a Some
                     Self::raise_parsing_error(
                         node,
@@ -3448,50 +3352,35 @@ where
         match &node.children {
             Missing => Ok((None, None)),
             Capability(c) => {
-                let hint_ =
-                    ast::Hint_::Hintersection(Self::could_map(&Self::p_hint, &c.types, env)?);
+                use ast::{Hint, Hint_};
+                let mut hints = Self::could_map(
+                    |n, e| match &n.children {
+                        FunctionCtxTypeSpecifier(_) => {
+                            Ok(Hint::new(Self::p_pos(n, e), Hint_::Hmixed))
+                        }
+                        TypeConstant(c) => match &c.left_type.children {
+                            Token(token) if token.kind() == TK::Variable => {
+                                Ok(Hint::new(Self::p_pos(n, e), Hint_::Hmixed))
+                            }
+                            _ => Self::p_hint(n, e),
+                        },
+                        _ => Self::p_hint(n, e),
+                    },
+                    &c.types,
+                    env,
+                )?;
+                let hint_ = if hints.len() == 1 {
+                    *hints.pop().unwrap().1
+                } else {
+                    /* Could make [] into Hmixed, but it just turns into empty intersection anyway */
+                    ast::Hint_::Hintersection(hints)
+                };
                 let pos = Self::p_pos(node, env);
                 let hint = ast::Hint::new(pos, hint_);
                 let unsafe_hint = hint.clone();
                 Ok((Some(hint), Some(unsafe_hint)))
             }
             _ => Self::missing_syntax("capability", node, env),
-        }
-    }
-
-    fn p_capability_provisional(
-        node: S<'a, T, V>,
-        env: &mut Env<'a, TF>,
-    ) -> Result<(Option<ast::Hint>, Option<ast::Hint>)> {
-        match &node.children {
-            Missing => Ok((None, None)),
-            CapabilityProvisional(c) => {
-                let cap = Self::p_hint(&c.type_, env)?;
-                let unsafe_cap = Self::mp_optional(Self::p_hint, &c.unsafe_type, env)?;
-                Ok((Some(cap), unsafe_cap))
-            }
-            _ => Self::missing_syntax("capability_provisional", node, env),
-        }
-    }
-
-    /* Just temporary to handle both syntaxes. This will be removed when p_capability_provisional is removed */
-    fn p_cap(
-        capability: S<'a, T, V>,
-        capability_provisional: S<'a, T, V>,
-        env: &mut Env<'a, TF>,
-    ) -> Result<(Option<ast::Hint>, Option<ast::Hint>)> {
-        if !capability.is_missing() && !capability_provisional.is_missing() {
-            Self::raise_parsing_error(
-                capability_provisional,
-                env,
-                "Cannot use both the [ and @{ syntax for coeffects",
-            );
-            /* Not exactly missing, but this is the standard function used to get an Err result in the lowerer */
-            Self::missing_syntax("capability", capability, env)
-        } else if !capability.is_missing() {
-            Self::p_capability(capability, env)
-        } else {
-            Self::p_capability_provisional(capability_provisional, env)
         }
     }
 
@@ -3505,7 +3394,6 @@ where
                 parameter_list,
                 type_,
                 capability,
-                capability_provisional,
                 ..
             }) => {
                 if name.value.is_missing() {
@@ -3514,8 +3402,7 @@ where
                 let kinds = Self::p_kinds(modifiers, env)?;
                 let has_async = kinds.has(modifier::ASYNC);
                 let parameters = Self::could_map(Self::p_fun_param, parameter_list, env)?;
-                let (capability, unsafe_capability) =
-                    Self::p_cap(capability, capability_provisional, env)?;
+                let (capability, unsafe_capability) = Self::p_capability(capability, env)?;
                 let return_type = Self::mp_optional(Self::p_hint, type_, env)?;
                 let suspension_kind = Self::mk_suspension_kind_(has_async);
                 let name = Self::pos_name(name, env)?;
@@ -4053,6 +3940,7 @@ where
                     doc_comment: doc_comment_opt,
                 }))
             }
+            ContextConstDeclaration(_) => Ok(()), // TODO(coeffects) implement later
             PropertyDeclaration(c) => {
                 let user_attributes = Self::p_user_attributes(&c.attribute_spec, env)?;
                 let type_ = Self::mp_optional(Self::p_hint, &c.type_, env)?
@@ -4125,6 +4013,7 @@ where
                                     e(E_::mk_lvar(lid(special_idents::THIS))),
                                     e(E_::mk_id(ast::Id(p.clone(), cvname.to_string()))),
                                     ast::OgNullFlavor::OGNullthrows,
+                                    false,
                                 )),
                                 e(E_::mk_lvar(lid(&param.name))),
                             ))),
@@ -4395,67 +4284,6 @@ where
                 }
                 Ok(class.xhp_category = Some((p, categories)))
             }
-            PocketEnumDeclaration(c) => {
-                let is_final = Self::p_kinds(&c.modifiers, env)?.has(modifier::FINAL);
-                let user_attributes = Self::p_user_attributes(&c.attributes, env)?;
-                let id = Self::pos_name(&c.name, env)?;
-                let flds = c.fields.syntax_node_to_list_skip_separator();
-                let mut case_types = vec![];
-                let mut case_values = vec![];
-                let mut members = vec![];
-                for fld in flds {
-                    match &fld.children {
-                        PocketAtomMappingDeclaration(c) => {
-                            let id = Self::pos_name(&c.name, env)?;
-                            let maps = c.mappings.syntax_node_to_list_skip_separator();
-                            let mut types = vec![];
-                            let mut exprs = vec![];
-                            for map in maps {
-                                match &map.children {
-                                    PocketMappingIdDeclaration(c) => {
-                                        let id = Self::pos_name(&c.name, env)?;
-                                        let expr = Self::p_simple_initializer(&c.initializer, env)?;
-                                        exprs.push((id, expr));
-                                    }
-                                    PocketMappingTypeDeclaration(c) => {
-                                        let id = Self::pos_name(&c.name, env)?;
-                                        let hint = Self::p_hint(&c.type_, env)?;
-                                        types.push((id, hint));
-                                    }
-                                    _ => {
-                                        Self::missing_syntax("pumapping", map, env)?;
-                                    }
-                                }
-                            }
-                            members.push(ast::PuMember {
-                                atom: id,
-                                types,
-                                exprs,
-                            })
-                        }
-                        PocketFieldTypeExprDeclaration(c) => {
-                            let typ = Self::p_hint(&c.type_, env)?;
-                            let id = Self::pos_name(&c.name, env)?;
-                            case_values.push(ast::PuCaseValue(id, typ));
-                        }
-                        PocketFieldTypeDeclaration(c) => {
-                            case_types.push(Self::p_tparam(false, &c.type_parameter, env)?);
-                        }
-                        _ => {
-                            Self::missing_syntax("pufield", fld, env)?;
-                        }
-                    }
-                }
-                Ok(class.pu_enums.push(ast::PuEnum {
-                    annotation: (),
-                    name: id,
-                    user_attributes,
-                    is_final,
-                    case_types,
-                    case_values,
-                    members,
-                }))
-            }
             _ => Self::missing_syntax("class element", node, env),
         }
     }
@@ -4716,7 +4544,6 @@ where
                     user_attributes,
                     file_attributes: vec![],
                     enum_: None,
-                    pu_enums: vec![],
                     doc_comment: doc_comment_opt,
                     emit_id: None,
                 };
@@ -4839,7 +4666,6 @@ where
                     attributes: vec![],
                     xhp_children: vec![],
                     xhp_attrs: vec![],
-                    pu_enums: vec![],
                     emit_id: None,
                 })])
             }
@@ -4907,7 +4733,6 @@ where
                     attributes: vec![],
                     xhp_children: vec![],
                     xhp_attrs: vec![],
-                    pu_enums: vec![],
                     emit_id: None,
                 };
 

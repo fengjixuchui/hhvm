@@ -16,38 +16,6 @@ type env = {
   desc: string;
 }
 
-let format_failure (message : string) (failure : Lwt_utils.Process_failure.t) :
-    string =
-  let open Lwt_utils.Process_failure in
-  let status =
-    match failure.process_status with
-    | Unix.WEXITED i ->
-      Printf.sprintf "WEXITED %d (%s)" i (Exit_status.exit_code_to_string i)
-    | Unix.WSIGNALED i ->
-      let msg =
-        if i = Sys.sigkill then
-          " this signal might have been sent by 'hh rage' itself if the command took too long"
-        else
-          ""
-      in
-      Printf.sprintf
-        "WSIGNALED %d (%s)%s"
-        i
-        (PrintSignal.string_of_signal i)
-        msg
-    | Unix.WSTOPPED i ->
-      Printf.sprintf "WSTOPPED %d (%s)" i (PrintSignal.string_of_signal i)
-  in
-  Printf.sprintf
-    "%s\nCMDLINE: %s\nEXIT STATUS: %s\nSTART: %s\nEND: %s\n\nSTDOUT:\n%s\nSTDERR:\n%s\n"
-    message
-    failure.command_line
-    status
-    (Utils.timestring failure.start_time)
-    (Utils.timestring failure.end_time)
-    failure.stdout
-    failure.stderr
-
 let get_stack (pid, reason) : string Lwt.t =
   let pid = string_of_int pid in
   let format msg = Printf.sprintf "PSTACK %s (%s)\n%s\n" pid reason msg in
@@ -136,7 +104,8 @@ let rage_strobelight () : string Lwt.t =
           match result with
           | Ok { Lwt_utils.Process_success.stdout; stderr; _ } ->
             reason ^ "\n" ^ stdout ^ "\n" ^ stderr
-          | Error failure -> reason ^ format_failure "" failure
+          | Error failure ->
+            reason ^ "\n" ^ Lwt_utils.Process_failure.to_string failure
         in
         Lwt.return result)
       pids
@@ -204,7 +173,7 @@ let rage_ps () : string Lwt.t =
   in
   match result with
   | Ok { Lwt_utils.Process_success.stdout; _ } -> Lwt.return stdout
-  | Error failure -> Lwt.return (format_failure "" failure)
+  | Error failure -> Lwt.return (Lwt_utils.Process_failure.to_string failure)
 
 let rage_hh_version
     (env : env) (hhconfig_version_raw : Config_file.version option) :
@@ -240,7 +209,7 @@ let rage_hh_version
   let hh_server_version =
     match hh_server_version_result with
     | Ok { Lwt_utils.Process_success.stdout; _ } -> stdout
-    | Error failure -> format_failure "" failure
+    | Error failure -> Lwt_utils.Process_failure.to_string failure
   in
   let hh_version =
     Printf.sprintf
@@ -298,7 +267,8 @@ let rage_hh_server_state (env : env) :
   in
   match hh_server_state_result with
   | Error failure ->
-    Lwt.return_error (format_failure "failed to obtain state" failure)
+    Lwt.return_error
+      ("failed to obtain state\n" ^ Lwt_utils.Process_failure.to_string failure)
   | Ok { Lwt_utils.Process_success.stdout; _ } ->
     begin
       try
@@ -312,20 +282,27 @@ let rage_hh_server_state (env : env) :
     end
 
 type www_results = {
-  hgdiff: (string * string) option;
-  instructions: string;
   mergebase: string option;
+      (** The commit hash of 'hg log -r last(public()&::.)', or None if the hg command failed *)
+  hgdiff: (string * string) option;
+      (** A pair ("www_hgdiff.txt", <results of hg diff -r mergebase>), or None if the hg command failed *)
+  instructions: string;
+      (** Human-readable instructions on how someone else can update to the current "." revision, or
+      human-readable message if we can't generate those instructions e.g. due to a tool failure *)
   patch_script: string option;
+      (** A bash shell-script for how someone else can update to ".", or None if we can't generate instructions *)
 }
 
 let rage_www (env : env) : www_results Lwt.t =
   let hgplain_env =
     Process.env_to_array (Process_types.Augment ["HGPLAIN=1"])
   in
+  (* Long 5min timeout here, in case watchman had crashed and we want to wait for it to
+  come back up again - hg blocks until watchman is ready. *)
   let%lwt www_result =
     Lwt_utils.exec_checked
       ?env:hgplain_env
-      ~timeout:60.0
+      ~timeout:300.0
       Exec_command.Hg
       [|
         "log";
@@ -342,7 +319,9 @@ let rage_www (env : env) : www_results Lwt.t =
     Lwt.return
       {
         hgdiff = None;
-        instructions = format_failure "Unable to determine mergebase" failure;
+        instructions =
+          "Unable to determine mergebase\n"
+          ^ Lwt_utils.Process_failure.to_string failure;
         mergebase = None;
         patch_script = None;
       }
@@ -352,14 +331,17 @@ let rage_www (env : env) : www_results Lwt.t =
       Lwt_utils.exec_checked
         ?env:hgplain_env
         Exec_command.Hg
-        ~timeout:60.0
+        ~timeout:300.0
         [| "diff"; "-r"; mergebase; "--cwd"; Path.to_string env.root |]
     in
     let%lwt (patch_item, patch_instructions, patch_script) =
       match www_diff_result with
       | Error failure ->
         Lwt.return
-          (None, format_failure "Unable to determine diff" failure, None)
+          ( None,
+            "Unable to determine diff\n"
+            ^ Lwt_utils.Process_failure.to_string failure,
+            None )
       | Ok { Lwt_utils.Process_success.stdout = hgdiff; _ } ->
         if String.is_empty hgdiff then
           Lwt.return (None, "", None)
@@ -385,12 +367,13 @@ let rage_www (env : env) : www_results Lwt.t =
       Lwt_utils.exec_checked
         ?env:hgplain_env
         Exec_command.Hg
-        ~timeout:30.0
+        ~timeout:300.0
         [| "status"; "--cwd"; Path.to_string env.root |]
     in
     let hg_st =
       match hg_st_result with
-      | Error failure -> format_failure "Unable to `hg status`" failure
+      | Error failure ->
+        "Unable to `hg status`\n" ^ Lwt_utils.Process_failure.to_string failure
       | Ok { Lwt_utils.Process_success.stdout; _ } -> "hg status:\n" ^ stdout
     in
     Lwt.return
@@ -431,7 +414,9 @@ let rage_www_errors (env : env) : string Lwt.t =
          (Utils.timestring success.end_time)
          success.stdout
          success.stderr)
-  | Error failure -> Lwt.return (format_failure "hh check failure" failure)
+  | Error failure ->
+    Lwt.return
+      ("hh check failure\n" ^ Lwt_utils.Process_failure.to_string failure)
 
 let rage_saved_state (env : env) : (string * string) list Lwt.t =
   let watchman_opts =
@@ -530,7 +515,8 @@ let rage_tmp_dir () : string Lwt.t =
     match dir1_result with
     | Ok { Lwt_utils.Process_success.command_line; stdout; _ } ->
       Printf.sprintf "%s\n\n%s\n\n" command_line stdout
-    | Error failure -> format_failure "listing tmp directory" failure
+    | Error failure ->
+      "listing tmp directory\n" ^ Lwt_utils.Process_failure.to_string failure
   in
   (* `ls -lR /tmp/hh_server` will do a recursive list of every file and directory within
   our tmp directory - in case wrong files are there, or in case we lack permissions. *)
@@ -545,7 +531,8 @@ let rage_tmp_dir () : string Lwt.t =
     | Ok { Lwt_utils.Process_success.command_line; stdout; _ } ->
       Printf.sprintf "%s\n\n%s\n\n" command_line stdout
     | Error failure ->
-      format_failure "listing contents of tmp directory" failure
+      "listing contents of tmp directory\n"
+      ^ Lwt_utils.Process_failure.to_string failure
   in
   Lwt.return (dir1 ^ "\n\n" ^ dir2)
 
@@ -564,21 +551,56 @@ let rage_experiments_and_config
     ( local_config.ServerLocalConfig.experiments,
       local_config.ServerLocalConfig.experiments_config_meta )
 
-let rage_repro (mergebase : string option) (patch_script : string option) :
-    (string * string) option Lwt.t =
-  match (mergebase, patch_script) with
-  | (None, _)
-  | (_, None) ->
-    Lwt.return_none
-  | (Some mergebase, Some patch_script) ->
-    let%lwt result = Extra_rage.create_repro mergebase patch_script in
-    let result =
-      match result with
-      | Some (Ok { Lwt_utils.Process_success.stdout; _ }) -> stdout
-      | Some (Error failure) -> format_failure "" failure
-      | None -> "not applicable"
-    in
-    Lwt.return_some ("repro", result)
+(** Human-readable text relating to what shell commands the user has executed *)
+let rage_command_history (env : env) : string Lwt.t =
+  (* .bash_history - a record of commands the user did, if they use bash. *)
+  let re = Str.regexp "^#[0-9]+$" in
+  let fn = Sys_utils.expanduser "~/.bash_history" in
+  let bash_history =
+    if Sys.file_exists fn then
+      try
+        let contents = Sys_utils.cat fn |> String_utils.split_into_lines in
+        (* .bash_history file format is a command-line, then a line like "#<timestamp>", repeated.
+        We'll reformat the timestamps. This fold statement has an accumulator (cmd, cmds) where
+        cmd is the most recent timestamp encountered, and cmds is where we accumuate "[time] - cmd".
+        Each command-line is followed by its timestamps, but the command-lines are unsorted. *)
+        let (_, cmds) =
+          List.fold contents ~init:("?", []) ~f:(fun (cmd, cmds) s ->
+              if Str.string_match re s 0 then
+                let t = float_of_string (String_utils.lstrip s "#") in
+                ("?", (Utils.timestring t ^ " " ^ cmd) :: cmds)
+              else
+                (s, cmds))
+        in
+        let cmds = List.sort cmds ~compare:String.descending in
+        Printf.sprintf
+          ( "BASH HISTORY\n"
+          ^^ "The file ~/.bash_history contains recent commands, but (1) it is only updated when\n"
+          ^^ "the user closes their shell and hence doesn't contain recent commands, and (2) it\n"
+          ^^ "naturally doesn't exist if the user doesn't use bash!\n\n%s" )
+          (List.take cmds 100 |> String.concat ~sep:"\n")
+      with e -> Exception.wrap e |> Exception.to_string
+    else
+      "Not found: ~/.bash_history"
+  in
+
+  let%lwt shell = Extra_rage.shell () in
+
+  (* hg journal - a list of all hg commit transitions in the repository *)
+  let%lwt journal_result =
+    Lwt_utils.exec_checked
+      ~timeout:30.0
+      Exec_command.Hg
+      [| "journal"; "--limit"; "300"; "--cwd"; Path.to_string env.root |]
+  in
+  let journal =
+    match journal_result with
+    | Ok { Lwt_utils.Process_success.stdout; _ } -> stdout
+    | Error failure -> Lwt_utils.Process_failure.to_string failure
+  in
+  let journal = "HG JOURNAL\n" ^ journal in
+
+  Lwt.return (Printf.sprintf "%s\n\n\n%s\n\n\n%s" bash_history shell journal)
 
 let main (env : env) : Exit_status.t Lwt.t =
   let start_time = Unix.gettimeofday () in
@@ -717,8 +739,15 @@ let main (env : env) : Exit_status.t Lwt.t =
   add ("hh_server tmp", tmp_dir);
 
   (* repro *)
-  let%lwt repro = rage_repro mergebase patch_script in
-  Option.iter repro ~f:add;
+  let%lwt repro = Extra_rage.create_repro mergebase patch_script in
+  add ("repro", repro);
+
+  (* host *)
+  let hostname = Unix.gethostname () in
+  let%lwt ooms = Extra_rage.ooms () in
+  add ("host", hostname ^ "\n\n" ^ ooms);
+  let%lwt command_history = rage_command_history env in
+  add ("command_history", command_history);
 
   (* We've assembled everything! now log it. *)
   let%lwt result =

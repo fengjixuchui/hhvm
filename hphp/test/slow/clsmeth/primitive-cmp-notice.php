@@ -6,7 +6,8 @@ function handle_error($_errno, $msg, ...) {
   if (
     !preg_match('/Implicit clsmeth to [^ ]+ conversion/', $msg) &&
     strpos($msg, 'Comparing clsmeth with vec') === false &&
-    strpos($msg, 'Comparing clsmeth with non-clsmeth') === false
+    strpos($msg, 'Comparing clsmeth with non-clsmeth') === false &&
+    strpos($msg, 'Comparing clsmeth with clsmeth relationally') === false
   ) {
     return false;
   }
@@ -80,7 +81,7 @@ function WRAPD($x) { $r = new stdclass; $r->x = $x; return LV($r); }
   $va = varray[Foo::class, 'bar'];
   $da = darray[0 => Foo::class, 1 => 'bar'];
   $cp = class_meth(Foo::class, 'bar');
-  $ep = fun('bar');
+  $ep = bar<>;
   $lp = class_meth(Foo::class, 'baz');
   $qp = CLS('Foo');
 
@@ -448,7 +449,7 @@ function WRAPD($x) { $r = new stdclass; $r->x = $x; return LV($r); }
   $va = LV(varray[Foo::class, 'bar']);
   $da = LV(darray[0 => Foo::class, 1 => 'bar']);
   $cp = LV(class_meth(Foo::class, 'bar'));
-  $ep = LV(fun('bar'));
+  $ep = LV(bar<>);
   $lp = LV(class_meth(Foo::class, 'baz'));
   $qp = LV(CLS('Foo'));
 

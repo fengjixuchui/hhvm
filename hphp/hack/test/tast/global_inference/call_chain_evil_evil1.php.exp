@@ -20,7 +20,7 @@
             param_visibility = None }
            ];
          m_cap =
-         (((HH\Capabilities\RxLocal & HH\Capabilities\IO & HH\Capabilities\CippGlobal & HH\Capabilities\Globals & HH\Capabilities\UnrestrictedMutation)),
+         (((HH\Capabilities\AccessStaticVariable & HH\Capabilities\WriteProperty & HH\Capabilities\Output)),
           None);
          m_unsafe_cap = ((mixed), None);
          m_body =
@@ -38,7 +38,7 @@
         ns_const_uses = <opaque>; ns_name = None; ns_auto_ns_map = [];
         ns_is_codegen = false; ns_disable_xhp_element_mangling = false };
       c_user_attributes = []; c_file_attributes = []; c_enum = None;
-      c_pu_enums = []; c_doc_comment = None; c_emit_id = None })
+      c_doc_comment = None; c_emit_id = None })
   ]
 [(Class
     { c_span = [3:1-7:2]; c_annotation = (); c_mode = Mpartial;
@@ -63,7 +63,7 @@
             param_visibility = None }
            ];
          m_cap =
-         (((HH\Capabilities\RxLocal & HH\Capabilities\IO & HH\Capabilities\CippGlobal & HH\Capabilities\Globals & HH\Capabilities\UnrestrictedMutation)),
+         (((HH\Capabilities\AccessStaticVariable & HH\Capabilities\WriteProperty & HH\Capabilities\Output)),
           None);
          m_unsafe_cap = ((mixed), None);
          m_body =
@@ -90,7 +90,7 @@
         ns_const_uses = <opaque>; ns_name = None; ns_auto_ns_map = [];
         ns_is_codegen = false; ns_disable_xhp_element_mangling = false };
       c_user_attributes = []; c_file_attributes = []; c_enum = None;
-      c_pu_enums = []; c_doc_comment = None; c_emit_id = None })
+      c_doc_comment = None; c_emit_id = None })
   ]
 [(Fun
     { f_span = [3:1-5:2]; f_annotation = (); f_mode = Mpartial;
@@ -111,7 +111,7 @@
           param_user_attributes = []; param_visibility = None }
         ];
       f_cap =
-      (((HH\Capabilities\RxLocal & HH\Capabilities\IO & HH\Capabilities\CippGlobal & HH\Capabilities\Globals & HH\Capabilities\UnrestrictedMutation)),
+      (((HH\Capabilities\AccessStaticVariable & HH\Capabilities\WriteProperty & HH\Capabilities\Output)),
        None);
       f_unsafe_cap = ((mixed), None);
       f_body =
@@ -124,7 +124,7 @@
                         (Obj_get ((([4:10-12], B), (Lvar ([4:10-12], $b))),
                            (([4:14-15], (function(string $x): string)),
                             (Id ([4:14-15], "f"))),
-                           OG_nullthrows))),
+                           OG_nullthrows, false))),
                        [],
                        [(([4:16-25], string),
                          (Call (
@@ -133,7 +133,7 @@
                                 (([4:16-18], A), (Lvar ([4:16-18], $a))),
                                 (([4:20-21], (function(string $x): string)),
                                  (Id ([4:20-21], "f"))),
-                                OG_nullthrows))),
+                                OG_nullthrows, false))),
                             [], [(([4:22-24], string), (String ""))], None)))
                          ],
                        None))))))

@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<add3690cda30cfec03d00aeacaaa14d2>>
+// @generated SignedSource<<59e9311360e0cdf5eaca4201a6bdc9d6>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
@@ -436,12 +436,6 @@ pub enum Ty_<'a> {
     /// during the localization phase.
     Tmixed,
     Tlike(&'a Ty<'a>),
-    /// Access to a Pocket Universe or Pocket Universes dependent type,
-    /// denoted by Foo:@Bar.
-    /// It might be unresolved at first (e.g. if Foo is a generic variable).
-    /// Will be refined to Tpu, or to the actual type associated with an
-    /// atom, once typechecking is successful.
-    TpuAccess(&'a (&'a Ty<'a>, nast::Sid<'a>)),
     Tany(tany_sentinel::TanySentinel),
     Terr,
     Tnonnull,
@@ -458,7 +452,7 @@ pub enum Ty_<'a> {
     /// Nullable, called "option" in the ML parlance.
     Toption(&'a Ty<'a>),
     /// All the primitive types: int, string, void, etc.
-    Tprim(&'a aast::Tprim<'a>),
+    Tprim(&'a aast::Tprim),
     /// A wrapper around fun_type, which contains the full type information for a
     /// function, method, lambda, etc.
     Tfun(&'a FunType<'a>),
@@ -530,14 +524,6 @@ pub enum Ty_<'a> {
     /// If exact=Exact, then this represents instances of *exactly* this class
     /// If exact=Nonexact, this also includes subclasses
     Tclass(&'a (nast::Sid<'a>, Exact, &'a [&'a Ty<'a>])),
-    /// Typing of Pocket Universe Expressions
-    /// - first parameter is the enclosing class
-    /// - second parameter is the name of the Pocket Universe Enumeration
-    Tpu(&'a (&'a Ty<'a>, nast::Sid<'a>)),
-    /// Typing of Pocket Universes type projections
-    /// - first parameter is the Tgeneric in place of the member name
-    /// - second parameter is the name of the type to project
-    TpuTypeAccess(&'a (nast::Sid<'a>, nast::Sid<'a>)),
 }
 impl<'a> TrivialDrop for Ty_<'a> {}
 
@@ -601,6 +587,26 @@ pub enum Reactivity<'a> {
 }
 impl<'a> TrivialDrop for Reactivity<'a> {}
 
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub enum Capability<'a> {
+    CapDefaults(&'a pos::Pos<'a>),
+    CapTy(&'a Ty<'a>),
+}
+impl<'a> TrivialDrop for Capability<'a> {}
+
 /// Companion to fun_params type, intended to consolidate checking of
 /// implicit params for functions.
 #[derive(
@@ -617,7 +623,7 @@ impl<'a> TrivialDrop for Reactivity<'a> {}
     ToOcamlRep
 )]
 pub struct FunImplicitParams<'a> {
-    pub capability: &'a Ty<'a>,
+    pub capability: Capability<'a>,
 }
 impl<'a> TrivialDrop for FunImplicitParams<'a> {}
 

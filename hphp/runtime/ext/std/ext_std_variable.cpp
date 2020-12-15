@@ -73,6 +73,13 @@ String HHVM_FUNCTION(gettype, const Variant& v) {
   // OH NO. This string could be used by logic in Hack, so we can't do the
   // sensible thing here and return "varray" or "darray" for dvarrays.
   if (isArrayType(v.getType())) return s_array;
+  if (isArrayLikeType(v.getType()) && v.getArrayData()->isLegacyArray()) {
+    return s_array;
+  }
+  if (RuntimeOption::EvalClassAsStringGetType &&
+      (v.isLazyClass() || v.isClass())) {
+    return s_string;
+  }
   return getDataTypeString(v.getType());
 }
 
@@ -180,7 +187,7 @@ bool HHVM_FUNCTION(HH_is_any_array, const Variant& val) {
 }
 
 bool HHVM_FUNCTION(HH_is_list_like, const Variant& val) {
-  if (val.isClsMeth()) {
+  if (val.isClsMeth() && RO::EvalIsCompatibleClsMethType) {
     raiseClsMethToVecWarningHelper();
     return true;
   }

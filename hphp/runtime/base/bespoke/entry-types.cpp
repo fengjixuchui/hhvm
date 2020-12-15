@@ -124,17 +124,30 @@ EntryTypes EntryTypes::pessimizeValueTypes() const {
   return EntryTypes(keyTypes, ValueTypes::Any, kInvalidDataType);
 }
 
-std::string EntryTypes::toString() const {
-  auto const keySt = [&] {
+bool EntryTypes::isMonotypeState() const {
+  auto const monotype_key = [&]{
     switch (keyTypes) {
-      case KeyTypes::Empty: return "Empty";
-      case KeyTypes::Ints: return "Ints";
-      case KeyTypes::StaticStrings: return "StaticStrings";
-      case KeyTypes::Strings: return "Strings";
-      case KeyTypes::Any: return "Any";
+      case KeyTypes::Empty:         return true;
+      case KeyTypes::Ints:          return true;
+      case KeyTypes::StaticStrings: return true;
+      case KeyTypes::Strings:       return true;
+      case KeyTypes::Any:           return false;
     }
-    not_reached();
+    always_assert(false);
   }();
+  auto const monotype_val = [&]{
+    switch (valueTypes) {
+      case ValueTypes::Empty:            return true;
+      case ValueTypes::Monotype:         return true;
+      case ValueTypes::MonotypeNullable: return false;
+      case ValueTypes::Any:              return false;
+    }
+    always_assert(false);
+  }();
+  return monotype_key && monotype_val;
+}
+
+std::string EntryTypes::toString() const {
   auto const valueSt = [&] {
     switch (valueTypes) {
       case ValueTypes::Empty: return folly::sformat("Empty");
@@ -147,7 +160,18 @@ std::string EntryTypes::toString() const {
     not_reached();
   }();
 
-  return folly::sformat("<{}, {}>", keySt, valueSt);
+  return folly::sformat("<{}, {}>", show(keyTypes), valueSt);
+}
+
+const char* show(KeyTypes kt) {
+  switch (kt) {
+    case KeyTypes::Empty: return "Empty";
+    case KeyTypes::Ints: return "Ints";
+    case KeyTypes::StaticStrings: return "StaticStrings";
+    case KeyTypes::Strings: return "Strings";
+    case KeyTypes::Any: return "Any";
+  }
+  not_reached();
 }
 
 }}

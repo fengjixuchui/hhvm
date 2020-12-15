@@ -30,7 +30,7 @@ let check_override_annotations cls ~static =
       sc.sc_methods
   in
   List.iter methods (fun meth ->
-      if not meth.sm_override then
+      if not (sm_override meth) then
         ()
       else
         let (get_method, all_methods_named) =
@@ -82,14 +82,14 @@ let check_trait_override_annotations env cls ~static =
                 Errors.override_per_trait
                   (Cls.pos cls, Cls.name cls)
                   id
+                  meth.ce_origin
                   (get_pos ty)
           ))
 
-let check_if_cyclic ctx cls =
-  let key = (Cls.name cls, Decl_defs.Member_resolution) in
+let check_if_cyclic cls =
   let cyclic_classes =
-    Decl_linearize.get_linearization ctx key
-    |> Sequence.find_map ~f:(fun mro -> mro.mro_cyclic)
+    Cls.linearization cls Decl_defs.Member_resolution
+    |> List.find_map ~f:(fun mro -> mro.mro_cyclic)
   in
   match cyclic_classes with
   | None -> ()
@@ -161,11 +161,9 @@ let check_extend_kinds ctx shallow_class =
 let disallow_trait_reuse env =
   TypecheckerOptions.disallow_trait_reuse (Env.get_tcopt env)
 
-let check_trait_reuse ctx shallow_class =
-  let class_name = snd shallow_class.sc_name in
-  let key = (class_name, Decl_defs.Ancestor_types) in
-  Decl_linearize.get_linearization ctx key
-  |> Sequence.iter ~f:(fun mro ->
+let check_trait_reuse ctx cls =
+  Cls.linearization cls Decl_defs.Ancestor_types
+  |> List.iter ~f:(fun mro ->
          match mro.mro_trait_reuse with
          | None -> ()
          | Some parent_name ->
@@ -176,15 +174,14 @@ let check_trait_reuse ctx shallow_class =
            Errors.trait_reuse
              parent_pos
              parent_name
-             shallow_class.sc_name
+             (Cls.pos cls, Cls.name cls)
              mro.mro_name)
 
 let check_class env cls =
-  check_if_cyclic (Env.get_ctx env) cls;
+  check_if_cyclic cls;
   let shallow_class = Cls.shallow_decl cls in
   check_extend_kinds (Env.get_ctx env) shallow_class;
-  if disallow_trait_reuse env then
-    check_trait_reuse (Env.get_ctx env) shallow_class;
+  if disallow_trait_reuse env then check_trait_reuse (Env.get_ctx env) cls;
   if not Ast_defs.(equal_class_kind (Cls.kind cls) Ctrait) then (
     check_override_annotations cls ~static:false;
     check_override_annotations cls ~static:true

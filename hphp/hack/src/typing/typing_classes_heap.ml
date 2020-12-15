@@ -16,9 +16,11 @@ module LSTable = Lazy_string_table
 module SN = Naming_special_names
 
 type lazy_class_type = {
+  lin_members: Decl_defs.linearization;
+  lin_ancestors: Decl_defs.linearization;
   ih: inherited_members;
-  ancestors: decl_ty LSTable.t;
-  parents_and_traits: unit LSTable.t;
+  ancestors: decl_ty LSTable.t;  (** Types of parents, interfaces, and traits *)
+  parents_and_traits: unit LSTable.t;  (** Names of parents and traits only *)
   members_fully_known: bool Lazy.t;
   req_ancestor_names: unit LSTable.t;
   all_requirements: (Pos.t * decl_ty) Sequence.t;
@@ -48,68 +50,74 @@ let make_lazy_class_type ctx class_name =
   | Some sc ->
     let remainder =
       lazy
-        (let Decl_ancestors.
-               {
-                 ancestors;
-                 parents_and_traits;
-                 members_fully_known;
-                 req_ancestor_names;
-                 all_requirements;
-                 is_disposable;
-               } =
-           Decl_ancestors.make ctx class_name
+        (let { Decl_linearize.lin_members; lin_ancestors } =
+           Decl_linearize.get_linearizations ctx class_name
          in
-         let get_ancestor = LSTable.get ancestors in
-         let inherited_members =
-           Decl_inheritance.make ctx class_name get_ancestor
+         let lin_ancestors_drop_one = Sequence.drop_eagerly lin_ancestors 1 in
+         let is_canonical _ = true in
+         let merge ~earlier ~later:_ = earlier in
+         let ancestors =
+           LSTable.make
+             (Decl_ancestors.all_ancestors ~lin_ancestors_drop_one)
+             ~is_canonical
+             ~merge
          in
          {
-           ih = inherited_members;
+           lin_members;
+           lin_ancestors;
+           ih =
+             Decl_inheritance.make ctx class_name lin_members (fun x ->
+                 LSTable.get ancestors x);
            ancestors;
-           parents_and_traits;
-           members_fully_known;
-           req_ancestor_names;
-           all_requirements;
-           is_disposable;
+           parents_and_traits =
+             LSTable.make
+               (Decl_ancestors.parents_and_traits ~lin_ancestors_drop_one)
+               ~is_canonical
+               ~merge;
+           members_fully_known =
+             Decl_ancestors.members_fully_known ~lin_ancestors_drop_one;
+           req_ancestor_names =
+             LSTable.make
+               (Decl_ancestors.req_ancestor_names ~lin_members)
+               ~is_canonical
+               ~merge;
+           all_requirements = Decl_ancestors.all_requirements ~lin_members;
+           is_disposable = Decl_ancestors.is_disposable ~lin_members;
          })
     in
     Some (Lazy (sc, remainder))
 
-let make_eager_class_type ctx class_name =
+let make_eager_class_type ctx class_name declare_folded_class_in_file =
   match Decl_heap.Classes.get class_name with
-  | Some decl -> Some (Eager (Decl_class.to_class_type decl))
+  | Some decl -> Some (Eager (Decl_class.to_class_type (decl, None)))
   | None ->
     begin
       match Naming_provider.get_class_path ctx class_name with
       | None -> None
       | Some file ->
-        Deferred_decl.raise_if_should_defer ~d:file;
+        Deferred_decl.raise_if_should_defer ~deferment:(file, class_name);
         (* declare_folded_class_in_file actual reads from Decl_heap.Classes.get
          * like what we do above, which makes our test redundant but cleaner.
          * It also writes into Decl_heap.Classes and other Decl_heaps. *)
-        let decl =
-          Errors.run_in_decl_mode file (fun () ->
-              Decl.declare_folded_class_in_file
-                ~sh:SharedMem.Uses
-                ctx
-                file
-                class_name)
-        in
+        let decl = declare_folded_class_in_file ctx file class_name in
         Deferred_decl.increment_counter ();
         Some (Eager (Decl_class.to_class_type decl))
     end
 
-let get (ctx : Provider_context.t) (class_name : string) : class_t option =
+let get
+    (ctx : Provider_context.t)
+    (class_name : string)
+    declare_folded_class_in_file : class_t option =
   (* Fetches either the [Lazy] class (if shallow decls are enabled)
-    or the [Eager] class (otherwise).
-    Note: Eager will always read+write to shmem Decl_heaps.
-    Lazy will solely go through the ctx provider. *)
+   * or the [Eager] class (otherwise).
+   * Note: Eager will always read+write to shmem Decl_heaps.
+   * Lazy will solely go through the ctx provider. *)
   try
     if TypecheckerOptions.shallow_class_decl (Provider_context.get_tcopt ctx)
     then
       make_lazy_class_type ctx class_name
     else
-      make_eager_class_type ctx class_name
+      make_eager_class_type ctx class_name declare_folded_class_in_file
   with Deferred_decl.Defer d ->
     Deferred_decl.add_deferment ~d;
     None
@@ -407,6 +415,15 @@ module ApiLazy = struct
 end
 
 module ApiEager = struct
+  let linearization (decl, t) kind : Decl_defs.mro_element list =
+    Decl_counters.count_subdecl decl Decl_counters.Linearization @@ fun () ->
+    match (t, kind) with
+    | (Lazy (_sc, lc), Decl_defs.Member_resolution) ->
+      (Lazy.force lc).lin_members |> Sequence.to_list
+    | (Lazy (_sc, lc), Decl_defs.Ancestor_types) ->
+      (Lazy.force lc).lin_ancestors |> Sequence.to_list
+    | (Eager _, _) -> failwith "shallow_class_decl is disabled"
+
   let members_fully_known (decl, t) =
     Decl_counters.count_subdecl decl Decl_counters.Members_fully_known
     @@ fun () ->
@@ -456,12 +473,6 @@ module ApiEager = struct
     List.map ~f:(fun req -> snd req) (all_ancestor_reqs t)
     |> List.append (ApiShallow.upper_bounds_on_this_from_constraints t)
 
-  let get_pu_enum (decl, t) id =
-    Decl_counters.count_subdecl decl (Decl_counters.Get_pu_enum id) @@ fun () ->
-    match t with
-    | Lazy (_sc, lc) -> LSTable.get (Lazy.force lc).ih.pu_enums id
-    | Eager c -> SMap.find_opt id c.tc_pu_enums
-
   let consts (decl, t) =
     Decl_counters.count_subdecl decl Decl_counters.Consts @@ fun () ->
     match t with
@@ -473,12 +484,6 @@ module ApiEager = struct
     match t with
     | Lazy (_sc, lc) -> LSTable.to_list (Lazy.force lc).ih.typeconsts
     | Eager c -> SMap.bindings c.tc_typeconsts
-
-  let pu_enums (decl, t) =
-    Decl_counters.count_subdecl decl Decl_counters.Pu_enums @@ fun () ->
-    match t with
-    | Lazy (_sc, lc) -> LSTable.to_list (Lazy.force lc).ih.pu_enums
-    | Eager c -> SMap.bindings c.tc_pu_enums
 
   let props (decl, t) =
     Decl_counters.count_subdecl decl Decl_counters.Props @@ fun () ->

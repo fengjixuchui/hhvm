@@ -11,13 +11,6 @@ open Hh_prelude
 open Typing_defs_flags
 include Typing_defs_core
 
-(* Identifies the class and PU enum from which this element originates *)
-type pu_origin = {
-  pu_class: string;
-  pu_enum: string;
-}
-[@@deriving show]
-
 type const_decl = {
   cd_pos: Pos.t;
   cd_type: decl_ty;
@@ -103,7 +96,6 @@ and class_type = {
   tc_where_constraints: decl_where_constraint list;
   tc_consts: class_const SMap.t;
   tc_typeconsts: typeconst_type SMap.t;
-  tc_pu_enums: pu_enum_type SMap.t;
   tc_props: class_elt SMap.t;
   tc_sprops: class_elt SMap.t;
   tc_methods: class_elt SMap.t;
@@ -135,21 +127,6 @@ and typeconst_type = {
   ttc_origin: string;
   ttc_enforceable: Pos.t * bool;
   ttc_reifiable: Pos.t option;
-}
-
-and pu_enum_type = {
-  tpu_name: Nast.sid;
-  tpu_is_final: bool;
-  tpu_case_types: (pu_origin * decl_tparam) SMap.t;
-  tpu_case_values: (pu_origin * Nast.sid * decl_ty) SMap.t;
-  tpu_members: pu_member_type SMap.t;
-}
-
-and pu_member_type = {
-  tpum_atom: Nast.sid;
-  tpum_origin: pu_origin;
-  tpum_types: (pu_origin * Nast.sid * decl_ty) SMap.t;
-  tpum_exprs: (pu_origin * Nast.sid) SMap.t;
 }
 
 and enum_type = {
@@ -322,8 +299,6 @@ let is_union_or_inter_type (ty : locl_ty) =
   | Tfun _
   | Ttuple _
   | Tshape _
-  | Tpu_type_access _
-  | Tpu _
   | Tvar _
   | Tnewtype _
   | Tdependent _
@@ -446,8 +421,6 @@ let ty_con_ordinal ty_ =
   | Tintersection _ -> 14
   | Tobject -> 15
   | Tclass _ -> 16
-  | Tpu _ -> 18
-  | Tpu_type_access _ -> 19
   | Tvarray _ -> 20
   | Tdarray _ -> 21
   | Tvarray_or_darray _ -> 22
@@ -477,7 +450,6 @@ let decl_ty_con_ordinal ty_ =
   | Tfun _ -> 15
   | Ttuple _ -> 16
   | Tshape _ -> 17
-  | Tpu_access _ -> 18
   | Tvar _ -> 19
   | Tunion _ -> 20
   | Tintersection _ -> 21
@@ -559,14 +531,6 @@ let rec ty__compare ?(normalize_lists = false) ty_1 ty_2 =
         | n -> n
       end
     | (Tvar v1, Tvar v2) -> compare v1 v2
-    | (Tpu (cls1, enum1), Tpu (cls2, enum2)) ->
-      (match ty_compare cls1 cls2 with
-      | 0 -> String.compare (snd enum1) (snd enum2)
-      | n -> n)
-    | (Tpu_type_access (n1, t1), Tpu_type_access (n2, t2)) ->
-      (match String.compare (snd n1) (snd n2) with
-      | 0 -> String.compare (snd t1) (snd t2)
-      | n -> n)
     | (Tunapplied_alias n1, Tunapplied_alias n2) -> String.compare n1 n2
     | _ -> ty_con_ordinal ty_1 - ty_con_ordinal ty_2
   and shape_field_type_compare sft1 sft2 =
@@ -801,8 +765,6 @@ let rec equal_decl_ty_ ty_1 ty_2 =
            Ast_defs.ShapeField.equal k1 k2 && equal_shape_field_type v1 v2)
          (Nast.ShapeMap.elements fields1)
          (Nast.ShapeMap.elements fields2)
-  | (Tpu_access (ty1, (_, s1)), Tpu_access (ty2, (_, s2))) ->
-    equal_decl_ty ty1 ty2 && String.equal s1 s2
   | (Tvar v1, Tvar v2) -> Ident.equal v1 v2
   | (Tany _, _)
   | (Terr, _)
@@ -823,7 +785,6 @@ let rec equal_decl_ty_ ty_1 ty_2 =
   | (Tfun _, _)
   | (Ttuple _, _)
   | (Tshape _, _)
-  | (Tpu_access _, _)
   | (Tvar _, _)
   | (Tunion _, _)
   | (Tintersection _, _) ->
@@ -887,6 +848,11 @@ and any_reactive r =
   | CippGlobal ->
     false
 
+and non_public_ifc ifc =
+  match ifc with
+  | FDPolicied (Some "PUBLIC") -> false
+  | _ -> true
+
 and equal_param_rx_annotation pa1 pa2 =
   match (pa1, pa2) with
   | (Param_rx_var, Param_rx_var) -> true
@@ -909,7 +875,14 @@ and equal_decl_ft_params params1 params2 =
   List.equal equal_decl_fun_param params1 params2
 
 and equal_decl_ft_implicit_params { capability = cap1 } { capability = cap2 } =
-  equal_decl_ty cap1 cap2
+  (* TODO(coeffects): could rework this so that implicit defaults and explicit
+   * [defaults] are considered equal *)
+  match (cap1, cap2) with
+  | (CapDefaults p1, CapDefaults p2) -> Pos.equal p1 p2
+  | (CapTy c1, CapTy c2) -> equal_decl_ty c1 c2
+  | (CapDefaults _, CapTy _)
+  | (CapTy _, CapDefaults _) ->
+    false
 
 let equal_typeconst_abstract_kind ak1 ak2 =
   match (ak1, ak2) with
@@ -968,8 +941,6 @@ let get_ce_override ce = is_set ce_flags_override ce.ce_flags
 
 let get_ce_lsb ce = is_set ce_flags_lsb ce.ce_flags
 
-let get_ce_memoizelsb ce = is_set ce_flags_memoizelsb ce.ce_flags
-
 let get_ce_synthesized ce = is_set ce_flags_synthesized ce.ce_flags
 
 let get_ce_const ce = is_set ce_flags_const ce.ce_flags
@@ -1019,7 +990,6 @@ let make_ce_flags
     ~final
     ~override
     ~lsb
-    ~memoizelsb
     ~synthesized
     ~const
     ~lateinit
@@ -1029,7 +999,6 @@ let make_ce_flags
   let flags = set_bit ce_flags_final final flags in
   let flags = set_bit ce_flags_override override flags in
   let flags = set_bit ce_flags_lsb lsb flags in
-  let flags = set_bit ce_flags_memoizelsb memoizelsb flags in
   let flags = set_bit ce_flags_synthesized synthesized flags in
   let flags = set_bit ce_flags_const const flags in
   let flags = set_bit ce_flags_lateinit lateinit flags in

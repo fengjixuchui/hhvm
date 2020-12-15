@@ -85,30 +85,6 @@ let typeconst env c tc =
         stc_reifiable = reifiable;
       }
 
-let pu_enum
-    env { pu_name; pu_is_final; pu_case_types; pu_case_values; pu_members; _ } =
-  let spu_case_types = pu_case_types in
-  let hint_assoc (k, hint) = (k, Decl_hint.hint env hint) in
-  let spu_case_values = List.map ~f:hint_assoc pu_case_values in
-  let spu_members =
-    let case_member { pum_atom; pum_types; pum_exprs } =
-      {
-        spum_atom = pum_atom;
-        spum_types = List.map ~f:hint_assoc pum_types;
-        spum_exprs = List.map ~f:fst pum_exprs;
-      }
-    in
-    List.map ~f:case_member pu_members
-  in
-  let spu_case_types = List.map ~f:(type_param env) spu_case_types in
-  {
-    spu_name = pu_name;
-    spu_is_final = pu_is_final;
-    spu_case_types;
-    spu_case_values;
-    spu_members;
-  }
-
 let make_xhp_attr cv =
   Option.map cv.cv_xhp_attr (fun xai ->
       {
@@ -131,16 +107,22 @@ let prop env cv =
   in
   let const = Attrs.mem SN.UserAttributes.uaConst cv.cv_user_attributes in
   let lateinit = Attrs.mem SN.UserAttributes.uaLateInit cv.cv_user_attributes in
+  let php_std_lib =
+    Attrs.mem SN.UserAttributes.uaPHPStdLib cv.cv_user_attributes
+  in
   {
-    sp_const = const;
-    sp_xhp_attr = make_xhp_attr cv;
-    sp_lateinit = lateinit;
-    sp_lsb = false;
     sp_name = cv.cv_id;
-    sp_needs_init = Option.is_none cv.cv_expr;
+    sp_xhp_attr = make_xhp_attr cv;
     sp_type = ty;
-    sp_abstract = cv.cv_abstract;
     sp_visibility = cv.cv_visibility;
+    sp_flags =
+      PropFlags.make
+        ~const
+        ~lateinit
+        ~lsb:false
+        ~needs_init:(Option.is_none cv.cv_expr)
+        ~abstract:cv.cv_abstract
+        ~php_std_lib;
   }
 
 and static_prop env cv =
@@ -156,16 +138,22 @@ and static_prop env cv =
   let lateinit = Attrs.mem SN.UserAttributes.uaLateInit cv.cv_user_attributes in
   let lsb = Attrs.mem SN.UserAttributes.uaLSB cv.cv_user_attributes in
   let const = Attrs.mem SN.UserAttributes.uaConst cv.cv_user_attributes in
+  let php_std_lib =
+    Attrs.mem SN.UserAttributes.uaPHPStdLib cv.cv_user_attributes
+  in
   {
-    sp_const = const;
-    sp_xhp_attr = make_xhp_attr cv;
-    sp_lateinit = lateinit;
-    sp_lsb = lsb;
     sp_name = (cv_pos, id);
-    sp_needs_init = Option.is_none cv.cv_expr;
+    sp_xhp_attr = make_xhp_attr cv;
     sp_type = ty;
-    sp_abstract = cv.cv_abstract;
     sp_visibility = cv.cv_visibility;
+    sp_flags =
+      PropFlags.make
+        ~const
+        ~lateinit
+        ~lsb
+        ~needs_init:(Option.is_none cv.cv_expr)
+        ~abstract:cv.cv_abstract
+        ~php_std_lib;
   }
 
 let method_type env m =
@@ -178,13 +166,10 @@ let method_type env m =
   let return_disposable = has_return_disposable_attribute m.m_user_attributes in
   let params = make_params env ~is_lambda:false m.m_params in
   let capability =
-    hint_to_type
-      ~is_lambda:false
-      ~default:
-        (Typing_make_type.default_capability (Reason.Rhint (fst m.m_name)))
-      env
-      (Reason.Rwitness (fst m.m_name))
+    Option.value_map
       (hint_of_type_hint m.m_cap)
+      ~f:(fun h -> CapTy (Decl_hint.hint env h))
+      ~default:(CapDefaults (fst m.m_name))
   in
   let ret =
     ret_from_fun_kind
@@ -228,11 +213,11 @@ let method_type env m =
 let method_ env m =
   let override = Attrs.mem SN.UserAttributes.uaOverride m.m_user_attributes in
   let (pos, _) = m.m_name in
-  let has_memoizelsb =
-    Attrs.mem SN.UserAttributes.uaMemoizeLSB m.m_user_attributes
-  in
   let has_dynamicallycallable =
     Attrs.mem SN.UserAttributes.uaDynamicallyCallable m.m_user_attributes
+  in
+  let php_std_lib =
+    Attrs.mem SN.UserAttributes.uaPHPStdLib m.m_user_attributes
   in
   let ft = method_type env m in
   let reactivity =
@@ -274,16 +259,18 @@ let method_ env m =
       m.m_user_attributes
   in
   {
-    sm_abstract = m.m_abstract;
-    sm_final = m.m_final;
-    sm_memoizelsb = has_memoizelsb;
     sm_name = m.m_name;
-    sm_override = override;
-    sm_dynamicallycallable = has_dynamicallycallable;
     sm_reactivity = reactivity;
     sm_type = mk (Reason.Rwitness pos, Tfun ft);
     sm_visibility = m.m_visibility;
     sm_deprecated;
+    sm_flags =
+      MethodFlags.make
+        ~abstract:m.m_abstract
+        ~final:m.m_final
+        ~override
+        ~dynamicallycallable:has_dynamicallycallable
+        ~php_std_lib;
   }
 
 let class_ ctx c =
@@ -349,7 +336,6 @@ let class_ ctx c =
     sc_implements_dynamic = c.c_implements_dynamic;
     sc_consts = List.filter_map c.c_consts (class_const env c);
     sc_typeconsts = List.filter_map c.c_typeconsts (typeconst env c);
-    sc_pu_enums = List.map c.c_pu_enums (pu_enum env);
     sc_props = List.map ~f:(prop env) vars;
     sc_sprops = List.map ~f:(static_prop env) static_vars;
     sc_constructor = Option.map ~f:(method_ env) constructor;

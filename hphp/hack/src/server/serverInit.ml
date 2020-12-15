@@ -122,11 +122,9 @@ let remote_init genv env root worker_key check_id _profiling =
   let t = Unix.gettimeofday () in
   let ctx = Provider_utils.ctx_from_server_env env in
   let open ServerLocalConfig in
-  let open RemoteTypeCheck in
   let { recli_version; remote_transport_channel = transport_channel; _ } =
     genv.local_config
   in
-  let { file_system_mode; _ } = genv.local_config.remote_type_check in
   let { init_id; ci_info; init_start_t; _ } = env.init_env in
   ServerRemoteInit.init
     ctx
@@ -135,7 +133,7 @@ let remote_init genv env root worker_key check_id _profiling =
     ~check_id
     ~recli_version
     ~transport_channel
-    ~file_system_mode
+    ~remote_type_check_config:genv.local_config.remote_type_check
     ~ci_info
     ~init_id
     ~init_start_t
@@ -191,7 +189,11 @@ let lazy_saved_state_init genv env root load_state_approach profiling =
     | Exit_status.No_error ->
       ServerProgress.send_to_monitor
         (MonitorRpc.PROGRESS_WARNING (Some user_message));
-      ( ServerLazyInit.full_init genv env profiling |> post_init genv,
+      let fall_back_to_full_init profiling =
+        ServerLazyInit.full_init genv env profiling |> post_init genv
+      in
+      ( CgroupProfiler.profile_memory ~event:(`Init "lazy_full_init")
+        @@ fall_back_to_full_init,
         Load_state_failed (user_message, Utils.Callstack stack) )
     | _ -> Exit.exit ~msg:user_message ~stack next_step)
 
@@ -220,8 +222,7 @@ let lazy_write_symbol_info_init genv env profiling =
 let init
     ~(init_approach : init_approach)
     (genv : ServerEnv.genv)
-    (env : ServerEnv.env) :
-    CgroupProfiler.Profiling.t * (ServerEnv.env * init_result) =
+    (env : ServerEnv.env) : ServerEnv.env * init_result =
   Provider_backend.set_shared_memory_backend ();
   let lazy_lev = get_lazy_level genv in
   let root = ServerArgs.root genv.options in
@@ -232,25 +233,25 @@ let init
     ) else
       (lazy_lev, init_approach)
   in
-  let (event, init_method) =
+  let (init_method, init_method_name) =
     match (lazy_lev, init_approach) with
     | (_, Remote_init { worker_key; check_id }) ->
-      ("remote init", remote_init genv env root worker_key check_id)
-    | (Init, Full_init) -> ("lazy full init", lazy_full_init genv env)
+      (remote_init genv env root worker_key check_id, "remote_init")
+    | (Init, Full_init) -> (lazy_full_init genv env, "lazy_full_init")
     | (Init, Parse_only_init) ->
-      ("lazy parse-only init", lazy_parse_only_init genv env)
+      (lazy_parse_only_init genv env, "lazy_parse_only_init")
     | (Init, Saved_state_init load_state_approach) ->
-      ( "lazy saved-state init",
-        lazy_saved_state_init genv env root load_state_approach )
+      ( lazy_saved_state_init genv env root load_state_approach,
+        "lazy_saved_state_init" )
     | (Off, Full_init)
     | (Decl, Full_init)
     | (Parse, Full_init) ->
-      ("eager full init", eager_full_init genv env lazy_lev)
+      (eager_full_init genv env lazy_lev, "eager full init")
     | (Off, _)
     | (Decl, _)
     | (Parse, _) ->
-      ("eager init", eager_init genv env lazy_lev)
+      (eager_init genv env lazy_lev, "eager_init")
     | (_, Write_symbol_info) ->
-      ("lazy write-symbol-info init", lazy_write_symbol_info_init genv env)
+      (lazy_write_symbol_info_init genv env, "lazy_write_symbol_info_init")
   in
-  CgroupProfiler.profile_memory ~event ~f:init_method
+  CgroupProfiler.profile_memory ~event:(`Init init_method_name) init_method

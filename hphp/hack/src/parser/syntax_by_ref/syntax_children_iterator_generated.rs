@@ -311,7 +311,7 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                 })
             },
             FunctionDeclarationHeader(x) => {
-                get_index(12).and_then(|index| { match index {
+                get_index(11).and_then(|index| { match index {
                         0 => Some(&x.modifiers),
                     1 => Some(&x.keyword),
                     2 => Some(&x.name),
@@ -320,10 +320,9 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                     5 => Some(&x.parameter_list),
                     6 => Some(&x.right_paren),
                     7 => Some(&x.capability),
-                    8 => Some(&x.capability_provisional),
-                    9 => Some(&x.colon),
-                    10 => Some(&x.type_),
-                    11 => Some(&x.where_clause),
+                    8 => Some(&x.colon),
+                    9 => Some(&x.type_),
+                    10 => Some(&x.where_clause),
                         _ => None,
                     }
                 })
@@ -333,18 +332,6 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                         0 => Some(&x.left_bracket),
                     1 => Some(&x.types),
                     2 => Some(&x.right_bracket),
-                        _ => None,
-                    }
-                })
-            },
-            CapabilityProvisional(x) => {
-                get_index(6).and_then(|index| { match index {
-                        0 => Some(&x.at),
-                    1 => Some(&x.left_brace),
-                    2 => Some(&x.type_),
-                    3 => Some(&x.unsafe_plus),
-                    4 => Some(&x.unsafe_type),
-                    5 => Some(&x.right_brace),
                         _ => None,
                     }
                 })
@@ -494,6 +481,21 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                     7 => Some(&x.equal),
                     8 => Some(&x.type_specifier),
                     9 => Some(&x.semicolon),
+                        _ => None,
+                    }
+                })
+            },
+            ContextConstDeclaration(x) => {
+                get_index(9).and_then(|index| { match index {
+                        0 => Some(&x.modifiers),
+                    1 => Some(&x.const_keyword),
+                    2 => Some(&x.ctx_keyword),
+                    3 => Some(&x.name),
+                    4 => Some(&x.type_parameters),
+                    5 => Some(&x.constraint),
+                    6 => Some(&x.equal),
+                    7 => Some(&x.ctx_list),
+                    8 => Some(&x.semicolon),
                         _ => None,
                     }
                 })
@@ -801,23 +803,6 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                 get_index(3).and_then(|index| { match index {
                         0 => Some(&x.keyword),
                     1 => Some(&x.expression),
-                    2 => Some(&x.semicolon),
-                        _ => None,
-                    }
-                })
-            },
-            GotoLabel(x) => {
-                get_index(2).and_then(|index| { match index {
-                        0 => Some(&x.name),
-                    1 => Some(&x.colon),
-                        _ => None,
-                    }
-                })
-            },
-            GotoStatement(x) => {
-                get_index(3).and_then(|index| { match index {
-                        0 => Some(&x.keyword),
-                    1 => Some(&x.label_name),
                     2 => Some(&x.semicolon),
                         _ => None,
                     }
@@ -1407,15 +1392,6 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                     }
                 })
             },
-            PUAccess(x) => {
-                get_index(3).and_then(|index| { match index {
-                        0 => Some(&x.left_type),
-                    1 => Some(&x.separator),
-                    2 => Some(&x.right_type),
-                        _ => None,
-                    }
-                })
-            },
             VectorTypeSpecifier(x) => {
                 get_index(5).and_then(|index| { match index {
                         0 => Some(&x.keyword),
@@ -1459,6 +1435,14 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                     }
                 })
             },
+            FunctionCtxTypeSpecifier(x) => {
+                get_index(2).and_then(|index| { match index {
+                        0 => Some(&x.keyword),
+                    1 => Some(&x.variable),
+                        _ => None,
+                    }
+                })
+            },
             TypeParameter(x) => {
                 get_index(6).and_then(|index| { match index {
                         0 => Some(&x.attribute_spec),
@@ -1475,6 +1459,14 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                 get_index(2).and_then(|index| { match index {
                         0 => Some(&x.keyword),
                     1 => Some(&x.type_),
+                        _ => None,
+                    }
+                })
+            },
+            ContextConstraint(x) => {
+                get_index(2).and_then(|index| { match index {
+                        0 => Some(&x.keyword),
+                    1 => Some(&x.ctx_list),
                         _ => None,
                     }
                 })
@@ -1698,88 +1690,6 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                 get_index(2).and_then(|index| { match index {
                         0 => Some(&x.hash),
                     1 => Some(&x.expression),
-                        _ => None,
-                    }
-                })
-            },
-            PocketAtomExpression(x) => {
-                get_index(2).and_then(|index| { match index {
-                        0 => Some(&x.glyph),
-                    1 => Some(&x.expression),
-                        _ => None,
-                    }
-                })
-            },
-            PocketIdentifierExpression(x) => {
-                get_index(5).and_then(|index| { match index {
-                        0 => Some(&x.qualifier),
-                    1 => Some(&x.pu_operator),
-                    2 => Some(&x.field),
-                    3 => Some(&x.operator),
-                    4 => Some(&x.name),
-                        _ => None,
-                    }
-                })
-            },
-            PocketAtomMappingDeclaration(x) => {
-                get_index(6).and_then(|index| { match index {
-                        0 => Some(&x.glyph),
-                    1 => Some(&x.name),
-                    2 => Some(&x.left_paren),
-                    3 => Some(&x.mappings),
-                    4 => Some(&x.right_paren),
-                    5 => Some(&x.semicolon),
-                        _ => None,
-                    }
-                })
-            },
-            PocketEnumDeclaration(x) => {
-                get_index(7).and_then(|index| { match index {
-                        0 => Some(&x.attributes),
-                    1 => Some(&x.modifiers),
-                    2 => Some(&x.enum_),
-                    3 => Some(&x.name),
-                    4 => Some(&x.left_brace),
-                    5 => Some(&x.fields),
-                    6 => Some(&x.right_brace),
-                        _ => None,
-                    }
-                })
-            },
-            PocketFieldTypeExprDeclaration(x) => {
-                get_index(4).and_then(|index| { match index {
-                        0 => Some(&x.case),
-                    1 => Some(&x.type_),
-                    2 => Some(&x.name),
-                    3 => Some(&x.semicolon),
-                        _ => None,
-                    }
-                })
-            },
-            PocketFieldTypeDeclaration(x) => {
-                get_index(4).and_then(|index| { match index {
-                        0 => Some(&x.case),
-                    1 => Some(&x.type_),
-                    2 => Some(&x.type_parameter),
-                    3 => Some(&x.semicolon),
-                        _ => None,
-                    }
-                })
-            },
-            PocketMappingIdDeclaration(x) => {
-                get_index(2).and_then(|index| { match index {
-                        0 => Some(&x.name),
-                    1 => Some(&x.initializer),
-                        _ => None,
-                    }
-                })
-            },
-            PocketMappingTypeDeclaration(x) => {
-                get_index(4).and_then(|index| { match index {
-                        0 => Some(&x.keyword),
-                    1 => Some(&x.name),
-                    2 => Some(&x.equal),
-                    3 => Some(&x.type_),
                         _ => None,
                     }
                 })

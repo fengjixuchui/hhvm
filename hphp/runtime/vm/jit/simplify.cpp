@@ -1388,6 +1388,15 @@ SSATmp* simplifyEqCls(State& env, const IRInstruction* inst) {
   return nullptr;
 }
 
+SSATmp* simplifyEqLazyCls(State& env, const IRInstruction* inst) {
+  auto const left = inst->src(0);
+  auto const right = inst->src(1);
+  if (left->hasConstVal() && right->hasConstVal()) {
+    return cns(env, left->lclsVal().name() == right->lclsVal().name());
+  }
+  return nullptr;
+}
+
 SSATmp* simplifyEqStrPtr(State& env, const IRInstruction* inst) {
   auto const left = inst->src(0);
   auto const right = inst->src(1);
@@ -2658,10 +2667,10 @@ SSATmp* simplifyCheckVecBounds(State& env, const IRInstruction* inst) {
   auto const idxVal = idx->hasConstVal()
     ? folly::Optional<int64_t>(idx->intVal())
     : folly::none;
-  switch (packedArrayBoundsStaticCheck(array->type(), idxVal)) {
-  case PackedBounds::In:       return gen(env, Nop);
-  case PackedBounds::Out:      return gen(env, Jmp, inst->taken());
-  case PackedBounds::Unknown:  break;
+  switch (vecBoundsStaticCheck(array->type(), idxVal)) {
+  case VecBounds::In:       return gen(env, Nop);
+  case VecBounds::Out:      return gen(env, Jmp, inst->taken());
+  case VecBounds::Unknown:  break;
   }
 
   return mergeBranchDests(env, inst);
@@ -3019,6 +3028,167 @@ X(CountDict)
 X(CountKeyset)
 
 #undef X
+
+// Simplify generic bespoke getters, either based on the DataType (often we
+// can make simplifications for all varrays and vecs) or specific layout.
+
+SSATmp* simplifyBespokeGet(State& env, const IRInstruction* inst) {
+  auto const arr = inst->src(0);
+  auto const key = inst->src(1);
+  assertx(key->type().subtypeOfAny(TInt, TStr));
+
+  if (arr->hasConstVal()) {
+    auto const ad = arr->arrLikeVal();
+    if (ad->empty()) return cns(env, TUninit);
+    if (key->hasConstVal()) {
+      auto const tv = key->isA(TInt) ? ad->get(key->intVal())
+                                     : ad->get(key->strVal());
+      return cns(env, tv);
+    }
+  }
+
+  if (arr->isA(TVArr|TVec)) {
+    if (key->isA(TStr)) return cns(env, TUninit);
+    if (arr->type().arrSpec().monotype() &&
+        inst->extra<BespokeGet>()->state == BespokeGetData::KeyState::Present) {
+      return gen(env, LdMonotypeVecElem, inst->typeParam(), arr, key);
+    }
+  }
+
+  return nullptr;
+}
+
+SSATmp* simplifyBespokeIterFirstPos(State& env, const IRInstruction* inst) {
+  auto const arr = inst->src(0);
+
+  if (arr->hasConstVal()) {
+    auto const pos = arr->type().arrLikeVal()->iter_begin();
+    return cns(env, pos);
+  }
+
+  if (arr->isA(TVArr|TVec)) {
+    return cns(env, 0);
+  }
+
+  return nullptr;
+}
+
+SSATmp* simplifyBespokeIterLastPos(State& env, const IRInstruction* inst) {
+  auto const arr = inst->src(0);
+
+  if (arr->hasConstVal()) {
+    auto const pos = arr->type().arrLikeVal()->iter_last();
+    return cns(env, pos);
+  }
+
+  if (arr->isA(TVArr|TVec)) {
+    auto const size = gen(env, CountVec, arr);
+    return gen(env, SubInt, size, cns(env, 1));
+  }
+
+  return nullptr;
+}
+
+SSATmp* simplifyBespokeIterEnd(State& env, const IRInstruction* inst) {
+  auto const arr = inst->src(0);
+
+  if (arr->hasConstVal()) {
+    auto const pos = arr->type().arrLikeVal()->iter_end();
+    return cns(env, pos);
+  }
+
+  if (arr->isA(TVArr|TVec)) {
+    return gen(env, CountVec, arr);
+  }
+
+  if (arr->isA(TDArr|TDict) && arr->type().arrSpec().monotype()) {
+    return gen(env, LdMonotypeDictEnd, arr);
+  }
+
+  return nullptr;
+}
+
+SSATmp* simplifyBespokeIterGetKey(State& env, const IRInstruction* inst) {
+  auto const arr = inst->src(0);
+  auto const pos = inst->src(1);
+
+  if (arr->hasConstVal() && pos->hasConstVal()) {
+    auto const key = arr->type().arrLikeVal()->nvGetKey(pos->intVal());
+    return cns(env, key);
+  }
+
+  if (arr->isA(TVArr|TVec)) return pos;
+
+  if (arr->isA(TDArr|TDict) && arr->type().arrSpec().monotype()) {
+    return gen(env, LdMonotypeDictKey, inst->typeParam(), arr, pos);
+  }
+
+  return nullptr;
+}
+
+SSATmp* simplifyBespokeIterGetVal(State& env, const IRInstruction* inst) {
+  auto const arr = inst->src(0);
+  auto const pos = inst->src(1);
+
+  if (arr->hasConstVal() && pos->hasConstVal()) {
+    auto const val = arr->type().arrLikeVal()->nvGetVal(pos->intVal());
+    return cns(env, val);
+  }
+
+  if (arr->isA(TVArr|TVec)) {
+    auto const data = BespokeGetData { BespokeGetData::KeyState::Present };
+    return gen(env, BespokeGet, data, inst->typeParam(), arr, pos);
+  }
+
+  if (arr->isA(TDArr|TDict) && arr->type().arrSpec().monotype()) {
+    return gen(env, LdMonotypeDictVal, inst->typeParam(), arr, pos);
+  }
+
+  return nullptr;
+}
+
+// Simplify layout-specific bespoke helpers.
+
+SSATmp* simplifyLdMonotypeDictEnd(State& env, const IRInstruction* inst) {
+  auto const type = inst->src(0)->type();
+
+  if (type.hasConstVal()) {
+    auto const end = type.arrLikeVal()->iter_end();
+    return cns(env, end);
+  }
+
+  return nullptr;
+}
+
+SSATmp* simplifyLdMonotypeDictKey(State& env, const IRInstruction* inst) {
+  auto const arr = inst->src(0);
+  auto const pos = inst->src(1);
+  if (arr->hasConstVal() && pos->hasConstVal()) {
+    auto const tv = arr->arrLikeVal()->nvGetKey(pos->intVal());
+    return tv.is_init() ? cns(env, tv) : nullptr;
+  }
+  return nullptr;
+}
+
+SSATmp* simplifyLdMonotypeDictVal(State& env, const IRInstruction* inst) {
+  auto const arr = inst->src(0);
+  auto const pos = inst->src(1);
+  if (arr->hasConstVal() && pos->hasConstVal()) {
+    auto const tv = arr->arrLikeVal()->nvGetVal(pos->intVal());
+    return tv.is_init() ? cns(env, tv) : nullptr;
+  }
+  return nullptr;
+}
+
+SSATmp* simplifyLdMonotypeVecElem(State& env, const IRInstruction* inst) {
+  auto const arr = inst->src(0);
+  auto const key = inst->src(1);
+  if (arr->hasConstVal() && key->hasConstVal()) {
+    auto const tv = arr->arrLikeVal()->get(key->intVal());
+    return tv.is_init() ? cns(env, tv) : nullptr;
+  }
+  return nullptr;
+}
 
 SSATmp* simplifyLdClsName(State& env, const IRInstruction* inst) {
   auto const src = inst->src(0);
@@ -3436,6 +3606,16 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
   X(LookupSPropSlot)
   X(LdClsMethod)
   X(LdStrLen)
+  X(BespokeGet)
+  X(BespokeIterFirstPos)
+  X(BespokeIterLastPos)
+  X(BespokeIterEnd)
+  X(BespokeIterGetKey)
+  X(BespokeIterGetVal)
+  X(LdMonotypeDictEnd)
+  X(LdMonotypeDictKey)
+  X(LdMonotypeDictVal)
+  X(LdMonotypeVecElem)
   X(LdVecElem)
   X(MethodExists)
   X(FuncHasAttr)
@@ -3515,6 +3695,7 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
   X(NeqRes)
   X(CmpRes)
   X(EqCls)
+  X(EqLazyCls)
   X(EqStrPtr)
   X(EqArrayDataPtr)
   X(DictGet)

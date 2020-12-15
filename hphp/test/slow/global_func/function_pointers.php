@@ -43,15 +43,15 @@ class C {
 <<__EntryPoint>>
 function main_entry(): void {
 
-  call_user_func(fun('var_dump'), 1);
+  call_user_func(var_dump<>, 1);
 
-  $f = fun('foo');
+  $f = foo<>;
   $x = 0;
   $f(inout $x);
   var_dump($x);
 
-  bar(fun('var_dump'));
-  var_dump(call_f(fun('inc')));
+  bar(var_dump<>);
+  var_dump(call_f(inc<>));
 
   $v = Vector {
     Vector {1, 2, 3},
@@ -62,7 +62,7 @@ function main_entry(): void {
   var_dump(meth_caller('HH\Vector', 'count')->getMethodName());
 
   $s = Vector {'1', '2', '3'};
-  $data = $s->map(fun('intval'));
+  $data = $s->map(intval<>);
   var_dump($data->filter(class_meth('C', 'isOdd')));
   var_dump((new C)->filter($data));
 

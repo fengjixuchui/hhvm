@@ -1,9 +1,10 @@
-<?hh // partial
+<?hh
+<<file: __EnableUnstableFeatures('coeffects_provisional')>>
 
 class C {}
 
 <<__Rx>>
-function f() {
+function f(): void {
     $a = \HH\Rx\mutable(new C());
     // OK
     $b = g(\HH\Rx\move($a));
