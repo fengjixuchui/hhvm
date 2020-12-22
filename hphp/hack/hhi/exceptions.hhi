@@ -8,6 +8,8 @@
  *
  */
 
+<<file: __EnableUnstableFeatures('coeffects_provisional')>>
+
 /**
  * This file provides type information for some of PHP's predefined classes
  *
@@ -15,6 +17,8 @@
  */
 
 namespace {
+
+  // TODO(coeffects) reintroduce purity of these methods
 
 <<__Sealed(Error::class, Exception::class)>>
 interface Throwable {

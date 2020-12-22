@@ -8,6 +8,8 @@
  *
  */
 
+<<file: __EnableUnstableFeatures('coeffects_provisional')>>
+
 /**
  * This file provides type information for some of HHVM's builtin classes.
  *
@@ -31,7 +33,7 @@ abstract class BuiltinEnum<+T> {
    * @return array ('CONST_NAME' => $value, ....)
    */
   <<__Pure>>
-  final public static function getValues(): darray<string, T>;
+  final public static function getValues()[]: darray<string, T>;
 
   /**
    * Get the names of all the const values, indexed by value. Calls
@@ -40,27 +42,27 @@ abstract class BuiltinEnum<+T> {
    * @return array($value => 'CONST_NAME', ....)
    */
   <<__Pure>>
-  final public static function getNames(): darray<T, string> where T as arraykey;
+  final public static function getNames()[]: darray<T, string> where T as arraykey;
 
   /**
    * Returns whether or not the value is defined as a constant.
    */
   <<__Pure>>
-  final public static function isValid(mixed $value): bool;
+  final public static function isValid(mixed $value)[]: bool;
 
   /**
    * Coerce to a valid value or null.
    * This is useful for typing deserialized enum values.
    */
   <<__Pure>>
-  final public static function coerce(mixed $value): ?T;
+  final public static function coerce(mixed $value)[]: ?T;
 
   /**
    * Coerce to valid value or throw UnexpectedValueException
    * This is useful for typing deserialized enum values.
    */
   <<__Pure>>
-  final public static function assert(mixed $value): T;
+  final public static function assert(mixed $value)[]: T;
 
   /**
    * Coerce all the values in a traversable. If the value is not an
@@ -69,7 +71,7 @@ abstract class BuiltinEnum<+T> {
   <<__Pure, __AtMostRxAsArgs>>
   final public static function assertAll(
     <<__OnlyRxIfImpl(\HH\Rx\Traversable::class), __MaybeMutable>> Traversable<mixed> $values,
-  ): Container<T>;
+  )[]: Container<T>;
 }
 
 type enumname<T> = classname<BuiltinEnum<T>>;
@@ -83,18 +85,18 @@ const enumname<arraykey> BUILTIN_ENUM = BuiltinEnum::class;
 /**
  * Base helper class for the enum class feature
  */
-final class Elt<-TPhantom, +T> {
+final class EnumMember<-TPhantom, +T> {
   /* TODO(T77095784) How to make it private ? */
   public function __construct(private string $name, private T $data) {}
 
   <<__Pure>>
-  public function name(): string {
+  public function name()[]: string {
     return $this->name;
   }
 
   /* TODO(T77095784) ask if this can be inlined/optimized */
   <<__Pure>>
-  public function unwrap(): T {
+  public function data()[]: T {
     return $this->data;
   }
 }
@@ -102,7 +104,7 @@ final class Elt<-TPhantom, +T> {
 /**
  * BuiltinEnumClass contains the utility methods provided by enum classes.
  * Under the hood, an enum class Foo : Bar will extend
- * BuiltinEnumClass<HH\Elt<this, Bar>>.
+ * BuiltinEnumClass<HH\EnumMember<this, Bar>>.
  *
  * HHVM provides a native implementation for this class. The PHP class
  * definition below is not actually used at run time; it is simply
@@ -117,7 +119,7 @@ abstract class BuiltinEnumClass<+T> {
    * @return array ('CONST_NAME' => $value, ....)
    */
   <<__Pure>>
-  final public static function getValues(): darray<string, T>;
+  final public static function getValues()[]: darray<string, T>;
 }
 
 }

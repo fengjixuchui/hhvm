@@ -54,7 +54,7 @@ pub enum SyntaxVariant<'a, T, V> {
     NamespaceUseClause(&'a NamespaceUseClauseChildren<'a, T, V>),
     FunctionDeclaration(&'a FunctionDeclarationChildren<'a, T, V>),
     FunctionDeclarationHeader(&'a FunctionDeclarationHeaderChildren<'a, T, V>),
-    Capability(&'a CapabilityChildren<'a, T, V>),
+    Contexts(&'a ContextsChildren<'a, T, V>),
     WhereClause(&'a WhereClauseChildren<'a, T, V>),
     WhereConstraint(&'a WhereConstraintChildren<'a, T, V>),
     MethodishDeclaration(&'a MethodishDeclarationChildren<'a, T, V>),
@@ -132,6 +132,7 @@ pub enum SyntaxVariant<'a, T, V> {
     FunctionPointerExpression(&'a FunctionPointerExpressionChildren<'a, T, V>),
     ParenthesizedExpression(&'a ParenthesizedExpressionChildren<'a, T, V>),
     BracedExpression(&'a BracedExpressionChildren<'a, T, V>),
+    ETSpliceExpression(&'a ETSpliceExpressionChildren<'a, T, V>),
     EmbeddedBracedExpression(&'a EmbeddedBracedExpressionChildren<'a, T, V>),
     ListExpression(&'a ListExpressionChildren<'a, T, V>),
     CollectionLiteralExpression(&'a CollectionLiteralExpressionChildren<'a, T, V>),
@@ -419,14 +420,14 @@ pub struct FunctionDeclarationHeaderChildren<'a, T, V> {
     pub left_paren: Syntax<'a, T, V>,
     pub parameter_list: Syntax<'a, T, V>,
     pub right_paren: Syntax<'a, T, V>,
-    pub capability: Syntax<'a, T, V>,
+    pub contexts: Syntax<'a, T, V>,
     pub colon: Syntax<'a, T, V>,
     pub type_: Syntax<'a, T, V>,
     pub where_clause: Syntax<'a, T, V>,
 }
 
 #[derive(Debug, Clone)]
-pub struct CapabilityChildren<'a, T, V> {
+pub struct ContextsChildren<'a, T, V> {
     pub left_bracket: Syntax<'a, T, V>,
     pub types: Syntax<'a, T, V>,
     pub right_bracket: Syntax<'a, T, V>,
@@ -872,6 +873,7 @@ pub struct AnonymousFunctionChildren<'a, T, V> {
     pub left_paren: Syntax<'a, T, V>,
     pub parameters: Syntax<'a, T, V>,
     pub right_paren: Syntax<'a, T, V>,
+    pub ctx_list: Syntax<'a, T, V>,
     pub colon: Syntax<'a, T, V>,
     pub type_: Syntax<'a, T, V>,
     pub use_: Syntax<'a, T, V>,
@@ -900,7 +902,7 @@ pub struct LambdaSignatureChildren<'a, T, V> {
     pub left_paren: Syntax<'a, T, V>,
     pub parameters: Syntax<'a, T, V>,
     pub right_paren: Syntax<'a, T, V>,
-    pub capability: Syntax<'a, T, V>,
+    pub contexts: Syntax<'a, T, V>,
     pub colon: Syntax<'a, T, V>,
     pub type_: Syntax<'a, T, V>,
 }
@@ -1044,6 +1046,14 @@ pub struct ParenthesizedExpressionChildren<'a, T, V> {
 
 #[derive(Debug, Clone)]
 pub struct BracedExpressionChildren<'a, T, V> {
+    pub left_brace: Syntax<'a, T, V>,
+    pub expression: Syntax<'a, T, V>,
+    pub right_brace: Syntax<'a, T, V>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ETSpliceExpressionChildren<'a, T, V> {
+    pub dollar: Syntax<'a, T, V>,
     pub left_brace: Syntax<'a, T, V>,
     pub expression: Syntax<'a, T, V>,
     pub right_brace: Syntax<'a, T, V>,
@@ -1363,7 +1373,7 @@ pub struct ClosureTypeSpecifierChildren<'a, T, V> {
     pub inner_left_paren: Syntax<'a, T, V>,
     pub parameter_list: Syntax<'a, T, V>,
     pub inner_right_paren: Syntax<'a, T, V>,
-    pub capability: Syntax<'a, T, V>,
+    pub contexts: Syntax<'a, T, V>,
     pub colon: Syntax<'a, T, V>,
     pub return_type: Syntax<'a, T, V>,
     pub outer_right_paren: Syntax<'a, T, V>,

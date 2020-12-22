@@ -1108,39 +1108,42 @@ and catch catchctx env (sid, exn_lvar, b) =
 
 and as_expr env ty1 pe e =
   let env = Env.open_tyvars env pe in
-  (fun (env, expected_ty, tk, tv) ->
-    let rec distribute_union env ty =
-      let (env, ty) = Env.expand_type env ty in
-      match get_node ty with
-      | Tunion tyl -> List.fold tyl ~init:env ~f:distribute_union
-      | _ ->
-        if SubType.is_sub_type_for_union env ty (MakeType.dynamic Reason.Rnone)
-        then
-          let env = SubType.sub_type env ty tk Errors.unify_error in
-          let env = SubType.sub_type env ty tv Errors.unify_error in
-          env
-        else
-          let ur = Reason.URforeach in
-          Type.sub_type pe ur env ty expected_ty Errors.unify_error
-    in
-    let env = distribute_union env ty1 in
-    let env = Env.set_tyvar_variance env expected_ty in
-    (Typing_solver.close_tyvars_and_solve env Errors.unify_error, tk, tv))
-  @@
   let (env, tv) = Env.fresh_type env pe in
-  match e with
-  | As_v _ ->
-    let tk = MakeType.mixed Reason.Rnone in
-    (env, MakeType.traversable (Reason.Rforeach pe) tv, tk, tv)
-  | As_kv _ ->
-    let (env, tk) = Env.fresh_type env pe in
-    (env, MakeType.keyed_traversable (Reason.Rforeach pe) tk tv, tk, tv)
-  | Await_as_v _ ->
-    let tk = MakeType.mixed Reason.Rnone in
-    (env, MakeType.async_iterator (Reason.Rasyncforeach pe) tv, tk, tv)
-  | Await_as_kv _ ->
-    let (env, tk) = Env.fresh_type env pe in
-    (env, MakeType.async_keyed_iterator (Reason.Rasyncforeach pe) tk tv, tk, tv)
+  let (env, expected_ty, tk, tv) =
+    match e with
+    | As_v _ ->
+      let tk = MakeType.mixed Reason.Rnone in
+      (env, MakeType.traversable (Reason.Rforeach pe) tv, tk, tv)
+    | As_kv _ ->
+      let (env, tk) = Env.fresh_type env pe in
+      (env, MakeType.keyed_traversable (Reason.Rforeach pe) tk tv, tk, tv)
+    | Await_as_v _ ->
+      let tk = MakeType.mixed Reason.Rnone in
+      (env, MakeType.async_iterator (Reason.Rasyncforeach pe) tv, tk, tv)
+    | Await_as_kv _ ->
+      let (env, tk) = Env.fresh_type env pe in
+      ( env,
+        MakeType.async_keyed_iterator (Reason.Rasyncforeach pe) tk tv,
+        tk,
+        tv )
+  in
+  let rec distribute_union env ty =
+    let (env, ty) = Env.expand_type env ty in
+    match get_node ty with
+    | Tunion tyl -> List.fold tyl ~init:env ~f:distribute_union
+    | _ ->
+      if SubType.is_sub_type_for_union env ty (MakeType.dynamic Reason.Rnone)
+      then
+        let env = SubType.sub_type env ty tk Errors.unify_error in
+        let env = SubType.sub_type env ty tv Errors.unify_error in
+        env
+      else
+        let ur = Reason.URforeach in
+        Type.sub_type pe ur env ty expected_ty Errors.unify_error
+  in
+  let env = distribute_union env ty1 in
+  let env = Env.set_tyvar_variance env expected_ty in
+  (Typing_solver.close_tyvars_and_solve env Errors.unify_error, tk, tv)
 
 and bind_as_expr env p ty1 ty2 aexpr =
   let check_reassigned_mutable env te =
@@ -1600,9 +1603,20 @@ and expr_
     make_result env p (make_expr th pairs) (make_ty k v)
   | Clone e ->
     let (env, te, ty) = expr env e in
-    (* Clone only works on objects; anything else fatals at runtime *)
-    let tobj = mk (Reason.Rwitness p, Tobject) in
-    let env = Type.sub_type p Reason.URclone env ty tobj Errors.unify_error in
+    (* Clone only works on objects; anything else fatals at runtime.
+     * Constructing a call `e`->__clone() checks that `e` is an object and
+     * checks coeffects on __clone *)
+    let clone_call =
+      ( p,
+        Call
+          ( ( p,
+              Obj_get (e, (p, Id (p, SN.Members.__clone)), OG_nullthrows, false)
+            ),
+            [],
+            [],
+            None ) )
+    in
+    let (env, _te, _ty) = expr env clone_call in
     make_result env p (Aast.Clone te) ty
   | This ->
     if Option.is_none (Env.get_self_ty env) then Errors.this_var_outside_class p;
@@ -2079,19 +2093,16 @@ and expr_
       | _ -> env
     in
     let env = might_throw env in
-    let (env, te, ty) =
-      check_call
-        ~is_using_clause
-        ~expected
-        ?in_await
-        env
-        p
-        e
-        explicit_targs
-        el
-        unpacked_element
-    in
-    (env, te, ty)
+    check_call
+      ~is_using_clause
+      ~expected
+      ?in_await
+      env
+      p
+      e
+      explicit_targs
+      el
+      unpacked_element
   | FunctionPointer (FP_id fid, targs) ->
     let (env, fty, targs) = fun_type_of_id env fid targs [] in
     let e = Aast.FunctionPointer (FP_id fid, targs) in
@@ -2120,41 +2131,51 @@ and expr_
       p
       (Aast.Binop (Ast_defs.QuestionQuestion, te1, te2))
       ty_result
-  (* For example, e1 += e2. This is typed and translated as if
-   * written e1 = e1 + e2.
-   * TODO TAST: is this right? e1 will get evaluated more than once
-   *)
-  | Binop (Ast_defs.Eq (Some op), e1, e2) ->
-    begin
-      match (op, snd e1) with
-      | (Ast_defs.QuestionQuestion, Class_get _) ->
-        Errors.experimental_feature
-          p
-          "null coalesce assignment operator with static properties";
-        expr_error env Reason.Rnone outer
-      | _ ->
-        let e_fake =
-          (p, Binop (Ast_defs.Eq None, e1, (p, Binop (op, e1, e2))))
-        in
-        let (env, te_fake, ty) = raw_expr env e_fake in
-        begin
-          match snd te_fake with
-          | Aast.Binop (_, te1, (_, Aast.Binop (_, _, te2))) ->
-            let te = Aast.Binop (Ast_defs.Eq (Some op), te1, te2) in
-            make_result env p te ty
-          | _ -> assert false
-        end
-    end
-  | Binop (Ast_defs.Eq None, e1, e2) ->
-    let (env, te2, ty2) = raw_expr env e2 in
-    let (env, te1, ty) = assign p env e1 ty2 in
-    let env =
-      if Env.env_local_reactive env then
-        Typing_mutability.handle_assignment_mutability env te1 (Some (snd te2))
-      else
-        env
+  | Binop (Ast_defs.Eq op_opt, e1, e2) ->
+    let make_result env p te ty =
+      let (env, te, ty) = make_result env p te ty in
+      let env = Typing_reactivity.check_assignment env te in
+      (env, te, ty)
     in
-    make_result env p (Aast.Binop (Ast_defs.Eq None, te1, te2)) ty
+    (match op_opt with
+    (* For example, e1 += e2. This is typed and translated as if
+     * written e1 = e1 + e2.
+     * TODO TAST: is this right? e1 will get evaluated more than once
+     *)
+    | Some op ->
+      begin
+        match (op, snd e1) with
+        | (Ast_defs.QuestionQuestion, Class_get _) ->
+          Errors.experimental_feature
+            p
+            "null coalesce assignment operator with static properties";
+          expr_error env Reason.Rnone outer
+        | _ ->
+          let e_fake =
+            (p, Binop (Ast_defs.Eq None, e1, (p, Binop (op, e1, e2))))
+          in
+          let (env, te_fake, ty) = raw_expr env e_fake in
+          begin
+            match snd te_fake with
+            | Aast.Binop (_, te1, (_, Aast.Binop (_, _, te2))) ->
+              let te = Aast.Binop (Ast_defs.Eq (Some op), te1, te2) in
+              make_result env p te ty
+            | _ -> assert false
+          end
+      end
+    | None ->
+      let (env, te2, ty2) = raw_expr env e2 in
+      let (env, te1, ty) = assign p env e1 ty2 in
+      let env =
+        if Env.env_local_reactive env then
+          Typing_mutability.handle_assignment_mutability
+            env
+            te1
+            (Some (snd te2))
+        else
+          env
+      in
+      make_result env p (Aast.Binop (Ast_defs.Eq None, te1, te2)) ty)
   | Binop (((Ast_defs.Ampamp | Ast_defs.Barbar) as bop), e1, e2) ->
     let c = Ast_defs.(equal_bop bop Ampamp) in
     let (env, te1, _) = expr env e1 in
@@ -2215,7 +2236,9 @@ and expr_
   | Unop (uop, e) ->
     let (env, te, ty) = raw_expr env e in
     let env = might_throw env in
-    Typing_arithmetic.unop p env uop te ty
+    let (env, tuop, ty) = Typing_arithmetic.unop p env uop te ty in
+    let env = Typing_reactivity.check_assignment env tuop in
+    (env, tuop, ty)
   | Eif (c, e1, e2) -> eif env ~expected ?in_await p c e1 e2
   | Class_const ((p, CI sid), pstr)
     when String.equal (snd pstr) "class" && Env.is_typedef env (snd sid) ->
@@ -2546,20 +2569,32 @@ and expr_
       { (Phase.env_with_self env) with from_class = Some CIstatic }
     in
     let (env, hint_ty) = Phase.localize_hint ~ety_env env hint in
+    let enable_sound_dynamic =
+      TypecheckerOptions.enable_sound_dynamic env.genv.tcopt
+    in
+    let is_dyn = Typing_utils.is_dynamic env hint_ty in
+    ( if enable_sound_dynamic && is_dyn then
+      let (_ : env * locl_ty) =
+        ( SubType.sub_type
+            ~allow_subtype_of_dynamic:true
+            env
+            expr_ty
+            hint_ty
+            Errors.unify_error,
+          hint_ty )
+      in
+      () );
     let (env, hint_ty) =
-      if Typing_utils.is_dynamic env hint_ty then
-        if TypecheckerOptions.enable_sound_dynamic env.genv.tcopt then
-          (SubType.sub_type env expr_ty hint_ty Errors.unify_error, hint_ty)
-        else
-          let env =
-            if is_instance_var e then
-              let (env, ivar) = get_instance_var env e in
-              set_local env ivar hint_ty
-            else
-              env
-          in
-          (env, hint_ty)
-      else if is_nullable then
+      if is_dyn && not enable_sound_dynamic then
+        let env =
+          if is_instance_var e then
+            let (env, ivar) = get_instance_var env e in
+            set_local env ivar hint_ty
+          else
+            env
+        in
+        (env, hint_ty)
+      else if is_nullable && not is_dyn then
         let (env, hint_ty) = refine_type env (fst e) expr_ty hint_ty in
         (env, MakeType.nullable_locl (Reason.Rwitness p) hint_ty)
       else if is_instance_var e then
@@ -3140,6 +3175,13 @@ and anon_check_param env param =
 
 and stash_conts_for_anon env p is_anon captured f =
   let captured =
+    if is_anon && TypecheckerOptions.any_coeffects (Env.get_tcopt env) then
+      Typing_coeffects.(
+        (Pos.none, local_capability_id) :: (Pos.none, capability_id) :: captured)
+    else
+      captured
+  in
+  let captured =
     if Env.is_local_defined env this then
       (Pos.none, this) :: captured
     else
@@ -3180,7 +3222,7 @@ and anon_make ?el ?ret_ty env lambda_pos f ft idl is_anon =
   Env.anon env.lenv env (fun env ->
       (* Extract capabilities from AAST and add them to the environment *)
       let (env, capability) =
-        match (hint_of_type_hint f.f_cap, hint_of_type_hint f.f_unsafe_cap) with
+        match (f.f_ctxs, f.f_unsafe_ctxs) with
         | (None, None) ->
           (* if the closure has no explicit coeffect annotations,
             do _not_ insert (unsafe) capabilities into the environment;
@@ -3192,13 +3234,10 @@ and anon_make ?el ?ret_ty env lambda_pos f ft idl is_anon =
             set of capabilities. *)
           (env, Env.get_local env Typing_coeffects.local_capability_id)
         | (_, _) ->
-          let (env, f_cap, f_unsafe_cap) =
-            type_capability env f.f_cap f.f_unsafe_cap (fst f.f_name)
+          let (env, cap_ty, unsafe_cap_ty) =
+            type_capability env f.f_ctxs f.f_unsafe_ctxs (fst f.f_name)
           in
-          Typing_coeffects.register_capabilities
-            env
-            (type_of_type_hint f_cap)
-            (type_of_type_hint f_unsafe_cap)
+          Typing_coeffects.register_capabilities env cap_ty unsafe_cap_ty
       in
       let ft =
         { ft with ft_implicit_params = { capability = CapTy capability } }
@@ -3343,9 +3382,6 @@ and anon_make ?el ?ret_ty env lambda_pos f ft idl is_anon =
           let (env, user_attributes) =
             List.map_env env f.f_user_attributes user_attribute
           in
-          let (env, f_cap, f_unsafe_cap) =
-            type_capability env f.f_cap f.f_unsafe_cap (fst f.f_name)
-          in
           let tfun_ =
             {
               Aast.f_annotation = Env.save local_tpenv env;
@@ -3359,8 +3395,8 @@ and anon_make ?el ?ret_ty env lambda_pos f ft idl is_anon =
               Aast.f_file_attributes = [];
               Aast.f_user_attributes = user_attributes;
               Aast.f_body = { Aast.fb_ast = tb; fb_annotation = () };
-              Aast.f_cap;
-              Aast.f_unsafe_cap;
+              Aast.f_ctxs = f.f_ctxs;
+              Aast.f_unsafe_ctxs = f.f_unsafe_ctxs;
               Aast.f_params = t_params;
               Aast.f_variadic = t_variadic;
               (* TODO TAST: Variadic efuns *)
@@ -3420,24 +3456,21 @@ and et_splice env p e =
 (*****************************************************************************)
 (* End expression trees *)
 (*****************************************************************************)
-
-(* Goes from Nast.f_cap to Tast.f_cap (same for unsafe_cap) *)
-and type_capability env cap unsafe_cap default_pos =
-  let cap_hint_opt = hint_of_type_hint cap in
+and type_capability env ctxs unsafe_ctxs default_pos =
+  let cc = Decl_hint.aast_contexts_to_decl_capability in
   let (env, cap_ty) =
-    Option.value_map
-      cap_hint_opt
-      ~default:(env, MakeType.default_capability)
-      ~f:(fun h -> Phase.localize_with_self env (Decl_hint.hint env.decl_env h))
+    match cc env.decl_env ctxs default_pos with
+    | CapTy ty -> Phase.localize_with_self env ty
+    | CapDefaults _p -> (env, MakeType.default_capability)
   in
-  let unsafe_cap_hint_opt = hint_of_type_hint unsafe_cap in
   let (env, unsafe_cap_ty) =
-    Option.value_map
-      unsafe_cap_hint_opt (* default is no unsafe capabilities *)
-      ~default:(env, MakeType.mixed (Reason.Rhint default_pos))
-      ~f:(Phase.localize_hint_with_self env)
+    match cc env.decl_env unsafe_ctxs default_pos with
+    | CapTy ty -> Phase.localize_with_self env ty
+    | CapDefaults p ->
+      (* default is no unsafe capabilities *)
+      (env, MakeType.mixed (Reason.Rhint p))
   in
-  (env, (cap_ty, cap_hint_opt), (unsafe_cap_ty, unsafe_cap_hint_opt))
+  (env, cap_ty, unsafe_cap_ty)
 
 and requires_consistent_construct = function
   | CIstatic -> true
@@ -3677,7 +3710,16 @@ and new_object
   (env, tcid, tal, tel, typed_unpack_element, new_ty, ctor_fty)
 
 and attributes_check_def env kind attrs =
-  Typing_attributes.check_def env new_object kind attrs
+  (* TODO(coeffects) change to mixed after changing those constructors to pure *)
+  let defaults = MakeType.default_capability in
+  let (env, _) =
+    Typing_lenv.stash_and_do env (Env.all_continuations env) (fun env ->
+        let env =
+          fst @@ Typing_coeffects.register_capabilities env defaults defaults
+        in
+        (Typing_attributes.check_def env new_object kind attrs, ()))
+  in
+  env
 
 (** Get class infos for a class expression (e.g. `parent`, `self` or
     regular classnames) - which might resolve to a union or intersection
@@ -4212,6 +4254,7 @@ and dispatch_call
   | Id ((_, pseudo_func) as id)
     when String.equal pseudo_func SN.PseudoFunctions.unset ->
     let (env, tel, _) = exprs env el in
+    let env = Typing_reactivity.check_unset_target env tel in
     if Option.is_some unpacked_element then
       Errors.unpacking_disallowed_builtin_function p pseudo_func;
     let checked_unset_error =
@@ -5678,11 +5721,30 @@ and call_construct p env class_ params el unpacked_element cid cid_ty =
           let ft =
             Typing_enforceability.compute_enforced_and_pessimize_fun_type env ft
           in
+          (* This creates type variables for non-denotable type parameters on constructors.
+           * These are notably different from the tparams on the class, which are handled
+           * at the top of this function. User-written type parameters on constructors
+           * are still a parse error. This is a no-op if ft.ft_tparams is empty. *)
+          let (env, implicit_constructor_targs) =
+            Phase.localize_targs
+              ~check_well_kinded:true
+              ~is_method:true
+              ~def_pos
+              ~use_pos:p
+              ~use_name:"constructor"
+              env
+              ft.ft_tparams
+              []
+          in
           let (env, ft) =
             Phase.(
               localize_ft
                 ~instantiation:
-                  { use_name = "constructor"; use_pos = p; explicit_targs = [] }
+                  {
+                    use_name = "constructor";
+                    use_pos = p;
+                    explicit_targs = implicit_constructor_targs;
+                  }
                 ~ety_env
                 ~def_pos
                 env
@@ -5951,7 +6013,7 @@ and call
                 | EnumAtom atom_name when is_atom ->
                   (match get_node ety with
                   | Tclass ((_, name), _, [ty_enum; _ty_interface])
-                    when String.equal name SN.Classes.cElt ->
+                    when String.equal name SN.Classes.cEnumMember ->
                     (match get_node ty_enum with
                     | Tclass ((_, enum_name), _, _)
                       when Env.is_enum_class env enum_name ->

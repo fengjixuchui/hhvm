@@ -6,7 +6,7 @@ function foo(): void {
   $x = 4;
 
   // Spliced Expressions need to be ExprTrees
-  $y = Code`__splice__($x)`;
+  $y = Code`${$x}`;
 }
 
 //// BEGIN DEFS
@@ -147,7 +147,7 @@ class Code {
   }
 }
 
-final class ExprTree<TVisitor, TResult, TInfer>{
+final class ExprTree<TVisitor, TResult, +TInfer>{
   public function __construct(
     private ?ExprPos $pos,
     private string $filepath,

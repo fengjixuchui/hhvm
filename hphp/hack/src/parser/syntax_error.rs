@@ -963,8 +963,8 @@ pub fn invalid_use_of_enable_unstable_feature(message: &str) -> Error {
     ))
 }
 
-pub const reserved_et_keyword: Error =
-    Cow::Borrowed("This is a reserved keyword for expression trees that cannot be used");
+pub const splice_outside_et: Error =
+    Cow::Borrowed("Splicing can only occur inside expression tree literals (between backticks)");
 
 pub const invalid_enum_class_enumerator: Error = Cow::Borrowed("Invalid enum class constant");
 
@@ -973,3 +973,24 @@ pub const fun_disabled: Error =
 
 pub const class_meth_disabled: Error =
     Cow::Borrowed("`class_meth()` is disabled; switch to first-class references like `C::bar<>`");
+
+pub fn ctx_var_invalid_parameter(param_name: &str) -> Error {
+    Cow::Owned(format!(
+        "Could not find parameter {} for dependent context",
+        param_name.to_string()
+    ))
+}
+
+pub fn ctx_var_missing_type_hint(param_name: &str) -> Error {
+    Cow::Owned(format!(
+        "Parameter {} used for dependent context must have a type hint",
+        param_name.to_string()
+    ))
+}
+
+pub fn ctx_var_invalid_type_hint(param_name: &str) -> Error {
+    Cow::Owned(format!(
+        "Type hint for parameter {} used for dependent context must be a class or a generic",
+        param_name.to_string()
+    ))
+}

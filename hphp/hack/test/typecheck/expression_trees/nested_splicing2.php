@@ -3,7 +3,7 @@
 <<file:__EnableUnstableFeatures('expression_trees')>>
 
 function test(): void {
-  Code`__splice__(1 + __splice__(4))`;
+  Code`${1 + ${4}}`;
 }
 
 //// BEGIN DEFS
@@ -144,7 +144,7 @@ class Code {
   }
 }
 
-final class ExprTree<TVisitor, TResult, TInfer>{
+final class ExprTree<TVisitor, TResult, +TInfer>{
   public function __construct(
     private ?ExprPos $pos,
     private string $filepath,

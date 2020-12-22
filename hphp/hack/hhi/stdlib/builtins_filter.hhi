@@ -8,6 +8,8 @@
 *
 */
 
+<<file: __EnableUnstableFeatures('coeffects_provisional')>>
+
 const int FILTER_FLAG_NONE = 0;
 const int FILTER_REQUIRE_SCALAR = 0;
 const int FILTER_REQUIRE_ARRAY = 0;
@@ -59,14 +61,14 @@ const int FILTER_FLAG_NO_PRIV_RANGE = 0;
 <<__PHPStdLib, __Deprecated('will be removed in a future version of hack')>>
 function filter_has_var(int $type, string $variable_name): bool {}
 <<__PHPStdLib, __Pure>>
-function filter_id(string $name) {}
+function filter_id(string $name)[] {}
 <<__PHPStdLib, __Deprecated('will be removed in a future version of hack')>>
 function filter_input_array(int $type, mixed $definition = null, bool $add_empty = true) {}
 <<__PHPStdLib, __Deprecated('will be removed in a future version of hack')>>
 function filter_input(int $type, string $variable_name, int $filter = FILTER_DEFAULT, mixed $options = null) {}
 <<__PHPStdLib, __Pure>>
-function filter_list(): varray<string> {}
+function filter_list()[]: varray<string> {}
 <<__PHPStdLib, __Pure>>
-function filter_var_array(Container<mixed> $data, mixed $definition = null, bool $add_empty = true) {}
+function filter_var_array(Container<mixed> $data, mixed $definition = null, bool $add_empty = true)[] {}
 <<__PHPStdLib, __Pure>>
-function filter_var(mixed $value, int $filter = FILTER_DEFAULT, mixed $options = null) {}
+function filter_var(mixed $value, int $filter = FILTER_DEFAULT, mixed $options = null)[] {}

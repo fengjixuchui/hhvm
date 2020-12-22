@@ -8,6 +8,8 @@
  *
  */
 
+<<file: __EnableUnstableFeatures('coeffects_provisional')>>
+
 /**
  * This file provides type information for some of hack's reactive interfaces
  *
@@ -42,20 +44,20 @@ interface Iterator<+Tv> extends namespace\Traversable<Tv>, \HH\Iterator<Tv> {
    * @return - The current value of type `Tv`.
    */
   <<__Pure, __MaybeMutable>>
-  public function current(): Tv;
+  public function current()[]: Tv;
   /**
    * Move the iterator position to the next element.
    *
    */
   <<__Pure, __Mutable>>
-  public function next(): void;
+  public function next()[]: void;
   /**
    * Rewind the iterator position to its beginning.
    *
    * This rewinds back to the first element of the `Iterator`.
    */
   <<__Pure, __Mutable>>
-  public function rewind(): void;
+  public function rewind()[]: void;
   /**
    * Checks to see if the current iterator position is valid.
    *
@@ -65,7 +67,7 @@ interface Iterator<+Tv> extends namespace\Traversable<Tv>, \HH\Iterator<Tv> {
    * @return - `true` if the position is valid; `false` otherwise.
    */
   <<__Pure, __MaybeMutable>>
-  public function valid(): bool;
+  public function valid()[]: bool;
 }
 
 interface KeyedIterator<+Tk, +Tv>
@@ -79,7 +81,7 @@ interface KeyedIterator<+Tk, +Tv>
    * @return - The current key of type `Tk`.
    */
   <<__Pure, __MaybeMutable>>
-  public function key(): Tk;
+  public function key()[]: Tk;
 }
 
 /* See documentation for \AsyncIterator */
@@ -96,7 +98,7 @@ interface AsyncIterator<+Tv> extends \HH\AsyncIterator<Tv> {
    * @return - The next `Awaitable` in the iterator sequence.
    */
   <<__Pure, __Mutable>>
-  public function next(): Awaitable<?(mixed, Tv)>;
+  public function next()[]: Awaitable<?(mixed, Tv)>;
 }
 
 /* See documentation for \AsyncKeyedIterator */
@@ -114,7 +116,7 @@ interface AsyncKeyedIterator<+Tk, +Tv>
    * @return - The next `Awaitable` in the iterator sequence.
    */
   <<__Pure, __Mutable>>
-  public function next(): Awaitable<?(Tk, Tv)>;
+  public function next()[]: Awaitable<?(Tk, Tv)>;
 }
 
 /* See documentation for \IteratorAggregate */
@@ -126,7 +128,7 @@ interface IteratorAggregate<+Tv>
    * @return - An `Iterator` for iteration.
    */
   <<__Pure, __MutableReturn, __MaybeMutable>>
-  public function getIterator(): namespace\Iterator<Tv>;
+  public function getIterator()[]: namespace\Iterator<Tv>;
 }
 
 interface Iterable<+Tv>
@@ -137,7 +139,7 @@ interface Iterable<+Tv>
    * @return - An `Iterator` that allows you to traverse the current `Iterable`.
    */
   <<__Pure, __MutableReturn, __MaybeMutable>>
-  public function getIterator(): namespace\Iterator<Tv>;
+  public function getIterator()[]: namespace\Iterator<Tv>;
   /**
    * Returns an `array` with the values from the current `Iterable`.
    *
@@ -147,7 +149,7 @@ interface Iterable<+Tv>
    * @return - an `array` containing the values from the current `Iterable`.
    */
   <<__Pure, __MaybeMutable>>
-  public function toValuesArray(): varray<Tv>;
+  public function toValuesArray()[]: varray<Tv>;
   /**
    * Returns an immutable vector (`ImmVector`) converted from the current
    * `Iterable`.
@@ -158,7 +160,7 @@ interface Iterable<+Tv>
    * @return - an `ImmVector` converted from the current `Iterable`.
    */
   <<__Pure, __MaybeMutable>>
-  public function toImmVector(): ImmVector<Tv>;
+  public function toImmVector()[]: ImmVector<Tv>;
   /**
    * Returns an immutable set (`ImmSet`) converted from the current `Iterable`.
    *
@@ -167,7 +169,7 @@ interface Iterable<+Tv>
    * @return - an `ImmSet` converted from the current `Iterable`.
    */
   <<__Pure, __MaybeMutable>>
-  public function toImmSet(): ImmSet<Tv> where Tv as arraykey;
+  public function toImmSet()[]: ImmSet<Tv> where Tv as arraykey;
   /**
    * Returns a lazy, access elements only when needed view of the current
    * `Iterable`.
@@ -182,7 +184,7 @@ interface Iterable<+Tv>
    * @guide /hack/collections/examples
    */
   <<__Pure, __MutableReturn, __MaybeMutable>>
-  public function lazy(): namespace\Iterable<Tv>;
+  public function lazy()[]: namespace\Iterable<Tv>;
   /**
    * Returns an `Iterable` containing the current `Iterable`'s values.
    *
@@ -191,7 +193,7 @@ interface Iterable<+Tv>
    * @return An `Iterable` with the values of the current `Iterable`.
    */
   <<__Pure, __MutableReturn, __MaybeMutable>>
-  public function values(): namespace\Iterable<Tv>;
+  public function values()[]: namespace\Iterable<Tv>;
   /**
    * Returns an `Iterable` containing the values after an operation has been
    * applied to each value in the current `Iterable`.
@@ -210,8 +212,8 @@ interface Iterable<+Tv>
    */
   <<__Pure, __AtMostRxAsArgs, __MutableReturn, __MaybeMutable>>
   public function map<Tu>(
-    <<__AtMostRxAsFunc>>(function(Tv): Tu) $fn,
-  ): namespace\Iterable<Tu>;
+    <<__AtMostRxAsFunc>>(function(Tv)[_]: Tu) $fn,
+  )[ctx $fn]: namespace\Iterable<Tu>;
   /**
    * Returns an `Iterable` containing the values of the current `Iterable` that
    * meet a supplied condition.
@@ -229,8 +231,8 @@ interface Iterable<+Tv>
    */
   <<__Pure, __AtMostRxAsArgs, __MutableReturn, __MaybeMutable>>
   public function filter(
-    <<__AtMostRxAsFunc>>(function(Tv): bool) $fn,
-  ): namespace\Iterable<Tv>;
+    <<__AtMostRxAsFunc>>(function(Tv)[_]: bool) $fn,
+  )[ctx $fn]: namespace\Iterable<Tv>;
   /**s
    *  Returns an `Iterable` where each element is a `Pair` that combines the
    *  element of the current `Iterable` and the provided `Traversable`.
@@ -249,7 +251,7 @@ interface Iterable<+Tv>
   <<__Pure, __AtMostRxAsArgs, __MutableReturn, __MaybeMutable>>
   public function zip<Tu>(
     <<__OnlyRxIfImpl(namespace\Traversable::class)>> \HH\Traversable<Tu> $traversable,
-  ): namespace\Iterable<Pair<Tv, Tu>>;
+  )[]: namespace\Iterable<Pair<Tv, Tu>>;
   /**
    * Returns an `Iterable` containing the first `n` values of the current
    * `Iterable`.
@@ -266,7 +268,7 @@ interface Iterable<+Tv>
    *           up to `n` elements.
    */
   <<__Pure, __MutableReturn, __MaybeMutable>>
-  public function take(int $n): namespace\Iterable<Tv>;
+  public function take(int $n)[]: namespace\Iterable<Tv>;
   /**
    * Returns an `Iterable` containing the values of the current `Iterable` up
    * to but not including the first value that produces `false` when passed to
@@ -283,8 +285,8 @@ interface Iterable<+Tv>
    */
   <<__Pure, __AtMostRxAsArgs, __MutableReturn, __MaybeMutable>>
   public function takeWhile(
-    <<__AtMostRxAsFunc>>(function(Tv): bool) $fn,
-  ): namespace\Iterable<Tv>;
+    <<__AtMostRxAsFunc>>(function(Tv)[_]: bool) $fn,
+  )[ctx $fn]: namespace\Iterable<Tv>;
   /**
    * Returns an `Iterable` containing the values after the `n`-th element of the
    * current `Iterable`.
@@ -301,7 +303,7 @@ interface Iterable<+Tv>
    *           containing values after the specified `n`-th element.
    */
   <<__Pure, __MutableReturn, __MaybeMutable>>
-  public function skip(int $n): namespace\Iterable<Tv>;
+  public function skip(int $n)[]: namespace\Iterable<Tv>;
   /**
    * Returns an `Iterable` containing the values of the current `Iterable`
    * starting after and including the first value that produces `true` when
@@ -318,8 +320,8 @@ interface Iterable<+Tv>
    */
   <<__Pure, __AtMostRxAsArgs, __MutableReturn, __MaybeMutable>>
   public function skipWhile(
-    <<__AtMostRxAsFunc>>(function(Tv): bool) $fn,
-  ): namespace\Iterable<Tv>;
+    <<__AtMostRxAsFunc>>(function(Tv)[_]: bool) $fn,
+  )[ctx $fn]: namespace\Iterable<Tv>;
   /**
    * Returns a subset of the current `Iterable` starting from a given key up
    * to, but not including, the element at the provided length from the
@@ -340,7 +342,7 @@ interface Iterable<+Tv>
    *           `$start + $len`.
    */
   <<__Pure, __MutableReturn, __MaybeMutable>>
-  public function slice(int $start, int $len): namespace\Iterable<Tv>;
+  public function slice(int $start, int $len)[]: namespace\Iterable<Tv>;
   /**
    * Returns an `Iterable` that is the concatenation of the values of the
    * current `Iterable` and the values of the provided `Traversable`.
@@ -358,7 +360,7 @@ interface Iterable<+Tv>
   <<__Pure, __AtMostRxAsArgs, __MutableReturn, __MaybeMutable>>
   public function concat<Tu super Tv>(
     <<__OnlyRxIfImpl(namespace\Traversable::class)>> \HH\Traversable<Tu> $traversable,
-  ): namespace\Iterable<Tu>;
+  )[]: namespace\Iterable<Tu>;
   /**
    * Returns the first value in the current `Iterable`.
    *
@@ -366,7 +368,7 @@ interface Iterable<+Tv>
    *           current `Iterable` is empty.
    */
   <<__Pure, __MaybeMutable>>
-  public function firstValue(): ?Tv;
+  public function firstValue()[]: ?Tv;
   /**
    * Returns the last value in the current `Iterable`.
    *
@@ -374,7 +376,7 @@ interface Iterable<+Tv>
    *           current `Iterable` is empty.
    */
   <<__Pure, __MaybeMutable>>
-  public function lastValue(): ?Tv;
+  public function lastValue()[]: ?Tv;
 }
 
 interface KeyedIterable<Tk, +Tv>
@@ -390,7 +392,7 @@ interface KeyedIterable<Tk, +Tv>
    *           `KeyedIterable`.
    */
   <<__Pure, __MutableReturn, __MaybeMutable>>
-  public function getIterator(): namespace\KeyedIterator<Tk, Tv>;
+  public function getIterator()[]: namespace\KeyedIterator<Tk, Tv>;
   /**
    * Returns an `array` with the keys from the current `KeyedIterable`.
    *
@@ -398,7 +400,7 @@ interface KeyedIterable<Tk, +Tv>
    *           `KeyedIterable`.
    */
   <<__Pure, __MaybeMutable>>
-  public function toKeysArray(): varray;
+  public function toKeysArray()[]: varray;
  /**
    * Returns an immutable map (`ImmMap`) based on the keys and values of the
    * current `KeyedIterable`.
@@ -407,7 +409,7 @@ interface KeyedIterable<Tk, +Tv>
    *           current `KeyedIterable`.
    */
   <<__Pure, __MaybeMutable>>
-  public function toImmMap(): ImmMap<Tk, Tv> where Tk as arraykey;
+  public function toImmMap()[]: ImmMap<Tk, Tv> where Tk as arraykey;
   /**
    * Returns a lazy, access elements only when needed view of the current
    * `KeyedIterable`.
@@ -422,7 +424,7 @@ interface KeyedIterable<Tk, +Tv>
    * @guide /hack/collections/examples
    */
   <<__Pure, __MutableReturn, __MaybeMutable>>
-  public function lazy(): namespace\KeyedIterable<Tk, Tv>;
+  public function lazy()[]: namespace\KeyedIterable<Tk, Tv>;
   /**
    * Returns an `Iterable` containing the current `KeyedIterable`'s values.
    *
@@ -431,7 +433,7 @@ interface KeyedIterable<Tk, +Tv>
    * @return An `Iterable` with the values of the current `KeyedIterable`.
    */
   <<__Pure, __MutableReturn, __MaybeMutable>>
-  public function values(): namespace\Iterable<Tv>;
+  public function values()[]: namespace\Iterable<Tv>;
   /**
    * Returns an `Iterable` containing the current `KeyedIterable`'s keys.
    *
@@ -440,7 +442,7 @@ interface KeyedIterable<Tk, +Tv>
    * @return An `Iterable` with the keys of the current `KeyedIterable`.
    */
   <<__Pure, __MutableReturn, __MaybeMutable>>
-  public function keys(): namespace\Iterable<Tk>;
+  public function keys()[]: namespace\Iterable<Tk>;
   /**
    * Returns a `KeyedIterable` containing the values after an operation has been
    * applied to each value in the current `KeyedIterable`.
@@ -459,8 +461,8 @@ interface KeyedIterable<Tk, +Tv>
    */
   <<__Pure, __AtMostRxAsArgs, __MutableReturn, __MaybeMutable>>
   public function map<Tu>(
-    <<__AtMostRxAsFunc>>(function(Tv): Tu) $fn,
-  ): namespace\KeyedIterable<Tk, Tu>;
+    <<__AtMostRxAsFunc>>(function(Tv)[_]: Tu) $fn,
+  )[ctx $fn]: namespace\KeyedIterable<Tk, Tu>;
   /**
    * Returns a `KeyedIterable` containing the values after an operation has
    * been applied to each key and value in the current `KeyedIterable`.
@@ -478,8 +480,8 @@ interface KeyedIterable<Tk, +Tv>
    */
   <<__Pure, __AtMostRxAsArgs, __MutableReturn, __MaybeMutable>>
   public function mapWithKey<Tu>(
-    <<__AtMostRxAsFunc>>(function(Tk, Tv): Tu) $fn,
-  ): namespace\KeyedIterable<Tk, Tu>;
+    <<__AtMostRxAsFunc>>(function(Tk, Tv)[_]: Tu) $fn,
+  )[ctx $fn]: namespace\KeyedIterable<Tk, Tu>;
   /**
    * Returns a `KeyedIterable` containing the values of the current
    * `KeyedIterable` that meet a supplied condition.
@@ -497,8 +499,8 @@ interface KeyedIterable<Tk, +Tv>
    */
   <<__Pure, __AtMostRxAsArgs, __MutableReturn, __MaybeMutable>>
   public function filter(
-    <<__AtMostRxAsFunc>>(function(Tv): bool) $fn,
-  ): namespace\KeyedIterable<Tk, Tv>;
+    <<__AtMostRxAsFunc>>(function(Tv)[_]: bool) $fn,
+  )[ctx $fn]: namespace\KeyedIterable<Tk, Tv>;
   /**
    * Returns a `KeyedIterable` containing the values of the current
    * `KeyedIterable` that meet a supplied condition applied to its keys and
@@ -518,8 +520,8 @@ interface KeyedIterable<Tk, +Tv>
    */
   <<__Pure, __AtMostRxAsArgs, __MutableReturn, __MaybeMutable>>
   public function filterWithKey(
-    <<__AtMostRxAsFunc>>(function(Tk, Tv): bool) $fn,
-  ): namespace\KeyedIterable<Tk, Tv>;
+    <<__AtMostRxAsFunc>>(function(Tk, Tv)[_]: bool) $fn,
+  )[ctx $fn]: namespace\KeyedIterable<Tk, Tv>;
   /**
    *  Returns a `KeyedIterable` where each element is a `Pair` that combines the
    *  element of the current `KeyedIterable` and the provided `Traversable`.
@@ -538,7 +540,7 @@ interface KeyedIterable<Tk, +Tv>
   <<__Pure, __AtMostRxAsArgs, __MutableReturn, __MaybeMutable>>
   public function zip<Tu>(
     <<__OnlyRxIfImpl(namespace\Traversable::class)>> \HH\Traversable<Tu> $traversable,
-  ): namespace\KeyedIterable<Tk, Pair<Tv, Tu>>;
+  )[]: namespace\KeyedIterable<Tk, Pair<Tv, Tu>>;
   /**
    * Returns a `KeyedIterable` containing the first `n` values of the current
    * `KeyedIterable`.
@@ -555,7 +557,7 @@ interface KeyedIterable<Tk, +Tv>
    *           `KeyedIterable` up to `n` elements.
    */
   <<__Pure, __MutableReturn, __MaybeMutable>>
-  public function take(int $n): namespace\KeyedIterable<Tk, Tv>;
+  public function take(int $n)[]: namespace\KeyedIterable<Tk, Tv>;
   /**
    * Returns a `KeyedIterable` containing the values of the current
    * `KeyedIterable` up to but not including the first value that produces
@@ -572,8 +574,8 @@ interface KeyedIterable<Tk, +Tv>
    */
   <<__Pure, __AtMostRxAsArgs, __MutableReturn, __MaybeMutable>>
   public function takeWhile(
-    <<__AtMostRxAsFunc>>(function(Tv): bool) $fn,
-  ): namespace\KeyedIterable<Tk, Tv>;
+    <<__AtMostRxAsFunc>>(function(Tv)[_]: bool) $fn,
+  )[ctx $fn]: namespace\KeyedIterable<Tk, Tv>;
   /**
    * Returns a `KeyedIterable` containing the values after the `n`-th element
    * of the current `KeyedIterable`.
@@ -591,7 +593,7 @@ interface KeyedIterable<Tk, +Tv>
    *           element.
    */
   <<__Pure, __MutableReturn, __MaybeMutable>>
-  public function skip(int $n): namespace\KeyedIterable<Tk, Tv>;
+  public function skip(int $n)[]: namespace\KeyedIterable<Tk, Tv>;
   /**
    * Returns a `KeyedIterable` containing the values of the current
    * `KeyedIterable` starting after and including the first value that produces
@@ -608,8 +610,8 @@ interface KeyedIterable<Tk, +Tv>
    */
   <<__Pure, __AtMostRxAsArgs, __MutableReturn, __MaybeMutable>>
   public function skipWhile(
-    <<__AtMostRxAsFunc>>(function(Tv): bool) $fn,
-  ): namespace\KeyedIterable<Tk, Tv>;
+    <<__AtMostRxAsFunc>>(function(Tv)[_]: bool) $fn,
+  )[ctx $fn]: namespace\KeyedIterable<Tk, Tv>;
   /**
    * Returns a subset of the current `KeyedIterable` starting from a given key
    * up to, but not including, the element at the provided length from the
@@ -630,7 +632,7 @@ interface KeyedIterable<Tk, +Tv>
    *           element `$start + $len`.
    */
   <<__Pure, __MutableReturn, __MaybeMutable>>
-  public function slice(int $start, int $len): namespace\KeyedIterable<Tk, Tv>;
+  public function slice(int $start, int $len)[]: namespace\KeyedIterable<Tk, Tv>;
   /**
    * Returns an `Iterable` that is the concatenation of the values of the
    * current `KeyedIterable` and the values of the provided `Traversable`.
@@ -648,7 +650,7 @@ interface KeyedIterable<Tk, +Tv>
   <<__Pure, __AtMostRxAsArgs, __MutableReturn, __MaybeMutable>>
   public function concat<Tu super Tv>(
     <<__OnlyRxIfImpl(namespace\Traversable::class)>> \HH\Traversable<Tu> $traversable,
-  ): namespace\Iterable<Tu>;
+  )[]: namespace\Iterable<Tu>;
   /**
    * Returns the first value in the current `KeyedIterable`.
    *
@@ -656,7 +658,7 @@ interface KeyedIterable<Tk, +Tv>
    *           current `KeyedIterable` is empty.
    */
   <<__Pure, __MaybeMutable>>
-  public function firstValue(): ?Tv;
+  public function firstValue()[]: ?Tv;
   /**
    * Returns the first key in the current `KeyedIterable`.
    *
@@ -664,7 +666,7 @@ interface KeyedIterable<Tk, +Tv>
    *           current `KeyedIterable` is empty.
    */
   <<__Pure, __MaybeMutable>>
-  public function firstKey(): ?Tk;
+  public function firstKey()[]: ?Tk;
   /**
    * Returns the last value in the current `KeyedIterable`.
    *
@@ -672,7 +674,7 @@ interface KeyedIterable<Tk, +Tv>
    *           current `KeyedIterable` is empty.
    */
   <<__Pure, __MaybeMutable>>
-  public function lastValue(): ?Tv;
+  public function lastValue()[]: ?Tv;
   /**
    * Returns the last key in the current `KeyedIterable`.
    *
@@ -680,10 +682,10 @@ interface KeyedIterable<Tk, +Tv>
    *           current `KeyedIterable` is empty.
    */
   <<__Pure, __MaybeMutable>>
-  public function lastKey(): ?Tk;
+  public function lastKey()[]: ?Tk;
 }
 
 interface Countable extends \Countable {
   <<__Pure, __MaybeMutable>>
-  public function count(): int;
+  public function count()[]: int;
 }

@@ -582,6 +582,9 @@ void FrameStateMgr::updateMInstr(const IRInstruction* inst) {
       not_reached();
     }();
 
+    // Skip locations that disagree with our source on type.
+    if (!oldType.derefIfPtr().maybe(baseTmp->type().deref())) return;
+
     if (maxType <= oldType) {
       // Drop the value and don't bother with precise effects.
       return setType(l, oldType);
@@ -918,6 +921,10 @@ const PostConditions& FrameStateMgr::postConds(Block* exitBlock) const {
  */
 bool FrameStateMgr::save(Block* block, Block* pred) {
   ITRACE(4, "Saving current state to B{}: {}\n", block->id(), show());
+
+  // If the destination block is unreachable, there's no need to merge in the
+  // frame state.
+  if (block->isUnreachable()) return false;
 
   auto const it = m_states.find(block);
   auto changed = true;

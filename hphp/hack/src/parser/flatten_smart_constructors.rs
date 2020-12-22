@@ -269,11 +269,11 @@ pub trait FlattenSmartConstructors<'src, State>
         }
     }
 
-    fn make_capability(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
+    fn make_contexts(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
         if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) {
-          Self::zero(SyntaxKind::Capability)
+          Self::zero(SyntaxKind::Contexts)
         } else {
-          self.flatten(SyntaxKind::Capability, vec!(arg0, arg1, arg2))
+          self.flatten(SyntaxKind::Contexts, vec!(arg0, arg1, arg2))
         }
     }
 
@@ -701,11 +701,11 @@ pub trait FlattenSmartConstructors<'src, State>
         }
     }
 
-    fn make_anonymous_function(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R, arg10: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) && Self::is_zero(&arg5) && Self::is_zero(&arg6) && Self::is_zero(&arg7) && Self::is_zero(&arg8) && Self::is_zero(&arg9) && Self::is_zero(&arg10) {
+    fn make_anonymous_function(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R, arg10: Self::R, arg11: Self::R) -> Self::R {
+        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) && Self::is_zero(&arg5) && Self::is_zero(&arg6) && Self::is_zero(&arg7) && Self::is_zero(&arg8) && Self::is_zero(&arg9) && Self::is_zero(&arg10) && Self::is_zero(&arg11) {
           Self::zero(SyntaxKind::AnonymousFunction)
         } else {
-          self.flatten(SyntaxKind::AnonymousFunction, vec!(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10))
+          self.flatten(SyntaxKind::AnonymousFunction, vec!(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11))
         }
     }
 
@@ -890,6 +890,14 @@ pub trait FlattenSmartConstructors<'src, State>
           Self::zero(SyntaxKind::BracedExpression)
         } else {
           self.flatten(SyntaxKind::BracedExpression, vec!(arg0, arg1, arg2))
+        }
+    }
+
+    fn make_et_splice_expression(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
+        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) {
+          Self::zero(SyntaxKind::ETSpliceExpression)
+        } else {
+          self.flatten(SyntaxKind::ETSpliceExpression, vec!(arg0, arg1, arg2, arg3))
         }
     }
 

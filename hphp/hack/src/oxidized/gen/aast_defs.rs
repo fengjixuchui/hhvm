@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<2f3331bca3e7d3a5ef41c72980ce218e>>
+// @generated SignedSource<<75d5c6ca2b02c147b5ee449f83e9a8af>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
@@ -199,13 +199,29 @@ pub type VariadicHint = Option<Hint>;
     Serialize,
     ToOcamlRep
 )]
+pub struct Contexts(pub Pos, pub Vec<Hint>);
+
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    FromOcamlRep,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
 pub struct HintFun {
     pub reactive_kind: FuncReactive,
     pub param_tys: Vec<Hint>,
     pub param_kinds: Vec<Option<ast_defs::ParamKind>>,
     pub param_mutability: Vec<Option<ParamMutability>>,
     pub variadic_ty: VariadicHint,
-    pub cap: Option<Hint>,
+    pub ctxs: Option<Contexts>,
     pub return_ty: Hint,
     pub is_mutable_return: MutableReturn,
 }
@@ -234,12 +250,14 @@ pub enum Hint_ {
     /// This represents the use of a type const. Type consts are accessed like
     /// regular consts in Hack, i.e.
     ///
-    /// [self | static | Class]::TypeConst
+    /// [$x | self | static | Class]::TypeConst
     ///
     /// Class  => Happly "Class"
     /// self   => Happly of the class of definition
     /// static => Habstr ("static",
     ///           Habstr ("this", (Constraint_as, Happly of class of definition)))
+    /// $x     => Hvar "$x"
+    ///
     /// Type const access can be chained such as
     ///
     /// Class::TC1::TC2::TC3
@@ -265,6 +283,8 @@ pub enum Hint_ {
     Hnothing,
     Hunion(Vec<Hint>),
     Hintersection(Vec<Hint>),
+    HfunContext(String),
+    Hvar(String),
 }
 
 /// AST types such as Happly("int", []) are resolved to Hprim values

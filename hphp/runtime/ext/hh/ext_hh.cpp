@@ -29,6 +29,7 @@
 #include "hphp/runtime/base/backtrace.h"
 #include "hphp/runtime/base/comparisons.h"
 #include "hphp/runtime/base/container-functions.h"
+#include "hphp/runtime/base/datatype.h"
 #include "hphp/runtime/base/execution-context.h"
 #include "hphp/runtime/base/file-stream-wrapper.h"
 #include "hphp/runtime/base/implicit-context.h"
@@ -1145,6 +1146,90 @@ bool HHVM_FUNCTION(is_dynamically_callable_inst_method, StringArg cls,
   return false;
 }
 
+namespace {
+
+Class* getClass(TypedValue cls) {
+  switch (cls.m_type) {
+    case KindOfPersistentString:
+    case KindOfString:
+      return Class::load(cls.m_data.pstr);
+    case KindOfClass:
+      return cls.m_data.pclass;
+    case KindOfLazyClass:
+      return Class::load(cls.m_data.plazyclass.name());
+    case KindOfObject:
+      return cls.m_data.pobj->getVMClass();
+    case KindOfUninit:
+    case KindOfNull:
+    case KindOfBoolean:
+    case KindOfInt64:
+    case KindOfDouble:
+    case KindOfDArray:
+    case KindOfPersistentDArray:
+    case KindOfVArray:
+    case KindOfPersistentVArray:
+    case KindOfVec:
+    case KindOfPersistentVec:
+    case KindOfDict:
+    case KindOfPersistentDict:
+    case KindOfKeyset:
+    case KindOfPersistentKeyset:
+    case KindOfResource:
+    case KindOfFunc:
+    case KindOfRFunc:
+    case KindOfClsMeth:
+    case KindOfRClsMeth:
+    case KindOfRecord:
+      SystemLib::throwInvalidArgumentExceptionObject(
+        folly::sformat(
+          "Invalid argument type passed to reflection class constructor")
+      );
+  }
+  not_reached();
+};
+
+}
+
+bool HHVM_FUNCTION(reflection_class_is_abstract, TypedValue cls) {
+  auto const c = getClass(cls);
+  if (!c) {
+    SystemLib::throwInvalidArgumentExceptionObject(
+      folly::sformat("Unable to find class.")
+    );
+  }
+  return isAbstract(c);
+}
+
+String HHVM_FUNCTION(reflection_class_get_name, TypedValue classname) {
+  auto const cls = getClass(classname);
+  if (!cls) {
+    SystemLib::throwInvalidArgumentExceptionObject(
+      folly::sformat("Unable to find class.")
+    );
+  }
+  return cls->name()->data();
+}
+
+bool HHVM_FUNCTION(reflection_class_is_final, TypedValue cls) {
+  auto const c = getClass(cls);
+  if (!c) {
+    SystemLib::throwInvalidArgumentExceptionObject(
+      folly::sformat("Unable to find class.")
+    );
+  }
+  return c->attrs() & AttrFinal;
+}
+
+bool HHVM_FUNCTION(reflection_class_is_interface, TypedValue cls) {
+  auto const c = getClass(cls);
+  if (!c) {
+    SystemLib::throwInvalidArgumentExceptionObject(
+      folly::sformat("Unable to find class.")
+    );
+  }
+  return isInterface(c);
+}
+
 static struct HHExtension final : Extension {
   HHExtension(): Extension("hh", NO_EXTENSION_VERSION_YET) { }
   void moduleInit() override {
@@ -1200,6 +1285,14 @@ static struct HHExtension final : Extension {
 
     HHVM_NAMED_FE(__SystemLib\\is_dynamically_callable_inst_method,
                   HHVM_FN(is_dynamically_callable_inst_method));
+    HHVM_NAMED_FE(__SystemLib\\reflection_class_get_name,
+                  HHVM_FN(reflection_class_get_name));
+    HHVM_NAMED_FE(__SystemLib\\reflection_class_is_abstract,
+                  HHVM_FN(reflection_class_is_abstract));
+    HHVM_NAMED_FE(__SystemLib\\reflection_class_is_final,
+                  HHVM_FN(reflection_class_is_final));
+    HHVM_NAMED_FE(__SystemLib\\reflection_class_is_interface,
+                  HHVM_FN(reflection_class_is_interface));
 
     loadSystemlib();
   }

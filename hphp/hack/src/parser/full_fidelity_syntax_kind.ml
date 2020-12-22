@@ -49,7 +49,7 @@ type t =
   | NamespaceUseClause
   | FunctionDeclaration
   | FunctionDeclarationHeader
-  | Capability
+  | Contexts
   | WhereClause
   | WhereConstraint
   | MethodishDeclaration
@@ -127,6 +127,7 @@ type t =
   | FunctionPointerExpression
   | ParenthesizedExpression
   | BracedExpression
+  | ETSpliceExpression
   | EmbeddedBracedExpression
   | ListExpression
   | CollectionLiteralExpression
@@ -225,7 +226,7 @@ let to_string kind =
   | NamespaceUseClause                -> "namespace_use_clause"
   | FunctionDeclaration               -> "function_declaration"
   | FunctionDeclarationHeader         -> "function_declaration_header"
-  | Capability                        -> "capability"
+  | Contexts                          -> "contexts"
   | WhereClause                       -> "where_clause"
   | WhereConstraint                   -> "where_constraint"
   | MethodishDeclaration              -> "methodish_declaration"
@@ -303,6 +304,7 @@ let to_string kind =
   | FunctionPointerExpression         -> "function_pointer_expression"
   | ParenthesizedExpression           -> "parenthesized_expression"
   | BracedExpression                  -> "braced_expression"
+  | ETSpliceExpression                -> "et_splice_expression"
   | EmbeddedBracedExpression          -> "embedded_braced_expression"
   | ListExpression                    -> "list_expression"
   | CollectionLiteralExpression       -> "collection_literal_expression"

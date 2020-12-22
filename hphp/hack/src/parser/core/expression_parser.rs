@@ -413,7 +413,7 @@ where
             TokenKind::SelfToken | TokenKind::Parent => self.parse_scope_resolution_or_name(),
             TokenKind::Static => self.parse_anon_or_awaitable_or_scope_resolution_or_name(),
             TokenKind::Yield => self.parse_yield_expression(),
-            TokenKind::Dollar => self.parse_dollar_expression(),
+            TokenKind::Dollar => self.parse_dollar_expression(true),
             TokenKind::Exclamation
             | TokenKind::PlusPlus
             | TokenKind::MinusMinus
@@ -1385,7 +1385,7 @@ where
             TokenKind::Variable if self.env.php5_compat_mode => {
                 self.parse_variable_in_php5_compat_mode()
             }
-            TokenKind::Dollar => self.parse_dollar_expression(),
+            TokenKind::Dollar => self.parse_dollar_expression(false),
             _ => self.require_xhp_class_name_or_name_or_variable(),
         };
         if token_kind == TokenKind::MinusGreaterThan {
@@ -1845,8 +1845,7 @@ where
             S!(make_token, self, token)
         } else {
             let (left, params, right) = self.parse_parameter_list_opt();
-            let capability =
-                self.with_type_parser(|p: &mut TypeParser<'a, S>| p.parse_capability_opt());
+            let contexts = self.with_type_parser(|p: &mut TypeParser<'a, S>| p.parse_contexts());
             let (colon, return_type) = self.parse_optional_return();
             S!(
                 make_lambda_signature,
@@ -1854,7 +1853,7 @@ where
                 left,
                 params,
                 right,
-                capability,
+                contexts,
                 colon,
                 return_type
             )
@@ -1912,14 +1911,17 @@ where
                 let variable = self.next_token();
                 S!(make_token, self, variable)
             }
-            TokenKind::Dollar => self.parse_dollar_expression(),
+            TokenKind::Dollar => self.parse_dollar_expression(false),
             _ => self.require_variable(),
         }
     }
 
-    fn parse_dollar_expression(&mut self) -> S::R {
+    fn parse_dollar_expression(&mut self, is_term: bool) -> S::R {
         let dollar = self.assert_token(TokenKind::Dollar);
         let operand = match self.peek_token_kind() {
+            TokenKind::LeftBrace if is_term => {
+                return self.parse_et_splice_expression(dollar);
+            }
             TokenKind::LeftBrace => self.parse_braced_expression(),
             TokenKind::Variable if self.env.php5_compat_mode => {
                 self.parse_variable_in_php5_compat_mode()
@@ -2606,6 +2608,7 @@ where
         let async_ = self.optional_token(TokenKind::Async);
         let fn_ = self.assert_token(TokenKind::Function);
         let (left_paren, params, right_paren) = self.parse_parameter_list_opt();
+        let ctx_list = self.with_type_parser(|p| p.parse_contexts());
         let (colon, return_type) = self.parse_optional_return();
         let use_clause = self.parse_anon_use_opt();
         // Detect if the user has the type in the wrong place
@@ -2630,10 +2633,25 @@ where
             left_paren,
             params,
             right_paren,
+            ctx_list,
             colon,
             return_type,
             use_clause,
             body,
+        )
+    }
+
+    fn parse_et_splice_expression(&mut self, dollar: S::R) -> S::R {
+        let left_brace = self.assert_token(TokenKind::LeftBrace);
+        let expression = self.parse_expression_with_reset_precedence();
+        let right_brace = self.require_right_brace();
+        S!(
+            make_et_splice_expression,
+            self,
+            dollar,
+            left_brace,
+            expression,
+            right_brace
         )
     }
 
@@ -3002,7 +3020,7 @@ where
                     self.continue_from(parser1);
                     S!(make_token, self, token)
                 }
-                TokenKind::Dollar => self.parse_dollar_expression(),
+                TokenKind::Dollar => self.parse_dollar_expression(false),
                 TokenKind::LeftBrace => self.parse_braced_expression(),
                 TokenKind::Variable if self.env.php5_compat_mode => {
                     let mut parser1 = self.clone();

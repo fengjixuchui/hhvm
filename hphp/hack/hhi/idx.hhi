@@ -8,6 +8,8 @@
  *
  */
 
+<<file: __EnableUnstableFeatures('coeffects_provisional')>>
+
 namespace HH {
 
 // NB: the typechecker relies on the exact format of this signature and rewrites
@@ -32,6 +34,6 @@ function idx<Tk as arraykey, Tv>(
   ?KeyedContainer<Tk, Tv> $collection,
   ?Tk $index,
   $default = null,
-) {}
+)[] {}
 
 }

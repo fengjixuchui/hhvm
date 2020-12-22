@@ -8,17 +8,19 @@
  *
  */
 
+<<file: __EnableUnstableFeatures('coeffects_provisional')>>
+
 namespace HH\ReifiedGenerics;
 
 /**
  * Returns the type structure representation of the reified type
  */
 <<__Pure>>
-function get_type_structure<reify T>(): TypeStructure<T>;
+function get_type_structure<reify T>()[]: TypeStructure<T>;
 
 /**
  * Returns the name of the class represented by this reified type.
  * If this type does not represent a class, throws an exception
  */
 <<__Pure>>
-function get_classname<reify T>(): classname<T>;
+function get_classname<reify T>()[]: classname<T>;

@@ -158,8 +158,8 @@ where S: SmartConstructors<State = State>,
     fn make_function_declaration_header(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R, arg9 : Self::R, arg10 : Self::R) -> Self::R {
         compose(SyntaxKind::FunctionDeclarationHeader, self.s.make_function_declaration_header(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1, arg6.1, arg7.1, arg8.1, arg9.1, arg10.1))
     }
-    fn make_capability(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
-        compose(SyntaxKind::Capability, self.s.make_capability(arg0.1, arg1.1, arg2.1))
+    fn make_contexts(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
+        compose(SyntaxKind::Contexts, self.s.make_contexts(arg0.1, arg1.1, arg2.1))
     }
     fn make_where_clause(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R {
         compose(SyntaxKind::WhereClause, self.s.make_where_clause(arg0.1, arg1.1))
@@ -320,8 +320,8 @@ where S: SmartConstructors<State = State>,
     fn make_anonymous_class(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R) -> Self::R {
         compose(SyntaxKind::AnonymousClass, self.s.make_anonymous_class(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1, arg6.1, arg7.1, arg8.1))
     }
-    fn make_anonymous_function(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R, arg9 : Self::R, arg10 : Self::R) -> Self::R {
-        compose(SyntaxKind::AnonymousFunction, self.s.make_anonymous_function(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1, arg6.1, arg7.1, arg8.1, arg9.1, arg10.1))
+    fn make_anonymous_function(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R, arg9 : Self::R, arg10 : Self::R, arg11 : Self::R) -> Self::R {
+        compose(SyntaxKind::AnonymousFunction, self.s.make_anonymous_function(arg0.1, arg1.1, arg2.1, arg3.1, arg4.1, arg5.1, arg6.1, arg7.1, arg8.1, arg9.1, arg10.1, arg11.1))
     }
     fn make_anonymous_function_use_clause(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R {
         compose(SyntaxKind::AnonymousFunctionUseClause, self.s.make_anonymous_function_use_clause(arg0.1, arg1.1, arg2.1, arg3.1))
@@ -391,6 +391,9 @@ where S: SmartConstructors<State = State>,
     }
     fn make_braced_expression(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
         compose(SyntaxKind::BracedExpression, self.s.make_braced_expression(arg0.1, arg1.1, arg2.1))
+    }
+    fn make_et_splice_expression(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R {
+        compose(SyntaxKind::ETSpliceExpression, self.s.make_et_splice_expression(arg0.1, arg1.1, arg2.1, arg3.1))
     }
     fn make_embedded_braced_expression(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R {
         compose(SyntaxKind::EmbeddedBracedExpression, self.s.make_embedded_braced_expression(arg0.1, arg1.1, arg2.1))

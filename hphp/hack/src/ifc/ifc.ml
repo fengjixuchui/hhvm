@@ -620,8 +620,8 @@ let call_special ~pos renv env args ret = function
   | StaticMethod ("\\HH\\Shapes", "idx") ->
     let (ty, key, def) =
       match args with
-      | [(ty, _); (_, key)] -> (ty, key, None)
-      | [(ty, _); (_, key); (def, _)] -> (ty, key, Some def)
+      | [(ty, _); (_, Some key)] -> (ty, key, None)
+      | [(ty, _); (_, Some key); (def, _)] -> (ty, key, Some def)
       | _ -> fail "incorrect arguments to Shapes::idx"
     in
     let key =
@@ -711,7 +711,7 @@ let call_regular ~pos renv env call_type name that_pty_opt args_pty ret_pty =
     let env = Env.acc env (fun acc -> call_constraint :: acc) in
     (env, ret_pty)
 
-let call ~pos renv env call_type that_pty_opt args ret_ty =
+let call ~pos renv env call_type that_pty_opt args ret_pty =
   let name =
     match call_type with
     | Cconstructor callable_name
@@ -719,7 +719,6 @@ let call ~pos renv env call_type that_pty_opt args ret_ty =
       Decl.callable_name_to_string callable_name
     | Clocal _ -> "anonymous"
   in
-  let ret_pty = Lift.ty ~prefix:(name ^ "_ret") renv ret_ty in
   let special =
     match call_type with
     | Cglobal (cn, _) -> call_special ~pos renv env args ret_pty cn
@@ -731,26 +730,29 @@ let call ~pos renv env call_type that_pty_opt args ret_ty =
     let args_pty = List.map ~f:fst args in
     call_regular ~pos renv env call_type name that_pty_opt args_pty ret_pty
 
-let array_like ~cow ~shape ~klass ~tuple ty =
+let array_like ~cow ~shape ~klass ~tuple ~dynamic ty =
   let rec search ty =
     match ty with
     | Tcow_array _ when cow -> Some ty
     | Tshape _ when shape -> Some ty
     | Tclass _ when klass -> Some ty
     | Ttuple _ when tuple -> Some ty
+    | Tdynamic _ when dynamic -> Some ty
     | Tinter tys -> List.find_map tys search
     | _ -> None
   in
   search ty
 
-let array_like_with_default ~cow ~shape ~klass ~tuple ~pos renv ty =
-  match array_like ~cow ~shape ~klass ~tuple ty with
+let array_like_with_default ~cow ~shape ~klass ~tuple ~dynamic ~pos renv ty =
+  match array_like ~cow ~shape ~klass ~tuple ~dynamic ty with
   | Some ty -> ty
   | None ->
     Errors.unknown_information_flow pos "Hack array";
     (* The default is completely arbitrary but it should be the least
        precisely handled array structure given the search options. *)
-    if klass then
+    if dynamic then
+      Tdynamic (Env.new_policy_var renv "fake_dynamic")
+    else if klass then
       Tclass
         {
           c_name = "fake";
@@ -779,6 +781,7 @@ let cow_array ~pos renv ty =
       ~shape:false
       ~klass:false
       ~tuple:false
+      ~dynamic:false
       ~pos
       renv
       ty
@@ -825,13 +828,13 @@ let assign_helper
 (* Hack array accesses and mutations may throw when the indexed
    element is not in the array. may_throw_out_of_bounds_exn is
    used to register this fact. *)
-let may_throw_out_of_bounds_exn ~pos renv env arry ix_pty =
+let may_throw_out_of_bounds_exn ~pos renv env length_pol ix_pty =
   let exn_ty = Lift.class_ty renv Decl.out_of_bounds_exception_id in
   (* both the indexing expression and the array length influence
      whether an exception is thrown or not; indeed, the check
      performed by the indexing is of the form:
        if ($ix >= $arry->length) { throw ...; } *)
-  let pc_deps = PSet.add arry.a_length (object_policy ix_pty) in
+  let pc_deps = PSet.add length_pol (object_policy ix_pty) in
   may_throw ~pos renv env pc_deps exn_ty
 
 let int_of_exp ix_exp =
@@ -860,59 +863,70 @@ let overwrite_nth_pty tuple_pty ix_exp pty =
 
    does not mutate an array cell, but the property p of
    the object $x instead.  *)
-let rec assign ?(use_pc = true) ~expr ~pos renv env lhs rhs_pty =
+let rec assign
+    ?(use_pc = true) ~expr ~pos renv env (((_, lhs_ty), _) as lhs) rhs_pty =
   match snd lhs with
   | A.Array_get ((((_, arry_ty), _) as arry_exp), ix_opt) ->
+    let handle_collection
+        env ~should_skip_exn old_array new_array key value length =
+      (* TODO(T68269878): track flows due to length changes *)
+      let env = Env.acc env (subtype ~pos old_array new_array) in
+
+      (* Evaluate the index *)
+      let (env, ix_pty_opt) =
+        match ix_opt with
+        | Some ix ->
+          let (env, ix_pty) = expr env ix in
+          (* The index flows to they key of the collection *)
+          let env = Env.acc env (subtype ~pos ix_pty key) in
+          (env, Some ix_pty)
+        | None -> (env, None)
+      in
+
+      (* Potentially raise `OutOfBoundsException` *)
+      let env =
+        match ix_pty_opt with
+        (* When there is no index, we add a new element, hence no exception. *)
+        | None -> env
+        (* Dictionaries don't throw on assignment, they register a new key. *)
+        | Some _ when should_skip_exn -> env
+        | Some ix_pty -> may_throw_out_of_bounds_exn ~pos renv env length ix_pty
+      in
+
+      (* Do the assignment *)
+      let env = Env.acc env (subtype ~pos rhs_pty value) in
+      (env, true)
+    in
     (* Evaluate the array *)
     let (env, old_arry_pty) = expr env arry_exp in
     let new_arry_pty = Lift.ty ~prefix:"arr" renv arry_ty in
-    let arry =
+    (* If the array is in an intersection, we pull it out and if we cannot
+       find find something suitable return a fake type to make the analysis go
+       through. *)
+    let new_arry_pty =
       array_like_with_default
         ~cow:true
         ~shape:true
-        ~klass:false
+        ~klass:true
         ~tuple:true
+        ~dynamic:false
         ~pos
         renv
         new_arry_pty
     in
 
     let (env, use_pc) =
-      match arry with
-      | Tcow_array _ ->
-        (* TODO(T68269878): track flows due to length changes *)
-        let arry = cow_array ~pos renv new_arry_pty in
-        (* Here we achieve two things:
-         * 1. CoW semantics by using a fresh array type that will be used from now on.
-         * 2. Account for the assignment destination type. This is the type the
-         *    LHS would receive _after_ the assignment.
-         *)
-        let env = Env.acc env (subtype ~pos old_arry_pty new_arry_pty) in
-
-        (* Evaluate the index *)
-        let (env, ix_pty_opt) =
-          match ix_opt with
-          | Some ix ->
-            let (env, ix_pty) = expr env ix in
-            (* The index flows to they key of the array *)
-            let env = Env.acc env (subtype ~pos ix_pty arry.a_key) in
-            (env, Some ix_pty)
-          | None -> (env, None)
-        in
-
-        (* Potentially raise `OutOfBoundsException` *)
-        let env =
-          match ix_pty_opt with
-          (* When there is no index, we add a new element, hence no exception. *)
-          | None -> env
-          (* Dictionaries don't throw on assignment, they register a new key. *)
-          | Some _ when equal_array_kind arry.a_kind Adict -> env
-          | Some ix_pty -> may_throw_out_of_bounds_exn ~pos renv env arry ix_pty
-        in
-
-        (* Do the assignment *)
-        let env = Env.acc env (subtype ~pos rhs_pty arry.a_value) in
-        (env, true)
+      match new_arry_pty with
+      | Tcow_array arry ->
+        let should_skip_exn = equal_array_kind arry.a_kind Adict in
+        handle_collection
+          env
+          ~should_skip_exn
+          old_arry_pty
+          new_arry_pty
+          arry.a_key
+          arry.a_value
+          arry.a_length
       | Tshape { sh_kind; sh_fields } ->
         begin
           match Option.(ix_opt >>= shape_field_name renv) with
@@ -946,6 +960,22 @@ let rec assign ?(use_pc = true) ~expr ~pos renv env lhs rhs_pty =
         let tuple_pty = overwrite_nth_pty old_arry_pty ix rhs_pty in
         let env = Env.acc env (subtype ~pos tuple_pty new_arry_pty) in
         (env, true)
+      | Tclass { c_name; c_lump; c_self } ->
+        let should_skip_exn = String.equal c_name "\\HH\\Map" in
+        (* The key is an arraykey so it will always be a Tprim *)
+        let key_pty = Tprim c_lump in
+        let env = Env.acc env (add_dependencies ~pos [c_self] key_pty) in
+        (* The value is constructed as if a property access is made *)
+        let value_pty = Lift.ty ~lump:c_lump renv lhs_ty in
+        let env = Env.acc env (add_dependencies ~pos [c_self] value_pty) in
+        handle_collection
+          env
+          ~should_skip_exn
+          old_arry_pty
+          new_arry_pty
+          key_pty
+          value_pty
+          c_lump
       | _ -> fail "the default type for array assignment is not handled"
     in
 
@@ -1059,7 +1089,7 @@ let rec expr ~pos renv (env : Env.expr_env) (((epos, ety), e) : Tast.expr) =
   let funargs env =
     let f env e =
       let (env, ty) = expr env e in
-      (env, (ty, e))
+      (env, (ty, Some e))
     in
     List.map_env env ~f
   in
@@ -1211,8 +1241,9 @@ let rec expr ~pos renv (env : Env.expr_env) (((epos, ety), e) : Tast.expr) =
   | A.Call (e, _type_args, args, _extra_args) ->
     let fty = Tast.get_type e in
     let (env, args_pty) = funargs env args in
+    let ret_pty = Lift.ty ~prefix:"ret" renv ety in
     let call env call_type this_pty =
-      call ~pos renv env call_type this_pty args_pty ety
+      call ~pos renv env call_type this_pty args_pty ret_pty
     in
     begin
       match e with
@@ -1273,6 +1304,29 @@ let rec expr ~pos renv (env : Env.expr_env) (((epos, ety), e) : Tast.expr) =
         in
         call env (Clocal ifc_fty) None
     end
+  | A.FunctionPointer (id, _) ->
+    let ty = Lift.ty renv ety in
+    let fty =
+      match ty with
+      | Tfun fty -> fty
+      | _ -> fail "FunctionPointer does not have a function type"
+    in
+    let ctype =
+      match id with
+      | A.FP_id (_, name) ->
+        let call_id = Decl.make_callable_name ~is_static:false None name in
+        Cglobal (call_id, ety)
+      | A.FP_class_const _ ->
+        (* TODO(T72024862): Handle late static binding *)
+        Errors.unknown_information_flow pos "late static binding";
+        Clocal fty
+    in
+    (* Act as though we are defining a lambda that wraps a call to the function
+        pointer. *)
+    let renv = { renv with re_gpc = fty.f_pc; re_exn = fty.f_exn } in
+    let args = List.map ~f:(fun t -> (t, None)) fty.f_args in
+    let (env, _ret_ty) = call ~pos renv env ctype None args fty.f_ret in
+    (env, ty)
   | A.Varray (_, exprs) -> cow_array_literal ~prefix:"varray" exprs
   | A.ValCollection
       (((A.Vec | A.Keyset | A.ImmSet | A.ImmVector) as kind), _, exprs) ->
@@ -1295,8 +1349,9 @@ let rec expr ~pos renv (env : Env.expr_env) (((epos, ety), e) : Tast.expr) =
       array_like_with_default
         ~cow:true
         ~shape:true
-        ~klass:false
+        ~klass:true
         ~tuple:true
+        ~dynamic:false
         ~pos
         renv
         arry_pty
@@ -1316,7 +1371,9 @@ let rec expr ~pos renv (env : Env.expr_env) (((epos, ety), e) : Tast.expr) =
         (* The index flows into the array key which flows into the array value *)
         let env = Env.acc env @@ subtype ~pos ix_pty arry.a_key in
 
-        let env = may_throw_out_of_bounds_exn ~pos renv env arry ix_pty in
+        let env =
+          may_throw_out_of_bounds_exn ~pos renv env arry.a_length ix_pty
+        in
 
         (env, arry.a_value)
       | Tshape { sh_fields; _ } ->
@@ -1335,6 +1392,18 @@ let rec expr ~pos renv (env : Env.expr_env) (((epos, ety), e) : Tast.expr) =
       | Ttuple ptys ->
         let indexed_pty = nth_tuple_pty ptys ix_exp in
         (env, indexed_pty)
+      | Tclass { c_self = self; c_lump = lump; _ } ->
+        let value_pty = Lift.ty ~lump renv ety in
+        let env = Env.acc env (add_dependencies ~pos [self] value_pty) in
+        (* Collection keys are arraykey's which are Tprims. *)
+        let key_pty = Tprim lump in
+        let env = Env.acc env (add_dependencies ~pos [self] key_pty) in
+        (* Indexing expression flows into the key policy type of the collection . *)
+        let env = Env.acc env @@ subtype ~pos ix_pty key_pty in
+        (* Join of lump and self governs the length of the collection as well. *)
+        let (env, join_pol) = join_policies ~pos renv env [lump; self] in
+        let env = may_throw_out_of_bounds_exn ~pos renv env join_pol ix_pty in
+        (env, value_pty)
       | _ -> fail "the default type for array access is not handled"
     end
   | A.New (((_, lty), cid), _targs, args, _extra_args, _) ->
@@ -1361,7 +1430,7 @@ let rec expr ~pos renv (env : Env.expr_env) (((epos, ety), e) : Tast.expr) =
             (Some c_name)
             Decl.construct_id
         in
-        let lty = T.mk (Typing_reason.Rnone, T.Tprim A.Tvoid) in
+        let lty = T.mk (Typing_reason.Rnone, T.Tprim A.Tvoid) |> Lift.ty renv in
         let (env, _) =
           call ~pos renv env (Cconstructor call_id) (Some obj_pty) args_pty lty
         in
@@ -1655,6 +1724,7 @@ and stmt renv (env : Env.stmt_env) ((pos, s) : Tast.stmt) =
         ~shape:false
         ~klass:true
         ~tuple:false
+        ~dynamic:true
         ~pos
         renv
         collection_pty
@@ -1679,6 +1749,9 @@ and stmt renv (env : Env.stmt_env) ((pos, s) : Tast.stmt) =
             let cl_pols = [class_.c_self; class_.c_lump] in
             let env = Env.acc env (add_dependencies ~pos cl_pols value_pty) in
             (env, value_pty, PSet.of_list cl_pols)
+          | Tdynamic dyn_pol ->
+            (* Deconstruction of dynamic also produces dynamic *)
+            (env, collection_pty, PSet.singleton dyn_pol)
           | _ -> fail "Collection is neither a class nor a cow array"
         in
         let env = assign_helper ~expr ~pos renv env value value_pty in
@@ -1703,6 +1776,9 @@ and stmt renv (env : Env.stmt_env) ((pos, s) : Tast.stmt) =
             let env = Env.acc env (add_dependencies ~pos cl_pols value_pty) in
             let env = Env.acc env (add_dependencies ~pos cl_pols key_pty) in
             (env, key_pty, value_pty, PSet.of_list cl_pols)
+          | Tdynamic dyn_pol ->
+            (* Deconstruction of dynamic also produces dynamic *)
+            (env, collection_pty, collection_pty, PSet.singleton dyn_pol)
           | _ -> fail "Collection is neither a class nor a cow array"
         in
         let env = assign_helper ~expr ~pos renv env key key_pty in

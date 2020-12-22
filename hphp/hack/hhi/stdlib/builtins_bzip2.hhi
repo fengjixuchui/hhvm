@@ -8,6 +8,8 @@
  *
  */
 
+<<file: __EnableUnstableFeatures('coeffects_provisional')>>
+
 <<__PHPStdLib>>
 function bzclose(resource $bz);
 <<__PHPStdLib>>
@@ -25,6 +27,6 @@ function bzerror(resource $bz);
 <<__PHPStdLib>>
 function bzerrno(resource $bz);
 <<__PHPStdLib, __Pure>>
-function bzcompress(string $source, int $blocksize = 4, int $workfactor = 0);
+function bzcompress(string $source, int $blocksize = 4, int $workfactor = 0)[];
 <<__PHPStdLib, __Pure>>
-function bzdecompress(string $source, int $small = 0);
+function bzdecompress(string $source, int $small = 0)[];

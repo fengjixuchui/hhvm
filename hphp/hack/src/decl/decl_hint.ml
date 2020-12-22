@@ -33,6 +33,13 @@ and aast_user_attribute_to_decl_user_attribute { ua_name; ua_params } =
           | _ -> None);
   }
 
+and aast_contexts_to_decl_capability env ctxs default_pos =
+  match ctxs with
+  | Some (pos, hl) ->
+    let hl = List.map ~f:(hint env) hl in
+    CapTy (Typing_make_type.intersection (Reason.Rhint pos) hl)
+  | None -> CapDefaults default_pos
+
 and aast_tparam_to_decl_tparam env t =
   {
     tp_variance = t.Aast.tp_variance;
@@ -80,7 +87,7 @@ and hint_ p env = function
         hf_param_kinds = kl;
         hf_param_mutability = muts;
         hf_variadic_ty = vh;
-        hf_cap = cap_opt;
+        hf_ctxs = ctxs;
         hf_return_ty = h;
         hf_is_mutable_return = mut_ret;
       } ->
@@ -112,11 +119,7 @@ and hint_ p env = function
     in
     let paraml = List.map3_exn hl kl muts ~f:make_param in
     let implicit_params =
-      let capability =
-        match cap_opt with
-        | Some cap -> CapTy (hint env cap)
-        | None -> CapDefaults p
-      in
+      let capability = aast_contexts_to_decl_capability env ctxs p in
       { capability }
     in
     let ret = possibly_enforced_hint env h in
@@ -155,6 +158,7 @@ and hint_ p env = function
   | Happly (id, argl) ->
     let argl = List.map argl (hint env) in
     Tapply (id, argl)
+  | Haccess ((_, Hvar n), [(_, id)]) -> Tgeneric ("T" ^ n ^ "@" ^ id, [])
   | Haccess (root_ty, ids) ->
     let root_ty = hint_ p env (snd root_ty) in
     let rec translate res ids =
@@ -192,6 +196,8 @@ and hint_ p env = function
     in
     Tshape (shape_kind, fdm)
   | Hsoft (p, h_) -> hint_ p env h_
+  | Hfun_context n -> Tgeneric ("Tctx" ^ n, [])
+  | Hvar n -> Tgeneric ("T" ^ n, [])
 
 and possibly_enforced_hint env h =
   (* Initially we assume that a type is not enforced at runtime.

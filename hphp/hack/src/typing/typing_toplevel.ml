@@ -302,6 +302,12 @@ let rec fun_def ctx f :
         Typing.attributes_check_def env SN.AttributeKinds.fn f.f_user_attributes
       in
       let (env, file_attrs) = Typing.file_attributes env f.f_file_attributes in
+      let (env, cap_ty, unsafe_cap_ty) =
+        Typing.type_capability env f.f_ctxs f.f_unsafe_ctxs (fst f.f_name)
+      in
+      let (env, _) =
+        Typing_coeffects.register_capabilities env cap_ty unsafe_cap_ty
+      in
       let reactive =
         fun_reactivity env.decl_env f.f_user_attributes f.f_params
       in
@@ -379,15 +385,6 @@ let rec fun_def ctx f :
           SN.UserAttributes.uaDisableTypecheckerInternal
           f.f_user_attributes
       in
-      let (env, f_cap, f_unsafe_cap) =
-        Typing.type_capability env f.f_cap f.f_unsafe_cap (fst f.f_name)
-      in
-      let (env, _) =
-        Typing_coeffects.register_capabilities
-          env
-          (type_of_type_hint f_cap)
-          (type_of_type_hint f_unsafe_cap)
-      in
       let (env, tb) =
         Typing.fun_ ~disable env return pos f.f_body f.f_fun_kind
       in
@@ -420,8 +417,8 @@ let rec fun_def ctx f :
           Aast.f_where_constraints = f.f_where_constraints;
           Aast.f_variadic = t_variadic;
           Aast.f_params = typed_params;
-          Aast.f_cap;
-          Aast.f_unsafe_cap;
+          Aast.f_ctxs = f.f_ctxs;
+          Aast.f_unsafe_ctxs = f.f_unsafe_ctxs;
           Aast.f_fun_kind = f.f_fun_kind;
           Aast.f_file_attributes = file_attrs;
           Aast.f_user_attributes = user_attributes;
@@ -470,6 +467,12 @@ and method_def env cls m =
           else
             None
         | x -> x
+      in
+      let (env, cap_ty, unsafe_cap_ty) =
+        Typing.type_capability env m.m_ctxs m.m_unsafe_ctxs (fst m.m_name)
+      in
+      let (env, _) =
+        Typing_coeffects.register_capabilities env cap_ty unsafe_cap_ty
       in
       let env = Env.set_env_reactive env reactive in
       let env = Env.set_fun_mutable env mut in
@@ -565,15 +568,6 @@ and method_def env cls m =
           SN.UserAttributes.uaDisableTypecheckerInternal
           m.m_user_attributes
       in
-      let (env, m_cap, m_unsafe_cap) =
-        Typing.type_capability env m.m_cap m.m_unsafe_cap (fst m.m_name)
-      in
-      let (env, _) =
-        Typing_coeffects.register_capabilities
-          env
-          (type_of_type_hint m_cap)
-          (type_of_type_hint m_unsafe_cap)
-      in
       let (env, tb) =
         Typing.fun_
           ~abstract:m.m_abstract
@@ -651,8 +645,8 @@ and method_def env cls m =
           Aast.m_where_constraints = m.m_where_constraints;
           Aast.m_variadic = t_variadic;
           Aast.m_params = typed_params;
-          Aast.m_cap;
-          Aast.m_unsafe_cap;
+          Aast.m_ctxs = m.m_ctxs;
+          Aast.m_unsafe_ctxs = m.m_unsafe_ctxs;
           Aast.m_fun_kind = m.m_fun_kind;
           Aast.m_user_attributes = user_attributes;
           Aast.m_ret = (locl_ty, hint_of_type_hint m.m_ret);
@@ -858,6 +852,18 @@ let shallow_decl_enabled (ctx : Provider_context.t) : bool =
 let class_type_param env ct =
   let (env, tparam_list) = List.map_env env ct Typing.type_param in
   (env, tparam_list)
+
+(* Some (legacy) special functions are allowed as class constant init.,
+   therefore treat them as pure and insert the matching capabilities. *)
+let expr_with_pure_coeffects env ?expected e =
+  let (env, (te, ty)) =
+    Typing_lenv.stash_and_do env (Env.all_continuations env) (fun env ->
+        let pure = MakeType.mixed Reason.Rnone in
+        let (env, _) = Typing_coeffects.register_capabilities env pure pure in
+        let (env, te, ty) = Typing.expr ?expected env e in
+        (env, (te, ty)))
+  in
+  (env, te, ty)
 
 let rec class_def ctx c =
   Counters.count Counters.Category.Typecheck @@ fun () ->
@@ -1255,6 +1261,7 @@ and typeconst_def
       c_tconst_user_attributes;
       c_tconst_span;
       c_tconst_doc_comment;
+      c_tconst_is_ctx;
     } =
   begin
     match cls.c_kind with
@@ -1314,6 +1321,7 @@ and typeconst_def
       Aast.c_tconst_user_attributes = user_attributes;
       Aast.c_tconst_span;
       Aast.c_tconst_doc_comment;
+      Aast.c_tconst_is_ctx;
     } )
 
 (* This should agree with the set of expressions whose type can be inferred in
@@ -1365,7 +1373,9 @@ and class_const_def c env cc =
   let (env, eopt, ty) =
     match e with
     | Some e ->
-      let (env, te, ty') = Typing.expr ?expected:opt_expected env e in
+      let (env, te, ty') =
+        expr_with_pure_coeffects env ?expected:opt_expected e
+      in
       let env =
         Typing_coercion.coerce_type
           (fst id)
@@ -1427,7 +1437,7 @@ and class_var_def ~is_static cls env cv =
     match cv.cv_expr with
     | None -> (env, None)
     | Some e ->
-      let (env, te, ty) = Typing.expr ?expected env e in
+      let (env, te, ty) = expr_with_pure_coeffects env ?expected e in
       (* Check that the inferred type is a subtype of the expected type.
        * Eventually this will be the responsibility of `expr`
        *)
@@ -1509,7 +1519,7 @@ let gconst_def ctx cst =
         let expected =
           ExpectedTy.make_and_allow_coercion (fst hint) Reason.URhint dty
         in
-        Typing.expr ~expected env value
+        expr_with_pure_coeffects env ~expected value
       in
       let env =
         Typing_coercion.coerce_type
@@ -1527,7 +1537,7 @@ let gconst_def ctx cst =
         && Partial.should_check_error cst.cst_mode 2035
       then
         Errors.missing_typehint (fst cst.cst_name);
-      let (env, te, _value_type) = Typing.expr env value in
+      let (env, te, _value_type) = expr_with_pure_coeffects env value in
       (te, env)
   in
   {
@@ -1551,7 +1561,7 @@ let record_field env f =
   let expected = ExpectedTy.make p Reason.URhint cty in
   match e with
   | Some e ->
-    let (env, te, ty) = Typing.expr ~expected env e in
+    let (env, te, ty) = expr_with_pure_coeffects env ~expected e in
     let env =
       Typing_coercion.coerce_type
         p

@@ -4,18 +4,18 @@
 class A {
   public ?int $a;
   <<__Rx, __Mutable>>
-  public function f(int $a): void {
+  public function f(int $a)[]: void {
     $this->a = $a;
   }
 }
 
 <<__Rx, __MutableReturn>>
-function g(): A {
+function g()[]: A {
   return new A();
 }
 
 <<__Rx>>
-function f(): void {
+function f()[]: void {
   $b = g();
   // ERROR
   $b->a = 5;

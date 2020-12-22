@@ -79,13 +79,15 @@ and mutable_return = bool
 
 and variadic_hint = hint option
 
+and contexts = pos * hint list
+
 and hint_fun = {
   hf_reactive_kind: func_reactive;
   hf_param_tys: hint list;
   hf_param_kinds: Ast_defs.param_kind option list;
   hf_param_mutability: param_mutability option list;
   hf_variadic_ty: variadic_hint;
-  hf_cap: hint option;
+  hf_ctxs: contexts option;
   hf_return_ty: hint;
   hf_is_mutable_return: mutable_return;
 }
@@ -101,12 +103,14 @@ and hint_ =
       (** This represents the use of a type const. Type consts are accessed like
        * regular consts in Hack, i.e.
        *
-       * [self | static | Class]::TypeConst
+       * [$x | self | static | Class]::TypeConst
        *
        * Class  => Happly "Class"
        * self   => Happly of the class of definition
        * static => Habstr ("static",
        *           Habstr ("this", (Constraint_as, Happly of class of definition)))
+       * $x     => Hvar "$x"
+       *
        * Type const access can be chained such as
        *
        * Class::TC1::TC2::TC3
@@ -133,6 +137,8 @@ and hint_ =
   | Hnothing
   | Hunion of hint list
   | Hintersection of hint list
+  | Hfun_context of string
+  | Hvar of string
 
 (** AST types such as Happly("int", []) are resolved to Hprim values *)
 and tprim =

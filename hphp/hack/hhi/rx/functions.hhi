@@ -8,6 +8,8 @@
  *
  */
 
+<<file: __EnableUnstableFeatures('coeffects_provisional')>>
+
 /**
  * This file provides type information for some of PHP's predefined functions
  *
@@ -18,13 +20,13 @@ namespace HH\Rx;
 
 // freeze is a special function for mutability
 <<__Pure>>
-function freeze<T>(T $x) : T;
+function freeze<T>(T $x)[]: T;
 
 // mutable is a special function to indicate ownership
 // transfer for fresh mutable values
 <<__Pure>>
-function mutable<T>(T $x): T;
+function mutable<T>(T $x)[]: T;
 
 // used to transfer ownership of mutably owned values
 <<__Pure>>
-function move<T>(T $x): T;
+function move<T>(T $x)[]: T;

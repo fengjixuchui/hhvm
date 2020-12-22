@@ -56,6 +56,8 @@
 #include "hphp/hhbbc/unit-util.h"
 #include "hphp/hhbbc/wide-func.h"
 
+#include "hphp/hhbbc/stats.h"
+
 #include "hphp/hhbbc/interp-internal.h"
 
 namespace HPHP { namespace HHBBC {
@@ -821,20 +823,6 @@ void in(ISS& env, const bc::PopU2&) {
   push(env, std::move(val), equiv != StackDupId ? equiv : NoLocalId);
 }
 
-void in(ISS& env, const bc::PopFrame& op) {
-  effect_free(env);
-
-  std::vector<std::pair<Type, LocalId>> vals{op.arg1};
-  for (auto i = op.arg1; i > 0; --i) {
-    vals[i - 1] = {popC(env), topStkEquiv(env)};
-  }
-  for (uint32_t i = 0; i < 2; i++) popU(env);
-  for (auto& p : vals) {
-    push(
-      env, std::move(p.first), p.second != StackDupId ? p.second : NoLocalId);
-  }
-}
-
 void in(ISS& env, const bc::EntryNop&) { effect_free(env); }
 
 void in(ISS& env, const bc::Dup& /*op*/) {
@@ -1035,18 +1023,12 @@ void in(ISS& env, const bc::AddElemC& /*op*/) {
 
   auto const tag = provTagHere(env);
 
-  auto outTy = [&] (Type ty) ->
-    folly::Optional<std::pair<Type,ThrowMode>> {
-    if (ty.subtypeOf(BArr)) {
-      return array_set(std::move(ty), k, v, tag);
-    }
-    if (ty.subtypeOf(BDict)) {
-      return dict_set(std::move(ty), k, v);
-    }
+  auto outTy = [&] (Type ty) -> folly::Optional<std::pair<Type,bool>> {
+    if (ty.subtypeOf(BDictish)) return dictish_set(std::move(ty), k, v, tag);
     return folly::none;
   }(std::move(inTy));
 
-  if (outTy && outTy->second == ThrowMode::None && will_reduce(env)) {
+  if (outTy && !outTy->second && will_reduce(env)) {
     if (!env.trackedElems.empty() &&
         env.trackedElems.back().depth + 3 == env.state.stack.size()) {
       auto const handled = [&] {
@@ -1083,7 +1065,7 @@ void in(ISS& env, const bc::AddElemC& /*op*/) {
 
   if (outTy->first.subtypeOf(BBottom)) {
     unreachable(env);
-  } else if (outTy->second == ThrowMode::None) {
+  } else if (!outTy->second) {
     effect_free(env);
     constprop(env);
   }
@@ -1097,11 +1079,8 @@ void in(ISS& env, const bc::AddNewElemC&) {
   auto const tag = provTagHere(env);
 
   auto outTy = [&] (Type ty) -> folly::Optional<Type> {
-    if (ty.subtypeOf(BArr)) {
-      return array_newelem(std::move(ty), std::move(v), tag).first;
-    }
-    if (ty.subtypeOf(BVec)) {
-      return vec_newelem(std::move(ty), std::move(v)).first;
+    if (ty.subtypeOf(BVecish)) {
+      return vecish_newelem(std::move(ty), std::move(v), tag).first;
     }
     if (ty.subtypeOf(BKeyset)) {
       return keyset_newelem(std::move(ty), std::move(v)).first;
@@ -1240,7 +1219,7 @@ void in(ISS& env, const bc::ClassName& op) {
                     bc::String { dcls.cls.name() });
     }
   }
-  if (ty.subtypeOf(TCls)) nothrow(env);
+  if (ty.subtypeOf(TCls)) effect_free(env);
   popC(env);
   push(env, TSStr);
 }
@@ -1829,7 +1808,7 @@ void in(ISS& env, const bc::CastDArray&)  {
 }
 
 void in(ISS& env, const bc::DblAsBits&) {
-  nothrow(env);
+  effect_free(env);
   constprop(env);
 
   auto const ty = popC(env);
@@ -1874,7 +1853,7 @@ void in(ISS& env, const bc::Select& op) {
   auto const t = topC(env, 1);
   auto const f = topC(env, 2);
 
-  nothrow(env);
+  effect_free(env);
   constprop(env);
 
   switch (emptiness(cond)) {
@@ -2180,7 +2159,7 @@ void jmpImpl(ISS& env, const JmpOp& op) {
   }
 
   popC(env);
-  nothrow(env);
+  effect_free(env);
 
   if (location == NoLocalId) return env.propagate(op.target1, &env.state);
 
@@ -2354,7 +2333,7 @@ void in(ISS& env, const bc::CGetQuietL& op) {
     return reduce(env, bc::CGetQuietL { minLocEquiv });
   }
 
-  nothrow(env);
+  effect_free(env);
   constprop(env);
   mayReadLocal(env, op.loc1);
   push(env, locAsCell(env, op.loc1), op.loc1);
@@ -2362,20 +2341,12 @@ void in(ISS& env, const bc::CGetQuietL& op) {
 
 void in(ISS& env, const bc::CUGetL& op) {
   auto ty = locRaw(env, op.loc1);
-  if (ty.subtypeOf(BUninit)) {
-    return reduce(env, bc::NullUninit {});
-  }
-  nothrow(env);
-  if (!ty.couldBe(BUninit)) constprop(env);
-  if (!ty.subtypeOf(BCell)) ty = TCell;
+  effect_free(env);
+  constprop(env);
   push(env, std::move(ty), op.loc1);
 }
 
 void in(ISS& env, const bc::PushL& op) {
-  if (auto val = tv(peekLocRaw(env, op.loc1))) {
-    return reduce(env, bc::UnsetL { op.loc1 }, gen_constant(*val));
-  }
-
   auto const minLocEquiv = findMinLocEquiv(env, op.loc1, false);
   if (minLocEquiv != NoLocalId) {
     return reduce(env, bc::CGetQuietL { minLocEquiv }, bc::UnsetL { op.loc1 });
@@ -2394,6 +2365,10 @@ void in(ISS& env, const bc::PushL& op) {
       rewind(env, 1);
       return reduce(env, bc::UnsetL { op.loc1 });
     }
+  }
+
+  if (auto val = tv(peekLocRaw(env, op.loc1))) {
+    return reduce(env, bc::UnsetL { op.loc1 }, gen_constant(*val));
   }
 
   impl(env, bc::CGetQuietL { op.loc1 }, bc::UnsetL { op.loc1 });
@@ -2430,52 +2405,35 @@ void in(ISS& env, const bc::CGetG&) { popC(env); push(env, TInitCell); }
 void in(ISS& env, const bc::CGetS& op) {
   auto const tcls  = popC(env);
   auto const tname = popC(env);
-  auto const vname = tv(tname);
-  auto const self  = selfCls(env);
 
-  if (vname && vname->m_type == KindOfPersistentString &&
-      self && tcls.subtypeOf(*self)) {
-    if (auto ty = selfPropAsCell(env, vname->m_data.pstr)) {
-      // Only nothrow when we know it's a private declared property (and thus
-      // accessible here), class initialization won't throw, and its not a
-      // LateInit prop (which will throw if not initialized).
-      if (!classInitMightRaise(env, tcls) &&
-          !isMaybeLateInitSelfProp(env, vname->m_data.pstr)) {
-        nothrow(env);
+  auto const throws = [&] {
+    unreachable(env);
+    return push(env, TBottom);
+  };
 
-        // We can only constprop here if we know for sure this is exactly the
-        // correct class.  The reason for this is that you could have a LSB
-        // class attempting to access a private static in a derived class with
-        // the same name as a private static in this class, which is supposed to
-        // fatal at runtime (for an example see test/quick/static_sprop2.php).
-        auto const selfExact = selfClsExact(env);
-        if (selfExact && tcls.subtypeOf(*selfExact)) constprop(env);
-      }
+  if (!tcls.couldBe(BCls)) return throws();
 
-      if (ty->subtypeOf(BBottom)) unreachable(env);
-      return push(env, std::move(*ty));
-    }
+  auto lookup = env.index.lookup_static(
+    env.ctx,
+    env.collect.props,
+    tcls,
+    tname
+  );
+
+  if (lookup.found == TriBool::No || lookup.ty.subtypeOf(BBottom)) {
+    return throws();
   }
 
-  auto indexTy = env.index.lookup_public_static(env.ctx, tcls, tname);
-  if (indexTy.subtypeOf(BInitCell)) {
-    /*
-     * Constant propagation here can change when we invoke autoload.
-     * It's safe not to check anything about private or protected static
-     * properties, because you can't override a public static property with
-     * a private or protected one---if the index gave us back a constant type,
-     * it's because it found a public static and it must be the property this
-     * would have read dynamically.
-     */
-    if (!classInitMightRaise(env, tcls) &&
-        !env.index.lookup_public_static_maybe_late_init(tcls, tname)) {
-      constprop(env);
-    }
-    if (indexTy.subtypeOf(BBottom)) unreachable(env);
-    return push(env, std::move(indexTy));
+  if (lookup.found == TriBool::Yes &&
+      lookup.lateInit == TriBool::No &&
+      !lookup.classInitMightRaise &&
+      tcls.subtypeOf(BCls) &&
+      tname.subtypeOf(BStr)) {
+    effect_free(env);
+    constprop(env);
   }
 
-  push(env, TInitCell);
+  push(env, std::move(lookup.ty));
 }
 
 void in(ISS& env, const bc::ClassGetC& op) {
@@ -2574,21 +2532,21 @@ void in(ISS& env, const bc::AKExists& /*op*/) {
   // return false for Str.
   if (base.subtypeOrNull(BVec)) {
     if (key.subtypeOf(BStr)) return finish(TFalse, false);
-    return hackArr(vec_elem(base, key, TBottom), TInt, TStr);
+    return hackArr(vecish_elem(base, key), TInt, TStr);
   }
 
   // Dicts and keysets will throw for any key other than Int or Str.
   if (base.subtypeOfAny(TOptDict, TOptKeyset)) {
     auto const elem = base.subtypeOrNull(BDict)
-      ? dict_elem(base, key, TBottom)
-      : keyset_elem(base, key, TBottom);
+      ? dictish_elem(base, key)
+      : keyset_elem(base, key);
     return hackArr(elem, TArrKeyCompat, TBottom);
   }
 
   if (base.subtypeOrNull(BArr)) {
     // Unlike Idx, AKExists will transform a null key on arrays into the static
     // empty string, so we don't need to do any fixups here.
-    auto const elem = array_elem(base, key, TBottom);
+    auto const elem = array_like_elem(base, key, TBottom, true);
     switch (elem.second) {
       case ThrowMode::None:                return finish(TTrue, false);
       case ThrowMode::MaybeMissingElement: return finish(TBool, false);
@@ -2627,7 +2585,8 @@ void in(ISS& env, const bc::GetMemoKeyL& op) {
   // the IMemoizeParam interface, and if it doesn't, we'll throw.
   if (!locCouldBeUninit(env, op.nloc1.id) &&
       !inTy.couldBeAny(TObj, TArr, TVec, TDict)) {
-    nothrow(env); constprop(env);
+    effect_free(env);
+    constprop(env);
   }
 
   // If type constraints are being enforced and the local being turned into a
@@ -2832,7 +2791,7 @@ void in(ISS& env, const bc::IssetL& op) {
                   bc::IsTypeC { IsTypeOp::Null },
                   bc::Not {});
   }
-  nothrow(env);
+  effect_free(env);
   constprop(env);
   auto const loc = locAsCell(env, op.loc1);
   if (loc.subtypeOf(BNull))  return push(env, TFalse);
@@ -2841,7 +2800,7 @@ void in(ISS& env, const bc::IssetL& op) {
 }
 
 void in(ISS& env, const bc::IsUnsetL& op) {
-  nothrow(env);
+  effect_free(env);
   constprop(env);
   auto const loc = locAsCell(env, op.loc1);
   if (loc.subtypeOf(BUninit))  return push(env, TTrue);
@@ -2852,40 +2811,30 @@ void in(ISS& env, const bc::IsUnsetL& op) {
 void in(ISS& env, const bc::IssetS& op) {
   auto const tcls  = popC(env);
   auto const tname = popC(env);
-  auto const vname = tv(tname);
-  auto const self  = selfCls(env);
 
-  if (self && tcls.subtypeOf(*self) &&
-      vname && vname->m_type == KindOfPersistentString) {
-    if (auto const t = selfPropAsCell(env, vname->m_data.pstr)) {
-      if (isMaybeLateInitSelfProp(env, vname->m_data.pstr)) {
-        if (!classInitMightRaise(env, tcls)) constprop(env);
-        return push(env, t->subtypeOf(BBottom) ? TFalse : TBool);
-      }
-      if (t->subtypeOf(BNull)) {
-        if (!classInitMightRaise(env, tcls)) constprop(env);
-        return push(env, TFalse);
-      }
-      if (!t->couldBe(BNull)) {
-        if (!classInitMightRaise(env, tcls)) constprop(env);
-        return push(env, TTrue);
-      }
-    }
+  if (!tcls.couldBe(BCls)) {
+    unreachable(env);
+    return push(env, TBottom);
   }
 
-  auto const indexTy = env.index.lookup_public_static(env.ctx, tcls, tname);
-  if (indexTy.subtypeOf(BInitCell)) {
-    // See the comments in CGetS about constprop for public statics.
-    if (!classInitMightRaise(env, tcls)) {
-      constprop(env);
-    }
-    if (env.index.lookup_public_static_maybe_late_init(tcls, tname)) {
-      return push(env, indexTy.subtypeOf(BBottom) ? TFalse : TBool);
-    }
-    if (indexTy.subtypeOf(BNull))  { return push(env, TFalse); }
-    if (!indexTy.couldBe(BNull))   { return push(env, TTrue); }
+  auto lookup = env.index.lookup_static(
+    env.ctx,
+    env.collect.props,
+    tcls,
+    tname
+  );
+
+  if (!lookup.classInitMightRaise &&
+      tcls.subtypeOf(BCls) &&
+      tname.subtypeOf(BStr)) {
+    effect_free(env);
+    constprop(env);
   }
 
+  if (lookup.ty.subtypeOf(BNull)) return push(env, TFalse);
+  if (!lookup.ty.couldBe(BNull) && lookup.lateInit == TriBool::No) {
+    return push(env, TTrue);
+  }
   push(env, TBool);
 }
 
@@ -2914,7 +2863,7 @@ void isTypeLImpl(ISS& env, const Op& op) {
   if (!locCouldBeUninit(env, op.nloc1.id) &&
       !is_type_might_raise(op.subop2, loc)) {
     constprop(env);
-    nothrow(env);
+    effect_free(env);
   }
 
   switch (op.subop2) {
@@ -2930,7 +2879,7 @@ void isTypeCImpl(ISS& env, const Op& op) {
   auto const t1 = popC(env);
   if (!is_type_might_raise(op.subop1, t1)) {
     constprop(env);
-    nothrow(env);
+    effect_free(env);
   }
 
   switch (op.subop1) {
@@ -3273,10 +3222,12 @@ void in(ISS& env, const bc::IsTypeStructC& op) {
       return reduce(
         env,
         bc::PopC {},
+        bc::NullUninit {},
+        bc::NullUninit {},
         bc::LateBoundCls {},
         bc::ClassName {},
         bc::String {val},
-        bc::FCallBuiltin {2, 0, s_hh_type_structure_no_throw.get()},
+        bc::FCallFuncD {FCallArgs(2), s_hh_type_structure_no_throw.get()},
         bc::IsTypeStructC { TypeStructResolveOp::DontResolve }
       );
     }
@@ -3446,61 +3397,43 @@ void in(ISS& env, const bc::SetG&) {
 }
 
 void in(ISS& env, const bc::SetS& op) {
-  auto const t1    = loosen_likeness(popC(env));
+  auto const val   = popC(env);
   auto const tcls  = popC(env);
   auto const tname = popC(env);
-  auto const vname = tv(tname);
-  auto const self  = selfCls(env);
 
-  if (vname && vname->m_type == KindOfPersistentString &&
-      canSkipMergeOnConstProp(env, tcls, vname->m_data.pstr)) {
-      unreachable(env);
-      push(env, TBottom);
-      return;
+  auto const throws = [&] {
+    unreachable(env);
+    return push(env, TBottom);
+  };
+
+  if (!tcls.couldBe(BCls)) return throws();
+
+  auto merge = env.index.merge_static_type(
+    env.ctx,
+    env.collect.publicSPropMutations,
+    env.collect.props,
+    tcls,
+    tname,
+    val,
+    true
+  );
+
+  if (merge.throws == TriBool::Yes || merge.adjusted.subtypeOf(BBottom)) {
+    return throws();
   }
 
-  if (!self || tcls.couldBe(*self)) {
-    if (vname && vname->m_type == KindOfPersistentString) {
-      mergeSelfProp(env, vname->m_data.pstr, t1);
-    } else {
-      mergeEachSelfPropRaw(env, [&] (Type) { return t1; });
-    }
+  if (merge.throws == TriBool::No &&
+      tcls.subtypeOf(BCls) &&
+      tname.subtypeOf(BStr)) {
+    nothrow(env);
   }
 
-  env.collect.publicSPropMutations.merge(env.index, env.ctx, tcls, tname, t1);
-
-  push(env, std::move(t1));
+  push(env, std::move(merge.adjusted));
 }
 
 void in(ISS& env, const bc::SetOpL& op) {
   auto const t1     = popC(env);
-  auto const v1     = tv(t1);
   auto const loc    = locAsCell(env, op.loc1);
-  auto const locVal = tv(loc);
-  if (v1 && locVal) {
-    // Can't constprop at this eval_cell, because of the effects on
-    // locals.
-    auto resultTy = eval_cell([&] {
-      TypedValue c = *locVal;
-      TypedValue rhs = *v1;
-      setopBody(&c, op.subop2, &rhs);
-      return c;
-    });
-    if (!resultTy) resultTy = TInitCell;
-
-    // We may have inferred a TSStr or TSArr with a value here, but
-    // at runtime it will not be static.  For now just throw that
-    // away.  TODO(#3696042): should be able to loosen_staticness here.
-    if (resultTy->subtypeOf(BStr)) resultTy = TStr;
-    else if (resultTy->subtypeOf(BArr)) resultTy = TArr;
-    else if (resultTy->subtypeOf(BVec)) resultTy = TVec;
-    else if (resultTy->subtypeOf(BDict)) resultTy = TDict;
-    else if (resultTy->subtypeOf(BKeyset)) resultTy = TKeyset;
-
-    setLoc(env, op.loc1, *resultTy);
-    push(env, *resultTy);
-    return;
-  }
 
   auto resultTy = typeSetOp(op.subop2, loc, t1);
   setLoc(env, op.loc1, resultTy);
@@ -3513,32 +3446,47 @@ void in(ISS& env, const bc::SetOpG&) {
 }
 
 void in(ISS& env, const bc::SetOpS& op) {
-  popC(env);
+  auto const rhs   = popC(env);
   auto const tcls  = popC(env);
   auto const tname = popC(env);
-  auto const vname = tv(tname);
-  auto const self  = selfCls(env);
 
-  if (vname && vname->m_type == KindOfPersistentString &&
-      canSkipMergeOnConstProp(env, tcls, vname->m_data.pstr)) {
-      unreachable(env);
-      push(env, TBottom);
-      return;
-  }
+  auto const throws = [&] {
+    unreachable(env);
+    return push(env, TBottom);
+  };
 
-  if (!self || tcls.couldBe(*self)) {
-    if (vname && vname->m_type == KindOfPersistentString) {
-      mergeSelfProp(env, vname->m_data.pstr, TInitCell);
-    } else {
-      killSelfProps(env);
-    }
-  }
+  if (!tcls.couldBe(BCls)) return throws();
 
-  env.collect.publicSPropMutations.merge(
-    env.index, env.ctx, tcls, tname, TInitCell
+  auto const lookup = env.index.lookup_static(
+    env.ctx,
+    env.collect.props,
+    tcls,
+    tname
   );
 
-  push(env, TInitCell);
+  if (lookup.found == TriBool::No || lookup.ty.subtypeOf(BBottom)) {
+    return throws();
+  }
+
+  auto const newTy = typeSetOp(op.subop1, lookup.ty, rhs);
+  if (newTy.subtypeOf(BBottom)) return throws();
+
+  auto merge = env.index.merge_static_type(
+    env.ctx,
+    env.collect.publicSPropMutations,
+    env.collect.props,
+    tcls,
+    tname,
+    newTy
+  );
+
+  if (merge.throws == TriBool::Yes || merge.adjusted.subtypeOf(BBottom)) {
+    return throws();
+  }
+
+  // NB: Unlike IncDecS, SetOpS pushes the post-TypeConstraint
+  // adjustment value.
+  push(env, std::move(merge.adjusted));
 }
 
 void in(ISS& env, const bc::IncDecL& op) {
@@ -3546,9 +3494,7 @@ void in(ISS& env, const bc::IncDecL& op) {
   auto newT = typeIncDec(op.subop2, loc);
   auto const pre = isPre(op.subop2);
 
-  // If it's a non-numeric string, this may cause it to exceed the max length.
-  if (!locCouldBeUninit(env, op.nloc1.id) &&
-      !loc.couldBe(BStr)) {
+  if (!locCouldBeUninit(env, op.nloc1.id) && loc.subtypeOf(BNum)) {
     nothrow(env);
   }
 
@@ -3562,35 +3508,73 @@ void in(ISS& env, const bc::IncDecG&) { popC(env); push(env, TInitCell); }
 void in(ISS& env, const bc::IncDecS& op) {
   auto const tcls  = popC(env);
   auto const tname = popC(env);
-  auto const vname = tv(tname);
-  auto const self  = selfCls(env);
+  auto const pre = isPre(op.subop1);
 
-  if (vname && vname->m_type == KindOfPersistentString &&
-      canSkipMergeOnConstProp(env, tcls, vname->m_data.pstr)) {
-      unreachable(env);
-      push(env, TBottom);
-      return;
-  }
+  auto const throws = [&] {
+    unreachable(env);
+    return push(env, TBottom);
+  };
 
-  if (!self || tcls.couldBe(*self)) {
-    if (vname && vname->m_type == KindOfPersistentString) {
-      mergeSelfProp(env, vname->m_data.pstr, TInitCell);
-    } else {
-      killSelfProps(env);
-    }
-  }
+  if (!tcls.couldBe(BCls)) return throws();
 
-  env.collect.publicSPropMutations.merge(
-    env.index, env.ctx, tcls, tname, TInitCell
+  auto lookup = env.index.lookup_static(
+    env.ctx,
+    env.collect.props,
+    tcls,
+    tname
   );
 
-  push(env, TInitCell);
+  if (lookup.found == TriBool::No || lookup.ty.subtypeOf(BBottom)) {
+    return throws();
+  }
+
+  auto newTy = typeIncDec(op.subop1, lookup.ty);
+  if (newTy.subtypeOf(BBottom)) return throws();
+
+  auto const merge = env.index.merge_static_type(
+    env.ctx,
+    env.collect.publicSPropMutations,
+    env.collect.props,
+    tcls,
+    tname,
+    newTy
+  );
+
+  if (merge.throws == TriBool::Yes || merge.adjusted.subtypeOf(BBottom)) {
+    return throws();
+  }
+
+  if (lookup.found == TriBool::Yes &&
+      lookup.lateInit == TriBool::No &&
+      !lookup.classInitMightRaise &&
+      merge.throws == TriBool::No &&
+      tcls.subtypeOf(BCls) &&
+      tname.subtypeOf(BStr) &&
+      lookup.ty.subtypeOf(BNum)) {
+    nothrow(env);
+  }
+
+  // NB: IncDecS pushes the value pre-TypeConstraint modification
+  push(env, pre ? std::move(newTy) : std::move(lookup.ty));
 }
 
 void in(ISS& env, const bc::UnsetL& op) {
   if (locRaw(env, op.loc1).subtypeOf(TUninit)) {
     return reduce(env);
   }
+
+  if (auto const last = last_op(env)) {
+    // No point in popping into the local if we're just going to
+    // immediately unset it.
+    if (last->op == Op::PopL &&
+        last->PopL.loc1 == op.loc1) {
+      reprocess(env);
+      rewind(env, 1);
+      setLocRaw(env, op.loc1, TCell);
+      return reduce(env, bc::PopC {}, bc::UnsetL { op.loc1 });
+    }
+  }
+
   if (any(env.collect.opts & CollectionOpts::Speculating)) {
     nothrow(env);
   } else {
@@ -3786,9 +3770,9 @@ void pushCallReturnType(ISS& env, Type&& ty, const FCallArgs& fca) {
     for (auto i = uint32_t{0}; i < numRets - 1; ++i) popU(env);
     if (is_specialized_vec(ty)) {
       for (int32_t i = 1; i < numRets; i++) {
-        push(env, vec_elem(ty, ival(i)).first);
+        push(env, vecish_elem(ty, ival(i)).first);
       }
-      push(env, vec_elem(ty, ival(0)).first);
+      push(env, vecish_elem(ty, ival(0)).first);
     } else {
       for (int32_t i = 0; i < numRets; i++) push(env, TInitCell);
     }
@@ -4738,7 +4722,7 @@ void inclOpImpl(ISS& env) {
   popC(env);
   killLocals(env);
   killThisProps(env);
-  killSelfProps(env);
+  killPrivateStatics(env);
   push(env, TInitCell);
 }
 
@@ -5281,14 +5265,14 @@ void idxImpl(ISS& env, bool arraysOnly) {
     // Vecs will throw for any key other than Int, Str, or Null, and will
     // silently return the default value for the latter two.
     if (key.subtypeOrNull(BStr)) return finish(def, false);
-    return hackArr(vec_elem(base, key, def), TInt, TOptStr);
+    return hackArr(vecish_elem(base, key, def), TInt, TOptStr);
   }
 
   if (base.subtypeOfAny(TOptDict, TOptKeyset)) {
     // Dicts and keysets will throw for any key other than Int, Str, or Null,
     // and will silently return the default value for Null.
     auto const elem = base.subtypeOrNull(BDict)
-      ? dict_elem(base, key, def)
+      ? dictish_elem(base, key, def)
       : keyset_elem(base, key, def);
     return hackArr(elem, TArrKeyCompat, TInitNull);
   }
@@ -5308,7 +5292,7 @@ void idxImpl(ISS& env, bool arraysOnly) {
       return key;
     }();
 
-    auto elem = array_elem(base, fixedKey, def);
+    auto elem = array_like_elem(base, fixedKey, def, true);
     // If the key was null, Idx will return the default value, so add to the
     // return type.
     if (maybeNull) elem.first |= def;
@@ -5389,7 +5373,7 @@ void in(ISS& env, const bc::CheckProp&) {
   if (env.ctx.cls->attrs & AttrNoOverride) {
     return reduce(env, bc::False {});
   }
-  nothrow(env);
+  effect_free(env);
   push(env, TBool);
 }
 
@@ -5397,9 +5381,15 @@ void in(ISS& env, const bc::InitProp& op) {
   auto const t = topC(env);
   switch (op.subop2) {
     case InitPropOp::Static:
-      mergeSelfProp(env, op.str1, t);
-      env.collect.publicSPropMutations.merge(
-        env.index, env.ctx, *env.ctx.cls, sval(op.str1), t, true
+      env.index.merge_static_type(
+        env.ctx,
+        env.collect.publicSPropMutations,
+        env.collect.props,
+        clsExact(env.index.resolve_class(env.ctx.cls)),
+        sval(op.str1),
+        t,
+        false,
+        true
       );
       break;
     case InitPropOp::NonStatic:
@@ -5493,7 +5483,7 @@ bool memoGetImpl(ISS& env, const Op& op, Rebind&& rebind) {
         }
       }
     }
-    nothrow(env);
+    effect_free(env);
   }
 
   if (retTy.first == TBottom) {
@@ -5885,6 +5875,9 @@ RunFlags run(Interp& interp, const State& in, PropagateFn propagate) {
 
     interpOne(env, bc);
     auto const& flags = env.flags;
+
+    if (flags.wasPEI) ret.noThrow = false;
+
     if (interp.collect.effectFree && !flags.effectFree) {
       interp.collect.effectFree = false;
       if (any(interp.collect.opts & CollectionOpts::EffectFreeOnly)) {

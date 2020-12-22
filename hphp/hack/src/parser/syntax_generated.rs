@@ -320,7 +320,7 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_function_declaration_header(_: &C, function_modifiers: Self, function_keyword: Self, function_name: Self, function_type_parameter_list: Self, function_left_paren: Self, function_parameter_list: Self, function_right_paren: Self, function_capability: Self, function_colon: Self, function_type: Self, function_where_clause: Self) -> Self {
+    fn make_function_declaration_header(_: &C, function_modifiers: Self, function_keyword: Self, function_name: Self, function_type_parameter_list: Self, function_left_paren: Self, function_parameter_list: Self, function_right_paren: Self, function_contexts: Self, function_colon: Self, function_type: Self, function_where_clause: Self) -> Self {
         let syntax = SyntaxVariant::FunctionDeclarationHeader(Box::new(FunctionDeclarationHeaderChildren {
             function_modifiers,
             function_keyword,
@@ -329,7 +329,7 @@ where
             function_left_paren,
             function_parameter_list,
             function_right_paren,
-            function_capability,
+            function_contexts,
             function_colon,
             function_type,
             function_where_clause,
@@ -338,11 +338,11 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_capability(_: &C, capability_left_bracket: Self, capability_types: Self, capability_right_bracket: Self) -> Self {
-        let syntax = SyntaxVariant::Capability(Box::new(CapabilityChildren {
-            capability_left_bracket,
-            capability_types,
-            capability_right_bracket,
+    fn make_contexts(_: &C, contexts_left_bracket: Self, contexts_types: Self, contexts_right_bracket: Self) -> Self {
+        let syntax = SyntaxVariant::Contexts(Box::new(ContextsChildren {
+            contexts_left_bracket,
+            contexts_types,
+            contexts_right_bracket,
         }));
         let value = V::from_values(syntax.iter_children().map(|child| &child.value));
         Self::make(syntax, value)
@@ -938,7 +938,7 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_anonymous_function(_: &C, anonymous_attribute_spec: Self, anonymous_static_keyword: Self, anonymous_async_keyword: Self, anonymous_function_keyword: Self, anonymous_left_paren: Self, anonymous_parameters: Self, anonymous_right_paren: Self, anonymous_colon: Self, anonymous_type: Self, anonymous_use: Self, anonymous_body: Self) -> Self {
+    fn make_anonymous_function(_: &C, anonymous_attribute_spec: Self, anonymous_static_keyword: Self, anonymous_async_keyword: Self, anonymous_function_keyword: Self, anonymous_left_paren: Self, anonymous_parameters: Self, anonymous_right_paren: Self, anonymous_ctx_list: Self, anonymous_colon: Self, anonymous_type: Self, anonymous_use: Self, anonymous_body: Self) -> Self {
         let syntax = SyntaxVariant::AnonymousFunction(Box::new(AnonymousFunctionChildren {
             anonymous_attribute_spec,
             anonymous_static_keyword,
@@ -947,6 +947,7 @@ where
             anonymous_left_paren,
             anonymous_parameters,
             anonymous_right_paren,
+            anonymous_ctx_list,
             anonymous_colon,
             anonymous_type,
             anonymous_use,
@@ -979,12 +980,12 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_lambda_signature(_: &C, lambda_left_paren: Self, lambda_parameters: Self, lambda_right_paren: Self, lambda_capability: Self, lambda_colon: Self, lambda_type: Self) -> Self {
+    fn make_lambda_signature(_: &C, lambda_left_paren: Self, lambda_parameters: Self, lambda_right_paren: Self, lambda_contexts: Self, lambda_colon: Self, lambda_type: Self) -> Self {
         let syntax = SyntaxVariant::LambdaSignature(Box::new(LambdaSignatureChildren {
             lambda_left_paren,
             lambda_parameters,
             lambda_right_paren,
-            lambda_capability,
+            lambda_contexts,
             lambda_colon,
             lambda_type,
         }));
@@ -1191,6 +1192,17 @@ where
             braced_expression_left_brace,
             braced_expression_expression,
             braced_expression_right_brace,
+        }));
+        let value = V::from_values(syntax.iter_children().map(|child| &child.value));
+        Self::make(syntax, value)
+    }
+
+    fn make_et_splice_expression(_: &C, et_splice_expression_dollar: Self, et_splice_expression_left_brace: Self, et_splice_expression_expression: Self, et_splice_expression_right_brace: Self) -> Self {
+        let syntax = SyntaxVariant::ETSpliceExpression(Box::new(ETSpliceExpressionChildren {
+            et_splice_expression_dollar,
+            et_splice_expression_left_brace,
+            et_splice_expression_expression,
+            et_splice_expression_right_brace,
         }));
         let value = V::from_values(syntax.iter_children().map(|child| &child.value));
         Self::make(syntax, value)
@@ -1623,14 +1635,14 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_closure_type_specifier(_: &C, closure_outer_left_paren: Self, closure_function_keyword: Self, closure_inner_left_paren: Self, closure_parameter_list: Self, closure_inner_right_paren: Self, closure_capability: Self, closure_colon: Self, closure_return_type: Self, closure_outer_right_paren: Self) -> Self {
+    fn make_closure_type_specifier(_: &C, closure_outer_left_paren: Self, closure_function_keyword: Self, closure_inner_left_paren: Self, closure_parameter_list: Self, closure_inner_right_paren: Self, closure_contexts: Self, closure_colon: Self, closure_return_type: Self, closure_outer_right_paren: Self) -> Self {
         let syntax = SyntaxVariant::ClosureTypeSpecifier(Box::new(ClosureTypeSpecifierChildren {
             closure_outer_left_paren,
             closure_function_keyword,
             closure_inner_left_paren,
             closure_parameter_list,
             closure_inner_right_paren,
-            closure_capability,
+            closure_contexts,
             closure_colon,
             closure_return_type,
             closure_outer_right_paren,
@@ -2081,7 +2093,7 @@ where
                 acc
             },
             SyntaxVariant::FunctionDeclarationHeader(x) => {
-                let FunctionDeclarationHeaderChildren { function_modifiers, function_keyword, function_name, function_type_parameter_list, function_left_paren, function_parameter_list, function_right_paren, function_capability, function_colon, function_type, function_where_clause } = *x;
+                let FunctionDeclarationHeaderChildren { function_modifiers, function_keyword, function_name, function_type_parameter_list, function_left_paren, function_parameter_list, function_right_paren, function_contexts, function_colon, function_type, function_where_clause } = *x;
                 let acc = f(function_modifiers, acc);
                 let acc = f(function_keyword, acc);
                 let acc = f(function_name, acc);
@@ -2089,17 +2101,17 @@ where
                 let acc = f(function_left_paren, acc);
                 let acc = f(function_parameter_list, acc);
                 let acc = f(function_right_paren, acc);
-                let acc = f(function_capability, acc);
+                let acc = f(function_contexts, acc);
                 let acc = f(function_colon, acc);
                 let acc = f(function_type, acc);
                 let acc = f(function_where_clause, acc);
                 acc
             },
-            SyntaxVariant::Capability(x) => {
-                let CapabilityChildren { capability_left_bracket, capability_types, capability_right_bracket } = *x;
-                let acc = f(capability_left_bracket, acc);
-                let acc = f(capability_types, acc);
-                let acc = f(capability_right_bracket, acc);
+            SyntaxVariant::Contexts(x) => {
+                let ContextsChildren { contexts_left_bracket, contexts_types, contexts_right_bracket } = *x;
+                let acc = f(contexts_left_bracket, acc);
+                let acc = f(contexts_types, acc);
+                let acc = f(contexts_right_bracket, acc);
                 acc
             },
             SyntaxVariant::WhereClause(x) => {
@@ -2534,7 +2546,7 @@ where
                 acc
             },
             SyntaxVariant::AnonymousFunction(x) => {
-                let AnonymousFunctionChildren { anonymous_attribute_spec, anonymous_static_keyword, anonymous_async_keyword, anonymous_function_keyword, anonymous_left_paren, anonymous_parameters, anonymous_right_paren, anonymous_colon, anonymous_type, anonymous_use, anonymous_body } = *x;
+                let AnonymousFunctionChildren { anonymous_attribute_spec, anonymous_static_keyword, anonymous_async_keyword, anonymous_function_keyword, anonymous_left_paren, anonymous_parameters, anonymous_right_paren, anonymous_ctx_list, anonymous_colon, anonymous_type, anonymous_use, anonymous_body } = *x;
                 let acc = f(anonymous_attribute_spec, acc);
                 let acc = f(anonymous_static_keyword, acc);
                 let acc = f(anonymous_async_keyword, acc);
@@ -2542,6 +2554,7 @@ where
                 let acc = f(anonymous_left_paren, acc);
                 let acc = f(anonymous_parameters, acc);
                 let acc = f(anonymous_right_paren, acc);
+                let acc = f(anonymous_ctx_list, acc);
                 let acc = f(anonymous_colon, acc);
                 let acc = f(anonymous_type, acc);
                 let acc = f(anonymous_use, acc);
@@ -2566,11 +2579,11 @@ where
                 acc
             },
             SyntaxVariant::LambdaSignature(x) => {
-                let LambdaSignatureChildren { lambda_left_paren, lambda_parameters, lambda_right_paren, lambda_capability, lambda_colon, lambda_type } = *x;
+                let LambdaSignatureChildren { lambda_left_paren, lambda_parameters, lambda_right_paren, lambda_contexts, lambda_colon, lambda_type } = *x;
                 let acc = f(lambda_left_paren, acc);
                 let acc = f(lambda_parameters, acc);
                 let acc = f(lambda_right_paren, acc);
-                let acc = f(lambda_capability, acc);
+                let acc = f(lambda_contexts, acc);
                 let acc = f(lambda_colon, acc);
                 let acc = f(lambda_type, acc);
                 acc
@@ -2717,6 +2730,14 @@ where
                 let acc = f(braced_expression_left_brace, acc);
                 let acc = f(braced_expression_expression, acc);
                 let acc = f(braced_expression_right_brace, acc);
+                acc
+            },
+            SyntaxVariant::ETSpliceExpression(x) => {
+                let ETSpliceExpressionChildren { et_splice_expression_dollar, et_splice_expression_left_brace, et_splice_expression_expression, et_splice_expression_right_brace } = *x;
+                let acc = f(et_splice_expression_dollar, acc);
+                let acc = f(et_splice_expression_left_brace, acc);
+                let acc = f(et_splice_expression_expression, acc);
+                let acc = f(et_splice_expression_right_brace, acc);
                 acc
             },
             SyntaxVariant::EmbeddedBracedExpression(x) => {
@@ -3027,13 +3048,13 @@ where
                 acc
             },
             SyntaxVariant::ClosureTypeSpecifier(x) => {
-                let ClosureTypeSpecifierChildren { closure_outer_left_paren, closure_function_keyword, closure_inner_left_paren, closure_parameter_list, closure_inner_right_paren, closure_capability, closure_colon, closure_return_type, closure_outer_right_paren } = *x;
+                let ClosureTypeSpecifierChildren { closure_outer_left_paren, closure_function_keyword, closure_inner_left_paren, closure_parameter_list, closure_inner_right_paren, closure_contexts, closure_colon, closure_return_type, closure_outer_right_paren } = *x;
                 let acc = f(closure_outer_left_paren, acc);
                 let acc = f(closure_function_keyword, acc);
                 let acc = f(closure_inner_left_paren, acc);
                 let acc = f(closure_parameter_list, acc);
                 let acc = f(closure_inner_right_paren, acc);
-                let acc = f(closure_capability, acc);
+                let acc = f(closure_contexts, acc);
                 let acc = f(closure_colon, acc);
                 let acc = f(closure_return_type, acc);
                 let acc = f(closure_outer_right_paren, acc);
@@ -3219,7 +3240,7 @@ where
             SyntaxVariant::NamespaceUseClause {..} => SyntaxKind::NamespaceUseClause,
             SyntaxVariant::FunctionDeclaration {..} => SyntaxKind::FunctionDeclaration,
             SyntaxVariant::FunctionDeclarationHeader {..} => SyntaxKind::FunctionDeclarationHeader,
-            SyntaxVariant::Capability {..} => SyntaxKind::Capability,
+            SyntaxVariant::Contexts {..} => SyntaxKind::Contexts,
             SyntaxVariant::WhereClause {..} => SyntaxKind::WhereClause,
             SyntaxVariant::WhereConstraint {..} => SyntaxKind::WhereConstraint,
             SyntaxVariant::MethodishDeclaration {..} => SyntaxKind::MethodishDeclaration,
@@ -3297,6 +3318,7 @@ where
             SyntaxVariant::FunctionPointerExpression {..} => SyntaxKind::FunctionPointerExpression,
             SyntaxVariant::ParenthesizedExpression {..} => SyntaxKind::ParenthesizedExpression,
             SyntaxVariant::BracedExpression {..} => SyntaxKind::BracedExpression,
+            SyntaxVariant::ETSpliceExpression {..} => SyntaxKind::ETSpliceExpression,
             SyntaxVariant::EmbeddedBracedExpression {..} => SyntaxKind::EmbeddedBracedExpression,
             SyntaxVariant::ListExpression {..} => SyntaxKind::ListExpression,
             SyntaxVariant::CollectionLiteralExpression {..} => SyntaxKind::CollectionLiteralExpression,
@@ -3557,7 +3579,7 @@ where
                  function_where_clause: ts.pop().unwrap(),
                  function_type: ts.pop().unwrap(),
                  function_colon: ts.pop().unwrap(),
-                 function_capability: ts.pop().unwrap(),
+                 function_contexts: ts.pop().unwrap(),
                  function_right_paren: ts.pop().unwrap(),
                  function_parameter_list: ts.pop().unwrap(),
                  function_left_paren: ts.pop().unwrap(),
@@ -3567,10 +3589,10 @@ where
                  function_modifiers: ts.pop().unwrap(),
                  
              })),
-             (SyntaxKind::Capability, 3) => SyntaxVariant::Capability(Box::new(CapabilityChildren {
-                 capability_right_bracket: ts.pop().unwrap(),
-                 capability_types: ts.pop().unwrap(),
-                 capability_left_bracket: ts.pop().unwrap(),
+             (SyntaxKind::Contexts, 3) => SyntaxVariant::Contexts(Box::new(ContextsChildren {
+                 contexts_right_bracket: ts.pop().unwrap(),
+                 contexts_types: ts.pop().unwrap(),
+                 contexts_left_bracket: ts.pop().unwrap(),
                  
              })),
              (SyntaxKind::WhereClause, 2) => SyntaxVariant::WhereClause(Box::new(WhereClauseChildren {
@@ -3951,11 +3973,12 @@ where
                  anonymous_class_class_keyword: ts.pop().unwrap(),
                  
              })),
-             (SyntaxKind::AnonymousFunction, 11) => SyntaxVariant::AnonymousFunction(Box::new(AnonymousFunctionChildren {
+             (SyntaxKind::AnonymousFunction, 12) => SyntaxVariant::AnonymousFunction(Box::new(AnonymousFunctionChildren {
                  anonymous_body: ts.pop().unwrap(),
                  anonymous_use: ts.pop().unwrap(),
                  anonymous_type: ts.pop().unwrap(),
                  anonymous_colon: ts.pop().unwrap(),
+                 anonymous_ctx_list: ts.pop().unwrap(),
                  anonymous_right_paren: ts.pop().unwrap(),
                  anonymous_parameters: ts.pop().unwrap(),
                  anonymous_left_paren: ts.pop().unwrap(),
@@ -3983,7 +4006,7 @@ where
              (SyntaxKind::LambdaSignature, 6) => SyntaxVariant::LambdaSignature(Box::new(LambdaSignatureChildren {
                  lambda_type: ts.pop().unwrap(),
                  lambda_colon: ts.pop().unwrap(),
-                 lambda_capability: ts.pop().unwrap(),
+                 lambda_contexts: ts.pop().unwrap(),
                  lambda_right_paren: ts.pop().unwrap(),
                  lambda_parameters: ts.pop().unwrap(),
                  lambda_left_paren: ts.pop().unwrap(),
@@ -4111,6 +4134,13 @@ where
                  braced_expression_right_brace: ts.pop().unwrap(),
                  braced_expression_expression: ts.pop().unwrap(),
                  braced_expression_left_brace: ts.pop().unwrap(),
+                 
+             })),
+             (SyntaxKind::ETSpliceExpression, 4) => SyntaxVariant::ETSpliceExpression(Box::new(ETSpliceExpressionChildren {
+                 et_splice_expression_right_brace: ts.pop().unwrap(),
+                 et_splice_expression_expression: ts.pop().unwrap(),
+                 et_splice_expression_left_brace: ts.pop().unwrap(),
+                 et_splice_expression_dollar: ts.pop().unwrap(),
                  
              })),
              (SyntaxKind::EmbeddedBracedExpression, 3) => SyntaxVariant::EmbeddedBracedExpression(Box::new(EmbeddedBracedExpressionChildren {
@@ -4384,7 +4414,7 @@ where
                  closure_outer_right_paren: ts.pop().unwrap(),
                  closure_return_type: ts.pop().unwrap(),
                  closure_colon: ts.pop().unwrap(),
-                 closure_capability: ts.pop().unwrap(),
+                 closure_contexts: ts.pop().unwrap(),
                  closure_inner_right_paren: ts.pop().unwrap(),
                  closure_parameter_list: ts.pop().unwrap(),
                  closure_inner_left_paren: ts.pop().unwrap(),
@@ -4742,17 +4772,17 @@ pub struct FunctionDeclarationHeaderChildren<T, V> {
     pub function_left_paren: Syntax<T, V>,
     pub function_parameter_list: Syntax<T, V>,
     pub function_right_paren: Syntax<T, V>,
-    pub function_capability: Syntax<T, V>,
+    pub function_contexts: Syntax<T, V>,
     pub function_colon: Syntax<T, V>,
     pub function_type: Syntax<T, V>,
     pub function_where_clause: Syntax<T, V>,
 }
 
 #[derive(Debug, Clone)]
-pub struct CapabilityChildren<T, V> {
-    pub capability_left_bracket: Syntax<T, V>,
-    pub capability_types: Syntax<T, V>,
-    pub capability_right_bracket: Syntax<T, V>,
+pub struct ContextsChildren<T, V> {
+    pub contexts_left_bracket: Syntax<T, V>,
+    pub contexts_types: Syntax<T, V>,
+    pub contexts_right_bracket: Syntax<T, V>,
 }
 
 #[derive(Debug, Clone)]
@@ -5195,6 +5225,7 @@ pub struct AnonymousFunctionChildren<T, V> {
     pub anonymous_left_paren: Syntax<T, V>,
     pub anonymous_parameters: Syntax<T, V>,
     pub anonymous_right_paren: Syntax<T, V>,
+    pub anonymous_ctx_list: Syntax<T, V>,
     pub anonymous_colon: Syntax<T, V>,
     pub anonymous_type: Syntax<T, V>,
     pub anonymous_use: Syntax<T, V>,
@@ -5223,7 +5254,7 @@ pub struct LambdaSignatureChildren<T, V> {
     pub lambda_left_paren: Syntax<T, V>,
     pub lambda_parameters: Syntax<T, V>,
     pub lambda_right_paren: Syntax<T, V>,
-    pub lambda_capability: Syntax<T, V>,
+    pub lambda_contexts: Syntax<T, V>,
     pub lambda_colon: Syntax<T, V>,
     pub lambda_type: Syntax<T, V>,
 }
@@ -5370,6 +5401,14 @@ pub struct BracedExpressionChildren<T, V> {
     pub braced_expression_left_brace: Syntax<T, V>,
     pub braced_expression_expression: Syntax<T, V>,
     pub braced_expression_right_brace: Syntax<T, V>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ETSpliceExpressionChildren<T, V> {
+    pub et_splice_expression_dollar: Syntax<T, V>,
+    pub et_splice_expression_left_brace: Syntax<T, V>,
+    pub et_splice_expression_expression: Syntax<T, V>,
+    pub et_splice_expression_right_brace: Syntax<T, V>,
 }
 
 #[derive(Debug, Clone)]
@@ -5686,7 +5725,7 @@ pub struct ClosureTypeSpecifierChildren<T, V> {
     pub closure_inner_left_paren: Syntax<T, V>,
     pub closure_parameter_list: Syntax<T, V>,
     pub closure_inner_right_paren: Syntax<T, V>,
-    pub closure_capability: Syntax<T, V>,
+    pub closure_contexts: Syntax<T, V>,
     pub closure_colon: Syntax<T, V>,
     pub closure_return_type: Syntax<T, V>,
     pub closure_outer_right_paren: Syntax<T, V>,
@@ -5869,7 +5908,7 @@ pub enum SyntaxVariant<T, V> {
     NamespaceUseClause(Box<NamespaceUseClauseChildren<T, V>>),
     FunctionDeclaration(Box<FunctionDeclarationChildren<T, V>>),
     FunctionDeclarationHeader(Box<FunctionDeclarationHeaderChildren<T, V>>),
-    Capability(Box<CapabilityChildren<T, V>>),
+    Contexts(Box<ContextsChildren<T, V>>),
     WhereClause(Box<WhereClauseChildren<T, V>>),
     WhereConstraint(Box<WhereConstraintChildren<T, V>>),
     MethodishDeclaration(Box<MethodishDeclarationChildren<T, V>>),
@@ -5947,6 +5986,7 @@ pub enum SyntaxVariant<T, V> {
     FunctionPointerExpression(Box<FunctionPointerExpressionChildren<T, V>>),
     ParenthesizedExpression(Box<ParenthesizedExpressionChildren<T, V>>),
     BracedExpression(Box<BracedExpressionChildren<T, V>>),
+    ETSpliceExpression(Box<ETSpliceExpressionChildren<T, V>>),
     EmbeddedBracedExpression(Box<EmbeddedBracedExpressionChildren<T, V>>),
     ListExpression(Box<ListExpressionChildren<T, V>>),
     CollectionLiteralExpression(Box<CollectionLiteralExpressionChildren<T, V>>),
@@ -6308,7 +6348,7 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                     4 => Some(&x.function_left_paren),
                     5 => Some(&x.function_parameter_list),
                     6 => Some(&x.function_right_paren),
-                    7 => Some(&x.function_capability),
+                    7 => Some(&x.function_contexts),
                     8 => Some(&x.function_colon),
                     9 => Some(&x.function_type),
                     10 => Some(&x.function_where_clause),
@@ -6316,11 +6356,11 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                     }
                 })
             },
-            Capability(x) => {
+            Contexts(x) => {
                 get_index(3).and_then(|index| { match index {
-                        0 => Some(&x.capability_left_bracket),
-                    1 => Some(&x.capability_types),
-                    2 => Some(&x.capability_right_bracket),
+                        0 => Some(&x.contexts_left_bracket),
+                    1 => Some(&x.contexts_types),
+                    2 => Some(&x.contexts_right_bracket),
                         _ => None,
                     }
                 })
@@ -6863,7 +6903,7 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                 })
             },
             AnonymousFunction(x) => {
-                get_index(11).and_then(|index| { match index {
+                get_index(12).and_then(|index| { match index {
                         0 => Some(&x.anonymous_attribute_spec),
                     1 => Some(&x.anonymous_static_keyword),
                     2 => Some(&x.anonymous_async_keyword),
@@ -6871,10 +6911,11 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                     4 => Some(&x.anonymous_left_paren),
                     5 => Some(&x.anonymous_parameters),
                     6 => Some(&x.anonymous_right_paren),
-                    7 => Some(&x.anonymous_colon),
-                    8 => Some(&x.anonymous_type),
-                    9 => Some(&x.anonymous_use),
-                    10 => Some(&x.anonymous_body),
+                    7 => Some(&x.anonymous_ctx_list),
+                    8 => Some(&x.anonymous_colon),
+                    9 => Some(&x.anonymous_type),
+                    10 => Some(&x.anonymous_use),
+                    11 => Some(&x.anonymous_body),
                         _ => None,
                     }
                 })
@@ -6905,7 +6946,7 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                         0 => Some(&x.lambda_left_paren),
                     1 => Some(&x.lambda_parameters),
                     2 => Some(&x.lambda_right_paren),
-                    3 => Some(&x.lambda_capability),
+                    3 => Some(&x.lambda_contexts),
                     4 => Some(&x.lambda_colon),
                     5 => Some(&x.lambda_type),
                         _ => None,
@@ -7092,6 +7133,16 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                         0 => Some(&x.braced_expression_left_brace),
                     1 => Some(&x.braced_expression_expression),
                     2 => Some(&x.braced_expression_right_brace),
+                        _ => None,
+                    }
+                })
+            },
+            ETSpliceExpression(x) => {
+                get_index(4).and_then(|index| { match index {
+                        0 => Some(&x.et_splice_expression_dollar),
+                    1 => Some(&x.et_splice_expression_left_brace),
+                    2 => Some(&x.et_splice_expression_expression),
+                    3 => Some(&x.et_splice_expression_right_brace),
                         _ => None,
                     }
                 })
@@ -7490,7 +7541,7 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                     2 => Some(&x.closure_inner_left_paren),
                     3 => Some(&x.closure_parameter_list),
                     4 => Some(&x.closure_inner_right_paren),
-                    5 => Some(&x.closure_capability),
+                    5 => Some(&x.closure_contexts),
                     6 => Some(&x.closure_colon),
                     7 => Some(&x.closure_return_type),
                     8 => Some(&x.closure_outer_right_paren),

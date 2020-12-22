@@ -8,6 +8,8 @@
  *
  */
 
+<<file: __EnableUnstableFeatures('coeffects_provisional')>>
+
 const int JSON_ERROR_NONE = 0;
 const int JSON_ERROR_DEPTH = 1;
 const int JSON_ERROR_STATE_MISMATCH = 2;
@@ -60,7 +62,7 @@ function json_encode_with_error(
   inout ?(int, string) $error,
   int $options = 0,
   int $depth = 512,
-);
+)[];
 <<__PHPStdLib, __Rx>>
 function json_decode(string $json, bool $assoc = false, int $depth = 512, int $options = 0);
 <<__PHPStdLib, __Pure>>
@@ -70,7 +72,7 @@ function json_decode_with_error(
   bool $assoc = false,
   int $depth = 512,
   int $options = 0,
-);
+)[];
 <<__PHPStdLib, __NonRx('Reads from a global')>>
 function json_last_error();
 <<__PHPStdLib, __NonRx('Reads from a global')>>

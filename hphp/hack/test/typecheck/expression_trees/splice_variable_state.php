@@ -18,7 +18,7 @@ function test(): void {
 
   // Expression Trees do not inherit local variables from the outer scope
   // But splices do
-  $_ = Code`__splice__(lift($x + 1))`;
+  $_ = Code`${lift($x + 1)}`;
 }
 
 //// BEGIN DEFS
@@ -159,7 +159,7 @@ class Code {
   }
 }
 
-final class ExprTree<TVisitor, TResult, TInfer>{
+final class ExprTree<TVisitor, TResult, +TInfer>{
   public function __construct(
     private ?ExprPos $pos,
     private string $filepath,

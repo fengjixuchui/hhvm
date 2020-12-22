@@ -24,9 +24,7 @@
 #include "hphp/runtime/base/type-variant.h"
 #include "hphp/runtime/base/tv-refcount.h"
 
-#include "hphp/runtime/vm/jit/irgen.h"
-#include "hphp/runtime/vm/jit/irgen-state.h"
-#include "hphp/runtime/vm/jit/ssa-tmp.h"
+#include "hphp/runtime/vm/jit/type.h"
 
 #include "hphp/util/word-mem.h"
 
@@ -420,16 +418,16 @@ const Value* MonotypeVec::rawData() const {
   return const_cast<MonotypeVec*>(this)->rawData();
 }
 
-Value& MonotypeVec::valueRefUnchecked(uint32_t idx) {
+Value& MonotypeVec::valueRefUnchecked(size_t idx) {
   return rawData()[idx];
 }
 
-const Value& MonotypeVec::valueRefUnchecked(uint32_t idx) const {
+const Value& MonotypeVec::valueRefUnchecked(size_t idx) const {
   return const_cast<MonotypeVec*>(this)->valueRefUnchecked(idx);
 }
 
-TypedValue MonotypeVec::typedValueUnchecked(uint32_t idx) const {
-  return { valueRefUnchecked(idx), type() };
+TypedValue MonotypeVec::typedValueUnchecked(size_t idx) const {
+  return make_tv_of_type(valueRefUnchecked(idx), type());
 }
 
 uint8_t MonotypeVec::sizeIndex() const {
@@ -780,11 +778,7 @@ ArrayData* MonotypeVec::Pop(MonotypeVec* madIn, Variant& value) {
   }
 
   auto const newSize = mad->size() - 1;
-  TypedValue tv;
-  tv.m_data = mad->valueRefUnchecked(newSize);
-  tv.m_type = mad->type();
-  value = Variant::wrap(tv);
-  tvDecRefGen(tv);
+  value = Variant::attach(mad->typedValueUnchecked(newSize));
   mad->m_size = newSize;
 
   return mad;
@@ -824,6 +818,50 @@ ArrayData* MonotypeVec::SetLegacyArray(MonotypeVec* madIn,
   auto const mad = copy ? madIn->copy() : madIn;
   mad->setLegacyArrayInPlace(legacy);
   return mad;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+using namespace jit;
+
+std::pair<Type, bool> EmptyMonotypeVecLayout::elemType(Type key) const {
+  return {TBottom, false};
+}
+
+std::pair<Type, bool> EmptyMonotypeVecLayout::firstLastType(
+    bool isFirst, bool isKey) const {
+  return {TBottom, false};
+}
+
+Type EmptyMonotypeVecLayout::iterPosType(Type pos, bool isKey) const {
+  return TBottom;
+}
+
+std::pair<Type, bool> MonotypeVecLayout::elemType(Type key) const {
+  return {Type(m_fixedType), false};
+}
+
+std::pair<Type, bool> MonotypeVecLayout::firstLastType(
+    bool isFirst, bool isKey) const {
+  return {isKey ? TInt : Type(m_fixedType), false};
+}
+
+Type MonotypeVecLayout::iterPosType(Type pos, bool isKey) const {
+  return isKey ? TInt : Type(m_fixedType);
+}
+
+
+std::pair<Type, bool> EmptyOrMonotypeVecLayout::elemType(Type key) const {
+  return {Type(m_fixedType), false};
+}
+
+std::pair<Type, bool> EmptyOrMonotypeVecLayout::firstLastType(
+    bool isFirst, bool isKey) const {
+  return {isKey ? TInt : Type(m_fixedType), false};
+}
+
+Type EmptyOrMonotypeVecLayout::iterPosType(Type pos, bool isKey) const {
+  return isKey ? TInt : Type(m_fixedType);
 }
 
 //////////////////////////////////////////////////////////////////////////////

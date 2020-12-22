@@ -768,6 +768,15 @@ where
         }
     }
 
+    fn class_constructor_has_tparams(node: S<'a, Token, Value>) -> bool {
+        match &node.children {
+            FunctionDeclarationHeader(node) => {
+                node.name.is_construct() && !node.type_parameter_list.is_missing()
+            }
+            _ => false,
+        }
+    }
+
     // Don't allow a promoted parameter in a constructor if the class
     // already has a property with the same name. Return the clashing name found.
     fn class_constructor_param_promotion_clash(&self, node: S<'a, Token, Value>) -> Option<&str> {
@@ -1760,6 +1769,13 @@ where
                     node,
                     || errors::error2010,
                     function_parameter_list,
+                );
+
+                self.produce_error(
+                    |_, x| Self::class_constructor_has_tparams(x),
+                    node,
+                    || errors::no_generics_on_constructors,
+                    &x.type_parameter_list,
                 );
 
                 if let Some(clashing_name) = self.class_constructor_param_promotion_clash(node) {
@@ -3291,15 +3307,6 @@ where
 
                 self.function_call_on_xhp_name_errors(recv);
 
-                if self.text(recv) == sn::special_functions::SPLICE
-                    && !self.env.context.active_expression_tree
-                {
-                    self.errors.push(Self::make_error_from_node(
-                        recv,
-                        errors::reserved_et_keyword,
-                    ))
-                }
-
                 let fun_and_clsmeth_disabled = self
                     .env
                     .parser_options
@@ -3321,6 +3328,14 @@ where
                     ))
                 }
             }
+
+            ETSpliceExpression(_) => {
+                if !self.env.context.active_expression_tree {
+                    self.errors
+                        .push(Self::make_error_from_node(node, errors::splice_outside_et))
+                }
+            }
+
             ListExpression(x) if x.members.is_missing() && self.env.is_hhvm_compat() => {
                 if let Some(Syntax {
                     children: ForeachStatement(x),
@@ -5584,9 +5599,7 @@ where
 
                 self.fold_child_nodes(node)
             }
-            FunctionCallExpression(x)
-                if self.text(&x.receiver) == sn::special_functions::SPLICE =>
-            {
+            ETSpliceExpression(_) => {
                 let previous_state = self.env.context.active_expression_tree;
                 self.env.context.active_expression_tree = false;
                 self.fold_child_nodes(node);
@@ -5599,7 +5612,7 @@ where
             UnionTypeSpecifier(_) | IntersectionTypeSpecifier(_) => {
                 self.check_can_use_feature(node, &UnstableFeatures::UnionIntersectionTypeHints)
             }
-            Capability(_) => {
+            Contexts(_) => {
                 self.check_can_use_feature(node, &UnstableFeatures::CoeffectsProvisional)
             }
             ClassishDeclaration(x) => match &x.where_clause.children {

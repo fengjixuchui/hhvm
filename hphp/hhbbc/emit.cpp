@@ -483,8 +483,6 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState, UnitEmitter& ue,
 #define POP_CMANY      pop(data.arg##1);
 #define POP_SMANY      pop(data.keys.size());
 #define POP_CUMANY     pop(data.arg##1);
-#define POP_CMANY_U2   pop(data.arg1 + 2);
-#define POP_CALLNATIVE pop(data.arg1 + data.arg2);
 #define POP_FCALL(nin, nobj) \
                        pop(nin + data.fca.numInputs() + 1 + data.fca.numRets());
 
@@ -494,7 +492,6 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState, UnitEmitter& ue,
 #define PUSH_THREE(x, y, z)    push(3);
 #define PUSH_CMANY             push(data.arg1);
 #define PUSH_FCALL             push(data.fca.numRets());
-#define PUSH_CALLNATIVE        push(data.arg2 + 1);
 
 #define O(opcode, imms, inputs, outputs, flags)                 \
     auto emit_##opcode = [&] (OpInfo<bc::opcode> data) {        \
@@ -582,8 +579,6 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState, UnitEmitter& ue,
 #undef POP_CMANY
 #undef POP_SMANY
 #undef POP_CUMANY
-#undef POP_CMANY_U2
-#undef POP_CALLNATIVE
 #undef POP_FCALL
 #undef POP_MFINAL
 #undef POP_C_MFINAL
@@ -594,7 +589,6 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState, UnitEmitter& ue,
 #undef PUSH_THREE
 #undef PUSH_CMANY
 #undef PUSH_FCALL
-#undef PUSH_CALLNATIVE
 
 #define O(opcode, ...)                                        \
     case Op::opcode:                                          \
@@ -1058,6 +1052,19 @@ void merge_repo_auth_type(UnitEmitter& ue, RepoAuthType rat) {
   case T::OptKeyset:
   case T::SKeyset:
   case T::Keyset:
+  case T::SVecish:
+  case T::Vecish:
+  case T::OptSVecish:
+  case T::OptVecish:
+  case T::SDictish:
+  case T::Dictish:
+  case T::OptSDictish:
+  case T::OptDictish:
+  case T::SArrLike:
+  case T::ArrLike:
+  case T::OptSArrLike:
+  case T::OptArrLike:
+
   case T::ArrCompat:
   case T::VArrCompat:
   case T::VecCompat:
@@ -1255,7 +1262,7 @@ void emit_class(EmitUnitState& state, UnitEmitter& ue, PreClassEmitter* pce,
   pce->setUserAttributes(cls.userAttributes);
 
   for (auto& x : cls.interfaceNames)     pce->addInterface(x);
-  for (auto& x : cls.includedEnums)      pce->addEnumInclude(x);
+  for (auto& x : cls.includedEnumNames)  pce->addEnumInclude(x);
   for (auto& x : cls.usedTraitNames)     pce->addUsedTrait(x);
   for (auto& x : cls.requirements)       pce->addClassRequirement(x);
   for (auto& x : cls.traitPrecRules)     pce->addTraitPrecRule(x);
@@ -1308,7 +1315,8 @@ void emit_class(EmitUnitState& state, UnitEmitter& ue, PreClassEmitter* pce,
 
   auto const privateProps   = state.index.lookup_private_props(&cls, true);
   auto const privateStatics = state.index.lookup_private_statics(&cls, true);
-  for (auto& prop : cls.properties) {
+  auto const publicStatics  = state.index.lookup_public_statics(&cls);
+  for (auto const& prop : cls.properties) {
     auto const makeRat = [&] (const Type& ty) -> RepoAuthType {
       if (!ty.subtypeOf(BCell)) return RepoAuthType{};
       if (ty.subtypeOf(BBottom)) {
@@ -1341,8 +1349,12 @@ void emit_class(EmitUnitState& state, UnitEmitter& ue, PreClassEmitter* pce,
     auto const attrs = prop.attrs;
     if (attrs & AttrPrivate) {
       propTy = privPropTy((attrs & AttrStatic) ? privateStatics : privateProps);
-    } else if ((attrs & AttrPublic) && (attrs & AttrStatic)) {
-      propTy = state.index.lookup_public_static(Context{}, &cls, prop.name);
+    } else if ((attrs & (AttrPublic|AttrProtected)) && (attrs & AttrStatic)) {
+      propTy = [&] {
+        auto const it = publicStatics.find(prop.name);
+        if (it == end(publicStatics)) return Type{};
+        return it->second.ty;
+      }();
     }
 
     pce->addProperty(

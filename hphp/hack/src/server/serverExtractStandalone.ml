@@ -379,7 +379,7 @@ let rec string_of_hint hint =
         hf_param_kinds;
         hf_param_mutability = _;
         hf_variadic_ty;
-        hf_cap = _;
+        hf_ctxs = _;
         (* TODO(vmladenov) support capability types here *)
         hf_return_ty;
         hf_is_mutable_return = _;
@@ -462,6 +462,8 @@ let rec string_of_hint hint =
     Printf.sprintf "(%s)" (concat_map ~sep:" & " ~f:string_of_hint hints)
   | Hany -> extract_standalone_any
   | Herr -> extract_standalone_any
+  | Hfun_context name -> "ctx " ^ name
+  | Hvar name -> name
 
 let maybe_string_of_user_attribute { ua_name; ua_params } =
   let name = snd ua_name in

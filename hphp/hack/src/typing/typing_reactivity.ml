@@ -486,3 +486,195 @@ let get_adjusted_return_type env receiver_info ret_ty =
   | Some cond_fty ->
     try_substitute_type_with_condition env cond_fty.ft_ret.et_type ret_ty
     |> Option.value ~default:(env, ret_ty)
+
+(* TODO(coeffects) rewrite below after basic_reactivity_check goes away *)
+(* BEGIN logic from Typed AST check in basic_reactivity_check goes away *)
+
+let expr_is_valid_owned_arg e : bool =
+  let open Aast in
+  match snd e with
+  | Call ((_, Id (_, id)), _, _, _) ->
+    String.equal id SN.Rx.mutable_ || String.equal id SN.Rx.move
+  | _ -> false
+
+(* true if expression is valid argument for __Mutable parameter:
+  - Rx\move(owned-local)
+  - Rx\mutable(call or new)
+  - owned-or-borrowed-local *)
+let expr_is_valid_borrowed_arg env e : bool =
+  let open Aast in
+  expr_is_valid_owned_arg e
+  ||
+  match snd e with
+  | Callconv (Ast_defs.Pinout, (_, Lvar (_, id)))
+  | Lvar (_, id) ->
+    Env.local_is_mutable ~include_borrowed:true env id
+  | This
+    when Option.equal
+           Typing_defs.equal_param_mutability
+           (Typing_env.function_is_mutable env)
+           (Some Typing_defs.Param_borrowed_mutable) ->
+    true
+  | _ -> false
+
+(* basic reactivity checks:
+  X no superglobals in reactive context
+  X no static property accesses
+  X no append calls *)
+let rec is_byval_collection_or_string_or_any_type env ty =
+  let check ty =
+    let open Aast in
+    let (env, ty) = Env.expand_type env ty in
+    match get_node ty with
+    | Toption inner -> is_byval_collection_or_string_or_any_type env inner
+    | Tclass ((_, x), _, _) ->
+      String.equal x SN.Collections.cVec
+      || String.equal x SN.Collections.cDict
+      || String.equal x SN.Collections.cKeyset
+    | Tvarray _
+    | Tdarray _
+    | Tvarray_or_darray _
+    | Ttuple _
+    | Tshape _ ->
+      true
+    | Tprim Tstring
+    | Tdynamic
+    | Tany _ ->
+      true
+    | Tunion tyl ->
+      List.for_all tyl ~f:(is_byval_collection_or_string_or_any_type env)
+    | Tintersection tyl ->
+      List.exists tyl ~f:(is_byval_collection_or_string_or_any_type env)
+    | Tgeneric _
+    | Tnewtype _
+    | Tdependent _ ->
+      (* FIXME we should probably look at the upper bounds here. *)
+      false
+    | Terr
+    | Tnonnull
+    | Tprim _
+    | Tobject
+    | Tfun _
+    | Tvar _
+    | Taccess _ ->
+      false
+    | Tunapplied_alias _ ->
+      Typing_defs.error_Tunapplied_alias_in_illegal_context ()
+  in
+
+  let (_, tl) = Typing_utils.get_concrete_supertypes env ty in
+  List.for_all tl ~f:check
+
+let rec is_valid_mutable_subscript_expression_target env v =
+  let open Aast in
+  match v with
+  | ((_, ty), Lvar _) -> is_byval_collection_or_string_or_any_type env ty
+  | ((_, ty), Array_get (e, _)) ->
+    is_byval_collection_or_string_or_any_type env ty
+    && is_valid_mutable_subscript_expression_target env e
+  | ((_, ty), Obj_get (e, _, _, _)) ->
+    is_byval_collection_or_string_or_any_type env ty
+    && ( is_valid_mutable_subscript_expression_target env e
+       || expr_is_valid_borrowed_arg env e )
+  | _ -> false
+
+let is_valid_append_target _env ty =
+  (* TODO(coeffects) move this to typing.ml and completely redesign
+     the line below (as it was in Tast_check) doesn't do the right thing *)
+  (* let (_env, ty) = Env.expand_type _env ty in *)
+  match get_node ty with
+  | Tclass ((_, n), _, []) ->
+    String.( <> ) n SN.Collections.cVector
+    && String.( <> ) n SN.Collections.cSet
+    && String.( <> ) n SN.Collections.cMap
+  | Tclass ((_, n), _, [_]) ->
+    String.( <> ) n SN.Collections.cVector
+    && String.( <> ) n SN.Collections.cSet
+  | Tclass ((_, n), _, [_; _]) -> String.( <> ) n SN.Collections.cMap
+  | _ -> true
+
+let check_assignment_or_unset_target
+    ~is_assignment
+    ?append_pos_opt
+    env
+    te1
+    capability_available
+    capability_required =
+  let fail =
+    Errors.op_coeffect_error
+      ~locally_available:(Typing_print.coeffects env capability_available)
+      ~available_pos:(Typing_defs.get_pos capability_available)
+      ~required:(Typing_print.coeffects env capability_required)
+      ~err_code:(Error_codes.Typing.err_code Error_codes.Typing.OpCoeffects)
+  in
+  (* Check for modifying immutable objects *)
+  let ((p, _), _) = te1 in
+  let open Aast in
+  match snd te1 with
+  (* Setting mutable locals is okay *)
+  | Obj_get (e1, _, _, _) when expr_is_valid_borrowed_arg env e1 -> ()
+  | Array_get (((_, ty1), _), i)
+    when is_assignment && not (is_valid_append_target env ty1) ->
+    let is_append = Option.is_none i in
+    let msg_prefix =
+      if is_append then
+        "Appending to a Hack Collection object"
+      else
+        "Assigning to an element of a Hack Collection object via `[]`"
+    in
+    fail msg_prefix (Option.value append_pos_opt ~default:p)
+  | Array_get (e1, _)
+    when expr_is_valid_borrowed_arg env e1
+         || is_valid_mutable_subscript_expression_target env e1 ->
+    ()
+  | Class_get _ ->
+    (* we already report errors about statics in rx context, no need to do it twice *)
+    ()
+  | Obj_get _
+  | Array_get _ ->
+    if is_assignment then
+      fail
+        ( "This object's property is being mutated (used as an lvalue)"
+        ^ "\nSetting non-mutable object properties" )
+        p
+    else
+      fail "Non-mutable argument for `unset`" p
+  | _ -> ()
+
+(* END logic from Typed AST check in basic_reactivity_check goes away *)
+
+let check_assignment env ((append_pos_opt, _), te_) =
+  if TypecheckerOptions.unsafe_rx (Env.get_tcopt env) then
+    env
+  else
+    let open Ast_defs in
+    match te_ with
+    | Aast.Unop ((Uincr | Udecr | Upincr | Updecr), te1)
+    | Aast.Binop (Eq _, te1, _) ->
+      Typing_local_ops.(
+        check_local_capability
+          Capabilities.(mk writeProperty)
+          (check_assignment_or_unset_target
+             ~is_assignment:true
+             ~append_pos_opt
+             env
+             te1)
+          env)
+    | _ -> env
+
+let check_unset_target env tel =
+  if TypecheckerOptions.unsafe_rx (Env.get_tcopt env) then
+    env
+  else
+    Typing_local_ops.(
+      check_local_capability
+        Capabilities.(mk writeProperty)
+        (fun available required ->
+          List.iter tel ~f:(fun te ->
+              check_assignment_or_unset_target
+                ~is_assignment:false
+                env
+                te
+                available
+                required))
+        env)

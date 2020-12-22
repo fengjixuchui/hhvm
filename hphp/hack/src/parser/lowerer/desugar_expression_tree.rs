@@ -165,8 +165,8 @@ fn wrap_fun_<TF>(
         params,
         body,
         fun_kind: ast::FunKind::FSync,
-        cap: ast::TypeHint((), None),        // TODO(T70095684)
-        unsafe_cap: ast::TypeHint((), None), // TODO(T70095684)
+        ctxs: None,        // TODO(T70095684)
+        unsafe_ctxs: None, // TODO(T70095684)
         user_attributes: vec![],
         file_attributes: vec![],
         external: false,
@@ -830,7 +830,7 @@ fn merge_positions(positions: &[&Pos]) -> Pos {
 /// placeholder variables.
 ///
 /// ```
-/// $c = Code`__splice__($x->foo()) + __splice__($y);
+/// $c = Code`${$x->foo()} + ${$y};
 /// $c_after = Code`$__splice_1 + $__splice_2`;
 /// ```
 ///

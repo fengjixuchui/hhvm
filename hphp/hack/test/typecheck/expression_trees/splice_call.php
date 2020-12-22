@@ -5,7 +5,7 @@
 function foo(
   ExprTree<Code, Code::TAst, (function(ExampleString): ExampleInt)> $x,
 ): void {
-  $fun_call = Code`(__splice__($x))("baz")`;
+  $fun_call = Code`(${$x})("baz")`;
 }
 
 //// BEGIN DEFS
@@ -146,7 +146,7 @@ class Code {
   }
 }
 
-final class ExprTree<TVisitor, TResult, TInfer>{
+final class ExprTree<TVisitor, TResult, +TInfer>{
   public function __construct(
     private ?ExprPos $pos,
     private string $filepath,

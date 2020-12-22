@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<3122311ac53b7b29aec0255a273072df>>
+// @generated SignedSource<<7b982cf93dc707dc38194b0b9b666979>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
@@ -601,8 +601,8 @@ pub struct Fun_<Ex, Fb, En, Hi> {
     pub where_constraints: Vec<WhereConstraintHint>,
     pub variadic: FunVariadicity<Ex, Fb, En, Hi>,
     pub params: Vec<FunParam<Ex, Fb, En, Hi>>,
-    pub cap: TypeHint<Hi>,
-    pub unsafe_cap: TypeHint<Hi>,
+    pub ctxs: Option<Contexts>,
+    pub unsafe_ctxs: Option<Contexts>,
     pub body: FuncBody<Ex, Fb, En, Hi>,
     pub fun_kind: ast_defs::FunKind,
     pub user_attributes: Vec<UserAttribute<Ex, Fb, En, Hi>>,
@@ -1030,6 +1030,7 @@ pub struct ClassTypeconst<Ex, Fb, En, Hi> {
     pub user_attributes: Vec<UserAttribute<Ex, Fb, En, Hi>>,
     pub span: Pos,
     pub doc_comment: Option<DocComment>,
+    pub is_ctx: bool,
 }
 
 #[derive(
@@ -1107,8 +1108,8 @@ pub struct Method_<Ex, Fb, En, Hi> {
     pub where_constraints: Vec<WhereConstraintHint>,
     pub variadic: FunVariadicity<Ex, Fb, En, Hi>,
     pub params: Vec<FunParam<Ex, Fb, En, Hi>>,
-    pub cap: TypeHint<Hi>,
-    pub unsafe_cap: TypeHint<Hi>,
+    pub ctxs: Option<Contexts>,
+    pub unsafe_ctxs: Option<Contexts>,
     pub body: FuncBody<Ex, Fb, En, Hi>,
     pub fun_kind: ast_defs::FunKind,
     pub user_attributes: Vec<UserAttribute<Ex, Fb, En, Hi>>,

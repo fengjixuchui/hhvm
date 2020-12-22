@@ -10,7 +10,7 @@ function test(): void {
   $x = 1;
 
   $_ = Code`() ==> {
-    __splice__(lift($x + 1));
+    ${lift($x + 1)};
     // Make sure that typing environment doesn't escape past splice
     $x + 1;
     return;
@@ -155,7 +155,7 @@ class Code {
   }
 }
 
-final class ExprTree<TVisitor, TResult, TInfer>{
+final class ExprTree<TVisitor, TResult, +TInfer>{
   public function __construct(
     private ?ExprPos $pos,
     private string $filepath,

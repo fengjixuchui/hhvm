@@ -62,7 +62,7 @@ module Classes = struct
 
   let cIAsyncDisposable = "\\IAsyncDisposable"
 
-  let cElt = "\\HH\\Elt"
+  let cEnumMember = "\\HH\\EnumMember"
 
   let cExprTree = "\\ExprTree"
 end
@@ -823,6 +823,10 @@ module Coeffects = struct
   let capability = "$#capability"
 
   let local_capability = "$#local_capability"
+
+  let contexts = "HH\\Contexts"
+
+  let unsafe_contexts = contexts ^ "\\Unsafe"
 end
 
 module Capabilities = struct

@@ -84,7 +84,9 @@ pub(crate) fn has_reified_type_constraint(env: &Env, h: &aast::Hint) -> Reificat
         | Hint_::Hintersection(_)
         | Hint_::Hshape(_)
         | Hint_::Hfun(_)
-        | Hint_::Haccess(_, _) => ReificationLevel::Not,
+        | Hint_::Haccess(_, _)
+        | Hint_::HfunContext(_)
+        | Hint_::Hvar(_) => ReificationLevel::Not,
         // Not found in the original AST
         Hint_::Herr | Hint_::Hany => panic!("Should be a naming error"),
         Hint_::Habstr(_, _) => panic!("TODO Unimplemented: Not in the original AST"),
@@ -112,7 +114,9 @@ fn remove_awaitable(h: aast::Hint) -> aast::Hint {
         | Hint_::Hshape(_)
         | Hint_::Hfun(_)
         | Hint_::Haccess(_, _)
-        | Hint_::Happly(_, _) => Hint(pos, h_),
+        | Hint_::Happly(_, _)
+        | Hint_::HfunContext(_)
+        | Hint_::Hvar(_) => Hint(pos, h_),
         Hint_::Herr
         | Hint_::Hany
         | Hint_::Hmixed
@@ -213,6 +217,9 @@ pub(crate) fn remove_erased_generics(env: &Env, h: aast::Hint) -> aast::Hint {
             | Hint_::Hthis
             | Hint_::Hnothing
             | Hint_::Hdynamic => panic!("TODO Unimplemented Did not exist on legacy AST"),
+            Hint_::HfunContext(_) | Hint_::Hvar(_) => {
+                panic!("Coeffects are currently erased during compilation")
+            }
         };
         Hint(pos, Box::new(h_))
     }

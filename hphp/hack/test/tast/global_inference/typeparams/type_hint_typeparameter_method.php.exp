@@ -1,6 +1,6 @@
 Errors:
   [3:14-17] Wrong number of type arguments (expected 2, got 0)
-  [54:13-16] Definition is here
+  [56:13-16] Definition is here
 [(Fun
     { f_span = [3:1-6:2]; f_annotation = (); f_mode = Mpartial;
       f_ret = ((void), None); f_name = ([3:10-13], "\\foo"); f_tparams = [];
@@ -14,10 +14,7 @@ Errors:
          param_expr = None; param_callconv = None;
          param_user_attributes = []; param_visibility = None }
         ];
-      f_cap =
-      (((HH\Capabilities\AccessStaticVariable & HH\Capabilities\WriteProperty & HH\Capabilities\Output)),
-       None);
-      f_unsafe_cap = ((mixed), None);
+      f_ctxs = None; f_unsafe_ctxs = None;
       f_body =
       { fb_ast =
         [([4:3-18],

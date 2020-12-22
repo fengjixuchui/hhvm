@@ -6,7 +6,7 @@ class A {
 }
 
 <<__Rx>>
-function f(A $a): void {
+function f(A $a)[]: void {
   // ERROR
   unset($a->v);
 }

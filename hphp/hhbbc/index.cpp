@@ -200,10 +200,9 @@ struct PublicSPropEntry {
   Type initializerType;
   const TypeConstraint* tc;
   uint32_t refinements;
-  bool everModified;
   /*
    * This flag is set during analysis to indicate that we resolved the
-   * intial value (and updated it on the php::Class). This doesn't
+   * initial value (and updated it on the php::Class). This doesn't
    * need to be atomic, because only one thread can resolve the value
    * (the one processing the 86sinit), and it's been joined by the
    * time we read the flag in refine_public_statics.
@@ -287,7 +286,10 @@ PropState make_unknown_propstate(const php::Class* cls,
   auto ret = PropState{};
   for (auto& prop : cls->properties) {
     if (filter(prop)) {
-      ret[prop.name].ty = TCell;
+      auto& elem = ret[prop.name];
+      elem.ty = TCell;
+      elem.tc = &prop.typeConstraint;
+      elem.attrs = prop.attrs;
     }
   }
   return ret;
@@ -471,6 +473,12 @@ struct ClassInfo {
   ISStringToOneT<const ClassInfo*> implInterfaces;
 
   /*
+   * A vector of the included enums, in class order, mirroring the
+   * php::Class includedEnums vector.
+   */
+  CompactVector<const ClassInfo*> includedEnums;
+
+  /*
    * A (case-sensitive) map from class constant name to the php::Const
    * that it came from.  This map is flattened across the inheritance
    * hierarchy.
@@ -577,6 +585,20 @@ struct ClassInfo {
   bool derivedHasConstProp{false};
 
   const php::Class* phpType() const { return cls; }
+
+  /*
+   * Return true if this is derived from o.
+   */
+  bool derivedFrom(const ClassInfo& o) const {
+    if (this == &o) return true;
+    // If o is an interface, see if this declared it.
+    if (o.cls->attrs & AttrInterface) return implInterfaces.count(o.cls->name);
+    // Otherwise check for direct inheritance.
+    if (baseList.size() >= o.baseList.size()) {
+      return baseList[o.baseList.size() - 1] == &o;
+    }
+    return false;
+  }
 
   /*
    * Flags about the existence of various magic methods, or whether
@@ -699,20 +721,7 @@ bool Class::subtypeOfImpl(const Class& o) const {
   if (s1 || s2) return returnTrueOnMaybe || s1 == s2;
   auto c1 = val.right();
   auto c2 = o.val.right();
-
-  // If c2 is an interface, see if c1 declared it.
-  if (c2->cls->attrs & AttrInterface) {
-    if (c1->implInterfaces.count(c2->cls->name)) {
-      return true;
-    }
-    return false;
-  }
-
-  // Otherwise check for direct inheritance.
-  if (c1->baseList.size() >= c2->baseList.size()) {
-    return c1->baseList[c2->baseList.size() - 1] == c2;
-  }
-  return false;
+  return c1->derivedFrom(*c2);
 }
 
 bool Class::mustBeSubtypeOf(const Class& o) const {
@@ -1515,8 +1524,9 @@ bool build_class_constants(BuildClsInfo& info,
         continue;
       }
 
-      // A constant from an interface collides with an existing constant.
-      if (rparent->cls->attrs & AttrInterface) {
+      // A constant from an interface or from an included enum collides
+      // with an existing constant.
+      if (rparent->cls->attrs & (AttrInterface | AttrEnum)) {
         ITRACE(2,
                "build_cls_info_rec failed for `{}' because "
                "`{}' was defined by both `{}' and `{}'\n",
@@ -1809,6 +1819,13 @@ bool build_cls_info_rec(BuildClsInfo& info,
     if (!build_cls_info_rec(info, trait, true)) return false;
   }
 
+  for (auto const included_enum : rparent->includedEnums) {
+    if (!enforce_in_maybe_sealed_parent_whitelist(rparent, included_enum)) {
+      return false;
+    }
+    if (!build_cls_info_rec(info, included_enum, true)) return false;
+  }
+
   if (rparent->cls->attrs & AttrInterface) {
     /*
      * Make a flattened table of all the interfaces implemented by the class.
@@ -1923,6 +1940,7 @@ struct PhpTypeHelper<php::Class> {
     if (cls->parentName) fn(cls->parentName);
     for (auto& i : cls->interfaceNames) fn(i);
     for (auto& t : cls->usedTraitNames) fn(t);
+    for (auto& t : cls->includedEnumNames) fn(t);
   }
 
   static std::string name() { return "class"; }
@@ -2522,6 +2540,18 @@ void resolve_combinations(ClassNamingEnv& env,
     cinfo->declInterfaces.push_back(iface);
   }
 
+  for (auto& included_enum_name : cls->includedEnumNames) {
+    auto const included_enum = map.at(included_enum_name);
+    if (!(included_enum->cls->attrs & AttrEnum)) {
+      ITRACE(2,
+             "Resolve combinations failed for `{}' because `{}' "
+             "is not an enum\n",
+             cls->name, included_enum_name);
+      return;
+    }
+    cinfo->includedEnums.push_back(included_enum);
+  }
+
   for (auto& tname : cls->usedTraitNames) {
     auto const trait = map.at(tname);
     if (!(trait->cls->attrs & AttrTrait)) {
@@ -2620,9 +2650,20 @@ void compute_subclass_list_rec(IndexData& index,
   }
 }
 
+void compute_included_enums_list_rec(IndexData& index,
+                               ClassInfo* cinfo,
+                               ClassInfo* csub) {
+  for (auto const cincluded_enum : csub->includedEnums) {
+    auto const cie = const_cast<ClassInfo*>(cincluded_enum);
+    cie->subclassList.push_back(cinfo);
+    compute_included_enums_list_rec(index, cinfo, cie);
+  }
+}
+
 void compute_subclass_list(IndexData& index) {
   trace_time _("compute subclass list");
   auto fixupTraits = false;
+  auto fixupEnums = false;
   for (auto& cinfo : index.allClassInfos) {
     if (cinfo->cls->attrs & AttrInterface) continue;
     for (auto& cparent : cinfo->baseList) {
@@ -2632,6 +2673,12 @@ void compute_subclass_list(IndexData& index) {
         cinfo->usedTraits.size()) {
       fixupTraits = true;
       compute_subclass_list_rec(index, cinfo.get(), cinfo.get());
+    }
+    // Add the included enum lists if cinfo is an enum
+    if (!(cinfo->cls->attrs & AttrEnum) &&
+        cinfo->cls->includedEnumNames.size()) {
+      fixupEnums = true;
+      compute_included_enums_list_rec(index, cinfo.get(), cinfo.get());
     }
     // Also add instantiable classes to their interface's subclassLists
     if (cinfo->cls->attrs & (AttrTrait | AttrEnum | AttrAbstract)) continue;
@@ -2643,9 +2690,10 @@ void compute_subclass_list(IndexData& index) {
 
   for (auto& cinfo : index.allClassInfos) {
     auto& sub = cinfo->subclassList;
-    if (fixupTraits && cinfo->cls->attrs & AttrTrait) {
-      // traits can be reached by multiple paths, so we need to uniquify
-      // their subclassLists.
+    if ((fixupTraits && cinfo->cls->attrs & AttrTrait) ||
+        (fixupEnums && cinfo->cls->attrs & AttrEnum)) {
+      // traits and enums can be reached by multiple paths, so we need to
+      // uniquify their subclassLists.
       std::sort(begin(sub), end(sub));
       sub.erase(
         std::unique(begin(sub), end(sub)),
@@ -3504,77 +3552,6 @@ visit_parent_cinfo(const ClassInfo* cinfo, F fun) -> decltype(fun(cinfo)) {
   return {};
 }
 
-PublicSPropEntry lookup_public_static_impl(
-  const IndexData& data,
-  const ClassInfo* cinfo,
-  SString prop
-) {
-  auto const noInfo = PublicSPropEntry{TInitCell, TInitCell, nullptr, 0, true};
-
-  if (data.allPublicSPropsUnknown) return noInfo;
-
-  const ClassInfo* knownCInfo = nullptr;
-  auto const knownClsPart = visit_parent_cinfo(
-    cinfo,
-    [&] (const ClassInfo* ci) -> const PublicSPropEntry* {
-      auto const it = ci->publicStaticProps.find(prop);
-      if (it != end(ci->publicStaticProps)) {
-        knownCInfo = ci;
-        return &it->second;
-      }
-      return nullptr;
-    }
-  );
-
-  auto const unkPart = [&]() -> const Type* {
-    auto unkIt = data.unknownClassSProps.find(prop);
-    if (unkIt != end(data.unknownClassSProps)) {
-      return &unkIt->second.first;
-    }
-    return nullptr;
-  }();
-
-  if (knownClsPart == nullptr) {
-    return noInfo;
-  }
-
-  for (auto const& prop_it : knownCInfo->cls->properties) {
-    if (prop_it.name == prop && (prop_it.attrs & AttrIsConst)) {
-      return *knownClsPart;
-    }
-  }
-
-  // NB: Inferred type can be TBottom here if the property is never set to a
-  // value which can satisfy its type constraint. Such properties can't exist at
-  // runtime.
-
-  if (unkPart != nullptr) {
-    return PublicSPropEntry {
-      union_of(
-        knownClsPart->inferredType,
-        *unkPart
-      ),
-      knownClsPart->initializerType,
-      nullptr,
-      0,
-      true
-    };
-  }
-  return *knownClsPart;
-}
-
-PublicSPropEntry lookup_public_static_impl(
-  const IndexData& data,
-  const php::Class* cls,
-  SString name
-) {
-  auto const cls_it = data.classInfo.find(cls->name);
-  if (cls_it == end(data.classInfo)) {
-    return PublicSPropEntry{TInitCell, TInitCell, nullptr, 0, true};
-  }
-  return lookup_public_static_impl(data, cls_it->second, name);
-}
-
 Type lookup_public_prop_impl(
   const IndexData& data,
   const ClassInfo* cinfo,
@@ -3611,6 +3588,454 @@ Type lookup_public_prop_impl(
     ty |= initialTy;
   }
   return ty;
+}
+
+// Return the best known type for the given static public/protected
+// property from the Index.
+Type calc_public_static_type(const IndexData& data,
+                             const ClassInfo* cinfo,
+                             const php::Prop& prop,
+                             SString propName) {
+  assertx(prop.attrs & AttrStatic);
+  assertx(prop.attrs & (AttrPublic|AttrProtected));
+  assertx(!(prop.attrs & AttrPrivate));
+  assertx(propName);
+
+  // We haven't recorded any public static information yet, or we saw
+  // a set using both an unknown class and prop name.
+  if (data.allPublicSPropsUnknown) return TInitCell;
+
+  // The type we know from sets using a known class and prop name.
+  auto const knownClsPart = [&] {
+    auto const it = cinfo->publicStaticProps.find(propName);
+    if (it == end(cinfo->publicStaticProps)) return TInitCell;
+    return it->second.inferredType;
+  }();
+
+  // Const properties don't need the unknown part because they can
+  // only be set with an initial value, which will always be known.
+  if (prop.attrs & AttrIsConst) return knownClsPart;
+
+  // The type we know from sets with just a known prop name. Since any
+  // of those potentially could be affecting our desired prop, we need
+  // to union those into the result.
+  auto const unknownClsPart = [&] {
+    auto const it = data.unknownClassSProps.find(propName);
+    if (it == end(data.unknownClassSProps)) return TBottom;
+    return it->second.first;
+  }();
+
+  // NB: Type can be TBottom here if the property is never set to a
+  // value which can satisfy its type constraint. Such properties
+  // can't exist at runtime.
+
+  return remove_uninit(union_of(knownClsPart, unknownClsPart));
+}
+
+// Test if the given property (declared in `cls') is accessible in the
+// given context (null if we're not in a class).
+bool static_is_accessible(const ClassInfo* clsCtx,
+                          const ClassInfo* cls,
+                          const php::Prop& prop) {
+  assertx(prop.attrs & AttrStatic);
+  switch (prop.attrs & (AttrPublic|AttrProtected|AttrPrivate)) {
+    case AttrPublic:
+      // Public is accessible everywhere
+      return true;
+    case AttrProtected:
+      // Protected is accessible from both derived classes and parent
+      // classes
+      return clsCtx && (clsCtx->derivedFrom(*cls) || cls->derivedFrom(*clsCtx));
+    case AttrPrivate:
+      // Private is only accessible from within the declared class
+      return clsCtx == cls;
+  }
+  always_assert(false);
+}
+
+// Return true if the given class can possibly throw when its
+// initialized. Initialization can happen when an object of that class
+// is instantiated, or (more importantly) when static properties are
+// accessed.
+bool class_init_might_raise(IndexData& data,
+                            Context ctx,
+                            const ClassInfo* cinfo) {
+  // Check this class and all of its parents for possible inequivalent
+  // redeclarations or bad initial values.
+  do {
+    // Be conservative for now if we have unflattened traits.
+    if (!cinfo->traitProps.empty()) return true;
+    if (cinfo->hasBadRedeclareProp) return true;
+    if (cinfo->hasBadInitialPropValues) {
+      add_dependency(data, cinfo->cls, ctx, Dep::PropBadInitialValues);
+      return true;
+    }
+    cinfo = cinfo->parent;
+  } while (cinfo);
+  return false;
+}
+
+/*
+ * Calculate the effects of applying the given type against the
+ * type-constraints for the given prop. This includes the subtype
+ * which will succeed (if any), and if the type-constraint check might
+ * throw.
+ */
+PropMergeResult<> prop_tc_effects(const Index& index,
+                                  const ClassInfo* ci,
+                                  const php::Prop& prop,
+                                  const Type& val,
+                                  bool checkUB) {
+  assertx(prop.typeConstraint.validForProp());
+
+  using R = PropMergeResult<>;
+
+  // If we're not actually checking property type-hints, everything
+  // goes
+  if (RuntimeOption::EvalCheckPropTypeHints <= 0) return R{ val, TriBool::No };
+
+  auto const ctx = Context { nullptr, nullptr, ci->cls };
+
+  auto const check = [&] (const TypeConstraint& tc, const Type& t) {
+    // If the type as is satisfies the constraint, we won't throw and
+    // the type is unchanged.
+    if (index.satisfies_constraint(ctx, t, tc)) return R{ t, TriBool::No };
+    // Otherwise adjust the type. If we get a Bottom we'll definitely
+    // throw. We already know the type doesn't completely satisfy the
+    // constraint, so we'll at least maybe throw.
+    auto adjusted = adjust_type_for_prop(index, *ctx.cls, &tc, t);
+    auto const throws = yesOrMaybe(adjusted.subtypeOf(BBottom));
+    return R{ std::move(adjusted), throws };
+  };
+
+  // First check the main type-constraint.
+  auto result = check(prop.typeConstraint, val);
+  // If we're not checking generics upper-bounds, or if we already
+  // know we'll fail, we're done.
+  if (!checkUB ||
+      RuntimeOption::EvalEnforceGenericsUB <= 0 ||
+      result.throws == TriBool::Yes) {
+    return result;
+  }
+
+  // Otherwise check every generic upper-bound. We'll feed the
+  // narrowed type into each successive round. If we reach the point
+  // where we'll know we'll definitely fail, just stop.
+  for (auto ub : prop.ubs) {
+    applyFlagsToUB(ub, prop.typeConstraint);
+    auto r = check(ub, result.adjusted);
+    result.throws &= r.throws;
+    result.adjusted = std::move(r.adjusted);
+    if (result.throws == TriBool::Yes) break;
+  }
+
+  return result;
+}
+
+/*
+ * Lookup data for the static property named `propName', starting from
+ * the specified class `start'. If `propName' is nullptr, then any
+ * accessible static property in the class hierarchy is considered. If
+ * `startOnly' is specified, if the property isn't found in `start',
+ * it is treated as a lookup failure. Otherwise the lookup continues
+ * in all parent classes of `start', until a property is found, or
+ * until all parent classes have been exhausted (`startOnly' is used
+ * to avoid redundant class hierarchy walks). `clsCtx' is the current
+ * context, converted to a ClassInfo* (or nullptr if not in a class).
+*/
+PropLookupResult<> lookup_static_impl(IndexData& data,
+                                      Context ctx,
+                                      const ClassInfo* clsCtx,
+                                      const PropertiesInfo& privateProps,
+                                      const ClassInfo* start,
+                                      SString propName,
+                                      bool startOnly) {
+  ITRACE(
+    6, "lookup_static_impl: {} {} {}\n",
+    clsCtx ? clsCtx->cls->name->toCppString() : std::string{"-"},
+    start->cls->name,
+    propName ? propName->toCppString() : std::string{"*"}
+  );
+  Trace::Indent _;
+
+  auto const type = [&] (const php::Prop& prop,
+                         const ClassInfo* ci) {
+    switch (prop.attrs & (AttrPublic|AttrProtected|AttrPrivate)) {
+      case AttrPublic:
+      case AttrProtected:
+        return calc_public_static_type(data, ci, prop, prop.name);
+      case AttrPrivate: {
+        assertx(clsCtx == ci);
+        auto const& privateStatics = privateProps.privateStatics();
+        auto const it = privateStatics.find(prop.name);
+        if (it == end(privateStatics)) return TInitCell;
+        return remove_uninit(it->second.ty);
+      }
+    }
+    always_assert(false);
+  };
+
+  auto const initMightRaise = class_init_might_raise(data, ctx, start);
+
+  auto const fromProp = [&] (const php::Prop& prop,
+                             const ClassInfo* ci) {
+    // The property was definitely found. Compute its attributes
+    // from the prop metadata.
+    return PropLookupResult<>{
+      type(prop, ci),
+      propName,
+      TriBool::Yes,
+      yesOrNo(prop.attrs & AttrIsConst),
+      yesOrNo(prop.attrs & AttrLateInit),
+      initMightRaise
+    };
+  };
+
+  auto const notFound = [&] {
+    // The property definitely wasn't found.
+    return PropLookupResult<>{
+      TBottom,
+      propName,
+      TriBool::No,
+      TriBool::No,
+      TriBool::No,
+      false
+    };
+  };
+
+  if (!propName) {
+    // We don't statically know the prop name. Walk up the hierarchy
+    // and union the data for any accessible static property.
+    ITRACE(4, "no prop name, considering all accessible\n");
+    auto result = notFound();
+    visit_parent_cinfo(
+      start,
+      [&] (const ClassInfo* ci) {
+        for (auto const& prop : ci->cls->properties) {
+          if (!(prop.attrs & AttrStatic) ||
+              !static_is_accessible(clsCtx, ci, prop)) {
+            ITRACE(
+              6, "skipping inaccessible {}::${}\n",
+              ci->cls->name, prop.name
+            );
+            continue;
+          }
+          if (ctx.unit) {
+            add_dependency(data, prop.name, ctx, Dep::PublicSPropName);
+          }
+          auto const r = fromProp(prop, ci);
+          ITRACE(6, "including {}:${} {}\n", ci->cls->name, prop.name, show(r));
+          result |= r;
+        }
+        // If we're only interested in the starting class, don't walk
+        // up to the parents.
+        return startOnly;
+      }
+    );
+    return result;
+  }
+
+  // We statically know the prop name. Walk up the hierarchy and stop
+  // at the first matching property and use that data.
+  assertx(!startOnly);
+  auto const result = visit_parent_cinfo(
+    start,
+    [&] (const ClassInfo* ci) -> folly::Optional<PropLookupResult<>> {
+      for (auto const& prop : ci->cls->properties) {
+        if (prop.name != propName) continue;
+        // We have a matching prop. If its not static or not
+        // accessible, the access will not succeed.
+        if (!(prop.attrs & AttrStatic) ||
+            !static_is_accessible(clsCtx, ci, prop)) {
+          ITRACE(
+            6, "{}::${} found but inaccessible, stopping\n",
+            ci->cls->name, propName
+          );
+          return notFound();
+        }
+        // Otherwise its a match
+        if (ctx.unit) add_dependency(data, propName, ctx, Dep::PublicSPropName);
+        auto const r = fromProp(prop, ci);
+        ITRACE(6, "found {}:${} {}\n", ci->cls->name, propName, show(r));
+        return r;
+      }
+      return folly::none;
+    }
+  );
+  if (!result) {
+    // We walked up to all of the base classes and didn't find a
+    // property with a matching name. The access will fail.
+    ITRACE(6, "nothing found\n");
+    return notFound();
+  }
+  return *result;
+}
+
+/*
+ * Lookup the static property named `propName', starting from the
+ * specified class `start'. If an accessible property is found, then
+ * merge the given type `val' into the already known type for that
+ * property. If `propName' is nullptr, then any accessible static
+ * property in the class hierarchy is considered. If `startOnly' is
+ * specified, if the property isn't found in `start', then the nothing
+ * is done. Otherwise the lookup continues in all parent classes of
+ * `start', until a property is found, or until all parent classes
+ * have been exhausted (`startOnly' is to avoid redundant class
+ * hierarchy walks). `clsCtx' is the current context, converted to a
+ * ClassInfo* (or nullptr if not in a class). If `ignoreConst' is
+ * false, then AttrConst properties will not have their type
+ * modified. `mergePublic' is a lambda with the logic to merge a type
+ * for a public property (this is needed to avoid cyclic
+ * dependencies).
+ */
+template <typename F>
+PropMergeResult<> merge_static_type_impl(IndexData& data,
+                                         Context ctx,
+                                         F mergePublic,
+                                         PropertiesInfo& privateProps,
+                                         const ClassInfo* clsCtx,
+                                         const ClassInfo* start,
+                                         SString propName,
+                                         const Type& val,
+                                         bool checkUB,
+                                         bool ignoreConst,
+                                         bool startOnly) {
+  ITRACE(
+    6, "merge_static_type_impl: {} {} {} {}\n",
+    clsCtx ? clsCtx->cls->name->toCppString() : std::string{"-"},
+    start->cls->name,
+    propName ? propName->toCppString() : std::string{"*"},
+    show(val)
+  );
+  Trace::Indent _;
+
+  assertx(!val.subtypeOf(BBottom));
+
+  // Perform the actual merge for a given property, returning the
+  // effects of that merge.
+  auto const merge = [&] (const php::Prop& prop, const ClassInfo* ci) {
+    // First calculate the effects of the type-constraint.
+    auto const effects = prop_tc_effects(*data.m_index, ci, prop, val, checkUB);
+    // No point in merging if the type-constraint will always fail.
+    if (effects.throws == TriBool::Yes) {
+      ITRACE(
+        6, "tc would throw on {}::${} with {}, skipping\n",
+        ci->cls->name, prop.name, show(val)
+      );
+      return effects;
+    }
+    assertx(!effects.adjusted.subtypeOf(BBottom));
+
+    ITRACE(
+      6, "merging {} into {}::${}\n",
+      show(effects.adjusted), ci->cls->name, prop.name
+    );
+
+    switch (prop.attrs & (AttrPublic|AttrProtected|AttrPrivate)) {
+      case AttrPublic:
+      case AttrProtected:
+        mergePublic(ci, prop, unctx(effects.adjusted));
+        return effects;
+      case AttrPrivate: {
+        assertx(clsCtx == ci);
+        auto& statics = privateProps.privateStatics();
+        auto const it = statics.find(prop.name);
+        if (it != end(statics)) {
+          ITRACE(6, " {} |= {}\n", show(it->second.ty), show(effects.adjusted));
+          it->second.ty |= unctx(effects.adjusted);
+        }
+        return effects;
+      }
+    }
+    always_assert(false);
+  };
+
+  // If we don't find a property, then the mutation will definitely
+  // fail.
+  auto const notFound = [&] {
+    return PropMergeResult<>{
+      TBottom,
+      TriBool::Yes
+    };
+  };
+
+  if (!propName) {
+    // We don't statically know the prop name. Walk up the hierarchy
+    // and merge the type for any accessible static property.
+    ITRACE(6, "no prop name, considering all accessible\n");
+    auto result = notFound();
+    visit_parent_cinfo(
+      start,
+      [&] (const ClassInfo* ci) {
+        for (auto const& prop : ci->cls->properties) {
+          if (!(prop.attrs & AttrStatic) ||
+              !static_is_accessible(clsCtx, ci, prop)) {
+            ITRACE(
+              6, "skipping inaccessible {}::${}\n",
+              ci->cls->name, prop.name
+            );
+            continue;
+          }
+          if (!ignoreConst && (prop.attrs & AttrIsConst)) {
+            ITRACE(6, "skipping const {}::${}\n", ci->cls->name, prop.name);
+            continue;
+          }
+          result |= merge(prop, ci);
+        }
+        return startOnly;
+      }
+    );
+    return result;
+  }
+
+  // We statically know the prop name. Walk up the hierarchy and stop
+  // at the first matching property and merge the type there.
+  assertx(!startOnly);
+  auto result = visit_parent_cinfo(
+    start,
+    [&] (const ClassInfo* ci) -> folly::Optional<PropMergeResult<>> {
+      for (auto const& prop : ci->cls->properties) {
+        if (prop.name != propName) continue;
+        // We found a property with the right name, but its
+        // inaccessible from this context (or not even static). This
+        // mutation will fail, so we don't need to modify the type.
+        if (!(prop.attrs & AttrStatic) ||
+            !static_is_accessible(clsCtx, ci, prop)) {
+          ITRACE(
+            6, "{}::${} found but inaccessible, stopping\n",
+            ci->cls->name, propName
+          );
+          return notFound();
+        }
+        // Mutations to AttrConst properties will fail as well, unless
+        // it we want to override that behavior.
+        if (!ignoreConst && (prop.attrs & AttrIsConst)) {
+          ITRACE(
+            6, "{}:${} found but const, stopping\n",
+            ci->cls->name, propName
+          );
+          return notFound();
+        }
+        return merge(prop, ci);
+      }
+      return folly::none;
+    }
+  );
+  if (!result) {
+    ITRACE(6, "nothing found\n");
+    return notFound();
+  }
+
+  // If the mutation won't throw, we still need to check if the class
+  // initialization can throw. If we might already throw (or
+  // definitely will throw), this doesn't matter.
+  if (result->throws == TriBool::No) {
+    return PropMergeResult<>{
+      std::move(result->adjusted),
+      maybeOrNo(class_init_might_raise(data, ctx, start))
+    };
+  }
+  return *result;
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -5235,90 +5660,131 @@ Index::lookup_private_statics(const php::Class* cls,
   );
 }
 
-Type Index::lookup_public_static(Context ctx,
-                                 const Type& cls,
-                                 const Type& name) const {
-  if (!is_specialized_cls(cls)) return TInitCell;
+PropState Index::lookup_public_statics(const php::Class* cls) const {
+  auto const cinfo = [&] () -> const ClassInfo* {
+    auto const it = m_data->classInfo.find(cls->name);
+    if (it == end(m_data->classInfo)) return nullptr;
+    return it->second;
+  }();
 
-  auto const vname = tv(name);
-  if (!vname || vname->m_type != KindOfPersistentString) return TInitCell;
-  auto const sname = vname->m_data.pstr;
+  PropState state;
+  for (auto const& prop : cls->properties) {
+    if (!(prop.attrs & (AttrPublic|AttrProtected)) ||
+        !(prop.attrs & AttrStatic)) {
+      continue;
+    }
+    auto ty = cinfo
+      ? calc_public_static_type(*m_data, cinfo, prop, prop.name)
+      : TInitCell;
+    state.emplace(
+      prop.name,
+      PropStateElem<>{std::move(ty), &prop.typeConstraint, prop.attrs}
+    );
+  }
+  return state;
+}
 
-  if (ctx.unit) add_dependency(*m_data, sname, ctx, Dep::PublicSPropName);
+/*
+ * Entry point for static property lookups from the Index. Return
+ * metadata about a `cls'::`name' static property access in the given
+ * context.
+ */
+PropLookupResult<> Index::lookup_static(Context ctx,
+                                        const PropertiesInfo& privateProps,
+                                        const Type& cls,
+                                        const Type& name) const {
+  ITRACE(4, "lookup_static: {} {}::${}\n", show(ctx), show(cls), show(name));
+  Trace::Indent _;
+
+  // First try to obtain the property name as a static string
+  auto const sname = [&] () -> SString {
+    // Treat non-string names conservatively, but the caller should be
+    // checking this.
+    if (!name.subtypeOf(BStr)) return nullptr;
+    auto const vname = tv(name);
+    if (!vname || vname->m_type != KindOfPersistentString) return nullptr;
+    return vname->m_data.pstr;
+  }();
+
+  // Conservative result when we can't do any better. The type can be
+  // anything, and anything might throw.
+  auto const conservative = [&] {
+    ITRACE(4, "conservative\n");
+    return PropLookupResult<>{
+      TInitCell,
+      sname,
+      TriBool::Maybe,
+      TriBool::Maybe,
+      TriBool::Maybe,
+      true
+    };
+  };
+
+  // If we don't know what `cls' is, there's not much we can do.
+  if (!is_specialized_cls(cls)) return conservative();
 
   auto const dcls = dcls_of(cls);
-  if (dcls.cls.val.left()) return TInitCell;
+  if (dcls.cls.val.left()) return conservative();
   auto const cinfo = dcls.cls.val.right();
+
+  // Turn the context class into a ClassInfo* for convenience.
+  const ClassInfo* ctxCls = nullptr;
+  if (ctx.cls) {
+    // I don't think this can ever fail (we should always be able to
+    // resolve the class since we're currently processing it). If it
+    // does, be conservative.
+    auto const rCtx = resolve_class(ctx.cls);
+    if (rCtx.val.left()) return conservative();
+    ctxCls = rCtx.val.right();
+  }
 
   switch (dcls.type) {
     case DCls::Sub: {
-      auto ty = TBottom;
+      // We know that `cls' is at least dcls.type, but could be a
+      // subclass. For every subclass (including dcls.type itself),
+      // start the property lookup from there, and union together all
+      // the potential results. This could potentially visit a lot of
+      // parent classes redundently, so tell it not to look into
+      // parent classes, unless we're processing dcls.type.
+      folly::Optional<PropLookupResult<>> result;
       for (auto const sub : cinfo->subclassList) {
-        ty |= lookup_public_static_impl(
+        auto r = lookup_static_impl(
           *m_data,
+          ctx,
+          ctxCls,
+          privateProps,
           sub,
-          sname
-        ).inferredType;
-      }
-      return ty;
-    }
-    case DCls::Exact:
-      return lookup_public_static_impl(
-        *m_data,
-        cinfo,
-        sname
-      ).inferredType;
-  }
-  always_assert(false);
-}
-
-Type Index::lookup_public_static(Context ctx,
-                                 const php::Class* cls,
-                                 SString name) const {
-  if (ctx.unit) add_dependency(*m_data, name, ctx, Dep::PublicSPropName);
-  return lookup_public_static_impl(*m_data, cls, name).inferredType;
-}
-
-bool Index::lookup_public_static_immutable(const php::Class* cls,
-                                           SString name) const {
-  return !lookup_public_static_impl(*m_data, cls, name).everModified;
-}
-
-bool Index::lookup_public_static_maybe_late_init(const Type& cls,
-                                                 const Type& name) const {
-  auto const cinfo = [&] () -> const ClassInfo* {
-    if (!is_specialized_cls(cls)) {
-      return nullptr;
-    }
-    auto const dcls = dcls_of(cls);
-    switch (dcls.type) {
-    case DCls::Sub:   return nullptr;
-    case DCls::Exact: return dcls.cls.val.right();
-    }
-    not_reached();
-  }();
-  if (!cinfo) return true;
-
-  auto const vname = tv(name);
-  if (!vname || (vname && vname->m_type != KindOfPersistentString)) {
-    return true;
-  }
-  auto const sname = vname->m_data.pstr;
-
-  auto isLateInit = false;
-  visit_parent_cinfo(
-    cinfo,
-    [&] (const ClassInfo* ci) -> bool {
-      for (auto const& prop : ci->cls->properties) {
-        if (prop.name == sname) {
-          isLateInit = prop.attrs & AttrLateInit;
-          return true;
+          sname,
+          !sname && sub != cinfo
+        );
+        ITRACE(4, "{} -> {}\n", sub->cls->name, show(r));
+        if (!result) {
+          result.emplace(std::move(r));
+        } else {
+          *result |= r;
         }
       }
-      return false;
+      assertx(result.has_value());
+      ITRACE(4, "union -> {}\n", show(*result));
+      return *result;
     }
-  );
-  return isLateInit;
+    case DCls::Exact: {
+      // We know what exactly `cls' is. Just do the property lookup
+      // starting from there.
+      auto const r = lookup_static_impl(
+        *m_data,
+        ctx,
+        ctxCls,
+        privateProps,
+        cinfo,
+        sname,
+        false
+      );
+      ITRACE(4, "{} -> {}\n", cinfo->cls->name, show(r));
+      return r;
+    }
+  }
+  always_assert(false);
 }
 
 Type Index::lookup_public_prop(const Type& cls, const Type& name) const {
@@ -5366,19 +5832,7 @@ bool Index::lookup_class_init_might_raise(Context ctx, res::Class cls) const {
   return cls.val.match(
     []  (SString) { return true; },
     [&] (ClassInfo* cinfo) {
-      // Check this class and all of its parents for possible inequivalent
-      // redeclarations or bad initial values.
-      do {
-        // Be conservative for now if we have unflattened traits.
-        if (!cinfo->traitProps.empty()) return true;
-        if (cinfo->hasBadRedeclareProp) return true;
-        if (cinfo->hasBadInitialPropValues) {
-          add_dependency(*m_data, cinfo->cls, ctx, Dep::PropBadInitialValues);
-          return true;
-        }
-        cinfo = cinfo->parent;
-      } while (cinfo);
-      return false;
+      return class_init_might_raise(*m_data, ctx, cinfo);
     }
   );
 }
@@ -5392,6 +5846,182 @@ void Index::join_iface_vtable_thread() const {
 Slot
 Index::lookup_iface_vtable_slot(const php::Class* cls) const {
   return folly::get_default(m_data->ifaceSlotMap, cls, kInvalidSlot);
+}
+
+//////////////////////////////////////////////////////////////////////
+
+/*
+ * Entry point for static property type mutation from the Index. Merge
+ * `val' into the known type for any accessible `cls'::`name' static
+ * property. The mutation will be recovered into either
+ * `publicMutations' or `privateProps' depending on the properties
+ * found. Mutations to AttrConst properties are ignored, unless
+ * `ignoreConst' is true.
+ */
+PropMergeResult<> Index::merge_static_type(
+    Context ctx,
+    PublicSPropMutations& publicMutations,
+    PropertiesInfo& privateProps,
+    const Type& cls,
+    const Type& name,
+    const Type& val,
+    bool checkUB,
+    bool ignoreConst) const {
+  ITRACE(
+    4, "merge_static_type: {} {}::${} {}\n",
+    show(ctx), show(cls), show(name), show(val)
+  );
+  Trace::Indent _;
+
+  assertx(val.subtypeOf(BInitCell));
+
+  using R = PropMergeResult<>;
+
+  // In some cases we might try to merge Bottom if we're un
+  // unreachable code. This won't affect anything, so just skip out
+  // early.
+  if (val.subtypeOf(BBottom)) return R{ TBottom, TriBool::No };
+
+  // Try to turn the given property name into a static string
+  auto const sname = [&] () -> SString {
+    // Non-string names are treated conservatively here. The caller
+    // should be checking for these and doing the right thing.
+    if (!name.subtypeOf(BStr)) return nullptr;
+    auto const vname = tv(name);
+    if (!vname || vname->m_type != KindOfPersistentString) return nullptr;
+    return vname->m_data.pstr;
+  }();
+
+  // To be conservative, say we might throw and be conservative about
+  // conversions.
+  auto const conservative = [&] {
+    return PropMergeResult<>{
+      loosen_likeness(val),
+      TriBool::Maybe
+    };
+  };
+
+  // The case where we don't know `cls':
+  auto const unknownCls = [&] {
+    auto& statics = privateProps.privateStatics();
+
+    if (!sname) {
+      // Very bad case. We don't know `cls' or the property name. This
+      // mutation can be affecting anything, so merge it into all
+      // properties (this drops type information for p ublic
+      // properties).
+      ITRACE(4, "unknown class and prop. merging everything\n");
+      publicMutations.mergeUnknown(ctx);
+
+      // Private properties can only be affected if they're accessible
+      // in the current context.
+      if (!ctx.cls) return conservative();
+
+      for (auto& kv : statics) {
+        if (!ignoreConst && (kv.second.attrs & AttrIsConst)) continue;
+        kv.second.ty |=
+          unctx(adjust_type_for_prop(*this, *ctx.cls, kv.second.tc, val));
+      }
+      return conservative();
+    }
+
+    // Otherwise we don't know `cls', but do know the property
+    // name. We'll store this mutation separately and union it in to
+    // any lookup with the same name.
+    ITRACE(4, "unknown class. merging all props with name {}\n", sname);
+
+    publicMutations.mergeUnknownClass(sname, unctx(val));
+
+    // Assume that it could possibly affect any private property with
+    // the same name.
+    if (!ctx.cls) return conservative();
+    auto it = statics.find(sname);
+    if (it == end(statics)) return conservative();
+    if (!ignoreConst && (it->second.attrs & AttrIsConst)) return conservative();
+
+    it->second.ty |=
+      unctx(adjust_type_for_prop(*this, *ctx.cls, it->second.tc, val));
+    return conservative();
+  };
+
+  // check if we can determine the class.
+  if (!is_specialized_cls(cls)) return unknownCls();
+
+  auto const dcls = dcls_of(cls);
+  if (dcls.cls.val.left()) return unknownCls();
+  auto const cinfo = dcls.cls.val.right();
+
+  const ClassInfo* ctxCls = nullptr;
+  if (ctx.cls) {
+    auto const rCtx = resolve_class(ctx.cls);
+    // We should only be not able to resolve our own context if the
+    // class is not instantiable. In that case, the merge can't
+    // happen.
+    if (rCtx.val.left()) return R{ TBottom, TriBool::No };
+    ctxCls = rCtx.val.right();
+  }
+
+  auto const mergePublic = [&] (const ClassInfo* ci,
+                                const php::Prop& prop,
+                                const Type& val) {
+    publicMutations.mergeKnown(ci, prop, val);
+  };
+
+  switch (dcls.type) {
+    case DCls::Sub: {
+      // We know this class is either dcls.type, or a child class of
+      // it. For every child of dcls.type (including dcls.type
+      // itself), do the merge starting from it. To avoid redundant
+      // work, only iterate into parent classes if we're dcls.type
+      // (this is only a matter of efficiency. The merge is
+      // idiompotent).
+      folly::Optional<PropMergeResult<>> result;
+      for (auto const sub : cinfo->subclassList) {
+        auto r = merge_static_type_impl(
+          *m_data,
+          ctx,
+          mergePublic,
+          privateProps,
+          ctxCls,
+          sub,
+          sname,
+          val,
+          checkUB,
+          ignoreConst,
+          !sname && sub != cinfo
+        );
+        ITRACE(4, "{} -> {}\n", sub->cls->name, show(r));
+        if (!result) {
+          result.emplace(std::move(r));
+        } else {
+          *result |= r;
+        }
+      }
+      assertx(result.has_value());
+      ITRACE(4, "union -> {}\n", show(*result));
+      return *result;
+    }
+    case DCls::Exact: {
+      // We know the class exactly. Do the merge starting from only
+      // it.
+      auto const r = merge_static_type_impl(
+        *m_data,
+        ctx,
+        mergePublic,
+        privateProps,
+        ctxCls,
+        cinfo,
+        sname,
+        val,
+        checkUB,
+        ignoreConst,
+        false
+      );
+      ITRACE(4, "{} -> {}\n", cinfo->cls->name, show(r));
+      return r;
+    }
+  }
+  always_assert(false);
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -5410,7 +6040,8 @@ void Index::use_class_dependencies(bool f) {
 void Index::init_public_static_prop_types() {
   for (auto const& cinfo : m_data->allClassInfos) {
     for (auto const& prop : cinfo->cls->properties) {
-      if (!(prop.attrs & AttrPublic) || !(prop.attrs & AttrStatic)) {
+      if (!(prop.attrs & (AttrPublic|AttrProtected)) ||
+          !(prop.attrs & AttrStatic)) {
         continue;
       }
 
@@ -5444,7 +6075,7 @@ void Index::init_public_static_prop_types() {
           initial,
           &prop.typeConstraint,
           0,
-          true
+          false
         };
     }
   }
@@ -5728,6 +6359,7 @@ void Index::refine_private_statics(const php::Class* cls,
     auto& elem = cleanedState[prop.first];
     elem.ty = unctx(prop.second.ty);
     elem.tc = prop.second.tc;
+    elem.attrs = prop.second.attrs;
   }
 
   refine_private_propstate(m_data->privateStaticPropInfo, cls, cleanedState);
@@ -5917,7 +6549,6 @@ void Index::refine_public_statics(DependencyContextSet& deps) {
         show(effectiveType),
         show(kv.second.inferredType)
       );
-      always_assert(newType == TBottom || kv.second.everModified);
 
       // Put a limit on the refinements to ensure termination. Since we only
       // ever refine types, we can stop at any point and still maintain
@@ -5927,7 +6558,6 @@ void Index::refine_public_statics(DependencyContextSet& deps) {
           find_deps(*m_data, kv.first, Dep::PublicSPropName, deps);
         }
         kv.second.inferredType = std::move(effectiveType);
-        kv.second.everModified = newType != TBottom;
         ++kv.second.refinements;
       } else {
         FTRACE(
@@ -6077,173 +6707,53 @@ Index::could_be_related(const php::Class* cls,
 
 //////////////////////////////////////////////////////////////////////
 
-void PublicSPropMutations::merge(const Index& index,
-                                 Context ctx,
-                                 const Type& tcls,
-                                 const Type& name,
-                                 const Type& val,
-                                 bool ignoreConst) {
-  // Figure out which class this can affect.  If we have a DCls::Sub we have to
-  // assume it could affect any subclass, so we repeat this merge for all exact
-  // class types deriving from that base.
-  if (is_specialized_cls(tcls)) {
-    auto const dcls = dcls_of(tcls);
-    if (auto const cinfo = dcls.cls.val.right()) {
-      switch (dcls.type) {
-        case DCls::Exact:
-          return merge(index, ctx, cinfo, name, val, ignoreConst);
-        case DCls::Sub:
-          for (auto const sub : cinfo->subclassList) {
-            merge(index, ctx, sub, name, val, ignoreConst);
-          }
-          return;
-      }
-      not_reached();
-    }
-  }
-
-  merge(index, ctx, nullptr, name, val, ignoreConst);
+PublicSPropMutations::Data& PublicSPropMutations::get() {
+  if (!m_data) m_data = std::make_unique<Data>();
+  return *m_data;
 }
 
-void PublicSPropMutations::merge(const Index& index,
-                                 Context ctx,
-                                 ClassInfo* cinfo,
-                                 const Type& name,
-                                 const Type& val,
-                                 bool ignoreConst) {
-  FTRACE(2, "merge_public_static: {} {} {}\n",
-         cinfo ? cinfo->cls->name->data() : "<unknown>", show(name), show(val));
+void PublicSPropMutations::mergeKnown(const ClassInfo* ci,
+                                      const php::Prop& prop,
+                                      const Type& val) {
+  ITRACE(4, "PublicSPropMutations::mergeKnown: {} {} {}\n",
+         ci->cls->name->data(), prop.name, show(val));
 
-  auto get = [this] () -> Data& {
-    if (!m_data) m_data = std::make_unique<Data>();
-    return *m_data;
-  };
-
-  auto const vname = tv(name);
-  auto const unknownName = !vname ||
-    (vname && vname->m_type != KindOfPersistentString);
-
-  if (!cinfo) {
-    if (unknownName) {
-      /*
-       * We have a case here where we know neither the class nor the static
-       * property name.  This means we have to pessimize public static property
-       * types for the entire program.
-       *
-       * We could limit it to pessimizing them by merging the `val' type, but
-       * instead we just throw everything away---this optimization is not
-       * expected to be particularly useful on programs that contain any
-       * instances of this situation.
-       */
-      std::fprintf(
-        stderr,
-        "NOTE: had to mark everything unknown for public static "
-        "property types due to dynamic code.  -fanalyze-public-statics "
-        "will not help for this program.\n"
-        "NOTE: The offending code occured in this context: %s\n",
-        show(ctx).c_str()
-      );
-      get().m_nothing_known = true;
-      return;
-    }
-
-    auto const res = get().m_unknown.emplace(vname->m_data.pstr, val);
-    if (!res.second) res.first->second |= val;
-    return;
-  }
-
-  /*
-   * We don't know the name, but we know something about the class.  We need to
-   * merge the type for every property in the class hierarchy.
-   */
-  if (unknownName) {
-    visit_parent_cinfo(cinfo,
-                         [&] (const ClassInfo* ci) {
-                           for (auto& kv : ci->publicStaticProps) {
-                             merge(index, ctx, cinfo, sval(kv.first),
-                                   val, ignoreConst);
-                           }
-                           return false;
-                         });
-    return;
-  }
-
-  /*
-   * Here we know both the ClassInfo and the static property name, but it may
-   * not actually be on this ClassInfo.  In php, you can access base class
-   * static properties through derived class names, and the access affects the
-   * property with that name on the most-recently-inherited-from base class.
-   *
-   * If the property is not found as a public property anywhere in the
-   * hierarchy, we don't want to merge this type.  Note we don't have to worry
-   * about the case that there is a protected property in between, because this
-   * is a fatal at class declaration time (you can't redeclare a public static
-   * property with narrower access in a subclass).
-   */
-  auto const affectedInfo = (
-    visit_parent_cinfo(
-      cinfo,
-      [&] (const ClassInfo* ci) ->
-          folly::Optional<std::pair<ClassInfo*, const TypeConstraint*>> {
-        auto const it = ci->publicStaticProps.find(vname->m_data.pstr);
-        if (it != end(ci->publicStaticProps)) {
-          return std::make_pair(
-            const_cast<ClassInfo*>(ci),
-            it->second.tc
-          );
-        }
-        return folly::none;
-      }
-    )
-  );
-
-  if (!affectedInfo) {
-    // Either this was a mutation that's going to fatal (property doesn't
-    // exist), or it's a private static or a protected static.  We aren't in
-    // that business here, so we don't need to record anything.
-    return;
-  }
-
-  auto const affectedCInfo = affectedInfo->first;
-  auto const affectedTC = affectedInfo->second;
-
-  if (!ignoreConst) {
-    for (auto const& prop : affectedCInfo->cls->properties) {
-      if (prop.name == vname->m_data.pstr && (prop.attrs & AttrIsConst)) {
-        return;
-      }
-    }
-  }
-
-  auto const adjusted =
-    adjust_type_for_prop(index, *affectedCInfo->cls, affectedTC, val);
-
-  // Merge the property type.
   auto const res = get().m_known.emplace(
-    KnownKey { affectedCInfo, vname->m_data.pstr },
-    adjusted
+    KnownKey { const_cast<ClassInfo*>(ci), prop.name }, val
   );
-  if (!res.second) res.first->second |= adjusted;
+  if (!res.second) res.first->second |= val;
 }
 
-void PublicSPropMutations::merge(const Index& index,
-                                 Context ctx,
-                                 const php::Class& cls,
-                                 const Type& name,
-                                 const Type& val,
-                                 bool ignoreConst) {
-  auto it = index.m_data->classInfo.find(cls.name);
-  if (it == end(index.m_data->classInfo)) {
-    return;
-  }
-  auto const cinfo = it->second;
-  if (cinfo->cls != &cls) {
-    return;
-  }
-  // Note that this works for both traits and regular classes
-  for (auto const sub : cinfo->subclassList) {
-    merge(index, ctx, sub, name, val, ignoreConst);
-  }
+void PublicSPropMutations::mergeUnknownClass(SString prop, const Type& val) {
+  ITRACE(4, "PublicSPropMutations::mergeUnknownClass: {} {}\n",
+         prop, show(val));
+
+  auto const res = get().m_unknown.emplace(prop, val);
+  if (!res.second) res.first->second |= val;
+}
+
+void PublicSPropMutations::mergeUnknown(Context ctx) {
+  ITRACE(4, "PublicSPropMutations::mergeUnknown\n");
+
+  /*
+   * We have a case here where we know neither the class nor the static
+   * property name.  This means we have to pessimize public static property
+   * types for the entire program.
+   *
+   * We could limit it to pessimizing them by merging the `val' type, but
+   * instead we just throw everything away---this optimization is not
+   * expected to be particularly useful on programs that contain any
+   * instances of this situation.
+   */
+  std::fprintf(
+    stderr,
+    "NOTE: had to mark everything unknown for public static "
+    "property types due to dynamic code.  -fanalyze-public-statics "
+    "will not help for this program.\n"
+    "NOTE: The offending code occured in this context: %s\n",
+    show(ctx).c_str()
+  );
+  get().m_nothing_known = true;
 }
 
 //////////////////////////////////////////////////////////////////////

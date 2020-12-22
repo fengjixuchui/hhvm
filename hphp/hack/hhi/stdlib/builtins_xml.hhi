@@ -8,6 +8,8 @@
  *
  */
 
+<<file: __EnableUnstableFeatures('coeffects_provisional')>>
+
 const XML_ERROR_ASYNC_ENTITY = 13;
 const XML_ERROR_ATTRIBUTE_EXTERNAL_ENTITY_REF = 16;
 const XML_ERROR_BAD_CHAR_REF = 14;
@@ -84,6 +86,6 @@ function xml_get_error_code(resource $parser);
 <<__PHPStdLib>>
 function xml_error_string(int $code);
 <<__PHPStdLib, __Pure>>
-function utf8_decode(string $data);
+function utf8_decode(string $data)[];
 <<__PHPStdLib, __Pure>>
-function utf8_encode(string $data);
+function utf8_encode(string $data)[];

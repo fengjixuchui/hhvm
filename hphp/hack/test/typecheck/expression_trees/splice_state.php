@@ -22,7 +22,7 @@ function test(): void {
   if ($x->x !== null) {
     $_ = Code`() ==> {
       // We know that $x->x is not null
-      __splice__(lift($x->x + 1));
+      ${lift($x->x + 1)};
       return;
     }`;
   }
@@ -166,7 +166,7 @@ class Code {
   }
 }
 
-final class ExprTree<TVisitor, TResult, TInfer>{
+final class ExprTree<TVisitor, TResult, +TInfer>{
   public function __construct(
     private ?ExprPos $pos,
     private string $filepath,

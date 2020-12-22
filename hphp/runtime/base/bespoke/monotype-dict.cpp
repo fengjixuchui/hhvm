@@ -24,7 +24,9 @@
 #include "hphp/runtime/base/mixed-array-defs.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/static-string-table.h"
+
 #include "hphp/runtime/vm/jit/mcgen-translate.h"
+#include "hphp/runtime/vm/jit/type.h"
 #include "hphp/runtime/vm/vm-regs.h"
 
 #include <algorithm>
@@ -607,7 +609,8 @@ template <typename Key>
 TypedValue MonotypeDict<Key>::getImpl(Key key) const {
   if (key == getTombstone<Key>()) return make_tv<KindOfUninit>();
   auto const result = findForGet(key, getHash(key));
-  return result ? TypedValue { result->val, type() } : make_tv<KindOfUninit>();
+  return result ? make_tv_of_type(result->val, type())
+                : make_tv<KindOfUninit>();
 }
 
 template <typename Key>
@@ -629,7 +632,7 @@ ArrayData* MonotypeDict<Key>::removeImpl(Key key) {
   assertx(keysEqual(elm->key, key));
 
   decRefKey(elm->key);
-  tvDecRefGen(TypedValue { elm->val, type() });
+  tvDecRefGen(make_tv_of_type(elm->val, type()));
   elm->key = getTombstone<Key>();
   index = kTombstoneIndex;
   mad->m_size--;
@@ -701,7 +704,7 @@ ArrayData* MonotypeDict<Key>::setImpl(Key key, K k, TypedValue v) {
 
   auto const update = result->template find<Update>(key, getHash(key));
   if (update.elm != nullptr) {
-    tvDecRefGen(TypedValue { update.elm->val, dt });
+    tvDecRefGen(make_tv_of_type(update.elm->val, dt));
     update.elm->val = v.val();
   } else {
     incRefKey(key);
@@ -729,20 +732,20 @@ void MonotypeDict<Key>::forEachElm(
         for (auto i = 0; i < limit; i++) {
           auto const elm = elmAtIndex(i);
           k(i, elm->key);
-          m(TypedValue { elm->val, dt });
+          m(make_tv_of_type(elm->val, dt));
         }
       } else {
         for (auto i = 0; i < limit; i++) {
           auto const elm = elmAtIndex(i);
           k(i, elm->key);
-          c(TypedValue { elm->val, dt });
+          c(make_tv_of_type(elm->val, dt));
         }
       }
     } else {
       for (auto i = 0; i < limit; i++) {
         auto const elm = elmAtIndex(i);
         k(i, elm->key);
-        u(TypedValue { elm->val, dt });
+        u(make_tv_of_type(elm->val, dt));
       }
     }
   } else {
@@ -752,14 +755,14 @@ void MonotypeDict<Key>::forEachElm(
           auto const elm = elmAtIndex(i);
           if (elm->key == getTombstone<Key>()) continue;
           k(i, elm->key);
-          m(TypedValue { elm->val, dt });
+          m(make_tv_of_type(elm->val, dt));
         }
       } else {
         for (auto i = 0; i < limit; i++) {
           auto const elm = elmAtIndex(i);
           if (elm->key == getTombstone<Key>()) continue;
           k(i, elm->key);
-          c(TypedValue { elm->val, dt });
+          c(make_tv_of_type(elm->val, dt));
         }
       }
     } else {
@@ -767,7 +770,7 @@ void MonotypeDict<Key>::forEachElm(
         auto const elm = elmAtIndex(i);
         if (elm->key == getTombstone<Key>()) continue;
         k(i, elm->key);
-        u(TypedValue { elm->val, dt });
+        u(make_tv_of_type(elm->val, dt));
       }
     }
   }
@@ -918,7 +921,7 @@ ArrayData* MonotypeDict<Key>::escalateWithCapacity(size_t capacity) const {
       continue;
     }
 
-    auto const tv = TypedValue { elm->val, dt };
+    auto const tv = make_tv_of_type(elm->val, dt);
     auto const result = [&]{
       if constexpr (std::is_same<Key, int64_t>::value) {
         return MixedArray::SetInt(ad, elm->key, tv);
@@ -1065,7 +1068,7 @@ void MonotypeDict<Key>::ReleaseUncounted(Self* mad) {
     if constexpr (std::is_same<Key, StringData*>::value) {
       if (elm->key->isUncounted()) StringData::ReleaseUncounted(elm->key);
     }
-    auto tv = TypedValue { elm->val, dt };
+    auto tv = make_tv_of_type(elm->val, dt);
     ReleaseUncountedTv(&tv);
   });
 }
@@ -1130,7 +1133,7 @@ template <typename Key>
 TypedValue MonotypeDict<Key>::GetPosVal(const Self* mad, ssize_t pos) {
   auto const elm = mad->elmAtIndex(pos);
   assertx(elm->key != getTombstone<Key>());
-  return { elm->val, mad->type() };
+  return make_tv_of_type(elm->val, mad->type());
 }
 
 template <typename Key>
@@ -1356,6 +1359,98 @@ ArrayData* MonotypeDict<Key>::SetLegacyArray(
   auto const mad = copy ? madIn->copy() : madIn;
   mad->setLegacyArrayInPlace(legacy);
   return mad;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+
+using namespace jit;
+
+namespace {
+Type applicableKeyType(KeyTypes kt) {
+  switch (kt) {
+    case KeyTypes::Empty:
+      return TBottom;
+    case KeyTypes::Ints:
+      return TInt;
+    case KeyTypes::StaticStrings:
+    case KeyTypes::Strings:
+      return TStr;
+    case KeyTypes::Any:
+      return TInt | TStr;
+  }
+  not_reached();
+}
+
+Type resKeyType(KeyTypes kt) {
+  switch (kt) {
+    case KeyTypes::Empty:
+      return TBottom;
+    case KeyTypes::Ints:
+      return TInt;
+    case KeyTypes::StaticStrings:
+      return TStaticStr;
+    case KeyTypes::Strings:
+      return TStr;
+    case KeyTypes::Any:
+      return TInt | TStr;
+  }
+  not_reached();
+}
+}
+
+std::pair<Type, bool> TopMonotypeDictLayout::elemType(Type key) const {
+  auto const validKey = key.maybe(applicableKeyType(m_keyType));
+  return {validKey ? TInitCell : TBottom, false};
+}
+
+std::pair<Type, bool> TopMonotypeDictLayout::firstLastType(
+    bool isFirst, bool isKey) const {
+  return {isKey ? resKeyType(m_keyType) : TInitCell, false};
+}
+
+Type TopMonotypeDictLayout::iterPosType(Type pos, bool isKey) const {
+  return isKey ? resKeyType(m_keyType) : TInitCell;
+}
+
+std::pair<Type, bool> EmptyMonotypeDictLayout::elemType(Type key) const {
+  return {TBottom, false};
+}
+
+std::pair<Type, bool> EmptyMonotypeDictLayout::firstLastType(
+    bool isFirst, bool isKey) const {
+  return {TBottom, false};
+}
+
+Type EmptyMonotypeDictLayout::iterPosType(Type pos, bool isKey) const {
+  return TBottom;
+}
+
+std::pair<Type, bool> EmptyOrMonotypeDictLayout::elemType(Type key) const {
+  auto const validKey = key.maybe(applicableKeyType(m_keyType));
+  return {validKey ? Type(m_valType) : TBottom, false};
+}
+
+std::pair<Type, bool> EmptyOrMonotypeDictLayout::firstLastType(
+    bool isFirst, bool isKey) const {
+  return {isKey ? resKeyType(m_keyType) : Type(m_valType), false};
+}
+
+Type EmptyOrMonotypeDictLayout::iterPosType(Type pos, bool isKey) const {
+  return isKey ? resKeyType(m_keyType) : Type(m_valType);
+}
+
+std::pair<Type, bool> MonotypeDictLayout::elemType(Type key) const {
+  auto const validKey = key.maybe(applicableKeyType(m_keyType));
+  return {validKey ? Type(m_valType) : TBottom, false};
+}
+
+std::pair<Type, bool> MonotypeDictLayout::firstLastType(
+    bool isFirst, bool isKey) const {
+  return {isKey ? resKeyType(m_keyType) : Type(m_valType), false};
+}
+
+Type MonotypeDictLayout::iterPosType(Type pos, bool isKey) const {
+  return isKey ? resKeyType(m_keyType) : Type(m_valType);
 }
 
 //////////////////////////////////////////////////////////////////////////////

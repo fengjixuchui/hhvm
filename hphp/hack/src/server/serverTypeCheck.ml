@@ -50,6 +50,9 @@ type check_results = {
 let shallow_decl_enabled (ctx : Provider_context.t) =
   TypecheckerOptions.shallow_class_decl (Provider_context.get_tcopt ctx)
 
+let use_direct_decl_parser (ctx : Provider_context.t) =
+  TypecheckerOptions.use_direct_decl_parser (Provider_context.get_tcopt ctx)
+
 (*****************************************************************************)
 (* Debugging *)
 (*****************************************************************************)
@@ -317,10 +320,12 @@ let parsing genv env to_check ~stop_at_errors profiling =
   let get_next =
     MultiWorker.next genv.workers (Relative_path.Set.elements disk_files)
   in
+  let ctx = Provider_utils.ctx_from_server_env env in
   let (fast, errors, failed_parsing) =
     CgroupProfiler.collect_cgroup_stats ~profiling ~stage:"parsing" @@ fun () ->
-    Parsing_service.go genv.workers ide_files ~get_next env.popt ~trace:true
+    Parsing_service.go ctx genv.workers ide_files ~get_next env.popt ~trace:true
   in
+
   SearchServiceRunner.update_fileinfo_map
     (Naming_table.create fast)
     SearchUtils.TypeChecker;
@@ -1324,6 +1329,9 @@ functor
              ~key:"redecl2_count_later"
              ~value:(Relative_path.Map.cardinal lazy_decl_later)
         |> Telemetry.bool_ ~key:"shallow" ~value:(shallow_decl_enabled ctx)
+        |> Telemetry.bool_
+             ~key:"direct_decl"
+             ~value:(use_direct_decl_parser ctx)
       in
 
       if not (shallow_decl_enabled ctx) then (

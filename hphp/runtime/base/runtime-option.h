@@ -1119,6 +1119,9 @@ struct RuntimeOption {
   F(bool, HackArrCompatFBSerializeHackArraysNotices, false)             \
   /* Raise notices on intish-cast (which may use an is_array check) */  \
   F(bool, HackArrCompatIntishCastNotices, false)                        \
+  /* Raise notices on a special, Hack-array only intish-cast in the     \
+   * array_slice builtin which we need to eliminate immediately. */     \
+  F(bool, HackArrCompatArraySliceIntishCastNotices, true)               \
   /* Raise notices when is_vec or is_dict  is called with a v/darray */ \
   F(bool, HackArrCompatIsVecDictNotices, false)                         \
   F(bool, HackArrCompatSerializeNotices, false)                         \
@@ -1210,7 +1213,6 @@ struct RuntimeOption {
   F(bool, NoticeOnMethCallerHelperUse, false)                           \
   F(bool, NoticeOnCollectionToBool, false)                              \
   F(bool, NoticeOnSimpleXMLBehavior, false)                             \
-  F(bool, ForbidDivisionByZero, true)                                   \
   /* Enables Hack records. */                                           \
   F(bool, HackRecords, false)                                           \
   /*                                                                    \

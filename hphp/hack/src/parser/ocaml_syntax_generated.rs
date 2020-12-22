@@ -654,7 +654,7 @@ where
       Self { syntax, value }
     }
 
-    fn make_capability(ctx: &C, arg0: Self, arg1: Self, arg2: Self) -> Self {
+    fn make_contexts(ctx: &C, arg0: Self, arg1: Self, arg2: Self) -> Self {
       let children = &[
           arg0.value, 
           arg1.value, 
@@ -663,7 +663,7 @@ where
       let value = V::from_values(children.iter());
       let syntax = Self::make(
           ctx,
-          SyntaxKind::Capability,
+          SyntaxKind::Contexts,
           &value,
           &[
               arg0.syntax, 
@@ -1854,7 +1854,7 @@ where
       Self { syntax, value }
     }
 
-    fn make_anonymous_function(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self, arg4: Self, arg5: Self, arg6: Self, arg7: Self, arg8: Self, arg9: Self, arg10: Self) -> Self {
+    fn make_anonymous_function(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self, arg4: Self, arg5: Self, arg6: Self, arg7: Self, arg8: Self, arg9: Self, arg10: Self, arg11: Self) -> Self {
       let children = &[
           arg0.value, 
           arg1.value, 
@@ -1866,7 +1866,8 @@ where
           arg7.value, 
           arg8.value, 
           arg9.value, 
-          arg10.value
+          arg10.value, 
+          arg11.value
       ];
       let value = V::from_values(children.iter());
       let syntax = Self::make(
@@ -1884,7 +1885,8 @@ where
               arg7.syntax, 
               arg8.syntax, 
               arg9.syntax, 
-              arg10.syntax
+              arg10.syntax, 
+              arg11.syntax
           ],
       );
       Self { syntax, value }
@@ -2365,6 +2367,28 @@ where
               arg0.syntax, 
               arg1.syntax, 
               arg2.syntax
+          ],
+      );
+      Self { syntax, value }
+    }
+
+    fn make_et_splice_expression(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self) -> Self {
+      let children = &[
+          arg0.value, 
+          arg1.value, 
+          arg2.value, 
+          arg3.value
+      ];
+      let value = V::from_values(children.iter());
+      let syntax = Self::make(
+          ctx,
+          SyntaxKind::ETSpliceExpression,
+          &value,
+          &[
+              arg0.syntax, 
+              arg1.syntax, 
+              arg2.syntax, 
+              arg3.syntax
           ],
       );
       Self { syntax, value }

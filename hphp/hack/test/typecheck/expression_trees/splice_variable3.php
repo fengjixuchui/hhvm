@@ -11,7 +11,7 @@ function test(): void {
 
   // Type check the splices regardless of what the overall expression tree is
   $_ = Code`() ==> {
-    __splice__(lift($x + 1));
+    ${lift($x + 1)};
     return;
   }`;
 }
@@ -154,7 +154,7 @@ class Code {
   }
 }
 
-final class ExprTree<TVisitor, TResult, TInfer>{
+final class ExprTree<TVisitor, TResult, +TInfer>{
   public function __construct(
     private ?ExprPos $pos,
     private string $filepath,

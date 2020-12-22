@@ -8,6 +8,8 @@
  *
  */
 
+<<file: __EnableUnstableFeatures('coeffects_provisional')>>
+
 const DATE_ATOM    = "";
 const DATE_COOKIE  = "";
 const DATE_ISO8601 = "";
@@ -212,14 +214,21 @@ class DateTimeZone {
   const ALL = 0;
   const ALL_WITH_BC = 0;
   const PER_COUNTRY = 0;
-  public function __construct(string $timezone);
-  public function getLocation(): darray { }
-  public function getName(): string { }
-  public function getOffset(DateTimeInterface $datetime);
+  <<__Pure>>
+  public function __construct(string $timezone)[];
+  <<__Pure>>
+  public function getLocation()[]: darray { }
+  <<__Pure>>
+  public function getName()[]: string { }
+  <<__Pure>>
+  public function getOffset(DateTimeInterface $datetime)[];
+  <<__Pure>>
   public function getTransitions(int $timestamp_begin = PHP_INT_MIN,
-                                 int $timestamp_end = PHP_INT_MAX);
-  static public function listAbbreviations();
-  static public function listIdentifiers(int $what = 2047, string $country = '');
+                                 int $timestamp_end = PHP_INT_MAX)[];
+  <<__Pure>>
+  static public function listAbbreviations()[];
+  <<__Pure>>
+  static public function listIdentifiers(int $what = 2047, string $country = '')[];
 }
 
 class DateInterval {

@@ -91,13 +91,13 @@
 #include "hphp/runtime/base/tv-type.h"
 #include "hphp/runtime/vm/as-shared.h"
 #include "hphp/runtime/vm/bc-pattern.h"
+#include "hphp/runtime/vm/coeffects.h"
 #include "hphp/runtime/vm/extern-compiler.h"
 #include "hphp/runtime/vm/func-emitter.h"
 #include "hphp/runtime/vm/hhbc.h"
 #include "hphp/runtime/vm/native.h"
 #include "hphp/runtime/vm/preclass-emitter.h"
 #include "hphp/runtime/vm/record-emitter.h"
-#include "hphp/runtime/vm/rx.h"
 #include "hphp/runtime/vm/type-alias-emitter.h"
 #include "hphp/runtime/vm/unit.h"
 #include "hphp/runtime/vm/unit-emitter.h"
@@ -1070,6 +1070,18 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   X("?VArrCompat",T::OptVArrCompat);
   X("?ArrCompat",T::OptArrCompat);
   X("Uninit",   T::Uninit);
+  X("SVecish", T::SVecish);
+  X("?SVecish", T::OptSVecish);
+  X("Vecish", T::Vecish);
+  X("?Vecish", T::OptVecish);
+  X("SDictish", T::SDictish);
+  X("?SDictish", T::OptSDictish);
+  X("Dictish", T::Dictish);
+  X("?Dictish", T::OptDictish);
+  X("SArrLike", T::SArrLike);
+  X("?SArrLike", T::OptSArrLike);
+  X("ArrLike", T::ArrLike);
+  X("?ArrLike", T::OptArrLike);
 
 #undef X
 #undef Y
@@ -1116,6 +1128,18 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   case T::OptSKeyset:
   case T::Keyset:
   case T::OptKeyset:
+  case T::SVecish:
+  case T::Vecish:
+  case T::OptSVecish:
+  case T::OptVecish:
+  case T::SDictish:
+  case T::Dictish:
+  case T::OptSDictish:
+  case T::OptDictish:
+  case T::SArrLike:
+  case T::ArrLike:
+  case T::OptSArrLike:
+  case T::OptArrLike:
   case T::Obj:
   case T::OptObj:
   case T::Func:
@@ -1515,7 +1539,6 @@ std::map<std::string,ParserFunc> opcode_parsers;
 #define NUM_PUSH_THREE(a,b,c) 3
 #define NUM_PUSH_CMANY immIVA[0]
 #define NUM_PUSH_FCALL immFCA.numRets
-#define NUM_PUSH_CALLNATIVE (immIVA[2] + 1)
 #define NUM_POP_NOV 0
 #define NUM_POP_ONE(a) 1
 #define NUM_POP_TWO(a,b) 2
@@ -1523,8 +1546,6 @@ std::map<std::string,ParserFunc> opcode_parsers;
 #define NUM_POP_MFINAL immIVA[0]
 #define NUM_POP_C_MFINAL(n) (immIVA[0] + n)
 #define NUM_POP_CUMANY immIVA[0] /* number of arguments */
-#define NUM_POP_CMANY_U2 immIVA[0] + 2
-#define NUM_POP_CALLNATIVE (immIVA[0] + immIVA[2]) /* number of args + nout */
 #define NUM_POP_FCALL(nin, nobj) (nin + immFCA.numInputs() + \
                                   (kNumActRecCells - 1) + immFCA.numRets)
 #define NUM_POP_CMANY immIVA[0] /* number of arguments */
@@ -1639,7 +1660,6 @@ OPCODES
 #undef NUM_PUSH_THREE
 #undef NUM_PUSH_CMANY
 #undef NUM_PUSH_FCALL
-#undef NUM_PUSH_CALLNATIVE
 #undef NUM_POP_NOV
 #undef NUM_POP_ONE
 #undef NUM_POP_TWO
@@ -1647,8 +1667,6 @@ OPCODES
 #undef NUM_POP_MFINAL
 #undef NUM_POP_C_MFINAL
 #undef NUM_POP_CUMANY
-#undef NUM_POP_CMANY_U2
-#undef NUM_POP_CALLNATIVE
 #undef NUM_POP_FCALL
 #undef NUM_POP_CMANY
 #undef NUM_POP_SMANY

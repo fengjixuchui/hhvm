@@ -523,7 +523,7 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           function_left_paren = leftp;
           function_parameter_list = params;
           function_right_paren = rightp;
-          function_capability = cap;
+          function_contexts = ctxs;
           function_colon = colon;
           function_type = ret_type;
           function_where_clause = where;
@@ -532,7 +532,7 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
         [
           Span (transform_fn_decl_name env modifiers kw name type_params leftp);
           transform_fn_decl_args env params rightp;
-          t env cap;
+          t env ctxs;
           t env colon;
           when_present colon space;
           t env ret_type;
@@ -555,11 +555,11 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           where_constraint_right_type = right;
         } ->
       Concat [t env left; Space; t env op; Space; t env right]
-    | Syntax.Capability
+    | Syntax.Contexts
         {
-          capability_left_bracket = lb;
-          capability_types = tys;
-          capability_right_bracket = rb;
+          contexts_left_bracket = lb;
+          contexts_types = tys;
+          contexts_right_bracket = rb;
         } ->
       Concat [t env lb; t env tys; t env rb]
     | Syntax.MethodishDeclaration
@@ -1381,6 +1381,7 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           anonymous_left_paren = lp;
           anonymous_parameters = params;
           anonymous_right_paren = rp;
+          anonymous_ctx_list = ctx_list;
           anonymous_colon = colon;
           anonymous_type = ret_type;
           anonymous_use = use;
@@ -1395,7 +1396,14 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           t env async_kw;
           when_present async_kw space;
           t env fun_kw;
-          transform_argish_with_return_type env lp params rp colon ret_type;
+          transform_argish_with_return_type
+            env
+            lp
+            params
+            rp
+            ctx_list
+            colon
+            ret_type;
           t env use;
           handle_possible_compound_statement
             env
@@ -1436,7 +1444,7 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           lambda_left_paren = lp;
           lambda_parameters = params;
           lambda_right_paren = rp;
-          lambda_capability = cap;
+          lambda_contexts = ctxs;
           lambda_colon = colon;
           lambda_type = ret_type;
         } ->
@@ -1445,7 +1453,7 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           t env lp;
           when_present params split;
           transform_fn_decl_args env params rp;
-          t env cap;
+          t env ctxs;
           t env colon;
           when_present colon space;
           t env ret_type;
@@ -1579,6 +1587,21 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
         } ->
       Concat
         [
+          t env left_p;
+          Split;
+          WithRule
+            (Rule.Parental, Concat [Nest [t env expr]; Split; t env right_p]);
+        ]
+    | Syntax.ETSpliceExpression
+        {
+          et_splice_expression_dollar = dollar;
+          et_splice_expression_left_brace = left_p;
+          et_splice_expression_expression = expr;
+          et_splice_expression_right_brace = right_p;
+        } ->
+      Concat
+        [
+          t env dollar;
           t env left_p;
           Split;
           WithRule
@@ -2178,7 +2201,7 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           closure_inner_left_paren = inner_left_p;
           closure_parameter_list = param_list;
           closure_inner_right_paren = inner_right_p;
-          closure_capability = cap;
+          closure_contexts = ctxs;
           closure_colon = colon;
           closure_return_type = ret_type;
           closure_outer_right_paren = outer_right_p;
@@ -2190,7 +2213,7 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           t env inner_left_p;
           when_present param_list split;
           transform_fn_decl_args env param_list inner_right_p;
-          t env cap;
+          t env ctxs;
           t env colon;
           when_present colon space;
           t env ret_type;
@@ -2905,12 +2928,14 @@ and transform_fn_decl_args env params rightp =
       Concat [transform_possible_comma_list env ~allow_trailing params rightp]
     )
 
-and transform_argish_with_return_type env left_p params right_p colon ret_type =
+and transform_argish_with_return_type
+    env left_p params right_p ctx_list colon ret_type =
   Concat
     [
       t env left_p;
       when_present params split;
       transform_fn_decl_args env params right_p;
+      t env ctx_list;
       t env colon;
       when_present colon space;
       t env ret_type;

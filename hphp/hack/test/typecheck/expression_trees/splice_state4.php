@@ -18,7 +18,7 @@ function test(): void {
 
   if ($x->x !== null) {
     $_ = Code`() ==> {
-      __splice__(lift($x->reset()));
+      ${lift($x->reset())};
       return;
     }`;
 
@@ -165,7 +165,7 @@ class Code {
   }
 }
 
-final class ExprTree<TVisitor, TResult, TInfer>{
+final class ExprTree<TVisitor, TResult, +TInfer>{
   public function __construct(
     private ?ExprPos $pos,
     private string $filepath,

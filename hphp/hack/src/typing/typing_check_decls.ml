@@ -49,7 +49,7 @@ let check_hint_wellkindedness env hint =
  * we check that it is only involving an enum class or a generic
  *)
 let check_atom_on_param env pos dty lty =
-  (* If lty is HH\Elt<Foo, Bar>, we need to check that Foo is
+  (* If lty is HH\EnumMember<Foo, Bar>, we need to check that Foo is
    * - an enum class
    * - a generic
    *
@@ -91,7 +91,7 @@ let check_atom_on_param env pos dty lty =
   (* Uncomment the next line to allow normal enums with __Atom *)
   (* | Tnewtype (enum_name, _, _) when Env.is_enum env enum_name -> () *)
   | Tclass ((_, name), _, [ty_enum; _ty_interface])
-    when String.equal name SN.Classes.cElt ->
+    when String.equal name SN.Classes.cEnumMember ->
     (match get_node ty_enum with
     | Tclass ((_, enum_name), _, _) when Env.is_enum_class env enum_name -> ()
     | Tgeneric (name, _) ->
@@ -129,6 +129,8 @@ and where_constr env (h1, _, h2) =
   hint env h1;
   hint env h2
 
+and contexts env (_, hl) = List.iter ~f:(hint env) hl
+
 and hint ?(is_atom = false) env (p, h) =
   (* Do not use this one recursively to avoid quadratic runtime! *)
   check_hint_wellkindedness env.tenv (p, h);
@@ -140,7 +142,7 @@ and hint_ ~is_atom env p h_ =
   let hint env (p, h) = hint_ ~is_atom:false env p h in
   let () =
     if is_atom then
-      (* __Atom is only allowed on HH\Elt, so we check everything that
+      (* __Atom is only allowed on HH\EnumMember, so we check everything that
        * is not a class with this, and make a more refined check for Happly
        *)
       match h_ with
@@ -186,14 +188,14 @@ and hint_ ~is_atom env p h_ =
         hf_param_kinds = _;
         hf_param_mutability = _;
         hf_variadic_ty = variadic_hint;
-        hf_cap = cap_opt;
+        hf_ctxs;
         hf_return_ty = h;
         hf_is_mutable_return = _;
       } ->
     List.iter hl (hint env);
     hint env h;
     Option.iter variadic_hint (hint env);
-    maybe hint env cap_opt
+    Option.iter ~f:(contexts env) hf_ctxs
   | Happly ((p, "\\Tuple"), _)
   | Happly ((p, "\\tuple"), _) ->
     Errors.tuple_syntax p
@@ -211,6 +213,12 @@ and hint_ ~is_atom env p h_ =
   | Hshape { nsi_allows_unknown_fields = _; nsi_field_map } ->
     let compute_hint_for_shape_field_info { sfi_hint; _ } = hint env sfi_hint in
     List.iter ~f:compute_hint_for_shape_field_info nsi_field_map
+  | Hfun_context _ ->
+    (* TODO(coeffects): check if arg is a function type in the locals? *)
+    ()
+  | Hvar _ ->
+    (* TODO(coeffects) *)
+    ()
 
 and check_happly ?(is_atom = false) unchecked_tparams env h =
   let pos = fst h in

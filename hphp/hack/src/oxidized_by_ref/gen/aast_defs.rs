@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<b23e101880ec0570f1bac93132599a7a>>
+// @generated SignedSource<<700d7b8c1f4891e9249dbb6a4c0c5d70>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
@@ -112,13 +112,29 @@ pub type VariadicHint<'a> = Option<&'a Hint<'a>>;
     Serialize,
     ToOcamlRep
 )]
+pub struct Contexts<'a>(pub &'a Pos<'a>, pub &'a [&'a Hint<'a>]);
+impl<'a> TrivialDrop for Contexts<'a> {}
+
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
 pub struct HintFun<'a> {
     pub reactive_kind: oxidized::aast_defs::FuncReactive,
     pub param_tys: &'a [&'a Hint<'a>],
     pub param_kinds: &'a [Option<oxidized::ast_defs::ParamKind>],
     pub param_mutability: &'a [Option<oxidized::aast_defs::ParamMutability>],
     pub variadic_ty: &'a VariadicHint<'a>,
-    pub cap: Option<&'a Hint<'a>>,
+    pub ctxs: Option<&'a Contexts<'a>>,
     pub return_ty: &'a Hint<'a>,
     pub is_mutable_return: &'a oxidized::aast_defs::MutableReturn,
 }
@@ -148,12 +164,14 @@ pub enum Hint_<'a> {
     /// This represents the use of a type const. Type consts are accessed like
     /// regular consts in Hack, i.e.
     ///
-    /// [self | static | Class]::TypeConst
+    /// [$x | self | static | Class]::TypeConst
     ///
     /// Class  => Happly "Class"
     /// self   => Happly of the class of definition
     /// static => Habstr ("static",
     ///           Habstr ("this", (Constraint_as, Happly of class of definition)))
+    /// $x     => Hvar "$x"
+    ///
     /// Type const access can be chained such as
     ///
     /// Class::TC1::TC2::TC3
@@ -179,6 +197,8 @@ pub enum Hint_<'a> {
     Hnothing,
     Hunion(&'a [&'a Hint<'a>]),
     Hintersection(&'a [&'a Hint<'a>]),
+    HfunContext(&'a str),
+    Hvar(&'a str),
 }
 impl<'a> TrivialDrop for Hint_<'a> {}
 

@@ -18,6 +18,7 @@
 #pragma once
 
 #include "hphp/runtime/base/array-init.h"
+#include "hphp/runtime/ext/thrift/transport.h"
 
 namespace HPHP { namespace thrift {
 
@@ -53,4 +54,3 @@ inline void set_with_intish_key_cast(
 }
 
 }}
-

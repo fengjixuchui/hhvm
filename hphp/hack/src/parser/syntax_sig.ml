@@ -199,15 +199,15 @@ module type Syntax_S = sig
     ; function_left_paren                                : t
     ; function_parameter_list                            : t
     ; function_right_paren                               : t
-    ; function_capability                                : t
+    ; function_contexts                                  : t
     ; function_colon                                     : t
     ; function_type                                      : t
     ; function_where_clause                              : t
     }
-  | Capability                        of
-    { capability_left_bracket                            : t
-    ; capability_types                                   : t
-    ; capability_right_bracket                           : t
+  | Contexts                          of
+    { contexts_left_bracket                              : t
+    ; contexts_types                                     : t
+    ; contexts_right_bracket                             : t
     }
   | WhereClause                       of
     { where_clause_keyword                               : t
@@ -542,6 +542,7 @@ module type Syntax_S = sig
     ; anonymous_left_paren                               : t
     ; anonymous_parameters                               : t
     ; anonymous_right_paren                              : t
+    ; anonymous_ctx_list                                 : t
     ; anonymous_colon                                    : t
     ; anonymous_type                                     : t
     ; anonymous_use                                      : t
@@ -564,7 +565,7 @@ module type Syntax_S = sig
     { lambda_left_paren                                  : t
     ; lambda_parameters                                  : t
     ; lambda_right_paren                                 : t
-    ; lambda_capability                                  : t
+    ; lambda_contexts                                    : t
     ; lambda_colon                                       : t
     ; lambda_type                                        : t
     }
@@ -671,6 +672,12 @@ module type Syntax_S = sig
     { braced_expression_left_brace                       : t
     ; braced_expression_expression                       : t
     ; braced_expression_right_brace                      : t
+    }
+  | ETSpliceExpression                of
+    { et_splice_expression_dollar                        : t
+    ; et_splice_expression_left_brace                    : t
+    ; et_splice_expression_expression                    : t
+    ; et_splice_expression_right_brace                   : t
     }
   | EmbeddedBracedExpression          of
     { embedded_braced_expression_left_brace              : t
@@ -905,7 +912,7 @@ module type Syntax_S = sig
     ; closure_inner_left_paren                           : t
     ; closure_parameter_list                             : t
     ; closure_inner_right_paren                          : t
-    ; closure_capability                                 : t
+    ; closure_contexts                                   : t
     ; closure_colon                                      : t
     ; closure_return_type                                : t
     ; closure_outer_right_paren                          : t
@@ -1075,7 +1082,7 @@ module type Syntax_S = sig
   val make_namespace_use_clause : t -> t -> t -> t -> t
   val make_function_declaration : t -> t -> t -> t
   val make_function_declaration_header : t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t
-  val make_capability : t -> t -> t -> t
+  val make_contexts : t -> t -> t -> t
   val make_where_clause : t -> t -> t
   val make_where_constraint : t -> t -> t -> t
   val make_methodish_declaration : t -> t -> t -> t -> t
@@ -1129,7 +1136,7 @@ module type Syntax_S = sig
   val make_concurrent_statement : t -> t -> t
   val make_simple_initializer : t -> t -> t
   val make_anonymous_class : t -> t -> t -> t -> t -> t -> t -> t -> t -> t
-  val make_anonymous_function : t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t
+  val make_anonymous_function : t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t
   val make_anonymous_function_use_clause : t -> t -> t -> t -> t
   val make_lambda_expression : t -> t -> t -> t -> t -> t
   val make_lambda_signature : t -> t -> t -> t -> t -> t -> t
@@ -1153,6 +1160,7 @@ module type Syntax_S = sig
   val make_function_pointer_expression : t -> t -> t
   val make_parenthesized_expression : t -> t -> t -> t
   val make_braced_expression : t -> t -> t -> t
+  val make_et_splice_expression : t -> t -> t -> t -> t
   val make_embedded_braced_expression : t -> t -> t -> t
   val make_list_expression : t -> t -> t -> t -> t
   val make_collection_literal_expression : t -> t -> t -> t -> t
@@ -1249,7 +1257,7 @@ module type Syntax_S = sig
   val is_namespace_use_clause : t -> bool
   val is_function_declaration : t -> bool
   val is_function_declaration_header : t -> bool
-  val is_capability : t -> bool
+  val is_contexts : t -> bool
   val is_where_clause : t -> bool
   val is_where_constraint : t -> bool
   val is_methodish_declaration : t -> bool
@@ -1327,6 +1335,7 @@ module type Syntax_S = sig
   val is_function_pointer_expression : t -> bool
   val is_parenthesized_expression : t -> bool
   val is_braced_expression : t -> bool
+  val is_et_splice_expression : t -> bool
   val is_embedded_braced_expression : t -> bool
   val is_list_expression : t -> bool
   val is_collection_literal_expression : t -> bool

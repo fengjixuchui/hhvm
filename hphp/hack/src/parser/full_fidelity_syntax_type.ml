@@ -90,7 +90,7 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; function_left_paren                                : t
     ; function_parameter_list                            : t
     ; function_right_paren                               : t
-    ; function_capability                                : t
+    ; function_contexts                                  : t
     ; function_colon                                     : t
     ; function_type                                      : t
     ; function_where_clause                              : t
@@ -109,6 +109,7 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; anonymous_left_paren                               : t
     ; anonymous_parameters                               : t
     ; anonymous_right_paren                              : t
+    ; anonymous_ctx_list                                 : t
     ; anonymous_colon                                    : t
     ; anonymous_type                                     : t
     ; anonymous_use                                      : t
@@ -125,7 +126,7 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     { lambda_left_paren                                  : t
     ; lambda_parameters                                  : t
     ; lambda_right_paren                                 : t
-    ; lambda_capability                                  : t
+    ; lambda_contexts                                    : t
     ; lambda_colon                                       : t
     ; lambda_type                                        : t
     }
@@ -135,7 +136,7 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; closure_inner_left_paren                           : t
     ; closure_parameter_list                             : t
     ; closure_inner_right_paren                          : t
-    ; closure_capability                                 : t
+    ; closure_contexts                                   : t
     ; closure_colon                                      : t
     ; closure_return_type                                : t
     ; closure_outer_right_paren                          : t
@@ -312,15 +313,15 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; function_left_paren                                : t
     ; function_parameter_list                            : t
     ; function_right_paren                               : t
-    ; function_capability                                : t
+    ; function_contexts                                  : t
     ; function_colon                                     : t
     ; function_type                                      : t
     ; function_where_clause                              : t
     }
-  | Capability                        of
-    { capability_left_bracket                            : t
-    ; capability_types                                   : t
-    ; capability_right_bracket                           : t
+  | Contexts                          of
+    { contexts_left_bracket                              : t
+    ; contexts_types                                     : t
+    ; contexts_right_bracket                             : t
     }
   | WhereClause                       of
     { where_clause_keyword                               : t
@@ -655,6 +656,7 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; anonymous_left_paren                               : t
     ; anonymous_parameters                               : t
     ; anonymous_right_paren                              : t
+    ; anonymous_ctx_list                                 : t
     ; anonymous_colon                                    : t
     ; anonymous_type                                     : t
     ; anonymous_use                                      : t
@@ -677,7 +679,7 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     { lambda_left_paren                                  : t
     ; lambda_parameters                                  : t
     ; lambda_right_paren                                 : t
-    ; lambda_capability                                  : t
+    ; lambda_contexts                                    : t
     ; lambda_colon                                       : t
     ; lambda_type                                        : t
     }
@@ -784,6 +786,12 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     { braced_expression_left_brace                       : t
     ; braced_expression_expression                       : t
     ; braced_expression_right_brace                      : t
+    }
+  | ETSpliceExpression                of
+    { et_splice_expression_dollar                        : t
+    ; et_splice_expression_left_brace                    : t
+    ; et_splice_expression_expression                    : t
+    ; et_splice_expression_right_brace                   : t
     }
   | EmbeddedBracedExpression          of
     { embedded_braced_expression_left_brace              : t
@@ -1018,7 +1026,7 @@ module MakeSyntaxType(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; closure_inner_left_paren                           : t
     ; closure_parameter_list                             : t
     ; closure_inner_right_paren                          : t
-    ; closure_capability                                 : t
+    ; closure_contexts                                   : t
     ; closure_colon                                      : t
     ; closure_return_type                                : t
     ; closure_outer_right_paren                          : t
@@ -1201,6 +1209,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   | ExprFunctionPointer              of function_pointer_expression
   | ExprParenthesized                of parenthesized_expression
   | ExprBraced                       of braced_expression
+  | ExprETSplice                     of et_splice_expression
   | ExprEmbeddedBraced               of embedded_braced_expression
   | ExprList                         of list_expression
   | ExprCollectionLiteral            of collection_literal_expression
@@ -1221,7 +1230,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   | ExprEnumAtom                     of enum_atom_expression
   and specifier =
   | SpecSimple            of simple_type_specifier
-  | SpecCapability        of capability
+  | SpecContexts          of contexts
   | SpecVariadicParameter of variadic_parameter
   | SpecLambdaSignature   of lambda_signature
   | SpecXHPEnumType       of xhp_enum_type
@@ -1316,6 +1325,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   | LambdaFunctionPointer              of function_pointer_expression
   | LambdaParenthesized                of parenthesized_expression
   | LambdaBraced                       of braced_expression
+  | LambdaETSplice                     of et_splice_expression
   | LambdaEmbeddedBraced               of embedded_braced_expression
   | LambdaList                         of list_expression
   | LambdaCollectionLiteral            of collection_literal_expression
@@ -1363,6 +1373,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
   | CExprFunctionPointer              of function_pointer_expression
   | CExprParenthesized                of parenthesized_expression
   | CExprBraced                       of braced_expression
+  | CExprETSplice                     of et_splice_expression
   | CExprEmbeddedBraced               of embedded_braced_expression
   | CExprList                         of list_expression
   | CExprCollectionLiteral            of collection_literal_expression
@@ -1562,15 +1573,15 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; function_left_paren: Token.t value
     ; function_parameter_list: parameter listesque value
     ; function_right_paren: Token.t value
-    ; function_capability: capability option value
+    ; function_contexts: contexts option value
     ; function_colon: Token.t option value
     ; function_type: attributized_specifier option value
     ; function_where_clause: where_clause option value
     }
-  and capability =
-    { capability_left_bracket: Token.t value
-    ; capability_types: specifier listesque value
-    ; capability_right_bracket: Token.t value
+  and contexts =
+    { contexts_left_bracket: Token.t value
+    ; contexts_types: specifier listesque value
+    ; contexts_right_bracket: Token.t value
     }
   and where_clause =
     { where_clause_keyword: Token.t value
@@ -1673,7 +1684,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; context_const_type_parameters: type_parameters option value
     ; context_const_constraint: context_constraint listesque value
     ; context_const_equal: Token.t option value
-    ; context_const_ctx_list: capability option value
+    ; context_const_ctx_list: contexts option value
     ; context_const_semicolon: Token.t value
     }
   and decorated_expression =
@@ -1905,6 +1916,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; anonymous_left_paren: Token.t value
     ; anonymous_parameters: parameter listesque value
     ; anonymous_right_paren: Token.t value
+    ; anonymous_ctx_list: contexts option value
     ; anonymous_colon: Token.t option value
     ; anonymous_type: specifier option value
     ; anonymous_use: anonymous_function_use_clause option value
@@ -1927,7 +1939,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     { lambda_left_paren: Token.t value
     ; lambda_parameters: parameter listesque value
     ; lambda_right_paren: Token.t value
-    ; lambda_capability: capability option value
+    ; lambda_contexts: contexts option value
     ; lambda_colon: Token.t option value
     ; lambda_type: specifier option value
     }
@@ -2034,6 +2046,12 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     { braced_expression_left_brace: Token.t value
     ; braced_expression_expression: expression value
     ; braced_expression_right_brace: Token.t value
+    }
+  and et_splice_expression =
+    { et_splice_expression_dollar: Token.t value
+    ; et_splice_expression_left_brace: Token.t value
+    ; et_splice_expression_expression: expression value
+    ; et_splice_expression_right_brace: Token.t value
     }
   and embedded_braced_expression =
     { embedded_braced_expression_left_brace: Token.t value
@@ -2245,7 +2263,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     }
   and context_constraint =
     { ctx_constraint_keyword: Token.t value
-    ; ctx_constraint_ctx_list: capability option value
+    ; ctx_constraint_ctx_list: contexts option value
     }
   and darray_type_specifier =
     { darray_keyword: Token.t value
@@ -2268,7 +2286,7 @@ module MakeValidated(Token : TokenType)(SyntaxValue : SyntaxValueType) = struct
     ; closure_inner_left_paren: Token.t value
     ; closure_parameter_list: closure_parameter_type_specifier listesque value
     ; closure_inner_right_paren: Token.t value
-    ; closure_capability: capability option value
+    ; closure_contexts: contexts option value
     ; closure_colon: Token.t value
     ; closure_return_type: specifier value
     ; closure_outer_right_paren: Token.t value

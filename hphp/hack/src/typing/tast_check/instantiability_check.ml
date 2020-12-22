@@ -37,7 +37,9 @@ let validate_classname (pos, hint) =
   | Aast.Hprim _
   | Aast.Hoption _
   | Aast.Hfun _
-  | Aast.Hshape _ ->
+  | Aast.Hshape _
+  | Aast.Hfun_context _
+  | Aast.Hvar _ ->
     Errors.invalid_classname pos
 
 let rec check_hint env (pos, hint) =
@@ -83,7 +85,9 @@ let rec check_hint env (pos, hint) =
   | Aast.Hnonnull
   | Aast.Hmixed
   | Aast.Hthis
-  | Aast.Hnothing ->
+  | Aast.Hnothing
+  | Aast.Hfun_context _
+  | Aast.Hvar _ ->
     ()
   | Aast.Hfun
       Aast.
@@ -94,7 +98,7 @@ let rec check_hint env (pos, hint) =
           hf_param_mutability = _;
           (* TODO: shouldn't we be checking this hint as well? *)
           hf_variadic_ty = _;
-          hf_cap = _;
+          hf_ctxs = _;
           hf_return_ty = h;
           hf_is_mutable_return = _;
         } ->

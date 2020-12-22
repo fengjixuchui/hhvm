@@ -108,30 +108,33 @@ let is_valid_append_target env ty =
 
 let check_assignment_or_unset_target
     ~is_assignment ?append_pos_opt (env : Tast_env.env) (te1 : expr) =
-  (* Check for modifying immutable objects *)
-  let p = get_position te1 in
-  match snd te1 with
-  (* Setting mutable locals is okay *)
-  | Obj_get (e1, _, _, _) when expr_is_valid_borrowed_arg env e1 -> ()
-  | Array_get (e1, i)
-    when is_assignment && not (is_valid_append_target env (get_type e1)) ->
-    Errors.nonreactive_indexing
-      (Option.is_none i)
-      (Option.value append_pos_opt ~default:p)
-  | Array_get (e1, _)
-    when expr_is_valid_borrowed_arg env e1
-         || is_valid_mutable_subscript_expression_target env e1 ->
+  if TypecheckerOptions.local_coeffects (Env.get_tcopt env) then
     ()
-  | Class_get _ ->
-    (* we already report errors about statics in rx context, no need to do it twice *)
-    ()
-  | Obj_get _
-  | Array_get _ ->
-    if is_assignment then
-      Errors.obj_set_reactive p
-    else
-      Errors.invalid_unset_target_rx p
-  | _ -> ()
+  else
+    (* Check for modifying immutable objects *)
+    let p = get_position te1 in
+    match snd te1 with
+    (* Setting mutable locals is okay *)
+    | Obj_get (e1, _, _, _) when expr_is_valid_borrowed_arg env e1 -> ()
+    | Array_get (e1, i)
+      when is_assignment && not (is_valid_append_target env (get_type e1)) ->
+      Errors.CoeffectEnforcedOp.nonreactive_indexing
+        (Option.is_none i)
+        (Option.value append_pos_opt ~default:p)
+    | Array_get (e1, _)
+      when expr_is_valid_borrowed_arg env e1
+           || is_valid_mutable_subscript_expression_target env e1 ->
+      ()
+    | Class_get _ ->
+      (* we already report errors about statics in rx context, no need to do it twice *)
+      ()
+    | Obj_get _
+    | Array_get _ ->
+      if is_assignment then
+        Errors.CoeffectEnforcedOp.obj_set_reactive p
+      else
+        Errors.CoeffectEnforcedOp.invalid_unset_target_rx p
+    | _ -> ()
 
 let check_non_rx =
   object
@@ -673,9 +676,10 @@ let check =
               if SN.Superglobals.is_superglobal local_id then
                 Errors.superglobal_in_reactive_context p local_id
             | (_, Class_get _) ->
-              Errors.CoeffectEnforcedOp.static_property_access
-                (get_position expr);
-
+              if not (TypecheckerOptions.local_coeffects (Env.get_tcopt env))
+              then
+                Errors.CoeffectEnforcedOp.static_property_access
+                  (get_position expr);
               (* dive into subnodes *)
               super#on_expr (env, ctx) expr
             | (_, This) when ctx.disallow_this ->
@@ -735,7 +739,9 @@ let check =
               super#on_expr (env, ctx) expr
             | (_, Call ((_, Id (p, f)), _, _, None))
               when String.equal f SN.SpecialFunctions.echo ->
-              Errors.CoeffectEnforcedOp.output p;
+              if not (TypecheckerOptions.local_coeffects (Env.get_tcopt env))
+              then
+                Errors.CoeffectEnforcedOp.output p;
               super#on_expr (env, ctx) expr
             | (_, Call (f, _, _, _)) ->
               enforce_mutable_call env expr;

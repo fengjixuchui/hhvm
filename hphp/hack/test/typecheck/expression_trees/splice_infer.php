@@ -7,7 +7,7 @@ function foo(): void {
   $y = Code`5`;
 
   // Inferred type needs to be compatible
-  $z = Code`__splice__($y) + __splice__($x)`;
+  $z = Code`${$y} + ${$x}`;
 }
 
 //// BEGIN DEFS
@@ -148,7 +148,7 @@ class Code {
   }
 }
 
-final class ExprTree<TVisitor, TResult, TInfer>{
+final class ExprTree<TVisitor, TResult, +TInfer>{
   public function __construct(
     private ?ExprPos $pos,
     private string $filepath,

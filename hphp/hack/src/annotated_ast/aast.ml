@@ -292,8 +292,8 @@ and ('ex, 'fb, 'en, 'hi) fun_ = {
   f_where_constraints: where_constraint_hint list;
   f_variadic: ('ex, 'fb, 'en, 'hi) fun_variadicity;
   f_params: ('ex, 'fb, 'en, 'hi) fun_param list;
-  f_cap: 'hi type_hint;
-  f_unsafe_cap: 'hi type_hint;
+  f_ctxs: contexts option;
+  f_unsafe_ctxs: contexts option;
   f_body: ('ex, 'fb, 'en, 'hi) func_body;
   f_fun_kind: Ast_defs.fun_kind;
   f_user_attributes: ('ex, 'fb, 'en, 'hi) user_attribute list;
@@ -459,6 +459,7 @@ and ('ex, 'fb, 'en, 'hi) class_typeconst = {
   c_tconst_user_attributes: ('ex, 'fb, 'en, 'hi) user_attribute list;
   c_tconst_span: pos;
   c_tconst_doc_comment: doc_comment option;
+  c_tconst_is_ctx: bool;
 }
 
 and xhp_attr_info = { xai_tag: xhp_attr_tag option }
@@ -490,8 +491,8 @@ and ('ex, 'fb, 'en, 'hi) method_ = {
   m_where_constraints: where_constraint_hint list;
   m_variadic: ('ex, 'fb, 'en, 'hi) fun_variadicity;
   m_params: ('ex, 'fb, 'en, 'hi) fun_param list;
-  m_cap: 'hi type_hint;
-  m_unsafe_cap: 'hi type_hint;
+  m_ctxs: contexts option;
+  m_unsafe_ctxs: contexts option;
   m_body: ('ex, 'fb, 'en, 'hi) func_body;
   m_fun_kind: Ast_defs.fun_kind;
   m_user_attributes: ('ex, 'fb, 'en, 'hi) user_attribute list;

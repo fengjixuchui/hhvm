@@ -14,6 +14,8 @@
  * YOU SHOULD NEVER INCLUDE THIS FILE ANYWHERE!!!
  */
 
+<<file: __EnableUnstableFeatures('coeffects_provisional')>>
+
 namespace {
 
 final class Generator<+Tk, +Tv, -Ts> implements KeyedIterator<Tk, Tv> {
@@ -202,5 +204,5 @@ final class ExternalThreadEventWaitHandle<+T> extends WaitableWaitHandle<T> {
 }
 
 <<__Pure>>
-function is_class(<<__MaybeMutable>> mixed $arg): bool;
+function is_class(<<__MaybeMutable>> mixed $arg)[]: bool;
 } // namespace HH

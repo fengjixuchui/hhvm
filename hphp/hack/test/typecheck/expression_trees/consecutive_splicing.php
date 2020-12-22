@@ -5,7 +5,7 @@
 function test(): void {
   $x = Code`4`;
   $y = Code`5`;
-  Code`__splice__($x) + __splice__($y)`;
+  Code`${$x} + ${$y}`;
 }
 
 //// BEGIN DEFS
@@ -146,7 +146,7 @@ class Code {
   }
 }
 
-final class ExprTree<TVisitor, TResult, TInfer>{
+final class ExprTree<TVisitor, TResult, +TInfer>{
   public function __construct(
     private ?ExprPos $pos,
     private string $filepath,

@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<127082229903dc79e267a28152835a06>>
+// @generated SignedSource<<2fe767d240bb10302abb403be390a9b2>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized/regen.sh
@@ -371,6 +371,7 @@ impl<P: Params> NodeMut<P> for ClassTypeconst<P::Ex, P::Fb, P::En, P::Hi> {
         self.user_attributes.accept(c, v)?;
         self.span.accept(c, v)?;
         self.doc_comment.accept(c, v)?;
+        self.is_ctx.accept(c, v)?;
         Ok(())
     }
 }
@@ -494,6 +495,24 @@ impl<P: Params> NodeMut<P> for ConstraintKind {
             ConstraintKind::ConstraintEq => Ok(()),
             ConstraintKind::ConstraintSuper => Ok(()),
         }
+    }
+}
+impl<P: Params> NodeMut<P> for Contexts {
+    fn accept<'node>(
+        &'node mut self,
+        c: &mut P::Context,
+        v: &mut dyn VisitorMut<'node, P = P>,
+    ) -> Result<(), P::Error> {
+        v.visit_contexts(c, self)
+    }
+    fn recurse<'node>(
+        &'node mut self,
+        c: &mut P::Context,
+        v: &mut dyn VisitorMut<'node, P = P>,
+    ) -> Result<(), P::Error> {
+        self.0.accept(c, v)?;
+        self.1.accept(c, v)?;
+        Ok(())
     }
 }
 impl<P: Params> NodeMut<P> for Def<P::Ex, P::Fb, P::En, P::Hi> {
@@ -1058,8 +1077,8 @@ impl<P: Params> NodeMut<P> for Fun_<P::Ex, P::Fb, P::En, P::Hi> {
         self.where_constraints.accept(c, v)?;
         self.variadic.accept(c, v)?;
         self.params.accept(c, v)?;
-        self.cap.accept(c, v)?;
-        self.unsafe_cap.accept(c, v)?;
+        self.ctxs.accept(c, v)?;
+        self.unsafe_ctxs.accept(c, v)?;
         self.body.accept(c, v)?;
         self.fun_kind.accept(c, v)?;
         self.user_attributes.accept(c, v)?;
@@ -1197,7 +1216,7 @@ impl<P: Params> NodeMut<P> for HintFun {
         self.param_kinds.accept(c, v)?;
         self.param_mutability.accept(c, v)?;
         self.variadic_ty.accept(c, v)?;
-        self.cap.accept(c, v)?;
+        self.ctxs.accept(c, v)?;
         self.return_ty.accept(c, v)?;
         self.is_mutable_return.accept(c, v)?;
         Ok(())
@@ -1286,6 +1305,14 @@ impl<P: Params> NodeMut<P> for Hint_ {
                 Ok(())
             }
             Hint_::Hintersection(a0) => {
+                a0.accept(c, v)?;
+                Ok(())
+            }
+            Hint_::HfunContext(a0) => {
+                a0.accept(c, v)?;
+                Ok(())
+            }
+            Hint_::Hvar(a0) => {
                 a0.accept(c, v)?;
                 Ok(())
             }
@@ -1412,8 +1439,8 @@ impl<P: Params> NodeMut<P> for Method_<P::Ex, P::Fb, P::En, P::Hi> {
         self.where_constraints.accept(c, v)?;
         self.variadic.accept(c, v)?;
         self.params.accept(c, v)?;
-        self.cap.accept(c, v)?;
-        self.unsafe_cap.accept(c, v)?;
+        self.ctxs.accept(c, v)?;
+        self.unsafe_ctxs.accept(c, v)?;
         self.body.accept(c, v)?;
         self.fun_kind.accept(c, v)?;
         self.user_attributes.accept(c, v)?;

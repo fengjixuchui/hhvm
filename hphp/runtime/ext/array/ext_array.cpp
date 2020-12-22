@@ -942,6 +942,7 @@ TypedValue HHVM_FUNCTION(array_shift,
     auto& arr_array = array.asArrRef();
     assertx(!arr_array.empty());
     auto newArray  = makeReserveLike(cell_array->m_type, arr_array.size() - 1);
+    if (arr_array->isLegacyArray()) newArray->setLegacyArrayInPlace(true);
     ArrayIter it(arr_array.detach(), ArrayIter::noInc);
     auto const result = it.second();
     ++it;
@@ -999,24 +1000,17 @@ TypedValue HHVM_FUNCTION(array_slice,
   }();
 
 
-  // If the slice covers the entire input container, we can just nop when
-  // preserve_keys is true, or when preserve_keys is false but the container
-  // is packed so we know the keys already map to [0,N].
-  if (offset == 0 && len == num_in && (preserve_keys || input_is_packed)) {
-    // TODO(kshaunak): Either intish-cast here, or DON'T intish-cast below.
-    // We should behave the same for arrays and other array-likes.
-    if (isArrayType(cell_input.m_type)) {
-      return tvReturn(Variant{cell_input.m_data.parr});
+  // If the slice covers the entirety of a packed input container, we can cast
+  // the whole thing into a varray and return it immediately.
+  if (offset == 0 && len == num_in && input_is_packed) {
+    if (tvIsArrayLike(cell_input)) {
+      return tvReturn(ArrNR{val(cell_input).parr}.asArray().toVArray());
     }
-    if (isClsMethType(cell_input.m_type) && RO::EvalIsCompatibleClsMethType) {
+    if (tvIsClsMeth(cell_input) && RO::EvalIsCompatibleClsMethType) {
       raiseClsMethToVecWarningHelper(__FUNCTION__+2);
-      return tvReturn(clsMethToVecHelper(cell_input.m_data.pclsmeth));
+      return tvReturn(clsMethToVecHelper(val(cell_input).pclsmeth));
     }
-    if (isArrayLikeType(cell_input.m_type)) {
-      return tvReturn(ArrNR{cell_input.m_data.parr}
-                        .asArray().toPHPArrayIntishCast());
-    }
-    return tvReturn(cell_input.m_data.pobj->toArray<IntishCast::Cast>());
+    return tvReturn(val(cell_input).pobj->toArray());
   }
 
   int pos = 0;
@@ -1033,14 +1027,22 @@ TypedValue HHVM_FUNCTION(array_slice,
 
   // Otherwise VArrayInit can't be used because non-numeric keys are
   // preserved even when preserve_keys is false
-  bool is_php_array = isArrayType(cell_input.m_type);
+  auto logged_intish_cast = false;
+  auto is_php_array = isArrayType(cell_input.m_type);
   Array ret = Array::attach(MixedArray::MakeReserveDArray(len));
   auto nextKI = 0; // for appends
   for (; pos < (offset + len) && iter; ++pos, ++iter) {
     Variant key(iter.first());
     if (!is_php_array && key.isString()) {
       int64_t n;
-      if (key.asCStrRef().get()->isStrictlyInteger(n)) key = n;
+      if (key.asCStrRef().get()->isStrictlyInteger(n)) {
+        if (!logged_intish_cast &&
+            RO::EvalHackArrCompatArraySliceIntishCastNotices) {
+          logged_intish_cast = true;
+          raise_hackarr_compat_notice("triggered IntishCast for array_slice");
+        }
+        key = n;
+      }
     }
     if (!preserve_keys && key.isInteger()) {
       ret.set(nextKI++, iter.secondValPlus());
@@ -1169,8 +1171,10 @@ TypedValue HHVM_FUNCTION(array_unshift,
   }
   auto const dt = type(cell_array);
   if (isArrayLikeType(dt)) {
-    auto const size = val(cell_array).parr->size() + args.size() + 1;
+    auto const ad = val(cell_array).parr;
+    auto const size = ad->size() + args.size() + 1;
     auto newArray = makeReserveLike(dt, size);
+    if (ad->isLegacyArray()) newArray->setLegacyArrayInPlace(true);
     if (isDictOrDArrayType(dt)) {
       int64_t i = 0;
       newArray.set(i++, var);
@@ -1274,13 +1278,18 @@ static int php_count_recursive(const Array& array) {
   return cnt;
 }
 
-bool HHVM_FUNCTION(shuffle,
-                   Variant& array) {
+bool HHVM_FUNCTION(shuffle, Variant& array) {
   if (!array.isArray()) {
     raise_expected_array_warning("shuffle");
     return false;
   }
+
+  auto const ad = array.asCArrRef().get();
+  if (ad->empty()) return true;
+
+  auto const legacy = ad->isLegacyArray();
   array = ArrayUtil::Shuffle(array.asCArrRef());
+  if (legacy) array.asArrRef()->setLegacyArrayInPlace(true);
   return true;
 }
 
@@ -2546,15 +2555,24 @@ struct ArraySortTmp {
     assertx(m_ad->empty() || m_ad->hasExactlyOneRef());
   }
   ~ArraySortTmp() {
+    auto const old = val(m_tv).parr;
+    auto const legacy = old->isLegacyArray();
+
     // We must call BespokeArray::PostSort before cleaning up the old array,
     // because some bespoke arrays may move values from old -> m_ad at PreSort
     // and move them back at PostSort. (LoggingArray moves the entire array.)
-    auto const old = val(m_tv).parr;
     if (!old->isVanilla()) {
       m_ad = BespokeArray::PostSort(old, m_ad);
     }
     if (m_ad != old) {
       tvMove(make_array_like_tv(m_ad), m_tv);
+    }
+
+    // All sort functions preserve the legacy bit.
+    assertx(m_ad == val(m_tv).parr);
+    if (legacy != m_ad->isLegacyArray()) {
+      auto const marked = arrprov::markTvShallow(*m_tv, legacy);
+      tvMove(marked, m_tv);
     }
   }
   ArrayData* operator->() { return m_ad; }

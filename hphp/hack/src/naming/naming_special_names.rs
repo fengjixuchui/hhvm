@@ -65,7 +65,7 @@ pub mod classes {
 
     pub const IASYNC_DISPOSABLE: &str = "\\IAsyncDisposable";
 
-    pub const ELT: &str = "\\HH\\Elt";
+    pub const ENUM_MEMBER: &str = "\\HH\\EnumMember";
 }
 
 pub mod collections {
@@ -446,12 +446,10 @@ pub mod special_functions {
 
     pub const HHAS_ADATA: &str = "__hhas_adata";
 
-    pub const SPLICE: &str = "__splice__";
-
     pub fn is_special_function(x: &str) -> bool {
         lazy_static! {
             static ref ALL_SPECIAL_FUNCTIONS: Vec<&'static str> =
-                vec![TUPLE, ECHO, ASSERT_, HHAS_ADATA, SPLICE,]
+                vec![TUPLE, ECHO, ASSERT_, HHAS_ADATA,]
                     .into_iter()
                     .collect();
         }

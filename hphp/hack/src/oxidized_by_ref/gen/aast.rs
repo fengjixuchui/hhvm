@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<4370679e1c6cfecef8d876745c19cb61>>
+// @generated SignedSource<<e09ccf33a7bd27edee4cea2f882d42ac>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_by_ref/regen.sh
@@ -696,8 +696,8 @@ pub struct Fun_<'a, Ex, Fb, En, Hi> {
     pub where_constraints: &'a [&'a WhereConstraintHint<'a>],
     pub variadic: FunVariadicity<'a, Ex, Fb, En, Hi>,
     pub params: &'a [&'a FunParam<'a, Ex, Fb, En, Hi>],
-    pub cap: &'a TypeHint<'a, Hi>,
-    pub unsafe_cap: &'a TypeHint<'a, Hi>,
+    pub ctxs: Option<&'a Contexts<'a>>,
+    pub unsafe_ctxs: Option<&'a Contexts<'a>>,
     pub body: &'a FuncBody<'a, Ex, Fb, En, Hi>,
     pub fun_kind: oxidized::ast_defs::FunKind,
     pub user_attributes: &'a [&'a UserAttribute<'a, Ex, Fb, En, Hi>],
@@ -1119,6 +1119,7 @@ pub struct ClassTypeconst<'a, Ex, Fb, En, Hi> {
     pub user_attributes: &'a [&'a UserAttribute<'a, Ex, Fb, En, Hi>],
     pub span: &'a Pos<'a>,
     pub doc_comment: Option<&'a DocComment<'a>>,
+    pub is_ctx: bool,
 }
 impl<'a, Ex: TrivialDrop, Fb: TrivialDrop, En: TrivialDrop, Hi: TrivialDrop> TrivialDrop
     for ClassTypeconst<'a, Ex, Fb, En, Hi>
@@ -1184,8 +1185,8 @@ pub struct Method_<'a, Ex, Fb, En, Hi> {
     pub where_constraints: &'a [&'a WhereConstraintHint<'a>],
     pub variadic: FunVariadicity<'a, Ex, Fb, En, Hi>,
     pub params: &'a [&'a FunParam<'a, Ex, Fb, En, Hi>],
-    pub cap: &'a TypeHint<'a, Hi>,
-    pub unsafe_cap: &'a TypeHint<'a, Hi>,
+    pub ctxs: Option<&'a Contexts<'a>>,
+    pub unsafe_ctxs: Option<&'a Contexts<'a>>,
     pub body: &'a FuncBody<'a, Ex, Fb, En, Hi>,
     pub fun_kind: oxidized::ast_defs::FunKind,
     pub user_attributes: &'a [&'a UserAttribute<'a, Ex, Fb, En, Hi>],
