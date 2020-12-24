@@ -1446,8 +1446,7 @@ struct DualDispatchUnionImpl {
         if (a->isDArray()) return aempty_darray(tag);
         always_assert(false);
       }();
-      set_trep(r, bits);
-      return r;
+      return set_trep(std::move(r), bits);
     }
 
     auto const p1 = toDArrLikePacked(a);
@@ -2450,20 +2449,18 @@ Type project_data(Type t, trep bits) {
 
 Type remove_counted(Type t) {
   auto const isStatic = [] (const Type& t) {
-    return (t.bits() & BUnc) == t.bits();
+    return t.subtypeOf(BUnc);
   };
   auto const isCounted = [] (const Type& t) {
-    return (t.bits() & BUnc) == BBottom;
+    return !t.couldBe(BUnc);
   };
   auto const strip = [&] {
     t.m_bits &= BUnc;
     assertx(isPredefined(t.bits()));
     return t;
   };
-  auto const nothing = [&] {
-    auto ret = t.bits() & BSArrLikeE;
-    if (is_opt(t)) ret |= BInitNull;
-    return Type { ret };
+  auto const nothing = [&] (trep bits = BArrLikeN) {
+    return Type { trep(t.m_bits & (BUnc & ~bits)) };
   };
 
   switch (t.m_dataTag) {
@@ -2476,7 +2473,7 @@ Type remove_counted(Type t) {
     case DataTag::ArrLikeVal:
       return strip();
     case DataTag::Obj:
-      return nothing();
+      return nothing(BBottom);
     case DataTag::ArrLikePackedN: {
       if (isStatic(t.m_data.packedn->type)) return strip();
       if (isCounted(t.m_data.packedn->type)) return nothing();
@@ -3229,7 +3226,7 @@ bool is_specialized_keyset(const Type& t) {
   return t.subtypeOrNull(BKeyset) && is_specialized_array_like(t);
 }
 
-Type set_trep(Type& a, trep bits) {
+Type set_trep(Type a, trep bits) {
   // If the type and its new bits don't agree on d/varray-ness and the type has
   // a static array, we need to convert the static array into its equivalent
   // Packed or Map type. We cannot have a ArrLikeVal if the type isn't
@@ -3238,7 +3235,7 @@ Type set_trep(Type& a, trep bits) {
       ((a.subtypeOrNull(BVArr) && ((bits & (BVArr | BNull)) != bits)) ||
        (a.subtypeOrNull(BDArr) && ((bits & (BDArr | BNull)) != bits)))) {
     if (a.m_data.aval->empty()) {
-      a = loosen_values(a);
+      a = loosen_values(std::move(a));
     } else {
       if (auto p = toDArrLikePacked(a.m_data.aval)) {
         return packed_impl(bits, std::move(p->elems),
@@ -3256,7 +3253,7 @@ Type set_trep(Type& a, trep bits) {
     }
   }
   a.m_bits = bits;
-  return std::move(a);
+  return a;
 }
 
 /*
@@ -3280,7 +3277,7 @@ Type spec_array_like_union(Type& spec_a,
   if (!is_specialized_array_like(b)) {
     // We can keep a's specialization if b is an empty array-like
     // or a nullable empty array-like.
-    if (b.subtypeOf(opt_e | BNull)) return set_trep(spec_a, bits);
+    if (b.subtypeOf(opt_e | BNull)) return set_trep(std::move(spec_a), bits);
     // otherwise drop the specialized bits
     return Type { bits };
   }
@@ -4425,19 +4422,19 @@ Type Type::unionArrLike(Type a, Type b) {
   auto a_projected = project_data(a, newBits);
   auto b_projected = project_data(b, newBits);
   if (!b_projected.hasData()) {
-    return set_trep(a_projected, newBits);
+    return set_trep(std::move(a_projected), newBits);
   }
   if (!a_projected.hasData()) {
-    return set_trep(b_projected, newBits);
+    return set_trep(std::move(b_projected), newBits);
   }
   /* at this point we know the projection removed nothing */
   assert(a.hasData() && a_projected.hasData());
   assert(b.hasData() && b_projected.hasData());
   if (a.subtypeData<true>(b)) {
-    return set_trep(b, newBits);
+    return set_trep(std::move(b), newBits);
   }
   if (b.subtypeData<true>(a)) {
-    return set_trep(a, newBits);
+    return set_trep(std::move(a), newBits);
   }
   return a.dualDispatchDataFn(b, DualDispatchUnion{ newBits });
 }
