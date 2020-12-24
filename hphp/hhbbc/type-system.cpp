@@ -4911,11 +4911,11 @@ Type loosen_staticness(Type t) {
   return t;
 }
 
-Type loosen_dvarrayness(Type t) {
+Type loosen_arraylike(Type t) {
   auto const check = [&] (trep a) {
     if (t.bits() & a) t.m_bits |= a;
   };
-  if (t.couldBe(BArr) && t.m_dataTag == DataTag::ArrLikeVal) {
+  if (t.couldBe(BArrLike) && t.m_dataTag == DataTag::ArrLikeVal) {
     // We need to drop any static array from the type because TArr unions cannot
     // have one. Turn it into the equivalent Packed or Map data.
     if (t.m_data.aval->empty()) {
@@ -4935,10 +4935,10 @@ Type loosen_dvarrayness(Type t) {
       );
     }
   }
-  check(BSArrE);
-  check(BCArrE);
-  check(BSArrN);
-  check(BCArrN);
+  check(BSArrLikeE);
+  check(BCArrLikeE);
+  check(BSArrLikeN);
+  check(BCArrLikeN);
   return t;
 }
 
@@ -6395,21 +6395,10 @@ bool could_copy_on_write(const Type& t) {
 }
 
 bool is_type_might_raise(const Type& testTy, const Type& valTy) {
-  auto const UNUSED hackarr = RO::EvalHackArrDVArrs;
-
-  // Explanation for the array-like type test behaviors:
-  //
-  //  1. If arrprov is on, we may log if an array-like with provenance fails or
-  //     passes a type test, because those arrays may have to be marked.
-  //
-  //  2. The ...IsArrayNotices flag is used to migrate is_array calls to
-  //     is_any_array calls, which differ for Hack arrays, so we must log.
-  //
-  //  3. The ...IsVecDictNotices flag tracks those type tests that would change
-  //     behavior with the Hack array migration - i.e. those tests which have
-  //     varrays in is_vec, darrays in is_dict, or vice versa.
-
-  auto const mayLogProv = RO::EvalArrayProvenance && valTy.couldBe(kProvBits);
+  // Before we flip the HADVAs flag, any type test that could distinguish
+  // between array and non-array types may log a serialization notice.
+  auto const HADVAs = RO::EvalHackArrDVArrs;
+  auto const mayLogSerialization = !HADVAs && valTy.couldBe(BArr);
 
   auto const mayLogClsMeth =
     RO::EvalIsVecNotices &&
@@ -6419,32 +6408,28 @@ bool is_type_might_raise(const Type& testTy, const Type& valTy) {
 
   assertx(
     !RO::EvalIsCompatibleClsMethType ||
-    (testTy != TVArr && testTy != (hackarr ? TVec : TArr))
+    (testTy != TVArr && testTy != (HADVAs ? TVec : TArr))
   );
   assertx(
     RO::EvalIsCompatibleClsMethType ||
-    (testTy != TVArrCompat && testTy != (hackarr ? TVecCompat : TArrCompat))
+    (testTy != TVArrCompat && testTy != (HADVAs ? TVecCompat : TArrCompat))
   );
-  assertx(testTy != (hackarr ? TArrCompat : TVecCompat));
+  assertx(testTy != (HADVAs ? TArrCompat : TVecCompat));
   assertx(!mayLogClsMeth || RO::EvalIsCompatibleClsMethType);
 
   if (is_opt(testTy)) return is_type_might_raise(unopt(testTy), valTy);
   if (testTy == TStrLike) {
     return valTy.couldBe(BCls | BLazyCls);
   } else if (testTy == TArr || testTy == TArrCompat) {
-    return mayLogProv || mayLogClsMeth;
+    return mayLogSerialization || mayLogClsMeth;
   } else if (testTy == TVArr || testTy == TVArrCompat) {
-    return mayLogProv || mayLogClsMeth ||
-           (RO::EvalHackArrCompatIsVecDictNotices && valTy.couldBe(BVec));
+    return mayLogSerialization || mayLogClsMeth;
   } else if (testTy == TDArr) {
-    return mayLogProv ||
-           (RO::EvalHackArrCompatIsVecDictNotices && valTy.couldBe(BDict));
+    return mayLogSerialization;
   } else if (testTy == TVec || testTy == TVecCompat) {
-    return mayLogProv || mayLogClsMeth ||
-           (RO::EvalHackArrCompatIsVecDictNotices && valTy.couldBe(BVec));
+    return mayLogSerialization || mayLogClsMeth;
   } else if (testTy == TDict) {
-    return mayLogProv ||
-           (RO::EvalHackArrCompatIsVecDictNotices && valTy.couldBe(BDArr));
+    return mayLogSerialization;
   } else if (testTy == TArrLikeCompat) {
     assertx(RO::EvalIsCompatibleClsMethType);
     return mayLogClsMeth;

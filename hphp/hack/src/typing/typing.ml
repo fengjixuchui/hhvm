@@ -3447,10 +3447,10 @@ and et_splice env p e =
   let (env, ty_visitor) = Env.fresh_type env p in
   let (env, ty_res) = Env.fresh_type env p in
   let (env, ty_infer) = Env.fresh_type env p in
-  let expr_tree_type =
-    MakeType.expr_tree (Reason.Rsplice p) ty_visitor ty_res ty_infer
+  let spliceable_type =
+    MakeType.spliceable (Reason.Rsplice p) ty_visitor ty_res ty_infer
   in
-  let env = SubType.sub_type env ty expr_tree_type Errors.unify_error in
+  let env = SubType.sub_type env ty spliceable_type Errors.unify_error in
   make_result env p (Aast.ET_Splice te) ty_infer
 
 (*****************************************************************************)
@@ -3461,7 +3461,7 @@ and type_capability env ctxs unsafe_ctxs default_pos =
   let (env, cap_ty) =
     match cc env.decl_env ctxs default_pos with
     | CapTy ty -> Phase.localize_with_self env ty
-    | CapDefaults _p -> (env, MakeType.default_capability)
+    | CapDefaults p -> (env, MakeType.default_capability p)
   in
   let (env, unsafe_cap_ty) =
     match cc env.decl_env unsafe_ctxs default_pos with
@@ -3711,7 +3711,7 @@ and new_object
 
 and attributes_check_def env kind attrs =
   (* TODO(coeffects) change to mixed after changing those constructors to pure *)
-  let defaults = MakeType.default_capability in
+  let defaults = MakeType.default_capability Pos.none in
   let (env, _) =
     Typing_lenv.stash_and_do env (Env.all_continuations env) (fun env ->
         let env =

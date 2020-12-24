@@ -62,7 +62,8 @@ let const_collection r ty = class_type r SN.Collections.cConstCollection [ty]
 
 let collection r ty = class_type r SN.Collections.cCollection [ty]
 
-let expr_tree r ty1 ty2 ty3 = class_type r SN.Classes.cExprTree [ty1; ty2; ty3]
+let spliceable r ty1 ty2 ty3 =
+  class_type r SN.Classes.cSpliceable [ty1; ty2; ty3]
 
 let varray_or_darray r kty vty = mk (r, Tvarray_or_darray (kty, vty))
 
@@ -178,7 +179,7 @@ let simple_variadic_splat r ty =
              d_kind = SplatUnpack;
            } ))
 
-let default_capability : locl_ty = nothing Reason.Rnone
+let default_capability p : locl_ty = nothing (Reason.Rdefault_capability p)
 
 (* ^ TODO(coeffects) after implementing lower bounds on const ctx/type, do:
   intersection

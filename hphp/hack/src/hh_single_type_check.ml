@@ -650,6 +650,7 @@ let parse_options () =
       ~tco_union_intersection_type_hints:!union_intersection_type_hints
       ~tco_coeffects:!call_coeffects
       ~tco_coeffects_local:!local_coeffects
+      ~po_enable_coeffects:true
       ~tco_like_casts:!like_casts
       ~tco_simple_pessimize:!simple_pessimize
       ~tco_complex_coercion:!complex_coercion
@@ -1371,6 +1372,12 @@ let handle_mode
           (* get the backtrace before doing anything else to be sure
              to get the one corresponding to exc *)
           let backtrace = Stdlib.Printexc.get_backtrace () in
+          Stdlib.Printexc.register_printer (function
+              | Ifc_types.IFCError err ->
+                Some
+                  ( Printf.sprintf "IFCError(%s)"
+                  @@ Ifc_types.show_ifc_error_ty err )
+              | _ -> None);
           Printf.printf
             "Uncaught exception: %s\n%s"
             (Stdlib.Printexc.to_string exc)

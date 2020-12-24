@@ -469,8 +469,9 @@ SSATmp* isStrImpl(IRGS& env, SSATmp* src) {
 // Logs a serialization notice for a dvarray if these notices are enabled.
 void maybeLogSerialization(IRGS& env, SSATmp* arr, SerializationSite site) {
   assertx(arr->isA(TVArr|TDArr));
-  if (!RO::EvalArrayProvenance) return;
-  gen(env, RaiseArraySerializeNotice, cns(env, site), arr);
+  if (raiseArraySerializationNotices()) {
+    gen(env, RaiseArraySerializeNotice, cns(env, site), arr);
+  }
 }
 
 SSATmp* isClassImpl(IRGS& env, SSATmp* src) {
@@ -483,10 +484,12 @@ SSATmp* isClassImpl(IRGS& env, SSATmp* src) {
 SSATmp* isPHPArrayImpl(IRGS& env, SSATmp* src) {
   MultiCond mc{env};
 
-  mc.ifTypeThen(src, TVArr|TDArr, [&](SSATmp* src) {
-    maybeLogSerialization(env, src, SerializationSite::IsArray);
-    return cns(env, true);
-  });
+  if (!RO::EvalHackArrDVArrs) {
+    mc.ifTypeThen(src, TVArr|TDArr, [&](SSATmp* src) {
+      maybeLogSerialization(env, src, SerializationSite::IsArray);
+      return cns(env, true);
+    });
+  }
 
   if (!RO::EvalHackArrDVArrs && RO::EvalIsCompatibleClsMethType) {
     mc.ifTypeThen(src, TClsMeth, [&](SSATmp*) {
@@ -530,7 +533,9 @@ SSATmp* isVecImpl(IRGS& env, SSATmp* src) {
     }
   }
 
-  if (RO::EvalHackArrCompatIsVecDictNotices || RO::EvalArrayProvenance) {
+  if (!RO::EvalHackArrDVArrs &&
+      (raiseArraySerializationNotices() ||
+       RO::EvalHackArrCompatIsVecDictNotices)) {
     mc.ifTypeThen(src, TVArr, [&](SSATmp* src) {
       hacLogging(Strings::HACKARR_COMPAT_VARR_IS_VEC);
       maybeLogSerialization(env, src, SerializationSite::IsVec);
@@ -553,7 +558,9 @@ SSATmp* isDictImpl(IRGS& env, SSATmp* src) {
     gen(env, RaiseHackArrCompatNotice, cns(env, makeStaticString(msg)));
   };
 
-  if (RO::EvalHackArrCompatIsVecDictNotices || RO::EvalArrayProvenance) {
+  if (!RO::EvalHackArrDVArrs &&
+      (raiseArraySerializationNotices() ||
+       RO::EvalHackArrCompatIsVecDictNotices)) {
     mc.ifTypeThen(src, TDArr, [&](SSATmp* src) {
       hacLogging(Strings::HACKARR_COMPAT_DARR_IS_DICT);
       maybeLogSerialization(env, src, SerializationSite::IsDict);
@@ -1426,11 +1433,9 @@ void verifyParamTypeImpl(IRGS& env, int32_t id) {
         return true;
       },
       [&] (Type valType, bool hard) { // Check failure
-        auto const failHard = hard &&
-          !(tc.isPHPArray() && valType.maybe(TObj));
         gen(
           env,
-          failHard ? VerifyParamFailHard : VerifyParamFail,
+          hard ? VerifyParamFailHard : VerifyParamFail,
           ParamWithTCData { id, &tc }
         );
       },
@@ -1603,10 +1608,7 @@ void verifyPropType(IRGS& env,
         // verifyPropType without us worrying about it punting the whole set op.
         // This check is fragile - which type constraints coerce?
 
-        // WARNING: Post HADVAs, VArray typehints (which are now vec typehints)
-        // will also coerce. It must be included in the isArray check, or else
-        // we have a bug.
-        if (coerce && (tc->isPHPArray() || tc->isString() ||
+        if (coerce && (tc->convertClsMethToArrLike() || tc->isString() ||
                        (tc->isObject() && !tc->isResolved()))) {
           *coerce = gen(
             env,
