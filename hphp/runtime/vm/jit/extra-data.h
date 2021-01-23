@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "hphp/runtime/base/bespoke/logging-profile.h"
 #include "hphp/runtime/base/collections.h"
 #include "hphp/runtime/base/typed-value.h"
 #include "hphp/runtime/vm/bytecode.h"
@@ -60,11 +61,13 @@ namespace HPHP { namespace jit {
  *   - Be arena-allocatable (no non-trivial destructors).
  *   - Either CopyConstructible, or implement a clone member function that
  *     takes an arena to clone to.
+ *   - Implement an equals() member that indicates equality.
+ *   - Implement a stableHash() method that is invariant across process
+ *     restarts.
  *
  * In addition, extra data belonging to IRInstructions that may be hashed in
  * IRInstrTables must:
  *
- *   - Implement an equals() member that indicates equality.
  *   - Implement a hash() method.
  *
  * Finally, optionally they may implement a show() method for use in debug
@@ -120,6 +123,10 @@ struct ClassData : IRExtraData {
     return pointer_hash<Class>()(cls);
   }
 
+  size_t stableHash() const {
+    return cls->stableHash();
+  }
+
   const Class* cls;
 };
 
@@ -138,6 +145,10 @@ struct OptClassData : IRExtraData {
 
   size_t hash() const {
     return pointer_hash<Class>()(cls);
+  }
+
+  size_t stableHash() const {
+    return (cls ? cls->stableHash() : 0);
   }
 
   const Class* cls;
@@ -185,6 +196,15 @@ struct ResolveTypeStructData : IRExtraData {
            ^ ((int64_t)(suppress ? -1 : 0) << 32 | (isOrAsOp ? -1 : 0));
   }
 
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      cls ? cls->stableHash() : 0,
+      std::hash<int32_t>()(offset.offset),
+      std::hash<uint32_t>()(size),
+      std::hash<uint8_t>()(suppress << 1 | isOrAsOp)
+    );
+  }
+
   const Class* cls;
   bool suppress;
   IRSPRelOffset offset;
@@ -215,6 +235,10 @@ struct ExtendsClassData : IRExtraData {
     return pointer_hash<Class>()(cls) ^ (strictLikely ? -1 : 0);
   }
 
+  size_t stableHash() const {
+    return cls->stableHash() ^ (strictLikely ? -1 : 0);
+  }
+
   const Class* cls;
   bool strictLikely;
 };
@@ -240,6 +264,10 @@ struct InstanceOfIfaceVtableData : IRExtraData {
 
   size_t hash() const {
     return pointer_hash<Class>()(cls) ^ (canOptimize ? -1 : 0);
+  }
+
+  size_t stableHash() const {
+    return cls->stableHash() ^ (canOptimize ? -1 : 0);
   }
 
   const Class* cls;
@@ -281,6 +309,14 @@ struct ClsMethodData : IRExtraData {
     );
   }
 
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      clsName->hashStatic(),
+      methodName->hashStatic(),
+      context ? context->stableHash() : 0
+    );
+  }
+
   const StringData* clsName;
   const StringData* methodName;
   const NamedEntity* namedEntity;
@@ -305,6 +341,10 @@ struct IfaceMethodData : IRExtraData {
     return hash_int64((int64_t)vtableIdx << 32 | methodIdx);
   }
 
+  size_t stableHash() const {
+    return hash_int64((int64_t)vtableIdx << 32 | methodIdx);
+  }
+
   Slot vtableIdx;
   Slot methodIdx;
 };
@@ -321,6 +361,14 @@ struct FuncData : IRExtraData {
     return folly::format("{}", func->fullName()).str();
   }
 
+  bool equals(const FuncData& f) const {
+    return func == f.func;
+  }
+
+  size_t stableHash() const {
+    return func->stableHash();
+  }
+
   const Func* func;
 };
 
@@ -335,6 +383,17 @@ struct FuncArgData : IRExtraData {
 
   std::string show() const {
     return folly::format("{},{}", func->name(), argNum).str();
+  }
+
+  bool equals(const FuncArgData& o) const {
+    return func == o.func && argNum == o.argNum;
+  }
+
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      func->stableHash(),
+      std::hash<int64_t>()(argNum)
+    );
   }
 
   const Func* func;
@@ -355,6 +414,18 @@ struct FuncArgTypeData : IRExtraData {
     return folly::format("{},{},{}", func->name(), argNum, type).str();
   }
 
+  bool equals(const FuncArgTypeData& o) const {
+    return func == o.func && argNum == o.argNum && type == o.type;
+  }
+
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      func->stableHash(),
+      std::hash<int64_t>()(argNum),
+      type->hashStatic()
+    );
+  }
+
   const Func* func;
   int64_t argNum;
   const StringData* type;
@@ -367,6 +438,7 @@ struct LdClsTypeCnsData : IRExtraData {
 
   bool equals(LdClsTypeCnsData o) const { return noThrow == o.noThrow; }
   size_t hash() const { return noThrow ? 1 : 0; }
+  size_t stableHash() const { return noThrow ? 1 : 0; }
 
   bool noThrow;
 };
@@ -381,6 +453,7 @@ struct LocalId : IRExtraData {
 
   bool equals(LocalId o) const { return locId == o.locId; }
   size_t hash() const { return std::hash<uint32_t>()(locId); }
+  size_t stableHash() const { return std::hash<uint32_t>()(locId); }
 
   uint32_t locId;
 };
@@ -393,6 +466,7 @@ struct IndexData : IRExtraData {
 
   std::string show() const { return folly::format("{}", index).str(); }
   size_t hash() const { return std::hash<uint32_t>()(index); }
+  size_t stableHash() const { return std::hash<uint32_t>()(index); }
 
   bool equals(const IndexData& o) const {
     return index == o.index;
@@ -408,9 +482,20 @@ struct KeyedIndexData : IRExtraData {
   explicit KeyedIndexData(uint32_t index, const StringData* key)
     : index(index)
     , key(key)
-    {}
+  {}
 
   std::string show() const;
+
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<uint32_t>()(index),
+      key->hashStatic()
+    );
+  }
+
+  bool equals(const KeyedIndexData& o) const {
+    return index == o.index && key == o.key;
+  }
 
   uint32_t index;
   const StringData* key;
@@ -440,6 +525,14 @@ struct SizeHintData : IRExtraData {
     not_reached();
   }
 
+  size_t stableHash() const {
+    return std::hash<SizeHint>()(hint);
+  }
+
+  bool equals(const SizeHintData& o) const {
+    return hint == o.hint;
+  }
+
   SizeHint hint;
 };
 
@@ -455,6 +548,7 @@ struct IterId : IRExtraData {
 
   bool equals(IterId o) const { return iterId == o.iterId; }
   size_t hash() const { return std::hash<uint32_t>()(iterId); }
+  size_t stableHash() const { return std::hash<uint32_t>()(iterId); }
 
   uint32_t iterId;
 };
@@ -470,6 +564,19 @@ struct IterData : IRExtraData {
     return HPHP::show(args, [&](int32_t id) {
       return folly::to<std::string>(id);
     });
+  }
+
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<int32_t>()(args.iterId),
+      std::hash<int32_t>()(args.keyId),
+      std::hash<int32_t>()(args.valId),
+      std::hash<IterArgs::Flags>()(args.flags)
+    );
+  }
+
+  bool equals(const IterData& o) const {
+    return args == o.args;
   }
 
   IterArgs args;
@@ -490,6 +597,19 @@ struct IterTypeData : IRExtraData {
     return folly::format("{}::{}::{}", iterId, type_str, layout_str).str();
   }
 
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<uint32_t>()(iterId),
+      std::hash<uint8_t>()(type.as_byte),
+      std::hash<uint16_t>()(layout.toUint16())
+    );
+  }
+
+  bool equals(const IterTypeData& o) const {
+    return iterId == o.iterId && type.as_byte == o.type.as_byte &&
+           layout == o.layout;
+  }
+
   uint32_t iterId;
   IterSpecialization type;
   ArrayLayout layout;
@@ -499,6 +619,10 @@ struct IterOffsetData : IRExtraData {
   IterOffsetData(int16_t offset) : offset(offset) {}
 
   std::string show() const { return folly::to<std::string>(offset); }
+
+  size_t stableHash() const { return std::hash<int16_t>()(offset); }
+
+  bool equals(const IterOffsetData& o) const { return offset == o.offset; }
 
   int16_t offset;
 };
@@ -513,6 +637,12 @@ struct RDSHandleData : IRExtraData {
 
   bool equals(RDSHandleData o) const { return handle == o.handle; }
   size_t hash() const { return std::hash<uint32_t>()(handle); }
+
+  size_t stableHash() const {
+    auto const sym = rds::reverseLink(handle);
+    if (!sym) return 0;
+    return rds::symbol_stable_hash(*sym);
+  }
 
   rds::Handle handle;
 };
@@ -536,6 +666,11 @@ struct ArrayAccessProfileData : RDSHandleData {
                                      std::hash<bool>()(cowCheck));
   }
 
+  size_t stableHash() const {
+    return folly::hash::hash_combine(RDSHandleData::stableHash(),
+                                     std::hash<bool>()(cowCheck));
+  }
+
   bool cowCheck;
 };
 
@@ -548,6 +683,14 @@ struct TransIDData : IRExtraData {
   explicit TransIDData(TransID transId) : transId(transId) {}
 
   std::string show() const { return folly::to<std::string>(transId); }
+
+  size_t stableHash() const {
+    return std::hash<TransID>()(transId);
+  }
+
+  bool equals(const TransIDData& o) const {
+    return transId == o.transId;
+  }
 
   TransID transId;
 };
@@ -564,6 +707,8 @@ struct FPRelOffsetData : IRExtraData {
 
   bool equals(FPRelOffsetData o) const { return offset == o.offset; }
   size_t hash() const { return std::hash<int32_t>()(offset.offset); }
+
+  size_t stableHash() const { return std::hash<int32_t>()(offset.offset); }
 
   FPRelOffset offset;
 };
@@ -592,6 +737,13 @@ struct DefStackData : IRExtraData {
     );
   }
 
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<int32_t>()(irSPOff.offset),
+      std::hash<int32_t>()(bcSPOff.offset)
+    );
+  }
+
   FPInvOffset irSPOff;  // offset from stack base to vmsp()
   FPInvOffset bcSPOff;  // offset from stack base to top of the stack
 };
@@ -608,6 +760,8 @@ struct IRSPRelOffsetData : IRExtraData {
 
   bool equals(IRSPRelOffsetData o) const { return offset == o.offset; }
   size_t hash() const { return std::hash<int32_t>()(offset.offset); }
+
+  size_t stableHash() const { return std::hash<int32_t>()(offset.offset); }
 
   IRSPRelOffset offset;
 };
@@ -628,6 +782,8 @@ struct IsAsyncData : IRExtraData {
   bool equals(IsAsyncData d) const { return isAsync == d.isAsync; }
   size_t hash() const { return std::hash<int32_t>()(isAsync); }
 
+  size_t stableHash() const { return std::hash<int32_t>()(isAsync); }
+
   bool isAsync;
 };
 
@@ -638,6 +794,17 @@ struct LdBindAddrData : IRExtraData {
   {}
 
   std::string show() const { return showShort(sk); }
+
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      SrcKey::StableHasher()(sk),
+      std::hash<int32_t>()(bcSPOff.offset)
+    );
+  }
+
+  bool equals(const LdBindAddrData& o) const {
+    return sk == o.sk && bcSPOff == o.bcSPOff;
+  }
 
   SrcKey sk;
   FPInvOffset bcSPOff;
@@ -667,6 +834,25 @@ struct LdSSwitchData : IRExtraData {
     return folly::to<std::string>(bcSPOff.offset);
   }
 
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<int64_t>()(numCases),
+      SrcKey::StableHasher()(defaultSk),
+      std::hash<int32_t>()(bcSPOff.offset)
+    );
+  }
+
+  bool equals(const LdSSwitchData& o) const {
+    if (numCases != o.numCases) return false;
+    if (defaultSk != o.defaultSk) return false;
+    if (bcSPOff != o.bcSPOff) return false;
+    for (int64_t i = 0; i < numCases; i++) {
+      if (cases[i].dest != o.cases[i].dest) return false;
+      if (cases[i].str != o.cases[i].str) return false;
+    }
+    return true;
+  }
+
   int64_t     numCases;
   const Elm*  cases;
   SrcKey      defaultSk;
@@ -682,6 +868,19 @@ struct ProfileSwitchData : IRExtraData {
 
   std::string show() const {
     return folly::sformat("handle {}, {} cases, base {}", handle, cases, base);
+  }
+
+  size_t stableHash() const {
+    auto const sym = rds::reverseLink(handle);
+    return folly::hash::hash_combine(
+      sym ? rds::symbol_stable_hash(*sym) : 0,
+      std::hash<int32_t>()(cases),
+      std::hash<int64_t>()(base)
+    );
+  }
+
+  bool equals(const ProfileSwitchData& o) const {
+    return handle == o.handle && cases == o.cases && base == o.base;
   }
 
   rds::Handle handle;
@@ -704,6 +903,24 @@ struct JmpSwitchData : IRExtraData {
     return folly::sformat("{} cases", cases);
   }
 
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<int32_t>()(cases),
+      std::hash<int32_t>()(spOffBCFromFP.offset),
+      std::hash<int32_t>()(spOffBCFromIRSP.offset)
+    );
+  }
+
+  bool equals(const JmpSwitchData& o) const {
+    if (cases != o.cases) return false;
+    if (spOffBCFromFP != o.spOffBCFromFP) return false;
+    if (spOffBCFromIRSP != o.spOffBCFromIRSP) return false;
+    for (int64_t i = 0; i < cases; i++) {
+      if (targets[i] != o.targets[i]) return false;
+    }
+    return true;
+  }
+
   int32_t cases;       // number of cases
   SrcKey* targets;     // srckeys for all targets
   FPInvOffset spOffBCFromFP;
@@ -715,6 +932,14 @@ struct LdTVAuxData : IRExtraData {
 
   std::string show() const {
     return folly::sformat("{:x}", valid);
+  }
+
+  size_t stableHash() const {
+    return std::hash<int32_t>()(valid);
+  }
+
+  bool equals(const LdTVAuxData& o) const {
+    return valid == o.valid;
   }
 
   int32_t valid;
@@ -736,6 +961,18 @@ struct ReqBindJmpData : IRExtraData {
     );
   }
 
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      SrcKey::StableHasher()(target),
+      std::hash<int32_t>()(invSPOff.offset),
+      std::hash<int32_t>()(irSPOff.offset)
+    );
+  }
+
+  bool equals(const ReqBindJmpData& o) const {
+    return target == o.target && invSPOff == o.invSPOff && irSPOff == o.irSPOff;
+  }
+
   SrcKey target;
   FPInvOffset invSPOff;
   IRSPRelOffset irSPOff;
@@ -753,6 +990,16 @@ struct InlineCallData : IRExtraData {
     );
   }
 
+  size_t stableHash() const {
+    // For now we are ignoring `syncVmpc`, but this could be fixed by storing
+    // an SK rather than a raw PC.
+    return std::hash<int32_t>()(spOffset.offset);
+  }
+
+  bool equals(const InlineCallData& o) const {
+    return spOffset == o.spOffset && syncVmpc == o.syncVmpc;
+  }
+
   IRSPRelOffset spOffset; // offset from caller SP to bottom of callee's ActRec
   PC syncVmpc{nullptr};
 };
@@ -764,6 +1011,18 @@ struct StFrameMetaData : IRExtraData {
       asyncEagerReturn
     );
   }
+
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<Offset>()(callBCOff),
+      std::hash<bool>()(asyncEagerReturn)
+    );
+  }
+
+  bool equals(const StFrameMetaData& o) const {
+    return callBCOff == o.callBCOff && asyncEagerReturn == o.asyncEagerReturn;
+  }
+
 
   Offset callBCOff;
   bool asyncEagerReturn;
@@ -786,6 +1045,19 @@ struct CallBuiltinData : IRExtraData {
     );
   }
 
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<int32_t>()(spOffset.offset),
+      retSpOffset ? std::hash<int32_t>()(retSpOffset->offset) : 0,
+      callee->stableHash()
+    );
+  }
+
+  bool equals(const CallBuiltinData& o) const {
+    return spOffset == o.spOffset && retSpOffset == o.retSpOffset &&
+      callee == o.callee;
+  }
+
   IRSPRelOffset spOffset; // offset from StkPtr to last passed arg
   folly::Optional<IRSPRelOffset> retSpOffset; // offset from StkPtr after a return
   const Func* callee;
@@ -796,7 +1068,8 @@ struct CallData : IRExtraData {
                     uint32_t numArgs,
                     uint32_t numOut,
                     Offset callOffset,
-                    uint32_t genericsBitmap,
+                    uint16_t genericsBitmap,
+                    RuntimeCoeffects coeffects,
                     bool hasGenerics,
                     bool hasUnpack,
                     bool skipRepack,
@@ -808,6 +1081,7 @@ struct CallData : IRExtraData {
     , numOut(numOut)
     , callOffset(callOffset)
     , genericsBitmap(genericsBitmap)
+    , coeffects(coeffects)
     , hasGenerics(hasGenerics)
     , hasUnpack(hasUnpack)
     , skipRepack(skipRepack)
@@ -822,6 +1096,7 @@ struct CallData : IRExtraData {
       hasGenerics
         ? folly::sformat(",hasGenerics({})", genericsBitmap)
         : std::string{},
+      ",[", coeffects.toString(), "]",
       hasUnpack ? ",unpack" : "",
       skipRepack ? ",skipRepack" : "",
       dynamicCall ? ",dynamicCall" : "",
@@ -834,11 +1109,47 @@ struct CallData : IRExtraData {
     return numArgs + (hasUnpack ? 1 : 0) + (hasGenerics ? 1 : 0);
   }
 
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<int32_t>()(spOffset.offset),
+      std::hash<uint32_t>()(numArgs),
+      std::hash<uint32_t>()(numOut),
+      std::hash<Offset>()(callOffset),
+      std::hash<uint16_t>()(genericsBitmap),
+      std::hash<uint16_t>()(coeffects.value()),
+      std::hash<uint8_t>()(
+        hasGenerics << 5 |
+        hasUnpack << 4 |
+        skipRepack << 3 |
+        dynamicCall << 2 |
+        asyncEagerReturn << 1 |
+        formingRegion
+      )
+    );
+  }
+
+  bool equals(const CallData& o) const {
+    return spOffset == o.spOffset &&
+           numArgs == o.numArgs &&
+           numOut == o.numOut &&
+           callOffset == o.callOffset &&
+           genericsBitmap == o.genericsBitmap &&
+           coeffects.value() == o.coeffects.value() &&
+           hasGenerics == o.hasGenerics &&
+           hasUnpack == o.hasUnpack &&
+           skipRepack == o.skipRepack &&
+           dynamicCall == o.dynamicCall &&
+           asyncEagerReturn == o.asyncEagerReturn &&
+           formingRegion == o.formingRegion;
+  }
+
+
   IRSPRelOffset spOffset; // offset from StkPtr to bottom of call's ActRec+args
   uint32_t numArgs;
   uint32_t numOut;     // number of values returned via stack from the callee
   Offset callOffset;   // offset from func->base()
-  uint32_t genericsBitmap;
+  uint16_t genericsBitmap;
+  RuntimeCoeffects coeffects;
   bool hasGenerics;
   bool hasUnpack;
   bool skipRepack;
@@ -860,6 +1171,19 @@ struct RetCtrlData : IRExtraData {
       offset.offset,
       suspendingResumed ? ",suspendingResumed" : ""
     );
+  }
+
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<int32_t>()(offset.offset),
+      std::hash<bool>()(suspendingResumed),
+      std::hash<uint32_t>()(aux.u_raw)
+    );
+  }
+
+  bool equals(const RetCtrlData& o) const {
+    return offset == o.offset && suspendingResumed == o.suspendingResumed &&
+           aux.u_raw == o.aux.u_raw;
   }
 
   // Adjustment we need to make to the stack pointer (for cross-tracelet ABI
@@ -887,6 +1211,8 @@ struct RecNameData : IRExtraData {
   }
 
   size_t hash() const { return recName->hash(); }
+
+  size_t stableHash() const { return recName->hash(); }
   bool equals(const RecNameData& o) const {
     return recName == o.recName;
   }
@@ -907,6 +1233,17 @@ struct ClsCnsName : IRExtraData {
     return folly::to<std::string>(clsName->data(), "::", cnsName->data());
   }
 
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      clsName->hashStatic(),
+      cnsName->hashStatic()
+    );
+  }
+  bool equals(const ClsCnsName& o) const {
+    return clsName == o.clsName &&
+           cnsName == o.cnsName;
+  }
+
   const StringData* clsName;
   const StringData* cnsName;
 };
@@ -922,6 +1259,15 @@ struct LdSubClsCnsData : IRExtraData {
 
   std::string show() const {
     return folly::sformat("<cls>::{}({})", cnsName, slot);
+  }
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      cnsName->hashStatic(),
+      std::hash<Slot>()(slot)
+    );
+  }
+  bool equals(const LdSubClsCnsData& o) const {
+    return cnsName == o.cnsName && slot == o.slot;
   }
 
   const StringData* cnsName;
@@ -941,6 +1287,18 @@ struct ProfileSubClsCnsData : IRExtraData {
     return folly::to<std::string>("<cls>::", cnsName->data());
   }
 
+  size_t stableHash() const {
+    auto const sym = rds::reverseLink(handle);
+    return folly::hash::hash_combine(
+      cnsName->hashStatic(),
+      sym ? rds::symbol_stable_hash(*sym) : 0
+    );
+  }
+
+  bool equals(const ProfileSubClsCnsData& o) const {
+    return cnsName == o.cnsName && handle == o.handle;
+  }
+
   const StringData* cnsName;
   rds::Handle handle;
 };
@@ -957,6 +1315,14 @@ struct FuncNameData : IRExtraData {
   }
 
   size_t hash() const { return name->hash(); }
+
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      name->hash(),
+      context ? context->stableHash() : 0
+    );
+  }
+
   bool equals(const FuncNameData& o) const {
     return name == o.name && context == o.context;
   }
@@ -985,6 +1351,43 @@ struct InterpOneData : IRExtraData {
     , changedLocals(nullptr)
     , smashesAllLocals(false)
   {}
+
+  size_t stableHash() const {
+    auto hash = folly::hash::hash_combine(
+      std::hash<int32_t>()(spOffset.offset),
+      std::hash<Offset>()(bcOff),
+      std::hash<int64_t>()(cellsPopped),
+      std::hash<int64_t>()(cellsPushed),
+      std::hash<Op>()(opcode),
+      std::hash<uint32_t>()(nChangedLocals),
+      std::hash<bool>()(smashesAllLocals)
+    );
+    for (uint32_t i = 0; i < nChangedLocals; i++) {
+      hash = folly::hash::hash_combine(
+        hash,
+        changedLocals[i].id,
+        changedLocals[i].type.stableHash()
+      );
+    }
+    return hash;
+  }
+
+  bool equals(const InterpOneData& o) const {
+    if (spOffset == o.spOffset &&
+        bcOff == o.bcOff &&
+        cellsPopped == o.cellsPopped &&
+        cellsPushed == o.cellsPushed &&
+        opcode == o.opcode &&
+        nChangedLocals == o.nChangedLocals &&
+        smashesAllLocals == o.smashesAllLocals) {
+      for (uint32_t i = 0; i < nChangedLocals; i++) {
+        if (changedLocals[i].id != o.changedLocals[i].id) return false;
+        if (changedLocals[i].type != o.changedLocals[i].type) return false;
+      }
+      return true;
+    }
+    return false;
+  }
 
   // Offset of the BC stack top relative to the current IR stack pointer.
   IRSPRelOffset spOffset;
@@ -1053,6 +1456,15 @@ struct RBEntryData : IRExtraData {
     return folly::sformat("{}: {}", ringbufferName(type), showShort(sk));
   }
 
+  size_t stableHash() const {
+    return std::hash<Trace::RingBufferType>()(type) ^
+           SrcKey::StableHasher()(sk);
+  }
+
+  bool equals(const RBEntryData& o) const {
+    return type == o.type && sk == o.sk;
+  }
+
   Trace::RingBufferType type;
   SrcKey sk;
 };
@@ -1067,6 +1479,14 @@ struct RBMsgData : IRExtraData {
 
   std::string show() const {
     return folly::sformat("{}: {}", ringbufferName(type), msg->data());
+  }
+
+  size_t stableHash() const {
+    return std::hash<Trace::RingBufferType>()(type) ^ msg->hash();
+  }
+
+  bool equals(const RBMsgData& o) const {
+    return type == o.type && msg->equal(o.msg);
   }
 
   Trace::RingBufferType type;
@@ -1086,11 +1506,44 @@ struct ClassKindData : IRExtraData {
     not_reached();
   }
 
+  size_t stableHash() const {
+    return std::hash<uint32_t>()(kind);
+  }
+
+  bool equals(const ClassKindData& o) const {
+    return kind == o.kind;
+  }
+
   uint32_t kind; // ... allows for direct usage in native_call
 };
 
 struct NewStructData : IRExtraData {
   std::string show() const;
+
+  size_t stableHash() const {
+    auto hash = folly::hash::hash_combine(
+      std::hash<int32_t>()(offset.offset),
+      std::hash<uint32_t>()(numKeys)
+    );
+
+    for (uint32_t i = 0; i < numKeys; i++) {
+      hash = folly::hash::hash_combine(
+        hash,
+        keys[i]->hashStatic()
+      );
+    }
+    return hash;
+  }
+
+  bool equals(const NewStructData& o) const {
+    if (offset != o.offset) return false;
+    if (numKeys != o.numKeys) return false;
+    for (uint32_t i = 0; i < numKeys; i++) {
+      if (keys[i] != o.keys[i]) return false;
+    }
+    return true;
+  }
+
   IRSPRelOffset offset;
   uint32_t numKeys;
   StringData** keys;
@@ -1099,6 +1552,15 @@ struct NewStructData : IRExtraData {
 struct PackedArrayData : IRExtraData {
   explicit PackedArrayData(uint32_t size) : size(size) {}
   std::string show() const { return folly::format("{}", size).str(); }
+
+  size_t stableHash() const {
+    return std::hash<uint32_t>()(size);
+  }
+
+  bool equals(const PackedArrayData& o) const {
+    return size == o.size;
+  }
+
   uint32_t size;
 };
 
@@ -1110,6 +1572,17 @@ struct InitPackedArrayLoopData : IRExtraData {
 
   std::string show() const {
     return folly::format("{},{}", offset.offset, size).str();
+  }
+
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<int32_t>()(offset.offset),
+      std::hash<uint32_t>()(size)
+    );
+  }
+
+  bool equals(const InitPackedArrayLoopData& o) const {
+    return offset == o.offset && size == o.size;
   }
 
   IRSPRelOffset offset;
@@ -1126,6 +1599,17 @@ struct CreateAAWHData : IRExtraData {
     return folly::format("{},{}", first, count).str();
   }
 
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<uint32_t>()(first),
+      std::hash<uint32_t>()(count)
+    );
+  }
+
+  bool equals(const CreateAAWHData& o) const {
+    return first == o.first && count == o.count;
+  }
+
   uint32_t first;
   uint32_t count;
 };
@@ -1140,6 +1624,17 @@ struct CountWHNotDoneData : IRExtraData {
     return folly::format("{},{}", first, count).str();
   }
 
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<uint32_t>()(first),
+      std::hash<uint32_t>()(count)
+    );
+  }
+
+  bool equals(const CountWHNotDoneData& o) const {
+    return first == o.first && count == o.count;
+  }
+
   uint32_t first;
   uint32_t count;
 };
@@ -1152,6 +1647,17 @@ struct NewKeysetArrayData : IRExtraData {
 
   std::string show() const {
     return folly::format("{},{}", offset.offset, size).str();
+  }
+
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<int32_t>()(offset.offset),
+      std::hash<uint32_t>()(size)
+    );
+  }
+
+  bool equals(const NewKeysetArrayData& o) const {
+    return offset == o.offset && size == o.size;
   }
 
   IRSPRelOffset offset;
@@ -1173,6 +1679,19 @@ struct MemoValueStaticData : IRExtraData {
       loadAux
     );
   }
+
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      func->stableHash(),
+      std::hash<folly::Optional<bool>>()(asyncEager),
+      std::hash<bool>()(loadAux)
+    );
+  }
+
+  bool equals(const MemoValueStaticData& o) const {
+    return func == o.func && asyncEager == o.asyncEager && loadAux == o.loadAux;
+  }
+
   const Func* func;
   folly::Optional<bool> asyncEager;
   bool loadAux;
@@ -1196,6 +1715,21 @@ struct MemoValueInstanceData : IRExtraData {
       loadAux
     );
   }
+
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<Slot>()(slot),
+      func->stableHash(),
+      std::hash<folly::Optional<bool>>()(asyncEager),
+      std::hash<bool>()(loadAux)
+    );
+  }
+
+  bool equals(const MemoValueInstanceData& o) const {
+    return slot == o.slot && func == o.func &&
+           asyncEager == o.asyncEager && loadAux == o.loadAux;
+  }
+
   Slot slot;
   const Func* func;
   folly::Optional<bool> asyncEager;
@@ -1235,6 +1769,34 @@ struct MemoCacheStaticData : IRExtraData {
       ret += ">";
     }
     return ret;
+  }
+
+  size_t stableHash() const {
+    auto hash = folly::hash::hash_combine(
+      func->stableHash(),
+      std::hash<folly::Optional<bool>>()(asyncEager),
+      std::hash<uint32_t>()(keys.first),
+      std::hash<uint32_t>()(keys.count),
+      std::hash<bool>()(loadAux)
+    );
+    for (auto i = 0; i < keys.count; i++) {
+      hash = folly::hash::hash_combine(
+        hash,
+        std::hash<bool>()(types[i])
+      );
+    }
+    return hash;
+  }
+
+  bool equals(const MemoCacheStaticData& o) const {
+    if (func == o.func && asyncEager == o.asyncEager && loadAux == o.loadAux &&
+        keys.first == o.keys.first && keys.count == o.keys.count) {
+      for (auto i = 0; i < keys.count; i++) {
+        if (types[i] != o.types[i]) return false;
+      }
+      return true;
+    }
+    return false;
   }
 
   const Func* func;
@@ -1286,6 +1848,37 @@ struct MemoCacheInstanceData : IRExtraData {
     );
   }
 
+  size_t stableHash() const {
+    auto hash = folly::hash::hash_combine(
+      std::hash<Slot>()(slot),
+      func->stableHash(),
+      std::hash<folly::Optional<bool>>()(asyncEager),
+      std::hash<uint32_t>()(keys.first),
+      std::hash<uint32_t>()(keys.count),
+      std::hash<bool>()(loadAux),
+      std::hash<bool>()(shared)
+    );
+    for (auto i = 0; i < keys.count; i++) {
+      hash = folly::hash::hash_combine(
+        hash,
+        std::hash<bool>()(types[i])
+      );
+    }
+    return hash;
+  }
+
+  bool equals(const MemoCacheInstanceData& o) const {
+    if (slot == o.slot && func == o.func && asyncEager == o.asyncEager &&
+        loadAux == o.loadAux && keys.first == o.keys.first &&
+        keys.count == o.keys.count && shared == o.shared) {
+      for (auto i = 0; i < keys.count; i++) {
+        if (types[i] != o.types[i]) return false;
+      }
+      return true;
+    }
+    return false;
+  }
+
   Slot slot;
   LocalRange keys;
   const bool* types;
@@ -1300,12 +1893,29 @@ struct MOpModeData : IRExtraData {
 
   std::string show() const { return subopToName(mode); }
 
+  size_t stableHash() const {
+    return std::hash<MOpMode>()(mode);
+  }
+
+  bool equals(const MOpModeData& o) const {
+    return mode == o.mode;
+  }
+
   MOpMode mode;
 };
 
 struct SetOpData : IRExtraData {
   explicit SetOpData(SetOpOp op) : op(op) {}
   std::string show() const { return subopToName(op); }
+
+  size_t stableHash() const {
+    return std::hash<SetOpOp>()(op);
+  }
+
+  bool equals(const SetOpData& o) const {
+    return op == o.op;
+  }
+
   SetOpOp op;
 };
 
@@ -1314,18 +1924,45 @@ struct DecRefData : IRExtraData {
   std::string show() const {
     return locId != -1 ? folly::to<std::string>("Loc", locId) : "-";
   }
+
+  size_t stableHash() const {
+    return std::hash<int>()(locId);
+  }
+
+  bool equals(const DecRefData& o) const {
+    return locId == o.locId;
+  }
+
   int locId; // If a known local, this has its id; -1 otherwise.
 };
 
 struct IncDecData : IRExtraData {
   explicit IncDecData(IncDecOp op) : op(op) {}
   std::string show() const { return subopToName(op); }
+
+  size_t stableHash() const {
+    return std::hash<IncDecOp>()(op);
+  }
+
+  bool equals(const IncDecData& o) const {
+    return op == o.op;
+  }
+
   IncDecOp op;
 };
 
 struct SuspendOffset : IRExtraData {
   explicit SuspendOffset(Offset off) : off(off) {}
   std::string show() const { return folly::to<std::string>(off); }
+
+  size_t stableHash() const {
+    return std::hash<Offset>()(off);
+  }
+
+  bool equals(const SuspendOffset& o) const {
+    return off == o.off;
+  }
+
   Offset off;
 };
 
@@ -1335,6 +1972,15 @@ struct GeneratorState : IRExtraData {
     using U = std::underlying_type<BaseGenerator::State>::type;
     return folly::to<std::string>(static_cast<U>(state));
   }
+
+  size_t stableHash() const {
+    return std::hash<BaseGenerator::State>()(state);
+  }
+
+  bool equals(const GeneratorState& o) const {
+    return state == o.state;
+  }
+
   BaseGenerator::State state;
 };
 
@@ -1351,6 +1997,19 @@ struct ContEnterData : IRExtraData {
                                   isAsync ? ",async" : "");
   }
 
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<int32_t>()(spOffset.offset),
+      std::hash<Offset>()(callBCOffset),
+      std::hash<bool>()(isAsync)
+    );
+  }
+
+  bool equals(const ContEnterData& o) const {
+    return spOffset == o.spOffset && callBCOffset == o.callBCOffset &&
+           isAsync && o.isAsync;
+  }
+
   IRSPRelOffset spOffset;
   Offset callBCOffset;
   bool isAsync;
@@ -1365,6 +2024,14 @@ struct NewColData : IRExtraData {
     return collections::typeToString(type)->toCppString();
   }
 
+  size_t stableHash() const {
+    return std::hash<CollectionType>()(type);
+  }
+
+  bool equals(const NewColData& o) const {
+    return type == o.type;
+  }
+
   CollectionType type;
 };
 
@@ -1376,6 +2043,17 @@ struct LocalIdRange : IRExtraData {
 
   std::string show() const {
     return folly::format("[{}, {})", start, end).str();
+  }
+
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<uint32_t>()(start),
+      std::hash<uint32_t>()(end)
+    );
+  }
+
+  bool equals(const LocalIdRange& o) const {
+    return start == o.start && end == o.end;
   }
 
   uint32_t start, end;
@@ -1395,6 +2073,17 @@ struct FuncEntryData : IRExtraData {
     ).str();
   }
 
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      func->stableHash(),
+      std::hash<uint32_t>()(argc)
+    );
+  }
+
+  bool equals(const FuncEntryData& o) const {
+    return func == o.func && argc == o.argc;
+  }
+
   const Func* func;
   uint32_t argc;
 };
@@ -1410,6 +2099,18 @@ struct CheckInOutsData : IRExtraData {
     return folly::format("{},{},{}", firstBit, mask, vals).str();
   }
 
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<int>()(firstBit),
+      std::hash<uint64_t>()(mask),
+      std::hash<uint64_t>()(vals)
+    );
+  }
+
+  bool equals(const CheckInOutsData& o) const {
+    return firstBit == o.firstBit && mask == o.mask && vals == o.vals;
+  }
+
   int firstBit;
   uint64_t mask;
   uint64_t vals;
@@ -1422,6 +2123,16 @@ struct ProfileCallTargetData : IRExtraData {
 
   std::string show() const {
     return folly::to<std::string>(handle);
+  }
+
+  size_t stableHash() const {
+    auto const sym = rds::reverseLink(handle);
+    if (!sym) return 0;
+    return rds::symbol_stable_hash(*sym);
+  }
+
+  bool equals(const ProfileCallTargetData& o) const {
+    return handle == o.handle;
   }
 
   rds::Handle handle;
@@ -1440,6 +2151,20 @@ struct BeginInliningData : IRExtraData {
                                   " FUNC ", func->fullName()->data());
   }
 
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<int32_t>()(spOffset.offset),
+      func->stableHash(),
+      std::hash<int>()(cost),
+      std::hash<int>()(numArgs)
+    );
+  }
+
+  bool equals(const BeginInliningData& o) const {
+    return spOffset == o.spOffset && func == o.func && cost == o.cost &&
+           numArgs == o.numArgs;
+  }
+
   IRSPRelOffset spOffset;
   const Func* func;
   int cost;
@@ -1453,6 +2178,10 @@ struct ParamData : IRExtraData {
     return folly::to<std::string>(paramId);
   }
 
+  size_t stableHash() const { return std::hash<int32_t>()(paramId); }
+  bool equals(const ParamData& o) const {
+    return paramId == o.paramId;
+  }
   int32_t paramId;
 };
 
@@ -1465,6 +2194,18 @@ struct ParamWithTCData : IRExtraData {
     return folly::to<std::string>(paramId, ":", tc->displayName());
   }
 
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<int32_t>()(paramId),
+      std::hash<std::string>()(tc->fullName())  // Not great but hey its easy.
+    );
+  }
+
+  bool equals(const ParamWithTCData& o) const {
+    return paramId == o.paramId &&
+           *tc == *o.tc;
+  }
+
   int32_t paramId;
   const TypeConstraint* tc;
 };
@@ -1474,6 +2215,15 @@ struct TypeConstraintData : IRExtraData {
     : tc(tc) {}
 
   std::string show() const { return tc->displayName(); }
+
+  size_t stableHash() const {
+    // Not great but easy.
+    return std::hash<std::string>()(tc->fullName());
+  }
+
+  bool equals(const TypeConstraintData& o) const {
+    return *tc == *o.tc;
+  }
 
   const TypeConstraint* tc;
 };
@@ -1488,6 +2238,18 @@ struct RaiseClsMethPropConvertNoticeData : IRExtraData {
     return folly::to<std::string>(tc->displayName(), ",", isSProp);
   }
 
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<bool>()(isSProp),
+      std::hash<std::string>()(tc->fullName())  // Not great but hey its easy.
+    );
+  }
+
+  bool equals(const RaiseClsMethPropConvertNoticeData& o) const {
+    return isSProp == o.isSProp &&
+           *tc == *o.tc;
+  }
+
   union { const TypeConstraint* tc; int64_t tcIntVal; };
   bool isSProp;
 };
@@ -1499,6 +2261,14 @@ struct ArrayGetExceptionData : IRExtraData {
     return isInOut ? "inout" : "none";
   }
 
+  size_t stableHash() const {
+    return std::hash<bool>()(isInOut);
+  }
+
+  bool equals(const ArrayGetExceptionData& o) const {
+    return isInOut == o.isInOut;
+  }
+
   bool isInOut;
 };
 
@@ -1507,6 +2277,17 @@ struct AssertReason : IRExtraData {
 
   std::string show() const {
     return jit::show(reason);
+  }
+
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<const char*>()(reason.file),
+      std::hash<unsigned>()(reason.line)
+    );
+  }
+
+  bool equals(const AssertReason& o) const {
+    return reason == o.reason;
   }
 
   Reason reason;
@@ -1539,6 +2320,18 @@ struct EndCatchData : IRSPRelOffsetData {
           teardown == Teardown::Full ? "Full" : "OnlyThis");
   }
 
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<CatchMode>()(mode),
+      std::hash<FrameMode>()(stublogue),
+      std::hash<Teardown>()(teardown)
+    );
+  }
+
+  bool equals(const EndCatchData& o) const {
+    return mode == o.mode && stublogue == o.stublogue && teardown == o.teardown;
+  }
+
   CatchMode mode;
   FrameMode stublogue;
   Teardown teardown;
@@ -1549,6 +2342,14 @@ struct EnterTCUnwindData : IRExtraData {
 
   std::string show() const {
     return folly::to<std::string>(teardown ? "" : "no-", "teardown");
+  }
+
+  size_t stableHash() const {
+    return std::hash<bool>()(teardown);
+  }
+
+  bool equals(const EnterTCUnwindData& o) const {
+    return teardown == o.teardown;
   }
 
   bool teardown;
@@ -1564,6 +2365,14 @@ struct AttrData : IRExtraData {
     return folly::format("{}", attr).str();
   }
 
+  size_t stableHash() const {
+    return std::hash<int32_t>()(attr);
+  }
+
+  bool equals(const AttrData& o) const {
+    return attr == o.attr;
+  }
+
   int32_t attr;
 };
 
@@ -1572,6 +2381,15 @@ struct MethCallerData : IRExtraData {
   std::string show() const {
     return folly::format("{}", isCls).str();
   }
+
+  size_t stableHash() const {
+    return std::hash<bool>()(isCls);
+  }
+
+  bool equals(const MethCallerData& o) const {
+    return isCls == o.isCls;
+  }
+
   bool isCls;
 };
 
@@ -1585,6 +2403,14 @@ struct LoggingProfileData : IRExtraData {
     return folly::sformat("{}", reinterpret_cast<void*>(profile));
   }
 
+  size_t stableHash() const {
+    return profile ? profile->key.stableHash() : 0;
+  }
+
+  bool equals(const LoggingProfileData& o) const {
+    return profile == o.profile;
+  }
+
   bespoke::LoggingProfile* profile;
 };
 
@@ -1596,6 +2422,15 @@ struct SinkProfileData : IRExtraData {
   std::string show() const {
     // profile->sink is already printed in the instruction's marker.
     return folly::sformat("{}", reinterpret_cast<void*>(profile));
+  }
+
+  size_t stableHash() const {
+    if (!profile) return 0;
+    return profile->key.first ^ SrcKey::StableHasher()(profile->key.second);
+  }
+
+  bool equals(const SinkProfileData& o) const {
+    return profile == o.profile;
   }
 
   bespoke::SinkProfile* profile;
@@ -1612,6 +2447,14 @@ struct BespokeGetData : IRExtraData {
       case KeyState::Unknown: return "Unknown";
     }
     always_assert(false);
+  }
+
+  size_t stableHash() const {
+    return std::hash<KeyState>()(state);
+  }
+
+  bool equals(const BespokeGetData& o) const {
+    return state == o.state;
   }
 
   KeyState state;
@@ -1718,6 +2561,7 @@ X(LdObjMethodD,                 OptClassData);
 X(ThrowMissingArg,              FuncArgData);
 X(RaiseClsMethPropConvertNotice,RaiseClsMethPropConvertNoticeData);
 X(RaiseTooManyArg,              FuncData);
+X(RaiseCoeffectsCallViolation,  FuncData);
 X(ThrowParamInOutMismatch,      ParamData);
 X(ThrowParamInOutMismatchRange, CheckInOutsData);
 X(ThrowParameterWrongType,      FuncArgTypeData);
@@ -1890,6 +2734,7 @@ template<class T> void assert_opcode_extra_same(Opcode opc) {
 }
 
 size_t hashExtra(Opcode opc, const IRExtraData* data);
+size_t stableHashExtra(Opcode opc, const IRExtraData* data);
 bool equalsExtra(Opcode opc, const IRExtraData* a, const IRExtraData* b);
 IRExtraData* cloneExtra(Opcode opc, IRExtraData* data, Arena& a);
 std::string showExtra(Opcode opc, const IRExtraData* data);

@@ -120,9 +120,9 @@ dependencies = [
 name = "ast_scope_rust"
 version = "0.0.0"
 dependencies = [
+ "hhas_coeffects",
  "itertools",
  "oxidized",
- "rx_rust",
 ]
 
 [[package]]
@@ -275,6 +275,7 @@ dependencies = [
  "emit_fatal_rust",
  "env",
  "global_state",
+ "hhas_coeffects",
  "hhbc_id_rust",
  "hhbc_string_utils_rust",
  "instruction_sequence_rust",
@@ -283,7 +284,6 @@ dependencies = [
  "ocamlrep",
  "options",
  "oxidized",
- "rx_rust",
  "unique_list_rust",
 ]
 
@@ -583,6 +583,7 @@ dependencies = [
  "escaper",
  "flatten_smart_constructors",
  "hh_autoimport_rust",
+ "namespaces_rust",
  "naming_special_names_rust",
  "oxidized_by_ref",
  "parser_core_types",
@@ -697,6 +698,7 @@ dependencies = [
  "env",
  "hhas_attribute_rust",
  "hhas_class_rust",
+ "hhas_coeffects",
  "hhas_constant_rust",
  "hhas_method_rust",
  "hhas_param_rust",
@@ -714,7 +716,6 @@ dependencies = [
  "options",
  "oxidized",
  "runtime",
- "rx_rust",
 ]
 
 [[package]]
@@ -725,6 +726,7 @@ dependencies = [
  "emit_body_rust",
  "emit_type_hint_rust",
  "env",
+ "hhas_coeffects",
  "hhas_constant_rust",
  "hhas_function_rust",
  "hhas_pos_rust",
@@ -732,7 +734,6 @@ dependencies = [
  "hhbc_string_utils_rust",
  "instruction_sequence_rust",
  "oxidized",
- "rx_rust",
 ]
 
 [[package]]
@@ -801,6 +802,7 @@ dependencies = [
  "env",
  "hhas_attribute_rust",
  "hhas_body_rust",
+ "hhas_coeffects",
  "hhas_function_rust",
  "hhas_param_rust",
  "hhas_pos_rust",
@@ -815,7 +817,6 @@ dependencies = [
  "options",
  "oxidized",
  "runtime",
- "rx_rust",
 ]
 
 [[package]]
@@ -844,6 +845,7 @@ dependencies = [
  "env",
  "hhas_attribute_rust",
  "hhas_body_rust",
+ "hhas_coeffects",
  "hhas_method_rust",
  "hhas_param_rust",
  "hhas_pos_rust",
@@ -857,7 +859,6 @@ dependencies = [
  "options",
  "oxidized",
  "runtime",
- "rx_rust",
 ]
 
 [[package]]
@@ -873,6 +874,7 @@ dependencies = [
  "env",
  "global_state",
  "hhas_attribute_rust",
+ "hhas_coeffects",
  "hhas_method_rust",
  "hhas_pos_rust",
  "hhbc_id_rust",
@@ -883,7 +885,6 @@ dependencies = [
  "ocamlrep",
  "options",
  "oxidized",
- "rx_rust",
 ]
 
 [[package]]
@@ -1200,10 +1201,11 @@ name = "global_state"
 version = "0.0.0"
 dependencies = [
  "env",
+ "hhas_coeffects",
+ "lazy_static",
  "ocamlrep",
  "ocamlrep_derive",
  "oxidized",
- "rx_rust",
 ]
 
 [[package]]
@@ -1220,7 +1222,6 @@ name = "hack_parser_ffi"
 version = "3.49.0"
 dependencies = [
  "aast_parser_ffi",
- "minimal_parser_ffi",
  "positioned_by_ref_parser_ffi",
  "positioned_parser_ffi",
  "verify_parser_ffi",
@@ -1282,7 +1283,6 @@ dependencies = [
  "bumpalo",
  "compile_rust",
  "direct_decl_parser",
- "minimal_parser",
  "multifile_rust",
  "ocamlrep",
  "options",
@@ -1310,11 +1310,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "hh_fanout_dep_graph_is_subgraph_rust"
+version = "0.0.0"
+dependencies = [
+ "depgraph",
+ "env_logger",
+ "log",
+ "ocamlrep_ocamlpool",
+]
+
+[[package]]
 name = "hh_fanout_dep_graph_stats_rust"
 version = "0.0.0"
 dependencies = [
  "depgraph",
  "env_logger",
+ "json",
  "log",
  "ocamlrep_ocamlpool",
 ]
@@ -1370,6 +1381,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hhas_coeffects"
+version = "0.0.0"
+dependencies = [
+ "hhbc_string_utils_rust",
+ "naming_special_names_rust",
+ "ocamlrep",
+ "ocamlrep_derive",
+ "oxidized",
+]
+
+[[package]]
 name = "hhas_constant_rust"
 version = "0.0.0"
 dependencies = [
@@ -1389,10 +1411,10 @@ dependencies = [
  "bitflags",
  "hhas_attribute_rust",
  "hhas_body_rust",
+ "hhas_coeffects",
  "hhas_param_rust",
  "hhas_pos_rust",
  "hhbc_id_rust",
- "rx_rust",
 ]
 
 [[package]]
@@ -1402,10 +1424,10 @@ dependencies = [
  "bitflags",
  "hhas_attribute_rust",
  "hhas_body_rust",
+ "hhas_coeffects",
  "hhas_pos_rust",
  "hhbc_id_rust",
  "oxidized",
- "rx_rust",
 ]
 
 [[package]]
@@ -1528,6 +1550,7 @@ dependencies = [
  "hhas_attribute_rust",
  "hhas_body_rust",
  "hhas_class_rust",
+ "hhas_coeffects",
  "hhas_constant_rust",
  "hhas_function_rust",
  "hhas_method_rust",
@@ -1659,6 +1682,12 @@ checksum = "6a27d435371a2fa5b6d2b028a74bbdb1234f308da363226a2854ca3ff8ba7055"
 dependencies = [
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "json"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "078e285eafdfb6c4b434e0d31e8cfcb5115b651496faca5749b88fafd4f23bfd"
 
 [[package]]
 name = "label_rewriter_rust"
@@ -1807,38 +1836,17 @@ dependencies = [
 name = "minimal_parser"
 version = "0.0.0"
 dependencies = [
- "minimal_smart_constructors",
  "parser",
- "stack_limit",
-]
-
-[[package]]
-name = "minimal_parser_ffi"
-version = "0.0.0"
-dependencies = [
- "minimal_parser",
- "ocamlrep",
- "ocamlrep_ocamlpool",
- "oxidized",
- "rust_parser_ffi",
-]
-
-[[package]]
-name = "minimal_smart_constructors"
-version = "0.0.0"
-dependencies = [
- "parser_core_types",
- "smart_constructors",
- "syntax_smart_constructors",
 ]
 
 [[package]]
 name = "mode_parser"
 version = "0.0.0"
 dependencies = [
- "minimal_parser",
+ "bumpalo",
  "oxidized",
  "parser_core_types",
+ "positioned_by_ref_parser",
 ]
 
 [[package]]
@@ -1867,10 +1875,12 @@ dependencies = [
 name = "namespaces_rust"
 version = "0.0.0"
 dependencies = [
+ "bumpalo",
  "core_utils_rust",
  "naming_special_names_rust",
  "ocamlrep",
  "oxidized",
+ "oxidized_by_ref",
 ]
 
 [[package]]
@@ -1988,6 +1998,7 @@ dependencies = [
 name = "ocamlrep_ocamlpool"
 version = "0.0.0"
 dependencies = [
+ "bumpalo",
  "ocaml",
  "ocamlpool_rust",
  "ocamlrep",
@@ -2076,6 +2087,7 @@ dependencies = [
  "ocamlrep_derive",
  "pretty_assertions",
  "serde",
+ "static_assertions",
 ]
 
 [[package]]
@@ -2233,28 +2245,26 @@ dependencies = [
 
 [[package]]
 name = "proc-macro-error"
-version = "0.4.8"
+version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "875077759af22fa20b610ad4471d8155b321c89c3f2785526c9839b099be4e0a"
+checksum = "da25490ff9892aab3fcf7c36f08cfb902dd3e71ca0f9f9517bea02a73a5ce38c"
 dependencies = [
  "proc-macro-error-attr",
  "proc-macro2",
  "quote",
- "rustversion",
  "syn",
+ "version_check",
 ]
 
 [[package]]
 name = "proc-macro-error-attr"
-version = "0.4.8"
+version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5717d9fa2664351a01ed73ba5ef6df09c01a521cb42cb65a061432a826f3c7a"
+checksum = "a1be40180e52ecc98ad80b184934baf3d0d29f979574e439af5a55274b35f869"
 dependencies = [
  "proc-macro2",
  "quote",
- "rustversion",
- "syn",
- "syn-mid",
+ "version_check",
 ]
 
 [[package]]
@@ -2392,9 +2402,9 @@ checksum = "2439c63f3f6139d1b57529d16bc3b8bb855230c8efcc5d3a896c8bea7c3b1e84"
 
 [[package]]
 name = "regex"
-version = "1.3.7"
+version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6020f034922e3194c711b82a627453881bc4682166cabb07134a10c26ba7692"
+checksum = "38cf2c13ed4745de91a5eb834e11c00bcc3709e773173b2ce4c56c9fbde04b9c"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -2413,9 +2423,9 @@ dependencies = [
 
 [[package]]
 name = "regex-syntax"
-version = "0.6.17"
+version = "0.6.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7fe5bd57d1d7414c6b5ed48563a2c855d995ff777729dcd91c369ec7fea395ae"
+checksum = "3b181ba2dcf07aaccad5448e8ead58db5b742cf85dfe035e2227f137a539a189"
 
 [[package]]
 name = "remove_dir_all"
@@ -2571,27 +2581,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustversion"
-version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3bba175698996010c4f6dce5e7f173b6eb781fce25d2cfc45e27091ce0b79f6"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "rx_rust"
-version = "0.0.0"
-dependencies = [
- "naming_special_names_rust",
- "ocamlrep",
- "ocamlrep_derive",
- "oxidized",
-]
-
-[[package]]
 name = "ryu"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2712,6 +2701,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "static_assertions"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
 name = "strsim"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2719,9 +2714,9 @@ checksum = "8ea5119cdb4c55b55d432abb513a0429384878c15dde60cc77b1c99de1a95a6a"
 
 [[package]]
 name = "structopt"
-version = "0.3.11"
+version = "0.3.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fe43617218c0805c6eb37160119dc3c548110a67786da7218d1c6555212f073"
+checksum = "5277acd7ee46e63e5168a80734c9f6ee81b1367a7d8772a2d765df2a3705d28c"
 dependencies = [
  "clap",
  "lazy_static",
@@ -2730,9 +2725,9 @@ dependencies = [
 
 [[package]]
 name = "structopt-derive"
-version = "0.4.4"
+version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6e79c80e0f4efd86ca960218d4e056249be189ff1c42824dcd9a7f51a56f0bd"
+checksum = "5ba9cdfda491b814720b6b06e0cac513d922fc407582032e8706e9f137976f90"
 dependencies = [
  "heck",
  "proc-macro-error",
@@ -2768,17 +2763,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-xid",
-]
-
-[[package]]
-name = "syn-mid"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7be3539f6c128a931cf19dcee741c1af532c7fd387baa739c03dd2e96479338a"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]

@@ -113,7 +113,7 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_enum_declaration(_: &C, enum_attribute_spec: Self, enum_keyword: Self, enum_name: Self, enum_colon: Self, enum_base: Self, enum_type: Self, enum_includes_keyword: Self, enum_includes_list: Self, enum_left_brace: Self, enum_enumerators: Self, enum_right_brace: Self) -> Self {
+    fn make_enum_declaration(_: &C, enum_attribute_spec: Self, enum_keyword: Self, enum_name: Self, enum_colon: Self, enum_base: Self, enum_type: Self, enum_left_brace: Self, enum_use_clauses: Self, enum_enumerators: Self, enum_right_brace: Self) -> Self {
         let syntax = SyntaxVariant::EnumDeclaration(Box::new(EnumDeclarationChildren {
             enum_attribute_spec,
             enum_keyword,
@@ -121,11 +121,20 @@ where
             enum_colon,
             enum_base,
             enum_type,
-            enum_includes_keyword,
-            enum_includes_list,
             enum_left_brace,
+            enum_use_clauses,
             enum_enumerators,
             enum_right_brace,
+        }));
+        let value = V::from_values(syntax.iter_children().map(|child| &child.value));
+        Self::make(syntax, value)
+    }
+
+    fn make_enum_use(_: &C, enum_use_keyword: Self, enum_use_names: Self, enum_use_semicolon: Self) -> Self {
+        let syntax = SyntaxVariant::EnumUse(Box::new(EnumUseChildren {
+            enum_use_keyword,
+            enum_use_names,
+            enum_use_semicolon,
         }));
         let value = V::from_values(syntax.iter_children().map(|child| &child.value));
         Self::make(syntax, value)
@@ -160,15 +169,12 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_enum_class_enumerator(_: &C, enum_class_enumerator_name: Self, enum_class_enumerator_left_angle: Self, enum_class_enumerator_type: Self, enum_class_enumerator_right_angle: Self, enum_class_enumerator_left_paren: Self, enum_class_enumerator_initial_value: Self, enum_class_enumerator_right_paren: Self, enum_class_enumerator_semicolon: Self) -> Self {
+    fn make_enum_class_enumerator(_: &C, enum_class_enumerator_type: Self, enum_class_enumerator_name: Self, enum_class_enumerator_equal: Self, enum_class_enumerator_initial_value: Self, enum_class_enumerator_semicolon: Self) -> Self {
         let syntax = SyntaxVariant::EnumClassEnumerator(Box::new(EnumClassEnumeratorChildren {
-            enum_class_enumerator_name,
-            enum_class_enumerator_left_angle,
             enum_class_enumerator_type,
-            enum_class_enumerator_right_angle,
-            enum_class_enumerator_left_paren,
+            enum_class_enumerator_name,
+            enum_class_enumerator_equal,
             enum_class_enumerator_initial_value,
-            enum_class_enumerator_right_paren,
             enum_class_enumerator_semicolon,
         }));
         let value = V::from_values(syntax.iter_children().map(|child| &child.value));
@@ -861,6 +867,16 @@ where
             return_keyword,
             return_expression,
             return_semicolon,
+        }));
+        let value = V::from_values(syntax.iter_children().map(|child| &child.value));
+        Self::make(syntax, value)
+    }
+
+    fn make_yield_break_statement(_: &C, yield_break_keyword: Self, yield_break_break: Self, yield_break_semicolon: Self) -> Self {
+        let syntax = SyntaxVariant::YieldBreakStatement(Box::new(YieldBreakStatementChildren {
+            yield_break_keyword,
+            yield_break_break,
+            yield_break_semicolon,
         }));
         let value = V::from_values(syntax.iter_children().map(|child| &child.value));
         Self::make(syntax, value)
@@ -1937,18 +1953,24 @@ where
                 acc
             },
             SyntaxVariant::EnumDeclaration(x) => {
-                let EnumDeclarationChildren { enum_attribute_spec, enum_keyword, enum_name, enum_colon, enum_base, enum_type, enum_includes_keyword, enum_includes_list, enum_left_brace, enum_enumerators, enum_right_brace } = *x;
+                let EnumDeclarationChildren { enum_attribute_spec, enum_keyword, enum_name, enum_colon, enum_base, enum_type, enum_left_brace, enum_use_clauses, enum_enumerators, enum_right_brace } = *x;
                 let acc = f(enum_attribute_spec, acc);
                 let acc = f(enum_keyword, acc);
                 let acc = f(enum_name, acc);
                 let acc = f(enum_colon, acc);
                 let acc = f(enum_base, acc);
                 let acc = f(enum_type, acc);
-                let acc = f(enum_includes_keyword, acc);
-                let acc = f(enum_includes_list, acc);
                 let acc = f(enum_left_brace, acc);
+                let acc = f(enum_use_clauses, acc);
                 let acc = f(enum_enumerators, acc);
                 let acc = f(enum_right_brace, acc);
+                acc
+            },
+            SyntaxVariant::EnumUse(x) => {
+                let EnumUseChildren { enum_use_keyword, enum_use_names, enum_use_semicolon } = *x;
+                let acc = f(enum_use_keyword, acc);
+                let acc = f(enum_use_names, acc);
+                let acc = f(enum_use_semicolon, acc);
                 acc
             },
             SyntaxVariant::Enumerator(x) => {
@@ -1975,14 +1997,11 @@ where
                 acc
             },
             SyntaxVariant::EnumClassEnumerator(x) => {
-                let EnumClassEnumeratorChildren { enum_class_enumerator_name, enum_class_enumerator_left_angle, enum_class_enumerator_type, enum_class_enumerator_right_angle, enum_class_enumerator_left_paren, enum_class_enumerator_initial_value, enum_class_enumerator_right_paren, enum_class_enumerator_semicolon } = *x;
-                let acc = f(enum_class_enumerator_name, acc);
-                let acc = f(enum_class_enumerator_left_angle, acc);
+                let EnumClassEnumeratorChildren { enum_class_enumerator_type, enum_class_enumerator_name, enum_class_enumerator_equal, enum_class_enumerator_initial_value, enum_class_enumerator_semicolon } = *x;
                 let acc = f(enum_class_enumerator_type, acc);
-                let acc = f(enum_class_enumerator_right_angle, acc);
-                let acc = f(enum_class_enumerator_left_paren, acc);
+                let acc = f(enum_class_enumerator_name, acc);
+                let acc = f(enum_class_enumerator_equal, acc);
                 let acc = f(enum_class_enumerator_initial_value, acc);
-                let acc = f(enum_class_enumerator_right_paren, acc);
                 let acc = f(enum_class_enumerator_semicolon, acc);
                 acc
             },
@@ -2492,6 +2511,13 @@ where
                 let acc = f(return_keyword, acc);
                 let acc = f(return_expression, acc);
                 let acc = f(return_semicolon, acc);
+                acc
+            },
+            SyntaxVariant::YieldBreakStatement(x) => {
+                let YieldBreakStatementChildren { yield_break_keyword, yield_break_break, yield_break_semicolon } = *x;
+                let acc = f(yield_break_keyword, acc);
+                let acc = f(yield_break_break, acc);
+                let acc = f(yield_break_semicolon, acc);
                 acc
             },
             SyntaxVariant::ThrowStatement(x) => {
@@ -3223,6 +3249,7 @@ where
             SyntaxVariant::PipeVariableExpression {..} => SyntaxKind::PipeVariableExpression,
             SyntaxVariant::FileAttributeSpecification {..} => SyntaxKind::FileAttributeSpecification,
             SyntaxVariant::EnumDeclaration {..} => SyntaxKind::EnumDeclaration,
+            SyntaxVariant::EnumUse {..} => SyntaxKind::EnumUse,
             SyntaxVariant::Enumerator {..} => SyntaxKind::Enumerator,
             SyntaxVariant::EnumClassDeclaration {..} => SyntaxKind::EnumClassDeclaration,
             SyntaxVariant::EnumClassEnumerator {..} => SyntaxKind::EnumClassEnumerator,
@@ -3287,6 +3314,7 @@ where
             SyntaxVariant::CaseLabel {..} => SyntaxKind::CaseLabel,
             SyntaxVariant::DefaultLabel {..} => SyntaxKind::DefaultLabel,
             SyntaxVariant::ReturnStatement {..} => SyntaxKind::ReturnStatement,
+            SyntaxVariant::YieldBreakStatement {..} => SyntaxKind::YieldBreakStatement,
             SyntaxVariant::ThrowStatement {..} => SyntaxKind::ThrowStatement,
             SyntaxVariant::BreakStatement {..} => SyntaxKind::BreakStatement,
             SyntaxVariant::ContinueStatement {..} => SyntaxKind::ContinueStatement,
@@ -3436,18 +3464,23 @@ where
                  file_attribute_specification_left_double_angle: ts.pop().unwrap(),
                  
              })),
-             (SyntaxKind::EnumDeclaration, 11) => SyntaxVariant::EnumDeclaration(Box::new(EnumDeclarationChildren {
+             (SyntaxKind::EnumDeclaration, 10) => SyntaxVariant::EnumDeclaration(Box::new(EnumDeclarationChildren {
                  enum_right_brace: ts.pop().unwrap(),
                  enum_enumerators: ts.pop().unwrap(),
+                 enum_use_clauses: ts.pop().unwrap(),
                  enum_left_brace: ts.pop().unwrap(),
-                 enum_includes_list: ts.pop().unwrap(),
-                 enum_includes_keyword: ts.pop().unwrap(),
                  enum_type: ts.pop().unwrap(),
                  enum_base: ts.pop().unwrap(),
                  enum_colon: ts.pop().unwrap(),
                  enum_name: ts.pop().unwrap(),
                  enum_keyword: ts.pop().unwrap(),
                  enum_attribute_spec: ts.pop().unwrap(),
+                 
+             })),
+             (SyntaxKind::EnumUse, 3) => SyntaxVariant::EnumUse(Box::new(EnumUseChildren {
+                 enum_use_semicolon: ts.pop().unwrap(),
+                 enum_use_names: ts.pop().unwrap(),
+                 enum_use_keyword: ts.pop().unwrap(),
                  
              })),
              (SyntaxKind::Enumerator, 4) => SyntaxVariant::Enumerator(Box::new(EnumeratorChildren {
@@ -3471,15 +3504,12 @@ where
                  enum_class_attribute_spec: ts.pop().unwrap(),
                  
              })),
-             (SyntaxKind::EnumClassEnumerator, 8) => SyntaxVariant::EnumClassEnumerator(Box::new(EnumClassEnumeratorChildren {
+             (SyntaxKind::EnumClassEnumerator, 5) => SyntaxVariant::EnumClassEnumerator(Box::new(EnumClassEnumeratorChildren {
                  enum_class_enumerator_semicolon: ts.pop().unwrap(),
-                 enum_class_enumerator_right_paren: ts.pop().unwrap(),
                  enum_class_enumerator_initial_value: ts.pop().unwrap(),
-                 enum_class_enumerator_left_paren: ts.pop().unwrap(),
-                 enum_class_enumerator_right_angle: ts.pop().unwrap(),
-                 enum_class_enumerator_type: ts.pop().unwrap(),
-                 enum_class_enumerator_left_angle: ts.pop().unwrap(),
+                 enum_class_enumerator_equal: ts.pop().unwrap(),
                  enum_class_enumerator_name: ts.pop().unwrap(),
+                 enum_class_enumerator_type: ts.pop().unwrap(),
                  
              })),
              (SyntaxKind::RecordDeclaration, 9) => SyntaxVariant::RecordDeclaration(Box::new(RecordDeclarationChildren {
@@ -3927,6 +3957,12 @@ where
                  return_semicolon: ts.pop().unwrap(),
                  return_expression: ts.pop().unwrap(),
                  return_keyword: ts.pop().unwrap(),
+                 
+             })),
+             (SyntaxKind::YieldBreakStatement, 3) => SyntaxVariant::YieldBreakStatement(Box::new(YieldBreakStatementChildren {
+                 yield_break_semicolon: ts.pop().unwrap(),
+                 yield_break_break: ts.pop().unwrap(),
+                 yield_break_keyword: ts.pop().unwrap(),
                  
              })),
              (SyntaxKind::ThrowStatement, 3) => SyntaxVariant::ThrowStatement(Box::new(ThrowStatementChildren {
@@ -4615,11 +4651,17 @@ pub struct EnumDeclarationChildren<T, V> {
     pub enum_colon: Syntax<T, V>,
     pub enum_base: Syntax<T, V>,
     pub enum_type: Syntax<T, V>,
-    pub enum_includes_keyword: Syntax<T, V>,
-    pub enum_includes_list: Syntax<T, V>,
     pub enum_left_brace: Syntax<T, V>,
+    pub enum_use_clauses: Syntax<T, V>,
     pub enum_enumerators: Syntax<T, V>,
     pub enum_right_brace: Syntax<T, V>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumUseChildren<T, V> {
+    pub enum_use_keyword: Syntax<T, V>,
+    pub enum_use_names: Syntax<T, V>,
+    pub enum_use_semicolon: Syntax<T, V>,
 }
 
 #[derive(Debug, Clone)]
@@ -4647,13 +4689,10 @@ pub struct EnumClassDeclarationChildren<T, V> {
 
 #[derive(Debug, Clone)]
 pub struct EnumClassEnumeratorChildren<T, V> {
-    pub enum_class_enumerator_name: Syntax<T, V>,
-    pub enum_class_enumerator_left_angle: Syntax<T, V>,
     pub enum_class_enumerator_type: Syntax<T, V>,
-    pub enum_class_enumerator_right_angle: Syntax<T, V>,
-    pub enum_class_enumerator_left_paren: Syntax<T, V>,
+    pub enum_class_enumerator_name: Syntax<T, V>,
+    pub enum_class_enumerator_equal: Syntax<T, V>,
     pub enum_class_enumerator_initial_value: Syntax<T, V>,
-    pub enum_class_enumerator_right_paren: Syntax<T, V>,
     pub enum_class_enumerator_semicolon: Syntax<T, V>,
 }
 
@@ -5163,6 +5202,13 @@ pub struct ReturnStatementChildren<T, V> {
     pub return_keyword: Syntax<T, V>,
     pub return_expression: Syntax<T, V>,
     pub return_semicolon: Syntax<T, V>,
+}
+
+#[derive(Debug, Clone)]
+pub struct YieldBreakStatementChildren<T, V> {
+    pub yield_break_keyword: Syntax<T, V>,
+    pub yield_break_break: Syntax<T, V>,
+    pub yield_break_semicolon: Syntax<T, V>,
 }
 
 #[derive(Debug, Clone)]
@@ -5891,6 +5937,7 @@ pub enum SyntaxVariant<T, V> {
     PipeVariableExpression(Box<PipeVariableExpressionChildren<T, V>>),
     FileAttributeSpecification(Box<FileAttributeSpecificationChildren<T, V>>),
     EnumDeclaration(Box<EnumDeclarationChildren<T, V>>),
+    EnumUse(Box<EnumUseChildren<T, V>>),
     Enumerator(Box<EnumeratorChildren<T, V>>),
     EnumClassDeclaration(Box<EnumClassDeclarationChildren<T, V>>),
     EnumClassEnumerator(Box<EnumClassEnumeratorChildren<T, V>>),
@@ -5955,6 +6002,7 @@ pub enum SyntaxVariant<T, V> {
     CaseLabel(Box<CaseLabelChildren<T, V>>),
     DefaultLabel(Box<DefaultLabelChildren<T, V>>),
     ReturnStatement(Box<ReturnStatementChildren<T, V>>),
+    YieldBreakStatement(Box<YieldBreakStatementChildren<T, V>>),
     ThrowStatement(Box<ThrowStatementChildren<T, V>>),
     BreakStatement(Box<BreakStatementChildren<T, V>>),
     ContinueStatement(Box<ContinueStatementChildren<T, V>>),
@@ -6150,18 +6198,26 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                 })
             },
             EnumDeclaration(x) => {
-                get_index(11).and_then(|index| { match index {
+                get_index(10).and_then(|index| { match index {
                         0 => Some(&x.enum_attribute_spec),
                     1 => Some(&x.enum_keyword),
                     2 => Some(&x.enum_name),
                     3 => Some(&x.enum_colon),
                     4 => Some(&x.enum_base),
                     5 => Some(&x.enum_type),
-                    6 => Some(&x.enum_includes_keyword),
-                    7 => Some(&x.enum_includes_list),
-                    8 => Some(&x.enum_left_brace),
-                    9 => Some(&x.enum_enumerators),
-                    10 => Some(&x.enum_right_brace),
+                    6 => Some(&x.enum_left_brace),
+                    7 => Some(&x.enum_use_clauses),
+                    8 => Some(&x.enum_enumerators),
+                    9 => Some(&x.enum_right_brace),
+                        _ => None,
+                    }
+                })
+            },
+            EnumUse(x) => {
+                get_index(3).and_then(|index| { match index {
+                        0 => Some(&x.enum_use_keyword),
+                    1 => Some(&x.enum_use_names),
+                    2 => Some(&x.enum_use_semicolon),
                         _ => None,
                     }
                 })
@@ -6194,15 +6250,12 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                 })
             },
             EnumClassEnumerator(x) => {
-                get_index(8).and_then(|index| { match index {
-                        0 => Some(&x.enum_class_enumerator_name),
-                    1 => Some(&x.enum_class_enumerator_left_angle),
-                    2 => Some(&x.enum_class_enumerator_type),
-                    3 => Some(&x.enum_class_enumerator_right_angle),
-                    4 => Some(&x.enum_class_enumerator_left_paren),
-                    5 => Some(&x.enum_class_enumerator_initial_value),
-                    6 => Some(&x.enum_class_enumerator_right_paren),
-                    7 => Some(&x.enum_class_enumerator_semicolon),
+                get_index(5).and_then(|index| { match index {
+                        0 => Some(&x.enum_class_enumerator_type),
+                    1 => Some(&x.enum_class_enumerator_name),
+                    2 => Some(&x.enum_class_enumerator_equal),
+                    3 => Some(&x.enum_class_enumerator_initial_value),
+                    4 => Some(&x.enum_class_enumerator_semicolon),
                         _ => None,
                     }
                 })
@@ -6833,6 +6886,15 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                         0 => Some(&x.return_keyword),
                     1 => Some(&x.return_expression),
                     2 => Some(&x.return_semicolon),
+                        _ => None,
+                    }
+                })
+            },
+            YieldBreakStatement(x) => {
+                get_index(3).and_then(|index| { match index {
+                        0 => Some(&x.yield_break_keyword),
+                    1 => Some(&x.yield_break_break),
+                    2 => Some(&x.yield_break_semicolon),
                         _ => None,
                     }
                 })

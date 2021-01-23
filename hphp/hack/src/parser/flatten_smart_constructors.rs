@@ -125,11 +125,19 @@ pub trait FlattenSmartConstructors<'src, State>
         }
     }
 
-    fn make_enum_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R, arg10: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) && Self::is_zero(&arg5) && Self::is_zero(&arg6) && Self::is_zero(&arg7) && Self::is_zero(&arg8) && Self::is_zero(&arg9) && Self::is_zero(&arg10) {
+    fn make_enum_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R) -> Self::R {
+        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) && Self::is_zero(&arg5) && Self::is_zero(&arg6) && Self::is_zero(&arg7) && Self::is_zero(&arg8) && Self::is_zero(&arg9) {
           Self::zero(SyntaxKind::EnumDeclaration)
         } else {
-          self.flatten(SyntaxKind::EnumDeclaration, vec!(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10))
+          self.flatten(SyntaxKind::EnumDeclaration, vec!(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9))
+        }
+    }
+
+    fn make_enum_use(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
+        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) {
+          Self::zero(SyntaxKind::EnumUse)
+        } else {
+          self.flatten(SyntaxKind::EnumUse, vec!(arg0, arg1, arg2))
         }
     }
 
@@ -149,11 +157,11 @@ pub trait FlattenSmartConstructors<'src, State>
         }
     }
 
-    fn make_enum_class_enumerator(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) && Self::is_zero(&arg5) && Self::is_zero(&arg6) && Self::is_zero(&arg7) {
+    fn make_enum_class_enumerator(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R) -> Self::R {
+        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) && Self::is_zero(&arg4) {
           Self::zero(SyntaxKind::EnumClassEnumerator)
         } else {
-          self.flatten(SyntaxKind::EnumClassEnumerator, vec!(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7))
+          self.flatten(SyntaxKind::EnumClassEnumerator, vec!(arg0, arg1, arg2, arg3, arg4))
         }
     }
 
@@ -642,6 +650,14 @@ pub trait FlattenSmartConstructors<'src, State>
           Self::zero(SyntaxKind::ReturnStatement)
         } else {
           self.flatten(SyntaxKind::ReturnStatement, vec!(arg0, arg1, arg2))
+        }
+    }
+
+    fn make_yield_break_statement(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
+        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) {
+          Self::zero(SyntaxKind::YieldBreakStatement)
+        } else {
+          self.flatten(SyntaxKind::YieldBreakStatement, vec!(arg0, arg1, arg2))
         }
     }
 

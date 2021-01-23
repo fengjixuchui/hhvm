@@ -59,6 +59,7 @@ type mode =
 
 type options = {
   files: string list;
+  extra_builtins: string list;
   mode: mode;
   error_format: Errors.format;
   no_builtins: bool;
@@ -68,6 +69,13 @@ type options = {
   out_extension: string;
   verbosity: int;
 }
+
+(** If the user passed --root, then all pathnames have to be canonicalized.
+The fact of whether they passed --root is kind of stored inside Relative_path
+global variables: the Relative_path.(path_of_prefix Root) is either "/"
+if they failed to pass something, or the thing that they passed. *)
+let use_canonical_filenames () =
+  not (String.equal "/" (Relative_path.path_of_prefix Relative_path.Root))
 
 (* Canonical builtins from our hhi library *)
 let hhi_builtins = Hhi.get_raw_hhi_contents ()
@@ -110,7 +118,13 @@ let print_error format ?(oc = stderr) l =
     | Errors.Raw -> (fun e -> Errors.to_string e)
     | Errors.Highlighted -> Highlighted_error_formatter.to_string
   in
-  Out_channel.output_string oc (formatter (Errors.to_absolute_for_test l))
+  let absolute_errors =
+    if use_canonical_filenames () then
+      Errors.to_absolute l
+    else
+      Errors.to_absolute_for_test l
+  in
+  Out_channel.output_string oc (formatter absolute_errors)
 
 let write_error_list format errors oc max_errors =
   let (shown_errors, dropped_errors) =
@@ -164,8 +178,12 @@ let print_errors_if_present (errors : Errors.error list) =
         Printf.printf "  %s\n" err_output)
   )
 
+let comma_string_to_iset (s : string) : ISet.t =
+  Str.split (Str.regexp ", *") s |> List.map ~f:int_of_string |> ISet.of_list
+
 let parse_options () =
   let fn_ref = ref [] in
+  let extra_builtins = ref [] in
   let usage = Printf.sprintf "Usage: %s filename\n" Sys.argv.(0) in
   let mode = ref Errors in
   let no_builtins = ref false in
@@ -204,8 +222,9 @@ let parse_options () =
   let out_extension = ref ".out" in
   let like_type_hints = ref false in
   let union_intersection_type_hints = ref false in
-  let call_coeffects = ref false in
-  let local_coeffects = ref false in
+  let call_coeffects = ref true in
+  let local_coeffects = ref true in
+  let strict_contexts = ref true in
   let like_casts = ref false in
   let simple_pessimize = ref 0.0 in
   let complex_coercion = ref false in
@@ -226,7 +245,6 @@ let parse_options () =
   let const_static_props = ref false in
   let disable_legacy_attribute_syntax = ref false in
   let const_attribute = ref false in
-  let disallow_goto = ref false in
   let const_default_func_args = ref false in
   let const_default_lambda_args = ref false in
   let disallow_silence = ref false in
@@ -247,17 +265,31 @@ let parse_options () =
   let disable_hh_ignore_error = ref false in
   let enable_systemlib_annotations = ref false in
   let enable_higher_kinded_types = ref false in
-  let allowed_fixme_codes_strict = ref ISet.empty in
-  let allowed_fixme_codes_partial = ref ISet.empty in
-  let codes_not_raised_partial = ref ISet.empty in
-  let allowed_decl_fixme_codes = ref ISet.empty in
+  let allowed_fixme_codes_strict = ref None in
+  let allowed_fixme_codes_partial = ref None in
+  let codes_not_raised_partial = ref None in
+  let allowed_decl_fixme_codes = ref None in
   let method_call_inference = ref false in
   let report_pos_from_reason = ref false in
   let enable_sound_dynamic = ref false in
   let disallow_hash_comments = ref false in
   let disallow_fun_and_cls_meth_pseudo_funcs = ref false in
+  let use_direct_decl_parser = ref false in
+  let enable_enum_classes = ref false in
+  let naming_table = ref None in
+  let root = ref None in
+  let sharedmem_config = ref SharedMem.default_config in
   let options =
     [
+      ( "--naming-table",
+        Arg.String (fun s -> naming_table := Some s),
+        "Naming table, to look up undefined symbols; needs --root" );
+      ( "--root",
+        Arg.String (fun s -> root := Some s),
+        "Root for where to look up undefined symbols; needs --naming-table" );
+      ( "--extra-builtin",
+        Arg.String (fun f -> extra_builtins := f :: !extra_builtins),
+        " HHI file to parse and declare" );
       ( "--ifc",
         Arg.Tuple [Arg.String (fun m -> ifc_mode := m); Arg.String set_ifc],
         " Run the flow analysis" );
@@ -282,8 +314,15 @@ let parse_options () =
         Arg.Unit (set_mode Ffp_autocomplete),
         " Produce autocomplete suggestions using the full-fidelity parse tree"
       );
-      ("--call-coeffects", Arg.Set call_coeffects, "Turns on call coeffects");
-      ("--local-coeffects", Arg.Set local_coeffects, "Turns on local coeffects");
+      ( "--no-call-coeffects",
+        Arg.Unit (fun () -> call_coeffects := false),
+        "Turns off call coeffects" );
+      ( "--no-local-coeffects",
+        Arg.Unit (fun () -> local_coeffects := false),
+        "Turns off local coeffects" );
+      ( "--no-strict-contexts",
+        Arg.Unit (fun () -> strict_contexts := false),
+        "Do not enforce contexts to be defined within Contexts namespace" );
       ("--colour", Arg.Unit (set_mode Color), " Produce colour output");
       ("--color", Arg.Unit (set_mode Color), " Produce color output");
       ("--coverage", Arg.Unit (set_mode Coverage), " Produce coverage output");
@@ -307,7 +346,7 @@ let parse_options () =
       ("--lint", Arg.Unit (set_mode Lint), " Produce lint errors");
       ( "--no-builtins",
         Arg.Set no_builtins,
-        " Don't use builtins (e.g. ConstSet)" );
+        " Don't use builtins (e.g. ConstSet); implied by --root" );
       ( "--out-extension",
         Arg.String (fun s -> out_extension := s),
         "output file extension (default .out)" );
@@ -496,9 +535,6 @@ let parse_options () =
         Arg.Set disable_legacy_attribute_syntax,
         " Disable the legacy <<...>> user attribute syntax" );
       ("--const-attribute", Arg.Set const_attribute, " Allow __Const attribute");
-      ( "--disallow-goto",
-        Arg.Set disallow_goto,
-        " Forbid the goto operator and goto labels in the parser" );
       ( "--const-default-func-args",
         Arg.Set const_default_func_args,
         " Statically check default function arguments are constant initializers"
@@ -562,35 +598,20 @@ let parse_options () =
         "Enable support for higher-kinded types" );
       ( "--allowed-fixme-codes-strict",
         Arg.String
-          (fun s ->
-            allowed_fixme_codes_strict :=
-              Str.split (Str.regexp ", *") s
-              |> List.map ~f:int_of_string
-              |> ISet.of_list),
+          (fun s -> allowed_fixme_codes_strict := Some (comma_string_to_iset s)),
         "List of fixmes that are allowed in strict mode." );
       ( "--allowed-fixme-codes-partial",
         Arg.String
           (fun s ->
-            allowed_fixme_codes_partial :=
-              Str.split (Str.regexp ", *") s
-              |> List.map ~f:int_of_string
-              |> ISet.of_list),
+            allowed_fixme_codes_partial := Some (comma_string_to_iset s)),
         "List of fixmes that are allowed in partial mode." );
       ( "--codes-not-raised-partial",
         Arg.String
-          (fun s ->
-            codes_not_raised_partial :=
-              Str.split (Str.regexp ", *") s
-              |> List.map ~f:int_of_string
-              |> ISet.of_list),
+          (fun s -> codes_not_raised_partial := Some (comma_string_to_iset s)),
         "List of error codes that are not raised in partial mode." );
       ( "--allowed-decl-fixme-codes",
         Arg.String
-          (fun s ->
-            allowed_decl_fixme_codes :=
-              Str.split (Str.regexp ", *") s
-              |> List.map ~f:int_of_string
-              |> ISet.of_list),
+          (fun s -> allowed_decl_fixme_codes := Some (comma_string_to_iset s)),
         "List of fixmes that are allowed in declarations." );
       ( "--method-call-inference",
         Arg.Set method_call_inference,
@@ -609,6 +630,12 @@ let parse_options () =
       ( "--disallow-fun-and-cls-meth-pseudo-funcs",
         Arg.Set disallow_fun_and_cls_meth_pseudo_funcs,
         "Disable parsing of fun() and class_meth()." );
+      ( "--use-direct-decl-parser",
+        Arg.Set use_direct_decl_parser,
+        "Use direct decl parser" );
+      ( "--enable-enum-classes",
+        Arg.Set enable_enum_classes,
+        "Enable the enum classes extension." );
     ]
   in
   let options = Arg.align ~limit:25 options in
@@ -624,6 +651,39 @@ let parse_options () =
     | _ -> false
   in
 
+  (* --root implies certain things... *)
+  let root =
+    match !root with
+    | None -> Path.make "/" (* if none specified, we use this dummy *)
+    | Some root ->
+      if Option.is_none !naming_table then
+        failwith "--root needs --naming-table";
+      (* builtins are already provided by project at --root, so we shouldn't provide our own *)
+      no_builtins := true;
+      (* Following will throw an exception if .hhconfig not found *)
+      let (_config_hash, config) =
+        Config_file.parse_hhconfig
+          ~silent:true
+          (Filename.concat root Config_file.file_path_relative_to_repo_root)
+      in
+      (* We will pick up values from .hhconfig, unless they've been overridden at the command-line. *)
+      if Option.is_none !auto_namespace_map then
+        auto_namespace_map :=
+          SMap.find_opt "auto_namespace_map" config
+          |> Option.map ~f:ServerConfig.convert_auto_namespace_to_map;
+      if Option.is_none !allowed_fixme_codes_strict then
+        allowed_fixme_codes_strict :=
+          SMap.find_opt "allowed_fixme_codes_strict" config
+          |> Option.map ~f:comma_string_to_iset;
+      sharedmem_config :=
+        ServerConfig.make_sharedmem_config
+          config
+          (ServerArgs.default_options root)
+          ServerLocalConfig.default;
+      (* Path.make canonicalizes it, i.e. resolves symlinks *)
+      Path.make root
+  in
+
   let tcopt =
     GlobalOptions.make
       ?po_disable_array_typehint:(Some false)
@@ -637,9 +697,12 @@ let parse_options () =
       ?po_auto_namespace_map:!auto_namespace_map
       ?tco_disallow_byref_dynamic_calls:!disallow_byref_dynamic_calls
       ?tco_disallow_byref_calls:!disallow_byref_calls
-      ~allowed_fixme_codes_strict:!allowed_fixme_codes_strict
-      ~allowed_fixme_codes_partial:!allowed_fixme_codes_partial
-      ~codes_not_raised_partial:!codes_not_raised_partial
+      ~allowed_fixme_codes_strict:
+        (Option.value !allowed_fixme_codes_strict ~default:ISet.empty)
+      ~allowed_fixme_codes_partial:
+        (Option.value !allowed_fixme_codes_partial ~default:ISet.empty)
+      ~codes_not_raised_partial:
+        (Option.value !codes_not_raised_partial ~default:ISet.empty)
       ?tco_disallow_invalid_arraykey_constraint:
         !disallow_invalid_arraykey_constraint
       ?tco_disallow_trait_reuse:!disallow_trait_reuse
@@ -648,9 +711,9 @@ let parse_options () =
       ~tco_shallow_class_decl:!shallow_class_decl
       ~tco_like_type_hints:!like_type_hints
       ~tco_union_intersection_type_hints:!union_intersection_type_hints
+      ~tco_strict_contexts:!strict_contexts
       ~tco_coeffects:!call_coeffects
       ~tco_coeffects_local:!local_coeffects
-      ~po_enable_coeffects:true
       ~tco_like_casts:!like_casts
       ~tco_simple_pessimize:!simple_pessimize
       ~tco_complex_coercion:!complex_coercion
@@ -668,7 +731,6 @@ let parse_options () =
       ~tco_gi_reinfer_types:!reinfer_types
       ~po_disable_legacy_attribute_syntax:!disable_legacy_attribute_syntax
       ~tco_const_attribute:!const_attribute
-      ~po_allow_goto:(not !disallow_goto)
       ~po_const_default_func_args:!const_default_func_args
       ~po_const_default_lambda_args:!const_default_lambda_args
       ~po_disallow_silence:!disallow_silence
@@ -690,7 +752,8 @@ let parse_options () =
       ~po_disable_hh_ignore_error:!disable_hh_ignore_error
       ~tco_enable_systemlib_annotations:!enable_systemlib_annotations
       ~tco_higher_kinded_types:!enable_higher_kinded_types
-      ~po_allowed_decl_fixme_codes:!allowed_decl_fixme_codes
+      ~po_allowed_decl_fixme_codes:
+        (Option.value !allowed_decl_fixme_codes ~default:ISet.empty)
       ~po_allow_unstable_features:true
       ~tco_method_call_inference:!method_call_inference
       ~tco_report_pos_from_reason:!report_pos_from_reason
@@ -698,7 +761,13 @@ let parse_options () =
       ~po_disallow_hash_comments:!disallow_hash_comments
       ~po_disallow_fun_and_cls_meth_pseudo_funcs:
         !disallow_fun_and_cls_meth_pseudo_funcs
-      ~tco_ifc_enabled:is_ifc_mode
+      ~tco_ifc_enabled:
+        ( if is_ifc_mode then
+          ["/"]
+        else
+          [] )
+      ~tco_use_direct_decl_parser:!use_direct_decl_parser
+      ~po_enable_enum_classes:!enable_enum_classes
       ()
   in
   Errors.allowed_fixme_codes_strict :=
@@ -753,6 +822,7 @@ let parse_options () =
   in
   ( {
       files = fns;
+      extra_builtins = !extra_builtins;
       mode = !mode;
       no_builtins = !no_builtins;
       max_errors = !max_errors;
@@ -762,7 +832,10 @@ let parse_options () =
       out_extension = !out_extension;
       verbosity = !verbosity;
     },
-    sienv )
+    sienv,
+    root,
+    !naming_table,
+    !sharedmem_config )
 
 (* Make readable test output *)
 let replace_color input =
@@ -1975,6 +2048,7 @@ let handle_mode
 let decl_and_run_mode
     {
       files;
+      extra_builtins;
       mode;
       error_format;
       no_builtins;
@@ -1986,6 +2060,7 @@ let decl_and_run_mode
     }
     (popt : TypecheckerOptions.t)
     (hhi_root : Path.t)
+    (naming_table_path : string option)
     (sienv : SearchUtils.si_env) : unit =
   Ident.track_names := true;
   let builtins =
@@ -1996,9 +2071,33 @@ let decl_and_run_mode
       with `Hhi.get_root ()` *)
       let magic_builtins =
         match mode with
-        | Ai _ -> Array.append magic_builtins Ai.magic_builtins
         | Ifc _ -> magic_builtins
         | _ -> magic_builtins
+      in
+      let extra_builtins =
+        let add_file_content map filename =
+          Relative_path.create Relative_path.Dummy filename
+          |> Multifile.file_to_file_list
+          |> List.map ~f:(fun (path, contents) ->
+                 (Filename.basename (Relative_path.suffix path), contents))
+          |> List.unordered_append map
+        in
+        extra_builtins
+        |> List.fold ~f:add_file_content ~init:[]
+        |> Array.of_list
+      in
+      let magic_builtins = Array.append magic_builtins extra_builtins in
+      (* Check that magic_builtin filenames are unique *)
+      let () =
+        let n_of_builtins = Array.length magic_builtins in
+        let n_of_unique_builtins =
+          Array.to_list magic_builtins
+          |> List.map ~f:fst
+          |> SSet.of_list
+          |> SSet.cardinal
+        in
+        if n_of_builtins <> n_of_unique_builtins then
+          die "Multiple magic builtins share the same base name.\n"
       in
       Array.iter magic_builtins ~f:(fun (file_name, file_contents) ->
           let file_path = Path.concat hhi_root file_name in
@@ -2019,7 +2118,15 @@ let decl_and_run_mode
             ~key:(Relative_path.create Relative_path.Hhi f)
             ~data:src)
   in
-  let files = List.map ~f:(Relative_path.create Relative_path.Dummy) files in
+  let files =
+    if use_canonical_filenames () then
+      files
+      |> List.map ~f:Sys_utils.realpath
+      |> List.map ~f:(fun s -> Option.value_exn s)
+      |> List.map ~f:Relative_path.create_detect_prefix
+    else
+      files |> List.map ~f:(Relative_path.create Relative_path.Dummy)
+  in
   let files_contents =
     List.fold
       files
@@ -2084,6 +2191,15 @@ let decl_and_run_mode
       ~tcopt
       ~deps_mode:Typing_deps_mode.SQLiteMode
   in
+  (* We make the following call for the side-effect of updating ctx's "naming-table fallback"
+  so it will look in the sqlite database for names it doesn't know.
+  This function returns the forward naming table, but we don't care about that;
+  it's only needed for tools that process file changes, to know in the event
+  of a file-change which old symbols used to be defined in the file. *)
+  let _naming_table_for_root : Naming_table.t option =
+    Option.map naming_table_path ~f:(fun path ->
+        Naming_table.load_from_sqlite ctx path)
+  in
   let (errors, files_info) = parse_name_and_decl ctx to_decl in
   handle_mode
     mode
@@ -2102,20 +2218,25 @@ let decl_and_run_mode
     sienv
     ~verbosity
 
-let main_hack ({ tcopt; _ } as opts) (sienv : SearchUtils.si_env) : unit =
+let main_hack
+    ({ tcopt; _ } as opts)
+    (sienv : SearchUtils.si_env)
+    (root : Path.t)
+    (naming_table : string option)
+    (sharedmem_config : SharedMem.config) : unit =
   (* TODO: We should have a per file config *)
   Sys_utils.signal Sys.sigusr1 (Sys.Signal_handle Typing.debug_print_last_pos);
   EventLogger.init_fake ();
 
   let (_handle : SharedMem.handle) =
-    SharedMem.init ~num_workers:0 SharedMem.default_config
+    SharedMem.init ~num_workers:0 sharedmem_config
   in
   Tempfile.with_tempdir (fun hhi_root ->
       Hhi.set_hhi_root_for_unit_test hhi_root;
-      Relative_path.set_path_prefix Relative_path.Root (Path.make "/");
+      Relative_path.set_path_prefix Relative_path.Root root;
       Relative_path.set_path_prefix Relative_path.Hhi hhi_root;
       Relative_path.set_path_prefix Relative_path.Tmp (Path.make "tmp");
-      decl_and_run_mode opts tcopt hhi_root sienv;
+      decl_and_run_mode opts tcopt hhi_root naming_table sienv;
       TypingLogger.flush_buffers ())
 
 (* command line driver *)
@@ -2128,5 +2249,13 @@ let () =
        it breaks the testsuite where the output is compared to the
        expected one (i.e. in given file without CRLF). *)
     Out_channel.set_binary_mode stdout true;
-  let (options, sienv) = parse_options () in
-  Unix.handle_unix_error main_hack options sienv
+  let (options, sienv, root, naming_table, sharedmem_config) =
+    parse_options ()
+  in
+  Unix.handle_unix_error
+    main_hack
+    options
+    sienv
+    root
+    naming_table
+    sharedmem_config

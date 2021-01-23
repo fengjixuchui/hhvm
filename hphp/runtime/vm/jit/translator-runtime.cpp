@@ -263,9 +263,10 @@ void raiseClsMethPropConvertNotice(const TypeConstraint* tc,
   );
 }
 
-void raiseUndefVariable(StringData* nm) {
-  raise_notice(Strings::UNDEFINED_VARIABLE, nm->data());
-  decRefStr(nm);
+void throwUndefVariable(StringData* nm) {
+  SCOPE_EXIT { decRefStr(nm); };
+  SystemLib::throwUndefinedVariableExceptionObject(
+    folly::sformat("Undefined variable: {}", nm->data()));
 }
 
 void raise_error_sd(const StringData *msg) {
@@ -734,7 +735,7 @@ void throwAsTypeStructExceptionHelper(ArrayData* a, TypedValue c) {
     throwTypeStructureDoesNotMatchTVException(
       givenType, expectedType, errorKey);
   }
-  raise_error("Invalid bytecode sequence: Instruction must throw");
+  always_assert(false && "Invalid bytecode sequence: Instruction must throw");
 }
 
 ArrayData* errorOnIsAsExpressionInvalidTypesHelper(ArrayData* a) {
@@ -796,6 +797,11 @@ ArrayData* loadClsTypeCnsHelper(
   assertx(typeCns.m_data.parr->isHAMSafeDArray());
   assertx(typeCns.m_data.parr->isStatic());
   return typeCns.m_data.parr;
+}
+
+void raiseCoeffectsCallViolationHelper(const ActRec* caller, const Func* callee,
+                                       uint64_t rawFlags) {
+  raiseCoeffectsCallViolation(caller, callee, CallFlags(rawFlags));
 }
 
 void throwOOBException(TypedValue base, TypedValue key) {

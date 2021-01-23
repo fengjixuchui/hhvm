@@ -9,13 +9,22 @@
 open Hh_prelude
 open Direct_decl_parser
 
-let popt ~auto_namespace_map ~enable_xhp_class_modifier =
+let popt
+    ~auto_namespace_map
+    ~enable_xhp_class_modifier
+    ~disable_xhp_element_mangling
+    ~enable_enum_classes =
   let po = ParserOptions.default in
-  let po = ParserOptions.with_disable_xhp_element_mangling po false in
+  let po =
+    ParserOptions.with_disable_xhp_element_mangling
+      po
+      disable_xhp_element_mangling
+  in
   let po = ParserOptions.with_auto_namespace_map po auto_namespace_map in
   let po =
     ParserOptions.with_enable_xhp_class_modifier po enable_xhp_class_modifier
   in
+  let po = ParserOptions.with_enable_enum_classes po enable_enum_classes in
   po
 
 let init root popt : Provider_context.t =
@@ -25,7 +34,7 @@ let init root popt : Provider_context.t =
   in
   let tcopt =
     {
-      TypecheckerOptions.default with
+      popt with
       GlobalOptions.tco_shallow_class_decl = true;
       tco_higher_kinded_types = true;
     }
@@ -84,7 +93,12 @@ let compare_decls ctx fn text =
   let legacy_decls_str = show_decls (List.rev legacy_decls) ^ "\n" in
   let popt = Provider_context.get_popt ctx in
   let auto_namespace_map = ParserOptions.auto_namespace_map popt in
-  let decls = parse_decls_ffi fn text auto_namespace_map in
+  let disable_xhp_element_mangling =
+    ParserOptions.disable_xhp_element_mangling popt
+  in
+  let decls =
+    parse_decls_ffi disable_xhp_element_mangling fn text auto_namespace_map
+  in
   let decls_str = show_decls (List.rev decls) ^ "\n" in
   let matched = String.equal decls_str legacy_decls_str in
   if matched then
@@ -132,6 +146,10 @@ let () =
   let set_expect_extension s = expect_extension := s in
   let auto_namespace_map = ref [] in
   let enable_xhp_class_modifier = ref false in
+  let disable_xhp_element_mangling = ref false in
+  let enable_enum_classes = ref false in
+  let ignored_flag flag = (flag, Arg.Unit (fun _ -> ()), "(ignored)") in
+  let ignored_arg flag = (flag, Arg.String (fun _ -> ()), "(ignored)") in
   Arg.parse
     [
       ( "--compare-direct-decl-parser",
@@ -154,6 +172,52 @@ let () =
         Arg.Set enable_xhp_class_modifier,
         "Enable the XHP class modifier, xhp class name {} will define an xhp class."
       );
+      ( "--disable-xhp-element-mangling",
+        Arg.Set disable_xhp_element_mangling,
+        "." );
+      ( "--enable-enum-classes",
+        Arg.Set enable_enum_classes,
+        "Enable the enum classes extension." );
+      (* The following options do not affect the direct decl parser and can be ignored
+         (they are used by hh_single_type_check, and we run hh_single_decl over all of
+         the typecheck test cases). *)
+      ignored_flag "--abstract-static-props";
+      ignored_arg "--allowed-decl-fixme-codes";
+      ignored_arg "--allowed-fixme-codes-strict";
+      ignored_flag "--allow-toplevel-requires";
+      ignored_flag "--check-xhp-attribute";
+      ignored_flag "--complex-coercion";
+      ignored_flag "--const-attribute";
+      ignored_flag "--const-static-props";
+      ignored_flag "--disable-hh-ignore-error";
+      ignored_flag "--disable-modes";
+      ignored_flag "--disable-partially-abstract-typeconsts";
+      ignored_flag "--disable-unset-class-const";
+      ignored_flag "--disable-xhp-children-declarations";
+      ignored_flag "--disallow-discarded-nullable-awaitables";
+      ignored_flag "--disallow-fun-and-cls-meth-pseudo-funcs";
+      ignored_flag "--disallow-func-ptrs-in-constants";
+      ignored_flag "--disallow-invalid-arraykey-constraint";
+      ignored_flag "--disallow-php-lambdas";
+      ignored_flag "--disallow-silence";
+      ignored_flag "--disallow-trait-reuse";
+      ignored_flag "--enable-class-level-where-clauses";
+      ignored_flag "--enable-higher-kinded-types";
+      ignored_flag "--enable-systemlib-annotations";
+      ignored_flag "--forbid_nullable_cast";
+      ( "--hh-log-level",
+        Arg.Tuple [Arg.String (fun _ -> ()); Arg.String (fun _ -> ())],
+        "(ignored)" );
+      ignored_flag "--like-casts";
+      ignored_flag "--like-type-hints";
+      ignored_flag "--like-types-all";
+      ignored_flag "--method-call-inference";
+      ignored_flag "--no-builtins";
+      ignored_flag "--no-strict-contexts";
+      ignored_flag "--report-pos-from-reason";
+      ignored_arg "--simple-pessimize";
+      ignored_arg "--timeout";
+      ignored_flag "--union-intersection-type-hints";
     ]
     set_file
     usage;
@@ -179,7 +243,15 @@ let () =
         let file = Path.make file in
         let auto_namespace_map = !auto_namespace_map in
         let enable_xhp_class_modifier = !enable_xhp_class_modifier in
-        let popt = popt ~auto_namespace_map ~enable_xhp_class_modifier in
+        let disable_xhp_element_mangling = !disable_xhp_element_mangling in
+        let enable_enum_classes = !enable_enum_classes in
+        let popt =
+          popt
+            ~auto_namespace_map
+            ~enable_xhp_class_modifier
+            ~disable_xhp_element_mangling
+            ~enable_enum_classes
+        in
         let ctx = init (Path.dirname file) popt in
         let file = Relative_path.(create Root (Path.to_string file)) in
         let files = Multifile.file_to_file_list file in

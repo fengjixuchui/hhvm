@@ -262,7 +262,7 @@ public:
   Attr attrs;
 
   ParamInfoVec params;
-  CoeffectAttr coeffectAttrs{CEAttrNone};
+  StaticCoeffects staticCoeffects{StaticCoeffects::none()};
   int16_t maxStackCells{0};
 
   MaybeDataType hniReturnType;

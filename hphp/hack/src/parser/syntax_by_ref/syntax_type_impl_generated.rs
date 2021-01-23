@@ -119,7 +119,7 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_enum_declaration(ctx: &C, attribute_spec: Self, keyword: Self, name: Self, colon: Self, base: Self, type_: Self, includes_keyword: Self, includes_list: Self, left_brace: Self, enumerators: Self, right_brace: Self) -> Self {
+    fn make_enum_declaration(ctx: &C, attribute_spec: Self, keyword: Self, name: Self, colon: Self, base: Self, type_: Self, left_brace: Self, use_clauses: Self, enumerators: Self, right_brace: Self) -> Self {
         let syntax = SyntaxVariant::EnumDeclaration(ctx.get_arena().alloc(EnumDeclarationChildren {
             attribute_spec,
             keyword,
@@ -127,11 +127,20 @@ where
             colon,
             base,
             type_,
-            includes_keyword,
-            includes_list,
             left_brace,
+            use_clauses,
             enumerators,
             right_brace,
+        }));
+        let value = V::from_values(syntax.iter_children().map(|child| &child.value));
+        Self::make(syntax, value)
+    }
+
+    fn make_enum_use(ctx: &C, keyword: Self, names: Self, semicolon: Self) -> Self {
+        let syntax = SyntaxVariant::EnumUse(ctx.get_arena().alloc(EnumUseChildren {
+            keyword,
+            names,
+            semicolon,
         }));
         let value = V::from_values(syntax.iter_children().map(|child| &child.value));
         Self::make(syntax, value)
@@ -166,15 +175,12 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_enum_class_enumerator(ctx: &C, name: Self, left_angle: Self, type_: Self, right_angle: Self, left_paren: Self, initial_value: Self, right_paren: Self, semicolon: Self) -> Self {
+    fn make_enum_class_enumerator(ctx: &C, type_: Self, name: Self, equal: Self, initial_value: Self, semicolon: Self) -> Self {
         let syntax = SyntaxVariant::EnumClassEnumerator(ctx.get_arena().alloc(EnumClassEnumeratorChildren {
-            name,
-            left_angle,
             type_,
-            right_angle,
-            left_paren,
+            name,
+            equal,
             initial_value,
-            right_paren,
             semicolon,
         }));
         let value = V::from_values(syntax.iter_children().map(|child| &child.value));
@@ -866,6 +872,16 @@ where
         let syntax = SyntaxVariant::ReturnStatement(ctx.get_arena().alloc(ReturnStatementChildren {
             keyword,
             expression,
+            semicolon,
+        }));
+        let value = V::from_values(syntax.iter_children().map(|child| &child.value));
+        Self::make(syntax, value)
+    }
+
+    fn make_yield_break_statement(ctx: &C, keyword: Self, break_: Self, semicolon: Self) -> Self {
+        let syntax = SyntaxVariant::YieldBreakStatement(ctx.get_arena().alloc(YieldBreakStatementChildren {
+            keyword,
+            break_,
             semicolon,
         }));
         let value = V::from_values(syntax.iter_children().map(|child| &child.value));

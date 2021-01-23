@@ -25,6 +25,7 @@ use hhas_adata_rust::{
 use hhas_attribute_rust::{self as hhas_attribute, HhasAttribute};
 use hhas_body_rust::HhasBody;
 use hhas_class_rust::{self as hhas_class, HhasClass};
+use hhas_coeffects::HhasCoeffects;
 use hhas_constant_rust::HhasConstant;
 use hhas_function_rust::HhasFunction;
 use hhas_method_rust::{HhasMethod, HhasMethodFlags};
@@ -53,9 +54,7 @@ use regex::Regex;
 use runtime::TypedValue;
 use write::*;
 
-use std::{
-    borrow::Cow, collections::BTreeSet, convert::TryInto, io::Write as _, path::Path, write,
-};
+use std::{borrow::Cow, collections::BTreeSet, io::Write as _, path::Path, write};
 
 pub mod context {
     use crate::write::*;
@@ -91,6 +90,7 @@ pub mod context {
         pub path: Option<&'a RelativePath>,
 
         dump_symbol_refs: bool,
+        pub dump_lambdas: bool,
         indent: Indent,
         is_system_lib: bool,
     }
@@ -106,6 +106,7 @@ pub mod context {
                 emitter,
                 path,
                 dump_symbol_refs,
+                dump_lambdas: false,
                 indent: Indent::new(),
                 is_system_lib,
             }
@@ -435,7 +436,9 @@ fn print_fun_def<W: Write>(
     }
     w.write(" ")?;
     braces(w, |w| {
-        ctx.block(w, |c, w| print_body(c, w, body, &fun_def.attributes))?;
+        ctx.block(w, |c, w| {
+            print_body(c, w, body, &fun_def.attributes, &fun_def.coeffects)
+        })?;
         newline(w)
     })?;
 
@@ -832,7 +835,9 @@ fn print_method_def<W: Write>(
     }
     w.write(" ")?;
     braces(w, |w| {
-        ctx.block(w, |c, w| print_body(c, w, body, &method_def.attributes))?;
+        ctx.block(w, |c, w| {
+            print_body(c, w, body, &method_def.attributes, &method_def.coeffects)
+        })?;
         newline(w)?;
         w.write("  ")
     })
@@ -846,9 +851,6 @@ fn print_method_attrs<W: Write>(
     use hhas_attribute::*;
     let user_attrs = &m.attributes;
     let mut special_attrs = vec![];
-    if let Ok(attr) = m.rx_level.try_into() {
-        special_attrs.push(attr);
-    }
     if has_provenance_skip_frame(user_attrs) {
         special_attrs.push("prov_skip_frame")
     }
@@ -1122,6 +1124,7 @@ fn print_body<W: Write>(
     w: &mut W,
     body: &HhasBody,
     attrs: &Vec<HhasAttribute>,
+    coeffects: &HhasCoeffects,
 ) -> Result<(), W::Error> {
     print_doc_comment(ctx, w, &body.doc_comment)?;
     if body.is_memoize_wrapper {
@@ -1147,6 +1150,10 @@ fn print_body<W: Write>(
             }
         })?;
         w.write(";")?;
+    }
+    for s in HhasCoeffects::coeffects_to_hhas(&coeffects).iter() {
+        ctx.newline(w)?;
+        w.write(s)?;
     }
     for i in body.rx_cond_rx_of_arg.iter() {
         ctx.newline(w)?;
@@ -2906,7 +2913,6 @@ fn print_expr<W: Write>(
             w.write("await ")?;
             print_expr(ctx, w, env, e)
         }
-        E_::YieldBreak => w.write("return"),
         E_::Import(i) => {
             print_import_flavor(w, &i.0)?;
             w.write(" ")?;
@@ -2949,13 +2955,34 @@ fn print_expr<W: Write>(
             })
         }
         E_::Omitted => Ok(()),
-        E_::Lfun(_) => Err(Error::fail(
-            "expected Lfun to be converted to Efun during closure conversion print_expr",
-        )),
+        E_::Lfun(lfun) => {
+            if ctx.dump_lambdas {
+                let fun_ = &lfun.0;
+                paren(w, |w| {
+                    paren(w, |w| {
+                        concat_by(w, ", ", &fun_.params, |w, param| {
+                            print_fparam(ctx, w, env, param)
+                        })
+                    })?;
+                    w.write(" ==> ")?;
+                    print_block_(ctx, w, env, &fun_.body.ast, None)
+                })
+            } else {
+                Err(Error::fail(
+                    "expected Lfun to be converted to Efun during closure conversion print_expr",
+                ))
+            }
+        }
         E_::Callconv(_) => Err(Error::fail("illegal default value")),
-        _ => Err(Error::fail(
-            "TODO Unimplemented: We are missing a lot of cases in the case match. Delete this catchall",
-        )),
+        E_::ETSplice(splice) => {
+            w.write("${")?;
+            print_expr(ctx, w, env, splice)?;
+            w.write("}")
+        }
+        _ => Err(Error::fail(format!(
+            "TODO Unimplemented: Cannot print: {:?}",
+            expr
+        ))),
     }
 }
 
@@ -3243,9 +3270,6 @@ fn print_fun_attrs<W: Write>(
     use hhas_attribute::*;
     let user_attrs = &f.attributes;
     let mut special_attrs = vec![];
-    if let Ok(attr) = f.rx_level.try_into() {
-        special_attrs.push(attr);
-    }
     if has_meth_caller(user_attrs) {
         special_attrs.push("builtin");
         special_attrs.push("is_meth_caller");
@@ -3449,4 +3473,27 @@ fn print_record_def<W: Write>(
         ctx.newline(w)
     })?;
     newline(w)
+}
+
+/// Convert an `Expr` to a `String` of the equivalent source code.
+///
+/// This is a debugging tool abusing a printer written for bytecode
+/// emission. It does not support all Hack expressions, and panics
+/// on unsupported syntax.
+///
+/// If you have an `Expr` with positions, you are much better off
+/// getting the source code at those positions rather than using this.
+pub fn expr_to_string_lossy(mut ctx: Context, expr: &ast::Expr) -> String {
+    ctx.dump_lambdas = true;
+
+    let env = ExprEnv {
+        codegen_env: None,
+        is_xhp: false,
+    };
+    let mut escaped_src = String::new();
+    print_expr(&mut ctx, &mut escaped_src, &env, expr).expect("Printing failed");
+
+    let bs = escaper::unescape_double(&escaped_src).expect("Unescaping failed");
+    let s = String::from_utf8_lossy(&bs);
+    s.to_string()
 }

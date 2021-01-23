@@ -65,7 +65,7 @@ pub mod classes {
 
     pub const IASYNC_DISPOSABLE: &str = "\\IAsyncDisposable";
 
-    pub const ENUM_MEMBER: &str = "\\HH\\EnumMember";
+    pub const MEMBER_OF: &str = "\\HH\\MemberOf";
 }
 
 pub mod collections {
@@ -835,6 +835,30 @@ pub mod rx {
     }
 }
 
+pub mod coeffects {
+    pub const DEFAULTS: &str = "defaults";
+
+    pub const RX_LOCAL: &str = "rx_local";
+
+    pub const RX_SHALLOW: &str = "rx_shallow";
+
+    pub const RX: &str = "rx";
+
+    pub const WRITE_PROPS: &str = "write_props";
+
+    pub const CIPP_LOCAL: &str = "cipp_local";
+
+    pub const CIPP_SHALLOW: &str = "cipp_shallow";
+
+    pub const CIPP: &str = "cipp";
+
+    pub const CIPP_OF: &str = "cipp_of";
+
+    pub const CIPP_GLOBAL: &str = "cipp_global";
+
+    pub const PURE: &str = "pure";
+}
+
 pub mod shapes {
     pub const SHAPES: &str = "\\HH\\Shapes";
 
@@ -874,31 +898,6 @@ pub mod superglobals {
     }
     pub fn is_any_global(x: &str) -> bool {
         is_superglobal(x) || x == GLOBALS
-    }
-}
-
-pub mod ppl_functions {
-    use lazy_static::lazy_static;
-    use std::collections::HashSet;
-
-    pub static ALL_RESERVED: &[&str] = &[
-        "sample",
-        "\\sample",
-        "factor",
-        "\\factor",
-        "observe",
-        "\\observe",
-        "condition",
-        "\\condition",
-        "sample_model",
-        "\\sample_model",
-    ];
-
-    lazy_static! {
-        static ref ALL_RESERVED_SET: HashSet<&'static str> = ALL_RESERVED.iter().cloned().collect();
-    }
-    pub fn is_reserved(x: &str) -> bool {
-        ALL_RESERVED_SET.contains(x)
     }
 }
 

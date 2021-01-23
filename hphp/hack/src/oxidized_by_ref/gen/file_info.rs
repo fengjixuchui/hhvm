@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<a8529a2abb2191f4b4b2cfd4b0bff5d9>>
+// @generated SignedSource<<98622815728a97c3a55e6840dd73b4aa>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidized_by_ref/regen.sh
+//   hphp/hack/src/oxidize_regen.sh
 
 use arena_trait::TrivialDrop;
 use no_pos_hash::NoPosHash;
@@ -103,3 +103,28 @@ impl<'a> TrivialDrop for FileInfo<'a> {}
 pub use oxidized::file_info::Names;
 
 pub use oxidized::file_info::Saved;
+
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub struct Diff<'a> {
+    pub removed_funs: s_set::SSet<'a>,
+    pub added_funs: s_set::SSet<'a>,
+    pub removed_classes: s_set::SSet<'a>,
+    pub added_classes: s_set::SSet<'a>,
+    pub removed_types: s_set::SSet<'a>,
+    pub added_types: s_set::SSet<'a>,
+    pub removed_consts: s_set::SSet<'a>,
+    pub added_consts: s_set::SSet<'a>,
+}
+impl<'a> TrivialDrop for Diff<'a> {}

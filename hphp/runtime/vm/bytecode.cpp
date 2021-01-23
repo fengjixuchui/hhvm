@@ -756,7 +756,7 @@ std::string Stack::toString(const ActRec* fp, int offset,
   auto func = fp->func();
   os << prefix << "=== Stack at "
      << unit->filepath()->data() << ":"
-     << unit->getLineNumber(func->offsetOf(vmpc()))
+     << func->getLineNumber(func->offsetOf(vmpc()))
      << " func " << func->fullName()->data() << " ===\n";
 
   toStringFrame(os, fp, offset, m_top, prefix);
@@ -1785,7 +1785,7 @@ OPTBLD_INLINE void iopThrowAsTypeStructException() {
     throwTypeStructureDoesNotMatchTVException(
       givenType, expectedType, errorKey);
   }
-  raise_error("Invalid bytecode sequence: Instruction must throw");
+  always_assert(false && "Invalid bytecode sequence: Instruction must throw");
 }
 
 OPTBLD_INLINE void iopCombineAndResolveTypeStruct(uint32_t n) {
@@ -2470,8 +2470,9 @@ static void raise_undefined_local(ActRec* fp, LocalName pind) {
       vm->getLine()
     );
   }
-  raise_notice(Strings::UNDEFINED_VARIABLE,
-               fp->func()->localVarName(pind)->data());
+  SystemLib::throwUndefinedVariableExceptionObject(
+    folly::sformat("Undefined variable: {}",
+                   fp->func()->localVarName(pind)->data()));
 }
 
 static inline void cgetl_inner_body(tv_rval fr, TypedValue* to) {
@@ -3632,6 +3633,7 @@ bool doFCall(CallFlags callFlags, const Func* func, uint32_t numArgsInclUnpack,
   calleeGenericsChecks(func, callFlags.hasGenerics());
   calleeArgumentArityChecks(func, numArgsInclUnpack);
   calleeDynamicCallChecks(func, callFlags.isDynamicCall());
+  calleeCoeffectChecks(func, callFlags);
   calleeImplicitContextChecks(func);
   initFuncInputs(func, numArgsInclUnpack);
 
@@ -3697,7 +3699,6 @@ void fcallImpl(PC origpc, PC& pc, const FCallArgs& fca, const Func* func,
                Ctx&& ctx, bool logAsDynamicCall = true) {
   if (fca.enforceInOut()) callerInOutChecks(func, fca);
   if (dynamic && logAsDynamicCall) callerDynamicCallChecks(func);
-  callerRxChecks(vmfp(), func);
   checkStack(vmStack(), func, 0);
 
   auto const numArgsInclUnpack = [&] {
@@ -3722,7 +3723,8 @@ void fcallImpl(PC origpc, PC& pc, const FCallArgs& fca, const Func* func,
     dynamic,
     fca.asyncEagerOffset != kInvalidOffset && func->supportsAsyncEagerReturn(),
     Offset(origpc - vmfp()->func()->entry()),
-    0  // generics bitmap not used by interpreter
+    0,  // generics bitmap not used by interpreter
+    vmfp()->coeffects()
   );
 
   doFCall(callFlags, func, numArgsInclUnpack, takeCtx(std::forward<Ctx>(ctx)),
@@ -5405,7 +5407,7 @@ void PrintTCCallerInfo() {
 
   fprintf(stderr, "Called from TC address %p\n", rip);
   std::cerr << u->filepath()->data() << ':'
-            << u->getLineNumber(f->offsetOf(vmpc())) << '\n';
+            << f->getLineNumber(f->offsetOf(vmpc())) << '\n';
 }
 
 // thread-local cached coverage info
@@ -5413,18 +5415,21 @@ static __thread Unit* s_prev_unit;
 static __thread int s_prev_line;
 
 void recordCodeCoverage(PC /*pc*/) {
-  Unit* unit = vmfp()->func()->unit();
+  auto const func = vmfp()->func();
+  Unit* unit = func->unit();
   assertx(unit != nullptr);
   if (unit == SystemLib::s_hhas_unit) {
     return;
   }
 
   if (!RO::RepoAuthoritative && RO::EvalEnablePerFileCoverage) {
-    if (unit->isCoverageEnabled()) unit->recordCoverage(pcOff());
+    if (unit->isCoverageEnabled()) {
+      unit->recordCoverage(func->getLineNumber(pcOff()));
+    }
     return;
   }
 
-  int line = unit->getLineNumber(pcOff());
+  int line = func->getLineNumber(pcOff());
   assertx(line != -1);
 
   if (unit != s_prev_unit || line != s_prev_line) {

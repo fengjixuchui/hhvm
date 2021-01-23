@@ -2,15 +2,15 @@
 
 <<file:__EnableUnstableFeatures('expression_trees')>>
 
-function nullable_bool(
+async function nullable_bool(
   ExampleContext $_,
-): ExprTree<Code, Code::TAst, (function(): ?ExampleBool)> {
+): Awaitable<ExprTree<Code, Code::TAst, (function(): ?ExampleBool)>> {
   throw new Exception();
 }
 
-function a_bool(
+async function a_bool(
   ExampleContext $_,
-): ExprTree<Code, Code::TAst, (function(): ExampleBool)> {
+): Awaitable<ExprTree<Code, Code::TAst, (function(): ExampleBool)>> {
   throw new Exception();
 }
 
@@ -72,7 +72,7 @@ class Code {
   // Symbols
   public static function symbol<T>(
     string $_,
-    (function(ExampleContext): ExprTree<Code, Code::TAst, T>) $_,
+    (function(ExampleContext): Awaitable<ExprTree<Code, Code::TAst, T>>) $_,
   ): ExprTree<Code, Code::TAst, T> {
     throw new Exception();
   }
@@ -170,11 +170,6 @@ class Code {
     Spliceable<Code, Code::TAst, T> $_,
   ): Code::TAst {
     throw new Exception();
-  }
-
-  // TODO: Discard unsupported syntax nodes while lowering
-  public function unsupportedSyntax(string $msg): Code::TAst {
-    throw new Exception($msg);
   }
 }
 

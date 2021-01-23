@@ -815,12 +815,19 @@ void VariableSerializer::writeOverflow(tv_rval tv) {
 }
 
 void VariableSerializer::writeRefCount() {
-  if (m_type == Type::DebugDump) {
+  if (m_type != Type::DebugDump) return;
+
+  if (m_refCount >= 0) {
     m_buf->append(" refcount(");
     m_buf->append(m_refCount);
     m_buf->append(')');
-    m_refCount = 1;
+  } else if (m_refCount == StaticValue) {
+    m_buf->append(" static");
+  } else {
+    m_buf->append(" uncounted");
   }
+
+  m_refCount = OneReference;
 }
 
 void VariableSerializer::writeArrayHeader(int size, bool isVectorData,
@@ -1468,9 +1475,51 @@ void VariableSerializer::decNestedLevel(tv_rval tv) {
 }
 
 void VariableSerializer::serializeRFunc(const RFuncData* rfunc) {
-  SystemLib::throwInvalidOperationExceptionObject(
-    "Unable to serialize reified function pointer"
-  );
+  switch (getType()) {
+    case Type::PrintR:
+    case Type::DebuggerDump:
+      m_buf->append("reifiedFunction{\n");
+      m_indent += 4;
+      indent();
+      m_buf->append("function(");
+      m_buf->append(rfunc->m_func->fullName()->data());
+      m_buf->append(")\n");
+      indent();
+      m_buf->append("[\"reified_generics\"] => ");
+      serializeArray(rfunc->m_arr);
+      m_indent -= 4;
+      indent();
+      m_buf->append("}\n");
+      break;
+
+    case Type::VarDump:
+    case Type::DebugDump:
+      indent();
+      m_buf->append("reifiedFunction{\n");
+      m_indent += 2;
+      indent();
+      m_buf->append("function(");
+      m_buf->append(rfunc->m_func->fullName()->data());
+      m_buf->append(")\n");
+      indent();
+      m_buf->append("[\"reified_generics\"]=>\n");
+      serializeArray(rfunc->m_arr);
+      m_indent -= 2;
+      indent();
+      m_buf->append("}\n");
+      break;
+    case Type::VarExport:
+    case Type::Serialize:
+    case Type::Internal:
+    case Type::JSON:
+    case Type::APCSerialize:
+    case Type::DebuggerSerialize:
+    case Type::PHPOutput:
+      SystemLib::throwInvalidOperationExceptionObject(
+        "Unable to serialize reified function pointer"
+      );
+      break;
+  }
 }
 
 void VariableSerializer::serializeFunc(const Func* func) {
@@ -1641,9 +1690,58 @@ void VariableSerializer::serializeClsMeth(
 }
 
 void VariableSerializer::serializeRClsMeth(RClsMethData* rclsMeth) {
-  SystemLib::throwInvalidOperationExceptionObject(
-    "Unable to serialize reified class meth pointer"
-  );
+  switch (getType()) {
+    case Type::PrintR:
+    case Type::DebuggerDump:
+      m_buf->append("reifiedClassMeth{\n");
+      m_indent += 4;
+      indent();
+      m_buf->append("class(");
+      m_buf->append(rclsMeth->m_cls->name()->data(), rclsMeth->m_cls->name()->size());
+      m_buf->append(")\n");
+      indent();
+      m_buf->append("function(");
+      m_buf->append(rclsMeth->m_func->name()->data());
+      m_buf->append(")\n");
+      indent();
+      m_buf->append("[\"reified_generics\"] => ");
+      serializeArray(rclsMeth->m_arr);
+      m_indent -= 4;
+      indent();
+      m_buf->append("}\n");
+      break;
+    case Type::VarDump:
+    case Type::DebugDump:
+      indent();
+      m_buf->append("reifiedClassMeth{\n");
+      m_indent += 2;
+      indent();
+      m_buf->append("class(");
+      m_buf->append(rclsMeth->m_cls->name()->data(), rclsMeth->m_cls->name()->size());
+      m_buf->append(")\n");
+      indent();
+      m_buf->append("function(");
+      m_buf->append(rclsMeth->m_func->name()->data());
+      m_buf->append(")\n");
+      indent();
+      m_buf->append("[\"reified_generics\"]=>\n");
+      serializeArray(rclsMeth->m_arr);
+      m_indent -= 2;
+      indent();
+      m_buf->append("}\n");
+      break;
+    case Type::VarExport:
+    case Type::Serialize:
+    case Type::Internal:
+    case Type::JSON:
+    case Type::APCSerialize:
+    case Type::DebuggerSerialize:
+    case Type::PHPOutput:
+      SystemLib::throwInvalidOperationExceptionObject(
+        "Unable to serialize reified class meth pointer"
+      );
+      break;
+  }
 }
 
 NEVER_INLINE
@@ -1740,6 +1838,7 @@ void VariableSerializer::serializeVariant(tv_rval tv,
     case KindOfRClsMeth:
       assertx(!isArrayKey);
       serializeRClsMeth(val(tv).prclsmeth);
+      return;
 
     case KindOfLazyClass:
       assertx(!isArrayKey);
@@ -1766,7 +1865,8 @@ void VariableSerializer::serializeResource(const ResourceData* res) {
   } else if (auto trace = dynamic_cast<const CompactTrace*>(res)) {
     auto const trace_array = Variant(trace->extract());
     auto const raw = *trace_array.asTypedValue();
-    auto const marked = Variant::attach(arrprov::markTvRecursively(raw, true));
+    // We use a depth of 2 because backtrace arrays are varrays-of-darrays.
+    auto const marked = Variant::attach(arrprov::markTvToDepth(raw, true, 2));
     serializeArray(marked.toArray().get());
   } else {
     serializeResourceImpl(res);

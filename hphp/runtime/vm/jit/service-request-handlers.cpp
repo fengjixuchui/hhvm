@@ -112,47 +112,55 @@ const StaticString s_AlwaysInterp("__ALWAYS_INTERP");
  * If a translation for this SrcKey already exists it will be returned. The kind
  * of translation created will be selected based on the SrcKey specified.
  */
-TCA getTranslation(SrcKey sk) {
+TranslationResult getTranslation(SrcKey sk) {
   sk.func()->validate();
 
   if (!RID().getJit()) {
     SKTRACE(2, sk, "punting because jit was disabled\n");
-    return nullptr;
+    return TranslationResult::failTransiently();
   }
 
   if (auto const sr = tc::findSrcRec(sk)) {
     if (auto const tca = sr->getTopTranslation()) {
       SKTRACE(2, sk, "getTranslation: found %p\n", tca);
-      return tca;
+      return TranslationResult{tca};
     }
   }
 
   if (UNLIKELY(RID().isJittingDisabled())) {
     SKTRACE(2, sk, "punting because jitting code was disabled\n");
-    return nullptr;
+    return TranslationResult::failTransiently();
   }
 
   if (UNLIKELY(!RO::RepoAuthoritative && sk.unit()->isCoverageEnabled())) {
     assertx(RO::EvalEnablePerFileCoverage);
     SKTRACE(2, sk, "punting because per file code coverage is enabled\n");
-    return nullptr;
+    return TranslationResult::failTransiently();
   }
 
   if (UNLIKELY(!RO::EvalHHIRAlwaysInterpIgnoreHint &&
                sk.func()->userAttributes().count(s_AlwaysInterp.get()))) {
     SKTRACE(2, sk,
             "punting because function is annotated with __ALWAYS_INTERP\n");
-    return nullptr;
+    return TranslationResult::failTransiently();
   }
 
   auto args = TransArgs{sk};
   args.kind = tc::profileFunc(args.sk.func()) ?
     TransKind::Profile : TransKind::Live;
 
-  if (!tc::shouldTranslate(args.sk, args.kind)) return nullptr;
+  if (auto const s = tc::shouldTranslate(args.sk, args.kind);
+      s != TranslationResult::Scope::Success) {
+    return TranslationResult{s};
+  }
 
   LeaseHolder writer(sk.func(), args.kind);
-  if (!writer || !tc::shouldTranslate(sk, args.kind)) return nullptr;
+  if (!writer) return TranslationResult::failTransiently();
+
+  if (auto const s = tc::shouldTranslate(args.sk, args.kind);
+      s != TranslationResult::Scope::Success) {
+    return TranslationResult{s};
+  }
 
   tc::createSrcRec(sk, liveSpOff());
 
@@ -160,25 +168,59 @@ TCA getTranslation(SrcKey sk) {
     // Handle extremely unlikely race; someone may have just added the first
     // translation for this SrcRec while we did a non-blocking wait on the
     // write lease in createSrcRec().
-    return tca;
+    return TranslationResult{tca};
   }
 
-  return mcgen::retranslate(args, getContext(args.sk, args.kind == TransKind::Profile));
+  return mcgen::retranslate(
+    args,
+    getContext(args.sk, args.kind == TransKind::Profile)
+  );
 }
 
 /*
  * Runtime service handler that patches a jmp to the translation of u:dest from
  * toSmash.
  */
-TCA bindJmp(TCA toSmash, SrcKey destSk, ServiceRequest req, bool& smashed) {
-  auto tDest = getTranslation(destSk);
-  if (!tDest) return nullptr;
-
-  if (req == REQ_BIND_ADDR) {
-    return tc::bindAddr(toSmash, destSk, smashed);
+TranslationResult bindJmp(TCA toSmash,
+                          SrcKey destSk,
+                          FPInvOffset spOff,
+                          ServiceRequest req,
+                          TCA oldStub,
+                          bool& smashed) {
+  auto const result = getTranslation(destSk);
+  if (!result.addr()) {
+    if (result.isProcessPersistentFailure()) {
+      // If we couldn't make a new translation, and we won't be able
+      // to make any new translations for the remainder of the process
+      // lifetime, we can just burn in a call to
+      // handleResumeNoTranslate.
+      if (auto const stub = emit_interp_no_translate_stub(spOff, destSk)) {
+        // We still need to create a SrcRec (if one doesn't already
+        // exist) to manage the locking correctly. This can fail.
+        if (!tc::createSrcRec(destSk, liveSpOff(), true)) return result;
+        if (req == REQ_BIND_ADDR) {
+          tc::bindAddrToStub(toSmash, oldStub, stub, destSk, smashed);
+        } else {
+          assertx(req == REQ_BIND_JMP);
+          tc::bindJmpToStub(toSmash, oldStub, stub, destSk, smashed);
+        }
+      }
+    }
+    return result;
   }
 
-  return tc::bindJmp(toSmash, destSk, smashed);
+  if (req == REQ_BIND_ADDR) {
+    if (auto const addr = tc::bindAddr(toSmash, destSk, smashed)) {
+      return TranslationResult{addr};
+    }
+  } else {
+    assertx(req == REQ_BIND_JMP);
+    if (auto const addr = tc::bindJmp(toSmash, destSk, smashed)) {
+      return TranslationResult{addr};
+    }
+  }
+
+  return TranslationResult::failTransiently();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -197,12 +239,18 @@ TCA getFuncBody(const Func* func) {
 
   if (func->numRequiredParams() != func->numNonVariadicParams()) {
     tca = tc::ustubs().resumeHelper;
+    const_cast<Func*>(func)->setFuncBody(tca);
   } else {
-    SrcKey sk(func, func->base(), ResumeMode::None);
-    tca = getTranslation(sk);
+    SrcKey sk{func, func->base(), ResumeMode::None};
+    auto const trans = getTranslation(sk);
+    tca = trans.isRequestPersistentFailure()
+      ? tc::ustubs().interpHelperNoTranslate
+      : trans.addr();
+    if (trans.isProcessPersistentFailure()) {
+      const_cast<Func*>(func)->setFuncBody(tca);
+    }
   }
 
-  if (tca) const_cast<Func*>(func)->setFuncBody(tca);
   return tca != nullptr ? tca : tc::ustubs().resumeHelper;
 }
 
@@ -218,7 +266,7 @@ TCA handleServiceRequest(ReqInfo& info) noexcept {
     );
   }
 
-  TCA start = nullptr;
+  folly::Optional<TranslationResult> transResult;
   SrcKey sk;
   auto smashed = false;
 
@@ -227,7 +275,8 @@ TCA handleServiceRequest(ReqInfo& info) noexcept {
     case REQ_BIND_ADDR: {
       auto const toSmash = info.args[0].tca;
       sk = SrcKey::fromAtomicInt(info.args[1].sk);
-      start = bindJmp(toSmash, sk, info.req, smashed);
+      transResult =
+        bindJmp(toSmash, sk, liveSpOff(), info.req, info.stub, smashed);
       break;
     }
 
@@ -235,8 +284,8 @@ TCA handleServiceRequest(ReqInfo& info) noexcept {
       INC_TPC(retranslate);
       sk = SrcKey{ liveFunc(), info.args[0].offset, liveResumeMode() };
       auto const context = getContext(sk, tc::profileFunc(sk.func()));
-      start = mcgen::retranslate(TransArgs{sk}, context);
-      SKTRACE(2, sk, "retranslated @%p\n", start);
+      transResult = mcgen::retranslate(TransArgs{sk}, context);
+      SKTRACE(2, sk, "retranslated @%p\n", transResult->addr());
       break;
     }
 
@@ -246,12 +295,12 @@ TCA handleServiceRequest(ReqInfo& info) noexcept {
         // Retranslation was successful. Resume execution at the new Optimize
         // translation.
         vmpc() = sk.func()->at(sk.offset());
-        start = tc::ustubs().resumeHelper;
+        transResult = TranslationResult{tc::ustubs().resumeHelper};
       } else {
         // Retranslation failed, probably because we couldn't get the write
         // lease. Interpret a BB before running more Profile translations, to
         // avoid spinning through this path repeatedly.
-        start = nullptr;
+        transResult = TranslationResult::failTransiently();
       }
       break;
     }
@@ -294,7 +343,7 @@ TCA handleServiceRequest(ReqInfo& info) noexcept {
              func->fullName()->data(),
              destFunc->fullName()->data());
       sk = liveSK();
-      start = getTranslation(sk);
+      transResult = getTranslation(sk);
       break;
     }
   }
@@ -305,10 +354,14 @@ TCA handleServiceRequest(ReqInfo& info) noexcept {
     Treadmill::enqueue([stub] { tc::freeTCStub(stub); });
   }
 
-  if (start == nullptr) {
+  auto const start = [&] {
+    assertx(transResult);
+    if (auto const addr = transResult->addr()) return addr;
     vmpc() = sk.pc();
-    start = tc::ustubs().interpHelperSyncedPC;
-  }
+    return transResult->scope() == TranslationResult::Scope::Transient
+      ? tc::ustubs().interpHelperSyncedPC
+      : tc::ustubs().interpHelperNoTranslate;
+  }();
 
   if (Trace::moduleEnabled(Trace::ringbuffer, 1)) {
     auto skData = sk.valid() ? sk.toAtomicInt() : uint64_t(-1LL);
@@ -321,21 +374,34 @@ TCA handleServiceRequest(ReqInfo& info) noexcept {
 
 TCA handleBindCall(TCA toSmash, Func* func, int32_t numArgs) {
   TRACE(2, "bindCall %s, numArgs %d\n", func->fullName()->data(), numArgs);
-  TCA start = mcgen::getFuncPrologue(func, numArgs);
-  TRACE(2, "bindCall immutably %s -> %p\n", func->fullName()->data(), start);
+  auto const trans = mcgen::getFuncPrologue(func, numArgs);
+  TRACE(2, "bindCall immutably %s -> %p\n",
+        func->fullName()->data(), trans.addr());
 
-  if (start) {
+  if (trans.isProcessPersistentFailure()) {
+    // We can't get a translation for this and we can't create any new
+    // ones any longer. Smash the call site with a stub which will
+    // interp the prologue, then run resumeHelperNoTranslate.
+    tc::bindCall(
+      toSmash,
+      tc::ustubs().fcallHelperNoTranslateThunk,
+      func,
+      numArgs
+    );
+    return tc::ustubs().fcallHelperNoTranslateThunk;
+  } else if (trans.addr()) {
     // Using start is racy but bindCall will recheck the start address after
     // acquiring a lock on the ProfTransRec
-    tc::bindCall(toSmash, start, func, numArgs);
+    tc::bindCall(toSmash, trans.addr(), func, numArgs);
+    return trans.addr();
   } else {
     // We couldn't get a prologue address. Return a stub that will finish
     // entering the callee frame in C++, then call handleResume at the callee's
     // entry point.
-    start = tc::ustubs().fcallHelperThunk;
+    return trans.isRequestPersistentFailure()
+      ? tc::ustubs().fcallHelperNoTranslateThunk
+      : tc::ustubs().fcallHelperThunk;
   }
-
-  return start;
 }
 
 TCA handleResume(bool interpFirst) {
@@ -347,12 +413,17 @@ TCA handleResume(bool interpFirst) {
   tl_regState = VMRegState::CLEAN;
 
   auto sk = liveSK();
+  FTRACE(2, "handleResume: sk: {}\n", showShort(sk));
+
   TCA start;
   if (interpFirst) {
     start = nullptr;
     INC_TPC(interp_bb_force);
   } else {
-    start = getTranslation(sk);
+    auto const trans = getTranslation(sk);
+    start = trans.isRequestPersistentFailure()
+      ? tc::ustubs().interpHelperNoTranslate
+      : trans.addr();
   }
 
   vmJitReturnAddr() = nullptr;
@@ -369,15 +440,73 @@ TCA handleResume(bool interpFirst) {
 
     while (!start) {
       INC_TPC(interp_bb);
-      if (auto retAddr = HPHP::dispatchBB()) {
+      if (auto const retAddr = HPHP::dispatchBB()) {
         start = retAddr;
         break;
       }
 
       assertx(vmpc());
       sk = liveSK();
-      start = getTranslation(sk);
+
+      auto const trans = getTranslation(sk);
+      start = trans.isRequestPersistentFailure()
+        ? tc::ustubs().interpHelperNoTranslate
+        : trans.addr();
     }
+  }
+
+  if (Trace::moduleEnabled(Trace::ringbuffer, 1)) {
+    auto skData = sk.valid() ? sk.toAtomicInt() : uint64_t(-1LL);
+    Trace::ringbufferEntry(Trace::RBTypeResumeTC, skData, (uint64_t)start);
+  }
+
+  tl_regState = VMRegState::DIRTY;
+  return start;
+}
+
+TCA handleResumeNoTranslate(bool interpFirst) {
+  assert_native_stack_aligned();
+  FTRACE(1, "handleResumeNoTranslate({})\n", interpFirst);
+
+  if (!vmRegsUnsafe().pc) return tc::ustubs().callToExit;
+
+  tl_regState = VMRegState::CLEAN;
+
+  auto sk = liveSK();
+  FTRACE(2, "handleResumeNoTranslate: sk: {}\n", showShort(sk));
+
+  auto const find = [&] () -> TCA {
+    if (auto const sr = tc::findSrcRec(sk)) {
+      if (auto const tca = sr->getTopTranslation()) {
+        if (LIKELY(RID().getJit())) {
+          SKTRACE(2, sk, "handleResumeNoTranslate: found %p\n", tca);
+          return tca;
+        }
+      }
+    }
+    return nullptr;
+  };
+
+  TCA start = nullptr;
+  if (!interpFirst) start = find();
+
+  vmJitReturnAddr() = nullptr;
+  vmJitCalledFrame() = vmfp();
+  SCOPE_EXIT { vmJitCalledFrame() = nullptr; };
+
+  if (!start) {
+    WorkloadStats guard(WorkloadStats::InInterp);
+    tracing::BlockNoTrace _{"dispatch-bb"};
+    do {
+      INC_TPC(interp_bb);
+      if (auto const retAddr = HPHP::dispatchBB()) {
+        start = retAddr;
+      } else {
+        assertx(vmpc());
+        sk = liveSK();
+        start = find();
+      }
+    } while (!start);
   }
 
   if (Trace::moduleEnabled(Trace::ringbuffer, 1)) {

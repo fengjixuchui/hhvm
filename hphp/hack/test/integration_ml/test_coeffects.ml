@@ -14,7 +14,7 @@ let source =
   "<?hh // strict
 
 namespace HH\\Contexts {
-  type a = int;
+  type a = mixed;
   namespace Unsafe {
     type a = mixed;
   }
@@ -64,7 +64,7 @@ let identify_tests =
       "result_type":"class",
       "pos":{"filename":"/source.php","line":11,"char_start":18,"char_end":18},
       "definition_pos":{"filename":"/source.php","line":4,"char_start":8,"char_end":8},
-      "definition_span":{"filename":"/source.php","line_start":4,"char_start":8,"line_end":4,"char_end":14},
+      "definition_span":{"filename":"/source.php","line_start":4,"char_start":8,"line_end":4,"char_end":16},
       "definition_id":"type_id::HH\\Contexts\\a"}] |}
     );
     ( (11, 18),
@@ -81,11 +81,10 @@ let identify_tests =
 let test () =
   let root = "/" in
   let hhconfig_filename = Filename.concat root ".hhconfig" in
-  let hhconfig_contents = "enable_coeffects_syntax = true" in
   let files = [("source.php", source)] in
 
   Relative_path.set_path_prefix Relative_path.Root (Path.make root);
-  TestDisk.set hhconfig_filename hhconfig_contents;
+  TestDisk.set hhconfig_filename "";
   let hhconfig_path =
     Relative_path.create Relative_path.Root hhconfig_filename
   in

@@ -1251,7 +1251,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
 
   case DictFirstKey:
   case DictLastKey:
-  case LdMonotypeDictEnd:
+  case LdMonotypeDictTombstones:
   case LdMonotypeDictKey:
     return may_load_store(AEmpty, AEmpty);
 
@@ -1601,7 +1601,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case IsFunReifiedGenericsMatched:
   case IsClsDynConstructible:
   case JmpPlaceholder:
-  case LdFuncRxLevel:
   case LdSmashable:
   case LdSmashableFunc:
   case LdRDSAddr:
@@ -1793,8 +1792,11 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case DbgAssertFunc:
   case ProfileCall:
   case ProfileMethod:
-  case LogArrayReach:
     return may_load_store(AEmpty, AEmpty);
+
+  case LogArrayReach:
+  case LogGuardFailure:
+    return may_load_store(AHeapAny, AEmpty);
 
   // Some that touch memory we might care about later, but currently don't:
   case ColIsEmpty:
@@ -1839,7 +1841,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case LdClsCtor:
     return may_load_store(AEmpty, AEmpty);
 
-  case RaiseRxCallViolation:
+  case RaiseCoeffectsCallViolation:
     return may_load_store(AFFunc{inst.src(0)}, AEmpty);
 
   case LdClsPropAddrOrNull:   // may run 86{s,p}init, which can autoload
@@ -1849,7 +1851,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ThrowArrayKeyException:
   case RaiseClsMethPropConvertNotice:
   case RaiseArraySerializeNotice:
-  case RaiseUninitLoc:
+  case ThrowUninitLoc:
   case RaiseUndefProp:
   case RaiseTooManyArg:
   case RaiseError:

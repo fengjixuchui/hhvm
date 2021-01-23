@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<e157cfd1fbe9b58d4078db1cc96c5e56>>
+// @generated SignedSource<<07b8783e7dc00dec82491d4ea0e8616e>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidized/regen.sh
+//   hphp/hack/src/oxidize_regen.sh
 
 use ocamlrep_derive::FromOcamlRep;
 use ocamlrep_derive::ToOcamlRep;
@@ -53,7 +53,6 @@ pub struct GlobalOptions {
     pub po_disallow_toplevel_requires: bool,
     pub po_disable_nontoplevel_declarations: bool,
     pub po_disable_static_closures: bool,
-    pub po_allow_goto: bool,
     pub po_allow_unstable_features: bool,
     pub tco_log_inference_constraints: bool,
     pub tco_disallow_array_typehint: bool,
@@ -80,6 +79,7 @@ pub struct GlobalOptions {
     pub tco_union_intersection_type_hints: bool,
     pub tco_coeffects: bool,
     pub tco_coeffects_local: bool,
+    pub tco_strict_contexts: bool,
     pub tco_like_casts: bool,
     pub tco_simple_pessimize: f64,
     pub tco_complex_coercion: bool,
@@ -136,6 +136,5 @@ pub struct GlobalOptions {
     pub po_disallow_hash_comments: bool,
     pub po_disallow_fun_and_cls_meth_pseudo_funcs: bool,
     pub tco_use_direct_decl_parser: bool,
-    pub tco_ifc_enabled: bool,
-    pub po_enable_coeffects: bool,
+    pub tco_ifc_enabled: Vec<String>,
 }

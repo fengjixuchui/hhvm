@@ -22,7 +22,10 @@ let is_enforceable (env : env) (ty : decl_ty) =
   let rec is_enforceable env visited ty =
     match get_node ty with
     | Tthis -> false
-    | Tapply ((_, name), _) when Env.is_enum env name -> false
+    | Tapply ((_, name), _)
+      when Env.is_enum env name
+           && not (TypecheckerOptions.enable_sound_dynamic env.genv.tcopt) ->
+      false
     | Tapply ((_, name), tyl) ->
       (* Cyclic type definition error will be produced elsewhere *)
       SSet.mem name visited
@@ -81,8 +84,6 @@ let is_enforceable (env : env) (ty : decl_ty) =
       false
     | Taccess _ -> false
     | Tlike _ -> false
-    | Tarray (None, None) -> true
-    | Tarray _ -> false
     | Tprim prim ->
       begin
         match prim with

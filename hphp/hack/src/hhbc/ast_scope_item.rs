@@ -3,8 +3,8 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
+use hhas_coeffects::HhasCoeffects;
 use oxidized::{ast, file_info, pos::Pos};
-use rx_rust as rx;
 
 use itertools::Either;
 use std::rc::Rc;
@@ -13,13 +13,13 @@ use std::rc::Rc;
 pub struct LongLambda {
     pub is_static: bool,
     pub is_async: bool,
-    pub rx_level: Option<rx::Level>,
+    pub coeffects: HhasCoeffects,
 }
 
 #[derive(Clone, Debug)]
 pub struct Lambda {
     pub is_async: bool,
-    pub rx_level: Option<rx::Level>,
+    pub coeffects: HhasCoeffects,
 }
 
 #[derive(Clone, Debug)]
@@ -122,6 +122,14 @@ impl<'a> Fun<'a> {
         self.either(|x| &x.user_attributes[..], |x| &x.user_attributes[..])
     }
 
+    pub fn get_ctxs(&self) -> &Option<ast::Contexts> {
+        self.either(|x| &x.ctxs, |x| &x.ctxs)
+    }
+
+    pub fn get_params(&self) -> &[ast::FunParam] {
+        self.either(|x| &x.params[..], |x| &x.params[..])
+    }
+
     pub fn get_span(&self) -> &Pos {
         self.either(|x| &x.span, |x| &x.span)
     }
@@ -158,6 +166,14 @@ impl<'a> Method<'a> {
 
     pub(in crate) fn get_user_attributes(&self) -> &[ast::UserAttribute] {
         self.either(|x| &x.user_attributes[..], |x| &x.user_attributes[..])
+    }
+
+    pub fn get_ctxs(&self) -> &Option<ast::Contexts> {
+        self.either(|x| &x.ctxs, |x| &x.ctxs)
+    }
+
+    pub fn get_params(&self) -> &[ast::FunParam] {
+        self.either(|x| &x.params[..], |x| &x.params[..])
     }
 
     pub fn get_span(&self) -> &Pos {
@@ -210,6 +226,8 @@ pub struct Fun_ {
     user_attributes: Vec<ast::UserAttribute>,
     mode: file_info::Mode,
     fun_kind: ast::FunKind,
+    ctxs: Option<ast::Contexts>,
+    params: Vec<ast::FunParam>,
 }
 
 impl Fun_ {
@@ -221,6 +239,8 @@ impl Fun_ {
             user_attributes: f.user_attributes.clone(),
             mode: f.mode,
             fun_kind: f.fun_kind,
+            ctxs: f.ctxs.clone(),
+            params: f.params.clone(),
         }
     }
 }
@@ -233,6 +253,8 @@ pub struct Method_ {
     user_attributes: Vec<ast::UserAttribute>,
     static_: bool,
     fun_kind: ast::FunKind,
+    ctxs: Option<ast::Contexts>,
+    params: Vec<ast::FunParam>,
 }
 
 impl Method_ {
@@ -244,6 +266,8 @@ impl Method_ {
             static_: m.static_,
             user_attributes: m.user_attributes.clone(),
             fun_kind: m.fun_kind,
+            ctxs: m.ctxs.clone(),
+            params: m.params.clone(),
         }
     }
 }

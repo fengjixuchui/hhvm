@@ -34,7 +34,6 @@ type t = {
   po_disallow_toplevel_requires: bool;
   po_disable_nontoplevel_declarations: bool;
   po_disable_static_closures: bool;
-  po_allow_goto: bool;
   po_allow_unstable_features: bool;
   tco_log_inference_constraints: bool;
   tco_disallow_array_typehint: bool;
@@ -61,6 +60,7 @@ type t = {
   tco_union_intersection_type_hints: bool;
   tco_coeffects: bool;
   tco_coeffects_local: bool;
+  tco_strict_contexts: bool;
   tco_like_casts: bool;
   tco_simple_pessimize: float;
   tco_complex_coercion: bool;
@@ -117,8 +117,7 @@ type t = {
   po_disallow_hash_comments: bool;
   po_disallow_fun_and_cls_meth_pseudo_funcs: bool;
   tco_use_direct_decl_parser: bool;
-  tco_ifc_enabled: bool;
-  po_enable_coeffects: bool;
+  tco_ifc_enabled: string list;
 }
 [@@deriving eq, show]
 
@@ -214,7 +213,6 @@ let default =
     po_deregister_php_stdlib = false;
     po_disable_nontoplevel_declarations = false;
     po_disable_static_closures = true;
-    po_allow_goto = false;
     po_allow_unstable_features = false;
     tco_log_inference_constraints = false;
     tco_disallow_array_typehint = false;
@@ -239,8 +237,9 @@ let default =
     profile_desc = "";
     tco_like_type_hints = false;
     tco_union_intersection_type_hints = false;
-    tco_coeffects = false;
-    tco_coeffects_local = false;
+    tco_coeffects = true;
+    tco_coeffects_local = true;
+    tco_strict_contexts = true;
     tco_like_casts = false;
     tco_simple_pessimize = 0.0;
     tco_complex_coercion = false;
@@ -297,8 +296,7 @@ let default =
     po_disallow_hash_comments = false;
     po_disallow_fun_and_cls_meth_pseudo_funcs = false;
     tco_use_direct_decl_parser = false;
-    tco_ifc_enabled = false;
-    po_enable_coeffects = false;
+    tco_ifc_enabled = [];
   }
 
 let make
@@ -307,7 +305,6 @@ let make
     ?(po_disable_nontoplevel_declarations =
       default.po_disable_nontoplevel_declarations)
     ?(po_disable_static_closures = default.po_disable_static_closures)
-    ?(po_allow_goto = default.po_allow_goto)
     ?(tco_log_inference_constraints = default.tco_log_inference_constraints)
     ?(tco_experimental_features = default.tco_experimental_features)
     ?(tco_migration_flags = default.tco_migration_flags)
@@ -361,6 +358,7 @@ let make
       default.tco_union_intersection_type_hints)
     ?(tco_coeffects = default.tco_coeffects)
     ?(tco_coeffects_local = default.tco_coeffects_local)
+    ?(tco_strict_contexts = default.tco_strict_contexts)
     ?(tco_like_casts = default.tco_like_casts)
     ?(tco_simple_pessimize = default.tco_simple_pessimize)
     ?(tco_complex_coercion = default.tco_complex_coercion)
@@ -430,7 +428,6 @@ let make
       default.po_disallow_fun_and_cls_meth_pseudo_funcs)
     ?(tco_use_direct_decl_parser = default.tco_use_direct_decl_parser)
     ?(tco_ifc_enabled = default.tco_ifc_enabled)
-    ?(po_enable_coeffects = default.po_enable_coeffects)
     () =
   {
     tco_experimental_features;
@@ -462,7 +459,6 @@ let make
     po_disallow_toplevel_requires;
     po_disable_nontoplevel_declarations;
     po_disable_static_closures;
-    po_allow_goto;
     po_allow_unstable_features;
     tco_log_inference_constraints;
     tco_disallow_array_typehint;
@@ -486,6 +482,7 @@ let make
     tco_union_intersection_type_hints;
     tco_coeffects;
     tco_coeffects_local;
+    tco_strict_contexts;
     tco_like_casts;
     tco_simple_pessimize;
     tco_complex_coercion;
@@ -543,7 +540,6 @@ let make
     po_disallow_fun_and_cls_meth_pseudo_funcs;
     tco_use_direct_decl_parser;
     tco_ifc_enabled;
-    po_enable_coeffects;
   }
 
 let tco_experimental_feature_enabled t s =
@@ -601,8 +597,6 @@ let po_disable_nontoplevel_declarations t =
   t.po_disable_nontoplevel_declarations
 
 let po_disable_static_closures t = t.po_disable_static_closures
-
-let po_allow_goto t = t.po_allow_goto
 
 let tco_log_inference_constraints t = t.tco_log_inference_constraints
 
@@ -663,9 +657,12 @@ let tco_call_coeffects t = t.tco_coeffects
 
 let tco_local_coeffects t = t.tco_coeffects_local
 
+let tco_strict_contexts t = t.tco_strict_contexts
+
 let ifc_enabled t = t.tco_ifc_enabled
 
-let enable_ifc t = { t with tco_ifc_enabled = true }
+(* Fully enable IFC on the tcopt *)
+let enable_ifc t = { t with tco_ifc_enabled = ["/"] }
 
 let tco_like_casts t = t.tco_like_casts
 
@@ -761,8 +758,6 @@ let po_disable_xhp_children_declarations t =
   t.po_disable_xhp_children_declarations
 
 let po_enable_enum_classes t = t.po_enable_enum_classes
-
-let po_enable_coeffects t = t.po_enable_coeffects
 
 let po_disable_modes t = t.po_disable_modes
 

@@ -748,7 +748,13 @@ let get_enum env x =
   | Some (ClassResult tc) when Option.is_some (Cls.enum_type tc) -> Some tc
   | _ -> None
 
-let is_enum env x = Option.is_some (get_enum env x)
+let is_enum env x =
+  match get_enum env x with
+  | Some cls ->
+    (match Cls.enum_type cls with
+    | Some enum_type -> not enum_type.te_enum_class
+    | None -> false (* we know this is impossible due to get_enum *))
+  | None -> false
 
 let is_enum_class env x =
   match get_enum env x with
@@ -1031,7 +1037,7 @@ let set_local_ env x ty =
  * that the local currently has, and an expression_id generated from
  * the last assignment to this local.
  *)
-let set_local env x new_type pos =
+let set_local ?(immutable = false) env x new_type pos =
   let new_type =
     match get_node new_type with
     | Tunion [ty] -> ty
@@ -1044,6 +1050,12 @@ let set_local env x new_type pos =
       match LID.Map.find_opt x next_cont.LEnvC.local_types with
       | None -> Ident.tmp ()
       | Some (_, _, y) -> y
+    in
+    let expr_id =
+      if immutable then
+        LID.make_immutable expr_id
+      else
+        expr_id
     in
     let local = (new_type, pos, expr_id) in
     set_local_ env x local
@@ -1196,6 +1208,7 @@ let set_local_expr_id env x new_eid =
       match LID.Map.find_opt x next_cont.LEnvC.local_types with
       | Some (type_, pos, eid)
         when not (Typing_local_types.equal_expression_id eid new_eid) ->
+        if LID.is_immutable eid then Errors.immutable_local pos;
         let local = (type_, pos, new_eid) in
         let per_cont_env = LEnvC.add_to_cont C.Next x local per_cont_env in
         let env = { env with lenv = { env.lenv with per_cont_env } } in
@@ -1339,16 +1352,16 @@ module FakeMembers = struct
 end
 
 (*****************************************************************************)
-(* Sets up/cleans up the environment when typing an anonymous function. *)
+(* Sets up/cleans up the environment when typing anonymous function / lambda *)
 (*****************************************************************************)
 
-let anon anon_lenv env f =
+let closure lenv env f =
   (* Setting up the environment. *)
   let old_lenv = env.lenv in
   let old_return = get_return env in
   let old_params = get_params env in
   let outer_fun_kind = get_fn_kind env in
-  let env = { env with lenv = anon_lenv } in
+  let env = { env with lenv } in
   (* Typing *)
   let (env, ret) = f env in
   (* Cleaning up the environment. *)

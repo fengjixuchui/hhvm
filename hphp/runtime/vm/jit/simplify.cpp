@@ -332,13 +332,6 @@ SSATmp* simplifyIsClsDynConstructible(State& env, const IRInstruction* inst) {
     : nullptr;
 }
 
-SSATmp* simplifyLdFuncRxLevel(State& env, const IRInstruction* inst) {
-  auto const funcTmp = inst->src(0);
-  return funcTmp->hasConstVal(TFunc)
-    ? cns(env, funcTmp->funcVal()->rxLevel())
-    : nullptr;
-}
-
 SSATmp* simplifyLdCls(State& env, const IRInstruction* inst) {
   if (inst->src(0)->inst()->is(LdClsName)) return inst->src(0)->inst()->src(0);
   return nullptr;
@@ -1099,6 +1092,20 @@ SSATmp* cmpIntImpl(State& env,
   // Identity optimization
   if (left == right) {
     return cns(env, cmpOp(opc, true, true));
+  }
+
+  // Arithmetic optimization
+  if (opc == EqInt || opc == NeqInt) {
+    if (left->inst()->is(AddInt)) {
+      auto const add = left->inst();
+      if (add->src(0) == right) return gen(env, opc, cns(env, 0), add->src(1));
+      if (add->src(1) == right) return gen(env, opc, cns(env, 0), add->src(0));
+    }
+    if (right->inst()->is(AddInt)) {
+      auto const add = right->inst();
+      if (add->src(0) == left) return gen(env, opc, cns(env, 0), add->src(1));
+      if (add->src(1) == left) return gen(env, opc, cns(env, 0), add->src(0));
+    }
   }
 
   if (left->hasConstVal()) {
@@ -3144,7 +3151,9 @@ SSATmp* simplifyBespokeIterEnd(State& env, const IRInstruction* inst) {
   }
 
   if (arr->isA(TDArr|TDict) && arr->type().arrSpec().monotype()) {
-    return gen(env, LdMonotypeDictEnd, arr);
+    auto const size = gen(env, CountDict, arr);
+    auto const tombstones = gen(env, LdMonotypeDictTombstones, arr);
+    return gen(env, AddInt, size, tombstones);
   }
 
   return nullptr;
@@ -3199,12 +3208,13 @@ SSATmp* simplifyBespokeIterGetVal(State& env, const IRInstruction* inst) {
 
 // Simplify layout-specific bespoke helpers.
 
-SSATmp* simplifyLdMonotypeDictEnd(State& env, const IRInstruction* inst) {
+SSATmp* simplifyLdMonotypeDictTombstones(
+    State& env, const IRInstruction* inst) {
   auto const type = inst->src(0)->type();
 
   if (type.hasConstVal()) {
-    auto const end = type.arrLikeVal()->iter_end();
-    return cns(env, end);
+    auto const arr = type.arrLikeVal();
+    return cns(env, arr->iter_end() - arr->size());
   }
 
   return nullptr;
@@ -3670,7 +3680,7 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
       X(BespokeIterEnd)
       X(BespokeIterGetKey)
       X(BespokeIterGetVal)
-      X(LdMonotypeDictEnd)
+      X(LdMonotypeDictTombstones)
       X(LdMonotypeDictKey)
       X(LdMonotypeDictVal)
       X(LdMonotypeVecElem)
@@ -3678,7 +3688,6 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
       X(MethodExists)
       X(FuncHasAttr)
       X(IsClsDynConstructible)
-      X(LdFuncRxLevel)
       X(LdObjClass)
       X(LdObjInvoke)
       X(Mov)

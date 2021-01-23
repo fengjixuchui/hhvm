@@ -1,6 +1,5 @@
 <?hh
 // Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
-<<file: __EnableUnstableFeatures('enum_class')>>
 
 interface ExBox {}
 
@@ -21,11 +20,11 @@ abstract final class Helper {
 }
 
 enum class E: ExBox {
-  A<Box<string>>(new Box('bli'));
-  B<IBox>(Helper::ibox());
-  C<Box<int>>(new Box(42));
+  Box<string> A = new Box('bli');
+  IBox B = Helper::ibox();
+  Box<int> C = new Box(42);
 }
 
 enum class F: ExBox extends E {
-  D<Box<int>>(new Box(1664));
+  Box<int> D = new Box(1664);
 }

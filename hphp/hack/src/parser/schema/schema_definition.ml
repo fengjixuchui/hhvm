@@ -162,11 +162,24 @@ let schema : schema_node list =
           ("colon", Token);
           ("base", Aggregate Specifier);
           ("type", ZeroOrOne (Just "TypeConstraint"));
-          ("includes_keyword", ZeroOrOne Token);
-          ("includes_list", ZeroOrMore (Aggregate Specifier));
           ("left_brace", Token);
+          ("use_clauses", ZeroOrMore (Just "EnumUse"));
           ("enumerators", ZeroOrMore (Just "Enumerator"));
           ("right_brace", Token);
+        ];
+    };
+    {
+      kind_name = "EnumUse";
+      type_name = "enum_use";
+      func_name = "enum_use";
+      description = "enum_use";
+      prefix = "enum_use";
+      aggregates = [];
+      fields =
+        [
+          ("keyword", Token);
+          ("names", ZeroOrMore (Aggregate Specifier));
+          ("semicolon", Token);
         ];
     };
     {
@@ -215,13 +228,10 @@ let schema : schema_node list =
       aggregates = [];
       fields =
         [
-          ("name", Token);
-          ("left_angle", Token);
           ("type", Aggregate Specifier);
-          ("right_angle", Token);
-          ("left_paren", Token);
+          ("name", Token);
+          ("equal", Token);
           ("initial_value", Aggregate Expression);
-          ("right_paren", Token);
           ("semicolon", Token);
         ];
     };
@@ -1102,6 +1112,15 @@ let schema : schema_node list =
           ("expression", ZeroOrOne (Aggregate Expression));
           ("semicolon", ZeroOrOne Token);
         ];
+    };
+    {
+      kind_name = "YieldBreakStatement";
+      type_name = "yield_break_statement";
+      func_name = "yield_break_statement";
+      description = "yield_break_statement";
+      prefix = "yield_break";
+      aggregates = [TopLevelDeclaration; Statement];
+      fields = [("keyword", Token); ("break", Token); ("semicolon", Token)];
     };
     {
       kind_name = "ThrowStatement";

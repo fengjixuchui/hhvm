@@ -2711,15 +2711,9 @@ bool Type::checkInvariants() const {
   DEBUG_ONLY auto const isDict = subtypeOrNull(BDict);
 
   DEBUG_ONLY auto const keyBits =
-    subtypeOrNull(BSArrLike) ? BUncArrKeyCompat : BArrKeyCompat;
-  DEBUG_ONLY auto const valBits = isKeyset ? BArrKeyCompat : BInitCell;
-
-  /*
-   * TODO(#3696042): for static arrays, we could enforce that all
-   * inner-types are also static (this may would require changes to
-   * things like union_of to ensure that we never promote an inner
-   * type to a counted type).
-   */
+    subtypeOf(BUnc) ? BUncArrKey : BArrKey;
+  DEBUG_ONLY auto const valBits = isKeyset ? keyBits :
+    subtypeOf(BUnc) ? BInitUnc : BInitCell;
 
   switch (m_dataTag) {
   case DataTag::None:   break;
@@ -5093,6 +5087,12 @@ Type loosen_likeness(Type t) {
 
   if (t.couldBe(BCls | BLazyCls)) t = union_of(std::move(t), TUncStrLike);
 
+  return t;
+}
+
+Type loosen_likeness_recursively(Type t) {
+  t = loosen_likeness(std::move(t));
+
   switch (t.m_dataTag) {
   case DataTag::None:
   case DataTag::Str:
@@ -5109,38 +5109,38 @@ Type loosen_likeness(Type t) {
   case DataTag::Obj:
     if (t.m_data.dobj.whType) {
       auto whType = t.m_data.dobj.whType.mutate();
-      *whType = loosen_likeness(std::move(*whType));
+      *whType = loosen_likeness_recursively(std::move(*whType));
     }
     break;
 
   case DataTag::ArrLikePacked: {
     auto& packed = *t.m_data.packed.mutate();
     for (auto& e : packed.elems) {
-      e = loosen_likeness(std::move(e));
+      e = loosen_likeness_recursively(std::move(e));
     }
     break;
   }
 
   case DataTag::ArrLikePackedN: {
     auto& packed = *t.m_data.packedn.mutate();
-    packed.type = loosen_likeness(std::move(packed.type));
+    packed.type = loosen_likeness_recursively(std::move(packed.type));
     break;
   }
 
   case DataTag::ArrLikeMap: {
     auto& map = *t.m_data.map.mutate();
     for (auto it = map.map.begin(); it != map.map.end(); it++) {
-      map.map.update(it, loosen_likeness(it->second));
+      map.map.update(it, loosen_likeness_recursively(it->second));
     }
-    map.optKey = loosen_likeness(std::move(map.optKey));
-    map.optVal = loosen_likeness(std::move(map.optVal));
+    map.optKey = loosen_likeness_recursively(std::move(map.optKey));
+    map.optVal = loosen_likeness_recursively(std::move(map.optVal));
     break;
   }
 
   case DataTag::ArrLikeMapN: {
     auto& map = *t.m_data.mapn.mutate();
-    map.key = loosen_likeness(std::move(map.key));
-    map.val = loosen_likeness(std::move(map.val));
+    map.key = loosen_likeness_recursively(std::move(map.key));
+    map.val = loosen_likeness_recursively(std::move(map.val));
     break;
   }
   }
@@ -5150,8 +5150,10 @@ Type loosen_likeness(Type t) {
 Type loosen_all(Type t) {
   return loosen_staticness(
     loosen_emptiness(
-      loosen_values(
-        loosen_likeness(std::move(t))
+      loosen_likeness(
+        loosen_values(
+          std::move(t)
+        )
       )
     )
   );
@@ -5265,35 +5267,6 @@ Type assert_nonemptiness(Type t) {
 
 //////////////////////////////////////////////////////////////////////
 
-folly::Optional<ArrKey> maybe_class_func_key(const Type& keyTy, bool strict) {
-  if (keyTy.subtypeOf(TNull)) return {};
-
-  auto ret = ArrKey{};
-  // TODO: T70712990: Specialize HHBBC types for lazy classes
-  if (keyTy.subtypeOf(BOptCls | BOptLazyCls)) {
-    ret.mayThrow = true;
-    if (keyTy.subtypeOf(BCls)) {
-      if (keyTy.strictSubtypeOf(TCls)) {
-        auto cname = dcls_of(keyTy).cls.name();
-        ret.s = cname;
-        ret.type = sval(cname);
-      } else {
-        ret.type = TStr;
-      }
-      return ret;
-    }
-    ret.type = TUncArrKey;
-    return ret;
-  } else if (keyTy.couldBe(BOptCls | BOptLazyCls)) {
-    ret.mayThrow = true;
-    if (strict) ret.type = keyTy.couldBe(BCStr) ? TArrKey : TUncArrKey;
-    else        ret.type = TInitCell;
-    return ret;
-  }
-
-  return {};
-}
-
 /*
  * For known strings that are strictly integers, we'll set both the known
  * integer and string keys, so generally the int case should be checked first
@@ -5313,8 +5286,6 @@ folly::Optional<ArrKey> maybe_class_func_key(const Type& keyTy, bool strict) {
 
 ArrKey disect_array_key_legacy(const Type& keyTy) {
   auto ret = ArrKey{};
-
-  if (auto const r = maybe_class_func_key(keyTy, false)) return *r;
 
   if (keyTy.subtypeOf(BOptInt)) {
     if (keyTy.subtypeOf(BInt)) {
@@ -6823,8 +6794,6 @@ std::pair<Type,bool> array_like_newelem(Type arr,
 ArrKey disect_strict_key(const Type& keyTy) {
   auto ret = ArrKey{};
 
-  if (auto const r = maybe_class_func_key(keyTy, true)) return *r;
-
   if (!keyTy.couldBe(BArrKey)) {
     ret.type = TBottom;
     ret.mayThrow = true;
@@ -6923,7 +6892,10 @@ keyset_set(Type keyset, const Type&, const Type&) {
 std::pair<Type,bool> keyset_newelem(Type keyset, const Type& val) {
   assertx(keyset.subtypeOf(BOptKeyset));
   assertx(!keyset.subtypeOf(BInitNull));
-  return array_like_newelem_impl(std::move(keyset), val, ProvTag::Top);
+  auto const [promotedVal, promotion] = promote_classlike_to_key(val);
+  auto const [elem, mayThrow] =
+    array_like_newelem_impl(std::move(keyset), promotedVal, ProvTag::Top);
+  return {elem, mayThrow || (promotion == Promotion::YesMightThrow)};
 }
 
 //////////////////////////////////////////////////////////////////////

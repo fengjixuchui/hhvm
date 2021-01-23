@@ -130,7 +130,7 @@ Tag::Tag(const Func* func, Offset offset) {
   // Builtins have empty filenames, so use the unit; else use func->filename
   // in order to resolve the original filenames of flattened traits.
   auto const unit = func->unit();
-  *this = Known(getFilename(func, unit), unit->getLineNumber(offset));
+  *this = Known(getFilename(func, unit), func->getLineNumber(offset));
 }
 
 Tag Tag::Param(const Func* func, int32_t param) {
@@ -139,7 +139,7 @@ Tag Tag::Param(const Func* func, int32_t param) {
   assertx(func->fullName());
   auto const unit = func->unit();
   auto const file = getFilename(func, unit);
-  auto const line = unit->getLineNumber(func->base());
+  auto const line = func->getLineNumber(func->base());
   auto const text = folly::to<std::string>(
       "param ", param, " of ", func->fullName()->data(), " at ", file->data());
   return Tag::Param(makeStaticString(text), line);
@@ -184,16 +184,6 @@ int32_t Tag::line() const {
     return getTagStorage(size_t(m_id) >> kKindBits).second;
   }
   return -1;
-}
-uint64_t Tag::hash() const {
-  return m_id;
-}
-
-bool Tag::operator==(const Tag& other) const {
-  return m_id == other.m_id;
-}
-bool Tag::operator!=(const Tag& other) const {
-  return m_id != other.m_id;
 }
 
 std::string Tag::toString() const {
@@ -299,38 +289,8 @@ Tag Tag::get(const AsioExternalThreadEvent* a) {
   return it->second;
 }
 
-namespace {
-
-/*
- * Used to override the provenance tag reported for ArrayData*'s in a given
- * thread.
- *
- * This is pretty hacky, but it's only used for one specific purpose: for
- * obtaining a copy of a static array which has specific provenance.
- *
- * The static array cache is set up to distinguish arrays by provenance tag.
- * However, it's a tbb::concurrent_hash_set, which we can't jam a tag into.
- * Instead, its hash and equal functions look up the provenance tag of an array
- * in order to allow for multiple identical static arrays with different source
- * tags.
- *
- * As a result, there's no real way to thread a tag into the lookups and
- * inserts of the hash set.  We could pass in tagged temporary empty arrays,
- * but we don't want to keep allocating those.  We could keep one around for
- * each thread... but that's pretty much the moral equivalent of doing things
- * this way:
- *
- * So instead, we have a thread-local tag that is only "active" when we're
- * trying to retrieve or create a specifically tagged copy of a static array,
- * which facilitates the desired behavior in the static array cache.
- */
-thread_local folly::Optional<Tag> tl_tag_override = folly::none;
-
-} // namespace
-
 Tag getTag(const ArrayData* ad) {
   assertx(RO::EvalArrayProvenance);
-  if (tl_tag_override) return *tl_tag_override;
   // We ensure that arrays that don't want a tag have an invalid tag set.
   return Tag::get(ad);
 }
@@ -350,6 +310,7 @@ Tag getTag(const AsioExternalThreadEvent* ev) {
 void setTag(ArrayData* ad, Tag tag) {
   assertx(RO::EvalArrayProvenance);
   assertx(tag.valid());
+  assertx(!ad->isStatic());
   if (!arrayWantsTag(ad)) return;
   Tag::set(ad, tag);
 }
@@ -366,6 +327,14 @@ void setTag(AsioExternalThreadEvent* ev, Tag tag) {
   assertx(tag.valid());
   if (!arrayWantsTag(ev)) return;
   Tag::set(ev, tag);
+}
+
+void setTagForStatic(ArrayData* ad, Tag tag) {
+  assertx(RO::EvalArrayProvenance);
+  assertx(tag.valid());
+  assertx(ad->isStatic());
+  if (!arrayWantsTag(ad)) return;
+  Tag::set(ad, tag);
 }
 
 void clearTag(ArrayData* ad) {
@@ -402,9 +371,6 @@ ArrayData* tagStaticArr(ArrayData* ad, Tag tag /* = {} */) {
 
   if (!tag.valid()) tag = tagFromPC();
   if (!tag.valid()) return ad;
-
-  tl_tag_override = tag;
-  SCOPE_EXIT { tl_tag_override = folly::none; };
 
   ArrayData::GetScalarArray(&ad, tag);
   return ad;
@@ -493,11 +459,13 @@ static auto const kMaxMutationStackDepth = 512;
 using IgnoreCollections = bool;
 using MutateCollections = req::fast_map<HeapObject*, ArrayData*>;
 
+// NOTE: Setting a max_depth of 0 means that there's no user-provided limit.
+// (We'll still stop at kMaxMutationStackDepth above for performance reasons.)
 template <typename Mutation, typename Collections = IgnoreCollections>
 struct MutationState {
   Mutation& mutation;
   const char* function_name;
-  bool recursive = true;
+  uint32_t max_depth = 0;
   bool raised_stack_notice = false;
   Collections visited{};
 };
@@ -584,7 +552,7 @@ ArrayData* apply_mutation_to_array(ArrayData* in, State& state,
   // Apply the mutation to the top-level array.
   cow |= in->cowCheck();
   auto result = state.mutation(in, cow);
-  if (!state.recursive) {
+  if (state.max_depth == depth + 1) {
     FTRACE(1, "Depth {}: {} {}\n", depth, result ? "copy" : "reuse", in);
     return result;
   }
@@ -714,7 +682,7 @@ ArrayData* apply_mutation(TypedValue tv, State& state,
   return apply_mutation_ignore_collections(tv, state, cow, depth);
 }
 
-TypedValue markTvImpl(TypedValue in, bool legacy, bool recursive) {
+TypedValue markTvImpl(TypedValue in, bool legacy, uint32_t depth) {
   // Closure state: whether or not we've raised notices for array-likes.
   auto raised_hack_array_notice = false;
   auto raised_non_hack_array_notice = false;
@@ -763,11 +731,11 @@ TypedValue markTvImpl(TypedValue in, bool legacy, bool recursive) {
   auto const ad = [&] {
     if (legacy) {
       auto state = MutationState<decltype(mark_tv)>{
-        mark_tv, "array_mark_legacy", recursive};
+        mark_tv, "array_mark_legacy", depth};
       return apply_mutation(in, state);
     } else {
       auto state = MutationState<decltype(unmark_tv)>{
-        unmark_tv, "array_unmark_legacy", recursive};
+        unmark_tv, "array_unmark_legacy", depth};
       return apply_mutation(in, state);
     }
   }();
@@ -809,11 +777,15 @@ TypedValue tagTvRecursively(TypedValue in, int64_t flags) {
 }
 
 TypedValue markTvRecursively(TypedValue in, bool legacy) {
-  return markTvImpl(in, legacy, /*recursive=*/true);
+  return markTvImpl(in, legacy, 0);
 }
 
 TypedValue markTvShallow(TypedValue in, bool legacy) {
-  return markTvImpl(in, legacy, /*recursive=*/false);
+  return markTvImpl(in, legacy, 1);
+}
+
+TypedValue markTvToDepth(TypedValue in, bool legacy, uint32_t depth) {
+  return markTvImpl(in, legacy, depth);
 }
 
 ///////////////////////////////////////////////////////////////////////////////

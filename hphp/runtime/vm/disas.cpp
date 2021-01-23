@@ -424,6 +424,9 @@ void print_func_directives(Output& out, const FuncInfo& finfo) {
     }
     out.fmtln(".declvars {};", folly::join(" ", locals));
   }
+  if (auto const coeffect = func->staticCoeffects().toString()) {
+    out.fmtln(".static_coeffects {};", coeffect);
+  }
   if (func->hasCoeffectRules()) {
     for (auto const& rule : func->getCoeffectRules()) {
       out.fmtln(rule.getDirectiveString());
@@ -509,7 +512,7 @@ void print_func_body(Output& out, const FuncInfo& finfo) {
     }
 
     SourceLoc newLoc;
-    finfo.unit->getSourceLoc(off, newLoc);
+    finfo.func->getSourceLoc(off, newLoc);
     if (!(newLoc == srcLoc)) {
       print_srcloc(out, newLoc);
       srcLoc = newLoc;
@@ -538,13 +541,11 @@ std::string opt_type_info(const StringData *userType,
 }
 
 std::string opt_attrs(AttrContext ctx, Attr attrs,
-                      CoeffectAttr coeffectAttrs = CEAttrNone,
                       const UserAttributeMap* userAttrs = nullptr,
                       bool needPrefix = true) {
   auto str = folly::trimWhitespace(folly::sformat(
-               "{} {} {}",
+               "{} {}",
                attrs_to_string(ctx, attrs),
-               attrs_to_string(ctx, coeffectAttrs),
                user_attrs(userAttrs))).str();
   if (!str.empty()) {
     str = folly::sformat("{}[{}]", needPrefix ? " " : "", str);
@@ -560,7 +561,7 @@ std::string func_param_list(const FuncInfo& finfo) {
     if (i != 0) ret += ", ";
 
     ret += opt_attrs(AttrContext::Parameter,
-        Attr(), CEAttrNone, &func->params()[i].userAttributes,
+        Attr(), &func->params()[i].userAttributes,
         /*needPrefix*/false);
 
     if (func->params()[i].isVariadic()) {
@@ -630,8 +631,7 @@ void print_func(Output& out, const Func* func) {
 
   out.fmtln(".function{}{}{} {}{}({}){}{{",
     opt_ubs(finfo.ubs),
-    opt_attrs(AttrContext::Func, func->attrs(), func->coeffectAttrs(),
-                                 &func->userAttributes()),
+    opt_attrs(AttrContext::Func, func->attrs(), &func->userAttributes()),
     format_line_pair(func),
     opt_type_info(func->returnUserType(), func->returnTypeConstraint()),
     func->name(),
@@ -665,7 +665,7 @@ void print_class_constant(Output& out, const PreClass::Const* cns) {
 template<class T>
 void print_prop_or_field_impl(Output& out, const T& f) {
   out.fmtln(".property{}{} {}{} =",
-    opt_attrs(AttrContext::Prop, f.attrs(), CEAttrNone, &f.userAttributes()),
+    opt_attrs(AttrContext::Prop, f.attrs(), &f.userAttributes()),
     RuntimeOption::EvalDisassemblerDocComments &&
     RuntimeOption::EvalDisassemblerPropDocComments
       ? opt_escaped_long(f.docComment())
@@ -690,8 +690,7 @@ void print_method(Output& out, const Func* func) {
   out.fmtln(".method{}{}{}{} {}{}({}){}{{",
     opt_shadowed_tparams(),
     opt_ubs(finfo.ubs),
-    opt_attrs(AttrContext::Func, func->attrs(), func->coeffectAttrs(),
-                                 &func->userAttributes()),
+    opt_attrs(AttrContext::Func, func->attrs(), &func->userAttributes()),
     format_line_pair(func),
     opt_type_info(func->returnUserType(), func->returnTypeConstraint()),
     func->name(),
@@ -839,8 +838,7 @@ void print_cls(Output& out, const PreClass* cls) {
 
   out.fmt(".class {} {} {}{}",
     opt_ubs(cls_ubs),
-    opt_attrs(AttrContext::Class, cls->attrs(), CEAttrNone,
-                                  &cls->userAttributes()),
+    opt_attrs(AttrContext::Class, cls->attrs(), &cls->userAttributes()),
     name,
     format_line_pair(cls));
   print_cls_inheritance_list(out, cls);
@@ -857,8 +855,7 @@ void print_alias(Output& out, const PreTypeAlias& alias) {
   TypeConstraint constraint(alias.value, flags);
 
   out.fmtln(".alias{} {} = <{}> ({}, {}) {};",
-            opt_attrs(AttrContext::Alias, alias.attrs, CEAttrNone,
-                                          &alias.userAttrs),
+            opt_attrs(AttrContext::Alias, alias.attrs, &alias.userAttrs),
             (const StringData*)alias.name,
             type_constraint(constraint),
             alias.line0,

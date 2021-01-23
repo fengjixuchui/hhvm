@@ -28,10 +28,9 @@ type options = {
   from: string;
   gen_saved_ignore_type_errors: bool;
   ignore_hh_version: bool;
-  enable_ifc: bool;
+  enable_ifc: string list;
   saved_state_ignore_hhconfig: bool;
   json_mode: bool;
-  load_state_canary: bool;
   log_inference_constraints: bool;
   max_procs: int option;
   no_load: bool;
@@ -75,7 +74,8 @@ module Messages = struct
 
   let dynamic_view = " start with dynamic view for IDE files on by default."
 
-  let enable_ifc = " run IFC analysis on all files"
+  let enable_ifc =
+    " run IFC analysis on any file whose path is prefixed by the argument (format: comma separated list of path prefixes)"
 
   let from = " so we know who's invoking - e.g. nuclide, vim, emacs, vscode"
 
@@ -94,10 +94,6 @@ module Messages = struct
     " ignore hhconfig hash when loading saved states"
 
   let json = " output errors in json format (arc lint mode)"
-
-  let load_state_canary =
-    " Look up a saved state using the hg commit"
-    ^ " hash instead of the SVN rev."
 
   let log_inference_constraints =
     " (for hh debugging purpose only) log type"
@@ -156,7 +152,7 @@ let parse_options () : options =
   let custom_telemetry_data = ref [] in
   let dump_fanout = ref false in
   let dynamic_view = ref false in
-  let enable_ifc = ref false in
+  let enable_ifc = ref [] in
   let from = ref "" in
   let from_emacs = ref false in
   let from_hhclient = ref false in
@@ -165,7 +161,6 @@ let parse_options () : options =
   let ignore_hh = ref false in
   let saved_state_ignore_hhconfig = ref false in
   let json_mode = ref false in
-  let load_state_canary = ref false in
   let log_inference_constraints = ref false in
   let max_procs = ref None in
   let no_load = ref false in
@@ -193,6 +188,7 @@ let parse_options () : options =
   let set_wait fd = waiting_client := Some (Handle.wrap_handle fd) in
   let set_with_saved_state s = with_saved_state := Some s in
   let set_write_symbol_info s = write_symbol_info := Some s in
+  let set_enable_ifc s = enable_ifc := String_utils.split ',' s in
   let set_from s = from := s in
   let options =
     [
@@ -212,7 +208,7 @@ let parse_options () : options =
       ("--daemon", Arg.Set should_detach, Messages.daemon);
       ("--dump-fanout", Arg.Set dump_fanout, Messages.dump_fanout);
       ("--dynamic-view", Arg.Set dynamic_view, Messages.dynamic_view);
-      ("--enable-ifc", Arg.Set enable_ifc, Messages.enable_ifc);
+      ("--enable-ifc", Arg.String set_enable_ifc, Messages.enable_ifc);
       ("--from-emacs", Arg.Set from_emacs, Messages.from_emacs);
       ("--from-hhclient", Arg.Set from_hhclient, Messages.from_hhclient);
       ("--from-vim", Arg.Set from_vim, Messages.from_vim);
@@ -222,9 +218,6 @@ let parse_options () : options =
         Messages.gen_saved_ignore_type_errors );
       ("--ignore-hh-version", Arg.Set ignore_hh, Messages.ignore_hh_version);
       ("--json", Arg.Set json_mode, Messages.json);
-      ( "--load-state-canary",
-        Arg.Set load_state_canary,
-        Messages.load_state_canary );
       ( "--log-inference-constraints",
         Arg.Set log_inference_constraints,
         Messages.log_inference_constraints );
@@ -340,7 +333,6 @@ let parse_options () : options =
     ignore_hh_version = !ignore_hh;
     saved_state_ignore_hhconfig = !saved_state_ignore_hhconfig;
     json_mode = !json_mode;
-    load_state_canary = !load_state_canary;
     log_inference_constraints = !log_inference_constraints;
     max_procs = !max_procs;
     no_load = !no_load;
@@ -370,13 +362,12 @@ let default_options ~root =
     custom_telemetry_data = [];
     dump_fanout = false;
     dynamic_view = false;
-    enable_ifc = false;
+    enable_ifc = [];
     from = "";
     gen_saved_ignore_type_errors = false;
     ignore_hh_version = false;
     saved_state_ignore_hhconfig = false;
     json_mode = false;
-    load_state_canary = false;
     log_inference_constraints = false;
     max_procs = None;
     no_load = true;
@@ -429,8 +420,6 @@ let ignore_hh_version options = options.ignore_hh_version
 let saved_state_ignore_hhconfig options = options.saved_state_ignore_hhconfig
 
 let json_mode options = options.json_mode
-
-let load_state_canary options = options.load_state_canary
 
 let log_inference_constraints options = options.log_inference_constraints
 
@@ -511,7 +500,6 @@ let to_string
       ignore_hh_version;
       saved_state_ignore_hhconfig;
       json_mode;
-      load_state_canary;
       log_inference_constraints;
       max_procs;
       no_load;
@@ -589,6 +577,9 @@ let to_string
            ~f:(fun (key, value) -> Printf.sprintf "%s=%s" key value)
            config )
   in
+  let enable_ifc_str =
+    Printf.sprintf "[%s]" (String.concat ~sep:"," enable_ifc)
+  in
   let custom_telemetry_data_str =
     custom_telemetry_data
     |> List.map ~f:(fun (column, value) -> Printf.sprintf "%s=%s" column value)
@@ -614,7 +605,7 @@ let to_string
     string_of_bool dynamic_view;
     ", ";
     "enable_ifc: ";
-    string_of_bool enable_ifc;
+    enable_ifc_str;
     ", ";
     "from: ";
     from;
@@ -630,9 +621,6 @@ let to_string
     ", ";
     "json_mode: ";
     string_of_bool json_mode;
-    ", ";
-    "load_state_canary: ";
-    string_of_bool load_state_canary;
     ", ";
     "log_inference_constraints: ";
     string_of_bool log_inference_constraints;

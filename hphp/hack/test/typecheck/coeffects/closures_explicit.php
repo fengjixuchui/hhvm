@@ -2,38 +2,38 @@
 // Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 
 function rx_context()[rx]: void {
-  $more_permissive = ()[rx, non_det] ==> {
+  $more_permissive = ()[rx, cipp_global] ==> {
     rx_context(); // ok
   };
 
   $less_permissive = ()[] ==> {
-    $more_permissive(); // error (missing non_det)
+    $more_permissive(); // error (missing output)
     rx_context(); // error (pure </: rx)
   };
 
   $equally_permissive = ()[rx] ==> {
     $less_permissive(); // ok (rx <: pure)
     rx_context(); // ok
-    $more_permissive(); // error (missing non_det)
+    $more_permissive(); // error (missing output)
   };
 }
 
-function nondeterministic_context()[non_det]: void {
-  // the type-checker shouldn't close over the non_det capability
-  ()[rx] ==> nondeterministic_context(); // error
+function cipp_global_context()[cipp_global]: void {
+  // the type-checker shouldn't close over the Output capability
+  ()[rx] ==> cipp_global_context(); // error
 }
 
 function nesting_test()[]: void {
   $rx_lambda = ()[rx] ==> {};
   $least_permissive = ()[] ==> {};
-  $nondeterministic = ()[non_det] ==> {};
+  $cipp_global = ()[cipp_global] ==> {};
 
-  ()[non_det] ==> {
+  ()[cipp_global] ==> {
     $call_lp = ()[] ==> $least_permissive();
     $call_rx = ()[rx] ==> {
       $rx_lambda(); // ok
       $least_permissive(); // ok
-      $nondeterministic(); // error
+      $cipp_global(); // error
     };
     ()[] ==> {
       $rx_lambda(); // error
@@ -42,7 +42,7 @@ function nesting_test()[]: void {
       $least_permissive(); // ok
       $call_lp(); // ok (verify inner lambda is typed properly)
 
-      $nondeterministic(); // error
+      $cipp_global(); // error
     };
   };
 }

@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<e8cb482ca8642295e97e17b8114a5e57>>
+// @generated SignedSource<<3f8415bce5c453d24a4cea22832146cf>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidized_by_ref/regen.sh
+//   hphp/hack/src/oxidize_regen.sh
 
 use arena_trait::TrivialDrop;
 use ocamlrep_derive::FromOcamlRepIn;
@@ -52,7 +52,6 @@ pub struct GlobalOptions<'a> {
     pub po_disallow_toplevel_requires: bool,
     pub po_disable_nontoplevel_declarations: bool,
     pub po_disable_static_closures: bool,
-    pub po_allow_goto: bool,
     pub po_allow_unstable_features: bool,
     pub tco_log_inference_constraints: bool,
     pub tco_disallow_array_typehint: bool,
@@ -79,6 +78,7 @@ pub struct GlobalOptions<'a> {
     pub tco_union_intersection_type_hints: bool,
     pub tco_coeffects: bool,
     pub tco_coeffects_local: bool,
+    pub tco_strict_contexts: bool,
     pub tco_like_casts: bool,
     pub tco_simple_pessimize: f64,
     pub tco_complex_coercion: bool,
@@ -135,7 +135,6 @@ pub struct GlobalOptions<'a> {
     pub po_disallow_hash_comments: bool,
     pub po_disallow_fun_and_cls_meth_pseudo_funcs: bool,
     pub tco_use_direct_decl_parser: bool,
-    pub tco_ifc_enabled: bool,
-    pub po_enable_coeffects: bool,
+    pub tco_ifc_enabled: &'a [&'a str],
 }
 impl<'a> TrivialDrop for GlobalOptions<'a> {}

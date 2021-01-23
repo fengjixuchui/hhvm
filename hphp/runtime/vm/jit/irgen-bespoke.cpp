@@ -47,25 +47,45 @@ StaticString s_ColFromArray("ColFromArray");
 // additional ops around them to produce better types. All of the mutating
 // helpers here consume a ref on the input and produce one on the output.
 
-SSATmp* emitGet(IRGS& env, SSATmp* arr, SSATmp* key, Block* taken) {
+template <typename Finish>
+SSATmp* emitProfiledGet(
+    IRGS& env, SSATmp* arr, SSATmp* key, Block* taken, Finish finish,
+    bool profiled = true) {
   auto const result = [&]{
     if (arr->isA(TVArr|TVec)) {
       gen(env, CheckVecBounds, taken, arr, key);
       auto const data = BespokeGetData { BespokeGetData::KeyState::Present };
-      return gen(env, BespokeGet, data, arr, key);
+      auto const val = gen(env, BespokeGet, data, arr, key);
+      return profiled ? profiledType(env, val, [&] { finish(val); })
+                      : val;
     } else {
       auto const data = BespokeGetData { BespokeGetData::KeyState::Unknown };
       auto const val = gen(env, BespokeGet, data, arr, key);
-      gen(env, CheckType, TInitCell, taken, val);
+      auto const pval = [&] {
+        if (!profiled) return val;
+
+        // We prefer to test the profiledType first, as this will rule out
+        // TUninit when we have profiledType information. In this case, the
+        // latter test will be optimized out.
+        return profiledType(env, val, [&] {
+          gen(env, CheckType, TInitCell, taken, val);
+          finish(val);
+        });
+      }();
+
+      gen(env, CheckType, TInitCell, taken, pval);
       // TODO(mcolavita): this is here because we can lose constval information
       // when unioning with TUninit.
       auto resultType =
         arrLikeElemType(arr->type(), key->type(), curClass(env));
-      return gen(env, AssertType, resultType.first, val);
+      return gen(env, AssertType, resultType.first, pval);
     }
   }();
-  // TODO(kshaunak): We should also pull in TypeProfile information here.
   return result;
+}
+
+SSATmp* emitGet(IRGS& env, SSATmp* arr, SSATmp* key, Block* taken) {
+  return emitProfiledGet(env, arr, key, taken, [&](SSATmp*) {}, false);
 }
 
 SSATmp* emitElem(IRGS& env, SSATmp* arr, SSATmp* key, bool throwOnMissing) {
@@ -73,17 +93,11 @@ SSATmp* emitElem(IRGS& env, SSATmp* arr, SSATmp* key, bool throwOnMissing) {
 }
 
 SSATmp* emitSet(IRGS& env, SSATmp* arr, SSATmp* key, SSATmp* val) {
-  auto const result = gen(env, BespokeSet, arr, key, val);
-  return gen(env, AssertType, TCounted, result);
+  return gen(env, BespokeSet, arr, key, val);
 }
 
 SSATmp* emitAppend(IRGS& env, SSATmp* arr, SSATmp* val) {
-  auto const result = gen(env, BespokeAppend, arr, val);
-  if (arr->type().maybe(TKeyset)) {
-    return gen(env, AssertType, arr->type() | TCountedKeyset, result);
-  } else {
-    return gen(env, AssertType, TCounted, result);
-  }
+  return gen(env, BespokeAppend, arr, val);
 }
 
 SSATmp* emitEscalateToVanilla(
@@ -259,7 +273,7 @@ SSATmp* emitIsset(IRGS& env, SSATmp* key) {
   );
 }
 
-SSATmp* emitGetElem(IRGS& env, SSATmp* key, bool quiet) {
+SSATmp* emitGetElem(IRGS& env, SSATmp* key, bool quiet, uint32_t nDiscard) {
   auto const baseType = env.irb->fs().mbase().type;
   auto const base = extractBase(env);
 
@@ -277,7 +291,11 @@ SSATmp* emitGetElem(IRGS& env, SSATmp* key, bool quiet) {
   return cond(
     env,
     [&](Block* taken) {
-      return emitGet(env, base, key, taken);
+      auto const finish = [&](SSATmp* val) {
+        gen(env, IncRef, val);
+        mFinalImpl(env, nDiscard, val);
+      };
+      return emitProfiledGet(env, base, key, taken, finish);
     },
     [&](SSATmp* val) {
       gen(env, IncRef, val);
@@ -302,9 +320,9 @@ void emitBespokeQueryM(
     switch (query) {
       case QueryMOp::InOut:
       case QueryMOp::CGet:
-        return emitGetElem(env, key, false);
+        return emitGetElem(env, key, false, nDiscard);
       case QueryMOp::CGetQuiet:
-        return emitGetElem(env, key, true);
+        return emitGetElem(env, key, true, nDiscard);
       case QueryMOp::Isset:
         return emitIsset(env, key);
     }
@@ -343,20 +361,16 @@ void emitBespokeIdx(IRGS& env) {
     return;
   }
 
-  cond(
+  auto const res = cond(
     env,
     [&](Block* taken) {
       return emitGet(env, base, key, taken);
     },
-    [&](SSATmp* val) {
-      finish(val);
-      return nullptr;
-    },
-    [&] {
-      finish(def);
-      return nullptr;
-    }
+    [&](SSATmp* val) { return val; },
+    [&] { return def; }
   );
+  auto const pres = profiledType(env, res, [&] { finish(res); });
+  finish(pres);
 }
 
 void emitBespokeAKExists(IRGS& env) {
@@ -408,8 +422,9 @@ SSATmp* baseValueToLval(IRGS& env, SSATmp* base) {
   return gen(env, ConvPtrToLval, temp);
 }
 
-SSATmp* bespokeElemImpl(IRGS& env,
-                        MOpMode mode, Type baseType, SSATmp* key) {
+template <typename Finish>
+SSATmp* bespokeElemImpl(
+    IRGS& env, MOpMode mode, Type baseType, SSATmp* key, Finish finish) {
   auto const base = extractBase(env);
   auto const baseLval = gen(env, LdMBase, TLvalToCell);
   auto const needsLval = mode == MOpMode::Unset || mode == MOpMode::Define;
@@ -437,7 +452,9 @@ SSATmp* bespokeElemImpl(IRGS& env,
     return cond(
       env,
       [&](Block* taken) {
-        return emitGet(env, base, key, taken);
+        return emitProfiledGet(env, base, key, taken, [&](SSATmp* val) {
+          finish(baseValueToLval(env, val));
+        });
       },
       [&](SSATmp* val) {
         return baseValueToLval(env, val);
@@ -457,9 +474,9 @@ void emitBespokeDim(IRGS& env, MOpMode mode, MemberKey mk) {
   assertx(mcodeIsElem(mk.mcode));
 
   auto const baseType = env.irb->fs().mbase().type;
-  auto const val = bespokeElemImpl(env, mode, baseType, key);
-
-  stMBase(env, val);
+  auto const finish = [&](SSATmp* val) { stMBase(env, val); };
+  auto const val = bespokeElemImpl(env, mode, baseType, key, finish);
+  finish(val);
 }
 
 void emitBespokeAddElemC(IRGS& env) {
@@ -563,57 +580,6 @@ void emitBespokeClassGetTS(IRGS& env) {
   push(env, cns(env, TInitNull));
 }
 
-void emitBespokeShapesIdx(IRGS& env, uint32_t numArgs) {
-  if (numArgs != 2 && numArgs != 3) PUNT(Bespoke-ShapesIdx-BadArgs);
-
-  auto const def = [&] {
-    if (numArgs < 3) return cns(env, TInitNull);
-
-    auto const defVal = popC(env);
-    auto const defType = defVal->type();
-    if (!(defType <= TUninit) && defType.maybe(TUninit)) {
-      PUNT(Bespoke-ShapesIdx-BadDefault);
-    }
-    return defType <= TUninit ? cns(env, TInitNull) : defVal;
-  }();
-
-  auto const key = popC(env);
-  if (!key->type().subtypeOfAny(TInt, TStr)) {
-    PUNT(Bespoke-ShapesIdx-BadKey);
-  }
-
-  auto const arr = popC(env);
-  auto const arrType = arr->type();
-  if (!(arrType <= (RuntimeOption::EvalHackArrDVArrs ? TDict : TDArr))) {
-    if (arrType <= TNull) {
-      decRef(env, key);
-      push(env, def);
-      return;
-    } else {
-      PUNT(Bespoke-ShapesIdx-BadVal);
-    }
-  }
-
-  auto const res = cond(
-    env,
-    [&] (Block* taken) {
-      return emitGet(env, arr, key, taken);
-    },
-    [&] (SSATmp* val) {
-      gen(env, IncRef, val);
-      decRef(env, def);
-      return val;
-    },
-    [&] {
-      return def;
-    }
-  );
-
-  decRef(env, key);
-  decRef(env, arr);
-  push(env, res);
-}
-
 template <bool isFirst, bool isKey>
 void emitBespokeFirstLast(IRGS& env, uint32_t numArgs) {
   if (numArgs != 1) PUNT(Bespoke-FirstLast-BadArgs);
@@ -648,7 +614,6 @@ void emitBespokeFirstLast(IRGS& env, uint32_t numArgs) {
 
 using BespokeOptEmitFn = void (*)(IRGS&, uint32_t);
 const hphp_fast_string_imap<BespokeOptEmitFn> s_bespoke_builtin_impls{
-  {"HH\\Shapes::idx", emitBespokeShapesIdx},
   {"HH\\Lib\\_Private\\Native\\first", emitBespokeFirstLast<true, false>},
   {"HH\\Lib\\_Private\\Native\\last", emitBespokeFirstLast<false, false>},
   {"HH\\Lib\\_Private\\Native\\first_key", emitBespokeFirstLast<true, true>},
@@ -772,7 +737,23 @@ ArrayLayout guardToLayout(IRGS& env, SrcKey sk, Location loc, Type type) {
       assertx(type.arrSpec().vanilla() || type.arrSpec().bespoke());
       return type.arrSpec().layout();
     }
-    checkType(env, loc, target, bcOff(env));
+    if (RO::EvalBespokeEscalationSampleRate) {
+      ifThen(
+        env,
+        [&](Block* taken) {
+          env.irb->setGuardFailBlock(taken);
+          checkType(env, loc, target, bcOff(env));
+          env.irb->resetGuardFailBlock();
+        },
+        [&]{
+          auto const arr = loadLocation(env, loc);
+          gen(env, LogGuardFailure, target, arr);
+          gen(env, Jmp, makeExit(env, curSrcKey(env)));
+        }
+      );
+    } else {
+      checkType(env, loc, target, bcOff(env));
+    }
     return layout;
   }
   return type.arrSpec().layout();
@@ -908,7 +889,7 @@ void emitProfileArrLikeProps(IRGS& env) {
     auto const index = cls->propSlotToIndex(slot);
     auto const tv = cls->declPropInit()[index].val.tv();
     if (!tvIsArrayLike(tv)) continue;
-    if (!arrayTypeMaybeBespoke(tv.val().parr->toDataType())) continue;
+    if (!arrayTypeCouldBeBespoke(tv.val().parr->toDataType())) continue;
     auto const profile = bespoke::getLoggingProfile(cls, slot);
     if (!profile) continue;
 
@@ -925,14 +906,15 @@ void emitProfileArrLikeProps(IRGS& env) {
 }
 
 bool specializeSource(IRGS& env, SrcKey sk) {
-  if (env.context.kind != TransKind::Optimize) return false;
+  auto const kind = env.context.kind;
+  if (kind != TransKind::Live && kind != TransKind::Optimize) return false;
 
   auto const op = sk.op();
   if (isArrLikeConstructorOp(op) || isArrLikeCastOp(op)) {
     auto const profile = bespoke::getLoggingProfile(sk);
     if (profile == nullptr) return false;
     if (auto const bad = profile->getStaticBespokeArray()) {
-      assertx(arrayTypeMaybeBespoke(bad->toDataType()));
+      assertx(arrayTypeCouldBeBespoke(bad->toDataType()));
       assertx(isArrLikeConstructorOp(op));
       push(env, cns(env, bad));
       return true;
@@ -955,8 +937,7 @@ void handleBespokeInputs(IRGS& env, const NormalizedInstruction& ni,
 
   auto const type = env.irb->typeOf(*loc, DataTypeGeneric);
   assertx(type <= TArrLike);
-  if (type.isKnownDataType() &&
-      !arrayTypeMaybeBespoke(type.toDataType())) {
+  if (type.isKnownDataType() && !arrayTypeCouldBeBespoke(type.toDataType())) {
     assertTypeLocation(env, *loc, TVanillaArrLike);
     return emitVanilla(env);
   }
@@ -998,7 +979,7 @@ void handleVanillaOutputs(IRGS& env, SrcKey sk) {
   } else if (isArrLikeConstructorOp(op) || isArrLikeCastOp(op)) {
     auto const newArr = topC(env);
     assertx(newArr->type().isKnownDataType());
-    if (!arrayTypeMaybeBespoke(newArr->type().toDataType())) return;
+    if (!arrayTypeCouldBeBespoke(newArr->type().toDataType())) return;
 
     auto const profile = bespoke::getLoggingProfile(sk);
     if (!profile) return;

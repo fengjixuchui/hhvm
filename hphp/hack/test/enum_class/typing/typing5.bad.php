@@ -1,6 +1,5 @@
 <?hh
 // Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
-<<file: __EnableUnstableFeatures('enum_class')>>
 
 interface ExBox<T> {}
 
@@ -10,7 +9,7 @@ class Box<T> implements ExBox<T> {
 
 // only types without parameters are allowed
 enum class F : ExBox<T> {
-  A<Box<string>>(new Box('zuck'));
+   Box<string> A = new Box('zuck');
 }
 
 // dynamic is not allwed

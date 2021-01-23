@@ -1,20 +1,20 @@
 <?hh
-<<file: __EnableUnstableFeatures('enum_atom', 'enum_class')>>
+<<file: __EnableUnstableFeatures('enum_atom')>>
 
 interface IBox {}
 class Box<T> implements IBox {
   public function __construct(public T $data) {}
 }
 enum class E : IBox {
-  A<Box<string>>(new Box("world"));
+   Box<string> A = new Box("world");
 }
 
 class C {
     const type T = E;
 }
 
-function f<T>(<<__Atom>> HH\EnumMember<C::T, Box<T>> $elt) : T {
-  return $elt->data()->data;
+function f<T>(<<__Atom>> HH\MemberOf<C::T, Box<T>> $elt) : T {
+  return $elt->data;
 }
 
 <<__EntryPoint>>

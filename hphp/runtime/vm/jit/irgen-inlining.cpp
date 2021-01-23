@@ -224,17 +224,24 @@ void beginInlining(IRGS& env,
   FTRACE(1, "[[[ begin inlining: {}\n", target->fullName()->data());
 
   auto const numArgsInclUnpack = fca.numArgs + (fca.hasUnpack() ? 1U : 0U);
+
+  // For cost calculation, use the most permissive coeffect
+  auto const coeffects =
+    curFunc(env) ? curCoeffects(env) : RuntimeCoeffects::none();
+
   auto const callFlags = cns(env, CallFlags(
     fca.hasGenerics(),
     dynamicCall,
     returnTarget.asyncEagerOffset != kInvalidOffset,
     0, // call offset unused by the logic below
-    0
+    0,
+    coeffects
   ).value());
 
   // Callee checks and input initialization.
   emitCalleeGenericsChecks(env, target, callFlags, fca.hasGenerics());
   emitCalleeDynamicCallChecks(env, target, callFlags);
+  emitCalleeCoeffectChecks(env, target, callFlags);
   emitCalleeImplicitContextChecks(env, target);
   emitInitFuncInputs(env, target, numArgsInclUnpack);
 

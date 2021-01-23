@@ -1,5 +1,5 @@
 <?hh
-<<file:__EnableUnstableFeatures('enum_atom', 'enum_class')>>
+<<file:__EnableUnstableFeatures('enum_atom')>>
 
 interface I {}
 class Box implements I {
@@ -7,23 +7,23 @@ class Box implements I {
 }
 
 enum class EE : I {
-  A<Box>(new Box(42));
+   Box A = new Box(42);
 }
 
 enum class FF : I extends EE {
-  C<Box>(new Box(0));
+   Box C = new Box(0);
 }
 
-function ff(<<__Atom>> HH\EnumMember<EE, Box> $x) : int {
-  return $x->data()->x;
+function ff(<<__Atom>> HH\MemberOf<EE, Box> $x) : int {
+  return $x->x;
 }
 
 abstract class Controller {
   abstract const type TEnum as EE;
 
   public static function get(
-    <<__Atom>>HH\EnumMember<this::TEnum, Box> $x): int {
-    return $x->data()->x;
+    <<__Atom>>HH\MemberOf<this::TEnum, Box> $x): int {
+    return $x->x;
   }
 
   public static function getA() : int {

@@ -1316,6 +1316,7 @@ std::string mangleUnitSha1(const std::string& fileSha1,
     + std::to_string(RuntimeOption::EvalAssemblerMaxScalarSize)
     + std::to_string(RuntimeOption::EvalEmitClassPointers)
     + (RuntimeOption::EvalFoldLazyClassKeys ? '1' : '0')
+    + CoeffectsConfig::mangle()
     + opts.cacheKeySha1().toString()
     + mangleExtension(fileName)
     + mangleUnitPHP7Options()

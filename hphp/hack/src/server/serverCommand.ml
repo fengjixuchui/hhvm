@@ -86,7 +86,6 @@ let rpc_command_needs_full_check : type a. a t -> bool =
   | CLOSE_FILE _ -> false
   | EDIT_FILE _ -> false
   | FUN_DEPS_BATCH _ -> false
-  | FUN_IS_LOCALLABLE_BATCH _ -> false
   | FILE_DEPENDENTS _ -> true
   | IDENTIFY_TYPES _ -> false
   | EXTRACT_STANDALONE _ -> false
@@ -163,7 +162,7 @@ let full_recheck_if_needed genv env msg =
     let (ide, disk) = get_unsaved_changes env in
     let env = apply_changes env disk in
     let env =
-      CgroupProfiler.profile_memory ~event:`Recheck
+      CgroupProfiler.profile_memory ~event:(`Recheck "Full_check")
       @@ full_recheck_if_needed'
            genv
            { env with ServerEnv.remote = force_remote msg }

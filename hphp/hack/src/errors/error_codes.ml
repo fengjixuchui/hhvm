@@ -44,7 +44,7 @@ module Parsing = struct
     (* | UnterminatedCommentDEPRECATED [@value 1004] *)
     (* | UnterminatedXhpCommentDEPRECATED [@value 1005] *)
     (* | CallTimePassByReferenceDEPRECATED [@value 1006] *)
-    | XhpParsingError [@value 1007] (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
+    | XhpParsingError [@value 1007]
   [@@deriving enum, show { with_path = false }]
 
   let err_code = to_enum
@@ -167,7 +167,8 @@ module Naming = struct
     | SelfInNonFinalFunctionPointer [@value 2113]
     | ClassMethNonFinalCLASS [@value 2114]
     | WildcardTypeParamDisallowed [@value 2115]
-    | CallingAssert [@value 2116] (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
+    | CallingAssert [@value 2116]
+    | InvalidWildcardContext [@value 2117]
   [@@deriving enum, show { with_path = false }]
 
   let err_code = to_enum
@@ -263,7 +264,8 @@ module NastCheck = struct
     | VariadicMemoize [@value 3086]
     | AbstractMethodMemoize [@value 3087]
     | InstancePropertyInAbstractFinalClass [@value 3088]
-    | DynamicallyCallableReified [@value 3089] (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
+    | DynamicallyCallableReified [@value 3089]
+    | IllegalContext [@value 3090]
   [@@deriving enum, show { with_path = false }]
 
   let err_code = to_enum
@@ -444,7 +446,7 @@ module Typing = struct
     (* | CoroutineCallOutsideOfSuspend [@value 4171] *)
     | FunctionIsNotCoroutine [@value 4172]
     | CoroutinnessMismatch [@value 4173]
-    | ExpectingAwaitableReturnTypeHint [@value 4174]
+    (* | ExpectingAwaitableReturnTypeHint [@value 4174] *)
     (* | ReffinessInvariantDEPRECATED [@value 4175] *)
     | DollardollarLvalue [@value 4176]
     (* | StaticMethodOnInterfaceDEPRECATED [@value 4177] *)
@@ -672,8 +674,12 @@ module Typing = struct
     | IFCExternalContravariant [@value 4399]
     | IFCPolicyMismatch [@value 4400]
     | OpCoeffects [@value 4401]
-    | ImplementsDynamic [@value 4402] (* EXTEND HERE WITH NEW VALUES IF NEEDED *)
+    | ImplementsDynamic [@value 4402]
     | SubtypeCoeffects [@value 4403]
+    | ImmutableLocal [@value 4404]
+    | EnumClassesReservedSyntax [@value 4405]
+    | NonsenseMemberSelection [@value 4406]
+    | ConsiderMethCaller [@value 4407]
   [@@deriving enum, show { with_path = false }]
 
   let err_code = to_enum

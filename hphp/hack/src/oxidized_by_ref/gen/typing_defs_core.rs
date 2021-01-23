@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<59e9311360e0cdf5eaca4201a6bdc9d6>>
+// @generated SignedSource<<becd8eff3a61376a6e44b26b811aad2c>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidized_by_ref/regen.sh
+//   hphp/hack/src/oxidize_regen.sh
 
 use arena_trait::TrivialDrop;
 use no_pos_hash::NoPosHash;
@@ -399,15 +399,6 @@ pub enum Ty_<'a> {
     Tthis,
     /// Either an object type or a type alias, ty list are the arguments
     Tapply(&'a (nast::Sid<'a>, &'a [&'a Ty<'a>])),
-    /// The type of the various forms of "array":
-    ///
-    /// ```
-    /// Tarray (None, None)         => "array"
-    /// Tarray (Some ty, None)      => "array<ty>"
-    /// Tarray (Some ty1, Some ty2) => "array<ty1, ty2>"
-    /// Tarray (None, Some ty)      => [invalid]
-    /// ```
-    Tarray(&'a (Option<&'a Ty<'a>>, Option<&'a Ty<'a>>)),
     /// "Any" is the type of a variable with a missing annotation, and "mixed" is
     /// the type of a variable annotated as "mixed". THESE TWO ARE VERY DIFFERENT!
     /// Any unifies with anything, i.e., it is both a supertype and subtype of any
@@ -498,18 +489,28 @@ pub enum Ty_<'a> {
     /// type Foo2 = ...
     /// that simply doesn't require type arguments.
     TunappliedAlias(&'a str),
-    /// The type of an opaque type (e.g. a "newtype" outside of the file where it
-    /// was defined) or enum. They are "opaque", which means that they only unify with
-    /// themselves. However, it is possible to have a constraint that allows us to
-    /// relax this. For example:
+    /// The type of an opaque type or enum. Outside their defining files or
+    /// when they represent enums, they are "opaque", which means that they
+    /// only unify with themselves. Within a file, uses of newtypes are
+    /// expanded to their definitions (unless the newtype is an enum).
     ///
-    ///   newtype my_type as int = ...
+    /// However, it is possible to have a constraint that allows us to relax
+    /// opaqueness. For example:
+    ///
+    ///   newtype MyType as int = ...
+    ///
+    /// or
+    ///
+    ///   enum MyType: int as int { ... }
     ///
     /// Outside of the file where the type was defined, this translates to:
     ///
-    ///   Tnewtype ((pos, "my_type"), [], Tprim Tint)
+    ///   Tnewtype ((pos, "MyType"), [], Tprim Tint)
     ///
-    /// Which means that my_type is abstract, but is subtype of int as well.
+    /// which means that MyType is abstract, but is a subtype of int as well.
+    /// When the constraint is omitted, the third parameter is set to mixed.
+    ///
+    /// The second parameter is the list of type arguments to the type.
     Tnewtype(&'a (&'a str, &'a [&'a Ty<'a>], &'a Ty<'a>)),
     /// see dependent_type
     Tdependent(&'a (DependentType, &'a Ty<'a>)),

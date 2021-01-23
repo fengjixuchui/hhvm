@@ -58,6 +58,8 @@ TRACE_SET_MOD(hhir);
 #define DVecElem       HasDest
 #define DDictElem      HasDest
 #define DModified(n)   HasDest
+#define DArrLikeSet    HasDest
+#define DArrLikeAppend HasDest
 #define DKeysetElem    HasDest
 #define DBespokeElemLval  HasDest
 #define DVecKey           HasDest
@@ -413,17 +415,17 @@ bool opcodeMayRaise(Opcode opc) {
   case PropX:
   case RaiseArraySerializeNotice:
   case RaiseClsMethPropConvertNotice:
+  case RaiseCoeffectsCallViolation:
   case RaiseError:
   case RaiseErrorOnInvalidIsAsExpressionType:
   case RaiseForbiddenDynCall:
   case RaiseForbiddenDynConstruct:
   case RaiseHackArrCompatNotice:
   case RaiseNotice:
-  case RaiseRxCallViolation:
   case RaiseStrToClassNotice:
   case RaiseTooManyArg:
   case RaiseUndefProp:
-  case RaiseUninitLoc:
+  case ThrowUninitLoc:
   case RaiseWarning:
   case RecordReifiedGenericsAndGetTSList:
   case ResolveTypeStruct:
@@ -753,7 +755,6 @@ bool opcodeMayRaise(Opcode opc) {
   case LdFuncFromRFunc:
   case LdFuncName:
   case LdFuncNumParams:
-  case LdFuncRxLevel:
   case LdFuncVecLen:
   case LdGenericsFromRClsMeth:
   case LdGenericsFromRFunc:
@@ -795,7 +796,7 @@ bool opcodeMayRaise(Opcode opc) {
   case LdTypeCns:
   case LdUnitPerRequestFilepath:
   case LdUnwinderValue:
-  case LdMonotypeDictEnd:
+  case LdMonotypeDictTombstones:
   case LdMonotypeDictKey:
   case LdMonotypeDictVal:
   case LdMonotypeVecElem:
@@ -811,6 +812,7 @@ bool opcodeMayRaise(Opcode opc) {
   case LIterNextK:
   case LockObj:
   case LogArrayReach:
+  case LogGuardFailure:
   case LookupClsRDS:
   case LookupSPropSlot:
   case Lshr:

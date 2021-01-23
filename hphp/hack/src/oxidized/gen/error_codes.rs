@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<47420593d224e913c0dd1f5666f320d0>>
+// @generated SignedSource<<8c1b0f64b30d4939e327a8c2d1077ce5>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidized/regen.sh
+//   hphp/hack/src/oxidize_regen.sh
 
 use arena_trait::TrivialDrop;
 use no_pos_hash::NoPosHash;
@@ -137,6 +137,7 @@ pub enum Naming {
     ClassMethNonFinalCLASS = 2114,
     WildcardTypeParamDisallowed = 2115,
     CallingAssert = 2116,
+    InvalidWildcardContext = 2117,
 }
 impl TrivialDrop for Naming {}
 
@@ -219,6 +220,7 @@ pub enum NastCheck {
     AbstractMethodMemoize = 3087,
     InstancePropertyInAbstractFinalClass = 3088,
     DynamicallyCallableReified = 3089,
+    IllegalContext = 3090,
 }
 impl TrivialDrop for NastCheck {}
 
@@ -369,7 +371,6 @@ pub enum Typing {
     NullableCast = 4167,
     FunctionIsNotCoroutine = 4172,
     CoroutinnessMismatch = 4173,
-    ExpectingAwaitableReturnTypeHint = 4174,
     DollardollarLvalue = 4176,
     DuplicateUsingVar = 4178,
     IllegalDisposable = 4179,
@@ -566,6 +567,10 @@ pub enum Typing {
     OpCoeffects = 4401,
     ImplementsDynamic = 4402,
     SubtypeCoeffects = 4403,
+    ImmutableLocal = 4404,
+    EnumClassesReservedSyntax = 4405,
+    NonsenseMemberSelection = 4406,
+    ConsiderMethCaller = 4407,
 }
 impl TrivialDrop for Typing {}
 

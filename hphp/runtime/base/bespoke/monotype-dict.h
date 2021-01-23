@@ -21,7 +21,6 @@
 #include "hphp/runtime/base/bespoke/entry-types.h"
 #include "hphp/runtime/base/bespoke/layout.h"
 #include "hphp/runtime/base/typed-value.h"
-#include "hphp/runtime/vm/srckey.h"
 
 /*
  * MonotypeDict<Key> can represent dicts and darrays with a fixed Key type and
@@ -43,10 +42,8 @@
  * which typically causes escalation. For strings, the tombstone is nullptr;
  * for ints, it's std::numeric_limits<int64_t>::min().
  *
- * TODO(kshaunak): we should escalate from static-string-keys to string-keys.
- *
  * The layout of MonotypeDict<Key> is the same for all Key types. The smallest
- * monodict has a capacity of 6 elements in 128 bytes (compare to the smallest
+ * monodict has a capacity of 5 elements in 128 bytes (compare to the smallest
  * MixedArray: 3 elements in 120 rounding up to 128 bytes):
  *
  *  16-byte ArrayData header:
@@ -57,18 +54,21 @@
  *          1-byte aux bits
  *          1-byte size index
  *      4-byte m_size field
- *      2-byte m_used field
+ *      2-byte m_tombstones field
  *      2-byte bespoke::LayoutIndex
  *          (low byte stores the DataType!)
- *  6x16-byte MixedArray<Key>::Elm
+ *  5x16-byte MixedArray<Key>::Elm
  *      8-byte Key
  *      8-byte Value
- *  8x2-byte MixedArray<Key>::Index
+ *  8x4-byte MixedArray<Key>::Index
  *      (hash table indices into the Elm array)
  *
+ * When we double the array size, we always have space for one extra element
+ * because the header is fixed (so the capacity goes: 5, 11, 23, 47, etc.)
+ *
  * As we can see, MonotypeDict is very tightly packed. As a consequence of its
- * design, it can only store up to 1 << 16 elements, and escalates to vanilla
- * when it hits this capacity bound.
+ * design, it can only store up to 1 << 16 tombstones - it shrinks when we are
+ * at that limit and we remove another element.
  *
  * We have some basic logic in MonotypeDict to maintain the layout above - see
  * sizeIndex(), used(), numElms(), numIndices(), and elmAtIndex(). They just
@@ -93,15 +93,8 @@
  * records the first tombstone index so that it can re-use this index if the
  * element is missing. Add additionally skips key equality checks.
  *
- * In the hash table, the number of non-empty indices (valid and tombstone)
- * is always bounded by m_used. We can prove this invariant inductively. Set
- * with a new key adds a valid key but increments m_used. Set with an old key
- * has no effect. Remove converts a valid key to a tombstone (no change to
- * the count of non-empty indices) and does not change m_used.
- *
- * Because m_used <= numElms(), and because numElms() < numIndices(), there is
- * always an empty index in the hash table. We use this property to simplify
- * the termination condition for find.
+ * Because numElms() < numIndices(), there is always an empty index in the hash
+ * table. We use this property to simplify the termination condition for find.
  *
  * After building up all this machinery, the array data operations are mostly
  * careful invocations of find, plus refcounting.
@@ -156,10 +149,10 @@ struct MonotypeDict : BespokeArray {
   static constexpr size_t elmValOffset() {
     return offsetof(Elm, val);
   }
-  static constexpr size_t usedOffset() {
+  static constexpr size_t tombstonesOffset() {
     return offsetof(Self, m_extra_lo16);
   }
-  static constexpr size_t usedSize() {
+  static constexpr size_t tombstonesSize() {
     return sizeof(m_extra_lo16);
   }
   static constexpr size_t typeOffset() {
@@ -176,7 +169,7 @@ struct MonotypeDict : BespokeArray {
 #undef X
 
 private:
-  using Index = uint16_t;
+  using Index = uint32_t;
   using Self = MonotypeDict<Key>;
   struct Elm { Key key; Value val; };
 
@@ -219,8 +212,9 @@ private:
   void initHash();
   MonotypeDict* copy();
   MonotypeDict* prepareForInsert();
+  MonotypeDict* compactIfNeeded(bool free);
   MonotypeDict* resize(uint8_t index, bool copy);
-  ArrayData* escalateWithCapacity(size_t capacity) const;
+  ArrayData* escalateWithCapacity(size_t capacity, const char* reason) const;
 
   Elm* elms();
   const Elm* elms() const;
@@ -231,16 +225,23 @@ private:
 
   DataType type() const;
   uint32_t used() const;
+  uint32_t tombstones() const;
   uint8_t sizeIndex() const;
   size_t numElms() const;
   size_t numIndices() const;
   void setZombie();
   bool isZombie() const;
+
+  friend EmptyMonotypeDict;
 };
 
 struct TopMonotypeDictLayout : public AbstractLayout {
   explicit TopMonotypeDictLayout(KeyTypes kt);
   static LayoutIndex Index(KeyTypes kt);
+
+  ArrayLayout appendType(Type val) const override;
+  ArrayLayout removeType(Type key) const override;
+  ArrayLayout setType(Type key, Type val) const override;
   std::pair<Type, bool> elemType(Type key) const override;
   std::pair<Type, bool> firstLastType(bool isFirst, bool isKey) const override;
   Type iterPosType(Type pos, bool isKey) const override;
@@ -251,6 +252,10 @@ struct TopMonotypeDictLayout : public AbstractLayout {
 struct EmptyOrMonotypeDictLayout : public AbstractLayout {
   EmptyOrMonotypeDictLayout(KeyTypes kt, DataType type);
   static LayoutIndex Index(KeyTypes kt, DataType type);
+
+  ArrayLayout appendType(Type val) const override;
+  ArrayLayout removeType(Type key) const override;
+  ArrayLayout setType(Type key, Type val) const override;
   std::pair<Type, bool> elemType(Type key) const override;
   std::pair<Type, bool> firstLastType(bool isFirst, bool isKey) const override;
   Type iterPosType(Type pos, bool isKey) const override;
@@ -262,6 +267,10 @@ struct EmptyOrMonotypeDictLayout : public AbstractLayout {
 struct EmptyMonotypeDictLayout : public ConcreteLayout {
   explicit EmptyMonotypeDictLayout();
   static LayoutIndex Index();
+
+  ArrayLayout appendType(Type val) const override;
+  ArrayLayout removeType(Type key) const override;
+  ArrayLayout setType(Type key, Type val) const override;
   std::pair<Type, bool> elemType(Type key) const override;
   std::pair<Type, bool> firstLastType(bool isFirst, bool isKey) const override;
   Type iterPosType(Type pos, bool isKey) const override;
@@ -270,6 +279,10 @@ struct EmptyMonotypeDictLayout : public ConcreteLayout {
 struct MonotypeDictLayout : public ConcreteLayout {
   MonotypeDictLayout(KeyTypes kt, DataType type);
   static LayoutIndex Index(KeyTypes kt, DataType type);
+
+  ArrayLayout appendType(Type val) const override;
+  ArrayLayout removeType(Type key) const override;
+  ArrayLayout setType(Type key, Type val) const override;
   std::pair<Type, bool> elemType(Type key) const override;
   std::pair<Type, bool> firstLastType(bool isFirst, bool isKey) const override;
   Type iterPosType(Type pos, bool isKey) const override;
@@ -280,7 +293,6 @@ struct MonotypeDictLayout : public ConcreteLayout {
 
 bool isMonotypeDictLayout(LayoutIndex index);
 
-// Returns nullptr on failure (e.g. on exceeding the max MonotypeDict size).
 BespokeArray* MakeMonotypeDictFromVanilla(ArrayData*, DataType, KeyTypes);
 
 }}

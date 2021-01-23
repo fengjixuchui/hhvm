@@ -1327,10 +1327,6 @@ To string conversions:
 
   Tests for Class::m_attrCopy & AttrDynamicallyConstructible.
 
-| LdFuncRxLevel, D(Int), S(Func), NF
-
-  Returns the value of func->rxLevel().
-
 | LdClsFromClsMeth, D(Cls), S(ClsMeth), NF
 
   Load the Class* of the ClsMethDataRef in S0.
@@ -1447,6 +1443,11 @@ To string conversions:
 
   If the supplied array is a LoggingArray, log the current tracelet and SrcKey
   for use during specialization.
+
+| LogGuardFailure<T>, ND, S(ArrLike), LA
+
+  Log that we failed to guard input S0 to the given type. Useful for catching
+  performance bugs in bespoke layout selection, but may have more general use.
 
 | NewDArray, DDArr, C(Int), PRc
 
@@ -2037,13 +2038,13 @@ To string conversions:
   coercing class_meth types is removed this ir instruction can also be removed
   (T61738946).
 
-| RaiseUninitLoc<localId>, ND, S(Str), NF
+| ThrowUninitLoc<localId>, ND, S(Str), T
 
-  Raise a notice for an uninitialized local variable.
+  Throws an UndefinedVariableException on an uninitialized local variable.
 
-| RaiseUndefProp, ND, S(Obj) CStr, NF
+| RaiseUndefProp, ND, S(Obj) CStr, T
 
-  Raise a notice for an undefined property named S1 on the class of S0.
+  Raises a fatal for an undefined property named S1 on the class of S0.
 
 | RaiseTooManyArg<func>, ND, S(VArr,Vec), CRc|LA
 
@@ -2111,11 +2112,12 @@ To string conversions:
   raise a warning or throw an exception indicating that the class specified in
   S0 was constructed dynamically (and should not be).
 
-| RaiseRxCallViolation, ND, S(FramePtr) S(Func), NF
+| RaiseCoeffectsCallViolation<func>, ND, S(FramePtr) S(Int), NF
 
-  Depending on the setting of the `RxEnforceCalls` runtime option, either raise
-  a warning or throw an exception indicating that the caller specified by S0
-  was violating reactivity constraints when calling the callee specified by S1.
+  Depending on the setting of the `CoeffectEnforcementLevels` runtime option,
+  either raise a warning or throw an exception indicating that the caller
+  specified by S0 was violating coeffects enforcement when calling the callee
+  specified by func. S1 is used to pass the coeffects provided by the caller.
 
 | RaiseStrToClassNotice, ND, S(Str), NF
 
@@ -3016,13 +3018,13 @@ fields of that struct for holding intermediate values.
   If the key is missing in the array, we'll use S2 to determine what to do.
   If S2 is true, we'll throw; else, we'll return an immutable lval to null.
 
-| BespokeSet, DModified(0), SKnownArrLike S(Int,Str) S(Cell), LA|PRc|CRc
+| BespokeSet, DArrLikeSet, SKnownArrLike S(Int,Str) S(Cell), LA|PRc|CRc
 
   Set element with key S1 in the array S0, which may have an arbitrary layout.
   This op has SetMove semantics; it consumes a refcount on the input array and
   produces one on the output, and does no refcounting to the value S2.
 
-| BespokeAppend, DModified(0), SKnownArrLike S(Cell), LA|PRc|CRc
+| BespokeAppend, DArrLikeAppend, SKnownArrLike S(Cell), LA|PRc|CRc
 
   Set element with key S1 in the array S0, which may have an arbitrary layout.
   This op has AppendMove semantics; it consumes a refcount on the input array
@@ -3055,15 +3057,18 @@ fields of that struct for holding intermediate values.
 
   Escalate the bespoke array S0 to a vanilla array for the reason S1.
 
-| LdMonotypeDictEnd, D(Int), SMonotypeDict, NF
+| LdMonotypeDictTombstones, D(Int), SMonotypeDict, NF
+
+  Returns the number of tombstones in the given MonotypeDict's value array.
+  The MonotypeDict's IterEnd is equal to its size plus its tombstone count.
 
 | LdMonotypeDictKey, DBespokePosKey, SMonotypeDict S(Int), NF
 
 | LdMonotypeDictVal, DBespokePosVal, SMonotypeDict S(Int), NF
 
-  Specializations of BespokeIterEnd, BespokeIterGetKey, and BespokeIterGetVal
-  for when the base is a monotype dict. The GetKey and GetVal ops require that
-  S1 is a valid iterator position for S0.
+  Specializations of BespokeIterGetKey and BespokeIterGetVal for when the base
+  is a monotype dict. The GetKey and GetVal ops require that S1 is a valid
+  iterator position for S0.
 
 | LdMonotypeVecElem, DBespokeElem, SMonotypeVec S(Int), NF
 
@@ -3301,10 +3306,11 @@ fields of that struct for holding intermediate values.
   The recursive variants traverse through the array-like's transitive elements
   but stop traversal at any non-array-like.
 
-| TagProvenanceHere, DModified(0), S(Vec,Dict,VArr,DArr) S(Int), CRc|PRc|LA
+| TagProvenanceHere, DModified(0), S(Obj,Vec,Dict,VArr,DArr) S(Int), CRc|PRc|LA
 
-  Tag the dvarray S0 with provenance information, using flags S1, skipping
-  over any stack frames with ProvenanceSkipFrame annotations.
+  Recursively tag any dvarrays contained within the array or collection rooted
+  at S0 with provenance information, using flags S1. When computing a tag, we
+  skip over any stack frames with ProvenanceSkipFrame annotations.
 
 
 18. Exception/unwinding support

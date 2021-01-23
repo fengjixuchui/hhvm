@@ -18,6 +18,7 @@
 #include <atomic>
 #include <cassert>
 #include <cstdio>
+#include <map>
 #include <mutex>
 #include <vector>
 
@@ -84,10 +85,20 @@ using LinkTable = tbb::concurrent_hash_map<
 >;
 LinkTable s_linkTable;
 
-using RevLinkTable = tbb::concurrent_hash_map<Handle,Symbol>;
+struct RevLinkEntry {
+  uint32_t size;
+  Symbol sym;
+};
+using RevLinkTable = std::map<Handle,RevLinkEntry>;
 RevLinkTable s_handleTable;
 
 __thread std::atomic<bool> s_hasFullInit{false};
+
+struct StoreRevLink : boost::static_visitor<bool> {
+  bool operator()(Profile) const { return false; }
+  template<typename T>
+  bool operator()(T) const { return true; }
+};
 
 //////////////////////////////////////////////////////////////////////
 
@@ -360,16 +371,17 @@ Handle bindImpl(Symbol key, Mode mode, size_t sizeBytes,
   recordRds(handle, sizeBytes, key);
 
   LinkTable::const_accessor insert_acc;
-  // insert_acc lives until after s_handleTable is updated
+  // insert_acc is held until after s_handleTable is updated
   if (!s_linkTable.insert(
         insert_acc,
         LinkTable::value_type(key, {handle, safe_cast<uint32_t>(sizeBytes)}))) {
     always_assert(0);
   }
-  if (type_scan::hasScanner(tyIndex)) {
-    s_handleTable.insert(std::make_pair(handle, key));
+  if (boost::apply_visitor(StoreRevLink(), key)) {
+    s_handleTable.emplace(handle, RevLinkEntry {
+      safe_cast<uint32_t>(sizeBytes), key
+    });
   }
-
   return handle;
 }
 
@@ -723,11 +735,11 @@ std::vector<void*> allTLBases() {
 }
 
 folly::Optional<Symbol> reverseLink(Handle handle) {
-  decltype(s_handleTable)::const_accessor acc;
-  if (s_handleTable.find(acc, handle)) {
-    return acc->second;
-  }
-  return folly::none;
+  Guard g(s_allocMutex);
+  auto const it = s_handleTable.lower_bound(handle);
+  if (it == s_handleTable.end()) return folly::none;
+  if (it->first + it->second.size < handle) return folly::none;
+  return it->second.sym;
 }
 
 namespace {

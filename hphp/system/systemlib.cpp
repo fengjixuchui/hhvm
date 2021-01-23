@@ -190,6 +190,15 @@ Object AllocDivisionByZeroExceptionObject() {
                                      Strings::DIVISION_BY_ZERO);
 }
 
+Object AllocInvalidForeachArgumentExceptionObject() {
+  return createAndConstructThrowable(s_InvalidForeachArgumentExceptionClass,
+                                     Strings::INVALID_ARGUMENT_FOREACH);
+}
+
+Object AllocUndefinedPropertyExceptionObject(const Variant& message) {
+  return createAndConstructThrowable(s_UndefinedPropertyExceptionClass, message);
+}
+
 Object AllocSoapFaultObject(const Variant& code,
                                  const Variant& message,
                                  const Variant& actor /* = uninit_variant */,
@@ -215,6 +224,10 @@ Object AllocLazyIterableViewObject(const Variant& iterable) {
 Object AllocLazyKeyedIterableViewObject(const Variant& iterable) {
   return createAndConstruct(s_LazyKeyedIterableViewClass,
                             make_varray(iterable));
+}
+
+Object AllocUndefinedVariableExceptionObject(const Variant& message) {
+  return createAndConstructThrowable(s_UndefinedVariableExceptionClass, message);
 }
 
 void throwExceptionObject(const Variant& message) {
@@ -288,6 +301,18 @@ void throwSoapFaultObject(const Variant& code,
                                     name, header)});
 }
 
+void throwInvalidForeachArgumentExceptionObject() {
+  throw_object(AllocInvalidForeachArgumentExceptionObject());
+}
+
+void throwUndefinedPropertyExceptionObject(const Variant& message) {
+  throw_object(AllocUndefinedPropertyExceptionObject(message));
+}
+
+void throwUndefinedVariableExceptionObject(const Variant& message) {
+  throw_object(AllocUndefinedVariableExceptionObject(message));
+}
+
 #define ALLOC_OBJECT_STUB(name)                                         \
   Object Alloc##name##Object() {                                        \
     return Object{s_##name##Class};                                     \
@@ -327,7 +352,7 @@ Func* setupNullClsMethod(Func* f, Class* cls, StringData* name) {
   clone->setNewFuncId();
   clone->setAttrs(static_cast<Attr>(
                     AttrPublic | AttrNoInjection | AttrDynamicallyCallable));
-  clone->setCoeffectAttrs(rxMakeAttr(RxLevel::Pure));
+  clone->setStaticCoeffects(StaticCoeffects::pure());
   return clone;
 }
 

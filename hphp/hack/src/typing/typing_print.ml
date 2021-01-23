@@ -219,13 +219,6 @@ module Full = struct
 
   let tvarray_or_darray k x y = list "varray_or_darray<" k [x; y] ">"
 
-  let tarray k x y =
-    match (x, y) with
-    | (None, None) -> text "array"
-    | (Some x, None) -> list "array<" k [x] ">"
-    | (Some x, Some y) -> list "array<" k [x; y] ">"
-    | (None, Some _) -> assert false
-
   let tfun ~ty to_doc st env ft =
     Concat
       [
@@ -330,7 +323,6 @@ module Full = struct
     | Tdarray (x, y) -> tdarray k x y
     | Tvarray x -> tvarray k x
     | Tvarray_or_darray (x, y) -> tvarray_or_darray k x y
-    | Tarray (x, y) -> tarray k x y
     | Tapply ((_, s), []) -> to_doc s
     | Tgeneric (s, []) -> to_doc s
     | Taccess (root_ty, id) -> Concat [k root_ty; text "::"; to_doc (snd id)]
@@ -348,6 +340,32 @@ module Full = struct
     | Tunion tyl -> Concat [text "|"; ttuple k tyl]
     | Tintersection tyl -> Concat [text "&"; ttuple k tyl]
     | Tshape (shape_kind, fdm) -> tshape k to_doc shape_kind fdm
+
+  (* For a given type parameter, construct a list of its constraints *)
+  let get_constraints_on_tparam env tparam =
+    let kind_opt = Env.get_pos_and_kind_of_generic env tparam in
+    match kind_opt with
+    | None -> []
+    | Some (_pos, kind) ->
+      (* Use the names of the parameters themselves to present bounds
+         depending on other parameters *)
+      let param_names = Type_parameter_env.get_parameter_names kind in
+      let params =
+        List.map param_names (fun name ->
+            Typing_make_type.generic Reason.none name)
+      in
+      let lower = Env.get_lower_bounds env tparam params in
+      let upper = Env.get_upper_bounds env tparam params in
+      let equ = Env.get_equal_bounds env tparam params in
+      (* If we have an equality we can ignore the other bounds *)
+      if not (TySet.is_empty equ) then
+        List.map (TySet.elements equ) (fun ty ->
+            (tparam, Ast_defs.Constraint_eq, ty))
+      else
+        List.map (TySet.elements lower) (fun ty ->
+            (tparam, Ast_defs.Constraint_super, ty))
+        @ List.map (TySet.elements upper) (fun ty ->
+              (tparam, Ast_defs.Constraint_as, ty))
 
   let rec locl_ty : _ -> _ -> _ -> locl_ty -> Doc.t =
    fun to_doc st env ty ->
@@ -419,6 +437,25 @@ module Full = struct
         match exact with
         | Exact when !debug_mode -> Concat [text "exact"; Space; d]
         | _ -> d
+      end
+    | Tgeneric (s, []) when String.contains s '$' ->
+      begin
+        (* Saves a call to is_prefix then chop_prefix_exn *)
+        match String.chop_prefix ~prefix:"Tctx" s with
+        | Some var -> (* Tctx$f *) to_doc ("ctx " ^ var)
+        | None ->
+          begin
+            match String.rsplit2 s '@' with
+            | Some (tvar, cst) ->
+              (* T$x@C *) to_doc (String.drop_prefix tvar 1 ^ "::" ^ cst)
+            | None ->
+              (* T$x *)
+              begin
+                match get_constraints_on_tparam env s with
+                | [(_, Ast_defs.Constraint_as, ty)] -> locl_ty to_doc st env ty
+                | _ -> (* this case shouldn't occur *) to_doc s
+              end
+          end
       end
     | Tunapplied_alias s
     | Tnewtype (s, [], _)
@@ -593,32 +630,6 @@ module Full = struct
     match ty with
     | LoclType ty -> locl_ty to_doc st env ty
     | ConstraintType ty -> constraint_type to_doc st env ty
-
-  (* For a given type parameter, construct a list of its constraints *)
-  let get_constraints_on_tparam env tparam =
-    let kind_opt = Env.get_pos_and_kind_of_generic env tparam in
-    match kind_opt with
-    | None -> []
-    | Some (_pos, kind) ->
-      (* Use the names of the parameters themselves to present bounds
-         depending on other parameters *)
-      let param_names = Type_parameter_env.get_parameter_names kind in
-      let params =
-        List.map param_names (fun name ->
-            Typing_make_type.generic Reason.none name)
-      in
-      let lower = Env.get_lower_bounds env tparam params in
-      let upper = Env.get_upper_bounds env tparam params in
-      let equ = Env.get_equal_bounds env tparam params in
-      (* If we have an equality we can ignore the other bounds *)
-      if not (TySet.is_empty equ) then
-        List.map (TySet.elements equ) (fun ty ->
-            (tparam, Ast_defs.Constraint_eq, ty))
-      else
-        List.map (TySet.elements lower) (fun ty ->
-            (tparam, Ast_defs.Constraint_super, ty))
-        @ List.map (TySet.elements upper) (fun ty ->
-              (tparam, Ast_defs.Constraint_as, ty))
 
   let to_string ~ty to_doc env x =
     ty to_doc ISet.empty env x
@@ -1452,10 +1463,10 @@ module PrintClass = struct
     | Ast_defs.Ctrait -> "Ctrait"
     | Ast_defs.Cenum -> "Cenum"
 
-  let constraint_ty tcopt = function
-    | (Ast_defs.Constraint_as, ty) -> "as " ^ Full.to_string_decl tcopt ty
-    | (Ast_defs.Constraint_eq, ty) -> "= " ^ Full.to_string_decl tcopt ty
-    | (Ast_defs.Constraint_super, ty) -> "super " ^ Full.to_string_decl tcopt ty
+  let constraint_ty ctx = function
+    | (Ast_defs.Constraint_as, ty) -> "as " ^ Full.to_string_decl ctx ty
+    | (Ast_defs.Constraint_eq, ty) -> "= " ^ Full.to_string_decl ctx ty
+    | (Ast_defs.Constraint_super, ty) -> "super " ^ Full.to_string_decl ctx ty
 
   let variance = function
     | Ast_defs.Covariant -> "+"
@@ -1463,7 +1474,7 @@ module PrintClass = struct
     | Ast_defs.Invariant -> ""
 
   let rec tparam
-      tcopt
+      ctx
       {
         tp_variance = var;
         tp_name = (position, name);
@@ -1476,7 +1487,7 @@ module PrintClass = struct
       if List.is_empty params then
         ""
       else
-        "<" ^ tparam_list tcopt params ^ ">"
+        "<" ^ tparam_list ctx params ^ ">"
     in
     variance var
     ^ pos position
@@ -1486,7 +1497,7 @@ module PrintClass = struct
     ^ " "
     ^ List.fold_right
         cstrl
-        ~f:(fun x acc -> constraint_ty tcopt x ^ " " ^ acc)
+        ~f:(fun x acc -> constraint_ty ctx x ^ " " ^ acc)
         ~init:""
     ^
     match reified with
@@ -1513,15 +1524,15 @@ module PrintClass = struct
     let type_ = Full.to_string_decl ctx ty in
     synth ^ vis ^ " " ^ type_
 
-  let class_elts tcopt m =
+  let class_elts ctx m =
     List.fold m ~init:"" ~f:(fun acc (field, v) ->
-        "(" ^ field ^ ": " ^ class_elt tcopt v ^ ") " ^ acc)
+        "(" ^ field ^ ": " ^ class_elt ctx v ^ ") " ^ acc)
 
-  let class_elts_with_breaks tcopt m =
+  let class_elts_with_breaks ctx m =
     List.fold m ~init:"" ~f:(fun acc (field, v) ->
-        "\n" ^ indent ^ field ^ ": " ^ class_elt tcopt v ^ acc)
+        "\n" ^ indent ^ field ^ ": " ^ class_elt ctx v ^ acc)
 
-  let class_consts tcopt m =
+  let class_consts ctx m =
     List.fold m ~init:"" ~f:(fun acc (field, cc) ->
         let synth =
           if cc.cc_synthesized then
@@ -1533,12 +1544,12 @@ module PrintClass = struct
         ^ field
         ^ ": "
         ^ synth
-        ^ Full.to_string_decl tcopt cc.cc_type
+        ^ Full.to_string_decl ctx cc.cc_type
         ^ ") "
         ^ acc)
 
   let typeconst
-      tcopt
+      ctx
       {
         ttc_abstract = _;
         ttc_name = tc_name;
@@ -1549,7 +1560,7 @@ module PrintClass = struct
         ttc_reifiable = reifiable;
       } =
     let name = snd tc_name in
-    let ty x = Full.to_string_decl tcopt x in
+    let ty x = Full.to_string_decl ctx x in
     let constraint_ =
       match tc_constraint with
       | None -> ""
@@ -1576,9 +1587,9 @@ module PrintClass = struct
     else
       ""
 
-  let typeconsts tcopt m =
+  let typeconsts ctx m =
     List.fold m ~init:"" ~f:(fun acc (_, v) ->
-        "\n(" ^ typeconst tcopt v ^ ")" ^ acc)
+        "\n(" ^ typeconst ctx v ^ ")" ^ acc)
 
   let ancestors ctx m =
     (* Format is as follows:
@@ -1602,18 +1613,18 @@ module PrintClass = struct
         let ty_str = Full.to_string_decl ctx v in
         "\n" ^ indent ^ sigil ^ " " ^ ty_str ^ kind ^ acc)
 
-  let constructor tcopt (ce_opt, (consist : consistent_kind)) =
+  let constructor ctx (ce_opt, (consist : consistent_kind)) =
     let consist_str = Format.asprintf "(%a)" pp_consistent_kind consist in
     let ce_str =
       match ce_opt with
       | None -> ""
-      | Some ce -> class_elt tcopt ce
+      | Some ce -> class_elt ctx ce
     in
     ce_str ^ consist_str
 
-  let req_ancestors tcopt xs =
+  let req_ancestors ctx xs =
     List.fold xs ~init:"" ~f:(fun acc (_p, x) ->
-        acc ^ Full.to_string_decl tcopt x ^ ", ")
+        acc ^ Full.to_string_decl ctx x ^ ", ")
 
   let class_type ctx c =
     let tenv = Typing_env.empty ctx (Pos.filename (Cls.pos c)) None in
@@ -1704,15 +1715,15 @@ module PrintClass = struct
 end
 
 module PrintTypedef = struct
-  let typedef tcopt = function
+  let typedef ctx = function
     | { td_pos; td_vis = _; td_tparams; td_constraint; td_type } ->
-      let tparaml_s = PrintClass.tparam_list tcopt td_tparams in
+      let tparaml_s = PrintClass.tparam_list ctx td_tparams in
       let constr_s =
         match td_constraint with
         | None -> "[None]"
-        | Some constr -> Full.to_string_decl tcopt constr
+        | Some constr -> Full.to_string_decl ctx constr
       in
-      let ty_s = Full.to_string_decl tcopt td_type in
+      let ty_s = Full.to_string_decl ctx td_type in
       let pos_s = PrintClass.pos td_pos in
       "ty: "
       ^ ty_s
@@ -1788,6 +1799,11 @@ let constraints_for_type env ty =
 
 let class_kind c_kind final = ErrorString.class_kind c_kind final
 
+let coercion_direction cd =
+  match cd with
+  | CoerceToDynamic -> "to"
+  | CoerceFromDynamic -> "from"
+
 let subtype_prop env prop =
   let rec subtype_prop = function
     | Conj [] -> "TRUE"
@@ -1797,7 +1813,8 @@ let subtype_prop env prop =
     | Disj (_, ps) ->
       "(" ^ String.concat ~sep:" || " (List.map ~f:subtype_prop ps) ^ ")"
     | IsSubtype (ty1, ty2) -> debug_i env ty1 ^ " <: " ^ debug_i env ty2
-    | Coerce (ty1, ty2) -> debug env ty1 ^ " ~> " ^ debug env ty2
+    | Coerce (cd, ty1, ty2) ->
+      debug env ty1 ^ " " ^ coercion_direction cd ^ "~> " ^ debug env ty2
   in
   let p_str = subtype_prop prop in
   p_str
@@ -1815,6 +1832,19 @@ let coeffects env ty =
   let exception Defaults in
   let rec desugar_simple_intersection (ty : locl_ty) : string list =
     match snd @@ deref ty with
+    | Tvar v ->
+      (* We are interested in the upper bounds because coeffects are parameters (contravariant).
+       * Similar to Typing_subtype.describe_ty_super, we ignore Tvars appearing in bounds *)
+      let upper_bounds =
+        ITySet.elements (Typing_env.get_tyvar_upper_bounds env v)
+        |> List.filter_map ~f:(function
+               | LoclType lty ->
+                 (match deref lty with
+                 | (_, Tvar _) -> None
+                 | _ -> Some lty)
+               | ConstraintType _ -> None)
+      in
+      List.concat_map ~f:desugar_simple_intersection upper_bounds
     | Tintersection tyl -> List.concat_map ~f:desugar_simple_intersection tyl
     | Tunion [] ->
       (* TODO(coeffects) delete this special case when defaults is no longer equal to nothing *)
@@ -1834,11 +1864,33 @@ let coeffects env ty =
   in
 
   try
+    let (env, ty) = Typing_env.expand_type env ty in
+    let ty =
+      match deref ty with
+      | (r, Tvar v) ->
+        (* We are interested in the upper bounds because coeffects are parameters (contravariant).
+         * Similar to Typing_subtype.describe_ty_super, we ignore Tvars appearing in bounds *)
+        let upper_bounds =
+          ITySet.elements (Typing_env.get_tyvar_upper_bounds env v)
+          |> List.filter_map ~f:(function
+                 | LoclType lty ->
+                   (match deref lty with
+                   | (_, Tvar _) -> None
+                   | _ -> Some lty)
+                 | ConstraintType _ -> None)
+        in
+        (match upper_bounds with
+        | [] -> raise (UndesugarableCoeffect ty)
+        | _ -> Typing_make_type.intersection r upper_bounds)
+      | _ -> ty
+    in
     match desugar_simple_intersection ty with
     | [cap] -> "the capability " ^ cap
     | caps ->
       "the capability set {"
-      ^ (caps |> List.sort ~compare:String.compare |> String.concat ~sep:", ")
+      ^ ( caps
+        |> List.dedup_and_sort ~compare:String.compare
+        |> String.concat ~sep:", " )
       ^ "}"
   with
   | UndesugarableCoeffect _ -> to_string ty

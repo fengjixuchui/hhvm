@@ -1,6 +1,5 @@
 <?hh
 // Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
-<<file:__EnableUnstableFeatures('enum_class')>>
 
 interface ExBox {}
 
@@ -9,5 +8,5 @@ class Box<T> implements ExBox {
 }
 
 enum class E: ExBox {
-  A<Box<string>>;
+  Box<string> A;
 }

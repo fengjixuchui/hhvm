@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<c2efca78d7fbb83c2b3af1ba6a379529>>
+// @generated SignedSource<<2c3ee08ffff7a51d30136326a6f6b047>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidized_by_ref/regen.sh
+//   hphp/hack/src/oxidize_regen.sh
 
 use arena_trait::TrivialDrop;
 use no_pos_hash::NoPosHash;
@@ -87,6 +87,12 @@ pub enum Stmt_<'a, Ex, Fb, En, Hi> {
     /// return;
     /// return $foo;
     Return(Option<&'a Expr<'a, Ex, Fb, En, Hi>>),
+    /// Yield break, terminating the current generator. This behaves like
+    /// return; but is more explicit, and ensures the function is treated
+    /// as a generator.
+    ///
+    /// yield break;
+    YieldBreak,
     /// Concurrent block. All the await expressions are awaited at the
     /// same time, similar to genva().
     ///
@@ -577,8 +583,14 @@ pub enum Expr_<'a, Ex, Fb, En, Hi> {
     /// This is not ambiguous, because constants are not allowed to
     /// contain functions.
     ///
-    /// Foo::some_const
-    /// Foo::some_meth() // Call (Class_get)
+    /// Foo::some_const // Class_const
+    /// Foo::someStaticMeth() // Call (Class_const)
+    ///
+    /// This syntax is used for both static and instance methods when
+    /// calling the implementation on the superclass.
+    ///
+    /// parent::someStaticMeth()
+    /// parent::someInstanceMeth()
     ClassConst(&'a (&'a ClassId<'a, Ex, Fb, En, Hi>, &'a Pstring<'a>)),
     /// Function or method call.
     ///
@@ -647,15 +659,6 @@ pub enum Expr_<'a, Ex, Fb, En, Hi> {
     /// yield $foo // enclosing function returns an Iterator
     /// yield $foo => $bar // enclosing function returns a KeyedIterator
     Yield(&'a Afield<'a, Ex, Fb, En, Hi>),
-    /// Yield break, terminating the current generator. This behaves like
-    /// return; but is more explicit, and ensures the function is treated
-    /// as a generator.
-    ///
-    /// TODO: this is only permitted in a statement position, so it
-    /// should be in stmt.
-    ///
-    /// yield break;
-    YieldBreak,
     /// Await expression.
     ///
     /// await $foo

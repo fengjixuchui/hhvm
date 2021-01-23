@@ -1,8 +1,6 @@
 <?hh // strict
-<<file: __EnableUnstableFeatures('coeffects_provisional')>>
-
-function f(): int {
-  if (HH\Rx\IS_ENABLED) {
+function f()[write_props]: int {
+  if (Rx\IS_ENABLED) {
     return rx();
   } else {
     return nonrx();
@@ -10,7 +8,7 @@ function f(): int {
 }
 
 <<__Rx>>
-function rx(): int {
+function rx()[rx]: int {
   return 1;
 }
 

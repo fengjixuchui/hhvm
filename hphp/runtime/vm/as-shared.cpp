@@ -73,7 +73,9 @@ constexpr bool supported(ContextMask mask, AttrContext a) {
   X(AttrNoReifiedInit,            C,       "noreifiedinit");        \
   X(AttrIsMethCaller,             F,       "is_meth_caller");       \
   X(AttrNoContext,                F,       "no_context");           \
-  X(AttrEnumClass,                C,       "enum_class");
+  X(AttrEnumClass,                C,       "enum_class");           \
+  X(AttrRxBody,                   F,       "rx_body");              \
+  X(AttrPureBody,                 F,       "pure_body");
   /* */
 
 #define HHAS_TYPE_FLAGS                                     \
@@ -101,19 +103,6 @@ std::vector<std::string> attrs_to_vec(AttrContext ctx, Attr attrs) {
 }
 
 std::string attrs_to_string(AttrContext ctx, Attr attrs) {
-  using namespace folly::gen;
-  return from(attrs_to_vec(ctx, attrs)) | unsplit<std::string>(" ");
-}
-
-std::vector<std::string> attrs_to_vec(AttrContext ctx, CoeffectAttr attrs) {
-  std::vector<std::string> vec;
-  if (auto const rxAttrString = rxAttrsToAttrString(attrs)) {
-    vec.push_back(rxAttrString);
-  }
-  return vec;
-}
-
-std::string attrs_to_string(AttrContext ctx, CoeffectAttr attrs) {
   using namespace folly::gen;
   return from(attrs_to_vec(ctx, attrs)) | unsplit<std::string>(" ");
 }

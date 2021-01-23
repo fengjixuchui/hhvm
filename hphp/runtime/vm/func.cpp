@@ -599,18 +599,11 @@ void Func::print_attrs(std::ostream& out, Attr attrs) {
   if (attrs & AttrNoContext) { out << " (no_context)"; }
 }
 
-void Func::print_attrs(std::ostream& out, CoeffectAttr attrs) {
-  if (auto rxAttrString = rxAttrsToAttrString(attrs)) {
-    out << " (" << rxAttrString << ")";
-  }
-}
-
 void Func::prettyPrint(std::ostream& out, const PrintOpts& opts) const {
   if (opts.name) {
     if (preClass() != nullptr) {
       out << "Method";
       print_attrs(out, m_attrs);
-      print_attrs(out, m_coeffectAttrs);
       if (isPhpLeafFn()) out << " (leaf)";
       if (isMemoizeWrapper()) out << " (memoize_wrapper)";
       if (isMemoizeWrapperLSB()) out << " (memoize_wrapper_lsb)";
@@ -622,7 +615,6 @@ void Func::prettyPrint(std::ostream& out, const PrintOpts& opts) const {
     } else {
       out << "Function";
       print_attrs(out, m_attrs);
-      print_attrs(out, m_coeffectAttrs);
       if (isPhpLeafFn()) out << " (leaf)";
       if (isMemoizeWrapper()) out << " (memoize_wrapper)";
       if (isMemoizeWrapperLSB()) out << " (memoize_wrapper_lsb)";
@@ -710,7 +702,7 @@ void Func::prettyPrint(std::ostream& out, const PrintOpts& opts) const {
     int prevLineNum = -1;
     while (it < &bc[stopOffset]) {
       if (opts.showLines) {
-        int lineNum = unit()->getLineNumber(offsetOf(it));
+        int lineNum = getLineNumber(offsetOf(it));
         if (lineNum != prevLineNum) {
           out << "  // line " << lineNum << std::endl;
           prevLineNum = lineNum;
@@ -737,7 +729,7 @@ void Func::prettyPrintInstruction(std::ostream& out, Offset offset) const {
 // SharedData.
 
 Func::SharedData::SharedData(PreClass* preClass, Offset base, Offset past,
-                             int line1, int line2, bool isPhpLeafFn,
+                             int sn, int line1, int line2, bool isPhpLeafFn,
                              const StringData* docComment)
   : m_base(base)
   , m_preClass(preClass)
@@ -767,6 +759,7 @@ Func::SharedData::SharedData(PreClass* preClass, Offset base, Offset past,
 
   m_pastDelta = std::min<uint32_t>(past - base, kSmallDeltaLimit);
   m_line2Delta = std::min<uint32_t>(line2 - line1, kSmallDeltaLimit);
+  m_sn = std::min<uint32_t>(sn, kSmallDeltaLimit);
 }
 
 Func::SharedData::~SharedData() {
@@ -923,6 +916,32 @@ void Func::bind(Func *func) {
     ne->setUniqueFunc(func);
   }
   func->setFuncHandle(ne->m_cachedFunc);
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Code locations.
+
+int Func::getLineNumber(Offset offset) const {
+  return unit()->getLineNumberHelper(offset);
+}
+
+bool Func::getSourceLoc(Offset offset, SourceLoc& sLoc) const {
+  auto const& sourceLocTable = SourceLocation::getLocTable(unit());
+  return SourceLocation::getLoc(sourceLocTable, offset, sLoc);
+}
+
+bool Func::getOffsetRange(Offset offset, OffsetRange& range) const {
+  OffsetRangeVec offsets;
+  auto line = getLineNumber(offset);
+  unit()->getOffsetRanges(line, offsets);
+
+  for (auto o: offsets) {
+    if (offset >= o.base && offset < o.past) {
+      range = o;
+      return true;
+    }
+  }
+  return false;
 }
 
 ///////////////////////////////////////////////////////////////////////////////

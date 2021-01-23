@@ -74,6 +74,7 @@ module FullFidelityParseArgs = struct
     enable_xhp_class_modifier: bool;
     disallow_hash_comments: bool;
     disallow_fun_and_cls_meth_pseudo_funcs: bool;
+    ignore_missing_json: bool;
   }
 
   let make
@@ -113,7 +114,8 @@ module FullFidelityParseArgs = struct
       allow_unstable_features
       enable_xhp_class_modifier
       disallow_hash_comments
-      disallow_fun_and_cls_meth_pseudo_funcs =
+      disallow_fun_and_cls_meth_pseudo_funcs
+      ignore_missing_json =
     {
       full_fidelity_json;
       full_fidelity_dot;
@@ -152,6 +154,7 @@ module FullFidelityParseArgs = struct
       enable_xhp_class_modifier;
       disallow_hash_comments;
       disallow_fun_and_cls_meth_pseudo_funcs;
+      ignore_missing_json;
     }
 
   let parse_args () =
@@ -207,6 +210,7 @@ module FullFidelityParseArgs = struct
     let enable_xhp_class_modifier = ref false in
     let disallow_hash_comments = ref false in
     let disallow_fun_and_cls_meth_pseudo_funcs = ref false in
+    let ignore_missing_json = ref false in
     let options =
       [
         (* modes *)
@@ -352,6 +356,9 @@ No errors are filtered out."
         ( "--disallow-fun-and-cls-meth-pseudo-funcs",
           Arg.Set disallow_fun_and_cls_meth_pseudo_funcs,
           "Disables parsing of fun() and class_meth()" );
+        ( "--ignore-missing-json",
+          Arg.Set ignore_missing_json,
+          "Ignore missing nodes in JSON ouput" );
       ]
     in
     Arg.parse options push_file usage;
@@ -409,6 +416,7 @@ No errors are filtered out."
       !enable_xhp_class_modifier
       !disallow_hash_comments
       !disallow_fun_and_cls_meth_pseudo_funcs
+      !ignore_missing_json
 end
 
 open FullFidelityParseArgs
@@ -595,7 +603,9 @@ let handle_existing_file args filename =
     | None -> ()
   end;
   ( if args.full_fidelity_json then
-    let json = SyntaxTree.to_json syntax_tree in
+    let json =
+      SyntaxTree.to_json ~ignore_missing:args.ignore_missing_json syntax_tree
+    in
     let str = Hh_json.json_to_string json ~pretty:args.pretty_print_json in
     Printf.printf "%s\n" str );
   ( if args.full_fidelity_text_json then

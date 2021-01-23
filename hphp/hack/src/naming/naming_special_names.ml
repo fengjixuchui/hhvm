@@ -62,7 +62,7 @@ module Classes = struct
 
   let cIAsyncDisposable = "\\IAsyncDisposable"
 
-  let cEnumMember = "\\HH\\EnumMember"
+  let cMemberOf = "\\HH\\MemberOf"
 
   (* Classes that can be spliced into ExpressionTrees *)
   let cSpliceable = "\\Spliceable"
@@ -111,6 +111,8 @@ module Collections = struct
 end
 
 module Members = struct
+  let mGetInstanceKey = "getInstanceKey"
+
   let mClass = "class"
 
   let __construct = "__construct"
@@ -531,6 +533,21 @@ module StdlibFunctions = struct
   let is_dict_or_darray = "\\HH\\is_dict_or_darray"
 
   let is_vec_or_varray = "\\HH\\is_vec_or_varray"
+
+  (* All Id funcions that Typing.dispatch_call handles specially *)
+  let special_dispatch =
+    String.Hash_set.of_list
+      ~growth_allowed:false
+      [
+        SpecialFunctions.echo;
+        PseudoFunctions.isset;
+        PseudoFunctions.unset;
+        array_filter;
+        type_structure;
+        array_map;
+      ]
+
+  let needs_special_dispatch x = Hash_set.mem special_dispatch x
 end
 
 module Typehints = struct
@@ -711,14 +728,13 @@ module HH = struct
 end
 
 module Rx = struct
+  let is_enabled = "\\HH\\Rx\\IS_ENABLED"
+
   let freeze = "\\HH\\Rx\\freeze"
 
   let mutable_ = "\\HH\\Rx\\mutable"
 
   let cTraversable = "\\HH\\Rx\\Traversable"
-
-  let is_enabled v =
-    String.equal v "\\HH\\Rx\\IS_ENABLED" || String.equal v "\\Rx\\IS_ENABLED"
 
   let cKeyedTraversable = "\\HH\\Rx\\KeyedTraversable"
 
@@ -825,13 +841,13 @@ module Coeffects = struct
 
   let local_capability = "$#local_capability"
 
-  let contexts = "HH\\Contexts"
+  let contexts = "\\HH\\Contexts"
 
   let unsafe_contexts = contexts ^ "\\Unsafe"
 end
 
 module Capabilities = struct
-  let defaults = "\\HH\\Contexts\\defaults"
+  let defaults = Coeffects.contexts ^ "\\defaults"
 
   let prefix = "\\HH\\Capabilities\\"
 
@@ -839,5 +855,7 @@ module Capabilities = struct
 
   let accessStaticVariable = prefix ^ "AccessStaticVariable"
 
-  let output = prefix ^ "Output"
+  let io = prefix ^ "IO"
+
+  let rx = prefix ^ "Rx"
 end

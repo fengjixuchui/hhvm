@@ -2,9 +2,9 @@
 
 <<file:__EnableUnstableFeatures('expression_trees')>>
 
-function bar(
+async function bar(
   ExampleContext $_,
-): ExprTree<Code, Code::TAst, (function(ExampleString): ExampleInt)> {
+): Awaitable<ExprTree<Code, Code::TAst, (function(ExampleString): ExampleInt)>> {
   throw new Exception();
 }
 
@@ -44,7 +44,7 @@ class Code {
   // Symbols
   public static function symbol<T>(
     string $_,
-    (function(ExampleContext): ExprTree<Code, Code::TAst, T>) $_,
+    (function(ExampleContext): Awaitable<ExprTree<Code, Code::TAst, T>>) $_,
   ): ExprTree<Code, Code::TAst, T> {
     throw new Exception();
   }
@@ -142,11 +142,6 @@ class Code {
     Spliceable<Code, Code::TAst, T> $_,
   ): Code::TAst {
     throw new Exception();
-  }
-
-  // TODO: Discard unsupported syntax nodes while lowering
-  public function unsupportedSyntax(string $msg): Code::TAst {
-    throw new Exception($msg);
   }
 }
 

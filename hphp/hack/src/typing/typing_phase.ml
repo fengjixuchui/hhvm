@@ -11,7 +11,6 @@ open Hh_prelude
 open Common
 open Typing_defs
 open Typing_env_types
-open Typing_dependent_type
 module Env = Typing_env
 module TUtils = Typing_utils
 module TGenConstraint = Typing_generic_constraint
@@ -96,7 +95,6 @@ let env_with_self ?pos ?(quiet = false) ?report_cycle env =
       end;
     substs = SMap.empty;
     this_ty;
-    from_class = None;
     quiet;
     on_error =
       (match pos with
@@ -141,40 +139,9 @@ let rec localize ~ety_env env (dty : decl_ty) =
           | Reason.Rnone -> r
           | Reason.Rexpr_dep_type (_, pos, s) ->
             Reason.Rexpr_dep_type (r, pos, s)
-          | reason ->
-            if Option.is_some ety_env.from_class then
-              reason
-            else
-              Reason.Rinstantiate (reason, SN.Typehints.this, r))
-    in
-    let (env, ty) =
-      match ety_env.from_class with
-      | Some cid -> ExprDepTy.make env cid ty
-      | _ -> (env, ty)
+          | reason -> Reason.Rinstantiate (reason, SN.Typehints.this, r))
     in
     (env, ty)
-  | (r, Tarray (ty1, ty2)) ->
-    let (env, ty) =
-      match (ty1, ty2) with
-      | (None, None) ->
-        let tk = MakeType.arraykey Reason.(Rvarray_or_darray_key (to_pos r)) in
-        let (env, tv) =
-          if GlobalOptions.tco_global_inference env.genv.tcopt then
-            Env.new_global_tyvar env r
-          else
-            (env, mk (r, TUtils.tany env))
-        in
-        (env, Tvarray_or_darray (tk, tv))
-      | (Some tv, None) ->
-        let (env, tv) = tvar_or_localize ~ety_env env r tv ~i:1 in
-        (env, Tvarray tv)
-      | (Some tk, Some tv) ->
-        let (env, tk) = tvar_or_localize ~ety_env env r tk ~i:0 in
-        let (env, tv) = tvar_or_localize ~ety_env env r tv ~i:1 in
-        (env, Tdarray (tk, tv))
-      | (None, Some _) -> failwith "Invalid array declaration type"
-    in
-    (env, mk (r, ty))
   | (r, Tdarray (tk, tv)) ->
     let (env, tk) = tvar_or_localize ~ety_env env r tk ~i:0 in
     let (env, tv) = tvar_or_localize ~ety_env env r tv ~i:1 in
@@ -977,7 +944,6 @@ and localize_missing_tparams_class env r sid class_ =
       type_expansions = [];
       this_ty = c_ty;
       substs = Subst.make_locl tparams tyl;
-      from_class = Some (Aast.CI sid);
       quiet = false;
       on_error = Errors.unify_error_at use_pos;
     }
@@ -1007,7 +973,6 @@ and localize_targs_and_check_constraints
     ?(check_explicit_targs = true)
     env
     class_id
-    from_class
     tparaml
     hintl =
   let (env, type_argl) =
@@ -1033,7 +998,6 @@ and localize_targs_and_check_constraints
           type_expansions = [];
           this_ty;
           substs = Subst.make_locl tparaml targs_tys;
-          from_class = Some from_class;
           quiet = false;
           on_error = Errors.unify_error_at use_pos;
         }

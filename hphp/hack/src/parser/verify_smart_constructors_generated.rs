@@ -154,9 +154,17 @@ impl<'src> SmartConstructors for VerifySmartConstructors
         r
     }
 
-    fn make_enum_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R, arg10: Self::R) -> Self::R {
-        let args = arg_kinds!(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10);
-        let r = <Self as SyntaxSmartConstructors<PositionedSyntax, SimpleTokenFactoryImpl<PositionedToken>, State>>::make_enum_declaration(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10);
+    fn make_enum_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R) -> Self::R {
+        let args = arg_kinds!(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9);
+        let r = <Self as SyntaxSmartConstructors<PositionedSyntax, SimpleTokenFactoryImpl<PositionedToken>, State>>::make_enum_declaration(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9);
+        self.state_mut().verify(&args);
+        self.state_mut().push(r.kind());
+        r
+    }
+
+    fn make_enum_use(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
+        let args = arg_kinds!(arg0, arg1, arg2);
+        let r = <Self as SyntaxSmartConstructors<PositionedSyntax, SimpleTokenFactoryImpl<PositionedToken>, State>>::make_enum_use(self, arg0, arg1, arg2);
         self.state_mut().verify(&args);
         self.state_mut().push(r.kind());
         r
@@ -178,9 +186,9 @@ impl<'src> SmartConstructors for VerifySmartConstructors
         r
     }
 
-    fn make_enum_class_enumerator(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R) -> Self::R {
-        let args = arg_kinds!(arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7);
-        let r = <Self as SyntaxSmartConstructors<PositionedSyntax, SimpleTokenFactoryImpl<PositionedToken>, State>>::make_enum_class_enumerator(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7);
+    fn make_enum_class_enumerator(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R) -> Self::R {
+        let args = arg_kinds!(arg0, arg1, arg2, arg3, arg4);
+        let r = <Self as SyntaxSmartConstructors<PositionedSyntax, SimpleTokenFactoryImpl<PositionedToken>, State>>::make_enum_class_enumerator(self, arg0, arg1, arg2, arg3, arg4);
         self.state_mut().verify(&args);
         self.state_mut().push(r.kind());
         r
@@ -669,6 +677,14 @@ impl<'src> SmartConstructors for VerifySmartConstructors
     fn make_return_statement(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
         let args = arg_kinds!(arg0, arg1, arg2);
         let r = <Self as SyntaxSmartConstructors<PositionedSyntax, SimpleTokenFactoryImpl<PositionedToken>, State>>::make_return_statement(self, arg0, arg1, arg2);
+        self.state_mut().verify(&args);
+        self.state_mut().push(r.kind());
+        r
+    }
+
+    fn make_yield_break_statement(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
+        let args = arg_kinds!(arg0, arg1, arg2);
+        let r = <Self as SyntaxSmartConstructors<PositionedSyntax, SimpleTokenFactoryImpl<PositionedToken>, State>>::make_yield_break_statement(self, arg0, arg1, arg2);
         self.state_mut().verify(&args);
         self.state_mut().push(r.kind());
         r

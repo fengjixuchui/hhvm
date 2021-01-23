@@ -174,15 +174,6 @@ const bespoke::Layout* ArrayLayout::bespokeLayout() const {
   return bespoke::Layout::FromIndex(*index);
 }
 
-const bespoke::ConcreteLayout* ArrayLayout::concreteLayout() const {
-  auto const layout = bespokeLayout();
-  auto const result = layout->isConcrete()
-    ? reinterpret_cast<const bespoke::ConcreteLayout*>(layout)
-    : nullptr;
-  assertx(result == dynamic_cast<const bespoke::ConcreteLayout*>(layout));
-  return result;
-}
-
 folly::Optional<bespoke::LayoutIndex> ArrayLayout::layoutIndex() const {
   auto const index = int(sort) - int(Sort::Bespoke);
   if (index < 0) return {};
@@ -228,6 +219,24 @@ ArrayData* ArrayLayout::apply(ArrayData* ad) const {
 }
 
 //////////////////////////////////////////////////////////////////////////////
+
+ArrayLayout ArrayLayout::appendType(Type val) const {
+  if (vanilla()) return ArrayLayout::Vanilla();
+  if (isBasicSort(sort)) return ArrayLayout::Top();
+  return bespokeLayout()->appendType(val);
+}
+
+ArrayLayout ArrayLayout::removeType(Type key) const {
+  if (vanilla()) return ArrayLayout::Vanilla();
+  if (isBasicSort(sort)) return ArrayLayout::Top();
+  return bespokeLayout()->removeType(key);
+}
+
+ArrayLayout ArrayLayout::setType(Type key, Type val) const {
+  if (vanilla()) return ArrayLayout::Vanilla();
+  if (isBasicSort(sort)) return ArrayLayout::Top();
+  return bespokeLayout()->setType(key, val);
+}
 
 std::pair<Type, bool> ArrayLayout::elemType(Type key) const {
   if (isBasicSort(sort)) return {TInitCell, false};

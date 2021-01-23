@@ -195,7 +195,7 @@ bool canDCE(IRInstruction* inst) {
   case LdFuncName:
   case LdMethCallerName:
   case LdStrLen:
-  case LdMonotypeDictEnd:
+  case LdMonotypeDictTombstones:
   case LdMonotypeDictKey:
   case LdMonotypeDictVal:
   case LdMonotypeVecElem:
@@ -271,7 +271,6 @@ bool canDCE(IRInstruction* inst) {
   case FuncHasAttr:
   case IsFunReifiedGenericsMatched:
   case IsClsDynConstructible:
-  case LdFuncRxLevel:
   case StrictlyIntegerConv:
   case GetMemoKeyScalar:
   case LookupSPropSlot:
@@ -511,7 +510,7 @@ bool canDCE(IRInstruction* inst) {
   case VerifyRetRecDesc:
   case VerifyPropRecDesc:
   case RaiseClsMethPropConvertNotice:
-  case RaiseUninitLoc:
+  case ThrowUninitLoc:
   case RaiseUndefProp:
   case RaiseTooManyArg:
   case RaiseError:
@@ -524,7 +523,7 @@ bool canDCE(IRInstruction* inst) {
   case RaiseHackArrCompatNotice:
   case RaiseForbiddenDynCall:
   case RaiseForbiddenDynConstruct:
-  case RaiseRxCallViolation:
+  case RaiseCoeffectsCallViolation:
   case RaiseStrToClassNotice:
   case CheckClsMethFunc:
   case CheckClsReifiedGenericMismatch:
@@ -680,6 +679,7 @@ bool canDCE(IRInstruction* inst) {
   case LdClsMethodFCacheFunc:
   case LdClsMethodCacheFunc:
   case LogArrayReach:
+  case LogGuardFailure:
   case ProfileInstanceCheck:
   case MemoGetStaticValue:
   case MemoGetStaticCache:

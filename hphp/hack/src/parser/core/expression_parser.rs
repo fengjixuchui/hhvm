@@ -1655,17 +1655,9 @@ where
     fn parse_yield_expression(&mut self) -> S::R {
         // SPEC:
         // yield  array-element-initializer
-        // TODO: Hack allows "yield break".
-        // TODO: Should this be its own production, or can it be a yield expression?
-        // TODO: Is this an expression or a statement?
-        // TODO: Add it to the specification.
         //
         let yield_kw = self.assert_token(TokenKind::Yield);
         match self.peek_token_kind() {
-            TokenKind::Break => {
-                let break_kw = self.assert_token(TokenKind::Break);
-                S!(make_yield_expression, self, yield_kw, break_kw)
-            }
             TokenKind::Semicolon => {
                 let missing = S!(make_missing, self, self.pos());
                 S!(make_yield_expression, self, yield_kw, missing)
@@ -2195,21 +2187,29 @@ where
                     name
                 }
             }
-            TokenKind::Backtick if !self.in_expression_tree() => {
-                let prefix = S!(make_simple_type_specifier, self, name);
-                let left_backtick = self.require_token(TokenKind::Backtick, Errors::error1065);
-                self.in_expression_tree = true;
-                let expr = self.parse_expression_with_reset_precedence();
-                self.in_expression_tree = false;
-                let right_backtick = self.require_token(TokenKind::Backtick, Errors::error1065);
-                S!(
-                    make_prefixed_code_expression,
-                    self,
-                    prefix,
-                    left_backtick,
-                    expr,
-                    right_backtick
-                )
+            TokenKind::Backtick => {
+                if self.in_expression_tree() {
+                    // If we see Foo` whilst parsing an expression tree
+                    // literal, it's a constant followed by a closing
+                    // backtick. For example: Bar`1 + Foo`
+                    name
+                } else {
+                    // Opening backtick of an expression tree literal.
+                    let prefix = S!(make_simple_type_specifier, self, name);
+                    let left_backtick = self.require_token(TokenKind::Backtick, Errors::error1065);
+                    self.in_expression_tree = true;
+                    let expr = self.parse_expression_with_reset_precedence();
+                    self.in_expression_tree = false;
+                    let right_backtick = self.require_token(TokenKind::Backtick, Errors::error1065);
+                    S!(
+                        make_prefixed_code_expression,
+                        self,
+                        prefix,
+                        left_backtick,
+                        expr,
+                        right_backtick
+                    )
+                }
             }
             _ => name,
         }

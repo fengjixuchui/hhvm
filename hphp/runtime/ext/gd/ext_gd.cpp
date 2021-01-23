@@ -194,6 +194,7 @@ struct ImageMemoryAlloc final : RequestEventHandler {
 , int ln
 #endif
   ) {
+    assertx(ptr);
     size_t size;
     void *sizePtr = (char *)ptr - sizeof(size);
     memcpy(&size, sizePtr, sizeof(size));
@@ -7216,6 +7217,8 @@ static int exif_process_IFD_in_TIFF(image_info_type *ImageInfo,
                 if (!ImageInfo->Thumbnail.data) {
                   ImageInfo->Thumbnail.data =
                     (char *)IM_MALLOC(ImageInfo->Thumbnail.size);
+                  CHECK_ALLOC_R(ImageInfo->Thumbnail.data,
+                                ImageInfo->Thumbnail.size, 0);
                   ImageInfo->infile->seek(ImageInfo->Thumbnail.offset,
                                           SEEK_SET);
                   String str =
@@ -7949,10 +7952,10 @@ Variant HHVM_FUNCTION(exif_read_data,
                      "%dmm", (int)ImageInfo.CCDWidth);
   }
   if (ImageInfo.ExposureTime>0) {
-    if (ImageInfo.ExposureTime <= 0.5) {
-      exif_iif_add_fmt(&ImageInfo, SECTION_COMPUTED, "ExposureTime",
-                       "%0.3F s (1/%d)", ImageInfo.ExposureTime,
-                       (int)(0.5 + 1/ImageInfo.ExposureTime));
+    float recip_exposure_time = 0.5f + 1.0f/ImageInfo.ExposureTime;
+    if (ImageInfo.ExposureTime <= 0.5 && recip_exposure_time < INT_MAX) {
+      exif_iif_add_fmt(&ImageInfo, SECTION_COMPUTED, "ExposureTime", "%0.3F s (1/%d)",
+                       ImageInfo.ExposureTime, (int) recip_exposure_time);
     } else {
       exif_iif_add_fmt(&ImageInfo, SECTION_COMPUTED, "ExposureTime",
                        "%0.3F s", ImageInfo.ExposureTime);

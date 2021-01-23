@@ -13,7 +13,11 @@ open Typing_env_types
 module MakeType = Typing_make_type
 
 (*
-* These are the main coercion functions.
+* These are the main coercion functions. Roughly, coercion should be used over
+* subtyping in places where a particular type that could be dynamic is
+* required, like parameters and returns.
+*
+* The old dynamic uses the following ideas:
 *
 * There are only a few coercion (~>) rules, documented in hphp/hack/doc/type_system/hack_typing.ott.
 *
@@ -32,20 +36,51 @@ module MakeType = Typing_make_type
 * useful to the user for error messages. In the cases where we do not want to
 * sub_type, it suffices to do nothing.
 *
-* Roughly, coercion should be used over subtyping in places where a particular
-* type that could be dynamic is required, like parameters and returns.
+*
+* The experimental sound dynamic (--enable-sound-dynamic-type) works
+* differently because it is not always safe to coerce a type to dynamic.
+* The canonical example of something that it is not safe to coerce to dynamic,
+* is a Box<T> with a property T, get, and set functions.
+* The following leads to putting a string into a Box<int>
+* $b = new Box<int>(1); // $b : Box<int>
+* $d = $b;
+* $d as dynamic;   // $d : dynamic & Box<int>
+* $d->set("a");    // fine to call set on $d since it is dynamic
+* $b->get();       // returns "a", but the type is int.
+*
+* Coercing from dynamic happens when the expected type will be enforced by
+* hhvm, in this case, if whatever happens to be in the dynamic isn't of the
+* expected type execution will not continue. Hence,
+* t1 ~> t2 if t2 is enforced and t1 <: dynamic, without having to
+* coerce t1 to dynamic, e.g., t1 = dynamic or t1 = dynamic | C, but
+* not t1 = C and C implements dynamic. The latter restriction ensures that
+* static type errors are generated where nothing in the program explicitly
+* coerces anything to dynamic.
+*
+* Coercion to dynamic happens in the sub-typing algorithm where it is allowed
+* to conclude that C <: dynamic if C implements dynamic. Again, we don't want
+* sub-typing to always be able to deduce this, only when we might be checking
+* a sub-typing relationship where the super-type could contain a programmer
+* supplied dynamic.
+*
 *)
 
 (* does coercion, including subtyping *)
 let coerce_type_impl
     env ty_have ty_expect (on_error : Errors.typing_error_callback) =
   if TypecheckerOptions.enable_sound_dynamic env.genv.tcopt then
-    Typing_utils.sub_type
-      ~allow_subtype_of_dynamic:true
+    if
+      ty_expect.et_enforced
+      && Typing_utils.is_sub_type_for_coercion env ty_have ty_expect.et_type
+    then
       env
-      ty_have
-      ty_expect.et_type
-      on_error
+    else
+      Typing_utils.sub_type
+        ~coerce:(Some Typing_logic.CoerceToDynamic)
+        env
+        ty_have
+        ty_expect.et_type
+        on_error
   else
     let complex_coercion =
       TypecheckerOptions.complex_coercion (Typing_env.get_tcopt env)

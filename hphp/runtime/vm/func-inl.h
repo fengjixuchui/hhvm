@@ -160,6 +160,14 @@ inline StrNR Func::nameStr() const {
   return StrNR(m_name);
 }
 
+inline size_t Func::stableHash() const {
+  return folly::hash::hash_combine(
+    name()->hashStatic(),
+    cls() ? cls()->name()->hashStatic() : 0,
+    unit()->sn()
+  );
+}
+
 inline const StringData* Func::fullName() const {
   if (m_fullName == nullptr) return m_name;
   if (UNLIKELY((intptr_t)m_fullName.get() == kNeedsFullName)) {
@@ -227,6 +235,16 @@ inline const StringData* Func::filename() const {
     assertx(name);
   }
   return name;
+}
+
+inline int Func::sn() const {
+  auto const sd = shared();
+  auto small = sd->m_sn;
+  if (UNLIKELY(small == kSmallDeltaLimit)) {
+    assertx(extShared());
+    return static_cast<const ExtendedSharedData*>(sd)->m_sn;
+  }
+  return small;
 }
 
 inline int Func::line1() const {
@@ -552,10 +570,6 @@ inline bool Func::isResumable() const {
 ///////////////////////////////////////////////////////////////////////////////
 // Coeffects.
 
-inline RxLevel Func::rxLevel() const {
-  return rxLevelFromAttr(m_coeffectAttrs);
-}
-
 inline bool Func::isRxDisabled() const {
   return shared()->m_allFlags.m_isRxDisabled;
 }
@@ -600,8 +614,8 @@ inline Attr Func::attrs() const {
   return m_attrs;
 }
 
-inline CoeffectAttr Func::coeffectAttrs() const {
-  return m_coeffectAttrs;
+inline StaticCoeffects Func::staticCoeffects() const {
+  return m_staticCoeffects;
 }
 
 inline const UserAttributeMap& Func::userAttributes() const {
@@ -725,8 +739,8 @@ inline void Func::setAttrs(Attr attrs) {
   m_attrs = attrs;
 }
 
-inline void Func::setCoeffectAttrs(CoeffectAttr attrs) {
-  m_coeffectAttrs = attrs;
+inline void Func::setStaticCoeffects(StaticCoeffects attrs) {
+  m_staticCoeffects = attrs;
 }
 
 inline void Func::setBaseCls(Class* baseCls) {

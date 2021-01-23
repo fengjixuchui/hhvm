@@ -35,7 +35,7 @@ let expand_typedef x = !expand_typedef_ref x
 
 type sub_type =
   env ->
-  ?allow_subtype_of_dynamic:bool ->
+  ?coerce:Typing_logic.coercion_direction option ->
   locl_ty ->
   locl_ty ->
   Errors.typing_error_callback ->
@@ -70,16 +70,25 @@ let (is_sub_type_ref : is_sub_type_type ref) =
 
 let is_sub_type x = !is_sub_type_ref x
 
+let (is_sub_type_for_coercion_ref : is_sub_type_type ref) =
+  ref (not_implemented "is_sub_type_for_coercion")
+
+let is_sub_type_for_coercion x = !is_sub_type_for_coercion_ref x
+
 let (is_sub_type_for_union_ref :
-      (env -> ?allow_subtype_of_dynamic:bool -> locl_ty -> locl_ty -> bool) ref)
-    =
+      (env ->
+      ?coerce:Typing_logic.coercion_direction option ->
+      locl_ty ->
+      locl_ty ->
+      bool)
+      ref) =
   ref (not_implemented "is_sub_type_for_union")
 
 let is_sub_type_for_union x = !is_sub_type_for_union_ref x
 
 let (is_sub_type_for_union_i_ref :
       (env ->
-      ?allow_subtype_of_dynamic:bool ->
+      ?coerce:Typing_logic.coercion_direction option ->
       internal_type ->
       internal_type ->
       bool)
@@ -218,8 +227,16 @@ let env_with_self_ref : env_with_self ref =
 let env_with_self ?pos ?quiet ?report_cycle x =
   !env_with_self_ref ?pos ?quiet ?report_cycle x
 
+let rec strip_this ty =
+  match get_node ty with
+  | Tdependent (DTthis, ty) -> ty
+  | Tunion tyl -> mk (get_reason ty, Tunion (List.map tyl strip_this))
+  | Tintersection tyl ->
+    mk (get_reason ty, Tintersection (List.map tyl strip_this))
+  | _ -> ty
+
 (* Convenience function for creating `this` types *)
-let this_of ty = Tdependent (DTthis, ty)
+let this_of ty = Tdependent (DTthis, strip_this ty)
 
 (*****************************************************************************)
 (* Returns true if a type is optional *)
@@ -342,39 +359,14 @@ let get_concrete_supertypes env ty =
             env
             acc
             (TySet.elements (Env.get_upper_bounds env n targs) @ tyl)
-      | Tunion tyl' ->
-        let tys = TySet.of_list tyl' in
-        begin
-          match TySet.elements tys with
-          | [ty] -> iter seen env acc (ty :: tyl)
-          | _ -> iter seen env (TySet.add ty acc) tyl
-        end
+      | Tintersection tyl' -> iter seen env acc (tyl' @ tyl)
       | _ -> iter seen env (TySet.add ty acc) tyl)
   in
   let (env, resl) = iter SSet.empty env TySet.empty [ty] in
   (env, TySet.elements resl)
 
-(* Try running function on each concrete supertype in turn. Return all
- * successful results
- *)
-let try_over_concrete_supertypes env ty f =
-  let (env, tyl) = get_concrete_supertypes env ty in
-  (* If there is just a single result then don't swallow errors *)
-  match tyl with
-  | [ty] -> [f env ty]
-  | _ ->
-    let rec iter_over_types env resl tyl =
-      match tyl with
-      | [] -> resl
-      | ty :: tyl ->
-        Errors.try_
-          (fun () -> iter_over_types env (f env ty :: resl) tyl)
-          (fun _ -> iter_over_types env resl tyl)
-    in
-    iter_over_types env [] tyl
-
 (** Run a function on an intersection represented by a list of types.
-    Similarly to try_over_concrete_supertypes, we stay liberal with errors:
+    We stay liberal with errors:
     discard the result of any run which has produced an error.
     If all runs have produced an error, gather all errors and results and add errors. *)
 let run_on_intersection :
@@ -404,9 +396,8 @@ let run_on_intersection :
 (*****************************************************************************)
 let is_dynamic env ty =
   let dynamic = MakeType.dynamic Reason.Rnone in
-  is_sub_type_for_union ~allow_subtype_of_dynamic:false env dynamic ty
-  && not (is_mixed env ty)
-  || is_sub_type_for_union ~allow_subtype_of_dynamic:false env ty dynamic
+  (is_sub_type_for_union ~coerce:None env dynamic ty && not (is_mixed env ty))
+  || is_sub_type_for_union ~coerce:None env ty dynamic
      && not (is_nothing env ty)
 
 (*****************************************************************************)
@@ -551,7 +542,6 @@ let unwrap_class_type ty =
   | (r, Tapply (name, tparaml)) -> (r, name, tparaml)
   | ( _,
       ( Terr | Tdynamic | Tany _ | Tmixed | Tnonnull
-      | Tarray (_, _)
       | Tdarray (_, _)
       | Tvarray _ | Tvarray_or_darray _ | Tgeneric _ | Toption _ | Tlike _
       | Tprim _ | Tfun _ | Ttuple _ | Tshape _ | Tunion _ | Tintersection _

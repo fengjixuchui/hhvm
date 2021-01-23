@@ -40,7 +40,6 @@ namespace HPHP { namespace bespoke {
 //////////////////////////////////////////////////////////////////////////////
 
 using namespace jit;
-using namespace jit::irgen;
 
 namespace {
 
@@ -49,6 +48,8 @@ std::atomic<size_t> s_layoutTableIndex;
 std::array<Layout*, Layout::kMaxIndex.raw + 1> s_layoutTable;
 std::atomic<bool> s_hierarchyFinal = false;
 std::mutex s_layoutCreationMutex;
+
+LayoutFunctions s_emptyVtable;
 
 constexpr LayoutIndex kBespokeTopIndex = {0};
 
@@ -172,10 +173,12 @@ folly::Optional<MaskAndCompare> computeXORMaskAndCompare(
 
 }
 
-Layout::Layout(LayoutIndex index, std::string description, LayoutSet parents)
+Layout::Layout(LayoutIndex index, std::string description, LayoutSet parents,
+               const LayoutFunctions* vtable)
   : m_index(index)
   , m_description(std::move(description))
   , m_parents(std::move(parents))
+  , m_vtable(vtable ? vtable : &s_emptyVtable)
 {
   std::lock_guard<std::mutex> lock(s_layoutCreationMutex);
   assertx(!s_hierarchyFinal.load(std::memory_order_acquire));
@@ -617,6 +620,18 @@ Layout::Initializer Layout::s_initializer;
 
 //////////////////////////////////////////////////////////////////////////////
 
+ArrayLayout Layout::appendType(Type val) const {
+  return ArrayLayout::Top();
+}
+
+ArrayLayout Layout::removeType(Type key) const {
+  return ArrayLayout::Top();
+}
+
+ArrayLayout Layout::setType(Type key, Type val) const {
+  return ArrayLayout::Top();
+}
+
 std::pair<Type, bool> Layout::elemType(Type key) const {
   return {TInitCell, false};
 }
@@ -633,8 +648,9 @@ Type Layout::iterPosType(Type pos, bool isKey) const {
 
 AbstractLayout::AbstractLayout(LayoutIndex index,
                                std::string description,
-                               LayoutSet parents)
-  : Layout(index, std::move(description), std::move(parents))
+                               LayoutSet parents,
+                               const LayoutFunctions* vtable /*=nullptr*/)
+  : Layout(index, std::move(description), std::move(parents), vtable)
 {}
 
 void AbstractLayout::InitializeLayouts() {
@@ -649,12 +665,15 @@ LayoutIndex AbstractLayout::GetBespokeTopIndex() {
 
 ConcreteLayout::ConcreteLayout(LayoutIndex index,
                                std::string description,
-                               const LayoutFunctions* vtable,
-                               LayoutSet parents)
-  : Layout(index, std::move(description), std::move(parents))
-  , m_vtable(vtable)
+                               LayoutSet parents,
+                               const LayoutFunctions* vtable)
+  : Layout(index, std::move(description), std::move(parents), vtable)
 {
   assertx(vtable);
+#define X(Return, Name, Args...) \
+  assertx(vtable->fn##Name);
+  BESPOKE_LAYOUT_FUNCTIONS(ArrayData)
+#undef X
 }
 
 const ConcreteLayout* ConcreteLayout::FromConcreteIndex(LayoutIndex index) {

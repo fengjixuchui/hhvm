@@ -365,7 +365,19 @@ and unwrap_mutability p =
 
 and contexts env ctxs =
   let (pos, hl) = ctxs in
-  let hl = List.map ~f:(hint env) hl in
+  let hl =
+    List.map
+      ~f:(fun h ->
+        match h with
+        | (p, Aast.Happly ((_, wildcard), []))
+          when String.equal wildcard SN.Typehints.wildcard ->
+          (* More helpful wildcard error for coeffects. We expect all valid
+           * wildcard hints to be transformed into Hfun_context *)
+          Errors.invalid_wildcard_context p;
+          (p, N.Herr)
+        | _ -> hint env h)
+      hl
+  in
   (pos, hl)
 
 and hfun env reactivity hl kl variadic_hint ctxs h =
@@ -1080,8 +1092,8 @@ and enum_ env enum_name e =
   let new_base = hint env old_base in
   let bound =
     if is_enum_class then
-      (* Turn the base type of the enum class into EnumMember<E, base> *)
-      let elt = (pos, SN.Classes.cEnumMember) in
+      (* Turn the base type of the enum class into MemberOf<E, base> *)
+      let elt = (pos, SN.Classes.cMemberOf) in
       let h = (pos, Happly (elt, [enum_hint; old_base])) in
       hint env h
     else
@@ -1246,13 +1258,10 @@ and class_prop_non_static env ?(const = None) cv =
   }
 
 and check_constant_expression env ~in_enum_class (pos, e) =
-  match e with
-  | Aast.New _ when in_enum_class ->
-    (* TODO(T77095784) sync with HHVM to see what restrictions we should check
-     * for
-     *)
+  if not in_enum_class then
+    check_constant_expr env (pos, e)
+  else
     true
-  | _ -> check_constant_expr env (pos, e)
 
 and check_constant_expr env (pos, e) =
   match e with
@@ -1574,6 +1583,7 @@ and stmt env (pos, st) =
     | Aast.Continue -> Aast.Continue
     | Aast.Throw e -> N.Throw (expr env e)
     | Aast.Return e -> N.Return (Option.map e (expr env))
+    | Aast.Yield_break -> N.Yield_break
     | Aast.Awaitall (el, b) -> awaitall_stmt env el b
     | Aast.If (e, b1, b2) -> if_stmt env e b1 b2
     | Aast.Do (b, e) -> do_stmt env b e
@@ -2087,7 +2097,6 @@ and expr_ env p (e : Nast.expr_) =
     N.FunctionPointer
       (N.FP_class_const (make_class_id env x1, x2), targl env p targs)
   | Aast.FunctionPointer _ -> N.Any
-  | Aast.Yield_break -> N.Yield_break
   | Aast.Yield e -> N.Yield (afield env e)
   | Aast.Await e -> N.Await (expr env e)
   | Aast.List el -> N.List (exprl env el)

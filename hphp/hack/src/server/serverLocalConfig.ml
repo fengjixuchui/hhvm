@@ -442,6 +442,7 @@ type t = {
   predeclare_ide: bool;
   predeclare_ide_deps: bool;
   max_typechecker_worker_memory_mb: int option;
+  use_worker_clones: bool;
   hg_aware: bool;
   hg_aware_parsing_restart_threshold: int;
   hg_aware_redecl_restart_threshold: int;
@@ -512,6 +513,8 @@ type t = {
   (* Enables the reverse naming table to fall back to SQLite for queries. *)
   naming_sqlite_path: string option;
   enable_naming_table_fallback: bool;
+  (* Download dependency graph from DevX infra. *)
+  enable_devx_dependency_graph: bool;
   (* Selects a search provider for autocomplete and symbol search *)
   symbolindex_search_provider: string;
   symbolindex_quiet: bool;
@@ -581,6 +584,7 @@ let default =
     predeclare_ide = false;
     predeclare_ide_deps = false;
     max_typechecker_worker_memory_mb = None;
+    use_worker_clones = true;
     hg_aware = false;
     hg_aware_parsing_restart_threshold = 0;
     hg_aware_redecl_restart_threshold = 0;
@@ -608,6 +612,7 @@ let default =
     remote_transport_channel = None;
     naming_sqlite_path = None;
     enable_naming_table_fallback = false;
+    enable_devx_dependency_graph = false;
     symbolindex_search_provider = "SqliteIndex";
     symbolindex_quiet = false;
     symbolindex_file = None;
@@ -908,6 +913,12 @@ let load_ fn ~silent ~current_version overrides =
   let max_typechecker_worker_memory_mb =
     int_opt "max_typechecker_worker_memory_mb" config
   in
+  let use_worker_clones =
+    bool_if_version
+      "use_worker_clones"
+      ~default:default.use_worker_clones
+      config
+  in
   let hg_aware = bool_if_version "hg_aware" ~default:default.hg_aware config in
   let disable_conservative_redecl =
     bool_if_version
@@ -1013,6 +1024,13 @@ let load_ fn ~silent ~current_version overrides =
     bool_if_min_version
       "enable_naming_table_fallback"
       ~default:default.enable_naming_table_fallback
+      ~current_version
+      config
+  in
+  let enable_devx_dependency_graph =
+    bool_if_min_version
+      "enable_devx_dependency_graph"
+      ~default:default.enable_devx_dependency_graph
       ~current_version
       config
   in
@@ -1136,6 +1154,7 @@ let load_ fn ~silent ~current_version overrides =
     prechecked_files;
     predeclare_ide;
     max_typechecker_worker_memory_mb;
+    use_worker_clones;
     hg_aware;
     hg_aware_parsing_restart_threshold;
     hg_aware_redecl_restart_threshold;
@@ -1164,6 +1183,7 @@ let load_ fn ~silent ~current_version overrides =
     remote_transport_channel;
     naming_sqlite_path;
     enable_naming_table_fallback;
+    enable_devx_dependency_graph;
     symbolindex_search_provider;
     symbolindex_quiet;
     symbolindex_file;

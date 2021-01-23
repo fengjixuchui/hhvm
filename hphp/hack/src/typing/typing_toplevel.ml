@@ -156,7 +156,7 @@ let check_param_has_hint env param ty is_code_error =
  * A similar line of reasoning is applied for the static method create.
  *)
 let make_param_local_ty env decl_hint param =
-  let ety_env = { (Phase.env_with_self env) with from_class = Some CIstatic } in
+  let ety_env = Phase.env_with_self env in
   let r = Reason.Rwitness param.param_pos in
   let (env, ty) =
     match decl_hint with
@@ -285,6 +285,16 @@ let merge_decl_header_with_hints ~params ~ret ~variadic decl_header env =
   in
   (ret_decl_ty, params_decl_ty, variadicity_decl_ty)
 
+(* Checking this with List.exists will be a single op in the vast majority of cases (empty) *)
+let get_ctx_vars ctxs =
+  Option.value_map
+    ~f:(fun (_, cs) ->
+      List.filter_map cs ~f:(function
+          | (_, Haccess ((_, Hvar n), _)) -> Some n
+          | _ -> None))
+    ~default:[]
+    ctxs
+
 let rec fun_def ctx f :
     (Tast.fun_def * Typing_inference_env.t_global_with_pos) option =
   Counters.count Counters.Category.Typecheck @@ fun () ->
@@ -357,9 +367,14 @@ let rec fun_def ctx f :
       let check_has_hint p t = check_param_has_hint env p t partial_callback in
       List.iter2_exn ~f:check_has_hint f.f_params param_tys;
       Typing_memoize.check_function env f;
+      let params_need_immutable = get_ctx_vars f.f_ctxs in
       let (env, typed_params) =
         let bind_param_and_check env param =
-          let (env, fun_param) = Typing.bind_param env param in
+          let name = (snd param).param_name in
+          let immutable =
+            List.exists ~f:(String.equal name) params_need_immutable
+          in
+          let (env, fun_param) = Typing.bind_param ~immutable env param in
           (env, fun_param)
         in
         List.map_env
@@ -394,7 +409,7 @@ let rec fun_def ctx f :
         match hint_of_type_hint f.f_ret with
         | None ->
           if partial_callback 4030 then Errors.expecting_return_type_hint pos
-        | Some hint -> Typing_return.async_suggest_return f.f_fun_kind hint
+        | Some _ -> ()
       end;
       let (env, tparams) = List.map_env env f.f_tparams Typing.type_param in
       let (env, user_attributes) =
@@ -435,6 +450,7 @@ let rec fun_def ctx f :
 and method_def env cls m =
   Errors.run_with_span m.m_span @@ fun () ->
   with_timeout env m.m_name ~do_:(fun env ->
+      Decl_fun_utils.check_params m.m_params;
       let initial_env = env in
       (* reset the expression dependent display ids for each method body *)
       Reason.expr_display_id_map := IMap.empty;
@@ -517,9 +533,7 @@ and method_def env cls m =
           (* If a 'this' type appears it needs to be compatible with the
            * late static type
            *)
-          let ety_env =
-            { (Phase.env_with_self env) with from_class = Some CIstatic }
-          in
+          let ety_env = Phase.env_with_self env in
           Typing_return.make_return_type (Phase.localize ~ety_env) env ret
       in
       let return =
@@ -540,9 +554,14 @@ and method_def env cls m =
       let param_fn p t = check_param_has_hint env p t partial_callback in
       List.iter2_exn ~f:param_fn m.m_params param_tys;
       Typing_memoize.check_method env m;
+      let params_need_immutable = get_ctx_vars m.m_ctxs in
       let (env, typed_params) =
         let bind_param_and_check env param =
-          let (env, fun_param) = Typing.bind_param env param in
+          let name = (snd param).param_name in
+          let immutable =
+            List.exists ~f:(String.equal name) params_need_immutable
+          in
+          let (env, fun_param) = Typing.bind_param ~immutable env param in
           (env, fun_param)
         in
         List.map_env
@@ -587,9 +606,7 @@ and method_def env cls m =
         | None ->
           if partial_callback 4030 then Errors.expecting_return_type_hint pos;
           None
-        | Some hint ->
-          Typing_return.async_suggest_return m.m_fun_kind hint;
-          hint_of_type_hint m.m_ret
+        | Some _ -> hint_of_type_hint m.m_ret
       in
       let m = { m with m_ret = (fst m.m_ret, type_hint') } in
       let (env, tparams) = List.map_env env m.m_tparams Typing.type_param in
@@ -622,7 +639,8 @@ and method_def env cls m =
         (* 2. check if the return type is coercible *)
         if
           not
-            (Typing_subtype.is_sub_type_for_coercion
+            (Typing_subtype.is_sub_type_for_union
+               ~coerce:(Some Typing_logic.CoerceToDynamic)
                env
                locl_ty
                (mk (Reason.Rnone, Tdynamic)))
@@ -944,7 +962,7 @@ and class_def_ env c tc =
     List.iter (Cls.smethods tc) (check_override ~is_static:true)
   );
   check_enum_includes env c;
-  let (pc, _) = c.c_name in
+  let (pc, c_name) = c.c_name in
   let (req_extends, req_implements) = split_reqs c in
   let extends = List.map c.c_extends (Decl_hint.hint env.decl_env) in
   let implements = List.map c.c_implements (Decl_hint.hint env.decl_env) in
@@ -975,7 +993,7 @@ and class_def_ env c tc =
   let impl = extends @ implements @ uses in
   let env =
     Phase.localize_and_add_ast_generic_parameters_and_where_constraints
-      (fst c.c_name)
+      pc
       env
       c.c_tparams
       c.c_where_constraints
@@ -1063,7 +1081,10 @@ and class_def_ env c tc =
   let (env, typed_typeconsts) =
     List.map_env env c.c_typeconsts (typeconst_def c)
   in
-  let (env, consts) = List.map_env env c.c_consts (class_const_def c) in
+  let in_enum_class = Env.is_enum_class env c_name in
+  let (env, consts) =
+    List.map_env env c.c_consts (class_const_def ~in_enum_class c)
+  in
   let (typed_consts, const_types) = List.unzip consts in
   let env = Typing_enum.enum_class_check env tc c.c_consts const_types in
   let typed_constructor = class_constr_def env tc constructor in
@@ -1091,37 +1112,63 @@ and class_def_ env c tc =
     Typing_solver.solve_all_unsolved_tyvars env Errors.bad_class_typevar
   in
 
-  let check_parent_implement_dynamic env child =
-    let parents =
-      (* for now, interfaces and traits are ignored *)
-      child.c_extends
+  ( if TypecheckerOptions.enable_sound_dynamic (Provider_context.get_tcopt ctx)
+  then
+    let parent_names =
+      List.filter_map
+        (c.c_extends @ c.c_uses @ c.c_implements)
+        (function
+          | (_, Happly ((_, name), _)) -> Some name
+          | _ -> None)
     in
-    List.iter parents (function
-        | (_, Happly ((_, name), _)) ->
+    let error_parent_implements_dynamic parent f =
+      Errors.parent_implements_dynamic
+        (fst c.c_name)
+        (snd c.c_name, c.c_kind)
+        (Cls.name parent, Cls.kind parent)
+        f
+    in
+    List.iter parent_names (fun name ->
+        match Env.get_class_dep env name with
+        | Some parent_type ->
           begin
-            match Env.get_class_dep env name with
-            | Some parent_type ->
+            match Cls.kind parent_type with
+            | Ast_defs.Cnormal
+            | Ast_defs.Cabstract ->
               if
                 not
                   (Bool.equal
                      (Cls.get_implements_dynamic parent_type)
                      c.c_implements_dynamic)
               then
-                Errors.parent_implements_dynamic
-                  (fst child.c_name)
-                  (snd child.c_name)
-                  (Cls.name parent_type)
+                error_parent_implements_dynamic
+                  parent_type
                   c.c_implements_dynamic
-            | None -> ()
+            | Ast_defs.Ctrait ->
+              if
+                c.c_implements_dynamic
+                && not (Cls.get_implements_dynamic parent_type)
+              then
+                error_parent_implements_dynamic parent_type true
+            | Ast_defs.Cinterface ->
+              if
+                (not c.c_implements_dynamic)
+                && Cls.get_implements_dynamic parent_type
+              then
+                error_parent_implements_dynamic parent_type false
+              else if
+                Ast_defs.is_c_interface c.c_kind
+                && not
+                     (Bool.equal
+                        (Cls.get_implements_dynamic parent_type)
+                        c.c_implements_dynamic)
+              then
+                error_parent_implements_dynamic
+                  parent_type
+                  c.c_implements_dynamic
+            | _ -> ()
           end
-        | _ -> ())
-  in
-  if TypecheckerOptions.enable_sound_dynamic (Provider_context.get_tcopt ctx)
-  then
-    (* two well-formedness checks are required: *)
-    (*  - a class that does not implements dynamic cannot extends a class that implement dynamic *)
-    (*  - if the superclass implements dynamic, then the class itself should implement dynamic *)
-    check_parent_implement_dynamic env c;
+        | None -> ()) );
 
   ( {
       Aast.c_span = c.c_span;
@@ -1339,7 +1386,7 @@ and is_literal_expr e =
   | Unop ((Ast_defs.Uminus | Ast_defs.Uplus), (_, (Int _ | Float _))) -> true
   | _ -> false
 
-and class_const_def c env cc =
+and class_const_def ~in_enum_class c env cc =
   let { cc_type = h; cc_id = id; cc_expr = e; _ } = cc in
   begin
     match c.c_kind with
@@ -1366,15 +1413,46 @@ and class_const_def c env cc =
       let ty = Decl_hint.hint env.decl_env h in
       let ty = Typing_enforceability.compute_enforced_ty env ty in
       let (env, ty) = Phase.localize_possibly_enforced_with_self env ty in
+      (* Removing the HH\MemberOf wrapper in case of enum classes so the
+       * following call to expr_* has the right expected type
+       *)
+      let opt_ty =
+        if in_enum_class then
+          match get_node ty.et_type with
+          | Tnewtype (memberof, [_; et_type], _)
+            when String.equal memberof SN.Classes.cMemberOf ->
+            { ty with et_type }
+          | _ -> ty
+        else
+          ty
+      in
       ( env,
         ty,
-        Some (ExpectedTy.make_and_allow_coercion (fst id) Reason.URhint ty) )
+        Some (ExpectedTy.make_and_allow_coercion (fst id) Reason.URhint opt_ty)
+      )
   in
   let (env, eopt, ty) =
     match e with
     | Some e ->
       let (env, te, ty') =
         expr_with_pure_coeffects env ?expected:opt_expected e
+      in
+      (* If we are checking an enum class, wrap ty' into the right
+       * HH\MemberOf<class name, ty'> alias
+       *)
+      let (te, ty') =
+        if in_enum_class then
+          match deref ty.et_type with
+          | (r, Tnewtype (memberof, [enum_name; _], _))
+            when String.equal memberof SN.Classes.cMemberOf ->
+            let lift r ty = mk (r, Tnewtype (memberof, [enum_name; ty], ty)) in
+            let ((p, te_ty), te) = te in
+            let te = ((p, lift (get_reason te_ty) te_ty), te) in
+            let ty' = lift r ty' in
+            (te, ty')
+          | _ -> (te, ty')
+        else
+          (te, ty')
       in
       let env =
         Typing_coercion.coerce_type

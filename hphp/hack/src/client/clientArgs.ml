@@ -324,20 +324,6 @@ let parse_check_args cmd =
           end,
         " (mode) for each entry in input list get list of function dependencies [file:line:character list]"
       );
-      ( "--fun-is-locallable-at-pos-batch",
-        Arg.Rest
-          begin
-            fun position ->
-            set_mode
-              ~validate:false
-              (match !mode with
-              | None -> MODE_FUN_IS_LOCALLABLE_AT_POS_BATCH [position]
-              | Some (MODE_FUN_IS_LOCALLABLE_AT_POS_BATCH positions) ->
-                MODE_FUN_IS_LOCALLABLE_AT_POS_BATCH (position :: positions)
-              | _ -> raise (Arg.Bad "only a single mode should be specified"))
-          end,
-        " (mode) for each entry in input list checks if function at position can be made RxLocal [file:line:character list]"
-      );
       ( "--gen-hot-classes-file",
         Arg.Tuple
           [
@@ -1070,7 +1056,7 @@ let parse_rage_args () =
         else if String.equal response "3" then
           ("hh monitor problem", `Verbose_hh_start)
         else if String.equal response "4" then begin
-          Extra_rage.verify_typechecker_err_src ();
+          ClientRage.verify_typechecker_err_src ();
           ("internal typecheck bug", `No_info)
         end else if String.equal response "5" then
           let () =
@@ -1130,7 +1116,7 @@ invocations of `hh` faster.|}
       Sys.argv.(0)
   in
   let valid_types_message =
-    "Valid values are: naming-and-dep-table, naming-table"
+    "Valid values are: naming-and-dep-table, naming-and-dep-table-64bit, naming-table"
   in
 
   let from = ref "" in
@@ -1177,7 +1163,9 @@ invocations of `hh` faster.|}
       Printf.printf "The '--type' option is required. %s\n" valid_types_message;
       exit 2
     | Some "naming-and-dep-table" ->
-      ClientDownloadSavedState.Naming_and_dep_table
+      ClientDownloadSavedState.Naming_and_dep_table { is_64bit = false }
+    | Some "naming-and-dep-table-64bit" ->
+      ClientDownloadSavedState.Naming_and_dep_table { is_64bit = true }
     | Some "naming-table" -> ClientDownloadSavedState.Naming_table
     | Some saved_state_type ->
       Printf.printf

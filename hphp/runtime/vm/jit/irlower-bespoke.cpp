@@ -16,7 +16,7 @@
 
 #include "hphp/runtime/vm/jit/irlower-bespoke.h"
 
-#include "hphp/runtime/base/bespoke/layout.h"
+#include "hphp/runtime/base/bespoke/escalation-logging.h"
 #include "hphp/runtime/base/bespoke/layout.h"
 #include "hphp/runtime/base/bespoke/logging-profile.h"
 #include "hphp/runtime/base/bespoke/monotype-dict.h"
@@ -35,12 +35,30 @@ namespace HPHP { namespace jit { namespace irlower {
 
 //////////////////////////////////////////////////////////////////////////////
 
+namespace {
+static void logGuardFailure(TypedValue tv, uint16_t layout, uint64_t sk) {
+  assertx(tvIsArrayLike(tv));
+  auto const al = ArrayLayout::FromUint16(layout);
+  bespoke::logGuardFailure(val(tv).parr, al, SrcKey(sk));
+}
+}
+
 void cgLogArrayReach(IRLS& env, const IRInstruction* inst) {
   auto const data = inst->extra<LogArrayReach>();
 
   auto& v = vmain(env);
   auto const args = argGroup(env, inst).imm(data->profile).ssa(0);
   auto const target = CallSpec::method(&bespoke::SinkProfile::update);
+  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
+}
+
+void cgLogGuardFailure(IRLS& env, const IRInstruction* inst) {
+  auto const layout = inst->typeParam().arrSpec().layout().toUint16();
+  auto const sk = inst->marker().sk().toAtomicInt();
+
+  auto& v = vmain(env);
+  auto const args = argGroup(env, inst).typedValue(0).imm(layout).imm(sk);
+  auto const target = CallSpec::direct(logGuardFailure);
   cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
 }
 
@@ -87,10 +105,12 @@ static TypedValue getStr(const ArrayData* ad, const StringData* key) {
   [&]{                                                                    \
     auto const layout = Type.arrSpec().layout();                          \
     if (layout.bespoke()) {                                               \
-      if (auto const concrete = layout.concreteLayout()) {                \
-        return CallSpec::direct(concrete->vtable()->fn##Fn);              \
+      auto const vtable = layout.bespokeLayout()->vtable();               \
+      if (vtable->fn##Fn) {                                               \
+        return CallSpec::direct(vtable->fn##Fn);                          \
+      } else {                                                            \
+        return CallSpec::direct(BespokeArray::Fn);                        \
       }                                                                   \
-      return CallSpec::direct(BespokeArray::Fn);                          \
     }                                                                     \
     if (layout.vanilla()) {                                               \
       if (arr <= (TVArr|TVec))  return CallSpec::direct(PackedArray::Fn); \
@@ -208,8 +228,9 @@ void cgBespokeIterGetVal(IRLS& env, const IRInstruction* inst) {
 void cgBespokeEscalateToVanilla(IRLS& env, const IRInstruction* inst) {
   auto const target = [&] {
     auto const layout = inst->src(0)->type().arrSpec().layout();
-    if (auto const concrete = layout.concreteLayout()) {
-      return CallSpec::direct(concrete->vtable()->fnEscalateToVanilla);
+    auto const vtable = layout.bespokeLayout()->vtable();
+    if (vtable->fnEscalateToVanilla) {
+      return CallSpec::direct(vtable->fnEscalateToVanilla);
     } else {
       return CallSpec::direct(BespokeArray::ToVanilla);
     }
@@ -237,9 +258,11 @@ void cgBespokeElem(IRLS& env, const IRInstruction* inst) {
     // Bespoke arrays always have specific Elem helper functions.
     if (layout.bespoke()) {
       args.ssa(2);
-      if (auto const concrete = layout.concreteLayout()) {
-        return key->isA(TStr) ? CallSpec::direct(concrete->vtable()->fnElemStr)
-                              : CallSpec::direct(concrete->vtable()->fnElemInt);
+      auto const vtable = layout.bespokeLayout()->vtable();
+      if (key->isA(TStr) && vtable->fnElemStr) {
+        return CallSpec::direct(vtable->fnElemStr);
+      } else if (key->isA(TInt) && vtable->fnElemInt) {
+        return CallSpec::direct(vtable->fnElemInt);
       } else {
         return key->isA(TStr) ? CallSpec::direct(BespokeArray::ElemStr)
                               : CallSpec::direct(BespokeArray::ElemInt);
@@ -295,16 +318,11 @@ Vptr ptrToMonotypeDictElm(Vout& v, Vreg rarr, Vreg rpos, Type pos, size_t off) {
 }
 }
 
-void cgLdMonotypeDictEnd(IRLS& env, const IRInstruction* inst) {
-  static_assert(MonotypeDict::usedSize() == 2);
-
+void cgLdMonotypeDictTombstones(IRLS& env, const IRInstruction* inst) {
+  static_assert(MonotypeDict::tombstonesSize() == 2);
   auto const rarr = srcLoc(env, inst, 0).reg();
   auto const used = dstLoc(env, inst, 0).reg();
-
-  auto& v = vmain(env);
-  auto const tmp = v.makeReg();
-  v << loadw{rarr[MonotypeDict::usedOffset()], tmp};
-  v << movzwq{tmp, used};
+  vmain(env) << loadzwq{rarr[MonotypeDict::tombstonesOffset()], used};
 }
 
 void cgLdMonotypeDictKey(IRLS& env, const IRInstruction* inst) {

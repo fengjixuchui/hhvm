@@ -140,56 +140,18 @@ void emitCallerDynamicCallChecksUnknown(IRGS& env, SSATmp* callee) {
   }
 }
 
-} // namespace
-
-void emitCallerRxChecksKnown(IRGS& env, const Func* callee) {
-  assertx(callee);
-  if (RuntimeOption::EvalPureEnforceCalls <= 0) return;
-  auto const callerLevel = curRxLevel(env);
-  if (!rxEnforceCallsInLevel(callerLevel)) return;
-
-  auto const minReqCalleeLevel = rxRequiredCalleeLevel(callerLevel);
-  if (callee->rxLevel() >= minReqCalleeLevel) return;
-  gen(env, RaiseRxCallViolation, fp(env), cns(env, callee));
-}
-
-namespace {
-
-void emitCallerRxChecksUnknown(IRGS& env, SSATmp* callee) {
-  assertx(!callee->hasConstVal());
-  if (RuntimeOption::EvalPureEnforceCalls <= 0) return;
-  auto const callerLevel = curRxLevel(env);
-  if (!rxEnforceCallsInLevel(callerLevel)) return;
-
-  ifThen(
-    env,
-    [&] (Block* taken) {
-      auto const minReqCalleeLevel = rxRequiredCalleeLevel(callerLevel);
-      auto const calleeLevel = gen(env, LdFuncRxLevel, callee);
-      auto const lt = gen(env, LtInt, calleeLevel, cns(env, minReqCalleeLevel));
-      gen(env, JmpNZero, taken, lt);
-    },
-    [&] {
-      hint(env, Block::Hint::Unlikely);
-      gen(env, RaiseRxCallViolation, fp(env), callee);
-    }
-  );
-}
-
-//////////////////////////////////////////////////////////////////////
-
 SSATmp* callImpl(IRGS& env, SSATmp* callee, const FCallArgs& fca,
                  SSATmp* objOrClass, bool skipRepack, bool dynamicCall,
                  bool asyncEagerReturn) {
   // TODO: extend hhbc with bitmap of passed generics, or even better, use one
   // stack value per generic argument and extend hhbc with their count
   auto const genericsBitmap = [&] {
-    if (!fca.hasGenerics()) return uint32_t{0};
+    if (!fca.hasGenerics()) return uint16_t{0};
     auto const type = RuntimeOption::EvalHackArrDVArrs ? TVec : TVArr;
     auto const generics = topC(env);
     // Do not bother calculating the bitmap using a C++ helper if generics are
     // not statically known, as the prologue already has the same logic.
-    if (!generics->hasConstVal(type)) return uint32_t{0};
+    if (!generics->hasConstVal(type)) return uint16_t{0};
     auto const genericsArr = generics->arrLikeVal();
     return getGenericsBitmap(genericsArr);
   }();
@@ -203,6 +165,7 @@ SSATmp* callImpl(IRGS& env, SSATmp* callee, const FCallArgs& fca,
     fca.numRets - 1,
     bcOff(env) - curFunc(env)->base(),
     genericsBitmap,
+    curCoeffects(env),
     fca.hasGenerics(),
     fca.hasUnpack(),
     skipRepack,
@@ -337,8 +300,6 @@ void prepareAndCallKnown(IRGS& env, const Func* callee, const FCallArgs& fca,
   if (dynamicCall && !suppressDynCallCheck) {
     emitCallerDynamicCallChecksKnown(env, callee);
   }
-  emitCallerRxChecksKnown(env, callee);
-
   auto const doCall = [&](const FCallArgs& fca, bool skipRepack) {
     assertx(
       !skipRepack ||
@@ -438,7 +399,6 @@ void prepareAndCallUnknown(IRGS& env, SSATmp* callee, const FCallArgs& fca,
   if (dynamicCall && !suppressDynCallCheck) {
     emitCallerDynamicCallChecksUnknown(env, callee);
   }
-  emitCallerRxChecksUnknown(env, callee);
 
   // We may have updated the stack, make sure Call opcode can set up its Catch.
   updateMarker(env);

@@ -33,7 +33,6 @@ let global_opts =
   GlobalOptions.make
     ~po_disable_xhp_element_mangling:false
     ~po_deregister_php_stdlib:true
-    ~po_allow_goto:false
     ~tco_unsafe_rx:false
     ()
 
@@ -486,6 +485,12 @@ let errors_to_string buf x =
   List.iter x ~f:(fun error ->
       Printf.bprintf buf "%s\n" (Errors.to_string error))
 
+let print_telemetries env =
+  Printf.eprintf "\n==Telementries==\n";
+  List.iter
+    ServerEnv.(env.last_recheck_loop_stats.per_batch_telemetry)
+    ~f:(fun t -> Printf.eprintf "%s\n" (Telemetry.to_string ~pretty:true t))
+
 let assert_errors errors expected =
   let buf = Buffer.create 1024 in
   Errors.get_error_list errors
@@ -651,14 +656,14 @@ let load_state
     List.map local_changes ~f:(fun x ->
         Relative_path.create_detect_prefix (root ^ x))
   in
-  let saved_state_fn = saved_state_dir ^ "/" ^ saved_state_filename in
+  let naming_table_path = saved_state_dir ^ "/" ^ saved_state_filename in
   let deptable_fn = saved_state_dir ^ "/" ^ saved_state_filename ^ ".sql" in
   (* TODO(hverr): Figure out 64-bit *)
   let deptable_is_64bit = false in
   let load_state_approach =
     ServerInit.Precomputed
       {
-        ServerArgs.saved_state_fn;
+        ServerArgs.naming_table_path;
         (* in Precomputed scenario, base revision should only be used in logging,
          * which is irrelevant in tests *)
         corresponding_base_revision = "-1";

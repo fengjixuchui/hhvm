@@ -86,7 +86,6 @@ hphp/system/php/async/vectors.ns.php
 hphp/system/php/array_filter.php
 hphp/system/php/array_map.php
 hphp/system/php/array_reduce.php
-hphp/system/php/apc/APCIterator.php
 hphp/system/php/asio/InvalidOperationException.php
 hphp/system/php/async/EntryPoint.ns.php
 hphp/system/php/curl/CURLFile.php
@@ -118,4 +117,5 @@ hphp/system/php/experimental_parser_utils.php
 # This provides a temporary workaround for renamed lz4 methods
 hphp/system/php/zlib/ext_zlib.php
 
-hphp/system/php/enum_member.ns.php
+hphp/system/php/switchable_class.ns.php
+hphp/system/php/member_of.ns.php

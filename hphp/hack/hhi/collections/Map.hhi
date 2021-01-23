@@ -8,8 +8,6 @@
  *
  */
 
-<<file: __EnableUnstableFeatures('coeffects_provisional')>>
-
 /**
  * This file provides type information for some of HHVM's builtin classes.
  *
@@ -671,7 +669,7 @@ final class Map<Tk as arraykey, Tv> implements \MutableMap<Tk, Tv> {
    *           empty `Map` if the `Traversable` is `null`.
    */
   <<__Pure, __AtMostRxAsArgs, __MutableReturn>>
-  public static function fromItems(<<__MaybeMutable, __OnlyRxIfImpl(\HH\Rx\Traversable::class)>> ?Traversable<Pair<Tk, Tv>> $items)
+  public static function fromItems(<<__MaybeMutable, __OnlyRxIfImpl(\HH\Rx\Traversable::class)>> ?Traversable<Pair<Tk, Tv>> $items)[]
     : Map<Tk, Tv>;
 
   /**

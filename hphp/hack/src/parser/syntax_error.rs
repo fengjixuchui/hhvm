@@ -399,6 +399,10 @@ pub fn instanceof_new_unknown_node(msg: &str) -> Error {
         msg.to_string(),
     ))
 }
+pub const invalid_async_return_hint: Error =
+    Cow::Borrowed("`async` functions must have an `Awaitable` return type.");
+pub const invalid_awaitable_arity: Error =
+    Cow::Borrowed("`Awaitable<_>` takes exactly one type argument.");
 pub const invalid_await_use: Error = Cow::Borrowed("`await` cannot be used as an expression");
 pub const toplevel_await_use: Error =
     Cow::Borrowed("`await` cannot be used in a toplevel statement");
@@ -968,8 +972,17 @@ pub const splice_outside_et: Error =
 
 pub const invalid_enum_class_enumerator: Error = Cow::Borrowed("Invalid enum class constant");
 
-pub const fun_disabled: Error =
-    Cow::Borrowed("`fun()` is disabled; switch to first-class references like `foo<>`");
+pub fn fun_disabled(func_name: &str) -> Error {
+    Cow::Owned(format!(
+        "`fun()` is disabled; switch to first-class references like `{}<>`",
+        func_name
+            .trim_end_matches('\'')
+            .trim_start_matches('\'')
+            .to_string()
+    ))
+}
+
+pub const fun_requires_const_string: Error = Cow::Borrowed("Constant string expected in fun()");
 
 pub const class_meth_disabled: Error =
     Cow::Borrowed("`class_meth()` is disabled; switch to first-class references like `C::bar<>`");
@@ -988,9 +1001,33 @@ pub fn ctx_var_missing_type_hint(param_name: &str) -> Error {
     ))
 }
 
+pub fn ctx_var_variadic(param_name: &str) -> Error {
+    Cow::Owned(format!(
+        "Parameter {} used for dependent context cannot be variadic",
+        param_name.to_string()
+    ))
+}
+
 pub fn ctx_var_invalid_type_hint(param_name: &str) -> Error {
     Cow::Owned(format!(
         "Type hint for parameter {} used for dependent context must be a class or a generic",
         param_name.to_string()
     ))
 }
+
+pub fn ctx_fun_invalid_type_hint(param_name: &str) -> Error {
+    Cow::Owned(format!(
+        "Type hint for parameter {} used for contextful function must be a function type hint whose context is exactly `[_]`, e.g. `(function (ts)[_]: t)`",
+        param_name.to_string()
+    ))
+}
+
+pub fn effect_polymorphic_memoized(kind: &str) -> Error {
+    Cow::Owned(format!(
+        "This {} cannot be memoized because it has a polymorphic context",
+        kind
+    ))
+}
+
+pub const lambda_effect_polymorphic: Error =
+    Cow::Borrowed("A lambda cannot have polymorphic context");

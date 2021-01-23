@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<e8a0f13efdb832d96588166a875c2049>>
+// @generated SignedSource<<92cd5fef3e761bafffa646b265e38c81>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidized/regen.sh
+//   hphp/hack/src/oxidize_regen.sh
 
 use arena_trait::TrivialDrop;
 use no_pos_hash::NoPosHash;
@@ -185,4 +185,29 @@ pub struct Saved {
     pub names: Names,
     pub hash: Option<isize>,
     pub mode: Option<Mode>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    FromOcamlRep,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub struct Diff {
+    pub removed_funs: s_set::SSet,
+    pub added_funs: s_set::SSet,
+    pub removed_classes: s_set::SSet,
+    pub added_classes: s_set::SSet,
+    pub removed_types: s_set::SSet,
+    pub added_types: s_set::SSet,
+    pub removed_consts: s_set::SSet,
+    pub added_consts: s_set::SSet,
 }

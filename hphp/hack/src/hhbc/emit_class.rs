@@ -18,6 +18,7 @@ use emit_xhp_rust as emit_xhp;
 use env::{emitter::Emitter, local, Env};
 use hhas_attribute_rust as hhas_attribute;
 use hhas_class_rust::{HhasClass, HhasClassFlags, TraitReqKind};
+use hhas_coeffects::HhasCoeffects;
 use hhas_constant_rust::{self as hhas_constant, HhasConstant};
 use hhas_method_rust::{HhasMethod, HhasMethodFlags};
 use hhas_param_rust::HhasParam;
@@ -25,7 +26,7 @@ use hhas_pos_rust::Span;
 use hhas_property_rust::HhasProperty;
 use hhas_type_const::HhasTypeConstant;
 use hhas_xhp_attribute_rust::HhasXhpAttribute;
-use hhbc_ast_rust::{FcallArgs, FcallFlags, SpecialClsRef};
+use hhbc_ast_rust::{FatalOp, FcallArgs, FcallFlags, SpecialClsRef};
 use hhbc_id_rust::r#const;
 use hhbc_id_rust::{self as hhbc_id, class, method, prop, Id};
 use hhbc_string_utils_rust as string_utils;
@@ -39,7 +40,6 @@ use oxidized::{
     pos::Pos,
 };
 use runtime::TypedValue;
-use rx_rust as rx;
 
 use std::collections::BTreeMap;
 
@@ -81,7 +81,7 @@ fn make_86method<'a>(
     flags.set(HhasMethodFlags::IS_STATIC, is_static);
 
     let attributes = vec![];
-    let rx_level = rx::Level::NonRx;
+    let coeffects = HhasCoeffects::default();
 
     let method_decl_vars = vec![];
     let method_return_type = None;
@@ -110,7 +110,7 @@ fn make_86method<'a>(
         name,
         flags,
         span,
-        rx_level,
+        coeffects,
         visibility,
     })
 }
@@ -416,7 +416,8 @@ fn emit_reified_init_method<'a>(
             default_value: None,
         }];
 
-        let instrs = emit_reified_init_body(emitter, env, num_reified, ast_class)?;
+        let body_instrs = emit_reified_init_body(emitter, env, num_reified, ast_class)?;
+        let instrs = emit_pos::emit_pos_then(&ast_class.span, body_instrs);
         Ok(Some(make_86method(
             emitter,
             string_utils::reified::INIT_METH_NAME.into(),
@@ -670,54 +671,47 @@ pub fn emit_class<'a>(emitter: &mut Emitter, ast_class: &'a tast::Class_) -> Res
     } else {
         fn make_cinit_instrs(
             e: &mut Emitter,
-            return_label: label::Label,
+            default_label: label::Label,
             pos: &Pos,
             consts: &[(&r#const::Type, label::Label, &InstrSeq)],
         ) -> InstrSeq {
             match consts {
                 [] => InstrSeq::gather(vec![
-                    instr::label(return_label),
+                    instr::label(default_label),
                     emit_pos::emit_pos(pos),
-                    instr::retc(),
-                ]),
-                [(_, label, instrs)] => InstrSeq::gather(vec![
-                    instr::label(label.clone()),
-                    (*instrs).clone(),
-                    make_cinit_instrs(e, return_label, pos, &[]),
+                    instr::string("Could not find initializer for "),
+                    instr::cgetl(local::Type::Named("$constName".into())),
+                    instr::string(" in 86cinit"),
+                    instr::concatn(3),
+                    instr::fatal(FatalOp::Runtime),
                 ]),
                 [(_, label, instrs), cs @ ..] => InstrSeq::gather(vec![
                     instr::label(label.clone()),
                     (*instrs).clone(),
                     emit_pos::emit_pos(pos),
-                    instr::jmp(return_label.clone()),
-                    make_cinit_instrs(e, return_label, pos, cs),
+                    instr::retc(),
+                    make_cinit_instrs(e, default_label, pos, cs),
                 ]),
             }
         }
-        let return_label = emitter.label_gen_mut().next_regular();
+        let default_label = emitter.label_gen_mut().next_regular();
 
-        let body_instrs = if initialized_constants.len() > 1 {
-            let cases: Vec<(String, label::Label)> = initialized_constants
+        let body_instrs = {
+            let mut cases: Vec<(String, label::Label)> = initialized_constants
                 .iter()
                 .map(|(c, l, _)| ((*c).to_raw_string().into(), l.clone()))
                 .collect();
+            cases.push(("default".to_string(), default_label.clone()));
             InstrSeq::gather(vec![
                 instr::cgetl(local::Type::Named("$constName".into())),
                 instr::sswitch(cases),
                 make_cinit_instrs(
                     emitter,
-                    return_label,
+                    default_label,
                     &ast_class.span,
                     &initialized_constants[..],
                 ),
             ])
-        } else {
-            make_cinit_instrs(
-                emitter,
-                return_label,
-                &ast_class.span,
-                &initialized_constants[..],
-            )
         };
         let instrs = emit_pos::emit_pos_then(&ast_class.span, body_instrs);
         let params = vec![HhasParam {

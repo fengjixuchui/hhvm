@@ -78,8 +78,6 @@ type t = {
   po_disable_nontoplevel_declarations: bool;
   (* Flag to disable PHP's static closures *)
   po_disable_static_closures: bool;
-  (* Flag to enable PHP's `goto` operator *)
-  po_allow_goto: bool;
   (* Allows enabling unstable features via the __EnableUnstableFeatures attribute *)
   po_allow_unstable_features: bool;
   (* Print types of size bigger than 1000 after performing a type union. *)
@@ -163,6 +161,9 @@ type t = {
   tco_coeffects: bool;
   (* Enables checking of coeffects for local operations (not calls) *)
   tco_coeffects_local: bool;
+  (* Internal (for tests-only): whether any type can appear in a context list
+   * or only types defined in the appropriate Context namespace *)
+  tco_strict_contexts: bool;
   (* Enables like casts *)
   tco_like_casts: bool;
   (* A simpler form of pessimization, only wraps the outermost type in like
@@ -288,9 +289,10 @@ type t = {
   po_disallow_fun_and_cls_meth_pseudo_funcs: bool;
   (* Enable use of the direct decl parser for parsing type signatures. *)
   tco_use_direct_decl_parser: bool;
-  (* Enable ifc *)
-  tco_ifc_enabled: bool;
-  po_enable_coeffects: bool;
+  (* Enable ifc on the specified list of path prefixes
+    (a list containing the empty string would denote all files,
+    an empty list denotes no files) *)
+  tco_ifc_enabled: string list; (* Enables the enum class extension *)
 }
 [@@deriving eq, show]
 
@@ -299,7 +301,6 @@ val make :
   ?po_disallow_toplevel_requires:bool ->
   ?po_disable_nontoplevel_declarations:bool ->
   ?po_disable_static_closures:bool ->
-  ?po_allow_goto:bool ->
   ?tco_log_inference_constraints:bool ->
   ?tco_experimental_features:SSet.t ->
   ?tco_migration_flags:SSet.t ->
@@ -346,6 +347,7 @@ val make :
   ?tco_union_intersection_type_hints:bool ->
   ?tco_coeffects:bool ->
   ?tco_coeffects_local:bool ->
+  ?tco_strict_contexts:bool ->
   ?tco_like_casts:bool ->
   ?tco_simple_pessimize:float ->
   ?tco_complex_coercion:bool ->
@@ -403,8 +405,7 @@ val make :
   ?po_disallow_hash_comments:bool ->
   ?po_disallow_fun_and_cls_meth_pseudo_funcs:bool ->
   ?tco_use_direct_decl_parser:bool ->
-  ?tco_ifc_enabled:bool ->
-  ?po_enable_coeffects:bool ->
+  ?tco_ifc_enabled:string list ->
   unit ->
   t
 
@@ -457,8 +458,6 @@ val po_disallow_toplevel_requires : t -> bool
 val po_disable_nontoplevel_declarations : t -> bool
 
 val po_disable_static_closures : t -> bool
-
-val po_allow_goto : t -> bool
 
 val po_codegen : t -> bool
 
@@ -534,7 +533,9 @@ val tco_call_coeffects : t -> bool
 
 val tco_local_coeffects : t -> bool
 
-val ifc_enabled : t -> bool
+val tco_strict_contexts : t -> bool
+
+val ifc_enabled : t -> string list
 
 val enable_ifc : t -> t
 
@@ -629,8 +630,6 @@ val po_disable_xhp_element_mangling : t -> bool
 val po_disable_xhp_children_declarations : t -> bool
 
 val po_enable_enum_classes : t -> bool
-
-val po_enable_coeffects : t -> bool
 
 val po_disable_modes : t -> bool
 

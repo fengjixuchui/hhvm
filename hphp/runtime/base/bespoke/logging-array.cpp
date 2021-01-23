@@ -19,6 +19,7 @@
 
 #include "hphp/runtime/base/array-data-defs.h"
 #include "hphp/runtime/base/bespoke-array.h"
+#include "hphp/runtime/base/bespoke/escalation-logging.h"
 #include "hphp/runtime/base/bespoke/logging-profile.h"
 #include "hphp/runtime/base/memory-manager.h"
 #include "hphp/runtime/base/memory-manager-defs.h"
@@ -122,7 +123,7 @@ ArrayData* maybeMakeLoggingArray(ArrayData* ad, LoggingProfile* profile) {
     return ad;
   }
 
-  if (!arrayTypeMaybeBespoke(ad->toDataType())) {
+  if (!arrayTypeCouldBeBespoke(ad->toDataType())) {
     FTRACE(5, "Skipping logging for ineligible array type.\n");
     return ad;
   }
@@ -179,8 +180,8 @@ void LoggingArray::InitializeLayouts() {
   auto const index = Layout::ReserveIndices(1);
   always_assert(index == kLayoutIndex);
   static auto const s_vtable = fromArray<LoggingArray>();
-  new ConcreteLayout(index, "LoggingLayout", &s_vtable,
-                     {AbstractLayout::GetBespokeTopIndex()});
+  new ConcreteLayout(index, "LoggingLayout",
+                     {AbstractLayout::GetBespokeTopIndex()}, &s_vtable);
 }
 
 bespoke::LayoutIndex LoggingArray::GetLayoutIndex() {
@@ -267,6 +268,7 @@ void LoggingArray::Scan(const LoggingArray* lad, type_scan::Scanner& scanner) {
 ArrayData* LoggingArray::EscalateToVanilla(
     const LoggingArray* lad, const char* reason) {
   logEvent(lad, ArrayOp::EscalateToVanilla, makeStaticString(reason));
+  logEscalateToVanilla(lad, reason);
   auto const wrapped = lad->wrapped;
   wrapped->incRefCount();
   return wrapped;

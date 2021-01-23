@@ -143,20 +143,18 @@ inline void calleeDynamicCallChecks(const Func* func, bool dynamicCall,
 }
 
 /*
- * Check if a call from `caller` to `callee` satisfies reactivity constraints.
+ * Check if the `callee` satisfies the coeffect constraints on the call flags.
  * Returns true if yes, otherwise raise a warning and return false or raise
  * an exception.
  */
-inline bool callerRxChecks(const ActRec* caller, const Func* callee) {
-  if (RuntimeOption::EvalPureEnforceCalls <= 0) return true;
-  // Conditional reactivity is not tracked yet, so assume the caller has minimum
-  // and the callee has maximum possible level of reactivity.
-  auto const callerLevel = caller->rxMinLevel();
-  if (!rxEnforceCallsInLevel(callerLevel)) return true;
-
-  auto const minReqCalleeLevel = rxRequiredCalleeLevel(callerLevel);
-  if (LIKELY(callee->rxLevel() >= minReqCalleeLevel)) return true;
-  raiseRxCallViolation(caller, callee);
+inline bool calleeCoeffectChecks(const Func* callee, const CallFlags flags) {
+  if (!CoeffectsConfig::enabled()) return true;
+  auto const providedCoeffects = flags.coeffects();
+  // Coeffect rules are not tracked yet, so assume the callee has a more
+  // permissive context than it would otherwise have with coeffect rules
+  auto const requiredCoeffects = callee->staticCoeffects().toRequired();
+  if (LIKELY(providedCoeffects.canCall(requiredCoeffects))) return true;
+  raiseCoeffectsCallViolation(vmfp(), callee, flags);
   return false;
 }
 

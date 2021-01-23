@@ -79,7 +79,7 @@ let rec is_byval_collection_or_string_or_any_type env ty =
   in
 
   let (_, tl) = Tast_env.get_concrete_supertypes env ty in
-  List.for_all tl ~f:check
+  List.exists tl ~f:check
 
 let rec is_valid_mutable_subscript_expression_target env v =
   match v with
@@ -142,8 +142,9 @@ let check_non_rx =
 
     method! on_expr env expr =
       match snd expr with
-      | Id (p, n) when SN.Rx.is_enabled n ->
-        Errors.rx_enabled_in_non_rx_context p
+      | Id (p, n) when String.equal SN.Rx.is_enabled n ->
+        if not @@ TypecheckerOptions.local_coeffects (Env.get_tcopt env) then
+          Errors.CoeffectEnforcedOp.rx_enabled_in_non_rx_context p
       | _ -> super#on_expr env expr
   end
 
@@ -462,7 +463,6 @@ type ctx = {
   allow_awaitable: bool;
   disallow_this: bool;
   is_expr_statement: bool;
-  is_locallable_pass: bool;
   allow_mutable_locals: bool;
 }
 
@@ -472,12 +472,8 @@ let new_ctx reactivity =
     allow_awaitable = false;
     disallow_this = false;
     is_expr_statement = false;
-    is_locallable_pass = false;
     allow_mutable_locals = true;
   }
-
-let new_ctx_for_is_locallable_pass reactivity =
-  { (new_ctx reactivity) with is_locallable_pass = true }
 
 let allow_awaitable ctx =
   if ctx.allow_awaitable then
@@ -569,12 +565,14 @@ let check =
       else
         match b.fb_ast with
         | [(_, If (((p, _), Id (_, c)), then_stmt, else_stmt))]
-          when SN.Rx.is_enabled c ->
+          when String.equal SN.Rx.is_enabled c ->
           (match ctx.reactivity with
           | Pure _
           | MaybeReactive (Pure _)
           | RxVar (Some (Pure _)) ->
-            Errors.rx_enabled_in_non_rx_context p;
+            if not @@ TypecheckerOptions.local_coeffects (Env.get_tcopt env)
+            then
+              Errors.CoeffectEnforcedOp.rx_enabled_in_non_rx_context p;
             List.iter b.fb_ast (self#on_stmt (env, ctx))
           | _ ->
             List.iter then_stmt (self#on_stmt (env, ctx));
@@ -601,7 +599,9 @@ let check =
           match (get_node ty, expr) with
           | (Tclass ((_, cls), _, _), (_, (Call _ | Pipe _)))
             when String.equal cls SN.Classes.cAwaitable ->
-            Errors.non_awaited_awaitable_in_rx (get_position expr)
+            if not (TypecheckerOptions.local_coeffects (Env.get_tcopt env)) then
+              Errors.CoeffectEnforcedOp.non_awaited_awaitable_in_rx
+                (get_position expr)
           | _ -> () );
         let ctx =
           if ctx.allow_mutable_locals then
@@ -700,15 +700,7 @@ let check =
               in
               let env = Tast_env.restore_fun_env env f in
               let (env, ctx) =
-                if ctx.is_locallable_pass then
-                  match
-                    get_reactivity_from_user_attributes f.f_user_attributes
-                  with
-                  | Some rx ->
-                    (Env.set_env_reactive env rx, set_reactivity ctx rx)
-                  | None -> (env, ctx)
-                else
-                  (env, set_reactivity ctx (Env.env_reactivity env))
+                (env, set_reactivity ctx (Env.env_reactivity env))
               in
               self#handle_body env ctx f.f_body
             | ( _,

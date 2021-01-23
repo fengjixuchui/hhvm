@@ -28,37 +28,102 @@ module ShapeMap = Nast.ShapeMap
 module ShapeSet = Ast_defs.ShapeSet
 module Nast = Aast
 
+(* We maintain a "visited" set for subtype goals. We do this only
+ * for goals of the form T <: t or t <: T where T is a generic parameter,
+ * as this is the more common case.
+ * T83096774: work out how to do this *efficiently* for all subtype goals.
+ *
+ * Here's a non-trivial example (assuming a contravariant type Contra).
+ * Under assumption T <: Contra<Contra<T>> show T <: Contra<T>.
+ * This leads to cycle of implications
+ *    T <: Contra<T> =>
+ *    Contra<Contra<T>> <: Contra<T> =>
+ *    T <: Contra<T>
+ * at which point we are back at the original goal.
+ *
+ * Note that it's not enough to just keep a set of visited generic parameters,
+ * else we would reject good code e.g. consider
+ *   class C extends B implements Contra<B>
+ * Now under assumption T <: C show T <: Contra<T>
+ * This leads to cycle of implications
+ *   T <: Contra<T> =>
+ *   C <: Contra<T> =>
+ *   Contra<B> <: Contra<T> =>
+ *   T <: B =>     // DO NOT REJECT here just because we've visited T before!
+ *   C <: B => done.
+ *
+ * We represent the visited set as a map from generic parameters
+ * to pairs of sets of types, such that an entry T := ({t1,...,tm},{u1,...,un})
+ * represents a set of goals
+ *   T <: u1, ..., t <: un , t1 <: T, ..., tn <: T
+ *)
+module VisitedGoals = struct
+  type t = (ITySet.t * ITySet.t) SMap.t
+
+  let empty : t = SMap.empty
+
+  (* Return None if (name <: ty) is already present, otherwise return Some v'
+   * where v' has the pair added
+   *)
+  let try_add_visited_generic_sub v name ty =
+    match SMap.find_opt name v with
+    | None -> Some (SMap.add name (ITySet.empty, ITySet.singleton ty) v)
+    | Some (lower, upper) ->
+      if ITySet.mem ty upper then
+        None
+      else
+        Some (SMap.add name (lower, ITySet.add ty upper) v)
+
+  (* Return None if (ty <: name) is already present, otherwise return Some v'
+   * where v' has the pair added
+   *)
+  let try_add_visited_generic_super v ty name =
+    match SMap.find_opt name v with
+    | None -> Some (SMap.add name (ITySet.singleton ty, ITySet.empty) v)
+    | Some (lower, upper) ->
+      if ITySet.mem ty lower then
+        None
+      else
+        Some (SMap.add name (ITySet.add ty lower, upper) v)
+end
+
 type subtype_env = {
-  seen_generic_params: SSet.t option;
+  (* If set, finish as soon as we see a goal of the form T <: t or t <: T for generic parameter T *)
+  ignore_generic_params: bool;
+  (* If above is not set, maintain a visited goal set *)
+  visited: VisitedGoals.t;
   no_top_bottom: bool;
-  treat_dynamic_as_bottom: bool;
-  (* Used with global flag --enable-sound-dynamic-type, allow_subtype_of_dynamic
-     controls whether types that implement dynamic can be subtypes of dynamic *)
-  allow_subtype_of_dynamic: bool;
+  (* Coerce indicates whether subtyping should allow
+   * coercion to or from dynamic. For coercion to dynamic, types that implement
+   * dynamic are considered sub-types of dynamic. For coercion from dynamic,
+   * dynamic is treated as a sub-type of all types.
+   *)
+  coerce: TL.coercion_direction option;
   on_error: Errors.typing_error_callback;
 }
 
-let empty_seen = Some SSet.empty
+let coercing_from_dynamic se =
+  match se.coerce with
+  | Some TL.CoerceFromDynamic -> true
+  | _ -> false
+
+let coercing_to_dynamic se =
+  match se.coerce with
+  | Some TL.CoerceToDynamic -> true
+  | _ -> false
 
 let make_subtype_env
-    ?(seen_generic_params = empty_seen)
+    ?(ignore_generic_params = false)
     ?(no_top_bottom = false)
-    ?(treat_dynamic_as_bottom = false)
-    ?(allow_subtype_of_dynamic = false)
+    ?(coerce = None)
     on_error =
   {
-    seen_generic_params;
+    ignore_generic_params;
+    visited = VisitedGoals.empty;
     no_top_bottom;
-    treat_dynamic_as_bottom;
-    allow_subtype_of_dynamic;
+    coerce;
     on_error;
   }
-
-let add_seen_generic subtype_env name =
-  match subtype_env.seen_generic_params with
-  | Some seen ->
-    { subtype_env with seen_generic_params = Some (SSet.add name seen) }
-  | None -> subtype_env
 
 type reactivity_extra_info = {
   method_info: (* method_name *) (string * (* is_static *) bool) option;
@@ -419,15 +484,21 @@ and default_subtype
         | (_, Tgeneric (name_sub, tyargs)) ->
           (* TODO(T69551141) handle type arguments. right now, just passin tyargs to
              Env.get_upper_bounds *)
-          (match subtype_env.seen_generic_params with
-          | None -> default env
-          | Some seen ->
+          ( if subtype_env.ignore_generic_params then
+            default env
+          else
             (* If we've seen this type parameter before then we must have gone
              * round a cycle so we fail
              *)
-            if SSet.mem name_sub seen then
-              invalid ~fail env
-            else
+            match
+              VisitedGoals.try_add_visited_generic_sub
+                subtype_env.visited
+                name_sub
+                ty_super
+            with
+            | None -> invalid ~fail env
+            | Some new_visited ->
+              let subtype_env = { subtype_env with visited = new_visited } in
               (* If the generic is actually an expression dependent type,
                 we need to update this_ty
               *)
@@ -440,7 +511,6 @@ and default_subtype
                 else
                   this_ty
               in
-              let subtype_env = add_seen_generic subtype_env name_sub in
               (* Otherwise, we collect all the upper bounds ("as" constraints) on
                 the generic parameter, and check each of these in turn against
                 ty_super until one of them succeeds
@@ -479,10 +549,10 @@ and default_subtype
               env
               |> try_bounds
                    (Typing_set.elements
-                      (Env.get_upper_bounds env name_sub tyargs)))
+                      (Env.get_upper_bounds env name_sub tyargs)) )
           |> (* Turn error into a generic error about the type parameter *)
           if_unsat (invalid ~fail)
-        | (_, Tdynamic) when subtype_env.treat_dynamic_as_bottom -> valid env
+        | (_, Tdynamic) when coercing_from_dynamic subtype_env -> valid env
         | (_, Taccess _) -> invalid ~fail env
         | _ -> invalid ~fail env
       end
@@ -497,8 +567,12 @@ and default_subtype
     | LoclType lty_sub ->
       begin
         match deref lty_sub with
-        | (_, Tvar _) when subtype_env.treat_dynamic_as_bottom ->
-          (env, TL.Coerce (lty_sub, lty_super))
+        | (_, Tvar _) ->
+          begin
+            match subtype_env.coerce with
+            | Some cd -> (env, TL.Coerce (cd, lty_sub, lty_super))
+            | None -> default_subtype_inner env ty_sub ty_super
+          end
         | (_, Tnewtype (_, _, ty)) ->
           simplify_subtype ~subtype_env ~this_ty ty lty_super env
         | (_, Tdependent (_, ty)) ->
@@ -536,7 +610,7 @@ and default_subtype
  *   C <: J              ==>  Unsat _
  * (Assuming we have T <: D in tpenv, and class D implements I)
  *   vec<T> <: vec<I>    ==>  True
- * This last one would be left as T <: I if seen_generic_params is None
+ * This last one would be left as T <: I if subtype_env.ignore_generic_params=true
  *)
 and simplify_subtype_i
     ~(subtype_env : subtype_env)
@@ -857,7 +931,7 @@ and simplify_subtype_i
       | LoclType ty_sub ->
         (match deref ty_sub with
         | (_, (Tunion _ | Terr)) -> default_subtype env
-        | (_, Tdynamic) when subtype_env.treat_dynamic_as_bottom ->
+        | (_, Tdynamic) when coercing_from_dynamic subtype_env ->
           default_subtype env
         (* We want to treat nullable as a union with the same rule as above.
          * This is only needed for Tvar on right; other cases are dealt with specially as
@@ -877,9 +951,12 @@ and simplify_subtype_i
             |> simplify_subtype ~subtype_env ~this_ty t ty_super
             &&& simplify_subtype ~subtype_env ~this_ty ty_null ty_super)
         | (_, Tvar var_sub) when Ident.equal var_sub var_super -> valid env
-        | _ when subtype_env.treat_dynamic_as_bottom ->
-          (env, TL.Coerce (ty_sub, ty_super))
-        | _ -> default env))
+        | _ ->
+          begin
+            match subtype_env.coerce with
+            | Some cd -> (env, TL.Coerce (cd, ty_sub, ty_super))
+            | None -> default env
+          end))
     | (_, Tintersection tyl) ->
       (match ety_sub with
       | ConstraintType cty when is_constraint_type_union cty ->
@@ -935,7 +1012,7 @@ and simplify_subtype_i
       | LoclType lty_sub ->
         (match deref lty_sub with
         | (_, (Tunion _ | Terr | Tvar _)) -> default_subtype env
-        | (_, Tgeneric _) when Option.is_none subtype_env.seen_generic_params ->
+        | (_, Tgeneric _) when subtype_env.ignore_generic_params ->
           default_subtype env
         (* Num is not atomic: it is equivalent to int|float. The rule below relies
          * on ty_sub not being a union e.g. consider num <: arraykey | float, so
@@ -1033,8 +1110,7 @@ and simplify_subtype_i
           (* We do not want to decompose Toption for these cases *)
           | ((_, (Tvar _ | Tunion _ | Tintersection _)), _) ->
             default_subtype env
-          | ((_, Tgeneric _), _)
-            when Option.is_none subtype_env.seen_generic_params ->
+          | ((_, Tgeneric _), _) when subtype_env.ignore_generic_params ->
             (* TODO(T69551141) handle type arguments ? *)
             default_subtype env
           (* If t1 <: ?t2 and t1 is an abstract type constrained as t1',
@@ -1106,7 +1182,6 @@ and simplify_subtype_i
                 substs =
                   TUtils.make_locl_subst_for_class_tparams class_ty tyl_super;
                 this_ty = Option.value this_ty ~default:ty_super;
-                from_class = None;
                 on_error = subtype_env.on_error;
                 quiet = true;
               }
@@ -1164,16 +1239,21 @@ and simplify_subtype_i
         | Terr ->
           default_subtype env
         | _ ->
-          (match subtype_env.seen_generic_params with
-          | None -> default env
-          | Some seen ->
+          if subtype_env.ignore_generic_params then
+            default env
+          else (
             (* If we've seen this type parameter before then we must have gone
              * round a cycle so we fail
              *)
-            if SSet.mem name_super seen then
-              invalid_env env
-            else
-              let subtype_env = add_seen_generic subtype_env name_super in
+            match
+              VisitedGoals.try_add_visited_generic_super
+                subtype_env.visited
+                ety_sub
+                name_super
+            with
+            | None -> invalid_env env
+            | Some new_visited ->
+              let subtype_env = { subtype_env with visited = new_visited } in
               (* Collect all the lower bounds ("super" constraints) on the
                * generic parameter, and check ty_sub against each of them in turn
                * until one of them succeeds *)
@@ -1190,7 +1270,8 @@ and simplify_subtype_i
               |> try_bounds
                    (Typing_set.elements
                       (Env.get_lower_bounds env name_super tyargs_super))
-              |> if_unsat invalid_env)))
+              |> if_unsat invalid_env
+          )))
     | (_, Tnonnull) ->
       (match ety_sub with
       | ConstraintType cty ->
@@ -1212,7 +1293,7 @@ and simplify_subtype_i
         | _ -> default_subtype env))
     | (_, Tdynamic)
       when TypecheckerOptions.enable_sound_dynamic env.genv.tcopt
-           && subtype_env.allow_subtype_of_dynamic ->
+           && coercing_to_dynamic subtype_env ->
       (match ety_sub with
       | ConstraintType _cty ->
         (* TODO *)
@@ -1242,11 +1323,15 @@ and simplify_subtype_i
         | (_, Tintersection _)
         | (_, Tgeneric _) ->
           default_subtype env
-        | (_, Toption ty)
         | (_, Tdarray (_, ty))
         | (_, Tvarray ty)
         | (_, Tvarray_or_darray (_, ty)) ->
           simplify_subtype ~subtype_env ty ty_super env
+        | (_, Toption ty) ->
+          (match deref ty with
+          (* Special case mixed <: dynamic for better error message *)
+          | (_, Tnonnull) -> invalid_env env
+          | _ -> simplify_subtype ~subtype_env ty ty_super env)
         | (_, Ttuple tyl) ->
           List.fold_left
             ~init:(env, TL.valid)
@@ -1266,11 +1351,23 @@ and simplify_subtype_i
             (* This should have been caught already in the naming phase *)
             valid env
           | Some class_sub ->
+            let class_name = Cls.name class_sub in
             if Cls.get_implements_dynamic class_sub then
               valid env
-            else if String.equal (Cls.name class_sub) SN.Collections.cVec then
+            else if String.equal class_name SN.Collections.cKeyset then
+              (* No need to check the argument since it's an arraykey *)
+              valid env
+            else if String.equal class_name SN.Collections.cVec then
               match tyargs with
               | [tyarg] -> simplify_subtype ~subtype_env tyarg ty_super env
+              | _ ->
+                (* This ill-formed type should have been caught earlier *)
+                valid env
+            else if String.equal class_name SN.Collections.cDict then
+              match tyargs with
+              | [_tykey; tyval] ->
+                (* No need to check the key argument since it's an arraykey *)
+                simplify_subtype ~subtype_env tyval ty_super env
               | _ ->
                 (* This ill-formed type should have been caught earlier *)
                 valid env
@@ -1581,7 +1678,6 @@ and simplify_subtype_i
                     TUtils.make_locl_subst_for_class_tparams class_sub tyl_sub;
                   (* TODO: do we need this? *)
                   this_ty = Option.value this_ty ~default:ty_sub;
-                  from_class = None;
                   quiet = true;
                   on_error = subtype_env.on_error;
                 }
@@ -1995,14 +2091,15 @@ and simplify_subtype_has_member
             Typing_object_get.obj_get
               ~obj_pos:(Reason.to_pos r)
               ~is_method
+              ~inst_meth:false
               ~coerce_from_ty:None
               ~nullsafe
               ~explicit_targs
+              ~class_id
+              ~member_id:name
+              ~on_error:subtype_env.on_error
               env
-              ty_sub
-              class_id
-              name
-              subtype_env.on_error)
+              ty_sub)
       in
       let prop =
         if Errors.is_empty errors then
@@ -2020,7 +2117,7 @@ and simplify_subtype_variance
     (super_tyl : locl_ty list) : env -> env * TL.subtype_prop =
  fun env ->
   let simplify_subtype reify_kind =
-    (* When doing coercions we treat dynamic as a bottom type. This is generally
+    (* When doing coercions from dynamic we treat dynamic as a bottom type. This is generally
       correct, except for the case when the generic isn't erased. When a generic is
       reified it is enforced as if it is it's own separate class in the runtime. i.e.
       In the code:
@@ -2040,8 +2137,11 @@ and simplify_subtype_variance
 
      *)
     let subtype_env =
-      if not Aast.(equal_reify_kind reify_kind Erased) then
-        { subtype_env with treat_dynamic_as_bottom = false }
+      if
+        (not Aast.(equal_reify_kind reify_kind Erased))
+        && coercing_from_dynamic subtype_env
+      then
+        { subtype_env with coerce = None }
       else
         subtype_env
     in
@@ -3021,17 +3121,9 @@ and sub_type_i
     old_env
 
 and sub_type
-    env
-    ?(allow_subtype_of_dynamic = false)
-    (ty_sub : locl_ty)
-    (ty_super : locl_ty)
-    on_error =
+    env ?(coerce = None) (ty_sub : locl_ty) (ty_super : locl_ty) on_error =
   sub_type_i
-    ~subtype_env:
-      (make_subtype_env
-         ~allow_subtype_of_dynamic
-         ~treat_dynamic_as_bottom:false
-         on_error)
+    ~subtype_env:(make_subtype_env ~coerce on_error)
     env
     (LoclType ty_sub)
     (LoclType ty_super)
@@ -3040,8 +3132,7 @@ and sub_type
  * so if we already have tyl <: var, then check that for each ty_sub
  * in tyl we have ty_sub <: ty.
  *)
-and add_tyvar_upper_bound_and_close
-    ~treat_dynamic_as_bottom (env, prop) var ty on_error =
+and add_tyvar_upper_bound_and_close ~coerce (env, prop) var ty on_error =
   let upper_bounds_before = Env.get_tyvar_upper_bounds env var in
   let env =
     Env.add_tyvar_upper_bound_and_update_variances
@@ -3068,8 +3159,7 @@ and add_tyvar_upper_bound_and_close
           (fun lower_bound (env, prop1) ->
             let (env, prop2) =
               simplify_subtype_i
-                ~subtype_env:
-                  (make_subtype_env ~treat_dynamic_as_bottom on_error)
+                ~subtype_env:(make_subtype_env ~coerce on_error)
                 lower_bound
                 upper_bound
                 env
@@ -3086,8 +3176,7 @@ and add_tyvar_upper_bound_and_close
  * (so if var <: ty1,...,tyn then assert ty <: tyi for each tyi), using
  * simplify_subtype to produce a subtype proposition.
  *)
-and add_tyvar_lower_bound_and_close
-    ~treat_dynamic_as_bottom (env, prop) var ty on_error =
+and add_tyvar_lower_bound_and_close ~coerce (env, prop) var ty on_error =
   let lower_bounds_before = Env.get_tyvar_lower_bounds env var in
   let env =
     Env.add_tyvar_lower_bound_and_update_variances
@@ -3114,8 +3203,7 @@ and add_tyvar_lower_bound_and_close
           (fun upper_bound (env, prop1) ->
             let (env, prop2) =
               simplify_subtype_i
-                ~subtype_env:
-                  (make_subtype_env ~treat_dynamic_as_bottom on_error)
+                ~subtype_env:(make_subtype_env ~coerce on_error)
                 lower_bound
                 upper_bound
                 env
@@ -3166,7 +3254,7 @@ and props_to_env env remain props on_error =
         | (Some var_sub, Some var_super) ->
           let (env, prop1) =
             add_tyvar_upper_bound_and_close
-              ~treat_dynamic_as_bottom:false
+              ~coerce:None
               (valid env)
               var_sub
               ty_super
@@ -3174,7 +3262,7 @@ and props_to_env env remain props on_error =
           in
           let (env, prop2) =
             add_tyvar_lower_bound_and_close
-              ~treat_dynamic_as_bottom:false
+              ~coerce:None
               (valid env)
               var_super
               ty_sub
@@ -3184,7 +3272,7 @@ and props_to_env env remain props on_error =
         | (Some var, _) ->
           let (env, prop) =
             add_tyvar_upper_bound_and_close
-              ~treat_dynamic_as_bottom:false
+              ~coerce:None
               (valid env)
               var
               ty_super
@@ -3194,7 +3282,7 @@ and props_to_env env remain props on_error =
         | (_, Some var) ->
           let (env, prop) =
             add_tyvar_lower_bound_and_close
-              ~treat_dynamic_as_bottom:false
+              ~coerce:None
               (valid env)
               var
               ty_sub
@@ -3203,13 +3291,14 @@ and props_to_env env remain props on_error =
           props_to_env env remain (prop :: props) on_error
         | _ -> props_to_env env (prop :: remain) props on_error
       end
-    | TL.Coerce (ty_sub, ty_super) ->
+    | TL.Coerce (cd, ty_sub, ty_super) ->
+      let coerce = Some cd in
       begin
         match (get_node ty_sub, get_node ty_super) with
         | (Tvar var_sub, Tvar var_super) ->
           let (env, prop1) =
             add_tyvar_upper_bound_and_close
-              ~treat_dynamic_as_bottom:true
+              ~coerce
               (valid env)
               var_sub
               (LoclType ty_super)
@@ -3217,7 +3306,7 @@ and props_to_env env remain props on_error =
           in
           let (env, prop2) =
             add_tyvar_lower_bound_and_close
-              ~treat_dynamic_as_bottom:true
+              ~coerce
               (valid env)
               var_super
               (LoclType ty_sub)
@@ -3227,7 +3316,7 @@ and props_to_env env remain props on_error =
         | (Tvar var, _) ->
           let (env, prop) =
             add_tyvar_upper_bound_and_close
-              ~treat_dynamic_as_bottom:true
+              ~coerce
               (valid env)
               var
               (LoclType ty_super)
@@ -3237,7 +3326,7 @@ and props_to_env env remain props on_error =
         | (_, Tvar var) ->
           let (env, prop) =
             add_tyvar_lower_bound_and_close
-              ~treat_dynamic_as_bottom:true
+              ~coerce
               (valid env)
               var
               (LoclType ty_sub)
@@ -3276,14 +3365,8 @@ and sub_type_inner
   let succeeded = process_simplify_subtype_result prop in
   (env, succeeded)
 
-and is_sub_type_alt_i
-    ~ignore_generic_params
-    ~no_top_bottom
-    ~treat_dynamic_as_bottom
-    ~allow_subtype_of_dynamic
-    env
-    ty1
-    ty2 =
+and is_sub_type_alt_i ~ignore_generic_params ~no_top_bottom ~coerce env ty1 ty2
+    =
   let (this_ty, pos) =
     match ty1 with
     | LoclType ty1 -> (Some ty1, get_pos ty1)
@@ -3292,17 +3375,11 @@ and is_sub_type_alt_i
   let (_env, prop) =
     simplify_subtype_i
       ~subtype_env:
-        {
-          seen_generic_params =
-            ( if ignore_generic_params then
-              None
-            else
-              empty_seen );
-          no_top_bottom;
-          treat_dynamic_as_bottom;
-          allow_subtype_of_dynamic;
-          on_error = Errors.unify_error_at pos;
-        }
+        (make_subtype_env
+           ~ignore_generic_params
+           ~no_top_bottom
+           ~coerce
+           (Errors.unify_error_at pos))
       ~this_ty
       (* It is weird that this can cause errors, but I am wary to discard them.
        * Using the generic unify_error to maintain current behavior. *)
@@ -3330,8 +3407,7 @@ and is_sub_type env ty1 ty2 =
   is_sub_type_alt
     ~ignore_generic_params:false
     ~no_top_bottom:false
-    ~treat_dynamic_as_bottom:false
-    ~allow_subtype_of_dynamic:false
+    ~coerce:None
     env
     ty1
     ty2
@@ -3342,33 +3418,29 @@ and is_sub_type_for_coercion env ty1 ty2 =
   is_sub_type_alt
     ~ignore_generic_params:false
     ~no_top_bottom:false
-    ~treat_dynamic_as_bottom:true
-    ~allow_subtype_of_dynamic:true
+    ~coerce:(Some TL.CoerceFromDynamic)
     env
     ty1
     ty2
   = Some true
 
-and is_sub_type_for_union env ?allow_subtype_of_dynamic:(asod = false) ty1 ty2 =
+and is_sub_type_for_union env ?(coerce = None) ty1 ty2 =
   let ( = ) = Option.equal Bool.equal in
   is_sub_type_alt
     ~ignore_generic_params:false
     ~no_top_bottom:true
-    ~treat_dynamic_as_bottom:false
-    ~allow_subtype_of_dynamic:asod
+    ~coerce
     env
     ty1
     ty2
   = Some true
 
-and is_sub_type_for_union_i env ?allow_subtype_of_dynamic:(asod = false) ty1 ty2
-    =
+and is_sub_type_for_union_i env ?(coerce = None) ty1 ty2 =
   let ( = ) = Option.equal Bool.equal in
   is_sub_type_alt_i
     ~ignore_generic_params:false
     ~no_top_bottom:true
-    ~treat_dynamic_as_bottom:false
-    ~allow_subtype_of_dynamic:asod
+    ~coerce
     env
     ty1
     ty2
@@ -3379,8 +3451,7 @@ and can_sub_type env ty1 ty2 =
   is_sub_type_alt
     ~ignore_generic_params:false
     ~no_top_bottom:true
-    ~treat_dynamic_as_bottom:false
-    ~allow_subtype_of_dynamic:false
+    ~coerce:None
     env
     ty1
     ty2
@@ -3391,8 +3462,7 @@ and is_sub_type_ignore_generic_params env ty1 ty2 =
   is_sub_type_alt
     ~ignore_generic_params:true
     ~no_top_bottom:true
-    ~treat_dynamic_as_bottom:false
-    ~allow_subtype_of_dynamic:false
+    ~coerce:None
     env
     ty1
     ty2
@@ -3403,8 +3473,7 @@ and is_sub_type_ignore_generic_params_i env ty1 ty2 =
   is_sub_type_alt_i
     ~ignore_generic_params:true
     ~no_top_bottom:true
-    ~treat_dynamic_as_bottom:false
-    ~allow_subtype_of_dynamic:false
+    ~coerce:None
     env
     ty1
     ty2
@@ -3504,7 +3573,7 @@ and try_union env ty tyl =
 
 let subtype_reactivity
     ?extra_info ?is_call_site env p_sub r_sub p_super r_super on_error =
-  let subtype_env = make_subtype_env ~treat_dynamic_as_bottom:false on_error in
+  let subtype_env = make_subtype_env ~coerce:None on_error in
   let (env, prop) =
     simplify_subtype_reactivity
       ~subtype_env
@@ -3595,7 +3664,7 @@ let rec decompose_subtype
     ty_super;
   let (env, prop) =
     simplify_subtype
-      ~subtype_env:(make_subtype_env ~seen_generic_params:None on_error)
+      ~subtype_env:(make_subtype_env ~ignore_generic_params:true on_error)
       ~this_ty:None
       ty_sub
       ty_super
@@ -3733,7 +3802,8 @@ let sub_type_with_dynamic_as_bottom
   let old_env = env in
   let (env, prop) =
     simplify_subtype
-      ~subtype_env:(make_subtype_env ~treat_dynamic_as_bottom:true on_error)
+      ~subtype_env:
+        (make_subtype_env ~coerce:(Some TL.CoerceFromDynamic) on_error)
       ~this_ty:None
       ty_sub
       ty_super
@@ -3762,11 +3832,7 @@ let simplify_subtype_i env ty_sub ty_super ~on_error =
 (*****************************************************************************)
 
 let sub_type_i env ty1 ty2 on_error =
-  sub_type_i
-    ~subtype_env:(make_subtype_env ~treat_dynamic_as_bottom:false on_error)
-    env
-    ty1
-    ty2
+  sub_type_i ~subtype_env:(make_subtype_env ~coerce:None on_error) env ty1 ty2
 
 let subtype_funs
     ~(check_return : bool)
@@ -3807,6 +3873,7 @@ let set_fun_refs () =
     sub_type_with_dynamic_as_bottom;
   Typing_utils.add_constraint_ref := add_constraint;
   Typing_utils.is_sub_type_ref := is_sub_type;
+  Typing_utils.is_sub_type_for_coercion_ref := is_sub_type_for_coercion;
   Typing_utils.is_sub_type_for_union_ref := is_sub_type_for_union;
   Typing_utils.is_sub_type_for_union_i_ref := is_sub_type_for_union_i;
   Typing_utils.is_sub_type_ignore_generic_params_ref :=

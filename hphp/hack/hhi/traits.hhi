@@ -8,8 +8,6 @@
  *
  */
 
-<<file: __EnableUnstableFeatures('coeffects_provisional')>>
-
 /**
  * This file provides type information for some of PHP's predefined interfaces
  *
@@ -123,7 +121,7 @@ trait LazyIterable<+Tv> implements Iterable<Tv> {
 
   public function filter((function(Tv)[_]: bool) $fn)[ctx $fn]: Iterable<Tv>;
 
-  public function zip<Tu>(Traversable<Tu> $traversable)[ctx $fn]: Iterable<Pair<Tv,Tu>>;
+  public function zip<Tu>(Traversable<Tu> $traversable)[]: Iterable<Pair<Tv,Tu>>;
 
   public function take(int $n): Iterable<Tv>;
 

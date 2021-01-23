@@ -111,17 +111,18 @@ struct Translator {
   explicit Translator(SrcKey sk, TransKind kind = TransKind::Invalid);
   virtual ~Translator();
 
-  virtual folly::Optional<TCA> getCached() = 0;
+  virtual folly::Optional<TranslationResult> getCached() = 0;
   virtual void resetCached() = 0;
+  virtual void setCachedForProcessFail() = 0;
   virtual void smashBackup() = 0;
 
   // Returns a TCA for already translated code if found, this can be nullptr if
   // the desired behavior is to trigger use of non jited code.  If none is
   // returned the locks for translation were successfully acquired.
-  folly::Optional<TCA> acquireLeaseAndRequisitePaperwork();
+  folly::Optional<TranslationResult> acquireLeaseAndRequisitePaperwork();
   // Check on tc sizes and make sure we are looking to translate more
   // translations of the specified type.
-  bool shouldTranslate(bool noSizeLimit = false);
+  TranslationResult::Scope shouldTranslate(bool noSizeLimit = false);
   // Generate and emit machine code into the provided view (if given) otherwise
   // the default view.
   void translate(folly::Optional<CodeCache::View> view = folly::none);
@@ -274,12 +275,12 @@ bool canTranslate();
  * Whether we should emit a translation of kind for sk, ignoring the cap on
  * overall TC size.
  */
-bool shouldTranslateNoSizeLimit(SrcKey sk, TransKind kind);
+TranslationResult::Scope shouldTranslateNoSizeLimit(SrcKey sk, TransKind kind);
 
 /*
  * Whether we should emit a translation of kind for sk.
  */
-bool shouldTranslate(SrcKey sk, TransKind kind);
+TranslationResult::Scope shouldTranslate(SrcKey sk, TransKind kind);
 
 /*
  * Whether we are still profiling new functions.
@@ -310,9 +311,11 @@ void freeProfCode();
 SrcRec* findSrcRec(SrcKey sk);
 
 /*
- * Create a SrcRec for sk with an sp offset of spOff.
+ * Create a SrcRec for sk with an sp offset of spOff. If checkLength
+ * is true, then false will be returned if there's not enough space
+ * for any stubs. Otherwise true will be returned.
  */
-void createSrcRec(SrcKey sk, FPInvOffset spOff);
+bool createSrcRec(SrcKey sk, FPInvOffset spOff, bool checkLength = false);
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -535,12 +538,16 @@ void recordJump(TCA toSmash, SrcRec* sr);
  * new address was written into the TC.
  */
 TCA bindJmp(TCA toSmash, SrcKey destSk, bool& smashed);
+TCA bindJmpToStub(TCA toSmash, TCA oldTarget, TCA stub,
+                  SrcKey destSk, bool& smashed);
 
 /*
  * Insert the address for branches to destSk at toSmash. Upon return, the value
  * of smashed indicates whether an address was written into the TC.
  */
 TCA bindAddr(TCA toSmash, SrcKey destSk, bool& smashed);
+TCA bindAddrToStub(TCA toSmash, TCA oldTarget, TCA stub,
+                   SrcKey destSk, bool& smashed);
 
 /*
  * Bind a call to start at toSmash, where start is the prologue for callee, when
@@ -549,4 +556,3 @@ TCA bindAddr(TCA toSmash, SrcKey destSk, bool& smashed);
 void bindCall(TCA toSmash, TCA start, Func* callee, int nArgs);
 
 }}}
-

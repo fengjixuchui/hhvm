@@ -29,6 +29,7 @@
 #include <memory>
 #include <sys/stat.h>
 
+#include "hphp/runtime/base/coeffects-config.h"
 #include "hphp/runtime/base/config.h"
 #include "hphp/runtime/base/typed-value.h"
 #include "hphp/runtime/base/types.h"
@@ -51,6 +52,8 @@ struct Hdf;
 struct IniSettingMap;
 
 constexpr int kDefaultInitialStaticStringTableSize = 500000;
+
+using StringToIntMap = std::unordered_map<std::string, int>;
 
 enum class JitSerdesMode {
   // NB: if changing the encoding here, make sure to update isJitSerializing()
@@ -104,7 +107,6 @@ struct RepoOptions {
   H(bool,           DisableArrayTypehint,             true)           \
   H(bool,           EnableEnumClasses,                false)          \
   H(bool,           DisallowFunAndClsMethPseudoFuncs, false)          \
-  H(bool,           EnableCoeffects,                  false)          \
   /**/
 
   /**/
@@ -135,7 +137,7 @@ struct RepoOptions {
 
 private:
   RepoOptions() = default;
-  explicit RepoOptions(const char* file);
+  explicit RepoOptions(const char* str, const char* file);
 
   void filterNamespaces();
   void initDefaults(const Hdf& hdf, const IniSettingMap& ini);
@@ -915,7 +917,6 @@ struct RuntimeOption {
   F(bool, HHIREnablePreColoring,       true)                            \
   F(bool, HHIREnableCoalescing,        true)                            \
   F(bool, HHIRAllocSIMDRegs,           true)                            \
-  F(bool, HHIRStressSpill,             false)                           \
   F(bool, JitStressTestLiveness,       false)                           \
   /* Region compiler flags */                                           \
   F(string,   JitRegionSelector,       regionSelectorDefault())         \
@@ -1093,6 +1094,7 @@ struct RuntimeOption {
    *     sample rate is 0, logging arrays are never constructed.        \
    *     Logging arrays are only created before RTA has begun. */       \
   F(int32_t, BespokeArrayLikeMode, 0)                                   \
+  F(uint64_t, BespokeEscalationSampleRate, 0)                           \
   F(uint64_t, EmitLoggingArraySampleRate, 1000)                         \
   F(string, ExportLoggingArrayDataPath, "")                             \
   /* Choice of layout selection algorithms:                             \
@@ -1247,8 +1249,11 @@ struct RuntimeOption {
    * 2 - Throw exception                                                \
    */                                                                   \
   F(int32_t, ForbidUnserializeIncompleteClass, 0)                       \
-  F(int32_t, RxEnforceCalls, 0)                                         \
-  F(int32_t, PureEnforceCalls, 0)                                       \
+  /*                                                                    \
+   * Map from coeffect name to enforcement level                        \
+   * e.g. {'pure' => 2, 'rx' => 1}                                      \
+   */                                                                   \
+  F(StringToIntMap, CoeffectEnforcementLevels, {})                      \
   /*                                                                    \
    * 0 - Nothing                                                        \
    * 1 - Warn                                                           \
@@ -1320,6 +1325,7 @@ struct RuntimeOption {
   /* More aggresively reuse already compiled units based on SHA1     */ \
   F(bool, CheckUnitSHA1, true)                                          \
   F(bool, ReuseUnitsByHash, false)                                      \
+  F(bool, StressUnitSerde, false)                                       \
   /* When dynamic_fun is called on a function not marked as
      __DynamicallyCallable:
 

@@ -204,7 +204,7 @@ where
       Self { syntax, value }
     }
 
-    fn make_enum_declaration(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self, arg4: Self, arg5: Self, arg6: Self, arg7: Self, arg8: Self, arg9: Self, arg10: Self) -> Self {
+    fn make_enum_declaration(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self, arg4: Self, arg5: Self, arg6: Self, arg7: Self, arg8: Self, arg9: Self) -> Self {
       let children = &[
           arg0.value, 
           arg1.value, 
@@ -215,8 +215,7 @@ where
           arg6.value, 
           arg7.value, 
           arg8.value, 
-          arg9.value, 
-          arg10.value
+          arg9.value
       ];
       let value = V::from_values(children.iter());
       let syntax = Self::make(
@@ -233,8 +232,27 @@ where
               arg6.syntax, 
               arg7.syntax, 
               arg8.syntax, 
-              arg9.syntax, 
-              arg10.syntax
+              arg9.syntax
+          ],
+      );
+      Self { syntax, value }
+    }
+
+    fn make_enum_use(ctx: &C, arg0: Self, arg1: Self, arg2: Self) -> Self {
+      let children = &[
+          arg0.value, 
+          arg1.value, 
+          arg2.value
+      ];
+      let value = V::from_values(children.iter());
+      let syntax = Self::make(
+          ctx,
+          SyntaxKind::EnumUse,
+          &value,
+          &[
+              arg0.syntax, 
+              arg1.syntax, 
+              arg2.syntax
           ],
       );
       Self { syntax, value }
@@ -298,16 +316,13 @@ where
       Self { syntax, value }
     }
 
-    fn make_enum_class_enumerator(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self, arg4: Self, arg5: Self, arg6: Self, arg7: Self) -> Self {
+    fn make_enum_class_enumerator(ctx: &C, arg0: Self, arg1: Self, arg2: Self, arg3: Self, arg4: Self) -> Self {
       let children = &[
           arg0.value, 
           arg1.value, 
           arg2.value, 
           arg3.value, 
-          arg4.value, 
-          arg5.value, 
-          arg6.value, 
-          arg7.value
+          arg4.value
       ];
       let value = V::from_values(children.iter());
       let syntax = Self::make(
@@ -319,10 +334,7 @@ where
               arg1.syntax, 
               arg2.syntax, 
               arg3.syntax, 
-              arg4.syntax, 
-              arg5.syntax, 
-              arg6.syntax, 
-              arg7.syntax
+              arg4.syntax
           ],
       );
       Self { syntax, value }
@@ -1700,6 +1712,26 @@ where
       let syntax = Self::make(
           ctx,
           SyntaxKind::ReturnStatement,
+          &value,
+          &[
+              arg0.syntax, 
+              arg1.syntax, 
+              arg2.syntax
+          ],
+      );
+      Self { syntax, value }
+    }
+
+    fn make_yield_break_statement(ctx: &C, arg0: Self, arg1: Self, arg2: Self) -> Self {
+      let children = &[
+          arg0.value, 
+          arg1.value, 
+          arg2.value
+      ];
+      let value = V::from_values(children.iter());
+      let syntax = Self::make(
+          ctx,
+          SyntaxKind::YieldBreakStatement,
           &value,
           &[
               arg0.syntax, 

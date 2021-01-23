@@ -263,7 +263,7 @@ namespace {
       for (auto& f : bt->frames()) {
         if (!f.func || f.func->isBuiltin()) continue;
 
-        auto const ln = f.func->unit()->getLineNumber(f.prevPc);
+        auto const ln = f.func->getLineNumber(f.prevPc);
         tvSet(
           make_tv<KindOfInt64>(ln),
           throwable->propLvalAtOffset(s_lineSlot)
@@ -344,9 +344,9 @@ void throwable_init(ObjectData* throwable) {
     // always exist, as vmfp() is a non-builtin frame pointer.
     auto const funcAndOffset = getCurrentFuncAndOffset();
     assertx(funcAndOffset.first != nullptr);
-    auto const unit = funcAndOffset.first->unit();
+    auto const func = funcAndOffset.first;
     auto const file = const_cast<StringData*>(funcAndOffset.first->filename());
-    auto const line = unit->getLineNumber(funcAndOffset.second);
+    auto const line = func->getLineNumber(funcAndOffset.second);
     tvSet(
       make_tv<KindOfString>(file),
       throwable->propLvalAtOffset(s_fileSlot)
@@ -396,7 +396,8 @@ void throwable_mark_array(const ObjectData* throwable, Array& props) {
   if (!tvIsArrayLike(base)) return;
 
   auto const incref = Variant::wrap(base);
-  auto const marked = Variant::attach(arrprov::markTvRecursively(base, true));
+  // We use a depth of 2 because backtrace arrays are varrays-of-darrays.
+  auto const marked = Variant::attach(arrprov::markTvToDepth(base, true, 2));
   props.set(name, marked);
 }
 

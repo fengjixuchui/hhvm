@@ -20,23 +20,12 @@
 #include "hphp/runtime/base/bespoke-array.h"
 #include "hphp/runtime/base/req-tiny-vector.h"
 #include "hphp/runtime/vm/hhbc.h"
+#include "hphp/runtime/vm/jit/array-layout.h"
 #include "hphp/util/type-scan.h"
 
 #include <set>
 
-namespace HPHP {
-
-namespace jit {
-
-struct SSATmp;
-struct Block;
-struct Type;
-
-namespace irgen { struct IRGS; }
-
-} // namespace jit
-
-namespace bespoke {
+namespace HPHP { namespace bespoke {
 
 void logBespokeDispatch(const ArrayData* ad, const char* fn);
 
@@ -304,6 +293,7 @@ struct Layout {
   const std::string& describe() const { return m_description; }
   std::string dumpInformation() const;
   virtual bool isConcrete() const { return false; }
+  const LayoutFunctions* vtable() const { return m_vtable; }
 
   /*
    * In order to support efficient layout type tests in the JIT, we let
@@ -329,7 +319,26 @@ struct Layout {
 
   ///////////////////////////////////////////////////////////////////////////
 
+  using ArrayLayout = jit::ArrayLayout;
   using Type = jit::Type;
+
+  /*
+   * Returns the most specific layout known for the result of appending a val
+   * of type `val` to an array with this layout.
+   */
+  virtual ArrayLayout appendType(Type val) const;
+
+  /*
+   * Returns the most specific layout known for the result of removing a key
+   * of type `key` from an array with this layout.
+   */
+  virtual ArrayLayout removeType(Type key) const;
+
+  /*
+   * Returns the most specific layout known for the result of setting a key
+   * of type `key` to a val of type `val` for an array with this layout.
+   */
+  virtual ArrayLayout setType(Type key, Type val) const;
 
   /*
    * Returns the most specific type known for the element at the given key for
@@ -361,7 +370,8 @@ struct Layout {
   MaskAndCompare maskAndCompare() const;
 
 protected:
-  Layout(LayoutIndex index, std::string description, LayoutSet parents);
+  Layout(LayoutIndex index, std::string description, LayoutSet parents,
+         const LayoutFunctions* vtable);
 
 private:
   bool checkInvariants() const;
@@ -376,25 +386,27 @@ private:
   static Initializer s_initializer;
   struct BFSWalker;
 
+  struct DescendantOrdering;
+  struct AncestorOrdering;
+
   LayoutIndex m_index;
   size_t m_topoIndex;
   std::string m_description;
-  const LayoutFunctions* m_vtable;
   LayoutSet m_parents;
   LayoutSet m_children;
   std::vector<Layout*> m_descendants;
   std::vector<Layout*> m_ancestors;
   MaskAndCompare m_maskAndCompare;
-
-  struct DescendantOrdering;
-  struct AncestorOrdering;
+protected:
+  const LayoutFunctions* m_vtable;
 };
 
 /*
  * An abstract bespoke layout, providing precious little on top of Layout.
  */
 struct AbstractLayout : public Layout {
-  AbstractLayout(LayoutIndex index, std::string description, LayoutSet parents);
+  AbstractLayout(LayoutIndex index, std::string description, LayoutSet parents,
+                 const LayoutFunctions* vtable = nullptr);
   virtual ~AbstractLayout() {}
 
   static void InitializeLayouts();
@@ -409,16 +421,12 @@ struct AbstractLayout : public Layout {
  */
 struct ConcreteLayout : public Layout {
   ConcreteLayout(LayoutIndex index, std::string description,
-                 const LayoutFunctions* vtable, LayoutSet parents);
+                 LayoutSet parents, const LayoutFunctions* vtable);
   virtual ~ConcreteLayout() {}
 
-  const LayoutFunctions* vtable() const { return m_vtable; }
   bool isConcrete() const override { return true; }
 
   static const ConcreteLayout* FromConcreteIndex(LayoutIndex index);
-
-private:
-  const LayoutFunctions* m_vtable;
 };
 
 }}

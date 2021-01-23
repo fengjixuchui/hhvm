@@ -22,6 +22,8 @@ module Profiling = struct
 
   and t = profiling ref
 
+  let empty = ref { event = ""; stages_rev = []; results = SMap.empty }
+
   let get_stage_result_map ~(stage : string) (profiling : t) : result =
     match SMap.find_opt stage !profiling.results with
     | None ->
@@ -171,9 +173,17 @@ module Results = struct
 
   let results : t ref = ref SMap.empty
 
-  let add ~event ~profiling = results := SMap.add event profiling !results
+  let get ~event =
+    match SMap.find_opt event !results with
+    | None ->
+      let profiling =
+        ref Profiling.{ event; stages_rev = []; results = SMap.empty }
+      in
+      results := SMap.add event profiling !results;
+      profiling
+    | Some profiling -> profiling
 
-  let get ~event = SMap.find event !results
+  let remove ~event = results := SMap.remove event !results
 end
 
 let sample_cgroup_mem ~(profiling : Profiling.t) ~(stage : string) : unit =
@@ -211,25 +221,27 @@ let profile_memory ~event f =
   let event =
     match event with
     | `Init init_type -> init_type
-    | `Recheck -> "recheck"
+    | `Recheck recheck_kind -> recheck_kind
   in
-  let profiling =
-    ref Profiling.{ event; stages_rev = []; results = SMap.empty }
-  in
-  let result = f profiling in
-  Results.add ~event ~profiling;
-  result
+  let profiling = Results.get ~event in
+  f profiling
 
 let print_summary_memory_table ~event =
   match event with
-  | `Recheck ->
-    let profiling_result = Results.get ~event:"recheck" in
+  | `Recheck recheck_kind ->
+    let profiling_result = Results.get ~event:recheck_kind in
+    Results.remove ~event:recheck_kind;
     Profiling.print_summary_memory_table profiling_result
   | `Init ->
     SMap.iter
       (fun event result ->
-        if not (String.equal event "recheck") then
-          Profiling.print_summary_memory_table result)
+        if
+          not
+            (String.equal event "Full_check" || String.equal event "Lazy_check")
+        then (
+          Results.remove ~event;
+          Profiling.print_summary_memory_table result
+        ))
       !Results.results
 
 let log_result_to_scuba

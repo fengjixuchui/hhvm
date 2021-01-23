@@ -99,10 +99,9 @@ let load_saved_state ~(env : env) ~(setup_result : setup_result) :
           (Printf.sprintf
              "Failed to load naming-table saved-state, and saved-state files were not manually provided on command-line: %s"
              (Saved_state_loader.debug_details_of_error load_error))
-      | Ok { Saved_state_loader.saved_state_info; changed_files; _ } ->
+      | Ok { Saved_state_loader.main_artifacts; changed_files; _ } ->
         Lwt.return
-          ( saved_state_info
-              .Saved_state_loader.Naming_table_info.naming_table_path,
+          ( main_artifacts.Saved_state_loader.Naming_table_info.naming_table_path,
             changed_files ))
   and (dep_table_path, errors_path, dep_table_changed_files) =
     match env.dep_table_path with
@@ -118,12 +117,14 @@ let load_saved_state ~(env : env) ~(setup_result : setup_result) :
       Lwt.return (dep_table_path, errors_path, [])
     | None ->
       let%lwt dep_table_saved_state =
+        (* TODO(hverr): Support 64-bit *)
         State_loader_lwt.load
           ~watchman_opts:
             Saved_state_loader.Watchman_options.
               { root = env.root; sockname = env.watchman_sockname }
           ~ignore_hh_version:env.ignore_hh_version
-          ~saved_state_type:Saved_state_loader.Naming_and_dep_table
+          ~saved_state_type:
+            (Saved_state_loader.Naming_and_dep_table { is_64bit = false })
       in
       (match dep_table_saved_state with
       | Error load_error ->
@@ -131,12 +132,11 @@ let load_saved_state ~(env : env) ~(setup_result : setup_result) :
           (Printf.sprintf
              "Failed to load dep-table saved-state, and saved-state files were not manually provided on command-line: %s"
              (Saved_state_loader.debug_details_of_error load_error))
-      | Ok { Saved_state_loader.saved_state_info; changed_files; _ } ->
+      | Ok { Saved_state_loader.main_artifacts; changed_files; _ } ->
+        let open Saved_state_loader.Naming_and_dep_table_info in
         Lwt.return
-          ( saved_state_info
-              .Saved_state_loader.Naming_and_dep_table_info.dep_table_path,
-            saved_state_info
-              .Saved_state_loader.Naming_and_dep_table_info.errors_path,
+          ( main_artifacts.dep_table_path,
+            main_artifacts.errors_path,
             changed_files ))
   in
   let changed_files =
@@ -860,21 +860,35 @@ to be produced by hh_server
   in
   let exits = Term.default_exits in
 
+  let incremental =
+    let doc =
+      "Use the provided dependency graph as a base. Build a new dependency graph"
+      ^ " by adding the edges in EDGES_DIR to this graph."
+    in
+    value
+    & opt (some string) None
+    & info ["incremental"] ~doc ~docv:"INCREMENTAL_HHDG"
+  in
+
   let edges_dir =
     let doc =
       "A directory containing the .bin files with all the edges."
       ^ " The files should just contain a sequence of pairs of big-endian"
       ^ " encoded 64-bit hashes."
     in
-    required & opt (some string) None & info ["edges-dir"] ~doc ~docv:"CURSOR"
+    required
+    & opt (some string) None
+    & info ["edges-dir"] ~doc ~docv:"EDGES_DIR"
   in
   let output =
     let doc = "Where to put the 64-bit dependency graph." in
     required & opt (some string) None & info ["output"] ~doc ~docv:"OUTPUT"
   in
-  let run edges_dir output = Lwt_main.run (mode_build ~edges_dir ~output) in
+  let run incremental edges_dir output =
+    Lwt_main.run (mode_build ~incremental ~edges_dir ~output)
+  in
   Term.
-    ( const run $ edges_dir $ output,
+    ( const run $ incremental $ edges_dir $ output,
       info "build" ~doc ~sdocs:Manpage.s_common_options ~man ~exits )
 
 let mode_dep_graph_stats = Dep_graph_stats.go
@@ -906,6 +920,42 @@ Calculate a bunch of statistics for a given 64-bit dependency graph.
     ( const run $ dep_graph,
       info "dep-graph-stats" ~doc ~sdocs:Manpage.s_common_options ~man ~exits )
 
+let mode_dep_graph_is_subgraph = Dep_graph_is_subgraph.go
+
+let dep_graph_is_subgraph_subcommand =
+  let open Cmdliner in
+  let open Cmdliner.Arg in
+  let doc = "Check whether SUB is a subgraph of SUPER" in
+  let man =
+    [
+      `S Manpage.s_description;
+      `P
+        (String.strip
+           {|
+Check whether a 64-bit dependency graph is a subgraph of an other graph.
+|});
+    ]
+  in
+  let exits = Term.default_exits in
+
+  let dep_graph_sub =
+    let doc = "Path to smallest 64-bit dependency graph." in
+    required & opt (some string) None & info ["sub"] ~doc ~docv:"SUB"
+  in
+  let dep_graph_super =
+    let doc = "Path to largest 64-bit dependency graph." in
+    required & opt (some string) None & info ["super"] ~doc ~docv:"SUPER"
+  in
+  let run sub super = Lwt_main.run (mode_dep_graph_is_subgraph ~sub ~super) in
+  Term.
+    ( const run $ dep_graph_sub $ dep_graph_super,
+      info
+        "dep-graph-is-subgraph"
+        ~doc
+        ~sdocs:Manpage.s_common_options
+        ~man
+        ~exits )
+
 let default_subcommand =
   let open Cmdliner in
   let sdocs = Manpage.s_common_options in
@@ -922,6 +972,7 @@ let () =
       calculate_errors_subcommand;
       clean_subcommand;
       debug_subcommand;
+      dep_graph_is_subgraph_subcommand;
       dep_graph_stats_subcommand;
       query_subcommand;
       query_path_subcommand;

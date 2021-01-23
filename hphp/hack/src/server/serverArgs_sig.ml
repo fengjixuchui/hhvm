@@ -46,7 +46,7 @@ module type S = sig
 
   val dynamic_view : options -> bool
 
-  val enable_ifc : options -> bool
+  val enable_ifc : options -> string list
 
   val from : options -> string
 
@@ -57,8 +57,6 @@ module type S = sig
   val saved_state_ignore_hhconfig : options -> bool
 
   val json_mode : options -> bool
-
-  val load_state_canary : options -> bool
 
   val log_inference_constraints : options -> bool
 

@@ -1685,6 +1685,12 @@ let self_in_non_final_function_pointer pos cido meth_name =
     ( "Cannot use `self::` in a function pointer in a non-final class due to class context ambiguity. "
     ^ suggestion )
 
+let invalid_wildcard_context pos =
+  add
+    (Naming.err_code Naming.InvalidWildcardContext)
+    pos
+    "A wildcard can only be used as a context when it is the sole context of a callable parameter in a higher-order function. The parameter must also be referenced with `ctx` in the higher-order function's context list, e.g. `function hof((function ()[_]: void) $f)[ctx $f]: void {}`"
+
 (*****************************************************************************)
 (* Init check errors *)
 (*****************************************************************************)
@@ -2095,6 +2101,36 @@ let switch_multiple_default pos =
     pos
     "There can be only one `default` case in `switch`"
 
+let context_definitions_msg () =
+  (* Notes:
+   * - needs to be a thunk because path_of_prefix resolves a reference that is populated at runtime
+   *   - points to the hh_server tmp hhi directory
+   * - magic numbers are inteded to provide a nicer IDE experience,
+   * - a Pos is constructed in order to make the link to contexts.hhi clickable
+   *)
+  let path =
+    Relative_path.(
+      let path =
+        Path.concat (Path.make (path_of_prefix Hhi)) "coeffect/contexts.hhi"
+      in
+      create Hhi (Path.to_string path))
+  in
+  ( Pos.make_from_lnum_bol_cnum
+      ~pos_file:path
+      ~pos_start:(28, 0, 0)
+      ~pos_end:(28, 0, 23),
+    "Hack provides a list of supported contexts here" )
+
+let illegal_context pos name =
+  add_list
+    NastCheck.(err_code IllegalContext)
+    ( pos,
+      "Illegal context: "
+      ^ (name |> Markdown_lite.md_codify)
+      ^ "\nCannot use a context defined outside namespace "
+      ^ Naming_special_names.Coeffects.contexts )
+    [context_definitions_msg ()]
+
 (*****************************************************************************)
 (* Nast terminality *)
 (*****************************************************************************)
@@ -2497,12 +2533,6 @@ let expecting_return_type_hint p =
     (Typing.err_code Typing.ExpectingReturnTypeHint)
     p
     "Was expecting a return type hint"
-
-let expecting_awaitable_return_type_hint p =
-  add
-    (Typing.err_code Typing.ExpectingAwaitableReturnTypeHint)
-    p
-    "Was expecting an `Awaitable` return type hint"
 
 let duplicate_using_var pos =
   add
@@ -3692,6 +3722,22 @@ let xhp_attribute_does_not_match_hint =
 let record_init_value_does_not_match_hint =
   maybe_unify_error Typing.RecordInitValueDoesNotMatchHint
 
+let using_error pos has_await ?code:_ msg _list =
+  let (note, cls) =
+    if has_await then
+      (" with await", Naming_special_names.Classes.cIAsyncDisposable)
+    else
+      ("", Naming_special_names.Classes.cIDisposable)
+  in
+  add_list
+    (Typing.err_code Typing.UnifyError)
+    ( pos,
+      Printf.sprintf
+        "This expression is used in a `using` clause%s so it must have type `%s`"
+        note
+        cls )
+    [msg]
+
 let elt_type_to_string = function
   | `Method -> "method"
   | `Property -> "property"
@@ -4075,6 +4121,12 @@ module CoeffectEnforcedOp = struct
       pos
       "Static property cannot be used in a reactive context."
 
+  let rx_enabled_in_non_rx_context pos =
+    add
+      (Typing.err_code Typing.RxEnabledInNonRxContext)
+      pos
+      "`\\HH\\Rx\\IS_ENABLED` can only be used in reactive functions."
+
   let nonreactive_indexing is_append pos =
     let msg =
       if is_append then
@@ -4096,6 +4148,12 @@ module CoeffectEnforcedOp = struct
       (Typing.err_code Typing.InvalidUnsetTargetInRx)
       pos
       "Non-mutable argument for `unset` is not allowed in reactive functions."
+
+  let non_awaited_awaitable_in_rx pos =
+    add
+      (Typing.err_code Typing.NonawaitedAwaitableInReactiveContext)
+      pos
+      "This value has `Awaitable` type. `Awaitable` typed values in reactive code must be immediately `await`ed."
 end
 
 (*****************************************************************************)
@@ -4664,12 +4722,6 @@ let nonreactive_call_from_shallow pos decl_pos callee_reactivity cause_pos_opt =
             );
           ]) )
 
-let rx_enabled_in_non_rx_context pos =
-  add
-    (Typing.err_code Typing.RxEnabledInNonRxContext)
-    pos
-    "`\\HH\\Rx\\IS_ENABLED` can only be used in reactive functions."
-
 let rx_parameter_condition_mismatch
     cond pos def_pos (on_error : typing_error_callback) =
   on_error
@@ -4781,12 +4833,6 @@ let returns_void_to_rx_function_as_non_expression_statement pos fpos =
       "Cannot use result of function annotated with `<<__ReturnsVoidToRx>>` in reactive context"
     )
     [(fpos, "This is function declaration.")]
-
-let non_awaited_awaitable_in_rx pos =
-  add
-    (Typing.err_code Typing.NonawaitedAwaitableInReactiveContext)
-    pos
-    "This value has `Awaitable` type. `Awaitable` typed values in reactive code must be immediately `await`ed."
 
 let shapes_key_exists_always_true pos1 name pos2 =
   add_list
@@ -5292,6 +5338,7 @@ let call_coeffect_error
         "From this declaration, the context of this function body provides "
         ^ available_incl_unsafe );
       (required_pos, "But the function being called requires " ^ required);
+      context_definitions_msg ();
     ]
 
 let op_coeffect_error
@@ -5304,6 +5351,7 @@ let op_coeffect_error
     [
       ( available_pos,
         "The local (enclosing) context provides " ^ locally_available );
+      context_definitions_msg ();
     ]
 
 let abstract_function_pointer cname meth_name call_pos decl_pos =
@@ -5402,7 +5450,7 @@ let atom_invalid_parameter pos =
       "Attribute "
       ^ Naming_special_names.UserAttributes.uaAtom
       ^ " is only allowed on "
-      ^ Naming_special_names.Classes.cEnumMember )
+      ^ Naming_special_names.Classes.cMemberOf )
     []
 
 let atom_invalid_parameter_in_enum_class pos =
@@ -5413,7 +5461,7 @@ let atom_invalid_parameter_in_enum_class pos =
       ^ Naming_special_names.UserAttributes.uaAtom
       ^ ", only type parameters bounded by enum classes and "
       ^ "enum classes are allowed as the first parameters of "
-      ^ Naming_special_names.Classes.cEnumMember )
+      ^ Naming_special_names.Classes.cMemberOf )
     []
 
 let atom_invalid_generic pos name =
@@ -5459,23 +5507,49 @@ let ifc_internal_error pos reason =
     )
 
 let parent_implements_dynamic
-    pos class_name parent_name class_implements_dynamic =
-  let class_name = strip_ns class_name in
+    pos
+    (child_name, child_kind)
+    (parent_name, parent_kind)
+    child_implements_dynamic =
+  let kind_to_strings = function
+    | Ast_defs.Cabstract
+    | Ast_defs.Cnormal ->
+      ("class ", "implement ")
+    | Ast_defs.Ctrait -> ("trait ", "implement ")
+    | Ast_defs.Cinterface -> ("interface ", "extend ")
+    | Ast_defs.Cenum -> (* cannot happen *) ("", "")
+  in
+  let kinds_to_use child_kind parent_kind =
+    match (child_kind, parent_kind) with
+    | (_, Ast_defs.Cabstract)
+    | (_, Ast_defs.Cnormal) ->
+      "extends "
+    | (_, Ast_defs.Ctrait) -> "uses "
+    | (Ast_defs.Cinterface, Ast_defs.Cinterface) -> "extends "
+    | (_, Ast_defs.Cinterface) -> "implements "
+    | (_, _) -> ""
+  in
+  let child_name = strip_ns child_name in
+  let (child_kind_s, action) = kind_to_strings child_kind in
   let parent_name = strip_ns parent_name in
+  let (parent_kind_s, _) = kind_to_strings parent_kind in
   add
     (Typing.err_code Typing.ImplementsDynamic)
     pos
-    ( "Class "
-    ^ class_name
-    ^ ( if class_implements_dynamic then
+    ( String.capitalize child_kind_s
+    ^ child_name
+    ^ ( if child_implements_dynamic then
         " cannot "
       else
         " must " )
-    ^ "implement dynamic because it extends class "
+    ^ action
+    ^ "dynamic because it "
+    ^ kinds_to_use child_kind parent_kind
+    ^ parent_kind_s
     ^ parent_name
     ^ " which does"
     ^
-    if class_implements_dynamic then
+    if child_implements_dynamic then
       " not"
     else
       "" )
@@ -5490,6 +5564,37 @@ let method_is_not_dynamically_callable pos method_name class_name =
     ^ " cannot implement dynamic because method "
     ^ method_name
     ^ " is not dynamically callable" )
+
+let immutable_local pos =
+  add
+    (Typing.err_code Typing.ImmutableLocal)
+    pos
+    (* TODO: generalize this error message in the future for arbitrary immutable locals *)
+    "This variable cannot be reassigned because it is used for a dependent context"
+
+let enum_classes_reserved_syntax pos =
+  add
+    (Typing.err_code Typing.EnumClassesReservedSyntax)
+    pos
+    ( "This syntax is reserved for the Enum Classes feature.\n"
+    ^ "Enable it with the enable_enum_classes option in .hhconfig" )
+
+let nonsense_member_selection pos kind =
+  add
+    (Typing.err_code Typing.NonsenseMemberSelection)
+    pos
+    ("Dynamic member access requires a local variable, not `" ^ kind ^ "`.")
+
+let consider_meth_caller pos class_name meth_name =
+  add
+    (Typing.err_code Typing.ConsiderMethCaller)
+    pos
+    ( "Function pointer syntax requires a static method. "
+    ^ "Use `meth_caller("
+    ^ strip_ns class_name
+    ^ "::class, '"
+    ^ meth_name
+    ^ "')` to create a function pointer to the instance method" )
 
 (*****************************************************************************)
 (* Printing *)

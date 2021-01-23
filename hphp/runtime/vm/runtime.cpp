@@ -282,22 +282,24 @@ void raiseTooManyArgumentsPrologue(const Func* func, ArrayData* unpackArgs) {
 
 //////////////////////////////////////////////////////////////////////
 
-void raiseRxCallViolation(const ActRec* caller, const Func* callee) {
-  assertx(RuntimeOption::EvalPureEnforceCalls > 0);
-  auto const callerIsPure = caller->func()->rxLevel() == RxLevel::Pure;
+void raiseCoeffectsCallViolation(const ActRec* caller, const Func* callee,
+                                 const CallFlags flags) {
+  assertx(CoeffectsConfig::enabled());
+  auto const provided = flags.coeffects();
+  auto const required = callee->staticCoeffects().toRequired();
   auto const errMsg = folly::sformat(
-    "Call to {} '{}' from {} '{}' violates {} constraints.",
-    rxLevelToString(callee->rxLevel()),
+    "Call to {}() requires [{}] coeffects but {}() provided [{}]",
     callee->fullName()->data(),
-    rxLevelToString(caller->rxMinLevel()),
+    required.toString(),
     caller->func()->fullName()->data(),
-    callerIsPure ? "purity" : "reactivity"
+    provided.toString()
   );
-  if (RuntimeOption::EvalRxEnforceCalls >= 2 ||
-      (callerIsPure && RuntimeOption::EvalPureEnforceCalls >= 2)) {
-    SystemLib::throwBadMethodCallExceptionObject(errMsg);
-  } else {
+
+  assertx(!provided.canCall(required));
+  if (provided.canCallWithWarning(required)) {
     raise_warning(errMsg);
+  } else {
+    SystemLib::throwBadMethodCallExceptionObject(errMsg);
   }
 }
 

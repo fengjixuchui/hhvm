@@ -34,7 +34,6 @@ impl Default for GlobalOptions {
             po_disallow_toplevel_requires: false,
             po_disable_nontoplevel_declarations: false,
             po_disable_static_closures: true,
-            po_allow_goto: false,
             po_allow_unstable_features: false,
             tco_log_inference_constraints: false,
             tco_disallow_array_typehint: false,
@@ -59,8 +58,9 @@ impl Default for GlobalOptions {
             profile_desc: String::new(),
             tco_like_type_hints: false,
             tco_union_intersection_type_hints: false,
-            tco_coeffects: false,
-            tco_coeffects_local: false,
+            tco_coeffects: true,
+            tco_coeffects_local: true,
+            tco_strict_contexts: true,
             tco_like_casts: false,
             tco_simple_pessimize: 0.0,
             tco_complex_coercion: false,
@@ -117,8 +117,7 @@ impl Default for GlobalOptions {
             po_disallow_hash_comments: false,
             po_disallow_fun_and_cls_meth_pseudo_funcs: false,
             tco_use_direct_decl_parser: false,
-            tco_ifc_enabled: false,
-            po_enable_coeffects: false,
+            tco_ifc_enabled: vec![],
         }
     }
 }

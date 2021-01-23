@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<b73ebbdc4ddbef51f88ff14d5d26a24a>>
+// @generated SignedSource<<bc6a8d30b35a3cddd113f9b25846c77d>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidized_by_ref/regen.sh
+//   hphp/hack/src/oxidize_regen.sh
 
 #![allow(unused_variables)]
 #![allow(unused_braces)]
@@ -924,7 +924,6 @@ impl<'a> Node<'a> for Ty_<'a> {
         match self {
             Ty_::Tthis => {}
             Ty_::Tapply(ref __binding_0) => __binding_0.accept(v),
-            Ty_::Tarray(ref __binding_0) => __binding_0.accept(v),
             Ty_::Tmixed => {}
             Ty_::Tlike(ref __binding_0) => __binding_0.accept(v),
             Ty_::Tany(ref __binding_0) => __binding_0.accept(v),

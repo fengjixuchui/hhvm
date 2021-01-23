@@ -279,8 +279,6 @@
             }
           },
           "enum_type":{"kind":"missing"},
-          "enum_includes_keyword":{"kind":"missing"},
-          "enum_includes_list":{"kind":"missing"},
           "enum_left_brace":{
             "kind":"token",
             "token":{
@@ -295,6 +293,7 @@
               "line_number":8
             }
           },
+          "enum_use_clauses":{"kind":"missing"},
           "enum_enumerators":{"kind":"missing"},
           "enum_right_brace":{
             "kind":"token",
@@ -374,59 +373,81 @@
             }
           },
           "enum_type":{"kind":"missing"},
-          "enum_includes_keyword":{
-            "kind":"token",
-            "token":{
-              "kind":"includes",
-              "text":"includes",
-              "offset":169,
-              "leading_width":0,
-              "width":8,
-              "trailing_width":1,
-              "leading":[],
-              "trailing":[{"kind":"whitespace","text":" ","offset":177,"width":1}],
-              "line_number":10
-            }
-          },
-          "enum_includes_list":{
-            "kind":"list",
-            "elements":[
-              {
-                "kind":"list_item",
-                "list_item":{
-                  "kind":"simple_type_specifier",
-                  "simple_type_specifier":{
-                    "kind":"token",
-                    "token":{
-                      "kind":"name",
-                      "text":"E",
-                      "offset":178,
-                      "leading_width":0,
-                      "width":1,
-                      "trailing_width":1,
-                      "leading":[],
-                      "trailing":[{"kind":"whitespace","text":" ","offset":179,"width":1}],
-                      "line_number":10
-                    }
-                  }
-                },
-                "list_separator":{"kind":"missing"}
-              }
-            ]
-          },
           "enum_left_brace":{
             "kind":"token",
             "token":{
               "kind":"{",
               "text":"{",
-              "offset":180,
+              "offset":169,
               "leading_width":0,
               "width":1,
-              "trailing_width":0,
+              "trailing_width":1,
               "leading":[],
-              "trailing":[],
+              "trailing":[{"kind":"end_of_line","text":"\n","offset":170,"width":1}],
               "line_number":10
             }
+          },
+          "enum_use_clauses":{
+            "kind":"list",
+            "elements":[
+              {
+                "kind":"enum_use",
+                "enum_use_keyword":{
+                  "kind":"token",
+                  "token":{
+                    "kind":"use",
+                    "text":"use",
+                    "offset":171,
+                    "leading_width":2,
+                    "width":3,
+                    "trailing_width":1,
+                    "leading":[{"kind":"whitespace","text":"  ","offset":171,"width":2}],
+                    "trailing":[{"kind":"whitespace","text":" ","offset":176,"width":1}],
+                    "line_number":11
+                  }
+                },
+                "enum_use_names":{
+                  "kind":"list",
+                  "elements":[
+                    {
+                      "kind":"list_item",
+                      "list_item":{
+                        "kind":"simple_type_specifier",
+                        "simple_type_specifier":{
+                          "kind":"token",
+                          "token":{
+                            "kind":"name",
+                            "text":"E",
+                            "offset":177,
+                            "leading_width":0,
+                            "width":1,
+                            "trailing_width":0,
+                            "leading":[],
+                            "trailing":[],
+                            "line_number":11
+                          }
+                        }
+                      },
+                      "list_separator":{"kind":"missing"}
+                    }
+                  ]
+                },
+                "enum_use_semicolon":{
+                  "kind":"token",
+                  "token":{
+                    "kind":";",
+                    "text":";",
+                    "offset":178,
+                    "leading_width":0,
+                    "width":1,
+                    "trailing_width":1,
+                    "leading":[],
+                    "trailing":[{"kind":"end_of_line","text":"\n","offset":179,"width":1}],
+                    "line_number":11
+                  }
+                }
+              }
+            ]
           },
           "enum_enumerators":{"kind":"missing"},
           "enum_right_brace":{
@@ -434,13 +455,13 @@
             "token":{
               "kind":"}",
               "text":"}",
-              "offset":181,
+              "offset":180,
               "leading_width":0,
               "width":1,
               "trailing_width":1,
               "leading":[],
-              "trailing":[{"kind":"end_of_line","text":"\n","offset":182,"width":1}],
-              "line_number":10
+              "trailing":[{"kind":"end_of_line","text":"\n","offset":181,"width":1}],
+              "line_number":12
             }
           }
         },
@@ -451,19 +472,19 @@
             "token":{
               "kind":"end_of_file",
               "text":"",
-              "offset":183,
+              "offset":182,
               "leading_width":0,
               "width":0,
               "trailing_width":0,
               "leading":[],
               "trailing":[],
-              "line_number":11
+              "line_number":13
             }
           }
         }
       ]
     }
   },
-  "program_text":"<?hh\n// Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.\n\n<<file:__EnableUnstableFeatures(\n  'enum_supertyping',\n)>>\n\nenum E : int {}\n\nenum F : int includes E {}\n",
-  "version":"2020-10-01-0000"
+  "program_text":"<?hh\n// Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.\n\n<<file:__EnableUnstableFeatures(\n  'enum_supertyping',\n)>>\n\nenum E : int {}\n\nenum F : int {\n  use E;\n}\n",
+  "version":"2021-01-14-0001"
 }

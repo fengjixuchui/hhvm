@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<1a29a7d0f3963364c803fea199fc7bf6>>
+// @generated SignedSource<<dccd40f06cbeb3bff4aa5da68d8f1805>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidized/regen.sh
+//   hphp/hack/src/oxidize_regen.sh
 
 use no_pos_hash::NoPosHash;
 use ocamlrep_derive::FromOcamlRep;
@@ -34,7 +34,6 @@ pub type ParserOptions = global_options::GlobalOptions;
     ToOcamlRep
 )]
 pub struct FfiT(
-    pub bool,
     pub bool,
     pub bool,
     pub bool,

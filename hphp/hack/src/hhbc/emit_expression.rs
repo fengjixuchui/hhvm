@@ -525,7 +525,6 @@ pub fn emit_expr(emitter: &mut Emitter, env: &Env, expression: &tast::Expr) -> R
         )),
         Expr_::Import(e) => emit_import(emitter, env, pos, &e.0, &e.1),
         Expr_::Omitted => Ok(instr::empty()),
-        Expr_::YieldBreak => Err(unrecoverable("yield break should be in statement position")),
         Expr_::Lfun(_) => Err(unrecoverable(
             "expected Lfun to be converted to Efun during closure conversion emit_expr",
         )),
@@ -2477,10 +2476,21 @@ fn emit_special_function(
         }
         ("HH\\fun", _) => {
             if fun_and_clsmeth_disabled {
-                Err(emit_fatal::raise_fatal_parse(
-                    pos,
-                    "`fun()` is disabled; switch to first-class references like `foo<>`",
-                ))
+                match args {
+                    [tast::Expr(_, tast::Expr_::String(func_name))] => {
+                        Err(emit_fatal::raise_fatal_parse(
+                            pos,
+                            format!(
+                                "`fun()` is disabled; switch to first-class references like `{}<>`",
+                                func_name
+                            ),
+                        ))
+                    }
+                    _ => Err(emit_fatal::raise_fatal_runtime(
+                        pos,
+                        "Constant string expected in fun()",
+                    )),
+                }
             } else if nargs != 1 {
                 Err(emit_fatal::raise_fatal_runtime(
                     pos,

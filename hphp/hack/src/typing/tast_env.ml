@@ -176,12 +176,7 @@ let is_sub_type_for_union env ty_sub ty_super =
 
 let referenced_typeconsts env root ids =
   let root = hint_to_ty env root in
-  let ety_env =
-    {
-      (Typing_phase.env_with_self env) with
-      Typing_defs.from_class = Some CIstatic;
-    }
-  in
+  let ety_env = Typing_phase.env_with_self env in
   Typing_taccess.referenced_typeconsts
     env
     ety_env
@@ -307,3 +302,5 @@ let set_allow_wildcards env =
 let get_allow_wildcards env = env.Typing_env_types.allow_wildcards
 
 let condition_type_matches = Typing_reactivity.condition_type_matches
+
+let is_enum_class env c = Typing_env.is_enum_class env c

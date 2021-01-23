@@ -81,6 +81,12 @@ and ('ex, 'fb, 'en, 'hi) stmt_ =
 
           return;
           return $foo; *)
+  | Yield_break
+      (** Yield break, terminating the current generator. This behaves like
+          return; but is more explicit, and ensures the function is treated
+          as a generator.
+
+          yield break; *)
   | Awaitall of
       (* Temporaries assigned when running awaits. *)
       (lid option * ('ex, 'fb, 'en, 'hi) expr) list
@@ -370,8 +376,14 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
           This is not ambiguous, because constants are not allowed to
           contain functions.
 
-          Foo::some_const
-          Foo::some_meth() // Call (Class_get) *)
+          Foo::some_const // Class_const
+          Foo::someStaticMeth() // Call (Class_const)
+
+          This syntax is used for both static and instance methods when
+          calling the implementation on the superclass.
+
+          parent::someStaticMeth()
+          parent::someInstanceMeth() *)
   | Call of
       (* function *)
       ('ex, 'fb, 'en, 'hi) expr
@@ -440,15 +452,6 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
 
           yield $foo // enclosing function returns an Iterator
           yield $foo => $bar // enclosing function returns a KeyedIterator *)
-  | Yield_break
-      (** Yield break, terminating the current generator. This behaves like
-          return; but is more explicit, and ensures the function is treated
-          as a generator.
-
-          TODO: this is only permitted in a statement position, so it
-          should be in stmt.
-
-          yield break; *)
   | Await of ('ex, 'fb, 'en, 'hi) expr
       (** Await expression.
 
@@ -563,7 +566,7 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
       (** Collection literal.
 
           TODO: T38184446 this is redundant with ValCollection/KeyValCollection.
-     
+
           Vector {} *)
   | ExpressionTree of ('ex, 'fb, 'en, 'hi) expression_tree
       (** Expression tree literal. Expression trees are not evaluated at

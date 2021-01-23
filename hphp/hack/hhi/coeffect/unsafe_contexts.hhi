@@ -28,13 +28,10 @@ namespace HH\Contexts\Unsafe {
   // = \HH\Capabilities\RxLocal
 
   type cipp_global = mixed;
-  type cipp<T> = mixed;
+  type cipp_of<T> = mixed;
+  type cipp = mixed;
 
-  type non_det = mixed;
-
-  type output = mixed;
-
-  type local = mixed;
+  type write_props = mixed;
 
   type rx = mixed;
   type rx_shallow = \HH\Capabilities\RxLocal;

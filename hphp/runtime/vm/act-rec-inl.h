@@ -150,9 +150,9 @@ inline void ActRec::trashThis() {
 
 /////////////////////////////////////////////////////////////////////////////
 
-inline RxLevel ActRec::rxMinLevel() const {
-  if (func()->hasCoeffectRules()) return RxLevel::None;
-  return func()->rxLevel();
+inline RuntimeCoeffects ActRec::coeffects() const {
+  if (func()->hasCoeffectRules()) return RuntimeCoeffects::none();
+  return func()->staticCoeffects().toAmbient();
 }
 
 ///////////////////////////////////////////////////////////////////////////////

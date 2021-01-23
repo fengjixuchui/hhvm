@@ -44,10 +44,11 @@ pub trait SmartConstructors: Clone {
     fn make_variable_expression(&mut self, arg0 : Self::R) -> Self::R;
     fn make_pipe_variable_expression(&mut self, arg0 : Self::R) -> Self::R;
     fn make_file_attribute_specification(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R) -> Self::R;
-    fn make_enum_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R, arg9 : Self::R, arg10 : Self::R) -> Self::R;
+    fn make_enum_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R, arg9 : Self::R) -> Self::R;
+    fn make_enum_use(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R;
     fn make_enumerator(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R;
     fn make_enum_class_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R, arg9 : Self::R, arg10 : Self::R) -> Self::R;
-    fn make_enum_class_enumerator(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R) -> Self::R;
+    fn make_enum_class_enumerator(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R) -> Self::R;
     fn make_record_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R, arg8 : Self::R) -> Self::R;
     fn make_record_field(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R;
     fn make_alias_declaration(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R, arg6 : Self::R, arg7 : Self::R) -> Self::R;
@@ -109,6 +110,7 @@ pub trait SmartConstructors: Clone {
     fn make_case_label(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R;
     fn make_default_label(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R;
     fn make_return_statement(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R;
+    fn make_yield_break_statement(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R;
     fn make_throw_statement(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R;
     fn make_break_statement(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R;
     fn make_continue_statement(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R;

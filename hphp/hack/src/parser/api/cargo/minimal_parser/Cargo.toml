@@ -9,6 +9,4 @@ include = ["../../minimal_parser.rs"]
 path = "../../minimal_parser.rs"
 
 [dependencies]
-minimal_smart_constructors = { path = "../../../cargo/minimal_parser" }
 parser = { path = "../../../core" }
-stack_limit = { path = "../../../../utils/stack_limit" }

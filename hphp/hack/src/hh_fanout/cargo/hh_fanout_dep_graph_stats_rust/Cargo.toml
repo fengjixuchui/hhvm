@@ -13,4 +13,5 @@ crate-type = ["lib", "staticlib"]
 depgraph = { path = "../../../depgraph" }
 ocamlrep_ocamlpool = { path = "../../../ocamlrep_ocamlpool" }
 env_logger = "0.7"
+json = "0.12.1"
 log = { version = "0.4.8", features = ["kv_unstable"] }

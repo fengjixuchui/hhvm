@@ -16,81 +16,97 @@
 
 #pragma once
 
-#include "hphp/runtime/base/attr.h"
 #include "hphp/runtime/vm/class.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
+struct RuntimeCoeffects {
+  enum Level : uint16_t {
+    Default   = 0,
+    RxShallow = 1,
+    Rx        = 2,
+    Pure      = 3,
+  };
 
-enum CoeffectAttr : uint16_t {
-  CEAttrNone = 0,
-  // The RxLevel attrs are used to encode the maximum level of reactivity
-  // of a function.
-  CEAttrRxLevel0         = (1u << 0),
-  CEAttrRxLevel1         = (1u << 1),
-  CEAttrRxLevel2         = (1u << 2),
+  explicit RuntimeCoeffects(Level level) : m_data(level) {}
+
+  static RuntimeCoeffects none() {
+    return RuntimeCoeffects{Level::Default};
+  }
+
+  static RuntimeCoeffects fromValue(uint16_t value) {
+    return RuntimeCoeffects{static_cast<Level>(value)};
+  }
+
+  uint16_t value() const { return m_data; }
+
+  const std::string toString() const;
+
+  // Checks whether provided coeffects in `this` can call
+  // required coeffects in `o`
+  bool canCall(const RuntimeCoeffects& o) const {
+    return m_data <= o.m_data;
+  }
+
+  bool canCallWithWarning(const RuntimeCoeffects& o) const {
+    if (canCall(o)) return true;
+
+    auto callerIsPure = m_data == Level::Pure;
+    return (CoeffectsConfig::rxEnforcementLevel() < 2) &&
+           (!callerIsPure || CoeffectsConfig::pureEnforcementLevel() < 2);
+  }
+
+private:
+  Level m_data;
 };
 
-constexpr CoeffectAttr operator|(CoeffectAttr a, CoeffectAttr b) {
-  return CoeffectAttr((uint16_t)a | (uint16_t)b);
-}
+struct StaticCoeffects {
+  enum class Level : uint16_t {
+    None    = 0,
+    Local   = 1,
+    Shallow = 2,
+    Rx      = 3,
+    Pure    = 4,
+  };
 
+  bool isPure() const {
+    return m_data == Level::Pure;
+  }
 
-inline CoeffectAttr& operator|=(CoeffectAttr& a, const CoeffectAttr& b) {
-  return (a = CoeffectAttr((uint16_t)a | (uint16_t)b));
-}
+  bool isAnyRx() const {
+    return m_data == Level::Local ||
+           m_data == Level::Shallow ||
+           m_data == Level::Rx;
+  }
 
-///////////////////////////////////////////////////////////////////////////////
+  const char* toString() const;
 
-enum class RxLevel : uint8_t {
-  None               = 0,
-  Local              = 1,
-  Shallow            = 2,
-  Rx                 = 3,
-  Pure               = 4,
+  RuntimeCoeffects toAmbient() const;
+  RuntimeCoeffects toRequired() const;
+
+  static StaticCoeffects fromName(const std::string&);
+
+  static StaticCoeffects none() { return StaticCoeffects{Level::None}; }
+  static StaticCoeffects pure() { return StaticCoeffects{Level::Pure}; }
+
+  // This operator is equivalent to & of [coeffectA & coeffectB]
+  StaticCoeffects& operator|=(const StaticCoeffects& o) {
+    m_data = std::max(m_data, o.m_data);
+    return *this;
+  }
+
+  template<class SerDe>
+  void serde(SerDe& sd) {
+    sd(m_data);
+  }
+
+private:
+  explicit StaticCoeffects(Level level) : m_data(level) {}
+  Level m_data;
 };
 
-constexpr int kRxAttrShift = 0;
-#define ASSERT_LEVEL(attr, rl) \
-  static_assert(static_cast<RxLevel>(attr >> kRxAttrShift) == RxLevel::rl, "")
-ASSERT_LEVEL(CEAttrRxLevel0, Local);
-ASSERT_LEVEL(CEAttrRxLevel1, Shallow);
-ASSERT_LEVEL((CEAttrRxLevel0 | CEAttrRxLevel1), Rx);
-ASSERT_LEVEL(CEAttrRxLevel2, Pure);
-#undef ASSERT_LEVEL
-
-constexpr uint16_t kRxAttrMask =
-  CEAttrRxLevel0 | CEAttrRxLevel1 | CEAttrRxLevel2;
-constexpr uint16_t kRxLevelMask = 7u;
-static_assert(kRxAttrMask >> kRxAttrShift == kRxLevelMask, "");
-
-
-constexpr RxLevel rxLevelFromAttr(CoeffectAttr attrs) {
-  return static_cast<RxLevel>(
-    (static_cast<uint16_t>(attrs) >> kRxAttrShift) & kRxLevelMask
-  );
-}
-
-constexpr CoeffectAttr rxMakeAttr(RxLevel level) {
-  return
-    static_cast<CoeffectAttr>(static_cast<uint16_t>(level) << kRxAttrShift);
-}
-
-CoeffectAttr rxAttrsFromAttrString(const std::string& a);
-const char* rxAttrsToAttrString(CoeffectAttr a);
-
-const char* rxLevelToString(RxLevel r);
-
-constexpr bool funcAttrIsAnyRx(CoeffectAttr a) {
-  return static_cast<uint16_t>(a) & kRxAttrMask;
-}
-
-constexpr bool funcAttrIsPure(CoeffectAttr a) {
-  return static_cast<uint16_t>(a) & CEAttrRxLevel2;
-}
-
-bool rxEnforceCallsInLevel(RxLevel level);
-RxLevel rxRequiredCalleeLevel(RxLevel level);
+static_assert(sizeof(StaticCoeffects) == sizeof(uint16_t), "");
+static_assert(sizeof(StaticCoeffects) == sizeof(RuntimeCoeffects), "");
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -175,8 +191,3 @@ private:
 
 ///////////////////////////////////////////////////////////////////////////////
 }
-
-#define incl_HPHP_VM_RX_INL_H_
-#include "hphp/runtime/vm/coeffects-inl.h"
-#undef incl_HPHP_VM_RX_INL_H_
-

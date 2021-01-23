@@ -13,7 +13,7 @@ use ast_scope_rust::{Scope, ScopeItem};
 use decl_vars_rust as decl_vars;
 use emit_adata_rust as emit_adata;
 use emit_expression_rust as emit_expression;
-use emit_fatal_rust::{emit_fatal_runtime, raise_fatal_parse, raise_fatal_runtime};
+use emit_fatal_rust::{emit_fatal_runtime, raise_fatal_parse};
 use emit_param_rust as emit_param;
 use emit_pos_rust::emit_pos;
 use emit_statement::emit_final_stmts;
@@ -33,7 +33,6 @@ use hhbc_string_utils_rust as string_utils;
 use instruction_sequence_rust::{instr, unrecoverable, Error, InstrSeq, Result};
 use label_rewriter_rust as label_rewriter;
 use label_rust::Label;
-use naming_special_names_rust::classes;
 use ocamlrep::rc::RcOc;
 use options::{CompilerFlags, LangFlags};
 use oxidized::{
@@ -112,13 +111,6 @@ pub fn emit_body<'a, 'b>(
     scope: Scope<'a>,
     args: Args<'_>,
 ) -> Result<(HhasBody<'a>, bool, bool)> {
-    if args.flags.contains(Flags::ASYNC)
-        && args.flags.contains(Flags::SKIP_AWAITABLE)
-        && args.ret.map_or(false, |hint| !is_awaitable(&hint))
-    {
-        report_error(args.flags.contains(Flags::CLOSURE_BODY), &scope, args.pos)?
-    };
-
     let tparams = scope
         .get_tparams()
         .into_iter()
@@ -651,7 +643,7 @@ fn atom_instrs(
             let label_done = emitter.label_gen_mut().next_regular();
             let label_not_a_class = emitter.label_gen_mut().next_regular();
             match &**h {
-                Happly(ast_defs::Id(_, ref ctor), vec) if ctor == "\\HH\\EnumMember" => {
+                Happly(ast_defs::Id(_, ref ctor), vec) if ctor == "\\HH\\MemberOf" => {
                     match &vec[..] {
                         [hint, _] => {
                             let Hint(_, e) = hint;
@@ -661,7 +653,7 @@ fn atom_instrs(
                                     if atom_helpers::is_erased_generic(tag, tparams) {
                                         Err(raise_fatal_parse(
                                             &pos,
-                                            "Erased generic as HH\\EnumMember enum type",
+                                            "Erased generic as HH\\MemberOf enum type",
                                         ))
                                     } else {
                                         if !atom_helpers::is_generic(tag, tparams) {
@@ -742,7 +734,7 @@ fn atom_instrs(
                                             if atom_helpers::is_erased_generic(tag, tparams) {
                                                 Err(raise_fatal_parse(
                                                     &pos,
-                                                    "Erased generic as HH\\EnumMember enum type",
+                                                    "Erased generic as HH\\MemberOf enum type",
                                                 ))
                                             } else {
                                                 //'tag' is a type constant.
@@ -774,23 +766,23 @@ fn atom_instrs(
                                             }
                                         }
                                         _ => Err(unrecoverable(
-                                            "Unexpected case for HH\\EnumMember enum type",
+                                            "Unexpected case for HH\\MemberOf enum type",
                                         )),
                                     }
                                 }
-                                _ => Err(unrecoverable(
-                                    "Unexpected case for HH\\EnumMember enum type",
-                                )),
+                                _ => {
+                                    Err(unrecoverable("Unexpected case for HH\\MemberOf enum type"))
+                                }
                             }
                         }
                         _ => Err(unrecoverable(
-                            "Wrong number of type arguments to HH\\EnumMember",
+                            "Wrong number of type arguments to HH\\MemberOf",
                         )),
                     }
                 }
                 _ => Err(raise_fatal_parse(
                     &ast_param.pos,
-                    "'__Atom' applied to a non-HH\\EnumMember parameter",
+                    "'__Atom' applied to a non-HH\\MemberOf parameter",
                 )),
             }
         }
@@ -1142,42 +1134,4 @@ fn set_function_jmp_targets(emitter: &mut Emitter, env: &mut Env) -> bool {
     global_state
         .functions_with_finally
         .contains(&function_state_key)
-}
-
-fn is_awaitable(hint: &tast::Hint) -> bool {
-    let Hint(_, h) = hint;
-    match &**h {
-        Happly(ast_defs::Id(_, s), hs) if s == classes::AWAITABLE && hs.len() <= 1 => true,
-        Hsoft(h) | Hoption(h) => is_awaitable(h),
-        _ => false,
-    }
-}
-
-fn report_error(is_closure_body: bool, scope: &Scope, pos: &Pos) -> Result<()> {
-    let msg: String = if is_closure_body {
-        "Return type hint for async closure must be awaitable".into()
-    } else {
-        let mut scope = scope.iter();
-        let s1 = scope.next();
-        let s2 = scope.next();
-        use ScopeItem as S;
-        let (kind, name) = match (s1, s2) {
-            (Some(S::Function(f)), _) => (
-                "function",
-                string_utils::strip_global_ns(f.get_name_str()).to_owned(),
-            ),
-            (Some(S::Method(m)), Some(S::Class(c))) => (
-                "method",
-                string_utils::strip_global_ns(c.get_name_str()).to_owned()
-                    + "::"
-                    + m.get_name_str(),
-            ),
-            _ => return Err(Error::Unrecoverable("Unexpected".into())),
-        };
-        format!(
-            "Return type hint for async {} {}() must be awaitable",
-            kind, name
-        )
-    };
-    Err(raise_fatal_runtime(pos, msg))
 }

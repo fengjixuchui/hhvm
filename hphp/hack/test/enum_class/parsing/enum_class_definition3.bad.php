@@ -1,6 +1,5 @@
 <?hh
 // Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
-<<file:__EnableUnstableFeatures('enum_class')>>
 
 interface ExBox {}
 
@@ -14,5 +13,5 @@ trait MyTrait {
 enum class E: ExBox {
   // Cannot use a trait inside an enum class
   use MyTrait;
-  A<Box<string>>(new Box('bli'));
+   Box<string> A = new Box('bli');
 }

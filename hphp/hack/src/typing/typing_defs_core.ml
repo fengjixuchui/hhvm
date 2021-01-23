@@ -21,7 +21,7 @@ type ce_visibility =
 type ifc_fun_decl =
   | FDPolicied of string option
   | FDInferFlows
-[@@deriving eq]
+[@@deriving eq, ord]
 
 (* The default policy is the public one. PUBLIC is a keyword, so no need to prevent class collisions *)
 let default_ifc_fun_decl = FDPolicied (Some "PUBLIC")
@@ -171,16 +171,6 @@ and _ ty_ =
   | Tthis : decl_phase ty_  (** The late static bound type of a class *)
   | Tapply : Nast.sid * decl_ty list -> decl_phase ty_
       (** Either an object type or a type alias, ty list are the arguments *)
-  | Tarray : decl_ty option * decl_ty option -> decl_phase ty_
-      (** The type of the various forms of "array":
-       *
-       * ```
-       * Tarray (None, None)         => "array"
-       * Tarray (Some ty, None)      => "array<ty>"
-       * Tarray (Some ty1, Some ty2) => "array<ty1, ty2>"
-       * Tarray (None, Some ty)      => [invalid]
-       * ```
-       *)
   | Tmixed : decl_phase ty_
       (** "Any" is the type of a variable with a missing annotation, and "mixed" is
        * the type of a variable annotated as "mixed". THESE TWO ARE VERY DIFFERENT!
@@ -273,18 +263,28 @@ and _ ty_ =
            type Foo2 = ...
          that simply doesn't require type arguments. *)
   | Tnewtype : string * locl_ty list * locl_ty -> locl_phase ty_
-      (** The type of an opaque type (e.g. a "newtype" outside of the file where it
-       * was defined) or enum. They are "opaque", which means that they only unify with
-       * themselves. However, it is possible to have a constraint that allows us to
-       * relax this. For example:
+      (** The type of an opaque type or enum. Outside their defining files or
+       * when they represent enums, they are "opaque", which means that they
+       * only unify with themselves. Within a file, uses of newtypes are
+       * expanded to their definitions (unless the newtype is an enum).
        *
-       *   newtype my_type as int = ...
+       * However, it is possible to have a constraint that allows us to relax
+       * opaqueness. For example:
+       *
+       *   newtype MyType as int = ...
+       *
+       * or
+       *
+       *   enum MyType: int as int { ... }
        *
        * Outside of the file where the type was defined, this translates to:
        *
-       *   Tnewtype ((pos, "my_type"), [], Tprim Tint)
+       *   Tnewtype ((pos, "MyType"), [], Tprim Tint)
        *
-       * Which means that my_type is abstract, but is subtype of int as well.
+       * which means that MyType is abstract, but is a subtype of int as well.
+       * When the constraint is omitted, the third parameter is set to mixed.
+       *
+       * The second parameter is the list of type arguments to the type.
        *)
   | Tdependent : dependent_type * locl_ty -> locl_phase ty_
       (** see dependent_type *)
@@ -566,22 +566,6 @@ module Pp = struct
       Format.fprintf fmt "(@[<2>Taccess@ ";
       pp_taccess_type fmt a0;
       Format.fprintf fmt "@])"
-    | Tarray (a0, a1) ->
-      Format.fprintf fmt "(@[<2>Tarray (@,";
-      (match a0 with
-      | None -> Format.pp_print_string fmt "None"
-      | Some x ->
-        Format.pp_print_string fmt "(Some ";
-        pp_ty fmt x;
-        Format.pp_print_string fmt ")");
-      Format.fprintf fmt ",@ ";
-      (match a1 with
-      | None -> Format.pp_print_string fmt "None"
-      | Some x ->
-        Format.pp_print_string fmt "(Some ";
-        pp_ty fmt x;
-        Format.pp_print_string fmt ")");
-      Format.fprintf fmt "@,))@]"
     | Tdarray (a0, a1) ->
       Format.fprintf fmt "(@[<2>Tdarray (@,";
       pp_ty fmt a0;

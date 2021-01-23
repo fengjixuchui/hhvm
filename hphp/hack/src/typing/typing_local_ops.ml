@@ -55,5 +55,13 @@ let enforce_static_property_access =
     Capabilities.(mk accessStaticVariable)
     "Static property access"
 
-let enforce_output =
-  enforce_local_capability Capabilities.(mk output) "`echo` or `print` builtin"
+let enforce_io =
+  enforce_local_capability Capabilities.(mk io) "`echo` or `print` builtin"
+
+let enforce_rx_is_enabled =
+  enforce_local_capability Capabilities.(mk rx) ("`" ^ SN.Rx.is_enabled ^ "`")
+
+let enforce_awaitable_immediately_awaited =
+  enforce_local_capability
+    Capabilities.(mk accessStaticVariable)
+    "Not immediately `await`ing `Awaitable`-typed values"

@@ -97,8 +97,12 @@ impl<'src> SmartConstructors for FactsSmartConstructors<'src> {
         <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_file_attribute_specification(self, arg0, arg1, arg2, arg3, arg4)
     }
 
-    fn make_enum_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R, arg10: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_enum_declaration(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10)
+    fn make_enum_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R, arg9: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_enum_declaration(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9)
+    }
+
+    fn make_enum_use(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_enum_use(self, arg0, arg1, arg2)
     }
 
     fn make_enumerator(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
@@ -109,8 +113,8 @@ impl<'src> SmartConstructors for FactsSmartConstructors<'src> {
         <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_enum_class_declaration(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10)
     }
 
-    fn make_enum_class_enumerator(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_enum_class_enumerator(self, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7)
+    fn make_enum_class_enumerator(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_enum_class_enumerator(self, arg0, arg1, arg2, arg3, arg4)
     }
 
     fn make_record_declaration(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R, arg4: Self::R, arg5: Self::R, arg6: Self::R, arg7: Self::R, arg8: Self::R) -> Self::R {
@@ -355,6 +359,10 @@ impl<'src> SmartConstructors for FactsSmartConstructors<'src> {
 
     fn make_return_statement(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
         <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_return_statement(self, arg0, arg1, arg2)
+    }
+
+    fn make_yield_break_statement(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, HasScriptContent<'src>>>::make_yield_break_statement(self, arg0, arg1, arg2)
     }
 
     fn make_throw_statement(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {

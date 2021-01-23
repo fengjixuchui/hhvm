@@ -81,7 +81,7 @@ StringData* convObjToStrHelper(ObjectData* o);
 StringData* convResToStrHelper(ResourceHdr* o);
 
 void raiseUndefProp(ObjectData* base, const StringData* name);
-void raiseUndefVariable(StringData* nm);
+void throwUndefVariable(StringData* nm);
 void VerifyParamTypeSlow(const Class* cls,
                          const Class* constraint,
                          const TypeConstraint* expected,
@@ -188,6 +188,8 @@ ArrayData* loadClsTypeCnsHelper(
   const StringData* name,
   bool no_throw_on_undefined
 );
+
+void raiseCoeffectsCallViolationHelper(const ActRec*, const Func*, uint64_t);
 
 [[noreturn]] void throwOOBException(TypedValue base, TypedValue key);
 [[noreturn]] void invalidArrayKeyHelper(const ArrayData* ad, TypedValue key);

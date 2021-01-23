@@ -215,6 +215,7 @@ struct Vgen {
   void emit(const loadzbl& i) { a.prefix(i.s.mr()).loadzbl(i.s, i.d); }
   void emit(const loadzbq& i) { a.prefix(i.s.mr()).loadzbl(i.s, Reg32(i.d)); }
   void emit(const loadsbq& i) { a.prefix(i.s.mr()).loadsbq(i.s, i.d); }
+  void emit(const loadzwq& i) { a.prefix(i.s.mr()).loadzwl(i.s, Reg32(i.d)); }
   void emit(const loadzlq& i) { a.prefix(i.s.mr()).loadl(i.s, Reg32(i.d)); }
   void emit(const movb& i) { a.movb(i.s, i.d); }
   void emit(const movl& i) { a.movl(i.s, i.d); }
@@ -1223,7 +1224,7 @@ void optimizeX64(Vunit& unit, const Abi& abi, bool regalloc) {
 
   assertx(checkWidths(unit));
 
-  if (unit.context && !isProfiling(unit.context->kind) && abi.canSpill &&
+  if (unit.context && unit.context->kind == TransKind::Optimize &&
       RuntimeOption::EvalProfBranchSampleFreq > 0) {
     // Even when branch profiling is on, we still only want to profile
     // non-profiling translations of PHP functions.  We also require that we

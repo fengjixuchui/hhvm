@@ -60,9 +60,8 @@ struct ArrayLayout {
   bool logging() const;
   bool monotype() const;
 
-  // The result is non-null iff the layout is a (concrete) bespoke layout.
+  // The result is non-null iff the layout is a bespoke layout.
   const bespoke::Layout* bespokeLayout() const;
-  const bespoke::ConcreteLayout* concreteLayout() const;
   folly::Optional<bespoke::LayoutIndex> layoutIndex() const;
 
   MaskAndCompare bespokeMaskAndCompare() const;
@@ -96,11 +95,18 @@ struct ArrayLayout {
   }
 
   /**************************************************************************
-   * Type information for contents
+   * Type inference functions
    **************************************************************************/
 
+  // The array's new layout after a mutating operation.
+  ArrayLayout appendType(Type val) const;
+  ArrayLayout removeType(Type key) const;
+  ArrayLayout setType(Type key, Type val) const;
+
+  // The second element of the pair is true if the key is definitely present.
   std::pair<Type, bool> elemType(Type key) const;
   std::pair<Type, bool> firstLastType(bool isFirst, bool isKey) const;
+
   Type iterPosType(Type pos, bool isKey) const;
 
   /**************************************************************************

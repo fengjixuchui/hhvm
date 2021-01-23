@@ -83,10 +83,12 @@ inline Offset nextBcOff(const IRGS& env) {
   return nextSrcKey(env).offset();
 }
 
-inline RxLevel curRxLevel(const IRGS& env) {
-  // Pessimize enforcements for conditional reactivity, as it is not tracked yet
-  if (curFunc(env)->hasCoeffectRules()) return RxLevel::None;
-  return curFunc(env)->rxLevel();
+inline RuntimeCoeffects curCoeffects(const IRGS& env) {
+  assertx(curFunc(env));
+  // Pessimize enforcements in presence of coeffect rules,
+  // as it is not tracked yet
+  if (curFunc(env)->hasCoeffectRules()) return RuntimeCoeffects::none();
+  return curFunc(env)->staticCoeffects().toAmbient();
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -689,7 +691,7 @@ inline SSATmp* ldLoc(IRGS& env,
 }
 
 /*
- * This is a wrapper to ldLocInner that also emits the RaiseUninitLoc if the
+ * This is a wrapper to ldLocInner that also emits the ThrowUninitLoc if the
  * local is uninitialized. The catchBlock argument may be provided if the
  * caller requires the catch trace to be generated at a point earlier than when
  * it calls this function.
@@ -707,7 +709,7 @@ inline SSATmp* ldLocWarn(IRGS& env,
     }
     auto const varName = curFunc(env)->localVarName(loc.name);
     if (varName != nullptr) {
-      gen(env, RaiseUninitLoc, cns(env, varName));
+      gen(env, ThrowUninitLoc, cns(env, varName));
     }
     return cns(env, TInitNull);
   };

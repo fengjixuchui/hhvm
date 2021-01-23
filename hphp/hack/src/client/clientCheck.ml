@@ -15,7 +15,7 @@ open Ocaml_overrides
 module Cmd = ServerCommandLwt
 module Rpc = ServerCommandTypes
 module SyntaxTree =
-  Full_fidelity_syntax_tree.WithSyntax (Full_fidelity_minimal_syntax)
+  Full_fidelity_syntax_tree.WithSyntax (Full_fidelity_positioned_syntax)
 
 module SaveStateResultPrinter = ClientResultPrinter.Make (struct
   type t = SaveStateServiceTypes.save_state_result
@@ -473,13 +473,6 @@ let main (args : client_check_env) : Exit_status.t Lwt.t =
       let positions = parse_positions positions in
       let%lwt (responses, telemetry) =
         rpc args @@ Rpc.FUN_DEPS_BATCH (positions, args.dynamic_view)
-      in
-      List.iter responses print_endline;
-      Lwt.return (Exit_status.No_error, telemetry)
-    | MODE_FUN_IS_LOCALLABLE_AT_POS_BATCH positions ->
-      let positions = parse_positions positions in
-      let%lwt (responses, telemetry) =
-        rpc args @@ Rpc.FUN_IS_LOCALLABLE_BATCH positions
       in
       List.iter responses print_endline;
       Lwt.return (Exit_status.No_error, telemetry)

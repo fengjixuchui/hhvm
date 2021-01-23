@@ -524,8 +524,8 @@ SrcRec* findSrcRec(SrcKey sk) {
   return srcDB().find(sk);
 }
 
-void createSrcRec(SrcKey sk, FPInvOffset spOff) {
-  if (srcDB().find(sk)) return;
+bool createSrcRec(SrcKey sk, FPInvOffset spOff, bool checkLength) {
+  if (srcDB().find(sk)) return true;
 
   auto const srcRecSPOff = sk.resumeMode() != ResumeMode::None
     ? folly::none : folly::make_optional(spOff);
@@ -533,23 +533,25 @@ void createSrcRec(SrcKey sk, FPInvOffset spOff) {
   // We put retranslate requests at the end of our slab to more frequently
   // allow conditional jump fall-throughs
   auto codeLock = lockCode();
-  if (srcDB().find(sk)) return;
+  if (srcDB().find(sk)) return true;
   auto codeView = code().view();
   TCA astart = codeView.main().frontier();
   TCA coldStart = codeView.cold().frontier();
   TCA frozenStart = codeView.frozen().frontier();
   TCA req;
+  auto const stubsize = svcreq::stub_size();
   if (!RuntimeOption::EvalEnableReusableTC) {
+    if (checkLength && !codeView.cold().canEmit(stubsize)) return false;
     req = svcreq::emit_persistent(codeView.cold(),
                                   codeView.data(),
                                   srcRecSPOff,
                                   REQ_RETRANSLATE,
                                   sk.offset());
   } else {
-    auto const stubsize = svcreq::stub_size();
     auto newStart = codeView.cold().allocInner(stubsize);
     if (!newStart) {
       newStart = codeView.cold().frontier();
+      if (checkLength && !codeView.cold().canEmit(stubsize)) return false;
     }
     // Ensure that the anchor translation is a known size so that it can be
     // reclaimed when the function is freed
@@ -590,6 +592,8 @@ void createSrcRec(SrcKey sk, FPInvOffset spOff) {
     assertx(!transdb::enabled() ||
             transdb::getTransRec(coldStart)->kind == TransKind::Anchor);
   }
+
+  return true;
 }
 
 
@@ -675,25 +679,32 @@ void RegionTranslator::computeKind() {
   }
 }
 
-folly::Optional<TCA> RegionTranslator::getCached() {
+folly::Optional<TranslationResult> RegionTranslator::getCached() {
   auto const srcRec = srcDB().find(sk);
   auto const numTrans = srcRec->numTrans();
   if (prevNumTranslations != -1 && prevNumTranslations != numTrans) {
     // A new translation was generated before we grabbed the lock.  Force
     // execution to rerun through the retranslation chain.
-    return srcRec->getTopTranslation();
+    return TranslationResult{srcRec->getTopTranslation()};
   }
   prevNumTranslations = numTrans;
+
+  // An optimize retranslation request may be in flight that will
+  // remove profiling translations from the srcRec.  Wait till
+  // getCached is called while the lease is held to check the
+  // number of translations in the srcRec is not over max
+  // capacity.
+  if (!m_lease || !(*m_lease)) return folly::none;
   // Check for potential interp anchor translation
   if (kind == TransKind::Profile) {
     if (numTrans > RuntimeOption::EvalJitMaxProfileTranslations) {
       always_assert(numTrans ==
                     RuntimeOption::EvalJitMaxProfileTranslations + 1);
-      return srcRec->getTopTranslation();
+      return TranslationResult{srcRec->getTopTranslation()};
     }
   } else if (numTrans > RuntimeOption::EvalJitMaxTranslations) {
     always_assert(numTrans == RuntimeOption::EvalJitMaxTranslations + 1);
-    return srcRec->getTopTranslation();
+    return TranslationResult{srcRec->getTopTranslation()};
   }
   return folly::none;
 }
@@ -844,6 +855,18 @@ void RegionTranslator::publishCodeImpl() {
     Trace::traceRelease("%s", getTCSpace().c_str());
   }
   checkFreeProfData();
+}
+
+void RegionTranslator::setCachedForProcessFail() {
+  auto const srcRec = srcDB().find(sk);
+  always_assert(srcRec);
+
+  auto const stub = svcreq::emit_interp_no_translate_stub(spOff, sk);
+  TRACE(1, "setCachedForProcessFail: stub: %p  sk: %s\n",
+        stub, showShort(sk).c_str());
+
+  if (!stub) return;
+  srcRec->smashFallbacksToStub(stub);
 }
 
 }}}

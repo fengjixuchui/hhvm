@@ -130,9 +130,8 @@ let create_root_from_type_constant ctx env root (_class_pos, class_name) class_
             | ty -> ty)
       in
       let ety_env =
-        let from_class = None in
         let this_ty = drop_exact (Option.value ctx.base ~default:root) in
-        { ctx.ety_env with from_class; type_expansions; this_ty }
+        { ctx.ety_env with type_expansions; this_ty }
       in
       let make_abstract env bnd =
         ( if (not ctx.allow_abstract) && not ety_env.quiet then
@@ -314,6 +313,17 @@ let rec expand ctx env root : _ * result =
         let ctx = { ctx with allow_abstract } in
         create_root_from_type_constant ctx env root cls ci
     end
+  | Tvarray _
+  | Tdarray _
+  | Tvarray_or_darray _ ->
+    let { id = (_, tconst); _ } = ctx in
+    (match tconst with
+    (* harcode the constants for coeffects until HAM finishes *)
+    | "C"
+    | "CMut" ->
+      (* TODO point to something real with this reason *)
+      (env, Exact (Typing_make_type.mixed Reason.Rnone))
+    | _ -> (env, Missing err))
   | Tgeneric (s, tyargs) ->
     let ctx =
       let generics_seen = TySet.add root ctx.generics_seen in
@@ -380,9 +390,6 @@ let rec expand ctx env root : _ * result =
   | Tprim _
   | Tshape _
   | Ttuple _
-  | Tvarray _
-  | Tdarray _
-  | Tvarray_or_darray _
   | Tfun _
   | Tdynamic
   | Toption _ ->

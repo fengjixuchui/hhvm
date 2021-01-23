@@ -1,6 +1,6 @@
 <?hh
 // Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
-<<file: __EnableUnstableFeatures('enum_class', 'enum_supertyping')>>
+<<file: __EnableUnstableFeatures('enum_supertyping')>>
 
 interface ExBox {}
 
@@ -15,10 +15,11 @@ class IBox extends Box<int> {
 }
 
 enum class E: ExBox {
-  A<Box<string>>(new Box('zuck'));
-  B<IBox>(new IBox(42));
+   Box<string> A = new Box('zuck');
+   IBox B = new IBox(42);
 }
 
-enum NormalEnum : int includes E {
+enum NormalEnum : int {
+  use E;
   Z = 42;
 }

@@ -681,6 +681,11 @@ struct AsmState {
   }
 
   void finishFunction() {
+    if (fe->isRxDisabled &&
+        (!(fe->attrs & AttrRxBody) || (fe->attrs & AttrPureBody))) {
+      error("isRxDisabled on non-rx func");
+    }
+
     finishSection();
 
     // Stack depth should be 0 at the end of a function body
@@ -1865,6 +1870,78 @@ void parse_declvars(AsmState& as) {
   as.in.expectWs(';');
 }
 
+StaticCoeffects coeffectFromName(AsmState& as, std::string name) {
+  auto const coeffect = StaticCoeffects::fromName(name);
+
+  if (coeffect.isAnyRx()) as.fe->attrs |= AttrRxBody;
+  if (coeffect.isPure()) as.fe->attrs |= AttrPureBody;
+
+  if (!CoeffectsConfig::enabled() ||
+      (!CoeffectsConfig::rxEnforcementLevel() && coeffect.isAnyRx())) {
+    return StaticCoeffects::none();
+  }
+  return coeffect;
+}
+
+/*
+ * directive-coeffects_static : coeffect-name* ';'
+ *                            ;
+ */
+void parse_coeffects_static(AsmState& as) {
+  while (true) {
+    as.in.skipWhitespace();
+    std::string name;
+    if (!as.in.readword(name)) break;
+    as.fe->staticCoeffects |= coeffectFromName(as, name);
+  }
+  as.in.expectWs(';');
+}
+
+/*
+ * directive-coeffects_fun_param : param-index* ';'
+ *                               ;
+ */
+void parse_coeffects_fun_param(AsmState& as) {
+  while (true) {
+    as.in.skipWhitespace();
+    read_opcode_arg<uint32_t>(as);
+    //TODO: Add to coeffectRules
+    if (as.in.peek() == ';') break;
+  }
+  as.in.expectWs(';');
+}
+
+/*
+ * directive-coeffects_cc_param : param-index ctx-name* ';'
+ *                              ;
+ */
+void parse_coeffects_cc_param(AsmState& as) {
+  while (true) {
+    as.in.skipWhitespace();
+    read_opcode_arg<uint32_t>(as);
+    as.in.skipWhitespace();
+    std::string name;
+    as.in.readword(name);
+    //TODO: Add to coeffectRules
+    if (as.in.peek() == ';') break;
+  }
+  as.in.expectWs(';');
+}
+
+/*
+ * directive-coeffects_cc_this : ctx-name* ';'
+ *                             ;
+ */
+void parse_coeffects_cc_this(AsmState& as) {
+  while (true) {
+    as.in.skipWhitespace();
+    std::string name;
+    if (!as.in.readword(name)) break;
+    //TODO: Add to coeffectRules
+  }
+  as.in.expectWs(';');
+}
+
 /*
  * directive-rx_cond_rx_of_arg : integer ';'
  *                             ;
@@ -2193,6 +2270,10 @@ void parse_function_body(AsmState& as, int nestLevel /* = 0 */) {
       if (word == ".try") { parse_try_catch(as, nestLevel); continue; }
       if (word == ".srcloc") { parse_srcloc(as, nestLevel); continue; }
       if (word == ".doc") { parse_func_doccomment(as); continue; }
+      if (word == ".coeffects_static") { parse_coeffects_static(as); continue; }
+      if (word == ".coeffects_fun_param") { parse_coeffects_fun_param(as); continue; }
+      if (word == ".coeffects_cc_param") { parse_coeffects_cc_param(as); continue; }
+      if (word == ".coeffects_cc_this") { parse_coeffects_cc_this(as); continue; }
       if (word == ".rx_cond_rx_of_arg") {
         parse_rx_cond_rx_of_arg(as);
         continue;
@@ -2263,15 +2344,13 @@ void parse_user_attribute(AsmState& as,
  * if attributeMap is non null.
  */
 Attr parse_attribute_list(AsmState& as, AttrContext ctx,
-                          UserAttributeMap* userAttrs = nullptr,
-                          CoeffectAttr* coeffectAttrs = nullptr) {
+                          UserAttributeMap* userAttrs = nullptr) {
   as.in.skipWhitespace();
   int ret = AttrNone;
   if (as.in.peek() != '[') return Attr(ret);
   as.in.getc();
 
   std::string word;
-  auto seen_rxl = false;
   for (;;) {
     as.in.skipWhitespace();
     if (as.in.peek() == ']') break;
@@ -2284,14 +2363,6 @@ Attr parse_attribute_list(AsmState& as, AttrContext ctx,
     auto const abit = string_to_attr(ctx, word);
     if (abit) {
       ret |= *abit;
-      continue;
-    }
-    auto const rxAttrs = rxAttrsFromAttrString(word);
-    if (rxAttrs != 0) {
-      if (seen_rxl) as.error("multiple rx attributes");
-      if (!coeffectAttrs) as.error("invalid position for rx attribute");
-      seen_rxl = true;
-      *coeffectAttrs |= rxAttrs;
       continue;
     }
 
@@ -2595,11 +2666,6 @@ void parse_function_flags(AsmState& as) {
     } else if (flag == "isPairGenerator") {
       as.fe->isPairGenerator = true;
     } else if (flag == "isRxDisabled") {
-      // this relies on attributes being parsed before flags
-      if (!funcAttrIsAnyRx(as.fe->coeffectAttrs) ||
-          funcAttrIsPure(as.fe->coeffectAttrs)) {
-        as.error("isRxDisabled on non-rx func");
-      }
       as.fe->isRxDisabled = true;
     } else {
       as.error("Unexpected function flag \"" + flag + "\"");
@@ -2699,9 +2765,7 @@ void parse_function(AsmState& as) {
   auto const ubs = parse_ubs(as);
 
   UserAttributeMap userAttrs;
-  CoeffectAttr coeffectAttrs = CEAttrNone;
-  Attr attrs = parse_attribute_list(as, AttrContext::Func,
-                                    &userAttrs, &coeffectAttrs);
+  Attr attrs = parse_attribute_list(as, AttrContext::Func, &userAttrs);
 
   if (!SystemLib::s_inited) {
     attrs |= AttrUnique | AttrPersistent | AttrBuiltin;
@@ -2719,7 +2783,6 @@ void parse_function(AsmState& as) {
 
   as.fe = as.ue->newFuncEmitter(makeStaticString(name));
   as.fe->init(line0, line1, as.ue->bcPos(), attrs, nullptr);
-  as.fe->coeffectAttrs = coeffectAttrs;
 
   auto currUBs = getRelevantUpperBounds(retTypeInfo.second, ubs, {}, {});
   auto const hasReifiedGenerics =
@@ -2743,7 +2806,8 @@ void parse_function(AsmState& as) {
 
   as.in.expectWs('{');
 
-  as.srcLoc = Location::Range{-1,-1,-1,-1};
+  // Until we get a .srcloc we attribute the code to the whole function
+  as.srcLoc = Location::Range{line0, -1, line1, -1};
   parse_function_body(as);
 }
 
@@ -2760,9 +2824,7 @@ void parse_method(AsmState& as, const UpperBoundMap& class_ubs) {
   auto const ubs = parse_ubs(as);
 
   UserAttributeMap userAttrs;
-  CoeffectAttr coeffectAttrs = CEAttrNone;
-  Attr attrs = parse_attribute_list(as, AttrContext::Func,
-                                    &userAttrs, &coeffectAttrs);
+  Attr attrs = parse_attribute_list(as, AttrContext::Func, &userAttrs);
 
   if (!SystemLib::s_inited) attrs |= AttrBuiltin;
 
@@ -2784,7 +2846,6 @@ void parse_method(AsmState& as, const UpperBoundMap& class_ubs) {
   as.fe = as.ue->newMethodEmitter(sname, as.pce);
   as.pce->addMethod(as.fe);
   as.fe->init(line0, line1, as.ue->bcPos(), attrs, nullptr);
-  as.fe->coeffectAttrs = coeffectAttrs;
 
   auto const hasReifiedGenerics =
     userAttrs.find(s___Reified.get()) != userAttrs.end() ||
@@ -2813,7 +2874,8 @@ void parse_method(AsmState& as, const UpperBoundMap& class_ubs) {
 
   as.in.expectWs('{');
 
-  as.srcLoc = Location::Range{-1,-1,-1,-1};
+  // Until we get a .srcloc we attribute the code to the whole function
+  as.srcLoc = Location::Range{line0, -1, line1, -1};
   parse_function_body(as);
 }
 

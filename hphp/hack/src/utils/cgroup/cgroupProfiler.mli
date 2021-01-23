@@ -9,6 +9,8 @@
 module Profiling : sig
   type t
 
+  val empty : t
+
   val record_stats :
     stage:string -> metric:string -> value:float -> profiling:t -> unit
 end
@@ -17,8 +19,8 @@ val collect_cgroup_stats :
   profiling:Profiling.t -> stage:string -> (unit -> 'a) -> 'a
 
 val profile_memory :
-  event:[ `Init of string | `Recheck ] -> (Profiling.t -> 'a) -> 'a
+  event:[ `Init of string | `Recheck of string ] -> (Profiling.t -> 'a) -> 'a
 
 val log_to_scuba : stage:string -> profiling:Profiling.t -> unit
 
-val print_summary_memory_table : event:[ `Init | `Recheck ] -> unit
+val print_summary_memory_table : event:[ `Init | `Recheck of string ] -> unit

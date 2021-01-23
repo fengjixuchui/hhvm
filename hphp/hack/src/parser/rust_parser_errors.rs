@@ -79,9 +79,7 @@ enum UnstableFeatures {
     UnionIntersectionTypeHints,
     ClassLevelWhere,
     ExpressionTrees,
-    CoeffectsProvisional,
     EnumSupertyping,
-    EnumClass,
     EnumAtom,
     IFC,
 }
@@ -436,8 +434,13 @@ where
                 parser_options.tco_union_intersection_type_hints
             }
             UnstableFeatures::ClassLevelWhere => parser_options.po_enable_class_level_where_clauses,
-            UnstableFeatures::IFC => parser_options.tco_ifc_enabled,
-            UnstableFeatures::CoeffectsProvisional => parser_options.po_enable_coeffects,
+            UnstableFeatures::IFC => {
+                let file_path = format!("/{}", self.env.text.source_text().file_path().path_str());
+                parser_options
+                    .tco_ifc_enabled
+                    .iter()
+                    .any(|prefix| file_path.find(prefix) == Some(0))
+            }
             _ => false,
         } || self.env.context.active_unstable_features.contains(feature);
         if !enabled {
@@ -3315,8 +3318,16 @@ where
                 if self.text(recv) == Self::strip_hh_ns(sn::autoimported_functions::FUN_)
                     && fun_and_clsmeth_disabled
                 {
-                    self.errors
-                        .push(Self::make_error_from_node(recv, errors::fun_disabled))
+                    let mut arg_node_list = Self::syntax_to_list_no_separators(arg_list);
+                    match arg_node_list.next() {
+                        Some(name) if arg_node_list.count() == 0 => self.errors.push(
+                            Self::make_error_from_node(recv, errors::fun_disabled(self.text(name))),
+                        ),
+                        _ => self.errors.push(Self::make_error_from_node(
+                            recv,
+                            errors::fun_requires_const_string,
+                        )),
+                    }
                 }
 
                 if self.text(recv) == Self::strip_hh_ns(sn::autoimported_functions::CLASS_METH)
@@ -5517,6 +5528,7 @@ where
         self.lval_errors(node);
 
         match &node.children {
+            // todo: lambda
             LambdaExpression(_) | AwaitableCreationExpression(_) | AnonymousFunction(_) => {
                 let prev_is_in_concurrent_block = self.is_in_concurrent_block;
                 // reset is_in_concurrent_block for functions
@@ -5612,22 +5624,13 @@ where
             UnionTypeSpecifier(_) | IntersectionTypeSpecifier(_) => {
                 self.check_can_use_feature(node, &UnstableFeatures::UnionIntersectionTypeHints)
             }
-            Contexts(_) => {
-                self.check_can_use_feature(node, &UnstableFeatures::CoeffectsProvisional)
-            }
             ClassishDeclaration(x) => match &x.where_clause.children {
                 WhereClause(_) => {
                     self.check_can_use_feature(&x.where_clause, &UnstableFeatures::ClassLevelWhere)
                 }
                 _ => {}
             },
-            EnumDeclaration(x) => match &x.includes_keyword.children {
-                Token(_) => self.check_can_use_feature(node, &UnstableFeatures::EnumSupertyping),
-                _ => {}
-            },
-            EnumClassDeclaration(_) | EnumClassEnumerator(_) => {
-                self.check_can_use_feature(node, &UnstableFeatures::EnumClass)
-            }
+            EnumUse(_) => self.check_can_use_feature(node, &UnstableFeatures::EnumSupertyping),
             EnumAtomExpression(_) => self.check_can_use_feature(node, &UnstableFeatures::EnumAtom),
             OldAttributeSpecification(x) => {
                 let attributes_string = self.text(&x.attributes);

@@ -316,11 +316,18 @@ struct Func final {
   Class* baseCls() const;
   Class* implCls() const;
 
+  int sn() const;
+
   /*
    * The function's short name (e.g., foo).
    */
   const StringData* name() const;
   StrNR nameStr() const;
+
+  /*
+   * A hash for this func that will remain constant across process restarts.
+   */
+  size_t stableHash() const;
 
   /*
    * The function's fully class-qualified, name (e.g., C::foo).
@@ -792,11 +799,6 @@ struct Func final {
   // Coeffects.                                                        [const]
 
   /*
-   * What is the level of reactivity of this function?
-   */
-  RxLevel rxLevel() const;
-
-  /*
    * Is this the version of the function body with reactivity disabled via
    * if (Rx\IS_ENABLED) ?
    */
@@ -880,7 +882,7 @@ struct Func final {
    * Get the system and coeffect attributes of the function.
    */
   Attr attrs() const;
-  CoeffectAttr coeffectAttrs() const;
+  StaticCoeffects staticCoeffects() const;
 
   /*
    * Get the user-declared attributes of the function.
@@ -1066,7 +1068,7 @@ struct Func final {
    * Print function attributes to out.
    */
   static void print_attrs(std::ostream& out, Attr attrs);
-  static void print_attrs(std::ostream& out, CoeffectAttr attrs);
+  static void print_attrs(std::ostream& out, StaticCoeffects attrs);
 
 
   /////////////////////////////////////////////////////////////////////////////
@@ -1096,7 +1098,7 @@ struct Func final {
   // Having public setters here should be avoided, so try not to add any.
 
   void setAttrs(Attr attrs);
-  void setCoeffectAttrs(CoeffectAttr attrs);
+  void setStaticCoeffects(StaticCoeffects attrs);
   void setBaseCls(Class* baseCls);
   void setFuncHandle(rds::Link<LowPtr<Func>, rds::Mode::NonLocal> l);
   void setHasPrivateAncestor(bool b);
@@ -1118,7 +1120,7 @@ struct Func final {
     return offsetof(Func, m_##f);       \
   }
   OFF(attrs)
-  OFF(coeffectAttrs)
+  OFF(staticCoeffects)
   OFF(name)
   OFF(maxStackCells)
   OFF(maybeIntercepted)
@@ -1212,7 +1214,7 @@ private:
    * Properties shared by all clones of a Func.
    */
   struct SharedData : AtomicCountable {
-    SharedData(PreClass* preClass, Offset base, Offset past,
+    SharedData(PreClass* preClass, Offset base, Offset past, int sn,
                int line1, int line2, bool isPhpLeafFn,
                const StringData* docComment);
     ~SharedData();
@@ -1241,7 +1243,7 @@ private:
     EHEntVec m_ehtab;
 
     /*
-     * Up to 32 bits.
+     * Up to 16 bits.
      */
     union Flags {
       struct {
@@ -1261,13 +1263,13 @@ private:
         bool m_hasReturnWithMultiUBs : true;
         bool m_hasCoeffectRules : true;
       };
-      uint32_t m_allFlags;
+      uint16_t m_allFlags;
     };
-    static_assert(sizeof(Flags) == sizeof(uint32_t));
+    static_assert(sizeof(Flags) == sizeof(uint16_t));
 
     Flags m_allFlags;
 
-    // 16 bits of padding here in LOWPTR builds
+    uint16_t m_sn;
 
     LowStringPtr m_retUserType;
     UserAttributeMap m_userAttributes;
@@ -1319,6 +1321,7 @@ private:
     CoeffectRules m_coeffectRules;
     Offset m_past;  // Only read if SharedData::m_pastDelta is kSmallDeltaLimit
     int m_line2;    // Only read if SharedData::m_line2 is kSmallDeltaLimit
+    int m_sn;       // Only read if SharedData::m_sn is kSmallDeltaLimit
     int64_t m_dynCallSampleRate;
   };
 
@@ -1508,6 +1511,30 @@ public:
   }
 
   /////////////////////////////////////////////////////////////////////////////
+  // Code locations.                                                    [const]
+
+  /*
+   * Get the line number corresponding to `offset'.
+   *
+   * Return -1 if not found.
+   */
+  int getLineNumber(Offset offset) const;
+
+  /*
+   * Get the SourceLoc corresponding to `offset'.
+   *
+   * Return false if not found, else true.
+   */
+  bool getSourceLoc(Offset offset, SourceLoc& sLoc) const;
+
+  /*
+   * Get the Offset range(s) corresponding to `offset'.
+   *
+   * Return false if not found, else true.
+   */
+  bool getOffsetRange(Offset offset, OffsetRange& range) const;
+
+  /////////////////////////////////////////////////////////////////////////////
   // Constants.
 
 private:
@@ -1570,7 +1597,7 @@ private:
   bool m_hasForeignThis : 1;
   bool m_registeredInDataMap : 1;
   // 2 free bits
-  CoeffectAttr m_coeffectAttrs{CEAttrNone};
+  StaticCoeffects m_staticCoeffects{StaticCoeffects::none()};
   int16_t m_maxStackCells{0};
   uint64_t m_inoutBitVal{0};
   Unit* const m_unit;

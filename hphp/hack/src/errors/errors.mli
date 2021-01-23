@@ -121,6 +121,107 @@ val phase_of_string : string -> phase option
 
 val name_context_to_string : name_context -> string
 
+val to_json : Pos.absolute error_ -> Hh_json.json
+
+val convert_errors_to_string :
+  ?include_filename:bool -> error list -> string list
+
+val combining_sort : 'a list -> f:('a -> string) -> 'a list
+
+val to_string : Pos.absolute error_ -> string
+
+val format_summary :
+  format -> 'a error_ list -> int -> int option -> string option
+
+val try_ : (unit -> 'a) -> (error -> 'a) -> 'a
+
+val try_with_error : (unit -> 'a) -> (unit -> 'a) -> 'a
+
+(* The type of collections of errors *)
+type t [@@deriving eq]
+
+(** Return the list of errors caused by the function passed as parameter
+    along with its result. *)
+val do_ : (unit -> 'a) -> t * 'a
+
+(** Return the list of errors caused by the function passed as parameter
+    along with its result.
+    The phase parameter determine the phase of the returned errors. *)
+val do_with_context : Relative_path.t -> phase -> (unit -> 'a) -> t * 'a
+
+val run_in_context : Relative_path.t -> phase -> (unit -> 'a) -> 'a
+
+(** Turn on lazy decl mode for the duration of the closure.
+    This runs without returning the original state,
+    since we collect it later in do_with_lazy_decls_ *)
+val run_in_decl_mode : Relative_path.t -> (unit -> 'a) -> 'a
+
+(* Run this function with span for the definition being checked.
+ * This is used to check that the primary position for errors is not located
+ * outside the span of the definition.
+ *)
+val run_with_span : Pos.t -> (unit -> 'a) -> 'a
+
+(** ignore errors produced by function passed in argument. *)
+val ignore_ : (unit -> 'a) -> 'a
+
+val try_when : (unit -> 'a) -> when_:(unit -> bool) -> do_:(error -> unit) -> 'a
+
+val has_no_errors : (unit -> 'a) -> bool
+
+val currently_has_errors : unit -> bool
+
+val to_absolute : error -> Pos.absolute error_
+
+val to_absolute_for_test : error -> Pos.absolute error_
+
+val merge : t -> t -> t
+
+val merge_into_current : t -> unit
+
+val incremental_update_set :
+  old:t -> new_:t -> rechecked:Relative_path.Set.t -> phase -> t
+
+val incremental_update_map :
+  old:t -> new_:t -> rechecked:'a Relative_path.Map.t -> phase -> t
+
+val empty : t
+
+val is_empty : t -> bool
+
+val count : t -> int
+
+val get_error_list : t -> error list
+
+val get_sorted_error_list : t -> error list
+
+val from_error_list : error list -> t
+
+val iter_error_list : (error -> unit) -> t -> unit
+
+val fold_errors :
+  ?phase:phase -> t -> init:'a -> f:(Relative_path.t -> error -> 'a -> 'a) -> 'a
+
+val fold_errors_in :
+  ?phase:phase ->
+  t ->
+  source:Relative_path.t ->
+  init:'a ->
+  f:(error -> 'a -> 'a) ->
+  'a
+
+val get_failed_files : t -> phase -> Relative_path.Set.t
+
+val sort : error list -> error list
+
+val get_applied_fixmes : t -> applied_fixme list
+
+(***************************************
+ *                                     *
+ *       Specific errors               *
+ *                                     *
+ ***************************************)
+
 val internal_error : Pos.t -> string -> unit
 
 val unimplemented_feature : Pos.t -> string -> unit
@@ -341,8 +442,6 @@ val expecting_type_hint_variadic : Pos.t -> unit
 
 val expecting_return_type_hint : Pos.t -> unit
 
-val expecting_awaitable_return_type_hint : Pos.t -> unit
-
 val field_kinds : Pos.t -> Pos.t -> unit
 
 val unbound_name_typing : Pos.t -> string -> unit
@@ -562,6 +661,8 @@ val class_property_initializer_type_does_not_match_hint : typing_error_callback
 val xhp_attribute_does_not_match_hint : typing_error_callback
 
 val record_init_value_does_not_match_hint : typing_error_callback
+
+val using_error : Pos.t -> bool -> typing_error_callback
 
 val static_redeclared_as_dynamic :
   Pos.t -> Pos.t -> string -> elt_type:[ `Method | `Property ] -> unit
@@ -894,101 +995,6 @@ val invalid_return_disposable : Pos.t -> unit
 
 val invalid_switch_case_value_type : Pos.t -> string -> string -> unit
 
-val to_json : Pos.absolute error_ -> Hh_json.json
-
-val convert_errors_to_string :
-  ?include_filename:bool -> error list -> string list
-
-val combining_sort : 'a list -> f:('a -> string) -> 'a list
-
-val to_string : Pos.absolute error_ -> string
-
-val format_summary :
-  format -> 'a error_ list -> int -> int option -> string option
-
-val try_ : (unit -> 'a) -> (error -> 'a) -> 'a
-
-val try_with_error : (unit -> 'a) -> (unit -> 'a) -> 'a
-
-(* The type of collections of errors *)
-type t [@@deriving eq]
-
-(** Return the list of errors caused by the function passed as parameter
-    along with its result. *)
-val do_ : (unit -> 'a) -> t * 'a
-
-(** Return the list of errors caused by the function passed as parameter
-    along with its result.
-    The phase parameter determine the phase of the returned errors. *)
-val do_with_context : Relative_path.t -> phase -> (unit -> 'a) -> t * 'a
-
-val run_in_context : Relative_path.t -> phase -> (unit -> 'a) -> 'a
-
-(** Turn on lazy decl mode for the duration of the closure.
-    This runs without returning the original state,
-    since we collect it later in do_with_lazy_decls_ *)
-val run_in_decl_mode : Relative_path.t -> (unit -> 'a) -> 'a
-
-(* Run this function with span for the definition being checked.
- * This is used to check that the primary position for errors is not located
- * outside the span of the definition.
- *)
-val run_with_span : Pos.t -> (unit -> 'a) -> 'a
-
-(** ignore errors produced by function passed in argument. *)
-val ignore_ : (unit -> 'a) -> 'a
-
-val try_when : (unit -> 'a) -> when_:(unit -> bool) -> do_:(error -> unit) -> 'a
-
-val has_no_errors : (unit -> 'a) -> bool
-
-val currently_has_errors : unit -> bool
-
-val to_absolute : error -> Pos.absolute error_
-
-val to_absolute_for_test : error -> Pos.absolute error_
-
-val merge : t -> t -> t
-
-val merge_into_current : t -> unit
-
-val incremental_update_set :
-  old:t -> new_:t -> rechecked:Relative_path.Set.t -> phase -> t
-
-val incremental_update_map :
-  old:t -> new_:t -> rechecked:'a Relative_path.Map.t -> phase -> t
-
-val empty : t
-
-val is_empty : t -> bool
-
-val count : t -> int
-
-val get_error_list : t -> error list
-
-val get_sorted_error_list : t -> error list
-
-val from_error_list : error list -> t
-
-val iter_error_list : (error -> unit) -> t -> unit
-
-val fold_errors :
-  ?phase:phase -> t -> init:'a -> f:(Relative_path.t -> error -> 'a -> 'a) -> 'a
-
-val fold_errors_in :
-  ?phase:phase ->
-  t ->
-  source:Relative_path.t ->
-  init:'a ->
-  f:(error -> 'a -> 'a) ->
-  'a
-
-val get_failed_files : t -> phase -> Relative_path.Set.t
-
-val sort : error list -> error list
-
-val get_applied_fixmes : t -> applied_fixme list
-
 val too_few_type_arguments : Pos.t -> unit
 
 val required_field_is_optional :
@@ -1086,8 +1092,6 @@ val nonreactive_call_from_shallow :
 
 val illegal_destructor : Pos.t -> unit
 
-val rx_enabled_in_non_rx_context : Pos.t -> unit
-
 val ambiguous_lambda : Pos.t -> (Pos.t * string) list -> unit
 
 val ellipsis_strict_mode :
@@ -1126,6 +1130,8 @@ val parent_in_function_pointer : Pos.t -> string option -> string -> unit
 val self_in_non_final_function_pointer :
   Pos.t -> string option -> string -> unit
 
+val invalid_wildcard_context : Pos.t -> unit
+
 val invalid_type_for_atmost_rx_as_rxfunc_parameter : Pos.t -> string -> unit
 
 val missing_annotation_for_atmost_rx_as_rxfunc_parameter : Pos.t -> unit
@@ -1139,8 +1145,6 @@ val return_void_to_rx_mismatch :
 
 val returns_void_to_rx_function_as_non_expression_statement :
   Pos.t -> Pos.t -> unit
-
-val non_awaited_awaitable_in_rx : Pos.t -> unit
 
 val shapes_key_exists_always_true : Pos.t -> string -> Pos.t -> unit
 
@@ -1416,12 +1420,18 @@ module CoeffectEnforcedOp : sig
 
   val static_property_access : Pos.t -> unit
 
+  val rx_enabled_in_non_rx_context : Pos.t -> unit
+
   val nonreactive_indexing : bool -> Pos.t -> unit
 
   val obj_set_reactive : Pos.t -> unit
 
   val invalid_unset_target_rx : Pos.t -> unit
+
+  val non_awaited_awaitable_in_rx : Pos.t -> unit
 end
+
+val illegal_context : Pos.t -> string -> unit
 
 val abstract_function_pointer : string -> string -> Pos.t -> Pos.t -> unit
 
@@ -1464,6 +1474,19 @@ val ifc_internal_error : Pos.t -> string -> unit
 val ifc_policy_mismatch :
   Pos.t -> Pos.t -> string -> string -> typing_error_callback -> unit
 
-val parent_implements_dynamic : Pos.t -> string -> string -> bool -> unit
+val parent_implements_dynamic :
+  Pos.t ->
+  string * Ast_defs.class_kind ->
+  string * Ast_defs.class_kind ->
+  bool ->
+  unit
 
 val method_is_not_dynamically_callable : Pos.t -> string -> string -> unit
+
+val immutable_local : Pos.t -> unit
+
+val enum_classes_reserved_syntax : Pos.t -> unit
+
+val nonsense_member_selection : Pos.t -> string -> unit
+
+val consider_meth_caller : Pos.t -> string -> string -> unit
