@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<bf7cd21672ec0df5012752cc4bbbcda7>>
+// @generated SignedSource<<bdc9d6019bf74383400ff255c8a0e49b>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidize_regen.sh
+//   hphp/hack/src/oxidized_regen.sh
 
 use no_pos_hash::NoPosHash;
 use ocamlrep_derive::FromOcamlRep;
@@ -49,4 +49,6 @@ pub struct FullFidelityParserEnv {
     pub disable_modes: bool,
     pub disallow_hash_comments: bool,
     pub disallow_fun_and_cls_meth_pseudo_funcs: bool,
+    pub array_unification: bool,
+    pub interpret_soft_types_as_like_types: bool,
 }

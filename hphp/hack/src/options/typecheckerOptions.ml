@@ -168,3 +168,15 @@ let report_pos_from_reason = GlobalOptions.tco_report_pos_from_reason
 let enable_sound_dynamic = GlobalOptions.tco_enable_sound_dynamic
 
 let use_direct_decl_parser = GlobalOptions.tco_use_direct_decl_parser
+
+let array_unification = GlobalOptions.po_array_unification
+
+let interpret_soft_types_as_like_types =
+  GlobalOptions.po_interpret_soft_types_as_like_types
+
+let enable_strict_string_concat_interp =
+  GlobalOptions.tco_enable_strict_string_concat_interp
+
+let set_readonly = GlobalOptions.set_tco_readonly
+
+let readonly = GlobalOptions.tco_readonly

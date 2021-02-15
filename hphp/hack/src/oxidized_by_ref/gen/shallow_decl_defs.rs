@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<f0326502a9ba19ec5a081e7483f94663>>
+// @generated SignedSource<<3348b8bb9db87f6013c7ff283c104e16>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidize_regen.sh
+//   hphp/hack/src/oxidized_regen.sh
 
 use arena_trait::TrivialDrop;
 use no_pos_hash::NoPosHash;
@@ -56,7 +56,7 @@ impl<'a> TrivialDrop for ShallowClassConst<'a> {}
 )]
 pub struct ShallowTypeconst<'a> {
     pub abstract_: TypeconstAbstractKind<'a>,
-    pub constraint: Option<&'a Ty<'a>>,
+    pub as_constraint: Option<&'a Ty<'a>>,
     pub name: ast_defs::Id<'a>,
     pub type_: Option<&'a Ty<'a>>,
     pub enforceable: (&'a pos::Pos<'a>, bool),

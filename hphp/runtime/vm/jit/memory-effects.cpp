@@ -1258,7 +1258,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case CheckDictKeys:
   case CheckMixedArrayOffset:
   case CheckDictOffset:
-  case CheckDictOffsetLA:
   case CheckKeysetOffset:
   case CheckMissingKeyInArrLike:
   case ProfileDictAccess:
@@ -1494,7 +1493,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case AddInt:
   case AddIntO:
   case AdvanceDictPtrIter:
-  case AdvanceVecPtrIter:
   case AndInt:
   case AssertType:
   case AssertLoc:
@@ -1522,7 +1520,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case EqInt:
   case EqPtrIter:
   case GetDictPtrIter:
-  case GetVecPtrIter:
   case GteBool:
   case GteInt:
   case GtBool:
@@ -1806,7 +1803,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case CountCollection:
   case LdVectorSize:
   case CheckVecBounds:
-  case CheckVecBoundsLA:
   case LdColVec:
   case LdColDict:
     return may_load_store(AEmpty, AEmpty);

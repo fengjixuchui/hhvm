@@ -1,3 +1,4 @@
+//// toplevel.php
 <?hh
 function with_defaults(
   int $arg = \extract_standalone_make_default(),
@@ -9,7 +10,10 @@ function call_defaulted(int $arg): void {
   with_defaults($arg);
   with_defaults();
 }
-<<__Rx>>
+
+//// __extract_standalone__.php
+<?hh
+<<__Pure>>
 function extract_standalone_make_default(): nothing {
   throw new \Exception();
 }

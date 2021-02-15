@@ -11,7 +11,6 @@ open Hh_prelude
 open Decl_defs
 open Shallow_decl_defs
 open Typing_defs
-module ShapeMap = Nast.ShapeMap
 
 (*****************************************************************************)
 (* Functor traversing a type, but applies a user defined function for
@@ -77,6 +76,7 @@ struct
     | Ris p -> Ris (pos p)
     | Ras p -> Ras (pos p)
     | Rvarray_or_darray_key p -> Rvarray_or_darray_key (pos p)
+    | Rvec_or_dict_key p -> Rvec_or_dict_key (pos p)
     | Rusing p -> Rusing (pos p)
     | Rdynamic_prop p -> Rdynamic_prop (pos p)
     | Rdynamic_call p -> Rdynamic_call (pos p)
@@ -110,6 +110,9 @@ struct
     | Rsplice p -> Rsplice (pos p)
     | Ret_boolean p -> Ret_boolean (pos p)
     | Rdefault_capability p -> Rdefault_capability (pos p)
+    | Rarray_unification p -> Rarray_unification (pos p)
+    | Rconcat_operand p -> Rconcat_operand (pos p)
+    | Rinterp_operand p -> Rinterp_operand (pos p)
 
   let rec ty t =
     let (p, x) = deref t in
@@ -120,6 +123,7 @@ struct
     | Tdarray (ty1, ty2) -> Tdarray (ty ty1, ty ty2)
     | Tvarray root_ty -> Tvarray (ty root_ty)
     | Tvarray_or_darray (ty1, ty2) -> Tvarray_or_darray (ty ty1, ty ty2)
+    | Tvec_or_dict (ty1, ty2) -> Tvec_or_dict (ty ty1, ty ty2)
     | Tprim _ as x -> x
     | Tgeneric (name, args) -> Tgeneric (name, List.map args ty)
     | Ttuple tyl -> Ttuple (List.map tyl ty)
@@ -167,9 +171,6 @@ struct
   and fun_elt fe = { fe with fe_type = ty fe.fe_type; fe_pos = pos fe.fe_pos }
 
   and fun_reactive = function
-    | Local (Some ty1) -> Local (Some (ty ty1))
-    | Shallow (Some ty1) -> Shallow (Some (ty ty1))
-    | Reactive (Some ty1) -> Reactive (Some (ty ty1))
     | Pure (Some ty1) -> Pure (Some (ty ty1))
     | r -> r
 
@@ -209,7 +210,7 @@ struct
     {
       ttc_abstract = typeconst_abstract_kind tc.ttc_abstract;
       ttc_name = string_id tc.ttc_name;
-      ttc_constraint = ty_opt tc.ttc_constraint;
+      ttc_as_constraint = ty_opt tc.ttc_as_constraint;
       ttc_type = ty_opt tc.ttc_type;
       ttc_origin = tc.ttc_origin;
       ttc_enforceable = Tuple.T2.map_fst ~f:pos tc.ttc_enforceable;
@@ -328,7 +329,7 @@ struct
   and shallow_typeconst stc =
     {
       stc_abstract = typeconst_abstract_kind stc.stc_abstract;
-      stc_constraint = Option.map stc.stc_constraint ty;
+      stc_as_constraint = Option.map stc.stc_as_constraint ty;
       stc_name = string_id stc.stc_name;
       stc_type = Option.map stc.stc_type ty;
       stc_enforceable = (pos (fst stc.stc_enforceable), snd stc.stc_enforceable);

@@ -118,6 +118,11 @@ type t = {
   po_disallow_fun_and_cls_meth_pseudo_funcs: bool;
   tco_use_direct_decl_parser: bool;
   tco_ifc_enabled: string list;
+  po_enable_enum_supertyping: bool;
+  po_array_unification: bool;
+  po_interpret_soft_types_as_like_types: bool;
+  tco_enable_strict_string_concat_interp: bool;
+  tco_readonly: bool;
 }
 [@@deriving eq, show]
 
@@ -297,6 +302,11 @@ let default =
     po_disallow_fun_and_cls_meth_pseudo_funcs = false;
     tco_use_direct_decl_parser = false;
     tco_ifc_enabled = [];
+    po_enable_enum_supertyping = false;
+    po_array_unification = false;
+    po_interpret_soft_types_as_like_types = false;
+    tco_enable_strict_string_concat_interp = false;
+    tco_readonly = false;
   }
 
 let make
@@ -428,6 +438,13 @@ let make
       default.po_disallow_fun_and_cls_meth_pseudo_funcs)
     ?(tco_use_direct_decl_parser = default.tco_use_direct_decl_parser)
     ?(tco_ifc_enabled = default.tco_ifc_enabled)
+    ?(po_enable_enum_supertyping = default.po_enable_enum_supertyping)
+    ?(po_array_unification = default.po_array_unification)
+    ?(po_interpret_soft_types_as_like_types =
+      default.po_interpret_soft_types_as_like_types)
+    ?(tco_enable_strict_string_concat_interp =
+      default.tco_enable_strict_string_concat_interp)
+    ?(tco_readonly = default.tco_readonly)
     () =
   {
     tco_experimental_features;
@@ -540,6 +557,11 @@ let make
     po_disallow_fun_and_cls_meth_pseudo_funcs;
     tco_use_direct_decl_parser;
     tco_ifc_enabled;
+    po_enable_enum_supertyping;
+    po_array_unification;
+    po_interpret_soft_types_as_like_types;
+    tco_enable_strict_string_concat_interp;
+    tco_readonly;
   }
 
 let tco_experimental_feature_enabled t s =
@@ -741,6 +763,10 @@ let set_global_inference t = { t with tco_global_inference = true }
 
 let set_ordered_solving t b = { t with tco_ordered_solving = b }
 
+let set_tco_readonly t b = { t with tco_readonly = b }
+
+let tco_readonly t = t.tco_readonly
+
 let po_parser_errors_only t = t.po_parser_errors_only
 
 let po_disallow_func_ptrs_in_constants t = t.po_disallow_func_ptrs_in_constants
@@ -785,3 +811,13 @@ let po_disallow_fun_and_cls_meth_pseudo_funcs t =
   t.po_disallow_fun_and_cls_meth_pseudo_funcs
 
 let tco_use_direct_decl_parser t = t.tco_use_direct_decl_parser
+
+let po_enable_enum_supertyping t = t.po_enable_enum_supertyping
+
+let po_array_unification t = t.po_array_unification
+
+let po_interpret_soft_types_as_like_types t =
+  t.po_interpret_soft_types_as_like_types
+
+let tco_enable_strict_string_concat_interp t =
+  t.tco_enable_strict_string_concat_interp

@@ -25,7 +25,7 @@ use hhas_adata_rust::{
 use hhas_attribute_rust::{self as hhas_attribute, HhasAttribute};
 use hhas_body_rust::HhasBody;
 use hhas_class_rust::{self as hhas_class, HhasClass};
-use hhas_coeffects::HhasCoeffects;
+use hhas_coeffects::{HhasCoeffects, HhasCtxConstant};
 use hhas_constant_rust::HhasConstant;
 use hhas_function_rust::HhasFunction;
 use hhas_method_rust::{HhasMethod, HhasMethodFlags};
@@ -476,6 +476,19 @@ fn print_type_constant<W: Write>(
     w.write(";")
 }
 
+fn print_ctx_constant<W: Write>(
+    ctx: &mut Context,
+    w: &mut W,
+    c: &HhasCtxConstant,
+) -> Result<(), W::Error> {
+    if let Some(coeffects) = HhasCoeffects::vec_to_string(&c.coeffects, |c| c.to_string()) {
+        ctx.newline(w)?;
+        concat_str_by(w, " ", [".ctx", &c.name, coeffects.as_ref()])?;
+        w.write(";")?;
+    }
+    Ok(())
+}
+
 fn print_property_doc_comment<W: Write>(w: &mut W, p: &HhasProperty) -> Result<(), W::Error> {
     if let Some(s) = p.doc_comment.as_ref() {
         w.write(triple_quote_string(&(s.0).1))?;
@@ -919,6 +932,9 @@ fn print_class_def<W: Write>(
         for x in &class_def.type_constants {
             print_type_constant(c, w, x)?;
         }
+        for x in &class_def.ctx_constants {
+            print_ctx_constant(c, w, x)?;
+        }
         for x in &class_def.properties {
             print_property(c, w, class_def, x)?;
         }
@@ -1157,7 +1173,7 @@ fn print_body<W: Write>(
     }
     for i in body.rx_cond_rx_of_arg.iter() {
         ctx.newline(w)?;
-        concat_str(w, [".rx_cond_rx_of_arg ", i.to_string().as_ref(), ";"])?;
+        concat_str(w, [".coeffects_fun_param ", i.to_string().as_ref(), ";"])?;
     }
     if let Some((_, s)) = extract_rx_if_impl_attr(0, attrs) {
         ctx.newline(w)?;
@@ -1379,7 +1395,10 @@ fn print_instr<W: Write>(w: &mut W, instr: &Instruct) -> Result<(), W::Error> {
                 print_local(w, id)
             }
             IG::CGetG => w.write("CGetG"),
-            IG::CGetS => w.write("CGetS"),
+            IG::CGetS(op) => {
+                w.write("CGetS ")?;
+                print_readonly_op(w, op)
+            }
             IG::ClassGetC => w.write("ClassGetC"),
             IG::ClassGetTS => w.write("ClassGetTS"),
         }
@@ -1439,13 +1458,15 @@ fn print_base<W: Write>(w: &mut W, i: &InstructBase) -> Result<(), W::Error> {
             w.write(" ")?;
             print_member_opmode(w, m)
         }
-        I::BaseSC(si1, si2, m) => {
+        I::BaseSC(si1, si2, m, op) => {
             w.write("BaseSC ")?;
             print_stack_index(w, si1)?;
             w.write(" ")?;
             print_stack_index(w, si2)?;
             w.write(" ")?;
-            print_member_opmode(w, m)
+            print_member_opmode(w, m)?;
+            w.write(" ")?;
+            print_readonly_op(w, op)
         }
         I::BaseL(id, m) => {
             w.write("BaseL ")?;
@@ -1487,34 +1508,52 @@ fn print_member_opmode<W: Write>(w: &mut W, m: &MemberOpMode) -> Result<(), W::E
 fn print_member_key<W: Write>(w: &mut W, mk: &MemberKey) -> Result<(), W::Error> {
     use MemberKey as M;
     match mk {
-        M::EC(si) => {
+        M::EC(si, op) => {
             w.write("EC:")?;
-            print_stack_index(w, si)
+            print_stack_index(w, si)?;
+            w.write(" ")?;
+            print_readonly_op(w, op)
         }
-        M::EL(local) => {
+        M::EL(local, op) => {
             w.write("EL:")?;
-            print_local(w, local)
+            print_local(w, local)?;
+            w.write(" ")?;
+            print_readonly_op(w, op)
         }
-        M::ET(s) => {
+        M::ET(s, op) => {
             w.write("ET:")?;
-            quotes(w, |w| w.write(escape(s)))
+            quotes(w, |w| w.write(escape(s)))?;
+            w.write(" ")?;
+            print_readonly_op(w, op)
         }
-        M::EI(i) => concat_str(w, ["EI:", i.to_string().as_ref()]),
-        M::PC(si) => {
+        M::EI(i, op) => {
+            concat_str(w, ["EI:", i.to_string().as_ref()])?;
+            w.write(" ")?;
+            print_readonly_op(w, op)
+        }
+        M::PC(si, op) => {
             w.write("PC:")?;
-            print_stack_index(w, si)
+            print_stack_index(w, si)?;
+            w.write(" ")?;
+            print_readonly_op(w, op)
         }
-        M::PL(local) => {
+        M::PL(local, op) => {
             w.write("PL:")?;
-            print_local(w, local)
+            print_local(w, local)?;
+            w.write(" ")?;
+            print_readonly_op(w, op)
         }
-        M::PT(id) => {
+        M::PT(id, op) => {
             w.write("PT:")?;
-            print_prop_id(w, id)
+            print_prop_id(w, id)?;
+            w.write(" ")?;
+            print_readonly_op(w, op)
         }
-        M::QT(id) => {
+        M::QT(id, op) => {
             w.write("QT:")?;
-            print_prop_id(w, id)
+            print_prop_id(w, id)?;
+            w.write(" ")?;
+            print_readonly_op(w, op)
         }
         M::W => w.write("W"),
     }
@@ -1620,16 +1659,18 @@ fn print_final<W: Write>(w: &mut W, f: &InstructFinal) -> Result<(), W::Error> {
             w.write(" ")?;
             print_member_key(w, mk)
         }
-        F::SetRangeM(i, op, s) => {
+        F::SetRangeM(i, s, op, rop) => {
             w.write("SetRangeM ")?;
             print_int(w, i)?;
+            w.write(" ")?;
+            print_int(w, &(*s as usize))?;
             w.write(" ")?;
             w.write(match op {
                 SetrangeOp::Forward => "Forward",
                 SetrangeOp::Reverse => "Reverse",
             })?;
             w.write(" ")?;
-            print_int(w, &(*s as usize))
+            print_readonly_op(w, rop)
         }
     }
 }
@@ -1707,7 +1748,10 @@ fn print_mutator<W: Write>(w: &mut W, mutator: &InstructMutator) -> Result<(), W
             print_local(w, id)
         }
         M::SetG => w.write("SetG"),
-        M::SetS => w.write("SetS"),
+        M::SetS(op) => {
+            w.write("SetS ")?;
+            print_readonly_op(w, op)
+        }
         M::SetOpL(id, op) => {
             w.write("SetOpL ")?;
             print_local(w, id)?;
@@ -1718,9 +1762,11 @@ fn print_mutator<W: Write>(w: &mut W, mutator: &InstructMutator) -> Result<(), W
             w.write("SetOpG ")?;
             print_eq_op(w, op)
         }
-        M::SetOpS(op) => {
+        M::SetOpS(op, rop) => {
             w.write("SetOpS ")?;
-            print_eq_op(w, op)
+            print_eq_op(w, op)?;
+            w.write(" ")?;
+            print_readonly_op(w, rop)
         }
         M::IncDecL(id, op) => {
             w.write("IncDecL ")?;
@@ -1732,9 +1778,11 @@ fn print_mutator<W: Write>(w: &mut W, mutator: &InstructMutator) -> Result<(), W
             w.write("IncDecG ")?;
             print_incdec_op(w, op)
         }
-        M::IncDecS(op) => {
+        M::IncDecS(op, rop) => {
             w.write("IncDecS ")?;
-            print_incdec_op(w, op)
+            print_incdec_op(w, op)?;
+            w.write(" ")?;
+            print_readonly_op(w, rop)
         }
         M::UnsetL(id) => {
             w.write("UnsetL ")?;
@@ -1745,14 +1793,16 @@ fn print_mutator<W: Write>(w: &mut W, mutator: &InstructMutator) -> Result<(), W
             w.write("CheckProp ")?;
             print_prop_id(w, id)
         }
-        M::InitProp(id, op) => {
+        M::InitProp(id, op, rop) => {
             w.write("InitProp ")?;
             print_prop_id(w, id)?;
             w.write(" ")?;
             match op {
                 InitpropOp::Static => w.write("Static"),
                 InitpropOp::NonStatic => w.write("NonStatic"),
-            }
+            }?;
+            w.write(" ")?;
+            print_readonly_op(w, rop)
         }
     }
 }
@@ -1774,6 +1824,14 @@ fn print_eq_op<W: Write>(w: &mut W, op: &EqOp) -> Result<(), W::Error> {
         EqOp::PlusEqualO => "PlusEqualO",
         EqOp::MinusEqualO => "MinusEqualO",
         EqOp::MulEqualO => "MulEqualO",
+    })
+}
+
+fn print_readonly_op<W: Write>(w: &mut W, op: &ReadOnlyOp) -> Result<(), W::Error> {
+    w.write(match op {
+        ReadOnlyOp::ReadOnly => "ReadOnly",
+        ReadOnlyOp::Mutable => "Mutable",
+        ReadOnlyOp::Any => "Any",
     })
 }
 

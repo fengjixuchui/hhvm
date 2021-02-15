@@ -408,11 +408,7 @@ void implCheckMixedArrayLikeOffset(IRLS& env, const IRInstruction* inst,
     // array-likes, m_extra is always 0, and for bespoke array-likes, the full
     // quadword is always a negative int64_t.
     auto const sf = v.makeReg();
-    if (inst->is(CheckDictOffsetLA)) {
-      v << cmpqim{safe_cast<int32_t>(pos), arr[ArrayData::offsetofSize()], sf};
-    } else {
-      v << cmplim{safe_cast<int32_t>(pos), arr[MixedArray::usedOff()], sf};
-    }
+    v << cmplim{safe_cast<int32_t>(pos), arr[MixedArray::usedOff()], sf};
     ifThen(v, CC_LE, sf, branch);
   }
   { // Fail if the Elm key value doesn't match.
@@ -462,10 +458,6 @@ void cgCheckMixedArrayOffset(IRLS& env, const IRInstruction* inst) {
 }
 
 void cgCheckDictOffset(IRLS& env, const IRInstruction* inst) {
-  implCheckMixedArrayLikeOffset(env, inst, getKeyType(inst->src(1)));
-}
-
-void cgCheckDictOffsetLA(IRLS& env, const IRInstruction* inst) {
   implCheckMixedArrayLikeOffset(env, inst, getKeyType(inst->src(1)));
 }
 
@@ -667,31 +659,6 @@ void cgGetDictPtrIter(IRLS& env, const IRInstruction* inst) {
   v << lea{arr[px3 * 8 + MixedArray::dataOff()], dst};
 }
 
-void cgGetVecPtrIter(IRLS& env, const IRInstruction* inst) {
-  auto const pos_tmp = inst->src(1);
-  auto const arr = srcLoc(env, inst, 0).reg();
-  auto const pos = srcLoc(env, inst, 1).reg();
-  auto const dst = dstLoc(env, inst, 0).reg();
-
-  auto& v = vmain(env);
-  if (pos_tmp->hasConstVal(TInt)) {
-    auto const n = pos_tmp->intVal();
-    auto const offset = PackedArray::entriesOffset() + n * sizeof(TypedValue);
-    if (deltaFits(offset, sz::dword)) {
-      v << addqi{safe_cast<int32_t>(offset), arr, dst, v.makeReg()};
-      return;
-    }
-  }
-
-  auto const pos_l = v.makeReg();
-  auto const px2 = v.makeReg();
-  auto const px2_l = v.makeReg();
-  v << movtql{pos, pos_l};
-  v << shlli{1, pos_l, px2_l, v.makeReg()};
-  v << movzlq{px2_l, px2};
-  v << lea{arr[px2 * 8 + PackedArray::entriesOffset()], dst};
-}
-
 void cgAdvanceDictPtrIter(IRLS& env, const IRInstruction* inst) {
   auto const src = srcLoc(env, inst, 0).reg();
   auto const dst = dstLoc(env, inst, 0).reg();
@@ -699,16 +666,6 @@ void cgAdvanceDictPtrIter(IRLS& env, const IRInstruction* inst) {
   auto& v = vmain(env);
   auto const extra = inst->extra<AdvanceDictPtrIter>();
   auto const delta = extra->offset * int32_t(sizeof(MixedArrayElm));
-  v << addqi{delta, src, dst, v.makeReg()};
-}
-
-void cgAdvanceVecPtrIter(IRLS& env, const IRInstruction* inst) {
-  auto const src = srcLoc(env, inst, 0).reg();
-  auto const dst = dstLoc(env, inst, 0).reg();
-
-  auto& v = vmain(env);
-  auto const extra = inst->extra<AdvanceVecPtrIter>();
-  auto const delta = extra->offset * int32_t(sizeof(TypedValue));
   v << addqi{delta, src, dst, v.makeReg()};
 }
 
@@ -811,32 +768,41 @@ LvalPtrs implPackedLayoutElemAddr(IRLS& env, Vloc arrLoc,
   static_assert(TVOFF(m_data) == 0, "");
 
   if (idx->hasConstVal()) {
-    auto const offset = PackedArray::entriesOffset() +
-                        idx->intVal() * sizeof(TypedValue);
-    if (deltaFits(offset, sz::dword)) {
-      return {rarr[offset + TVOFF(m_type)], rarr[offset]};
+    auto const offset = PackedArray::entryOffset(idx->intVal());
+    if (deltaFits(offset.type_offset, sz::dword) &&
+        deltaFits(offset.data_offset, sz::dword)) {
+      return {rarr[offset.type_offset], rarr[offset.data_offset]};
     }
   }
 
-  /*
-   * Compute `rarr + ridx * sizeof(TypedValue) + PackedArray::entriesOffset()`.
-   *
-   * The logic of `scaledIdx * 16` is split in the following two instructions,
-   * in order to save a byte in the shl instruction.
-   *
-   * TODO(#7728856): We should really move this into vasm-x64.cpp...
-   */
-  auto idxl = v.makeReg();
-  auto scaled_idxl = v.makeReg();
-  auto scaled_idx = v.makeReg();
-  v << movtql{ridx, idxl};
-  v << shlli{1, idxl, scaled_idxl, v.makeReg()};
-  v << movzlq{scaled_idxl, scaled_idx};
+  if constexpr (PackedArray::stores_typed_values) {
+    // Compute `rarr + ridx * sizeof(TypedValue) + PackedArray::entriesOffset().
+    //
+    // The logic of `scaledIdx * 16` is split in the following two instructions,
+    // in order to save a byte in the shl instruction.
+    //
+    // TODO(#7728856): We should really move this into vasm-x64.cpp...
+    auto idxl = v.makeReg();
+    auto scaled_idxl = v.makeReg();
+    auto scaled_idx = v.makeReg();
+    v << movtql{ridx, idxl};
+    v << shlli{1, idxl, scaled_idxl, v.makeReg()};
+    v << movzlq{scaled_idxl, scaled_idx};
 
-  auto const valPtr = rarr[
-    scaled_idx * int(sizeof(TypedValue) / 2) + PackedArray::entriesOffset()
-  ];
-  return {valPtr + TVOFF(m_type), valPtr};
+    auto const valPtr = rarr[
+      scaled_idx * int(sizeof(TypedValue) / 2) + PackedArray::entriesOffset()
+    ];
+    return {valPtr + TVOFF(m_type), valPtr};
+  } else {
+    // See PackedBlock::LvalAt for an explanation of this math.
+    auto const x = v.makeReg();
+    auto const a = v.makeReg();
+    auto const b = v.makeReg();
+    v << andqi{-8, ridx, x, v.makeReg()};
+    v << lea{rarr[x    * 8] + PackedArray::entriesOffset(), a};
+    v << lea{rarr[ridx * 8] + PackedArray::entriesOffset(), b};
+    return {a[ridx], b[x] + 8};
+  }
 }
 
 void implVecSet(IRLS& env, const IRInstruction* inst) {

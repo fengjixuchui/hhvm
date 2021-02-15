@@ -7,18 +7,13 @@
  *
  *)
 
-(* This module performs some "validity" checks on declared types in
- * function and member signatures, extends, implements, uses, etc.
- * - trivial syntactic errors (e.g. writing ?nonnull instead of mixed)
- * - unsatisfied constraints (e.g. C<bool> where C requires T as arraykey)
- *)
-
 open Hh_prelude
 open Aast
 open Typing_defs
 open Typing_env_types
 open Utils
 module Env = Typing_env
+module FunUtils = Decl_fun_utils
 module Inst = Decl_instantiate
 module Phase = Typing_phase
 module SN = Naming_special_names
@@ -26,20 +21,11 @@ module TGenConstraint = Typing_generic_constraint
 module Subst = Decl_subst
 module TUtils = Typing_utils
 module Cls = Decl_provider.Class
-module Partial = Partial_provider
 
 type env = {
   typedef_tparams: Nast.tparam list;
   tenv: Typing_env_types.env;
 }
-
-let get_ctx env = Env.get_ctx env.tenv
-
-let get_tracing_info env =
-  {
-    Decl_counters.origin = Decl_counters.TopLevel;
-    file = Env.get_file env.tenv;
-  }
 
 let check_hint_wellkindedness env hint =
   let decl_ty = Decl_hint.hint env.decl_env hint in
@@ -104,124 +90,7 @@ let check_atom_on_param env pos dty lty =
     | _ -> Errors.atom_invalid_parameter_in_enum_class pos)
   | _ -> Errors.atom_invalid_parameter pos
 
-let rec fun_ tenv f =
-  Decl_fun_utils.check_params f.f_params;
-  let env = { typedef_tparams = []; tenv } in
-  let (p, _) = f.f_name in
-  (* Add type parameters to typing environment and localize the bounds
-     and where constraints *)
-  let tenv =
-    Phase.localize_and_add_ast_generic_parameters_and_where_constraints
-      p
-      env.tenv
-      f.f_tparams
-      f.f_where_constraints
-  in
-  let env = { env with tenv } in
-  maybe hint env (hint_of_type_hint f.f_ret);
-
-  List.iter f.f_tparams (tparam env);
-  List.iter f.f_params (fun_param env);
-  variadic_param env f.f_variadic
-
-and tparam env t = List.iter t.tp_constraints (fun (_, h) -> hint env h)
-
-and where_constr env (h1, _, h2) =
-  hint env h1;
-  hint env h2
-
-and contexts env (_, hl) = List.iter ~f:(hint env) hl
-
-and hint ?(is_atom = false) env (p, h) =
-  (* Do not use this one recursively to avoid quadratic runtime! *)
-  check_hint_wellkindedness env.tenv (p, h);
-  hint_ ~is_atom env p h
-
-and hint_no_kind_check env (p, h) = hint_ ~is_atom:false env p h
-
-and hint_ ~is_atom env p h_ =
-  let hint env (p, h) = hint_ ~is_atom:false env p h in
-  let () =
-    if is_atom then
-      (* __Atom is only allowed on HH\MemberOf, so we check everything that
-       * is not a class with this, and make a more refined check for Happly
-       *)
-      match h_ with
-      | Happly _ -> () (* checked in check_happly *)
-      | _ -> Errors.atom_invalid_parameter p
-  in
-  match h_ with
-  | Hany
-  | Herr
-  | Hmixed
-  | Hnonnull
-  | Hprim _
-  | Hthis
-  | Haccess _
-  | Habstr _
-  | Hdynamic
-  | Hnothing ->
-    ()
-  | Hoption (_, Hprim Tnull) -> Errors.option_null p
-  | Hoption (_, Hprim Tvoid) -> Errors.option_return_only_typehint p `void
-  | Hoption (_, Hprim Tnoreturn) ->
-    Errors.option_return_only_typehint p `noreturn
-  | Hoption (_, Hmixed) -> Errors.option_mixed p
-  | Hdarray (ty1, ty2) ->
-    hint env ty1;
-    hint env ty2
-  | Hvarray_or_darray (ty1, ty2) ->
-    maybe hint env ty1;
-    hint env ty2
-  | Hvarray ty -> hint env ty
-  | Htuple hl
-  | Hunion hl
-  | Hintersection hl ->
-    List.iter hl (hint env)
-  | Hoption h
-  | Hsoft h
-  | Hlike h ->
-    hint env h
-  | Hfun
-      {
-        hf_reactive_kind = _;
-        hf_param_tys = hl;
-        hf_param_kinds = _;
-        hf_param_mutability = _;
-        hf_variadic_ty = variadic_hint;
-        hf_ctxs;
-        hf_return_ty = h;
-        hf_is_mutable_return = _;
-      } ->
-    List.iter hl (hint env);
-    hint env h;
-    Option.iter variadic_hint (hint env);
-    Option.iter ~f:(contexts env) hf_ctxs
-  | Happly ((p, "\\Tuple"), _)
-  | Happly ((p, "\\tuple"), _) ->
-    Errors.tuple_syntax p
-  | Happly ((_, x), hl) as h ->
-    begin
-      match Env.get_class_or_typedef env.tenv x with
-      | None -> ()
-      | Some (Env.TypedefResult _) ->
-        check_happly ~is_atom env.typedef_tparams env.tenv (p, h);
-        List.iter hl (hint env)
-      | Some (Env.ClassResult _) ->
-        check_happly ~is_atom env.typedef_tparams env.tenv (p, h);
-        List.iter hl (hint env)
-    end
-  | Hshape { nsi_allows_unknown_fields = _; nsi_field_map } ->
-    let compute_hint_for_shape_field_info { sfi_hint; _ } = hint env sfi_hint in
-    List.iter ~f:compute_hint_for_shape_field_info nsi_field_map
-  | Hfun_context _ ->
-    (* TODO(coeffects): check if arg is a function type in the locals? *)
-    ()
-  | Hvar _ ->
-    (* TODO(coeffects) *)
-    ()
-
-and check_happly ?(is_atom = false) unchecked_tparams env h =
+let check_happly ?(is_atom = false) unchecked_tparams env h =
   let pos = fst h in
   let decl_ty = Decl_hint.hint env.decl_env h in
   let unchecked_tparams =
@@ -281,7 +150,169 @@ and check_happly ?(is_atom = false) unchecked_tparams env h =
     end
   | _ -> ()
 
-and class_ tenv c =
+let rec fun_ tenv f =
+  FunUtils.check_params f.f_params;
+  let env = { typedef_tparams = []; tenv } in
+  let (p, _) = f.f_name in
+  (* Add type parameters to typing environment and localize the bounds
+     and where constraints *)
+  let tenv =
+    Phase.localize_and_add_ast_generic_parameters_and_where_constraints
+      p
+      env.tenv
+      f.f_tparams
+      f.f_where_constraints
+  in
+  let env = { env with tenv } in
+  maybe hint env (hint_of_type_hint f.f_ret);
+
+  List.iter f.f_tparams (tparam env);
+  List.iter f.f_params (fun_param env);
+  variadic_param env f.f_variadic
+
+and tparam env t = List.iter t.tp_constraints (fun (_, h) -> hint env h)
+
+and where_constr env (h1, _, h2) =
+  hint env h1;
+  hint env h2
+
+and contexts env (_, hl) = List.iter ~f:(hint env) hl
+
+and hint ?(is_atom = false) env (p, h) =
+  (* Do not use this one recursively to avoid quadratic runtime! *)
+  check_hint_wellkindedness env.tenv (p, h);
+  hint_ ~is_atom env p h
+
+and hint_ ~is_atom env p h_ =
+  let hint env (p, h) = hint_ ~is_atom:false env p h in
+  let () =
+    if is_atom then
+      (* __Atom is only allowed on HH\MemberOf, so we check everything that
+       * is not a class with this, and make a more refined check for Happly
+       *)
+      match h_ with
+      | Happly _ -> () (* checked in check_happly *)
+      | _ -> Errors.atom_invalid_parameter p
+  in
+  match h_ with
+  | Hany
+  | Herr
+  | Hmixed
+  | Hnonnull
+  | Hprim _
+  | Hthis
+  | Haccess _
+  | Habstr _
+  | Hdynamic
+  | Hnothing ->
+    ()
+  | Hoption (_, Hprim Tnull) -> Errors.option_null p
+  | Hoption (_, Hprim Tvoid) -> Errors.option_return_only_typehint p `void
+  | Hoption (_, Hprim Tnoreturn) ->
+    Errors.option_return_only_typehint p `noreturn
+  | Hoption (_, Hmixed) -> Errors.option_mixed p
+  | Hdarray (ty1, ty2) ->
+    hint env ty1;
+    hint env ty2
+  | Hvec_or_dict (ty1, ty2)
+  | Hvarray_or_darray (ty1, ty2) ->
+    maybe hint env ty1;
+    hint env ty2
+  | Hvarray ty -> hint env ty
+  | Htuple hl
+  | Hunion hl
+  | Hintersection hl ->
+    List.iter hl (hint env)
+  | Hoption h
+  | Hsoft h
+  | Hlike h ->
+    hint env h
+  | Hfun
+      {
+        hf_reactive_kind = _;
+        hf_param_tys = hl;
+        hf_param_kinds = _;
+        hf_param_mutability = _;
+        hf_variadic_ty = variadic_hint;
+        hf_ctxs;
+        hf_return_ty = h;
+        hf_is_mutable_return = _;
+      } ->
+    List.iter hl (hint env);
+    hint env h;
+    Option.iter variadic_hint (hint env);
+    Option.iter ~f:(contexts env) hf_ctxs
+  | Happly ((p, "\\Tuple"), _)
+  | Happly ((p, "\\tuple"), _) ->
+    Errors.tuple_syntax p
+  | Happly ((_, x), hl) as h ->
+    begin
+      match Env.get_class_or_typedef env.tenv x with
+      | None -> ()
+      | Some (Env.TypedefResult _) ->
+        check_happly ~is_atom env.typedef_tparams env.tenv (p, h);
+        List.iter hl (hint env)
+      | Some (Env.ClassResult _) ->
+        check_happly ~is_atom env.typedef_tparams env.tenv (p, h);
+        List.iter hl (hint env)
+    end
+  | Hshape { nsi_allows_unknown_fields = _; nsi_field_map } ->
+    let compute_hint_for_shape_field_info { sfi_hint; _ } = hint env sfi_hint in
+    List.iter ~f:compute_hint_for_shape_field_info nsi_field_map
+  | Hfun_context _ ->
+    (* TODO(coeffects): check if arg is a function type in the locals? *)
+    ()
+  | Hvar _ ->
+    (* TODO(coeffects) *)
+    ()
+
+and fun_param env param =
+  let is_atom =
+    List.exists
+      ~f:(fun { ua_name; ua_params } ->
+        String.equal (snd ua_name) SN.UserAttributes.uaAtom
+        && List.is_empty ua_params)
+      param.param_user_attributes
+  in
+  maybe (hint ~is_atom) env (hint_of_type_hint param.param_type_hint)
+
+and variadic_param env vparam =
+  match vparam with
+  | FVvariadicArg p -> fun_param env p
+  | _ -> ()
+
+let enum env e =
+  hint env e.e_base;
+  maybe hint env e.e_constraint
+
+let const env class_const = maybe hint env class_const.Aast.cc_type
+
+let typeconst (env, _) tconst =
+  maybe hint env tconst.c_tconst_type;
+  maybe hint env tconst.c_tconst_as_constraint
+
+let class_var env cv = maybe hint env (hint_of_type_hint cv.cv_type)
+
+let method_ env m =
+  (* Add method type parameters to environment and localize the bounds
+     and where constraints *)
+  let tenv =
+    Phase.localize_and_add_ast_generic_parameters_and_where_constraints
+      (fst m.m_name)
+      env.tenv
+      m.m_tparams
+      m.m_where_constraints
+  in
+  let env = { env with tenv } in
+  List.iter m.m_params (fun_param env);
+  variadic_param env m.m_variadic;
+  List.iter m.m_tparams (tparam env);
+  List.iter m.m_where_constraints (where_constr env);
+  maybe hint env (hint_of_type_hint m.m_ret)
+
+let hint_no_kind_check env (p, h) = hint_ ~is_atom:false env p h
+
+let class_ tenv c =
   let env = { typedef_tparams = []; tenv } in
   (* Add type parameters to typing environment and localize the bounds *)
   let tenv =
@@ -308,50 +339,6 @@ and class_ tenv c =
   List.iter c_statics (method_ env);
   List.iter c_methods (method_ env);
   maybe enum env c.c_enum
-
-and typeconst (env, _) tconst =
-  maybe hint env tconst.c_tconst_type;
-  maybe hint env tconst.c_tconst_constraint
-
-and const env class_const = maybe hint env class_const.cc_type
-
-and class_var env cv = maybe hint env (hint_of_type_hint cv.cv_type)
-
-and method_ env m =
-  (* Add method type parameters to environment and localize the bounds
-     and where constraints *)
-  let tenv =
-    Phase.localize_and_add_ast_generic_parameters_and_where_constraints
-      (fst m.m_name)
-      env.tenv
-      m.m_tparams
-      m.m_where_constraints
-  in
-  let env = { env with tenv } in
-  List.iter m.m_params (fun_param env);
-  variadic_param env m.m_variadic;
-  List.iter m.m_tparams (tparam env);
-  List.iter m.m_where_constraints (where_constr env);
-  maybe hint env (hint_of_type_hint m.m_ret)
-
-and fun_param env param =
-  let is_atom =
-    List.exists
-      ~f:(fun { ua_name; ua_params } ->
-        String.equal (snd ua_name) SN.UserAttributes.uaAtom
-        && List.is_empty ua_params)
-      param.param_user_attributes
-  in
-  maybe (hint ~is_atom) env (hint_of_type_hint param.param_type_hint)
-
-and variadic_param env vparam =
-  match vparam with
-  | FVvariadicArg p -> fun_param env p
-  | _ -> ()
-
-and enum env e =
-  hint env e.e_base;
-  maybe hint env e.e_constraint
 
 let typedef tenv t =
   (* We don't allow constraints on typdef parameters, but we still

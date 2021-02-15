@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<a0c1354970bcac935696e453194857d0>>
+// @generated SignedSource<<c1e06cdcd5a141fc5234fde91cb67229>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidize_regen.sh
+//   hphp/hack/src/oxidized_regen.sh
 
 #![allow(unused_variables)]
 use super::node::Node;
@@ -534,6 +534,13 @@ pub trait Visitor<'node> {
         &mut self,
         c: &mut <Self::P as Params>::Context,
         p: &'node ParamMutability,
+    ) -> Result<(), <Self::P as Params>::Error> {
+        p.recurse(c, self.object())
+    }
+    fn visit_readonly_kind(
+        &mut self,
+        c: &mut <Self::P as Params>::Context,
+        p: &'node ReadonlyKind,
     ) -> Result<(), <Self::P as Params>::Error> {
         p.recurse(c, self.object())
     }

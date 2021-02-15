@@ -193,12 +193,32 @@ bool PreClassEmitter::addProperty(const StringData* n, Attr attrs,
 
 bool PreClassEmitter::addAbstractConstant(const StringData* n,
                                           const StringData* typeConstraint,
-                                          const bool typeconst) {
+                                          const ConstModifiers::Kind kind,
+                                          const bool fromTrait) {
+  assertx(kind == ConstModifiers::Kind::Value ||
+          kind == ConstModifiers::Kind::Type);
+
   auto it = m_constMap.find(n);
   if (it != m_constMap.end()) {
     return false;
   }
-  PreClassEmitter::Const cns(n, typeConstraint, nullptr, nullptr, typeconst);
+  PreClassEmitter::Const cns(n, typeConstraint, nullptr, nullptr,
+                             StaticCoeffects::none(), kind, true, fromTrait);
+  m_constMap.add(cns.name(), cns);
+  return true;
+}
+
+bool PreClassEmitter::addContextConstant(const StringData* n,
+                                         StaticCoeffects coeffects,
+                                         const bool isAbstract,
+                                         const bool fromTrait) {
+  auto it = m_constMap.find(n);
+  if (it != m_constMap.end()) {
+    return false;
+  }
+  PreClassEmitter::Const cns(n, nullptr, nullptr, nullptr,
+                             coeffects, ConstModifiers::Kind::Context,
+                             isAbstract, fromTrait);
   m_constMap.add(cns.name(), cns);
   return true;
 }
@@ -207,21 +227,25 @@ bool PreClassEmitter::addConstant(const StringData* n,
                                   const StringData* typeConstraint,
                                   const TypedValue* val,
                                   const StringData* phpCode,
-                                  const bool typeconst,
+                                  const ConstModifiers::Kind kind,
+                                  const bool fromTrait,
                                   const Array& typeStructure) {
+  assertx(kind == ConstModifiers::Kind::Value ||
+          kind == ConstModifiers::Kind::Type);
   ConstMap::Builder::const_iterator it = m_constMap.find(n);
   if (it != m_constMap.end()) {
     return false;
   }
   TypedValue tvVal;
-  if (typeconst && !typeStructure.empty())  {
+  if (kind == ConstModifiers::Kind::Type && !typeStructure.empty())  {
     assertx(typeStructure.isHAMSafeDArray());
     tvVal = make_persistent_array_like_tv(typeStructure.get());
     assertx(tvIsPlausible(tvVal));
   } else {
     tvVal = *val;
   }
-  PreClassEmitter::Const cns(n, typeConstraint, &tvVal, phpCode, typeconst);
+  PreClassEmitter::Const cns(n, typeConstraint, &tvVal, phpCode,
+                             StaticCoeffects::none(), kind, false, fromTrait);
   m_constMap.add(cns.name(), cns);
   return true;
 }
@@ -258,7 +282,7 @@ const StaticString
   s_nativedata("__nativedata"),
   s_DynamicallyConstructible("__DynamicallyConstructible");
 
-PreClass* PreClassEmitter::create(Unit& unit) const {
+PreClass* PreClassEmitter::create(Unit& unit, bool saveLineTable) const {
   Attr attrs = m_attrs;
   if (attrs & AttrPersistent &&
       !RuntimeOption::RepoAuthoritative && SystemLib::s_inited) {
@@ -324,7 +348,7 @@ PreClass* PreClassEmitter::create(Unit& unit) const {
   PreClass::MethodMap::Builder methodBuild;
   for (MethodVec::const_iterator it = m_methods.begin();
        it != m_methods.end(); ++it) {
-    Func* f = (*it)->create(unit, pc.get());
+    Func* f = (*it)->create(unit, pc.get(), saveLineTable);
     if (f->attrs() & AttrTrait) {
       if (pc->m_numDeclMethods == -1) {
         pc->m_numDeclMethods = it - m_methods.begin();
@@ -357,19 +381,25 @@ PreClass* PreClassEmitter::create(Unit& unit) const {
     const Const& const_ = m_constMap[i];
     TypedValueAux tvaux;
     tvaux.constModifiers() = {};
-    if (const_.isAbstract()) {
-      tvWriteUninit(tvaux);
-      tvaux.constModifiers().setIsAbstract(true);
+    if (const_.kind() == ConstModifiers::Kind::Context) {
+      tvaux.constModifiers().setIsAbstract(const_.isAbstract());
+      tvaux.constModifiers().setCoeffects(const_.coeffects());
     } else {
-      tvCopy(const_.val(), tvaux);
-      tvaux.constModifiers().setIsAbstract(false);
+      if (const_.isAbstract()) {
+        tvWriteUninit(tvaux);
+        tvaux.constModifiers().setIsAbstract(true);
+      } else {
+        tvCopy(const_.val(), tvaux);
+        tvaux.constModifiers().setIsAbstract(false);
+      }
     }
 
-    tvaux.constModifiers().setIsType(const_.isTypeconst());
+    tvaux.constModifiers().setKind(const_.kind());
 
     constBuild.add(const_.name(), PreClass::Const(const_.name(),
                                                   tvaux,
-                                                  const_.phpCode()));
+                                                  const_.phpCode(),
+                                                  const_.isFromTrait()));
   }
   if (auto nativeConsts = Native::getClassConstants(m_name)) {
     for (auto cnsMap : *nativeConsts) {
@@ -378,7 +408,8 @@ PreClass* PreClassEmitter::create(Unit& unit) const {
       tvaux.constModifiers() = {};
       constBuild.add(cnsMap.first, PreClass::Const(cnsMap.first,
                                                    tvaux,
-                                                   staticEmptyString()));
+                                                   staticEmptyString(),
+                                                   false));
     }
   }
 

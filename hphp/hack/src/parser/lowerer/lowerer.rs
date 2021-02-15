@@ -112,6 +112,7 @@ pub struct FunHdr {
     parameters: Vec<ast::FunParam>,
     contexts: Option<ast::Contexts>,
     unsafe_contexts: Option<ast::Contexts>,
+    readonly_return: Option<ast::ReadonlyKind>,
     return_type: Option<ast::Hint>,
 }
 
@@ -125,6 +126,7 @@ impl FunHdr {
             parameters: vec![],
             contexts: None,
             unsafe_contexts: None,
+            readonly_return: None,
             return_type: None,
         }
     }
@@ -1533,9 +1535,11 @@ where
         match &node.children {
             LambdaExpression(c) => {
                 let suspension_kind = Self::mk_suspension_kind(&c.async_);
-                let (params, (ctxs, unsafe_ctxs), ret) = match &c.signature.children {
+                let (params, (ctxs, unsafe_ctxs), readonly_ret, ret) = match &c.signature.children {
                     LambdaSignature(c) => {
                         let params = Self::could_map(Self::p_fun_param, &c.parameters, env)?;
+                        let readonly_ret =
+                            Self::mp_optional(Self::p_readonly, &c.readonly_return, env)?;
                         let (ctxs, unsafe_ctxs) = Self::p_contexts(&c.contexts, env)?;
                         if Self::has_polymorphic_context(&ctxs) {
                             Self::raise_parsing_error(
@@ -1545,7 +1549,7 @@ where
                             );
                         }
                         let ret = Self::mp_optional(Self::p_hint, &c.type_, env)?;
-                        (params, (ctxs, unsafe_ctxs), ret)
+                        (params, (ctxs, unsafe_ctxs), readonly_ret, ret)
                     }
                     Token(_) => {
                         let ast::Id(p, n) = Self::pos_name(&c.signature, env)?;
@@ -1558,10 +1562,12 @@ where
                                 name: n,
                                 expr: None,
                                 callconv: None,
+                                readonly: None,
                                 user_attributes: vec![],
                                 visibility: None,
                             }],
                             (None, None),
+                            None,
                             None,
                         )
                     }
@@ -1579,6 +1585,7 @@ where
                     span: pos.clone(),
                     annotation: (),
                     mode: env.file_mode(),
+                    readonly_ret,
                     ret: ast::TypeHint((), ret),
                     name: ast::Id(pos, String::from(";anonymous")),
                     tparams: vec![],
@@ -1851,6 +1858,7 @@ where
                         Some(TK::Minus) => mk_unop(Uminus, expr),
                         Some(TK::Inout) => Ok(E_::mk_callconv(ast::ParamKind::Pinout, expr)),
                         Some(TK::Await) => Self::lift_await(pos, expr, env, location),
+                        Some(TK::Readonly) => Ok(E_::mk_readonly_expr(expr)),
                         Some(TK::Clone) => Ok(E_::mk_clone(expr)),
                         Some(TK::Print) => Ok(E_::mk_call(
                             E::new(
@@ -2140,6 +2148,7 @@ where
                     span: Self::p_pos(node, env),
                     annotation: (),
                     mode: env.file_mode(),
+                    readonly_ret: Self::mp_optional(Self::p_readonly, &c.readonly_return, env)?,
                     ret: ast::TypeHint((), Self::mp_optional(Self::p_hint, &c.type_, env)?),
                     name: ast::Id(name_pos, String::from(";anonymous")),
                     tparams: vec![],
@@ -2174,6 +2183,7 @@ where
                     span: pos.clone(),
                     annotation: (),
                     mode: env.file_mode(),
+                    readonly_ret: None, // TODO: awaitable creation expression
                     ret: ast::TypeHint((), None),
                     name: ast::Id(name_pos, String::from(";anonymous")),
                     tparams: vec![],
@@ -2314,7 +2324,7 @@ where
                 let attr_expr = &c.expression;
                 let name = Self::p_pstring(&c.name, env)?;
                 let expr = if attr_expr.is_braced_expression()
-                    && env.file_mode() == file_info::Mode::Mdecl
+                    && env.file_mode() == file_info::Mode::Mhhi
                     && !env.codegen()
                 {
                     ast::Expr::new(env.mk_none_pos(), E_::Null)
@@ -3425,6 +3435,13 @@ where
         }
     }
 
+    fn p_readonly(node: S<'a, T, V>, env: &mut Env<'a, TF>) -> Result<ast::ReadonlyKind> {
+        match Self::token_kind(node) {
+            Some(TK::Readonly) => Ok(ast::ReadonlyKind::Readonly),
+            _ => Self::missing_syntax("readonly", node, env),
+        }
+    }
+
     fn param_template(node: S<'a, T, V>, env: &Env<TF>) -> ast::FunParam {
         let pos = Self::p_pos(node, env);
         ast::FunParam {
@@ -3435,6 +3452,7 @@ where
             name: Self::text(node, env),
             expr: None,
             callconv: None,
+            readonly: None,
             user_attributes: vec![],
             visibility: None,
         }
@@ -3446,6 +3464,7 @@ where
                 attribute,
                 visibility,
                 call_convention,
+                readonly,
                 type_,
                 name,
                 default_value,
@@ -3492,6 +3511,7 @@ where
                     name,
                     expr: Self::p_fun_param_default_value(default_value, env)?,
                     callconv: Self::mp_optional(Self::p_param_kind, call_convention, env)?,
+                    readonly: Self::mp_optional(Self::p_readonly, readonly, env)?,
                     /* implicit field via constructor parameter.
                      * This is always None except for constructors and the modifier
                      * can be only Public or Protected or Private.
@@ -3635,6 +3655,7 @@ where
                 parameter_list,
                 type_,
                 contexts,
+                readonly_return,
                 ..
             }) => {
                 if name.value.is_missing() {
@@ -3642,6 +3663,7 @@ where
                 }
                 let kinds = Self::p_kinds(modifiers, env)?;
                 let has_async = kinds.has(modifier::ASYNC);
+                let readonly_ret = Self::mp_optional(Self::p_readonly, readonly_return, env)?;
                 let mut type_parameters = Self::p_tparam_l(false, type_parameter_list, env)?;
                 let mut parameters = Self::could_map(Self::p_fun_param, parameter_list, env)?;
                 let (contexts, unsafe_contexts) = Self::p_contexts(contexts, env)?;
@@ -3664,6 +3686,7 @@ where
                     parameters,
                     contexts,
                     unsafe_contexts,
+                    readonly_return: readonly_ret,
                     return_type,
                 })
             }
@@ -3671,14 +3694,17 @@ where
                 parameters,
                 contexts,
                 type_,
+                readonly_return,
                 ..
             }) => {
+                let readonly_ret = Self::mp_optional(Self::p_readonly, readonly_return, env)?;
                 let mut header = FunHdr::make_empty(env);
                 header.parameters = Self::could_map(Self::p_fun_param, parameters, env)?;
                 let (contexts, unsafe_contexts) = Self::p_contexts(contexts, env)?;
                 header.contexts = contexts;
                 header.unsafe_contexts = unsafe_contexts;
                 header.return_type = Self::mp_optional(Self::p_hint, type_, env)?;
+                header.readonly_return = readonly_ret;
                 Ok(header)
             }
             Token(_) => Ok(FunHdr::make_empty(env)),
@@ -3748,7 +3774,7 @@ where
                         }
                         _ => {
                             if !e.top_level_statements
-                                && ((e.file_mode() == file_info::Mode::Mdecl && !e.codegen())
+                                && ((e.file_mode() == file_info::Mode::Mhhi && !e.codegen())
                                     || e.quick_mode)
                             {
                                 mk_noop_result(e)
@@ -4156,17 +4182,20 @@ where
                     .map(|hint| Self::soften_hint(&user_attributes, hint));
                 let kinds = Self::p_kinds(&c.modifiers, env)?;
                 let name = Self::pos_name(&c.name, env)?;
-                let constraint =
+                let as_constraint =
                     Self::mp_optional(Self::p_tconstraint_ty, &c.type_constraint, env)?;
                 let span = Self::p_pos(node, env);
                 let has_abstract = kinds.has(modifier::ABSTRACT);
-                let (type_, abstract_kind) = match (has_abstract, &constraint, &type__) {
+                let (type_, abstract_kind) = match (has_abstract, &as_constraint, &type__) {
                     (false, _, None) => {
                         Self::raise_hh_error(
                             env,
                             NastCheck::not_abstract_without_typeconst(name.0.clone()),
                         );
-                        (constraint.clone(), ast::TypeconstAbstractKind::TCConcrete)
+                        (
+                            as_constraint.clone(),
+                            ast::TypeconstAbstractKind::TCConcrete,
+                        )
                     }
                     (false, None, Some(_)) => (type__, ast::TypeconstAbstractKind::TCConcrete),
                     (false, Some(_), Some(_)) => {
@@ -4181,7 +4210,7 @@ where
                 Ok(class.typeconsts.push(ast::ClassTypeconst {
                     abstract_: abstract_kind,
                     name,
-                    constraint,
+                    as_constraint,
                     type_,
                     user_attributes,
                     span,
@@ -4223,7 +4252,7 @@ where
                 Ok(class.typeconsts.push(ast::ClassTypeconst {
                     abstract_: abstract_kind,
                     name,
-                    constraint: None,
+                    as_constraint: None,
                     type_: context,
                     user_attributes: vec![],
                     span,
@@ -4268,6 +4297,7 @@ where
                         final_: kinds.has(modifier::FINAL),
                         xhp_attr: None,
                         abstract_: kinds.has(modifier::ABSTRACT),
+                        readonly: kinds.has(modifier::READONLY),
                         visibility: vis,
                         type_: ast::TypeHint((), type_.clone()),
                         id: name_expr.1,
@@ -4312,6 +4342,11 @@ where
                             final_: false,
                             xhp_attr: None,
                             abstract_: false,
+                            // We use the param readonlyness here to represent the
+                            // ClassVar's readonlyness once lowered
+                            // TODO(jjwu): Convert this to an enum when we support
+                            // multiple types of readonlyness
+                            readonly: param.readonly.is_some(),
                             visibility: param.visibility.unwrap(),
                             type_: param.type_hint.clone(),
                             id: ast::Id(p.clone(), cvname.to_string()),
@@ -4339,6 +4374,7 @@ where
                 let kinds = Self::p_kinds(&h.modifiers, env)?;
                 let visibility = p_method_vis(&h.modifiers, &hdr.name.0, env)?;
                 let is_static = kinds.has(modifier::STATIC);
+                let readonly_this = kinds.has(modifier::READONLY);
                 *env.in_static_method() = is_static;
                 let (mut body, body_has_yield) =
                     Self::mp_yielding(Self::p_function_body, &c.function_body, env)?;
@@ -4361,6 +4397,7 @@ where
                     span: Self::p_fun_pos(node, env),
                     annotation: (),
                     final_: kinds.has(modifier::FINAL),
+                    readonly_this,
                     abstract_: is_abstract,
                     static_: is_static,
                     name: hdr.name,
@@ -4377,6 +4414,7 @@ where
                     },
                     fun_kind: Self::mk_fun_kind(hdr.suspension_kind, body_has_yield),
                     user_attributes,
+                    readonly_ret: hdr.readonly_return,
                     ret: ast::TypeHint((), hdr.return_type),
                     external: is_external,
                     doc_comment: doc_comment_opt,
@@ -4522,6 +4560,7 @@ where
                                     final_: false,
                                     xhp_attr: Some(ast::XhpAttrInfo { xai_tag: req }),
                                     abstract_: false,
+                                    readonly: false,
                                     visibility: ast::Visibility::Public,
                                     type_: ast::TypeHint((), hint),
                                     id: ast::Id(p, String::from(":") + &name),
@@ -4753,6 +4792,7 @@ where
                     annotation: (),
                     mode: env.file_mode(),
                     ret,
+                    readonly_ret: hdr.readonly_return,
                     name: hdr.name,
                     tparams: hdr.type_parameters,
                     where_constraints: hdr.constrs,
@@ -5133,7 +5173,7 @@ where
                     emit_id: None,
                 })])
             }
-            InclusionDirective(c) if env.file_mode() != file_info::Mode::Mdecl || env.codegen() => {
+            InclusionDirective(c) if env.file_mode() != file_info::Mode::Mhhi || env.codegen() => {
                 let expr = Self::p_expr(&c.expression, env)?;
                 Ok(vec![ast::Def::mk_stmt(ast::Stmt::new(
                     Self::p_pos(node, env),
@@ -5200,7 +5240,7 @@ where
                     namespace: Self::mk_empty_ns_env(env),
                 })])
             }
-            _ if env.file_mode() == file_info::Mode::Mdecl => Ok(vec![]),
+            _ if env.file_mode() == file_info::Mode::Mhhi => Ok(vec![]),
             _ => Ok(vec![ast::Def::mk_stmt(Self::p_stmt(node, env)?)]),
         }
     }

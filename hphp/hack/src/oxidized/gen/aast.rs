@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<82c14b37e3ca390bbc45c604cee7592c>>
+// @generated SignedSource<<30b64dc237cd3a552557ebe2a16bd1b7>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidize_regen.sh
+//   hphp/hack/src/oxidized_regen.sh
 
 use arena_trait::TrivialDrop;
 use no_pos_hash::NoPosHash;
@@ -630,6 +630,10 @@ pub enum Expr_<Ex, Fb, En, Hi> {
     ///
     /// await $foo
     Await(Box<Expr<Ex, Fb, En, Hi>>),
+    /// Readonly expression.
+    ///
+    /// readonly $foo
+    ReadonlyExpr(Box<Expr<Ex, Fb, En, Hi>>),
     /// List expression, only used in destructuring. Allows any arbitrary
     /// lvalue as a subexpression. May also nest.
     ///
@@ -940,6 +944,7 @@ pub struct FunParam<Ex, Fb, En, Hi> {
     pub pos: Pos,
     pub name: String,
     pub expr: Option<Expr<Ex, Fb, En, Hi>>,
+    pub readonly: Option<ast_defs::ReadonlyKind>,
     pub callconv: Option<ast_defs::ParamKind>,
     pub user_attributes: Vec<UserAttribute<Ex, Fb, En, Hi>>,
     pub visibility: Option<Visibility>,
@@ -991,6 +996,7 @@ pub struct Fun_<Ex, Fb, En, Hi> {
     pub span: Pos,
     pub annotation: En,
     pub mode: file_info::Mode,
+    pub readonly_ret: Option<ast_defs::ReadonlyKind>,
     pub ret: TypeHint<Hi>,
     pub name: Sid,
     pub tparams: Vec<Tparam<Ex, Fb, En, Hi>>,
@@ -1226,7 +1232,11 @@ pub struct Class_<Ex, Fb, En, Hi> {
     pub tparams: Vec<Tparam<Ex, Fb, En, Hi>>,
     pub extends: Vec<ClassHint>,
     pub uses: Vec<TraitHint>,
+    /// PHP feature not supported in hack but required
+    /// because we have runtime support.
     pub use_as_alias: Vec<UseAsAlias>,
+    /// PHP feature not supported in hack but required
+    /// because we have runtime support.
     pub insteadof_alias: Vec<InsteadofAlias>,
     pub xhp_attr_uses: Vec<XhpAttrHint>,
     pub xhp_category: Option<(Pos, Vec<Pstring>)>,
@@ -1421,7 +1431,7 @@ pub enum TypeconstAbstractKind {
 pub struct ClassTypeconst<Ex, Fb, En, Hi> {
     pub abstract_: TypeconstAbstractKind,
     pub name: Sid,
-    pub constraint: Option<Hint>,
+    pub as_constraint: Option<Hint>,
     pub type_: Option<Hint>,
     pub user_attributes: Vec<UserAttribute<Ex, Fb, En, Hi>>,
     pub span: Pos,
@@ -1467,6 +1477,7 @@ pub struct ClassVar<Ex, Fb, En, Hi> {
     pub final_: bool,
     pub xhp_attr: Option<XhpAttrInfo>,
     pub abstract_: bool,
+    pub readonly: bool,
     pub visibility: Visibility,
     pub type_: TypeHint<Hi>,
     pub id: Sid,
@@ -1498,6 +1509,7 @@ pub struct Method_<Ex, Fb, En, Hi> {
     pub final_: bool,
     pub abstract_: bool,
     pub static_: bool,
+    pub readonly_this: bool,
     pub visibility: Visibility,
     pub name: Sid,
     pub tparams: Vec<Tparam<Ex, Fb, En, Hi>>,
@@ -1509,6 +1521,7 @@ pub struct Method_<Ex, Fb, En, Hi> {
     pub body: FuncBody<Ex, Fb, En, Hi>,
     pub fun_kind: ast_defs::FunKind,
     pub user_attributes: Vec<UserAttribute<Ex, Fb, En, Hi>>,
+    pub readonly_ret: Option<ast_defs::ReadonlyKind>,
     pub ret: TypeHint<Hi>,
     /// true if this declaration has no body because it is an external method
     /// declaration (e.g. from an HHI file)

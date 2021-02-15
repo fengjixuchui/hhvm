@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<2c3ee08ffff7a51d30136326a6f6b047>>
+// @generated SignedSource<<63fcd0a8b3defaca3a987ac182e8ee06>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidize_regen.sh
+//   hphp/hack/src/oxidized_regen.sh
 
 use arena_trait::TrivialDrop;
 use no_pos_hash::NoPosHash;
@@ -663,6 +663,10 @@ pub enum Expr_<'a, Ex, Fb, En, Hi> {
     ///
     /// await $foo
     Await(&'a Expr<'a, Ex, Fb, En, Hi>),
+    /// Readonly expression.
+    ///
+    /// readonly $foo
+    ReadonlyExpr(&'a Expr<'a, Ex, Fb, En, Hi>),
     /// List expression, only used in destructuring. Allows any arbitrary
     /// lvalue as a subexpression. May also nest.
     ///
@@ -1028,6 +1032,7 @@ pub struct FunParam<'a, Ex, Fb, En, Hi> {
     pub pos: &'a Pos<'a>,
     pub name: &'a str,
     pub expr: Option<&'a Expr<'a, Ex, Fb, En, Hi>>,
+    pub readonly: Option<oxidized::ast_defs::ReadonlyKind>,
     pub callconv: Option<oxidized::ast_defs::ParamKind>,
     pub user_attributes: &'a [&'a UserAttribute<'a, Ex, Fb, En, Hi>],
     pub visibility: Option<oxidized::aast::Visibility>,
@@ -1086,6 +1091,7 @@ pub struct Fun_<'a, Ex, Fb, En, Hi> {
     pub span: &'a Pos<'a>,
     pub annotation: En,
     pub mode: oxidized::file_info::Mode,
+    pub readonly_ret: Option<oxidized::ast_defs::ReadonlyKind>,
     pub ret: &'a TypeHint<'a, Hi>,
     pub name: Sid<'a>,
     pub tparams: &'a [&'a Tparam<'a, Ex, Fb, En, Hi>],
@@ -1317,7 +1323,11 @@ pub struct Class_<'a, Ex, Fb, En, Hi> {
     pub tparams: &'a [&'a Tparam<'a, Ex, Fb, En, Hi>],
     pub extends: &'a [&'a ClassHint<'a>],
     pub uses: &'a [&'a TraitHint<'a>],
+    /// PHP feature not supported in hack but required
+    /// because we have runtime support.
     pub use_as_alias: &'a [&'a UseAsAlias<'a>],
+    /// PHP feature not supported in hack but required
+    /// because we have runtime support.
     pub insteadof_alias: &'a [&'a InsteadofAlias<'a>],
     pub xhp_attr_uses: &'a [&'a XhpAttrHint<'a>],
     pub xhp_category: Option<&'a (&'a Pos<'a>, &'a [&'a Pstring<'a>])>,
@@ -1510,7 +1520,7 @@ impl<'a> TrivialDrop for TypeconstAbstractKind<'a> {}
 pub struct ClassTypeconst<'a, Ex, Fb, En, Hi> {
     pub abstract_: TypeconstAbstractKind<'a>,
     pub name: Sid<'a>,
-    pub constraint: Option<&'a Hint<'a>>,
+    pub as_constraint: Option<&'a Hint<'a>>,
     pub type_: Option<&'a Hint<'a>>,
     pub user_attributes: &'a [&'a UserAttribute<'a, Ex, Fb, En, Hi>],
     pub span: &'a Pos<'a>,
@@ -1541,6 +1551,7 @@ pub struct ClassVar<'a, Ex, Fb, En, Hi> {
     pub final_: bool,
     pub xhp_attr: Option<&'a oxidized::aast::XhpAttrInfo>,
     pub abstract_: bool,
+    pub readonly: bool,
     pub visibility: oxidized::aast::Visibility,
     pub type_: &'a TypeHint<'a, Hi>,
     pub id: Sid<'a>,
@@ -1575,6 +1586,7 @@ pub struct Method_<'a, Ex, Fb, En, Hi> {
     pub final_: bool,
     pub abstract_: bool,
     pub static_: bool,
+    pub readonly_this: bool,
     pub visibility: oxidized::aast::Visibility,
     pub name: Sid<'a>,
     pub tparams: &'a [&'a Tparam<'a, Ex, Fb, En, Hi>],
@@ -1586,6 +1598,7 @@ pub struct Method_<'a, Ex, Fb, En, Hi> {
     pub body: &'a FuncBody<'a, Ex, Fb, En, Hi>,
     pub fun_kind: oxidized::ast_defs::FunKind,
     pub user_attributes: &'a [&'a UserAttribute<'a, Ex, Fb, En, Hi>],
+    pub readonly_ret: Option<oxidized::ast_defs::ReadonlyKind>,
     pub ret: &'a TypeHint<'a, Hi>,
     /// true if this declaration has no body because it is an external method
     /// declaration (e.g. from an HHI file)

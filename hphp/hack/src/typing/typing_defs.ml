@@ -79,7 +79,8 @@ and class_type = {
   tc_need_init: bool;
   tc_members_fully_known: bool;
       (** Whether the typechecker knows of all (non-interface) ancestors
-       * and thus known all accessible members of this class *)
+       * and thus knows all accessible members of this class
+       * This is not the case if one ancestor at least could not be found. *)
   tc_abstract: bool;
   tc_final: bool;
   tc_const: bool;
@@ -122,7 +123,7 @@ and typeconst_abstract_kind =
 and typeconst_type = {
   ttc_abstract: typeconst_abstract_kind;
   ttc_name: Nast.sid;
-  ttc_constraint: decl_ty option;
+  ttc_as_constraint: decl_ty option;
   ttc_type: decl_ty option;
   ttc_origin: string;
   ttc_enforceable: Pos.t * bool;
@@ -307,6 +308,7 @@ let is_union_or_inter_type (ty : locl_ty) =
   | Tdarray _
   | Tunapplied_alias _
   | Tvarray_or_darray _
+  | Tvec_or_dict _
   | Taccess _ ->
     false
 
@@ -425,6 +427,7 @@ let ty_con_ordinal ty_ =
   | Tvarray_or_darray _ -> 22
   | Tunapplied_alias _ -> 23
   | Taccess _ -> 24
+  | Tvec_or_dict _ -> 25
 
 (* Ordinal value for type constructor, for decl types *)
 let decl_ty_con_ordinal ty_ =
@@ -451,15 +454,12 @@ let decl_ty_con_ordinal ty_ =
   | Tvar _ -> 19
   | Tunion _ -> 20
   | Tintersection _ -> 21
+  | Tvec_or_dict _ -> 22
 
 let reactivity_ordinal r =
   match r with
   | Nonreactive -> 0
   | CippGlobal -> 1
-  | CippRx -> 2
-  | Local _ -> 3
-  | Shallow _ -> 4
-  | Reactive _ -> 5
   | Pure _ -> 6
   | MaybeReactive _ -> 7
   | RxVar _ -> 8
@@ -553,15 +553,15 @@ let rec ty__compare ?(normalize_lists = false) ty_1 ty_2 =
     | (Tobject, Tobject) -> 0
     | (Terr, Terr) -> 0
     | ( ( Tprim _ | Toption _ | Tvarray _ | Tdarray _ | Tvarray_or_darray _
-        | Tfun _ | Tintersection _ | Tunion _ | Ttuple _ | Tgeneric _
-        | Tnewtype _ | Tdependent _ | Tclass _ | Tshape _ | Tvar _
+        | Tvec_or_dict _ | Tfun _ | Tintersection _ | Tunion _ | Ttuple _
+        | Tgeneric _ | Tnewtype _ | Tdependent _ | Tclass _ | Tshape _ | Tvar _
         | Tunapplied_alias _ | Tnonnull | Tdynamic | Terr | Tobject | Taccess _
         | Tany _ ),
         _ )
     | ( _,
         ( Tprim _ | Toption _ | Tvarray _ | Tdarray _ | Tvarray_or_darray _
-        | Tfun _ | Tintersection _ | Tunion _ | Ttuple _ | Tgeneric _
-        | Tnewtype _ | Tdependent _ | Tclass _ | Tshape _ | Tvar _
+        | Tvec_or_dict _ | Tfun _ | Tintersection _ | Tunion _ | Ttuple _
+        | Tgeneric _ | Tnewtype _ | Tdependent _ | Tclass _ | Tshape _ | Tvar _
         | Tunapplied_alias _ | Tnonnull | Tdynamic | Terr | Tobject | Taccess _
         | Tany _ ) ) ->
       ty_con_ordinal ty_1 - ty_con_ordinal ty_2
@@ -732,12 +732,8 @@ let rec ty__compare ?(normalize_lists = false) ty_1 ty_2 =
   and reactivity_compare r1 r2 =
     match (r1, r2) with
     | (Nonreactive, Nonreactive)
-    | (CippGlobal, CippGlobal)
-    | (CippRx, CippRx) ->
+    | (CippGlobal, CippGlobal) ->
       0
-    | (Local opt_ty1, Local opt_ty2)
-    | (Shallow opt_ty1, Shallow opt_ty2)
-    | (Reactive opt_ty1, Reactive opt_ty2)
     | (Pure opt_ty1, Pure opt_ty2) ->
       (* TODO T82455489: proper decl compare. Poly.compare will be position sensitive *)
       Option.compare Poly.compare opt_ty1 opt_ty2
@@ -747,10 +743,10 @@ let rec ty__compare ?(normalize_lists = false) ty_1 ty_2 =
     | (Cipp opt_s1, Cipp opt_s2)
     | (CippLocal opt_s1, CippLocal opt_s2) ->
       Option.compare String.compare opt_s1 opt_s2
-    | ( ( Nonreactive | CippGlobal | CippRx | Local _ | Shallow _ | Reactive _
-        | Pure _ | MaybeReactive _ | RxVar _ | Cipp _ | CippLocal _ ),
-        ( Nonreactive | CippGlobal | CippRx | Local _ | Shallow _ | Reactive _
-        | Pure _ | MaybeReactive _ | RxVar _ | Cipp _ | CippLocal _ ) ) ->
+    | ( ( Nonreactive | CippGlobal | Pure _ | MaybeReactive _ | RxVar _ | Cipp _
+        | CippLocal _ ),
+        ( Nonreactive | CippGlobal | Pure _ | MaybeReactive _ | RxVar _ | Cipp _
+        | CippLocal _ ) ) ->
       reactivity_ordinal r1 - reactivity_ordinal r2
   and ty_compare ty1 ty2 = ty__compare (get_node ty1) (get_node ty2) in
   ty__compare ty_1 ty_2
@@ -943,6 +939,8 @@ let rec equal_decl_ty_ ty_1 ty_2 =
   | (Tvarray ty1, Tvarray ty2) -> equal_decl_ty ty1 ty2
   | (Tvarray_or_darray (tk1, tv1), Tvarray_or_darray (tk2, tv2)) ->
     equal_decl_ty tk1 tk2 && equal_decl_ty tv1 tv2
+  | (Tvec_or_dict (tk1, tv1), Tvec_or_dict (tk2, tv2)) ->
+    equal_decl_ty tk1 tk2 && equal_decl_ty tv1 tv2
   | (Tlike ty1, Tlike ty2) -> equal_decl_ty ty1 ty2
   | (Tprim ty1, Tprim ty2) -> Aast.equal_tprim ty1 ty2
   | (Toption ty, Toption ty2) -> equal_decl_ty ty ty2
@@ -968,6 +966,7 @@ let rec equal_decl_ty_ ty_1 ty_2 =
   | (Tdarray _, _)
   | (Tvarray _, _)
   | (Tvarray_or_darray _, _)
+  | (Tvec_or_dict _, _)
   | (Tmixed, _)
   | (Tlike _, _)
   | (Tnonnull, _)
@@ -1011,28 +1010,19 @@ and equal_decl_fun_type fty1 fty2 =
 and equal_reactivity r1 r2 =
   match (r1, r2) with
   | (Nonreactive, Nonreactive) -> true
-  | (Local ty1, Local ty2)
-  | (Shallow ty1, Shallow ty2)
-  | (Reactive ty1, Reactive ty2)
-  | (Pure ty1, Pure ty2) ->
-    Option.equal equal_decl_ty ty1 ty2
+  | (Pure ty1, Pure ty2) -> Option.equal equal_decl_ty ty1 ty2
   | (MaybeReactive r1, MaybeReactive r2) -> equal_reactivity r1 r2
   | (RxVar r1, RxVar r2) -> Option.equal equal_reactivity r1 r2
   | (Cipp s1, Cipp s2) -> Option.equal String.equal s1 s2
   | (CippLocal s1, CippLocal s2) -> Option.equal String.equal s1 s2
   | (CippGlobal, CippGlobal) -> true
-  | (CippRx, CippRx) -> true
   | _ -> false
 
 and any_reactive r =
   match r with
-  | Local _
-  | Shallow _
-  | Reactive _
   | Pure _
   | MaybeReactive _
-  | RxVar _
-  | CippRx ->
+  | RxVar _ ->
     true
   | Nonreactive
   | Cipp _
@@ -1139,6 +1129,8 @@ let get_ce_const ce = is_set ce_flags_const ce.ce_flags
 
 let get_ce_lateinit ce = is_set ce_flags_lateinit ce.ce_flags
 
+let get_ce_readonly_prop ce = is_set ce_flags_readonly_prop ce.ce_flags
+
 let get_ce_dynamicallycallable ce =
   is_set ce_flags_dynamicallycallable ce.ce_flags
 
@@ -1185,7 +1177,8 @@ let make_ce_flags
     ~synthesized
     ~const
     ~lateinit
-    ~dynamicallycallable =
+    ~dynamicallycallable
+    ~readonly_prop =
   let flags = 0 in
   let flags = set_bit ce_flags_abstract abstract flags in
   let flags = set_bit ce_flags_final final flags in
@@ -1196,6 +1189,7 @@ let make_ce_flags
   let flags = set_bit ce_flags_lateinit lateinit flags in
   let flags = set_bit ce_flags_dynamicallycallable dynamicallycallable flags in
   let flags = Int.bit_or flags (xhp_attr_to_ce_flags xhp_attr) in
+  let flags = set_bit ce_flags_readonly_prop readonly_prop flags in
   flags
 
 (** Tunapplied_alias is a locl phase constructor that always stands for a higher-kinded type.

@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<bc6a8d30b35a3cddd113f9b25846c77d>>
+// @generated SignedSource<<cca4487dc4131518f4216cf64d810b95>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidize_regen.sh
+//   hphp/hack/src/oxidized_regen.sh
 
 #![allow(unused_variables)]
 #![allow(unused_braces)]
@@ -406,16 +406,12 @@ impl<'a> Node<'a> for Reactivity<'a> {
     fn recurse(&'a self, v: &mut dyn Visitor<'a>) {
         match self {
             Reactivity::Nonreactive => {}
-            Reactivity::Local(ref __binding_0) => __binding_0.accept(v),
-            Reactivity::Shallow(ref __binding_0) => __binding_0.accept(v),
-            Reactivity::Reactive(ref __binding_0) => __binding_0.accept(v),
             Reactivity::Pure(ref __binding_0) => __binding_0.accept(v),
             Reactivity::MaybeReactive(ref __binding_0) => __binding_0.accept(v),
             Reactivity::RxVar(ref __binding_0) => __binding_0.accept(v),
             Reactivity::Cipp(ref __binding_0) => __binding_0.accept(v),
             Reactivity::CippLocal(ref __binding_0) => __binding_0.accept(v),
             Reactivity::CippGlobal => {}
-            Reactivity::CippRx => {}
         }
     }
 }
@@ -473,6 +469,7 @@ impl<'a> Node<'a> for Reason<'a> {
             Reason::Ris(ref __binding_0) => __binding_0.accept(v),
             Reason::Ras(ref __binding_0) => __binding_0.accept(v),
             Reason::RvarrayOrDarrayKey(ref __binding_0) => __binding_0.accept(v),
+            Reason::RvecOrDictKey(ref __binding_0) => __binding_0.accept(v),
             Reason::Rusing(ref __binding_0) => __binding_0.accept(v),
             Reason::RdynamicProp(ref __binding_0) => __binding_0.accept(v),
             Reason::RdynamicCall(ref __binding_0) => __binding_0.accept(v),
@@ -500,6 +497,9 @@ impl<'a> Node<'a> for Reason<'a> {
             Reason::Rsplice(ref __binding_0) => __binding_0.accept(v),
             Reason::RetBoolean(ref __binding_0) => __binding_0.accept(v),
             Reason::RdefaultCapability(ref __binding_0) => __binding_0.accept(v),
+            Reason::RarrayUnification(ref __binding_0) => __binding_0.accept(v),
+            Reason::RconcatOperand(ref __binding_0) => __binding_0.accept(v),
+            Reason::RinterpOperand(ref __binding_0) => __binding_0.accept(v),
         }
     }
 }
@@ -756,7 +756,7 @@ impl<'a> Node<'a> for ShallowTypeconst<'a> {
         match self {
             ShallowTypeconst {
                 abstract_: ref __binding_0,
-                constraint: ref __binding_1,
+                as_constraint: ref __binding_1,
                 name: ref __binding_2,
                 type_: ref __binding_3,
                 enforceable: ref __binding_4,
@@ -942,6 +942,7 @@ impl<'a> Node<'a> for Ty_<'a> {
             Ty_::Tdarray(ref __binding_0) => __binding_0.accept(v),
             Ty_::Tvarray(ref __binding_0) => __binding_0.accept(v),
             Ty_::TvarrayOrDarray(ref __binding_0) => __binding_0.accept(v),
+            Ty_::TvecOrDict(ref __binding_0) => __binding_0.accept(v),
             Ty_::Taccess(ref __binding_0) => __binding_0.accept(v),
             Ty_::TunappliedAlias(ref __binding_0) => __binding_0.accept(v),
             Ty_::Tnewtype(ref __binding_0) => __binding_0.accept(v),

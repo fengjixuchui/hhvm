@@ -3,13 +3,13 @@
 name = "hhas_class_rust"
 edition = "2018"
 version = "0.0.0"
-include = ["../../hhas_class.rs"]
 
 [lib]
 path = "../../hhas_class.rs"
 
 [dependencies]
 hhas_attribute_rust = { path = "../hhas_attribute" }
+hhas_coeffects = { path = "../hhas_coeffects" }
 hhas_constant_rust = { path = "../hhas_constant" }
 hhas_method_rust = { path = "../hhas_method" }
 hhas_pos_rust = { path = "../hhas_pos" }

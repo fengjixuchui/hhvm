@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<becd8eff3a61376a6e44b26b811aad2c>>
+// @generated SignedSource<<37bcda8641b1297cc17414e2137c1b29>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidize_regen.sh
+//   hphp/hack/src/oxidized_regen.sh
 
 use arena_trait::TrivialDrop;
 use no_pos_hash::NoPosHash;
@@ -479,6 +479,8 @@ pub enum Ty_<'a> {
     Tvarray(&'a Ty<'a>),
     /// Tvarray_or_darray (ty1, ty2) => "varray_or_darray<ty1, ty2>"
     TvarrayOrDarray(&'a (&'a Ty<'a>, &'a Ty<'a>)),
+    /// Tvec_or_dict (ty1, ty2) => "vec_or_dict<ty1, ty2>"
+    TvecOrDict(&'a (&'a Ty<'a>, &'a Ty<'a>)),
     /// Name of class, name of type const, remaining names of type consts
     Taccess(&'a TaccessType<'a>),
     /// This represents a type alias that lacks necessary type arguments. Given
@@ -575,16 +577,12 @@ impl<'a> TrivialDrop for TaccessType<'a> {}
 )]
 pub enum Reactivity<'a> {
     Nonreactive,
-    Local(Option<&'a Ty<'a>>),
-    Shallow(Option<&'a Ty<'a>>),
-    Reactive(Option<&'a Ty<'a>>),
     Pure(Option<&'a Ty<'a>>),
     MaybeReactive(&'a Reactivity<'a>),
     RxVar(Option<&'a Reactivity<'a>>),
     Cipp(Option<&'a str>),
     CippLocal(Option<&'a str>),
     CippGlobal,
-    CippRx,
 }
 impl<'a> TrivialDrop for Reactivity<'a> {}
 

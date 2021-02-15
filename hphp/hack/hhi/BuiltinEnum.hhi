@@ -28,7 +28,7 @@ abstract class BuiltinEnum<+T> {
    * Get the values of the public consts defined on this class,
    * indexed by the string name of those consts.
    *
-   * @return array ('CONST_NAME' => $value, ....)
+   * @return darray['CONST_NAME' => $value, ...]
    */
   <<__Pure>>
   final public static function getValues()[]: darray<string, T>;
@@ -37,7 +37,7 @@ abstract class BuiltinEnum<+T> {
    * Get the names of all the const values, indexed by value. Calls
    * invariant_exception if multiple constants have the same value.
    *
-   * @return array($value => 'CONST_NAME', ....)
+   * @return darray[$value => 'CONST_NAME', ...]
    */
   <<__Pure>>
   final public static function getNames()[]: darray<T, string> where T as arraykey;
@@ -86,7 +86,7 @@ newtype MemberOf<-TEnumClass, +TType> as TType = TType;
  * needed.
  */
 final class SwitchableClass<+T> {
-  public function __construct(private T $data) {}
+  public function __construct(private T $data)[] {}
 
   <<__Pure>>
   public function data()[]: T {
@@ -112,7 +112,7 @@ abstract class BuiltinEnumClass<+T> {
    * @return array ('CONST_NAME' => $value, ....)
    */
   <<__Pure>>
-  final public static function getValues()[]: darray<string, T>;
+  final public static function getValues()[write_props]: darray<string, T>;
 }
 
 }

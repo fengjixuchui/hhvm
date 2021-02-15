@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<7268d668b8c2a5f97d9b5ceaaffe3cc7>>
+// @generated SignedSource<<25b6db76c10982de5322827e5c871ea6>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidize_regen.sh
+//   hphp/hack/src/oxidized_regen.sh
 
 #![allow(unused_variables)]
 use super::node_mut::NodeMut;
@@ -366,7 +366,7 @@ impl<P: Params> NodeMut<P> for ClassTypeconst<P::Ex, P::Fb, P::En, P::Hi> {
     ) -> Result<(), P::Error> {
         self.abstract_.accept(c, v)?;
         self.name.accept(c, v)?;
-        self.constraint.accept(c, v)?;
+        self.as_constraint.accept(c, v)?;
         self.type_.accept(c, v)?;
         self.user_attributes.accept(c, v)?;
         self.span.accept(c, v)?;
@@ -391,6 +391,7 @@ impl<P: Params> NodeMut<P> for ClassVar<P::Ex, P::Fb, P::En, P::Hi> {
         self.final_.accept(c, v)?;
         self.xhp_attr.accept(c, v)?;
         self.abstract_.accept(c, v)?;
+        self.readonly.accept(c, v)?;
         self.visibility.accept(c, v)?;
         self.type_.accept(c, v)?;
         self.id.accept(c, v)?;
@@ -794,6 +795,10 @@ impl<P: Params> NodeMut<P> for Expr_<P::Ex, P::Fb, P::En, P::Hi> {
                 a0.accept(c, v)?;
                 Ok(())
             }
+            Expr_::ReadonlyExpr(a0) => {
+                a0.accept(c, v)?;
+                Ok(())
+            }
             Expr_::List(a0) => {
                 a0.accept(c, v)?;
                 Ok(())
@@ -1022,6 +1027,7 @@ impl<P: Params> NodeMut<P> for FunParam<P::Ex, P::Fb, P::En, P::Hi> {
         self.pos.accept(c, v)?;
         self.name.accept(c, v)?;
         self.expr.accept(c, v)?;
+        self.readonly.accept(c, v)?;
         self.callconv.accept(c, v)?;
         self.user_attributes.accept(c, v)?;
         self.visibility.accept(c, v)?;
@@ -1070,6 +1076,7 @@ impl<P: Params> NodeMut<P> for Fun_<P::Ex, P::Fb, P::En, P::Hi> {
         self.span.accept(c, v)?;
         v.visit_en(c, &mut self.annotation)?;
         self.mode.accept(c, v)?;
+        self.readonly_ret.accept(c, v)?;
         self.ret.accept(c, v)?;
         self.name.accept(c, v)?;
         self.tparams.accept(c, v)?;
@@ -1122,9 +1129,6 @@ impl<P: Params> NodeMut<P> for FuncReactive {
     ) -> Result<(), P::Error> {
         match self {
             FuncReactive::FPure => Ok(()),
-            FuncReactive::FReactive => Ok(()),
-            FuncReactive::FLocal => Ok(()),
-            FuncReactive::FShallow => Ok(()),
             FuncReactive::FNonreactive => Ok(()),
         }
     }
@@ -1292,6 +1296,11 @@ impl<P: Params> NodeMut<P> for Hint_ {
                 a1.accept(c, v)?;
                 Ok(())
             }
+            Hint_::HvecOrDict(a0, a1) => {
+                a0.accept(c, v)?;
+                a1.accept(c, v)?;
+                Ok(())
+            }
             Hint_::Hprim(a0) => {
                 a0.accept(c, v)?;
                 Ok(())
@@ -1432,6 +1441,7 @@ impl<P: Params> NodeMut<P> for Method_<P::Ex, P::Fb, P::En, P::Hi> {
         self.final_.accept(c, v)?;
         self.abstract_.accept(c, v)?;
         self.static_.accept(c, v)?;
+        self.readonly_this.accept(c, v)?;
         self.visibility.accept(c, v)?;
         self.name.accept(c, v)?;
         self.tparams.accept(c, v)?;
@@ -1443,6 +1453,7 @@ impl<P: Params> NodeMut<P> for Method_<P::Ex, P::Fb, P::En, P::Hi> {
         self.body.accept(c, v)?;
         self.fun_kind.accept(c, v)?;
         self.user_attributes.accept(c, v)?;
+        self.readonly_ret.accept(c, v)?;
         self.ret.accept(c, v)?;
         self.external.accept(c, v)?;
         self.doc_comment.accept(c, v)?;
@@ -1543,6 +1554,24 @@ impl<P: Params> NodeMut<P> for ParamMutability {
             ParamMutability::PMutable => Ok(()),
             ParamMutability::POwnedMutable => Ok(()),
             ParamMutability::PMaybeMutable => Ok(()),
+        }
+    }
+}
+impl<P: Params> NodeMut<P> for ReadonlyKind {
+    fn accept<'node>(
+        &'node mut self,
+        c: &mut P::Context,
+        v: &mut dyn VisitorMut<'node, P = P>,
+    ) -> Result<(), P::Error> {
+        v.visit_readonly_kind(c, self)
+    }
+    fn recurse<'node>(
+        &'node mut self,
+        c: &mut P::Context,
+        v: &mut dyn VisitorMut<'node, P = P>,
+    ) -> Result<(), P::Error> {
+        match self {
+            ReadonlyKind::Readonly => Ok(()),
         }
     }
 }

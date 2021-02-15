@@ -79,9 +79,9 @@ enum UnstableFeatures {
     UnionIntersectionTypeHints,
     ClassLevelWhere,
     ExpressionTrees,
-    EnumSupertyping,
     EnumAtom,
     IFC,
+    Readonly,
 }
 
 use BinopAllowsAwaitInPositions::*;
@@ -1084,6 +1084,9 @@ where
         if let Some(modifiers) = Self::get_modifiers_of_declaration(node) {
             for modifier in Self::syntax_to_list_no_separators(modifiers) {
                 if let Some(kind) = Self::token_kind(modifier) {
+                    if kind == TokenKind::Readonly {
+                        self.check_can_use_feature(modifier, &UnstableFeatures::Readonly)
+                    }
                     if !ok(kind) {
                         self.errors.push(Self::make_error_from_node(
                             modifier,
@@ -1279,11 +1282,6 @@ where
     fn is_inside_interface(&self) -> bool {
         self.first_parent_classish_node(TokenKind::Interface)
             .is_some()
-    }
-
-    // Tests if the immediate classish parent is a trait.
-    fn is_inside_trait(&self) -> bool {
-        self.first_parent_classish_node(TokenKind::Trait).is_some()
     }
 
     fn is_abstract_and_async_method(md_node: S<'a, Token, Value>) -> bool {
@@ -1759,6 +1757,9 @@ where
             FunctionDeclarationHeader(x) => {
                 let function_parameter_list = &x.parameter_list;
                 let function_type = &x.type_;
+                if x.readonly_return.is_readonly() {
+                    self.check_can_use_feature(&x.readonly_return, &UnstableFeatures::Readonly)
+                }
 
                 self.produce_error(
                     |self_, x| Self::class_constructor_has_non_void_type(self_, x),
@@ -1878,6 +1879,7 @@ where
                         || kind == TokenKind::Protected
                         || kind == TokenKind::Public
                         || kind == TokenKind::Async
+                        || kind == TokenKind::Readonly
                 });
 
                 if self.is_inside_interface() {
@@ -2061,6 +2063,14 @@ where
             let attr = &x.attribute;
             if self.attribute_specification_contains(attr, sn::user_attributes::EXTERNAL) {
                 self.check_can_use_feature(attr, &UnstableFeatures::IFC);
+            }
+        }
+    }
+
+    fn check_parameter_readonly(&mut self, node: S<'a, Token, Value>) {
+        if let ParameterDeclaration(x) = &node.children {
+            if x.readonly.is_readonly() {
+                self.check_can_use_feature(&x.readonly, &UnstableFeatures::Readonly);
             }
         }
     }
@@ -2304,6 +2314,7 @@ where
             for x in Self::syntax_to_list_no_separators(params) {
                 self_.parameter_rx_errors(x);
                 self_.check_parameter_ifc(x);
+                self_.check_parameter_readonly(x);
             }
             self_.params_errors(params)
         };
@@ -2314,8 +2325,10 @@ where
                     errors::error2074(callconv_text)
                 });
                 self.parameter_rx_errors(node);
+
                 self.check_type_hint(&p.type_);
                 self.check_parameter_ifc(node);
+                self.check_parameter_readonly(node);
 
                 if let Some(inout_modifier) = Self::parameter_callconv(node) {
                     if self.is_inside_async_method() {
@@ -2987,7 +3000,7 @@ where
     fn unop_allows_await(t: S<'a, Token, Value>) -> bool {
         use TokenKind::*;
         Self::token_kind(t).map_or(false, |t| match t {
-            Exclamation | Tilde | Plus | Minus | At | Clone | Print => true,
+            Exclamation | Tilde | Plus | Minus | At | Clone | Print | Readonly => true,
             _ => false,
         })
     }
@@ -3665,6 +3678,12 @@ where
             PrefixUnaryExpression(x) if Self::token_kind(&x.operator) == Some(TokenKind::Await) => {
                 self.await_as_an_expression_errors(node)
             }
+            PrefixUnaryExpression(x)
+                if Self::token_kind(&x.operator) == Some(TokenKind::Readonly) =>
+            {
+                self.check_can_use_feature(&x.operator, &UnstableFeatures::Readonly)
+            }
+
             // Other kinds of expressions currently produce no expr errors.
             _ => {}
         }
@@ -3710,6 +3729,7 @@ where
                 }
             }
             TypeConstDeclaration(x) => check(&x.name, c_names),
+            ContextConstDeclaration(x) => check(&x.name, c_names),
             _ => {}
         }
     }
@@ -4185,10 +4205,6 @@ where
 
     // Checks for modifiers on class constants
     fn class_constant_modifier_errors(&mut self, node: S<'a, Token, Value>) {
-        if self.is_inside_trait() {
-            self.errors
-                .push(Self::make_error_from_node(node, errors::const_in_trait))
-        }
         self.invalid_modifier_errors("Constants", node, |kind| kind == TokenKind::Abstract);
     }
 
@@ -4790,6 +4806,7 @@ where
                     || kind == TokenKind::Private
                     || kind == TokenKind::Protected
                     || kind == TokenKind::Public
+                    || kind == TokenKind::Readonly
             });
 
             self.produce_error(
@@ -5006,10 +5023,7 @@ where
     fn enum_decl_errors(&mut self, node: S<'a, Token, Value>) {
         if let EnumDeclaration(x) = &node.children {
             let attrs = &x.attribute_spec;
-            if self.attr_spec_contains_sealed(attrs) {
-                self.errors
-                    .push(Self::make_error_from_node(node, errors::sealed_enum))
-            } else if self.attr_spec_contains_const(attrs) {
+            if self.attr_spec_contains_const(attrs) {
                 self.errors.push(Self::make_error_from_node(
                     node,
                     errors::no_const_interfaces_traits_enums,
@@ -5630,7 +5644,6 @@ where
                 }
                 _ => {}
             },
-            EnumUse(_) => self.check_can_use_feature(node, &UnstableFeatures::EnumSupertyping),
             EnumAtomExpression(_) => self.check_can_use_feature(node, &UnstableFeatures::EnumAtom),
             OldAttributeSpecification(x) => {
                 let attributes_string = self.text(&x.attributes);

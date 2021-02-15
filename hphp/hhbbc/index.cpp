@@ -94,7 +94,7 @@ constexpr bool CheckSize() { static_assert(Expected == Actual); return true; };
 static_assert(CheckSize<php::Block, 24>(), "");
 static_assert(CheckSize<php::Local, use_lowptr ? 12 : 16>(), "");
 static_assert(CheckSize<php::Param, use_lowptr ? 64 : 88>(), "");
-static_assert(CheckSize<php::Func, use_lowptr ? 168 : 192>(), "");
+static_assert(CheckSize<php::Func, use_lowptr ? 168 : 200>(), "");
 
 // Likewise, we also keep the bytecode and immediate types small.
 static_assert(CheckSize<Bytecode, use_lowptr ? 32 : 40>(), "");
@@ -509,6 +509,11 @@ struct ClassInfo {
    * A list of extra properties supplied by this class's used traits.
    */
   CompactVector<php::Prop> traitProps;
+
+  /*
+   * A list of extra consts supplied by this class's used traits.
+   */
+  CompactVector<php::Const> traitConsts;
 
   /*
    * A (case-insensitive) map from class method names to the php::Func
@@ -1522,20 +1527,41 @@ bool build_class_constants(BuildClsInfo& info,
     // Same constant (from an interface via two different paths) is ok
     if (existing->cls == rparent->cls) continue;
 
-    if (existing->isTypeconst != c.isTypeconst) {
+    if (existing->kind != c.kind) {
       ITRACE(2,
              "build_cls_info_rec failed for `{}' because `{}' was defined by "
-             "`{}' as a {}constant and by `{}' as a {}constant\n",
+             "`{}' as a {} and by `{}' as a {}\n",
              info.rleaf->cls->name, c.name,
-             rparent->cls->name, c.isTypeconst ? "type " : "",
-             existing->cls->name, existing->isTypeconst ? "type " : "");
+             rparent->cls->name,
+             ConstModifiers::show(c.kind),
+             existing->cls->name,
+             ConstModifiers::show(existing->kind));
       return false;
     }
-
+    
     // Ignore abstract constants
-    if (!c.val) continue;
+    if (c.isAbstract) continue;
 
     if (existing->val) {
+      
+      // A constant from a declared interface collides with a constant 
+      // (Excluding constants from interfaces a trait implements)
+      // Need this check otherwise constants from traits that conflict with
+      // declared interfaces will silently lose and not conflict in the runtime
+      if (existing->cls->attrs & AttrInterface &&
+        !(c.cls->attrs & AttrInterface && fromTrait)) {
+        for (auto const& interface : info.rleaf->declInterfaces) {
+          if (existing->cls == interface->cls) {
+            ITRACE(2,
+               "build_cls_info_rec failed for `{}' because "
+               "`{}' was defined by both `{}' and `{}'\n",
+               info.rleaf->cls->name, c.name,
+               rparent->cls->name, existing->cls->name);
+            return false;
+          }
+        }
+      }
+
       // Constants from traits silently lose
       if (fromTrait) {
         removeNoOverride(&c);
@@ -1831,6 +1857,9 @@ bool build_cls_info_rec(BuildClsInfo& info,
     }
   }
 
+  // Need to add current class constants before looking at used traits
+  if (!build_class_constants(info, rparent, fromTrait)) return false;
+
   for (auto const trait : rparent->usedTraits) {
     if (!enforce_in_maybe_sealed_parent_whitelist(rparent, trait)) {
       return false;
@@ -1864,8 +1893,6 @@ bool build_cls_info_rec(BuildClsInfo& info,
       if (!build_class_methods(info)) return false;
     }
   }
-
-  if (!build_class_constants(info, rparent, fromTrait)) return false;
 
   return true;
 }
@@ -1902,6 +1929,30 @@ bool enforce_in_maybe_sealed_parent_whitelist(
 bool build_cls_info(IndexData& index, ClassInfo* cinfo) {
   auto info = BuildClsInfo{ index, cinfo };
   if (!build_cls_info_rec(info, cinfo, false)) return false;
+
+  auto const addConst = [&] (const php::Const& c) {
+    /* Only copy in constants that win. Otherwise, in the runtime, if we have
+     * a constant from an interface implemented by a trait that wins over this
+     * fromTrait constant, we won't know which trait it came from, and therefore
+     * won't know which constant should win.
+     * Dropping losing constants here works because if they fatal with constants in
+     * declared interfaces, we catch that below in build_class_constants().
+     */
+    auto const& existing = cinfo->clsConstants.find(c.name);
+    if (existing->second->cls == c.cls) {
+      info.rleaf->traitConsts.push_back(c);
+      info.rleaf->traitConsts.back().isFromTrait = true;
+    }
+  };
+
+  for (auto t : cinfo->usedTraits) {
+    for (auto const& c : t->cls->constants) {
+      addConst(c);
+    }
+    for (auto const& c : t->traitConsts) {
+      addConst(c);
+    }
+  }
   return true;
 }
 
@@ -1914,6 +1965,9 @@ static const char* filename_from_symbol(const T* t) {
 
 template <typename T, typename R>
 static void add_symbol(R&& map, const T* t, const char* type) {
+  assertx(t->attrs & AttrUnique);
+  assertx(t->attrs & AttrPersistent);
+
   auto ret = map.insert({t->name, t});
   if (!ret.second) {
     throw Index::NonUniqueSymbolException(folly::sformat(
@@ -1922,15 +1976,20 @@ static void add_symbol(R&& map, const T* t, const char* type) {
   }
 }
 
-template <typename T, typename R, typename F>
-static void add_symbol(R&& map, const T* t, const char* type, F&& other_map) {
+template <typename T, typename E>
+static void validate_uniqueness(const T* t, E&& other_map) {
   auto iter = other_map.find(t->name);
   if (iter != other_map.end()) {
     throw Index::NonUniqueSymbolException(folly::sformat(
       "More than one symbol with the name {}. In {} and {}",
       t->name->data(), filename_from_symbol(t), filename_from_symbol(iter->second)));
   }
+}
 
+template <typename T, typename R, typename E, typename F>
+static void add_symbol(R&& map, const T* t, const char* type, E&& other_map1, F&& other_map2) {
+  validate_uniqueness(t, std::forward<E>(other_map1));
+  validate_uniqueness(t, std::forward<F>(other_map2));
   add_symbol(std::forward<R>(map), t, type);
 }
 
@@ -1940,7 +1999,7 @@ void add_system_constants_to_index(IndexData& index) {
   for (auto cnsPair : Native::getConstants()) {
     assertx(cnsPair.second.m_type != KindOfUninit ||
             cnsPair.second.dynamic());
-    auto pc = new php::Constant { nullptr, cnsPair.first, cnsPair.second, AttrNone };
+    auto pc = new php::Constant { nullptr, cnsPair.first, cnsPair.second, AttrUnique | AttrPersistent };
     add_symbol(index.constants, pc, "constant");
   }
 }
@@ -2013,25 +2072,20 @@ void attribute_setter(const Attr& attrs, bool set, Attr attr) {
   attrSetter(const_cast<Attr&>(attrs), set, attr);
 }
 
-void add_unit_to_index(IndexData& index, const php::Unit& unit) {
+void add_unit_to_index(IndexData& index, php::Unit& unit) {
   hphp_hash_map<
     const php::Class*,
     hphp_hash_set<const php::Class*>
   > closureMap;
 
   for (auto& c : unit.classes) {
-    attribute_setter(c->attrs, false, AttrNoOverride);
-
-    // Manually set closure classes to be unique to maintain invariance.
-    if (is_closure(*c)) {
-      attrSetter(c->attrs, true, AttrUnique);
-    }
+    assertx(!(c->attrs & AttrNoOverride));
 
     if (c->attrs & AttrEnum) {
       add_symbol(index.enums, c.get(), "enum");
     }
 
-    add_symbol(index.classes, c.get(), "class", index.records);
+    add_symbol(index.classes, c.get(), "class", index.records, index.typeAliases);
 
     for (auto& m : c->methods) {
       attribute_setter(m->attrs, false, AttrNoOverride);
@@ -2076,13 +2130,20 @@ void add_unit_to_index(IndexData& index, const php::Unit& unit) {
     }
   }
 
-  for (auto& f : unit.funcs) {
+  for (auto i = unit.funcs.begin(); i != unit.funcs.end();) {
+    auto& f = *i;
+    // Deduplicate meth_caller wrappers- We just take the first one we see.
+    if (f->attrs & AttrIsMethCaller && index.funcs.count(f->name)) {
+      unit.funcs.erase(i);
+      continue;
+    }
     if (f->attrs & AttrInterceptable) index.any_interceptable_functions = true;
     add_symbol(index.funcs, f.get(), "function");
+    ++i;
   }
 
   for (auto& ta : unit.typeAliases) {
-    add_symbol(index.typeAliases, ta.get(), "type alias");
+    add_symbol(index.typeAliases, ta.get(), "type alias", index.classes, index.records);
   }
 
   for (auto& c : unit.constants) {
@@ -2090,7 +2151,8 @@ void add_unit_to_index(IndexData& index, const php::Unit& unit) {
   }
 
   for (auto& rec : unit.records) {
-    add_symbol(index.records, rec.get(), "record", index.classes);
+    assertx(!(rec->attrs & AttrNoOverride));
+    add_symbol(index.records, rec.get(), "record", index.classes, index.typeAliases);
   }
 }
 
@@ -2247,48 +2309,12 @@ std::unique_ptr<php::Func> clone_meth(php::Class* newContext,
                            nextFuncId, nextClass, clonedClosures);
 }
 
-bool merge_xinits(Attr attr,
-                  std::vector<std::unique_ptr<php::Func>>& clones,
-                  ClassInfo* cinfo,
-                  std::atomic<uint32_t>& nextFuncId,
-                  uint32_t& nextClass,
-                  ClonedClosureMap& clonedClosures) {
+bool merge_inits(std::vector<std::unique_ptr<php::Func>>& clones,
+              ClassInfo* cinfo,
+              std::atomic<uint32_t>& nextFuncId,
+              uint32_t& nextClass,
+              ClonedClosureMap& clonedClosures, SString xinitName) {
   auto const cls = const_cast<php::Class*>(cinfo->cls);
-  auto const xinitName = [&]() {
-    switch (attr) {
-    case AttrNone  : return s_86pinit.get();
-    case AttrStatic: return s_86sinit.get();
-    case AttrLSB   : return s_86linit.get();
-    default: always_assert(false);
-    }
-  }();
-
-  auto const xinitMatch = [&](Attr prop_attrs) {
-    auto mask = AttrStatic | AttrLSB;
-    switch (attr) {
-    case AttrNone: return (prop_attrs & mask) == AttrNone;
-    case AttrStatic: return (prop_attrs & mask) == AttrStatic;
-    case AttrLSB: return (prop_attrs & mask) == mask;
-    default: always_assert(false);
-    }
-  };
-
-  auto const needsXinit = [&] {
-    for (auto const& p : cinfo->traitProps) {
-      if (xinitMatch(p.attrs) &&
-          p.val.m_type == KindOfUninit &&
-          !(p.attrs & AttrLateInit)) {
-        ITRACE(5, "merge_xinits: {}: Needs merge for {}{}prop `{}'\n",
-               cls->name, attr & AttrStatic ? "static " : "",
-               attr & AttrLSB ? "lsb " : "", p.name);
-        return true;
-      }
-    }
-    return false;
-  }();
-
-  if (!needsXinit) return true;
-
   std::unique_ptr<php::Func> empty;
   auto& xinit = [&] () -> std::unique_ptr<php::Func>& {
     for (auto& m : cls->methods) {
@@ -2308,7 +2334,11 @@ bool merge_xinits(Attr attr,
 
     ITRACE(5, "  - appending {}::{} into {}::{}\n",
            func->cls->name, func->name, cls->name, xinitName);
-    return append_func(xinit.get(), *func);
+    if (xinitName == s_86cinit.get()) {
+      return append_86cinit(xinit.get(), *func);
+    } else {
+      return append_func(xinit.get(), *func);
+    }
   };
 
   for (auto t : cinfo->usedTraits) {
@@ -2330,6 +2360,61 @@ bool merge_xinits(Attr attr,
     clones.push_back(std::move(xinit));
   }
 
+  return true;
+}
+
+
+bool merge_xinits(Attr attr,
+                  std::vector<std::unique_ptr<php::Func>>& clones,
+                  ClassInfo* cinfo,
+                  std::atomic<uint32_t>& nextFuncId,
+                  uint32_t& nextClass,
+                  ClonedClosureMap& clonedClosures) {
+  auto const xinitName = [&]() {
+    switch (attr) {
+    case AttrNone  : return s_86pinit.get();
+    case AttrStatic: return s_86sinit.get();
+    case AttrLSB   : return s_86linit.get();
+    default: always_assert(false);
+    }
+  }();
+
+  auto const xinitMatch = [&](Attr prop_attrs) {
+    auto mask = AttrStatic | AttrLSB;
+    switch (attr) {
+    case AttrNone: return (prop_attrs & mask) == AttrNone;
+    case AttrStatic: return (prop_attrs & mask) == AttrStatic;
+    case AttrLSB: return (prop_attrs & mask) == mask;
+    default: always_assert(false);
+    }
+  };
+
+  for (auto const& p : cinfo->traitProps) {
+    if (xinitMatch(p.attrs) &&
+        p.val.m_type == KindOfUninit &&
+        !(p.attrs & AttrLateInit)) {
+      ITRACE(5, "merge_xinits: {}: Needs merge for {}{}prop `{}'\n",
+              cinfo->cls->name, attr & AttrStatic ? "static " : "",
+              attr & AttrLSB ? "lsb " : "", p.name);
+      return merge_inits(clones, cinfo, nextFuncId,
+                         nextClass, clonedClosures, xinitName);
+    }
+  }
+  return true;
+}
+
+bool merge_cinits(std::vector<std::unique_ptr<php::Func>>& clones,
+                  ClassInfo* cinfo,
+                  std::atomic<uint32_t>& nextFuncId,
+                  uint32_t& nextClass,
+                  ClonedClosureMap& clonedClosures) {
+  auto const xinitName = s_86cinit.get();
+  for (auto const& c : cinfo->traitConsts) {
+    if (c.val && c.val->m_type == KindOfUninit) {
+      return merge_inits(clones, cinfo, nextFuncId,
+                         nextClass, clonedClosures, xinitName);
+    }
+  }
   return true;
 }
 
@@ -2426,7 +2511,17 @@ void flatten_traits(ClassNamingEnv& env, ClassInfo* cinfo) {
     }
   }
 
-  // We're now committed to flattening.
+  // flatten initializers for constants in traits
+  if (cinfo->traitConsts.size()) {
+    if (!merge_cinits(clones, cinfo, env.program->nextFuncId, nextClassId,
+                      clonedClosures)) {
+      ITRACE(5, "Not flattening {} because we couldn't merge the 86cinits\n",
+             cls->name);
+      return;
+    }
+  }
+
+ // We're now committed to flattening.
   ITRACE(3, "Flattening {}\n", cls->name);
   if (it != env.index.classExtraMethodMap.end()) it->second.clear();
   for (auto const& p : cinfo->traitProps) {
@@ -2435,6 +2530,14 @@ void flatten_traits(ClassNamingEnv& env, ClassInfo* cinfo) {
     cls->properties.back().attrs |= AttrTrait;
   }
   cinfo->traitProps.clear();
+
+  for (auto const& c : cinfo->traitConsts) {
+    ITRACE(5, "  - const {}\n", c.name);
+    cls->constants.push_back(c);
+    cinfo->clsConstants[c.name].cls = cls;
+    cinfo->clsConstants[c.name].idx = cls->constants.size()-1;
+  }
+  cinfo->traitConsts.clear();
 
   if (clones.size()) {
     auto cinit = cls->methods.size() &&
@@ -2451,6 +2554,10 @@ void flatten_traits(ClassNamingEnv& env, ClassInfo* cinfo) {
       }
       ITRACE(5, "  - meth {}\n", clone->name);
       cinfo->methods.find(clone->name)->second.func = clone.get();
+      if (clone->name == s_86cinit.get()) {
+        cinit = std::move(clone);
+        continue;
+      }
       cls->methods.push_back(std::move(clone));
     }
     if (cinit) cls->methods.push_back(std::move(cinit));
@@ -3199,7 +3306,6 @@ void mark_no_override_classes(IndexData& index) {
   for (auto& cinfo : index.allClassInfos) {
     // We cleared all the NoOverride flags while building the
     // index. Set them as necessary.
-    if (!(cinfo->cls->attrs & AttrUnique)) continue;
     if (!(cinfo->cls->attrs & AttrInterface) &&
         cinfo->subclassList.size() == 1) {
       attribute_setter(cinfo->cls->attrs, true, AttrNoOverride);
@@ -3213,7 +3319,6 @@ void mark_no_override_methods(IndexData& index) {
   // (non-interface, non-special) method as AttrNoOverride.
   for (auto& cinfo : index.allClassInfos) {
     if (cinfo->cls->attrs & AttrInterface) continue;
-    if (!(cinfo->cls->attrs & AttrUnique)) continue;
 
     for (auto& m : cinfo->methods) {
       if (!(is_special_method_name(m.first))) {
@@ -4184,68 +4289,6 @@ Index::Index(php::Program* program)
     preresolveTypes(env, m_data->classInfo);
   }
 
-  auto const error = [&](auto symbol, auto symbol2) {
-    auto filename = [](auto t) {
-      auto unit = t->unit;
-      if (!unit) return "BUILTIN";
-      return unit->filename->data();
-    };
-    throw Index::NonUniqueSymbolException(folly::sformat(
-      "More than one symbol with the name {} is defined. In {} and {}",
-      symbol->name->data(), filename(symbol), filename(symbol2)
-    ));
-  };
-
-  for (auto &it : m_data->typeAliases) {
-    const php::TypeAlias* ta = it.second;
-    auto ci = m_data->classInfo.find(ta->name);
-    if (ci != m_data->classInfo.end()) error(ta, ci->second->cls);
-    auto sym = m_data->records.find(ta->name);
-    if (sym != m_data->records.end()) error(ta, sym->second);
-    attribute_setter(ta->attrs, true, AttrUnique);
-  }
-
-  for (auto &it : m_data->constants) {
-    attribute_setter(it.second->attrs, true, AttrUnique);
-  }
-
-  for (auto& rinfo : m_data->allRecordInfos) {
-    auto const rec = rinfo->rec;
-    auto ci = m_data->classInfo.find(rec->name);
-    if (ci != m_data->classInfo.end()) error(rec, ci->second->cls);
-    auto sym = m_data->typeAliases.find(rec->name);
-    if (sym != m_data->typeAliases.end()) error(rec, sym->second);
-    attribute_setter(rinfo->rec->attrs, true, AttrUnique);
-  }
-
-  // Iterate allClassInfos so that we visit parent classes before
-  // child classes.
-  for (auto& cinfo : m_data->allClassInfos) {
-    auto const set = [&] {
-      if (m_data->classInfo.count(cinfo->cls->name) != 1 ||
-          m_data->typeAliases.count(cinfo->cls->name) ||
-          m_data->records.count(cinfo->cls->name)) {
-        return false;
-      }
-      if (cinfo->parent && !(cinfo->parent->cls->attrs & AttrUnique)) {
-        return false;
-      }
-      for (auto const i : cinfo->declInterfaces) {
-        if (!(i->cls->attrs & AttrUnique)) return false;
-      }
-      for (auto const t : cinfo->usedTraits) {
-        if (!(t->cls->attrs & AttrUnique)) return false;
-      }
-      FTRACE(2, "Adding AttrUnique to class {}\n", cinfo->cls->name->data());
-      return true;
-    }();
-    attribute_setter(cinfo->cls->attrs, set, AttrUnique);
-  }
-
-  for (auto &it : m_data->funcs) {
-    attribute_setter(it.second->attrs, true, AttrUnique);
-  }
-
   m_data->funcInfo.resize(program->nextFuncId);
 
   // Part of the index building routines happens before the various asserted
@@ -4253,7 +4296,7 @@ Index::Index(php::Program* program)
   // previous functions, so be careful changing the order here.
   compute_subclass_list(*m_data);
   clean_86reifiedinit_methods(*m_data); // uses the base class lists
-  mark_no_override_methods(*m_data);    // uses AttrUnique
+  mark_no_override_methods(*m_data);
   find_magic_methods(*m_data);          // uses the subclass lists
   find_mocked_classes(*m_data);
   mark_const_props(*m_data);
@@ -4271,7 +4314,7 @@ Index::Index(php::Program* program)
 
   check_invariants(*m_data);
 
-  mark_no_override_classes(*m_data);    // uses AttrUnique
+  mark_no_override_classes(*m_data);
 
   trace_time tracer_2("initialize return types");
   std::vector<const php::Func*> all_funcs;
@@ -4612,31 +4655,30 @@ folly::Optional<T> Index::resolve_type_impl(SString name) const {
     /*
      * If the preresolved [Class|Record]Info is Unique we can give it out.
      */
-    if (tinfo->phpType()->attrs & AttrUnique) {
-      if (debug &&
-          (omap.count(name) ||
-           m_data->typeAliases.count(name))) {
-        std::fprintf(stderr, "non unique \"unique\" %s: %s\n",
-                     ResTypeHelper<T>::name().c_str(),
-                     tinfo->phpType()->name->data());
+    assertx(tinfo->phpType()->attrs & AttrUnique);
+    if (debug &&
+        (omap.count(name) ||
+          m_data->typeAliases.count(name))) {
+      std::fprintf(stderr, "non unique \"unique\" %s: %s\n",
+                    ResTypeHelper<T>::name().c_str(),
+                    tinfo->phpType()->name->data());
 
-        auto const ta = m_data->typeAliases.find(name);
-        if (ta != end(m_data->typeAliases)) {
-          std::fprintf(stderr, "   and type-alias %s\n",
-                       ta->second->name->data());
-        }
-
-        auto const to = omap.find(name);
-        if (to != end(omap)) {
-          std::fprintf(stderr, "   and %s %s\n",
-                       ResTypeHelper<typename ResTypeHelper<T>::OtherT>::
-                       name().c_str(),
-                       to->second->phpType()->name->data());
-        }
-        always_assert(0);
+      auto const ta = m_data->typeAliases.find(name);
+      if (ta != end(m_data->typeAliases)) {
+        std::fprintf(stderr, "   and type-alias %s\n",
+                      ta->second->name->data());
       }
-      return T { tinfo };
+
+      auto const to = omap.find(name);
+      if (to != end(omap)) {
+        std::fprintf(stderr, "   and %s %s\n",
+                      ResTypeHelper<typename ResTypeHelper<T>::OtherT>::
+                      name().c_str(),
+                      to->second->phpType()->name->data());
+      }
+      always_assert(0);
     }
+    return T { tinfo };
   }
   // We refuse to have name-only resolutions of enums and typeAliases,
   // so that all name only resolutions can be treated as records or classes.
@@ -4732,21 +4774,13 @@ Index::resolve_type_name_internal(SString inName) const {
     auto const rec_it = m_data->recordInfo.find(name);
     if (rec_it != end(m_data->recordInfo)) {
       auto const rinfo = rec_it->second;
-      if (rinfo->rec->attrs & AttrUnique) {
-        return { AnnotType::Record, nullable, rinfo };
-      } else {
-        return { AnnotType::Record, nullable, name };
-      }
+      assertx(rinfo->rec->attrs & AttrUnique);
+      return { AnnotType::Record, nullable, rinfo };
     }
     auto const cls_it = m_data->classInfo.find(name);
     if (cls_it != end(m_data->classInfo)) {
       auto const cinfo = cls_it->second;
-      if (!(cinfo->cls->attrs & AttrUnique)) {
-        if (!m_data->enums.count(name) && !m_data->typeAliases.count(name)) {
-          break;
-        }
-        return { AnnotType::Object, false, {} };
-      }
+      assertx(cinfo->cls->attrs & AttrUnique);
       if (!(cinfo->cls->attrs & AttrEnum)) {
         return { AnnotType::Object, nullable, cinfo };
       }
@@ -4762,9 +4796,7 @@ Index::resolve_type_name_internal(SString inName) const {
       auto const ta_it = m_data->typeAliases.find(name);
       if (ta_it == end(m_data->typeAliases)) break;
       auto const ta = ta_it->second;
-      if (!(ta->attrs & AttrUnique)) {
-        return { AnnotType::Object, false, {} };
-      }
+      assertx(ta->attrs & AttrUnique);
       nullable = nullable || ta->nullable;
       if (ta->type != AnnotType::Object) {
         return { ta->type, nullable, ta->value.get() };
@@ -5332,8 +5364,9 @@ const php::Const* Index::lookup_class_const_ptr(Context ctx,
   auto const it = cinfo->clsConstants.find(cnsName);
   if (it != end(cinfo->clsConstants)) {
     if (!it->second->val.has_value() ||
-        (!allow_tconst && it->second->isTypeconst)) {
-      // This is an abstract class constant or typeconstant
+        it->second->kind == ConstModifiers::Kind::Context ||
+        (!allow_tconst && it->second->kind == ConstModifiers::Kind::Type)) {
+      // This is an abstract class constant, context constant or type constant
       return nullptr;
     }
     if (it->second->val.value().m_type == KindOfUninit) {

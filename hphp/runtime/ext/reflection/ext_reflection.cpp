@@ -882,6 +882,30 @@ static Array HHVM_METHOD(ReflectionFunctionAbstract, getReifiedTypeParamInfo) {
   return arr.toArray();
 }
 
+const StaticString s_pure("pure");
+const StaticString s_defaults("defaults");
+
+static Array HHVM_METHOD(ReflectionFunctionAbstract, getCoeffects) {
+  auto const func = ReflectionFuncHandle::GetFuncFor(this_);
+  std::vector<LowStringPtr> result;
+  for (auto const& name : func->staticCoeffectNames()) {
+    if (name->equal(s_pure.get())) continue;
+    result.push_back(name);
+  }
+  if (func->staticCoeffectNames().empty()) {
+    result.push_back(makeStaticString(s_defaults.get()));
+  }
+  if (func->hasCoeffectRules()) {
+    for (auto const& rule : func->getCoeffectRules()) {
+      auto const name = rule.toString(func);
+      if (name) result.push_back(makeStaticString(*name));
+    }
+  }
+  VecInit arr(result.size());
+  for (auto& name : result) arr.append(make_tv<KindOfPersistentString>(name));
+  return arr.toArray();
+}
+
 ALWAYS_INLINE
 static Array get_function_user_attributes(const Func* func) {
   auto userAttrs = func->userAttributes();
@@ -1426,11 +1450,18 @@ void addClassConstantNames(const Class* cls,
 
   const Class::Const* consts = cls->constants();
   for (size_t i = 0; i < numConsts; i++) {
-    if (consts[i].cls == cls && !consts[i].isAbstract() &&
-        !consts[i].isType()) {
+    if (consts[i].cls == cls && !consts[i].isAbstract()
+        && consts[i].kind() == ConstModifiers::Kind::Value) {
       st->add(const_cast<StringData*>(consts[i].name.get()));
     }
   }
+
+  auto const& allTraits = cls->usedTraitClasses();
+  auto const numTraits = allTraits.size();
+  for (int i = 0; i < numTraits && (st->size() < limit); ++i) {
+    addClassConstantNames(allTraits[i].get(), st, limit);
+  }
+
   if ((st->size() < limit) && cls->parent()) {
     addClassConstantNames(cls->parent(), st, limit);
   }
@@ -1502,7 +1533,7 @@ static Array HHVM_STATIC_METHOD(
   return orderedConstantsHelper(
     get_class_from_name(clsname),
     [](Class::Const c) -> bool {
-      return c.isAbstract() && !c.isType();
+      return c.isAbstract() && c.kind() == ConstModifiers::Kind::Value;
     }
   );
 }
@@ -1514,7 +1545,9 @@ static Array HHVM_STATIC_METHOD(
 ) {
   return orderedConstantsHelper(
     get_class_from_name(clsname),
-    [](Class::Const c) -> bool { return c.isType(); }
+    [](Class::Const c) -> bool {
+      return c.kind() == ConstModifiers::Kind::Type;
+    }
   );
 }
 
@@ -1695,7 +1728,8 @@ static bool HHVM_METHOD(ReflectionTypeConstant, __init,
   const Class::Const* consts = cls->constants();
 
   for (size_t i = 0; i < numConsts; i++) {
-    if (const_name.same(consts[i].name) && consts[i].isType()) {
+    if (const_name.same(consts[i].name)
+        && consts[i].kind() == ConstModifiers::Kind::Type) {
       auto handle = ReflectionConstHandle::Get(this_);
       handle->setConst(&consts[i]);
       handle->setClass(cls);
@@ -1732,7 +1766,7 @@ static String HHVM_METHOD(ReflectionTypeConstant, getAssignedTypeHint) {
     // the original assigned type text
     auto const preCls = cls->preClass();
     auto typeCns = preCls->lookupConstant(cns->name);
-    assertx(typeCns->isType());
+    assertx(typeCns->kind() == ConstModifiers::Kind::Type);
     assertx(!typeCns->isAbstract());
     assertx(isArrayLikeType(typeCns->val().m_type));
     return TypeStructure::toString(Array::attach(typeCns->val().m_data.parr),
@@ -2121,6 +2155,7 @@ struct ReflectionExtension final : Extension {
     HHVM_ME(ReflectionFunctionAbstract, getAttributesNamespaced);
     HHVM_ME(ReflectionFunctionAbstract, getRetTypeInfo);
     HHVM_ME(ReflectionFunctionAbstract, getReifiedTypeParamInfo);
+    HHVM_ME(ReflectionFunctionAbstract, getCoeffects);
 
     HHVM_ME(ReflectionMethod, __init);
     HHVM_ME(ReflectionMethod, isFinal);

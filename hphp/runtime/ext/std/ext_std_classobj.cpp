@@ -122,7 +122,7 @@ Array HHVM_FUNCTION(get_class_constants, const String& className) {
     // Note: hphpc doesn't include inherited constants in
     // get_class_constants(), so mimic that behavior
     if (consts[i].cls == cls && !consts[i].isAbstract() &&
-        !consts[i].isType()) {
+        consts[i].kind() == ConstModifiers::Kind::Value) {
       auto const name  = const_cast<StringData*>(consts[i].name.get());
       TypedValue value = consts[i].val;
       // Handle dynamically set constants
@@ -388,6 +388,7 @@ String HHVM_FUNCTION(HH_class_get_class_name, TypedValue v) {
 namespace {
 const StaticString
   s_meth_caller_cls("__SystemLib\\MethCallerHelper"),
+  s_dyn_meth_caller_cls("__SystemLib\\DynMethCallerHelper"),
   s_cls_prop("class"),
   s_meth_prop("method");
 const Slot s_cls_idx{0};
@@ -410,7 +411,17 @@ String getMethCallerClsOrMethNameHelper(const char* fn, TypedValue v) {
     }
   } else if (tvIsObject(v)) {
     auto const mcCls = Class::lookup(s_meth_caller_cls.get());
+    auto const dynMcCls = Class::lookup(s_dyn_meth_caller_cls.get());
     assertx(mcCls);
+    assertx(dynMcCls);
+    if (dynMcCls == val(v).pobj->getVMClass()) {
+      auto const obj = val(v).pobj;
+      assertx(meth_caller_has_expected_prop(obj->getVMClass()));
+      auto const tv = obj->propRvalAtOffset(
+        isGetClass ? s_cls_idx : s_meth_idx).tv();
+      assertx(isStringType(type(tv)));
+      return String(val(tv).pstr);
+    }
     if (mcCls == val(v).pobj->getVMClass()) {
       auto const obj = val(v).pobj;
       assertx(meth_caller_has_expected_prop(obj->getVMClass()));

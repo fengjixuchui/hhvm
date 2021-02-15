@@ -21,6 +21,7 @@ open Typing_defs
 open Typing_env_types
 open Utils
 open Typing_helpers
+module FunUtils = Decl_fun_utils
 module TFTerm = Typing_func_terminality
 module TUtils = Typing_utils
 module Reason = Typing_reason
@@ -112,7 +113,7 @@ let unbound_name env (pos, name) e =
   | FileInfo.Mpartial when strictish ->
     Errors.unbound_name_typing pos name;
     expr_error env (Reason.Rwitness pos) e
-  | FileInfo.Mdecl
+  | FileInfo.Mhhi
   | FileInfo.Mpartial ->
     expr_any env pos e
 
@@ -248,6 +249,8 @@ let set_tcopt_unstable_features env { fa_user_attributes; _ } =
         match snd feature with
         | Aast.String s when s = SN.UnstableFeatures.ifc ->
           Env.map_tcopt ~f:TypecheckerOptions.enable_ifc env
+        | Aast.String s when s = SN.UnstableFeatures.readonly ->
+          Env.map_tcopt ~f:(fun t -> TypecheckerOptions.set_readonly t true) env
         | _ -> env)
 
 (* Given a localized parameter type and parameter information, infer
@@ -317,6 +320,7 @@ let rec bind_param env ?(immutable = false) (ty1, param) =
       Aast.param_name = param.param_name;
       Aast.param_expr = param_te;
       Aast.param_callconv = param.param_callconv;
+      Aast.param_readonly = param.param_readonly;
       Aast.param_user_attributes = user_attributes;
       Aast.param_visibility = param.param_visibility;
     }
@@ -1582,11 +1586,20 @@ and expr_
           fun value_ty ->
             MakeType.class_type (Reason.Rwitness p) class_name [value_ty] )
       | Varray _ ->
+        let unif = TypecheckerOptions.array_unification (Env.get_tcopt env) in
         ( get_varray_inst,
           "varray",
           array_value,
-          (fun th elements -> Aast.Varray (th, elements)),
-          (fun value_ty -> MakeType.varray (Reason.Rwitness p) value_ty) )
+          (fun th elements ->
+            if unif then
+              Aast.ValCollection (Vec, th, elements)
+            else
+              Aast.Varray (th, elements)),
+          fun value_ty ->
+            if unif then
+              MakeType.vec (Reason.Rarray_unification p) value_ty
+            else
+              MakeType.varray (Reason.Rwitness p) value_ty )
       | _ ->
         (* The parent match makes this case impossible *)
         failwith "impossible match case"
@@ -1632,10 +1645,19 @@ and expr_
           (fun k v -> MakeType.class_type (Reason.Rwitness p) class_name [k; v])
         )
       | Darray _ ->
+        let unif = TypecheckerOptions.array_unification (Env.get_tcopt env) in
         ( get_darray_inst p,
           "darray",
-          (fun th pairs -> Aast.Darray (th, pairs)),
-          (fun k v -> MakeType.darray (Reason.Rwitness p) k v) )
+          (fun th pairs ->
+            if unif then
+              Aast.KeyValCollection (Dict, th, pairs)
+            else
+              Aast.Darray (th, pairs)),
+          fun k v ->
+            if unif then
+              MakeType.dict (Reason.Rarray_unification p) k v
+            else
+              MakeType.darray (Reason.Rwitness p) k v )
       | _ ->
         (* The parent match makes this case impossible *)
         failwith "impossible match case"
@@ -2565,6 +2587,10 @@ and expr_
     in
     let (env, ty) = Async.overload_extract_from_awaitable env p rty in
     make_result env p (Aast.Await te) ty
+  | ReadonlyExpr e ->
+    (* Basically ignore the readonly since it does not affect the type of the result *)
+    let (env, te, rty) = expr ~is_using_clause env e in
+    make_result env p (Aast.ReadonlyExpr te) rty
   | New ((pos, c), explicit_targs, el, unpacked_element, p1) ->
     let env = might_throw env in
     let (env, tc, tal, tel, typed_unpack_element, ty, ctor_fty) =
@@ -2766,7 +2792,7 @@ and expr_
     (* Is the return type declared? *)
     let is_explicit_ret = Option.is_some (hint_of_type_hint f.f_ret) in
     let reactivity =
-      Decl_fun_utils.fun_reactivity_opt env.decl_env f.f_user_attributes
+      FunUtils.fun_reactivity_opt env.decl_env f.f_user_attributes
       |> Option.value
            ~default:(TR.strip_conditional_reactivity (env_reactivity env))
     in
@@ -2809,35 +2835,31 @@ and expr_
         (* First check that arities match up *)
         check_lambda_arity p (get_pos ty) declared_ft expected_ft;
         (* Use declared types for parameters in preference to those determined
-         * by the context: they might be more general. *)
-        let rec replace_non_declared_types
-            params declared_ft_params expected_ft_params =
-          match (params, declared_ft_params, expected_ft_params) with
-          | ( param :: params,
-              declared_ft_param :: declared_ft_params,
+         * by the context (expected parameters): they might be more general. *)
+        let rec replace_non_declared_types declared_ft_params expected_ft_params
+            =
+          match (declared_ft_params, expected_ft_params) with
+          | ( declared_ft_param :: declared_ft_params,
               expected_ft_param :: expected_ft_params ) ->
             let rest =
-              replace_non_declared_types
-                params
-                declared_ft_params
-                expected_ft_params
+              replace_non_declared_types declared_ft_params expected_ft_params
             in
+            (* If the type parameter did not have a type hint, it is Tany and
+            we use the expected type instead. Otherwise, declared type takes
+            precedence. *)
             let resolved_ft_param =
-              if Option.is_some (hint_of_type_hint param.param_type_hint) then
-                declared_ft_param
-              else
+              if TUtils.is_any env declared_ft_param.fp_type.et_type then
                 { declared_ft_param with fp_type = expected_ft_param.fp_type }
+              else
+                declared_ft_param
             in
             resolved_ft_param :: rest
-          | (_ :: params, declared_ft_param :: declared_ft_params, []) ->
-            let rest =
-              replace_non_declared_types
-                params
-                declared_ft_params
-                expected_ft_params
-            in
-            declared_ft_param :: rest
-          | (_, _, _) ->
+          | (_, []) ->
+            (* Morally, this case should match on ([],[]) because we already
+            check arity mismatch between declared and expected types. We
+            handle it more generally here to be graceful. *)
+            declared_ft_params
+          | ([], _) ->
             (* This means the expected_ft params list can have more parameters
              * than declared parameters in the lambda. For variadics, this is OK.
              *)
@@ -2865,7 +2887,6 @@ and expr_
                 expected_ft.ft_arity;
             ft_params =
               replace_non_declared_types
-                f.f_params
                 declared_ft.ft_params
                 expected_ft.ft_params;
             ft_implicit_params = declared_ft.ft_implicit_params;
@@ -2910,6 +2931,38 @@ and expr_
              * Note: we should be using 'nothing' to type the arguments. *)
             Typing_log.increment_feature_count env FL.Lambda.untyped_context;
             check_body_under_known_params env declared_ft
+          | Some ExpectedTy.{ ty = { et_type; _ }; _ }
+            when TUtils.is_mixed env et_type || TUtils.is_dynamic env et_type ->
+            (* If the expected type of a lambda is mixed or dynamic, we
+             * decompose the expected type into a function type where the
+             * undeclared parameters and the return type are set to the expected
+             * type of lambda, i.e., mixed or dynamic.
+             *
+             * For an expected mixed type, one could argue that the lambda
+             * doesn't even need to be checked as it can't be called (there is
+             * no downcast to function type). Thus, we should be using nothing
+             * to type the arguments. But generally users are very confused by
+             * the use of nothing and would expect the lambda body to be
+             * checked as though it could be called.
+             *)
+            let replace_non_declared_type declared_ft_param =
+              let is_undeclared =
+                TUtils.is_any env declared_ft_param.fp_type.et_type
+              in
+              if is_undeclared then
+                let enforced_ty = { et_enforced = false; et_type } in
+                { declared_ft_param with fp_type = enforced_ty }
+              else
+                declared_ft_param
+            in
+            let expected_ft =
+              let ft_params =
+                List.map ~f:replace_non_declared_type declared_ft.ft_params
+              in
+              { declared_ft with ft_params }
+            in
+            let ret_ty = et_type in
+            check_body_under_known_params env ~ret_ty expected_ft
           | Some _ ->
             (* If the expected type is something concrete but not a function
              * then we should reject in strict mode. Check body anyway.
@@ -3002,7 +3055,7 @@ and expr_
           let (env, te, _) = expr env e in
           (env, te))
     in
-    let txml = Aast.Xml (sid, typed_attrs, List.rev tel) in
+    let txml = Aast.Xml (sid, typed_attrs, tel) in
     (match class_info with
     | None -> make_result env p txml (mk (Reason.Runknown_class p, Tobject))
     | Some class_info ->
@@ -3098,6 +3151,12 @@ and expr_
 and class_const ?(incl_tc = false) env p ((cpos, cid), mid) =
   let (env, _tal, ce, cty) =
     static_class_id ~check_constraints:true cpos env [] cid
+  in
+  let env =
+    match get_node cty with
+    | Tclass ((_, n), _, _) when Env.is_enum_class env n ->
+      Typing_local_ops.enforce_enum_class_variant p env
+    | _ -> env
   in
   let (env, (const_ty, _tal)) =
     class_get
@@ -3490,6 +3549,7 @@ and closure_make ?el ?ret_ty env lambda_pos f ft idl is_anon =
               Aast.f_span = f.f_span;
               Aast.f_mode = f.f_mode;
               Aast.f_ret = (hret, hint_of_type_hint f.f_ret);
+              Aast.f_readonly_ret = f.f_readonly_ret;
               Aast.f_name = f.f_name;
               Aast.f_tparams = tparams;
               Aast.f_where_constraints = f.f_where_constraints;
@@ -5524,8 +5584,8 @@ and class_get_
     Typing_defs.error_Tunapplied_alias_in_illegal_context ()
   | ( _,
       ( Tvar _ | Tnonnull | Tvarray _ | Tdarray _ | Tvarray_or_darray _
-      | Toption _ | Tprim _ | Tfun _ | Ttuple _ | Tobject | Tshape _ | Taccess _
-        ) ) ->
+      | Tvec_or_dict _ | Toption _ | Tprim _ | Tfun _ | Ttuple _ | Tobject
+      | Tshape _ | Taccess _ ) ) ->
     Errors.non_class_member
       ~is_method
       mid
@@ -5804,8 +5864,8 @@ and static_class_id
         Typing_defs.error_Tunapplied_alias_in_illegal_context ()
       | ( _,
           ( Tany _ | Tnonnull | Tvarray _ | Tdarray _ | Tvarray_or_darray _
-          | Toption _ | Tprim _ | Tfun _ | Ttuple _ | Tnewtype _ | Tdependent _
-          | Tobject | Tshape _ | Taccess _ ) ) ->
+          | Tvec_or_dict _ | Toption _ | Tprim _ | Tfun _ | Ttuple _
+          | Tnewtype _ | Tdependent _ | Tobject | Tshape _ | Taccess _ ) ) ->
         Errors.expected_class
           ~suffix:(", but got " ^ Typing_print.error env base_ty)
           p;
@@ -6451,6 +6511,7 @@ and call
               ~ifc_external:false
               ~ifc_can_call:false
               ~is_atom:false
+              ~readonly:false
           in
           {
             fp_pos = pos;
@@ -6495,6 +6556,8 @@ and call
             ~return_disposable:false (* TODO: deal with disposable return *)
             ~returns_mutable:false
             ~returns_void_to_rx:false
+            ~returns_readonly:false
+            ~readonly_this:false
         in
         let ft_ifc_decl = Typing_defs_core.default_ifc_fun_decl in
         let fun_locl_type =
@@ -7109,8 +7172,23 @@ and string2 env idl =
     List.fold_left idl ~init:(env, []) ~f:(fun (env, tel) x ->
         let (env, te, ty) = expr env x ~allow_awaitable:(*?*) false in
         let p = fst x in
-        let env = Typing_substring.sub_string p env ty in
-        (env, te :: tel))
+        if
+          TypecheckerOptions.enable_strict_string_concat_interp
+            (Env.get_tcopt env)
+        then
+          let env =
+            Typing_ops.sub_type
+              p
+              Reason.URstr_interp
+              env
+              ty
+              (MakeType.arraykey (Reason.Rinterp_operand p))
+              Errors.strict_str_interp_type_mismatch
+          in
+          (env, te :: tel)
+        else
+          let env = Typing_substring.sub_string p env ty in
+          (env, te :: tel))
   in
   (env, List.rev tel)
 
@@ -7167,7 +7245,7 @@ and typedef_def ctx typedef =
       []
   in
   Typing_check_decls.typedef env typedef;
-  Typing_variance.typedef env (snd typedef.t_name);
+  Typing_variance.typedef env typedef;
   let {
     t_annotation = ();
     t_name = (t_pos, t_name);

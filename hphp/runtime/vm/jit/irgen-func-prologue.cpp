@@ -18,6 +18,7 @@
 
 #include "hphp/runtime/base/array-iterator.h"
 #include "hphp/runtime/base/attr.h"
+#include "hphp/runtime/base/coeffects-config.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/type-structure-helpers-defs.h"
 #include "hphp/runtime/ext/asio/ext_resumable-wait-handle.h"
@@ -271,11 +272,14 @@ void emitCalleeCoeffectChecks(IRGS& env, const Func* callee,
   ifThen(
     env,
     [&] (Block* taken) {
+      // providedCoeffects & (~requiredCoeffects) == 0
       auto const providedCoeffects =
         gen(env, Lshr, callFlags, cns(env, CallFlags::CoeffectsStart));
+      auto const requiredCoeffectsFlipped = (~requiredCoeffects.value()) &
+        ((1 << CoeffectsConfig::numUsedBits()) - 1);
       auto const cond =
-        gen(env, GteInt, cns(env, requiredCoeffects.value()), providedCoeffects);
-      gen(env, JmpZero, taken, cond);
+        gen(env, AndInt, providedCoeffects, cns(env, requiredCoeffectsFlipped));
+      gen(env, JmpNZero, taken, cond);
     },
     [&] {
       hint(env, Block::Hint::Unlikely);

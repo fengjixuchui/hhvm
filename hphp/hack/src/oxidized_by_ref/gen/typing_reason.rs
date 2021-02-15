@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<0a3dcbc164855284a49c2c4beb8677f6>>
+// @generated SignedSource<<325a550a952253895baa659d87b8d315>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidize_regen.sh
+//   hphp/hack/src/oxidized_regen.sh
 
 use arena_trait::TrivialDrop;
 use no_pos_hash::NoPosHash;
@@ -92,6 +92,7 @@ pub enum Reason<'a> {
     Ris(&'a pos::Pos<'a>),
     Ras(&'a pos::Pos<'a>),
     RvarrayOrDarrayKey(&'a pos::Pos<'a>),
+    RvecOrDictKey(&'a pos::Pos<'a>),
     Rusing(&'a pos::Pos<'a>),
     RdynamicProp(&'a pos::Pos<'a>),
     RdynamicCall(&'a pos::Pos<'a>),
@@ -119,6 +120,9 @@ pub enum Reason<'a> {
     Rsplice(&'a pos::Pos<'a>),
     RetBoolean(&'a pos::Pos<'a>),
     RdefaultCapability(&'a pos::Pos<'a>),
+    RarrayUnification(&'a pos::Pos<'a>),
+    RconcatOperand(&'a pos::Pos<'a>),
+    RinterpOperand(&'a pos::Pos<'a>),
 }
 impl<'a> TrivialDrop for Reason<'a> {}
 
@@ -259,5 +263,7 @@ pub enum Ureason<'a> {
     URsubsumeTconstAssign,
     URclone,
     URusing,
+    URstrConcat,
+    URstrInterp,
 }
 impl<'a> TrivialDrop for Ureason<'a> {}

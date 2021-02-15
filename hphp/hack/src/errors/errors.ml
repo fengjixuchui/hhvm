@@ -2936,6 +2936,8 @@ let string_of_class_member_kind = function
   | `static_method -> "static method"
   | `class_variable -> "class variable"
   | `class_typeconst -> "type constant"
+  | `method_ -> "method"
+  | `property -> "property"
 
 let smember_not_found
     kind
@@ -3722,6 +3724,12 @@ let xhp_attribute_does_not_match_hint =
 let record_init_value_does_not_match_hint =
   maybe_unify_error Typing.RecordInitValueDoesNotMatchHint
 
+let strict_str_concat_type_mismatch =
+  maybe_unify_error Typing.StrictStrConcatTypeMismatch
+
+let strict_str_interp_type_mismatch =
+  maybe_unify_error Typing.StrictStrInterpTypeMismatch
+
 let using_error pos has_await ?code:_ msg _list =
   let (note, cls) =
     if has_await then
@@ -3832,14 +3840,11 @@ let top_member_write =
   top_member Typing.NullMemberWrite Typing.NonObjectMemberWrite
 
 let non_object_member
-    code ~is_method s pos1 ty pos2 (on_error : typing_error_callback) =
+    code ~kind s pos1 ty pos2 (on_error : typing_error_callback) =
   let msg_start =
     Printf.sprintf
       "You are trying to access the %s %s but this is %s"
-      ( if is_method then
-        "method"
-      else
-        "property" )
+      (string_of_class_member_kind kind)
       (Markdown_lite.md_codify s)
       ty
   in
@@ -5014,7 +5019,8 @@ let exception_occurred pos e =
     (Typing.err_code Typing.ExceptionOccurred)
     pos
     (Printf.sprintf
-       "An exception occurred while typechecking this. %s"
+       "An exception occurred while typechecking this. Please try %s. %s"
+       (Markdown_lite.md_codify "hh restart")
        Error_message_sentinel.please_file_a_bug_message)
 
 let redundant_covariant pos msg suggest =
@@ -5595,6 +5601,84 @@ let consider_meth_caller pos class_name meth_name =
     ^ "::class, '"
     ^ meth_name
     ^ "')` to create a function pointer to the instance method" )
+
+let enum_supertyping_reserved_syntax pos =
+  add
+    (Typing.err_code Typing.EnumSupertypingReservedSyntax)
+    pos
+    ( "This Enum uses syntax reserved for the Enum Supertyping feature.\n"
+    ^ "Enable it with the enable_enum_supertyping option in .hhconfig" )
+
+let readonly_modified ?reason pos =
+  match reason with
+  | Some (rpos, rmsg) ->
+    add_list
+      (Typing.err_code Typing.ReadonlyValueModified)
+      (pos, "This value is readonly, its properties cannot be modified")
+      [(rpos, rmsg)]
+  | None ->
+    add
+      (Typing.err_code Typing.ReadonlyValueModified)
+      pos
+      "This value is readonly, its properties cannot be modified"
+
+let var_readonly_mismatch pos var_ro rval_pos rval_ro =
+  add_list
+    (Typing.err_code Typing.ReadonlyVarMismatch)
+    (pos, "This variable is " ^ var_ro)
+    [
+      ( rval_pos,
+        "But it's being assigned to an expression which is "
+        ^ rval_ro
+        ^ "."
+        ^ "\n For now, variables can only be assigned the same readonlyness within the body of a function."
+      );
+    ]
+
+let readonly_mismatch prefix pos ~reason_sub ~reason_super =
+  add_list
+    (Typing.err_code Typing.ReadonlyMismatch)
+    (pos, prefix)
+    (reason_sub @ reason_super)
+
+let explicit_readonly_cast kind pos =
+  add
+    (Typing.err_code Typing.ExplicitReadonlyCast)
+    pos
+    ( "This "
+    ^ kind
+    ^ " returns a readonly value. It must be explicitly wrapped in a readonly expression."
+    )
+
+let readonly_method_call receiver_pos method_pos =
+  add_list
+    (Typing.err_code Typing.ReadonlyMethodCall)
+    ( receiver_pos,
+      "This expression is readonly, so it can only call readonly methods" )
+    [(method_pos, "This method is not readonly")]
+
+let enum_inclusion_unsupported_ordering dest_pos dest_name src_name =
+  add_list
+    (Typing.err_code Typing.IncompatibleEnumInclusion)
+    ( dest_pos,
+      "Enum "
+      ^ strip_ns dest_name
+      ^ " cannot include enum "
+      ^ strip_ns src_name
+      ^ " because it precedes it in the same file" )
+    []
+
+let invalid_meth_caller_calling_convention call_pos param_pos convention =
+  add_list
+    (Typing.err_code Typing.InvalidMethCallerCallingConvention)
+    ( call_pos,
+      "`meth_caller` does not support methods with the "
+      ^ convention
+      ^ " calling convention" )
+    [
+      ( param_pos,
+        "This is why I think this method uses the `inout` calling convention" );
+    ]
 
 (*****************************************************************************)
 (* Printing *)

@@ -17,6 +17,7 @@
 
 #include "hphp/runtime/base/autoload-handler.h"
 #include "hphp/runtime/base/builtin-functions.h"
+#include "hphp/runtime/base/coeffects-config.h"
 #include "hphp/runtime/base/execution-context.h"
 #include "hphp/runtime/base/file-stream-wrapper.h"
 #include "hphp/runtime/base/file-util.h"
@@ -1277,7 +1278,6 @@ std::string mangleUnitSha1(const std::string& fileSha1,
   std::string t = fileSha1 + '\0'
     + repoSchemaId().toString()
     + (RuntimeOption::EnableClassLevelWhereClauses ? '1' : '0')
-    + (RuntimeOption::AssertEmitted ? '1' : '0')
     + (RuntimeOption::EvalGenerateDocComments ? '1' : '0')
     + (RuntimeOption::EnableXHP ? '1' : '0')
     + (RuntimeOption::EvalEnableCallBuiltin ? '1' : '0')

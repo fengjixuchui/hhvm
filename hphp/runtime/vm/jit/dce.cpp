@@ -280,9 +280,7 @@ bool canDCE(IRInstruction* inst) {
   case AllocVArray:
   case AllocVec:
   case GetDictPtrIter:
-  case GetVecPtrIter:
   case AdvanceDictPtrIter:
-  case AdvanceVecPtrIter:
   case LdPtrIterKey:
   case LdPtrIterVal:
   case EqPtrIter:
@@ -597,7 +595,6 @@ bool canDCE(IRInstruction* inst) {
   case CheckArrayCOW:
   case ProfileDictAccess:
   case CheckDictOffset:
-  case CheckDictOffsetLA:
   case ProfileKeysetAccess:
   case CheckKeysetOffset:
   case ElemMixedArrayK:
@@ -642,7 +639,6 @@ bool canDCE(IRInstruction* inst) {
   case ProfileMethod:
   case ProfileSubClsCns:
   case CheckVecBounds:
-  case CheckVecBoundsLA:
   case BespokeElem:
   case BespokeEscalateToVanilla:
   case LdVectorSize:

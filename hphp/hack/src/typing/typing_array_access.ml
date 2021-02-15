@@ -78,7 +78,7 @@ let widen_for_array_get ~lhs_of_null_coalesce ~expr_pos index_expr env ty =
     let ty = MakeType.keyed_container r index_ty element_ty in
     (env, Some ty)
   (* The same is true of PHP arrays *)
-  | (r, (Tvarray _ | Tdarray _ | Tvarray_or_darray _)) ->
+  | (r, (Tvarray _ | Tdarray _ | Tvec_or_dict _ | Tvarray_or_darray _)) ->
     let (env, element_ty) = Env.fresh_invariant_type_var env expr_pos in
     let (env, index_ty) = Env.fresh_invariant_type_var env expr_pos in
     let ty = MakeType.keyed_container r index_ty element_ty in
@@ -344,6 +344,7 @@ let rec array_get
                 || String.equal cn SN.Collections.cImmVector ) ->
         error_const_mutation env expr_pos ty1
       | Tdarray (_k, v)
+      | Tvec_or_dict (_k, v)
       | Tvarray_or_darray (_k, v) ->
         let env = check_arraykey_index_read env expr_pos ty1 ty2 in
         (env, v)
@@ -359,13 +360,12 @@ let rec array_get
         (* requires integer literal *)
         (match e2 with
         | (p, Int n) ->
-          (try
-             let idx = int_of_string n in
-             let nth = List.nth_exn tyl idx in
-             (env, nth)
-           with _ ->
-             Errors.typing_error p (Reason.string_of_ureason Reason.index_tuple);
-             (env, err_witness env p))
+          let idx = int_of_string_opt n in
+          (match Option.bind idx ~f:(List.nth tyl) with
+          | Some nth -> (env, nth)
+          | None ->
+            Errors.typing_error p (Reason.string_of_ureason Reason.index_tuple);
+            (env, err_witness env p))
         | (p, _) ->
           Errors.typing_error p (Reason.string_of_ureason Reason.URtuple_access);
           (env, err_witness env p))
@@ -382,14 +382,13 @@ let rec array_get
         (* requires integer literal *)
         (match e2 with
         | (p, Int n) ->
-          (try
-             let idx = int_of_string n in
-             let nth = List.nth_exn [ty1; ty2] idx in
-             (env, nth)
-           with _ ->
-             Errors.typing_error p
-             @@ Reason.string_of_ureason (Reason.index_class cn);
-             (env, err_witness env p))
+          let idx = int_of_string_opt n in
+          (match Option.bind ~f:(List.nth [ty1; ty2]) idx with
+          | Some nth -> (env, nth)
+          | None ->
+            Errors.typing_error p
+            @@ Reason.string_of_ureason (Reason.index_class cn);
+            (env, err_witness env p))
         | (p, _) ->
           Errors.typing_error p (Reason.string_of_ureason Reason.URpair_access);
           (env, err_witness env p))
@@ -566,10 +565,10 @@ let assign_array_append ~array_pos ~expr_pos ur env ty1 ty2 =
       | (_, Tunapplied_alias _) ->
         Typing_defs.error_Tunapplied_alias_in_illegal_context ()
       | ( _,
-          ( Tnonnull | Tdarray _ | Tvarray_or_darray _ | Toption _ | Tprim _
-          | Tvar _ | Tfun _ | Tclass _ | Ttuple _ | Tshape _ | Tunion _
-          | Tintersection _ | Tgeneric _ | Tnewtype _ | Tdependent _ | Taccess _
-            ) ) ->
+          ( Tnonnull | Tdarray _ | Tvec_or_dict _ | Tvarray_or_darray _
+          | Toption _ | Tprim _ | Tvar _ | Tfun _ | Tclass _ | Ttuple _
+          | Tshape _ | Tunion _ | Tintersection _ | Tgeneric _ | Tnewtype _
+          | Tdependent _ | Taccess _ ) ) ->
         error_assign_array_append env expr_pos ty1)
 
 let widen_for_assign_array_get ~expr_pos index_expr env ty =
@@ -754,6 +753,11 @@ let assign_array_get ~array_pos ~expr_pos ur env ty1 key tkey ty2 =
         let (env, tk') = Typing_union.union env tk tkey in
         let (env, tv') = Typing_union.union env tv ty2 in
         (env, mk (r, Tvarray_or_darray (tk', tv')))
+      | Tvec_or_dict (tk, tv) ->
+        let env = check_arraykey_index_write env expr_pos ety1 tkey in
+        let (env, tk') = Typing_union.union env tk tkey in
+        let (env, tv') = Typing_union.union env tv ty2 in
+        (env, mk (r, Tvec_or_dict (tk', tv')))
       | Terr -> error
       | Tdynamic -> (env, ety1)
       | Tany _ -> (env, ety1)
@@ -773,13 +777,11 @@ let assign_array_get ~array_pos ~expr_pos ur env ty1 key tkey ty2 =
         begin
           match key with
           | (_, Int n) ->
-            (try
-               let idx = int_of_string n in
-               match List.split_n tyl idx with
-               | (tyl', _ :: tyl'') ->
-                 (env, MakeType.tuple r (tyl' @ (ty2 :: tyl'')))
-               | _ -> fail Reason.index_tuple
-             with _ -> fail Reason.index_tuple)
+            let idx = int_of_string_opt n in
+            (match Option.map ~f:(List.split_n tyl) idx with
+            | Some (tyl', _ :: tyl'') ->
+              (env, MakeType.tuple r (tyl' @ (ty2 :: tyl'')))
+            | _ -> fail Reason.index_tuple)
           | _ -> fail Reason.URtuple_access
         end
       | Tshape (shape_kind, fdm) ->

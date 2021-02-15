@@ -462,15 +462,14 @@ let check_members
   in
   let should_check_member_unique class_elt parent_class_elt =
     (* We want to check if there are conflicting trait or interface declarations
-    of a class member. This means that if the parent class is a trait or interface,
-    we need to check that the child member is *uniquely inherited*.
-
-    A member is uniquely inherited if any of the following hold:
-    1. It is synthetic (from a requirement)
-    2. It is defined on the child class
-    3. It is concretely defined in exactly one place
-    4. It is abstract, and all other declarations are identical
-    *)
+     * of a class member. This means that if the parent class is a trait or interface,
+     * we need to check that the child member is *uniquely inherited*.
+     *
+     * A member is uniquely inherited if any of the following hold:
+     * 1. It is synthetic (from a requirement)
+     * 2. It is defined on the child class
+     * 3. It is concretely defined in exactly one place
+     * 4. It is abstract, and all other declarations are identical *)
     match Cls.kind parent_class with
     | Ast_defs.Cinterface
     | Ast_defs.Ctrait ->
@@ -584,7 +583,8 @@ let default_constructor_ce class_ =
         ~override:false
         ~lsb:false
         ~synthesized:true
-        ~dynamicallycallable:false;
+        ~dynamicallycallable:false
+        ~readonly_prop:false;
   }
 
 (* When an interface defines a constructor, we check that they are compatible *)
@@ -687,14 +687,14 @@ let tconst_subsumption env class_name parent_typeconst child_typeconst on_error
     let child_cstr =
       match child_typeconst.ttc_abstract with
       | TCAbstract _ ->
-        Some (Option.value child_typeconst.ttc_constraint ~default)
-      | _ -> child_typeconst.ttc_constraint
+        Some (Option.value child_typeconst.ttc_as_constraint ~default)
+      | _ -> child_typeconst.ttc_as_constraint
     in
     let env =
       Option.value ~default:env
       @@ Option.map2
            child_cstr
-           parent_typeconst.ttc_constraint
+           parent_typeconst.ttc_as_constraint
            ~f:
              (Typing_ops.sub_type_decl_on_error
                 pos
@@ -708,7 +708,7 @@ let tconst_subsumption env class_name parent_typeconst child_typeconst on_error
       Option.value ~default:env
       @@ Option.map2
            child_typeconst.ttc_type
-           parent_typeconst.ttc_constraint
+           parent_typeconst.ttc_as_constraint
            ~f:
              (Typing_ops.sub_type_decl_on_error
                 pos
@@ -733,7 +733,7 @@ let tconst_subsumption env class_name parent_typeconst child_typeconst on_error
         let emit_error =
           Errors.invalid_enforceable_type "constant" (pos, name)
         in
-        Typing_enforceable_hint.validator#validate_type
+        Typing_enforceable_hint.validate_type
           tast_env
           (fst child_typeconst.ttc_name)
           ty
@@ -852,7 +852,6 @@ let check_class_implements
   let env = check_typeconsts env parent_class class_ on_error in
   let (parent_pos, parent_class, parent_tparaml) = parent_class in
   let (pos, class_, tparaml) = class_ in
-  let fully_known = Cls.members_fully_known class_ in
   let psubst = Inst.make_subst (Cls.tparams parent_class) parent_tparaml in
   let subst = Inst.make_subst (Cls.tparams class_) tparaml in
   let env = check_consts env parent_class class_ psubst subst on_error in
@@ -869,7 +868,7 @@ let check_class_implements
   let check_privates : bool =
     Ast_defs.(equal_class_kind (Cls.kind parent_class) Ctrait)
   in
-  if fully_known then
+  if Cls.members_fully_known class_ then
     List.iter memberl (check_members_implemented check_privates parent_pos pos);
   List.fold ~init:env memberl ~f:(fun env ->
       check_members

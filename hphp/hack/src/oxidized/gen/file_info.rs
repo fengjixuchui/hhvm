@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<92cd5fef3e761bafffa646b265e38c81>>
+// @generated SignedSource<<f4e204c954fa80854c347f78bdab9f91>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidize_regen.sh
+//   hphp/hack/src/oxidized_regen.sh
 
 use arena_trait::TrivialDrop;
 use no_pos_hash::NoPosHash;
@@ -39,7 +39,7 @@ pub use prim_defs::*;
 )]
 pub enum Mode {
     /// just declare signatures, don't check anything
-    Mdecl,
+    Mhhi,
     /// check everything!
     Mstrict,
     /// Don't fail if you see a function/class you don't know

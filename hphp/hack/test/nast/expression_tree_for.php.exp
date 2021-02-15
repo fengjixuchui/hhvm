@@ -1,6 +1,6 @@
 [(Fun
     { f_span = [3:1-5:2]; f_annotation = (); f_mode = Mstrict;
-      f_ret = ((), (Some ([3:18-22], (Hprim Tvoid))));
+      f_readonly_ret = None; f_ret = ((), (Some ([3:18-22], (Hprim Tvoid))));
       f_name = ([3:10-14], "\\test"); f_tparams = [];
       f_where_constraints = []; f_variadic = FVnonVariadic; f_params = [];
       f_ctxs = None; f_unsafe_ctxs = None;
@@ -15,7 +15,8 @@
                    ([4:8-60],
                     (Lfun (
                        { f_span = [4:8-60]; f_annotation = ();
-                         f_mode = Mstrict; f_ret = ((), None);
+                         f_mode = Mstrict; f_readonly_ret = None;
+                         f_ret = ((), None);
                          f_name = ([4:8-60], ";anonymous"); f_tparams = [];
                          f_where_constraints = [];
                          f_variadic = FVnonVariadic; f_params = [];
@@ -68,7 +69,8 @@
                        ([4:8-60],
                         (Lfun (
                            { f_span = [4:8-60]; f_annotation = ();
-                             f_mode = Mstrict; f_ret = ((), None);
+                             f_mode = Mstrict; f_readonly_ret = None;
+                             f_ret = ((), None);
                              f_name = ([Pos.none], ";anonymous");
                              f_tparams = []; f_where_constraints = [];
                              f_variadic = FVnonVariadic; f_params = [];
@@ -142,11 +144,28 @@
                                              None)))
                                          )))));
                                  ([4:8-60],
+                                  (Expr
+                                     ([4:8-60],
+                                      (Binop ((Eq None),
+                                         ([4:8-60], (Lvar ([4:8-60], $__4))),
+                                         ([4:8-60],
+                                          (Call (
+                                             ([4:8-60],
+                                              (Class_const (
+                                                 ([4:8-60],
+                                                  (CI ([4:8-60], "\\Code"))),
+                                                 ([4:8-60], "voidLiteral")))),
+                                             [], [], None)))
+                                         )))));
+                                 ([4:8-60],
                                   (Return
                                      (Some ([4:8-60],
-                                            (New (
+                                            (Call (
                                                ([4:8-60],
-                                                (CI ([4:8-60], "\\ExprTree"))),
+                                                (Class_const (
+                                                   ([4:8-60],
+                                                    (CI ([4:8-60], "\\Code"))),
+                                                   ([4:8-60], "makeTree")))),
                                                [],
                                                [([4:8-60],
                                                  (New (
@@ -187,7 +206,12 @@
                                                          (String "$__3")),
                                                         ([Pos.none],
                                                          (Lvar
-                                                            ([Pos.none], $__3))))
+                                                            ([Pos.none], $__3))));
+                                                       (([Pos.none],
+                                                         (String "$__4")),
+                                                        ([Pos.none],
+                                                         (Lvar
+                                                            ([Pos.none], $__4))))
                                                        ]
                                                      )));
                                                  ([4:8-60],
@@ -195,6 +219,7 @@
                                                      { f_span = [4:8-60];
                                                        f_annotation = ();
                                                        f_mode = Mstrict;
+                                                       f_readonly_ret = None;
                                                        f_ret = ((), None);
                                                        f_name =
                                                        ([Pos.none],
@@ -219,6 +244,8 @@
                                                           param_pos = [4:3-7];
                                                           param_name = "$v";
                                                           param_expr = None;
+                                                          param_readonly =
+                                                          None;
                                                           param_callconv =
                                                           None;
                                                           param_user_attributes =
@@ -272,7 +299,7 @@
                                                                     Vec,
                                                                     None, 
                                                                     [])));
-                                                                   ([4:17-58],
+                                                                   ([4:8-60],
                                                                     (
                                                                     ValCollection (
                                                                     Vec,
@@ -791,6 +818,81 @@
                                                                     [])))],
                                                                     None)))]
                                                                     )))],
+                                                                    None)));
+                                                                    ([4:8-60],
+                                                                    (Call (
+                                                                    ([4:8-60],
+                                                                    (Obj_get (
+                                                                    ([4:8-60],
+                                                                    (Lvar
+                                                                    ([4:8-60],
+                                                                    $v))),
+                                                                    ([4:8-60],
+                                                                    (Id
+                                                                    ([4:8-60],
+                                                                    "returnStatement"))),
+                                                                    OG_nullthrows,
+                                                                    false))),
+                                                                    [],
+                                                                    [([4:8-60],
+                                                                    (New (
+                                                                    ([4:8-60],
+                                                                    (CI
+                                                                    ([4:8-60],
+                                                                    "\\ExprPos"))),
+                                                                    [],
+                                                                    [([Pos.none],
+                                                                    (Int "4"));
+                                                                    ([Pos.none],
+                                                                    (Int "7"));
+                                                                    ([Pos.none],
+                                                                    (Int "4"));
+                                                                    ([Pos.none],
+                                                                    (Int "59"))
+                                                                    ], None,
+                                                                    [4:8-60]
+                                                                    )));
+                                                                    ([4:8-60],
+                                                                    (Call (
+                                                                    ([4:8-60],
+                                                                    (Obj_get (
+                                                                    ([4:8-60],
+                                                                    (Lvar
+                                                                    ([4:8-60],
+                                                                    $v))),
+                                                                    ([4:8-60],
+                                                                    (Id
+                                                                    ([4:8-60],
+                                                                    "splice"))),
+                                                                    OG_nullthrows,
+                                                                    false))),
+                                                                    [],
+                                                                    [([4:8-60],
+                                                                    (New (
+                                                                    ([4:8-60],
+                                                                    (CI
+                                                                    ([4:8-60],
+                                                                    "\\ExprPos"))),
+                                                                    [],
+                                                                    [([Pos.none],
+                                                                    (Int "4"));
+                                                                    ([Pos.none],
+                                                                    (Int "7"));
+                                                                    ([Pos.none],
+                                                                    (Int "4"));
+                                                                    ([Pos.none],
+                                                                    (Int "59"))
+                                                                    ], None,
+                                                                    [4:8-60]
+                                                                    )));
+                                                                    ([Pos.none],
+                                                                    (String
+                                                                    "$__4"));
+                                                                    ([4:8-60],
+                                                                    (Lvar
+                                                                    ([4:8-60],
+                                                                    $__4)))],
+                                                                    None)))],
                                                                     None)))]
                                                                     )))
                                                                    ],
@@ -821,16 +923,18 @@
                                                          false };
                                                        f_doc_comment = None;
                                                        f_static = false },
-                                                     [([4:50-55], $__3);
+                                                     [([4:8-60], $__4);
+                                                       ([4:50-55], $__3);
                                                        ([4:45-46], $__2);
                                                        ([4:29-33], $__1);
                                                        ([4:26-27], $__0)]
                                                      )));
                                                  ([4:8-60],
-                                                  (Lfun (
+                                                  (Efun (
                                                      { f_span = [4:8-60];
                                                        f_annotation = ();
                                                        f_mode = Mstrict;
+                                                       f_readonly_ret = None;
                                                        f_ret = ((), None);
                                                        f_name =
                                                        ([Pos.none],
@@ -856,6 +960,8 @@
                                                                    ();
                                                                    f_mode =
                                                                    Mstrict;
+                                                                   f_readonly_ret =
+                                                                   None;
                                                                    f_ret =
                                                                    ((), None);
                                                                    f_name =
@@ -954,7 +1060,17 @@
                                                                     $__3))))),
                                                                     [], 
                                                                     [], None
-                                                                    )))))])))
+                                                                    )))))])));
+                                                                    ([4:8-60],
+                                                                    (Return
+                                                                    (Some (
+                                                                    [4:8-60],
+                                                                    (
+                                                                    ET_Splice
+                                                                    ([4:8-60],
+                                                                    (Lvar
+                                                                    ([4:8-60],
+                                                                    $__4))))))))
                                                                     ];
                                                                     fb_annotation =
                                                                     Named };
@@ -989,8 +1105,10 @@
                                                                    None;
                                                                    f_static =
                                                                    false },
-                                                                 [([4:45-46],
-                                                                   $__2);
+                                                                 [([4:8-60],
+                                                                   $__4);
+                                                                   ([4:45-46],
+                                                                    $__2);
                                                                    ([4:50-55],
                                                                     $__3);
                                                                    ([4:29-33],
@@ -1025,13 +1143,14 @@
                                                          false };
                                                        f_doc_comment = None;
                                                        f_static = false },
-                                                     [([4:45-46], $__2);
-                                                       ([4:50-55], $__3);
-                                                       ([4:29-33], $__1);
-                                                       ([4:26-27], $__0)]
+                                                     [([Pos.none], $__0);
+                                                       ([Pos.none], $__1);
+                                                       ([Pos.none], $__2);
+                                                       ([Pos.none], $__3);
+                                                       ([Pos.none], $__4)]
                                                      )))
                                                  ],
-                                               None, [4:8-60]))))))
+                                               None))))))
                                  ];
                                fb_annotation = Named };
                              f_fun_kind = FSync; f_user_attributes = [];

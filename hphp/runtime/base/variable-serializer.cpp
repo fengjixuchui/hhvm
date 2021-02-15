@@ -837,6 +837,7 @@ void VariableSerializer::writeArrayHeader(int size, bool isVectorData,
   info.first_element = true;
   info.indent_delta = 0;
   info.size = size;
+  info.key = nullptr;
 
   switch (m_type) {
   case Type::DebuggerDump:
@@ -1135,6 +1136,9 @@ void VariableSerializer::writeArrayKey(
   bool const skey = isStringType(keyCell->m_type);
 
   ArrayInfo &info = m_arrayInfos.back();
+
+  auto const log_key = skey && val(keyCell).pstr->isStatic();
+  info.key = log_key ? val(keyCell).pstr : nullptr;
 
   switch (m_type) {
   case Type::DebuggerDump:
@@ -1646,11 +1650,19 @@ void VariableSerializer::serializeClsMeth(
   switch (getType()) {
     case Type::DebuggerDump:
     case Type::PrintR:
-      m_buf->append("classMeth{\n    class(");
+      m_buf->append("classMeth{\n");
+      m_indent += 4;
+      indent();
+      m_buf->append("class(");
       m_buf->append(clsName->data());
-      m_buf->append(")\n    function(");
+      m_buf->append(")\n");
+      indent();
+      m_buf->append("function(");
       m_buf->append(funcName->data());
-      m_buf->append(")\n}");
+      m_buf->append(")\n");
+      m_indent -= 4;
+      indent();
+      m_buf->append("}");
       break;
 
     case Type::VarExport:
@@ -1664,11 +1676,20 @@ void VariableSerializer::serializeClsMeth(
 
     case Type::VarDump:
     case Type::DebugDump:
-      m_buf->append("classMeth{\n    class(");
+      indent();
+      m_buf->append("classMeth{\n");
+      m_indent += 2;
+      indent();
+      m_buf->append("class(");
       m_buf->append(clsName->data());
-      m_buf->append(")\n    function(");
+      m_buf->append(")\n");
+      indent();
+      m_buf->append("function(");
       m_buf->append(funcName->data());
-      m_buf->append(")\n}\n");
+      m_buf->append(")\n");
+      m_indent -= 2;
+      indent();
+      m_buf->append("}\n");
       break;
 
     case Type::Serialize:
@@ -1993,7 +2014,23 @@ void VariableSerializer::serializeArray(const ArrayData* arr,
         return folly::none;
       }
     }();
-    if (source) maybe_raise_array_serialization_notice(*source, arr);
+    if (source && raiseArraySerializationNotices()) {
+      auto buffer = StringBuffer{};
+      if (!m_arrayInfos.empty()) {
+        auto count = 0;
+        buffer.append(" at path [");
+        for (auto const& info : m_arrayInfos) {
+          if (count++) buffer.append(',');
+          if (info.key) {
+            appendJsonEscape(buffer, info.key->data(), info.key->size(), 0);
+          } else {
+            buffer.append('?');
+          }
+        }
+        buffer.append(']');
+      }
+      raise_array_serialization_notice(*source, arr, buffer.data());
+    }
   }
 
   if (arr->size() == 0 && LIKELY(!arrprov::arrayWantsTag(arr))) {

@@ -1,6 +1,6 @@
 [(Fun
     { f_span = [3:1-6:2]; f_annotation = (); f_mode = Mstrict;
-      f_ret = ((), (Some ([3:18-22], (Hprim Tvoid))));
+      f_readonly_ret = None; f_ret = ((), (Some ([3:18-22], (Hprim Tvoid))));
       f_name = ([3:10-14], "\\test"); f_tparams = [];
       f_where_constraints = []; f_variadic = FVnonVariadic; f_params = [];
       f_ctxs = None; f_unsafe_ctxs = None;
@@ -21,7 +21,8 @@
                        ([5:8-14],
                         (Lfun (
                            { f_span = [5:8-14]; f_annotation = ();
-                             f_mode = Mstrict; f_ret = ((), None);
+                             f_mode = Mstrict; f_readonly_ret = None;
+                             f_ret = ((), None);
                              f_name = ([Pos.none], ";anonymous");
                              f_tparams = []; f_where_constraints = [];
                              f_variadic = FVnonVariadic; f_params = [];
@@ -61,9 +62,12 @@
                                  ([5:8-14],
                                   (Return
                                      (Some ([5:8-14],
-                                            (New (
+                                            (Call (
                                                ([5:8-14],
-                                                (CI ([5:8-14], "\\ExprTree"))),
+                                                (Class_const (
+                                                   ([5:8-14],
+                                                    (CI ([5:8-14], "\\Code"))),
+                                                   ([5:8-14], "makeTree")))),
                                                [],
                                                [([5:8-14],
                                                  (New (
@@ -102,6 +106,7 @@
                                                      { f_span = [5:8-14];
                                                        f_annotation = ();
                                                        f_mode = Mstrict;
+                                                       f_readonly_ret = None;
                                                        f_ret = ((), None);
                                                        f_name =
                                                        ([Pos.none],
@@ -126,6 +131,8 @@
                                                           param_pos = [5:3-7];
                                                           param_name = "$v";
                                                           param_expr = None;
+                                                          param_readonly =
+                                                          None;
                                                           param_callconv =
                                                           None;
                                                           param_user_attributes =
@@ -150,6 +157,8 @@
                                                                     ();
                                                                     f_mode =
                                                                     Mstrict;
+                                                                    f_readonly_ret =
+                                                                    None;
                                                                     f_ret =
                                                                     (
                                                                     (), None);
@@ -250,10 +259,11 @@
                                                        f_static = false },
                                                      [])));
                                                  ([5:8-14],
-                                                  (Lfun (
+                                                  (Efun (
                                                      { f_span = [5:8-14];
                                                        f_annotation = ();
                                                        f_mode = Mstrict;
+                                                       f_readonly_ret = None;
                                                        f_ret = ((), None);
                                                        f_name =
                                                        ([Pos.none],
@@ -313,11 +323,11 @@
                                                          false };
                                                        f_doc_comment = None;
                                                        f_static = false },
-                                                     [([5:8-9], $__0);
-                                                       ([5:13-14], $__1)]
+                                                     [([Pos.none], $__0);
+                                                       ([Pos.none], $__1)]
                                                      )))
                                                  ],
-                                               None, [5:8-14]))))))
+                                               None))))))
                                  ];
                                fb_annotation = Named };
                              f_fun_kind = FSync; f_user_attributes = [];

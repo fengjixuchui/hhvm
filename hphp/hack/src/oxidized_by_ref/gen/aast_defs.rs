@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<05b80ca1176423ba7bdc6dae70db2964>>
+// @generated SignedSource<<5bf3f099fbf25cfdd320bfc368dc6b9f>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidize_regen.sh
+//   hphp/hack/src/oxidized_regen.sh
 
 use arena_trait::TrivialDrop;
 use no_pos_hash::NoPosHash;
@@ -191,6 +191,7 @@ pub enum Hint_<'a> {
     Hdarray(&'a (&'a Hint<'a>, &'a Hint<'a>)),
     Hvarray(&'a Hint<'a>),
     HvarrayOrDarray(&'a (Option<&'a Hint<'a>>, &'a Hint<'a>)),
+    HvecOrDict(&'a (Option<&'a Hint<'a>>, &'a Hint<'a>)),
     Hprim(&'a Tprim),
     Hthis,
     Hdynamic,

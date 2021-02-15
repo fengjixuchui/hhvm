@@ -1438,22 +1438,27 @@ static void set_stack_size() {
 
 std::vector<int> get_executable_lines(const Unit* compiled) {
   std::vector<int> lines;
-  auto loadedTable = LineTable{};
-  auto lineTable = SourceLocation::getLineTable(compiled);
 
-  if (!lineTable) {
-    // If it's not in the repo we have no line information to return.
-    if (compiled->repoID() == RepoIdInvalid) return lines;
+  compiled->forEachFunc([&](const Func* func) {
+    auto loadedTable = LineTable{};
+    auto lineTable = func->getLineTable();
 
-    // Don't do loadLineTable here to avoid storing the line table in the cache,
-    // we likely won't access it again.
-    auto& urp = Repo::get().urp();
-    urp.getUnitLineTable[compiled->repoID()].get(compiled->sn(), loadedTable);
-    lineTable = &loadedTable;
-  }
+    if (!lineTable) {
+      // If it's not in the repo we have no line information for this func so just continue.
+      if (compiled->repoID() == RepoIdInvalid) return false;
 
-  lines.reserve(lineTable->size());
-  for (auto& ent : *lineTable) lines.push_back(ent.val());
+      // Don't do loadLineTable here to avoid storing the line table in the cache,
+      // we likely won't access it again.
+      auto& frp = Repo::get().frp();
+      frp.getFuncLineTable[compiled->repoID()].get(compiled->sn(), func->sn(), loadedTable);
+      lineTable = &loadedTable;
+    }
+
+    lines.reserve(lines.size() + lineTable->size());
+    for (auto& ent : *lineTable) lines.push_back(ent.val());
+    return false;
+  });
+
   std::sort(lines.begin(), lines.end());
   auto const last = std::unique(lines.begin(), lines.end());
   lines.erase(last, lines.end());
@@ -2071,12 +2076,6 @@ static int execute_program_impl(int argc, char** argv) {
       return 1;
     }
 
-    int ret = 0;
-    hphp_process_init();
-    SCOPE_EXIT { hphp_process_exit(); };
-
-    block_sync_signals_and_start_handler_thread();
-
     if (RuntimeOption::EvalUseRemoteUnixServer != "no" &&
         !RuntimeOption::EvalUnixServerPath.empty() &&
         (!po.file.empty() || !po.args.empty()) && po.mode != "eval") {
@@ -2093,6 +2092,12 @@ static int execute_program_impl(int argc, char** argv) {
         exit(255);
       }
     }
+
+    int ret = 0;
+    hphp_process_init();
+    SCOPE_EXIT { hphp_process_exit(); };
+
+    block_sync_signals_and_start_handler_thread();
 
     std::string file;
     if (new_argc > 0) {
@@ -2347,6 +2352,30 @@ void hphp_thread_exit() {
 #if USE_JEMALLOC_EXTENT_HOOKS
   arenas_thread_exit();
 #endif
+}
+
+void cli_server_init() {
+  if (*s_sessionInitialized) return;
+  Process::InitProcessStatics();
+  HHProf::Init();
+  rds::processInit();
+  rds::threadInit();
+  ServerStats::GetLogger();
+  zend_rand_init();
+  get_server_note();
+  assertx(RequestInfo::s_requestInfo.isNull());
+  RequestInfo::s_requestInfo.getCheck()->init();
+  HardwareCounter::s_counter.getCheck();
+  InitFiniNode::ThreadInit();
+  hphp_memory_cleanup();
+  g_context.getCheck();
+  AsioSession::Init();
+  Socket::clearLastError();
+  RI().onSessionInit();
+  tl_heap->resetExternalStats();
+  g_thread_safe_locale_handler->reset();
+  Treadmill::startRequest(Treadmill::SessionKind::CLIServer);
+  *s_sessionInitialized = true;
 }
 
 void hphp_process_init() {

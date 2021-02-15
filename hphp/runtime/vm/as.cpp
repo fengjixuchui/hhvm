@@ -84,6 +84,7 @@
 #include "hphp/util/sha1.h"
 
 #include "hphp/runtime/base/builtin-functions.h"
+#include "hphp/runtime/base/coeffects-config.h"
 #include "hphp/runtime/base/memory-manager-defs.h"
 #include "hphp/runtime/base/repo-auth-type-codec.h"
 #include "hphp/runtime/base/repo-auth-type.h"
@@ -681,9 +682,13 @@ struct AsmState {
   }
 
   void finishFunction() {
-    if (fe->isRxDisabled &&
-        (!(fe->attrs & AttrRxBody) || (fe->attrs & AttrPureBody))) {
-      error("isRxDisabled on non-rx func");
+    if (fe->isRxDisabled) {
+      auto& coeffects = fe->staticCoeffects;
+      bool isPureBody =
+        std::any_of(coeffects.begin(), coeffects.end(), CoeffectsConfig::isPure);
+      bool isRxBody =
+        std::any_of(coeffects.begin(), coeffects.end(), CoeffectsConfig::isAnyRx);
+      if (!isRxBody || isPureBody) error("isRxDisabled on non-rx func");
     }
 
     finishSection();
@@ -695,6 +700,14 @@ struct AsmState {
     const int numLocals = maxUnnamed + 1;
     while (fe->numLocals() < numLocals) {
       fe->allocUnnamedLocal();
+    }
+
+    if (fe->numLocals() > std::numeric_limits<uint16_t>::max()) {
+      error("too many locals");
+    }
+
+    if (fe->numIterators() > std::numeric_limits<uint16_t>::max()) {
+      error("too many iterators");
     }
 
     auto const maxStackCells =
@@ -1287,7 +1300,7 @@ MemberKey read_member_key(AsmState& as) {
   if (mcode != MW && as.in.getc() != ':') {
     as.error("expected `:' after member code `" + word + "'");
   }
-
+  
   switch (mcode) {
     case MW:
       return MemberKey{};
@@ -1297,14 +1310,24 @@ MemberKey read_member_key(AsmState& as) {
         as.error("couldn't read name for local variable in member key");
       }
       int32_t lid = as.getLocalId(name);
-      return MemberKey{mcode, NamedLocal{lid, lid}};
+      ReadOnlyOp op = static_cast<ReadOnlyOp>(read_subop<ReadOnlyOp>(as));
+      return MemberKey{mcode, NamedLocal{lid, lid}, op};
     }
-    case MEC: case MPC:
-      return MemberKey{mcode, read_opcode_arg<int32_t>(as)};
-    case MEI:
-      return MemberKey{mcode, read_opcode_arg<int64_t>(as)};
-    case MET: case MPT: case MQT:
-      return MemberKey{mcode, read_litstr(as)};
+    case MEC: case MPC: {
+      auto const i = read_opcode_arg<int32_t>(as);
+      ReadOnlyOp op = static_cast<ReadOnlyOp>(read_subop<ReadOnlyOp>(as));
+      return MemberKey{mcode, i, op};
+    }
+    case MEI: {
+      auto const i = read_opcode_arg<int64_t>(as);
+      ReadOnlyOp op = static_cast<ReadOnlyOp>(read_subop<ReadOnlyOp>(as));
+      return MemberKey{mcode, i, op};
+    }
+    case MET: case MPT: case MQT: {
+      auto const litstr = read_litstr(as);
+      ReadOnlyOp op = static_cast<ReadOnlyOp>(read_subop<ReadOnlyOp>(as));
+      return MemberKey{mcode, litstr, op};
+    }
   }
   not_reached();
 }
@@ -1627,7 +1650,7 @@ std::map<std::string,ParserFunc> opcode_parsers;
     }                                                                  \
                                                                        \
     /* Record source location. */                                      \
-    as.ue->recordSourceLocation(as.srcLoc, curOpcodeOff);              \
+    as.fe->recordSourceLocation(as.srcLoc, curOpcodeOff);              \
                                                                        \
     /* Retain stack depth after calls to exit */                       \
     if ((instrFlags(thisOpcode) & InstrFlags::TF) &&                   \
@@ -1870,19 +1893,6 @@ void parse_declvars(AsmState& as) {
   as.in.expectWs(';');
 }
 
-StaticCoeffects coeffectFromName(AsmState& as, std::string name) {
-  auto const coeffect = StaticCoeffects::fromName(name);
-
-  if (coeffect.isAnyRx()) as.fe->attrs |= AttrRxBody;
-  if (coeffect.isPure()) as.fe->attrs |= AttrPureBody;
-
-  if (!CoeffectsConfig::enabled() ||
-      (!CoeffectsConfig::rxEnforcementLevel() && coeffect.isAnyRx())) {
-    return StaticCoeffects::none();
-  }
-  return coeffect;
-}
-
 /*
  * directive-coeffects_static : coeffect-name* ';'
  *                            ;
@@ -1892,7 +1902,7 @@ void parse_coeffects_static(AsmState& as) {
     as.in.skipWhitespace();
     std::string name;
     if (!as.in.readword(name)) break;
-    as.fe->staticCoeffects |= coeffectFromName(as, name);
+    as.fe->staticCoeffects.push_back(makeStaticString(name));
   }
   as.in.expectWs(';');
 }
@@ -1904,8 +1914,9 @@ void parse_coeffects_static(AsmState& as) {
 void parse_coeffects_fun_param(AsmState& as) {
   while (true) {
     as.in.skipWhitespace();
-    read_opcode_arg<uint32_t>(as);
-    //TODO: Add to coeffectRules
+    auto const pos = read_opcode_arg<uint32_t>(as);
+    as.fe->coeffectRules.emplace_back(
+      CoeffectRule(CoeffectRule::FunParam{}, pos));
     if (as.in.peek() == ';') break;
   }
   as.in.expectWs(';');
@@ -1918,11 +1929,12 @@ void parse_coeffects_fun_param(AsmState& as) {
 void parse_coeffects_cc_param(AsmState& as) {
   while (true) {
     as.in.skipWhitespace();
-    read_opcode_arg<uint32_t>(as);
+    auto const pos = read_opcode_arg<uint32_t>(as);
     as.in.skipWhitespace();
     std::string name;
     as.in.readword(name);
-    //TODO: Add to coeffectRules
+    as.fe->coeffectRules.emplace_back(
+      CoeffectRule(CoeffectRule::CCParam{}, pos, makeStaticString(name)));
     if (as.in.peek() == ';') break;
   }
   as.in.expectWs(';');
@@ -1937,19 +1949,9 @@ void parse_coeffects_cc_this(AsmState& as) {
     as.in.skipWhitespace();
     std::string name;
     if (!as.in.readword(name)) break;
-    //TODO: Add to coeffectRules
+    as.fe->coeffectRules.emplace_back(
+      CoeffectRule(CoeffectRule::CCThis{}, makeStaticString(name)));
   }
-  as.in.expectWs(';');
-}
-
-/*
- * directive-rx_cond_rx_of_arg : integer ';'
- *                             ;
- */
-void parse_rx_cond_rx_of_arg(AsmState& as) {
-  auto const pos = read_opcode_arg<uint32_t>(as);
-  as.fe->coeffectRules.emplace_back(
-    CoeffectRule(CoeffectRule::CondRxArg{}, pos));
   as.in.expectWs(';');
 }
 
@@ -2274,10 +2276,6 @@ void parse_function_body(AsmState& as, int nestLevel /* = 0 */) {
       if (word == ".coeffects_fun_param") { parse_coeffects_fun_param(as); continue; }
       if (word == ".coeffects_cc_param") { parse_coeffects_cc_param(as); continue; }
       if (word == ".coeffects_cc_this") { parse_coeffects_cc_this(as); continue; }
-      if (word == ".rx_cond_rx_of_arg") {
-        parse_rx_cond_rx_of_arg(as);
-        continue;
-      }
       if (word == ".rx_cond_implements") {
         parse_rx_cond_implements(as);
         continue;
@@ -3030,13 +3028,16 @@ void parse_class_constant(AsmState& as) {
   }
 
   bool isType = as.in.tryConsume("isType");
+  auto const kind =
+    isType ? ConstModifiers::Kind::Type : ConstModifiers::Kind::Value;
   as.in.skipWhitespace();
 
   if (as.in.peek() == ';') {
     as.in.getc();
     as.pce->addAbstractConstant(makeStaticString(name),
                                 staticEmptyString(),
-                                isType);
+                                kind,
+                                false);
     return;
   }
 
@@ -3044,7 +3045,38 @@ void parse_class_constant(AsmState& as) {
   as.pce->addConstant(makeStaticString(name),
                       staticEmptyString(), &tvInit,
                       staticEmptyString(),
-                      isType);
+                      kind,
+                      false);
+}
+
+/*
+ * directive-ctx : identifier coeffect-name* ';'
+ */
+void parse_context_constant(AsmState& as) {
+  as.in.skipWhitespace();
+
+  std::string name;
+  if (!as.in.readword(name)) {
+    as.error("expected name for context constant");
+  }
+
+  auto coeffects = StaticCoeffects::none();
+  auto isAbstract = true;
+  
+  while (true) {
+    as.in.skipWhitespace();
+    std::string coeffect;
+    if (!as.in.readword(coeffect)) break;
+    isAbstract = false;
+    auto const result = CoeffectsConfig::fromName(coeffect);
+    coeffects |= result;
+  }
+
+  as.in.expectWs(';');
+
+  DEBUG_ONLY auto added =
+    as.pce->addContextConstant(makeStaticString(name), coeffects, isAbstract);
+  assertx(added);
 }
 
 /*
@@ -3242,6 +3274,7 @@ void parse_class_body(AsmState& as, bool class_is_const,
     if (directive == ".enum_ty")      { parse_enum_ty(as);        continue; }
     if (directive == ".require")      { parse_require(as);        continue; }
     if (directive == ".doc")          { parse_cls_doccomment(as); continue; }
+    if (directive == ".ctx")          { parse_context_constant(as); continue; }
 
     as.error("unrecognized directive `" + directive + "' in class");
   }

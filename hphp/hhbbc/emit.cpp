@@ -253,7 +253,7 @@ ExnNodeId commonParent(const php::Func& func, ExnNodeId eh1, ExnNodeId eh2) {
 const StaticString
   s_hhbbc_fail_verification("__hhvm_intrinsics\\hhbbc_fail_verification");
 
-EmitBcInfo emit_bytecode(EmitUnitState& euState, UnitEmitter& ue,
+EmitBcInfo emit_bytecode(EmitUnitState& euState, UnitEmitter& ue, FuncEmitter& fe,
                          const php::WideFunc& func) {
   EmitBcInfo ret = {};
   auto& blockInfo = ret.blockInfo;
@@ -382,7 +382,7 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState, UnitEmitter& ue,
       auto const loc = sl.isValid() ?
         Location::Range(sl.start.line, sl.start.col, sl.past.line, sl.past.col)
         : Location::Range(-1,-1,-1,-1);
-      ue.recordSourceLocation(loc, startOffset);
+      fe.recordSourceLocation(loc, startOffset);
     };
 
     auto pop = [&] (int32_t n) {
@@ -1136,9 +1136,9 @@ void emit_finish_func(EmitUnitState& state, FuncEmitter& fe,
   fe.isRxDisabled = func.isRxDisabled;
   fe.hasParamsWithMultiUBs = func.hasParamsWithMultiUBs;
   fe.hasReturnWithMultiUBs = func.hasReturnWithMultiUBs;
-  fe.staticCoeffects = func.staticCoeffects;
 
-  for (auto& rule : func.coeffectRules) fe.coeffectRules.push_back(rule);
+  for (auto& name : func.staticCoeffects) fe.staticCoeffects.push_back(name);
+  for (auto& rule : func.coeffectRules)   fe.coeffectRules.push_back(rule);
 
   auto const retTy = state.index.lookup_return_type_raw(&func);
   if (!retTy.subtypeOf(BBottom)) {
@@ -1215,14 +1215,18 @@ void emit_init_func(FuncEmitter& fe, const php::Func& func) {
 void emit_func(EmitUnitState& state, UnitEmitter& ue,
                FuncEmitter& fe, php::Func& f) {
   FTRACE(2,  "    func {}\n", f.name->data());
+  assertx(f.attrs & AttrUnique);
+  assertx(f.attrs & AttrPersistent);
   renumber_locals(f);
   emit_init_func(fe, f);
   auto func = php::WideFunc::mut(&f);
-  auto const info = emit_bytecode(state, ue, func);
+  auto const info = emit_bytecode(state, ue, fe, func);
   emit_finish_func(state, fe, func, info);
 }
 
 void emit_record(UnitEmitter& ue, const php::Record& rec) {
+  assertx(rec.attrs & AttrUnique);
+  assertx(rec.attrs & AttrPersistent);
   auto const re = ue.newRecordEmitter(rec.name->toCppString());
   re->init(
       std::get<0>(rec.srcInfo.loc),
@@ -1251,6 +1255,8 @@ void emit_record(UnitEmitter& ue, const php::Record& rec) {
 void emit_class(EmitUnitState& state, UnitEmitter& ue, PreClassEmitter* pce,
                 Offset offset, php::Class& cls) {
   FTRACE(2, "    class: {}\n", cls.name->data());
+  assertx(cls.attrs & AttrUnique);
+  assertx(cls.attrs & AttrPersistent);
   pce->init(
     std::get<0>(cls.srcInfo.loc),
     std::get<1>(cls.srcInfo.loc),
@@ -1279,11 +1285,19 @@ void emit_class(EmitUnitState& state, UnitEmitter& ue, PreClassEmitter* pce,
     if (nativeConsts && nativeConsts->count(cconst.name)) {
       break;
     }
-    if (!cconst.val.has_value()) {
+    if (cconst.kind == ConstModifiers::Kind::Context) {
+      pce->addContextConstant(
+        cconst.name,
+        cconst.coeffects,
+        cconst.isAbstract,
+        cconst.isFromTrait
+      );
+    } else if (!cconst.val.has_value()) {
       pce->addAbstractConstant(
         cconst.name,
         cconst.typeConstraint,
-        cconst.isTypeconst
+        cconst.kind,
+        cconst.isFromTrait
       );
     } else {
       needs86cinit |= cconst.val->m_type == KindOfUninit;
@@ -1293,7 +1307,8 @@ void emit_class(EmitUnitState& state, UnitEmitter& ue, PreClassEmitter* pce,
         cconst.typeConstraint,
         &cconst.val.value(),
         cconst.phpCode,
-        cconst.isTypeconst
+        cconst.kind,
+        cconst.isFromTrait
       );
     }
   }
@@ -1375,6 +1390,8 @@ void emit_class(EmitUnitState& state, UnitEmitter& ue, PreClassEmitter* pce,
 }
 
 void emit_typealias(UnitEmitter& ue, const php::TypeAlias& alias) {
+  assertx(alias.attrs & AttrUnique);
+  assertx(alias.attrs & AttrPersistent);
   auto const te = ue.newTypeAliasEmitter(alias.name->toCppString());
   te->init(
       std::get<0>(alias.srcInfo.loc),
@@ -1392,6 +1409,8 @@ void emit_typealias(UnitEmitter& ue, const php::TypeAlias& alias) {
 }
 
 void emit_constant(UnitEmitter& ue, const php::Constant& constant) {
+  assertx(constant.attrs & AttrUnique);
+  assertx(constant.attrs & AttrPersistent);
   Constant c {
     constant.name,
     constant.val,

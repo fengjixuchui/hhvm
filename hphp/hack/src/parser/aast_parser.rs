@@ -167,7 +167,7 @@ impl<'src> AastParser {
             mode = Some(Mode::Mstrict);
         }
         let quick_mode = match mode {
-            None | Some(Mode::Mdecl) => !env.codegen,
+            None | Some(Mode::Mhhi) => !env.codegen,
             _ => !env.codegen && env.quick_mode,
         };
         let parser_env = ParserEnv {
@@ -185,6 +185,10 @@ impl<'src> AastParser {
             disallow_fun_and_cls_meth_pseudo_funcs: env
                 .parser_options
                 .po_disallow_fun_and_cls_meth_pseudo_funcs,
+            array_unification: env.parser_options.po_array_unification,
+            interpret_soft_types_as_like_types: env
+                .parser_options
+                .po_interpret_soft_types_as_like_types,
         };
 
         let tree = if quick_mode {

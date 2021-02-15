@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<1c6bb29e3edbd0c05c4718e5450fb2be>>
+// @generated SignedSource<<8761a95cde0c0033cacdf77269b27e50>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidize_regen.sh
+//   hphp/hack/src/oxidized_regen.sh
 
 use no_pos_hash::NoPosHash;
 use ocamlrep_derive::FromOcamlRep;
@@ -63,6 +63,8 @@ pub type UserAttribute = aast::UserAttribute<pos::Pos, FuncBodyAnn, (), ()>;
 pub type ClassId_ = aast::ClassId_<pos::Pos, FuncBodyAnn, (), ()>;
 
 pub type Class_ = aast::Class_<pos::Pos, FuncBodyAnn, (), ()>;
+
+pub type ClassVar = aast::ClassVar<pos::Pos, FuncBodyAnn, (), ()>;
 
 pub type Method_ = aast::Method_<pos::Pos, FuncBodyAnn, (), ()>;
 

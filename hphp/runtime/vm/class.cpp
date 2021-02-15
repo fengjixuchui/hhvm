@@ -14,7 +14,7 @@
    +----------------------------------------------------------------------+
 */
 
-#include "hphp/runtime/vm/class.h"
+#include "hphp/runtime/base/attr.h"
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/autoload-handler.h"
 #include "hphp/runtime/base/collections.h"
@@ -27,6 +27,7 @@
 #include "hphp/runtime/base/type-structure.h"
 #include "hphp/runtime/base/typed-value.h"
 #include "hphp/runtime/server/memory-stats.h"
+#include "hphp/runtime/vm/class.h"
 #include "hphp/runtime/vm/frame-restore.h"
 #include "hphp/runtime/vm/jit/irgen-minstr.h"
 #include "hphp/runtime/vm/jit/translator.h"
@@ -1456,26 +1457,31 @@ TypedValue Class::clsCnsGet(const StringData* clsCnsName,
   ArrayData* typeCns = nullptr;
 
   if (cnsVal->m_type != KindOfUninit) {
-    if (cns.isType()) {
-      // Type constants with the low bit set are already resolved and can be
-      // returned after masking out that bit.
-      //
-      // We can't check isHAMSafeDArray here because we're using that low bit as
-      // a marker; instead, check isArrayLike and do the stricter check below.
-      assertx(isArrayLikeType(type(cnsVal)));
-      assertx(!isRefcountedType(type(cnsVal)));
-      typeCns = val(cnsVal).parr;
-      auto const rawData = reinterpret_cast<intptr_t>(typeCns);
-      if (rawData & 0x1) {
-        auto const resolved = reinterpret_cast<ArrayData*>(rawData ^ 0x1);
-        assertx(resolved->isHAMSafeDArray());
-        return make_persistent_array_like_tv(resolved);
+    switch (cns.kind()) {
+      case ConstModifiers::Kind::Value:
+        return *cnsVal;
+      case ConstModifiers::Kind::Type: {
+        // Type constants with the low bit set are already resolved and can be
+        // returned after masking out that bit.
+        //
+        // We can't check isHAMSafeDArray here because we're using that low bit as
+        // a marker; instead, check isArrayLike and do the stricter check below.
+        assertx(isArrayLikeType(type(cnsVal)));
+        assertx(!isRefcountedType(type(cnsVal)));
+        typeCns = val(cnsVal).parr;
+        auto const rawData = reinterpret_cast<intptr_t>(typeCns);
+        if (rawData & 0x1) {
+          auto const resolved = reinterpret_cast<ArrayData*>(rawData ^ 0x1);
+          assertx(resolved->isHAMSafeDArray());
+          return make_persistent_array_like_tv(resolved);
+        }
+        if (what == ClsCnsLookup::IncludeTypesPartial) {
+          return make_tv<KindOfUninit>();
+        }
+        break;
       }
-      if (what == ClsCnsLookup::IncludeTypesPartial) {
-        return make_tv<KindOfUninit>();
-      }
-    } else {
-      return *cnsVal;
+      case ConstModifiers::Kind::Context:
+        raise_error("Cannot load context constants");
     }
   }
 
@@ -1514,7 +1520,7 @@ TypedValue Class::clsCnsGet(const StringData* clsCnsName,
         raise_error(
           folly::sformat(
             "Cannot declare self-referencing {} '{}::{}'",
-            cns.isType() ? "type constant" : "constant",
+            ConstModifiers::show(cns.kind()),
             name(),
             clsCnsName
           )
@@ -1547,7 +1553,7 @@ TypedValue Class::clsCnsGet(const StringData* clsCnsName,
     }
   };
 
-  if (cns.isType()) {
+  if (cns.kind() == ConstModifiers::Kind::Type) {
     // Resolve type constant, if needed
     if (what == ClsCnsLookup::IncludeTypesPartial) {
       clsCnsData.remove(StrNR{clsCnsName});
@@ -1637,21 +1643,23 @@ const TypedValue* Class::cnsNameToTV(const StringData* clsCnsName,
   if (m_constants[clsCnsInd].isAbstract()) {
     return nullptr;
   }
-  if (what == ClsCnsLookup::NoTypes && m_constants[clsCnsInd].isType()) {
+  if (what == ClsCnsLookup::NoTypes
+      && m_constants[clsCnsInd].kind() == ConstModifiers::Kind::Type) {
     return nullptr;
   }
   auto const ret = &m_constants[clsCnsInd].val;
-  assertx(m_constants[clsCnsInd].isType() || tvIsPlausible(*ret));
+  assertx(m_constants[clsCnsInd].kind() == ConstModifiers::Kind::Type
+          || tvIsPlausible(*ret));
   return ret;
 }
 
 Slot Class::clsCnsSlot(
-  const StringData* name, bool wantTypeCns, bool allowAbstract
+  const StringData* name, ConstModifiers::Kind want, bool allowAbstract
 ) const {
   auto slot = m_constants.findIndex(name);
   if (slot == kInvalidSlot) return slot;
   if (!allowAbstract && m_constants[slot].isAbstract()) return kInvalidSlot;
-  return m_constants[slot].isType() == wantTypeCns ? slot : kInvalidSlot;
+  return m_constants[slot].kind() == want ? slot : kInvalidSlot;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -2199,6 +2207,98 @@ void Class::setRTAttributes() {
   }
 }
 
+void Class::importTraitConsts(ConstMap::Builder& builder) {
+  auto importConst = [&] (const Const& tConst, bool isFromInterface) {
+    auto const existing = builder.find(tConst.name);
+    if (existing == builder.end()) {
+      builder.add(tConst.name, tConst);
+      return;
+    }
+    auto& existingConst = builder[existing->second];
+
+    if (tConst.kind() != existingConst.kind()) {
+      raise_error("%s cannot inherit the %s %s from %s, because it "
+                  "was previously inherited as a %s from %s",
+                  m_preClass->name()->data(),
+                  ConstModifiers::show(tConst.kind()),
+                  tConst.name->data(),
+                  tConst.cls->name()->data(),
+                  ConstModifiers::show(existingConst.kind()),
+                  existingConst.cls->name()->data());
+    }
+
+    if (tConst.isAbstract()) {
+      return;
+    }
+
+    if (existingConst.isAbstract()) {
+      existingConst.cls = tConst.cls;
+      existingConst.val = tConst.val;
+      return;
+    }
+
+    // Constants in interfaces implemented by traits don't fatal with constants
+    // in declInterfaces
+    if (isFromInterface) { return; }
+
+    if (existingConst.cls != tConst.cls) {
+
+      // Constants in traits conflict with constants in declared interfaces
+      if (existingConst.cls->attrs() & AttrInterface) {
+        for (auto const& interface : m_declInterfaces) {
+          auto iface = existingConst.cls;
+          if (interface.get() == iface) {
+            raise_error("%s cannot inherit the %s %s, because "
+                        "it was previously inherited from %s",
+                        m_preClass->name()->data(),
+                        ConstModifiers::show(tConst.kind()),
+                        tConst.name->data(),
+                        existingConst.cls->name()->data());
+          }
+        }
+      }
+    }
+  };
+
+  if (attrs() & AttrNoExpandTrait) {
+    Slot traitIdx = m_preClass->numConstants();
+    while (traitIdx && m_preClass->constants()[traitIdx - 1].isFromTrait()) {
+      traitIdx--;
+    }
+    for (Slot i = traitIdx; i < m_preClass->numConstants(); i++) {
+        auto const* preConst = &m_preClass->constants()[i];
+        Const tConst;
+        tConst.cls = this;
+        tConst.name = preConst->name();
+        tConst.val = preConst->val();
+        importConst(tConst, false);
+    }
+    // If we flatten, we need to check implemented interfaces for constants
+    for (auto const& traitName : m_preClass->usedTraits()) {
+      auto const trait = Class::lookup(traitName);
+      assertx(trait->attrs() & AttrTrait);
+      int numIfcs = trait->m_interfaces.size();
+
+      for (int i = 0; i < numIfcs; i++) {
+        auto interface = trait->m_interfaces[i];
+        for (Slot slot = 0; slot < interface->m_constants.size(); ++slot) {
+          auto const tConst = interface->m_constants[slot];
+          importConst(tConst, true);
+        }
+      }
+    }
+  } else if (m_extra) {
+    for (auto const& t : m_extra->m_usedTraits) {
+      auto trait = t.get();
+      for (Slot slot = 0; slot < trait->m_constants.size(); ++slot) {
+        auto const tConst = trait->m_constants[slot];
+        importConst(tConst, tConst.cls->attrs() & AttrInterface);
+      }
+    }
+  }
+}
+
+
 void Class::setConstants() {
   ConstMap::Builder builder;
 
@@ -2237,8 +2337,8 @@ void Class::setConstants() {
   }
 
   // Copy in interface constants.
-  for (int i = 0, size = m_interfaces.size(); i < size; ++i) {
-    const Class* iface = m_interfaces[i];
+  for (int i = 0, size = m_declInterfaces.size(); i < size; ++i) {
+    auto const iface = m_declInterfaces[i].get();
 
     for (Slot slot = 0; slot < iface->m_constants.size(); ++slot) {
       auto const iConst = iface->m_constants[slot];
@@ -2254,14 +2354,14 @@ void Class::setConstants() {
       }
       auto& existingConst = builder[existing->second];
 
-      if (iConst.isType() != existingConst.isType()) {
-        raise_error("%s cannot inherit the %sconstant %s from %s, because it "
-                    "was previously inherited as a %sconstant from %s",
+      if (iConst.kind() != existingConst.kind()) {
+        raise_error("%s cannot inherit the %s %s from %s, because it "
+                    "was previously inherited as a %s from %s",
                     m_preClass->name()->data(),
-                    iConst.isType() ? "type " : "",
+                    ConstModifiers::show(iConst.kind()),
                     iConst.name->data(),
                     iConst.cls->name()->data(),
-                    iConst.isType() ? "" : "type ",
+                    ConstModifiers::show(existingConst.kind()),
                     existingConst.cls->name()->data());
       }
 
@@ -2276,22 +2376,19 @@ void Class::setConstants() {
       }
 
       if (existingConst.cls != iConst.cls) {
-        // It's only an error if the constant comes from the declared
-        // interfaces.
-        for (auto const& interface : m_declInterfaces) {
-          if (interface.get() == iface) {
-            raise_error("%s cannot inherit the %sconstant %s from %s, because "
-                        "it was previously inherited from %s",
-                        m_preClass->name()->data(),
-                        iConst.isType() ? "type " : "",
-                        iConst.name->data(),
-                        iConst.cls->name()->data(),
-                        existingConst.cls->name()->data());
-          }
-        }
+        raise_error("%s cannot inherit the %s %s from %s, because "
+                    "it was previously inherited from %s",
+                    m_preClass->name()->data(),
+                    ConstModifiers::show(iConst.kind()),
+                    iConst.name->data(),
+                    iConst.cls->name()->data(),
+                    existingConst.cls->name()->data());
       }
     }
   }
+
+  // Copy in trait constants.
+  importTraitConsts(builder);
 
   for (Slot i = 0, sz = m_preClass->numConstants(); i < sz; ++i) {
     const PreClass::Const* preConst = &m_preClass->constants()[i];
@@ -2299,15 +2396,15 @@ void Class::setConstants() {
     if (it2 != builder.end()) {
       auto definingClass = builder[it2->second].cls;
       // Forbid redefining constants from interfaces, but not superclasses.
-      // Constants from interfaces implemented by superclasses can be
-      // overridden.
+      // Constants from interfaces implemented by superclasses can be overridden.
+      // Note that we don't do this check for type constants due to the
+      // existence of abstract type constants with defaults, which we don't
+      // currently have a way of tracking within HHVM.
       if (definingClass->attrs() & AttrInterface) {
         for (auto interface : m_declInterfaces) {
-          if (interface->hasConstant(preConst->name()) ||
-              interface->hasTypeConstant(preConst->name())) {
-            raise_error("Cannot override previously defined %sconstant "
+          if (interface->hasConstant(preConst->name())) {
+            raise_error("Cannot override previously defined constant "
                         "%s::%s in %s",
-                        builder[it2->second].isType() ? "type " : "",
                         builder[it2->second].cls->name()->data(),
                         preConst->name()->data(),
                         m_preClass->name()->data());
@@ -2330,18 +2427,18 @@ void Class::setConstants() {
       if (preConst->isAbstract() &&
           !builder[it2->second].isAbstract()) {
         raise_error("Cannot re-declare as abstract previously defined "
-                    "%sconstant %s::%s in %s",
-                    builder[it2->second].isType() ? "type " : "",
+                    "%s %s::%s in %s",
+                    ConstModifiers::show(builder[it2->second].kind()),
                     builder[it2->second].cls->name()->data(),
                     preConst->name()->data(),
                     m_preClass->name()->data());
       }
 
-      if (preConst->isType() != builder[it2->second].isType()) {
-        raise_error("Cannot re-declare as a %sconstant previously defined "
-                    "%sconstant %s::%s in %s",
-                    preConst->isType() ? "type " : "",
-                    preConst->isType() ? "" : "type ",
+      if (preConst->kind() != builder[it2->second].kind()) {
+        raise_error("Cannot re-declare as a %s previously defined "
+                    "%s %s::%s in %s",
+                    ConstModifiers::show(preConst->kind()),
+                    ConstModifiers::show(builder[it2->second].kind()),
                     builder[it2->second].cls->name()->data(),
                     preConst->name()->data(),
                     m_preClass->name()->data());
@@ -2364,11 +2461,11 @@ void Class::setConstants() {
     for (Slot i = 0; i < builder.size(); i++) {
       const Const& constant = builder[i];
       if (constant.isAbstract()) {
-        raise_error("Class %s contains abstract %sconstant (%s) and "
+        raise_error("Class %s contains abstract %s (%s) and "
                     "must therefore be declared abstract or define "
                     "the remaining constants",
                     m_preClass->name()->data(),
-                    constant.isType() ? "type " : "",
+                    ConstModifiers::show(constant.kind()),
                     constant.name->data());
       }
     }
@@ -2381,10 +2478,10 @@ void Class::setConstants() {
       const Const& constant = builder[i];
       if (constant.isAbstract()) {
         raise_error(
-          "Class %s contains abstract %sconstant (%s) and "
+          "Class %s contains abstract %s (%s) and "
           "therefore cannot be declared 'abstract final'",
           m_preClass->name()->data(),
-          constant.isType() ? "type " : "",
+          ConstModifiers::show(constant.kind()),
           constant.name->data());
       }
     }
@@ -2396,7 +2493,7 @@ void Class::setConstants() {
   // have replaced it with a resolved value.
   for (auto& pair : builder) {
     auto& cns = builder[pair.second];
-    if (cns.isType()) {
+    if (cns.kind() == ConstModifiers::Kind::Type) {
       auto& preConsts = cns.cls->preClass()->constantsMap();
       auto const idx = preConsts.findIndex(cns.name.get());
       assertx(idx != -1);
@@ -4579,6 +4676,10 @@ Class* Class::def(const PreClass* preClass, bool failIsFatal /* = true */) {
         if (!enumBaseTy ||
             (!isIntType(*enumBaseTy) && !isStringType(*enumBaseTy))) {
           return nullptr;
+        }
+        for (auto it = preClass->includedEnums().begin();
+                   it != preClass->includedEnums().end(); ++it) {
+          if (!Class::get(*it, false)) return nullptr;
         }
       }
     }

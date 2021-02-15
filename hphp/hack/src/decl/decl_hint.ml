@@ -72,6 +72,13 @@ and hint_ p env = function
       | None -> mk (Typing_reason.Rvarray_or_darray_key p, Tprim Aast.Tarraykey)
     in
     Tvarray_or_darray (t1, hint env h2)
+  | Hvec_or_dict (h1, h2) ->
+    let t1 =
+      match h1 with
+      | Some h -> hint env h
+      | None -> mk (Typing_reason.Rvec_or_dict_key p, Tprim Aast.Tarraykey)
+    in
+    Tvec_or_dict (t1, hint env h2)
   | Hprim p -> Tprim p
   | Habstr (x, argl) ->
     let argl = List.map argl (hint env) in
@@ -113,7 +120,10 @@ and hint_ p env = function
               (* Currently do not support external and cancall on parameters of function parameters *)
             ~ifc_external:false
             ~ifc_can_call:false
-            ~is_atom:false;
+            ~is_atom:
+              false
+              (* TODO: support readonly on parameters of function parameters *)
+            ~readonly:false;
         fp_rx_annotation = None;
       }
     in
@@ -131,9 +141,6 @@ and hint_ p env = function
     let reactivity =
       match reactivity with
       | FPure -> Pure None
-      | FReactive -> Reactive None
-      | FShallow -> Shallow None
-      | FLocal -> Local None
       | FNonreactive -> Nonreactive
     in
     Tfun
@@ -150,7 +157,10 @@ and hint_ p env = function
             None
             ~return_disposable:false
             ~returns_void_to_rx:false
-            ~returns_mutable:mut_ret;
+            ~returns_mutable:mut_ret
+            ~returns_readonly:
+              false (* TODO: support readonly on function type hints *)
+            ~readonly_this:false;
         ft_reactive = reactivity;
         (* TODO: handle function parameters with <<CanCall>> *)
         ft_ifc_decl = default_ifc_fun_decl;

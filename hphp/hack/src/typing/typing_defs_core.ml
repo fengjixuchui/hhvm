@@ -251,6 +251,8 @@ and _ ty_ =
   | Tvarray : 'phase ty -> 'phase ty_  (** Tvarray (ty) => "varray<ty>" *)
   | Tvarray_or_darray : 'phase ty * 'phase ty -> 'phase ty_
       (** Tvarray_or_darray (ty1, ty2) => "varray_or_darray<ty1, ty2>" *)
+  | Tvec_or_dict : 'phase ty * 'phase ty -> 'phase ty_
+      (** Tvec_or_dict (ty1, ty2) => "vec_or_dict<ty1, ty2>" *)
   | Taccess : 'phase taccess_type -> 'phase ty_
       (** Name of class, name of type const, remaining names of type consts *)
   (*========== Below Are Types That Cannot Be Declared In User Code ==========*)
@@ -322,16 +324,12 @@ and 'phase taccess_type = 'phase ty * Nast.sid
   *)
 and reactivity =
   | Nonreactive
-  | Local of decl_ty option
-  | Shallow of decl_ty option
-  | Reactive of decl_ty option
   | Pure of decl_ty option
   | MaybeReactive of reactivity
   | RxVar of reactivity option
   | Cipp of string option
   | CippLocal of string option
   | CippGlobal
-  | CippRx
 
 and 'ty capability =
   | CapDefaults of Pos.t
@@ -395,6 +393,10 @@ module Flags = struct
     is_set ft.ft_flags ft_flags_returns_void_to_rx
 
   let get_ft_returns_mutable ft = is_set ft.ft_flags ft_flags_returns_mutable
+
+  let get_ft_returns_readonly ft = is_set ft.ft_flags ft_flags_returns_readonly
+
+  let get_ft_readonly_this ft = is_set ft.ft_flags ft_flags_readonly_this
 
   let get_ft_is_coroutine ft = is_set ft.ft_flags ft_flags_is_coroutine
 
@@ -464,6 +466,8 @@ module Flags = struct
 
   let get_fp_is_atom fp = is_set fp.fp_flags fp_flags_atom
 
+  let get_fp_readonly fp = is_set fp.fp_flags fp_flags_readonly
+
   let fun_kind_to_flags kind =
     match kind with
     | Ast_defs.FSync -> 0
@@ -472,14 +476,21 @@ module Flags = struct
     | Ast_defs.FAsyncGenerator -> Int.bit_or ft_flags_async ft_flags_generator
 
   let make_ft_flags
-      kind param_mutable ~return_disposable ~returns_mutable ~returns_void_to_rx
-      =
+      kind
+      param_mutable
+      ~return_disposable
+      ~returns_mutable
+      ~returns_void_to_rx
+      ~returns_readonly
+      ~readonly_this =
     let flags =
       Int.bit_or (to_mutable_flags param_mutable) (fun_kind_to_flags kind)
     in
     let flags = set_bit ft_flags_return_disposable return_disposable flags in
     let flags = set_bit ft_flags_returns_mutable returns_mutable flags in
     let flags = set_bit ft_flags_returns_void_to_rx returns_void_to_rx flags in
+    let flags = set_bit ft_flags_returns_readonly returns_readonly flags in
+    let flags = set_bit ft_flags_readonly_this readonly_this flags in
     flags
 
   let mode_to_flags mode =
@@ -494,7 +505,8 @@ module Flags = struct
       ~has_default
       ~ifc_external
       ~ifc_can_call
-      ~is_atom =
+      ~is_atom
+      ~readonly =
     let flags = mode_to_flags mode in
     let flags = Int.bit_or (to_mutable_flags mutability) flags in
     let flags = set_bit fp_flags_accept_disposable accept_disposable flags in
@@ -502,6 +514,7 @@ module Flags = struct
     let flags = set_bit fp_flags_ifc_external ifc_external flags in
     let flags = set_bit fp_flags_ifc_can_call ifc_can_call flags in
     let flags = set_bit fp_flags_atom is_atom flags in
+    let flags = set_bit fp_flags_readonly readonly flags in
     flags
 
   let get_fp_accept_disposable fp =
@@ -578,6 +591,12 @@ module Pp = struct
       Format.fprintf fmt "@])"
     | Tvarray_or_darray (a0, a1) ->
       Format.fprintf fmt "(@[<2>Tvarray_or_darray@ ";
+      pp_ty fmt a0;
+      Format.fprintf fmt ",@ ";
+      pp_ty fmt a1;
+      Format.fprintf fmt "@])"
+    | Tvec_or_dict (a0, a1) ->
+      Format.fprintf fmt "(@[<2>Tvec_or_dict@ ";
       pp_ty fmt a0;
       Format.fprintf fmt ",@ ";
       pp_ty fmt a1;
@@ -708,21 +727,6 @@ module Pp = struct
       Format.pp_print_string fmt "MaybeReactive {";
       pp_reactivity fmt v;
       Format.pp_print_string fmt "}"
-    | Local None -> Format.pp_print_string fmt "Local {}"
-    | Local (Some ty) ->
-      Format.pp_print_string fmt "Local {";
-      pp_ty fmt ty;
-      Format.pp_print_string fmt "}"
-    | Shallow None -> Format.pp_print_string fmt "Shallow {}"
-    | Shallow (Some ty) ->
-      Format.pp_print_string fmt "Shallow {";
-      pp_ty fmt ty;
-      Format.pp_print_string fmt "}"
-    | Reactive None -> Format.pp_print_string fmt "Reactive {}"
-    | Reactive (Some ty) ->
-      Format.pp_print_string fmt "Reactive {";
-      pp_ty fmt ty;
-      Format.pp_print_string fmt "}"
     | Pure None -> Format.pp_print_string fmt "Pure {}"
     | Pure (Some ty) ->
       Format.pp_print_string fmt "Pure {";
@@ -739,7 +743,6 @@ module Pp = struct
       Format.pp_print_string fmt s;
       Format.pp_print_string fmt "}"
     | CippGlobal -> Format.pp_print_string fmt "CippGlobal"
-    | CippRx -> Format.pp_print_string fmt "CippRx"
 
   and pp_possibly_enforced_ty :
       type a. Format.formatter -> a ty possibly_enforced_ty -> unit =
@@ -882,6 +885,16 @@ module Pp = struct
       Format.fprintf fmt "@[~%s:" "returns_void_to_rx";
       Format.fprintf fmt "%B" (get_ft_returns_void_to_rx ft);
       Format.fprintf fmt "@]";
+      Format.fprintf fmt "@ ";
+
+      Format.fprintf fmt "@[~%s:" "returns_readonly";
+      Format.fprintf fmt "%B" (get_ft_returns_readonly ft);
+      Format.fprintf fmt "@]";
+      Format.fprintf fmt "@ ";
+
+      Format.fprintf fmt "@[~%s:" "readonly_this";
+      Format.fprintf fmt "%B" (get_ft_readonly_this ft);
+      Format.fprintf fmt "@]";
 
       Format.fprintf fmt ")@]"
     in
@@ -956,6 +969,11 @@ module Pp = struct
 
       Format.fprintf fmt "@[~%s:" "is_atom";
       Format.fprintf fmt "%B" (get_fp_is_atom fp);
+      Format.fprintf fmt "@]";
+      Format.fprintf fmt "@ ";
+
+      Format.fprintf fmt "@[~%s:" "readonly";
+      Format.fprintf fmt "%B" (get_fp_readonly fp);
       Format.fprintf fmt "@]";
       Format.fprintf fmt ")@]"
     in
@@ -1050,6 +1068,8 @@ module Pp = struct
 end
 
 include Pp
+
+type decl_ty_ = decl_phase ty_
 
 type locl_ty_ = locl_phase ty_
 

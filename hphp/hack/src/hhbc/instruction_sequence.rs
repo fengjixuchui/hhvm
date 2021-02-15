@@ -544,8 +544,8 @@ pub mod instr {
         instr(Instruct::IOp(InstructOperator::BitXor))
     }
 
-    pub fn sets() -> InstrSeq {
-        instr(Instruct::IMutator(InstructMutator::SetS))
+    pub fn sets(op: ReadOnlyOp) -> InstrSeq {
+        instr(Instruct::IMutator(InstructMutator::SetS(op)))
     }
 
     pub fn setl(local: local::Type) -> InstrSeq {
@@ -572,8 +572,8 @@ pub mod instr {
         instr(Instruct::IMutator(InstructMutator::IncDecG(op)))
     }
 
-    pub fn incdecs(op: IncdecOp) -> InstrSeq {
-        instr(Instruct::IMutator(InstructMutator::IncDecS(op)))
+    pub fn incdecs(op: IncdecOp, rop: ReadOnlyOp) -> InstrSeq {
+        instr(Instruct::IMutator(InstructMutator::IncDecS(op, rop)))
     }
 
     pub fn setopg(op: EqOp) -> InstrSeq {
@@ -584,8 +584,8 @@ pub mod instr {
         instr(Instruct::IMutator(InstructMutator::SetOpL(local, op)))
     }
 
-    pub fn setops(op: EqOp) -> InstrSeq {
-        instr(Instruct::IMutator(InstructMutator::SetOpS(op)))
+    pub fn setops(op: EqOp, rop: ReadOnlyOp) -> InstrSeq {
+        instr(Instruct::IMutator(InstructMutator::SetOpS(op, rop)))
     }
 
     pub fn issetl(local: local::Type) -> InstrSeq {
@@ -604,8 +604,8 @@ pub mod instr {
         instr(Instruct::IIsset(InstructIsset::IsUnsetL(local)))
     }
 
-    pub fn cgets() -> InstrSeq {
-        instr(Instruct::IGet(InstructGet::CGetS))
+    pub fn cgets(op: ReadOnlyOp) -> InstrSeq {
+        instr(Instruct::IGet(InstructGet::CGetS(op)))
     }
 
     pub fn cgetg() -> InstrSeq {
@@ -664,8 +664,8 @@ pub mod instr {
         instr(Instruct::IMutator(InstructMutator::PopL(l)))
     }
 
-    pub fn initprop(pid: PropId, op: InitpropOp) -> InstrSeq {
-        instr(Instruct::IMutator(InstructMutator::InitProp(pid, op)))
+    pub fn initprop(pid: PropId, op: InitpropOp, rop: ReadOnlyOp) -> InstrSeq {
+        instr(Instruct::IMutator(InstructMutator::InitProp(pid, op, rop)))
     }
 
     pub fn checkprop(pid: PropId) -> InstrSeq {
@@ -788,8 +788,8 @@ pub mod instr {
         instr(Instruct::IBase(InstructBase::BaseGL(local, mode)))
     }
 
-    pub fn basesc(y: StackIndex, z: StackIndex, mode: MemberOpMode) -> InstrSeq {
-        instr(Instruct::IBase(InstructBase::BaseSC(y, z, mode)))
+    pub fn basesc(y: StackIndex, z: StackIndex, mode: MemberOpMode, op: ReadOnlyOp) -> InstrSeq {
+        instr(Instruct::IBase(InstructBase::BaseSC(y, z, mode, op)))
     }
 
     pub fn baseh() -> InstrSeq {
@@ -862,12 +862,12 @@ pub mod instr {
         instr(Instruct::IBase(InstructBase::Dim(op, key)))
     }
 
-    pub fn dim_warn_pt(key: PropId) -> InstrSeq {
-        dim(MemberOpMode::Warn, MemberKey::PT(key))
+    pub fn dim_warn_pt(key: PropId, op: ReadOnlyOp) -> InstrSeq {
+        dim(MemberOpMode::Warn, MemberKey::PT(key, op))
     }
 
-    pub fn dim_define_pt(key: PropId) -> InstrSeq {
-        dim(MemberOpMode::Define, MemberKey::PT(key))
+    pub fn dim_define_pt(key: PropId, op: ReadOnlyOp) -> InstrSeq {
+        dim(MemberOpMode::Define, MemberKey::PT(key, op))
     }
 
     pub fn fcallclsmethod(
@@ -946,8 +946,8 @@ pub mod instr {
         instr(Instruct::IFinal(InstructFinal::QueryM(num_params, op, key)))
     }
 
-    pub fn querym_cget_pt(num_params: NumParams, key: PropId) -> InstrSeq {
-        querym(num_params, QueryOp::CGet, MemberKey::PT(key))
+    pub fn querym_cget_pt(num_params: NumParams, key: PropId, op: ReadOnlyOp) -> InstrSeq {
+        querym(num_params, QueryOp::CGet, MemberKey::PT(key, op))
     }
 
     pub fn setm(num_params: NumParams, key: MemberKey) -> InstrSeq {
@@ -968,8 +968,8 @@ pub mod instr {
         )))
     }
 
-    pub fn setm_pt(num_params: NumParams, key: PropId) -> InstrSeq {
-        setm(num_params, MemberKey::PT(key))
+    pub fn setm_pt(num_params: NumParams, key: PropId, op: ReadOnlyOp) -> InstrSeq {
+        setm(num_params, MemberKey::PT(key, op))
     }
 
     pub fn resolve_func(func_id: FunctionId) -> InstrSeq {

@@ -116,11 +116,18 @@ const DEFAULT: GlobalOptions<'_> = GlobalOptions {
     po_disallow_fun_and_cls_meth_pseudo_funcs: false,
     tco_use_direct_decl_parser: false,
     tco_ifc_enabled: &[],
+    po_enable_enum_supertyping: false,
+    po_array_unification: false,
+    po_interpret_soft_types_as_like_types: false,
+    tco_enable_strict_string_concat_interp: false,
+    tco_readonly: false,
 };
 
 impl GlobalOptions<'static> {
+    pub const DEFAULT: &'static Self = &DEFAULT;
+
     pub const fn default_ref() -> &'static Self {
-        &DEFAULT
+        Self::DEFAULT
     }
 }
 

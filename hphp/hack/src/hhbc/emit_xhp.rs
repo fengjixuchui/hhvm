@@ -422,6 +422,7 @@ fn from_xhp_attribute_declaration_method<'a>(
         final_,
         abstract_,
         static_,
+        readonly_this: false, // TODO readonly emitter
         visibility,
         name: ast_defs::Id(Pos::make_none(), name.into()),
         tparams: vec![],
@@ -436,6 +437,7 @@ fn from_xhp_attribute_declaration_method<'a>(
         },
         fun_kind: ast_defs::FunKind::FSync,
         user_attributes: vec![],
+        readonly_ret: None, // TODO readonly emitter
         ret: TypeHint((), None),
         external: false,
         doc_comment: None,

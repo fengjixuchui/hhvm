@@ -20,6 +20,7 @@
 #include "hphp/runtime/vm/verifier/util.h"
 #include "hphp/runtime/vm/verifier/pretty.h"
 
+#include "hphp/runtime/base/coeffects-config.h"
 #include "hphp/runtime/base/mixed-array.h"
 #include "hphp/runtime/base/repo-auth-type-codec.h"
 #include "hphp/runtime/base/runtime-option.h"
@@ -72,6 +73,7 @@ struct FuncChecker {
   bool checkOffsets();
   bool checkFlow();
   bool checkDef();
+  bool checkInfo();
 
  private:
   struct unknown_length : std::runtime_error {
@@ -155,6 +157,8 @@ struct FuncChecker {
   ErrorMode m_errmode;
   FlavorDesc* m_tmp_sig;
   Id m_last_rpo_id; // rpo_id of the last block visited
+  bool m_verify_pure;
+  bool m_verify_rx;
 };
 
 const StaticString s_invoke("__invoke");
@@ -210,7 +214,8 @@ bool checkFunc(const FuncEmitter* func, ErrorMode mode) {
     }
   }
   FuncChecker v(func, mode);
-  return v.checkDef() &&
+  return v.checkInfo() &&
+         v.checkDef() &&
          v.checkOffsets() &&
          v.checkFlow();
 }
@@ -265,6 +270,18 @@ FuncChecker::FuncChecker(const FuncEmitter* f, ErrorMode mode)
 , m_graph(0)
 , m_instrs(m_arena, f->past - f->base + 1)
 , m_errmode(mode) {
+  auto& coeffects = f->staticCoeffects;
+  auto const isPureBody =
+    std::any_of(coeffects.begin(), coeffects.end(), CoeffectsConfig::isPure);
+  auto const isRxBody =
+    std::any_of(coeffects.begin(), coeffects.end(), CoeffectsConfig::isAnyRx);
+  m_verify_rx = (RuntimeOption::EvalRxVerifyBody > 0) &&
+                isRxBody &&
+                // defer this to next check
+                !isPureBody &&
+                !m_func->isRxDisabled;
+  m_verify_pure = (RuntimeOption::EvalPureVerifyBody > 0) &&
+                  isPureBody;
 }
 
 FuncChecker::~FuncChecker() {
@@ -286,6 +303,18 @@ Offset findSection(SectionMap& sections, Offset off) {
   SectionMap::iterator i = sections.upper_bound(off);
   --i;
   return i->first;
+}
+
+bool FuncChecker::checkInfo() {
+  if (numLocals() > std::numeric_limits<uint16_t>::max()) {
+    error("too many locals: %d", numLocals());
+    return false;
+  }
+  if (numIters() > std::numeric_limits<uint16_t>::max()) {
+    error("too many iterators: %d", numIters());
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -1915,13 +1944,6 @@ bool FuncChecker::checkExnEdge(State cur, Op op, Block* b) {
 
 bool FuncChecker::checkBlock(State& cur, Block* b) {
   bool ok = true;
-  auto const verify_rx = (RuntimeOption::EvalRxVerifyBody > 0) &&
-                         (m_func->attrs & AttrRxBody) &&
-                         // defer this to next check
-                         !(m_func->attrs & AttrPureBody) &&
-                         !m_func->isRxDisabled;
-  auto const verify_pure = (RuntimeOption::EvalPureVerifyBody > 0) &&
-                           (m_func->attrs & AttrPureBody);
   if (m_errmode == kVerbose) {
     std::cout << blockToString(b, m_graph, m_func) << std::endl;
   }
@@ -1942,8 +1964,8 @@ bool FuncChecker::checkBlock(State& cur, Block* b) {
     if (flags & TF) ok &= checkTerminal(&cur, op, b);
     if (isIter(pc)) ok &= checkIter(&cur, pc);
     ok &= checkOutputs(&cur, pc, b);
-    if (verify_rx) ok &= checkRxOp(&cur, pc, op, false);
-    if (verify_pure) ok &= checkRxOp(&cur, pc, op, true);
+    if (m_verify_rx) ok &= checkRxOp(&cur, pc, op, false);
+    if (m_verify_pure) ok &= checkRxOp(&cur, pc, op, true);
     prev_pc = pc;
   }
   ok &= checkSuccEdges(b, &cur);

@@ -495,7 +495,6 @@ bool opcodeMayRaise(Opcode opc) {
   case AddIntO:
   case AddNewElemVec:
   case AdvanceDictPtrIter:
-  case AdvanceVecPtrIter:
   case AFWHBlockOn:
   case AFWHPushTailFrame:
   case AKExistsDict:
@@ -527,7 +526,6 @@ bool opcodeMayRaise(Opcode opc) {
   case CheckCold:
   case CheckDictKeys:
   case CheckDictOffset:
-  case CheckDictOffsetLA:
   case CheckImplicitContextNull:
   case CheckInit:
   case CheckInitMem:
@@ -549,7 +547,6 @@ bool opcodeMayRaise(Opcode opc) {
   case CheckType:
   case CheckTypeMem:
   case CheckVecBounds:
-  case CheckVecBoundsLA:
   case ChrInt:
   case CmpBool:
   case CmpDbl:
@@ -661,7 +658,6 @@ bool opcodeMayRaise(Opcode opc) {
   case GetMemoKeyScalar:
   case GetTime:
   case GetTimeNs:
-  case GetVecPtrIter:
   case GtBool:
   case GtDbl:
   case GteBool:

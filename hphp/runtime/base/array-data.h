@@ -206,7 +206,7 @@ public:
    * This is normally called when the reference count goes to zero (e.g., via a
    * helper like decRefArr()).
    */
-  void release() noexcept;
+  void release() DEBUG_NOEXCEPT;
 
   /*
    * Decref the array and release() it if its refcount goes to zero.
@@ -397,14 +397,21 @@ public:
   Variant getValue(ssize_t pos) const;
 
   /*
+   * Get the value of the element at key `k'. Returns an Uninit TypedValue if
+   * the key `k` is missing from the array.
+   */
+  TypedValue get(int64_t k) const;
+  TypedValue get(const StringData* k) const;
+
+  /*
    * Get the value of the element at key `k'.
    *
    * If `error` is false, get returns an Uninit TypedValue if `k` is missing.
    * If `error` is true, get throws if `k` is missing.
    */
+  TypedValue get(int64_t k, bool error) const;
+  TypedValue get(const StringData* k, bool error) const;
   TypedValue get(TypedValue k, bool error = false) const;
-  TypedValue get(int64_t k, bool error = false) const;
-  TypedValue get(const StringData* k, bool error = false) const;
   TypedValue get(const String& k, bool error = false) const;
   TypedValue get(const Variant& k, bool error = false) const;
 
@@ -420,20 +427,15 @@ public:
    * These methods return `this' if copy/escalation are not needed, or a
    * copied/escalated array data if they are.
    */
-  ArrayData* set(int64_t k, TypedValue v);
-  ArrayData* set(StringData* k, TypedValue v);
-  ArrayData* set(TypedValue k, TypedValue v);
-  ArrayData* set(const String& k, TypedValue v);
   ArrayData* setMove(int64_t k, TypedValue v);
   ArrayData* setMove(StringData* k, TypedValue v);
 
-  ArrayData* set(int64_t k, const Variant& v);
-  ArrayData* set(StringData* k, const Variant& v);
-  ArrayData* set(const String& k, const Variant& v);
-  ArrayData* set(const Variant& k, const Variant& v);
-
-  ArrayData* set(const StringData*, TypedValue) = delete;
-  ArrayData* set(const StringData*, const Variant&) = delete;
+  ArrayData* setMove(TypedValue k, TypedValue v);
+  ArrayData* setMove(const String& k, TypedValue v);
+  ArrayData* setMove(int64_t k, const Variant& v);
+  ArrayData* setMove(StringData* k, const Variant& v);
+  ArrayData* setMove(const String& k, const Variant& v);
+  ArrayData* setMove(const Variant& k, const Variant& v);
 
   /*
    * Remove the value at key `k', making a copy first if necessary. Returns
@@ -452,7 +454,6 @@ public:
    * appendMove dec-refs the old array if we needed copy / escalation, and
    * does not do any refcounting ops on the value.
    */
-  ArrayData* append(TypedValue v);
   ArrayData* appendMove(TypedValue v);
 
   /////////////////////////////////////////////////////////////////////////////
@@ -795,9 +796,7 @@ struct ArrayFunctions {
   ssize_t (*nvGetStrPos[NK])(const ArrayData*, const StringData* k);
   TypedValue (*getPosKey[NK])(const ArrayData*, ssize_t pos);
   TypedValue (*getPosVal[NK])(const ArrayData*, ssize_t pos);
-  ArrayData* (*setInt[NK])(ArrayData*, int64_t k, TypedValue v);
   ArrayData* (*setIntMove[NK])(ArrayData*, int64_t k, TypedValue v);
-  ArrayData* (*setStr[NK])(ArrayData*, StringData* k, TypedValue v);
   ArrayData* (*setStrMove[NK])(ArrayData*, StringData* k, TypedValue v);
   bool (*isVectorData[NK])(const ArrayData*);
   bool (*existsInt[NK])(const ArrayData*, int64_t k);
@@ -819,7 +818,6 @@ struct ArrayFunctions {
   bool (*usort[NK])(ArrayData* ad, const Variant& cmp_function);
   bool (*uasort[NK])(ArrayData* ad, const Variant& cmp_function);
   ArrayData* (*copyStatic[NK])(const ArrayData*);
-  ArrayData* (*append[NK])(ArrayData*, TypedValue v);
   ArrayData* (*appendMove[NK])(ArrayData*, TypedValue v);
   ArrayData* (*pop[NK])(ArrayData*, Variant& value);
   ArrayData* (*toDVArray[NK])(ArrayData*, bool copy);
@@ -846,7 +844,6 @@ extern const ArrayFunctions g_array_funcs;
                                             const ArrayData* ad);
 [[noreturn]] void throwFalseyPromoteException(const char* type);
 [[noreturn]] void throwInvalidKeysetOperation();
-[[noreturn]] void throwInvalidAdditionException(const ArrayData* ad);
 [[noreturn]] void throwVarrayUnsetException();
 [[noreturn]] void throwVecUnsetException();
 

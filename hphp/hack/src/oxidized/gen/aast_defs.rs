@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<51d611a2b7270e40dfd0ace1020f4286>>
+// @generated SignedSource<<dab46425a4d1477826ea1d88c0c41f39>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidize_regen.sh
+//   hphp/hack/src/oxidized_regen.sh
 
 use arena_trait::TrivialDrop;
 use no_pos_hash::NoPosHash;
@@ -67,9 +67,6 @@ pub type IsReified = bool;
 )]
 pub enum FuncReactive {
     FPure,
-    FReactive,
-    FLocal,
-    FShallow,
     FNonreactive,
 }
 impl TrivialDrop for FuncReactive {}
@@ -277,6 +274,7 @@ pub enum Hint_ {
     Hdarray(Hint, Hint),
     Hvarray(Hint),
     HvarrayOrDarray(Option<Hint>, Hint),
+    HvecOrDict(Option<Hint>, Hint),
     Hprim(Tprim),
     Hthis,
     Hdynamic,

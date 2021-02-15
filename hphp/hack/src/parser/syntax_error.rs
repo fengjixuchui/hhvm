@@ -482,14 +482,13 @@ pub const type_alias_to_type_constant: Error =
 pub const interface_with_memoize: Error =
     Cow::Borrowed("`__Memoize` is not allowed on interface methods");
 pub const multiple_reactivity_annotations: Error = Cow::Borrowed(concat!(
-    "Only one of following annotations is allowed: `__Pure`, `__Rx`, ",
-    "`__RxShallow`, `__RxLocal`, `__NonRx`, `__Cipp`, `__CippLocal`, `__CippGlobal`.",
+    "Only one of following annotations is allowed: `__Pure`, ",
+    "`__NonRx`, `__Cipp`, `__CippLocal`, `__CippGlobal`.",
 ));
 pub const functions_cannot_implement_reactive: Error =
     Cow::Borrowed("`__OnlyRxIfImpl` annotations are only valid on class methods.");
 pub const missing_reactivity_for_condition: Error = Cow::Borrowed(concat!(
-    "`__OnlyRxIfImpl` and `__AtMostRxAsArgs` annotations cannot ",
-    "be used without `__Pure`, `__Rx`, `__RxShallow`, or `__RxLocal`.",
+    "`__OnlyRxIfImpl` and `__AtMostRxAsArgs` annotations cannot be used without `__Pure`.",
 ));
 pub const conflicting_mutable_and_owned_mutable_attributes: Error =
     Cow::Borrowed("Parameter cannot have both `__Mutable` and `__OwnedMutable` annotations.");
@@ -623,7 +622,6 @@ pub fn not_allowed_in_write(what: &str) -> Error {
 }
 pub const reassign_this: Error = Cow::Borrowed("Cannot re-assign `$this`");
 pub const enum_elem_name_is_class: Error = Cow::Borrowed("Enum element cannot be named `class`");
-pub const sealed_enum: Error = Cow::Borrowed("Enums cannot be sealed.");
 pub const property_requires_visibility: Error = Cow::Borrowed(concat!(
     "Property declarations require a visibility modifier ",
     "such as `public`, `private` or `protected`.",
@@ -745,7 +743,6 @@ pub fn declared_name_is_already_in_use(line_num: usize, name: &str, _short_name:
         line_num.to_string(),
     ))
 }
-pub const const_in_trait: Error = Cow::Borrowed("Traits cannot have constants");
 pub const sealed_val_not_classname: Error =
     Cow::Borrowed("Values in sealed whitelist must be classname constants.");
 pub const sealed_qualifier_invalid: Error =

@@ -16,62 +16,134 @@
 
 #include "hphp/runtime/vm/coeffects.h"
 
+#include "hphp/runtime/base/coeffects-config.h"
+#include "hphp/runtime/vm/blob-helper.h"
+#include "hphp/util/trace.h"
+
+TRACE_SET_MOD(coeffects);
+
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
 const std::string RuntimeCoeffects::toString() const {
-  switch (m_data) {
-    case Level::Default:   return "defaults";
-    case Level::RxShallow: return "rx_shallow";
-    case Level::Rx:        return "rx";
-    case Level::Pure:      return "";
-  }
-  not_reached();
+  // Pretend to be StaticCoeffects, this is safe since RuntimeCoeffects is a
+  // subset of StaticCoeffects
+  auto const data = StaticCoeffects::fromValue(m_data);
+  auto const list = CoeffectsConfig::toStringList(data);
+  if (list.empty()) return "defaults";
+  if (list.size() == 1 && list[0] == "pure") return "";
+  return folly::join(", ", list);
 }
 
-StaticCoeffects StaticCoeffects::fromName(const std::string& a) {
-  using SC = StaticCoeffects;
-  if (a == "rx_local")   return SC{Level::Local};
-  if (a == "rx_shallow") return SC{Level::Shallow};
-  if (a == "rx")         return SC{Level::Rx};
-  if (a == "pure")       return SC{Level::Pure};
-  return StaticCoeffects::none();
+bool RuntimeCoeffects::canCallWithWarning(const RuntimeCoeffects o) const {
+  auto const promoted =
+    RuntimeCoeffects::fromValue(o.m_data | CoeffectsConfig::warningMask());
+  return canCall(promoted);
 }
 
-const char* StaticCoeffects::toString() const {
-  switch (m_data) {
-    case Level::None:    return nullptr;
-    case Level::Local:   return "rx_local";
-    case Level::Shallow: return "rx_shallow";
-    case Level::Rx:      return "rx";
-    case Level::Pure:    return "pure";
-  }
-  not_reached();
+const folly::Optional<std::string> StaticCoeffects::toString() const {
+  auto const list = CoeffectsConfig::toStringList(*this);
+  if (list.empty()) return folly::none;
+  return folly::join(" ", list);
 }
 
 RuntimeCoeffects StaticCoeffects::toAmbient() const {
-  using RC = RuntimeCoeffects;
-  switch (m_data) {
-    case Level::None:
-    case Level::Local:   return RC{RC::Level::Default};
-    case Level::Shallow: return RC{RC::Level::RxShallow};
-    case Level::Rx:      return RC{RC::Level::Rx};
-    case Level::Pure:    return RC{RC::Level::Pure};
+  auto const locals =
+    (((~m_data) >> 1) & m_data) & CoeffectsConfig::escapeMask();
+  auto const val = m_data - locals;
+  FTRACE(5, "Converting {:016b} to ambient {:016b}\n", m_data, val);
+  return RuntimeCoeffects::fromValue(val);
+}
+
+RuntimeCoeffects StaticCoeffects::toRequired() const {
+  auto const locals =
+    (((~m_data) >> 1) & m_data) & CoeffectsConfig::escapeMask();
+  // This converts the 01 (local) pattern to 10 (shallow) pattern
+  // (m_data | (locals << 1)) & (~locals)
+  // => m_data - locals + 2 * locals
+  // => m_data + locals
+  auto const val = m_data + locals;
+  FTRACE(5, "Converting {:016b} to required {:016b}\n", m_data, val);
+  return RuntimeCoeffects::fromValue(val);
+}
+
+StaticCoeffects& StaticCoeffects::operator|=(const StaticCoeffects o) {
+  return (*this = CoeffectsConfig::combine(*this, o));
+}
+
+folly::Optional<std::string> CoeffectRule::toString(const Func* f) const {
+  switch (m_type) {
+    case Type::ConditionalReactiveImplements:
+    case Type::ConditionalReactiveArgImplements:
+      return folly::none;
+    case Type::FunParam:
+      return folly::to<std::string>("ctx $",
+                                    f->localVarName(m_index)->toCppString());
+    case Type::CCParam:
+      return folly::to<std::string>("$",
+                                    f->localVarName(m_index)->toCppString(),
+                                    "::",
+                                    m_name->toCppString());
+    case Type::CCThis:
+      return folly::to<std::string>("this::", m_name->toCppString());
+    case Type::Invalid:
+      always_assert(false);
   }
   not_reached();
 }
 
-RuntimeCoeffects StaticCoeffects::toRequired() const {
-  using RC = RuntimeCoeffects;
-  switch (m_data) {
-    case Level::None:    return RC{RC::Level::Default};
-    case Level::Local:
-    case Level::Shallow: return RC{RC::Level::RxShallow};
-    case Level::Rx:      return RC{RC::Level::Rx};
-    case Level::Pure:    return RC{RC::Level::Pure};
+std::string CoeffectRule::getDirectiveString() const {
+  switch (m_type) {
+    case Type::ConditionalReactiveImplements:
+      return folly::sformat(".rx_cond_implements \"{}\";",
+                            folly::cEscape<std::string>(
+                              m_name->toCppString()));
+    case Type::ConditionalReactiveArgImplements:
+      return folly::sformat(".rx_cond_implements_arg {} \"{}\";",
+                            m_index,
+                            folly::cEscape<std::string>(
+                              m_name->toCppString()));
+    case Type::FunParam:
+      return folly::sformat(".coeffects_fun_param {};", m_index);
+    case Type::CCParam:
+      return folly::sformat(".coeffects_cc_param {} {};", m_index,
+                            folly::cEscape<std::string>(
+                              m_name->toCppString()));
+    case Type::CCThis:
+      return folly::sformat(".coeffects_cc_this {};",
+                            folly::cEscape<std::string>(
+                              m_name->toCppString()));
+    case Type::Invalid:
+      always_assert(false);
   }
   not_reached();
 }
+
+template<class SerDe>
+void CoeffectRule::serde(SerDe& sd) {
+  sd(m_type)
+    (m_index)
+    (m_name)
+  ;
+
+  if constexpr (SerDe::deserializing) {
+    switch (m_type) {
+      case Type::ConditionalReactiveImplements:
+      case Type::ConditionalReactiveArgImplements:
+        m_ne = NamedEntity::get(m_name);
+        break;
+      case Type::FunParam:
+      case Type::CCParam:
+      case Type::CCThis:
+        break;
+      case Type::Invalid:
+        always_assert(false);
+    }
+  }
+}
+
+template void CoeffectRule::serde<>(BlobDecoder&);
+template void CoeffectRule::serde<>(BlobEncoder&);
 
 ///////////////////////////////////////////////////////////////////////////////
 }

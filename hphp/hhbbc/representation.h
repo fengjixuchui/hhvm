@@ -285,7 +285,6 @@ struct Func : FuncBase {
   LSString name;
   SrcInfo srcInfo;
   Attr attrs;
-  StaticCoeffects staticCoeffects{StaticCoeffects::none()};
 
   /*
    * Parameters and locals.
@@ -401,8 +400,9 @@ struct Func : FuncBase {
   UserAttributeMap userAttributes;
 
   /*
-   * List of all coeffect rules
+   * Lists of all static coeffect names and coeffect rules
    */
+  CompactVector<LowStringPtr> staticCoeffects;
   CompactVector<CoeffectRule> coeffectRules;
 };
 
@@ -444,7 +444,6 @@ struct Const {
    * The value will be KindOfUninit if the class constant is defined
    * using an 86cinit method.
    *
-   * The lack of a value represents an abstract class constant.
    */
   folly::Optional<TypedValue> val;
 
@@ -455,7 +454,11 @@ struct Const {
   LSString phpCode;
   LSString typeConstraint;
 
-  bool isTypeconst  : 1;
+  StaticCoeffects coeffects;
+
+  ConstModifiers::Kind kind;
+  bool isAbstract   : 1;
+  bool isFromTrait  : 1;
   bool isNoOverride : 1;
 };
 

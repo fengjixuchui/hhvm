@@ -44,8 +44,15 @@ namespace HPHP { namespace jit { namespace irgen {
 
 namespace {
 
-const Class* callContext(IRGS& env, const FCallArgs& fca) {
+const StaticString
+  s_DynamicContextOverrideUnsafe("__SystemLib\\DynamicContextOverrideUnsafe");
+
+const Class* callContext(IRGS& env, const FCallArgs& fca, const Class* cls) {
   if (!fca.context) return curClass(env);
+  if (fca.context->isame(s_DynamicContextOverrideUnsafe.get())) {
+    if (RO::RepoAuthoritative) PUNT(Bad-Dyn-Override);
+    return cls;
+  }
   return lookupUniqueClass(env, fca.context, true /* trustUnit */);
 }
 
@@ -777,7 +784,7 @@ void fcallObjMethodObj(IRGS& env, const FCallArgs& fca, SSATmp* obj,
         assertx(!isInterface(cls));
         obj = gen(env, AssertType, Type::SubObj(cls), obj);
         return lookupImmutableObjMethod(cls, methodName->strVal(),
-                                        callContext(env, fca), true);
+                                        callContext(env, fca, cls), true);
       }
     }
 
@@ -789,7 +796,7 @@ void fcallObjMethodObj(IRGS& env, const FCallArgs& fca, SSATmp* obj,
         auto const exactClass =
           obj->type().clsSpec().exact() || cls->attrs() & AttrNoOverride;
         return lookupImmutableObjMethod(cls, methodName->strVal(),
-                                        callContext(env, fca), exactClass);
+                                        callContext(env, fca, cls), exactClass);
       }
     }
 
@@ -1000,7 +1007,13 @@ void emitResolveFunc(IRGS& env, const StringData* name) {
 void emitResolveMethCaller(IRGS& env, const StringData* name) {
   auto const lookup = lookupImmutableFunc(curUnit(env), name);
   auto func = lookup.func;
-  assertx(func && func->isMethCaller());
+
+  // We de-duplicate meth_caller across the repo which may lead to the resolved
+  // meth caller being in a different unit (and therefore unavailable at this
+  // point). The interpreter will perform the load.
+  if (!func) return interpOne(env);
+
+  assertx(func->isMethCaller());
 
   auto const className = func->methCallerClsName();
   auto const methodName = func->methCallerMethName();
@@ -1335,7 +1348,7 @@ void emitFCallClsMethodD(IRGS& env,
   auto const cls = lookupUniqueClass(env, className);
   if (cls) {
     auto const func = lookupImmutableClsMethod(cls, methodName,
-                                               callContext(env, fca), true);
+                                               callContext(env, fca, cls), true);
     if (func) {
       if (!classIsPersistentOrCtxParent(env, cls)) {
         gen(env, LdClsCached, cns(env, className));
@@ -1662,7 +1675,9 @@ void fcallClsMethodCommon(IRGS& env,
     SSATmp* ctx;
     auto const func = lookupClsMethodKnown(env, methodName, clsVal,
                                            knownClass.first, knownClass.second,
-                                           forward, ctx, callContext(env, fca));
+                                           forward, ctx,
+                                           callContext(env, fca,
+                                                       knownClass.first));
     if (func) {
       discard(env, numExtraInputs);
       return prepareAndCallProfiled(env, func, fca, ctx,

@@ -662,6 +662,10 @@ val xhp_attribute_does_not_match_hint : typing_error_callback
 
 val record_init_value_does_not_match_hint : typing_error_callback
 
+val strict_str_concat_type_mismatch : typing_error_callback
+
+val strict_str_interp_type_mismatch : typing_error_callback
+
 val using_error : Pos.t -> bool -> typing_error_callback
 
 val static_redeclared_as_dynamic :
@@ -695,7 +699,7 @@ val top_member_write :
   unit
 
 val non_object_member_read :
-  is_method:bool ->
+  kind:[< `property | `method_ | `class_typeconst ] ->
   string ->
   Pos.t ->
   string ->
@@ -704,7 +708,7 @@ val non_object_member_read :
   unit
 
 val non_object_member_write :
-  is_method:bool ->
+  kind:[< `property | `method_ | `class_typeconst ] ->
   string ->
   Pos.t ->
   string ->
@@ -1490,3 +1494,24 @@ val enum_classes_reserved_syntax : Pos.t -> unit
 val nonsense_member_selection : Pos.t -> string -> unit
 
 val consider_meth_caller : Pos.t -> string -> string -> unit
+
+val enum_supertyping_reserved_syntax : Pos.t -> unit
+
+val readonly_modified : ?reason:Pos.t * string -> Pos.t -> unit
+
+val var_readonly_mismatch : Pos.t -> string -> Pos.t -> string -> unit
+
+val readonly_mismatch :
+  string ->
+  Pos.t ->
+  reason_sub:(Pos.t * string) list ->
+  reason_super:(Pos.t * string) list ->
+  unit
+
+val explicit_readonly_cast : string -> Pos.t -> unit
+
+val readonly_method_call : Pos.t -> Pos.t -> unit
+
+val enum_inclusion_unsupported_ordering : Pos.t -> string -> string -> unit
+
+val invalid_meth_caller_calling_convention : Pos.t -> Pos.t -> string -> unit

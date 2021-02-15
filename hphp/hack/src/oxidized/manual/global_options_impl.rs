@@ -118,6 +118,11 @@ impl Default for GlobalOptions {
             po_disallow_fun_and_cls_meth_pseudo_funcs: false,
             tco_use_direct_decl_parser: false,
             tco_ifc_enabled: vec![],
+            po_enable_enum_supertyping: false,
+            po_array_unification: false,
+            po_interpret_soft_types_as_like_types: false,
+            tco_enable_strict_string_concat_interp: false,
+            tco_readonly: false,
         }
     }
 }

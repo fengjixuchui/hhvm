@@ -129,13 +129,22 @@ struct PreClassEmitter {
       , m_typeConstraint(nullptr)
       , m_val(make_tv<KindOfUninit>())
       , m_phpCode(nullptr)
-      , m_typeconst(false)
+      , m_coeffects(StaticCoeffects::none())
+      , m_kind(ConstModifiers::Kind::Value)
+      , m_isAbstract(false)
+      , m_fromTrait(false)
     {}
     Const(const StringData* n, const StringData* typeConstraint,
           const TypedValue* val, const StringData* phpCode,
-          const bool typeconst)
-      : m_name(n), m_typeConstraint(typeConstraint), m_phpCode(phpCode),
-        m_typeconst(typeconst) {
+          const StaticCoeffects coeffects, const ConstModifiers::Kind kind,
+          const bool isAbstract, const bool fromTrait)
+      : m_name(n)
+      , m_typeConstraint(typeConstraint)
+      , m_phpCode(phpCode)
+      , m_coeffects(coeffects)
+      , m_kind(kind)
+      , m_isAbstract(isAbstract)
+      , m_fromTrait(fromTrait) {
       if (!val) {
         m_val.reset();
       } else {
@@ -149,14 +158,19 @@ struct PreClassEmitter {
     const TypedValue& val() const { return m_val.value(); }
     const folly::Optional<TypedValue>& valOption() const { return m_val; }
     const StringData* phpCode() const { return m_phpCode; }
-    bool isAbstract()       const { return !m_val.has_value(); }
-    bool isTypeconst() const { return m_typeconst; }
+    bool isAbstract() const { return m_isAbstract; }
+    StaticCoeffects coeffects() const { return m_coeffects; }
+    ConstModifiers::Kind kind() const { return m_kind; }
+    bool isFromTrait() const { return m_fromTrait; }
 
     template<class SerDe> void serde(SerDe& sd) {
       sd(m_name)
         (m_val)
         (m_phpCode)
-        (m_typeconst);
+        (m_coeffects)
+        (m_kind)
+        (m_isAbstract)
+        (m_fromTrait);
     }
 
    private:
@@ -164,7 +178,10 @@ struct PreClassEmitter {
     LowStringPtr m_typeConstraint;
     folly::Optional<TypedValue> m_val;
     LowStringPtr m_phpCode;
-    bool m_typeconst;
+    StaticCoeffects m_coeffects;
+    ConstModifiers::Kind m_kind;
+    bool m_isAbstract;
+    bool m_fromTrait;
   };
 
   typedef IndexedStringMap<Prop, true, Slot> PropMap;
@@ -232,11 +249,17 @@ struct PreClassEmitter {
                    UserAttributeMap);
   bool addConstant(const StringData* n, const StringData* typeConstraint,
                    const TypedValue* val, const StringData* phpCode,
-                   const bool typeConst = false,
+                   const ConstModifiers::Kind kind =
+                    ConstModifiers::Kind::Value,
+                   const bool fromTrait = false,
                    const Array& typeStructure = Array{});
+  bool addContextConstant(const StringData* n, StaticCoeffects coeffects,
+                          const bool isAbstract, const bool fromTrait = false);
   bool addAbstractConstant(const StringData* n,
                            const StringData* typeConstraint,
-                           const bool typeConst = false);
+                           const ConstModifiers::Kind kind =
+                             ConstModifiers::Kind::Value,
+                           const bool fromTrait = false);
   void addUsedTrait(const StringData* traitName);
   void addClassRequirement(const PreClass::ClassRequirement req) {
     m_requirements.push_back(req);
@@ -263,7 +286,7 @@ struct PreClassEmitter {
 
   void commit(RepoTxn& txn) const; // throws(RepoExc)
 
-  PreClass* create(Unit& unit) const;
+  PreClass* create(Unit& unit, bool saveLineTable = false) const;
 
   template<class SerDe> void serdeMetaData(SerDe&);
 
@@ -336,4 +359,3 @@ struct PreClassRepoProxy : RepoProxy {
 
 ///////////////////////////////////////////////////////////////////////////////
 }
-

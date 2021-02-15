@@ -3,24 +3,15 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<8d6f5b4c708ad6855459de04f4bb2d65>>
+// @generated SignedSource<<80b3afc5c2a43c4e78c02ebef42a0144>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidize_regen.sh
+//   hphp/hack/src/oxidized_regen.sh
 
 use crate::aast_defs::*;
 impl FuncReactive {
     pub fn mk_fpure() -> Self {
         FuncReactive::FPure
-    }
-    pub fn mk_freactive() -> Self {
-        FuncReactive::FReactive
-    }
-    pub fn mk_flocal() -> Self {
-        FuncReactive::FLocal
-    }
-    pub fn mk_fshallow() -> Self {
-        FuncReactive::FShallow
     }
     pub fn mk_fnonreactive() -> Self {
         FuncReactive::FNonreactive
@@ -28,24 +19,6 @@ impl FuncReactive {
     pub fn is_fpure(&self) -> bool {
         match self {
             FuncReactive::FPure => true,
-            _ => false,
-        }
-    }
-    pub fn is_freactive(&self) -> bool {
-        match self {
-            FuncReactive::FReactive => true,
-            _ => false,
-        }
-    }
-    pub fn is_flocal(&self) -> bool {
-        match self {
-            FuncReactive::FLocal => true,
-            _ => false,
-        }
-    }
-    pub fn is_fshallow(&self) -> bool {
-        match self {
-            FuncReactive::FShallow => true,
             _ => false,
         }
     }
@@ -311,6 +284,9 @@ impl Hint_ {
     pub fn mk_hvarray_or_darray(p0: Option<Hint>, p1: Hint) -> Self {
         Hint_::HvarrayOrDarray(p0, p1)
     }
+    pub fn mk_hvec_or_dict(p0: Option<Hint>, p1: Hint) -> Self {
+        Hint_::HvecOrDict(p0, p1)
+    }
     pub fn mk_hprim(p0: Tprim) -> Self {
         Hint_::Hprim(p0)
     }
@@ -428,6 +404,12 @@ impl Hint_ {
     pub fn is_hvarray_or_darray(&self) -> bool {
         match self {
             Hint_::HvarrayOrDarray(..) => true,
+            _ => false,
+        }
+    }
+    pub fn is_hvec_or_dict(&self) -> bool {
+        match self {
+            Hint_::HvecOrDict(..) => true,
             _ => false,
         }
     }
@@ -551,6 +533,12 @@ impl Hint_ {
             _ => None,
         }
     }
+    pub fn as_hvec_or_dict(&self) -> Option<(&Option<Hint>, &Hint)> {
+        match self {
+            Hint_::HvecOrDict(p0, p1) => Some((p0, p1)),
+            _ => None,
+        }
+    }
     pub fn as_hprim(&self) -> Option<&Tprim> {
         match self {
             Hint_::Hprim(p0) => Some(p0),
@@ -653,6 +641,12 @@ impl Hint_ {
             _ => None,
         }
     }
+    pub fn as_hvec_or_dict_mut(&mut self) -> Option<(&mut Option<Hint>, &mut Hint)> {
+        match self {
+            Hint_::HvecOrDict(p0, p1) => Some((p0, p1)),
+            _ => None,
+        }
+    }
     pub fn as_hprim_mut(&mut self) -> Option<&mut Tprim> {
         match self {
             Hint_::Hprim(p0) => Some(p0),
@@ -752,6 +746,12 @@ impl Hint_ {
     pub fn as_hvarray_or_darray_into(self) -> Option<(Option<Hint>, Hint)> {
         match self {
             Hint_::HvarrayOrDarray(p0, p1) => Some((p0, p1)),
+            _ => None,
+        }
+    }
+    pub fn as_hvec_or_dict_into(self) -> Option<(Option<Hint>, Hint)> {
+        match self {
+            Hint_::HvecOrDict(p0, p1) => Some((p0, p1)),
             _ => None,
         }
     }

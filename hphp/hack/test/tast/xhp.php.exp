@@ -10,7 +10,7 @@
       c_typeconsts = [];
       c_vars =
       [{ cv_final = false; cv_xhp_attr = (Some { xai_tag = None });
-         cv_abstract = false; cv_visibility = Public;
+         cv_abstract = false; cv_readonly = false; cv_visibility = Public;
          cv_type =
          ((?string),
           (Some ([4:13-34], (Hoption ([4:13-34], (Hprim Tstring))))));
@@ -30,6 +30,7 @@
       c_doc_comment = None; c_emit_id = None });
   (Fun
      { f_span = [7:1-19:2]; f_annotation = (); f_mode = Mstrict;
+       f_readonly_ret = None;
        f_ret = ((void), (Some ([7:18-22], (Hprim Tvoid))));
        f_name = ([7:10-14], "\\main"); f_tparams = [];
        f_where_constraints = []; f_variadic = FVnonVariadic; f_params = [];

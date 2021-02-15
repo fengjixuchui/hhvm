@@ -642,7 +642,7 @@ resolveTSStaticallyImpl(ISS& env, hphp_fast_set<SArray>& seenTs, SArray ts,
         resolveTSListStatically(env, seenTs, generics, declaringCls);
       if (!rgenerics) return nullptr;
       auto result = const_cast<ArrayData*>(ts);
-      return finish(result->set(s_generic_types.get(), Variant(rgenerics)));
+      return finish(result->setMove(s_generic_types.get(), Variant(rgenerics)));
     }
     case TypeStructure::Kind::T_class:
     case TypeStructure::Kind::T_interface:
@@ -656,7 +656,7 @@ resolveTSStaticallyImpl(ISS& env, hphp_fast_set<SArray>& seenTs, SArray ts,
       auto relems = resolveTSListStatically(env, seenTs, elems, declaringCls);
       if (!relems) return nullptr;
       auto result = const_cast<ArrayData*>(ts);
-      return finish(result->set(s_elem_types.get(), Variant(relems)));
+      return finish(result->setMove(s_elem_types.get(), Variant(relems)));
     }
     case TypeStructure::Kind::T_shape:
       // TODO(T31677864): We can also optimize this but shapes could have
@@ -671,7 +671,7 @@ resolveTSStaticallyImpl(ISS& env, hphp_fast_set<SArray>& seenTs, SArray ts,
         auto rgenerics =
           resolveTSListStatically(env, seenTs, generics, declaringCls);
         if (!rgenerics) return nullptr;
-        result = result->set(s_generic_types.get(), Variant(rgenerics));
+        result = result->setMove(s_generic_types.get(), Variant(rgenerics));
       }
       auto const rcls = env.index.resolve_class(env.ctx, get_ts_classname(ts));
       if (!rcls || !rcls->resolved()) return nullptr;
@@ -682,8 +682,8 @@ resolveTSStaticallyImpl(ISS& env, hphp_fast_set<SArray>& seenTs, SArray ts,
         if (attrs & AttrInterface) return TypeStructure::Kind::T_interface;
         return TypeStructure::Kind::T_class;
       }();
-      return finish(result->set(s_kind.get(),
-                                Variant(static_cast<uint8_t>(kind))));
+      return finish(result->setMove(s_kind.get(),
+                                    Variant(static_cast<uint8_t>(kind))));
     }
     case TypeStructure::Kind::T_typeaccess: {
       auto const accList = get_ts_access_list(ts);
@@ -709,8 +709,8 @@ resolveTSStaticallyImpl(ISS& env, hphp_fast_set<SArray>& seenTs, SArray ts,
         auto const cnst = env.index.lookup_class_const_ptr(env.ctx, *rcls,
                                                            cnsName.m_data.pstr,
                                                            true);
-        if (!cnst || !cnst->val || !cnst->isTypeconst ||
-            !tvIsHAMSafeDArray(&*cnst->val)) {
+        if (!cnst || !cnst->val || cnst->kind != ConstModifiers::Kind::Type
+            || !tvIsHAMSafeDArray(&*cnst->val)) {
           return nullptr;
         }
         if (checkNoOverrideOnFirst && i == 0 && !cnst->isNoOverride) {
@@ -740,14 +740,14 @@ resolveTSStaticallyImpl(ISS& env, hphp_fast_set<SArray>& seenTs, SArray ts,
                                              declaringCls);
       if (!rparams) return nullptr;
       auto result = const_cast<ArrayData*>(ts)
-        ->set(s_return_type.get(), Variant(rreturn))
-        ->set(s_param_types.get(), Variant(rparams));
+        ->setMove(s_return_type.get(), Variant(rreturn))
+        ->setMove(s_param_types.get(), Variant(rparams));
       auto const variadic = get_ts_variadic_type_opt(ts);
       if (variadic) {
         auto rvariadic =
           resolveTSStaticallyImpl(env, seenTs, variadic, declaringCls);
         if (!rvariadic) return nullptr;
-        result = result->set(s_variadic_type.get(), Variant(rvariadic));
+        result = result->setMove(s_variadic_type.get(), Variant(rvariadic));
       }
       return finish(result);
     }
@@ -1041,7 +1041,7 @@ void in(ISS& env, const bc::AddElemC& /*op*/) {
         auto vtv = tv(v);
         if (!vtv) return false;
         return mutate_add_elem_array(env, tag, [&](ArrayData** arr) {
-          *arr = (*arr)->set(*ktv, *vtv);
+          *arr = (*arr)->setMove(*ktv, *vtv);
         });
       }();
       if (handled) {
@@ -1098,7 +1098,7 @@ void in(ISS& env, const bc::AddNewElemC&) {
         auto vtv = tv(v);
         if (!vtv) return false;
         return mutate_add_elem_array(env, tag, [&](ArrayData** arr) {
-          *arr = (*arr)->append(*vtv);
+          *arr = (*arr)->appendMove(*vtv);
         });
       }();
       if (handled) {
@@ -3764,14 +3764,17 @@ Type typeFromWH(Type t) {
 }
 
 void pushCallReturnType(ISS& env, Type&& ty, const FCallArgs& fca) {
-  if (ty == TBottom) {
-    // The callee function never returns.  It might throw, or loop forever.
-    unreachable(env);
-  }
   auto const numRets = fca.numRets();
   if (numRets != 1) {
     assertx(fca.asyncEagerTarget() == NoBlockId);
+
     for (auto i = uint32_t{0}; i < numRets - 1; ++i) popU(env);
+    if (!ty.couldBe(BVecN)) {
+      // Function cannot have an in-out args match, so call will
+      // always fail.
+      for (int32_t i = 0; i < numRets; i++) push(env, TBottom);
+      return unreachable(env);
+    }
     if (is_specialized_vec(ty)) {
       for (int32_t i = 1; i < numRets; i++) {
         push(env, vecish_elem(ty, ival(i)).first);
@@ -3782,9 +3785,15 @@ void pushCallReturnType(ISS& env, Type&& ty, const FCallArgs& fca) {
     }
     return;
   }
+  if (ty.subtypeOf(BBottom)) {
+    // The callee function never returns.  It might throw, or loop
+    // forever.
+    push(env, TBottom);
+    return unreachable(env);
+  }
   if (fca.asyncEagerTarget() != NoBlockId) {
     push(env, typeFromWH(ty));
-    assertx(topC(env) != TBottom);
+    assertx(!topC(env).subtypeOf(BBottom));
     env.propagate(fca.asyncEagerTarget(), &env.state);
     popC(env);
   }
@@ -3831,6 +3840,12 @@ void fcallKnownImpl(
       (numArgs == 1 || numArgs == 2) &&
       !fca.hasUnpack() && !fca.hasGenerics()) {
     handle_function_exists(env, topT(env, numExtraInputs + numArgs - 1));
+  }
+
+  // If there's a caller/callee inout mismatch, then the call will
+  // always fail.
+  if (auto const numInOut = env.index.lookup_num_inout_params(env.ctx, func)) {
+    if (*numInOut + 1 != fca.numRets()) returnType = TBottom;
   }
 
   for (auto i = uint32_t{0}; i < numExtraInputs; ++i) popC(env);
@@ -4066,6 +4081,14 @@ void in(ISS& env, const bc::LazyClass&) {
 
 namespace {
 
+const StaticString
+  s_DynamicContextOverrideUnsafe("__SystemLib\\DynamicContextOverrideUnsafe");
+
+bool isBadContext(const FCallArgs& fca) {
+  return fca.context() &&
+    fca.context()->isame(s_DynamicContextOverrideUnsafe.get());
+}
+
 Context getCallContext(const ISS& env, const FCallArgs& fca) {
   if (auto const name = fca.context()) {
     auto const rcls = env.index.resolve_class(env.ctx, name);
@@ -4143,6 +4166,12 @@ void fcallObjMethodImpl(ISS& env, const Op& op, SString methName, bool dynamic,
     // May only return null, but can't fold as we may still throw.
     assertx(mayUseNullsafe && mayThrowNonObj);
     return unknown();
+  }
+
+  if (isBadContext(op.fca)) {
+    unknown();
+    unreachable(env);
+    return;
   }
 
   auto const ctx = getCallContext(env, op.fca);
@@ -4227,6 +4256,13 @@ template <typename Op, class UpdateBC>
 void fcallClsMethodImpl(ISS& env, const Op& op, Type clsTy, SString methName,
                         bool dynamic, uint32_t numExtraInputs,
                         UpdateBC updateBC) {
+  if (isBadContext(op.fca)) {
+    for (auto i = uint32_t{0}; i < numExtraInputs; ++i) popC(env);
+    fcallUnknownImpl(env, op.fca);
+    unreachable(env);
+    return;
+  }
+
   auto const ctx = getCallContext(env, op.fca);
   auto const rfunc = env.index.resolve_method(ctx, clsTy, methName);
 

@@ -18,7 +18,7 @@ use emit_xhp_rust as emit_xhp;
 use env::{emitter::Emitter, local, Env};
 use hhas_attribute_rust as hhas_attribute;
 use hhas_class_rust::{HhasClass, HhasClassFlags, TraitReqKind};
-use hhas_coeffects::HhasCoeffects;
+use hhas_coeffects::{HhasCoeffects, HhasCtxConstant};
 use hhas_constant_rust::{self as hhas_constant, HhasConstant};
 use hhas_method_rust::{HhasMethod, HhasMethodFlags};
 use hhas_param_rust::HhasParam;
@@ -26,7 +26,7 @@ use hhas_pos_rust::Span;
 use hhas_property_rust::HhasProperty;
 use hhas_type_const::HhasTypeConstant;
 use hhas_xhp_attribute_rust::HhasXhpAttribute;
-use hhbc_ast_rust::{FatalOp, FcallArgs, FcallFlags, SpecialClsRef};
+use hhbc_ast_rust::{FatalOp, FcallArgs, FcallFlags, ReadOnlyOp, SpecialClsRef};
 use hhbc_id_rust::r#const;
 use hhbc_id_rust::{self as hhbc_id, class, method, prop, Id};
 use hhbc_string_utils_rust as string_utils;
@@ -174,6 +174,15 @@ fn from_type_constant<'a>(
     Ok(HhasTypeConstant { name, initializer })
 }
 
+fn from_ctx_constant(tc: &tast::ClassTypeconst) -> Result<HhasCtxConstant> {
+    let name = tc.name.1.to_string();
+    let coeffects = match &tc.type_ {
+        Some(hint) => HhasCoeffects::from_ctx_constant(hint),
+        None => vec![],
+    };
+    Ok(HhasCtxConstant { name, coeffects })
+}
+
 fn from_class_elt_classvars<'a>(
     emitter: &mut Emitter,
     namespace: &namespace_env::Env,
@@ -243,17 +252,6 @@ fn from_class_elt_requirements<'a>(
             };
             (emit_type_hint::hint_to_class(h), kind)
         })
-        .collect()
-}
-
-fn from_class_elt_typeconsts<'a>(
-    emitter: &mut Emitter,
-    class_: &'a tast::Class_,
-) -> Result<Vec<HhasTypeConstant>> {
-    class_
-        .typeconsts
-        .iter()
-        .map(|x| from_type_constant(emitter, x))
         .collect()
 }
 
@@ -363,7 +361,7 @@ fn emit_reified_init_body<'a>(
             instr::checkthis(),
             instr::cgetl(local::Type::Named(INIT_METH_PARAM_NAME.into())),
             instr::baseh(),
-            instr::setm_pt(0, prop::from_raw_string(PROP_NAME)),
+            instr::setm_pt(0, prop::from_raw_string(PROP_NAME), ReadOnlyOp::Any),
             instr::popc(),
         ])
     };
@@ -572,7 +570,7 @@ pub fn emit_class<'a>(emitter: &mut Emitter, ast_class: &'a tast::Class_) -> Res
         .map(|(p, c)| (p, c.iter().map(|x| &x.1).collect()));
 
     let is_abstract = ast_class.kind == tast::ClassKind::Cabstract;
-    let is_final = ast_class.final_ || is_trait || enum_type.is_some();
+    let is_final = ast_class.final_ || is_trait;
     let is_sealed = hhas_attribute::has_sealed(&attributes);
 
     let tparams: Vec<&str> = ast_class
@@ -750,7 +748,16 @@ pub fn emit_class<'a>(emitter: &mut Emitter, ast_class: &'a tast::Class_) -> Res
 
     let mut methods = emit_method::from_asts(emitter, ast_class, &ast_class.methods)?;
     methods.extend(additional_methods.into_iter());
-    let type_constants = from_class_elt_typeconsts(emitter, ast_class)?;
+    let (ctxconsts, tconsts): (Vec<_>, Vec<_>) =
+        ast_class.typeconsts.iter().partition(|x| x.is_ctx);
+    let type_constants = tconsts
+        .iter()
+        .map(|x| from_type_constant(emitter, x))
+        .collect::<Result<Vec<HhasTypeConstant>>>()?;
+    let ctx_constants = ctxconsts
+        .iter()
+        .map(|x| from_ctx_constant(x))
+        .collect::<Result<Vec<HhasCtxConstant>>>()?;
     let upper_bounds = emit_body::emit_generics_upper_bounds(&ast_class.tparams, &[], false);
 
     if !no_xhp_attributes {
@@ -799,6 +806,7 @@ pub fn emit_class<'a>(emitter: &mut Emitter, ast_class: &'a tast::Class_) -> Res
         properties,
         requirements,
         type_constants,
+        ctx_constants,
         constants,
     })
 }

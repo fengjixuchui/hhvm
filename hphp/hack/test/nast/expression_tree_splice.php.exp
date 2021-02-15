@@ -1,6 +1,6 @@
 [(Fun
     { f_span = [3:1-5:2]; f_annotation = (); f_mode = Mstrict;
-      f_ret = ((), (Some ([3:18-22], (Hprim Tvoid))));
+      f_readonly_ret = None; f_ret = ((), (Some ([3:18-22], (Hprim Tvoid))));
       f_name = ([3:10-14], "\\test"); f_tparams = [];
       f_where_constraints = []; f_variadic = FVnonVariadic; f_params = [];
       f_ctxs = None; f_unsafe_ctxs = None;
@@ -30,7 +30,8 @@
                        ([4:8-26],
                         (Lfun (
                            { f_span = [4:8-26]; f_annotation = ();
-                             f_mode = Mstrict; f_ret = ((), None);
+                             f_mode = Mstrict; f_readonly_ret = None;
+                             f_ret = ((), None);
                              f_name = ([Pos.none], ";anonymous");
                              f_tparams = []; f_where_constraints = [];
                              f_variadic = FVnonVariadic; f_params = [];
@@ -81,9 +82,12 @@
                                  ([4:8-26],
                                   (Return
                                      (Some ([4:8-26],
-                                            (New (
+                                            (Call (
                                                ([4:8-26],
-                                                (CI ([4:8-26], "\\ExprTree"))),
+                                                (Class_const (
+                                                   ([4:8-26],
+                                                    (CI ([4:8-26], "\\Code"))),
+                                                   ([4:8-26], "makeTree")))),
                                                [],
                                                [([4:8-26],
                                                  (New (
@@ -127,6 +131,7 @@
                                                      { f_span = [4:8-26];
                                                        f_annotation = ();
                                                        f_mode = Mstrict;
+                                                       f_readonly_ret = None;
                                                        f_ret = ((), None);
                                                        f_name =
                                                        ([Pos.none],
@@ -151,6 +156,8 @@
                                                           param_pos = [4:3-7];
                                                           param_name = "$v";
                                                           param_expr = None;
+                                                          param_readonly =
+                                                          None;
                                                           param_callconv =
                                                           None;
                                                           param_user_attributes =
@@ -406,10 +413,11 @@
                                                        ([4:8-9], $__0)]
                                                      )));
                                                  ([4:8-26],
-                                                  (Lfun (
+                                                  (Efun (
                                                      { f_span = [4:8-26];
                                                        f_annotation = ();
                                                        f_mode = Mstrict;
+                                                       f_readonly_ret = None;
                                                        f_ret = ((), None);
                                                        f_name =
                                                        ([Pos.none],
@@ -496,12 +504,12 @@
                                                          false };
                                                        f_doc_comment = None;
                                                        f_static = false },
-                                                     [([4:8-9], $__0);
-                                                       ([4:12-14], $__1);
-                                                       ([4:19-25], $__2)]
+                                                     [([Pos.none], $__0);
+                                                       ([Pos.none], $__1);
+                                                       ([Pos.none], $__2)]
                                                      )))
                                                  ],
-                                               None, [4:8-26]))))))
+                                               None))))))
                                  ];
                                fb_annotation = Named };
                              f_fun_kind = FSync; f_user_attributes = [];

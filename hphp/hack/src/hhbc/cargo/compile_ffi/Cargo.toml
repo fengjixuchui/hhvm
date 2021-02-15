@@ -3,7 +3,6 @@
 name = "compile_ffi"
 edition = "2018"
 version = "0.0.0"
-include = ["../../compile_ffi.rs"]
 
 [lib]
 path = "../../compile_ffi.rs"
@@ -11,6 +10,7 @@ crate-type = ["lib", "staticlib"]
 
 [dependencies]
 compile_rust = { path = "../compile" }
+cpp_helper = { path = "../../../utils/cpp_helper" }
 ocamlrep = { path = "../../../ocamlrep" }
 ocamlrep_derive = { path = "../../../ocamlrep_derive" }
 ocamlrep_ocamlpool = { path = "../../../ocamlrep_ocamlpool" }
@@ -19,4 +19,6 @@ parser_core_types = { path = "../../../parser/cargo/core_types" }
 stack_limit = { path = "../../../utils/stack_limit" }
 anyhow = "1.0"
 atty = "0.2"
+libc = "0.2"
+log = { version = "0.4.8", features = ["kv_unstable"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }

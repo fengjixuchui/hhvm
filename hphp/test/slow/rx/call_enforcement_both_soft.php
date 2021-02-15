@@ -4,18 +4,31 @@ function non_rx($fn) {
   if ($fn) $fn(null);
 }
 
-<<__RxLocal>>
-function rx_local($fn) {
+function rx_local($fn)[rx_local] {
   if ($fn) $fn(null);
 }
 
-<<__RxShallow>>
-function rx_shallow($fn) {
+function rx_shallow($fn)[rx_shallow] {
   if ($fn) $fn(null);
 }
 
-<<__Rx>>
-function rx($fn) {
+function rx($fn)[rx] {
+  if ($fn) $fn(null);
+}
+
+function write_props($fn)[write_props] {
+  if ($fn) $fn(null);
+}
+
+function write_props_rx($fn)[write_props, rx] {
+  if ($fn) $fn(null);
+}
+
+function write_props_rx_shallow($fn)[write_props, rx_shallow] {
+  if ($fn) $fn(null);
+}
+
+function write_props_rx_local($fn)[write_props, rx_local] {
   if ($fn) $fn(null);
 }
 
@@ -25,7 +38,17 @@ function pure($fn)[] {
 
 <<__EntryPoint>>
 function main() {
-  $functions = vec['non_rx', 'rx_local', 'rx_shallow', 'rx', 'pure'];
+  $functions = vec[
+    'non_rx',
+    'rx_local',
+    'rx_shallow',
+    'rx',
+    'write_props',
+    'write_props_rx',
+    'write_props_rx_shallow',
+    'write_props_rx_local',
+    'pure'
+  ];
   foreach ($functions as $caller) {
     foreach ($functions as $callee) {
       try {

@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<789206dd8dec99b5070e6184ba7eded3>>
+// @generated SignedSource<<ac554a96e997634bf3cfa486c40077e2>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidize_regen.sh
+//   hphp/hack/src/oxidized_regen.sh
 
 use arena_trait::TrivialDrop;
 use no_pos_hash::NoPosHash;
@@ -23,6 +23,8 @@ pub use crate::shape_map;
 
 pub use pos::Pos;
 
+pub type Id_ = String;
+
 #[derive(
     Clone,
     Debug,
@@ -37,7 +39,7 @@ pub use pos::Pos;
     Serialize,
     ToOcamlRep
 )]
-pub struct Id(pub Pos, pub String);
+pub struct Id(pub Pos, pub Id_);
 
 pub type Pstring = (Pos, String);
 
@@ -158,6 +160,27 @@ pub enum ParamKind {
     Pinout,
 }
 impl TrivialDrop for ParamKind {}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    FromOcamlRep,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub enum ReadonlyKind {
+    Readonly,
+}
+impl TrivialDrop for ReadonlyKind {}
 
 #[derive(
     Clone,

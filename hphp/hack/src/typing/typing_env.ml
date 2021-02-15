@@ -638,8 +638,15 @@ let error_if_reactive_context env f =
   then
     f ()
 
-let make_depend_on_class env x =
-  let dep = Dep.Class x in
+let make_depend_on_class env class_name =
+  let dep = Dep.Class class_name in
+  Option.iter env.decl_env.droot (fun root ->
+      Typing_deps.add_idep (get_deps_mode env) root dep);
+  ()
+
+let make_depend_on_constructor env class_name =
+  make_depend_on_class env class_name;
+  let dep = Dep.Cstr class_name in
   Option.iter env.decl_env.droot (fun root ->
       Typing_deps.add_idep (get_deps_mode env) root dep);
   ()
@@ -902,14 +909,10 @@ let suggest_member is_method class_ mid =
 
 let get_construct env class_ =
   if not (Pos.is_hhi (Cls.pos class_)) then begin
-    make_depend_on_class env (Cls.name class_);
-    let add_dep x =
-      let dep = Dep.Cstr x in
-      Option.iter env.decl_env.Decl_env.droot (fun root ->
-          Typing_deps.add_idep (get_deps_mode env) root dep)
-    in
-    add_dep (Cls.name class_);
-    Option.iter (fst (Cls.construct class_)) (fun ce -> add_dep ce.ce_origin)
+    make_depend_on_constructor env (Cls.name class_);
+    Option.iter
+      (fst (Cls.construct class_))
+      (fun ce -> make_depend_on_constructor env ce.ce_origin)
   end;
   Cls.construct class_
 
@@ -1016,7 +1019,7 @@ let get_mode env = env.decl_env.mode
 
 let is_strict env = FileInfo.is_strict (get_mode env)
 
-let is_decl env = FileInfo.(equal_mode (get_mode env) Mdecl)
+let is_hhi env = FileInfo.(equal_mode (get_mode env) Mhhi)
 
 let get_allow_solve_globals env =
   wrap_inference_env_call_res env Inf.get_allow_solve_globals
@@ -1490,6 +1493,7 @@ and get_tyvars_i env (ty : internal_type) =
       let (env, positive1, negative1) = get_tyvars env ty1 in
       let (env, positive2, negative2) = get_tyvars env ty2 in
       (env, ISet.union positive1 positive2, ISet.union negative1 negative2)
+    | Tvec_or_dict (ty1, ty2)
     | Tvarray_or_darray (ty1, ty2) ->
       let (env, positive1, negative1) = get_tyvars env ty1 in
       let (env, positive2, negative2) = get_tyvars env ty2 in

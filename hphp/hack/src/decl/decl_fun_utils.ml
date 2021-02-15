@@ -44,12 +44,6 @@ let fun_reactivity_opt env user_attributes =
     | { Aast.ua_name = (_, n); ua_params } :: tl ->
       if String.equal n UA.uaPure then
         Some (Pure rx_condition)
-      else if String.equal n UA.uaReactive then
-        Some (Reactive rx_condition)
-      else if String.equal n UA.uaShallowReactive then
-        Some (Shallow rx_condition)
-      else if String.equal n UA.uaLocalReactive then
-        Some (Local rx_condition)
       else if String.equal n UA.uaNonRx then
         Some Nonreactive
       else if String.equal n UA.uaCipp then
@@ -58,8 +52,6 @@ let fun_reactivity_opt env user_attributes =
         Some (CippLocal (get_classname_or_literal_attribute_param ua_params))
       else if String.equal n UA.uaCippGlobal then
         Some CippGlobal
-      else if String.equal n UA.uaCippRx then
-        Some CippRx
       else
         go tl
   in
@@ -254,7 +246,8 @@ let make_param_ty env ~is_lambda param =
         ~has_default:(Option.is_some param.param_expr)
         ~ifc_external:(has_external_attribute param.param_user_attributes)
         ~ifc_can_call:(has_can_call_attribute param.param_user_attributes)
-        ~is_atom:(has_atom_attribute param.param_user_attributes);
+        ~is_atom:(has_atom_attribute param.param_user_attributes)
+        ~readonly:(Option.is_some param.param_readonly);
     fp_rx_annotation = rx_annotation;
   }
 
@@ -274,7 +267,8 @@ let make_ellipsis_param_ty pos =
         ~has_default:false
         ~ifc_external:false
         ~ifc_can_call:false
-        ~is_atom:false;
+        ~is_atom:false
+        ~readonly:false;
     fp_rx_annotation = None;
   }
 
@@ -315,16 +309,6 @@ let where_constraint env (ty1, ck, ty2) =
 
 (* Functions building the types for the parameters of a function *)
 (* It's not completely trivial because of optional arguments  *)
-
-let minimum_arity paraml =
-  (* We're looking for the minimum number of arguments that must be specified
-  in a call to this method. Variadic "..." parameters need not be specified,
-  parameters with default values need not be specified, so this method counts
-  non-default-value, non-variadic parameters. *)
-  let f param =
-    (not param.param_is_variadic) && Option.is_none param.param_expr
-  in
-  List.count paraml f
 
 let check_params paraml =
   (* We wish to give an error on the first non-default parameter

@@ -65,6 +65,8 @@ using ArFunction = TypedValue* (*)(ActRec* ar);
 struct NativeArgs; // never defined
 using NativeFunction = void(*)(NativeArgs*);
 
+using StaticCoeffectNamesMap = CompactVector<LowStringPtr>;
+
 ///////////////////////////////////////////////////////////////////////////////
 // EH table.
 
@@ -90,6 +92,9 @@ struct EHEnt {
 
   template<class SerDe> void serde(SerDe& sd);
 };
+
+template <typename T, size_t Expected, size_t Actual = sizeof(T)>
+constexpr bool CheckSize() { static_assert(Expected == Actual); return true; };
 
 ///////////////////////////////////////////////////////////////////////////////
 /*
@@ -799,6 +804,12 @@ struct Func final {
   // Coeffects.                                                        [const]
 
   /*
+   * Names of the static coeffects on the function
+   * Used for reflection
+   */
+  StaticCoeffectNamesMap staticCoeffectNames() const;
+
+  /*
    * Is this the version of the function body with reactivity disabled via
    * if (Rx\IS_ENABLED) ?
    */
@@ -1231,8 +1242,6 @@ private:
     // (There's a 32-bit integer in the AtomicCountable base class here.)
     Offset m_base;
     PreClass* m_preClass;
-    Id m_numLocals;
-    Id m_numIterators;
     int m_line1;
     LowStringPtr m_docComment;
     // Bits 64 and up of the inout-ness guards (the first 64 bits are in
@@ -1241,6 +1250,7 @@ private:
     ParamInfoVec m_params;
     NamedLocalsMap m_localNames;
     EHEntVec m_ehtab;
+    StaticCoeffectNamesMap m_staticCoeffectNames;
 
     /*
      * Up to 16 bits.
@@ -1293,8 +1303,11 @@ private:
 
     std::atomic<Offset> m_cti_base; // relative to CodeCache cti section
     uint32_t m_cti_size; // size of cti code
-    // 32 bits free here.
+    uint16_t m_numLocals;
+    uint16_t m_numIterators;
+    mutable LockFreePtrWrapper<VMCompactVector<LineInfo>> m_lineMap;
   };
+  static_assert(CheckSize<SharedData, use_lowptr ? 144 : 176>(), "");
 
   /*
    * If this Func represents a native function or is exceptionally large
@@ -1324,6 +1337,7 @@ private:
     int m_sn;       // Only read if SharedData::m_sn is kSmallDeltaLimit
     int64_t m_dynCallSampleRate;
   };
+  static_assert(CheckSize<ExtendedSharedData, use_lowptr ? 272 : 304>(), "");
 
   /*
    * SharedData accessors for internal use.
@@ -1337,6 +1351,46 @@ private:
   const ExtendedSharedData* extShared() const;
         ExtendedSharedData* extShared();
 
+  /*
+  * We store 'detailed' line number information on a table on the side, because
+  * in production modes for HHVM it's generally not useful (which keeps Func
+  * smaller in that case)---this stuff is only used for the debugger, where we
+  * can afford the lookup here.  The normal Func m_lineMap is capable of
+  * producing enough line number information for things needed in production
+  * modes (backtraces, warnings, etc).
+  */
+
+  struct ExtendedLineInfo {
+    SourceLocTable sourceLocTable;
+
+    /*
+    * Map from source lines to a collection of all the bytecode ranges the line
+    * encompasses.
+    *
+    * The value type of the map is a list of offset ranges, so a single line
+    * with several sub-statements may correspond to the bytecodes of all of the
+    * sub-statements.
+    *
+    * May not be initialized.  Lookups need to check if it's empty() and if so
+    * compute it from sourceLocTable.
+    */
+    LineToOffsetRangeVecMap lineToOffsetRange;
+  };
+
+  using ExtendedLineInfoCache = tbb::concurrent_hash_map<
+    const SharedData*,
+    ExtendedLineInfo,
+    pointer_hash<SharedData>
+  >;
+  using LineTableStash = tbb::concurrent_hash_map<
+    const SharedData*,
+    LineTable,
+    pointer_hash<SharedData>
+  >;
+
+  static ExtendedLineInfoCache s_extendedLineInfo;
+
+  static LineTableStash s_lineTables;
 
   /////////////////////////////////////////////////////////////////////////////
   // Internal methods.
@@ -1534,6 +1588,20 @@ public:
    */
   bool getOffsetRange(Offset offset, OffsetRange& range) const;
 
+  void stashLineTable(LineTable table) const;
+
+  void stashExtendedLineTable(SourceLocTable table) const;
+
+  const SourceLocTable& getLocTable() const;
+
+  LineToOffsetRangeVecMap getLineToOffsetRangeVecMap() const;
+
+  const LineTable* getLineTable() const;
+
+private:
+  const LineTable& loadLineTable() const;
+  void cleanupLocationCache() const;
+
   /////////////////////////////////////////////////////////////////////////////
   // Constants.
 
@@ -1611,6 +1679,9 @@ private:
   // should not be inherited from.
   AtomicLowPtr<uint8_t> m_prologueTable[1];
 };
+static constexpr size_t kFuncSize = debug ? (use_lowptr ? 88 : 112)
+                                          : (use_lowptr ? 80 : 104);
+static_assert(CheckSize<Func, kFuncSize>(), "");
 
 ///////////////////////////////////////////////////////////////////////////////
 

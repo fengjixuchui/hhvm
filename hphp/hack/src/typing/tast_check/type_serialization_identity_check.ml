@@ -34,6 +34,7 @@ let rec strip_ty ty =
     | Tvarray ty -> Tvarray (strip_ty ty)
     | Tvarray_or_darray (ty1, ty2) ->
       Tvarray_or_darray (strip_ty ty1, strip_ty ty2)
+    | Tvec_or_dict (ty1, ty2) -> Tvec_or_dict (strip_ty ty1, strip_ty ty2)
     | Ttuple tyl -> Ttuple (strip_tyl tyl)
     | Toption ty -> Toption (strip_ty ty)
     | Tnewtype (name, tparams, ty) ->
@@ -55,7 +56,8 @@ let rec strip_ty ty =
               ~has_default:false
               ~ifc_external:false
               ~ifc_can_call:false
-              ~is_atom:false;
+              ~is_atom:false
+              ~readonly:false;
           (* Dummy values: these aren't currently serialized. *)
           fp_pos = Pos.none;
           fp_name = None;

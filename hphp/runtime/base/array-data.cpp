@@ -449,7 +449,6 @@ const ArrayFunctions g_array_funcs = {
    *   SetIntMove is equivalent to SetInt, followed by a dec-ref of the value,
    *   followed by a dec-ref of the old array (if it was copied or escalated).
    */
-  DISPATCH(SetInt)
   DISPATCH(SetIntMove)
 
   /*
@@ -459,7 +458,6 @@ const ArrayFunctions g_array_funcs = {
    *   SetStrMove is equivalent to SetStr, followed by a dec-ref of the value,
    *   followed by a dec-ref of the old array (if it was copied or escalated).
    */
-  DISPATCH(SetStr)
   DISPATCH(SetStrMove)
 
   /*
@@ -639,7 +637,6 @@ const ArrayFunctions g_array_funcs = {
    *   AppendMove is equivalent to calling Append, dec-ref-ing the value,
    *   and (if copy or escalation was needed), dec-ref-ing the old array.
    */
-  DISPATCH(Append)
   DISPATCH(AppendMove)
 
   /*
@@ -773,11 +770,8 @@ int64_t ArrayData::CompareHelper(const ArrayData* ad1, const ArrayData* ad2) {
     if (ad2->isVArray()) throw_varray_compare_exception();
     if (ad2->isDArray()) throw_darray_compare_exception();
     always_assert(false);
-  } else if (!ad1->isVArray()) {
-    if (ad1->isDArray()) throw_darray_compare_exception();
-    if (checkHACCompare()) {
-      raise_hackarr_compat_notice("Comparing two plain arrays relationally");
-    }
+  } else if (ad1->isDArray()) {
+    throw_darray_compare_exception();
   }
 
   auto const size1 = ad1->size();
@@ -1032,19 +1026,6 @@ void throwOOBArrayKeyException(const StringData* key, const ArrayData* ad) {
 
 void throwInvalidKeysetOperation() {
   SystemLib::throwInvalidOperationExceptionObject(s_InvalidKeysetOperationMsg);
-}
-
-void throwInvalidAdditionException(const ArrayData* ad) {
-  const char* type = [&]{
-    if (ad->isPHPArrayType()) return "Arrays";
-    if (ad->isVecType()) return "Vecs";
-    if (ad->isDictType()) return "Dicts";
-    if (ad->isKeysetType()) return "Keysets";
-    not_reached();
-  }();
-  SystemLib::throwInvalidOperationExceptionObject(
-    folly::sformat("{} do not support the + operator", type)
-  );
 }
 
 void throwVarrayUnsetException() {

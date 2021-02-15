@@ -442,16 +442,12 @@ pub mod special_functions {
 
     pub const ECHO: &str = "echo"; /* pseudo-function */
 
-    pub const ASSERT_: &str = "assert";
-
     pub const HHAS_ADATA: &str = "__hhas_adata";
 
     pub fn is_special_function(x: &str) -> bool {
         lazy_static! {
             static ref ALL_SPECIAL_FUNCTIONS: Vec<&'static str> =
-                vec![TUPLE, ECHO, ASSERT_, HHAS_ADATA,]
-                    .into_iter()
-                    .collect();
+                vec![TUPLE, ECHO, HHAS_ADATA,].into_iter().collect();
         }
         ALL_SPECIAL_FUNCTIONS.contains(&x)
     }
@@ -508,8 +504,6 @@ pub mod pseudo_functions {
 
     pub const HH_LOOP_FOREVER: &str = "\\hh_loop_forever";
 
-    pub const ASSERT: &str = "\\assert";
-
     pub const ECHO: &str = "\\echo";
 
     pub const ECHO_NO_NS: &str = "echo";
@@ -528,7 +522,6 @@ pub mod pseudo_functions {
         HH_LOG_LEVEL,
         HH_FORCE_SOLVE,
         HH_LOOP_FOREVER,
-        ASSERT,
         ECHO,
         EMPTY,
         EXIT,
@@ -846,15 +839,17 @@ pub mod coeffects {
 
     pub const WRITE_PROPS: &str = "write_props";
 
-    pub const CIPP_LOCAL: &str = "cipp_local";
+    pub const POLICIED_LOCAL: &str = "policied_local";
 
-    pub const CIPP_SHALLOW: &str = "cipp_shallow";
+    pub const POLICIED_SHALLOW: &str = "policied_shallow";
 
-    pub const CIPP: &str = "cipp";
+    pub const POLICIED: &str = "policied";
 
-    pub const CIPP_OF: &str = "cipp_of";
+    pub const POLICIED_OF_LOCAL: &str = "policied_of_local";
 
-    pub const CIPP_GLOBAL: &str = "cipp_global";
+    pub const POLICIED_OF_SHALLOW: &str = "policied_of_shallow";
+
+    pub const POLICIED_OF: &str = "policied_of";
 
     pub const PURE: &str = "pure";
 }

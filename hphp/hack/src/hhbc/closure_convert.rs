@@ -21,7 +21,7 @@ use hhbc_string_utils_rust as string_utils;
 use instruction_sequence_rust::{unrecoverable, Error, Result};
 use naming_special_names_rust::{fb, pseudo_consts, special_idents, superglobals};
 use ocamlrep::rc::RcOc;
-use options::{CompilerFlags, HhvmFlags, Options};
+use options::{CompilerFlags, HhvmFlags, LangFlags, Options};
 use oxidized::{
     aast_defs,
     aast_visitor::{visit_mut, AstParams, NodeMut, VisitorMut},
@@ -452,17 +452,19 @@ fn make_closure(
         final_: false,
         abstract_: false,
         static_: is_static,
+        readonly_this: false, // readonly on closure_convert
         visibility: Visibility::Public,
         name: Id(fd.name.0.clone(), "__invoke".into()),
         tparams: fun_tparams,
         where_constraints: fd.where_constraints.clone(),
         variadic: fd.variadic.clone(),
         params: fd.params.clone(),
-        ctxs: None,        // TODO(T70095684)
+        ctxs: fd.ctxs.clone(),
         unsafe_ctxs: None, // TODO(T70095684)
         body: fd.body.clone(),
         fun_kind: fd.fun_kind,
         user_attributes: fd.user_attributes.clone(),
+        readonly_ret: None, // readonly_ret on closure_convert
         ret: fd.ret.clone(),
         external: false,
         doc_comment: fd.doc_comment.clone(),
@@ -472,6 +474,7 @@ fn make_closure(
         final_: false,
         xhp_attr: None,
         abstract_: false,
+        readonly: false, // readonly on closure_convert
         visibility: Visibility::Private,
         type_: TypeHint((), None),
         id: Id(p.clone(), name.into()),
@@ -798,6 +801,7 @@ fn make_fn_param(pos: Pos, lid: &LocalId, is_variadic: bool, is_inout: bool) -> 
         } else {
             None
         },
+        readonly: None, // TODO
         user_attributes: vec![],
         visibility: None,
     }
@@ -894,6 +898,7 @@ fn convert_meth_caller_to_func_ptr<'a>(
         span: pos(),
         annotation: dummy_saved_env,
         mode: get_scope_fmode(&env.scope),
+        readonly_ret: None,
         ret: TypeHint((), None),
         name: Id(pos(), mangle_name.clone()),
         tparams: vec![],
@@ -933,6 +938,7 @@ fn make_dyn_meth_caller_lambda(
     pos: &Pos,
     cexpr: &Expr,
     fexpr: &Expr,
+    force: bool,
 ) -> Expr_ {
     fn get_scope_fmode(scope: &Scope) -> Mode {
         scope
@@ -971,11 +977,20 @@ fn make_dyn_meth_caller_lambda(
             Some(Expr(pos(), Expr_::Lvar(args_var))),
         ),
     );
+    let attrs = if force {
+        vec![UserAttribute {
+            name: Id(pos(), "__DynamicMethCallerForce".into()),
+            params: vec![],
+        }]
+    } else {
+        vec![]
+    };
 
     let fd = Fun_ {
         span: pos(),
         annotation: dummy_saved_env,
         mode: get_scope_fmode(&env.scope),
+        readonly_ret: None, // TODO: readonly_ret in closure convert
         ret: TypeHint((), None),
         name: Id(pos(), ";anonymous".to_string()),
         tparams: vec![],
@@ -993,7 +1008,7 @@ fn make_dyn_meth_caller_lambda(
             annotation: (),
         },
         fun_kind: FunKind::FSync,
-        user_attributes: vec![],
+        user_attributes: attrs,
         file_attributes: vec![],
         external: false,
         namespace: RcOc::clone(&st.state.empty_namespace),
@@ -1001,6 +1016,7 @@ fn make_dyn_meth_caller_lambda(
         static_: false,
     };
     let expr_id = |name: String| Expr(pos(), Expr_::mk_id(Id(pos(), name)));
+    let force_val = if force { Expr_::True } else { Expr_::False };
     let fun_handle: Expr_ = Expr_::mk_call(
         expr_id("\\__systemlib\\dynamic_meth_caller".into()),
         vec![],
@@ -1008,6 +1024,7 @@ fn make_dyn_meth_caller_lambda(
             cexpr.clone(),
             fexpr.clone(),
             Expr(pos(), Expr_::mk_efun(fd, vec![])),
+            Expr(pos(), force_val),
         ],
         None,
     );
@@ -1047,6 +1064,7 @@ fn add_reified_property(tparams: &Vec<Tparam>, vars: &mut Vec<ClassVar>) {
                 is_promoted_variadic: false,
                 doc_comment: None,
                 abstract_: false,
+                readonly: false,
                 visibility: Visibility::Private,
                 type_: TypeHint((), Some(hint)),
                 id: Id(p.clone(), string_utils::reified::PROP_NAME.into()),
@@ -1231,13 +1249,20 @@ impl<'ast, 'a> VisitorMut<'ast> for ClosureConvertVisitor<'a> {
                 if {
                     if let Expr_::Id(ref id) = (x.0).1 {
                         strip_id(id).eq_ignore_ascii_case("hh\\dynamic_meth_caller")
+                            || strip_id(id).eq_ignore_ascii_case("hh\\dynamic_meth_caller_force")
                     } else {
                         false
                     }
                 } =>
             {
+                let force = if let Expr_::Id(ref id) = (x.0).1 {
+                    strip_id(id).eq_ignore_ascii_case("hh\\dynamic_meth_caller_force")
+                } else {
+                    false
+                };
                 if let [cexpr, fexpr] = &mut *x.2 {
-                    let mut res = make_dyn_meth_caller_lambda(env, self, &*pos, &cexpr, &fexpr);
+                    let mut res =
+                        make_dyn_meth_caller_lambda(env, self, &*pos, &cexpr, &fexpr, force);
                     res.recurse(env, self.object())?;
                     res
                 } else {
@@ -1263,6 +1288,12 @@ impl<'ast, 'a> VisitorMut<'ast> for ClosureConvertVisitor<'a> {
                     }
                 } =>
             {
+                let strict = env
+                    .options
+                    .hhvm
+                    .hack_lang
+                    .flags
+                    .contains(LangFlags::DISALLOW_DYNAMIC_METH_CALLER_ARGS);
                 if let [Expr(pc, cls), Expr(pf, func)] = &mut *x.2 {
                     match (&cls, func.as_string()) {
                         (Expr_::ClassConst(cc), Some(fname))
@@ -1315,6 +1346,26 @@ impl<'ast, 'a> VisitorMut<'ast> for ClosureConvertVisitor<'a> {
                                 "Class must be a Class or string type",
                             ));
                         }
+                        (Expr_::ClassConst(cc), None)
+                            if string_utils::is_class(&(cc.1).1) && strict =>
+                        {
+                            return Err(emit_fatal::raise_fatal_parse(
+                                pf,
+                                "Method name must be a literal string",
+                            ));
+                        }
+                        (Expr_::ClassConst(_), _) if strict => {
+                            return Err(emit_fatal::raise_fatal_parse(
+                                pc,
+                                "Class must be a Class or string type",
+                            ));
+                        }
+                        (Expr_::String(_), None) if strict => {
+                            return Err(emit_fatal::raise_fatal_parse(
+                                pf,
+                                "Method name must be a literal string",
+                            ));
+                        }
                         (Expr_::String(cls_name), Some(fname)) => convert_meth_caller_to_func_ptr(
                             env,
                             self,
@@ -1329,8 +1380,82 @@ impl<'ast, 'a> VisitorMut<'ast> for ClosureConvertVisitor<'a> {
                             unsafe { std::str::from_utf8_unchecked(fname.as_slice().into()) },
                         ),
 
+                        (_, _) if strict => {
+                            return Err(emit_fatal::raise_fatal_parse(
+                                pf,
+                                "Method name must be a literal string",
+                            ));
+                        }
                         // For other cases, fallback to create __SystemLib\MethCallerHelper
                         _ => Expr_::Call(x),
+                    }
+                } else {
+                    let mut res = Expr_::Call(x);
+                    res.recurse(env, self.object())?;
+                    res
+                }
+            }
+            Expr_::Call(mut x)
+                if {
+                    if let Expr_::Id(ref id) = (x.0).1 {
+                        let name = strip_id(id);
+                        ["hh\\meth_caller", "meth_caller"]
+                            .iter()
+                            .any(|n| n.eq_ignore_ascii_case(name))
+                            && env
+                                .options
+                                .hhvm
+                                .hack_lang
+                                .flags
+                                .contains(LangFlags::DISALLOW_DYNAMIC_METH_CALLER_ARGS)
+                    } else {
+                        false
+                    }
+                } =>
+            {
+                if let [Expr(pc, cls), Expr(pf, func)] = &mut *x.2 {
+                    match (&cls, func.as_string()) {
+                        (Expr_::ClassConst(cc), Some(_)) if string_utils::is_class(&(cc.1).1) => {
+                            let mut cls_const = cls.as_class_const_mut();
+                            let cid = match cls_const {
+                                None => unreachable!(),
+                                Some((ref mut cid, (_, _))) => cid,
+                            };
+                            if cid.as_ciexpr().and_then(|x| x.as_id()).map_or(false, |id| {
+                                !(string_utils::is_self(id)
+                                    || string_utils::is_parent(id)
+                                    || string_utils::is_static(id))
+                            }) {
+                                let mut res = Expr_::Call(x);
+                                res.recurse(env, self.object())?;
+                                res
+                            } else {
+                                return Err(emit_fatal::raise_fatal_parse(pc, "Invalid class"));
+                            }
+                        }
+                        (Expr_::String(_), Some(_)) => {
+                            let mut res = Expr_::Call(x);
+                            res.recurse(env, self.object())?;
+                            res
+                        }
+                        (Expr_::ClassConst(cc), None) if string_utils::is_class(&(cc.1).1) => {
+                            return Err(emit_fatal::raise_fatal_parse(
+                                pf,
+                                "Method name must be a literal string",
+                            ));
+                        }
+                        (Expr_::String(_), None) => {
+                            return Err(emit_fatal::raise_fatal_parse(
+                                pf,
+                                "Method name must be a literal string",
+                            ));
+                        }
+                        (_, _) => {
+                            return Err(emit_fatal::raise_fatal_parse(
+                                pc,
+                                "Class must be a Class or string type",
+                            ));
+                        }
                     }
                 } else {
                     let mut res = Expr_::Call(x);
@@ -1403,6 +1528,10 @@ impl<'ast, 'a> VisitorMut<'ast> for ClosureConvertVisitor<'a> {
                 env.check_if_in_async_context()?;
                 x.recurse(env, self.object())?;
                 Expr_::Await(x)
+            }
+            Expr_::ReadonlyExpr(mut x) => {
+                x.recurse(env, self.object())?;
+                Expr_::ReadonlyExpr(x)
             }
             Expr_::ExpressionTree(mut x) => {
                 x.desugared_expr.recurse(env, self.object())?;
@@ -1537,6 +1666,7 @@ fn extract_debugger_main(
         span: pos,
         annotation: (),
         mode: Mode::Mstrict,
+        readonly_ret: None, // TODO: readonly_ret in closure_convert
         ret: TypeHint((), None),
         name: Id(Pos::make_none(), "include".into()),
         tparams: vec![],

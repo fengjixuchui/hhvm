@@ -500,6 +500,8 @@ pub fn emit_expr(emitter: &mut Emitter, env: &Env, expression: &tast::Expr) -> R
         Expr_::Clone(e) => Ok(emit_pos_then(pos, emit_clone(emitter, env, e)?)),
         Expr_::Shape(e) => Ok(emit_pos_then(pos, emit_shape(emitter, env, expression, e)?)),
         Expr_::Await(e) => emit_await(emitter, env, pos, e),
+        // TODO: emit readonly expressions
+        Expr_::ReadonlyExpr(e) => emit_expr(emitter, env, e),
         Expr_::Yield(e) => emit_yield(emitter, env, pos, e),
         Expr_::Efun(e) => Ok(emit_pos_then(pos, emit_lambda(emitter, env, &e.0, &e.1)?)),
 
@@ -875,7 +877,7 @@ fn inline_gena_call(emitter: &mut Emitter, env: &Env, arg: &tast::Expr) -> Resul
                         instr::cgetl(val_local),
                         instr::whresult(),
                         instr::basel(arr_local.clone(), MemberOpMode::Define),
-                        instr::setm(0, MemberKey::EL(key_local)),
+                        instr::setm(0, MemberKey::EL(key_local, ReadOnlyOp::Any)),
                         instr::popc(),
                     ])
                 },
@@ -1662,15 +1664,11 @@ fn emit_call(
         Some(ast_defs::Id(_, id)) => {
             let fq = function::Type::from_ast_name(id);
             let lower_fq_name = fq.to_raw_string();
-            if lower_fq_name == "assert" {
-                emit_special_function_assert(e, env, pos, expr, targs, args, uarg, fcall_args)
-            } else {
-                emit_special_function(e, env, pos, args, uarg, lower_fq_name)
-                    .transpose()
-                    .unwrap_or_else(|| {
-                        emit_call_default(e, env, pos, expr, targs, args, uarg, fcall_args)
-                    })
-            }
+            emit_special_function(e, env, pos, args, uarg, lower_fq_name)
+                .transpose()
+                .unwrap_or_else(|| {
+                    emit_call_default(e, env, pos, expr, targs, args, uarg, fcall_args)
+                })
         }
     }
 }
@@ -1711,37 +1709,6 @@ fn emit_call_default(
     })
 }
 
-fn emit_special_function_assert(
-    e: &mut Emitter,
-    env: &Env,
-    pos: &Pos,
-    expr: &tast::Expr,
-    targs: &[tast::Targ],
-    args: &[tast::Expr],
-    uarg: Option<&tast::Expr>,
-    fcall_args: FcallArgs,
-) -> Result {
-    let l0 = e.label_gen_mut().next_regular();
-    let l1 = e.label_gen_mut().next_regular();
-    Ok(InstrSeq::gather(vec![
-        instr::nulluninit(),
-        instr::nulluninit(),
-        instr::string("zend.assertions"),
-        instr::fcallfuncd(
-            FcallArgs::new(FcallFlags::default(), 1, vec![], None, 1, None),
-            function::from_raw_string("ini_get"),
-        ),
-        instr::int(0),
-        instr::gt(),
-        instr::jmpz(l0.clone()),
-        emit_call_default(e, env, pos, expr, targs, args, uarg, fcall_args)?,
-        instr::jmp(l1.clone()),
-        instr::label(l0),
-        instr::true_(),
-        instr::label(l1),
-    ]))
-}
-
 pub fn emit_reified_targs(e: &mut Emitter, env: &Env, pos: &Pos, targs: &[&tast::Hint]) -> Result {
     let current_fun_tparams = env.scope.get_fun_tparams();
     let current_cls_tparams = env.scope.get_class_tparams();
@@ -1770,7 +1737,10 @@ pub fn emit_reified_targs(e: &mut Emitter, env: &Env, pos: &Pos, targs: &[&tast:
             instr::querym(
                 0,
                 QueryOp::CGet,
-                MemberKey::PT(prop::from_raw_string(string_utils::reified::PROP_NAME)),
+                MemberKey::PT(
+                    prop::from_raw_string(string_utils::reified::PROP_NAME),
+                    ReadOnlyOp::Any,
+                ),
             ),
         ])
     } else {
@@ -2215,7 +2185,11 @@ fn get_reified_var_cexpr(env: &Env, pos: &Pos, name: &str) -> Result<Option<Clas
         ClassExpr::Reified(InstrSeq::gather(vec![
             instrs,
             instr::basec(0, MemberOpMode::Warn),
-            instr::querym(1, QueryOp::CGet, MemberKey::ET("classname".into())),
+            instr::querym(
+                1,
+                QueryOp::CGet,
+                MemberKey::ET("classname".into(), ReadOnlyOp::Any),
+            ),
         ]))
     }))
 }
@@ -2436,10 +2410,6 @@ fn emit_special_function(
                 instr::null(),
             ])))
         }
-        ("assert", _) => Err(unrecoverable(concat!(
-            "emit_special_function assert case:",
-            "should've been handled by emit_special_function_assert"
-        ))),
         ("HH\\sequence", &[]) => Ok(Some(instr::null())),
         ("HH\\sequence", args) => Ok(Some(InstrSeq::gather(
             args.iter()
@@ -3135,14 +3105,21 @@ pub fn emit_reified_generic_instrs(pos: &Pos, is_fun: bool, index: usize) -> Res
         InstrSeq::gather(vec![
             instr::checkthis(),
             instr::baseh(),
-            instr::dim_warn_pt(prop::from_raw_string(string_utils::reified::PROP_NAME)),
+            instr::dim_warn_pt(
+                prop::from_raw_string(string_utils::reified::PROP_NAME),
+                ReadOnlyOp::Any,
+            ),
         ])
     };
     Ok(emit_pos_then(
         pos,
         InstrSeq::gather(vec![
             base,
-            instr::querym(0, QueryOp::CGet, MemberKey::EI(index.try_into().unwrap())),
+            instr::querym(
+                0,
+                QueryOp::CGet,
+                MemberKey::EI(index.try_into().unwrap(), ReadOnlyOp::Any),
+            ),
         ]),
     ))
 }
@@ -3444,7 +3421,7 @@ fn emit_prop_expr(
         tast::Expr_::Id(id) => {
             let ast_defs::Id(pos, name) = &**id;
             if name.starts_with("$") {
-                MemberKey::PL(get_local(e, env, pos, name)?)
+                MemberKey::PL(get_local(e, env, pos, name)?, ReadOnlyOp::Any)
             } else {
                 // Special case for known property name
 
@@ -3452,8 +3429,8 @@ fn emit_prop_expr(
                 // `from_ast_name` should be able to accpet Cow<str>
                 let pid: prop::Type = string_utils::strip_global_ns(&name).to_string().into();
                 match nullflavor {
-                    ast_defs::OgNullFlavor::OGNullthrows => MemberKey::PT(pid),
-                    ast_defs::OgNullFlavor::OGNullsafe => MemberKey::QT(pid),
+                    ast_defs::OgNullFlavor::OGNullthrows => MemberKey::PT(pid, ReadOnlyOp::Any),
+                    ast_defs::OgNullFlavor::OGNullsafe => MemberKey::QT(pid, ReadOnlyOp::Any),
                 }
             }
         }
@@ -3469,21 +3446,22 @@ fn emit_prop_expr(
             .to_string()
             .into();
             match nullflavor {
-                ast_defs::OgNullFlavor::OGNullthrows => MemberKey::PT(pid),
-                ast_defs::OgNullFlavor::OGNullsafe => MemberKey::QT(pid),
+                ast_defs::OgNullFlavor::OGNullthrows => MemberKey::PT(pid, ReadOnlyOp::Any),
+                ast_defs::OgNullFlavor::OGNullsafe => MemberKey::QT(pid, ReadOnlyOp::Any),
             }
         }
-        tast::Expr_::Lvar(lid) if !(is_local_this(env, &lid.1)) => {
-            MemberKey::PL(get_local(e, env, &lid.0, local_id::get_name(&lid.1))?)
-        }
+        tast::Expr_::Lvar(lid) if !(is_local_this(env, &lid.1)) => MemberKey::PL(
+            get_local(e, env, &lid.0, local_id::get_name(&lid.1))?,
+            ReadOnlyOp::Any,
+        ),
         _ => {
             // General case
-            MemberKey::PC(stack_index)
+            MemberKey::PC(stack_index, ReadOnlyOp::Any)
         }
     };
     // For nullsafe access, insist that property is known
     Ok(match mk {
-        MemberKey::PL(_) | MemberKey::PC(_)
+        MemberKey::PL(_, _) | MemberKey::PC(_, _)
             if nullflavor.eq(&ast_defs::OgNullFlavor::OGNullsafe) =>
         {
             return Err(emit_fatal::raise_fatal_parse(
@@ -3491,10 +3469,12 @@ fn emit_prop_expr(
                 "?-> can only be used with scalar property names",
             ));
         }
-        MemberKey::PC(_) => (mk, emit_expr(e, env, prop)?, 1),
-        MemberKey::PL(local) if null_coalesce_assignment => {
-            (MemberKey::PC(stack_index), instr::cgetl(local), 1)
-        }
+        MemberKey::PC(_, _) => (mk, emit_expr(e, env, prop)?, 1),
+        MemberKey::PL(local, ReadOnlyOp::Any) if null_coalesce_assignment => (
+            MemberKey::PC(stack_index, ReadOnlyOp::Any),
+            instr::cgetl(local),
+            1,
+        ),
         _ => (mk, instr::empty(), 0),
     })
 }
@@ -3727,7 +3707,7 @@ fn emit_array_get_(
                     ));
                     let store = InstrSeq::gather(vec![
                         store,
-                        instr::setm(0, MemberKey::EL(local)),
+                        instr::setm(0, MemberKey::EL(local, ReadOnlyOp::Any)),
                         instr::popc(),
                     ]);
                     ArrayGetInstr::Inout {
@@ -3807,9 +3787,12 @@ fn get_elem_member_key(
             E_::Lvar(x) if !is_local_this(env, &x.1) => Ok((
                 {
                     if null_coalesce_assignment {
-                        MemberKey::EC(stack_index)
+                        MemberKey::EC(stack_index, ReadOnlyOp::Any)
                     } else {
-                        MemberKey::EL(get_local(e, env, &x.0, local_id::get_name(&x.1))?)
+                        MemberKey::EL(
+                            get_local(e, env, &x.0, local_id::get_name(&x.1))?,
+                            ReadOnlyOp::Any,
+                        )
                     }
                 },
                 instr::empty(),
@@ -3817,7 +3800,9 @@ fn get_elem_member_key(
             // Special case for literal integer
             E_::Int(s) => {
                 match ast_constant_folder::expr_to_typed_value(e, &env.namespace, elem_expr) {
-                    Ok(TypedValue::Int(i)) => Ok((MemberKey::EI(i), instr::empty())),
+                    Ok(TypedValue::Int(i)) => {
+                        Ok((MemberKey::EI(i, ReadOnlyOp::Any), instr::empty()))
+                    }
                     _ => Err(Unrecoverable(format!("{} is not a valid integer index", s))),
                 }
             }
@@ -3826,7 +3811,10 @@ fn get_elem_member_key(
                 Ok((
                     // FIXME: This is not safe--string literals are binary strings.
                     // There's no guarantee that they're valid UTF-8.
-                    MemberKey::ET(unsafe { String::from_utf8_unchecked(s.clone().into()) }),
+                    MemberKey::ET(
+                        unsafe { String::from_utf8_unchecked(s.clone().into()) },
+                        ReadOnlyOp::Any,
+                    ),
                     instr::empty(),
                 ))
             }
@@ -3847,16 +3835,16 @@ fn get_elem_member_key(
                 let fq_id = class::Type::from_ast_name(&cname).to_raw_string().into();
                 if e.options().emit_class_pointers() > 0 {
                     Ok((
-                        MemberKey::ET(fq_id),
+                        MemberKey::ET(fq_id, ReadOnlyOp::Any),
                         instr::raise_class_string_conversion_warning(),
                     ))
                 } else {
-                    Ok((MemberKey::ET(fq_id), instr::empty()))
+                    Ok((MemberKey::ET(fq_id, ReadOnlyOp::Any), instr::empty()))
                 }
             }
             _ => {
                 // General case
-                Ok((MemberKey::EC(stack_index), instr::empty()))
+                Ok((MemberKey::EC(stack_index, ReadOnlyOp::Any), instr::empty()))
             }
         },
     }
@@ -3882,7 +3870,7 @@ fn emit_store_for_simple_base(
         elem_stack_size,
         0,
     )?;
-    let memberkey = MemberKey::EL(local);
+    let memberkey = MemberKey::EL(local, ReadOnlyOp::Any);
     Ok(InstrSeq::gather(vec![
         base_expr_instrs_begin,
         base_expr_instrs_end,
@@ -3915,7 +3903,7 @@ fn emit_class_get(
     Ok(InstrSeq::gather(vec![
         InstrSeq::from(emit_class_expr(e, env, cexpr, prop)?),
         match query_op {
-            QueryOp::CGet => instr::cgets(),
+            QueryOp::CGet => instr::cgets(ReadOnlyOp::Any),
             QueryOp::Isset => instr::issets(),
             QueryOp::CGetQuiet => return Err(Unrecoverable("emit_class_get: CGetQuiet".into())),
             QueryOp::InOut => return Err(Unrecoverable("emit_class_get: InOut".into())),
@@ -4607,8 +4595,9 @@ pub fn emit_set_range_expr(
             (base_stack + cls_stack)
                 .try_into()
                 .expect("StackIndex overflow"),
-            kind.op,
             kind.size.try_into().expect("Setrange size overflow"),
+            kind.op,
+            ReadOnlyOp::Any,
         ))),
     ]))
 }
@@ -5001,7 +4990,10 @@ fn emit_base_(
                             },
                             store: InstrSeq::gather(vec![
                                 store,
-                                instr::dim(MemberOpMode::Define, MemberKey::EL(local)),
+                                instr::dim(
+                                    MemberOpMode::Define,
+                                    MemberKey::EL(local, ReadOnlyOp::Any),
+                                ),
                             ]),
                         }
                     }
@@ -5086,7 +5078,7 @@ fn emit_base_(
                     e,
                     cexpr_begin,
                     cexpr_end,
-                    instr::basesc(base_offset + 1, rhs_stack_size, base_mode),
+                    instr::basesc(base_offset + 1, rhs_stack_size, base_mode, ReadOnlyOp::Any),
                     1,
                     1,
                 ))
@@ -5208,6 +5200,7 @@ fn can_use_as_rhs_in_list_assignment(expr: &tast::Expr_) -> Result<bool> {
         | E_::Unop(_)
         | E_::As(_)
         | E_::Await(_)
+        | E_::ReadonlyExpr(_)
         | E_::ClassConst(_) => true,
         E_::Pipe(p) => can_use_as_rhs_in_list_assignment(&(p.2).1)?,
         E_::Binop(b) => {
@@ -5246,7 +5239,7 @@ fn emit_array_get_fixed(last_usage: bool, local: local::Type, indices: &[isize])
             .enumerate()
             .rev()
             .map(|(i, ix)| {
-                let mk = MemberKey::EI(*ix as i64);
+                let mk = MemberKey::EI(*ix as i64, ReadOnlyOp::Any);
                 if i == 0 {
                     instr::querym(stack_count, QueryOp::CGet, mk)
                 } else {
@@ -5424,9 +5417,9 @@ fn emit_final_member_op(stack_size: usize, op: LValOp, mk: MemberKey) -> InstrSe
 fn emit_final_static_op(cid: &tast::ClassId, prop: &tast::ClassGetExpr, op: LValOp) -> Result {
     use LValOp as L;
     Ok(match op {
-        L::Set => instr::sets(),
-        L::SetOp(op) => instr::setops(op),
-        L::IncDec(op) => instr::incdecs(op),
+        L::Set => instr::sets(ReadOnlyOp::Any),
+        L::SetOp(op) => instr::setops(op, ReadOnlyOp::Any),
+        L::IncDec(op) => instr::incdecs(op, ReadOnlyOp::Any),
         L::Unset => {
             let pos = match prop {
                 tast::ClassGetExpr::CGstring((pos, _))

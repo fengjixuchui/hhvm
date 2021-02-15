@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<8c1b0f64b30d4939e327a8c2d1077ce5>>
+// @generated SignedSource<<0a41f9b61f371f60f8b5ddc3a147d9cb>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidize_regen.sh
+//   hphp/hack/src/oxidized_regen.sh
 
 use arena_trait::TrivialDrop;
 use no_pos_hash::NoPosHash;
@@ -571,6 +571,15 @@ pub enum Typing {
     EnumClassesReservedSyntax = 4405,
     NonsenseMemberSelection = 4406,
     ConsiderMethCaller = 4407,
+    EnumSupertypingReservedSyntax = 4408,
+    ReadonlyValueModified = 4409,
+    ReadonlyVarMismatch = 4410,
+    ReadonlyMismatch = 4411,
+    ExplicitReadonlyCast = 4412,
+    ReadonlyMethodCall = 4413,
+    StrictStrConcatTypeMismatch = 4414,
+    StrictStrInterpTypeMismatch = 4415,
+    InvalidMethCallerCallingConvention = 4416,
 }
 impl TrivialDrop for Typing {}
 

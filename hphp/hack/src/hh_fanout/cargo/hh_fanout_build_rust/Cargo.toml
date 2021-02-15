@@ -3,7 +3,6 @@
 name = "hh_fanout_build_rust"
 edition = "2018"
 version = "0.0.0"
-include = ["../../build.rs"]
 
 [lib]
 path = "../../build.rs"
@@ -11,6 +10,7 @@ crate-type = ["lib", "staticlib"]
 
 [dependencies]
 depgraph = { path = "../../../depgraph" }
+deps_rust = { path = "../../../deps" }
 ocamlrep_ocamlpool = { path = "../../../ocamlrep_ocamlpool" }
 env_logger = "0.7"
 log = { version = "0.4.8", features = ["kv_unstable"] }

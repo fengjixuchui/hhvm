@@ -193,6 +193,7 @@ inline const char* prettytype(SetRangeOp) { return "SetRangeOp"; }
 inline const char* prettytype(TypeStructResolveOp) {
   return "TypeStructResolveOp";
 }
+inline const char* prettytype(ReadOnlyOp) { return "ReadOnlyOp"; }
 inline const char* prettytype(CudOp) { return "CudOp"; }
 inline const char* prettytype(ContCheckOp) { return "ContCheckOp"; }
 inline const char* prettytype(SpecialClsRef) { return "SpecialClsRef"; }
@@ -2571,7 +2572,7 @@ SpropState::~SpropState() {
   tvDecRefGen(oldNameCell);
 }
 
-OPTBLD_INLINE void iopCGetS() {
+OPTBLD_INLINE void iopCGetS(ReadOnlyOp /*op*/) {
   SpropState ss(vmStack(), false);
   if (!(ss.visible && ss.accessible)) {
     raise_error("Invalid static property access: %s::%s",
@@ -2613,7 +2614,10 @@ OPTBLD_INLINE void iopBaseGL(tv_lval loc, MOpMode mode) {
   baseGImpl(loc, mode);
 }
 
-OPTBLD_INLINE void iopBaseSC(uint32_t keyIdx, uint32_t clsIdx, MOpMode mode) {
+OPTBLD_INLINE void iopBaseSC(uint32_t keyIdx,
+                             uint32_t clsIdx,
+                             MOpMode mode,
+                             ReadOnlyOp /*op*/) {
   auto& mstate = vmMInstrState();
   auto const clsCell = vmStack().indC(clsIdx);
   auto const key = vmStack().indTV(keyIdx);
@@ -2835,7 +2839,7 @@ OPTBLD_INLINE void iopSetM(uint32_t nDiscard, MemberKey mk) {
 }
 
 OPTBLD_INLINE void iopSetRangeM(
-  uint32_t nDiscard, SetRangeOp op, uint32_t size
+  uint32_t nDiscard, uint32_t size, SetRangeOp op, ReadOnlyOp /*rop*/
 ) {
   auto& mstate = vmMInstrState();
   auto const count = tvCastToInt64(*vmStack().indC(0));
@@ -3432,7 +3436,7 @@ OPTBLD_INLINE void iopSetG() {
   vmStack().discard();
 }
 
-OPTBLD_INLINE void iopSetS() {
+OPTBLD_INLINE void iopSetS(ReadOnlyOp /*op*/) {
   TypedValue* tv1 = vmStack().topTV();
   TypedValue* clsCell = vmStack().indC(1);
   TypedValue* propn = vmStack().indTV(2);
@@ -3498,7 +3502,7 @@ OPTBLD_INLINE void iopSetOpG(SetOpOp op) {
   vmStack().discard();
 }
 
-OPTBLD_INLINE void iopSetOpS(SetOpOp op) {
+OPTBLD_INLINE void iopSetOpS(SetOpOp op, ReadOnlyOp /*op*/) {
   TypedValue* fr = vmStack().topC();
   TypedValue* clsCell = vmStack().indC(1);
   TypedValue* propn = vmStack().indTV(2);
@@ -3567,7 +3571,7 @@ OPTBLD_INLINE void iopIncDecG(IncDecOp op) {
   tvCopy(IncDecBody(op, gbl), *nameCell);
 }
 
-OPTBLD_INLINE void iopIncDecS(IncDecOp op) {
+OPTBLD_INLINE void iopIncDecS(IncDecOp op, ReadOnlyOp /*rop*/) {
   SpropState ss(vmStack(), false);
   if (!(ss.visible && ss.accessible)) {
     raise_error("Invalid static property access: %s::%s",
@@ -3953,6 +3957,9 @@ OPTBLD_INLINE void iopFCallFuncD(PC origpc, PC& pc, FCallArgs fca, Id id) {
 
 namespace {
 
+const StaticString
+  s_DynamicContextOverrideUnsafe("__SystemLib\\DynamicContextOverrideUnsafe");
+
 template<bool dynamic>
 void fcallObjMethodImpl(PC origpc, PC& pc, const FCallArgs& fca,
                         StringData* methName) {
@@ -3964,6 +3971,12 @@ void fcallObjMethodImpl(PC origpc, PC& pc, const FCallArgs& fca,
   auto cls = obj->getVMClass();
   auto const ctx = [&] {
     if (!fca.context) return arGetContextClass(vmfp());
+    if (fca.context->isame(s_DynamicContextOverrideUnsafe.get())) {
+      if (RO::RepoAuthoritative) {
+        raise_error("Cannot use dynamic_meth_caller_force() in repo-mode");
+      }
+      return cls;
+    }
     return Class::load(fca.context);
   }();
   // if lookup throws, obj will be decref'd via stack
@@ -4242,6 +4255,12 @@ void fcallClsMethodImpl(PC origpc, PC& pc, const FCallArgs& fca, Class* cls,
                         bool logAsDynamicCall = true) {
   auto const ctx = [&] {
     if (!fca.context) return liveClass();
+    if (fca.context->isame(s_DynamicContextOverrideUnsafe.get())) {
+      if (RO::RepoAuthoritative) {
+        raise_error("Cannot use dynamic_meth_caller_force() in repo-mode");
+      }
+      return cls;
+    }
     return Class::load(fca.context);
   }();
   auto obj = liveClass() && vmfp()->hasThis() ? vmfp()->getThis() : nullptr;
@@ -5269,7 +5288,9 @@ OPTBLD_INLINE void iopCheckProp(const StringData* propName) {
   vmStack().pushBool(type(val) != KindOfUninit);
 }
 
-OPTBLD_INLINE void iopInitProp(const StringData* propName, InitPropOp propOp) {
+OPTBLD_INLINE void iopInitProp(const StringData* propName,
+                               InitPropOp propOp,
+                               ReadOnlyOp /*op*/) {
   auto* cls = vmfp()->getClass();
 
   auto* ctx = arGetContextClass(vmfp());
@@ -5431,7 +5452,6 @@ void recordCodeCoverage(PC /*pc*/) {
 
   int line = func->getLineNumber(pcOff());
   assertx(line != -1);
-
   if (unit != s_prev_unit || line != s_prev_line) {
     s_prev_unit = unit;
     s_prev_line = line;

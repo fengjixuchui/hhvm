@@ -29,7 +29,6 @@
 #include <memory>
 #include <sys/stat.h>
 
-#include "hphp/runtime/base/coeffects-config.h"
 #include "hphp/runtime/base/config.h"
 #include "hphp/runtime/base/typed-value.h"
 #include "hphp/runtime/base/types.h"
@@ -107,6 +106,7 @@ struct RepoOptions {
   H(bool,           DisableArrayTypehint,             true)           \
   H(bool,           EnableEnumClasses,                false)          \
   H(bool,           DisallowFunAndClsMethPseudoFuncs, false)          \
+  H(bool,           DisallowDynamicMethCallerArgs,    false)          \
   /**/
 
   /**/
@@ -238,7 +238,6 @@ struct RuntimeOption {
   static bool AllowRunAsRoot; // Allow running hhvm as root.
 
   static int  MaxSerializedStringSize;
-  static bool AssertEmitted;
   static int64_t NoticeFrequency; // output 1 out of NoticeFrequency notices
   static int64_t WarningFrequency;
   static int RaiseDebuggingFrequency;
@@ -624,10 +623,6 @@ struct RuntimeOption {
   // valid values are 0 => enabled (default)
   // 1 => warning, 2 => error
   static uint64_t DisableConstant;
-  // Disables PHP's assert() function
-  // valid values are 0 => enabled (default)
-  // 1 => warning, 2 => error
-  static uint64_t DisableAssert;
   // Disables non-top-level declarations
   // true => error, false => default behaviour
   static bool DisableNontoplevelDeclarations;
@@ -727,6 +722,8 @@ struct RuntimeOption {
   /* Whether the HackC compiler should inherit the compiler config of the
      HHVM process that launches it. */                                  \
   F(bool, HackCompilerInheritConfig,   true)                            \
+  /* Use compiler pool to get hhas from hh_single_compile process */    \
+  F(bool, HackCompilerUseCompilerPool, true)                            \
   /* When using embedded data, extract it to the ExtractPath or the
    * ExtractFallback. */                                                \
   F(string, EmbeddedDataExtractPath,   "/var/run/hhvm_%{type}_%{buildid}") \
@@ -791,7 +788,7 @@ struct RuntimeOption {
   F(uint32_t, ThreadTCColdBufferSize,  6 << 20)                         \
   F(uint32_t, ThreadTCFrozenBufferSize,4 << 20)                         \
   F(uint32_t, ThreadTCDataBufferSize,  256 << 10)                       \
-  F(uint32_t, JitTargetCacheSize,      64 << 20)                        \
+  F(uint32_t, RDSSize,                 64 << 20)                        \
   F(uint32_t, HHBCArenaChunkSize,      10 << 20)                        \
   F(bool, ProfileBC,                   false)                           \
   F(bool, ProfileHeapAcrossRequests,   false)                           \
@@ -1233,7 +1230,6 @@ struct RuntimeOption {
   F(int32_t, ForbidDynamicCallsToFunc, 0)                               \
   F(int32_t, ForbidDynamicCallsToClsMeth, 0)                            \
   F(int32_t, ForbidDynamicCallsToInstMeth, 0)                           \
-  F(int32_t, ForbidDynamicCallsToMethCaller, 0)                         \
   F(int32_t, ForbidDynamicConstructs, 0)                                \
   /*                                                                    \
    * Keep logging dynamic calls according to options above even if      \
@@ -1340,6 +1336,13 @@ struct RuntimeOption {
      1 - raise a warning
      2 - throw */                                                       \
   F(uint64_t, DynamicClsMethLevel, 1)                                   \
+  /* When dynamic_meth_caller is called on a static method or
+     a method not marked as __DynamicallyCallable:
+
+     0 - do nothing
+     1 - raise a warning
+     2 - throw */                                                       \
+  F(uint64_t, DynamicMethCallerLevel, 1)                                \
   F(bool, APCSerializeFuncs, true)                                      \
   F(bool, APCSerializeClsMeth, true)                                    \
   /* When set:

@@ -187,7 +187,6 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
     | Syntax.GenericTypeSpecifier _
     | Syntax.NullableTypeSpecifier _
     | Syntax.LikeTypeSpecifier _
-    | Syntax.FunctionCtxTypeSpecifier _
     | Syntax.SoftTypeSpecifier _
     | Syntax.ListItem _ ->
       transform_simple env node
@@ -277,6 +276,7 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
               )
           | _ -> Concat [Space; t env elements]);
           t env semi;
+          Newline;
         ]
     | Syntax.RecordDeclaration
         {
@@ -513,6 +513,7 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           function_right_paren = rightp;
           function_contexts = ctxs;
           function_colon = colon;
+          function_readonly_return = readonly_return;
           function_type = ret_type;
           function_where_clause = where;
         } ->
@@ -523,6 +524,8 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           t env ctxs;
           t env colon;
           when_present colon space;
+          t env readonly_return;
+          when_present readonly_return space;
           t env ret_type;
           when_present where space;
           t env where;
@@ -534,7 +537,11 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
         [
           t env where;
           Space;
-          handle_possible_list env constraints ~after_each:(fun _ -> Space);
+          handle_possible_list env constraints ~after_each:(fun is_last ->
+              if is_last then
+                Nothing
+              else
+                Space);
         ]
     | Syntax.WhereConstraint
         {
@@ -549,7 +556,10 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           contexts_types = tys;
           contexts_right_bracket = rb;
         } ->
-      Concat [t env lb; t env tys; t env rb]
+      transform_argish env lb tys rb
+    | Syntax.FunctionCtxTypeSpecifier
+        { function_ctx_type_keyword = kw; function_ctx_type_variable = var } ->
+      Concat [t env kw; Space; t env var]
     | Syntax.MethodishDeclaration
         {
           methodish_attribute = attr;
@@ -854,7 +864,7 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           context_const_ctx_keyword = ctx_kw;
           context_const_name = name;
           context_const_type_parameters = type_params;
-          context_const_constraint = constraint_;
+          context_const_constraint = constraint_list;
           context_const_equal = eq;
           context_const_ctx_list = ctx_list;
           context_const_semicolon = semi;
@@ -869,8 +879,15 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           Space;
           t env name;
           t env type_params;
-          when_present constraint_ space;
-          t env constraint_;
+          when_present constraint_list space;
+          handle_possible_list
+            env
+            ~after_each:(fun is_last ->
+              if is_last then
+                Nothing
+              else
+                Space)
+            constraint_list;
           when_present eq space;
           t env eq;
           when_present ctx_list (fun _ ->
@@ -883,6 +900,7 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           parameter_attribute = attr;
           parameter_visibility = visibility;
           parameter_call_convention = callconv;
+          parameter_readonly = readonly;
           parameter_type = param_type;
           parameter_name = name;
           parameter_default_value = default;
@@ -895,6 +913,8 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           when_present visibility space;
           t env callconv;
           when_present callconv space;
+          t env readonly;
+          when_present readonly space;
           t env param_type;
           ( if
             Syntax.is_missing visibility
@@ -1378,6 +1398,7 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           anonymous_right_paren = rp;
           anonymous_ctx_list = ctx_list;
           anonymous_colon = colon;
+          anonymous_readonly_return = readonly_ret;
           anonymous_type = ret_type;
           anonymous_use = use;
           anonymous_body = body;
@@ -1398,6 +1419,7 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
             rp
             ctx_list
             colon
+            readonly_ret
             ret_type;
           t env use;
           handle_possible_compound_statement
@@ -1441,6 +1463,7 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           lambda_right_paren = rp;
           lambda_contexts = ctxs;
           lambda_colon = colon;
+          lambda_readonly_return = readonly;
           lambda_type = ret_type;
         } ->
       Concat
@@ -1451,6 +1474,8 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           t env ctxs;
           t env colon;
           when_present colon space;
+          t env readonly;
+          when_present readonly space;
           t env ret_type;
         ]
     | Syntax.CastExpression _ -> Span (List.map (Syntax.children node) (t env))
@@ -1474,6 +1499,7 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
             TokenKind.(
               (match Token.kind x with
               | Await
+              | Readonly
               | Clone ->
                 Space
               | Print ->
@@ -2488,9 +2514,11 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
       Concat
         [
           t env type_;
+          when_present type_ space;
           t env name;
+          Space;
           t env equal_;
-          t env initial_value;
+          Nest [Space; SplitWith Cost.Base; t env initial_value];
           t env semicolon;
           Newline;
         ]
@@ -2918,7 +2946,7 @@ and transform_fn_decl_args env params rightp =
     )
 
 and transform_argish_with_return_type
-    env left_p params right_p ctx_list colon ret_type =
+    env left_p params right_p ctx_list colon readonly_ret ret_type =
   Concat
     [
       t env left_p;
@@ -2927,6 +2955,8 @@ and transform_argish_with_return_type
       t env ctx_list;
       t env colon;
       when_present colon space;
+      t env readonly_ret;
+      when_present readonly_ret space;
       t env ret_type;
     ]
 
@@ -3067,7 +3097,10 @@ and looks_bad_in_non_parental_braces item =
   | Syntax.FieldInitializer _
   | Syntax.ElementInitializer _
   | Syntax.LambdaExpression _
-  | Syntax.XHPExpression _ ->
+  | Syntax.XHPExpression _
+  | Syntax.IsExpression _
+  | Syntax.AsExpression _
+  | Syntax.NullableAsExpression _ ->
     true
   | _ -> false
 

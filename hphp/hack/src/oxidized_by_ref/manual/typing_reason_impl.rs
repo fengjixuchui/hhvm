@@ -68,6 +68,7 @@ impl<'a> Reason<'a> {
             | Ris(p)
             | Ras(p)
             | RvarrayOrDarrayKey(p)
+            | RvecOrDictKey(p)
             | Rusing(p)
             | RdynamicProp(p)
             | RdynamicCall(p)
@@ -97,7 +98,10 @@ impl<'a> Reason<'a> {
             | RglobalFunRet(p)
             | Rsplice(p)
             | RetBoolean(p)
-            | RdefaultCapability(p) => Some(p),
+            | RdefaultCapability(p)
+            | RconcatOperand(p)
+            | RinterpOperand(p) => Some(p),
+            RarrayUnification(p) => Some(p),
             RlostInfo((_, r, _))
             | Rinstantiate((_, _, r))
             | Rtypeconst((r, _, _, _))

@@ -17,7 +17,6 @@ class E<T> extends D<T, int> {}
 
 type Complex = shape('first' => int, 'second' => B);
 
-// TODO: check that the type alias is opaque
 newtype Point = shape('x' => int, 'y' => int);
 
 function generic<T>(): int {
@@ -92,20 +91,12 @@ function with_built_in_constant(): int {
   return PHP_INT_MAX;
 }
 
-<<__Rx>>
+<<__Pure>>
 function reactive(mixed $x = null): void {}
 
-<<__Rx>>
+<<__Pure>>
 function call_reactive(): void {
   reactive();
-}
-
-<<__RxShallow>>
-function shallow_reactive(): void {}
-
-<<__RxShallow>>
-function call_shallow_reactive(): void {
-  shallow_reactive();
 }
 
 class Fred {}

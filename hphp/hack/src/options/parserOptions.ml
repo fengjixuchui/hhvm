@@ -118,6 +118,9 @@ let enable_enum_classes = GlobalOptions.po_enable_enum_classes
 let with_enable_enum_classes po b =
   { po with GlobalOptions.po_enable_enum_classes = b }
 
+let with_enable_enum_supertyping po b =
+  { po with GlobalOptions.po_enable_enum_supertyping = b }
+
 let disable_modes = GlobalOptions.po_disable_modes
 
 let disable_hh_ignore_error = GlobalOptions.po_disable_hh_ignore_error
@@ -136,6 +139,17 @@ let disallow_fun_and_cls_meth_pseudo_funcs =
 
 let with_disallow_fun_and_cls_meth_pseudo_funcs po b =
   { po with GlobalOptions.po_disallow_fun_and_cls_meth_pseudo_funcs = b }
+
+let array_unification = GlobalOptions.po_array_unification
+
+let with_array_unification po b =
+  { po with GlobalOptions.po_array_unification = b }
+
+let interpret_soft_types_as_like_types =
+  GlobalOptions.po_interpret_soft_types_as_like_types
+
+let with_interpret_soft_types_as_like_types po b =
+  { po with GlobalOptions.po_interpret_soft_types_as_like_types = b }
 
 let make
     ~auto_namespace_map
@@ -164,7 +178,9 @@ let make
     ~disable_array
     ~disable_array_typehint
     ~disallow_hash_comments
-    ~disallow_fun_and_cls_meth_pseudo_funcs =
+    ~disallow_fun_and_cls_meth_pseudo_funcs
+    ~array_unification
+    ~interpret_soft_types_as_like_types =
   GlobalOptions.
     {
       default with
@@ -196,11 +212,15 @@ let make
       po_disallow_hash_comments = disallow_hash_comments;
       po_disallow_fun_and_cls_meth_pseudo_funcs =
         disallow_fun_and_cls_meth_pseudo_funcs;
+      po_array_unification = array_unification;
+      po_interpret_soft_types_as_like_types = interpret_soft_types_as_like_types;
     }
 
 (* Changes here need to be synchronized with rust_parser_errors_ffi.rs *)
 type ffi_t =
   bool
+  * bool
+  * bool
   * bool
   * bool
   * bool
@@ -243,4 +263,6 @@ let to_rust_ffi_t po ~hhvm_compat_mode ~hhi_mode ~codegen =
     disable_array_typehint po,
     allow_unstable_features po,
     disallow_hash_comments po,
-    disallow_fun_and_cls_meth_pseudo_funcs po )
+    disallow_fun_and_cls_meth_pseudo_funcs po,
+    array_unification po,
+    interpret_soft_types_as_like_types po )

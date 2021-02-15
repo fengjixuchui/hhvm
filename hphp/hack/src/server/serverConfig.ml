@@ -431,6 +431,12 @@ let load ~silent config_filename options : t * ServerLocalConfig.t =
         local_config.ServerLocalConfig.use_direct_decl_parser
       ~tco_ifc_enabled:(ServerArgs.enable_ifc options)
       ?po_enable_enum_classes:(bool_opt "enable_enum_classes" config)
+      ?po_enable_enum_supertyping:(bool_opt "enable_enum_supertyping" config)
+      ?po_array_unification:(bool_opt "array_unification" config)
+      ?po_interpret_soft_types_as_like_types:
+        (bool_opt "interpret_soft_types_as_like_types" config)
+      ?tco_enable_strict_string_concat_interp:
+        (bool_opt "enable_strict_string_concat_interp" config)
       ()
   in
   Errors.allowed_fixme_codes_strict :=

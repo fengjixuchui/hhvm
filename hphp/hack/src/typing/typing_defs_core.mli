@@ -248,6 +248,8 @@ and _ ty_ =
   | Tvarray : 'phase ty -> 'phase ty_
   (* Tvarray_or_darray (ty1, ty2) => "varray_or_darray<ty1, ty2>" *)
   | Tvarray_or_darray : 'phase ty * 'phase ty -> 'phase ty_
+  (* Tvec_or_dict (ty1, ty2) => "vec_or_dict<ty1, ty2>" *)
+  | Tvec_or_dict : 'phase ty * 'phase ty -> 'phase ty_
   (* Name of class, name of type const, remaining names of type consts *)
   | Taccess : 'phase taccess_type -> 'phase ty_
   (*========== Below Are Types That Cannot Be Declared In User Code ==========*)
@@ -306,16 +308,12 @@ and 'phase taccess_type = 'phase ty * Nast.sid
   *)
 and reactivity =
   | Nonreactive
-  | Local of decl_ty option
-  | Shallow of decl_ty option
-  | Reactive of decl_ty option
   | Pure of decl_ty option
   | MaybeReactive of reactivity
   | RxVar of reactivity option
   | Cipp of string option
   | CippLocal of string option
   | CippGlobal
-  | CippRx
 
 (* Because Tfun is currently used as both a decl and locl ty, without this,
  * the HH\Contexts\defaults alias must be stored in shared memory for a
@@ -381,6 +379,8 @@ module Flags : sig
 
   val get_ft_returns_mutable : 'a fun_type -> bool
 
+  val get_ft_returns_readonly : 'a fun_type -> bool
+
   val get_ft_is_coroutine : 'a fun_type -> bool
 
   val get_ft_async : 'a fun_type -> bool
@@ -397,6 +397,8 @@ module Flags : sig
 
   val get_ft_fun_kind : 'a fun_type -> Ast_defs.fun_kind
 
+  val get_ft_readonly_this : 'a fun_type -> bool
+
   val from_mutable_flags : Hh_prelude.Int.t -> param_mutability option
 
   val to_mutable_flags : param_mutability option -> Hh_prelude.Int.t
@@ -411,6 +413,8 @@ module Flags : sig
 
   val get_fp_is_atom : 'a fun_param -> bool
 
+  val get_fp_readonly : 'a fun_param -> bool
+
   val fun_kind_to_flags : Ast_defs.fun_kind -> Hh_prelude.Int.t
 
   val make_ft_flags :
@@ -419,6 +423,8 @@ module Flags : sig
     return_disposable:bool ->
     returns_mutable:bool ->
     returns_void_to_rx:bool ->
+    returns_readonly:bool ->
+    readonly_this:bool ->
     Hh_prelude.Int.t
 
   val mode_to_flags : param_mode -> int
@@ -431,6 +437,7 @@ module Flags : sig
     ifc_external:bool ->
     ifc_can_call:bool ->
     is_atom:bool ->
+    readonly:bool ->
     Hh_prelude.Int.t
 
   val get_fp_accept_disposable : 'a fun_param -> bool
@@ -486,6 +493,8 @@ module Pp : sig
 end
 
 include module type of Pp
+
+type decl_ty_ = decl_phase ty_
 
 type locl_ty_ = locl_phase ty_
 

@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<3f492e69b1cdf8ee0291db3a8e9d8561>>
+// @generated SignedSource<<bd26f06c284b35d928f9950b610981cd>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidize_regen.sh
+//   hphp/hack/src/oxidized_regen.sh
 
 use arena_trait::TrivialDrop;
 use no_pos_hash::NoPosHash;
@@ -64,6 +64,8 @@ pub type UserAttribute<'a> = aast::UserAttribute<'a, &'a pos::Pos<'a>, FuncBodyA
 pub type ClassId_<'a> = aast::ClassId_<'a, &'a pos::Pos<'a>, FuncBodyAnn<'a>, (), ()>;
 
 pub type Class_<'a> = aast::Class_<'a, &'a pos::Pos<'a>, FuncBodyAnn<'a>, (), ()>;
+
+pub type ClassVar<'a> = aast::ClassVar<'a, &'a pos::Pos<'a>, FuncBodyAnn<'a>, (), ()>;
 
 pub type Method_<'a> = aast::Method_<'a, &'a pos::Pos<'a>, FuncBodyAnn<'a>, (), ()>;
 

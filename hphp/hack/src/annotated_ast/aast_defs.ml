@@ -46,9 +46,6 @@ and is_reified = bool
 
 and func_reactive =
   | FPure
-  | FReactive
-  | FLocal
-  | FShallow
   | FNonreactive
 
 and param_mutability =
@@ -131,6 +128,7 @@ and hint_ =
   | Hdarray of hint * hint
   | Hvarray of hint
   | Hvarray_or_darray of hint option * hint
+  | Hvec_or_dict of hint option * hint
   | Hprim of tprim
   | Hthis
   | Hdynamic
@@ -241,11 +239,7 @@ and reify_kind =
 
 let is_f_non_reactive = function
   | FNonreactive -> true
-  | FPure
-  | FReactive
-  | FLocal
-  | FShallow ->
-    false
+  | FPure -> false
 
 let string_of_visibility vis =
   match vis with

@@ -207,6 +207,8 @@ module AttributeKinds = struct
 
   let lambda = "\\HH\\LambdaAttribute"
 
+  let enumcls = "\\HH\\EnumClassAttribute"
+
   let plain_english_map =
     List.fold_left
       ~init:SMap.empty
@@ -224,6 +226,7 @@ module AttributeKinds = struct
         (file, "a file");
         (typeconst, "a type constant");
         (lambda, "a lambda expression");
+        (enumcls, "an enum class");
       ]
 end
 
@@ -257,14 +260,6 @@ module UserAttributes = struct
   let uaCippLocal = "__CippLocal"
 
   let uaCippGlobal = "__CippGlobal"
-
-  let uaCippRx = "__CippRx"
-
-  let uaReactive = "__Rx"
-
-  let uaLocalReactive = "__RxLocal"
-
-  let uaShallowReactive = "__RxShallow"
 
   let uaMutable = "__Mutable"
 
@@ -324,8 +319,6 @@ module UserAttributes = struct
 
   let uaAlwaysInline = "__ALWAYS_INLINE"
 
-  let uaPu = "__Pu"
-
   let uaEnableUnstableFeatures = "__EnableUnstableFeatures"
 
   let uaEnumClass = "__EnumClass"
@@ -359,15 +352,11 @@ module UserAttributes = struct
           (uaCipp, [fn; mthd; lambda]);
           (uaCippLocal, [fn; mthd; lambda]);
           (uaCippGlobal, [fn; mthd; lambda]);
-          (uaCippRx, [fn; mthd; lambda]);
-          (uaReactive, [fn; mthd; lambda]);
-          (uaLocalReactive, [fn; mthd; lambda]);
           (uaMutable, [mthd; parameter]);
           (uaMutableReturn, [fn; mthd; lambda]);
-          (uaShallowReactive, [fn; mthd; lambda]);
           (uaOnlyRxIfImpl, [parameter; mthd]);
           (uaLSB, [staticProperty]);
-          (uaSealed, [cls]);
+          (uaSealed, [cls; enumcls; enum]);
           (uaReturnsVoidToRx, [fn; mthd; lambda]);
           (uaMaybeMutable, [mthd; parameter]);
           (uaLateInit, [instProperty; staticProperty]);
@@ -387,9 +376,8 @@ module UserAttributes = struct
           (uaReifiable, [typeconst]);
           (uaNeverInline, [fn; mthd]);
           (uaDisableTypecheckerInternal, [fn; mthd]);
-          (uaPu, [cls]);
           (uaEnableUnstableFeatures, [file]);
-          (uaEnumClass, [cls; enum]);
+          (uaEnumClass, [cls; enumcls]);
           (uaPolicied, [fn; mthd; instProperty; parameter]);
           (uaInferFlows, [fn; mthd]);
           (uaExternal, [parameter]);
@@ -417,14 +405,10 @@ module SpecialFunctions = struct
 
   let echo = "echo" (* pseudo-function *)
 
-  let assert_ = "assert"
-
   let hhas_adata = "__hhas_adata"
 
   let is_special_function =
-    let all_special_functions =
-      HashSet.of_list [tuple; echo; assert_; hhas_adata]
-    in
+    let all_special_functions = HashSet.of_list [tuple; echo; hhas_adata] in
     (fun x -> HashSet.mem all_special_functions x)
 end
 
@@ -479,8 +463,6 @@ module PseudoFunctions = struct
 
   let hh_loop_forever = "\\hh_loop_forever"
 
-  let assert_ = "\\assert"
-
   let echo = "\\echo"
 
   let empty = "\\empty"
@@ -499,7 +481,6 @@ module PseudoFunctions = struct
         hh_log_level;
         hh_force_solve;
         hh_loop_forever;
-        assert_;
         echo;
         empty;
         exit;
@@ -587,6 +568,8 @@ module Typehints = struct
 
   let varray_or_darray = "varray_or_darray"
 
+  let vec_or_dict = "vec_or_dict"
+
   let callable = "callable"
 
   let wildcard = "_"
@@ -613,6 +596,7 @@ module Typehints = struct
           darray;
           varray;
           varray_or_darray;
+          vec_or_dict;
           callable;
           wildcard;
         ]
@@ -757,9 +741,7 @@ module Rx = struct
   let hOwnedMutable = "OwnedMutable"
 
   let is_reactive_typehint =
-    let reactive_typehints =
-      [hPure; hRx; hRxShallow; hRxLocal; hMutable; hMaybeMutable; hOwnedMutable]
-    in
+    let reactive_typehints = [hPure; hMutable; hMaybeMutable; hOwnedMutable] in
     fun name ->
       List.exists reactive_typehints ~f:(fun th -> String.equal th name)
 end
@@ -834,6 +816,8 @@ module UnstableFeatures = struct
   let coeffects_provisional = "coeffects_provisional"
 
   let ifc = "ifc"
+
+  let readonly = "readonly"
 end
 
 module Coeffects = struct

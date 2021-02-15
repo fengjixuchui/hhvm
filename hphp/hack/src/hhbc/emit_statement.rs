@@ -1201,7 +1201,7 @@ fn emit_load_list_element(
     let query_value = |path| {
         InstrSeq::gather(vec![
             InstrSeq::gather(path),
-            instr::querym(0, QueryOp::CGet, MemberKey::EI(i as i64)),
+            instr::querym(0, QueryOp::CGet, MemberKey::EI(i as i64, ReadOnlyOp::Any)),
         ])
     };
     Ok(match &elem.1 {
@@ -1214,7 +1214,8 @@ fn emit_load_list_element(
             (vec![], vec![load_value])
         }
         tast::Expr_::List(es) => {
-            let instr_dim = instr::dim(MemberOpMode::Warn, MemberKey::EI(i as i64));
+            let instr_dim =
+                instr::dim(MemberOpMode::Warn, MemberKey::EI(i as i64, ReadOnlyOp::Any));
             path.push(instr_dim);
             emit_load_list_elements(e, env, path, es)?
         }
@@ -1448,11 +1449,18 @@ pub fn emit_final_stmt(e: &mut Emitter, env: &mut Env, stmt: &tast::Stmt) -> Res
 pub fn emit_final_stmts(e: &mut Emitter, env: &mut Env, block: &[tast::Stmt]) -> Result {
     match block {
         [] => emit_dropthrough_return(e, env),
-        [s] => emit_final_stmt(e, env, s),
-        [s, ..] => Ok(InstrSeq::gather(vec![
-            emit_stmt(e, env, s)?,
-            emit_final_stmts(e, env, &block[1..])?,
-        ])),
+        _ => {
+            let mut ret = Vec::with_capacity(block.len());
+            for (i, s) in block.iter().enumerate() {
+                let instrs = if i == block.len() - 1 {
+                    emit_final_stmt(e, env, s)?
+                } else {
+                    emit_stmt(e, env, s)?
+                };
+                ret.push(instrs);
+            }
+            Ok(InstrSeq::gather(ret))
+        }
     }
 }
 

@@ -456,6 +456,10 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
       (** Await expression.
 
           await $foo *)
+  | ReadonlyExpr of ('ex, 'fb, 'en, 'hi) expr
+      (** Readonly expression.
+
+          readonly $foo *)
   | List of ('ex, 'fb, 'en, 'hi) expr list
       (** List expression, only used in destructuring. Allows any arbitrary
           lvalue as a subexpression. May also nest.
@@ -655,6 +659,7 @@ and ('ex, 'fb, 'en, 'hi) fun_param = {
   param_pos: pos;
   param_name: string;
   param_expr: ('ex, 'fb, 'en, 'hi) expr option;
+  param_readonly: Ast_defs.readonly_kind option;
   param_callconv: Ast_defs.param_kind option;
   param_user_attributes: ('ex, 'fb, 'en, 'hi) user_attribute list;
   param_visibility: visibility option;
@@ -677,6 +682,8 @@ and ('ex, 'fb, 'en, 'hi) fun_ = {
   f_span: pos;
   f_annotation: 'en;
   f_mode: FileInfo.mode; [@visitors.opaque]
+  f_readonly_ret: Ast_defs.readonly_kind option;
+  (* Whether the return value is readonly *)
   f_ret: 'hi type_hint;
   f_name: sid;
   f_tparams: ('ex, 'fb, 'en, 'hi) tparam list;
@@ -770,7 +777,11 @@ and ('ex, 'fb, 'en, 'hi) class_ = {
   c_extends: class_hint list;
   c_uses: trait_hint list;
   c_use_as_alias: use_as_alias list;
+      (** PHP feature not supported in hack but required
+          because we have runtime support. *)
   c_insteadof_alias: insteadof_alias list;
+      (** PHP feature not supported in hack but required
+          because we have runtime support. *)
   c_xhp_attr_uses: xhp_attr_hint list;
   c_xhp_category: (pos * pstring list) option;
   c_reqs: (class_hint * is_extends) list;
@@ -845,7 +856,7 @@ and typeconst_abstract_kind =
 and ('ex, 'fb, 'en, 'hi) class_typeconst = {
   c_tconst_abstract: typeconst_abstract_kind;
   c_tconst_name: sid;
-  c_tconst_constraint: hint option;
+  c_tconst_as_constraint: hint option;
   c_tconst_type: hint option;
   c_tconst_user_attributes: ('ex, 'fb, 'en, 'hi) user_attribute list;
   c_tconst_span: pos;
@@ -859,6 +870,7 @@ and ('ex, 'fb, 'en, 'hi) class_var = {
   cv_final: bool;
   cv_xhp_attr: xhp_attr_info option;
   cv_abstract: bool;
+  cv_readonly: bool;
   cv_visibility: visibility;
   cv_type: 'hi type_hint;
   cv_id: sid;
@@ -876,6 +888,7 @@ and ('ex, 'fb, 'en, 'hi) method_ = {
   m_final: bool;
   m_abstract: bool;
   m_static: bool;
+  m_readonly_this: bool;
   m_visibility: visibility;
   m_name: sid;
   m_tparams: ('ex, 'fb, 'en, 'hi) tparam list;
@@ -887,6 +900,7 @@ and ('ex, 'fb, 'en, 'hi) method_ = {
   m_body: ('ex, 'fb, 'en, 'hi) func_body;
   m_fun_kind: Ast_defs.fun_kind;
   m_user_attributes: ('ex, 'fb, 'en, 'hi) user_attribute list;
+  m_readonly_ret: Ast_defs.readonly_kind option;
   m_ret: 'hi type_hint;
   m_external: bool;
       (** true if this declaration has no body because it is an external method
@@ -1062,3 +1076,8 @@ let enum_includes_map ?(default = []) ~f includes =
   match includes with
   | None -> default
   | Some includes -> f includes
+
+let is_enum_class c =
+  match (c.c_kind, c.c_enum) with
+  | (Ast_defs.Cenum, Some enum_) -> enum_.e_enum_class
+  | (_, _) -> false

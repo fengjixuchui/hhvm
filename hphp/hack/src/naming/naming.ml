@@ -442,7 +442,10 @@ and hint_
     N.Hlike (hint ~allow_retonly env h)
   | Aast.Hsoft h ->
     let h = hint ~allow_retonly env h in
-    snd h
+    if TypecheckerOptions.interpret_soft_types_as_like_types tcopt then
+      N.Hlike h
+    else
+      snd h
   | Aast.Hfun
       Aast.
         {
@@ -476,66 +479,6 @@ and hint_
         ] )
     when String.equal hname SN.Rx.hPure ->
     hfun env N.FPure hl kl variadic_hint ctxs h
-  (* Special case for Rx<function> *)
-  | Aast.Happly
-      ( (_, hname),
-        [
-          ( _,
-            Aast.Hfun
-              Aast.
-                {
-                  hf_reactive_kind = _;
-                  hf_param_tys = hl;
-                  hf_param_kinds = kl;
-                  hf_param_mutability = _;
-                  hf_variadic_ty = variadic_hint;
-                  hf_ctxs = ctxs;
-                  hf_return_ty = h;
-                  hf_is_mutable_return = _;
-                } );
-        ] )
-    when String.equal hname SN.Rx.hRx ->
-    hfun env N.FReactive hl kl variadic_hint ctxs h
-  (* Special case for RxShallow<function> *)
-  | Aast.Happly
-      ( (_, hname),
-        [
-          ( _,
-            Aast.Hfun
-              Aast.
-                {
-                  hf_reactive_kind = _;
-                  hf_param_tys = hl;
-                  hf_param_kinds = kl;
-                  hf_param_mutability = _;
-                  hf_variadic_ty = variadic_hint;
-                  hf_ctxs = ctxs;
-                  hf_return_ty = h;
-                  hf_is_mutable_return = _;
-                } );
-        ] )
-    when String.equal hname SN.Rx.hRxShallow ->
-    hfun env N.FShallow hl kl variadic_hint ctxs h
-  (* Special case for RxLocal<function> *)
-  | Aast.Happly
-      ( (_, hname),
-        [
-          ( _,
-            Aast.Hfun
-              Aast.
-                {
-                  hf_reactive_kind = _;
-                  hf_param_tys = hl;
-                  hf_param_kinds = kl;
-                  hf_param_mutability = _;
-                  hf_variadic_ty = variadic_hint;
-                  hf_ctxs = ctxs;
-                  hf_return_ty = h;
-                  hf_is_mutable_return = _;
-                } );
-        ] )
-    when String.equal hname SN.Rx.hRxLocal ->
-    hfun env N.FLocal hl kl variadic_hint ctxs h
   | Aast.Happly (((p, _x) as id), hl) ->
     let hint_id =
       hint_id ~forbid_this ~allow_retonly ~allow_wildcard ~tp_depth env id hl
@@ -621,6 +564,7 @@ and hint_
   | Aast.Hdarray _
   | Aast.Hvarray _
   | Aast.Hvarray_or_darray _
+  | Aast.Hvec_or_dict _
   | Aast.Hprim _
   | Aast.Hthis
   | Aast.Hdynamic
@@ -751,6 +695,10 @@ and try_castable_hint
       ~allow_wildcard
       ~allow_retonly:false
   in
+  let unif env =
+    TypecheckerOptions.array_unification
+      (Provider_context.get_tcopt (fst env).ctx)
+  in
   let canon = String.lowercase x in
   let opt_hint =
     match canon with
@@ -764,11 +712,18 @@ and try_castable_hint
         | [] ->
           if Partial.should_check_error (fst env).in_mode 2071 then
             Errors.too_few_type_arguments p;
-          N.Hdarray ((p, N.Hany), (p, N.Hany))
+          if unif env then
+            N.Happly ((p, SN.Collections.cDict), [(p, N.Hany); (p, N.Hany)])
+          else
+            N.Hdarray ((p, N.Hany), (p, N.Hany))
         | [_] ->
           Errors.too_few_type_arguments p;
           N.Hany
-        | [key_; val_] -> N.Hdarray (hint env key_, hint env val_)
+        | [key_; val_] ->
+          if unif env then
+            N.Happly ((p, SN.Collections.cDict), [hint env key_; hint env val_])
+          else
+            N.Hdarray (hint env key_, hint env val_)
         | _ ->
           Errors.too_many_type_arguments p;
           N.Hany)
@@ -778,8 +733,15 @@ and try_castable_hint
         | [] ->
           if Partial.should_check_error (fst env).in_mode 2071 then
             Errors.too_few_type_arguments p;
-          N.Hvarray (p, N.Hany)
-        | [val_] -> N.Hvarray (hint env val_)
+          if unif env then
+            N.Happly ((p, SN.Collections.cVec), [(p, N.Hany)])
+          else
+            N.Hvarray (p, N.Hany)
+        | [val_] ->
+          if unif env then
+            N.Happly ((p, SN.Collections.cVec), [hint env val_])
+          else
+            N.Hvarray (hint env val_)
         | _ ->
           Errors.too_many_type_arguments p;
           N.Hany)
@@ -790,12 +752,36 @@ and try_castable_hint
           if Partial.should_check_error (fst env).in_mode 2071 then
             Errors.too_few_type_arguments p;
 
-          (* Warning: These Hanys are here because they produce subtle
-              errors because of interaction with tco_experimental_isarray
-              if you change them to Herr *)
-          N.Hvarray_or_darray (None, (p, N.Hany))
-        | [val_] -> N.Hvarray_or_darray (None, hint env val_)
-        | [key; val_] -> N.Hvarray_or_darray (Some (hint env key), hint env val_)
+          if unif env then
+            N.Hvec_or_dict (None, (p, N.Hany))
+          else
+            (* Warning: These Hanys are here because they produce subtle
+                errors because of interaction with tco_experimental_isarray
+                if you change them to Herr *)
+            N.Hvarray_or_darray (None, (p, N.Hany))
+        | [val_] ->
+          if unif env then
+            N.Hvec_or_dict (None, hint env val_)
+          else
+            N.Hvarray_or_darray (None, hint env val_)
+        | [key; val_] ->
+          if unif env then
+            N.Hvec_or_dict (Some (hint env key), hint env val_)
+          else
+            N.Hvarray_or_darray (Some (hint env key), hint env val_)
+        | _ ->
+          Errors.too_many_type_arguments p;
+          N.Hany)
+    | nm when String.equal nm SN.Typehints.vec_or_dict ->
+      Some
+        (match hl with
+        | [] ->
+          if Partial.should_check_error (fst env).in_mode 2071 then
+            Errors.too_few_type_arguments p;
+
+          N.Hvec_or_dict (None, (p, N.Hany))
+        | [val_] -> N.Hvec_or_dict (None, hint env val_)
+        | [key; val_] -> N.Hvec_or_dict (Some (hint env key), hint env val_)
         | _ ->
           Errors.too_many_type_arguments p;
           N.Hany)
@@ -1071,6 +1057,7 @@ and xhp_attribute_decl env (h, cv, tag, maybe_enum) =
   {
     N.cv_final = cv.Aast.cv_final;
     N.cv_xhp_attr = xhp_attr_info;
+    N.cv_readonly = cv.Aast.cv_readonly;
     N.cv_abstract = cv.Aast.cv_abstract;
     N.cv_visibility = cv.Aast.cv_visibility;
     N.cv_type = hint_;
@@ -1188,8 +1175,7 @@ and class_prop_expr_is_xhp env cv =
   let expr = Option.map cv.Aast.cv_expr (expr env) in
   let expr =
     if
-      FileInfo.equal_mode (fst env).in_mode FileInfo.Mdecl
-      && Option.is_none expr
+      FileInfo.equal_mode (fst env).in_mode FileInfo.Mhhi && Option.is_none expr
     then
       Some (fst cv.Aast.cv_id, N.Any)
     else
@@ -1217,6 +1203,7 @@ and class_prop_static env cv =
     N.cv_final = cv.Aast.cv_final;
     N.cv_xhp_attr = make_xhp_attr is_xhp;
     N.cv_abstract = cv.Aast.cv_abstract;
+    N.cv_readonly = cv.Aast.cv_readonly;
     N.cv_visibility = cv.Aast.cv_visibility;
     N.cv_type = h;
     N.cv_id = cv.Aast.cv_id;
@@ -1246,6 +1233,7 @@ and class_prop_non_static env ?(const = None) cv =
     N.cv_final = cv.Aast.cv_final;
     N.cv_xhp_attr = make_xhp_attr is_xhp;
     N.cv_visibility = cv.Aast.cv_visibility;
+    N.cv_readonly = cv.Aast.cv_readonly;
     N.cv_type = h;
     N.cv_abstract = cv.Aast.cv_abstract;
     N.cv_id = cv.Aast.cv_id;
@@ -1369,14 +1357,14 @@ and typeconst env t =
       Aast.TCAbstract (Some (hint env default))
     | _ -> t.Aast.c_tconst_abstract
   in
-  let constr = Option.map t.Aast.c_tconst_constraint (hint env) in
+  let as_constraint = Option.map t.Aast.c_tconst_as_constraint (hint env) in
   let type_ = Option.map t.Aast.c_tconst_type (hint env) in
   let attrs = user_attributes env t.Aast.c_tconst_user_attributes in
   N.
     {
       c_tconst_abstract = abstract;
       c_tconst_name = t.Aast.c_tconst_name;
-      c_tconst_constraint = constr;
+      c_tconst_as_constraint = as_constraint;
       c_tconst_type = type_;
       c_tconst_user_attributes = attrs;
       c_tconst_span = t.Aast.c_tconst_span;
@@ -1398,7 +1386,7 @@ and method_ genv m =
   in
   let body =
     match genv.in_mode with
-    | FileInfo.Mdecl ->
+    | FileInfo.Mhhi ->
       { N.fb_ast = []; fb_annotation = Nast.NamedWithUnsafeBlocks }
     | FileInfo.Mstrict
     | FileInfo.Mpartial ->
@@ -1426,6 +1414,7 @@ and method_ genv m =
     N.m_final = m.Aast.m_final;
     N.m_visibility = m.Aast.m_visibility;
     N.m_abstract = m.Aast.m_abstract;
+    N.m_readonly_this = m.Aast.m_readonly_this;
     N.m_static = m.Aast.m_static;
     N.m_name = m.Aast.m_name;
     N.m_tparams = tparam_l;
@@ -1435,6 +1424,7 @@ and method_ genv m =
     N.m_unsafe_ctxs;
     N.m_body = body;
     N.m_fun_kind = m.Aast.m_fun_kind;
+    N.m_readonly_ret = m.Aast.m_readonly_ret;
     N.m_ret = ret;
     N.m_variadic = variadicity;
     N.m_user_attributes = attrs;
@@ -1479,6 +1469,7 @@ and fun_param env (param : Nast.fun_param) =
     param_name = name;
     param_expr = eopt;
     param_callconv = param.Aast.param_callconv;
+    param_readonly = param.Aast.param_readonly;
     param_user_attributes = user_attributes env param.Aast.param_user_attributes;
     param_visibility = param.Aast.param_visibility;
   }
@@ -1512,7 +1503,7 @@ and fun_ ctx f =
   let f_kind = f.Aast.f_fun_kind in
   let body =
     match genv.in_mode with
-    | FileInfo.Mdecl ->
+    | FileInfo.Mhhi ->
       { N.fb_ast = []; fb_annotation = Nast.NamedWithUnsafeBlocks }
     | FileInfo.Mstrict
     | FileInfo.Mpartial ->
@@ -1541,6 +1532,7 @@ and fun_ ctx f =
       N.f_annotation = ();
       f_span = f.Aast.f_span;
       f_mode = f.Aast.f_mode;
+      f_readonly_ret = f.Aast.f_readonly_ret;
       f_ret = h;
       f_name = f.Aast.f_name;
       f_tparams;
@@ -2225,6 +2217,7 @@ and expr_ env p (e : Nast.expr_) =
   | Aast.Omitted -> N.Omitted
   | Aast.Callconv (kind, e) -> N.Callconv (kind, expr env e)
   | Aast.EnumAtom x -> N.EnumAtom x
+  | Aast.ReadonlyExpr e -> N.ReadonlyExpr (expr env e)
   (* The below were not found on the AST.ml so they are not implemented here *)
   | Aast.ValCollection _
   | Aast.KeyValCollection _
@@ -2259,6 +2252,7 @@ and expr_lambda env f =
     N.f_annotation = ();
     f_span = f.Aast.f_span;
     f_mode = (fst env).in_mode;
+    f_readonly_ret = f.Aast.f_readonly_ret;
     f_ret = h;
     f_name = f.Aast.f_name;
     f_params = paraml;

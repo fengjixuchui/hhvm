@@ -67,6 +67,7 @@ type t =
   | Ris of Pos.t
   | Ras of Pos.t
   | Rvarray_or_darray_key of Pos.t
+  | Rvec_or_dict_key of Pos.t
   | Rusing of Pos.t
   | Rdynamic_prop of Pos.t
   | Rdynamic_call of Pos.t
@@ -94,6 +95,9 @@ type t =
   | Rsplice of Pos.t
   | Ret_boolean of Pos.t
   | Rdefault_capability of Pos.t
+  | Rarray_unification of Pos.t
+  | Rconcat_operand of Pos.t
+  | Rinterp_operand of Pos.t
 
 and arg_position =
   | Aonly
@@ -386,6 +390,8 @@ let rec to_string prefix r =
         "This is varray_or_darray, which requires arraykey-typed keys when used with an array (used like a hashtable)"
       );
     ]
+  | Rvec_or_dict_key _ ->
+    [(p, "This is vec_or_dict, which requires keys that have type arraykey")]
   | Rusing p -> [(p, prefix ^ " because it was assigned in a `using` clause")]
   | Rdynamic_prop p ->
     [(p, prefix ^ ", the result of accessing a property of a `dynamic` type")]
@@ -498,6 +504,10 @@ let rec to_string prefix r =
     ]
   | Rdefault_capability p ->
     [(p, prefix ^ " because the function did not have an explicit context")]
+  | Rarray_unification p ->
+    [(p, prefix ^ " because legacy arrays have been unified with Hack arrays")]
+  | Rconcat_operand p -> [(p, "Expected `string` or `int`")]
+  | Rinterp_operand p -> [(p, "Expected `string` or `int`")]
 
 and to_pos r =
   if !Errors.report_pos_from_reason then
@@ -553,6 +563,7 @@ and to_raw_pos r =
   | Ris p -> p
   | Ras p -> p
   | Rvarray_or_darray_key p -> p
+  | Rvec_or_dict_key p -> p
   | Rusing p -> p
   | Rdynamic_prop p -> p
   | Rdynamic_call p -> p
@@ -585,6 +596,9 @@ and to_raw_pos r =
   | Rsplice p -> p
   | Ret_boolean p -> p
   | Rdefault_capability p -> p
+  | Rarray_unification p -> p
+  | Rconcat_operand p -> p
+  | Rinterp_operand p -> p
 
 (* This is a mapping from internal expression ids to a standardized int.
  * Used for outputting cleaner error messages to users
@@ -669,6 +683,7 @@ let to_constructor_string r =
   | Ris _ -> "Ris"
   | Ras _ -> "Ras"
   | Rvarray_or_darray_key _ -> "Rvarray_or_darray_key"
+  | Rvec_or_dict_key _ -> "Rvec_or_dict_key"
   | Rusing _ -> "Rusing"
   | Rdynamic_prop _ -> "Rdynamic_prop"
   | Rdynamic_call _ -> "Rdynamic_call"
@@ -702,6 +717,9 @@ let to_constructor_string r =
   | Rsplice _ -> "Rsplice"
   | Ret_boolean _ -> "Ret_boolean"
   | Rdefault_capability _ -> "Rdefault_capability"
+  | Rarray_unification _ -> "Rarray_unification"
+  | Rconcat_operand _ -> "Rconcat_operand"
+  | Rinterp_operand _ -> "Rinterp_operand"
 
 let pp fmt r =
   let pos = to_raw_pos r in
@@ -748,6 +766,8 @@ type ureason =
   | URsubsume_tconst_assign
   | URclone
   | URusing
+  | URstr_concat
+  | URstr_interp
 [@@deriving show]
 
 let index_array = URindex "array"
@@ -799,6 +819,10 @@ let string_of_ureason = function
     "The assigned type of this type constant is inconsistent with its parent"
   | URclone -> "Clone cannot be called on non-object"
   | URusing -> "Using cannot be used on non-disposable expression"
+  | URstr_concat ->
+    "String concatenation can only be performed on string and int arguments"
+  | URstr_interp ->
+    "Only string and int values can be used in string interpolation"
 
 let compare r1 r2 =
   let get_pri = function

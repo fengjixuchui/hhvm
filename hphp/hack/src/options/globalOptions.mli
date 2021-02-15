@@ -292,7 +292,17 @@ type t = {
   (* Enable ifc on the specified list of path prefixes
     (a list containing the empty string would denote all files,
     an empty list denotes no files) *)
-  tco_ifc_enabled: string list; (* Enables the enum class extension *)
+  tco_ifc_enabled: string list;
+  (* Enables the enum supertyping extension *)
+  po_enable_enum_supertyping: bool;
+  (* Treat varray as vec, dict as dict, TODO varray_or_darray as vec_or_dict *)
+  po_array_unification: bool;
+  (* <<__Soft>> T -> ~T *)
+  po_interpret_soft_types_as_like_types: bool;
+  (* Restricts string concatenation and interpolation to arraykeys *)
+  tco_enable_strict_string_concat_interp: bool;
+  (* Enable Unstable feature readonly tast check *)
+  tco_readonly: bool;
 }
 [@@deriving eq, show]
 
@@ -406,6 +416,11 @@ val make :
   ?po_disallow_fun_and_cls_meth_pseudo_funcs:bool ->
   ?tco_use_direct_decl_parser:bool ->
   ?tco_ifc_enabled:string list ->
+  ?po_enable_enum_supertyping:bool ->
+  ?po_array_unification:bool ->
+  ?po_interpret_soft_types_as_like_types:bool ->
+  ?tco_enable_strict_string_concat_interp:bool ->
+  ?tco_readonly:bool ->
   unit ->
   t
 
@@ -656,3 +671,15 @@ val po_disallow_hash_comments : t -> bool
 val po_disallow_fun_and_cls_meth_pseudo_funcs : t -> bool
 
 val tco_use_direct_decl_parser : t -> bool
+
+val po_enable_enum_supertyping : t -> bool
+
+val po_array_unification : t -> bool
+
+val po_interpret_soft_types_as_like_types : t -> bool
+
+val tco_enable_strict_string_concat_interp : t -> bool
+
+val tco_readonly : t -> bool
+
+val set_tco_readonly : t -> bool -> t

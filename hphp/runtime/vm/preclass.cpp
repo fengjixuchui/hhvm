@@ -239,20 +239,38 @@ void PreClass::Prop::prettyPrint(std::ostream& out,
 
 PreClass::Const::Const(const StringData* name,
                        const TypedValueAux& val,
-                       const StringData* phpCode)
+                       const StringData* phpCode,
+                       const bool fromTrait)
   : m_name(name)
   , m_val(val)
   , m_phpCode(phpCode)
+  , m_fromTrait(fromTrait)
 {}
 
 void PreClass::Const::prettyPrint(std::ostream& out,
                                   const PreClass* preClass) const {
-  if (isType()) {
-    out << "Type ";
+  switch (kind()) {
+    case ConstModifiers::Kind::Value:
+      break;
+    case ConstModifiers::Kind::Type:
+      out << "Type ";
+      break;
+    case ConstModifiers::Kind::Context:
+      out << "Context ";
+      break;
   }
   if (isAbstract()) {
     out << "Constant (abstract) "
         << preClass->name()->data() << "::" << m_name->data()
+        << std::endl;
+    return;
+  }
+  if (kind() == ConstModifiers::Kind::Context) {
+    auto const coeffect_str_opt = coeffects().toString();
+    auto const coeffect_str = coeffect_str_opt ? *coeffect_str_opt : "defaults";
+    out << "Constant "
+        << preClass->name()->data() << "::" << m_name->data()
+        << " " << coeffect_str
         << std::endl;
     return;
   }
@@ -265,6 +283,11 @@ void PreClass::Const::prettyPrint(std::ostream& out,
     out << " = " << ss;
   }
   out << std::endl;
+}
+
+StaticCoeffects PreClass::Const::coeffects() const {
+  assertx(kind() == ConstModifiers::Kind::Context);
+  return m_val.constModifiers().getCoeffects();
 }
 
 ///////////////////////////////////////////////////////////////////////////////

@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<07b8783e7dc00dec82491d4ea0e8616e>>
+// @generated SignedSource<<38eb135394b1fe7ac0064defeddc198e>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidize_regen.sh
+//   hphp/hack/src/oxidized_regen.sh
 
 use ocamlrep_derive::FromOcamlRep;
 use ocamlrep_derive::ToOcamlRep;
@@ -137,4 +137,9 @@ pub struct GlobalOptions {
     pub po_disallow_fun_and_cls_meth_pseudo_funcs: bool,
     pub tco_use_direct_decl_parser: bool,
     pub tco_ifc_enabled: Vec<String>,
+    pub po_enable_enum_supertyping: bool,
+    pub po_array_unification: bool,
+    pub po_interpret_soft_types_as_like_types: bool,
+    pub tco_enable_strict_string_concat_interp: bool,
+    pub tco_readonly: bool,
 }

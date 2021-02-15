@@ -652,6 +652,12 @@ std::unique_ptr<php::Func> parse_func(ParseUnitState& puState,
                                       php::Unit* unit,
                                       php::Class* cls,
                                       const FuncEmitter& fe) {
+  if (fe.hasSourceLocInfo()) {
+    puState.srcLocInfo = fe.createSourceLocTable();
+  } else {
+    puState.srcLocInfo = fe.lineTable();
+  }
+
   FTRACE(2, "  func: {}\n",
     fe.name->data() && *fe.name->data() ? fe.name->data() : "pseudomain");
 
@@ -665,7 +671,6 @@ std::unique_ptr<php::Func> parse_func(ParseUnitState& puState,
 
   ret->attrs              = static_cast<Attr>((fe.attrs & ~AttrNoOverride) |
                                               AttrUnique | AttrPersistent);
-  ret->staticCoeffects    = fe.staticCoeffects;
   ret->userAttributes     = fe.userAttributes;
   ret->returnUserType     = fe.retUserType;
   ret->retTypeConstraint  = fe.retTypeConstraint;
@@ -691,6 +696,7 @@ std::unique_ptr<php::Func> parse_func(ParseUnitState& puState,
     return false;
   }();
 
+  for (auto& name : fe.staticCoeffects) ret->staticCoeffects.push_back(name);
   for (auto& rule : fe.coeffectRules) ret->coeffectRules.push_back(rule);
 
   ret->sampleDynamicCalls = [&] {
@@ -957,7 +963,10 @@ std::unique_ptr<php::Class> parse_class(ParseUnitState& puState,
         cconst.valOption(),
         cconst.phpCode(),
         cconst.typeConstraint(),
-        cconst.isTypeconst(),
+        cconst.coeffects(),
+        cconst.kind(),
+        cconst.isAbstract(),
+        cconst.isFromTrait(),
         true // NoOverride
       }
     );
@@ -976,6 +985,9 @@ std::unique_ptr<php::Class> parse_class(ParseUnitState& puState,
             tvaux,
             staticEmptyString(),
             staticEmptyString(),
+            StaticCoeffects::none(),
+            ConstModifiers::Kind::Value,
+            false,
             false
           }
         );
@@ -1105,11 +1117,6 @@ void parse_unit(php::Program& prog, const UnitEmitter* uep) {
   }
 
   ParseUnitState puState{ prog.nextFuncId };
-  if (ue.hasSourceLocInfo()) {
-    puState.srcLocInfo = ue.createSourceLocTable();
-  } else {
-    puState.srcLocInfo = ue.lineTable();
-  }
 
   for (size_t i = 0; i < ue.numPreClasses(); ++i) {
     auto cls = parse_class(puState, ret.get(), *ue.pce(i));

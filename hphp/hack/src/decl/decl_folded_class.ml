@@ -336,7 +336,7 @@ and synthesize_defaults
       {
         tc with
         ttc_abstract = TCConcrete;
-        ttc_constraint = None;
+        ttc_as_constraint = None;
         ttc_type = Some default;
       }
     in
@@ -615,7 +615,8 @@ and build_constructor
           ~lsb:false
           ~synthesized:false
           ~override:false
-          ~dynamicallycallable:false;
+          ~dynamicallycallable:false
+          ~readonly_prop:false;
       elt_visibility = vis;
       elt_origin = class_name;
       elt_reactivity = None;
@@ -692,7 +693,8 @@ and prop_decl
           ~const:(sp_const sp)
           ~lateinit:(sp_lateinit sp)
           ~abstract:(sp_abstract sp)
-          ~dynamicallycallable:false;
+          ~dynamicallycallable:false
+          ~readonly_prop:(sp_readonly sp);
       elt_visibility = vis;
       elt_origin = snd c.sc_name;
       elt_reactivity = None;
@@ -728,7 +730,8 @@ and static_prop_decl
           ~override:false
           ~abstract:(sp_abstract sp)
           ~synthesized:false
-          ~dynamicallycallable:false;
+          ~dynamicallycallable:false
+          ~readonly_prop:(sp_readonly sp);
       elt_visibility = vis;
       elt_origin = snd c.sc_name;
       elt_reactivity = None;
@@ -808,7 +811,7 @@ and typeconst_fold
       {
         ttc_abstract = stc.stc_abstract;
         ttc_name = stc.stc_name;
-        ttc_constraint = stc.stc_constraint;
+        ttc_as_constraint = stc.stc_as_constraint;
         ttc_type = stc.stc_type;
         ttc_origin = c_name;
         ttc_enforceable = enforceable;
@@ -833,14 +836,11 @@ and method_decl_acc
   let get_reactivity t =
     match get_node t with
     | Tfun { ft_reactive; _ } -> ft_reactive
-    | _ -> Local None
+    | _ -> Nonreactive
   in
   let condition_types =
     match get_reactivity m.sm_type with
-    | Pure (Some ty)
-    | Reactive (Some ty)
-    | Shallow (Some ty)
-    | Local (Some ty) ->
+    | Pure (Some ty) ->
       begin
         match get_node ty with
         | Tapply ((_, cls), []) -> SSet.add cls condition_types
@@ -867,7 +867,8 @@ and method_decl_acc
           ~lsb:false
           ~const:false
           ~lateinit:false
-          ~dynamicallycallable:(sm_dynamicallycallable m);
+          ~dynamicallycallable:(sm_dynamicallycallable m)
+          ~readonly_prop:false;
       elt_visibility = vis;
       elt_origin = snd c.sc_name;
       elt_reactivity = m.sm_reactivity;

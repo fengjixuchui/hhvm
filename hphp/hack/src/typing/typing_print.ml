@@ -323,6 +323,7 @@ module Full = struct
     | Tdarray (x, y) -> tdarray k x y
     | Tvarray x -> tvarray k x
     | Tvarray_or_darray (x, y) -> tvarray_or_darray k x y
+    | Tvec_or_dict (x, y) -> list "vec_or_dict<" k [x; y] ">"
     | Tapply ((_, s), []) -> to_doc s
     | Tgeneric (s, []) -> to_doc s
     | Taccess (root_ty, id) -> Concat [k root_ty; text "::"; to_doc (snd id)]
@@ -385,6 +386,7 @@ module Full = struct
     | Tdynamic -> text "dynamic"
     | Tnonnull -> text "nonnull"
     | Tvarray_or_darray (x, y) -> tvarray_or_darray k x y
+    | Tvec_or_dict (x, y) -> list "vec_or_dict<" k [x; y] ">"
     | Tvarray x -> tvarray k x
     | Tdarray (x, y) -> tdarray k x y
     | Tclass ((_, s), Exact, []) when !debug_mode ->
@@ -705,7 +707,7 @@ module Full = struct
     let body =
       SymbolOccurrence.(
         match (occurrence, get_node x) with
-        | ({ type_ = Class; name; _ }, _) ->
+        | ({ type_ = Class _; name; _ }, _) ->
           Concat [text "class"; Space; text_strip_ns name]
         | ({ type_ = Function; name; _ }, Tfun ft)
         | ({ type_ = Method (_, name); _ }, Tfun ft) ->
@@ -776,6 +778,7 @@ module ErrorString = struct
     | Tintersection [] -> "a mixed value"
     | Tintersection l -> intersection env l
     | Tvarray_or_darray _ -> varray_or_darray
+    | Tvec_or_dict _ -> "a vec_or_dict"
     | Tvarray _ -> varray
     | Tdarray (_, _) -> darray
     | Ttuple l -> "a tuple of size " ^ string_of_int (List.length l)
@@ -999,6 +1002,8 @@ module Json = struct
       obj @@ fun_kind p @ params ft.ft_params @ result ft.ft_ret.et_type
     | (p, Tvarray_or_darray (ty1, ty2)) ->
       obj @@ kind p "varray_or_darray" @ args [ty1; ty2]
+    | (p, Tvec_or_dict (ty1, ty2)) ->
+      obj @@ kind p "vec_or_dict" @ args [ty1; ty2]
     | (p, Tdarray (ty1, ty2)) -> obj @@ kind p "darray" @ args [ty1; ty2]
     | (p, Tvarray ty) -> obj @@ kind p "varray" @ args [ty]
     (* TODO akenn *)
@@ -1364,7 +1369,8 @@ module Json = struct
                         ~has_default:false
                         ~ifc_external:false
                         ~ifc_can_call:false
-                        ~is_atom:false;
+                        ~is_atom:false
+                        ~readonly:false;
                     (* Dummy values: these aren't currently serialized. *)
                     fp_pos = Pos.none;
                     fp_name = None;
@@ -1553,7 +1559,7 @@ module PrintClass = struct
       {
         ttc_abstract = _;
         ttc_name = tc_name;
-        ttc_constraint = tc_constraint;
+        ttc_as_constraint = as_constraint;
         ttc_type = tc_type;
         ttc_origin = origin;
         ttc_enforceable = (_, enforceable);
@@ -1561,8 +1567,8 @@ module PrintClass = struct
       } =
     let name = snd tc_name in
     let ty x = Full.to_string_decl ctx x in
-    let constraint_ =
-      match tc_constraint with
+    let as_constraint =
+      match as_constraint with
       | None -> ""
       | Some x -> " as " ^ ty x
     in
@@ -1572,7 +1578,7 @@ module PrintClass = struct
       | Some x -> " = " ^ ty x
     in
     name
-    ^ constraint_
+    ^ as_constraint
     ^ type_
     ^ " (origin:"
     ^ origin

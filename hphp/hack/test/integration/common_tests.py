@@ -81,6 +81,7 @@ class CommonTestDriver(TestDriver):
             **{
                 "HH_TEST_MODE": "1",
                 "HH_TMPDIR": cls.hh_tmp_dir,
+                "HACKFMT_TEST_PATH": hackfmt,
                 "PATH": (
                     "%s:%s:%s:/bin:/usr/bin:/usr/local/bin"
                     % (hh_server_dir, hh_merge_deps_dir, cls.bin_dir)
@@ -233,8 +234,7 @@ class CommonTestDriver(TestDriver):
     # Check to see if you can run hackfmt
     def run_hackfmt_check(self) -> bool:
         try:
-            #
-            (stdout_data, stderr_data, retcode) = self.proc_call(["hackfmt", "-help"])
+            (stdout_data, stderr_data, retcode) = self.proc_call([hackfmt, "-help"])
             return retcode == 0
         # If the file isn't found you will get this
         except FileNotFoundError:
@@ -321,7 +321,7 @@ class CommonTestDriver(TestDriver):
 
         self.check_cmd(["No errors!"])
 
-        # trigger rechecking of all 11 files, and make one of them loop
+        # trigger rechecking of all 11 file, and make one of them loop
         # until cancelled
         with open(os.path.join(self.repo_dir, "__hh_loop_forever_foo.php"), "w") as f:
             f.write(
@@ -1023,7 +1023,7 @@ class CommonTests(BarebonesTests):
         self.test_driver.start_hh_server(changed_files=["foo_4.php"])
 
         self.test_driver.check_cmd_and_json_cmd(
-            ["Rewrote 1 files."],
+            ["Rewrote 1 file."],
             [
                 '[{{"filename":"{root}foo_4.php","patches":[{{'
                 '"char_start":84,"char_end":85,"line":4,"col_start":33,'
@@ -1034,7 +1034,7 @@ class CommonTests(BarebonesTests):
             options=["--refactor", "Method", "Bar::f", "Bar::wat"],
         )
         self.test_driver.check_cmd_and_json_cmd(
-            ["Rewrote 1 files."],
+            ["Rewrote 1 file."],
             [
                 '[{{"filename":"{root}foo_4.php","patches":[{{'
                 '"char_start":125,"char_end":126,"line":5,"col_start":33,'
@@ -1045,6 +1045,57 @@ class CommonTests(BarebonesTests):
             ],
             options=["--refactor", "Method", "Bar::g", "Bar::overrideMe"],
         )
+
+        with open(os.path.join(self.test_driver.repo_dir, "foo_4.php")) as f:
+            out = f.read()
+            self.assertEqual(
+                out,
+                """<?hh //partial
+
+            class Bar extends Foo {
+                public function wat() {}
+                public function overrideMe() {}
+            }
+
+            class Baz extends Bar {
+                public function overrideMe() {
+                    $this->wat();
+                }
+            }
+            """,
+            )
+
+    def test_refactor_classes(self) -> None:
+        with open(os.path.join(self.test_driver.repo_dir, "foo_4.php"), "w") as f:
+            f.write(
+                """<?hh //partial
+
+            class Bar extends Foo {
+                const int FOO = 42;
+
+                private static int $val = 0;
+
+                public function f() {}
+                public function g() {}
+                public static function h() {}
+                public static function i() {
+                    self::h();
+                    self::$val = 1;
+                    static::$val = 2;
+                    $x = self::FOO;
+                }
+            }
+
+            class Baz extends Bar {
+                public function g() {
+                    $this->f();
+                    parent::g();
+                }
+            }
+            """
+            )
+        self.test_driver.start_hh_server(changed_files=["foo_4.php"])
+
         self.test_driver.check_cmd_and_json_cmd(
             ["Rewrote 2 files."],
             [
@@ -1060,6 +1111,17 @@ class CommonTests(BarebonesTests):
             ],
             options=["--refactor", "Class", "Foo", "Qux"],
         )
+        self.test_driver.check_cmd_and_json_cmd(
+            ["Rewrote 1 file."],
+            [
+                '[{{"filename":"{root}foo_4.php","patches":[{{'
+                '"char_start":34,"char_end":37,"line":3,"col_start":19,'
+                '"col_end":21,"patch_type":"replace","replacement":"Quux"}},'
+                '{{"char_start":508,"char_end":511,"line":19,"col_start":31,'
+                '"col_end":33,"patch_type":"replace","replacement":"Quux"}}]}}]'
+            ],
+            options=["--refactor", "Class", "Bar", "Quux"],
+        )
 
         with open(os.path.join(self.test_driver.repo_dir, "foo_4.php")) as f:
             out = f.read()
@@ -1067,14 +1129,26 @@ class CommonTests(BarebonesTests):
                 out,
                 """<?hh //partial
 
-            class Bar extends Qux {
-                public function wat() {}
-                public function overrideMe() {}
+            class Quux extends Qux {
+                const int FOO = 42;
+
+                private static int $val = 0;
+
+                public function f() {}
+                public function g() {}
+                public static function h() {}
+                public static function i() {
+                    self::h();
+                    self::$val = 1;
+                    static::$val = 2;
+                    $x = self::FOO;
+                }
             }
 
-            class Baz extends Bar {
-                public function overrideMe() {
-                    $this->wat();
+            class Baz extends Quux {
+                public function g() {
+                    $this->f();
+                    parent::g();
                 }
             }
             """,
@@ -1115,7 +1189,7 @@ class CommonTests(BarebonesTests):
         self.test_driver.start_hh_server(changed_files=["foo_4.php"])
 
         self.test_driver.check_cmd_and_json_cmd(
-            ["Rewrote 1 files."],
+            ["Rewrote 1 file."],
             [
                 '[{{"filename":"{root}foo_4.php","patches":[{{'
                 '"char_start":132,"char_end":135,"line":8,"col_start":22,'
@@ -1185,7 +1259,7 @@ class CommonTests(BarebonesTests):
         self.test_driver.start_hh_server(changed_files=["foo_4.php"])
 
         self.test_driver.check_cmd_and_json_cmd(
-            ["Rewrote 1 files."],
+            ["Rewrote 1 file."],
             [
                 '[{{"filename":"{root}foo_4.php","patches":[{{'
                 '"char_start":36,"char_end":43,"line":3,"col_start":21,'
@@ -1198,7 +1272,7 @@ class CommonTests(BarebonesTests):
         )
 
         self.test_driver.check_cmd_and_json_cmd(
-            ["Rewrote 1 files."],
+            ["Rewrote 1 file."],
             [
                 '[{{"filename":"{root}foo_4.php","patches":[{{'
                 '"char_start":69,"char_end":73,"line":4,"col_start":18,'

@@ -3,10 +3,10 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<3f8415bce5c453d24a4cea22832146cf>>
+// @generated SignedSource<<c9284eda5ff6f2539875f6cfa377ed51>>
 //
 // To regenerate this file, run:
-//   hphp/hack/src/oxidize_regen.sh
+//   hphp/hack/src/oxidized_regen.sh
 
 use arena_trait::TrivialDrop;
 use ocamlrep_derive::FromOcamlRepIn;
@@ -136,5 +136,10 @@ pub struct GlobalOptions<'a> {
     pub po_disallow_fun_and_cls_meth_pseudo_funcs: bool,
     pub tco_use_direct_decl_parser: bool,
     pub tco_ifc_enabled: &'a [&'a str],
+    pub po_enable_enum_supertyping: bool,
+    pub po_array_unification: bool,
+    pub po_interpret_soft_types_as_like_types: bool,
+    pub tco_enable_strict_string_concat_interp: bool,
+    pub tco_readonly: bool,
 }
 impl<'a> TrivialDrop for GlobalOptions<'a> {}

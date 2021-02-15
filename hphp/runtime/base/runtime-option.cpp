@@ -21,6 +21,7 @@
 #include "hphp/runtime/base/autoload-handler.h"
 #include "hphp/runtime/base/bespoke-array.h"
 #include "hphp/runtime/base/builtin-functions.h"
+#include "hphp/runtime/base/coeffects-config.h"
 #include "hphp/runtime/base/config.h"
 #include "hphp/runtime/base/crash-reporter.h"
 #include "hphp/runtime/base/execution-context.h"
@@ -273,9 +274,9 @@ const RepoOptions& RepoOptions::forFile(const char* path) {
     wrapper = Stream::getWrapperFromURI(path);
     if (wrapper && !wrapper->isNormalFileStream()) wrapper = nullptr;
   }
-  auto const wrapped_lstat = [&](const char* path, struct stat* st) {
-    if (wrapper) return wrapper->lstat(path, st);
-    return lstat(path, st);
+  auto const wrapped_stat = [&](const char* path, struct stat* st) {
+    if (wrapper) return wrapper->stat(path, st);
+    return ::stat(path, st);
   };
 
   auto const wrapped_open = [&](const char* path) -> folly::Optional<String> {
@@ -313,7 +314,7 @@ const RepoOptions& RepoOptions::forFile(const char* path) {
 
       if (isParentOf(opts->path(), fpath)) {
         struct stat st;
-        if (wrapped_lstat(opts->path().data(), &st) == 0) {
+        if (wrapped_stat(opts->path().data(), &st) == 0) {
           if (!CachedRepoOptions::isChanged(opts, st)) return *opts;
         }
       }
@@ -341,7 +342,7 @@ const RepoOptions& RepoOptions::forFile(const char* path) {
     RepoOptionCache::const_accessor rpathAcc;
     const RepoOptionCacheKey key {(bool)wrapper, path};
     if (!s_repoOptionCache.find(rpathAcc, key)) return nullptr;
-    if (wrapped_lstat(path.data(), &st) != 0) {
+    if (wrapped_stat(path.data(), &st) != 0) {
       s_repoOptionCache.erase(rpathAcc);
       return nullptr;
     }
@@ -375,7 +376,7 @@ const RepoOptions& RepoOptions::forFile(const char* path) {
 
   walkDirTree(fpath, [&] (const std::string& path) {
     struct stat st;
-    if (wrapped_lstat(path.data(), &st) != 0) return false;
+    if (wrapped_stat(path.data(), &st) != 0) return false;
     RepoOptionCache::const_accessor rpathAcc;
     const RepoOptionCacheKey key {(bool)wrapper, path};
     s_repoOptionCache.insert(rpathAcc, key);
@@ -565,7 +566,6 @@ std::string RuntimeOption::ServerUser;
 std::vector<std::string> RuntimeOption::TzdataSearchPaths;
 
 int RuntimeOption::MaxSerializedStringSize = 64 * 1024 * 1024; // 64MB
-bool RuntimeOption::AssertEmitted = true;
 int64_t RuntimeOption::NoticeFrequency = 1;
 int64_t RuntimeOption::WarningFrequency = 1;
 int RuntimeOption::RaiseDebuggingFrequency = 1;
@@ -856,7 +856,6 @@ int64_t RuntimeOption::HeapLowWaterMark = 16;
 int64_t RuntimeOption::HeapHighWaterMark = 1024;
 uint64_t RuntimeOption::DisableCallUserFunc = 0;
 uint64_t RuntimeOption::DisableCallUserFuncArray = 0;
-uint64_t RuntimeOption::DisableAssert = 0;
 uint64_t RuntimeOption::DisableConstant = 0;
 bool RuntimeOption::DisableNontoplevelDeclarations = false;
 bool RuntimeOption::DisableStaticClosures = false;
@@ -1744,9 +1743,6 @@ void RuntimeOption::Load(
     Config::Bind(DisableCallUserFuncArray, ini, config,
                  "Hack.Lang.Phpism.DisableCallUserFuncArray",
                  DisableCallUserFuncArray);
-    Config::Bind(DisableAssert, ini, config,
-                 "Hack.Lang.Phpism.DisableAssert",
-                 DisableAssert);
     Config::Bind(DisableNontoplevelDeclarations, ini, config,
                  "Hack.Lang.Phpism.DisableNontoplevelDeclarations",
                  DisableNontoplevelDeclarations);
@@ -2709,16 +2705,6 @@ void RuntimeOption::Load(
     // Profiling
     Config::Bind(SetProfileNullThisObject, ini, config,
                  "SetProfile.NullThisObject", true);
-  }
-  {
-    // We directly read zend.assertions here, so that we can get its INI value
-    // in order to know how we should emit bytecode. We don't actually Bind the
-    // option here though, since its runtime value can be changed and is per
-    // request. (We prevent its value from changing at runtime between values
-    // that would affect byecode emission.)
-    Variant v;
-    bool b = IniSetting::GetSystem("zend.assertions", v);
-    if (b) RuntimeOption::AssertEmitted = v.toInt64() >= 0;
   }
 
   Config::Bind(TzdataSearchPaths, ini, config, "TzdataSearchPaths");

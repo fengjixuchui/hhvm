@@ -303,7 +303,7 @@ void print_instr(Output& out, const FuncInfo& finfo, PC pc) {
   auto print_mk = [&] (MemberKey m) {
     if (m.mcode == MEL || m.mcode == MPL) {
       std::string ret = memberCodeString(m.mcode);
-      folly::toAppend(':', loc_name(finfo, m.iva), &ret);
+      folly::toAppend(':', loc_name(finfo, m.iva), " ", subopToName(m.rop), &ret);
       return ret;
     }
     return show(m);
@@ -424,8 +424,11 @@ void print_func_directives(Output& out, const FuncInfo& finfo) {
     }
     out.fmtln(".declvars {};", folly::join(" ", locals));
   }
-  if (auto const coeffect = func->staticCoeffects().toString()) {
-    out.fmtln(".static_coeffects {};", coeffect);
+  auto const coeffects = func->staticCoeffectNames();
+  if (!coeffects.empty()) {
+    std::vector<std::string> names;
+    for (auto const& name : coeffects) names.push_back(name->toCppString());
+    out.fmtln(".static_coeffects {};", folly::join(" ", names));
   }
   if (func->hasCoeffectRules()) {
     for (auto const& rule : func->getCoeffectRules()) {
@@ -652,13 +655,26 @@ std::string member_tv_initializer(TypedValue cell) {
 }
 
 void print_class_constant(Output& out, const PreClass::Const* cns) {
-  if (cns->isAbstract()) {
-    out.fmtln(".const {}{};", cns->name(),
-              cns->isType() ? " isType" : "");
+  if (cns->kind() == ConstModifiers::Kind::Context) {
+    auto const coeffect_str = cns->coeffects().toString();
+    out.fmtln(".ctx {} {};",
+              cns->name(),
+              coeffect_str ? *coeffect_str : std::string("defaults"));
     return;
   }
-  out.fmtln(".const {}{} = {};", cns->name(),
-    cns->isType() ? " isType" : "",
+  auto const kind = [&] {
+    switch (cns->kind()) {
+      case ConstModifiers::Kind::Value:   return "";
+      case ConstModifiers::Kind::Type:    return " isType";
+      case ConstModifiers::Kind::Context: not_reached();
+    }
+    not_reached();
+  }();
+  if (cns->isAbstract()) {
+    out.fmtln(".const {}{};", cns->name(), kind);
+    return;
+  }
+  out.fmtln(".const {}{} = {};", cns->name(), kind,
     member_tv_initializer(cns->val()));
 }
 
