@@ -314,7 +314,6 @@ bool canDCE(IRInstruction* inst) {
   case ConvTVToBool:
   case ConvObjToBool:
   case ConvObjToStr:
-  case ConvResToStr:
   case ConvTVToStr:
   case ConvArrLikeToVec:
   case ConvObjToVec:
@@ -700,6 +699,7 @@ bool canDCE(IRInstruction* inst) {
   case StFrameFunc:
   case StFrameMeta:
   case LookupClsCns:
+  case LookupClsCtxCns:
   case ArrayMarkLegacyShallow:
   case ArrayMarkLegacyRecursive:
   case ArrayUnmarkLegacyShallow:
@@ -830,16 +830,16 @@ WorkList initInstructions(const IRUnit& unit, const BlockList& blocks,
 //////////////////////////////////////////////////////////////////////
 
 void processCatchBlock(IRUnit& unit, DceState& state, Block* block,
-                       FPRelOffset stackTop, const UseCounts& uses) {
-  using Bits = std::bitset<64>;
+                       const UseCounts& uses) {
+  assertx(block->front().is(BeginCatch));
+  assertx(block->back().is(EndCatch));
 
-  auto const stackSize = (stackTop.offset < -64) ? 64 : -stackTop.offset;
-  if (stackSize == 0) return;
-  auto const stackBase = stackTop + stackSize;
-  // subtract 1 because we want the cells at offsets -1, -2, ... -stackSize
-  auto const stackRange = AStack { stackBase - 1, stackSize };
+  auto constexpr numTrackedSlots = 64;
+  auto constexpr wholeRange = std::make_pair(0, numTrackedSlots);
+  auto const stackTop = block->back().extra<EndCatch>()->offset;
+  auto const stackRange = AStack::range(stackTop, stackTop + numTrackedSlots);
 
-  Bits usedLocations = {};
+  std::bitset<numTrackedSlots> usedLocations = {};
   // stores that are only read by the EndCatch
   jit::fast_set<IRInstruction*> candidateStores;
   // Any IncRefs we see; if they correspond to stores above, we can
@@ -850,24 +850,25 @@ void processCatchBlock(IRUnit& unit, DceState& state, Block* block,
     [&] (const AliasClass& cls) -> std::pair<int, int> {
       if (!cls.maybe(stackRange)) return {};
       auto const stk = cls.stack();
-      if (!stk) return { 0, stackSize };
-      if (stk->offset < stackTop) {
-        auto const delta = stackTop.offset - stk->offset.offset;
-        if (delta >= stk->size) return {};
-        return { 0, stk->size - delta };
-      }
-      auto const base = stk->offset.offset - stackTop.offset;
-      if (base >= stackSize) return {};
-      auto const end = base + stk->size < stackSize ?
-        base + stk->size : stackSize;
-      return { base, end };
+      if (!stk) return wholeRange;
+      auto const lowest_upper = std::min(stackRange.high, stk->high);
+      auto const highest_lower = std::max(stackRange.low, stk->low);
+      if (lowest_upper <= highest_lower) return {};
+      return {
+        highest_lower.offset - stackRange.low.offset,
+        lowest_upper.offset - stackRange.low.offset
+      };
     };
 
   auto const process_stack =
     [&] (const AliasClass& cls) {
       auto r = range(cls);
-      while (r.first < r.second) {
-        usedLocations.set(r.first++);
+      if (r == wholeRange) {
+        usedLocations.set();
+      } else {
+        while (r.first < r.second) {
+          usedLocations.set(r.first++);
+        }
       }
       return false;
     };
@@ -969,10 +970,7 @@ void optimizeCatchBlocks(const BlockList& blocks,
         block->back().extra<EndCatch>()->mode !=
           EndCatchData::CatchMode::SideExit &&
         block->front().is(BeginCatch)) {
-      auto const astk = AStack {
-        block->back().src(1), block->back().extra<EndCatch>()->offset, 0
-      };
-      processCatchBlock(unit, state, block, astk.offset, uses);
+      processCatchBlock(unit, state, block, uses);
     }
   }
 }

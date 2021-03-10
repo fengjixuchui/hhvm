@@ -15,75 +15,62 @@
        sc_props =
        [{ Shallow_decl_defs.sp_name = ([4:13-18], "data");
           sp_xhp_attr = None;
-          sp_type =
-          (Some (Rhint (root|generic_classes.php line 4, characters 11-11),
-                 (Tgeneric ("T", []))));
+          sp_type = (Some (Rhint ([4:11-12]), (Tgeneric ("T", []))));
           sp_visibility = Private; sp_flags = needs_init }
          ];
        sc_sprops = [];
        sc_constructor =
        (Some { Shallow_decl_defs.sm_name = ([6:19-30], "__construct");
-               sm_reactivity = None;
                sm_type =
-               (Rwitness (root|generic_classes.php line 6, characters 19-29),
+               (Rwitness_from_decl ([6:19-30]),
                 (Tfun
                    { ft_arity = (Fstandard ()); ft_tparams = [];
                      ft_where_constraints = [];
                      ft_params =
                      [{ fp_pos = [6:33-38]; fp_name = (Some "$data");
                         fp_type =
-                        { et_enforced = false;
-                          et_type =
-                          (Rhint (root|generic_classes.php line 6, characters 31-31),
-                           (Tgeneric ("T", [])))
+                        { et_enforced = Typing_defs_core.Unenforced;
+                          et_type = (Rhint ([6:31-32]), (Tgeneric ("T", [])))
                           };
-                        fp_rx_annotation = None;
                         fp_flags =
-                        (make_fp_flags ~mutability:None
-                          ~accept_disposable:false ~has_default:false
-                          ~mode:Typing_defs_core.FPnormal ~ifc_external:false
-                          ~ifc_can_call:false ~is_atom:false ~readonly:false);
+                        (make_fp_flags ~accept_disposable:false
+                          ~has_default:false ~mode:Typing_defs_core.FPnormal
+                          ~ifc_external:false ~ifc_can_call:false
+                          ~is_atom:false ~readonly:false
+                          ~const_function:false);
                          }
                        ];
                      ft_implicit_params =
                      { capability = (CapDefaults [6:19-30]) };
                      ft_ret =
-                     { et_enforced = false;
+                     { et_enforced = Typing_defs_core.Unenforced;
                        et_type =
-                       (Rwitness (root|generic_classes.php line 6, characters 19-29),
-                        (Tprim Tvoid))
-                       };
+                       (Rwitness_from_decl ([6:19-30]), (Tprim Tvoid)) };
                      ft_flags =
-                     (make_ft_flags FSync None ~return_disposable:false
-                       ~returns_mutable:false ~returns_void_to_rx:false
-                       ~returns_readonly:false ~readonly_this:false);
-                     ft_reactive = Nonreactive;
+                     (make_ft_flags FSync ~return_disposable:false
+                       ~returns_readonly:false ~readonly_this:false
+                       ~is_const:false);
                      ft_ifc_decl = FDPolicied {PUBLIC} }));
                sm_visibility = Public; sm_deprecated = None;
                sm_flags = (empty) });
        sc_static_methods = [];
        sc_methods =
        [{ Shallow_decl_defs.sm_name = ([10:19-22], "get");
-          sm_reactivity = None;
           sm_type =
-          (Rwitness (root|generic_classes.php line 10, characters 19-21),
+          (Rwitness_from_decl ([10:19-22]),
            (Tfun
               { ft_arity = (Fstandard ()); ft_tparams = [];
                 ft_where_constraints = []; ft_params = [];
                 ft_implicit_params =
                 { capability = (CapDefaults [10:19-22]) };
                 ft_ret =
-                { et_enforced = false;
-                  et_type =
-                  (Rhint (root|generic_classes.php line 10, characters 26-26),
-                   (Tgeneric ("T", [])))
-                  };
+                { et_enforced = Typing_defs_core.Unenforced;
+                  et_type = (Rhint ([10:26-27]), (Tgeneric ("T", []))) };
                 ft_flags =
-                (make_ft_flags FSync None ~return_disposable:false
-                  ~returns_mutable:false ~returns_void_to_rx:false
-                  ~returns_readonly:false ~readonly_this:false);
-                ft_reactive = Nonreactive; ft_ifc_decl = FDPolicied {PUBLIC}
-                }));
+                (make_ft_flags FSync ~return_disposable:false
+                  ~returns_readonly:false ~readonly_this:false
+                  ~is_const:false);
+                ft_ifc_decl = FDPolicied {PUBLIC} }));
           sm_visibility = Public; sm_deprecated = None; sm_flags = (empty) }
          ];
        sc_user_attributes = []; sc_enum_type = None }));
@@ -104,50 +91,41 @@
         sc_props =
         [{ Shallow_decl_defs.sp_name = ([16:13-18], "data");
            sp_xhp_attr = None;
-           sp_type =
-           (Some (Rhint (root|generic_classes.php line 16, characters 11-11),
-                  (Tgeneric ("T", []))));
+           sp_type = (Some (Rhint ([16:11-12]), (Tgeneric ("T", []))));
            sp_visibility = Private; sp_flags = needs_init }
           ];
         sc_sprops = [];
         sc_constructor =
         (Some { Shallow_decl_defs.sm_name = ([18:19-30], "__construct");
-                sm_reactivity = None;
                 sm_type =
-                (Rwitness (root|generic_classes.php line 18, characters 19-29),
+                (Rwitness_from_decl ([18:19-30]),
                  (Tfun
                     { ft_arity = (Fstandard ()); ft_tparams = [];
                       ft_where_constraints = [];
                       ft_params =
                       [{ fp_pos = [18:33-38]; fp_name = (Some "$data");
                          fp_type =
-                         { et_enforced = false;
+                         { et_enforced = Typing_defs_core.Unenforced;
                            et_type =
-                           (Rhint (root|generic_classes.php line 18, characters 31-31),
-                            (Tgeneric ("T", [])))
-                           };
-                         fp_rx_annotation = None;
+                           (Rhint ([18:31-32]), (Tgeneric ("T", []))) };
                          fp_flags =
-                         (make_fp_flags ~mutability:None
-                           ~accept_disposable:false ~has_default:false
-                           ~mode:Typing_defs_core.FPnormal
+                         (make_fp_flags ~accept_disposable:false
+                           ~has_default:false ~mode:Typing_defs_core.FPnormal
                            ~ifc_external:false ~ifc_can_call:false
-                           ~is_atom:false ~readonly:false);
+                           ~is_atom:false ~readonly:false
+                           ~const_function:false);
                           }
                         ];
                       ft_implicit_params =
                       { capability = (CapDefaults [18:19-30]) };
                       ft_ret =
-                      { et_enforced = false;
+                      { et_enforced = Typing_defs_core.Unenforced;
                         et_type =
-                        (Rwitness (root|generic_classes.php line 18, characters 19-29),
-                         (Tprim Tvoid))
-                        };
+                        (Rwitness_from_decl ([18:19-30]), (Tprim Tvoid)) };
                       ft_flags =
-                      (make_ft_flags FSync None ~return_disposable:false
-                        ~returns_mutable:false ~returns_void_to_rx:false
-                        ~returns_readonly:false ~readonly_this:false);
-                      ft_reactive = Nonreactive;
+                      (make_ft_flags FSync ~return_disposable:false
+                        ~returns_readonly:false ~readonly_this:false
+                        ~is_const:false);
                       ft_ifc_decl = FDPolicied {PUBLIC} }));
                 sm_visibility = Public; sm_deprecated = None;
                 sm_flags = (empty) });
@@ -170,76 +148,62 @@
         sc_props =
         [{ Shallow_decl_defs.sp_name = ([24:13-18], "data");
            sp_xhp_attr = None;
-           sp_type =
-           (Some (Rhint (root|generic_classes.php line 24, characters 11-11),
-                  (Tgeneric ("T", []))));
+           sp_type = (Some (Rhint ([24:11-12]), (Tgeneric ("T", []))));
            sp_visibility = Private; sp_flags = needs_init }
           ];
         sc_sprops = [];
         sc_constructor =
         (Some { Shallow_decl_defs.sm_name = ([26:19-30], "__construct");
-                sm_reactivity = None;
                 sm_type =
-                (Rwitness (root|generic_classes.php line 26, characters 19-29),
+                (Rwitness_from_decl ([26:19-30]),
                  (Tfun
                     { ft_arity = (Fstandard ()); ft_tparams = [];
                       ft_where_constraints = [];
                       ft_params =
                       [{ fp_pos = [26:33-38]; fp_name = (Some "$data");
                          fp_type =
-                         { et_enforced = false;
+                         { et_enforced = Typing_defs_core.Unenforced;
                            et_type =
-                           (Rhint (root|generic_classes.php line 26, characters 31-31),
-                            (Tgeneric ("T", [])))
-                           };
-                         fp_rx_annotation = None;
+                           (Rhint ([26:31-32]), (Tgeneric ("T", []))) };
                          fp_flags =
-                         (make_fp_flags ~mutability:None
-                           ~accept_disposable:false ~has_default:false
-                           ~mode:Typing_defs_core.FPnormal
+                         (make_fp_flags ~accept_disposable:false
+                           ~has_default:false ~mode:Typing_defs_core.FPnormal
                            ~ifc_external:false ~ifc_can_call:false
-                           ~is_atom:false ~readonly:false);
+                           ~is_atom:false ~readonly:false
+                           ~const_function:false);
                           }
                         ];
                       ft_implicit_params =
                       { capability = (CapDefaults [26:19-30]) };
                       ft_ret =
-                      { et_enforced = false;
+                      { et_enforced = Typing_defs_core.Unenforced;
                         et_type =
-                        (Rwitness (root|generic_classes.php line 26, characters 19-29),
-                         (Tprim Tvoid))
-                        };
+                        (Rwitness_from_decl ([26:19-30]), (Tprim Tvoid)) };
                       ft_flags =
-                      (make_ft_flags FSync None ~return_disposable:false
-                        ~returns_mutable:false ~returns_void_to_rx:false
-                        ~returns_readonly:false ~readonly_this:false);
-                      ft_reactive = Nonreactive;
+                      (make_ft_flags FSync ~return_disposable:false
+                        ~returns_readonly:false ~readonly_this:false
+                        ~is_const:false);
                       ft_ifc_decl = FDPolicied {PUBLIC} }));
                 sm_visibility = Public; sm_deprecated = None;
                 sm_flags = (empty) });
         sc_static_methods = [];
         sc_methods =
         [{ Shallow_decl_defs.sm_name = ([30:19-22], "get");
-           sm_reactivity = None;
            sm_type =
-           (Rwitness (root|generic_classes.php line 30, characters 19-21),
+           (Rwitness_from_decl ([30:19-22]),
             (Tfun
                { ft_arity = (Fstandard ()); ft_tparams = [];
                  ft_where_constraints = []; ft_params = [];
                  ft_implicit_params =
                  { capability = (CapDefaults [30:19-22]) };
                  ft_ret =
-                 { et_enforced = false;
-                   et_type =
-                   (Rhint (root|generic_classes.php line 30, characters 26-26),
-                    (Tgeneric ("T", [])))
-                   };
+                 { et_enforced = Typing_defs_core.Unenforced;
+                   et_type = (Rhint ([30:26-27]), (Tgeneric ("T", []))) };
                  ft_flags =
-                 (make_ft_flags FSync None ~return_disposable:false
-                   ~returns_mutable:false ~returns_void_to_rx:false
-                   ~returns_readonly:false ~readonly_this:false);
-                 ft_reactive = Nonreactive; ft_ifc_decl = FDPolicied {PUBLIC}
-                 }));
+                 (make_ft_flags FSync ~return_disposable:false
+                   ~returns_readonly:false ~readonly_this:false
+                   ~is_const:false);
+                 ft_ifc_decl = FDPolicied {PUBLIC} }));
            sm_visibility = Public; sm_deprecated = None; sm_flags = (empty) }
           ];
         sc_user_attributes = []; sc_enum_type = None }))

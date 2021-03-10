@@ -18,8 +18,8 @@ exception Decl_heap_elems_bug
 [@@@warning "-3"]
 
 let wrap_not_found (child_class_name : string) find member =
-  try find member (* TODO: t13396089 *)
-  with Not_found ->
+  match find member (* TODO: t13396089 *) with
+  | None ->
     let (origin, name) = member in
     Hh_logger.log
       "Decl_heap_elems_bug: could not find %s::%s (inherited by %s):\n%s"
@@ -28,6 +28,7 @@ let wrap_not_found (child_class_name : string) find member =
       child_class_name
       Stdlib.Printexc.(raw_backtrace_to_string @@ get_callstack 100);
     raise Decl_heap_elems_bug
+  | Some m -> m
 
 [@@@warning "+3"]
 
@@ -38,12 +39,11 @@ let rec apply_substs substs class_context (pos, ty) =
     apply_substs substs next_class_context (pos, Inst.instantiate subst ty)
 
 let element_to_class_elt
-    (pty : (Pos.t * decl_ty) lazy_t)
+    (pty : (Pos_or_decl.t * decl_ty) lazy_t)
     {
       elt_flags = ce_flags;
       elt_origin = ce_origin;
       elt_visibility = ce_visibility;
-      elt_reactivity = _;
       elt_deprecated = ce_deprecated;
     } =
   let (ce_pos, ce_type) =
@@ -86,7 +86,7 @@ let to_class_type
         dc_decl_errors;
         dc_condition_types = _;
       },
-      (members : Decl_heap.class_members option) ) =
+      (members : Decl_store.class_members option) ) =
   let find_in_local_or_heap find_in_local find_in_heap (origin, name) =
     match find_in_local name with
     | Some m -> m
@@ -97,19 +97,19 @@ let to_class_type
   in
   let find_method =
     find_in_local_or_heap
-      (find_in_local @@ fun m -> m.Decl_heap.m_methods)
-      Decl_heap.Methods.find_unsafe
+      (find_in_local @@ fun m -> m.Decl_store.m_methods)
+      Decl_store.((get ()).get_method)
   in
   let find_static_method =
     find_in_local_or_heap
-      (find_in_local @@ fun m -> m.Decl_heap.m_static_methods)
-      Decl_heap.StaticMethods.find_unsafe
+      (find_in_local @@ fun m -> m.Decl_store.m_static_methods)
+      Decl_store.((get ()).get_static_method)
   in
   let find_property x =
     let ty =
       find_in_local_or_heap
-        (find_in_local @@ fun m -> m.Decl_heap.m_properties)
-        Decl_heap.Props.find_unsafe
+        (find_in_local @@ fun m -> m.Decl_store.m_properties)
+        Decl_store.((get ()).get_prop)
         x
     in
     (get_pos ty, ty)
@@ -117,16 +117,16 @@ let to_class_type
   let find_static_property x =
     let ty =
       find_in_local_or_heap
-        (find_in_local @@ fun m -> m.Decl_heap.m_static_properties)
-        Decl_heap.StaticProps.find_unsafe
+        (find_in_local @@ fun m -> m.Decl_store.m_static_properties)
+        Decl_store.((get ()).get_static_prop)
         x
     in
     (get_pos ty, ty)
   in
   let find_constructor class_ =
     find_in_local_or_heap
-      (fun _ -> members >>= fun m -> m.Decl_heap.m_constructor)
-      (fun (class_, _) -> Decl_heap.Constructors.find_unsafe class_)
+      (fun _ -> members >>= fun m -> m.Decl_store.m_constructor)
+      (fun (class_, _) -> Decl_store.((get ()).get_constructor class_))
       (class_, Naming_special_names.Members.__construct)
   in
   let map_elements find elts =

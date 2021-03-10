@@ -899,24 +899,10 @@ void VariableSerializer::writeArrayHeader(int size, bool isVectorData,
     } else {
       switch (kind) {
       case ArrayKind::Dict:
-        if (m_type == Type::PHPOutput && m_dvOverrides) {
-          m_buf->append(
-            (*m_dvOverrides)[m_dvOverridesIndex] ? "darray [\n" : "dict [\n"
-          );
-          m_dvOverridesIndex++;
-        } else {
-          m_buf->append("dict [\n");
-        }
+        m_buf->append("dict [\n");
         break;
       case ArrayKind::Vec:
-        if (m_type == Type::PHPOutput && m_dvOverrides) {
-          m_buf->append(
-            (*m_dvOverrides)[m_dvOverridesIndex] ? "varray [\n" : "vec [\n"
-          );
-          m_dvOverridesIndex++;
-        } else {
-          m_buf->append("vec [\n");
-        }
+        m_buf->append("vec [\n");
         break;
       case ArrayKind::Keyset:
         m_buf->append("keyset [\n");
@@ -1526,6 +1512,8 @@ void VariableSerializer::serializeRFunc(const RFuncData* rfunc) {
   }
 }
 
+const StaticString s_invalidMethCaller("Cannot store meth_caller in APC");
+
 void VariableSerializer::serializeFunc(const Func* func) {
   auto const name = func->fullName();
   switch (getType()) {
@@ -1554,9 +1542,14 @@ void VariableSerializer::serializeFunc(const Func* func) {
     case Type::JSON:
       write(func->nameStr());
       break;
+    case Type::APCSerialize:
+      if (func->isMethCaller()) {
+        SystemLib::throwInvalidOperationExceptionObject(
+          VarNR{s_invalidMethCaller.get()}
+        );
+      }
     case Type::Serialize:
     case Type::Internal:
-    case Type::APCSerialize:
     case Type::DebuggerSerialize:
       invalidFuncConversion("string");
       break;
@@ -2238,6 +2231,21 @@ void VariableSerializer::serializeObjectImpl(const ObjectData* obj) {
                     obj->getVMClass()->preClass()->name()->data());
       serializeVariant(init_null().asTypedValue());
       return;
+    }
+    if (type == VariableSerializer::Type::APCSerialize) {
+      if (cls == SystemLib::s_MethCallerHelperClass) {
+        if (RO::EvalForbidMethCallerAPCSerialize == 1) {
+          raise_warning("Storing meth_caller in APC");
+        } else if (RO::EvalForbidMethCallerAPCSerialize > 1) {
+          SystemLib::throwInvalidOperationExceptionObject(
+            VarNR{s_invalidMethCaller.get()}
+          );
+        }
+      } else if (cls == SystemLib::s_DynMethCallerHelperClass) {
+        SystemLib::throwInvalidOperationExceptionObject(
+          VarNR{s_invalidMethCaller.get()}
+        );
+      }
     }
     if (obj->getVMClass()->rtAttribute(Class::HasSleep)) {
       handleSleep = true;

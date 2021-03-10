@@ -481,31 +481,6 @@ pub const type_alias_to_type_constant: Error =
     Cow::Borrowed("Type aliases to type constants are not supported");
 pub const interface_with_memoize: Error =
     Cow::Borrowed("`__Memoize` is not allowed on interface methods");
-pub const multiple_reactivity_annotations: Error = Cow::Borrowed(concat!(
-    "Only one of following annotations is allowed: `__Pure`, ",
-    "`__NonRx`, `__Cipp`, `__CippLocal`, `__CippGlobal`.",
-));
-pub const functions_cannot_implement_reactive: Error =
-    Cow::Borrowed("`__OnlyRxIfImpl` annotations are only valid on class methods.");
-pub const missing_reactivity_for_condition: Error = Cow::Borrowed(concat!(
-    "`__OnlyRxIfImpl` and `__AtMostRxAsArgs` annotations cannot be used without `__Pure`.",
-));
-pub const conflicting_mutable_and_owned_mutable_attributes: Error =
-    Cow::Borrowed("Parameter cannot have both `__Mutable` and `__OwnedMutable` annotations.");
-pub const conflicting_mutable_and_maybe_mutable_attributes: Error =
-    Cow::Borrowed("Parameter cannot have both `__Mutable` and `__MaybeMutable` annotations.");
-pub const conflicting_owned_mutable_and_maybe_mutable_attributes: Error =
-    Cow::Borrowed("Parameter cannot have both `__OwnedMutable` and `__MaybeMutable` annotations.");
-pub const mutably_owned_attribute_on_non_rx_function: Error =
-    Cow::Borrowed("`__OwnedMutable` annotated parameters are only allowed in reactive functions.");
-pub const invalid_non_rx_argument_for_lambda: Error = Cow::Borrowed(concat!(
-    "Invalid argument list for `__NonRx` attribute that is placed on anonymous function. ",
-    "Argument list for `__NonRx` attribute that is used in this position should be empty.",
-));
-pub const invalid_non_rx_argument_for_declaration: Error = Cow::Borrowed(concat!(
-    "Invalid argument list for `__NonRx` attribute that is placed on a declaration of function or method. ",
-    "Argument list for `__NonRx` attribute that is used in this position should contain only one string literal value.",
-));
 pub const nested_concurrent_blocks: Error = Cow::Borrowed("`concurrent` blocks cannot be nested.");
 pub const fewer_than_two_statements_in_concurrent_block: Error = Cow::Borrowed(concat!(
     "Expected 2 or more statements in concurrent block. `concurrent` wrapping ",
@@ -528,23 +503,6 @@ pub const invalid_await_position_dependent: Error = Cow::Borrowed(concat!(
     "`await` cannot be used as an expression inside another await expression. ",
     "Pull the inner `await` out into its own statement.",
 ));
-pub const mutability_annotation_on_constructor: Error = Cow::Borrowed(
-    "`__Mutable`, `__MaybeMutable`, and `__MutableReturn` annotations are not allowed on constructors.",
-);
-pub const mutability_annotation_on_static_method: Error = Cow::Borrowed(
-    "`__Mutable` and `__MaybeMutable` annotations are not allowed on static methods.",
-);
-pub const mutability_annotation_on_inout_parameter: Error = Cow::Borrowed(
-    "`__Mutable`, `__MaybeMutable` and `__OwnedMutable` annotations are not allowed on inout parameters.",
-);
-pub fn mutable_parameter_in_memoize_function(is_this: bool) -> Error {
-    Cow::Owned(format!(
-        "Memoized functions cannot have mutable {}",
-        if is_this { "`$this`." } else { "parameters." }.to_string()
-    ))
-}
-pub const mutable_return_in_memoize_function: Error =
-    Cow::Borrowed("Memoized functions cannot return mutable objects.");
 pub const tparams_in_tconst: Error =
     Cow::Borrowed("Type parameters are not allowed on class type constants");
 pub const targs_not_allowed: Error =
@@ -584,7 +542,7 @@ pub const const_mutation: Error = Cow::Borrowed("Cannot mutate a class constant"
 pub const no_attributes_on_variadic_parameter: Error =
     Cow::Borrowed("Attributes on variadic parameters are not allowed");
 pub const invalid_constant_initializer: Error =
-    Cow::Borrowed("Invalid expression in constant initializer");
+    Cow::Borrowed("Expected constant expression for initializer");
 pub const parent_static_prop_decl: Error =
     Cow::Borrowed("Cannot use `static` or `parent::class` in property declaration");
 pub fn error2070(open_tag: &str, close_tag: &str) -> Error {
@@ -1028,3 +986,6 @@ pub fn effect_polymorphic_memoized(kind: &str) -> Error {
 
 pub const lambda_effect_polymorphic: Error =
     Cow::Borrowed("A lambda cannot have polymorphic context");
+
+pub const inst_meth_disabled: Error =
+    Cow::Borrowed("`inst_meth()` is disabled; use a lambda `(...) ==> {...}` instead");

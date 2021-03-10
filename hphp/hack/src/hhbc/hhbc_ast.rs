@@ -6,7 +6,7 @@
 use hhbc_id_rust as hhbc_id;
 use label_rust as label;
 
-use env::{iterator::Id as IterId, local};
+use iterator::Id as IterId;
 use runtime::TypedValue;
 
 extern crate bitflags;
@@ -261,7 +261,6 @@ pub enum InstructLitConst {
 pub enum InstructOperator {
     Concat,
     ConcatN(isize),
-    Abs,
     Add,
     Sub,
     Mul,
@@ -271,8 +270,6 @@ pub enum InstructOperator {
     Div,
     Mod,
     Pow,
-    Sqrt,
-    Xor,
     Not,
     Same,
     NSame,
@@ -289,8 +286,6 @@ pub enum InstructOperator {
     BitNot,
     Shl,
     Shr,
-    Floor,
-    Ceil,
     CastBool,
     CastInt,
     CastDouble,

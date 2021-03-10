@@ -107,6 +107,7 @@ struct RepoOptions {
   H(bool,           EnableEnumClasses,                false)          \
   H(bool,           DisallowFunAndClsMethPseudoFuncs, false)          \
   H(bool,           DisallowDynamicMethCallerArgs,    false)          \
+  H(bool,           DisallowInstMeth,                 false)          \
   /**/
 
   /**/
@@ -120,14 +121,32 @@ struct RepoOptions {
   SHA1 cacheKeySha1() const { return m_sha1; }
   std::string toJSON() const;
   folly::dynamic toDynamic() const;
+  std::uint32_t getParserFlags() const;
   struct stat stat() const { return m_stat; }
   std::string autoloadQuery() const noexcept { return Query; }
   std::string trustedDBPath() const noexcept { return TrustedDBPath; }
+  bool emitInstMethPointers() const noexcept { return EmitInstMethPointers; }
+  bool ltrAssign() const noexcept { return LTRAssign; }
+  bool uvs() const noexcept { return UVS; }
+  StringMap aliasedNamespaces() const noexcept {
+    return AliasedNamespaces;
+  }
 
   bool operator==(const RepoOptions& o) const {
     // If we have hash collisions of unequal RepoOptions, we have
     // bigger problems.
     return m_sha1 == o.m_sha1;
+  }
+
+  // Getters for the parser options we pass to HackC for extracting facts
+  bool allowNewAttributeSyntax() const noexcept {
+    return AllowNewAttributeSyntax;
+  }
+  bool enableXHPClassModifier() const noexcept {
+    return EnableXHPClassModifier;
+  }
+  bool disableXHPElementMangling() const noexcept {
+    return DisableXHPElementMangling;
   }
 
   static const RepoOptions& defaults();
@@ -143,16 +162,16 @@ private:
   void initDefaults(const Hdf& hdf, const IniSettingMap& ini);
   void calcCacheKey();
 
-#define N(t, n, ...) t n;
-#define P(t, n, ...) t n;
-#define H(t, n, ...) t n;
-#define E(t, n, ...) t n;
-PARSERFLAGS()
-AUTOLOADFLAGS()
-#undef N
-#undef P
-#undef H
-#undef E
+  #define N(t, n, ...) t n;
+  #define P(t, n, ...) t n;
+  #define H(t, n, ...) t n;
+  #define E(t, n, ...) t n;
+  PARSERFLAGS()
+  AUTOLOADFLAGS()
+  #undef N
+  #undef P
+  #undef H
+  #undef E
 
   std::string m_path;
   struct stat m_stat;
@@ -803,6 +822,7 @@ struct RuntimeOption {
   F(int32_t, JitNopInterval,           0)                               \
   F(uint32_t, JitMaxTranslations,      10)                              \
   F(uint32_t, JitMaxProfileTranslations, 30)                            \
+  F(uint32_t, JitTraceletLiveLocsLimit, 2000)                           \
   F(uint32_t, JitTraceletGuardsLimit,  5)                               \
   F(uint64_t, JitGlobalTranslationLimit, -1)                            \
   F(int64_t, JitMaxRequestTranslationTime, -1)                          \
@@ -815,6 +835,8 @@ struct RuntimeOption {
   F(uint32_t, JitResetProfCountersRequest, resetProfCountersDefault())  \
   F(uint32_t, JitRetranslateAllRequest, retranslateAllRequestDefault()) \
   F(uint32_t, JitRetranslateAllSeconds, retranslateAllSecondsDefault()) \
+  F(bool,     JitRerunRetranslateAll,  false)                           \
+  F(bool,     JitBuildOutliningHashes, false)                           \
   F(bool,     JitPGOLayoutSplitHotCold, pgoLayoutSplitHotColdDefault()) \
   F(bool,     JitPGOVasmBlockCounters, true)                            \
   F(bool,     JitPGOVasmBlockCountersForceSaveSF, false)                \
@@ -896,7 +918,7 @@ struct RuntimeOption {
   F(uint32_t, HHIRLoadElimMaxIters,    10)                              \
   /* Temporarily only enable in debug builds so the optimizations get
    * tested */                                                          \
-  F(bool, HHIRLoadEnableTeardownOpts, debug)                            \
+  F(bool, HHIRLoadEnableTeardownOpts, false)                            \
   F(uint32_t, HHIRLoadStackTeardownMaxDecrefs, 8)                       \
   F(uint32_t, HHIRLoadThrowMaxDecrefs, 64)                              \
   F(bool, HHIRStorePRE,                true)                            \
@@ -993,6 +1015,7 @@ struct RuntimeOption {
   F(bool, JsonParserUseLocalArena,     true)                            \
   F(bool, XmlParserUseLocalArena,      true)                            \
   F(bool, LowStaticArrays,             true)                            \
+  F(bool, RecycleAProf,                true)                            \
   F(int64_t, HeapPurgeWindowSize,      5 * 1000000)                     \
   F(uint64_t, HeapPurgeThreshold,      128 * 1024 * 1024)               \
   /* GC Options: See heap-collect.cpp for more details */               \
@@ -1117,9 +1140,6 @@ struct RuntimeOption {
   F(bool, HackArrCompatFBSerializeHackArraysNotices, false)             \
   /* Raise notices on intish-cast (which may use an is_array check) */  \
   F(bool, HackArrCompatIntishCastNotices, false)                        \
-  /* Raise notices on a special, Hack-array only intish-cast in the     \
-   * array_slice builtin which we need to eliminate immediately. */     \
-  F(bool, HackArrCompatArraySliceIntishCastNotices, true)               \
   /* Raise notices when is_vec or is_dict  is called with a v/darray */ \
   F(bool, HackArrCompatIsVecDictNotices, false)                         \
   F(bool, HackArrCompatSerializeNotices, false)                         \
@@ -1173,6 +1193,10 @@ struct RuntimeOption {
   /* Raise a notice if a Class type is passed to function that expects a
      string */                                                          \
   F(bool, ClassStringHintNotices, false)                                \
+  /* When this options is on, classname type-hints accepts classes */   \
+  F(bool, ClassPassesClassname, false)                                  \
+  /* Raise notice if a Class type is passed to a classname type-hint */ \
+  F(bool, ClassnameNotices, false)                                      \
   /*  Raise a notice if a ClsMeth type is passed to is_vec/is_array */  \
   F(bool, IsVecNotices, false)                                          \
   /*  Raise a notice if a ClsMeth type is passed to a function that
@@ -1212,6 +1236,15 @@ struct RuntimeOption {
   /* trigger E_USER_WARNING error when getClassName()/getMethodName()
    * is used on __SystemLib\MethCallerHelper */                         \
   F(bool, NoticeOnMethCallerHelperUse, false)                           \
+  /*                                                                    \
+   * Control dynamic calls to functions and dynamic constructs of       \
+   * classes which haven't opted into being called that way.            \
+   *                                                                    \
+   * 0 - Do nothing                                                     \
+   * 1 - Warn if meth_caller is apc serialized                          \
+   * 2 - Throw exception if meth_caller is apc serialized               \
+   */                                                                   \
+  F(int32_t, ForbidMethCallerAPCSerialize, 0)                           \
   F(bool, NoticeOnCollectionToBool, false)                              \
   F(bool, NoticeOnSimpleXMLBehavior, false)                             \
   /* Enables Hack records. */                                           \
@@ -1359,6 +1392,10 @@ struct RuntimeOption {
   F(uint32_t, IdleUnitTimeoutSecs, 0)                                   \
   /* Don't reap total Units below threshold */                          \
   F(uint32_t, IdleUnitMinThreshold, 0)                                  \
+  /* 0 nothing, 1 notice, 2 error */                                    \
+  F(int32_t, NoticeOnCoerceForStrConcat, 0)                             \
+  /* 0 nothing, 1 notice, 2 error */                                    \
+  F(int32_t, NoticeOnCoerceForBitOp, 0)                                 \
   /* */
 
 private:

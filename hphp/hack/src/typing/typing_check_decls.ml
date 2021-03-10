@@ -100,7 +100,7 @@ let check_happly ?(is_atom = false) unchecked_tparams env h =
   in
   let tyl =
     List.map unchecked_tparams (fun t ->
-        mk (Reason.Rwitness (fst t.tp_name), Typing_defs.make_tany ()))
+        mk (Reason.Rwitness_from_decl (fst t.tp_name), Typing_defs.make_tany ()))
   in
   let subst = Inst.make_subst unchecked_tparams tyl in
   let decl_ty = Inst.instantiate subst decl_ty in
@@ -229,14 +229,12 @@ and hint_ ~is_atom env p h_ =
     hint env h
   | Hfun
       {
-        hf_reactive_kind = _;
         hf_param_tys = hl;
-        hf_param_kinds = _;
-        hf_param_mutability = _;
+        hf_param_info = _;
         hf_variadic_ty = variadic_hint;
         hf_ctxs;
         hf_return_ty = h;
-        hf_is_mutable_return = _;
+        hf_is_readonly_return = _;
       } ->
     List.iter hl (hint env);
     hint env h;

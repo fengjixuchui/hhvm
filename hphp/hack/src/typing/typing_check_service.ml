@@ -312,46 +312,50 @@ let profile_log
     ~(start_counters : Counters.time_in_sec * Telemetry.t)
     ~(end_counters : Counters.time_in_sec * Telemetry.t)
     ~(second_run_end_counters : (Counters.time_in_sec * Telemetry.t) option)
+    ~(start_heap_mb : int)
+    ~(end_heap_mb : int)
     ~(file : check_file_computation)
     ~(result : process_file_results) : unit =
   let (start_time, start_counters) = start_counters in
   let (end_time, end_counters) = end_counters in
   let duration = end_time -. start_time in
-  let profile = Telemetry.diff ~all:false ~prev:start_counters end_counters in
-  let (duration_second_run, profile_second_run) =
-    match second_run_end_counters with
-    | Some (time, counters) ->
-      let duration = time -. end_time in
-      let profile = Telemetry.diff ~all:false ~prev:end_counters counters in
-      (Some duration, Some profile)
-    | None -> (None, None)
+  let duration_second_run =
+    Option.map second_run_end_counters ~f:(fun (time, _) -> time -. end_time)
   in
-  let { deferred_decls; _ } = result in
-  let times_checked = file.deferred_count + 1 in
-  let files_to_declare = List.length deferred_decls in
-  (* "deciding_time" is what we compare against the threshold, *)
-  (* to see if we should log. *)
   let deciding_time = Option.value duration_second_run ~default:duration in
+  (* "deciding_time" is what we compare against the threshold, to see if we should log. *)
+  (* We'll also log if it had been previously deferred, or if it's being deferred right now. *)
   let should_log =
     Float.(deciding_time >= check_info.profile_type_check_duration_threshold)
-    || times_checked > 1
-    || files_to_declare > 0
+    || end_heap_mb - start_heap_mb
+       >= check_info.profile_type_check_memory_threshold_mb
+    || file.deferred_count > 0
+    || not (List.is_empty result.deferred_decls)
   in
-  if should_log then (
+  if should_log then begin
+    let profile = Telemetry.diff ~all:false ~prev:start_counters end_counters in
+    let profile_second_run =
+      Option.map second_run_end_counters ~f:(fun (_, counters) ->
+          Telemetry.diff ~all:false ~prev:end_counters counters)
+    in
     let filesize_opt =
       try Some (Relative_path.to_absolute file.path |> Unix.stat).Unix.st_size
       with Unix.Unix_error _ -> None
     in
     let deferment_telemetry =
       Telemetry.create ()
-      |> Telemetry.int_ ~key:"times_checked" ~value:times_checked
-      |> Telemetry.int_ ~key:"files_to_declare" ~value:files_to_declare
+      |> Telemetry.int_ ~key:"times_checked" ~value:(file.deferred_count + 1)
+      |> Telemetry.int_
+           ~key:"files_to_declare"
+           ~value:(List.length result.deferred_decls)
     in
     let telemetry =
       Telemetry.create ()
       |> Telemetry.int_opt ~key:"filesize" ~value:filesize_opt
       |> Telemetry.object_ ~key:"deferment" ~value:deferment_telemetry
       |> Telemetry.object_ ~key:"profile" ~value:profile
+      |> Telemetry.int_ ~key:"start_heap_mb" ~value:start_heap_mb
+      |> Telemetry.int_ ~key:"end_heap_mb" ~value:end_heap_mb
     in
     let telemetry =
       Option.fold
@@ -365,18 +369,20 @@ let profile_log
       ~path:file.path
       ~telemetry;
     Hh_logger.log
-      "%s [%s] %fs%s"
+      "%s [%s] %fs %dMiB->%dMiB%s"
       (Relative_path.suffix file.path)
-      ( if files_to_declare > 0 then
-        "discover-decl-deps"
+      ( if List.is_empty result.deferred_decls then
+        "type-check"
       else
-        "type-check" )
+        "discover-decl-deps" )
       (Option.value duration_second_run ~default:duration)
+      start_heap_mb
+      end_heap_mb
       ( if SharedMem.hh_log_level () > 0 then
         "\n" ^ Telemetry.to_string telemetry
       else
         "" )
-  )
+  end
 
 let read_counters () : Counters.time_in_sec * Telemetry.t =
   let typecheck_time = Counters.read_time Counters.Category.Typecheck in
@@ -484,22 +490,26 @@ let process_files
           let result =
             if check_info.profile_log then (
               let start_counters = read_counters () in
+              let start_heap_mb = heap_mb in
               let result = process_file () in
               let end_counters = read_counters () in
-              let second_run_end_counters =
+              let end_heap_mb = get_heap_size () in
+              let (start_heap_mb, end_heap_mb, second_run_end_counters) =
                 if check_info.profile_type_check_twice then
                   (* we're running this routine solely for the side effect *)
-                  (* of seeing how long it takes to run. *)
+                  (* of seeing how much time+memory it takes to run. *)
                   let _ignored = process_file () in
-                  Some (read_counters ())
+                  (end_heap_mb, get_heap_size (), Some (read_counters ()))
                 else
-                  None
+                  (start_heap_mb, end_heap_mb, None)
               in
               profile_log
                 ~check_info
                 ~start_counters
                 ~end_counters
                 ~second_run_end_counters
+                ~start_heap_mb
+                ~end_heap_mb
                 ~file
                 ~result;
               result

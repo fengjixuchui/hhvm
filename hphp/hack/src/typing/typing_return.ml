@@ -55,22 +55,14 @@ let has_attribute attr l =
 let has_return_disposable_attribute attrs =
   has_attribute SN.UserAttributes.uaReturnDisposable attrs
 
-let has_mutable_return_attribute attrs =
-  has_attribute SN.UserAttributes.uaMutableReturn attrs
-
-let has_return_void_to_rx_attribute attrs =
-  has_attribute SN.UserAttributes.uaReturnsVoidToRx attrs
-
 let make_info fun_kind attributes env ~is_explicit locl_ty decl_ty =
   let return_disposable = has_return_disposable_attribute attributes in
-  let return_mutable = has_mutable_return_attribute attributes in
-  let return_void_to_rx = has_return_void_to_rx_attribute attributes in
   let et_enforced =
     match decl_ty with
-    | None -> false
+    | None -> Unenforced
     | Some decl_ty ->
       let stripped_decl_ty = strip_awaitable_decl fun_kind env decl_ty in
-      Typing_enforceability.is_enforceable env stripped_decl_ty
+      Typing_enforceability.get_enforcement env stripped_decl_ty
   in
   let return_type = { et_type = locl_ty; et_enforced } in
   if not return_disposable then
@@ -78,9 +70,7 @@ let make_info fun_kind attributes env ~is_explicit locl_ty decl_ty =
   {
     return_type;
     return_disposable;
-    return_mutable;
     return_explicit = is_explicit;
-    return_void_to_rx;
     return_dynamically_callable = false;
   }
 
@@ -155,5 +145,5 @@ let implicit_return env pos ~expected ~actual =
     Reason.URreturn
     env
     actual
-    { et_type = expected; et_enforced = false }
+    { et_type = expected; et_enforced = Unenforced }
     Errors.missing_return

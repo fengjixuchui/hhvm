@@ -582,7 +582,7 @@ struct AsmState {
       error("Duplicate label " + name);
     }
     label.bound = true;
-    label.target = ue->bcPos();
+    label.target = fe->bcPos();
 
     StackDepth* newStack = &label.stackDepth;
 
@@ -656,7 +656,7 @@ struct AsmState {
 
   void patchLabelOffsets(const Label& label) {
     for (auto const& source : label.sources) {
-      ue->emitInt32(label.target - source.second, source.first);
+      fe->emitInt32(label.target - source.second, source.first);
     }
 
     for (auto const& dvinit : label.dvInits) {
@@ -673,7 +673,7 @@ struct AsmState {
       if (!label.second.bound) {
         error("Undefined label " + label.first);
       }
-      if (label.second.target >= ue->bcPos()) {
+      if (label.second.target >= fe->bcPos()) {
         error("label " + label.first + " falls of the end of the function");
       }
 
@@ -717,8 +717,7 @@ struct AsmState {
                   fe->maxStackCells + maxStackCells);
     fe->maxStackCells += maxStackCells;
 
-
-    fe->finish(ue->bcPos());
+    fe->finish();
 
     fe = 0;
     labelMap.clear();
@@ -768,14 +767,8 @@ struct AsmState {
    */
   std::unordered_map<std::string, std::vector<char>> adataDecls;
 
-  // Map of adata identifiers to their associated static arrays and potential DV
-  // overrides.
-  std::map<
-    std::string,
-    std::pair<ArrayData*,VariableSerializer::DVOverrides>
-  > adataMap;
-  // Map of array immediates to their adata identifiers.
-  std::map<Offset, std::string> adataUses;
+  // Map of adata identifiers to their associated static arrays.
+  std::map<std::string, ArrayData*> adataMap;
 
   // In whole program mode it isn't possible to lookup a litstr in the global
   // table while emitting, so keep a lookaside of litstrs seen by the assembler.
@@ -940,8 +933,7 @@ std::vector<std::string> read_strvector(AsmState& as) {
   return ret;
 }
 
-Variant parse_php_serialized(folly::StringPiece,
-                             VariableSerializer::DVOverrides*);
+Variant parse_php_serialized(folly::StringPiece);
 
 std::pair<ArrayData*, std::string> read_litarray(AsmState& as) {
   as.in.skipSpaceTab();
@@ -955,23 +947,19 @@ std::pair<ArrayData*, std::string> read_litarray(AsmState& as) {
 
   auto adata = [&]() -> ArrayData* {
     auto const it = as.adataMap.find(name);
-    if (it != as.adataMap.end()) return it->second.first;
+    if (it != as.adataMap.end()) return it->second;
     auto const decl = as.adataDecls.find(name);
     if (decl == as.adataDecls.end()) return nullptr;
     auto& buf = decl->second;
     return suppressOOM([&] {
-      VariableSerializer::DVOverrides overrides;
-      auto var = parse_php_serialized(
-        buf,
-        RuntimeOption::EvalHackArrDVArrs ? &overrides : nullptr
-      );
+      auto var = parse_php_serialized(buf);
       if (!var.isArray()) {
         as.error(".adata only supports serialized arrays");
       }
 
       auto data = var.detach().m_data.parr;
       ArrayData::GetScalarArray(&data);
-      as.adataMap[name] = std::make_pair(data, std::move(overrides));
+      as.adataMap[name] = data;
       as.adataDecls.erase(decl);
       return data;
     });
@@ -1007,7 +995,9 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
 
   Y("Obj=",     T::ExactObj);
   Y("?Obj=",    T::OptExactObj);
+  Y("UninitObj=",T::UninitExactObj);
   Y("?Obj<=",   T::OptSubObj);
+  Y("UninitObj<=",T::UninitSubObj);
   Y("Obj<=",    T::SubObj);
   Y("Cls=",     T::ExactCls);
   Y("?Cls=",    T::OptExactCls);
@@ -1031,6 +1021,7 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   X("?Keyset",  T::OptKeyset);
   X("Bool",     T::Bool);
   X("?Bool",    T::OptBool);
+  X("UninitBool",T::UninitBool);
   X("Cell",     T::Cell);
   X("Dbl",      T::Dbl);
   X("?Dbl",     T::OptDbl);
@@ -1039,9 +1030,11 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   X("InitUnc",  T::InitUnc);
   X("Int",      T::Int);
   X("?Int",     T::OptInt);
+  X("UninitInt",T::UninitInt);
   X("Null",     T::Null);
   X("Obj",      T::Obj);
   X("?Obj",     T::OptObj);
+  X("UninitObj",T::UninitObj);
   X("Cls",      T::Cls);
   X("?Cls",     T::OptCls);
   X("ClsMeth",  T::ClsMeth);
@@ -1065,8 +1058,10 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   X("?SKeyset", T::OptSKeyset);
   X("SKeyset",  T::SKeyset);
   X("?SStr",    T::OptSStr);
+  X("UninitSStr",T::UninitSStr);
   X("SStr",     T::SStr);
   X("?Str",     T::OptStr);
+  X("UninitStr",T::UninitStr);
   X("Str",      T::Str);
   X("Unc",      T::Unc);
   X("?UncArrKey", T::OptUncArrKey);
@@ -1100,7 +1095,12 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   X("?SArrLike", T::OptSArrLike);
   X("ArrLike", T::ArrLike);
   X("?ArrLike", T::OptArrLike);
-
+  X("ArrLikeCompat", T::ArrLikeCompat);
+  X("?ArrLikeCompat", T::OptArrLikeCompat);
+  X("Num", T::Num);
+  X("?Num", T::OptNum);
+  X("InitPrim", T::InitPrim);
+  X("NonNull", T::NonNull);
 #undef X
 #undef Y
 
@@ -1112,16 +1112,20 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   case T::Null:
   case T::Int:
   case T::OptInt:
+  case T::UninitInt:
   case T::Dbl:
   case T::OptDbl:
   case T::Res:
   case T::OptRes:
   case T::Bool:
   case T::OptBool:
+  case T::UninitBool:
   case T::SStr:
   case T::OptSStr:
+  case T::UninitSStr:
   case T::Str:
   case T::OptStr:
+  case T::UninitStr:
   case T::SArr:
   case T::OptSArr:
   case T::Arr:
@@ -1160,6 +1164,7 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   case T::OptArrLike:
   case T::Obj:
   case T::OptObj:
+  case T::UninitObj:
   case T::Func:
   case T::OptFunc:
   case T::Cls:
@@ -1190,12 +1195,20 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   case T::VArrCompat:
   case T::VecCompat:
   case T::ArrCompat:
+  case T::ArrLikeCompat:
+  case T::OptArrLikeCompat:
+  case T::Num:
+  case T::OptNum:
+  case T::InitPrim:
+  case T::NonNull:
   case T::InitCell:
   case T::Cell:
   case T::ExactObj:
   case T::SubObj:
   case T::OptExactObj:
   case T::OptSubObj:
+  case T::UninitExactObj:
+  case T::UninitSubObj:
   case T::ExactCls:
   case T::SubCls:
   case T::OptExactCls:
@@ -1300,7 +1313,7 @@ MemberKey read_member_key(AsmState& as) {
   if (mcode != MW && as.in.getc() != ':') {
     as.error("expected `:' after member code `" + word + "'");
   }
-  
+
   switch (mcode) {
     case MW:
       return MemberKey{};
@@ -1469,97 +1482,93 @@ std::map<std::string,ParserFunc> opcode_parsers;
 // Some bytecodes need to know an iva imm for (PUSH|POP)_*.
 #define IMM_IVA do {                                      \
     auto imm = read_opcode_arg<uint32_t>(as);             \
-    as.ue->emitIVA(imm);                                  \
+    as.fe->emitIVA(imm);                                  \
     immIVA[immIdx] = imm;                                 \
   } while (0)
 
 #define IMM_VSA \
   std::vector<std::string> vecImm = read_strvector(as);                 \
   auto const vecImmStackValues = vecImm.size();                         \
-  as.ue->emitIVA(vecImmStackValues);                                    \
+  as.fe->emitIVA(vecImmStackValues);                                    \
   for (size_t i = 0; i < vecImmStackValues; ++i) {                      \
-    as.ue->emitInt32(as.ue->mergeLitstr(String(vecImm[i]).get()));      \
+    as.fe->emitInt32(as.ue->mergeLitstr(String(vecImm[i]).get()));      \
   }
 
-#define IMM_SA     as.ue->emitInt32(create_litstr_id(as))
-#define IMM_RATA   encodeRAT(*as.ue, read_repo_auth_type(as))
-#define IMM_I64A   as.ue->emitInt64(read_opcode_arg<int64_t>(as))
-#define IMM_DA     as.ue->emitDouble(read_opcode_arg<double>(as))
-#define IMM_LA     as.ue->emitIVA(as.getLocalId(  \
+#define IMM_SA     as.fe->emitInt32(create_litstr_id(as))
+#define IMM_RATA   encodeRAT(*as.fe, read_repo_auth_type(as))
+#define IMM_I64A   as.fe->emitInt64(read_opcode_arg<int64_t>(as))
+#define IMM_DA     as.fe->emitDouble(read_opcode_arg<double>(as))
+#define IMM_LA     as.fe->emitIVA(as.getLocalId(  \
                      read_opcode_arg<std::string>(as)))
 #define IMM_NLA    auto const loc = as.getLocalId(        \
                      read_opcode_arg<std::string>(as));   \
-                   as.ue->emitNamedLocal(NamedLocal{loc, loc});
-#define IMM_ILA    as.ue->emitIVA(as.getLocalId(  \
+                   as.fe->emitNamedLocal(NamedLocal{loc, loc});
+#define IMM_ILA    as.fe->emitIVA(as.getLocalId(  \
                      read_opcode_arg<std::string>(as)))
-#define IMM_IA     as.ue->emitIVA(as.getIterId( \
+#define IMM_IA     as.fe->emitIVA(as.getIterId( \
                      read_opcode_arg<int32_t>(as)))
-#define IMM_OA(ty) as.ue->emitByte(read_subop<ty>(as));
-#define IMM_LAR    encodeLocalRange(*as.ue, read_local_range(as))
-#define IMM_ITA    encodeIterArgs(*as.ue, read_iter_args(as))
+#define IMM_OA(ty) as.fe->emitByte(read_subop<ty>(as));
+#define IMM_LAR    encodeLocalRange(*as.fe, read_local_range(as))
+#define IMM_ITA    encodeIterArgs(*as.fe, read_iter_args(as))
 #define IMM_FCA do {                                                    \
     auto const fca = read_fcall_args(as, thisOpcode);                   \
     auto const& fcab = std::get<0>(fca);                                \
     auto const io = std::get<1>(fca).get();                             \
     encodeFCallArgs(                                                    \
-      *as.ue, fcab,                                                     \
+      *as.fe, fcab,                                                     \
       io != nullptr,                                                    \
       [&] {                                                             \
-        encodeFCallArgsIO(*as.ue, (fcab.numArgs+7)/8, io);              \
+        encodeFCallArgsIO(*as.fe, (fcab.numArgs+7)/8, io);              \
       },                                                                \
       std::get<2>(fca) != "-",                                          \
       [&] {                                                             \
-        labelJumps.emplace_back(std::get<2>(fca), as.ue->bcPos());      \
-        as.ue->emitInt32(0);                                            \
+        labelJumps.emplace_back(std::get<2>(fca), as.fe->bcPos());      \
+        as.fe->emitInt32(0);                                            \
       },                                                                \
       std::get<3>(fca) != nullptr,                                      \
       [&] {                                                             \
         auto const sd = std::get<3>(fca);                               \
         auto const id = as.ue->mergeLitstr(sd);                         \
         as.litstrMap.emplace(id, sd);                                   \
-        as.ue->emitInt32(id);                                           \
+        as.fe->emitInt32(id);                                           \
       }                                                                 \
     );                                                                  \
     immFCA = fcab;                                                      \
   } while (0)
 
-// Record the offset of the immediate so that we can correlate it with its
-// associated adata later.
 #define IMM_AA do {                             \
   auto const p = read_litarray(as);             \
-  auto const pos = as.ue->bcPos();              \
-  as.ue->emitInt32(as.ue->mergeArray(p.first)); \
-  as.adataUses[pos] = std::move(p.second);      \
+  as.fe->emitInt32(as.ue->mergeArray(p.first)); \
 } while (0)
 
 #define IMM_BLA do {                                    \
   std::vector<std::string> vecImm = read_jmpvector(as); \
-  as.ue->emitIVA(vecImm.size());                        \
+  as.fe->emitIVA(vecImm.size());                        \
   for (auto const& imm : vecImm) {                      \
-    labelJumps.emplace_back(imm, as.ue->bcPos());       \
-    as.ue->emitInt32(0); /* to be patched */            \
+    labelJumps.emplace_back(imm, as.fe->bcPos());       \
+    as.fe->emitInt32(0); /* to be patched */            \
   }                                                     \
 } while (0)
 
 #define IMM_SLA do {                                       \
   auto vecImm = read_sswitch_jmpvector(as);                \
-  as.ue->emitIVA(vecImm.size());                           \
+  as.fe->emitIVA(vecImm.size());                           \
   for (auto const& pair : vecImm) {                        \
-    as.ue->emitInt32(pair.first);                          \
-    labelJumps.emplace_back(pair.second, as.ue->bcPos());  \
-    as.ue->emitInt32(0); /* to be patched */               \
+    as.fe->emitInt32(pair.first);                          \
+    labelJumps.emplace_back(pair.second, as.fe->bcPos());  \
+    as.fe->emitInt32(0); /* to be patched */               \
   }                                                        \
 } while(0)
 
 #define IMM_BA do {                                                 \
   labelJumps.emplace_back(                                          \
     read_opcode_arg<std::string>(as),                               \
-    as.ue->bcPos()                                                  \
+    as.fe->bcPos()                                                  \
   );                                                                \
-  as.ue->emitInt32(0);                                              \
+  as.fe->emitInt32(0);                                              \
 } while (0)
 
-#define IMM_KA encode_member_key(read_member_key(as), *as.ue)
+#define IMM_KA encode_member_key(read_member_key(as), *as.fe)
 
 #define NUM_PUSH_NOV 0
 #define NUM_PUSH_ONE(a) 1
@@ -1584,7 +1593,7 @@ std::map<std::string,ParserFunc> opcode_parsers;
     UNUSED auto immFCA = FCallArgsBase(FCallArgsBase::None, -1, -1);   \
     UNUSED uint32_t immIVA[kMaxHhbcImms];                              \
     UNUSED auto const thisOpcode = Op::name;                           \
-    UNUSED const Offset curOpcodeOff = as.ue->bcPos();                 \
+    UNUSED const Offset curOpcodeOff = as.fe->bcPos();                 \
     std::vector<std::pair<std::string, Offset> > labelJumps;           \
                                                                        \
     TRACE(                                                             \
@@ -1600,7 +1609,7 @@ std::map<std::string,ParserFunc> opcode_parsers;
       as.enterReachableRegion(0);                                      \
     }                                                                  \
                                                                        \
-    as.ue->emitOp(Op##name);                                           \
+    as.fe->emitOp(Op##name);                                           \
                                                                        \
     UNUSED size_t immIdx = 0;                                          \
     IMM_##imm;                                                         \
@@ -1803,17 +1812,13 @@ Variant checkSize(Variant val) {
  * Returns a Variant representing the serialized data.  It's up to the
  * caller to make sure it is a legal literal.
  */
-Variant parse_php_serialized(
-  folly::StringPiece str,
-  VariableSerializer::DVOverrides* overrides = nullptr
-) {
+Variant parse_php_serialized(folly::StringPiece str) {
   VariableUnserializer vu(
     str.data(),
     str.size(),
     VariableUnserializer::Type::Internal,
     true
   );
-  if (overrides) vu.setDVOverrides(overrides);
   try {
     return checkSize(vu.unserialize());
   } catch (const FatalErrorException&) {
@@ -1827,12 +1832,9 @@ Variant parse_php_serialized(
   }
 }
 
-Variant parse_php_serialized(
-  AsmState& as,
-  VariableSerializer::DVOverrides* overrides = nullptr
-) {
+Variant parse_php_serialized(AsmState& as) {
   auto str = parse_long_string(as);
-  return parse_php_serialized(str.slice(), overrides);
+  return parse_php_serialized(str.slice());
 }
 
 /*
@@ -1955,30 +1957,6 @@ void parse_coeffects_cc_this(AsmState& as) {
   as.in.expectWs(';');
 }
 
-/*
- * directive-rx_cond_implements : name ';'
- *                              ;
- */
-void parse_rx_cond_implements(AsmState& as) {
-  auto const name = makeStaticString(read_litstr(as));
-  as.fe->coeffectRules.emplace_back(
-    CoeffectRule(CoeffectRule::CondRxImpl{}, name));
-  as.in.expectWs(';');
-}
-
-/*
- * directive-rx_cond_arg_implements : integer name ';'
- *                                  ;
- */
-void parse_rx_cond_arg_implements(AsmState& as) {
-  auto const pos = read_opcode_arg<uint32_t>(as);
-  as.in.skipWhitespace();
-  auto const name = makeStaticString(read_litstr(as));
-  as.fe->coeffectRules.emplace_back(
-    CoeffectRule(CoeffectRule::CondRxArgImpl{}, pos, name));
-  as.in.expectWs(';');
-}
-
 void parse_function_body(AsmState&, int nestLevel = 0);
 
 /*
@@ -1986,7 +1964,7 @@ void parse_function_body(AsmState&, int nestLevel = 0);
  *                 ;
  */
 void parse_catch(AsmState& as, int nestLevel) {
-  const Offset start = as.ue->bcPos();
+  const Offset start = as.fe->bcPos();
 
   std::string label;
   if (!as.in.readword(label)) {
@@ -2002,7 +1980,7 @@ void parse_catch(AsmState& as, int nestLevel) {
 
   auto& eh = as.fe->addEHEnt();
   eh.m_base = start;
-  eh.m_past = as.ue->bcPos();
+  eh.m_past = as.fe->bcPos();
   eh.m_iterId = iterId;
   eh.m_end = kInvalidOffset;
 
@@ -2014,7 +1992,7 @@ void parse_catch(AsmState& as, int nestLevel) {
  *                     ;
  */
 void parse_try_catch(AsmState& as, int nestLevel) {
-  const Offset start = as.ue->bcPos();
+  const Offset start = as.fe->bcPos();
 
   int iterId = -1;
   as.in.skipWhitespace();
@@ -2029,7 +2007,7 @@ void parse_try_catch(AsmState& as, int nestLevel) {
     as.error("expected .try region to not fall-thru");
   }
 
-  const Offset handler = as.ue->bcPos();
+  const Offset handler = as.fe->bcPos();
 
   // Emit catch body.
   as.enterReachableRegion(0);
@@ -2045,7 +2023,7 @@ void parse_try_catch(AsmState& as, int nestLevel) {
   as.in.expectWs('{');
   parse_function_body(as, nestLevel + 1);
 
-  const Offset end = as.ue->bcPos();
+  const Offset end = as.fe->bcPos();
 
   auto& eh = as.fe->addEHEnt();
   eh.m_base = start;
@@ -2105,11 +2083,11 @@ void fixup_default_values(AsmState& as, FuncEmitter* fe) {
   using Atom = BCPattern::Atom;
   using Captures = BCPattern::CaptureVec;
 
-  auto end = as.ue->bc() + fe->past;
+  auto end = fe->bc() + fe->bcPos();
   for (uint32_t paramIdx = 0; paramIdx < fe->params.size(); ++paramIdx) {
     auto& pi = fe->params[paramIdx];
     if (!pi.hasDefaultValue() || pi.funcletOff == kInvalidOffset) continue;
-    auto inst = as.ue->bc() + pi.funcletOff;
+    auto inst = fe->bc() + pi.funcletOff;
 
     // Check that the DV intitializer is actually setting the local for the
     // parameter being initialized.
@@ -2142,7 +2120,7 @@ void fixup_default_values(AsmState& as, FuncEmitter* fe) {
     // or is immediately followed by the next DV initializer.
     if (!result.found() || result.getEnd() >= end) continue;
     auto pc = result.getEnd();
-    auto off = pc - as.ue->bc();
+    auto off = pc - fe->bc();
     auto const valid = [&] {
       for (uint32_t next = paramIdx + 1; next < fe->params.size(); ++next) {
         auto& npi = fe->params[next];
@@ -2152,7 +2130,7 @@ void fixup_default_values(AsmState& as, FuncEmitter* fe) {
         return npi.funcletOff == off;
       }
       auto const orig = pc;
-      auto const base = as.ue->bc() + fe->base;
+      auto const base = fe->bc();
       return decode_op(pc) == OpJmpNS && orig + decode_raw<Offset>(pc) == base;
     }();
     if (!valid) continue;
@@ -2163,19 +2141,10 @@ void fixup_default_values(AsmState& as, FuncEmitter* fe) {
     assertx(capture);
 
     TypedValue dv = make_tv<KindOfUninit>();
-    const VariableSerializer::DVOverrides* overrides = nullptr;
-    SCOPE_EXIT { overrides = nullptr; };
     auto decode_array = [&] {
-      auto const captureCopy = capture;
       if (auto arr = as.ue->lookupArray(decode_raw<uint32_t>(capture))) {
         dv.m_type = arr->toPersistentDataType();
         dv.m_data.parr = const_cast<ArrayData*>(arr);
-        if (RuntimeOption::EvalHackArrDVArrs) {
-          auto const litOffset = captureCopy - as.ue->bc();
-          auto const it = as.adataUses.find(litOffset);
-          assertx(it != as.adataUses.end());
-          overrides = &as.adataMap[it->second].second;
-        }
       }
     };
 
@@ -2206,9 +2175,6 @@ void fixup_default_values(AsmState& as, FuncEmitter* fe) {
     // default value, matching the behavior of hphpc.
     if (dv.m_type != KindOfUninit) {
       VariableSerializer vs(VariableSerializer::Type::PHPOutput);
-      if (RuntimeOption::EvalHackArrDVArrs && overrides) {
-        vs.setDVOverrides(overrides);
-      }
       auto str = vs.serialize(tvAsCVarRef(&dv), true);
       pi.defaultValue = dv;
       pi.phpCode = makeStaticString(str.get());
@@ -2276,14 +2242,6 @@ void parse_function_body(AsmState& as, int nestLevel /* = 0 */) {
       if (word == ".coeffects_fun_param") { parse_coeffects_fun_param(as); continue; }
       if (word == ".coeffects_cc_param") { parse_coeffects_cc_param(as); continue; }
       if (word == ".coeffects_cc_this") { parse_coeffects_cc_this(as); continue; }
-      if (word == ".rx_cond_implements") {
-        parse_rx_cond_implements(as);
-        continue;
-      }
-      if (word == ".rx_cond_arg_implements") {
-        parse_rx_cond_arg_implements(as);
-        continue;
-      }
       as.error("unrecognized directive `" + word + "' in function");
     }
     if (as.in.peek() == ':') {
@@ -2780,7 +2738,7 @@ void parse_function(AsmState& as) {
   }
 
   as.fe = as.ue->newFuncEmitter(makeStaticString(name));
-  as.fe->init(line0, line1, as.ue->bcPos(), attrs, nullptr);
+  as.fe->init(line0, line1, attrs, nullptr);
 
   auto currUBs = getRelevantUpperBounds(retTypeInfo.second, ubs, {}, {});
   auto const hasReifiedGenerics =
@@ -2843,7 +2801,7 @@ void parse_method(AsmState& as, const UpperBoundMap& class_ubs) {
 
   as.fe = as.ue->newMethodEmitter(sname, as.pce);
   as.pce->addMethod(as.fe);
-  as.fe->init(line0, line1, as.ue->bcPos(), attrs, nullptr);
+  as.fe->init(line0, line1, attrs, nullptr);
 
   auto const hasReifiedGenerics =
     userAttrs.find(s___Reified.get()) != userAttrs.end() ||
@@ -3010,9 +2968,9 @@ void parse_record_field(AsmState& as) {
   );
 }
 
-
 /*
  * const-flags     : isType
+ *                 : isAbstract
  *                 ;
  *
  * directive-const : identifier const-flags member-tv-initializer
@@ -3031,9 +2989,12 @@ void parse_class_constant(AsmState& as) {
   auto const kind =
     isType ? ConstModifiers::Kind::Type : ConstModifiers::Kind::Value;
   as.in.skipWhitespace();
+  DEBUG_ONLY bool isAbstract = as.in.tryConsume("isAbstract");
+  as.in.skipWhitespace();
 
   if (as.in.peek() == ';') {
     as.in.getc();
+    assertx(isAbstract);
     as.pce->addAbstractConstant(makeStaticString(name),
                                 staticEmptyString(),
                                 kind,
@@ -3050,7 +3011,10 @@ void parse_class_constant(AsmState& as) {
 }
 
 /*
- * directive-ctx : identifier coeffect-name* ';'
+ * const-flags     : isAbstract
+ *                 ;
+ *
+ * directive-ctx : identifier const-flags coeffect-name* ';'
  */
 void parse_context_constant(AsmState& as) {
   as.in.skipWhitespace();
@@ -3060,22 +3024,26 @@ void parse_context_constant(AsmState& as) {
     as.error("expected name for context constant");
   }
 
+  as.in.skipWhitespace();
+  bool isAbstract = as.in.tryConsume("isAbstract");
+
   auto coeffects = StaticCoeffects::none();
-  auto isAbstract = true;
-  
+
   while (true) {
     as.in.skipWhitespace();
     std::string coeffect;
     if (!as.in.readword(coeffect)) break;
-    isAbstract = false;
-    auto const result = CoeffectsConfig::fromName(coeffect);
-    coeffects |= result;
+    coeffects |= CoeffectsConfig::fromName(coeffect);
   }
 
   as.in.expectWs(';');
 
+  // temporarily drop the abstract ones until runtime is fixed
+  if (isAbstract) return;
+
   DEBUG_ONLY auto added =
-    as.pce->addContextConstant(makeStaticString(name), coeffects, isAbstract);
+    as.pce->addContextConstant(makeStaticString(name), coeffects,
+                               false /* isAbstract */);
   assertx(added);
 }
 

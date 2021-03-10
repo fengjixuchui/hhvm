@@ -139,13 +139,15 @@ impl<'ast> Visitor<'ast> for Checker {
             Lvar(_) => None,
             Binop(bop) => match bop.0 {
                 // Allow arithmetic operators
-                Bop::Plus | Bop::Minus | Bop::Star | Bop::Slash => None,
+                Bop::Plus | Bop::Minus | Bop::Star | Bop::Slash | Bop::Percent => None,
                 // Allow $x = 1, but not $x += 1.
                 Bop::Eq(None) => None,
                 // Allow boolean &&, || operators
                 Bop::Ampamp | Bop::Barbar => None,
                 // Allow comparison operators
                 Bop::Lt | Bop::Lte | Bop::Gt | Bop::Gte | Bop::Eqeqeq | Bop::Diff2 => None,
+                // Allow string concatenation operator
+                Bop::Dot => None,
                 _ => Some(
                     "Expression trees only support comparison (`<`, `===` etc) and basic arithmetic operators (`+` etc).",
                 ),
@@ -153,6 +155,8 @@ impl<'ast> Visitor<'ast> for Checker {
             Unop(uop) => match **uop {
                 // Allow boolean not operator !$x
                 (Uop::Unot, _) => None,
+                // Allow negation -$x (required for supporting negative literals -123)
+                (Uop::Uminus, _) => None,
                 _ => Some("Expression trees do not support this operator."),
             },
             // Allow ternary _ ? _ : _, but not Elvis operator _ ?: _

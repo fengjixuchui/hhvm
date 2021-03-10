@@ -75,22 +75,6 @@ using MergeKind = Unit::MergeKind;
 
 ///////////////////////////////////////////////////////////////////////////////
 
-using BytecodeArena = ReadOnlyArena<VMColdAllocator<char>, false, 8>;
-static BytecodeArena& bytecode_arena() {
-  static BytecodeArena arena(RuntimeOption::EvalHHBCArenaChunkSize);
-  return arena;
-}
-
-/*
- * Export for the admin server.
- */
-size_t hhbc_arena_capacity() {
-  if (!RuntimeOption::RepoAuthoritative) return 0;
-  return bytecode_arena().capacity();
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
 UnitEmitter::UnitEmitter(const SHA1& sha1,
                          const SHA1& bcSha1,
                          const Native::FuncTable& nativeFuncs,
@@ -99,34 +83,14 @@ UnitEmitter::UnitEmitter(const SHA1& sha1,
   , m_nativeFuncs(nativeFuncs)
   , m_sha1(sha1)
   , m_bcSha1(bcSha1)
-  , m_bc((unsigned char*)malloc(BCMaxInit))
-  , m_bclen(0)
-  , m_bcmax(BCMaxInit)
   , m_nextFuncSn(0)
   , m_allClassesHoistable(true)
 {}
 
 UnitEmitter::~UnitEmitter() {
-  if (m_bc) free(m_bc);
-
   for (auto& pce : m_pceVec) delete pce;
   for (auto& re : m_reVec) delete re;
 }
-
-
-///////////////////////////////////////////////////////////////////////////////
-// Basic data.
-
-void UnitEmitter::setBc(const unsigned char* bc, size_t bclen) {
-  if (m_bc) {
-    free(m_bc);
-  }
-  m_bc = (unsigned char*)malloc(bclen);
-  m_bcmax = bclen;
-  if (bclen) memcpy(m_bc, bc, bclen);
-  m_bclen = bclen;
-}
-
 
 ///////////////////////////////////////////////////////////////////////////////
 // Litstrs and Arrays.
@@ -216,7 +180,6 @@ Func* UnitEmitter::newFunc(const FuncEmitter* fe, Unit& unit,
   } else {
     func = new (Func::allocFuncMem(numParams)) Func(unit, name, attrs);
   }
-  if (unit.m_extended) unit.getExtended()->m_funcTable.push_back(func);
   return func;
 }
 
@@ -357,8 +320,7 @@ RepoStatus UnitEmitter::insert(UnitOrigin unitOrigin, RepoTxn& txn,
   m_repoId = repoId;
 
   try {
-    urp.insertUnit[repoId].insert(*this, txn, m_sn, m_sha1, m_bc,
-                                  m_bclen, usePreAllocatedUnitSn);
+    urp.insertUnit[repoId].insert(*this, txn, m_sn, m_sha1, usePreAllocatedUnitSn);
     int64_t usn = m_sn;
     for (unsigned i = 0; i < m_litstrs.size(); ++i) {
       urp.insertUnitLitstr[repoId].insert(txn, usn, i, m_litstrs[i]);
@@ -428,16 +390,6 @@ ServiceData::ExportedTimeSeries* g_hhbc_size = ServiceData::createTimeSeries(
    ServiceData::StatsType::SUM,
    ServiceData::StatsType::COUNT}
 );
-
-static const unsigned char*
-allocateBCRegion(const unsigned char* bc, size_t bclen) {
-  g_hhbc_size->addValue(bclen);
-  auto mem = static_cast<unsigned char*>(
-    RuntimeOption::RepoAuthoritative ? bytecode_arena().allocate(bclen)
-                                     : malloc(bclen));
-  std::copy(bc, bc + bclen, mem);
-  return mem;
-}
 
 bool UnitEmitter::check(bool verbose) const {
   return Verifier::checkUnit(
@@ -512,8 +464,6 @@ std::unique_ptr<Unit> UnitEmitter::create(bool saveLineTable) const {
 
   u->m_repoId = saveLineTable ? RepoIdInvalid : m_repoId;
   u->m_sn = m_sn;
-  u->m_bc = allocateBCRegion(m_bc, m_bclen);
-  u->m_bclen = m_bclen;
   u->m_origFilepath = m_filepath;
   u->m_sha1 = m_sha1;
   u->m_bcSha1 = m_bcSha1;
@@ -574,13 +524,6 @@ std::unique_ptr<Unit> UnitEmitter::create(bool saveLineTable) const {
       ux->m_namedInfo.emplace_back(LowStringPtr{s});
     }
     ux->m_arrayTypeTable = m_arrayTypeTable;
-
-    // Funcs can be recorded out of order when loading them from the
-    // repo currently.  So sort 'em here.
-    std::sort(ux->m_funcTable.begin(), ux->m_funcTable.end(),
-              [] (const Func* a, const Func* b) {
-                return a->past() < b->past();
-              });
 
     // If prefetching is enabled, store the symbol refs in the Unit so
     // the prefetcher can claim them. Reset the atomic flag to mark
@@ -871,10 +814,9 @@ void UnitEmitter::serde(SerDe& sd) {
         assertx(added);
       }
       assertx(fe->sn() == i);
-      fe->serdeMetaData(sd);
-      fe->serdeLineTable(sd);
+      fe->serde(sd);
       fe->setEHTabIsSorted();
-      fe->finish(fe->past);
+      fe->finish();
     }
   } else {
     auto total = m_fes.size();
@@ -884,25 +826,12 @@ void UnitEmitter::serde(SerDe& sd) {
     auto const write = [&] (FuncEmitter* fe, Id pceId) {
       sd(pceId);
       sd(fe->name);
-      fe->serdeMetaData(sd);
-      fe->serdeLineTable(sd);
+      fe->serde(sd);
     };
     for (auto const& fe : m_fes) write(fe.get(), -1);
     for (auto const pce : m_pceVec) {
       for (auto const fe : pce->methods()) write(fe, pce->id());
     }
-  }
-
-  // Bytecode
-  if constexpr (SerDe::deserializing) {
-    size_t size;
-    sd(size);
-    assertx(sd.remaining() <= size);
-    setBc(sd.data(), size);
-    sd.advance(size);
-  } else {
-    sd(m_bclen);
-    sd.writeRaw((const char*)m_bc, m_bclen);
   }
 }
 
@@ -943,7 +872,7 @@ void UnitRepoProxy::createSchema(int repoId, RepoTxn& txn) {
     auto createQuery = folly::sformat(
       "CREATE TABLE {} "
       "(unitSn INTEGER PRIMARY KEY, sha1 BLOB UNIQUE, globalids INTEGER,"
-      " bc BLOB, data BLOB);",
+      " data BLOB);",
       m_repo.table(repoId, "Unit"));
     txn.exec(createQuery);
   }
@@ -1090,20 +1019,18 @@ UnitRepoProxy::load(const folly::StringPiece name, const SHA1& sha1,
 void UnitRepoProxy::InsertUnitStmt
                   ::insert(const UnitEmitter& ue,
                            RepoTxn& txn, int64_t& unitSn, const SHA1& sha1,
-                           const unsigned char* bc, size_t bclen,
                            bool usePreAllocatedUnitSn) {
   BlobEncoder dataBlob{ue.useGlobalIds()};
 
   if (!prepared()) {
     auto insertQuery = folly::sformat(
-      "INSERT INTO {} VALUES(@unitSn, @sha1, @globalids, @bc, @data);",
+      "INSERT INTO {} VALUES(@unitSn, @sha1, @globalids, @data);",
       m_repo.table(m_repoId, "Unit"));
     txn.prepare(*this, insertQuery);
   }
   RepoTxnQuery query(txn, *this);
   query.bindSha1("@sha1", sha1);
   query.bindBool("@globalids", ue.m_useGlobalIds);
-  query.bindBlob("@bc", (const void*)bc, bclen);
   const_cast<UnitEmitter&>(ue).serdeMetaData(dataBlob);
   query.bindBlob("@data", dataBlob, /* static */ true);
   if (!usePreAllocatedUnitSn) {
@@ -1123,7 +1050,7 @@ RepoStatus UnitRepoProxy::GetUnitStmt::get(UnitEmitter& ue, const SHA1& sha1) {
     auto txn = RepoTxn{m_repo.begin()};
     if (!prepared()) {
       auto selectQuery = folly::sformat(
-        "SELECT unitSn, globalids, bc, data FROM {} WHERE sha1 == @sha1;",
+        "SELECT unitSn, globalids, data FROM {} WHERE sha1 == @sha1;",
         m_repo.table(m_repoId, "Unit"));
       txn.prepare(*this, selectQuery);
     }
@@ -1135,13 +1062,11 @@ RepoStatus UnitRepoProxy::GetUnitStmt::get(UnitEmitter& ue, const SHA1& sha1) {
     }
     int64_t unitSn;                     /**/ query.getInt64(0, unitSn);
     bool useGlobalIds;                  /**/ query.getBool(1, useGlobalIds);
-    const void* bc; size_t bclen;       /**/ query.getBlob(2, bc, bclen);
-    BlobDecoder dataBlob =              /**/ query.getBlob(3, useGlobalIds);
+    BlobDecoder dataBlob =              /**/ query.getBlob(2, useGlobalIds);
 
     ue.m_repoId = m_repoId;
     ue.m_sn = unitSn;
     ue.m_useGlobalIds = useGlobalIds;
-    ue.setBc(static_cast<const unsigned char*>(bc), bclen);
     ue.serdeMetaData(dataBlob);
 
     txn.commit();

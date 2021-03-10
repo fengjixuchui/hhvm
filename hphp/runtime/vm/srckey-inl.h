@@ -68,7 +68,7 @@ inline bool SrcKey::valid() const {
   auto const funcID = m_s.m_funcID;
   assertx(
     funcID.isInvalid() || funcID.isDummy() ||
-    (m_s.m_offset >= func()->base() && m_s.m_offset < func()->past())
+    (m_s.m_offset >= 0 && m_s.m_offset < func()->bclen())
   );
   return !funcID.isInvalid();
 }
@@ -165,6 +165,12 @@ inline void SrcKey::advance(const Func* f) {
 inline SrcKey SrcKey::advanced(const Func* f) const {
   auto tmp = *this;
   tmp.advance(f);
+  return tmp;
+}
+
+inline SrcKey SrcKey::withFuncID(FuncId funcId) const {
+  auto tmp = *this;
+  tmp.m_s.m_funcID = funcId;
   return tmp;
 }
 

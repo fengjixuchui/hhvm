@@ -15,7 +15,7 @@ use emit_symbol_refs_rust as emit_symbol_refs;
 use emit_type_constant_rust as emit_type_constant;
 use emit_type_hint_rust as emit_type_hint;
 use emit_xhp_rust as emit_xhp;
-use env::{emitter::Emitter, local, Env};
+use env::{emitter::Emitter, Env};
 use hhas_attribute_rust as hhas_attribute;
 use hhas_class_rust::{HhasClass, HhasClassFlags, TraitReqKind};
 use hhas_coeffects::{HhasCoeffects, HhasCtxConstant};
@@ -51,15 +51,15 @@ fn add_symbol_refs(
     requirements: &Vec<(class::Type, TraitReqKind)>,
 ) {
     base.iter()
-        .for_each(|x| emit_symbol_refs::State::add_class(emitter, x.clone()));
+        .for_each(|x| emit_symbol_refs::add_class(emitter, x.clone()));
     implements
         .iter()
-        .for_each(|x| emit_symbol_refs::State::add_class(emitter, x.clone()));
+        .for_each(|x| emit_symbol_refs::add_class(emitter, x.clone()));
     uses.iter()
-        .for_each(|x| emit_symbol_refs::State::add_class(emitter, class::Type::from_ast_name(x)));
+        .for_each(|x| emit_symbol_refs::add_class(emitter, class::Type::from_ast_name(x)));
     requirements
         .iter()
-        .for_each(|(x, _)| emit_symbol_refs::State::add_class(emitter, x.clone()));
+        .for_each(|(x, _)| emit_symbol_refs::add_class(emitter, x.clone()));
 }
 
 fn make_86method<'a>(
@@ -171,16 +171,41 @@ fn from_type_constant<'a>(
         }
     };
 
-    Ok(HhasTypeConstant { name, initializer })
+    let is_abstract = match &tc.abstract_ {
+        TCConcrete => false,
+        _ => true,
+    };
+
+    Ok(HhasTypeConstant {
+        name,
+        initializer,
+        is_abstract,
+    })
 }
 
 fn from_ctx_constant(tc: &tast::ClassTypeconst) -> Result<HhasCtxConstant> {
+    use tast::TypeconstAbstractKind::*;
     let name = tc.name.1.to_string();
-    let coeffects = match &tc.type_ {
-        Some(hint) => HhasCoeffects::from_ctx_constant(hint),
-        None => vec![],
+    let coeffects = match (&tc.abstract_, &tc.type_) {
+        (TCAbstract(Some(hint)), _) | (_, Some(hint)) => {
+            let result = HhasCoeffects::from_ctx_constant(hint);
+            if result.is_empty() {
+                vec![hhas_coeffects::Ctx::Pure]
+            } else {
+                result
+            }
+        }
+        (_, None) => vec![],
     };
-    Ok(HhasCtxConstant { name, coeffects })
+    let is_abstract = match &tc.abstract_ {
+        TCConcrete => false,
+        _ => true,
+    };
+    Ok(HhasCtxConstant {
+        name,
+        coeffects,
+        is_abstract,
+    })
 }
 
 fn from_class_elt_classvars<'a>(
@@ -220,6 +245,7 @@ fn from_class_elt_classvars<'a>(
                     visibility: cv.visibility, // This used to be cv_kinds
                     is_static: cv.is_static,
                     is_abstract: cv.abstract_,
+                    is_readonly: cv.readonly,
                 },
             )
         })
@@ -361,7 +387,7 @@ fn emit_reified_init_body<'a>(
             instr::checkthis(),
             instr::cgetl(local::Type::Named(INIT_METH_PARAM_NAME.into())),
             instr::baseh(),
-            instr::setm_pt(0, prop::from_raw_string(PROP_NAME), ReadOnlyOp::Any),
+            instr::setm_pt(0, prop::from_raw_string(PROP_NAME), ReadOnlyOp::Mutable),
             instr::popc(),
         ])
     };

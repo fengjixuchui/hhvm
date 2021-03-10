@@ -155,6 +155,13 @@ inline const StringData* Func::name() const {
   return m_name;
 }
 
+inline String Func::nameWithClosureName() const {
+  if (!isClosureBody()) return String(const_cast<StringData*>(name()));
+  // Strip the file hash from the closure name.
+  String name{const_cast<StringData*>(baseCls()->name())};
+  return name.substr(0, name.find(';'));
+}
+
 inline StrNR Func::nameStr() const {
   assertx(m_name != nullptr);
   return StrNR(m_name);
@@ -175,6 +182,11 @@ inline const StringData* Func::fullName() const {
       std::string(cls()->name()->data()) + "::" + m_name->data());
   }
   return m_fullName;
+}
+
+inline String Func::fullNameWithClosureName() const {
+  if (!isClosureBody()) return String(const_cast<StringData*>(fullName()));
+  return nameWithClosureName();
 }
 
 inline StrNR Func::fullNameStr() const {
@@ -269,46 +281,50 @@ inline const StringData* Func::docComment() const {
 // Bytecode.
 
 inline PC Func::entry() const {
-  return m_unit->entry() + shared()->m_base;
-}
-
-inline Offset Func::base() const {
-  return shared()->m_base;
-}
-
-inline Offset Func::past() const {
-  auto const sd = shared();
-  auto const delta = sd->m_pastDelta;
-  if (UNLIKELY(delta == kSmallDeltaLimit)) {
-    assertx(extShared());
-    return static_cast<const ExtendedSharedData*>(sd)->m_past;
+  const auto pc = shared()->m_bc.load(std::memory_order_relaxed);
+  if (pc != nullptr) {
+    return pc;
   }
-  return base() + delta;
+  return const_cast<Func*>(this)->loadBytecode();
+}
+
+inline Offset Func::bclen() const {
+  return shared()->bclen();
+}
+
+inline Offset Func::SharedData::bclen() const {
+  auto const len = this->m_bclenSmall;
+  if (UNLIKELY(len == kSmallDeltaLimit)) {
+    assertx(m_allFlags.m_hasExtendedSharedData);
+    return static_cast<const ExtendedSharedData*>(this)->m_bclen;
+  }
+  return len;
 }
 
 inline bool Func::contains(PC pc) const {
-  return contains(Offset(pc - unit()->entry()));
+  return uintptr_t(pc - entry()) < bclen();
 }
 
 inline bool Func::contains(Offset offset) const {
-  return offset >= base() && offset < past();
+  assertx(offset >= 0);
+  return offset < bclen();
 }
 
 inline PC Func::at(Offset off) const {
   // We don't use contains because we want to allow past becase it is often
   // used in loops
-  assertx(off >= base() && off <= past());
-  return unit()->entry() + off;
+  assertx(off >= 0 && off <= bclen());
+  return entry() + off;
 }
 
 inline Offset Func::offsetOf(PC pc) const {
   assertx(contains(pc));
-  return pc - unit()->entry();
+  return pc - entry();
 }
 
 inline Op Func::getOp(Offset instrOffset) const {
   assertx(contains(instrOffset));
-  return peek_op(unit()->entry() + instrOffset);
+  return peek_op(entry() + instrOffset);
 }
 
 inline Offset Func::ctiEntry() const {
@@ -689,7 +705,7 @@ inline const Func::EHEntVec& Func::ehtab() const {
 }
 
 inline const EHEnt* Func::findEH(Offset o) const {
-  assertx(o >= base() && o < past());
+  assertx(o >= 0 && o < bclen());
   return findEH(shared()->m_ehtab, o);
 }
 

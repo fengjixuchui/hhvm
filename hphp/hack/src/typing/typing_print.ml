@@ -86,7 +86,7 @@ module Full = struct
     let compare (k1, _) (k2, _) =
       String.compare (Env.get_shape_field_name k1) (Env.get_shape_field_name k2)
     in
-    let fields = List.sort ~compare (Nast.ShapeMap.bindings fdm) in
+    let fields = List.sort ~compare (TShapeMap.bindings fdm) in
     List.map fields f_field
 
   let rec fun_type ~ty to_doc st env ft =
@@ -129,8 +129,11 @@ module Full = struct
   and possibly_enforced_ty ~ty to_doc st env { et_enforced; et_type } =
     Concat
       [
-        ( if show_verbose env && et_enforced then
-          text "enforced" ^^ Space
+        ( if show_verbose env then
+          match et_enforced with
+          | Enforced -> text "enforced" ^^ Space
+          | PartiallyEnforced -> text "partially enforced" ^^ Space
+          | Unenforced -> Nothing
         else
           Nothing );
         ty to_doc st env et_type;
@@ -239,7 +242,7 @@ module Full = struct
       let f_field (shape_map_key, { sft_optional; sft_ty }) =
         let key_delim =
           match shape_map_key with
-          | Ast_defs.SFlit_str _ -> text "'"
+          | Typing_defs.TSFlit_str _ -> text "'"
           | _ -> Nothing
         in
         Concat
@@ -721,6 +724,7 @@ module Full = struct
               fun_type ~ty text_strip_ns ISet.empty env ft;
             ]
         | ({ type_ = Property _; name; _ }, _)
+        | ({ type_ = XhpLiteralAttr _; name; _ }, _)
         | ({ type_ = ClassConst _; name; _ }, _)
         | ({ type_ = GConst; name; _ }, _) ->
           Concat [ty text_strip_ns ISet.empty env x; Space; text_strip_ns name]
@@ -915,9 +919,9 @@ module Json = struct
       let shape_field_name_to_json shape_field =
         (* TODO: need to update userland tooling? *)
         match shape_field with
-        | Ast_defs.SFlit_int (_, s) -> Hh_json.JSON_Number s
-        | Ast_defs.SFlit_str (_, s) -> Hh_json.JSON_String s
-        | Ast_defs.SFclass_const ((_, s1), (_, s2)) ->
+        | Typing_defs.TSFlit_int (_, s) -> Hh_json.JSON_Number s
+        | Typing_defs.TSFlit_str (_, s) -> Hh_json.JSON_String s
+        | Typing_defs.TSFclass_const ((_, s1), (_, s2)) ->
           Hh_json.JSON_Array [Hh_json.JSON_String s1; Hh_json.JSON_String s2]
       in
       obj
@@ -978,7 +982,7 @@ module Json = struct
       @@ kind p "shape"
       @ is_array false
       @ [("fields_known", JSON_Bool fields_known)]
-      @ fields (Nast.ShapeMap.bindings fl)
+      @ fields (TShapeMap.bindings fl)
     | (p, Tunion []) -> obj @@ kind p "nothing"
     | (_, Tunion [ty]) -> from_type env ty
     | (p, Tunion tyl) -> obj @@ kind p "union" @ args tyl
@@ -1260,7 +1264,7 @@ module Json = struct
           get_bool "is_array" (json, keytrace)
           >>= fun (is_array, _is_array_keytrace) ->
           let unserialize_field field_json ~keytrace :
-              ( Ast_defs.shape_field_name
+              ( Typing_defs.tshape_field_name
                 * locl_phase Typing_defs.shape_field_type,
                 deserialization_error )
               result =
@@ -1272,13 +1276,13 @@ module Json = struct
             begin
               match name with
               | Hh_json.JSON_Number name ->
-                Ok (Ast_defs.SFlit_int (dummy_pos, name))
+                Ok (Typing_defs.TSFlit_int (dummy_pos, name))
               | Hh_json.JSON_String name ->
-                Ok (Ast_defs.SFlit_str (dummy_pos, name))
+                Ok (Typing_defs.TSFlit_str (dummy_pos, name))
               | Hh_json.JSON_Array
                   [Hh_json.JSON_String name1; Hh_json.JSON_String name2] ->
                 Ok
-                  (Ast_defs.SFclass_const
+                  (Typing_defs.TSFclass_const
                      ((dummy_pos, name1), (dummy_pos, name2)))
               | _ ->
                 deserialization_error
@@ -1322,10 +1326,8 @@ module Json = struct
                 Open_shape
             in
             let fields =
-              List.fold
-                fields
-                ~init:Nast.ShapeMap.empty
-                ~f:(fun shape_map (k, v) -> Nast.ShapeMap.add k v shape_map)
+              List.fold fields ~init:TShapeMap.empty ~f:(fun shape_map (k, v) ->
+                  TShapeMap.add k v shape_map)
             in
             ty (Tshape (shape_kind, fields))
         | "union" ->
@@ -1360,21 +1362,20 @@ module Json = struct
                 >>= fun param_type ->
                 Ok
                   {
-                    fp_type = { et_type = param_type; et_enforced = false };
+                    fp_type = { et_type = param_type; et_enforced = Unenforced };
                     fp_flags =
                       make_fp_flags
                         ~mode:callconv
                         ~accept_disposable:false
-                        ~mutability:None
                         ~has_default:false
                         ~ifc_external:false
                         ~ifc_can_call:false
                         ~is_atom:false
-                        ~readonly:false;
+                        ~readonly:false
+                        ~const_function:false;
                     (* Dummy values: these aren't currently serialized. *)
                     fp_pos = Pos.none;
                     fp_name = None;
-                    fp_rx_annotation = None;
                   })
           in
           params >>= fun ft_params ->
@@ -1385,13 +1386,12 @@ module Json = struct
                {
                  ft_params;
                  ft_implicit_params = { capability = CapDefaults Pos.none };
-                 ft_ret = { et_type = ft_ret; et_enforced = false };
+                 ft_ret = { et_type = ft_ret; et_enforced = Unenforced };
                  (* Dummy values: these aren't currently serialized. *)
                  ft_arity = Fstandard;
                  ft_tparams = [];
                  ft_where_constraints = [];
                  ft_flags = 0;
-                 ft_reactive = Nonreactive;
                  ft_ifc_decl = default_ifc_fun_decl;
                })
         | _ ->
@@ -1558,12 +1558,14 @@ module PrintClass = struct
       ctx
       {
         ttc_abstract = _;
+        ttc_synthesized = synthetic;
         ttc_name = tc_name;
         ttc_as_constraint = as_constraint;
         ttc_type = tc_type;
         ttc_origin = origin;
         ttc_enforceable = (_, enforceable);
         ttc_reifiable = reifiable;
+        ttc_concretized = _;
       } =
     let name = snd tc_name in
     let ty x = Full.to_string_decl ctx x in
@@ -1583,6 +1585,10 @@ module PrintClass = struct
     ^ " (origin:"
     ^ origin
     ^ ")"
+    ^ ( if synthetic then
+        " (synthetic)"
+      else
+        "" )
     ^ ( if enforceable then
         " (enforceable)"
       else
@@ -1790,7 +1796,7 @@ let debug_i env ty =
 
 let class_ ctx c = PrintClass.class_type ctx c
 
-let gconst ctx gc = Full.to_string_decl ctx gc
+let gconst ctx gc = Full.to_string_decl ctx gc.cd_type
 
 let fun_ ctx { fe_type; _ } = Full.to_string_decl ctx fe_type
 

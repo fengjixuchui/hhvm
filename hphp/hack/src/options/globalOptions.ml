@@ -39,7 +39,6 @@ type t = {
   tco_disallow_array_typehint: bool;
   tco_disallow_array_literal: bool;
   tco_language_feature_logging: bool;
-  tco_unsafe_rx: bool;
   tco_disallow_scrutinee_case_value_type_mismatch: bool;
   tco_timeout: int;
   tco_disallow_invalid_arraykey: bool;
@@ -52,10 +51,6 @@ type t = {
   po_disable_lval_as_an_expression: bool;
   tco_shallow_class_decl: bool;
   po_rust_parser_errors: bool;
-  profile_type_check_duration_threshold: float;
-  profile_type_check_twice: bool;
-  profile_owner: string option;
-  profile_desc: string;
   tco_like_type_hints: bool;
   tco_union_intersection_type_hints: bool;
   tco_coeffects: bool;
@@ -116,12 +111,14 @@ type t = {
   tco_enable_sound_dynamic: bool;
   po_disallow_hash_comments: bool;
   po_disallow_fun_and_cls_meth_pseudo_funcs: bool;
+  po_disallow_inst_meth: bool;
   tco_use_direct_decl_parser: bool;
   tco_ifc_enabled: string list;
   po_enable_enum_supertyping: bool;
   po_array_unification: bool;
   po_interpret_soft_types_as_like_types: bool;
   tco_enable_strict_string_concat_interp: bool;
+  tco_ignore_unsafe_cast: bool;
   tco_readonly: bool;
 }
 [@@deriving eq, show]
@@ -223,7 +220,6 @@ let default =
     tco_disallow_array_typehint = false;
     tco_disallow_array_literal = false;
     tco_language_feature_logging = false;
-    tco_unsafe_rx = true;
     tco_disallow_scrutinee_case_value_type_mismatch = false;
     tco_timeout = 0;
     tco_disallow_invalid_arraykey = true;
@@ -236,10 +232,6 @@ let default =
     po_disable_lval_as_an_expression = true;
     tco_shallow_class_decl = false;
     po_rust_parser_errors = false;
-    profile_type_check_duration_threshold = 0.05;
-    profile_type_check_twice = false;
-    profile_owner = None;
-    profile_desc = "";
     tco_like_type_hints = false;
     tco_union_intersection_type_hints = false;
     tco_coeffects = true;
@@ -300,12 +292,14 @@ let default =
     tco_enable_sound_dynamic = false;
     po_disallow_hash_comments = false;
     po_disallow_fun_and_cls_meth_pseudo_funcs = false;
+    po_disallow_inst_meth = false;
     tco_use_direct_decl_parser = false;
     tco_ifc_enabled = [];
     po_enable_enum_supertyping = false;
     po_array_unification = false;
     po_interpret_soft_types_as_like_types = false;
     tco_enable_strict_string_concat_interp = false;
+    tco_ignore_unsafe_cast = false;
     tco_readonly = false;
   }
 
@@ -342,7 +336,6 @@ let make
     ?(tco_disallow_array_typehint = default.tco_disallow_array_typehint)
     ?(tco_disallow_array_literal = default.tco_disallow_array_literal)
     ?(tco_language_feature_logging = default.tco_language_feature_logging)
-    ?(tco_unsafe_rx = default.tco_unsafe_rx)
     ?(tco_disallow_scrutinee_case_value_type_mismatch =
       default.tco_disallow_scrutinee_case_value_type_mismatch)
     ?(tco_timeout = default.tco_timeout)
@@ -358,11 +351,6 @@ let make
       default.po_disable_lval_as_an_expression)
     ?(tco_shallow_class_decl = default.tco_shallow_class_decl)
     ?(po_rust_parser_errors = default.po_rust_parser_errors)
-    ?(profile_type_check_duration_threshold =
-      default.profile_type_check_duration_threshold)
-    ?(profile_type_check_twice = default.profile_type_check_twice)
-    ?profile_owner
-    ?(profile_desc = default.profile_desc)
     ?(tco_like_type_hints = default.tco_like_type_hints)
     ?(tco_union_intersection_type_hints =
       default.tco_union_intersection_type_hints)
@@ -436,6 +424,7 @@ let make
     ?(po_disallow_hash_comments = default.po_disallow_hash_comments)
     ?(po_disallow_fun_and_cls_meth_pseudo_funcs =
       default.po_disallow_fun_and_cls_meth_pseudo_funcs)
+    ?(po_disallow_inst_meth = default.po_disallow_inst_meth)
     ?(tco_use_direct_decl_parser = default.tco_use_direct_decl_parser)
     ?(tco_ifc_enabled = default.tco_ifc_enabled)
     ?(po_enable_enum_supertyping = default.po_enable_enum_supertyping)
@@ -444,6 +433,7 @@ let make
       default.po_interpret_soft_types_as_like_types)
     ?(tco_enable_strict_string_concat_interp =
       default.tco_enable_strict_string_concat_interp)
+    ?(tco_ignore_unsafe_cast = default.tco_ignore_unsafe_cast)
     ?(tco_readonly = default.tco_readonly)
     () =
   {
@@ -481,7 +471,6 @@ let make
     tco_disallow_array_typehint;
     tco_disallow_array_literal;
     tco_language_feature_logging;
-    tco_unsafe_rx;
     tco_disallow_scrutinee_case_value_type_mismatch;
     tco_timeout;
     tco_disallow_invalid_arraykey;
@@ -491,10 +480,6 @@ let make
     po_disable_lval_as_an_expression;
     tco_shallow_class_decl;
     po_rust_parser_errors;
-    profile_type_check_duration_threshold;
-    profile_type_check_twice;
-    profile_owner;
-    profile_desc;
     tco_like_type_hints;
     tco_union_intersection_type_hints;
     tco_coeffects;
@@ -555,12 +540,14 @@ let make
     tco_enable_sound_dynamic;
     po_disallow_hash_comments;
     po_disallow_fun_and_cls_meth_pseudo_funcs;
+    po_disallow_inst_meth;
     tco_use_direct_decl_parser;
     tco_ifc_enabled;
     po_enable_enum_supertyping;
     po_array_unification;
     po_interpret_soft_types_as_like_types;
     tco_enable_strict_string_concat_interp;
+    tco_ignore_unsafe_cast;
     tco_readonly;
   }
 
@@ -632,8 +619,6 @@ let tco_disallow_array_literal t = t.tco_disallow_array_literal
 
 let tco_language_feature_logging t = t.tco_language_feature_logging
 
-let tco_unsafe_rx t = t.tco_unsafe_rx
-
 let tco_disallow_scrutinee_case_value_type_mismatch t =
   t.tco_disallow_scrutinee_case_value_type_mismatch
 
@@ -661,15 +646,6 @@ let po_disable_lval_as_an_expression t = t.po_disable_lval_as_an_expression
 let tco_shallow_class_decl t = t.tco_shallow_class_decl
 
 let po_rust_parser_errors t = t.po_rust_parser_errors
-
-let profile_type_check_duration_threshold t =
-  t.profile_type_check_duration_threshold
-
-let profile_type_check_twice t = t.profile_type_check_twice
-
-let profile_owner t = t.profile_owner
-
-let profile_desc t = t.profile_desc
 
 let tco_like_type_hints t = t.tco_like_type_hints
 
@@ -810,6 +786,8 @@ let po_disallow_hash_comments t = t.po_disallow_hash_comments
 let po_disallow_fun_and_cls_meth_pseudo_funcs t =
   t.po_disallow_fun_and_cls_meth_pseudo_funcs
 
+let po_disallow_inst_meth t = t.po_disallow_inst_meth
+
 let tco_use_direct_decl_parser t = t.tco_use_direct_decl_parser
 
 let po_enable_enum_supertyping t = t.po_enable_enum_supertyping
@@ -821,3 +799,5 @@ let po_interpret_soft_types_as_like_types t =
 
 let tco_enable_strict_string_concat_interp t =
   t.tco_enable_strict_string_concat_interp
+
+let tco_ignore_unsafe_cast t = t.tco_ignore_unsafe_cast

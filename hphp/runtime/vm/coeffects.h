@@ -22,15 +22,26 @@
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
+namespace jit {
+struct SSATmp;
+namespace irgen {
+struct IRGS;
+}
+}
+///////////////////////////////////////////////////////////////////////////////
 struct RuntimeCoeffects {
   using storage_t = uint16_t;
 
-  static RuntimeCoeffects none() {
-    return RuntimeCoeffects{0};
-  }
-
   static RuntimeCoeffects fromValue(uint16_t value) {
     return RuntimeCoeffects{value};
+  }
+
+  static RuntimeCoeffects none() {
+    return RuntimeCoeffects::fromValue(0);
+  }
+
+  static RuntimeCoeffects full() {
+    return RuntimeCoeffects::fromValue(std::numeric_limits<storage_t>::max());
   }
 
   uint16_t value() const { return m_data; }
@@ -46,6 +57,9 @@ struct RuntimeCoeffects {
   }
 
   bool canCallWithWarning(const RuntimeCoeffects) const;
+
+  // This operator is equivalent to | of [coeffectA | coeffectB]
+  RuntimeCoeffects& operator&=(const RuntimeCoeffects);
 
 private:
   explicit RuntimeCoeffects(uint16_t data) : m_data(data) {}
@@ -89,30 +103,11 @@ static_assert(sizeof(StaticCoeffects) == sizeof(RuntimeCoeffects), "");
 ///////////////////////////////////////////////////////////////////////////////
 
 struct CoeffectRule final {
-  struct CondRxImpl {};
-  struct CondRxArgImpl {};
-
   struct FunParam {};
   struct CCParam {};
   struct CCThis {};
 
   CoeffectRule() = default;
-
-  /////////////////////////////////////////////////////////////////////////////
-  // Attribute based RX rules /////////////////////////////////////////////////
-
-  CoeffectRule(CondRxImpl, const StringData* name)
-    : m_type(Type::ConditionalReactiveImplements)
-    , m_name(name)
-    , m_ne(NamedEntity::get(name))
-  { assertx(name); }
-
-  CoeffectRule(CondRxArgImpl, uint32_t index, const StringData* name)
-    : m_type(Type::ConditionalReactiveArgImplements)
-    , m_index(index)
-    , m_name(name)
-    , m_ne(NamedEntity::get(name))
-  { assertx(name); }
 
   /////////////////////////////////////////////////////////////////////////////
   // Native coeffect rules ////////////////////////////////////////////////////
@@ -133,6 +128,9 @@ struct CoeffectRule final {
     , m_name(ctx_name)
   { assertx(ctx_name); }
 
+  RuntimeCoeffects emit(const Func*, uint32_t, void*) const;
+  jit::SSATmp* emitJit(jit::irgen::IRGS&, const Func*,
+                       uint32_t, jit::SSATmp*) const;
 
   folly::Optional<std::string> toString(const Func*) const;
   std::string getDirectiveString() const;
@@ -143,8 +141,6 @@ struct CoeffectRule final {
 private:
   enum class Type {
     Invalid = 0,
-    ConditionalReactiveImplements,
-    ConditionalReactiveArgImplements,
 
     FunParam,
     CCParam,
@@ -154,7 +150,6 @@ private:
   Type m_type{Type::Invalid};
   uint32_t m_index{0};
   LowPtr<const StringData> m_name{nullptr};
-  LowPtr<const NamedEntity> m_ne{nullptr};
 };
 
 ///////////////////////////////////////////////////////////////////////////////

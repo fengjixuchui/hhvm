@@ -236,12 +236,6 @@ StringData* convObjToStrHelper(ObjectData* o) {
   return o->invokeToString().detach();
 }
 
-StringData* convResToStrHelper(ResourceHdr* r) {
-  // toString() returns a counted String; detach() it to move ownership
-  // of the count to the caller
-  return r->data()->o_toString().detach();
-}
-
 void raiseUndefProp(ObjectData* base, const StringData* name) {
   base->raiseUndefProp(name);
 }
@@ -680,6 +674,10 @@ TypedValue lookupClsCns(const Class* cls, const StringData* cnsName) {
   return cls->clsCnsGet(cnsName);
 }
 
+int lookupClsCtxCns(const Class* cls, const StringData* cnsName) {
+  return cls->clsCtxCnsGet(cnsName).value();
+}
+
 bool methodExistsHelper(Class* cls, StringData* meth) {
   assertx(isNormalClass(cls) && !isAbstract(cls));
   return cls->lookupMethod(meth) != nullptr;
@@ -768,14 +766,14 @@ ArrayData* loadClsTypeCnsHelper(
   TypedValue typeCns;
   if (no_throw_on_undefined) {
     try {
-      typeCns = cls->clsCnsGet(name, ClsCnsLookup::IncludeTypes);
+      typeCns = cls->clsCnsGet(name, ConstModifiers::Kind::Type);
     } catch (Exception& e) {
       return getFake();
     } catch (Object& e) {
       return getFake();
     }
   } else {
-    typeCns = cls->clsCnsGet(name, ClsCnsLookup::IncludeTypes);
+    typeCns = cls->clsCnsGet(name, ConstModifiers::Kind::Type);
   }
   if (typeCns.m_type == KindOfUninit) {
     if (no_throw_on_undefined) {
@@ -797,9 +795,10 @@ ArrayData* loadClsTypeCnsHelper(
   return typeCns.m_data.parr;
 }
 
-void raiseCoeffectsCallViolationHelper(const ActRec* caller, const Func* callee,
-                                       uint64_t rawFlags) {
-  raiseCoeffectsCallViolation(caller, callee, CallFlags(rawFlags));
+void raiseCoeffectsCallViolationHelper(const Func* callee, uint64_t rawFlags,
+                                       uint64_t requiredCoeffects) {
+  raiseCoeffectsCallViolation(callee, CallFlags(rawFlags),
+                              RuntimeCoeffects::fromValue(requiredCoeffects));
 }
 
 void throwOOBException(TypedValue base, TypedValue key) {

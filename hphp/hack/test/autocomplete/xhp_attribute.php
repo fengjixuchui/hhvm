@@ -1,9 +1,11 @@
 <?hh
 
-class :foo:bar {
-  attribute ?MyEnum my-attribute;
+final class :foo:bar {
+  attribute string name, string color;
+
+  public function genRender() {}
 }
 
 function main(): void {
-  <foo:bar my-attrAUTO332={}
+  <foo:bar AUTO332
 }

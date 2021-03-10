@@ -39,7 +39,6 @@
 #include "hphp/util/functional.h"
 #include "hphp/util/lock.h"
 #include "hphp/util/mutex.h"
-#include "hphp/util/smalllocks.h"
 #include "hphp/util/struct-log.h"
 
 #include "hphp/runtime/base/attr.h"
@@ -147,15 +146,6 @@ Unit::~Unit() {
     data_map::deregister(this);
   }
 
-  if (!RuntimeOption::RepoAuthoritative) {
-    if (debug) {
-      // poison released bytecode
-      memset(const_cast<unsigned char*>(m_bc), 0xff, m_bclen);
-    }
-    free(const_cast<unsigned char*>(m_bc));
-    g_hhbc_size->addValue(-int64_t(m_bclen));
-  }
-
   auto const mi = mergeInfo();
   if (mi) {
     for (auto const func : mi->mutableFuncs()) Func::destroy(func);
@@ -202,7 +192,7 @@ void Unit::operator delete(void* p, size_t /*sz*/) {
 ///////////////////////////////////////////////////////////////////////////////
 // Code locations.
 
-bool Unit::getOffsetRanges(int line, OffsetRangeVec& offsets) const {
+bool Unit::getOffsetRanges(int line, OffsetFuncRangeVec& offsets) const {
   assertx(offsets.size() == 0);
   forEachFunc([&](const Func* func) {
     // Quickly ignore functions that can't have that line in them
@@ -211,25 +201,11 @@ bool Unit::getOffsetRanges(int line, OffsetRangeVec& offsets) const {
     auto map = func->getLineToOffsetRangeVecMap();
     auto it = map.find(line);
     if (it != map.end()) {
-      offsets.insert(offsets.end(), it->second.begin(), it->second.end());
+      offsets.push_back(std::pair(func, it->second));
     }
     return false;
   });
   return offsets.size() != 0;
-}
-
-const Func* Unit::getFunc(Offset pc) const {
-  auto& table = getExtended()->m_funcTable;
-  auto it = std::upper_bound(table.begin(), table.end(), nullptr,
-                             [&] (const Func* a, const Func* b) {
-                               assertx(a == nullptr);
-                               return pc < b->past();
-                             });
-  if (it != table.end()) {
-    assertx(pc < (*it)->past());
-    return *it;
-  }
-  return nullptr;
 }
 
 bool Unit::isCoverageEnabled() const {
@@ -295,9 +271,8 @@ Func* Unit::getCachedEntryPoint() const {
 namespace {
 
 void setupRecord(RecordDesc* newRecord, NamedEntity* nameList) {
-  bool const isPersistent =
-    (!SystemLib::s_inited || RuntimeOption::RepoAuthoritative) &&
-    newRecord->verifyPersistent();
+  bool const isPersistent = newRecord->isPersistent();
+  assertx(!isPersistent || newRecord->verifyPersistent());
   nameList->m_cachedRecordDesc.bind(
     isPersistent? rds::Mode::Persistent : rds::Mode::Normal,
     rds::LinkName{"NERecord", newRecord->name()}
@@ -882,8 +857,13 @@ void Unit::initialMerge() {
             needsCompact = true;
           }
           break;
-        case MergeKind::Record:
+        case MergeKind::Record: {
+          auto const recordId = static_cast<Id>(intptr_t(obj)) >> 3;
+          if (m_preRecords[recordId]->attrs() & AttrPersistent) {
+            needsCompact = true;
+          }
           break;
+        }
         case MergeKind::Define: {
           auto const constantId = static_cast<Id>(intptr_t(obj)) >> 3;
           if (m_constants[constantId].attrs & AttrPersistent) {
@@ -932,7 +912,8 @@ void Unit::merge() {
 
 static size_t compactMergeInfo(Unit::MergeInfo* in, Unit::MergeInfo* out,
                                const Unit::TypeAliasVec& aliasInfo,
-                               const Unit::ConstantVec& constantInfo) {
+                               const Unit::ConstantVec& constantInfo,
+                               const CompactVector<PreRecordDescPtr>& recordInfo) {
   using MergeKind = Unit::MergeKind;
 
   Func** it = in->funcBegin();
@@ -1006,7 +987,12 @@ static size_t compactMergeInfo(Unit::MergeInfo* in, Unit::MergeInfo* out,
         break;
       }
       case MergeKind::Record: {
-        if (out) out->mergeableObj(oix++) = obj;
+        auto const recordId = static_cast<Id>(intptr_t(obj)) >> 3;
+        if (recordInfo[recordId]->attrs() & AttrPersistent) {
+          delta++;
+        } else if (out) {
+          out->mergeableObj(oix++) = obj;
+        }
         break;
       }
       case MergeKind::TypeAlias: {
@@ -1184,7 +1170,9 @@ void Unit::mergeImpl(MergeInfo* mi) {
         case MergeKind::Class: {
           Stats::inc(Stats::UnitMerge_mergeable);
           Stats::inc(Stats::UnitMerge_mergeable_class);
-          if (Class::def((PreClass*)obj, failIsFatal)) {
+          auto cls = (PreClass*)obj;
+          assertx(cls->isPersistent() == (this->isSystemLib() || RuntimeOption::RepoAuthoritative));
+          if (Class::def(cls, failIsFatal)) {
             madeProgress = true;
             define.reset(i);
           }
@@ -1258,6 +1246,7 @@ void Unit::mergeImpl(MergeInfo* mi) {
           Stats::inc(Stats::UnitMerge_mergeable_record);
           auto const recordId = static_cast<Id>(intptr_t(obj)) >> 3;
           auto const r = lookupPreRecordId(recordId);
+          assertx(r->isPersistent() == (this->isSystemLib() || RuntimeOption::RepoAuthoritative));
           if (defRecordDesc(r, failIsFatal)) {
             madeProgress = true;
             define.reset(i);
@@ -1291,7 +1280,7 @@ void Unit::mergeImpl(MergeInfo* mi) {
      * and any requires of modules that are (now) empty
      */
     size_t delta = compactMergeInfo(mi, nullptr, m_typeAliases,
-                                    m_constants);
+                                    m_constants, m_preRecords);
     MergeInfo* newMi = mi;
     if (delta) {
       newMi = MergeInfo::alloc(mi->m_mergeablesSize - delta);
@@ -1303,7 +1292,7 @@ void Unit::mergeImpl(MergeInfo* mi) {
      * readers. But thats ok, because it doesnt matter
      * whether they see the old contents or the new.
      */
-    compactMergeInfo(mi, newMi, m_typeAliases, m_constants);
+    compactMergeInfo(mi, newMi, m_typeAliases, m_constants, m_preRecords);
     if (newMi != mi) {
       this->m_mergeInfo.store(newMi, std::memory_order_release);
       Treadmill::deferredFree(mi);
@@ -1315,6 +1304,10 @@ void Unit::mergeImpl(MergeInfo* mi) {
     m_mergeState.fetch_and(~MergeState::NeedsCompact,
                            std::memory_order_relaxed);
   }
+}
+
+bool Unit::isSystemLib() const {
+  return FileUtil::isSystemName(m_origFilepath->slice());
 }
 
 ///////////////////////////////////////////////////////////////////////////////

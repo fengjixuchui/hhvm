@@ -150,7 +150,6 @@ static const struct {
   { OpMod,         {StackTop2,        Stack1,       OutUnknown      }},
   { OpPow,         {StackTop2,        Stack1,       OutUnknown      }},
   /* Logical ops */
-  { OpXor,         {StackTop2,        Stack1,       OutBoolean      }},
   { OpNot,         {Stack1,           Stack1,       OutBoolean      }},
   { OpSame,        {StackTop2,        Stack1,       OutBoolean      }},
   { OpNSame,       {StackTop2,        Stack1,       OutBoolean      }},
@@ -497,6 +496,9 @@ int64_t getStackPopped(PC pc) {
     case Op::SetM:
     case Op::SetOpM:
       return getImm(pc, 0).u_IVA + 1;
+
+    case Op::SetRangeM:
+      return getImm(pc, 0).u_IVA + 3;
 
     case Op::NewRecord:
     case Op::NewStructDArray:
@@ -1000,7 +1002,6 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::VerifyRetNonNullC:
   case Op::VerifyOutType:
   case Op::WHResult:
-  case Op::Xor:
   case Op::BaseGC:
   case Op::BaseGL:
   case Op::BaseSC:

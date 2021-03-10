@@ -199,8 +199,7 @@ let rec union env ty1 ty2 =
   else if Typing_utils.is_sub_type_for_union ~coerce:None env ty2 ty1 then
     (env, ty1)
   else
-    let r = union_reason r1 r2 in
-    union_ env ty1 ty2 r
+    union_ env ty1 ty2 (union_reason r1 r2)
 
 and union_ env ty1 ty2 r = union_lists env [ty1] [ty2] r
 
@@ -364,7 +363,6 @@ and union_funs env fty1 fty2 =
   (* TODO: If we later add fields to ft, they will be forgotten here. *)
   if
     equal_locl_fun_arity fty1 fty2
-    && equal_reactivity fty1.ft_reactive fty2.ft_reactive
     && Int.equal fty1.ft_flags fty2.ft_flags
     && Int.equal (ft_params_compare fty1.ft_params fty2.ft_params) 0
   then
@@ -425,7 +423,7 @@ and union_tylists_w_variances env tparams tyl1 tyl2 =
 and union_shapes env (shape_kind1, fdm1, r1) (shape_kind2, fdm2, r2) =
   let shape_kind = union_shape_kind shape_kind1 shape_kind2 in
   let ((env, shape_kind), fdm) =
-    Nast.ShapeMap.merge_env
+    TShapeMap.merge_env
       (env, shape_kind)
       fdm1
       fdm2
@@ -463,9 +461,9 @@ and union_shape_kind shape_kind1 shape_kind2 =
 (* TODO: add a new reason with positions of merge point and possibly merged
  * envs.*)
 and union_reason r1 r2 =
-  if Reason.(equal r1 none) then
+  if Reason.is_none r1 then
     r2
-  else if Reason.(equal r2 none) then
+  else if Reason.is_none r2 then
     r1
   else if Reason.compare r1 r2 <= 0 then
     r1

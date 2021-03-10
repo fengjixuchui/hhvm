@@ -57,6 +57,7 @@ using TagStorage = std::pair<LowPtr<const StringData>, int32_t>;
 
 static constexpr TagID kKindBits = 3;
 static constexpr TagID kKindMask = 0x7;
+static constexpr TagID kExternalStorageSentinel = 0x0;
 static constexpr size_t kNumTagIDs = (1 << (8 * sizeof(TagID) - kKindBits));
 static constexpr size_t kNumRuntimeTagIDs = (1 << 10);
 
@@ -162,7 +163,7 @@ Tag Tag::Param(const Func* func, int32_t param) {
   assertx(func->fullName());
   auto const unit = func->unit();
   auto const file = getFilename(func, unit);
-  auto const line = func->getLineNumber(func->base());
+  auto const line = func->getLineNumber(0);
   auto const text = folly::to<std::string>(
       "param ", param, " of ", func->fullName()->data(), " at ", file->data());
   return Tag::Param(makeStaticString(text), line);
@@ -170,10 +171,14 @@ Tag Tag::Param(const Func* func, int32_t param) {
 
 Tag::Tag(Tag::Kind kind, const StringData* name, int32_t line) {
   auto const k = TagID(kind);
-  assertx(k < kKindMask);
   assertx((k & kKindMask) == k);
   assertx((k & uintptr_t(name)) == 0);
+  assertx(k != kExternalStorageSentinel);
   assertx(kind != Kind::Invalid);
+
+  // Assert that the default-constructed tag matches the default Array extra.
+  static_assert(Tag().m_id == ArrayData::kDefaultVanillaArrayExtra);
+  assertx(Tag().kind() == Kind::Invalid);
 
   if (isIndirectKind(kind)) {
     m_id = k | (s_defaultTags.getTagID({name, line}) << kKindBits);
@@ -182,7 +187,7 @@ Tag::Tag(Tag::Kind kind, const StringData* name, int32_t line) {
   } else if (uintptr_t(name) <= std::numeric_limits<TagID>::max()) {
     m_id = k | safe_cast<TagID>(uintptr_t(name));
   } else {
-    m_id = kKindMask | (s_defaultTags.getTagID({name, -int(k)}) << kKindBits);
+    m_id = s_defaultTags.getTagID({name, -int(k)}) << kKindBits;
   }
 
   // Check that we can undo tag compression and get back the original values.
@@ -193,12 +198,12 @@ Tag::Tag(Tag::Kind kind, const StringData* name, int32_t line) {
 
 Tag::Kind Tag::kind() const {
   auto const bits = m_id & kKindMask;
-  if (bits < kKindMask) return Tag::Kind(bits);
+  if (bits != kExternalStorageSentinel) return Tag::Kind(bits);
   return Tag::Kind(-s_defaultTags.getTag(size_t(m_id) >> kKindBits).second);
 }
 const StringData* Tag::name() const {
   auto const bits = m_id & kKindMask;
-  if (bits == kKindMask || isIndirectKind(Kind(bits))) {
+  if (bits == kExternalStorageSentinel || isIndirectKind(Kind(bits))) {
     return s_defaultTags.getTag(size_t(m_id) >> kKindBits).first;
   } else if (!use_lowptr && isRuntimeKind(Kind(bits))) {
     return s_runtimeTags.getTag(size_t(m_id) >> kKindBits).first;
@@ -547,26 +552,25 @@ ArrayData* apply_mutation_fast(ArrayData* in, ArrayData* result,
 template <typename State>
 ArrayData* apply_mutation_slow(ArrayData* in, ArrayData* result,
                                State& state, bool cow, uint32_t depth) {
-  IterateKVNoInc(in, [&](auto key, auto prev) {
+  // Careful! Even IterateKVNoInc will take a refcount on unknown arrays.
+  // In order to do the mutation in place when possible, we iterate by hand.
+  auto const end = in->iter_end();
+  for (auto pos = in->iter_begin(); pos != end; pos = in->iter_advance(pos)) {
+    auto const prev = in->nvGetVal(pos);
     auto const ad = apply_mutation(prev, state, cow, depth + 1);
-    if (!ad) return;
+    if (!ad) continue;
 
+    // TODO(kshaunak): We can avoid the copy here if !cow by modifying all
+    // of these mutation helpers to have "setMove" semantics. But it doesn't
+    // affect algorithmic complexity, since we already do O(n) iteration.
+    auto const escalated = result ? result : in;
+    if (escalated == in) in->incRefCount();
+
+    auto const key = in->nvGetKey(pos);
     auto const next = make_array_like_tv(ad);
-    if (result || !cow) {
-      result = result ? result : in;
-      auto const escalated = result->setMove(key, next);
-      ad->incRefCount();
-      assertx(escalated->hasExactlyOneRef());
-      if (escalated == result) return;
-      result->incRefCount();
-      result = escalated;
-    } else {
-      in->incRefCount();
-      result = in->setMove(key, next);
-      ad->incRefCount();
-      assertx(result->hasExactlyOneRef());
-    }
-  });
+    result = escalated->setMove(key, next);
+    assertx(result->hasExactlyOneRef());
+  }
   FTRACE(1, "Depth {}: {} {}\n", depth,
          result && result != in ? "copy" : "reuse", in);
   return result == in ? nullptr : result;

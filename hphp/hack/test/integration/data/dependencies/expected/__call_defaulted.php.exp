@@ -1,11 +1,13 @@
 //// toplevel.php
 <?hh
+
 function with_defaults(
   int $arg = \extract_standalone_make_default(),
   float $argf = \extract_standalone_make_default(),
 ): void {
   throw new \Exception();
 }
+
 function call_defaulted(int $arg): void {
   with_defaults($arg);
   with_defaults();
@@ -13,7 +15,7 @@ function call_defaulted(int $arg): void {
 
 //// __extract_standalone__.php
 <?hh
-<<__Pure>>
-function extract_standalone_make_default(): nothing {
+
+function extract_standalone_make_default()[]: nothing {
   throw new \Exception();
 }

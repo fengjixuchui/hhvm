@@ -11,54 +11,12 @@ open Hh_prelude
 open Aast
 open Typing_defs
 
-let conditionally_reactive_attribute_to_hint env { ua_params = l; _ } =
-  match l with
-  (* convert class const expression to non-generic type hint *)
-  | [(p, Class_const ((_, CI cls), (_, name)))]
-    when String.equal name SN.Members.mClass ->
-    (* set Extends dependency for between class that contains
-         method and condition type *)
-    Decl_env.add_extends_dependency env (snd cls);
-    Decl_hint.hint env (p, Happly (cls, []))
-  | _ ->
-    (* error for invalid argument list was already reported during the
-       naming step, do nothing *)
-    mk (Reason.none, Typing_defs.make_tany ())
-
-let condition_type_from_attributes env user_attributes =
-  Naming_attributes.find SN.UserAttributes.uaOnlyRxIfImpl user_attributes
-  |> Option.map ~f:(conditionally_reactive_attribute_to_hint env)
-
 let get_classname_or_literal_attribute_param = function
   | [(_, String s)] -> Some s
   | [(_, Class_const ((_, CI (_, s)), (_, name)))]
     when String.equal name SN.Members.mClass ->
     Some s
   | _ -> None
-
-let fun_reactivity_opt env user_attributes =
-  let module UA = SN.UserAttributes in
-  let rx_condition = condition_type_from_attributes env user_attributes in
-  let rec go = function
-    | [] -> None
-    | { Aast.ua_name = (_, n); ua_params } :: tl ->
-      if String.equal n UA.uaPure then
-        Some (Pure rx_condition)
-      else if String.equal n UA.uaNonRx then
-        Some Nonreactive
-      else if String.equal n UA.uaCipp then
-        Some (Cipp (get_classname_or_literal_attribute_param ua_params))
-      else if String.equal n UA.uaCippLocal then
-        Some (CippLocal (get_classname_or_literal_attribute_param ua_params))
-      else if String.equal n UA.uaCippGlobal then
-        Some CippGlobal
-      else
-        go tl
-  in
-  go user_attributes
-
-let fun_reactivity env user_attributes =
-  fun_reactivity_opt env user_attributes |> Option.value ~default:Nonreactive
 
 let find_policied_attribute user_attributes : ifc_fun_decl =
   match Naming_attributes.find SN.UserAttributes.uaPolicied user_attributes with
@@ -70,6 +28,9 @@ let find_policied_attribute user_attributes : ifc_fun_decl =
     when Naming_attributes.mem SN.UserAttributes.uaInferFlows user_attributes ->
     FDInferFlows
   | None -> default_ifc_fun_decl
+
+let has_constfun_attribute user_attributes =
+  Naming_attributes.mem SN.UserAttributes.uaConstFun user_attributes
 
 let has_accept_disposable_attribute user_attributes =
   Naming_attributes.mem SN.UserAttributes.uaAcceptDisposable user_attributes
@@ -85,23 +46,6 @@ let has_atom_attribute user_attributes =
 
 let has_return_disposable_attribute user_attributes =
   Naming_attributes.mem SN.UserAttributes.uaReturnDisposable user_attributes
-
-let fun_returns_mutable user_attributes =
-  Naming_attributes.mem SN.UserAttributes.uaMutableReturn user_attributes
-
-let fun_returns_void_to_rx user_attributes =
-  Naming_attributes.mem SN.UserAttributes.uaReturnsVoidToRx user_attributes
-
-let get_param_mutability user_attributes =
-  if Naming_attributes.mem SN.UserAttributes.uaOwnedMutable user_attributes then
-    Some Param_owned_mutable
-  else if Naming_attributes.mem SN.UserAttributes.uaMutable user_attributes then
-    Some Param_borrowed_mutable
-  else if Naming_attributes.mem SN.UserAttributes.uaMaybeMutable user_attributes
-  then
-    Some Param_maybe_mutable
-  else
-    None
 
 exception Gi_reinfer_type_not_supported
 
@@ -197,13 +141,14 @@ let hint_to_type ~is_lambda ~default env reason hint =
   Option.value (hint_to_type_opt ~is_lambda env reason hint) ~default
 
 let make_param_ty env ~is_lambda param =
+  let param_pos = Decl_env.make_decl_pos env param.param_pos in
   let ty =
-    let r = Reason.Rwitness param.param_pos in
+    let r = Reason.Rwitness_from_decl param_pos in
     hint_to_type
       ~is_lambda
       ~default:(mk (r, Typing_defs.make_tany ()))
       env
-      (Reason.Rglobal_fun_param param.param_pos)
+      (Reason.Rglobal_fun_param param_pos)
       (hint_of_type_hint param.param_type_hint)
   in
   let ty =
@@ -211,72 +156,58 @@ let make_param_ty env ~is_lambda param =
     | t when param.param_is_variadic ->
       (* When checking a call f($a, $b) to a function f(C ...$args),
        * both $a and $b must be of type C *)
-      mk (Reason.Rvar_param param.param_pos, t)
+      mk (Reason.Rvar_param_from_decl param_pos, t)
     | _ -> ty
   in
   let module UA = SN.UserAttributes in
-  let has_at_most_rx_as_func =
-    Naming_attributes.mem UA.uaAtMostRxAsFunc param.param_user_attributes
-  in
-  let ty =
-    if has_at_most_rx_as_func then
-      make_function_type_rxvar ty
-    else
-      ty
-  in
   let mode = get_param_mode param.param_callconv in
-  let rx_annotation =
-    if has_at_most_rx_as_func then
-      Some Param_rx_var
-    else
-      Naming_attributes.find UA.uaOnlyRxIfImpl param.param_user_attributes
-      |> Option.map ~f:(fun v ->
-             Param_rx_if_impl (conditionally_reactive_attribute_to_hint env v))
-  in
   {
-    fp_pos = param.param_pos;
+    fp_pos = param_pos;
     fp_name = Some param.param_name;
-    fp_type = { et_type = ty; et_enforced = false };
+    fp_type = { et_type = ty; et_enforced = Unenforced };
     fp_flags =
       make_fp_flags
         ~mode
-        ~mutability:(get_param_mutability param.param_user_attributes)
         ~accept_disposable:
           (has_accept_disposable_attribute param.param_user_attributes)
         ~has_default:(Option.is_some param.param_expr)
         ~ifc_external:(has_external_attribute param.param_user_attributes)
         ~ifc_can_call:(has_can_call_attribute param.param_user_attributes)
         ~is_atom:(has_atom_attribute param.param_user_attributes)
-        ~readonly:(Option.is_some param.param_readonly);
-    fp_rx_annotation = rx_annotation;
+        ~readonly:(Option.is_some param.param_readonly)
+        ~const_function:(has_constfun_attribute param.param_user_attributes);
   }
 
-(* Make FunParam for the partial-mode ellipsis parameter (unnamed, and untyped) *)
-let make_ellipsis_param_ty pos =
-  let r = Reason.Rwitness pos in
+(** Make FunParam for the partial-mode ellipsis parameter (unnamed, and untyped) *)
+let make_ellipsis_param_ty :
+    Decl_env.env -> Pos.t -> 'phase ty Typing_defs_core.fun_param =
+ fun env pos ->
+  let pos = Decl_env.make_decl_pos env pos in
+  let r = Reason.Rwitness_from_decl pos in
   let ty = mk (r, Typing_defs.make_tany ()) in
   {
     fp_pos = pos;
     fp_name = None;
-    fp_type = { et_type = ty; et_enforced = false };
+    fp_type = { et_type = ty; et_enforced = Unenforced };
     fp_flags =
       make_fp_flags
         ~mode:FPnormal
-        ~mutability:None
         ~accept_disposable:false
         ~has_default:false
         ~ifc_external:false
         ~ifc_can_call:false
         ~is_atom:false
-        ~readonly:false;
-    fp_rx_annotation = None;
+        ~readonly:false
+        ~const_function:false;
   }
 
-let ret_from_fun_kind ?(is_constructor = false) ~is_lambda env pos kind hint =
-  let default = mk (Reason.Rwitness pos, Typing_defs.make_tany ()) in
+let ret_from_fun_kind
+    ?(is_constructor = false) ~is_lambda env (pos : pos) kind hint =
+  let pos = Decl_env.make_decl_pos env pos in
+  let default = mk (Reason.Rwitness_from_decl pos, Typing_defs.make_tany ()) in
   let ret_ty () =
     if is_constructor then
-      mk (Reason.Rwitness pos, Tprim Tvoid)
+      mk (Reason.Rwitness_from_decl pos, Tprim Tvoid)
     else
       hint_to_type ~is_lambda ~default env (Reason.Rglobal_fun_ret pos) hint
   in
@@ -284,20 +215,20 @@ let ret_from_fun_kind ?(is_constructor = false) ~is_lambda env pos kind hint =
   | None ->
     (match kind with
     | Ast_defs.FGenerator ->
-      let r = Reason.Rret_fun_kind (pos, kind) in
+      let r = Reason.Rret_fun_kind_from_decl (pos, kind) in
       mk
         ( r,
           Tapply
             ((pos, SN.Classes.cGenerator), [ret_ty (); ret_ty (); ret_ty ()]) )
     | Ast_defs.FAsyncGenerator ->
-      let r = Reason.Rret_fun_kind (pos, kind) in
+      let r = Reason.Rret_fun_kind_from_decl (pos, kind) in
       mk
         ( r,
           Tapply
             ( (pos, SN.Classes.cAsyncGenerator),
               [ret_ty (); ret_ty (); ret_ty ()] ) )
     | Ast_defs.FAsync ->
-      let r = Reason.Rret_fun_kind (pos, kind) in
+      let r = Reason.Rret_fun_kind_from_decl (pos, kind) in
       mk (r, Tapply ((pos, SN.Classes.cAwaitable), [ret_ty ()]))
     | Ast_defs.FSync -> ret_ty ())
   | Some _ -> ret_ty ()

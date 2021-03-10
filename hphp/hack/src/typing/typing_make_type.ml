@@ -65,11 +65,23 @@ let collection r ty = class_type r SN.Collections.cCollection [ty]
 let spliceable r ty1 ty2 ty3 =
   class_type r SN.Classes.cSpliceable [ty1; ty2; ty3]
 
-let varray_or_darray r kty vty = mk (r, Tvarray_or_darray (kty, vty))
+let varray_or_darray ~unification r kty vty =
+  if unification then
+    mk (r, Tvec_or_dict (kty, vty))
+  else
+    mk (r, Tvarray_or_darray (kty, vty))
 
-let varray r ty = mk (r, Tvarray ty)
+let varray ~unification r ty =
+  if unification then
+    vec r ty
+  else
+    mk (r, Tvarray ty)
 
-let darray r kty vty = mk (r, Tdarray (kty, vty))
+let darray ~unification r kty vty =
+  if unification then
+    dict r kty vty
+  else
+    mk (r, Tdarray (kty, vty))
 
 let int r = prim_type r Nast.Tint
 
@@ -139,9 +151,9 @@ let intersection r tyl =
   | [ty] -> ty
   | _ -> mk (r, Tintersection tyl)
 
-let unenforced ty = { et_type = ty; et_enforced = false }
+let unenforced ty = { et_type = ty; et_enforced = Unenforced }
 
-let enforced ty = { et_type = ty; et_enforced = true }
+let enforced ty = { et_type = ty; et_enforced = Enforced }
 
 let has_member r ~name ~ty ~class_id ~explicit_targs =
   ConstraintType

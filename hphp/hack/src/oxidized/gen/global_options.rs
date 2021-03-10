@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<38eb135394b1fe7ac0064defeddc198e>>
+// @generated SignedSource<<ff4c8d9b2cf9525e1b9c5f072fb94915>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -58,7 +58,6 @@ pub struct GlobalOptions {
     pub tco_disallow_array_typehint: bool,
     pub tco_disallow_array_literal: bool,
     pub tco_language_feature_logging: bool,
-    pub tco_unsafe_rx: bool,
     pub tco_disallow_scrutinee_case_value_type_mismatch: bool,
     pub tco_timeout: isize,
     pub tco_disallow_invalid_arraykey: bool,
@@ -71,10 +70,6 @@ pub struct GlobalOptions {
     pub po_disable_lval_as_an_expression: bool,
     pub tco_shallow_class_decl: bool,
     pub po_rust_parser_errors: bool,
-    pub profile_type_check_duration_threshold: f64,
-    pub profile_type_check_twice: bool,
-    pub profile_owner: Option<String>,
-    pub profile_desc: String,
     pub tco_like_type_hints: bool,
     pub tco_union_intersection_type_hints: bool,
     pub tco_coeffects: bool,
@@ -135,11 +130,13 @@ pub struct GlobalOptions {
     pub tco_enable_sound_dynamic: bool,
     pub po_disallow_hash_comments: bool,
     pub po_disallow_fun_and_cls_meth_pseudo_funcs: bool,
+    pub po_disallow_inst_meth: bool,
     pub tco_use_direct_decl_parser: bool,
     pub tco_ifc_enabled: Vec<String>,
     pub po_enable_enum_supertyping: bool,
     pub po_array_unification: bool,
     pub po_interpret_soft_types_as_like_types: bool,
     pub tco_enable_strict_string_concat_interp: bool,
+    pub tco_ignore_unsafe_cast: bool,
     pub tco_readonly: bool,
 }

@@ -96,15 +96,6 @@ type t = {
    *)
   tco_language_feature_logging: bool;
   (*
-   * Flag to disable enforcement of requirements for reactive Hack.
-   *
-   * Currently defaults to true as Reactive Hack is experimental and
-   * undocumented; the HSL is compatible with it, but we don't want to
-   * raise errors that can't be fully understood without knowledge of
-   * undocumented features.
-   *)
-  tco_unsafe_rx: bool;
-  (*
    * When enabled, mismatches between the types of the scrutinee and case value
    * of a switch expression are reported as type errors.
    *)
@@ -142,17 +133,6 @@ type t = {
   tco_shallow_class_decl: bool;
   (* Use Rust parser errors *)
   po_rust_parser_errors: bool;
-  (* The threshold (in seconds) that determines whether a file's type checking time
-      should be logged. It's only in effect if we're profiling type checking to begin
-      with. To profile, pass --profile-log to hh_server. *)
-  profile_type_check_duration_threshold: float;
-  (* When typechecking, do a second typecheck on each file. *)
-  profile_type_check_twice: bool;
-  (* Two more profile options, used solely to send to logging backend. These allow
-      the person who launches hack, to provide unique identifying keys that get
-      sent to logging, so they can correlate/sort/filter their logs as they want. *)
-  profile_owner: string option;
-  profile_desc: string;
   (* Enables like type hints *)
   tco_like_type_hints: bool;
   (* Enables union and intersection type hints *)
@@ -287,6 +267,8 @@ type t = {
   po_disallow_hash_comments: bool;
   (* Disable parsing of fun() and class_meth() *)
   po_disallow_fun_and_cls_meth_pseudo_funcs: bool;
+  (* Disable parsing of inst_meth() *)
+  po_disallow_inst_meth: bool;
   (* Enable use of the direct decl parser for parsing type signatures. *)
   tco_use_direct_decl_parser: bool;
   (* Enable ifc on the specified list of path prefixes
@@ -301,6 +283,8 @@ type t = {
   po_interpret_soft_types_as_like_types: bool;
   (* Restricts string concatenation and interpolation to arraykeys *)
   tco_enable_strict_string_concat_interp: bool;
+  (* Ignores unsafe_cast and retains the original type of the expression *)
+  tco_ignore_unsafe_cast: bool;
   (* Enable Unstable feature readonly tast check *)
   tco_readonly: bool;
 }
@@ -336,7 +320,6 @@ val make :
   ?tco_disallow_array_typehint:bool ->
   ?tco_disallow_array_literal:bool ->
   ?tco_language_feature_logging:bool ->
-  ?tco_unsafe_rx:bool ->
   ?tco_disallow_scrutinee_case_value_type_mismatch:bool ->
   ?tco_timeout:int ->
   ?tco_disallow_invalid_arraykey:bool ->
@@ -349,10 +332,6 @@ val make :
   ?po_disable_lval_as_an_expression:bool ->
   ?tco_shallow_class_decl:bool ->
   ?po_rust_parser_errors:bool ->
-  ?profile_type_check_duration_threshold:float ->
-  ?profile_type_check_twice:bool ->
-  ?profile_owner:string ->
-  ?profile_desc:string ->
   ?tco_like_type_hints:bool ->
   ?tco_union_intersection_type_hints:bool ->
   ?tco_coeffects:bool ->
@@ -414,12 +393,14 @@ val make :
   ?tco_enable_sound_dynamic:bool ->
   ?po_disallow_hash_comments:bool ->
   ?po_disallow_fun_and_cls_meth_pseudo_funcs:bool ->
+  ?po_disallow_inst_meth:bool ->
   ?tco_use_direct_decl_parser:bool ->
   ?tco_ifc_enabled:string list ->
   ?po_enable_enum_supertyping:bool ->
   ?po_array_unification:bool ->
   ?po_interpret_soft_types_as_like_types:bool ->
   ?tco_enable_strict_string_concat_interp:bool ->
+  ?tco_ignore_unsafe_cast:bool ->
   ?tco_readonly:bool ->
   unit ->
   t
@@ -484,8 +465,6 @@ val tco_disallow_array_literal : t -> bool
 
 val tco_language_feature_logging : t -> bool
 
-val tco_unsafe_rx : t -> bool
-
 val tco_disallow_scrutinee_case_value_type_mismatch : t -> bool
 
 val tco_timeout : t -> int
@@ -531,14 +510,6 @@ val po_disable_lval_as_an_expression : t -> bool
 val tco_shallow_class_decl : t -> bool
 
 val po_rust_parser_errors : t -> bool
-
-val profile_type_check_duration_threshold : t -> float
-
-val profile_type_check_twice : t -> bool
-
-val profile_owner : t -> string option
-
-val profile_desc : t -> string
 
 val tco_like_type_hints : t -> bool
 
@@ -670,6 +641,8 @@ val po_disallow_hash_comments : t -> bool
 
 val po_disallow_fun_and_cls_meth_pseudo_funcs : t -> bool
 
+val po_disallow_inst_meth : t -> bool
+
 val tco_use_direct_decl_parser : t -> bool
 
 val po_enable_enum_supertyping : t -> bool
@@ -679,6 +652,8 @@ val po_array_unification : t -> bool
 val po_interpret_soft_types_as_like_types : t -> bool
 
 val tco_enable_strict_string_concat_interp : t -> bool
+
+val tco_ignore_unsafe_cast : t -> bool
 
 val tco_readonly : t -> bool
 

@@ -102,6 +102,7 @@ HPHP::(anonymous namespace)::s_localCounters
 HPHP::arrprov::(anonymous namespace)::tl_tag_override
 HPHP::tracing::detail::tl_active
 HPHP::jit::(anonymous namespace)::tl_ownedFunc
+HPHP::jit::tc::tl_is_jitting
 
 # Native Facts is not request-scoped.
 HPHP::Facts::t_adb
@@ -118,3 +119,6 @@ HPHP::(anonymous namespace)::cc_misses
 HPHP::(anonymous namespace)::s_predict
 HPHP::(anonymous namespace)::s_predictors
 HPHP::(anonymous namespace)::tl_cti_cache
+
+# Outlining data caches are background JIT thread local
+HPHP::jit::(anonymous namespace)::tl_dataStorePtr

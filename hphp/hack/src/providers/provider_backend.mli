@@ -13,7 +13,7 @@ module Decl_cache_entry : sig
     | Class_decl : string -> Obj.t t
     | Record_decl : string -> Typing_defs.record_def_type t
     | Typedef_decl : string -> Typing_defs.typedef_type t
-    | Gconst_decl : string -> Typing_defs.decl_ty t
+    | Gconst_decl : string -> Typing_defs.const_decl t
 
   type 'a key = 'a t
 
@@ -168,8 +168,11 @@ type t =
       decl: Decl_service_client.t;
       fixmes: Fixmes.t;
     }  (** Used by the hh_server rearchitecture (hh_decl/hh_worker) *)
+  | Analysis
 
 val t_to_string : t -> string
+
+val set_analysis_backend : unit -> unit
 
 val set_shared_memory_backend : unit -> unit
 

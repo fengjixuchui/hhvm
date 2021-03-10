@@ -131,6 +131,11 @@ struct ArrayData : MaybeCountable {
    */
   static auto constexpr kSampledArray = 8;
 
+  /*
+   * See notes on the m_extra field for constraints on this value.
+   */
+  static auto constexpr kDefaultVanillaArrayExtra = uint32_t(-1);
+
   /////////////////////////////////////////////////////////////////////////////
   // Creation and destruction.
 
@@ -369,16 +374,6 @@ public:
   TypedValue at(int64_t k) const;
   TypedValue at(const StringData* k) const;
   TypedValue at(TypedValue k) const;
-
-  /*
-   * Get the internal position for element with key `k', if it exists.
-   * If the key is not present then these return the canonical invalid position
-   * (i.e. iter_end()).
-   * The returned values can be passed to atPos or nvGetKey (if they're not the
-   * canonical invalid position).
-   */
-  ssize_t nvGetIntPos(int64_t k) const;
-  ssize_t nvGetStrPos(const StringData* k) const;
 
   /*
    * Get the value or key for the element at raw position `pos'. This op
@@ -679,25 +674,25 @@ protected:
   friend struct bespoke::MonotypeVec;
 
   uint32_t m_size;
+
   /*
-   * m_extra is used both to store bespoke IDs and for array provenance (for
-   * v/darrays.) It's fine to share the field since we already refuse to enable
-   * these features together.
+   * m_extra is used to store BespokeArray data and to store arrprov::Tag for
+   * dvarrays when array provenance is enabled. It's fine to share the field,
+   * since we refuse to enable these features together.
    *
-   * When RO::EvalArrayProvenance is on, this stores an arrprov::Tag--otherwise
-   * we use this field as follows:
+   * When RO::EvalArrayProvenance is on, this stores an arrprov::Tag.
+   * Otherwise we use this field as follows:
    *
-   * When the array is bespoke (m_kind & kBespokeKindMask):
+   * When the array is bespoke:
    *
-   *   bits 0..15: for private bespoke-array use. we don't require these to be
-   *                have any specific value but are reserved for use by bespoke
-   *                layouts
+   *   bits 0..15: For private BespokeArray use. We don't constrain the value
+   *               in this field - different layouts can use it differently.
    *
-   *   bits 16..30: store the bespoke layout index
+   *   bits 16..31: The bespoke LayoutIndex.
    *
-   *   bit 31:      must be set
-   *
-   * When the array is vanilla and array provenance is off, m_extra must be 0.
+   * When the array is vanilla and array provenance is disabled, m_extra must
+   * be kDefaultVanillaArrayExtra. This value must also equal, as raw bytes,
+   * the default arrprov::Tag.
    */
   union {
     uint32_t m_extra;
@@ -792,8 +787,6 @@ struct ArrayFunctions {
   void (*release[NK])(ArrayData*);
   TypedValue (*nvGetInt[NK])(const ArrayData*, int64_t k);
   TypedValue (*nvGetStr[NK])(const ArrayData*, const StringData* k);
-  ssize_t (*nvGetIntPos[NK])(const ArrayData*, int64_t k);
-  ssize_t (*nvGetStrPos[NK])(const ArrayData*, const StringData* k);
   TypedValue (*getPosKey[NK])(const ArrayData*, ssize_t pos);
   TypedValue (*getPosVal[NK])(const ArrayData*, ssize_t pos);
   ArrayData* (*setIntMove[NK])(ArrayData*, int64_t k, TypedValue v);

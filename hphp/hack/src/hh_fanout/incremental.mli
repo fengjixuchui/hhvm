@@ -22,6 +22,7 @@ type client_config = {
   dep_table_saved_state_path: Path.t;
   dep_table_errors_saved_state_path: Path.t;
   naming_table_saved_state_path: Naming_sqlite.db_path;
+  deps_mode: Typing_deps_mode.t;
 }
 
 (** A "cursor" represents a pointer to a state in time of the repository with
@@ -56,6 +57,9 @@ class type cursor =
     In particular, this contains information about the saved-state that this
     cursor was initialized with. *)
     method get_client_config : client_config
+
+    (** Helper to get deps_mode out of client_config *)
+    method get_deps_mode : Typing_deps_mode.t
 
     (** Process the provided set of changed files and advance the cursor.
 
@@ -125,4 +129,4 @@ If the path does not exist, it is atomically created and loaded.
 
 Currently not production-usable -- it is not safe for concurrent consumers.
 *)
-val make_reference_implementation : Typing_deps_mode.t -> Path.t -> state
+val make_reference_implementation : Path.t -> state

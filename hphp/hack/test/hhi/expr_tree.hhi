@@ -7,7 +7,6 @@ class Code {
 
   public static function makeTree<TVisitor as Code, TInfer>(
     ?ExprPos $pos,
-    string $filepath,
     dict<string, mixed> $spliced_values,
     (function(TVisitor): Code::TAst) $ast,
     ExprTreeInferredType<TInfer> $null,
@@ -45,7 +44,6 @@ class Code {
 
   // Symbols
   public static function symbol<T>(
-    string $_,
     (function(ExampleContext): Awaitable<ExprTree<Code, Code::TAst, T>>) $_,
   ): ExprTree<Code, Code::TAst, T> {
     throw new Exception();
@@ -155,7 +153,6 @@ final class ExprTree<TVisitor, TResult, +TInfer>
   implements Spliceable<TVisitor, TResult, TInfer> {
   public function __construct(
     private ?ExprPos $pos,
-    private string $filepath,
     private dict<string, mixed> $spliced_values,
     private (function(TVisitor): TResult) $ast,
     private (function(): TInfer) $err,
@@ -168,6 +165,7 @@ final class ExprTree<TVisitor, TResult, +TInfer>
 
 final class ExprPos {
   public function __construct(
+    private string $filepath,
     private int $begin_line,
     private int $begin_col,
     private int $end_line,
@@ -184,6 +182,8 @@ abstract class ExampleInt extends ExampleMixed {
   public abstract function __minus(ExampleInt $_): ExampleInt;
   public abstract function __star(ExampleInt $_): ExampleInt;
   public abstract function __slash(ExampleInt $_): ExampleInt;
+  public abstract function __percent(ExampleInt $_): ExampleInt;
+  public abstract function __negate(): ExampleInt;
 
   public abstract function __lessThan(ExampleInt $_): ExampleBool;
   public abstract function __lessThanEqual(ExampleInt $_): ExampleBool;
@@ -198,7 +198,10 @@ abstract class ExampleBool extends ExampleMixed {
   public abstract function __exclamationMark(): ExampleBool;
 }
 
-abstract class ExampleString extends ExampleMixed {}
+abstract class ExampleString extends ExampleMixed {
+  public abstract function __dot(ExampleString $_): ExampleString;
+}
+
 abstract class ExampleFloat extends ExampleMixed {}
 
 final class ExampleContext {}

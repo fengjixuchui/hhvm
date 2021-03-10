@@ -1052,7 +1052,7 @@ let hack_symbol_definition_to_lsp_identifier_location
     }
 
 let hack_errors_to_lsp_diagnostic
-    (filename : string) (errors : Pos.absolute Errors.error_ list) :
+    (filename : string) (errors : Errors.finalized_error list) :
     PublishDiagnostics.params =
   let open Lsp.Location in
   let location_message (error : Pos.absolute * string) : Lsp.Location.t * string
@@ -1061,7 +1061,7 @@ let hack_errors_to_lsp_diagnostic
     let { uri; range } = hack_pos_to_lsp_location pos ~default_path:filename in
     ({ Location.uri; range }, Markdown_lite.render message)
   in
-  let hack_error_to_lsp_diagnostic (error : Pos.absolute Errors.error_) =
+  let hack_error_to_lsp_diagnostic (error : Errors.finalized_error) =
     let all_messages = Errors.to_list error |> List.map ~f:location_message in
     let (first_message, additional_messages) =
       match all_messages with
@@ -1332,9 +1332,7 @@ and reconnect_from_lost_if_necessary
       match (state, reason) with
       | (Lost_server _, `Force_regain) -> true
       | ( Lost_server { p = { trigger_on_lsp = true; _ }; _ },
-          `Event
-            (Client_message (_, (RequestMessage _ | NotificationMessage _))) )
-        ->
+          `Event (Client_message (_, RequestMessage _)) ) ->
         true
       | ( Lost_server { p = { trigger_on_lock_file = true; _ }; lock_file; _ },
           `Event Tick ) ->
@@ -2295,7 +2293,7 @@ let do_definition
     (conn : server_conn)
     (ref_unblocked_time : float ref)
     (editor_open_files : Lsp.TextDocumentItem.t UriMap.t)
-    (params : Definition.params) : Definition.result Lwt.t =
+    (params : Definition.params) : (Definition.result * bool) Lwt.t =
   let (filename, line, column) = lsp_file_position_to_hack params in
   let uri =
     params.TextDocumentPositionParams.textDocument.TextDocumentIdentifier.uri
@@ -2312,11 +2310,17 @@ let do_definition
     ServerCommandTypes.GO_TO_DEFINITION (labelled_file, line, column)
   in
   let%lwt results = rpc conn ref_unblocked_time ~desc:"go-to-def" command in
-  Lwt.return
-    (List.map results ~f:(fun (_occurrence, definition) ->
-         hack_symbol_definition_to_lsp_identifier_location
-           definition
-           ~default_path:filename))
+  let locations =
+    List.map results ~f:(fun (_, definition) ->
+        hack_symbol_definition_to_lsp_identifier_location
+          definition
+          ~default_path:filename)
+  in
+  let has_xhp_attribute =
+    List.exists results ~f:(fun (occurence, _) ->
+        SymbolOccurrence.is_xhp_literal_attr occurence)
+  in
+  Lwt.return (locations, has_xhp_attribute)
 
 let do_definition_local
     (ide_service : ClientIdeService.t ref)
@@ -2324,7 +2328,7 @@ let do_definition_local
     (tracking_id : string)
     (ref_unblocked_time : float ref)
     (editor_open_files : Lsp.TextDocumentItem.t UriMap.t)
-    (params : Definition.params) : Definition.result Lwt.t =
+    (params : Definition.params) : (Definition.result * bool) Lwt.t =
   let document_location = get_document_location editor_open_files params in
   let%lwt results =
     ide_rpc
@@ -2334,14 +2338,18 @@ let do_definition_local
       ~ref_unblocked_time
       (ClientIdeMessage.Definition document_location)
   in
-  let results =
-    List.map results ~f:(fun (_occurrence, definition) ->
+  let locations =
+    List.map results ~f:(fun (_, definition) ->
         hack_symbol_definition_to_lsp_identifier_location
           definition
           ~default_path:
             (document_location.ClientIdeMessage.file_path |> Path.to_string))
   in
-  Lwt.return results
+  let has_xhp_attribute =
+    List.exists results ~f:(fun (occurence, _) ->
+        SymbolOccurrence.is_xhp_literal_attr occurence)
+  in
+  Lwt.return (locations, has_xhp_attribute)
 
 let snippet_re = Str.regexp {|[\$}]|} (* snippets must backslash-escape "$\}" *)
 
@@ -3336,7 +3344,7 @@ let do_server_busy (state : state) (status : ServerCommandTypes.busy_status) :
 (* our client currently has non-empty diagnostic reports.                     *)
 let do_diagnostics
     (uris_with_diagnostics : UriSet.t)
-    (file_reports : Pos.absolute Errors.error_ list SMap.t) : UriSet.t =
+    (file_reports : Errors.finalized_error list SMap.t) : UriSet.t =
   (* Hack sometimes reports a diagnostic on an empty file when it can't       *)
   (* figure out which file to report. In this case we'll report on the root.  *)
   (* Nuclide and VSCode both display this fine, though they obviously don't   *)
@@ -3397,7 +3405,7 @@ let do_initialize ~(env : env) (root : Path.t) : Initialize.result =
               {
                 resolveProvider = true;
                 completion_triggerCharacters =
-                  ["$"; ">"; "\\"; ":"; "<"; "["; "'"; "\""];
+                  ["$"; ">"; "\\"; ":"; "<"; "["; "'"; "\""; "{"];
               };
           signatureHelpProvider =
             Some { sighelp_triggerCharacters = ["("; ","] };
@@ -3424,19 +3432,19 @@ let do_initialize ~(env : env) (root : Path.t) : Initialize.result =
     }
 
 let do_didChangeWatchedFiles_registerCapability () : Lsp.lsp_request =
+  (* We want a glob-pattern like "**/*.{php,phpt,hack,hackpartial,hck,hh,hhi,xhp}".
+  I'm constructing it from FindUtils.extensions so our glob-pattern doesn't get out
+  of sync with FindUtils.file_filter. *)
+  let extensions =
+    List.map FindUtils.extensions ~f:(fun s -> String_utils.lstrip s ".")
+  in
+  let globPattern =
+    Printf.sprintf "**/*.{%s}" (extensions |> String.concat ~sep:",")
+  in
   let registration_options =
     DidChangeWatchedFilesRegistrationOptions
       {
-        DidChangeWatchedFiles.watchers =
-          [
-            {
-              DidChangeWatchedFiles.globPattern
-              (* We could be more precise here, but some language clients (such as
-          LanguageClient-neovim) don't currently support rich glob patterns.
-          We'll do further filtering at a later stage. *) =
-                "**";
-            };
-          ];
+        DidChangeWatchedFiles.watchers = [{ DidChangeWatchedFiles.globPattern }];
       }
   in
   let registration =
@@ -4149,7 +4157,7 @@ let handle_client_message
         { result_count = List.length result; result_extra_telemetry = None }
     | (_, Some ide_service, RequestMessage (id, DefinitionRequest params)) ->
       let%lwt () = cancel_if_stale client timestamp short_timeout in
-      let%lwt result =
+      let%lwt (result, has_xhp_attribute) =
         do_definition_local
           ide_service
           env
@@ -4158,9 +4166,15 @@ let handle_client_message
           editor_open_files
           params
       in
+      let result_extra_telemetry =
+        Option.some_if
+          has_xhp_attribute
+          ( Telemetry.create ()
+          |> Telemetry.bool_ ~key:"has_xhp_attribute" ~value:true )
+      in
       respond_jsonrpc ~powered_by:Serverless_ide id (DefinitionResult result);
       Lwt.return_some
-        { result_count = List.length result; result_extra_telemetry = None }
+        { result_count = List.length result; result_extra_telemetry }
     | (_, Some ide_service, RequestMessage (id, TypeDefinitionRequest params))
       ->
       let%lwt () = cancel_if_stale client timestamp short_timeout in
@@ -4282,12 +4296,18 @@ let handle_client_message
     (* textDocument/definition request *)
     | (Main_loop menv, _, RequestMessage (id, DefinitionRequest params)) ->
       let%lwt () = cancel_if_stale client timestamp short_timeout in
-      let%lwt result =
+      let%lwt (result, has_xhp_attribute) =
         do_definition menv.conn ref_unblocked_time editor_open_files params
+      in
+      let result_extra_telemetry =
+        Option.some_if
+          has_xhp_attribute
+          ( Telemetry.create ()
+          |> Telemetry.bool_ ~key:"has_xhp_attribute" ~value:true )
       in
       respond_jsonrpc ~powered_by:Hh_server id (DefinitionResult result);
       Lwt.return_some
-        { result_count = List.length result; result_extra_telemetry = None }
+        { result_count = List.length result; result_extra_telemetry }
     (* textDocument/completion request *)
     | (Main_loop menv, _, RequestMessage (id, CompletionRequest params)) ->
       let do_completion =
@@ -4631,6 +4651,7 @@ let handle_tick
     ~(env : env) ~(state : state ref) ~(ref_unblocked_time : float ref) :
     result_telemetry option Lwt.t =
   EventLogger.recheck_disk_files ();
+  HackEventLogger.Memory.profile_if_needed ();
   (* Update the hh_server_status global variable, either by asking the monitor
   during In_init, or reading it from Main_env: *)
   latest_hh_server_status := get_hh_server_status !state;

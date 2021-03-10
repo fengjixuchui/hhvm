@@ -25,36 +25,6 @@ module Env = Typing_env
 module EnvFromDef = Typing_env_from_def
 module MakeType = Typing_make_type
 
-let param_has_at_most_rx_as_func p =
-  let module UA = SN.UserAttributes in
-  Naming_attributes.mem UA.uaAtMostRxAsFunc p.param_user_attributes
-
-let fun_reactivity env attrs params =
-  let r = FunUtils.fun_reactivity env attrs in
-  let module UA = Naming_special_names.UserAttributes in
-  let r =
-    (* if at least one of parameters has <<__AtMostRxAsFunc>> attribute -
-      treat function reactivity as generic that is determined from the reactivity
-      of arguments annotated with __AtMostRxAsFunc. Declared reactivity is used as a
-      upper boundary of the reactivity function can have. *)
-    if List.exists params ~f:param_has_at_most_rx_as_func then
-      RxVar (Some r)
-    else
-      r
-  in
-  let r =
-    (* if at least one of arguments have <<__OnlyRxIfImpl>> attribute -
-      treat function reactivity as conditional that is determined at the callsite *)
-    if
-      List.exists params ~f:(fun { param_user_attributes = p; _ } ->
-          Naming_attributes.mem UA.uaOnlyRxIfImpl p)
-    then
-      MaybeReactive r
-    else
-      r
-  in
-  r
-
 (* The two following functions enable us to retrieve the function (or class)
   header from the shared mem. Note that they only return a non None value if
   global inference is on *)
@@ -169,37 +139,7 @@ let make_param_local_ty env decl_hint param =
           env
           ty
       in
-      let condition_type =
-        FunUtils.condition_type_from_attributes
-          env.decl_env
-          param.param_user_attributes
-      in
-      begin
-        match condition_type with
-        | Some condition_type ->
-          let (env, ty) = Phase.localize ~ety_env env ty in
-          begin
-            match
-              TR.try_substitute_type_with_condition env condition_type ty
-            with
-            | Some r -> r
-            | None -> (env, ty)
-          end
-        | _
-          when Naming_attributes.mem
-                 SN.UserAttributes.uaAtMostRxAsFunc
-                 param.param_user_attributes ->
-          let (env, ty) = Phase.localize ~ety_env env ty in
-          (* expand type to track aliased function types *)
-          let (env, expanded_ty) = Env.expand_type env ty in
-          let adjusted_ty = make_function_type_rxvar expanded_ty in
-          ( env,
-            if phys_equal adjusted_ty expanded_ty then
-              ty
-            else
-              adjusted_ty )
-        | _ -> Phase.localize ~ety_env env ty
-      end
+      Phase.localize ~ety_env env ty
   in
   let ty =
     match get_node ty with
@@ -208,14 +148,15 @@ let make_param_local_ty env decl_hint param =
        * argument, "f(C ...$args)", $args is a varray<C> *)
       let r = Reason.Rvar_param param.param_pos in
       let arr_values = mk (r, t) in
-      mk (r, Tvarray arr_values)
+      let unification =
+        TypecheckerOptions.array_unification (Env.get_tcopt env)
+      in
+      MakeType.varray ~unification r arr_values
     | _ -> ty
   in
-  Typing_reactivity.disallow_atmost_rx_as_rxfunc_on_non_functions env param ty;
   (env, ty)
 
-let get_callable_variadicity
-    ?(is_function = false) ~partial_callback ~pos env variadicity_decl_ty =
+let get_callable_variadicity ~partial_callback ~pos env variadicity_decl_ty =
   function
   | FVvariadicArg vparam ->
     let (env, ty) = make_param_local_ty env variadicity_decl_ty vparam in
@@ -223,7 +164,7 @@ let get_callable_variadicity
     let (env, t_variadic) = Typing.bind_param env (ty, vparam) in
     (env, Aast.FVvariadicArg t_variadic)
   | FVellipsis p ->
-    if is_function && Partial.should_check_error (Env.get_mode env) 4223 then
+    if Partial.should_check_error (Env.get_mode env) 4223 then
       Errors.ellipsis_strict_mode ~require:`Type_and_param_name pos;
     (env, Aast.FVellipsis p)
   | FVnonVariadic -> (env, Aast.FVnonVariadic)
@@ -319,12 +260,6 @@ let fun_def ctx f :
       let (env, _) =
         Typing_coeffects.register_capabilities env cap_ty unsafe_cap_ty
       in
-      let reactive =
-        fun_reactivity env.decl_env f.f_user_attributes f.f_params
-      in
-      let mut = TUtils.fun_mutable f.f_user_attributes in
-      let env = Env.set_env_reactive env reactive in
-      let env = Env.set_fun_mutable env mut in
       Typing_check_decls.fun_ env f;
       let env =
         Phase.localize_and_add_ast_generic_parameters_and_where_constraints
@@ -385,7 +320,6 @@ let fun_def ctx f :
       in
       let (env, t_variadic) =
         get_callable_variadicity
-          ~is_function:true
           ~pos
           ~partial_callback
           env
@@ -404,8 +338,6 @@ let fun_def ctx f :
       let (env, tb) =
         Typing.fun_ ~disable env return pos f.f_body f.f_fun_kind
       in
-      (* restore original reactivity *)
-      let env = Env.set_env_reactive env reactive in
       begin
         match hint_of_type_hint f.f_ret with
         | None ->
@@ -473,27 +405,14 @@ let method_def env cls m =
           SN.AttributeKinds.mthd
           m.m_user_attributes
       in
-      let reactive =
-        fun_reactivity env.decl_env m.m_user_attributes m.m_params
-      in
-      let mut =
-        match TUtils.fun_mutable m.m_user_attributes with
-        | None ->
-          (* <<__Mutable>> is implicit on constructors  *)
-          if String.equal (snd m.m_name) SN.Members.__construct then
-            Some Param_borrowed_mutable
-          else
-            None
-        | x -> x
-      in
       let (env, cap_ty, unsafe_cap_ty) =
         Typing.type_capability env m.m_ctxs m.m_unsafe_ctxs (fst m.m_name)
       in
       let (env, _) =
         Typing_coeffects.register_capabilities env cap_ty unsafe_cap_ty
       in
-      let env = Env.set_env_reactive env reactive in
-      let env = Env.set_fun_mutable env mut in
+      let is_ctor = String.equal (snd m.m_name) SN.Members.__construct in
+      let env = Env.set_fun_is_constructor env is_ctor in
       let env =
         Phase.localize_and_add_ast_generic_parameters_and_where_constraints
           pos
@@ -502,10 +421,10 @@ let method_def env cls m =
           m.m_where_constraints
       in
       let env =
-        if Env.is_static env then
-          env
-        else
-          Env.set_local env this (Env.get_self env) Pos.none
+        match Env.get_self_ty env with
+        | Some ty when not (Env.is_static env) ->
+          Env.set_local env this ty Pos.none
+        | _ -> env
       in
       let env =
         match Env.get_self_class env with
@@ -599,8 +518,6 @@ let method_def env cls m =
           nb
           m.m_fun_kind
       in
-      (* restore original method reactivity  *)
-      let env = Env.set_env_reactive env reactive in
       let type_hint' =
         match hint_of_type_hint m.m_ret with
         | None when String.equal (snd m.m_name) SN.Members.__construct ->
@@ -781,17 +698,6 @@ let check_const_trait_members pos env use_list =
 let check_consistent_enum_inclusion included_cls (dest_cls : Cls.t) =
   match (Cls.enum_type included_cls, Cls.enum_type dest_cls) with
   | (Some included_e, Some dest_e) ->
-    (* Temporary workaround until D26410129 reaches HHVM *)
-    let pos_included = Cls.pos included_cls in
-    let pos_dest = Cls.pos dest_cls in
-    if
-      Relative_path.equal (Pos.filename pos_dest) (Pos.filename pos_included)
-      && Pos.line pos_dest < Pos.line pos_included
-    then
-      Errors.enum_inclusion_unsupported_ordering
-        pos_dest
-        (Cls.name dest_cls)
-        (Cls.name included_cls);
     (* ensure that the base types are identical *)
     if not (Typing_defs.equal_decl_ty included_e.te_base dest_e.te_base) then
       Errors.incompatible_enum_inclusion_base
@@ -1242,14 +1148,14 @@ let class_constr_def env cls constructor =
   let env = { env with inside_constructor = true } in
   Option.bind constructor (method_def env cls)
 
-let class_implements_type env c1 ctype2 =
+let class_implements_type env implements c1 ctype2 =
   let params =
     List.map c1.c_tparams (fun { tp_name = (p, s); _ } ->
-        mk (Reason.Rwitness p, Tgeneric (s, [])))
+        mk (Reason.Rwitness_from_decl p, Tgeneric (s, [])))
   in
-  let r = Reason.Rwitness (fst c1.c_name) in
+  let r = Reason.Rwitness_from_decl (fst c1.c_name) in
   let ctype1 = mk (r, Tapply (c1.c_name, params)) in
-  Typing_extends.check_implements env ctype2 ctype1
+  Typing_extends.check_implements env implements ctype2 ctype1
 
 (** Type-check a property declaration, with optional initializer *)
 let class_var_def ~is_static cls env cv =
@@ -1326,6 +1232,33 @@ let class_var_def ~is_static cls env cv =
       (expected.ExpectedTy.ty.et_type, hint_of_type_hint cv.cv_type)
     | None -> Tast.dummy_type_hint (hint_of_type_hint cv.cv_type)
   in
+  (* if the class implements dynamic, then check that the type of the property
+   * is enforceable (for writing) and coerces to dynamic (for reading) *)
+  if
+    TypecheckerOptions.enable_sound_dynamic
+      (Provider_context.get_tcopt (Env.get_ctx env))
+    && Cls.get_implements_dynamic cls
+  then begin
+    Option.iter decl_cty (fun ty ->
+        let te_check = Typing_enforceability.is_enforceable env ty in
+        if not te_check then
+          Errors.property_is_not_enforceable
+            (fst cv.cv_id)
+            (snd cv.cv_id)
+            (Cls.name cls));
+    if
+      not
+        (Typing_subtype.is_sub_type_for_union
+           ~coerce:(Some Typing_logic.CoerceToDynamic)
+           env
+           (fst cv_type)
+           (mk (Reason.Rnone, Tdynamic)))
+    then
+      Errors.property_is_not_dynamic
+        (fst cv.cv_id)
+        (snd cv.cv_id)
+        (Cls.name cls)
+  end;
   ( env,
     ( {
         Aast.cv_final = cv.cv_final;
@@ -1369,9 +1302,9 @@ let class_def_ env c tc =
     let method_pos ~is_static class_id meth_id =
       let get_meth =
         if is_static then
-          Decl_heap.StaticMethods.get
+          Decl_store.((get ()).get_static_method)
         else
-          Decl_heap.Methods.get
+          Decl_store.((get ()).get_method)
       in
       match get_meth (class_id, meth_id) with
       | Some { fe_pos; _ } -> fe_pos
@@ -1503,7 +1436,8 @@ let class_def_ env c tc =
   List.iter methods ~f:(fun { m_name = (p, id); _ } ->
       check_dynamic_class_element (Cls.get_smethod tc) ~elt_type:`Method id p);
   let env =
-    List.fold ~init:env impl ~f:(fun env -> class_implements_type env c)
+    List.fold ~init:env impl ~f:(fun env ->
+        class_implements_type env implements c)
   in
   if Cls.is_disposable tc then
     List.iter

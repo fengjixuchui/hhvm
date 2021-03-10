@@ -157,8 +157,20 @@ struct Repo::GlobalData {
   /* Whether implicit class conversions can raise a warning */
   bool RaiseClassConversionWarning = false;
 
+  /* Whether classname type-hint accepts (lazy) classes */
+  bool ClassPassesClassname = false;
+
+  /* Whether passing (lazy) classes to classname can raise a notice */
+  bool ClassnameNotices = false;
+
   /* Whether implicit class meth conversions can raise a warning */
   bool RaiseClsMethConversionWarning = false;
+
+  /* Whether implicit coercions for concat/interp trigger logs/exceptions */
+  int32_t NoticeOnCoerceForStrConcat = 0;
+
+  /* Whether implicit coercions for bit ops trigger logs/exceptions */
+  int32_t NoticeOnCoerceForBitOp = 0;
 
   /*
    * The Hack.Lang.StrictArrayFillKeys option the repo was compiled with.
@@ -202,8 +214,12 @@ struct Repo::GlobalData {
       (IsCompatibleClsMethType)
       (ArrayProvenance)
       (RaiseClassConversionWarning)
+      (ClassPassesClassname)
+      (ClassnameNotices)
       (RaiseClsMethConversionWarning)
       (StrictArrayFillKeys)
+      (NoticeOnCoerceForStrConcat)
+      (NoticeOnCoerceForBitOp)
       ;
   }
 };

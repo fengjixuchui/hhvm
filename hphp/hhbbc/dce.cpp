@@ -452,7 +452,7 @@ std::string show(InstrId id) {
 }
 
 inline void validate(Use u) {
-  assert(!any(u & Use::Linked) || mask_use(u) == Use::Not);
+  assertx(!any(u & Use::Linked) || mask_use(u) == Use::Not);
 }
 
 const char* show(Use u) {
@@ -593,13 +593,13 @@ bool shouldPopOutputs(Env& env, const Args&... args) {
 // query eval stack
 
 Type topT(Env& env, uint32_t idx = 0) {
-  assert(idx < env.stateBefore.stack.size());
+  assertx(idx < env.stateBefore.stack.size());
   return env.stateBefore.stack[env.stateBefore.stack.size() - idx - 1].type;
 }
 
 Type topC(Env& env, uint32_t idx = 0) {
   auto const t = topT(env, idx);
-  assert(t.subtypeOf(BInitCell));
+  assertx(t.subtypeOf(BInitCell));
   return t;
 }
 
@@ -734,7 +734,7 @@ void use(LocationIdSet& forcedLive,
     ui.usage = Use::Used;
     ui.actions.clear();
     if (!linked) break;
-    assert(i);
+    assertx(i);
     i--;
   }
 }
@@ -826,7 +826,7 @@ DceActionMap& commitActions(Env& env, bool linked, const DceActionMap& am) {
     FTRACE(2, "     committing {}: {}\n", show(env.id), show(am));
   }
 
-  assert(!linked || env.dceState.stack.back().usage != Use::Used);
+  assertx(!linked || env.dceState.stack.back().usage != Use::Used);
 
   auto& dst = linked ?
     env.dceState.stack.back().actions : env.dceState.actionMap;
@@ -989,7 +989,7 @@ void handle_push(Env& env, PushFlags pf, Args&... uis) {
       break;
 
     case PushFlags::AddElemC: {
-      assert(!linked);
+      assertx(!linked);
       auto& ui = combineUis(uis...);
       ui.usage = Use::AddElemC;
       // For the last AddElemC, we will already have added a Replace
@@ -1280,7 +1280,7 @@ void dce(Env& env, const bc::Array& op) {
 
       if (ui.usage != Use::AddElemC) return PushFlags::MarkLive;
 
-      assert(!env.dceState.isLocal);
+      assertx(!env.dceState.isLocal);
 
       updateSrcLocForAddElemC(ui, env.op.srcLoc);
 
@@ -1357,10 +1357,10 @@ void dce(Env& env, const bc::AddElemC& /*op*/) {
         if (allUnusedIfNotLastRef(ui)) return PushFlags::MarkUnused;
         auto v = tv(arrPost);
         CompactVector<Bytecode> bcs;
-        if (arrPost.subtypeOf(BArrN)) {
+        if (arrPost.subtypeOf(BVArrN | BDArrN)) {
           bcs.emplace_back(bc::Array { v->m_data.parr });
         } else {
-          assert(arrPost.subtypeOf(BDictN));
+          assertx(arrPost.subtypeOf(BDictN));
           bcs.emplace_back(bc::Dict { v->m_data.parr });
         }
         ui.actions[env.id] = DceAction(DceAction::PopAndReplace,
@@ -1370,7 +1370,7 @@ void dce(Env& env, const bc::AddElemC& /*op*/) {
 
       if (isLinked(ui)) return PushFlags::MarkLive;
 
-      if (arrPost.strictSubtypeOf(TArrN)) {
+      if (arrPost.strictSubtypeOf(BVArrN | BDArrN)) {
         CompactVector<Bytecode> bcs;
         if (cat.cat == Type::ArrayCat::Struct &&
             *postSize <= ArrayData::MaxElemsOnStack) {
@@ -1395,7 +1395,7 @@ void dce(Env& env, const bc::AddElemC& /*op*/) {
         return PushFlags::AddElemC;
       }
 
-      if (arrPost.strictSubtypeOf(TDictN) &&
+      if (arrPost.strictSubtypeOf(BDictN) &&
           cat.cat == Type::ArrayCat::Struct &&
           *postSize <= ArrayData::MaxElemsOnStack) {
         CompactVector<Bytecode> bcs;
@@ -1500,13 +1500,23 @@ void dce(Env& env, const bc::IncDecL& op) {
 }
 
 bool setOpLSideEffects(const bc::SetOpL& op, const Type& lhs, const Type& rhs) {
-  auto const lhsOk = lhs.subtypeOfAny(TUninit, TNull, TBool, TInt, TDbl, TStr);
-  auto const rhsOk = rhs.subtypeOfAny(TNull, TBool, TInt, TDbl, TStr);
+  auto const lhsOk = lhs.subtypeOf(BNull | BBool | BInt | BDbl | BStr);
+  auto const rhsOk = rhs.subtypeOf(BNull | BBool | BInt | BDbl | BStr);
   if (!lhsOk || !rhsOk) return true;
 
   switch (op.subop2) {
     case SetOpOp::ConcatEqual:
-      return false;
+      return RuntimeOption::EvalNoticeOnCoerceForStrConcat > 0 &&
+        (!lhs.subtypeOf(BArrKey) || !rhs.subtypeOf(BArrKey));
+
+    case SetOpOp::AndEqual:
+    case SetOpOp::OrEqual:
+    case SetOpOp::XorEqual:
+    case SetOpOp::SlEqual:
+    case SetOpOp::SrEqual:
+      if (RuntimeOption::EvalNoticeOnCoerceForBitOp > 0) {
+        return !lhs.subtypeOf(BInt) || !rhs.subtypeOf(BInt);
+      }
 
     case SetOpOp::PlusEqual:
     case SetOpOp::PlusEqualO:
@@ -1515,13 +1525,8 @@ bool setOpLSideEffects(const bc::SetOpL& op, const Type& lhs, const Type& rhs) {
     case SetOpOp::DivEqual:
     case SetOpOp::ModEqual:
     case SetOpOp::PowEqual:
-    case SetOpOp::AndEqual:
-    case SetOpOp::OrEqual:
-    case SetOpOp::XorEqual:
     case SetOpOp::MinusEqualO:
     case SetOpOp::MulEqualO:
-    case SetOpOp::SlEqual:
-    case SetOpOp::SrEqual:
       return lhs.subtypeOf(BStr) || rhs.subtypeOf(BStr);
   }
   not_reached();
@@ -1601,7 +1606,6 @@ void dce(Env& env, const bc::Shl&)              { pushRemovableIfNoThrow(env); }
 void dce(Env& env, const bc::Shr&)              { pushRemovableIfNoThrow(env); }
 void dce(Env& env, const bc::Sub&)              { pushRemovableIfNoThrow(env); }
 void dce(Env& env, const bc::SubO&)             { pushRemovableIfNoThrow(env); }
-void dce(Env& env, const bc::Xor&)              { pushRemovableIfNoThrow(env); }
 void dce(Env& env, const bc::LateBoundCls&)     { pushRemovableIfNoThrow(env); }
 void dce(Env& env, const bc::Self&)             { pushRemovableIfNoThrow(env); }
 void dce(Env& env, const bc::Parent&)           { pushRemovableIfNoThrow(env); }
@@ -2088,7 +2092,7 @@ dce_visit(VisitContext& visit, BlockId bid, const State& stateIn,
 
   if (dceOutState.dceStack) {
     dceState.stack = *dceOutState.dceStack;
-    assert(dceState.stack.size() == dceStkSz);
+    assertx(dceState.stack.size() == dceStkSz);
   } else {
     dceState.stack.resize(dceStkSz, UseInfo { Use::Used });
   }
@@ -2671,7 +2675,7 @@ void remap_locals(const FuncAnalysis& ainfo, php::WideFunc& func,
 
     // We unify into the smaller localid.  The larger one will no longer be
     // valid.
-    assert(l1 < l2);
+    assertx(l1 < l2);
 
     // Everything that was uniquely a conflict to l2 is now also a conflict to
     // l1 and should be updated.
@@ -2828,7 +2832,7 @@ bool global_dce(const Index& index, const FuncAnalysis& ai,
                         LocationId location) {
     if (forcedLiveLocations.count(location)) return true;
     if (!isLinked(uis[i])) return false;
-    assert(i);
+    assertx(i);
     return uis[i - 1].usage == Use::Used;
   };
 
@@ -2863,7 +2867,7 @@ bool global_dce(const Index& index, const FuncAnalysis& ai,
           }
           auto linked = isLinked(ui);
           if (!linked) break;
-          assert(i);
+          assertx(i);
           i--;
         }
       }
@@ -2885,7 +2889,7 @@ bool global_dce(const Index& index, const FuncAnalysis& ai,
     for (auto const& id : in.actions) {
       ret |= out.actions.insert(id).second;
     }
-    assert(out.location.blk != NoBlockId);
+    assertx(out.location.blk != NoBlockId);
     if (out.location < location) {
       // It doesn't matter which one we choose, but it should be
       // independent of the visiting order.
@@ -2905,7 +2909,7 @@ bool global_dce(const Index& index, const FuncAnalysis& ai,
     }
 
     auto ret = false;
-    assert(stkOut->size() == stkIn.size());
+    assertx(stkOut->size() == stkIn.size());
     for (uint32_t i = 0; i < stkIn.size(); i++) {
       if (mergeUIs(*stkOut, stkIn, i, blk, isSlot)) ret = true;
     }

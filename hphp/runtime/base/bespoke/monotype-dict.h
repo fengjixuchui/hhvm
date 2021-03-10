@@ -161,7 +161,7 @@ struct MonotypeDict : BespokeArray {
   }
   // This bit is set in our layout index iff we have int keys.
   static constexpr LayoutIndex intKeyMask() {
-    return {0x0200};
+    return {(kIntMonotypeDictLayoutByte & ~kStrMonotypeDictLayoutByte) << 8};
   }
 
 #define X(Return, Name, Args...) static Return Name(Args);
@@ -230,6 +230,7 @@ private:
   size_t numIndices() const;
   void setZombie();
   bool isZombie() const;
+  bool hasEmptyLayout() const;
 
   friend EmptyMonotypeDict;
 };
@@ -246,21 +247,6 @@ struct TopMonotypeDictLayout : public AbstractLayout {
   Type iterPosType(Type pos, bool isKey) const override;
 
   KeyTypes m_keyType;
-};
-
-struct EmptyOrMonotypeDictLayout : public AbstractLayout {
-  EmptyOrMonotypeDictLayout(KeyTypes kt, DataType type);
-  static LayoutIndex Index(KeyTypes kt, DataType type);
-
-  ArrayLayout appendType(Type val) const override;
-  ArrayLayout removeType(Type key) const override;
-  ArrayLayout setType(Type key, Type val) const override;
-  std::pair<Type, bool> elemType(Type key) const override;
-  std::pair<Type, bool> firstLastType(bool isFirst, bool isKey) const override;
-  Type iterPosType(Type pos, bool isKey) const override;
-
-  KeyTypes m_keyType;
-  DataType m_valType;
 };
 
 struct EmptyMonotypeDictLayout : public ConcreteLayout {

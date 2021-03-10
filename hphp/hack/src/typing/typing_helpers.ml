@@ -39,7 +39,6 @@ module EnvFromDef = Typing_env_from_def
 module C = Typing_continuations
 module CMap = C.Map
 module Try = Typing_try
-module TR = Typing_reactivity
 module FL = FeatureLogging
 module MakeType = Typing_make_type
 module Cls = Decl_provider.Class
@@ -62,9 +61,17 @@ module ExpectedTy : sig
 
   val make : Pos.t -> Typing_reason.ureason -> locl_ty -> t
 
-  (* We will allow coercion to this expected type, if et_enforced=true *)
+  (* We will allow coercion to this expected type, if et_enforced=Enforced *)
   val make_and_allow_coercion :
     Pos.t -> Typing_reason.ureason -> locl_possibly_enforced_ty -> t
+
+  (* If type is an unsolved type variable, don't create an expected type *)
+  val make_and_allow_coercion_opt :
+    Typing_env_types.env ->
+    Pos.t ->
+    Typing_reason.ureason ->
+    locl_possibly_enforced_ty ->
+    t option
 end = struct
   (* Some mutually recursive inference functions in typing.ml pass around an ~expected argument that
    * enables bidirectional type checking. This module abstracts away that type so that it can be
@@ -75,6 +82,13 @@ end = struct
     ty: locl_possibly_enforced_ty;
   }
   [@@deriving show]
+
+  let make_and_allow_coercion_opt env pos reason ty =
+    let (_env, ety) = Env.expand_type env ty.et_type in
+    if is_tyvar ety then
+      None
+    else
+      Some { pos; reason; ty }
 
   let make_and_allow_coercion pos reason ty = { pos; reason; ty }
 
@@ -122,16 +136,6 @@ let param_has_attribute param attr =
 
 let has_accept_disposable_attribute param =
   param_has_attribute param SN.UserAttributes.uaAcceptDisposable
-
-let get_param_mutability param =
-  if param_has_attribute param SN.UserAttributes.uaMutable then
-    Some Param_borrowed_mutable
-  else if param_has_attribute param SN.UserAttributes.uaMaybeMutable then
-    Some Param_maybe_mutable
-  else if param_has_attribute param SN.UserAttributes.uaOwnedMutable then
-    Some Param_owned_mutable
-  else
-    None
 
 let with_timeout env fun_name ~(do_ : env -> 'b) : 'b option =
   let timeout = (Env.get_tcopt env).GlobalOptions.tco_timeout in

@@ -340,8 +340,7 @@ let rec hint
     ?(tp_depth = 0)
     env
     (hh : Aast.hint) =
-  let (mut, (p, h)) = unwrap_mutability hh in
-  if Option.is_some mut then Errors.misplaced_mutability_hint p;
+  let (p, h) = hh in
   ( p,
     hint_
       ~forbid_this
@@ -352,16 +351,6 @@ let rec hint
       ~tp_depth
       env
       (p, h) )
-
-and unwrap_mutability p =
-  match p with
-  | (_, Aast.Happly ((_, hn), [t])) when String.equal hn SN.Rx.hMutable ->
-    (Some N.PMutable, t)
-  | (_, Aast.Happly ((_, hn), [t])) when String.equal hn SN.Rx.hMaybeMutable ->
-    (Some N.PMaybeMutable, t)
-  | (_, Aast.Happly ((_, hn), [t])) when String.equal hn SN.Rx.hOwnedMutable ->
-    (Some N.POwnedMutable, t)
-  | t -> (None, t)
 
 and contexts env ctxs =
   let (pos, hl) = ctxs in
@@ -380,39 +369,19 @@ and contexts env ctxs =
   in
   (pos, hl)
 
-and hfun env reactivity hl kl variadic_hint ctxs h =
+and hfun env hl il variadic_hint ctxs h readonly_ret =
   let variadic_hint = Option.map variadic_hint (hint env) in
-  let (muts, hl) =
-    List.map
-      ~f:(fun h ->
-        let (mut, h1) = unwrap_mutability h in
-        if Option.is_some mut && N.is_f_non_reactive reactivity then
-          Errors.mutability_hint_in_non_rx_function (fst h);
-        (mut, hint env h1))
-      hl
-    |> List.unzip
-  in
+  let hl = List.map ~f:(hint env) hl in
   let ctxs = Option.map ~f:(contexts env) ctxs in
-  let (ret_mut, rh) = unwrap_mutability h in
-  let ret_mut =
-    match ret_mut with
-    | None -> false
-    | Some N.POwnedMutable -> true
-    | Some _ ->
-      Errors.invalid_mutability_in_return_type_hint (fst h);
-      true
-  in
   N.Hfun
     N.
       {
-        hf_reactive_kind = reactivity;
         hf_param_tys = hl;
-        hf_param_kinds = kl;
-        hf_param_mutability = muts;
+        hf_param_info = il;
         hf_variadic_ty = variadic_hint;
         hf_ctxs = ctxs;
-        hf_return_ty = hint ~allow_retonly:true env rh;
-        hf_is_mutable_return = ret_mut;
+        hf_return_ty = hint ~allow_retonly:true env h;
+        hf_is_readonly_return = readonly_ret;
       }
 
 and hint_
@@ -449,36 +418,14 @@ and hint_
   | Aast.Hfun
       Aast.
         {
-          hf_reactive_kind = reactivity;
           hf_param_tys = hl;
-          hf_param_kinds = kl;
-          hf_param_mutability = _;
+          hf_param_info = il;
           hf_variadic_ty = variadic_hint;
           hf_ctxs = ctxs;
           hf_return_ty = h;
-          hf_is_mutable_return = _;
+          hf_is_readonly_return = readonly_ret;
         } ->
-    hfun env reactivity hl kl variadic_hint ctxs h
-  (* Special case for Pure<function> *)
-  | Aast.Happly
-      ( (_, hname),
-        [
-          ( _,
-            Aast.Hfun
-              Aast.
-                {
-                  hf_reactive_kind = _;
-                  hf_param_tys = hl;
-                  hf_param_kinds = kl;
-                  hf_param_mutability = _;
-                  hf_variadic_ty = variadic_hint;
-                  hf_ctxs = ctxs;
-                  hf_return_ty = h;
-                  hf_is_mutable_return = _;
-                } );
-        ] )
-    when String.equal hname SN.Rx.hPure ->
-    hfun env N.FPure hl kl variadic_hint ctxs h
+    hfun env hl il variadic_hint ctxs h readonly_ret
   | Aast.Happly (((p, _x) as id), hl) ->
     let hint_id =
       hint_id ~forbid_this ~allow_retonly ~allow_wildcard ~tp_depth env id hl
@@ -2363,7 +2310,8 @@ and attrl env l = List.map ~f:(attr env) l
 
 and attr env at =
   match at with
-  | Aast.Xhp_simple (x, e) -> N.Xhp_simple (x, expr env e)
+  | Aast.Xhp_simple { Aast.xs_name; xs_type; xs_expr = e } ->
+    N.Xhp_simple { Aast.xs_name; xs_type; xs_expr = expr env e }
   | Aast.Xhp_spread e -> N.Xhp_spread (expr env e)
 
 and string2 env idl = List.map idl (expr env)

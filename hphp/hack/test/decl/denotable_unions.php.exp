@@ -24,85 +24,74 @@
    (Shallow_decl_defs.Fun
       { Typing_defs.fe_deprecated = None;
         fe_type =
-        (Rwitness (root|denotable_unions.php line 9, characters 10-10),
+        (Rwitness_from_decl ([9:10-11]),
          (Tfun
             { ft_arity = (Fstandard ()); ft_tparams = [];
               ft_where_constraints = [];
               ft_params =
               [{ fp_pos = [9:19-22]; fp_name = (Some "$_x");
                  fp_type =
-                 { et_enforced = false;
+                 { et_enforced = Typing_defs_core.Unenforced;
                    et_type =
-                   (Rhint (root|denotable_unions.php line 9, characters 12-17),
+                   (Rhint ([9:12-18]),
                     (Tintersection
-                       [(Rhint (root|denotable_unions.php line 9, characters 13-13),
-                         (Tapply (([9:13-14], "\\I"), [])));
-                         (Rhint (root|denotable_unions.php line 9, characters 16-16),
+                       [(Rhint ([9:13-14]), (Tapply (([9:13-14], "\\I"), [])));
+                         (Rhint ([9:16-17]),
                           (Tapply (([9:16-17], "\\J"), [])))
                          ]))
                    };
-                 fp_rx_annotation = None;
                  fp_flags =
-                 (make_fp_flags ~mutability:None ~accept_disposable:false
-                   ~has_default:false ~mode:Typing_defs_core.FPnormal
-                   ~ifc_external:false ~ifc_can_call:false ~is_atom:false
-                   ~readonly:false);
+                 (make_fp_flags ~accept_disposable:false ~has_default:false
+                   ~mode:Typing_defs_core.FPnormal ~ifc_external:false
+                   ~ifc_can_call:false ~is_atom:false ~readonly:false
+                   ~const_function:false);
                   }
                 ];
               ft_implicit_params = { capability = (CapDefaults [9:10-11]) };
               ft_ret =
-              { et_enforced = false;
-                et_type =
-                (Rhint (root|denotable_unions.php line 9, characters 25-28),
-                 (Tprim Tvoid))
-                };
+              { et_enforced = Typing_defs_core.Unenforced;
+                et_type = (Rhint ([9:25-29]), (Tprim Tvoid)) };
               ft_flags =
-              (make_ft_flags FSync None ~return_disposable:false
-                ~returns_mutable:false ~returns_void_to_rx:false
-                ~returns_readonly:false ~readonly_this:false);
-              ft_reactive = Nonreactive; ft_ifc_decl = FDPolicied {PUBLIC} }));
+              (make_ft_flags FSync ~return_disposable:false
+                ~returns_readonly:false ~readonly_this:false ~is_const:false);
+              ft_ifc_decl = FDPolicied {PUBLIC} }));
         fe_pos = [9:10-11]; fe_php_std_lib = false }));
   ("\\g",
    (Shallow_decl_defs.Fun
       { Typing_defs.fe_deprecated = None;
         fe_type =
-        (Rwitness (root|denotable_unions.php line 10, characters 10-10),
+        (Rwitness_from_decl ([10:10-11]),
          (Tfun
             { ft_arity = (Fstandard ()); ft_tparams = [];
               ft_where_constraints = [];
               ft_params =
               [{ fp_pos = [10:19-22]; fp_name = (Some "$_x");
                  fp_type =
-                 { et_enforced = false;
+                 { et_enforced = Typing_defs_core.Unenforced;
                    et_type =
-                   (Rhint (root|denotable_unions.php line 10, characters 12-17),
+                   (Rhint ([10:12-18]),
                     (Tunion
-                       [(Rhint (root|denotable_unions.php line 10, characters 13-13),
+                       [(Rhint ([10:13-14]),
                          (Tapply (([10:13-14], "\\I"), [])));
-                         (Rhint (root|denotable_unions.php line 10, characters 16-16),
+                         (Rhint ([10:16-17]),
                           (Tapply (([10:16-17], "\\J"), [])))
                          ]))
                    };
-                 fp_rx_annotation = None;
                  fp_flags =
-                 (make_fp_flags ~mutability:None ~accept_disposable:false
-                   ~has_default:false ~mode:Typing_defs_core.FPnormal
-                   ~ifc_external:false ~ifc_can_call:false ~is_atom:false
-                   ~readonly:false);
+                 (make_fp_flags ~accept_disposable:false ~has_default:false
+                   ~mode:Typing_defs_core.FPnormal ~ifc_external:false
+                   ~ifc_can_call:false ~is_atom:false ~readonly:false
+                   ~const_function:false);
                   }
                 ];
               ft_implicit_params = { capability = (CapDefaults [10:10-11]) };
               ft_ret =
-              { et_enforced = false;
-                et_type =
-                (Rhint (root|denotable_unions.php line 10, characters 25-28),
-                 (Tprim Tvoid))
-                };
+              { et_enforced = Typing_defs_core.Unenforced;
+                et_type = (Rhint ([10:25-29]), (Tprim Tvoid)) };
               ft_flags =
-              (make_ft_flags FSync None ~return_disposable:false
-                ~returns_mutable:false ~returns_void_to_rx:false
-                ~returns_readonly:false ~readonly_this:false);
-              ft_reactive = Nonreactive; ft_ifc_decl = FDPolicied {PUBLIC} }));
+              (make_ft_flags FSync ~return_disposable:false
+                ~returns_readonly:false ~readonly_this:false ~is_const:false);
+              ft_ifc_decl = FDPolicied {PUBLIC} }));
         fe_pos = [10:10-11]; fe_php_std_lib = false }))
   ]
 

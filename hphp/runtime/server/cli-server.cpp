@@ -460,6 +460,7 @@ int fd = fdNetworkSocket.toFd();
     m_dispatcher->enqueue(fd);
   }
 
+  using folly::AsyncServerSocket::AcceptCallback::acceptError;
   void acceptError(const std::exception& ex) noexcept override {
     Logger::Warning("Error accepting connection: %s", ex.what());
   }
@@ -1330,7 +1331,7 @@ folly::Optional<int> cli_process_command_loop(int fd) {
     cli_read(fd, cmd);
   }
 
-  cli_server_init();
+  cli_client_init();
   for (;; cli_read(fd, cmd)) {
     FTRACE(2, "cli_process_command_loop({}): got command: {}\n", fd, cmd);
 

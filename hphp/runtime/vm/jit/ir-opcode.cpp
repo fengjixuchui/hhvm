@@ -334,7 +334,6 @@ bool opcodeMayRaise(Opcode opc) {
   case ConvObjToStr:
   case ConvObjToVArr:
   case ConvObjToVec:
-  case ConvResToStr:
   case Count:
   case CreateAAWH:
   case DictGet:
@@ -386,6 +385,7 @@ bool opcodeMayRaise(Opcode opc) {
   case LdSSwitchDestSlow:
   case LdSwitchObjIndex:
   case LookupClsCns:
+  case LookupClsCtxCns:
   case LookupClsMethod:
   case LookupClsMethodCache:
   case LookupClsMethodFCache:

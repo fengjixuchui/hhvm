@@ -832,41 +832,11 @@ LazyClass <litstr id>                []  ->  [C:LazyClass]
 
   Push immediate. Pushes %1 onto the stack.
 
-NewArray <capacity hint>    []  ->  [C:Arr]
-
-  New array, with a capacity hint. Creates a new array and pushes it onto the
-  stack. The implementation may make use of the hint in %1 to pre-size the
-  array. The hint %1 must be greater than or equal to 0.
-
-NewMixedArray <capacity hint>    []  ->  [C:Arr]
-
-  New array in mixed mode, with a capacity hint. Creates a new array and pushes
-  it onto the stack. The implementation may make use of the hint in %1 to
-  pre-size the array. The hint %1 must be greater than or equal to 0.
-
 NewDictArray <capacity hint>    []  ->  [C:Dict]
 
   New dict, with a capacity hint. Creates a new dict and pushes
   it onto the stack. The implementation may make use of the hint in %1 to
   pre-size the array. The hint %1 must be greater than or equal to 0.
-
-NewPackedArray <num elems>    [C..C]  ->  [C]
-
-  New array. Creates a new array from the top %1 cells on the stack, pops those
-  cells, then pushes the new array onto the stack. Elements are pushed on the
-  stack in array insertion order and are implicitly numbered from 0 to %1 - 1.
-  $1 is at index %i - 1, $2 at %1-2, and so on; $(%1) is at index 0.
-
-NewStructArray <litstr id vector>    [C..C]  ->  [C]
-
-  New array. Creates a new array from the names given in %1 and values from the
-  stack. The vector of litstr ids gives the element names, one value for each
-  name is popped from the stack. Names are in array insertion order, and values
-  were pushed onto the stack in insertion order, so are added to the array in
-  reverse order (the topmost value will become the last element in the array).
-  For example:
-
-    NewStructArray < "a" "b" >  [ 1 2 ]  ->  [ array("a"=>1, "b"=>2) ]
 
 NewStructDArray <litstr id vector>    [C..C]  ->  [C]
 
@@ -1021,11 +991,6 @@ ConcatN <n>   [C..C]  ->  [C:Str]
 
   Concatenation (.). Pushes ((string)$n . ... . (string)$1) on the stack.
 
-Abs    [C] -> [C:Int|Dbl|Bool]
-
-  Absolute value. Computes the absolute value of $1 and pushes the result onto
-  the stack.
-
 Add    [C:Arr C:Arr]  ->  [C:Arr]
        [C:<T2> C:<T1>]  ->  [C:Dbl]    (where T1 == Dbl || T2 == Dbl)
        [C:<T2> C:<T1>]  ->  [C:Int]    (where T1 != Dbl && T2 != Dbl &&
@@ -1087,19 +1052,6 @@ Pow    [C C]  ->  [C:Int|Dbl]
 
   Power. Pushes $2 raised to the power of $1 onto the stack. This instruction
   never throws a fatal error.
-
-Sqrt   [C]    ->  [C:Null|Dbl]
-
-  Square root. Computes the square root of $1 and pushes the result onto the
-  stack. If $1 is not null, a bool, an int, a double, or a numeric string, it
-  raises a warning and pushes null onto the stack.
-
-  If $1 is a negative number, this instruction pushes a floating-point value
-  representing NAN onto the stack.
-
-Xor    [C C]  ->  [C:Bool]
-
-  Logical xor (xor). Pushes ((bool)$2 xor (bool)$1) onto the stack.
 
 Not    [C]  ->  [C:Bool]
 
@@ -1176,16 +1128,6 @@ Shr    [C C]  ->  [C:Int]
   Shift right (>>). Pushes ((int)$2 >> (int)$1) onto the stack. This
   instruction never throws a fatal error.
 
-Floor    [C]  ->  [C:Dbl]
-
-  Round $1 to nearest integer value not greater than $1. Converts $1 to numeric
-  as appropriate and then takes floor of resulting numeric value.
-
-Ceil    [C]  ->  [C:Dbl]
-
-  Round $1 to nearest integer value not less than $1. Converts $1 to numeric as
-  appropriate and then takes ceil of resulting numeric value.
-
 CastBool    [C]  ->  [C:Bool]
 
   Cast to boolean ((bool),(boolean)). Pushes (bool)$1 onto the stack.
@@ -1204,10 +1146,6 @@ CastString    [C]  ->  [C:Str]
   is an object that implements the __toString method, the string cast returns
   $1->__toString(). If $1 is an object that does not implement __toString
   method, the string cast throws a fatal error.
-
-CastArray    [C]  ->  [C:Arr]
-
-  Cast to array ((array)). Pushes (array)$1 onto the stack.
 
 CastVec       [C]  ->  [C:Vec]
 

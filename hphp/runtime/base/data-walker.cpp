@@ -94,23 +94,26 @@ bool DataWalker::visitTypedValue(TypedValue rval,
   auto const serialize_clsmeth = RO::EvalAPCSerializeClsMeth;
 
   if (rval.m_type == KindOfObject) {
-    features.hasObjectOrResource = true;
+    features.hasNonPersistable = true;
     traverseData(rval.m_data.pobj, features, visited);
   } else if (isArrayLikeType(rval.m_type)) {
     traverseData(rval.m_data.parr, features, visited, seenArrs);
   } else if (rval.m_type == KindOfResource) {
-    features.hasObjectOrResource = true;
+    features.hasNonPersistable = true;
   } else if (rval.m_type == KindOfRFunc) {
-    features.hasObjectOrResource = true;
-  } else if (serialize_funcs && rval.m_type == KindOfFunc) {
-    if (!rval.m_data.pfunc->isPersistent()) features.hasObjectOrResource = true;
+    features.hasNonPersistable = true;
+  } else if (rval.m_type == KindOfFunc) {
+    if (!serialize_funcs) features.hasNonPersistable = true;
+    if (rval.m_data.pfunc->isMethCaller()) features.hasNonPersistable = true;
+    if (!rval.m_data.pfunc->isPersistent()) features.hasNonPersistable = true;
   } else if (rval.m_type == KindOfClass) {
     if (!rval.m_data.pclass->isPersistent()) {
-      features.hasObjectOrResource = true;
+      features.hasNonPersistable = true;
     }
-  } else if (serialize_clsmeth && rval.m_type == KindOfClsMeth) {
+  } else if (rval.m_type == KindOfClsMeth) {
+    if (!serialize_clsmeth) features.hasNonPersistable = true;
     if (!rval.m_data.pclsmeth->getCls()->isPersistent()) {
-      features.hasObjectOrResource = true;
+      features.hasNonPersistable = true;
     }
   }
   return canStopWalk(features);
@@ -130,18 +133,31 @@ inline bool DataWalker::markVisited(
 inline void DataWalker::objectFeature(ObjectData* pobj,
                                       DataFeature& features) const {
   if (pobj->isCollection()) return;
-  if ((m_features & LookupFeature::DetectSerializable) &&
-       pobj->instanceof(SystemLib::s_SerializableClass)) {
+  if (m_feature == LookupFeature::DetectSerializable &&
+      pobj->instanceof(SystemLib::s_SerializableClass)) {
     features.hasSerializable = true;
   }
 }
 
 inline bool DataWalker::canStopWalk(DataFeature& features) const {
-  auto objectCheck =
-    features.hasObjectOrResource ||
-    !(m_features & LookupFeature::HasObjectOrResource);
+  /*
+   * This encodes some assumptions about our callers and our implementation:
+   *
+   * Those who pass DetectNonPersistable need to know if the data isCircular,
+   * and only if it's not do they care whether it hasNonPersistable; because of
+   * this we can only stop early if both are true for these callers.
+   *
+   * On the other hand, those that pass DetectSerializable react the same to
+   * a result of isCircular and hasSerializable, so for these callers we can
+   * stop if either is true (callers not passing DetectSerializable are not
+   * affected by this logic since we only do the check needed to set
+   * hasSerializable when passed DetectSerializable).
+   */
+  auto nonPersistableCheck =
+    features.hasNonPersistable ||
+    m_feature != LookupFeature::DetectNonPersistable;
   auto defaultChecks = features.isCircular || features.hasSerializable;
-  return objectCheck && defaultChecks;
+  return nonPersistableCheck && defaultChecks;
 }
 
 //////////////////////////////////////////////////////////////////////

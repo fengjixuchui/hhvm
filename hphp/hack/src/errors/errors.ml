@@ -13,9 +13,9 @@ open String_utils
 
 type error_code = int [@@deriving eq]
 
-(** We use `Pos.t message` on the server and convert to `Pos.absolute message`
- * before sending it to the client *)
-type 'a message = 'a * string [@@deriving eq]
+(** We use `Pos.t message` and `Pos_or_decl.t message` on the server
+    and convert to `Pos.absolute message` before sending it to the client *)
+type 'a message = 'a * string [@@deriving eq, ord]
 
 let get_message_pos (msg : 'a message) = fst msg
 
@@ -39,7 +39,7 @@ type format =
   | Highlighted
 
 type typing_error_callback =
-  ?code:int -> Pos.t * string -> (Pos.t * string) list -> unit
+  ?code:int -> Pos.t * string -> (Pos_or_decl.t * string) list -> unit
 
 type name_context =
   | FunctionNamespace
@@ -134,16 +134,23 @@ let get_last error_map =
     | [] -> None
     | e :: _ -> Some e)
 
-type 'a error_ = {
+type ('prim_pos, 'pos) error_ = {
   code: error_code;
-  claim: 'a message;
-  reasons: 'a message list;
+  claim: 'prim_pos message;
+  reasons: 'pos message list;
 }
 [@@deriving eq]
 
-type error = Pos.t error_ [@@deriving eq]
+type finalized_error = (Pos.absolute, Pos.absolute) error_
+
+type error = (Pos.t, Pos_or_decl.t) error_ [@@deriving eq]
 
 type applied_fixme = Pos.t * int [@@deriving eq]
+
+type t = error files_t * applied_fixme files_t [@@deriving eq]
+
+let claim_as_reason : Pos.t message -> Pos_or_decl.t message =
+ (fun (p, m) -> (Pos_or_decl.of_raw_pos p, m))
 
 let applied_fixmes : applied_fixme files_t ref = ref Relative_path.Map.empty
 
@@ -166,7 +173,7 @@ let badpos_message_2 =
     "There is an error somewhere in this definition. However the type checker reports that the error is elsewhere. %s"
     Error_message_sentinel.please_file_a_bug_message
 
-let try_with_result f1 f2 =
+let try_with_result f1 (f2 : 'res -> error -> 'res) : 'res =
   let error_map_copy = !error_map in
   let accumulate_errors_copy = !accumulate_errors in
   let is_hh_fixme_copy = !is_hh_fixme in
@@ -193,19 +200,18 @@ let try_with_result f1 f2 =
   | None -> result
   | Some { code; claim; reasons } ->
     (* Remove bad position sentinel if present: we might be about to add a new primary
-     * error position*)
-    let l =
-      let (_, msg) = claim in
+     * error position. *)
+    let (claim, reasons) =
+      let (prim_pos, msg) = claim in
       if String.equal msg badpos_message || String.equal msg badpos_message_2
       then
-        if List.is_empty reasons then
-          failwith "in try_with_result"
-        else
-          reasons
+        match reasons with
+        | [] -> failwith "in try_with_result"
+        | (_p, claim) :: reasons -> ((prim_pos, claim), reasons)
       else
-        claim :: reasons
+        (claim, reasons)
     in
-    f2 result { code; claim = List.hd_exn l; reasons = List.tl_exn l }
+    f2 result { code; claim; reasons }
 
 (* Reset errors before running [f] so that we can return the errors
  * caused by f. These errors are not added in the global list of errors. *)
@@ -311,55 +317,53 @@ let (name_context_to_string : name_context -> string) = function
 
 let get_pos { claim; _ } = fst claim
 
-let sort err =
-  let rec compare (x_code, x_messages) (y_code, y_messages) =
-    match (x_messages, y_messages) with
-    | ([], []) -> 0
-    | (_x_messages, []) -> -1
-    | ([], _y_messages) -> 1
-    | (x_message :: x_messages, y_message :: y_messages) ->
-      (* The primary sort order is by file *)
-      let comparison =
-        Relative_path.compare
-          (fst x_message |> Pos.filename)
-          (fst y_message |> Pos.filename)
-      in
-      (* Then within each file, sort by phase *)
-      let comparison =
-        if comparison = 0 then
-          Int.compare (x_code / 1000) (y_code / 1000)
-        else
-          comparison
-      in
-      (* If the error codes are the same, sort by position *)
-      let comparison =
-        if comparison = 0 then
-          Pos.compare (fst x_message) (fst y_message)
-        else
-          comparison
-      in
-      (* If the error codes are also the same, sort by message text *)
-      let comparison =
-        if comparison = 0 then
-          String.compare (snd x_message) (snd y_message)
-        else
-          comparison
-      in
-      (* Finally, if the message text is also the same, then continue comparing
-      the reason messages (which indicate the reason why Hack believes
-      there is an error reported in the claim message) *)
+let sort : error list -> error list =
+ fun err ->
+  let compare_reasons = List.compare (compare_message Pos_or_decl.compare) in
+  let compare
+      { code = x_code; claim = x_claim; reasons = x_messages }
+      { code = y_code; claim = y_claim; reasons = y_messages } =
+    (* The primary sort order is by file *)
+    let comparison =
+      Relative_path.compare
+        (fst x_claim |> Pos.filename)
+        (fst y_claim |> Pos.filename)
+    in
+    (* Then within each file, sort by phase *)
+    let comparison =
       if comparison = 0 then
-        compare (x_code, x_messages) (y_code, y_messages)
+        Int.compare (x_code / 1000) (y_code / 1000)
       else
         comparison
+    in
+    (* If the error codes are the same, sort by position *)
+    let comparison =
+      if comparison = 0 then
+        Pos.compare (fst x_claim) (fst y_claim)
+      else
+        comparison
+    in
+    (* If the primary positions are also the same, sort by message text *)
+    let comparison =
+      if comparison = 0 then
+        String.compare (snd x_claim) (snd y_claim)
+      else
+        comparison
+    in
+    (* Finally, if the message text is also the same, then continue comparing
+    the reason messages (which indicate the reason why Hack believes
+    there is an error reported in the claim message) *)
+    if comparison = 0 then
+      compare_reasons x_messages y_messages
+    else
+      comparison
   in
   let equal x y = compare x y = 0 in
-  let coalesce { code; claim; reasons } = (code, claim :: reasons) in
-  List.sort ~compare:(fun x y -> compare (coalesce x) (coalesce y)) err
-  |> List.remove_consecutive_duplicates ~equal:(fun x y ->
-         equal (coalesce x) (coalesce y))
+  List.sort ~compare:(fun x y -> compare x y) err
+  |> List.remove_consecutive_duplicates ~equal:(fun x y -> equal x y)
 
-let get_sorted_error_list (err, _) = sort (files_t_to_list err)
+let get_sorted_error_list : t -> error list =
+ (fun (err, _) -> sort (files_t_to_list err))
 
 (* Getters and setter for passed-in map, based on current context *)
 let get_current_file_t file_t_map =
@@ -395,24 +399,26 @@ and make_error code claim reasons : error = { code; claim; reasons }
 (*****************************************************************************)
 (* Accessors. *)
 (*****************************************************************************)
-and get_code ({ code; _ } : 'a error_) = (code : error_code)
+and get_code ({ code; _ } : ('pp, 'p) error_) = (code : error_code)
 
-let get_severity (error : 'a error_) = get_code_severity (get_code error)
+let get_severity (error : ('pp, 'p) error_) = get_code_severity (get_code error)
 
-let to_list ({ claim; reasons; _ } : 'a error_) = claim :: reasons
+let to_list : ('p, 'p) error_ -> 'p message list =
+ (fun { claim; reasons; _ } -> claim :: reasons)
 
-let to_absolute { code; claim; reasons } =
+let get_messages = to_list
+
+let to_absolute : error -> finalized_error =
+ fun { code; claim; reasons } ->
   let claim = (fst claim |> Pos.to_absolute, snd claim) in
   let reasons = List.map reasons (fun (p, s) -> (Pos.to_absolute p, s)) in
   { code; claim; reasons }
 
 let make_absolute_error code (x : (Pos.absolute * string) list) :
-    Pos.absolute error_ =
+    finalized_error =
   match x with
   | [] -> failwith "an error must have at least one message"
   | claim :: reasons -> { code; claim; reasons }
-
-let get_messages ({ claim; reasons; _ } : 'a error_) = claim :: reasons
 
 let read_lines path =
   try In_channel.read_lines path
@@ -425,7 +431,7 @@ let num_digits x = int_of_float (Float.log10 (float_of_int x)) + 1
    value for (f x) are consecutive. For any two elements
    x1 and x2 in xs where (f x1) = (f x2), if x1 occurs before x2 in
    xs, then x1 also occurs before x2 in the returned list. *)
-let combining_sort (xs : 'a list) ~(f : 'a -> string) : 'a list =
+let combining_sort (xs : 'a list) ~(f : 'a -> string) : _ list =
   let rec build_map xs grouped keys =
     match xs with
     | x :: xs ->
@@ -486,7 +492,7 @@ let to_absolute_for_test { code; claim; reasons } =
 
 let report_pos_from_reason = ref false
 
-let to_string ({ code; claim; reasons } : Pos.absolute error_) : string =
+let to_string ({ code; claim; reasons } : finalized_error) : string =
   let buf = Buffer.create 50 in
   let (pos1, msg1) = claim in
   Buffer.add_string
@@ -547,8 +553,6 @@ module Typing = Error_codes.Typing
 (*****************************************************************************)
 (* Types *)
 (*****************************************************************************)
-
-type t = error files_t * applied_fixme files_t [@@deriving eq]
 
 module type Error_category = sig
   type t
@@ -656,7 +660,7 @@ let add_error_with_fixme_error error explanation =
   add_error_impl error;
   add_error_impl { code; claim = (pos, explanation); reasons = [] }
 
-let rec add_applied_fixme code pos =
+let rec add_applied_fixme code (pos : Pos.t) =
   if ServerLoadFlag.get_no_load () then
     let applied_fixmes_list = get_current_list !applied_fixmes in
     set_current_list applied_fixmes ((pos, code) :: applied_fixmes_list)
@@ -665,13 +669,13 @@ let rec add_applied_fixme code pos =
 
 and add code pos msg = add_list code (pos, msg) []
 
-and fixme_present pos code =
+and fixme_present (pos : Pos.t) code =
   !is_hh_fixme pos code || !is_hh_fixme_disallowed pos code
 
 and add_list code (claim : _ message) reasons =
   add_error { code; claim; reasons }
 
-and add_error error =
+and add_error (error : error) =
   let { code; claim; reasons } = error in
   let (claim, reasons) = check_pos_msg (claim, reasons) in
   let error = { code; claim; reasons } in
@@ -1017,7 +1021,8 @@ let highlight_differences base to_highlight =
     |> String.concat
   | List.Or_unequal_lengths.Unequal_lengths -> to_highlight
 
-let error_name_already_bound name name_prev p p_prev =
+let error_name_already_bound name name_prev (p : Pos.t) (p_prev : Pos_or_decl.t)
+    =
   let name = strip_ns name in
   let name_prev = strip_ns name_prev in
   let (claim, reasons) =
@@ -1042,8 +1047,8 @@ let error_name_already_bound name name_prev p p_prev =
   let reasons =
     if Relative_path.(is_hhi (prefix (Pos.filename p))) then
       reasons @ [(p_prev, hhi_msg)]
-    else if Relative_path.(is_hhi (prefix (Pos.filename p_prev))) then
-      reasons @ [(p, hhi_msg)]
+    else if Pos_or_decl.is_hhi p_prev then
+      reasons @ [(Pos_or_decl.of_raw_pos p, hhi_msg)]
     else
       reasons
   in
@@ -1083,12 +1088,6 @@ let invalid_fun_pointer pos name =
     ^ Markdown_lite.md_codify (strip_ns name)
     ^ " is not a valid name for fun()" )
 
-let rx_move_invalid_location pos =
-  add
-    (Naming.err_code Naming.RxMoveInvalidLocation)
-    pos
-    "`Rx\\move` is only allowed in argument position or as right hand side of the assignment."
-
 let hint_message ?(modifier = "") orig hint hint_pos =
   let s =
     if
@@ -1107,16 +1106,11 @@ let hint_message ?(modifier = "") orig hint hint_pos =
   in
   (hint_pos, s)
 
-let undefined ~in_rx_scope pos var_name did_you_mean =
+let undefined pos var_name did_you_mean =
   let msg =
-    if in_rx_scope then
-      Printf.sprintf
-        "Variable %s is undefined, not always defined, or unset afterwards."
-        (Markdown_lite.md_codify var_name)
-    else
-      Printf.sprintf
-        "Variable %s is undefined, or not always defined."
-        (Markdown_lite.md_codify var_name)
+    Printf.sprintf
+      "Variable %s is undefined, or not always defined."
+      (Markdown_lite.md_codify var_name)
   in
   let suggestion =
     match did_you_mean with
@@ -1470,7 +1464,9 @@ let unexpected_ty_in_tast pos ~actual_ty ~expected_ty =
     ^ ", got "
     ^ Markdown_lite.md_codify actual_ty )
 
-let uninstantiable_class usage_pos decl_pos name reason_msgl =
+let uninstantiable_class :
+    Pos.t -> Pos_or_decl.t -> string -> (Pos.t * string) option -> unit =
+ fun (usage_pos : Pos.t) (decl_pos : Pos_or_decl.t) name reason_msgl ->
   let name = strip_ns name in
   let (claim, reasons) =
     ( (usage_pos, Markdown_lite.md_codify name ^ " is uninstantiable"),
@@ -1478,11 +1474,13 @@ let uninstantiable_class usage_pos decl_pos name reason_msgl =
   in
   let (claim, reasons) =
     match reason_msgl with
-    | (reason_pos, reason_str) :: tail ->
-      let reasons = tail @ (claim :: reasons) in
-      let claim = (reason_pos, reason_str ^ " which must be instantiable") in
+    | Some (prefix_claim_pos, prefix_claim_msg) ->
+      let reasons = claim_as_reason claim :: reasons in
+      let claim =
+        (prefix_claim_pos, prefix_claim_msg ^ " which must be instantiable")
+      in
       (claim, reasons)
-    | [] -> (claim, reasons)
+    | None -> (claim, reasons)
   in
   add_list (Typing.err_code Typing.UninstantiableClass) claim reasons
 
@@ -1519,6 +1517,69 @@ let concrete_const_interface_override
         ^ Markdown_lite.md_codify name
         ^ " abstract in "
         ^ Markdown_lite.md_codify parent_origin
+        ^ "." );
+    ]
+
+let interface_const_multiple_defs
+    child_pos
+    parent_pos
+    child_origin
+    parent_origin
+    name
+    (on_error : typing_error_callback) =
+  let parent_origin = strip_ns parent_origin in
+  let child_origin = strip_ns child_origin in
+  on_error
+    ~code:(Typing.err_code Typing.ConcreteConstInterfaceOverride)
+    ( child_pos,
+      "Non-abstract constants defined in an interface cannot conflict with other inherited constants."
+    )
+    [
+      ( parent_pos,
+        Markdown_lite.md_codify name
+        ^ " inherited from "
+        ^ Markdown_lite.md_codify parent_origin );
+      ( child_pos,
+        "conflicts with constant "
+        ^ Markdown_lite.md_codify name
+        ^ " inherited from "
+        ^ Markdown_lite.md_codify child_origin
+        ^ "." );
+    ]
+
+let interface_typeconst_multiple_defs
+    child_pos
+    parent_pos
+    child_origin
+    parent_origin
+    name
+    child_is_abstract
+    (on_error : typing_error_callback) =
+  let parent_origin = strip_ns parent_origin in
+  let child_origin = strip_ns child_origin in
+  let child =
+    if child_is_abstract then
+      "abstract type constant with default value"
+    else
+      "concrete type constant"
+  in
+  on_error
+    ~code:(Typing.err_code Typing.ConcreteConstInterfaceOverride)
+    ( child_pos,
+      "Concrete and abstract type constants with default values in an interface cannot conflict with inherited"
+      ^ " concrete or abstract type constants with default values." )
+    [
+      ( parent_pos,
+        Markdown_lite.md_codify name
+        ^ " inherited from "
+        ^ Markdown_lite.md_codify parent_origin );
+      ( child_pos,
+        "conflicts with "
+        ^ Markdown_lite.md_codify child
+        ^ " "
+        ^ Markdown_lite.md_codify name
+        ^ " inherited from "
+        ^ Markdown_lite.md_codify child_origin
         ^ "." );
     ]
 
@@ -1623,24 +1684,6 @@ let wildcard_param_disallowed pos =
     (Naming.err_code Naming.WildcardTypeParamDisallowed)
     pos
     "Cannot use anonymous type parameter in this position."
-
-let misplaced_mutability_hint pos =
-  add
-    (Naming.err_code Naming.MisplacedMutabilityHint)
-    pos
-    "Setting mutability via type hints is only allowed for parameters of reactive function types. For other cases consider using attributes."
-
-let mutability_hint_in_non_rx_function pos =
-  add
-    (Naming.err_code Naming.MutabilityHintInNonRx)
-    pos
-    "Parameter with mutability hint cannot appear in non-reactive function type."
-
-let invalid_mutability_in_return_type_hint pos =
-  add
-    (Naming.err_code Naming.InvalidReturnMutableHint)
-    pos
-    "`OwnedMutable` is the only mutability related hint allowed in return type annotation for reactive function types."
 
 let illegal_use_of_dynamically_callable attr_pos meth_pos visibility =
   add_list
@@ -1953,41 +1996,6 @@ let illegal_function_name pos mname =
     pos
     ("Illegal function name: " ^ (strip_ns mname |> Markdown_lite.md_codify))
 
-let conflicting_mutable_and_maybe_mutable_attributes pos =
-  add
-    (NastCheck.err_code NastCheck.ConflictingMutableAndMaybeMutableAttributes)
-    pos
-    "Declaration cannot have both `<<__Mutable>>` and `<<__MaybeMutable>>` attributes."
-
-let mutable_methods_must_be_reactive pos name =
-  add
-    (NastCheck.err_code NastCheck.MutableMethodsMustBeReactive)
-    pos
-    ( "The method "
-    ^ (strip_ns name |> Markdown_lite.md_codify)
-    ^ " has a mutable parameter"
-    ^ " (or mutable `this`), so it must be marked reactive with `<<__Rx>>`." )
-
-let mutable_return_annotated_decls_must_be_reactive kind pos name =
-  add
-    (NastCheck.err_code NastCheck.MutableReturnAnnotatedDeclsMustBeReactive)
-    pos
-    ( "The "
-    ^ kind
-    ^ " "
-    ^ (strip_ns name |> Markdown_lite.md_codify)
-    ^ " is annotated with `<<__MutableReturn>>`, "
-    ^ " so it must be marked reactive with `<<__Rx>>`." )
-
-let maybe_mutable_methods_must_be_reactive pos name =
-  add
-    (NastCheck.err_code NastCheck.MaybeMutableMethodsMustBeReactive)
-    pos
-    ( "The method "
-    ^ (strip_ns name |> Markdown_lite.md_codify)
-    ^ " is annotated with `<<__MaybeMutable>>` attribute, or has this attribute on one of its parameters so it must be marked reactive."
-    )
-
 let entrypoint_arguments pos =
   add
     (NastCheck.err_code NastCheck.EntryPointArguments)
@@ -2043,52 +2051,6 @@ let illegal_destructor pos =
     ( "Destructors are not supported in Hack; use other patterns like "
     ^ "`IDisposable`/`using` or `try`/`catch` instead." )
 
-let multiple_conditionally_reactive_annotations pos name =
-  add
-    (NastCheck.err_code NastCheck.MultipleConditionallyReactiveAnnotations)
-    pos
-    ( "Method '"
-    ^ Markdown_lite.md_codify name
-    ^ "' has multiple `<<__OnlyRxIfImpl>>` annotations." )
-
-let rx_is_enabled_invalid_location pos =
-  add
-    (NastCheck.err_code NastCheck.RxIsEnabledInvalidLocation)
-    pos
-    ( "`HH\\Rx\\IS_ENABLED` must be the only condition in an if-statement, "
-    ^ "and that if-statement must be the only statement in the function body."
-    )
-
-let atmost_rx_as_rxfunc_invalid_location pos =
-  add
-    (NastCheck.err_code NastCheck.MaybeRxInvalidLocation)
-    pos
-    ( "`<<__AtMostRxAsFunc>>` attribute can only be put on parameters of conditionally reactive functions "
-    ^ "or methods annotated with `<<__AtMostRxAsArgs>>` attribute." )
-
-let no_atmost_rx_as_rxfunc_for_rx_if_args pos =
-  add
-    (NastCheck.err_code NastCheck.NoOnlyrxIfRxfuncForRxIfArgs)
-    pos
-    ( "Function or method annotated with `<<__AtMostRxAsArgs>>` attribute should have at least one parameter "
-    ^ "with `<<__AtMostRxAsFunc>>` or `<<__OnlyRxIfImpl>>` annotations." )
-
-let conditionally_reactive_annotation_invalid_arguments ~is_method pos =
-  let loc =
-    if is_method then
-      "Method"
-    else
-      "Parameter"
-  in
-  add
-    (NastCheck.err_code
-       NastCheck.ConditionallyReactiveAnnotationInvalidArguments)
-    pos
-    ( loc
-    ^ " is marked with `<<__OnlyRxIfImpl>>` attribute that have "
-    ^ "invalid arguments. This attribute must have one argument and it should be the "
-    ^ "`::class` class constant." )
-
 let switch_non_terminal_default pos =
   add
     (NastCheck.err_code NastCheck.SwitchNonTerminalDefault)
@@ -2106,7 +2068,7 @@ let context_definitions_msg () =
    * - needs to be a thunk because path_of_prefix resolves a reference that is populated at runtime
    *   - points to the hh_server tmp hhi directory
    * - magic numbers are inteded to provide a nicer IDE experience,
-   * - a Pos is constructed in order to make the link to contexts.hhi clickable
+   * - a pos is constructed in order to make the link to contexts.hhi clickable
    *)
   let path =
     Relative_path.(
@@ -2403,7 +2365,8 @@ let method_variance pos =
     pos
     "Covariance or contravariance is not allowed in type parameter of method or function."
 
-let explain_constraint ~use_pos ~definition_pos ~param_name claim reasons =
+let explain_constraint
+    ~(use_pos : Pos.t) ~definition_pos ~param_name claim reasons =
   let inst_msg = "Some type constraint(s) here are violated" in
   (* There may be multiple constraints instantiated at one spot; avoid
    * duplicating the instantiation message *)
@@ -2412,7 +2375,7 @@ let explain_constraint ~use_pos ~definition_pos ~param_name claim reasons =
     if String.equal msg inst_msg && Pos.equal p use_pos then
       reasons
     else
-      claim :: reasons
+      claim_as_reason claim :: reasons
   in
   let name = strip_ns param_name in
   add_list
@@ -2570,12 +2533,6 @@ let escaping_this pos =
     ^ "or passed to another function with `<<__AcceptDisposable>>` parameter attribute"
     )
 
-let escaping_mutable_object pos =
-  add
-    (Typing.err_code Typing.EscapingMutableObject)
-    pos
-    "Neither a `Mutable` nor `MaybeMutable` object may be captured by an anonymous function."
-
 let must_extend_disposable pos =
   add
     (Typing.err_code Typing.MustExtendDisposable)
@@ -2607,20 +2564,6 @@ let unbound_name_typing pos name =
     (Typing.err_code Typing.UnboundNameTyping)
     pos
     ("Unbound name (typing): " ^ Markdown_lite.md_codify (strip_ns name))
-
-let unbound_name_type_constant_access ~access_pos ~name_pos name =
-  add_list
-    (Typing.err_code Typing.UnboundNameTypeConstantAccess)
-    ( access_pos,
-      "Unbound name "
-      ^ Markdown_lite.md_codify (strip_ns name)
-      ^ " in type constant access" )
-    ( []
-    @
-    if Pos.equal name_pos access_pos then
-      []
-    else
-      [(name_pos, "Unbound name is here")] )
 
 let previous_default p =
   add
@@ -2871,7 +2814,7 @@ let array_access code pos1 pos2 ty =
   add_list
     (Typing.err_code code)
     (pos1, "This is not an object of type `KeyedContainer`, this is " ^ ty)
-    ( if not (phys_equal pos2 Pos.none) then
+    ( if not (phys_equal pos2 Pos_or_decl.none) then
       [(pos2, "Definition is here")]
     else
       [] )
@@ -2884,7 +2827,7 @@ let keyset_set pos1 pos2 =
   add_list
     (Typing.err_code Typing.KeysetSet)
     (pos1, "Elements in a keyset cannot be assigned, use append instead.")
-    ( if not (phys_equal pos2 Pos.none) then
+    ( if not (phys_equal pos2 Pos_or_decl.none) then
       [(pos2, "Definition is here")]
     else
       [] )
@@ -2893,7 +2836,7 @@ let array_append pos1 pos2 ty =
   add_list
     (Typing.err_code Typing.ArrayAppend)
     (pos1, ty ^ " does not allow array append")
-    ( if not (phys_equal pos2 Pos.none) then
+    ( if not (phys_equal pos2 Pos_or_decl.none) then
       [(pos2, "Definition is here")]
     else
       [] )
@@ -2902,7 +2845,7 @@ let const_mutation pos1 pos2 ty =
   add_list
     (Typing.err_code Typing.ConstMutation)
     (pos1, "You cannot mutate this")
-    ( if not (phys_equal pos2 Pos.none) then
+    ( if not (phys_equal pos2 Pos_or_decl.none) then
       [(pos2, "This is " ^ ty)]
     else
       [] )
@@ -3001,7 +2944,7 @@ let member_not_found
      in
      hint @ reason @ [(cpos, "Declaration of " ^ type_name ^ " is here")])
 
-let expr_tree_unsupported_operator cls_name meth_name pos =
+let expr_tree_unsupported_operator cls_name meth_name pos ~is_method =
   let msg =
     match String.chop_prefix meth_name ~prefix:"__to" with
     | Some type_name ->
@@ -3009,17 +2952,25 @@ let expr_tree_unsupported_operator cls_name meth_name pos =
          `if ($not_bool->__toBool())`.
         *)
       Printf.sprintf
-        "`%s` cannot be used in a %s position (it has no `%s` method)"
+        "`%s` cannot be used in a %s position (it has no %s method named `%s`)"
         cls_name
         (String.lowercase type_name)
+        ( if is_method then
+          "instance"
+        else
+          "static" )
         meth_name
     | None ->
       (* Complain about usage like `$not_int +` that's virtualized to
          `$not_int->__plus(...)`.
         *)
       Printf.sprintf
-        "`%s` does not support this operator (it has no `%s` method)"
+        "`%s` does not support this operator (it has no %s method named `%s`)"
         cls_name
+        ( if is_method then
+          "instance"
+        else
+          "static" )
         meth_name
   in
   add (Typing.err_code Typing.MemberNotFound) pos msg
@@ -3253,292 +3204,6 @@ let fun_arity_mismatch pos1 pos2 (on_error : typing_error_callback) =
     (pos1, "Number of arguments doesn't match")
     [(pos2, "Because of this definition")]
 
-let fun_reactivity_mismatch
-    pos1 kind1 pos2 kind2 (on_error : typing_error_callback) =
-  let f k = "This function is " ^ k ^ "." in
-  on_error
-    ~code:(Typing.err_code Typing.FunReactivityMismatch)
-    (pos1, f kind1)
-    [(pos2, f kind2)]
-
-let inconsistent_mutability pos1 mut1 p2_opt =
-  match p2_opt with
-  | Some (pos2, mut2) ->
-    add_list
-      (Typing.err_code Typing.InconsistentMutability)
-      (pos1, "Inconsistent mutability of local variable, here local is " ^ mut1)
-      [(pos2, "But here it is " ^ mut2)]
-  | None ->
-    add
-      (Typing.err_code Typing.InconsistentMutability)
-      pos1
-      ("Local is " ^ mut1 ^ " in one scope and immutable in another.")
-
-let inconsistent_mutability_for_conditional p_mut p_other =
-  add_list
-    (Typing.err_code Typing.InconsistentMutability)
-    ( p_mut,
-      "Inconsistent mutability of conditional expression, this branch returns owned mutable value"
-    )
-    [(p_other, "But this one does not.")]
-
-let invalid_mutability_flavor pos mut1 mut2 =
-  add
-    (Typing.err_code Typing.InvalidMutabilityFlavorInAssignment)
-    pos
-    ( "Cannot assign "
-    ^ mut2
-    ^ " value to "
-    ^ mut1
-    ^ " local variable. Mutability flavor of local variable cannot be altered."
-    )
-
-let reassign_mutable_var ~in_collection pos1 =
-  let msg =
-    if in_collection then
-      "This variable is mutable. You cannot create a new reference to it by putting it into the collection."
-    else
-      "This variable is mutable. You cannot create a new reference to it."
-  in
-  add (Typing.err_code Typing.ReassignMutableVar) pos1 msg
-
-let reassign_mutable_this ~in_collection ~is_maybe_mutable pos1 =
-  let kind =
-    if is_maybe_mutable then
-      "maybe mutable"
-    else
-      "mutable"
-  in
-  let msg =
-    if in_collection then
-      "`$this` here is "
-      ^ kind
-      ^ ". You cannot create a new reference to it by putting it into the collection."
-    else
-      "`$this` here is " ^ kind ^ ". You cannot create a new reference to it."
-  in
-  add (Typing.err_code Typing.ReassignMutableThis) pos1 msg
-
-let mutable_expression_as_multiple_mutable_arguments
-    pos param_kind prev_pos prev_param_kind =
-  add_list
-    (Typing.err_code Typing.MutableExpressionAsMultipleMutableArguments)
-    ( pos,
-      "A mutable expression may not be passed as multiple arguments where at least one matching parameter is mutable. Matching parameter here is "
-      ^ param_kind )
-    [
-      ( prev_pos,
-        "This is where it was used before, being passed as " ^ prev_param_kind
-      );
-    ]
-
-let reassign_maybe_mutable_var ~in_collection pos1 =
-  let msg =
-    if in_collection then
-      "This variable is maybe mutable. You cannot create a new reference to it by putting it into the collection."
-    else
-      "This variable is maybe mutable. You cannot create a new reference to it."
-  in
-  add (Typing.err_code Typing.ReassignMaybeMutableVar) pos1 msg
-
-let mutable_call_on_immutable fpos pos1 rx_mutable_hint_pos =
-  let l =
-    match rx_mutable_hint_pos with
-    | Some p ->
-      [
-        ( p,
-          "Consider wrapping this expression with `Rx\\mutable` to forward mutability."
-        );
-      ]
-    | None -> []
-  in
-  let claim = (pos1, "Cannot call mutable function on immutable expression") in
-  let reasons =
-    ( fpos,
-      "This function is marked `<<__Mutable>>`, so it has a mutable `$this`." )
-    :: l
-  in
-  add_list (Typing.err_code Typing.MutableCallOnImmutable) claim reasons
-
-let immutable_call_on_mutable fpos pos1 =
-  add_list
-    (Typing.err_code Typing.ImmutableCallOnMutable)
-    (pos1, "Cannot call non-mutable function on mutable expression")
-    [(fpos, "This function is not marked as `<<__Mutable>>`.")]
-
-let mutability_mismatch
-    ~is_receiver pos1 mut1 pos2 mut2 (on_error : typing_error_callback) =
-  let msg mut =
-    let msg =
-      if is_receiver then
-        "Receiver of this function"
-      else
-        "This parameter"
-    in
-    msg ^ " is " ^ mut
-  in
-  on_error
-    ~code:(Typing.err_code Typing.MutabilityMismatch)
-    (pos1, "Incompatible mutabilities:")
-    [(pos1, msg mut1); (pos2, msg mut2)]
-
-let invalid_call_on_maybe_mutable ~fun_is_mutable pos fpos =
-  let msg =
-    "Cannot call "
-    ^ ( if fun_is_mutable then
-        "mutable"
-      else
-        "non-mutable" )
-    ^ " function on maybe mutable value."
-  in
-  add_list
-    (Typing.err_code Typing.InvalidCallMaybeMutable)
-    (pos, msg)
-    [(fpos, "This function is not marked as `<<__MaybeMutable>>`.")]
-
-let mutable_argument_mismatch param_pos arg_pos =
-  add_list
-    (Typing.err_code Typing.MutableArgumentMismatch)
-    (arg_pos, "Invalid argument")
-    [
-      (param_pos, "This parameter is marked mutable");
-      (arg_pos, "But this expression is not");
-    ]
-
-let immutable_argument_mismatch param_pos arg_pos =
-  add_list
-    (Typing.err_code Typing.ImmutableArgumentMismatch)
-    (arg_pos, "Invalid argument")
-    [
-      (param_pos, "This parameter is not marked as mutable");
-      (arg_pos, "But this expression is mutable");
-    ]
-
-let mutably_owned_argument_mismatch ~arg_is_owned_local param_pos arg_pos =
-  let arg_msg =
-    if arg_is_owned_local then
-      "Owned mutable locals used as argument should be passed via `Rx\\move` function"
-    else
-      "But this expression is not owned mutable"
-  in
-  add_list
-    (Typing.err_code Typing.ImmutableArgumentMismatch)
-    (arg_pos, "Invalid argument")
-    [
-      (param_pos, "This parameter is marked with `<<__OwnedMutable>>`");
-      (arg_pos, arg_msg);
-    ]
-
-let maybe_mutable_argument_mismatch param_pos arg_pos =
-  add_list
-    (Typing.err_code Typing.MaybeMutableArgumentMismatch)
-    (arg_pos, "Invalid argument")
-    [
-      (param_pos, "This parameter is not marked `<<__MaybeMutable>>`");
-      (arg_pos, "But this expression is maybe mutable");
-    ]
-
-let invalid_mutable_return_result error_pos function_pos value_kind =
-  add_list
-    (Typing.err_code Typing.InvalidMutableReturnResult)
-    ( error_pos,
-      "Functions marked `<<__MutableReturn>>` must return mutably owned values: mutably owned local variables and results of calling `Rx\\mutable`."
-    )
-    [
-      (function_pos, "This function is marked `<<__MutableReturn>>`");
-      (error_pos, "This expression is " ^ value_kind);
-    ]
-
-let freeze_in_nonreactive_context pos1 =
-  add
-    (Typing.err_code Typing.FreezeInNonreactiveContext)
-    pos1
-    "`\\HH\\Rx\\freeze` can only be used in reactive functions"
-
-let mutable_in_nonreactive_context pos =
-  add
-    (Typing.err_code Typing.MutableInNonreactiveContext)
-    pos
-    "`\\HH\\Rx\\mutable` can only be used in reactive functions"
-
-let move_in_nonreactive_context pos =
-  add
-    (Typing.err_code Typing.MoveInNonreactiveContext)
-    pos
-    "`\\HH\\Rx\\move` can only be used in reactive functions"
-
-let invalid_argument_type_for_condition_in_rx
-    ~is_receiver f_pos def_pos arg_pos expected_type actual_type =
-  let arg_msg =
-    if is_receiver then
-      "Receiver type"
-    else
-      "Argument type"
-  in
-  let arg_msg =
-    arg_msg
-    ^ " must be a subtype of "
-    ^ Markdown_lite.md_codify expected_type
-    ^ ", now "
-    ^ Markdown_lite.md_codify actual_type
-    ^ "."
-  in
-  add_list
-    (Typing.err_code Typing.InvalidConditionallyReactiveCall)
-    ( f_pos,
-      "Cannot invoke conditionally reactive function in reactive context, because at least one reactivity condition is not met."
-    )
-    [(arg_pos, arg_msg); (def_pos, "This is the function declaration")]
-
-let callsite_reactivity_mismatch
-    f_pos def_pos callee_reactivity cause_pos_opt caller_reactivity =
-  add_list
-    (Typing.err_code Typing.CallSiteReactivityMismatch)
-    ( f_pos,
-      "Reactivity mismatch: "
-      ^ caller_reactivity
-      ^ " function cannot call "
-      ^ callee_reactivity
-      ^ " function." )
-    ( [(def_pos, "This is the declaration of the function being called.")]
-    @ Option.value_map cause_pos_opt ~default:[] ~f:(fun cause_pos ->
-          [
-            ( cause_pos,
-              "Reactivity of this argument was used as reactivity of the callee."
-            );
-          ]) )
-
-let callsite_cipp_mismatch f_pos def_pos callee_cipp caller_cipp =
-  add_list
-    (Typing.err_code Typing.CallsiteCIPPMismatch)
-    ( f_pos,
-      "CIPP mismatch: "
-      ^ caller_cipp
-      ^ " function cannot call "
-      ^ callee_cipp
-      ^ " function." )
-    [(def_pos, "This is the declaration of the function being called.")]
-
-let invalid_argument_of_rx_mutable_function pos =
-  add
-    (Typing.err_code Typing.InvalidArgumentOfRxMutableFunction)
-    pos
-    ( "Single argument to `\\HH\\Rx\\mutable` should be an expression that yields new mutably-owned value, "
-    ^ "like `new A()`, Hack collection literal or `f()` where `f` is function annotated with `<<__MutableReturn>>` attribute."
-    )
-
-let invalid_freeze_use pos1 =
-  add
-    (Typing.err_code Typing.InvalidFreezeUse)
-    pos1
-    "`freeze` takes a single mutably-owned local variable as an argument"
-
-let invalid_move_use pos1 =
-  add
-    (Typing.err_code Typing.InvalidMoveUse)
-    pos1
-    "`move` takes a single mutably-owned local variable as an argument"
-
 let require_args_reify def_pos arg_pos =
   add_list
     (Typing.err_code Typing.RequireArgsReify)
@@ -3634,18 +3299,6 @@ let new_without_newable pos name =
     ^ " cannot be used with `new` because it does not have the `<<__Newable>>` attribute"
     )
 
-let invalid_freeze_target pos1 var_pos var_mutability_str =
-  add_list
-    (Typing.err_code Typing.InvalidFreezeTarget)
-    (pos1, "Invalid argument - `freeze()` takes a single mutable variable")
-    [(var_pos, "This variable is " ^ var_mutability_str)]
-
-let invalid_move_target pos1 var_pos var_mutability_str =
-  add_list
-    (Typing.err_code Typing.InvalidMoveTarget)
-    (pos1, "Invalid argument - `move()` takes a single mutably-owned variable")
-    [(var_pos, "This variable is " ^ var_mutability_str)]
-
 let discarded_awaitable pos1 pos2 =
   add_list
     (Typing.err_code Typing.DiscardedAwaitable)
@@ -3660,7 +3313,7 @@ let unify_error ?code err =
 
 let unify_error_at : Pos.t -> typing_error_callback =
  fun pos ?code claim reasons ->
-  unify_error ?code (pos, "Typing error") (claim :: reasons)
+  unify_error ?code (pos, "Typing error") (claim_as_reason claim :: reasons)
 
 let maybe_unify_error specific_code ?code errl =
   add_list (Option.value code ~default:(Typing.err_code specific_code)) errl
@@ -4022,25 +3675,6 @@ let ifc_policy_mismatch
     (pos_sub, m1)
     [(pos_super, m2)]
 
-let return_void_to_rx_mismatch
-    ~pos1_has_attribute pos1 pos2 (on_error : typing_error_callback) =
-  let m1 = "This is marked `<<__ReturnsVoidToRx>>`." in
-  let m2 = "This is not marked `<<__ReturnsVoidToRx>>`." in
-  on_error
-    ~code:(Typing.err_code Typing.ReturnVoidToRxMismatch)
-    ( pos1,
-      if pos1_has_attribute then
-        m1
-      else
-        m2 )
-    [
-      ( pos2,
-        if pos1_has_attribute then
-          m2
-        else
-          m1 );
-    ]
-
 let this_as_lexical_variable pos =
   add
     (Naming.err_code Naming.ThisAsLexicalVariable)
@@ -4088,78 +3722,11 @@ let overriding_prop_const_mismatch
           m2 );
     ]
 
-let mutable_return_result_mismatch
-    pos1_has_mutable_return pos1 pos2 (on_error : typing_error_callback) =
-  let m1 = "This is marked `<<__MutableReturn>>`." in
-  let m2 = "This is not marked `<<__MutableReturn>>`." in
-  on_error
-    ~code:(Typing.err_code Typing.MutableReturnResultMismatch)
-    ( pos1,
-      if pos1_has_mutable_return then
-        m1
-      else
-        m2 )
-    [
-      ( pos2,
-        if pos1_has_mutable_return then
-          m2
-        else
-          m1 );
-    ]
-
 let php_lambda_disallowed pos =
   add
     (NastCheck.err_code NastCheck.PhpLambdaDisallowed)
     pos
     "PHP style anonymous functions are not allowed."
-
-module CoeffectEnforcedOp = struct
-  let output pos =
-    add
-      (Typing.err_code Typing.OutputInWrongContext)
-      pos
-      "`echo` or `print` are not allowed in reactive functions."
-
-  let static_property_access pos =
-    add
-      (Typing.err_code Typing.StaticPropertyInWrongContext)
-      pos
-      "Static property cannot be used in a reactive context."
-
-  let rx_enabled_in_non_rx_context pos =
-    add
-      (Typing.err_code Typing.RxEnabledInNonRxContext)
-      pos
-      "`\\HH\\Rx\\IS_ENABLED` can only be used in reactive functions."
-
-  let nonreactive_indexing is_append pos =
-    let msg =
-      if is_append then
-        "Cannot append to a Hack Collection object in a reactive context. Instead, use the `add` method."
-      else
-        "Cannot assign to element of Hack Collection object via `[]` in a reactive context. Instead, use the `set` method."
-    in
-    add (Typing.err_code Typing.NonreactiveIndexing) pos msg
-
-  let obj_set_reactive pos =
-    let msg =
-      "This object's property is being mutated (used as an lvalue)"
-      ^ "\nYou cannot set non-mutable object properties in reactive functions"
-    in
-    add (Typing.err_code Typing.ObjSetReactive) pos msg
-
-  let invalid_unset_target_rx pos =
-    add
-      (Typing.err_code Typing.InvalidUnsetTargetInRx)
-      pos
-      "Non-mutable argument for `unset` is not allowed in reactive functions."
-
-  let non_awaited_awaitable_in_rx pos =
-    add
-      (Typing.err_code Typing.NonawaitedAwaitableInReactiveContext)
-      pos
-      "This value has `Awaitable` type. `Awaitable` typed values in reactive code must be immediately `await`ed."
-end
 
 (*****************************************************************************)
 (* Typing decl errors *)
@@ -4226,7 +3793,7 @@ let wrong_extend_kind
   let msg2 = (parent_pos, "This is " ^ parent_kind_str ^ ".") in
   add_list (Typing.err_code Typing.WrongExtendKind) msg1 [msg2]
 
-let unsatisfied_req parent_pos req_name req_pos =
+let unsatisfied_req (parent_pos : Pos.t) req_name req_pos =
   let s1 = "Failure to satisfy requirement: " ^ strip_ns req_name in
   let s2 = "Required here" in
   if Pos.equal req_pos parent_pos then
@@ -4235,7 +3802,7 @@ let unsatisfied_req parent_pos req_name req_pos =
     add_list
       (Typing.err_code Typing.UnsatisfiedReq)
       (parent_pos, s1)
-      [(req_pos, s2)]
+      [(Pos_or_decl.of_raw_pos req_pos, s2)]
 
 let cyclic_class_def stack pos =
   let stack =
@@ -4431,12 +3998,18 @@ let invalid_disposable_return_hint pos class_name =
     ^ " must not implement `IDisposable` or `IAsyncDisposable`. Please add `<<__ReturnDisposable>>` attribute."
     )
 
+let invalid_constfun_attribute pos =
+  add
+    (NastCheck.err_code NastCheck.InvalidConstFunAttribute)
+    pos
+    "<<__ConstFun>> can only be used on function type hints and functions."
+
 let xhp_required pos why_xhp ty_reason_msg =
   let msg = "An XHP instance was expected" in
   add_list
     (Typing.err_code Typing.XhpRequired)
     (pos, msg)
-    ((pos, why_xhp) :: ty_reason_msg)
+    ((Pos_or_decl.of_raw_pos pos, why_xhp) :: ty_reason_msg)
 
 let illegal_xhp_child pos ty_reason_msg =
   let msg = "XHP children must be compatible with XHPChild" in
@@ -4548,7 +4121,6 @@ let cannot_declare_constant kind pos (class_pos, class_name) =
   let kind_str =
     match kind with
     | `enum -> "an enum"
-    | `trait -> "a trait"
     | `record -> "a record"
   in
   add_list
@@ -4597,11 +4169,11 @@ let multiple_concrete_defs
       ^ Markdown_lite.md_codify name
       ^ "." )
     [
-      ( child_pos,
+      ( Pos_or_decl.of_raw_pos child_pos,
         Markdown_lite.md_codify child_origin ^ "'s definition is here." );
       ( parent_pos,
         Markdown_lite.md_codify parent_origin ^ "'s definition is here." );
-      ( child_pos,
+      ( Pos_or_decl.of_raw_pos child_pos,
         "Redeclare "
         ^ Markdown_lite.md_codify name
         ^ " in "
@@ -4697,46 +4269,6 @@ let invalid_return_disposable pos =
   in
   add (Typing.err_code Typing.InvalidReturnDisposable) pos msg
 
-let nonreactive_function_call pos decl_pos callee_reactivity cause_pos_opt =
-  add_list
-    (Typing.err_code Typing.NonreactiveFunctionCall)
-    (pos, "Reactive functions can only call other reactive functions.")
-    ( [(decl_pos, "This function is " ^ callee_reactivity ^ ".")]
-    @ Option.value_map cause_pos_opt ~default:[] ~f:(fun cause_pos ->
-          [
-            ( cause_pos,
-              "This argument caused function to be " ^ callee_reactivity ^ "."
-            );
-          ]) )
-
-let nonpure_function_call pos decl_pos callee_reactivity =
-  add_list
-    (Typing.err_code Typing.NonpureFunctionCall)
-    (pos, "Pure functions can only call other pure functions.")
-    [(decl_pos, "This function is " ^ callee_reactivity ^ ".")]
-
-let nonreactive_call_from_shallow pos decl_pos callee_reactivity cause_pos_opt =
-  add_list
-    (Typing.err_code Typing.NonreactiveCallFromShallow)
-    (pos, "Shallow reactive functions cannot call non-reactive functions.")
-    ( [(decl_pos, "This function is " ^ callee_reactivity ^ ".")]
-    @ Option.value_map cause_pos_opt ~default:[] ~f:(fun cause_pos ->
-          [
-            ( cause_pos,
-              "This argument caused function to be " ^ callee_reactivity ^ "."
-            );
-          ]) )
-
-let rx_parameter_condition_mismatch
-    cond pos def_pos (on_error : typing_error_callback) =
-  on_error
-    ~code:(Typing.err_code Typing.RxParameterConditionMismatch)
-    ( pos,
-      "This parameter does not satisfy "
-      ^ cond
-      ^ " condition defined on matching parameter in function super type." )
-    [(def_pos, "This is parameter declaration from the function super type.")]
-
 let inout_argument_bad_type pos msgl =
   let msg =
     "Expected argument marked `inout` to be contained in a local or "
@@ -4757,7 +4289,7 @@ let ambiguous_lambda pos uses =
   add_list
     (Typing.err_code Typing.AmbiguousLambda)
     (pos, msg1)
-    ( (pos, msg2)
+    ( (Pos_or_decl.of_raw_pos pos, msg2)
     :: List.map uses (fun (pos, ty) ->
            (pos, "This use has type " ^ Markdown_lite.md_codify ty)) )
 
@@ -4790,17 +4322,6 @@ let wrong_expression_kind_builtin_attribute expr_kind pos attr =
   in
   add_list (Typing.err_code Typing.WrongExpressionKindAttribute) (pos, msg1) []
 
-let cannot_return_borrowed_value_as_immutable fun_pos value_pos =
-  add_list
-    (Typing.err_code Typing.CannotReturnBorrowedValueAsImmutable)
-    ( fun_pos,
-      "Values returned from reactive function by default are treated as immutable."
-    )
-    [
-      ( value_pos,
-        "This value is mutably borrowed and cannot be returned as immutable" );
-    ]
-
 let decl_override_missing_hint pos (on_error : typing_error_callback) =
   on_error
     ~code:(Typing.err_code Typing.DeclOverrideMissingHint)
@@ -4808,36 +4329,6 @@ let decl_override_missing_hint pos (on_error : typing_error_callback) =
       "When redeclaring class members, both declarations must have a typehint"
     )
     []
-
-let invalid_type_for_atmost_rx_as_rxfunc_parameter pos type_str =
-  add
-    (Typing.err_code Typing.InvalidTypeForOnlyrxIfRxfuncParameter)
-    pos
-    ( "Parameter annotated with `<<__AtMostRxAsFunc>>` attribute must be function, now "
-    ^ Markdown_lite.md_codify type_str
-    ^ "." )
-
-let missing_annotation_for_atmost_rx_as_rxfunc_parameter pos =
-  add
-    (Typing.err_code Typing.MissingAnnotationForOnlyrxIfRxfuncParameter)
-    pos
-    "Missing function type annotation on parameter marked with `<<__AtMostRxAsFunc>>` attribute."
-
-let superglobal_in_reactive_context pos name =
-  add
-    (Typing.err_code Typing.SuperglobalInReactiveContext)
-    pos
-    ( "Superglobal "
-    ^ Markdown_lite.md_codify name
-    ^ " cannot be used in a reactive context." )
-
-let returns_void_to_rx_function_as_non_expression_statement pos fpos =
-  add_list
-    (Typing.err_code Typing.ReturnsVoidToRxAsNonExpressionStatement)
-    ( pos,
-      "Cannot use result of function annotated with `<<__ReturnsVoidToRx>>` in reactive context"
-    )
-    [(fpos, "This is function declaration.")]
 
 let shapes_key_exists_always_true pos1 name pos2 =
   add_list
@@ -4907,12 +4398,6 @@ let ambiguous_object_access
         ^ Markdown_lite.md_codify class_subclass );
     ]
 
-let invalid_traversable_in_rx pos =
-  add
-    (Typing.err_code Typing.InvalidTraversableInRx)
-    pos
-    "Cannot traverse over non-reactive traversable in reactive code."
-
 let lateinit_with_default pos =
   add
     (Typing.err_code Typing.LateInitWithDefault)
@@ -4960,12 +4445,6 @@ let unserializable_type pos message =
     pos
     ( "Unserializable type (could not be converted to JSON and back again): "
     ^ message )
-
-let redundant_rx_condition pos =
-  add
-    (Typing.err_code Typing.RedundantRxCondition)
-    pos
-    "Reactivity condition for this method is always true, consider removing it."
 
 let invalid_arraykey code pos (cpos, ctype) (kpos, ktype) =
   add_list
@@ -5381,7 +4860,10 @@ let unnecessary_attribute pos ~attr ~reason ~suggestion =
   add_list
     (Typing.err_code Typing.UnnecessaryAttribute)
     (pos, sprintf "The attribute `%s` is unnecessary" attr)
-    [(reason_pos, "It is unnecessary because " ^ reason_msg); (pos, suggestion)]
+    [
+      (reason_pos, "It is unnecessary because " ^ reason_msg);
+      (Pos_or_decl.of_raw_pos pos, suggestion);
+    ]
 
 let inherited_class_member_with_different_case
     member_type name name_prev p child_class prev_class prev_class_pos =
@@ -5566,10 +5048,32 @@ let method_is_not_dynamically_callable pos method_name class_name =
     (Typing.err_code Typing.ImplementsDynamic)
     pos
     ( "Class "
-    ^ class_name
+    ^ Markdown_lite.md_codify class_name
     ^ " cannot implement dynamic because method "
-    ^ method_name
+    ^ Markdown_lite.md_codify method_name
     ^ " is not dynamically callable" )
+
+let property_is_not_enforceable pos prop_name class_name =
+  let class_name = strip_ns class_name in
+  add
+    (Typing.err_code Typing.ImplementsDynamic)
+    pos
+    ( "Class "
+    ^ Markdown_lite.md_codify class_name
+    ^ " cannot implement dynamic because property "
+    ^ Markdown_lite.md_codify prop_name
+    ^ " does not have an enforceable type" )
+
+let property_is_not_dynamic pos prop_name class_name =
+  let class_name = strip_ns class_name in
+  add
+    (Typing.err_code Typing.ImplementsDynamic)
+    pos
+    ( "Class "
+    ^ Markdown_lite.md_codify class_name
+    ^ " cannot implement dynamic because property "
+    ^ Markdown_lite.md_codify prop_name
+    ^ " cannot be assigned to dynamic" )
 
 let immutable_local pos =
   add
@@ -5641,14 +5145,22 @@ let readonly_mismatch prefix pos ~reason_sub ~reason_super =
     (pos, prefix)
     (reason_sub @ reason_super)
 
-let explicit_readonly_cast kind pos =
-  add
+let readonly_mismatch_on_error
+    prefix pos ~reason_sub ~reason_super (on_error : typing_error_callback) =
+  on_error
+    ~code:(Typing.err_code Typing.ReadonlyMismatch)
+    (pos, prefix)
+    (reason_sub @ reason_super)
+
+let explicit_readonly_cast kind pos origin_pos =
+  add_list
     (Typing.err_code Typing.ExplicitReadonlyCast)
-    pos
-    ( "This "
-    ^ kind
-    ^ " returns a readonly value. It must be explicitly wrapped in a readonly expression."
+    ( pos,
+      "This "
+      ^ kind
+      ^ " returns a readonly value. It must be explicitly wrapped in a readonly expression."
     )
+    [(origin_pos, "The " ^ kind ^ " is defined here.")]
 
 let readonly_method_call receiver_pos method_pos =
   add_list
@@ -5656,17 +5168,6 @@ let readonly_method_call receiver_pos method_pos =
     ( receiver_pos,
       "This expression is readonly, so it can only call readonly methods" )
     [(method_pos, "This method is not readonly")]
-
-let enum_inclusion_unsupported_ordering dest_pos dest_name src_name =
-  add_list
-    (Typing.err_code Typing.IncompatibleEnumInclusion)
-    ( dest_pos,
-      "Enum "
-      ^ strip_ns dest_name
-      ^ " cannot include enum "
-      ^ strip_ns src_name
-      ^ " because it precedes it in the same file" )
-    []
 
 let invalid_meth_caller_calling_convention call_pos param_pos convention =
   add_list
@@ -5680,11 +5181,17 @@ let invalid_meth_caller_calling_convention call_pos param_pos convention =
         "This is why I think this method uses the `inout` calling convention" );
     ]
 
+let unsafe_cast pos =
+  add
+    (Typing.err_code Typing.UnsafeCast)
+    pos
+    "This cast violates type safety and may lead to unexpected behavior at runtime."
+
 (*****************************************************************************)
 (* Printing *)
 (*****************************************************************************)
 
-let to_json (error : Pos.absolute error_) =
+let to_json (error : finalized_error) =
   let (error_code, msgl) = (get_code error, to_list error) in
   let elts =
     List.map msgl (fun (p, w) ->

@@ -78,7 +78,6 @@ double convTVToDblHelper(TypedValue tv);
 StringData* convDblToStrHelper(double i);
 StringData* convIntToStrHelper(int64_t i);
 StringData* convObjToStrHelper(ObjectData* o);
-StringData* convResToStrHelper(ResourceHdr* o);
 
 void raiseUndefProp(ObjectData* base, const StringData* name);
 void throwUndefVariable(StringData* nm);
@@ -153,6 +152,7 @@ const Func* lookupClsMethodHelper(const Class* cls, const StringData* methName,
                                   ObjectData* obj, const Class* ctx);
 
 TypedValue lookupClsCns(const Class* cls, const StringData* cnsName);
+int lookupClsCtxCns(const Class* cls, const StringData* cnsName);
 
 // These shuffle* functions are the JIT's version of bytecode.cpp's
 // shuffleExtraStackArgs
@@ -189,7 +189,7 @@ ArrayData* loadClsTypeCnsHelper(
   bool no_throw_on_undefined
 );
 
-void raiseCoeffectsCallViolationHelper(const ActRec*, const Func*, uint64_t);
+void raiseCoeffectsCallViolationHelper(const Func*, uint64_t, uint64_t);
 
 [[noreturn]] void throwOOBException(TypedValue base, TypedValue key);
 [[noreturn]] void invalidArrayKeyHelper(const ArrayData* ad, TypedValue key);

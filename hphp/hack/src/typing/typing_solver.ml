@@ -312,15 +312,12 @@ let ty_equal_shallow env ty1 ty2 =
   | (Tclass (x_sub, exact_sub, _), Tclass (x_super, exact_super, _)) ->
     String.equal (snd x_sub) (snd x_super) && equal_exact exact_sub exact_super
   | (Tfun fty1, Tfun fty2) ->
-    equal_locl_fun_arity fty1 fty2
-    && equal_reactivity fty1.ft_reactive fty2.ft_reactive
-    && Int.equal fty1.ft_flags fty2.ft_flags
+    equal_locl_fun_arity fty1 fty2 && Int.equal fty1.ft_flags fty2.ft_flags
   | (Tshape (shape_kind1, fdm1), Tshape (shape_kind2, fdm2)) ->
     equal_shape_kind shape_kind1 shape_kind2
     && List.equal
          (fun (k1, v1) (k2, v2) ->
-           Ast_defs.ShapeField.equal k1 k2
-           && Bool.equal v1.sft_optional v2.sft_optional)
+           TShapeField.equal k1 k2 && Bool.equal v1.sft_optional v2.sft_optional)
          (ShapeFieldMap.elements fdm1)
          (ShapeFieldMap.elements fdm2)
   | (Tnewtype (n1, _, _), Tnewtype (n2, _, _)) -> String.equal n1 n2
@@ -420,7 +417,7 @@ let rec always_solve_tyvar_down ~freshen env r var on_error =
     env
   else
     let r =
-      if Reason.(equal r Rnone) then
+      if Reason.is_none r then
         Reason.Rwitness (Env.get_tyvar_pos env var)
       else
         r
@@ -454,7 +451,7 @@ let solve_tyvar_wrt_variance env r var on_error =
     env
   else
     let r =
-      if Reason.equal r Reason.Rnone then
+      if Reason.is_none r then
         Reason.Rwitness (Env.get_tyvar_pos env var)
       else
         r

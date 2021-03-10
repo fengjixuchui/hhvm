@@ -5,27 +5,35 @@
 
 mod verify_smart_constructors_generated;
 
+use ocamlrep::{Allocator, OpaqueValue, ToOcamlRep};
 use parser_core_types::{
-    positioned_syntax::PositionedSyntax, positioned_token::PositionedToken,
-    syntax_kind::SyntaxKind, token_factory::SimpleTokenFactoryImpl,
+    syntax_by_ref::{
+        has_arena::HasArena,
+        positioned_syntax::PositionedSyntax,
+        positioned_token::{PositionedToken, TokenFactory},
+    },
+    syntax_kind::SyntaxKind,
 };
 use syntax_smart_constructors::{StateType, SyntaxSmartConstructors};
 
-use ocaml::core::mlvalues::Value;
-use rust_to_ocaml::{to_list, SerializationContext, ToOcaml};
+use bumpalo::Bump;
 
 // TODO: This parser is only used by the ffp tests, and should be moved out of
 // the parser crate into a separate crate colocated with the tests. This will
 // improve build times.
 
 #[derive(Clone)]
-pub struct State {
+pub struct State<'a> {
     stack: Vec<SyntaxKind>,
+    arena: &'a Bump,
 }
 
-impl State {
-    pub fn new() -> Self {
-        State { stack: vec![] }
+impl<'a> State<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
+        State {
+            stack: vec![],
+            arena,
+        }
     }
 
     pub fn push(&mut self, kind: SyntaxKind) {
@@ -56,34 +64,40 @@ impl State {
     }
 }
 
-impl StateType<PositionedSyntax> for State {
+impl<'a> StateType<PositionedSyntax<'a>> for State<'a> {
     fn next(&mut self, _inputs: &[&PositionedSyntax]) {}
+}
+
+impl<'a> HasArena<'a> for State<'a> {
+    fn get_arena(&self) -> &'a Bump {
+        self.arena
+    }
 }
 
 pub use crate::verify_smart_constructors_generated::*;
 
 #[derive(Clone)]
-pub struct VerifySmartConstructors {
-    pub state: State,
-    pub token_factory: SimpleTokenFactoryImpl<PositionedToken>,
+pub struct VerifySmartConstructors<'a> {
+    pub state: State<'a>,
+    pub token_factory: TokenFactory<'a>,
 }
 
-impl VerifySmartConstructors {
-    pub fn new() -> Self {
+impl<'a> VerifySmartConstructors<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
         Self {
-            state: State::new(),
-            token_factory: SimpleTokenFactoryImpl::new(),
+            state: State::new(arena),
+            token_factory: TokenFactory::new(arena),
         }
     }
 }
 
-impl SyntaxSmartConstructors<PositionedSyntax, SimpleTokenFactoryImpl<PositionedToken>, State>
-    for VerifySmartConstructors
+impl<'a> SyntaxSmartConstructors<PositionedSyntax<'a>, TokenFactory<'a>, State<'a>>
+    for VerifySmartConstructors<'a>
 {
 }
 
-impl ToOcaml for State {
-    unsafe fn to_ocaml(&self, context: &SerializationContext) -> Value {
-        to_list(self.stack(), context)
+impl ToOcamlRep for State<'_> {
+    fn to_ocamlrep<'a, A: Allocator>(&self, alloc: &'a A) -> OpaqueValue<'a> {
+        self.stack().to_ocamlrep(alloc)
     }
 }

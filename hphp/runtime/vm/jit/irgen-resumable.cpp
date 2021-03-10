@@ -502,13 +502,12 @@ void emitAwait(IRGS& env) {
       push(env, exception);
       jmpImpl(env, offset);
     } else {
-      hint(env, Block::Hint::Unlikely);
       // There are no more catch blocks in this function, we are at the top
       // level throw
-      auto const spOff = IRSPRelOffsetData { spOffBCFromIRSP(env) };
-      gen(env, EagerSyncVMRegs, spOff, fp(env), sp(env));
+      hint(env, Block::Hint::Unlikely);
       updateMarker(env);
-      gen(env, EnterTCUnwind, EnterTCUnwindData { true }, exception);
+      auto const etcData = EnterTCUnwindData { spOffBCFromIRSP(env), true };
+      gen(env, EnterTCUnwind, etcData, sp(env), fp(env), exception);
     }
   };
   auto const handleNotFinished = [&] {
@@ -674,7 +673,7 @@ void emitContEnter(IRGS& env) {
   assertx(curClass(env)->classof(AsyncGenerator::getClass()) ||
           curClass(env)->classof(Generator::getClass()));
 
-  auto const callBCOffset = bcOff(env) - curFunc(env)->base();
+  auto const callBCOffset = bcOff(env);
   auto const isAsync = curClass(env)->classof(AsyncGenerator::getClass());
   // Load generator's FP and resume address.
   auto const genObj = ldThis(env);

@@ -544,6 +544,81 @@ TO_KIND        }
       ()
 end
 
+module GenerateSyntaxSerialize = struct
+  let match_arm x =
+    let get_field x = escape_rust_keyword (fst x) in
+    let serialize_fields =
+      map_and_concat_separated
+        "\n"
+        (fun y ->
+          sprintf
+            "ss.serialize_field(\"%s_%s\", &self.with(%s))?;"
+            x.prefix
+            (fst y)
+            (get_field y))
+        x.fields
+    in
+    let fields = map_and_concat_separated "," get_field x.fields in
+    sprintf
+      "SyntaxVariant::%s (%sChildren{%s} ) => {
+      let mut ss = s.serialize_struct(\"\", %d)?;
+      ss.serialize_field(\"kind\", \"%s\")?;
+      %s
+      ss.end()
+} \n"
+      x.kind_name
+      x.kind_name
+      fields
+      (1 + List.length x.fields)
+      x.description
+      serialize_fields
+
+  let template =
+    make_header CStyle ""
+    ^ "
+use super::{serialize::WithContext, syntax::Syntax, syntax_variant_generated::*};
+use serde::{ser::SerializeStruct, Serialize, Serializer};
+
+impl<'a, T, V> Serialize for WithContext<'a, Syntax<'a, T, V>>
+where
+    T: 'a,
+    WithContext<'a, T>: Serialize,
+{
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self.1.children {
+            SyntaxVariant::Missing => {
+                let mut ss = s.serialize_struct(\"\", 1)?;
+                ss.serialize_field(\"kind\", \"missing\")?;
+                ss.end()
+            }
+            SyntaxVariant::Token(ref t) => {
+                let mut ss = s.serialize_struct(\"\", 2)?;
+                ss.serialize_field(\"kind\", \"token\")?;
+                ss.serialize_field(\"token\", &self.with(t))?;
+                ss.end()
+            }
+            SyntaxVariant::SyntaxList(l) => {
+                let mut ss = s.serialize_struct(\"\", 2)?;
+                ss.serialize_field(\"kind\", \"list\")?;
+                ss.serialize_field(\"elements\", &self.with(l))?;
+                ss.end()
+            }
+            MATCH_ARMS
+        }
+    }
+}
+"
+
+  let gen =
+    Full_fidelity_schema.make_template_file
+      ~transformations:[{ pattern = "MATCH_ARMS"; func = match_arm }]
+      ~filename:
+        ( full_fidelity_path_prefix
+        ^ "syntax_by_ref/syntax_serialize_generated.rs" )
+      ~template
+      ()
+end
+
 module GenerateFFRustSyntaxVariantByRef = struct
   let to_syntax_variant_children x =
     let mapper (f, _) =
@@ -1239,7 +1314,7 @@ pub trait SmartConstructors: Clone {
 
     fn state_mut(&mut self) -> &mut Self::State;
     fn into_state(self) -> Self::State;
-    fn token_factory(&mut self) -> &mut Self::TF;
+    fn token_factory_mut(&mut self) -> &mut Self::TF;
 
     fn make_missing(&mut self, offset : usize) -> Self::R;
     fn make_token(&mut self, arg0: Token<Self>) -> Self::R;
@@ -1326,7 +1401,7 @@ where
       self.state
     }
 
-    fn token_factory(&mut self) -> &mut Self::TF {
+    fn token_factory_mut(&mut self) -> &mut Self::TF {
         &mut self.token_factory
     }
 
@@ -1364,7 +1439,7 @@ module GenerateFFRustVerifySmartConstructors = struct
     sprintf
       "    fn make_%s(&mut self, %s) -> Self::R {
         let args = arg_kinds!(%s);
-        let r = <Self as SyntaxSmartConstructors<PositionedSyntax, SimpleTokenFactoryImpl<PositionedToken>, State>>::make_%s(self, %s);
+        let r = <Self as SyntaxSmartConstructors<PositionedSyntax<'a>, TokenFactory<'a>, State<'a>>>::make_%s(self, %s);
         self.state_mut().verify(&args);
         self.state_mut().push(r.kind());
         r
@@ -1379,9 +1454,10 @@ module GenerateFFRustVerifySmartConstructors = struct
     make_header CStyle ""
     ^ "
 use crate::*;
-use parser_core_types::positioned_syntax::PositionedSyntax;
-use parser_core_types::positioned_token::PositionedToken;
-use parser_core_types::token_factory::SimpleTokenFactoryImpl;
+use parser_core_types::syntax_by_ref::{
+    positioned_syntax::PositionedSyntax,
+    positioned_token::TokenFactory,
+};
 use smart_constructors::SmartConstructors;
 use syntax_smart_constructors::SyntaxSmartConstructors;
 
@@ -1394,32 +1470,32 @@ macro_rules! arg_kinds {
     );
 }
 
-impl<'src> SmartConstructors for VerifySmartConstructors
+impl<'a> SmartConstructors for VerifySmartConstructors<'a>
 {
-    type State = State;
-    type TF = SimpleTokenFactoryImpl<PositionedToken>;
-    type R = PositionedSyntax;
+    type State = State<'a>;
+    type TF = TokenFactory<'a>;
+    type R = PositionedSyntax<'a>;
 
-    fn state_mut(&mut self) -> &mut State {
+    fn state_mut(&mut self) -> &mut State<'a> {
        &mut self.state
     }
 
-    fn into_state(self) -> State {
+    fn into_state(self) -> State<'a> {
       self.state
     }
 
-    fn token_factory(&mut self) -> &mut Self::TF {
+    fn token_factory_mut(&mut self) -> &mut Self::TF {
         &mut self.token_factory
     }
 
     fn make_missing(&mut self, offset: usize) -> Self::R {
-        let r = <Self as SyntaxSmartConstructors<PositionedSyntax, SimpleTokenFactoryImpl<PositionedToken>, State>>::make_missing(self, offset);
+        let r = <Self as SyntaxSmartConstructors<PositionedSyntax<'a>, TokenFactory<'a>, State<'a>>>::make_missing(self, offset);
         self.state_mut().push(r.kind());
         r
     }
 
-    fn make_token(&mut self, offset: PositionedToken) -> Self::R {
-        let r = <Self as SyntaxSmartConstructors<PositionedSyntax, SimpleTokenFactoryImpl<PositionedToken>, State>>::make_token(self, offset);
+    fn make_token(&mut self, offset: PositionedToken<'a>) -> Self::R {
+        let r = <Self as SyntaxSmartConstructors<PositionedSyntax<'a>, TokenFactory<'a>, State<'a>>>::make_token(self, offset);
         self.state_mut().push(r.kind());
         r
     }
@@ -1427,7 +1503,7 @@ impl<'src> SmartConstructors for VerifySmartConstructors
     fn make_list(&mut self, lst: Vec<Self::R>, offset: usize) -> Self::R {
         if !lst.is_empty() {
             let args: Vec<_> = (&lst).iter().map(|s| s.kind()).collect();
-            let r = <Self as SyntaxSmartConstructors<PositionedSyntax, SimpleTokenFactoryImpl<PositionedToken>, State>>::make_list(self, lst, offset);
+            let r = <Self as SyntaxSmartConstructors<PositionedSyntax<'a>, TokenFactory<'a>, State<'a>>>::make_list(self, lst, offset);
             self.state_mut().verify(&args);
             self.state_mut().push(r.kind());
             r
@@ -1608,67 +1684,6 @@ end
 
 (* GenerateFFRustSyntaxSmartConstructors *)
 
-module GenerateOcamlSyntax = struct
-  let to_constructor_methods x =
-    let sep s = String.concat ~sep:s in
-    let comma_sep = sep ", " in
-    let newline_sep spaces = sep (", \n" ^ spaces) in
-    let args = List.mapi x.fields ~f:(fun i _ -> sprintf "arg%d: Self" i) in
-    let args = comma_sep args in
-    let params f = List.mapi x.fields ~f:(fun i _ -> f (sprintf "arg%d" i)) in
-    let param_values = newline_sep "          " (params (sprintf "%s.value")) in
-    let param_nodes =
-      newline_sep "              " (params (sprintf "%s.syntax"))
-    in
-    sprintf
-      "    fn make_%s(ctx: &C, %s) -> Self {
-      let children = &[
-          %s
-      ];
-      let value = V::from_values(children.iter());
-      let syntax = Self::make(
-          ctx,
-          SyntaxKind::%s,
-          &value,
-          &[
-              %s
-          ],
-      );
-      Self { syntax, value }
-    }\n\n"
-      x.type_name
-      args
-      param_values
-      x.kind_name
-      param_nodes
-
-  let template : string =
-    make_header CStyle ""
-    ^ "
-use crate::{OcamlSyntax, Context};
-use rust_to_ocaml::*;
-
-use parser_core_types::syntax_kind::SyntaxKind;
-use parser_core_types::syntax::{SyntaxType, SyntaxValueType};
-use parser_core_types::positioned_token::PositionedToken;
-
-impl<V, C> SyntaxType<C> for OcamlSyntax<V>
-where
-    C: Context,
-    V: SyntaxValueType<PositionedToken> + ToOcaml,
-{
-CONSTRUCTOR_METHODS}
-  "
-
-  let ocaml_syntax =
-    Full_fidelity_schema.make_template_file
-      ~transformations:
-        [{ pattern = "CONSTRUCTOR_METHODS"; func = to_constructor_methods }]
-      ~filename:(full_fidelity_path_prefix ^ "ocaml_syntax_generated.rs")
-      ~template
-      ()
-end
-
 module GenerateFFRustDeclModeSmartConstructors = struct
   let to_constructor_methods x =
     let args = List.mapi x.fields ~f:(fun i _ -> sprintf "arg%d: Self::R" i) in
@@ -1714,7 +1729,7 @@ where
         self.state
     }
 
-    fn token_factory(&mut self) -> &mut Self::TF {
+    fn token_factory_mut(&mut self) -> &mut Self::TF {
         &mut self.token_factory
     }
 
@@ -1859,7 +1874,7 @@ impl<'src> SmartConstructors for FactsSmartConstructors<'src> {
       self.state
     }
 
-    fn token_factory(&mut self) -> &mut Self::TF {
+    fn token_factory_mut(&mut self) -> &mut Self::TF {
         &mut self.token_factory
     }
 
@@ -1934,7 +1949,7 @@ impl<'src> SmartConstructors for DirectDeclSmartConstructors<'src> {
         self
     }
 
-    fn token_factory(&mut self) -> &mut Self::TF {
+    fn token_factory_mut(&mut self) -> &mut Self::TF {
         &mut self.token_factory
     }
 
@@ -2081,8 +2096,8 @@ where S: SmartConstructors<State = State>,
       self.s.into_state()
     }
 
-    fn token_factory(&mut self) -> &mut Self::TF {
-        self.s.token_factory()
+    fn token_factory_mut(&mut self) -> &mut Self::TF {
+        self.s.token_factory_mut()
     }
 
 
@@ -3144,6 +3159,23 @@ OPERATOR_DECL_IMPLend
       ()
 end
 
+module GenerateSchemaVersion = struct
+  let template =
+    make_header CStyle ""
+    ^ sprintf
+        "
+pub const VERSION: &'static str = \"%s\";
+"
+        Full_fidelity_schema.full_fidelity_schema_version_number
+
+  let gen =
+    Full_fidelity_schema.make_template_file
+      ~filename:
+        "hphp/hack/src/parser/schema/full_fidelity_schema_version_number.rs"
+      ~template
+      ()
+end
+
 let templates =
   [
     GenerateFFOperatorRust.full_fidelity_operators;
@@ -3176,9 +3208,10 @@ let templates =
     .full_fidelity_smart_constructors_wrappers;
     GenerateFFRustSmartConstructorsWrappers
     .full_fidelity_smart_constructors_wrappers;
-    GenerateOcamlSyntax.ocaml_syntax;
     GenerateFFRustSyntaxVariantByRef.full_fidelity_syntax;
     GenerateSyntaxTypeImpl.full_fidelity_syntax;
     GenerateSyntaxChildrenIterator.full_fidelity_syntax;
     GenerateFFRustSyntaxImplByRef.full_fidelity_syntax;
+    GenerateSyntaxSerialize.gen;
+    GenerateSchemaVersion.gen;
   ]

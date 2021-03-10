@@ -379,7 +379,7 @@ OffsetList instrJumpTargets(PC instrs, Offset pos) {
 }
 
 OffsetSet instrSuccOffsets(PC opc, const Func* func) {
-  auto const bcStart = func->unit()->entry();
+  auto const bcStart = func->entry();
   auto const offsets = instrJumpTargets(bcStart, opc - bcStart);
   OffsetSet offsetsSet{offsets.begin(), offsets.end()};
 
@@ -451,8 +451,8 @@ int instrNumPops(PC pc) {
   // For most instructions, we know how many values are popped based
   // solely on the opcode
   if (n >= 0) return n;
-  // NewPackedArray and some final member operations specify how
-  // many values are popped in their first immediate
+  // Some final member operations specify how many values are popped in their
+  // first immediate.
   if (n == -3) return getImm(pc, 0).u_IVA;
   // FCall* opcodes pop number of opcode specific inputs, unpack, numArgs,
   // 2 cells/uninits reserved for ActRec and (numRets - 1) uninit values.
@@ -1077,7 +1077,7 @@ X(CudOp,          static_cast<int>(CudOp::IgnoreIter))
 X(SpecialClsRef,  static_cast<int>(SpecialClsRef::Self))
 X(IsLogAsDynamicCallOp,
                   static_cast<int>(IsLogAsDynamicCallOp::LogAsDynamicCall))
-X(ReadOnlyOp,     static_cast<int>(ReadOnlyOp::Any))
+X(ReadOnlyOp,     static_cast<int>(ReadOnlyOp::Mutable))
 #undef X
 
 //////////////////////////////////////////////////////////////////////

@@ -8,14 +8,12 @@
 
 open Hh_prelude
 
-(* TODO(hverr): Support 64-bit deps mode *)
-let deps_mode = Typing_deps_mode.SQLiteMode
-
 type env = {
   from: string;
   client_id: string;
   root: Path.t;
   ignore_hh_version: bool;
+  is_64bit: bool;
   detail_level: Calculate_fanout.Detail_level.t;
   naming_table_path: Path.t option;
   dep_table_path: Path.t option;
@@ -35,13 +33,15 @@ type saved_state_result = {
   dep_table_path: Path.t;
   errors_path: Path.t;
   saved_state_changed_files: Relative_path.Set.t;
+  setup_result: setup_result;
 }
 
-type previous_cursor =
-  | Previous_cursor_from_saved_state of saved_state_result
-  | Previous_cursor_id of string
+type cursor_reference =
+  | Cursor_reference_from_saved_state of saved_state_result
+  | Cursor_reference_id of string
 
-let set_up_global_environment (env : env) : setup_result =
+let set_up_global_environment (env : env) ~(deps_mode : Typing_deps_mode.t) :
+    setup_result =
   let server_args =
     ServerArgs.default_options_with_check_mode ~root:(Path.to_string env.root)
   in
@@ -52,35 +52,25 @@ let set_up_global_environment (env : env) : setup_result =
     ServerEnvBuild.make_genv server_args server_config server_local_config []
     (* no workers *)
   in
-  let init_id = Random_id.short_string () in
-  let server_env =
-    ServerEnvBuild.make_env ~init_id ~deps_mode genv.ServerEnv.config
-  in
+
+  let popt = ServerConfig.parser_options genv.ServerEnv.config in
+  let tcopt = ServerConfig.typechecker_options genv.ServerEnv.config in
   (* We need shallow class declarations so that we can invalidate individual
   members in a class hierarchy. *)
-  let server_env =
-    {
-      server_env with
-      ServerEnv.tcopt =
-        {
-          server_env.ServerEnv.tcopt with
-          GlobalOptions.tco_shallow_class_decl = true;
-        };
-    }
-  in
+  let tcopt = { tcopt with GlobalOptions.tco_shallow_class_decl = true } in
 
   let (ctx, workers, _time_taken) =
     Batch_init.init
       ~root:env.root
       ~shmem_config:(ServerConfig.sharedmem_config server_config)
-      ~popt:server_env.ServerEnv.popt
-      ~tcopt:server_env.ServerEnv.tcopt
+      ~popt
+      ~tcopt
+      ~deps_mode
       (Unix.gettimeofday ())
   in
   { workers; ctx }
 
-let load_saved_state ~(env : env) ~(setup_result : setup_result) :
-    saved_state_result Lwt.t =
+let load_saved_state ~(env : env) : saved_state_result Lwt.t =
   let%lwt (naming_table_path, naming_table_changed_files) =
     match env.naming_table_path with
     | Some naming_table_path -> Lwt.return (naming_table_path, [])
@@ -117,14 +107,13 @@ let load_saved_state ~(env : env) ~(setup_result : setup_result) :
       Lwt.return (dep_table_path, errors_path, [])
     | None ->
       let%lwt dep_table_saved_state =
-        (* TODO(hverr): Support 64-bit *)
         State_loader_lwt.load
           ~watchman_opts:
             Saved_state_loader.Watchman_options.
               { root = env.root; sockname = env.watchman_sockname }
           ~ignore_hh_version:env.ignore_hh_version
           ~saved_state_type:
-            (Saved_state_loader.Naming_and_dep_table { is_64bit = false })
+            (Saved_state_loader.Naming_and_dep_table { is_64bit = env.is_64bit })
       in
       (match dep_table_saved_state with
       | Error load_error ->
@@ -148,6 +137,14 @@ let load_saved_state ~(env : env) ~(setup_result : setup_result) :
     Relative_path.Set.filter changed_files ~f:(fun path ->
         FindUtils.file_filter (Relative_path.to_absolute path))
   in
+
+  let deps_mode =
+    if env.is_64bit then
+      Typing_deps_mode.CustomMode (Some (Path.to_string dep_table_path))
+    else
+      Typing_deps_mode.SQLiteMode
+  in
+  let setup_result = set_up_global_environment env ~deps_mode in
 
   let naming_table =
     Naming_table.load_from_sqlite
@@ -176,6 +173,7 @@ let load_saved_state ~(env : env) ~(setup_result : setup_result) :
       dep_table_path;
       errors_path;
       saved_state_changed_files = changed_files;
+      setup_result;
     }
 
 let get_state_path ~(env : env) : Path.t =
@@ -199,48 +197,54 @@ let get_state_path ~(env : env) : Path.t =
 let make_incremental_state ~(env : env) : Incremental.state =
   let state_path = get_state_path env in
   Hh_logger.log "State path: %s" (Path.to_string state_path);
-  Incremental.make_reference_implementation deps_mode state_path
+  Incremental.make_reference_implementation state_path
+
+let resolve_cursor_reference
+    ~(env : env)
+    ~(incremental_state : Incremental.state)
+    ~(previous_cursor_reference : cursor_reference) :
+    Incremental.cursor * Relative_path.Set.t =
+  match previous_cursor_reference with
+  | Cursor_reference_from_saved_state saved_state_result ->
+    let client_id =
+      incremental_state#make_client_id
+        {
+          Incremental.client_id = env.client_id;
+          ignore_hh_version = env.ignore_hh_version;
+          dep_table_saved_state_path = saved_state_result.dep_table_path;
+          dep_table_errors_saved_state_path = saved_state_result.errors_path;
+          naming_table_saved_state_path =
+            Naming_sqlite.Db_path
+              (Path.to_string saved_state_result.naming_table_path);
+          deps_mode =
+            Provider_context.get_deps_mode saved_state_result.setup_result.ctx;
+        }
+    in
+    let cursor =
+      incremental_state#make_default_cursor client_id |> Result.ok_or_failwith
+    in
+    (cursor, saved_state_result.saved_state_changed_files)
+  | Cursor_reference_id cursor_id ->
+    let cursor =
+      incremental_state#look_up_cursor
+        ~client_id:(Some (Incremental.Client_id env.client_id))
+        ~cursor_id
+      |> Result.ok_or_failwith
+    in
+    (cursor, Relative_path.Set.empty)
 
 let advance_cursor
     ~(env : env)
     ~(setup_result : setup_result)
-    ~(incremental_state : Incremental.state)
-    ~(previous_cursor : previous_cursor)
+    ~(previous_cursor : Incremental.cursor)
+    ~(previous_changed_files : Relative_path.Set.t)
     ~(input_files : Relative_path.Set.t) : Incremental.cursor =
-  let (cursor, cursor_changed_files) =
-    match previous_cursor with
-    | Previous_cursor_from_saved_state saved_state_result ->
-      let client_id =
-        incremental_state#make_client_id
-          {
-            Incremental.client_id = env.client_id;
-            ignore_hh_version = env.ignore_hh_version;
-            dep_table_saved_state_path = saved_state_result.dep_table_path;
-            dep_table_errors_saved_state_path = saved_state_result.errors_path;
-            naming_table_saved_state_path =
-              Naming_sqlite.Db_path
-                (Path.to_string saved_state_result.naming_table_path);
-          }
-      in
-      let cursor =
-        incremental_state#make_default_cursor client_id |> Result.ok_or_failwith
-      in
-      (cursor, saved_state_result.saved_state_changed_files)
-    | Previous_cursor_id cursor_id ->
-      let cursor =
-        incremental_state#look_up_cursor
-          ~client_id:(Some (Incremental.Client_id env.client_id))
-          ~cursor_id
-        |> Result.ok_or_failwith
-      in
-      (cursor, Relative_path.Set.empty)
-  in
   let cursor_changed_files =
-    cursor_changed_files
+    previous_changed_files
     |> Relative_path.Set.union env.changed_files
     |> Relative_path.Set.union input_files
   in
-  cursor#advance
+  previous_cursor#advance
     ~detail_level:env.detail_level
     setup_result.ctx
     setup_result.workers
@@ -250,13 +254,35 @@ let mode_calculate
     ~(env : env) ~(input_files : Path.Set.t) ~(cursor_id : string option) :
     unit Lwt.t =
   let telemetry = Telemetry.create () in
-  let setup_result = set_up_global_environment env in
-  let%lwt previous_cursor =
+  let incremental_state = make_incremental_state ~env in
+  let%lwt (previous_cursor, previous_changed_files, setup_result) =
     match cursor_id with
     | None ->
-      let%lwt saved_state_result = load_saved_state ~env ~setup_result in
-      Lwt.return (Previous_cursor_from_saved_state saved_state_result)
-    | Some cursor_id -> Lwt.return (Previous_cursor_id cursor_id)
+      let%lwt saved_state_result = load_saved_state ~env in
+      let previous_cursor_reference =
+        Cursor_reference_from_saved_state saved_state_result
+      in
+      let (previous_cursor, previous_changed_files) =
+        resolve_cursor_reference
+          ~env
+          ~incremental_state
+          ~previous_cursor_reference
+      in
+      Lwt.return
+        ( previous_cursor,
+          previous_changed_files,
+          saved_state_result.setup_result )
+    | Some cursor_id ->
+      let previous_cursor_reference = Cursor_reference_id cursor_id in
+      let (previous_cursor, previous_changed_files) =
+        resolve_cursor_reference
+          ~env
+          ~incremental_state
+          ~previous_cursor_reference
+      in
+      let deps_mode = previous_cursor#get_deps_mode in
+      let setup_result = set_up_global_environment env ~deps_mode in
+      Lwt.return (previous_cursor, previous_changed_files, setup_result)
   in
 
   let input_files =
@@ -264,13 +290,12 @@ let mode_calculate
         let path = Relative_path.create_detect_prefix (Path.to_string path) in
         Relative_path.Set.add acc path)
   in
-  let incremental_state = make_incremental_state ~env in
   let cursor =
     advance_cursor
       ~env
       ~setup_result
-      ~incremental_state
       ~previous_cursor
+      ~previous_changed_files
       ~input_files
   in
 
@@ -337,7 +362,6 @@ let mode_calculate
 let mode_calculate_errors
     ~(env : env) ~(cursor_id : string option) ~(pretty_print : bool) :
     unit Lwt.t =
-  let { ctx; workers } = set_up_global_environment env in
   let incremental_state = make_incremental_state ~env in
   let cursor =
     match cursor_id with
@@ -351,6 +375,9 @@ let mode_calculate_errors
     match cursor with
     | Error message -> failwith ("Cursor not found: " ^ message)
     | Ok cursor -> cursor
+  in
+  let { ctx; workers } =
+    set_up_global_environment env ~deps_mode:cursor#get_deps_mode
   in
 
   let (errors, cursor) = cursor#calculate_errors ctx workers in
@@ -417,6 +444,7 @@ let env
     root
     detail_level
     ignore_hh_version
+    is_64bit
     naming_table_path
     dep_table_path
     watchman_sockname
@@ -465,6 +493,7 @@ let env
     client_id;
     root;
     ignore_hh_version;
+    is_64bit;
     detail_level;
     naming_table_path;
     dep_table_path;
@@ -514,6 +543,10 @@ If not provided, defaults to the value for 'from'.
     in
     value & flag & info ["ignore-hh-version"] ~doc
   in
+  let is_64bit =
+    let doc = "Use 64bit depgraph." in
+    value & flag & info ["64bit"] ~doc
+  in
   let naming_table_path =
     let doc = "The path to the naming table SQLite saved-state." in
     let docv = "PATH" in
@@ -561,6 +594,7 @@ If not provided, will use the default path for the repository.
     $ root
     $ detail_level
     $ ignore_hh_version
+    $ is_64bit
     $ naming_table_path
     $ dep_table_path
     $ watchman_sockname
@@ -644,47 +678,47 @@ If not provided, uses the cursor corresponding to the saved-state.
 
 let mode_debug ~(env : env) ~(path : Path.t) ~(cursor_id : string option) :
     unit Lwt.t =
-  let ({ ctx; workers } as setup_result) = set_up_global_environment env in
-  let%lwt ({ naming_table = old_naming_table; _ } as saved_state_result) =
-    load_saved_state ~env ~setup_result
-  in
-  let previous_cursor =
+  let%lwt saved_state_result = load_saved_state ~env in
+  let previous_cursor_reference =
     match cursor_id with
     | Some _ ->
       Hh_logger.warn
         ( "A cursor ID was passed to `debug`, "
         ^^ "but loading from a previous cursor is not yet implemented." );
-      Previous_cursor_from_saved_state saved_state_result
-    | None -> Previous_cursor_from_saved_state saved_state_result
+      Cursor_reference_from_saved_state saved_state_result
+    | None -> Cursor_reference_from_saved_state saved_state_result
   in
 
   let path = Relative_path.create_detect_prefix (Path.to_string path) in
   let input_files = Relative_path.Set.singleton path in
   let incremental_state = make_incremental_state ~env in
+  let (previous_cursor, previous_changed_files) =
+    resolve_cursor_reference ~env ~incremental_state ~previous_cursor_reference
+  in
   let cursor =
     advance_cursor
       ~env
-      ~setup_result
-      ~incremental_state
+      ~setup_result:saved_state_result.setup_result
       ~previous_cursor
+      ~previous_changed_files
       ~input_files
   in
   let file_deltas = cursor#get_file_deltas in
   let new_naming_table =
-    Naming_table.update_from_deltas old_naming_table file_deltas
+    Naming_table.update_from_deltas saved_state_result.naming_table file_deltas
   in
 
   let cursor_id = incremental_state#add_cursor cursor in
 
   let json =
     Debug_fanout.go
-      ~ctx
-      ~workers
-      ~old_naming_table
+      ~ctx:saved_state_result.setup_result.ctx
+      ~workers:saved_state_result.setup_result.workers
+      ~old_naming_table:saved_state_result.naming_table
       ~new_naming_table
       ~file_deltas
       ~path
-    |> Debug_fanout.result_to_json ~deps_mode
+    |> Debug_fanout.result_to_json ~deps_mode:cursor#get_deps_mode
   in
   let json =
     Hh_json.JSON_Object
@@ -755,12 +789,13 @@ let status_subcommand =
 let mode_query
     ~(env : env) ~(dep_hash : Typing_deps.Dep.t) ~(include_extends : bool) :
     unit Lwt.t =
-  let setup_result = set_up_global_environment env in
-  let%lwt (_saved_state_result : saved_state_result) =
-    load_saved_state ~env ~setup_result
-  in
+  let%lwt (saved_state_result : saved_state_result) = load_saved_state ~env in
   let json =
-    Query_fanout.go ~deps_mode ~dep_hash ~include_extends
+    Query_fanout.go
+      ~deps_mode:
+        (Provider_context.get_deps_mode saved_state_result.setup_result.ctx)
+      ~dep_hash
+      ~include_extends
     |> Query_fanout.result_to_json
   in
   let json = Hh_json.JSON_Object [("result", json)] in
@@ -793,9 +828,9 @@ let query_subcommand =
 let mode_query_path
     ~(env : env) ~(source : Typing_deps.Dep.t) ~(dest : Typing_deps.Dep.t) :
     unit Lwt.t =
-  let setup_result = set_up_global_environment env in
-  let%lwt (_saved_state_result : saved_state_result) =
-    load_saved_state ~env ~setup_result
+  let%lwt (saved_state_result : saved_state_result) = load_saved_state ~env in
+  let deps_mode =
+    Provider_context.get_deps_mode saved_state_result.setup_result.ctx
   in
   let json =
     Query_path.go ~deps_mode ~source ~dest |> Query_path.result_to_json

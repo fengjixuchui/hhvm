@@ -2354,12 +2354,13 @@ void hphp_thread_exit() {
 #endif
 }
 
-void cli_server_init() {
+void cli_client_init() {
   if (*s_sessionInitialized) return;
   Process::InitProcessStatics();
   HHProf::Init();
   rds::processInit();
   rds::threadInit();
+  ExtensionRegistry::cliClientInit();
   ServerStats::GetLogger();
   zend_rand_init();
   get_server_note();

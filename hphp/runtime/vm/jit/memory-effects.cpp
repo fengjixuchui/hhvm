@@ -102,7 +102,7 @@ AliasClass pointee(
     if (type <= TMemToStkCell) {
       if (sinst->is(LdStkAddr)) {
         return AliasClass {
-          AStack { sinst->src(0), sinst->extra<LdStkAddr>()->offset, 1 }
+          AStack::at(sinst->extra<LdStkAddr>()->offset)
         };
       }
       return AStackAny;
@@ -222,22 +222,15 @@ AliasClass all_pointees(const IRInstruction& inst) {
 
 // Return an AliasClass representing a range of the eval stack that contains
 // everything below a logical depth.
-template<typename Off>
-AliasClass stack_below(SSATmp* base, Off offset) {
-  return AStack { base, offset, std::numeric_limits<int32_t>::max() };
+AliasClass stack_below(IRSPRelOffset offset) {
+  return AStack::below(offset);
 }
 
 //////////////////////////////////////////////////////////////////////
 
 // Return an AliasClass representing an entire ActRec at base + offset.
 AliasClass actrec(SSATmp* base, IRSPRelOffset offset) {
-  return AStack {
-    base,
-    // The offset is the bottom of where the ActRec is stored, but AliasClass
-    // needs an offset to the highest cell.
-    offset + int32_t{kNumActRecCells} - 1,
-    int32_t{kNumActRecCells}
-  };
+  return AStack::range(offset, offset + int32_t{kNumActRecCells});
 }
 
 /*
@@ -362,10 +355,22 @@ GeneralEffects may_reenter(const IRInstruction& inst, GeneralEffects x) {
   auto const new_kills = [&] {
     if (inst.marker().fp() == nullptr) return AEmpty;
 
-    auto const killed_stack = stack_below(
-      inst.marker().fp(),
-      -inst.marker().spOff() - 1
-    );
+    auto const offset = [&]() -> IRSPRelOffset {
+      auto const fp = canonical(inst.marker().fp());
+      if (fp->inst()->is(BeginInlining)) {
+        assertx(inst.marker().resumeMode() == ResumeMode::None);
+        auto const fpOffset = fp->inst()->extra<BeginInlining>()->spOffset;
+        auto const numStackElemsFromFP = inst.marker().spOff() - FPInvOffset{0};
+        return fpOffset - numStackElemsFromFP;
+      }
+
+      assertx(fp->inst()->is(DefFP, DefFuncEntryFP));
+      auto const sp = inst.marker().sp();
+      auto const irSPOff = sp->inst()->extra<DefStackData>()->irSPOff;
+      return inst.marker().spOff().to<IRSPRelOffset>(irSPOff);
+    }();
+
+    auto const killed_stack = stack_below(offset);
     auto const kills_union = x.kills.precise_union(killed_stack);
     return kills_union ? *kills_union : killed_stack;
   }();
@@ -483,30 +488,28 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ReqBindJmp:
     return ExitEffects {
       AUnknown,
-      stack_below(inst.src(0), inst.extra<ReqBindJmp>()->irSPOff - 1)
+      stack_below(inst.extra<ReqBindJmp>()->irSPOff)
     };
   case ReqRetranslate:
     return ExitEffects {
       AUnknown,
-      stack_below(inst.src(0), inst.extra<ReqRetranslate>()->offset - 1)
+      stack_below(inst.extra<ReqRetranslate>()->offset)
     };
   case ReqRetranslateOpt:
     return ExitEffects {
       AUnknown,
-      stack_below(inst.src(0), inst.extra<ReqRetranslateOpt>()->offset - 1)
+      stack_below(inst.extra<ReqRetranslateOpt>()->offset)
     };
   case JmpSwitchDest:
     return ExitEffects {
       AUnknown,
-      *stack_below(inst.src(1),
-                   inst.extra<JmpSwitchDest>()->spOffBCFromIRSP - 1).
+      *stack_below(inst.extra<JmpSwitchDest>()->spOffBCFromIRSP).
         precise_union(AMIStateAny)
     };
   case JmpSSwitchDest:
     return ExitEffects {
       AUnknown,
-      *stack_below(inst.src(1),
-                   inst.extra<JmpSSwitchDest>()->offset - 1).
+      *stack_below(inst.extra<JmpSSwitchDest>()->offset).
         precise_union(AMIStateAny)
     };
 
@@ -571,10 +574,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     return may_load_store_kill(AUnknown, AUnknown, AMIStateAny);
 
   case EndCatch: {
-    auto const stack_kills = stack_below(
-      inst.src(1),
-      inst.extra<EndCatch>()->offset - 1
-    );
+    auto const stack_kills = stack_below(inst.extra<EndCatch>()->offset);
     return ExitEffects {
       AUnknown,
       stack_kills | AMIStateTempBase | AMIStateBase
@@ -582,10 +582,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   }
 
   case EnterTCUnwind: {
-    auto const stack_kills = stack_below(
-      inst.marker().fp(),
-      -inst.marker().spOff() - 1
-    );
+    auto const stack_kills = stack_below(inst.extra<EnterTCUnwind>()->offset);
     return ExitEffects {
       AUnknown,
       stack_kills | AMIStateTempBase | AMIStateBase
@@ -602,7 +599,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
      * SP relative offset of the firstin the inlined call.
      */
     auto inlineStackOff =
-      inst.extra<BeginInlining>()->spOffset + kNumActRecCells - 1;
+      inst.extra<BeginInlining>()->spOffset + kNumActRecCells;
     return may_load_store_kill(
       AEmpty,
       AEmpty,
@@ -612,7 +609,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
        * locals of the callee-- those slots are inacessible in the inlined
        * call as frame and stack locations may not alias.
        */
-      stack_below(inst.src(0), inlineStackOff)
+      stack_below(inlineStackOff)
     );
   }
 
@@ -657,11 +654,13 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
 
   case InterpOne:
     return interp_one_effects(inst);
-  case InterpOneCF:
+  case InterpOneCF: {
+    auto const extra = inst.extra<InterpOneData>();
     return ExitEffects {
       AUnknown,
-      stack_below(inst.src(1), -inst.marker().spOff() - 1) | AMIStateAny
+      stack_below(extra->spOffset) | AMIStateAny
     };
+  }
 
   case NativeImpl:
     return UnknownEffects {};
@@ -722,7 +721,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
       auto const extra = inst.extra<ContEnter>();
       return CallEffects {
         // Kills. Everything on the stack.
-        stack_below(inst.src(0), extra->spOffset) | AMIStateAny,
+        stack_below(extra->spOffset) | AMIStateAny,
         // No inputs. The value being sent is passed explicitly.
         AEmpty,
         // ActRec. It is on the heap and we already implicitly assume that
@@ -745,22 +744,20 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
       auto const extra = inst.extra<Call>();
       return CallEffects {
         // Kills. Everything on the stack below the incoming parameters.
-        stack_below(inst.src(0), extra->spOffset - 1) | AMIStateAny,
+        stack_below(extra->spOffset) | AMIStateAny,
         // Input arguments.
-        extra->numInputs() == 0 ? AEmpty : AStack {
-          inst.src(0),
-          extra->spOffset + extra->numInputs() - 1,
-          static_cast<int32_t>(extra->numInputs())
-        },
+        extra->numInputs() == 0 ? AEmpty : AStack::range(
+          extra->spOffset,
+          extra->spOffset + extra->numInputs()
+        ),
         // ActRec.
         actrec(inst.src(0), extra->spOffset + extra->numInputs()),
         // Inout outputs.
-        extra->numOut == 0 ? AEmpty : AStack {
-          inst.src(0),
+        extra->numOut == 0 ? AEmpty : AStack::range(
+          extra->spOffset + extra->numInputs() + kNumActRecCells,
           extra->spOffset + extra->numInputs() + kNumActRecCells +
-            extra->numOut - 1,
-          static_cast<int32_t>(extra->numOut)
-        },
+            extra->numOut
+        ),
         // Locals. We intentionally leave off a dependency on AFBasePtr to allow
         // store-elim to elide the new frame.
         backtrace_locals(inst) | ar
@@ -792,7 +789,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
       return may_load_store_kill(
         stk | AHeapAny | foldable,
         out_stk | AHeapAny | foldable,
-        stack_below(inst.src(1), extra->spOffset - 1) | AMIStateAny
+        stack_below(extra->spOffset) | AMIStateAny
       );
     }
 
@@ -1088,11 +1085,10 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case InitVecElemLoop:
     {
       auto const extra = inst.extra<InitVecElemLoop>();
-      auto const stack_in = AStack {
-        inst.src(1),
-        extra->offset + static_cast<int32_t>(extra->size) - 1,
-        static_cast<int32_t>(extra->size)
-      };
+      auto const stack_in = AStack::range(
+        extra->offset,
+        extra->offset + static_cast<int32_t>(extra->size)
+      );
       return may_load_store_move(stack_in, AElemIAny, stack_in);
     }
 
@@ -1107,36 +1103,33 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
       // NewKeysetArray is reading elements from the stack, but writes to a
       // completely new array, so we can treat the store set as empty.
       auto const extra = inst.extra<NewKeysetArray>();
-      auto const stack_in = AStack {
-        inst.src(0),
-        extra->offset + static_cast<int32_t>(extra->size) - 1,
-        static_cast<int32_t>(extra->size)
-      };
+      auto const stack_in = AStack::range(
+        extra->offset,
+        extra->offset + static_cast<int32_t>(extra->size)
+      );
       return may_load_store_move(stack_in, AEmpty, stack_in);
     }
 
   case NewStructDArray:
   case NewStructDict:
     {
-      // NewStructArray is reading elements from the stack, but writes to a
-      // completely new array, so we can treat the store set as empty.
+      // NewStruct{Dict,DArray} is reading elements from the stack, but writes
+      // to a completely new array, so we can treat the store set as empty.
       auto const extra = inst.extra<NewStructData>();
-      auto const stack_in = AStack {
-        inst.src(0),
-        extra->offset + static_cast<int32_t>(extra->numKeys) - 1,
-        static_cast<int32_t>(extra->numKeys)
-      };
+      auto const stack_in = AStack::range(
+        extra->offset,
+        extra->offset + static_cast<int32_t>(extra->numKeys)
+      );
       return may_load_store_move(stack_in, AEmpty, stack_in);
     }
 
   case NewRecord:
     {
       auto const extra = inst.extra<NewStructData>();
-      auto const stack_in = AStack {
-        inst.src(1),
-        extra->offset + static_cast<int32_t>(extra->numKeys) - 1,
-        static_cast<int32_t>(extra->numKeys)
-      };
+      auto const stack_in = AStack::range(
+        extra->offset,
+        extra->offset + static_cast<int32_t>(extra->numKeys)
+      );
       return may_load_store_move(stack_in, AEmpty, stack_in);
     }
   case MemoGetStaticValue:
@@ -1427,13 +1420,11 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   // Instructions that explicitly manipulate the stack.
 
   case LdStk:
-    return PureLoad {
-      AStack { inst.src(0), inst.extra<LdStk>()->offset, 1 }
-    };
+    return PureLoad { AStack::at(inst.extra<LdStk>()->offset) };
 
   case StStk:
     return PureStore {
-      AStack { inst.src(0), inst.extra<StStk>()->offset, 1 },
+      AStack::at(inst.extra<StStk>()->offset),
       inst.src(1),
       nullptr
     };
@@ -1449,7 +1440,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
 
   case CheckStk:
     return may_load_store(
-      AStack { inst.src(0), inst.extra<CheckStk>()->offset, 1 },
+      AStack::at(inst.extra<CheckStk>()->offset),
       AEmpty
     );
 
@@ -1462,11 +1453,10 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
 
   case ResolveTypeStruct: {
     auto const extra = inst.extra<ResolveTypeStructData>();
-    auto const stack_in = AStack {
-      inst.src(0),
-      extra->offset + static_cast<int32_t>(extra->size) - 1,
-      static_cast<int32_t>(extra->size)
-    };
+    auto const stack_in = AStack::range(
+      extra->offset,
+      extra->offset + static_cast<int32_t>(extra->size)
+    );
     return may_load_store(AliasClass(stack_in)|AHeapAny, AHeapAny);
   }
 
@@ -1623,6 +1613,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     return may_load_store(AHeapAny, AHeapAny);
 
   case LookupClsCns:
+  case LookupClsCtxCns:
     return may_load_store(AEmpty, AEmpty);
 
   case StClosureArg:
@@ -1838,7 +1829,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     return may_load_store(AEmpty, AEmpty);
 
   case RaiseCoeffectsCallViolation:
-    return may_load_store(AFFunc{inst.src(0)}, AEmpty);
+    return may_load_store(AEmpty, AEmpty);
 
   case LdClsPropAddrOrNull:   // may run 86{s,p}init, which can autoload
   case LdClsPropAddrOrRaise:  // raises errors, and 86{s,p}init
@@ -1910,7 +1901,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ConvObjToDbl:
   case ConvObjToInt:
   case ConvTVToInt:
-  case ConvResToStr:
   case ConcatStr3:
   case ConcatStr4:
   case ConvTVToDbl:
@@ -1981,7 +1971,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case DbgTrashStk:
     return GeneralEffects {
       AEmpty, AEmpty, AEmpty,
-      AStack { inst.src(0), inst.extra<DbgTrashStk>()->offset, 1 }
+      AStack::at(inst.extra<DbgTrashStk>()->offset)
     };
   case DbgTrashFrame:
     return GeneralEffects {

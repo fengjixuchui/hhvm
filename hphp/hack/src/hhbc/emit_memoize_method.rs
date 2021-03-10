@@ -9,7 +9,7 @@ use emit_fatal_rust as emit_fatal;
 use emit_memoize_helpers_rust as emit_memoize_helpers;
 use emit_param_rust as emit_param;
 use emit_pos_rust::emit_pos_then;
-use env::{emitter::Emitter, local, Env};
+use env::{emitter::Emitter, Env};
 use hhas_attribute_rust::deprecation_info;
 use hhas_body_rust::HhasBody;
 use hhas_coeffects::HhasCoeffects;
@@ -133,7 +133,7 @@ fn make_memoize_wrapper_method<'a>(
     let is_async = method.fun_kind.is_fasync();
     // __Memoize is not allowed on lambdas, so we never need to inherit the rx
     // level from the declaring scope when we're in a Memoize wrapper
-    let coeffects = HhasCoeffects::from_ast(&method.user_attributes, &method.ctxs, &method.params);
+    let coeffects = HhasCoeffects::from_ast(&method.ctxs, &method.params);
     let is_reified = method
         .tparams
         .iter()
@@ -247,8 +247,8 @@ fn make_memoize_method_with_params_code(
     let deprecation_body =
         emit_body::emit_deprecation_info(args.scope, args.deprecation_info, emitter.systemlib())?;
     let (begin_label, default_value_setters) =
-    // Default value setters belong in the wrapper method not in the original method
-     emit_param::emit_param_default_value_setter(emitter, env, pos, hhas_params)?;
+        // Default value setters belong in the wrapper method not in the original method
+        emit_param::emit_param_default_value_setter(emitter, env, pos, hhas_params)?;
     let fcall_args = {
         let mut fcall_flags = FcallFlags::default();
         if args.flags.contains(Flags::IS_REFIED) {

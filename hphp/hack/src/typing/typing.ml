@@ -1,5 +1,4 @@
 (*
-n
  * Copyright (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
@@ -21,7 +20,6 @@ open Typing_defs
 open Typing_env_types
 open Utils
 open Typing_helpers
-module FunUtils = Decl_fun_utils
 module TFTerm = Typing_func_terminality
 module TUtils = Typing_utils
 module Reason = Typing_reason
@@ -44,7 +42,6 @@ module EnvFromDef = Typing_env_from_def
 module C = Typing_continuations
 module CMap = C.Map
 module Try = Typing_try
-module TR = Typing_reactivity
 module FL = FeatureLogging
 module MakeType = Typing_make_type
 module Cls = Decl_provider.Class
@@ -271,17 +268,18 @@ let rec bind_param env ?(immutable = false) (ty1, param) =
       in
       let enforced =
         match decl_hint with
-        | None -> false
-        | Some ty -> Typing_enforceability.is_enforceable env ty
+        | None -> Unenforced
+        | Some ty -> Typing_enforceability.get_enforcement env ty
       in
       let ty1_enforced = { et_type = ty1; et_enforced = enforced } in
       let expected =
-        ExpectedTy.make_and_allow_coercion
+        ExpectedTy.make_and_allow_coercion_opt
+          env
           param.param_pos
           Reason.URparam
           ty1_enforced
       in
-      let (env, te, ty2) = expr ~expected env e ~allow_awaitable:(*?*) false in
+      let (env, te, ty2) = expr ?expected env e ~allow_awaitable:(*?*) false in
       Typing_sequencing.sequence_check_expr e;
       let (env, ty1) =
         if
@@ -334,26 +332,6 @@ let rec bind_param env ?(immutable = false) (ty1, param) =
       Env.set_using_var env id
     else
       env
-  in
-  let env =
-    match get_param_mutability param with
-    | Some Param_borrowed_mutable ->
-      Env.add_mutable_var
-        env
-        id
-        (param.param_pos, Typing_mutability_env.Borrowed)
-    | Some Param_owned_mutable ->
-      Env.add_mutable_var env id (param.param_pos, Typing_mutability_env.Mutable)
-    | Some Param_maybe_mutable ->
-      Env.add_mutable_var
-        env
-        id
-        (param.param_pos, Typing_mutability_env.MaybeMutable)
-    | None ->
-      Env.add_mutable_var
-        env
-        id
-        (param.param_pos, Typing_mutability_env.Immutable)
   in
   (env, tparam)
 
@@ -704,9 +682,7 @@ and stmt_ env pos st =
           {
             return_type;
             return_disposable;
-            return_mutable;
             return_explicit;
-            return_void_to_rx;
             return_dynamically_callable = _;
           } =
       Env.get_return env
@@ -727,23 +703,6 @@ and stmt_ env pos st =
     if return_disposable then enforce_return_disposable env e;
     let (env, te, rty) =
       expr ~is_using_clause:return_disposable ?expected env e
-    in
-    let env =
-      if not (equal_reactivity (env_reactivity env) Nonreactive) then
-        Typing_mutability.handle_value_in_return
-          ~function_returns_mutable:return_mutable
-          ~function_returns_void_for_rx:return_void_to_rx
-          env
-          env.function_pos
-          te
-      else
-        env
-    in
-    let return_type =
-      {
-        return_type with
-        et_type = TR.strip_condition_type_in_return env return_type.et_type;
-      }
     in
     (* This is a unify_error rather than a return_type_mismatch because the return
      * statement is the problem, not the return type itself. *)
@@ -1059,27 +1018,17 @@ and case_list parent_locals ty env switch_pos cl =
     LEnv.drop_cont env C.Fallthrough
   in
   let check_fallthrough env switch_pos case_pos block rest_of_list ~is_default =
-    if not @@ List.is_empty block then
-      match rest_of_list with
-      | []
-      | [Default (_, [])] ->
-        ()
-      | _ ->
-        begin
-          match LEnv.get_cont_option env C.Next with
-          | Some _ ->
-            if is_default then
-              Errors.default_fallthrough switch_pos
-            else
-              Errors.case_fallthrough switch_pos case_pos
-          | None -> ()
-        end
-    (* match *)
-    (* match *)
-    else
-      ()
+    if (not (List.is_empty block)) && not (List.is_empty rest_of_list) then
+      match LEnv.get_cont_option env C.Next with
+      | Some _ ->
+        if is_default then
+          Errors.default_fallthrough switch_pos
+        else
+          Errors.case_fallthrough switch_pos case_pos
+      | None -> ()
   in
-  let make_exhaustive_equivalent_case_list env cl =
+  let env =
+    (* below, we try to find out if the switch is exhaustive *)
     let has_default =
       List.exists cl ~f:(function
           | Default _ -> true
@@ -1098,6 +1047,7 @@ and case_list parent_locals ty env switch_pos cl =
           ty
           Errors.unify_error
     in
+    (* leverage that enums are checked for exhaustivity *)
     let is_enum =
       let top_type =
         MakeType.class_type
@@ -1107,14 +1057,12 @@ and case_list parent_locals ty env switch_pos cl =
       in
       Typing_subtype.is_sub_type_for_coercion env ty top_type
     in
-    (* If there is no default case and this is not a switch on enum (since
-     * exhaustiveness is garanteed elsewhere on enums),
-     * then add a default case for control flow correctness
-     *)
+    (* register that the runtime may throw in case we cannot prove
+       that the switch is exhaustive *)
     if has_default || is_enum then
-      (env, cl, false)
+      env
     else
-      (env, cl @ [Default (Pos.none, [])], true)
+      might_throw env
   in
   let rec case_list env = function
     | [] -> (env, [])
@@ -1132,17 +1080,7 @@ and case_list parent_locals ty env switch_pos cl =
       let (env, tcl) = case_list env rl in
       (env, Aast.Case (te, tb) :: tcl)
   in
-  let (env, cl, added_empty_default) =
-    make_exhaustive_equivalent_case_list env cl
-  in
-  let (env, tcl) = case_list env cl in
-  let tcl =
-    if added_empty_default then
-      List.take tcl (List.length tcl - 1)
-    else
-      tcl
-  in
-  (env, tcl)
+  case_list env cl
 
 and catch catchctx env (sid, exn_lvar, b) =
   let env = LEnv.replace_cont env C.Next catchctx in
@@ -1198,34 +1136,22 @@ and as_expr env ty1 pe e =
   (Typing_solver.close_tyvars_and_solve env Errors.unify_error, tk, tv)
 
 and bind_as_expr env p ty1 ty2 aexpr =
-  let check_reassigned_mutable env te =
-    if Env.env_local_reactive env then
-      Typing_mutability.handle_assignment_mutability env te None
-    else
-      env
-  in
   match aexpr with
   | As_v ev ->
     let (env, te, _) = assign p env ev ty2 in
-    let env = check_reassigned_mutable env te in
     (env, Aast.As_v te)
   | Await_as_v (p, ev) ->
     let (env, te, _) = assign p env ev ty2 in
-    let env = check_reassigned_mutable env te in
     (env, Aast.Await_as_v (p, te))
   | As_kv ((p, Lvar ((_, k) as id)), ev) ->
     let env = set_valid_rvalue p env k ty1 in
     let (env, te, _) = assign p env ev ty2 in
     let tk = Tast.make_typed_expr p ty1 (Aast.Lvar id) in
-    let env = check_reassigned_mutable env tk in
-    let env = check_reassigned_mutable env te in
     (env, Aast.As_kv (tk, te))
   | Await_as_kv (p, (p1, Lvar ((_, k) as id)), ev) ->
     let env = set_valid_rvalue p env k ty1 in
     let (env, te, _) = assign p env ev ty2 in
     let tk = Tast.make_typed_expr p1 ty1 (Aast.Lvar id) in
-    let env = check_reassigned_mutable env tk in
-    let env = check_reassigned_mutable env te in
     (env, Aast.Await_as_kv (p, tk, te))
   | _ ->
     (* TODO Probably impossible, should check that *)
@@ -1545,13 +1471,6 @@ and expr_
         unpacked_element
     in
     let env = forget_fake_members env p e in
-    let env =
-      Typing_reactivity.check_awaitable_immediately_awaited
-        env
-        ty
-        p
-        ~allow_awaitable
-    in
     (env, te, ty)
   in
   match e with
@@ -1573,7 +1492,7 @@ and expr_
           | Set
           | ImmSet
           | Keyset ->
-            arraykey_value p class_name
+            arraykey_value p class_name true
           | Vector
           | ImmVector
           | Vec ->
@@ -1586,20 +1505,26 @@ and expr_
           fun value_ty ->
             MakeType.class_type (Reason.Rwitness p) class_name [value_ty] )
       | Varray _ ->
-        let unif = TypecheckerOptions.array_unification (Env.get_tcopt env) in
-        ( get_varray_inst,
-          "varray",
-          array_value,
-          (fun th elements ->
-            if unif then
-              Aast.ValCollection (Vec, th, elements)
-            else
-              Aast.Varray (th, elements)),
-          fun value_ty ->
-            if unif then
-              MakeType.vec (Reason.Rarray_unification p) value_ty
-            else
-              MakeType.varray (Reason.Rwitness p) value_ty )
+        let unification =
+          TypecheckerOptions.array_unification (Env.get_tcopt env)
+        in
+        if unification then
+          ( get_vc_inst Vec,
+            "varray",
+            array_value,
+            (fun th elements -> Aast.ValCollection (Vec, th, elements)),
+            fun value_ty ->
+              MakeType.varray
+                ~unification
+                (Reason.Rarray_unification p)
+                value_ty )
+        else
+          ( get_varray_inst,
+            "varray",
+            array_value,
+            (fun th elements -> Aast.Varray (th, elements)),
+            fun value_ty ->
+              MakeType.varray ~unification (Reason.Rwitness p) value_ty )
       | _ ->
         (* The parent match makes this case impossible *)
         failwith "impossible match case"
@@ -1645,19 +1570,21 @@ and expr_
           (fun k v -> MakeType.class_type (Reason.Rwitness p) class_name [k; v])
         )
       | Darray _ ->
-        let unif = TypecheckerOptions.array_unification (Env.get_tcopt env) in
-        ( get_darray_inst p,
-          "darray",
-          (fun th pairs ->
-            if unif then
-              Aast.KeyValCollection (Dict, th, pairs)
-            else
-              Aast.Darray (th, pairs)),
-          fun k v ->
-            if unif then
-              MakeType.dict (Reason.Rarray_unification p) k v
-            else
-              MakeType.darray (Reason.Rwitness p) k v )
+        let unification =
+          TypecheckerOptions.array_unification (Env.get_tcopt env)
+        in
+        let name = "darray" in
+        if unification then
+          ( get_kvc_inst p Dict,
+            name,
+            (fun th pairs -> Aast.KeyValCollection (Dict, th, pairs)),
+            fun k v ->
+              MakeType.darray ~unification (Reason.Rarray_unification p) k v )
+        else
+          ( get_darray_inst p,
+            name,
+            (fun th pairs -> Aast.Darray (th, pairs)),
+            (fun k v -> MakeType.darray ~unification (Reason.Rwitness p) k v) )
       | _ ->
         (* The parent match makes this case impossible *)
         failwith "impossible match case"
@@ -1694,7 +1621,7 @@ and expr_
         (Reason.Rtype_variable_generics (p, "Tk", strip_ns name))
         env
         kl
-        (arraykey_value p name)
+        (arraykey_value p name false)
     in
     let (env, tvl, v) =
       compute_exprs_and_supertype
@@ -1805,8 +1732,8 @@ and expr_
       let ty = err_witness env cst_pos in
       make_result env cst_pos (Aast.Id id) ty
     | None -> make_result env p (Aast.Id id) (Typing_utils.mk_tany env cst_pos)
-    | Some ty ->
-      let (env, ty) = Phase.localize_with_self ~pos:p env ty in
+    | Some const ->
+      let (env, ty) = Phase.localize_with_self ~pos:p env const.cd_type in
       make_result env p (Aast.Id id) ty)
   | Method_id (instance, meth) ->
     (* Method_id is used when creating a "method pointer" using the magic
@@ -1856,9 +1783,11 @@ and expr_
       let params =
         List.map (Cls.tparams class_) (fun { tp_name = (p, n); _ } ->
             (* TODO(T69551141) handle type arguments for Tgeneric *)
-            MakeType.generic (Reason.Rwitness p) n)
+            MakeType.generic (Reason.Rwitness_from_decl p) n)
       in
-      let obj_type = MakeType.apply (Reason.Rwitness p) pos_cname params in
+      let obj_type =
+        MakeType.apply (Reason.Rwitness_from_decl p) pos_cname params
+      in
       let ety_env =
         {
           (Phase.env_with_self env) with
@@ -1913,7 +1842,6 @@ and expr_
             ft_ret = fty.ft_ret;
             (* propagate 'is_coroutine' from the method being called*)
             ft_flags = fty.ft_flags;
-            ft_reactive = fty.ft_reactive;
             ft_ifc_decl = fty.ft_ifc_decl;
           }
         in
@@ -2016,8 +1944,9 @@ and expr_
             on_error = Errors.unify_error_at p;
           }
         in
-        (match deref ty with
-        | (r, Tfun ft) ->
+        let r = get_reason ty |> Typing_reason.localize in
+        (match get_node ty with
+        | Tfun ft ->
           let ft =
             Typing_enforceability.compute_enforced_and_pessimize_fun_type env ft
           in
@@ -2059,7 +1988,7 @@ and expr_
           | Vprotected _ ->
             Errors.protected_class_meth ~def_pos ~use_pos;
             expr_error env r outer)
-        | (r, _) ->
+        | _ ->
           Errors.internal_error p "We have a method which isn't callable";
           expr_error env r outer)))
   | Lplaceholder p ->
@@ -2248,7 +2177,7 @@ and expr_
   | Binop (Ast_defs.Eq op_opt, e1, e2) ->
     let make_result env p te ty =
       let (env, te, ty) = make_result env p te ty in
-      let env = Typing_reactivity.check_assignment env te in
+      let env = Typing_local_ops.check_assignment env te in
       (env, te, ty)
     in
     (match op_opt with
@@ -2280,15 +2209,6 @@ and expr_
     | None ->
       let (env, te2, ty2) = raw_expr env e2 in
       let (env, te1, ty) = assign p env e1 ty2 in
-      let env =
-        if Env.env_local_reactive env then
-          Typing_mutability.handle_assignment_mutability
-            env
-            te1
-            (Some (snd te2))
-        else
-          env
-      in
       make_result env p (Aast.Binop (Ast_defs.Eq None, te1, te2)) ty)
   | Binop (((Ast_defs.Ampamp | Ast_defs.Barbar) as bop), e1, e2) ->
     let c = Ast_defs.(equal_bop bop Ampamp) in
@@ -2347,19 +2267,12 @@ and expr_
       | Some (ty, pos) -> Env.set_local env dd_var ty pos
     in
     let (env, te, ty) = make_result env p (Aast.Pipe (e0, te1, te2)) ty2 in
-    let env =
-      Typing_reactivity.check_awaitable_immediately_awaited
-        env
-        ty
-        p
-        ~allow_awaitable
-    in
     (env, te, ty)
   | Unop (uop, e) ->
     let (env, te, ty) = raw_expr env e in
     let env = might_throw env in
     let (env, tuop, ty) = Typing_arithmetic.unop p env uop te ty in
-    let env = Typing_reactivity.check_assignment env tuop in
+    let env = Typing_local_ops.check_assignment env te in
     (env, tuop, ty)
   | Eif (c, e1, e2) -> eif env ~expected ?in_await p c e1 e2
   | Class_const ((p, CI sid), pstr)
@@ -2374,13 +2287,15 @@ and expr_
               begin
                 fun { tp_name = (p, x); _ } ->
                 (* TODO(T69551141) handle type arguments for Tgeneric *)
-                MakeType.generic (Reason.Rwitness p) x
+                MakeType.generic (Reason.Rwitness_from_decl p) x
               end
             tparaml
         in
-        let tdef = mk (Reason.Rwitness p, Tapply (sid, params)) in
+        let tdef = mk (Reason.Rwitness_from_decl p, Tapply (sid, params)) in
         let typename =
-          mk (Reason.Rwitness p, Tapply ((p, SN.Classes.cTypename), [tdef]))
+          mk
+            ( Reason.Rwitness_from_decl p,
+              Tapply ((p, SN.Classes.cTypename), [tdef]) )
         in
         let (env, tparams) =
           List.map_env env tparaml (fun env tp ->
@@ -2791,19 +2706,10 @@ and expr_
 
     (* Is the return type declared? *)
     let is_explicit_ret = Option.is_some (hint_of_type_hint f.f_ret) in
-    let reactivity =
-      FunUtils.fun_reactivity_opt env.decl_env f.f_user_attributes
-      |> Option.value
-           ~default:(TR.strip_conditional_reactivity (env_reactivity env))
-    in
     let check_body_under_known_params env ?ret_ty ft : env * _ * locl_ty =
-      let old_reactivity = env_reactivity env in
-      let env = Env.set_env_reactive env reactivity in
-      let ft = { ft with ft_reactive = reactivity } in
       let (env, (tefun, ty, ft)) =
         closure_make ?ret_ty env p f ft idl is_anon
       in
-      let env = Env.set_env_reactive env old_reactivity in
       let inferred_ty =
         mk
           ( Reason.Rwitness p,
@@ -2950,7 +2856,7 @@ and expr_
                 TUtils.is_any env declared_ft_param.fp_type.et_type
               in
               if is_undeclared then
-                let enforced_ty = { et_enforced = false; et_type } in
+                let enforced_ty = { et_enforced = Unenforced; et_type } in
                 { declared_ft_param with fp_type = enforced_ty }
               else
                 declared_ft_param
@@ -3044,55 +2950,32 @@ and expr_
           | `Dynamic -> None
           | `Class (_, class_info, _) -> Some class_info)
     in
-    let (env, _te, obj) =
-      expr env (fst sid, New ((fst sid, cid), [], [], None, fst sid))
+    let (env, te, obj) =
+      (* New statements derived from Xml literals are of the following form:
+       *
+       *   __construct(
+       *     darray<string,mixed> $attributes,
+       *     varray<mixed> $children,
+       *     string $file,
+       *     int $line
+       *   );
+       *)
+      let new_exp = Typing_xhp.rewrite_xml_into_new p sid attrl el in
+      expr ?expected env new_exp
     in
-    let (env, typed_attrs, attr_types) =
-      xhp_attribute_exprs env class_info attrl
+    let tchildren =
+      match te with
+      | (_, New (_, _, [_; (_, Varray (_, children)); _; _], _, _)) -> children
+      | _ ->
+        (* We end up in this case when the cosntructed new expression does
+        not typecheck. *)
+        []
     in
-    let (env, tel) =
-      List.map_env env el ~f:(fun env e ->
-          let (env, te, _) = expr env e in
-          (env, te))
-    in
-    let txml = Aast.Xml (sid, typed_attrs, tel) in
+    let (env, typed_attrs) = xhp_attribute_exprs env class_info attrl sid obj in
+    let txml = Aast.Xml (sid, typed_attrs, tchildren) in
     (match class_info with
     | None -> make_result env p txml (mk (Reason.Runknown_class p, Tobject))
-    | Some class_info ->
-      let env =
-        List.fold_left
-          attr_types
-          ~f:
-            begin
-              fun env attr ->
-              let (namepstr, valpty) = attr in
-              let (valp, valty) = valpty in
-              let (env, (declty, _tal)) =
-                TOG.obj_get
-                  ~obj_pos:(fst sid)
-                  ~is_method:false
-                  ~inst_meth:false
-                  ~nullsafe:None
-                  ~coerce_from_ty:None
-                  ~explicit_targs:[]
-                  ~class_id:cid
-                  ~member_id:namepstr
-                  ~on_error:Errors.unify_error
-                  env
-                  obj
-              in
-              let ureason = Reason.URxhp (Cls.name class_info, snd namepstr) in
-              Typing_coercion.coerce_type
-                valp
-                ureason
-                env
-                valty
-                (MakeType.unenforced declty)
-                Errors.xhp_attribute_does_not_match_hint
-            end
-          ~init:env
-      in
-      make_result env p txml obj)
+    | Some _ -> make_result env p txml obj)
   | Callconv (kind, e) ->
     let (env, te, ty) = expr env e in
     make_result env p (Aast.Callconv (kind, te)) ty
@@ -3103,7 +2986,8 @@ and expr_
         let fdme =
           List.map
             ~f:(fun (k, v) ->
-              match ShapeMap.find_opt k expected_fdm with
+              let tk = TShapeField.of_ast (fun p -> p) k in
+              match TShapeMap.find_opt tk expected_fdm with
               | None -> (k, (v, None))
               | Some sft -> (k, (v, Some (ExpectedTy.make pos ur sft.sft_ty))))
             fdm
@@ -3130,11 +3014,13 @@ and expr_
     in
     let fdm =
       List.fold_left
-        ~f:(fun acc (k, v) -> ShapeMap.add k v acc)
-        ~init:ShapeMap.empty
+        ~f:(fun acc (k, v) ->
+          let tk = TShapeField.of_ast (fun p -> p) k in
+          TShapeMap.add tk v acc)
+        ~init:TShapeMap.empty
         fdm
     in
-    let env = check_shape_keys_validity env p (ShapeMap.keys fdm) in
+    let env = check_shape_keys_validity env p (List.map tfdm ~f:fst) in
     (* Fields are fully known, because this shape is constructed
      * using shape keyword and we know exactly what fields are set. *)
     make_result
@@ -3170,16 +3056,45 @@ and class_const ?(incl_tc = false) env p ((cpos, cid), mid) =
       cid
   in
   make_result env p (Aast.Class_const (ce, mid)) const_ty
-  (*****************************************************************************)
-  (* XHP attribute/body helpers. *)
-  (*****************************************************************************)
+
+(*****************************************************************************)
+(* XHP attribute/body helpers. *)
+(*****************************************************************************)
+and xhp_attribute_decl_ty env sid obj attr =
+  let (namepstr, valpty) = attr in
+  let (valp, valty) = valpty in
+  let (env, (declty, _tal)) =
+    TOG.obj_get
+      ~obj_pos:(fst sid)
+      ~is_method:false
+      ~inst_meth:false
+      ~nullsafe:None
+      ~coerce_from_ty:None
+      ~explicit_targs:[]
+      ~class_id:(CI sid)
+      ~member_id:namepstr
+      ~on_error:Errors.unify_error
+      env
+      obj
+  in
+  let ureason = Reason.URxhp (snd sid, snd namepstr) in
+  let env =
+    Typing_coercion.coerce_type
+      valp
+      ureason
+      env
+      valty
+      (MakeType.unenforced declty)
+      Errors.xhp_attribute_does_not_match_hint
+  in
+  (env, declty)
 
 (**
  * Process a spread operator by computing the intersection of XHP attributes
  * between the spread expression and the XHP constructor onto which we're
  * spreading.
  *)
-and xhp_spread_attribute env c_onto valexpr =
+and xhp_spread_attribute env c_onto valexpr sid obj =
   let (p, _) = valexpr in
   let (env, te, valty) = expr env valexpr ~allow_awaitable:(*?*) false in
   (* Build the typed attribute node *)
@@ -3189,39 +3104,52 @@ and xhp_spread_attribute env c_onto valexpr =
     | None -> (env, [])
     | Some class_info -> Typing_xhp.get_spread_attributes env p class_info valty
   in
-  (env, typed_attr, attr_ptys)
+
+  let env =
+    List.fold_left
+      attr_ptys
+      ~f:(fun env attr ->
+        let (env, _) = xhp_attribute_decl_ty env sid obj attr in
+        env)
+      ~init:env
+  in
+  (env, typed_attr)
 
 (**
  * Simple XHP attributes (attr={expr} form) are simply interpreted as a member
- * variable prefixed with a colon, the types of which will be validated later
+ * variable prefixed with a colon.
  *)
-and xhp_simple_attribute env id valexpr =
+and xhp_simple_attribute env id valexpr sid obj =
   let (p, _) = valexpr in
   let (env, te, valty) = expr env valexpr ~allow_awaitable:(*?*) false in
   (* This converts the attribute name to a member name. *)
   let name = ":" ^ snd id in
   let attr_pty = ((fst id, name), (p, valty)) in
-  let typed_attr = Aast.Xhp_simple (id, te) in
-  (env, typed_attr, [attr_pty])
+  let (env, decl_ty) = xhp_attribute_decl_ty env sid obj attr_pty in
+  let typed_attr =
+    Aast.Xhp_simple { xs_name = id; xs_type = decl_ty; xs_expr = te }
+  in
+  (env, typed_attr)
 
 (**
  * Typecheck the attribute expressions - this just checks that the expressions are
  * valid, not that they match the declared type for the attribute and,
  * in case of spreads, makes sure they are XHP.
  *)
-and xhp_attribute_exprs env cid attrl =
-  let handle_attr (env, typed_attrl, attr_ptyl) attr =
-    let (env, typed_attr, attr_ptys) =
+and xhp_attribute_exprs env cls_decl attrl sid obj =
+  let handle_attr (env, typed_attrl) attr =
+    let (env, typed_attr) =
       match attr with
-      | Xhp_simple (id, valexpr) -> xhp_simple_attribute env id valexpr
-      | Xhp_spread valexpr -> xhp_spread_attribute env cid valexpr
+      | Xhp_simple { xs_name = id; xs_expr = valexpr; _ } ->
+        xhp_simple_attribute env id valexpr sid obj
+      | Xhp_spread valexpr -> xhp_spread_attribute env cls_decl valexpr sid obj
     in
-    (env, typed_attr :: typed_attrl, attr_ptys @ attr_ptyl)
+    (env, typed_attr :: typed_attrl)
   in
-  let (env, typed_attrl, attr_ptyl) =
-    List.fold_left ~f:handle_attr ~init:(env, [], []) attrl
+  let (env, typed_attrl) =
+    List.fold_left ~f:handle_attr ~init:(env, []) attrl
   in
-  (env, List.rev typed_attrl, List.rev attr_ptyl)
+  (env, List.rev typed_attrl)
 
 (*****************************************************************************)
 (* Anonymous functions & lambdas. *)
@@ -3296,7 +3224,8 @@ and closure_bind_variadic env vparam variadic_ty =
   in
   let r = Reason.Rvar_param pos in
   let arr_values = mk (r, get_node ty) in
-  let ty = MakeType.varray r arr_values in
+  let unification = TypecheckerOptions.array_unification (Env.get_tcopt env) in
+  let ty = MakeType.varray ~unification r arr_values in
   let (env, t_variadic) = bind_param env (ty, vparam) in
   (env, t_variadic)
 
@@ -3679,9 +3608,12 @@ and check_expected_ty message env inferred_ty (expected : ExpectedTy.t option) =
             [
               Log_head
                 ( Printf.sprintf
-                    "Typing.check_expected_ty %s enforced=%b"
+                    "Typing.check_expected_ty %s enforced=%s"
                     message
-                    ty.et_enforced,
+                    (match ty.et_enforced with
+                    | Unenforced -> "unenforced"
+                    | Enforced -> "enforced"
+                    | PartiallyEnforced -> "partially enforced"),
                   [
                     Log_type ("inferred_ty", inferred_ty);
                     Log_type ("expected_ty", ty.et_type);
@@ -3935,14 +3867,14 @@ and instantiable_cid ?(exact = Nonexact) p env cid explicit_targs :
   (env, tal, te, classes)
 
 and uninstantiable_error env reason_pos cid c_tc_pos c_name c_usage_pos c_ty =
-  let reason_msgl =
+  let reason =
     match cid with
     | CIexpr _ ->
       let ty_str = "This would be " ^ Typing_print.error env c_ty in
-      [(reason_pos, ty_str)]
-    | _ -> []
+      Some (reason_pos, ty_str)
+    | _ -> None
   in
-  Errors.uninstantiable_class c_usage_pos c_tc_pos c_name reason_msgl
+  Errors.uninstantiable_class c_usage_pos c_tc_pos c_name reason
 
 and coerce_to_throwable pos env exn_ty =
   let throwable_ty = MakeType.throwable (Reason.Rthrow pos) in
@@ -3951,7 +3883,7 @@ and coerce_to_throwable pos env exn_ty =
     Reason.URthrow
     env
     exn_ty
-    { et_type = throwable_ty; et_enforced = false }
+    { et_type = throwable_ty; et_enforced = Unenforced }
     Errors.unify_error
 
 and shape_field_pos = function
@@ -3961,7 +3893,9 @@ and shape_field_pos = function
   | Ast_defs.SFclass_const ((cls_pos, _), (mem_pos, _)) ->
     Pos.btw cls_pos mem_pos
 
-and check_shape_keys_validity env pos keys =
+and check_shape_keys_validity :
+    env -> pos -> Ast_defs.shape_field_name list -> env =
+ fun env pos keys ->
   (* If the key is a class constant, get its class name and type. *)
   let get_field_info env key =
     let key_pos = shape_field_pos key in
@@ -4263,16 +4197,22 @@ and array_value ~(expected : ExpectedTy.t option) env x =
   (env, (te, ty))
 
 and arraykey_value
-    p class_name ~(expected : ExpectedTy.t option) env ((pos, _) as x) =
+    p class_name is_set ~(expected : ExpectedTy.t option) env ((pos, _) as x) =
   let (env, (te, ty)) = array_value ~expected env x in
-  let ty_arraykey = MakeType.arraykey (Reason.Ridx_dict pos) in
+  let (ty_arraykey, reason) =
+    if is_set then
+      ( MakeType.arraykey (Reason.Rset_element pos),
+        Reason.set_element class_name )
+    else
+      (MakeType.arraykey (Reason.Ridx_dict pos), Reason.index_class class_name)
+  in
   let env =
     Typing_coercion.coerce_type
       p
-      (Reason.index_class class_name)
+      reason
       env
       ty
-      { et_type = ty_arraykey; et_enforced = true }
+      { et_type = ty_arraykey; et_enforced = Enforced }
       Errors.unify_error
   in
   (env, (te, ty))
@@ -4311,8 +4251,8 @@ and check_class_get env p def_pos cid mid ce e function_pointer =
   match e with
   | CIself when get_ce_abstract ce ->
     begin
-      match get_class_type (Env.get_self env) with
-      | Some ((_, self), _, _) ->
+      match Env.get_self_id env with
+      | Some self ->
         (* at runtime, self:: in a trait is a call to whatever
          * self:: is in the context of the non-trait "use"-ing
          * the trait's code *)
@@ -4354,8 +4294,8 @@ and call_parent_construct pos env el unpacked_element =
     (* continue here *)
     let ty = Typing_utils.mk_tany env pos in
     let default = (env, [], None, ty, ty, ty) in
-    (match get_class_type (Env.get_self env) with
-    | Some ((_, self), _, _) ->
+    (match Env.get_self_id env with
+    | Some self ->
       (match Env.get_class env self with
       | Some trait when Ast_defs.(equal_class_kind (Cls.kind trait) Ctrait) ->
         (match trait_most_concrete_req_class trait env with
@@ -4420,37 +4360,11 @@ and dispatch_call
     if is_return_disposable_fun_type env fty && not is_using_clause then
       Errors.invalid_new_disposable p
   in
-  let dispatch_id env ((_, x) as id) =
+  let dispatch_id env ((_, _) as id) =
     let (env, fty, tal) = fun_type_of_id env id explicit_targs el in
     check_disposable_in_return env fty;
     let (env, (tel, typed_unpack_element, ty)) =
       call ~expected p env fty el unpacked_element
-    in
-    let is_mutable = String.equal x SN.Rx.mutable_ in
-    let is_move = String.equal x SN.Rx.move in
-    let is_freeze = String.equal x SN.Rx.freeze in
-    (* error when rx builtins are used in non-reactive context *)
-    if not (Env.env_local_reactive env) then
-      if is_mutable then
-        Errors.mutable_in_nonreactive_context p
-      else if is_move then
-        Errors.move_in_nonreactive_context p
-      else if is_freeze then
-        Errors.freeze_in_nonreactive_context p;
-
-    (* ban unpacking when calling builtings *)
-    if (is_mutable || is_move || is_freeze) && Option.is_some unpacked_element
-    then
-      Errors.unpacking_disallowed_builtin_function p x;
-
-    (* adjust env for Rx\freeze or Rx\move calls *)
-    let env =
-      if is_freeze then
-        Typing_mutability.freeze_local p env tel
-      else if is_move then
-        Typing_mutability.move_local p env tel
-      else
-        env
     in
     make_call
       env
@@ -4469,9 +4383,6 @@ and dispatch_call
         []
         e1
     in
-    let this_ty =
-      mk (Reason.Rwitness fpos, TUtils.this_of (Env.get_self env))
-    in
     (* In static context, you can only call parent::foo() on static methods.
      * In instance context, you can call parent:foo() on static
      * methods as well as instance methods
@@ -4482,17 +4393,8 @@ and dispatch_call
       || class_contains_smethod env ty1 m
     in
     let (env, (fty, tal)) =
-      if is_static then
-        class_get
-          ~coerce_from_ty:None
-          ~is_method:true
-          ~is_const:false
-          ~explicit_targs
-          env
-          ty1
-          m
-          e1
-      else
+      match Env.get_self_ty env with
+      | Some this_ty when not is_static ->
         (* parent::nonStaticFunc() is really weird. It's calling a method
          * defined on the parent class, but $this is still the child class.
          *)
@@ -4509,28 +4411,20 @@ and dispatch_call
           ~parent_ty:ty1
           env
           this_ty
+      | _ ->
+        class_get
+          ~coerce_from_ty:None
+          ~is_method:true
+          ~is_const:false
+          ~explicit_targs
+          env
+          ty1
+          m
+          e1
     in
     check_disposable_in_return env fty;
-    let ty =
-      if Nast.equal_class_id_ e1 CIparent then
-        this_ty
-      else
-        ty1
-    in
     let (env, (tel, typed_unpack_element, ty)) =
-      call
-        ~expected
-        ~method_call_info:
-          (TR.make_call_info
-             ~receiver_is_self:(Nast.equal_class_id_ e1 CIself)
-             ~is_static
-             ty
-             (snd m))
-        p
-        env
-        fty
-        el
-        unpacked_element
+      call ~expected p env fty el unpacked_element
     in
     make_call
       env
@@ -4549,6 +4443,20 @@ and dispatch_call
       | echo when String.equal echo SN.SpecialFunctions.echo ->
         let (env, tel, _) = exprs ~accept_using_var:true env el in
         make_call_special env id tel (MakeType.void (Reason.Rwitness pos))
+      (* `unsafe_cast` *)
+      | unsafe_cast when String.equal unsafe_cast SN.PseudoFunctions.unsafe_cast
+        ->
+        if
+          Int.(List.length el = 1)
+          && TypecheckerOptions.ignore_unsafe_cast (Env.get_tcopt env)
+        then
+          let original_expr = List.hd_exn el in
+          expr env original_expr
+        else (
+          Errors.unsafe_cast p;
+          (* dispatch_id also covers arity errors *)
+          dispatch_id env id
+        )
       (* Special function `isset` *)
       | isset when String.equal isset SN.PseudoFunctions.isset ->
         let (env, tel, _) =
@@ -4560,9 +4468,9 @@ and dispatch_call
       (* Special function `unset` *)
       | unset when String.equal unset SN.PseudoFunctions.unset ->
         let (env, tel, _) = exprs env el in
-        let env = Typing_reactivity.check_unset_target env tel in
         if Option.is_some unpacked_element then
           Errors.unpacking_disallowed_builtin_function p unset;
+        let env = Typing_local_ops.check_unset_target env tel in
         let checked_unset_error =
           if Partial.should_check_error (Env.get_mode env) 4135 then
             Errors.unset_nonidx_in_strict
@@ -4580,6 +4488,9 @@ and dispatch_call
             let (env, _te, ty) = expr env ea in
             let r = Reason.Rwitness p in
             let tmixed = MakeType.mixed r in
+            let unification =
+              TypecheckerOptions.array_unification (Env.get_tcopt env)
+            in
             let super =
               mk
                 ( Reason.Rnone,
@@ -4588,7 +4499,7 @@ and dispatch_call
                       MakeType.dynamic r;
                       MakeType.dict r tmixed tmixed;
                       MakeType.keyset r tmixed;
-                      MakeType.darray r tmixed tmixed;
+                      MakeType.darray ~unification r tmixed tmixed;
                     ] )
             in
             SubType.sub_type_or_fail env ty super (fun () ->
@@ -4637,7 +4548,10 @@ and dispatch_call
           match deref ety with
           | (r, Tvarray tv) ->
             let (env, tv) = get_value_type env tv in
-            (env, MakeType.varray r tv)
+            let unification =
+              TypecheckerOptions.array_unification (Env.get_tcopt env)
+            in
+            (env, MakeType.varray ~unification r tv)
           | (r, Tunion tyl) ->
             let (env, tyl) =
               List.map_env env tyl get_array_filter_return_type
@@ -4653,6 +4567,9 @@ and dispatch_call
           | (r, _) ->
             let (env, tk) = Env.fresh_type env p in
             let (env, tv) = Env.fresh_type env p in
+            let unification =
+              TypecheckerOptions.array_unification (Env.get_tcopt env)
+            in
             Errors.try_
               (fun () ->
                 let keyed_container_type =
@@ -4666,7 +4583,8 @@ and dispatch_call
                     Errors.unify_error
                 in
                 let (env, tv) = get_value_type env tv in
-                (env, MakeType.darray r (explain_array_filter tk) tv))
+                ( env,
+                  MakeType.darray ~unification r (explain_array_filter tk) tv ))
               (fun _ ->
                 Errors.try_
                   (fun () ->
@@ -4677,6 +4595,7 @@ and dispatch_call
                     let (env, tv) = get_value_type env tv in
                     ( env,
                       MakeType.darray
+                        ~unification
                         r
                         (explain_array_filter (MakeType.arraykey r))
                         tv ))
@@ -4744,7 +4663,13 @@ and dispatch_call
             env * (env -> locl_ty -> env * locl_ty) =
           let (env, x) = Env.expand_type env x in
           match deref x with
-          | (r, Tvarray _) -> (env, (fun env tr -> (env, MakeType.varray r tr)))
+          | (r, Tvarray _) ->
+            ( env,
+              fun env tr ->
+                let unification =
+                  TypecheckerOptions.array_unification (Env.get_tcopt env)
+                in
+                (env, MakeType.varray ~unification r tr) )
           | (r, Tany _) ->
             (env, (fun env _ -> (env, mk (r, Typing_utils.tany env))))
           | (r, Terr) -> (env, (fun env _ -> (env, TUtils.terr env r)))
@@ -4767,17 +4692,20 @@ and dispatch_call
           | (r, _) ->
             let (env, tk) = Env.fresh_type env p in
             let (env, tv) = Env.fresh_type env p in
+            let unification =
+              TypecheckerOptions.array_unification (Env.get_tcopt env)
+            in
             let try_vector env =
               let vector_type = MakeType.const_vector r_fty tv in
               let env = SubType.sub_type env x vector_type Errors.unify_error in
-              (env, (fun env tr -> (env, MakeType.varray r tr)))
+              (env, (fun env tr -> (env, MakeType.varray ~unification r tr)))
             in
             let try_keyed_container env =
               let keyed_container_type = MakeType.keyed_container r_fty tk tv in
               let env =
                 SubType.sub_type env x keyed_container_type Errors.unify_error
               in
-              (env, (fun env tr -> (env, MakeType.darray r tk tr)))
+              (env, (fun env tr -> (env, MakeType.darray ~unification r tk tr)))
             in
             let try_container env =
               let container_type = MakeType.container r_fty tv in
@@ -4785,7 +4713,8 @@ and dispatch_call
                 SubType.sub_type env x container_type Errors.unify_error
               in
               ( env,
-                (fun env tr -> (env, MakeType.darray r (MakeType.arraykey r) tr))
+                fun env tr ->
+                  (env, MakeType.darray ~unification r (MakeType.arraykey r) tr)
               )
             in
             let (env, tr) =
@@ -5017,20 +4946,7 @@ and dispatch_call
     in
     check_disposable_in_return env tfty;
     let (env, (tel, typed_unpack_element, ty)) =
-      call
-        ~nullsafe
-        ~expected
-        ~method_call_info:
-          (TR.make_call_info
-             ~receiver_is_self:false
-             ~is_static:false
-             ty1
-             (snd m))
-        p
-        env
-        tfty
-        el
-        unpacked_element
+      call ~nullsafe ~expected p env tfty el unpacked_element
     in
     make_call
       env
@@ -5119,21 +5035,7 @@ and dispatch_call
     in
     check_disposable_in_return env method_ty;
     let (env, (typed_params, typed_unpack_element, ret_ty)) =
-      call
-        ~nullsafe
-        ~expected
-        ~method_call_info:
-          (TR.make_call_info
-             ~receiver_is_self:false
-             ~is_static:false
-             receiver_ty
-             (snd meth))
-        ?in_await
-        p
-        env
-        method_ty
-        el
-        unpacked_element
+      call ~nullsafe ~expected ?in_await p env method_ty el unpacked_element
     in
     (* If the call is nullsafe AND the receiver is nullable,
        make the return type nullable too *)
@@ -5239,7 +5141,7 @@ and fun_type_of_id env x tal el =
             env
             ft)
       in
-      let fty = mk (get_reason fe_type, Tfun ft) in
+      let fty = mk (get_reason fe_type |> Typing_reason.localize, Tfun ft) in
       TVis.check_deprecated ~use_pos ~def_pos fe_deprecated;
       (env, fty, tal)
     | _ -> failwith "Expected function type")
@@ -5538,7 +5440,10 @@ and class_get_
                     env
                     ft)
               in
-              (env, mk (r, Tfun ft), false, explicit_targs)
+              ( env,
+                mk (Typing_reason.localize r, Tfun ft),
+                Unenforced,
+                explicit_targs )
             (* unused *)
             | _ ->
               let { et_type; et_enforced } =
@@ -5726,8 +5631,8 @@ and static_class_id
   let make_result env tal te ty = (env, tal, ((p, ty), te), ty) in
   function
   | CIparent ->
-    (match get_class_type (Env.get_self env) with
-    | Some ((_, self), _, _) ->
+    (match Env.get_self_id env with
+    | Some self ->
       (match Env.get_class env self with
       | Some trait when Ast_defs.(equal_class_kind (Cls.kind trait) Ctrait) ->
         (match trait_most_concrete_req_class trait env with
@@ -5774,15 +5679,25 @@ and static_class_id
         Aast.CIparent
         (mk (r, TUtils.this_of (mk (r, get_node parent)))))
   | CIstatic ->
-    let this = mk (Reason.Rwitness p, TUtils.this_of (Env.get_self env)) in
-    make_result env [] Aast.CIstatic this
-  | CIself ->
-    let self =
-      match get_node (Env.get_self env) with
-      | Tclass (c, _, tyl) -> Tclass (c, exact, tyl)
-      | self -> self
+    let ty =
+      match Env.get_self_ty env with
+      | Some ty -> mk (Reason.Rwitness p, TUtils.this_of ty)
+      | None ->
+        (* Naming phase has already checked and replaced CIstatic with CI if outside a class *)
+        Errors.internal_error p "Unexpected CIstatic";
+        Typing_utils.mk_tany env p
     in
-    make_result env [] Aast.CIself (mk (Reason.Rwitness p, self))
+    make_result env [] Aast.CIstatic ty
+  | CIself ->
+    let ty =
+      match Env.get_self_class_type env with
+      | Some (c, _, tyl) -> mk (Reason.Rwitness p, Tclass (c, exact, tyl))
+      | None ->
+        (* Naming phase has already checked and replaced CIself with CI if outside a class *)
+        Errors.internal_error p "Unexpected CIself";
+        Typing_utils.mk_tany env p
+    in
+    make_result env [] Aast.CIself ty
   | CI ((p, id) as c) ->
     begin
       match Env.get_pos_and_kind_of_generic env id with
@@ -5876,10 +5791,10 @@ and static_class_id
 
 and call_construct p env class_ params el unpacked_element cid cid_ty =
   let cid_ty =
-    if Nast.equal_class_id_ cid CIparent then
-      mk (Reason.Rwitness p, TUtils.this_of (Env.get_self env))
-    else
-      cid_ty
+    match Env.get_self_ty env with
+    | Some ty when Nast.equal_class_id_ cid CIparent ->
+      mk (Reason.Rwitness p, TUtils.this_of ty)
+    | _ -> cid_ty
   in
   let ety_env =
     {
@@ -5902,71 +5817,69 @@ and call_construct p env class_ params el unpacked_element cid cid_ty =
       env
       (Cls.where_constraints class_)
   in
-  if Cls.is_xhp class_ then
-    (env, [], None, TUtils.mk_tany env p)
-  else
-    let cstr = Env.get_construct env class_ in
-    let mode = Env.get_mode env in
-    match fst cstr with
-    | None ->
-      if
-        ((not (List.is_empty el)) || Option.is_some unpacked_element)
-        && (FileInfo.is_strict mode || FileInfo.(equal_mode mode Mpartial))
-        && Cls.members_fully_known class_
-      then
-        Errors.constructor_no_args p;
-      let (env, tel, _tyl) = exprs env el ~allow_awaitable:(*?*) false in
-      (env, tel, None, TUtils.terr env Reason.Rnone)
-    | Some { ce_visibility = vis; ce_type = (lazy m); ce_deprecated; _ } ->
-      let def_pos = get_pos m in
-      TVis.check_obj_access ~use_pos:p ~def_pos env vis;
-      TVis.check_deprecated ~use_pos:p ~def_pos ce_deprecated;
-      (* Obtain the type of the constructor *)
-      let (env, m) =
-        match deref m with
-        | (r, Tfun ft) ->
-          let ft =
-            Typing_enforceability.compute_enforced_and_pessimize_fun_type env ft
-          in
-          (* This creates type variables for non-denotable type parameters on constructors.
-           * These are notably different from the tparams on the class, which are handled
-           * at the top of this function. User-written type parameters on constructors
-           * are still a parse error. This is a no-op if ft.ft_tparams is empty. *)
-          let (env, implicit_constructor_targs) =
-            Phase.localize_targs
-              ~check_well_kinded:true
-              ~is_method:true
+  let cstr = Env.get_construct env class_ in
+  let mode = Env.get_mode env in
+  match fst cstr with
+  | None ->
+    if
+      ((not (List.is_empty el)) || Option.is_some unpacked_element)
+      && (FileInfo.is_strict mode || FileInfo.(equal_mode mode Mpartial))
+      && Cls.members_fully_known class_
+    then
+      Errors.constructor_no_args p;
+    let (env, tel, _tyl) = exprs env el ~allow_awaitable:(*?*) false in
+    (env, tel, None, TUtils.terr env Reason.Rnone)
+  | Some { ce_visibility = vis; ce_type = (lazy m); ce_deprecated; _ } ->
+    let def_pos = get_pos m in
+    TVis.check_obj_access ~use_pos:p ~def_pos env vis;
+    TVis.check_deprecated ~use_pos:p ~def_pos ce_deprecated;
+    (* Obtain the type of the constructor *)
+    let (env, m) =
+      let r = get_reason m |> Typing_reason.localize in
+      match get_node m with
+      | Tfun ft ->
+        let ft =
+          Typing_enforceability.compute_enforced_and_pessimize_fun_type env ft
+        in
+        (* This creates type variables for non-denotable type parameters on constructors.
+         * These are notably different from the tparams on the class, which are handled
+         * at the top of this function. User-written type parameters on constructors
+         * are still a parse error. This is a no-op if ft.ft_tparams is empty. *)
+        let (env, implicit_constructor_targs) =
+          Phase.localize_targs
+            ~check_well_kinded:true
+            ~is_method:true
+            ~def_pos
+            ~use_pos:p
+            ~use_name:"constructor"
+            env
+            ft.ft_tparams
+            []
+        in
+        let (env, ft) =
+          Phase.(
+            localize_ft
+              ~instantiation:
+                {
+                  use_name = "constructor";
+                  use_pos = p;
+                  explicit_targs = implicit_constructor_targs;
+                }
+              ~ety_env
               ~def_pos
-              ~use_pos:p
-              ~use_name:"constructor"
               env
-              ft.ft_tparams
-              []
-          in
-          let (env, ft) =
-            Phase.(
-              localize_ft
-                ~instantiation:
-                  {
-                    use_name = "constructor";
-                    use_pos = p;
-                    explicit_targs = implicit_constructor_targs;
-                  }
-                ~ety_env
-                ~def_pos
-                env
-                ft)
-          in
-          (env, mk (r, Tfun ft))
-        | (r, _) ->
-          Errors.internal_error p "Expected function type for constructor";
-          let ty = TUtils.terr env r in
-          (env, ty)
-      in
-      let (env, (tel, typed_unpack_element, _ty)) =
-        call ~expected:None p env m el unpacked_element
-      in
-      (env, tel, typed_unpack_element, m)
+              ft)
+        in
+        (env, mk (r, Tfun ft))
+      | _ ->
+        Errors.internal_error p "Expected function type for constructor";
+        let ty = TUtils.terr env r in
+        (env, ty)
+    in
+    let (env, (tel, typed_unpack_element, _ty)) =
+      call ~expected:None p env m el unpacked_element
+    in
+    (env, tel, typed_unpack_element, m)
 
 and check_arity ?(did_unpack = false) pos pos_def ft (arity : int) =
   let exp_min = Typing_defs.arity_min ft in
@@ -6038,7 +5951,6 @@ and inout_write_back env { fp_type; _ } (_, e) =
 Returns in this order the typed expressions for the arguments, for the variadic arguments, and the return type. *)
 and call
     ~(expected : ExpectedTy.t option)
-    ?(method_call_info : TR.method_call_info option)
     ?(nullsafe : Pos.t option = None)
     ?in_await
     pos
@@ -6080,10 +5992,10 @@ and call
          * coercible iff it's constituent types are. *)
         Option.value_map ~f:(fun u -> el @ [u]) ~default:el unpacked_element
       in
-      let _expected_arg_ty = ExpectedTy.make pos Reason.URparam ty in
       let (env, tel) =
         List.map_env env el (fun env elt ->
-            let (env, te, e_ty) = expr (*~expected:expected_arg_ty*) env elt in
+            (* TODO(sowens): Pass the expected type to expr *)
+            let (env, te, e_ty) = expr env elt in
             let env =
               match elt with
               | (_, Callconv (Ast_defs.Pinout, e1)) ->
@@ -6101,7 +6013,7 @@ and call
                 e_ty
                 {
                   Typing_defs_core.et_type = ty;
-                  Typing_defs_core.et_enforced = false;
+                  Typing_defs_core.et_enforced = Unenforced;
                 }
                 Errors.unify_error
             in
@@ -6220,9 +6132,6 @@ and call
         | param :: paraml -> (false, Some param, paraml)
         | [] -> (true, var_param, paraml)
       in
-      (* TODO: We're using plain String at the moment, until we
-       * introduce actual atom notation (#A instead of "A")
-       *)
       let expand_atom_in_enum env enum_name atom_name =
         let cls = Env.get_class env enum_name in
         match cls with
@@ -6236,7 +6145,10 @@ and call
             (env, Some (te, lty))
           | None ->
             Errors.atom_unknown pos atom_name enum_name;
-            (env, None))
+            let r = Reason.Rwitness pos in
+            let ty = Typing_utils.terr env r in
+            let te = ((pos, ty), EnumAtom atom_name) in
+            (env, Some (te, ty)))
         | None -> (env, None)
       in
       let check_arg env ((pos, arg) as e) opt_param ~is_variadic =
@@ -6286,14 +6198,15 @@ and call
             | Some (te, ty) -> (env, te, ty)
             | None ->
               let expected =
-                ExpectedTy.make_and_allow_coercion
+                ExpectedTy.make_and_allow_coercion_opt
+                  env
                   pos
                   Reason.URparam
                   param.fp_type
               in
               expr
                 ~accept_using_var:(get_fp_accept_disposable param)
-                ~expected
+                ?expected
                 env
                 e
           in
@@ -6390,12 +6303,11 @@ and call
         | Some x -> x
         | None -> failwith "missing parameter in check_args"
       in
-      let (tel, tys) =
+      let (tel, _) =
         let l = List.map rl (fun (_, opt) -> get_param opt) in
         List.unzip l
       in
       let env = check_implicit_args env in
-      let env = TR.check_call env method_call_info pos r2 ft tys in
       let (env, typed_unpack_element, arity, did_unpack) =
         match unpacked_element with
         | None -> (env, None, List.length el, false)
@@ -6479,10 +6391,7 @@ and call
       let () = check_arity ~did_unpack pos pos_def ft arity in
       (* Variadic params cannot be inout so we can stop early *)
       let env = wfold_left2 inout_write_back env ft.ft_params el in
-      let (env, ret_ty) =
-        TR.get_adjusted_return_type env method_call_info ft.ft_ret.et_type
-      in
-      (env, (tel, typed_unpack_element, ret_ty))
+      (env, (tel, typed_unpack_element, ft.ft_ret.et_type))
     | (r, Tvar _)
       when TypecheckerOptions.method_call_inference (Env.get_tcopt env) ->
       (*
@@ -6506,18 +6415,17 @@ and call
             make_fp_flags
               ~mode:FPnormal (* TODO: deal with `inout` parameters *)
               ~accept_disposable:false (* TODO: deal with disposables *)
-              ~mutability:(Some Param_maybe_mutable)
               ~has_default:false
               ~ifc_external:false
               ~ifc_can_call:false
               ~is_atom:false
               ~readonly:false
+              ~const_function:false
           in
           {
             fp_pos = pos;
             fp_name = None;
             fp_type = MakeType.enforced ty;
-            fp_rx_annotation = None;
             fp_flags = flags;
           }
         in
@@ -6546,18 +6454,14 @@ and call
           | Some r -> MakeType.awaitable r return_ty
         in
         let ft_ret = MakeType.enforced return_ty in
-        (* A non-reactive supertype is most permissive: *)
-        let ft_reactive = Nonreactive in
         let ft_flags =
           (* Keep supertype as permissive as possible: *)
           make_ft_flags
             Ast_defs.FSync (* `FSync` fun can still return `Awaitable<_>` *)
-            (Some Param_maybe_mutable)
             ~return_disposable:false (* TODO: deal with disposable return *)
-            ~returns_mutable:false
-            ~returns_void_to_rx:false
             ~returns_readonly:false
             ~readonly_this:false
+            ~const:false
         in
         let ft_ifc_decl = Typing_defs_core.default_ifc_fun_decl in
         let fun_locl_type =
@@ -6568,7 +6472,6 @@ and call
             ft_params;
             ft_implicit_params;
             ft_ret;
-            ft_reactive;
             ft_flags;
             ft_ifc_decl;
           }
@@ -6791,15 +6694,12 @@ and condition
     (* when Rx\IS_ENABLED is false - switch env to non-reactive *)
     let env =
       if not tparamet then
-        let env =
-          if TypecheckerOptions.any_coeffects (Env.get_tcopt env) then
-            let env = Typing_local_ops.enforce_rx_is_enabled p env in
-            let defaults = MakeType.default_capability Pos.none in
-            fst @@ Typing_coeffects.register_capabilities env defaults defaults
-          else
-            env
-        in
-        Env.set_env_reactive env Nonreactive
+        if TypecheckerOptions.any_coeffects (Env.get_tcopt env) then
+          let env = Typing_local_ops.enforce_rx_is_enabled p env in
+          let defaults = MakeType.default_capability Pos.none in
+          fst @@ Typing_coeffects.register_capabilities env defaults defaults
+        else
+          env
       else
         env
     in
@@ -7113,6 +7013,9 @@ and safely_refine_is_array env ty p pred_name arg_expr =
       (* If we're refining the type for `is_array` we have a slightly more
        * involved process. Let's separate out that logic so we can re-use it.
        *)
+      let unification =
+        TypecheckerOptions.array_unification (Env.get_tcopt env)
+      in
       let array_ty =
         let safe_isarray_enabled =
           TypecheckerOptions.experimental_feature_enabled
@@ -7126,7 +7029,7 @@ and safely_refine_is_array env ty p pred_name arg_expr =
           else
             mk (r, TUtils.tany env)
         in
-        MakeType.varray_or_darray r tk tv
+        MakeType.varray_or_darray ~unification r tk tv
       in
       (* This is the refined type of e inside the branch *)
       let hint_ty =
@@ -7139,9 +7042,14 @@ and safely_refine_is_array env ty p pred_name arg_expr =
         | `HackDictOrDArray ->
           MakeType.union
             r
-            [MakeType.dict r tarrkey tfresh; MakeType.darray r tarrkey tfresh]
+            [
+              MakeType.dict r tarrkey tfresh;
+              MakeType.darray ~unification r tarrkey tfresh;
+            ]
         | `HackVecOrVArray ->
-          MakeType.union r [MakeType.vec r tfresh; MakeType.varray r tfresh]
+          MakeType.union
+            r
+            [MakeType.vec r tfresh; MakeType.varray ~unification r tfresh]
       in
       let ((arg_pos, _), _) = arg_expr in
       let (env, hint_ty) =
@@ -7165,6 +7073,7 @@ and key_exists env pos shape field =
       match TUtils.shape_field_name env field with
       | None -> (env, shape_ty)
       | Some field_name ->
+        let field_name = TShapeField.of_ast (fun p -> p) field_name in
         Typing_shapes.refine_shape field_name pos env shape_ty)
 
 and string2 env idl =
@@ -7176,13 +7085,23 @@ and string2 env idl =
           TypecheckerOptions.enable_strict_string_concat_interp
             (Env.get_tcopt env)
         then
+          let r = Reason.Rinterp_operand p in
+          let (env, formatter_tyvar) = Env.fresh_invariant_type_var env p in
+          let stringlike =
+            MakeType.union
+              r
+              [
+                MakeType.arraykey r;
+                MakeType.new_type r SN.Classes.cHHFormatString [formatter_tyvar];
+              ]
+          in
           let env =
             Typing_ops.sub_type
               p
               Reason.URstr_interp
               env
               ty
-              (MakeType.arraykey (Reason.Rinterp_operand p))
+              stringlike
               Errors.strict_str_interp_type_mismatch
           in
           (env, te :: tel)

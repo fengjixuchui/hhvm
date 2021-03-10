@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<8d9e0b0ec1a12c5904cb1702ddc8b5f7>>
+// @generated SignedSource<<bbe46bdc58620505abd7af60bcc5a0f5>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -101,7 +101,6 @@ impl<P: Params> Node<P> for Bop {
             Bop::Diff2 => Ok(()),
             Bop::Ampamp => Ok(()),
             Bop::Barbar => Ok(()),
-            Bop::LogXor => Ok(()),
             Bop::Lt => Ok(()),
             Bop::Lte => Ok(()),
             Bop::Gt => Ok(()),
@@ -1114,25 +1113,6 @@ impl<P: Params> Node<P> for FuncBody<P::Ex, P::Fb, P::En, P::Hi> {
         Ok(())
     }
 }
-impl<P: Params> Node<P> for FuncReactive {
-    fn accept<'node>(
-        &'node self,
-        c: &mut P::Context,
-        v: &mut dyn Visitor<'node, P = P>,
-    ) -> Result<(), P::Error> {
-        v.visit_func_reactive(c, self)
-    }
-    fn recurse<'node>(
-        &'node self,
-        c: &mut P::Context,
-        v: &mut dyn Visitor<'node, P = P>,
-    ) -> Result<(), P::Error> {
-        match self {
-            FuncReactive::FPure => Ok(()),
-            FuncReactive::FNonreactive => Ok(()),
-        }
-    }
-}
 impl<P: Params> Node<P> for FunctionPtrId<P::Ex, P::Fb, P::En, P::Hi> {
     fn accept<'node>(
         &'node self,
@@ -1183,6 +1163,24 @@ impl<P: Params> Node<P> for Gconst<P::Ex, P::Fb, P::En, P::Hi> {
         Ok(())
     }
 }
+impl<P: Params> Node<P> for HfParamInfo {
+    fn accept<'node>(
+        &'node self,
+        c: &mut P::Context,
+        v: &mut dyn Visitor<'node, P = P>,
+    ) -> Result<(), P::Error> {
+        v.visit_hf_param_info(c, self)
+    }
+    fn recurse<'node>(
+        &'node self,
+        c: &mut P::Context,
+        v: &mut dyn Visitor<'node, P = P>,
+    ) -> Result<(), P::Error> {
+        self.kind.accept(c, v)?;
+        self.readonlyness.accept(c, v)?;
+        Ok(())
+    }
+}
 impl<P: Params> Node<P> for Hint {
     fn accept<'node>(
         &'node self,
@@ -1214,14 +1212,12 @@ impl<P: Params> Node<P> for HintFun {
         c: &mut P::Context,
         v: &mut dyn Visitor<'node, P = P>,
     ) -> Result<(), P::Error> {
-        self.reactive_kind.accept(c, v)?;
         self.param_tys.accept(c, v)?;
-        self.param_kinds.accept(c, v)?;
-        self.param_mutability.accept(c, v)?;
+        self.param_info.accept(c, v)?;
         self.variadic_ty.accept(c, v)?;
         self.ctxs.accept(c, v)?;
         self.return_ty.accept(c, v)?;
-        self.is_mutable_return.accept(c, v)?;
+        self.is_readonly_return.accept(c, v)?;
         Ok(())
     }
 }
@@ -1534,26 +1530,6 @@ impl<P: Params> Node<P> for ParamKind {
     ) -> Result<(), P::Error> {
         match self {
             ParamKind::Pinout => Ok(()),
-        }
-    }
-}
-impl<P: Params> Node<P> for ParamMutability {
-    fn accept<'node>(
-        &'node self,
-        c: &mut P::Context,
-        v: &mut dyn Visitor<'node, P = P>,
-    ) -> Result<(), P::Error> {
-        v.visit_param_mutability(c, self)
-    }
-    fn recurse<'node>(
-        &'node self,
-        c: &mut P::Context,
-        v: &mut dyn Visitor<'node, P = P>,
-    ) -> Result<(), P::Error> {
-        match self {
-            ParamMutability::PMutable => Ok(()),
-            ParamMutability::POwnedMutable => Ok(()),
-            ParamMutability::PMaybeMutable => Ok(()),
         }
     }
 }
@@ -2195,9 +2171,8 @@ impl<P: Params> Node<P> for XhpAttribute<P::Ex, P::Fb, P::En, P::Hi> {
         v: &mut dyn Visitor<'node, P = P>,
     ) -> Result<(), P::Error> {
         match self {
-            XhpAttribute::XhpSimple(a0, a1) => {
+            XhpAttribute::XhpSimple(a0) => {
                 a0.accept(c, v)?;
-                a1.accept(c, v)?;
                 Ok(())
             }
             XhpAttribute::XhpSpread(a0) => {
@@ -2260,5 +2235,24 @@ impl<P: Params> Node<P> for XhpChildOp {
             XhpChildOp::ChildPlus => Ok(()),
             XhpChildOp::ChildQuestion => Ok(()),
         }
+    }
+}
+impl<P: Params> Node<P> for XhpSimple<P::Ex, P::Fb, P::En, P::Hi> {
+    fn accept<'node>(
+        &'node self,
+        c: &mut P::Context,
+        v: &mut dyn Visitor<'node, P = P>,
+    ) -> Result<(), P::Error> {
+        v.visit_xhp_simple(c, self)
+    }
+    fn recurse<'node>(
+        &'node self,
+        c: &mut P::Context,
+        v: &mut dyn Visitor<'node, P = P>,
+    ) -> Result<(), P::Error> {
+        self.name.accept(c, v)?;
+        v.visit_hi(c, &self.type_)?;
+        self.expr.accept(c, v)?;
+        Ok(())
     }
 }

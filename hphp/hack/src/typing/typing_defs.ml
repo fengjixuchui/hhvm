@@ -11,8 +11,74 @@ open Hh_prelude
 open Typing_defs_flags
 include Typing_defs_core
 
+(** Origin of Class Constant References:
+    In order to be able to detect cycle definitions like
+    class C {
+      const int A = D::A;
+    }
+    class D {
+      const int A = C::A;
+    }
+    we need to remember which constants were used during initialization.
+
+    Currently the syntax of constants allows direct references to another class
+    like D::A, or self references using self::A.
+
+    class_const_from encodes the origin (class vs self).
+ *)
+type class_const_from =
+  | Self
+  | From of string
+[@@deriving eq, show]
+
+(** Class Constant References:
+    In order to be able to detect cycle definitions like
+    class C {
+      const int A = D::A;
+    }
+    class D {
+      const int A = C::A;
+    }
+    we need to remember which constants were used during initialization.
+
+    Currently the syntax of constants allows direct references to another class
+    like D::A, or self references using self::A.
+ *)
+type class_const_ref = class_const_from * string [@@deriving eq, show]
+
+module CCR = struct
+  type t = class_const_ref [@@deriving show]
+
+  (* We're deriving the compare function by hand to sync it with the rust code.
+   * In the decl parser I need to sort these class_const_from in the same
+   * way. I used `cargo expand` to see how Cargo generated they Ord/PartialOrd
+   * functions.
+   *)
+  let compare_class_const_from ccf0 ccf1 =
+    match (ccf0, ccf1) with
+    | (Self, Self) -> 0
+    | (From lhs, From rhs) -> String.compare lhs rhs
+    | (Self, From _) -> -1
+    | (From _, Self) -> 1
+
+  let compare (ccf0, s0) (ccf1, s1) =
+    match compare_class_const_from ccf0 ccf1 with
+    | 0 -> String.compare s0 s1
+    | x -> x
+end
+
+module CCRSet = struct
+  include Caml.Set.Make (CCR)
+
+  type t_as_list = CCR.t list [@@deriving show]
+
+  let pp fmt set = pp_t_as_list fmt (elements set)
+
+  let show set = show_t_as_list (elements set)
+end
+
 type const_decl = {
-  cd_pos: Pos.t;
+  cd_pos: Pos_or_decl.t;
   cd_type: decl_ty;
 }
 [@@deriving show]
@@ -22,7 +88,7 @@ type class_elt = {
   ce_type: decl_ty Lazy.t;
   ce_origin: string;  (** identifies the class from which this elt originates *)
   ce_deprecated: string option;
-  ce_pos: Pos.t Lazy.t;  (** pos of the type of the elt *)
+  ce_pos: Pos_or_decl.t Lazy.t;  (** pos of the type of the elt *)
   ce_flags: int;
 }
 [@@deriving show]
@@ -30,7 +96,7 @@ type class_elt = {
 type fun_elt = {
   fe_deprecated: string option;
   fe_type: decl_ty;
-  fe_pos: Pos.t;
+  fe_pos: Pos_or_decl.t;
   fe_php_std_lib: bool;
 }
 [@@deriving show]
@@ -38,10 +104,12 @@ type fun_elt = {
 type class_const = {
   cc_synthesized: bool;
   cc_abstract: bool;
-  cc_pos: Pos.t;
+  cc_pos: Pos_or_decl.t;
   cc_type: decl_ty;
   cc_origin: string;
       (** identifies the class from which this const originates *)
+  cc_refs: class_const_ref list;
+      (** references to the constants used in the initializer *)
 }
 [@@deriving show]
 
@@ -51,11 +119,11 @@ type record_field_req =
 [@@deriving show]
 
 type record_def_type = {
-  rdt_name: Nast.sid;
-  rdt_extends: Nast.sid option;
-  rdt_fields: (Nast.sid * record_field_req) list;
+  rdt_name: pos_id;
+  rdt_extends: pos_id option;
+  rdt_fields: (pos_id * record_field_req) list;
   rdt_abstract: bool;
-  rdt_pos: Pos.t;
+  rdt_pos: Pos_or_decl.t;
 }
 [@@deriving show]
 
@@ -73,7 +141,7 @@ type record_def_type = {
  * }
  * ```
  *)
-type requirement = Pos.t * decl_ty
+type requirement = Pos_or_decl.t * decl_ty
 
 and class_type = {
   tc_need_init: bool;
@@ -92,7 +160,7 @@ and class_type = {
   tc_has_xhp_keyword: bool;
   tc_is_disposable: bool;
   tc_name: string;
-  tc_pos: Pos.t;
+  tc_pos: Pos_or_decl.t;
   tc_tparams: decl_tparam list;
   tc_where_constraints: decl_where_constraint list;
   tc_consts: class_const SMap.t;
@@ -122,12 +190,14 @@ and typeconst_abstract_kind =
 
 and typeconst_type = {
   ttc_abstract: typeconst_abstract_kind;
-  ttc_name: Nast.sid;
+  ttc_synthesized: bool;
+  ttc_name: pos_id;
   ttc_as_constraint: decl_ty option;
   ttc_type: decl_ty option;
   ttc_origin: string;
-  ttc_enforceable: Pos.t * bool;
-  ttc_reifiable: Pos.t option;
+  ttc_enforceable: Pos_or_decl.t * bool;
+  ttc_reifiable: Pos_or_decl.t option;
+  ttc_concretized: bool;
 }
 
 and enum_type = {
@@ -139,7 +209,7 @@ and enum_type = {
 [@@deriving show]
 
 type typedef_type = {
-  td_pos: Pos.t;
+  td_pos: Pos_or_decl.t;
   td_vis: Aast.typedef_visibility;
   td_tparams: decl_tparam list;
   td_constraint: decl_ty option;
@@ -168,7 +238,7 @@ type deserialization_error =
 
 (** Tracks information about how a type was expanded *)
 type expand_env = {
-  type_expansions: (bool * Pos.t * string) list;
+  type_expansions: (bool * Pos_or_decl.t * string) list;
       (** A list of the type defs and type access we have expanded thus far. Used
        * to prevent entering into a cycle when expanding these types.
        * If the boolean is set, then emit an error because we were checking the
@@ -352,20 +422,20 @@ module DependentKind = struct
 end
 
 module ShapeFieldMap = struct
-  include Nast.ShapeMap
+  include TShapeMap
 
   let map_and_rekey shape_map key_f value_f =
     let f_over_shape_field_type ({ sft_ty; _ } as shape_field_type) =
       { shape_field_type with sft_ty = value_f sft_ty }
     in
-    Nast.ShapeMap.map_and_rekey shape_map key_f f_over_shape_field_type
+    TShapeMap.map_and_rekey shape_map key_f f_over_shape_field_type
 
   let map_env f env shape_map =
     let f_over_shape_field_type env _key ({ sft_ty; _ } as shape_field_type) =
       let (env, sft_ty) = f env sft_ty in
       (env, { shape_field_type with sft_ty })
     in
-    Nast.ShapeMap.map_env f_over_shape_field_type env shape_map
+    TShapeMap.map_env f_over_shape_field_type env shape_map
 
   let map f shape_map = map_and_rekey shape_map (fun x -> x) f
 
@@ -373,7 +443,7 @@ module ShapeFieldMap = struct
     let f_over_shape_field_type shape_map_key { sft_ty; _ } =
       f shape_map_key sft_ty
     in
-    Nast.ShapeMap.iter f_over_shape_field_type shape_map
+    TShapeMap.iter f_over_shape_field_type shape_map
 
   let iter_values f = iter (fun _ -> f)
 end
@@ -456,16 +526,6 @@ let decl_ty_con_ordinal ty_ =
   | Tintersection _ -> 21
   | Tvec_or_dict _ -> 22
 
-let reactivity_ordinal r =
-  match r with
-  | Nonreactive -> 0
-  | CippGlobal -> 1
-  | Pure _ -> 6
-  | MaybeReactive _ -> 7
-  | RxVar _ -> 8
-  | Cipp _ -> 9
-  | CippLocal _ -> 10
-
 (* Compare two types syntactically, ignoring reason information and other
  * small differences that do not affect type inference behaviour. This
  * comparison function can be used to construct tree-based sets of types,
@@ -533,11 +593,11 @@ let rec ty__compare ?(normalize_lists = false) ty_1 ty_2 =
         | 0 ->
           List.compare
             (fun (k1, v1) (k2, v2) ->
-              match Ast_defs.ShapeField.compare k1 k2 with
+              match TShapeField.compare k1 k2 with
               | 0 -> shape_field_type_compare v1 v2
               | n -> n)
-            (Nast.ShapeMap.elements fields1)
-            (Nast.ShapeMap.elements fields2)
+            (TShapeMap.elements fields1)
+            (TShapeMap.elements fields2)
         | n -> n
       end
     | (Tvar v1, Tvar v2) -> compare v1 v2
@@ -644,7 +704,6 @@ let rec ty__compare ?(normalize_lists = false) ty_1 ty_2 =
       ft_ret = ret1;
       ft_params = params1;
       ft_arity = arity1;
-      ft_reactive = reactive1;
       ft_flags = flags1;
       ft_implicit_params = implicit_params1;
       ft_ifc_decl = ifc_decl1;
@@ -657,7 +716,6 @@ let rec ty__compare ?(normalize_lists = false) ty_1 ty_2 =
       ft_ret = ret2;
       ft_params = params2;
       ft_arity = arity2;
-      ft_reactive = reactive2;
       ft_flags = flags2;
       ft_implicit_params = implicit_params2;
       ft_ifc_decl = ifc_decl2;
@@ -696,14 +754,7 @@ let rec ty__compare ?(normalize_lists = false) ty_1 ty_2 =
                             match
                               capability_compare capability1 capability2
                             with
-                            | 0 ->
-                              begin
-                                match
-                                  compare_ifc_fun_decl ifc_decl1 ifc_decl2
-                                with
-                                | 0 -> reactivity_compare reactive1 reactive2
-                                | n -> n
-                              end
+                            | 0 -> compare_ifc_fun_decl ifc_decl1 ifc_decl2
                             | n -> n
                           end
                         | n -> n
@@ -729,25 +780,6 @@ let rec ty__compare ?(normalize_lists = false) ty_1 ty_2 =
     | (CapDefaults _, CapTy _) -> -1
     | (CapTy _, CapDefaults _) -> 1
     | (CapTy ty1, CapTy ty2) -> ty_compare ty1 ty2
-  and reactivity_compare r1 r2 =
-    match (r1, r2) with
-    | (Nonreactive, Nonreactive)
-    | (CippGlobal, CippGlobal) ->
-      0
-    | (Pure opt_ty1, Pure opt_ty2) ->
-      (* TODO T82455489: proper decl compare. Poly.compare will be position sensitive *)
-      Option.compare Poly.compare opt_ty1 opt_ty2
-    | (MaybeReactive r1, MaybeReactive r2) -> reactivity_compare r1 r2
-    | (RxVar opt_r1, RxVar opt_r2) ->
-      Option.compare reactivity_compare opt_r1 opt_r2
-    | (Cipp opt_s1, Cipp opt_s2)
-    | (CippLocal opt_s1, CippLocal opt_s2) ->
-      Option.compare String.compare opt_s1 opt_s2
-    | ( ( Nonreactive | CippGlobal | Pure _ | MaybeReactive _ | RxVar _ | Cipp _
-        | CippLocal _ ),
-        ( Nonreactive | CippGlobal | Pure _ | MaybeReactive _ | RxVar _ | Cipp _
-        | CippLocal _ ) ) ->
-      reactivity_ordinal r1 - reactivity_ordinal r2
   and ty_compare ty1 ty2 = ty__compare (get_node ty1) (get_node ty2) in
   ty__compare ty_1 ty_2
 
@@ -765,7 +797,7 @@ and tyl_compare ~sort ?(normalize_lists = false) tyl1 tyl2 =
 
 and possibly_enforced_ty_compare ?(normalize_lists = false) ety1 ety2 =
   match ty_compare ~normalize_lists ety1.et_type ety2.et_type with
-  | 0 -> Bool.compare ety1.et_enforced ety2.et_enforced
+  | 0 -> compare_enforcement ety1.et_enforced ety2.et_enforced
   | n -> n
 
 and ft_param_compare ?(normalize_lists = false) param1 param2 =
@@ -908,18 +940,6 @@ let equal_locl_fun_arity ft1 ft2 =
 
 let is_type_no_return = equal_locl_ty_ (Tprim Aast.Tnoreturn)
 
-let make_function_type_rxvar param_ty =
-  match deref param_ty with
-  | (r, Tfun tfun) -> mk (r, Tfun { tfun with ft_reactive = RxVar None })
-  | (r, Toption t) ->
-    begin
-      match deref t with
-      | (r1, Tfun tfun) ->
-        mk (r, Toption (mk (r1, Tfun { tfun with ft_reactive = RxVar None })))
-      | _ -> param_ty
-    end
-  | _ -> param_ty
-
 let rec equal_decl_ty_ ty_1 ty_2 =
   match (ty_1, ty_2) with
   | (Tany _, Tany _) -> true
@@ -953,9 +973,9 @@ let rec equal_decl_ty_ ty_1 ty_2 =
     equal_shape_kind shape_kind1 shape_kind2
     && List.equal
          (fun (k1, v1) (k2, v2) ->
-           Ast_defs.ShapeField.equal k1 k2 && equal_shape_field_type v1 v2)
-         (Nast.ShapeMap.elements fields1)
-         (Nast.ShapeMap.elements fields2)
+           TShapeField.equal k1 k2 && equal_shape_field_type v1 v2)
+         (TShapeMap.elements fields1)
+         (TShapeMap.elements fields2)
   | (Tvar v1, Tvar v2) -> Ident.equal v1 v2
   | (Tany _, _)
   | (Terr, _)
@@ -1004,50 +1024,18 @@ and equal_decl_fun_type fty1 fty2 =
        fty1.ft_implicit_params
        fty2.ft_implicit_params
   && equal_decl_fun_arity fty1 fty2
-  && equal_reactivity fty1.ft_reactive fty2.ft_reactive
   && Int.equal fty1.ft_flags fty2.ft_flags
-
-and equal_reactivity r1 r2 =
-  match (r1, r2) with
-  | (Nonreactive, Nonreactive) -> true
-  | (Pure ty1, Pure ty2) -> Option.equal equal_decl_ty ty1 ty2
-  | (MaybeReactive r1, MaybeReactive r2) -> equal_reactivity r1 r2
-  | (RxVar r1, RxVar r2) -> Option.equal equal_reactivity r1 r2
-  | (Cipp s1, Cipp s2) -> Option.equal String.equal s1 s2
-  | (CippLocal s1, CippLocal s2) -> Option.equal String.equal s1 s2
-  | (CippGlobal, CippGlobal) -> true
-  | _ -> false
-
-and any_reactive r =
-  match r with
-  | Pure _
-  | MaybeReactive _
-  | RxVar _ ->
-    true
-  | Nonreactive
-  | Cipp _
-  | CippLocal _
-  | CippGlobal ->
-    false
 
 and non_public_ifc ifc =
   match ifc with
   | FDPolicied (Some "PUBLIC") -> false
   | _ -> true
 
-and equal_param_rx_annotation pa1 pa2 =
-  match (pa1, pa2) with
-  | (Param_rx_var, Param_rx_var) -> true
-  | (Param_rx_if_impl ty1, Param_rx_if_impl ty2) -> equal_decl_ty ty1 ty2
-  | (Param_rx_var, Param_rx_if_impl _)
-  | (Param_rx_if_impl _, Param_rx_var) ->
-    false
-
 and equal_decl_tyl tyl1 tyl2 = List.equal equal_decl_ty tyl1 tyl2
 
 and equal_decl_possibly_enforced_ty ety1 ety2 =
   equal_decl_ty ety1.et_type ety2.et_type
-  && Bool.equal ety1.et_enforced ety2.et_enforced
+  && equal_enforcement ety1.et_enforced ety2.et_enforced
 
 and equal_decl_fun_param param1 param2 =
   equal_decl_possibly_enforced_ty param1.fp_type param2.fp_type
@@ -1056,11 +1044,13 @@ and equal_decl_fun_param param1 param2 =
 and equal_decl_ft_params params1 params2 =
   List.equal equal_decl_fun_param params1 params2
 
-and equal_decl_ft_implicit_params { capability = cap1 } { capability = cap2 } =
+and equal_decl_ft_implicit_params :
+    decl_ty fun_implicit_params -> decl_ty fun_implicit_params -> bool =
+ fun { capability = cap1 } { capability = cap2 } ->
   (* TODO(coeffects): could rework this so that implicit defaults and explicit
    * [defaults] are considered equal *)
   match (cap1, cap2) with
-  | (CapDefaults p1, CapDefaults p2) -> Pos.equal p1 p2
+  | (CapDefaults p1, CapDefaults p2) -> Pos_or_decl.equal p1 p2
   | (CapTy c1, CapTy c2) -> equal_decl_ty c1 c2
   | (CapDefaults _, CapTy _)
   | (CapTy _, CapDefaults _) ->
@@ -1089,7 +1079,7 @@ let equal_decl_where_constraint c1 c2 =
 
 let equal_decl_tparam tp1 tp2 =
   Ast_defs.equal_variance tp1.tp_variance tp2.tp_variance
-  && Ast_defs.equal_id tp1.tp_name tp2.tp_name
+  && equal_pos_id tp1.tp_name tp2.tp_name
   && List.equal
        (Tuple.T2.equal ~eq1:Ast_defs.equal_constraint_kind ~eq2:equal_decl_ty)
        tp1.tp_constraints
@@ -1101,7 +1091,7 @@ let equal_decl_tparam tp1 tp2 =
        tp2.tp_user_attributes
 
 let equal_typedef_type tt1 tt2 =
-  Pos.equal tt1.td_pos tt2.td_pos
+  Pos_or_decl.equal tt1.td_pos tt2.td_pos
   && Aast.equal_typedef_visibility tt1.td_vis tt2.td_vis
   && List.equal equal_decl_tparam tt1.td_tparams tt2.td_tparams
   && Option.equal equal_decl_ty tt1.td_constraint tt2.td_constraint
@@ -1110,10 +1100,11 @@ let equal_typedef_type tt1 tt2 =
 let equal_fun_elt fe1 fe2 =
   Option.equal String.equal fe1.fe_deprecated fe2.fe_deprecated
   && equal_decl_ty fe1.fe_type fe2.fe_type
-  && Pos.equal fe1.fe_pos fe2.fe_pos
+  && Pos_or_decl.equal fe1.fe_pos fe2.fe_pos
 
 let equal_const_decl cd1 cd2 =
-  Pos.equal cd1.cd_pos cd2.cd_pos && equal_decl_ty cd1.cd_type cd2.cd_type
+  Pos_or_decl.equal cd1.cd_pos cd2.cd_pos
+  && equal_decl_ty cd1.cd_type cd2.cd_type
 
 let get_ce_abstract ce = is_set ce_flags_abstract ce.ce_flags
 

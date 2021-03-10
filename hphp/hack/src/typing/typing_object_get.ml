@@ -65,7 +65,7 @@ let member_not_found
     (env : Typing_env_types.env) pos ~is_method class_ member_name r on_error =
   let cls_name = strip_ns (Cls.name class_) in
   if env.Typing_env_types.in_expr_tree && is_method then
-    Errors.expr_tree_unsupported_operator cls_name member_name pos
+    Errors.expr_tree_unsupported_operator cls_name member_name pos ~is_method
   else
     let kind =
       if is_method then
@@ -322,13 +322,19 @@ let rec obj_get_concrete_ty
                 ft_implicit_params =
                   { capability = CapTy (MakeType.intersection Reason.Rnone []) };
                 ft_ret =
-                  { et_type = MakeType.void Reason.Rnone; et_enforced = false };
-                ft_reactive = Pure None;
+                  {
+                    et_type = MakeType.void Reason.Rnone;
+                    et_enforced = Unenforced;
+                  };
                 ft_flags = 0;
                 ft_ifc_decl = default_ifc_fun_decl;
               }
             in
             (env, (mk (Reason.Rnone, Tfun ft), []))
+          | None when String.equal id_str SN.Members.__construct ->
+            (* __construct is not an instance method and shouldn't be invoked directly *)
+            let () = Errors.magic (id_pos, id_str) in
+            default ()
           | None ->
             member_not_found env id_pos ~is_method class_info id_str r on_error;
             default ()
@@ -406,8 +412,8 @@ let rec obj_get_concrete_ty
                       env
                       ft)
                 in
-                let ft_ty = mk (r, Tfun ft) in
-                (env, ft_ty, explicit_targs, false)
+                let ft_ty = mk (Typing_reason.localize r, Tfun ft) in
+                (env, ft_ty, explicit_targs, Unenforced)
               | _ ->
                 let is_xhp_attr = Option.is_some (get_ce_xhp_attr member_ce) in
                 let { et_type; et_enforced } =

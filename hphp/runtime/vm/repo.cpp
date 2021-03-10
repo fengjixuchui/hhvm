@@ -292,8 +292,18 @@ void Repo::loadGlobalData(bool readGlobalTables /* = true */) {
 
     RO::EvalRaiseClassConversionWarning =
       s_globalData.RaiseClassConversionWarning;
+    RO::EvalClassPassesClassname =
+      s_globalData.ClassPassesClassname;
+    RO::EvalClassnameNotices =
+      s_globalData.ClassnameNotices;
     RO::EvalRaiseClsMethConversionWarning =
       s_globalData.RaiseClsMethConversionWarning;
+
+    RO::EvalNoticeOnCoerceForStrConcat =
+      s_globalData.NoticeOnCoerceForStrConcat;
+
+    RO::EvalNoticeOnCoerceForBitOp =
+      s_globalData.NoticeOnCoerceForBitOp;
 
     RuntimeOption::ConstantFunctions.clear();
     for (auto const& elm : s_globalData.ConstantFunctions) {

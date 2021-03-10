@@ -24,8 +24,13 @@ OPAM_EXECUTABLE_DIR="$(dirname "$OPAM_EXECUTABLE")"
 export PATH="$OPAM_EXECUTABLE_DIR:$PATH"
 # detect if we are building inside FB by checking a specific dune file
 if [ -e "$SOURCE_ROOT/src/facebook/dune" ]; then
+  # FB script must have already set OPAMROOT, and we reuse it
   echo "FB build"
-  OPAMROOT="$SOURCE_ROOT/facebook/opam"
+  if [ -z ${OPAMROOT+x} ]; then
+    echo "OPAMROOT must be set by dune.sh"
+    exit 1
+  fi
+  echo "OPAMROOT = $OPAMROOT"
 else
   echo "Non-FB build"
   OPAMROOT="${BUILD_ROOT}/opam"
@@ -93,6 +98,10 @@ if [[ -f "${MINI_REPO_FETCH_SCRIPT}" && "${SKIP_MINI_REPO}" -eq 0 ]]; then
     # Patching ocaml base compiler so we can pass it CFLAGS/LDFLAGS
     # The goal is to make it use the right glibc, not the system one
     opam switch create "$HACK_OPAM_NAME" --empty
+    # Temporary fix to try to avoid concurrency error while building ocaml
+    opam config set jobs 12
+    opam config list
+    # end of fix
     pushd "$OPAMROOT/repo/offline_clone" || exit 1
     mkdir -p base-compiler-source
     cd base-compiler-source

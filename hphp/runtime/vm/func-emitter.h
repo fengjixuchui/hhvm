@@ -45,6 +45,8 @@ namespace Native {
 struct NativeFunctionInfo;
 }
 
+void freeBCRegion(const unsigned char* bc, size_t bclen);
+
 ///////////////////////////////////////////////////////////////////////////////
 
 /*
@@ -89,9 +91,9 @@ struct FuncEmitter {
   /*
    * Just set some fields when we start and stop emitting.
    */
-  void init(int l1, int l2, Offset base_, Attr attrs_,
+  void init(int l1, int l2, Attr attrs_,
             const StringData* docComment_);
-  void finish(Offset past);
+  void finish();
 
   /*
    * Commit this function to a repo.
@@ -105,7 +107,7 @@ struct FuncEmitter {
 
   template<class SerDe> void serdeMetaData(SerDe&);
 
-  template<class SerDe> void serdeLineTable(SerDe&);
+  template<class SerDe> void serde(SerDe&);
 
   /////////////////////////////////////////////////////////////////////////////
   // Metadata.
@@ -241,9 +243,50 @@ public:
 
   Offset offsetOf(const unsigned char* pc) const;
 
+  /*
+   * Bytecode pointer and current emit position.
+   */
+  const unsigned char* bc() const;
+  Offset bcPos() const;
+
+  /*
+   * Set the bytecode pointer by allocating a copy of `bc' with size `bclen'.
+   *
+   * Not safe to call with m_bc as the argument because we free our current
+   * bytecode stream before allocating a copy of `bc'.
+   */
+  void setBc(const unsigned char* bc, size_t bclen);
+
+  /////////////////////////////////////////////////////////////////////////////
+  // Bytecode emit.
+  //
+  // These methods emit values to bc() at bcPos() (or pos, if given) and then
+  // update bcPos(), realloc-ing the bytecode region if necessary.
+
+  void emitOp(Op op);
+  void emitByte(unsigned char n, int64_t pos = -1);
+
+  void emitInt16(uint16_t n, int64_t pos = -1);
+  void emitInt32(int n, int64_t pos = -1);
+  void emitInt64(int64_t n, int64_t pos = -1);
+  void emitDouble(double n, int64_t pos = -1);
+
+  void emitIVA(bool) = delete;
+  template<typename T> void emitIVA(T n);
+
+  void emitNamedLocal(NamedLocal loc);
+
+ private:
+  /*
+   * Bytecode emit implementation.
+   */
+  template<class T>
+  void emitImpl(T n, int64_t pos);
+
   /////////////////////////////////////////////////////////////////////////////
   // Source locations.
 
+ public:
   /*
    * Return a copy of the SrcLocTable for the Func, if it has one; otherwise,
    * return an empty table.
@@ -276,6 +319,9 @@ public:
   // Data members.
 
 private:
+  // Initial bytecode size.
+  static const size_t BCMaxInit = 64;
+
   /*
    * Metadata.
    */
@@ -285,12 +331,14 @@ private:
   int m_sn;
   Id m_id;
 
+  unsigned char* m_bc;
+  size_t m_bclen;
+  size_t m_bcmax;
+
 public:
   /*
    * Func fields.
    */
-  Offset base;
-  Offset past;
   int line1;
   int line2;
   LowStringPtr name;
@@ -345,7 +393,8 @@ private:
   int m_numUnnamedLocals;
   Id m_numIterators;
   Id m_nextFreeIterator;
-  bool m_ehTabSorted;
+  bool m_ehTabSorted : 1;
+  bool m_loadedFromRepo: 1;
 
   /*
    * Source location tables.
@@ -380,7 +429,7 @@ struct FuncRepoProxy : public RepoProxy {
     InsertFuncStmt(Repo& repo, int repoId) : Stmt(repo, repoId) {}
     void insert(const FuncEmitter& fe,
                 RepoTxn& txn, int64_t unitSn, int funcSn, Id preClassId,
-                const StringData* name); // throws(RepoExc)
+                const StringData* name, const unsigned char* bc, size_t bclen); // throws(RepoExc)
   };
 
   struct GetFuncsStmt : public RepoProxy::Stmt {
@@ -388,13 +437,6 @@ struct FuncRepoProxy : public RepoProxy {
     void get(UnitEmitter& ue); // throws(RepoExc)
   };
 
-  struct InsertFuncLineTableStmt : public RepoProxy::Stmt {
-    InsertFuncLineTableStmt(Repo& repo, int repoId) : Stmt(repo, repoId) {}
-    void insert(RepoTxn& txn,
-                int64_t unitSn,
-                int64_t funcSn,
-                LineTable& lineTable); // throws(RepoExc)
-  };
   struct GetFuncLineTableStmt : public RepoProxy::Stmt {
     GetFuncLineTableStmt(Repo& repo, int repoId) : Stmt(repo, repoId) {}
     void get(int64_t unitSn, int64_t funcSn, LineTable& lineTable);
@@ -410,12 +452,17 @@ struct FuncRepoProxy : public RepoProxy {
     RepoStatus get(int64_t unitSn, int64_t funcSn, SourceLocTable& sourceLocTab);
   };
 
+  struct GetBytecodeStmt : public RepoProxy::Stmt {
+    GetBytecodeStmt(Repo& repo, int repoId) : Stmt(repo, repoId) {}
+    RepoStatus get(Func* func, PC& pc);
+  };
+
   InsertFuncStmt insertFunc[RepoIdCount];
   GetFuncsStmt getFuncs[RepoIdCount];
-  InsertFuncLineTableStmt insertFuncLineTable[RepoIdCount];
   GetFuncLineTableStmt getFuncLineTable[RepoIdCount];
   InsertFuncSourceLocStmt insertFuncSourceLoc[RepoIdCount];
   GetSourceLocTabStmt getSourceLocTab[RepoIdCount];
+  GetBytecodeStmt getBytecode[RepoIdCount];
 };
 
 ///////////////////////////////////////////////////////////////////////////////

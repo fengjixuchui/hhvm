@@ -58,7 +58,7 @@ let rec check_hint env (pos, hint) =
              && String.( <> ) tc_name SN.Collections.cVec ->
         let tc_pos = Cls.pos cls in
         let tc_name = Cls.name cls in
-        Errors.uninstantiable_class pos tc_pos tc_name []
+        Errors.uninstantiable_class pos tc_pos tc_name None
       | _ -> ()
     end;
     if String.equal class_id SN.Classes.cClassname then
@@ -94,15 +94,13 @@ let rec check_hint env (pos, hint) =
   | Aast.Hfun
       Aast.
         {
-          hf_reactive_kind = _;
           hf_param_tys = hl;
-          hf_param_kinds = _;
-          hf_param_mutability = _;
+          hf_param_info = _;
           (* TODO: shouldn't we be checking this hint as well? *)
           hf_variadic_ty = _;
           hf_ctxs = _;
           hf_return_ty = h;
-          hf_is_mutable_return = _;
+          hf_is_readonly_return = _;
         } ->
     List.iter hl (check_hint env);
     check_hint env h

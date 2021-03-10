@@ -18,6 +18,7 @@
 #define HPHP_LOGGING_PROFILE_H_
 
 #include "hphp/runtime/base/bespoke/entry-types.h"
+#include "hphp/runtime/base/bespoke/key-order.h"
 #include "hphp/runtime/base/program-functions.h"
 #include "hphp/runtime/vm/srckey.h"
 #include "hphp/runtime/vm/jit/array-layout.h"
@@ -147,6 +148,9 @@ struct CopyAtomic {
   std::atomic<T> value;
 };
 
+using KeyOrderMap =
+  std::unordered_map<KeyOrder, CopyAtomic<size_t>, KeyOrderHash>;
+
 // We'll store a LoggingProfile for each array construction site SrcKey.
 // It tracks the operations that happen on arrays coming from that site.
 struct LoggingProfile {
@@ -169,9 +173,11 @@ struct LoggingProfile {
     std::atomic<uint64_t> loggingArraysEmitted = 0;
     LoggingArray* staticLoggingArray = nullptr;
     std::atomic<ArrayData*> staticMonotypeArray{nullptr};
+    std::atomic<ArrayData*> staticStructArray{nullptr};
     ArrayData* staticSampledArray = nullptr;
     EventMap events;
     EntryTypesMap entryTypes;
+    KeyOrderMap keyOrders;
   };
 
   explicit LoggingProfile(LoggingProfileKey key);
@@ -193,6 +199,7 @@ struct LoggingProfile {
   void logEvent(ArrayOp op, const StringData* k, TypedValue v);
 
   void logEntryTypes(EntryTypes before, EntryTypes after);
+  void logKeyOrders(const KeyOrder&);
 
   // TODO(kshaunak): Refactor this class so that we automatically construct
   // this cached array when we set the layout. (We should make layout.apply
@@ -239,6 +246,7 @@ struct SinkProfile {
     std::atomic<uint64_t> sampledCount = 0;
     std::atomic<uint64_t> unsampledCount = 0;
     SourceMap sources;
+    KeyOrderMap keyOrders;
   };
 
   void update(const ArrayData* ad);

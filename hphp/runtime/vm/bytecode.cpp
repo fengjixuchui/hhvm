@@ -657,7 +657,7 @@ static std::string toStringElm(TypedValue tv) {
  * funclet for iterId, otherwise false.
  */
 static bool checkIterScope(const Func* f, Offset o, Id iterId) {
-  assertx(o >= f->base() && o < f->past());
+  assertx(o >= 0 && o < f->bclen());
   for (auto const& eh : f->ehtab()) {
     if (eh.m_base <= o && o < eh.m_past &&
         eh.m_iterId == iterId) {
@@ -927,7 +927,7 @@ static void prepareFuncEntry(ActRec *ar, uint32_t numArgsInclUnpack) {
   pushFrameSlots(func, nlocals);
 
   vmfp() = ar;
-  vmpc() = func->unit()->entry() + func->getEntryForNumArgs(numArgsInclUnpack);
+  vmpc() = func->entry() + func->getEntryForNumArgs(numArgsInclUnpack);
   vmJitReturnAddr() = nullptr;
 }
 
@@ -941,7 +941,15 @@ void enterVMAtFunc(ActRec* enterFnAr, uint32_t numArgsInclUnpack) {
 
   prepareFuncEntry(enterFnAr, numArgsInclUnpack);
 
-  if (!EventHook::FunctionCall(enterFnAr, EventHook::NormalFunc)) return;
+  if (
+    !EventHook::FunctionCall(
+      enterFnAr,
+      EventHook::NormalFunc,
+      EventHook::Source::Native
+    )
+  ) {
+    return;
+  }
   checkStack(vmStack(), enterFnAr->func(), 0);
   assertx(vmfp()->func()->contains(vmpc()));
 
@@ -1407,11 +1415,17 @@ OPTBLD_INLINE void iopClsCnsL(tv_lval local) {
   tvSet(clsCns, *clsTV);
 }
 
+String toStringWithNotice(const Variant& c) {
+  static ConvNoticeLevel notice_level =
+    flagToConvNoticeLevel(RuntimeOption::EvalNoticeOnCoerceForStrConcat);
+  return c.toString(notice_level, s_ConvNoticeReasonConcat.get());
+}
+
 OPTBLD_INLINE void iopConcat() {
   auto const c1 = vmStack().topC();
   auto const c2 = vmStack().indC(1);
-  auto const s2 = tvAsVariant(*c2).toString();
-  auto const s1 = tvAsCVarRef(*c1).toString();
+  auto const s2 = toStringWithNotice(tvAsVariant(*c2));
+  auto const s1 = toStringWithNotice(tvAsCVarRef(*c1));
   tvAsVariant(*c2) = concat(s2, s1);
   assertx(c2->m_data.pstr->checkCount());
   vmStack().popC();
@@ -1420,27 +1434,25 @@ OPTBLD_INLINE void iopConcat() {
 OPTBLD_INLINE void iopConcatN(uint32_t n) {
   auto const c1 = vmStack().topC();
   auto const c2 = vmStack().indC(1);
+  auto const s1 = toStringWithNotice(tvAsCVarRef(*c1));
 
   if (n == 2) {
-    auto const s2 = tvAsVariant(*c2).toString();
-    auto const s1 = tvAsCVarRef(*c1).toString();
+    auto const s2 = toStringWithNotice(tvAsVariant(*c2));
     tvAsVariant(*c2) = concat(s2, s1);
     assertx(c2->m_data.pstr->checkCount());
   } else if (n == 3) {
     auto const c3 = vmStack().indC(2);
-    auto const s3 = tvAsVariant(*c3).toString();
-    auto const s2 = tvAsCVarRef(*c2).toString();
-    auto const s1 = tvAsCVarRef(*c1).toString();
+    auto const s3 = toStringWithNotice(tvAsVariant(*c3));
+    auto const s2 = toStringWithNotice(tvAsCVarRef(*c2));
     tvAsVariant(*c3) = concat3(s3, s2, s1);
     assertx(c3->m_data.pstr->checkCount());
   } else {
     assertx(n == 4);
     auto const c3 = vmStack().indC(2);
     auto const c4 = vmStack().indC(3);
-    auto const s4 = tvAsVariant(*c4).toString();
-    auto const s3 = tvAsCVarRef(*c3).toString();
-    auto const s2 = tvAsCVarRef(*c2).toString();
-    auto const s1 = tvAsCVarRef(*c1).toString();
+    auto const s4 = toStringWithNotice(tvAsVariant(*c4));
+    auto const s3 = toStringWithNotice(tvAsCVarRef(*c3));
+    auto const s2 = toStringWithNotice(tvAsCVarRef(*c2));
     tvAsVariant(*c4) = concat4(s4, s3, s2, s1);
     assertx(c4->m_data.pstr->checkCount());
   }
@@ -1531,12 +1543,6 @@ OPTBLD_INLINE void iopBitOr() {
 
 OPTBLD_INLINE void iopBitXor() {
   implTvBinOp(tvBitXor);
-}
-
-OPTBLD_INLINE void iopXor() {
-  implTvBinOpBool([&] (TypedValue c1, TypedValue c2) -> bool {
-    return tvToBool(c1) ^ tvToBool(c2);
-  });
 }
 
 OPTBLD_INLINE void iopSame() {
@@ -2258,7 +2264,14 @@ OPTBLD_INLINE TCA ret(PC& pc) {
   // value must be removed from the stack, or the unwinder would try to free it
   // if the hook throws---but the event hook routine decrefs the return value
   // in that case if necessary.
-  frame_free_locals_inl(fp, func->numLocals(), &retval);
+  // in that case if necessary.
+  fp->setLocalsDecRefd();
+  frame_free_locals_inl(
+    fp,
+    func->numLocals(),
+    &retval,
+    EventHook::Source::Interpreter
+  );
 
   if (LIKELY(!isResumed(fp))) {
     // If in an eagerly executed async function, wrap the return value into
@@ -2341,7 +2354,12 @@ OPTBLD_INLINE TCA iopRetM(PC& pc, uint32_t numRet) {
   // value must be removed from the stack, or the unwinder would try to free it
   // if the hook throws---but the event hook routine decrefs the return value
   // in that case if necessary.
-  frame_free_locals_inl(vmfp(), vmfp()->func()->numLocals(), &retvals[0]);
+  frame_free_locals_inl(
+    vmfp(),
+    vmfp()->func()->numLocals(),
+    &retvals[0],
+    EventHook::Source::Interpreter
+  );
 
   assertx(!vmfp()->func()->isGenerator() && !vmfp()->func()->isAsync());
 
@@ -3624,9 +3642,7 @@ OPTBLD_INLINE void iopUnsetG() {
 
 bool doFCall(CallFlags callFlags, const Func* func, uint32_t numArgsInclUnpack,
              void* ctx, TCA retAddr) {
-  TRACE(3, "FCall: pc %p func %p base %d\n", vmpc(),
-        vmfp()->unit()->entry(),
-        int(vmfp()->func()->base()));
+  TRACE(3, "FCall: pc %p func %p\n", vmpc(), vmfp()->func()->entry());
 
   assertx(numArgsInclUnpack <= func->numNonVariadicParams() + 1);
   assertx(kNumActRecCells == 2);
@@ -3637,7 +3653,7 @@ bool doFCall(CallFlags callFlags, const Func* func, uint32_t numArgsInclUnpack,
   calleeGenericsChecks(func, callFlags.hasGenerics());
   calleeArgumentArityChecks(func, numArgsInclUnpack);
   calleeDynamicCallChecks(func, callFlags.isDynamicCall());
-  calleeCoeffectChecks(func, callFlags);
+  calleeCoeffectChecks(func, callFlags, numArgsInclUnpack, ctx);
   calleeImplicitContextChecks(func);
   initFuncInputs(func, numArgsInclUnpack);
 
@@ -3653,7 +3669,11 @@ bool doFCall(CallFlags callFlags, const Func* func, uint32_t numArgsInclUnpack,
   try {
     prepareFuncEntry(ar, numArgsInclUnpack);
 
-    return EventHook::FunctionCall(ar, EventHook::NormalFunc);
+    return EventHook::FunctionCall(
+      ar,
+      EventHook::NormalFunc,
+      EventHook::Source::Interpreter
+    );
   } catch (...) {
     // Manually unwind the pre-live or live frame, as we may be called from JIT
     // and expected to enter JIT unwinder with vmfp() set to the callee.
@@ -4948,7 +4968,11 @@ OPTBLD_INLINE TCA iopCreateCont(PC origpc, PC& pc) {
     static_cast<BaseGenerator*>(AsyncGenerator::fromObject(obj)) :
     static_cast<BaseGenerator*>(Generator::fromObject(obj));
 
-  EventHook::FunctionSuspendCreateCont(fp, genData->actRec());
+  EventHook::FunctionSuspendCreateCont(
+    fp,
+    genData->actRec(),
+    EventHook::Source::Interpreter
+  );
 
   // Grab caller info from ActRec.
   ActRec* sfp = fp->sfp();
@@ -4987,7 +5011,7 @@ OPTBLD_INLINE void contEnterImpl(PC origpc) {
   // Do linkage of the generator's AR.
   assertx(vmfp()->hasThis());
   movePCIntoGenerator(origpc, this_base_generator(vmfp()));
-  EventHook::FunctionResumeYield(vmfp());
+  EventHook::FunctionResumeYield(vmfp(), EventHook::Source::Interpreter);
 }
 
 OPTBLD_INLINE void iopContEnter(PC origpc, PC& pc) {
@@ -5010,7 +5034,7 @@ OPTBLD_INLINE TCA yield(PC origpc, PC& pc, const TypedValue* key, const TypedVal
   assertx(isResumed(fp));
   assertx(func->isGenerator());
 
-  EventHook::FunctionSuspendYield(fp);
+  EventHook::FunctionSuspendYield(fp, EventHook::Source::Interpreter);
 
   auto const sfp = fp->sfp();
   auto const callOff = fp->callOffset();
@@ -5115,7 +5139,11 @@ OPTBLD_INLINE void asyncSuspendE(PC origpc, PC& pc) {
     }
     // Call the suspend hook. It will decref the newly allocated waitHandle
     // if it throws.
-    EventHook::FunctionSuspendAwaitEF(fp, waitHandle->actRec());
+    EventHook::FunctionSuspendAwaitEF(
+      fp,
+      waitHandle->actRec(),
+      EventHook::Source::Interpreter
+    );
 
     // Grab caller info from ActRec.
     ActRec* sfp = fp->sfp();
@@ -5142,7 +5170,7 @@ OPTBLD_INLINE void asyncSuspendE(PC origpc, PC& pc) {
 
     // Call the suspend hook. It will decref the newly allocated waitHandle
     // if it throws.
-    EventHook::FunctionSuspendAwaitEG(fp);
+    EventHook::FunctionSuspendAwaitEG(fp, EventHook::Source::Interpreter);
 
     // Store the return value.
     vmStack().pushObjectNoRc(waitHandle);
@@ -5169,7 +5197,11 @@ OPTBLD_INLINE void asyncSuspendR(PC origpc, PC& pc) {
 
   // Before adjusting the stack or doing anything, check the suspend hook.
   // This can throw.
-  EventHook::FunctionSuspendAwaitR(fp, child.get());
+  EventHook::FunctionSuspendAwaitR(
+    fp,
+    child.get(),
+    EventHook::Source::Interpreter
+  );
 
   // Await child and suspend the async function/generator. May throw.
   if (!func->isGenerator()) {  // Async function.
@@ -5684,12 +5716,12 @@ OPCODES
 
 // fast path to look up native pc; try entry point first.
 PcPair lookup_cti(const Func* func, PC pc) {
-  auto unitpc = func->unit()->entry();
+  auto unitpc = func->entry();
   auto cti_entry = func->ctiEntry();
   if (!cti_entry) {
     cti_entry = compile_cti(const_cast<Func*>(func), unitpc);
   }
-  if (pc == unitpc + func->base()) {
+  if (pc == unitpc) {
     return {cti_code().base() + cti_entry, pc};
   }
   return {lookup_cti(func, cti_entry, unitpc, pc), pc};

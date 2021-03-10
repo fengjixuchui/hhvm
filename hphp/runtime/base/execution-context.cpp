@@ -1678,7 +1678,7 @@ static void prepareAsyncFuncEntry(ActRec* enterFnAr,
       ? resumable->suspendOffset()
       : resumable->resumeFromAwaitOffset()
   );
-  EventHook::FunctionResumeAwait(enterFnAr);
+  EventHook::FunctionResumeAwait(enterFnAr, EventHook::Source::Asio);
 }
 
 void ExecutionContext::resumeAsyncFunc(Resumable* resumable,
@@ -1784,7 +1784,7 @@ ActRec* ExecutionContext::getPrevVMState(const ActRec* fp,
         *prevSp = (TypedValue*)(fp + 1);
       }
     }
-    if (prevPc) *prevPc = prevFp->func()->base() + fp->callOffset();
+    if (prevPc) *prevPc = fp->callOffset();
     if (fromVMEntry) *fromVMEntry = false;
     return prevFp;
   }
@@ -2147,7 +2147,7 @@ void ExecutionContext::enterDebuggerDummyEnv() {
   ar->trashThis();
   ar->setReturnVMExit();
   vmfp() = ar;
-  vmpc() = s_debuggerDummy->entry();
+  vmpc() = ar->func()->entry();
   vmFirstAR() = ar;
 }
 

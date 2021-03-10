@@ -214,7 +214,7 @@ void beginInlining(IRGS& env,
   assertx(callBcOffset >= 0 && "callBcOffset before beginning of caller");
   // curFunc is null when called from conjureBeginInlining
   assertx((!curFunc(env) ||
-          curFunc(env)->base() + callBcOffset < curFunc(env)->past()) &&
+          callBcOffset < curFunc(env)->bclen()) &&
          "callBcOffset past end of caller");
   assertx(fca.numArgs >= target->numRequiredParams());
   assertx(fca.numArgs <= target->numNonVariadicParams());
@@ -241,7 +241,7 @@ void beginInlining(IRGS& env,
   // Callee checks and input initialization.
   emitCalleeGenericsChecks(env, target, callFlags, fca.hasGenerics());
   emitCalleeDynamicCallChecks(env, target, callFlags);
-  emitCalleeCoeffectChecks(env, target, callFlags);
+  emitCalleeCoeffectChecks(env, target, callFlags, numArgsInclUnpack, ctx);
   emitCalleeImplicitContextChecks(env, target);
   emitInitFuncInputs(env, target, numArgsInclUnpack);
 

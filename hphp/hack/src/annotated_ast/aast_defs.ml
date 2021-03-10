@@ -44,15 +44,6 @@ and sid = Ast_defs.id
 
 and is_reified = bool
 
-and func_reactive =
-  | FPure
-  | FNonreactive
-
-and param_mutability =
-  | PMutable
-  | POwnedMutable
-  | PMaybeMutable
-
 and import_flavor =
   | Include
   | Require
@@ -72,21 +63,25 @@ and xhp_child_op =
 
 and hint = pos * hint_
 
-and mutable_return = bool
-
 and variadic_hint = hint option
 
 and contexts = pos * hint list
 
+and hf_param_info = {
+  hfparam_kind: Ast_defs.param_kind option;
+  hfparam_readonlyness: Ast_defs.readonly_kind option;
+}
+
 and hint_fun = {
-  hf_reactive_kind: func_reactive;
   hf_param_tys: hint list;
-  hf_param_kinds: Ast_defs.param_kind option list;
-  hf_param_mutability: param_mutability option list;
+  (* hf_param_info is None when all three are none, for perf optimization reasons.
+   It is not semantically incorrect for the record to appear with 3 None values,
+   but in practice we shouldn't lower to that, since it wastes CPU/space *)
+  hf_param_info: hf_param_info option list;
   hf_variadic_ty: variadic_hint;
   hf_ctxs: contexts option;
   hf_return_ty: hint;
-  hf_is_mutable_return: mutable_return;
+  hf_is_readonly_return: Ast_defs.readonly_kind option;
 }
 
 and hint_ =
@@ -236,10 +231,6 @@ and reify_kind =
         visit_prefix = "on_";
         ancestors = ["endo_defs_base"];
       }]
-
-let is_f_non_reactive = function
-  | FNonreactive -> true
-  | FPure -> false
 
 let string_of_visibility vis =
   match vis with

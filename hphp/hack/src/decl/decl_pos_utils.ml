@@ -22,17 +22,26 @@ open Typing_defs
 (*****************************************************************************)
 module TraversePos (ImplementPos : sig
   val pos : Pos.t -> Pos.t
+
+  val pos_or_decl : Pos_or_decl.t -> Pos_or_decl.t
 end) =
 struct
   open Typing_reason
 
   let pos = ImplementPos.pos
 
+  let pos_or_decl = ImplementPos.pos_or_decl
+
   let string_id (p, x) = (pos p, x)
 
-  let rec reason = function
+  let positioned_id : Typing_defs.pos_id -> Typing_defs.pos_id =
+   (fun (p, x) -> (pos_or_decl p, x))
+
+  let rec reason : type ph. ph Typing_reason.t_ -> ph Typing_reason.t_ =
+    function
     | Rnone -> Rnone
     | Rwitness p -> Rwitness (pos p)
+    | Rwitness_from_decl p -> Rwitness_from_decl (pos_or_decl p)
     | Ridx (p, r) -> Ridx (pos p, reason r)
     | Ridx_vector p -> Ridx_vector (pos p)
     | Rforeach p -> Rforeach (pos p)
@@ -47,7 +56,9 @@ struct
     | Rno_return p -> Rno_return (pos p)
     | Rno_return_async p -> Rno_return_async (pos p)
     | Rret_fun_kind (p, k) -> Rret_fun_kind (pos p, k)
-    | Rhint p -> Rhint (pos p)
+    | Rret_fun_kind_from_decl (p, k) ->
+      Rret_fun_kind_from_decl (pos_or_decl p, k)
+    | Rhint p -> Rhint (pos_or_decl p)
     | Rthrow p -> Rthrow (pos p)
     | Rplaceholder p -> Rplaceholder (pos p)
     | Rret_div p -> Rret_div (pos p)
@@ -58,9 +69,10 @@ struct
     | Rlost_info (s, r1, Blame (p2, l)) ->
       Rlost_info (s, reason r1, Blame (pos p2, l))
     | Rformat (p1, s, r) -> Rformat (pos p1, s, reason r)
-    | Rclass_class (p, s) -> Rclass_class (pos p, s)
+    | Rclass_class (p, s) -> Rclass_class (pos_or_decl p, s)
     | Runknown_class p -> Runknown_class (pos p)
     | Rvar_param p -> Rvar_param (pos p)
+    | Rvar_param_from_decl p -> Rvar_param_from_decl (pos_or_decl p)
     | Runpack_param (p1, p2, i) -> Runpack_param (pos p1, pos p2, i)
     | Rinout_param p -> Rinout_param (pos p)
     | Rinstantiate (r1, x, r2) -> Rinstantiate (reason r1, x, reason r2)
@@ -69,26 +81,27 @@ struct
       Rtypeconst (reason r1, (pos p, s1), s2, reason r2)
     | Rtype_access (r1, ls) ->
       Rtype_access (reason r1, List.map ls ~f:(fun (r, s) -> (reason r, s)))
-    | Rexpr_dep_type (r, p, n) -> Rexpr_dep_type (reason r, pos p, n)
+    | Rexpr_dep_type (r, p, n) -> Rexpr_dep_type (reason r, pos_or_decl p, n)
     | Rnullsafe_op p -> Rnullsafe_op (pos p)
-    | Rtconst_no_cstr (p, s) -> Rtconst_no_cstr (pos p, s)
+    | Rtconst_no_cstr id -> Rtconst_no_cstr (string_id id)
     | Rpredicated (p, f) -> Rpredicated (pos p, f)
     | Ris p -> Ris (pos p)
     | Ras p -> Ras (pos p)
-    | Rvarray_or_darray_key p -> Rvarray_or_darray_key (pos p)
-    | Rvec_or_dict_key p -> Rvec_or_dict_key (pos p)
+    | Rvarray_or_darray_key p -> Rvarray_or_darray_key (pos_or_decl p)
+    | Rvec_or_dict_key p -> Rvec_or_dict_key (pos_or_decl p)
     | Rusing p -> Rusing (pos p)
     | Rdynamic_prop p -> Rdynamic_prop (pos p)
     | Rdynamic_call p -> Rdynamic_call (pos p)
     | Rdynamic_construct p -> Rdynamic_construct (pos p)
     | Ridx_dict p -> Ridx_dict (pos p)
-    | Rmissing_required_field (p, n) -> Rmissing_required_field (pos p, n)
-    | Rmissing_optional_field (p, n) -> Rmissing_optional_field (pos p, n)
+    | Rset_element p -> Rset_element (pos p)
+    | Rmissing_optional_field (p, n) ->
+      Rmissing_optional_field (pos_or_decl p, n)
     | Runset_field (p, n) -> Runset_field (pos p, n)
     | Rcontravariant_generic (r1, n) -> Rcontravariant_generic (reason r1, n)
     | Rinvariant_generic (r1, n) -> Rcontravariant_generic (reason r1, n)
     | Rregex p -> Rregex (pos p)
-    | Rimplicit_upper_bound (p, s) -> Rimplicit_upper_bound (pos p, s)
+    | Rimplicit_upper_bound (p, s) -> Rimplicit_upper_bound (pos_or_decl p, s)
     | Rarith_ret_int p -> Rarith_ret_int (pos p)
     | Rarith_ret_float (p, r, s) -> Rarith_ret_float (pos p, reason r, s)
     | Rarith_ret_num (p, r, s) -> Rarith_ret_num (pos p, reason r, s)
@@ -97,22 +110,23 @@ struct
     | Rincdec_dynamic p -> Rincdec_dynamic (pos p)
     | Rtype_variable p -> Rtype_variable (pos p)
     | Rtype_variable_generics (p, t, s) -> Rtype_variable_generics (pos p, t, s)
-    | Rsolve_fail p -> Rsolve_fail (pos p)
+    | Rsolve_fail p -> Rsolve_fail (pos_or_decl p)
     | Rcstr_on_generics (p, sid) -> Rcstr_on_generics (pos p, string_id sid)
     | Rlambda_param (p, r) -> Rlambda_param (pos p, reason r)
     | Rshape (p, fun_name) -> Rshape (pos p, fun_name)
-    | Renforceable p -> Renforceable (pos p)
+    | Renforceable p -> Renforceable (pos_or_decl p)
     | Rdestructure p -> Rdestructure (pos p)
     | Rkey_value_collection_key p -> Rkey_value_collection_key (pos p)
-    | Rglobal_class_prop p -> Rglobal_class_prop (pos p)
-    | Rglobal_fun_param p -> Rglobal_fun_param (pos p)
-    | Rglobal_fun_ret p -> Rglobal_fun_ret (pos p)
+    | Rglobal_class_prop p -> Rglobal_class_prop (pos_or_decl p)
+    | Rglobal_fun_param p -> Rglobal_fun_param (pos_or_decl p)
+    | Rglobal_fun_ret p -> Rglobal_fun_ret (pos_or_decl p)
     | Rsplice p -> Rsplice (pos p)
     | Ret_boolean p -> Ret_boolean (pos p)
-    | Rdefault_capability p -> Rdefault_capability (pos p)
+    | Rdefault_capability p -> Rdefault_capability (pos_or_decl p)
     | Rarray_unification p -> Rarray_unification (pos p)
     | Rconcat_operand p -> Rconcat_operand (pos p)
     | Rinterp_operand p -> Rinterp_operand (pos p)
+    | Rdynamic_coercion r -> Rdynamic_coercion (reason r)
 
   let rec ty t =
     let (p, x) = deref t in
@@ -132,18 +146,18 @@ struct
     | Toption x -> Toption (ty x)
     | Tlike x -> Tlike (ty x)
     | Tfun ft -> Tfun (fun_type ft)
-    | Tapply (sid, xl) -> Tapply (string_id sid, List.map xl ty)
-    | Taccess (root_ty, id) -> Taccess (ty root_ty, string_id id)
+    | Tapply (sid, xl) -> Tapply (positioned_id sid, List.map xl ty)
+    | Taccess (root_ty, id) -> Taccess (ty root_ty, positioned_id id)
     | Tshape (shape_kind, fdm) ->
       Tshape (shape_kind, ShapeFieldMap.map_and_rekey fdm shape_field_name ty)
 
   and ty_opt x = Option.map x ty
 
   and shape_field_name = function
-    | Ast_defs.SFlit_int s -> Ast_defs.SFlit_int (string_id s)
-    | Ast_defs.SFlit_str s -> Ast_defs.SFlit_str (string_id s)
-    | Ast_defs.SFclass_const (id, s) ->
-      Ast_defs.SFclass_const (string_id id, string_id s)
+    | Typing_defs.TSFlit_int (p, s) -> Typing_defs.TSFlit_int (pos_or_decl p, s)
+    | Typing_defs.TSFlit_str (p, s) -> Typing_defs.TSFlit_str (pos_or_decl p, s)
+    | Typing_defs.TSFclass_const (id, s) ->
+      Typing_defs.TSFclass_const (positioned_id id, positioned_id s)
 
   and constraint_ x = List.map ~f:(fun (ck, x) -> (ck, ty x)) x
 
@@ -151,7 +165,7 @@ struct
 
   and capability = function
     | CapTy cap -> CapTy (ty cap)
-    | CapDefaults p -> CapDefaults (pos p)
+    | CapDefaults p -> CapDefaults (pos_or_decl p)
 
   and fun_implicit_params implicit =
     { capability = capability implicit.capability }
@@ -165,14 +179,10 @@ struct
       ft_implicit_params = fun_implicit_params ft.ft_implicit_params;
       ft_ret = possibly_enforced_ty ft.ft_ret;
       ft_arity = fun_arity ft.ft_arity;
-      ft_reactive = fun_reactive ft.ft_reactive;
     }
 
-  and fun_elt fe = { fe with fe_type = ty fe.fe_type; fe_pos = pos fe.fe_pos }
-
-  and fun_reactive = function
-    | Pure (Some ty1) -> Pure (Some (ty ty1))
-    | r -> r
+  and fun_elt fe =
+    { fe with fe_type = ty fe.fe_type; fe_pos = pos_or_decl fe.fe_pos }
 
   and where_constraint (ty1, c, ty2) = (ty ty1, c, ty ty2)
 
@@ -183,22 +193,18 @@ struct
   and fun_param param =
     {
       param with
-      fp_pos = pos param.fp_pos;
+      fp_pos = pos_or_decl param.fp_pos;
       fp_type = possibly_enforced_ty param.fp_type;
-      fp_rx_annotation = param_rx_annotation param.fp_rx_annotation;
     }
-
-  and param_rx_annotation = function
-    | Some (Param_rx_if_impl t) -> Some (Param_rx_if_impl (ty t))
-    | c -> c
 
   and class_const cc =
     {
       cc_synthesized = cc.cc_synthesized;
       cc_abstract = cc.cc_abstract;
-      cc_pos = pos cc.cc_pos;
+      cc_pos = pos_or_decl cc.cc_pos;
       cc_type = ty cc.cc_type;
       cc_origin = cc.cc_origin;
+      cc_refs = cc.cc_refs;
     }
 
   and typeconst_abstract_kind = function
@@ -209,20 +215,22 @@ struct
   and typeconst tc =
     {
       ttc_abstract = typeconst_abstract_kind tc.ttc_abstract;
-      ttc_name = string_id tc.ttc_name;
+      ttc_synthesized = tc.ttc_synthesized;
+      ttc_name = positioned_id tc.ttc_name;
       ttc_as_constraint = ty_opt tc.ttc_as_constraint;
       ttc_type = ty_opt tc.ttc_type;
       ttc_origin = tc.ttc_origin;
-      ttc_enforceable = Tuple.T2.map_fst ~f:pos tc.ttc_enforceable;
-      ttc_reifiable = Option.map tc.ttc_reifiable pos;
+      ttc_enforceable = Tuple.T2.map_fst ~f:pos_or_decl tc.ttc_enforceable;
+      ttc_reifiable = Option.map tc.ttc_reifiable pos_or_decl;
+      ttc_concretized = tc.ttc_concretized;
     }
 
   and user_attribute { ua_name; ua_classname_params } =
-    { ua_name = string_id ua_name; ua_classname_params }
+    { ua_name = positioned_id ua_name; ua_classname_params }
 
   and type_param t =
     {
-      tp_name = string_id t.tp_name;
+      tp_name = positioned_id t.tp_name;
       tp_variance = t.tp_variance;
       tp_reified = t.tp_reified;
       tp_tparams = List.map ~f:type_param t.tp_tparams;
@@ -272,7 +280,7 @@ struct
       dc_condition_types = dc.dc_condition_types;
     }
 
-  and requirement (p, t) = (pos p, ty t)
+  and requirement (p, t) = (pos_or_decl p, ty t)
 
   and enum_type te =
     {
@@ -284,7 +292,7 @@ struct
 
   and typedef tdef =
     {
-      td_pos = pos tdef.td_pos;
+      td_pos = pos_or_decl tdef.td_pos;
       td_vis = tdef.td_vis;
       td_tparams = List.map tdef.td_tparams type_param;
       td_constraint = ty_opt tdef.td_constraint;
@@ -298,7 +306,7 @@ struct
       sc_is_xhp = sc.sc_is_xhp;
       sc_has_xhp_keyword = sc.sc_has_xhp_keyword;
       sc_kind = sc.sc_kind;
-      sc_name = string_id sc.sc_name;
+      sc_name = positioned_id sc.sc_name;
       sc_tparams = List.map sc.sc_tparams type_param;
       sc_where_constraints = List.map sc.sc_where_constraints where_constraint;
       sc_extends = List.map sc.sc_extends ty;
@@ -322,23 +330,25 @@ struct
   and shallow_class_const scc =
     {
       scc_abstract = scc.scc_abstract;
-      scc_name = string_id scc.scc_name;
+      scc_name = positioned_id scc.scc_name;
       scc_type = ty scc.scc_type;
+      scc_refs = scc.scc_refs;
     }
 
   and shallow_typeconst stc =
     {
       stc_abstract = typeconst_abstract_kind stc.stc_abstract;
       stc_as_constraint = Option.map stc.stc_as_constraint ty;
-      stc_name = string_id stc.stc_name;
+      stc_name = positioned_id stc.stc_name;
       stc_type = Option.map stc.stc_type ty;
-      stc_enforceable = (pos (fst stc.stc_enforceable), snd stc.stc_enforceable);
-      stc_reifiable = Option.map stc.stc_reifiable pos;
+      stc_enforceable =
+        (pos_or_decl (fst stc.stc_enforceable), snd stc.stc_enforceable);
+      stc_reifiable = Option.map stc.stc_reifiable pos_or_decl;
     }
 
   and shallow_prop sp =
     {
-      sp_name = string_id sp.sp_name;
+      sp_name = positioned_id sp.sp_name;
       sp_xhp_attr = sp.sp_xhp_attr;
       sp_type = Option.map sp.sp_type ty;
       sp_visibility = sp.sp_visibility;
@@ -347,8 +357,7 @@ struct
 
   and shallow_method sm =
     {
-      sm_name = string_id sm.sm_name;
-      sm_reactivity = sm.sm_reactivity;
+      sm_name = positioned_id sm.sm_name;
       sm_type = ty sm.sm_type;
       sm_visibility = sm.sm_visibility;
       sm_deprecated = sm.sm_deprecated;
@@ -361,4 +370,6 @@ end
 (*****************************************************************************)
 module NormalizeSig = TraversePos (struct
   let pos _ = Pos.none
+
+  let pos_or_decl _ = Pos_or_decl.none
 end)

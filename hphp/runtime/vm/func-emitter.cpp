@@ -42,6 +42,7 @@
 #include "hphp/util/trace.h"
 
 namespace HPHP {
+
 ///////////////////////////////////////////////////////////////////////////////
 // FuncEmitter.
 
@@ -50,6 +51,9 @@ FuncEmitter::FuncEmitter(UnitEmitter& ue, int sn, Id id, const StringData* n)
   , m_pce(nullptr)
   , m_sn(sn)
   , m_id(id)
+  , m_bc(nullptr)
+  , m_bclen(0)
+  , m_bcmax(0)
   , name(n)
   , maxStackCells(0)
   , hniReturnType(folly::none)
@@ -64,6 +68,7 @@ FuncEmitter::FuncEmitter(UnitEmitter& ue, int sn, Id id, const StringData* n)
   , m_numIterators(0)
   , m_nextFreeIterator(0)
   , m_ehTabSorted(false)
+  , m_loadedFromRepo(false)
 {}
 
 FuncEmitter::FuncEmitter(UnitEmitter& ue, int sn, const StringData* n,
@@ -72,6 +77,9 @@ FuncEmitter::FuncEmitter(UnitEmitter& ue, int sn, const StringData* n,
   , m_pce(pce)
   , m_sn(sn)
   , m_id(kInvalidId)
+  , m_bc(nullptr)
+  , m_bclen(0)
+  , m_bcmax(0)
   , name(n)
   , maxStackCells(0)
   , hniReturnType(folly::none)
@@ -86,9 +94,11 @@ FuncEmitter::FuncEmitter(UnitEmitter& ue, int sn, const StringData* n,
   , m_numIterators(0)
   , m_nextFreeIterator(0)
   , m_ehTabSorted(false)
+  , m_loadedFromRepo(false)
 {}
 
 FuncEmitter::~FuncEmitter() {
+  if (m_bc) free(m_bc);
 }
 
 
@@ -101,7 +111,7 @@ SourceLocTable FuncEmitter::createSourceLocTable() const {
   for (size_t i = 0; i < m_sourceLocTab.size(); ++i) {
     Offset endOff = i < m_sourceLocTab.size() - 1
       ? m_sourceLocTab[i + 1].first
-      : past;
+      : m_bclen;
     locations.push_back(SourceLocEntry(endOff, m_sourceLocTab[i].second));
   }
   return locations;
@@ -139,7 +149,7 @@ void FuncEmitter::recordSourceLocation(const Location::Range& sLoc,
   // Some byte codes, such as for the implicit "return 0" at the end of a
   // a source file do not have valid source locations. This check makes
   // sure we don't record a (dummy) source location in this case.
-  if (start > base && sLoc.line0 == -1) return;
+  if (start > 0 && sLoc.line0 == -1) return;
   SourceLoc newLoc(sLoc);
   if (!m_sourceLocTab.empty()) {
     if (m_sourceLocTab.back().second == newLoc) {
@@ -153,7 +163,7 @@ void FuncEmitter::recordSourceLocation(const Location::Range& sLoc,
   } else {
     // First record added should be for bytecode offset zero or very rarely one
     // when the source starts with a label and a Nop is inserted.
-    assertx(start == base || start == base + 1);
+    assertx(start == 0 || start == 1);
   }
   m_sourceLocTab.push_back(std::make_pair(start, newLoc));
 }
@@ -161,9 +171,8 @@ void FuncEmitter::recordSourceLocation(const Location::Range& sLoc,
 ///////////////////////////////////////////////////////////////////////////////
 // Initialization and execution.
 
-void FuncEmitter::init(int l1, int l2, Offset base_, Attr attrs_,
+void FuncEmitter::init(int l1, int l2, Attr attrs_,
                        const StringData* docComment_) {
-  base = base_;
   line1 = l1;
   line2 = l2;
   attrs = fix_attrs(attrs_);
@@ -172,8 +181,7 @@ void FuncEmitter::init(int l1, int l2, Offset base_, Attr attrs_,
   if (!SystemLib::s_inited) assertx(attrs & AttrBuiltin);
 }
 
-void FuncEmitter::finish(Offset past_) {
-  past = past_;
+void FuncEmitter::finish() {
   sortEHTab();
 }
 
@@ -184,20 +192,18 @@ void FuncEmitter::commit(RepoTxn& txn) {
   int64_t usn = m_ue.m_sn;
 
   if (!m_sourceLocTab.empty()) {
-    m_lineTable = createLineTable(m_sourceLocTab, past);
+    m_lineTable = createLineTable(m_sourceLocTab, m_bclen);
   }
 
   frp.insertFunc[repoId]
-     .insert(*this, txn, usn, m_sn, m_pce ? m_pce->id() : -1, name);
-
-  frp.insertFuncLineTable[repoId].insert(txn, usn, m_sn, m_lineTable);
+     .insert(*this, txn, usn, m_sn, m_pce ? m_pce->id() : -1, name, m_bc, m_bclen);
 
   if (RuntimeOption::RepoDebugInfo) {
     for (size_t i = 0; i < m_sourceLocTab.size(); ++i) {
       SourceLoc& e = m_sourceLocTab[i].second;
       Offset endOff = i < m_sourceLocTab.size() - 1
                           ? m_sourceLocTab[i + 1].first
-                          : past;
+                          : m_bclen;
 
       frp.insertFuncSourceLoc[repoId]
           .insert(txn, usn, m_sn, endOff, e.line0, e.char0, e.line1, e.char1);
@@ -263,7 +269,7 @@ Func* FuncEmitter::create(Unit& unit, PreClass* preClass /* = NULL */, bool save
   bool const needsExtendedSharedData =
     isNative ||
     line2 - line1 >= Func::kSmallDeltaLimit ||
-    past - base >= Func::kSmallDeltaLimit ||
+    m_bclen >= Func::kSmallDeltaLimit ||
     m_sn >= Func::kSmallDeltaLimit ||
     hasReifiedGenerics ||
     hasParamsWithMultiUBs ||
@@ -271,12 +277,23 @@ Func* FuncEmitter::create(Unit& unit, PreClass* preClass /* = NULL */, bool save
     dynCallSampleRate ||
     !coeffectRules.empty();
 
+  const unsigned char* bc = nullptr;
+  // If we created the FuncEmitter by loading from the repo we don't need the bytecode.
+  // Instead we will load it lazily when needed
+  // If the function is a builtin function hhbbc may use the bytecode for constant folding.
+  // The way hhbbc does it is to read in all Funcs into memory. Close the current repo and
+  // then open the new repo for writing. It then want to constant fold some builtins which
+  // require the bytecode from the closed repo. So instead we just keep the bytecode alive
+  // for those Funcs.
+  if (!m_loadedFromRepo || (attrs & AttrBuiltin)) {
+    bc = m_bc;
+  }
   f->m_shared.reset(
     needsExtendedSharedData
-      ? new Func::ExtendedSharedData(preClass, base, past, m_sn, line1, line2,
+      ? new Func::ExtendedSharedData(bc, m_bclen, preClass, m_sn, line1, line2,
                                      !containsCalls, docComment)
-      : new Func::SharedData(preClass, base, past, m_sn,
-                             line1, line2, !containsCalls, docComment)
+      : new Func::SharedData(bc, m_bclen, preClass, m_sn, line1, line2,
+                             !containsCalls, docComment)
   );
 
   f->init(params.size());
@@ -285,9 +302,9 @@ Func* FuncEmitter::create(Unit& unit, PreClass* preClass /* = NULL */, bool save
     ex->m_allFlags.m_hasExtendedSharedData = true;
     ex->m_arFuncPtr = nullptr;
     ex->m_nativeFuncPtr = nullptr;
+    ex->m_bclen = m_bclen;
     ex->m_sn = m_sn;
     ex->m_line2 = line2;
-    ex->m_past = past;
     ex->m_dynCallSampleRate = dynCallSampleRate.value_or(-1);
     ex->m_allFlags.m_returnByValue = false;
     ex->m_allFlags.m_isMemoizeWrapper = false;
@@ -378,7 +395,7 @@ Func* FuncEmitter::create(Unit& unit, PreClass* preClass /* = NULL */, bool save
    * info altogether, since it may not be backed by a repo).
    */
   if (m_sourceLocTab.size() != 0) {
-    f->stashLineTable(createLineTable(m_sourceLocTab, past));
+    f->stashLineTable(createLineTable(m_sourceLocTab, m_bclen));
     // If the debugger is enabled, or we plan to dump hhas we will
     // need the extended line table information in the output, and if
     // we're not writing the repo, stashing it here is necessary for
@@ -559,6 +576,18 @@ void FuncEmitter::setEHTabIsSorted() {
   }
 }
 
+///////////////////////////////////////////////////////////////////////////////
+// Bytecode
+
+void FuncEmitter::setBc(const unsigned char* bc, size_t bclen) {
+  if (m_bc) {
+    free(m_bc);
+  }
+  m_bc = (unsigned char*)malloc(bclen);
+  m_bcmax = bclen;
+  if (bclen) memcpy(m_bc, bc, bclen);
+  m_bclen = bclen;
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 // Complex setters.
@@ -619,19 +648,16 @@ Attr FuncEmitter::fix_attrs(Attr a) const {
 template<class SerDe>
 void FuncEmitter::serdeMetaData(SerDe& sd) {
   // NOTE: name and a few other fields currently handled outside of this.
-  Offset past_delta;
   Attr a = attrs;
 
   if (!SerDe::deserializing) {
-    past_delta = past - base;
     a = fix_attrs(attrs);
   }
 
   sd(line1)
     (line2)
-    (base)
-    (past_delta)
     (a)
+    (m_bclen)
     (staticCoeffects)
     (hniReturnType)
     (repoReturnType)
@@ -669,10 +695,45 @@ void FuncEmitter::serdeMetaData(SerDe& sd) {
   if (SerDe::deserializing) {
     repoReturnType.resolveArray(ue());
     repoAwaitedReturnType.resolveArray(ue());
-    past = base + past_delta;
     attrs = fix_attrs(a);
   }
 }
+
+template<class SerDe>
+void FuncEmitter::serde(SerDe& sd) {
+  serdeMetaData(sd);
+
+  sd(
+    m_lineTable,
+    [&] (const LineEntry& prev, const LineEntry& curDelta) {
+      if (SerDe::deserializing) {
+        return LineEntry {
+          curDelta.pastOffset() + prev.pastOffset(),
+          curDelta.val() + prev.val()
+        };
+      } else {
+        return LineEntry {
+          curDelta.pastOffset() - prev.pastOffset(),
+          curDelta.val() - prev.val()
+        };
+      }
+    }
+  );
+
+  sd(m_sourceLocTab);
+
+  // Bytecode
+  if constexpr (SerDe::deserializing) {
+    assertx(sd.remaining() >= m_bclen);
+    setBc(sd.data(), m_bclen);
+    sd.advance(m_bclen);
+  } else {
+    sd.writeRaw((const char*)m_bc, m_bclen);
+  }
+}
+
+template void FuncEmitter::serde<>(BlobDecoder&);
+template void FuncEmitter::serde<>(BlobEncoder&);
 
 ///////////////////////////////////////////////////////////////////////////////
 // FuncRepoProxy.
@@ -681,10 +742,10 @@ FuncRepoProxy::FuncRepoProxy(Repo& repo)
     : RepoProxy(repo),
       insertFunc{InsertFuncStmt(repo, 0), InsertFuncStmt(repo, 1)},
       getFuncs{GetFuncsStmt(repo, 0), GetFuncsStmt(repo, 1)},
-      insertFuncLineTable{InsertFuncLineTableStmt(repo, 0), InsertFuncLineTableStmt(repo, 1)},
       getFuncLineTable{GetFuncLineTableStmt(repo, 0), GetFuncLineTableStmt(repo, 1)},
       insertFuncSourceLoc{InsertFuncSourceLocStmt(repo, 0), InsertFuncSourceLocStmt(repo, 1)},
-      getSourceLocTab{GetSourceLocTabStmt(repo, 0), GetSourceLocTabStmt(repo, 1)}
+      getSourceLocTab{GetSourceLocTabStmt(repo, 0), GetSourceLocTabStmt(repo, 1)},
+      getBytecode{GetBytecodeStmt(repo, 0), GetBytecodeStmt(repo, 1)}
 {}
 
 FuncRepoProxy::~FuncRepoProxy() {
@@ -695,7 +756,7 @@ void FuncRepoProxy::createSchema(int repoId, RepoTxn& txn) {
     auto createQuery = folly::sformat(
       "CREATE TABLE {} "
       "(unitSn INTEGER, funcSn INTEGER, preClassId INTEGER, name TEXT, "
-      " extraData BLOB, PRIMARY KEY (unitSn, funcSn));",
+      " bc BLOB, extraData BLOB, lineTable BLOB, PRIMARY KEY (unitSn, funcSn));",
       m_repo.table(repoId, "Func"));
     txn.exec(createQuery);
   }
@@ -708,34 +769,44 @@ void FuncRepoProxy::createSchema(int repoId, RepoTxn& txn) {
       m_repo.table(repoId, "FuncSourceLoc"));
     txn.exec(createQuery);
   }
-  {
-    auto createQuery = folly::sformat(
-      "CREATE TABLE {} (unitSn INTEGER, funcSn INTEGER, data BLOB, PRIMARY KEY (unitSn, funcSn));",
-      m_repo.table(repoId, "FuncLineTable"));
-    txn.exec(createQuery);
-  }
 }
 
 void FuncRepoProxy::InsertFuncStmt
                   ::insert(const FuncEmitter& fe,
                            RepoTxn& txn, int64_t unitSn, int funcSn,
-                           Id preClassId, const StringData* name) {
+                           Id preClassId, const StringData* name,
+                           const unsigned char* bc, size_t bclen) {
   if (!prepared()) {
     auto insertQuery = folly::sformat(
       "INSERT INTO {} "
-      "VALUES(@unitSn, @funcSn, @preClassId, @name, @extraData);",
+      "VALUES(@unitSn, @funcSn, @preClassId, @name, @bc, @extraData, @lineTable);",
       m_repo.table(m_repoId, "Func"));
     txn.prepare(*this, insertQuery);
   }
 
   BlobEncoder extraBlob{fe.useGlobalIds()};
+  BlobEncoder lineTableBlob{false};
+
   RepoTxnQuery query(txn, *this);
   query.bindInt64("@unitSn", unitSn);
   query.bindInt("@funcSn", funcSn);
   query.bindId("@preClassId", preClassId);
   query.bindStaticString("@name", name);
+  query.bindBlob("@bc", (const void*)bc, bclen);
   const_cast<FuncEmitter&>(fe).serdeMetaData(extraBlob);
   query.bindBlob("@extraData", extraBlob, /* static */ true);
+
+  lineTableBlob(
+    const_cast<LineTable&>(fe.lineTable()),
+    [&](const LineEntry& prev, const LineEntry& cur) -> LineEntry {
+      return LineEntry {
+        cur.pastOffset() - prev.pastOffset(),
+        cur.val() - prev.val()
+      };
+    }
+  );
+  query.bindBlob("@lineTable", lineTableBlob, /* static */ true);
+
   query.exec();
 }
 
@@ -744,12 +815,10 @@ void FuncRepoProxy::GetFuncsStmt
   auto txn = RepoTxn{m_repo.begin()};
   if (!prepared()) {
     auto selectQuery = folly::sformat(
-      "SELECT f.funcSn, f.preClassId, f.name, f.extraData, l.data as lineData "
-      "FROM {} AS f "
-      "LEFT JOIN {} as l ON f.unitSn = l.unitSn AND f.funcSn = l.funcSn "
-      "WHERE f.unitSn == @unitSn ORDER BY f.funcSn ASC;",
-      m_repo.table(m_repoId, "Func"),
-      m_repo.table(m_repoId, "FuncLineTable"));
+      "SELECT funcSn, preClassId, name, bc, extraData, lineTable "
+      "FROM {} "
+      "WHERE unitSn == @unitSn ORDER BY funcSn ASC;",
+      m_repo.table(m_repoId, "Func"));
     txn.prepare(*this, selectQuery);
   }
   RepoTxnQuery query(txn, *this);
@@ -760,7 +829,8 @@ void FuncRepoProxy::GetFuncsStmt
       int funcSn;               /**/ query.getInt(0, funcSn);
       Id preClassId;            /**/ query.getId(1, preClassId);
       StringData* name;         /**/ query.getStaticString(2, name);
-      BlobDecoder extraBlob =   /**/ query.getBlob(3, ue.useGlobalIds());
+      const void* bc; size_t bclen; /**/ query.getBlob(3, bc, bclen);
+      BlobDecoder extraBlob =   /**/ query.getBlob(4, ue.useGlobalIds());
 
       FuncEmitter* fe;
       if (preClassId < 0) {
@@ -772,6 +842,8 @@ void FuncRepoProxy::GetFuncsStmt
         assertx(added);
       }
       assertx(fe->sn() == funcSn);
+      fe->setBc(static_cast<const unsigned char*>(bc), bclen);
+      fe->m_loadedFromRepo = true;
       fe->serdeMetaData(extraBlob);
       if (!SystemLib::s_inited) {
         assertx(fe->attrs & AttrBuiltin);
@@ -781,8 +853,8 @@ void FuncRepoProxy::GetFuncsStmt
         }
       }
 
-      BlobDecoder dataBlob = query.getBlob(4, false);
-      dataBlob(
+      BlobDecoder lineTableBlob = query.getBlob(5, false);
+      lineTableBlob(
         fe->m_lineTable,
         [&](const LineEntry& prev, const LineEntry& delta) -> LineEntry {
           return LineEntry {
@@ -793,40 +865,10 @@ void FuncRepoProxy::GetFuncsStmt
       );
 
       fe->setEHTabIsSorted();
-      fe->finish(fe->past);
+      fe->finish();
     }
   } while (!query.done());
   txn.commit();
-}
-
-void FuncRepoProxy::InsertFuncLineTableStmt
-                  ::insert(RepoTxn& txn,
-                           int64_t unitSn,
-                           int64_t funcSn,
-                           LineTable& lineTable) {
-  if (!prepared()) {
-    auto insertQuery = folly::sformat(
-      "INSERT INTO {} VALUES(@unitSn, @funcSn, @data);",
-      m_repo.table(m_repoId, "FuncLineTable"));
-    txn.prepare(*this, insertQuery);
-  }
-
-  BlobEncoder dataBlob{false};
-  RepoTxnQuery query(txn, *this);
-  query.bindInt64("@unitSn", unitSn);
-  query.bindInt64("@funcSn", funcSn);
-  dataBlob(
-    lineTable,
-    [&](const LineEntry& prev, const LineEntry& cur) -> LineEntry {
-      return LineEntry {
-        cur.pastOffset() - prev.pastOffset(),
-        cur.val() - prev.val()
-      };
-    }
-  );
-
-  query.bindBlob("@data", dataBlob, /* static */ true);
-  query.exec();
 }
 
 void FuncRepoProxy::GetFuncLineTableStmt::get(int64_t unitSn, int64_t funcSn,
@@ -834,8 +876,8 @@ void FuncRepoProxy::GetFuncLineTableStmt::get(int64_t unitSn, int64_t funcSn,
   auto txn = RepoTxn{m_repo.begin()};
   if (!prepared()) {
     auto selectQuery = folly::sformat(
-      "SELECT data FROM {} WHERE unitSn == @unitSn AND funcSn == @funcSn;",
-      m_repo.table(m_repoId, "FuncLineTable"));
+      "SELECT lineTable FROM {} WHERE unitSn == @unitSn AND funcSn == @funcSn;",
+      m_repo.table(m_repoId, "Func"));
     txn.prepare(*this, selectQuery);
   }
   RepoTxnQuery query(txn, *this);
@@ -910,6 +952,50 @@ FuncRepoProxy::GetSourceLocTabStmt::get(int64_t unitSn, int64_t funcSn,
       SourceLocEntry entry(pastOffset, sLoc);
       sourceLocTab.push_back(entry);
     } while (!query.done());
+    txn.commit();
+  } catch (RepoExc& re) {
+    return RepoStatus::error;
+  }
+  return RepoStatus::success;
+}
+
+RepoStatus
+FuncRepoProxy::GetBytecodeStmt::get(Func* func, PC& pc) {
+  try {
+    auto txn = RepoTxn{m_repo.begin()};
+    if (!prepared()) {
+      auto selectQuery = folly::sformat(
+        "SELECT bc "
+        "FROM {} "
+        "WHERE unitSn == @unitSn AND funcSn = @funcSn",
+        m_repo.table(m_repoId, "Func"));
+      txn.prepare(*this, selectQuery);
+    }
+    RepoTxnQuery query(txn, *this);
+    query.bindInt64("@unitSn", func->unit()->sn());
+    query.bindInt64("@funcSn", func->sn());
+
+    query.step();
+    if (query.row()) {
+      const void* bc; size_t bclen; /**/ query.getBlob(0, bc, bclen);
+
+      always_assert(bclen == func->bclen());
+
+      // Recheck that no one else have loaded the bytecode because there is a risk
+      // that we leak memory we want that risk to be as little as possible
+      pc = func->shared()->m_bc.load(std::memory_order_acquire);
+      if (pc == nullptr) {
+        pc = allocateBCRegion(static_cast<const unsigned char*>(bc), bclen);
+        const unsigned char* expected = nullptr;
+        if (!func->shared()->m_bc.compare_exchange_strong(expected, pc)) {
+          // If someone set it before us free the one we created
+          // In repoauth mode we will not be able to free but the chance of a race
+          // is very tiny so we are ok with it leaking.
+          freeBCRegion(static_cast<const unsigned char*>(pc), bclen);
+          pc = expected;
+        }
+      }
+    }
     txn.commit();
   } catch (RepoExc& re) {
     return RepoStatus::error;

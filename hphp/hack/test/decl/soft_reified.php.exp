@@ -2,7 +2,7 @@
   (Shallow_decl_defs.Fun
      { Typing_defs.fe_deprecated = None;
        fe_type =
-       (Rwitness (root|soft_reified.php line 3, characters 10-13),
+       (Rwitness_from_decl ([3:10-14]),
         (Tfun
            { ft_arity = (Fstandard ());
              ft_tparams =
@@ -18,16 +18,12 @@
              ft_where_constraints = []; ft_params = [];
              ft_implicit_params = { capability = (CapDefaults [3:10-14]) };
              ft_ret =
-             { et_enforced = false;
-               et_type =
-               (Rhint (root|soft_reified.php line 3, characters 38-41),
-                (Tprim Tvoid))
-               };
+             { et_enforced = Typing_defs_core.Unenforced;
+               et_type = (Rhint ([3:38-42]), (Tprim Tvoid)) };
              ft_flags =
-             (make_ft_flags FSync None ~return_disposable:false
-               ~returns_mutable:false ~returns_void_to_rx:false
-               ~returns_readonly:false ~readonly_this:false);
-             ft_reactive = Nonreactive; ft_ifc_decl = FDPolicied {PUBLIC} }));
+             (make_ft_flags FSync ~return_disposable:false
+               ~returns_readonly:false ~readonly_this:false ~is_const:false);
+             ft_ifc_decl = FDPolicied {PUBLIC} }));
        fe_pos = [3:10-14]; fe_php_std_lib = false }))
   ]
 

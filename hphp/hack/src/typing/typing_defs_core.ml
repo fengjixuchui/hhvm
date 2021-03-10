@@ -11,6 +11,8 @@ open Hh_prelude
 module Reason = Typing_reason
 module SN = Naming_special_names
 
+type pos_id = Reason.pos_id [@@deriving eq, ord, show]
+
 type ce_visibility =
   | Vpublic
   | Vprivate of string
@@ -39,21 +41,15 @@ type exact =
    inferred via local inference.
 *)
 (* create private types to represent the different type phases *)
-type decl_phase = private DeclPhase [@@deriving eq, show]
+type decl_phase = Reason.decl_phase [@@deriving eq, show]
 
-type locl_phase = private LoclPhase [@@deriving eq, show]
+type locl_phase = Reason.locl_phase [@@deriving eq, show]
 
 type val_kind =
   | Lval
   | LvalSubexpr
   | Other
 [@@deriving eq]
-
-type param_mutability =
-  | Param_owned_mutable
-  | Param_borrowed_mutable
-  | Param_maybe_mutable
-[@@deriving eq, show]
 
 type fun_tparams_kind =
   | FTKtparams
@@ -72,6 +68,73 @@ type shape_kind =
   | Closed_shape
   | Open_shape
 [@@deriving eq, ord, show]
+
+type pos_string = Pos_or_decl.t * string [@@deriving eq, ord, show]
+
+(* Trick the Rust generators to use a BStr, the same way it does for Ast_defs.shape_field_name. *)
+type t_byte_string = string [@@deriving eq, ord, show]
+
+type pos_byte_string = Pos_or_decl.t * t_byte_string [@@deriving eq, ord, show]
+
+type tshape_field_name =
+  | TSFlit_int of pos_string
+  | TSFlit_str of pos_byte_string
+  | TSFclass_const of pos_id * pos_string
+[@@deriving eq, ord, show]
+
+module TShapeField = struct
+  type t = tshape_field_name
+
+  let pos : t -> Pos_or_decl.t = function
+    | TSFlit_int (p, _)
+    | TSFlit_str (p, _) ->
+      p
+    | TSFclass_const ((cls_pos, _), (mem_pos, _)) ->
+      Pos_or_decl.btw cls_pos mem_pos
+
+  let of_ast : (Pos.t -> Pos_or_decl.t) -> Ast_defs.shape_field_name -> t =
+   fun convert_pos -> function
+    | Ast_defs.SFlit_int (p, s) -> TSFlit_int (convert_pos p, s)
+    | Ast_defs.SFlit_str (p, s) -> TSFlit_str (convert_pos p, s)
+    | Ast_defs.SFclass_const ((pcls, cls), (pconst, const)) ->
+      TSFclass_const ((convert_pos pcls, cls), (convert_pos pconst, const))
+
+  (* We include span information in shape_field_name to improve error
+   * messages, but we don't want it being used in the comparison, so
+   * we have to write our own compare. *)
+  let compare x y =
+    match (x, y) with
+    | (TSFlit_int (_, s1), TSFlit_int (_, s2)) -> String.compare s1 s2
+    | (TSFlit_str (_, s1), TSFlit_str (_, s2)) -> String.compare s1 s2
+    | (TSFclass_const ((_, s1), (_, s1')), TSFclass_const ((_, s2), (_, s2')))
+      ->
+      Core_kernel.Tuple.T2.compare
+        ~cmp1:String.compare
+        ~cmp2:String.compare
+        (s1, s1')
+        (s2, s2')
+    | (TSFlit_int _, _) -> -1
+    | (TSFlit_str _, TSFlit_int _) -> 1
+    | (TSFlit_str _, _) -> -1
+    | (TSFclass_const _, _) -> 1
+
+  let equal x y = Core_kernel.Int.equal 0 (compare x y)
+end
+
+module TShapeMap = struct
+  include WrappedMap.Make (TShapeField)
+
+  let map_and_rekey m f1 f2 =
+    fold (fun k v acc -> add (f1 k) (f2 v) acc) m empty
+
+  let pp
+      (pp_val : Format.formatter -> 'a -> unit)
+      (fmt : Format.formatter)
+      (map : 'a t) : unit =
+    make_pp pp_tshape_field_name pp_val fmt map
+end
+
+module TShapeSet = Caml.Set.Make (TShapeField)
 
 type param_mode =
   | FPnormal
@@ -127,14 +190,14 @@ type dependent_type =
 [@@deriving eq, ord, show]
 
 type user_attribute = {
-  ua_name: Aast.sid;
+  ua_name: pos_id;
   ua_classname_params: string list;
 }
 [@@deriving eq, show]
 
 type 'ty tparam = {
   tp_variance: Ast_defs.variance;
-  tp_name: Ast_defs.id;
+  tp_name: pos_id;
   tp_tparams: 'ty tparam list;
   tp_constraints: (Ast_defs.constraint_kind * 'ty) list;
   tp_reified: Aast.reify_kind;
@@ -145,7 +208,13 @@ type 'ty tparam = {
 type 'ty where_constraint = 'ty * Ast_defs.constraint_kind * 'ty
 [@@deriving eq, show]
 
-type 'phase ty = Reason.t * 'phase ty_
+type enforcement =
+  | Unenforced
+  | Enforced
+  | PartiallyEnforced
+[@@deriving eq, show, ord]
+
+type 'phase ty = 'phase Reason.t_ * 'phase ty_
 
 and decl_ty = decl_phase ty
 
@@ -169,7 +238,7 @@ and 'phase shape_field_type = {
 and _ ty_ =
   (*========== Following Types Exist Only in the Declared Phase ==========*)
   | Tthis : decl_phase ty_  (** The late static bound type of a class *)
-  | Tapply : Nast.sid * decl_ty list -> decl_phase ty_
+  | Tapply : pos_id * decl_ty list -> decl_phase ty_
       (** Either an object type or a type alias, ty list are the arguments *)
   | Tmixed : decl_phase ty_
       (** "Any" is the type of a variable with a missing annotation, and "mixed" is
@@ -224,7 +293,7 @@ and _ ty_ =
        * function, method, lambda, etc. *)
   | Ttuple : 'phase ty list -> 'phase ty_
       (** Tuple, with ordered list of the types of the elements of the tuple. *)
-  | Tshape : shape_kind * 'phase shape_field_type Nast.ShapeMap.t -> 'phase ty_
+  | Tshape : shape_kind * 'phase shape_field_type TShapeMap.t -> 'phase ty_
       (** Whether all fields of this shape are known, types of each of the
        * known arms.
        *)
@@ -298,41 +367,16 @@ and _ ty_ =
        * Tobject is currently used to type code like:
        *   ../test/typecheck/return_unknown_class.php
        *)
-  | Tclass : Nast.sid * exact * locl_ty list -> locl_phase ty_
+  | Tclass : pos_id * exact * locl_ty list -> locl_phase ty_
       (** An instance of a class or interface, ty list are the arguments
        * If exact=Exact, then this represents instances of *exactly* this class
        * If exact=Nonexact, this also includes subclasses
        *)
 
-and 'phase taccess_type = 'phase ty * Nast.sid
-
-(** represents reactivity of function
-   - None corresponds to non-reactive function
-   - Some reactivity - to reactive function with specified reactivity flavor
-
- Nonreactive <: Local -t <: Shallow -t <: Reactive -t
-
- MaybeReactive represents conditional reactivity of function that depends on
-   reactivity of function arguments
-
-```
-   <<__Rx>>
-   function f(<<__MaybeRx>> $g) { ... }
-```
-
-   call to function f will be treated as reactive only if $g is reactive
-  *)
-and reactivity =
-  | Nonreactive
-  | Pure of decl_ty option
-  | MaybeReactive of reactivity
-  | RxVar of reactivity option
-  | Cipp of string option
-  | CippLocal of string option
-  | CippGlobal
+and 'phase taccess_type = 'phase ty * pos_id
 
 and 'ty capability =
-  | CapDefaults of Pos.t
+  | CapDefaults of Pos_or_decl.t
   | CapTy of 'ty
 
 (** Companion to fun_params type, intended to consolidate checking of
@@ -349,7 +393,6 @@ and 'ty fun_type = {
   ft_implicit_params: 'ty fun_implicit_params;
   ft_ret: 'ty possibly_enforced_ty;
       (** Carries through the sync/async information from the aast *)
-  ft_reactive: reactivity;
   ft_flags: Typing_defs_flags.fun_type_flags;
   ft_ifc_decl: ifc_fun_decl;
 }
@@ -363,21 +406,16 @@ and 'ty fun_arity =
       (** PHP5.6-style ...$args finishes the func declaration.
           min ; variadic param type *)
 
-and param_rx_annotation =
-  | Param_rx_var
-  | Param_rx_if_impl of decl_ty
-
 and 'ty possibly_enforced_ty = {
-  et_enforced: bool;
+  et_enforced: enforcement;
       (** True if consumer of this type enforces it at runtime *)
   et_type: 'ty;
 }
 
 and 'ty fun_param = {
-  fp_pos: Pos.t;
+  fp_pos: Pos_or_decl.t;
   fp_name: string option;
   fp_type: 'ty possibly_enforced_ty;
-  fp_rx_annotation: param_rx_annotation option;
   fp_flags: Typing_defs_flags.fun_param_flags;
 }
 
@@ -389,14 +427,11 @@ module Flags = struct
   let get_ft_return_disposable ft =
     is_set ft.ft_flags ft_flags_return_disposable
 
-  let get_ft_returns_void_to_rx ft =
-    is_set ft.ft_flags ft_flags_returns_void_to_rx
-
-  let get_ft_returns_mutable ft = is_set ft.ft_flags ft_flags_returns_mutable
-
   let get_ft_returns_readonly ft = is_set ft.ft_flags ft_flags_returns_readonly
 
   let get_ft_readonly_this ft = is_set ft.ft_flags ft_flags_readonly_this
+
+  let get_ft_is_const ft = is_set ft.ft_flags ft_flags_is_const
 
   let get_ft_is_coroutine ft = is_set ft.ft_flags ft_flags_is_coroutine
 
@@ -438,28 +473,6 @@ module Flags = struct
     | (false, true) -> Ast_defs.FGenerator
     | (true, true) -> Ast_defs.FAsyncGenerator
 
-  let from_mutable_flags flags =
-    let masked = Int.bit_and flags mutable_flags_mask in
-    if Int.equal masked mutable_flags_owned then
-      Some Param_owned_mutable
-    else if Int.equal masked mutable_flags_borrowed then
-      Some Param_borrowed_mutable
-    else if Int.equal masked mutable_flags_maybe then
-      Some Param_maybe_mutable
-    else
-      None
-
-  let to_mutable_flags m =
-    match m with
-    | None -> 0x0
-    | Some Param_owned_mutable -> mutable_flags_owned
-    | Some Param_borrowed_mutable -> mutable_flags_borrowed
-    | Some Param_maybe_mutable -> mutable_flags_maybe
-
-  let get_ft_param_mutable ft = from_mutable_flags ft.ft_flags
-
-  let get_fp_mutability fp = from_mutable_flags fp.fp_flags
-
   let get_fp_ifc_external fp = is_set fp.fp_flags fp_flags_ifc_external
 
   let get_fp_ifc_can_call fp = is_set fp.fp_flags fp_flags_ifc_can_call
@@ -467,6 +480,8 @@ module Flags = struct
   let get_fp_is_atom fp = is_set fp.fp_flags fp_flags_atom
 
   let get_fp_readonly fp = is_set fp.fp_flags fp_flags_readonly
+
+  let get_fp_const_function fp = is_set fp.fp_flags fp_flags_const_function
 
   let fun_kind_to_flags kind =
     match kind with
@@ -476,21 +491,12 @@ module Flags = struct
     | Ast_defs.FAsyncGenerator -> Int.bit_or ft_flags_async ft_flags_generator
 
   let make_ft_flags
-      kind
-      param_mutable
-      ~return_disposable
-      ~returns_mutable
-      ~returns_void_to_rx
-      ~returns_readonly
-      ~readonly_this =
-    let flags =
-      Int.bit_or (to_mutable_flags param_mutable) (fun_kind_to_flags kind)
-    in
+      kind ~return_disposable ~returns_readonly ~readonly_this ~const =
+    let flags = fun_kind_to_flags kind in
     let flags = set_bit ft_flags_return_disposable return_disposable flags in
-    let flags = set_bit ft_flags_returns_mutable returns_mutable flags in
-    let flags = set_bit ft_flags_returns_void_to_rx returns_void_to_rx flags in
     let flags = set_bit ft_flags_returns_readonly returns_readonly flags in
     let flags = set_bit ft_flags_readonly_this readonly_this flags in
+    let flags = set_bit ft_flags_is_const const flags in
     flags
 
   let mode_to_flags mode =
@@ -501,20 +507,20 @@ module Flags = struct
   let make_fp_flags
       ~mode
       ~accept_disposable
-      ~mutability
       ~has_default
       ~ifc_external
       ~ifc_can_call
       ~is_atom
-      ~readonly =
+      ~readonly
+      ~const_function =
     let flags = mode_to_flags mode in
-    let flags = Int.bit_or (to_mutable_flags mutability) flags in
     let flags = set_bit fp_flags_accept_disposable accept_disposable flags in
     let flags = set_bit fp_flags_has_default has_default flags in
     let flags = set_bit fp_flags_ifc_external ifc_external flags in
     let flags = set_bit fp_flags_ifc_can_call ifc_can_call flags in
     let flags = set_bit fp_flags_atom is_atom flags in
     let flags = set_bit fp_flags_readonly readonly flags in
+    let flags = set_bit fp_flags_const_function const_function flags in
     flags
 
   let get_fp_accept_disposable fp =
@@ -552,7 +558,7 @@ module Pp = struct
     | Tnonnull -> Format.pp_print_string fmt "Tnonnull"
     | Tapply (a0, a1) ->
       Format.fprintf fmt "(@[<2>Tapply (@,";
-      let () = Aast.pp_sid fmt a0 in
+      let () = pp_pos_id fmt a0 in
       Format.fprintf fmt ",@ ";
       Format.fprintf fmt "@[<2>[";
       ignore
@@ -634,7 +640,7 @@ module Pp = struct
       Format.fprintf fmt "(@[<2>Tshape (@,";
       pp_shape_kind fmt a0;
       Format.fprintf fmt ",@ ";
-      Nast.ShapeMap.pp pp_shape_field_type fmt a1;
+      TShapeMap.pp pp_shape_field_type fmt a1;
       Format.fprintf fmt "@,))@]"
     | Tvar a0 ->
       Format.fprintf fmt "(@[<2>Tvar@ ";
@@ -674,7 +680,7 @@ module Pp = struct
     | Tobject -> Format.pp_print_string fmt "Tobject"
     | Tclass (a0, a2, a1) ->
       Format.fprintf fmt "(@[<2>Tclass (@,";
-      Aast.pp_sid fmt a0;
+      pp_pos_id fmt a0;
       Format.fprintf fmt ",@ ";
       pp_exact fmt a2;
       Format.fprintf fmt ",@ ";
@@ -709,40 +715,9 @@ module Pp = struct
     pp_ty fmt a0;
     Format.fprintf fmt ",@ ";
     Format.fprintf fmt "@[<2>[";
-    Aast.pp_sid fmt a1;
+    pp_pos_id fmt a1;
     Format.fprintf fmt "@,]@]";
     Format.fprintf fmt "@])"
-
-  and pp_reactivity : Format.formatter -> reactivity -> unit =
-   fun fmt r ->
-    match r with
-    (* Nonreactive functions are printed in error messages as "normal", *)
-    (* But for this printing purpose, we print the same as the ast structure *)
-    | Nonreactive -> Format.pp_print_string fmt "Nonreactive"
-    | RxVar v ->
-      Format.pp_print_string fmt "RxVar {";
-      Option.iter v (pp_reactivity fmt);
-      Format.pp_print_string fmt "}"
-    | MaybeReactive v ->
-      Format.pp_print_string fmt "MaybeReactive {";
-      pp_reactivity fmt v;
-      Format.pp_print_string fmt "}"
-    | Pure None -> Format.pp_print_string fmt "Pure {}"
-    | Pure (Some ty) ->
-      Format.pp_print_string fmt "Pure {";
-      pp_ty fmt ty;
-      Format.pp_print_string fmt "}"
-    | Cipp None -> Format.pp_print_string fmt "Cipp {}"
-    | Cipp (Some s) ->
-      Format.pp_print_string fmt "Cipp {";
-      Format.pp_print_string fmt s;
-      Format.pp_print_string fmt "}"
-    | CippLocal None -> Format.pp_print_string fmt "CippLocal {}"
-    | CippLocal (Some s) ->
-      Format.pp_print_string fmt "CippLocal {";
-      Format.pp_print_string fmt s;
-      Format.pp_print_string fmt "}"
-    | CippGlobal -> Format.pp_print_string fmt "CippGlobal"
 
   and pp_possibly_enforced_ty :
       type a. Format.formatter -> a ty possibly_enforced_ty -> unit =
@@ -750,7 +725,7 @@ module Pp = struct
     Format.fprintf fmt "@[<2>{ ";
 
     Format.fprintf fmt "@[%s =@ " "et_enforced";
-    Format.fprintf fmt "%B" x.et_enforced;
+    Format.fprintf fmt "%a" pp_enforcement x.et_enforced;
     Format.fprintf fmt "@]";
     Format.fprintf fmt ";@ ";
 
@@ -767,7 +742,7 @@ module Pp = struct
       Format.pp_print_string fmt ")"
     | CapDefaults pos ->
       Format.pp_print_string fmt "(CapDefaults ";
-      Pos.pp fmt pos;
+      Pos_or_decl.pp fmt pos;
       Format.pp_print_string fmt ")"
 
   and pp_fun_implicit_params :
@@ -864,26 +839,8 @@ module Pp = struct
       Format.fprintf fmt "@]";
       Format.fprintf fmt "@ ";
 
-      Format.fprintf fmt "@[";
-      Format.fprintf
-        fmt
-        "%s"
-        ([%show: param_mutability option] (get_ft_param_mutable ft));
-      Format.fprintf fmt "@]";
-      Format.fprintf fmt "@ ";
-
       Format.fprintf fmt "@[~%s:" "return_disposable";
       Format.fprintf fmt "%B" (get_ft_return_disposable ft);
-      Format.fprintf fmt "@]";
-      Format.fprintf fmt "@ ";
-
-      Format.fprintf fmt "@[~%s:" "returns_mutable";
-      Format.fprintf fmt "%B" (get_ft_returns_mutable ft);
-      Format.fprintf fmt "@]";
-      Format.fprintf fmt "@ ";
-
-      Format.fprintf fmt "@[~%s:" "returns_void_to_rx";
-      Format.fprintf fmt "%B" (get_ft_returns_void_to_rx ft);
       Format.fprintf fmt "@]";
       Format.fprintf fmt "@ ";
 
@@ -895,17 +852,17 @@ module Pp = struct
       Format.fprintf fmt "@[~%s:" "readonly_this";
       Format.fprintf fmt "%B" (get_ft_readonly_this ft);
       Format.fprintf fmt "@]";
+      Format.fprintf fmt "@ ";
+
+      Format.fprintf fmt "@[~%s:" "is_const";
+      Format.fprintf fmt "%B" (get_ft_is_const ft);
+      Format.fprintf fmt "@]";
 
       Format.fprintf fmt ")@]"
     in
 
     Format.fprintf fmt "@[%s =@ " "ft_flags";
     pp_ft_flags fmt x;
-    Format.fprintf fmt "@]";
-    Format.fprintf fmt ";@ ";
-
-    Format.fprintf fmt "@[%s =@ " "ft_reactive";
-    pp_reactivity fmt x.ft_reactive;
     Format.fprintf fmt "@]";
     Format.fprintf fmt ";@ ";
 
@@ -933,14 +890,6 @@ module Pp = struct
   and pp_fun_param : type a. Format.formatter -> a ty fun_param -> unit =
     let pp_fp_flags fmt fp =
       Format.fprintf fmt "@[<2>(%s@ " "make_fp_flags";
-
-      Format.fprintf fmt "@[~%s:" "mutability";
-      Format.fprintf
-        fmt
-        "%s"
-        ([%show: param_mutability option] (get_fp_mutability fp));
-      Format.fprintf fmt "@]";
-      Format.fprintf fmt "@ ";
 
       Format.fprintf fmt "@[~%s:" "accept_disposable";
       Format.fprintf fmt "%B" (get_fp_accept_disposable fp);
@@ -975,6 +924,11 @@ module Pp = struct
       Format.fprintf fmt "@[~%s:" "readonly";
       Format.fprintf fmt "%B" (get_fp_readonly fp);
       Format.fprintf fmt "@]";
+      Format.fprintf fmt "@ ";
+
+      Format.fprintf fmt "@[~%s:" "const_function";
+      Format.fprintf fmt "%B" (get_fp_const_function fp);
+      Format.fprintf fmt "@]";
       Format.fprintf fmt ")@]"
     in
 
@@ -982,7 +936,7 @@ module Pp = struct
       Format.fprintf fmt "@[<2>{ ";
 
       Format.fprintf fmt "@[%s =@ " "fp_pos";
-      Pos.pp fmt x.fp_pos;
+      Pos_or_decl.pp fmt x.fp_pos;
       Format.fprintf fmt "@]";
       Format.fprintf fmt ";@ ";
 
@@ -998,16 +952,6 @@ module Pp = struct
 
       Format.fprintf fmt "@[%s =@ " "fp_type";
       pp_possibly_enforced_ty fmt x.fp_type;
-      Format.fprintf fmt "@]";
-      Format.fprintf fmt ";@ ";
-
-      Format.fprintf fmt "@[%s =@ " "fp_rx_annotation";
-      (match x.fp_rx_annotation with
-      | None -> Format.pp_print_string fmt "None"
-      | Some x ->
-        Format.pp_print_string fmt "(Some ";
-        pp_param_rx_annotation fmt x;
-        Format.pp_print_string fmt ")");
       Format.fprintf fmt "@]";
       Format.fprintf fmt ";@ ";
 
@@ -1031,15 +975,6 @@ module Pp = struct
          x);
     Format.fprintf fmt "@,]@]"
 
-  and pp_param_rx_annotation : Format.formatter -> param_rx_annotation -> unit =
-   fun fmt x ->
-    match x with
-    | Param_rx_var -> Format.pp_print_string fmt "Param_rx_var"
-    | Param_rx_if_impl ty ->
-      Format.pp_print_string fmt "(Param_rx_if_impl ";
-      pp_ty fmt ty;
-      Format.pp_print_string fmt ")"
-
   and pp_tparam_ : type a. Format.formatter -> a ty tparam -> unit =
    (fun fmt tparam -> pp_tparam pp_ty fmt tparam)
 
@@ -1062,9 +997,6 @@ module Pp = struct
   let show_decl_ty x = show_ty x
 
   let show_locl_ty x = show_ty x
-
-  let show_reactivity : reactivity -> string =
-   (fun x -> Format.asprintf "%a" pp_reactivity x)
 end
 
 include Pp
@@ -1179,9 +1111,10 @@ let get_reason (r, _) = r
 
 let get_node (_, n) = n
 
-let map_reason (r, ty) ~(f : Reason.t -> Reason.t) = (f r, ty)
+let map_reason (r, ty) ~(f : _ Reason.t_ -> _ Reason.t_) = (f r, ty)
 
-let map_ty (r, ty) ~(f : _ ty_ -> _ ty_) = (r, f ty)
+let map_ty : type ph. ph ty -> f:(ph ty_ -> ph ty_) -> ph ty =
+ (fun (r, ty) ~(f : _ ty_ -> _ ty_) -> (r, f ty))
 
 let with_reason ty r = map_reason ty ~f:(fun _r -> r)
 
@@ -1191,6 +1124,6 @@ let mk_constraint_type p = p
 
 let deref_constraint_type p = p
 
-let get_reason_i = function
+let get_reason_i : internal_type -> Reason.t = function
   | LoclType lty -> get_reason lty
   | ConstraintType (r, _) -> r

@@ -67,6 +67,7 @@ struct Class;
 struct ClassInfo;
 struct EnumValues;
 struct Func;
+struct RuntimeCoeffects;
 struct StringData;
 struct c_Awaitable;
 
@@ -95,12 +96,6 @@ struct StaticPropData {
  */
 struct StaticMultiPropData {
   TypedValue val;
-};
-
-enum class ClsCnsLookup {
-  NoTypes,
-  IncludeTypes,
-  IncludeTypesPartial
 };
 
 /*
@@ -738,10 +733,9 @@ public:
    * Return null if no such method exists.
    *
    * If the method name lookup matches case insensitively but not case
-   * sensitively, if raise flag is set, we raise a notice.
-   * Otherwise, we return nullptr as if it didn't match.
+   * sensitively, we raise a notice.
    */
-  Func* lookupMethod(const StringData* methName, bool raise = true) const;
+  Func* lookupMethod(const StringData* methName) const;
 
   /*
    * public because its used by importTraitMethod.
@@ -1064,14 +1058,24 @@ public:
                        bool includeAbs = false) const;
 
   /*
+   * Returns the runtime coeffect value of the class context constant.
+   * Raises an error if the context constant is not defined, is abstract or
+   * is a type/value constant.
+   */
+  RuntimeCoeffects clsCtxCnsGet(const StringData* name) const;
+
+  /*
    * Look up the actual value of a class constant.  Perform dynamic
    * initialization if necessary.
+   *
+   * If resolve not is set, then returns an unresolved structure.
    *
    * Return a TypedValue containing KindOfUninit if this class has no
    * such constant.
    */
   TypedValue clsCnsGet(const StringData* clsCnsName,
-                       ClsCnsLookup what = ClsCnsLookup::NoTypes) const;
+                       ConstModifiers::Kind what = ConstModifiers::Kind::Value,
+                       bool resolve = true) const;
 
   /*
    * Look up a class constant's TypedValue if it doesn't require dynamic
@@ -1087,7 +1091,8 @@ public:
    */
   const TypedValue* cnsNameToTV(const StringData* clsCnsName,
                                 Slot& clsCnsInd,
-                                ClsCnsLookup what = ClsCnsLookup::NoTypes) const;
+                                ConstModifiers::Kind what
+                                  = ConstModifiers::Kind::Value) const;
 
   /*
    * Get the slot for a constant with name, which can optionally be abstract and
@@ -1291,10 +1296,9 @@ public:
   // Avoiding adding methods to this section.
 
   /*
-   * Whether this class can be made persistent---i.e., if AttrPersistent is set
-   * and all parents, interfaces, and traits for this class are persistent.
+   * Verify that the AttrPersistent is set correctly.
    */
-  bool verifyPersistent() const;
+  void verifyPersistence() const;
 
   /*
    * Set the instance bits on this class.

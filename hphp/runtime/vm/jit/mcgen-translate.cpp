@@ -22,6 +22,7 @@
 #include "hphp/runtime/vm/jit/func-order.h"
 #include "hphp/runtime/vm/jit/inlining-decider.h"
 #include "hphp/runtime/vm/jit/irlower.h"
+#include "hphp/runtime/vm/jit/outlined-sequence-selector.h"
 #include "hphp/runtime/vm/jit/prof-data.h"
 #include "hphp/runtime/vm/jit/prof-data-serialize.h"
 #include "hphp/runtime/vm/jit/stack-offsets.h"
@@ -239,13 +240,13 @@ void createSrcRecs(const Func* func) {
 
   auto create_one = [&] (Offset off) {
     auto const sk = SrcKey { func, off, ResumeMode::None };
-    if (off == func->base() ||
+    if (off == 0 ||
         profData->dvFuncletTransId(sk) != kInvalidTransID) {
       tc::createSrcRec(sk, spOff);
     }
   };
 
-  create_one(func->base());
+  create_one(0);
   for (auto const& pi : func->params()) {
     if (pi.hasDefaultValue()) create_one(pi.funcletOff);
   }
@@ -385,31 +386,58 @@ void retranslateAll() {
     std::lock_guard<std::mutex> lock{s_dispatcherMutex};
     BootStats::Block timer("RTA_translate_and_relocate",
                            RuntimeOption::ServerExecutionMode());
-    {
-      Treadmill::Session session(Treadmill::SessionKind::Retranslate);
-      auto bufp = codeBuffer.get();
-      for (auto i = 0u; i < nFuncs; ++i, bufp += initialSize) {
-        auto const fid = sortedFuncs[i];
-        auto const func = const_cast<Func*>(Func::fromFuncId(fid));
-        if (!RuntimeOption::EvalJitSerdesDebugFunctions.empty()) {
-          // Only run specified functions
-          if (!RuntimeOption::EvalJitSerdesDebugFunctions.
-              count(func->fullName()->toCppString())) {
-            continue;
+    auto const runParallelRetranslate = [&] {
+      {
+        Treadmill::Session session(Treadmill::SessionKind::Retranslate);
+        auto bufp = codeBuffer.get();
+        for (auto i = 0u; i < nFuncs; ++i, bufp += initialSize) {
+          auto const fid = sortedFuncs[i];
+          auto const func = const_cast<Func*>(Func::fromFuncId(fid));
+          if (!RuntimeOption::EvalJitSerdesDebugFunctions.empty()) {
+            // Only run specified functions
+            if (!RuntimeOption::EvalJitSerdesDebugFunctions.
+                count(func->fullName()->toCppString())) {
+              continue;
+            }
           }
+
+          jobs.emplace_back(
+            tc::FuncMetaInfo(func, tc::LocalTCBuffer(bufp, initialSize))
+          );
+
+          createSrcRecs(func);
+          enqueueRetranslateOptRequest(&jobs.back());
         }
-
-        jobs.emplace_back(
-          tc::FuncMetaInfo(func, tc::LocalTCBuffer(bufp, initialSize))
-        );
-
-        createSrcRecs(func);
-        enqueueRetranslateOptRequest(&jobs.back());
       }
+      if (RuntimeOption::EvalJitBuildOutliningHashes) {
+        auto const dispatcher = s_dispatcher.load(std::memory_order_acquire);
+        if (dispatcher) {
+          dispatcher->waitEmpty(false);
+        }
+        buildOptimizedHashes();
+      }
+    };
+    runParallelRetranslate();
+
+    if (RuntimeOption::EvalJitRerunRetranslateAll) {
+      if (auto const dispatcher = s_dispatcher.load(std::memory_order_acquire)) {
+        dispatcher->waitEmpty(false);
+      }
+      jobs.clear();
+      jobs.reserve(nFuncs);
+      {
+        ProfData::Session pds;
+        for (auto i = 0u; i < nFuncs; ++i) {
+          auto const fid = sortedFuncs[i];
+          profData()->unsetOptimized(fid);
+        }
+        profData()->clearAllOptimizedSKs();
+        clearCachedInliningCost();
+      }
+      runParallelRetranslate();
     }
 
     // 5) Relocate the machine code into code.hot in the desired order
-
     tc::relocatePublishSortedOptFuncs(std::move(jobs));
 
     if (auto const dispatcher = s_dispatcher.load(std::memory_order_acquire)) {

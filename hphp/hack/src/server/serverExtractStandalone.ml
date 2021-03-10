@@ -94,6 +94,8 @@ module Fmt = struct
 
   let angles pp_v ppf v = surround "<" ">" pp_v ppf v
 
+  let brackets pp_v ppf v = surround "[" "]" pp_v ppf v
+
   let comma ppf _ =
     string ppf ",";
     sp ppf ()
@@ -114,6 +116,8 @@ module Fmt = struct
     sp ppf ()
 
   let semicolon ppf _ = string ppf ";"
+
+  let arrow ppf _ = string ppf "->"
 
   let fat_arrow ppf _ =
     sp ppf ();
@@ -151,6 +155,12 @@ module Fmt = struct
   let hbox pp_v ppf v =
     Format.(
       pp_open_hbox ppf ();
+      pp_v ppf v;
+      pp_close_box ppf ())
+
+  let vbox ?(indent = 0) pp_v ppf v =
+    Format.(
+      pp_open_vbox ppf indent;
       pp_v ppf v;
       pp_close_box ppf ())
 end
@@ -200,7 +210,7 @@ end = struct
 
   let get_gconst_pos ctx name =
     Decl_provider.get_gconst ctx name
-    |> Option.map ~f:(fun ty -> Typing_defs.get_pos ty)
+    |> Option.map ~f:(fun const -> const.Typing_defs.cd_pos)
 
   let get_class_or_typedef_pos ctx name =
     Option.first_some (get_class_pos ctx name) (get_typedef_pos ctx name)
@@ -611,13 +621,13 @@ end = struct
           List.iter tyl ~f:(add_dep ctx env ~this)
 
         method! on_tshape _ _ _ fdm =
-          Nast.ShapeMap.iter
+          Typing_defs.TShapeMap.iter
             (fun name Typing_defs.{ sft_ty; _ } ->
               (match name with
-              | Ast_defs.SFlit_int _
-              | Ast_defs.SFlit_str _ ->
+              | Typing_defs.TSFlit_int _
+              | Typing_defs.TSFlit_str _ ->
                 ()
-              | Ast_defs.SFclass_const ((_, c), (_, s)) ->
+              | Typing_defs.TSFclass_const ((_, c), (_, s)) ->
                 do_add_dep ctx env (Typing_deps.Dep.Class c);
                 do_add_dep ctx env (Typing_deps.Dep.Const (c, s)));
               add_dep ctx env ~this sft_ty)
@@ -690,12 +700,16 @@ end = struct
     match Dep.get_class_name obj with
     | Some cls_name ->
       do_add_dep ctx env (Typing_deps.Dep.Class cls_name);
+      Option.iter ~f:(add_class_attr_deps ctx env)
+      @@ Nast_helper.get_class ctx cls_name;
       (match Decl_provider.get_class ctx cls_name with
       | None ->
         let Typing_defs.{ td_type; td_constraint; _ } =
           value_or_not_found description
           @@ Decl_provider.get_typedef ctx cls_name
         in
+        Option.iter ~f:(add_tydef_attr_deps ctx env)
+        @@ Nast_helper.get_typedef ctx cls_name;
         add_dep ctx ~this:None env td_type;
         Option.iter td_constraint ~f:(add_dep ctx ~this:None env)
       | Some cls ->
@@ -707,19 +721,24 @@ end = struct
               value_or_not_found description @@ Class.get_prop cls name
             in
             add_dep @@ Lazy.force ce_type;
-
+            Option.iter ~f:(add_classvar_attr_deps ctx env)
+            @@ Nast_helper.get_prop ctx cls_name name;
             (* We need to initialize properties in the constructor, add a dependency on it *)
             do_add_dep ctx env (Cstr cls_name)
           | SProp (_, name) ->
             let Typing_defs.{ ce_type; _ } =
               value_or_not_found description @@ Class.get_sprop cls name
             in
-            add_dep @@ Lazy.force ce_type
+            add_dep @@ Lazy.force ce_type;
+            Option.iter ~f:(add_classvar_attr_deps ctx env)
+            @@ Nast_helper.get_prop ctx cls_name name
           | Method (_, name) ->
             let Typing_defs.{ ce_type; _ } =
               value_or_not_found description @@ Class.get_method cls name
             in
             add_dep @@ Lazy.force ce_type;
+            Option.iter ~f:(add_method_attr_deps ctx env)
+            @@ Nast_helper.get_method ctx cls_name name;
             Class.all_ancestor_names cls
             |> List.iter ~f:(fun ancestor_name ->
                    match Decl_provider.get_class ctx ancestor_name with
@@ -730,6 +749,8 @@ end = struct
             (match Class.get_smethod cls name with
             | Some Typing_defs.{ ce_type; _ } ->
               add_dep @@ Lazy.force ce_type;
+              Option.iter ~f:(add_method_attr_deps ctx env)
+              @@ Nast_helper.get_method ctx cls_name name;
               Class.all_ancestor_names cls
               |> List.iter ~f:(fun ancestor_name ->
                      match Decl_provider.get_class ctx ancestor_name with
@@ -747,6 +768,9 @@ end = struct
             | Some Typing_defs.{ ttc_type; ttc_as_constraint; ttc_origin; _ } ->
               if not (String.equal cls_name ttc_origin) then
                 do_add_dep ctx env (Const (ttc_origin, name));
+
+              Option.iter ~f:(add_tyconst_attr_deps ctx env)
+              @@ Nast_helper.get_typeconst ctx ttc_origin name;
               Option.iter ttc_type ~f:add_dep;
               Option.iter ttc_as_constraint ~f:add_dep
             | None ->
@@ -757,7 +781,9 @@ end = struct
           | Cstr _ ->
             (match Class.construct cls with
             | (Some Typing_defs.{ ce_type; _ }, _) ->
-              add_dep @@ Lazy.force ce_type
+              add_dep @@ Lazy.force ce_type;
+              Option.iter ~f:(add_method_attr_deps ctx env)
+              @@ Nast_helper.get_method ctx cls_name "__construct"
             | _ -> ())
           | Class _ ->
             List.iter (Class.all_ancestors cls) (fun (_, ty) -> add_dep ty);
@@ -785,14 +811,68 @@ end = struct
           let Typing_defs.{ fe_type; _ } =
             value_or_not_found description @@ Decl_provider.get_fun ctx f
           in
-          add_dep ctx ~this:None env @@ fe_type
+          add_dep ctx ~this:None env @@ fe_type;
+          Option.iter ~f:(add_fun_attr_deps ctx env)
+          @@ Nast_helper.get_fun ctx f
         | GConst c
         | GConstName c ->
-          let ty =
+          let const =
             value_or_not_found description @@ Decl_provider.get_gconst ctx c
           in
-          add_dep ctx ~this:None env ty
+          add_dep ctx ~this:None env const.Typing_defs.cd_type
         | _ -> raise UnexpectedDependency))
+
+  and add_user_attr_deps ctx env user_attrs =
+    List.iter user_attrs ~f:(fun Aast.{ ua_name = (_, cls); _ } ->
+        if not @@ String.is_prefix ~prefix:"__" cls then (
+          do_add_dep ctx env @@ Typing_deps.Dep.Class cls;
+          do_add_dep ctx env @@ Typing_deps.Dep.Cstr cls
+        ))
+
+  and add_class_attr_deps
+      ctx env Aast.{ c_user_attributes = attrs; c_tparams = tparams; _ } =
+    add_user_attr_deps ctx env attrs;
+    List.iter tparams ~f:(add_tparam_attr_deps ctx env)
+
+  and add_classvar_attr_deps ctx env Aast.{ cv_user_attributes = attrs; _ } =
+    add_user_attr_deps ctx env attrs
+
+  and add_tyconst_attr_deps ctx env Aast.{ c_tconst_user_attributes = attrs; _ }
+      =
+    add_user_attr_deps ctx env attrs
+
+  and add_arg_attr_deps ctx env (attrs, params, tparams) =
+    add_user_attr_deps ctx env attrs;
+    List.iter params ~f:(add_fun_param_attr_deps ctx env);
+    List.iter tparams ~f:(add_tparam_attr_deps ctx env)
+
+  and add_fun_attr_deps
+      ctx
+      env
+      Aast.
+        { f_user_attributes = attrs; f_params = params; f_tparams = tparams; _ }
+      =
+    add_arg_attr_deps ctx env (attrs, params, tparams)
+
+  and add_method_attr_deps
+      ctx
+      env
+      Aast.
+        { m_user_attributes = attrs; m_tparams = tparams; m_params = params; _ }
+      =
+    add_arg_attr_deps ctx env (attrs, params, tparams)
+
+  and add_fun_param_attr_deps ctx env Aast.{ param_user_attributes = attrs; _ }
+      =
+    add_user_attr_deps ctx env attrs
+
+  and add_tydef_attr_deps ctx env Aast.{ t_user_attributes = attrs; _ } =
+    add_user_attr_deps ctx env attrs
+
+  and add_tparam_attr_deps
+      ctx env Aast.{ tp_user_attributes = attrs; tp_parameters = tparams; _ } =
+    add_user_attr_deps ctx env attrs;
+    List.iter tparams ~f:(add_tparam_attr_deps ctx env)
 
   let add_impls ~ctx ~env ~cls acc ancestor_name =
     let open Typing_deps.Dep in
@@ -861,8 +941,13 @@ end = struct
     requirements *)
   let get_implementation_dependencies ctx env cls =
     let f = add_impls ~ctx ~env ~cls in
-    let init = List.fold ~init:[] ~f @@ Class.all_ancestor_names cls in
-    List.fold ~f ~init @@ Class.all_ancestor_req_names cls
+    let init =
+      Option.value_map ~default:[] ~f:(fun ss ->
+          List.map ~f:(fun nm -> Typing_deps.Dep.Class nm) @@ SSet.elements ss)
+      @@ Class.sealed_whitelist cls
+    in
+    let ancs = List.fold ~init ~f @@ Class.all_ancestor_names cls in
+    List.fold ~f ~init:ancs @@ Class.all_ancestor_req_names cls
 
   (** Add implementation depedencies of all class dependencies until we reach
     a fixed point *)
@@ -953,6 +1038,9 @@ end = struct
     match String.rsplit2 obj_name '\\' with
     | Some (_, name) -> name
     | None -> obj_name
+
+  let is_contextual_param Aast.{ tp_name = (_, name); _ } =
+    String.is_substring ~substring:"Tctx" name
 
   (** Generate an initial value based on type hint *)
   let init_value ctx hint =
@@ -1080,6 +1168,11 @@ end = struct
     Format.asprintf "%a" (pp []) hint
 
   (* -- Shared pretty printers ---------------------------------------------- *)
+  let pp_visibility ppf = function
+    | Ast_defs.Private -> Fmt.string ppf "private"
+    | Ast_defs.Public -> Fmt.string ppf "public"
+    | Ast_defs.Protected -> Fmt.string ppf "protected"
+
   let pp_paramkind ppf =
     Ast_defs.(
       function
@@ -1099,7 +1192,7 @@ end = struct
       | Tresource -> Fmt.string ppf "resource"
       | Tnoreturn -> Fmt.string ppf "noreturn")
 
-  let rec pp_hint ppf (_, hint_) =
+  let rec pp_hint ~is_ctx ppf (_, hint_) =
     match hint_ with
     | Aast.Hany
     | Aast.Herr ->
@@ -1112,43 +1205,62 @@ end = struct
     | Aast.Hvar name -> Fmt.string ppf name
     | Aast.Hfun_context name ->
       Fmt.(prefix (const string "ctx ") string) ppf name
-    | Aast.Hoption hint -> Fmt.(prefix (const string "?") pp_hint) ppf hint
-    | Aast.Hlike hint -> Fmt.(prefix (const string "~") pp_hint) ppf hint
-    | Aast.Hsoft hint -> Fmt.(prefix (const string "@") pp_hint) ppf hint
-    | Aast.Htuple hints -> Fmt.(parens @@ list ~sep:comma pp_hint) ppf hints
-    | Aast.Hunion hints -> Fmt.(parens @@ list ~sep:vbar pp_hint) ppf hints
+    | Aast.Hoption hint ->
+      Fmt.(prefix (const string "?") @@ pp_hint ~is_ctx:false) ppf hint
+    | Aast.Hlike hint ->
+      Fmt.(prefix (const string "~") @@ pp_hint ~is_ctx:false) ppf hint
+    | Aast.Hsoft hint ->
+      Fmt.(prefix (const string "@") @@ pp_hint ~is_ctx:false) ppf hint
+    | Aast.Htuple hints ->
+      Fmt.(parens @@ list ~sep:comma @@ pp_hint ~is_ctx:false) ppf hints
+    | Aast.Hunion hints ->
+      Fmt.(parens @@ list ~sep:vbar @@ pp_hint ~is_ctx:false) ppf hints
+    | Aast.Hintersection hints when is_ctx ->
+      Fmt.(brackets @@ list ~sep:comma @@ pp_hint ~is_ctx:false) ppf hints
     | Aast.Hintersection hints ->
-      Fmt.(parens @@ list ~sep:amp pp_hint) ppf hints
+      Fmt.(parens @@ list ~sep:amp @@ pp_hint ~is_ctx:false) ppf hints
     | Aast.Hprim prim -> pp_tprim ppf prim
     | Aast.Haccess (root, ids) ->
-      Fmt.(pair ~sep:dbl_colon pp_hint @@ list ~sep:dbl_colon string)
+      Fmt.(
+        pair ~sep:dbl_colon (pp_hint ~is_ctx:false)
+        @@ list ~sep:dbl_colon string)
         ppf
         (root, List.map ~f:snd ids)
     | Aast.Hvarray hint ->
-      Fmt.(prefix (const string "varray") @@ angles pp_hint) ppf hint
+      Fmt.(prefix (const string "varray") @@ angles @@ pp_hint ~is_ctx:false)
+        ppf
+        hint
     | Aast.Hvarray_or_darray (None, vhint) ->
-      Fmt.(prefix (const string "varray_or_darray") @@ angles pp_hint) ppf vhint
+      Fmt.(
+        prefix (const string "varray_or_darray")
+        @@ angles
+        @@ pp_hint ~is_ctx:false)
+        ppf
+        vhint
     | Aast.Hvarray_or_darray (Some khint, vhint) ->
       Fmt.(
         prefix (const string "varray_or_darray")
         @@ angles
-        @@ pair ~sep:comma pp_hint pp_hint)
+        @@ pair ~sep:comma (pp_hint ~is_ctx:false) (pp_hint ~is_ctx:false))
         ppf
         (khint, vhint)
     | Aast.Hvec_or_dict (None, vhint) ->
-      Fmt.(prefix (const string "vec_or_dict") @@ angles pp_hint) ppf vhint
+      Fmt.(
+        prefix (const string "vec_or_dict") @@ angles @@ pp_hint ~is_ctx:false)
+        ppf
+        vhint
     | Aast.Hvec_or_dict (Some khint, vhint) ->
       Fmt.(
         prefix (const string "vec_or_dict")
         @@ angles
-        @@ pair ~sep:comma pp_hint pp_hint)
+        @@ pair ~sep:comma (pp_hint ~is_ctx:false) (pp_hint ~is_ctx:false))
         ppf
         (khint, vhint)
     | Aast.Hdarray (khint, vhint) ->
       Fmt.(
         prefix (const string "darray")
         @@ angles
-        @@ pair ~sep:comma pp_hint pp_hint)
+        @@ pair ~sep:comma (pp_hint ~is_ctx:false) (pp_hint ~is_ctx:false))
         ppf
         (khint, vhint)
     | Aast.Habstr (name, [])
@@ -1156,26 +1268,56 @@ end = struct
       Fmt.string ppf name
     | Aast.Habstr (name, hints)
     | Aast.Happly ((_, name), hints) ->
-      Fmt.(prefix (const string name) @@ angles @@ list ~sep:comma pp_hint)
+      Fmt.(
+        prefix (const string name)
+        @@ angles
+        @@ list ~sep:comma
+        @@ pp_hint ~is_ctx:false)
         ppf
         hints
     | Aast.(
-        Hfun { hf_param_tys; hf_param_kinds; hf_variadic_ty; hf_return_ty; _ })
-      ->
-      (* TODO(vmladenov) support capability types here *)
+        Hfun
+          {
+            hf_param_tys;
+            hf_param_info;
+            hf_variadic_ty;
+            hf_return_ty;
+            hf_ctxs;
+            _;
+          }) ->
+      let hf_param_kinds =
+        List.map hf_param_info ~f:(fun i ->
+            Option.bind i (fun i -> i.Aast.hfparam_kind))
+      in
+      let pp_typed_param ppf kp =
+        Fmt.(
+          pair ~sep:nop (option @@ suffix sp pp_paramkind)
+          @@ pp_hint ~is_ctx:false)
+          ppf
+          kp
+      in
+      let pp_fun_params ppf (ps, v) =
+        Fmt.(
+          parens
+          @@ pair
+               ~sep:nop
+               (list ~sep:comma pp_typed_param)
+               (option @@ surround ", " "..." @@ pp_hint ~is_ctx:false))
+          ppf
+          (ps, v)
+      in
+      let all_params =
+        (List.zip_exn hf_param_kinds hf_param_tys, hf_variadic_ty)
+      in
       Fmt.(
         parens
         @@ pair
              ~sep:colon
-             (pair
-                ~sep:nop
-                ( list ~sep:comma
-                @@ pair ~sep:nop (option @@ suffix sp pp_paramkind) pp_hint )
-                (option @@ surround ", " "..." @@ pp_hint))
-             pp_hint)
+             ( prefix (const string "function")
+             @@ pair ~sep:nop pp_fun_params (option pp_contexts) )
+        @@ pp_hint ~is_ctx:false)
         ppf
-        ( (List.zip_exn hf_param_kinds hf_param_tys, hf_variadic_ty),
-          hf_return_ty )
+        ((all_params, hf_ctxs), hf_return_ty)
     | Aast.(Hshape { nsi_allows_unknown_fields; nsi_field_map }) ->
       Fmt.(
         prefix (const string "shape")
@@ -1195,26 +1337,339 @@ end = struct
            ~sep:nop
            (cond ~pp_t:(const string "?") ~pp_f:nop)
            pp_shape_field_name)
-        pp_hint)
+      @@ pp_hint ~is_ctx:false)
       ppf
       ((sfi_optional, sfi_name), sfi_hint)
 
   and pp_shape_field_name ppf = function
     | Ast_defs.SFlit_int (_, s) -> Fmt.string ppf s
-    | Ast_defs.SFlit_str (_, s) -> Fmt.(surround "'" "'" string) ppf s
+    | Ast_defs.SFlit_str (_, s) -> Fmt.(quote string) ppf s
     | Ast_defs.SFclass_const ((_, c), (_, s)) ->
       Fmt.(pair ~sep:dbl_colon string string) ppf (c, s)
 
-  let pp_user_attrs ppf attrs =
-    match
-      List.filter_map attrs ~f:(function
-          | Aast.{ ua_name = (_, nm); ua_params = [] }
-            when SMap.mem nm SN.UserAttributes.as_map ->
-            Some nm
-          | _ -> None)
-    with
+  and pp_contexts ppf (_, ctxts) =
+    Fmt.(brackets @@ list ~sep:comma @@ pp_hint ~is_ctx:false) ppf ctxts
+
+  let pp_lid ppf lid =
+    Fmt.(prefix (const string "$") string) ppf @@ Local_id.get_name lid
+
+  let rec pp_binop ppf = function
+    | Ast_defs.Plus -> Fmt.string ppf "+"
+    | Ast_defs.Minus -> Fmt.string ppf "-"
+    | Ast_defs.Star -> Fmt.string ppf "*"
+    | Ast_defs.Slash -> Fmt.string ppf "/"
+    | Ast_defs.Eqeq -> Fmt.string ppf "=="
+    | Ast_defs.Eqeqeq -> Fmt.string ppf "==="
+    | Ast_defs.Starstar -> Fmt.string ppf "**"
+    | Ast_defs.Diff -> Fmt.string ppf "diff"
+    | Ast_defs.Diff2 -> Fmt.string ppf "diff2"
+    | Ast_defs.Ampamp -> Fmt.string ppf "&&"
+    | Ast_defs.Barbar -> Fmt.string ppf "||"
+    | Ast_defs.Lt -> Fmt.string ppf "<"
+    | Ast_defs.Lte -> Fmt.string ppf "<="
+    | Ast_defs.Gt -> Fmt.string ppf ">"
+    | Ast_defs.Gte -> Fmt.string ppf ">="
+    | Ast_defs.Dot -> Fmt.string ppf "."
+    | Ast_defs.Amp -> Fmt.string ppf "&"
+    | Ast_defs.Bar -> Fmt.string ppf "|"
+    | Ast_defs.Ltlt -> Fmt.string ppf "<<"
+    | Ast_defs.Gtgt -> Fmt.string ppf ">>"
+    | Ast_defs.Percent -> Fmt.string ppf "%"
+    | Ast_defs.Xor -> Fmt.string ppf "^"
+    | Ast_defs.Cmp -> Fmt.string ppf "<=>"
+    | Ast_defs.QuestionQuestion -> Fmt.string ppf "??"
+    | Ast_defs.Eq (Some op) -> Fmt.(suffix (const string "=") pp_binop) ppf op
+    | Ast_defs.Eq _ -> Fmt.string ppf "="
+
+  let pp_unop ppf op =
+    match op with
+    | Ast_defs.Utild -> Fmt.string ppf "~"
+    | Ast_defs.Unot -> Fmt.string ppf "!"
+    | Ast_defs.Uplus -> Fmt.string ppf "+"
+    | Ast_defs.Uminus -> Fmt.string ppf "-"
+    | Ast_defs.Uincr
+    | Ast_defs.Upincr ->
+      Fmt.string ppf "++"
+    | Ast_defs.Udecr
+    | Ast_defs.Updecr ->
+      Fmt.string ppf "--"
+    | Ast_defs.Usilence -> Fmt.string ppf "@"
+
+  let is_postfix_unop = function
+    | Ast_defs.Updecr
+    | Ast_defs.Upincr ->
+      true
+    | _ -> false
+
+  let pp_targ ppf (_, hint) = pp_hint ~is_ctx:false ppf hint
+
+  let pp_targs ppf = function
     | [] -> ()
-    | rs -> Fmt.(angles @@ angles @@ list ~sep:comma string) ppf rs
+    | targs -> Fmt.(angles @@ list ~sep:comma pp_targ) ppf targs
+
+  let pp_vc_kind ppf = function
+    | Aast_defs.Vector -> Fmt.string ppf "Vector"
+    | Aast_defs.ImmVector -> Fmt.string ppf "ImmVector"
+    | Aast_defs.Vec -> Fmt.string ppf "vec"
+    | Aast_defs.Set -> Fmt.string ppf "Set"
+    | Aast_defs.ImmSet -> Fmt.string ppf "ImmSet"
+    | Aast_defs.Keyset -> Fmt.string ppf "keyset"
+
+  let pp_kvc_kind ppf = function
+    | Aast_defs.Dict -> Fmt.string ppf "dict"
+    | Aast_defs.Map -> Fmt.string ppf "Map"
+    | Aast_defs.ImmMap -> Fmt.string ppf "ImmMap"
+
+  let rec pp_expr ppf (_, expr_) = pp_expr_ ppf expr_
+
+  and pp_expr_ ppf = function
+    | Aast.Darray (kv_ty_opt, kvs) ->
+      Fmt.(
+        prefix (const string "darray")
+        @@ pair
+             ~sep:nop
+             (option @@ angles @@ pair ~sep:comma pp_targ pp_targ)
+             (brackets @@ list ~sep:comma @@ pair ~sep:fat_arrow pp_expr pp_expr))
+        ppf
+        (kv_ty_opt, kvs)
+    | Aast.Varray (k_ty_opt, ks) ->
+      Fmt.(
+        prefix (const string "varray")
+        @@ pair
+             ~sep:nop
+             (option @@ angles pp_targ)
+             (brackets @@ list ~sep:comma pp_expr))
+        ppf
+        (k_ty_opt, ks)
+    | Aast.Shape flds ->
+      Fmt.(
+        prefix (const string "shape")
+        @@ parens
+        @@ list ~sep:comma
+        @@ pair ~sep:fat_arrow pp_shape_field_name pp_expr)
+        ppf
+        flds
+    | Aast.ValCollection (kind, targ_opt, exprs) ->
+      let delim =
+        match kind with
+        | Aast_defs.Keyset
+        | Aast_defs.Vec ->
+          Fmt.brackets
+        | _ -> Fmt.braces
+      in
+      Fmt.(
+        pair ~sep:nop pp_vc_kind
+        @@ pair
+             ~sep:nop
+             (option @@ angles @@ pp_targ)
+             (delim @@ list ~sep:comma pp_expr))
+        ppf
+        (kind, (targ_opt, exprs))
+    | Aast.KeyValCollection (kind, targs_opt, flds) ->
+      let delim =
+        match kind with
+        | Aast_defs.Dict -> Fmt.brackets
+        | _ -> Fmt.braces
+      in
+      Fmt.(
+        pair ~sep:nop pp_kvc_kind
+        @@ pair
+             ~sep:nop
+             (option @@ angles @@ pair ~sep:comma pp_targ pp_targ)
+             (delim @@ list ~sep:comma @@ pair ~sep:fat_arrow pp_expr pp_expr))
+        ppf
+        (kind, (targs_opt, flds))
+    | Aast.Null -> Fmt.string ppf "null"
+    | Aast.This -> Fmt.string ppf "this"
+    | Aast.True -> Fmt.string ppf "true"
+    | Aast.False -> Fmt.string ppf "false"
+    | Aast.Id (_, id) -> Fmt.string ppf id
+    | Aast.Lvar (_, lid) -> pp_lid ppf lid
+    | Aast.Dollardollar _ -> Fmt.string ppf "$$"
+    | Aast.Clone expr -> Fmt.(prefix (const string "clone") pp_expr) ppf expr
+    | Aast.Array_get (arr_expr, idx_expr_opt) ->
+      Fmt.(pair ~sep:nop pp_expr @@ brackets @@ option pp_expr)
+        ppf
+        (arr_expr, idx_expr_opt)
+    | Aast.(Obj_get (obj_expr, get_expr, OG_nullsafe, false)) ->
+      Fmt.(pair ~sep:arrow (suffix (const string "?") pp_expr) pp_expr)
+        ppf
+        (obj_expr, get_expr)
+    | Aast.(Obj_get (obj_expr, get_expr, OG_nullsafe, _)) ->
+      Fmt.(
+        parens @@ pair ~sep:arrow (suffix (const string "?") pp_expr) pp_expr)
+        ppf
+        (obj_expr, get_expr)
+    | Aast.(Obj_get (obj_expr, get_expr, _, false)) ->
+      Fmt.(pair ~sep:arrow pp_expr pp_expr) ppf (obj_expr, get_expr)
+    | Aast.(Obj_get (obj_expr, get_expr, _, _)) ->
+      Fmt.(parens @@ pair ~sep:arrow pp_expr pp_expr) ppf (obj_expr, get_expr)
+    | Aast.Class_get (class_id, class_get_expr, false) ->
+      Fmt.(pair ~sep:dbl_colon pp_class_id pp_class_get_expr)
+        ppf
+        (class_id, class_get_expr)
+    | Aast.Class_get (class_id, class_get_expr, _) ->
+      Fmt.(parens @@ pair ~sep:dbl_colon pp_class_id pp_class_get_expr)
+        ppf
+        (class_id, class_get_expr)
+    | Aast.Class_const (class_id, (_, cname)) ->
+      Fmt.(pair ~sep:dbl_colon pp_class_id string) ppf (class_id, cname)
+    | Aast.Call (fn, targs, exprs, expr_opt) ->
+      Fmt.(pair ~sep:nop pp_expr @@ pair ~sep:nop pp_targs pp_arg_exprs)
+        ppf
+        (fn, (targs, (exprs, expr_opt)))
+    | Aast.FunctionPointer (id, targs) ->
+      Fmt.(pair ~sep:nop pp_function_ptr_id (angles @@ list ~sep:comma pp_targ))
+        ppf
+        (id, targs)
+    | Aast.Int str
+    | Aast.Float str ->
+      Fmt.string ppf str
+    | Aast.String str -> Fmt.(quote string) ppf str
+    | Aast.String2 exprs -> Fmt.(quote @@ list ~sep:sp pp_expr) ppf exprs
+    | Aast.PrefixedString (pfx, expr) ->
+      Fmt.(pair ~sep:nop string @@ quote pp_expr) ppf (pfx, expr)
+    | Aast.Yield afield ->
+      Fmt.(prefix (const string "yield") pp_afield) ppf afield
+    | Aast.Await expr -> Fmt.(prefix (const string "await") pp_expr) ppf expr
+    | Aast.ReadonlyExpr expr ->
+      Fmt.(prefix (const string "readonly") pp_expr) ppf expr
+    | Aast.List exprs ->
+      Fmt.(prefix (const string "list") @@ parens @@ list ~sep:comma pp_expr)
+        ppf
+        exprs
+    | Aast.Cast (hint, expr) ->
+      Fmt.(pair ~sep:nop (parens @@ pp_hint ~is_ctx:false) pp_expr)
+        ppf
+        (hint, expr)
+    | Aast.Unop (unop, expr) when is_postfix_unop unop ->
+      Fmt.(pair ~sep:nop pp_expr pp_unop) ppf (expr, unop)
+    | Aast.Unop (unop, expr) ->
+      Fmt.(pair ~sep:nop pp_unop pp_expr) ppf (unop, expr)
+    | Aast.Binop (op, e1, e2) ->
+      Fmt.(pair ~sep:sp pp_expr @@ pair ~sep:sp pp_binop pp_expr)
+        ppf
+        (e1, (op, e2))
+    | Aast.Pipe (_lid, e1, e2) ->
+      Fmt.(pair ~sep:(const string " |> ") pp_expr pp_expr) ppf (e1, e2)
+    | Aast.Eif (cond, Some texpr, fexpr) ->
+      Fmt.(
+        pair ~sep:(const string " ? ") pp_expr
+        @@ pair ~sep:colon pp_expr pp_expr)
+        ppf
+        (cond, (texpr, fexpr))
+    | Aast.Eif (cond, _, expr) ->
+      Fmt.(pair ~sep:(const string " ?: ") pp_expr pp_expr) ppf (cond, expr)
+    | Aast.Is (expr, hint) ->
+      Fmt.(pair ~sep:(const string " is ") pp_expr @@ pp_hint ~is_ctx:false)
+        ppf
+        (expr, hint)
+    | Aast.As (expr, hint, false) ->
+      Fmt.(pair ~sep:(const string " as ") pp_expr @@ pp_hint ~is_ctx:false)
+        ppf
+        (expr, hint)
+    | Aast.As (expr, hint, true) ->
+      Fmt.(pair ~sep:(const string " ?as ") pp_expr @@ pp_hint ~is_ctx:false)
+        ppf
+        (expr, hint)
+    | Aast.New (class_id, targs, exprs, expr_opt, _) ->
+      Fmt.(
+        prefix (const string "new")
+        @@ pair ~sep:nop pp_class_id
+        @@ pair ~sep:nop pp_targs pp_arg_exprs)
+        ppf
+        (class_id, (targs, (exprs, expr_opt)))
+    | Aast.Record ((_, name), flds) ->
+      Fmt.(
+        pair ~sep:nop string
+        @@ brackets
+        @@ list ~sep:comma
+        @@ pair ~sep:fat_arrow pp_expr pp_expr)
+        ppf
+        (name, flds)
+    | Aast.Callconv (param_kind, expr) ->
+      Fmt.(pair ~sep:sp pp_paramkind pp_expr) ppf (param_kind, expr)
+    | Aast.Lplaceholder _ -> Fmt.string ppf "$_"
+    | Aast.Fun_id (_, name) ->
+      Fmt.(prefix (const string "fun") @@ quote string) ppf name
+    | Aast.Method_id (expr, (_, meth)) ->
+      Fmt.(
+        prefix (const string "inst_meth")
+        @@ parens
+        @@ pair ~sep:comma pp_expr
+        @@ quote string)
+        ppf
+        (expr, meth)
+    | Aast.Pair (targs_opt, fst, snd) ->
+      Fmt.(
+        prefix (const string "Pair")
+        @@ pair
+             ~sep:nop
+             (option @@ angles @@ pair ~sep:comma pp_targ pp_targ)
+             (braces @@ pair ~sep:comma pp_expr pp_expr))
+        ppf
+        (targs_opt, (fst, snd))
+    | Aast.EnumAtom name -> Fmt.(prefix (const string "#") string) ppf name
+    | Aast.Efun _
+    | Aast.Lfun _
+    | Aast.Xml _
+    | Aast.Import _
+    | Aast.Collection _
+    | Aast.ExpressionTree _
+    | Aast.Method_caller _
+    | Aast.Smethod_id _
+    | Aast.ET_Splice _
+    | Aast.Any
+    | Aast.Omitted ->
+      ()
+
+  and pp_arg_exprs ppf (exprs, expr_opt) =
+    match exprs with
+    | [] ->
+      Fmt.(parens @@ option @@ prefix (const string "...") pp_expr) ppf expr_opt
+    | _ ->
+      Fmt.(
+        parens
+        @@ pair
+             ~sep:comma
+             (list ~sep:comma pp_expr)
+             (option @@ prefix (const string "...") pp_expr))
+        ppf
+        (exprs, expr_opt)
+
+  and pp_afield ppf = function
+    | Aast.AFvalue expr -> pp_expr ppf expr
+    | Aast.AFkvalue (key_expr, val_expr) ->
+      Fmt.(pair ~sep:fat_arrow pp_expr pp_expr) ppf (key_expr, val_expr)
+
+  and pp_class_id ppf (_, class_id_) =
+    match class_id_ with
+    | Aast.CIparent -> Fmt.string ppf "parent"
+    | Aast.CIstatic -> Fmt.string ppf "static"
+    | Aast.CIself -> Fmt.string ppf "self"
+    | Aast.CI (_, name) -> Fmt.string ppf name
+    | Aast.CIexpr expr -> pp_expr ppf expr
+
+  and pp_class_get_expr ppf = function
+    | Aast.CGexpr expr -> pp_expr ppf expr
+    | Aast.CGstring (_, name) -> Fmt.string ppf name
+
+  and pp_function_ptr_id ppf = function
+    | Aast.FP_id (_, name) -> Fmt.string ppf name
+    | Aast.FP_class_const (class_id, (_, str)) ->
+      Fmt.(pair ~sep:dbl_colon pp_class_id string) ppf (class_id, str)
+
+  let pp_user_attr ppf Aast.{ ua_name = (_, nm); ua_params; _ } =
+    match ua_params with
+    | [] -> Fmt.string ppf nm
+    | _ ->
+      Fmt.(pair ~sep:nop string @@ parens @@ list ~sep:comma pp_expr)
+        ppf
+        (nm, ua_params)
+
+  let pp_user_attrs ppf = function
+    | [] -> ()
+    | rs -> Fmt.(angles @@ angles @@ list ~sep:comma pp_user_attr) ppf rs
 
   let pp_variance ppf =
     Ast_defs.(
@@ -1231,7 +1686,11 @@ end = struct
       | Constraint_super -> Fmt.string ppf "super")
 
   let pp_constraint ppf (kind, hint) =
-    Format.(fprintf ppf {|%a %a|}) pp_constraint_kind kind pp_hint hint
+    Format.(fprintf ppf {|%a %a|})
+      pp_constraint_kind
+      kind
+      (pp_hint ~is_ctx:false)
+      hint
 
   let pp_tp_reified ppf =
     Aast.(
@@ -1268,15 +1727,18 @@ end = struct
         Fmt.(list ~sep:sp pp_constraint)
         tp_constraints)
 
-  and pp_tparams ppf = function
+  and pp_tparams ppf ps =
+    match List.filter ~f:Fn.(compose not is_contextual_param) ps with
     | [] -> ()
     | ps -> Fmt.(angles @@ list ~sep:comma pp_tparam) ppf ps
 
   let pp_type_hint ~is_ret_type ppf (_, hint) =
     if is_ret_type then
-      Fmt.(option @@ prefix (const string ": ") pp_hint) ppf hint
+      Fmt.(option @@ prefix (const string ": ") @@ pp_hint ~is_ctx:false)
+        ppf
+        hint
     else
-      Fmt.(option @@ suffix sp pp_hint) ppf hint
+      Fmt.(option @@ suffix sp @@ pp_hint ~is_ctx:false) ppf hint
 
   let pp_fun_param_name ppf (param_is_variadic, param_name) =
     if param_is_variadic then
@@ -1285,6 +1747,60 @@ end = struct
       Fmt.string ppf param_name
 
   let pp_fun_param_default ppf _ = Fmt.pf ppf {| = \%s()|} __FN_MAKE_DEFAULT__
+
+  let update_hfun_context (pos, hints) ~name =
+    ( pos,
+      List.map hints ~f:(function
+          | (pos, Aast_defs.Hfun_context nm) when String.(nm = name) ->
+            (pos, Aast_defs.Hvar "_")
+          | hint -> hint) )
+
+  let update_hint_fun_context hint_fun ~name =
+    Aast_defs.
+      {
+        hint_fun with
+        hf_ctxs =
+          Option.map ~f:(update_hfun_context ~name) hint_fun.Aast_defs.hf_ctxs;
+      }
+
+  let update_fun_context (nm, hint_opt) ~name =
+    let f ((pos, hint_) as hint) =
+      Aast_defs.(
+        match hint_ with
+        | Hfun hint_fun -> (pos, Hfun (update_hint_fun_context hint_fun ~name))
+        | Hoption (opt_pos, Hfun hint_fun) ->
+          (pos, Hoption (opt_pos, Hfun (update_hint_fun_context hint_fun ~name)))
+        (* Non-function option *)
+        | Hoption _
+        (* places where we _can't_ use wildcard contexts *)
+        | Hlike _
+        | Hsoft _
+        | Hshape _
+        | Htuple _
+        (* places where function types shouldn't appear *)
+        | Haccess _
+        | Happly _
+        (* non-denotable types *)
+        | Hany
+        | Herr
+        | Hmixed
+        | Hnonnull
+        | Habstr _
+        | Hdarray _
+        | Hvarray _
+        | Hvarray_or_darray _
+        | Hvec_or_dict _
+        | Hprim _
+        | Hthis
+        | Hdynamic
+        | Hnothing
+        | Hunion _
+        | Hintersection _
+        | Hfun_context _
+        | Hvar _ ->
+          hint)
+    in
+    (nm, Option.map hint_opt ~f)
 
   let pp_fun_param
       ppf
@@ -1296,18 +1812,23 @@ end = struct
           param_expr;
           param_callconv;
           param_user_attributes;
+          param_visibility;
           _;
         } =
     Format.(
       fprintf
         ppf
-        {|%a %a %a%a%a|}
+        {|%a %a %a %a%a%a|}
         pp_user_attrs
         param_user_attributes
+        Fmt.(option pp_visibility)
+        param_visibility
         Fmt.(option pp_paramkind)
         param_callconv
         (pp_type_hint ~is_ret_type:false)
-        param_type_hint
+        (* Type hint for parameter $f used for contextful function must be a
+        function type hint whose context is exactly [_] *)
+        (update_fun_context ~name:param_name param_type_hint)
         pp_fun_param_name
         (param_is_variadic, param_name)
         Fmt.(option pp_fun_param_default)
@@ -1326,11 +1847,6 @@ end = struct
         @@ pair ~sep:comma (list ~sep:comma pp_fun_param) pp_variadic_fun_param)
         ppf
         tup
-
-  let pp_visibility ppf = function
-    | Ast_defs.Private -> Fmt.string ppf "private"
-    | Ast_defs.Public -> Fmt.string ppf "public"
-    | Ast_defs.Protected -> Fmt.string ppf "protected"
 
   (* -- Single element depdencies ------------------------------------------- *)
 
@@ -1360,6 +1876,7 @@ end = struct
           base: Aast.hint;
           constr: Aast.hint option;
           consts: (string * string) list;
+          user_attrs: Nast.user_attribute list;
         }
       | SGConst of {
           name: string;
@@ -1377,7 +1894,9 @@ end = struct
           Pos.line @@ Target.pos ctx target,
           Target.source_text ctx target )
 
-    let mk_enum ctx Aast.{ c_name = (pos, name); c_enum; c_consts; _ } =
+    let mk_enum
+        ctx
+        Aast.{ c_name = (pos, name); c_enum; c_consts; c_user_attributes; _ } =
       let Aast.{ e_base; e_constraint; _ } =
         value_or_not_found Format.(sprintf "expected an enum class: %s" name)
         @@ c_enum
@@ -1394,6 +1913,7 @@ end = struct
           consts;
           base = e_base;
           constr = e_constraint;
+          user_attrs = c_user_attributes;
         }
 
     let mk_gconst ctx Aast.{ cst_name = (pos, name); cst_type; _ } =
@@ -1433,12 +1953,20 @@ end = struct
     let pp_fun
         ppf
         ( name,
-          Aast.{ f_user_attributes; f_tparams; f_variadic; f_params; f_ret; _ }
-        ) =
+          Aast.
+            {
+              f_user_attributes;
+              f_tparams;
+              f_variadic;
+              f_params;
+              f_ret;
+              f_ctxs;
+              _;
+            } ) =
       Fmt.(
         pf
           ppf
-          "%a function %s%a%a%a {throw new \\Exception();}"
+          "%a function %s%a%a%a%a {throw new \\Exception();}"
           pp_user_attrs
           f_user_attributes
           (strip_ns name)
@@ -1446,6 +1974,8 @@ end = struct
           f_tparams
           pp_fun_params
           (f_params, f_variadic)
+          (option pp_contexts)
+          f_ctxs
           (pp_type_hint ~is_ret_type:true)
           f_ret)
 
@@ -1458,46 +1988,60 @@ end = struct
     let pp_fixme ppf code = Fmt.pf ppf "/* HH_FIXME[%d] */@." code
 
     let pp_tydef
-        ppf (nm, fixmes, Aast.{ t_tparams; t_constraint; t_vis; t_kind; _ }) =
+        ppf
+        ( nm,
+          fixmes,
+          Aast.{ t_tparams; t_constraint; t_vis; t_kind; t_user_attributes; _ }
+        ) =
       Fmt.(
         pf
           ppf
-          {|%a%a %s%a%a = %a;|}
+          {|%a%a%a %s%a%a = %a;|}
           (list ~sep:cut pp_fixme)
           fixmes
+          pp_user_attrs
+          t_user_attributes
           pp_typedef_visiblity
           t_vis
           (strip_ns nm)
           pp_tparams
           t_tparams
-          (option @@ prefix (const string " as ") pp_hint)
+          (option @@ prefix (const string " as ") @@ pp_hint ~is_ctx:false)
           t_constraint
-          pp_hint
+          (pp_hint ~is_ctx:false)
           t_kind)
 
     (* -- Global constants -------------------------------------------------- *)
 
     let pp_gconst ppf (name, hint, init) =
-      Fmt.pf ppf {|const %a %s = %s;|} pp_hint hint (strip_ns name) init
+      Fmt.pf
+        ppf
+        {|const %a %s = %s;|}
+        (pp_hint ~is_ctx:false)
+        hint
+        (strip_ns name)
+        init
 
     (* -- Enums ------------------------------------------------------------- *)
 
-    let pp_enum ppf (name, base, constr, consts) =
+    let pp_enum ppf (name, base, constr, consts, user_attrs) =
       Fmt.(
         pf
           ppf
-          {|enum %s: %a%a {%a}|}
+          {|%a enum %s: %a%a {%a}|}
+          pp_user_attrs
+          user_attrs
           (strip_ns name)
-          pp_hint
+          (pp_hint ~is_ctx:false)
           base
-          (option @@ prefix (const string " as ") pp_hint)
+          (option @@ prefix (const string " as ") @@ pp_hint ~is_ctx:false)
           constr
           (list ~sep:sp @@ suffix semicolon @@ pair ~sep:equal_to string string)
           consts)
 
     let pp ppf = function
-      | SEnum { name; base; constr; consts; _ } ->
-        pp_enum ppf (name, base, constr, consts)
+      | SEnum { name; base; constr; consts; user_attrs; _ } ->
+        pp_enum ppf (name, base, constr, consts, user_attrs)
       | STydef (nm, _, fixmes, ast) -> pp_tydef ppf (nm, fixmes, ast)
       | SGConst { name; type_; init_val; _ } ->
         pp_gconst ppf (name, type_, init_val)
@@ -1541,8 +2085,10 @@ end = struct
           name: string;
           line: int;
           is_abstract: bool;
+          is_ctx: bool;
           type_: Aast.hint option;
           constraint_: Aast.hint option;
+          user_attrs: Nast.user_attribute list;
         }
       | EltProp of {
           name: string;
@@ -1585,10 +2131,10 @@ end = struct
       let (type_, init_val) =
         match (cc_type, cc_expr) with
         | (Some hint, _) -> (Some hint, Some (init_value ctx hint))
-        | (_, Some e) ->
-          (match Decl_utils.infer_const e with
+        | (_, Some (e_pos, e_)) ->
+          (match Decl_utils.infer_const e_ with
           | Some tprim ->
-            let hint = (fst e, Aast.Hprim tprim) in
+            let hint = (e_pos, Aast.Hprim tprim) in
             (None, Some (init_value ctx hint))
           | None -> raise Unsupported)
         | (None, None) -> (None, None)
@@ -1603,6 +2149,8 @@ end = struct
             c_tconst_name = (pos, name);
             c_tconst_type;
             c_tconst_as_constraint;
+            c_tconst_is_ctx;
+            c_tconst_user_attributes;
             _;
           } =
       let is_abstract =
@@ -1618,6 +2166,8 @@ end = struct
           is_abstract;
           type_ = c_tconst_type;
           constraint_ = c_tconst_as_constraint;
+          is_ctx = c_tconst_is_ctx;
+          user_attrs = c_tconst_user_attributes;
         }
 
     let mk_method from_interface (Aast.{ m_name = (pos, _); _ } as method_) =
@@ -1680,6 +2230,7 @@ end = struct
               m_tparams;
               m_params;
               m_variadic;
+              m_ctxs;
               m_ret;
               m_static;
               m_abstract;
@@ -1691,7 +2242,7 @@ end = struct
       Fmt.(
         pf
           ppf
-          "%a %a %a %a %a function %s%a%a%a%a"
+          "%a %a %a %a %a function %s%a%a%a%a%a"
           pp_user_attrs
           m_user_attributes
           (cond ~pp_t:(const string "abstract") ~pp_f:nop)
@@ -1707,6 +2258,8 @@ end = struct
           m_tparams
           pp_fun_params
           (m_params, m_variadic)
+          (option pp_contexts)
+          m_ctxs
           (pp_type_hint ~is_ret_type:true)
           m_ret
           (cond
@@ -1729,7 +2282,7 @@ end = struct
           {|%a attribute %a %s %a %a;|}
           pp_user_attrs
           user_attrs
-          (option pp_hint)
+          (option @@ pp_hint ~is_ctx:false)
           type_
           (String.lstrip ~drop:(fun c -> Char.equal c ':') name)
           (option @@ prefix equal_to string)
@@ -1748,24 +2301,29 @@ end = struct
           visibility
           (cond ~pp_t:(const string "static") ~pp_f:nop)
           is_static
-          (option pp_hint)
+          (option @@ pp_hint ~is_ctx:false)
           type_
           name
           (option @@ prefix equal_to string)
           init_val)
 
     (* -- Type constants ---------------------------------------------------- *)
-    let pp_tyconst ppf (name, is_abstract, type_, constraint_) =
+    let pp_tyconst
+        ppf (name, is_abstract, is_ctx, type_, constraint_, user_attrs) =
       Fmt.(
         pf
           ppf
-          {|%a const type %s%a%a;|}
+          {|%a %a const %a %s%a%a;|}
+          pp_user_attrs
+          user_attrs
           (cond ~pp_t:(const string "abstract") ~pp_f:nop)
           is_abstract
+          (cond ~pp_t:(const string "ctx") ~pp_f:(const string "type"))
+          is_ctx
           name
-          (option @@ prefix (const string " as ") pp_hint)
+          (option @@ prefix (const string " as ") @@ pp_hint ~is_ctx:false)
           constraint_
-          (option @@ prefix equal_to pp_hint)
+          (option @@ prefix equal_to @@ pp_hint ~is_ctx)
           type_)
 
     (* -- Constants --------------------------------------------------------- *)
@@ -1777,7 +2335,7 @@ end = struct
           {|%a const %a %s %a;|}
           (cond ~pp_t:(const string "abstract") ~pp_f:nop)
           is_abstract
-          (option pp_hint)
+          (option @@ pp_hint ~is_ctx:false)
           type_
           name
           (option @@ prefix equal_to string)
@@ -1788,8 +2346,11 @@ end = struct
       | EltMethod (from_interface, _, method_) ->
         pp_method ppf (from_interface, method_)
       | EltTargetMethod (_, src) -> Fmt.string ppf @@ SourceText.text src
-      | EltTypeConst { name; is_abstract; type_; constraint_; _ } ->
-        pp_tyconst ppf (name, is_abstract, type_, constraint_)
+      | EltTypeConst
+          { name; is_abstract; is_ctx; type_; constraint_; user_attrs; _ } ->
+        pp_tyconst
+          ppf
+          (name, is_abstract, is_ctx, type_, constraint_, user_attrs)
       | EltConst { name; is_abstract; type_; init_val; _ } ->
         pp_const ppf (name, is_abstract, type_, init_val)
       | EltXHPAttr { name; user_attrs; type_; init_val; xhp_attr_info; _ } ->
@@ -1860,19 +2421,19 @@ end = struct
         | Ctrait -> Fmt.string ppf "trait"
         | Cenum -> Fmt.string ppf "enum")
 
-    let pp_class_extends ppf = function
-      | [] -> Fmt.nop ppf ()
+    let pp_class_ancestors class_or_intf ppf = function
+      | [] ->
+        (* because we are prefixing the list with a constant string, we
+           match on the empty list here and noop to avoid priting "extends "
+           ("implements ") with no class (interface) *)
+        ()
       | hints ->
-        Fmt.(prefix (const string "extends ") @@ list ~sep:comma pp_hint)
-          ppf
-          hints
-
-    let pp_class_implements ppf = function
-      | [] -> Fmt.nop ppf ()
-      | hints ->
-        Fmt.(prefix (const string "implements ") @@ list ~sep:comma pp_hint)
-          ppf
-          hints
+        let pfx =
+          match class_or_intf with
+          | `Class -> Fmt.(const string "extends ")
+          | `Interface -> Fmt.(const string "implements ")
+        in
+        Fmt.(prefix pfx @@ list ~sep:comma @@ pp_hint ~is_ctx:false) ppf hints
 
     let pp
         ppf
@@ -1890,9 +2451,9 @@ end = struct
           (strip_ns name)
           pp_tparams
           tparams
-          pp_class_extends
+          (pp_class_ancestors `Class)
           extends
-          pp_class_implements
+          (pp_class_ancestors `Interface)
           implements)
   end
 
@@ -1926,23 +2487,36 @@ end = struct
         elements = List.sort ~compare:Class_elt.compare class_elts;
       }
 
-    let pp_use ppf = Fmt.pf ppf "use %a;" pp_hint
+    let pp_use_extend ppf = function
+      | ([], [], []) ->
+        (* In the presence of any traits or trait/interface requirements
+           we add a cut after them to match the Hack style given in the docs
+           (line breaks are not added by HackFmt). We need to check that
+           we have no traits or requirements here else we end up with
+           an unnecessary line break in this case *)
+        ()
+      | (uses, req_extends, req_implements) ->
+        let pp_elem pfx ppf hint =
+          Fmt.(prefix pfx @@ suffix semicolon @@ pp_hint ~is_ctx:false) ppf hint
+        in
+        Fmt.(
+          suffix cut
+          @@ pair ~sep:nop (list @@ pp_elem @@ const string "use ")
+          @@ pair
+               ~sep:nop
+               (list @@ pp_elem @@ const string "require extends ")
+               (list @@ pp_elem @@ const string "require implements "))
+          ppf
+          (uses, (req_extends, req_implements))
 
-    let pp_req_extends ppf = Fmt.pf ppf "require extends %a;" pp_hint
-
-    let pp_req_implements ppf = Fmt.pf ppf "require implements %a;" pp_hint
+    let pp_elts ppf = function
+      | [] -> ()
+      | elts -> Fmt.(list ~sep:cut @@ prefix cut Class_elt.pp) ppf elts
 
     let pp ppf { uses; req_extends; req_implements; elements } =
-      Fmt.(
-        pair
-          ~sep:sp
-          (pair ~sep:sp (list ~sep:sp pp_use) (list ~sep:sp pp_req_extends))
-          (pair
-             ~sep:sp
-             (list ~sep:sp pp_req_implements)
-             (list ~sep:sp Class_elt.pp)))
+      Fmt.(pair ~sep:nop pp_use_extend pp_elts)
         ppf
-        ((uses, req_extends), (req_implements, elements))
+        ((uses, req_extends, req_implements), elements)
   end
 
   type t =
@@ -1971,7 +2545,7 @@ end = struct
 
   let pp ppf = function
     | ClsGroup { decl; body; _ } ->
-      Fmt.(pair ~sep:sp Class_decl.pp @@ braces Class_body.pp) ppf (decl, body)
+      Fmt.(pair Class_decl.pp @@ braces @@ vbox Class_body.pp) ppf (decl, body)
     | Single single -> Single.pp ppf single
 
   (* -- Classify and group extracted dependencies --------------------------- *)
@@ -2123,13 +2697,28 @@ end = struct
     children: (string * t) list;
   }
 
-  let pp_namespace ppf nm = Fmt.pf ppf {|namespace %s|} nm
-
-  let rec pp ppf { deps; children; _ } =
-    Fmt.(pair ~sep:sp (list Grouped.pp) (list pp_children)) ppf (deps, children)
+  let rec pp_ ppf { deps; children; _ } =
+    (* We guard against empty list of depedencies or nested namespaces here
+       since we should add a cut between them only when both are non-empty
+    *)
+    match (deps, children) with
+    | (_, []) -> Fmt.(list ~sep:cut @@ suffix cut Grouped.pp) ppf deps
+    | ([], _) -> Fmt.(list ~sep:cut pp_children) ppf children
+    | _ ->
+      Fmt.(
+        pair
+          ~sep:cut
+          (list ~sep:cut @@ suffix cut Grouped.pp)
+          (list ~sep:cut pp_children))
+        ppf
+        (deps, children)
 
   and pp_children ppf (nm, t) =
-    Fmt.(pair ~sep:sp pp_namespace @@ braces pp) ppf (nm, t)
+    Fmt.(pair (prefix (const string "namespace ") string) (braces pp_))
+      ppf
+      (nm, t)
+
+  let pp ppf t = Fmt.(vbox @@ prefix cut pp_) ppf t
 
   let namespace_of dep =
     Grouped.name dep
@@ -2308,7 +2897,6 @@ end = struct
 
   let generate ctx target (dep_default, dep_any, deps) =
     let target_path = Target.relative_path ctx target in
-
     let files =
       List.sort ~compare:File.compare
       @@ List.map ~f:File.(of_deps ctx (target_path, target))
@@ -2335,7 +2923,7 @@ end = struct
 
   let __DEPS_ON_DEFAULT__ =
     Format.sprintf
-      {|<<__Pure>>@.function %s(): nothing {@.  throw new \Exception();@.}|}
+      {|@.function %s()[]: nothing {@.  throw new \Exception();@.}|}
       __FN_MAKE_DEFAULT__
 
   let __DEPS_ON_ANY__ =
@@ -2376,8 +2964,7 @@ end = struct
 
   let pp ppf { dep_default; dep_any; files } =
     if dep_default || dep_any then
-      Fmt.(
-        pair ~sep:cut (list ~sep:sp @@ File.pp ~is_multifile:true) pp_helpers)
+      Fmt.(pair ~sep:cut (list @@ File.pp ~is_multifile:true) pp_helpers)
         ppf
         (files, (dep_default, dep_any))
     else
@@ -2387,7 +2974,7 @@ end = struct
         | _ -> false
       in
 
-      Fmt.(list ~sep:sp @@ File.pp ~is_multifile) ppf files
+      Fmt.(list @@ File.pp ~is_multifile) ppf files
 
   let to_string = Fmt.to_to_string pp
 end

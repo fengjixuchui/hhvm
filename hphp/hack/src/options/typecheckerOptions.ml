@@ -50,8 +50,6 @@ let disallow_array_literal = GlobalOptions.tco_disallow_array_literal
 
 let language_feature_logging = GlobalOptions.tco_language_feature_logging
 
-let unsafe_rx = GlobalOptions.tco_unsafe_rx
-
 let experimental_feature_enabled =
   GlobalOptions.tco_experimental_feature_enabled
 
@@ -176,6 +174,8 @@ let interpret_soft_types_as_like_types =
 
 let enable_strict_string_concat_interp =
   GlobalOptions.tco_enable_strict_string_concat_interp
+
+let ignore_unsafe_cast = GlobalOptions.tco_ignore_unsafe_cast
 
 let set_readonly = GlobalOptions.set_tco_readonly
 

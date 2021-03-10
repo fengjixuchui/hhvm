@@ -27,10 +27,52 @@
 
 namespace HPHP { namespace bespoke {
 
-void logBespokeDispatch(const ArrayData* ad, const char* fn);
+// Although we dynamically construct bespoke layouts, we only have a small,
+// statically-known list of "families" of these layouts.
+//
+// We restrict layout indices: the upper byte of a bespoke layout's index must
+// match the "layout byte" for its layout family. That means that we're limited
+// to 256 layouts for a given family.
+//
+// This restriction helps us in two ways:
+//
+//   1. It lets us do bespoke vtable dispatch off this byte alone.
+//
+//   2. It lets us choose indices that we can efficiently test for. All layout
+//      tests are a single "test" op. See also "unordered code" in datatype.h.
+//
+// These constants look ad-hoc. Here's what the bits mean:
+//  - Bit 1: unset iff subtype of MonotypeVec<Top>
+//  - Bit 2: unset iff subtype of MonotypeDict<Empty|Int,Top>
+//  - Bit 3: unset iff subtype of MonotypeDict<Empty|Str,Top>
+//
+// Bit 0 is less constrained. For MonotypeDict, when it is unset, it means the
+// layout is one of the static-string keyed layouts. For MonotypeVec, when it
+// is unset, it means the layout is the empty singleton. We have space here to
+// add kStructLayoutByte = 0b1111.
+//
+// This encoding is the one that uses the fewest number of bits (resulting in
+// the smallest vtable) for our current set of layout families.
+//
+constexpr uint8_t kLoggingLayoutByte               = 0b1110;
+constexpr uint8_t kMonotypeVecLayoutByte           = 0b1101;
+constexpr uint8_t kEmptyMonotypeVecLayoutByte      = 0b1100;
+constexpr uint8_t kIntMonotypeDictLayoutByte       = 0b1011;
+constexpr uint8_t kStrMonotypeDictLayoutByte       = 0b0111;
+constexpr uint8_t kStaticStrMonotypeDictLayoutByte = 0b0110;
+constexpr uint8_t kEmptyMonotypeDictLayoutByte     = 0b0010;
+constexpr uint8_t kStructLayoutByte                = 0b1111;
+constexpr uint8_t kMaxLayoutByte = kStructLayoutByte;
+
+// Log that we're calling the given function for the given array.
+void logBespokeDispatch(const BespokeArray* bad, const char* fn);
 
 // Return a monotype copy of a vanilla array, or nullptr if it's not monotype.
 BespokeArray* maybeMonoify(ArrayData*);
+
+// Return a struct copy of a vanilla array, or nullptr if
+// it cannot be constructed.
+BespokeArray* maybeStructify(ArrayData* ad, const LoggingProfile* profile);
 
 #define BESPOKE_LAYOUT_FUNCTIONS(T) \
   X(size_t, HeapSize, const T* ad) \
@@ -44,8 +86,6 @@ BespokeArray* maybeMonoify(ArrayData*);
   X(TypedValue, NvGetStr, const T*, const StringData*) \
   X(TypedValue, GetPosKey, const T*, ssize_t pos) \
   X(TypedValue, GetPosVal, const T*, ssize_t pos) \
-  X(ssize_t, GetIntPos, const T*, int64_t) \
-  X(ssize_t, GetStrPos, const T*, const StringData*) \
   X(ssize_t, IterBegin, const T*) \
   X(ssize_t, IterLast, const T*) \
   X(ssize_t, IterEnd, const T*) \
@@ -73,6 +113,14 @@ struct LayoutFunctions {
 #undef X
 };
 
+struct LayoutFunctionsDispatch {
+#define X(Return, Name, Args...) Return (*fn##Name[kMaxLayoutByte + 1])(Args);
+  BESPOKE_LAYOUT_FUNCTIONS(ArrayData)
+#undef X
+};
+
+extern LayoutFunctionsDispatch g_layout_funcs;
+
 /**
  * Provides an interface between LayoutFunctions, which exposes methods
  * accepting ArrayData*, and the bespoke array implementations, which expose
@@ -85,11 +133,11 @@ struct LayoutFunctions {
 template <typename Array>
 struct LayoutFunctionDispatcher {
   ALWAYS_INLINE static Array* Cast(ArrayData* ad, const char* fn) {
-    logBespokeDispatch(ad, fn);
+    logBespokeDispatch(BespokeArray::asBespoke(ad), fn);
     return Array::As(ad);
   }
   ALWAYS_INLINE static const Array* Cast(const ArrayData* ad, const char* fn) {
-    logBespokeDispatch(ad, fn);
+    logBespokeDispatch(BespokeArray::asBespoke(ad), fn);
     return Array::As(ad);
   }
 
@@ -128,12 +176,6 @@ struct LayoutFunctionDispatcher {
   }
   static TypedValue GetPosVal(const ArrayData* ad, ssize_t pos) {
     return Array::GetPosVal(Cast(ad, __func__), pos);
-  }
-  static ssize_t GetIntPos(const ArrayData* ad, int64_t k) {
-    return Array::GetIntPos(Cast(ad, __func__), k);
-  }
-  static ssize_t GetStrPos(const ArrayData* ad, const StringData* k) {
-    return Array::GetStrPos(Cast(ad, __func__), k);
   }
   static arr_lval LvalInt(ArrayData* ad, int64_t k) {
     return Array::LvalInt(Cast(ad, __func__), k);
@@ -220,37 +262,14 @@ constexpr LayoutFunctions fromArray() {
  * A bespoke::Layout can represent either both the concrete layout of a given
  * BespokeArray or some abstract type that's a union of concrete layouts.
  *
- * bespoke::Layout also maintains the type hierarchy of bespoke layouts.
- * Bespoke layouts form a lattice, with BespokeTop as the top type and the null
- * layout as the bottom type. Each layout specifies its set of immediate
- * parents and whether or not it is "liveable"--whether it is sufficiently
- * general to be used as a guard type for a live translation. The type
- * hierarchy satisfies the following constraints:
+ * bespoke::Layout* also forms a type lattice. BespokeTop is the top type, and
+ * the null layout is the bottom type. We construct this lattice incrementally:
+ * a layout must declare edges to its (pre-existing) parents on construction.
+ * This constraint means that layout creation order is a topological sort.
  *
- *   1) When a layout is initialized, all of its parents must have already been
- *   initialized. This ensures that the type hierarchy is a DAG. Each layout
- *   other than BespokeTop must have at least one parent.
- *
- *   2) The supplied parents of each node are immediate parents. That is, no
- *   supplied parent can be an ancestor of another supplied parent. This
- *   ensures that the parent edges form a covering relation and simplifies the
- *   process of computing joins and meets.
- *
- *   3) The type hierarchy forms a join semilattice. That is, the least upper
- *   bound of every pair of layouts exists (this is trivial as we have
- *   BespokeTop) and is unique. Together with our bottom type, this implies
- *   that the type hierarchy is a lattice in which both least upper bounds and
- *   greatest lower bounds are unique.
- *
- *   4) Each layout has a distinct least liveable ancestor. This is equivalent
- *   to the constraint that each liveable layout is the unique parent of each
- *   of its non-liveable immediate children. This makes the process of
- *   converting a layout to a liveable layout unambiguous.
- *
- * These constraints are validated upon the creation of each layout in debug
- * mode. If the constraints are satisfied, we are left with a DAG corresponding
- * to the covering relation of a valid lattice, in which join and meet can be
- * implemented by simple BFS.
+ * (NOTE: Parent edges do not need to form a covering relation on the lattice.
+ * The set of all ancestors of a given layout is defined by the transitive
+ * closure of the parent edges.)
  *
  * Once the type hierarchy has been created, we supply the standard <=, meet
  * (&), and join (|) operations for the layouts, which are used from ArraySpec
@@ -282,17 +301,19 @@ struct Layout {
   std::string dumpInformation() const;
   virtual bool isConcrete() const { return false; }
   const LayoutFunctions* vtable() const { return m_vtable; }
+  LayoutTest getLayoutTest() const;
 
   /*
-   * In order to support efficient layout type tests in the JIT, we let
-   * layout initializers reserve aligned blocks of indices to populate.
-   *
-   *   @precondition:  `size` must be a power of two.
-   *   @postcondition: The result is a multiple of size.
+   * Access to individual layouts, or debug access to all of them.
    */
-  static LayoutIndex ReserveIndices(size_t size);
   static const Layout* FromIndex(LayoutIndex index);
   static std::string dumpAllLayouts();
+
+  /*
+   * Test-only helper to clear the existing layouts in the type hierarchy.
+   * After calling this method, the only layout will be the BespokeTop one.
+   */
+  static void ClearHierarchy();
 
   /*
    * Seals the bespoke type hierarchy. Before this is invoked, type operations
@@ -351,12 +372,6 @@ struct Layout {
 
   ///////////////////////////////////////////////////////////////////////////
 
-  /**
-   * Retrieve the set of masks and compares to use for a type test for this
-   * layout.
-   */
-  MaskAndCompare maskAndCompare() const;
-
 protected:
   Layout(LayoutIndex index, std::string description, LayoutSet parents,
          const LayoutFunctions* vtable);
@@ -365,10 +380,9 @@ private:
   bool checkInvariants() const;
   LayoutSet computeAncestors() const;
   LayoutSet computeDescendants() const;
-  MaskAndCompare computeMaskAndCompare() const;
+  LayoutTest computeLayoutTest() const;
 
   bool isDescendantOfDebug(const Layout* other) const;
-  const Layout* nearestBoundDebug(bool upward, const Layout* other) const;
 
   struct Initializer;
   static Initializer s_initializer;
@@ -384,7 +398,8 @@ private:
   LayoutSet m_children;
   std::vector<Layout*> m_descendants;
   std::vector<Layout*> m_ancestors;
-  MaskAndCompare m_maskAndCompare;
+  LayoutTest m_layout_test;
+
 protected:
   const LayoutFunctions* m_vtable;
 };

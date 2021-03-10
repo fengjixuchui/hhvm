@@ -1,11 +1,7 @@
 [("\\NS1\\NS2\\T",
   (Shallow_decl_defs.Typedef
      { Typing_defs.td_pos = [6:12-13]; td_vis = Transparent; td_tparams = [];
-       td_constraint = None;
-       td_type =
-       (Rhint (root|namespace_import.php line 6, characters 16-18),
-        (Tprim Tint))
-       }));
+       td_constraint = None; td_type = (Rhint ([6:16-19]), (Tprim Tint)) }));
   ("\\NS1\\NS2\\C",
    (Shallow_decl_defs.Class
       { Shallow_decl_defs.sc_mode = Mstrict; sc_final = false;
@@ -21,22 +17,21 @@
    (Shallow_decl_defs.Fun
       { Typing_defs.fe_deprecated = None;
         fe_type =
-        (Rwitness (root|namespace_import.php line 15, characters 12-15),
+        (Rwitness_from_decl ([15:12-16]),
          (Tfun
             { ft_arity = (Fstandard ()); ft_tparams = [];
               ft_where_constraints = []; ft_params = [];
               ft_implicit_params = { capability = (CapDefaults [15:12-16]) };
               ft_ret =
-              { et_enforced = false;
+              { et_enforced = Typing_defs_core.Unenforced;
                 et_type =
-                (Rhint (root|namespace_import.php line 15, characters 20-23),
+                (Rhint ([15:20-24]),
                  (Tapply (([15:20-24], "\\NS1\\NS2\\T"), [])))
                 };
               ft_flags =
-              (make_ft_flags FSync None ~return_disposable:false
-                ~returns_mutable:false ~returns_void_to_rx:false
-                ~returns_readonly:false ~readonly_this:false);
-              ft_reactive = Nonreactive; ft_ifc_decl = FDPolicied {PUBLIC} }));
+              (make_ft_flags FSync ~return_disposable:false
+                ~returns_readonly:false ~readonly_this:false ~is_const:false);
+              ft_ifc_decl = FDPolicied {PUBLIC} }));
         fe_pos = [15:12-16]; fe_php_std_lib = false }));
   ("\\D",
    (Shallow_decl_defs.Class

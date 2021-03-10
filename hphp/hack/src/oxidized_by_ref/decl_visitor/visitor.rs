@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<a3949bd56397d58287ce6991c71d04ba>>
+// @generated SignedSource<<93e4b9f6a4255dc0a49e03b5337fd271>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -11,8 +11,8 @@
 #![allow(unused_variables)]
 use super::node::Node;
 use crate::{
-    aast_defs::*, ast_defs::*, decl_defs::*, direct_decl_parser::*, shallow_decl_defs::*,
-    shape_map::*, typing_defs::*, typing_defs_core::*, typing_reason::*,
+    aast_defs::*, ast_defs::*, direct_decl_parser::*, shallow_decl_defs::*, t_shape_map::*,
+    typing_defs::*, typing_defs_core::*, typing_reason::*,
 };
 pub trait Visitor<'a> {
     fn object(&mut self) -> &mut dyn Visitor<'a>;
@@ -26,6 +26,12 @@ pub trait Visitor<'a> {
         p.recurse(self.object())
     }
     fn visit_capability(&mut self, p: &'a Capability<'a>) {
+        p.recurse(self.object())
+    }
+    fn visit_class_const_from(&mut self, p: &'a ClassConstFrom<'a>) {
+        p.recurse(self.object())
+    }
+    fn visit_class_const_ref(&mut self, p: &'a ClassConstRef<'a>) {
         p.recurse(self.object())
     }
     fn visit_class_kind(&mut self, p: &'a ClassKind) {
@@ -44,6 +50,9 @@ pub trait Visitor<'a> {
         p.recurse(self.object())
     }
     fn visit_dependent_type(&mut self, p: &'a DependentType) {
+        p.recurse(self.object())
+    }
+    fn visit_enforcement(&mut self, p: &'a Enforcement) {
         p.recurse(self.object())
     }
     fn visit_enum_type(&mut self, p: &'a EnumType<'a>) {
@@ -79,19 +88,16 @@ pub trait Visitor<'a> {
     fn visit_ifc_fun_decl(&mut self, p: &'a IfcFunDecl<'a>) {
         p.recurse(self.object())
     }
-    fn visit_method_reactivity(&mut self, p: &'a MethodReactivity<'a>) {
+    fn visit_pos_byte_string(&mut self, p: &'a PosByteString<'a>) {
         p.recurse(self.object())
     }
-    fn visit_param_rx_annotation(&mut self, p: &'a ParamRxAnnotation<'a>) {
+    fn visit_pos_id(&mut self, p: &'a PosId<'a>) {
+        p.recurse(self.object())
+    }
+    fn visit_pos_string(&mut self, p: &'a PosString<'a>) {
         p.recurse(self.object())
     }
     fn visit_possibly_enforced_ty(&mut self, p: &'a PossiblyEnforcedTy<'a>) {
-        p.recurse(self.object())
-    }
-    fn visit_reactivity(&mut self, p: &'a Reactivity<'a>) {
-        p.recurse(self.object())
-    }
-    fn visit_reason(&mut self, p: &'a Reason<'a>) {
         p.recurse(self.object())
     }
     fn visit_record_def_type(&mut self, p: &'a RecordDefType<'a>) {
@@ -118,16 +124,16 @@ pub trait Visitor<'a> {
     fn visit_shallow_typeconst(&mut self, p: &'a ShallowTypeconst<'a>) {
         p.recurse(self.object())
     }
-    fn visit_shape_field(&mut self, p: &'a ShapeField<'a>) {
-        p.recurse(self.object())
-    }
-    fn visit_shape_field_name(&mut self, p: &'a ShapeFieldName<'a>) {
-        p.recurse(self.object())
-    }
     fn visit_shape_field_type(&mut self, p: &'a ShapeFieldType<'a>) {
         p.recurse(self.object())
     }
     fn visit_shape_kind(&mut self, p: &'a ShapeKind) {
+        p.recurse(self.object())
+    }
+    fn visit_tshape_field(&mut self, p: &'a TShapeField<'a>) {
+        p.recurse(self.object())
+    }
+    fn visit_t_(&mut self, p: &'a T_<'a>) {
         p.recurse(self.object())
     }
     fn visit_taccess_type(&mut self, p: &'a TaccessType<'a>) {
@@ -137,6 +143,9 @@ pub trait Visitor<'a> {
         p.recurse(self.object())
     }
     fn visit_tprim(&mut self, p: &'a Tprim) {
+        p.recurse(self.object())
+    }
+    fn visit_tshape_field_name(&mut self, p: &'a TshapeFieldName<'a>) {
         p.recurse(self.object())
     }
     fn visit_ty(&mut self, p: &'a Ty<'a>) {

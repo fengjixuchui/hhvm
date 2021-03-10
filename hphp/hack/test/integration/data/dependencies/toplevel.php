@@ -91,10 +91,8 @@ function with_built_in_constant(): int {
   return PHP_INT_MAX;
 }
 
-<<__Pure>>
 function reactive(mixed $x = null): void {}
 
-<<__Pure>>
 function call_reactive(): void {
   reactive();
 }
@@ -136,4 +134,151 @@ class WithTypeAliasHint {
   public function getX(): Option<int> {
     return $this->x;
   }
+}
+
+type TydefWithFun<T> = (
+  (function(int, ?T): void),
+  (function(int, float...):void)
+);
+
+function function_in_typedef<T>(TydefWithFun<T> $y):void {}
+
+type TydefWithCapabilities<T> = (
+  (function(): void),
+  (function()[]: void),
+  (function()[write_props,rx]: void),
+);
+
+function contexts_in_typedef<T>(TydefWithCapabilities<T> $y):void {}
+
+function with_argument_dependent_context_callee(
+  (function()[_]: void) $f,
+)[write_props, ctx $f]: void {
+  $f();
+}
+
+function with_argument_dependent_context()[ policied_local, rx]: void {
+  with_argument_dependent_context_callee(()[policied_local] ==> {
+    echo "write";
+  });
+}
+
+class Contextual {
+  public static function with_argument_dependent_context(
+    (function()[_]: void) $f,
+  )[write_props, ctx $f]: void {
+    $f();
+  }
+}
+
+class WithContextConstant {
+  const ctx C = [policied_shallow];
+  public function has_io()[self::C]: void {
+    echo "I have IO!";
+  }
+}
+
+function with_optional_argument_dependent_context_callee(
+  ?(function()[_]: void) $f1,
+)[ctx $f1]: void {
+  if ($f1 is nonnull) {
+    $f1();
+  }
+}
+
+function with_optional_argument_dependent_context(): void {
+  with_optional_argument_dependent_context_callee(null);
+}
+
+function my_keys<Tk as arraykey, Tv>(
+   KeyedTraversable<Tk, Tv> $traversable,
+)[]: keyset<Tk> {
+  $result = keyset[];
+  foreach ($traversable as $key => $_) {
+    $result[] = $key;
+  }
+  return $result;
+}
+
+function with_expr_in_user_attrs(): void {
+  $_ = my_keys(vec[]);
+}
+
+<<MyUserAttr('blah')>>
+type TransparentWithUserAttr = int;
+
+<<MyUserAttr('blah')>>
+newtype OpaqueWithUserAttr = int;
+
+<<MyUserAttr('blah')>>
+enum EnumWithUserAttr: int as int {
+  Blah = 0;
+}
+
+function enum_with_user_attr(EnumWithUserAttr $x): void {}
+
+function transparent_with_user_attr(TransparentWithUserAttr $x): void {}
+
+function opaque_with_user_attr(OpaqueWithUserAttr $x): void {}
+
+<<MyUserAttr('blah')>>
+class WithUserAttr {
+  public function foo(): void {}
+}
+
+class WithMethodWithUserAttr {
+  <<MyUserAttr('blah')>>
+  public function foo(): void {}
+}
+
+class WithTypeConstantWithUserAttr {
+  <<MyUserAttr('blah')>>
+  const type T = int;
+  public function foo(): self::T {
+    return 1;
+  }
+}
+
+class WithStaticPropWithUserAttr {
+  <<MyUserAttr('blah')>> public static int $i = 0;
+  public function foo(): int {
+    return self::$i;
+  }
+}
+
+class WithPropWithUserAttr {
+  <<MyUserAttr('blah')>> public int $i = 0;
+  public function foo(): int {
+    return $this->i;
+  }
+}
+
+class WithConstrPropWithUserAttr {
+  public function __construct(<<MyUserAttr('blah')>> private int $i){}
+}
+
+function with_constr_prop_with_user_attr():void {
+  $_ = new WithConstrPropWithUserAttr(2);
+}
+
+<<MyUserAttr('blah')>>
+function with_user_attr(): void {}
+
+function with_param_with_user_attr(<<MyUserAttr('blah')>> int $s): void {}
+
+function with_tparam_with_user_attr<<<MyUserAttr('blah')>> T>(T $x): void {}
+
+final class MyUserAttr
+  implements
+    HH\ClassAttribute,
+    HH\MethodAttribute,
+    HH\TypeAliasAttribute,
+    HH\EnumAttribute,
+    HH\FunctionAttribute,
+    HH\InstancePropertyAttribute,
+    HH\StaticPropertyAttribute,
+    HH\ParameterAttribute,
+    HH\TypeParameterAttribute,
+    HH\TypeConstantAttribute {
+  public function __construct(string $first, string ...$remainder)[] {}
 }

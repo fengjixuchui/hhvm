@@ -283,16 +283,17 @@ void raiseTooManyArgumentsPrologue(const Func* func, ArrayData* unpackArgs) {
 
 //////////////////////////////////////////////////////////////////////
 
-void raiseCoeffectsCallViolation(const ActRec* caller, const Func* callee,
-                                 const CallFlags flags) {
+void raiseCoeffectsCallViolation(const Func* callee, const CallFlags flags,
+                                 RuntimeCoeffects required) {
   assertx(CoeffectsConfig::enabled());
   auto const provided = flags.coeffects();
-  auto const required = callee->staticCoeffects().toRequired();
   auto const errMsg = folly::sformat(
     "Call to {}() requires [{}] coeffects but {}() provided [{}]",
-    callee->fullName()->data(),
+    callee->fullNameWithClosureName(),
     required.toString(),
-    caller->func()->fullName()->data(),
+    fromLeaf([] (const ActRec* fp, Offset) {
+      return fp->func()->fullNameWithClosureName();
+    }),
     provided.toString()
   );
 

@@ -13,6 +13,7 @@ open String_utils
 open Sys_utils
 open Typing_env_types
 module Inf = Typing_inference_env
+module Cls = Decl_provider.Class
 
 module StringAnnotation = struct
   type t = string
@@ -43,6 +44,7 @@ type mode =
   | Dump_deps
   | Identify_symbol of int * int
   | Find_local of int * int
+  | Get_member of string
   | Outline
   | Dump_nast
   | Dump_stripped_tast
@@ -210,7 +212,6 @@ let parse_options () =
   let disallow_array_literal = ref None in
   let dynamic_view = ref None in
   let auto_namespace_map = ref None in
-  let unsafe_rx = ref (Some false) in
   let log_inference_constraints = ref None in
   let timeout = ref None in
   let disallow_byref_dynamic_calls = ref (Some false) in
@@ -274,12 +275,14 @@ let parse_options () =
   let enable_sound_dynamic = ref false in
   let disallow_hash_comments = ref false in
   let disallow_fun_and_cls_meth_pseudo_funcs = ref false in
+  let disallow_inst_meth = ref false in
   let use_direct_decl_parser = ref false in
   let enable_enum_classes = ref false in
   let enable_enum_supertyping = ref false in
   let array_unification = ref false in
   let interpret_soft_types_as_like_types = ref false in
   let enable_strict_string_concat_interp = ref false in
+  let ignore_unsafe_cast = ref false in
   let naming_table = ref None in
   let root = ref None in
   let sharedmem_config = ref SharedMem.default_config in
@@ -442,9 +445,12 @@ let parse_options () =
       ( "--dynamic-view",
         Arg.Unit (set_bool dynamic_view),
         " Turns on dynamic view, replacing Tany with dynamic" );
-      ( "--unsafe-rx",
-        Arg.Unit (set_bool unsafe_rx),
-        " Disables reactivity related errors" );
+      ( "--get-member",
+        Arg.String
+          (fun class_and_member_id ->
+            set_mode (Get_member class_and_member_id) ()),
+        " Given ClassName::MemberName, fetch the decl of members with that name and print them."
+      );
       ( "--mro",
         Arg.Unit (set_mode Linearization),
         " Grabs the linearization of all classes in a file." );
@@ -634,6 +640,9 @@ let parse_options () =
       ( "--disallow-fun-and-cls-meth-pseudo-funcs",
         Arg.Set disallow_fun_and_cls_meth_pseudo_funcs,
         "Disable parsing of fun() and class_meth()." );
+      ( "--disallow-inst-meth",
+        Arg.Set disallow_inst_meth,
+        "Disable parsing of inst_meth()." );
       ( "--use-direct-decl-parser",
         Arg.Set use_direct_decl_parser,
         "Use direct decl parser" );
@@ -655,14 +664,18 @@ let parse_options () =
         "Require arguments are arraykey types in string concatenation and
         interpolation."
       );
+      ( "--ignore-unsafe-cast",
+        Arg.Set ignore_unsafe_cast,
+        "Ignore unsafe_cast and retain the original type of the expression" );
     ]
   in
   let options = Arg.align ~limit:25 options in
   Arg.parse options (fun fn -> fn_ref := fn :: !fn_ref) usage;
   let fns =
-    match !fn_ref with
-    | [] -> die usage
-    | x -> x
+    match (!fn_ref, !mode) with
+    | ([], Get_member _) -> []
+    | ([], _) -> die usage
+    | (x, _) -> x
   in
   let is_ifc_mode =
     match !mode with
@@ -706,7 +719,6 @@ let parse_options () =
   let tcopt =
     GlobalOptions.make
       ?po_disable_array_typehint:(Some false)
-      ?tco_unsafe_rx:!unsafe_rx
       ?po_deregister_php_stdlib:!deregister_attributes
       ?tco_disallow_array_typehint:!disallow_array_typehint
       ?tco_disallow_array_literal:!disallow_array_literal
@@ -780,6 +792,7 @@ let parse_options () =
       ~po_disallow_hash_comments:!disallow_hash_comments
       ~po_disallow_fun_and_cls_meth_pseudo_funcs:
         !disallow_fun_and_cls_meth_pseudo_funcs
+      ~po_disallow_inst_meth:!disallow_inst_meth
       ~tco_ifc_enabled:
         ( if is_ifc_mode then
           ["/"]
@@ -792,6 +805,7 @@ let parse_options () =
       ~po_interpret_soft_types_as_like_types:!interpret_soft_types_as_like_types
       ~tco_enable_strict_string_concat_interp:
         !enable_strict_string_concat_interp
+      ~tco_ignore_unsafe_cast:!ignore_unsafe_cast
       ()
   in
   Errors.allowed_fixme_codes_strict :=
@@ -1741,7 +1755,9 @@ let handle_mode
     iter_over_files (fun filename ->
         let nasts = create_nasts ctx files_info in
         let nast = Relative_path.Map.find nasts filename in
-        Printf.printf "%s\n" (Nast.show_program nast))
+        let formatter = Format.formatter_of_out_channel Stdlib.stdout in
+        Format.pp_set_margin formatter 200;
+        Nast.pp_program formatter nast)
   | Dump_tast ->
     let (errors, tasts, _gi_solved) =
       compute_tasts_expand_types ctx ~verbosity files_info files_contents
@@ -1979,6 +1995,116 @@ let handle_mode
     print_errors_if_present parse_errors;
     let filename = expect_single_file () in
     test_shallow_class_diff ctx filename
+  | Get_member class_and_member_id ->
+    let (cid, mid) =
+      match Str.split (Str.regexp "::") class_and_member_id with
+      | [cid; mid] -> (cid, mid)
+      | _ ->
+        failwith
+          (Printf.sprintf "Invalid --get-member ID: %S" class_and_member_id)
+    in
+    let cid = Utils.add_ns cid in
+    (match Decl_provider.get_class ctx cid with
+    | None -> Printf.printf "No class named %s\n" cid
+    | Some cls ->
+      let ty_to_string ty =
+        let env = Typing_env.empty ctx Relative_path.default ~droot:None in
+        Typing_print.full_strip_ns_decl env ty
+      in
+      let print_class_element member_type get mid =
+        match get cls mid with
+        | None -> ()
+        | Some ce ->
+          let abstract =
+            if Typing_defs.get_ce_abstract ce then
+              "abstract "
+            else
+              ""
+          in
+          let origin = ce.Typing_defs.ce_origin in
+          let from =
+            if String.equal origin cid then
+              ""
+            else
+              Printf.sprintf " from %s" (Utils.strip_ns origin)
+          in
+          Printf.printf
+            "  %s%s%s: %s\n"
+            abstract
+            member_type
+            from
+            (ty_to_string (Lazy.force ce.Typing_defs.ce_type))
+      in
+      Printf.printf "%s::%s\n" cid mid;
+      print_class_element "method" Cls.get_method mid;
+      print_class_element "static method" Cls.get_smethod mid;
+      print_class_element "property" Cls.get_prop mid;
+      print_class_element "static property" Cls.get_sprop mid;
+      print_class_element "static property" Cls.get_sprop ("$" ^ mid);
+      (match Cls.get_const cls mid with
+      | None -> ()
+      | Some cc ->
+        let abstract =
+          if cc.Typing_defs.cc_abstract then
+            "abstract "
+          else
+            ""
+        in
+        let origin = cc.Typing_defs.cc_origin in
+        let from =
+          if String.equal origin cid then
+            ""
+          else
+            Printf.sprintf " from %s" (Utils.strip_ns origin)
+        in
+        let ty = ty_to_string cc.Typing_defs.cc_type in
+        Printf.printf "  %sconst%s: %s\n" abstract from ty);
+      (match Cls.get_typeconst cls mid with
+      | None -> ()
+      | Some ttc ->
+        let origin = ttc.Typing_defs.ttc_origin in
+        let from =
+          if String.equal origin cid then
+            ""
+          else
+            Printf.sprintf " from %s" (Utils.strip_ns origin)
+        in
+        let ty =
+          match ttc.Typing_defs.ttc_abstract with
+          | Typing_defs.TCConcrete ->
+            (match ttc.Typing_defs.ttc_type with
+            | None -> "= None"
+            | Some ty -> "= " ^ ty_to_string ty)
+          | Typing_defs.TCAbstract default ->
+            String.concat
+              ~sep:" "
+              (List.filter_map
+                 [
+                   Option.map ttc.Typing_defs.ttc_as_constraint ~f:(fun ty ->
+                       "as " ^ ty_to_string ty);
+                   Option.map default ~f:(fun ty -> "= " ^ ty_to_string ty);
+                 ]
+                 ~f:(fun x -> x))
+          | Typing_defs.TCPartiallyAbstract ->
+            String.concat
+              ~sep:" "
+              (List.filter_map
+                 [
+                   Option.map ttc.Typing_defs.ttc_as_constraint ~f:(fun ty ->
+                       "as " ^ ty_to_string ty);
+                   Option.map ttc.Typing_defs.ttc_type ~f:(fun ty ->
+                       "= " ^ ty_to_string ty);
+                 ]
+                 ~f:(fun x -> x))
+        in
+        let abstract =
+          match ttc.Typing_defs.ttc_abstract with
+          | Typing_defs.TCConcrete -> ""
+          | Typing_defs.TCAbstract _ -> "abstract "
+          | Typing_defs.TCPartiallyAbstract -> "partially abstract "
+        in
+        Printf.printf "  %stypeconst%s: %s %s\n" abstract from mid ty);
+      ())
   | Linearization ->
     if not (List.is_empty parse_errors) then (
       print_error error_format (List.hd_exn parse_errors);
@@ -1996,24 +2122,29 @@ let handle_mode
     in
     Relative_path.Map.iter files_info ~f:(fun _file info ->
         let { FileInfo.classes; _ } = info in
+        let is_first = ref true in
         List.iter classes ~f:(fun (_, classname) ->
-            Printf.printf "Linearization for class %s:\n" classname;
+            if not !is_first then Printf.printf "\n";
+            is_first := false;
             let { Decl_linearize.lin_members; _ } =
               Decl_linearize.get_linearizations ctx classname
             in
             let linearization =
               Sequence.map lin_members (fun mro ->
-                  let name = mro.Decl_defs.mro_name in
+                  let name = Utils.strip_ns mro.Decl_defs.mro_name in
+                  let env =
+                    Typing_env.empty ctx Relative_path.default ~droot:None
+                  in
                   let targs =
                     List.map
                       mro.Decl_defs.mro_type_args
-                      (Typing_print.full_decl ctx)
+                      (Typing_print.full_strip_ns_decl env)
                   in
                   let targs =
                     if List.is_empty targs then
                       ""
                     else
-                      "<" ^ String.concat ~sep:"," targs ^ ">"
+                      "<" ^ String.concat ~sep:", " targs ^ ">"
                   in
                   Decl_defs.(
                     let modifiers =
@@ -2060,10 +2191,11 @@ let handle_mode
                       ( if String.equal modifiers "" then
                         ""
                       else
-                        Printf.sprintf "(%s)" modifiers )))
+                        Printf.sprintf " (%s)" modifiers )))
               |> Sequence.to_list
             in
-            Printf.printf "[%s]\n" (String.concat ~sep:", " linearization)))
+            Printf.printf "%s:\n" (Utils.strip_ns classname);
+            List.iter linearization ~f:(Printf.printf "  %s\n")))
 
 (*****************************************************************************)
 (* Main entry point *)

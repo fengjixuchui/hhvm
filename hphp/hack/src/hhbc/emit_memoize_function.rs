@@ -8,7 +8,7 @@ use emit_body_rust as emit_body;
 use emit_memoize_helpers_rust as emit_memoize_helpers;
 use emit_param_rust as emit_param;
 use emit_pos_rust::emit_pos_then;
-use env::{emitter::Emitter, local, Env};
+use env::{emitter::Emitter, Env};
 use hhas_body_rust::HhasBody;
 use hhas_coeffects::HhasCoeffects;
 use hhas_function_rust::{Flags as HhasFunctionFlags, HhasFunction};
@@ -74,7 +74,7 @@ pub(crate) fn emit_wrapper_function<'a>(
         f.fun_kind.is_fasync(),
         is_reified,
     )?;
-    let coeffects = HhasCoeffects::from_ast(&f.user_attributes, &f.ctxs, &f.params);
+    let coeffects = HhasCoeffects::from_ast(&f.ctxs, &f.params);
     env.with_rx_body(coeffects.is_any_rx_or_pure());
     let body = make_wrapper_body(
         emitter,
@@ -151,8 +151,8 @@ fn make_memoize_function_with_params_code(
     let deprecation_body =
         emit_body::emit_deprecation_info(&env.scope, deprecation_info, e.systemlib())?;
     let (begin_label, default_value_setters) =
-    // Default value setters belong in the wrapper method not in the original method
-     emit_param::emit_param_default_value_setter(e, env, pos, hhas_params)?;
+        // Default value setters belong in the wrapper method not in the original method
+        emit_param::emit_param_default_value_setter(e, env, pos, hhas_params)?;
     let fcall_args = {
         let mut fcall_flags = FcallFlags::default();
         fcall_flags.set(FcallFlags::HAS_GENERICS, is_reified);

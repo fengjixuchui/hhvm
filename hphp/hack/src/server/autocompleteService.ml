@@ -14,7 +14,6 @@ open String_utils
 open SearchUtils
 include AutocompleteTypes
 open Tast
-module Nast = Aast
 module Tast = Aast
 module Phase = Typing_phase
 module Cls = Decl_provider.Class
@@ -147,7 +146,7 @@ let autocomplete_trait_only = autocomplete_token Actrait_only None
 
 let autocomplete_new cid env =
   match cid with
-  | Nast.CI sid -> autocomplete_token Acnew (Some env) sid
+  | Aast.CI sid -> autocomplete_token Acnew (Some env) sid
   | _ -> ()
 
 let get_class_elt_types env class_ cid elts =
@@ -169,15 +168,15 @@ let autocomplete_shape_key env fields id =
       Pos.length (fst id) > AutocompleteTypes.autocomplete_token_length
     in
     let prefix = strip_suffix (snd id) in
-    let add (name : Ast_defs.shape_field_name) =
+    let add (name : Typing_defs.tshape_field_name) =
       let (code, kind, ty) =
         match name with
-        | Ast_defs.SFlit_int (pos, str) ->
-          let reason = Typing_reason.Rwitness pos in
+        | Typing_defs.TSFlit_int (pos, str) ->
+          let reason = Typing_reason.Rwitness_from_decl pos in
           let ty = Typing_defs.Tprim Aast_defs.Tint in
           (str, SI_Literal, Typing_defs.mk (reason, ty))
-        | Ast_defs.SFlit_str (pos, str) ->
-          let reason = Typing_reason.Rwitness pos in
+        | Typing_defs.TSFlit_str (pos, str) ->
+          let reason = Typing_reason.Rwitness_from_decl pos in
           let ty = Typing_defs.Tprim Aast_defs.Tstring in
           let quote =
             if have_prefix then
@@ -186,26 +185,25 @@ let autocomplete_shape_key env fields id =
               "'"
           in
           (quote ^ str ^ quote, SI_Literal, Typing_defs.mk (reason, ty))
-        | Ast_defs.SFclass_const ((pos, cid), (_, mid)) ->
+        | Typing_defs.TSFclass_const ((pos, cid), (_, mid)) ->
           ( Printf.sprintf "%s::%s" cid mid,
             SI_ClassConstant,
-            Typing_defs.mk (Reason.Rwitness pos, Typing_defs.make_tany ()) )
+            Typing_defs.mk
+              (Reason.Rwitness_from_decl pos, Typing_defs.make_tany ()) )
       in
       if (not have_prefix) || string_starts_with code prefix then
         add_partial_result code (Phase.decl ty) kind None
     in
-    List.iter (Ast_defs.ShapeMap.keys fields) ~f:add
+    List.iter (TShapeMap.keys fields) ~f:add
   )
 
 let autocomplete_member ~is_static env class_ cid id =
   (* This is used for instance "$x->|" and static "Class1::|" members. *)
-  (* It's also used for "<nt:fb:text |" XHP attributes, in which case  *)
-  (* class_ is ":nt:fb:text" and its attributes are in tc_props.       *)
   if is_auto_complete (snd id) then (
     (* Detect usage of "parent::|" which can use both static and instance *)
     let match_both_static_and_instance =
       match cid with
-      | Some Nast.CIparent -> true
+      | Some Aast.CIparent -> true
       | _ -> false
     in
     ac_env := Some env;
@@ -243,9 +241,27 @@ let autocomplete_member ~is_static env class_ cid id =
     )
   )
 
+let autocomplete_xhp_attributes env class_ cid id =
+  (* This is used for "<nt:fb:text |" XHP attributes, in which case  *)
+  (* class_ is ":nt:fb:text" and its attributes are in tc_props.     *)
+  if is_auto_complete (snd id) && Cls.is_xhp class_ then (
+    ac_env := Some env;
+    autocomplete_identifier := Some id;
+    argument_global_type := Some Acprop;
+    List.iter
+      (get_class_elt_types env class_ cid (Cls.props class_))
+      ~f:(fun (name, ty) ->
+        add_partial_result
+          name
+          (Phase.decl ty)
+          SearchUtils.SI_Property
+          (Some class_))
+  )
+
 let autocomplete_xhp_enum_value
     (attr_name : string) id_id env xhp_class_ xhp_cid =
-  if is_auto_complete (snd id_id) then
+  if is_auto_complete (snd id_id) then begin
+    autocomplete_identifier := Some id_id;
     let get_class_name (ty : Typing_defs.decl_ty) : string option =
       let get_name = function
         | Tapply ((_, name), _) -> Some name
@@ -296,6 +312,7 @@ let autocomplete_xhp_enum_value
                     (Phase.decl ty.cc_type)
                     SearchUtils.SI_Enum
                     enum_class))
+  end
 
 let autocomplete_lvar id env =
   (* This is used for "$|" and "$x = $|" local variables. *)
@@ -516,11 +533,11 @@ let visitor =
        use that as the search term. *)
       let trimmed_sid = (fst sid, snd sid |> Utils.strip_both_ns) in
       autocomplete_id trimmed_sid env;
-      let cid = Nast.CI sid in
+      let cid = Aast.CI sid in
       Decl_provider.get_class (Tast_env.get_ctx env) (snd sid)
       |> Option.iter ~f:(fun (c : Cls.t) ->
              List.iter attrs ~f:(function
-                 | Tast.Xhp_simple (id, value) ->
+                 | Tast.Xhp_simple { Aast.xs_name = id; xs_expr = value; _ } ->
                    (match value with
                    | (_, Tast.Id id_id) ->
                      (* This handles the situation
@@ -528,7 +545,10 @@ let visitor =
                         *)
                      autocomplete_xhp_enum_value (snd id) id_id env c (Some cid)
                    | _ -> ());
-                   autocomplete_member ~is_static:false env c (Some cid) id
+                   if Cls.is_xhp c then
+                     autocomplete_xhp_attributes env c (Some cid) id
+                   else
+                     autocomplete_member ~is_static:false env c (Some cid) id
                  | Tast.Xhp_spread _ -> ()));
       super#on_Xml env sid attrs el
 
@@ -660,6 +680,17 @@ let find_global_results
     ()
   else if ctx.is_after_double_right_angle_bracket then
     (* <<__Override>>AUTO332 *)
+    ()
+  else if ctx.is_open_curly_without_equals then
+    (* In the case that we trigger autocompletion with an open curly brace,
+    we only want to perform autocompletion if it is preceded by an equal sign.
+
+    i.e. if (true) {
+      --> Do not autocomplete
+
+    i.e. <foo:bar my-attribute={
+      --> Allow autocompletion
+    *)
     ()
   else (
     (kind_filter :=

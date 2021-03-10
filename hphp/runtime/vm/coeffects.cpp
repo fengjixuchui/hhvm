@@ -67,15 +67,17 @@ RuntimeCoeffects StaticCoeffects::toRequired() const {
   return RuntimeCoeffects::fromValue(val);
 }
 
+RuntimeCoeffects& RuntimeCoeffects::operator&=(const RuntimeCoeffects o) {
+  m_data &= o.m_data;
+  return *this;
+}
+
 StaticCoeffects& StaticCoeffects::operator|=(const StaticCoeffects o) {
   return (*this = CoeffectsConfig::combine(*this, o));
 }
 
 folly::Optional<std::string> CoeffectRule::toString(const Func* f) const {
   switch (m_type) {
-    case Type::ConditionalReactiveImplements:
-    case Type::ConditionalReactiveArgImplements:
-      return folly::none;
     case Type::FunParam:
       return folly::to<std::string>("ctx $",
                                     f->localVarName(m_index)->toCppString());
@@ -92,17 +94,59 @@ folly::Optional<std::string> CoeffectRule::toString(const Func* f) const {
   not_reached();
 }
 
+namespace {
+
+RuntimeCoeffects emitCCParam(const Func* f,
+                             uint32_t numArgsInclUnpack,
+                             uint32_t paramIdx,
+                             const StringData* name) {
+  if (paramIdx >= numArgsInclUnpack) return RuntimeCoeffects::full();
+  auto const index =
+    numArgsInclUnpack - 1 - paramIdx + (f->hasReifiedGenerics() ? 1 : 0);
+  auto const tv = vmStack().indC(index);
+  if (tvIsNull(tv)) return RuntimeCoeffects::full();
+  if (!tvIsObject(tv)) {
+    raise_error(folly::sformat("Coeffect rule requires parameter at "
+                               "position {} to be an object or null",
+                               paramIdx));
+  }
+  auto const cls = tv->m_data.pobj->getVMClass();
+  return cls->clsCtxCnsGet(name);
+}
+
+RuntimeCoeffects emitCCThis(const Func* f, const StringData* name,
+                            void* prologueCtx) {
+  assertx(!f->isClosureBody());
+  assertx(f->isMethod());
+  auto const cls = f->isStatic()
+    ? reinterpret_cast<Class*>(prologueCtx)
+    : reinterpret_cast<ObjectData*>(prologueCtx)->getVMClass();
+  return cls->clsCtxCnsGet(name);
+}
+
+RuntimeCoeffects emitFunParam() {
+  // TODO(oulgen): implement this
+  return RuntimeCoeffects::full();
+}
+
+} // namespace
+
+RuntimeCoeffects CoeffectRule::emit(const Func* f,
+                                    uint32_t numArgsInclUnpack,
+                                    void* prologueCtx) const {
+  switch (m_type) {
+    case Type::CCParam:  return emitCCParam(f, numArgsInclUnpack,
+                                            m_index, m_name);
+    case Type::CCThis:   return emitCCThis(f, m_name, prologueCtx);
+    case Type::FunParam: return emitFunParam();
+    case Type::Invalid:
+      always_assert(false);
+  }
+  not_reached();
+}
+
 std::string CoeffectRule::getDirectiveString() const {
   switch (m_type) {
-    case Type::ConditionalReactiveImplements:
-      return folly::sformat(".rx_cond_implements \"{}\";",
-                            folly::cEscape<std::string>(
-                              m_name->toCppString()));
-    case Type::ConditionalReactiveArgImplements:
-      return folly::sformat(".rx_cond_implements_arg {} \"{}\";",
-                            m_index,
-                            folly::cEscape<std::string>(
-                              m_name->toCppString()));
     case Type::FunParam:
       return folly::sformat(".coeffects_fun_param {};", m_index);
     case Type::CCParam:
@@ -125,21 +169,6 @@ void CoeffectRule::serde(SerDe& sd) {
     (m_index)
     (m_name)
   ;
-
-  if constexpr (SerDe::deserializing) {
-    switch (m_type) {
-      case Type::ConditionalReactiveImplements:
-      case Type::ConditionalReactiveArgImplements:
-        m_ne = NamedEntity::get(m_name);
-        break;
-      case Type::FunParam:
-      case Type::CCParam:
-      case Type::CCThis:
-        break;
-      case Type::Invalid:
-        always_assert(false);
-    }
-  }
 }
 
 template void CoeffectRule::serde<>(BlobDecoder&);

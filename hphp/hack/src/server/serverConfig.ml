@@ -321,7 +321,6 @@ let load ~silent config_filename options : t * ServerLocalConfig.t =
           Some local_config.remote_type_check.worker_vfs_checkout_threshold)
       ?so_naming_sqlite_path:local_config.naming_sqlite_path
       ?tco_language_feature_logging:(bool_opt "language_feature_logging" config)
-      ?tco_unsafe_rx:(bool_opt "unsafe_rx" config)
       ?tco_disallow_scrutinee_case_value_type_mismatch:
         (bool_opt "disallow_scrutinee_case_value_type_mismatch" config)
       ?tco_timeout:(int_opt "timeout" config)
@@ -346,12 +345,6 @@ let load ~silent config_filename options : t * ServerLocalConfig.t =
       ~tco_shallow_class_decl:local_config.ServerLocalConfig.shallow_class_decl
       ~po_allow_unstable_features:
         local_config.ServerLocalConfig.allow_unstable_features
-      ~profile_type_check_duration_threshold:
-        local_config.ServerLocalConfig.profile_type_check_duration_threshold
-      ~profile_type_check_twice:
-        local_config.ServerLocalConfig.profile_type_check_twice
-      ?profile_owner:local_config.ServerLocalConfig.profile_owner
-      ~profile_desc:local_config.ServerLocalConfig.profile_desc
       ?tco_like_type_hints:(bool_opt "like_type_hints" config)
       ?tco_union_intersection_type_hints:
         (bool_opt "union_intersection_type_hints" config)
@@ -427,6 +420,7 @@ let load ~silent config_filename options : t * ServerLocalConfig.t =
       ?po_disallow_hash_comments:(bool_opt "disallow_hash_comments" config)
       ?po_disallow_fun_and_cls_meth_pseudo_funcs:
         (bool_opt "disallow_fun_and_cls_meth_pseudo_funcs" config)
+      ?po_disallow_inst_meth:(bool_opt "disallow_inst_meth" config)
       ~tco_use_direct_decl_parser:
         local_config.ServerLocalConfig.use_direct_decl_parser
       ~tco_ifc_enabled:(ServerArgs.enable_ifc options)
@@ -437,6 +431,7 @@ let load ~silent config_filename options : t * ServerLocalConfig.t =
         (bool_opt "interpret_soft_types_as_like_types" config)
       ?tco_enable_strict_string_concat_interp:
         (bool_opt "enable_strict_string_concat_interp" config)
+      ?tco_ignore_unsafe_cast:(bool_opt "ignore_unsafe_cast" config)
       ()
   in
   Errors.allowed_fixme_codes_strict :=

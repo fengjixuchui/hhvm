@@ -110,6 +110,7 @@ type check_info = {
   profile_decling: profile_decling;
   profile_type_check_twice: bool;
   profile_type_check_duration_threshold: float;
+  profile_type_check_memory_threshold_mb: int;
 }
 
 type files_to_process = file_computation BigList.t
@@ -186,6 +187,7 @@ type delegate_env = {
   mergebase: Hg.hg_rev option;
   num_workers: int;
   recheck_id: string;
+  nonce: Int64.t;
   root: string;
   tcopt: TypecheckerOptions.t;
   hash_mode: Typing_deps_mode.hash_mode;

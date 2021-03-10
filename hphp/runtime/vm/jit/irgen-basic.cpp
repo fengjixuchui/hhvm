@@ -481,13 +481,13 @@ void emitCastDouble(IRGS& env) {
 
 void emitCastInt(IRGS& env) {
   auto const src = popC(env);
-  push(env, gen(env, ConvTVToInt, src));
+  push(env, gen(env, ConvTVToInt, ConvNoticeData{}, src));
   decRef(env, src);
 }
 
 void emitCastString(IRGS& env) {
   auto const src = popC(env);
-  push(env, gen(env, ConvTVToStr, src));
+  push(env, gen(env, ConvTVToStr, ConvNoticeData{}, src));
   decRef(env, src);
 }
 

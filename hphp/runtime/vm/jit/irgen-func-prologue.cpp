@@ -255,35 +255,45 @@ void emitCalleeDynamicCallChecks(IRGS& env, const Func* callee,
 }
 
 void emitCalleeCoeffectChecks(IRGS& env, const Func* callee,
-                              SSATmp* callFlags) {
+                              SSATmp* callFlags, uint32_t argc,
+                              SSATmp* prologueCtx) {
   assertx(callee);
   assertx(callFlags);
 
   if (!CoeffectsConfig::enabled()) return;
-  auto const requiredCoeffects = callee->staticCoeffects().toRequired();
+  auto const requiredCoeffects = [&] {
+    auto result = cns(env, callee->staticCoeffects().toRequired().value());
+    if (!callee->hasCoeffectRules()) return result;
+    for (auto const& rule : callee->getCoeffectRules()) {
+      if (auto const coeffect = rule.emitJit(env, callee, argc, prologueCtx)) {
+        result = gen(env, AndInt, result, coeffect);
+      }
+    }
+    return result;
+  }();
 
-  if (callFlags->hasConstVal(TInt)) {
-    auto const providedCoeffects =
-      CallFlags(callFlags->intVal()).coeffects();
-    if (LIKELY(providedCoeffects.canCall(requiredCoeffects))) return;
-    gen(env, RaiseCoeffectsCallViolation, FuncData{callee}, fp(env), callFlags);
-    return;
-  }
   ifThen(
     env,
     [&] (Block* taken) {
       // providedCoeffects & (~requiredCoeffects) == 0
+
       auto const providedCoeffects =
         gen(env, Lshr, callFlags, cns(env, CallFlags::CoeffectsStart));
-      auto const requiredCoeffectsFlipped = (~requiredCoeffects.value()) &
-        ((1 << CoeffectsConfig::numUsedBits()) - 1);
+
+      // The unused higher order bits of requiredCoeffects will be 0
+      // We want to flip the used lower order bits
+      auto const mask = (1 << CoeffectsConfig::numUsedBits()) - 1;
+      auto const requiredCoeffectsFlipped =
+        gen(env, XorInt, requiredCoeffects, cns(env, mask));
+
       auto const cond =
-        gen(env, AndInt, providedCoeffects, cns(env, requiredCoeffectsFlipped));
+        gen(env, AndInt, providedCoeffects, requiredCoeffectsFlipped);
       gen(env, JmpNZero, taken, cond);
     },
     [&] {
       hint(env, Block::Hint::Unlikely);
-      gen(env, RaiseCoeffectsCallViolation, FuncData{callee}, fp(env), callFlags);
+      gen(env, RaiseCoeffectsCallViolation, FuncData{callee}, callFlags,
+          requiredCoeffects);
     }
   );
 }
@@ -344,14 +354,14 @@ void emitPrologueEntry(IRGS& env, const Func* callee, uint32_t argc,
 }
 
 void emitCalleeChecks(IRGS& env, const Func* callee, uint32_t argc,
-                      SSATmp* callFlags) {
+                      SSATmp* callFlags, SSATmp* prologueCtx) {
   // Generics are special and need to be checked first, as they may or may not
   // be on the stack. This check makes sure they materialize on the stack
   // if we expect them.
   emitCalleeGenericsChecks(env, callee, callFlags, false);
   emitCalleeArgumentArityChecks(env, callee, argc);
   emitCalleeDynamicCallChecks(env, callee, callFlags);
-  emitCalleeCoeffectChecks(env, callee, callFlags);
+  emitCalleeCoeffectChecks(env, callee, callFlags, argc, prologueCtx);
   emitCalleeImplicitContextChecks(env, callee);
 
   // Emit early stack overflow check if necessary.
@@ -553,7 +563,7 @@ void emitFuncPrologue(IRGS& env, const Func* callee, uint32_t argc,
     : cns(env, nullptr);
 
   emitPrologueEntry(env, callee, argc, transID);
-  emitCalleeChecks(env, callee, argc, callFlags);
+  emitCalleeChecks(env, callee, argc, callFlags, prologueCtx);
   emitInitFuncInputs(env, callee, argc);
   emitSpillFrame(env, callee, argc, callFlags, prologueCtx);
   emitInitFuncLocals(env, callee, prologueCtx);

@@ -175,9 +175,15 @@ void commitGlobalData(std::unique_ptr<ArrayTypeTable::Builder> arrTable,
   gd.IsCompatibleClsMethType = RuntimeOption::EvalIsCompatibleClsMethType;
   gd.RaiseClassConversionWarning =
     RuntimeOption::EvalRaiseClassConversionWarning;
+  gd.ClassPassesClassname = RuntimeOption::EvalClassPassesClassname;
+  gd.ClassnameNotices = RuntimeOption::EvalClassnameNotices;
   gd.RaiseClsMethConversionWarning =
     RuntimeOption::EvalRaiseClsMethConversionWarning;
   gd.StrictArrayFillKeys = RuntimeOption::StrictArrayFillKeys;
+  gd.NoticeOnCoerceForStrConcat =
+    RuntimeOption::EvalNoticeOnCoerceForStrConcat;
+  gd.NoticeOnCoerceForBitOp =
+    RuntimeOption::EvalNoticeOnCoerceForBitOp;
 
   for (auto a : Option::APCProfile) {
     gd.APCProfile.emplace_back(StringData::MakeStatic(folly::StringPiece(a)));
@@ -201,7 +207,7 @@ void emitAllHHBC(AnalysisResultPtr&& ar) {
 
   std::thread wp_thread;
   std::future<void> fut;
-  
+
   auto unexpectedException = [&] (const char* what) {
     if (wp_thread.joinable()) {
       Logger::Error("emitAllHHBC exited via an exception "

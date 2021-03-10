@@ -10,25 +10,20 @@
        sc_constructor = None; sc_static_methods = [];
        sc_methods =
        [{ Shallow_decl_defs.sm_name = ([4:19-28], "doNothing");
-          sm_reactivity = None;
           sm_type =
-          (Rwitness (root|interfaces.php line 4, characters 19-27),
+          (Rwitness_from_decl ([4:19-28]),
            (Tfun
               { ft_arity = (Fstandard ()); ft_tparams = [];
                 ft_where_constraints = []; ft_params = [];
                 ft_implicit_params = { capability = (CapDefaults [4:19-28]) };
                 ft_ret =
-                { et_enforced = false;
-                  et_type =
-                  (Rhint (root|interfaces.php line 4, characters 32-35),
-                   (Tprim Tvoid))
-                  };
+                { et_enforced = Typing_defs_core.Unenforced;
+                  et_type = (Rhint ([4:32-36]), (Tprim Tvoid)) };
                 ft_flags =
-                (make_ft_flags FSync None ~return_disposable:false
-                  ~returns_mutable:false ~returns_void_to_rx:false
-                  ~returns_readonly:false ~readonly_this:false);
-                ft_reactive = Nonreactive; ft_ifc_decl = FDPolicied {PUBLIC}
-                }));
+                (make_ft_flags FSync ~return_disposable:false
+                  ~returns_readonly:false ~readonly_this:false
+                  ~is_const:false);
+                ft_ifc_decl = FDPolicied {PUBLIC} }));
           sm_visibility = Public; sm_deprecated = None; sm_flags = abstract }
          ];
        sc_user_attributes = []; sc_enum_type = None }))

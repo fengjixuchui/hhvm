@@ -40,7 +40,7 @@ mod options_cli;
 
 use options_serde::prefix_all;
 
-use lru_cache::LruCache;
+use lru::LruCache;
 
 extern crate bitflags;
 use bitflags::bitflags;
@@ -133,7 +133,7 @@ impl<T> Arg<T> {
         &mut self.global_value
     }
 
-    fn new(global_value: T) -> Arg<T> {
+    pub fn new(global_value: T) -> Arg<T> {
         Arg { global_value }
     }
 }
@@ -262,6 +262,7 @@ prefixed_flags!(
     DISABLE_UNSET_CLASS_CONST,
     DISABLE_XHP_ELEMENT_MANGLING,
     DISALLOW_FUN_AND_CLS_METH_PSEUDO_FUNCS,
+    DISALLOW_INST_METH,
     DISALLOW_FUNC_PTRS_IN_CONSTANTS,
     DISALLOW_HASH_COMMENTS,
     DISALLOW_DYNAMIC_METH_CALLER_ARGS,
@@ -478,7 +479,7 @@ impl Options {
                 Ok(o.clone())
             } else {
                 let o = Options::from_configs_(&key.0, &key.1)?;
-                cache.insert(key, o.clone());
+                cache.put(key, o.clone());
                 Ok(o)
             }
         })
@@ -547,8 +548,8 @@ enum GlobalValue {
     VecStr(Vec<String>),
     MapStr(BTreeMap<String, String>),
     Json(Json), // support HHVM options with arbitrary layout
-                // (A poorer alternative that risks silent HHVM breakage
-                // would be to explicitly enumerate all possible layouts.)
+    // (A poorer alternative that risks silent HHVM breakage
+    // would be to explicitly enumerate all possible layouts.)
 }
 
 fn deserialize_flags<'de, D: Deserializer<'de>, P: PrefixedFlags>(
@@ -741,6 +742,9 @@ mod tests {
     "global_value": false
   },
   "hhvm.hack.lang.disallow_hash_comments": {
+    "global_value": false
+  },
+  "hhvm.hack.lang.disallow_inst_meth": {
     "global_value": false
   },
   "hhvm.hack.lang.enable_class_level_where_clauses": {
@@ -1180,5 +1184,6 @@ bitflags! {
         const DISALLOW_FUN_AND_CLS_METH_PSEUDO_FUNCS = 1 << 57;
         const FOLD_LAZY_CLASS_KEYS = 1 << 58;
         const DISALLOW_DYNAMIC_METH_CALLER_ARGS = 1 << 59;
+        const DISALLOW_INST_METH = 1 << 60;
     }
 }

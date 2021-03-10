@@ -49,7 +49,7 @@ struct PatchTable {
     m_ctimap[pc - m_unitpc] = cti - m_ctibase;
   }
   void addPatch(PC pc, CodeAddress next_ip) {
-    auto unit_pc = m_func->unit()->entry();
+    auto unit_pc = m_func->entry();
     auto targets = instrJumpTargets(unit_pc, pc - unit_pc);
     assert(targets.size() == 1);
     auto target_pc = unit_pc + targets[0];
@@ -207,11 +207,11 @@ Offset compile_cti(Func* func, PC unitpc) {
   }
   // patch jumps, update func with code addresses.
   patches.finish(cti_size);
-  bc_total += func->past() - func->base();
+  bc_total += func->bclen();
   TRACE(1, "cti %s entry %p size %d %lu total %lu %lu\n",
         func->fullName()->size() > 0 ? func->fullName()->data() : "\"\"",
         func->entry(),
-        func->past() - func->base(), cti_size,
+        func->bclen(), cti_size,
         bc_total, a.used());
   TRACE(2, "cti lookups %lu misses %lu\n", cc_lookups, cc_misses);
   return cti_base - cti_code().base();

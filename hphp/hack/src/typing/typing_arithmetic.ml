@@ -65,7 +65,7 @@ let check_dynamic_or_enforce_num env p t r =
       Reason.URnone
       env
       t
-      { et_type = MakeType.num r; et_enforced = true }
+      { et_type = MakeType.num r; et_enforced = Enforced }
       Errors.unify_error
   in
   let widen_for_arithmetic env ty =
@@ -98,7 +98,7 @@ let check_dynamic_or_enforce_int env p t r =
       Reason.URnone
       env
       t
-      { et_type = MakeType.int r; et_enforced = true }
+      { et_type = MakeType.int r; et_enforced = Enforced }
       Errors.unify_error
   in
   (env, Typing_utils.is_dynamic env t)
@@ -369,12 +369,22 @@ let binop p env bop p1 te1 ty1 p2 te2 ty2 =
     if TypecheckerOptions.enable_strict_string_concat_interp (Env.get_tcopt env)
     then
       let sub_arraykey env p ty =
+        let r = Reason.Rconcat_operand p in
+        let (env, formatter_tyvar) = Env.fresh_invariant_type_var env p in
+        let stringlike =
+          MakeType.union
+            r
+            [
+              MakeType.arraykey r;
+              MakeType.new_type r SN.Classes.cHHFormatString [formatter_tyvar];
+            ]
+        in
         Typing_ops.sub_type
           p
           Reason.URstr_concat
           env
           ty
-          (MakeType.arraykey (Reason.Rconcat_operand p))
+          stringlike
           Errors.strict_str_concat_type_mismatch
       in
       let env = sub_arraykey env p1 ty1 in
@@ -385,8 +395,7 @@ let binop p env bop p1 te1 ty1 p2 te2 ty2 =
       let env = Typing_substring.sub_string p2 env ty2 in
       make_result env te1 te2 (MakeType.string (Reason.Rconcat_ret p))
   | Ast_defs.Barbar
-  | Ast_defs.Ampamp
-  | Ast_defs.LogXor ->
+  | Ast_defs.Ampamp ->
     make_result env te1 te2 (MakeType.bool (Reason.Rlogic_ret p))
   | Ast_defs.QuestionQuestion
   | Ast_defs.Eq _
@@ -439,12 +448,6 @@ let unop p env uop te ty =
       (* args isn't any or a variant thereof so can actually do stuff *)
       let (env, is_dynamic) =
         check_dynamic_or_enforce_num env p ty (Reason.Rarith p)
-      in
-      let env =
-        if Env.env_local_reactive env then
-          Typing_mutability.handle_assignment_mutability env te (Some (snd te))
-        else
-          env
       in
       let result_ty =
         if is_dynamic then

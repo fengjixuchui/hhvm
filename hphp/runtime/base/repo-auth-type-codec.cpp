@@ -46,18 +46,23 @@ RepoAuthType decodeRATImpl(const unsigned char*& pc, LookupStr lookupStr,
   case T::Null:
   case T::Int:
   case T::OptInt:
+  case T::UninitInt:
   case T::Dbl:
   case T::OptDbl:
   case T::Res:
   case T::OptRes:
   case T::Bool:
   case T::OptBool:
+  case T::UninitBool:
   case T::SStr:
   case T::OptSStr:
+  case T::UninitSStr:
   case T::Str:
   case T::OptStr:
+  case T::UninitStr:
   case T::Obj:
   case T::OptObj:
+  case T::UninitObj:
   case T::Func:
   case T::OptFunc:
   case T::Cls:
@@ -80,8 +85,12 @@ RepoAuthType decodeRATImpl(const unsigned char*& pc, LookupStr lookupStr,
   case T::ArrKeyCompat:
   case T::OptUncArrKeyCompat:
   case T::OptArrKeyCompat:
+  case T::Num:
+  case T::OptNum:
+  case T::InitPrim:
   case T::InitUnc:
   case T::Unc:
+  case T::NonNull:
   case T::InitCell:
   case T::Cell:
     assertx(!highBitSet);
@@ -129,6 +138,8 @@ RepoAuthType decodeRATImpl(const unsigned char*& pc, LookupStr lookupStr,
   case T::OptVecCompat:
   case T::ArrCompat:
   case T::OptArrCompat:
+  case T::ArrLikeCompat:
+  case T::OptArrLikeCompat:
     if (highBitSet) {
       uint32_t id = decode_iva(pc);
       auto const arr = lookupArrayType(id);
@@ -140,6 +151,8 @@ RepoAuthType decodeRATImpl(const unsigned char*& pc, LookupStr lookupStr,
   case T::SubObj:
   case T::OptExactObj:
   case T::OptSubObj:
+  case T::UninitExactObj:
+  case T::UninitSubObj:
   case T::ExactCls:
   case T::SubCls:
   case T::OptExactCls:
@@ -176,7 +189,7 @@ RepoAuthType decodeRAT(const UnitEmitter& ue, const unsigned char*& pc) {
   );
 }
 
-void encodeRAT(UnitEmitter& ue, RepoAuthType rat) {
+void encodeRAT(FuncEmitter& fe, RepoAuthType rat) {
   auto rawTag = static_cast<uint16_t>(rat.tag());
   if (rat.hasArrData()) rawTag |= kRATArrayDataBit;
 
@@ -184,11 +197,11 @@ void encodeRAT(UnitEmitter& ue, RepoAuthType rat) {
   uint16_t permutatedTag = (rawTag << 2) | (rawTag >> 14);
   if (permutatedTag >= 0xff) {
     // Write a 0xff signal byte
-    ue.emitByte(static_cast<uint8_t>(0xff));
+    fe.emitByte(static_cast<uint8_t>(0xff));
     permutatedTag -= 0xff;
   }
   assertx(permutatedTag < 0xff);
-  ue.emitByte(static_cast<uint8_t>(permutatedTag));
+  fe.emitByte(static_cast<uint8_t>(permutatedTag));
 
   using T = RepoAuthType::Tag;
   switch (rat.tag()) {
@@ -197,18 +210,23 @@ void encodeRAT(UnitEmitter& ue, RepoAuthType rat) {
   case T::Null:
   case T::Int:
   case T::OptInt:
+  case T::UninitInt:
   case T::Dbl:
   case T::OptDbl:
   case T::Res:
   case T::OptRes:
   case T::Bool:
   case T::OptBool:
+  case T::UninitBool:
   case T::SStr:
   case T::OptSStr:
+  case T::UninitSStr:
   case T::Str:
   case T::OptStr:
+  case T::UninitStr:
   case T::Obj:
   case T::OptObj:
+  case T::UninitObj:
   case T::Func:
   case T::OptFunc:
   case T::Cls:
@@ -231,8 +249,12 @@ void encodeRAT(UnitEmitter& ue, RepoAuthType rat) {
   case T::ArrKeyCompat:
   case T::OptUncArrKeyCompat:
   case T::OptArrKeyCompat:
+  case T::OptNum:
+  case T::Num:
+  case T::InitPrim:
   case T::InitUnc:
   case T::Unc:
+  case T::NonNull:
   case T::InitCell:
   case T::Cell:
     break;
@@ -279,8 +301,10 @@ void encodeRAT(UnitEmitter& ue, RepoAuthType rat) {
   case T::OptVecCompat:
   case T::ArrCompat:
   case T::OptArrCompat:
+  case T::ArrLikeCompat:
+  case T::OptArrLikeCompat:
     if (rat.hasArrData()) {
-      ue.emitIVA(rat.arrayId());
+      fe.emitIVA(rat.arrayId());
     }
     break;
 
@@ -288,18 +312,20 @@ void encodeRAT(UnitEmitter& ue, RepoAuthType rat) {
   case T::SubObj:
   case T::OptExactObj:
   case T::OptSubObj:
+  case T::UninitExactObj:
+  case T::UninitSubObj:
   case T::ExactCls:
   case T::SubCls:
   case T::OptExactCls:
   case T::OptSubCls:
-    ue.emitIVA(ue.mergeLitstr(rat.clsName()));
+    fe.emitIVA(fe.ue().mergeLitstr(rat.clsName()));
     break;
 
   case T::ExactRecord:
   case T::SubRecord:
   case T::OptExactRecord:
   case T::OptSubRecord:
-    ue.emitIVA(ue.mergeLitstr(rat.recordName()));
+    fe.emitIVA(fe.ue().mergeLitstr(rat.recordName()));
     break;
 
   }

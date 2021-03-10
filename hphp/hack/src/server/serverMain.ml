@@ -1133,16 +1133,17 @@ let serve genv env in_fds =
  * 7. Otherwise, load it normally!
  *)
 let resolve_init_approach genv : ServerInit.init_approach * string =
+  let nonce = genv.local_config.ServerLocalConfig.remote_nonce in
   match
     ( genv.local_config.ServerLocalConfig.remote_worker_key,
       genv.local_config.ServerLocalConfig.remote_check_id )
   with
   | (Some worker_key, Some check_id) ->
-    let remote_init = ServerInit.{ worker_key; check_id } in
+    let remote_init = ServerInit.{ worker_key; nonce; check_id } in
     (ServerInit.Remote_init remote_init, "Server_args_remote_worker")
   | (Some worker_key, None) ->
     let check_id = Random_id.short_string () in
-    let remote_init = ServerInit.{ worker_key; check_id } in
+    let remote_init = ServerInit.{ worker_key; nonce; check_id } in
     (ServerInit.Remote_init remote_init, "Server_args_remote_worker")
   | (None, Some check_id) ->
     failwith
@@ -1354,9 +1355,6 @@ let setup_server ~informant_managed ~monitor_pid options config local_config =
     let max_times_to_defer =
       local_config.ServerLocalConfig.max_times_to_defer_type_checking
     in
-    let profile_type_check_duration_threshold =
-      local_config.ServerLocalConfig.profile_type_check_duration_threshold
-    in
     let profile_owner = local_config.ServerLocalConfig.profile_owner in
     let profile_desc = local_config.ServerLocalConfig.profile_desc in
     Hh_logger.Level.set_min_level local_config.ServerLocalConfig.min_log_level;
@@ -1371,7 +1369,6 @@ let setup_server ~informant_managed ~monitor_pid options config local_config =
         ~init_id
         ~custom_columns:(ServerArgs.custom_telemetry_data options)
         ~time:(Unix.gettimeofday ())
-        ~profile_type_check_duration_threshold
         ~profile_owner
         ~profile_desc
         ~max_times_to_defer
@@ -1392,7 +1389,6 @@ let setup_server ~informant_managed ~monitor_pid options config local_config =
         ~prechecked_files
         ~predeclare_ide
         ~max_typechecker_worker_memory_mb
-        ~profile_type_check_duration_threshold
         ~profile_owner
         ~profile_desc
         ~max_times_to_defer

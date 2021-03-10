@@ -38,12 +38,8 @@ and fun_decl (ctx : Provider_context.t) (f : Nast.fun_) : Typing_defs.fun_elt =
 
 and fun_decl_in_env (env : Decl_env.env) ~(is_lambda : bool) (f : Nast.fun_) :
     Typing_defs.fun_elt =
-  let reactivity = FunUtils.fun_reactivity env f.f_user_attributes in
   let ifc_decl = FunUtils.find_policied_attribute f.f_user_attributes in
-  let returns_mutable = FunUtils.fun_returns_mutable f.f_user_attributes in
-  let returns_void_to_rx =
-    FunUtils.fun_returns_void_to_rx f.f_user_attributes
-  in
+  let is_const = FunUtils.has_constfun_attribute f.f_user_attributes in
   let return_disposable =
     FunUtils.has_return_disposable_attribute f.f_user_attributes
   in
@@ -64,7 +60,7 @@ and fun_decl_in_env (env : Decl_env.env) ~(is_lambda : bool) (f : Nast.fun_) :
     | FVvariadicArg param ->
       assert param.param_is_variadic;
       Fvariadic (FunUtils.make_param_ty env ~is_lambda param)
-    | FVellipsis p -> Fvariadic (FunUtils.make_ellipsis_param_ty p)
+    | FVellipsis p -> Fvariadic (FunUtils.make_ellipsis_param_ty env p)
     | FVnonVariadic -> Fstandard
   in
   let tparams = List.map f.f_tparams (FunUtils.type_param env) in
@@ -80,9 +76,10 @@ and fun_decl_in_env (env : Decl_env.env) ~(is_lambda : bool) (f : Nast.fun_) :
   let fe_php_std_lib =
     Naming_attributes.mem SN.UserAttributes.uaPHPStdLib f.f_user_attributes
   in
+  let fe_pos = Decl_env.make_decl_pos env @@ fst f.f_name in
   let fe_type =
     mk
-      ( Reason.Rwitness (fst f.f_name),
+      ( Reason.Rwitness_from_decl (fst f.f_name),
         Tfun
           {
             ft_arity = arity;
@@ -90,65 +87,83 @@ and fun_decl_in_env (env : Decl_env.env) ~(is_lambda : bool) (f : Nast.fun_) :
             ft_where_constraints = where_constraints;
             ft_params = params;
             ft_implicit_params = { capability };
-            ft_ret = { et_type = ret_ty; et_enforced = false };
-            ft_reactive = reactivity;
+            ft_ret = { et_type = ret_ty; et_enforced = Unenforced };
             ft_flags =
               make_ft_flags
                 f.f_fun_kind
-                (* Functions can't be mutable because they don't have "this" *)
-                None
-                ~returns_mutable
                 ~return_disposable
-                ~returns_void_to_rx
                 ~returns_readonly:(Option.is_some f.f_readonly_ret)
-                ~readonly_this:false;
+                ~readonly_this:false
+                ~const:is_const;
             (* TODO: handle const attribute *)
             ft_ifc_decl = ifc_decl;
           } )
   in
-  { fe_pos = fst f.f_name; fe_type; fe_deprecated; fe_php_std_lib }
+  { fe_pos; fe_type; fe_deprecated; fe_php_std_lib }
 
 (*****************************************************************************)
 (* Dealing with records *)
 (*****************************************************************************)
 
-let record_def_decl (rd : Nast.record_def) : Typing_defs.record_def_type =
+let record_def_decl (ctx : Provider_context.t) (rd : Nast.record_def) :
+    Typing_defs.record_def_type =
+  let {
+    rd_annotation = _;
+    rd_name;
+    rd_doc_comment = _;
+    rd_emit_id = _;
+    rd_extends;
+    rd_abstract;
+    rd_fields;
+    rd_namespace = _;
+    rd_span;
+    rd_user_attributes = _;
+  } =
+    rd
+  in
+  let env =
+    {
+      Decl_env.mode = FileInfo.Mstrict;
+      droot = Some (Typing_deps.Dep.RecordDef (Ast_defs.get_id rd_name));
+      ctx;
+    }
+  in
   let extends =
-    match rd.rd_extends with
+    match rd_extends with
     (* The only valid type hint for record parents is a record
        name. Records do not support generics. *)
     | Some (_, Happly (id, [])) -> Some id
     | _ -> None
   in
   let fields =
-    List.map rd.rd_fields ~f:(fun (id, _, default) ->
+    List.map rd_fields ~f:(fun (id, _, default) ->
+        let id = Decl_env.make_decl_posed env id in
         match default with
         | Some _ -> (id, Typing_defs.HasDefaultValue)
         | None -> (id, ValueRequired))
   in
   {
-    rdt_name = rd.rd_name;
-    rdt_extends = extends;
+    rdt_name = Decl_env.make_decl_posed env rd_name;
+    rdt_extends = Option.map ~f:(Decl_env.make_decl_posed env) extends;
     rdt_fields = fields;
-    rdt_abstract = rd.rd_abstract;
-    rdt_pos = rd.rd_span;
+    rdt_abstract = rd_abstract;
+    rdt_pos = Decl_env.make_decl_pos env rd_span;
   }
 
 let record_def_naming_and_decl (ctx : Provider_context.t) (rd : Nast.record_def)
     : string * Typing_defs.record_def_type =
   let rd = Errors.ignore_ (fun () -> Naming.record_def ctx rd) in
-  let tdecl = record_def_decl rd in
+  let tdecl = record_def_decl ctx rd in
   (snd rd.rd_name, tdecl)
 
 (*****************************************************************************)
 (* Dealing with typedefs *)
 (*****************************************************************************)
-
-let typedef_decl (ctx : Provider_context.t) (tdef : Nast.typedef) :
+and typedef_decl (ctx : Provider_context.t) (tdef : Nast.typedef) :
     Typing_defs.typedef_type =
   let {
     t_annotation = ();
-    t_name = (td_pos, tid);
+    t_name = (name_pos, tid);
     t_tparams = params;
     t_constraint = tcstr;
     t_kind = concrete_type;
@@ -166,6 +181,7 @@ let typedef_decl (ctx : Provider_context.t) (tdef : Nast.typedef) :
   let td_tparams = List.map params (FunUtils.type_param env) in
   let td_type = Decl_hint.hint env concrete_type in
   let td_constraint = Option.map tcstr (Decl_hint.hint env) in
+  let td_pos = Decl_env.make_decl_pos env name_pos in
   { td_vis; td_tparams; td_constraint; td_type; td_pos }
 
 let typedef_naming_and_decl (ctx : Provider_context.t) (tdef : Nast.typedef) :
@@ -179,21 +195,41 @@ let typedef_naming_and_decl (ctx : Provider_context.t) (tdef : Nast.typedef) :
 (*****************************************************************************)
 
 let const_decl (ctx : Provider_context.t) (cst : Nast.gconst) :
-    Typing_defs.decl_ty =
-  let (cst_pos, _cst_name) = cst.cst_name in
-  let dep = Dep.GConst (snd cst.cst_name) in
-  let env = { Decl_env.mode = cst.cst_mode; droot = Some dep; ctx } in
-  match cst.cst_type with
-  | Some h -> Decl_hint.hint env h
-  | None ->
-    (match Decl_utils.infer_const cst.cst_value with
-    | Some tprim -> mk (Reason.Rwitness (fst cst.cst_value), Tprim tprim)
-    (* A NAST check will take care of rejecting constants that have neither
-     * an initializer nor a literal initializer *)
-    | None -> mk (Reason.Rwitness cst_pos, Typing_defs.make_tany ()))
+    Typing_defs.const_decl =
+  let {
+    Aast.cst_name = (name_pos, name);
+    cst_annotation = _;
+    cst_emit_id = _;
+    cst_mode;
+    cst_namespace = _;
+    cst_span;
+    cst_type;
+    cst_value = (value_pos, value);
+  } =
+    cst
+  in
+  let dep = Dep.GConst name in
+  let env = { Decl_env.mode = cst_mode; droot = Some dep; ctx } in
+  let cd_type =
+    match cst_type with
+    | Some h -> Decl_hint.hint env h
+    | None ->
+      (match Decl_utils.infer_const value with
+      | Some tprim ->
+        mk
+          ( Reason.Rwitness_from_decl (Decl_env.make_decl_pos env value_pos),
+            Tprim tprim )
+      (* A NAST check will take care of rejecting constants that have neither
+       * an initializer nor a literal initializer *)
+      | None ->
+        mk
+          ( Reason.Rwitness_from_decl (Decl_env.make_decl_pos env name_pos),
+            Typing_defs.make_tany () ))
+  in
+  { cd_pos = Decl_env.make_decl_pos env cst_span; cd_type }
 
 let const_naming_and_decl (ctx : Provider_context.t) (cst : Nast.gconst) :
-    string * Typing_defs.decl_ty =
+    string * Typing_defs.const_decl =
   let cst = Errors.ignore_ (fun () -> Naming.global_const ctx cst) in
   let hint_ty = const_decl ctx cst in
   (snd cst.cst_name, hint_ty)

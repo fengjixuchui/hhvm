@@ -180,10 +180,10 @@ folly::Optional<bespoke::LayoutIndex> ArrayLayout::layoutIndex() const {
   return bespoke::LayoutIndex { safe_cast<uint16_t>(index) };
 }
 
-MaskAndCompare ArrayLayout::bespokeMaskAndCompare() const {
+LayoutTest ArrayLayout::bespokeLayoutTest() const {
+  assertx(!isBasicSort(sort));
   auto const& layout = assertBespoke(*this);
-  if (isBasicSort(sort)) return MaskAndCompare{0,0,0};
-  return layout.maskAndCompare();
+  return layout.getLayoutTest();
 }
 
 const bespoke::Layout* ArrayLayout::irgenLayout() const {

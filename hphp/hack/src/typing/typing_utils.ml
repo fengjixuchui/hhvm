@@ -118,8 +118,7 @@ type expand_typeconst =
   ?as_tyvar_with_cnstr:bool ->
   locl_ty ->
   Aast.sid ->
-  root_pos:Pos.t ->
-  on_error:Errors.typing_error_callback ->
+  root_pos:Pos_or_decl.t ->
   allow_abstract_tconst:bool ->
   env * locl_ty
 
@@ -219,10 +218,16 @@ let (localize_ref : localize ref) =
 let localize x = !localize_ref x
 
 type env_with_self =
-  ?pos:Pos.t -> ?quiet:bool -> ?report_cycle:Pos.t * string -> env -> expand_env
+  ?pos:Pos.t ->
+  ?quiet:bool ->
+  ?report_cycle:Pos.t * string ->
+  ?on_error:Errors.typing_error_callback ->
+  env ->
+  expand_env
 
 let env_with_self_ref : env_with_self ref =
-  ref (fun ?pos:_ ?quiet:_ ?report_cycle:_ -> not_implemented "env_with_self")
+  ref (fun ?pos:_ ?quiet:_ ?report_cycle:_ ?on_error:_ ->
+      not_implemented "env_with_self")
 
 let env_with_self ?pos ?quiet ?report_cycle x =
   !env_with_self_ref ?pos ?quiet ?report_cycle x
@@ -465,30 +470,6 @@ let rec get_base_type env ty =
     end
   | _ -> ty
 
-(*****************************************************************************)
-(* Reactivity *)
-(*****************************************************************************)
-
-let reactivity_to_string env r =
-  let cond_reactive prefix t =
-    let str = Typing_print.full_decl (Env.get_ctx env) t in
-    prefix ^ " (condition type: " ^ str ^ ")"
-  in
-  let rec aux r =
-    match r with
-    | Pure None -> "pure"
-    | Pure (Some ty) -> cond_reactive "conditionally pure" ty
-    | MaybeReactive n -> "maybe (" ^ aux n ^ ")"
-    | Nonreactive -> "normal"
-    | RxVar _ -> "maybe reactive"
-    | Cipp None -> "cipp"
-    | Cipp (Some s) -> "cipp(" ^ s ^ ")"
-    | CippLocal None -> "cipp_local"
-    | CippLocal (Some s) -> "cipp_local(" ^ s ^ ")"
-    | CippGlobal -> "cipp_global"
-  in
-  aux r
-
 let get_printable_shape_field_name = Env.get_shape_field_name
 
 let shape_field_name_ this field =
@@ -504,13 +485,17 @@ let shape_field_name_ this field =
       | None -> Error `Expected_class)
     | _ -> Error `Invalid_shape_field_name)
 
-let shape_field_name env (p, field) =
+let shape_field_name :
+    env -> Pos.t * Nast.expr_ -> Ast_defs.shape_field_name option =
+ fun env (p, field) ->
   let this =
     lazy
-      (let c_ty = get_node (Env.get_self env) in
-       match c_ty with
-       | Tclass (sid, _, _) -> Some sid
-       | _ -> None)
+      (match Env.get_self_ty env with
+      | None -> None
+      | Some c_ty ->
+        (match get_node c_ty with
+        | Tclass (sid, _, _) -> Some sid
+        | _ -> None))
   in
   match shape_field_name_ this (p, field) with
   | Ok x -> Some x
@@ -576,42 +561,26 @@ end
 (* Function parameters *)
 (*****************************************************************************)
 
-let default_fun_param ?(pos = Pos.none) ty : 'a fun_param =
+let default_fun_param ?(pos = Pos_or_decl.none) ty : 'a fun_param =
   {
     fp_pos = pos;
     fp_name = None;
-    fp_type = { et_type = ty; et_enforced = false };
+    fp_type = { et_type = ty; et_enforced = Unenforced };
     fp_flags =
       make_fp_flags
         ~mode:FPnormal
         ~accept_disposable:false
-        ~mutability:None
         ~has_default:false
         ~ifc_external:false
         ~ifc_can_call:false
         ~is_atom:false
-        ~readonly:false;
-    fp_rx_annotation = None;
+        ~readonly:false
+        ~const_function:false;
   }
-
-let fun_mutable user_attributes =
-  let rec go = function
-    | [] -> None
-    | { Aast.ua_name = (_, n); _ } :: _
-      when String.equal n SN.UserAttributes.uaMutable ->
-      Some Param_borrowed_mutable
-    | { Aast.ua_name = (_, n); _ } :: _
-      when String.equal n SN.UserAttributes.uaMaybeMutable ->
-      Some Param_maybe_mutable
-    | _ :: tl -> go tl
-  in
-  go user_attributes
 
 let tany = Env.tany
 
 let mk_tany env p = mk (Reason.Rwitness p, tany env)
-
-let decl_tany = Env.decl_tany
 
 let terr env r =
   let dynamic_view_enabled =

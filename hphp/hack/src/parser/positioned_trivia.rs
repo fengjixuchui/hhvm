@@ -7,8 +7,9 @@
 use crate::lexable_trivia::{LexableTrivia, LexableTrivium};
 use crate::source_text::SourceText;
 use crate::trivia_kind::TriviaKind;
+use ocamlrep_derive::ToOcamlRep;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, ToOcamlRep)]
 pub struct PositionedTrivium {
     pub kind: TriviaKind,
     pub offset: usize,
@@ -34,12 +35,6 @@ impl PositionedTrivium {
 impl LexableTrivia for PositionedTrivia {
     type Trivium = PositionedTrivium;
 
-    fn new() -> Self {
-        Vec::new()
-    }
-    fn from_slice(trivia: &[Self::Trivium]) -> Self {
-        trivia.to_vec()
-    }
     fn is_empty(&self) -> bool {
         self.is_empty()
     }

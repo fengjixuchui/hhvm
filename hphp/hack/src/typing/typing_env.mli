@@ -62,9 +62,9 @@ val expand_type : env -> locl_ty -> env * locl_ty
 
 val expand_internal_type : env -> internal_type -> env * internal_type
 
-val get_shape_field_name : Ast_defs.shape_field_name -> string
+val get_shape_field_name : tshape_field_name -> string
 
-val get_shape_field_name_pos : Ast_defs.shape_field_name -> Pos.t
+val get_shape_field_name_pos : tshape_field_name -> Pos_or_decl.t
 
 val empty :
   ?origin:Decl_counters.origin ->
@@ -103,6 +103,9 @@ val get_class_or_typedef : env -> class_key -> class_or_typedef_result option
 
 (** Get class constant declaration from the appropriate backend and add dependency. *)
 val get_const : env -> class_decl -> string -> class_const option
+
+(** Get class constants declaration from the appropriate backend and add dependency. *)
+val consts : env -> class_decl -> (string * class_const) list
 
 (** Get type constant declaration from the appropriate backend and add dependency. *)
 val get_typeconst : env -> class_decl -> string -> typeconst_type option
@@ -157,7 +160,7 @@ val get_val_kind : env -> Typing_defs.val_kind
 
 val get_self_ty : env -> locl_ty option
 
-val get_self : env -> locl_ty
+val get_self_class_type : env -> (Nast.sid * exact * locl_ty list) option
 
 val get_self_id : env -> string option
 
@@ -222,8 +225,6 @@ module FakeMembers : sig
 end
 
 val tany : env -> locl_phase ty_
-
-val decl_tany : env -> decl_phase ty_
 
 val next_cont_opt : env -> Typing_per_cont_env.per_cont_entry option
 
@@ -295,10 +296,6 @@ val get_tparams : env -> locl_ty -> SSet.t
 val add_upper_bound_global : env -> string -> locl_ty -> env
 
 val env_with_tpenv : env -> TPEnv.t -> env
-
-val env_with_mut : env -> Typing_mutability_env.mutability_env -> env
-
-val get_env_mutability : env -> Typing_mutability_env.mutability_env
 
 val env_with_global_tpenv : env -> TPEnv.t -> env
 
@@ -390,8 +387,6 @@ val copy_tyvar_from_genv_to_env :
 
 val get_all_tyvars : env -> Ident.t list
 
-val error_if_reactive_context : env -> (unit -> unit) -> unit
-
 val add_fresh_generic_parameter_by_kind :
   env -> string -> Typing_kinding_defs.kind -> env * string
 
@@ -409,22 +404,13 @@ val get_tpenv_size : env -> int
 
 val get_tpenv_tparams : env -> SSet.t
 
-val set_env_reactive : env -> reactivity -> env
-
 val set_env_function_pos : env -> Pos.t -> env
 
 val set_env_pessimize : env -> env
 
-val env_local_reactive : env -> bool
+val fun_is_constructor : env -> bool
 
-val add_mutable_var :
-  env -> Local_id.t -> Typing_mutability_env.mutability -> env
-
-val local_is_mutable : include_borrowed:bool -> env -> Local_id.t -> bool
-
-val function_is_mutable : env -> param_mutability option
-
-val set_fun_mutable : env -> param_mutability option -> env
+val set_fun_is_constructor : env -> bool -> env
 
 val env_with_locals : env -> Typing_per_cont_env.t -> env
 

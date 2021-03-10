@@ -435,8 +435,17 @@ bool Func::isFuncIdValid(FuncId id) {
 ///////////////////////////////////////////////////////////////////////////////
 // Bytecode.
 
+PC Func::loadBytecode() {
+  auto& frp = Repo::get().frp();
+  PC pc = nullptr;
+  auto DEBUG_ONLY res = frp.getBytecode[m_unit->repoID()].get(this, pc);
+  assertx(res == RepoStatus::success);
+  assertx(pc != nullptr && shared()->m_bc.load(std::memory_order_relaxed) != nullptr);
+  return pc;
+}
+
 bool Func::isEntry(Offset offset) const {
-  return offset == base() || isDVEntry(offset);
+  return offset == 0 || isDVEntry(offset);
 }
 
 bool Func::isDVEntry(Offset offset) const {
@@ -449,7 +458,7 @@ bool Func::isDVEntry(Offset offset) const {
 }
 
 int Func::getEntryNumParams(Offset offset) const {
-  if (offset == base()) return numNonVariadicParams();
+  if (offset == 0) return numNonVariadicParams();
   return getDVEntryNumParams(offset);
 }
 
@@ -471,7 +480,7 @@ Offset Func::getEntryForNumArgs(int numArgsPassed) const {
       return pi.funcletOff;
     }
   }
-  return base();
+  return 0;
 }
 
 
@@ -625,7 +634,6 @@ void Func::prettyPrint(std::ostream& out, const PrintOpts& opts) const {
       out << ' ' << m_name->data();
     }
 
-    out << " at " << base();
     out << std::endl;
   }
 
@@ -694,14 +702,14 @@ void Func::prettyPrint(std::ostream& out, const PrintOpts& opts) const {
   }
 
   if (opts.startOffset != kInvalidOffset) {
-    auto startOffset = std::max(base(), opts.startOffset);
-    auto stopOffset = std::min(past(), opts.stopOffset);
+    auto startOffset = std::max(0, opts.startOffset);
+    auto stopOffset = std::min(bclen(), opts.stopOffset);
 
     if (startOffset >= stopOffset) {
       return;
     }
 
-    const auto bc = unit()->entry();
+    const auto bc = entry();
     const auto* it = &bc[startOffset];
     int prevLineNum = -1;
     while (it < &bc[stopOffset]) {
@@ -721,7 +729,7 @@ void Func::prettyPrint(std::ostream& out, const PrintOpts& opts) const {
 }
 
 void Func::prettyPrintInstruction(std::ostream& out, Offset offset) const {
-  const auto bc = unit()->entry();
+  const auto bc = entry();
   const auto* it = &bc[offset];
   out << std::setw(4) << (it - bc) << ": "
     << instrToString(it, this)
@@ -732,10 +740,11 @@ void Func::prettyPrintInstruction(std::ostream& out, Offset offset) const {
 ///////////////////////////////////////////////////////////////////////////////
 // SharedData.
 
-Func::SharedData::SharedData(PreClass* preClass, Offset base, Offset past,
-                             int sn, int line1, int line2, bool isPhpLeafFn,
+Func::SharedData::SharedData(unsigned char const* bc, Offset bclen,
+                             PreClass* preClass, int sn, int line1,
+                             int line2, bool isPhpLeafFn,
                              const StringData* docComment)
-  : m_base(base)
+  : m_bc((bc != nullptr) ? allocateBCRegion(bc, bclen) : nullptr)
   , m_preClass(preClass)
   , m_line1(line1)
   , m_docComment(docComment)
@@ -761,12 +770,14 @@ Func::SharedData::SharedData(PreClass* preClass, Offset base, Offset past,
   m_allFlags.m_hasReturnWithMultiUBs = false;
   m_allFlags.m_hasCoeffectRules = false;
 
-  m_pastDelta = std::min<uint32_t>(past - base, kSmallDeltaLimit);
+  m_bclenSmall = std::min<uint32_t>(bclen, kSmallDeltaLimit);
   m_line2Delta = std::min<uint32_t>(line2 - line1, kSmallDeltaLimit);
   m_sn = std::min<uint32_t>(sn, kSmallDeltaLimit);
 }
 
 Func::SharedData::~SharedData() {
+  freeBCRegion(m_bc, bclen());
+
   Func::s_extendedLineInfo.erase(this);
   Func::s_lineTables.erase(this);
   free(m_inoutBitPtr);
@@ -1020,7 +1031,7 @@ LineToOffsetRangeVecMap Func::getLineToOffsetRangeVecMap() const {
 
   LineToOffsetRangeVecMap map;
   auto const& srcLocTable = getLocTable();
-  SourceLocation::generateLineToOffsetRangesMap(srcLocTable, base(), map);
+  SourceLocation::generateLineToOffsetRangesMap(srcLocTable, map);
 
   ExtendedLineInfoCache::accessor acc;
   if (!s_extendedLineInfo.find(acc, sharedData)) {
@@ -1162,6 +1173,45 @@ bool Func::getOffsetRange(Offset offset, OffsetRange& range) const {
     }
   }
   return false;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Bytecode
+
+using BytecodeArena = ReadOnlyArena<VMColdAllocator<char>, false, 8>;
+static BytecodeArena& bytecode_arena() {
+  static BytecodeArena arena(RuntimeOption::EvalHHBCArenaChunkSize);
+  return arena;
+}
+
+/*
+ * Export for the admin server.
+ */
+size_t hhbc_arena_capacity() {
+  if (!RuntimeOption::RepoAuthoritative) return 0;
+  return bytecode_arena().capacity();
+}
+
+const unsigned char*
+allocateBCRegion(const unsigned char* bc, size_t bclen) {
+  g_hhbc_size->addValue(bclen);
+  auto mem = static_cast<unsigned char*>(
+    RuntimeOption::RepoAuthoritative ? bytecode_arena().allocate(bclen)
+                                     : malloc(bclen));
+  std::copy(bc, bc + bclen, mem);
+  return mem;
+}
+
+void freeBCRegion(const unsigned char* bc, size_t bclen) {
+  // Can't free bytecode arena memory.
+  if (RuntimeOption::RepoAuthoritative) return;
+
+  if (debug) {
+    // poison released bytecode
+    memset(const_cast<unsigned char*>(bc), 0xff, bclen);
+  }
+  free(const_cast<unsigned char*>(bc));
+  g_hhbc_size->addValue(-int64_t(bclen));
 }
 
 ///////////////////////////////////////////////////////////////////////////////

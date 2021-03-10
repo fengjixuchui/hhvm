@@ -47,8 +47,9 @@ fn rewrite_xml_(
             .into_iter()
             .fold((0, vec![]), |(mut spread_id, mut attrs), attr| {
                 match attr {
-                    XhpAttribute::XhpSimple((pos, name), v) => {
-                        attrs.push((SF::SFlitStr((pos, name.into())), v));
+                    XhpAttribute::XhpSimple(xhp_simple) => {
+                        let (pos, name) = xhp_simple.name;
+                        attrs.push((SF::SFlitStr((pos, name.into())), xhp_simple.expr));
                     }
                     XhpAttribute::XhpSpread(expr) => {
                         attrs.push((
@@ -79,7 +80,7 @@ fn rewrite_xml_(
         ClassId_::CI(Id(id.0.clone(), renamed_id.to_raw_string().into())),
     );
 
-    emit_symbol_refs::State::add_class(e, renamed_id);
+    emit_symbol_refs::add_class(e, renamed_id);
 
     Ok(E(
         pos.clone(),

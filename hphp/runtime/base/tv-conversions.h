@@ -18,6 +18,7 @@
 
 #include "hphp/runtime/base/datatype.h"
 #include "hphp/runtime/base/req-root.h"
+#include "hphp/runtime/base/tv-conv-notice.h"
 #include "hphp/runtime/base/type-array.h"
 #include "hphp/runtime/base/type-object.h"
 #include "hphp/runtime/base/type-string.h"
@@ -77,7 +78,10 @@ String tvCastToString(TypedValue tv);
 template <IntishCast IC = IntishCast::None>
 Array tvCastToArrayLike(TypedValue tv);
 
-StringData* tvCastToStringData(TypedValue tv);
+StringData* tvCastToStringData(
+   TypedValue tv,
+   const ConvNoticeLevel notice_level = ConvNoticeLevel::None,
+   const StringData* reason = nullptr);
 template <IntishCast IC /* = IntishCast::None */>
 ArrayData* tvCastToArrayLikeData(TypedValue tv);
 ObjectData* tvCastToObjectData(TypedValue tv);
@@ -86,7 +90,9 @@ ObjectData* tvCastToObjectData(TypedValue tv);
  * Convert a cell to various raw data types, without changing the TypedValue.
  */
 bool tvToBool(TypedValue);
-int64_t tvToInt(TypedValue);
+int64_t tvToInt(TypedValue,
+                const ConvNoticeLevel = ConvNoticeLevel::None,
+                const StringData* = nullptr);
 double tvToDouble(TypedValue);
 
 /*
@@ -104,9 +110,6 @@ TypedNum stringToNumeric(const StringData*);
 
 TypedValue tvClassToString(TypedValue key);
 
-///////////////////////////////////////////////////////////////////////////////
-
 }
 
 #include "hphp/runtime/base/tv-conversions-inl.h"
-

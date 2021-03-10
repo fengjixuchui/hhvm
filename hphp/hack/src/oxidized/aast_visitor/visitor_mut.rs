@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<169b10b3311ea33c4571ac328806de74>>
+// @generated SignedSource<<9516b27a5156a418ec8707140231fd1b>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -403,13 +403,6 @@ pub trait VisitorMut<'node> {
     ) -> Result<(), <Self::P as Params>::Error> {
         p.recurse(c, self.object())
     }
-    fn visit_func_reactive(
-        &mut self,
-        c: &mut <Self::P as Params>::Context,
-        p: &'node mut FuncReactive,
-    ) -> Result<(), <Self::P as Params>::Error> {
-        p.recurse(c, self.object())
-    }
     fn visit_function_ptr_id(
         &mut self,
         c: &mut <Self::P as Params>::Context,
@@ -431,6 +424,13 @@ pub trait VisitorMut<'node> {
             <Self::P as Params>::En,
             <Self::P as Params>::Hi,
         >,
+    ) -> Result<(), <Self::P as Params>::Error> {
+        p.recurse(c, self.object())
+    }
+    fn visit_hf_param_info(
+        &mut self,
+        c: &mut <Self::P as Params>::Context,
+        p: &'node mut HfParamInfo,
     ) -> Result<(), <Self::P as Params>::Error> {
         p.recurse(c, self.object())
     }
@@ -527,13 +527,6 @@ pub trait VisitorMut<'node> {
         &mut self,
         c: &mut <Self::P as Params>::Context,
         p: &'node mut ParamKind,
-    ) -> Result<(), <Self::P as Params>::Error> {
-        p.recurse(c, self.object())
-    }
-    fn visit_param_mutability(
-        &mut self,
-        c: &mut <Self::P as Params>::Context,
-        p: &'node mut ParamMutability,
     ) -> Result<(), <Self::P as Params>::Error> {
         p.recurse(c, self.object())
     }
@@ -782,6 +775,18 @@ pub trait VisitorMut<'node> {
         &mut self,
         c: &mut <Self::P as Params>::Context,
         p: &'node mut XhpChildOp,
+    ) -> Result<(), <Self::P as Params>::Error> {
+        p.recurse(c, self.object())
+    }
+    fn visit_xhp_simple(
+        &mut self,
+        c: &mut <Self::P as Params>::Context,
+        p: &'node mut XhpSimple<
+            <Self::P as Params>::Ex,
+            <Self::P as Params>::Fb,
+            <Self::P as Params>::En,
+            <Self::P as Params>::Hi,
+        >,
     ) -> Result<(), <Self::P as Params>::Error> {
         p.recurse(c, self.object())
     }

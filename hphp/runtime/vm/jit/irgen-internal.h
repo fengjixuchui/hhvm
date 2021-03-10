@@ -583,7 +583,8 @@ inline BCMarker makeMarker(IRGS& env, SrcKey sk) {
     stackOff,
     env.irb->fs().stublogue(),
     env.profTransIDs,
-    env.irb->fs().fp()
+    env.irb->fs().fp(),
+    env.irb->fs().sp()
   };
 }
 
@@ -862,8 +863,8 @@ Block* create_catch_block(
   auto const marker = env.irb->curMarker();
   auto const newMarker = [&] {
     if (offsetToAdjustSPForCall == 0) return marker;
-    auto const newSP = marker.spOff() - offsetToAdjustSPForCall;
-    return marker.adjustSP(newSP);
+    auto const newSPOff = marker.spOff() - offsetToAdjustSPForCall;
+    return marker.adjustSPOff(newSPOff);
   }();
   env.irb->setCurMarker(newMarker);
   gen(env, EndCatch, data, fp(env), sp(env));

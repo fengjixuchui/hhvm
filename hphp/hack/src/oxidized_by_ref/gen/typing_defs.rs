@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<bdd8d83909a635c8b5f4ecf34bc3124b>>
+// @generated SignedSource<<b7ac05f028cd12d12c5150985d3066ff>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -22,6 +22,68 @@ pub use typing_defs_flags::*;
 
 pub use typing_defs_core::*;
 
+/// Origin of Class Constant References:
+/// In order to be able to detect cycle definitions like
+/// class C {
+/// const int A = D::A;
+/// }
+/// class D {
+/// const int A = C::A;
+/// }
+/// we need to remember which constants were used during initialization.
+///
+/// Currently the syntax of constants allows direct references to another class
+/// like D::A, or self references using self::A.
+///
+/// class_const_from encodes the origin (class vs self).
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub enum ClassConstFrom<'a> {
+    Self_,
+    From(&'a str),
+}
+impl<'a> TrivialDrop for ClassConstFrom<'a> {}
+
+/// Class Constant References:
+/// In order to be able to detect cycle definitions like
+/// class C {
+/// const int A = D::A;
+/// }
+/// class D {
+/// const int A = C::A;
+/// }
+/// we need to remember which constants were used during initialization.
+///
+/// Currently the syntax of constants allows direct references to another class
+/// like D::A, or self references using self::A.
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub struct ClassConstRef<'a>(pub ClassConstFrom<'a>, pub &'a str);
+impl<'a> TrivialDrop for ClassConstRef<'a> {}
+
 #[derive(
     Clone,
     Debug,
@@ -36,7 +98,7 @@ pub use typing_defs_core::*;
     ToOcamlRep
 )]
 pub struct ConstDecl<'a> {
-    pub pos: &'a pos::Pos<'a>,
+    pub pos: &'a pos_or_decl::PosOrDecl<'a>,
     pub type_: &'a Ty<'a>,
 }
 impl<'a> TrivialDrop for ConstDecl<'a> {}
@@ -61,7 +123,7 @@ pub struct ClassElt<'a> {
     pub origin: &'a str,
     pub deprecated: Option<&'a str>,
     /// pos of the type of the elt
-    pub pos: &'a lazy::Lazy<&'a pos::Pos<'a>>,
+    pub pos: &'a lazy::Lazy<&'a pos_or_decl::PosOrDecl<'a>>,
     pub flags: isize,
 }
 impl<'a> TrivialDrop for ClassElt<'a> {}
@@ -82,7 +144,7 @@ impl<'a> TrivialDrop for ClassElt<'a> {}
 pub struct FunElt<'a> {
     pub deprecated: Option<&'a str>,
     pub type_: &'a Ty<'a>,
-    pub pos: &'a pos::Pos<'a>,
+    pub pos: &'a pos_or_decl::PosOrDecl<'a>,
     pub php_std_lib: bool,
 }
 impl<'a> TrivialDrop for FunElt<'a> {}
@@ -103,10 +165,12 @@ impl<'a> TrivialDrop for FunElt<'a> {}
 pub struct ClassConst<'a> {
     pub synthesized: bool,
     pub abstract_: bool,
-    pub pos: &'a pos::Pos<'a>,
+    pub pos: &'a pos_or_decl::PosOrDecl<'a>,
     pub type_: &'a Ty<'a>,
     /// identifies the class from which this const originates
     pub origin: &'a str,
+    /// references to the constants used in the initializer
+    pub refs: &'a [&'a ClassConstRef<'a>],
 }
 impl<'a> TrivialDrop for ClassConst<'a> {}
 
@@ -145,11 +209,11 @@ impl TrivialDrop for RecordFieldReq {}
     ToOcamlRep
 )]
 pub struct RecordDefType<'a> {
-    pub name: nast::Sid<'a>,
-    pub extends: Option<nast::Sid<'a>>,
-    pub fields: &'a [(nast::Sid<'a>, RecordFieldReq)],
+    pub name: PosId<'a>,
+    pub extends: Option<PosId<'a>>,
+    pub fields: &'a [(PosId<'a>, RecordFieldReq)],
     pub abstract_: bool,
-    pub pos: &'a pos::Pos<'a>,
+    pub pos: &'a pos_or_decl::PosOrDecl<'a>,
 }
 impl<'a> TrivialDrop for RecordDefType<'a> {}
 
@@ -179,7 +243,7 @@ impl<'a> TrivialDrop for RecordDefType<'a> {}
     Serialize,
     ToOcamlRep
 )]
-pub struct Requirement<'a>(pub &'a pos::Pos<'a>, pub &'a Ty<'a>);
+pub struct Requirement<'a>(pub &'a pos_or_decl::PosOrDecl<'a>, pub &'a Ty<'a>);
 impl<'a> TrivialDrop for Requirement<'a> {}
 
 #[derive(
@@ -212,7 +276,7 @@ pub struct ClassType<'a> {
     pub has_xhp_keyword: bool,
     pub is_disposable: bool,
     pub name: &'a str,
-    pub pos: &'a pos::Pos<'a>,
+    pub pos: &'a pos_or_decl::PosOrDecl<'a>,
     pub tparams: &'a [&'a Tparam<'a>],
     pub where_constraints: &'a [&'a WhereConstraint<'a>],
     pub consts: s_map::SMap<'a, &'a ClassConst<'a>>,
@@ -274,12 +338,14 @@ impl<'a> TrivialDrop for TypeconstAbstractKind<'a> {}
 )]
 pub struct TypeconstType<'a> {
     pub abstract_: TypeconstAbstractKind<'a>,
-    pub name: nast::Sid<'a>,
+    pub synthesized: bool,
+    pub name: PosId<'a>,
     pub as_constraint: Option<&'a Ty<'a>>,
     pub type_: Option<&'a Ty<'a>>,
     pub origin: &'a str,
-    pub enforceable: (&'a pos::Pos<'a>, bool),
-    pub reifiable: Option<&'a pos::Pos<'a>>,
+    pub enforceable: (&'a pos_or_decl::PosOrDecl<'a>, bool),
+    pub reifiable: Option<&'a pos_or_decl::PosOrDecl<'a>>,
+    pub concretized: bool,
 }
 impl<'a> TrivialDrop for TypeconstType<'a> {}
 
@@ -318,7 +384,7 @@ impl<'a> TrivialDrop for EnumType<'a> {}
     ToOcamlRep
 )]
 pub struct TypedefType<'a> {
-    pub pos: &'a pos::Pos<'a>,
+    pub pos: &'a pos_or_decl::PosOrDecl<'a>,
     pub vis: oxidized::aast::TypedefVisibility,
     pub tparams: &'a [&'a Tparam<'a>],
     pub constraint: Option<&'a Ty<'a>>,

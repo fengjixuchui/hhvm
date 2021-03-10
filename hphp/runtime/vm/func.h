@@ -118,6 +118,7 @@ constexpr bool CheckSize() { static_assert(Expected == Actual); return true; };
  */
 struct Func final {
   friend struct FuncEmitter;
+  friend struct FuncRepoProxy;
 
 #ifndef USE_LOWPTR
   // DO NOT access it directly, instead use Func::getFuncVec()
@@ -327,6 +328,7 @@ struct Func final {
    * The function's short name (e.g., foo).
    */
   const StringData* name() const;
+  String nameWithClosureName() const;
   StrNR nameStr() const;
 
   /*
@@ -338,6 +340,7 @@ struct Func final {
    * The function's fully class-qualified, name (e.g., C::foo).
    */
   const StringData* fullName() const;
+  String fullNameWithClosureName() const;
   StrNR fullNameStr() const;
 
   /*
@@ -391,13 +394,9 @@ struct Func final {
    * Get the function's main entrypoint.
    */
   PC entry() const;
+  Offset bclen() const;
 
-  /*
-   * Get the offsets of the start (base) and end (past) of the function's
-   * bytecode, relative to the start of the unit.
-   */
-  Offset base() const;
-  Offset past() const;
+  PC loadBytecode();
 
   /*
    * Whether a given PC or Offset (from the beginning of the unit) is within
@@ -1151,10 +1150,6 @@ struct Func final {
     return offsetof(Func, m_u);
   }
 
-  static constexpr ptrdiff_t sharedBaseOff() {
-    return offsetof(SharedData, m_base);
-  }
-
   static constexpr ptrdiff_t sharedInOutBitPtrOff() {
     return offsetof(SharedData, m_inoutBitPtr);
   }
@@ -1225,8 +1220,8 @@ private:
    * Properties shared by all clones of a Func.
    */
   struct SharedData : AtomicCountable {
-    SharedData(PreClass* preClass, Offset base, Offset past, int sn,
-               int line1, int line2, bool isPhpLeafFn,
+    SharedData(unsigned char const* bc, Offset bclen, PreClass* preClass,
+               int sn, int line1, int line2, bool isPhpLeafFn,
                const StringData* docComment);
     ~SharedData();
 
@@ -1235,12 +1230,14 @@ private:
      */
     void atomicRelease();
 
+    Offset bclen() const;
+
     /*
      * Data fields are packed to minimize size.  Try not to add anything new
      * here or reorder anything.
      */
     // (There's a 32-bit integer in the AtomicCountable base class here.)
-    Offset m_base;
+    std::atomic<unsigned char const*> m_bc{nullptr};
     PreClass* m_preClass;
     int m_line1;
     LowStringPtr m_docComment;
@@ -1289,9 +1286,8 @@ private:
     RepoAuthType m_repoAwaitedReturnType;
 
     /*
-     * The `past' offset and `line2' are likely to be small, particularly
-     * relative to m_base and m_line1, so we encode each as a 16-bit
-     * difference.
+     * The `line2' are likely to be small, particularly relative to m_line1,
+     * so we encode each as a 16-bit difference.
      *
      * If the delta doesn't fit, we need to have an ExtendedSharedData to hold
      * the real values---in that case, the field here that overflowed is set to
@@ -1299,7 +1295,16 @@ private:
      * be valid.
      */
     uint16_t m_line2Delta;
-    uint16_t m_pastDelta;
+
+    /**
+     * bclen is likely to be small. So we encode each as a 16-bit value
+     *
+     * If the value doesn't fit, we need to have an ExtendedSharedData to hold
+     * the real values---in that case, the field here that overflowed is set to
+     * kSmallDeltaLimit and the corresponding field in ExtendedSharedData will
+     * be valid.
+     */
+    uint16_t m_bclenSmall;
 
     std::atomic<Offset> m_cti_base; // relative to CodeCache cti section
     uint32_t m_cti_size; // size of cti code
@@ -1307,7 +1312,7 @@ private:
     uint16_t m_numIterators;
     mutable LockFreePtrWrapper<VMCompactVector<LineInfo>> m_lineMap;
   };
-  static_assert(CheckSize<SharedData, use_lowptr ? 144 : 176>(), "");
+  static_assert(CheckSize<SharedData, use_lowptr ? 152 : 184>(), "");
 
   /*
    * If this Func represents a native function or is exceptionally large
@@ -1332,12 +1337,12 @@ private:
     ParamUBMap m_paramUBs;
     UpperBoundVec m_returnUBs;
     CoeffectRules m_coeffectRules;
-    Offset m_past;  // Only read if SharedData::m_pastDelta is kSmallDeltaLimit
+    Offset m_bclen;  // Only read if SharedData::m_bclen is kSmallDeltaLimit
     int m_line2;    // Only read if SharedData::m_line2 is kSmallDeltaLimit
     int m_sn;       // Only read if SharedData::m_sn is kSmallDeltaLimit
     int64_t m_dynCallSampleRate;
   };
-  static_assert(CheckSize<ExtendedSharedData, use_lowptr ? 272 : 304>(), "");
+  static_assert(CheckSize<ExtendedSharedData, use_lowptr ? 280 : 312>(), "");
 
   /*
    * SharedData accessors for internal use.
@@ -1739,6 +1744,20 @@ inline tracing::Props traceProps(const Func* f) {
  * Throw an exception that func cannot be converted to type.
  */
 [[noreturn]] void invalidFuncConversion(const char* type);
+
+///////////////////////////////////////////////////////////////////////////////
+// Bytecode
+
+/*
+ * Report capacity of RepoAuthoritative mode bytecode arena.
+ *
+ * Returns 0 if !RuntimeOption::RepoAuthoritative.
+ */
+size_t hhbc_arena_capacity();
+
+const unsigned char*
+allocateBCRegion(const unsigned char* bc, size_t bclen);
+void freeBCRegion(const unsigned char* bc, size_t bclen);
 
 ///////////////////////////////////////////////////////////////////////////////
 

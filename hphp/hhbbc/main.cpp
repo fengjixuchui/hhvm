@@ -308,7 +308,11 @@ std::vector<SString> load_input(F&& fun) {
   RO::EvalIsCompatibleClsMethType = gd.IsCompatibleClsMethType;
   RO::EvalArrayProvenance = gd.ArrayProvenance;
   RO::EvalRaiseClassConversionWarning = gd.RaiseClassConversionWarning;
+  RO::EvalClassPassesClassname = gd.ClassPassesClassname;
+  RO::EvalClassnameNotices = gd.ClassnameNotices;
   RO::EvalRaiseClsMethConversionWarning = gd.RaiseClsMethConversionWarning;
+  RO::EvalNoticeOnCoerceForStrConcat = gd.NoticeOnCoerceForStrConcat;
+  RO::EvalNoticeOnCoerceForBitOp = gd.NoticeOnCoerceForBitOp;
   RO::StrictArrayFillKeys = gd.StrictArrayFillKeys;
   if (gd.HardGenericsUB) {
     RO::EvalEnforceGenericsUB = 2;
@@ -412,9 +416,17 @@ void write_global_data(
   gd.ArrayProvenance = RuntimeOption::EvalArrayProvenance;
   gd.RaiseClassConversionWarning =
     RuntimeOption::EvalRaiseClassConversionWarning;
+  gd.ClassPassesClassname =
+    RuntimeOption::EvalClassPassesClassname;
+  gd.ClassnameNotices =
+    RuntimeOption::EvalClassnameNotices;
   gd.RaiseClsMethConversionWarning =
     RuntimeOption::EvalRaiseClsMethConversionWarning;
   gd.StrictArrayFillKeys = RuntimeOption::StrictArrayFillKeys;
+  gd.NoticeOnCoerceForStrConcat =
+    RuntimeOption::EvalNoticeOnCoerceForStrConcat;
+  gd.NoticeOnCoerceForBitOp =
+    RuntimeOption::EvalNoticeOnCoerceForBitOp;
 
   for (auto const& elm : RuntimeOption::ConstantFunctions) {
     gd.ConstantFunctions.push_back(elm);
@@ -474,11 +486,23 @@ void print_repo_bytecode_stats() {
   auto const input = load_input(
     [&] (size_t, std::unique_ptr<UnitEmitter> ue) {
       if (!ue) return;
-      auto pc = ue->bc();
-      auto const end = pc + ue->bcPos();
-      for (; pc < end; pc += instrLen(pc)) {
-        auto &opc = op_counts[static_cast<uint16_t>(peek_op(pc))];
-        opc.fetch_add(1, std::memory_order_relaxed);
+
+      auto countInstrs = [&](const FuncEmitter& fe) {
+        auto pc = fe.bc();
+        auto const end = pc + fe.bcPos();
+        for (; pc < end; pc += instrLen(pc)) {
+          auto &opc = op_counts[static_cast<uint16_t>(peek_op(pc))];
+          opc.fetch_add(1, std::memory_order_relaxed);
+        }
+      };
+
+      for (auto& fe : ue->fevec()) {
+        countInstrs(*fe.get());
+      }
+      for (Id i = 0; i < ue->numPreClasses(); i++) {
+        for (auto fe : ue->pce(i)->methods()) {
+          countInstrs(*fe);
+        }
       }
     }
   );

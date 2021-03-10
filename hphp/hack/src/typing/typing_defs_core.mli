@@ -10,6 +10,8 @@
 module Reason = Typing_reason
 module SN = Naming_special_names
 
+type pos_id = Reason.pos_id [@@deriving eq, ord, show]
+
 type ce_visibility =
   | Vpublic
   | Vprivate of string
@@ -37,21 +39,15 @@ type exact =
    inferred via local inference.
 *)
 (* create private types to represent the different type phases *)
-type decl_phase = private DeclPhase [@@deriving eq, show]
+type decl_phase = Typing_reason.decl_phase [@@deriving eq, show]
 
-type locl_phase = private LoclPhase [@@deriving eq, show]
+type locl_phase = Typing_reason.locl_phase [@@deriving eq, show]
 
 type val_kind =
   | Lval
   | LvalSubexpr
   | Other
 [@@deriving eq]
-
-type param_mutability =
-  | Param_owned_mutable
-  | Param_borrowed_mutable
-  | Param_maybe_mutable
-[@@deriving eq, show]
 
 type fun_tparams_kind =
   | FTKtparams
@@ -70,6 +66,44 @@ type shape_kind =
   | Closed_shape
   | Open_shape
 [@@deriving eq, ord, show]
+
+type pos_string = Pos_or_decl.t * string [@@deriving eq, ord, show]
+
+type pos_byte_string = Pos_or_decl.t * Ast_defs.byte_string
+[@@deriving eq, ord, show]
+
+(** This is similar to Aast.shape_field_name, but contains Pos_or_decl.t
+    instead of Pos.t. Aast.shape_field_name is used in shape expressions,
+    while this is used in shape types. *)
+type tshape_field_name =
+  | TSFlit_int of pos_string
+  | TSFlit_str of pos_byte_string
+  | TSFclass_const of pos_id * pos_string
+[@@deriving eq, ord, show]
+
+(** This is similar to Aast.ShapeField, but contains Pos_or_decl.t
+    instead of Pos.t. Aast.ShapeField is used in shape expressions,
+    while this is used in shape types. *)
+module TShapeField : sig
+  type t = tshape_field_name [@@deriving eq, ord]
+
+  val pos : t -> Pos_or_decl.t
+
+  val of_ast : (Pos.t -> Pos_or_decl.t) -> Ast_defs.shape_field_name -> t
+end
+
+(** This is similar to Aast.ShapeMap, but contains Pos_or_decl.t
+    instead of Pos.t. Aast.ShapeMap is used in shape expressions,
+    while this is used in shape types. *)
+module TShapeMap : sig
+  include WrappedMap.S with type key = TShapeField.t
+
+  val pp : (Format.formatter -> 'a -> unit) -> Format.formatter -> 'a t -> unit
+
+  val map_and_rekey : 'a t -> (key -> key) -> ('a -> 'b) -> 'b t
+end
+
+module TShapeSet : Caml.Set.S with type elt = TShapeField.t
 
 type param_mode =
   | FPnormal
@@ -125,14 +159,14 @@ type dependent_type =
 [@@deriving eq, ord, show]
 
 type user_attribute = {
-  ua_name: Aast.sid;
+  ua_name: pos_id;
   ua_classname_params: string list;
 }
 [@@deriving eq, show]
 
 type 'ty tparam = {
   tp_variance: Ast_defs.variance;
-  tp_name: Ast_defs.id;
+  tp_name: pos_id;
   tp_tparams: 'ty tparam list;
   tp_constraints: (Ast_defs.constraint_kind * 'ty) list;
   tp_reified: Aast.reify_kind;
@@ -142,6 +176,17 @@ type 'ty tparam = {
 
 type 'ty where_constraint = 'ty * Ast_defs.constraint_kind * 'ty
 [@@deriving eq, show]
+
+type enforcement =
+  (* The consumer doesn't enforce the type at runtime *)
+  | Unenforced
+  (* The consumer enforces the type at runtime *)
+  | Enforced
+  (* The consumer enforces part of the type at runtime, e.g.,
+   * in C<int> it enforces that the value is a C, but does not enforce the
+   * type argument. *)
+  | PartiallyEnforced
+[@@deriving eq, show, ord]
 
 (* = Reason.t * 'phase ty_ *)
 type 'phase ty
@@ -168,7 +213,7 @@ and _ ty_ =
   (* The late static bound type of a class *)
   | Tthis : decl_phase ty_
   (* Either an object type or a type alias, ty list are the arguments *)
-  | Tapply : Nast.sid * decl_ty list -> decl_phase ty_
+  | Tapply : pos_id * decl_ty list -> decl_phase ty_
   (* "Any" is the type of a variable with a missing annotation, and "mixed" is
    * the type of a variable annotated as "mixed". THESE TWO ARE VERY DIFFERENT!
    * Any unifies with anything, i.e., it is both a supertype and subtype of any
@@ -223,7 +268,7 @@ and _ ty_ =
   (* Whether all fields of this shape are known, types of each of the
    * known arms.
    *)
-  | Tshape : shape_kind * 'phase shape_field_type Nast.ShapeMap.t -> 'phase ty_
+  | Tshape : shape_kind * 'phase shape_field_type TShapeMap.t -> 'phase ty_
   | Tvar : Ident.t -> 'phase ty_
   (* The type of a generic parameter. The constraints on a generic parameter
    * are accessed through the lenv.tpenv component of the environment, which
@@ -290,37 +335,16 @@ and _ ty_ =
    * If exact=Exact, then this represents instances of *exactly* this class
    * If exact=Nonexact, this also includes subclasses
    *)
-  | Tclass : Nast.sid * exact * locl_ty list -> locl_phase ty_
+  | Tclass : pos_id * exact * locl_ty list -> locl_phase ty_
 
-and 'phase taccess_type = 'phase ty * Nast.sid
-
-(* represents reactivity of function
-   - None corresponds to non-reactive function
-   - Some reactivity - to reactive function with specified reactivity flavor
-
- Nonreactive <: Local -t <: Shallow -t <: Reactive -t
-
- MaybeReactive represents conditional reactivity of function that depends on
-   reactivity of function arguments
-   <<__Rx>>
-   function f(<<__MaybeRx>> $g) { ... }
-   call to function f will be treated as reactive only if $g is reactive
-  *)
-and reactivity =
-  | Nonreactive
-  | Pure of decl_ty option
-  | MaybeReactive of reactivity
-  | RxVar of reactivity option
-  | Cipp of string option
-  | CippLocal of string option
-  | CippGlobal
+and 'phase taccess_type = 'phase ty * pos_id
 
 (* Because Tfun is currently used as both a decl and locl ty, without this,
  * the HH\Contexts\defaults alias must be stored in shared memory for a
  * decl Tfun record. We can eliminate this if the majority of usages end up
  * explicit or if we separate decl and locl Tfuns. *)
 and 'ty capability =
-  | CapDefaults of Pos.t (* Should not be used for lambda inference *)
+  | CapDefaults of Pos_or_decl.t (* Should not be used for lambda inference *)
   | CapTy of 'ty
 
 (** Companion to fun_params type, intended to consolidate checking of
@@ -336,7 +360,6 @@ and 'ty fun_type = {
   ft_params: 'ty fun_params;
   ft_implicit_params: 'ty fun_implicit_params;
   ft_ret: 'ty possibly_enforced_ty;
-  ft_reactive: reactivity;
   (* Carries through the sync/async information from the aast *)
   ft_flags: int;
   ft_ifc_decl: ifc_fun_decl;
@@ -352,21 +375,15 @@ and 'ty fun_arity =
      min ; variadic param type *)
   | Fvariadic of 'ty fun_param
 
-and param_rx_annotation =
-  | Param_rx_var
-  | Param_rx_if_impl of decl_ty
-
 and 'ty possibly_enforced_ty = {
-  (* True if consumer of this type enforces it at runtime *)
-  et_enforced: bool;
+  et_enforced: enforcement;
   et_type: 'ty;
 }
 
 and 'ty fun_param = {
-  fp_pos: Pos.t;
+  fp_pos: Pos_or_decl.t;
   fp_name: string option;
   fp_type: 'ty possibly_enforced_ty;
-  fp_rx_annotation: param_rx_annotation option;
   fp_flags: int;
 }
 
@@ -374,10 +391,6 @@ and 'ty fun_params = 'ty fun_param list
 
 module Flags : sig
   val get_ft_return_disposable : 'a fun_type -> bool
-
-  val get_ft_returns_void_to_rx : 'a fun_type -> bool
-
-  val get_ft_returns_mutable : 'a fun_type -> bool
 
   val get_ft_returns_readonly : 'a fun_type -> bool
 
@@ -399,13 +412,7 @@ module Flags : sig
 
   val get_ft_readonly_this : 'a fun_type -> bool
 
-  val from_mutable_flags : Hh_prelude.Int.t -> param_mutability option
-
-  val to_mutable_flags : param_mutability option -> Hh_prelude.Int.t
-
-  val get_ft_param_mutable : 'a fun_type -> param_mutability option
-
-  val get_fp_mutability : 'a fun_param -> param_mutability option
+  val get_ft_is_const : 'a fun_type -> bool
 
   val get_fp_ifc_can_call : 'a fun_param -> bool
 
@@ -415,16 +422,16 @@ module Flags : sig
 
   val get_fp_readonly : 'a fun_param -> bool
 
+  val get_fp_const_function : 'a fun_param -> bool
+
   val fun_kind_to_flags : Ast_defs.fun_kind -> Hh_prelude.Int.t
 
   val make_ft_flags :
     Ast_defs.fun_kind ->
-    param_mutability option ->
     return_disposable:bool ->
-    returns_mutable:bool ->
-    returns_void_to_rx:bool ->
     returns_readonly:bool ->
     readonly_this:bool ->
+    const:bool ->
     Hh_prelude.Int.t
 
   val mode_to_flags : param_mode -> int
@@ -432,12 +439,12 @@ module Flags : sig
   val make_fp_flags :
     mode:param_mode ->
     accept_disposable:bool ->
-    mutability:param_mutability option ->
     has_default:bool ->
     ifc_external:bool ->
     ifc_can_call:bool ->
     is_atom:bool ->
     readonly:bool ->
+    const_function:bool ->
     Hh_prelude.Int.t
 
   val get_fp_accept_disposable : 'a fun_param -> bool
@@ -462,8 +469,6 @@ module Pp : sig
 
   val pp_taccess_type : Format.formatter -> 'a taccess_type -> unit
 
-  val pp_reactivity : Format.formatter -> reactivity -> unit
-
   val pp_possibly_enforced_ty :
     (Format.formatter -> 'a ty -> unit) ->
     Format.formatter ->
@@ -486,8 +491,6 @@ module Pp : sig
   val show_decl_ty : decl_ty -> string
 
   val show_locl_ty : locl_ty -> string
-
-  val show_reactivity : reactivity -> string
 
   val pp_ifc_fun_decl : Format.formatter -> ifc_fun_decl -> unit
 end
@@ -595,21 +598,22 @@ type internal_type =
 (* Abstraction *)
 val compare_decl_ty : decl_ty -> decl_ty -> int
 
-val mk : Reason.t * 'phase ty_ -> 'phase ty
+val mk : 'phase Reason.t_ * 'phase ty_ -> 'phase ty
 
-val deref : 'phase ty -> Reason.t * 'phase ty_
+val deref : 'phase ty -> 'phase Reason.t_ * 'phase ty_
 
-val get_reason : 'phase ty -> Reason.t
+val get_reason : 'phase ty -> 'phase Reason.t_
 
 val get_node : 'phase ty -> 'phase ty_
 
-val with_reason : 'phase ty -> Reason.t -> 'phase ty
+val with_reason : 'phase ty -> 'phase Reason.t_ -> 'phase ty
 
-val get_pos : 'phase ty -> Pos.t
+val get_pos : 'phase ty -> Pos_or_decl.t
 
-val map_reason : 'phase ty -> f:(Reason.t -> Reason.t) -> 'phase ty
+val map_reason :
+  'phase ty -> f:('phase Reason.t_ -> 'phase Reason.t_) -> 'phase ty
 
-val map_ty : 'ph1 ty -> f:('ph1 ty_ -> 'ph2 ty_) -> 'ph2 ty
+val map_ty : 'ph ty -> f:('ph ty_ -> 'ph ty_) -> 'ph ty
 
 val mk_constraint_type : Reason.t * constraint_type_ -> constraint_type
 

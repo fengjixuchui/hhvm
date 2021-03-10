@@ -39,12 +39,12 @@ struct TypedValue;
  */
 struct DataWalker {
   /*
-   * Directive for the DataWalker. Define what to look for.
+   * Directive for the DataWalker. Define what to look for. In any case, we
+   * also detect cycles in the data.
    */
   enum class LookupFeature {
-    Default                  = 0x0,
-    DetectSerializable       = 0x1,
-    HasObjectOrResource      = 0x2
+    DetectSerializable,
+    DetectNonPersistable,
   };
 
   /*
@@ -55,16 +55,16 @@ struct DataWalker {
     DataFeature()
       : isCircular(false)
       , hasSerializable(false)
-      , hasObjectOrResource(false) {
+      , hasNonPersistable(false) {
     }
 
     // whether the data graph is not a tree in a user-visible way (either
     // circular or DAG of types with reference semantics like objects).
     unsigned isCircular : 1;
-    // whether the data graph contains serializable objects
+    // whether the data graph contains objects implementing Serializable
     unsigned hasSerializable : 1;
-    // whether the data graph contains any object or resource
-    unsigned hasObjectOrResource : 1;
+    // whether the data graph contains anything that can't be made persistent
+    unsigned hasNonPersistable : 1;
   };
 
   using PointerSet = req::fast_set<const HeapObject*,
@@ -77,8 +77,8 @@ public:
   /*
    * Sets up a DataWalker to analyze an object or array.
    */
-  explicit DataWalker(LookupFeature features)
-    : m_features(features)
+  explicit DataWalker(LookupFeature feature)
+    : m_feature(feature)
   {}
 
   DataFeature traverseData(ObjectData* data) const {
@@ -119,26 +119,9 @@ private:
   bool canStopWalk(DataFeature& features) const;
 
 private:
-  // the set of feature to analyze for this walker
-  LookupFeature m_features;
+  // the feature to analyze for this walker
+  LookupFeature m_feature;
 };
-
-inline DataWalker::LookupFeature operator|(
-    DataWalker::LookupFeature a,
-    DataWalker::LookupFeature b) {
-  return DataWalker::LookupFeature(
-      static_cast<int>(a) | static_cast<int>(b));
-}
-
-inline bool operator&(
-    DataWalker::LookupFeature a,
-    DataWalker::LookupFeature b) {
-  return static_cast<int>(a) & static_cast<int>(b);
-}
-
-inline DataWalker::LookupFeature operator~(DataWalker::LookupFeature f) {
-  return DataWalker::LookupFeature(~static_cast<int>(f));
-}
 
 //////////////////////////////////////////////////////////////////////
 

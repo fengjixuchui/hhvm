@@ -299,7 +299,7 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState, UnitEmitter& ue, FuncEmitter& f
       nl.name = kInvalidLocalName;
       return nl;
     }
-    assert(!loc.unusedName);
+    assertx(!loc.unusedName);
     nl.name = loc.nameId;
     return nl;
   };
@@ -308,7 +308,7 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState, UnitEmitter& ue, FuncEmitter& f
     auto& info = blockInfo[block];
 
     if (info.expectedStackDepth) {
-      assert(*info.expectedStackDepth == currentStackDepth);
+      assertx(*info.expectedStackDepth == currentStackDepth);
     } else {
       info.expectedStackDepth = currentStackDepth;
     }
@@ -331,7 +331,7 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState, UnitEmitter& ue, FuncEmitter& f
   };
 
   auto emit_inst = [&] (const Bytecode& inst) {
-    auto const startOffset = ue.bcPos();
+    auto const startOffset = fe.bcPos();
     lastOff = startOffset;
 
     FTRACE(4, " emit: {} -- {} @ {}\n", currentStackDepth, show(func, inst),
@@ -341,24 +341,24 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState, UnitEmitter& ue, FuncEmitter& f
 
     auto emit_vsa = [&] (const CompactVector<LSString>& keys) {
       auto n = keys.size();
-      ue.emitIVA(n);
+      fe.emitIVA(n);
       for (size_t i = 0; i < n; ++i) {
-        ue.emitInt32(ue.mergeLitstr(keys[i]));
+        fe.emitInt32(ue.mergeLitstr(keys[i]));
       }
     };
 
     auto emit_branch = [&] (BlockId id) {
       auto& info = blockInfo[id];
       if (info.offset != kInvalidOffset) {
-        ue.emitInt32(info.offset - startOffset);
+        fe.emitInt32(info.offset - startOffset);
       } else {
-        info.forwardJumps.push_back({ startOffset, ue.bcPos() });
-        ue.emitInt32(0);
+        info.forwardJumps.push_back({ startOffset, fe.bcPos() });
+        fe.emitInt32(0);
       }
     };
 
     auto emit_switch = [&] (const SwitchTab& targets) {
-      ue.emitIVA(targets.size());
+      fe.emitIVA(targets.size());
       for (auto t : targets) {
         set_expected_depth(t);
         emit_branch(t);
@@ -366,13 +366,13 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState, UnitEmitter& ue, FuncEmitter& f
     };
 
     auto emit_sswitch = [&] (const SSwitchTab& targets) {
-      ue.emitIVA(targets.size());
+      fe.emitIVA(targets.size());
       for (size_t i = 0; i < targets.size() - 1; ++i) {
         set_expected_depth(targets[i].second);
-        ue.emitInt32(ue.mergeLitstr(targets[i].first));
+        fe.emitInt32(ue.mergeLitstr(targets[i].first));
         emit_branch(targets[i].second);
       }
-      ue.emitInt32(-1);
+      fe.emitInt32(-1);
       set_expected_depth(targets[targets.size() - 1].second);
       emit_branch(targets[targets.size() - 1].second);
     };
@@ -387,7 +387,7 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState, UnitEmitter& ue, FuncEmitter& f
 
     auto pop = [&] (int32_t n) {
       currentStackDepth -= n;
-      assert(currentStackDepth >= 0);
+      assertx(currentStackDepth >= 0);
     };
     auto push = [&] (int32_t n) {
       currentStackDepth += n;
@@ -395,7 +395,7 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState, UnitEmitter& ue, FuncEmitter& f
         std::max<uint32_t>(ret.maxStackDepth, currentStackDepth);
     };
 
-    auto ret_assert = [&] { assert(currentStackDepth == inst.numPop()); };
+    auto ret_assert = [&] { assertx(currentStackDepth == inst.numPop()); };
 
     auto createcl  = [&] (auto& data) {
       auto& id = data.arg2;
@@ -413,7 +413,7 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState, UnitEmitter& ue, FuncEmitter& f
     };
 
     auto emit_lar  = [&](const LocalRange& range) {
-      encodeLocalRange(ue, HPHP::LocalRange{
+      encodeLocalRange(fe, HPHP::LocalRange{
         map_local(range.first), range.count
       });
     };
@@ -421,36 +421,36 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState, UnitEmitter& ue, FuncEmitter& f
     auto emit_ita  = [&](IterArgs ita) {
       if (ita.hasKey()) ita.keyId = map_local(ita.keyId);
       ita.valId = map_local(ita.valId);
-      encodeIterArgs(ue, ita);
+      encodeIterArgs(fe, ita);
     };
 
 #define IMM_BLA(n)     emit_switch(data.targets);
 #define IMM_SLA(n)     emit_sswitch(data.targets);
-#define IMM_IVA(n)     ue.emitIVA(data.arg##n);
-#define IMM_I64A(n)    ue.emitInt64(data.arg##n);
-#define IMM_LA(n)      ue.emitIVA(map_local(data.loc##n));
-#define IMM_NLA(n)     ue.emitNamedLocal(map_local_name(data.nloc##n));
-#define IMM_ILA(n)     ue.emitIVA(map_local(data.loc##n));
-#define IMM_IA(n)      ue.emitIVA(data.iter##n);
-#define IMM_DA(n)      ue.emitDouble(data.dbl##n);
-#define IMM_SA(n)      ue.emitInt32(ue.mergeLitstr(data.str##n));
-#define IMM_RATA(n)    encodeRAT(ue, data.rat);
-#define IMM_AA(n)      ue.emitInt32(ue.mergeArray(data.arr##n));
-#define IMM_OA_IMPL(n) ue.emitByte(static_cast<uint8_t>(data.subop##n));
+#define IMM_IVA(n)     fe.emitIVA(data.arg##n);
+#define IMM_I64A(n)    fe.emitInt64(data.arg##n);
+#define IMM_LA(n)      fe.emitIVA(map_local(data.loc##n));
+#define IMM_NLA(n)     fe.emitNamedLocal(map_local_name(data.nloc##n));
+#define IMM_ILA(n)     fe.emitIVA(map_local(data.loc##n));
+#define IMM_IA(n)      fe.emitIVA(data.iter##n);
+#define IMM_DA(n)      fe.emitDouble(data.dbl##n);
+#define IMM_SA(n)      fe.emitInt32(ue.mergeLitstr(data.str##n));
+#define IMM_RATA(n)    encodeRAT(fe, data.rat);
+#define IMM_AA(n)      fe.emitInt32(ue.mergeArray(data.arr##n));
+#define IMM_OA_IMPL(n) fe.emitByte(static_cast<uint8_t>(data.subop##n));
 #define IMM_OA(type)   IMM_OA_IMPL
 #define IMM_BA(n)      targets[numTargets++] = data.target##n; \
                        emit_branch(data.target##n);
 #define IMM_VSA(n)     emit_vsa(data.keys);
-#define IMM_KA(n)      encode_member_key(make_member_key(data.mkey), ue);
+#define IMM_KA(n)      encode_member_key(make_member_key(data.mkey), fe);
 #define IMM_LAR(n)     emit_lar(data.locrange);
 #define IMM_ITA(n)     emit_ita(data.ita);
 #define IMM_FCA(n)     encodeFCallArgs(                                 \
-                         ue, data.fca.base(),                           \
+                         fe, data.fca.base(),                           \
                          data.fca.enforceInOut(),                       \
                          [&] {                                          \
                            data.fca.applyIO(                            \
                              [&] (int numBytes, const uint8_t* inOut) { \
-                               encodeFCallArgsIO(ue, numBytes, inOut);  \
+                               encodeFCallArgsIO(fe, numBytes, inOut);  \
                              }                                          \
                            );                                           \
                          },                                             \
@@ -461,7 +461,7 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState, UnitEmitter& ue, FuncEmitter& f
                          },                                             \
                          data.fca.context() != nullptr,                 \
                          [&] {                                          \
-                           ue.emitInt32(ue.mergeLitstr(data.fca.context()));\
+                           fe.emitInt32(ue.mergeLitstr(data.fca.context()));\
                          });                                            \
                        if (!data.fca.hasUnpack()) ret.containsCalls = true;
 
@@ -499,17 +499,17 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState, UnitEmitter& ue, FuncEmitter& f
         if (Op::opcode == Op::FCallFuncD &&                     \
             inst.FCallFuncD.str2->isame(                        \
               s_hhbbc_fail_verification.get())) {               \
-          ue.emitOp(Op::CheckProp);                             \
-          ue.emitInt32(                                         \
+          fe.emitOp(Op::CheckProp);                             \
+          fe.emitInt32(                                         \
             ue.mergeLitstr(inst.FCallFuncD.str2));              \
-          ue.emitOp(Op::PopC);                                  \
+          fe.emitOp(Op::PopC);                                  \
           ret.maxStackDepth++;                                  \
         }                                                       \
       }                                                         \
       caller<Op::CreateCl>(createcl, data);                     \
                                                                 \
       if (isRet(Op::opcode)) ret_assert();                      \
-      ue.emitOp(Op::opcode);                                    \
+      fe.emitOp(Op::opcode);                                    \
       POP_##inputs                                              \
                                                                 \
       size_t numTargets = 0;                                    \
@@ -606,11 +606,11 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState, UnitEmitter& ue, FuncEmitter& f
     auto& info = blockInfo[bid];
     auto const b = func.blocks()[bid].get();
 
-    info.offset = ue.bcPos();
+    info.offset = fe.bcPos();
     FTRACE(2, "      block {}: {}\n", bid, info.offset);
 
     for (auto& fixup : info.forwardJumps) {
-      ue.emitInt32(info.offset - fixup.instrOff, fixup.jmpImmedOff);
+      fe.emitInt32(info.offset - fixup.instrOff, fixup.jmpImmedOff);
     }
 
     if (!info.expectedStackDepth) {
@@ -657,7 +657,7 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState, UnitEmitter& ue, FuncEmitter& f
       }
     }
 
-    info.past = ue.bcPos();
+    info.past = fe.bcPos();
 
     if (fallthrough != NoBlockId) {
       set_expected_depth(fallthrough);
@@ -678,7 +678,7 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState, UnitEmitter& ue, FuncEmitter& f
         // If we are in an exn region we pop from the current region to the
         // common parent. If the common parent is null, we pop all regions
         info.regionsToPop = depth(b->exnNodeId) - depth(parent);
-        assert(info.regionsToPop >= 0);
+        assertx(info.regionsToPop >= 0);
         FTRACE(4, "      popped catch regions: {}\n", info.regionsToPop);
       }
     }
@@ -706,9 +706,9 @@ void emit_locals_and_params(FuncEmitter& fe, const php::Func& func,
   Id id = 0;
   for (auto const& loc : func.locals) {
     if (loc.id < func.params.size()) {
-      assert(loc.name);
-      assert(!loc.killed);
-      assert(!loc.unusedName);
+      assertx(loc.name);
+      assertx(!loc.killed);
+      assertx(!loc.unusedName);
       auto& param = func.params[id];
       FuncEmitter::ParamInfo pinfo;
       pinfo.defaultValue = param.defaultValue;
@@ -730,8 +730,8 @@ void emit_locals_and_params(FuncEmitter& fe, const php::Func& func,
       if (loc.killed) continue;
       if (loc.name && !loc.unusedName && loc.name) {
         fe.allocVarId(loc.name);
-        assert(fe.lookupVarId(loc.name) == id);
-        assert(loc.id == id);
+        assertx(fe.lookupVarId(loc.name) == id);
+        assertx(loc.id == id);
         ++id;
       } else {
         fe.allocUnnamedLocal();
@@ -756,7 +756,7 @@ void emit_locals_and_params(FuncEmitter& fe, const php::Func& func,
     }
   }
 
-  assert(fe.numLocals() == id);
+  assertx(fe.numLocals() == id);
   fe.setNumIterators(func.numIters);
 }
 
@@ -792,8 +792,8 @@ void emit_eh_region(FuncEmitter& fe,
   auto& eh = fe.addEHEnt();
   eh.m_base = region->start;
   eh.m_past = region->past;
-  assert(eh.m_past >= eh.m_base);
-  assert(eh.m_base != kInvalidOffset && eh.m_past != kInvalidOffset);
+  assertx(eh.m_past >= eh.m_base);
+  assertx(eh.m_base != kInvalidOffset && eh.m_past != kInvalidOffset);
 
   // An unreachable parent won't be emitted (and thus its offset won't be set),
   // so find the closest reachable one.
@@ -801,7 +801,7 @@ void emit_eh_region(FuncEmitter& fe,
   while (parent && unreachable(*parent->node)) parent = parent->parent;
   if (parent) {
     auto parentIt = parentIndexMap.find(parent);
-    assert(parentIt != end(parentIndexMap));
+    assertx(parentIt != end(parentIndexMap));
     eh.m_parentIndex = parentIt->second;
   } else {
     eh.m_parentIndex = -1;
@@ -813,7 +813,7 @@ void emit_eh_region(FuncEmitter& fe,
   eh.m_end = kInvalidOffset;
   eh.m_iterId = cr.iterId;
 
-  assert(eh.m_handler != kInvalidOffset);
+  assertx(eh.m_handler != kInvalidOffset);
 }
 
 void exn_path(const php::Func& func,
@@ -917,7 +917,7 @@ void emit_ehent_tree(FuncEmitter& fe, const php::WideFunc& func,
     if (debug && !activeList.empty()) {
       current.clear();
       exn_path(*func, current, activeList.back()->idx);
-      assert(current == activeList);
+      assertx(current == activeList);
     }
   }
 
@@ -962,7 +962,7 @@ void emit_ehent_tree(FuncEmitter& fe, const php::WideFunc& func,
           if (debug) {
             auto p = a->parent;
             for (; p != b && p != nullptr; p = p->parent) continue;
-            assert(p == b);
+            assertx(p == b);
           }
           return false;
         }
@@ -984,12 +984,17 @@ void merge_repo_auth_type(UnitEmitter& ue, RepoAuthType rat) {
 
   switch (rat.tag()) {
   case T::OptBool:
+  case T::UninitBool:
   case T::OptInt:
+  case T::UninitInt:
   case T::OptSStr:
+  case T::UninitSStr:
   case T::OptStr:
+  case T::UninitStr:
   case T::OptDbl:
   case T::OptRes:
   case T::OptObj:
+  case T::UninitObj:
   case T::OptFunc:
   case T::OptCls:
   case T::OptClsMeth:
@@ -1026,6 +1031,10 @@ void merge_repo_auth_type(UnitEmitter& ue, RepoAuthType rat) {
   case T::ClsMeth:
   case T::Record:
   case T::LazyCls:
+  case T::Num:
+  case T::OptNum:
+  case T::InitPrim:
+  case T::NonNull:
     return;
 
   case T::OptSArr:
@@ -1068,9 +1077,11 @@ void merge_repo_auth_type(UnitEmitter& ue, RepoAuthType rat) {
   case T::ArrCompat:
   case T::VArrCompat:
   case T::VecCompat:
+  case T::ArrLikeCompat:
   case T::OptArrCompat:
   case T::OptVArrCompat:
   case T::OptVecCompat:
+  case T::OptArrLikeCompat:
     // NOTE: In repo mode, RAT's in Array's might only contain global litstr
     // id's. No need to merge. In non-repo mode, RAT's in Array's might contain
     // local litstr id's.
@@ -1093,6 +1104,8 @@ void merge_repo_auth_type(UnitEmitter& ue, RepoAuthType rat) {
 
   case T::OptSubObj:
   case T::OptExactObj:
+  case T::UninitSubObj:
+  case T::UninitExactObj:
   case T::SubObj:
   case T::ExactObj:
   case T::OptSubCls:
@@ -1168,7 +1181,7 @@ void emit_finish_func(EmitUnitState& state, FuncEmitter& fe,
                      fe.numLocals() +
                      fe.numIterators() * kNumIterCells;
 
-  fe.finish(fe.ue().bcPos());
+  fe.finish();
 }
 
 void renumber_locals(php::Func& func) {
@@ -1206,7 +1219,6 @@ void emit_init_func(FuncEmitter& fe, const php::Func& func) {
   fe.init(
     std::get<0>(func.srcInfo.loc),
     std::get<1>(func.srcInfo.loc),
-    fe.ue().bcPos(),
     func.attrs | (func.sampleDynamicCalls ? AttrDynamicallyCallable : AttrNone),
     func.srcInfo.docComment
   );
@@ -1352,22 +1364,22 @@ void emit_class(EmitUnitState& state, UnitEmitter& ue, PreClassEmitter* pce,
         // For closures use variables will be the first properties of the
         // closure object, in declaration order
         if (uvIt != useVars.end()) return *uvIt++;
-        return Type{};
+        return TCell;
       }
 
       auto it = ps.find(prop.name);
-      if (it == end(ps)) return Type{};
+      if (it == end(ps)) return TCell;
       return it->second.ty;
     };
 
-    Type propTy;
+    auto propTy = TCell;
     auto const attrs = prop.attrs;
     if (attrs & AttrPrivate) {
       propTy = privPropTy((attrs & AttrStatic) ? privateStatics : privateProps);
     } else if ((attrs & (AttrPublic|AttrProtected)) && (attrs & AttrStatic)) {
       propTy = [&] {
         auto const it = publicStatics.find(prop.name);
-        if (it == end(publicStatics)) return Type{};
+        if (it == end(publicStatics)) return TCell;
         return it->second.ty;
       }();
     }
@@ -1384,7 +1396,7 @@ void emit_class(EmitUnitState& state, UnitEmitter& ue, PreClassEmitter* pce,
       prop.userAttributes
     );
   }
-  assert(uvIt == useVars.end());
+  assertx(uvIt == useVars.end());
 
   pce->setEnumBaseTy(cls.enumBaseTy);
 }
@@ -1429,7 +1441,7 @@ std::unique_ptr<UnitEmitter> emit_unit(const Index& index, php::Unit& unit) {
     Trace::hhbbc_emit, kSystemLibBump, is_systemlib_part(unit)
   };
 
-  assert(check(unit));
+  assertx(check(unit));
 
   auto ue = std::make_unique<UnitEmitter>(unit.sha1,
                                           SHA1{},

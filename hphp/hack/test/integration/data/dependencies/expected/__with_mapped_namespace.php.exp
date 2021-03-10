@@ -1,11 +1,13 @@
 //// toplevel.php
 <?hh
+
 function with_mapped_namespace(): void {
   PHP\ini_set('foo', 'bar');
 }
 
 //// builtins.php
 <?hh // partial
+
 namespace HH {
   namespace Lib {
     namespace PHP {
@@ -21,8 +23,8 @@ namespace HH {
 
 //// __extract_standalone__.php
 <?hh
-<<__Pure>>
-function extract_standalone_make_default(): nothing {
+
+function extract_standalone_make_default()[]: nothing {
   throw new \Exception();
 }
 /* HH_FIXME[4101] */

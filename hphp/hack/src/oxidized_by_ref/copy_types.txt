@@ -1,3 +1,4 @@
+aast_defs::ClassConstFrom
 aast_defs::Hint_
 aast_defs::ReifyKind
 aast_defs::Sid
@@ -28,6 +29,7 @@ decl_defs::ConditionTypeName
 decl_defs::LinearizationKind
 decl_defs::MethodReactivity
 decl_defs::SourceType
+decl_reference::DeclReference
 errors::AppliedFixme
 errors::FilesT
 errors::FileT
@@ -106,6 +108,7 @@ tast::MutabilityEnv
 tast::Reactivity
 tast::TypeParamMutability
 tast::ValKind
+t_shape_map::TShapeMap
 typing_cont_key::TypingContKey
 typing_defs_core::Capability
 typing_defs_core::CeVisibility
@@ -114,6 +117,7 @@ typing_defs_core::ConstraintType
 typing_defs_core::ConstraintType_
 typing_defs_core::DependentType
 typing_defs_core::DestructureKind
+typing_defs_core::Enforcement
 typing_defs_core::Exact
 typing_defs_core::FunArity
 typing_defs_core::FunTparamsKind
@@ -122,8 +126,12 @@ typing_defs_core::InternalType
 typing_defs_core::ParamMode
 typing_defs_core::ParamMutability
 typing_defs_core::ParamRxAnnotation
+typing_defs_core::PosByteString
+typing_defs_core::PosId
+typing_defs_core::PosString
 typing_defs_core::Reactivity
 typing_defs_core::ShapeKind
+typing_defs_core::TshapeFieldName
 typing_defs_core::Ty_
 typing_defs_core::ValKind
 typing_defs_core::XhpAttr
@@ -131,6 +139,7 @@ typing_defs_core::XhpAttrTag
 typing_defs_flags::FunParamFlags
 typing_defs_flags::FunTypeFlags
 typing_defs::CeVisibility
+typing_defs::ClassConstFrom
 typing_defs::ConsistentKind
 typing_defs::ConstraintType
 typing_defs::DeserializationError
@@ -140,6 +149,9 @@ typing_defs::FunTparamsKind
 typing_defs::InternalType
 typing_defs::ParamMode
 typing_defs::ParamMutability
+typing_defs::PosByteString
+typing_defs::PosId
+typing_defs::PosString
 typing_defs::RecordFieldReq
 typing_defs::ShapeKind
 typing_defs::Ty_
@@ -154,6 +166,10 @@ typing_mutability_env::MutType
 typing_reason::ArgPosition
 typing_reason::Blame
 typing_reason::BlameSource
+typing_reason::DeclPhase
 typing_reason::ExprDepTypeReason
+typing_reason::LoclPhase
+typing_reason::PosId
 typing_reason::Reason
+typing_reason::T_
 typing_reason::Ureason

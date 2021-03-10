@@ -6,54 +6,43 @@
        sc_where_constraints = []; sc_extends = []; sc_uses = [];
        sc_xhp_attr_uses = []; sc_req_extends = []; sc_req_implements = [];
        sc_implements =
-       [(Rhint (root|accept_disposable.php line 4, characters 25-35),
-         (Tapply (([4:25-36], "\\IDisposable"), [])))];
+       [(Rhint ([4:25-36]), (Tapply (([4:25-36], "\\IDisposable"), [])))];
        sc_implements_dynamic = false; sc_consts = []; sc_typeconsts = [];
        sc_props = []; sc_sprops = []; sc_constructor = None;
        sc_static_methods = [];
        sc_methods =
        [{ Shallow_decl_defs.sm_name = ([5:19-28], "__dispose");
-          sm_reactivity = None;
           sm_type =
-          (Rwitness (root|accept_disposable.php line 5, characters 19-27),
+          (Rwitness_from_decl ([5:19-28]),
            (Tfun
               { ft_arity = (Fstandard ()); ft_tparams = [];
                 ft_where_constraints = []; ft_params = [];
                 ft_implicit_params = { capability = (CapDefaults [5:19-28]) };
                 ft_ret =
-                { et_enforced = false;
-                  et_type =
-                  (Rhint (root|accept_disposable.php line 5, characters 32-35),
-                   (Tprim Tvoid))
-                  };
+                { et_enforced = Typing_defs_core.Unenforced;
+                  et_type = (Rhint ([5:32-36]), (Tprim Tvoid)) };
                 ft_flags =
-                (make_ft_flags FSync None ~return_disposable:false
-                  ~returns_mutable:false ~returns_void_to_rx:false
-                  ~returns_readonly:false ~readonly_this:false);
-                ft_reactive = Nonreactive; ft_ifc_decl = FDPolicied {PUBLIC}
-                }));
+                (make_ft_flags FSync ~return_disposable:false
+                  ~returns_readonly:false ~readonly_this:false
+                  ~is_const:false);
+                ft_ifc_decl = FDPolicied {PUBLIC} }));
           sm_visibility = Public; sm_deprecated = None; sm_flags = (empty) };
          { Shallow_decl_defs.sm_name = ([6:19-22], "foo");
-           sm_reactivity = None;
            sm_type =
-           (Rwitness (root|accept_disposable.php line 6, characters 19-21),
+           (Rwitness_from_decl ([6:19-22]),
             (Tfun
                { ft_arity = (Fstandard ()); ft_tparams = [];
                  ft_where_constraints = []; ft_params = [];
                  ft_implicit_params =
                  { capability = (CapDefaults [6:19-22]) };
                  ft_ret =
-                 { et_enforced = false;
-                   et_type =
-                   (Rhint (root|accept_disposable.php line 6, characters 26-29),
-                    (Tprim Tvoid))
-                   };
+                 { et_enforced = Typing_defs_core.Unenforced;
+                   et_type = (Rhint ([6:26-30]), (Tprim Tvoid)) };
                  ft_flags =
-                 (make_ft_flags FSync None ~return_disposable:false
-                   ~returns_mutable:false ~returns_void_to_rx:false
-                   ~returns_readonly:false ~readonly_this:false);
-                 ft_reactive = Nonreactive; ft_ifc_decl = FDPolicied {PUBLIC}
-                 }));
+                 (make_ft_flags FSync ~return_disposable:false
+                   ~returns_readonly:false ~readonly_this:false
+                   ~is_const:false);
+                 ft_ifc_decl = FDPolicied {PUBLIC} }));
            sm_visibility = Public; sm_deprecated = None; sm_flags = (empty) }
          ];
        sc_user_attributes = []; sc_enum_type = None }));
@@ -61,38 +50,32 @@
    (Shallow_decl_defs.Fun
       { Typing_defs.fe_deprecated = None;
         fe_type =
-        (Rwitness (root|accept_disposable.php line 9, characters 10-10),
+        (Rwitness_from_decl ([9:10-11]),
          (Tfun
             { ft_arity = (Fstandard ()); ft_tparams = [];
               ft_where_constraints = [];
               ft_params =
               [{ fp_pos = [9:42-44]; fp_name = (Some "$h");
                  fp_type =
-                 { et_enforced = false;
+                 { et_enforced = Typing_defs_core.Unenforced;
                    et_type =
-                   (Rhint (root|accept_disposable.php line 9, characters 35-40),
-                    (Tapply (([9:35-41], "\\Handle"), [])))
+                   (Rhint ([9:35-41]), (Tapply (([9:35-41], "\\Handle"), [])))
                    };
-                 fp_rx_annotation = None;
                  fp_flags =
-                 (make_fp_flags ~mutability:None ~accept_disposable:true
-                   ~has_default:false ~mode:Typing_defs_core.FPnormal
-                   ~ifc_external:false ~ifc_can_call:false ~is_atom:false
-                   ~readonly:false);
+                 (make_fp_flags ~accept_disposable:true ~has_default:false
+                   ~mode:Typing_defs_core.FPnormal ~ifc_external:false
+                   ~ifc_can_call:false ~is_atom:false ~readonly:false
+                   ~const_function:false);
                   }
                 ];
               ft_implicit_params = { capability = (CapDefaults [9:10-11]) };
               ft_ret =
-              { et_enforced = false;
-                et_type =
-                (Rhint (root|accept_disposable.php line 9, characters 47-50),
-                 (Tprim Tvoid))
-                };
+              { et_enforced = Typing_defs_core.Unenforced;
+                et_type = (Rhint ([9:47-51]), (Tprim Tvoid)) };
               ft_flags =
-              (make_ft_flags FSync None ~return_disposable:false
-                ~returns_mutable:false ~returns_void_to_rx:false
-                ~returns_readonly:false ~readonly_this:false);
-              ft_reactive = Nonreactive; ft_ifc_decl = FDPolicied {PUBLIC} }));
+              (make_ft_flags FSync ~return_disposable:false
+                ~returns_readonly:false ~readonly_this:false ~is_const:false);
+              ft_ifc_decl = FDPolicied {PUBLIC} }));
         fe_pos = [9:10-11]; fe_php_std_lib = false }))
   ]
 

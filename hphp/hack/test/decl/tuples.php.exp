@@ -3,102 +3,90 @@
      { Typing_defs.td_pos = [3:6-16]; td_vis = Transparent; td_tparams = [];
        td_constraint = None;
        td_type =
-       (Rhint (root|tuples.php line 3, characters 19-32),
+       (Rhint ([3:19-33]),
         (Ttuple
-           [(Rhint (root|tuples.php line 3, characters 20-24), (Tprim Tfloat));
-             (Rhint (root|tuples.php line 3, characters 27-31),
-              (Tprim Tfloat))
-             ]))
+           [(Rhint ([3:20-25]), (Tprim Tfloat));
+             (Rhint ([3:27-32]), (Tprim Tfloat))]))
        }));
   ("\\takes_tuple",
    (Shallow_decl_defs.Fun
       { Typing_defs.fe_deprecated = None;
         fe_type =
-        (Rwitness (root|tuples.php line 5, characters 10-20),
+        (Rwitness_from_decl ([5:10-21]),
          (Tfun
             { ft_arity = (Fstandard ()); ft_tparams = [];
               ft_where_constraints = [];
               ft_params =
               [{ fp_pos = [5:37-42]; fp_name = (Some "$arg1");
                  fp_type =
-                 { et_enforced = false;
+                 { et_enforced = Typing_defs_core.Unenforced;
                    et_type =
-                   (Rhint (root|tuples.php line 5, characters 22-35),
+                   (Rhint ([5:22-36]),
                     (Ttuple
-                       [(Rhint (root|tuples.php line 5, characters 23-27),
-                         (Tprim Tfloat));
-                         (Rhint (root|tuples.php line 5, characters 30-34),
-                          (Tprim Tfloat))
-                         ]))
+                       [(Rhint ([5:23-28]), (Tprim Tfloat));
+                         (Rhint ([5:30-35]), (Tprim Tfloat))]))
                    };
-                 fp_rx_annotation = None;
                  fp_flags =
-                 (make_fp_flags ~mutability:None ~accept_disposable:false
-                   ~has_default:false ~mode:Typing_defs_core.FPnormal
-                   ~ifc_external:false ~ifc_can_call:false ~is_atom:false
-                   ~readonly:false);
+                 (make_fp_flags ~accept_disposable:false ~has_default:false
+                   ~mode:Typing_defs_core.FPnormal ~ifc_external:false
+                   ~ifc_can_call:false ~is_atom:false ~readonly:false
+                   ~const_function:false);
                   }
                 ];
               ft_implicit_params = { capability = (CapDefaults [5:10-21]) };
               ft_ret =
-              { et_enforced = false;
+              { et_enforced = Typing_defs_core.Unenforced;
                 et_type =
-                (Rhint (root|tuples.php line 5, characters 45-54),
+                (Rhint ([5:45-55]),
                  (Tapply (([5:45-55], "\\Coordinate"), [])))
                 };
               ft_flags =
-              (make_ft_flags FSync None ~return_disposable:false
-                ~returns_mutable:false ~returns_void_to_rx:false
-                ~returns_readonly:false ~readonly_this:false);
-              ft_reactive = Nonreactive; ft_ifc_decl = FDPolicied {PUBLIC} }));
+              (make_ft_flags FSync ~return_disposable:false
+                ~returns_readonly:false ~readonly_this:false ~is_const:false);
+              ft_ifc_decl = FDPolicied {PUBLIC} }));
         fe_pos = [5:10-21]; fe_php_std_lib = false }));
   ("\\returns_tuple",
    (Shallow_decl_defs.Fun
       { Typing_defs.fe_deprecated = None;
         fe_type =
-        (Rwitness (root|tuples.php line 9, characters 10-22),
+        (Rwitness_from_decl ([9:10-23]),
          (Tfun
             { ft_arity = (Fstandard ()); ft_tparams = [];
               ft_where_constraints = [];
               ft_params =
               [{ fp_pos = [9:35-40]; fp_name = (Some "$arg1");
                  fp_type =
-                 { et_enforced = false;
+                 { et_enforced = Typing_defs_core.Unenforced;
                    et_type =
-                   (Rhint (root|tuples.php line 9, characters 24-33),
+                   (Rhint ([9:24-34]),
                     (Tapply (([9:24-34], "\\Coordinate"), [])))
                    };
-                 fp_rx_annotation = None;
                  fp_flags =
-                 (make_fp_flags ~mutability:None ~accept_disposable:false
-                   ~has_default:false ~mode:Typing_defs_core.FPnormal
-                   ~ifc_external:false ~ifc_can_call:false ~is_atom:false
-                   ~readonly:false);
+                 (make_fp_flags ~accept_disposable:false ~has_default:false
+                   ~mode:Typing_defs_core.FPnormal ~ifc_external:false
+                   ~ifc_can_call:false ~is_atom:false ~readonly:false
+                   ~const_function:false);
                   }
                 ];
               ft_implicit_params = { capability = (CapDefaults [9:10-23]) };
               ft_ret =
-              { et_enforced = false;
+              { et_enforced = Typing_defs_core.Unenforced;
                 et_type =
-                (Rhint (root|tuples.php line 9, characters 43-56),
+                (Rhint ([9:43-57]),
                  (Ttuple
-                    [(Rhint (root|tuples.php line 9, characters 44-48),
-                      (Tprim Tfloat));
-                      (Rhint (root|tuples.php line 9, characters 51-55),
-                       (Tprim Tfloat))
-                      ]))
+                    [(Rhint ([9:44-49]), (Tprim Tfloat));
+                      (Rhint ([9:51-56]), (Tprim Tfloat))]))
                 };
               ft_flags =
-              (make_ft_flags FSync None ~return_disposable:false
-                ~returns_mutable:false ~returns_void_to_rx:false
-                ~returns_readonly:false ~readonly_this:false);
-              ft_reactive = Nonreactive; ft_ifc_decl = FDPolicied {PUBLIC} }));
+              (make_ft_flags FSync ~return_disposable:false
+                ~returns_readonly:false ~readonly_this:false ~is_const:false);
+              ft_ifc_decl = FDPolicied {PUBLIC} }));
         fe_pos = [9:10-23]; fe_php_std_lib = false }));
   ("\\generic_tuple",
    (Shallow_decl_defs.Fun
       { Typing_defs.fe_deprecated = None;
         fe_type =
-        (Rwitness (root|tuples.php line 13, characters 10-22),
+        (Rwitness_from_decl ([13:10-23]),
          (Tfun
             { ft_arity = (Fstandard ());
               ft_tparams =
@@ -111,41 +99,33 @@
               ft_params =
               [{ fp_pos = [13:34-39]; fp_name = (Some "$arg1");
                  fp_type =
-                 { et_enforced = false;
+                 { et_enforced = Typing_defs_core.Unenforced;
                    et_type =
-                   (Rhint (root|tuples.php line 13, characters 27-32),
+                   (Rhint ([13:27-33]),
                     (Ttuple
-                       [(Rhint (root|tuples.php line 13, characters 28-28),
-                         (Tgeneric ("T", [])));
-                         (Rhint (root|tuples.php line 13, characters 31-31),
-                          (Tgeneric ("T", [])))
-                         ]))
+                       [(Rhint ([13:28-29]), (Tgeneric ("T", [])));
+                         (Rhint ([13:31-32]), (Tgeneric ("T", [])))]))
                    };
-                 fp_rx_annotation = None;
                  fp_flags =
-                 (make_fp_flags ~mutability:None ~accept_disposable:false
-                   ~has_default:false ~mode:Typing_defs_core.FPnormal
-                   ~ifc_external:false ~ifc_can_call:false ~is_atom:false
-                   ~readonly:false);
+                 (make_fp_flags ~accept_disposable:false ~has_default:false
+                   ~mode:Typing_defs_core.FPnormal ~ifc_external:false
+                   ~ifc_can_call:false ~is_atom:false ~readonly:false
+                   ~const_function:false);
                   }
                 ];
               ft_implicit_params = { capability = (CapDefaults [13:10-23]) };
               ft_ret =
-              { et_enforced = false;
+              { et_enforced = Typing_defs_core.Unenforced;
                 et_type =
-                (Rhint (root|tuples.php line 13, characters 42-47),
+                (Rhint ([13:42-48]),
                  (Ttuple
-                    [(Rhint (root|tuples.php line 13, characters 43-43),
-                      (Tgeneric ("T", [])));
-                      (Rhint (root|tuples.php line 13, characters 46-46),
-                       (Tgeneric ("T", [])))
-                      ]))
+                    [(Rhint ([13:43-44]), (Tgeneric ("T", [])));
+                      (Rhint ([13:46-47]), (Tgeneric ("T", [])))]))
                 };
               ft_flags =
-              (make_ft_flags FSync None ~return_disposable:false
-                ~returns_mutable:false ~returns_void_to_rx:false
-                ~returns_readonly:false ~readonly_this:false);
-              ft_reactive = Nonreactive; ft_ifc_decl = FDPolicied {PUBLIC} }));
+              (make_ft_flags FSync ~return_disposable:false
+                ~returns_readonly:false ~readonly_this:false ~is_const:false);
+              ft_ifc_decl = FDPolicied {PUBLIC} }));
         fe_pos = [13:10-23]; fe_php_std_lib = false }))
   ]
 

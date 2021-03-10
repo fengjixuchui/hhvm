@@ -18,10 +18,8 @@ use emit_param_rust as emit_param;
 use emit_pos_rust::emit_pos;
 use emit_statement::emit_final_stmts;
 use emit_type_hint_rust as emit_type_hint;
-use env::{emitter::Emitter, local, Env};
+use env::{emitter::Emitter, Env};
 use generator_rust as generator;
-use global_state::LazyState;
-use hhas_attribute_rust::{has_at_most_rx_as_func, is_only_rx_if_impl, HhasAttribute};
 use hhas_body_rust::HhasBody;
 use hhas_param_rust::HhasParam;
 use hhas_type::Info as HhasTypeInfo;
@@ -41,6 +39,8 @@ use oxidized::{
 };
 use reified_generics_helpers as RGH;
 use runtime::TypedValue;
+use statement_state::StatementState;
+use unique_id_builder::*;
 
 use bitflags::bitflags;
 use indexmap::IndexSet;
@@ -304,7 +304,7 @@ fn make_decl_vars(
     body: &AstBody,
     arg_flags: Flags,
 ) -> Result<Vec<String>> {
-    let explicit_use_set = &emitter.emit_state().explicit_use_set;
+    let explicit_use_set = &emitter.emit_global_state().explicit_use_set;
 
     let mut decl_vars =
         decl_vars::from_ast(params, body, explicit_use_set).map_err(unrecoverable)?;
@@ -400,42 +400,6 @@ fn make_params(
     )
 }
 
-pub fn extract_rx_if_impl_attr(
-    index: usize,
-    attrs: &Vec<HhasAttribute>,
-) -> Option<(usize, String)> {
-    attrs.iter().find_map(|attr| {
-        if is_only_rx_if_impl(&attr) {
-            match attr.arguments.iter().last() {
-                Some(TypedValue::String(s)) => Some((index, s.to_string())),
-                _ => None,
-            }
-        } else {
-            None
-        }
-    })
-}
-
-pub fn extract_rx_conds(params: &Vec<HhasParam>) -> (Vec<usize>, Vec<(usize, String)>) {
-    let rx_cond_rx_of_arg = params
-        .iter()
-        .enumerate()
-        .filter_map(|(i, p)| {
-            if has_at_most_rx_as_func(&p.user_attributes) {
-                Some(i)
-            } else {
-                None
-            }
-        })
-        .collect();
-    let rx_cond_arg_implements = params
-        .iter()
-        .enumerate()
-        .filter_map(|(i, p)| extract_rx_if_impl_attr(i, &p.user_attributes))
-        .collect();
-    (rx_cond_rx_of_arg, rx_cond_arg_implements)
-}
-
 pub fn make_body<'a>(
     emitter: &mut Emitter,
     mut body_instrs: InstrSeq,
@@ -463,7 +427,6 @@ pub fn make_body<'a>(
     } else {
         emitter.iterator().count()
     };
-    let (rx_cond_rx_of_arg, rx_cond_arg_implements) = extract_rx_conds(&params);
     Ok(HhasBody {
         body_instrs,
         decl_vars,
@@ -476,8 +439,6 @@ pub fn make_body<'a>(
         return_type_info,
         doc_comment,
         env,
-        rx_cond_rx_of_arg,
-        rx_cond_arg_implements,
     })
 }
 
@@ -717,7 +678,7 @@ fn atom_instrs(
                                                         QueryOp::CGetQuiet,
                                                         MemberKey::ET(
                                                             "classname".into(),
-                                                            ReadOnlyOp::Any,
+                                                            ReadOnlyOp::Mutable,
                                                         ),
                                                     ),
                                                     instr::dup(),
@@ -758,7 +719,7 @@ fn atom_instrs(
                                                         )?,
                                                         instr::combine_and_resolve_type_struct(1),
                                                         instr::basec(0, MemberOpMode::ModeNone),
-                                                        instr::querym(1, QueryOp::CGetQuiet, MemberKey::ET("classname".into(), ReadOnlyOp::Any)),
+                                                        instr::querym(1, QueryOp::CGetQuiet, MemberKey::ET("classname".into(), ReadOnlyOp::Mutable)),
                                                         instr::dup(),
                                                         instr::istypec(IstypeOp::OpNull),
                                                         instr::jmpnz(label_not_a_class.clone()),
@@ -997,7 +958,7 @@ fn set_emit_statement_state(
 
     emit_statement::set_state(
         emitter,
-        emit_statement::State {
+        StatementState {
             verify_return,
             default_return_value,
             default_dropthrough,
@@ -1118,21 +1079,21 @@ fn modify_prog_for_debugger_eval(_body_instrs: &mut InstrSeq) {
 fn set_function_jmp_targets(emitter: &mut Emitter, env: &mut Env) -> bool {
     use ScopeItem::*;
     let function_state_key = match env.scope.items.as_slice() {
-        [] => env::get_unique_id_for_main(),
+        [] => get_unique_id_for_main(),
         [.., Class(cls), Method(md)] | [.., Class(cls), Method(md), Lambda(_)] => {
-            env::get_unique_id_for_method(cls.get_name_str(), md.get_name_str())
+            get_unique_id_for_method(cls.get_name_str(), md.get_name_str())
         }
-        [.., Function(fun)] => env::get_unique_id_for_function(fun.get_name_str()),
+        [.., Function(fun)] => get_unique_id_for_function(fun.get_name_str()),
         _ => panic!("unexpected scope shape"),
     };
-    let global_state = emitter.emit_state();
+    let global_state = emitter.emit_global_state();
     match global_state.function_to_labels_map.get(&function_state_key) {
         Some(labels) => {
             env.jump_targets_gen.set_labels_in_function(labels.clone());
         }
         None => {
             env.jump_targets_gen
-                .set_labels_in_function(<env::SMap<bool>>::new());
+                .set_labels_in_function(<SMap<bool>>::new());
         }
     };
     global_state

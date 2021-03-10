@@ -602,7 +602,7 @@ Flags handle_assert(Local& env, const IRInstruction& inst) {
       };
     case AssertStk:
       return AliasClass {
-        AStack { inst.src(0), inst.extra<AssertStk>()->offset, 1 }
+        AStack::at(inst.extra<AssertStk>()->offset)
       };
     default: break;
     }
@@ -648,19 +648,6 @@ void check_decref_eligible(
     }
   };
 
-int32_t findSPOffset(const IRUnit& unit, const SSATmp* fp,
-                     const IRInstruction* defSP) {
-  assertx(fp->isA(TFramePtr));
-  auto const inst = fp->inst();
-
-  if (inst->is(BeginInlining)) {
-    return inst->extra<BeginInlining>()->spOffset.offset;
-  }
-  assertx(inst->is(DefFP, DefFuncEntryFP));
-  assertx(defSP->is(DefFrameRelSP, DefRegSP));
-  return defSP->extra<DefStackData>()->irSPOff.offset;
-}
-
 Flags handle_end_catch(Local& env, const IRInstruction& inst) {
   if (!RuntimeOption::EvalHHIRLoadEnableTeardownOpts) return FNone{};
   assertx(inst.op() == EndCatch);
@@ -671,7 +658,7 @@ Flags handle_end_catch(Local& env, const IRInstruction& inst) {
     FTRACE(4, "      non-reducible EndCatch\n");
     return FNone{};
   }
-  auto pc = inst.marker().fixupSk().unit()->entry() + inst.marker().bcOff();
+  auto pc = inst.marker().fixupSk().func()->entry() + inst.marker().bcOff();
   auto const op = decode_op(pc);
   if (op == OpFCallCtor &&
       decodeFCallArgs(op, pc, nullptr /*StringDecoder*/).lockWhileUnwinding()) {
@@ -680,57 +667,10 @@ Flags handle_end_catch(Local& env, const IRInstruction& inst) {
   }
   assertx(data->stublogue != EndCatchData::FrameMode::Stublogue);
   auto const numLocals = inst.func()->numLocals();
-  auto const astk = AStack { inst.src(1), data->offset, 0 };
-  auto const numStackElemsWithInlining =
-    inst.marker().resumeMode() != ResumeMode::None
-      ? -astk.offset.offset
-      : -astk.offset.offset - inst.func()->numSlotsInFrame();
-  assertx(numStackElemsWithInlining >= 0);
-
-  /*
-
-  Reference to guide around stack offset calculations:
-
-  +---------------------------------+
-  | ActRec for outer Func           |
-  +---------------------------------+ <-+ DefFp    <-+          <-+
-  | Local1 for outer Func           |   |            |            |
-  | Local2 for outer Func           |   |            |            |
-  | Local3 for outer Func           |   |            | defSP      |
-  | Local4 for outer Func           |   |            |  ->spOff   | findSpOffset
-  +---------------------------------+   |            |            |
-  |                                 |   |            |            |
-  | Stack slots for outer Func      |   |            |            |
-  |                                 | <-] inst.src(0) [ sp ]      | <-+
-  +---------------------------------+   |                         |   |
-  | ActRec for inlined func one     |   |                         |   |
-  +---------------------------------+ <-+ BeginInlining           |   |
-  | Locals for inlined func one     |   |                         |   |
-  +---------------------------------+   |                         |   |
-  | Stack slots for inlined func one|   |                         |   |
-  +---------------------------------+   |                         |   | EndCatch
-  | ActRec for inlined func two     |   |                         |   |  .offset
-  +---------------------------------+ <-+ inst.src(1) [ fp ]    <-+   |
-  | Local1 for inlined func two     |   |                         |   |
-  | Local2 for inlined func two     |   |                         |   |
-  +---------------------------------+ <-+                         |   |
-  | Stack slots for inlined func two|                                 |
-  +---------------------------------+                               <-+
-
-  */
-
-  auto const adjustSP = [&]() -> int32_t {
-    auto const fpReg = inst.src(0);
-    auto const defSP = inst.src(1)->inst();
-    auto const spOff = findSPOffset(env.global.unit, fpReg, defSP);
-    auto const defSPOff = defSP->extra<DefStackData>()->irSPOff.offset;
-    assertx(!fpReg->inst()->is(DefFP, DefFuncEntryFP) || defSPOff == spOff);
-    return spOff - defSPOff;
-  }();
-
-  // We need to adjust the number of stack elements since we only want to emit
-  // decrefs for the most inlined frame
-  auto const numStackElems = numStackElemsWithInlining + adjustSP;
+  auto const numStackElems =
+    inst.marker().spOff().offset -
+    (inst.marker().resumeMode() != ResumeMode::None
+      ? 0 : inst.func()->numSlotsInFrame());
 
   if (numStackElems + numLocals > kMaxTrackedFrameElems) {
     FTRACE(4, "      non-reducible EndCatch - too many values\n");
@@ -758,7 +698,7 @@ Flags handle_end_catch(Local& env, const IRInstruction& inst) {
     // Iterate from higher addresses to lower so that tracing prints them in
     // the memory layout order
     for (int32_t i = numStackElems - 1; i >= 0; --i) {
-      auto const astk_ = AStack { inst.src(1), data->offset + i, 1 };
+      auto const astk_ = AStack::at(data->offset + i);
       check_decref_eligible(
         env,
         elems,
@@ -779,7 +719,7 @@ Flags handle_end_catch(Local& env, const IRInstruction& inst) {
 Flags handle_enter_tc_unwind(Local& env, const IRInstruction& inst) {
   if (!RuntimeOption::EvalHHIRLoadEnableTeardownOpts) return FNone{};
   assertx(inst.op() == EnterTCUnwind);
-  auto const data = inst.extra<EnterTCUnwindData>();
+  auto const data = inst.extra<EnterTCUnwind>();
   if (!data->teardown || inst.func()->isCPPBuiltin()) {
     FTRACE(4, "      non-reducible EnterTCUnwind\n");
     return FNone{};
@@ -797,7 +737,7 @@ Flags handle_enter_tc_unwind(Local& env, const IRInstruction& inst) {
       env,
       locals,
       i,
-      AliasClass { ALocal { inst.marker().fp(), i }});
+      AliasClass { ALocal { inst.src(1), i }});
   }
 
   if (locals.size() > RuntimeOption::EvalHHIRLoadThrowMaxDecrefs) {
@@ -1171,6 +1111,8 @@ void optimize_enter_tc_unwind(
   FTRACE(3, "Optimizing EnterTCUnwind\n{}\n", inst.marker().show());
 
   auto const block = inst.block();
+  auto const extra = inst.extra<EnterTCUnwind>();
+  assertx(extra->teardown);
 
   for (auto local : locals) {
     int locId = local.first;
@@ -1184,8 +1126,9 @@ void optimize_enter_tc_unwind(
       env.unit.gen(DecRef, inst.bcctx(), DecRefData{locId}, loadInst->dst());
     block->insert(block->iteratorTo(&inst), decref);
   }
-  auto const data = EnterTCUnwindData { false };
-  env.unit.replace(&inst, EnterTCUnwind, data, inst.src(0));
+  auto const etcData = EnterTCUnwindData { extra->offset, false };
+  env.unit.replace(&inst, EnterTCUnwind, etcData, inst.src(0), inst.src(1),
+                   inst.src(2));
   env.stackTeardownsOptimized++;
 }
 

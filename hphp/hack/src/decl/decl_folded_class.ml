@@ -169,7 +169,7 @@ let add_grand_parents_or_traits
 let get_class_parent_or_trait
     (env : Decl_env.env)
     (shallow_class : Shallow_decl_defs.shallow_class)
-    (parent_cache : Decl_heap.class_entries SMap.t)
+    (parent_cache : Decl_store.class_entries SMap.t)
     ((parents, is_complete, pass) :
       SSet.t * bool * [> `Extends_pass | `Xhp_pass ])
     (ty : Typing_defs.decl_phase Typing_defs.ty) : SSet.t * bool * 'a =
@@ -248,22 +248,22 @@ let rec declare_class_and_parents
     ~(sh : SharedMem.uses)
     (class_env : class_env)
     (shallow_class : Shallow_decl_defs.shallow_class) :
-    string * Decl_heap.class_entries =
+    string * Decl_store.class_entries =
   let (_, name) = shallow_class.sc_name in
   let class_env = { class_env with stack = SSet.add name class_env.stack } in
   let (errors, (tc, member_heaps_values)) =
     Errors.do_ (fun () ->
         let parents = class_parents_decl ~sh class_env shallow_class in
-        class_decl ~sh class_env.ctx shallow_class parents)
+        class_decl ~sh class_env.ctx shallow_class ~parents)
   in
   let class_ = { tc with dc_decl_errors = Some errors } in
-  Decl_heap.Classes.add name class_;
+  Decl_store.((get ()).add_class name class_);
   (name, (class_, Some member_heaps_values))
 
 and class_parents_decl
     ~(sh : SharedMem.uses)
     (class_env : class_env)
-    (c : Shallow_decl_defs.shallow_class) : Decl_heap.class_entries SMap.t =
+    (c : Shallow_decl_defs.shallow_class) : Decl_store.class_entries SMap.t =
   let class_type_decl acc class_ty =
     match get_node class_ty with
     | Tapply ((pos, class_name), _) ->
@@ -302,8 +302,8 @@ and is_disposable_type
 
 and class_decl_if_missing
     ~(sh : SharedMem.uses) (class_env : class_env) (class_name : string) :
-    (string * Decl_heap.class_entries) option =
-  match Decl_heap.Classes.get class_name with
+    (string * Decl_store.class_entries) option =
+  match Decl_store.((get ()).get_class class_name) with
   | Some decl -> Some (class_name, (decl, None))
   | None ->
     (match Shallow_classes_provider.get class_env.ctx class_name with
@@ -338,6 +338,7 @@ and synthesize_defaults
         ttc_abstract = TCConcrete;
         ttc_as_constraint = None;
         ttc_type = Some default;
+        ttc_concretized = true;
       }
     in
     let typeconsts = SMap.add k concrete typeconsts in
@@ -354,8 +355,8 @@ and class_decl
     ~(sh : SharedMem.uses)
     (ctx : Provider_context.t)
     (c : Shallow_decl_defs.shallow_class)
-    (parents : Decl_heap.class_entries SMap.t) :
-    Decl_defs.decl_class_type * Decl_heap.class_members =
+    ~(parents : Decl_store.class_entries SMap.t) :
+    Decl_defs.decl_class_type * Decl_store.class_members =
   let is_abstract = class_is_abstract c in
   let const = Attrs.mem SN.UserAttributes.uaConst c.sc_user_attributes in
   let (_p, cls_name) = c.sc_name in
@@ -517,7 +518,7 @@ and class_decl
   in
   let member_heaps_values =
     {
-      Decl_heap.m_static_properties = SMap.filter_map snd static_props;
+      Decl_store.m_static_properties = SMap.filter_map snd static_props;
       m_properties = SMap.filter_map snd props;
       m_static_methods = SMap.filter_map snd static_methods;
       m_methods = SMap.filter_map snd methods;
@@ -569,10 +570,10 @@ and trait_exists
 and constructor_decl
     ~(sh : SharedMem.uses)
     ((parent_cstr, pconsist) :
-      (Decl_defs.element * Decl_heap.Constructor.t option) option
+      (Decl_defs.element * Typing_defs.fun_elt option) option
       * Typing_defs.consistent_kind)
     (class_ : Shallow_decl_defs.shallow_class) :
-    (Decl_defs.element * Decl_heap.Constructor.t option) option
+    (Decl_defs.element * Typing_defs.fun_elt option) option
     * Typing_defs.consistent_kind =
   let SharedMem.Uses = sh in
   (* constructors in children of class_ must be consistent? *)
@@ -599,7 +600,7 @@ and build_constructor
     ~(write_shmem : bool)
     (class_ : Shallow_decl_defs.shallow_class)
     (method_ : Shallow_decl_defs.shallow_method) :
-    (Decl_defs.element * Decl_heap.Constructor.t option) option =
+    (Decl_defs.element * Typing_defs.fun_elt option) option =
   let (_, class_name) = class_.sc_name in
   let vis = visibility class_name method_.sm_visibility in
   let pos = fst method_.sm_name in
@@ -619,7 +620,6 @@ and build_constructor
           ~readonly_prop:false;
       elt_visibility = vis;
       elt_origin = class_name;
-      elt_reactivity = None;
       elt_deprecated = method_.sm_deprecated;
     }
   in
@@ -631,7 +631,7 @@ and build_constructor
       fe_php_std_lib = false;
     }
   in
-  if write_shmem then Decl_heap.Constructors.add class_name fe;
+  (if write_shmem then Decl_store.((get ()).add_constructor class_name fe));
   Some (cstr, Some fe)
 
 and class_const_fold
@@ -647,6 +647,7 @@ and class_const_fold
       cc_pos = fst scc.scc_name;
       cc_type = scc.scc_type;
       cc_origin = c_name;
+      cc_refs = scc.scc_refs;
     }
   in
   let acc = SMap.add (snd scc.scc_name) cc acc in
@@ -666,18 +667,19 @@ and class_class_decl (class_id : Ast_defs.id) : Typing_defs.class_const =
     cc_synthesized = true;
     cc_type = classname_ty;
     cc_origin = name;
+    cc_refs = [];
   }
 
 and prop_decl
     ~(write_shmem : bool)
     (c : Shallow_decl_defs.shallow_class)
-    (acc : (Decl_defs.element * Decl_heap.Property.t option) SMap.t)
+    (acc : (Decl_defs.element * Typing_defs.decl_ty option) SMap.t)
     (sp : Shallow_decl_defs.shallow_prop) :
-    (Decl_defs.element * Decl_heap.Property.t option) SMap.t =
+    (Decl_defs.element * Typing_defs.decl_ty option) SMap.t =
   let (sp_pos, sp_name) = sp.sp_name in
   let ty =
     match sp.sp_type with
-    | None -> mk (Reason.Rwitness sp_pos, Typing_defs.make_tany ())
+    | None -> mk (Reason.Rwitness_from_decl sp_pos, Typing_defs.make_tany ())
     | Some ty' -> ty'
   in
   let vis = visibility (snd c.sc_name) sp.sp_visibility in
@@ -697,24 +699,24 @@ and prop_decl
           ~readonly_prop:(sp_readonly sp);
       elt_visibility = vis;
       elt_origin = snd c.sc_name;
-      elt_reactivity = None;
       elt_deprecated = None;
     }
   in
-  if write_shmem then Decl_heap.Props.add (elt.elt_origin, sp_name) ty;
+  ( if write_shmem then
+    Decl_store.((get ()).add_prop (elt.elt_origin, sp_name) ty) );
   let acc = SMap.add sp_name (elt, Some ty) acc in
   acc
 
 and static_prop_decl
     ~(write_shmem : bool)
     (c : Shallow_decl_defs.shallow_class)
-    (acc : (Decl_defs.element * Decl_heap.StaticProperty.t option) SMap.t)
+    (acc : (Decl_defs.element * Typing_defs.decl_ty option) SMap.t)
     (sp : Shallow_decl_defs.shallow_prop) :
-    (Decl_defs.element * Decl_heap.StaticProperty.t option) SMap.t =
+    (Decl_defs.element * Typing_defs.decl_ty option) SMap.t =
   let (sp_pos, sp_name) = sp.sp_name in
   let ty =
     match sp.sp_type with
-    | None -> mk (Reason.Rwitness sp_pos, Typing_defs.make_tany ())
+    | None -> mk (Reason.Rwitness_from_decl sp_pos, Typing_defs.make_tany ())
     | Some ty' -> ty'
   in
   let vis = visibility (snd c.sc_name) sp.sp_visibility in
@@ -734,11 +736,11 @@ and static_prop_decl
           ~readonly_prop:(sp_readonly sp);
       elt_visibility = vis;
       elt_origin = snd c.sc_name;
-      elt_reactivity = None;
       elt_deprecated = None;
     }
   in
-  if write_shmem then Decl_heap.StaticProps.add (elt.elt_origin, sp_name) ty;
+  ( if write_shmem then
+    Decl_store.((get ()).add_static_prop (elt.elt_origin, sp_name) ty) );
   let acc = SMap.add sp_name (elt, Some ty) acc in
   acc
 
@@ -755,7 +757,7 @@ and typeconst_structure
     (c : Shallow_decl_defs.shallow_class)
     (stc : Shallow_decl_defs.shallow_typeconst) : Typing_defs.class_const =
   let pos = fst stc.stc_name in
-  let r = Reason.Rwitness pos in
+  let r = Reason.Rwitness_from_decl pos in
   let tsid = (pos, SN.FB.cTypeStructure) in
   let ts_ty =
     mk (r, Tapply (tsid, [mk (r, Taccess (mk (r, Tthis), stc.stc_name))]))
@@ -771,6 +773,7 @@ and typeconst_structure
     cc_synthesized = true;
     cc_type = ts_ty;
     cc_origin = snd c.sc_name;
+    cc_refs = [];
   }
 
 and typeconst_fold
@@ -780,9 +783,8 @@ and typeconst_fold
     Typing_defs.typeconst_type SMap.t * Typing_defs.class_const SMap.t =
   let (typeconsts, consts) = acc in
   match c.sc_kind with
+  | Ast_defs.Cenum -> acc
   | Ast_defs.Ctrait
-  | Ast_defs.Cenum ->
-    acc
   | Ast_defs.Cinterface
   | Ast_defs.Cabstract
   | Ast_defs.Cnormal ->
@@ -810,12 +812,14 @@ and typeconst_fold
     let tc =
       {
         ttc_abstract = stc.stc_abstract;
+        ttc_synthesized = false;
         ttc_name = stc.stc_name;
         ttc_as_constraint = stc.stc_as_constraint;
         ttc_type = stc.stc_type;
         ttc_origin = c_name;
         ttc_enforceable = enforceable;
         ttc_reifiable = reifiable;
+        ttc_concretized = false;
       }
     in
     let typeconsts = SMap.add (snd stc.stc_name) tc typeconsts in
@@ -826,28 +830,13 @@ and method_decl_acc
     ~(is_static : bool)
     (c : Shallow_decl_defs.shallow_class)
     ((acc, condition_types) :
-      (Decl_defs.element * Decl_heap.Method.t option) SMap.t * SSet.t)
+      (Decl_defs.element * Typing_defs.fun_elt option) SMap.t * SSet.t)
     (m : Shallow_decl_defs.shallow_method) :
-    (Decl_defs.element * Decl_heap.Method.t option) SMap.t * SSet.t =
+    (Decl_defs.element * Typing_defs.fun_elt option) SMap.t * SSet.t =
   (* If method doesn't override anything but has the <<__Override>> attribute, then
    * set the override flag in ce_flags and let typing emit an appropriate error *)
   let check_override = sm_override m && not (SMap.mem (snd m.sm_name) acc) in
   let (pos, id) = m.sm_name in
-  let get_reactivity t =
-    match get_node t with
-    | Tfun { ft_reactive; _ } -> ft_reactive
-    | _ -> Nonreactive
-  in
-  let condition_types =
-    match get_reactivity m.sm_type with
-    | Pure (Some ty) ->
-      begin
-        match get_node ty with
-        | Tapply ((_, cls), []) -> SSet.add cls condition_types
-        | _ -> condition_types
-      end
-    | _ -> condition_types
-  in
   let vis =
     match (SMap.find_opt id acc, m.sm_visibility) with
     | (Some ({ elt_visibility = Vprotected _ as parent_vis; _ }, _), Protected)
@@ -871,7 +860,6 @@ and method_decl_acc
           ~readonly_prop:false;
       elt_visibility = vis;
       elt_origin = snd c.sc_name;
-      elt_reactivity = m.sm_reactivity;
       elt_deprecated = m.sm_deprecated;
     }
   in
@@ -883,18 +871,18 @@ and method_decl_acc
       fe_php_std_lib = false;
     }
   in
-  if write_shmem then
+  ( if write_shmem then
     if is_static then
-      Decl_heap.StaticMethods.add (elt.elt_origin, id) fe
+      Decl_store.((get ()).add_static_method (elt.elt_origin, id) fe)
     else
-      Decl_heap.Methods.add (elt.elt_origin, id) fe;
+      Decl_store.((get ()).add_method (elt.elt_origin, id) fe) );
   let acc = SMap.add id (elt, Some fe) acc in
   (acc, condition_types)
 
 let class_decl_if_missing
     ~(sh : SharedMem.uses) (ctx : Provider_context.t) (class_name : string) :
-    (string * Decl_heap.class_entries) option =
-  match Decl_heap.Classes.get class_name with
+    (string * Decl_store.class_entries) option =
+  match Decl_store.((get ()).get_class class_name) with
   | Some class_ -> Some (class_name, (class_, None))
   | None ->
     (* Class elements are in memory if and only if the class itself is there.

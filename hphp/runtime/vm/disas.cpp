@@ -179,8 +179,8 @@ FuncInfo find_func_info(const Func* func) {
 
   auto find_jump_targets = [&] {
     auto pc           = func->entry();
-    auto const stop   = func->at(func->past());
-    auto const bcBase = func->unit()->entry();
+    auto const stop   = func->at(func->bclen());
+    auto const bcBase = func->entry();
 
     for (; pc != stop; pc += instrLen(pc)) {
       auto const off = func->offsetOf(pc);
@@ -455,7 +455,7 @@ void print_func_body(Output& out, const FuncInfo& finfo) {
   auto       ehIter  = begin(finfo.ehStarts);
   auto const ehStop  = end(finfo.ehStarts);
   auto       bcIter  = func->entry();
-  auto const bcStop  = func->at(func->past());
+  auto const bcStop  = func->at(func->bclen());
 
   SourceLoc srcLoc;
 
@@ -732,6 +732,16 @@ void print_cls_inheritance_list(Output& out, const PreClass* cls) {
   }
 }
 
+void print_enum_includes(Output& out, const PreClass* cls) {
+  if (!cls->includedEnums().empty()) {
+    out.fmt(" enum_includes (");
+    for (auto i = uint32_t{}; i < cls->includedEnums().size(); ++i) {
+      out.fmt("{}{}", i != 0 ? " " : "", cls->includedEnums()[i].get());
+    }
+    out.fmt(")");
+  }
+}
+
 void print_cls_enum_ty(Output& out, const PreClass* cls) {
   if (cls->attrs() & AttrEnum) {
     out.fmtln(".enum_ty <{}>;", type_constraint(cls->enumBaseTy()));
@@ -858,6 +868,7 @@ void print_cls(Output& out, const PreClass* cls) {
     name,
     format_line_pair(cls));
   print_cls_inheritance_list(out, cls);
+  print_enum_includes(out, cls);
   out.fmt(" {{");
   out.nl();
   indented(out, [&] { print_cls_directives(out, cls); });

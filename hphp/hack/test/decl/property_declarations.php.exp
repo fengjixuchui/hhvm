@@ -10,50 +10,40 @@
        sc_props =
        [{ Shallow_decl_defs.sp_name = ([5:5-9], "map"); sp_xhp_attr = None;
           sp_type =
-          (Some (Rhint (root|property_declarations.php line 4, characters 11-23),
+          (Some (Rhint ([4:11-24]),
                  (Tapply (([4:11-14], "\\HH\\Map"),
-                    [(Rhint (root|property_declarations.php line 4, characters 15-17),
-                      (Tprim Tint));
-                      (Rhint (root|property_declarations.php line 4, characters 20-22),
-                       (Tprim Tint))
-                      ]
+                    [(Rhint ([4:15-18]), (Tprim Tint));
+                      (Rhint ([4:20-23]), (Tprim Tint))]
                     ))));
           sp_visibility = Private; sp_flags = (empty) };
          { Shallow_decl_defs.sp_name = ([6:5-12], "uninit");
            sp_xhp_attr = None;
            sp_type =
-           (Some (Rhint (root|property_declarations.php line 4, characters 11-23),
+           (Some (Rhint ([4:11-24]),
                   (Tapply (([4:11-14], "\\HH\\Map"),
-                     [(Rhint (root|property_declarations.php line 4, characters 15-17),
-                       (Tprim Tint));
-                       (Rhint (root|property_declarations.php line 4, characters 20-22),
-                        (Tprim Tint))
-                       ]
+                     [(Rhint ([4:15-18]), (Tprim Tint));
+                       (Rhint ([4:20-23]), (Tprim Tint))]
                      ))));
            sp_visibility = Private; sp_flags = needs_init }
          ];
        sc_sprops = [];
        sc_constructor =
        (Some { Shallow_decl_defs.sm_name = ([8:19-30], "__construct");
-               sm_reactivity = None;
                sm_type =
-               (Rwitness (root|property_declarations.php line 8, characters 19-29),
+               (Rwitness_from_decl ([8:19-30]),
                 (Tfun
                    { ft_arity = (Fstandard ()); ft_tparams = [];
                      ft_where_constraints = []; ft_params = [];
                      ft_implicit_params =
                      { capability = (CapDefaults [8:19-30]) };
                      ft_ret =
-                     { et_enforced = false;
+                     { et_enforced = Typing_defs_core.Unenforced;
                        et_type =
-                       (Rwitness (root|property_declarations.php line 8, characters 19-29),
-                        (Tprim Tvoid))
-                       };
+                       (Rwitness_from_decl ([8:19-30]), (Tprim Tvoid)) };
                      ft_flags =
-                     (make_ft_flags FSync None ~return_disposable:false
-                       ~returns_mutable:false ~returns_void_to_rx:false
-                       ~returns_readonly:false ~readonly_this:false);
-                     ft_reactive = Nonreactive;
+                     (make_ft_flags FSync ~return_disposable:false
+                       ~returns_readonly:false ~readonly_this:false
+                       ~is_const:false);
                      ft_ifc_decl = FDPolicied {PUBLIC} }));
                sm_visibility = Public; sm_deprecated = None;
                sm_flags = (empty) });

@@ -115,7 +115,6 @@ pub fn desugar<TF>(hint: &aast::Hint, e: &Expr, env: &Env<TF>) -> Expr {
             "makeTree",
             vec![
                 exprpos(&temp_pos),
-                Expr::new(temp_pos.clone(), Expr_::Id(Box::new(make_id("__FILE__")))),
                 spliced_dict,
                 visitor_lambda,
                 inferred_type,
@@ -275,6 +274,7 @@ impl<'ast> VisitorMut<'ast> for TypeVirtualizer {
                     Bop::Minus => *e = virtualize_binop(lhs, "__minus", rhs, &e.0),
                     Bop::Star => *e = virtualize_binop(lhs, "__star", rhs, &e.0),
                     Bop::Slash => *e = virtualize_binop(lhs, "__slash", rhs, &e.0),
+                    Bop::Percent => *e = virtualize_binop(lhs, "__percent", rhs, &e.0),
                     // Convert boolean &&, ||
                     Bop::Ampamp => *e = virtualize_binop(lhs, "__ampamp", rhs, &e.0),
                     Bop::Barbar => *e = virtualize_binop(lhs, "__barbar", rhs, &e.0),
@@ -285,6 +285,8 @@ impl<'ast> VisitorMut<'ast> for TypeVirtualizer {
                     Bop::Gte => *e = virtualize_binop(lhs, "__greaterThanEqual", rhs, &e.0),
                     Bop::Eqeqeq => *e = virtualize_binop(lhs, "__tripleEquals", rhs, &e.0),
                     Bop::Diff2 => *e = virtualize_binop(lhs, "__notTripleEquals", rhs, &e.0),
+                    // Convert string concatenation
+                    Bop::Dot => *e = virtualize_binop(lhs, "__dot", rhs, &e.0),
                     // Assignment is special and not virtualized
                     Bop::Eq(None) => {}
                     // The rest should be parser errors from expression_tree_check
@@ -298,6 +300,7 @@ impl<'ast> VisitorMut<'ast> for TypeVirtualizer {
 
                 match op {
                     Uop::Unot => *e = virtualize_unop(operand, "__exclamationMark", &e.0),
+                    Uop::Uminus => *e = virtualize_unop(operand, "__negate", &e.0),
                     // The rest should be parser errors from expression_tree_check
                     _ => {}
                 }
@@ -397,12 +400,11 @@ impl<'ast> VisitorMut<'ast> for CallVirtualizer {
         let mk_splice = |e: Expr| -> Expr { Expr::new(pos.clone(), Expr_::ETSplice(Box::new(e))) };
 
         match &mut e.1 {
-            // Convert `foo(...)` to `__splice__(Visitor::symbol('foo', foo<>))(...)`
+            // Convert `foo(...)` to `__splice__(Visitor::symbol(foo<>))(...)`
             Call(ref mut call) => {
                 let (ref recv, ref mut targs, ref mut args, ref mut variadic) = **call;
                 match &recv.1 {
                     Id(sid) => {
-                        let fn_name = string_literal(&*sid.1);
                         targs.accept(env, self.object())?;
                         let targs = std::mem::replace(targs, vec![]);
 
@@ -416,7 +418,7 @@ impl<'ast> VisitorMut<'ast> for CallVirtualizer {
                         let callee = mk_splice(static_meth_call(
                             &self.visitor_name,
                             "symbol",
-                            vec![fn_name, fp],
+                            vec![fp],
                             &pos,
                         ));
 
@@ -427,17 +429,9 @@ impl<'ast> VisitorMut<'ast> for CallVirtualizer {
                         let variadic = variadic.take();
                         e.1 = Call(Box::new((callee, vec![], args, variadic)))
                     }
-                    // Convert `Foo::bar(...)` to `${ Visitor::symbol('Foo::bar', Foo::bar<>) }(...)`
+                    // Convert `Foo::bar(...)` to `${ Visitor::symbol(Foo::bar<>) }(...)`
                     ClassConst(cc) => {
                         let (ref cid, ref s) = **cc;
-                        let fn_name = if let ClassId_::CIexpr(Expr(_, Id(sid))) = &cid.1 {
-                            let name = format!("{}::{}", &*sid.1, &s.1);
-                            string_literal(&name)
-                        } else {
-                            // Should be unreachable
-                            string_literal("__ILLEGAL_STATIC_CALL_IN_EXPRESSION_TREE")
-                        };
-
                         targs.accept(env, self.object())?;
                         let targs = std::mem::replace(targs, vec![]);
 
@@ -452,7 +446,7 @@ impl<'ast> VisitorMut<'ast> for CallVirtualizer {
                         let callee = mk_splice(static_meth_call(
                             &self.visitor_name,
                             "symbol",
-                            vec![fn_name, fp],
+                            vec![fp],
                             &pos,
                         ));
 
@@ -985,7 +979,7 @@ impl<'ast> VisitorMut<'ast> for SpliceExtractor {
 }
 
 fn temp_lvar_string(num: usize) -> String {
-    format!("$__{}", num.to_string())
+    format!("$0splice{}", num.to_string())
 }
 
 fn temp_lvar(pos: &Pos, num: usize) -> Expr {
@@ -1004,6 +998,7 @@ fn exprpos(pos: &Pos) -> Expr {
             &pos,
             "\\ExprPos",
             vec![
+                Expr::new(Pos::make_none(), Expr_::Id(Box::new(make_id("__FILE__")))),
                 int_literal(start_lnum),
                 int_literal(start_cnum - start_bol),
                 int_literal(end_lnum),

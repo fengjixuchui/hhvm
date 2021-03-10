@@ -200,8 +200,9 @@ void unbindLink(rds::Link<T, M>* link, rds::Symbol symbol) {
 }
 
 bool shouldUsePersistentHandles(const Class* cls) {
-  return (!SystemLib::s_inited || RO::RepoAuthoritative) &&
-         cls->verifyPersistent();
+  const auto isPersistent = cls->isPersistent();
+  cls->verifyPersistence();
+  return isPersistent;
 }
 
 /*
@@ -630,7 +631,7 @@ void Class::releaseSProps() {
 
   auto init = &m_sPropCacheInit;
   if (init->bound() && rds::isNormalHandle(init->handle())) {
-    auto const symbol = rds::LinkName{"PropCacheInit", name()};
+    auto const symbol = rds::LinkName{"SPropCacheInit", name()};
     unbindLink(init, symbol);
   }
 
@@ -664,6 +665,25 @@ Class::Avail Class::avail(Class*& parent,
         const_cast<Class*>(this)->destroy();
       }
       return Avail::False;
+    }
+  }
+
+  if (m_preClass->attrs() & AttrEnum) {
+    auto const& ie = m_extra->m_includedEnums;
+    for (size_t i = 0; i < ie.size(); ++i) {
+      auto const penum = ie[i]->m_preClass.get();
+      auto const included_enum = Class::get(penum->namedEntity(),
+                                            penum->name(), tryAutoload);
+      if (included_enum != ie[i]) {
+        if (!included_enum) {
+          parent = ie[i].get();
+          return Avail::Fail;
+        }
+        if (UNLIKELY(ie[i]->isZombie())) {
+          const_cast<Class*>(this)->destroy();
+        }
+        return Avail::False;
+      }
     }
   }
 
@@ -1189,7 +1209,7 @@ void Class::initSPropHandles() const {
     // of them.
     m_sPropCacheInit = rds::s_persistentTrue;
   } else {
-    auto const symbol = rds::LinkName{"PropCacheInit", name()};
+    auto const symbol = rds::LinkName{"SPropCacheInit", name()};
     m_sPropCacheInit.bind(rds::Mode::Normal, symbol);
   }
   rds::recordRds(m_sPropCacheInit.handle(),
@@ -1447,8 +1467,28 @@ Slot Class::propIndexToSlot(uint16_t index) const {
 
 const StaticString s_classname("classname");
 
+RuntimeCoeffects Class::clsCtxCnsGet(const StringData* name) const {
+  auto const slot = m_constants.findIndex(name);
+
+  if (slot == kInvalidSlot) {
+    raise_error("Context constant %s does not exist", name->data());
+  }
+  auto const& cns = m_constants[slot];
+  if (cns.kind() != ConstModifiers::Kind::Context) {
+    raise_error("%s is a %s, looking for a context constant",
+                name->data(), ConstModifiers::show(cns.kind()));
+  }
+  if (cns.isAbstract()) {
+    raise_error("Context constant %s is abstract", name->data());
+  }
+
+  return cns.val.constModifiers().getCoeffects().toRequired();
+}
+
 TypedValue Class::clsCnsGet(const StringData* clsCnsName,
-                            ClsCnsLookup what) const {
+                            ConstModifiers::Kind what,
+                            bool resolve) const {
+  always_assert(what != ConstModifiers::Kind::Context);
   Slot clsCnsInd;
   auto cnsVal = cnsNameToTV(clsCnsName, clsCnsInd, what);
   if (!cnsVal) return make_tv<KindOfUninit>();
@@ -1475,15 +1515,14 @@ TypedValue Class::clsCnsGet(const StringData* clsCnsName,
           assertx(resolved->isHAMSafeDArray());
           return make_persistent_array_like_tv(resolved);
         }
-        if (what == ClsCnsLookup::IncludeTypesPartial) {
-          return make_tv<KindOfUninit>();
-        }
         break;
       }
       case ConstModifiers::Kind::Context:
-        raise_error("Cannot load context constants");
+        not_reached();
     }
   }
+
+  if (!resolve) return make_tv<KindOfUninit>();
 
   /*
    * We use a sentinel static array to mark constants that are being evaluated
@@ -1554,11 +1593,6 @@ TypedValue Class::clsCnsGet(const StringData* clsCnsName,
   };
 
   if (cns.kind() == ConstModifiers::Kind::Type) {
-    // Resolve type constant, if needed
-    if (what == ClsCnsLookup::IncludeTypesPartial) {
-      clsCnsData.remove(StrNR{clsCnsName});
-      return make_tv<KindOfUninit>();
-    }
     Array resolvedTS;
     bool persistent = true;
     try {
@@ -1635,21 +1669,17 @@ TypedValue Class::clsCnsGet(const StringData* clsCnsName,
 
 const TypedValue* Class::cnsNameToTV(const StringData* clsCnsName,
                                      Slot& clsCnsInd,
-                                     ClsCnsLookup what) const {
+                                     ConstModifiers::Kind what) const {
+  always_assert(what != ConstModifiers::Kind::Context);
   clsCnsInd = m_constants.findIndex(clsCnsName);
-  if (clsCnsInd == kInvalidSlot) {
-    return nullptr;
-  }
-  if (m_constants[clsCnsInd].isAbstract()) {
-    return nullptr;
-  }
-  if (what == ClsCnsLookup::NoTypes
-      && m_constants[clsCnsInd].kind() == ConstModifiers::Kind::Type) {
-    return nullptr;
-  }
+  if (clsCnsInd == kInvalidSlot) return nullptr;
+  if (m_constants[clsCnsInd].isAbstract()) return nullptr;
+
+  auto const kind = m_constants[clsCnsInd].kind();
+  if (kind != what) return nullptr;
+
   auto const ret = &m_constants[clsCnsInd].val;
-  assertx(m_constants[clsCnsInd].kind() == ConstModifiers::Kind::Type
-          || tvIsPlausible(*ret));
+  assertx(IMPLIES(kind == ConstModifiers::Kind::Value, tvIsPlausible(*ret)));
   return ret;
 }
 
@@ -1665,23 +1695,17 @@ Slot Class::clsCnsSlot(
 ///////////////////////////////////////////////////////////////////////////////
 // Other methods.
 
-bool Class::verifyPersistent() const {
-  if (!(attrs() & AttrPersistent)) return false;
-  if (m_parent.get() && !classHasPersistentRDS(m_parent.get())) {
-    return false;
+void Class::verifyPersistence() const {
+  if (!debug) return;
+  if (!isPersistent()) return;
+  assertx(preClass()->unit()->isSystemLib() || RO::RepoAuthoritative);
+  assertx(!m_parent || classHasPersistentRDS(m_parent.get()));
+  for (DEBUG_ONLY int i = 0; i < m_interfaces.size(); i++) {
+    assertx(classHasPersistentRDS(m_interfaces[i]));
   }
-  int numIfaces = m_interfaces.size();
-  for (int i = 0; i < numIfaces; i++) {
-    if (!classHasPersistentRDS(m_interfaces[i])) {
-      return false;
-    }
+  for (DEBUG_ONLY auto const& usedTrait : m_extra->m_usedTraits) {
+    assertx(classHasPersistentRDS(usedTrait.get()));
   }
-  for (auto const& usedTrait : m_extra->m_usedTraits) {
-    if (!classHasPersistentRDS(usedTrait.get())) {
-      return false;
-    }
-  }
-  return true;
 }
 
 void Class::setInstanceBits() {
@@ -3853,6 +3877,7 @@ void Class::setIncludedEnums() {
       raise_error("%s cannot include %s - it is not an enum",
                   m_preClass->name()->data(), cp->name()->data());
     }
+    m_preClass->enforceInMaybeSealedParentWhitelist(cp->preClass());
     auto cp_baseType = cp->m_enumBaseTy;
     if (m_enumBaseTy &&
         (!cp_baseType ||

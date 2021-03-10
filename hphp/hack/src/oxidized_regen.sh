@@ -41,6 +41,7 @@ summary "Write oxidized/gen/"
   hphp/hack/src/annotated_ast/aast.ml                                         \
   hphp/hack/src/annotated_ast/namespace_env.ml                                \
   hphp/hack/src/ast/ast_defs.ml                                               \
+  hphp/hack/src/decl/pos/pos_or_decl.ml                                       \
   hphp/hack/src/deps/fileInfo.ml                                              \
   hphp/hack/src/deps/typing_deps_mode.ml                                      \
   hphp/hack/src/errors/errors.ml                                              \
@@ -52,6 +53,7 @@ summary "Write oxidized/gen/"
   hphp/hack/src/options/typecheckerOptions.ml                                 \
   hphp/hack/src/parser/full_fidelity_parser_env.ml                            \
   hphp/hack/src/utils/core/prim_defs.ml                                       \
+  hphp/hack/src/utils/decl_reference.ml                                       \
   hphp/hack/src/parser/scoured_comments.ml                                    \
 
 # Add exports in oxidized/lib.rs from oxidized/gen/mod.rs.
@@ -96,6 +98,7 @@ summary "Write oxidized_by_ref/gen/"
   hphp/hack/src/annotated_ast/namespace_env.ml                                \
   hphp/hack/src/ast/ast_defs.ml                                               \
   hphp/hack/src/decl/decl_defs.ml                                             \
+  hphp/hack/src/decl/pos/pos_or_decl.ml                                       \
   hphp/hack/src/decl/shallow_decl_defs.ml                                     \
   hphp/hack/src/deps/fileInfo.ml                                              \
   hphp/hack/src/errors/error_codes.ml                                         \
@@ -118,10 +121,10 @@ summary "Write oxidized_by_ref/gen/"
   hphp/hack/src/typing/typing_inference_env.ml                                \
   hphp/hack/src/typing/typing_kinding_defs.ml                                 \
   hphp/hack/src/typing/typing_local_types.ml                                  \
-  hphp/hack/src/typing/typing_mutability_env.ml                               \
   hphp/hack/src/typing/typing_per_cont_env.ml                                 \
   hphp/hack/src/typing/typing_reason.ml                                       \
   hphp/hack/src/typing/typing_tyvar_occurrences.ml                            \
+  hphp/hack/src/utils/decl_reference.ml                                       \
   hphp/hack/src/utils/core/prim_defs.ml                                       \
 
 # Add exports in oxidized_by_ref/lib.rs from oxidized_by_ref/gen/mod.rs.
@@ -137,13 +140,12 @@ summary "Write oxidized_by_ref/decl_visitor/"
   by-ref-decl-visitor                                                         \
   --input "hphp/hack/src/oxidized_by_ref/gen/aast_defs.rs"                    \
   --input "hphp/hack/src/oxidized_by_ref/gen/ast_defs.rs"                     \
-  --input "hphp/hack/src/oxidized_by_ref/gen/decl_defs.rs"                    \
   --input "hphp/hack/src/oxidized_by_ref/gen/shallow_decl_defs.rs"            \
   --input "hphp/hack/src/oxidized_by_ref/gen/typing_defs_core.rs"             \
   --input "hphp/hack/src/oxidized_by_ref/gen/typing_defs.rs"                  \
   --input "hphp/hack/src/oxidized_by_ref/gen/typing_reason.rs"                \
   --input "hphp/hack/src/oxidized_by_ref/manual/direct_decl_parser.rs"        \
-  --input "hphp/hack/src/oxidized_by_ref/manual/shape_map.rs"                 \
+  --input "hphp/hack/src/oxidized_by_ref/manual/t_shape_map.rs"               \
   --extern-input "hphp/hack/src/oxidized/gen/aast_defs.rs"                    \
   --extern-input "hphp/hack/src/oxidized/gen/ast_defs.rs"                     \
   --output "hphp/hack/src/oxidized_by_ref/decl_visitor/"                      \

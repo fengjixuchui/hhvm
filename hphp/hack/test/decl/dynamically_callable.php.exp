@@ -10,26 +10,21 @@
        sc_constructor = None; sc_static_methods = [];
        sc_methods =
        [{ Shallow_decl_defs.sm_name = ([14:19-22], "pub");
-          sm_reactivity = None;
           sm_type =
-          (Rwitness (root|dynamically_callable.php line 14, characters 19-21),
+          (Rwitness_from_decl ([14:19-22]),
            (Tfun
               { ft_arity = (Fstandard ()); ft_tparams = [];
                 ft_where_constraints = []; ft_params = [];
                 ft_implicit_params =
                 { capability = (CapDefaults [14:19-22]) };
                 ft_ret =
-                { et_enforced = false;
-                  et_type =
-                  (Rhint (root|dynamically_callable.php line 14, characters 26-29),
-                   (Tprim Tvoid))
-                  };
+                { et_enforced = Typing_defs_core.Unenforced;
+                  et_type = (Rhint ([14:26-30]), (Tprim Tvoid)) };
                 ft_flags =
-                (make_ft_flags FSync None ~return_disposable:false
-                  ~returns_mutable:false ~returns_void_to_rx:false
-                  ~returns_readonly:false ~readonly_this:false);
-                ft_reactive = Nonreactive; ft_ifc_decl = FDPolicied {PUBLIC}
-                }));
+                (make_ft_flags FSync ~return_disposable:false
+                  ~returns_readonly:false ~readonly_this:false
+                  ~is_const:false);
+                ft_ifc_decl = FDPolicied {PUBLIC} }));
           sm_visibility = Public; sm_deprecated = None;
           sm_flags = dynamicallycallable }
          ];

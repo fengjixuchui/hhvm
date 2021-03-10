@@ -13,9 +13,8 @@ use ast_class_expr_rust::ClassExpr;
 use ast_scope_rust as ast_scope;
 use context::Context;
 use core_utils_rust::add_ns;
-use emit_body_rust::extract_rx_if_impl_attr;
 use emit_type_hint_rust as emit_type_hint;
-use env::{iterator::Id as IterId, local::Type as Local, Env as BodyEnv};
+use env::Env as BodyEnv;
 use escaper::{escape, escape_by, is_lit_printable};
 use hhas_adata_rust::HhasAdata;
 use hhas_adata_rust::{
@@ -45,8 +44,10 @@ use hhbc_string_utils_rust::{
     quote_string_with_escape, strip_global_ns, strip_ns, triple_quote_string, types,
 };
 use instruction_sequence_rust::{Error::Unrecoverable, InstrSeq};
+use iterator::Id as IterId;
 use label_rust::Label;
 use lazy_static::lazy_static;
+use local::Type as Local;
 use naming_special_names_rust::classes;
 use ocaml_helper::escaped;
 use oxidized::{ast, ast_defs, doc_comment::DocComment, local_id, pos::Pos};
@@ -436,9 +437,7 @@ fn print_fun_def<W: Write>(
     }
     w.write(" ")?;
     braces(w, |w| {
-        ctx.block(w, |c, w| {
-            print_body(c, w, body, &fun_def.attributes, &fun_def.coeffects)
-        })?;
+        ctx.block(w, |c, w| print_body(c, w, body, &fun_def.coeffects))?;
         newline(w)
     })?;
 
@@ -469,6 +468,9 @@ fn print_type_constant<W: Write>(
 ) -> Result<(), W::Error> {
     ctx.newline(w)?;
     concat_str_by(w, " ", [".const", &c.name, "isType"])?;
+    if c.is_abstract {
+        w.write(" isAbstract")?;
+    }
     option(w, &c.initializer, |w, init| {
         w.write(" = ")?;
         triple_quotes(w, |w| print_adata(ctx, w, init))
@@ -481,11 +483,16 @@ fn print_ctx_constant<W: Write>(
     w: &mut W,
     c: &HhasCtxConstant,
 ) -> Result<(), W::Error> {
-    if let Some(coeffects) = HhasCoeffects::vec_to_string(&c.coeffects, |c| c.to_string()) {
-        ctx.newline(w)?;
-        concat_str_by(w, " ", [".ctx", &c.name, coeffects.as_ref()])?;
-        w.write(";")?;
+    ctx.newline(w)?;
+    concat_str_by(w, " ", [".ctx", &c.name])?;
+    if c.is_abstract {
+        w.write(" isAbstract")?;
     }
+    if let Some(coeffects) = HhasCoeffects::vec_to_string(&c.coeffects, |c| c.to_string()) {
+        w.write(" ")?;
+        w.write(coeffects)?;
+    }
+    w.write(";")?;
     Ok(())
 }
 
@@ -520,6 +527,9 @@ fn print_property_attributes<W: Write>(
     }
     if property.is_const() {
         special_attributes.push("is_const")
+    }
+    if property.is_readonly() {
+        special_attributes.push("readonly")
     }
     if property.is_deep_init() {
         special_attributes.push("deep_init")
@@ -580,6 +590,9 @@ fn print_constant<W: Write>(
     ctx.newline(w)?;
     w.write(".const ")?;
     w.write(c.name.to_raw_string())?;
+    if c.is_abstract {
+        w.write(" isAbstract")?;
+    }
     match c.value.as_ref() {
         Some(TypedValue::Uninit) => w.write(" = uninit")?,
         Some(value) => {
@@ -848,9 +861,7 @@ fn print_method_def<W: Write>(
     }
     w.write(" ")?;
     braces(w, |w| {
-        ctx.block(w, |c, w| {
-            print_body(c, w, body, &method_def.attributes, &method_def.coeffects)
-        })?;
+        ctx.block(w, |c, w| print_body(c, w, body, &method_def.coeffects))?;
         newline(w)?;
         w.write("  ")
     })
@@ -1139,7 +1150,6 @@ fn print_body<W: Write>(
     ctx: &mut Context,
     w: &mut W,
     body: &HhasBody,
-    attrs: &Vec<HhasAttribute>,
     coeffects: &HhasCoeffects,
 ) -> Result<(), W::Error> {
     print_doc_comment(ctx, w, &body.doc_comment)?;
@@ -1170,27 +1180,6 @@ fn print_body<W: Write>(
     for s in HhasCoeffects::coeffects_to_hhas(&coeffects).iter() {
         ctx.newline(w)?;
         w.write(s)?;
-    }
-    for i in body.rx_cond_rx_of_arg.iter() {
-        ctx.newline(w)?;
-        concat_str(w, [".coeffects_fun_param ", i.to_string().as_ref(), ";"])?;
-    }
-    if let Some((_, s)) = extract_rx_if_impl_attr(0, attrs) {
-        ctx.newline(w)?;
-        concat_str(w, [".rx_cond_implements \"", escape(&s).as_ref(), "\";"])?;
-    }
-    for (i, s) in body.rx_cond_arg_implements.iter() {
-        ctx.newline(w)?;
-        concat_str(
-            w,
-            [
-                ".rx_cond_arg_implements ",
-                i.to_string().as_ref(),
-                " \"",
-                escape(s).as_ref(),
-                "\";",
-            ],
-        )?;
     }
     print_instructions(ctx, w, &body.body_instrs)
 }
@@ -2190,7 +2179,6 @@ fn print_op<W: Write>(w: &mut W, op: &InstructOperator) -> Result<(), W::Error> 
     match op {
         I::Concat => w.write("Concat"),
         I::ConcatN(n) => concat_str_by(w, " ", ["ConcatN", n.to_string().as_str()]),
-        I::Abs => w.write("Abs"),
         I::Add => w.write("Add"),
         I::Sub => w.write("Sub"),
         I::Mul => w.write("Mul"),
@@ -2200,8 +2188,6 @@ fn print_op<W: Write>(w: &mut W, op: &InstructOperator) -> Result<(), W::Error> 
         I::Div => w.write("Div"),
         I::Mod => w.write("Mod"),
         I::Pow => w.write("Pow"),
-        I::Sqrt => w.write("Sqrt"),
-        I::Xor => w.write("Xor"),
         I::Not => w.write("Not"),
         I::Same => w.write("Same"),
         I::NSame => w.write("NSame"),
@@ -2218,8 +2204,6 @@ fn print_op<W: Write>(w: &mut W, op: &InstructOperator) -> Result<(), W::Error> 
         I::BitNot => w.write("BitNot"),
         I::Shl => w.write("Shl"),
         I::Shr => w.write("Shr"),
-        I::Floor => w.write("Floor"),
-        I::Ceil => w.write("Ceil"),
         I::CastBool => w.write("CastBool"),
         I::CastInt => w.write("CastInt"),
         I::CastDouble => w.write("CastDouble"),
@@ -2544,7 +2528,6 @@ fn print_expr_string<W: Write>(w: &mut W, s: &[u8]) -> Result<(), W::Error> {
             b'\\' => Some((&b"\\\\\\\\"[..]).into()),
             b'"' => Some((&b"\\\\\\\""[..]).into()),
             b'$' => Some((&b"\\\\$"[..]).into()),
-            b'?' => Some((&b"\\?"[..]).into()),
             c if is_lit_printable(c) => None,
             c => {
                 let mut r = vec![];
@@ -2908,7 +2891,7 @@ fn print_expr<W: Write>(
             print_expr(ctx, w, env, &og.0)?;
             w.write(match og.2 {
                 ast::OgNullFlavor::OGNullthrows => "->",
-                ast::OgNullFlavor::OGNullsafe => "\\?->",
+                ast::OgNullFlavor::OGNullsafe => "?->",
             })?;
             print_expr(ctx, w, env, &og.1)
         }
@@ -2934,7 +2917,7 @@ fn print_expr<W: Write>(
         }
         E_::Eif(eif) => {
             print_expr(ctx, w, env, &eif.0)?;
-            w.write(" \\? ")?;
+            w.write(" ? ")?;
             option(w, &eif.1, |w, etrue| print_expr(ctx, w, env, etrue))?;
             w.write(" : ")?;
             print_expr(ctx, w, env, &eif.2)
@@ -3276,10 +3259,9 @@ fn print_bop<W: Write>(w: &mut W, bop: &ast_defs::Bop) -> Result<(), W::Error> {
         Bop::Gtgt => w.write(">>"),
         Bop::Percent => w.write("%"),
         Bop::Xor => w.write("^"),
-        Bop::LogXor => w.write("xor"),
         Bop::Diff => w.write("!="),
         Bop::Diff2 => w.write("!=="),
-        Bop::QuestionQuestion => w.write("\\?\\?"),
+        Bop::QuestionQuestion => w.write("??"),
     }
 }
 

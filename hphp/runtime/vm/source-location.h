@@ -85,6 +85,7 @@ struct OffsetRange {
 };
 
 using OffsetRangeVec = std::vector<OffsetRange>;
+using OffsetFuncRangeVec = std::vector<std::pair<const Func*, OffsetRangeVec>>;
 using LineToOffsetRangeVecMap = std::map<int, OffsetRangeVec>;
 
 /*
@@ -155,7 +156,6 @@ LineInfo getLineInfo(const LineTable& table, Offset pc);
 
 void generateLineToOffsetRangesMap(
   const SourceLocTable& srcLocTable,
-  Offset baseOff,
   LineToOffsetRangeVecMap& map
 );
 

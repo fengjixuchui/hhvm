@@ -141,11 +141,28 @@ struct BCSPRelOffset {
 struct IRSPRelOffset {
   int32_t offset;
 
+  /*
+   * Comparisons.
+   *
+   * A "lower" IRSPRelOffset means "lower address".
+   */
   bool operator==(IRSPRelOffset o) const { return offset == o.offset; }
   bool operator!=(IRSPRelOffset o) const { return offset != o.offset; }
+  bool operator< (IRSPRelOffset o) const { return offset <  o.offset; }
+  bool operator<=(IRSPRelOffset o) const { return offset <= o.offset; }
+  bool operator> (IRSPRelOffset o) const { return offset >  o.offset; }
+  bool operator>=(IRSPRelOffset o) const { return offset >= o.offset; }
 
   IRSPRelOffset operator+(int32_t d) const { return IRSPRelOffset{offset + d}; }
   IRSPRelOffset operator-(int32_t d) const { return IRSPRelOffset{offset - d}; }
+
+  /*
+   * Increment.
+   */
+  IRSPRelOffset& operator++() {
+    offset++;
+    return *this;
+  }
 
   /*
    * Convert to an FP*Off, given that the IR stack pointer is at `sp' relative

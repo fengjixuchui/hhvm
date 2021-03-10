@@ -12,7 +12,7 @@ use hh_autoimport_rust as hh_autoimport;
 use itertools::Either;
 use lint_rust::LintError;
 use naming_special_names_rust::{
-    classes as special_classes, literal, rx, special_functions, special_idents,
+    classes as special_classes, literal, special_functions, special_idents,
     typehints as special_typehints, user_attributes as special_attrs,
 };
 use ocamlrep::rc::RcOc;
@@ -692,12 +692,17 @@ where
     fn p_closure_parameter(
         node: S<'a, T, V>,
         env: &mut Env<'a, TF>,
-    ) -> Result<(ast::Hint, Option<ast::ParamKind>)> {
+    ) -> Result<(ast::Hint, Option<ast::HfParamInfo>)> {
         match &node.children {
             ClosureParameterTypeSpecifier(c) => {
                 let kind = Self::mp_optional(Self::p_param_kind, &c.call_convention, env)?;
+                let readonlyness = Self::mp_optional(Self::p_readonly, &c.readonly, env)?;
+                let info = match (kind, readonlyness) {
+                    (None, None) => None,
+                    _ => Some(ast::HfParamInfo { kind, readonlyness }),
+                };
                 let hint = Self::p_hint(&c.type_, env)?;
-                Ok((hint, kind))
+                Ok((hint, info))
             }
             _ => Self::missing_syntax("closure parameter", node, env),
         }
@@ -894,29 +899,7 @@ where
                     TypeArguments(c) => Self::could_map(Self::p_hint, &c.types, env)?,
                     _ => Self::missing_syntax("generic type arguments", args, env)?,
                 };
-                if env.codegen() {
-                    let process = |name: ast::Sid, mut args: Vec<ast::Hint>| -> ast::Hint_ {
-                        if args.len() == 1 {
-                            let eq = |s| name.1.eq_ignore_ascii_case(s);
-                            if (args[0].1.is_hfun()
-                                && (eq(rx::RX)
-                                    || eq(rx::RX_LOCAL)
-                                    || eq(rx::RX_SHALLOW)
-                                    || eq(rx::PURE)))
-                                || (args[0].1.is_happly()
-                                    && (eq(rx::MUTABLE)
-                                        || eq(rx::MAYBE_MUTABLE)
-                                        || eq(rx::OWNED_MUTABLE)))
-                            {
-                                return *args.pop().unwrap().1;
-                            }
-                        }
-                        Happly(name, args)
-                    };
-                    Ok(process(name, type_args))
-                } else {
-                    Ok(Happly(name, type_args))
-                }
+                Ok(Happly(name, type_args))
             }
             NullableTypeSpecifier(c) => Ok(Hoption(Self::p_hint(&c.type_, env)?)),
             LikeTypeSpecifier(c) => Ok(Hlike(Self::p_hint(&c.type_, env)?)),
@@ -929,7 +912,7 @@ where
                         VariadicParameter(_) => false,
                         _ => true,
                     });
-                let (type_hints, kinds) = param_list
+                let (type_hints, info) = param_list
                     .iter()
                     .map(|p| Self::p_closure_parameter(p, env))
                     .collect::<std::result::Result<Vec<_>, _>>()?
@@ -959,14 +942,16 @@ where
                 }
                 let (ctxs, _) = Self::p_contexts(&c.contexts, env)?;
                 Ok(Hfun(ast::HintFun {
-                    reactive_kind: ast::FuncReactive::FNonreactive,
                     param_tys: type_hints,
-                    param_kinds: kinds,
-                    param_mutability: vec![],
+                    param_info: info,
                     variadic_ty: variadic_hints.into_iter().next().unwrap_or(None),
                     ctxs,
                     return_ty: Self::p_hint(&c.return_type, env)?,
-                    is_mutable_return: true,
+                    is_readonly_return: Self::mp_optional(
+                        Self::p_readonly,
+                        &c.readonly_return,
+                        env,
+                    )?,
                 }))
             }
             AttributizedSpecifier(c) => {
@@ -2331,7 +2316,12 @@ where
                 } else {
                     Self::p_xhp_embedded(Self::unesc_xhp_attr, attr_expr, env)?
                 };
-                Ok(ast::XhpAttribute::XhpSimple(name, expr))
+                let xhp_simple = ast::XhpSimple {
+                    name,
+                    type_: (),
+                    expr,
+                };
+                Ok(ast::XhpAttribute::XhpSimple(xhp_simple))
             }
             XHPSpreadAttribute(c) => {
                 let expr = Self::p_xhp_embedded(Self::unesc_xhp, &c.expression, env)?;
@@ -3191,20 +3181,36 @@ where
         }
     }
 
-    fn has_polymorphic_context(contexts: &Option<ast::Contexts>) -> bool {
-        use ast::Hint_::{Haccess, HfunContext, Hvar};
-        if let Some(ast::Contexts(_, ref context_hints)) = contexts {
-            return context_hints.iter().any(|c| match *c.1 {
-                HfunContext(_) => true,
-                Haccess(ref root, _) => {
-                    if let Hvar(_) = *root.1 {
-                        true
-                    } else {
-                        false
-                    }
+    fn strip_ns(name: &str) -> &str {
+        match name.chars().next() {
+            Some('\\') => &name[1..],
+            _ => name,
+        }
+    }
+
+    fn has_polymorphic_context_single(hint: &ast::Hint) -> bool {
+        use ast::Hint_::{Haccess, Happly, HfunContext, Hvar};
+        match *hint.1 {
+            HfunContext(_) => true,
+            Haccess(ref root, _) => match &*root.1 {
+                Happly(oxidized::ast::Id(_, id), _)
+                    if Self::strip_ns(id.as_str())
+                        == naming_special_names_rust::typehints::THIS =>
+                {
+                    true
                 }
+                Hvar(_) => true,
                 _ => false,
-            });
+            },
+            _ => false,
+        }
+    }
+
+    fn has_polymorphic_context(contexts: &Option<ast::Contexts>) -> bool {
+        if let Some(ast::Contexts(_, ref context_hints)) = contexts {
+            return context_hints
+                .iter()
+                .any(|c| Self::has_polymorphic_context_single(c));
         } else {
             false
         }
@@ -3346,6 +3352,7 @@ where
             match *context_hint.1 {
                 HfunContext(ref name) => match hint_by_param.get_mut::<str>(name) {
                     Some((hint_opt, param_pos, _is_variadic)) => match hint_opt {
+                        Some(_) if env.codegen() => {}
                         Some(ref mut param_hint) => match *param_hint.1 {
                             Hint_::Hoption(ref mut h) => rewrite_fun_ctx(env, tparams, h, name),
                             _ => rewrite_fun_ctx(env, tparams, param_hint, name),
@@ -3375,6 +3382,7 @@ where
                                     )
                                 } else {
                                     match hint_opt {
+                                        Some(_) if env.codegen() => {}
                                         Some(ref mut param_hint) => match *param_hint.1 {
                                             Hint_::Hoption(ref mut h) => rewrite_arg_ctx(
                                                 env,
@@ -4231,6 +4239,31 @@ where
                         "Constraints on ctx constants are not allowed",
                     );
                 }
+                if let Some(ref hint) = context {
+                    use ast::Hint_::{Happly, Hintersection};
+                    let ast::Hint(_, ref h) = hint;
+                    if let Hintersection(hl) = &**h {
+                        for h in hl {
+                            if Self::has_polymorphic_context_single(h) {
+                                Self::raise_parsing_error(
+                                    &c.constraint,
+                                    env,
+                                    "Polymorphic contexts on ctx constants are not allowed",
+                                );
+                            }
+                            let ast::Hint(_, ref h) = h;
+                            if let Happly(oxidized::ast::Id(_, id), _) = &**h {
+                                if id.as_str().ends_with("_local") {
+                                    Self::raise_parsing_error(
+                                        &c.ctx_list,
+                                        env,
+                                        "Local contexts on ctx constants are not allowed",
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
                 let span = Self::p_pos(node, env);
                 let kinds = Self::p_kinds(&c.modifiers, env)?;
                 let has_abstract = kinds.has(modifier::ABSTRACT);
@@ -4761,6 +4794,28 @@ where
         }
     }
 
+    fn check_context_has_this(contexts: &Option<ast::Contexts>, env: &mut Env<'a, TF>) {
+        use ast::Hint_::{Haccess, Happly};
+        if let Some(ast::Contexts(pos, ref context_hints)) = contexts {
+            context_hints.iter().for_each(|c| match *c.1 {
+                Haccess(ref root, _) => match &*root.1 {
+                    Happly(oxidized::ast::Id(_, id), _)
+                        if Self::strip_ns(id.as_str())
+                            == naming_special_names_rust::typehints::THIS =>
+                    {
+                        Self::raise_parsing_error_pos(
+                            pos,
+                            env,
+                            "this:: context is not allowed on top level functions",
+                        )
+                    }
+                    _ => {}
+                },
+                _ => {}
+            });
+        }
+    }
+
     fn p_def(node: S<'a, T, V>, env: &mut Env<'a, TF>) -> Result<Vec<ast::Def>> {
         let doc_comment_opt = Self::extract_docblock(node, env);
         match &node.children {
@@ -4785,6 +4840,7 @@ where
                     "function",
                     env,
                 );
+                Self::check_context_has_this(&hdr.contexts, env);
                 let variadic = Self::determine_variadicity(&hdr.parameters);
                 let ret = ast::TypeHint((), hdr.return_type);
                 Ok(vec![ast::Def::mk_fun(ast::Fun_ {

@@ -2295,14 +2295,14 @@ struct AssertReason : IRExtraData {
 
 #define ASSERT_REASON AssertReason{Reason{__FILE__, __LINE__}}
 
-struct EndCatchData : IRSPRelOffsetData {
+struct EndCatchData : IRExtraData {
   enum class CatchMode { UnwindOnly, CallCatch, SideExit, LocalsDecRefd };
   enum class FrameMode { Phplogue, Stublogue };
   enum class Teardown  { NA, None, Full, OnlyThis };
 
   explicit EndCatchData(IRSPRelOffset offset, CatchMode mode,
                         FrameMode stublogue, Teardown teardown)
-    : IRSPRelOffsetData{offset}
+    : offset{offset}
     , mode{mode}
     , stublogue{stublogue}
     , teardown{teardown}
@@ -2310,7 +2310,7 @@ struct EndCatchData : IRSPRelOffsetData {
 
   std::string show() const {
     return folly::to<std::string>(
-      IRSPRelOffsetData::show(), ",",
+      "IRSPOff ", offset.offset, ",",
       mode == CatchMode::UnwindOnly ? "UnwindOnly" :
         mode == CatchMode::CallCatch ? "CallCatch" :
           mode == CatchMode::SideExit ? "SideExit" : "LocalsDecRefd", ",",
@@ -2322,6 +2322,7 @@ struct EndCatchData : IRSPRelOffsetData {
 
   size_t stableHash() const {
     return folly::hash::hash_combine(
+      std::hash<int32_t>()(offset.offset),
       std::hash<CatchMode>()(mode),
       std::hash<FrameMode>()(stublogue),
       std::hash<Teardown>()(teardown)
@@ -2329,29 +2330,39 @@ struct EndCatchData : IRSPRelOffsetData {
   }
 
   bool equals(const EndCatchData& o) const {
-    return mode == o.mode && stublogue == o.stublogue && teardown == o.teardown;
+    return offset == o.offset && mode == o.mode && stublogue == o.stublogue &&
+           teardown == o.teardown;
   }
 
+  IRSPRelOffset offset;
   CatchMode mode;
   FrameMode stublogue;
   Teardown teardown;
 };
 
 struct EnterTCUnwindData : IRExtraData {
-  explicit EnterTCUnwindData(bool teardown) : teardown{teardown} {}
+  explicit EnterTCUnwindData(IRSPRelOffset offset, bool teardown)
+    : offset{offset}, teardown{teardown} {}
 
   std::string show() const {
-    return folly::to<std::string>(teardown ? "" : "no-", "teardown");
+    return folly::to<std::string>(
+      "IRSPOff ", offset.offset, ",",
+      teardown ? "" : "no-", "teardown"
+    );
   }
 
   size_t stableHash() const {
-    return std::hash<bool>()(teardown);
+    return folly::hash::hash_combine(
+      std::hash<int32_t>()(offset.offset),
+      std::hash<bool>()(teardown)
+    );
   }
 
   bool equals(const EnterTCUnwindData& o) const {
-    return teardown == o.teardown;
+    return offset == o.offset && teardown == o.teardown;
   }
 
+  IRSPRelOffset offset;
   bool teardown;
 };
 
@@ -2458,6 +2469,32 @@ struct BespokeGetData : IRExtraData {
   }
 
   KeyState state;
+};
+
+struct ConvNoticeData : IRExtraData {
+  explicit ConvNoticeData(ConvNoticeLevel l = ConvNoticeLevel::None,
+                          const StringData* r = nullptr)
+                          : level(l), reason(r) {}
+  std::string show() const {
+    assertx(level == ConvNoticeLevel::None || (reason != nullptr && reason->isStatic()));
+    if (reason == nullptr) return convOpToName(level);
+    return folly::format("{} for {}", convOpToName(level), reason).str();
+  }
+
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<ConvNoticeLevel>()(level),
+      std::hash<const StringData*>()(reason)
+    );
+  }
+
+  bool equals(const ConvNoticeData& o) const {
+    // can use pointer equality bc reason is always a StaticString
+    return level == o.level && reason == o.reason;
+  }
+
+  ConvNoticeLevel level;
+  union { const StringData* reason; int64_t reasonIntVal; };
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -2675,6 +2712,9 @@ X(LdRecDescCached,              RecNameData);
 X(LdRecDescCachedSafe,          RecNameData);
 X(LdUnitPerRequestFilepath,     RDSHandleData);
 X(LdClsTypeCns,                 LdClsTypeCnsData);
+X(ConvTVToStr,                  ConvNoticeData);
+X(ConvTVToInt,                  ConvNoticeData);
+X(ConvObjToInt,                 ConvNoticeData);
 
 #undef X
 
