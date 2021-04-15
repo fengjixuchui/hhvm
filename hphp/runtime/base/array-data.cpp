@@ -22,7 +22,6 @@
 #include "hphp/runtime/base/array-common.h"
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/array-iterator.h"
-#include "hphp/runtime/base/array-provenance.h"
 #include "hphp/runtime/base/bespoke-array.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/comparisons.h"
@@ -81,8 +80,6 @@ size_t hashArrayPortion(const ArrayData* arr) {
         case KindOfInt64:
         case KindOfDouble:
         case KindOfPersistentString:
-        case KindOfPersistentDArray:
-        case KindOfPersistentVArray:
         case KindOfPersistentVec:
         case KindOfPersistentDict:
         case KindOfPersistentKeyset:
@@ -97,8 +94,6 @@ size_t hashArrayPortion(const ArrayData* arr) {
           break;
         case KindOfUninit:
         case KindOfString:
-        case KindOfDArray:
-        case KindOfVArray:
         case KindOfVec:
         case KindOfDict:
         case KindOfKeyset:
@@ -127,26 +122,25 @@ bool compareArrayPortion(const ArrayData* ad1, const ArrayData* ad2) {
   if (ad1->isLegacyArray() != ad2->isLegacyArray()) return false;
 
   auto const check = [] (const TypedValue& tv1, const TypedValue& tv2) {
-      if (tv1.m_type != tv2.m_type) {
-        // String keys from arrays might be KindOfString, even when
-        // the StringData is static.
-        if (!isStringType(tv1.m_type) || !isStringType(tv2.m_type)) {
-          return false;
-        }
-        assertx(tv1.m_data.pstr->isStatic());
-        assertx(tv2.m_data.pstr->isStatic());
+    if (tv1.m_type != tv2.m_type) {
+      // String keys from arrays might be KindOfString, even when
+      // the StringData is static.
+      if (!isStringType(tv1.m_type) || !isStringType(tv2.m_type)) {
+        return false;
       }
-      if (isNullType(tv1.m_type)) return true;
-      return tv1.m_data.num == tv2.m_data.num;
-    };
+      assertx(tv1.m_data.pstr->isStatic());
+      assertx(tv2.m_data.pstr->isStatic());
+    }
+    if (isNullType(tv1.m_type)) return true;
+    return tv1.m_data.num == tv2.m_data.num;
+  };
 
   auto equal = true;
   ArrayIter iter2{ad2};
   IterateKV(
     ad1,
     [&](TypedValue k, TypedValue v) {
-      if (!check(k, *iter2.first().asTypedValue()) ||
-          !check(v, iter2.secondVal())) {
+      if (!check(k, iter2.nvFirst()) || !check(v, iter2.secondVal())) {
         equal = false;
         return true;
       }
@@ -157,7 +151,7 @@ bool compareArrayPortion(const ArrayData* ad1, const ArrayData* ad2) {
   return equal;
 }
 
-struct ScalarHashNoProv {
+struct ScalarHash {
   size_t operator()(ArrayData* arr) const {
     return s_cachedHash.first == arr
       ? s_cachedHash.second
@@ -168,70 +162,21 @@ struct ScalarHashNoProv {
   }
 };
 
-struct ScalarHashProv {
-  size_t operator()(const std::pair<ArrayData*, arrprov::Tag>& p) const {
-    assertx(IMPLIES(p.second.valid(), arrprov::arrayWantsTag(p.first)));
-    return folly::hash::hash_combine(
-      p.first == s_cachedHash.first
-        ? s_cachedHash.second
-        : hashArrayPortion(p.first),
-      p.second.hash()
-    );
-  }
-  bool operator()(const std::pair<ArrayData*, arrprov::Tag>& p1,
-                  const std::pair<ArrayData*, arrprov::Tag>& p2) const {
-    assertx(p1.first->isVanilla());
-    assertx(p2.first->isVanilla());
-    assertx(IMPLIES(p1.second.valid(), arrprov::arrayWantsTag(p1.first)));
-    assertx(IMPLIES(p2.second.valid(), arrprov::arrayWantsTag(p2.first)));
-
-    // NB: The arrprov::Tag here might not match the one inside the
-    // ArrayData because one of the arrays might be the one we're
-    // trying to lookup with (and thus has its old tag).
-    if (p1.second != p2.second) return false;
-    return compareArrayPortion(p1.first, p2.first);
-  }
-};
-
-using ArrayDataMapNoProv = tbb::concurrent_unordered_set<
-  ArrayData*,
-  ScalarHashNoProv,
-  ScalarHashNoProv
->;
-ArrayDataMapNoProv s_arrayDataMapNoProv;
-
-using ArrayDataMapProv = tbb::concurrent_unordered_set<
-  std::pair<ArrayData*, arrprov::Tag>,
-  ScalarHashProv,
-  ScalarHashProv
->;
-ArrayDataMapProv s_arrayDataMapProv;
+using ArrayDataMap =
+  tbb::concurrent_unordered_set<ArrayData*, ScalarHash, ScalarHash>;
+ArrayDataMap s_arrayDataMap;
 
 }
 
 size_t loadedStaticArrayCount() {
-  return RO::EvalArrayProvenance
-    ? s_arrayDataMapProv.size()
-    : s_arrayDataMapNoProv.size();
+  return s_arrayDataMap.size();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 
-template <bool ArrayProv>
-ALWAYS_INLINE
-void ArrayData::GetScalarArrayImpl(ArrayData** parr, arrprov::Tag tag) {
-  assertx(IMPLIES(!ArrayProv, !tag.valid()));
-
+void ArrayData::GetScalarArray(ArrayData** parr) {
   auto const base = *parr;
-  assertx(IMPLIES(tag.valid(), arrprov::arrayWantsTag(base)));
-
-  auto const oldTag = ArrayProv
-    ? arrprov::getTag(base)
-    : arrprov::Tag{};
-  assertx(IMPLIES(oldTag.valid(), arrprov::arrayWantsTag(base)));
-
-  auto const newTag = tag.valid() ? tag : oldTag;
-  if (base->isStatic() && LIKELY(newTag == oldTag)) return;
+  if (base->isStatic()) return;
 
   auto const arr = [&]{
     if (base->isVanilla()) return base;
@@ -241,32 +186,21 @@ void ArrayData::GetScalarArrayImpl(ArrayData** parr, arrprov::Tag tag) {
   }();
 
   auto const replace = [&] (ArrayData* rep) {
-    assertx(IMPLIES(ArrayProv, arrprov::getTag(rep) == newTag));
     *parr = rep;
     decRefArr(arr);
     s_cachedHash.first = nullptr;
   };
 
-  if (arr->empty() && !newTag.valid()) {
-    return replace(
-      [&]{
-        auto const legacy = arr->isLegacyArray();
-        switch (arr->toDataType()) {
-        case KindOfVArray:
-          return legacy ? staticEmptyMarkedVArray() : staticEmptyVArray();
-        case KindOfDArray:
-          return legacy ? staticEmptyMarkedDArray() : staticEmptyDArray();
-        case KindOfVec:
-          return legacy ? staticEmptyMarkedVec() : staticEmptyVec();
-        case KindOfDict:
-          return legacy ? staticEmptyMarkedDictArray() : staticEmptyDictArray();
-        case KindOfKeyset:
-          return staticEmptyKeysetArray();
-        default:
-          always_assert(false);
-        }
-      }()
-    );
+  if (arr->empty()) {
+    return replace([&]{
+      auto const legacy = arr->isLegacyArray();
+      switch (arr->toDataType()) {
+        case KindOfVec:    return ArrayData::CreateVec(legacy);
+        case KindOfDict:   return ArrayData::CreateDict(legacy);
+        case KindOfKeyset: return ArrayData::CreateKeyset();
+        default: always_assert(false);
+      }
+    }());
   }
 
   arr->onSetEvalScalar();
@@ -275,19 +209,11 @@ void ArrayData::GetScalarArrayImpl(ArrayData** parr, arrprov::Tag tag) {
   s_cachedHash.second = hashArrayPortion(arr);
 
   auto const lookup = [&] (ArrayData* a) -> ArrayData* {
-    if (ArrayProv) {
-      if (auto const it = s_arrayDataMapProv.find({a, newTag});
-          it != s_arrayDataMapProv.end()) {
-        return it->first;
-      }
-      return nullptr;
-    } else {
-      if (auto const it = s_arrayDataMapNoProv.find(a);
-          it != s_arrayDataMapNoProv.end()) {
-        return *it;
-      }
-      return nullptr;
+    if (auto const it = s_arrayDataMap.find(a);
+        it != s_arrayDataMap.end()) {
+      return *it;
     }
+    return nullptr;
   };
 
   if (auto const a = lookup(arr)) return replace(a);
@@ -305,7 +231,6 @@ void ArrayData::GetScalarArrayImpl(ArrayData** parr, arrprov::Tag tag) {
   auto const ad = arr->copyStatic();
   ad->m_aux16 &= ~kSampledArray;
   assertx(ad->isStatic());
-  if (newTag.valid()) arrprov::setTagForStatic(ad, newTag);
 
   // TODO(T68458896): allocSize rounds up to size class, which we shouldn't do.
   MemoryStats::LogAlloc(AllocKind::StaticArray, allocSize(ad));
@@ -313,32 +238,9 @@ void ArrayData::GetScalarArrayImpl(ArrayData** parr, arrprov::Tag tag) {
   s_cachedHash.first = ad;
   assertx(hashArrayPortion(ad) == s_cachedHash.second);
 
-  if (ArrayProv) {
-    auto const DEBUG_ONLY inserted =
-      s_arrayDataMapProv.insert({ad, newTag}).second;
-    assertx(inserted);
-  } else {
-    auto const DEBUG_ONLY inserted =
-      s_arrayDataMapNoProv.insert(ad).second;
-    assertx(inserted);
-  }
+  auto const DEBUG_ONLY inserted = s_arrayDataMap.insert(ad).second;
+  assertx(inserted);
   return replace(ad);
-}
-
-ALWAYS_INLINE
-void ArrayData::GetScalarArrayNoProv(ArrayData** parr) {
-  return GetScalarArrayImpl<false>(parr, arrprov::Tag{});
-}
-
-NEVER_INLINE
-void ArrayData::GetScalarArrayProv(ArrayData** parr, arrprov::Tag tag) {
-  return GetScalarArrayImpl<true>(parr, tag);
-}
-
-void ArrayData::GetScalarArray(ArrayData** parr, arrprov::Tag tag) {
-  if (UNLIKELY(RO::EvalArrayProvenance)) return GetScalarArrayProv(parr, tag);
-  assertx(!tag.valid());
-  return GetScalarArrayNoProv(parr);
 }
 
 ArrayData* ArrayData::GetScalarArray(Array&& arr) {
@@ -360,15 +262,11 @@ static_assert(ArrayFunctions::NK == ArrayData::ArrayKind::kNumKinds,
               "add new kinds here");
 
 #define DISPATCH(entry)                           \
-  { MixedArray::entry,       /* darray */         \
-    BespokeArray::entry,     /* bespoke darray */ \
-    PackedArray::entry,      /* varray */         \
-    BespokeArray::entry,     /* bespoke varray */ \
-    MixedArray::entry,       /* dict */           \
-    BespokeArray::entry,     /* bespoke dict */   \
-    PackedArray::entry,      /* vec */            \
+  { PackedArray::entry,      /* vanilla vec */    \
     BespokeArray::entry,     /* bespoke vec */    \
-    SetArray::entry,         /* keyset */         \
+    MixedArray::entry,       /* vanilla dict */   \
+    BespokeArray::entry,     /* bespoke dict */   \
+    SetArray::entry,         /* vanilla keyset */ \
     BespokeArray::entry,     /* bespoke keyset */ \
   },
 
@@ -407,10 +305,18 @@ const ArrayFunctions g_array_funcs = {
   /*
    * void Release(ArrayData*)
    *
-   *   Free memory associated with an array.  Generally called when
-   *   the reference count on an array drops to zero.
+   *   Free the memory associated with a refcounted array. Generally called
+   *   when the reference count on the array drops to zero.
    */
   DISPATCH(Release)
+
+  /*
+   * void ReleaseUncounted(ArrayData*)
+   *
+   *   Free the memory associated with an uncounted array. Generally called
+   *   when the reference count on the array drops to "uncounted zero".
+   */
+  DISPATCH(ReleaseUncounted)
 
   /*
    * TypedValue NvGetInt(const ArrayData*, int64_t key)
@@ -639,28 +545,22 @@ const ArrayFunctions g_array_funcs = {
   DISPATCH(Pop)
 
   /*
-   * ArrayData* ToDVArray(ArrayData*, bool copy)
-   *
-   *   Convert the given {vec, dict} to a {varray, darray}. If copy is false,
-   *   this conversion may be done in place.
-   */
-  DISPATCH(ToDVArray)
-
-  /*
-   * ArrayData* ToHackArr(ArrayData*, bool copy)
-   *
-   *   Convert the given {varray, darray} to a {vec, dict}. If copy is false,
-   *   this conversion may be done in place.
-   */
-  DISPATCH(ToHackArr)
-
-  /*
    * void OnSetEvalScalar(ArrayData*)
    *
    *   Go through an array and call Variant::setEvalScalar on each
    *   value, and make all string keys into static strings.
    */
   DISPATCH(OnSetEvalScalar)
+
+  /*
+   * void MakeUncounted(ArrayData*, DataWalker::PointerMap*, bool hasApcTv)
+   *
+   *   Return a copy of the array where all its contents are converted to
+   *   uncounted values. The caller must confirm that its contents can all be
+   *   converted, e.g. by using DataWalker. If hasApcTv is true, this method
+   *   will colocate an ApcTypedValue right before the array.
+   */
+  DISPATCH(MakeUncounted)
 };
 
 #undef DISPATCH
@@ -692,20 +592,6 @@ bool ArrayData::IsValidKey(const String& k) {
   return IsValidKey(k.get());
 }
 
-ArrayData* ArrayData::Create(TypedValue value) {
-  MixedArrayInit pai(1);
-  pai.append(value);
-  return pai.create();
-}
-
-ArrayData* ArrayData::Create(TypedValue name, TypedValue value) {
-  if (debug) assertForCreate(name);
-
-  ArrayInit init(1, ArrayInit::Map{});
-  init.setValidKey(name, value);
-  return init.create();
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 // reads
 
@@ -713,14 +599,6 @@ ALWAYS_INLINE
 bool ArrayData::EqualHelper(const ArrayData* ad1, const ArrayData* ad2,
                             bool strict) {
   if (ad1 == ad2) return true;
-  if (!ArrayData::dvArrayEqual(ad1, ad2)) {
-    if (checkHACCompare() &&
-        ((ad1->isDArray() && ad2->isNotDVArray()) ||
-         (ad1->isNotDVArray() && ad2->isDArray()))) {
-      raise_hackarr_compat_notice("Comparing plain array and darray");
-    }
-    return false;
-  }
   if (ad1->size() != ad2->size()) return false;
 
   // Prevent circular referenced objects/arrays or deep ones.
@@ -754,16 +632,6 @@ bool ArrayData::EqualHelper(const ArrayData* ad1, const ArrayData* ad2,
 
 ALWAYS_INLINE
 int64_t ArrayData::CompareHelper(const ArrayData* ad1, const ArrayData* ad2) {
-  if (!ArrayData::dvArrayEqual(ad1, ad2)) {
-    if (ad1->isVArray()) throw_varray_compare_exception();
-    if (ad1->isDArray()) throw_darray_compare_exception();
-    if (ad2->isVArray()) throw_varray_compare_exception();
-    if (ad2->isDArray()) throw_darray_compare_exception();
-    always_assert(false);
-  } else if (ad1->isDArray()) {
-    throw_darray_compare_exception();
-  }
-
   auto const size1 = ad1->size();
   auto const size2 = ad2->size();
   if (size1 < size2) return -1;
@@ -833,18 +701,15 @@ bool ArrayData::same(const ArrayData* v2) const {
   assertx(v2);
 
   if (toDataType() != v2->toDataType()) {
-    if (UNLIKELY(checkHACCompare() && v2->isHackArrayType())) {
+    if (UNLIKELY(checkHACCompare())) {
       raiseHackArrCompatArrHackArrCmp();
     }
     return false;
   }
 
-  if (isPHPArrayType() || !bothVanilla(this, v2)) {
-    return Same(this, v2);
-  }
-
-  if (isVecKind())  return PackedArray::VecSame(this, v2);
-  if (isDictKind()) return MixedArray::DictSame(this, v2);
+  if (!bothVanilla(this, v2)) return Same(this, v2);
+  if (isVanillaVec())  return PackedArray::VecSame(this, v2);
+  if (isVanillaDict()) return MixedArray::DictSame(this, v2);
   return SetArray::Same(this, v2);
 }
 
@@ -856,21 +721,16 @@ void ArrayData::getNotFound(int64_t k) const {
 }
 
 void ArrayData::getNotFound(const StringData* k) const {
-  // For varrays and vecs, we throw an InvalidArgumentException
-  if (isVArray() || isVecType()) throwInvalidArrayKeyException(k, this);
+  if (isVecType()) throwInvalidArrayKeyException(k, this);
   throwOOBArrayKeyException(k, this);
 }
 
 const char* ArrayData::kindToString(ArrayKind kind) {
-  std::array<const char*, 10> names = {{
-    "MixedKind",
-    "BespokeDArrayKind",
-    "PackedKind",
-    "BespokeVArrayKind",
-    "DictKind",
-    "BespokeDictKind",
+  std::array<const char*, 6> names = {{
     "VecKind",
     "BespokeVecKind",
+    "DictKind",
+    "BespokeDictKind",
     "KeysetKind",
     "BespokeKeysetKind",
   }};
@@ -881,49 +741,6 @@ const char* ArrayData::kindToString(ArrayKind kind) {
 namespace {
 
 ////////////////////////////////////////////////////////////////////////////////
-
-std::string describeKeyType(const TypedValue* tv) {
-  switch (tv->m_type) {
-  case KindOfUninit:
-  case KindOfNull:             return "null";
-  case KindOfBoolean:          return "bool";
-  case KindOfInt64:            return "int";
-  case KindOfDouble:           return "double";
-  case KindOfPersistentString:
-  case KindOfString:           return "string";
-  case KindOfPersistentVec:
-  case KindOfVec:
-    return val(*tv).parr->isLegacyArray() ? "array" : "vec";
-  case KindOfPersistentDict:
-  case KindOfDict:
-    return val(*tv).parr->isLegacyArray() ? "array" : "dict";
-  case KindOfPersistentKeyset:
-  case KindOfKeyset:           return "keyset";
-
-  // TODO(kshaunak): Fix the messages for dvarrays here.
-  case KindOfPersistentDArray:
-  case KindOfDArray:           return "array";
-  case KindOfPersistentVArray:
-  case KindOfVArray:           return "array";
-
-  case KindOfResource:
-    return tv->m_data.pres->data()->o_getClassName().toCppString();
-
-  case KindOfObject:
-    return tv->m_data.pobj->getClassName().get()->toCppString();
-
-  case KindOfRecord:
-    return tv->m_data.prec->record()->name()->toCppString();
-
-  case KindOfRFunc:           return "rfunc";
-  case KindOfFunc:            return "func";
-  case KindOfClass:           return "class";
-  case KindOfLazyClass:       return "lclass";
-  case KindOfClsMeth:         return "clsmeth";
-  case KindOfRClsMeth:        return "rclsmeth";
-  }
-  not_reached();
-}
 
 std::string describeKeyValue(TypedValue tv) {
   switch (tv.m_type) {
@@ -942,10 +759,6 @@ std::string describeKeyValue(TypedValue tv) {
   case KindOfDict:
   case KindOfPersistentKeyset:
   case KindOfKeyset:
-  case KindOfPersistentDArray:
-  case KindOfDArray:
-  case KindOfPersistentVArray:
-  case KindOfVArray:
   case KindOfResource:
   case KindOfObject:
   case KindOfRFunc:
@@ -968,16 +781,13 @@ void throwInvalidArrayKeyException(const TypedValue* key, const ArrayData* ad) {
   std::pair<const char*, const char*> kind_type = [&]{
     if (ad->isVecType()) return std::make_pair("vec", "int");
     if (ad->isDictType()) return std::make_pair("dict", "int or string");
-    if (ad->isKeysetType()) return std::make_pair("keyset", "int or string");
-    assertx(ad->isPHPArrayType());
-    if (ad->isVArray()) return std::make_pair("varray", "int");
-    if (ad->isDArray()) return std::make_pair("darray", "int or string");
-    return std::make_pair("array", "int or string");
+    assertx(ad->isKeysetType());
+    return std::make_pair("keyset", "int or string");
   }();
   SystemLib::throwInvalidArgumentExceptionObject(
     folly::sformat(
       "Invalid {} key: expected a key of type {}, {} given",
-      kind_type.first, kind_type.second, describeKeyType(key)
+      kind_type.first, kind_type.second, describe_actual_type(key)
     )
   );
 }
@@ -1034,57 +844,25 @@ void raiseHackArrCompatArrHackArrCmp() {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-namespace arrprov_detail {
-
-template<typename SrcArr>
-ArrayData* tagArrProvImpl(ArrayData* ad, const SrcArr* src) {
-  assertx(!RuntimeOption::EvalHackArrDVArrs);
-  assertx(RuntimeOption::EvalArrayProvenance);
-  assertx(ad->hasExactlyOneRef() || !ad->isRefCounted());
-
-  if (!arrprov::arrayWantsTag(ad)) return ad;
-
-  auto const do_tag = [] (ArrayData* ad, arrprov::Tag tag) {
-    if (ad->isStatic()) return tagStaticArr(ad, tag);
-
-    arrprov::setTag(ad, tag);
-    return ad;
-  };
-
-  if (src != nullptr) {
-    if (auto const tag = arrprov::getTag(src)) return do_tag(ad, tag);
-  }
-  if (auto const tag = arrprov::tagFromPC()) return do_tag(ad, tag);
-
-  return ad;
-}
-
-template ArrayData* tagArrProvImpl<ArrayData>(ArrayData*, const ArrayData*);
-template ArrayData* tagArrProvImpl<APCArray>(ArrayData*, const APCArray*);
-
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-ArrayData* ArrayData::toPHPArrayIntishCast(bool copy) {
-  auto const base = toPHPArray(copy);
-  if (isVArray() || isVecType()) return base;
+ArrayData* ArrayData::toDictIntishCast(bool copy) {
+  auto const base = toDict(copy);
+  if (isVecType()) return base;
 
   // Check if we need to intish-cast any string keys.
   int64_t i;
   auto intish = false;
-  IterateKVNoInc(base, [&](TypedValue k, TypedValue) {
+  IterateKV(base, [&](TypedValue k, TypedValue) {
     return intish |= tvIsString(k) && val(k).pstr->isStrictlyInteger(i);
   });
   if (!intish) return base;
 
   if (RO::EvalHackArrCompatIntishCastNotices) {
-    raise_hackarr_compat_notice("triggered IntishCast for toPHPArray");
+    raise_hackarr_compat_notice("triggered IntishCast for toDictIntishCast");
   }
 
   // Create a new, plain PHP array with the casted keys.
   auto result = MixedArrayInit(base->size());
-  IterateKVNoInc(base, [&](TypedValue k, TypedValue v) {
+  IterateKV(base, [&](TypedValue k, TypedValue v) {
     result.setUnknownKey<IntishCast::Cast>(tvAsCVarRef(&k), tvAsCVarRef(&v));
   });
   if (base != this) decRefArr(base);
@@ -1104,7 +882,7 @@ ArrayData* ArrayData::toPHPArrayIntishCast(bool copy) {
   return ad;
 }
 
-bool ArrayData::intishCastKey(const StringData* key, int64_t& i) const {
+bool ArrayData::IntishCastKey(const StringData* key, int64_t& i) {
   if (key->isStrictlyInteger(i)) {
     if (RO::EvalHackArrCompatIntishCastNotices) {
       raise_hackarr_compat_notice("triggered IntishCast for set");
@@ -1116,8 +894,7 @@ bool ArrayData::intishCastKey(const StringData* key, int64_t& i) const {
 
 ArrayData* ArrayData::setLegacyArray(bool copy, bool legacy) {
   assertx(IMPLIES(cowCheck(), copy));
-  assertx(IMPLIES(!RO::EvalHackArrDVArrs, isDVArray()));
-  assertx(IMPLIES(RO::EvalHackArrDVArrs, isDictType() || isVecType()));
+  assertx(isDictType() || isVecType());
 
   if (legacy == isLegacyArray()) return this;
 
@@ -1125,8 +902,7 @@ ArrayData* ArrayData::setLegacyArray(bool copy, bool legacy) {
 
   auto const ad = [&]{
     if (!copy) return this;
-    auto const packed = hasVanillaPackedLayout();
-    return packed ? PackedArray::Copy(this) : MixedArray::Copy(this);
+    return isVanillaVec() ? PackedArray::Copy(this) : MixedArray::Copy(this);
   }();
   ad->setLegacyArrayInPlace(legacy);
   return ad;
@@ -1136,7 +912,6 @@ void ArrayData::setLegacyArrayInPlace(bool legacy) {
   assertx(hasExactlyOneRef());
   if (legacy) {
     m_aux16 |= kLegacyArray;
-    if (RO::EvalArrayProvenance && isVanilla()) arrprov::clearTag(this);
   } else {
     m_aux16 &= ~kLegacyArray;
   }
@@ -1144,66 +919,23 @@ void ArrayData::setLegacyArrayInPlace(bool legacy) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-ArrayData* ArrayData::toDVArrayWithLogging(bool copy) {
-  assertx(isVecType() || isDictType());
-  if (RO::EvalHackArrDVArrs) {
-    if (RO::EvalHackArrDVArrMark) {
-      return setLegacyArray(copy, /*legacy=*/true);
-    }
-    return this;
-  }
-  return toDVArray(copy);
-}
-
-ArrayData* ArrayData::toHackArrWithLogging(bool copy) {
-  assertx(isDVArray());
-  if (isLegacyArray() && RO::EvalHackArrCompatCastMarkedArrayNotices) {
-    raise_hack_arr_compat_cast_marked_array_notice(this);
-  }
-  return toHackArr(copy);
-}
-
-ArrayData* ArrayData::toVArray(bool copy) {
-  assertx(IMPLIES(cowCheck(), copy));
-  if (isVArray()) return this;
-  if (isVecType()) return toDVArrayWithLogging(copy);
-
-  if (empty()) return ArrayData::CreateVArray();
-  VArrayInit init{size()};
-  IterateVNoInc(this, [&](auto v) { init.append(v); });
-  return init.create();
-}
-
-ArrayData* ArrayData::toDArray(bool copy) {
-  assertx(IMPLIES(cowCheck(), copy));
-  if (isDArray()) return this;
-  if (isDictType()) return toDVArrayWithLogging(copy);
-
-  if (empty()) return ArrayData::CreateDArray();
-  DArrayInit init{size()};
-  IterateKVNoInc(this, [&](auto k, auto v) { init.setValidKey(k, v); });
-  return init.create();
-}
-
 ArrayData* ArrayData::toVec(bool copy) {
   assertx(IMPLIES(cowCheck(), copy));
   if (isVecType()) return this;
-  if (isVArray()) return toHackArrWithLogging(copy);
 
   if (empty()) return ArrayData::CreateVec();
   VecInit init{size()};
-  IterateVNoInc(this, [&](auto v) { init.append(v); });
+  IterateV(this, [&](auto v) { init.append(v); });
   return init.create();
 }
 
 ArrayData* ArrayData::toDict(bool copy) {
   assertx(IMPLIES(cowCheck(), copy));
   if (isDictType()) return this;
-  if (isDArray()) return toHackArrWithLogging(copy);
 
   if (empty()) return ArrayData::CreateDict();
   DictInit init{size()};
-  IterateKVNoInc(this, [&](auto k, auto v) { init.setValidKey(k, v); });
+  IterateKV(this, [&](auto k, auto v) { init.setValidKey(k, v); });
   return init.create();
 }
 
@@ -1212,7 +944,7 @@ ArrayData* ArrayData::toKeyset(bool copy) {
   if (isKeysetType()) return this;
   if (empty()) return ArrayData::CreateKeyset();
   KeysetInit init{size()};
-  IterateVNoInc(this, [&](auto v) { init.add(v); });
+  IterateV(this, [&](auto v) { init.add(v); });
   return init.create();
 }
 

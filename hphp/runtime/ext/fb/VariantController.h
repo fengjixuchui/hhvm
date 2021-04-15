@@ -19,7 +19,7 @@
 
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/array-iterator.h"
-#include "hphp/runtime/base/array-provenance.h"
+#include "hphp/runtime/base/bespoke-runtime.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/datatype.h"
 
@@ -27,6 +27,8 @@
 #include "hphp/runtime/ext/fb/FBSerialize/FBSerialize.h"
 
 #include <algorithm>
+#include <utility>
+#include <vector>
 
 namespace HPHP {
 
@@ -43,18 +45,24 @@ inline void mapSetConvertStatic(Array& map, StringData* str, Variant&& v) {
 }
 
 enum class VariantControllerHackArraysMode {
-  // Do not serialize Hack arrays and unserialize as PHP arrays
+  // Serialize vecs and dicts both as dicts. Intish-cast dict keys. This mode
+  // does not preserve types or values, and only exists because vecs and dicts
+  // were once a single PHP array type with the intish-cast behavior.
   OFF,
-  // Do serialize Hack arrays and unserialize as Hack arrays.
-  // Does not support serializing keysets.
+  // Serialize Hack arrays (excluding keysets), and unserialize them as the
+  // same Hack arrays, except for one case: unserialize marked vecs as dicts.
   ON,
   // (Un)serialize varrays / darrays: this will accept / emit Hack arrays if
-  // HackArrDVArrs is set.
+  // HackArrDVArrs is set. Intish-cast dict keys.
   MIGRATORY,
-  // Do serialize Hack arrays and unserialize as Hack arrays.
-  // Supports serializing keysets.
+  // Serialize Hack arrays (including keysets), and unserialize them as the
+  // same Hack arrays, except for one case: unserialize marked vecs as dicts.
   ON_AND_KEYSET,
-
+  // The "best" mode, with the fewest number of legacy array behaviors.
+  //
+  // Serialize Hack arrays (including keysets), and unserialize them as the
+  // same Hack array in all cases. Ignore legacy array marks.
+  POST_MIGRATION,
 };
 
 /**
@@ -62,11 +70,12 @@ enum class VariantControllerHackArraysMode {
  */
 template <VariantControllerHackArraysMode HackArraysMode>
 struct VariantControllerImpl {
-  typedef Variant VariantType;
-  typedef Array MapType;
-  typedef Array VectorType;
-  typedef Array SetType;
-  typedef String StringType;
+  using VariantType = Variant;
+  using MapType = Array;
+  using VectorType = Array;
+  using SetType = Array;
+  using StringType = String;
+  using StructHandle = RuntimeStruct*;
 
   // variant accessors
   static HPHP::serialize::Type type(const_variant_ref obj) {
@@ -82,67 +91,48 @@ struct VariantControllerImpl {
       case KindOfPersistentString:
       case KindOfString:     return HPHP::serialize::Type::STRING;
       case KindOfObject:     return HPHP::serialize::Type::OBJECT;
-      case KindOfPersistentDArray:
-      case KindOfDArray:
-      case KindOfPersistentVArray:
-      case KindOfVArray:
         if (HackArraysMode == VariantControllerHackArraysMode::MIGRATORY) {
-          return obj.asCArrRef().isHAMSafeVArray()
+          return obj.asCArrRef().isVec()
             ? HPHP::serialize::Type::LIST
             : HPHP::serialize::Type::MAP;
         }
         return HPHP::serialize::Type::MAP;
+
       case KindOfPersistentDict:
       case KindOfDict: {
-        if (RO::EvalHackArrDVArrs) return HPHP::serialize::Type::MAP;
-        if (HackArraysMode == VariantControllerHackArraysMode::ON ||
-            HackArraysMode == VariantControllerHackArraysMode::ON_AND_KEYSET) {
-          return HPHP::serialize::Type::MAP;
-        }
-        if (RuntimeOption::EvalHackArrCompatFBSerializeHackArraysNotices) {
-          raise_hackarr_compat_notice(
-              "attempted to fb_serialize dict without "
-              "FB_SERIALIZE_HACK_ARRAYS flag");
-        }
-        throw HPHP::serialize::HackArraySerializeError{};
+        return HPHP::serialize::Type::MAP;
       }
+
       case KindOfPersistentVec:
       case KindOfVec: {
-        if (RO::EvalHackArrDVArrs) {
-          switch (HackArraysMode) {
-            case VariantControllerHackArraysMode::OFF:
-              return HPHP::serialize::Type::MAP;
-            case VariantControllerHackArraysMode::MIGRATORY:
-              return HPHP::serialize::Type::LIST;
-            case VariantControllerHackArraysMode::ON:
-            case VariantControllerHackArraysMode::ON_AND_KEYSET: {
-              auto const legacy = obj.rval().val().parr->isLegacyArray();
-              return legacy ? HPHP::serialize::Type::MAP
-                            : HPHP::serialize::Type::LIST;
-            }
+        switch (HackArraysMode) {
+          case VariantControllerHackArraysMode::OFF:
+            return HPHP::serialize::Type::MAP;
+          case VariantControllerHackArraysMode::MIGRATORY:
+          case VariantControllerHackArraysMode::POST_MIGRATION:
+            return HPHP::serialize::Type::LIST;
+          case VariantControllerHackArraysMode::ON:
+          case VariantControllerHackArraysMode::ON_AND_KEYSET: {
+            auto const legacy = obj.rval().val().parr->isLegacyArray();
+            return legacy ? HPHP::serialize::Type::MAP
+                          : HPHP::serialize::Type::LIST;
           }
         }
-        if (HackArraysMode == VariantControllerHackArraysMode::ON ||
-            HackArraysMode == VariantControllerHackArraysMode::ON_AND_KEYSET) {
-          return HPHP::serialize::Type::LIST;
-        }
-        if (RuntimeOption::EvalHackArrCompatFBSerializeHackArraysNotices) {
-          raise_hackarr_compat_notice(
-              "attempted to fb_serialize vec without "
-              "FB_SERIALIZE_HACK_ARRAYS flag");
-        }
-        throw HPHP::serialize::HackArraySerializeError{};
       }
+
       case KindOfPersistentKeyset:
       case KindOfKeyset:
-        if (HackArraysMode == VariantControllerHackArraysMode::ON_AND_KEYSET) {
+        if constexpr (
+            HackArraysMode == VariantControllerHackArraysMode::ON_AND_KEYSET ||
+            HackArraysMode == VariantControllerHackArraysMode::POST_MIGRATION) {
           return HPHP::serialize::Type::SET;
         }
-
         throw HPHP::serialize::KeysetSerializeError{};
 
       case KindOfClsMeth:
-        if (HackArraysMode == VariantControllerHackArraysMode::MIGRATORY) {
+        if constexpr (
+            HackArraysMode == VariantControllerHackArraysMode::MIGRATORY ||
+            HackArraysMode == VariantControllerHackArraysMode::POST_MIGRATION) {
           return HPHP::serialize::Type::LIST;
         } else {
           return HPHP::serialize::Type::MAP;
@@ -184,48 +174,24 @@ struct VariantControllerImpl {
 
   // map methods
   static MapType createMap() {
-    switch (HackArraysMode) {
-      case VariantControllerHackArraysMode::ON:
-      case VariantControllerHackArraysMode::ON_AND_KEYSET:
-        return empty_dict_array();
-      case VariantControllerHackArraysMode::OFF:
-        return empty_darray();
-      case VariantControllerHackArraysMode::MIGRATORY:
-        return empty_darray();
-    }
+    return Array::CreateDict();
   }
   static MapType createMap(DArrayInit&& map) {
-    auto arrayData = map.toArray().detach();
-    switch (HackArraysMode) {
-      case VariantControllerHackArraysMode::ON:
-      case VariantControllerHackArraysMode::ON_AND_KEYSET:
-        return Array::attach(arrayData->toDict(false));
-      case VariantControllerHackArraysMode::OFF:
-        return Array::attach(arrayData->toDArray(false));
-      case VariantControllerHackArraysMode::MIGRATORY:
-        return Array::attach(arrayData->toDArray(false));
-    }
-    not_reached(); // not sure why I need this here and not in createMap()
+    return map.toArray();
+  }
+  static MapType createMap(StructDictInit&& map) {
+    return map.toArray();
   }
   static DArrayInit reserveMap(size_t n) {
     DArrayInit res(n, CheckAllocation{});
     return res;
   }
+  static StructDictInit reserveMap(StructHandle handle, size_t n) {
+    StructDictInit res(handle, n);
+    return res;
+  }
   static MapType getStaticEmptyMap() {
-    ArrayData* empty;
-    switch (HackArraysMode) {
-      case VariantControllerHackArraysMode::ON:
-      case VariantControllerHackArraysMode::ON_AND_KEYSET:
-        empty = ArrayData::CreateDict();
-        break;
-      case VariantControllerHackArraysMode::OFF:
-        empty = ArrayData::CreateDArray();
-        break;
-      case VariantControllerHackArraysMode::MIGRATORY:
-        empty = ArrayData::CreateDArray();
-        break;
-    }
-    return MapType(empty);
+    return Array::CreateDict();
   }
   static HPHP::serialize::Type mapKeyType(const Variant& k) {
     return type(k);
@@ -240,6 +206,7 @@ struct VariantControllerImpl {
       switch (HackArraysMode) {
         case VariantControllerHackArraysMode::ON:
         case VariantControllerHackArraysMode::ON_AND_KEYSET:
+        case VariantControllerHackArraysMode::POST_MIGRATION:
           return IntishCast::None;
         case VariantControllerHackArraysMode::OFF:
         case VariantControllerHackArraysMode::MIGRATORY:
@@ -257,6 +224,10 @@ struct VariantControllerImpl {
   static void mapSet(DArrayInit& map, Key&& k, VariantType&& v) {
     map.setUnknownKey<IntishCast::Cast>(std::move(k), std::move(v));
   }
+  static void mapSet(StructDictInit& map, size_t idx, const StringType& k,
+                     VariantType&& v) {
+    map.setIntishCast(idx, k, std::move(v));
+  }
   static int64_t mapSize(const MapType& map) { return map.size(); }
   static ArrayIter mapIterator(const MapType& map) {
     return ArrayIter(map);
@@ -273,11 +244,11 @@ struct VariantControllerImpl {
     switch (HackArraysMode) {
       case VariantControllerHackArraysMode::ON:
       case VariantControllerHackArraysMode::ON_AND_KEYSET:
+      case VariantControllerHackArraysMode::MIGRATORY:
+      case VariantControllerHackArraysMode::POST_MIGRATION:
         return empty_vec_array();
       case VariantControllerHackArraysMode::OFF:
-        return empty_darray();
-      case VariantControllerHackArraysMode::MIGRATORY:
-        return empty_varray();
+        return empty_dict_array();
     }
   }
   static int64_t vectorSize(const VectorType& vec) {
@@ -353,20 +324,12 @@ struct VariantControllerImpl {
     return str.data();
   }
 
-  /* called by FBSerializer before serializing each item,
-     useful to instrument the serialization process if needed */
-  ALWAYS_INLINE
-  static void traceSerialization(const_variant_ref thing) {
-    if constexpr (
-        HackArraysMode != VariantControllerHackArraysMode::ON &&
-        HackArraysMode != VariantControllerHackArraysMode::ON_AND_KEYSET) {
-      return;
-    }
-
-    if (thing.isArray() && thing.getArrayData()->isVArray()) {
-      maybe_raise_array_serialization_notice(SerializationSite::FBSerialize,
-                                             thing.getArrayData());
-    }
+  static StructHandle registerStruct(
+      const String& stableIdentifier,
+      const std::vector<std::pair<size_t, StringType>>& fields) {
+    auto const runtimeStruct =
+      RuntimeStruct::registerRuntimeStruct(stableIdentifier, fields);
+    return runtimeStruct;
   }
 };
 
@@ -378,6 +341,9 @@ using VariantControllerUsingHackArraysAndKeyset =
   VariantControllerImpl<VariantControllerHackArraysMode::ON_AND_KEYSET>;
 using VariantControllerUsingVarrayDarray =
   VariantControllerImpl<VariantControllerHackArraysMode::MIGRATORY>;
+using VariantControllerPostHackArrayMigration =
+  VariantControllerImpl<VariantControllerHackArraysMode::POST_MIGRATION>;
+
 }
 
 

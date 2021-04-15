@@ -192,9 +192,15 @@ void emitEntryAssertions(irgen::IRGS& irgs, const Func* func, SrcKey sk) {
   auto const numLocs = func->numLocals();
   auto loc = func->numParams();
   if (func->hasReifiedGenerics()) {
-    // First non parameter local will specially set
-    auto const t = RuntimeOption::EvalHackArrDVArrs ? TVec : TArr;
-    irgen::assertTypeLocation(irgs, Location::Local { loc }, t);
+    // The next non-parameter local contains the reified generics.
+    assertx(func->reifiedGenericsLocalId() == loc);
+    irgen::assertTypeLocation(irgs, Location::Local { loc }, TVec);
+    loc++;
+  }
+  if (func->hasCoeffectsLocal()) {
+    // The next non-parameter local contains the coeffects.
+    assertx(func->coeffectsLocalId() == loc);
+    irgen::assertTypeLocation(irgs, Location::Local { loc }, TInt);
     loc++;
   }
   for (; loc < numLocs; ++loc) {
@@ -599,7 +605,7 @@ std::unique_ptr<IRUnit> irGenRegion(const RegionDesc& region,
                                     std::make_unique<AnnotationData>());
     unit->initLogEntry(context.initSrcKey.func());
     irgen::IRGS irgs{*unit, &region, budgetBCInstrs, &retryContext};
-    irgen::defineStack(irgs, region.entry()->initialSpOffset());
+    irgen::defineFrameAndStack(irgs, region.entry()->initialSpOffset());
     tries++;
 
     // Set the profCount of the IRUnit's entry block, which is created a
@@ -779,7 +785,7 @@ std::unique_ptr<IRUnit> irGenInlineRegion(const TransContext& ctx,
     // account for the locals, iters, and slots, etc.
     // TODO: make inlining cost calculation caller agnostic
     auto const bcSPOff = FPInvOffset{ctx.initSrcKey.func()->numSlotsInFrame()};
-    irgen::defineStack(irgs, bcSPOff);
+    irgen::defineFrameAndStack(irgs, bcSPOff);
     irgs.inlineState.conjure = true;
     if (hasTransID(entryBID)) {
       irgs.profTransIDs.clear();

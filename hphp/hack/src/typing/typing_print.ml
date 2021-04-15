@@ -20,6 +20,7 @@ module Reason = Typing_reason
 module TySet = Typing_set
 module Cls = Decl_provider.Class
 module Nast = Aast
+module ITySet = Internal_type_set
 
 let strip_ns id = id |> Utils.strip_ns |> Hh_autoimport.reverse_type
 
@@ -226,8 +227,8 @@ module Full = struct
     Concat
       [
         text "(";
-        ( if get_ft_is_coroutine ft then
-          text "coroutine" ^^ Space
+        ( if get_ft_readonly_this ft then
+          text "readonly "
         else
           Nothing );
         text "function";
@@ -641,36 +642,44 @@ module Full = struct
     |> Libhackfmt.format_doc_unbroken format_env
     |> String.strip
 
+  (* Print a suffix for type parameters in typ that have constraints
+   * If the type itself is a type parameter with a single constraint, just
+   * represent this as `as t` or `super t`, otherwise use full `where` syntax
+   *)
   let constraints_for_type to_doc env typ =
     let tparams = SSet.elements (Env.get_tparams env typ) in
     let constraints = List.concat_map tparams (get_constraints_on_tparam env) in
-    if List.is_empty constraints then
-      None
-    else
-      Some
-        (Concat
-           [
-             text "where";
-             Space;
-             WithRule
-               ( Rule.Parental,
-                 list_sep
-                   comma_sep
-                   begin
-                     fun (tparam, ck, typ) ->
-                     Concat
-                       [
-                         text tparam;
-                         tparam_constraint
-                           ~ty:locl_ty
-                           to_doc
-                           ISet.empty
-                           env
-                           (ck, typ);
-                       ]
-                   end
-                   constraints );
-           ])
+    let (_, typ) = Env.expand_type env typ in
+    match (get_node typ, constraints) with
+    | (_, []) -> Nothing
+    | (Tgeneric (tparam, []), [(tparam', ck, typ)])
+      when String.equal tparam tparam' ->
+      tparam_constraint ~ty:locl_ty to_doc ISet.empty env (ck, typ)
+    | _ ->
+      Concat
+        [
+          Newline;
+          text "where";
+          Space;
+          WithRule
+            ( Rule.Parental,
+              list_sep
+                comma_sep
+                begin
+                  fun (tparam, ck, typ) ->
+                  Concat
+                    [
+                      text tparam;
+                      tparam_constraint
+                        ~ty:locl_ty
+                        to_doc
+                        ISet.empty
+                        env
+                        (ck, typ);
+                    ]
+                end
+                constraints );
+        ]
 
   let to_string_rec env n x =
     locl_ty Doc.text (ISet.add n ISet.empty) env x
@@ -726,14 +735,12 @@ module Full = struct
         | ({ type_ = Property _; name; _ }, _)
         | ({ type_ = XhpLiteralAttr _; name; _ }, _)
         | ({ type_ = ClassConst _; name; _ }, _)
-        | ({ type_ = GConst; name; _ }, _) ->
+        | ({ type_ = GConst; name; _ }, _)
+        | ({ type_ = EnumAtom _; name; _ }, _) ->
           Concat [ty text_strip_ns ISet.empty env x; Space; text_strip_ns name]
         | _ -> ty text_strip_ns ISet.empty env x)
     in
-    let constraints =
-      constraints_for_type text_strip_ns env x
-      |> Option.value_map ~default:Nothing ~f:(fun x -> Concat [Newline; x])
-    in
+    let constraints = constraints_for_type text_strip_ns env x in
     Concat [prefix; body; constraints]
     |> Libhackfmt.format_doc format_env
     |> String.strip
@@ -905,9 +912,7 @@ module Json = struct
   let rec from_type : env -> locl_ty -> json =
    fun env ty ->
     (* Helpers to construct fields that appear in JSON rendering of type *)
-    let kind p k =
-      [("src_pos", Pos.json (Pos.to_absolute p)); ("kind", JSON_String k)]
-    in
+    let kind p k = [("src_pos", Pos_or_decl.json p); ("kind", JSON_String k)] in
     let args tys = [("args", JSON_Array (List.map tys (from_type env)))] in
     let typ ty = [("type", from_type env ty)] in
     let result ty = [("result", from_type env ty)] in
@@ -990,12 +995,7 @@ module Json = struct
     | (_, Tintersection [ty]) -> from_type env ty
     | (p, Tintersection tyl) -> obj @@ kind p "intersection" @ args tyl
     | (p, Tfun ft) ->
-      let fun_kind p =
-        if get_ft_is_coroutine ft then
-          kind p "coroutine"
-        else
-          kind p "function"
-      in
+      let fun_kind p = kind p "function" in
       let callconv cc =
         [("callConvention", JSON_String (param_mode_to_string cc))]
       in
@@ -1250,12 +1250,12 @@ module Json = struct
             | Some class_ty -> Cls.pos class_ty
             | None ->
               (* Class may not exist (such as in non-strict modes). *)
-              Pos.none
+              Pos_or_decl.none
           in
           get_array "args" (json, keytrace) >>= fun (args, _args_keytrace) ->
           aux_args args ~keytrace >>= fun tyl ->
           (* NB: "class" could have come from either a `Tapply` or a `Tclass`. Right
-      now, we always return a `Tclass`. *)
+           * now, we always return a `Tclass`. *)
           ty (Tclass ((class_pos, name), Nonexact, tyl))
         | "object" -> ty Tobject
         | "shape" ->
@@ -1271,8 +1271,8 @@ module Json = struct
             get_val "name" (field_json, keytrace)
             >>= fun (name, name_keytrace) ->
             (* We don't need position information for shape field names. They're
-        only used for error messages and the like. *)
-            let dummy_pos = Pos.none in
+             * only used for error messages and the like. *)
+            let dummy_pos = Pos_or_decl.none in
             begin
               match name with
               | Hh_json.JSON_Number name ->
@@ -1312,7 +1312,7 @@ module Json = struct
           >>= fun fields ->
           if is_array then
             (* We don't have enough information to perfectly reconstruct shape-like
-        arrays. We're missing the keys in the shape map of the shape fields. *)
+             * arrays. We're missing the keys in the shape map of the shape fields. *)
             not_supported
               ~message:"Cannot deserialize shape-like array type"
               ~keytrace
@@ -1336,8 +1336,7 @@ module Json = struct
         | "intersection" ->
           get_array "args" (json, keytrace) >>= fun (args, keytrace) ->
           aux_args args ~keytrace >>= fun tyl -> ty (Tintersection tyl)
-        | ("function" | "coroutine") as kind ->
-          let _ft_is_coroutine = String.equal kind "coroutine" in
+        | "function" ->
           get_array "params" (json, keytrace)
           >>= fun (params, params_keytrace) ->
           let params =
@@ -1371,10 +1370,9 @@ module Json = struct
                         ~ifc_external:false
                         ~ifc_can_call:false
                         ~is_atom:false
-                        ~readonly:false
-                        ~const_function:false;
+                        ~readonly:false;
                     (* Dummy values: these aren't currently serialized. *)
-                    fp_pos = Pos.none;
+                    fp_pos = Pos_or_decl.none;
                     fp_name = None;
                   })
           in
@@ -1385,7 +1383,8 @@ module Json = struct
             (Tfun
                {
                  ft_params;
-                 ft_implicit_params = { capability = CapDefaults Pos.none };
+                 ft_implicit_params =
+                   { capability = CapDefaults Pos_or_decl.none };
                  ft_ret = { et_type = ft_ret; et_enforced = Unenforced };
                  (* Dummy values: these aren't currently serialized. *)
                  ft_arity = Fstandard;
@@ -1458,8 +1457,8 @@ module PrintClass = struct
     let contents = SSet.fold (fun x acc -> x ^ " " ^ acc) s "" in
     Printf.sprintf "Set( %s)" contents
 
-  let pos p =
-    let (line, start, end_) = Pos.info_pos p in
+  let pos_or_decl p =
+    let (line, start, end_) = Pos_or_decl.line_start_end_columns p in
     Printf.sprintf "(line %d: chars %d-%d)" line start end_
 
   let class_kind = function
@@ -1496,7 +1495,7 @@ module PrintClass = struct
         "<" ^ tparam_list ctx params ^ ">"
     in
     variance var
-    ^ pos position
+    ^ pos_or_decl position
     ^ " "
     ^ name
     ^ params_string
@@ -1561,6 +1560,7 @@ module PrintClass = struct
         ttc_synthesized = synthetic;
         ttc_name = tc_name;
         ttc_as_constraint = as_constraint;
+        ttc_super_constraint = super_constraint;
         ttc_type = tc_type;
         ttc_origin = origin;
         ttc_enforceable = (_, enforceable);
@@ -1574,6 +1574,11 @@ module PrintClass = struct
       | None -> ""
       | Some x -> " as " ^ ty x
     in
+    let super_constraint =
+      match super_constraint with
+      | None -> ""
+      | Some x -> " super " ^ ty x
+    in
     let type_ =
       match tc_type with
       | None -> ""
@@ -1581,6 +1586,7 @@ module PrintClass = struct
     in
     name
     ^ as_constraint
+    ^ super_constraint
     ^ type_
     ^ " (origin:"
     ^ origin
@@ -1639,7 +1645,7 @@ module PrintClass = struct
         acc ^ Full.to_string_decl ctx x ^ ", ")
 
   let class_type ctx c =
-    let tenv = Typing_env.empty ctx (Pos.filename (Cls.pos c)) None in
+    let tenv = Typing_env.empty ctx Relative_path.default None in
     let tc_need_init = bool (Cls.need_init c) in
     let tc_members_fully_known = bool (Cls.members_fully_known c) in
     let tc_abstract = bool (Cls.abstract c) in
@@ -1736,7 +1742,7 @@ module PrintTypedef = struct
         | Some constr -> Full.to_string_decl ctx constr
       in
       let ty_s = Full.to_string_decl ctx td_type in
-      let pos_s = PrintClass.pos td_pos in
+      let pos_s = PrintClass.pos_or_decl td_pos in
       "ty: "
       ^ ty_s
       ^ "\n"
@@ -1805,9 +1811,9 @@ let fun_type ctx f = Full.fun_to_string ctx f
 let typedef ctx td = PrintTypedef.typedef ctx td
 
 let constraints_for_type env ty =
-  Full.constraints_for_type Doc.text env ty
-  |> Option.map ~f:(Libhackfmt.format_doc_unbroken Full.format_env)
-  |> Option.map ~f:String.strip
+  Full.constraints_for_type Full.text_strip_ns env ty
+  |> Libhackfmt.format_doc_unbroken Full.format_env
+  |> String.strip
 
 let class_kind c_kind final = ErrorString.class_kind c_kind final
 

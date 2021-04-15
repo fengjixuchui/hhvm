@@ -139,7 +139,7 @@ let test_sqlite_plus_local (harness : Test_harness.t) : bool =
   let s = Relative_path.Set.empty in
   let s = Relative_path.Set.add s bar1path in
   let s = Relative_path.Set.add s foo3path in
-  let sienv = SymbolIndex.remove_files ~sienv ~paths:s in
+  let sienv = SymbolIndexCore.remove_files ~sienv ~paths:s in
   Hh_logger.log "Removed files";
 
   (* Two of these have been removed! *)
@@ -162,7 +162,7 @@ let test_sqlite_plus_local (harness : Test_harness.t) : bool =
     (FileInfo.File (FileInfo.Class, bar1path), "\\NoBigTrait")
   in
   let some_long_function_name_id =
-    (FileInfo.File (FileInfo.Class, foo3path), "\\some_long_function_name")
+    (FileInfo.File (FileInfo.Fun, foo3path), "\\some_long_function_name")
   in
   let bar1fileinfo =
     {
@@ -190,8 +190,8 @@ let test_sqlite_plus_local (harness : Test_harness.t) : bool =
   in
   let changelist =
     [
-      (bar1path, Full bar1fileinfo, TypeChecker);
-      (foo3path, Full foo3fileinfo, TypeChecker);
+      (bar1path, bar1fileinfo, TypeChecker);
+      (foo3path, foo3fileinfo, TypeChecker);
     ]
   in
   let init_id = Random_id.short_string () in
@@ -202,7 +202,7 @@ let test_sqlite_plus_local (harness : Test_harness.t) : bool =
       ServerConfig.default_config
   in
   let ctx = Provider_utils.ctx_from_server_env env in
-  let sienv = SymbolIndex.update_files ~ctx ~sienv ~paths:changelist in
+  let sienv = SymbolIndexCore.update_files ~ctx ~sienv ~paths:changelist in
   let n = LocalSearchService.count_local_fileinfos sienv in
   Hh_logger.log "Added back; local search service now contains %d files" n;
 

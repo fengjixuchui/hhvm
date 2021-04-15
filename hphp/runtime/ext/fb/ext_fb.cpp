@@ -57,6 +57,7 @@ namespace HPHP {
 const int64_t k_FB_SERIALIZE_HACK_ARRAYS = 1<<1;
 const int64_t k_FB_SERIALIZE_VARRAY_DARRAY = 1<<2;
 const int64_t k_FB_SERIALIZE_HACK_ARRAYS_AND_KEYSETS = 1<<3;
+const int64_t k_FB_SERIALIZE_POST_HACK_ARRAY_MIGRATION = 1<<4;
 
 // fb_compact_serialize options
 const int64_t FB_COMPACT_SERIALIZE_FORCE_PHP_ARRAYS = 1 << 0;
@@ -110,7 +111,17 @@ enum TType {
 
 Variant HHVM_FUNCTION(fb_serialize, const Variant& thing, int64_t options) {
   try {
-    if (options & k_FB_SERIALIZE_HACK_ARRAYS) {
+    if (options & k_FB_SERIALIZE_POST_HACK_ARRAY_MIGRATION) {
+      size_t len = HPHP::serialize
+        ::FBSerializer<VariantControllerPostHackArrayMigration>
+        ::serializedSize(thing);
+      String s(len, ReserveString);
+      HPHP::serialize
+        ::FBSerializer<VariantControllerPostHackArrayMigration>
+        ::serialize(thing, s.mutableData());
+      s.setSize(len);
+      return s;
+    } else if (options & k_FB_SERIALIZE_HACK_ARRAYS) {
       size_t len = HPHP::serialize
         ::FBSerializer<VariantControllerUsingHackArrays>
         ::serializedSize(thing);
@@ -189,7 +200,13 @@ Variant fb_unserialize(const char* str,
                        bool& success,
                        int64_t options) {
   try {
-    if (options & k_FB_SERIALIZE_HACK_ARRAYS) {
+    if (options & k_FB_SERIALIZE_POST_HACK_ARRAY_MIGRATION) {
+      auto res = HPHP::serialize
+        ::FBUnserializer<VariantControllerPostHackArrayMigration>
+        ::unserialize(folly::StringPiece(str, len));
+      success = true;
+      return res;
+    } else if (options & k_FB_SERIALIZE_HACK_ARRAYS) {
       auto res = HPHP::serialize
         ::FBUnserializer<VariantControllerUsingHackArrays>
         ::unserialize(folly::StringPiece(str, len));
@@ -391,8 +408,7 @@ static bool fb_compact_serialize_is_list(
     const Array& arr, int64_t& index_limit, int64_t options) {
   index_limit = arr->size();
   auto const dt = arr->toDataType();
-  assertx(isVecOrVArrayType(dt) || isDictOrDArrayType(dt));
-  auto const is_php_array = isPHPArrayType(dt);
+  assertx(isVecType(dt) || isDictType(dt));
 
   // fb_compact_serialize has slightly different formats for dicts and darrays,
   // and for vecs and varrays. We can address these format differences either
@@ -400,15 +416,11 @@ static bool fb_compact_serialize_is_list(
   auto const force_legacy_format =
     (options & FB_COMPACT_SERIALIZE_FORCE_PHP_ARRAYS) ||
     arr->isLegacyArray();
-  if (!force_legacy_format && is_php_array) {
-    maybe_raise_array_serialization_notice(
-      SerializationSite::FBCompactSerialize, arr.get());
-  }
 
-  if (isVecOrVArrayType(dt)) {
+  if (isVecType(dt)) {
     // Encode empty vecs as lists and empty varrays as maps. It doesn't affect
     // the encoding size or the decoding result so it doesn't matter too much.
-    return !arr->empty() || !(force_legacy_format || is_php_array);
+    return !arr->empty() || !force_legacy_format;
   }
 
   int64_t max_index = 0;
@@ -432,7 +444,7 @@ static bool fb_compact_serialize_is_list(
   }
 
   index_limit = max_index + 1;
-  return force_legacy_format || is_php_array;
+  return force_legacy_format;
 }
 
 static int fb_compact_serialize_variant(
@@ -536,10 +548,6 @@ static int fb_compact_serialize_variant(
       return 0;
     }
 
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
     case KindOfPersistentDict:
     case KindOfDict:
     case KindOfPersistentVec:
@@ -759,7 +767,7 @@ int fb_compact_unserialize_from_buffer(
 
     case FB_CS_VECTOR:
     {
-      Array arr = Array::CreateVArray();
+      Array arr = Array::CreateVec();
       while (p < n && buf[p] != (char)(kCodePrefix | FB_CS_STOP)) {
         Variant value;
         int err =
@@ -780,7 +788,7 @@ int fb_compact_unserialize_from_buffer(
 
     case FB_CS_LIST_MAP:
     {
-      Array arr = Array::CreateDArray();
+      Array arr = Array::CreateDict();
       int64_t i = 0;
       while (p < n && buf[p] != (char)(kCodePrefix | FB_CS_STOP)) {
         if (buf[p] == (char)(kCodePrefix | FB_CS_SKIP)) {
@@ -807,7 +815,7 @@ int fb_compact_unserialize_from_buffer(
 
     case FB_CS_MAP:
     {
-      Array arr = Array::CreateDArray();
+      Array arr = Array::CreateDict();
       while (p < n && buf[p] != (char)(kCodePrefix | FB_CS_STOP)) {
         Variant key;
         int err = fb_compact_unserialize_from_buffer(key, buf, n, p, depth + 1);
@@ -1298,7 +1306,6 @@ struct FBExtension : Extension {
 
   void moduleInit() override {
     HHVM_RC_BOOL_SAME(HHVM_FACEBOOK);
-    HHVM_RC_BOOL(HHVM_ONE_BIT_REFCOUNT, one_bit_refcount);
     HHVM_RC_INT_SAME(FB_UNSERIALIZE_NONSTRING_VALUE);
     HHVM_RC_INT_SAME(FB_UNSERIALIZE_UNEXPECTED_END);
     HHVM_RC_INT_SAME(FB_UNSERIALIZE_UNRECOGNIZED_OBJECT_TYPE);
@@ -1309,6 +1316,8 @@ struct FBExtension : Extension {
     HHVM_RC_INT(FB_SERIALIZE_VARRAY_DARRAY, k_FB_SERIALIZE_VARRAY_DARRAY);
     HHVM_RC_INT(FB_SERIALIZE_HACK_ARRAYS_AND_KEYSETS,
                 k_FB_SERIALIZE_HACK_ARRAYS_AND_KEYSETS);
+    HHVM_RC_INT(FB_SERIALIZE_POST_HACK_ARRAY_MIGRATION,
+                k_FB_SERIALIZE_POST_HACK_ARRAY_MIGRATION);
 
     HHVM_RC_INT_SAME(FB_COMPACT_SERIALIZE_FORCE_PHP_ARRAYS);
 

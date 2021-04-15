@@ -15,7 +15,7 @@ use hhas_coeffects::HhasCoeffects;
 use hhas_function_rust::{self as hhas_function, HhasFunction};
 use hhas_pos_rust::Span;
 use hhbc_id_rust::{self as hhbc_id, Id};
-use instruction_sequence_rust::{instr, Result};
+use instruction_sequence::{instr, Result};
 use naming_special_names_rust::user_attributes as ua;
 use ocamlrep::rc::RcOc;
 use options::HhvmFlags;
@@ -126,6 +126,11 @@ pub fn emit_function<'a>(e: &mut Emitter, f: &'a tast::Fun_) -> Result<Vec<HhasF
             EmitBodyFlags::SKIP_AWAITABLE,
             f.fun_kind == ast_defs::FunKind::FAsync,
         );
+        body_flags.set(
+            EmitBodyFlags::HAS_COEFFECTS_LOCAL,
+            coeffects.has_coeffects_local(),
+        );
+
         emit_body::emit_body(
             e,
             RcOc::clone(&f.namespace),

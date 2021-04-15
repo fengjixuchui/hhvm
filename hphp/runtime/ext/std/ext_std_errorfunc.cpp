@@ -90,7 +90,7 @@ ResourceHdr* debug_backtrace_fast() {
  * class name (if in class context) where the "caller" called the "callee".
  */
 Array HHVM_FUNCTION(hphp_debug_caller_info) {
-  Array ret = empty_darray();
+  Array ret = empty_dict_array();
   bool skipped = false;
   walkStack([&] (const ActRec* fp, Offset pc) {
     if (!skipped && fp->func()->isSkipFrame()) return false;
@@ -379,7 +379,7 @@ Array HHVM_FUNCTION(SL_extract_trace, const Resource& handle) {
     raise_invalid_argument_warning(
         "__SystemLib\\extract_trace() expects parameter 1 "
         "to be a CompactTrace resource.");
-    return Array::CreateVArray();
+    return Array::CreateVec();
   }
 
   return bt->extract();

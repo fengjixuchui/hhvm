@@ -42,12 +42,13 @@ let () =
         shm_min_avail = 0;
         log_level = 0;
         sample_rate = 0.0;
+        compression = 0;
       }
   in
   let workers =
     MultiWorker.make
       ?call_wrapper:None
-      ~use_worker_clones:true
+      ~longlived_workers:false
       ~saved_state:()
       ~entry
       ~nbr_procs:num_workers

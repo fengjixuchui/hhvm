@@ -20,7 +20,7 @@
 #include "hphp/runtime/base/bespoke/logging-profile.h"
 #include "hphp/runtime/base/bespoke/monotype-dict.h"
 #include "hphp/runtime/base/bespoke/monotype-vec.h"
-#include "hphp/runtime/base/bespoke/struct-array.h"
+#include "hphp/runtime/base/bespoke/struct-dict.h"
 #include "hphp/runtime/base/packed-array-defs.h"
 #include "hphp/runtime/vm/jit/irgen.h"
 #include "hphp/runtime/vm/jit/irgen-internal.h"
@@ -532,6 +532,7 @@ ConcreteLayout::ConcreteLayout(LayoutIndex index,
     entry = vtable->fn##Name;                               \
   }
   BESPOKE_LAYOUT_FUNCTIONS(ArrayData)
+  BESPOKE_SYNTHESIZED_LAYOUT_FUNCTIONS(ArrayData)
 #undef X
 }
 
@@ -570,22 +571,6 @@ ArrayData* maybeBespokifyForTesting(ArrayData* ad,
   return current;
 }
 
-KeyOrder collectKeyOrder(const KeyOrderMap& keyOrderMap) {
-  std::unordered_set<const StringData*> keys;
-  for (auto const& p : keyOrderMap) {
-    if (!p.first.valid()) continue;
-    keys.insert(p.first.begin(), p.first.end());
-  }
-
-  KeyOrder::KeyOrderData sorted;
-  for (auto const key : keys) {
-    sorted.push_back(key);
-  }
-  std::sort(sorted.begin(), sorted.end(),
-            [](auto a, auto b) { return a->compare(b) < 0; });
-  return KeyOrder::Make(sorted);
-}
-
 }
 
 void logBespokeDispatch(const BespokeArray* bad, const char* fn) {
@@ -606,16 +591,14 @@ BespokeArray* maybeMonoify(ArrayData* ad) {
 
   if (et.valueTypes == ValueTypes::Empty) {
     switch (ad->toDataType()) {
-      case KindOfVArray: return EmptyMonotypeVec::GetVArray(legacy);
-      case KindOfVec:    return EmptyMonotypeVec::GetVec(legacy);
-      case KindOfDArray: return EmptyMonotypeDict::GetDArray(legacy);
-      case KindOfDict:   return EmptyMonotypeDict::GetDict(legacy);
+      case KindOfVec:  return EmptyMonotypeVec::GetVec(legacy);
+      case KindOfDict: return EmptyMonotypeDict::GetDict(legacy);
       default: always_assert(false);
     }
   }
 
   auto const dt = et.valueDatatype;
-  return ad->isDArray() || ad->isDictType()
+  return ad->isDictType()
     ? MakeMonotypeDictFromVanilla(ad, dt, et.keyTypes)
     : MonotypeVec::MakeFromVanilla(ad, dt);
 }
@@ -629,8 +612,8 @@ BespokeArray* maybeStructify(ArrayData* ad, const LoggingProfile* profile) {
 
   auto const ko = collectKeyOrder(koMap);
   auto const create = !s_hierarchyFinal.load(std::memory_order_acquire);
-  auto const layout = StructLayout::getLayout(ko, create);
-  return layout ?  StructArray::MakeFromVanilla(ad, layout) : nullptr;
+  auto const layout = StructLayout::GetLayout(ko, create);
+  return layout ? StructDict::MakeFromVanilla(ad, layout) : nullptr;
 }
 
 ArrayData* makeBespokeForTesting(ArrayData* ad, LoggingProfile* profile) {
@@ -647,11 +630,19 @@ ArrayData* makeBespokeForTesting(ArrayData* ad, LoggingProfile* profile) {
   }
   if (mod == 3) {
     return bespoke::maybeBespokifyForTesting(
-      ad, profile, profile->data->staticStructArray,
+      ad, profile, profile->data->staticStructDict,
       [](auto ad, auto profile) { return maybeStructify(ad, profile); }
     );
   }
   return ad;
+}
+
+void eachLayout(std::function<void(Layout& layout)> fn) {
+  assertx(s_hierarchyFinal.load(std::memory_order_acquire));
+  for (size_t i = 0; i < kMaxNumLayouts; i++) {
+    auto const layout = s_layoutTable[i];
+    if (layout) fn(*layout);
+  }
 }
 
 //////////////////////////////////////////////////////////////////////////////

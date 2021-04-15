@@ -5,8 +5,7 @@
 
 use crate::utils;
 use ::anyhow::anyhow;
-use compile_lib::{Env, EnvFlags, Profile};
-use compile_rust as compile_lib;
+use compile::{Env, EnvFlags, Profile};
 use multifile_rust as multifile;
 use options::Options;
 use oxidized::relative_path::{self, RelativePath};
@@ -61,6 +60,12 @@ pub struct Opts {
     /// Disable toplevel definition elaboration
     #[structopt(long)]
     disable_toplevel_elaboration: bool,
+
+    #[structopt(long)]
+    use_hhbc_by_ref: bool,
+
+    #[structopt(long)]
+    thread_num: Option<usize>,
 }
 
 pub fn run(opts: Opts) -> anyhow::Result<()> {
@@ -91,7 +96,7 @@ pub fn run(opts: Opts) -> anyhow::Result<()> {
             ],
         };
 
-        files.par_iter().try_for_each(|f| {
+        let process_one_file = |f: &PathBuf| {
             let content = utils::read_file(f)?;
             let files = multifile::to_files(f, content)?;
             for (f, content) in files {
@@ -109,7 +114,19 @@ pub fn run(opts: Opts) -> anyhow::Result<()> {
                 }
             }
             Ok(())
-        })
+        };
+
+        if opts.thread_num.map_or(false, |n| n <= 1) {
+            files.iter().try_for_each(process_one_file)
+        } else {
+            opts.thread_num.map_or((), |thread_num| {
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(thread_num)
+                    .build_global()
+                    .unwrap();
+            });
+            files.par_iter().try_for_each(process_one_file)
+        }
     }
 }
 
@@ -124,20 +141,36 @@ fn process_single_file_impl(
     }
 
     let rel_path = RelativePath::make(relative_path::Prefix::Dummy, filepath.to_owned());
-    let mut flags = EnvFlags::empty();
-    flags.set(
-        EnvFlags::DISABLE_TOPLEVEL_ELABORATION,
-        opts.disable_toplevel_elaboration,
-    );
-    let env: Env<String> = Env {
-        filepath: rel_path,
-        config_jsons: vec![],
-        config_list: vec![],
-        flags,
-    };
     let mut output = String::new();
-    let profile = compile_lib::from_text(&env, stack_limit, &mut output, content)?;
-    Ok((output, profile))
+    if opts.use_hhbc_by_ref {
+        let mut flags = hhbc_by_ref_compile::EnvFlags::empty();
+        flags.set(
+            hhbc_by_ref_compile::EnvFlags::DISABLE_TOPLEVEL_ELABORATION,
+            opts.disable_toplevel_elaboration,
+        );
+        let env: hhbc_by_ref_compile::Env<String> = hhbc_by_ref_compile::Env {
+            filepath: rel_path,
+            config_jsons: vec![],
+            config_list: vec![],
+            flags,
+        };
+        hhbc_by_ref_compile::from_text(&env, stack_limit, &mut output, content)?;
+        Ok((output, None))
+    } else {
+        let mut flags = EnvFlags::empty();
+        flags.set(
+            EnvFlags::DISABLE_TOPLEVEL_ELABORATION,
+            opts.disable_toplevel_elaboration,
+        );
+        let env: Env<String> = Env {
+            filepath: rel_path,
+            config_jsons: vec![],
+            config_list: vec![],
+            flags,
+        };
+        let profile = compile::from_text(&env, stack_limit, &mut output, content)?;
+        Ok((output, profile))
+    }
 }
 
 fn process_single_file_with_retry(
@@ -194,7 +227,7 @@ fn process_single_file(
 fn assert_regular_file(filepath: impl AsRef<Path>) {
     let filepath = filepath.as_ref();
     if !filepath.is_file() {
-        panic!(format!("{} not a valid file", filepath.display()));
+        panic!("{} not a valid file", filepath.display());
     }
 }
 

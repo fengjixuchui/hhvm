@@ -33,14 +33,14 @@
 //! opts.hhvm_flags.contains(
 //!     HhvmFlags::RX_IS_ENABLED);          // hhvm.rx_is_enabled
 //! opts.hhvm.hack_lang_flags.set(
-//!     LangFlags::ENABLE_COROUTINES);      // hhvm.hack.lang.enable_coroutines
+//!     LangFlags::ENABLE_ENUM_CLASSES);      // hhvm.hack.lang.enable_enum_classes
 //! ```
 
 mod options_cli;
 
 use hhbc_by_ref_options_serde::prefix_all;
 
-use lru_cache::LruCache;
+use lru::LruCache;
 
 extern crate bitflags;
 use bitflags::bitflags;
@@ -163,7 +163,6 @@ prefixed_flags!(
     ENABLE_INTRINSICS_EXTENSION,
     FOLD_LAZY_CLASS_KEYS,
     HACK_ARR_COMPAT_NOTICES,
-    HACK_ARR_DV_ARR_MARK,
     HACK_ARR_DV_ARRS,
     JIT_ENABLE_RENAME_FUNCTION,
     LOG_EXTERN_COMPILER_PERF,
@@ -267,7 +266,6 @@ prefixed_flags!(
     DISALLOW_HASH_COMMENTS,
     DISALLOW_DYNAMIC_METH_CALLER_ARGS,
     ENABLE_CLASS_LEVEL_WHERE_CLAUSES,
-    ENABLE_COROUTINES,
     ENABLE_ENUM_CLASSES,
     ENABLE_XHP_CLASS_MODIFIER,
     DISABLE_ARRAY_CAST,
@@ -277,7 +275,7 @@ prefixed_flags!(
 );
 impl Default for LangFlags {
     fn default() -> LangFlags {
-        LangFlags::ENABLE_COROUTINES | LangFlags::DISABLE_LEGACY_SOFT_TYPEHINTS
+        LangFlags::DISABLE_LEGACY_SOFT_TYPEHINTS | LangFlags::ENABLE_ENUM_CLASSES
     }
 }
 
@@ -285,11 +283,10 @@ prefixed_flags!(
     PhpismFlags,
     "hhvm.hack.lang.phpism.",
     DISABLE_NONTOPLEVEL_DECLARATIONS,
-    DISABLE_STATIC_CLOSURES,
 );
 impl Default for PhpismFlags {
     fn default() -> PhpismFlags {
-        PhpismFlags::DISABLE_STATIC_CLOSURES
+        PhpismFlags::empty()
     }
 }
 
@@ -413,7 +410,6 @@ thread_local! {
 pub(crate) type Cache = LruCache<(Vec<String>, Vec<String>), Options, fnv::FnvBuildHasher>;
 
 impl Options {
-    #[allow(clippy::inherent_to_string)]
     pub fn to_string(&self) -> String {
         serde_json::to_string_pretty(&self).expect("failed to parse JSON")
     }
@@ -480,7 +476,7 @@ impl Options {
                 Ok(o.clone())
             } else {
                 let o = Options::from_configs_(&key.0, &key.1)?;
-                cache.insert(key, o.clone());
+                cache.put(key, o.clone());
                 Ok(o)
             }
         })
@@ -659,7 +655,7 @@ impl<K: std::cmp::Ord, V> Default for BTreeMapOrEmptyVec<K, V> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq; // make assert_eq print huge diffs more human-readable
-    #[allow(clippy::redundant_static_lifetimes)]
+
     const HHVM_1: &'static str = r#"{
   "hhvm.aliased_namespaces": {
     "global_value": {
@@ -751,11 +747,8 @@ mod tests {
   "hhvm.hack.lang.enable_class_level_where_clauses": {
     "global_value": false
   },
-  "hhvm.hack.lang.enable_coroutines": {
-    "global_value": true
-  },
   "hhvm.hack.lang.enable_enum_classes": {
-    "global_value": false
+    "global_value": true
   },
   "hhvm.hack.lang.enable_xhp_class_modifier": {
     "global_value": false
@@ -764,9 +757,6 @@ mod tests {
     "global_value": false
   },
   "hhvm.hack_arr_compat_notices": {
-    "global_value": false
-  },
-  "hhvm.hack_arr_dv_arr_mark": {
     "global_value": false
   },
   "hhvm.hack_arr_dv_arrs": {
@@ -958,7 +948,7 @@ mod tests {
         let jsons: [String; 2] = [
             json!({
                 // override an options from 1 to 0 in first JSON,
-                "hhvm.hack.lang.enable_coroutines": { "global_value": false },
+                "hhvm.hack.lang.enable_enum_classes": { "global_value": false },
                 // but specify the default (0) on rx_is_enabled)
                 "hhvm.rx_is_enabled": { "global_value": false }
             })
@@ -982,7 +972,7 @@ mod tests {
             !act.hhvm
                 .hack_lang
                 .flags
-                .contains(LangFlags::ENABLE_COROUTINES)
+                .contains(LangFlags::ENABLE_ENUM_CLASSES)
         );
         assert!(act.hhvm.flags.contains(HhvmFlags::RX_IS_ENABLED));
     }
@@ -1142,15 +1132,12 @@ bitflags! {
         const HACK_ARR_DV_ARRS = 1 << 8;
         const AUTHORITATIVE = 1 << 9;
         const JIT_ENABLE_RENAME_FUNCTION = 1 << 10;
-        // No longer using bit 11.
-        const ENABLE_COROUTINES = 1 << 12;
-        // No longer using bit 13.
+        // No longer using bits 11-13.
         const LOG_EXTERN_COMPILER_PERF = 1 << 14;
         const ENABLE_INTRINSICS_EXTENSION = 1 << 15;
         // No longer using bits 16-21.
         const DISABLE_NONTOPLEVEL_DECLARATIONS = 1 << 22;
-        const DISABLE_STATIC_CLOSURES = 1 << 23;
-        // No longer using bits 24-25.
+        // No longer using bits 23-25.
         const EMIT_CLS_METH_POINTERS = 1 << 26;
         const EMIT_INST_METH_POINTERS = 1 << 27;
         const EMIT_METH_CALLER_FUNC_POINTERS = 1 << 28;
@@ -1178,7 +1165,7 @@ bitflags! {
         const RUST_EMITTER = 1 << 51;
         const DISABLE_ARRAY_CAST = 1 << 52;
         const DISABLE_ARRAY_TYPEHINT = 1 << 53;
-        const HACK_ARR_DV_ARR_MARK = 1 << 54;
+        // No longer using bit 54
         const ALLOW_UNSTABLE_FEATURES = 1 << 55;
         const DISALLOW_HASH_COMMENTS = 1 << 56;
         const DISALLOW_FUN_AND_CLS_METH_PSEUDO_FUNCS = 1 << 57;

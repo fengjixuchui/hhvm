@@ -1596,7 +1596,6 @@ module WithToken (Token : TokenType) = struct
       | AnonymousFunction
           {
             anonymous_attribute_spec;
-            anonymous_static_keyword;
             anonymous_async_keyword;
             anonymous_function_keyword;
             anonymous_left_paren;
@@ -1610,7 +1609,6 @@ module WithToken (Token : TokenType) = struct
             anonymous_body;
           } ->
         let acc = f acc anonymous_attribute_spec in
-        let acc = f acc anonymous_static_keyword in
         let acc = f acc anonymous_async_keyword in
         let acc = f acc anonymous_function_keyword in
         let acc = f acc anonymous_left_paren in
@@ -1794,12 +1792,14 @@ module WithToken (Token : TokenType) = struct
           {
             function_call_receiver;
             function_call_type_args;
+            function_call_enum_atom;
             function_call_left_paren;
             function_call_argument_list;
             function_call_right_paren;
           } ->
         let acc = f acc function_call_receiver in
         let acc = f acc function_call_type_args in
+        let acc = f acc function_call_enum_atom in
         let acc = f acc function_call_left_paren in
         let acc = f acc function_call_argument_list in
         let acc = f acc function_call_right_paren in
@@ -2254,6 +2254,7 @@ module WithToken (Token : TokenType) = struct
       | ClosureTypeSpecifier
           {
             closure_outer_left_paren;
+            closure_readonly_keyword;
             closure_function_keyword;
             closure_inner_left_paren;
             closure_parameter_list;
@@ -2265,6 +2266,7 @@ module WithToken (Token : TokenType) = struct
             closure_outer_right_paren;
           } ->
         let acc = f acc closure_outer_left_paren in
+        let acc = f acc closure_readonly_keyword in
         let acc = f acc closure_function_keyword in
         let acc = f acc closure_inner_left_paren in
         let acc = f acc closure_parameter_list in
@@ -3262,7 +3264,6 @@ module WithToken (Token : TokenType) = struct
       | AnonymousFunction
           {
             anonymous_attribute_spec;
-            anonymous_static_keyword;
             anonymous_async_keyword;
             anonymous_function_keyword;
             anonymous_left_paren;
@@ -3277,7 +3278,6 @@ module WithToken (Token : TokenType) = struct
           } ->
         [
           anonymous_attribute_spec;
-          anonymous_static_keyword;
           anonymous_async_keyword;
           anonymous_function_keyword;
           anonymous_left_paren;
@@ -3434,6 +3434,7 @@ module WithToken (Token : TokenType) = struct
           {
             function_call_receiver;
             function_call_type_args;
+            function_call_enum_atom;
             function_call_left_paren;
             function_call_argument_list;
             function_call_right_paren;
@@ -3441,6 +3442,7 @@ module WithToken (Token : TokenType) = struct
         [
           function_call_receiver;
           function_call_type_args;
+          function_call_enum_atom;
           function_call_left_paren;
           function_call_argument_list;
           function_call_right_paren;
@@ -3889,6 +3891,7 @@ module WithToken (Token : TokenType) = struct
       | ClosureTypeSpecifier
           {
             closure_outer_left_paren;
+            closure_readonly_keyword;
             closure_function_keyword;
             closure_inner_left_paren;
             closure_parameter_list;
@@ -3901,6 +3904,7 @@ module WithToken (Token : TokenType) = struct
           } ->
         [
           closure_outer_left_paren;
+          closure_readonly_keyword;
           closure_function_keyword;
           closure_inner_left_paren;
           closure_parameter_list;
@@ -4881,7 +4885,6 @@ module WithToken (Token : TokenType) = struct
       | AnonymousFunction
           {
             anonymous_attribute_spec;
-            anonymous_static_keyword;
             anonymous_async_keyword;
             anonymous_function_keyword;
             anonymous_left_paren;
@@ -4896,7 +4899,6 @@ module WithToken (Token : TokenType) = struct
           } ->
         [
           "anonymous_attribute_spec";
-          "anonymous_static_keyword";
           "anonymous_async_keyword";
           "anonymous_function_keyword";
           "anonymous_left_paren";
@@ -5060,6 +5062,7 @@ module WithToken (Token : TokenType) = struct
           {
             function_call_receiver;
             function_call_type_args;
+            function_call_enum_atom;
             function_call_left_paren;
             function_call_argument_list;
             function_call_right_paren;
@@ -5067,6 +5070,7 @@ module WithToken (Token : TokenType) = struct
         [
           "function_call_receiver";
           "function_call_type_args";
+          "function_call_enum_atom";
           "function_call_left_paren";
           "function_call_argument_list";
           "function_call_right_paren";
@@ -5525,6 +5529,7 @@ module WithToken (Token : TokenType) = struct
       | ClosureTypeSpecifier
           {
             closure_outer_left_paren;
+            closure_readonly_keyword;
             closure_function_keyword;
             closure_inner_left_paren;
             closure_parameter_list;
@@ -5537,6 +5542,7 @@ module WithToken (Token : TokenType) = struct
           } ->
         [
           "closure_outer_left_paren";
+          "closure_readonly_keyword";
           "closure_function_keyword";
           "closure_inner_left_paren";
           "closure_parameter_list";
@@ -6673,7 +6679,6 @@ module WithToken (Token : TokenType) = struct
       | ( SyntaxKind.AnonymousFunction,
           [
             anonymous_attribute_spec;
-            anonymous_static_keyword;
             anonymous_async_keyword;
             anonymous_function_keyword;
             anonymous_left_paren;
@@ -6689,7 +6694,6 @@ module WithToken (Token : TokenType) = struct
         AnonymousFunction
           {
             anonymous_attribute_spec;
-            anonymous_static_keyword;
             anonymous_async_keyword;
             anonymous_function_keyword;
             anonymous_left_paren;
@@ -6870,6 +6874,7 @@ module WithToken (Token : TokenType) = struct
           [
             function_call_receiver;
             function_call_type_args;
+            function_call_enum_atom;
             function_call_left_paren;
             function_call_argument_list;
             function_call_right_paren;
@@ -6878,6 +6883,7 @@ module WithToken (Token : TokenType) = struct
           {
             function_call_receiver;
             function_call_type_args;
+            function_call_enum_atom;
             function_call_left_paren;
             function_call_argument_list;
             function_call_right_paren;
@@ -7371,6 +7377,7 @@ module WithToken (Token : TokenType) = struct
       | ( SyntaxKind.ClosureTypeSpecifier,
           [
             closure_outer_left_paren;
+            closure_readonly_keyword;
             closure_function_keyword;
             closure_inner_left_paren;
             closure_parameter_list;
@@ -7384,6 +7391,7 @@ module WithToken (Token : TokenType) = struct
         ClosureTypeSpecifier
           {
             closure_outer_left_paren;
+            closure_readonly_keyword;
             closure_function_keyword;
             closure_inner_left_paren;
             closure_parameter_list;
@@ -8783,7 +8791,6 @@ module WithToken (Token : TokenType) = struct
 
       let make_anonymous_function
           anonymous_attribute_spec
-          anonymous_static_keyword
           anonymous_async_keyword
           anonymous_function_keyword
           anonymous_left_paren
@@ -8799,7 +8806,6 @@ module WithToken (Token : TokenType) = struct
           AnonymousFunction
             {
               anonymous_attribute_spec;
-              anonymous_static_keyword;
               anonymous_async_keyword;
               anonymous_function_keyword;
               anonymous_left_paren;
@@ -9052,6 +9058,7 @@ module WithToken (Token : TokenType) = struct
       let make_function_call_expression
           function_call_receiver
           function_call_type_args
+          function_call_enum_atom
           function_call_left_paren
           function_call_argument_list
           function_call_right_paren =
@@ -9060,6 +9067,7 @@ module WithToken (Token : TokenType) = struct
             {
               function_call_receiver;
               function_call_type_args;
+              function_call_enum_atom;
               function_call_left_paren;
               function_call_argument_list;
               function_call_right_paren;
@@ -9701,6 +9709,7 @@ module WithToken (Token : TokenType) = struct
 
       let make_closure_type_specifier
           closure_outer_left_paren
+          closure_readonly_keyword
           closure_function_keyword
           closure_inner_left_paren
           closure_parameter_list
@@ -9714,6 +9723,7 @@ module WithToken (Token : TokenType) = struct
           ClosureTypeSpecifier
             {
               closure_outer_left_paren;
+              closure_readonly_keyword;
               closure_function_keyword;
               closure_inner_left_paren;
               closure_parameter_list;
@@ -10022,7 +10032,6 @@ module WithToken (Token : TokenType) = struct
       let from_anonymous_function
           {
             anonymous_attribute_spec;
-            anonymous_static_keyword;
             anonymous_async_keyword;
             anonymous_function_keyword;
             anonymous_left_paren;
@@ -10038,7 +10047,6 @@ module WithToken (Token : TokenType) = struct
         AnonymousFunction
           {
             anonymous_attribute_spec;
-            anonymous_static_keyword;
             anonymous_async_keyword;
             anonymous_function_keyword;
             anonymous_left_paren;
@@ -10093,6 +10101,7 @@ module WithToken (Token : TokenType) = struct
       let from_closure_type_specifier
           {
             closure_outer_left_paren;
+            closure_readonly_keyword;
             closure_function_keyword;
             closure_inner_left_paren;
             closure_parameter_list;
@@ -10106,6 +10115,7 @@ module WithToken (Token : TokenType) = struct
         ClosureTypeSpecifier
           {
             closure_outer_left_paren;
+            closure_readonly_keyword;
             closure_function_keyword;
             closure_inner_left_paren;
             closure_parameter_list;
@@ -10189,7 +10199,6 @@ module WithToken (Token : TokenType) = struct
         | AnonymousFunction
             {
               anonymous_attribute_spec;
-              anonymous_static_keyword;
               anonymous_async_keyword;
               anonymous_function_keyword;
               anonymous_left_paren;
@@ -10204,7 +10213,6 @@ module WithToken (Token : TokenType) = struct
             } ->
           {
             anonymous_attribute_spec;
-            anonymous_static_keyword;
             anonymous_async_keyword;
             anonymous_function_keyword;
             anonymous_left_paren;
@@ -10266,6 +10274,7 @@ module WithToken (Token : TokenType) = struct
         | ClosureTypeSpecifier
             {
               closure_outer_left_paren;
+              closure_readonly_keyword;
               closure_function_keyword;
               closure_inner_left_paren;
               closure_parameter_list;
@@ -10278,6 +10287,7 @@ module WithToken (Token : TokenType) = struct
             } ->
           {
             closure_outer_left_paren;
+            closure_readonly_keyword;
             closure_function_keyword;
             closure_inner_left_paren;
             closure_parameter_list;

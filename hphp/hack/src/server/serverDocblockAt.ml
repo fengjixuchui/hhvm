@@ -38,7 +38,10 @@ let get_docblock_for_member ctx class_info member_name =
   Cls.get_method class_info member_name >>= fun member ->
   match Typing_defs.get_node @@ Lazy.force member.Typing_defs.ce_type with
   | Typing_defs.Tfun _ ->
-    let pos = Lazy.force member.Typing_defs.ce_pos in
+    let pos =
+      Lazy.force member.Typing_defs.ce_pos
+      |> Naming_provider.resolve_position ctx
+    in
     let path = Pos.filename pos in
     let (ctx, entry) = Provider_context.add_entry_if_missing ~ctx ~path in
     ServerSymbolDefinition.get_definition_cst_node_ctx
@@ -178,7 +181,7 @@ let go_locate_symbol
     ~(ctx : Provider_context.t) ~(symbol : string) ~(kind : SearchUtils.si_kind)
     : DocblockService.dbs_symbol_location_result =
   (* Look up this class name *)
-  match SymbolIndex.get_position_for_symbol ctx symbol kind with
+  match SymbolIndexCore.get_position_for_symbol ctx symbol kind with
   | None -> None
   | Some (path, line, column) ->
     let filename = Relative_path.to_absolute path in
@@ -262,7 +265,7 @@ let go_docblock_for_symbol
     | None ->
       let msg =
         Printf.sprintf
-          "The symbol %s (%s) was not found.  If this symbol was added recently, you might consider rebasing."
+          "Could not find the symbol '%s' (expected to be a %s). This symbol may need namespace information (e.g. HH\\a\\b\\c) to resolve correctly. You can also consider rebasing."
           symbol
           (SearchUtils.show_si_kind kind)
       in

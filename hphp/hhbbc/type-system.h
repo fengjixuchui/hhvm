@@ -26,7 +26,6 @@
 
 #include "hphp/runtime/base/repo-auth-type.h"
 #include "hphp/runtime/base/repo-auth-type-array.h"
-#include "hphp/runtime/base/array-provenance.h"
 
 #include "hphp/hhbbc/type-system-bits.h"
 
@@ -62,7 +61,7 @@
  *   Array types are divided along two dimensions: counted or
  *   uncounted, and empty or non-empty.  Unions of either are allowed.
  *   The naming convention is {S,C,}Arr{N,E,} (where Arr can be any
- *   array type, for example Vecish or Dictish), where leaving out
+ *   array type, for example Vec, Dict, or Keyset), where leaving out
  *   either bit means it's unknown along that dimension. An example
  *   lattice looks like this:
  *
@@ -185,6 +184,7 @@ struct Type;
   DT(Obj, DObj, dobj)                                           \
   DT(WaitHandle, DWaitHandle, dwh)                              \
   DT(Cls, DCls, dcls)                                           \
+  DT(LazyCls, SString, lazyclsval)                              \
   DT(Record, DRecord, drec)                                     \
   DT(ArrLikePacked, copy_ptr<DArrLikePacked>, packed)           \
   DT(ArrLikePackedN, copy_ptr<DArrLikePackedN>, packedn)        \
@@ -300,10 +300,6 @@ struct HAMSandwich {
   // which don't care about array-provenance (vec, dict, etc).
   static const HAMSandwich Unmarked;
 
-  // Create a HAMSandwich with an unmarked legacy mark and the given
-  // array provenance tag.
-  static HAMSandwich UnmarkedWithTag(arrprov::Tag);
-
   // Create the appropriate HAMSandwich for the given static array.
   static HAMSandwich FromSArr(SArray);
 
@@ -311,20 +307,9 @@ struct HAMSandwich {
   static HAMSandwich TopForBits(trep);
 
   // Return a new HAMSandwich refined based on the given type. For
-  // example, if the given type no longer contains VArr or DArr, we
-  // need to drop any array provenance information.
+  // example, if the given type no longer contains Vec or Dict, we
+  // need to drop any marking information.
   HAMSandwich project(trep) const;
-
-  // "Loosen" the array provenance information (if present) to its
-  // most general allowed form.
-  HAMSandwich loosenProvTag() const;
-
-  // If this HAMSandwich has known array provenance information,
-  // return it. If we have the "top" array provenance information,
-  // return folly::none. Note: if array provenance is disabled or
-  // array provenance isn't appropriate for the given type, this will
-  // always return arrprov::Tag{}.
-  folly::Optional<arrprov::Tag> provTag(trep) const;
 
   // Return the legacy mark information in this HAMSandwich. If the
   // given type does not require legacy mark information, Unmarked is
@@ -334,12 +319,6 @@ struct HAMSandwich {
   // Return true if this is the "bottom" HAMSandwich type. That is,
   // the result of intersecting together incompatible ones.
   bool isBottom(trep b) const;
-
-  // Raw getter:
-  folly::Optional<arrprov::Tag> rawProvTag() const {
-    return (m_tag_state == TagState::Value)
-      ? folly::make_optional(m_tag) : folly::none;
-  }
 
   // Check if the intersection between this and another HAMSandwich is
   // non-empty.
@@ -364,24 +343,11 @@ struct HAMSandwich {
   bool checkInvariants(trep) const;
 
 private:
-  // We only track array provenance information for VArr and DArr.
-  static constexpr trep kTagBits = BVArr | BDArr;
-  // Legacy marks are only tracked for Vecish and Dictish.
-  static constexpr trep kMarkBits = BVecish | BDictish;
+  // Legacy marks are only tracked for Vec and Dict.
+  static constexpr trep kMarkBits = BVec | BDict;
 
-  enum class TagState : uint8_t {
-    Bottom,
-    Value,
-    Top
-  };
+  explicit HAMSandwich(LegacyMark mark) : m_mark{mark} {}
 
-  HAMSandwich(arrprov::Tag tag, TagState state, LegacyMark mark)
-    : m_tag{tag}
-    , m_tag_state{state}
-    , m_mark{mark} {}
-
-  arrprov::Tag m_tag;
-  TagState m_tag_state;
   LegacyMark m_mark;
 };
 
@@ -506,6 +472,7 @@ private:
   friend bool is_specialized_obj(const Type&);
   friend bool is_specialized_record(const Type&);
   friend bool is_specialized_cls(const Type&);
+  friend bool is_specialized_lazycls(const Type&);
   friend bool is_specialized_string(const Type&);
   friend bool is_specialized_int(const Type&);
   friend bool is_specialized_double(const Type&);
@@ -515,7 +482,7 @@ private:
   friend Type sval_counted(SString);
   friend Type ival(int64_t);
   friend Type dval(double);
-  friend Type aval(SArray);
+  friend Type lazyclsval(SString);
   friend Type subObj(res::Class);
   friend Type objExact(res::Class);
   friend Type subCls(res::Class);
@@ -531,6 +498,7 @@ private:
   friend DRecord drec_of(const Type&);
   friend DCls dcls_of(Type);
   friend SString sval_of(const Type&);
+  friend SString lazyclsval_of(const Type&);
   friend int64_t ival_of(const Type&);
   friend Type union_of(Type, Type);
   friend Type intersection_of(Type, Type);
@@ -552,6 +520,7 @@ private:
   friend Type remove_int(Type);
   friend Type remove_double(Type);
   friend Type remove_string(Type);
+  friend Type remove_lazycls(Type);
   friend Type remove_cls(Type);
   friend Type remove_obj(Type);
   friend Type remove_keyset(Type);
@@ -560,6 +529,7 @@ private:
   friend std::pair<Type, Type> split_cls(Type);
   friend std::pair<Type, Type> split_array_like(Type);
   friend std::pair<Type, Type> split_string(Type);
+  friend std::pair<Type, Type> split_lazycls(Type);
 
   friend std::string show(const Type&);
   friend std::pair<Type,bool> array_like_elem_impl(const Type&, const Type&);
@@ -580,15 +550,11 @@ private:
   friend folly::Optional<RepoAuthType> make_repo_type_arr(ArrayTypeTable::Builder&,
                                                           const Type&);
 
-  friend Type aempty_varray(arrprov::Tag);
-  friend Type aempty_darray(arrprov::Tag);
   friend Type vec_val(SArray);
   friend Type vec_empty();
   friend Type some_vec_empty();
   friend Type dict_val(SArray);
   friend Type dict_empty();
-  friend Type some_aempty_darray(arrprov::Tag);
-  friend Type some_aempty_varray(arrprov::Tag);
   friend Type some_dict_empty();
   friend Type keyset_val(SArray);
   friend bool could_contain_objects(const Type&);
@@ -596,7 +562,6 @@ private:
   friend Type loosen_staticness(Type);
   friend Type loosen_string_staticness(Type);
   friend Type loosen_array_staticness(Type);
-  friend Type loosen_provenance(Type);
   friend Type loosen_values(Type);
   friend Type loosen_string_values(Type);
   friend Type loosen_array_values(Type);
@@ -772,7 +737,7 @@ Type wait_handle_inner(const Type& t);
  */
 Type ival(int64_t);
 Type dval(double);
-Type aval(SArray);
+Type lazyclsval(SString);
 Type vec_val(SArray);
 Type dict_val(SArray);
 Type keyset_val(SArray);
@@ -794,8 +759,6 @@ Type sempty_counted();
 /*
  * Create static empty array types
  */
-Type aempty_varray(arrprov::Tag = {});
-Type aempty_darray(arrprov::Tag = {});
 Type vec_empty();
 Type dict_empty();
 Type keyset_empty();
@@ -803,8 +766,6 @@ Type keyset_empty();
 /*
  * Create an any-countedness empty array/vec/dict type.
  */
-Type some_aempty_darray(arrprov::Tag = {});
-Type some_aempty_varray(arrprov::Tag = {});
 Type some_vec_empty();
 Type some_dict_empty();
 Type some_keyset_empty();
@@ -824,20 +785,6 @@ Type clsExact(res::Class);
  */
 Type exactRecord(res::Record);
 Type subRecord(res::Record);
-
-/*
- * Packed varray types with known size.
- *
- * Pre: !v.empty()
- */
-Type arr_packed_varray(std::vector<Type> v, arrprov::Tag = {});
-
-/*
- * Struct-like darrays.
- *
- * Pre: !m.empty()
- */
-Type arr_map_darray(MapElems m, arrprov::Tag = {});
 
 /*
  * vec types with known size.
@@ -960,9 +907,10 @@ bool is_specialized_record(const Type&);
 
 /*
  * Returns true if type 't' represents a "specialized"
- * string/int/double--i.e. with a known value.
+ * string/int/double/lazy class--i.e. with a known value.
  */
 bool is_specialized_string(const Type&);
+bool is_specialized_lazycls(const Type&);
 bool is_specialized_int(const Type&);
 bool is_specialized_double(const Type&);
 
@@ -997,6 +945,7 @@ std::pair<Type, Type> split_obj(Type);
 std::pair<Type, Type> split_cls(Type);
 std::pair<Type, Type> split_array_like(Type);
 std::pair<Type, Type> split_string(Type);
+std::pair<Type, Type> split_lazycls(Type);
 
 /*
  * Remove TInt/TDbl/TStr/TCls/TObj from the type `t', including any
@@ -1006,6 +955,7 @@ std::pair<Type, Type> split_string(Type);
 Type remove_int(Type);
 Type remove_double(Type);
 Type remove_string(Type);
+Type remove_lazycls(Type);
 Type remove_cls(Type);
 Type remove_obj(Type);
 
@@ -1126,6 +1076,13 @@ DCls dcls_of(Type t);
  * Pre: is_specialized_string(t)
  */
 SString sval_of(const Type& t);
+
+/*
+ * Return the SString for a strict subtype of TLazyCls.
+ *
+ * Pre: is_specialized_lazycls(t)
+ */
+SString lazyclsval_of(const Type& t);
 
 /*
  * Return the specialized integer value for a type.
@@ -1264,17 +1221,11 @@ Type loosen_array_staticness(Type);
 Type loosen_string_staticness(Type);
 
 /*
- * Force any type which might contain TVArr or TDArr to contain
- * TVArr|TDArr, and likewise with TVec and TDict. This discards any
- * emptiness, staticness, or value information if the type is
- * modified.
+ * Force any type which might contain TVec or TDict to contain TVec|TDict.
+ * This discards any emptiness, staticness, or value information if the
+ * type is modified.
  */
-Type loosen_vecish_or_dictish(Type);
-
-/*
- * Discard any specific provenance tag on this type and any sub-arrays
- */
-Type loosen_provenance(Type);
+Type loosen_vec_or_dict(Type);
 
 /*
  * Drop any data from the type (except for object class information) and force
@@ -1304,7 +1255,7 @@ Type loosen_emptiness(Type t);
 
 /*
  * Force any type which includes TCls or TLazyCls to also include
- * TSStr, and all TClsMeth to include either TVecN or TVArrN|TDArrN.
+ * TSStr, and all TClsMeth to include TVecN.
  */
 Type loosen_likeness(Type t);
 

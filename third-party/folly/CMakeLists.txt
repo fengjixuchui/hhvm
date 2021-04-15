@@ -155,11 +155,8 @@ target_include_directories(folly PUBLIC ${FOLLY_ROOT})
 
 target_link_libraries(folly fmt)
 
-add_dependencies(folly boostMaybeBuild)
 target_link_libraries(folly boost)
 
-add_dependencies(folly libsodiumMaybeBuild)
-target_include_directories(folly PUBLIC "${LIBSODIUM_INCLUDE_DIRS}")
 target_link_libraries(folly libsodium)
 
 find_package(Glog REQUIRED)
@@ -169,12 +166,7 @@ target_link_libraries(folly ${LIBGLOG_LIBRARY})
 find_package(PThread REQUIRED)
 target_include_directories(folly PUBLIC ${LIBPTHREAD_INCLUDE_DIRS})
 target_link_libraries(folly ${LIBPTHREAD_LIBRARIES})
-
-if (DOUBLE_CONVERSION_FOUND)
-  target_link_libraries(folly ${DOUBLE_CONVERSION_LIBRARY})
-else()
-  target_link_libraries(folly double-conversion)
-endif()
+target_link_libraries(folly double-conversion)
 
 if (JEMALLOC_ENABLED)
   target_link_libraries(folly PUBLIC jemalloc)

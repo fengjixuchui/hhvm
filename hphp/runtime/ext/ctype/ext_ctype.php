@@ -8,8 +8,8 @@
  * @return bool - Returns TRUE if every character in text is either a
  *   letter or a digit, FALSE otherwise.
  */
-<<__Native, __Pure>>
-function ctype_alnum(mixed $text): bool;
+<<__Native>>
+function ctype_alnum(mixed $text)[]: bool;
 
 /**
  * Check for alphabetic character(s)
@@ -19,8 +19,8 @@ function ctype_alnum(mixed $text): bool;
  * @return bool - Returns TRUE if every character in text is a letter
  *   from the current locale, FALSE otherwise.
  */
-<<__Native, __Pure>>
-function ctype_alpha(mixed $text): bool;
+<<__Native>>
+function ctype_alpha(mixed $text)[]: bool;
 
 /**
  * Check for control character(s)
@@ -30,8 +30,8 @@ function ctype_alpha(mixed $text): bool;
  * @return bool - Returns TRUE if every character in text is a control
  *   character from the current locale, FALSE otherwise.
  */
-<<__Native, __Pure>>
-function ctype_cntrl(mixed $text): bool;
+<<__Native>>
+function ctype_cntrl(mixed $text)[]: bool;
 
 /**
  * Check for numeric character(s)
@@ -41,8 +41,8 @@ function ctype_cntrl(mixed $text): bool;
  * @return bool - Returns TRUE if every character in the string text is a
  *   decimal digit, FALSE otherwise.
  */
-<<__Native, __Pure>>
-function ctype_digit(mixed $text): bool;
+<<__Native>>
+function ctype_digit(mixed $text)[]: bool;
 
 /**
  * Check for any printable character(s) except space
@@ -52,8 +52,8 @@ function ctype_digit(mixed $text): bool;
  * @return bool - Returns TRUE if every character in text is printable
  *   and actually creates visible output (no white space), FALSE otherwise.
  */
-<<__Native, __Pure>>
-function ctype_graph(mixed $text): bool;
+<<__Native>>
+function ctype_graph(mixed $text)[]: bool;
 
 /**
  * Check for lowercase character(s)
@@ -63,8 +63,8 @@ function ctype_graph(mixed $text): bool;
  * @return bool - Returns TRUE if every character in text is a lowercase
  *   letter in the current locale.
  */
-<<__Native, __Pure>>
-function ctype_lower(mixed $text): bool;
+<<__Native>>
+function ctype_lower(mixed $text)[]: bool;
 
 /**
  * Check for printable character(s)
@@ -76,8 +76,8 @@ function ctype_lower(mixed $text): bool;
  *   control characters or characters that do not have any output or
  *   control function at all.
  */
-<<__Native, __Pure>>
-function ctype_print(mixed $text): bool;
+<<__Native>>
+function ctype_print(mixed $text)[]: bool;
 
 /**
  * Check for any printable character which is not whitespace or an
@@ -89,8 +89,8 @@ function ctype_print(mixed $text): bool;
  * @return bool - Returns TRUE if every character in text is printable,
  *   but neither letter, digit or blank, FALSE otherwise.
  */
-<<__Native, __Pure>>
-function ctype_punct(mixed $text): bool;
+<<__Native>>
+function ctype_punct(mixed $text)[]: bool;
 
 /**
  * Check for whitespace character(s)
@@ -102,8 +102,8 @@ function ctype_punct(mixed $text): bool;
  *   also includes tab, vertical tab, line feed, carriage return and form
  *   feed characters.
  */
-<<__Native, __Pure>>
-function ctype_space(mixed $text): bool;
+<<__Native>>
+function ctype_space(mixed $text)[]: bool;
 
 /**
  * Check for uppercase character(s)
@@ -113,8 +113,8 @@ function ctype_space(mixed $text): bool;
  * @return bool - Returns TRUE if every character in text is an uppercase
  *   letter in the current locale.
  */
-<<__Native, __Pure>>
-function ctype_upper(mixed $text): bool;
+<<__Native>>
+function ctype_upper(mixed $text)[]: bool;
 
 /**
  * Check for character(s) representing a hexadecimal digit
@@ -126,5 +126,5 @@ function ctype_upper(mixed $text): bool;
  *   hexadecimal 'digit', that is a decimal digit or a character from
  *   [A-Fa-f] , FALSE otherwise.
  */
-<<__Native, __Pure>>
-function ctype_xdigit(mixed $text): bool;
+<<__Native>>
+function ctype_xdigit(mixed $text)[]: bool;

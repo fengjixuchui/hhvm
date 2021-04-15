@@ -332,7 +332,7 @@ static bool set_sockaddr(sockaddr_storage &sa_storage, req::ptr<Socket> sock,
 
 static void sock_array_to_fd_set(const Array& sockets, std::vector<pollfd>& fds,
                                  const short flag) {
-  IterateVNoInc(
+  IterateV(
     sockets.get(),
     [&](TypedValue v) {
       assertx(v.m_type == KindOfResource);
@@ -355,10 +355,10 @@ static void sock_array_to_fd_set(const Array& sockets, std::vector<pollfd>& fds,
 static void sock_array_from_fd_set(Variant &sockets,
                                    const std::vector<pollfd>& fds,
                                    int &nfds, int &count, const short flag) {
-  Array ret = Array::CreateDArray();
+  Array ret = Array::CreateDict();
   assertx(sockets.isArray());
   const auto& sock_array = sockets.asCArrRef();
-  IterateKVNoInc(
+  IterateKV(
     sock_array.get(),
     [&](TypedValue k, TypedValue v) {
       const pollfd &fd = fds.at(nfds++);
@@ -1043,8 +1043,8 @@ Variant HHVM_FUNCTION(socket_select,
   if (!read.isNull()) {
     // sock_array_from_fd_set can set a sparsely indexed array, so
     // we use darray everywhere.
-    auto hasData = Array::CreateDArray();
-    IterateVNoInc(
+    auto hasData = Array::CreateDict();
+    IterateV(
       read.asCArrRef().get(),
       [&](TypedValue v) {
         assertx(v.m_type == KindOfResource);
@@ -1055,8 +1055,8 @@ Variant HHVM_FUNCTION(socket_select,
       }
     );
     if (hasData.size() > 0) {
-      write = empty_darray();
-      except = empty_darray();
+      write = empty_dict_array();
+      except = empty_dict_array();
       read = hasData;
       return hasData.size();
     }
@@ -1633,7 +1633,7 @@ Variant HHVM_FUNCTION(getaddrinfo,
     return false;
   }
 
-  Array ret = Array::CreateVArray();
+  Array ret = Array::CreateVec();
 
   for (res = res0; res; res = res->ai_next) {
     Array data = make_darray(
@@ -1678,7 +1678,7 @@ Variant HHVM_FUNCTION(getaddrinfo,
         break;
       }
       default:
-        data.set(s_sockaddr, empty_array());
+        data.set(s_sockaddr, empty_dict_array());
         break;
     }
 

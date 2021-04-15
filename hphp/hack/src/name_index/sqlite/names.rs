@@ -30,7 +30,7 @@ impl Names {
         Ok(Self { connection })
     }
 
-    fn create_tables(connection: &Connection) -> Result<()> {
+    pub fn create_tables(connection: &Connection) -> Result<()> {
         file_infos::create_table(connection)?;
         funs::create_table(connection)?;
         types::create_table(connection)?;
@@ -85,7 +85,7 @@ mod tests {
         let result = names.get_const_path("\\Foo").unwrap();
 
         match result {
-            Some(path) => assert!(false, format!("Unexpected path: {:?}", path)),
+            Some(path) => assert!(false, "Unexpected path: {:?}", path),
             None => assert!(true),
         }
     }

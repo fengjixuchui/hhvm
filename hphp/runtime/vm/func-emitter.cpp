@@ -243,6 +243,8 @@ Func* FuncEmitter::create(Unit& unit, PreClass* preClass /* = NULL */, bool save
     attrs |= AttrSupportsAsyncEagerReturn;
   }
 
+  if (!coeffectRules.empty()) attrs |= AttrHasCoeffectRules;
+
   auto const dynCallSampleRate = [&] () -> folly::Optional<int64_t> {
     if (!(attrs & AttrDynamicallyCallable)) return {};
 
@@ -266,6 +268,13 @@ Func* FuncEmitter::create(Unit& unit, PreClass* preClass /* = NULL */, bool save
   auto const uait = userAttributes.find(s___Reified.get());
   auto const hasReifiedGenerics = uait != userAttributes.end();
 
+  auto coeffects = StaticCoeffects::none();
+  for (auto const& name : staticCoeffects) {
+    coeffects |= CoeffectsConfig::fromName(name->toCppString());
+  }
+  auto const shallowCoeffectsWithLocals = coeffects.toShallowWithLocals();
+  f->m_requiredCoeffects = coeffects.toRequired();
+
   bool const needsExtendedSharedData =
     isNative ||
     line2 - line1 >= Func::kSmallDeltaLimit ||
@@ -275,6 +284,7 @@ Func* FuncEmitter::create(Unit& unit, PreClass* preClass /* = NULL */, bool save
     hasParamsWithMultiUBs ||
     hasReturnWithMultiUBs ||
     dynCallSampleRate ||
+    shallowCoeffectsWithLocals.value() != 0 ||
     !coeffectRules.empty();
 
   const unsigned char* bc = nullptr;
@@ -310,26 +320,15 @@ Func* FuncEmitter::create(Unit& unit, PreClass* preClass /* = NULL */, bool save
     ex->m_allFlags.m_isMemoizeWrapper = false;
     ex->m_allFlags.m_isMemoizeWrapperLSB = false;
 
-    if (!coeffectRules.empty()) {
-      ex->m_coeffectRules = coeffectRules;
-      f->shared()->m_allFlags.m_hasCoeffectRules = true;
-    }
+    if (!coeffectRules.empty()) ex->m_coeffectRules = coeffectRules;
+    ex->m_shallowCoeffectsWithLocals = shallowCoeffectsWithLocals;
   }
-
-  auto coeffects = StaticCoeffects::none();
-  for (auto const& name : staticCoeffects) {
-    f->shared()->m_staticCoeffectNames.push_back(name);
-    coeffects |= CoeffectsConfig::fromName(name->toCppString());
-  }
-  f->m_staticCoeffects = coeffects;
-
 
   std::vector<Func::ParamInfo> fParams;
   for (unsigned i = 0; i < params.size(); ++i) {
     Func::ParamInfo pi = params[i];
     if (pi.isVariadic()) {
-      pi.builtinType = RuntimeOption::EvalHackArrDVArrs
-        ? KindOfVec : KindOfVArray;
+      pi.builtinType = KindOfVec;
     }
     f->appendParam(params[i].isInOut(), pi, fParams);
     auto const& fromUBs = params[i].upperBounds;
@@ -376,9 +375,13 @@ Func* FuncEmitter::create(Unit& unit, PreClass* preClass /* = NULL */, bool save
   f->shared()->m_allFlags.m_hasReifiedGenerics = hasReifiedGenerics;
   f->shared()->m_allFlags.m_isRxDisabled = isRxDisabled;
 
+  for (auto const& name : staticCoeffects) {
+    f->shared()->m_staticCoeffectNames.push_back(name);
+  }
+
   if (hasReifiedGenerics) {
-    auto tv = uait->second;
-    assertx(tvIsHAMSafeVArray(tv));
+    auto const tv = uait->second;
+    assertx(tvIsVec(tv));
     f->extShared()->m_reifiedGenericsInfo =
       extractSizeAndPosFromReifiedAttribute(tv.m_data.parr);
   }

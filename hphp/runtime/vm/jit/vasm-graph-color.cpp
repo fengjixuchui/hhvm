@@ -22,8 +22,6 @@
 #include "hphp/runtime/vm/jit/vasm-unit.h"
 #include "hphp/runtime/vm/jit/vasm-util.h"
 
-#include "hphp/ppc64-asm/asm-ppc64.h"
-
 #include "hphp/util/copy-ptr.h"
 #include "hphp/util/dataflow-worklist.h"
 #include "hphp/util/match.h"
@@ -1309,7 +1307,6 @@ State make_state(Vunit& unit, const Abi& abi) {
     switch (arch()) {
       case Arch::X64:   return reg::xmm15;
       case Arch::ARM:   return vixl::d31;
-      case Arch::PPC64: return ppc64_asm::reg::v29;
     }
     always_assert(false);
   }();
@@ -9373,7 +9370,6 @@ bool can_single_swap(PhysReg r1, PhysReg r2) {
   switch (arch()) {
     case Arch::X64:   return r1.isGP() && r2.isGP();
     case Arch::ARM:   return false;
-    case Arch::PPC64: return false;
   }
   always_assert(false);
 }
@@ -10915,6 +10911,10 @@ SPOffsets calculate_sp_offsets(const State& state) {
       if (inst.op == Vinstr::recordbasenativesp) {
         assertx(!spOffset);
         spOffset = 0;
+      } else if (inst.op == Vinstr::unrecordbasenativesp) {
+        assert_flog(spOffset, "Block B{} Instr {} uninitiailizes native SP, "
+                    "but already uninitialized.", b, i);
+        spOffset = folly::none;
       } else if (spOffset) {
         *spOffset += sp_change(state, inst);
         // Don't support moving the stack pointer before where it started
@@ -11140,6 +11140,9 @@ void materialize_spills(const State& state, size_t spillSpace) {
         if (inst.op == Vinstr::recordbasenativesp) {
           assertx(!spOffset);
           spOffset = 0;
+        } else if (inst.op == Vinstr::unrecordbasenativesp) {
+          assertx(spOffset);
+          spOffset = folly::none;
         } else if (spOffset) {
           *spOffset += sp_change(state, inst);
           assertx(*spOffset <= 0);
@@ -11172,6 +11175,8 @@ struct SPAdjustLiveness {
   // If set, the index of the last instruction in the block which goes from
   // alive to dead.
   folly::Optional<size_t> end;
+  // Whether this block contains an indirect fixup
+  bool hasIndirectFixup;
 };
 
 // Implementation of spill liveness algorithm, templated to allow for
@@ -11206,6 +11211,8 @@ jit::vector<SPAdjustLiveness> find_spill_liveness_impl(const State& state,
     }
   };
 
+  jit::vector<SPAdjustLiveness> liveness(unit.blocks.size());
+
   for (auto const b : state.rpo) {
     auto& live = slotLiveness[b];
     resize(live.in);
@@ -11224,6 +11231,7 @@ jit::vector<SPAdjustLiveness> find_spill_liveness_impl(const State& state,
         live.kill[o] = false;
         live.gen[o] = true;
       }
+      if (instrHasIndirectFixup(inst)) liveness[b].hasIndirectFixup = true;
     }
 
     live.in = live.gen;
@@ -11248,8 +11256,6 @@ jit::vector<SPAdjustLiveness> find_spill_liveness_impl(const State& state,
     }
   }
 
-  jit::vector<SPAdjustLiveness> liveness(unit.blocks.size());
-
   for (auto const b : state.rpo) {
     auto& live = liveness[b];
     bool spRecorded = spOff[b].in.has_value();
@@ -11267,6 +11273,7 @@ jit::vector<SPAdjustLiveness> find_spill_liveness_impl(const State& state,
         auto const& inst = block.code[i];
         assertx(inst.op != Vinstr::reload);
         if (inst.op == Vinstr::recordbasenativesp) spRecorded = true;
+        else if (inst.op == Vinstr::unrecordbasenativesp) spRecorded = false;
         if (!is_spill_inst(inst)) continue;
         live.begin = i;
         // This should be caught earlier when the spill occurs.
@@ -11277,11 +11284,12 @@ jit::vector<SPAdjustLiveness> find_spill_liveness_impl(const State& state,
         break;
       }
     } else {
-      always_assert_flog(spRecorded, "Trying to spill before it is allowed. "
-                         "Spill slots are live at the start of B{}, but the "
-                         "base native sp is not yet recorded. There is a "
-                         "spill somewhere in a loop that is not dominated by "
-                         "the recording of the base native sp.", b);
+      always_assert_flog(spRecorded, "Trying to spill before or after it is "
+                         "allowed. Spill slots are live at the start of B{}, "
+                         "but the base native sp is not yet recorded. There "
+                         "is a spill somewhere in a loop that is not "
+                         "dominated by the recording of the base native sp.",
+                         b);
     }
 
     // If there are no spill slots alive going out of the block and there's any
@@ -11353,7 +11361,18 @@ jit::vector<SPAdjustLiveness> find_sp_liveness(const State& state,
       auto& block = unit.blocks[b];
       for (size_t i = 0; i < block.code.size(); ++i) {
         auto const& inst = block.code[i];
-        if (!in && inst.op == Vinstr::recordbasenativesp) in = 0;
+        if (inst.op == Vinstr::recordbasenativesp) {
+          assertx(!in);
+          in = 0;
+          continue;
+        }
+        if (inst.op == Vinstr::unrecordbasenativesp) {
+          assertx(in);
+          assert_flog(*in == 0, "Base native sp unrecorded when spill space "
+                      "is live.");
+          in = folly::none;
+          continue;
+        }
         if (!in || sp_change(state, inst) == 0) continue;
         live.begin = i;
         found = true;
@@ -11365,16 +11384,26 @@ jit::vector<SPAdjustLiveness> find_sp_liveness(const State& state,
       found = true;
     }
 
-    if (!out) continue;
-    if (*out == 0) {
+    if (!out || *out == 0) {
       // The out-offset of the block is 0, so the stack pointer offset is dead
       // going out of the block. Look backwards for any instruction which
       // changes it to make the stack pointer offset alive.
       auto& block = unit.blocks[b];
       for (size_t i = block.code.size(); i > 0; --i) {
         auto const& inst = block.code[i-1];
-        if (inst.op == Vinstr::recordbasenativesp) break;
-        if (sp_change(state, inst) == 0) continue;
+        if (inst.op == Vinstr::recordbasenativesp) {
+          assertx(out);
+          assert_flog(*out == 0, "Base native sp unrecorded when spill space "
+                      "is live.");
+          out = folly::none;
+          continue;
+        }
+        if (inst.op == Vinstr::unrecordbasenativesp) {
+          assertx(!out);
+          out = 0;
+          continue;
+        }
+        if (!out || sp_change(state, inst) == 0) continue;
         live.end = i - 1;
         found = true;
         break;
@@ -11465,6 +11494,7 @@ void expand_spill_liveness(const State& state,
 
 // Insert stack pointer adjustments at the appropriate places
 void insert_sp_adjustments(State& state, size_t spillSpace) {
+  assertx(spillSpace != 0);
   // We make use of the stack pointer offset info to determine liveness of the
   // stack pointer, and establish if the base sp has been recorded.
   auto const spOffsets = calculate_sp_offsets(state);
@@ -11501,8 +11531,42 @@ void insert_sp_adjustments(State& state, size_t spillSpace) {
     return 1;
   };
 
+  auto const adjust_rip = [&](Vlabel b, size_t begin, size_t end) {
+    assertx(begin < state.unit.blocks[b].code.size());
+    assertx(end <= state.unit.blocks[b].code.size());
+    for (size_t i = begin; i < end; ++i) {
+      auto& inst = state.unit.blocks[b].code[i];
+      if (instrHasIndirectFixup(inst)) {
+        updateIndirectFixupBySpill(inst, spillSpace);
+      }
+    }
+  };
+
+  auto const prologue = isPrologue(state.unit.context->kind);
   for (auto const b : state.rpo) {
     auto const& spill = spillLiveness[b];
+
+    if (prologue && spill.hasIndirectFixup) {
+      if (spill.begin) {
+        // Spill begins in this block
+        assertx(!spill.in);
+        assertx(IMPLIES(!spill.end, spill.out));
+        assertx(IMPLIES(spill.end, !spill.out));
+        auto const end =
+          spill.end ? *spill.end + 1 : state.unit.blocks[b].code.size();
+        adjust_rip(b, *spill.begin, end);
+      } else if (spill.end) {
+        // Spill ends in this block
+        assertx(spill.in);
+        assertx(!spill.out);
+        adjust_rip(b, 0, *spill.end + 1);
+      } else if (spill.in && spill.out) {
+        // Spill persists in this block
+        adjust_rip(b, 0, state.unit.blocks[b].code.size());
+      } else {
+        assertx(!spill.in && !spill.out);
+      }
+    }
 
     size_t added = 0;
     if (spill.begin) {

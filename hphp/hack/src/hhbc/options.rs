@@ -33,7 +33,7 @@
 //! opts.hhvm_flags.contains(
 //!     HhvmFlags::RX_IS_ENABLED);          // hhvm.rx_is_enabled
 //! opts.hhvm.hack_lang_flags.set(
-//!     LangFlags::ENABLE_COROUTINES);      // hhvm.hack.lang.enable_coroutines
+//!     LangFlags::ENABLE_ENUM_CLASSES);      // hhvm.hack.lang.enable_enum_classes
 //! ```
 
 mod options_cli;
@@ -163,7 +163,6 @@ prefixed_flags!(
     ENABLE_INTRINSICS_EXTENSION,
     FOLD_LAZY_CLASS_KEYS,
     HACK_ARR_COMPAT_NOTICES,
-    HACK_ARR_DV_ARR_MARK,
     HACK_ARR_DV_ARRS,
     JIT_ENABLE_RENAME_FUNCTION,
     LOG_EXTERN_COMPILER_PERF,
@@ -267,17 +266,17 @@ prefixed_flags!(
     DISALLOW_HASH_COMMENTS,
     DISALLOW_DYNAMIC_METH_CALLER_ARGS,
     ENABLE_CLASS_LEVEL_WHERE_CLAUSES,
-    ENABLE_COROUTINES,
     ENABLE_ENUM_CLASSES,
     ENABLE_XHP_CLASS_MODIFIER,
     DISABLE_ARRAY_CAST,
     DISABLE_ARRAY_TYPEHINT,
     DISABLE_ARRAY,
     RUST_EMITTER,
+    ENABLE_READONLY_ENFORCEMENT,
 );
 impl Default for LangFlags {
     fn default() -> LangFlags {
-        LangFlags::ENABLE_COROUTINES | LangFlags::DISABLE_LEGACY_SOFT_TYPEHINTS
+        LangFlags::DISABLE_LEGACY_SOFT_TYPEHINTS | LangFlags::ENABLE_ENUM_CLASSES
     }
 }
 
@@ -285,11 +284,10 @@ prefixed_flags!(
     PhpismFlags,
     "hhvm.hack.lang.phpism.",
     DISABLE_NONTOPLEVEL_DECLARATIONS,
-    DISABLE_STATIC_CLOSURES,
 );
 impl Default for PhpismFlags {
     fn default() -> PhpismFlags {
-        PhpismFlags::DISABLE_STATIC_CLOSURES
+        PhpismFlags::empty()
     }
 }
 
@@ -750,10 +748,10 @@ mod tests {
   "hhvm.hack.lang.enable_class_level_where_clauses": {
     "global_value": false
   },
-  "hhvm.hack.lang.enable_coroutines": {
+  "hhvm.hack.lang.enable_enum_classes": {
     "global_value": true
   },
-  "hhvm.hack.lang.enable_enum_classes": {
+  "hhvm.hack.lang.enable_readonly_enforcement": {
     "global_value": false
   },
   "hhvm.hack.lang.enable_xhp_class_modifier": {
@@ -763,9 +761,6 @@ mod tests {
     "global_value": false
   },
   "hhvm.hack_arr_compat_notices": {
-    "global_value": false
-  },
-  "hhvm.hack_arr_dv_arr_mark": {
     "global_value": false
   },
   "hhvm.hack_arr_dv_arrs": {
@@ -958,7 +953,7 @@ mod tests {
         let jsons: [String; 2] = [
             json!({
                 // override an options from 1 to 0 in first JSON,
-                "hhvm.hack.lang.enable_coroutines": { "global_value": false },
+                "hhvm.hack.lang.enable_enum_classes": { "global_value": false },
                 // but specify the default (0) on rx_is_enabled)
                 "hhvm.rx_is_enabled": { "global_value": false }
             })
@@ -982,7 +977,7 @@ mod tests {
             !act.hhvm
                 .hack_lang
                 .flags
-                .contains(LangFlags::ENABLE_COROUTINES)
+                .contains(LangFlags::ENABLE_ENUM_CLASSES)
         );
         assert!(act.hhvm.flags.contains(HhvmFlags::RX_IS_ENABLED));
     }
@@ -1142,15 +1137,12 @@ bitflags! {
         const HACK_ARR_DV_ARRS = 1 << 8;
         const AUTHORITATIVE = 1 << 9;
         const JIT_ENABLE_RENAME_FUNCTION = 1 << 10;
-        // No longer using bit 11.
-        const ENABLE_COROUTINES = 1 << 12;
-        // No longer using bit 13.
+        // No longer using bits 11-13.
         const LOG_EXTERN_COMPILER_PERF = 1 << 14;
         const ENABLE_INTRINSICS_EXTENSION = 1 << 15;
         // No longer using bits 16-21.
         const DISABLE_NONTOPLEVEL_DECLARATIONS = 1 << 22;
-        const DISABLE_STATIC_CLOSURES = 1 << 23;
-        // No longer using bits 24-25.
+        // No longer using bits 23-25.
         const EMIT_CLS_METH_POINTERS = 1 << 26;
         const EMIT_INST_METH_POINTERS = 1 << 27;
         const EMIT_METH_CALLER_FUNC_POINTERS = 1 << 28;
@@ -1178,12 +1170,13 @@ bitflags! {
         const RUST_EMITTER = 1 << 51;
         const DISABLE_ARRAY_CAST = 1 << 52;
         const DISABLE_ARRAY_TYPEHINT = 1 << 53;
-        const HACK_ARR_DV_ARR_MARK = 1 << 54;
+        // No longer using bit 54.
         const ALLOW_UNSTABLE_FEATURES = 1 << 55;
         const DISALLOW_HASH_COMMENTS = 1 << 56;
         const DISALLOW_FUN_AND_CLS_METH_PSEUDO_FUNCS = 1 << 57;
         const FOLD_LAZY_CLASS_KEYS = 1 << 58;
         const DISALLOW_DYNAMIC_METH_CALLER_ARGS = 1 << 59;
         const DISALLOW_INST_METH = 1 << 60;
+        const ENABLE_READONLY_ENFORCEMENT = 1 << 61;
     }
 }

@@ -962,10 +962,9 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_anonymous_function(ctx: &C, attribute_spec: Self, static_keyword: Self, async_keyword: Self, function_keyword: Self, left_paren: Self, parameters: Self, right_paren: Self, ctx_list: Self, colon: Self, readonly_return: Self, type_: Self, use_: Self, body: Self) -> Self {
+    fn make_anonymous_function(ctx: &C, attribute_spec: Self, async_keyword: Self, function_keyword: Self, left_paren: Self, parameters: Self, right_paren: Self, ctx_list: Self, colon: Self, readonly_return: Self, type_: Self, use_: Self, body: Self) -> Self {
         let syntax = SyntaxVariant::AnonymousFunction(ctx.get_arena().alloc(AnonymousFunctionChildren {
             attribute_spec,
-            static_keyword,
             async_keyword,
             function_keyword,
             left_paren,
@@ -1182,10 +1181,11 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_function_call_expression(ctx: &C, receiver: Self, type_args: Self, left_paren: Self, argument_list: Self, right_paren: Self) -> Self {
+    fn make_function_call_expression(ctx: &C, receiver: Self, type_args: Self, enum_atom: Self, left_paren: Self, argument_list: Self, right_paren: Self) -> Self {
         let syntax = SyntaxVariant::FunctionCallExpression(ctx.get_arena().alloc(FunctionCallExpressionChildren {
             receiver,
             type_args,
+            enum_atom,
             left_paren,
             argument_list,
             right_paren,
@@ -1661,9 +1661,10 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_closure_type_specifier(ctx: &C, outer_left_paren: Self, function_keyword: Self, inner_left_paren: Self, parameter_list: Self, inner_right_paren: Self, contexts: Self, colon: Self, readonly_return: Self, return_type: Self, outer_right_paren: Self) -> Self {
+    fn make_closure_type_specifier(ctx: &C, outer_left_paren: Self, readonly_keyword: Self, function_keyword: Self, inner_left_paren: Self, parameter_list: Self, inner_right_paren: Self, contexts: Self, colon: Self, readonly_return: Self, return_type: Self, outer_right_paren: Self) -> Self {
         let syntax = SyntaxVariant::ClosureTypeSpecifier(ctx.get_arena().alloc(ClosureTypeSpecifierChildren {
             outer_left_paren,
+            readonly_keyword,
             function_keyword,
             inner_left_paren,
             parameter_list,

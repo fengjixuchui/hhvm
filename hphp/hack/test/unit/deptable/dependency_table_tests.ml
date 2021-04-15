@@ -73,8 +73,12 @@ let write_and_parse_test_files ctx =
   if not (Errors.is_empty errors) then (
     Errors.iter_error_list
       (fun e ->
-        List.iter (Errors.to_list e) ~f:(fun (pos, msg) ->
-            eprintf "%s: %s\n" (Pos.string (Pos.to_absolute pos)) msg))
+        List.iter (Errors.to_list_ e) ~f:(fun (pos, msg) ->
+            eprintf
+              "%s: %s\n"
+              (Pos.string
+                 (Pos.to_absolute @@ Pos_or_decl.unsafe_to_raw_pos pos))
+              msg))
       errors;
     failwith "Expected no errors from parsing."
   );
@@ -98,6 +102,7 @@ let run_test f =
             shm_min_avail = 0;
             log_level = 0;
             sample_rate = 0.0;
+            compression = 0;
           }
       in
       let (_ : SharedMem.handle) = SharedMem.init config ~num_workers:0 in
@@ -158,8 +163,9 @@ let test_dep_graph_blob () =
             (Telemetry.create ())
             dynamic_view_files
             [Relative_path.from_root ~suffix:"baz.php"]
-            memory_cap
-            check_info
+            ~memory_cap
+            ~longlived_workers:false
+            ~check_info
         in
 
         Asserter.Bool_asserter.assert_equals

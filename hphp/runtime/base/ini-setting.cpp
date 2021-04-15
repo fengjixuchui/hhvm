@@ -21,6 +21,7 @@
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/execution-context.h"
 #include "hphp/runtime/base/req-optional.h"
+#include "hphp/runtime/base/string-functors.h"
 #include "hphp/runtime/base/runtime-option.h"
 
 #include "hphp/runtime/base/ini-parser/zend-ini.h"
@@ -46,6 +47,8 @@
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string.hpp>
 #include <map>
+
+#include <folly/container/F14Map.h>
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
@@ -578,7 +581,6 @@ void IniSettingMap::set(const String& key, const Variant& v) {
 Array IniSetting::ParserCallback::emptyArrayForMode() const {
   switch (mode_) {
     case ParserCallbackMode::DARRAY:
-      return Array::CreateDArray();
     case ParserCallbackMode::DICT:
       return Array::CreateDict();
   }
@@ -588,7 +590,6 @@ Array IniSetting::ParserCallback::emptyArrayForMode() const {
 Array& IniSetting::ParserCallback::forceToArrayForMode(Variant& var) const {
   switch (mode_) {
     case ParserCallbackMode::DARRAY:
-      return forceToDArray(var);
     case ParserCallbackMode::DICT:
       return forceToDict(var);
   }
@@ -598,7 +599,6 @@ Array& IniSetting::ParserCallback::forceToArrayForMode(Variant& var) const {
 Array& IniSetting::ParserCallback::forceToArrayForMode(tv_lval var) const {
   switch (mode_) {
     case ParserCallbackMode::DARRAY:
-      return forceToDArray(var);
     case ParserCallbackMode::DICT:
       return forceToDict(var);
   }
@@ -806,7 +806,7 @@ Variant IniSetting::FromString(const String& ini, const String& filename,
   if (process_sections) {
     CallbackData data;
     SectionParserCallback cb(ParserCallbackMode::DARRAY);
-    data.arr = Array::CreateDArray();
+    data.arr = Array::CreateDict();
     if (zend_parse_ini_string(ini_cpp, filename_cpp, scanner_mode, cb, &data)) {
       if (!data.active_name.isNull()) {
         data.arr.asArrRef().set(data.active_name, data.active_section);
@@ -815,7 +815,7 @@ Variant IniSetting::FromString(const String& ini, const String& filename,
     }
   } else {
     ParserCallback cb(ParserCallbackMode::DARRAY);
-    Variant arr = Array::CreateDArray();
+    Variant arr = Array::CreateDict();
     if (zend_parse_ini_string(ini_cpp, filename_cpp, scanner_mode, cb, &arr)) {
       ret = arr;
     }
@@ -857,7 +857,8 @@ public:
   std::function<Variant()> getCallback;
 };
 
-typedef std::map<std::string, IniCallbackData> CallbackMap;
+using CallbackMap = folly::F14FastMap<
+  String, IniCallbackData, hphp_string_hash, hphp_string_same>;
 
 //
 // These are for settings/callbacks only settable at startup.
@@ -950,6 +951,7 @@ void IniSetting::Bind(
   // line is that we can't really use ModulesInitialised() to help steer
   // the choices here.
   //
+  auto const staticName = String::attach(makeStaticString(name));
 
   bool use_user = is_thread_local;
   if (RuntimeOption::EnableZendIniCompat && !use_user) {
@@ -959,7 +961,7 @@ void IniSetting::Bind(
     // observed during development.
     //
     bool in_user_callbacks =
-      (s_user_callbacks->find(name) != s_user_callbacks->end());
+      (s_user_callbacks->find(staticName) != s_user_callbacks->end());
     assert (!in_user_callbacks);  // See note above
     use_user = in_user_callbacks;
   }
@@ -981,8 +983,8 @@ void IniSetting::Bind(
   // the default, but we haven't built that yet.
   //
 
-  IniCallbackData &data =
-    use_user ? (*s_user_callbacks)[name] : s_system_ini_callbacks[name];
+  IniCallbackData &data = use_user ? (*s_user_callbacks)[staticName]
+                                   : s_system_ini_callbacks[staticName];
 
   data.extension = extension;
   data.mode = mode;
@@ -998,8 +1000,8 @@ void IniSetting::Unbind(const std::string& name) {
   s_user_callbacks->erase(name);
 }
 
-static IniCallbackData* get_callback(const std::string& name) {
-  CallbackMap::iterator iter = s_system_ini_callbacks.find(name);
+static IniCallbackData* get_callback(const String& name) {
+  auto iter = s_system_ini_callbacks.find(name);
   if (iter == s_system_ini_callbacks.end()) {
     iter = s_user_callbacks->find(name);
     if (iter == s_user_callbacks->end()) {
@@ -1016,6 +1018,13 @@ bool IniSetting::Get(const std::string& name, std::string &value) {
   return ret && !value.empty();
 }
 
+bool IniSetting::Get(const String& name, std::string &value) {
+  Variant b;
+  auto ret = Get(name, b);
+  value = b.toString().toCppString();
+  return ret && !value.empty();
+}
+
 bool IniSetting::Get(const String& name, String& value) {
   Variant b;
   auto ret = Get(name, b);
@@ -1023,9 +1032,9 @@ bool IniSetting::Get(const String& name, String& value) {
   return ret;
 }
 
-static bool shouldHideSetting(const std::string& name) {
+static bool shouldHideSetting(const String& name) {
   for (auto& sub : RuntimeOption::EvalIniGetHide) {
-    if (name.find(sub) != std::string::npos) {
+    if (name.find(sub) != -1) {
       return true;
     }
   }
@@ -1033,11 +1042,10 @@ static bool shouldHideSetting(const std::string& name) {
 }
 
 bool IniSetting::Get(const String& name, Variant& value) {
-  auto nameStr = name.toCppString();
-  if (shouldHideSetting(nameStr)) {
+  if (shouldHideSetting(name)) {
     return false;
   }
-  auto cb = get_callback(nameStr);
+  auto cb = get_callback(name);
   if (!cb) {
     return false;
   }
@@ -1051,7 +1059,13 @@ std::string IniSetting::Get(const std::string& name) {
   return ret;
 }
 
-static bool ini_set(const std::string& name, const Variant& value,
+std::string IniSetting::Get(const String& name) {
+  std::string ret;
+  Get(name, ret);
+  return ret;
+}
+
+static bool ini_set(const String& name, const Variant& value,
                     IniSetting::Mode mode) {
   auto cb = get_callback(name);
   if (!cb || !(cb->mode & mode)) {
@@ -1083,7 +1097,7 @@ bool IniSetting::SetSystem(const String& name, const Variant& value) {
   Variant eval_scalar_variant = value;
   eval_scalar_variant.setEvalScalar();
   s_system_settings.settings[name.toCppString()] = eval_scalar_variant;
-  return ini_set(name.toCppString(), value, PHP_INI_SET_EVERY);
+  return ini_set(name, value, PHP_INI_SET_EVERY);
 }
 
 bool IniSetting::GetSystem(const String& name, Variant& value) {
@@ -1104,7 +1118,7 @@ bool IniSetting::SetUser(const String& name, const Variant& value) {
       defaults[name.toCppString()] = def;
     }
   }
-  return ini_set(name.toCppString(), value, PHP_INI_SET_USER);
+  return ini_set(name, value, PHP_INI_SET_USER);
 }
 
 void IniSetting::RestoreUser(const String& name) {
@@ -1112,7 +1126,7 @@ void IniSetting::RestoreUser(const String& name) {
     auto& defaults = s_saved_defaults->settings.value();
     auto it = defaults.find(name.toCppString());
     if (it != defaults.end() &&
-        ini_set(name.toCppString(), it->second, PHP_INI_SET_USER)) {
+        ini_set(name, it->second, PHP_INI_SET_USER)) {
       defaults.erase(it);
     }
   }
@@ -1136,7 +1150,7 @@ void IniSetting::ResetSavedDefaults() {
   s_saved_defaults->clear();
 }
 
-bool IniSetting::GetMode(const std::string& name, Mode& mode) {
+bool IniSetting::GetMode(const String& name, Mode& mode) {
   auto cb = get_callback(name);
   if (!cb) {
     return false;
@@ -1146,7 +1160,7 @@ bool IniSetting::GetMode(const std::string& name, Mode& mode) {
 }
 
 Array IniSetting::GetAll(const String& ext_name, bool details) {
-  Array r = Array::CreateDArray();
+  Array r = Array::CreateDict();
 
   const Extension* ext = nullptr;
   if (!ext_name.empty()) {
@@ -1176,7 +1190,7 @@ Array IniSetting::GetAll(const String& ext_name, bool details) {
       value = value.toString();
     }
     if (details) {
-      Array item = Array::CreateDArray();
+      Array item = Array::CreateDict();
       item.set(s_global_value, value);
       item.set(s_local_value, value);
       if (iter.second.mode == PHP_INI_ALL) {
@@ -1198,7 +1212,6 @@ Array IniSetting::GetAll(const String& ext_name, bool details) {
 }
 
 std::string IniSetting::GetAllAsJSON() {
-  ARRPROV_USE_RUNTIME_LOCATION();
   Array settings = GetAll(empty_string(), true);
   auto const opts = k_JSON_FB_FORCE_HACK_ARRAYS;
   String out = Variant::attach(HHVM_FN(json_encode)(settings, opts)).toString();

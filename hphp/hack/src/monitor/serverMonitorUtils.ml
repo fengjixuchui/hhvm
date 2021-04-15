@@ -28,7 +28,7 @@ type watchman_mergebase = {
   (* Watchman says current repo mergebase is this. *)
   mergebase_global_rev: int;
   (* ... plus these files changed to represent its current state *)
-  files_changed: SSet.t;
+  files_changed: SSet.t; [@printer SSet.pp_large]
   (* ...as of this clock *)
   watchman_clock: string;
 }
@@ -42,6 +42,7 @@ type target_saved_state = {
   target_global_rev: int;
   watchman_mergebase: watchman_mergebase option;
 }
+[@@deriving show]
 
 let watchman_mergebase_to_string
     { mergebase_global_rev; files_changed; watchman_clock } =
@@ -72,6 +73,8 @@ module type Server_config = sig
 
   (* Callback to run when server exits *)
   val on_server_exit : monitor_config -> unit
+
+  val is_saved_state_precomputed : server_start_options -> bool
 end
 
 type build_mismatch_info = {

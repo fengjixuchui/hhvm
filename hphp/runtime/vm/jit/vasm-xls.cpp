@@ -35,8 +35,6 @@
 #include "hphp/util/dataflow-worklist.h"
 #include "hphp/util/trace.h"
 
-#include "hphp/ppc64-asm/asm-ppc64.h"
-
 #include <boost/dynamic_bitset.hpp>
 #include <boost/range/adaptor/reversed.hpp>
 #include <folly/Format.h>
@@ -320,9 +318,6 @@ struct VxlsContext {
         break;
       case Arch::ARM:
         tmp = vixl::d31;
-        break;
-      case Arch::PPC64:
-        tmp = ppc64_asm::reg::v29;
         break;
     }
     this->abi.simdUnreserved -= tmp;
@@ -693,6 +688,12 @@ jit::vector<folly::Optional<int>> analyzeSP(const Vunit& unit,
         assert_flog(!offset, "Block B{} Instr {} initiailizes native SP, but "
                     "already initialized.", size_t(b), j);
         offset = 0;
+      } else if (inst.op == Vinstr::unrecordbasenativesp) {
+        assert_flog(offset, "Block B{} Instr {} uninitiailizes native SP, but "
+                    "already uninitialized.", size_t(b), j);
+        assert_flog(*offset == 0, "Block B{} Instr {} uninitiailizes native SP, "
+                    "but SPOffset is nonzero.", size_t(b), j);
+        offset = folly::none;
       } else if (offset) {
         *offset -= spEffect(unit, inst, sp);
       }
@@ -947,11 +948,19 @@ jit::vector<Variable*> buildIntervals(const Vunit& unit,
       if (inst.op == Vinstr::recordbasenativesp) {
         forEach(live, [&](Vreg r) {
           if (!unit.regToConst.count(r)) {
-            // We mark the recordbasenativesp as a use so no spills get
-            // inserted prior to the recordbasenativesp unless they have to be.
+            // We mark the instruction as a use so no spills span the
+            // instruction  unless they have to.
             uv.use(r);
             if (!variables[r]) variables[r] = Variable::create(r);
             variables[r]->recordbasenativesps.push_back(pos);
+          }
+        });
+      } else if (inst.op == Vinstr::unrecordbasenativesp) {
+        forEach(live, [&](Vreg r) {
+          if (!unit.regToConst.count(r)) {
+            // We mark the instruction as a use so no spills span the
+            // instruction  unless they have to.
+            uv.use(r);
           }
         });
       }
@@ -2018,7 +2027,8 @@ void insertSpill(const VxlsContext& ctx,
     spill(ivl->var->def_pos + 1);
   } else {
     for (auto const pos : ivl->var->recordbasenativesps) {
-      always_assert_flog(ivl->covers(pos), "Spilling required before native sp set");
+      always_assert_flog(ivl->covers(pos),
+                         "Spilling required before native sp set");
       spill(pos + 1);
     }
   }
@@ -2435,6 +2445,12 @@ void insertCopies(Vunit& unit, const VxlsContext& ctx,
         assert_flog(!offset, "Block B{} Instr {} initiailizes native SP, but "
                     "already initialized.", size_t(b), j);
         offset = 0;
+      } else if (code[j].op == Vinstr::unrecordbasenativesp) {
+        assert_flog(offset, "Block B{} Instr {} uninitiailizes native SP, but "
+                    "already uninitialized.", size_t(b), j);
+        assert_flog(*offset == 0, "Block B{} Instr {} uninitiailizes native "
+                    "SP, but SP offset is non zero.", size_t(b), j);
+        offset = folly::none;
       } else if (offset) {
         *offset -= spEffect(unit, code[j], ctx.sp);
       }
@@ -2553,6 +2569,8 @@ enum SpillState : uint8_t {
 struct SpillStates {
   SpillState in;
   SpillState out;
+  bool changes;
+  bool hasIndirectFixup;
 };
 
 /*
@@ -2586,10 +2604,12 @@ SpillState instrInState(const Vunit& unit, const Vinstr& inst,
       return NoSpillPossible;
 
     case NoSpill:
+      if (inst.op == Vinstr::unrecordbasenativesp) return NoSpillPossible;
       if (instrNeedsSpill(unit, inst, sp)) return NeedSpill;
       return NoSpill;
 
     case NeedSpill:
+      if (inst.op == Vinstr::unrecordbasenativesp) return NoSpillPossible;
       return NeedSpill;
   }
 
@@ -2703,8 +2723,10 @@ bool mergeSpillStates(SpillState& dst, SpillState src) {
   assertx(src != Uninit);
   if (dst == src) return false;
 
-  // The only allowed state transitions are to states with higher values, so we
-  // merge with std::max().
+  // The only permitted merges result in a state with higher values.  This
+  // holds because we can't merge a NoSpillPossible with a non NoSpillPossible
+  // since that would mean a program point both can and can't have spills.
+  assertx(IMPLIES(src != NoSpillPossible, dst != NoSpillPossible));
   auto const oldDst = dst;
   dst = std::max(dst, src);
   return dst != oldDst;
@@ -2728,7 +2750,7 @@ std::uniform_int_distribution<int> s_stressDist(1,7);
  * Analysis:
  *   - For each block in RPO:
  *     - Load in-state, which has been populated by at least one predecessor
- *       (or manually set to NoSpill for the entry block).
+ *       (or manually set to NoSpillPossible for the entry block).
  *     - Analyze each instruction in the block, determining what state the
  *       spill space must be in before executing it.
  *     - Record out-state for the block and propagate to successors. If this
@@ -2738,10 +2760,11 @@ std::uniform_int_distribution<int> s_stressDist(1,7);
  *   - For each block (we use RPO to only visit reachable blocks but order
  *     doesn't matter):
  *     - Inspect the block's in-state and out-state:
- *       - NoSpill in, == NeedSpill out: Walk the block to see if we need to
- *         allocate spill space before any instructions.
+ *       - NoSpill in: Walk the block to see if we need to allocate spill space
+ *         before any instructions.
  *       - NoSpill out: Allocate spill space on any edges to successors with
- *         NeedSpill in-states.
+ *         NeedSpill in-states.  Also walk block and check for deallocation of
+ *         spill space.
  *       - NeedSpill out: If the block has no in-unit successors, free spill
  *         space before the block-end instruction.
  *       - != NoSpill out: Look for any fallbackcc/bindjcc instructions,
@@ -2766,7 +2789,8 @@ void allocateSpillSpace(Vunit& unit, const VxlsContext& ctx,
   jit::vector<uint32_t> rpoIds(unit.blocks.size());
   for (uint32_t i = 0; i < ctx.blocks.size(); ++i) rpoIds[ctx.blocks[i]] = i;
 
-  jit::vector<SpillStates> states(unit.blocks.size(), {Uninit, Uninit});
+  jit::vector<SpillStates> states(unit.blocks.size(),
+                                  {Uninit, Uninit, false, false});
   states[unit.entry].in = NoSpillPossible;
   dataflow_worklist<uint32_t> worklist(unit.blocks.size());
   worklist.push(0);
@@ -2777,13 +2801,13 @@ void allocateSpillSpace(Vunit& unit, const VxlsContext& ctx,
   while (!worklist.empty()) {
     auto const label  = ctx.blocks[worklist.pop()];
     auto const& block = unit.blocks[label];
-    auto state = states[label].in;
+    auto const stateIn = states[label].in;
+    auto state = stateIn;
 
-    if (state < NeedSpill) {
-      for (auto& inst : block.code) {
-        state = instrInState(unit, inst, state, ctx.sp);
-        if (state == NeedSpill) break;
-      }
+    for (auto& inst : block.code) {
+      state = instrInState(unit, inst, state, ctx.sp);
+      if (state != stateIn) states[label].changes = true;
+      if (instrHasIndirectFixup(inst)) states[label].hasIndirectFixup = true;
     }
     states[label].out = state;
 
@@ -2799,10 +2823,10 @@ void allocateSpillSpace(Vunit& unit, const VxlsContext& ctx,
     auto state = states[label];
     auto& block = unit.blocks[label];
 
-    // Any block with a non NeedSpill in-state and == NeedSpill out-state might
-    // have an instruction in it that needs spill space, which we allocate
-    // right before the instruction in question.
-    if (state.in != NeedSpill && state.out == NeedSpill) {
+    // Any block with a non NeedSpill in-state might have an instruction in it
+    // that needs spill space, which we allocate right before the instruction
+    // in question.
+    if (state.in != NeedSpill && (state.out == NeedSpill || state.changes)) {
       auto blockState = state.in;
       for (auto it = block.code.begin(); it != block.code.end(); ++it) {
         blockState = instrInState(unit, *it, blockState, ctx.sp);
@@ -2830,6 +2854,21 @@ void allocateSpillSpace(Vunit& unit, const VxlsContext& ctx,
       }
     }
 
+    // Any block that unrecords the base native sp must have the spill space
+    // removed at the appropriate point.
+    if ((state.in == NeedSpill || state.changes) && state.out != NeedSpill) {
+      auto blockState = state.in;
+      for (auto it = block.code.begin(); it != block.code.end(); ++it) {
+        blockState = instrInState(unit, *it, blockState, ctx.sp);
+        if (blockState == NoSpillPossible) {
+          FTRACE(3, "free spill before {}: {}\n", label, show(unit, *it));
+          free.set_irctx(it->irctx());
+          block.code.insert(it, free);
+          break;
+        }
+      }
+    }
+
     // Any block with a NeedSpill out-state and no successors must free spill
     // space right before the block-end instruction. We ignore trap so spill
     // space is still allocated in core files.
@@ -2845,6 +2884,22 @@ void allocateSpillSpace(Vunit& unit, const VxlsContext& ctx,
     // to free spill space.
     if (state.out == NeedSpill) {
       processSpillExits(unit, label, state.in, free, ctx.sp);
+    }
+
+    if (isPrologue(unit.context->kind)) {
+      if (state.hasIndirectFixup) {
+        auto blockState = state.in;
+        for (auto it = block.code.begin(); it != block.code.end(); ++it) {
+          // Note that if the instruction at the start or end of the spill
+          // regions has fixup, this loop does not account for it.
+          // This is not ideal but currently there are no instructions that
+          // have fixups that can start/end spill regions, so it is fine.
+          if (instrInState(unit, *it, blockState, ctx.sp) == NeedSpill &&
+              instrHasIndirectFixup(*it)) {
+            updateIndirectFixupBySpill(*it, spillSize);
+          }
+        }
+      }
     }
   }
 }

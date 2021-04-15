@@ -8,11 +8,13 @@
        sc_implements = []; sc_implements_dynamic = false; sc_consts = [];
        sc_typeconsts =
        [{ Shallow_decl_defs.stc_abstract = Typing_defs.TCConcrete;
-          stc_as_constraint = None; stc_name = ([5:14-15], "T");
+          stc_as_constraint = None; stc_super_constraint = None;
+          stc_name = ([5:14-15], "T");
           stc_type = (Some (Rhint ([5:18-21]), (Tprim Tint)));
           stc_enforceable = ([Pos.none], false); stc_reifiable = None };
          { Shallow_decl_defs.stc_abstract = Typing_defs.TCConcrete;
-           stc_as_constraint = None; stc_name = ([15:14-16], "T2");
+           stc_as_constraint = None; stc_super_constraint = None;
+           stc_name = ([15:14-16], "T2");
            stc_type = (Some (Rhint ([15:19-25]), (Tprim Tstring)));
            stc_enforceable = ([Pos.none], false); stc_reifiable = None }
          ];
@@ -34,8 +36,7 @@
                   };
                 ft_flags =
                 (make_ft_flags FSync ~return_disposable:false
-                  ~returns_readonly:false ~readonly_this:false
-                  ~is_const:false);
+                  ~returns_readonly:false ~readonly_this:false);
                 ft_ifc_decl = FDPolicied {PUBLIC} }));
           sm_visibility = Public; sm_deprecated = None; sm_flags = (empty) };
          { Shallow_decl_defs.sm_name = ([11:19-20], "g");
@@ -55,8 +56,7 @@
                    };
                  ft_flags =
                  (make_ft_flags FSync ~return_disposable:false
-                   ~returns_readonly:false ~readonly_this:false
-                   ~is_const:false);
+                   ~returns_readonly:false ~readonly_this:false);
                  ft_ifc_decl = FDPolicied {PUBLIC} }));
            sm_visibility = Public; sm_deprecated = None; sm_flags = (empty) }
          ];
@@ -73,6 +73,7 @@
         [{ Shallow_decl_defs.stc_abstract = (Typing_defs.TCAbstract None);
            stc_as_constraint =
            (Some (Rhint ([19:37-38]), (Tapply (([19:37-38], "\\C"), []))));
+           stc_super_constraint = None;
            stc_name = ([19:23-33], "TConstType"); stc_type = None;
            stc_enforceable = ([Pos.none], false); stc_reifiable = None }
           ];
@@ -102,7 +103,7 @@
                     (make_fp_flags ~accept_disposable:false
                       ~has_default:false ~mode:Typing_defs_core.FPnormal
                       ~ifc_external:false ~ifc_can_call:false ~is_atom:false
-                      ~readonly:false ~const_function:false);
+                      ~readonly:false);
                      }
                    ];
                  ft_implicit_params =
@@ -117,8 +118,7 @@
                    };
                  ft_flags =
                  (make_ft_flags FSync ~return_disposable:false
-                   ~returns_readonly:false ~readonly_this:false
-                   ~is_const:false);
+                   ~returns_readonly:false ~readonly_this:false);
                  ft_ifc_decl = FDPolicied {PUBLIC} }));
            sm_visibility = Public; sm_deprecated = None; sm_flags = abstract
            }

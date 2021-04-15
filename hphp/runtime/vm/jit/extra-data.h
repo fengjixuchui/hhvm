@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include "hphp/runtime/base/bespoke/logging-profile.h"
 #include "hphp/runtime/base/collections.h"
 #include "hphp/runtime/base/typed-value.h"
 #include "hphp/runtime/vm/bytecode.h"
@@ -525,6 +524,10 @@ struct SizeHintData : IRExtraData {
     not_reached();
   }
 
+  size_t hash() const {
+    return stableHash();
+  }
+
   size_t stableHash() const {
     return std::hash<SizeHint>()(hint);
   }
@@ -695,22 +698,21 @@ struct TransIDData : IRExtraData {
   TransID transId;
 };
 
-/*
- * FP-relative offset.
- */
-struct FPRelOffsetData : IRExtraData {
-  explicit FPRelOffsetData(FPRelOffset offset) : offset(offset) {}
+struct DefFPData : IRExtraData {
+  explicit DefFPData(folly::Optional<IRSPRelOffset> offset) : offset(offset) {}
 
   std::string show() const {
-    return folly::to<std::string>("FPRelOff ", offset.offset);
+    if (!offset) return "IRSPOff unknown";
+    return folly::to<std::string>("IRSPOff ", offset->offset);
   }
 
-  bool equals(FPRelOffsetData o) const { return offset == o.offset; }
-  size_t hash() const { return std::hash<int32_t>()(offset.offset); }
+  bool equals(DefFPData o) const { return offset == o.offset; }
+  size_t stableHash() const {
+    return offset ? std::hash<int32_t>()(offset->offset) : 0;
+  }
 
-  size_t stableHash() const { return std::hash<int32_t>()(offset.offset); }
-
-  FPRelOffset offset;
+  // Frame position on the stack, if it lives there and the position is known.
+  folly::Optional<IRSPRelOffset> offset;
 };
 
 /*
@@ -1069,7 +1071,6 @@ struct CallData : IRExtraData {
                     uint32_t numOut,
                     Offset callOffset,
                     uint16_t genericsBitmap,
-                    RuntimeCoeffects coeffects,
                     bool hasGenerics,
                     bool hasUnpack,
                     bool skipRepack,
@@ -1081,7 +1082,6 @@ struct CallData : IRExtraData {
     , numOut(numOut)
     , callOffset(callOffset)
     , genericsBitmap(genericsBitmap)
-    , coeffects(coeffects)
     , hasGenerics(hasGenerics)
     , hasUnpack(hasUnpack)
     , skipRepack(skipRepack)
@@ -1096,7 +1096,6 @@ struct CallData : IRExtraData {
       hasGenerics
         ? folly::sformat(",hasGenerics({})", genericsBitmap)
         : std::string{},
-      ",[", coeffects.toString(), "]",
       hasUnpack ? ",unpack" : "",
       skipRepack ? ",skipRepack" : "",
       dynamicCall ? ",dynamicCall" : "",
@@ -1116,7 +1115,6 @@ struct CallData : IRExtraData {
       std::hash<uint32_t>()(numOut),
       std::hash<Offset>()(callOffset),
       std::hash<uint16_t>()(genericsBitmap),
-      std::hash<uint16_t>()(coeffects.value()),
       std::hash<uint8_t>()(
         hasGenerics << 5 |
         hasUnpack << 4 |
@@ -1134,7 +1132,6 @@ struct CallData : IRExtraData {
            numOut == o.numOut &&
            callOffset == o.callOffset &&
            genericsBitmap == o.genericsBitmap &&
-           coeffects.value() == o.coeffects.value() &&
            hasGenerics == o.hasGenerics &&
            hasUnpack == o.hasUnpack &&
            skipRepack == o.skipRepack &&
@@ -1149,7 +1146,6 @@ struct CallData : IRExtraData {
   uint32_t numOut;     // number of values returned via stack from the callee
   Offset callOffset;   // offset from func->base()
   uint16_t genericsBitmap;
-  RuntimeCoeffects coeffects;
   bool hasGenerics;
   bool hasUnpack;
   bool skipRepack;
@@ -1549,6 +1545,53 @@ struct NewStructData : IRExtraData {
   StringData** keys;
 };
 
+struct ArrayLayoutData : IRExtraData {
+  explicit ArrayLayoutData(ArrayLayout layout) : layout(layout) {}
+
+  std::string show() const { return layout.describe(); }
+
+  size_t stableHash() const { return layout.toUint16(); }
+
+  bool equals(const ArrayLayoutData& o) const { return layout == o.layout; }
+
+  ArrayLayout layout;
+};
+
+struct NewBespokeStructData : IRExtraData {
+  NewBespokeStructData(ArrayLayout layout, IRSPRelOffset offset,
+                       uint32_t numSlots, Slot* slots)
+    : layout(layout), offset(offset), numSlots(numSlots), slots(slots) {}
+
+  std::string show() const;
+
+  size_t stableHash() const {
+    auto hash = folly::hash::hash_combine(
+      std::hash<uint16_t>()(layout.toUint16()),
+      std::hash<int32_t>()(offset.offset),
+      std::hash<uint32_t>()(numSlots)
+    );
+    for (auto i = 0; i < numSlots; i++) {
+      hash = folly::hash::hash_combine(hash, slots[i]);
+    }
+    return hash;
+  }
+
+  bool equals(const NewBespokeStructData& o) const {
+    if (layout != o.layout) return false;
+    if (offset != o.offset) return false;
+    if (numSlots != o.numSlots) return false;
+    for (auto i = 0; i < numSlots; i++) {
+      if (slots[i] != o.slots[i]) return false;
+    }
+    return true;
+  }
+
+  ArrayLayout layout;
+  IRSPRelOffset offset;
+  uint32_t numSlots;
+  Slot* slots;
+};
+
 struct PackedArrayData : IRExtraData {
   explicit PackedArrayData(uint32_t size) : size(size) {}
   std::string show() const { return folly::format("{}", size).str(); }
@@ -1902,6 +1945,43 @@ struct MOpModeData : IRExtraData {
   }
 
   MOpMode mode;
+};
+
+struct PropData : IRExtraData {
+  explicit PropData(MOpMode mode, ReadOnlyOp op) : mode{mode}, op(op) {}
+
+  std::string show() const {
+    return fmt::format("{} {}", subopToName(mode), subopToName(op));
+  }
+
+  size_t stableHash() const {
+    return folly::hash::hash_combine(
+      std::hash<MOpMode>()(mode),
+      std::hash<ReadOnlyOp>()(op)
+    );
+  }
+
+  bool equals(const PropData& o) const {
+    return mode == o.mode && op == o.op;
+  }
+
+  MOpMode mode;
+  ReadOnlyOp op;
+};
+
+struct ReadOnlyData : IRExtraData {
+  explicit ReadOnlyData(ReadOnlyOp op) : op(op) {}
+  std::string show() const { return subopToName(op); }
+
+  size_t stableHash() const {
+    return std::hash<ReadOnlyOp>()(op);
+  }
+
+  bool equals(const ReadOnlyData& o) const {
+    return op == o.op;
+  }
+
+  ReadOnlyOp op;
 };
 
 struct SetOpData : IRExtraData {
@@ -2367,16 +2447,20 @@ struct EnterTCUnwindData : IRExtraData {
 };
 
 /*
- * Func attributes
+ * Func/Class/Prop attributes
  */
 struct AttrData : IRExtraData {
-  explicit AttrData(int32_t attr) : attr(attr) {}
+  explicit AttrData(Attr attr) : attr(static_cast<int32_t>(attr)) {}
 
   std::string show() const {
     return folly::format("{}", attr).str();
   }
 
   size_t stableHash() const {
+    return std::hash<int32_t>()(attr);
+  }
+
+  size_t hash() const {
     return std::hash<int32_t>()(attr);
   }
 
@@ -2405,8 +2489,9 @@ struct MethCallerData : IRExtraData {
 };
 
 struct LoggingProfileData : IRExtraData {
-  explicit LoggingProfileData(bespoke::LoggingProfile* profile)
+  LoggingProfileData(bespoke::LoggingProfile* profile, bool isStatic)
     : profile(profile)
+    , isStatic(isStatic)
   {}
 
   std::string show() const {
@@ -2414,15 +2499,14 @@ struct LoggingProfileData : IRExtraData {
     return folly::sformat("{}", reinterpret_cast<void*>(profile));
   }
 
-  size_t stableHash() const {
-    return profile ? profile->key.stableHash() : 0;
-  }
+  size_t stableHash() const;
 
   bool equals(const LoggingProfileData& o) const {
     return profile == o.profile;
   }
 
   bespoke::LoggingProfile* profile;
+  bool isStatic; // Whether the output is guaranteed to be static
 };
 
 struct SinkProfileData : IRExtraData {
@@ -2435,10 +2519,7 @@ struct SinkProfileData : IRExtraData {
     return folly::sformat("{}", reinterpret_cast<void*>(profile));
   }
 
-  size_t stableHash() const {
-    if (!profile) return 0;
-    return profile->key.first ^ SrcKey::StableHasher()(profile->key.second);
-  }
+  size_t stableHash() const;
 
   bool equals(const SinkProfileData& o) const {
     return profile == o.profile;
@@ -2460,6 +2541,10 @@ struct BespokeGetData : IRExtraData {
     always_assert(false);
   }
 
+  size_t hash() const {
+    return stableHash();
+  }
+
   size_t stableHash() const {
     return std::hash<KeyState>()(state);
   }
@@ -2473,28 +2558,33 @@ struct BespokeGetData : IRExtraData {
 
 struct ConvNoticeData : IRExtraData {
   explicit ConvNoticeData(ConvNoticeLevel l = ConvNoticeLevel::None,
-                          const StringData* r = nullptr)
-                          : level(l), reason(r) {}
+                          const StringData* r = nullptr,
+                          bool noticeWithinNum_ = true)
+                          : level(l), reason(r), noticeWithinNum(noticeWithinNum_)  {}
   std::string show() const {
     assertx(level == ConvNoticeLevel::None || (reason != nullptr && reason->isStatic()));
-    if (reason == nullptr) return convOpToName(level);
-    return folly::format("{} for {}", convOpToName(level), reason).str();
+    const auto reason_str = reason ? folly::format(" for {}", reason).str() : "";
+    const auto num_str = !noticeWithinNum ? " with no intra-num notices": "";
+    return folly::format("{}{}{}", convOpToName(level), reason_str, num_str).str();
   }
 
   size_t stableHash() const {
     return folly::hash::hash_combine(
       std::hash<ConvNoticeLevel>()(level),
-      std::hash<const StringData*>()(reason)
+      std::hash<const StringData*>()(reason),
+      std::hash<bool>()(noticeWithinNum)
     );
   }
 
   bool equals(const ConvNoticeData& o) const {
     // can use pointer equality bc reason is always a StaticString
-    return level == o.level && reason == o.reason;
+    return level == o.level && reason == o.reason && noticeWithinNum == o.noticeWithinNum;
   }
 
   ConvNoticeLevel level;
   union { const StringData* reason; int64_t reasonIntVal; };
+  // whether to trigger notices for conversions between int and double
+  bool noticeWithinNum = true;
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -2554,6 +2644,7 @@ X(StStk,                        IRSPRelOffsetData);
 X(StOutValue,                   IndexData);
 X(LdOutAddr,                    IndexData);
 X(AssertStk,                    IRSPRelOffsetData);
+X(DefFP,                        DefFPData);
 X(DefFrameRelSP,                DefStackData);
 X(DefRegSP,                     DefStackData);
 X(LdStk,                        IRSPRelOffsetData);
@@ -2561,7 +2652,6 @@ X(LdStkAddr,                    IRSPRelOffsetData);
 X(InlineCall,                   InlineCallData);
 X(StFrameMeta,                  StFrameMetaData);
 X(BeginInlining,                BeginInliningData);
-X(InlineReturn,                 FPRelOffsetData);
 X(ReqBindJmp,                   ReqBindJmpData);
 X(ReqRetranslate,               IRSPRelOffsetData);
 X(ReqRetranslateOpt,            IRSPRelOffsetData);
@@ -2598,6 +2688,7 @@ X(ThrowMissingArg,              FuncArgData);
 X(RaiseClsMethPropConvertNotice,RaiseClsMethPropConvertNoticeData);
 X(RaiseTooManyArg,              FuncData);
 X(RaiseCoeffectsCallViolation,  FuncData);
+X(RaiseCoeffectsFunParamTypeViolation, ParamData);
 X(ThrowParamInOutMismatch,      ParamData);
 X(ThrowParamInOutMismatchRange, CheckInOutsData);
 X(ThrowParameterWrongType,      FuncArgTypeData);
@@ -2611,12 +2702,11 @@ X(StClosureArg,                 IndexData);
 X(RBTraceEntry,                 RBEntryData);
 X(RBTraceMsg,                   RBMsgData);
 X(OODeclExists,                 ClassKindData);
-X(NewStructDArray,              NewStructData);
 X(NewStructDict,                NewStructData);
 X(NewRecord,                    NewStructData);
-X(AllocStructDArray,            NewStructData);
 X(AllocStructDict,              NewStructData);
-X(AllocVArray,                  PackedArrayData);
+X(AllocBespokeStructDict,       ArrayLayoutData);
+X(NewBespokeStructDict,         NewBespokeStructData);
 X(AllocVec,                     PackedArrayData);
 X(NewKeysetArray,               NewKeysetArrayData);
 X(InitVecElemLoop,              InitPackedArrayLoopData);
@@ -2624,7 +2714,6 @@ X(InitVecElem,                  IndexData);
 X(InitDictElem,                 KeyedIndexData);
 X(CreateAAWH,                   CreateAAWHData);
 X(CountWHNotDone,               CountWHNotDoneData);
-X(CheckMixedArrayOffset,        IndexData);
 X(CheckDictOffset,              IndexData);
 X(CheckKeysetOffset,            IndexData);
 X(ProfileDictAccess,            ArrayAccessProfileData);
@@ -2638,12 +2727,14 @@ X(CheckRDSInitialized,          RDSHandleData);
 X(MarkRDSInitialized,           RDSHandleData);
 X(LdInitRDSAddr,                RDSHandleData);
 X(BaseG,                        MOpModeData);
-X(PropX,                        MOpModeData);
-X(PropDX,                       MOpModeData);
+X(PropX,                        PropData);
+X(PropQ,                        ReadOnlyData);
+X(PropDX,                       PropData);
 X(ElemX,                        MOpModeData);
 X(ElemDX,                       MOpModeData);
 X(ElemUX,                       MOpModeData);
-X(CGetProp,                     MOpModeData);
+X(CGetProp,                     PropData);
+X(CGetPropQ,                    ReadOnlyData);
 X(CGetElem,                     MOpModeData);
 X(MemoGetStaticValue,           MemoValueStaticData);
 X(MemoSetStaticValue,           MemoValueStaticData);
@@ -2659,6 +2750,7 @@ X(MemoGetInstanceCache,         MemoCacheInstanceData);
 X(MemoSetInstanceCache,         MemoCacheInstanceData);
 X(SetOpProp,                    SetOpData);
 X(SetOpTV,                      SetOpData);
+X(SetProp,                      ReadOnlyData);
 X(OutlineSetOp,                 SetOpData);
 X(IncDecProp,                   IncDecData);
 X(SetOpElem,                    SetOpData);
@@ -2707,6 +2799,7 @@ X(VerifyPropCoerce,             TypeConstraintData);
 X(EndCatch,                     EndCatchData);
 X(EnterTCUnwind,                EnterTCUnwindData);
 X(FuncHasAttr,                  AttrData);
+X(ClassHasAttr,                 AttrData);
 X(LdMethCallerName,             MethCallerData);
 X(LdRecDescCached,              RecNameData);
 X(LdRecDescCachedSafe,          RecNameData);

@@ -63,11 +63,10 @@ val get_self_ty_exn : env -> Tast.ty
 val get_parent_id : env -> string option
 
 (** Return the info of the given class from the typing heap. *)
-val get_class :
-  env -> Decl_provider.class_key -> Decl_provider.class_decl option
+val get_class : env -> Decl_provider.type_key -> Decl_provider.class_decl option
 
 val get_class_or_typedef :
-  env -> Decl_provider.class_key -> class_or_typedef_result option
+  env -> Decl_provider.type_key -> class_or_typedef_result option
 
 (** Return {true} when in the definition of a static property or method. *)
 val is_static : env -> bool
@@ -154,12 +153,7 @@ val localize :
     and/or are not appropriate at the time we call localize.
     *)
 val localize_with_self :
-  env ->
-  ?pos:Pos.t ->
-  ?quiet:bool ->
-  ?report_cycle:Pos.t * string ->
-  Typing_defs.decl_ty ->
-  env * Tast.ty
+  env -> ignore_errors:bool -> Typing_defs.decl_ty -> env * Tast.ty
 
 (** Get the upper bounds of the type parameter with the given name.
   FIXME: This function cannot return correct bounds at this time, because
@@ -262,13 +256,14 @@ val tast_env_as_typing_env : env -> Typing_env_types.env
 (** Verify that an XHP body expression is legal. *)
 val is_xhp_child : env -> Pos.t -> Tast.ty -> bool
 
-val get_enum : env -> string -> Decl_provider.class_decl option
+val get_enum : env -> Decl_provider.type_key -> Decl_provider.class_decl option
 
-val is_typedef : env -> string -> bool
+val is_typedef : env -> Decl_provider.type_key -> bool
 
-val get_typedef : env -> string -> Decl_provider.typedef_decl option
+val get_typedef :
+  env -> Decl_provider.type_key -> Decl_provider.typedef_decl option
 
-val is_enum : env -> string -> bool
+val is_enum : env -> Decl_provider.type_key -> bool
 
 val get_fun : env -> Decl_provider.fun_key -> Decl_provider.fun_decl option
 
@@ -276,4 +271,21 @@ val set_allow_wildcards : env -> env
 
 val get_allow_wildcards : env -> bool
 
+(*val is_enum_class : env -> Decl_provider.type_key -> bool*)
+
 val is_enum_class : env -> string -> bool
+
+val fun_has_implicit_return : env -> bool
+
+val named_fun_body_is_unsafe : env -> bool
+
+val get_const :
+  env -> Decl_provider.class_decl -> string -> Typing_defs.class_const option
+
+val consts :
+  env -> Decl_provider.class_decl -> (string * Typing_defs.class_const) list
+
+(** Check that the position is in the current decl and if it is, resolve
+    it with the current file. *)
+val fill_in_pos_filename_if_in_current_decl :
+  env -> Pos_or_decl.t -> Pos.t option

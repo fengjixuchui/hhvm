@@ -10,7 +10,7 @@ use emit_pos_rust::{emit_pos, emit_pos_then};
 use env::{emitter::Emitter, Env};
 use hhbc_ast_rust::*;
 use hhbc_id_rust::{self as hhbc_id, Id};
-use instruction_sequence_rust::{instr, Error::Unrecoverable, InstrSeq, Result};
+use instruction_sequence::{instr, Error::Unrecoverable, InstrSeq, Result};
 use label_rewriter_rust as label_rewriter;
 use label_rust::Label;
 use lazy_static::lazy_static;
@@ -1176,11 +1176,7 @@ fn emit_load_list_element(
     let query_value = |path| {
         InstrSeq::gather(vec![
             InstrSeq::gather(path),
-            instr::querym(
-                0,
-                QueryOp::CGet,
-                MemberKey::EI(i as i64, ReadOnlyOp::Mutable),
-            ),
+            instr::querym(0, QueryOp::CGet, MemberKey::EI(i as i64, ReadOnlyOp::Any)),
         ])
     };
     Ok(match &elem.1 {
@@ -1193,10 +1189,8 @@ fn emit_load_list_element(
             (vec![], vec![load_value])
         }
         tast::Expr_::List(es) => {
-            let instr_dim = instr::dim(
-                MemberOpMode::Warn,
-                MemberKey::EI(i as i64, ReadOnlyOp::Mutable),
-            );
+            let instr_dim =
+                instr::dim(MemberOpMode::Warn, MemberKey::EI(i as i64, ReadOnlyOp::Any));
             path.push(instr_dim);
             emit_load_list_elements(e, env, path, es)?
         }

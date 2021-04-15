@@ -85,77 +85,7 @@ struct APCTypedValue {
     assertx(checkInvariants());
   }
 
-  enum class StaticArr {};
-  APCTypedValue(StaticArr, ArrayData* data)
-    : m_handle(APCKind::StaticArray, data->toPersistentDataType()) {
-    assertx(data->isPHPArrayType());
-    assertx(data->isStatic());
-    m_data.arr = data;
-    assertx(checkInvariants());
-  }
-
-  enum class UncountedArr {};
-  APCTypedValue(UncountedArr, ArrayData* data)
-    : m_handle(APCKind::UncountedArray, data->toPersistentDataType()) {
-    assertx(data->isPHPArrayType());
-    assertx(data->isUncounted());
-    m_data.arr = data;
-    assertx(checkInvariants());
-  }
-
-  enum class StaticVec {};
-  APCTypedValue(StaticVec, ArrayData* data)
-    : m_handle(APCKind::StaticVec, KindOfPersistentVec) {
-    assertx(data->isVecType());
-    assertx(data->isStatic());
-    m_data.arr = data;
-    assertx(checkInvariants());
-  }
-
-  enum class UncountedVec {};
-  APCTypedValue(UncountedVec, ArrayData* data)
-    : m_handle(APCKind::UncountedVec, KindOfPersistentVec) {
-    assertx(data->isVecType());
-    assertx(data->isUncounted());
-    m_data.arr = data;
-    assertx(checkInvariants());
-  }
-
-  enum class StaticDict {};
-  APCTypedValue(StaticDict, ArrayData* data)
-    : m_handle(APCKind::StaticDict, KindOfPersistentDict) {
-    assertx(data->isDictType());
-    assertx(data->isStatic());
-    m_data.arr = data;
-    assertx(checkInvariants());
-  }
-
-  enum class UncountedDict {};
-  APCTypedValue(UncountedDict, ArrayData* data)
-    : m_handle(APCKind::UncountedDict, KindOfPersistentDict) {
-    assertx(data->isDictType());
-    assertx(data->isUncounted());
-    m_data.arr = data;
-    assertx(checkInvariants());
-  }
-
-  enum class StaticKeyset {};
-  APCTypedValue(StaticKeyset, ArrayData* data)
-    : m_handle(APCKind::StaticKeyset, KindOfPersistentKeyset) {
-    assertx(data->isKeysetType());
-    assertx(data->isStatic());
-    m_data.arr = data;
-    assertx(checkInvariants());
-  }
-
-  enum class UncountedKeyset {};
-  APCTypedValue(UncountedKeyset, ArrayData* data)
-    : m_handle(APCKind::UncountedKeyset, KindOfPersistentKeyset) {
-    assertx(data->isKeysetType());
-    assertx(data->isUncounted());
-    m_data.arr = data;
-    assertx(checkInvariants());
-  }
+  explicit APCTypedValue(ArrayData* data);
 
   explicit APCTypedValue(DataType type)
     : m_handle(type == KindOfUninit ? APCKind::Uninit : APCKind::Null, type) {
@@ -201,13 +131,6 @@ struct APCTypedValue {
     return m_data.str;
   }
 
-  ArrayData* getArrayData() const {
-    assertx(checkInvariants());
-    assertx(m_handle.kind() == APCKind::StaticArray ||
-           m_handle.kind() == APCKind::UncountedArray);
-    return m_data.arr;
-  }
-
   ArrayData* getVecData() const {
     assertx(checkInvariants());
     assertx(m_handle.kind() == APCKind::StaticVec ||
@@ -244,21 +167,23 @@ struct APCTypedValue {
 
   void deleteUncounted();
 
-  template <class StaticKey, class UncountedKey, class XData>
-  static APCHandle::Pair HandlePersistent(StaticKey skey,
-                                          UncountedKey ukey,
-                                          XData *data) {
-    if (!data->isRefCounted()) {
-      if (data->isStatic()) {
-        auto const value = new APCTypedValue(skey, data);
-        return {value->getHandle(), sizeof(APCTypedValue)};
-      }
-      if (data->uncountedIncRef()) {
-        auto const value = new APCTypedValue(ukey, data);
-        return {value->getHandle(), sizeof(APCTypedValue)};
-      }
+  static APCHandle::Pair HandlePersistent(ArrayData* data) {
+    if (!data->persistentIncRef()) return {nullptr, 0};
+    auto const value = new APCTypedValue(data);
+    return {value->getHandle(), sizeof(APCTypedValue)};
+  }
+
+  static APCHandle::Pair HandlePersistent(StringData* data) {
+    if (data->isRefCounted()) {
+      return {nullptr, 0};
     }
-    return {nullptr, 0};
+    if (data->isStatic()) {
+      auto const value = new APCTypedValue(StaticStr{}, data);
+      return {value->getHandle(), sizeof(APCTypedValue)};
+    }
+    data->uncountedIncRef();
+    auto const value = new APCTypedValue(UncountedStr{}, data);
+    return {value->getHandle(), sizeof(APCTypedValue)};
   }
 
 private:

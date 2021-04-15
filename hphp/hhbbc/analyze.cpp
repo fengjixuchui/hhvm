@@ -69,13 +69,16 @@ Type get_type_of_reified_list(const UserAttributeMap& ua) {
   auto const it = ua.find(s___Reified.get());
   assertx(it != ua.end());
   auto const tv = it->second;
-  assertx(tvIsHAMSafeVArray(&tv));
+  assertx(tvIsVec(&tv));
   auto const info = extractSizeAndPosFromReifiedAttribute(tv.m_data.parr);
   auto const numGenerics = info.m_typeParamInfo.size();
   assertx(numGenerics > 0);
-  std::vector<Type> types(numGenerics, RO::EvalHackArrDVArrs ? TDictN : TDArrN);
-  return RO::EvalHackArrDVArrs ? vec(types) : arr_packed_varray(types);
+  std::vector<Type> types(numGenerics, TDictN);
+  return vec(types);
 }
+
+const StaticString s_reified_generics_var("0ReifiedGenerics");
+const StaticString s_coeffects_var("0Coeffects");
 
 State entry_state(const Index& index, const Context& ctx,
                   const KnownArgs* knownArgs) {
@@ -109,16 +112,12 @@ State entry_state(const Index& index, const Context& ctx,
           std::vector<Type> pack(knownArgs->args.begin() + locId,
                                  knownArgs->args.end());
           for (auto& p : pack) p = unctx(std::move(p));
-          ret.locals[locId] = RuntimeOption::EvalHackArrDVArrs
-            ? vec(std::move(pack))
-            : arr_packed_varray(std::move(pack));
+          ret.locals[locId] = vec(std::move(pack));
         } else {
           ret.locals[locId] = unctx(knownArgs->args[locId]);
         }
       } else {
-        ret.locals[locId] = ctx.func->params[locId].isVariadic
-          ? (RuntimeOption::EvalHackArrDVArrs ? TVec : TVArr)
-          : TUninit;
+        ret.locals[locId] = ctx.func->params[locId].isVariadic ? TVec : TUninit;
       }
       continue;
     }
@@ -133,9 +132,7 @@ State entry_state(const Index& index, const Context& ctx,
     }
     // Because we throw a non-recoverable error for having fewer than the
     // required number of args, all function parameters must be initialized.
-    ret.locals[locId] = ctx.func->params[locId].isVariadic
-      ? (RuntimeOption::EvalHackArrDVArrs ? TVec : TVArr)
-      : TInitCell;
+    ret.locals[locId] = ctx.func->params[locId].isVariadic ? TVec : TInitCell;
   }
 
   // Closures have use vars, we need to look up their types from the index.
@@ -151,7 +148,19 @@ State entry_state(const Index& index, const Context& ctx,
     // Currently closures cannot be reified
     assertx(!ctx.func->isClosureBody);
     assertx(locId < ret.locals.size());
+    assertx(ctx.func->locals[locId].name->same(s_reified_generics_var.get()));
     ret.locals[locId++] = get_type_of_reified_list(ctx.func->userAttributes);
+  }
+
+  /*
+   * Functions with coeffect rules have a hidden local that's always the first
+   * (non-parameter) local (after reified generics, if exists),
+   * which stores the ambient coeffects.
+   */
+  if (has_coeffects_local(ctx.func)) {
+    assertx(locId < ret.locals.size());
+    assertx(ctx.func->locals[locId].name->same(s_coeffects_var.get()));
+    ret.locals[locId++] = TInt;
   }
 
   auto afterParamsLocId = uint32_t{0};
@@ -234,9 +243,8 @@ prepare_incompleteQ(const Index& index,
       ai.bdata[dv].stateIn.copy_from(entryState);
       incompleteQ.push(rpoId(ai, dv));
       for (auto locId = paramId; locId < numParams; ++locId) {
-        ai.bdata[dv].stateIn.locals[locId] = ctx.func->params[locId].isVariadic
-          ? (RuntimeOption::EvalHackArrDVArrs ? TVec : TVArr)
-          : TUninit;
+        ai.bdata[dv].stateIn.locals[locId] =
+          ctx.func->params[locId].isVariadic ? TVec : TUninit;
       }
     }
   }
@@ -517,10 +525,7 @@ void expand_hni_prop_types(ClassAnalysis& clsAnalysis) {
      * known to return things matching the property type hints for
      * some properties, or not to take their arguments by reference.
      */
-    auto const hniTy =
-      clsAnalysis.anyInterceptable
-        ? TCell
-        : from_hni_constraint(prop.userType);
+    auto const hniTy = from_hni_constraint(prop.userType);
     if (it->second.ty.subtypeOf(hniTy)) {
       it->second.ty = hniTy;
       return;
@@ -591,7 +596,7 @@ ClassAnalysis analyze_class(const Index& index, const Context& ctx) {
     FTRACE(2, "{:#^70}\n", "Class");
   }
 
-  ClassAnalysis clsAnalysis(ctx, index.any_interceptable_functions());
+  ClassAnalysis clsAnalysis(ctx);
   auto const associatedClosures = index.lookup_closures(ctx.cls);
   auto const associatedMethods  = index.lookup_extra_methods(ctx.cls);
   auto const isHNIBuiltin       = ctx.cls->attrs & AttrBuiltin;
@@ -645,7 +650,7 @@ ClassAnalysis analyze_class(const Index& index, const Context& ctx) {
     }
 
     if (!(prop.attrs & AttrStatic)) {
-      auto t = loosen_vecish_or_dictish(loosen_all(cellTy));
+      auto t = loosen_vec_or_dict(loosen_all(cellTy));
       if (!is_closure(*ctx.cls) && t.subtypeOf(BUninit)) {
         /*
          * For non-closure classes, a property of type KindOfUninit

@@ -44,6 +44,8 @@ type 'a forward_naming_table_delta =
 
 type file_deltas = FileInfo.t forward_naming_table_delta Relative_path.Map.t
 
+type blob_format = FileInfo.saved forward_naming_table_delta Relative_path.Map.t
+
 let pp_file_deltas =
   Relative_path.Map.make_pp
     Relative_path.pp
@@ -172,16 +174,15 @@ module LocalChanges = struct
 
   let prime db stmt_cache base_content_version =
     let insert_stmt = StatementCache.make_stmt stmt_cache insert_sqlite in
-    let empty =
-      Marshal.to_string Relative_path.Map.empty [Marshal.No_sharing]
-    in
+    let (blob : blob_format) = Relative_path.Map.empty in
+    let empty = Marshal.to_string blob [Marshal.No_sharing] in
     Sqlite3.bind insert_stmt 1 (Sqlite3.Data.BLOB empty) |> check_rc db;
     Sqlite3.bind insert_stmt 2 (Sqlite3.Data.TEXT base_content_version)
     |> check_rc db;
     Sqlite3.step insert_stmt |> check_rc db
 
   let update db stmt_cache (local_changes : local_changes) =
-    let local_changes_saved =
+    let (local_changes_saved : blob_format) =
       Relative_path.Map.map local_changes.file_deltas ~f:(fun delta ->
           match delta with
           | Modified fi -> Modified (FileInfo.to_saved fi)
@@ -202,7 +203,9 @@ module LocalChanges = struct
      * exactly one row. *)
     | Sqlite3.Rc.ROW ->
       let local_changes_blob = column_blob get_stmt 0 in
-      let local_changes_saved = Marshal.from_string local_changes_blob 0 in
+      let (local_changes_saved : blob_format) =
+        Marshal.from_string local_changes_blob 0
+      in
       let base_content_version = column_str get_stmt 1 in
       let file_deltas =
         Relative_path.Map.mapi local_changes_saved ~f:(fun path delta ->
@@ -500,12 +503,12 @@ module TypesTable = struct
   let insert db stmt_cache ~name ~flags ~file_info_id :
       (unit, insertion_error) result =
     let hash =
-      Typing_deps.Dep.Class name
+      Typing_deps.Dep.Type name
       |> Typing_deps.NamingHash.make
       |> Typing_deps.NamingHash.to_int64
     in
     let canon_hash =
-      Typing_deps.Dep.Class (to_canon_name_key name)
+      Typing_deps.Dep.Type (to_canon_name_key name)
       |> Typing_deps.NamingHash.make
       |> Typing_deps.NamingHash.to_int64
     in
@@ -532,17 +535,9 @@ module TypesTable = struct
       (unit, insertion_error) result =
     insert db stmt_cache ~name ~flags:record_def_flag ~file_info_id
 
-  let get db stmt_cache ~name ~case_insensitive =
-    let name =
-      if case_insensitive then
-        Caml.String.lowercase_ascii name
-      else
-        name
-    in
+  let get db stmt_cache ~dep ~case_insensitive =
     let hash =
-      Typing_deps.Dep.Class name
-      |> Typing_deps.NamingHash.make
-      |> Typing_deps.NamingHash.to_int64
+      dep |> Typing_deps.NamingHash.make |> Typing_deps.NamingHash.to_int64
     in
     let get_sqlite =
       if case_insensitive then
@@ -653,17 +648,9 @@ module FunsTable = struct
     insert_safe ~name ~kind_of_type:None ~hash ~canon_hash:(Some canon_hash)
     @@ fun () -> Sqlite3.step insert_stmt |> check_rc db
 
-  let get db stmt_cache ~name ~case_insensitive =
-    let name =
-      if case_insensitive then
-        Caml.String.lowercase_ascii name
-      else
-        name
-    in
+  let get db stmt_cache ~dep ~case_insensitive =
     let hash =
-      Typing_deps.Dep.Fun name
-      |> Typing_deps.NamingHash.make
-      |> Typing_deps.NamingHash.to_int64
+      dep |> Typing_deps.NamingHash.make |> Typing_deps.NamingHash.to_int64
     in
     let get_sqlite =
       if case_insensitive then
@@ -748,11 +735,9 @@ module ConstsTable = struct
     insert_safe ~name ~kind_of_type:None ~hash ~canon_hash:None @@ fun () ->
     Sqlite3.step insert_stmt |> check_rc db
 
-  let get db stmt_cache ~name =
+  let get db stmt_cache ~dep =
     let hash =
-      Typing_deps.Dep.GConst name
-      |> Typing_deps.NamingHash.make
-      |> Typing_deps.NamingHash.to_int64
+      dep |> Typing_deps.NamingHash.make |> Typing_deps.NamingHash.to_int64
     in
     let get_stmt = StatementCache.make_stmt stmt_cache get_sqlite in
     Sqlite3.bind get_stmt 1 (Sqlite3.Data.INT hash) |> check_rc db;
@@ -977,9 +962,39 @@ let get_file_info (db_path : db_path) path =
   let (db, stmt_cache) = get_db_and_stmt_cache db_path in
   FileInfoTable.get_file_info db stmt_cache path
 
-let get_type_pos (db_path : db_path) name ~case_insensitive =
-  let (db, stmt_cache) = get_db_and_stmt_cache db_path in
-  TypesTable.get db stmt_cache ~name ~case_insensitive
+(* Same as `get_db_and_stmt_cache` but with logging for when opening the
+database fails. *)
+let sqlite_exn_wrapped_get_db_and_stmt_cache ~case_insensitive db_path name =
+  try get_db_and_stmt_cache db_path
+  with Sqlite3.Error _ as exn ->
+    Hh_logger.info
+      "Sqlite_db_open_bug: couldn't open the DB at `%s` while getting the position of `%s` with case insensitivity `%b`\n"
+      (show_db_path db_path)
+      name
+      case_insensitive;
+    raise exn
+
+let get_type_pos (db_path : db_path) name =
+  let case_insensitive = false in
+  let (db, stmt_cache) =
+    sqlite_exn_wrapped_get_db_and_stmt_cache ~case_insensitive db_path name
+  in
+  TypesTable.get
+    db
+    stmt_cache
+    ~dep:(Typing_deps.Dep.Type name)
+    ~case_insensitive
+
+let get_itype_pos (db_path : db_path) name =
+  let case_insensitive = true in
+  let (db, stmt_cache) =
+    sqlite_exn_wrapped_get_db_and_stmt_cache ~case_insensitive db_path name
+  in
+  TypesTable.get
+    db
+    stmt_cache
+    ~dep:(Typing_deps.Dep.Type (Caml.String.lowercase_ascii name))
+    ~case_insensitive
 
 let get_type_paths_by_dep_hash (db_path : db_path) (hash : Typing_deps.Dep.t) :
     Relative_path.Set.t =
@@ -987,9 +1002,21 @@ let get_type_paths_by_dep_hash (db_path : db_path) (hash : Typing_deps.Dep.t) :
 
   TypesTable.get_paths_by_dep_hash db stmt_cache ~hash
 
-let get_fun_pos (db_path : db_path) name ~case_insensitive =
+let get_fun_pos (db_path : db_path) name =
   let (db, stmt_cache) = get_db_and_stmt_cache db_path in
-  FunsTable.get db stmt_cache ~name ~case_insensitive
+  FunsTable.get
+    db
+    stmt_cache
+    ~dep:(Typing_deps.Dep.Fun name)
+    ~case_insensitive:false
+
+let get_ifun_pos (db_path : db_path) name =
+  let (db, stmt_cache) = get_db_and_stmt_cache db_path in
+  FunsTable.get
+    db
+    stmt_cache
+    ~dep:(Typing_deps.Dep.Fun (Caml.String.lowercase_ascii name))
+    ~case_insensitive:true
 
 let get_fun_paths_by_dep_hash (db_path : db_path) (hash : Typing_deps.Dep.t) :
     Relative_path.Set.t =
@@ -998,7 +1025,7 @@ let get_fun_paths_by_dep_hash (db_path : db_path) (hash : Typing_deps.Dep.t) :
 
 let get_const_pos (db_path : db_path) name =
   let (db, stmt_cache) = get_db_and_stmt_cache db_path in
-  ConstsTable.get db stmt_cache ~name
+  ConstsTable.get db stmt_cache ~dep:(Typing_deps.Dep.GConst name)
 
 let get_const_paths_by_dep_hash (db_path : db_path) (hash : Typing_deps.Dep.t) :
     Relative_path.Set.t =

@@ -152,7 +152,6 @@ function determine_flags(OptionMap $opts): string {
     $mode = (int)$opts['bespoke'];
     $flags .=
         '-v Eval.BespokeArrayLikeMode='.$mode.' '.
-        '-v Eval.ArrayProvenance=0 '.
         '-v Eval.ExportLoggingArrayDataPath="/tmp/logging-array-export" '.
         '-v Eval.EmitLoggingArraySampleRate=17 '.
         '';

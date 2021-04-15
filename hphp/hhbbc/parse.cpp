@@ -249,13 +249,13 @@ template<class T> void decode(PC& pc, T& val) {
 MKey make_mkey(const php::Func& /*func*/, MemberKey mk) {
   switch (mk.mcode) {
     case MEL: case MPL:
-      return MKey{mk.mcode, mk.local};
+      return MKey{mk.mcode, mk.local, mk.rop};
     case MEC: case MPC:
-      return MKey{mk.mcode, mk.iva};
+      return MKey{mk.mcode, mk.iva, mk.rop};
     case MET: case MPT: case MQT:
-      return MKey{mk.mcode, mk.litstr};
+      return MKey{mk.mcode, mk.litstr, mk.rop};
     case MEI:
-      return MKey{mk.mcode, mk.int64};
+      return MKey{mk.mcode, mk.int64, mk.rop};
     case MW:
       return MKey{};
   }
@@ -671,6 +671,10 @@ std::unique_ptr<php::Func> parse_func(ParseUnitState& puState,
 
   ret->attrs              = static_cast<Attr>((fe.attrs & ~AttrNoOverride) |
                                               AttrUnique | AttrPersistent);
+
+  // We do not support AttrInterceptable in hhbbc so make sure it is not set
+  always_assert((ret->attrs & AttrInterceptable) == 0);
+
   ret->userAttributes     = fe.userAttributes;
   ret->returnUserType     = fe.retUserType;
   ret->retTypeConstraint  = fe.retTypeConstraint;
@@ -985,7 +989,7 @@ std::unique_ptr<php::Class> parse_class(ParseUnitState& puState,
             tvaux,
             staticEmptyString(),
             staticEmptyString(),
-            StaticCoeffects::none(),
+            {},
             ConstModifiers::Kind::Value,
             false,
             false

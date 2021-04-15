@@ -55,6 +55,7 @@ let rpc_command_needs_full_check : type a. a t -> bool =
   | STATUS_SINGLE _ -> false
   | INFER_TYPE _ -> false
   | INFER_TYPE_BATCH _ -> false
+  | INFER_TYPE_ERROR _ -> false
   | IDE_HOVER _ -> false
   | DOCBLOCK_AT _ -> false
   | DOCBLOCK_FOR_SYMBOL _ -> false
@@ -192,54 +193,6 @@ let with_dependency_table_reads mode full_recheck_needed f =
             ( Typing_deps.allow_dependency_table_reads mode deptable_unlocked
               : bool )))
 
-(* Given a set of declaration names, put them in shared memory. We do it here, because
- * declarations computed while handling IDE commands will likely be useful for subsequent IDE
- * commands too, but are not persisted outside of make_then_revert_local_changes closure. *)
-let predeclare_ide_deps
-    genv ctx { FileInfo.n_funs; n_classes; n_record_defs; n_types; n_consts } =
-  if genv.ServerEnv.local_config.ServerLocalConfig.predeclare_ide_deps then
-    Utils.try_finally
-      ~f:
-        begin
-          fun () ->
-          (* We only want to populate declaration heap, without wasting space in lower
-           * heaps (similar to what Typing_check_service.check_files does) *)
-          File_provider.local_changes_push_sharedmem_stack ();
-          Ast_provider.local_changes_push_sharedmem_stack ();
-          let iter :
-              type a. (Provider_context.t -> string -> a) -> SSet.t -> unit =
-           fun declare s ->
-            SSet.iter
-              begin
-                fun x ->
-                (* Depending on Decl_provider putting the thing we ask for in shared memory *)
-                ignore @@ (declare ctx x : a)
-              end
-              s
-          in
-          let declare_class ctx x =
-            let cls = Decl_provider.get_class ctx x in
-            (* For now, is_disposable forces the eager computation of all ancestor
-           declarations. In the future, we will want to explicitly declare all
-           ancestors when shallow decl is enabled instead. *)
-            let (_ : bool option) =
-              Option.map cls Decl_provider.Class.is_disposable
-            in
-            ()
-          in
-          iter Decl_provider.get_fun n_funs;
-          iter declare_class n_classes;
-          iter declare_class n_record_defs;
-          iter Decl_provider.get_typedef n_types;
-          iter Decl_provider.get_gconst n_consts
-        end
-      ~finally:
-        begin
-          fun () ->
-          Ast_provider.local_changes_pop_sharedmem_stack ();
-          File_provider.local_changes_pop_sharedmem_stack ()
-        end
-
 (* Construct a continuation that will finish handling the command and update
  * the environment. Server can execute the continuation immediately, or store it
  * to be completed later (when full recheck is completed, when workers are
@@ -274,10 +227,8 @@ let actually_handle genv client msg full_recheck_needed ~is_stale env =
       ~time:t_start;
     Sys_utils.start_gc_profiling ();
     Full_fidelity_parser_profiling.start_profiling ();
-    let ((new_env, response), declared_names) =
-      try
-        Decl_provider.with_decl_tracking @@ fun () ->
-        ServerRpc.handle ~is_stale genv env cmd
+    let (new_env, response) =
+      try ServerRpc.handle ~is_stale genv env cmd
       with e ->
         let stack = Caml.Printexc.get_raw_backtrace () in
         if ServerCommandTypes.is_critical_rpc cmd then
@@ -288,9 +239,7 @@ let actually_handle genv client msg full_recheck_needed ~is_stale env =
                (e, Caml.Printexc.raw_backtrace_to_string stack, env))
     in
     let parsed_files = Full_fidelity_parser_profiling.stop_profiling () in
-    let ctx = Provider_utils.ctx_from_server_env env in
     ClientProvider.track client ~key:Connection_tracker.Server_end_handle;
-    predeclare_ide_deps genv ctx declared_names;
     let t_end = Unix.gettimeofday () in
     ClientProvider.track
       client
@@ -336,8 +285,9 @@ let handle
   ClientProvider.track client ~key:Connection_tracker.Server_waiting_for_cmd;
   let msg = ClientProvider.read_client_msg client in
   ClientProvider.track client ~key:Connection_tracker.Server_got_cmd;
-  ServerProgress.send_to_monitor
-    (MonitorRpc.PROGRESS (ServerCommandTypesUtils.status_describe_cmd msg));
+  ServerProgress.send_progress_to_monitor_w_timeout
+    "%s"
+    (ServerCommandTypesUtils.status_describe_cmd msg);
   let env = { env with ServerEnv.remote = force_remote msg } in
   let full_recheck_needed = command_needs_full_check msg in
   let is_stale = ServerEnv.(env.last_recheck_loop_stats.updates_stale) in

@@ -317,13 +317,13 @@ EmitBcInfo emit_bytecode(EmitUnitState& euState, UnitEmitter& ue, FuncEmitter& f
   auto make_member_key = [&] (MKey mkey) {
     switch (mkey.mcode) {
       case MEC: case MPC:
-        return MemberKey{mkey.mcode, static_cast<int32_t>(mkey.idx)};
+        return MemberKey{mkey.mcode, static_cast<int32_t>(mkey.idx), mkey.rop};
       case MEL: case MPL:
-        return MemberKey{mkey.mcode, map_local_name(mkey.local)};
+        return MemberKey{mkey.mcode, map_local_name(mkey.local), mkey.rop};
       case MET: case MPT: case MQT:
-        return MemberKey{mkey.mcode, mkey.litstr};
+        return MemberKey{mkey.mcode, mkey.litstr, mkey.rop};
       case MEI:
-        return MemberKey{mkey.mcode, mkey.int64};
+        return MemberKey{mkey.mcode, mkey.int64, mkey.rop};
       case MW:
         return MemberKey{};
     }
@@ -1037,18 +1037,6 @@ void merge_repo_auth_type(UnitEmitter& ue, RepoAuthType rat) {
   case T::NonNull:
     return;
 
-  case T::OptSArr:
-  case T::OptArr:
-  case T::SArr:
-  case T::Arr:
-  case T::OptSVArr:
-  case T::OptVArr:
-  case T::SVArr:
-  case T::VArr:
-  case T::OptSDArr:
-  case T::OptDArr:
-  case T::SDArr:
-  case T::DArr:
   case T::OptSVec:
   case T::OptVec:
   case T::SVec:
@@ -1061,45 +1049,18 @@ void merge_repo_auth_type(UnitEmitter& ue, RepoAuthType rat) {
   case T::OptKeyset:
   case T::SKeyset:
   case T::Keyset:
-  case T::SVecish:
-  case T::Vecish:
-  case T::OptSVecish:
-  case T::OptVecish:
-  case T::SDictish:
-  case T::Dictish:
-  case T::OptSDictish:
-  case T::OptDictish:
   case T::SArrLike:
   case T::ArrLike:
   case T::OptSArrLike:
   case T::OptArrLike:
 
-  case T::ArrCompat:
-  case T::VArrCompat:
   case T::VecCompat:
   case T::ArrLikeCompat:
-  case T::OptArrCompat:
-  case T::OptVArrCompat:
   case T::OptVecCompat:
   case T::OptArrLikeCompat:
     // NOTE: In repo mode, RAT's in Array's might only contain global litstr
     // id's. No need to merge. In non-repo mode, RAT's in Array's might contain
     // local litstr id's.
-    if (RuntimeOption::RepoAuthoritative) return;
-
-    if (rat.hasArrData()) {
-      auto arr = rat.array();
-      switch (arr->tag()) {
-        case RepoAuthType::Array::Tag::Packed:
-          for (uint32_t i = 0; i < arr->size(); ++i) {
-            merge_repo_auth_type(ue, arr->packedElem(i));
-          }
-          break;
-        case RepoAuthType::Array::Tag::PackedN:
-          merge_repo_auth_type(ue, arr->elemType());
-          break;
-      }
-    }
     return;
 
   case T::OptSubObj:
@@ -1300,7 +1261,7 @@ void emit_class(EmitUnitState& state, UnitEmitter& ue, PreClassEmitter* pce,
     if (cconst.kind == ConstModifiers::Kind::Context) {
       pce->addContextConstant(
         cconst.name,
-        cconst.coeffects,
+        std::vector<LowStringPtr>(cconst.coeffects),
         cconst.isAbstract,
         cconst.isFromTrait
       );

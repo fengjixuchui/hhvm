@@ -146,13 +146,6 @@ let debug_print_fast_keys genv name fast =
           ]))
 
 (*****************************************************************************)
-(* Given a set of Ast.id list produce a SSet.t (got rid of the positions)    *)
-(*****************************************************************************)
-
-let set_of_idl l =
-  List.fold_left l ~f:(fun acc (_, x) -> SSet.add acc x) ~init:SSet.empty
-
-(*****************************************************************************)
 (* We want add all the declarations that were present in a file *before* the
  * current modification. The scenario:
  * File foo.php was defining the class A.
@@ -195,27 +188,23 @@ let remove_decls env fast_parsed =
       | None -> ()
       | Some
           {
-            FileInfo.funs = funl;
-            classes = classel;
-            record_defs = record_defsl;
-            typedefs = typel;
-            consts = constl;
+            FileInfo.funs;
+            classes;
+            record_defs;
+            typedefs;
+            consts;
             file_mode = _;
             comments = _;
             hash = _;
           } ->
-        let funs = set_of_idl funl in
-        let classes = set_of_idl classel in
-        let record_defs = set_of_idl record_defsl in
-        let typedefs = set_of_idl typel in
-        let consts = set_of_idl constl in
+        (* we use [snd] to strip away positions *)
         Naming_global.remove_decls
           ~backend:(Provider_backend.get ())
-          ~funs
-          ~classes
-          ~record_defs
-          ~typedefs
-          ~consts)
+          ~funs:(List.map funs ~f:snd)
+          ~classes:(List.map classes ~f:snd)
+          ~record_defs:(List.map record_defs ~f:snd)
+          ~typedefs:(List.map typedefs ~f:snd)
+          ~consts:(List.map consts ~f:snd))
 
 (* If the only things that would change about file analysis are positions,
  * we're not going to recheck it, and positions in its error list might
@@ -231,7 +220,8 @@ let get_files_with_stale_errors
     ~(* Consider errors only coming from those phases *)
     phases
     ~(* Current global error list *)
-    errors =
+    errors
+    ~ctx =
   let fold =
     match filter with
     | None ->
@@ -253,8 +243,10 @@ let get_files_with_stale_errors
   List.fold phases ~init:Relative_path.Set.empty ~f:(fun acc phase ->
       fold phase acc (fun source error acc ->
           if
-            List.exists (Errors.to_list error) ~f:(fun e ->
-                Relative_path.Set.mem reparsed (fst e |> Pos.filename))
+            List.exists (Errors.to_list_ error) ~f:(fun e ->
+                Relative_path.Set.mem
+                  reparsed
+                  (fst e |> Naming_provider.resolve_position ctx |> Pos.filename))
           then
             Relative_path.Set.add acc source
           else
@@ -297,7 +289,9 @@ let parsing genv env to_check ~stop_at_errors profiling =
     {
       env with
       local_symbol_table =
-        SymbolIndex.remove_files ~sienv:env.local_symbol_table ~paths:to_check;
+        SymbolIndexCore.remove_files
+          ~sienv:env.local_symbol_table
+          ~paths:to_check;
     }
   in
   SharedMem.collect `gentle;
@@ -397,7 +391,9 @@ let declare_names env fast_parsed =
       ~f:
         begin
           fun k v (errorl, failed) ->
-          let (errorl', failed') = Naming_global.ndecl_file ctx k v in
+          let (errorl', failed') =
+            Naming_global.ndecl_file_error_if_already_bound ctx k v
+          in
           let errorl = Errors.merge errorl' errorl in
           let failed = Relative_path.Set.union failed' failed in
           (errorl, failed)
@@ -437,7 +433,10 @@ module type CheckKindType = sig
   (* files to parse, should we stop if there are parsing errors *)
 
   val get_defs_to_redecl :
-    reparsed:Relative_path.Set.t -> env:ServerEnv.env -> Relative_path.Set.t
+    reparsed:Relative_path.Set.t ->
+    env:ServerEnv.env ->
+    ctx:Provider_context.t ->
+    Relative_path.Set.t
 
   (* Returns a tuple: files to redecl now, files to redecl later *)
   val get_defs_to_redecl_phase2 :
@@ -460,6 +459,8 @@ module type CheckKindType = sig
     phase_2_decl_defs:Naming_table.fast ->
     to_recheck:Relative_path.Set.t ->
     env:ServerEnv.env ->
+    ctx:Provider_context.t ->
+    enable_type_check_filter_files:bool ->
     Relative_path.Set.t * Relative_path.Set.t
 
   (* Update the global state based on resuts of parsing, naming and decl *)
@@ -488,7 +489,7 @@ module FullCheckKind : CheckKindType = struct
     in
     (files_to_parse, false)
 
-  let get_defs_to_redecl ~reparsed ~env =
+  let get_defs_to_redecl ~reparsed ~(env : env) ~ctx =
     (* Besides the files that actually changed, we want to also redeclare
      * those that have decl errors referring to files that were
      * reparsed, since positions in those errors can be now stale *)
@@ -497,6 +498,7 @@ module FullCheckKind : CheckKindType = struct
       ~filter:None
       ~phases:[Errors.Decl]
       ~errors:env.errorl
+      ~ctx
 
   let get_defs_to_redecl_phase2
       genv ~decl_defs ~naming_table ~to_redecl_phase2 ~env =
@@ -510,7 +512,24 @@ module FullCheckKind : CheckKindType = struct
      * to approximate anything *)
     Relative_path.Set.empty
 
-  let get_defs_to_recheck ~reparsed ~phase_2_decl_defs ~to_recheck ~env =
+  let get_defs_to_recheck
+      ~reparsed
+      ~phase_2_decl_defs
+      ~to_recheck
+      ~env
+      ~ctx
+      ~enable_type_check_filter_files =
+    (* If the user has enabled a custom file filter, we want to only
+     * type check files that pass the filter *)
+    let to_recheck =
+      if enable_type_check_filter_files then
+        ServerCheckUtils.user_filter_type_check_files
+          ~to_recheck
+          ~reparsed
+          ~is_ide_file:(Relative_path.Set.mem env.editor_open_files)
+      else
+        to_recheck
+    in
     (* Besides the files that actually changed, we want to also recheck
      * those that have typing errors referring to files that were
      * reparsed, since positions in those errors can be now stale.
@@ -521,6 +540,7 @@ module FullCheckKind : CheckKindType = struct
         ~filter:None
         ~phases:[Errors.Decl; Errors.Typing]
         ~errors:env.errorl
+        ~ctx
     in
     let to_recheck = Relative_path.Set.union stale_errors to_recheck in
     let to_recheck = Relative_path.Set.union env.needs_recheck to_recheck in
@@ -587,7 +607,7 @@ module LazyCheckKind : CheckKindType = struct
     Relative_path.Set.mem (ide_error_sources env) x
     || Relative_path.Set.mem env.editor_open_files x
 
-  let get_defs_to_redecl ~reparsed ~env =
+  let get_defs_to_redecl ~reparsed ~env ~ctx =
     (* Same as FullCheckKind.get_defs_to_redecl, but we limit returned set only
      * to files that are relevant to IDE *)
     get_files_with_stale_errors
@@ -595,6 +615,7 @@ module LazyCheckKind : CheckKindType = struct
       ~filter:(Some (ide_error_sources env))
       ~phases:[Errors.Decl]
       ~errors:env.errorl
+      ~ctx
 
   let get_defs_to_redecl_phase2
       genv ~decl_defs ~naming_table ~to_redecl_phase2 ~env =
@@ -629,11 +650,30 @@ module LazyCheckKind : CheckKindType = struct
         ~f:(fun x acc -> Relative_path.Set.union acc @@ get_related_files ctx x)
       |> Relative_path.Set.filter ~f:(is_ide_file env)
 
-  let get_defs_to_recheck ~reparsed ~phase_2_decl_defs ~to_recheck ~env =
+  let get_defs_to_recheck
+      ~reparsed
+      ~phase_2_decl_defs
+      ~to_recheck
+      ~env
+      ~ctx
+      ~enable_type_check_filter_files =
+    (* If the user has enabled a custom file filter, we want to only
+     * type check files that pass the filter. As such, we don't want
+     * to add unwanted files to the "type check later"-queue *)
+    let to_recheck =
+      if enable_type_check_filter_files then
+        ServerCheckUtils.user_filter_type_check_files
+          ~to_recheck
+          ~reparsed
+          ~is_ide_file:(is_ide_file env)
+      else
+        to_recheck
+    in
     (* Same as FullCheckKind.get_defs_to_recheck, but we limit returned set only
      * to files that are relevant to IDE *)
     let stale_errors =
       get_files_with_stale_errors
+        ~ctx
         ~reparsed
         ~filter:(Some (ide_error_sources env))
         ~phases:[Errors.Decl; Errors.Typing]
@@ -776,6 +816,7 @@ functor
     let do_naming
         (genv : genv)
         (env : env)
+        (ctx : Provider_context.t)
         ~(errors : Errors.t)
         ~(fast_parsed : FileInfo.t Relative_path.Map.t)
         ~(naming_table : Naming_table.t)
@@ -792,7 +833,9 @@ functor
          * Naming_global.ndecl_file *)
         let fast = extend_fast genv fast naming_table failed_naming in
         (* COMPUTES WHAT MUST BE REDECLARED  *)
-        let failed_decl = CheckKind.get_defs_to_redecl files_to_parse env in
+        let failed_decl =
+          CheckKind.get_defs_to_redecl ~reparsed:files_to_parse ~env ~ctx
+        in
         let fast = extend_fast genv fast naming_table failed_decl in
         let fast = add_old_decls env.naming_table fast in
         (errors, failed_naming, fast)
@@ -958,6 +1001,9 @@ functor
       let memory_cap =
         genv.local_config.ServerLocalConfig.max_typechecker_worker_memory_mb
       in
+      let longlived_workers =
+        genv.local_config.ServerLocalConfig.longlived_workers
+      in
       let fnl = Relative_path.Set.elements files_to_check in
       let (errorl', delegate_state, telemetry, env', cancelled) =
         let ctx = Provider_utils.ctx_from_server_env env in
@@ -972,6 +1018,7 @@ functor
           fnl
           ~interrupt
           ~memory_cap
+          ~longlived_workers
           ~check_info:(get_check_info genv env)
           ~profiling
       in
@@ -1102,7 +1149,7 @@ functor
       (* PARSING ***************************************************************)
       debug_print_path_set genv "files_to_parse" files_to_parse;
 
-      ServerProgress.send_progress_to_monitor
+      ServerProgress.send_progress_to_monitor_w_timeout
         ~include_in_logs:false
         "parsing %d files"
         reparse_count;
@@ -1142,14 +1189,14 @@ functor
        toplevel symbols declared in that file. Also, update Typing_deps' table,
        which is a map from toplevel symbol hash (Dep.t) to filename. *)
       let naming_table = update_naming_table env fast_parsed profiling in
-      HackEventLogger.updating_deps_end t;
+      HackEventLogger.updating_deps_end ~count:reparse_count t;
       let t = Hh_logger.log_duration logstring t in
       let telemetry =
         Telemetry.duration telemetry ~key:"naming_update_end" ~start_time
       in
 
       (* NAMING ****************************************************************)
-      ServerProgress.send_progress_to_monitor
+      ServerProgress.send_progress_to_monitor_w_timeout
         ~include_in_logs:false
         "resolving symbol references";
       let logstring = "Naming" in
@@ -1161,6 +1208,7 @@ functor
       let deptable_unlocked =
         Typing_deps.allow_dependency_table_reads env.deps_mode true
       in
+      let ctx = Provider_utils.ctx_from_server_env env in
       (* Run Naming_global, updating the reverse naming table (which maps the names
        of toplevel symbols to the files in which they were declared) in shared
        memory. Does not run Naming itself (which converts an AST to a NAST by
@@ -1171,6 +1219,7 @@ functor
         do_naming
           genv
           env
+          ctx
           ~errors
           ~fast_parsed
           ~naming_table
@@ -1178,10 +1227,10 @@ functor
           ~profiling
       in
 
-      let t = Hh_logger.log_duration logstring t in
       let heap_size = SharedMem.heap_size () in
       Hh_logger.log "Heap size: %d" heap_size;
-      HackEventLogger.naming_end t heap_size;
+      HackEventLogger.naming_end ~count:reparse_count t heap_size;
+      let t = Hh_logger.log_duration logstring t in
       let telemetry =
         telemetry
         |> Telemetry.duration ~key:"naming_end" ~start_time
@@ -1189,7 +1238,7 @@ functor
       in
 
       (* REDECL PHASE 1 ********************************************************)
-      ServerProgress.send_progress_to_monitor
+      ServerProgress.send_progress_to_monitor_w_timeout
         ~include_in_logs:false
         "determining changes";
       let count = Relative_path.Map.cardinal fast in
@@ -1253,7 +1302,6 @@ functor
        redeclare definitions in files with parse errors.
 
        When shallow_class_decl is enabled, there is no need to do phase 2. *)
-      let ctx = Provider_utils.ctx_from_server_env env in
       let telemetry =
         Telemetry.duration telemetry ~key:"redecl2_now_start" ~start_time
       in
@@ -1272,7 +1320,7 @@ functor
       let telemetry =
         Telemetry.duration telemetry ~key:"redecl2_now_end" ~start_time
       in
-      ServerProgress.send_progress_to_monitor
+      ServerProgress.send_progress_to_monitor_w_timeout
         ~include_in_logs:false
         "evaluating type declarations of %d files"
         count;
@@ -1419,7 +1467,15 @@ functor
        open in the IDE, leaving other affected files to be lazily checked later.
        In either case, don't attempt to typecheck files with parse errors. *)
       let (files_to_check, lazy_check_later) =
-        CheckKind.get_defs_to_recheck files_to_parse fast to_recheck env
+        CheckKind.get_defs_to_recheck
+          ~reparsed:files_to_parse
+          ~phase_2_decl_defs:fast
+          ~to_recheck
+          ~env
+          ~ctx
+          ~enable_type_check_filter_files:
+            genv.ServerEnv.local_config
+              .ServerLocalConfig.enable_type_check_filter_files
       in
       let env =
         start_delegate_if_needed
@@ -1446,7 +1502,7 @@ functor
           ~changed_files:files_to_parse
           ~parse_t
       in
-      ServerProgress.send_progress_to_monitor
+      ServerProgress.send_progress_to_monitor_w_timeout
         ~include_in_logs:false
         "typechecking %d files"
         to_recheck_count;
@@ -1542,6 +1598,14 @@ functor
              ~value:
                genv.local_config
                  .ServerLocalConfig.defer_class_memory_mb_threshold
+        |> Telemetry.bool_
+             ~key:"enable_type_check_filter_files"
+             ~value:
+               genv.local_config
+                 .ServerLocalConfig.enable_type_check_filter_files
+        |> Telemetry.bool_
+             ~key:"typecheck_longlived_workers"
+             ~value:genv.local_config.ServerLocalConfig.longlived_workers
       in
 
       (* INVALIDATE FILES (EXPERIMENTAL TYPES IN CODEGEN) **********************)

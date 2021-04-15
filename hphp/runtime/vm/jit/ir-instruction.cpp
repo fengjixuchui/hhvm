@@ -343,15 +343,15 @@ Type bespokeElemReturn(const IRInstruction* inst, bool present) {
 
   auto resultType = arrLikeElemType(
       inst->src(0)->type(), inst->src(1)->type(), inst->ctx());
-  if (present) return resultType.first;
 
-  assertx(inst->is(BespokeGet));
-  auto const keyState = inst->extra<BespokeGet>()->state;
-  auto const knownPresent =
-    resultType.second || (keyState == BespokeGetData::KeyState::Present);
-  auto const type = knownPresent ? resultType.first
-                                 : (resultType.first | TUninit);
-  return type;
+  auto const knownPresent = [&] {
+    if (present || resultType.second) return true;
+    if (!inst->is(BespokeGet)) return false;
+    auto const keyState = inst->extra<BespokeGet>()->state;
+    return keyState == BespokeGetData::KeyState::Present;
+  }();
+
+  return knownPresent ? resultType.first : (resultType.first | TUninit);
 }
 
 Type bespokePosReturn(const IRInstruction* inst, bool isKey) {
@@ -364,7 +364,7 @@ Type bespokePosReturn(const IRInstruction* inst, bool isKey) {
 
 Type vecElemReturn(const IRInstruction* inst) {
   assertx(inst->is(LdVecElem));
-  assertx(inst->src(0)->type().subtypeOfAny(TVec, TVArr));
+  assertx(inst->src(0)->isA(TVec));
   assertx(inst->src(1)->isA(TInt));
 
   auto resultType = arrLikeElemType(
@@ -374,7 +374,7 @@ Type vecElemReturn(const IRInstruction* inst) {
 
 Type dictElemReturn(const IRInstruction* inst) {
   assertx(inst->is(DictGet, DictGetK, DictGetQuiet, DictIdx));
-  assertx(inst->src(0)->type().subtypeOfAny(TDict, TDArr));
+  assertx(inst->src(0)->isA(TDict));
   assertx(inst->src(1)->isA(TInt | TStr));
 
   auto elem =
@@ -500,9 +500,9 @@ Type ptrIterReturn(const IRInstruction* inst) {
   auto const arr = inst->src(0)->type();
   assertx(arr <= TArrLike);
   auto const value = [&]{
-    if (arr <= (TVArr|TVec)) {
+    if (arr <= TVec) {
       return arrLikeElemType(arr, TInt, inst->ctx()).first;
-    } else if (arr <= (TDArr|TDict)) {
+    } else if (arr <= TDict) {
       return arrLikeElemType(arr, TInt | TStr, inst->ctx()).first;
     }
     return TCell;
@@ -519,14 +519,24 @@ Type ptrIterValReturn(const IRInstruction* inst) {
 Type loggingArrLikeReturn(const IRInstruction* inst) {
   assertx(inst->is(NewLoggingArray));
   auto const arr = inst->src(0)->type();
+  auto const isStatic = inst->extra<NewLoggingArray>()->isStatic;
 
   assertx(arr <= TArrLike);
   assertx(arr.isKnownDataType());
-  return arr.unspecialize();
+  assertx(IMPLIES(isStatic, arr.hasConstVal()));
+  return isStatic ? arr.unspecialize() : arr.unspecialize().modified();
+}
+
+Type structDictReturn(const IRInstruction* inst) {
+  assertx(inst->is(AllocBespokeStructDict, NewBespokeStructDict));
+  auto const layout = inst->is(AllocBespokeStructDict)
+    ? inst->extra<AllocBespokeStructDict>()->layout
+    : inst->extra<NewBespokeStructDict>()->layout;
+  return TDict.narrowToLayout(layout);
 }
 
 Type arrLikeSetReturn(const IRInstruction* inst) {
-  assertx(inst->is(BespokeSet));
+  assertx(inst->is(BespokeSet, StructDictSet));
   auto const arr = inst->src(0)->type();
   auto const key = inst->src(1)->type();
   auto const val = inst->src(2)->type();
@@ -553,14 +563,12 @@ Type arrLikeAppendReturn(const IRInstruction* inst) {
   return base.narrowToLayout(layout);
 }
 
-// Is this instruction an array cast that always results in a layout change?
-// Such casts are guaranteed to return vanilla arrays.
+// Is this instruction an array cast that always modifies the type of the
+// input array? Such casts are guaranteed to return vanilla arrays.
 bool isNontrivialArrayCast(const IRInstruction* inst) {
   auto const& type = inst->src(0)->type();
-  if (inst->is(ConvArrLikeToVec))    return !type.maybe(TVec|TVArr);
-  if (inst->is(ConvArrLikeToVArr))   return !type.maybe(TVec|TVArr);
-  if (inst->is(ConvArrLikeToDict))   return !type.maybe(TDict|TDArr);
-  if (inst->is(ConvArrLikeToDArr))   return !type.maybe(TDict|TDArr);
+  if (inst->is(ConvArrLikeToVec))    return !type.maybe(TVec);
+  if (inst->is(ConvArrLikeToDict))   return !type.maybe(TDict);
   if (inst->is(ConvArrLikeToKeyset)) return !type.maybe(TKeyset);
   return false;
 }
@@ -628,9 +636,7 @@ Type outputType(const IRInstruction* inst, int /*dstId*/) {
 #define DModified(n)      return inst->src(n)->type().modified();
 #define DArrLikeSet       return arrLikeSetReturn(inst);
 #define DArrLikeAppend    return arrLikeAppendReturn(inst);
-#define DVArr return checkLayoutFlags(RO::EvalHackArrDVArrs ? TVec : TVArr);
-#define DDArr return checkLayoutFlags(RO::EvalHackArrDVArrs ? TDict : TDArr);
-#define DStaticDArr     return (TStaticDict | TStaticArr) & [&]{ DDArr }();
+#define DStructDict     return structDictReturn(inst);
 #define DCol            return newColReturn(inst);
 #define DMulti          return TBottom;
 #define DSetElem        return setElemReturn(inst);
@@ -675,9 +681,7 @@ Type outputType(const IRInstruction* inst, int /*dstId*/) {
 #undef DFirstKey
 #undef DLastKey
 #undef DLoggingArrLike
-#undef DVArr
-#undef DDArr
-#undef DStaticDArr
+#undef DStructDict
 #undef DCol
 #undef DMulti
 #undef DSetElem

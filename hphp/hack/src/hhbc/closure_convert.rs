@@ -19,7 +19,7 @@ use hhas_coeffects::HhasCoeffects;
 use hhbc_id::class;
 use hhbc_id_rust as hhbc_id;
 use hhbc_string_utils_rust as string_utils;
-use instruction_sequence_rust::{unrecoverable, Error, Result};
+use instruction_sequence::{unrecoverable, Error, Result};
 use naming_special_names_rust::{fb, pseudo_consts, special_idents, superglobals};
 use ocamlrep::rc::RcOc;
 use options::{CompilerFlags, HhvmFlags, LangFlags, Options};
@@ -163,12 +163,11 @@ impl<'a> Env<'a> {
         self.with_function_like(ScopeItem::Lambda(lambda), true, fd)
     }
 
-    fn with_longlambda(&mut self, is_static: bool, fd: &Fun_) -> Result<()> {
+    fn with_longlambda(&mut self, fd: &Fun_) -> Result<()> {
         let is_async = fd.fun_kind.is_async();
         let coeffects = HhasCoeffects::from_ast(&fd.ctxs, &fd.params);
 
         let long_lambda = LongLambda {
-            is_static,
             is_async,
             coeffects,
         };
@@ -230,6 +229,35 @@ impl<'a> Env<'a> {
             Some(S::Method(md)) => check_valid_fun_kind(&md.get_name().1, md.get_fun_kind()),
         }
     }
+
+    fn check_readonlyness(&self, state: &mut State, lhs: &Expr, rhs: &Expr) -> Result<()> {
+        match &lhs.1 {
+            Expr_::Lvar(id_orig) => {
+                let var_name = local_id::get_name(&id_orig.1);
+                // TODO(alnash) we need to handle $this separately because the readonlyness
+                // comes from the function for this and not by the name
+                if var_name != special_idents::THIS {
+                    match get_readonlyness(state, &rhs.1) {
+                        Readonlyness::Readonly => {
+                            state.add_readonly(var_name.to_string());
+                            Ok(())
+                        }
+                        _ => Ok(()),
+                    }
+                } else {
+                    Ok(())
+                }
+            }
+            Expr_::ObjGet(_) => match get_readonlyness(state, &lhs.1) {
+                Readonlyness::Readonly => Err(emit_fatal::raise_fatal_parse(
+                    &self.pos,
+                    "check readonlyness fails",
+                )),
+                _ => Ok(()),
+            },
+            _ => Ok(()),
+        }
+    }
 }
 
 struct State {
@@ -251,6 +279,8 @@ struct State {
     current_function_state: PerFunctionState,
     // accumulated information about program
     global_state: GlobalState,
+    // readonly locals
+    readonly_locals: HashSet<String>,
 }
 
 impl State {
@@ -266,7 +296,20 @@ impl State {
             named_hoisted_functions: SMap::new(),
             current_function_state: PerFunctionState::default(),
             global_state: GlobalState::default(),
+            readonly_locals: HashSet::new(),
         }
+    }
+
+    pub fn add_readonly(&mut self, var_name: String) {
+        self.readonly_locals.insert(var_name);
+    }
+
+    pub fn is_readonly<S: ?Sized>(&self, var_name: &S) -> bool
+    where
+        String: std::borrow::Borrow<S>,
+        S: std::hash::Hash + Eq,
+    {
+        self.readonly_locals.contains(var_name)
     }
 
     pub fn reset_function_counts(&mut self) {
@@ -299,6 +342,33 @@ impl State {
 
     pub fn set_namespace(&mut self, namespace: RcOc<namespace_env::Env>) {
         self.namespace = namespace;
+    }
+}
+
+pub enum Readonlyness {
+    Readonly,
+    Mutable,
+}
+
+fn get_readonlyness(state: &mut State, expr: &Expr_) -> Readonlyness {
+    match expr {
+        Expr_::ReadonlyExpr(_) => Readonlyness::Readonly,
+        Expr_::ObjGet(og) => {
+            let (obj, _member_name, _null_flavor, _reffiness) = &**og;
+            get_readonlyness(state, &obj.1)
+        }
+        Expr_::Lvar(id_orig) => {
+            let var_name = local_id::get_name(&id_orig.1);
+            // TODO(alnash) we need to handle $this separately because the readonlyness
+            // comes from the function for this and not by the name
+            let is_this = var_name == special_idents::THIS;
+            if !is_this && state.is_readonly(var_name) {
+                Readonlyness::Readonly
+            } else {
+                Readonlyness::Mutable
+            }
+        }
+        _ => Readonlyness::Mutable,
     }
 }
 
@@ -531,7 +601,6 @@ fn make_closure(
 
     // TODO(hrust): can we reconstruct fd here from the scratch?
     fd.name = Id(p.clone(), class_num.to_string());
-    fd.static_ = is_static;
     (fd, cd)
 }
 
@@ -647,7 +716,7 @@ fn convert_lambda<'a>(
     let lambda_env = &mut env.clone();
 
     if use_vars_opt.is_some() {
-        lambda_env.with_longlambda(false, &fd)?
+        lambda_env.with_longlambda(&fd)?
     } else {
         lambda_env.with_lambda(&fd)?
     };
@@ -721,11 +790,11 @@ fn convert_lambda<'a>(
     let class_num = total_class_count(lambda_env, st);
 
     let is_static = if is_long_lambda {
-        // long lambdas are static if they are annotated as such
-        fd.static_
+        // long lambdas are never static
+        false
     } else {
         // short lambdas can be made static if they don't capture this in
-        // any form (including any nested non-static lambdas )
+        // any form (including any nested lambdas)
         !st.captured_this
     };
 
@@ -897,6 +966,7 @@ fn convert_meth_caller_to_func_ptr<'a>(
 
     let fd = Fun_ {
         span: pos(),
+        readonly_this: None, // TODOreadonly closure convert
         annotation: dummy_saved_env,
         mode: get_scope_fmode(&env.scope),
         readonly_ret: None,
@@ -927,7 +997,6 @@ fn convert_meth_caller_to_func_ptr<'a>(
         external: false,
         namespace: RcOc::clone(&st.state.empty_namespace),
         doc_comment: None,
-        static_: false,
     };
     st.state.named_hoisted_functions.insert(mangle_name, fd);
     return fun_handle;
@@ -989,6 +1058,7 @@ fn make_dyn_meth_caller_lambda(
 
     let fd = Fun_ {
         span: pos(),
+        readonly_this: None, // TODO: readonly_this in closure convert
         annotation: dummy_saved_env,
         mode: get_scope_fmode(&env.scope),
         readonly_ret: None, // TODO: readonly_ret in closure convert
@@ -1014,7 +1084,6 @@ fn make_dyn_meth_caller_lambda(
         external: false,
         namespace: RcOc::clone(&st.state.empty_namespace),
         doc_comment: None,
-        static_: false,
     };
     let expr_id = |name: String| Expr(pos(), Expr_::mk_id(Id(pos(), name)));
     let force_val = if force { Expr_::True } else { Expr_::False };
@@ -1534,8 +1603,24 @@ impl<'ast, 'a> VisitorMut<'ast> for ClosureConvertVisitor<'a> {
                 x.recurse(env, self.object())?;
                 Expr_::ReadonlyExpr(x)
             }
+            Expr_::Binop(mut x) => {
+                x.recurse(env, self.object())?;
+                let strict = env
+                    .options
+                    .hhvm
+                    .hack_lang
+                    .flags
+                    .contains(LangFlags::ENABLE_READONLY_ENFORCEMENT);
+                if strict {
+                    let (bop, e_lhs, e_rhs) = x.as_ref();
+                    if let Bop::Eq(None) = bop {
+                        env.check_readonlyness(&mut self.state, e_lhs, e_rhs)?;
+                    }
+                }
+                Expr_::Binop(x)
+            }
             Expr_::ExpressionTree(mut x) => {
-                x.desugared_expr.recurse(env, self.object())?;
+                x.runtime_expr.recurse(env, self.object())?;
                 Expr_::ExpressionTree(x)
             }
             mut x => {
@@ -1665,6 +1750,7 @@ fn extract_debugger_main(
     );
     let fd = Fun_ {
         span: pos,
+        readonly_this: None, // TODO: readonly_this in closure_convert
         annotation: (),
         mode: Mode::Mstrict,
         readonly_ret: None, // TODO: readonly_ret in closure_convert
@@ -1689,7 +1775,6 @@ fn extract_debugger_main(
         external: false,
         namespace: RcOc::clone(empty_namespace),
         doc_comment: None,
-        static_: false,
     };
     let mut new_defs = vec![Def::mk_fun(fd)];
     new_defs.append(&mut defs);

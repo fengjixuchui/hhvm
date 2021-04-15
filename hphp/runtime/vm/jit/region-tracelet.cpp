@@ -78,7 +78,7 @@ struct Env {
     , profiling(kind == TransKind::Profile)
     , inlining(inlining)
   {
-    irgen::defineStack(irgs, ctx.spOffset);
+    irgen::defineFrameAndStack(irgs, ctx.spOffset);
     irgs.formingRegion = true;
     irgs.irb->enableConstrainGuards();
   }
@@ -267,7 +267,6 @@ bool isLiteral(Op op) {
     case OpInt:
     case OpDouble:
     case OpString:
-    case OpArray:
     case OpDict:
     case OpVec:
     case OpKeyset:

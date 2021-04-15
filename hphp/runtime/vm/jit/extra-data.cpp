@@ -20,6 +20,7 @@
 
 #include <folly/functional/Invoke.h>
 
+#include "hphp/runtime/base/bespoke/logging-profile.h"
 #include "hphp/runtime/vm/jit/ssa-tmp.h"
 #include "hphp/runtime/vm/jit/abi-x64.h"
 #include "hphp/util/text-util.h"
@@ -42,6 +43,28 @@ std::string NewStructData::show() const {
     delim = ",";
   }
   return os.str();
+}
+
+std::string NewBespokeStructData::show() const {
+  std::ostringstream os;
+  os << layout.describe() << ',';
+  os << offset.offset << ",(";
+  auto delimiter = "";
+  for (auto i = 0; i < numSlots; i++) {
+    os << delimiter << slots[i];
+    delimiter = ",";
+  }
+  os << ')';
+  return os.str();
+}
+
+size_t LoggingProfileData::stableHash() const {
+  return profile ? profile->key.stableHash() : 0;
+}
+
+size_t SinkProfileData::stableHash() const {
+  if (!profile) return 0;
+  return profile->key.first ^ SrcKey::StableHasher()(profile->key.second);
 }
 
 //////////////////////////////////////////////////////////////////////

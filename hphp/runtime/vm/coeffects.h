@@ -74,6 +74,9 @@ struct StaticCoeffects {
   RuntimeCoeffects toAmbient() const;
   RuntimeCoeffects toRequired() const;
 
+  // Returns the corresponding shallow bits for coeffects that are local
+  RuntimeCoeffects toShallowWithLocals() const;
+
   static StaticCoeffects fromValue(uint16_t value) {
     return StaticCoeffects{value};
   }
@@ -93,6 +96,10 @@ struct StaticCoeffects {
   }
 
 private:
+  // Returns the local bits
+  storage_t locals() const;
+
+private:
   explicit StaticCoeffects(uint16_t data) : m_data(data) {}
   storage_t m_data;
 };
@@ -106,6 +113,8 @@ struct CoeffectRule final {
   struct FunParam {};
   struct CCParam {};
   struct CCThis {};
+  struct ClosureInheritFromParent {};
+  struct GeneratorThis {};
 
   CoeffectRule() = default;
 
@@ -128,9 +137,20 @@ struct CoeffectRule final {
     , m_name(ctx_name)
   { assertx(ctx_name); }
 
+  explicit CoeffectRule(ClosureInheritFromParent)
+    : m_type(Type::ClosureInheritFromParent)
+  {}
+
+  explicit CoeffectRule(GeneratorThis)
+    : m_type(Type::GeneratorThis)
+  {}
+
   RuntimeCoeffects emit(const Func*, uint32_t, void*) const;
   jit::SSATmp* emitJit(jit::irgen::IRGS&, const Func*,
                        uint32_t, jit::SSATmp*) const;
+
+  bool isClosureInheritFromParent() const;
+  bool isGeneratorThis() const;
 
   folly::Optional<std::string> toString(const Func*) const;
   std::string getDirectiveString() const;
@@ -145,6 +165,8 @@ private:
     FunParam,
     CCParam,
     CCThis,
+    ClosureInheritFromParent,
+    GeneratorThis,
   };
 
   Type m_type{Type::Invalid};

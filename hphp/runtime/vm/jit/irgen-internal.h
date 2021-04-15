@@ -83,12 +83,24 @@ inline Offset nextBcOff(const IRGS& env) {
   return nextSrcKey(env).offset();
 }
 
-inline RuntimeCoeffects curCoeffects(const IRGS& env) {
-  assertx(curFunc(env));
-  // Pessimize enforcements in presence of coeffect rules,
-  // as it is not tracked yet
-  if (curFunc(env)->hasCoeffectRules()) return RuntimeCoeffects::none();
-  return curFunc(env)->staticCoeffects().toAmbient();
+inline SSATmp* curRequiredCoeffects(IRGS& env) {
+  auto const func = curFunc(env);
+  assertx(func);
+  if (!func->hasCoeffectsLocal()) {
+    assertx(!func->hasCoeffectRules());
+    return cns(env, func->requiredCoeffects().value());
+  }
+  // Access 0Coeffects variable
+  // TODO: Figure out why TInt asserts here
+  auto const local =
+    gen(env, LdLoc, TCell, LocalId(func->coeffectsLocalId()), fp(env));
+  return gen(env, AssertType, TInt, local);
+}
+
+inline SSATmp* curCoeffects(IRGS& env) {
+  auto const coeffects = curRequiredCoeffects(env);
+  auto const shallows = curFunc(env)->shallowCoeffectsWithLocals();
+  return gen(env, AndInt, coeffects, cns(env, ~shallows.value()));
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -187,6 +199,14 @@ SSATmp* cond(IRGS& env, Branch branch, Next next, Taken taken) {
     return result;
   }
   return nullptr;
+}
+
+// Helper to allow for chaining of Branch/Next pairs
+template<class Branch1, class Next1, class Branch2, class Next2, class... Args>
+SSATmp* cond(IRGS& env, Branch1 b1, Next1 n1, Branch2 b2, Next2 n2,
+             Args&&... args) {
+  return cond(env, b1, n1,
+              [&]{ return cond(env, b2, n2, std::forward<Args>(args)...); });
 }
 
 template<class Branch, class Next, class Taken>
@@ -506,7 +526,7 @@ inline SSATmp* pop(IRGS& env, GuardConstraint gc = DataTypeSpecific) {
 }
 
 inline SSATmp* popC(IRGS& env, GuardConstraint gc = DataTypeSpecific) {
-  return assertType(pop(env, gc), TCell);
+  return assertType(pop(env, gc), TInitCell);
 }
 
 inline SSATmp* popCU(IRGS& env) { return assertType(pop(env), TCell); }
@@ -559,7 +579,7 @@ inline SSATmp* top(IRGS& env, BCSPRelOffset index = BCSPRelOffset{0},
 
 inline SSATmp* topC(IRGS& env, BCSPRelOffset i = BCSPRelOffset{0},
                     GuardConstraint gc = DataTypeSpecific) {
-  return assertType(top(env, i, gc), TCell);
+  return assertType(top(env, i, gc), TInitCell);
 }
 
 /*
@@ -891,8 +911,20 @@ SSATmp* convertClsMethToVec(IRGS& env, SSATmp* clsMeth);
 SSATmp* convertClassKey(IRGS& env, SSATmp* key);
 
 /*
- * Define sp(env).
+ * Define fp(env) and sp(env).
  */
-void defineStack(IRGS& env, FPInvOffset bcSPOff);
+void defineFrameAndStack(IRGS& env, FPInvOffset bcSPOff);
+
+//////////////////////////////////////////////////////////////////////
+
+/*
+ * Determines correct course of action based on notice_data and acts upon it.
+ * Returns true if an exception throw is emitted.
+ */
+bool handleConvNoticeLevel(
+  IRGS& env,
+  const ConvNoticeData& notice_data,
+  const char* const from,
+  const char* const to);
 
 }}}

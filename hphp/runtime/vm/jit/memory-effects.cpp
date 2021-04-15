@@ -944,6 +944,9 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case LdLoc:
     return PureLoad { ALocal { inst.src(0), inst.extra<LocalId>()->locId } };
 
+  case LdLocForeign:
+    return may_load_store(ALocalAny, AEmpty);
+
   case CheckLoc:
     return may_load_store(
       ALocal { inst.src(0), inst.extra<LocalId>()->locId },
@@ -1008,6 +1011,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
       AHeapAny | ARds { inst.extra<InitSProps>()->cls->sPropInitHandle() }
     );
 
+  case LdARFunc:
   case LdClsFromClsMeth:
   case LdFuncFromClsMeth:
   case LdFuncFromRFunc:
@@ -1067,7 +1071,17 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     };
   }
 
-  case BespokeGet: {
+  case LdStructDictElem: {
+    auto const base = inst.src(0);
+    auto const key = inst.src(1);
+    return PureLoad { AElemS { base, key->strVal() } };
+  }
+
+  case DictGetK:
+  case KeysetGetK:
+  case BespokeGet:
+  case KeysetGetQuiet:
+  case DictGetQuiet: {
     auto const base = inst.src(0);
     auto const key  = inst.src(1);
     assertx(key->type().subtypeOfAny(TInt, TStr));
@@ -1080,6 +1094,26 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
         key->hasConstVal() ? AElemS { base, key->strVal() } : AElemSAny,
       };
     }
+  }
+
+  case DictIsset:
+  case DictIdx:
+  case KeysetIsset:
+  case KeysetIdx:
+  case AKExistsDict:
+  case AKExistsKeyset:
+  case BespokeGetThrow: {
+    auto const base = inst.src(0);
+    auto const key  = inst.src(1);
+    assertx(key->type().subtypeOfAny(TInt, TStr));
+    auto const elem = [&] {
+      if (key->isA(TInt)) {
+        return key->hasConstVal() ? AElemI { base, key->intVal() } : AElemIAny;
+      } else {
+        return key->hasConstVal() ? AElemS { base, key->strVal() } : AElemSAny;
+      }
+    }();
+    return may_load_store(elem, AEmpty);
   }
 
   case InitVecElemLoop:
@@ -1110,15 +1144,26 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
       return may_load_store_move(stack_in, AEmpty, stack_in);
     }
 
-  case NewStructDArray:
   case NewStructDict:
     {
-      // NewStruct{Dict,DArray} is reading elements from the stack, but writes
-      // to a completely new array, so we can treat the store set as empty.
+      // NewStructDict reads elements from the stack, but writes to a
+      // completely new array, so we can treat the store set as empty.
       auto const extra = inst.extra<NewStructData>();
       auto const stack_in = AStack::range(
         extra->offset,
         extra->offset + static_cast<int32_t>(extra->numKeys)
+      );
+      return may_load_store_move(stack_in, AEmpty, stack_in);
+    }
+
+  case NewBespokeStructDict:
+    {
+      // NewBespokeStructDict reads elements from the stack, but writes to
+      // a completely new array, so we can treat the stores as empty.
+      auto const extra = inst.extra<NewBespokeStructDict>();
+      auto const stack_in = AStack::range(
+        extra->offset,
+        extra->offset + static_cast<int32_t>(extra->numSlots)
       );
       return may_load_store_move(stack_in, AEmpty, stack_in);
     }
@@ -1186,24 +1231,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     return may_load_store(frame, AEmpty);
   }
 
-  case DictGetK:
-  case KeysetGetK: {
-    auto const base = inst.src(0);
-    auto const key  = inst.src(1);
-    always_assert(key->isA(TInt | TStr));
-    if (key->isA(TInt)) {
-      return PureLoad {
-        key->hasConstVal() ? AElemI { base, key->intVal() } : AElemIAny
-      };
-    }
-    if (key->isA(TStr)) {
-      return PureLoad {
-        key->hasConstVal() ? AElemS { base, key->strVal() } : AElemSAny
-      };
-    }
-    return PureLoad { AElemAny };
-  }
-
   case BespokeIterGetKey:
   case LdPtrIterKey:
     // Array element keys are not tracked by memory effects right now.
@@ -1219,7 +1246,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case BespokeIterGetVal:
     return may_load_store(AElemAny, AEmpty);
 
-  case ElemMixedArrayK:
   case ElemDictK:
   case ElemKeysetK:
     return IrrelevantEffects {};
@@ -1249,7 +1275,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     return may_load_store(AEmpty, AEmpty);
 
   case CheckDictKeys:
-  case CheckMixedArrayOffset:
   case CheckDictOffset:
   case CheckKeysetOffset:
   case CheckMissingKeyInArrLike:
@@ -1257,16 +1282,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ProfileKeysetAccess:
   case CheckArrayCOW:
     return may_load_store(AHeapAny, AEmpty);
-
-  case DictGetQuiet:
-  case DictIsset:
-  case DictIdx:
-  case KeysetGetQuiet:
-  case KeysetIsset:
-  case KeysetIdx:
-  case AKExistsDict:
-  case AKExistsKeyset:
-    return may_load_store(AElemAny, AEmpty);
 
   case SameArrLike:
   case NSameArrLike:
@@ -1396,14 +1411,12 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case NewColFromArray:
   case NewPair:
   case NewInstanceRaw:
-  case NewDArray:
   case NewDictArray:
   case NewRFunc:
   case FuncCred:
-  case AllocVArray:
   case AllocVec:
-  case AllocStructDArray:
   case AllocStructDict:
+  case AllocBespokeStructDict:
   case ConvDblToStr:
   case ConvIntToStr:
     return IrrelevantEffects {};
@@ -1585,8 +1598,9 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case CheckSubClsCns:
   case LdClsCnsVecLen:
   case FuncHasAttr:
+  case ClassHasAttr:
+  case LdFuncRequiredCoeffects:
   case IsFunReifiedGenericsMatched:
-  case IsClsDynConstructible:
   case JmpPlaceholder:
   case LdSmashable:
   case LdSmashableFunc:
@@ -1829,6 +1843,8 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     return may_load_store(AEmpty, AEmpty);
 
   case RaiseCoeffectsCallViolation:
+  case RaiseCoeffectsFunParamCoeffectRulesViolation:
+  case RaiseCoeffectsFunParamTypeViolation:
     return may_load_store(AEmpty, AEmpty);
 
   case LdClsPropAddrOrNull:   // may run 86{s,p}init, which can autoload
@@ -1837,7 +1853,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ThrowArrayIndexException:
   case ThrowArrayKeyException:
   case RaiseClsMethPropConvertNotice:
-  case RaiseArraySerializeNotice:
   case ThrowUninitLoc:
   case RaiseUndefProp:
   case RaiseTooManyArg:
@@ -1866,8 +1881,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case LtArrLike:
   case LteArrLike:
   case CmpArrLike:
-  case ConvObjToVArr:  // can invoke PHP
-  case ConvObjToDArr:  // can invoke PHP
   case OODeclExists:
   case LdCls:          // autoload
   case LdClsCached:    // autoload
@@ -1891,6 +1904,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case DictSet:
   case BespokeSet:
   case BespokeAppend:
+  case StructDictSet:
   case ConcatStrStr:
   case PrintStr:
   case PrintBool:
@@ -1921,9 +1935,10 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ThrowParamInOutMismatchRange:
   case ArrayMarkLegacyShallow:
   case ArrayMarkLegacyRecursive:
+  case ThrowMustBeMutableException:
+  case ThrowMustBeReadOnlyException:
   case ArrayUnmarkLegacyShallow:
   case ArrayUnmarkLegacyRecursive:
-  case TagProvenanceHere:
   case SetOpTV:
   case OutlineSetOp:
   case ThrowAsTypeStructException:
@@ -1939,14 +1954,10 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     return may_load_store(AElemAny, AEmpty);
 
   case ConvArrLikeToVec:
-  case ConvArrLikeToVArr:
-  case ConvArrLikeToDArr: // May raise Hack array compat notices
   case ConvArrLikeToDict:
   case ConvArrLikeToKeyset: // Decrefs input values
-  case ConvClsMethToDArr:
   case ConvClsMethToDict:
   case ConvClsMethToKeyset:
-  case ConvClsMethToVArr:
   case ConvClsMethToVec:
     return may_load_store(AElemAny, AEmpty);
 
@@ -1998,13 +2009,6 @@ DEBUG_ONLY bool check_effects(const IRInstruction& inst, MemEffects me) {
     return folly::sformat("  inst: {}\n  effects: {}\n", inst, show(me));
   };
 
-  auto check_fp = [&] (FPRelOffset base) {
-    always_assert_flog(
-      base.offset <= 0,
-      "frame offset is above base frame"
-    );
-  };
-
   auto check_obj = [&] (SSATmp* obj) {
     always_assert_flog(
       obj->type() <= TObj,
@@ -2013,7 +2017,6 @@ DEBUG_ONLY bool check_effects(const IRInstruction& inst, MemEffects me) {
   };
 
   auto check = [&] (AliasClass a) {
-    if (auto const fr = a.local()) check_fp(fr->base);
     if (auto const pr = a.prop())  check_obj(pr->obj);
   };
 

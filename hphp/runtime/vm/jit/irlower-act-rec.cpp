@@ -73,6 +73,7 @@ void cgDefFuncEntryFP(IRLS& env, const IRInstruction* inst) {
   auto& v = vmain(env);
 
   v << store{prevFP, newFP + AROFF(m_sfp)};
+  v << unrecordbasenativesp{};
   v << unstublogue{};
   v << phplogue{newFP};
   v << storeli{(int32_t)func->getFuncId().toInt(), newFP[AROFF(m_funcId)]};
@@ -193,6 +194,23 @@ void cgDbgCheckLocalsDecRefd(IRLS& env, const IRInstruction* inst) {
   ifThen(v, CC_NZ, sf, [&](Vout& v) {
     v << trap{TRAP_REASON};
   });
+}
+
+namespace {
+const Func* funcFromActRecHelper(const ActRec* fp) { return fp->func(); }
+} // namespace
+
+void cgLdARFunc(IRLS& env, const IRInstruction* inst) {
+  auto& v = vmain(env);
+  if (use_lowptr) {
+    auto const fp = srcLoc(env, inst, 0).reg();
+    auto const dst = dstLoc(env, inst, 0).reg();
+    v << loadzlq{fp[AROFF(m_funcId)], dst};
+    return;
+  }
+  auto const args = argGroup(env, inst).ssa(0);
+  auto const target = CallSpec::direct(funcFromActRecHelper);
+  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::None, args);
 }
 
 ///////////////////////////////////////////////////////////////////////////////

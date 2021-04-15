@@ -64,6 +64,8 @@ module Classes = struct
 
   let cMemberOf = "\\HH\\MemberOf"
 
+  let cLabel = "\\HH\\Label"
+
   (* Classes that can be spliced into ExpressionTrees *)
   let cSpliceable = "\\Spliceable"
 end
@@ -237,8 +239,6 @@ module UserAttributes = struct
 
   let uaConst = "__Const"
 
-  let uaConstFun = "__ConstFun"
-
   let uaDeprecated = "__Deprecated"
 
   let uaEntryPoint = "__EntryPoint"
@@ -248,8 +248,6 @@ module UserAttributes = struct
   let uaMemoizeLSB = "__MemoizeLSB"
 
   let uaPHPStdLib = "__PHPStdLib"
-
-  let uaHipHopSpecific = "__HipHopSpecific"
 
   let uaAcceptDisposable = "__AcceptDisposable"
 
@@ -309,6 +307,8 @@ module UserAttributes = struct
 
   let uaAtom = "__Atom"
 
+  let uaSoundDynamicCallable = "__SoundDynamicCallable"
+
   let as_map =
     AttributeKinds.(
       SMap.of_list
@@ -316,13 +316,11 @@ module UserAttributes = struct
           (uaOverride, [mthd]);
           (uaConsistentConstruct, [cls]);
           (uaConst, [cls; instProperty; parameter; staticProperty]);
-          (uaConstFun, [parameter; lambda; mthd; fn]);
           (uaDeprecated, [fn; mthd]);
           (uaEntryPoint, [fn]);
           (uaMemoize, [fn; mthd]);
           (uaMemoizeLSB, [mthd]);
           (uaPHPStdLib, [cls; fn; mthd]);
-          (uaHipHopSpecific, [cls; fn; mthd]);
           (uaAcceptDisposable, [parameter]);
           (uaReturnDisposable, [fn; mthd; lambda]);
           (uaLSB, [staticProperty]);
@@ -347,6 +345,7 @@ module UserAttributes = struct
           (uaExternal, [parameter]);
           (uaCanCall, [parameter]);
           (uaAtom, [parameter]);
+          (uaSoundDynamicCallable, [cls; mthd]);
         ])
 
   (* These are names which are allowed in the systemlib but not in normal programs *)
@@ -755,6 +754,8 @@ module UnstableFeatures = struct
   let ifc = "ifc"
 
   let readonly = "readonly"
+
+  let expression_trees = "expression_trees"
 end
 
 module Coeffects = struct

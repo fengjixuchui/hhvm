@@ -6,9 +6,5 @@
  *
  *)
 
-open Hh_json
-
-let convert_deps_to_json ~deps:_ : json option = None
-
 let go_to_implementation ~class_name:_ ~globalrev:_ : string HashSet.t =
   HashSet.create ()

@@ -53,12 +53,14 @@
 #include "hphp/runtime/base/extended-logger.h"
 #include "hphp/runtime/base/implicit-context.h"
 #include "hphp/runtime/debugger/debugger.h"
+#include "hphp/runtime/debugger/debugger_base.h"
 #include "hphp/runtime/ext/std/ext_std_output.h"
 #include "hphp/runtime/ext/string/ext_string.h"
 #include "hphp/runtime/ext/reflection/ext_reflection.h"
 #include "hphp/runtime/ext/apc/ext_apc.h"
 #include "hphp/runtime/server/cli-server.h"
 #include "hphp/runtime/server/server-stats.h"
+#include "hphp/runtime/server/source-root-info.h"
 #include "hphp/runtime/vm/debug/debug.h"
 #include "hphp/runtime/vm/jit/enter-tc.h"
 #include "hphp/runtime/vm/jit/tc.h"
@@ -78,6 +80,8 @@
 #include "hphp/runtime/base/php-globals.h"
 #include "hphp/runtime/base/exceptions.h"
 #include "hphp/zend/zend-math.h"
+
+#include "hphp/runtime/base/bespoke-runtime.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
@@ -109,7 +113,6 @@ ExecutionContext::ExecutionContext()
   , m_executingSetprofileCallback(false)
   , m_logger_hook(*this)
 {
-  ARRPROV_USE_RUNTIME_LOCATION();
   m_deferredErrors = staticEmptyVec();
   resetCoverageCounters();
   // We don't want a new execution context to cause any request-heap
@@ -365,7 +368,6 @@ bool ExecutionContext::obFlush(bool force /*= false*/) {
       try {
         Variant tout;
         {
-          ARRPROV_USE_RUNTIME_LOCATION();
           m_insideOBHandler = true;
           SCOPE_EXIT { m_insideOBHandler = false; };
           tout = vm_call_user_func(
@@ -386,7 +388,6 @@ bool ExecutionContext::obFlush(bool force /*= false*/) {
     try {
       Variant tout;
       {
-        ARRPROV_USE_RUNTIME_LOCATION();
         m_insideOBHandler = true;
         SCOPE_EXIT { m_insideOBHandler = false; };
         tout = vm_call_user_func(
@@ -442,10 +443,10 @@ const StaticString
   s_default_output_handler("default output handler");
 
 Array ExecutionContext::obGetStatus(bool full) {
-  Array ret = empty_varray();
+  Array ret = empty_vec_array();
   int level = 0;
   for (auto& buffer : m_buffers) {
-    Array status = empty_darray();
+    Array status = empty_dict_array();
     if (level < m_protectedLevel || buffer.handler.isNull()) {
       status.set(s_name, s_default_output_handler);
       status.set(s_type, 0);
@@ -501,7 +502,7 @@ void ExecutionContext::obSetImplicitFlush(bool on) {
 }
 
 Array ExecutionContext::obGetHandlers() {
-  Array ret = empty_varray();
+  Array ret = empty_vec_array();
   for (auto& ob : m_buffers) {
     auto& handler = ob.handler;
     ret.append(handler.isNull() ? s_default_output_handler : handler);
@@ -634,7 +635,6 @@ void ExecutionContext::onRequestShutdown() {
 }
 
 void ExecutionContext::executeFunctions(ShutdownType type) {
-  ARRPROV_USE_RUNTIME_LOCATION();
   RID().resetTimers(
       RuntimeOption::PspTimeoutSeconds,
       RuntimeOption::PspCpuTimeoutSeconds
@@ -890,14 +890,13 @@ bool ExecutionContext::callUserErrorHandler(const Exception& e, int errnum,
       backtrace = ee->getBacktrace();
     }
     try {
-      ARRPROV_USE_RUNTIME_LOCATION();
       ErrorStateHelper esh(this, ErrorState::ExecutingUserHandler);
       m_deferredErrors = empty_vec_array();
       SCOPE_EXIT { m_deferredErrors = empty_vec_array(); };
       if (!same(vm_call_user_func
                 (m_userErrorHandlers.back().first,
                  make_vec_array(errnum, String(e.getMessage()),
-                     fileAndLine.first, fileAndLine.second, empty_darray(),
+                     fileAndLine.first, fileAndLine.second, empty_dict_array(),
                      backtrace)),
                 false)) {
         return true;
@@ -988,7 +987,6 @@ bool ExecutionContext::onUnhandledException(Object e) {
   }
 
   if (e.instanceof(SystemLib::s_ThrowableClass)) {
-    ARRPROV_USE_RUNTIME_LOCATION();
     // user thrown exception
     if (!m_userExceptionHandlers.empty()) {
       if (!same(vm_call_user_func
@@ -1013,7 +1011,8 @@ bool ExecutionContext::onUnhandledException(Object e) {
 
 void ExecutionContext::debuggerInfo(
     std::vector<std::pair<const char*,std::string>>& info) {
-  int64_t newInt = convert_bytes_to_long(IniSetting::Get("memory_limit"));
+  static StaticString s_memoryLimit("memory_limit");
+  int64_t newInt = convert_bytes_to_long(IniSetting::Get(s_memoryLimit));
   if (newInt <= 0) {
     newInt = std::numeric_limits<int64_t>::max();
   }
@@ -1147,14 +1146,46 @@ ObjectData* ExecutionContext::getThis() {
   return nullptr;
 }
 
+namespace {
+const RepoOptions& getRepoOptionsForDebuggerEval() {
+  const auto root = SourceRootInfo::GetCurrentSourceRoot();
+  if (root.size() == 0) {
+    return RepoOptions::defaults();
+  }
+
+  const auto dummyPath = fmt::format("{}/$$eval$$.php", root);
+  return RepoOptions::forFile(dummyPath.data());
+}
+} // namespace
+
 const RepoOptions& ExecutionContext::getRepoOptionsForCurrentFrame() const {
+  return getRepoOptionsForFrame(0);
+}
+
+const RepoOptions& ExecutionContext::getRepoOptionsForFrame(int frame) const {
   VMRegAnchor _;
 
-  if (auto const ar = vmfp()) {
+  const RepoOptions* ret{nullptr};
+
+  walkStack([&] (ActRec* ar, Offset) {
+    if (frame--) {
+      return false;
+    }
+
     auto const path = ar->func()->unit()->filepath();
-    return RepoOptions::forFile(path->data());
-  }
-  return RepoOptions::defaults();
+    if (UNLIKELY(path->empty())) {
+      // - Systemlib paths always start with `/:systemlib`
+      // - we make up a bogus filename for eval()
+      // - but let's assert out of paranoia as we're in a path that's not
+      //   perf-sensitive
+      assertx(!ar->func()->unit()->isSystemLib());
+      ret = &getRepoOptionsForDebuggerEval();
+      return true;
+    }
+    ret = &RepoOptions::forFile(path->data());
+    return true;
+  });
+  return ret ? *ret : RepoOptions::defaults();
 }
 
 void ExecutionContext::onLoadWithOptions(
@@ -1200,7 +1231,7 @@ int ExecutionContext::getLine() {
   return func->getLineNumber(pc);
 }
 
-ActRec* ExecutionContext::getFrameAtDepthForDebuggerUnsafe(int frameDepth) {
+ActRec* ExecutionContext::getFrameAtDepthForDebuggerUnsafe(int frameDepth) const {
   ActRec* ret = nullptr;
   walkStack([&] (ActRec* fp, Offset) {
     if (frameDepth == 0) {
@@ -1244,7 +1275,7 @@ TypedValue ExecutionContext::invokeUnit(const Unit* unit,
     if (it->isAsync()) {
       invokeFunc(
         Func::lookup(s_enter_async_entry_point.get()),
-        make_vec_array_tagged(ARRPROV_HERE(), Variant{it}),
+        make_vec_array(Variant{it}),
         nullptr, nullptr, false
       );
     } else {
@@ -1443,7 +1474,6 @@ void ExecutionContext::requestExit() {
   }
 
   {
-    ARRPROV_USE_RUNTIME_LOCATION();
     m_deferredErrors = empty_vec_array();
   }
 
@@ -1497,6 +1527,8 @@ TypedValue ExecutionContext::invokeFuncImpl(const Func* f,
   calleeGenericsChecks(f, hasGenerics);
   calleeArgumentArityChecks(f, numArgsInclUnpack);
   calleeDynamicCallChecks(f, dynamic, allowDynCallNoPointer);
+  void* ctx = thiz ? (void*)thiz : (void*)cls;
+  calleeCoeffectChecks(f, RuntimeCoeffects::none(), numArgsInclUnpack, ctx);
   calleeImplicitContextChecks(f);
   initFuncInputs(f, numArgsInclUnpack);
 
@@ -1543,19 +1575,12 @@ TypedValue ExecutionContext::invokeFuncImpl(const Func* f,
   });
 
   if (UNLIKELY(f->takesInOutParams())) {
-    // This is OK (albeit ugly) since the return value should only be readable
-    // from user code via e.g. call_user_func and we will tagTV the result from
-    // the native wrapper and getting the correct frame pointer here (or from
-    // the normal arrprov::tagFromPC) is awkward.
-    ARRPROV_USE_RUNTIME_LOCATION();
-
-    VArrayInit varr(f->numInOutParams() + 1);
+    VecInit vec(f->numInOutParams() + 1);
     for (uint32_t i = 0; i < f->numInOutParams() + 1; ++i) {
-      varr.append(*vmStack().topTV());
+      vec.append(*vmStack().topTV());
       vmStack().popC();
     }
-    auto arr = varr.toArray();
-    return make_array_like_tv(arr.detach());
+    return make_array_like_tv(vec.create());
   } else {
     auto const retval = *vmStack().topTV();
     vmStack().discard();
@@ -1918,7 +1943,7 @@ ExecutionContext::EvaluationResult
 ExecutionContext::evalPHPDebugger(StringData* code, int frame) {
   // The code has "<?hh" prepended already
   auto unit = compile_debugger_string(code->data(), code->size(),
-    getRepoOptionsForCurrentFrame());
+    getRepoOptionsForFrame(frame));
   if (unit == nullptr) {
     raise_error("Syntax error");
     return {true, init_null_variant, "Syntax error"};
@@ -2132,7 +2157,7 @@ const StaticString s_include("include");
 
 void ExecutionContext::enterDebuggerDummyEnv() {
   static Unit* s_debuggerDummy = compile_debugger_string(
-    "<?hh", 4, RepoOptions::defaults()
+    "<?hh", 4, getRepoOptionsForDebuggerEval()
   );
   // Ensure that the VM stack is completely empty (vmfp() should be null)
   // and that we're not in a nested VM (reentrancy)

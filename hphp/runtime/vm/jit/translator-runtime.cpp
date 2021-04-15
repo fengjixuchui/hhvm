@@ -94,13 +94,13 @@ void setNewElemDict(tv_lval base, TypedValue val) {
 //////////////////////////////////////////////////////////////////////
 
 ArrayData* addNewElemVec(ArrayData* vec, TypedValue v) {
-  assertx(vec->hasVanillaPackedLayout());
+  assertx(vec->isVanillaVec());
   tvIncRefGen(v);
   return PackedArray::AppendMove(vec, v);
 }
 
 ArrayData* addNewElemKeyset(ArrayData* keyset, TypedValue v) {
-  assertx(keyset->isKeysetKind());
+  assertx(keyset->isVanillaKeyset());
   tvIncRefGen(v);
   return SetArray::AppendMove(keyset, v);
 }
@@ -149,41 +149,10 @@ ArrayData* convObjToKeysetHelper(ObjectData* obj) {
   return a;
 }
 
-ArrayData* convArrLikeToVArrHelper(ArrayData* adIn) {
-  auto a = adIn->toVArray(adIn->cowCheck());
-  assertx(a->isVArray());
-  if (a != adIn) decRefArr(adIn);
-  return a;
-}
-
-ArrayData* convArrLikeToDArrHelper(ArrayData* adIn) {
-  auto a = adIn->toDArray(adIn->cowCheck());
-  assertx(a->isDArray());
-  if (a != adIn) decRefArr(adIn);
-  return a;
-}
-
-ArrayData* convClsMethToVArrHelper(ClsMethDataRef clsmeth) {
-  assertx(RO::EvalIsCompatibleClsMethType);
-  raiseClsMethConvertWarningHelper("varray");
-  auto a = make_varray(clsmeth->getClsStr(), clsmeth->getFuncStr()).detach();
-  decRefClsMeth(clsmeth);
-  return a;
-}
-
 ArrayData* convClsMethToVecHelper(ClsMethDataRef clsmeth) {
   assertx(RO::EvalIsCompatibleClsMethType);
   raiseClsMethConvertWarningHelper("vec");
   auto a = make_vec_array(clsmeth->getClsStr(), clsmeth->getFuncStr()).detach();
-  decRefClsMeth(clsmeth);
-  return a;
-}
-
-ArrayData* convClsMethToDArrHelper(ClsMethDataRef clsmeth) {
-  assertx(RO::EvalIsCompatibleClsMethType);
-  raiseClsMethConvertWarningHelper("darray");
-  auto a = make_darray(
-    0, clsmeth->getClsStr(), 1, clsmeth->getFuncStr()).detach();
   decRefClsMeth(clsmeth);
   return a;
 }
@@ -445,39 +414,39 @@ TypedValue doScan(const MixedArray* arr, StringData* key, TypedValue def) {
 
 // This helper may also be used when we know we have a MixedArray in the JIT.
 TypedValue dictIdxI(ArrayData* a, int64_t key, TypedValue def) {
-  assertx(a->hasVanillaMixedLayout());
+  assertx(a->isVanillaDict());
   return getDefaultIfMissing(MixedArray::NvGetInt(a, key), def);
 }
 
 // This helper is also used for MixedArrays.
 NEVER_INLINE
 TypedValue dictIdxS(ArrayData* a, StringData* key, TypedValue def) {
-  assertx(a->hasVanillaMixedLayout());
+  assertx(a->isVanillaDict());
   return getDefaultIfMissing(MixedArray::NvGetStr(a, key), def);
 }
 
 // This helper is also used for MixedArrays.
 NEVER_INLINE
 TypedValue dictIdxScan(ArrayData* a, StringData* key, TypedValue def) {
-  assertx(a->hasVanillaMixedLayout());
+  assertx(a->isVanillaDict());
   auto const ad = MixedArray::asMixed(a);
   if (!ad->keyTypes().mustBeStaticStrs()) return dictIdxS(a, key, def);
   return doScan(ad, key, def);
 }
 
 TypedValue keysetIdxI(ArrayData* a, int64_t key, TypedValue def) {
-  assertx(a->isKeysetKind());
+  assertx(a->isVanillaKeyset());
   return getDefaultIfMissing(SetArray::NvGetInt(a, key), def);
 }
 
 TypedValue keysetIdxS(ArrayData* a, StringData* key, TypedValue def) {
-  assertx(a->isKeysetKind());
+  assertx(a->isVanillaKeyset());
   return getDefaultIfMissing(SetArray::NvGetStr(a, key), def);
 }
 
 template <bool isFirst>
 TypedValue vecFirstLast(ArrayData* a) {
-  assertx(a->isVecKind() || a->isPackedKind());
+  assertx(a->isVanillaVec());
   auto const size = a->size();
   if (UNLIKELY(size == 0)) return make_tv<KindOfNull>();
   return PackedArray::NvGetInt(a, isFirst ? 0 : size - 1);
@@ -504,12 +473,20 @@ TypedValue* getSPropOrNull(const Class* cls,
                            const StringData* name,
                            Class* ctx,
                            bool ignoreLateInit,
-                           bool disallowConst) {
+                           bool disallowConst,
+                           bool mustBeMutable,
+                           bool mustBeReadOnly) {
   auto const lookup = ignoreLateInit
     ? cls->getSPropIgnoreLateInit(ctx, name)
     : cls->getSProp(ctx, name);
   if (disallowConst && UNLIKELY(lookup.constant)) {
     throw_cannot_modify_static_const_prop(cls->name()->data(), name->data());
+  }
+  if (mustBeMutable && UNLIKELY(lookup.readonly)) {
+    throw_must_be_mutable(cls->name()->data(), name->data());
+  }
+  if (mustBeReadOnly && UNLIKELY(!lookup.readonly)) {
+    throw_cannot_write_non_readonly_prop(cls->name()->data(), name->data());
   }
   if (UNLIKELY(!lookup.val || !lookup.accessible)) return nullptr;
 
@@ -520,8 +497,11 @@ TypedValue* getSPropOrRaise(const Class* cls,
                             const StringData* name,
                             Class* ctx,
                             bool ignoreLateInit,
-                            bool disallowConst) {
-  auto sprop = getSPropOrNull(cls, name, ctx, ignoreLateInit, disallowConst);
+                            bool disallowConst,
+                            bool mustBeMutable,
+                            bool mustBeReadOnly) {
+  auto sprop = getSPropOrNull(cls, name, ctx, ignoreLateInit, disallowConst,
+                              mustBeMutable, mustBeReadOnly);
   if (UNLIKELY(!sprop)) {
     raise_error("Invalid static property access: %s::%s",
                 cls->name()->data(), name->data());
@@ -576,10 +556,6 @@ int64_t switchStringHelper(StringData* s, int64_t base, int64_t nTargets) {
       case KindOfDict:
       case KindOfPersistentKeyset:
       case KindOfKeyset:
-      case KindOfPersistentDArray:
-      case KindOfDArray:
-      case KindOfPersistentVArray:
-      case KindOfVArray:
       case KindOfObject:
       case KindOfResource:
       case KindOfRFunc:
@@ -675,7 +651,7 @@ TypedValue lookupClsCns(const Class* cls, const StringData* cnsName) {
 }
 
 int lookupClsCtxCns(const Class* cls, const StringData* cnsName) {
-  return cls->clsCtxCnsGet(cnsName).value();
+  return cls->clsCtxCnsGet(cnsName, true)->value();
 }
 
 bool methodExistsHelper(Class* cls, StringData* meth) {
@@ -790,14 +766,16 @@ ArrayData* loadClsTypeCnsHelper(
   }
 
   assertx(isArrayLikeType(typeCns.m_type));
-  assertx(typeCns.m_data.parr->isHAMSafeDArray());
+  assertx(typeCns.m_data.parr->isDictType());
   assertx(typeCns.m_data.parr->isStatic());
   return typeCns.m_data.parr;
 }
 
-void raiseCoeffectsCallViolationHelper(const Func* callee, uint64_t rawFlags,
+void raiseCoeffectsCallViolationHelper(const Func* callee,
+                                       uint64_t providedCoeffects,
                                        uint64_t requiredCoeffects) {
-  raiseCoeffectsCallViolation(callee, CallFlags(rawFlags),
+  raiseCoeffectsCallViolation(callee,
+                              RuntimeCoeffects::fromValue(providedCoeffects),
                               RuntimeCoeffects::fromValue(requiredCoeffects));
 }
 
@@ -849,7 +827,7 @@ TypedValue incDecElem(tv_lval base, TypedValue key, IncDecOp op) {
 }
 
 tv_lval elemVecIU(tv_lval base, int64_t key) {
-  assertx(tvIsVecOrVArray(base));
+  assertx(tvIsVec(base));
   return ElemUVec<KeyType::Int>(base, key);
 }
 

@@ -1,5 +1,4 @@
-// Copyright (c) 2019, Facebook, Inc.
-// All rights reserved.
+// Copyright (c) Facebook, Inc. and its affiliates.
 //
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
@@ -9,8 +8,8 @@ use quote::quote;
 
 use crate::common::gen_helpers;
 
-use super::context::Context;
 use super::visitor_trait_generator;
+use super::Context;
 
 pub fn gen(ctx: &Context) -> TokenStream {
     let uses = gen_helpers::gen_module_uses(ctx.modules());

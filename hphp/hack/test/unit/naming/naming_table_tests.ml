@@ -77,8 +77,12 @@ let write_and_parse_test_files ctx =
   if not (Errors.is_empty errors) then (
     Errors.iter_error_list
       (fun e ->
-        List.iter (Errors.to_list e) ~f:(fun (pos, msg) ->
-            eprintf "%s: %s\n" (Pos.string (Pos.to_absolute pos)) msg))
+        List.iter (Errors.to_list_ e) ~f:(fun (pos, msg) ->
+            eprintf
+              "%s: %s\n"
+              (Pos.string
+                 (Pos.to_absolute @@ Pos_or_decl.unsafe_to_raw_pos pos))
+              msg))
       errors;
     failwith "Expected no errors from parsing."
   );
@@ -102,6 +106,7 @@ let run_naming_table_test f =
             shm_min_avail = 0;
             log_level = 0;
             sample_rate = 0.0;
+            compression = 0;
           }
       in
       let popt = ParserOptions.default in
@@ -131,6 +136,13 @@ let run_naming_table_test f =
       in
 
       Provider_backend.set_local_memory_backend_with_defaults ();
+      let ctx =
+        Provider_context.empty_for_tool
+          ~popt
+          ~tcopt
+          ~backend:(Provider_backend.get ())
+          ~deps_mode
+      in
       (* load_from_sqlite will call set_naming_db_path for the ctx it's given, but
       here is a fresh ctx with a fresh backend so we have to set it again. *)
       Db_path_provider.set_naming_db_path
@@ -261,7 +273,12 @@ let test_local_changes () =
       let a_file = Relative_path.from_root ~suffix:"a.php" in
       let a_pos = FileInfo.File (FileInfo.Const, a_file) in
       let a_file_info =
-        FileInfo.{ FileInfo.empty_t with consts = [(a_pos, a_name)] }
+        FileInfo.
+          {
+            FileInfo.empty_t with
+            consts = [(a_pos, a_name)];
+            hash = Some (Int64.of_int 1234567);
+          }
       in
       let backed_naming_table =
         Naming_table.update backed_naming_table a_file a_file_info
@@ -289,9 +306,10 @@ let test_local_changes () =
       in
       Asserter.Bool_asserter.assert_equals
         true
-        (FileInfo.equal a_file_info a_file_info')
+        (FileInfo.equal_hash_type
+           a_file_info.FileInfo.hash
+           a_file_info'.FileInfo.hash)
         "Expected file info to be found in the naming table";
-
       let a_pos' =
         Option.value_exn (Naming_provider.get_const_pos ctx a_name)
       in
@@ -331,6 +349,15 @@ let test_context_changes_consts () =
 let test_context_changes_funs () =
   run_naming_table_test
     (fun ~ctx ~unbacked_naming_table:_ ~backed_naming_table:_ ~db_name:_ ->
+      Asserter.String_asserter.assert_option_equals
+        (Some "\\bar")
+        (Naming_provider.get_fun_canon_name ctx "\\bar")
+        "Existing function should be accessible by non-canon name \\bar";
+      Asserter.String_asserter.assert_option_equals
+        (Some "\\bar")
+        (Naming_provider.get_fun_canon_name ctx "\\BAR")
+        "Existing function should be accessible by non-canon name \\BAR";
+
       let (ctx, _entry) =
         Provider_context.add_or_overwrite_entry_contents
           ~ctx
@@ -361,18 +388,47 @@ let test_context_changes_funs () =
         (Naming_provider.get_fun_canon_name ctx "\\NeW_bAr")
         "New function in context should be accessible by canon name";
 
-      (* NB: under shared-memory provider, this doesn't hold true if we made
-      a call to `get_fun_canon_name` before we added the context entry, as
-      the result will be cached. The caller is expected to have manually
-      removed any old reverse naming table entries manually in that case. *)
+      (* NB: under shared-memory provider, the following two tests aren't
+      useful. Sharedmem doesn't suppress canonical lookup results that
+      have been overridden by the context. (That's because sharedmem only
+      gives us back the canonical name, not the path where that canonical
+      name was defined, and without paths we can't tell whether it's been
+      overridden by context). For the sharedmem case, the caller is expected
+      to manually remove any old reverse-naming-table entries before calling
+      into the naming provider -- something that this test doesn't do.
+      Hence why it gives incorrect answers. *)
+      let expected =
+        match Provider_context.get_backend ctx with
+        | Provider_backend.Shared_memory ->
+          Some "\\bar" (* because the caller (us) is expected to clean up *)
+        | _ -> None
+      in
       Asserter.String_asserter.assert_option_equals
-        None
+        expected
+        (Naming_provider.get_fun_canon_name ctx "\\bar")
+        "Old function in context should NOT be accessible by non-canon name \\bar";
+      Asserter.String_asserter.assert_option_equals
+        expected
         (Naming_provider.get_fun_canon_name ctx "\\BAR")
-        "Old function in context should NOT be accessible by canon name")
+        "Old function in context should NOT be accessible by non-canon name \\BAR";
+      Asserter.String_asserter.assert_option_equals
+        expected
+        (Naming_provider.get_fun_canon_name ctx "\\BaR")
+        "Old function in context should NOT be accessible by non-canon name \\BaR";
+      ())
 
 let test_context_changes_classes () =
   run_naming_table_test
     (fun ~ctx ~unbacked_naming_table:_ ~backed_naming_table:_ ~db_name:_ ->
+      Asserter.String_asserter.assert_option_equals
+        (Some "\\Foo")
+        (Naming_provider.get_type_canon_name ctx "\\Foo")
+        "Existing class should be accessible by non-canon name \\Foo";
+      Asserter.String_asserter.assert_option_equals
+        (Some "\\Foo")
+        (Naming_provider.get_type_canon_name ctx "\\FOO")
+        "Existing class should be accessible by non-canon name \\FOO";
+
       let (ctx, _entry) =
         Provider_context.add_or_overwrite_entry_contents
           ~ctx
@@ -395,18 +451,47 @@ let test_context_changes_classes () =
         (Naming_provider.get_type_canon_name ctx "\\NEWFOO")
         "New class in context should be accessible by canon name";
 
-      (* NB: under shared-memory provider, this doesn't hold true if we made
-      a call to `get_type_canon_name` before we added the context entry, as
-      the result will be cached. The caller is expected to have manually
-      removed any old reverse naming table entries manually in that case. *)
+      (* NB: under shared-memory provider, the following two tests aren't
+      useful. Sharedmem doesn't suppress canonical lookup results that
+      have been overridden by the context. (That's because sharedmem only
+      gives us back the canonical name, not the path where that canonical
+      name was defined, and without paths we can't tell whether it's been
+      overridden by context). For the sharedmem case, the caller is expected
+      to manually remove any old reverse-naming-table entries before calling
+      into the naming provider -- something that this test doesn't do.
+      Hence why it gives incorrect answers. *)
+      let expected =
+        match Provider_context.get_backend ctx with
+        | Provider_backend.Shared_memory ->
+          Some "\\Foo" (* because the caller (us) is expected to clean up *)
+        | _ -> None
+      in
       Asserter.String_asserter.assert_option_equals
-        None
+        expected
+        (Naming_provider.get_type_canon_name ctx "\\Foo")
+        "Old class in context should NOT be accessible by non-canon name \\Foo";
+      Asserter.String_asserter.assert_option_equals
+        expected
         (Naming_provider.get_type_canon_name ctx "\\FOO")
-        "Old class in context should NOT be accessible by canon name")
+        "Old class in context should NOT be accessible by non-canon name \\FOO";
+      Asserter.String_asserter.assert_option_equals
+        expected
+        (Naming_provider.get_type_canon_name ctx "\\FoO")
+        "Old class in context should NOT be accessible by non-canon name \\FoO";
+      ())
 
 let test_context_changes_typedefs () =
   run_naming_table_test
     (fun ~ctx ~unbacked_naming_table:_ ~backed_naming_table:_ ~db_name:_ ->
+      Asserter.String_asserter.assert_option_equals
+        (Some "\\Baz")
+        (Naming_provider.get_type_canon_name ctx "\\Baz")
+        "Existing typedef should be accessible by non-canon name \\Baz";
+      Asserter.String_asserter.assert_option_equals
+        (Some "\\Baz")
+        (Naming_provider.get_type_canon_name ctx "\\BAZ")
+        "Existing typedef should be accessible by non-canon name \\BAZ";
+
       let (ctx, _entry) =
         Provider_context.add_or_overwrite_entry_contents
           ~ctx
@@ -429,14 +514,34 @@ let test_context_changes_typedefs () =
         (Naming_provider.get_type_canon_name ctx "\\NEWBAZ")
         "New typedef in context should be accessible by canon name";
 
-      (* NB: under shared-memory provider, this doesn't hold true if we made
-      a call to `get_type_canon_name` before we added the context entry, as
-      the result will be cached. The caller is expected to have manually
-      removed any old reverse naming table entries manually in that case. *)
+      (* NB: under shared-memory provider, the following two tests aren't
+      useful. Sharedmem doesn't suppress canonical lookup results that
+      have been overridden by the context. (That's because sharedmem only
+      gives us back the canonical name, not the path where that canonical
+      name was defined, and without paths we can't tell whether it's been
+      overridden by context). For the sharedmem case, the caller is expected
+      to manually remove any old reverse-naming-table entries before calling
+      into the naming provider -- something that this test doesn't do.
+      Hence why it gives incorrect answers. *)
+      let expected =
+        match Provider_context.get_backend ctx with
+        | Provider_backend.Shared_memory ->
+          Some "\\Baz" (* because the caller (us) is expected to clean up *)
+        | _ -> None
+      in
       Asserter.String_asserter.assert_option_equals
-        None
+        expected
+        (Naming_provider.get_type_canon_name ctx "\\Baz")
+        "Old typedef in context should NOT be accessible by non-canon name \\Baz";
+      Asserter.String_asserter.assert_option_equals
+        expected
         (Naming_provider.get_type_canon_name ctx "\\BAZ")
-        "Old typedef in context should NOT be accessible by canon name")
+        "Old typedef in context should NOT be accessible by non-canon name \\BAZ";
+      Asserter.String_asserter.assert_option_equals
+        expected
+        (Naming_provider.get_type_canon_name ctx "\\BaZ")
+        "Old typedef in context should NOT be accessible by non-canon name \\BaZ";
+      ())
 
 let test_naming_table_hash () =
   (* Dep hash is 31 bits. *)
@@ -455,7 +560,7 @@ let test_naming_table_hash () =
     (Int64.to_int_exn actual)
     "Expected to move dep hash to upper 31 bits";
 
-  let foo_dep = Typing_deps.Dep.Class "\\Foo" in
+  let foo_dep = Typing_deps.Dep.Type "\\Foo" in
   let foo_dep_hash = Typing_deps.ForTest.compute_dep_hash hash_mode foo_dep in
   Asserter.Int_asserter.assert_equals
     0b011_1101_0111_1011_0110_1111_1110_1011
@@ -505,7 +610,7 @@ let test_ensure_hashing_outputs_31_bits () =
   let dep_with_thirty_first_bit_set_to_1 =
     (* This name selected by trying a bunch of names and finding one that has
     the 31st bit set to 1. *)
-    Typing_deps.Dep.Class "\\Abcd"
+    Typing_deps.Dep.Type "\\Abcd"
     |> Typing_deps.ForTest.compute_dep_hash hash_mode
   in
   let thirty_first_bit = 0b01000000_00000000_00000000_00000000 in
@@ -555,14 +660,14 @@ let test_naming_table_query_by_dep_hash () =
 
       Asserter.Relative_path_asserter.assert_list_equals
         [Relative_path.from_root "foo.php"]
-        ( Typing_deps.Dep.Class "\\Foo"
+        ( Typing_deps.Dep.Type "\\Foo"
         |> Typing_deps.Dep.make hash_mode
         |> Naming_sqlite.get_type_paths_by_dep_hash db_path
         |> Relative_path.Set.elements )
         "Look up class by dep hash should return file path";
       Asserter.Relative_path_asserter.assert_list_equals
         []
-        ( Typing_deps.Dep.Class "\\nonexistent"
+        ( Typing_deps.Dep.Type "\\nonexistent"
         |> Typing_deps.Dep.make hash_mode
         |> Naming_sqlite.get_type_paths_by_dep_hash db_path
         |> Relative_path.Set.elements )
@@ -570,14 +675,14 @@ let test_naming_table_query_by_dep_hash () =
 
       Asserter.Relative_path_asserter.assert_list_equals
         [Relative_path.from_root "baz.php"]
-        ( Typing_deps.Dep.Class "\\Baz"
+        ( Typing_deps.Dep.Type "\\Baz"
         |> Typing_deps.Dep.make hash_mode
         |> Naming_sqlite.get_type_paths_by_dep_hash db_path
         |> Relative_path.Set.elements )
         "Look up class by dep hash should return file path";
       Asserter.Relative_path_asserter.assert_list_equals
         []
-        ( Typing_deps.Dep.Class "\\nonexistent"
+        ( Typing_deps.Dep.Type "\\nonexistent"
         |> Typing_deps.Dep.make hash_mode
         |> Naming_sqlite.get_type_paths_by_dep_hash db_path
         |> Relative_path.Set.elements )
@@ -601,7 +706,7 @@ let test_naming_table_query_by_dep_hash () =
         "Bulk lookup for fun should be correct";
       Asserter.Relative_path_asserter.assert_list_equals
         [Relative_path.from_root "baz.php"]
-        ( Typing_deps.Dep.Class "\\Baz"
+        ( Typing_deps.Dep.Type "\\Baz"
         |> Typing_deps.Dep.make hash_mode
         |> Typing_deps.DepSet.singleton deps_mode
         |> Naming_table.get_dep_set_files backed_naming_table deps_mode
@@ -624,7 +729,7 @@ let test_naming_table_query_by_dep_hash () =
              |> Typing_deps.Dep.make hash_mode
              |> Typing_deps.DepSet.singleton deps_mode )
         |> Typing_deps.DepSet.union
-             ( Typing_deps.Dep.Class "\\Baz"
+             ( Typing_deps.Dep.Type "\\Baz"
              |> Typing_deps.Dep.make hash_mode
              |> Typing_deps.DepSet.singleton deps_mode )
         |> Naming_table.get_dep_set_files backed_naming_table deps_mode
@@ -661,7 +766,7 @@ let test_naming_table_query_by_dep_hash () =
       in
       Asserter.Relative_path_asserter.assert_list_equals
         [Relative_path.from_root "bar.php"]
-        ( Typing_deps.Dep.Class "\\Baz"
+        ( Typing_deps.Dep.Type "\\Baz"
         |> Typing_deps.Dep.make hash_mode
         |> Typing_deps.DepSet.singleton deps_mode
         |> Naming_table.get_dep_set_files new_naming_table deps_mode
@@ -682,6 +787,7 @@ let () =
         shm_min_avail = 0;
         log_level = 0;
         sample_rate = 0.0;
+        compression = 0;
       }
   in
   let (_ : SharedMem.handle) = SharedMem.init config ~num_workers:0 in

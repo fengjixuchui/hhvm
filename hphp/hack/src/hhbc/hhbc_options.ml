@@ -20,18 +20,15 @@ type t = {
   option_php7_uvs: bool;
   option_php7_ltr_assign: bool;
   option_hack_arr_compat_notices: bool;
-  option_hack_arr_dv_arr_mark: bool;
   option_hack_arr_dv_arrs: bool;
   option_repo_authoritative: bool;
   option_jit_enable_rename_function: bool;
-  option_enable_coroutines: bool;
   option_doc_root: string;
   option_include_search_paths: string list;
   option_include_roots: string SMap.t;
   option_log_extern_compiler_perf: bool;
   option_enable_intrinsics_extension: bool;
   option_phpism_disable_nontoplevel_declarations: bool;
-  option_phpism_disable_static_closures: bool;
   option_emit_cls_meth_pointers: bool;
   option_emit_inst_meth_pointers: bool;
   option_emit_meth_caller_func_pointers: bool;
@@ -76,18 +73,15 @@ let default =
      * HHVM it's helpful to renumber in order that the labels match more closely *)
     option_relabel = true;
     option_hack_arr_compat_notices = false;
-    option_hack_arr_dv_arr_mark = false;
     option_hack_arr_dv_arrs = false;
     option_repo_authoritative = false;
     option_jit_enable_rename_function = false;
-    option_enable_coroutines = true;
     option_doc_root = "";
     option_include_search_paths = [];
     option_include_roots = SMap.empty;
     option_log_extern_compiler_perf = false;
     option_enable_intrinsics_extension = false;
     option_phpism_disable_nontoplevel_declarations = false;
-    option_phpism_disable_static_closures = true;
     option_emit_cls_meth_pointers = true;
     option_emit_inst_meth_pointers = true;
     option_emit_meth_caller_func_pointers = true;
@@ -135,15 +129,11 @@ let php7_ltr_assign o = o.option_php7_ltr_assign
 
 let hack_arr_compat_notices o = o.option_hack_arr_compat_notices
 
-let hack_arr_dv_arr_mark o = o.option_hack_arr_dv_arr_mark
-
 let hack_arr_dv_arrs o = o.option_hack_arr_dv_arrs
 
 let repo_authoritative o = o.option_repo_authoritative
 
 let jit_enable_rename_function o = o.option_jit_enable_rename_function
-
-let enable_coroutines o = o.option_enable_coroutines
 
 let doc_root o = o.option_doc_root
 
@@ -157,8 +147,6 @@ let enable_intrinsics_extension o = o.option_enable_intrinsics_extension
 
 let phpism_disable_nontoplevel_declarations o =
   o.option_phpism_disable_nontoplevel_declarations
-
-let phpism_disable_static_closures o = o.option_phpism_disable_static_closures
 
 let emit_cls_meth_pointers o = o.option_emit_cls_meth_pointers
 
@@ -247,12 +235,10 @@ let to_string o =
       @@ enable_uniform_variable_syntax o;
       Printf.sprintf "php7_ltr_assign: %B" @@ php7_ltr_assign o;
       Printf.sprintf "hack_arr_compat_notices: %B" @@ hack_arr_compat_notices o;
-      Printf.sprintf "hack_arr_dv_arr_mark: %B" @@ hack_arr_dv_arr_mark o;
       Printf.sprintf "hack_arr_dv_arrs: %B" @@ hack_arr_dv_arrs o;
       Printf.sprintf "repo_authoritative: %B" @@ repo_authoritative o;
       Printf.sprintf "jit_enable_rename_function: %B"
       @@ jit_enable_rename_function o;
-      Printf.sprintf "enable_coroutines: %B" @@ enable_coroutines o;
       Printf.sprintf "doc_root: %s" @@ doc_root o;
       Printf.sprintf "include_search_paths: [%s]" search_paths;
       Printf.sprintf "include_roots: {%s}" inc_roots;
@@ -262,8 +248,6 @@ let to_string o =
       @@ enable_intrinsics_extension o;
       Printf.sprintf "phpism_disable_nontoplevel_declarations: %B"
       @@ phpism_disable_nontoplevel_declarations o;
-      Printf.sprintf "phpism_disable_static_closures: %B"
-      @@ phpism_disable_static_closures o;
       Printf.sprintf "emit_cls_meth_pointers: %B" @@ emit_cls_meth_pointers o;
       Printf.sprintf "emit_inst_meth_pointers: %B" @@ emit_inst_meth_pointers o;
       Printf.sprintf "emit_meth_caller_func_pointers: %B"
@@ -330,16 +314,12 @@ let set_option options name value =
   | "hack.compiler.relabel" -> { options with option_relabel = as_bool value }
   | "eval.hackarrcompatnotices" ->
     { options with option_hack_arr_compat_notices = as_bool value }
-  | "eval.hackarrdvarrmark" ->
-    { options with option_hack_arr_dv_arr_mark = as_bool value }
   | "eval.hackarrdvarrs" ->
     { options with option_hack_arr_dv_arrs = as_bool value }
   | "hhvm.repo_authoritative" ->
     { options with option_repo_authoritative = as_bool value }
   | "eval.jitenablerenamefunction" ->
     { options with option_jit_enable_rename_function = as_bool value }
-  | "hack.lang.enablecoroutines" ->
-    { options with option_enable_coroutines = as_bool value }
   | "eval.logexterncompilerperf" ->
     { options with option_log_extern_compiler_perf = as_bool value }
   | "eval.enableintrinsicsextension" ->
@@ -351,8 +331,6 @@ let set_option options name value =
       options with
       option_phpism_disable_nontoplevel_declarations = as_bool value;
     }
-  | "hack.lang.phpism.disablestaticclosures" ->
-    { options with option_phpism_disable_static_closures = as_bool value }
   | "hhvm.emit_cls_meth_pointers" ->
     { options with option_emit_cls_meth_pointers = int_of_string value > 0 }
   | "hhvm.emit_inst_meth_pointers" ->
@@ -497,16 +475,12 @@ let value_setters =
       { opts with option_php7_ltr_assign = v = 1 } );
     ( set_value "hhvm.hack_arr_compat_notices" get_value_from_config_int
     @@ fun opts v -> { opts with option_hack_arr_compat_notices = v = 1 } );
-    ( set_value "hhvm.hack_arr_dv_arr_mark" get_value_from_config_int
-    @@ fun opts v -> { opts with option_hack_arr_dv_arr_mark = v = 1 } );
     ( set_value "hhvm.hack_arr_dv_arrs" get_value_from_config_int
     @@ fun opts v -> { opts with option_hack_arr_dv_arrs = v = 1 } );
     ( set_value "hhvm.repo.authoritative" get_value_from_config_int
     @@ fun opts v -> { opts with option_repo_authoritative = v = 1 } );
     ( set_value "hhvm.jit_enable_rename_function" get_value_from_config_int
     @@ fun opts v -> { opts with option_jit_enable_rename_function = v = 1 } );
-    ( set_value "hhvm.hack.lang.enable_coroutines" get_value_from_config_int
-    @@ fun opts v -> { opts with option_enable_coroutines = v = 1 } );
     ( set_value
         "hhvm.hack.lang.disable_lval_as_an_expression"
         get_value_from_config_int
@@ -538,11 +512,6 @@ let value_setters =
         get_value_from_config_int
     @@ fun opts v ->
       { opts with option_phpism_disable_nontoplevel_declarations = v = 1 } );
-    ( set_value
-        "hhvm.hack.lang.phpism.disable_static_closures"
-        get_value_from_config_int
-    @@ fun opts v -> { opts with option_phpism_disable_static_closures = v = 1 }
-    );
     ( set_value "hhvm.emit_cls_meth_pointers" get_value_from_config_int
     @@ fun opts v -> { opts with option_emit_cls_meth_pointers = v = 1 } );
     ( set_value "hhvm.emit_meth_caller_func_pointers" get_value_from_config_int

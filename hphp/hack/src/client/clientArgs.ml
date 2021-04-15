@@ -58,7 +58,7 @@ module Common_argspecs = struct
   let watchman_debug_logging value_ref =
     ( "--watchman-debug-logging",
       Arg.Set value_ref,
-      " Enable debug logging on Watchman client. This is very noisy" )
+      " Logs full Watchman requests and responses. This is very noisy" )
 
   let allow_non_opt_build value_ref =
     ( "--allow-non-opt-build",
@@ -673,6 +673,10 @@ let parse_check_args cmd =
               | _ -> raise (Arg.Bad "only a single mode should be specified"))
           end,
         " (mode) show types at multiple positions [file:line:character list]" );
+      ( "--type-error-at-pos",
+        Arg.String (fun x -> set_mode (MODE_TYPE_ERROR_AT_POS x)),
+        " (mode) show type error at a given position in file [line:character]"
+      );
       ( "--verbose-on",
         Arg.Unit (fun () -> set_mode (MODE_VERBOSE true)),
         " (mode) turn on verbose server log" );

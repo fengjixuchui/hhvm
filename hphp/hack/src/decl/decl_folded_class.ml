@@ -32,11 +32,11 @@ module SN = Naming_special_names
 (*****************************************************************************)
 
 let check_extend_kind
-    (parent_pos : Pos.t)
+    (parent_pos : Pos_or_decl.t)
     (parent_kind : Ast_defs.class_kind)
     (parent_name : string)
     (parent_is_enum_class : bool)
-    (child_pos : Pos.t)
+    (child_pos : Pos_or_decl.t)
     (child_kind : Ast_defs.class_kind)
     (child_name : string)
     (child_is_enum_class : bool) : unit =
@@ -58,7 +58,8 @@ let check_extend_kind
         ~parent_kind
         ~parent_name
         ~parent_is_enum_class
-        ~child_pos
+        ~child_pos:
+          (Pos_or_decl.unsafe_to_raw_pos child_pos) (* TODO: T87242856 *)
         ~child_kind
         ~child_name
         ~child_is_enum_class
@@ -69,7 +70,7 @@ let check_extend_kind
       ~parent_kind
       ~parent_name
       ~parent_is_enum_class
-      ~child_pos
+      ~child_pos:(Pos_or_decl.unsafe_to_raw_pos child_pos) (* TODO: T87242856 *)
       ~child_kind
       ~child_name
       ~child_is_enum_class
@@ -93,7 +94,7 @@ let report_reused_trait
   Errors.trait_reuse
     parent_type.dc_pos
     parent_type.dc_name
-    shallow_class.sc_name
+    (Positioned.unsafe_to_raw_positioned shallow_class.sc_name)
 
 (**
  * Verifies that a class never reuses the same trait throughout its hierarchy.
@@ -129,7 +130,7 @@ let check_no_duplicate_traits
  *)
 let add_grand_parents_or_traits
     (no_trait_reuse : bool)
-    (parent_pos : Pos.t)
+    (parent_pos : Pos_or_decl.t)
     (shallow_class : Shallow_decl_defs.shallow_class)
     (acc : SSet.t * bool * [> `Extends_pass | `Xhp_pass ])
     (parent_type : Decl_defs.decl_class_type)
@@ -267,7 +268,9 @@ and class_parents_decl
   let class_type_decl acc class_ty =
     match get_node class_ty with
     | Tapply ((pos, class_name), _) ->
-      if check_if_cyclic class_env (pos, class_name) then
+      if
+        check_if_cyclic class_env (Pos_or_decl.unsafe_to_raw_pos pos, class_name)
+      then
         acc
       else (
         match class_decl_if_missing ~sh class_env class_name with
@@ -309,7 +312,9 @@ and class_decl_if_missing
     (match Shallow_classes_provider.get class_env.ctx class_name with
     | None -> None
     | Some shallow_class ->
-      let fn = Pos.filename (fst shallow_class.sc_name) in
+      let fn =
+        Pos.filename (fst shallow_class.sc_name |> Pos_or_decl.unsafe_to_raw_pos)
+      in
       Errors.run_in_context fn Errors.Decl @@ fun () ->
       Some (declare_class_and_parents ~sh class_env shallow_class))
 
@@ -337,6 +342,7 @@ and synthesize_defaults
         tc with
         ttc_abstract = TCConcrete;
         ttc_as_constraint = None;
+        ttc_super_constraint = None;
         ttc_type = Some default;
         ttc_concretized = true;
       }
@@ -360,7 +366,7 @@ and class_decl
   let is_abstract = class_is_abstract c in
   let const = Attrs.mem SN.UserAttributes.uaConst c.sc_user_attributes in
   let (_p, cls_name) = c.sc_name in
-  let class_dep = Dep.Class cls_name in
+  let class_dep = Dep.Type cls_name in
   let env = { Decl_env.mode = c.sc_mode; droot = Some class_dep; ctx } in
   let inherited = Decl_inherit.make env c ~cache:parents in
   let props = inherited.Decl_inherit.ih_props in
@@ -530,8 +536,8 @@ and class_decl
       fun x _ ->
       Typing_deps.add_idep
         (Provider_context.get_deps_mode ctx)
-        (Dep.Class cls_name)
-        (Dep.Class x)
+        (Dep.Type cls_name)
+        (Dep.Type x)
     end
     impl;
   (tc, member_heaps_values)
@@ -617,7 +623,8 @@ and build_constructor
           ~synthesized:false
           ~override:false
           ~dynamicallycallable:false
-          ~readonly_prop:false;
+          ~readonly_prop:false
+          ~sound_dynamic_callable:false;
       elt_visibility = vis;
       elt_origin = class_name;
       elt_deprecated = method_.sm_deprecated;
@@ -655,7 +662,7 @@ and class_const_fold
 
 (* Every class, interface, and trait implicitly defines a ::class to
  * allow accessing its fully qualified name as a string *)
-and class_class_decl (class_id : Ast_defs.id) : Typing_defs.class_const =
+and class_class_decl (class_id : Typing_defs.pos_id) : Typing_defs.class_const =
   let (pos, name) = class_id in
   let reason = Reason.Rclass_class (pos, name) in
   let classname_ty =
@@ -696,7 +703,8 @@ and prop_decl
           ~lateinit:(sp_lateinit sp)
           ~abstract:(sp_abstract sp)
           ~dynamicallycallable:false
-          ~readonly_prop:(sp_readonly sp);
+          ~readonly_prop:(sp_readonly sp)
+          ~sound_dynamic_callable:false;
       elt_visibility = vis;
       elt_origin = snd c.sc_name;
       elt_deprecated = None;
@@ -733,7 +741,8 @@ and static_prop_decl
           ~abstract:(sp_abstract sp)
           ~synthesized:false
           ~dynamicallycallable:false
-          ~readonly_prop:(sp_readonly sp);
+          ~readonly_prop:(sp_readonly sp)
+          ~sound_dynamic_callable:false;
       elt_visibility = vis;
       elt_origin = snd c.sc_name;
       elt_deprecated = None;
@@ -801,7 +810,7 @@ and typeconst_fold
       else
         match ptc_opt with
         | Some ptc -> ptc.ttc_enforceable
-        | None -> (Pos.none, false)
+        | None -> (Pos_or_decl.none, false)
     in
     let reifiable =
       if Option.is_some stc.stc_reifiable then
@@ -815,6 +824,7 @@ and typeconst_fold
         ttc_synthesized = false;
         ttc_name = stc.stc_name;
         ttc_as_constraint = stc.stc_as_constraint;
+        ttc_super_constraint = stc.stc_super_constraint;
         ttc_type = stc.stc_type;
         ttc_origin = c_name;
         ttc_enforceable = enforceable;
@@ -857,7 +867,8 @@ and method_decl_acc
           ~const:false
           ~lateinit:false
           ~dynamicallycallable:(sm_dynamicallycallable m)
-          ~readonly_prop:false;
+          ~readonly_prop:false
+          ~sound_dynamic_callable:(sm_sound_dynamic_callable m);
       elt_visibility = vis;
       elt_origin = snd c.sc_name;
       elt_deprecated = m.sm_deprecated;

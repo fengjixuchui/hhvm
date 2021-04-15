@@ -436,6 +436,16 @@ inline Id Func::numNamedLocals() const {
   return shared()->m_localNames.size();
 }
 
+inline Id Func::coeffectsLocalId() const {
+  assertx(hasCoeffectsLocal());
+  return numParams() + (hasReifiedGenerics() ? 1 : 0);
+}
+
+inline Id Func::reifiedGenericsLocalId() const {
+  assertx(hasReifiedGenerics());
+  return numParams();
+}
+
 inline const StringData* Func::localVarName(Id id) const {
   assertx(id >= 0);
   return id < numNamedLocals() ? shared()->m_localNames[id] : nullptr;
@@ -586,6 +596,19 @@ inline bool Func::isResumable() const {
 ///////////////////////////////////////////////////////////////////////////////
 // Coeffects.
 
+inline RuntimeCoeffects Func::requiredCoeffects() const {
+  return m_requiredCoeffects;
+}
+
+inline RuntimeCoeffects Func::shallowCoeffectsWithLocals() const {
+  return extShared() ? extShared()->m_shallowCoeffectsWithLocals
+                     : RuntimeCoeffects::none();
+}
+
+inline void Func::setRequiredCoeffects(RuntimeCoeffects c) {
+  m_requiredCoeffects = c;
+}
+
 inline StaticCoeffectNamesMap Func::staticCoeffectNames() const {
   return shared()->m_staticCoeffectNames;
 }
@@ -594,8 +617,14 @@ inline bool Func::isRxDisabled() const {
   return shared()->m_allFlags.m_isRxDisabled;
 }
 
+inline bool Func::hasCoeffectsLocal() const {
+  return hasCoeffectRules() &&
+         !(getCoeffectRules().size() == 1 &&
+           getCoeffectRules()[0].isGeneratorThis());
+}
+
 inline bool Func::hasCoeffectRules() const {
-  return shared()->m_allFlags.m_hasCoeffectRules;
+  return attrs() & AttrHasCoeffectRules;
 }
 
 inline const Func::CoeffectRules& Func::getCoeffectRules() const {
@@ -632,10 +661,6 @@ inline bool Func::isSpecial(const StringData* name) {
 
 inline Attr Func::attrs() const {
   return m_attrs;
-}
-
-inline StaticCoeffects Func::staticCoeffects() const {
-  return m_staticCoeffects;
 }
 
 inline const UserAttributeMap& Func::userAttributes() const {
@@ -757,10 +782,6 @@ inline int8_t& Func::maybeIntercepted() const {
 
 inline void Func::setAttrs(Attr attrs) {
   m_attrs = attrs;
-}
-
-inline void Func::setStaticCoeffects(StaticCoeffects attrs) {
-  m_staticCoeffects = attrs;
 }
 
 inline void Func::setBaseCls(Class* baseCls) {

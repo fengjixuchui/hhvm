@@ -25,8 +25,6 @@ let default = GlobalOptions.default
 let disable_nontoplevel_declarations =
   GlobalOptions.po_disable_nontoplevel_declarations
 
-let disable_static_closures = GlobalOptions.po_disable_static_closures
-
 let const_default_func_args = GlobalOptions.po_const_default_func_args
 
 let with_const_default_func_args po b =
@@ -145,10 +143,10 @@ let disallow_inst_meth = GlobalOptions.po_disallow_inst_meth
 let with_disallow_inst_meth po b =
   { po with GlobalOptions.po_disallow_inst_meth = b }
 
-let array_unification = GlobalOptions.po_array_unification
+let hack_arr_dv_arrs = GlobalOptions.po_hack_arr_dv_arrs
 
-let with_array_unification po b =
-  { po with GlobalOptions.po_array_unification = b }
+let with_hack_arr_dv_arrs po b =
+  { po with GlobalOptions.po_hack_arr_dv_arrs = b }
 
 let interpret_soft_types_as_like_types =
   GlobalOptions.po_interpret_soft_types_as_like_types
@@ -160,7 +158,6 @@ let make
     ~auto_namespace_map
     ~codegen
     ~disable_nontoplevel_declarations
-    ~disable_static_closures
     ~disable_lval_as_an_expression
     ~enable_class_level_where_clauses
     ~disable_legacy_soft_typehints
@@ -184,7 +181,7 @@ let make
     ~disable_array_typehint
     ~disallow_hash_comments
     ~disallow_fun_and_cls_meth_pseudo_funcs
-    ~array_unification
+    ~hack_arr_dv_arrs
     ~interpret_soft_types_as_like_types
     ~disallow_inst_meth =
   GlobalOptions.
@@ -193,7 +190,6 @@ let make
       po_auto_namespace_map = auto_namespace_map;
       po_codegen = codegen;
       po_disable_nontoplevel_declarations = disable_nontoplevel_declarations;
-      po_disable_static_closures = disable_static_closures;
       po_disable_lval_as_an_expression = disable_lval_as_an_expression;
       po_enable_class_level_where_clauses = enable_class_level_where_clauses;
       po_disable_legacy_soft_typehints = disable_legacy_soft_typehints;
@@ -218,7 +214,7 @@ let make
       po_disallow_hash_comments = disallow_hash_comments;
       po_disallow_fun_and_cls_meth_pseudo_funcs =
         disallow_fun_and_cls_meth_pseudo_funcs;
-      po_array_unification = array_unification;
+      po_hack_arr_dv_arrs = hack_arr_dv_arrs;
       po_interpret_soft_types_as_like_types = interpret_soft_types_as_like_types;
       po_disallow_inst_meth = disallow_inst_meth;
     }
@@ -272,6 +268,6 @@ let to_rust_ffi_t po ~hhvm_compat_mode ~hhi_mode ~codegen =
     allow_unstable_features po,
     disallow_hash_comments po,
     disallow_fun_and_cls_meth_pseudo_funcs po,
-    array_unification po,
+    hack_arr_dv_arrs po,
     interpret_soft_types_as_like_types po,
     disallow_inst_meth po )

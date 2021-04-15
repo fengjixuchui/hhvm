@@ -1,9 +1,6 @@
 [submodule "__FORKS__"]
 	path = third-party/forks
 	url = https://github.com/hhvm/hhvm-third-party.git
-[submodule "double-conversion"]
-	path = third-party/double-conversion
-	url = https://github.com/google/double-conversion
 [submodule "fastlz"]
 	path = third-party/fastlz/src
 	url = https://github.com/ariya/FastLZ
@@ -22,9 +19,6 @@
 [submodule "libafdt"]
 	path = third-party/libafdt/src
 	url = https://github.com/facebook/libafdt
-[submodule "libsodium"]
-	path = third-party/libsodium/libsodium
-	url = https://github.com/jedisct1/libsodium.git
 [submodule "mcrouter"]
 	path = third-party/mcrouter/src
 	url = https://github.com/facebook/mcrouter

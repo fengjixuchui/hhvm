@@ -1162,13 +1162,18 @@ where
                 let type_specifier = S!(make_generic_type_specifier, self, term, type_arguments);
                 self.parse_scope_resolution_expression(type_specifier)
             }
-            TokenKind::LeftParen => {
+            TokenKind::Hash | TokenKind::LeftParen => {
+                let enum_atom = match self.peek_token_kind() {
+                    TokenKind::Hash => self.parse_atom(),
+                    _ => S!(make_missing, self, self.pos()),
+                };
                 let (left, args, right) = self.parse_expression_list_opt();
                 S!(
                     make_function_call_expression,
                     self,
                     term,
                     type_arguments,
+                    enum_atom,
                     left,
                     args,
                     right
@@ -1270,6 +1275,7 @@ where
                 // AND
                 // - <term> <operator> does not look like a prefix of
                 // some assignment expression
+
                 match assignment_prefix_kind {
                     BinaryExpressionPrefixKind::PrefixLessThan((type_args, parser1)) => {
                         self.continue_from(parser1);
@@ -1346,7 +1352,7 @@ where
                         TokenKind::PlusPlus | TokenKind::MinusMinus => {
                             self.parse_postfix_unary(term)
                         }
-                        TokenKind::LeftParen => self.parse_function_call(term),
+                        TokenKind::Hash | TokenKind::LeftParen => self.parse_function_call(term),
                         TokenKind::LeftBracket | TokenKind::LeftBrace => self.parse_subscript(term),
                         TokenKind::Question => {
                             let token = self.assert_token(TokenKind::Question);
@@ -1625,6 +1631,10 @@ where
         // function-call-expression:
         //   postfix-expression  (  argument-expression-list-opt  )
         let type_arguments = S!(make_missing, self, self.pos());
+        let enum_atom = match self.peek_token_kind() {
+            TokenKind::Hash => self.parse_atom(),
+            _ => S!(make_missing, self, self.pos()),
+        };
         let old_enabled = self.allow_as_expressions();
         self.allow_as_expressions = true;
         let (left, args, right) = self.parse_expression_list_opt();
@@ -1633,6 +1643,7 @@ where
             self,
             receiver,
             type_arguments,
+            enum_atom,
             left,
             args,
             right
@@ -2523,7 +2534,6 @@ where
         let parser1 = self.clone();
         let attribute_spec = self.with_decl_parser(|p| p.parse_attribute_specification_opt());
         let mut parser2 = self.clone();
-        let _ = parser2.optional_token(TokenKind::Static);
         let _ = parser2.optional_token(TokenKind::Async);
         match parser2.peek_token_kind() {
             TokenKind::Function => self.parse_anon(attribute_spec),
@@ -2533,8 +2543,8 @@ where
             }
             _ => {
                 self.continue_from(parser1);
-                let static_or_async_as_name = self.next_token_as_name();
-                S!(make_token, self, static_or_async_as_name)
+                let async_as_name = self.next_token_as_name();
+                S!(make_token, self, async_as_name)
             }
         }
     }
@@ -2603,7 +2613,7 @@ where
     fn parse_anon(&mut self, attribute_spec: S::R) -> S::R {
         // SPEC
         // anonymous-function-creation-expression:
-        //   static-opt async-opt function
+        //   async-opt function
         //     ( anonymous-function-parameter-list-opt  )
         //     anonymous-function-return-opt
         //     anonymous-function-use-clauseopt
@@ -2614,7 +2624,6 @@ where
         // The "..." syntax and trailing commas are supported. We'll simply
         // parse an optional parameter list; it already takes care of making the
         // type annotations optional.
-        let static_ = self.optional_token(TokenKind::Static);
         let async_ = self.optional_token(TokenKind::Async);
         let fn_ = self.assert_token(TokenKind::Function);
         let (left_paren, params, right_paren) = self.parse_parameter_list_opt();
@@ -2637,7 +2646,6 @@ where
             make_anonymous_function,
             self,
             attribute_spec,
-            static_,
             async_,
             fn_,
             left_paren,

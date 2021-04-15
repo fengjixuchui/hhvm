@@ -454,7 +454,7 @@ struct Const {
   LSString phpCode;
   LSString typeConstraint;
 
-  StaticCoeffects coeffects;
+  std::vector<LowStringPtr> coeffects;
 
   ConstModifiers::Kind kind;
   bool isAbstract   : 1;
@@ -595,7 +595,7 @@ struct TypeAlias {
   AnnotType type;
   bool nullable;  // null is allowed; for ?Foo aliases
   UserAttributeMap userAttrs;
-  Array typeStructure{ArrayData::CreateDArray(ARRPROV_HERE())};
+  Array typeStructure{ArrayData::CreateDict()};
 };
 
 //////////////////////////////////////////////////////////////////////

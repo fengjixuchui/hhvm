@@ -70,38 +70,16 @@ private:
 
 public:
   /*
-   * Create an empty array.
+   * Create an empty array of a given type.
    */
-  static Array Create() {
-    return Array(ArrayData::Create(), NoIncRef{});
-  }
-
-  /*
-   * There are existing callsites that we intentionally want to create a
-   * "traditional" PHP array with no specialization. Array::CreatePHPArray()
-   * are calls that have been audited and determined that the callsite should
-   * never be converted.
-   */
-  static constexpr auto CreatePHPArray = &Create;
-
   static Array CreateVec() {
     return Array(ArrayData::CreateVec(), NoIncRef{});
   }
-
   static Array CreateDict() {
     return Array(ArrayData::CreateDict(), NoIncRef{});
   }
-
   static Array CreateKeyset() {
     return Array(ArrayData::CreateKeyset(), NoIncRef{});
-  }
-
-  static Array CreateVArray() {
-    return Array(ArrayData::CreateVArray(), NoIncRef{});
-  }
-
-  static Array CreateDArray(arrprov::Tag tag = {}) {
-    return Array(ArrayData::CreateDArray(tag), NoIncRef{});
   }
 
   /////////////////////////////////////////////////////////////////////////////
@@ -190,12 +168,7 @@ public:
   Array toVec() const { COPY_BODY(toVec(true), CreateVec()) }
   Array toDict() const { COPY_BODY(toDict(true), CreateDict()) }
   Array toKeyset() const { COPY_BODY(toKeyset(true), CreateKeyset()) }
-  Array toPHPArray() const { COPY_BODY(toPHPArray(true), Array{}) }
-  Array toPHPArrayIntishCast() const {
-    COPY_BODY(toPHPArrayIntishCast(true), Array{})
-  }
-  Array toVArray() const { COPY_BODY(toVArray(true), CreateVArray()) }
-  Array toDArray() const { COPY_BODY(toDArray(true), CreateDArray()) }
+  Array toDictIntishCast() const { COPY_BODY(toDictIntishCast(true), Array{}) }
 
   #undef COPY_BODY
 
@@ -219,13 +192,6 @@ public:
   bool isVec() const { return m_arr && m_arr->isVecType(); }
   bool isDict() const { return m_arr && m_arr->isDictType(); }
   bool isKeyset() const { return m_arr && m_arr->isKeysetType(); }
-  bool isHackArray() const { return m_arr && m_arr->isHackArrayType(); }
-  bool isPHPArray() const { return !m_arr || m_arr->isPHPArrayType(); }
-  bool isVArray() const { return m_arr && m_arr->isVArray(); }
-  bool isDArray() const { return m_arr && m_arr->isDArray(); }
-  bool isHAMSafeVArray() const { return m_arr && m_arr->isHAMSafeVArray(); }
-  bool isHAMSafeDArray() const { return m_arr && m_arr->isHAMSafeDArray(); }
-  bool isHAMSafeDVArray() const { return m_arr && m_arr->isHAMSafeDVArray(); }
 
   /////////////////////////////////////////////////////////////////////////////
 
@@ -475,7 +441,7 @@ public:
   /*
    * Remove all elements.
    */
-  void clear() { operator=(Create()); }
+  void clear() { operator=(CreateDict()); }
 
   /*
    * Stack-like function - the inverse of append().
@@ -565,18 +531,6 @@ private:
 };
 
 ///////////////////////////////////////////////////////////////////////////////
-
-ALWAYS_INLINE Array empty_array() {
-  return Array::attach(ArrayData::Create());
-}
-
-ALWAYS_INLINE Array empty_varray() {
-  return Array::attach(ArrayData::CreateVArray());
-}
-
-ALWAYS_INLINE Array empty_darray() {
-  return Array::attach(ArrayData::CreateDArray());
-}
 
 ALWAYS_INLINE Array empty_vec_array() {
   return Array::attach(ArrayData::CreateVec());

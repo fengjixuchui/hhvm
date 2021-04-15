@@ -23,7 +23,7 @@ let no_incremental_check (options : ServerArgs.options) : bool =
 
 let indexing ?hhi_filter (genv : ServerEnv.genv) :
     Relative_path.t list Bucket.next * float =
-  ServerProgress.send_progress_to_monitor "indexing";
+  ServerProgress.send_progress_to_monitor_w_timeout "indexing";
   let t = Unix.gettimeofday () in
   let get_next =
     ServerFiles.make_next
@@ -49,8 +49,9 @@ let parsing
   @@ fun () ->
   begin
     match count with
-    | None -> ServerProgress.send_progress_to_monitor "%s" "parsing"
-    | Some c -> ServerProgress.send_progress_to_monitor "parsing %d files" c
+    | None -> ServerProgress.send_progress_to_monitor_w_timeout "%s" "parsing"
+    | Some c ->
+      ServerProgress.send_progress_to_monitor_w_timeout "parsing %d files" c
   end;
   let quick = lazy_parse in
   let ctx = Provider_utils.ctx_from_server_env env in
@@ -106,7 +107,8 @@ let naming
     ~(profiling : CgroupProfiler.Profiling.t) : ServerEnv.env * float =
   CgroupProfiler.collect_cgroup_stats ~profiling ~stage:profile_label
   @@ fun () ->
-  ServerProgress.send_progress_to_monitor "resolving symbol references";
+  ServerProgress.send_progress_to_monitor_w_timeout
+    "resolving symbol references";
   let ctx = Provider_utils.ctx_from_server_env env in
   let env =
     Naming_table.fold
@@ -114,7 +116,9 @@ let naming
       ~f:
         begin
           fun k v env ->
-          let (errorl, failed_naming) = Naming_global.ndecl_file ctx k v in
+          let (errorl, failed_naming) =
+            Naming_global.ndecl_file_error_if_already_bound ctx k v
+          in
           {
             env with
             errorl = Errors.merge errorl env.errorl;
@@ -213,6 +217,9 @@ let type_check
       let memory_cap =
         genv.local_config.ServerLocalConfig.max_typechecker_worker_memory_mb
       in
+      let longlived_workers =
+        genv.local_config.ServerLocalConfig.longlived_workers
+      in
       let ctx = Provider_utils.ctx_from_server_env env in
       CgroupProfiler.collect_cgroup_stats ~profiling ~stage:profile_label
       @@ fun () ->
@@ -224,6 +231,7 @@ let type_check
         Relative_path.Set.empty
         files_to_check
         ~memory_cap
+        ~longlived_workers
         ~check_info:(ServerCheckUtils.get_check_info genv env)
     in
     hh_log_heap ();

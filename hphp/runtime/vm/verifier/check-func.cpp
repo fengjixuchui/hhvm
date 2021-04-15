@@ -305,6 +305,10 @@ Offset findSection(SectionMap& sections, Offset off) {
   return i->first;
 }
 
+const StaticString s_reified("__Reified");
+const StaticString s_reified_var("0ReifiedGenerics");
+const StaticString s_coeffects_var("0Coeffects");
+
 bool FuncChecker::checkInfo() {
   if (numLocals() > std::numeric_limits<uint16_t>::max()) {
     error("too many locals: %d", numLocals());
@@ -313,6 +317,28 @@ bool FuncChecker::checkInfo() {
   if (numIters() > std::numeric_limits<uint16_t>::max()) {
     error("too many iterators: %d", numIters());
     return false;
+  }
+
+  auto const it = m_func->userAttributes.find(s_reified.get());
+  auto const hasReifiedGenerics = it != m_func->userAttributes.end();
+
+  if (hasReifiedGenerics) {
+    auto const localId = m_func->lookupVarId(s_reified_var.get());
+    if (localId != m_func->params.size()) {
+      ferror("functions with reified generics must have the first non parameter"
+             " local to be reified generics local");
+      return false;
+    }
+  }
+  if (!m_func->coeffectRules.empty() &&
+      !(m_func->coeffectRules.size() == 1 &&
+        m_func->coeffectRules[0].isGeneratorThis())) {
+    auto const localId = m_func->lookupVarId(s_coeffects_var.get());
+    if (localId != m_func->params.size() + (hasReifiedGenerics ? 1 : 0)) {
+      ferror("functions with coeffect rules must have the first non parameter"
+             " local (also after reified generics local) to be coeffects local");
+      return false;
+    }
   }
   return true;
 }
@@ -601,17 +627,21 @@ bool FuncChecker::checkImmKA(PC& pc, PC const /*instr*/) {
       decode_iva(pc);
       auto const loc = decode_iva(pc);
       ok &= checkLocal(pc, loc);
+      decode_oa<ReadOnlyOp>(pc);
       break;
     }
     case MEC: case MPC:
       decode_iva(pc);
+      decode_oa<ReadOnlyOp>(pc);
       break;
     case MEI:
       pc += sizeof(int64_t);
+      decode_oa<ReadOnlyOp>(pc);
       break;
     case MET: case MPT: case MQT:
       auto const id = decode_raw<Id>(pc);
       ok &= checkString(pc, id);
+      decode_oa<ReadOnlyOp>(pc);
       break;
   }
 
@@ -801,11 +831,9 @@ const FlavorDesc* FuncChecker::sig(PC pc) {
       m_tmp_sig[i] = CUV;
     }
     return m_tmp_sig;
-  case Op::NewStructDArray: // ONE(VSA),     SMANY,   ONE(CV)
   case Op::NewStructDict:   // ONE(VSA),     SMANY,   ONE(CV)
   case Op::NewVec:          // ONE(IVA),     CMANY,   ONE(CV)
   case Op::NewKeysetArray:  // ONE(IVA),     CMANY,   ONE(CV)
-  case Op::NewVArray:       // ONE(IVA),     CMANY,   ONE(CV)
   case Op::NewRecord:       // TWO(SA,VSA),  SMANY,   ONE(CV)
   case Op::ConcatN:         // ONE(IVA),     CMANY,   ONE(CV)
   case Op::CombineAndResolveTypeStruct:
@@ -847,6 +875,8 @@ bool FuncChecker::checkMemberKey(State* cur, PC pc, Op op) {
   }
 
   uint32_t iva = 0;
+  ReadOnlyOp rop = ReadOnlyOp::Any;
+  
   switch (mcode) {
     case MET: case MPT: case MQT: {
       auto const id = decode_raw<Id>(pc);
@@ -855,18 +885,30 @@ bool FuncChecker::checkMemberKey(State* cur, PC pc, Op op) {
               opcodeToName(op));
         return false;
       }
+      rop = decode_oa<ReadOnlyOp>(pc);
       break;
     }
 
-    case MEC: case MPC: iva = decode_iva(pc); break;
-    case MEL: case MPL: decode_iva(pc); decode_iva(pc); break;
-    case MEI:                               decode_raw<int64_t>(pc); break;
-    case MW:                                break;
+    case MEC: case MPC:
+      iva = decode_iva(pc);
+      rop = decode_oa<ReadOnlyOp>(pc);
+      break;
+    case MEL: case MPL:
+      decode_iva(pc);
+      decode_iva(pc);
+      rop = decode_oa<ReadOnlyOp>(pc);
+      break;
+    case MEI:                               
+      decode_raw<int64_t>(pc);
+      rop = decode_oa<ReadOnlyOp>(pc);
+      break;
+    case MW:                                
+      break;
   }
 
   if ((mcode == MemberCode::MEC || mcode == MemberCode::MPC) &&
       iva + 1 > cur->stklen) {
-    MemberKey key{mcode, static_cast<int32_t>(iva)};
+    MemberKey key{mcode, static_cast<int32_t>(iva), rop};
     error("Member Key %s in op %s has stack offset greater than stack"
           " depth %d\n", show(key).c_str(), opcodeToName(op), cur->stklen);
     return false;
@@ -1154,19 +1196,6 @@ bool FuncChecker::checkOp(State* cur, PC pc, Op op, Block* b, PC prev_pc) {
       }
       break;
     }
-    case Op::Array: {
-      auto const id = getImm(pc, 0).u_AA;
-      if (id < 0 || id >= unit()->numArrays()) {
-        ferror("Array references array data that is not an Array\n");
-        return false;
-      }
-      auto const dt = unit()->lookupArray(id)->toDataType();
-      if (!isArrayType(dt)) {
-        ferror("Array references array data that is a {}\n", dt);
-        return false;
-      }
-      break;
-    }
     #define O(name) \
     case Op::name: { \
       auto const id = getImm(pc, 0).u_AA; \
@@ -1326,7 +1355,6 @@ bool FuncChecker::checkOp(State* cur, PC pc, Op op, Block* b, PC prev_pc) {
       cur->silences.clear();
       break;
 
-    case Op::NewVArray:
     case Op::NewVec:
     case Op::NewKeysetArray: {
       auto new_pc = pc;
@@ -1357,7 +1385,7 @@ bool FuncChecker::checkOp(State* cur, PC pc, Op op, Block* b, PC prev_pc) {
       auto const fca = getImm(pc, 0).u_FCA;
       if (prev_pc && fca.hasGenerics()) {
         auto const prev_op = peek_op(prev_pc);
-        if (prev_op == Op::Array || prev_op == Op::Vec) {
+        if (prev_op == Op::Vec) {
           auto const id = getImm(prev_pc, 0).u_AA;
           if (id < 0 || id >= unit()->numArrays()) {
             ferror("Generics passed to {} don't exist\n", opcodeToName(op));
@@ -1475,18 +1503,14 @@ bool FuncChecker::checkRxOp(State* cur, PC pc, Op op, bool pure) {
     case Op::Int:
     case Op::Double:
     case Op::String:
-    case Op::Array:
     case Op::Dict:
     case Op::Keyset:
     case Op::Vec:
     case Op::NewDictArray:
     case Op::NewRecord:
-    case Op::NewStructDArray:
     case Op::NewStructDict:
     case Op::NewVec:
     case Op::NewKeysetArray:
-    case Op::NewVArray:
-    case Op::NewDArray:
     case Op::AddElemC:
     case Op::AddNewElemC:
     case Op::NewCol:
@@ -1544,8 +1568,6 @@ bool FuncChecker::checkRxOp(State* cur, PC pc, Op op, bool pure) {
     case Op::CastDict:
     case Op::CastKeyset:
     case Op::CastVec:
-    case Op::CastVArray:
-    case Op::CastDArray:
     case Op::DblAsBits:
     case Op::RaiseClassStringConversionWarning:
 
@@ -1593,7 +1615,6 @@ bool FuncChecker::checkRxOp(State* cur, PC pc, Op op, bool pure) {
     case Op::ArrayIdx:
     case Op::ArrayMarkLegacy:
     case Op::ArrayUnmarkLegacy:
-    case Op::TagProvenanceHere:
       return true;
 
     // this

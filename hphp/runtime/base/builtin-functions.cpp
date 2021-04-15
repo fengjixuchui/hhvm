@@ -74,14 +74,6 @@ const StaticString s_cmpWithCollection(
   "Cannot use relational comparison operators (<, <=, >, >=, <=>) to compare "
   "a collection with an integer, double, string, array, or object"
 );
-const StaticString s_cmpWithVArray(
-  "Cannot use relational comparison operators (<, <=, >, >=, <=>) to compare "
-  "a varray with a non-varray"
-);
-const StaticString s_cmpWithDArray(
-  "Cannot use relational comparison operators (<, <=, >, >=, <=>) to compare "
-  "darrays"
-);
 const StaticString s_cmpWithVec(
   "Cannot use relational comparison operators (<, <=, >, >=, <=>) to compare "
   "a vec with a non-vec"
@@ -125,7 +117,7 @@ const StaticString s_cmpWithFunc(
 ///////////////////////////////////////////////////////////////////////////////
 
 bool array_is_valid_callback(const Array& arr) {
-  if (!arr.isPHPArray() && !arr.isVec() && !arr.isDict()) return false;
+  if (!arr.isVec() && !arr.isDict()) return false;
   if (arr.size() != 2 || !arr.exists(int64_t(0)) || !arr.exists(int64_t(1))) {
     return false;
   }
@@ -180,8 +172,7 @@ bool is_callable(const Variant& v, bool syntax_only, Variant* name) {
     return ret;
   }
 
-  if (isArrayType(tv_func->m_type) ||
-      isVecType(tv_func->m_type) ||
+  if (isVecType(tv_func->m_type) ||
       isDictType(tv_func->m_type)) {
     auto const arr = Array(tv_func->m_data.parr);
     auto const clsname = arr.lookup(int64_t(0));
@@ -433,7 +424,13 @@ void checkMethCaller(const Func* func, const Class* ctx) {
     ));
   }
 
-  auto const meth = cls->lookupMethod(func->methCallerMethName());
+  auto const meth = [&] () -> const Func* {
+    if (auto const m = cls->lookupMethod(func->methCallerMethName())) return m;
+    for (auto const i : cls->allInterfaces().range()) {
+      if (auto const m = i->lookupMethod(func->methCallerMethName())) return m;
+    }
+    return nullptr;
+  }();
   if (!meth) {
     SystemLib::throwInvalidArgumentExceptionObject(folly::sformat(
       "meth_caller(): method {}::{} not found",
@@ -791,14 +788,6 @@ void throw_collection_compare_exception() {
   SystemLib::throwInvalidOperationExceptionObject(s_cmpWithCollection);
 }
 
-void throw_varray_compare_exception() {
-  SystemLib::throwInvalidOperationExceptionObject(s_cmpWithVArray);
-}
-
-void throw_darray_compare_exception() {
-  SystemLib::throwInvalidOperationExceptionObject(s_cmpWithDArray);
-}
-
 void throw_vec_compare_exception() {
   SystemLib::throwInvalidOperationExceptionObject(s_cmpWithVec);
 }
@@ -829,10 +818,6 @@ void throw_clsmeth_compare_exception() {
 
 void throw_rclsmeth_compare_exception() {
   SystemLib::throwInvalidOperationExceptionObject(s_cmpWithRClsMeth);
-}
-
-void throw_arr_non_arr_compare_exception() {
-  SystemLib::throwInvalidOperationExceptionObject(s_cmpWithNonArr);
 }
 
 void throw_func_compare_exception() {
@@ -890,6 +875,25 @@ void throw_cannot_modify_static_const_prop(const char* className,
 {
   auto msg = folly::sformat(
    "Cannot modify static const property {} of class {}.",
+   propName, className
+  );
+  SystemLib::throwInvalidOperationExceptionObject(msg);
+}
+
+void throw_cannot_write_non_readonly_prop(const char* className,
+                                          const char* propName)
+{
+  auto msg = folly::sformat(
+   "Cannot store readonly value in a non-readonly property {} of class {}.",
+   propName, className
+  );
+  SystemLib::throwInvalidOperationExceptionObject(msg);
+}
+
+void throw_must_be_mutable(const char* className, const char* propName)
+{
+  auto msg = folly::sformat(
+   "Property {} of class {} must be mutable.",
    propName, className
   );
   SystemLib::throwInvalidOperationExceptionObject(msg);

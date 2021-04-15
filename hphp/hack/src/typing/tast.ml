@@ -38,12 +38,23 @@ let show_decl_ty = Typing_defs.show_decl_ty
 
 let pp_ifc_fun_decl fmt d = Typing_defs.pp_ifc_fun_decl fmt d
 
+(* Contains information about a specific function that we
+    a) want to make available to TAST checks
+    b) isn't otherwise (space-efficiently) present in the saved typing env *)
+type fun_tast_info = {
+  has_implicit_return: bool;
+      (** True if there are leaves of the function's imaginary CFG without a return statement *)
+  named_body_is_unsafe: bool;  (** Result of {!Nast.named_body_is_unsafe} *)
+}
+[@@deriving show]
+
 type saved_env = {
   tcopt: TypecheckerOptions.t; [@opaque]
   inference_env: Typing_inference_env.t;
   tpenv: Type_parameter_env.t;
   condition_types: decl_ty SMap.t;
   pessimize: bool;
+  fun_tast_info: fun_tast_info option;
 }
 [@@deriving show]
 
@@ -69,7 +80,8 @@ type targ = ty Aast.targ
 
 type class_get_expr = (Pos.t * ty, unit, saved_env, ty) Aast.class_get_expr
 
-type class_typeconst = (Pos.t * ty, unit, saved_env, ty) Aast.class_typeconst
+type class_typeconst_def =
+  (Pos.t * ty, unit, saved_env, ty) Aast.class_typeconst_def
 
 type user_attribute = (Pos.t * ty, unit, saved_env, ty) Aast.user_attribute
 
@@ -104,6 +116,7 @@ let empty_saved_env tcopt : saved_env =
     tpenv = Type_parameter_env.empty;
     condition_types = SMap.empty;
     pessimize = false;
+    fun_tast_info = None;
   }
 
 (* Used when an env is needed in codegen.

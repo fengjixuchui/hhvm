@@ -1,6 +1,6 @@
 [(Fun
-    { f_span = [3:1-5:2]; f_annotation = (); f_mode = Mpartial; f_readonly_ret = None;
-      f_ret = ((Awaitable<int>), (Some ([3:29-45], (Happly (([3:29-38], "\\HH\\Awaitable"), [([3:39-44], Hmixed)]))))); 
+    { f_span = [3:1-5:2]; f_readonly_this = None; f_annotation = (); 
+      f_mode = Mpartial; f_readonly_ret = None; f_ret = ((Awaitable<int>), (Some ([3:29-45], (Happly (([3:29-38], "\\HH\\Awaitable"), [([3:39-44], Hmixed)]))))); 
       f_name = ([3:16-19], "\\foo"); f_tparams = []; f_where_constraints = []; 
       f_variadic = FVnonVariadic;
       f_params =
@@ -16,7 +16,7 @@
       { Namespace_env.ns_ns_uses = <opaque>; ns_class_uses = <opaque>; 
         ns_record_def_uses = <opaque>; ns_fun_uses = <opaque>; ns_const_uses = <opaque>; 
         ns_name = None; ns_auto_ns_map = []; ns_is_codegen = false; ns_disable_xhp_element_mangling = false };
-      f_doc_comment = None; f_static = false });
+      f_doc_comment = None });
   (Class
      { c_span = [7:1-11:2]; c_annotation = (); c_mode = Mpartial; c_final = false; 
        c_is_xhp = false; c_has_xhp_keyword = false; c_kind = Cnormal; 

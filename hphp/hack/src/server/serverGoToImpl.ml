@@ -53,14 +53,19 @@ let parallel_find_positions_of_classes
 
 let add_if_valid_origin ctx class_elt child_class method_name result =
   if String.equal class_elt.ce_origin child_class then
-    (method_name, Lazy.force class_elt.ce_pos) :: result
+    ( method_name,
+      Lazy.force class_elt.ce_pos |> Naming_provider.resolve_position ctx )
+    :: result
   else
     let origin_decl = Decl_provider.get_class ctx class_elt.ce_origin in
     match origin_decl with
     | Some origin_decl ->
       let origin_kind = Decl_provider.Class.kind origin_decl in
       (match origin_kind with
-      | Ast_defs.Ctrait -> (method_name, Lazy.force class_elt.ce_pos) :: result
+      | Ast_defs.Ctrait ->
+        ( method_name,
+          Lazy.force class_elt.ce_pos |> Naming_provider.resolve_position ctx )
+        :: result
       | Ast_defs.Cabstract
       | Ast_defs.Cnormal
       | Ast_defs.Cinterface
@@ -128,7 +133,7 @@ let search_class
     ctx
     genv
     env
-    Typing_deps.(Dep.(make (hash_mode deps_mode) (Class class_name)))
+    Typing_deps.(Dep.(make (hash_mode deps_mode) (Type class_name)))
   @@ fun () ->
   let child_classes = find_child_classes ctx class_name genv env in
   if List.length child_classes < parallel_limit then
@@ -153,7 +158,7 @@ let search_member
       ctx
       genv
       env
-      Typing_deps.(Dep.(make (hash_mode deps_mode) (Class class_name)))
+      Typing_deps.(Dep.(make (hash_mode deps_mode) (Type class_name)))
     @@ fun () ->
     (* Find all the classes that extend this one *)
     let child_classes = find_child_classes ctx class_name genv env in

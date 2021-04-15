@@ -10,19 +10,15 @@ use itertools::Itertools;
 pub use write::{Error, IoWrite, Result, Write};
 
 use ast_class_expr_rust::ClassExpr;
-use ast_scope_rust as ast_scope;
 use context::Context;
 use core_utils_rust::add_ns;
 use emit_type_hint_rust as emit_type_hint;
-use env::Env as BodyEnv;
 use escaper::{escape, escape_by, is_lit_printable};
 use hhas_adata_rust::HhasAdata;
-use hhas_adata_rust::{
-    DARRAY_PREFIX, DICT_PREFIX, KEYSET_PREFIX, LEGACY_DICT_PREFIX, LEGACY_VEC_PREFIX,
-    VARRAY_PREFIX, VEC_PREFIX,
-};
+use hhas_adata_rust::{DICT_PREFIX, KEYSET_PREFIX, VEC_PREFIX};
 use hhas_attribute_rust::{self as hhas_attribute, HhasAttribute};
 use hhas_body_rust::HhasBody;
+use hhas_body_rust::HhasBodyEnv;
 use hhas_class_rust::{self as hhas_class, HhasClass};
 use hhas_coeffects::{HhasCoeffects, HhasCtxConstant};
 use hhas_constant_rust::HhasConstant;
@@ -30,7 +26,7 @@ use hhas_function_rust::HhasFunction;
 use hhas_method_rust::{HhasMethod, HhasMethodFlags};
 use hhas_param_rust::HhasParam;
 use hhas_pos_rust::Span;
-use hhas_program_rust::HhasProgram;
+use hhas_program::HhasProgram;
 use hhas_property_rust::HhasProperty;
 use hhas_record_def_rust::{Field, HhasRecord};
 use hhas_symbol_refs_rust::{HhasSymbolRefs, IncludePath};
@@ -43,7 +39,7 @@ use hhbc_string_utils_rust::{
     float, integer, is_class, is_parent, is_self, is_static, is_xhp, lstrip, mangle, quote_string,
     quote_string_with_escape, strip_global_ns, strip_ns, triple_quote_string, types,
 };
-use instruction_sequence_rust::{Error::Unrecoverable, InstrSeq};
+use instruction_sequence::{Error::Unrecoverable, InstrSeq};
 use iterator::Id as IterId;
 use label_rust::Label;
 use lazy_static::lazy_static;
@@ -163,7 +159,7 @@ pub mod context {
 }
 
 struct ExprEnv<'e> {
-    pub codegen_env: Option<&'e BodyEnv<'e>>,
+    pub codegen_env: Option<&'e HhasBodyEnv>,
     pub is_xhp: bool,
 }
 
@@ -755,7 +751,7 @@ fn print_class_special_attributes<W: Write>(
     if c.is_sealed() {
         special_attributes.push("sealed");
     }
-    if c.enum_type.is_some() {
+    if c.enum_type.is_some() && !hhas_attribute::has_enum_class(user_attrs) {
         special_attributes.push("enum");
     }
     if c.is_abstract() {
@@ -1065,30 +1061,14 @@ fn print_adata<W: Write>(ctx: &mut Context, w: &mut W, tv: &TypedValue) -> Resul
         // TODO: The False case seems to sometimes be b:0 and sometimes i:0.  Why?
         TypedValue::Bool(false) => w.write("b:0;"),
         TypedValue::Bool(true) => w.write("b:1;"),
-        TypedValue::Dict((pairs, loc, is_legacy)) => {
-            let prefix = if *is_legacy {
-                LEGACY_DICT_PREFIX
-            } else {
-                DICT_PREFIX
-            };
-            print_adata_dict_collection_argument(ctx, w, prefix, loc, pairs)
+        TypedValue::Vec(values) => {
+            print_adata_collection_argument(ctx, w, VEC_PREFIX, &None, values)
         }
-        TypedValue::Vec((values, loc, is_legacy)) => {
-            let prefix = if *is_legacy {
-                LEGACY_VEC_PREFIX
-            } else {
-                VEC_PREFIX
-            };
-            print_adata_collection_argument(ctx, w, prefix, loc, values)
-        }
-        TypedValue::DArray((pairs, loc)) => {
-            print_adata_dict_collection_argument(ctx, w, DARRAY_PREFIX, loc, pairs)
+        TypedValue::Dict(pairs) => {
+            print_adata_dict_collection_argument(ctx, w, DICT_PREFIX, &None, pairs)
         }
         TypedValue::Keyset(values) => {
             print_adata_collection_argument(ctx, w, KEYSET_PREFIX, &None, values)
-        }
-        TypedValue::VArray((values, loc)) => {
-            print_adata_collection_argument(ctx, w, VARRAY_PREFIX, loc, values)
         }
         TypedValue::HhasAdata(s) => w.write(escaped(s)),
     }
@@ -1103,7 +1083,7 @@ fn print_attribute<W: Write>(
         w,
         "\"{}\"(\"\"\"{}:{}:{{",
         a.name,
-        VARRAY_PREFIX,
+        VEC_PREFIX,
         a.arguments.len()
     )?;
     concat(w, &a.arguments, |w, arg| print_adata(ctx, w, arg))?;
@@ -1707,11 +1687,8 @@ fn print_istype_op<W: Write>(w: &mut W, op: &IstypeOp) -> Result<(), W::Error> {
         Op::OpVec => w.write("Vec"),
         Op::OpArrLike => w.write("ArrLike"),
         Op::OpLegacyArrLike => w.write("LegacyArrLike"),
-        Op::OpVArray => w.write("VArray"),
-        Op::OpDArray => w.write("DArray"),
         Op::OpClsMeth => w.write("ClsMeth"),
         Op::OpFunc => w.write("Func"),
-        Op::OpPHPArr => w.write("PHPArr"),
         Op::OpClass => w.write("Class"),
     }
 }
@@ -1782,7 +1759,7 @@ fn print_mutator<W: Write>(w: &mut W, mutator: &InstructMutator) -> Result<(), W
             w.write("CheckProp ")?;
             print_prop_id(w, id)
         }
-        M::InitProp(id, op, rop) => {
+        M::InitProp(id, op) => {
             w.write("InitProp ")?;
             print_prop_id(w, id)?;
             w.write(" ")?;
@@ -1790,8 +1767,7 @@ fn print_mutator<W: Write>(w: &mut W, mutator: &InstructMutator) -> Result<(), W
                 InitpropOp::Static => w.write("Static"),
                 InitpropOp::NonStatic => w.write("NonStatic"),
             }?;
-            w.write(" ")?;
-            print_readonly_op(w, rop)
+            w.write(" ")
         }
     }
 }
@@ -1878,7 +1854,6 @@ fn print_misc<W: Write>(w: &mut W, misc: &InstructMisc) -> Result<(), W::Error> 
         M::ArrayIdx => w.write("ArrayIdx"),
         M::ArrayMarkLegacy => w.write("ArrayMarkLegacy"),
         M::ArrayUnmarkLegacy => w.write("ArrayUnmarkLegacy"),
-        M::TagProvenanceHere => w.write("TagProvenanceHere"),
         M::BreakTraceHint => w.write("BreakTraceHint"),
         M::CGetCUNop => w.write("CGetCUNop"),
         M::UGetCUNop => w.write("UGetCUNop"),
@@ -2087,10 +2062,6 @@ fn print_lit_const<W: Write>(w: &mut W, lit: &InstructLitConst) -> Result<(), W:
         LC::Dir => w.write("Dir"),
         LC::Method => w.write("Method"),
         LC::FuncCred => w.write("FuncCred"),
-        LC::Array(id) => {
-            w.write("Array ")?;
-            print_adata_id(w, id)
-        }
         LC::Dict(id) => {
             w.write("Dict ")?;
             print_adata_id(w, id)
@@ -2104,14 +2075,8 @@ fn print_lit_const<W: Write>(w: &mut W, lit: &InstructLitConst) -> Result<(), W:
             print_adata_id(w, id)
         }
         LC::NewDictArray(i) => concat_str_by(w, " ", ["NewDictArray", i.to_string().as_str()]),
-        LC::NewDArray(i) => concat_str_by(w, " ", ["NewDArray", i.to_string().as_str()]),
-        LC::NewVArray(i) => concat_str_by(w, " ", ["NewVArray", i.to_string().as_str()]),
         LC::NewVec(i) => concat_str_by(w, " ", ["NewVec", i.to_string().as_str()]),
         LC::NewKeysetArray(i) => concat_str_by(w, " ", ["NewKeysetArray", i.to_string().as_str()]),
-        LC::NewStructDArray(l) => {
-            w.write("NewStructDArray ")?;
-            angle(w, |w| print_shape_fields(w, l))
-        }
         LC::NewStructDict(l) => {
             w.write("NewStructDict ")?;
             angle(w, |w| print_shape_fields(w, l))
@@ -2211,8 +2176,6 @@ fn print_op<W: Write>(w: &mut W, op: &InstructOperator) -> Result<(), W::Error> 
         I::CastVec => w.write("CastVec"),
         I::CastDict => w.write("CastDict"),
         I::CastKeyset => w.write("CastKeyset"),
-        I::CastVArray => w.write("CastVArray"),
-        I::CastDArray => w.write("CastDArray"),
         I::InstanceOf => w.write("InstanceOf"),
         I::InstanceOfD(id) => {
             w.write("InstanceOfD ")?;
@@ -2303,7 +2266,7 @@ fn print_fatal_op<W: Write>(w: &mut W, f: &FatalOp) -> Result<(), W::Error> {
 fn print_params<W: Write>(
     ctx: &mut Context,
     w: &mut W,
-    body_env: Option<&BodyEnv>,
+    body_env: Option<&HhasBodyEnv>,
     params: &[HhasParam],
 ) -> Result<(), W::Error> {
     paren(w, |w| {
@@ -2314,7 +2277,7 @@ fn print_params<W: Write>(
 fn print_param<W: Write>(
     ctx: &mut Context,
     w: &mut W,
-    body_env: Option<&BodyEnv>,
+    body_env: Option<&HhasBodyEnv>,
     param: &HhasParam,
 ) -> Result<(), W::Error> {
     print_param_user_attributes(ctx, w, param)?;
@@ -2340,7 +2303,7 @@ fn print_param_id<W: Write>(w: &mut W, param_id: &ParamId) -> Result<(), W::Erro
 fn print_param_default_value<W: Write>(
     ctx: &mut Context,
     w: &mut W,
-    body_env: Option<&BodyEnv>,
+    body_env: Option<&HhasBodyEnv>,
     default_val: &(Label, ast::Expr),
 ) -> Result<(), W::Error> {
     let expr_env = ExprEnv {
@@ -2564,7 +2527,7 @@ fn print_expr<W: Write>(
     fn adjust_id<'a>(env: &ExprEnv, id: &'a String) -> Cow<'a, str> {
         let s: Cow<'a, str> = match env.codegen_env {
             Some(env) => {
-                if env.namespace.name.is_none()
+                if env.is_namespaced
                     && id
                         .as_bytes()
                         .iter()
@@ -2603,7 +2566,7 @@ fn print_expr<W: Write>(
     }
     fn get_class_name_from_id<'e>(
         ctx: &mut Context,
-        env: Option<&'e BodyEnv<'e>>,
+        env: Option<&HhasBodyEnv>,
         should_format: bool,
         is_class_constant: bool,
         id: &'e str,
@@ -2631,26 +2594,31 @@ fn print_expr<W: Write>(
     }
     fn get_special_class_name<'e>(
         ctx: &mut Context,
-        env: Option<&'e BodyEnv<'e>>,
+        env: Option<&HhasBodyEnv>,
         is_class_constant: bool,
         id: &'e str,
     ) -> Cow<'e, str> {
         let class_expr = match env {
-            None => ClassExpr::expr_to_class_expr(
+            None => ClassExpr::expr_to_class_expr_(
                 ctx.emitter,
                 true,
                 true,
-                &ast_scope::Scope::toplevel(),
+                None,
+                None,
                 ast::Expr(
                     Pos::make_none(),
                     ast::Expr_::mk_id(ast_defs::Id(Pos::make_none(), id.into())),
                 ),
             ),
-            Some(body_env) => ClassExpr::expr_to_class_expr(
+            Some(body_env) => ClassExpr::expr_to_class_expr_(
                 ctx.emitter,
                 true,
                 true,
-                &body_env.scope,
+                body_env
+                    .class_info
+                    .as_ref()
+                    .map(|(k, s)| (k.clone(), s.as_str())),
+                body_env.parent_name.clone(),
                 ast::Expr(
                     Pos::make_none(),
                     ast::Expr_::mk_id(ast_defs::Id(Pos::make_none(), id.into())),
@@ -3088,7 +3056,6 @@ fn print_efun<W: Write>(
     f: &ast::Fun_,
     use_list: &[ast::Lid],
 ) -> Result<(), W::Error> {
-    w.write_if(f.static_, "static ")?;
     w.write_if(
         f.fun_kind.is_fasync() || f.fun_kind.is_fasync_generator(),
         "async ",

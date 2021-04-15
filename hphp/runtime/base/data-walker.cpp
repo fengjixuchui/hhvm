@@ -46,7 +46,7 @@ void DataWalker::traverseData(ArrayData* data,
     return;
   }
 
-  IterateVNoInc(data, [&](TypedValue rval) {
+  IterateV(data, [&](TypedValue rval) {
     visitTypedValue(rval, features, visited, seenArrs);
   });
 }
@@ -74,7 +74,7 @@ void DataWalker::traverseData(
     return;
   }
 
-  IteratePropMemOrderNoInc(
+  IteratePropMemOrder(
     data,
     [&](Slot slot, const Class::Prop& prop, tv_rval val) {
       visitTypedValue(val.tv(), features, visited);
@@ -111,7 +111,7 @@ bool DataWalker::visitTypedValue(TypedValue rval,
       features.hasNonPersistable = true;
     }
   } else if (rval.m_type == KindOfClsMeth) {
-    if (!serialize_clsmeth) features.hasNonPersistable = true;
+    if (!serialize_clsmeth || !use_lowptr) features.hasNonPersistable = true;
     if (!rval.m_data.pclsmeth->getCls()->isPersistent()) {
       features.hasNonPersistable = true;
     }

@@ -188,8 +188,7 @@ let lazy_saved_state_init genv env root load_state_approach profiling =
       stack;
     (match next_step with
     | Exit_status.No_error ->
-      ServerProgress.send_to_monitor
-        (MonitorRpc.PROGRESS_WARNING (Some user_message));
+      ServerProgress.send_progress_warning_to_monitor (Some user_message);
       (* print the memory stats for saved-state init gathered before it failed *)
       CgroupProfiler.print_summary_memory_table ~event:`Init;
       let fall_back_to_full_init profiling =
@@ -237,6 +236,10 @@ let init
       (lazy_lev, init_approach)
   in
   let (init_method, init_method_name) =
+    Hh_logger.log "ServerInit: lazy_lev=%s" (show_lazy_level lazy_lev);
+    Hh_logger.log
+      "ServerInit: init_approach=%s"
+      (show_init_approach init_approach);
     match (lazy_lev, init_approach) with
     | (_, Remote_init { worker_key; nonce; check_id }) ->
       (remote_init genv env root worker_key nonce check_id, "remote_init")

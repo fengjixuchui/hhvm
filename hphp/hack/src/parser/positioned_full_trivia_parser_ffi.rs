@@ -23,7 +23,7 @@ struct CParserEnv {
     disable_modes: bool,
     disallow_hash_comments: bool,
     disallow_fun_and_cls_meth_pseudo_funcs: bool,
-    array_unification: bool,
+    hack_arr_dv_arrs: bool,
     interpret_soft_types_as_like_types: bool,
 }
 
@@ -47,7 +47,7 @@ impl CParserEnv {
             disable_modes: env.disable_modes,
             disallow_hash_comments: env.disallow_hash_comments,
             disallow_fun_and_cls_meth_pseudo_funcs: env.disallow_fun_and_cls_meth_pseudo_funcs,
-            array_unification: env.array_unification,
+            hack_arr_dv_arrs: env.hack_arr_dv_arrs,
             interpret_soft_types_as_like_types: env.interpret_soft_types_as_like_types,
         })
     }
@@ -55,7 +55,7 @@ impl CParserEnv {
 
 /// Return result of `parse_positioned_full_trivia_cpp_ffi` to Rust.
 #[no_mangle]
-unsafe extern "C" fn parse_positioned_full_trivia_free_string_cpp_ffi(s: *mut libc::c_char) {
+unsafe extern "C" fn hackc_parse_positioned_full_trivia_free_string_cpp_ffi(s: *mut libc::c_char) {
     // Safety:
     //   - This should only ever be called on a pointer obtained by
     //     `CString::into_raw`.
@@ -67,7 +67,7 @@ unsafe extern "C" fn parse_positioned_full_trivia_free_string_cpp_ffi(s: *mut li
 /// Calculate a parse tree from source text and render it as json.
 #[cfg(unix)]
 #[no_mangle]
-unsafe extern "C" fn parse_positioned_full_trivia_cpp_ffi(
+unsafe extern "C" fn hackc_parse_positioned_full_trivia_cpp_ffi(
     filename: *const libc::c_char,
     source_text: *const libc::c_char,
     env: usize,

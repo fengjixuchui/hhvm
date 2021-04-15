@@ -46,7 +46,7 @@ let check_atom_on_param env pos dty lty =
    * in both cases, it must be bounded by an enum class
    *
    * In all cases, we check that the requested atom is part of the
-   * detected enum class
+   * detected enum class.
    *)
   let check_tgeneric name =
     let is_taccess_this =
@@ -90,6 +90,7 @@ let check_atom_on_param env pos dty lty =
     | _ -> Errors.atom_invalid_parameter_in_enum_class pos)
   | _ -> Errors.atom_invalid_parameter pos
 
+(** Mostly check constraints on type parameters. *)
 let check_happly ?(is_atom = false) unchecked_tparams env h =
   let pos = fst h in
   let decl_ty = Decl_hint.hint env.decl_env h in
@@ -106,7 +107,9 @@ let check_happly ?(is_atom = false) unchecked_tparams env h =
   let decl_ty = Inst.instantiate subst decl_ty in
   match get_node decl_ty with
   | Tapply _ ->
-    let (env, locl_ty) = Phase.localize_with_self env decl_ty in
+    let (env, locl_ty) =
+      Phase.localize_with_self env ~ignore_errors:true decl_ty
+    in
     let () = if is_atom then check_atom_on_param env pos decl_ty locl_ty in
     begin
       match get_node (TUtils.get_base_type env locl_ty) with
@@ -122,7 +125,7 @@ let check_happly ?(is_atom = false) unchecked_tparams env h =
            *)
           let ety_env =
             {
-              (Phase.env_with_self env) with
+              (Phase.env_with_self env ~on_error:Errors.ignore_error) with
               substs = Subst.make_locl tc_tparams tyl;
             }
           in
@@ -130,7 +133,7 @@ let check_happly ?(is_atom = false) unchecked_tparams env h =
             begin
               fun { tp_name = (p, x); tp_constraints = cstrl; _ } ty ->
               List.iter cstrl (fun (ck, cstr_ty) ->
-                  let r = Reason.Rwitness p in
+                  let r = Reason.Rwitness_from_decl p in
                   let (env, cstr_ty) = Phase.localize ~ety_env env cstr_ty in
                   let (_ : Typing_env_types.env) =
                     TGenConstraint.check_constraint
@@ -138,8 +141,8 @@ let check_happly ?(is_atom = false) unchecked_tparams env h =
                       ck
                       ty
                       ~cstr_ty
-                      (fun ?code:_ l ->
-                        Reason.explain_generic_constraint (fst h) r x l)
+                      (fun ?code:_ reasons ->
+                        Reason.explain_generic_constraint (fst h) r x reasons)
                   in
                   ())
             end
@@ -153,13 +156,12 @@ let check_happly ?(is_atom = false) unchecked_tparams env h =
 let rec fun_ tenv f =
   FunUtils.check_params f.f_params;
   let env = { typedef_tparams = []; tenv } in
-  let (p, _) = f.f_name in
   (* Add type parameters to typing environment and localize the bounds
      and where constraints *)
   let tenv =
     Phase.localize_and_add_ast_generic_parameters_and_where_constraints
-      p
       env.tenv
+      ~ignore_errors:true
       f.f_tparams
       f.f_where_constraints
   in
@@ -229,6 +231,7 @@ and hint_ ~is_atom env p h_ =
     hint env h
   | Hfun
       {
+        hf_is_readonly = _;
         hf_param_tys = hl;
         hf_param_info = _;
         hf_variadic_ty = variadic_hint;
@@ -266,11 +269,7 @@ and hint_ ~is_atom env p h_ =
 
 and fun_param env param =
   let is_atom =
-    List.exists
-      ~f:(fun { ua_name; ua_params } ->
-        String.equal (snd ua_name) SN.UserAttributes.uaAtom
-        && List.is_empty ua_params)
-      param.param_user_attributes
+    Naming_attributes.mem SN.UserAttributes.uaAtom param.param_user_attributes
   in
   maybe (hint ~is_atom) env (hint_of_type_hint param.param_type_hint)
 
@@ -286,8 +285,15 @@ let enum env e =
 let const env class_const = maybe hint env class_const.Aast.cc_type
 
 let typeconst (env, _) tconst =
-  maybe hint env tconst.c_tconst_type;
-  maybe hint env tconst.c_tconst_as_constraint
+  match tconst.c_tconst_kind with
+  | TCAbstract { c_atc_as_constraint; c_atc_super_constraint; c_atc_default } ->
+    maybe hint env c_atc_as_constraint;
+    maybe hint env c_atc_super_constraint;
+    maybe hint env c_atc_default
+  | TCConcrete { c_tc_type } -> hint env c_tc_type
+  | TCPartiallyAbstract { c_patc_constraint; c_patc_type } ->
+    hint env c_patc_constraint;
+    hint env c_patc_type
 
 let class_var env cv = maybe hint env (hint_of_type_hint cv.cv_type)
 
@@ -296,8 +302,8 @@ let method_ env m =
      and where constraints *)
   let tenv =
     Phase.localize_and_add_ast_generic_parameters_and_where_constraints
-      (fst m.m_name)
       env.tenv
+      ~ignore_errors:true
       m.m_tparams
       m.m_where_constraints
   in
@@ -315,8 +321,8 @@ let class_ tenv c =
   (* Add type parameters to typing environment and localize the bounds *)
   let tenv =
     Phase.localize_and_add_ast_generic_parameters_and_where_constraints
-      (fst c.c_name)
       tenv
+      ~ignore_errors:true
       c.c_tparams
       c.c_where_constraints
   in
@@ -339,20 +345,37 @@ let class_ tenv c =
   maybe enum env c.c_enum
 
 let typedef tenv t =
+  let {
+    t_tparams;
+    t_annotation = _;
+    t_name = _;
+    t_constraint;
+    t_kind;
+    t_mode = _;
+    t_vis = _;
+    t_namespace = _;
+    t_user_attributes = _;
+    t_span = _;
+    t_emit_id = _;
+  } =
+    t
+  in
   (* We don't allow constraints on typdef parameters, but we still
      need to record their kinds in the generic var environment *)
-  let tparams =
-    List.map t.t_tparams (Decl_hint.aast_tparam_to_decl_tparam tenv.decl_env)
-  in
+  let where_constraints = [] in
   let tenv_with_typedef_tparams =
-    Phase.localize_and_add_generic_parameters (fst t.t_name) tenv tparams
+    Phase.localize_and_add_ast_generic_parameters_and_where_constraints
+      tenv
+      ~ignore_errors:true
+      t_tparams
+      where_constraints
   in
   (* For typdefs, we do want to do the simple kind checks on the body
      (e.g., arities match up), but no constraint checks. We need to check the
      kinds of typedefs separately, because check_happly replaces all the generic
      parameters of typedefs by Tany, which makes the kind check moot *)
-  maybe check_hint_wellkindedness tenv_with_typedef_tparams t.t_constraint;
-  check_hint_wellkindedness tenv_with_typedef_tparams t.t_kind;
+  maybe check_hint_wellkindedness tenv_with_typedef_tparams t_constraint;
+  check_hint_wellkindedness tenv_with_typedef_tparams t_kind;
   let env =
     {
       (* Since typedefs cannot have constraints we shouldn't check
@@ -365,4 +388,4 @@ let typedef tenv t =
   in
   (* We checked the kinds already above.  *)
   maybe hint_no_kind_check env t.t_constraint;
-  hint_no_kind_check env t.t_kind
+  hint_no_kind_check env t_kind

@@ -326,7 +326,7 @@ void createGlobalNVTable() {
   assertx(!g_context->m_globalNVTable);
   g_context->m_globalNVTable = req::make_raw<NameValueTable>();
   auto nvTable = g_context->m_globalNVTable;
-  Variant arr(ArrayData::CreateDArray());
+  Variant arr(ArrayData::CreateDict());
   nvTable->set(s_argc.get(),               init_null_variant.asTypedValue());
   nvTable->set(s_argv.get(),               init_null_variant.asTypedValue());
   nvTable->set(s__SERVER.get(),            arr.asTypedValue());
@@ -340,16 +340,18 @@ void createGlobalNVTable() {
 }
 
 const StaticString s_reified_generics_var("0ReifiedGenerics");
+const StaticString s_coeffects_var("0Coeffects");
 
 Array getDefinedVariables() {
-  Array ret = Array::CreateDArray();
+  Array ret = Array::CreateDict();
 
   NameValueTable::Iterator iter(g_context->m_globalNVTable);
   for (; iter.valid(); iter.next()) {
     auto const sd = iter.curKey();
     auto const val = iter.curVal();
-    // Reified functions have an internal 0ReifiedGenerics variable
-    if (s_reified_generics_var.equal(sd)) {
+    // Reified functions and functions with coeffects rules
+    // have an internal variables
+    if (s_reified_generics_var.equal(sd) || s_coeffects_var.equal(sd)) {
       continue;
     }
     ret.set(StrNR(sd).asString(), Variant{const_variant_ref{val}});
@@ -561,24 +563,6 @@ static std::string toStringElm(TypedValue tv) {
       os << tv.m_data.parr;
       print_count();
       os << ":Keyset";
-      continue;
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-      assertx(tv.m_data.parr->isDArray());
-      assertx(tv.m_data.parr->isPHPArrayType());
-      assertx(tv.m_data.parr->checkCount());
-      os << tv.m_data.parr;
-      print_count();
-      os << ":darray";
-      continue;
-    case KindOfPersistentVArray:
-    case KindOfVArray:
-      assertx(tv.m_data.parr->isVArray());
-      assertx(tv.m_data.parr->isPHPArrayType());
-      assertx(tv.m_data.parr->checkCount());
-      os << tv.m_data.parr;
-      print_count();
-      os << ":varray";
       continue;
     case KindOfObject:
       assertx(tv.m_data.pobj->checkCount());
@@ -811,7 +795,7 @@ TypedValue* Stack::resumableStackBase(const ActRec* fp) {
 }
 
 Array getDefinedVariables(const ActRec* fp) {
-  if (UNLIKELY(fp == nullptr || fp->isInlined())) return empty_darray();
+  if (UNLIKELY(fp == nullptr || fp->isInlined())) return empty_dict_array();
   auto const func = fp->func();
   auto const numLocals = func->numNamedLocals();
   DArrayInit ret(numLocals);
@@ -843,14 +827,8 @@ uint32_t prepareUnpackArgs(const Func* func, uint32_t numArgs,
   auto const numParams = func->numNonVariadicParams();
   if (LIKELY(numArgs == numParams)) {
     // Convert unpack args to the proper type.
-    if (RuntimeOption::EvalHackArrDVArrs) {
-      tvCastToVecInPlace(&unpackArgs);
-      tvSetLegacyArrayInPlace(&unpackArgs, RuntimeOption::EvalHackArrDVArrMark);
-      stack.pushVec(unpackArgs.m_data.parr);
-    } else {
-      tvCastToVArrayInPlace(&unpackArgs);
-      stack.pushArray(unpackArgs.m_data.parr);
-    }
+    tvCastToVecInPlace(&unpackArgs);
+    stack.pushVec(unpackArgs.m_data.parr);
     return numParams + 1;
   }
 
@@ -905,23 +883,40 @@ static void prepareFuncEntry(ActRec *ar, uint32_t numArgsInclUnpack) {
   assertx(!isResumed(ar));
   assertx(
     reinterpret_cast<TypedValue*>(ar) - vmStack().top() ==
-      ar->func()->numParams() + (ar->func()->hasReifiedGenerics() ? 1U : 0U)
+      ar->func()->numParams()
+      + (ar->func()->hasReifiedGenerics() ? 1U : 0U)
+      + (ar->func()->hasCoeffectsLocal() ? 1U : 0U)
   );
+
+  // +- Order Of Stack-------+
+  // | arguments             |
+  // | reified generics      |
+  // | coeffects             |
+  // | closure use variables |
+  // | all other locals      |
+  // +-----------------------+
 
   const Func* func = ar->func();
   int nlocals = func->numParams();
+
+  if (ar->func()->hasReifiedGenerics()) {
+    // Currently does not work with closures
+    assertx(!func->isClosureBody());
+    assertx(func->reifiedGenericsLocalId() == nlocals);
+    nlocals++;
+  }
+
+  if (ar->func()->hasCoeffectsLocal()) {
+    assertx(func->coeffectsLocalId() == nlocals);
+    nlocals++;
+  }
+
   if (UNLIKELY(func->isClosureBody())) {
     int nuse = c_Closure::initActRecFromClosure(ar, vmStack().top());
     // initActRecFromClosure doesn't move stack
     vmStack().nalloc(nuse);
     nlocals += nuse;
     func = ar->func();
-  }
-
-  if (ar->func()->hasReifiedGenerics()) {
-    // Currently does not work with closures
-    assertx(!func->isClosureBody());
-    nlocals++;
   }
 
   pushFrameSlots(func, nlocals);
@@ -936,7 +931,6 @@ static void dispatch();
 void enterVMAtFunc(ActRec* enterFnAr, uint32_t numArgsInclUnpack) {
   assertx(enterFnAr);
   assertx(!isResumed(enterFnAr));
-  ARRPROV_USE_VMPC();
   Stats::inc(Stats::VMEnter);
 
   prepareFuncEntry(enterFnAr, numArgsInclUnpack);
@@ -968,7 +962,6 @@ void enterVMAtCurPC() {
   assertx(vmfp());
   assertx(vmpc());
   assertx(vmfp()->func()->contains(vmpc()));
-  ARRPROV_USE_VMPC();
   Stats::inc(Stats::VMEnter);
   if (RID().getJit()) {
     jit::enterTC(jit::tc::ustubs().resumeHelper);
@@ -1026,6 +1019,7 @@ static inline void lookup_sprop(ActRec* fp,
                                 bool& visible,
                                 bool& accessible,
                                 bool& constant,
+                                bool& readonly,
                                 bool ignoreLateInit) {
   name = lookup_name(key);
   auto const ctx = arGetContextClass(fp);
@@ -1038,6 +1032,7 @@ static inline void lookup_sprop(ActRec* fp,
   slot = lookup.slot;
   visible = lookup.val != nullptr;
   constant = lookup.constant;
+  readonly = lookup.readonly;
   accessible = lookup.accessible;
 }
 
@@ -1171,12 +1166,6 @@ OPTBLD_INLINE void iopString(const StringData* s) {
   vmStack().pushStaticString(s);
 }
 
-OPTBLD_INLINE void iopArray(const ArrayData* a) {
-  assertx(a->isPHPArrayType());
-  assertx(!RuntimeOption::EvalHackArrDVArrs || a->isNotDVArray());
-  vmStack().pushStaticArray(bespoke::maybeMakeLoggingArray(a));
-}
-
 OPTBLD_INLINE void iopVec(const ArrayData* a) {
   assertx(a->isVecType());
   vmStack().pushStaticVec(bespoke::maybeMakeLoggingArray(a));
@@ -1220,12 +1209,6 @@ ArrayData* newStructArrayImpl(imm_array<int32_t> ids, F f) {
 
 }
 
-OPTBLD_INLINE void iopNewStructDArray(imm_array<int32_t> ids) {
-  assertx(!RuntimeOption::EvalHackArrDVArrs);
-  auto const ad = newStructArrayImpl(ids, MixedArray::MakeStructDArray);
-  vmStack().pushArrayNoRc(bespoke::maybeMakeLoggingArray(ad));
-}
-
 OPTBLD_INLINE void iopNewStructDict(imm_array<int32_t> ids) {
   auto const ad = newStructArrayImpl(ids, MixedArray::MakeStructDict);
   vmStack().pushDictNoRc(bespoke::maybeMakeLoggingArray(ad));
@@ -1243,27 +1226,6 @@ OPTBLD_INLINE void iopNewKeysetArray(uint32_t n) {
   auto const ad = SetArray::MakeSet(n, vmStack().topC());
   vmStack().ndiscard(n);
   vmStack().pushKeysetNoRc(bespoke::maybeMakeLoggingArray(ad));
-}
-
-namespace {
-void newVArrayImpl(uint32_t n) {
-  // This constructor moves values, no inc/decref is necessary.
-  auto const ad = PackedArray::MakeVArray(n, vmStack().topC());
-  vmStack().ndiscard(n);
-  vmStack().pushArrayLikeNoRc(bespoke::maybeMakeLoggingArray(ad));
-}
-}
-
-OPTBLD_INLINE void iopNewVArray(uint32_t n) {
-  assertx(!RuntimeOption::EvalHackArrDVArrs);
-  newVArrayImpl(n);
-}
-
-OPTBLD_INLINE void iopNewDArray(uint32_t capacity) {
-  assertx(!RuntimeOption::EvalHackArrDVArrs);
-  auto const ad = capacity ? MixedArray::MakeReserveDArray(capacity)
-                           : ArrayData::CreateDArray();
-  vmStack().pushArrayNoRc(bespoke::maybeMakeLoggingArray(ad));
 }
 
 namespace {
@@ -1300,7 +1262,7 @@ OPTBLD_INLINE void iopAddElemC() {
   TypedValue* c1 = vmStack().topC();
   auto key = tvClassToString(*vmStack().indC(1));
   TypedValue* c3 = vmStack().indC(2);
-  if (!tvIsArray(c3) && !tvIsDict(c3)) {
+  if (!tvIsDict(c3)) {
     raise_error("AddElemC: $3 must be an array or dict");
   }
   tvAsVariant(*c3).asArrRef().set(tvAsCVarRef(key), tvAsCVarRef(c1));
@@ -1312,7 +1274,7 @@ OPTBLD_INLINE void iopAddElemC() {
 OPTBLD_INLINE void iopAddNewElemC() {
   TypedValue* c1 = vmStack().topC();
   TypedValue* c2 = vmStack().indC(1);
-  if (!tvIsVecOrVArray(c2) && !tvIsKeyset(c2)) {
+  if (!tvIsVec(c2) && !tvIsKeyset(c2)) {
     raise_error("AddNewElemC: $2 must be an varray, vec, or keyset");
   }
   tvAsVariant(*c2).asArrRef().append(tvAsCVarRef(c1));
@@ -1653,20 +1615,6 @@ OPTBLD_INLINE void iopCastVec() {
   maybeMakeLoggingArrayAfterCast(c1);
 }
 
-OPTBLD_INLINE void iopCastVArray() {
-  assertx(!RuntimeOption::EvalHackArrDVArrs);
-  TypedValue* c1 = vmStack().topC();
-  tvCastToVArrayInPlace(c1);
-  maybeMakeLoggingArrayAfterCast(c1);
-}
-
-OPTBLD_INLINE void iopCastDArray() {
-  assertx(!RuntimeOption::EvalHackArrDVArrs);
-  TypedValue* c1 = vmStack().topC();
-  tvCastToDArrayInPlace(c1);
-  maybeMakeLoggingArrayAfterCast(c1);
-}
-
 OPTBLD_INLINE void iopDblAsBits() {
   auto c = vmStack().topC();
   if (UNLIKELY(!isDoubleType(c->m_type))) {
@@ -1806,7 +1754,7 @@ OPTBLD_INLINE void iopCombineAndResolveTypeStruct(uint32_t n) {
 
 OPTBLD_INLINE void iopRecordReifiedGeneric() {
   auto const tsList = vmStack().topC();
-  if (!tvIsHAMSafeVArray(tsList)) {
+  if (!tvIsVec(tsList)) {
     raise_error("Invalid type-structure list in RecordReifiedGeneric");
   }
   // recordReifiedGenericsAndGetTSList decrefs the tsList
@@ -1820,7 +1768,7 @@ OPTBLD_INLINE void iopCheckReifiedGenericMismatch() {
   Class* cls = arGetContextClass(vmfp());
   if (!cls) raise_error("No class scope is active");
   auto const c = vmStack().topC();
-  if (!tvIsHAMSafeVArray(c)) {
+  if (!tvIsVec(c)) {
     raise_error("Invalid type-structure list in CheckReifiedGenericMismatch");
   }
   checkClassReifiedGenericMismatch(cls, c->m_data.parr);
@@ -2039,10 +1987,6 @@ void iopSwitch(PC origpc, PC& pc, SwitchKind kind, int64_t base,
             case KindOfDict:
             case KindOfPersistentKeyset:
             case KindOfKeyset:
-            case KindOfPersistentDArray:
-            case KindOfDArray:
-            case KindOfPersistentVArray:
-            case KindOfVArray:
             case KindOfObject:
             case KindOfResource:
             case KindOfRFunc:
@@ -2061,14 +2005,10 @@ void iopSwitch(PC origpc, PC& pc, SwitchKind kind, int64_t base,
         case KindOfVec:
         case KindOfDict:
         case KindOfKeyset:
-        case KindOfDArray:
-        case KindOfVArray:
           tvDecRefArr(val);
         case KindOfPersistentVec:
         case KindOfPersistentDict:
         case KindOfPersistentKeyset:
-        case KindOfPersistentDArray:
-        case KindOfPersistentVArray:
           match = SwitchMatch::DEFAULT;
           return;
 
@@ -2443,7 +2383,7 @@ OPTBLD_INLINE void iopClassGetC() {
 
 OPTBLD_INLINE void iopClassGetTS() {
   auto const cell = vmStack().topC();
-  if (!tvIsHAMSafeDArray(cell)) {
+  if (!tvIsDict(cell)) {
     raise_error("Reified type must be a type structure");
   }
   auto const ts = cell->m_data.parr;
@@ -2569,6 +2509,7 @@ struct SpropState {
   bool visible;
   bool accessible;
   bool constant;
+  bool readonly;
   Stack& vmstack;
 };
 
@@ -2580,7 +2521,7 @@ SpropState::SpropState(Stack& vmstack, bool ignoreLateInit) : vmstack{vmstack} {
   }
   cls = clsCell->m_data.pclass;
   lookup_sprop(vmfp(), cls, name, nameCell, val,
-               slot, visible, accessible, constant, ignoreLateInit);
+               slot, visible, accessible, constant, readonly, ignoreLateInit);
   oldNameCell = *nameCell;
 }
 
@@ -2590,12 +2531,15 @@ SpropState::~SpropState() {
   tvDecRefGen(oldNameCell);
 }
 
-OPTBLD_INLINE void iopCGetS(ReadOnlyOp /*op*/) {
+OPTBLD_INLINE void iopCGetS(ReadOnlyOp op) {
   SpropState ss(vmStack(), false);
   if (!(ss.visible && ss.accessible)) {
     raise_error("Invalid static property access: %s::%s",
                 ss.cls->name()->data(),
                 ss.name->data());
+  }
+  if (ss.readonly && op == ReadOnlyOp::Mutable){
+    throw_must_be_mutable(ss.cls->name()->data(), ss.name->data());
   }
   tvDup(*ss.val, *ss.output);
 }
@@ -2635,7 +2579,7 @@ OPTBLD_INLINE void iopBaseGL(tv_lval loc, MOpMode mode) {
 OPTBLD_INLINE void iopBaseSC(uint32_t keyIdx,
                              uint32_t clsIdx,
                              MOpMode mode,
-                             ReadOnlyOp /*op*/) {
+                             ReadOnlyOp op) {
   auto& mstate = vmMInstrState();
   auto const clsCell = vmStack().indC(clsIdx);
   auto const key = vmStack().indTV(keyIdx);
@@ -2653,11 +2597,15 @@ OPTBLD_INLINE void iopBaseSC(uint32_t keyIdx,
                 class_->name()->data(),
                 name->data());
   }
+  assertx(mode != MOpMode::InOut);
+  auto const writeMode = mode == MOpMode::Define || mode == MOpMode::Unset;
 
-  if (lookup.constant && (mode == MOpMode::Define ||
-    mode == MOpMode::Unset || mode == MOpMode::InOut)) {
-      throw_cannot_modify_static_const_prop(class_->name()->data(),
-        name->data());
+  if (lookup.constant && writeMode) {
+    throw_cannot_modify_static_const_prop(class_->name()->data(),
+      name->data());
+  }
+  if (lookup.readonly && op == ReadOnlyOp::Mutable) {
+    throw_must_be_mutable(class_->name()->data(), name->data());
   }
   mstate.base = tv_lval(lookup.val);
 }
@@ -2686,22 +2634,22 @@ OPTBLD_INLINE void iopBaseH() {
   mstate.base = &mstate.tvTempBase;
 }
 
-static OPTBLD_INLINE void propDispatch(MOpMode mode, TypedValue key) {
+static OPTBLD_INLINE void propDispatch(MOpMode mode, TypedValue key, ReadOnlyOp op) {
   auto& mstate = vmMInstrState();
   auto ctx = arGetContextClass(vmfp());
 
   mstate.base = [&]{
     switch (mode) {
       case MOpMode::None:
-        return Prop<MOpMode::None>(mstate.tvTempBase, ctx, mstate.base, key);
+        return Prop<MOpMode::None>(mstate.tvTempBase, ctx, mstate.base, key, op);
       case MOpMode::Warn:
-        return Prop<MOpMode::Warn>(mstate.tvTempBase, ctx, mstate.base, key);
+        return Prop<MOpMode::Warn>(mstate.tvTempBase, ctx, mstate.base, key, op);
       case MOpMode::Define:
         return Prop<MOpMode::Define,KeyType::Any>(
-          mstate.tvTempBase, ctx, mstate.base, key
+          mstate.tvTempBase, ctx, mstate.base, key, op
         );
       case MOpMode::Unset:
-        return Prop<MOpMode::Unset>(mstate.tvTempBase, ctx, mstate.base, key);
+        return Prop<MOpMode::Unset>(mstate.tvTempBase, ctx, mstate.base, key, op);
       case MOpMode::InOut:
         always_assert_flog(false, "MOpMode::InOut can only occur on Elem");
     }
@@ -2709,21 +2657,21 @@ static OPTBLD_INLINE void propDispatch(MOpMode mode, TypedValue key) {
   }();
 }
 
-static OPTBLD_INLINE void propQDispatch(MOpMode mode, TypedValue key) {
+static OPTBLD_INLINE void propQDispatch(MOpMode mode, TypedValue key, ReadOnlyOp op) {
   auto& mstate = vmMInstrState();
   auto ctx = arGetContextClass(vmfp());
-
+  
   assertx(mode == MOpMode::None || mode == MOpMode::Warn);
   assertx(key.m_type == KindOfPersistentString);
   mstate.base = nullSafeProp(mstate.tvTempBase, ctx, mstate.base,
-                             key.m_data.pstr);
+                             key.m_data.pstr, op);
 }
 
 static OPTBLD_INLINE
 void elemDispatch(MOpMode mode, TypedValue key) {
   auto& mstate = vmMInstrState();
   auto const b = mstate.base;
-
+  
   auto const baseValueToLval = [&](TypedValue base) {
     mstate.tvTempBase = base;
     return tv_lval { &mstate.tvTempBase };
@@ -2771,9 +2719,9 @@ static inline TypedValue key_tv(MemberKey key) {
 static OPTBLD_INLINE void dimDispatch(MOpMode mode, MemberKey mk) {
   auto const key = key_tv(mk);
   if (mk.mcode == MQT) {
-    propQDispatch(mode, key);
+    propQDispatch(mode, key, mk.rop);
   } else if (mcodeIsProp(mk.mcode)) {
-    propDispatch(mode, key);
+    propDispatch(mode, key, mk.rop);
   } else if (mcodeIsElem(mk.mcode)) {
     elemDispatch(mode, key);
   } else {
@@ -2847,7 +2795,7 @@ OPTBLD_INLINE void iopSetM(uint32_t nDiscard, MemberKey mk) {
       }
     } else {
       auto const ctx = arGetContextClass(vmfp());
-      SetProp<true>(ctx, mstate.base, key, topC);
+      SetProp<true>(ctx, mstate.base, key, topC, mk.rop);
     }
   }
 
@@ -3220,12 +3168,9 @@ OPTBLD_INLINE static bool isTypeHelper(TypedValue val, IsTypeOp op) {
   case IsTypeOp::Bool:   return is_bool(&val);
   case IsTypeOp::Int:    return is_int(&val);
   case IsTypeOp::Dbl:    return is_double(&val);
-  case IsTypeOp::PHPArr: return is_php_array(&val);
   case IsTypeOp::Vec:    return is_vec(&val);
   case IsTypeOp::Dict:   return is_dict(&val);
   case IsTypeOp::Keyset: return is_keyset(&val);
-  case IsTypeOp::VArray: return is_varray(&val);
-  case IsTypeOp::DArray: return is_darray(&val);
   case IsTypeOp::Obj:    return is_object(&val);
   case IsTypeOp::Str:    return is_string(&val);
   case IsTypeOp::Res:    return tvIsResource(val);
@@ -3379,12 +3324,7 @@ OPTBLD_INLINE void iopArrayIdx() {
   auto const  key = tvClassToString(*vmStack().indTV(1));
   TypedValue* arr = vmStack().indTV(2);
   if (isClsMethType(type(arr))) {
-    if (RuntimeOption::EvalHackArrDVArrs) {
-      tvCastToVecInPlace(arr);
-      tvSetLegacyArrayInPlace(arr, RuntimeOption::EvalHackArrDVArrMark);
-    } else {
-      tvCastToVArrayInPlace(arr);
-    }
+    tvCastToVecInPlace(arr);
   }
   auto const result = HHVM_FN(hphp_array_idx)(tvAsCVarRef(arr),
                                               tvAsCVarRef(&key),
@@ -3422,21 +3362,6 @@ OPTBLD_INLINE void iopArrayUnmarkLegacy() {
   implArrayMarkLegacy(false);
 }
 
-OPTBLD_INLINE void iopTagProvenanceHere() {
-  auto const flags = *vmStack().topTV();
-  if (!tvIsInt(flags)) {
-    SystemLib::throwInvalidArgumentExceptionObject(
-      folly::sformat("$flags must be an int; got {}",
-                     getDataTypeString(type(flags))));
-  }
-
-  auto const input = vmStack().indTV(1);
-  auto const output = arrprov::tagTvRecursively(*input, val(flags).num);
-
-  vmStack().popTV();
-  tvMove(output, input);
-}
-
 OPTBLD_INLINE void iopSetL(tv_lval to) {
   TypedValue* fr = vmStack().topC();
   tvSet(*fr, to);
@@ -3454,14 +3379,14 @@ OPTBLD_INLINE void iopSetG() {
   vmStack().discard();
 }
 
-OPTBLD_INLINE void iopSetS(ReadOnlyOp /*op*/) {
+OPTBLD_INLINE void iopSetS(ReadOnlyOp op) {
   TypedValue* tv1 = vmStack().topTV();
   TypedValue* clsCell = vmStack().indC(1);
   TypedValue* propn = vmStack().indTV(2);
   TypedValue* output = propn;
   StringData* name;
   TypedValue* val;
-  bool visible, accessible, constant;
+  bool visible, accessible, readonly, constant;
   Slot slot;
 
   if (!isClassType(clsCell->m_type)) {
@@ -3470,8 +3395,12 @@ OPTBLD_INLINE void iopSetS(ReadOnlyOp /*op*/) {
   auto const cls = clsCell->m_data.pclass;
 
   lookup_sprop(vmfp(), cls, name, propn, val, slot, visible,
-               accessible, constant, true);
+               accessible, constant, readonly, true);
+
   SCOPE_EXIT { decRefStr(name); };
+  if (!readonly && op == ReadOnlyOp::ReadOnly) {
+    throw_cannot_write_non_readonly_prop(cls->name()->data(), name->data());
+  }
   if (!(visible && accessible)) {
     raise_error("Invalid static property access: %s::%s",
                 cls->name()->data(),
@@ -3527,7 +3456,7 @@ OPTBLD_INLINE void iopSetOpS(SetOpOp op, ReadOnlyOp /*op*/) {
   TypedValue* output = propn;
   StringData* name;
   TypedValue* val;
-  bool visible, accessible, constant;
+  bool visible, accessible, readonly, constant;
   Slot slot;
 
   if (!isClassType(clsCell->m_type)) {
@@ -3536,7 +3465,7 @@ OPTBLD_INLINE void iopSetOpS(SetOpOp op, ReadOnlyOp /*op*/) {
   auto const cls = clsCell->m_data.pclass;
 
   lookup_sprop(vmfp(), cls, name, propn, val, slot, visible,
-               accessible, constant, false);
+               accessible, constant, readonly, false);
   SCOPE_EXIT { decRefStr(name); };
   if (!(visible && accessible)) {
     raise_error("Invalid static property access: %s::%s",
@@ -3653,7 +3582,7 @@ bool doFCall(CallFlags callFlags, const Func* func, uint32_t numArgsInclUnpack,
   calleeGenericsChecks(func, callFlags.hasGenerics());
   calleeArgumentArityChecks(func, numArgsInclUnpack);
   calleeDynamicCallChecks(func, callFlags.isDynamicCall());
-  calleeCoeffectChecks(func, callFlags, numArgsInclUnpack, ctx);
+  calleeCoeffectChecks(func, callFlags.coeffects(), numArgsInclUnpack, ctx);
   calleeImplicitContextChecks(func);
   initFuncInputs(func, numArgsInclUnpack);
 
@@ -3735,7 +3664,7 @@ void fcallImpl(PC origpc, PC& pc, const FCallArgs& fca, const Func* func,
 
     if (UNLIKELY(fca.numArgs > func->numNonVariadicParams())) {
       GenericsSaver gs{fca.hasGenerics()};
-      newVArrayImpl(fca.numArgs - func->numNonVariadicParams());
+      iopNewVec(fca.numArgs - func->numNonVariadicParams());
       return func->numNonVariadicParams() + 1;
     }
 
@@ -3934,11 +3863,11 @@ OPTBLD_INLINE void iopResolveRFunc(Id id) {
 
   // Should I refactor this out with iopNewObj*?
   auto const reified = [&] () -> ArrayData* {
-      if (!tvIsHAMSafeVArray(tsList)) {
-        raise_error("Attempting ResolveRFunc with invalid reified generics");
-      }
-      return tsList->m_data.parr;
-    }();
+    if (!tvIsVec(tsList)) {
+      raise_error("Attempting ResolveRFunc with invalid reified generics");
+    }
+    return tsList->m_data.parr;
+  }();
 
   auto func = resolveFuncImpl(id);
   if (!func->hasReifiedGenerics()) {
@@ -4222,11 +4151,11 @@ void resolveRClsMethodImpl(Class* cls, const StringData* methName) {
 
   auto const tsList = vmStack().topC();
   auto const reified = [&] () -> ArrayData* {
-      if (!tvIsHAMSafeVArray(tsList)) {
-        raise_error("Invalid reified generics when resolving class method");
-      }
-      return tsList->m_data.parr;
-    }();
+    if (!tvIsVec(tsList)) {
+      raise_error("Invalid reified generics when resolving class method");
+    }
+    return tsList->m_data.parr;
+  }();
 
   if (func->hasReifiedGenerics()) {
     checkFunReifiedGenericMismatch(func, reified);
@@ -4438,7 +4367,7 @@ OPTBLD_INLINE void iopNewObjR() {
 
   auto const reified = [&] () -> ArrayData* {
     if (reifiedCell->m_type == KindOfNull) return nullptr;
-    if (!tvIsHAMSafeVArray(reifiedCell)) {
+    if (!tvIsVec(reifiedCell)) {
       raise_error("Attempting NewObjR with invalid reified generics");
     }
     return reifiedCell->m_data.parr;
@@ -4460,7 +4389,7 @@ OPTBLD_INLINE void iopNewObjRD(Id id) {
 
   auto const reified = [&] () -> ArrayData* {
     if (tsList->m_type == KindOfNull) return nullptr;
-    if (!tvIsHAMSafeVArray(tsList)) {
+    if (!tvIsVec(tsList)) {
       raise_error("Attempting NewObjRD with invalid reified generics");
     }
     return tsList->m_data.parr;
@@ -4794,7 +4723,7 @@ OPTBLD_INLINE void iopVerifyParamType(local_var param) {
 OPTBLD_INLINE void iopVerifyParamTypeTS(local_var param) {
   iopVerifyParamType(param);
   auto const cell = vmStack().topC();
-  assertx(tvIsHAMSafeDArray(cell));
+  assertx(tvIsDict(cell));
   auto isTypeVar = tcCouldBeReified(vmfp()->func(), param.index);
   bool warn = false;
   if ((isTypeVar || tvIsObject(param.lval)) &&
@@ -4857,7 +4786,7 @@ OPTBLD_INLINE void iopVerifyRetTypeC() {
 OPTBLD_INLINE void iopVerifyRetTypeTS() {
   verifyRetTypeImpl(1); // TypedValue is the second element on the stack
   auto const ts = vmStack().topC();
-  assertx(tvIsHAMSafeDArray(ts));
+  assertx(tvIsDict(ts));
   auto const cell = vmStack().indC(1);
   bool isTypeVar = tcCouldBeReified(vmfp()->func(), TypeConstraint::ReturnId);
   bool warn = false;
@@ -5320,9 +5249,7 @@ OPTBLD_INLINE void iopCheckProp(const StringData* propName) {
   vmStack().pushBool(type(val) != KindOfUninit);
 }
 
-OPTBLD_INLINE void iopInitProp(const StringData* propName,
-                               InitPropOp propOp,
-                               ReadOnlyOp /*op*/) {
+OPTBLD_INLINE void iopInitProp(const StringData* propName, InitPropOp propOp) {
   auto* cls = vmfp()->getClass();
 
   auto* ctx = arGetContextClass(vmfp());

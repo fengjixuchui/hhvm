@@ -65,7 +65,7 @@ let member_not_found
     (env : Typing_env_types.env) pos ~is_method class_ member_name r on_error =
   let cls_name = strip_ns (Cls.name class_) in
   if env.Typing_env_types.in_expr_tree && is_method then
-    Errors.expr_tree_unsupported_operator cls_name member_name pos ~is_method
+    Errors.expr_tree_unsupported_operator cls_name member_name pos
   else
     let kind =
       if is_method then
@@ -99,7 +99,7 @@ let member_not_found
       ()
     | (None, None) -> error `no_hint
 
-let widen_class_for_obj_get ~is_method ~nullsafe ~on_error member_name env ty =
+let widen_class_for_obj_get ~is_method ~nullsafe member_name env ty =
   match deref ty with
   | (_, Tprim Tnull) ->
     if Option.is_some nullsafe then
@@ -127,12 +127,11 @@ let widen_class_for_obj_get ~is_method ~nullsafe ~on_error member_name env ty =
             | Some basety ->
               let ety_env =
                 {
-                  type_expansions = [];
+                  type_expansions = Typing_defs.Type_expansions.empty;
                   substs =
                     TUtils.make_locl_subst_for_class_tparams class_info tyl;
                   this_ty = ty;
-                  quiet = true;
-                  on_error;
+                  on_error = Errors.ignore_error;
                 }
               in
               let (env, basety) = Phase.localize ~ety_env env basety in
@@ -183,7 +182,9 @@ let rec make_nullable_member_type env ~is_method id_pos pos ty =
       (* Shouldn't happen *)
       make_nullable_member_type ~is_method:false env id_pos pos ty
   else
-    let (env, ty) = Typing_solver.non_null env id_pos ty in
+    let (env, ty) =
+      Typing_solver.non_null env (Pos_or_decl.of_raw_pos id_pos) ty
+    in
     (env, MakeType.nullable_locl (Reason.Rnullsafe_op pos) ty)
 
 (* We know that the receiver is a concrete class: not a generic with
@@ -211,11 +212,10 @@ let rec obj_get_concrete_ty
   in
   let mk_ety_env class_info paraml =
     {
-      type_expansions = [];
+      type_expansions = Typing_defs.Type_expansions.empty;
       this_ty;
       substs = TUtils.make_locl_subst_for_class_tparams class_info paraml;
-      quiet = true;
-      on_error;
+      on_error = Errors.ignore_error;
     }
   in
   let read_context = Option.is_none coerce_from_ty in
@@ -236,7 +236,7 @@ let rec obj_get_concrete_ty
         ~inst_meth
         ~is_method
         ~nullsafe:None
-        ~obj_pos:(Reason.to_pos r)
+        ~obj_pos:(Reason.to_pos r |> Pos_or_decl.unsafe_to_raw_pos)
         ~explicit_targs
         ~coerce_from_ty
         ~is_nonnull:true
@@ -406,8 +406,7 @@ let rec obj_get_concrete_ty
                           use_pos = id_pos;
                           explicit_targs;
                         }
-                      ~ety_env:
-                        { ety_env with on_error = Errors.unify_error_at id_pos }
+                      ~ety_env:{ ety_env with on_error = Errors.ignore_error }
                       ~def_pos:mem_pos
                       env
                       ft)
@@ -449,19 +448,17 @@ let rec obj_get_concrete_ty
                 (env, (member_ty, tal))
             in
             let env =
-              match coerce_from_ty with
-              | None -> env
-              | Some (p, ur, ty) ->
-                let env =
+              Option.value_map
+                coerce_from_ty
+                ~default:env
+                ~f:(fun (p, ur, ty) ->
                   Typing_coercion.coerce_type
                     p
                     ur
                     env
                     ty
                     { et_type = member_ty; et_enforced }
-                    Errors.unify_error
-                in
-                env
+                    Errors.unify_error)
             in
             (env, (member_ty, tal))
         end
@@ -469,6 +466,38 @@ let rec obj_get_concrete_ty
     end
   (* match Env.get_class env (snd x) *)
   | (_, Tdynamic) ->
+    ( if TypecheckerOptions.enable_sound_dynamic (Env.get_tcopt env) then
+      (* Any access to a *private* member through dynamic might potentially
+       * be unsound, if the receiver is an instance of a class that implements dynamic,
+       * as we do no checks on enforceability or subtype-dynamic at the definition site
+       * of private members.
+       *)
+      match Env.get_self_class env with
+      | Some self_class
+        when Cls.get_implements_dynamic self_class || not (Cls.final self_class)
+        ->
+        (match Env.get_member is_method env self_class id_str with
+        | Some { ce_visibility = Vprivate _; ce_type = (lazy ty); _ }
+          when not is_method ->
+          ( if read_context then
+            let (env, locl_ty) =
+              Phase.localize_with_self ~ignore_errors:true env ty
+            in
+            Typing_dynamic.check_property_sound_for_dynamic_read
+              ~on_error:Errors.private_property_is_not_dynamic
+              env
+              (Cls.name self_class)
+              (id_pos, id_str)
+              locl_ty );
+          if not read_context then
+            Typing_dynamic.check_property_sound_for_dynamic_write
+              ~on_error:Errors.private_property_is_not_enforceable
+              env
+              (Cls.name self_class)
+              (id_pos, id_str)
+              ty
+        | _ -> ())
+      | _ -> () );
     let ty = MakeType.dynamic (Reason.Rdynamic_prop id_pos) in
     (env, (ty, []))
   | (_, Tobject)
@@ -629,15 +658,13 @@ and obj_get_inner
           ~description_of_expected:"an object"
           obj_pos
           ty1
-          Errors.unify_error
     else
       Typing_solver.expand_type_and_narrow
         env
         ~description_of_expected:"an object"
-        (widen_class_for_obj_get ~is_method ~nullsafe ~on_error id_str)
+        (widen_class_for_obj_get ~is_method ~nullsafe id_str)
         obj_pos
         ty1
-        Errors.unify_error
   in
   let nullable_obj_get ~read_context ty =
     nullable_obj_get
@@ -790,7 +817,7 @@ and obj_get_inner
       let (env, ty) = Typing_intersection.intersect_list env r tyl in
       let (env, ty) =
         if is_nonnull then
-          Typing_solver.non_null env obj_pos ty
+          Typing_solver.non_null env (Pos_or_decl.of_raw_pos obj_pos) ty
         else
           (env, ty)
       in

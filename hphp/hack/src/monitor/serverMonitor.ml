@@ -244,6 +244,18 @@ struct
     if Option.is_none target_saved_state then Informant.reinit env.informant;
     kill_server_and_wait_for_exit env;
     let version_matches = is_config_version_matching env in
+    if SC.is_saved_state_precomputed env.server_start_options then begin
+      let reason =
+        "Not restarting server as requested, server was launched using a "
+        ^ "precomputed saved-state. Exiting monitor"
+      in
+      Hh_logger.log "%s" reason;
+      HackEventLogger.refuse_to_restart_server
+        ~reason
+        ~server_state:(ServerProcess.show_server_process env.server)
+        ~version_matches;
+      Exit.exit Exit_status.Not_restarting_server_with_precomputed_saved_state
+    end;
     match (env.server, version_matches) with
     | (Died_config_changed, _) ->
       (* Now we can start a new instance safely.
@@ -477,9 +489,13 @@ struct
       if
         (not env.ignore_hh_version)
         && not (String.equal client_version Build_id.build_revision)
-      then
+      then (
+        Hh_logger.log
+          "New client version is %s, while currently running server version is %s"
+          client_version
+          Build_id.build_revision;
         client_out_of_date env client_fd ServerMonitorUtils.current_build_info
-      else (
+      ) else (
         msg_to_channel client_fd Connection_ok;
         handle_monitor_rpc env client_fd
       )

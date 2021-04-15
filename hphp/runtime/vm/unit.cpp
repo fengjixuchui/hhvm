@@ -533,7 +533,7 @@ TypeAlias typeAliasFromRecordDesc(const PreTypeAlias* thisType,
   req.type = AnnotType::Record;
   req.rec = rec;
   req.userAttrs = thisType->userAttrs;
-  assertx(thisType->typeStructure.isHAMSafeDArray());
+  assertx(thisType->typeStructure.isDict());
   req.typeStructure = thisType->typeStructure;
   return req;
 }
@@ -556,7 +556,7 @@ TypeAlias typeAliasFromClass(const PreTypeAlias* thisType,
     req.klass = klass;
   }
   req.userAttrs = thisType->userAttrs;
-  assertx(thisType->typeStructure.isHAMSafeDArray());
+  assertx(thisType->typeStructure.isDict());
   req.typeStructure = thisType->typeStructure;
   return req;
 }
@@ -887,7 +887,6 @@ void Unit::initialMerge() {
 }
 
 void Unit::merge() {
-  ARRPROV_USE_RUNTIME_LOCATION();
   if (m_mergeState.load(std::memory_order_relaxed) & MergeState::Empty) {
     return;
   }
@@ -1316,8 +1315,8 @@ bool Unit::isSystemLib() const {
 namespace {
 
 Array getClassesWithAttrInfo(Attr attrs, bool inverse = false) {
-  auto builtins = Array::CreateVArray();
-  auto non_builtins = Array::CreateVArray();
+  auto builtins = Array::CreateVec();
+  auto non_builtins = Array::CreateVec();
   NamedEntity::foreach_cached_class([&](Class* c) {
     if ((c->attrs() & attrs) ? !inverse : inverse) {
       if (c->isBuiltin()) {
@@ -1332,7 +1331,7 @@ Array getClassesWithAttrInfo(Attr attrs, bool inverse = false) {
   for (auto i = builtins.size(); i > 0; i--) {
     all.append(builtins.lookup(safe_cast<int64_t>(i - 1)));
   }
-  IterateVNoInc(non_builtins.get(), [&](auto name) { all.append(name); });
+  IterateV(non_builtins.get(), [&](auto name) { all.append(name); });
   return all.toArray();
 }
 
@@ -1340,7 +1339,7 @@ template<bool system>
 Array getFunctions() {
   // Return an array of all defined functions.  This method is used
   // to support get_defined_functions().
-  Array a = Array::CreateVArray();
+  Array a = Array::CreateVec();
   NamedEntity::foreach_cached_func([&](Func* func) {
     if ((system ^ func->isBuiltin()) || func->isGenerated()) return; //continue
     a.append(HHVM_FN(strtolower)(func->nameStr()));
@@ -1399,7 +1398,7 @@ std::string mangleReifiedGenericsName(const ArrayData* tsList) {
   IterateV(
     tsList,
     [&](TypedValue v) {
-      assertx(tvIsHAMSafeDArray(v));
+      assertx(tvIsDict(v));
       auto str =
         TypeStructure::toString(ArrNR(v.m_data.parr),
           TypeStructure::TSDisplayType::TSDisplayTypeInternal).toCppString();

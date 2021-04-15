@@ -1218,7 +1218,6 @@ let schema : schema_node list =
       fields =
         [
           ("attribute_spec", ZeroOrOne (Aggregate AttributeSpecification));
-          ("static_keyword", ZeroOrOne Token);
           ("async_keyword", ZeroOrOne Token);
           ("function_keyword", Token);
           ("left_paren", Token);
@@ -1500,6 +1499,7 @@ let schema : schema_node list =
         [
           ("receiver", Aggregate Expression);
           ("type_args", ZeroOrOne (Just "TypeArguments"));
+          ("enum_atom", ZeroOrOne (Aggregate Expression));
           ("left_paren", Token);
           ("argument_list", ZeroOrMore (Aggregate Expression));
           ("right_paren", Token);
@@ -2124,6 +2124,7 @@ let schema : schema_node list =
       fields =
         [
           ("outer_left_paren", Token);
+          ("readonly_keyword", ZeroOrOne Token);
           ("function_keyword", Token);
           ("inner_left_paren", Token);
           ("parameter_list", ZeroOrMore (Just "ClosureParameterTypeSpecifier"));

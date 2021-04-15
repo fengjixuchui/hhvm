@@ -193,9 +193,9 @@ function set_exception_handler(mixed $exception_handler): ?callable;
  * @return bool - This function returns FALSE if wrong error_type is
  *   specified, TRUE otherwise.
  */
-<<__Native, __Pure>>
+<<__Native>>
 function trigger_error(string $error_msg,
-                       int $error_type = E_USER_NOTICE): bool;
+                       int $error_type = E_USER_NOTICE)[]: bool;
 
 <<__Native>>
 function trigger_sampled_error(string $error_msg,
@@ -215,7 +215,7 @@ function user_error(string $error_msg, int $error_type = E_USER_NOTICE): bool;
  *
  * @param string $page - Relative path of the PHP document.
  */
-<<__Native, __HipHopSpecific>>
+<<__Native>>
 function hphp_set_error_page(string $page): void;
 
 /**
@@ -223,7 +223,7 @@ function hphp_set_error_page(string $page): void;
  *
  * @param string $error_msg - The error message for the fatal.
  */
-<<__Native, __HipHopSpecific>>
+<<__Native>>
 function hphp_throw_fatal_error(string $error_msg): void;
 
 /**
@@ -233,7 +233,7 @@ function hphp_throw_fatal_error(string $error_msg): void;
  * PHP page, one may call this function to clear previously written content, so
  * to replay what will be displayed.
  */
-<<__Native, __HipHopSpecific>>
+<<__Native>>
 function hphp_clear_unflushed(): void;
 
 /**
@@ -245,10 +245,10 @@ function hphp_clear_unflushed(): void;
  *    indicate the filename, function, line number and class name (if in class
  *    context) of the callsite that invoked the current function or method.
  */
-<<__Native, __HipHopSpecific, __Pure>>
+<<__Native, __Pure>>
 function hphp_debug_caller_info(): darray<string, mixed>;
 
-<<__Native("NoInjection"), __HipHopSpecific>>
+<<__Native("NoInjection")>>
 function hphp_debug_backtrace_hash(int $options = 0): int;
 
 } // root namespace

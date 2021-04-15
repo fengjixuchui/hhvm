@@ -46,9 +46,12 @@ class virtual type_validator =
     method on_alias acc _ _ tyl ty =
       List.fold_left (ty :: tyl) ~f:this#on_type ~init:acc
 
-    method on_typeconst acc _ typeconst =
+    method on_typeconst acc _ _ typeconst =
       let acc =
         Option.fold ~f:this#on_type ~init:acc typeconst.ttc_as_constraint
+      in
+      let acc =
+        Option.fold ~f:this#on_type ~init:acc typeconst.ttc_super_constraint
       in
       let acc = Option.fold ~f:this#on_type ~init:acc typeconst.ttc_type in
       acc
@@ -78,8 +81,11 @@ class virtual type_validator =
                 in
                 let ety_env = { acc.ety_env with this_ty = ty } in
                 Some
-                  (this#on_typeconst { acc with ety_env } is_concrete typeconst)
-              )
+                  (this#on_typeconst
+                     { acc with ety_env }
+                     class_
+                     is_concrete
+                     typeconst) )
           | _ -> acc)
 
     method! on_tapply acc r (pos, name) tyl =
@@ -105,7 +111,7 @@ class virtual type_validator =
             | Aast.Opaque
               when not
                      (Relative_path.equal
-                        (Pos.filename td_pos)
+                        (Pos.filename (Pos_or_decl.unsafe_to_raw_pos td_pos))
                         (Env.get_file acc.env)) ->
               let td_constraint =
                 match td_constraint with
@@ -125,14 +131,13 @@ class virtual type_validator =
             env;
             ety_env =
               {
-                type_expansions = [];
+                type_expansions = Typing_defs.Type_expansions.empty;
                 substs = SMap.empty;
                 this_ty =
                   Option.value
                     (Env.get_self_ty env)
                     ~default:(MakeType.nothing Reason.none);
-                quiet = true;
-                on_error = Errors.unify_error_at use_pos;
+                on_error = Errors.ignore_error;
               };
             expanded_typedefs = SSet.empty;
             validity = Valid;

@@ -156,6 +156,7 @@ bool canDCE(IRInstruction* inst) {
   case IsCol:
   case LdStk:
   case LdLoc:
+  case LdLocForeign:
   case LdStkAddr:
   case LdLocAddr:
   case LdRDSAddr:
@@ -199,11 +200,11 @@ bool canDCE(IRInstruction* inst) {
   case LdMonotypeDictKey:
   case LdMonotypeDictVal:
   case LdMonotypeVecElem:
+  case LdStructDictElem:
   case LdVecElem:
   case LdVecElemAddr:
   case NewInstanceRaw:
   case NewLoggingArray:
-  case NewDArray:
   case NewDictArray:
   case NewCol:
   case NewPair:
@@ -269,15 +270,16 @@ bool canDCE(IRInstruction* inst) {
   case Select:
   case LdARFlags:
   case FuncHasAttr:
+  case ClassHasAttr:
   case IsFunReifiedGenericsMatched:
-  case IsClsDynConstructible:
+  case LdFuncRequiredCoeffects:
+  case LdARFunc:
   case StrictlyIntegerConv:
   case GetMemoKeyScalar:
   case LookupSPropSlot:
   case ConstructClosure:
-  case AllocStructDArray:
+  case AllocBespokeStructDict:
   case AllocStructDict:
-  case AllocVArray:
   case AllocVec:
   case GetDictPtrIter:
   case AdvanceDictPtrIter:
@@ -321,18 +323,12 @@ bool canDCE(IRInstruction* inst) {
   case ConvObjToDict:
   case ConvArrLikeToKeyset:
   case ConvObjToKeyset:
-  case ConvArrLikeToVArr:
-  case ConvObjToVArr:
-  case ConvArrLikeToDArr:
-  case ConvObjToDArr:
   case LdOutAddr:
     return !opcodeMayRaise(inst->op()) &&
       (!inst->consumesReferences() || inst->producesReference());
 
-  case ConvClsMethToDArr:
   case ConvClsMethToDict:
   case ConvClsMethToKeyset:
-  case ConvClsMethToVArr:
   case ConvClsMethToVec: {
     bool consumeRef = use_lowptr ? false : inst->consumesReferences();
     return !opcodeMayRaise(inst->op()) &&
@@ -451,8 +447,8 @@ bool canDCE(IRInstruction* inst) {
   case InitVecElemLoop:
   case NewKeysetArray:
   case NewRecord:
-  case NewStructDArray:
   case NewStructDict:
+  case NewBespokeStructDict:
   case Clone:
   case InlineReturn:
   case InlineCall:
@@ -516,11 +512,12 @@ bool canDCE(IRInstruction* inst) {
   case RaiseNotice:
   case ThrowArrayIndexException:
   case ThrowArrayKeyException:
-  case RaiseArraySerializeNotice:
   case RaiseHackArrCompatNotice:
   case RaiseForbiddenDynCall:
   case RaiseForbiddenDynConstruct:
   case RaiseCoeffectsCallViolation:
+  case RaiseCoeffectsFunParamTypeViolation:
+  case RaiseCoeffectsFunParamCoeffectRulesViolation:
   case RaiseStrToClassNotice:
   case CheckClsMethFunc:
   case CheckClsReifiedGenericMismatch:
@@ -589,14 +586,12 @@ bool canDCE(IRInstruction* inst) {
   case IncDecProp:
   case IssetProp:
   case ElemX:
-  case CheckMixedArrayOffset:
   case CheckMissingKeyInArrLike:
   case CheckArrayCOW:
   case ProfileDictAccess:
   case CheckDictOffset:
   case ProfileKeysetAccess:
   case CheckKeysetOffset:
-  case ElemMixedArrayK:
   case ElemVecD:
   case ElemVecU:
   case ElemDictD:
@@ -617,6 +612,7 @@ bool canDCE(IRInstruction* inst) {
   case MapSet:
   case VectorSet:
   case BespokeSet:
+  case StructDictSet:
   case BespokeAppend:
   case SetElem:
   case SetRange:
@@ -640,6 +636,7 @@ bool canDCE(IRInstruction* inst) {
   case CheckVecBounds:
   case BespokeElem:
   case BespokeEscalateToVanilla:
+  case BespokeGetThrow:
   case LdVectorSize:
   case BeginCatch:
   case EndCatch:
@@ -664,6 +661,8 @@ bool canDCE(IRInstruction* inst) {
   case ThrowParameterWrongType:
   case ThrowParamInOutMismatch:
   case ThrowParamInOutMismatchRange:
+  case ThrowMustBeMutableException:
+  case ThrowMustBeReadOnlyException:
   case StMBase:
   case FinishMemberOp:
   case BeginInlining:
@@ -704,7 +703,6 @@ bool canDCE(IRInstruction* inst) {
   case ArrayMarkLegacyRecursive:
   case ArrayUnmarkLegacyShallow:
   case ArrayUnmarkLegacyRecursive:
-  case TagProvenanceHere:
   case ProfileArrLikeProps:
     return false;
 

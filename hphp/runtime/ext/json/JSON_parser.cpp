@@ -34,7 +34,6 @@ SOFTWARE.
 
 #include <folly/FBVector.h>
 
-#include "hphp/runtime/base/array-provenance.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/collections.h"
 #include "hphp/runtime/base/string-buffer.h"
@@ -323,7 +322,7 @@ void appendToContainer(JSONContainerType container_type,
     collections::append(base.getObjectData(), value.asTypedValue());
   } else {
     auto& arr = base.asArrRef();
-    if (arr.isDict() || arr.isDArray()) {
+    if (arr.isDict()) {
       arr.set(safe_cast<int64_t>(arr.size()), value);
     } else {
       arr.append(value);
@@ -558,13 +557,13 @@ struct SimpleParser {
       }
       if (container_type == JSONContainerType::DARRAYS_AND_VARRAYS) {
         return top == fp
-          ? ArrayData::CreateVArray()
-          : PackedArray::MakeVArrayNatural(top - fp, fp);
+          ? ArrayData::CreateVec()
+          : PackedArray::MakeVecNatural(top - fp, fp);
       }
       assertx(container_type == JSONContainerType::DARRAYS);
       return top == fp
-        ? ArrayData::CreateDArray()
-        : MixedArray::MakeDArrayNatural(top - fp, fp);
+        ? ArrayData::CreateDict()
+        : MixedArray::MakeDictNatural(top - fp, fp);
     }();
     top = fp;
     pushArrayData(arr);
@@ -595,8 +594,8 @@ struct SimpleParser {
       assertx(container_type == JSONContainerType::DARRAYS ||
               container_type == JSONContainerType::DARRAYS_AND_VARRAYS);
       return top == fp
-        ? ArrayData::CreateDArray()
-        : MixedArray::MakeDArray((top - fp) >> 1, fp)->asArrayData();
+        ? ArrayData::CreateDict()
+        : MixedArray::MakeDict((top - fp) >> 1, fp)->asArrayData();
     }();
     // MixedArray::MakeMixed can return nullptr if there are duplicate keys
     if (!arr) return false;
@@ -685,7 +684,6 @@ struct SimpleParser {
     auto const tv = top++;
     tv->m_type = data->toDataType();
     tv->m_data.parr = data;
-    assertx(IMPLIES(arrprov::arrayWantsTag(data), arrprov::getTag(data)));
   }
 
   const char* p;
@@ -971,10 +969,6 @@ static void json_create_zval(Variant &z, UncheckedBuffer &buf, DataType type,
     case KindOfUninit:
     case KindOfNull:
     case KindOfPersistentString:
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
     case KindOfPersistentVec:
     case KindOfVec:
     case KindOfPersistentDict:
@@ -1058,14 +1052,10 @@ static void object_set(const json_parser* json,
     } else {
       int64_t i;
       if (key.get()->isStrictlyInteger(i)) {
-        forceToDArray(var).set(i, value);
+        forceToDict(var).set(i, value);
       } else {
-        forceToDArray(var).set(key, value);
+        forceToDict(var).set(key, value);
       }
-    }
-    if (var.isArray()) {
-      DEBUG_ONLY auto const data = var.getArrayData();
-      assertx(IMPLIES(arrprov::arrayWantsTag(data), arrprov::getTag(data)));
     }
   }
 }
@@ -1320,10 +1310,10 @@ bool JSON_parser(Variant &z, const char *p, int length, bool const assoc,
             } else if (container_type == JSONContainerType::DARRAYS ||
                        container_type == JSONContainerType::DARRAYS_AND_VARRAYS)
             {
-              top = Array::CreateDArray();
+              top = Array::CreateDict();
             /* </fb> */
             } else {
-              top = Array::CreateDArray();
+              top = Array::CreateDict();
             }
           /*<fb>*/
           }
@@ -1394,11 +1384,11 @@ bool JSON_parser(Variant &z, const char *p, int length, bool const assoc,
           } else if (container_type == JSONContainerType::HACK_ARRAYS) {
             top = Array::CreateVec();
           } else if (container_type == JSONContainerType::DARRAYS_AND_VARRAYS) {
-            top = Array::CreateVArray();
+            top = Array::CreateVec();
           } else if (container_type == JSONContainerType::DARRAYS) {
-            top = Array::CreateDArray();
+            top = Array::CreateDict();
           } else {
-            top = Array::CreateDArray();
+            top = Array::CreateDict();
           }
           /*</fb>*/
           json->stack[json->top].key = copy_and_clear(*key);

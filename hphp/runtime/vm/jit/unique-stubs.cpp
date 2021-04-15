@@ -59,7 +59,6 @@
 #include "hphp/runtime/vm/jit/tc-record.h"
 #include "hphp/runtime/vm/jit/translator-inline.h"
 #include "hphp/runtime/vm/jit/unique-stubs-arm.h"
-#include "hphp/runtime/vm/jit/unique-stubs-ppc64.h"
 #include "hphp/runtime/vm/jit/unique-stubs-x64.h"
 #include "hphp/runtime/vm/jit/unwind-itanium.h"
 #include "hphp/runtime/vm/jit/vasm-gen.h"
@@ -103,22 +102,15 @@ void alignCacheLine(CodeBlock& cb) {
   }
 }
 
-void assertNativeStackAligned(Vout& v, RegSet set = {}) {
-  if (RuntimeOption::EvalHHIRGenerateAsserts) {
-    v << call{TCA(assert_native_stack_aligned), set};
-  }
-}
-
 /*
  * Load and store the VM registers from/to RDS.
  */
 void loadVmfp(Vout& v) { v << load{rvmtl()[rds::kVmfpOff], rvmfp()}; }
 void loadVmsp(Vout& v) { v << load{rvmtl()[rds::kVmspOff], rvmsp()}; }
 void loadVMRegs(Vout& v) { loadVmfp(v); loadVmsp(v); }
-void storeVMRegs(Vout& v) {
-  v << store{rvmfp(), rvmtl()[rds::kVmfpOff]};
-  v << store{rvmsp(), rvmtl()[rds::kVmspOff]};
-}
+void storeVmfp(Vout& v) { v << store{rvmfp(), rvmtl()[rds::kVmfpOff]}; }
+void storeVmsp(Vout& v) { v << store{rvmsp(), rvmtl()[rds::kVmspOff]}; }
+void storeVMRegs(Vout& v) { storeVmfp(v); storeVmsp(v); }
 
 /*
  * Load and store the PHP return registers from/to the top of the VM stack.
@@ -309,22 +301,13 @@ TCA emitFuncPrologueRedispatch(CodeBlock& cb, DataBlock& data) {
     v << subl{numNonVariadicParams, numArgs, numToPack, v.makeReg()};
 
     // Pack the extra args into a vec/varray.
-    auto const helper = [](uint32_t count,
-                           TypedValue* values,
-                           const Func* func) -> ArrayData* {
-      arrprov::TagOverride _(RO::EvalArrayProvenance
-        ? arrprov::Tag::Param(func, func->numNonVariadicParams())
-        : arrprov::Tag{});
-      return PackedArray::MakeVArray(count, values);
-    };
     auto const packedArr = v.makeReg();
     {
-      using PackExtraArgs = ArrayData* (*)(uint32_t, TypedValue*, const Func*);
       auto const save = r_php_call_flags()|r_php_call_func()|r_php_call_ctx();
       PhysRegSaver prs{v, save};
       v << vcall{
-        CallSpec::direct(static_cast<PackExtraArgs>(helper)),
-        v.makeVcallArgs({{numToPack, stackTopPtr, func}}),
+        CallSpec::direct(PackedArray::MakeVec),
+        v.makeVcallArgs({{numToPack, stackTopPtr}}),
         v.makeTuple({packedArr}),
         Fixup::none(),
         DestType::SSA
@@ -345,9 +328,8 @@ TCA emitFuncPrologueRedispatch(CodeBlock& cb, DataBlock& data) {
     v << subq{unpackCellOff, rvmsp(), unpackCellPtr, v.makeReg()};
 
     // Store it.
-    auto const type = RO::EvalHackArrDVArrs ? DataType::Vec : DataType::VArray;
     v << store{packedArr, unpackCellPtr + TVOFF(m_data)};
-    v << storeb{v.cns(type), unpackCellPtr + TVOFF(m_type)};
+    v << storeb{v.cns(KindOfVec), unpackCellPtr + TVOFF(m_type)};
 
     // Move generics to the correct place.
     auto const generics = v.makeReg();
@@ -657,18 +639,27 @@ TCA emitInterpRet(CodeBlock& cb, DataBlock& data) {
   alignCacheLine(cb);
 
   auto const start = vwrap(cb, data, [] (Vout& v) {
-    // After writing to svcreq registers or calling a function,
-    // return regs are invalid
-    v << copy2{rret_data(), rret_type(), r_svcreq_arg(2), r_svcreq_arg(3)};
+    // Load ActRec::m_callOffAndFlags.
+    auto const callOffAndFlags = v.makeReg();
+    v << loadl{rvmsp()[-kArRetOff + AROFF(m_callOffAndFlags)], callOffAndFlags};
 
-    assertNativeStackAligned(v, RegSet() | r_svcreq_arg(2) | r_svcreq_arg(3));
+    // Store return value (overwrites ActRec) and sync VM regs.
+    storeReturnRegs(v);
+    storeVMRegs(v);
 
-    v << lea{rvmsp()[-kArRetOff], r_svcreq_arg(0)};
-    v << copy{rvmfp(), r_svcreq_arg(1)};
-    v << fallthru{r_svcreq_arg(0) | r_svcreq_arg(1) |
-                  r_svcreq_arg(2) | r_svcreq_arg(3)};
+    auto const ret = v.makeReg();
+    v << vcall{
+      CallSpec::direct(svcreq::handlePostInterpRet),
+      v.makeVcallArgs({{callOffAndFlags}}),
+      v.makeTuple({ret}),
+      Fixup::none(),
+      DestType::SSA
+    };
+
+    loadVMRegs(v);
+    loadReturnRegs(v);  // spurious load if we're not returning
+    v << jmpr{ret, php_return_regs()};
   });
-  svcreq::emit_persistent(cb, data, folly::none, REQ_POST_INTERP_RET);
   return start;
 }
 
@@ -677,15 +668,29 @@ TCA emitInterpGenRet(CodeBlock& cb, DataBlock& data) {
   alignJmpTarget(cb);
 
   auto const start = vwrap(cb, data, [] (Vout& v) {
-    // Sync return regs before calling native assert function.
-    storeReturnRegs(v);
-    assertNativeStackAligned(v);
+    // Load ActRec::m_callOffAndFlags.
+    auto const calleeFP = v.makeReg();
+    auto const callOffAndFlags = v.makeReg();
+    loadGenFrame<async>(v, calleeFP);
+    v << loadl{calleeFP[AROFF(m_callOffAndFlags)], callOffAndFlags};
 
-    loadGenFrame<async>(v, r_svcreq_arg(0));
-    v << copy{rvmfp(), r_svcreq_arg(1)};
-    v << fallthru{r_svcreq_arg(0) | r_svcreq_arg(1)};
+    // Store return value and sync VM regs.
+    storeReturnRegs(v);
+    storeVMRegs(v);
+
+    auto const ret = v.makeReg();
+    v << vcall{
+      CallSpec::direct(svcreq::handlePostInterpRet),
+      v.makeVcallArgs({{callOffAndFlags}}),
+      v.makeTuple({ret}),
+      Fixup::none(),
+      DestType::SSA
+    };
+
+    loadVMRegs(v);
+    loadReturnRegs(v);  // spurious load if we're not returning
+    v << jmpr{ret, php_return_regs()};
   });
-  svcreq::emit_persistent(cb, data, folly::none, REQ_POST_INTERP_RET_GENITER);
   return start;
 }
 
@@ -874,7 +879,6 @@ TCA emitDecRefGeneric(CodeBlock& cb, DataBlock& data) {
     auto const fullFrame = [&] {
       switch (arch()) {
         case Arch::ARM:
-        case Arch::PPC64:
           return true;
         case Arch::X64:
           return false;
@@ -932,7 +936,6 @@ namespace {
 void alignNativeStack(Vout& v, bool exit) {
   switch (arch()) {
     case Arch::X64:
-    case Arch::PPC64:
       v << lea{rsp()[exit ? 8 : -8], rsp()};
       break;
     case Arch::ARM:
@@ -971,10 +974,7 @@ TCA emitEnterTCExit(CodeBlock& cb, DataBlock& data, UniqueStubs& /*us*/) {
     );
 
     // Perform a native return.
-    //
-    // On PPC64, as there is no new frame created when entering the VM, the FP
-    // must not be restored.
-    v << stubret{cross_jit, arch() != Arch::PPC64};
+    v << stubret{cross_jit, true};
   });
 }
 
@@ -992,7 +992,7 @@ TCA emitEnterTCHelper(CodeBlock& cb, DataBlock& data, UniqueStubs& us) {
     v << inittc{};
 
     // Native func prologue.
-    v << stublogue{arch() != Arch::PPC64};
+    v << stublogue{true};
 
     // Set up linkage with the top VM frame in this nesting.
     v << store{rsp(), firstAR[AROFF(m_sfp)]};
@@ -1021,14 +1021,22 @@ TCA emitHandleSRHelper(CodeBlock& cb, DataBlock& data) {
   alignCacheLine(cb);
 
   return vwrap(cb, data, [] (Vout& v) {
-    storeVMRegs(v);
+    storeVmfp(v);
+
+    // Combine ServiceRequest and FPInvOffset into one pushable 64-bit reg.
+    static_assert(folly::kIsLittleEndian,
+        "Packing two 32-bit ints into one 64-bit for ReqInfo.");
+    auto const spOffShifted = v.makeReg();
+    auto const reqAndSpOff = v.makeReg();
+    v << shlqi{32, r_svcreq_spoff(), spOffShifted, v.makeReg()};
+    v << orq{r_svcreq_req(), spOffShifted, reqAndSpOff, v.makeReg()};
 
     // Pack the service request args into a svcreq::ReqInfo on the stack.
     assertx(!(svcreq::kMaxArgs & 1));
     for (auto i = svcreq::kMaxArgs; i >= 2; i -= 2) {
       v << pushp{r_svcreq_arg(i - 1), r_svcreq_arg(i - 2)};
     }
-    v << pushp{r_svcreq_stub(), r_svcreq_req()};
+    v << pushp{r_svcreq_stub(), reqAndSpOff};
 
     // Call mcg->handleServiceRequest(rsp()).
     auto const sp = v.makeReg();

@@ -48,16 +48,15 @@ struct APCHandle;
  * There are multiple layouts within PackedArray. See `stores_typed_values`.
  */
 struct PackedArray final : type_scan::MarkCollectable<PackedArray> {
-  // When true, we'll store a simple array of TypedValues.
-  // When false, we'll use the "8 type bytes / 8 value words" chunked layout.
-  static constexpr bool stores_typed_values = !wide_tv_val;
+  // Use the "8 type bytes / 8 value words" chunked layout.
+  static constexpr bool stores_typed_values = false;
 
   // The default capacity of PackedLayout, used if capacity = 0.
-  static constexpr uint32_t SmallSize = wide_tv_val ? 5 : 3;
+  static constexpr uint32_t SmallSize = 5;
 
   // The smallest and largest MM size classes we use for PackedLayouts.
   static constexpr size_t SmallSizeIndex = 3;
-  static constexpr size_t MaxSizeIndex = wide_tv_val ? 119 : 121;
+  static constexpr size_t MaxSizeIndex = 119;
 
   static_assert(MaxSizeIndex <= std::numeric_limits<uint8_t>::max(),
                 "Size index must fit into 8-bits");
@@ -94,8 +93,6 @@ struct PackedArray final : type_scan::MarkCollectable<PackedArray> {
   static ArrayData* AppendMove(ArrayData*, TypedValue v);
   static ArrayData* Pop(ArrayData*, Variant& value);
   static ArrayData* Prepend(ArrayData*, TypedValue v);
-  static ArrayData* ToDVArray(ArrayData*, bool copy);
-  static ArrayData* ToHackArr(ArrayData*, bool copy);
   static void OnSetEvalScalar(ArrayData*);
 
   //////////////////////////////////////////////////////////////////////
@@ -140,7 +137,6 @@ struct PackedArray final : type_scan::MarkCollectable<PackedArray> {
 
   static void scan(const ArrayData*, type_scan::Scanner&);
 
-  static ArrayData* MakeReserveVArray(uint32_t capacity);
   static ArrayData* MakeReserveVec(uint32_t capacity);
 
   /*
@@ -150,33 +146,19 @@ struct PackedArray final : type_scan::MarkCollectable<PackedArray> {
    *
    * This function takes ownership of the Cells in `values'.
    */
-  static ArrayData* MakeVArray(uint32_t size, const TypedValue* values);
   static ArrayData* MakeVec(uint32_t size, const TypedValue* values);
 
   /*
    * Like MakePacked, but with `values' array in natural (not reversed) order.
    */
-  static ArrayData* MakeVArrayNatural(uint32_t size, const TypedValue* values);
   static ArrayData* MakeVecNatural(uint32_t size, const TypedValue* values);
 
-  static ArrayData* MakeUninitializedVArray(uint32_t size);
   static ArrayData* MakeUninitializedVec(uint32_t size);
 
   static ArrayData* MakeUncounted(
-      ArrayData* array, bool withApcTypedValue = false,
-      DataWalker::PointerMap* seen = nullptr
-  );
-  static ArrayData* MakeUncounted(
-      ArrayData* array, int, DataWalker::PointerMap* seen = nullptr
-  ) = delete;
-  static ArrayData* MakeUncounted(
-      ArrayData* array, size_t extra, DataWalker::PointerMap* seen = nullptr
-  ) = delete;
-  static ArrayData* MakeUncountedHelper(ArrayData* array, size_t extra);
+      ArrayData* array, DataWalker::PointerMap* seen, bool hasApcTv);
 
   static ArrayData* MakeVecFromAPC(const APCArray* apc, bool isLegacy = false);
-  static ArrayData* MakeVArrayFromAPC(const APCArray* apc,
-                                      bool isMarked = false);
 
   static bool VecEqual(const ArrayData* ad1, const ArrayData* ad2);
   static bool VecNotEqual(const ArrayData* ad1, const ArrayData* ad2);
@@ -184,12 +166,10 @@ struct PackedArray final : type_scan::MarkCollectable<PackedArray> {
   static bool VecNotSame(const ArrayData* ad1, const ArrayData* ad2);
 
   // Fast iteration
-  template <class F, bool inc = true>
-  static void IterateV(const ArrayData* arr, F fn);
-  template <class F, bool inc = true>
-  static void IterateKV(const ArrayData* arr, F fn);
   template <class F>
-  static void IterateVNoInc(const ArrayData* arr, F fn);
+  static void IterateV(const ArrayData* arr, F fn);
+  template <class F>
+  static void IterateKV(const ArrayData* arr, F fn);
 
   // Return a MixedArray with the same elements as this PackedArray.
   // The target type is based on the source: varray -> darray, vec -> dict.
@@ -232,14 +212,8 @@ private:
   struct VecInitializer;
   static VecInitializer s_vec_initializer;
 
-  struct VArrayInitializer;
-  static VArrayInitializer s_varr_initializer;
-
   struct MarkedVecInitializer;
   static MarkedVecInitializer s_marked_vec_initializer;
-
-  struct MarkedVArrayInitializer;
-  static MarkedVArrayInitializer s_marked_varr_initializer;
 };
 
 //////////////////////////////////////////////////////////////////////

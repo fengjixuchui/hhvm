@@ -388,8 +388,8 @@ impl<'src> SmartConstructors for DirectDeclSmartConstructors<'src> {
         <Self as FlattenSmartConstructors<'src, Self>>::make_anonymous_class(self, class_keyword, left_paren, argument_list, right_paren, extends_keyword, extends_list, implements_keyword, implements_list, body)
     }
 
-    fn make_anonymous_function(&mut self, attribute_spec: Self::R, static_keyword: Self::R, async_keyword: Self::R, function_keyword: Self::R, left_paren: Self::R, parameters: Self::R, right_paren: Self::R, ctx_list: Self::R, colon: Self::R, readonly_return: Self::R, type_: Self::R, use_: Self::R, body: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, Self>>::make_anonymous_function(self, attribute_spec, static_keyword, async_keyword, function_keyword, left_paren, parameters, right_paren, ctx_list, colon, readonly_return, type_, use_, body)
+    fn make_anonymous_function(&mut self, attribute_spec: Self::R, async_keyword: Self::R, function_keyword: Self::R, left_paren: Self::R, parameters: Self::R, right_paren: Self::R, ctx_list: Self::R, colon: Self::R, readonly_return: Self::R, type_: Self::R, use_: Self::R, body: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, Self>>::make_anonymous_function(self, attribute_spec, async_keyword, function_keyword, left_paren, parameters, right_paren, ctx_list, colon, readonly_return, type_, use_, body)
     }
 
     fn make_anonymous_function_use_clause(&mut self, keyword: Self::R, left_paren: Self::R, variables: Self::R, right_paren: Self::R) -> Self::R {
@@ -468,8 +468,8 @@ impl<'src> SmartConstructors for DirectDeclSmartConstructors<'src> {
         <Self as FlattenSmartConstructors<'src, Self>>::make_isset_expression(self, keyword, left_paren, argument_list, right_paren)
     }
 
-    fn make_function_call_expression(&mut self, receiver: Self::R, type_args: Self::R, left_paren: Self::R, argument_list: Self::R, right_paren: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, Self>>::make_function_call_expression(self, receiver, type_args, left_paren, argument_list, right_paren)
+    fn make_function_call_expression(&mut self, receiver: Self::R, type_args: Self::R, enum_atom: Self::R, left_paren: Self::R, argument_list: Self::R, right_paren: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, Self>>::make_function_call_expression(self, receiver, type_args, enum_atom, left_paren, argument_list, right_paren)
     }
 
     fn make_function_pointer_expression(&mut self, receiver: Self::R, type_args: Self::R) -> Self::R {
@@ -648,8 +648,8 @@ impl<'src> SmartConstructors for DirectDeclSmartConstructors<'src> {
         <Self as FlattenSmartConstructors<'src, Self>>::make_dictionary_type_specifier(self, keyword, left_angle, members, right_angle)
     }
 
-    fn make_closure_type_specifier(&mut self, outer_left_paren: Self::R, function_keyword: Self::R, inner_left_paren: Self::R, parameter_list: Self::R, inner_right_paren: Self::R, contexts: Self::R, colon: Self::R, readonly_return: Self::R, return_type: Self::R, outer_right_paren: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, Self>>::make_closure_type_specifier(self, outer_left_paren, function_keyword, inner_left_paren, parameter_list, inner_right_paren, contexts, colon, readonly_return, return_type, outer_right_paren)
+    fn make_closure_type_specifier(&mut self, outer_left_paren: Self::R, readonly_keyword: Self::R, function_keyword: Self::R, inner_left_paren: Self::R, parameter_list: Self::R, inner_right_paren: Self::R, contexts: Self::R, colon: Self::R, readonly_return: Self::R, return_type: Self::R, outer_right_paren: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, Self>>::make_closure_type_specifier(self, outer_left_paren, readonly_keyword, function_keyword, inner_left_paren, parameter_list, inner_right_paren, contexts, colon, readonly_return, return_type, outer_right_paren)
     }
 
     fn make_closure_parameter_type_specifier(&mut self, call_convention: Self::R, readonly: Self::R, type_: Self::R) -> Self::R {

@@ -80,22 +80,12 @@ struct Repo::GlobalData {
   bool PHP7_Substr = false;
 
   /*
-   * Should all functions be interceptable?
-   */
-  bool EnableRenameFunction = false;
-
-  /*
    * Are Hack array compatibility notices enabled? If so, certain optimizations
    * may be disabled.
    */
   bool HackArrCompatNotices = false;
   bool HackArrCompatIsVecDictNotices = false;
   bool HackArrCompatSerializeNotices = false;
-
-  /*
-   * Are d/varrays dicts and vecs?
-   */
-  bool HackArrDVArrs = false;
 
   /*
    * Should the extension containing HHVM intrinsics be enabled?
@@ -151,9 +141,6 @@ struct Repo::GlobalData {
   /* Skip ClsMeth type refinement when this is true. */
   bool IsCompatibleClsMethType = false;
 
-  /* Avoid optimizations that interfere with array provenance */
-  bool ArrayProvenance = false;
-
   /* Whether implicit class conversions can raise a warning */
   bool RaiseClassConversionWarning = false;
 
@@ -177,8 +164,6 @@ struct Repo::GlobalData {
    */
   HackStrictOption StrictArrayFillKeys = HackStrictOption::OFF;
 
-  std::vector<const StringData*> APCProfile;
-
   std::vector<std::pair<std::string,TypedValue>> ConstantFunctions;
 
   std::unique_ptr<RepoAutoloadMap> AutoloadMap = nullptr;
@@ -192,11 +177,9 @@ struct Repo::GlobalData {
       (PHP7_NoHexNumerics)
       (PHP7_Substr)
       (PHP7_Builtins)
-      (EnableRenameFunction)
       (HackArrCompatNotices)
       (HackArrCompatIsVecDictNotices)
       (HackArrCompatSerializeNotices)
-      (HackArrDVArrs)
       (EnableIntrinsicsExtension)
       (ForbidDynamicCallsToFunc)
       (ForbidDynamicCallsToClsMeth)
@@ -212,7 +195,6 @@ struct Repo::GlobalData {
       (EmitClsMethPointers)
       (IsVecNotices)
       (IsCompatibleClsMethType)
-      (ArrayProvenance)
       (RaiseClassConversionWarning)
       (ClassPassesClassname)
       (ClassnameNotices)

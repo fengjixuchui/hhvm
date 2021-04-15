@@ -63,7 +63,7 @@ tv_lval baseGImpl(TypedValue key) {
   m(baseGD,  MOpMode::Define)                   \
 
 #define X(nm, mode)                             \
-inline tv_lval nm(TypedValue key) {         \
+inline tv_lval nm(TypedValue key) {             \
   return baseGImpl<mode>(key);                  \
 }
 BASE_G_HELPER_TABLE(X)
@@ -82,8 +82,8 @@ BASE_G_HELPER_TABLE(X)
 
 #define X(nm, mode, kt)                                       \
 inline tv_lval nm(Class* ctx, tv_lval base, key_type<kt> key, \
-                  TypedValue& tvRef) {                        \
-  return Prop<mode,kt>(tvRef, ctx, base, key);                \
+                  TypedValue& tvRef, ReadOnlyOp op) {         \
+  return Prop<mode,kt>(tvRef, ctx, base, key, op);            \
 }
 PROP_HELPER_TABLE(X)
 #undef X
@@ -95,14 +95,14 @@ PROP_HELPER_TABLE(X)
 
 #define X(nm, kt)                                             \
 inline tv_lval nm(Class* ctx, tv_lval base, key_type<kt> key, \
-                  TypedValue& tvRef) {                        \
-  return Prop<MOpMode::Define,kt>(tvRef, ctx, base, key);     \
+                  TypedValue& tvRef, ReadOnlyOp op) {         \
+  return Prop<MOpMode::Define,kt>(tvRef, ctx, base, key, op); \
 }
 PROPD_HELPER_TABLE(X)
 #undef X
 
-#define PROP_OBJ_HELPER_TABLE(m)                      \
-  /* name      mode                  keyType     */   \
+#define PROP_OBJ_HELPER_TABLE(m)                     \
+  /* name      mode                  keyType     */  \
   m(propCO,    MOpMode::None,       KeyType::Any)    \
   m(propCOS,   MOpMode::None,       KeyType::Str)    \
   m(propCUO,   MOpMode::Unset,      KeyType::Any)    \
@@ -112,8 +112,8 @@ PROPD_HELPER_TABLE(X)
 
 #define X(nm, mode, kt)                                           \
 inline tv_lval nm(Class* ctx, ObjectData* base, key_type<kt> key, \
-                  TypedValue& tvRef) {                            \
-  return PropObj<mode,kt>(tvRef, ctx, base, key);                 \
+                  TypedValue& tvRef, ReadOnlyOp op) {             \
+  return PropObj<mode,kt>(tvRef, ctx, base, key, op);             \
 }
 PROP_OBJ_HELPER_TABLE(X)
 #undef X
@@ -125,22 +125,22 @@ PROP_OBJ_HELPER_TABLE(X)
 
 #define X(nm, kt)                                                 \
 inline tv_lval nm(Class* ctx, ObjectData* base, key_type<kt> key, \
-                  TypedValue& tvRef) {                            \
-  return PropObj<MOpMode::Define,kt>(tvRef, ctx, base, key);      \
+                  TypedValue& tvRef, ReadOnlyOp op) {             \
+  return PropObj<MOpMode::Define,kt>(tvRef, ctx, base, key, op);  \
 }
 PROPD_OBJ_HELPER_TABLE(X)
 #undef X
 
 // NullSafe prop.
 inline tv_lval propCQ(Class* ctx, tv_rval base, StringData* key,
-                      TypedValue& tvRef) {
-  return nullSafeProp(tvRef, ctx, base, key);
+                      TypedValue& tvRef, ReadOnlyOp op) {
+  return nullSafeProp(tvRef, ctx, base, key, op);
 }
 
 // NullSafe prop with object base.
 inline tv_lval propCOQ(Class* ctx, ObjectData* base, StringData* key,
-                       TypedValue& tvRef) {
-  return base->prop(&tvRef, ctx, key);
+                       TypedValue& tvRef, ReadOnlyOp op) {
+  return base->prop(&tvRef, ctx, key, op);
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -154,34 +154,36 @@ inline TypedValue cGetRefShuffle(const TypedValue& localTvRef,
   return *result;
 }
 
-#define CGET_PROP_HELPER_TABLE(m)                       \
-  /* name            keyType       mode  */             \
+#define CGET_PROP_HELPER_TABLE(m)                      \
+  /* name            keyType       mode  */            \
   m(cGetPropCQuiet,  KeyType::Any, MOpMode::None)      \
   m(cGetPropSQuiet,  KeyType::Str, MOpMode::None)      \
   m(cGetPropC,       KeyType::Any, MOpMode::Warn)      \
   m(cGetPropS,       KeyType::Str, MOpMode::Warn)      \
 
-#define X(nm, kt, mode)                                                \
-inline TypedValue nm(Class* ctx, tv_lval base, key_type<kt> key) {     \
-  TypedValue localTvRef;                                               \
-  auto result = Prop<mode,kt>(localTvRef, ctx, base, key);             \
-  return cGetRefShuffle(localTvRef, result);                           \
+#define X(nm, kt, mode)                                               \
+inline TypedValue nm(Class* ctx, tv_lval base, key_type<kt> key,      \
+                     ReadOnlyOp op) {                                 \
+  TypedValue localTvRef;                                              \
+  auto result = Prop<mode,kt>(localTvRef, ctx, base, key, op);        \
+  return cGetRefShuffle(localTvRef, result);                          \
 }
 CGET_PROP_HELPER_TABLE(X)
 #undef X
 
-#define CGET_OBJ_PROP_HELPER_TABLE(m)                   \
+#define CGET_OBJ_PROP_HELPER_TABLE(m)                  \
   /* name            keyType       mode */             \
   m(cGetPropCOQuiet, KeyType::Any, MOpMode::None)      \
   m(cGetPropSOQuiet, KeyType::Str, MOpMode::None)      \
   m(cGetPropCO,      KeyType::Any, MOpMode::Warn)      \
   m(cGetPropSO,      KeyType::Str, MOpMode::Warn)      \
 
-#define X(nm, kt, mode)                                                \
-inline TypedValue nm(Class* ctx, ObjectData* base, key_type<kt> key) { \
-  TypedValue localTvRef;                                               \
-  auto result = PropObj<mode,kt>(localTvRef, ctx, base, key);          \
-  return cGetRefShuffle(localTvRef, result);                           \
+#define X(nm, kt, mode)                                               \
+inline TypedValue nm(Class* ctx, ObjectData* base, key_type<kt> key,  \
+                     ReadOnlyOp op) {                                 \
+  TypedValue localTvRef;                                              \
+  auto result = PropObj<mode,kt>(localTvRef, ctx, base, key, op);     \
+  return cGetRefShuffle(localTvRef, result);                          \
 }
 CGET_OBJ_PROP_HELPER_TABLE(X)
 #undef X
@@ -189,16 +191,18 @@ CGET_OBJ_PROP_HELPER_TABLE(X)
 //////////////////////////////////////////////////////////////////////
 
 // NullSafe prop.
-inline TypedValue cGetPropSQ(Class* ctx, tv_lval base, StringData* key) {
+inline TypedValue cGetPropSQ(Class* ctx, tv_lval base, StringData* key,
+                             ReadOnlyOp op) {
   TypedValue localTvRef;
-  auto result = nullSafeProp(localTvRef, ctx, base, key);
+  auto result = nullSafeProp(localTvRef, ctx, base, key, op);
   return cGetRefShuffle(localTvRef, result);
 }
 
 // NullSafe prop with object base.
-inline TypedValue cGetPropSOQ(Class* ctx, ObjectData* base, StringData* key) {
+inline TypedValue cGetPropSOQ(Class* ctx, ObjectData* base, StringData* key,
+                              ReadOnlyOp op) {
   TypedValue localTvRef;
-  auto result = base->prop(&localTvRef, ctx, key);
+  auto result = base->prop(&localTvRef, ctx, key, op);
   return cGetRefShuffle(localTvRef, result);
 }
 
@@ -210,8 +214,9 @@ inline TypedValue cGetPropSOQ(Class* ctx, ObjectData* base, StringData* key) {
   m(setPropCS,   KeyType::Str)           \
 
 #define X(nm, kt)                                                            \
-inline void nm(Class* ctx, tv_lval base, key_type<kt> key, TypedValue val) { \
-  HPHP::SetProp<false, kt>(ctx, base, key, &val);                            \
+inline void nm(Class* ctx, tv_lval base, key_type<kt> key, TypedValue val,   \
+               ReadOnlyOp op) {                                              \
+  HPHP::SetProp<false, kt>(ctx, base, key, &val, op);                        \
 }
 SETPROP_HELPER_TABLE(X)
 #undef X
@@ -221,9 +226,10 @@ SETPROP_HELPER_TABLE(X)
   m(setPropCO,   KeyType::Any)          \
   m(setPropCOS,  KeyType::Str)          \
 
-#define X(nm, kt)                                                          \
-inline void nm(Class* ctx, ObjectData* base, key_type<kt> key, TypedValue val) { \
-  HPHP::SetPropObj<kt>(ctx, base, key, &val);                              \
+#define X(nm, kt)                                                              \
+inline void nm(Class* ctx, ObjectData* base, key_type<kt> key, TypedValue val, \
+               ReadOnlyOp op) {                                                \
+  HPHP::SetPropObj<kt>(ctx, base, key, &val, op);                              \
 }
 SETPROP_OBJ_HELPER_TABLE(X)
 #undef X
@@ -404,7 +410,7 @@ ELEMU_HELPER_TABLE(X)
 
 #define X(nm, keyType)                                   \
 inline tv_lval nm(tv_lval base, key_type<keyType> key) { \
-  assertx(tvIsDictOrDArray(base));                       \
+  assertx(tvIsDict(base));                               \
   return ElemDDict<keyType>(base, key);                  \
 }
 ELEM_DICT_D_HELPER_TABLE(X)
@@ -417,7 +423,7 @@ ELEM_DICT_D_HELPER_TABLE(X)
 
 #define X(nm, keyType)                                   \
 inline tv_lval nm(tv_lval base, key_type<keyType> key) { \
-  assertx(tvIsDictOrDArray(base));                       \
+  assertx(tvIsDict(base));                               \
   return ElemUDict<keyType>(base, key);                  \
 }
 ELEM_DICT_U_HELPER_TABLE(X)
@@ -426,12 +432,12 @@ ELEM_DICT_U_HELPER_TABLE(X)
 //////////////////////////////////////////////////////////////////////
 
 #define ELEM_KEYSET_U_HELPER_TABLE(m)  \
-  /* name         keyType */          \
+  /* name         keyType */           \
   m(elemKeysetSU, KeyType::Str)        \
   m(elemKeysetIU, KeyType::Int)        \
 
-#define X(nm, keyType)                                                 \
-inline tv_lval nm(tv_lval base, key_type<keyType> key) {               \
+#define X(nm, keyType)                                                \
+inline tv_lval nm(tv_lval base, key_type<keyType> key) {              \
   assertx(isKeysetType(type(base)));                                  \
   return ElemUKeyset<keyType>(base, key);                             \
 }
@@ -440,8 +446,8 @@ ELEM_KEYSET_U_HELPER_TABLE(X)
 
 //////////////////////////////////////////////////////////////////////
 
-#define DICTGET_HELPER_TABLE(m)                                  \
-  /* name          keyType        mode  */                       \
+#define DICTGET_HELPER_TABLE(m)                                 \
+  /* name          keyType        mode  */                      \
   m(dictGetS,      KeyType::Str,  MOpMode::Warn)                \
   m(dictGetI,      KeyType::Int,  MOpMode::Warn)                \
   m(dictGetSQuiet, KeyType::Str,  MOpMode::None)                \
@@ -456,7 +462,7 @@ DICTGET_HELPER_TABLE(X)
 
 //////////////////////////////////////////////////////////////////////
 
-#define KEYSETGET_HELPER_TABLE(m)                                  \
+#define KEYSETGET_HELPER_TABLE(m)                                 \
   /* name            keyType        mode */                       \
   m(keysetGetS,      KeyType::Str,  MOpMode::Warn)                \
   m(keysetGetI,      KeyType::Int,  MOpMode::Warn)                \
@@ -510,7 +516,7 @@ inline ArrayData* dictSetImplPre(ArrayData* a, StringData* s, TypedValue val) {
 template<KeyType keyType>
 auto dictSetImpl(ArrayData* a, key_type<keyType> key, TypedValue value) {
   assertx(tvIsPlausible(value));
-  assertx(a->hasVanillaMixedLayout());
+  assertx(a->isVanillaDict());
   return dictSetImplPre(a, key, value);
 }
 
@@ -678,4 +684,3 @@ void vectorSetImplS(c_Vector* vector, StringData* key, TypedValue value) {
 //////////////////////////////////////////////////////////////////////
 
 }}}
-

@@ -131,16 +131,6 @@ using StrIntCmpFnInt = int64_t (*)(const StringData*, int64_t);
  */
 static CallMap s_callMap {
     /* Opcode, Func, Dest, SyncPoint, Args */
-    {ConvArrLikeToVArr,  convArrLikeToVArrHelper, DSSA, SSync,
-                           {{SSA, 0}}},
-    {ConvClsMethToVArr,  convClsMethToVArrHelper, DSSA, SSync,
-                           {{SSA, 0}}},
-
-    {ConvArrLikeToDArr,  convArrLikeToDArrHelper, DSSA, SSync,
-                           {{SSA, 0}}},
-    {ConvClsMethToDArr,  convClsMethToDArrHelper, DSSA, SSync,
-                           {{SSA, 0}}},
-
     {ConvArrLikeToVec,   convArrLikeToVecHelper, DSSA, SSync,
                            {{SSA, 0}}},
     {ConvClsMethToVec,   convClsMethToVecHelper, DSSA, SSync,
@@ -181,9 +171,14 @@ static CallMap s_callMap {
                            {{SSA, 0}, immed(10)}},
     {ConvResToInt,       &ResourceHdr::getId, DSSA, SNone,
                            {{SSA, 0}}},
-    {ConvTVToInt,      tvToInt, DSSA, SSync,
+    {ConvTVToInt,        static_cast<int64_t (*)(
+                             TypedValue,
+                             const ConvNoticeLevel,
+                             const StringData*,
+                             bool)>(tvToInt), DSSA, SSync,
                            {{TV, 0}, extra(&ConvNoticeData::level),
-                            extra(&ConvNoticeData::reasonIntVal)}},
+                            extra(&ConvNoticeData::reasonIntVal),
+                            extra(&ConvNoticeData::noticeWithinNum)}},
 
     {ConvDblToStr,       convDblToStrHelper, DSSA, SNone,
                            {{SSA, 0}}},
@@ -191,7 +186,10 @@ static CallMap s_callMap {
                            {{SSA, 0}}},
     {ConvObjToStr,       convObjToStrHelper, DSSA, SSync,
                            {{SSA, 0}}},
-    {ConvTVToStr,        tvCastToStringData, DSSA, SSync,
+    {ConvTVToStr,        static_cast<StringData* (*)(
+                             TypedValue,
+                             const ConvNoticeLevel,
+                             const StringData*)>(tvCastToStringData), DSSA, SSync,
                            {{TV, 0}, extra(&ConvNoticeData::level),
                             extra(&ConvNoticeData::reasonIntVal)}},
 
@@ -252,8 +250,14 @@ static CallMap s_callMap {
     {RaiseError,         raise_error_sd, DNone, SSync, {{SSA, 0}}},
     {RaiseWarning,       raiseWarning, DNone, SSync, {{SSA, 0}}},
     {RaiseNotice,        raiseNotice, DNone, SSync, {{SSA, 0}}},
-    {ThrowArrayIndexException,
-                         throwArrayIndexException, DNone, SSync,
+    {ThrowMustBeReadOnlyException,
+                         throwMustBeReadOnlyException, DNone, SSync,
+                         {{SSA, 0}, {SSA, 1}}},
+    {ThrowMustBeMutableException,
+                         throwMustBeMutableException, DNone, SSync,
+                         {{SSA, 0}, {SSA, 1}}},
+    {ThrowArrayKeyException,
+                         throwArrayKeyException, DNone, SSync,
                          {{SSA, 0}, {SSA, 1}}},
     {ThrowArrayKeyException,
                          throwArrayKeyException, DNone, SSync,
@@ -269,6 +273,11 @@ static CallMap s_callMap {
     {RaiseCoeffectsCallViolation, raiseCoeffectsCallViolationHelper,
                           DNone, SSync, {extra(&FuncData::func),
                                          {SSA, 0}, {SSA, 1}}},
+    {RaiseCoeffectsFunParamTypeViolation, raiseCoeffectsFunParamTypeViolation,
+                          DNone, SSync, {{TV, 0}, extra(&ParamData::paramId)}},
+    {RaiseCoeffectsFunParamCoeffectRulesViolation,
+                          raiseCoeffectsFunParamCoeffectRulesViolation,
+                          DNone, SSync, {{SSA, 0}}},
     {ThrowInvalidOperation, throw_invalid_operation_exception,
                           DNone, SSync, {{SSA, 0}}},
     {ThrowCallReifiedFunctionWithoutGenerics,
@@ -377,10 +386,10 @@ static CallMap s_callMap {
     /* Static prop helpers */
     {LdClsPropAddrOrNull,
                          getSPropOrNull, DSSA, SSync,
-                           {{SSA, 0}, {SSA, 1}, {SSA, 2}, {SSA, 3}, {SSA, 4}}},
+                           {{SSA, 0}, {SSA, 1}, {SSA, 2}, {SSA, 3}, {SSA, 4}, {SSA, 5}, {SSA, 6}}},
     {LdClsPropAddrOrRaise,
                          getSPropOrRaise, DSSA, SSync,
-                           {{SSA, 0}, {SSA, 1}, {SSA, 2}, {SSA, 3}, {SSA, 4}}},
+                           {{SSA, 0}, {SSA, 1}, {SSA, 2}, {SSA, 3}, {SSA, 4}, {SSA, 5}, {SSA, 6}}},
 
     {ProfileProp,        &PropertyProfile::incCount, DNone, SNone,
                            {{SSA, 0}, {SSA, 1}}},

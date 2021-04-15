@@ -106,18 +106,14 @@ inline void scanMemoSlots(const ObjectData* obj,
 
 inline void scanHeapObject(const HeapObject* h, type_scan::Scanner& scanner) {
   switch (h->kind()) {
-    case HeaderKind::Packed:
     case HeaderKind::Vec:
       return PackedArray::scan(static_cast<const ArrayData*>(h), scanner);
-    case HeaderKind::Mixed:
     case HeaderKind::Dict:
       return static_cast<const MixedArray*>(h)->scan(scanner);
     case HeaderKind::Keyset:
       return static_cast<const SetArray*>(h)->scan(scanner);
-    case HeaderKind::BespokeVArray:
-    case HeaderKind::BespokeDArray:
-    case HeaderKind::BespokeDict:
     case HeaderKind::BespokeVec:
+    case HeaderKind::BespokeDict:
     case HeaderKind::BespokeKeyset:
       return static_cast<const BespokeArray*>(h)->scan(scanner);
     case HeaderKind::Closure:
@@ -327,9 +323,10 @@ template<class Fn> void iterateConservativeRoots(Fn fn) {
 
   // cpp stack. ensure stack contains callee-saved registers.
   CALLEE_SAVED_BARRIER();
-  auto sp = stack_top_ptr_conservative();
-  fn(sp, s_stackLimit + s_stackSize - uintptr_t(sp),
-     type_scan::getIndexForScan<CppStack>());
+  auto const sp = stack_top_ptr_conservative();
+  auto const stackLen = s_stackLimit + s_stackSize - uintptr_t(sp);
+  assertx(s_stackLimit != 0 && s_stackSize != 0);
+  fn(sp, stackLen, type_scan::getIndexForScan<CppStack>());
 }
 
 template<class Fn> void iterateExactRoots(Fn fn) {

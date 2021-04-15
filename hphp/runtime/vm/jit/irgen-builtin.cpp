@@ -189,13 +189,12 @@ const StaticString
 
 void raiseClsMethToVecWarningHelper(IRGS& env, const ParamPrep& params) {
   assertx(RO::EvalIsCompatibleClsMethType);
-  if (RuntimeOption::EvalRaiseClsMethConversionWarning) {
+  if (RO::EvalRaiseClsMethConversionWarning) {
     gen(
       env,
       RaiseNotice,
       make_opt_catch(env, params),
-      cns(env, RuntimeOption::EvalHackArrDVArrs ?
-        s_conv_clsmeth_to_vec.get() : s_conv_clsmeth_to_varray.get())
+      cns(env, s_conv_clsmeth_to_vec.get())
     );
   }
 }
@@ -308,19 +307,19 @@ SSATmp* opt_in_array(IRGS& env, const ParamPrep& params) {
   }
 
   auto const haystackType = params[1].value->type();
-  if (!haystackType.hasConstVal(TStaticArr)) {
+  if (!haystackType.hasConstVal(TArrLike)) {
     // Haystack isn't statically known
     return nullptr;
   }
 
-  auto const haystack = haystackType.arrVal();
+  auto const haystack = haystackType.arrLikeVal();
   if (haystack->size() == 0) {
     return cns(env, false);
   }
 
   KeysetInit flipped{haystack->size()};
   bool failed{false};
-  IterateVNoInc(
+  IterateV(
     haystack,
     [&](TypedValue key) {
 
@@ -342,12 +341,9 @@ SSATmp* opt_in_array(IRGS& env, const ParamPrep& params) {
     return nullptr;
   }
 
-  return gen(
-    env,
-    AKExistsKeyset,
-    cns(env, ArrayData::GetScalarArray(flipped.toArray())),
-    needle
-  );
+
+  auto const ad = ArrayData::GetScalarArray(flipped.toArray());
+  return gen(env, AKExistsKeyset, cns(env, ad), needle);
 }
 
 SSATmp* opt_get_class(IRGS& env, const ParamPrep& params) {
@@ -622,7 +618,7 @@ SSATmp* opt_is_list_like(IRGS& env, const ParamPrep& params) {
     return cns(env, true);
   }
   if (!type.maybe(TArrLike)) return cns(env, false);
-  if (type.subtypeOfAny(TVArr, TVec)) return cns(env, true);
+  if (type <= TVec) return cns(env, true);
   return nullptr;
 }
 
@@ -630,19 +626,19 @@ SSATmp* opt_is_vec_or_varray(IRGS& env, const ParamPrep& params) {
   if (params.size() != 1) return nullptr;
   auto const type = params[0].value->type();
 
-  if (type.subtypeOfAny(TVec, TVArr)) {
+  if (type <= TVec) {
     return cns(env, true);
   }
 
   if (type <= TClsMeth && RO::EvalIsCompatibleClsMethType) {
     if (RO::EvalIsVecNotices) {
-      auto const msg = makeStaticString(Strings::CLSMETH_COMPAT_IS_VEC_OR_VARR);
+      auto const msg = makeStaticString(Strings::CLSMETH_COMPAT_IS_VEC);
       gen(env, RaiseNotice, make_opt_catch(env, params), cns(env, msg));
     }
     return cns(env, true);
   }
 
-  if (!type.maybe(TVec) && !type.maybe(TVArr) &&
+  if (!type.maybe(TVec) &&
       !(type.maybe(TClsMeth) && RO::EvalIsCompatibleClsMethType)) {
     return cns(env, false);
   }
@@ -654,11 +650,11 @@ SSATmp* opt_is_dict_or_darray(IRGS& env, const ParamPrep& params) {
   if (params.size() != 1) return nullptr;
   auto const type = params[0].value->type();
 
-  if (type.subtypeOfAny(TDict, TDArr)) {
+  if (type <= TDict) {
     return cns(env, true);
   }
 
-  if (!type.maybe(TDict) && !type.maybe(TDArr)) {
+  if (!type.maybe(TDict)) {
     return cns(env, false);
   }
 
@@ -669,22 +665,6 @@ SSATmp* opt_foldable(IRGS& env,
                      const Func* func,
                      const ParamPrep& params) {
   if (!func->isFoldable()) return nullptr;
-
-  // Tag arrprov with the last non-ProvenanceSkipFrame SrcKey in inlineState.
-  auto const sk = [&]{
-    auto const cur = curSrcKey(env);
-    if (!RO::EvalArrayProvenance) return cur;
-    if (!cur.func()->isProvenanceSkipFrame()) return cur;
-    auto const& stack = env.inlineState.bcStateStack;
-    for (auto it = stack.rbegin(); it != stack.rend(); it++) {
-      if (!it->func()->isProvenanceSkipFrame()) return *it;
-    }
-    return SrcKey();
-  }();
-  assertx(IMPLIES(!RO::EvalArrayProvenance, sk.valid()));
-  if (!sk.valid()) return nullptr;
-  auto const tag = arrprov::tagFromSK(sk);
-  arrprov::TagOverride _{tag};
 
   const Class* cls = nullptr;
   if (func->isMethod()) {
@@ -699,13 +679,12 @@ SSATmp* opt_foldable(IRGS& env,
   if (numNonDefaultArgs > func->numNonVariadicParams()) {
     assertx(params.size() == func->numParams());
     auto const variadic = params.info.back().value;
-    auto const ty = RuntimeOption::EvalHackArrDVArrs ? TVec : TVArr;
-    if (!variadic->type().hasConstVal(ty)) return nullptr;
+    if (!variadic->type().hasConstVal(TVec)) return nullptr;
 
     variadicArgs = variadic->variantVal().asCArrRef().get();
     numVariadicArgs = variadicArgs->size();
 
-    if (numVariadicArgs && !variadicArgs->isHAMSafeVArray()) return nullptr;
+    if (numVariadicArgs && !variadicArgs->isVecType()) return nullptr;
 
     assertx(variadicArgs->isStatic());
     numNonDefaultArgs = func->numNonVariadicParams();
@@ -714,7 +693,7 @@ SSATmp* opt_foldable(IRGS& env,
   // Don't pop the args yet---if the builtin throws at compile time (because
   // it would raise a warning or something at runtime) we're going to leave
   // the call alone.
-  VArrayInit args(numNonDefaultArgs + numVariadicArgs);
+  VecInit args(numNonDefaultArgs + numVariadicArgs);
   for (auto i = 0; i < numNonDefaultArgs; ++i) {
     auto const t = params[i].value->type();
     if (!t.hasConstVal() && !t.subtypeOfAny(TUninit, TInitNull, TNullptr)) {
@@ -756,7 +735,7 @@ SSATmp* opt_foldable(IRGS& env,
 
     auto scalar_array = [&] {
       auto& a = val(retVal).parr;
-      ArrayData::GetScalarArray(&a, tag);
+      ArrayData::GetScalarArray(&a);
       return a;
     };
 
@@ -778,12 +757,6 @@ SSATmp* opt_foldable(IRGS& env,
       case KindOfPersistentKeyset:
       case KindOfKeyset:
         return cns(env, make_tv<KindOfPersistentKeyset>(scalar_array()));
-      case KindOfPersistentDArray:
-      case KindOfDArray:
-        return cns(env, make_tv<KindOfPersistentDArray>(scalar_array()));
-      case KindOfPersistentVArray:
-      case KindOfVArray:
-        return cns(env, make_tv<KindOfPersistentVArray>(scalar_array()));
       case KindOfLazyClass:
         return cns(env, retVal.m_data.plazyclass.name());
       case KindOfUninit:
@@ -813,11 +786,11 @@ SSATmp* opt_container_first(IRGS& env, const ParamPrep& params) {
   }
   auto const value = params[0].value;
   auto const type = value->type();
-  if (type.subtypeOfAny(TVArr, TVec)) {
+  if (type <= TVec) {
     auto const r = gen(env, VecFirst, value);
     gen(env, IncRef, r);
     return r;
-  } else if (type.subtypeOfAny(TDArr, TDict)) {
+  } else if (type <= TDict) {
     auto const r = gen(env, DictFirst, value);
     gen(env, IncRef, r);
     return r;
@@ -835,11 +808,11 @@ SSATmp* opt_container_last(IRGS& env, const ParamPrep& params) {
   }
   auto const value = params[0].value;
   auto const type = value->type();
-  if (type.subtypeOfAny(TVArr, TVec)) {
+  if (type <= TVec) {
     auto const r = gen(env, VecLast, value);
     gen(env, IncRef, r);
     return r;
-  } else if (type.subtypeOfAny(TDArr, TDict)) {
+  } else if (type <= TDict) {
     auto const r = gen(env, DictLast, value);
     gen(env, IncRef, r);
     return r;
@@ -858,7 +831,7 @@ SSATmp* opt_container_first_key(IRGS& env, const ParamPrep& params) {
   auto const value = params[0].value;
   auto const type = value->type();
 
-  if (type.subtypeOfAny(TVArr, TVec)) {
+  if (type <= TVec) {
     return cond(
       env,
       [&](Block* taken) {
@@ -868,7 +841,7 @@ SSATmp* opt_container_first_key(IRGS& env, const ParamPrep& params) {
       [&] { return cns(env, 0); },
       [&] { return cns(env, TInitNull); }
     );
-  } else if (type.subtypeOfAny(TDArr, TDict)) {
+  } else if (type <= TDict) {
     auto const r = gen(env, DictFirstKey, value);
     gen(env, IncRef, r);
     return r;
@@ -887,7 +860,7 @@ SSATmp* opt_container_last_key(IRGS& env, const ParamPrep& params) {
   auto const value = params[0].value;
   auto const type = value->type();
 
-  if (type.subtypeOfAny(TVArr, TVec)) {
+  if (type <= TVec) {
     return cond(
       env,
       [&](Block* taken) {
@@ -898,7 +871,7 @@ SSATmp* opt_container_last_key(IRGS& env, const ParamPrep& params) {
       [&] (SSATmp* next) { return gen(env, SubInt, next, cns(env, 1)); },
       [&] { return cns(env, TInitNull); }
     );
-  } else if (type.subtypeOfAny(TDArr, TDict)) {
+  } else if (type <= TDict) {
     auto const r = gen(env, DictLastKey, value);
     gen(env, IncRef, r);
     return r;
@@ -949,7 +922,7 @@ SSATmp* meth_caller_get_name(IRGS& env, SSATmp *value) {
     return cond(
         env,
         [&] (Block* taken) {
-          auto const attr = AttrData {static_cast<int32_t>(AttrIsMethCaller)};
+          auto const attr = AttrData { AttrIsMethCaller };
           auto isMC = gen(env, FuncHasAttr, attr, value);
           gen(env, JmpZero, taken, isMC);
         },
@@ -1043,7 +1016,6 @@ SSATmp* opt_class_meth_get_method(IRGS& env, const ParamPrep& params) {
 }
 
 const EnumValues* getEnumValues(IRGS& env, const ParamPrep& params) {
-  if (RO::EvalArrayProvenance) return nullptr;
   if (!(params.ctx && params.ctx->hasConstVal(TCls))) return nullptr;
   auto const cls = params.ctx->clsVal();
   if (!(isEnum(cls) && classHasPersistentRDS(cls))) return nullptr;
@@ -1103,11 +1075,7 @@ SSATmp* opt_is_meth_caller(IRGS& env, const ParamPrep& params) {
   if (params.size() != 1) return nullptr;
   auto const value = params[0].value;
   if (value->isA(TFunc)) {
-    return gen(
-      env,
-      FuncHasAttr,
-      AttrData {static_cast<int32_t>(AttrIsMethCaller)},
-      value);
+    return gen(env, FuncHasAttr, AttrData { AttrIsMethCaller }, value);
   }
   if (value->isA(TObj)) {
     auto const mcCls = Class::lookup(s_meth_caller_cls.get());
@@ -1195,12 +1163,9 @@ const hphp_fast_string_imap<int> s_vanilla_params{
 
 //////////////////////////////////////////////////////////////////////
 
-// If bespoke array-likes are enabled, we may encounter inlined NativeImpls
-// with optimized IR generation paths. In this case, we don't emit
-// layout-sensitive implementations to avoid making NativeImpl a
-// layout-sensitive bytecode. Therefore, when bespokes are enabled and we are
-// not at an FCallBuiltin bytecode, don't emit an optimized implementation if
-// it's layout-sensitive.
+// If we encounter an inlined NativeImpls in an optimized region, we can't use
+// a layout-sensitive implementation for the bytecode, today, because we don't
+// support arbitrary control flow with an inlined NativeImpl.
 bool skipLayoutSensitiveNativeImpl(IRGS& env, const StringData* fname) {
   return allowBespokeArrayLikes() &&
          s_vanilla_params.find(fname->data()) != s_vanilla_params.end();
@@ -1227,7 +1192,7 @@ SSATmp* optimizedFCallBuiltin(IRGS& env,
       // contents to their proper place on the stack.
       auto const ad = retVal->arrLikeVal();
       assertx(ad->isStatic());
-      assertx(ad->isVecType() || ad->isVArray());
+      assertx(ad->isVecType());
       assertx(ad->size() == numInOut + 1);
 
       size_t inOutIndex = 0;
@@ -1301,8 +1266,7 @@ Type param_target_type(const Func* callee, uint32_t paramIdx) {
     return TNull | Type(*dt);
   }
   if (!pi.builtinType) {
-    if (!tc.isVArrayOrDArray()) return TBottom;
-    return RO::EvalHackArrDVArrs ? TVec|TDict : TVArr|TDArr;
+    return tc.isVecOrDict() ? TVec|TDict : TBottom;
   }
   if (pi.builtinType == KindOfObject &&
       pi.defaultValue.m_type == KindOfNull) {
@@ -1508,8 +1472,7 @@ SSATmp* realize_param(IRGS& env,
                       R realize) {
   if (param.needsConversion) {
     auto const baseTy = targetTy - TNull;
-    assertx(baseTy.isKnownDataType() ||
-            (baseTy == (RO::EvalHackArrDVArrs ? TVec|TDict : TVArr|TDArr)));
+    assertx(baseTy.isKnownDataType() || baseTy == (TVec|TDict));
 
     if (auto const value = cond(
           env,
@@ -1552,8 +1515,7 @@ SSATmp* maybeCoerceValue(
   U update,
   F fail
 ) {
-  assertx(target.isKnownDataType() ||
-          (target == (RO::EvalHackArrDVArrs ? TVec|TDict : TVArr|TDArr)));
+  assertx(target.isKnownDataType() || (target == (TVec|TDict)));
 
   auto bail = [&] { fail(); return cns(env, TBottom); };
   if (target <= TStr) {
@@ -1583,8 +1545,7 @@ SSATmp* maybeCoerceValue(
     });
   }
 
-  if (target <= (RuntimeOption::EvalHackArrDVArrs ? TVec : TVArr) &&
-      RO::EvalIsCompatibleClsMethType) {
+  if ((target <= TVec) && RO::EvalIsCompatibleClsMethType) {
     if (!val->type().maybe(TClsMeth)) return bail();
     auto const& tc = func->params()[id].typeConstraint;
     if (!tc.convertClsMethToArrLike()) return bail();
@@ -1610,7 +1571,9 @@ SSATmp* maybeCoerceValue(
   return bail();
 }
 
-StaticString s_varray_or_darray("varray_or_darray");
+StaticString
+  s_varray_or_darray("varray_or_darray"),
+  s_vec_or_dict("vec_or_dict");
 
 /*
  * Prepare the actual arguments to the CallBuiltin instruction, by converting a
@@ -1631,7 +1594,7 @@ jit::vector<SSATmp*> realize_params(IRGS& env,
   auto const genFail = [&](uint32_t param, SSATmp* val) {
     auto const expected_type = [&]{
       auto const& tc = callee->params()[param].typeConstraint;
-      if (tc.isVArrayOrDArray()) return s_varray_or_darray.get();
+      if (tc.isVecOrDict()) return s_vec_or_dict.get();
       auto const dt = param_target_type(callee, param) - TNull;
       return getDataTypeString(dt.toDataType()).get();
     }();
@@ -1841,8 +1804,6 @@ SSATmp* builtinCall(IRGS& env,
         decRef(env, realized[i + aoff]);
         realized[i + aoff] = iv;
         ty = iv->type();
-        if (ty->maybe(TPersistentVArr)) *ty |= TVArr;
-        if (ty->maybe(TPersistentDArr)) *ty |= TDArr;
         if (ty->maybe(TPersistentVec)) *ty |= TVec;
         if (ty->maybe(TPersistentDict)) *ty |= TDict;
         if (ty->maybe(TPersistentKeyset)) *ty |= TKeyset;
@@ -1952,11 +1913,6 @@ void nativeImplInlined(IRGS& env) {
 }
 
 //////////////////////////////////////////////////////////////////////
-
-int getBuiltinVanillaParam(const char* name) {
-  auto const it = s_vanilla_params.find(name);
-  return it != s_vanilla_params.end() ? it->second : -1;
-}
 
 SSATmp* optimizedCallIsObject(IRGS& env, SSATmp* src) {
   if (src->isA(TObj) && src->type().clsSpec()) {
@@ -2122,11 +2078,7 @@ Type builtinOutType(const Func* builtin, uint32_t i) {
       return TInt | TStr;
     case AnnotMetaType::This:
       return TObj;
-    case AnnotMetaType::VArrOrDArr:
-      assertx(!RO::EvalHackArrDVArrs);
-      return TVArr|TDArr;
     case AnnotMetaType::VecOrDict:
-      assertx(RO::EvalHackArrDVArrs);
       return TVec|TDict;
     case AnnotMetaType::ArrayLike:
       return TArrLike;
@@ -2214,7 +2166,7 @@ void implVecIdx(IRGS& env, SSATmp* loaded_collection_vec) {
   auto const use_base = loaded_collection_vec
     ? loaded_collection_vec
     : stack_base;
-  assertx(use_base->type().subtypeOfAny(TVec, TVArr));
+  assertx(use_base->isA(TVec));
 
   auto const elem = cond(
     env,
@@ -2262,8 +2214,7 @@ void implDictKeysetIdx(IRGS& env,
   auto const use_base = loaded_collection_dict
     ? loaded_collection_dict
     : stack_base;
-  assertx(is_dict ? use_base->type().subtypeOfAny(TDict, TDArr)
-                  : use_base->isA(TKeyset));
+  assertx(use_base->isA(is_dict ? TDict : TKeyset));
 
   auto const elem = profiledArrayAccess(
     env, use_base, key, MOpMode::None,
@@ -2324,7 +2275,7 @@ void implArrayMarkLegacy(IRGS& env, bool legacy) {
   }
 
 
-  if (!value->isA(TVec|TDict|TVArr|TDArr)) {
+  if (!value->isA(TVec|TDict)) {
     discard(env);
     return;
   }
@@ -2359,56 +2310,12 @@ void emitArrayUnmarkLegacy(IRGS& env) {
   implArrayMarkLegacy(env, false);
 }
 
-void emitTagProvenanceHere(IRGS& env) {
-  auto const flags = topC(env, BCSPRelOffset{0});
-  auto const value = topC(env, BCSPRelOffset{1});
-
-  // When arrprov is disabled, this bytecode should do nothing.
-  if (!RO::EvalArrayProvenance && flags->isA(TInt)) {
-    discard(env);
-    return;
-  }
-
-  if (!flags->isA(TInt)) {
-    PUNT(TagProvenanceHere-FlagsMustBeInt);
-  } else if (!value->type().isKnownDataType()) {
-    PUNT(TagProvenanceHere-ValueMustBeKnown);
-  }
-
-  if (!value->isA(TObj|TVec|TDict|TVArr|TDArr)) {
-    discard(env);
-    return;
-  }
-
-  auto const result = [&]{
-    if (!value->isA(TObj)) return gen(env, TagProvenanceHere, value, flags);
-
-    return cond(
-      env,
-      [&](Block* taken) {
-        namespace F = arrprov::TagTVFlags;
-        auto const flag = cns(env, F::TAG_PROVENANCE_HERE_MUTATE_COLLECTIONS);
-        auto const test = gen(env, AndInt, flags, flag);
-        gen(env, JmpZero, taken, test);
-      },
-      [&]{ return gen(env, TagProvenanceHere, value, flags); },
-      [&]{ return value; }
-    );
-  }();
-
-  discard(env, 2);
-  push(env, result);
-}
-
 void emitArrayIdx(IRGS& env) {
   auto const arrType = topC(env, BCSPRelOffset{2}, DataTypeGeneric)->type();
-  if (arrType.subtypeOfAny(TVec, TVArr)) return implVecIdx(env, nullptr);
-  if (arrType.subtypeOfAny(TDict, TDArr)) {
-    return implDictKeysetIdx(env, true, nullptr);
-  }
+  if (arrType <= TVec) return implVecIdx(env, nullptr);
+  if (arrType <= TDict) return implDictKeysetIdx(env, true, nullptr);
   if (arrType <= TKeyset) return implDictKeysetIdx(env, false, nullptr);
   if (arrType <= TClsMeth) PUNT(ArrayIdx_clsmeth);
-
   interpOne(env, TCell, 3);
 }
 
@@ -2418,13 +2325,11 @@ void emitIdx(IRGS& env) {
   auto const keyType  = key->type();
   auto const baseType = base->type();
 
-  if (baseType.subtypeOfAny(TVec, TVArr)) return implVecIdx(env, nullptr);
-  if (baseType.subtypeOfAny(TDict, TDArr)) {
-    return implDictKeysetIdx(env, true, nullptr);
-  }
+  if (baseType <= TVec) return implVecIdx(env, nullptr);
+  if (baseType <= TDict) return implDictKeysetIdx(env, true, nullptr);
   if (baseType <= TKeyset) return implDictKeysetIdx(env, false, nullptr);
 
-  if (keyType <= TNull || !baseType.maybe(TArr | TObj | TStr)) {
+  if (keyType <= TNull || !baseType.maybe(TArrLike | TObj | TStr)) {
     auto const def = popC(env, DataTypeGeneric);
     popC(env, keyType <= TNull ? DataTypeSpecific : DataTypeGeneric);
     popC(env, keyType <= TNull ? DataTypeGeneric : DataTypeSpecific);
@@ -2464,7 +2369,7 @@ void emitAKExists(IRGS& env) {
   if (!origKey->type().isKnownDataType()) PUNT(AKExists-KeyNotKnown);
   auto const key = convertClassKey(env, origKey);
   if (key->isA(TFunc)) PUNT(AKExists_func_key);
-  if (!arr->type().subtypeOfAny(TKeyset, TVec, TVArr, TDict, TDArr, TObj)) {
+  if (!arr->type().subtypeOfAny(TVec, TDict, TKeyset, TObj)) {
     PUNT(AKExists_unknown_array_or_obj_type);
   }
 
@@ -2479,7 +2384,7 @@ void emitAKExists(IRGS& env) {
     gen(env, ThrowInvalidArrayKey, arr, key);
   };
 
-  if (arr->type().subtypeOfAny(TVec, TVArr)) {
+  if (arr->isA(TVec)) {
     if (key->isA(TStr)) {
       push(env, cns(env, false));
       decRef(env, arr);
@@ -2502,7 +2407,7 @@ void emitAKExists(IRGS& env) {
     return throwBadKey();
   }
 
-  if (arr->type().subtypeOfAny(TDict, TDArr, TKeyset)) {
+  if (arr->type().subtypeOfAny(TDict, TKeyset)) {
     if (!key->type().subtypeOfAny(TInt, TStr)) {
       return throwBadKey();
     }

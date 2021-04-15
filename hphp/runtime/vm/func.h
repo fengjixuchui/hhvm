@@ -570,6 +570,13 @@ struct Func final {
   Id lookupVarId(const StringData* name) const;
 
   /*
+   * Returns the ID of coeffects and reified generics locals.
+   * Requires hasCoeffectRules() and hasReifiedGenerics() respectively
+   */
+  Id coeffectsLocalId() const;
+  Id reifiedGenericsLocalId() const;
+
+  /*
    * Find the name of the local with the given ID.
    */
   const StringData* localVarName(Id id) const;
@@ -803,6 +810,17 @@ struct Func final {
   // Coeffects.                                                        [const]
 
   /*
+   * Returns the runtime representation of coeffects
+   */
+  RuntimeCoeffects requiredCoeffects() const;
+  RuntimeCoeffects shallowCoeffectsWithLocals() const;
+
+  /*
+   * Sets required coeffects
+   */
+  void setRequiredCoeffects(RuntimeCoeffects);
+
+  /*
    * Names of the static coeffects on the function
    * Used for reflection
    */
@@ -813,6 +831,11 @@ struct Func final {
    * if (Rx\IS_ENABLED) ?
    */
   bool isRxDisabled() const;
+
+  /*
+   * Does this function use coeffects local to store its ambient coeffects?
+   */
+  bool hasCoeffectsLocal() const;
 
   /*
    * Does this function have coeffect rules?
@@ -892,7 +915,6 @@ struct Func final {
    * Get the system and coeffect attributes of the function.
    */
   Attr attrs() const;
-  StaticCoeffects staticCoeffects() const;
 
   /*
    * Get the user-declared attributes of the function.
@@ -1078,7 +1100,6 @@ struct Func final {
    * Print function attributes to out.
    */
   static void print_attrs(std::ostream& out, Attr attrs);
-  static void print_attrs(std::ostream& out, StaticCoeffects attrs);
 
 
   /////////////////////////////////////////////////////////////////////////////
@@ -1108,7 +1129,6 @@ struct Func final {
   // Having public setters here should be avoided, so try not to add any.
 
   void setAttrs(Attr attrs);
-  void setStaticCoeffects(StaticCoeffects attrs);
   void setBaseCls(Class* baseCls);
   void setFuncHandle(rds::Link<LowPtr<Func>, rds::Mode::NonLocal> l);
   void setHasPrivateAncestor(bool b);
@@ -1130,7 +1150,7 @@ struct Func final {
     return offsetof(Func, m_##f);       \
   }
   OFF(attrs)
-  OFF(staticCoeffects)
+  OFF(requiredCoeffects)
   OFF(name)
   OFF(maxStackCells)
   OFF(maybeIntercepted)
@@ -1268,7 +1288,6 @@ private:
         bool m_isRxDisabled : true;
         bool m_hasParamsWithMultiUBs : true;
         bool m_hasReturnWithMultiUBs : true;
-        bool m_hasCoeffectRules : true;
       };
       uint16_t m_allFlags;
     };
@@ -1330,7 +1349,6 @@ private:
     ExtendedSharedData(const ExtendedSharedData&) = delete;
     ExtendedSharedData(ExtendedSharedData&&) = delete;
 
-    MaybeDataType m_hniReturnType;
     ArFunction m_arFuncPtr;
     NativeFunction m_nativeFuncPtr;
     ReifiedGenericsInfo m_reifiedGenericsInfo;
@@ -1340,9 +1358,11 @@ private:
     Offset m_bclen;  // Only read if SharedData::m_bclen is kSmallDeltaLimit
     int m_line2;    // Only read if SharedData::m_line2 is kSmallDeltaLimit
     int m_sn;       // Only read if SharedData::m_sn is kSmallDeltaLimit
+    MaybeDataType m_hniReturnType;
+    RuntimeCoeffects m_shallowCoeffectsWithLocals{RuntimeCoeffects::none()};
     int64_t m_dynCallSampleRate;
   };
-  static_assert(CheckSize<ExtendedSharedData, use_lowptr ? 280 : 312>(), "");
+  static_assert(CheckSize<ExtendedSharedData, use_lowptr ? 272 : 304>(), "");
 
   /*
    * SharedData accessors for internal use.
@@ -1670,7 +1690,7 @@ private:
   bool m_hasForeignThis : 1;
   bool m_registeredInDataMap : 1;
   // 2 free bits
-  StaticCoeffects m_staticCoeffects{StaticCoeffects::none()};
+  RuntimeCoeffects m_requiredCoeffects{RuntimeCoeffects::none()};
   int16_t m_maxStackCells{0};
   uint64_t m_inoutBitVal{0};
   Unit* const m_unit;

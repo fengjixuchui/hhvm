@@ -17,9 +17,9 @@
 
 #include "hphp/runtime/ext/array/ext_array.h"
 
-#include "hphp/runtime/base/array-provenance.h"
 #include "hphp/runtime/base/array-data-defs.h"
 #include "hphp/runtime/base/array-init.h"
+#include "hphp/runtime/base/array-provenance.h"
 #include "hphp/runtime/base/bespoke-array.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/collections.h"
@@ -68,9 +68,7 @@ Array makeReserveLike(DataType type, size_t size) {
   auto const ad = [&]{
     switch (dt_with_rc(type)) {
       case KindOfVec:    return PackedArray::MakeReserveVec(size);
-      case KindOfVArray: return PackedArray::MakeReserveVArray(size);
       case KindOfDict:   return MixedArray::MakeReserveDict(size);
-      case KindOfDArray: return MixedArray::MakeReserveDArray(size);
       case KindOfKeyset: return SetArray::MakeReserveSet(size);
       default:           always_assert(false);
     }
@@ -87,7 +85,7 @@ Array makeReserveLike(DataType type, size_t size) {
 // for optimizations in the loops below.
 void appendKeysAndVals(Array& array, ArrayIter& it) {
   assertx(array->toDataType() == it.getArrayData()->toDataType());
-  if (array.isVArray() || array.isVec() || array.isKeyset()) {
+  if (array.isVec() || array.isKeyset()) {
     for (; it; ++it) {
       array.append(it.secondVal());
     }
@@ -262,7 +260,7 @@ TypedValue HHVM_FUNCTION(array_combine,
                   "number of elements");
     return make_tv<KindOfBoolean>(false);
   }
-  Array ret = Array::attach(MixedArray::MakeReserveMixed(keys_size));
+  Array ret = Array::attach(MixedArray::MakeReserveDict(keys_size));
   for (ArrayIter iter1(cell_keys), iter2(cell_values);
        iter1; ++iter1, ++iter2) {
     auto const key = iter1.secondValPlus();
@@ -339,7 +337,7 @@ TypedValue HHVM_FUNCTION(array_fill,
     raise_invalid_argument_warning("Number of elements can't be negative");
     return make_tv<KindOfBoolean>(false);
   } else if (num == 0) {
-    return tvReturn(start_index == 0 ? empty_varray() : empty_darray());
+    return tvReturn(start_index == 0 ? empty_vec_array() : empty_dict_array());
   }
 
   if (start_index == 0) {
@@ -425,10 +423,6 @@ bool HHVM_FUNCTION(array_key_exists,
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
     case KindOfObject:
     case KindOfResource:
     case KindOfRecord:
@@ -475,7 +469,7 @@ TypedValue HHVM_FUNCTION(array_keys,
 namespace {
 
 void php_array_merge(Array& arr1, const Array& arr2) {
-  assertx(arr1->hasVanillaMixedLayout());
+  assertx(arr1->isVanillaDict());
   arr1.reset(!arr2.empty() ? MixedArray::Merge(arr1.get(), arr2.get())
                            : MixedArray::Renumber(arr1.get()));
 }
@@ -492,7 +486,7 @@ void php_array_merge_recursive(Array& arr1, const Array& arr2) {
         arr1.convertKey<IntishCast::Cast>(*key.asTypedValue());
       auto const lval = arr1.lval(arrkey, AccessFlags::Key);
       auto subarr1 = tvCastToArrayLike<IntishCast::Cast>(lval.tv());
-      subarr1 = subarr1.toDArray();
+      subarr1 = subarr1.toDict();
       auto subarr2 = tvCastToArrayLike<IntishCast::Cast>(iter.secondVal());
       php_array_merge_recursive(subarr1, subarr2);
       tvUnset(lval); // avoid contamination of the value that was strongly bound
@@ -593,7 +587,7 @@ TypedValue HHVM_FUNCTION(array_merge,
                          const Variant& array1,
                          const Array& arrays /* = null array */) {
   getCheckedContainer(array1);
-  Array ret = Array::CreateDArray();
+  Array ret = Array::CreateDict();
   php_array_merge(ret, arr_array1);
 
   bool success = true;
@@ -621,7 +615,7 @@ TypedValue HHVM_FUNCTION(array_merge_recursive,
                          const Variant& array1,
                          const Array& arrays /* = null array */) {
   getCheckedArray(array1);
-  auto ret = Array::CreateDArray();
+  auto ret = Array::CreateDict();
   php_array_merge_recursive(ret, arr_array1);
 
   bool success = true;
@@ -668,7 +662,7 @@ static void php_array_replace_recursive(Array &arr1, const Array& arr2) {
       if (isArrayLikeType(lval.type())) {
         Array subarr1 = tvCastToArrayLike<IntishCast::Cast>(
           lval.tv()
-        ).toPHPArrayIntishCast();
+        ).toDictIntishCast();
         php_array_replace_recursive(subarr1, ArrNR(val(tv).parr));
         tvSet(make_array_like_tv(subarr1.get()), lval);
       } else {
@@ -685,7 +679,7 @@ TypedValue HHVM_FUNCTION(array_replace,
                          const Variant& array2 /* = uninit_variant */,
                          const Array& args /* = null array */) {
   getCheckedArray(array1);
-  Array ret = Array::CreateDArray();
+  Array ret = Array::CreateDict();
   php_array_replace(ret, arr_array1);
 
   if (UNLIKELY(array2.isNull() && args.empty())) {
@@ -708,7 +702,7 @@ TypedValue HHVM_FUNCTION(array_replace_recursive,
                          const Variant& array2 /* = uninit_variant */,
                          const Array& args /* = null array */) {
   getCheckedArray(array1);
-  Array ret = Array::CreateDArray();
+  Array ret = Array::CreateDict();
   php_array_replace_recursive(ret, arr_array1);
 
   if (UNLIKELY(array2.isNull() && args.empty())) {
@@ -731,16 +725,8 @@ TypedValue HHVM_FUNCTION(array_pad,
                          int pad_size,
                          const Variant& pad_value) {
   getCheckedArray(input);
-  auto arr = [&](){
-    if (UNLIKELY(arr_input.isDict() || arr_input.isKeyset())) {
-      return arr_input.toDArray();
-    } else if (UNLIKELY(arr_input.isVec())) {
-      return arr_input.toVArray();
-    } else {
-      return arr_input;
-    }
-  }();
-  assertx(arr->isHAMSafeDVArray());
+  auto arr = arr_input.isKeyset() ? arr_input.toDict() : arr_input;
+  assertx(arr->isVecType() || arr->isDictType());
   if (pad_size > 0) {
     return tvReturn(ArrayUtil::PadRight(arr, pad_value, pad_size));
   } else {
@@ -809,10 +795,6 @@ TypedValue HHVM_FUNCTION(array_product,
       case KindOfDict:
       case KindOfPersistentKeyset:
       case KindOfKeyset:
-      case KindOfPersistentDArray:
-      case KindOfDArray:
-      case KindOfPersistentVArray:
-      case KindOfVArray:
       case KindOfObject:
       case KindOfResource:
       case KindOfRFunc:
@@ -840,8 +822,6 @@ DOUBLE:
       case KindOfVec:
       case KindOfDict:
       case KindOfKeyset:
-      case KindOfDArray:
-      case KindOfVArray:
       case KindOfClsMeth:
       case KindOfRClsMeth:
       case KindOfObject:
@@ -982,15 +962,14 @@ TypedValue HHVM_FUNCTION(array_slice,
   }
 
   if (len <= 0) {
-    return make_persistent_array_like_tv(ArrayData::Create());
+    return make_persistent_array_like_tv(ArrayData::CreateDict());
   }
 
   bool input_is_packed = [&] {
     if (isClsMethType(cell_input.m_type)) {
       return true;
     } else if (isArrayLikeType(cell_input.m_type)) {
-      auto const ad = cell_input.m_data.parr;
-      return ad->isVecType() || ad->isVArray();
+      return tvIsVec(cell_input);
     }
 
     assertx(cell_input.m_type == KindOfObject);
@@ -1004,7 +983,7 @@ TypedValue HHVM_FUNCTION(array_slice,
   // the whole thing into a varray and return it immediately.
   if (offset == 0 && len == num_in && input_is_packed) {
     if (tvIsArrayLike(cell_input)) {
-      return tvReturn(ArrNR{val(cell_input).parr}.asArray().toVArray());
+      return tvReturn(ArrNR{val(cell_input).parr}.asArray().toVec());
     }
     if (tvIsClsMeth(cell_input) && RO::EvalIsCompatibleClsMethType) {
       raiseClsMethToVecWarningHelper(__FUNCTION__+2);
@@ -1027,7 +1006,7 @@ TypedValue HHVM_FUNCTION(array_slice,
 
   // Otherwise VArrayInit can't be used because non-numeric keys are
   // preserved even when preserve_keys is false
-  Array ret = Array::attach(MixedArray::MakeReserveDArray(len));
+  Array ret = Array::attach(MixedArray::MakeReserveDict(len));
   auto nextKI = 0; // for appends
   for (; pos < (offset + len) && iter; ++pos, ++iter) {
     auto const key = iter.first();
@@ -1043,7 +1022,7 @@ TypedValue HHVM_FUNCTION(array_slice,
 Variant array_splice(Variant& input, int offset,
                      const Variant& length, const Variant& replacement) {
   getCheckedArrayVariant(input);
-  Array ret = Array::CreateDArray();
+  Array ret = Array::CreateDict();
   int64_t len = length.isNull() ? 0x7FFFFFFF : length.toInt64();
   input = ArrayUtil::Splice(arr_input, offset, len, replacement, ret);
   return ret;
@@ -1100,10 +1079,6 @@ TypedValue HHVM_FUNCTION(array_sum,
       case KindOfDict:
       case KindOfPersistentKeyset:
       case KindOfKeyset:
-      case KindOfPersistentDArray:
-      case KindOfDArray:
-      case KindOfPersistentVArray:
-      case KindOfVArray:
       case KindOfObject:
       case KindOfResource:
       case KindOfRFunc:
@@ -1131,8 +1106,6 @@ DOUBLE:
       case KindOfVec:
       case KindOfDict:
       case KindOfKeyset:
-      case KindOfDArray:
-      case KindOfVArray:
       case KindOfClsMeth:
       case KindOfRClsMeth:
       case KindOfObject:
@@ -1162,16 +1135,16 @@ TypedValue HHVM_FUNCTION(array_unshift,
     auto const size = ad->size() + args.size() + 1;
     auto newArray = makeReserveLike(dt, size);
     if (ad->isLegacyArray()) newArray->setLegacyArrayInPlace(true);
-    if (isDictOrDArrayType(dt)) {
+    if (isDictType(dt)) {
       int64_t i = 0;
       newArray.set(i++, var);
       if (!args.empty()) {
-        IterateVNoInc(args.get(), [&](auto val) { newArray.set(i++, val); });
+        IterateV(args.get(), [&](auto val) { newArray.set(i++, val); });
       }
     } else {
       newArray.append(var);
       if (!args.empty()) {
-        IterateVNoInc(args.get(), [&](auto val) { newArray.append(val); });
+        IterateV(args.get(), [&](auto val) { newArray.append(val); });
       }
     }
     Array& arr_array = array.asArrRef();
@@ -1224,7 +1197,7 @@ TypedValue HHVM_FUNCTION(array_unshift,
 TypedValue HHVM_FUNCTION(array_values,
                          const Variant& input) {
   if (input.isArray() || input.isClsMeth()) {
-    return tvReturn(input.toVArray());
+    return tvReturn(input.toVec());
   }
 
   folly::Optional<VArrayInit> ai;
@@ -1306,10 +1279,6 @@ int64_t HHVM_FUNCTION(count,
     case KindOfLazyClass:
       return 1;
 
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
     case KindOfPersistentVec:
     case KindOfVec:
     case KindOfPersistentDict:
@@ -1491,7 +1460,7 @@ static int cmp_func(const Variant& v1, const Variant& v2, const void *data) {
 #define diff_intersect_body(type, vararg, intersect_params)     \
   getCheckedArray(array1);                                      \
   if (!arr_array1.size()) {                                     \
-    return tvReturn(empty_array());                             \
+    return tvReturn(empty_dict_array());                             \
   }                                                             \
   auto ret = arr_array1.type(array2, intersect_params);         \
   if (ret.size()) {                                             \
@@ -1631,7 +1600,7 @@ TypedValue HHVM_FUNCTION(array_diff,
   }
   /* If container1 is empty, we can stop here and return the empty array */
   if (!getContainerSize(c1)) {
-    return make_persistent_array_like_tv(ArrayData::Create());
+    return make_persistent_array_like_tv(ArrayData::CreateDict());
   }
   /* If all of the containers (except container1) are empty, we can just
      return container1 (converting it to an array if needed) */
@@ -1642,7 +1611,7 @@ TypedValue HHVM_FUNCTION(array_diff,
       return tvReturn(container1.toArray<IntishCast::Cast>());
     }
   }
-  Array ret = Array::CreateDArray();
+  Array ret = Array::CreateDict();
 
   // Put all of the values from all the containers (except container1 into a
   // Set. All types aside from integer and string will be cast to string, and
@@ -1693,7 +1662,7 @@ bool array_diff_intersect_key_inputs_ok(const TypedValue& c1, const TypedValue& 
   callback(getContainerSize(c2));
 
   bool ok = true;
-  IterateKVNoInc(args, [&](TypedValue k, TypedValue v) {
+  IterateKV(args, [&](TypedValue k, TypedValue v) {
     assertx(k.m_type == KindOfInt64);
     if (isClsMethType(v.m_type)) {
       raiseIsClsMethWarning(fname, k.m_data.num + 3);
@@ -1816,7 +1785,7 @@ TypedValue HHVM_FUNCTION(array_diff_key,
     return make_tv<KindOfNull>();
   }
   if (getContainerSize(c1) == 0) {
-    return make_persistent_array_like_tv(ArrayData::Create());
+    return make_persistent_array_like_tv(ArrayData::CreateDict());
   }
   if (largestSize == 0) {
     if (isArrayLikeType(c1.m_type)) {
@@ -1829,7 +1798,7 @@ TypedValue HHVM_FUNCTION(array_diff_key,
   auto diff_step = [](TypedValue left, TypedValue right) {
     auto leftSize = getContainerSize(left);
     // If we have more than 2 args, the left input could end up empty
-    if (leftSize == 0) return empty_array();
+    if (leftSize == 0) return empty_dict_array();
 
     ArrayInit ret(leftSize, ArrayInit::Map{});
     auto setInt = [&](int64_t k, TypedValue v) { ret.set(k, v); };
@@ -1893,7 +1862,7 @@ TypedValue HHVM_FUNCTION(array_diff_key,
   };
 
   auto ret = diff_step(c1, c2);
-  IterateVNoInc(args.get(), [&](TypedValue v) {
+  IterateV(args.get(), [&](TypedValue v) {
     ret = diff_step(make_array_like_tv(ret.get()), v);
   });
   return make_array_like_tv(ret.detach());
@@ -2207,10 +2176,10 @@ TypedValue HHVM_FUNCTION(array_intersect,
   /* If any of the containers were empty, we can stop here and return the
      empty array */
   if (!getContainerSize(c1) || !smallestSize) {
-    return make_persistent_array_like_tv(ArrayData::CreateDArray());
+    return make_persistent_array_like_tv(ArrayData::CreateDict());
   }
 
-  Array ret = Array::CreateDArray();
+  Array ret = Array::CreateDict();
   // Build up a Set containing the values that are present in all the
   // containers (except container1)
   auto st = req::make<c_Set>();
@@ -2262,12 +2231,12 @@ TypedValue HHVM_FUNCTION(array_intersect_key,
     return make_tv<KindOfNull>();
   }
   if ((getContainerSize(c1) == 0) || empty_arg) {
-    return make_persistent_array_like_tv(ArrayData::Create());
+    return make_persistent_array_like_tv(ArrayData::CreateDict());
   }
 
   auto intersect_step = [](TypedValue left, TypedValue right) {
     auto const leftSize = getContainerSize(left);
-    if (leftSize == 0) return empty_array();
+    if (leftSize == 0) return empty_dict_array();
 
     ArrayInit ret(leftSize, ArrayInit::Map{});
     auto setInt = [&](int64_t k, TypedValue v) { ret.set(k, v); };
@@ -2331,7 +2300,7 @@ TypedValue HHVM_FUNCTION(array_intersect_key,
   };
 
   auto ret = intersect_step(c1, c2);
-  IterateVNoInc(args.get(), [&](TypedValue v) {
+  IterateV(args.get(), [&](TypedValue v) {
     ret = intersect_step(make_array_like_tv(ret.get()), v);
   });
   return make_array_like_tv(ret.detach());
@@ -2573,7 +2542,7 @@ static bool
 php_sort(Variant& container, int sort_flags, bool ascending) {
   if (container.isArray()) {
     auto const ad = container.asTypedValue()->val().parr;
-    if (ad->size() == 1 && (ad->isVArray() || ad->isVecType())) return true;
+    if (ad->size() == 1 && ad->isVecType()) return true;
     if (ad->empty()) return true;
     SortFunction sf = getSortFunction(SORTFUNC_SORT, ascending);
     ArraySortTmp ast(container.asTypedValue(), sf);
@@ -2601,7 +2570,7 @@ static bool
 php_asort(Variant& container, int sort_flags, bool ascending) {
   if (container.isArray()) {
     auto const ad = container.asTypedValue()->val().parr;
-    if (ad->size() <= 1 && !(ad->isVArray() || ad->isVecType())) return true;
+    if (ad->size() <= 1 && !ad->isVecType()) return true;
     SortFunction sf = getSortFunction(SORTFUNC_ASORT, ascending);
     ArraySortTmp ast(container.asTypedValue(), sf);
     ast->asort(sort_flags, ascending);
@@ -2627,8 +2596,8 @@ static bool
 php_ksort(Variant& container, int sort_flags, bool ascending) {
   if (container.isArray()) {
     auto const ad = container.asTypedValue()->val().parr;
-    auto const vecish = ad->isVArray() || ad->isVecType();
-    if ((vecish && ascending) || (!vecish && ad->size() <= 1)) return true;
+    auto const vec = ad->isVecType();
+    if ((vec && ascending) || (!vec && ad->size() <= 1)) return true;
     SortFunction sf = getSortFunction(SORTFUNC_KSORT, ascending);
     ArraySortTmp ast(container.asTypedValue(), sf);
     ast->ksort(sort_flags, ascending);
@@ -2708,7 +2677,7 @@ bool HHVM_FUNCTION(usort,
   if (checkIsClsMethAndRaise( __FUNCTION__+2, container)) return false;
   if (container.isArray()) {
     auto const ad = container.asTypedValue()->val().parr;
-    if (ad->size() == 1 && (ad->isVArray() || ad->isVecType())) return true;
+    if (ad->size() == 1 && ad->isVecType()) return true;
     if (ad->empty()) return true;
     ArraySortTmp ast(container.asTypedValue(), SORTFUNC_USORT);
     return ast->usort(cmp_function);
@@ -2735,7 +2704,7 @@ bool HHVM_FUNCTION(uasort,
   if (checkIsClsMethAndRaise( __FUNCTION__+2, container)) return false;
   if (container.isArray()) {
     auto const ad = container.asTypedValue()->val().parr;
-    if (ad->size() <= 1 && !(ad->isVArray() || ad->isVecType())) return true;
+    if (ad->size() <= 1 && !ad->isVecType()) return true;
     ArraySortTmp ast(container.asTypedValue(), SORTFUNC_UASORT);
     return ast->uasort(cmp_function);
   }
@@ -2763,7 +2732,7 @@ bool HHVM_FUNCTION(uksort,
   if (checkIsClsMethAndRaise( __FUNCTION__+2, container)) return false;
   if (container.isArray()) {
     auto const ad = container.asTypedValue()->val().parr;
-    if (ad->size() <= 1 && !(ad->isVArray() || ad->isVecType())) return true;
+    if (ad->size() <= 1 && !ad->isVecType()) return true;
     ArraySortTmp ast(container.asTypedValue(), SORTFUNC_UKSORT);
     return ast->uksort(cmp_function);
   }
@@ -3044,12 +3013,12 @@ Array HHVM_FUNCTION(HH_vec, const Variant& input) {
 
 // HH\\varray
 Array HHVM_FUNCTION(HH_varray, const Variant& input) {
-  return input.toVArray();
+  return input.toVec();
 }
 
 // HH\\darray
 Array HHVM_FUNCTION(HH_darray, const Variant& input) {
-  return input.toDArray();
+  return input.toDict();
 }
 
 TypedValue HHVM_FUNCTION(HH_array_key_cast, const Variant& input) {
@@ -3099,13 +3068,6 @@ TypedValue HHVM_FUNCTION(HH_array_key_cast, const Variant& input) {
       SystemLib::throwInvalidArgumentExceptionObject(
         "Keysets cannot be cast to an array-key"
       );
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
-      SystemLib::throwInvalidArgumentExceptionObject(
-        "Arrays cannot be cast to an array-key"
-      );
     case KindOfClsMeth:
       SystemLib::throwInvalidArgumentExceptionObject(
         "ClsMeths cannot be cast to an array-key"
@@ -3131,28 +3093,18 @@ TypedValue HHVM_FUNCTION(HH_array_key_cast, const Variant& input) {
 }
 
 String HHVM_FUNCTION(HH_get_provenance, const Variant& in) {
-  if (!isArrayLikeType(in.getType())) return "";
-  if (!RuntimeOption::EvalArrayProvenance) return "";
-
-  auto const& arr = in.asCArrRef();
-  auto const tag = arrprov::getTag(arr.get());
-  if (tag.valid()) {
-    return tag.toString();
-  } else {
-    return "<none>";
-  }
+  return "";
 }
 
 TypedValue HHVM_FUNCTION(HH_tag_provenance_here, TypedValue in, int64_t flags) {
-  auto force_cow = Variant::wrap(in);
-  return arrprov::tagTvRecursively(in, flags);
+  return tvReturn(tvAsCVarRef(in));
 }
 
 Array HHVM_FUNCTION(merge_xhp_attr_declarations,
                     const Array& arr1,
                     const Array& arr2,
                     const Array& rest) {
-  auto ret = Array::CreateDArray();
+  auto ret = Array::CreateDict();
   IterateKV(arr1.get(), [&](TypedValue k, TypedValue v) { ret.set(k, v); });
   IterateKV(arr2.get(), [&](TypedValue k, TypedValue v) { ret.set(k, v); });
   int idx = 2;

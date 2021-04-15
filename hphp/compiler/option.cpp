@@ -63,8 +63,6 @@ std::map<std::string,std::string,stdltistr> Option::AutoloadFuncMap;
 std::map<std::string,std::string> Option::AutoloadConstMap;
 std::string Option::AutoloadRoot;
 
-std::vector<std::string> Option::APCProfile;
-
 bool Option::GenerateTextHHBC = false;
 bool Option::GenerateHhasHHBC = false;
 bool Option::GenerateBinaryHHBC = false;
@@ -145,7 +143,7 @@ void Option::Load(const IniSetting::Map& ini, Hdf &config) {
       VariableUnserializer uns{
         value.data(), value.size(),
         VariableUnserializer::Type::Internal,
-        false, empty_array()
+        false, empty_dict_array()
       };
       try {
         auto v = uns.unserialize();
@@ -183,17 +181,12 @@ void Option::Load(const IniSetting::Map& ini, Hdf &config) {
  Config::Bind(RuntimeOption::EvalCheckPropTypeHints, ini, config,
                "CheckPropTypeHints", RuntimeOption::EvalCheckPropTypeHints);
 
-  Config::Bind(APCProfile, ini, config, "APCProfile");
-
   Config::Bind(RuntimeOption::EnableHipHopSyntax,
                ini, config, "EnableHipHopSyntax",
                RuntimeOption::EnableHipHopSyntax);
   Config::Bind(RuntimeOption::EvalJitEnableRenameFunction,
                ini, config, "JitEnableRenameFunction",
                RuntimeOption::EvalJitEnableRenameFunction);
-  Config::Bind(RuntimeOption::EvalArrayProvenance,
-               ini, config, "ArrayProvenance",
-               RuntimeOption::EvalArrayProvenance);
   Config::Bind(EnableShortTags, ini, config, "EnableShortTags", true);
 
 #define BIND_HAC_OPTION(Name, Def)                      \
@@ -281,11 +274,8 @@ void Option::Load(const IniSetting::Map& ini, Hdf &config) {
                "NoticeOnCoerceForBitOp",
                RuntimeOption::EvalNoticeOnCoerceForBitOp);
 
-  // arrprov is only for dvarrays. It should be off if HADVAs is on.
-  if (RO::EvalHackArrDVArrs) {
-    RO::EvalArrayProvenance = false;
-    RO::EvalLogArrayProvenance = false;
-  }
+  RO::EvalArrayProvenance = false;
+  RO::EvalLogArrayProvenance = false;
 }
 
 void Option::Load() {

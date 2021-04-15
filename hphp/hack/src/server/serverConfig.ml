@@ -71,6 +71,7 @@ let make_sharedmem_config config options local_config =
   let hash_table_pow = int_ "sharedmem_hash_table_pow" ~default:18 config in
   let log_level = int_ "sharedmem_log_level" ~default:0 config in
   let sample_rate = float_ "sharedmem_sample_rate" ~default:0.0 config in
+  let compression = int_ "sharedmem_compression" ~default:0 config in
   let shm_dirs =
     string_list
       ~delim:(Str.regexp ",")
@@ -81,9 +82,10 @@ let make_sharedmem_config config options local_config =
   let shm_min_avail =
     int_ "sharedmem_minimum_available" ~default:shm_min_avail config
   in
-  let (global_size, heap_size, dep_table_pow, hash_table_pow) =
+  let (global_size, heap_size, dep_table_pow, hash_table_pow, compression) =
     match ServerArgs.ai_mode options with
-    | None -> (global_size, heap_size, dep_table_pow, hash_table_pow)
+    | None ->
+      (global_size, heap_size, dep_table_pow, hash_table_pow, compression)
     | Some ai_options ->
       Ai_options.modify_shared_mem_sizes
         global_size
@@ -101,6 +103,7 @@ let make_sharedmem_config config options local_config =
     sample_rate;
     shm_dirs;
     shm_min_avail;
+    compression;
   }
 
 let config_list_regexp = Str.regexp "[, \t]+"
@@ -281,7 +284,6 @@ let load ~silent config_filename options : t * ServerLocalConfig.t =
   let global_opts =
     GlobalOptions.make
       ?po_deregister_php_stdlib:(bool_opt "deregister_php_stdlib" config)
-      ?po_disable_static_closures:(bool_opt "disable_static_closures" config)
       ?po_disable_array_typehint:
         (bool_opt "disable_parse_array_typehint" config)
       ?tco_disallow_array_typehint:(bool_opt "disallow_array_typehint" config)
@@ -426,12 +428,18 @@ let load ~silent config_filename options : t * ServerLocalConfig.t =
       ~tco_ifc_enabled:(ServerArgs.enable_ifc options)
       ?po_enable_enum_classes:(bool_opt "enable_enum_classes" config)
       ?po_enable_enum_supertyping:(bool_opt "enable_enum_supertyping" config)
-      ?po_array_unification:(bool_opt "array_unification" config)
+      ?po_hack_arr_dv_arrs:(bool_opt "hack_arr_dv_arrs" config)
       ?po_interpret_soft_types_as_like_types:
         (bool_opt "interpret_soft_types_as_like_types" config)
       ?tco_enable_strict_string_concat_interp:
         (bool_opt "enable_strict_string_concat_interp" config)
       ?tco_ignore_unsafe_cast:(bool_opt "ignore_unsafe_cast" config)
+      ?tco_allowed_expression_tree_visitors:
+        (Option.map
+           (string_list_opt "allowed_expression_tree_visitors" config)
+           ~f:(fun l -> List.map l ~f:Utils.add_ns))
+      ?tco_bitwise_math_new_code:(bool_opt "bitwise_math_new_code" config)
+      ?tco_inc_dec_new_code:(bool_opt "inc_dec_new_code" config)
       ()
   in
   Errors.allowed_fixme_codes_strict :=

@@ -533,7 +533,6 @@ module type Syntax_S = sig
       }
     | AnonymousFunction of {
         anonymous_attribute_spec: t;
-        anonymous_static_keyword: t;
         anonymous_async_keyword: t;
         anonymous_function_keyword: t;
         anonymous_left_paren: t;
@@ -654,6 +653,7 @@ module type Syntax_S = sig
     | FunctionCallExpression of {
         function_call_receiver: t;
         function_call_type_args: t;
+        function_call_enum_atom: t;
         function_call_left_paren: t;
         function_call_argument_list: t;
         function_call_right_paren: t;
@@ -905,6 +905,7 @@ module type Syntax_S = sig
       }
     | ClosureTypeSpecifier of {
         closure_outer_left_paren: t;
+        closure_readonly_keyword: t;
         closure_function_keyword: t;
         closure_inner_left_paren: t;
         closure_parameter_list: t;
@@ -1251,7 +1252,7 @@ module type Syntax_S = sig
   val make_anonymous_class : t -> t -> t -> t -> t -> t -> t -> t -> t -> t
 
   val make_anonymous_function :
-    t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t
+    t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t
 
   val make_anonymous_function_use_clause : t -> t -> t -> t -> t
 
@@ -1291,7 +1292,7 @@ module type Syntax_S = sig
 
   val make_isset_expression : t -> t -> t -> t -> t
 
-  val make_function_call_expression : t -> t -> t -> t -> t -> t
+  val make_function_call_expression : t -> t -> t -> t -> t -> t -> t
 
   val make_function_pointer_expression : t -> t -> t
 
@@ -1382,7 +1383,7 @@ module type Syntax_S = sig
   val make_dictionary_type_specifier : t -> t -> t -> t -> t
 
   val make_closure_type_specifier :
-    t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t
+    t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t -> t
 
   val make_closure_parameter_type_specifier : t -> t -> t -> t
 

@@ -890,20 +890,19 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                 })
             },
             AnonymousFunction(x) => {
-                get_index(13).and_then(|index| { match index {
+                get_index(12).and_then(|index| { match index {
                         0 => Some(&x.attribute_spec),
-                    1 => Some(&x.static_keyword),
-                    2 => Some(&x.async_keyword),
-                    3 => Some(&x.function_keyword),
-                    4 => Some(&x.left_paren),
-                    5 => Some(&x.parameters),
-                    6 => Some(&x.right_paren),
-                    7 => Some(&x.ctx_list),
-                    8 => Some(&x.colon),
-                    9 => Some(&x.readonly_return),
-                    10 => Some(&x.type_),
-                    11 => Some(&x.use_),
-                    12 => Some(&x.body),
+                    1 => Some(&x.async_keyword),
+                    2 => Some(&x.function_keyword),
+                    3 => Some(&x.left_paren),
+                    4 => Some(&x.parameters),
+                    5 => Some(&x.right_paren),
+                    6 => Some(&x.ctx_list),
+                    7 => Some(&x.colon),
+                    8 => Some(&x.readonly_return),
+                    9 => Some(&x.type_),
+                    10 => Some(&x.use_),
+                    11 => Some(&x.body),
                         _ => None,
                     }
                 })
@@ -1090,12 +1089,13 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                 })
             },
             FunctionCallExpression(x) => {
-                get_index(5).and_then(|index| { match index {
+                get_index(6).and_then(|index| { match index {
                         0 => Some(&x.receiver),
                     1 => Some(&x.type_args),
-                    2 => Some(&x.left_paren),
-                    3 => Some(&x.argument_list),
-                    4 => Some(&x.right_paren),
+                    2 => Some(&x.enum_atom),
+                    3 => Some(&x.left_paren),
+                    4 => Some(&x.argument_list),
+                    5 => Some(&x.right_paren),
                         _ => None,
                     }
                 })
@@ -1524,17 +1524,18 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                 })
             },
             ClosureTypeSpecifier(x) => {
-                get_index(10).and_then(|index| { match index {
+                get_index(11).and_then(|index| { match index {
                         0 => Some(&x.outer_left_paren),
-                    1 => Some(&x.function_keyword),
-                    2 => Some(&x.inner_left_paren),
-                    3 => Some(&x.parameter_list),
-                    4 => Some(&x.inner_right_paren),
-                    5 => Some(&x.contexts),
-                    6 => Some(&x.colon),
-                    7 => Some(&x.readonly_return),
-                    8 => Some(&x.return_type),
-                    9 => Some(&x.outer_right_paren),
+                    1 => Some(&x.readonly_keyword),
+                    2 => Some(&x.function_keyword),
+                    3 => Some(&x.inner_left_paren),
+                    4 => Some(&x.parameter_list),
+                    5 => Some(&x.inner_right_paren),
+                    6 => Some(&x.contexts),
+                    7 => Some(&x.colon),
+                    8 => Some(&x.readonly_return),
+                    9 => Some(&x.return_type),
+                    10 => Some(&x.outer_right_paren),
                         _ => None,
                     }
                 })

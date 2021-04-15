@@ -177,12 +177,12 @@ protected:
 namespace detail {
 
 struct VArray {
-  static constexpr auto MakeReserve = &PackedArray::MakeReserveVArray;
+  static constexpr auto MakeReserve = &PackedArray::MakeReserveVec;
   static constexpr auto Release = PackedArray::Release;
 };
 
 struct DArray {
-  static constexpr auto MakeReserve = &MixedArray::MakeReserveDArray;
+  static constexpr auto MakeReserve = &MixedArray::MakeReserveDict;
   static constexpr auto Release = MixedArray::Release;
 };
 
@@ -475,7 +475,7 @@ using VecInit = PackedArrayInitBase<detail::Vec, KindOfVec>;
 
 struct VArrayInit {
   explicit VArrayInit(size_t n)
-    : m_arr(PackedArray::MakeReserveVArray(n))
+    : m_arr(PackedArray::MakeReserveVec(n))
 #ifndef NDEBUG
     , m_addCount(0)
     , m_expectedCount(n)
@@ -491,7 +491,7 @@ struct VArrayInit {
     , m_expectedCount(other.m_expectedCount)
 #endif
   {
-    assertx(!m_arr || m_arr->isHAMSafeVArray());
+    assertx(!m_arr || m_arr->isVecType());
     other.m_arr = nullptr;
 #ifndef NDEBUG
     other.m_expectedCount = 0;
@@ -503,8 +503,7 @@ struct VArrayInit {
 
   ~VArrayInit() {
     // In case an exception interrupts the initialization.
-    assertx(!m_arr || (m_arr->hasExactlyOneRef() &&
-                       m_arr->isHAMSafeVArray()));
+    assertx(!m_arr || (m_arr->hasExactlyOneRef() && m_arr->isVecType()));
     if (m_arr) m_arr->release();
   }
 
@@ -523,7 +522,7 @@ struct VArrayInit {
 
   Variant toVariant() {
     assertx(m_arr->hasExactlyOneRef());
-    assertx(m_arr->isHAMSafeVArray());
+    assertx(m_arr->isVecType());
     auto const ptr = m_arr;
     m_arr = nullptr;
 #ifndef NDEBUG
@@ -534,7 +533,7 @@ struct VArrayInit {
 
   Array toArray() {
     assertx(m_arr->hasExactlyOneRef());
-    assertx(m_arr->isHAMSafeVArray());
+    assertx(m_arr->isVecType());
     auto const ptr = m_arr;
     m_arr = nullptr;
 #ifndef NDEBUG
@@ -545,7 +544,7 @@ struct VArrayInit {
 
   ArrayData* create() {
     assertx(m_arr->hasExactlyOneRef());
-    assertx(m_arr->isHAMSafeVArray());
+    assertx(m_arr->isVecType());
     auto const ptr = m_arr;
     m_arr = nullptr;
 #ifndef NDEBUG
@@ -574,7 +573,7 @@ private:
 
 struct DArrayInit {
   explicit DArrayInit(size_t n)
-    : m_arr(MixedArray::MakeReserveDArray(n))
+    : m_arr(MixedArray::MakeReserveDict(n))
 #ifndef NDEBUG
     , m_addCount(0)
     , m_expectedCount(n)
@@ -592,7 +591,7 @@ struct DArrayInit {
     , m_expectedCount(other.m_expectedCount)
 #endif
   {
-    assertx(!m_arr || m_arr->isHAMSafeDArray());
+    assertx(!m_arr || m_arr->isDictType());
     other.m_arr = nullptr;
 #ifndef NDEBUG
     other.m_expectedCount = 0;
@@ -604,8 +603,7 @@ struct DArrayInit {
 
   ~DArrayInit() {
     // In case an exception interrupts the initialization.
-    assertx(!m_arr || (m_arr->hasExactlyOneRef() &&
-                      m_arr->isHAMSafeDArray()));
+    assertx(!m_arr || (m_arr->hasExactlyOneRef() && m_arr->isDictType()));
     if (m_arr) m_arr->release();
   }
 
@@ -723,7 +721,7 @@ struct DArrayInit {
 
   Variant toVariant() {
     assertx(m_arr->hasExactlyOneRef());
-    assertx(m_arr->isHAMSafeDArray());
+    assertx(m_arr->isDictType());
     auto const ptr = m_arr;
     m_arr = nullptr;
 #ifndef NDEBUG
@@ -734,7 +732,7 @@ struct DArrayInit {
 
   Array toArray() {
     assertx(m_arr->hasExactlyOneRef());
-    assertx(m_arr->isHAMSafeDArray());
+    assertx(m_arr->isDictType());
     auto const ptr = m_arr;
     m_arr = nullptr;
 #ifndef NDEBUG
@@ -745,7 +743,7 @@ struct DArrayInit {
 
   ArrayData* create() {
     assertx(m_arr->hasExactlyOneRef());
-    assertx(m_arr->isHAMSafeDArray());
+    assertx(m_arr->isDictType());
     auto const ptr = m_arr;
     m_arr = nullptr;
 #ifndef NDEBUG
@@ -895,7 +893,7 @@ namespace make_array_detail {
  */
 template<class... Vals>
 Array make_varray(Vals&&... vals) {
-  static_assert(sizeof...(vals), "use Array::CreateVArray() instead");
+  static_assert(sizeof...(vals), "use Array::CreateVec() instead");
   VArrayInit init(sizeof...(vals));
   make_array_detail::varray_impl(init, std::forward<Vals>(vals)...);
   return init.toArray();
@@ -916,16 +914,9 @@ Array make_vec_array(Vals&&... vals) {
   return init.toArray();
 }
 
-template<class... Vals>
-Array make_vec_array_tagged(arrprov::Tag tag, Vals&&... vals) {
-  arrprov::TagOverride to{tag};
-  auto ret = make_vec_array(std::forward<Vals>(vals)...);
-  return ret;
-}
-
 /*
- * Helper for creating map-like arrays (kMixedKind).  Takes pairs of
- * arguments for the keys and values.
+ * Helper for creating dicts. TODO(kshaunak): Rename to make_dict.
+ * Takes pairs of arguments for the keys and values.
  *
  * Usage:
  *
@@ -954,19 +945,12 @@ Array make_map_array(KVPairs&&... kvpairs) {
  */
 template<class... KVPairs>
 Array make_darray(KVPairs&&... kvpairs) {
-  static_assert(sizeof...(kvpairs), "use Array::CreateDArray() instead");
+  static_assert(sizeof...(kvpairs), "use Array::CreateDict() instead");
   static_assert(
     sizeof...(kvpairs) % 2 == 0, "make_darray needs key value pairs");
   DArrayInit init(sizeof...(kvpairs) / 2);
   make_array_detail::darray_impl(init, std::forward<KVPairs>(kvpairs)...);
   return init.toArray();
-}
-
-template<class... KVPairs>
-Array make_darray_tagged(arrprov::Tag tag, KVPairs&&... kvpairs) {
-  arrprov::TagOverride to{tag};
-  auto ret = make_darray(std::forward<KVPairs>(kvpairs)...);
-  return ret;
 }
 
 /*

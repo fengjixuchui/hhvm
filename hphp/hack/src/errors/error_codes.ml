@@ -22,20 +22,6 @@
  *)
 (*****************************************************************************)
 
-(* Errors in the Temporary range are for errors that will disappear in the
- * future. *)
-module Temporary = struct
-  let darray_not_supported = 1
-
-  let varray_not_supported = 2
-
-  (* DEPRECATED let unknown_fields_not_supported = 3 *)
-  let varray_or_darray_not_supported = 4
-
-  (* DEPRECATED let goto_not_supported = 5 *)
-  let nonnull_not_supported = 6
-end
-
 module Parsing = struct
   type t =
     | FixmeFormat [@value 1001]
@@ -136,7 +122,7 @@ module Naming = struct
     | ArrayTypehintsDisallowed [@value 2082]
     (* | ArrayLiteralsDisallowedDEPRECATED [@value 2083] *)
     | WildcardHintDisallowed [@value 2084]
-    | AttributeClassNameConflict [@value 2085]
+    (* | AttributeClassNameConflictDEPRECATED [@value 2085] *)
     | MethodNeedsVisibility [@value 2086]
     (* | ReferenceInStrictModeDEPRECATED [@value 2087] *)
     (* | DeclareStatementDEPRECATED [@value 2089] *)
@@ -160,7 +146,7 @@ module Naming = struct
     | SelfInNonFinalFunctionPointer [@value 2113]
     | ClassMethNonFinalCLASS [@value 2114]
     | WildcardTypeParamDisallowed [@value 2115]
-    | CallingAssert [@value 2116]
+    (* | CallingAssert [@value 2116] *)
     | InvalidWildcardContext [@value 2117]
   [@@deriving enum, show { with_path = false }]
 
@@ -204,13 +190,13 @@ module NastCheck = struct
     (* | OptionalShapeFieldsNotSupportedDEPRECATED [@value 3033] *)
     (* | AwaitNotAllowedDEPRECATED [@value 3034] *)
     (* | AsyncInInterfaceDEPRECATED [@value 3035] *)
-    | AwaitInCoroutine [@value 3036]
-    | YieldInCoroutine [@value 3037]
+    (* | AwaitInCoroutine [@value 3036] *)
+    (* | YieldInCoroutine [@value 3037] *)
     (* | SuspendOutsideOfCoroutine [@value 3038] *)
     (* | SuspendInFinally [@value 3039] *)
     (* | BreakContinueNNotSupportedDEPRECATED [@value 3040] *)
     | StaticMemoizedFunction [@value 3041]
-    | InoutParamsInCoroutine [@value 3042]
+    (* | InoutParamsInCoroutine [@value 3042] *)
     | InoutParamsSpecial [@value 3043]
     (* | InoutParamsMixByrefDEPRECATED [@value 3044] *)
     | InoutParamsMemoize [@value 3045]
@@ -220,7 +206,7 @@ module NastCheck = struct
     (* | RetiredError3049DEPRECATED [@value 3049] *)
     | InoutArgumentBadExpr [@value 3050]
     | IllegalDestructor [@value 3056]
-    | CoroutineInConstructor [@value 3065]
+    (* | CoroutineInConstructor [@value 3065] *)
     (* | IllegalReturnByRefDEPRECATED [@value 3066] *)
     (* | IllegalByRefExprDEPRECATED [@value 3067] *)
     (* | VariadicByRefParamDEPRECATED [@value 3068] *)
@@ -242,7 +228,8 @@ module NastCheck = struct
     | InstancePropertyInAbstractFinalClass [@value 3088]
     | DynamicallyCallableReified [@value 3089]
     | IllegalContext [@value 3090]
-    | InvalidConstFunAttribute [@value 3091]
+    (* | InvalidConstFunAttributeDEPRECATED [@value 3091] *)
+    | ListRvalue [@value 3092]
   [@@deriving enum, show { with_path = false }]
 
   let err_code = to_enum
@@ -421,8 +408,8 @@ module Typing = struct
     (* | NonCallArgumentInSuspend [@value 4169] *)
     (* | NonCoroutineCallInSuspend [@value 4170] *)
     (* | CoroutineCallOutsideOfSuspend [@value 4171] *)
-    | FunctionIsNotCoroutine [@value 4172]
-    | CoroutinnessMismatch [@value 4173]
+    (* | FunctionIsNotCoroutine [@value 4172] *)
+    (* | CoroutinnessMismatch [@value 4173] *)
     (* | ExpectingAwaitableReturnTypeHint [@value 4174] *)
     (* | ReffinessInvariantDEPRECATED [@value 4175] *)
     | DollardollarLvalue [@value 4176]
@@ -480,7 +467,8 @@ module Typing = struct
     (* | InvalidPPLCallDEPRECATED [@value 4264] *)
     (* | InvalidPPLStaticCallDEPRECATED [@value 4265] *)
     (* | TypeTestInLambdaDEPRECATED [@value 4266] *)
-    | CoroutineOutsideExperimental [@value 4271]
+    (* | InvalidTraversableInRx [@value 4267] *)
+    (* | CoroutineOutsideExperimental [@value 4271] *)
     (* | PPLMethPointerDEPRECATED [@value 4272] *)
     (* | InvalidTruthinessTestDEPRECATED [@value 4273] *)
     | RePrefixedNonString [@value 4274]
@@ -537,9 +525,9 @@ module Typing = struct
     | EnumSubtypeMustHaveCompatibleConstraint [@value 4330]
     | ParameterDefaultValueWrongType [@value 4331]
     | NewtypeAliasMustSatisfyConstraint [@value 4332]
-    | BadFunctionTypevar [@value 4333]
-    | BadClassTypevar [@value 4334]
-    | BadMethodTypevar [@value 4335]
+    (* | BadFunctionTypevarDEPRECATED [@value 4333] *)
+    (* | BadClassTypevarDEPRECATED [@value 4334] *)
+    (* | BadMethodTypevarDEPRECATED [@value 4335] *)
     | MissingReturnInNonVoidFunction [@value 4336]
     | InoutReturnTypeMismatch [@value 4337]
     | ClassConstantValueDoesNotMatchHint [@value 4338]
@@ -614,7 +602,7 @@ module Typing = struct
     | ConsiderMethCaller [@value 4407]
     | EnumSupertypingReservedSyntax [@value 4408]
     | ReadonlyValueModified [@value 4409]
-    | ReadonlyVarMismatch [@value 4410]
+    (* | ReadonlyVarMismatch [@value 4410] DEPRECATED *)
     | ReadonlyMismatch [@value 4411]
     | ExplicitReadonlyCast [@value 4412]
     | ReadonlyMethodCall [@value 4413]
@@ -622,6 +610,17 @@ module Typing = struct
     | StrictStrInterpTypeMismatch [@value 4415]
     | InvalidMethCallerCallingConvention [@value 4416]
     | UnsafeCast [@value 4417]
+    | ReadonlyException [@value 4418]
+    | InvalidTypeHint [@value 4419]
+    | ExperimentalExpressionTrees [@value 4420]
+    | ReturnsWithAndWithoutValue [@value 4421]
+    | NonVoidAnnotationOnReturnVoidFun [@value 4422]
+    | BitwiseMathInvalidArgument [@value 4423]
+    | CyclicClassConstant [@value 4424]
+    | PrivateDynamicRead [@value 4425]
+    | PrivateDynamicWrite [@value 4426]
+    | IncDecInvalidArgument [@value 4427]
+    | ReadonlyClosureCall [@value 4428]
   [@@deriving enum, show { with_path = false }]
 
   let err_code = to_enum

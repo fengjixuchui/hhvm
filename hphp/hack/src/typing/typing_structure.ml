@@ -6,8 +6,6 @@
  * LICENSE file in the "hack" directory of this source tree.
  *
  *)
-
-(* This module implements the typing for type_structure. *)
 open Hh_prelude
 open Common
 open Typing_defs
@@ -18,6 +16,8 @@ module Reason = Typing_reason
 module SN = Naming_special_names
 module Subst = Decl_subst
 module TUtils = Typing_utils
+
+(** This module implements the typing for type_structure. *)
 
 let make_ts : Typing_env_types.env -> locl_ty -> Typing_env_types.env * locl_ty
     =
@@ -36,11 +36,17 @@ let make_ts : Typing_env_types.env -> locl_ty -> Typing_env_types.env * locl_ty
         td_tparams
     in
     let ts =
-      mk (Reason.Rnone, Tapply ((Pos.none, SN.FB.cTypeStructure), params))
+      mk
+        (Reason.Rnone, Tapply ((Pos_or_decl.none, SN.FB.cTypeStructure), params))
     in
     let ety_env =
       {
-        (Phase.env_with_self env) with
+        (Phase.env_with_self
+           env
+           ~on_error:
+             (Errors.invalid_type_hint
+                (Reason.to_pos r |> Pos_or_decl.unsafe_to_raw_pos)))
+        with
         substs = Subst.make_locl td_tparams [ty];
       }
     in
@@ -58,7 +64,6 @@ let rec transform_shapemap ?(nullable = false) env pos ty shape =
       env
       pos
       ty
-      Errors.unify_error
   in
   (* If there are Tanys, be conservative and don't try to represent the
    * type more precisely
@@ -99,7 +104,13 @@ let rec transform_shapemap ?(nullable = false) env pos ty shape =
             (env, acc_field_with_type fty)
           | (TSFlit_str (_, "nullable"), (_, Toption fty), (_, Toption _)) ->
             (env, acc_field_with_type fty)
-          | (TSFlit_str (_, "classname"), (_, Toption fty), (_, Tclass _)) ->
+          | ( TSFlit_str (_, "classname"),
+              (_, Toption fty),
+              (_, Tclass ((_, x), _, _)) )
+            when not
+                   ( String.equal x SN.Collections.cVec
+                   || String.equal x SN.Collections.cDict
+                   || String.equal x SN.Collections.cKeyset ) ->
             (env, acc_field_with_type fty)
           | ( TSFlit_str (_, "classname"),
               (_, Toption fty),

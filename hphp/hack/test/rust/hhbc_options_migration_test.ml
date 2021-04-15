@@ -35,9 +35,6 @@ let assert_opts_equal caml rust =
   assert_equal
     Hhbc_options.(jit_enable_rename_function caml)
     Hhbc_options.(jit_enable_rename_function rust);
-  assert_equal
-    Hhbc_options.(enable_coroutines caml)
-    Hhbc_options.(enable_coroutines rust);
   assert_equal Hhbc_options.(doc_root caml) Hhbc_options.(doc_root rust);
   assert_equal
     Hhbc_options.(include_search_paths caml)
@@ -54,9 +51,6 @@ let assert_opts_equal caml rust =
   assert_equal
     Hhbc_options.(phpism_disable_nontoplevel_declarations caml)
     Hhbc_options.(phpism_disable_nontoplevel_declarations rust);
-  assert_equal
-    Hhbc_options.(phpism_disable_static_closures caml)
-    Hhbc_options.(phpism_disable_static_closures rust);
   assert_equal
     Hhbc_options.(emit_cls_meth_pointers caml)
     Hhbc_options.(emit_cls_meth_pointers rust);
@@ -137,7 +131,7 @@ let assert_opts_equal caml rust =
 let json_override_2bools =
   "
 {
-\"hhvm.hack.lang.enable_coroutines\": { \"global_value\": \"0\" },
+\"hhvm.hack.lang.disallow_hash_comments\": { \"global_value\": \"1\" },
 \"hhvm.hack.lang.disable_xhp_element_mangling\": { \"global_value\": \"1\" }
 }
 "
@@ -149,13 +143,13 @@ let test_override_2bools_sanity_check _ =
       ~init:Hhbc_options.default
       (Some (Hh_json.json_of_string json_override_2bools))
   in
-  assert_equal false Hhbc_options.(enable_coroutines opts);
+  assert_equal true Hhbc_options.(disallow_hash_comments opts);
   assert_equal true Hhbc_options.(disable_xhp_element_mangling opts);
 
   (* Sanity check that we're actually overriding *)
   assert_equal
-    Hhbc_options.(enable_coroutines opts)
-    (not Hhbc_options.(enable_coroutines default));
+    Hhbc_options.(disallow_hash_comments opts)
+    (not Hhbc_options.(disallow_hash_comments default));
   assert_equal
     Hhbc_options.(disable_xhp_element_mangling opts)
     (not Hhbc_options.(disable_xhp_element_mangling default));
@@ -167,7 +161,7 @@ let test_override_2bools_configs_to_json_ffi _ =
   let opts =
     Hhbc_options.from_configs_rust ~jsons:[json_override_2bools] ~args:[]
   in
-  assert_equal false Hhbc_options.(enable_coroutines opts);
+  assert_equal true Hhbc_options.(disallow_hash_comments opts);
   assert_equal true Hhbc_options.(disable_xhp_element_mangling opts);
   ()
 
@@ -229,7 +223,7 @@ let test_json_configs_stackable _ =
       [
         "
   {
-     \"hhvm.hack.lang.enable_coroutines\": { \"global_value\": \"0\" },
+     \"hhvm.hack.lang.disallow_hash_comments\": { \"global_value\": \"1\" },
      \"hhvm.rx_is_enabled\": { \"global_value\": \"0\" }
   }
       ";
@@ -243,8 +237,8 @@ let test_json_configs_stackable _ =
   in
   (* Sanity checks *)
   let (caml_opts, _) = caml_from_configs ~jsons ~args:[] in
-  (* set to 0 in the first JSON, so it must stay 0 *)
-  assert_equal false Hhbc_options.(enable_coroutines caml_opts);
+  (* set to 1 in the first JSON, so it must stay 1 *)
+  assert_equal true Hhbc_options.(disallow_hash_comments caml_opts);
 
   (* set to 1 in the second JSON, so it must stay 1 *)
   assert_equal true Hhbc_options.(disable_xhp_element_mangling caml_opts);
@@ -255,8 +249,8 @@ let test_json_configs_stackable _ =
   (* Verify Rust implementation behind FFI gives the same results *)
   let rust_opts = Hhbc_options.from_configs_rust ~jsons ~args:[] in
   assert_equal
-    Hhbc_options.(enable_coroutines caml_opts)
-    Hhbc_options.(enable_coroutines rust_opts);
+    Hhbc_options.(disallow_hash_comments caml_opts)
+    Hhbc_options.(disallow_hash_comments rust_opts);
   assert_equal
     Hhbc_options.(disable_xhp_element_mangling caml_opts)
     Hhbc_options.(disable_xhp_element_mangling rust_opts);
@@ -359,16 +353,10 @@ let test_all_overrides_json_only _ =
   \"hhvm.hack.lang.enable_class_level_where_clauses\": {
     \"global_value\": true
   },
-  \"hhvm.hack.lang.enable_coroutines\": {
-    \"global_value\": false
-  },
   \"hhvm.hack.lang.enable_xhp_class_modifier\": {
     \"global_value\": true
   },
   \"hhvm.hack.lang.phpism.disable_nontoplevel_declarations\": {
-    \"global_value\": true
-  },
-  \"hhvm.hack.lang.phpism.disable_static_closures\": {
     \"global_value\": true
   },
   \"hhvm.hack_arr_compat_notices\": {
@@ -481,16 +469,11 @@ module CliArgOverrides = struct
   let hhvm'hack'lang'enable_class_level_where_clauses =
     "-vhhvm.lang.enable_class_level_where_clauses=true"
 
-  let hhvm'hack'lang'enable_coroutines = "-vhack.lang.enablecoroutines=false"
-
   let hhvm'hack'lang'enable_xhp_class_modifier =
     "-vhhvm.hack.lang.enable_xhp_class_modifier=true"
 
   let hhvm'hack'lang'phpism'disable_nontoplevel_declarations =
     "-vhack.lang.phpism.disablenontopleveldeclarations=true"
-
-  let hhvm'hack'lang'phpism'disable_static_closures =
-    "-vhack.lang.phpism.disablestaticclosures=true"
 
   let hhvm'hack_arr_compat_notices = "-veval.hackarrcompatnotices=true"
 
@@ -553,10 +536,8 @@ let test_all_overrides_cli_only _ =
       hhvm'hack'lang'disable_xhp_element_mangling;
       hhvm'hack'lang'disallow_func_ptrs_in_constants;
       hhvm'hack'lang'enable_class_level_where_clauses;
-      hhvm'hack'lang'enable_coroutines;
       hhvm'hack'lang'enable_xhp_class_modifier;
       hhvm'hack'lang'phpism'disable_nontoplevel_declarations;
-      hhvm'hack'lang'phpism'disable_static_closures;
       hhvm'hack_arr_compat_notices;
       hhvm'hack_arr_dv_arrs;
       (* hhvm'include_roots; *)

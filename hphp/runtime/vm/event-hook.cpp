@@ -187,6 +187,10 @@ Array getReifiedClasses(const ActRec* ar) {
       );
       break;
 
+    case K::T_xhp:
+      clist.append(String{xhpNameFromTS(ArrNR{val(ts).parr})});
+      break;
+
     case K::T_void:
     case K::T_int:
     case K::T_bool:
@@ -218,7 +222,6 @@ Array getReifiedClasses(const ActRec* ar) {
 
     case K::T_unresolved:
     case K::T_typeaccess:
-    case K::T_xhp:
     case K::T_reifiedtype:
       // These type structures should always be resolved
       always_assert(false);
@@ -238,7 +241,7 @@ void addFramePointers(const ActRec* ar, Array& frameinfo, bool isCall) {
     return;
   }
   if (frameinfo.isNull()) {
-    frameinfo = Array::CreateDArray();
+    frameinfo = Array::CreateDict();
   }
 
   if (isCall) {
@@ -278,11 +281,7 @@ void runUserProfilerOnFunctionEnter(const ActRec* ar, bool isResume) {
 
   Array frameinfo;
   {
-    arrprov::TagOverride _(RO::EvalArrayProvenance
-      ? arrprov::Tag::Param(func, 2)
-      : arrprov::Tag{});
-
-    frameinfo = Array::attach(ArrayData::CreateDArray());
+    frameinfo = Array::attach(ArrayData::CreateDict());
     if (!isResume) {
       // Add arguments only if this is a function call.
       frameinfo.set(s_args, hhvm_get_frame_args(ar));
@@ -321,9 +320,6 @@ void runUserProfilerOnFunctionExit(const ActRec* ar, const TypedValue* retval,
 
   Array frameinfo;
   {
-    arrprov::TagOverride _(RO::EvalArrayProvenance
-      ? arrprov::Tag::Param(func, 2)
-      : arrprov::Tag{});
     if (retval) {
       frameinfo = make_darray(s_return, tvAsCVarRef(retval));
     } else if (exception) {
@@ -372,12 +368,7 @@ static Variant call_intercept_handler(
     );
   }
 
-  {
-    arrprov::TagOverride _(RO::EvalArrayProvenance
-      ? arrprov::Tag::Param(f, 2)
-      : arrprov::Tag{});
-    args = hhvm_get_frame_args(ar);
-  }
+  args = hhvm_get_frame_args(ar);
 
   VArrayInit par{newCallback ? 3u : 5u};
   par.append(called);
@@ -424,13 +415,6 @@ static Variant call_intercept_handler_callback(
   }
 
   auto const args = [&]{
-    // The array here is the array of all parameters. Typically, this array
-    // isn't observed - however, if the callback takes the array as a single
-    // varargs list, it will be. In this case, it will be param 0.
-    arrprov::TagOverride _(RO::EvalArrayProvenance
-      ? arrprov::Tag::Param(f, 0)
-      : arrprov::Tag{});
-
     auto const curArgs = hhvm_get_frame_args(ar);
     VArrayInit args(prepend_this + curArgs.size());
     if (prepend_this) {
@@ -448,7 +432,7 @@ static Variant call_intercept_handler_callback(
     if (!origCallee->hasReifiedGenerics()) return Array();
     // Reified generics is the first non param local
     auto const generics = frame_local(ar, origCallee->numParams());
-    assertx(tvIsHAMSafeVArray(generics));
+    assertx(tvIsVec(generics));
     return Array(val(generics).parr);
   }();
   auto ret = Variant::attach(
@@ -516,7 +500,7 @@ bool EventHook::RunInterceptHandler(ActRec* ar) {
         Variant("fb_intercept2 requires a darray to be returned"));
     }
     assertx(ret.isArray());
-    auto const retArr = ret.toDArray();
+    auto const retArr = ret.toDict();
     if (retArr.exists(s_value)) {
       ret = retArr[s_value];
     } else if (retArr.exists(s_callback)) {
@@ -679,7 +663,7 @@ void EventHook::onFunctionExit(const ActRec* ar, const TypedValue* retval,
   // Xenon
   if (flags & XenonSignalFlag) {
     if (Strobelight::active()) {
-      Strobelight::getInstance().log();
+      Strobelight::getInstance().log(Xenon::ExitSample);
     } else {
       Xenon::getInstance().log(Xenon::ExitSample, sourceType);
     }
@@ -763,7 +747,7 @@ bool EventHook::onFunctionCall(const ActRec* ar, int funcType,
   // Xenon
   if (flags & XenonSignalFlag) {
     if (Strobelight::active()) {
-      Strobelight::getInstance().log();
+      Strobelight::getInstance().log(Xenon::EnterSample);
     } else {
       Xenon::getInstance().log(Xenon::EnterSample, sourceType);
     }
@@ -793,7 +777,7 @@ void EventHook::onFunctionResumeAwait(const ActRec* ar,
   // Xenon
   if (flags & XenonSignalFlag) {
     if (Strobelight::active()) {
-      Strobelight::getInstance().log();
+      Strobelight::getInstance().log(Xenon::ResumeAwaitSample);
     } else {
       Xenon::getInstance().log(Xenon::ResumeAwaitSample, sourceType);
     }
@@ -822,7 +806,7 @@ void EventHook::onFunctionResumeYield(const ActRec* ar,
   // Xenon
   if (flags & XenonSignalFlag) {
     if (Strobelight::active()) {
-      Strobelight::getInstance().log();
+      Strobelight::getInstance().log(Xenon::EnterSample);
     } else {
       Xenon::getInstance().log(Xenon::EnterSample, sourceType);
     }

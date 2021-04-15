@@ -102,6 +102,70 @@ where
 }
 
 #[derive(Debug)]
+pub struct InstrIterByValue {
+    stack: Vec<(InstrSeq, usize)>,
+}
+
+impl IntoIterator for InstrSeq {
+    type Item = Instruct;
+    type IntoIter = InstrIterByValue;
+
+    fn into_iter(self) -> Self::IntoIter {
+        InstrIterByValue {
+            stack: vec![(self, 0)],
+        }
+    }
+}
+
+impl Iterator for InstrIterByValue {
+    type Item = Instruct;
+
+    /// Iterate an `InstrSeq` as a flat iterable of `Instruct` values.
+    ///
+    /// Uses constant stack space by avoiding recursion. Avoids
+    /// copying and minimises pushing/popping, because this function
+    /// is hot in large Hack functions.
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some((ref mut instr_seq, ref mut idx)) = self.stack.last_mut() {
+            match instr_seq {
+                InstrSeq::Empty => {
+                    self.stack.pop();
+                }
+                InstrSeq::One(_) => {
+                    if let Some((InstrSeq::One(i), _)) = self.stack.pop() {
+                        return Some(*i);
+                    }
+                }
+                InstrSeq::List(ref mut instrs) => {
+                    if *idx < instrs.len() {
+                        let instr = std::mem::replace(
+                            &mut instrs[*idx],
+                            Instruct::IBasic(InstructBasic::Nop),
+                        );
+                        *idx += 1;
+                        return Some(instr);
+                    } else {
+                        self.stack.pop();
+                    }
+                }
+                InstrSeq::Concat(ref mut instr_seqs) => {
+                    if *idx < instr_seqs.len() {
+                        let next_instr_seq =
+                            std::mem::replace(&mut instr_seqs[*idx], InstrSeq::Empty);
+                        *idx += 1;
+
+                        self.stack.push((next_instr_seq, 0));
+                    } else {
+                        self.stack.pop();
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
+#[derive(Debug)]
 pub struct InstrIter<'i> {
     instr_seq: &'i InstrSeq,
     index: usize,
@@ -116,6 +180,10 @@ impl<'i> InstrIter<'i> {
             concat_stack: vec![],
         }
     }
+}
+
+pub fn flatten(instrs: InstrSeq) -> InstrSeq {
+    InstrSeq::List(instrs.into_iter().collect())
 }
 
 impl<'i> Iterator for InstrIter<'i> {
@@ -200,11 +268,6 @@ pub mod instr {
     pub fn lit_const(l: InstructLitConst) -> InstrSeq {
         instr(Instruct::ILitConst(l))
     }
-
-    /* TODO(hrust): re-enable it with arg
-     pub fn lit_empty_varray() -> InstrSeq {
-        InstrSeq::lit_const(InstructLitConst::TypedValue(TypedValue::VArray(vec![])))
-    } */
 
     pub fn iterinit(args: IterArgs, label: Label) -> InstrSeq {
         instr(Instruct::IIterator(InstructIterator::IterInit(args, label)))
@@ -324,10 +387,6 @@ pub mod instr {
 
     pub fn print() -> InstrSeq {
         instr(Instruct::IOp(InstructOperator::Print))
-    }
-
-    pub fn cast_darray() -> InstrSeq {
-        instr(Instruct::IOp(InstructOperator::CastDArray))
     }
 
     pub fn cast_dict() -> InstrSeq {
@@ -660,8 +719,8 @@ pub mod instr {
         instr(Instruct::IMutator(InstructMutator::PopL(l)))
     }
 
-    pub fn initprop(pid: PropId, op: InitpropOp, rop: ReadOnlyOp) -> InstrSeq {
-        instr(Instruct::IMutator(InstructMutator::InitProp(pid, op, rop)))
+    pub fn initprop(pid: PropId, op: InitpropOp) -> InstrSeq {
+        instr(Instruct::IMutator(InstructMutator::InitProp(pid, op)))
     }
 
     pub fn checkprop(pid: PropId) -> InstrSeq {
@@ -678,10 +737,6 @@ pub mod instr {
 
     pub fn new_vec_array(i: isize) -> InstrSeq {
         instr(Instruct::ILitConst(InstructLitConst::NewVec(i)))
-    }
-
-    pub fn new_varray(i: isize) -> InstrSeq {
-        instr(Instruct::ILitConst(InstructLitConst::NewVArray(i)))
     }
 
     pub fn new_pair() -> InstrSeq {
@@ -738,10 +793,6 @@ pub mod instr {
 
     pub fn new_record(id: ClassId, keys: Vec<String>) -> InstrSeq {
         instr(Instruct::ILitConst(InstructLitConst::NewRecord(id, keys)))
-    }
-
-    pub fn newstructdarray(keys: Vec<String>) -> InstrSeq {
-        instr(Instruct::ILitConst(InstructLitConst::NewStructDArray(keys)))
     }
 
     pub fn newstructdict(keys: Vec<String>) -> InstrSeq {

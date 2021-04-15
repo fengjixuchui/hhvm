@@ -73,6 +73,8 @@ pub struct HhasCoeffects {
     cc_this: Vec<String>,
     is_any_rx: bool,
     is_pure: bool,
+    closure_inherit_from_parent: bool,
+    generator_this: bool,
 }
 
 impl HhasCoeffects {
@@ -110,6 +112,12 @@ impl HhasCoeffects {
         {
             results.push(format!(".coeffects_cc_this {};", str));
         }
+        if coeffects.is_closure_inherit_from_parent() {
+            results.push(".coeffects_closure_inherit_from_parent;".to_string());
+        }
+        if coeffects.generator_this() {
+            results.push(".coeffects_generator_this;".to_string());
+        }
         results
     }
 
@@ -132,6 +140,20 @@ impl HhasCoeffects {
             },
             _ => None,
         }
+    }
+
+    pub fn local_to_shallow(coeffects: &[Ctx]) -> Vec<Ctx> {
+        use Ctx::*;
+        let mut result = vec![];
+        for c in coeffects.iter() {
+            result.push(match c {
+                RxLocal => RxShallow,
+                PoliciedOfLocal => PoliciedOfShallow,
+                PoliciedLocal => PoliciedShallow,
+                _ => *c,
+            })
+        }
+        result
     }
 
     pub fn from_ctx_constant(hint: &Hint) -> Vec<Ctx> {
@@ -227,6 +249,30 @@ impl HhasCoeffects {
             cc_this,
             is_any_rx,
             is_pure,
+            ..HhasCoeffects::default()
+        }
+    }
+
+    pub fn inherit_to_child_closure(&self) -> Self {
+        let static_coeffects = HhasCoeffects::local_to_shallow(self.get_static_coeffects());
+        if self.has_coeffect_rules() {
+            Self {
+                static_coeffects,
+                closure_inherit_from_parent: true,
+                ..HhasCoeffects::default()
+            }
+        } else {
+            Self {
+                static_coeffects,
+                ..self.clone()
+            }
+        }
+    }
+
+    pub fn with_gen_coeffect(&self) -> Self {
+        Self {
+            generator_this: true,
+            ..self.clone()
         }
     }
 
@@ -256,6 +302,26 @@ impl HhasCoeffects {
 
     pub fn is_any_rx_or_pure(&self) -> bool {
         self.is_any_rx() || self.is_pure
+    }
+
+    pub fn generator_this(&self) -> bool {
+        self.generator_this
+    }
+
+    fn has_coeffect_rules(&self) -> bool {
+        !self.fun_param.is_empty()
+            || !self.cc_param.is_empty()
+            || !self.cc_this.is_empty()
+            || self.closure_inherit_from_parent
+            || self.generator_this
+    }
+
+    pub fn has_coeffects_local(&self) -> bool {
+        self.has_coeffect_rules() && !self.generator_this()
+    }
+
+    pub fn is_closure_inherit_from_parent(&self) -> bool {
+        self.closure_inherit_from_parent
     }
 }
 

@@ -60,6 +60,7 @@ function get_expect_file_and_type($test, $options) {
       }
     }
   }
+
   foreach ($types as $type) {
     $fname = "$test.$type";
     if (file_exists($fname)) {
@@ -404,7 +405,7 @@ function rel_path($to) {
   return implode('/', $relPath);
 }
 
-function get_options($argv) {
+function get_options($argv): (darray<string, mixed>, varray<string>) {
   // Options marked * affect test behavior, and need to be reported by list_tests
   $parameters = darray[
     '*env:' => '',
@@ -447,15 +448,14 @@ function get_options($argv) {
     '*vendor:' => '',
     'record-failures:' => '',
     '*hackc' => '',
-    '*hack-only' => '',
     '*ignore-oids' => '',
     'jitsample:' => '',
     '*hh_single_type_check:' => '',
     'write-to-checkout' => '',
     'bespoke' => '',
-    'hadva' => '',
     'lazyclass' => '',
     '*force-repo' => '',
+    'hn' => '',
   ];
   $options = darray[];
   $files = varray[];
@@ -562,7 +562,12 @@ function get_options($argv) {
     Status::$write_to_checkout = true;
   }
 
-  return varray[$options, $files];
+  if (isset($options['hackc']) && isset($options['use-internal-compiler'])) {
+    echo "hackc and use-internal-compiler are mutually exclusive options\n";
+    exit(1);
+  }
+
+  return tuple($options, $files);
 }
 
 /*
@@ -638,18 +643,18 @@ function find_test_files($file) {
 
 // Some tests have to be run together in the same test bucket, serially, one
 // after other in order to avoid races and other collisions.
-function serial_only_tests($tests) {
+function serial_only_tests(varray<string> $tests): varray<string> {
   if (is_testing_dso_extension()) {
     return varray[];
   }
   // Add a <testname>.php.serial file to make your test run in the serial
   // bucket.
-  $serial_tests = array_filter(
+  $serial_tests = varray(array_filter(
     $tests,
     function($test) {
       return file_exists($test . '.serial');
     }
-  );
+  ));
   return $serial_tests;
 }
 
@@ -669,7 +674,7 @@ function exec_find(mixed $files, string $extra): mixed {
   return $results;
 }
 
-function find_tests($files, darray $options = null) {
+function find_tests($files, darray $options = null): varray<string> {
   if (!$files) {
     $files = varray['quick'];
   }
@@ -712,37 +717,37 @@ function find_tests($files, darray $options = null) {
           usage());
   }
   asort(inout $tests);
-  $tests = array_filter($tests);
+  $tests = varray(array_filter($tests));
   if ($options['exclude'] ?? false) {
     $exclude = $options['exclude'];
-    $tests = array_filter($tests, function($test) use ($exclude) {
+    $tests = varray(array_filter($tests, function($test) use ($exclude) {
       return (false === strpos($test, $exclude));
-    });
+    }));
   }
   if ($options['exclude-pattern'] ?? false) {
     $exclude = $options['exclude-pattern'];
-    $tests = array_filter($tests, function($test) use ($exclude) {
+    $tests = varray(array_filter($tests, function($test) use ($exclude) {
       return !preg_match($exclude, $test);
-    });
+    }));
   }
   if ($options['exclude-recorded-failures'] ?? false) {
     $exclude_file = $options['exclude-recorded-failures'];
     $exclude = file($exclude_file, FILE_IGNORE_NEW_LINES);
-    $tests = array_filter($tests, function($test) use ($exclude) {
+    $tests = varray(array_filter($tests, function($test) use ($exclude) {
       return (false === in_array(canonical_path($test), $exclude));
-    });
+    }));
   }
   if ($options['include'] ?? false) {
     $include = $options['include'];
-    $tests = array_filter($tests, function($test) use ($include) {
+    $tests = varray(array_filter($tests, function($test) use ($include) {
       return (false !== strpos($test, $include));
-    });
+    }));
   }
   if ($options['include-pattern'] ?? false) {
     $include = $options['include-pattern'];
-    $tests = array_filter($tests, function($test) use ($include) {
+    $tests = varray(array_filter($tests, function($test) use ($include) {
       return preg_match($include, $test);
-    });
+    }));
   }
   return $tests;
 }
@@ -766,14 +771,18 @@ function list_tests($files, $options) {
   }
 }
 
-function find_test_ext($test, $ext, $configName='config') {
+function find_test_ext(
+  string $test,
+  string $ext,
+  string $configName='config',
+): ?string {
   if (is_file("{$test}.{$ext}")) {
     return "{$test}.{$ext}";
   }
   return find_file_for_dir(dirname($test), "{$configName}.{$ext}");
 }
 
-function find_file_for_dir($dir, $name) {
+function find_file_for_dir(string $dir, string $name): ?string {
   // Handle the case where the $dir might come in as '.' because you
   // are running the test runner on a file from the same directory as
   // the test e.g., './mytest.php'. dirname() will give you the '.' when
@@ -838,11 +847,6 @@ function extra_args($options): string {
     $args .= escapeshellarg($vendor.'/hh_autoload.php');
   }
 
-  if (isset($options['hadva'])) {
-    $args .= ' -vEval.HackArrDVArrs=true';
-    $args .= ' -vEval.HackArrDVArrMark=true';
-  }
-
   if (isset($options['lazyclass'])) {
     $args .= ' -vEval.EmitClassPointers=2';
     $args .= ' -vEval.ClassPassesClassname=true';
@@ -876,9 +880,11 @@ function hhvm_cmd_impl(
       // load/store counters don't work on Ivy Bridge so disable for tests
       '-vEval.ProfileHWEnable=false',
 
-      // use a fixed path for embedded data
-      '-vEval.HackCompilerExtractPath='
+      isset($options['use-internal-compiler']) ?  '' :
+        '-vEval.HackCompilerExtractPath='
         .escapeshellarg(bin_root().'/hackc_%{schema}'),
+
+      // use a fixed path for embedded data
       '-vEval.EmbeddedDataExtractPath='
         .escapeshellarg(bin_root().'/hhvm_%{type}_%{buildid}'),
       extra_args($options),
@@ -961,25 +967,27 @@ function hhvm_cmd(
   $test_run = null,
   $is_temp_file = false
 ): (varray<string>, darray<string, mixed>) {
-  if ($test_run === null) {
-    $test_run = $test;
-  }
+  $test_run ??= $test;
   // hdf support is only temporary until we fully migrate to ini
   // Discourage broad use.
   $hdf_suffix = ".use.for.ini.migration.testing.only.hdf";
   $hdf = file_exists($test.$hdf_suffix)
        ? '-c ' . $test . $hdf_suffix
        : "";
+  $extra_opts = read_opts_file(find_test_ext($test, 'opts'));
+  if (isset($options['hn'])) {
+    $extra_opts = read_opts_file("$test.hn_opts")." ".$extra_opts;
+  }
   $cmds = hhvm_cmd_impl(
     $options,
     find_test_ext($test, 'ini'),
     Status::getTestTmpPath($test, 'autoloadDB'),
     $hdf,
     find_debug_config($test, 'hphpd.ini'),
-    read_opts_file(find_test_ext($test, 'opts')),
+    $extra_opts,
+    $is_temp_file ? " --temp-file" : "",
     '--file',
     escapeshellarg($test_run),
-    $is_temp_file ? " --temp-file" : ""
   );
 
   $cmd = "";
@@ -1110,7 +1118,8 @@ function hphp_cmd($options, $test, $program): string {
     '-vRuntime.Eval.EnableIntrinsicsExtension=true',
     '-vRuntime.Eval.EnableArgsInBacktraces=true',
     '-vRuntime.Eval.FoldLazyClassKeys=false',
-    '-vRuntime.Eval.HackCompilerExtractPath='
+    isset($options['use-internal-compiler']) ?  '' :
+      '-vRuntime.Eval.HackCompilerExtractPath='
       .escapeshellarg(bin_root().'/hackc_%{schema}'),
     '-vParserThreadCount=' . ($options['repo-threads'] ?? 1),
     '--nofork=1 -thhbc -l1 -k1',
@@ -1965,11 +1974,15 @@ function clean_intermediate_files($test, $options) {
   }
 }
 
-function run($options, $tests, $bad_test_file) {
+function child_main(
+  darray<string, mixed> $options,
+  varray<string> $tests,
+  string $json_results_file,
+): int {
   foreach ($tests as $test) {
-    run_and_lock_test($options, $test);
+    run_and_log_test($options, $test);
   }
-  file_put_contents($bad_test_file, json_encode(Status::getResults()));
+  file_put_contents($json_results_file, json_encode(Status::getResults()));
   foreach (Status::getResults() as $result) {
     if ($result['status'] == 'failed') {
       return 1;
@@ -1978,32 +1991,299 @@ function run($options, $tests, $bad_test_file) {
   return 0;
 }
 
-function is_hack_file($options, $test) {
-  if (substr($test, -3) === '.hh') return true;
+/**
+ * The runif feature is similar in spirit to skipif, but instead of allowing
+ * one to run arbitrary code it can only skip based on pre-defined reasons
+ * understood by the test runner.
+ *
+ * The .runif file should consist of one or more lines made up of words
+ * separated by spaces, optionally followed by a comment starting with #.
+ * Empty lines (or lines with only comments) are ignored. The first word
+ * determines the interpretation of the rest. The .runif file will allow the
+ * test to run if all the non-empty lines 'match'.
+ *
+ * Currently supported operations:
+ *   os [not] <os_name> # matches if we are (or are not) on the named OS
+ *   euid [not] root # matches if we are (or are not) running as root (euid==0)
+ *   extension <extension_name> # matches if the named extension is available
+ *   function <function_name> # matches if the named function is available
+ *   class <class_name> # matches if the named class is available
+ *   method <class_name> <method name> # matches if the method is available
+ *   const <constant_name> # matches if the named constant is available
+ *
+ * Several functions in this implementation return RunifResult. Valid sets of
+ * keys are:
+ *   valid, error # valid will be false
+ *   valid, match # valid will be true, match will be true
+ *   valid, match, skip_reason # valid will be true, match will be false
+ */
+type RunifResult = shape(
+  'valid' => bool, // was the runif file valid
+  ?'error' => string, // if !valid, what was the problem
+  ?'match' => bool, // did the line match/did all the lines in the file match
+  ?'skip_reason' => string, // if !match, the skip reason to use
+);
 
-  $file = fopen($test, 'r');
-  if ($file === false) return false;
-
-  // Skip lines that are a shebang or whitespace.
-  while (($line = fgets($file)) !== false) {
-    $line = trim($line);
-    if ($line === '' || substr($line, 0, 2) === '#!') continue;
-    // Allow partial and strict, but don't count decl files as Hack code
-    if ($line === '<?hh' || $line === '<?hh //strict') return true;
-    break;
-  }
-  fclose($file);
-
-  return false;
+<<__Memoize>> function runif_canonical_os(): string {
+  if (PHP_OS === 'Linux' || PHP_OS === 'Darwin') return PHP_OS;
+  if (substr(PHP_OS, 0, 3) === 'WIN') return 'WIN';
+  invariant_violation('add proper canonicalization for your OS');
 }
 
-function skip_test($options, $test, $run_skipif = true): ?string {
-  if (isset($options['hack-only']) &&
-      substr($test, -5) !== '.hhas' &&
-      !is_hack_file($options, $test)) {
-    return 'skip-hack-only';
+function runif_known_os(string $match_os): bool {
+  switch ($match_os) {
+    case 'Linux':
+    case 'Darwin':
+    case 'WIN':
+      return true;
+    default:
+      return false;
   }
+}
 
+function runif_os_matches(varray<string> $words): RunifResult {
+  if (count($words) === 2) {
+    if ($words[0] !== 'not') {
+      return shape('valid' => false, 'error' => "malformed 'os' match");
+    }
+    $match_os = $words[1];
+    $invert = true;
+  } else if (count($words) === 1) {
+    $match_os = $words[0];
+    $invert = false;
+  } else {
+    return shape('valid' => false, 'error' => "malformed 'os' match");
+  }
+  if (!runif_known_os($match_os)) {
+    return shape('valid' => false, 'error' => "unknown os '$match_os'");
+  }
+  $matches = (runif_canonical_os() === $match_os);
+  if ($matches !== $invert) return shape('valid' => true, 'match' => true);
+  return shape(
+    'valid' => true,
+    'match' => false,
+    'skip_reason' => 'skip-runif-os-' . implode('-', $words)
+  );
+}
+
+function runif_test_for_feature(
+  darray<string, mixed> $options,
+  string $test,
+  string $bool_expression,
+): bool {
+  $tmp = tempnam(sys_get_temp_dir(), 'test-run-runif-');
+  file_put_contents(
+    $tmp,
+    "<?hh\n" .
+      "<<__EntryPoint>> function main(): void {\n" .
+      "  echo ($bool_expression) as bool ? 'PRESENT' : 'ABSENT';\n" .
+      "}\n",
+  );
+
+  // Run the check in non-repo mode to avoid building the repo (same features
+  // should be available). Pick the mode arbitrarily for the same reason.
+  $options_without_repo = $options;
+  unset($options_without_repo['repo']);
+  list($hhvm, $_) = hhvm_cmd($options_without_repo, $test, $tmp, true);
+  $hhvm = $hhvm[0];
+  // Remove any --count <n> from the command
+  $hhvm = preg_replace('/ --count[ =][\d+][\s]{0,}/', ' ', $hhvm);
+  // some tests set open_basedir to a restrictive value, override to permissive
+  $hhvm .= ' -dopen_basedir= ';
+
+  $result = shell_exec("$hhvm 2>&1");
+  invariant ($result !== false, 'shell_exec in runif_test_for_feature failed');
+  $result = trim($result);
+  if ($result === 'ABSENT') return false;
+  if ($result === 'PRESENT') return true;
+  invariant_violation(
+    "unexpected output from shell_exec in runif_test_for_feature: '$result'"
+  );
+}
+
+function runif_euid_matches(
+  darray<string, mixed> $options,
+  string $test,
+  varray<string> $words,
+): RunifResult {
+  if (count($words) === 2) {
+    if ($words[0] !== 'not' || $words[1] !== 'root') {
+      return shape('valid' => false, 'error' => "malformed 'euid' match");
+    }
+    $invert = true;
+  } else if (count($words) === 1) {
+    if ($words[0] !== 'root') {
+      return shape('valid' => false, 'error' => "malformed 'euid' match");
+    }
+    $invert = false;
+  } else {
+    return shape('valid' => false, 'error' => "malformed 'euid' match");
+  }
+  $matches = runif_test_for_feature($options, $test, 'posix_geteuid() === 0');
+  if ($matches !== $invert) return shape('valid' => true, 'match' => true);
+  return shape(
+    'valid' => true,
+    'match' => false,
+    'skip_reason' => 'skip-runif-euid-' . implode('-', $words)
+  );
+}
+
+function runif_extension_matches(
+  darray<string, mixed> $options,
+  string $test,
+  varray<string> $words,
+): RunifResult {
+  if (count($words) !== 1) {
+    return shape('valid' => false, 'error' => "malformed 'extension' match");
+  }
+  if (runif_test_for_feature($options, $test, "extension_loaded('{$words[0]}')")) {
+    return shape('valid' => true, 'match' => true);
+  }
+  return shape(
+    'valid' => true,
+    'match' => false,
+    'skip_reason' => 'skip-runif-extension-' . $words[0]
+  );
+}
+
+function runif_function_matches(
+  darray<string, mixed> $options,
+  string $test,
+  varray<string> $words,
+): RunifResult {
+  if (count($words) !== 1) {
+    return shape('valid' => false, 'error' => "malformed 'function' match");
+  }
+  if (runif_test_for_feature($options, $test, "function_exists('{$words[0]}')")) {
+    return shape('valid' => true, 'match' => true);
+  }
+  return shape(
+    'valid' => true,
+    'match' => false,
+    'skip_reason' => 'skip-runif-function-' . $words[0]
+  );
+}
+
+function runif_class_matches(
+  darray<string, mixed> $options,
+  string $test,
+  varray<string> $words,
+): RunifResult {
+  if (count($words) !== 1) {
+    return shape('valid' => false, 'error' => "malformed 'class' match");
+  }
+  if (runif_test_for_feature($options, $test, "class_exists('{$words[0]}')")) {
+    return shape('valid' => true, 'match' => true);
+  }
+  return shape(
+    'valid' => true,
+    'match' => false,
+    'skip_reason' => 'skip-runif-class-' . $words[0]
+  );
+}
+
+function runif_method_matches(
+  darray<string, mixed> $options,
+  string $test,
+  varray<string> $words,
+): RunifResult {
+  if (count($words) !== 2) {
+    return shape('valid' => false, 'error' => "malformed 'method' match");
+  }
+  if (runif_test_for_feature($options, $test,
+                             "method_exists('{$words[0]}', '{$words[1]}')")) {
+    return shape('valid' => true, 'match' => true);
+  }
+  return shape(
+    'valid' => true,
+    'match' => false,
+    'skip_reason' => 'skip-runif-method-' . $words[0] . '-' . $words[1],
+  );
+}
+
+function runif_const_matches(
+  darray<string, mixed> $options,
+  string $test,
+  varray<string> $words,
+): RunifResult {
+  if (count($words) !== 1) {
+    return shape('valid' => false, 'error' => "malformed 'const' match");
+  }
+  if (runif_test_for_feature($options, $test, "defined('{$words[0]}')")) {
+    return shape('valid' => true, 'match' => true);
+  }
+  return shape(
+    'valid' => true,
+    'match' => false,
+    'skip_reason' => 'skip-runif-const-' . $words[0]
+  );
+}
+
+function runif_should_skip_test(
+  darray<string, mixed> $options,
+  string $test,
+): RunifResult {
+  $runif_path = find_test_ext($test, 'runif');
+  if (!$runif_path) return shape('valid' => true, 'match' => true);
+
+  $file_empty = true;
+  $contents = file($runif_path, FILE_IGNORE_NEW_LINES);
+  foreach ($contents as $line) {
+    $line = preg_replace('/[#].*$/', '', $line); // remove comment
+    $line = trim($line);
+    if ($line === '') continue;
+    $file_empty = false;
+
+    $words = preg_split('/ +/', $line);
+    if (count($words) < 2) {
+      return shape('valid' => false, 'error' => "malformed line '$line'");
+    }
+    foreach ($words as $word) {
+      if (!preg_match('/^\w+$/', $word)) {
+        return shape(
+          'valid' => false,
+          'error' => "bad word '$word' in line '$line'",
+        );
+      }
+    }
+
+    $type = array_shift(inout $words);
+    $words = varray($words); // array_shift always promotes to darray :-\
+    switch ($type) {
+      case 'os':
+        $result = runif_os_matches($words);
+        break;
+      case 'euid':
+        $result = runif_euid_matches($options, $test, $words);
+        break;
+      case 'extension':
+        $result = runif_extension_matches($options, $test, $words);
+        break;
+      case 'function':
+        $result = runif_function_matches($options, $test, $words);
+        break;
+      case 'class':
+        $result = runif_class_matches($options, $test, $words);
+        break;
+      case 'method':
+        $result = runif_method_matches($options, $test, $words);
+        break;
+      case 'const':
+        $result = runif_const_matches($options, $test, $words);
+        break;
+      default:
+        return shape('valid' => false, 'error' => "bad match type '$type'");
+    }
+    if (!$result['valid'] || !$result['match']) return $result;
+  }
+  if ($file_empty) return shape('valid' => false, 'error' => 'empty runif file');
+  return shape('valid' => true, 'match' => true);
+}
+
+function should_skip_test_simple(
+  darray<string, mixed> $options,
+  string $test,
+): ?string {
   if ((isset($options['cli-server']) || isset($options['server'])) &&
       !can_run_server_test($test, $options)) {
     return 'skip-server';
@@ -2039,7 +2319,6 @@ function skip_test($options, $test, $run_skipif = true): ?string {
     }
   }
 
-
   $no_bespoke_tag = "nobespoke";
   if (isset($options['bespoke']) &&
       file_exists("$test.$no_bespoke_tag")) {
@@ -2047,18 +2326,19 @@ function skip_test($options, $test, $run_skipif = true): ?string {
       return 'skip-bespoke';
   }
 
-  $no_hadva_tag = "nohadva";
-  if (isset($options['hadva']) &&
-      file_exists("$test.$no_hadva_tag")) {
-      return 'skip-hadva';
-  }
   $no_lazyclass_tag = "nolazyclass";
   if (isset($options['lazyclass']) &&
       file_exists("$test.$no_lazyclass_tag")) {
-      return 'skip-lazyclass';
+    return 'skip-lazyclass';
   }
 
-  if (!$run_skipif) return null;
+  return null;
+}
+
+function skipif_should_skip_test(
+  darray<string, mixed> $options,
+  string $test,
+): ?string {
   $skipif_test = find_test_ext($test, 'skipif');
   if (!$skipif_test) {
     return null;
@@ -2313,7 +2593,10 @@ function can_run_server_test($test, $options) {
 
 const SERVER_TIMEOUT = 45;
 function run_config_server($options, $test) {
-  invariant(can_run_server_test($test, $options), "skip_test should have skipped this");
+  invariant(
+    can_run_server_test($test, $options),
+    'should_skip_test_simple should have skipped this',
+  );
 
   Status::createTestTmpDir($test); // force it to be created
   $config = find_file_for_dir(dirname($test), 'config.ini');
@@ -2347,6 +2630,7 @@ function run_config_cli(
   } else {
     $cmd_env['HPHP_TEST_TMPDIR'] = Status::createTestTmpDir($test);
   }
+  $cmd_env['HPHP_TEST_SOURCE_FILE'] = $test;
   if (isset($options['log'])) {
     $cmd_env['TRACE'] = 'printir:1';
     $cmd_env['HPHP_TRACE_FILE'] = $test . '.log';
@@ -2401,12 +2685,6 @@ function run_config_post($outputs, $test, $options) {
       "Test failed because the process wrote on stderr:\n$stderr"
     );
     return false;
-  }
-
-  // Needed for testing non-hhvm binaries that don't actually run the code
-  // e.g. parser/test/parse_tester.cpp.
-  if ($output == "FORCE PASS") {
-    return true;
   }
 
   $repeats = 0;
@@ -2578,61 +2856,53 @@ function run_foreach_config(
   return $result;
 }
 
-function run_and_lock_test($options, $test) {
+function run_and_log_test($options, $test) {
   $stime = time();
   $time = microtime(true);
-  $failmsg = "";
-  $status = false;
-  $lock = fopen($test, 'r');
-  $wouldblock = false;
-  if (!$lock || !flock($lock, LOCK_EX, inout $wouldblock)) {
-    $failmsg = "Failed to lock test";
-    if ($lock) fclose($lock);
-    $lock = null;
-  } else {
-    $status = run_test($options, $test);
-  }
+  $status = run_test($options, $test);
   $time = microtime(true) - $time;
   $etime = time();
-  if ($lock) {
-    if ($status) {
-      clean_intermediate_files($test, $options);
-    } else if ($failmsg === '') {
-      $failmsg = Status::diffForTest($test);
-      if (!$failmsg) $failmsg = "Test failed with empty diff";
-    }
-    if (!flock($lock, LOCK_UN, inout $wouldblock)) {
-      if ($failmsg !== '') $failmsg .= "\n";
-      $failmsg .= "Failed to release test lock";
-      $status = false;
-    }
-    if (!fclose($lock)) {
-      if ($failmsg !== '') $failmsg .= "\n";
-      $failmsg .= "Failed to close lock file";
-      $status = false;
-    }
-  }
+
   if ($status === false) {
-    invariant($failmsg !== '', "test failed with empty failmsg");
-    Status::fail($test, $time, $stime, $etime, $failmsg);
+    $diff = Status::diffForTest($test);
+    if ($diff === '') {
+      $diff = 'Test failed with empty diff';
+    }
+    Status::fail($test, $time, $stime, $etime, $diff);
   } else if ($status === true) {
-    invariant($failmsg === '', "test passed with non-empty failmsg $failmsg");
     Status::pass($test, $time, $stime, $etime);
+    clean_intermediate_files($test, $options);
   } else if ($status is string) {
     invariant(
       preg_match('/^skip-[\w-]+$/', $status),
       "invalid skip status $status"
     );
-    invariant($failmsg === '', "test skipped with non-empty failmsg $failmsg");
     Status::skip($test, substr($status, 5), $time, $stime, $etime);
+    clean_intermediate_files($test, $options);
   } else {
     invariant_violation("invalid status type " . gettype($status));
   }
 }
 
 function run_test($options, $test) {
-  $skip_reason = skip_test($options, $test, !($options['no-skipif'] ?? false));
+  $skip_reason = should_skip_test_simple($options, $test);
   if ($skip_reason !== null) return $skip_reason;
+
+  if (!($options['no-skipif'] ?? false)) {
+    $skip_reason = skipif_should_skip_test($options, $test);
+    if ($skip_reason !== null) return $skip_reason;
+
+    $result = runif_should_skip_test($options, $test);
+    if (!$result['valid']) {
+      invariant($result['error'] is string, 'missing runif error');
+      Status::writeDiff($test, 'Invalid .runif file: ' . $result['error']);
+      return false;
+    }
+    if (!$result['match']) {
+      invariant($result['skip_reason'] is string, 'missing skip_reason');
+      return $result['skip_reason'];
+    }
+  }
 
   list($hhvm, $hhvm_env) = hhvm_cmd($options, $test);
 
@@ -2737,7 +3007,10 @@ function run_test($options, $test) {
   }
 
   if (isset($options['hhas-round-trip'])) {
-    invariant(substr($test, -5) !== ".hhas", "skip_test should have skipped");
+    invariant(
+      substr($test, -5) !== ".hhas",
+      'should_skip_test_simple should have skipped this',
+    );
     // create tmpdir now so that we can write hhas
     Status::createTestTmpDir($test);
     // dumping hhas, not running code so arbitrarily picking a mode
@@ -3301,7 +3574,7 @@ function main($argv) {
         error("Couldn't find config file for $test");
       }
       if (array_key_exists($config, $configs)) continue;
-      if (skip_test($options, $test, false) !== null) continue;
+      if (should_skip_test_simple($options, $test) !== null) continue;
       $configs[] = $config;
     }
 
@@ -3392,25 +3665,25 @@ function main($argv) {
 
   // Fork "worker" children (if needed).
   $children = darray[];
-  // A poor man's shared memory.
-  $bad_test_files = varray[];
+  // We write results as json in each child and collate them at the end
+  $json_results_files = varray[];
   if (Status::$nofork) {
     Status::registerCleanup(isset($options['no-clean']));
-    $bad_test_file = tempnam('/tmp', 'test-run-');
-    $bad_test_files[] = $bad_test_file;
+    $json_results_file = tempnam('/tmp', 'test-run-');
+    $json_results_files[] = $json_results_file;
     invariant(count($test_buckets) === 1, "nofork was set erroneously");
-    $return_value = run($options, $test_buckets[0], $bad_test_file);
+    $return_value = child_main($options, $test_buckets[0], $json_results_file);
   } else {
     foreach ($test_buckets as $test_bucket) {
-      $bad_test_file = tempnam('/tmp', 'test-run-');
-      $bad_test_files[] = $bad_test_file;
+      $json_results_file = tempnam('/tmp', 'test-run-');
+      $json_results_files[] = $json_results_file;
       $pid = pcntl_fork();
       if ($pid == -1) {
         error('could not fork');
       } else if ($pid) {
         $children[$pid] = $pid;
       } else {
-        exit(run($options, $test_bucket, $bad_test_file));
+        exit(child_main($options, $test_bucket, $json_results_file));
       }
     }
 
@@ -3471,8 +3744,8 @@ function main($argv) {
 
   // aggregate results
   $results = darray[];
-  foreach ($bad_test_files as $bad_test_file) {
-    $json = json_decode(file_get_contents($bad_test_file), true);
+  foreach ($json_results_files as $json_results_file) {
+    $json = json_decode(file_get_contents($json_results_file), true);
     if (!is_array($json)) {
       error(
         "\nNo JSON output was received from a test thread. ".
@@ -3480,7 +3753,7 @@ function main($argv) {
       );
     }
     $results = array_merge($results, $json);
-    unlink($bad_test_file);
+    unlink($json_results_file);
   }
 
   // print results

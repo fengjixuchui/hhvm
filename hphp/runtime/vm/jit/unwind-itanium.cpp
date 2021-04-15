@@ -117,7 +117,8 @@ TCA lookup_catch_trace(TCA rip) {
  * updating the unwind RDS info, as well as the IP in `ctx'.
  */
 void install_catch_trace(_Unwind_Context* ctx, TCA rip,
-                         bool do_side_exit, TypedValue unwinder_tv) {
+                         bool do_side_exit, bool dummy_exn,
+                         TypedValue unwinder_tv) {
   auto catchTrace = lookup_catch_trace(rip);
   if (!catchTrace) {
     FTRACE(1, "no catch trace entry for ip {}; installing default catch trace "
@@ -139,7 +140,8 @@ void install_catch_trace(_Unwind_Context* ctx, TCA rip,
   // things to the handler using the RDS. This also simplifies the handler code
   // because it doesn't have to worry about saving its arguments somewhere
   // while executing the exit trace.
-  if (do_side_exit) {
+  assertx(int(do_side_exit) + int(dummy_exn) <= 1);
+  if (do_side_exit || dummy_exn) {
     __cxxabiv1::__cxa_end_catch();
     g_unwind_rds->exn = nullptr;
     g_unwind_rds->tv = unwinder_tv;
@@ -240,7 +242,8 @@ tc_unwind_personality(int version,
 
   // If we have a catch trace at the IP in the frame given by `context',
   // install it otherwise install the default catch trace.
-  install_catch_trace(context, ip, bool(ism), tv);
+  bool cde = ti == typeid(CppDummyException);
+  install_catch_trace(context, ip, bool(ism), cde, tv);
   return _URC_INSTALL_CONTEXT;
 }
 
@@ -323,11 +326,6 @@ TCUnwindInfo tc_unwind_resume(ActRec* fp, bool teardown) {
         case Arch::ARM:
         case Arch::X64:
           return {nullptr, sfp};
-        case Arch::PPC64:
-          // On PPC64 the fp->m_savedRip is not the return address of the
-          // context of fp, but from the next frame. So if the callToExit is
-          // found in fp->m_savedRip, the correct frame to be returned is fp.
-          return {nullptr, fp};
       }
     }
 
@@ -396,21 +394,6 @@ void write_tc_cie(EHFrameWriter& ehfw, PersonalityFunc personality) {
     case Arch::X64:
       ehfw.offset_extended_sf(dw_reg::IP,
                               (record_size - AROFF(m_savedRip)) / 8);
-      break;
-
-    case Arch::PPC64:
-      // On PPC64, the return address for the current frame is found in the
-      // parent frame.  The following expression uses the FP to get the parent
-      // frame and recovers the return address from it.
-      //
-      // LR is at (*SP) + 2 * data_align
-      ehfw.begin_val_expression(dw_reg::IP);
-      ehfw.op_breg(dw_reg::FP, 0);
-      ehfw.op_deref();                              // Previous frame
-      ehfw.op_consts(AROFF(m_savedRip));            // LR position
-      ehfw.op_plus();
-      ehfw.op_deref();                              // Grab data, not address
-      ehfw.end_expression();
       break;
   }
 

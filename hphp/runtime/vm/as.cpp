@@ -1007,12 +1007,6 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   Y("?Record=", T::OptExactRecord);
   Y("?Record<=",T::OptSubRecord);
   Y("Record<=", T::SubRecord);
-  X("Arr",      T::Arr);
-  X("?Arr",     T::OptArr);
-  X("VArr",     T::VArr);
-  X("?VArr",    T::OptVArr);
-  X("DArr",     T::DArr);
-  X("?DArr",    T::OptDArr);
   X("Vec",      T::Vec);
   X("?Vec",     T::OptVec);
   X("Dict",     T::Dict);
@@ -1045,12 +1039,6 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   X("?LazyCls",    T::OptLazyCls);
   X("?Res",     T::OptRes);
   X("Res",      T::Res);
-  X("?SArr",    T::OptSArr);
-  X("SArr",     T::SArr);
-  X("?SVArr",   T::OptSVArr);
-  X("SVArr",    T::SVArr);
-  X("?SDArr",   T::OptSDArr);
-  X("SDArr",    T::SDArr);
   X("?SVec",    T::OptSVec);
   X("SVec",     T::SVec);
   X("?SDict",   T::OptSDict);
@@ -1077,20 +1065,8 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   X("UncArrKeyCompat",T::UncArrKeyCompat);
   X("ArrKeyCompat",   T::ArrKeyCompat);
   X("VecCompat",T::VecCompat);
-  X("VArrCompat",T::VArrCompat);
-  X("ArrCompat",T::ArrCompat);
   X("?VecCompat",T::OptVecCompat);
-  X("?VArrCompat",T::OptVArrCompat);
-  X("?ArrCompat",T::OptArrCompat);
   X("Uninit",   T::Uninit);
-  X("SVecish", T::SVecish);
-  X("?SVecish", T::OptSVecish);
-  X("Vecish", T::Vecish);
-  X("?Vecish", T::OptVecish);
-  X("SDictish", T::SDictish);
-  X("?SDictish", T::OptSDictish);
-  X("Dictish", T::Dictish);
-  X("?Dictish", T::OptDictish);
   X("SArrLike", T::SArrLike);
   X("?SArrLike", T::OptSArrLike);
   X("ArrLike", T::ArrLike);
@@ -1126,18 +1102,6 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   case T::Str:
   case T::OptStr:
   case T::UninitStr:
-  case T::SArr:
-  case T::OptSArr:
-  case T::Arr:
-  case T::OptArr:
-  case T::SVArr:
-  case T::OptSVArr:
-  case T::VArr:
-  case T::OptVArr:
-  case T::SDArr:
-  case T::OptSDArr:
-  case T::DArr:
-  case T::OptDArr:
   case T::SVec:
   case T::OptSVec:
   case T::Vec:
@@ -1150,14 +1114,6 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   case T::OptSKeyset:
   case T::Keyset:
   case T::OptKeyset:
-  case T::SVecish:
-  case T::Vecish:
-  case T::OptSVecish:
-  case T::OptVecish:
-  case T::SDictish:
-  case T::Dictish:
-  case T::OptSDictish:
-  case T::OptDictish:
   case T::SArrLike:
   case T::ArrLike:
   case T::OptSArrLike:
@@ -1189,12 +1145,8 @@ RepoAuthType read_repo_auth_type(AsmState& as) {
   case T::OptArrKeyCompat:
   case T::UncArrKeyCompat:
   case T::ArrKeyCompat:
-  case T::OptVArrCompat:
   case T::OptVecCompat:
-  case T::OptArrCompat:
-  case T::VArrCompat:
   case T::VecCompat:
-  case T::ArrCompat:
   case T::ArrLikeCompat:
   case T::OptArrLikeCompat:
   case T::Num:
@@ -1783,7 +1735,7 @@ void checkSize(TypedValue tv, size_t& available) {
   if (isArrayLikeType(type(tv))) {
     update(allocSize(val(tv).parr));
 
-    IterateKVNoInc(val(tv).parr, [&] (TypedValue k, TypedValue v) {
+    IterateKV(val(tv).parr, [&] (TypedValue k, TypedValue v) {
       if (isStringType(type(k))) {
         update(val(k).pstr->heapSize());
       }
@@ -1957,6 +1909,22 @@ void parse_coeffects_cc_this(AsmState& as) {
   as.in.expectWs(';');
 }
 
+/*
+ * directive-coeffects_closure_inherit_from_parent ';'
+ */
+void parse_coeffects_closure_inherit_from_parent(AsmState& as) {
+  assertx(as.fe->isClosureBody);
+  as.fe->coeffectRules.emplace_back(
+    CoeffectRule(CoeffectRule::ClosureInheritFromParent{}));
+  as.in.expectWs(';');
+}
+
+void parse_coeffects_generator_this(AsmState& as) {
+  assertx(!SystemLib::s_inited);
+  as.fe->coeffectRules.emplace_back(CoeffectRule(CoeffectRule::GeneratorThis{}));
+  as.in.expectWs(';');
+}
+
 void parse_function_body(AsmState&, int nestLevel = 0);
 
 /*
@@ -2102,12 +2070,12 @@ void fixup_default_values(AsmState& as, FuncEmitter* fe) {
     // then immediately use it to set the parameter local and pop it from the
     // stack. Currently the following relatively limited sequences are accepted:
     //
-    // Int | String | Double | Null | True | False | Array | Dict | Keyset | Vec
+    // Int | String | Double | Null | True | False | Vec | Dict | Keyset
     // SetL loc, PopC | PopL loc
     auto result = BCPattern {
       Atom::alt(
-        Atom(OpInt), Atom(OpString), Atom(OpDouble), Atom(OpNull), Atom(OpTrue),
-        Atom(OpFalse), Atom(OpArray), Atom(OpDict), Atom(OpVec), Atom(OpKeyset)
+        Atom(OpInt), Atom(OpString), Atom(OpDouble), Atom(OpNull),
+        Atom(OpTrue), Atom(OpFalse), Atom(OpVec), Atom(OpDict), Atom(OpKeyset)
       ).capture(),
       Atom::alt(
         Atom(OpPopL).onlyif(checkloc),
@@ -2141,8 +2109,8 @@ void fixup_default_values(AsmState& as, FuncEmitter* fe) {
     assertx(capture);
 
     TypedValue dv = make_tv<KindOfUninit>();
-    auto decode_array = [&] {
-      if (auto arr = as.ue->lookupArray(decode_raw<uint32_t>(capture))) {
+    auto const decode_array = [&] {
+      if (auto const arr = as.ue->lookupArray(decode_raw<uint32_t>(capture))) {
         dv.m_type = arr->toPersistentDataType();
         dv.m_data.parr = const_cast<ArrayData*>(arr);
       }
@@ -2152,7 +2120,6 @@ void fixup_default_values(AsmState& as, FuncEmitter* fe) {
     case OpNull:   dv = make_tv<KindOfNull>();           break;
     case OpTrue:   dv = make_tv<KindOfBoolean>(true);    break;
     case OpFalse:  dv = make_tv<KindOfBoolean>(false);   break;
-    case OpArray:  decode_array(); break;
     case OpVec:    decode_array(); break;
     case OpDict:   decode_array(); break;
     case OpKeyset: decode_array(); break;
@@ -2242,6 +2209,14 @@ void parse_function_body(AsmState& as, int nestLevel /* = 0 */) {
       if (word == ".coeffects_fun_param") { parse_coeffects_fun_param(as); continue; }
       if (word == ".coeffects_cc_param") { parse_coeffects_cc_param(as); continue; }
       if (word == ".coeffects_cc_this") { parse_coeffects_cc_this(as); continue; }
+      if (word == ".coeffects_closure_inherit_from_parent") {
+        parse_coeffects_closure_inherit_from_parent(as);
+        continue;
+      }
+      if (word == ".coeffects_generator_this") {
+        parse_coeffects_generator_this(as);
+        continue;
+      }
       as.error("unrecognized directive `" + word + "' in function");
     }
     if (as.in.peek() == ':') {
@@ -3027,13 +3002,13 @@ void parse_context_constant(AsmState& as) {
   as.in.skipWhitespace();
   bool isAbstract = as.in.tryConsume("isAbstract");
 
-  auto coeffects = StaticCoeffects::none();
+  auto coeffects = PreClassEmitter::Const::CoeffectsVec{};
 
   while (true) {
     as.in.skipWhitespace();
     std::string coeffect;
     if (!as.in.readword(coeffect)) break;
-    coeffects |= CoeffectsConfig::fromName(coeffect);
+    coeffects.push_back(makeStaticString(coeffect));
   }
 
   as.in.expectWs(';');
@@ -3042,7 +3017,7 @@ void parse_context_constant(AsmState& as) {
   if (isAbstract) return;
 
   DEBUG_ONLY auto added =
-    as.pce->addContextConstant(makeStaticString(name), coeffects,
+    as.pce->addContextConstant(makeStaticString(name), std::move(coeffects),
                                false /* isAbstract */);
   assertx(added);
 }
@@ -3280,7 +3255,7 @@ PreClass::Hoistable compute_hoistable(AsmState& as,
     if (!pce.interfaces().empty() ||
         !pce.usedTraits().empty() ||
         !pce.requirements().empty() ||
-        (pce.attrs() & AttrEnum)) {
+        (pce.attrs() & (AttrEnum|AttrEnumClass))) {
       return PreClass::Mergeable;
     }
     if (!parentName.empty() && !as.hoistables.count(parentName)) {
@@ -3319,7 +3294,7 @@ void parse_class(AsmState& as) {
     attrs |= AttrUnique | AttrPersistent | AttrBuiltin;
   }
   if (attrs & AttrIsConst) {
-    if (attrs & (AttrEnum | AttrInterface | AttrTrait)) {
+    if (attrs & (AttrEnum | AttrEnumClass | AttrInterface | AttrTrait)) {
       as.error("interfaces, traits and enums may not be const");
     }
     if (!(attrs & AttrForbidDynamicProps)) {
@@ -3749,7 +3724,6 @@ std::unique_ptr<UnitEmitter> assemble_string(
     }
   };
 
-  ARRPROV_USE_RUNTIME_LOCATION();
   auto const bcSha1 = SHA1{string_sha1(folly::StringPiece(code, codeLen))};
   auto ue = std::make_unique<UnitEmitter>(sha1, bcSha1, nativeFuncs, false);
   StringData* sd = makeStaticString(filename);

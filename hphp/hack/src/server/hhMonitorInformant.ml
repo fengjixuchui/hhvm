@@ -399,7 +399,11 @@ module Revision_tracker = struct
   type repo_transition =
     | State_enter of Hg.hg_rev
     | State_leave of Hg.hg_rev
-    | Changed_merge_base of Hg.hg_rev * SSet.t * Watchman.clock
+    | Changed_merge_base of
+        Hg.hg_rev * (SSet.t[@printer SSet.pp_large]) * Watchman.clock
+  [@@deriving show]
+
+  let _ = show_repo_transition (* allow unused show *)
 
   type init_settings = {
     watchman: Watchman.watchman_instance ref;
@@ -409,6 +413,7 @@ module Revision_tracker = struct
     use_xdb: bool;
     ignore_hh_version: bool;
     ignore_hhconfig: bool;
+    is_saved_state_precomputed: bool;
   }
 
   type env = {
@@ -461,6 +466,7 @@ module Revision_tracker = struct
       ~ignore_hh_version
       ~ignore_hhconfig
       ~saved_state_cache_limit
+      ~is_saved_state_precomputed
       watchman
       root =
     let init_settings =
@@ -472,6 +478,7 @@ module Revision_tracker = struct
         use_xdb;
         ignore_hh_version;
         ignore_hhconfig;
+        is_saved_state_precomputed;
       }
     in
     ref
@@ -599,7 +606,18 @@ module Revision_tracker = struct
               "Informant: Incremental distance <= state distance. Ignoring fetched Saved State."
           in
           Move_along
-      | (true, Changed_merge_base _, _, _) -> Restart_server None)
+      | (true, Changed_merge_base _, _, _) ->
+        (* If the current server was started using a precomputed saved-state,
+         * we don't want to relaunch the server. If we do, it'll reuse
+         * the previously used saved-state for the new mergebase and more
+         * importantly the **same list of changed files!!!** which is
+         * totally wrong *)
+        if env.inits.is_saved_state_precomputed then begin
+          Hh_logger.log
+            "Server was started using a precomputed saved-state, not restarting.";
+          Move_along
+        end else
+          Restart_server None)
 
   (**
    * If we have a cached global_rev for this hg_rev, make a decision on
@@ -945,6 +963,7 @@ let init
       watchman_debug_logging;
       ignore_hh_version;
       ignore_hhconfig;
+      is_saved_state_precomputed;
     } =
   if use_dummy then
     let () = Printf.eprintf "Informant using dummy - resigning\n" in
@@ -984,6 +1003,7 @@ let init
               ~ignore_hh_version
               ~ignore_hhconfig
               ~saved_state_cache_limit
+              ~is_saved_state_precomputed
               (Watchman.Watchman_alive watchman_env)
               root;
           watchman_event_watcher = WEWClient.init root;

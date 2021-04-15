@@ -168,19 +168,19 @@ end
 (* -- Decl_provider helpers ------------------------------------------------- *)
 module Decl : sig
   val get_class_exn :
-    Provider_context.t -> Decl_provider.class_key -> Decl_provider.class_decl
+    Provider_context.t -> Decl_provider.type_key -> Decl_provider.class_decl
 
   val get_class_pos :
-    Provider_context.t -> Decl_provider.class_key -> Pos.t option
+    Provider_context.t -> Decl_provider.type_key -> Pos.t option
 
-  val get_class_pos_exn : Provider_context.t -> Decl_provider.class_key -> Pos.t
+  val get_class_pos_exn : Provider_context.t -> Decl_provider.type_key -> Pos.t
 
   val get_fun_pos : Provider_context.t -> Decl_provider.fun_key -> Pos.t option
 
   val get_fun_pos_exn : Provider_context.t -> Decl_provider.fun_key -> Pos.t
 
   val get_typedef_pos :
-    Provider_context.t -> Decl_provider.typedef_key -> Pos.t option
+    Provider_context.t -> Decl_provider.type_key -> Pos.t option
 
   val get_gconst_pos :
     Provider_context.t -> Decl_provider.gconst_key -> Pos.t option
@@ -193,24 +193,32 @@ end = struct
 
   let get_fun_pos ctx name =
     Decl_provider.get_fun ctx name
-    |> Option.map ~f:Typing_defs.((fun decl -> decl.fe_pos))
+    |> Option.map
+         ~f:
+           Typing_defs.(
+             (fun decl -> decl.fe_pos |> Naming_provider.resolve_position ctx))
 
   let get_fun_pos_exn ctx name = value_or_not_found name (get_fun_pos ctx name)
 
   let get_class_pos ctx name =
     Decl_provider.get_class ctx name
-    |> Option.map ~f:(fun decl -> Class.pos decl)
+    |> Option.map ~f:(fun decl ->
+           Class.pos decl |> Naming_provider.resolve_position ctx)
 
   let get_class_pos_exn ctx name =
     value_or_not_found name (get_class_pos ctx name)
 
   let get_typedef_pos ctx name =
     Decl_provider.get_typedef ctx name
-    |> Option.map ~f:Typing_defs.((fun decl -> decl.td_pos))
+    |> Option.map
+         ~f:
+           Typing_defs.(
+             (fun decl -> decl.td_pos |> Naming_provider.resolve_position ctx))
 
   let get_gconst_pos ctx name =
     Decl_provider.get_gconst ctx name
-    |> Option.map ~f:(fun const -> const.Typing_defs.cd_pos)
+    |> Option.map ~f:(fun const ->
+           const.Typing_defs.cd_pos |> Naming_provider.resolve_position ctx)
 
   let get_class_or_typedef_pos ctx name =
     Option.first_some (get_class_pos ctx name) (get_typedef_pos ctx name)
@@ -245,7 +253,7 @@ module Nast_helper : sig
     Provider_context.t ->
     string ->
     string ->
-    (Pos.t, Nast.func_body_ann, unit, unit) Aast.class_typeconst option
+    (Pos.t, Nast.func_body_ann, unit, unit) Aast.class_typeconst_def option
 
   val get_prop :
     Provider_context.t ->
@@ -254,6 +262,8 @@ module Nast_helper : sig
     (Pos.t, Nast.func_body_ann, unit, unit) Aast.class_var option
 
   val is_tydef : Provider_context.t -> string -> bool
+
+  val is_class : Provider_context.t -> string -> bool
 
   val is_enum : Provider_context.t -> string -> bool
 
@@ -348,6 +358,8 @@ end = struct
 
   let is_tydef ctx nm = Option.is_some @@ get_typedef ctx nm
 
+  let is_class ctx nm = Option.is_some @@ get_class ctx nm
+
   let is_enum ctx nm =
     Option.value_map ~default:false ~f:(fun Aast.{ c_kind; _ } ->
         match c_kind with
@@ -379,7 +391,7 @@ module Dep : sig
 
   val get_origin :
     Provider_context.t ->
-    Decl_provider.class_key ->
+    Decl_provider.type_key ->
     Typing_deps.Dep.dependency Typing_deps.Dep.variant ->
     string
 
@@ -402,7 +414,7 @@ end = struct
       | SMethod (cls, _) -> Some cls
       | Prop (cls, _) -> Some cls
       | SProp (cls, _) -> Some cls
-      | Class cls -> Some cls
+      | Type cls -> Some cls
       | Cstr cls -> Some cls
       | AllMembers cls -> Some cls
       | Extends cls -> Some cls
@@ -410,8 +422,7 @@ end = struct
       | FunName _
       | GConst _
       | GConstName _ ->
-        None
-      | RecordDef _ -> raise Unsupported)
+        None)
 
   let get_dep_pos ctx dep =
     let open Typing_deps.Dep in
@@ -419,7 +430,7 @@ end = struct
     | Fun name
     | FunName name ->
       Decl.get_fun_pos ctx name
-    | Class name
+    | Type name
     | Const (name, _)
     | Method (name, _)
     | SMethod (name, _)
@@ -432,7 +443,6 @@ end = struct
     | GConst name
     | GConstName name ->
       Decl.get_gconst_pos ctx name
-    | RecordDef _ -> raise Unsupported
 
   let get_relative_path ctx dep =
     Option.map ~f:(fun pos -> Pos.filename pos) @@ get_dep_pos ctx dep
@@ -461,7 +471,7 @@ end = struct
     | Fun name
     | FunName name ->
       get_fun_mode ctx name
-    | Class name
+    | Type name
     | Const (name, _)
     | Method (name, _)
     | SMethod (name, _)
@@ -474,7 +484,6 @@ end = struct
     | GConst name
     | GConstName name ->
       get_gconst_mode ctx name
-    | RecordDef _ -> raise Unsupported
 
   let get_origin ctx cls (dep : 'a Typing_deps.Dep.variant) =
     let open Typing_deps.Dep in
@@ -583,7 +592,7 @@ end = struct
   let rec do_add_dep ctx env dep =
     let is_wildcard =
       match dep with
-      | Typing_deps.Dep.Class h -> String.equal h SN.Typehints.wildcard
+      | Typing_deps.Dep.Type h -> String.equal h SN.Typehints.wildcard
       | _ -> false
     in
     if
@@ -612,7 +621,7 @@ end = struct
           super#on_tfun () r ft
 
         method! on_tapply _ _ (_, name) tyl =
-          let dep = Typing_deps.Dep.Class name in
+          let dep = Typing_deps.Dep.Type name in
           do_add_dep ctx env dep;
 
           (* If we have a constant of a generic type, it can only be an
@@ -628,7 +637,7 @@ end = struct
               | Typing_defs.TSFlit_str _ ->
                 ()
               | Typing_defs.TSFclass_const ((_, c), (_, s)) ->
-                do_add_dep ctx env (Typing_deps.Dep.Class c);
+                do_add_dep ctx env (Typing_deps.Dep.Type c);
                 do_add_dep ctx env (Typing_deps.Dep.Const (c, s)));
               add_dep ctx env ~this sft_ty)
             fdm
@@ -664,23 +673,33 @@ end = struct
               do_add_dep ctx env (Typing_deps.Dep.Const (class_name, tconst));
               let cls = Decl.get_class_exn ctx class_name in
               (match Decl_provider.Class.get_typeconst cls tconst with
-              | Some Typing_defs.{ ttc_type; ttc_as_constraint; _ } ->
+              | Some
+                  Typing_defs.
+                    { ttc_type; ttc_as_constraint; ttc_super_constraint; _ } ->
                 Option.iter
                   ttc_type
                   ~f:(add_dep ctx ~this:(Some class_name) env);
+                let add_cstr_dep tc_type =
+                  (* What does 'this' refer to inside of T? *)
+                  let this =
+                    match Typing_defs.get_node tc_type with
+                    | Typing_defs.Tapply ((_, name), _) -> Some name
+                    | _ -> this
+                  in
+                  let taccess = make_taccess r tc_type tconsts in
+                  add_dep ctx ~this env taccess
+                in
                 if not (List.is_empty tconsts) then (
-                  match (ttc_type, ttc_as_constraint) with
-                  | (Some tc_type, _)
-                  | (None, Some tc_type) ->
-                    (* What does 'this' refer to inside of T? *)
-                    let this =
-                      match Typing_defs.get_node tc_type with
-                      | Typing_defs.Tapply ((_, name), _) -> Some name
-                      | _ -> this
-                    in
-                    let taccess = make_taccess r tc_type tconsts in
-                    add_dep ctx ~this env taccess
-                  | (None, None) -> ()
+                  match (ttc_type, ttc_as_constraint, ttc_super_constraint) with
+                  | (None, Some as_tc_type, Some super_tc_type) ->
+                    add_cstr_dep as_tc_type;
+                    add_cstr_dep super_tc_type
+                  (* TODO(coeffects) double-check this *)
+                  | (Some tc_type, _, _)
+                  | (None, Some tc_type, _)
+                  | (None, _, Some tc_type) ->
+                    add_cstr_dep tc_type
+                  | (None, None, None) -> ()
                 )
               | None -> ())
           in
@@ -699,7 +718,7 @@ end = struct
     let description = Typing_deps.Dep.variant_to_string obj in
     match Dep.get_class_name obj with
     | Some cls_name ->
-      do_add_dep ctx env (Typing_deps.Dep.Class cls_name);
+      do_add_dep ctx env (Typing_deps.Dep.Type cls_name);
       Option.iter ~f:(add_class_attr_deps ctx env)
       @@ Nast_helper.get_class ctx cls_name;
       (match Decl_provider.get_class ctx cls_name with
@@ -785,7 +804,7 @@ end = struct
               Option.iter ~f:(add_method_attr_deps ctx env)
               @@ Nast_helper.get_method ctx cls_name "__construct"
             | _ -> ())
-          | Class _ ->
+          | Type _ ->
             List.iter (Class.all_ancestors cls) (fun (_, ty) -> add_dep ty);
             List.iter (Class.all_ancestor_reqs cls) (fun (_, ty) -> add_dep ty);
             Option.iter
@@ -825,7 +844,7 @@ end = struct
   and add_user_attr_deps ctx env user_attrs =
     List.iter user_attrs ~f:(fun Aast.{ ua_name = (_, cls); _ } ->
         if not @@ String.is_prefix ~prefix:"__" cls then (
-          do_add_dep ctx env @@ Typing_deps.Dep.Class cls;
+          do_add_dep ctx env @@ Typing_deps.Dep.Type cls;
           do_add_dep ctx env @@ Typing_deps.Dep.Cstr cls
         ))
 
@@ -897,7 +916,7 @@ end = struct
           Typing_deps.Dep.Const (cc_origin, const_name) :: acc)
       @@ Class.get_const cls const_name
     in
-    if Dep.is_builtin ctx (Class ancestor_name) then
+    if Dep.is_builtin ctx (Type ancestor_name) then
       let with_smths =
         List.fold ~init:acc ~f:(fun acc (nm, _) -> add_smethod_impl acc nm)
         @@ Class.smethods ancestor
@@ -943,7 +962,7 @@ end = struct
     let f = add_impls ~ctx ~env ~cls in
     let init =
       Option.value_map ~default:[] ~f:(fun ss ->
-          List.map ~f:(fun nm -> Typing_deps.Dep.Class nm) @@ SSet.elements ss)
+          List.map ~f:(fun nm -> Typing_deps.Dep.Type nm) @@ SSet.elements ss)
       @@ Class.sealed_whitelist cls
     in
     let ancs = List.fold ~init ~f @@ Class.all_ancestor_names cls in
@@ -955,7 +974,7 @@ end = struct
     let size = HashSet.length env.dependencies in
     let add_class dep acc =
       match dep with
-      | Typing_deps.Dep.Class cls_name ->
+      | Typing_deps.Dep.Type cls_name ->
         Option.value_map ~default:acc ~f:(fun cls -> cls :: acc)
         @@ Decl_provider.get_class ctx cls_name
       | _ -> acc
@@ -1538,6 +1557,10 @@ end = struct
       Fmt.(prefix (const string "list") @@ parens @@ list ~sep:comma pp_expr)
         ppf
         exprs
+    | Aast.Tuple exprs ->
+      Fmt.(prefix (const string "tuple") @@ parens @@ list ~sep:comma pp_expr)
+        ppf
+        exprs
     | Aast.Cast (hint, expr) ->
       Fmt.(pair ~sep:nop (parens @@ pp_hint ~is_ctx:false) pp_expr)
         ppf
@@ -1609,6 +1632,7 @@ end = struct
              (braces @@ pair ~sep:comma pp_expr pp_expr))
         ppf
         (targs_opt, (fst, snd))
+    | Aast.Hole (expr, _, _, _) -> pp_expr ppf expr
     | Aast.EnumAtom name -> Fmt.(prefix (const string "#") string) ppf name
     | Aast.Efun _
     | Aast.Lfun _
@@ -2057,7 +2081,7 @@ end = struct
     val mk_const : Provider_context.t -> Nast.class_const -> t
 
     val mk_tyconst :
-      (Pos.t, Nast.func_body_ann, unit, unit) Aast.class_typeconst -> t
+      (Pos.t, Nast.func_body_ann, unit, unit) Aast.class_typeconst_def -> t
 
     val mk_method : bool -> Nast.method_ -> t
 
@@ -2145,27 +2169,27 @@ end = struct
     let mk_tyconst
         Aast.
           {
-            c_tconst_abstract;
+            c_tconst_kind;
             c_tconst_name = (pos, name);
-            c_tconst_type;
-            c_tconst_as_constraint;
             c_tconst_is_ctx;
             c_tconst_user_attributes;
             _;
           } =
-      let is_abstract =
+      let (is_abstract, type_, constraint_) =
         Aast.(
-          match c_tconst_abstract with
-          | TCAbstract _ -> true
-          | _ -> false)
+          match c_tconst_kind with
+          | TCAbstract { c_atc_as_constraint = c; _ } -> (true, None, c)
+          | TCPartiallyAbstract { c_patc_constraint = c; c_patc_type = t } ->
+            (false, Some t, Some c)
+          | TCConcrete { c_tc_type = t } -> (false, Some t, None))
       in
       EltTypeConst
         {
           name;
           line = Pos.line pos;
           is_abstract;
-          type_ = c_tconst_type;
-          constraint_ = c_tconst_as_constraint;
+          type_;
+          constraint_;
           is_ctx = c_tconst_is_ctx;
           user_attrs = c_tconst_user_attributes;
         }
@@ -2608,13 +2632,13 @@ end = struct
       | GConst nm
       | GConstName nm ->
         PartSingle (Single.mk_gconst ctx @@ Nast_helper.get_gconst_exn ctx nm)
-      (* -- Type defs and Enums -- *)
-      | Class nm when Nast_helper.is_tydef ctx nm ->
+      (* -- Type defs, Enums, Classes, RecordDefs -- *)
+      | Type nm when Nast_helper.is_tydef ctx nm ->
         PartSingle (Single.mk_tydef @@ Nast_helper.get_typedef_exn ctx nm)
-      | Class nm when Nast_helper.is_enum ctx nm ->
+      | Type nm when Nast_helper.is_enum ctx nm ->
         PartSingle (Single.mk_enum ctx @@ Nast_helper.get_class_exn ctx nm)
-      (* -- Classes -- *)
-      | Class nm -> PartCls nm
+      | Type nm when Nast_helper.is_class ctx nm -> PartCls nm
+      | Type _ -> raise Unsupported
       (* -- Ignore -- *)
       | Const _
       | Method _
@@ -2624,8 +2648,7 @@ end = struct
       | SProp _
       | AllMembers _
       | Extends _ ->
-        PartIgnore
-      | RecordDef _ -> raise Unsupported)
+        PartIgnore)
 
   let of_deps ctx target_opt deps =
     let insert_elt (sgls, grps) (cls_nm, cls_elt) =

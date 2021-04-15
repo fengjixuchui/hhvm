@@ -77,6 +77,7 @@ module Tools = struct
       saved_state_cache_limit = 20;
       ignore_hh_version = false;
       ignore_hhconfig = false;
+      is_saved_state_precomputed = false;
     }
 end
 
@@ -129,6 +130,8 @@ let make_test test =
       let wait_for_server_exit _ _ = ()
 
       let wait_pid _ = (0, Unix.WEXITED 0)
+
+      let is_saved_state_precomputed _ = false
     end : Mock_server_config_sig )
   in
   Xdb.Mocking.reset_find_nearest ();

@@ -15,7 +15,7 @@ use hhas_symbol_refs_rust::IncludePath;
 use hhbc_ast_rust::*;
 use hhbc_id_rust::{class, r#const, function, method, prop, Id};
 use hhbc_string_utils_rust as string_utils;
-use instruction_sequence_rust::{
+use instruction_sequence::{
     instr, unrecoverable,
     Error::{self, Unrecoverable},
     InstrSeq, Result,
@@ -273,30 +273,6 @@ mod inout_locals {
     }
 }
 
-pub fn wrap_array_mark_legacy(e: &Emitter, ins: InstrSeq) -> InstrSeq {
-    if mark_as_legacy(e.options()) {
-        InstrSeq::gather(vec![
-            ins,
-            instr::false_(),
-            instr::instr(Instruct::IMisc(InstructMisc::ArrayMarkLegacy)),
-        ])
-    } else {
-        ins
-    }
-}
-
-pub fn wrap_array_unmark_legacy(e: &Emitter, ins: InstrSeq) -> InstrSeq {
-    if mark_as_legacy(e.options()) {
-        InstrSeq::gather(vec![
-            ins,
-            instr::false_(),
-            instr::instr(Instruct::IMisc(InstructMisc::ArrayUnmarkLegacy)),
-        ])
-    } else {
-        ins
-    }
-}
-
 pub fn get_type_structure_for_hint(
     e: &mut Emitter,
     tparams: &[&str],
@@ -317,11 +293,7 @@ pub fn get_type_structure_for_hint(
         false,
     )?;
     let i = emit_adata::get_array_identifier(e, &tv);
-    Ok(if hack_arr_dv_arrs(e.options()) {
-        instr::lit_const(InstructLitConst::Dict(i))
-    } else {
-        instr::lit_const(InstructLitConst::Array(i))
-    })
+    Ok(instr::lit_const(InstructLitConst::Dict(i)))
 }
 
 pub struct Setrange {
@@ -534,12 +506,25 @@ pub fn emit_expr(emitter: &mut Emitter, env: &Env, expression: &tast::Expr) -> R
             pos,
             "list() can only be used as an lvar. Did you mean to use tuple()?",
         )),
+        Expr_::Tuple(_) => {
+            unimplemented!("TODO: generate Tuple nodes in lowerer and update codegen")
+        }
+
         Expr_::Any => Err(unrecoverable("Cannot codegen from an Any node")),
         Expr_::This | Expr_::Lplaceholder(_) | Expr_::Dollardollar(_) => {
             unimplemented!("TODO(hrust) Codegen after naming pass on AAST")
         }
-        Expr_::ExpressionTree(et) => emit_expr(emitter, env, &et.desugared_expr),
-        _ => unimplemented!("TODO(hrust)"),
+        Expr_::ExpressionTree(et) => emit_expr(emitter, env, &et.runtime_expr),
+        Expr_::ETSplice(_) => Err(unrecoverable(
+            "expression trees: splice should be erased during rewriting",
+        )),
+        Expr_::FunId(_)
+        | Expr_::MethodId(_)
+        | Expr_::MethodCaller(_)
+        | Expr_::SmethodId(_)
+        | Expr_::Hole(_) => {
+            unimplemented!("TODO(hrust)")
+        }
     }
 }
 
@@ -820,28 +805,14 @@ pub fn emit_await(emitter: &mut Emitter, env: &Env, pos: &Pos, expr: &tast::Expr
     }
 }
 
-fn hack_arr_dv_arrs(opts: &Options) -> bool {
-    opts.hhvm.flags.contains(HhvmFlags::HACK_ARR_DV_ARRS)
-}
-
-fn mark_as_legacy(opts: &Options) -> bool {
-    opts.hhvm.flags.contains(HhvmFlags::HACK_ARR_DV_ARRS)
-        && opts.hhvm.flags.contains(HhvmFlags::HACK_ARR_DV_ARR_MARK)
-}
-
 fn inline_gena_call(emitter: &mut Emitter, env: &Env, arg: &tast::Expr) -> Result {
     let load_arr = emit_expr(emitter, env, arg)?;
     let async_eager_label = emitter.label_gen_mut().next_regular();
-    let hack_arr_dv_arrs = hack_arr_dv_arrs(emitter.options());
 
     scope::with_unnamed_local(emitter, |e, arr_local| {
         let before = InstrSeq::gather(vec![
             load_arr,
-            if hack_arr_dv_arrs {
-                instr::cast_dict()
-            } else {
-                instr::cast_darray()
-            },
+            instr::cast_dict(),
             instr::popl(arr_local.clone()),
         ]);
 
@@ -858,11 +829,7 @@ fn inline_gena_call(emitter: &mut Emitter, env: &Env, arg: &tast::Expr) -> Resul
                     1,
                     None,
                 ),
-                method::from_raw_string(if hack_arr_dv_arrs {
-                    "fromDict"
-                } else {
-                    "fromDArray"
-                }),
+                method::from_raw_string("fromDict"),
                 class::from_raw_string("HH\\AwaitAllWaitHandle"),
             ),
             instr::await_(),
@@ -876,7 +843,7 @@ fn inline_gena_call(emitter: &mut Emitter, env: &Env, arg: &tast::Expr) -> Resul
                         instr::cgetl(val_local),
                         instr::whresult(),
                         instr::basel(arr_local.clone(), MemberOpMode::Define),
-                        instr::setm(0, MemberKey::EL(key_local, ReadOnlyOp::Mutable)),
+                        instr::setm(0, MemberKey::EL(key_local, ReadOnlyOp::Any)),
                         instr::popc(),
                     ])
                 },
@@ -979,8 +946,8 @@ fn emit_vec_collection(
     pos: &Pos,
     fields: &Vec<tast::Afield>,
 ) -> Result {
-    match ast_constant_folder::vec_to_typed_value(e, &env.namespace, pos, fields) {
-        Ok(tv) => emit_static_collection(e, env, None, pos, tv),
+    match ast_constant_folder::vec_to_typed_value(e, &env.namespace, fields) {
+        Ok(tv) => emit_static_collection(None, pos, tv),
         Err(_) => emit_value_only_collection(e, env, pos, fields, InstructLitConst::NewVec),
     }
 }
@@ -1097,36 +1064,25 @@ fn emit_collection(
         true,  /*allow_map*/
         false, /*force_class_const*/
     ) {
-        Ok(tv) => emit_static_collection(e, env, transform_to_collection, pos, tv),
+        Ok(tv) => emit_static_collection(transform_to_collection, pos, tv),
         Err(_) => emit_dynamic_collection(e, env, expr, fields),
     }
 }
 
 fn emit_static_collection(
-    e: &mut Emitter,
-    env: &Env,
     transform_to_collection: Option<CollectionType>,
     pos: &Pos,
     tv: TypedValue,
 ) -> Result {
-    let arrprov_enabled = e.options().hhvm.flags.contains(HhvmFlags::ARRAY_PROVENANCE);
     let transform_instr = match transform_to_collection {
         Some(collection_type) => instr::colfromarray(collection_type),
         _ => instr::empty(),
     };
-    Ok(
-        if arrprov_enabled && env.scope.has_function_attribute("__ProvenanceSkipFrame") {
-            InstrSeq::gather(vec![
-                emit_pos(pos),
-                instr::typedvalue(tv),
-                instr::int(0),
-                instr::instr(Instruct::IMisc(InstructMisc::TagProvenanceHere)),
-                transform_instr,
-            ])
-        } else {
-            InstrSeq::gather(vec![emit_pos(pos), instr::typedvalue(tv), transform_instr])
-        },
-    )
+    Ok(InstrSeq::gather(vec![
+        emit_pos(pos),
+        instr::typedvalue(tv),
+        transform_instr,
+    ]))
 }
 
 fn expr_and_new(
@@ -1403,37 +1359,21 @@ fn emit_dynamic_collection(
             emit_collection_helper(e, CollectionType::ImmMap)
         }
         E_::Varray(_) => {
-            let hack_arr_dv_arrs = hack_arr_dv_arrs(e.options());
-            let instrs = emit_value_only_collection(e, env, pos, fields, |n| {
-                if hack_arr_dv_arrs {
-                    InstructLitConst::NewVec(n)
-                } else {
-                    InstructLitConst::NewVArray(n)
-                }
-            });
-            Ok(wrap_array_mark_legacy(e, instrs?))
+            let instrs = emit_value_only_collection(e, env, pos, fields, InstructLitConst::NewVec);
+            Ok(instrs?)
         }
         E_::Darray(_) => {
             if is_struct_init(e, env, fields, false /* allow_numerics */)? {
-                let hack_arr_dv_arrs = hack_arr_dv_arrs(e.options());
                 let instrs = emit_struct_array(e, env, pos, fields, |_, arg| {
-                    let instr = if hack_arr_dv_arrs {
-                        instr::newstructdict(arg)
-                    } else {
-                        instr::newstructdarray(arg)
-                    };
+                    let instr = instr::newstructdict(arg);
                     Ok(emit_pos_then(pos, instr))
                 });
-                Ok(wrap_array_mark_legacy(e, instrs?))
+                Ok(instrs?)
             } else {
-                let constr = if hack_arr_dv_arrs(e.options()) {
-                    InstructLitConst::NewDictArray(count as isize)
-                } else {
-                    InstructLitConst::NewDArray(count as isize)
-                };
+                let constr = InstructLitConst::NewDictArray(count as isize);
                 let instrs =
                     emit_keyvalue_collection(e, env, pos, fields, CollectionType::Array, constr);
-                Ok(wrap_array_mark_legacy(e, instrs?))
+                Ok(instrs?)
             }
         }
         _ => Err(unrecoverable("plain PHP arrays cannot be constructed")),
@@ -1584,17 +1524,15 @@ fn emit_call_isset_exprs(e: &mut Emitter, env: &Env, pos: &Pos, exprs: &[tast::E
 }
 
 fn emit_tag_provenance_here(e: &mut Emitter, env: &Env, pos: &Pos, es: &[tast::Expr]) -> Result {
-    let default = if es.len() == 1 {
-        instr::int(0)
-    } else {
+    let pop = if es.len() == 1 {
         instr::empty()
+    } else {
+        instr::popc()
     };
-    let tag = instr::instr(Instruct::IMisc(InstructMisc::TagProvenanceHere));
     Ok(InstrSeq::gather(vec![
         emit_exprs(e, env, es)?,
         emit_pos(pos),
-        default,
-        tag,
+        pop,
     ]))
 }
 
@@ -1738,7 +1676,7 @@ pub fn emit_reified_targs(e: &mut Emitter, env: &Env, pos: &Pos, targs: &[&tast:
                 QueryOp::CGet,
                 MemberKey::PT(
                     prop::from_raw_string(string_utils::reified::PROP_NAME),
-                    ReadOnlyOp::Mutable,
+                    ReadOnlyOp::Any,
                 ),
             ),
         ])
@@ -1750,13 +1688,9 @@ pub fn emit_reified_targs(e: &mut Emitter, env: &Env, pos: &Pos, targs: &[&tast:
                     .map(|h| Ok(emit_reified_arg(e, env, pos, false, h)?.0))
                     .collect::<Result<Vec<_>>>()?,
             ),
-            if hack_arr_dv_arrs(e.options()) {
-                instr::new_vec_array(targs.len() as isize)
-            } else {
-                instr::new_varray(targs.len() as isize)
-            },
+            instr::new_vec_array(targs.len() as isize),
         ]);
-        wrap_array_mark_legacy(e, instrs)
+        instrs
     })
 }
 
@@ -2187,7 +2121,7 @@ fn get_reified_var_cexpr(env: &Env, pos: &Pos, name: &str) -> Result<Option<Clas
             instr::querym(
                 1,
                 QueryOp::CGet,
-                MemberKey::ET("classname".into(), ReadOnlyOp::Mutable),
+                MemberKey::ET("classname".into(), ReadOnlyOp::Any),
             ),
         ]))
     }))
@@ -2540,6 +2474,19 @@ fn emit_special_function(
                 }
             }
         }
+        ("__SystemLib\\get_enum_member_by_label", _) if e.systemlib() => {
+            let local = match args {
+                [E(_, E_::Lvar(id))] => get_local(e, env, pos, id.name()),
+                _ => Err(emit_fatal::raise_fatal_runtime(
+                    pos,
+                    "Argument must be the label argument",
+                )),
+            }?;
+            Ok(Some(InstrSeq::gather(vec![
+                instr::lateboundcls(),
+                instr::clscnsl(local),
+            ])))
+        }
         ("HH\\inst_meth", _) => match args {
             [obj_expr, method_name] => Ok(Some(emit_inst_meth(e, env, obj_expr, method_name)?)),
             _ => Err(emit_fatal::raise_fatal_runtime(
@@ -2636,11 +2583,7 @@ fn emit_special_function(
             Ok(Some(emit_tag_provenance_here(e, env, pos, args)?))
         }
         _ => Ok(
-            match (
-                args,
-                istype_op(e.options(), lower_fq_name),
-                is_isexp_op(lower_fq_name),
-            ) {
+            match (args, istype_op(lower_fq_name), is_isexp_op(lower_fq_name)) {
                 (&[ref arg_expr], _, Some(ref h)) => {
                     let is_expr = emit_is(e, env, pos, &h)?;
                     Some(InstrSeq::gather(vec![
@@ -2668,19 +2611,14 @@ fn emit_special_function(
                     emit_pos(pos),
                     instr::istypec(i),
                 ])),
-                _ => match get_call_builtin_func_info(e.options(), lower_fq_name) {
+                _ => match get_call_builtin_func_info(lower_fq_name) {
                     Some((nargs, i)) if nargs == args.len() => {
                         let inner = emit_exprs(e, env, args)?;
-                        let unmarked_inner = match lower_fq_name {
-                            "HH\\dict" | "HH\\vec" => wrap_array_unmark_legacy(e, inner),
-                            _ => inner,
-                        };
-                        let instrs =
-                            InstrSeq::gather(vec![unmarked_inner, emit_pos(pos), instr::instr(i)]);
-                        match lower_fq_name {
-                            "HH\\varray" | "HH\\darray" => Some(wrap_array_mark_legacy(e, instrs)),
-                            _ => Some(instrs),
-                        }
+                        Some(InstrSeq::gather(vec![
+                            inner,
+                            emit_pos(pos),
+                            instr::instr(i),
+                        ]))
                     }
                     _ => None,
                 },
@@ -2704,21 +2642,11 @@ fn emit_inst_meth(
             .contains(HhvmFlags::EMIT_INST_METH_POINTERS)
         {
             instr::resolve_obj_method()
-        } else if hack_arr_dv_arrs(e.options()) {
-            instr::new_vec_array(2)
         } else {
-            instr::new_varray(2)
+            instr::new_vec_array(2)
         },
     ]);
-    if e.options()
-        .hhvm
-        .flags
-        .contains(HhvmFlags::EMIT_INST_METH_POINTERS)
-    {
-        Ok(instrs)
-    } else {
-        Ok(wrap_array_mark_legacy(e, instrs))
-    }
+    Ok(instrs)
 }
 
 fn emit_class_meth(e: &mut Emitter, env: &Env, cls: &tast::Expr, meth: &tast::Expr) -> Result {
@@ -2767,13 +2695,9 @@ fn emit_class_meth(e: &mut Emitter, env: &Env, cls: &tast::Expr, meth: &tast::Ex
         let instrs = InstrSeq::gather(vec![
             emit_expr(e, env, cls)?,
             emit_expr(e, env, meth)?,
-            if hack_arr_dv_arrs(e.options()) {
-                instr::new_vec_array(2)
-            } else {
-                instr::new_varray(2)
-            },
+            instr::new_vec_array(2),
         ]);
-        Ok(wrap_array_mark_legacy(e, instrs))
+        Ok(instrs)
     }
 }
 
@@ -2832,9 +2756,8 @@ fn emit_class_meth_native(
     })
 }
 
-fn get_call_builtin_func_info(opts: &Options, id: impl AsRef<str>) -> Option<(usize, Instruct)> {
+fn get_call_builtin_func_info(id: impl AsRef<str>) -> Option<(usize, Instruct)> {
     use {Instruct::*, InstructGet::*, InstructIsset::*, InstructMisc::*, InstructOperator::*};
-    let hack_arr_dv_arrs = hack_arr_dv_arrs(opts);
     match id.as_ref() {
         "array_key_exists" => Some((2, IMisc(AKExists))),
         "hphp_array_idx" => Some((3, IMisc(ArrayIdx))),
@@ -2845,22 +2768,8 @@ fn get_call_builtin_func_info(opts: &Options, id: impl AsRef<str>) -> Option<(us
         "HH\\vec" => Some((1, IOp(CastVec))),
         "HH\\keyset" => Some((1, IOp(CastKeyset))),
         "HH\\dict" => Some((1, IOp(CastDict))),
-        "HH\\varray" => Some((
-            1,
-            IOp(if hack_arr_dv_arrs {
-                CastVec
-            } else {
-                CastVArray
-            }),
-        )),
-        "HH\\darray" => Some((
-            1,
-            IOp(if hack_arr_dv_arrs {
-                CastDict
-            } else {
-                CastDArray
-            }),
-        )),
+        "HH\\varray" => Some((1, IOp(CastVec))),
+        "HH\\darray" => Some((1, IOp(CastDict))),
         "HH\\global_get" => Some((1, IGet(CGetG))),
         "HH\\global_isset" => Some((1, IIsset(IssetG))),
         _ => None,
@@ -2936,8 +2845,7 @@ fn emit_is(e: &mut Emitter, env: &Env, pos: &Pos, h: &tast::Hint) -> Result {
     })
 }
 
-fn istype_op(opts: &Options, id: impl AsRef<str>) -> Option<IstypeOp> {
-    let hack_arr_dv_arrs = hack_arr_dv_arrs(opts);
+fn istype_op(id: impl AsRef<str>) -> Option<IstypeOp> {
     use IstypeOp::*;
     match id.as_ref() {
         "is_int" | "is_integer" | "is_long" => Some(OpInt),
@@ -2950,16 +2858,12 @@ fn istype_op(opts: &Options, id: impl AsRef<str>) -> Option<IstypeOp> {
         "HH\\is_keyset" => Some(OpKeyset),
         "HH\\is_dict" => Some(OpDict),
         "HH\\is_vec" => Some(OpVec),
-        "HH\\is_varray" => Some(if hack_arr_dv_arrs { OpVec } else { OpVArray }),
-        "HH\\is_darray" => Some(if hack_arr_dv_arrs { OpDict } else { OpDArray }),
+        "HH\\is_varray" => Some(OpVec),
+        "HH\\is_darray" => Some(OpDict),
         "HH\\is_any_array" => Some(OpArrLike),
         "HH\\is_class_meth" => Some(OpClsMeth),
         "HH\\is_fun" => Some(OpFunc),
-        "HH\\is_php_array" => Some(if hack_arr_dv_arrs {
-            OpLegacyArrLike
-        } else {
-            OpPHPArr
-        }),
+        "HH\\is_php_array" => Some(OpLegacyArrLike),
         "HH\\is_array_marked_legacy" => Some(OpLegacyArrLike),
         "HH\\is_class" => Some(OpClass),
         _ => None,
@@ -3109,7 +3013,7 @@ pub fn emit_reified_generic_instrs(pos: &Pos, is_fun: bool, index: usize) -> Res
             instr::baseh(),
             instr::dim_warn_pt(
                 prop::from_raw_string(string_utils::reified::PROP_NAME),
-                ReadOnlyOp::Mutable,
+                ReadOnlyOp::Any,
             ),
         ])
     };
@@ -3120,7 +3024,7 @@ pub fn emit_reified_generic_instrs(pos: &Pos, is_fun: bool, index: usize) -> Res
             instr::querym(
                 0,
                 QueryOp::CGet,
-                MemberKey::EI(index.try_into().unwrap(), ReadOnlyOp::Mutable),
+                MemberKey::EI(index.try_into().unwrap(), ReadOnlyOp::Any),
             ),
         ]),
     ))
@@ -3423,7 +3327,7 @@ fn emit_prop_expr(
         tast::Expr_::Id(id) => {
             let ast_defs::Id(pos, name) = &**id;
             if name.starts_with("$") {
-                MemberKey::PL(get_local(e, env, pos, name)?, ReadOnlyOp::Mutable)
+                MemberKey::PL(get_local(e, env, pos, name)?, ReadOnlyOp::Any)
             } else {
                 // Special case for known property name
 
@@ -3431,8 +3335,8 @@ fn emit_prop_expr(
                 // `from_ast_name` should be able to accpet Cow<str>
                 let pid: prop::Type = string_utils::strip_global_ns(&name).to_string().into();
                 match nullflavor {
-                    ast_defs::OgNullFlavor::OGNullthrows => MemberKey::PT(pid, ReadOnlyOp::Mutable),
-                    ast_defs::OgNullFlavor::OGNullsafe => MemberKey::QT(pid, ReadOnlyOp::Mutable),
+                    ast_defs::OgNullFlavor::OGNullthrows => MemberKey::PT(pid, ReadOnlyOp::Any),
+                    ast_defs::OgNullFlavor::OGNullsafe => MemberKey::QT(pid, ReadOnlyOp::Any),
                 }
             }
         }
@@ -3448,17 +3352,17 @@ fn emit_prop_expr(
             .to_string()
             .into();
             match nullflavor {
-                ast_defs::OgNullFlavor::OGNullthrows => MemberKey::PT(pid, ReadOnlyOp::Mutable),
-                ast_defs::OgNullFlavor::OGNullsafe => MemberKey::QT(pid, ReadOnlyOp::Mutable),
+                ast_defs::OgNullFlavor::OGNullthrows => MemberKey::PT(pid, ReadOnlyOp::Any),
+                ast_defs::OgNullFlavor::OGNullsafe => MemberKey::QT(pid, ReadOnlyOp::Any),
             }
         }
         tast::Expr_::Lvar(lid) if !(is_local_this(env, &lid.1)) => MemberKey::PL(
             get_local(e, env, &lid.0, local_id::get_name(&lid.1))?,
-            ReadOnlyOp::Mutable,
+            ReadOnlyOp::Any,
         ),
         _ => {
             // General case
-            MemberKey::PC(stack_index, ReadOnlyOp::Mutable)
+            MemberKey::PC(stack_index, ReadOnlyOp::Any)
         }
     };
     // For nullsafe access, insist that property is known
@@ -3472,8 +3376,8 @@ fn emit_prop_expr(
             ));
         }
         MemberKey::PC(_, _) => (mk, emit_expr(e, env, prop)?, 1),
-        MemberKey::PL(local, ReadOnlyOp::Mutable) if null_coalesce_assignment => (
-            MemberKey::PC(stack_index, ReadOnlyOp::Mutable),
+        MemberKey::PL(local, ReadOnlyOp::Any) if null_coalesce_assignment => (
+            MemberKey::PC(stack_index, ReadOnlyOp::Any),
             instr::cgetl(local),
             1,
         ),
@@ -3709,7 +3613,7 @@ fn emit_array_get_(
                     ));
                     let store = InstrSeq::gather(vec![
                         store,
-                        instr::setm(0, MemberKey::EL(local, ReadOnlyOp::Mutable)),
+                        instr::setm(0, MemberKey::EL(local, ReadOnlyOp::Any)),
                         instr::popc(),
                     ]);
                     ArrayGetInstr::Inout {
@@ -3789,11 +3693,11 @@ fn get_elem_member_key(
             E_::Lvar(x) if !is_local_this(env, &x.1) => Ok((
                 {
                     if null_coalesce_assignment {
-                        MemberKey::EC(stack_index, ReadOnlyOp::Mutable)
+                        MemberKey::EC(stack_index, ReadOnlyOp::Any)
                     } else {
                         MemberKey::EL(
                             get_local(e, env, &x.0, local_id::get_name(&x.1))?,
-                            ReadOnlyOp::Mutable,
+                            ReadOnlyOp::Any,
                         )
                     }
                 },
@@ -3803,7 +3707,7 @@ fn get_elem_member_key(
             E_::Int(s) => {
                 match ast_constant_folder::expr_to_typed_value(e, &env.namespace, elem_expr) {
                     Ok(TypedValue::Int(i)) => {
-                        Ok((MemberKey::EI(i, ReadOnlyOp::Mutable), instr::empty()))
+                        Ok((MemberKey::EI(i, ReadOnlyOp::Any), instr::empty()))
                     }
                     _ => Err(Unrecoverable(format!("{} is not a valid integer index", s))),
                 }
@@ -3815,7 +3719,7 @@ fn get_elem_member_key(
                     // There's no guarantee that they're valid UTF-8.
                     MemberKey::ET(
                         unsafe { String::from_utf8_unchecked(s.clone().into()) },
-                        ReadOnlyOp::Mutable,
+                        ReadOnlyOp::Any,
                     ),
                     instr::empty(),
                 ))
@@ -3837,19 +3741,16 @@ fn get_elem_member_key(
                 let fq_id = class::Type::from_ast_name(&cname).to_raw_string().into();
                 if e.options().emit_class_pointers() > 0 {
                     Ok((
-                        MemberKey::ET(fq_id, ReadOnlyOp::Mutable),
+                        MemberKey::ET(fq_id, ReadOnlyOp::Any),
                         instr::raise_class_string_conversion_warning(),
                     ))
                 } else {
-                    Ok((MemberKey::ET(fq_id, ReadOnlyOp::Mutable), instr::empty()))
+                    Ok((MemberKey::ET(fq_id, ReadOnlyOp::Any), instr::empty()))
                 }
             }
             _ => {
                 // General case
-                Ok((
-                    MemberKey::EC(stack_index, ReadOnlyOp::Mutable),
-                    instr::empty(),
-                ))
+                Ok((MemberKey::EC(stack_index, ReadOnlyOp::Any), instr::empty()))
             }
         },
     }
@@ -3875,7 +3776,7 @@ fn emit_store_for_simple_base(
         elem_stack_size,
         0,
     )?;
-    let memberkey = MemberKey::EL(local, ReadOnlyOp::Mutable);
+    let memberkey = MemberKey::EL(local, ReadOnlyOp::Any);
     Ok(InstrSeq::gather(vec![
         base_expr_instrs_begin,
         base_expr_instrs_end,
@@ -3908,7 +3809,7 @@ fn emit_class_get(
     Ok(InstrSeq::gather(vec![
         InstrSeq::from(emit_class_expr(e, env, cexpr, prop)?),
         match query_op {
-            QueryOp::CGet => instr::cgets(ReadOnlyOp::Mutable),
+            QueryOp::CGet => instr::cgets(ReadOnlyOp::Any),
             QueryOp::Isset => instr::issets(),
             QueryOp::CGetQuiet => return Err(Unrecoverable("emit_class_get: CGetQuiet".into())),
             QueryOp::InOut => return Err(Unrecoverable("emit_class_get: InOut".into())),
@@ -4601,7 +4502,7 @@ pub fn emit_set_range_expr(
                 .expect("StackIndex overflow"),
             kind.size.try_into().expect("Setrange size overflow"),
             kind.op,
-            ReadOnlyOp::Mutable,
+            ReadOnlyOp::Any,
         ))),
     ]))
 }
@@ -4996,7 +4897,7 @@ fn emit_base_(
                                 store,
                                 instr::dim(
                                     MemberOpMode::Define,
-                                    MemberKey::EL(local, ReadOnlyOp::Mutable),
+                                    MemberKey::EL(local, ReadOnlyOp::Any),
                                 ),
                             ]),
                         }
@@ -5082,12 +4983,7 @@ fn emit_base_(
                     e,
                     cexpr_begin,
                     cexpr_end,
-                    instr::basesc(
-                        base_offset + 1,
-                        rhs_stack_size,
-                        base_mode,
-                        ReadOnlyOp::Mutable,
-                    ),
+                    instr::basesc(base_offset + 1, rhs_stack_size, base_mode, ReadOnlyOp::Any),
                     1,
                     1,
                 ))
@@ -5248,7 +5144,7 @@ fn emit_array_get_fixed(last_usage: bool, local: local::Type, indices: &[isize])
             .enumerate()
             .rev()
             .map(|(i, ix)| {
-                let mk = MemberKey::EI(*ix as i64, ReadOnlyOp::Mutable);
+                let mk = MemberKey::EI(*ix as i64, ReadOnlyOp::Any);
                 if i == 0 {
                     instr::querym(stack_count, QueryOp::CGet, mk)
                 } else {
@@ -5426,9 +5322,9 @@ fn emit_final_member_op(stack_size: usize, op: LValOp, mk: MemberKey) -> InstrSe
 fn emit_final_static_op(cid: &tast::ClassId, prop: &tast::ClassGetExpr, op: LValOp) -> Result {
     use LValOp as L;
     Ok(match op {
-        L::Set => instr::sets(ReadOnlyOp::Mutable),
-        L::SetOp(op) => instr::setops(op, ReadOnlyOp::Mutable),
-        L::IncDec(op) => instr::incdecs(op, ReadOnlyOp::Mutable),
+        L::Set => instr::sets(ReadOnlyOp::Any),
+        L::SetOp(op) => instr::setops(op, ReadOnlyOp::Any),
+        L::IncDec(op) => instr::incdecs(op, ReadOnlyOp::Any),
         L::Unset => {
             let pos = match prop {
                 tast::ClassGetExpr::CGstring((pos, _))

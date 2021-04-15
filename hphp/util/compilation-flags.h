@@ -15,8 +15,6 @@
 */
 #pragma once
 
-#include "hphp/util/wide-tv-val-def.h"
-
 namespace HPHP {
 
 //////////////////////////////////////////////////////////////////////
@@ -50,22 +48,6 @@ constexpr bool hhvm_reuse_tc =
 
 constexpr bool use_tsan =
 #ifdef FOLLY_SANITIZE_THREAD
-  true
-#else
-  false
-#endif
-  ;
-
-constexpr bool one_bit_refcount =
-#ifdef ONE_BIT_REFCOUNT
-  true
-#else
-  false
-#endif
-  ;
-
-constexpr bool wide_tv_val =
-#ifdef HHVM_WIDE_TV_VAL
   true
 #else
   false

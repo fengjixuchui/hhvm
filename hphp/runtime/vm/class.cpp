@@ -282,6 +282,8 @@ template struct assert_sizeof_class<sizeof_Class>;
  */
 ReadWriteMutex s_scope_cache_mutex;
 
+std::set<std::pair<int64_t, Class*>> s_priority_serialize;
+
 }
 
 Class* Class::newClass(PreClass* preClass, Class* parent) {
@@ -580,13 +582,14 @@ void Class::releaseRefs() {
   if (m_extra) {
     auto xtra = m_extra.raw();
     xtra->m_usedTraits.clear();
+    xtra->m_declIncludedEnums.clear();
 
     if (xtra->m_clonesWithThisScope.size() > 0) {
       WriteLock l(s_scope_cache_mutex);
 
       // Purge all references to scoped closure clones that are scoped to
       // `this'---there is no way anyone can find them at this point.
-      for (auto const template_cls : xtra->m_clonesWithThisScope) {
+      for (auto const& template_cls : xtra->m_clonesWithThisScope) {
         auto const invoke = template_cls->m_invoke;
 
         if (invoke->cls() == this) {
@@ -668,18 +671,19 @@ Class::Avail Class::avail(Class*& parent,
     }
   }
 
-  if (m_preClass->attrs() & AttrEnum) {
-    auto const& ie = m_extra->m_includedEnums;
+  if (m_preClass->attrs() & (AttrEnum|AttrEnumClass)) {
+    auto const& ie = m_extra->m_declIncludedEnums;
     for (size_t i = 0; i < ie.size(); ++i) {
+      auto const de = ie[i].get();
       auto const penum = ie[i]->m_preClass.get();
       auto const included_enum = Class::get(penum->namedEntity(),
                                             penum->name(), tryAutoload);
-      if (included_enum != ie[i]) {
+      if (included_enum != de) {
         if (!included_enum) {
-          parent = ie[i].get();
+          parent = de;
           return Avail::Fail;
         }
-        if (UNLIKELY(ie[i]->isZombie())) {
+        if (UNLIKELY(de->isZombie())) {
           const_cast<Class*>(this)->destroy();
         }
         return Avail::False;
@@ -1240,9 +1244,11 @@ Class::PropSlotLookup Class::getDeclPropSlot(
   auto const propSlot = lookupDeclProp(key);
 
   auto accessible = false;
+  auto readonly = false;
 
   if (propSlot != kInvalidSlot) {
     auto const attrs = m_declProperties[propSlot].attrs;
+    readonly = bool(attrs & AttrIsReadOnly);
     if ((attrs & (AttrProtected|AttrPrivate)) &&
         (g_context.isNull() || !g_context->debuggerSettings.bypassCheck)) {
       // Fetch the class in the inheritance tree which first declared the
@@ -1251,11 +1257,11 @@ Class::PropSlotLookup Class::getDeclPropSlot(
       assertx(baseClass);
 
       // If ctx == baseClass, we have the right property and we can stop here.
-      if (ctx == baseClass) return PropSlotLookup { propSlot, true };
+      if (ctx == baseClass) return PropSlotLookup { propSlot, true, false, readonly };
 
       // The anonymous context cannot access protected or private properties, so
       // we can fail fast here.
-      if (ctx == nullptr) return PropSlotLookup { propSlot, false };
+      if (ctx == nullptr) return PropSlotLookup { propSlot, false, false, readonly };
 
       assertx(ctx);
       if (attrs & AttrPrivate) {
@@ -1270,7 +1276,7 @@ Class::PropSlotLookup Class::getDeclPropSlot(
           // ctx is derived from baseClass, so we know this protected
           // property is accessible and we know ctx cannot have private
           // property with the same name, so we're done.
-          return PropSlotLookup { propSlot, true };
+          return PropSlotLookup { propSlot, true, false, readonly };
         }
         if (!baseClass->classof(ctx)) {
           // ctx is not the same, an ancestor, or a descendent of baseClass,
@@ -1278,7 +1284,7 @@ Class::PropSlotLookup Class::getDeclPropSlot(
           // be the same or an ancestor of this, so we don't need to check if
           // ctx declares a private property with the same name and we can
           // fail fast here.
-          return PropSlotLookup { propSlot, false };
+          return PropSlotLookup { propSlot, false, false, readonly };
         }
         // We now know this protected property is accessible, but we need to
         // keep going because ctx may define a private property with the same
@@ -1292,7 +1298,7 @@ Class::PropSlotLookup Class::getDeclPropSlot(
       accessible = true;
       // If ctx == this, we don't have to check if ctx defines a private
       // property with the same name and we can stop here.
-      if (ctx == this) return PropSlotLookup { propSlot, true };
+      if (ctx == this) return PropSlotLookup { propSlot, true, false, readonly };
 
       // We still need to check if ctx defines a private property with the same
       // name.
@@ -1312,7 +1318,7 @@ Class::PropSlotLookup Class::getDeclPropSlot(
         (ctx->m_declProperties[ctxPropSlot].attrs & AttrPrivate)) {
       // A private property from ctx trumps any other property we may
       // have found.
-      return PropSlotLookup { ctxPropSlot, true };
+      return PropSlotLookup { ctxPropSlot, true, false, readonly };
     }
   }
 
@@ -1327,7 +1333,7 @@ Class::PropSlotLookup Class::getDeclPropSlot(
     return m_parent->getDeclPropSlot(ctx, key);
   }
 
-  return PropSlotLookup { propSlot, accessible };
+  return PropSlotLookup { propSlot, accessible, false, readonly };
 }
 
 Class::PropSlotLookup Class::findSProp(
@@ -1338,11 +1344,12 @@ Class::PropSlotLookup Class::findSProp(
 
   // Non-existent property.
   if (sPropInd == kInvalidSlot)
-    return PropSlotLookup { kInvalidSlot, false, false };
+    return PropSlotLookup { kInvalidSlot, false, false, false };
 
   auto const& sProp = m_staticProperties[sPropInd];
   auto const sPropAttrs = sProp.attrs;
   auto const sPropConst = bool(sPropAttrs & AttrIsConst);
+  auto const sPropReadOnly = bool(sPropAttrs & AttrIsReadOnly);
   const Class* baseCls = this;
   if (sPropAttrs & AttrLSB) {
     // For an LSB static, accessibility attributes are relative to the class
@@ -1350,7 +1357,7 @@ Class::PropSlotLookup Class::findSProp(
     baseCls = sProp.cls;
   }
   // Property access within this Class's context.
-  if (ctx == baseCls) return PropSlotLookup { sPropInd, true, sPropConst };
+  if (ctx == baseCls) return PropSlotLookup { sPropInd, true, sPropConst, sPropReadOnly };
 
   auto const accessible = [&] {
     switch (sPropAttrs & (AttrPublic | AttrProtected | AttrPrivate)) {
@@ -1373,7 +1380,7 @@ Class::PropSlotLookup Class::findSProp(
     not_reached();
   }();
 
-  return PropSlotLookup { sPropInd, accessible, sPropConst };
+  return PropSlotLookup { sPropInd, accessible, sPropConst, sPropReadOnly };
 }
 
 Class::PropValLookup Class::getSPropIgnoreLateInit(
@@ -1384,7 +1391,7 @@ Class::PropValLookup Class::getSPropIgnoreLateInit(
 
   auto const lookup = findSProp(ctx, sPropName);
   if (lookup.slot == kInvalidSlot) {
-    return PropValLookup { nullptr, kInvalidSlot, false, false };
+    return PropValLookup { nullptr, kInvalidSlot, false, false, false };
   }
 
   auto const sProp = getSPropData(lookup.slot);
@@ -1429,7 +1436,7 @@ Class::PropValLookup Class::getSPropIgnoreLateInit(
   }
 
   return
-    PropValLookup { sProp, lookup.slot, lookup.accessible, lookup.constant };
+    PropValLookup { sProp, lookup.slot, lookup.accessible, lookup.constant, lookup.readonly };
 }
 
 Class::PropValLookup Class::getSProp(
@@ -1462,24 +1469,53 @@ Slot Class::propIndexToSlot(uint16_t index) const {
   always_assert_flog(0, "propIndexToSlot: no slot found for index = {}", index);
 }
 
+bool Class::isClosureClass() const {
+  assertx(IMPLIES(attrs() & AttrIsClosureClass,
+                  parent() == c_Closure::classof()));
+  return attrs() & AttrIsClosureClass;
+}
+
+bool Class::hasClosureCoeffectsProp() const {
+  assertx(isClosureClass());
+  if (!(attrs() & AttrHasClosureCoeffectsProp)) return false;
+  assertx(getCachedInvoke()->hasCoeffectRules());
+  assertx(getCachedInvoke()->getCoeffectRules().size() == 1);
+  assertx(getCachedInvoke()->getCoeffectRules()[0].isClosureInheritFromParent());
+  return true;
+}
+
+Slot Class::getCoeffectsProp() const {
+  assertx(hasClosureCoeffectsProp());
+  assertx(numDeclProperties() > 0);
+  return 0;
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // Constants.
 
 const StaticString s_classname("classname");
 
-RuntimeCoeffects Class::clsCtxCnsGet(const StringData* name) const {
+folly::Optional<RuntimeCoeffects>
+Class::clsCtxCnsGet(const StringData* name, bool failIsFatal) const {
   auto const slot = m_constants.findIndex(name);
 
   if (slot == kInvalidSlot) {
-    raise_error("Context constant %s does not exist", name->data());
+    if (!failIsFatal) return folly::none;
+    // TODO: Once coeffect migration is done, convert this back to raise_error
+    raise_warning("Context constant %s does not exist", name->data());
+    return RuntimeCoeffects::full();
   }
   auto const& cns = m_constants[slot];
   if (cns.kind() != ConstModifiers::Kind::Context) {
+    if (!failIsFatal) return folly::none;
     raise_error("%s is a %s, looking for a context constant",
                 name->data(), ConstModifiers::show(cns.kind()));
   }
   if (cns.isAbstract()) {
-    raise_error("Context constant %s is abstract", name->data());
+    if (!failIsFatal) return folly::none;
+    // TODO: Once coeffect migration is done, convert this back to raise_error
+    raise_warning("Context constant %s is abstract", name->data());
+    return RuntimeCoeffects::full();
   }
 
   return cns.val.constModifiers().getCoeffects().toRequired();
@@ -1494,6 +1530,18 @@ TypedValue Class::clsCnsGet(const StringData* clsCnsName,
   if (!cnsVal) return make_tv<KindOfUninit>();
 
   auto& cns = m_constants[clsCnsInd];
+  // When a child extends a parent, rather than the child having
+  // distinct copies of the constants defined by their parent we prefer
+  // those constants be shared. Aside from saving memeory and avoiding
+  // multiple initializations of the same logical constant, this
+  // establishes the property that a constant accessed through a child
+  // class will compare equal to the same constant accessed through the
+  // child's parent class.
+  if (cns.cls != this
+      && what == ConstModifiers::Kind::Value) {
+    return cns.cls->clsCnsGet(clsCnsName, what, resolve);
+  }
+
   ArrayData* typeCns = nullptr;
 
   if (cnsVal->m_type != KindOfUninit) {
@@ -1504,15 +1552,15 @@ TypedValue Class::clsCnsGet(const StringData* clsCnsName,
         // Type constants with the low bit set are already resolved and can be
         // returned after masking out that bit.
         //
-        // We can't check isHAMSafeDArray here because we're using that low bit as
-        // a marker; instead, check isArrayLike and do the stricter check below.
+        // We can't check isDict here because we're using that low bit as a
+        // marker; instead, check isArrayLike and do the stricter check below.
         assertx(isArrayLikeType(type(cnsVal)));
         assertx(!isRefcountedType(type(cnsVal)));
         typeCns = val(cnsVal).parr;
         auto const rawData = reinterpret_cast<intptr_t>(typeCns);
         if (rawData & 0x1) {
           auto const resolved = reinterpret_cast<ArrayData*>(rawData ^ 0x1);
-          assertx(resolved->isHAMSafeDArray());
+          assertx(resolved->isDictType());
           return make_persistent_array_like_tv(resolved);
         }
         break;
@@ -1601,7 +1649,7 @@ TypedValue Class::clsCnsGet(const StringData* clsCnsName,
     } catch (const Exception& e) {
       raise_error(e.getMessage());
     }
-    assertx(resolvedTS.isHAMSafeDArray());
+    assertx(resolvedTS.isDict());
 
     auto const ad = ArrayData::GetScalarArray(std::move(resolvedTS));
     if (persistent) {
@@ -1635,28 +1683,41 @@ TypedValue Class::clsCnsGet(const StringData* clsCnsName,
     make_tv<KindOfPersistentString>(const_cast<StringData*>(cns.name.get()))
   };
 
-  auto ret = g_context->invokeFuncFew(
-    meth86cinit,
-    const_cast<Class*>(this),
-    1,
-    args,
-    false,
-    false
-  );
+  // Wrap the call to 'invokeFuncFew' and call 'raise_error' if an
+  // 'Object' exception is encountered. The effect of this is to treat
+  // constant intialization errors as terminal.
+  auto invokeFuncFew = [&]() -> TypedValue {
+    try {
+      return g_context->invokeFuncFew(
+               meth86cinit,
+               const_cast<Class*>(this),
+               1,
+               args,
+               false,
+               false
+             );
+    } catch(Object& e) {
+      auto const msg = throwable_to_string(e.get());
+      raise_error(
+                  "'%s::%s' initialization failure: %s"
+                  , m_preClass->name()->data(), clsCnsName->data(), msg.data());
+    }
+  };
+  auto ret = invokeFuncFew();
 
   switch (tvAsCVarRef(&ret).isAllowedAsConstantValue()) {
-    case Variant::AllowedAsConstantValue::Allowed:
-      break;
-    case Variant::AllowedAsConstantValue::NotAllowed: {
-      always_assert(false);
+  case Variant::AllowedAsConstantValue::Allowed:
+    break;
+  case Variant::AllowedAsConstantValue::NotAllowed: {
+    always_assert(false);
+  }
+  case Variant::AllowedAsConstantValue::ContainsObject: {
+    // Generally, objects are not allowed as class constants.
+    if (!(attrs() & AttrEnumClass)) {
+      raise_error("Value unsuitable as class constant");
     }
-    case Variant::AllowedAsConstantValue::ContainsObject: {
-      // Generally, objects are not allowed as class constants.
-      if (!(attrs() & AttrEnumClass)) {
-        raise_error("Value unsuitable as class constant");
-      }
-      break;
-    }
+    break;
+  }
   }
 
   clsCnsData.set(StrNR(clsCnsName), tvAsCVarRef(ret), true /* isKey */);
@@ -1762,15 +1823,16 @@ void Class::setParent() {
   if (m_parent.get() != nullptr) {
     Attr parentAttrs = m_parent->attrs();
     if (UNLIKELY(parentAttrs &
-                 (AttrFinal | AttrInterface | AttrTrait | AttrEnum))) {
+                 (AttrFinal | AttrInterface | AttrTrait | AttrEnum |
+                  AttrEnumClass))) {
       if (!(parentAttrs & AttrFinal) ||
-          (parentAttrs & AttrEnum) ||
+          (parentAttrs & (AttrEnum|AttrEnumClass)) ||
           m_preClass->userAttributes().find(s___MockClass.get()) ==
           m_preClass->userAttributes().end() ||
           m_parent->isCollectionClass()) {
         raise_error("Class %s may not inherit from %s (%s)",
                     m_preClass->name()->data(),
-                    ((parentAttrs & AttrEnum)      ? "enum" :
+                    ((parentAttrs & (AttrEnum|AttrEnumClass)) ? "enum" :
                      (parentAttrs & AttrFinal)     ? "final class" :
                      (parentAttrs & AttrInterface) ? "interface"   : "trait"),
                     m_parent->name()->data());
@@ -1789,20 +1851,6 @@ void Class::setParent() {
     if ((m_attrCopy & AttrIsConst) && !(parentAttrs & AttrIsConst)) {
       raise_error(
         "Const class %s cannot extend non-const parent %s",
-        m_preClass->name()->data(),
-        m_parent->name()->data()
-      );
-    }
-    if (!(m_attrCopy & AttrEnumClass) && (parentAttrs & AttrEnumClass)) {
-      raise_error(
-        "Non-enum class %s cannot extend enum class parent %s",
-        m_preClass->name()->data(),
-        m_parent->name()->data()
-      );
-    }
-    if ((m_attrCopy & AttrEnumClass) && !(parentAttrs & AttrEnumClass)){
-      raise_error(
-        "Enum class %s cannot extend non-enum class parent %s",
         m_preClass->name()->data(),
         m_parent->name()->data()
       );
@@ -2265,6 +2313,11 @@ void Class::importTraitConsts(ConstMap::Builder& builder) {
     // in declInterfaces
     if (isFromInterface) { return; }
 
+    // Type and Context constants in interfaces can be overriden.
+    if (tConst.kind() == ConstModifiers::Kind::Type ||
+        tConst.kind() == ConstModifiers::Kind::Context)  {
+      return;
+    }
     if (existingConst.cls != tConst.cls) {
 
       // Constants in traits conflict with constants in declared interfaces
@@ -2436,7 +2489,7 @@ void Class::setConstants() {
         }
       }
       // Forbid redefining constants from included enums
-      if ((definingClass->attrs() & AttrEnum) && m_extra) {
+      if ((definingClass->attrs() & (AttrEnum|AttrEnumClass)) && m_extra) {
         for (int j = 0, size = m_extra->m_includedEnums.size(); j < size; ++j) {
           const Class* includedEnum = m_extra->m_includedEnums[j];
           if (includedEnum->hasConstant(preConst->name())) {
@@ -3133,10 +3186,6 @@ bool Class::compatibleTraitPropInit(const TypedValue& tv1,
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
     case KindOfObject:
     case KindOfResource:
     case KindOfRFunc:
@@ -3456,8 +3505,8 @@ void Class::setReifiedData() {
       m_parent->m_hasReifiedGenerics || m_parent->m_hasReifiedParent;
   }
   if (m_hasReifiedGenerics) {
-    auto tv = it->second;
-    assertx(tvIsHAMSafeVArray(tv));
+    auto const tv = it->second;
+    assertx(tvIsVec(tv));
     allocExtraData();
     m_extra.raw()->m_reifiedGenericsInfo =
       extractSizeAndPosFromReifiedAttribute(tv.m_data.parr);
@@ -3697,10 +3746,10 @@ void Class::setInterfaces() {
 }
 
 void Class::setInterfaceVtables() {
-  // We only need to set interface vtables for classes that can be instantiated
-  // and implement more than 0 interfaces.
+  // We only need to set interface vtables for classes with callable methods
+  // that implement more than 0 interfaces.
   if (!RuntimeOption::RepoAuthoritative ||
-      !isNormalClass(this) || isAbstract(this) || m_interfaces.empty()) return;
+      !isNormalClass(this) || m_interfaces.empty()) return;
 
   size_t totalMethods = 0;
   Slot maxSlot = 0;
@@ -3751,7 +3800,22 @@ void Class::setInterfaceVtables() {
       auto ifunc = iface->getMethod(i);
       auto func = lookupMethod(ifunc->name());
       ITRACE(3, "{}:{} @ slot {}\n", ifunc->name()->data(), func, i);
-      always_assert(func || Func::isSpecial(ifunc->name()));
+
+      if (!func && isAbstract(this) && ifunc->isStatic() &&
+          !Func::isSpecial(ifunc->name())) {
+        // When iface vtable is present and used for a static method call, it is
+        // expected that the method to be called exists. This may not be true
+        // for abstract classes, in that case do not define the iface vtable.
+        //
+        // Instance methods do not have this issue, as iface vtable of object
+        // instance's class is used to invoke them, which is never abstract.
+        low_free(vtableVec);
+        m_vtableVecLen = 0;
+        m_vtableVec = nullptr;
+        return;
+      }
+
+      always_assert(func || isAbstract(this) || Func::isSpecial(ifunc->name()));
       vtable[i] = func;
     }
   }
@@ -3849,7 +3913,6 @@ void Class::setEnumType() {
 
     // Make sure we've loaded a valid underlying type.
     if (m_enumBaseTy &&
-        !((attrs() & AttrEnumClass) && isObjectType(*m_enumBaseTy)) &&
         !isIntType(*m_enumBaseTy) &&
         !isStringType(*m_enumBaseTy)) {
       raise_error("Invalid base type for enum %s",
@@ -3861,11 +3924,13 @@ void Class::setEnumType() {
 void Class::setIncludedEnums() {
   IncludedEnumMap::Builder includedEnumsBuilder;
 
-  if (!isEnum(this) || m_preClass->includedEnums().empty()) {
+  if (!isAnyEnum(this) || m_preClass->includedEnums().empty()) {
     return;
   }
 
   allocExtraData();
+
+  std::vector<ClassPtr> declIncludedEnums;
 
   for (auto it = m_preClass->includedEnums().begin();
        it != m_preClass->includedEnums().end(); ++it) {
@@ -3873,10 +3938,12 @@ void Class::setIncludedEnums() {
     if (cp == nullptr) {
       raise_error("Undefined enum: %s", (*it)->data());
     }
-    if (!isEnum(cp)) {
-      raise_error("%s cannot include %s - it is not an enum",
-                  m_preClass->name()->data(), cp->name()->data());
+    if (isEnum(this) != isEnum(cp) || isEnumClass(this) != isEnumClass(cp)) {
+      raise_error("%s cannot include %s - it is not an enum%s",
+                  m_preClass->name()->data(), cp->name()->data(),
+                  isEnumClass(this) ? " class" : "");
     }
+    declIncludedEnums.emplace_back(cp);
     m_preClass->enforceInMaybeSealedParentWhitelist(cp->preClass());
     auto cp_baseType = cp->m_enumBaseTy;
     if (m_enumBaseTy &&
@@ -3898,6 +3965,11 @@ void Class::setIncludedEnums() {
     }
   }
 
+  m_extra->m_declIncludedEnums.insert(
+    m_extra->m_declIncludedEnums.begin(),
+    declIncludedEnums.begin(),
+    declIncludedEnums.end()
+  );
   m_extra->m_includedEnums.create(includedEnumsBuilder);
 }
 
@@ -3994,6 +4066,10 @@ void Class::setInstanceMemoCacheInfo() {
     }
   };
 
+  auto const numKeys = [](const Func* f) {
+    return f->numParams() + (f->hasReifiedGenerics() ? 1 : 0);
+  };
+
   auto const addNonShared = [&](const Func* f) {
     allocExtraData();
     auto extra = m_extra.raw();
@@ -4011,7 +4087,7 @@ void Class::setInstanceMemoCacheInfo() {
     // kMemoCacheMaxSpecializedKeys, since they'll all be generic caches
     // anyways. Cap the count at that.
     auto const keyCount =
-      std::min<size_t>(f->numParams(), kMemoCacheMaxSpecializedKeys + 1);
+      std::min<size_t>(numKeys(f), kMemoCacheMaxSpecializedKeys + 1);
     auto const it = extra->m_sharedMemoSlots.find(keyCount);
     if (it != extra->m_sharedMemoSlots.end()) {
       extra->m_memoMappings.emplace(
@@ -4033,7 +4109,7 @@ void Class::setInstanceMemoCacheInfo() {
   size_t methWithKeys = 0;
   forEachMeth(
     [&](const Func* f) {
-      if (f->numParams() == 0) {
+      if (numKeys(f) == 0) {
         ++methNoKeys;
       } else {
         ++methWithKeys;
@@ -4063,7 +4139,7 @@ void Class::setInstanceMemoCacheInfo() {
   if (methNoKeys > 0) {
     forEachMeth(
       [&](const Func* f) {
-        if (f->numParams() == 0) {
+        if (numKeys(f) == 0) {
           (methNoKeys <= slotsLeft) ? addNonShared(f) : addShared(f);
         }
       }
@@ -4074,7 +4150,7 @@ void Class::setInstanceMemoCacheInfo() {
   if (methWithKeys > 0) {
     forEachMeth(
       [&](const Func* f) {
-        if (f->numParams() > 0) {
+        if (numKeys(f) > 0) {
           (methWithKeys <= slotsLeft) ? addNonShared(f) : addShared(f);
         }
       }
@@ -4609,6 +4685,8 @@ void setupClass(Class* newClass, NamedEntity* nameList) {
 
 }
 
+const StaticString s__JitSerdesPriority("__JitSerdesPriority");
+
 Class* Class::def(const PreClass* preClass, bool failIsFatal /* = true */) {
   FTRACE(3, "  Defining cls {} failIsFatal {}\n",
          preClass->name()->data(), failIsFatal);
@@ -4734,6 +4812,18 @@ Class* Class::def(const PreClass* preClass, bool failIsFatal /* = true */) {
     assertx(!RO::RepoAuthoritative ||
             (newClass.get()->isPersistent() &&
              classHasPersistentRDS(newClass.get())));
+
+    if (UNLIKELY(RO::EnableIntrinsicsExtension)) {
+      auto const it =
+        preClass->userAttributes().find(s__JitSerdesPriority.get());
+      if (it != preClass->userAttributes().end()) {
+        auto const prio = it->second;
+        if (tvIsInt(prio)) {
+          s_priority_serialize.emplace(val(prio).num, newClass.get());
+        }
+      }
+    }
+
     return newClass.get();
   }
 }
@@ -4791,6 +4881,13 @@ bool Class::exists(const StringData* name, bool autoload, ClassKind kind) {
   Class* cls = Class::get(name, autoload);
   return cls &&
     (cls->attrs() & (AttrInterface | AttrTrait)) == classKindAsAttr(kind);
+}
+
+std::vector<Class*> prioritySerializeClasses() {
+  assertx(RO::EnableIntrinsicsExtension);
+  std::vector<Class*> ret;
+  for (auto [_p, c] : s_priority_serialize) ret.emplace_back(c);
+  return ret;
 }
 
 ///////////////////////////////////////////////////////////////////////////////

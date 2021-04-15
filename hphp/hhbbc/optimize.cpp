@@ -194,14 +194,11 @@ bool hasObviousStackOutput(const Bytecode& op, const Interp& interp) {
   case Op::Int:
   case Op::Double:
   case Op::String:
-  case Op::Array:
+  case Op::LazyClass:
   case Op::Dict:
   case Op::Vec:
   case Op::Keyset:
-  case Op::NewDArray:
   case Op::NewDictArray:
-  case Op::NewVArray:
-  case Op::NewStructDArray:
   case Op::NewStructDict:
   case Op::NewVec:
   case Op::NewKeysetArray:
@@ -232,8 +229,6 @@ bool hasObviousStackOutput(const Bytecode& op, const Interp& interp) {
   case Op::CastDict:
   case Op::CastVec:
   case Op::CastKeyset:
-  case Op::CastVArray:
-  case Op::CastDArray:
   case Op::DblAsBits:
   case Op::InstanceOfD:
   case Op::IsLateBoundCls:
@@ -709,10 +704,6 @@ void fixTypeConstraint(const Index& index, TypeConstraint& tc) {
   if (interface_supports_non_objects(tc.typeName())) return;
   auto const resolved = index.resolve_type_name(tc.typeName());
 
-  assertx(!RuntimeOption::EvalHackArrDVArrs ||
-          (resolved.type != AnnotType::VArray &&
-           resolved.type != AnnotType::DArray));
-
   if (resolved.type == AnnotType::Object) {
     auto const resolvedValue = match<folly::Optional<res::Class>>(
       resolved.value,
@@ -859,20 +850,14 @@ Bytecode gen_constant(const TypedValue& cell) {
     case KindOfPersistentKeyset:
       assertx(cell.m_data.parr->isKeysetType());
       return bc::Keyset { cell.m_data.parr };
-    case KindOfDArray:
-    case KindOfVArray:
-      assertx(cell.m_data.parr->isStatic());
-    case KindOfPersistentDArray:
-    case KindOfPersistentVArray:
-      assertx(cell.m_data.parr->isPHPArrayType());
-      return bc::Array { cell.m_data.parr };
+    case KindOfLazyClass:
+      return bc::LazyClass { cell.m_data.plazyclass.name() };
 
     case KindOfResource:
     case KindOfObject:
     case KindOfRFunc:
     case KindOfFunc:
     case KindOfClass:
-    case KindOfLazyClass: // TODO (T68822846)
     case KindOfClsMeth:
     case KindOfRClsMeth:
     case KindOfRecord:

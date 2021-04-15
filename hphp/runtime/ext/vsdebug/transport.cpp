@@ -137,6 +137,8 @@ void DebugTransport::enqueueOutgoingMessageForClient(
   folly::dynamic& message,
   const char* messageType
 ) {
+  message["seq"] = m_responseSeqId++;
+
   if (!clientConnected()) {
     VSDebugLogger::Log(
       VSDebugLogger::LogLevelWarning,
@@ -145,6 +147,12 @@ void DebugTransport::enqueueOutgoingMessageForClient(
     );
     return;
   }
+
+  VSDebugLogger::Log(
+    VSDebugLogger::LogLevelVerbose,
+    "Enqueueing outgoing message: %s\n",
+    folly::toJson(message).c_str()
+  );
 
   const auto wrapped = wrapOutgoingMessage(message, messageType);
 
@@ -213,6 +221,12 @@ void DebugTransport::processOutgoingMessages() {
       // Write out the entire string, *including* its terminating NULL char.
       const char* output = it->c_str();
       size_t bytesToSend = strlen(output) + 1;
+
+      VSDebugLogger::Log(
+        VSDebugLogger::LogLevelVerbose,
+        "Sending outgoing message: %s\n",
+        output
+      );
 
       while (bytesToSend > 0) {
         int ret = poll(pollFds.data(), 2, -1);

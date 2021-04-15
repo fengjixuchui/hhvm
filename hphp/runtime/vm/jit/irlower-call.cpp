@@ -71,6 +71,7 @@ void cgCall(IRLS& env, const IRInstruction* inst) {
   auto const sp = srcLoc(env, inst, 0).reg();
   auto const callee = srcLoc(env, inst, 2).reg();
   auto const ctx = srcLoc(env, inst, 3).reg();
+  auto const coeffects = srcLoc(env, inst, 4).reg();
   auto const extra = inst->extra<Call>();
   auto const numArgsInclUnpack = extra->numArgs + (extra->hasUnpack ? 1 : 0);
   auto const func = inst->src(2)->hasConstVal(TFunc)
@@ -80,6 +81,9 @@ void cgCall(IRLS& env, const IRInstruction* inst) {
   auto const skipRepack = extra->skipRepack || (
     func && !extra->hasUnpack && extra->numArgs <= func->numNonVariadicParams()
   );
+  auto const coeffectsVal = inst->src(4)->hasConstVal(TInt)
+    ? RuntimeCoeffects::fromValue(inst->src(4)->intVal())
+    : RuntimeCoeffects::none();
 
   auto& v = vmain(env);
 
@@ -89,10 +93,27 @@ void cgCall(IRLS& env, const IRInstruction* inst) {
     extra->asyncEagerReturn,
     extra->callOffset,
     extra->genericsBitmap,
-    extra->coeffects
+    coeffectsVal
   );
 
-  v << copy{v.cns(callFlags.value()), r_php_call_flags()};
+  if (!inst->src(4)->hasConstVal(TInt)) {
+    auto const coeffectsShifted = v.makeReg();
+    v << shlqi{
+      CallFlags::CoeffectsStart,
+      coeffects,
+      coeffectsShifted,
+      v.makeReg()
+    };
+    v << orq{
+      coeffectsShifted,
+      v.cns(callFlags.value()),
+      r_php_call_flags(),
+      v.makeReg()
+    };
+  } else {
+    v << copy{v.cns(callFlags.value()), r_php_call_flags()};
+  }
+
   v << copy{callee, r_php_call_func()};
   v << copy{v.cns(numArgsInclUnpack), r_php_call_num_args()};
 
@@ -283,16 +304,12 @@ void cgCallBuiltin(IRLS& env, const IRInstruction* inst) {
         args.ssa(srcNum);
       } else {
         assertx(src->isA(TLvalToCell));
-        if (!wide_tv_val) {
-          args.ssa(srcNum);
-        } else {
-          auto const data = v.makeReg();
-          auto const type = v.makeReg();
-          auto const loc = srcLoc(env, inst, srcNum);
-          v << load{*loc.reg(tv_lval::val_idx), data};
-          v << loadb{*loc.reg(tv_lval::type_idx), type};
-          args.constPtrToTV(type, data);
-        }
+        auto const data = v.makeReg();
+        auto const type = v.makeReg();
+        auto const loc = srcLoc(env, inst, srcNum);
+        v << load{*loc.reg(tv_lval::val_idx), data};
+        v << loadb{*loc.reg(tv_lval::type_idx), type};
+        args.constPtrToTV(type, data);
       }
     }
   }
@@ -425,6 +442,7 @@ void cgProfileCall(IRLS& env, const IRInstruction* inst) {
 
 void cgEnterPrologue(IRLS& env, const IRInstruction*) {
   vmain(env) << stublogue{false};
+  vmain(env) << recordbasenativesp{};
 }
 
 ///////////////////////////////////////////////////////////////////////////////

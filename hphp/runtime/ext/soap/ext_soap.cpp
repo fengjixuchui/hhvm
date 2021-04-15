@@ -973,7 +973,7 @@ static std::shared_ptr<sdlFunction> deserialize_function_call
     }
   }
 
-  headers = Array::CreateVArray();
+  headers = Array::CreateVec();
   if (head) {
     attr = head->properties;
     while (attr != nullptr) {
@@ -2116,7 +2116,7 @@ Variant HHVM_METHOD(SoapServer, getfunctions) {
       )
     );
   } else {
-    return empty_varray();
+    return empty_vec_array();
   }
 
   assertx(class_name.get());
@@ -2124,7 +2124,7 @@ Variant HHVM_METHOD(SoapServer, getfunctions) {
   assertx(cls);
   auto ret = DArrayInit(cls->numMethods()).toArray();
   Class::getMethodNames(cls, nullptr, ret);
-  return ret.toVArray();
+  return ret.toVec();
 }
 
 static bool valid_function(SoapServer *server, Object &soap_obj,
@@ -2599,7 +2599,7 @@ Variant HHVM_METHOD(SoapClient, soapcallImpl,
     }
   }
 
-  Array soap_headers = Array::CreateVArray();
+  Array soap_headers = Array::CreateVec();
   if (input_headers.isNull()) {
   } else if (input_headers.isArray()) {
     Array arr = input_headers.toArray();
@@ -2613,7 +2613,7 @@ Variant HHVM_METHOD(SoapClient, soapcallImpl,
     return init_null();
   }
   if (!data->m_default_headers.isNull()) {
-    IterateVNoInc(data->m_default_headers.toArray().get(), [&](auto val) {
+    IterateV(data->m_default_headers.toArray().get(), [&](auto val) {
       soap_headers.append(val);
     });
   }

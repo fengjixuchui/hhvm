@@ -187,6 +187,10 @@ Type make_specialized_string(trep bits, SString s) {
   return set_trep_for_testing(sval(s), bits);
 }
 
+Type make_specialized_lazycls(trep bits, SString s) {
+  return set_trep_for_testing(lazyclsval(s), bits);
+}
+
 Type make_specialized_int(trep bits, int64_t i) {
   return set_trep_for_testing(ival(i), bits);
 }
@@ -256,7 +260,7 @@ Type make_specialized_arrmapn(trep bits, Type key, Type val) {
 trep get_bits(const Type& t) { return get_trep_for_testing(t); }
 
 Type make_unmarked(Type t) {
-  if (!t.couldBe(BVecish|BDictish)) return t;
+  if (!t.couldBe(BVec|BDict)) return t;
   return set_mark_for_testing(t, LegacyMark::Unmarked);
 }
 
@@ -272,6 +276,10 @@ Type sval_nonstatic(const StaticString& s) {
 }
 Type sval_counted(const StaticString& s) {
   return HPHP::HHBBC::sval_counted(s.get());
+}
+
+Type lazyclsval(const StaticString& s) {
+  return HPHP::HHBBC::lazyclsval(s.get());
 }
 
 TypedValue tv(SString s) { return make_tv<KindOfPersistentString>(s); }
@@ -304,20 +312,8 @@ SArray static_vec(Args&&... args) {
 }
 
 template<typename... Args>
-SArray static_varray(Args&&... args) {
-  auto ar = make_varray(std::forward<Args>(args)...);
-  return ArrayData::GetScalarArray(std::move(ar));
-}
-
-template<typename... Args>
 SArray static_dict(Args&&... args) {
   auto ar = make_dict_array(std::forward<Args>(args)...);
-  return ArrayData::GetScalarArray(std::move(ar));
-}
-
-template<typename... Args>
-SArray static_darray(Args&&... args) {
-  auto ar = make_darray(std::forward<Args>(args)...);
   return ArrayData::GetScalarArray(std::move(ar));
 }
 
@@ -336,10 +332,10 @@ auto const predefined = folly::lazy([]{
 #undef X
   };
   types.emplace_back(BInt|BObj, Type{BInt|BObj});
-  types.emplace_back(BKeysetN|BVecishN, Type{BKeysetN|BVecishN});
-  types.emplace_back(BKeysetN|BDictishN, Type{BKeysetN|BDictishN});
-  types.emplace_back(BKeysetE|BVecishE, Type{BKeysetE|BVecishE});
-  types.emplace_back(BKeysetE|BDictishE, Type{BKeysetE|BDictishE});
+  types.emplace_back(BKeysetN|BVecN, Type{BKeysetN|BVecN});
+  types.emplace_back(BKeysetN|BDictN, Type{BKeysetN|BDictN});
+  types.emplace_back(BKeysetE|BVecE, Type{BKeysetE|BVecE});
+  types.emplace_back(BKeysetE|BDictE, Type{BKeysetE|BDictE});
   return types;
 });
 
@@ -390,16 +386,13 @@ std::vector<Type> withData(const Index& index) {
 
   auto const svec1 = static_vec(s_A.get(), s_B.get());
   auto const svec2 = static_vec(123, 456);
-  auto const svarr1 = static_varray(s_A.get(), s_B.get());
-  auto const svarr2 = static_varray(123, 456);
   auto const sdict1 = static_dict(s_A.get(), s_B.get(), s_C.get(), 123);
   auto const sdict2 = static_dict(100, s_A.get(), 200, s_C.get());
-  auto const sdarr1 = static_darray(s_A.get(), s_B.get(), s_C.get(), 123);
-  auto const sdarr2 = static_darray(100, s_A.get(), 200, s_C.get());
   auto const skeyset1 = static_keyset(s_A.get(), s_B.get());
   auto const skeyset2 = static_keyset(123, 456);
 
-  auto const support = BStr | BDbl | BInt | BCls | BObj | BRecord | BArrLikeN;
+  auto const support = BStr | BDbl | BInt | BCls | BObj |
+                       BRecord | BArrLikeN | BLazyCls;
   auto const nonSupport = BCell & ~support;
 
   auto const add = [&] (trep b) {
@@ -410,6 +403,10 @@ std::vector<Type> withData(const Index& index) {
     if (couldBe(b, BStr) && subtypeOf(b, BStr | nonSupport)) {
       types.emplace_back(make_specialized_string(b, s_A.get()));
       types.emplace_back(make_specialized_string(b, s_B.get()));
+    }
+    if (couldBe(b, BLazyCls) && subtypeOf(b, BLazyCls | nonSupport)) {
+      types.emplace_back(make_specialized_lazycls(b, s_A.get()));
+      types.emplace_back(make_specialized_lazycls(b, s_B.get()));
     }
     if (couldBe(b, BInt) && subtypeOf(b, BInt | nonSupport)) {
       types.emplace_back(make_specialized_int(b, 123));
@@ -528,7 +525,7 @@ std::vector<Type> withData(const Index& index) {
           types.emplace_back(make_specialized_arrmapn(b, TArrKey, TArrKey));
         }
 
-        if (!couldBe(b, BVecishN)) {
+        if (!couldBe(b, BVecN)) {
           types.emplace_back(make_specialized_arrmap(b, {map_elem(1, TInt)}));
           if (subtypeAmong(b, BSArrLikeN, BArrLikeN)) {
             types.emplace_back(make_specialized_arrmap(b, {map_elem(s_A, TSStr)}));
@@ -560,15 +557,15 @@ std::vector<Type> withData(const Index& index) {
           types.emplace_back(make_specialized_arrpackedn(b, TObj));
         }
 
-        if (!subtypeAmong(b, BVecishN, BArrLikeN)) {
+        if (!subtypeAmong(b, BVecN, BArrLikeN)) {
           types.emplace_back(make_specialized_arrmapn(b, TInt, TInt));
           if (subtypeAmong(b, BSArrLikeN, BArrLikeN)) {
-            if (!couldBe(b, BVecishN)) {
+            if (!couldBe(b, BVecN)) {
               types.emplace_back(make_specialized_arrmapn(b, TSStr, TSStr));
             }
             types.emplace_back(make_specialized_arrmapn(b, TUncArrKey, TUncArrKey));
           } else {
-            if (!couldBe(b, BVecishN)) {
+            if (!couldBe(b, BVecN)) {
               types.emplace_back(make_specialized_arrmapn(b, TStr, TStr));
             }
             types.emplace_back(make_specialized_arrmapn(b, TArrKey, TArrKey));
@@ -576,7 +573,7 @@ std::vector<Type> withData(const Index& index) {
           }
         }
 
-        if (!couldBe(b, BVecishN)) {
+        if (!couldBe(b, BVecN)) {
           if (subtypeAmong(b, BSArrLikeN, BArrLikeN)) {
             types.emplace_back(make_specialized_arrmap(b, {map_elem(1, TSStr)}));
             types.emplace_back(make_specialized_arrmap(b, {map_elem(s_A, TInitUnc)}));
@@ -598,17 +595,9 @@ std::vector<Type> withData(const Index& index) {
         types.emplace_back(make_specialized_arrval(b, svec1));
         types.emplace_back(make_specialized_arrval(b, svec2));
       }
-      if (subtypeAmong(b, BSVArrN, BArrLikeN)) {
-        types.emplace_back(make_specialized_arrval(b, svarr1));
-        types.emplace_back(make_specialized_arrval(b, svarr2));
-      }
       if (subtypeAmong(b, BSDictN, BArrLikeN)) {
         types.emplace_back(make_specialized_arrval(b, sdict1));
         types.emplace_back(make_specialized_arrval(b, sdict2));
-      }
-      if (subtypeAmong(b, BSDArrN, BArrLikeN)) {
-        types.emplace_back(make_specialized_arrval(b, sdarr1));
-        types.emplace_back(make_specialized_arrval(b, sdarr2));
       }
       if (subtypeAmong(b, BSKeysetN, BArrLikeN)) {
         types.emplace_back(make_specialized_arrval(b, skeyset1));
@@ -633,9 +622,7 @@ auto const specialized_arrays = folly::lazy([]{
 
     auto const containsUncounted = [] (trep bits) {
       if ((bits & BVecN)    == BSVecN)    return true;
-      if ((bits & BVArrN)   == BSVArrN)   return true;
       if ((bits & BDictN)   == BSDictN)   return true;
-      if ((bits & BDArrN)   == BSDArrN)   return true;
       if ((bits & BKeysetN) == BSKeysetN) return true;
       return false;
     };
@@ -644,10 +631,10 @@ auto const specialized_arrays = folly::lazy([]{
       auto upper = BBottom;
       auto lower = BArrKey;
 
-      if (couldBe(bits, BVecish)) {
+      if (couldBe(bits, BVec)) {
         upper |= BInt;
         lower &= BInt;
-        bits &= ~BVecish;
+        bits &= ~BVec;
       }
       if (couldBe(bits, BArrLikeN)) {
         if (subtypeOf(bits, BSArrLikeN)) {
@@ -695,7 +682,7 @@ auto const specialized_arrays = folly::lazy([]{
     auto const packedn = [&] (const Type& t) {
       if (!t.subtypeOf(packedValBits.first)) return;
       if (!t.couldBe(packedValBits.second)) return;
-      if (subtypeOf(b, BVecishN) && !t.strictSubtypeOf(packedValBits.first)) {
+      if (subtypeOf(b, BVecN) && !t.strictSubtypeOf(packedValBits.first)) {
         return;
       }
       types.emplace_back(make_specialized_arrpackedn(b, t));
@@ -742,7 +729,7 @@ auto const specialized_arrays = folly::lazy([]{
     packed({TArrKey, TArrKey, TArrKey});
 
     auto const mapn = [&] (const Type& key, const Type& val) {
-      if (subtypeOf(b, BVecishN)) return;
+      if (subtypeOf(b, BVecN)) return;
       if (!key.subtypeOf(keyBits.first)) return;
       if (!key.couldBe(keyBits.second)) return;
       if (!val.subtypeOf(valBits.first)) return;
@@ -782,7 +769,7 @@ auto const specialized_arrays = folly::lazy([]{
     auto const map = [&] (const MapElems& elems,
                           const Type& optKey = TBottom,
                           const Type& optVal = TBottom) {
-      if (couldBe(b, BVecishN)) return;
+      if (couldBe(b, BVecN)) return;
 
       for (auto const& e : elems) {
         if (!e.second.val.subtypeOf(valBits.first)) return;
@@ -861,10 +848,10 @@ auto const specialized_arrays = folly::lazy([]{
   };
 
   auto const bits = std::vector<trep>{
-    BCVecishN,
-    BSVecishN,
-    BCDictishN,
-    BSDictishN,
+    BCVecN,
+    BSVecN,
+    BCDictN,
+    BSDictN,
     BCKeysetN,
     BSKeysetN,
   };
@@ -880,27 +867,19 @@ auto const specialized_arrays = folly::lazy([]{
 
   auto const svec1 = static_vec(s_A.get(), s_B.get());
   auto const svec2 = static_vec(123, 456);
-  auto const svarr1 = static_varray(s_A.get(), s_B.get());
-  auto const svarr2 = static_varray(123, 456);
   auto const sdict1 = static_dict(s_A.get(), s_B.get(), s_C.get(), 123);
   auto const sdict2 = static_dict(100, s_A.get(), 200, s_C.get());
-  auto const sdarr1 = static_darray(s_A.get(), s_B.get(), s_C.get(), 123);
-  auto const sdarr2 = static_darray(100, s_A.get(), 200, s_C.get());
   auto const skeyset1 = static_keyset(s_A.get(), s_B.get());
   auto const skeyset2 = static_keyset(123, 456);
 
   types.emplace_back(make_specialized_arrval(BSVecN, svec1));
   types.emplace_back(make_specialized_arrval(BSVecN, svec2));
-  types.emplace_back(make_specialized_arrval(BSVArrN, svarr1));
-  types.emplace_back(make_specialized_arrval(BSVArrN, svarr2));
   types.emplace_back(make_specialized_arrval(BSDictN, sdict1));
   types.emplace_back(make_specialized_arrval(BSDictN, sdict2));
-  types.emplace_back(make_specialized_arrval(BSDArrN, sdarr1));
-  types.emplace_back(make_specialized_arrval(BSDArrN, sdarr2));
   types.emplace_back(make_specialized_arrval(BSKeysetN, skeyset1));
   types.emplace_back(make_specialized_arrval(BSKeysetN, skeyset2));
 
-  types.emplace_back(make_specialized_arrpackedn(BVecishN|BKeysetN, ival(0)));
+  types.emplace_back(make_specialized_arrpackedn(BVecN|BKeysetN, ival(0)));
 
   make_unmarked(types);
   return types;
@@ -926,10 +905,6 @@ auto const allBits = folly::lazy([]{
     BSVecN,
     BCDictN,
     BSDictN,
-    BCVArrN,
-    BSVArrN,
-    BCDArrN,
-    BSDArrN,
     BCKeysetN,
     BSKeysetN,
   };
@@ -1248,11 +1223,11 @@ void test_basic_operators(const std::vector<Type>& types) {
   }
 
   for (auto const& t : types) {
-    if (t.couldBe(BVecish)) {
-      EXPECT_FALSE(intersection_of(t, TVecish).is(BBottom));
+    if (t.couldBe(BVec)) {
+      EXPECT_FALSE(intersection_of(t, TVec).is(BBottom));
     }
-    if (t.couldBe(BDictish)) {
-      EXPECT_FALSE(intersection_of(t, TDictish).is(BBottom));
+    if (t.couldBe(BDict)) {
+      EXPECT_FALSE(intersection_of(t, TDict).is(BBottom));
     }
     if (t.couldBe(BKeyset)) {
       EXPECT_FALSE(intersection_of(t, TKeyset).is(BBottom));
@@ -1276,29 +1251,29 @@ TEST(Type, SpecializedArrays) {
 
   EXPECT_EQ(
     intersection_of(
-      make_specialized_arrmapn(BVecishN|BKeysetN, TArrKey, TStr),
-      make_specialized_arrmapn(BDictishN|BKeysetN, TInt, TArrKey)
+      make_specialized_arrmapn(BVecN|BKeysetN, TArrKey, TStr),
+      make_specialized_arrmapn(BDictN|BKeysetN, TInt, TArrKey)
     ),
     TBottom
   );
   EXPECT_EQ(
     intersection_of(
       make_specialized_arrmapn(BArrLikeN, TArrKey, TStr),
-      make_specialized_arrmapn(BDictishN|BKeysetN, TInt, TArrKey)
+      make_specialized_arrmapn(BDictN|BKeysetN, TInt, TArrKey)
     ),
-    make_specialized_arrmapn(BDictishN, TInt, TStr)
+    make_specialized_arrmapn(BDictN, TInt, TStr)
   );
   EXPECT_EQ(
     intersection_of(
-      make_specialized_arrmapn(BVecishN|BDictishN, TArrKey, TInt),
-      make_specialized_arrmapn(BVecishN|BKeysetN, TArrKey, TInt)
+      make_specialized_arrmapn(BVecN|BDictN, TArrKey, TInt),
+      make_specialized_arrmapn(BVecN|BKeysetN, TArrKey, TInt)
     ),
-    make_specialized_arrpackedn(BVecishN, TInt)
+    make_specialized_arrpackedn(BVecN, TInt)
   );
 
   {
-    auto const map1 = make_specialized_arrmap(BDictishN, {map_elem(s_A, ival(123))});
-    auto const map2 = make_specialized_arrmap(BDictishN, {map_elem_nonstatic(s_A, ival(123))});
+    auto const map1 = make_specialized_arrmap(BDictN, {map_elem(s_A, ival(123))});
+    auto const map2 = make_specialized_arrmap(BDictN, {map_elem_nonstatic(s_A, ival(123))});
     EXPECT_NE(map1, map2);
     EXPECT_TRUE(map1.couldBe(map2));
     EXPECT_TRUE(map2.couldBe(map1));
@@ -1341,8 +1316,8 @@ TEST(Type, SpecializedArrays) {
 
   EXPECT_EQ(
     intersection_of(
-      make_specialized_arrpacked(BDictN|BVecN, {TInitCell}),
-      make_specialized_arrpacked(BDArrN|BSVecN, {TInitCell})
+      make_specialized_arrpacked(BSDictN|BVecN, {TInitCell}),
+      make_specialized_arrpacked(BCDictN|BSVecN, {TInitCell})
     ),
     make_specialized_arrpacked(BSVecN, {TInitUnc})
   );
@@ -1380,8 +1355,8 @@ TEST(Type, SpecializedArrays) {
 
   EXPECT_EQ(
     intersection_of(
-      make_specialized_arrpackedn(BDictN|BVecN, Type{BInitCell & ~BObj}),
-      make_specialized_arrpackedn(BSDictN|BDArrN, Type{BInitCell & ~BObj})
+      make_specialized_arrpackedn(BDictN|BSVecN, Type{BInitCell & ~BObj}),
+      make_specialized_arrpackedn(BSDictN|BCVecN, Type{BInitCell & ~BObj})
     ),
     make_specialized_arrpackedn(BSDictN, TInitUnc)
   );
@@ -1441,30 +1416,23 @@ TEST(Type, SpecializedArrays) {
 
   EXPECT_EQ(
     intersection_of(
-      make_specialized_arrmapn(BDictN|BDArrN, TCStr, TInt),
-      Type{BSDictN|BDArrN}
+      make_specialized_arrmapn(BDictN|BCKeysetN, TCStr, TCStr),
+      Type{BDictN|BSKeysetN}
     ),
-    make_specialized_arrmapn(BDArrN, TCStr, TInt)
-  );
-  EXPECT_EQ(
-    intersection_of(
-      make_specialized_arrmapn(BDictN|BDArrN, TStr, TObj),
-      Type{BSDictN|BDArrN}
-    ),
-    make_specialized_arrmapn(BDArrN, TStr, TObj)
+    make_specialized_arrmapn(BDictN, TCStr, TCStr)
   );
 
   EXPECT_EQ(
     intersection_of(
-      make_specialized_arrmapn(BDictN|BDArrN, TArrKey, Type{BInitCell & ~BObj}),
+      make_specialized_arrmapn(BDictN|BKeysetN, TArrKey, Type{BInitCell & ~BObj}),
       make_specialized_arrmapn(BSDictN|BVecN, TUncArrKey, Type{BInitCell & ~BObj})
     ),
     TSDictN
   );
   EXPECT_EQ(
     intersection_of(
-      make_specialized_arrmapn(BDictN|BVecN, TArrKey, Type{BInitCell & ~BObj}),
-      make_specialized_arrmapn(BDArrN|BSVecN, TUncArrKey, Type{BInitCell & ~BObj})
+      make_specialized_arrmapn(BCDictN|BSVecN, TArrKey, Type{BInitCell & ~BObj}),
+      make_specialized_arrmapn(BSDictN|BVecN, TUncArrKey, Type{BInitCell & ~BObj})
     ),
     TSVecN
   );
@@ -1500,32 +1468,32 @@ TEST(Type, SpecializedArrays) {
 
   EXPECT_EQ(
     intersection_of(
-      make_specialized_arrmap(BDictN|BKeysetN, {map_elem(s_A, TArrKey)}),
-      make_specialized_arrmap(BDArrN|BKeysetN, {map_elem(s_A, TArrKey)})
+      make_specialized_arrmap(BCDictN|BKeysetN, {map_elem(s_A, TArrKey)}),
+      make_specialized_arrmap(BSDictN|BKeysetN, {map_elem(s_A, TArrKey)})
     ),
     make_specialized_arrmap(BKeysetN, {map_elem(s_A, sval(s_A))})
   );
   EXPECT_EQ(
     intersection_of(
-      make_specialized_arrmap(BDictN|BKeysetN, {map_elem_nonstatic(s_A, sval(s_A))}),
-      make_specialized_arrmap(BDArrN|BKeysetN, {map_elem_nonstatic(s_A, sval(s_A))})
+      make_specialized_arrmap(BCDictN|BKeysetN, {map_elem_nonstatic(s_A, sval(s_A))}),
+      make_specialized_arrmap(BSDictN|BKeysetN, {map_elem_nonstatic(s_A, sval(s_A))})
     ),
     make_specialized_arrmap(BKeysetN, {map_elem(s_A, sval(s_A))})
   );
   EXPECT_EQ(
     intersection_of(
-      make_specialized_arrmap(BDictN|BKeysetN, {map_elem(s_A, TArrKey)}),
-      make_specialized_arrmap(BDArrN|BKeysetN, {map_elem_nonstatic(s_A, TCStr)})
+      make_specialized_arrmap(BSDictN|BKeysetN, {map_elem(s_A, TArrKey)}),
+      make_specialized_arrmap(BCDictN|BKeysetN, {map_elem_nonstatic(s_A, TCStr)})
     ),
     TBottom
   );
 
   EXPECT_EQ(
     intersection_of(
-      make_specialized_arrmap(BDictN|BDArrN, {map_elem_counted(s_A, ival(123))}),
-      Type{BSDictN|BDArrN}
+      make_specialized_arrmap(BDictN|BKeysetN, {map_elem_counted(s_A, TCStr)}),
+      Type{BDictN|BSKeysetN}
     ),
-    make_specialized_arrmap(BDArrN, {map_elem_counted(s_A, ival(123))})
+    make_specialized_arrmap(BDictN, {map_elem_counted(s_A, TCStr)})
   );
   EXPECT_EQ(
     intersection_of(
@@ -1537,15 +1505,15 @@ TEST(Type, SpecializedArrays) {
 
   EXPECT_EQ(
     intersection_of(
-      make_specialized_arrmap(BDictN|BSDArrN, {map_elem(s_A, TInitCell)}, TArrKey, TInitCell),
-      make_specialized_arrmap(BKeysetN|BSDArrN, {map_elem(s_A, TArrKey)}, TArrKey, TArrKey)
+      make_specialized_arrmap(BDictN, {map_elem(s_A, TInitCell)}, TArrKey, TInitCell),
+      make_specialized_arrmap(BSDictN|BKeysetN, {map_elem(s_A, TArrKey)}, TArrKey, TArrKey)
     ),
-    make_specialized_arrmap(BSDArrN, {map_elem(s_A, TUncArrKey)}, TUncArrKey, TUncArrKey)
+    make_specialized_arrmap(BSDictN, {map_elem(s_A, TUncArrKey)}, TUncArrKey, TUncArrKey)
   );
 
   EXPECT_EQ(
     intersection_of(
-      make_specialized_arrpackedn(BVecishN|BKeysetN, ival(0)),
+      make_specialized_arrpackedn(BVecN|BKeysetN, ival(0)),
       TKeyset
     ),
     make_specialized_arrpacked(BKeysetN, {ival(0)})
@@ -1600,6 +1568,9 @@ TEST(Type, Split) {
 
     auto const [str, strRest] = split_string(t);
     test(is_specialized_string, BStr, str, strRest, t);
+
+    auto const [lcls, lclsRest] = split_lazycls(t);
+    test(is_specialized_lazycls, BLazyCls, lcls, lclsRest, t);
   }
 
   auto split = split_array_like(Type{BDictN|BInt});
@@ -1716,6 +1687,18 @@ TEST(Type, Split) {
   split = split_string(union_of(TStr, ival(123)));
   EXPECT_EQ(split.first, TStr);
   EXPECT_EQ(split.second, TInt);
+
+  split = split_lazycls(TInt);
+  EXPECT_EQ(split.first, TBottom);
+  EXPECT_EQ(split.second, TInt);
+
+  split = split_lazycls(Type{BStr|BLazyCls});
+  EXPECT_EQ(split.first, TLazyCls);
+  EXPECT_EQ(split.second, TStr);
+
+  split = split_lazycls(union_of(lazyclsval(s_A), TFalse));
+  EXPECT_EQ(split.first, lazyclsval(s_A));
+  EXPECT_EQ(split.second, TFalse);
 }
 
 TEST(Type, Remove) {
@@ -1743,18 +1726,20 @@ TEST(Type, Remove) {
     test(is_specialized_int, BInt, remove_int(t), t);
     test(is_specialized_double, BDbl, remove_double(t), t);
     test(is_specialized_string, BStr, remove_string(t), t);
+    test(is_specialized_lazycls, BLazyCls, remove_lazycls(t), t);
     test(is_specialized_cls, BCls, remove_cls(t), t);
     test(is_specialized_obj, BObj, remove_obj(t), t);
 
     EXPECT_EQ(remove_int(t), remove_bits(t, BInt));
     EXPECT_EQ(remove_double(t), remove_bits(t, BDbl));
     EXPECT_EQ(remove_string(t), remove_bits(t, BStr));
+    EXPECT_EQ(remove_lazycls(t), remove_bits(t, BLazyCls));
     EXPECT_EQ(remove_cls(t), remove_bits(t, BCls));
     EXPECT_EQ(remove_obj(t), remove_bits(t, BObj));
 
     EXPECT_FALSE(is_specialized_array_like(remove_bits(t, BArrLikeN)));
-    if (t.couldBe(BDictishN)) {
-      EXPECT_FALSE(is_specialized_array_like(remove_bits(t, BDictishN)));
+    if (t.couldBe(BDictN)) {
+      EXPECT_FALSE(is_specialized_array_like(remove_bits(t, BDictN)));
     }
 
     EXPECT_FALSE(remove_keyset(t).couldBe(BKeyset));
@@ -1789,6 +1774,12 @@ TEST(Type, Remove) {
   EXPECT_EQ(remove_string(sval(s_A)), TBottom);
   EXPECT_EQ(remove_string(union_of(ival(123),TStr)), TInt);
   EXPECT_EQ(remove_string(union_of(TInt,sval(s_A))), TInt);
+
+  EXPECT_EQ(remove_lazycls(TStr), TStr);
+  EXPECT_EQ(remove_lazycls(TLazyCls), TBottom);
+  EXPECT_EQ(remove_lazycls(Type{BLazyCls|BStr}), TStr);
+  EXPECT_EQ(remove_lazycls(lazyclsval(s_A)), TBottom);
+  EXPECT_EQ(remove_lazycls(union_of(TInt,lazyclsval(s_A))), TInt);
 
   auto const clsA = index.resolve_class(Context{}, s_A.get());
   if (!clsA || !clsA->resolved()) ADD_FAILURE();
@@ -1847,6 +1838,7 @@ TEST(Type, Prim) {
     { TPrim, dval(0.0) },
     { TCls, TInitPrim },
     { TFunc, TInitPrim },
+    { TLazyCls, TInitPrim },
   };
 
   const std::initializer_list<std::pair<Type, Type>> couldbe_true{
@@ -1865,6 +1857,7 @@ TEST(Type, Prim) {
     { TPrim, TSStr },
     { TInitPrim, TSStr },
     { TInitPrim, sval(s_test) },
+    { TInitPrim, lazyclsval(s_test) },
     { TPrim, sval(s_test) },
     { TInitPrim, TUninit },
     { TPrim, TObj },
@@ -1926,6 +1919,9 @@ TEST(Type, CouldBeValues) {
   EXPECT_TRUE(sval_nonstatic(s_test).couldBe(sval(s_test)));
   EXPECT_FALSE(sval(s_test.get()).couldBe(sval_nonstatic(s_A)));
   EXPECT_FALSE(sval_nonstatic(s_test).couldBe(sval(s_A)));
+
+  EXPECT_FALSE(lazyclsval(s_test).couldBe(lazyclsval(s_A)));
+  EXPECT_TRUE(lazyclsval(s_test).couldBe(lazyclsval(s_test)));
 }
 
 TEST(Type, Unc) {
@@ -2066,14 +2062,10 @@ TEST(Type, Option) {
   EXPECT_TRUE(TInitNull.subtypeOf(BOptStr));
   EXPECT_TRUE(!TUninit.subtypeOf(BOptStr));
 
-  EXPECT_TRUE(TSVArr.subtypeOf(BOptSVArr));
-  EXPECT_TRUE(!TVArr.subtypeOf(BOptSVArr));
-  EXPECT_TRUE(TInitNull.subtypeOf(BOptSVArr));
-  EXPECT_TRUE(!TUninit.subtypeOf(BOptSVArr));
-
-  EXPECT_TRUE(TDArr.subtypeOf(BOptDArr));
-  EXPECT_TRUE(TInitNull.subtypeOf(BOptDArr));
-  EXPECT_TRUE(!TUninit.subtypeOf(BOptDArr));
+  EXPECT_TRUE(lazyclsval(s_test).subtypeOf(BOptLazyCls));
+  EXPECT_TRUE(TLazyCls.subtypeOf(BOptLazyCls));
+  EXPECT_TRUE(TInitNull.subtypeOf(BOptLazyCls));
+  EXPECT_TRUE(!TUninit.subtypeOf(BOptLazyCls));
 
   EXPECT_TRUE(TObj.subtypeOf(BOptObj));
   EXPECT_TRUE(TInitNull.subtypeOf(BOptObj));
@@ -2115,19 +2107,16 @@ TEST(Type, OptUnionOf) {
   EXPECT_EQ(opt(ival(2)), union_of(ival(2), TInitNull));
   EXPECT_EQ(opt(dval(2.0)), union_of(TInitNull, dval(2.0)));
   EXPECT_EQ(opt(sval(s_test)), union_of(sval(s_test), TInitNull));
+  EXPECT_EQ(opt(lazyclsval(s_test)), union_of(lazyclsval(s_test), TInitNull));
   EXPECT_EQ(opt(sval_nonstatic(s_test)),
             union_of(sval_nonstatic(s_test), TInitNull));
   EXPECT_EQ(opt(sval(s_test)), union_of(TInitNull, sval(s_test)));
+  EXPECT_EQ(opt(lazyclsval(s_test)), union_of(TInitNull, lazyclsval(s_test)));
   EXPECT_EQ(opt(sval_nonstatic(s_test)),
             union_of(TInitNull, sval_nonstatic(s_test)));
 
   EXPECT_EQ(TOptBool, union_of(TOptFalse, TOptTrue));
   EXPECT_EQ(TOptBool, union_of(TOptTrue, TOptFalse));
-
-  EXPECT_EQ(TOptSDArr, union_of(TInitNull, TOptSDArr));
-  EXPECT_EQ(TOptSVArr, union_of(TOptSVArr, TInitNull));
-  EXPECT_EQ(TOptDArr, union_of(TOptDArr, TInitNull));
-  EXPECT_EQ(TOptVArr, union_of(TInitNull, TOptVArr));
 
   EXPECT_EQ(TOptSStr,
             union_of(opt(sval(s_test)), opt(sval(s_TestClass))));
@@ -2189,8 +2178,6 @@ TEST(Type, TV) {
 
     if (t.couldBe(BCounted & ~(BArrLike | BStr)) ||
         (t.couldBe(BStr) && t.subtypeAmong(BCStr, BStr)) ||
-        (t.couldBe(BVArr) && t.subtypeAmong(BCVArr, BVArr)) ||
-        (t.couldBe(BDArr) && t.subtypeAmong(BCDArr, BDArr)) ||
         (t.couldBe(BVec) && t.subtypeAmong(BCVec, BVec)) ||
         (t.couldBe(BDict) && t.subtypeAmong(BCDict, BDict)) ||
         (t.couldBe(BKeyset) && t.subtypeAmong(BCKeyset, BKeyset))) {
@@ -2208,9 +2195,7 @@ TEST(Type, TV) {
     }
 
     if (t.couldBe(BArrLikeE)) {
-      if (!t.subtypeAmong(BVArrE, BArrLike) &&
-          !t.subtypeAmong(BDArrE, BArrLike) &&
-          !t.subtypeAmong(BVecE, BArrLike) &&
+      if (!t.subtypeAmong(BVecE, BArrLike) &&
           !t.subtypeAmong(BDictE, BArrLike) &&
           !t.subtypeAmong(BKeysetE, BArrLike)) {
         EXPECT_FALSE(tv(t).has_value());
@@ -2226,12 +2211,8 @@ TEST(Type, TV) {
   test(TInitNull, make_tv<KindOfNull>());
   test(TTrue, make_tv<KindOfBoolean>(true));
   test(TFalse, make_tv<KindOfBoolean>(false));
-  test(aempty_varray(), make_array_like_tv(staticEmptyVArray()));
-  test(some_aempty_varray(), make_array_like_tv(staticEmptyVArray()));
   test(vec_empty(), make_array_like_tv(staticEmptyVec()));
   test(some_vec_empty(), make_array_like_tv(staticEmptyVec()));
-  test(aempty_darray(), make_array_like_tv(staticEmptyDArray()));
-  test(some_aempty_darray(), make_array_like_tv(staticEmptyDArray()));
   test(dict_empty(), make_array_like_tv(staticEmptyDictArray()));
   test(some_dict_empty(), make_array_like_tv(staticEmptyDictArray()));
   test(keyset_empty(), make_array_like_tv(staticEmptyKeysetArray()));
@@ -2239,6 +2220,7 @@ TEST(Type, TV) {
   test(ival(123), make_tv<KindOfInt64>(123));
   test(dval(3.141), make_tv<KindOfDouble>(3.141));
   test(sval(s_A), tv(s_A));
+  test(lazyclsval(s_A), tv(s_A));
   test(vec_val(static_vec(123, 456, 789)),
        make_array_like_tv(const_cast<ArrayData*>(static_vec(123, 456, 789))));
   test(make_specialized_arrpacked(BDictN, {ival(1), ival(2), ival(3)}, LegacyMark::Unmarked),
@@ -2271,6 +2253,7 @@ TEST(Type, TV) {
   EXPECT_FALSE(tv(union_of(dict_empty(), vec_empty())).has_value());
   EXPECT_FALSE(tv(make_specialized_int(BInt|BFalse, 123)).has_value());
   EXPECT_FALSE(tv(make_specialized_string(BStr|BFalse, s_A.get())).has_value());
+  EXPECT_FALSE(tv(make_specialized_lazycls(BLazyCls|BFalse, s_A.get())).has_value());
   EXPECT_FALSE(
     tv(
       make_specialized_arrmap(
@@ -2294,7 +2277,7 @@ TEST(Type, TV) {
 
   EXPECT_FALSE(tv(sval_counted(s_A)).has_value());
   EXPECT_FALSE(tv(TCDictE).has_value());
-  EXPECT_FALSE(tv(TCVecishE).has_value());
+  EXPECT_FALSE(tv(TCVecE).has_value());
   EXPECT_FALSE(tv(make_specialized_arrpacked(BVecN, {sval_counted(s_A)})).has_value());
   EXPECT_FALSE(tv(make_specialized_arrpacked(BCVec, {ival(123)})).has_value());
   EXPECT_FALSE(
@@ -2324,8 +2307,6 @@ TEST(Type, TV) {
     }
 
     if (!(t.couldBe(BStr) && t.subtypeAmong(BCStr, BStr)) &&
-        !(t.couldBe(BVArr) && t.subtypeAmong(BCVArr, BVArr)) &&
-        !(t.couldBe(BDArr) && t.subtypeAmong(BCDArr, BDArr)) &&
         !(t.couldBe(BVec) && t.subtypeAmong(BCVec, BVec)) &&
         !(t.couldBe(BDict) && t.subtypeAmong(BCDict, BDict)) &&
         !(t.couldBe(BKeyset) && t.subtypeAmong(BCKeyset, BKeyset))) {
@@ -2343,9 +2324,7 @@ TEST(Type, TV) {
     }
 
     if (t.couldBe(BArrLikeE)) {
-      if (!t.subtypeAmong(BVArrE, BArrLike) &&
-          !t.subtypeAmong(BDArrE, BArrLike) &&
-          !t.subtypeAmong(BVecE, BArrLike) &&
+      if (!t.subtypeAmong(BVecE, BArrLike) &&
           !t.subtypeAmong(BDictE, BArrLike) &&
           !t.subtypeAmong(BKeysetE, BArrLike)) {
         EXPECT_FALSE(tv(t).has_value());
@@ -2357,8 +2336,6 @@ TEST(Type, TV) {
     auto const val = tvCounted(t);
     EXPECT_TRUE(val && tvSame(*val, d));
   };
-  testC(make_unmarked(TCVArrE), make_array_like_tv(staticEmptyVArray()));
-  testC(make_unmarked(TCDArrE), make_array_like_tv(staticEmptyDArray()));
   testC(make_unmarked(TCVecE), make_array_like_tv(staticEmptyVec()));
   testC(make_unmarked(TCDictE), make_array_like_tv(staticEmptyDictArray()));
   testC(TCKeysetE, make_array_like_tv(staticEmptyKeysetArray()));
@@ -2409,6 +2386,11 @@ TEST(Type, OptCouldBe) {
     { opt(sval_nonstatic(s_test)), TSStr },
     { opt(sval_nonstatic(s_test)), sval_nonstatic(s_test) },
     { opt(sval_nonstatic(s_test)), sval(s_test) },
+
+    { opt(lazyclsval(s_test)), TLazyCls },
+    { opt(lazyclsval(s_test)), TInitNull },
+    { opt(lazyclsval(s_test)), lazyclsval(s_test) },
+    { opt(sval(s_test)), sval_nonstatic(s_test) },
 
     { opt(ival(2)), TInt },
     { opt(ival(2)), TInitNull },
@@ -2563,7 +2545,7 @@ TEST(Type, ArrayLikeElem) {
         EXPECT_TRUE(elem.first.subtypeOf(loosen_staticness(key)));
       }
 
-      if (t.subtypeAmong(BVecishN, BArrLikeN) && !key.couldBe(BInt)) {
+      if (t.subtypeAmong(BVecN, BArrLikeN) && !key.couldBe(BInt)) {
         EXPECT_TRUE(elem.first.is(BBottom));
       }
       if ((is_specialized_array_like_packedn(t) ||
@@ -2617,42 +2599,42 @@ TEST(Type, ArrayLikeElem) {
   };
 
   const std::vector<std::tuple<Type, Type, Type, bool>> tests{
-    { TVecishE, TInt, TBottom, false },
-    { TVecishE, TStr, TBottom, false },
-    { TVecishE, TArrKey, TBottom, false },
-    { TVecishN, TInt, TInitCell, false },
-    { TVecish, TInt, TInitCell, false },
-    { TSVecishN, TInt, TInitUnc, false },
-    { TVecishN, TStr, TBottom, false },
-    { TVecishN, ival(-1), TBottom, false },
-    { TVecishN, ival(0), TInitCell, false },
-    { TSVecishN, ival(0), TInitUnc, false },
-    { TVecishN, TArrKey, TInitCell, false },
-    { TSVecishN, TArrKey, TInitUnc, false },
-    { TVecishN, union_of(ival(-1),TStr), TInitCell, false },
-    { TVecishN, union_of(ival(0),TStr), TInitCell, false },
-    { TVecishN, union_of(TInt,sval(s_A)), TInitCell, false },
+    { TVecE, TInt, TBottom, false },
+    { TVecE, TStr, TBottom, false },
+    { TVecE, TArrKey, TBottom, false },
+    { TVecN, TInt, TInitCell, false },
+    { TVec, TInt, TInitCell, false },
+    { TSVecN, TInt, TInitUnc, false },
+    { TVecN, TStr, TBottom, false },
+    { TVecN, ival(-1), TBottom, false },
+    { TVecN, ival(0), TInitCell, false },
+    { TSVecN, ival(0), TInitUnc, false },
+    { TVecN, TArrKey, TInitCell, false },
+    { TSVecN, TArrKey, TInitUnc, false },
+    { TVecN, union_of(ival(-1),TStr), TInitCell, false },
+    { TVecN, union_of(ival(0),TStr), TInitCell, false },
+    { TVecN, union_of(TInt,sval(s_A)), TInitCell, false },
 
-    { TDictishE, TInt, TBottom, false },
-    { TDictishE, TStr, TBottom, false },
-    { TDictishE, TArrKey, TBottom, false },
-    { TDictishN, TInt, TInitCell, false },
-    { TDictish, TInt, TInitCell, false },
-    { TDictish, TStr, TInitCell, false },
-    { TSDictishN, TInt, TInitUnc, false },
-    { TDictishN, TStr, TInitCell, false },
-    { TSDictishN, TStr, TInitUnc, false },
-    { TDictishN, ival(-1), TInitCell, false },
-    { TSDictishN, ival(-1), TInitUnc, false },
-    { TDictishN, ival(0), TInitCell, false },
-    { TSDictishN, ival(0), TInitUnc, false },
-    { TDictishN, sval(s_A), TInitCell, false },
-    { TSDictishN, sval(s_A), TInitUnc, false },
-    { TDictishN, union_of(ival(-1),TStr), TInitCell, false },
-    { TDictishN, union_of(ival(0),TStr), TInitCell, false },
-    { TDictishN, union_of(TInt,sval(s_A)), TInitCell, false },
-    { TDictishN, TArrKey, TInitCell, false },
-    { TSDictishN, TArrKey, TInitUnc, false },
+    { TDictE, TInt, TBottom, false },
+    { TDictE, TStr, TBottom, false },
+    { TDictE, TArrKey, TBottom, false },
+    { TDictN, TInt, TInitCell, false },
+    { TDict, TInt, TInitCell, false },
+    { TDict, TStr, TInitCell, false },
+    { TSDictN, TInt, TInitUnc, false },
+    { TDictN, TStr, TInitCell, false },
+    { TSDictN, TStr, TInitUnc, false },
+    { TDictN, ival(-1), TInitCell, false },
+    { TSDictN, ival(-1), TInitUnc, false },
+    { TDictN, ival(0), TInitCell, false },
+    { TSDictN, ival(0), TInitUnc, false },
+    { TDictN, sval(s_A), TInitCell, false },
+    { TSDictN, sval(s_A), TInitUnc, false },
+    { TDictN, union_of(ival(-1),TStr), TInitCell, false },
+    { TDictN, union_of(ival(0),TStr), TInitCell, false },
+    { TDictN, union_of(TInt,sval(s_A)), TInitCell, false },
+    { TDictN, TArrKey, TInitCell, false },
+    { TSDictN, TArrKey, TInitUnc, false },
 
     { TKeysetE, TInt, TBottom, false },
     { TKeysetE, TStr, TBottom, false },
@@ -2731,117 +2713,117 @@ TEST(Type, ArrayLikeElem) {
     { make_specialized_arrval(BSKeysetN, staticKeyset), union_of(TInt,sval(s_A)), union_of(TInt,sval(s_A)), false },
     { make_specialized_arrval(BSKeysetN, staticKeyset), union_of(TInt,sval(s_B)), union_of(TInt,sval(s_B)), false },
 
-    { make_specialized_arrpackedn(BDictishN, TInitCell), TInt, TInitCell, false },
-    { make_specialized_arrpackedn(BDictishN, TInitCell), TStr, TBottom, false },
-    { make_specialized_arrpackedn(BDictishN, TInitCell), TArrKey, TInitCell, false },
-    { make_specialized_arrpackedn(BDictishN, TInitCell), ival(-1), TBottom, false },
-    { make_specialized_arrpackedn(BDictishN, TInitCell), sval(s_A), TBottom, false },
-    { make_specialized_arrpackedn(BDictishN, TInitCell), ival(0), TInitCell, false },
-    { make_specialized_arrpackedn(BSDictishN, TInitUnc), ival(0), TInitUnc, false },
-    { make_specialized_arrpackedn(BDictishN, TObj), ival(0), TObj, false },
-    { make_specialized_arrpackedn(BDictish, TObj), ival(0), TObj, false },
-    { make_specialized_arrpackedn(BDictishN, TSStr), ival(0), TSStr, false },
-    { make_specialized_arrpackedn(BDictishN, TObj), union_of(ival(-1),TStr), TObj, false },
-    { make_specialized_arrpackedn(BDictishN, TObj), union_of(ival(0),TStr), TObj, false },
-    { make_specialized_arrpackedn(BDictishN, TObj), union_of(TInt,sval(s_A)), TObj, false },
+    { make_specialized_arrpackedn(BDictN, TInitCell), TInt, TInitCell, false },
+    { make_specialized_arrpackedn(BDictN, TInitCell), TStr, TBottom, false },
+    { make_specialized_arrpackedn(BDictN, TInitCell), TArrKey, TInitCell, false },
+    { make_specialized_arrpackedn(BDictN, TInitCell), ival(-1), TBottom, false },
+    { make_specialized_arrpackedn(BDictN, TInitCell), sval(s_A), TBottom, false },
+    { make_specialized_arrpackedn(BDictN, TInitCell), ival(0), TInitCell, false },
+    { make_specialized_arrpackedn(BSDictN, TInitUnc), ival(0), TInitUnc, false },
+    { make_specialized_arrpackedn(BDictN, TObj), ival(0), TObj, false },
+    { make_specialized_arrpackedn(BDict, TObj), ival(0), TObj, false },
+    { make_specialized_arrpackedn(BDictN, TSStr), ival(0), TSStr, false },
+    { make_specialized_arrpackedn(BDictN, TObj), union_of(ival(-1),TStr), TObj, false },
+    { make_specialized_arrpackedn(BDictN, TObj), union_of(ival(0),TStr), TObj, false },
+    { make_specialized_arrpackedn(BDictN, TObj), union_of(TInt,sval(s_A)), TObj, false },
 
-    { make_specialized_arrpacked(BDictishN, {TInitCell}), TInt, TInitCell, false },
-    { make_specialized_arrpacked(BDictishN, {TInitCell}), TStr, TBottom, false },
-    { make_specialized_arrpacked(BDictishN, {TInitCell}), TArrKey, TInitCell, false },
-    { make_specialized_arrpacked(BDictishN, {TInitCell}), ival(-1), TBottom, false },
-    { make_specialized_arrpacked(BDictishN, {TInitCell}), sval(s_A), TBottom, false },
-    { make_specialized_arrpacked(BDictishN, {TInitCell}), ival(1), TBottom, false },
-    { make_specialized_arrpacked(BDictishN, {TInitCell}), ival(0), TInitCell, true },
-    { make_specialized_arrpacked(BDictish, {TInitCell}), ival(0), TInitCell, false },
-    { make_specialized_arrpacked(BSDictishN, {TInitUnc}), ival(0), TInitUnc, true },
-    { make_specialized_arrpacked(BSDictish, {TInitUnc}), ival(0), TInitUnc, false },
-    { make_specialized_arrpacked(BDictishN, {TObj}), ival(0), TObj, true },
-    { make_specialized_arrpacked(BDictishN, {TSStr}), TInt, TSStr, false },
-    { make_specialized_arrpacked(BDictishN, {TObj}), union_of(ival(1),TStr), TObj, false },
-    { make_specialized_arrpacked(BDictishN, {TObj}), union_of(ival(0),TStr), TObj, false },
-    { make_specialized_arrpacked(BDictishN, {TObj}), union_of(TInt,sval(s_A)), TObj, false },
-    { make_specialized_arrpacked(BDictishN, {TObj, TInt}), TInt, Type{BObj|BInt}, false },
-    { make_specialized_arrpacked(BDictishN, {TObj, TInt}), ival(0), TObj, true },
-    { make_specialized_arrpacked(BDictishN, {TObj, TInt}), ival(1), TInt, true },
-    { make_specialized_arrpacked(BDictishN, {TObj, TInt}), ival(2), TBottom, false },
+    { make_specialized_arrpacked(BDictN, {TInitCell}), TInt, TInitCell, false },
+    { make_specialized_arrpacked(BDictN, {TInitCell}), TStr, TBottom, false },
+    { make_specialized_arrpacked(BDictN, {TInitCell}), TArrKey, TInitCell, false },
+    { make_specialized_arrpacked(BDictN, {TInitCell}), ival(-1), TBottom, false },
+    { make_specialized_arrpacked(BDictN, {TInitCell}), sval(s_A), TBottom, false },
+    { make_specialized_arrpacked(BDictN, {TInitCell}), ival(1), TBottom, false },
+    { make_specialized_arrpacked(BDictN, {TInitCell}), ival(0), TInitCell, true },
+    { make_specialized_arrpacked(BDict, {TInitCell}), ival(0), TInitCell, false },
+    { make_specialized_arrpacked(BSDictN, {TInitUnc}), ival(0), TInitUnc, true },
+    { make_specialized_arrpacked(BSDict, {TInitUnc}), ival(0), TInitUnc, false },
+    { make_specialized_arrpacked(BDictN, {TObj}), ival(0), TObj, true },
+    { make_specialized_arrpacked(BDictN, {TSStr}), TInt, TSStr, false },
+    { make_specialized_arrpacked(BDictN, {TObj}), union_of(ival(1),TStr), TObj, false },
+    { make_specialized_arrpacked(BDictN, {TObj}), union_of(ival(0),TStr), TObj, false },
+    { make_specialized_arrpacked(BDictN, {TObj}), union_of(TInt,sval(s_A)), TObj, false },
+    { make_specialized_arrpacked(BDictN, {TObj, TInt}), TInt, Type{BObj|BInt}, false },
+    { make_specialized_arrpacked(BDictN, {TObj, TInt}), ival(0), TObj, true },
+    { make_specialized_arrpacked(BDictN, {TObj, TInt}), ival(1), TInt, true },
+    { make_specialized_arrpacked(BDictN, {TObj, TInt}), ival(2), TBottom, false },
 
-    { make_specialized_arrmapn(BDictishN, TArrKey, TObj), TInt, TObj, false },
-    { make_specialized_arrmapn(BDictishN, TArrKey, TObj), TStr, TObj, false },
-    { make_specialized_arrmapn(BDictishN, TArrKey, TObj), TSStr, TObj, false },
-    { make_specialized_arrmapn(BDictishN, TArrKey, TObj), TCStr, TObj, false },
-    { make_specialized_arrmapn(BDictishN, TArrKey, TObj), TArrKey, TObj, false },
-    { make_specialized_arrmapn(BDictishN, TArrKey, TObj), TUncArrKey, TObj, false },
-    { make_specialized_arrmapn(BDictishN, TArrKey, TObj), ival(0), TObj, false },
-    { make_specialized_arrmapn(BDictishN, TArrKey, TObj), ival(-1), TObj, false },
-    { make_specialized_arrmapn(BDictishN, TArrKey, TObj), sval(s_A), TObj, false },
-    { make_specialized_arrmapn(BDictishN, TUncArrKey, TObj), TInt, TObj, false },
-    { make_specialized_arrmapn(BDictishN, TUncArrKey, TObj), TStr, TObj, false },
-    { make_specialized_arrmapn(BDictishN, TUncArrKey, TObj), TSStr, TObj, false },
-    { make_specialized_arrmapn(BDictishN, TUncArrKey, TObj), TCStr, TObj, false },
-    { make_specialized_arrmapn(BDictishN, TUncArrKey, TObj), TArrKey, TObj, false },
-    { make_specialized_arrmapn(BDictishN, TUncArrKey, TObj), TUncArrKey, TObj, false },
-    { make_specialized_arrmapn(BDictishN, TUncArrKey, TSStr), TInt, TSStr, false },
-    { make_specialized_arrmapn(BDictishN, TInt, TObj), TInt, TObj, false },
-    { make_specialized_arrmapn(BDictishN, TInt, TObj), TStr, TBottom, false },
-    { make_specialized_arrmapn(BDictishN, TInt, TObj), TArrKey, TObj, false },
+    { make_specialized_arrmapn(BDictN, TArrKey, TObj), TInt, TObj, false },
+    { make_specialized_arrmapn(BDictN, TArrKey, TObj), TStr, TObj, false },
+    { make_specialized_arrmapn(BDictN, TArrKey, TObj), TSStr, TObj, false },
+    { make_specialized_arrmapn(BDictN, TArrKey, TObj), TCStr, TObj, false },
+    { make_specialized_arrmapn(BDictN, TArrKey, TObj), TArrKey, TObj, false },
+    { make_specialized_arrmapn(BDictN, TArrKey, TObj), TUncArrKey, TObj, false },
+    { make_specialized_arrmapn(BDictN, TArrKey, TObj), ival(0), TObj, false },
+    { make_specialized_arrmapn(BDictN, TArrKey, TObj), ival(-1), TObj, false },
+    { make_specialized_arrmapn(BDictN, TArrKey, TObj), sval(s_A), TObj, false },
+    { make_specialized_arrmapn(BDictN, TUncArrKey, TObj), TInt, TObj, false },
+    { make_specialized_arrmapn(BDictN, TUncArrKey, TObj), TStr, TObj, false },
+    { make_specialized_arrmapn(BDictN, TUncArrKey, TObj), TSStr, TObj, false },
+    { make_specialized_arrmapn(BDictN, TUncArrKey, TObj), TCStr, TObj, false },
+    { make_specialized_arrmapn(BDictN, TUncArrKey, TObj), TArrKey, TObj, false },
+    { make_specialized_arrmapn(BDictN, TUncArrKey, TObj), TUncArrKey, TObj, false },
+    { make_specialized_arrmapn(BDictN, TUncArrKey, TSStr), TInt, TSStr, false },
+    { make_specialized_arrmapn(BDictN, TInt, TObj), TInt, TObj, false },
+    { make_specialized_arrmapn(BDictN, TInt, TObj), TStr, TBottom, false },
+    { make_specialized_arrmapn(BDictN, TInt, TObj), TArrKey, TObj, false },
 
-    { make_specialized_arrmap(BDictishN, mapElems1), TInt, sval(s_B), false },
-    { make_specialized_arrmap(BDictishN, mapElems1), TStr, union_of(TInt,sval(s_BA)), false },
-    { make_specialized_arrmap(BDictishN, mapElems1), TSStr, union_of(TInt,sval(s_BA)), false },
-    { make_specialized_arrmap(BDictishN, mapElems1), TCStr, union_of(TInt,sval(s_BA)), false },
-    { make_specialized_arrmap(BDictishN, mapElems2), TInt, sval(s_B), false },
-    { make_specialized_arrmap(BDictishN, mapElems2), TStr, union_of(TInt,sval(s_BA)), false },
-    { make_specialized_arrmap(BDictishN, mapElems2), TSStr, union_of(TInt,sval(s_BA)), false },
-    { make_specialized_arrmap(BDictishN, mapElems2), TCStr, union_of(TInt,sval(s_BA)), false },
-    { make_specialized_arrmap(BDictishN, mapElems1), TArrKey, TUncArrKey, false },
-    { make_specialized_arrmap(BDictishN, mapElems1), TUncArrKey, TUncArrKey, false },
-    { make_specialized_arrmap(BDictishN, mapElems2), TArrKey, TUncArrKey, false },
-    { make_specialized_arrmap(BDictishN, mapElems2), TUncArrKey, TUncArrKey, false },
-    { make_specialized_arrmap(BDictishN, mapElems3), TInt, TBottom, false },
-    { make_specialized_arrmap(BDictishN, mapElems3), TStr, Type{BObj|BArrKey}, false },
-    { make_specialized_arrmap(BDictishN, mapElems3), ival(100), TBottom, false },
-    { make_specialized_arrmap(BDictishN, mapElems1), ival(0), TBottom, false },
-    { make_specialized_arrmap(BDictishN, mapElems1), sval(s_B), TBottom, false },
-    { make_specialized_arrmap(BDictishN, mapElems1), ival(200), sval(s_B), true },
-    { make_specialized_arrmap(BDictish, mapElems1), ival(200), sval(s_B), false },
-    { make_specialized_arrmap(BDictishN, mapElems1), sval(s_A), ival(100), true },
-    { make_specialized_arrmap(BDictish, mapElems1), sval(s_A), ival(100), false },
-    { make_specialized_arrmap(BDictishN, mapElems1), sval_nonstatic(s_A), ival(100), true },
-    { make_specialized_arrmap(BDictishN, mapElems1), sval_counted(s_A), ival(100), true },
-    { make_specialized_arrmap(BDictishN, mapElems2), ival(200), sval(s_B), true },
-    { make_specialized_arrmap(BDictishN, mapElems2), sval(s_A), ival(100), true },
-    { make_specialized_arrmap(BDictishN, mapElems2), sval_nonstatic(s_A), ival(100), true },
-    { make_specialized_arrmap(BDictishN, mapElems2), sval_counted(s_A), ival(100), true },
-    { make_specialized_arrmap(BDictishN, mapElems3), union_of(ival(0),TStr), Type{BObj|BArrKey}, false },
-    { make_specialized_arrmap(BDictishN, mapElems3), union_of(TInt,sval(s_BA)), Type{BArrKey|BObj}, false },
-    { make_specialized_arrmap(BDictishN, mapElems3), union_of(TInt,sval(s_A)), Type{BArrKey|BObj}, false },
-    { make_specialized_arrmap(BDictishN, mapElems3), union_of(TInt,sval(s_B)), Type{BArrKey|BObj}, false },
-    { make_specialized_arrmap(BDictishN, mapElems1), union_of(ival(0),TStr), union_of(TInt,sval(s_BA)), false },
-    { make_specialized_arrmap(BDictishN, mapElems1), union_of(TInt,sval(s_BA)), TUncArrKey, false },
-    { make_specialized_arrmap(BDictishN, mapElems1), union_of(TInt,sval(s_A)), union_of(TInt,sval(s_B)), false },
-    { make_specialized_arrmap(BDictishN, mapElems1), union_of(ival(200),TStr), TUncArrKey, false },
-    { make_specialized_arrmap(BDictishN, mapElems4), union_of(ival(100),TStr), Type{BObj|BFalse}, false },
-    { make_specialized_arrmap(BDictishN, mapElems4), union_of(ival(200),TStr), Type{BObj|BFalse}, false },
-    { make_specialized_arrmap(BDictishN, mapElems1, TInt, TObj), ival(0), TObj, false },
-    { make_specialized_arrmap(BDictishN, mapElems1, TSStr, TObj), sval(s_BA), TObj, false },
-    { make_specialized_arrmap(BDictishN, mapElems1, TSStr, TObj), sval_nonstatic(s_BA), TObj, false },
-    { make_specialized_arrmap(BDictishN, mapElems1, TSStr, TObj), sval_counted(s_BA), TObj, false },
-    { make_specialized_arrmap(BDictishN, mapElems1, TSStr, TObj), ival(0), TBottom, false },
-    { make_specialized_arrmap(BDictishN, mapElems1, TInt, TObj), sval(s_A), ival(100), true },
-    { make_specialized_arrmap(BDictishN, mapElems1, TStr, TObj), sval(s_A), ival(100), true },
-    { make_specialized_arrmap(BDictishN, mapElems3, TInt, TFalse), TInt, TFalse, false },
-    { make_specialized_arrmap(BDictishN, mapElems3, TInt, TFalse), ival(0), TFalse, false },
-    { make_specialized_arrmap(BDictishN, mapElems3, TStr, TFalse), TInt, TBottom, false },
-    { make_specialized_arrmap(BDictishN, mapElems4, TSStr, TNum), TStr, TNum, false },
-    { make_specialized_arrmap(BDictishN, mapElems4, TSStr, TNum), TCStr, TNum, false },
-    { make_specialized_arrmap(BDictishN, mapElems4, TSStr, TNum), TSStr, TNum, false },
-    { make_specialized_arrmap(BDictishN, mapElems4, TSStr, TNum), sval(s_A), TNum, false },
-    { make_specialized_arrmap(BDictishN, mapElems4, TSStr, TNum), sval_nonstatic(s_A), TNum, false },
-    { make_specialized_arrmap(BDictishN, mapElems4, TSStr, TNum), sval_counted(s_A), TNum, false },
-    { make_specialized_arrmap(BDictishN, mapElems4, TStr, TNum), union_of(ival(0),TStr), Type{BNum|BFalse|BObj}, false },
-    { make_specialized_arrmap(BDictishN, mapElems4, TStr, TNum), union_of(ival(100),TStr), Type{BObj|BNum|BFalse}, false },
-    { make_specialized_arrmap(BDictishN, mapElems3, TInt, TNum), union_of(TInt,sval(s_BA)), Type{BObj|BNum|BStr}, false },
-    { make_specialized_arrmap(BDictishN, mapElems3, TInt, TNum), union_of(TInt,sval(s_A)), Type{BObj|BNum|BStr}, false }
+    { make_specialized_arrmap(BDictN, mapElems1), TInt, sval(s_B), false },
+    { make_specialized_arrmap(BDictN, mapElems1), TStr, union_of(TInt,sval(s_BA)), false },
+    { make_specialized_arrmap(BDictN, mapElems1), TSStr, union_of(TInt,sval(s_BA)), false },
+    { make_specialized_arrmap(BDictN, mapElems1), TCStr, union_of(TInt,sval(s_BA)), false },
+    { make_specialized_arrmap(BDictN, mapElems2), TInt, sval(s_B), false },
+    { make_specialized_arrmap(BDictN, mapElems2), TStr, union_of(TInt,sval(s_BA)), false },
+    { make_specialized_arrmap(BDictN, mapElems2), TSStr, union_of(TInt,sval(s_BA)), false },
+    { make_specialized_arrmap(BDictN, mapElems2), TCStr, union_of(TInt,sval(s_BA)), false },
+    { make_specialized_arrmap(BDictN, mapElems1), TArrKey, TUncArrKey, false },
+    { make_specialized_arrmap(BDictN, mapElems1), TUncArrKey, TUncArrKey, false },
+    { make_specialized_arrmap(BDictN, mapElems2), TArrKey, TUncArrKey, false },
+    { make_specialized_arrmap(BDictN, mapElems2), TUncArrKey, TUncArrKey, false },
+    { make_specialized_arrmap(BDictN, mapElems3), TInt, TBottom, false },
+    { make_specialized_arrmap(BDictN, mapElems3), TStr, Type{BObj|BArrKey}, false },
+    { make_specialized_arrmap(BDictN, mapElems3), ival(100), TBottom, false },
+    { make_specialized_arrmap(BDictN, mapElems1), ival(0), TBottom, false },
+    { make_specialized_arrmap(BDictN, mapElems1), sval(s_B), TBottom, false },
+    { make_specialized_arrmap(BDictN, mapElems1), ival(200), sval(s_B), true },
+    { make_specialized_arrmap(BDict, mapElems1), ival(200), sval(s_B), false },
+    { make_specialized_arrmap(BDictN, mapElems1), sval(s_A), ival(100), true },
+    { make_specialized_arrmap(BDict, mapElems1), sval(s_A), ival(100), false },
+    { make_specialized_arrmap(BDictN, mapElems1), sval_nonstatic(s_A), ival(100), true },
+    { make_specialized_arrmap(BDictN, mapElems1), sval_counted(s_A), ival(100), true },
+    { make_specialized_arrmap(BDictN, mapElems2), ival(200), sval(s_B), true },
+    { make_specialized_arrmap(BDictN, mapElems2), sval(s_A), ival(100), true },
+    { make_specialized_arrmap(BDictN, mapElems2), sval_nonstatic(s_A), ival(100), true },
+    { make_specialized_arrmap(BDictN, mapElems2), sval_counted(s_A), ival(100), true },
+    { make_specialized_arrmap(BDictN, mapElems3), union_of(ival(0),TStr), Type{BObj|BArrKey}, false },
+    { make_specialized_arrmap(BDictN, mapElems3), union_of(TInt,sval(s_BA)), Type{BArrKey|BObj}, false },
+    { make_specialized_arrmap(BDictN, mapElems3), union_of(TInt,sval(s_A)), Type{BArrKey|BObj}, false },
+    { make_specialized_arrmap(BDictN, mapElems3), union_of(TInt,sval(s_B)), Type{BArrKey|BObj}, false },
+    { make_specialized_arrmap(BDictN, mapElems1), union_of(ival(0),TStr), union_of(TInt,sval(s_BA)), false },
+    { make_specialized_arrmap(BDictN, mapElems1), union_of(TInt,sval(s_BA)), TUncArrKey, false },
+    { make_specialized_arrmap(BDictN, mapElems1), union_of(TInt,sval(s_A)), union_of(TInt,sval(s_B)), false },
+    { make_specialized_arrmap(BDictN, mapElems1), union_of(ival(200),TStr), TUncArrKey, false },
+    { make_specialized_arrmap(BDictN, mapElems4), union_of(ival(100),TStr), Type{BObj|BFalse}, false },
+    { make_specialized_arrmap(BDictN, mapElems4), union_of(ival(200),TStr), Type{BObj|BFalse}, false },
+    { make_specialized_arrmap(BDictN, mapElems1, TInt, TObj), ival(0), TObj, false },
+    { make_specialized_arrmap(BDictN, mapElems1, TSStr, TObj), sval(s_BA), TObj, false },
+    { make_specialized_arrmap(BDictN, mapElems1, TSStr, TObj), sval_nonstatic(s_BA), TObj, false },
+    { make_specialized_arrmap(BDictN, mapElems1, TSStr, TObj), sval_counted(s_BA), TObj, false },
+    { make_specialized_arrmap(BDictN, mapElems1, TSStr, TObj), ival(0), TBottom, false },
+    { make_specialized_arrmap(BDictN, mapElems1, TInt, TObj), sval(s_A), ival(100), true },
+    { make_specialized_arrmap(BDictN, mapElems1, TStr, TObj), sval(s_A), ival(100), true },
+    { make_specialized_arrmap(BDictN, mapElems3, TInt, TFalse), TInt, TFalse, false },
+    { make_specialized_arrmap(BDictN, mapElems3, TInt, TFalse), ival(0), TFalse, false },
+    { make_specialized_arrmap(BDictN, mapElems3, TStr, TFalse), TInt, TBottom, false },
+    { make_specialized_arrmap(BDictN, mapElems4, TSStr, TNum), TStr, TNum, false },
+    { make_specialized_arrmap(BDictN, mapElems4, TSStr, TNum), TCStr, TNum, false },
+    { make_specialized_arrmap(BDictN, mapElems4, TSStr, TNum), TSStr, TNum, false },
+    { make_specialized_arrmap(BDictN, mapElems4, TSStr, TNum), sval(s_A), TNum, false },
+    { make_specialized_arrmap(BDictN, mapElems4, TSStr, TNum), sval_nonstatic(s_A), TNum, false },
+    { make_specialized_arrmap(BDictN, mapElems4, TSStr, TNum), sval_counted(s_A), TNum, false },
+    { make_specialized_arrmap(BDictN, mapElems4, TStr, TNum), union_of(ival(0),TStr), Type{BNum|BFalse|BObj}, false },
+    { make_specialized_arrmap(BDictN, mapElems4, TStr, TNum), union_of(ival(100),TStr), Type{BObj|BNum|BFalse}, false },
+    { make_specialized_arrmap(BDictN, mapElems3, TInt, TNum), union_of(TInt,sval(s_BA)), Type{BObj|BNum|BStr}, false },
+    { make_specialized_arrmap(BDictN, mapElems3, TInt, TNum), union_of(TInt,sval(s_A)), Type{BObj|BNum|BStr}, false }
   };
   for (auto const& t : tests) {
     auto const elem = array_like_elem(std::get<0>(t), std::get<1>(t));
@@ -2906,7 +2888,7 @@ TEST(Type, ArrayLikeNewElem) {
         }
       }
 
-      if (t.subtypeAmong(BVecish, BArrLike)) {
+      if (t.subtypeAmong(BVec, BArrLike)) {
         EXPECT_FALSE(newelem.second);
       }
 
@@ -3021,24 +3003,24 @@ TEST(Type, ArrayLikeNewElem) {
   auto const staticDict = static_dict(s_A, 100, 200, s_B, s_C, s_BA);
 
   const std::vector<std::tuple<Type, Type, Type, bool>> tests{
-    { TVecishE, TObj, make_specialized_arrpacked(BVecishN, {TObj}), false },
-    { TSVecishE, TObj, make_specialized_arrpacked(BVecishN, {TObj}), false },
-    { TCVecishE, TObj, make_specialized_arrpacked(BVecishN, {TObj}), false },
-    { TVecishN, TObj, TVecishN, false },
-    { TSVecishN, TObj, TVecishN, false },
-    { TCVecishN, TObj, TVecishN, false },
-    { TVecish, TObj, TVecishN, false },
-    { TSVecish, TObj, TVecishN, false },
-    { TCVecish, TObj, TVecishN, false },
-    { TDictishE, TObj, make_specialized_arrpacked(BDictishN, {TObj}), false },
-    { TSDictishE, TObj, make_specialized_arrpacked(BDictishN, {TObj}), false },
-    { TCDictishE, TObj, make_specialized_arrpacked(BDictishN, {TObj}), false },
-    { TDictishN, TObj, TDictishN, true },
-    { TSDictishN, TObj, TDictishN, true },
-    { TCDictishN, TObj, TDictishN, true },
-    { TDictish, TObj, TDictishN, true },
-    { TSDictish, TObj, TDictishN, true },
-    { TCDictish, TObj, TDictishN, true },
+    { TVecE, TObj, make_specialized_arrpacked(BVecN, {TObj}), false },
+    { TSVecE, TObj, make_specialized_arrpacked(BVecN, {TObj}), false },
+    { TCVecE, TObj, make_specialized_arrpacked(BVecN, {TObj}), false },
+    { TVecN, TObj, TVecN, false },
+    { TSVecN, TObj, TVecN, false },
+    { TCVecN, TObj, TVecN, false },
+    { TVec, TObj, TVecN, false },
+    { TSVec, TObj, TVecN, false },
+    { TCVec, TObj, TVecN, false },
+    { TDictE, TObj, make_specialized_arrpacked(BDictN, {TObj}), false },
+    { TSDictE, TObj, make_specialized_arrpacked(BDictN, {TObj}), false },
+    { TCDictE, TObj, make_specialized_arrpacked(BDictN, {TObj}), false },
+    { TDictN, TObj, TDictN, true },
+    { TSDictN, TObj, TDictN, true },
+    { TCDictN, TObj, TDictN, true },
+    { TDict, TObj, TDictN, true },
+    { TSDict, TObj, TDictN, true },
+    { TCDict, TObj, TDictN, true },
     { TKeysetE, TObj, TBottom, true },
     { TKeysetN, TObj, TBottom, true },
     { TKeyset, TObj, TBottom, true },
@@ -3068,18 +3050,18 @@ TEST(Type, ArrayLikeNewElem) {
     { make_specialized_arrval(BSDictN, staticDict), TInt, make_specialized_arrmap(BDictN, mapElem6), false },
     { make_specialized_arrval(BSDict, staticDict), TInt, make_specialized_arrmapn(BDictN, TUncArrKey, TUncArrKey), false },
 
-    { make_specialized_arrpackedn(BVecishN, TInt), TStr, make_specialized_arrpackedn(BVecishN, TArrKey), false },
-    { make_specialized_arrpackedn(BSVecishN, TSStr), TInt, make_specialized_arrpackedn(BVecishN, TUncArrKey), false },
-    { make_specialized_arrpackedn(BVecishN, Type{BInitCell & ~BObj}), TObj, TVecishN, false },
-    { make_specialized_arrpackedn(BVecish, TInt), TStr, make_specialized_arrpackedn(BVecishN, TArrKey), false },
-    { make_specialized_arrpackedn(BSVecish, TSStr), TInt, make_specialized_arrpackedn(BVecishN, TUncArrKey), false },
-    { make_specialized_arrpackedn(BVecish, Type{BInitCell & ~BObj}), TObj, TVecishN, false },
-    { make_specialized_arrpackedn(BDictishN, TInt), TStr, make_specialized_arrpackedn(BDictishN, TArrKey), false },
-    { make_specialized_arrpackedn(BSDictishN, TSStr), TInt, make_specialized_arrpackedn(BDictishN, TUncArrKey), false },
-    { make_specialized_arrpackedn(BDictishN, Type{BInitCell & ~BObj}), TObj, make_specialized_arrpackedn(BDictishN, TInitCell), false },
-    { make_specialized_arrpackedn(BDictish, TInt), TStr, make_specialized_arrpackedn(BDictishN, TArrKey), false },
-    { make_specialized_arrpackedn(BSDictish, TSStr), TInt, make_specialized_arrpackedn(BDictishN, TUncArrKey), false },
-    { make_specialized_arrpackedn(BDictish, Type{BInitCell & ~BObj}), TObj, make_specialized_arrpackedn(BDictishN, TInitCell), false },
+    { make_specialized_arrpackedn(BVecN, TInt), TStr, make_specialized_arrpackedn(BVecN, TArrKey), false },
+    { make_specialized_arrpackedn(BSVecN, TSStr), TInt, make_specialized_arrpackedn(BVecN, TUncArrKey), false },
+    { make_specialized_arrpackedn(BVecN, Type{BInitCell & ~BObj}), TObj, TVecN, false },
+    { make_specialized_arrpackedn(BVec, TInt), TStr, make_specialized_arrpackedn(BVecN, TArrKey), false },
+    { make_specialized_arrpackedn(BSVec, TSStr), TInt, make_specialized_arrpackedn(BVecN, TUncArrKey), false },
+    { make_specialized_arrpackedn(BVec, Type{BInitCell & ~BObj}), TObj, TVecN, false },
+    { make_specialized_arrpackedn(BDictN, TInt), TStr, make_specialized_arrpackedn(BDictN, TArrKey), false },
+    { make_specialized_arrpackedn(BSDictN, TSStr), TInt, make_specialized_arrpackedn(BDictN, TUncArrKey), false },
+    { make_specialized_arrpackedn(BDictN, Type{BInitCell & ~BObj}), TObj, make_specialized_arrpackedn(BDictN, TInitCell), false },
+    { make_specialized_arrpackedn(BDict, TInt), TStr, make_specialized_arrpackedn(BDictN, TArrKey), false },
+    { make_specialized_arrpackedn(BSDict, TSStr), TInt, make_specialized_arrpackedn(BDictN, TUncArrKey), false },
+    { make_specialized_arrpackedn(BDict, Type{BInitCell & ~BObj}), TObj, make_specialized_arrpackedn(BDictN, TInitCell), false },
     { make_specialized_arrpackedn(BKeyset, TInt), TInt, make_specialized_arrmapn(BKeysetN, TInt, TInt), false },
     { make_specialized_arrpackedn(BKeyset, TInt), TStr, TKeysetN, false },
     { make_specialized_arrpackedn(BKeyset, TInt), TSStr, make_specialized_arrmapn(BKeysetN, TUncArrKey, TUncArrKey), false },
@@ -3089,10 +3071,10 @@ TEST(Type, ArrayLikeNewElem) {
     { make_specialized_arrpackedn(BKeyset, TInt), ival(1), make_specialized_arrmapn(BKeysetN, TInt, TInt), false },
     { make_specialized_arrpackedn(BKeysetN, TInt), ival(1), make_specialized_arrpackedn(BKeysetN, TInt), false },
 
-    { make_specialized_arrpacked(BVecishN, {TObj}), TStr, make_specialized_arrpacked(BVecishN, {TObj, TStr}), false },
-    { make_specialized_arrpacked(BSVecishN, {TInt}), TStr, make_specialized_arrpacked(BVecishN, {TInt, TStr}), false },
-    { make_specialized_arrpacked(BVecish, {TObj}), TStr, make_specialized_arrpackedn(BVecishN, Type{BStr|BObj}), false },
-    { make_specialized_arrpacked(BSVecish, {TInt}), TStr, make_specialized_arrpackedn(BVecishN, TArrKey), false },
+    { make_specialized_arrpacked(BVecN, {TObj}), TStr, make_specialized_arrpacked(BVecN, {TObj, TStr}), false },
+    { make_specialized_arrpacked(BSVecN, {TInt}), TStr, make_specialized_arrpacked(BVecN, {TInt, TStr}), false },
+    { make_specialized_arrpacked(BVec, {TObj}), TStr, make_specialized_arrpackedn(BVecN, Type{BStr|BObj}), false },
+    { make_specialized_arrpacked(BSVec, {TInt}), TStr, make_specialized_arrpackedn(BVecN, TArrKey), false },
     { make_specialized_arrpacked(BKeysetN, {ival(0)}), TStr, TKeysetN, false },
     { make_specialized_arrpacked(BKeysetN, {ival(0),ival(1)}), TStr, TKeysetN, false },
     { make_specialized_arrpacked(BKeyset, {ival(0)}), sval(s_A),
@@ -3114,28 +3096,28 @@ TEST(Type, ArrayLikeNewElem) {
     { make_specialized_arrpacked(BKeyset, {ival(0),ival(1)}), ival(0), make_specialized_arrpackedn(BKeysetN, TInt), false },
     { make_specialized_arrpacked(BKeyset, {ival(0)}), ival(1), make_specialized_arrmapn(BKeysetN, TInt, TInt), false },
 
-    { make_specialized_arrmapn(BDictishN, TInt, TObj), TStr, make_specialized_arrmapn(BDictishN, TInt, Type{BObj|BStr}), true },
-    { make_specialized_arrmapn(BSDictishN, TSStr, TSStr), TInt, make_specialized_arrmapn(BDictishN, TUncArrKey, TUncArrKey), true },
-    { make_specialized_arrmapn(BDictish, TArrKey, TStr), Type{BInitCell & ~BStr}, TDictishN, true },
-    { make_specialized_arrmapn(BDictish, TStr, TInitCell), TInitCell, TDictishN, true },
+    { make_specialized_arrmapn(BDictN, TInt, TObj), TStr, make_specialized_arrmapn(BDictN, TInt, Type{BObj|BStr}), true },
+    { make_specialized_arrmapn(BSDictN, TSStr, TSStr), TInt, make_specialized_arrmapn(BDictN, TUncArrKey, TUncArrKey), true },
+    { make_specialized_arrmapn(BDict, TArrKey, TStr), Type{BInitCell & ~BStr}, TDictN, true },
+    { make_specialized_arrmapn(BDict, TStr, TInitCell), TInitCell, TDictN, true },
     { make_specialized_arrmapn(BKeysetN, TInt, TInt), TStr, TKeysetN, false },
     { make_specialized_arrmapn(BKeyset, TInt, TInt), TStr, TKeysetN, false },
     { make_specialized_arrmapn(BKeysetN, TCStr, TCStr), TSStr, make_specialized_arrmapn(BKeysetN, TStr, TStr), false },
     { make_specialized_arrmapn(BKeyset, TCStr, TCStr), TSStr, make_specialized_arrmapn(BKeysetN, TStr, TStr), false },
 
-    { make_specialized_arrmap(BDictishN, mapElem1), TFalse, make_specialized_arrmap(BDictishN, mapElem4), false },
-    { make_specialized_arrmap(BDictishN, mapElem2), TInitCell, make_specialized_arrmap(BDictishN, mapElem5), false },
-    { make_specialized_arrmap(BDictishN, mapElem3), TFalse, make_specialized_arrmap(BDictishN, mapElem3), true },
-    { make_specialized_arrmap(BDictishN, mapElem1, TStr, TInt),
-      TFalse, make_specialized_arrmap(BDictishN, mapElem1, TArrKey, Type{BInt|BFalse}), true },
-    { make_specialized_arrmap(BDictishN, mapElem1, ival(10), TInt),
-      TFalse, make_specialized_arrmap(BDictishN, mapElem1, TInt, Type{BInt|BFalse}), false },
-    { make_specialized_arrmap(BDictishN, mapElem1, ival(std::numeric_limits<int64_t>::max()), TInt),
-      TFalse, make_specialized_arrmap(BDictishN, mapElem1, TInt, Type{BInt|BFalse}), true },
-    { make_specialized_arrmap(BDictish, mapElem1), TFalse,
-      make_specialized_arrmapn(BDictishN, TUncArrKey, Type{BInt|BObj|BFalse}), false },
-    { make_specialized_arrmap(BDictish, mapElem3), TFalse,
-      make_specialized_arrmapn(BDictishN, TInt, TInitCell), true },
+    { make_specialized_arrmap(BDictN, mapElem1), TFalse, make_specialized_arrmap(BDictN, mapElem4), false },
+    { make_specialized_arrmap(BDictN, mapElem2), TInitCell, make_specialized_arrmap(BDictN, mapElem5), false },
+    { make_specialized_arrmap(BDictN, mapElem3), TFalse, make_specialized_arrmap(BDictN, mapElem3), true },
+    { make_specialized_arrmap(BDictN, mapElem1, TStr, TInt),
+      TFalse, make_specialized_arrmap(BDictN, mapElem1, TArrKey, Type{BInt|BFalse}), true },
+    { make_specialized_arrmap(BDictN, mapElem1, ival(10), TInt),
+      TFalse, make_specialized_arrmap(BDictN, mapElem1, TInt, Type{BInt|BFalse}), false },
+    { make_specialized_arrmap(BDictN, mapElem1, ival(std::numeric_limits<int64_t>::max()), TInt),
+      TFalse, make_specialized_arrmap(BDictN, mapElem1, TInt, Type{BInt|BFalse}), true },
+    { make_specialized_arrmap(BDict, mapElem1), TFalse,
+      make_specialized_arrmapn(BDictN, TUncArrKey, Type{BInt|BObj|BFalse}), false },
+    { make_specialized_arrmap(BDict, mapElem3), TFalse,
+      make_specialized_arrmapn(BDictN, TInt, TInitCell), true },
     { make_specialized_arrmap(BKeysetN, mapElem10), TInt, make_specialized_arrmap(BKeysetN, mapElem10, TInt, TInt), false },
     { make_specialized_arrmap(BKeysetN, mapElem10), TSStr, make_specialized_arrmap(BKeysetN, mapElem10, TSStr, TSStr), false },
     { make_specialized_arrmap(BKeysetN, mapElem10, TInt, TInt), TStr, make_specialized_arrmap(BKeysetN, mapElem10, TArrKey, TArrKey), false },
@@ -3239,11 +3221,11 @@ TEST(Type, ArrayLikeSetElem) {
         if (t.couldBe(BKeyset)) {
           EXPECT_TRUE(set.second);
         }
-        if (t.subtypeAmong(BDictish, BArrLike)) {
+        if (t.subtypeAmong(BDict, BArrLike)) {
           EXPECT_FALSE(set.second);
         }
-        if (t.subtypeAmong(BVecish, BArrLike)) {
-          if (!k.couldBe(BInt) || !t.couldBe(BVecishN)) {
+        if (t.subtypeAmong(BVec, BArrLike)) {
+          if (!k.couldBe(BInt) || !t.couldBe(BVecN)) {
             EXPECT_FALSE(set.first.couldBe(BArrLike));
           }
         }
@@ -3363,27 +3345,27 @@ TEST(Type, ArrayLikeSetElem) {
   auto const staticDict1 = static_dict(s_A, 100, s_B, 200);
 
   const std::vector<std::tuple<Type, Type, Type, Type, bool>> tests{
-    { TVecishN, TStr, TInitCell, TBottom, true },
-    { TVecishE, TStr, TInitCell, TBottom, true },
-    { TVecish, TStr, TInitCell, TBottom, true },
-    { TVecishE, TInt, TInitCell, TBottom, true },
-    { TVecishN, ival(-1), TInitCell, TBottom, true },
-    { TSVecish, TInt, TInitCell, TVecishN, true },
-    { TSVecishN, TInt, TInitCell, TVecishN, true },
-    { TVecish, TInt, TInitCell, TVecishN, true },
-    { TVecishN, TInt, TInitCell, TVecishN, true },
-    { TVecishN, ival(0), TInitCell, TVecishN, true },
-    { TDictishE, TInt, TStr, make_specialized_arrmapn(BDictishN, TInt, TStr), false },
-    { TSDictishE, TInt, TStr, make_specialized_arrmapn(BDictishN, TInt, TStr), false },
-    { TCDictishE, TInt, TStr, make_specialized_arrmapn(BDictishN, TInt, TStr), false },
-    { TDictishE, TArrKey, TInitCell, TDictishN, false },
-    { TDictishE, ival(0), TObj, make_specialized_arrpacked(BDictishN, {TObj}), false },
-    { TDictishE, sval(s_A), TObj, make_specialized_arrmap(BDictishN, mapElem1), false },
-    { TDictishE, sval_nonstatic(s_A), TObj, make_specialized_arrmap(BDictishN, mapElem2), false },
-    { TDictishN, TInt, TStr, TDictishN, false },
-    { TDictish, TInt, TStr, TDictishN, false },
-    { TSDictish, TInt, TStr, TDictishN, false },
-    { TSDictishN, TInt, TStr, TDictishN, false },
+    { TVecN, TStr, TInitCell, TBottom, true },
+    { TVecE, TStr, TInitCell, TBottom, true },
+    { TVec, TStr, TInitCell, TBottom, true },
+    { TVecE, TInt, TInitCell, TBottom, true },
+    { TVecN, ival(-1), TInitCell, TBottom, true },
+    { TSVec, TInt, TInitCell, TVecN, true },
+    { TSVecN, TInt, TInitCell, TVecN, true },
+    { TVec, TInt, TInitCell, TVecN, true },
+    { TVecN, TInt, TInitCell, TVecN, true },
+    { TVecN, ival(0), TInitCell, TVecN, true },
+    { TDictE, TInt, TStr, make_specialized_arrmapn(BDictN, TInt, TStr), false },
+    { TSDictE, TInt, TStr, make_specialized_arrmapn(BDictN, TInt, TStr), false },
+    { TCDictE, TInt, TStr, make_specialized_arrmapn(BDictN, TInt, TStr), false },
+    { TDictE, TArrKey, TInitCell, TDictN, false },
+    { TDictE, ival(0), TObj, make_specialized_arrpacked(BDictN, {TObj}), false },
+    { TDictE, sval(s_A), TObj, make_specialized_arrmap(BDictN, mapElem1), false },
+    { TDictE, sval_nonstatic(s_A), TObj, make_specialized_arrmap(BDictN, mapElem2), false },
+    { TDictN, TInt, TStr, TDictN, false },
+    { TDict, TInt, TStr, TDictN, false },
+    { TSDict, TInt, TStr, TDictN, false },
+    { TSDictN, TInt, TStr, TDictN, false },
     { TKeysetN, TArrKey, TArrKey, TBottom, true },
     { TKeysetE, TArrKey, TArrKey, TBottom, true },
     { TKeyset, TArrKey, TArrKey, TBottom, true },
@@ -3398,91 +3380,91 @@ TEST(Type, ArrayLikeSetElem) {
     { make_specialized_arrval(BSDictN, staticDict1), TStr, TFalse, make_specialized_arrmap(BDictN, mapElem19, TStr, TFalse), false },
     { make_specialized_arrval(BSDictN, staticDict1), sval(s_B), ival(300), make_specialized_arrmap(BDictN, mapElem20), false },
 
-    { make_specialized_arrpackedn(BVecishN, TObj), TInt, TStr, make_specialized_arrpackedn(BVecishN, Type{BObj|BStr}), true },
-    { make_specialized_arrpackedn(BVecishN, Type{BInitCell & ~BObj}), TInt, TObj, TVecishN, true },
-    { make_specialized_arrpackedn(BVecishN, TObj), ival(-1), TStr, TBottom, true },
-    { make_specialized_arrpackedn(BVecishN, TObj), ival(0), TStr, make_specialized_arrpackedn(BVecishN, Type{BObj|BStr}), false },
-    { make_specialized_arrpackedn(BVecish, TObj), ival(0), TStr, make_specialized_arrpackedn(BVecishN, Type{BObj|BStr}), true },
-    { make_specialized_arrpackedn(BVecishN, TObj), ival(1), TStr, make_specialized_arrpackedn(BVecishN, Type{BObj|BStr}), true },
-    { make_specialized_arrpackedn(BVecishN, TObj), union_of(ival(0),TStr), TStr, make_specialized_arrpackedn(BVecishN, Type{BObj|BStr}), true },
-    { make_specialized_arrpackedn(BDictishN, TObj), TInt, TStr, make_specialized_arrmapn(BDictishN, TInt, Type{BObj|BStr}), false },
-    { make_specialized_arrpackedn(BDictishN, Type{BInitCell & ~BObj}), TArrKey, TObj, TDictishN, false },
-    { make_specialized_arrpackedn(BDictishN, TInitCell), TArrKey, TInitCell, TDictishN, false },
-    { make_specialized_arrpackedn(BDictishN, TObj), sval(s_A), TObj, make_specialized_arrmapn(BDictishN, union_of(TInt,sval(s_A)), TObj), false },
-    { make_specialized_arrpackedn(BDictishN, TObj), ival(0), TStr, make_specialized_arrpackedn(BDictishN, Type{BObj|BStr}), false },
-    { make_specialized_arrpackedn(BDictishN, TObj), ival(1), TStr, make_specialized_arrpackedn(BDictishN, Type{BObj|BStr}), false },
-    { make_specialized_arrpackedn(BDictish, TObj), ival(1), TStr, make_specialized_arrmapn(BDictishN, TInt, Type{BObj|BStr}), false },
+    { make_specialized_arrpackedn(BVecN, TObj), TInt, TStr, make_specialized_arrpackedn(BVecN, Type{BObj|BStr}), true },
+    { make_specialized_arrpackedn(BVecN, Type{BInitCell & ~BObj}), TInt, TObj, TVecN, true },
+    { make_specialized_arrpackedn(BVecN, TObj), ival(-1), TStr, TBottom, true },
+    { make_specialized_arrpackedn(BVecN, TObj), ival(0), TStr, make_specialized_arrpackedn(BVecN, Type{BObj|BStr}), false },
+    { make_specialized_arrpackedn(BVec, TObj), ival(0), TStr, make_specialized_arrpackedn(BVecN, Type{BObj|BStr}), true },
+    { make_specialized_arrpackedn(BVecN, TObj), ival(1), TStr, make_specialized_arrpackedn(BVecN, Type{BObj|BStr}), true },
+    { make_specialized_arrpackedn(BVecN, TObj), union_of(ival(0),TStr), TStr, make_specialized_arrpackedn(BVecN, Type{BObj|BStr}), true },
+    { make_specialized_arrpackedn(BDictN, TObj), TInt, TStr, make_specialized_arrmapn(BDictN, TInt, Type{BObj|BStr}), false },
+    { make_specialized_arrpackedn(BDictN, Type{BInitCell & ~BObj}), TArrKey, TObj, TDictN, false },
+    { make_specialized_arrpackedn(BDictN, TInitCell), TArrKey, TInitCell, TDictN, false },
+    { make_specialized_arrpackedn(BDictN, TObj), sval(s_A), TObj, make_specialized_arrmapn(BDictN, union_of(TInt,sval(s_A)), TObj), false },
+    { make_specialized_arrpackedn(BDictN, TObj), ival(0), TStr, make_specialized_arrpackedn(BDictN, Type{BObj|BStr}), false },
+    { make_specialized_arrpackedn(BDictN, TObj), ival(1), TStr, make_specialized_arrpackedn(BDictN, Type{BObj|BStr}), false },
+    { make_specialized_arrpackedn(BDict, TObj), ival(1), TStr, make_specialized_arrmapn(BDictN, TInt, Type{BObj|BStr}), false },
 
-    { make_specialized_arrpacked(BVecishN, {TStr}), TInt, TInt, make_specialized_arrpacked(BVecishN, {TArrKey}), true },
-    { make_specialized_arrpacked(BVecishN, {TStr, TObj}), TInt, TInt, make_specialized_arrpacked(BVecishN, {TArrKey, Type{BObj|BInt}}), true },
-    { make_specialized_arrpacked(BVecishN, {TStr}), ival(-1), TInt, TBottom, true },
-    { make_specialized_arrpacked(BVecishN, {TStr}), ival(1), TInt, TBottom, true },
-    { make_specialized_arrpacked(BVecishN, {TStr, TObj}), ival(1), TInt, make_specialized_arrpacked(BVecishN, {TStr, TInt}), false },
-    { make_specialized_arrpacked(BVecish, {TStr, TObj}), ival(1), TInt, make_specialized_arrpacked(BVecishN, {TStr, TInt}), true },
-    { make_specialized_arrpacked(BVecishN, {TStr, TObj}), union_of(ival(1),TStr), TInt, make_specialized_arrpacked(BVecishN, {TArrKey, Type{BInt|BObj}}), true },
-    { make_specialized_arrpacked(BDictishN, {TObj}), TInt, TStr, make_specialized_arrmapn(BDictishN, TInt, Type{BObj|BStr}), false },
-    { make_specialized_arrpacked(BDictishN, {TObj}), TStr, TObj, make_specialized_arrmapn(BDictishN, union_of(ival(0),TStr), TObj), false },
-    { make_specialized_arrpacked(BDictishN, {TInitCell}), TStr, TInitCell, TDictishN, false },
-    { make_specialized_arrpacked(BDictishN, {TInitCell, TInitCell}), TStr, TInitCell, TDictishN, false },
-    { make_specialized_arrpacked(BDictishN, {TInt, TObj}), sval(s_A), TFalse, make_specialized_arrmap(BDictishN, mapElem3), false },
-    { make_specialized_arrpacked(BDictish, {TInt, TObj}), sval(s_A), TFalse, make_specialized_arrmapn(BDictishN, union_of(TInt,sval(s_A)), Type{BInt|BObj|BFalse}), false },
-    { make_specialized_arrpacked(BDictishN, {TInt}), ival(-1), TStr, make_specialized_arrmap(BDictishN, mapElem4), false },
-    { make_specialized_arrpacked(BDictishN, {TInt}), ival(2), TStr, make_specialized_arrmap(BDictishN, mapElem5), false },
-    { make_specialized_arrpacked(BDictish, {TInt}), ival(-1), TStr, make_specialized_arrmapn(BDictishN, TInt, TArrKey), false },
-    { make_specialized_arrpacked(BDictish, {TInt}), ival(2), TStr, make_specialized_arrmapn(BDictishN, TInt, TArrKey), false },
-    { make_specialized_arrpacked(BDictishN, {TInt}), ival(0), TStr, make_specialized_arrpacked(BDictishN, {TStr}), false },
-    { make_specialized_arrpacked(BDictishN, {TInt}), ival(1), TStr, make_specialized_arrpacked(BDictishN, {TInt, TStr}), false },
+    { make_specialized_arrpacked(BVecN, {TStr}), TInt, TInt, make_specialized_arrpacked(BVecN, {TArrKey}), true },
+    { make_specialized_arrpacked(BVecN, {TStr, TObj}), TInt, TInt, make_specialized_arrpacked(BVecN, {TArrKey, Type{BObj|BInt}}), true },
+    { make_specialized_arrpacked(BVecN, {TStr}), ival(-1), TInt, TBottom, true },
+    { make_specialized_arrpacked(BVecN, {TStr}), ival(1), TInt, TBottom, true },
+    { make_specialized_arrpacked(BVecN, {TStr, TObj}), ival(1), TInt, make_specialized_arrpacked(BVecN, {TStr, TInt}), false },
+    { make_specialized_arrpacked(BVec, {TStr, TObj}), ival(1), TInt, make_specialized_arrpacked(BVecN, {TStr, TInt}), true },
+    { make_specialized_arrpacked(BVecN, {TStr, TObj}), union_of(ival(1),TStr), TInt, make_specialized_arrpacked(BVecN, {TArrKey, Type{BInt|BObj}}), true },
+    { make_specialized_arrpacked(BDictN, {TObj}), TInt, TStr, make_specialized_arrmapn(BDictN, TInt, Type{BObj|BStr}), false },
+    { make_specialized_arrpacked(BDictN, {TObj}), TStr, TObj, make_specialized_arrmapn(BDictN, union_of(ival(0),TStr), TObj), false },
+    { make_specialized_arrpacked(BDictN, {TInitCell}), TStr, TInitCell, TDictN, false },
+    { make_specialized_arrpacked(BDictN, {TInitCell, TInitCell}), TStr, TInitCell, TDictN, false },
+    { make_specialized_arrpacked(BDictN, {TInt, TObj}), sval(s_A), TFalse, make_specialized_arrmap(BDictN, mapElem3), false },
+    { make_specialized_arrpacked(BDict, {TInt, TObj}), sval(s_A), TFalse, make_specialized_arrmapn(BDictN, union_of(TInt,sval(s_A)), Type{BInt|BObj|BFalse}), false },
+    { make_specialized_arrpacked(BDictN, {TInt}), ival(-1), TStr, make_specialized_arrmap(BDictN, mapElem4), false },
+    { make_specialized_arrpacked(BDictN, {TInt}), ival(2), TStr, make_specialized_arrmap(BDictN, mapElem5), false },
+    { make_specialized_arrpacked(BDict, {TInt}), ival(-1), TStr, make_specialized_arrmapn(BDictN, TInt, TArrKey), false },
+    { make_specialized_arrpacked(BDict, {TInt}), ival(2), TStr, make_specialized_arrmapn(BDictN, TInt, TArrKey), false },
+    { make_specialized_arrpacked(BDictN, {TInt}), ival(0), TStr, make_specialized_arrpacked(BDictN, {TStr}), false },
+    { make_specialized_arrpacked(BDictN, {TInt}), ival(1), TStr, make_specialized_arrpacked(BDictN, {TInt, TStr}), false },
 
-    { make_specialized_arrmapn(BDictishN, TStr, TInt), TStr, TStr, make_specialized_arrmapn(BDictishN, TStr, TArrKey), false },
-    { make_specialized_arrmapn(BDictishN, TStr, TInt), TInt, TInt, make_specialized_arrmapn(BDictishN, TArrKey, TInt), false },
-    { make_specialized_arrmapn(BDictishN, TStr, Type{BInitCell & ~BObj}), TInt, TObj, TDictishN, false },
-    { make_specialized_arrmapn(BDictish, TStr, TInt), TStr, TStr, make_specialized_arrmapn(BDictishN, TStr, TArrKey), false },
-    { make_specialized_arrmapn(BDictish, TStr, TInt), TInt, TInt, make_specialized_arrmapn(BDictishN, TArrKey, TInt), false },
-    { make_specialized_arrmapn(BDictish, TStr, Type{BInitCell & ~BObj}), TInt, TObj, TDictishN, false },
+    { make_specialized_arrmapn(BDictN, TStr, TInt), TStr, TStr, make_specialized_arrmapn(BDictN, TStr, TArrKey), false },
+    { make_specialized_arrmapn(BDictN, TStr, TInt), TInt, TInt, make_specialized_arrmapn(BDictN, TArrKey, TInt), false },
+    { make_specialized_arrmapn(BDictN, TStr, Type{BInitCell & ~BObj}), TInt, TObj, TDictN, false },
+    { make_specialized_arrmapn(BDict, TStr, TInt), TStr, TStr, make_specialized_arrmapn(BDictN, TStr, TArrKey), false },
+    { make_specialized_arrmapn(BDict, TStr, TInt), TInt, TInt, make_specialized_arrmapn(BDictN, TArrKey, TInt), false },
+    { make_specialized_arrmapn(BDict, TStr, Type{BInitCell & ~BObj}), TInt, TObj, TDictN, false },
 
-    { make_specialized_arrmap(BDictishN, mapElem6), TStr, TTrue, make_specialized_arrmap(BDictishN, mapElem8, TStr, TTrue), false },
-    { make_specialized_arrmap(BDictishN, mapElem6), TCStr, TTrue, make_specialized_arrmap(BDictishN, mapElem8, TCStr, TTrue), false },
-    { make_specialized_arrmap(BDictishN, mapElem6), TSStr, TTrue, make_specialized_arrmap(BDictishN, mapElem8, TSStr, TTrue), false },
-    { make_specialized_arrmap(BDictishN, mapElem7), TStr, TTrue, make_specialized_arrmap(BDictishN, mapElem9, TStr, TTrue), false },
-    { make_specialized_arrmap(BDictishN, mapElem7), TCStr, TTrue, make_specialized_arrmap(BDictishN, mapElem9, TCStr, TTrue), false },
-    { make_specialized_arrmap(BDictishN, mapElem7), TSStr, TTrue, make_specialized_arrmap(BDictishN, mapElem9, TSStr, TTrue), false },
-    { make_specialized_arrmap(BDictishN, mapElem6), TInt, TTrue, make_specialized_arrmap(BDictishN, mapElem10, TInt, TTrue), false },
-    { make_specialized_arrmap(BDictishN, mapElem6), sval(s_B), TFalse, make_specialized_arrmap(BDictishN, mapElem11), false },
-    { make_specialized_arrmap(BDictishN, mapElem6), sval_nonstatic(s_B), TFalse, make_specialized_arrmap(BDictishN, mapElem11), false },
-    { make_specialized_arrmap(BDictishN, mapElem6), sval_counted(s_B), TFalse, make_specialized_arrmap(BDictishN, mapElem11), false },
-    { make_specialized_arrmap(BDictishN, mapElem7), sval(s_B), TFalse, make_specialized_arrmap(BDictishN, mapElem12), false },
-    { make_specialized_arrmap(BDictishN, mapElem7), sval_nonstatic(s_B), TFalse, make_specialized_arrmap(BDictishN, mapElem12), false },
-    { make_specialized_arrmap(BDictishN, mapElem7), sval_counted(s_B), TFalse, make_specialized_arrmap(BDictishN, mapElem12), false },
-    { make_specialized_arrmap(BDictishN, mapElem6), sval(s_BA), TInt, make_specialized_arrmap(BDictishN, mapElem13), false },
-    { make_specialized_arrmap(BDictishN, mapElem6), sval_counted(s_BA), TInt, make_specialized_arrmap(BDictishN, mapElem14), false },
-    { make_specialized_arrmap(BDictishN, mapElem6, TInt, TTrue), sval(s_BA), TFalse,
-      make_specialized_arrmap(BDictishN, mapElem6, union_of(TInt,sval(s_BA)), TBool), false },
-    { make_specialized_arrmap(BDictishN, mapElem6, sval(s_BA), TFalse), sval(s_BA), TTrue,
-      make_specialized_arrmap(BDictishN, mapElem15), false },
-    { make_specialized_arrmap(BDictishN, mapElem6, sval_counted(s_BA), TFalse), sval(s_BA), TTrue,
-      make_specialized_arrmap(BDictishN, mapElem16), false },
-    { make_specialized_arrmap(BDictishN, mapElem6, sval(s_BA), TFalse), sval_counted(s_BA), TTrue,
-      make_specialized_arrmap(BDictishN, mapElem16), false },
-    { make_specialized_arrmap(BDictish, mapElem6), TStr, TTrue,
-      make_specialized_arrmapn(BDictishN, union_of(ival(100),TStr), Type{BInt|BObj|BBool}), false },
-    { make_specialized_arrmap(BDictish, mapElem6), TSStr, TTrue,
-      make_specialized_arrmapn(BDictishN, union_of(ival(100),TSStr), Type{BInt|BObj|BBool}), false },
-    { make_specialized_arrmap(BDictish, mapElem6), TCStr, TTrue,
-      make_specialized_arrmapn(BDictishN, union_of(ival(100),TStr), Type{BInt|BObj|BBool}), false },
-    { make_specialized_arrmap(BDictish, mapElem7), TStr, TTrue,
-      make_specialized_arrmapn(BDictishN, union_of(ival(100),TStr), Type{BInt|BObj|BBool}), false },
-    { make_specialized_arrmap(BDictish, mapElem7), TSStr, TTrue,
-      make_specialized_arrmapn(BDictishN, union_of(ival(100),TStr), Type{BInt|BObj|BBool}), false },
-    { make_specialized_arrmap(BDictish, mapElem7), TCStr, TTrue,
-      make_specialized_arrmapn(BDictishN, union_of(ival(100),TCStr), Type{BInt|BObj|BBool}), false },
-    { make_specialized_arrmap(BDictish, mapElem6), sval(s_A), TStr,
-      make_specialized_arrmap(BDictishN, mapElem17, union_of(TInt,sval(s_B)), Type{BObj|BFalse}), false },
-    { make_specialized_arrmap(BDictish, mapElem6), sval_counted(s_A), TStr,
-      make_specialized_arrmap(BDictishN, mapElem18, union_of(TInt,sval(s_B)), Type{BObj|BFalse}), false },
-    { make_specialized_arrmap(BDictish, mapElem6, TInt, TTrue), sval(s_A), TStr,
-      make_specialized_arrmap(BDictishN, mapElem17, union_of(TInt,sval(s_B)), Type{BObj|BBool}), false },
-    { make_specialized_arrmap(BDictishN, mapElem21), union_of(ival(1),TStr), TInt,
-      make_specialized_arrmap(BDictishN, mapElem22, TArrKey, TInt), false },
+    { make_specialized_arrmap(BDictN, mapElem6), TStr, TTrue, make_specialized_arrmap(BDictN, mapElem8, TStr, TTrue), false },
+    { make_specialized_arrmap(BDictN, mapElem6), TCStr, TTrue, make_specialized_arrmap(BDictN, mapElem8, TCStr, TTrue), false },
+    { make_specialized_arrmap(BDictN, mapElem6), TSStr, TTrue, make_specialized_arrmap(BDictN, mapElem8, TSStr, TTrue), false },
+    { make_specialized_arrmap(BDictN, mapElem7), TStr, TTrue, make_specialized_arrmap(BDictN, mapElem9, TStr, TTrue), false },
+    { make_specialized_arrmap(BDictN, mapElem7), TCStr, TTrue, make_specialized_arrmap(BDictN, mapElem9, TCStr, TTrue), false },
+    { make_specialized_arrmap(BDictN, mapElem7), TSStr, TTrue, make_specialized_arrmap(BDictN, mapElem9, TSStr, TTrue), false },
+    { make_specialized_arrmap(BDictN, mapElem6), TInt, TTrue, make_specialized_arrmap(BDictN, mapElem10, TInt, TTrue), false },
+    { make_specialized_arrmap(BDictN, mapElem6), sval(s_B), TFalse, make_specialized_arrmap(BDictN, mapElem11), false },
+    { make_specialized_arrmap(BDictN, mapElem6), sval_nonstatic(s_B), TFalse, make_specialized_arrmap(BDictN, mapElem11), false },
+    { make_specialized_arrmap(BDictN, mapElem6), sval_counted(s_B), TFalse, make_specialized_arrmap(BDictN, mapElem11), false },
+    { make_specialized_arrmap(BDictN, mapElem7), sval(s_B), TFalse, make_specialized_arrmap(BDictN, mapElem12), false },
+    { make_specialized_arrmap(BDictN, mapElem7), sval_nonstatic(s_B), TFalse, make_specialized_arrmap(BDictN, mapElem12), false },
+    { make_specialized_arrmap(BDictN, mapElem7), sval_counted(s_B), TFalse, make_specialized_arrmap(BDictN, mapElem12), false },
+    { make_specialized_arrmap(BDictN, mapElem6), sval(s_BA), TInt, make_specialized_arrmap(BDictN, mapElem13), false },
+    { make_specialized_arrmap(BDictN, mapElem6), sval_counted(s_BA), TInt, make_specialized_arrmap(BDictN, mapElem14), false },
+    { make_specialized_arrmap(BDictN, mapElem6, TInt, TTrue), sval(s_BA), TFalse,
+      make_specialized_arrmap(BDictN, mapElem6, union_of(TInt,sval(s_BA)), TBool), false },
+    { make_specialized_arrmap(BDictN, mapElem6, sval(s_BA), TFalse), sval(s_BA), TTrue,
+      make_specialized_arrmap(BDictN, mapElem15), false },
+    { make_specialized_arrmap(BDictN, mapElem6, sval_counted(s_BA), TFalse), sval(s_BA), TTrue,
+      make_specialized_arrmap(BDictN, mapElem16), false },
+    { make_specialized_arrmap(BDictN, mapElem6, sval(s_BA), TFalse), sval_counted(s_BA), TTrue,
+      make_specialized_arrmap(BDictN, mapElem16), false },
+    { make_specialized_arrmap(BDict, mapElem6), TStr, TTrue,
+      make_specialized_arrmapn(BDictN, union_of(ival(100),TStr), Type{BInt|BObj|BBool}), false },
+    { make_specialized_arrmap(BDict, mapElem6), TSStr, TTrue,
+      make_specialized_arrmapn(BDictN, union_of(ival(100),TSStr), Type{BInt|BObj|BBool}), false },
+    { make_specialized_arrmap(BDict, mapElem6), TCStr, TTrue,
+      make_specialized_arrmapn(BDictN, union_of(ival(100),TStr), Type{BInt|BObj|BBool}), false },
+    { make_specialized_arrmap(BDict, mapElem7), TStr, TTrue,
+      make_specialized_arrmapn(BDictN, union_of(ival(100),TStr), Type{BInt|BObj|BBool}), false },
+    { make_specialized_arrmap(BDict, mapElem7), TSStr, TTrue,
+      make_specialized_arrmapn(BDictN, union_of(ival(100),TStr), Type{BInt|BObj|BBool}), false },
+    { make_specialized_arrmap(BDict, mapElem7), TCStr, TTrue,
+      make_specialized_arrmapn(BDictN, union_of(ival(100),TCStr), Type{BInt|BObj|BBool}), false },
+    { make_specialized_arrmap(BDict, mapElem6), sval(s_A), TStr,
+      make_specialized_arrmap(BDictN, mapElem17, union_of(TInt,sval(s_B)), Type{BObj|BFalse}), false },
+    { make_specialized_arrmap(BDict, mapElem6), sval_counted(s_A), TStr,
+      make_specialized_arrmap(BDictN, mapElem18, union_of(TInt,sval(s_B)), Type{BObj|BFalse}), false },
+    { make_specialized_arrmap(BDict, mapElem6, TInt, TTrue), sval(s_A), TStr,
+      make_specialized_arrmap(BDictN, mapElem17, union_of(TInt,sval(s_B)), Type{BObj|BBool}), false },
+    { make_specialized_arrmap(BDictN, mapElem21), union_of(ival(1),TStr), TInt,
+      make_specialized_arrmap(BDictN, mapElem22, TArrKey, TInt), false },
   };
   for (auto const& t : tests) {
     auto const elem = array_like_set(std::get<0>(t), std::get<1>(t), std::get<2>(t));
@@ -4945,18 +4927,12 @@ TEST(Type, LoosenStaticness) {
   auto const test_map3 = MapElems{map_elem_counted(s_A, TInt)};
   std::vector<std::pair<Type, Type>> tests = {
     { TSStr, TStr },
-    { TSVecishE, TVecishE },
-    { TSVecishN, TVecishN },
-    { TSVecish, TVecish },
-    { TSDictishE, TDictishE },
-    { TSDictishN, TDictishN },
-    { TSDictish, TDictish },
-    { TSVArrE, TVArrE },
-    { TSVArrN, TVArrN },
-    { TSVArr, TVArr },
-    { TSDArrE, TDArrE },
-    { TSDArrN, TDArrN },
-    { TSDArr, TDArr },
+    { TSVecE, TVecE },
+    { TSVecN, TVecN },
+    { TSVec, TVec },
+    { TSDictE, TDictE },
+    { TSDictN, TDictN },
+    { TSDict, TDict },
     { TSVecE, TVecE },
     { TSVecN, TVecN },
     { TSVec, TVec },
@@ -5104,18 +5080,12 @@ TEST(Type, LoosenArrayStaticness) {
   std::vector<std::pair<Type, Type>> tests = {
     { TSStr, TSStr },
     { TCStr, TCStr},
-    { TSVecishE, TVecishE },
-    { TSVecishN, TVecishN },
-    { TSVecish, TVecish },
-    { TSDictishE, TDictishE },
-    { TSDictishN, TDictishN },
-    { TSDictish, TDictish },
-    { TSVArrE, TVArrE },
-    { TSVArrN, TVArrN },
-    { TSVArr, TVArr },
-    { TSDArrE, TDArrE },
-    { TSDArrN, TDArrN },
-    { TSDArr, TDArr },
+    { TSVecE, TVecE },
+    { TSVecN, TVecN },
+    { TSVec, TVec },
+    { TSDictE, TDictE },
+    { TSDictN, TDictN },
+    { TSDict, TDict },
     { TSVecE, TVecE },
     { TSVecN, TVecN },
     { TSVec, TVec },
@@ -5169,11 +5139,11 @@ TEST(Type, Emptiness) {
     { TFalse, Emptiness::Empty },
     { TVecE, Emptiness::Empty },
     { TSKeysetE, Emptiness::Empty },
-    { TDictishE, Emptiness::Empty },
-    { TDictish, Emptiness::Maybe },
+    { TDictE, Emptiness::Empty },
+    { TDict, Emptiness::Maybe },
     { TTrue, Emptiness::NonEmpty },
     { TVecN, Emptiness::NonEmpty },
-    { TDictishN, Emptiness::NonEmpty },
+    { TDictN, Emptiness::NonEmpty },
     { TArrLikeN, Emptiness::NonEmpty },
     { TArrLike, Emptiness::Maybe },
     { TObj, Emptiness::Maybe },
@@ -5184,11 +5154,14 @@ TEST(Type, Emptiness) {
     { opt(ival(1)), Emptiness::Maybe },
     { sempty(), Emptiness::Empty },
     { sval(s_A), Emptiness::NonEmpty },
+    { lazyclsval(s_A), Emptiness::NonEmpty },
     { dval(3.14), Emptiness::NonEmpty },
     { dval(0), Emptiness::Empty },
     { TInitCell, Emptiness::Maybe },
     { TInt, Emptiness::Maybe },
     { TStr, Emptiness::Maybe },
+    { TLazyCls, Emptiness::NonEmpty },
+    { TCls, Emptiness::NonEmpty },
     { TDbl, Emptiness::Maybe }
   };
   for (auto const& p : tests) {
@@ -5234,9 +5207,9 @@ TEST(Type, AssertNonEmptiness) {
     { TVecE, TBottom },
     { TVec, TVecN },
     { TVecN, TVecN },
-    { TDictishE, TBottom },
-    { TDictishN, TDictishN },
-    { TDictish, TDictishN },
+    { TDictE, TBottom },
+    { TDictN, TDictN },
+    { TDict, TDictN },
     { TArrLikeE, TBottom },
     { TArrLikeN, TArrLikeN },
     { TArrLike, TArrLikeN },
@@ -5247,6 +5220,7 @@ TEST(Type, AssertNonEmptiness) {
     { ival(1), ival(1) },
     { sempty(), TBottom },
     { sval(s_A), sval(s_A) },
+    { lazyclsval(s_A), lazyclsval(s_A) },
     { dval(3.14), dval(3.14) },
     { dval(0), TBottom },
     { opt(ival(0)), TBottom },
@@ -5254,6 +5228,7 @@ TEST(Type, AssertNonEmptiness) {
     { TInitCell, Type{BInitCell & ~(BNull | BFalse | BArrLikeE)} },
     { TInt, TInt },
     { TStr, TStr },
+    { TLazyCls, TLazyCls },
     { TDbl, TDbl },
     { union_of(ival(1),TStr), union_of(ival(1),TStr) },
     { union_of(ival(0),TStr), TArrKey },
@@ -5297,9 +5272,9 @@ TEST(Type, AssertEmptiness) {
     { TVecE, TVecE },
     { TVec, TVecE },
     { TVecN, TBottom },
-    { TDictishE, TDictishE },
-    { TDictishN, TBottom },
-    { TDictish, TDictishE },
+    { TDictE, TDictE },
+    { TDictN, TBottom },
+    { TDict, TDictE },
     { TArrLikeE, TArrLikeE },
     { TArrLikeN, TBottom },
     { TArrLike, TArrLikeE },
@@ -5313,6 +5288,7 @@ TEST(Type, AssertEmptiness) {
     { sempty(), sempty() },
     { sempty_nonstatic(), sempty_nonstatic() },
     { sval(s_A), TBottom },
+    { lazyclsval(s_A), TBottom },
     { dval(3.14), TBottom },
     { dval(0), dval(0) },
     { opt(ival(0)), opt(ival(0)) },
@@ -5320,6 +5296,7 @@ TEST(Type, AssertEmptiness) {
     { TInt, ival(0) },
     { TStr, sempty_nonstatic() },
     { TSStr, sempty() },
+    { TLazyCls, TBottom },
     { TDbl, dval(0) },
     { union_of(ival(1),TStr), TArrKey },
     { union_of(ival(0),TStr), union_of(TInt,sempty_nonstatic()) },
@@ -5359,14 +5336,6 @@ TEST(Type, LoosenEmptiness) {
 
   auto const test_map    = MapElems{map_elem(s_A, TInt)};
   std::vector<std::pair<Type, Type>> tests = {
-    { TSVArrE, TSVArr },
-    { TSVArrN, TSVArr },
-    { TVArrE, TVArr },
-    { TVArrN, TVArr },
-    { TSDArrE, TSDArr },
-    { TSDArrN, TSDArr },
-    { TDArrE, TDArr },
-    { TDArrN, TDArr },
     { TSVecE, TSVec },
     { TSVecN, TSVec },
     { TVecE, TVec },
@@ -5379,14 +5348,14 @@ TEST(Type, LoosenEmptiness) {
     { TSKeysetN, TSKeyset },
     { TKeysetE, TKeyset },
     { TKeysetN, TKeyset },
-    { TSVecishE, TSVecish },
-    { TSVecishN, TSVecish },
-    { TVecishE, TVecish },
-    { TVecishN, TVecish },
-    { TSDictishE, TSDictish },
-    { TSDictishN, TSDictish },
-    { TDictishE, TDictish },
-    { TDictishN, TDictish },
+    { TSVecE, TSVec },
+    { TSVecN, TSVec },
+    { TVecE, TVec },
+    { TVecN, TVec },
+    { TSDictE, TSDict },
+    { TSDictN, TSDict },
+    { TDictE, TDict },
+    { TDictN, TDict },
     { dict_packedn(TInt), union_of(TDictE, dict_packedn(TInt)) },
     { dict_packed({TInt, TBool}), union_of(TDictE, dict_packed({TInt, TBool})) },
     { dict_n(TStr, TInt), union_of(TDictE, dict_n(TStr, TInt)) },
@@ -5432,6 +5401,7 @@ TEST(Type, LoosenValues) {
     if (is_specialized_string(t) ||
         is_specialized_int(t) ||
         is_specialized_double(t) ||
+        is_specialized_lazycls(t) ||
         is_specialized_array_like(t)) {
       EXPECT_FALSE(loosen_values(t).hasData());
     } else if (!t.couldBe(BBool)) {
@@ -5453,6 +5423,7 @@ TEST(Type, LoosenValues) {
     { dval(3.14), TDbl },
     { sval(s_test), TSStr },
     { sval_nonstatic(s_test), TStr },
+    { lazyclsval(s_test), TLazyCls },
     { dict_val(static_dict(0, 42, 1, 23, 2, 12)), TSDictN },
     { dict_packedn(TInt), TDictN },
     { dict_packed({TInt, TBool}), TDictN },
@@ -5542,14 +5513,6 @@ TEST(Type, AddNonEmptiness) {
 
   auto const test_map    = MapElems{map_elem(s_A, TInt)};
   std::vector<std::pair<Type, Type>> tests = {
-    { TVArrE, TVArr },
-    { TSVArrE, TSVArr },
-    { TVArrN, TVArrN },
-    { TSVArrN, TSVArrN },
-    { TDArrE, TDArr },
-    { TSDArrE, TSDArr },
-    { TDArrN, TDArrN },
-    { TSDArrN, TSDArrN },
     { TVecE, TVec },
     { TSVecE, TSVec },
     { TVecN, TVecN },
@@ -5562,14 +5525,14 @@ TEST(Type, AddNonEmptiness) {
     { TSKeysetE, TSKeyset },
     { TKeysetN, TKeysetN },
     { TSKeysetN, TSKeysetN },
-    { TVecishE, TVecish },
-    { TSVecishE, TSVecish },
-    { TVecishN, TVecishN },
-    { TSVecishN, TSVecishN },
-    { TDictishE, TDictish },
-    { TSDictishE, TSDictish },
-    { TDictishN, TDictishN },
-    { TSDictishN, TSDictishN },
+    { TVecE, TVec },
+    { TSVecE, TSVec },
+    { TVecN, TVecN },
+    { TSVecN, TSVecN },
+    { TDictE, TDict },
+    { TSDictE, TSDict },
+    { TDictN, TDictN },
+    { TSDictN, TSDictN },
     { TSArrLikeE, TSArrLike },
     { TArrLikeE, TArrLike },
     { TSArrLikeN, TSArrLikeN },
@@ -5591,35 +5554,33 @@ TEST(Type, AddNonEmptiness) {
   }
 }
 
-TEST(Type, LoosenVecishOrDictish) {
+TEST(Type, LoosenVecOrDict) {
   auto const program = make_test_program();
   Index index{ program.get() };
 
   auto const& all = allCases(index);
   for (auto const& t : all) {
     if (!t.couldBe(BKVish)) {
-      EXPECT_EQ(loosen_vecish_or_dictish(t), t);
+      EXPECT_EQ(loosen_vec_or_dict(t), t);
     } else {
       EXPECT_EQ(get_bits(t) & ~BArrLike,
-                get_bits(loosen_vecish_or_dictish(t)) & ~BArrLike);
-      EXPECT_TRUE(t.subtypeOf(loosen_vecish_or_dictish(t)));
+                get_bits(loosen_vec_or_dict(t)) & ~BArrLike);
+      EXPECT_TRUE(t.subtypeOf(loosen_vec_or_dict(t)));
     }
 
     if (!t.couldBe(BKeysetN)) {
-      EXPECT_FALSE(is_specialized_array_like(loosen_vecish_or_dictish(t)));
+      EXPECT_FALSE(is_specialized_array_like(loosen_vec_or_dict(t)));
     }
 
     if (!t.subtypeOf(BCell)) continue;
     auto const [arr, rest] = split_array_like(t);
     EXPECT_EQ(
-      loosen_vecish_or_dictish(t),
-      union_of(loosen_vecish_or_dictish(arr), loosen_vecish_or_dictish(rest))
+      loosen_vec_or_dict(t),
+      union_of(loosen_vec_or_dict(arr), loosen_vec_or_dict(rest))
     );
   }
 
   auto const vecOrDict = union_of(TVec, TDict);
-  auto const varrOrDArr = union_of(TVArr, TDArr);
-  auto const both = union_of(vecOrDict, varrOrDArr);
   std::vector<std::pair<Type, Type>> tests = {
     { TSVecE, vecOrDict },
     { TSVecN, vecOrDict },
@@ -5633,41 +5594,17 @@ TEST(Type, LoosenVecishOrDictish) {
     { TDictN, vecOrDict },
     { TSDict, vecOrDict },
     { TDict, vecOrDict },
-    { TSVArrE, varrOrDArr },
-    { TSVArrN, varrOrDArr },
-    { TVArrE, varrOrDArr },
-    { TVArrN, varrOrDArr },
-    { TSVArr, varrOrDArr },
-    { TVArr, varrOrDArr },
-    { TSDArrE, varrOrDArr },
-    { TSDArrN, varrOrDArr },
-    { TDArrE, varrOrDArr },
-    { TDArrN, varrOrDArr },
-    { TSDArr, varrOrDArr },
-    { TDArr, varrOrDArr },
     { TSKeysetE, TSKeysetE },
     { TSKeysetN, TSKeysetN },
     { TKeysetE, TKeysetE },
     { TKeysetN, TKeysetN },
     { TSKeyset, TSKeyset },
     { TKeyset, TKeyset },
-    { TSVecishE, both },
-    { TSVecishN, both },
-    { TVecishE, both },
-    { TVecishN, both },
-    { TSVecish, both },
-    { TVecish, both },
-    { TSDictishE, both },
-    { TSDictishN, both },
-    { TDictishE, both },
-    { TDictishN, both },
-    { TSDictish, both },
-    { TDictish, both },
-    { TSArrLikeE, union_of(both, TSKeysetE) },
-    { TSArrLikeN, union_of(both, TSKeysetN) },
-    { TArrLikeE, union_of(both, TKeysetE) },
-    { TArrLikeN, union_of(both, TKeysetN) },
-    { TSArrLike, union_of(both, TSKeyset) },
+    { TSArrLikeE, union_of(vecOrDict, TSKeysetE) },
+    { TSArrLikeN, union_of(vecOrDict, TSKeysetN) },
+    { TArrLikeE, union_of(vecOrDict, TKeysetE) },
+    { TArrLikeN, union_of(vecOrDict, TKeysetN) },
+    { TSArrLike, union_of(vecOrDict, TSKeyset) },
     { TArrLike, TArrLike },
     { TInitCell, TInitCell },
     { TObj, TObj },
@@ -5682,8 +5619,8 @@ TEST(Type, LoosenVecishOrDictish) {
     { Type{BVecN|BInt}, union_of(vecOrDict, TInt) },
  };
   for (auto const& p : tests) {
-    EXPECT_EQ(loosen_vecish_or_dictish(p.first), p.second);
-    EXPECT_EQ(loosen_vecish_or_dictish(opt(p.first)), opt(p.second));
+    EXPECT_EQ(loosen_vec_or_dict(p.first), p.second);
+    EXPECT_EQ(loosen_vec_or_dict(opt(p.first)), opt(p.second));
   }
 }
 
@@ -5700,7 +5637,7 @@ TEST(Type, Scalarize) {
     if (!t.hasData() && !t.subtypeOf(BArrLikeE)) {
       EXPECT_EQ(scalarize(t), t);
     }
-    if (is_specialized_int(t) || is_specialized_double(t)) {
+    if (is_specialized_int(t) || is_specialized_double(t) || is_specialized_lazycls(t)) {
       EXPECT_EQ(scalarize(t), t);
     }
     if (is_specialized_string(t)) {
@@ -5716,10 +5653,6 @@ TEST(Type, Scalarize) {
     { TInitNull, TInitNull },
     { TFalse, TFalse },
     { TTrue, TTrue },
-    { TSVArrE, TSVArrE },
-    { TVArrE, TSVArrE },
-    { TSDArrE, TSDArrE },
-    { TDArrE, TSDArrE },
     { TSVecE, TSVecE },
     { TVecE, TSVecE },
     { TSDictE, TSDictE },
@@ -6437,9 +6370,6 @@ TEST(Type, ArrLike) {
     { TKeyset,  TArrLike },
     { TDict,    TArrLike },
     { TVec,     TArrLike },
-    // Expect VArray and DArray to be subtypes
-    { TDArr,    TArrLike },
-    { TVArr,    TArrLike },
   };
 
   const std::initializer_list<std::pair<Type, Type>> subtype_false{
@@ -6500,17 +6430,19 @@ TEST(Type, LoosenLikeness) {
     } else {
       auto u = BBottom;
       if (t.couldBe(BCls | BLazyCls)) u |= BSStr;
-      if (t.couldBe(BClsMeth)) u |= BVArrN|BDArrN;
+      if (t.couldBe(BClsMeth)) u |= BVecN;
       EXPECT_EQ(loosen_likeness(t), union_of(t, Type{u}));
     }
   }
 
   std::vector<std::pair<Type, Type>> tests{
-    { TClsMeth, Type{BClsMeth|BVArrN|BDArrN} },
+    { TClsMeth, Type{BClsMeth|BVecN} },
     { TCls, Type{BCls|BSStr} },
     { TLazyCls, Type{BLazyCls|BSStr} },
+    { lazyclsval(s_A), Type{BLazyCls|BSStr} },
     { TInt, TInt },
-    { Type{BInt|BCls}, Type{BCls|BSStr|BInt} }
+    { Type{BInt|BCls}, Type{BCls|BSStr|BInt} },
+    { Type{BInt|BLazyCls}, Type{BLazyCls|BSStr|BInt} }
   };
   for (auto const& p : tests) {
     EXPECT_EQ(loosen_likeness(p.first), p.second);
@@ -6556,13 +6488,13 @@ TEST(Type, LoosenLikenessRecursively) {
     } else {
       auto u = BBottom;
       if (t.couldBe(BCls | BLazyCls)) u |= BSStr;
-      if (t.couldBe(BClsMeth)) u |= BVArrN|BDArrN;
+      if (t.couldBe(BClsMeth)) u |= BVecN;
       EXPECT_EQ(loosen_likeness_recursively(t), union_of(t, Type{u}));
     }
   };
 
   auto const almostAll1 = Type{BInitCell & ~BSStr};
-  auto const almostAll2 = Type{BInitCell & ~(BVArrN|BDArrN)};
+  auto const almostAll2 = Type{BInitCell & ~BVecN};
 
   auto const& all = allCases(index);
   for (auto const& t : all) test(t);
@@ -6570,32 +6502,32 @@ TEST(Type, LoosenLikenessRecursively) {
   test(almostAll2);
 
   std::vector<std::pair<Type, Type>> tests{
-    { TClsMeth, Type{BClsMeth|BVArrN|BDArrN} },
+    { TClsMeth, Type{BClsMeth|BVecN} },
     { TCls, Type{BCls|BSStr} },
     { TLazyCls, Type{BLazyCls|BSStr} },
     { TInt, TInt },
     { Type{BInt|BCls}, Type{BCls|BSStr|BInt} },
     { wait_handle(index, TInt), wait_handle(index, TInt) },
     { wait_handle(index, TCls), wait_handle(index, Type{BCls|BSStr}) },
-    { wait_handle(index, TClsMeth), wait_handle(index, Type{BClsMeth|BVArrN|BDArrN}) },
+    { wait_handle(index, TClsMeth), wait_handle(index, Type{BClsMeth|BVecN}) },
     { dict_val(static_dict(s_A, 100, s_B, 200)),
       dict_map({map_elem(s_A, ival(100)), map_elem(s_B, ival(200))}) },
     { vec_n(TInt), vec_n(TInt) },
     { vec_n(TCls), vec_n(Type{BCls|BSStr}) },
-    { vec_n(TClsMeth), vec_n(Type{BClsMeth|BVArrN|BDArrN}) },
+    { vec_n(TClsMeth), vec_n(Type{BClsMeth|BVecN}) },
     { vec({TInt}), vec({TInt}) },
     { vec({TCls}), vec({Type{BCls|BSStr}}) },
-    { vec({TClsMeth}), vec({Type{BClsMeth|BVArrN|BDArrN}}) },
+    { vec({TClsMeth}), vec({Type{BClsMeth|BVecN}}) },
     { dict_n(TArrKey, TInt), dict_n(TArrKey, TInt) },
     { dict_n(TArrKey, TCls), dict_n(TArrKey, Type{BCls|BSStr}) },
-    { dict_n(TArrKey, TClsMeth), dict_n(TArrKey, Type{BClsMeth|BVArrN|BDArrN}) },
+    { dict_n(TArrKey, TClsMeth), dict_n(TArrKey, Type{BClsMeth|BVecN}) },
     { dict_map({map_elem(s_A, TInt)}, TArrKey, TInt),
       dict_map({map_elem(s_A, TInt)}, TArrKey, TInt) },
     { dict_map({map_elem(s_A, TCls)}, TArrKey, TCls),
       dict_map({map_elem(s_A, Type{BCls|BSStr})}, TArrKey, Type{BCls|BSStr}) },
     { dict_map({map_elem(s_A, TClsMeth)}, TArrKey, TClsMeth),
-      dict_map({map_elem(s_A, Type{BClsMeth|BVArrN|BDArrN})},
-               TArrKey, Type{BClsMeth|BVArrN|BDArrN}) },
+      dict_map({map_elem(s_A, Type{BClsMeth|BVecN})},
+               TArrKey, Type{BClsMeth|BVecN}) },
     { vec_n(almostAll1), TVecN },
     { vec_n(almostAll2), TVecN },
     { dict_n(TArrKey, almostAll1), TDictN },
@@ -6604,45 +6536,6 @@ TEST(Type, LoosenLikenessRecursively) {
   for (auto const& p : tests) {
     EXPECT_EQ(loosen_mark_for_testing(loosen_likeness_recursively(p.first)),
               loosen_mark_for_testing(p.second));
-  }
-}
-
-TEST(Type, ArrayProvenance) {
-  RO::EvalArrayProvenance = true;
-
-  auto const program = make_test_program();
-  Index index{ program.get() };
-
-  auto const& all = allCases(index);
-  for (auto const& t : all) {
-    EXPECT_EQ(opt(loosen_provenance(t)), loosen_provenance(opt(t)));
-    if (t.strictSubtypeOf(BInitCell)) {
-      EXPECT_EQ(wait_handle(index, loosen_provenance(t)),
-                loosen_provenance(wait_handle(index, t)));
-    }
-
-    if (!t.couldBe(BArrLike) && !is_specialized_wait_handle(t)) {
-      EXPECT_EQ(t, loosen_provenance(t));
-    } else {
-      EXPECT_FALSE(is_specialized_array_like_arrval(loosen_provenance(t)));
-    }
-
-    if (t.subtypeOf(BCell)) {
-      EXPECT_FALSE(
-        assert_nonemptiness(union_of(t,TArrLikeE)).couldBe(BArrLikeE)
-      );
-
-      EXPECT_FALSE(
-        remove_bits(union_of(t,TArrLikeE), BArrLikeE).couldBe(BArrLikeE)
-      );
-
-      EXPECT_FALSE(
-        intersection_of(
-          union_of(t, TVecishE),
-          TDictish
-        ).couldBe(BVecishE)
-      );
-    }
   }
 }
 
@@ -6660,10 +6553,10 @@ TEST(Type, IterTypes) {
     { TVecE, { TBottom, TBottom, IterTypes::Count::Empty, false, false } },
     { TOptVecE, { TBottom, TBottom, IterTypes::Count::Empty, true, false } },
 
-    { TSVecish, { TInt, TInitUnc, IterTypes::Count::Any, false, false } },
-    { TOptSVecish, { TInt, TInitUnc, IterTypes::Count::Any, true, false } },
-    { TSVecishN, { TInt, TInitUnc, IterTypes::Count::NonEmpty, false, false } },
-    { TOptSVecishN, { TInt, TInitUnc, IterTypes::Count::Any, true, false } },
+    { TSVec, { TInt, TInitUnc, IterTypes::Count::Any, false, false } },
+    { TOptSVec, { TInt, TInitUnc, IterTypes::Count::Any, true, false } },
+    { TSVecN, { TInt, TInitUnc, IterTypes::Count::NonEmpty, false, false } },
+    { TOptSVecN, { TInt, TInitUnc, IterTypes::Count::Any, true, false } },
 
     { TSKeyset, { TUncArrKey, TUncArrKey, IterTypes::Count::Any, false, false } },
     { TOptSKeyset, { TUncArrKey, TUncArrKey, IterTypes::Count::Any, true, false } },
@@ -6675,10 +6568,10 @@ TEST(Type, IterTypes) {
     { TSArrLikeN, { TUncArrKey, TInitUnc, IterTypes::Count::NonEmpty, false, false } },
     { TOptSArrLikeN, { TUncArrKey, TInitUnc, IterTypes::Count::Any, true, false } },
 
-    { TVecish, { TInt, TInitCell, IterTypes::Count::Any, false, false } },
-    { TOptVecish, { TInt, TInitCell, IterTypes::Count::Any, true, false } },
-    { TVecishN, { TInt, TInitCell, IterTypes::Count::NonEmpty, false, false } },
-    { TOptVecishN, { TInt, TInitCell, IterTypes::Count::Any, true, false } },
+    { TVec, { TInt, TInitCell, IterTypes::Count::Any, false, false } },
+    { TOptVec, { TInt, TInitCell, IterTypes::Count::Any, true, false } },
+    { TVecN, { TInt, TInitCell, IterTypes::Count::NonEmpty, false, false } },
+    { TOptVecN, { TInt, TInitCell, IterTypes::Count::Any, true, false } },
 
     { TKeyset, { TArrKey, TArrKey, IterTypes::Count::Any, false, false } },
     { TOptKeyset, { TArrKey, TArrKey, IterTypes::Count::Any, true, false } },
@@ -6700,20 +6593,20 @@ TEST(Type, IterTypes) {
     { make_specialized_arrval(BSDictN, sdict2), { TSStr, TInt, IterTypes::Count::NonEmpty, false, false } },
     { make_specialized_arrval(BOptSDictN, sdict2), { TSStr, TInt, IterTypes::Count::Any, true, false } },
 
-    { make_specialized_arrpackedn(BVecish, TObj), { TInt, TObj, IterTypes::Count::Any, false, false } },
-    { make_specialized_arrpackedn(BOptVecish, TObj), { TInt, TObj, IterTypes::Count::Any, true, false } },
-    { make_specialized_arrpackedn(BVecishN, TObj), { TInt, TObj, IterTypes::Count::NonEmpty, false, false } },
-    { make_specialized_arrpackedn(BOptVecishN, TObj), { TInt, TObj, IterTypes::Count::Any, true, false } },
+    { make_specialized_arrpackedn(BVec, TObj), { TInt, TObj, IterTypes::Count::Any, false, false } },
+    { make_specialized_arrpackedn(BOptVec, TObj), { TInt, TObj, IterTypes::Count::Any, true, false } },
+    { make_specialized_arrpackedn(BVecN, TObj), { TInt, TObj, IterTypes::Count::NonEmpty, false, false } },
+    { make_specialized_arrpackedn(BOptVecN, TObj), { TInt, TObj, IterTypes::Count::Any, true, false } },
 
-    { make_specialized_arrpacked(BVecish, {TObj}), { ival(0), TObj, IterTypes::Count::ZeroOrOne, false, false } },
-    { make_specialized_arrpacked(BOptVecish, {TObj}), { ival(0), TObj, IterTypes::Count::ZeroOrOne, true, false } },
-    { make_specialized_arrpacked(BVecishN, {TObj}), { ival(0), TObj, IterTypes::Count::Single, false, false } },
-    { make_specialized_arrpacked(BOptVecishN, {TObj}), { ival(0), TObj, IterTypes::Count::ZeroOrOne, true, false } },
+    { make_specialized_arrpacked(BVec, {TObj}), { ival(0), TObj, IterTypes::Count::ZeroOrOne, false, false } },
+    { make_specialized_arrpacked(BOptVec, {TObj}), { ival(0), TObj, IterTypes::Count::ZeroOrOne, true, false } },
+    { make_specialized_arrpacked(BVecN, {TObj}), { ival(0), TObj, IterTypes::Count::Single, false, false } },
+    { make_specialized_arrpacked(BOptVecN, {TObj}), { ival(0), TObj, IterTypes::Count::ZeroOrOne, true, false } },
 
-    { make_specialized_arrpacked(BVecish, {TObj,TStr}), { TInt, Type{BObj|BStr}, IterTypes::Count::Any, false, false } },
-    { make_specialized_arrpacked(BOptVecish, {TObj,TStr}), { TInt, Type{BObj|BStr}, IterTypes::Count::Any, true, false } },
-    { make_specialized_arrpacked(BVecishN, {TObj,TStr}), { TInt, Type{BObj|BStr}, IterTypes::Count::NonEmpty, false, false } },
-    { make_specialized_arrpacked(BOptVecishN, {TObj,TStr}), { TInt, Type{BObj|BStr}, IterTypes::Count::Any, true, false } },
+    { make_specialized_arrpacked(BVec, {TObj,TStr}), { TInt, Type{BObj|BStr}, IterTypes::Count::Any, false, false } },
+    { make_specialized_arrpacked(BOptVec, {TObj,TStr}), { TInt, Type{BObj|BStr}, IterTypes::Count::Any, true, false } },
+    { make_specialized_arrpacked(BVecN, {TObj,TStr}), { TInt, Type{BObj|BStr}, IterTypes::Count::NonEmpty, false, false } },
+    { make_specialized_arrpacked(BOptVecN, {TObj,TStr}), { TInt, Type{BObj|BStr}, IterTypes::Count::Any, true, false } },
 
     { make_specialized_arrmapn(BDict, TStr, TObj), { TStr, TObj, IterTypes::Count::Any, false, false } },
     { make_specialized_arrmapn(BOptDict, TStr, TObj), { TStr, TObj, IterTypes::Count::Any, true, false } },

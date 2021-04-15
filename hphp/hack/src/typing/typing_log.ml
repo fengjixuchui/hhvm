@@ -81,6 +81,8 @@ let lastenv =
 
 let iterations : int Pos.Map.t ref = ref Pos.Map.empty
 
+let iterations_decl : int Pos_or_decl.Map.t ref = ref Pos_or_decl.Map.empty
+
 (* Universal representation of a delta between values
  *)
 type delta =
@@ -420,7 +422,35 @@ let log_position p ?function_name f =
   else
     indentEnv
       ~color:(Bold Yellow)
-      ( Pos.string (Pos.to_absolute p)
+      ( (Pos.string @@ Pos.to_absolute p)
+      ^ ( if Int.equal n 1 then
+          ""
+        else
+          "[" ^ string_of_int n ^ "]" )
+      ^
+      match function_name with
+      | None -> ""
+      | Some n -> " {" ^ n ^ "}" )
+      f
+
+let log_pos_or_decl p ?function_name f =
+  let n =
+    match Pos_or_decl.Map.find_opt p !iterations_decl with
+    | None ->
+      iterations_decl := Pos_or_decl.Map.add p 1 !iterations_decl;
+      1
+    | Some n ->
+      iterations_decl := Pos_or_decl.Map.add p (n + 1) !iterations_decl;
+      n + 1
+  in
+  (* If we've hit this many iterations then something must have gone wrong
+   * so let's not bother spewing to the log *)
+  if n > 10000 then
+    ()
+  else
+    indentEnv
+      ~color:(Bold Yellow)
+      ( Pos_or_decl.show_as_absolute_file_line_characters p
       ^ ( if Int.equal n 1 then
           ""
         else
@@ -506,6 +536,17 @@ let genv_as_value env genv =
       ]
     | None -> [] )
 
+let fun_tast_info_as_map = function
+  | None -> make_map []
+  | Some r ->
+    let open Tast in
+    let { has_implicit_return; named_body_is_unsafe } = r in
+    make_map
+      [
+        ("has_implicit_return", bool_as_value has_implicit_return);
+        ("named_body_is_unsafe", bool_as_value named_body_is_unsafe);
+      ]
+
 let env_as_value env =
   let {
     function_pos;
@@ -525,6 +566,7 @@ let env_as_value env =
     inference_env;
     big_envs = _;
     pessimize = _;
+    fun_tast_info;
   } =
     env
   in
@@ -543,6 +585,7 @@ let env_as_value env =
       ("allow_wildcards", bool_as_value allow_wildcards);
       ( "inference_env",
         Typing_inference_env.Log.inference_env_as_value inference_env );
+      ("fun_tast_info", fun_tast_info_as_map fun_tast_info);
     ]
 
 let log_env_diff p ?function_name old_env new_env =
@@ -572,15 +615,11 @@ let _ =
 (* Log the type of an expression *)
 let hh_show p env ty =
   let s1 = Pr.with_blank_tyvars (fun () -> Pr.debug env ty) in
-  let s2_opt = Typing_print.constraints_for_type env ty in
+  let s2 = Typing_print.constraints_for_type env ty in
   log_position p (fun () ->
       lprintf (Normal Green) "%s" s1;
-      lnewline ();
-      match s2_opt with
-      | None -> ()
-      | Some s2 ->
-        lprintf (Normal Green) "%s" s2;
-        lnewline ())
+      if String.( <> ) s2 "" then lprintf (Normal Green) " %s" s2;
+      lnewline ())
 
 (* Simple type of possible log data *)
 type log_structure =
@@ -596,7 +635,7 @@ let log_with_level env key ~level log_f =
     ()
 
 let log_types p env items =
-  log_position p (fun () ->
+  log_pos_or_decl p (fun () ->
       let rec go items =
         List.iter items (fun item ->
             match item with
@@ -630,7 +669,10 @@ let log_prop level p message env prop =
 
 let log_new_tvar env p tvar message =
   log_with_level env "prop" 2 (fun () ->
-      log_types p env [Log_head (message, [Log_type ("type variable", tvar)])])
+      log_types
+        (Pos_or_decl.of_raw_pos p)
+        env
+        [Log_head (message, [Log_type ("type variable", tvar)])])
 
 let log_tparam_instantiation env p tparam_name tvar =
   let message =
@@ -647,13 +689,13 @@ let log_new_tvar_for_new_object env p tvar cname tparam =
   in
   log_new_tvar env p tvar message
 
-let log_new_tvar_for_tconst env p tvar tconstid tvar_for_tconst =
+let log_new_tvar_for_tconst env (p, tvar) (_p, tconstid) tvar_for_tconst =
   let message =
     Printf.sprintf "Creating new type var for #%d::%s" tvar tconstid
   in
   log_new_tvar env p tvar_for_tconst message
 
-let log_new_tvar_for_tconst_access env p tvar class_name tconst =
+let log_new_tvar_for_tconst_access env p tvar class_name (_p, tconst) =
   let message =
     Printf.sprintf
       "Creating type var with the same constraints as %s::%s"
@@ -691,9 +733,8 @@ let log_type_access ~level root (p, type_const_name) (env, result_ty) =
 
 let log_localize ~level (decl_ty : decl_ty) (env, result_ty) =
   ( log_with_level env "localize" ~level @@ fun () ->
-    let pos = Reason.to_pos @@ get_reason result_ty in
     log_types
-      pos
+      (get_pos result_ty)
       env
       [
         Log_head

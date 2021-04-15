@@ -38,28 +38,58 @@ type sub_type =
   ?coerce:Typing_logic.coercion_direction option ->
   locl_ty ->
   locl_ty ->
-  Errors.typing_error_callback ->
+  Errors.error_from_reasons_callback ->
   env
 
 let (sub_type_ref : sub_type ref) = ref (not_implemented "sub_type")
 
 let sub_type x = !sub_type_ref x
 
+type sub_type_res =
+  env ->
+  ?coerce:Typing_logic.coercion_direction option ->
+  locl_ty ->
+  locl_ty ->
+  Errors.error_from_reasons_callback ->
+  (env, env) result
+
+let (sub_type_res_ref : sub_type_res ref) = ref (not_implemented "sub_type_res")
+
+let sub_type_res x = !sub_type_res_ref x
+
 type sub_type_i =
-  env -> internal_type -> internal_type -> Errors.typing_error_callback -> env
+  env ->
+  internal_type ->
+  internal_type ->
+  Errors.error_from_reasons_callback ->
+  env
 
 let (sub_type_i_ref : sub_type_i ref) = ref (not_implemented "sub_type_i")
 
 let sub_type_i x = !sub_type_i_ref x
 
 type sub_type_with_dynamic_as_bottom =
-  env -> locl_ty -> locl_ty -> Errors.typing_error_callback -> env
+  env -> locl_ty -> locl_ty -> Errors.error_from_reasons_callback -> env
 
 let (sub_type_with_dynamic_as_bottom_ref : sub_type_with_dynamic_as_bottom ref)
     =
   ref (not_implemented "sub_type_with_dynamic_as_bottom")
 
 let sub_type_with_dynamic_as_bottom x = !sub_type_with_dynamic_as_bottom_ref x
+
+type sub_type_with_dynamic_as_bottom_res =
+  env ->
+  locl_ty ->
+  locl_ty ->
+  Errors.error_from_reasons_callback ->
+  (env, env) result
+
+let (sub_type_with_dynamic_as_bottom_res_ref :
+      sub_type_with_dynamic_as_bottom_res ref) =
+  ref (not_implemented "sub_type_with_dynamic_as_bottom_res")
+
+let sub_type_with_dynamic_as_bottom_res x =
+  !sub_type_with_dynamic_as_bottom_res_ref x
 
 type is_sub_type_type = env -> locl_ty -> locl_ty -> bool
 
@@ -104,7 +134,12 @@ let is_sub_type_ignore_generic_params x =
   !is_sub_type_ignore_generic_params_ref x
 
 type add_constraint =
-  Pos.Map.key -> env -> Ast_defs.constraint_kind -> locl_ty -> locl_ty -> env
+  env ->
+  Ast_defs.constraint_kind ->
+  locl_ty ->
+  locl_ty ->
+  Errors.error_from_reasons_callback ->
+  env
 
 let (add_constraint_ref : add_constraint ref) =
   ref (not_implemented "add_constraint")
@@ -115,9 +150,9 @@ type expand_typeconst =
   expand_env ->
   env ->
   ?ignore_errors:bool ->
-  ?as_tyvar_with_cnstr:bool ->
+  ?as_tyvar_with_cnstr:Pos.t option ->
   locl_ty ->
-  Aast.sid ->
+  pos_id ->
   root_pos:Pos_or_decl.t ->
   allow_abstract_tconst:bool ->
   env * locl_ty
@@ -197,13 +232,7 @@ let (simplify_intersections_ref : simplify_intersections ref) =
 
 let simplify_intersections x = !simplify_intersections_ref x
 
-type localize_with_self =
-  env ->
-  ?pos:Pos.t ->
-  ?quiet:bool ->
-  ?report_cycle:Pos.t * string ->
-  decl_ty ->
-  env * locl_ty
+type localize_with_self = env -> ignore_errors:bool -> decl_ty -> env * locl_ty
 
 let (localize_with_self_ref : localize_with_self ref) =
   ref (not_implemented "localize_with_self")
@@ -218,19 +247,16 @@ let (localize_ref : localize ref) =
 let localize x = !localize_ref x
 
 type env_with_self =
-  ?pos:Pos.t ->
-  ?quiet:bool ->
   ?report_cycle:Pos.t * string ->
-  ?on_error:Errors.typing_error_callback ->
   env ->
+  on_error:Errors.error_from_reasons_callback ->
   expand_env
 
 let env_with_self_ref : env_with_self ref =
-  ref (fun ?pos:_ ?quiet:_ ?report_cycle:_ ?on_error:_ ->
-      not_implemented "env_with_self")
+  ref (fun ?report_cycle:_ _ ~on_error:_ ->
+      (not_implemented "env_with_self" () : _))
 
-let env_with_self ?pos ?quiet ?report_cycle x =
-  !env_with_self_ref ?pos ?quiet ?report_cycle x
+let env_with_self ?report_cycle x = !env_with_self_ref ?report_cycle x
 
 let rec strip_this ty =
   match get_node ty with
@@ -494,7 +520,7 @@ let shape_field_name :
       | None -> None
       | Some c_ty ->
         (match get_node c_ty with
-        | Tclass (sid, _, _) -> Some sid
+        | Tclass (sid, _, _) -> Some (Positioned.unsafe_to_raw_positioned sid)
         | _ -> None))
   in
   match shape_field_name_ this (p, field) with
@@ -574,13 +600,14 @@ let default_fun_param ?(pos = Pos_or_decl.none) ty : 'a fun_param =
         ~ifc_external:false
         ~ifc_can_call:false
         ~is_atom:false
-        ~readonly:false
-        ~const_function:false;
+        ~readonly:false;
   }
 
 let tany = Env.tany
 
 let mk_tany env p = mk (Reason.Rwitness p, tany env)
+
+let mk_tany_ env p = mk (Reason.Rwitness_from_decl p, tany env)
 
 let terr env r =
   let dynamic_view_enabled =

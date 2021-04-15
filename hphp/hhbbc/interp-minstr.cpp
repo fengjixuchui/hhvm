@@ -953,7 +953,7 @@ Effects setOpNewElemHelper(ISS& env, int32_t nDiscard) {
 //////////////////////////////////////////////////////////////////////
 // intermediate ops
 
-Effects miProp(ISS& env, bool, MOpMode mode, Type key) {
+Effects miProp(ISS& env, bool, MOpMode mode, Type key, ReadOnlyOp op) {
   auto const name     = mStringKey(key);
   auto const isDefine = mode == MOpMode::Define;
   auto const isUnset  = mode == MOpMode::Unset;
@@ -992,9 +992,14 @@ Effects miProp(ISS& env, bool, MOpMode mode, Type key) {
     auto const optThisTy = thisTypeFromContext(env.index, env.ctx);
     auto const thisTy    = optThisTy ? *optThisTy : TObj;
     if (name) {
+      auto const elem = thisPropRaw(env, name);
+      if (elem && elem->attrs & AttrIsReadOnly && op == ReadOnlyOp::Mutable) {
+        return Effects::AlwaysThrows;
+      }
+      
       auto const ty = [&] {
         if (update) {
-          if (auto const elem = thisPropRaw(env, name)) return elem->ty;
+          if (elem) return elem->ty;
         } else {
           if (auto const propTy = thisPropAsCell(env, name)) return *propTy;
         }
@@ -1365,7 +1370,7 @@ Effects miFinalIssetProp(ISS& env, int32_t nDiscard, const Type& key) {
 
   if (name && mustBeThisObj(env, env.collect.mInstrState.base)) {
     if (auto const pt = thisPropAsCell(env, name)) {
-      if (isMaybeLateInitThisProp(env, name)) {
+      if (isMaybeThisPropAttr(env, name, AttrLateInit)) {
         // LateInit props can always be maybe unset, except if its never set at
         // all.
         push(env, pt->subtypeOf(BBottom) ? TFalse : TBool);
@@ -1384,8 +1389,8 @@ Effects miFinalIssetProp(ISS& env, int32_t nDiscard, const Type& key) {
   return Effects::Throws;
 }
 
-Effects miFinalCGetProp(ISS& env, int32_t nDiscard,
-                        const Type& key, bool quiet) {
+Effects miFinalCGetProp(ISS& env, int32_t nDiscard, const Type& key,
+                        bool quiet, bool mustBeMutable) {
   auto const name = mStringKey(key);
   discard(env, nDiscard);
 
@@ -1395,8 +1400,11 @@ Effects miFinalCGetProp(ISS& env, int32_t nDiscard,
     if (mustBeThisObj(env, env.collect.mInstrState.base)) {
       if (auto const t = thisPropAsCell(env, name)) {
         push(env, *t);
+        if (mustBeMutable && isMaybeThisPropAttr(env, name, AttrIsReadOnly)) {
+          return Effects::Throws;  
+        }
         if (t->subtypeOf(BBottom)) return Effects::AlwaysThrows;
-        if (isMaybeLateInitThisProp(env, name)) return Effects::Throws;
+        if (isMaybeThisPropAttr(env, name, AttrLateInit)) return Effects::Throws;
         if (quiet) return Effects::None;
         auto const elem = thisPropRaw(env, name);
         assertx(elem);
@@ -1424,7 +1432,7 @@ Effects miFinalCGetProp(ISS& env, int32_t nDiscard,
   return Effects::Throws;
 }
 
-Effects miFinalSetProp(ISS& env, int32_t nDiscard, const Type& key) {
+Effects miFinalSetProp(ISS& env, int32_t nDiscard, const Type& key, ReadOnlyOp op) {
   auto const name = mStringKey(key);
   auto const t1 = unctx(popC(env));
 
@@ -1434,6 +1442,16 @@ Effects miFinalSetProp(ISS& env, int32_t nDiscard, const Type& key) {
     push(env, std::move(ty));
     return Effects::Throws;
   };
+  
+  auto const alwaysThrows = [&] {
+    discard(env, nDiscard);
+    push(env, TBottom);
+    return Effects::AlwaysThrows;
+  };
+  
+  if (op == ReadOnlyOp::ReadOnly && !isMaybeThisPropAttr(env, name, AttrIsReadOnly)) {
+    return alwaysThrows();
+  }
 
   if (couldBeThisObj(env, env.collect.mInstrState.base)) {
     if (!name) {
@@ -1449,11 +1467,7 @@ Effects miFinalSetProp(ISS& env, int32_t nDiscard, const Type& key) {
   }
 
   if (env.collect.mInstrState.base.type.subtypeOf(BObj)) {
-    if (t1.subtypeOf(BBottom)) {
-      discard(env, nDiscard);
-      push(env, TBottom);
-      return Effects::AlwaysThrows;
-    }
+    if (t1.subtypeOf(BBottom)) return alwaysThrows();
     moveBase(
       env,
       Base { t1, BaseLoc::Prop, env.collect.mInstrState.base.type, name }
@@ -1827,14 +1841,14 @@ Effects miFinalUnsetElem(ISS& env, int32_t nDiscard, const Type& key) {
       refine |= BArrLike;
     } else {
       auto e = key.subtypeOf(BArrKey) ? Effects::None : Effects::Throws;
-      if (base.couldBe(BVecish) && key.couldBe(BInt)) e = Effects::Throws;
+      if (base.couldBe(BVec) && key.couldBe(BInt)) e = Effects::Throws;
       effects = unionEffects(effects, e);
 
       // We purposefully do not model the effects of unset on array
       // structure. This lets us assume that if we have array structure,
       // we also have no tombstones. Pessimize the base which drops array
       // structure and also remove emptiness information.
-      if (!base.subtypeAmong(BVecish, BArrLike) || key.couldBe(BInt)) {
+      if (!base.subtypeAmong(BVec, BArrLike) || key.couldBe(BInt)) {
         base = loosen_array_staticness(loosen_array_values(std::move(base)));
         base = loosen_emptiness(std::move(base));
         update = true;
@@ -2026,6 +2040,13 @@ void in(ISS& env, const bc::BaseSC& op) {
       // These don't mutate the base, so AttrConst does not apply
       break;
   }
+  
+  // Whether we might potentially throw because of AttrIsReadOnly
+  if (op.subop4 == ReadOnlyOp::Mutable && lookup.readOnly == TriBool::Yes) {
+    return unreachable(env);
+  }
+  auto const mightReadOnlyThrow =
+    (op.subop4 == ReadOnlyOp::Mutable && lookup.readOnly == TriBool::Maybe);
 
   // Loading the base from a static property can be considered
   // effect_free if there's no possibility of throwing. This requires
@@ -2036,6 +2057,7 @@ void in(ISS& env, const bc::BaseSC& op) {
       lookup.lateInit == TriBool::No &&
       !lookup.classInitMightRaise &&
       !mightConstThrow &&
+      !mightReadOnlyThrow &&
       tcls.subtypeOf(BCls) &&
       tname.subtypeOf(BStr)) {
 
@@ -2150,7 +2172,7 @@ void in(ISS& env, const bc::Dim& op) {
   auto const effects = [&] {
     if (mcodeIsProp(op.mkey.mcode)) {
       return miProp(
-        env, op.mkey.mcode == MQT, op.subop1, std::move(key->first)
+        env, op.mkey.mcode == MQT, op.subop1, std::move(key->first), op.mkey.rop
       );
     } else if (mcodeIsElem(op.mkey.mcode)) {
       return miElem(env, op.subop1, std::move(key->first), key_local(env, op));
@@ -2232,7 +2254,8 @@ void in(ISS& env, const bc::QueryM& op) {
         case QueryMOp::CGet:
         case QueryMOp::CGetQuiet:
           return miFinalCGetProp(env, nDiscard, key->first,
-                                 op.subop2 == QueryMOp::CGetQuiet);
+                                 op.subop2 == QueryMOp::CGetQuiet,
+                                 op.mkey.rop == ReadOnlyOp::Mutable);
         case QueryMOp::Isset:
           return miFinalIssetProp(env, nDiscard, key->first);
         case QueryMOp::InOut:
@@ -2329,7 +2352,7 @@ void in(ISS& env, const bc::SetM& op) {
 
   auto const effects = [&] {
     if (mcodeIsProp(op.mkey.mcode)) {
-      return miFinalSetProp(env, op.arg1, key->first);
+      return miFinalSetProp(env, op.arg1, key->first, op.mkey.rop);
     } else if (mcodeIsElem(op.mkey.mcode)) {
       return miFinalSetElem(env, op.arg1, key->first, key_local(env, op));
     } else {

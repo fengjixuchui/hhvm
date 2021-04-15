@@ -42,20 +42,9 @@ namespace HPHP {
  * HHVM_REPO_SCHEMA, because kind values are used in HHBC.
  */
 enum class HeaderKind : uint8_t {
-  // Array-like header kinds. We use the concrete values of these kinds for
-  // tests in array-data.h, so take care when changing them. Specifically,
-  // we currently require that:
-  //
-  //  1. Array-like HeaderKind values match up with ArrayData::ArrayKind.
-  //  2. All PHP kinds come before any Hack array kinds.
-  //  3. varray-ish and darray-ish kinds come first (used for dvarray tests)
-  //  4. "vanilla" kinds are even, and "bespoke" kinds are odd.
-  //  5. We support fast mask-compare tests for packed and mixed layouts.
-
-  // dvarrays, with bespoke counterparts
-  Mixed, BespokeDArray, Packed, BespokeVArray,
-  // Hack arrays, with bespoke counterparts
-  Dict, BespokeDict, Vec, BespokeVec, Keyset, BespokeKeyset,
+  // Array-like header kinds. They must match up with ArrayData::ArrayKind.
+  // "vanilla" kinds must be odd and "bespoke" kinds must be even.
+  Vec, BespokeVec, Dict, BespokeDict, Keyset, BespokeKeyset,
 
   // Other ordinary refcounted heap objects
   String, Resource, ClsMeth, RClsMeth, Record, RFunc,
@@ -96,43 +85,21 @@ inline bool haveCount(HeaderKind k) {
  * while uncounted objects are freed using the treadmill. Using 8-bit values
  * generates shorter cmp instructions while still being far enough from 0 to be
  * safe.
- *
- * One-bit reference counting:
- *
- * When one_bit_refcount == true, HHVM's reference counting primitives behave
- * very differently. Reference counts are conceptually one bit, where 0 means
- * "one reference" and 1 means "many references". In practice, m_count is a
- * full byte wide, both to accommodate UncountedValue and StaticValue, and so
- * we can operate on m_count directly without any bit twiddling.
- *
- * DecRef becomes `if (m_count == 0) release();`, while IncRef becomes `m_count
- * = 1` (depending on the value of unconditional_one_bit_incref; see
- * runtime/base/countable.h). This means that any object that is ever IncRefed
- * will stick at m_count == 1 until the GC collects it or the end of the
- * request. This also causes spurious COW operations on ararys, and means
- * Object destructors aren't supported.
- *
- * None of this matters to the vast majority of runtime and JIT code. The
- * interpreter and HHIR programs should still use balanced IncRef and DecRef
- * operations as usual, regardless of the build mode. All differences in how
- * reference counts are manipulated are isolated to member functions of
- * Countable/MaybeCountable and the HHIR -> vasm lowering code for the IncRef
- * and DecRef HHIR instructions.
  */
-enum RefCount : std::conditional<one_bit_refcount, int8_t, int32_t>::type {
-  OneReference   = one_bit_refcount ? 0 : 1,
+enum RefCount : int32_t {
+  OneReference   = 1,
   // MultiReference should never be used outside of one-bit mode, so set it to
   // something above RefCountMaxRealistic to trip asserts.
-  MultiReference = one_bit_refcount ? 1 : 0x40000000,
+  MultiReference = 0x40000000,
 
-  // In one_bit_refcount builds, uncountedIncRef will count upwards
-  // from UncountedValue to -1, so it needs to be above StaticValue;
-  // in regular builds, its going to count downwards towards
-  // INT_MIN, so needs to be below StaticValue.
-  UncountedValue = one_bit_refcount ? -127 : -128,
-  StaticValue    = one_bit_refcount ? -128 : -127,
+  // Uncounted refcounts count down from UncountedValue to INT_MIN. A count
+  // of UncountedZero is not a valid count - it indicates we must release the
+  // memory of the uncounted object.
+  UncountedValue = -128,
+  UncountedZero  = -127,
+  StaticValue    = -126,
 
-  RefCountMaxRealistic = one_bit_refcount ? MultiReference : (1 << 30) - 1,
+  RefCountMaxRealistic = (1 << 30) - 1,
 };
 
 using UnsignedRefCount = std::make_unsigned<RefCount>::type;
@@ -146,9 +113,10 @@ enum class GCBits : uint8_t {};
  * padding with ONE_BIT_REFCOUNT.
  *
  * 0       32     40      48            56
- * [ cnt | kind | marks | arrBits      | sizeClass ] Packed, Vec
- * [ cnt | kind | marks | arrBits      | keyTypes  ] Mixed, Dict
- * [ cnt | kind | marks |                          ] Empty, Globals, Keyset
+ * [ cnt | kind | marks | arrBits      | sizeClass ] (vanilla) Vec
+ * [ cnt | kind | marks | arrBits      | keyTypes  ] (vanilla) Dict
+ * [ cnt | kind | marks |                          ] (vanilla) Keyset
+ * [ cnt | kind | marks | arrBits      | extraData ] any BespokeArray
  * [ cnt | kind | marks | sizeClass    | isSymbol  ] String
  * [ cnt | kind | marks | heapSize:16              ] Resource (ResourceHdr)
  * [ cnt | kind | marks | Attribute    |           ] Object..ImmSet (ObjectData)
@@ -156,12 +124,12 @@ enum class GCBits : uint8_t {};
  * Note: arrBits includes several flags, mostly from the Hack array migration:
  *  - 1 bit for hasAPCTypedValue
  *  - 1 bit for isLegacyArray
- *  - 1 bit for hasProvenanceData
  *  - 1 bit for hasStrKeyTable
+ *  - 1 bit for isSampledArray
  *  - 4 bits unused
  *
- * When HAM is complete, we can eliminate DVArray and hasProvenanceData and move
- * the MixedArray keyTypes bitset (which uses 4 bits) to byte 6.
+ * Now that HAM is done, we can merge the MixedArrayKeys bitset (which also
+ * uses 4 bits) into this field, so the highest byte is always the size class.
  *
  * Note: when an ObjectData is preceded by a special header (AsyncFuncFrame,
  * NativeData, ClosureHeader, or MemoData), only the special header is marked
@@ -191,9 +159,6 @@ protected:
   union {
     struct {
       mutable RefCount m_count;
-#ifdef ONE_BIT_REFCOUNT
-      int8_t m_padding[3];
-#endif
       HeaderKind m_kind;
       mutable GCBits m_marks;
       mutable uint16_t m_aux16;
@@ -279,7 +244,7 @@ inline constexpr bool isObjectKind(HeaderKind k) {
 }
 
 inline constexpr bool isArrayKind(HeaderKind k) {
-  return k >= HeaderKind::Mixed && k <= HeaderKind::BespokeKeyset;
+  return k >= HeaderKind::Vec && k <= HeaderKind::BespokeKeyset;
 }
 
 inline constexpr bool isFreeKind(HeaderKind k) {

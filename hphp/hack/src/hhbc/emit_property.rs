@@ -11,10 +11,10 @@ use emit_type_hint_rust as emit_type_hint;
 use env::{emitter::Emitter, Env};
 use hhas_property_rust::{HhasProperty, HhasPropertyFlags};
 use hhas_type::{constraint, Info as TypeInfo};
-use hhbc_ast_rust::{InitpropOp, ReadOnlyOp};
+use hhbc_ast_rust::InitpropOp;
 use hhbc_id_rust::{prop, Id};
 use hhbc_string_utils_rust as string_utils;
-use instruction_sequence_rust::{instr, InstrSeq, Result};
+use instruction_sequence::{instr, InstrSeq, Result};
 use naming_special_names_rust::{pseudo_consts, user_attributes as ua};
 use oxidized::{aast_defs, ast as tast, ast_defs, doc_comment, namespace_env};
 use runtime::TypedValue;
@@ -119,11 +119,7 @@ pub fn from_ast<'a>(
                             instr::empty(),
                             emit_pos::emit_pos_then(
                                 &class.span,
-                                instr::initprop(
-                                    pid.clone(),
-                                    InitpropOp::Static,
-                                    ReadOnlyOp::Mutable,
-                                ),
+                                instr::initprop(pid.clone(), InitpropOp::Static),
                             ),
                         )
                     } else if args.visibility.is_private() {
@@ -131,11 +127,7 @@ pub fn from_ast<'a>(
                             instr::empty(),
                             emit_pos::emit_pos_then(
                                 &class.span,
-                                instr::initprop(
-                                    pid.clone(),
-                                    InitpropOp::NonStatic,
-                                    ReadOnlyOp::Mutable,
-                                ),
+                                instr::initprop(pid.clone(), InitpropOp::NonStatic),
                             ),
                         )
                     } else {
@@ -147,11 +139,7 @@ pub fn from_ast<'a>(
                             ]),
                             InstrSeq::gather(vec![
                                 emit_pos::emit_pos(&class.span),
-                                instr::initprop(
-                                    pid.clone(),
-                                    InitpropOp::NonStatic,
-                                    ReadOnlyOp::Mutable,
-                                ),
+                                instr::initprop(pid.clone(), InitpropOp::NonStatic),
                                 instr::label(label),
                             ]),
                         )

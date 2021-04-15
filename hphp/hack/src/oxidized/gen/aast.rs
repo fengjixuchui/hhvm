@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<f6b592e0fda1eca57936644c661c3633>>
+// @generated SignedSource<<90d5df1e603b8e764f9b4769927c6909>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -194,6 +194,8 @@ pub enum Stmt_<Ex, Fb, En, Hi> {
     ),
     /// No-op, the empty statement.
     ///
+    /// {}
+    /// while (true) ;
     /// if ($foo) {} // the else is Noop here
     Noop,
     /// Block, a list of statements in curly braces.
@@ -422,8 +424,9 @@ pub enum FunctionPtrId<Ex, Fb, En, Hi> {
 )]
 pub struct ExpressionTree<Ex, Fb, En, Hi> {
     pub hint: Hint,
-    pub src_expr: Expr<Ex, Fb, En, Hi>,
-    pub desugared_expr: Expr<Ex, Fb, En, Hi>,
+    pub splices: Block<Ex, Fb, En, Hi>,
+    pub virtualized_expr: Expr<Ex, Fb, En, Hi>,
+    pub runtime_expr: Expr<Ex, Fb, En, Hi>,
 }
 
 #[derive(
@@ -634,11 +637,12 @@ pub enum Expr_<Ex, Fb, En, Hi> {
     ///
     /// readonly $foo
     ReadonlyExpr(Box<Expr<Ex, Fb, En, Hi>>),
+    /// Tuple expression.
+    ///
+    /// tuple("a", 1, $foo)
+    Tuple(Vec<Expr<Ex, Fb, En, Hi>>),
     /// List expression, only used in destructuring. Allows any arbitrary
     /// lvalue as a subexpression. May also nest.
-    ///
-    /// Note that tuple(1, 2) is lowered to a Call, but naming converts it to a List.
-    /// TODO: Define a separate AAST node for tuple.
     ///
     /// list($x, $y) = vec[1, 2];
     /// list(, $y) = vec[1, 2]; // skipping items
@@ -811,6 +815,39 @@ pub enum Expr_<Ex, Fb, En, Hi> {
     ///
     /// TODO: Remove.
     Any,
+    /// Annotation used to record failure in subtyping or coercion of an
+    /// expression and calls to [unsafe_cast] or [enforced_cast].
+    ///
+    /// The [hole_source] indicates whether this came from an
+    /// explicit call to [unsafe_cast] or [enforced_cast] or was
+    /// generated during typing.
+    ///
+    /// Given a call to [unsafe_cast]:
+    /// ```
+    ///          function f(int $x): void { /* ... */ }
+    ///
+    ///          function g(float $x): void {
+    ///             f(unsafe_cast<float,int>($x));
+    ///          }
+    /// ```
+    /// After typing, this is represented by the following TAST fragment
+    /// ```
+    ///          Call
+    ///            ( ( (..., function(int $x): void), Id (..., "\f"))
+    ///            , []
+    ///            , [ ( (..., int)
+    ///                , Hole
+    ///                    ( ((..., float), Lvar (..., $x))
+    ///                    , float
+    ///                    , int
+    ///                    , UnsafeCast
+    ///                    )
+    ///                )
+    ///              ]
+    ///            , None
+    ///            )
+    /// ```
+    Hole(Box<(Expr<Ex, Fb, En, Hi>, Hi, Hi, HoleSource)>),
 }
 
 #[derive(
@@ -1014,6 +1051,7 @@ pub enum FunVariadicity<Ex, Fb, En, Hi> {
 )]
 pub struct Fun_<Ex, Fb, En, Hi> {
     pub span: Pos,
+    pub readonly_this: Option<ast_defs::ReadonlyKind>,
     pub annotation: En,
     pub mode: file_info::Mode,
     pub readonly_ret: Option<ast_defs::ReadonlyKind>,
@@ -1034,7 +1072,6 @@ pub struct Fun_<Ex, Fb, En, Hi> {
     pub external: bool,
     pub namespace: Nsenv,
     pub doc_comment: Option<DocComment>,
-    pub static_: bool,
 }
 
 /// Naming has two phases and the annotation helps to indicate the phase.
@@ -1265,7 +1302,7 @@ pub struct Class_<Ex, Fb, En, Hi> {
     pub implements_dynamic: bool,
     pub where_constraints: Vec<WhereConstraintHint>,
     pub consts: Vec<ClassConst<Ex, Fb, En, Hi>>,
-    pub typeconsts: Vec<ClassTypeconst<Ex, Fb, En, Hi>>,
+    pub typeconsts: Vec<ClassTypeconstDef<Ex, Fb, En, Hi>>,
     pub vars: Vec<ClassVar<Ex, Fb, En, Hi>>,
     pub methods: Vec<Method_<Ex, Fb, En, Hi>>,
     pub attributes: Vec<ClassAttr<Ex, Fb, En, Hi>>,
@@ -1423,17 +1460,12 @@ pub struct ClassConst<Ex, Fb, En, Hi> {
     Serialize,
     ToOcamlRep
 )]
-pub enum TypeconstAbstractKind {
-    TCAbstract(Option<Hint>),
-    TCPartiallyAbstract,
-    TCConcrete,
+pub struct ClassAbstractTypeconst {
+    pub as_constraint: Option<Hint>,
+    pub super_constraint: Option<Hint>,
+    pub default: Option<Hint>,
 }
 
-/// This represents a type const definition. If a type const is abstract then
-/// then the type hint acts as a constraint. Any concrete definition of the
-/// type const must satisfy the constraint.
-///
-/// If the type const is not abstract then a type must be specified.
 #[derive(
     Clone,
     Debug,
@@ -1448,12 +1480,67 @@ pub enum TypeconstAbstractKind {
     Serialize,
     ToOcamlRep
 )]
-pub struct ClassTypeconst<Ex, Fb, En, Hi> {
-    pub abstract_: TypeconstAbstractKind,
-    pub name: Sid,
-    pub as_constraint: Option<Hint>,
-    pub type_: Option<Hint>,
+pub struct ClassConcreteTypeconst {
+    pub c_tc_type: Hint,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    FromOcamlRep,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub struct ClassPartiallyAbstractTypeconst {
+    pub constraint: Hint,
+    pub type_: Hint,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    FromOcamlRep,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub enum ClassTypeconst {
+    TCAbstract(ClassAbstractTypeconst),
+    TCConcrete(ClassConcreteTypeconst),
+    TCPartiallyAbstract(ClassPartiallyAbstractTypeconst),
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    FromOcamlRep,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub struct ClassTypeconstDef<Ex, Fb, En, Hi> {
     pub user_attributes: Vec<UserAttribute<Ex, Fb, En, Hi>>,
+    pub name: Sid,
+    pub kind: ClassTypeconst,
     pub span: Pos,
     pub doc_comment: Option<DocComment>,
     pub is_ctx: bool,
@@ -1686,6 +1773,29 @@ pub enum NsKind {
     NSConst,
 }
 impl TrivialDrop for NsKind {}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    FromOcamlRep,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub enum HoleSource {
+    Typing,
+    UnsafeCast,
+    EnforcedCast,
+}
+impl TrivialDrop for HoleSource {}
 
 #[derive(
     Clone,

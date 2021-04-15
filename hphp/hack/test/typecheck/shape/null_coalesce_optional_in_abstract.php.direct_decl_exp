@@ -1,6 +1,6 @@
 --- legacy
 +++ direct decl
-@@ -1,138 +1,138 @@
+@@ -1,137 +1,137 @@
  [("\\Foo",
    (Shallow_decl_defs.Class
       { Shallow_decl_defs.sc_mode = Mstrict; sc_final = false;
@@ -18,8 +18,9 @@
                        { sft_optional = true;
                          sft_ty = (Rhint ([4:15-18]), (Tprim Tint)) } }
                      ))));
-           stc_name = ([3:23-27], "TFoo"); stc_type = None;
-           stc_enforceable = ([Pos.none], false); stc_reifiable = None }
+           stc_super_constraint = None; stc_name = ([3:23-27], "TFoo");
+           stc_type = None; stc_enforceable = ([Pos.none], false);
+           stc_reifiable = None }
           ];
         sc_props = []; sc_sprops = []; sc_constructor = None;
         sc_static_methods =
@@ -39,8 +40,7 @@
                    };
                  ft_flags =
                  (make_ft_flags FSync ~return_disposable:false
-                   ~returns_readonly:false ~readonly_this:false
-                   ~is_const:false);
+                   ~returns_readonly:false ~readonly_this:false);
                  ft_ifc_decl = FDPolicied {PUBLIC} }));
            sm_visibility = Public; sm_deprecated = None; sm_flags = abstract }
           ];
@@ -58,7 +58,8 @@
          sc_implements_dynamic = false; sc_consts = [];
          sc_typeconsts =
          [{ Shallow_decl_defs.stc_abstract = Typing_defs.TCConcrete;
-            stc_as_constraint = None; stc_name = ([11:14-18], "TFoo");
+            stc_as_constraint = None; stc_super_constraint = None;
+            stc_name = ([11:14-18], "TFoo");
             stc_type =
             (Some (Rhint ([11:21-14:4]),
                    (Tshape (Typing_defs_core.Open_shape,
@@ -87,8 +88,7 @@
                     };
                   ft_flags =
                   (make_ft_flags FSync ~return_disposable:false
-                    ~returns_readonly:false ~readonly_this:false
-                    ~is_const:false);
+                    ~returns_readonly:false ~readonly_this:false);
                   ft_ifc_decl = FDPolicied {PUBLIC} }));
             sm_visibility = Public; sm_deprecated = None; sm_flags = (empty) }
            ];
@@ -133,8 +133,7 @@
                     et_type = (Rhint ([22:35-39]), (Tprim Tvoid)) };
                   ft_flags =
                   (make_ft_flags FSync ~return_disposable:false
-                    ~returns_readonly:false ~readonly_this:false
-                    ~is_const:false);
+                    ~returns_readonly:false ~readonly_this:false);
                   ft_ifc_decl = FDPolicied {PUBLIC} }));
             sm_visibility = Public; sm_deprecated = None; sm_flags = (empty) }
            ];

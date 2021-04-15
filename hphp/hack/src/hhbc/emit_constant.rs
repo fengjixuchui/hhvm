@@ -13,7 +13,7 @@ use hhas_function_rust::{self as hhas_function, HhasFunction};
 use hhas_pos_rust::Span;
 use hhbc_id_rust::{r#const, function, Id};
 use hhbc_string_utils_rust::strip_global_ns;
-use instruction_sequence_rust::{instr, InstrSeq, Result};
+use instruction_sequence::{instr, InstrSeq, Result};
 use oxidized::ast as tast;
 
 fn emit_constant_cinit<'a>(
@@ -57,7 +57,7 @@ fn emit_constant_cinit<'a>(
                 vec![], /* params */
                 return_type_info,
                 None, /* doc_comment */
-                Some(env.clone()),
+                Some(&env),
             )?;
             Ok(HhasFunction {
                 attributes: vec![],

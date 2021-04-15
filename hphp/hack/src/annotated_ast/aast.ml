@@ -177,6 +177,8 @@ and ('ex, 'fb, 'en, 'hi) stmt_ =
   | Noop
       (** No-op, the empty statement.
 
+          {}
+          while (true) ;
           if ($foo) {} // the else is Noop here *)
   | Block of ('ex, 'fb, 'en, 'hi) block
       (** Block, a list of statements in curly braces.
@@ -269,8 +271,9 @@ and ('ex, 'fb, 'en, 'hi) function_ptr_id =
 
 and ('ex, 'fb, 'en, 'hi) expression_tree = {
   et_hint: hint;
-  et_src_expr: ('ex, 'fb, 'en, 'hi) expr;
-  et_desugared_expr: ('ex, 'fb, 'en, 'hi) expr;
+  et_splices: ('ex, 'fb, 'en, 'hi) block;
+  et_virtualized_expr: ('ex, 'fb, 'en, 'hi) expr;
+  et_runtime_expr: ('ex, 'fb, 'en, 'hi) expr;
 }
 
 and ('ex, 'fb, 'en, 'hi) expr_ =
@@ -460,12 +463,13 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
       (** Readonly expression.
 
           readonly $foo *)
+  | Tuple of ('ex, 'fb, 'en, 'hi) expr list
+      (** Tuple expression.
+
+          tuple("a", 1, $foo) *)
   | List of ('ex, 'fb, 'en, 'hi) expr list
       (** List expression, only used in destructuring. Allows any arbitrary
           lvalue as a subexpression. May also nest.
-
-          Note that tuple(1, 2) is lowered to a Call, but naming converts it to a List.
-          TODO: Define a separate AAST node for tuple.
 
           list($x, $y) = vec[1, 2];
           list(, $y) = vec[1, 2]; // skipping items
@@ -628,6 +632,40 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
           the toolchain.
 
           TODO: Remove. *)
+  | Hole of ('ex, 'fb, 'en, 'hi) expr * 'hi * 'hi * hole_source
+      (** Annotation used to record failure in subtyping or coercion of an
+          expression and calls to [unsafe_cast] or [enforced_cast].
+
+          The [hole_source] indicates whether this came from an
+          explicit call to [unsafe_cast] or [enforced_cast] or was
+          generated during typing.
+
+          Given a call to [unsafe_cast]:
+          ```
+          function f(int $x): void { /* ... */ }
+
+          function g(float $x): void {
+             f(unsafe_cast<float,int>($x));
+          }
+          ```
+          After typing, this is represented by the following TAST fragment
+          ```
+          Call
+            ( ( (..., function(int $x): void), Id (..., "\f"))
+            , []
+            , [ ( (..., int)
+                , Hole
+                    ( ((..., float), Lvar (..., $x))
+                    , float
+                    , int
+                    , UnsafeCast
+                    )
+                )
+              ]
+            , None
+            )
+          ```
+      *)
 
 and ('ex, 'fb, 'en, 'hi) class_get_expr =
   | CGstring of pstring
@@ -686,6 +724,7 @@ and ('ex, 'fb, 'en, 'hi) fun_variadicity =
 
 and ('ex, 'fb, 'en, 'hi) fun_ = {
   f_span: pos;
+  f_readonly_this: Ast_defs.readonly_kind option;
   f_annotation: 'en;
   f_mode: FileInfo.mode; [@visitors.opaque]
   f_readonly_ret: Ast_defs.readonly_kind option;
@@ -707,7 +746,6 @@ and ('ex, 'fb, 'en, 'hi) fun_ = {
                          external function declaration (e.g. from an HHI file)*)
   f_namespace: nsenv;
   f_doc_comment: doc_comment option;
-  f_static: bool;
 }
 
 (**
@@ -795,7 +833,7 @@ and ('ex, 'fb, 'en, 'hi) class_ = {
   c_implements_dynamic: bool;
   c_where_constraints: where_constraint_hint list;
   c_consts: ('ex, 'fb, 'en, 'hi) class_const list;
-  c_typeconsts: ('ex, 'fb, 'en, 'hi) class_typeconst list;
+  c_typeconsts: ('ex, 'fb, 'en, 'hi) class_typeconst_def list;
   c_vars: ('ex, 'fb, 'en, 'hi) class_var list;
   c_methods: ('ex, 'fb, 'en, 'hi) method_ list;
   c_attributes: ('ex, 'fb, 'en, 'hi) class_attr list;
@@ -848,23 +886,37 @@ and ('ex, 'fb, 'en, 'hi) class_const = {
   cc_doc_comment: doc_comment option;
 }
 
-and typeconst_abstract_kind =
-  | TCAbstract of hint option (* default *)
-  | TCPartiallyAbstract
-  | TCConcrete
-
 (** This represents a type const definition. If a type const is abstract then
  * then the type hint acts as a constraint. Any concrete definition of the
  * type const must satisfy the constraint.
  *
  * If the type const is not abstract then a type must be specified.
  *)
-and ('ex, 'fb, 'en, 'hi) class_typeconst = {
-  c_tconst_abstract: typeconst_abstract_kind;
-  c_tconst_name: sid;
-  c_tconst_as_constraint: hint option;
-  c_tconst_type: hint option;
+
+and class_abstract_typeconst = {
+  c_atc_as_constraint: hint option;
+  c_atc_super_constraint: hint option;
+  c_atc_default: hint option;
+}
+
+and class_concrete_typeconst = { c_tc_type: hint }
+
+(* A partially abstract type constant always has a constraint *
+ * and always has a value. *)
+and class_partially_abstract_typeconst = {
+  c_patc_constraint: hint;
+  c_patc_type: hint;
+}
+
+and class_typeconst =
+  | TCAbstract of class_abstract_typeconst
+  | TCConcrete of class_concrete_typeconst
+  | TCPartiallyAbstract of class_partially_abstract_typeconst
+
+and ('ex, 'fb, 'en, 'hi) class_typeconst_def = {
   c_tconst_user_attributes: ('ex, 'fb, 'en, 'hi) user_attribute list;
+  c_tconst_name: sid;
+  c_tconst_kind: class_typeconst;
   c_tconst_span: pos;
   c_tconst_doc_comment: doc_comment option;
   c_tconst_is_ctx: bool;
@@ -976,6 +1028,11 @@ and ns_kind =
   | NSClassAndNamespace
   | NSFun
   | NSConst
+
+and hole_source =
+  | Typing
+  | UnsafeCast
+  | EnforcedCast
 
 and doc_comment = (Doc_comment.t[@visitors.opaque])
 

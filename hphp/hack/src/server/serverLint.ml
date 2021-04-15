@@ -13,34 +13,6 @@ module Hack_bucket = Bucket
 open Hh_prelude
 module RP = Relative_path
 
-let output_json oc el =
-  let errors_json = List.map el Lint.to_json in
-  let res =
-    Hh_json.JSON_Object
-      [
-        ("errors", Hh_json.JSON_Array errors_json);
-        ("version", Hh_json.JSON_String Hh_version.version);
-      ]
-  in
-  Out_channel.output_string oc (Hh_json.json_to_string res);
-  Out_channel.flush stderr
-
-let output_text oc el format =
-  (* Essentially the same as type error output, except that we only have one
-   * message per error, and no additional 'typing reasons' *)
-  ( if List.is_empty el then
-    Out_channel.output_string oc "No lint errors!\n"
-  else
-    let f =
-      match format with
-      | Errors.Context -> Lint.to_contextual_string
-      | Errors.Raw -> Lint.to_string
-      | Errors.Highlighted -> Lint.to_highlighted_string
-    in
-    let sl = List.map el ~f in
-    List.iter sl (fun s -> Printf.fprintf oc "%s\n%!" s) );
-  Out_channel.flush oc
-
 (* For linting from stdin, we pass the file contents in directly because there's
 no other way to get ahold of the contents of stdin from a worker process. But
 when linting from disk, we want each individual worker to read the file off disk
@@ -132,7 +104,9 @@ let lint_single_xcontroller ctx name =
   match Decl_provider.get_class ctx name with
   | Some class_ ->
     if Cls.extends class_ "\\XControllerBase" && not (Cls.abstract class_) then
-      Linting_service.lint_xcontroller ctx Cls.(pos class_, name class_)
+      Linting_service.lint_xcontroller
+        ctx
+        Cls.(pos class_ |> Naming_provider.resolve_position ctx, name class_)
   | None -> Lint.internal_error Pos.none ("Could not find class: " ^ name)
 
 let lint_xcontroller tcopt acc classes =

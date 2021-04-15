@@ -84,9 +84,7 @@ module type ReverseNamingTable = sig
 
   val is_defined : Naming_sqlite.db_path option -> string -> bool
 
-  val remove_batch : Naming_sqlite.db_path option -> SSet.t -> unit
-
-  val heap_string_of_key : string -> string
+  val remove_batch : Naming_sqlite.db_path option -> string list -> unit
 
   module Position : Value.Type with type t = pos
 end
@@ -158,8 +156,7 @@ module Types = struct
       Some (FileInfo.File (name_type, path), entry_type)
     in
     let fallback_get_func_opt =
-      Option.map db_path_opt ~f:(fun db_path ->
-          Naming_sqlite.get_type_pos db_path ~case_insensitive:false)
+      Option.map db_path_opt ~f:Naming_sqlite.get_type_pos
     in
     get_and_cache
       ~map_result
@@ -193,9 +190,7 @@ module Types = struct
       match entry_type with
       | Naming_types.TClass ->
         begin
-          match
-            Ast_provider.find_class_in_file ~case_insensitive:true ctx path id
-          with
+          match Ast_provider.find_iclass_in_file ctx path id with
           | Some cls -> Some (snd cls.Aast.c_name)
           | None ->
             Hh_logger.log
@@ -206,9 +201,7 @@ module Types = struct
         end
       | Naming_types.TTypedef ->
         begin
-          match
-            Ast_provider.find_typedef_in_file ~case_insensitive:true ctx path id
-          with
+          match Ast_provider.find_itypedef_in_file ctx path id with
           | Some typedef -> Some (snd typedef.Aast.t_name)
           | None ->
             Hh_logger.log
@@ -219,7 +212,7 @@ module Types = struct
         end
       | Naming_types.TRecordDef ->
         begin
-          match Ast_provider.find_record_def_in_file ctx path id with
+          match Ast_provider.find_irecord_def_in_file ctx path id with
           | Some cls -> Some (snd cls.Aast.rd_name)
           | None ->
             Hh_logger.log
@@ -233,8 +226,7 @@ module Types = struct
       Db_path_provider.get_naming_db_path (Provider_context.get_backend ctx)
     in
     let fallback_get_func_opt =
-      Option.map db_path_opt ~f:(fun db_path ->
-          Naming_sqlite.get_type_pos db_path ~case_insensitive:true)
+      Option.map db_path_opt ~f:Naming_sqlite.get_itype_pos
     in
     get_and_cache
       ~map_result
@@ -246,6 +238,7 @@ module Types = struct
       ~key:id
 
   let remove_batch db_path_opt types =
+    let types = SSet.of_list types in
     let canon_key_types = canonize_set types in
     TypeCanonHeap.remove_batch canon_key_types;
     TypePosHeap.remove_batch types;
@@ -255,8 +248,6 @@ module Types = struct
       SSet.iter
         (fun id -> BlockedEntries.add id Blocked)
         (SSet.union types canon_key_types)
-
-  let heap_string_of_key = TypePosHeap.string_of_key
 end
 
 module Funs = struct
@@ -303,8 +294,7 @@ module Funs = struct
   let get_pos db_path_opt ?bypass_cache:(_ = false) id =
     let map_result path = Some (FileInfo.File (FileInfo.Fun, path)) in
     let fallback_get_func_opt =
-      Option.map db_path_opt ~f:(fun db_path ->
-          Naming_sqlite.get_fun_pos db_path ~case_insensitive:false)
+      Option.map db_path_opt ~f:Naming_sqlite.get_fun_pos
     in
     get_and_cache
       ~map_result
@@ -323,9 +313,7 @@ module Funs = struct
 
   let get_canon_name ctx name =
     let map_result path =
-      match
-        Ast_provider.find_fun_in_file ~case_insensitive:true ctx path name
-      with
+      match Ast_provider.find_ifun_in_file ctx path name with
       | Some f -> Some (snd f.Aast.f_name)
       | None ->
         let path_str = Relative_path.S.to_string path in
@@ -339,8 +327,7 @@ module Funs = struct
       Db_path_provider.get_naming_db_path (Provider_context.get_backend ctx)
     in
     let fallback_get_func_opt =
-      Option.map db_path_opt ~f:(fun db_path ->
-          Naming_sqlite.get_fun_pos db_path ~case_insensitive:true)
+      Option.map db_path_opt ~f:Naming_sqlite.get_ifun_pos
     in
     get_and_cache
       ~map_result
@@ -352,6 +339,7 @@ module Funs = struct
       ~key:name
 
   let remove_batch db_path_opt funs =
+    let funs = SSet.of_list funs in
     let canon_key_funs = canonize_set funs in
     FunCanonHeap.remove_batch canon_key_funs;
     FunPosHeap.remove_batch funs;
@@ -361,8 +349,6 @@ module Funs = struct
       SSet.iter
         (fun id -> BlockedEntries.add id Blocked)
         (SSet.union funs canon_key_funs)
-
-  let heap_string_of_key = FunPosHeap.string_of_key
 end
 
 module Consts = struct
@@ -416,12 +402,11 @@ module Consts = struct
   let is_defined db_path_opt id = Option.is_some (get_pos db_path_opt id)
 
   let remove_batch db_path_opt consts =
+    let consts = SSet.of_list consts in
     ConstPosHeap.remove_batch consts;
     match db_path_opt with
     | None -> ()
     | Some _ -> SSet.iter (fun id -> BlockedEntries.add id Blocked) consts
-
-  let heap_string_of_key = ConstPosHeap.string_of_key
 end
 
 let push_local_changes () =

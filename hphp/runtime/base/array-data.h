@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include "hphp/runtime/base/array-provenance.h"
 #include "hphp/runtime/base/countable.h"
+#include "hphp/runtime/base/data-walker.h"
 #include "hphp/runtime/base/datatype.h"
 #include "hphp/runtime/base/header-kind.h"
 #include "hphp/runtime/base/runtime-option.h"
@@ -38,14 +38,11 @@ namespace HPHP {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-struct APCArray;
 struct Array;
 struct String;
 struct StringData;
-struct VariableSerializer;
 struct Variant;
 
-namespace arrprov { struct Tag; }
 namespace bespoke {
   struct LoggingArray;
   struct MonotypeVec;
@@ -88,14 +85,10 @@ struct ArrayData : MaybeCountable {
    * kNumKinds-1 since we use these values to index into a table.
    */
   enum ArrayKind : uint8_t {
-    kMixedKind,         // darray: dict-like array with int or string keys
-    kBespokeDArrayKind,
-    kPackedKind,        // varray: vec-like array with keys in range [0..size)
-    kBespokeVArrayKind,
-    kDictKind,
-    kBespokeDictKind,
     kVecKind,
     kBespokeVecKind,
+    kDictKind,
+    kBespokeDictKind,
     kKeysetKind,
     kBespokeKeysetKind,
     kNumKinds           // Insert new values before kNumKinds.
@@ -145,73 +138,31 @@ protected:
    */
   ~ArrayData() { always_assert(false); }
 
-  /*
-   * Part of the implementation of conversion methods.
-   *
-   * If you call ToDVArray on a {vec, dict}, you'll get a {varray, darray}.
-   * We only ever call it on vecs and dicts. Similarly, toDVArr converts in
-   * the opposite direction, and we only ever call it on dvarrays.
-   *
-   * It's important that we implement these conversions efficiently, but these
-   * casts also come with critical logging behavior. As a result, we extract
-   * the (per-layout) conversion helper for performance, and then add logging
-   * and HAM behavior in the generic helpers.
-   *
-   * All other conversions can be implemented generically with no performance
-   * penalty (since they require a change of layout).
-   */
-  ArrayData* toDVArrayWithLogging(bool copy);
-  ArrayData* toHackArrWithLogging(bool copy);
-  ArrayData* toDVArray(bool copy);
-  ArrayData* toHackArr(bool copy);
-
 public:
   /*
    * Create a new empty ArrayData with the appropriate ArrayKind.
    */
-  static ArrayData* Create(bool legacy = false);
   static ArrayData* CreateVec(bool legacy = false);
   static ArrayData* CreateDict(bool legacy = false);
   static ArrayData* CreateKeyset();
-  static ArrayData* CreateVArray(arrprov::Tag tag = {}, bool legacy = false);
-  static ArrayData* CreateDArray(arrprov::Tag tag = {}, bool legacy = false);
-
-  /*
-   * Create a new kPackedKind ArrayData with a single element, `value'.
-   *
-   * Initializes `value' if it's UninitNull.
-   */
-  static ArrayData* Create(TypedValue value);
-  static ArrayData* Create(const Variant& value);
-
-  /*
-   * Create a new kMixedKind ArrayData with a single key `name' and value
-   * `value'.
-   *
-   * Initializes `value' if it's UninitNull.
-   */
-  static ArrayData* Create(TypedValue name, TypedValue value);
-  static ArrayData* Create(const Variant& name, TypedValue value);
-  static ArrayData* Create(const Variant& name, const Variant& value);
 
   /*
    * Convert between array kinds.
    */
-  ArrayData* toPHPArray(bool copy);
-  ArrayData* toPHPArrayIntishCast(bool copy);
-  ArrayData* toDict(bool copy);
   ArrayData* toVec(bool copy);
+  ArrayData* toDict(bool copy);
   ArrayData* toKeyset(bool copy);
-  ArrayData* toVArray(bool copy);
-  ArrayData* toDArray(bool copy);
+  ArrayData* toDictIntishCast(bool copy);
 
   /*
-   * Return the array to the request heap.
+   * Return the array to the request heap or the global heap.
    *
-   * This is normally called when the reference count goes to zero (e.g., via a
-   * helper like decRefArr()).
+   * The counted variant is called when the refcount goes to zero (e.g. from
+   * the JIT or from a helper like decRefArr). The uncounted variant is called
+   * when the refcount goes to "uncounted zero", from DecRefUncounted.
    */
   void release() DEBUG_NOEXCEPT;
+  void releaseUncounted();
 
   /*
    * Decref the array and release() it if its refcount goes to zero.
@@ -244,33 +195,22 @@ public:
   ArrayKind kind() const;
 
   /*
-   * Whether the array has a particular kind.
+   * Whether the array has a particular type.
    */
-  bool isPackedKind() const;
-  bool isMixedKind() const;
-  bool isPlainKind() const;
-  bool isDictKind() const;
-  bool isVecKind() const;
-  bool isKeysetKind() const;
-
-  /*
-   * Whether the array has a particular Hack type
-   */
-  bool isPHPArrayType() const;
-  bool isHackArrayType() const;
   bool isVecType() const;
   bool isDictType() const;
   bool isKeysetType() const;
 
   /*
-   * Whether the ArrayData is backed by PackedArray or MixedArray.
+   * Whether the array has a particular type *and layout*.
    */
-  bool hasVanillaPackedLayout() const;
-  bool hasVanillaMixedLayout() const;
+  bool isVanillaVec() const;
+  bool isVanillaDict() const;
+  bool isVanillaKeyset() const;
 
   /*
-   * Whether the array-like has the standard layout. This check excludes
-   * array-likes with a "bespoke" hidden-class layout.
+   * Whether the array-like has the standard layout for its type.
+   * This check excludes array-likes with a "bespoke" hidden-class layout.
    */
   bool isVanilla() const;
 
@@ -308,19 +248,6 @@ public:
    * when we copy or resize the array
    */
   uint8_t auxBits() const;
-
-  /*
-   * Is the array a varray, darray, either, or neither?
-   */
-  bool isVArray() const;
-  bool isDArray() const;
-  bool isDVArray() const;
-  bool isNotDVArray() const;
-  bool isHAMSafeVArray() const;
-  bool isHAMSafeDArray() const;
-  bool isHAMSafeDVArray() const;
-
-  static bool dvArrayEqual(const ArrayData* a, const ArrayData* b);
 
   /*
    * Whether the array contains "vector-like" data---i.e., iteration order
@@ -399,6 +326,12 @@ public:
   TypedValue get(const StringData* k) const;
 
   /*
+   * Get the value of the element at key `k'. Throws if `k` is missing.
+   */
+  TypedValue getThrow(int64_t k) const;
+  TypedValue getThrow(const StringData* k) const;
+
+  /*
    * Get the value of the element at key `k'.
    *
    * If `error` is false, get returns an Uninit TypedValue if `k` is missing.
@@ -411,8 +344,7 @@ public:
   TypedValue get(const Variant& k, bool error = false) const;
 
   /*
-   * Set the element at key `k' to `v'. set() methods make a copy first if
-   * cowCheck() returns true. If `v' is a ref, its inner value is used.
+   * Set the element at key `k' to `v'. `v' must be a TInitCell.
    *
    * Semantically, setMove() methods 1) do a set, 2) dec-ref the value, and
    * 3) if the operation required copy/escalation, dec-ref the old array. This
@@ -445,6 +377,8 @@ public:
   /**
    * Append `v' to the array, making a copy first if necessary. Returns `this`
    * if copy/escalation are not needed, or a copied/escalated ArrayData.
+   *
+   * As with setMove, `v' must be a TInitCell.
    *
    * appendMove dec-refs the old array if we needed copy / escalation, and
    * does not do any refcounting ops on the value.
@@ -510,7 +444,7 @@ public:
   static int64_t Compare(const ArrayData*, const ArrayData*);
 
   /////////////////////////////////////////////////////////////////////////////
-  // Static arrays.
+  // Shared arrays: static and uncounted.
 
   /*
    * If `arr' points to a static array, do nothing.  Otherwise, make a static
@@ -519,8 +453,7 @@ public:
    * If `tag` is set or `arr` has provenance data, we copy the tag to the new
    * static array.  (A set `tag` overrides the provenance of `arr`.)
    */
-  static void GetScalarArray(ArrayData** arr,
-                             arrprov::Tag tag = {});
+  static void GetScalarArray(ArrayData** arr);
 
   /*
    * Promote the array referenced by `arr` to a static array and return it.
@@ -532,6 +465,12 @@ public:
    * Static-ify the contents of the array.
    */
   void onSetEvalScalar();
+
+  /*
+   * Return a new uncounted version of the given array. The array must be a
+   * refcounted array - otherwise, we should call persistentIncRef() instead.
+   */
+  ArrayData* makeUncounted(DataWalker::PointerMap* seen, bool hasApcTv);
 
   /////////////////////////////////////////////////////////////////////////////
   // Other functions.
@@ -548,11 +487,10 @@ public:
   /*
    * Perform intish-string array key conversion on `key'.
    *
-   * Return whether `key' should undergo intish-cast when used in this array
-   * (which may depend on the array kind, e.g.).  If true, `i' is set to the
-   * intish value of `key'.
+   * Return whether `key' should undergo intish-cast.  If true, `i' is set to
+   * the intish value of `key'.
    */
-  bool intishCastKey(const StringData* key, int64_t& i) const;
+  static bool IntishCastKey(const StringData* key, int64_t& i);
 
   /*
    * Get the string name for the array kind `kind'.
@@ -649,14 +587,6 @@ private:
 
   /////////////////////////////////////////////////////////////////////////////
 
-  template<bool>
-  static void GetScalarArrayImpl(ArrayData**, arrprov::Tag);
-
-  static void GetScalarArrayNoProv(ArrayData**);
-  static void GetScalarArrayProv(ArrayData**, arrprov::Tag);
-
-  /////////////////////////////////////////////////////////////////////////////
-
 protected:
   friend struct BespokeArray;
   friend struct PackedArray;
@@ -669,30 +599,24 @@ protected:
   friend struct BaseMap;
   friend struct c_Map;
   friend struct c_ImmMap;
-  friend struct arrprov::Tag;
   friend struct bespoke::LoggingArray;
   friend struct bespoke::MonotypeVec;
 
   uint32_t m_size;
 
   /*
-   * m_extra is used to store BespokeArray data and to store arrprov::Tag for
-   * dvarrays when array provenance is enabled. It's fine to share the field,
-   * since we refuse to enable these features together.
+   * m_extra is used to store extra data for BespokeArray. For now, we require
+   * that for vanilla arrays, m_extra always equals kDefaultVanillaArrayExtra.
    *
-   * When RO::EvalArrayProvenance is on, this stores an arrprov::Tag.
-   * Otherwise we use this field as follows:
+   * We may modify this field to include "array-provenance-like" info that
+   * could help us removing legacy marks.
    *
    * When the array is bespoke:
    *
-   *   bits 0..15: For private BespokeArray use. We don't constrain the value
-   *               in this field - different layouts can use it differently.
+   *   m_extra_lo16: For private BespokeArray use. We don't constrain the value
+   *                 in this field - different layouts can use it differently.
    *
-   *   bits 16..31: The bespoke LayoutIndex.
-   *
-   * When the array is vanilla and array provenance is disabled, m_extra must
-   * be kDefaultVanillaArrayExtra. This value must also equal, as raw bytes,
-   * the default arrprov::Tag.
+   *   m_extra_hi16: The bespoke LayoutIndex.
    */
   union {
     uint32_t m_extra;
@@ -704,10 +628,12 @@ protected:
   };
 };
 
-static_assert(ArrayData::kPackedKind == uint8_t(HeaderKind::Packed), "");
-static_assert(ArrayData::kMixedKind == uint8_t(HeaderKind::Mixed), "");
-static_assert(ArrayData::kDictKind == uint8_t(HeaderKind::Dict), "");
-static_assert(ArrayData::kVecKind == uint8_t(HeaderKind::Vec), "");
+static_assert(ArrayData::kVecKind == uint8_t(HeaderKind::Vec));
+static_assert(ArrayData::kDictKind == uint8_t(HeaderKind::Dict));
+static_assert(ArrayData::kKeysetKind == uint8_t(HeaderKind::Keyset));
+static_assert(ArrayData::kBespokeVecKind == uint8_t(HeaderKind::BespokeVec));
+static_assert(ArrayData::kBespokeDictKind == uint8_t(HeaderKind::BespokeDict));
+static_assert(ArrayData::kBespokeKeysetKind == uint8_t(HeaderKind::BespokeKeyset));
 
 //////////////////////////////////////////////////////////////////////
 
@@ -745,8 +671,6 @@ extern ArrayData* s_theEmptyMarkedDictArrayPtr;
  * is needed. We should avoid using these methods, as these arrays don't have
  * provenance information; use ArrayData::CreateDArray and friends instead.
  */
-ArrayData* staticEmptyVArray();
-ArrayData* staticEmptyDArray();
 ArrayData* staticEmptyVec();
 ArrayData* staticEmptyDictArray();
 ArrayData* staticEmptyKeysetArray();
@@ -755,8 +679,6 @@ ArrayData* staticEmptyKeysetArray();
  * Static empty marked arrays; they're common enough (due to constant-folding)
  * that it's useful to keep a singleton value for them, too.
  */
-ArrayData* staticEmptyMarkedVArray();
-ArrayData* staticEmptyMarkedDArray();
 ArrayData* staticEmptyMarkedVec();
 ArrayData* staticEmptyMarkedDictArray();
 
@@ -785,6 +707,7 @@ struct ArrayFunctions {
   static auto const NK = size_t{ArrayData::kNumKinds};
 
   void (*release[NK])(ArrayData*);
+  void (*releaseUncounted[NK])(ArrayData*);
   TypedValue (*nvGetInt[NK])(const ArrayData*, int64_t k);
   TypedValue (*nvGetStr[NK])(const ArrayData*, const StringData* k);
   TypedValue (*getPosKey[NK])(const ArrayData*, ssize_t pos);
@@ -813,9 +736,9 @@ struct ArrayFunctions {
   ArrayData* (*copyStatic[NK])(const ArrayData*);
   ArrayData* (*appendMove[NK])(ArrayData*, TypedValue v);
   ArrayData* (*pop[NK])(ArrayData*, Variant& value);
-  ArrayData* (*toDVArray[NK])(ArrayData*, bool copy);
-  ArrayData* (*toHackArr[NK])(ArrayData*, bool copy);
   void (*onSetEvalScalar[NK])(ArrayData*);
+  ArrayData* (*makeUncounted[NK])(
+    ArrayData*, DataWalker::PointerMap*, bool hasApcTv);
 };
 
 extern const ArrayFunctions g_array_funcs;
@@ -847,16 +770,6 @@ std::string makeHackArrCompatImplicitArrayKeyMsg(const TypedValue* key);
 StringData* getHackArrCompatNullHackArrayKeyMsg();
 
 bool checkHACCompare();
-
-/*
- * Add a provenance tag for the current vmpc to `ad`, copying instead from
- * `src` if it's provided (and if it has a tag).  Returns `ad` for convenience.
- *
- * This function does not assert that `ad` does not have an existing tag, and
- * instead overrides it.
- */
-ArrayData* tagArrProv(ArrayData* ad, const ArrayData* src = nullptr);
-ArrayData* tagArrProv(ArrayData* ad, const APCArray* src);
 
 ///////////////////////////////////////////////////////////////////////////////
 

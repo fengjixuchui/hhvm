@@ -304,7 +304,7 @@ void serialize_memoize_array(StringBuffer& sb, int depth, const ArrayData* ad) {
 
 void serialize_memoize_set(StringBuffer& sb, const ArrayData* ad) {
   serialize_memoize_code(sb, SER_MC_CONTAINER);
-  IterateKVNoInc(ad, [&] (TypedValue k, TypedValue) {
+  IterateKV(ad, [&] (TypedValue k, TypedValue) {
     serialize_memoize_arraykey(sb, k);
     serialize_memoize_arraykey(sb, k);
   });
@@ -415,10 +415,6 @@ void serialize_memoize_tv(StringBuffer& sb, int depth, TypedValue tv) {
       serialize_memoize_set(sb, tv.m_data.parr);
       break;
 
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
     case KindOfPersistentVec:
     case KindOfVec:
     case KindOfPersistentDict:
@@ -702,7 +698,7 @@ TypedValue HHVM_FUNCTION(all_request_stats) {
   if (auto const trace = g_context->getRequestTrace()) {
     return tvReturn(from_stats_list(trace->stats()));
   }
-  return tvReturn(ArrayData::CreateDArray());
+  return tvReturn(ArrayData::CreateDict());
 }
 
 TypedValue HHVM_FUNCTION(all_process_stats) {
@@ -1165,10 +1161,6 @@ Class* getClass(TypedValue cls) {
     case KindOfBoolean:
     case KindOfInt64:
     case KindOfDouble:
-    case KindOfDArray:
-    case KindOfPersistentDArray:
-    case KindOfVArray:
-    case KindOfPersistentVArray:
     case KindOfVec:
     case KindOfPersistentVec:
     case KindOfDict:

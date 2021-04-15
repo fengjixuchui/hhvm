@@ -93,25 +93,12 @@ struct CGMeta;
    * PGO is enabled. Execution will resume at `sk' whether or not retranslation
    * is successful.
    */                     \
-  REQ(RETRANSLATE_OPT)    \
-                          \
-  /*
-   * post_interp_ret(ActRec* arg, ActRec* caller, Value tvData, DataType tvType)
-   * post_interp_ret_geniter(ActRec* arg, ActRec* caller)
-   *
-   * post_interp_ret is invoked in the case that translated code in the TC
-   * executes the return for a frame that was pushed by the interpreter---since
-   * there is no TCA to return to.
-   * The non geniter version takes the return value as inputs and writes it
-   * on to the stack.
-   */                     \
-  REQ(POST_INTERP_RET)    \
-  REQ(POST_INTERP_RET_GENITER)
+  REQ(RETRANSLATE_OPT)
 
 /*
  * Service request types.
  */
-enum ServiceRequest {
+enum ServiceRequest : uint32_t {
 #define REQ(nm) REQ_##nm,
   SERVICE_REQUESTS
 #undef REQ
@@ -190,7 +177,7 @@ template<typename... Args>
 TCA emit_persistent(CodeBlock& cb,
                     DataBlock& data,
                     CGMeta& meta,
-                    folly::Optional<FPInvOffset> spOff,
+                    FPInvOffset spOff,
                     ServiceRequest sr,
                     Args... args);
 template<typename... Args>
@@ -198,7 +185,7 @@ TCA emit_ephemeral(CodeBlock& cb,
                    DataBlock& data,
                    CGMeta& meta,
                    TCA start,
-                   folly::Optional<FPInvOffset> spOff,
+                   FPInvOffset spOff,
                    ServiceRequest sr,
                    Args... args);
 /*
@@ -208,14 +195,14 @@ TCA emit_ephemeral(CodeBlock& cb,
 template<typename... Args>
 TCA emit_persistent(CodeBlock& cb,
                     DataBlock& data,
-                    folly::Optional<FPInvOffset> spOff,
+                    FPInvOffset spOff,
                     ServiceRequest sr,
                     Args... args);
 template<typename... Args>
 TCA emit_ephemeral(CodeBlock& cb,
                    DataBlock& data,
                    TCA start,
-                   folly::Optional<FPInvOffset> spOff,
+                   FPInvOffset spOff,
                    ServiceRequest sr,
                    Args... args);
 
@@ -243,7 +230,7 @@ TCA emit_interp_no_translate_stub(FPInvOffset spOff, SrcKey sk);
 /*
  * Maximum number of arguments a service request can accept.
  */
-constexpr int kMaxArgs = 4;
+constexpr int kMaxArgs = 2;
 
 namespace x64 {
   constexpr int kMovLen = 10;
@@ -265,13 +252,6 @@ namespace arm {
   constexpr int kSvcReqExit = 16;
 }
 
-namespace ppc64 {
-  // Standard ppc64 instructions are 4 bytes long
-  constexpr int kStdIns = 4;
-  // Leap for ppc64, in worst case, have 5 standard ppc64 instructions.
-  constexpr int kLeaVMSpLen = kStdIns * 5;
-}
-
 /*
  * Space used by an ephemeral stub.
  *
@@ -290,11 +270,6 @@ constexpr size_t stub_size() {
       return arm::kLeaVmSpLen +
         kTotalArgs * arm::kMovLen +
         arm::kPersist + arm::kSvcReqExit;
-    case Arch::PPC64:
-      // This calculus was based on the amount of emitted instructions in
-      // emit_svcreq.
-      return (ppc64::kStdIns + ppc64::kLeaVMSpLen) * kTotalArgs +
-          ppc64::kLeaVMSpLen + 3 * ppc64::kStdIns;
     default:
       // GCC has a bug with throwing in a constexpr function.
       // https://gcc.gnu.org/bugzilla/show_bug.cgi?id=67371
@@ -302,8 +277,8 @@ constexpr size_t stub_size() {
       break;
   }
   // Because of GCC's issue, we have this assert, and a return value.
-  static_assert(arch() == Arch::X64 || arch() == Arch::ARM ||
-                arch() == Arch::PPC64, "Stub size not defined on architecture");
+  static_assert(arch() == Arch::X64 || arch() == Arch::ARM,
+                "Stub size not defined on architecture");
   return 0;
 }
 
@@ -323,6 +298,11 @@ struct ReqInfo {
   ServiceRequest req;
 
   /*
+   * Depth of the evaluation stack.
+   */
+  FPInvOffset spOff;
+
+  /*
    * Address of the service request's code stub for non-persistent requests.
    *
    * The service request handler will free this stub if it's set, after the
@@ -337,18 +317,10 @@ struct ReqInfo {
     TCA tca;
     Offset offset;
     SrcKey::AtomicInt sk;
-    TransID transID;
-    bool boolVal;
-    ActRec* ar;
-    Value tvData;
-    struct {
-      DataType tvType;
-      AuxUnion tvAux;
-    };
   } args[kMaxArgs];
 };
 
-static_assert(sizeof(ReqInfo) == 0x30,
+static_assert(sizeof(ReqInfo) == 0x20,
               "rsp adjustments in handleSRHelper");
 
 ///////////////////////////////////////////////////////////////////////////////

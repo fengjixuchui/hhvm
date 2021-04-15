@@ -439,10 +439,14 @@ type t = {
   interrupt_on_client: bool;
   trace_parsing: bool;
   prechecked_files: bool;
+  enable_type_check_filter_files: bool;
+  (* Let the user configure which files to type check and
+   * which files to ignore. This flag is not expected to be
+   * rolled out broadly, rather it is meant to be used by
+   * power users only. *)
   predeclare_ide: bool;
-  predeclare_ide_deps: bool;
   max_typechecker_worker_memory_mb: int option;
-  use_worker_clones: bool;
+  longlived_workers: bool;
   hg_aware: bool;
   hg_aware_parsing_restart_threshold: int;
   hg_aware_redecl_restart_threshold: int;
@@ -585,10 +589,10 @@ let default =
     interrupt_on_client = false;
     trace_parsing = false;
     prechecked_files = false;
+    enable_type_check_filter_files = false;
     predeclare_ide = false;
-    predeclare_ide_deps = false;
     max_typechecker_worker_memory_mb = None;
-    use_worker_clones = true;
+    longlived_workers = false;
     hg_aware = false;
     hg_aware_parsing_restart_threshold = 0;
     hg_aware_redecl_restart_threshold = 0;
@@ -942,6 +946,13 @@ let load_ fn ~silent ~current_version overrides =
       ~current_version
       config
   in
+  let enable_type_check_filter_files =
+    bool_if_min_version
+      "enable_type_check_filter_files"
+      ~default:default.enable_type_check_filter_files
+      ~current_version
+      config
+  in
   let predeclare_ide =
     bool_if_min_version
       "predeclare_ide"
@@ -949,20 +960,13 @@ let load_ fn ~silent ~current_version overrides =
       ~current_version
       config
   in
-  let predeclare_ide_deps =
-    bool_if_min_version
-      "predeclare_ide_deps"
-      ~default:default.predeclare_ide_deps
-      ~current_version
-      config
-  in
   let max_typechecker_worker_memory_mb =
     int_opt "max_typechecker_worker_memory_mb" config
   in
-  let use_worker_clones =
+  let longlived_workers =
     bool_if_min_version
-      "use_worker_clones"
-      ~default:default.use_worker_clones
+      "longlived_workers"
+      ~default:default.longlived_workers
       ~current_version
       config
   in
@@ -1236,15 +1240,15 @@ let load_ fn ~silent ~current_version overrides =
     interrupt_on_client;
     trace_parsing;
     prechecked_files;
+    enable_type_check_filter_files;
     predeclare_ide;
     max_typechecker_worker_memory_mb;
-    use_worker_clones;
+    longlived_workers;
     hg_aware;
     hg_aware_parsing_restart_threshold;
     hg_aware_redecl_restart_threshold;
     hg_aware_recheck_restart_threshold;
     disable_conservative_redecl;
-    predeclare_ide_deps;
     ide_parser_cache;
     ide_tast_cache;
     store_decls_in_saved_state;
@@ -1290,3 +1294,21 @@ let load_ fn ~silent ~current_version overrides =
 
 let load ~silent ~current_version config_overrides =
   load_ path ~silent ~current_version config_overrides
+
+let to_rollout_flags (options : t) : HackEventLogger.rollout_flags =
+  HackEventLogger.
+    {
+      search_chunk_size = options.search_chunk_size;
+      max_bucket_size = options.max_bucket_size;
+      use_full_fidelity_parser = options.use_full_fidelity_parser;
+      use_direct_decl_parser = options.use_direct_decl_parser;
+      interrupt_on_watchman = options.interrupt_on_watchman;
+      interrupt_on_client = options.interrupt_on_client;
+      longlived_workers = options.longlived_workers;
+      prechecked_files = options.prechecked_files;
+      predeclare_ide = options.predeclare_ide;
+      max_typechecker_worker_memory_mb =
+        options.max_typechecker_worker_memory_mb;
+      max_times_to_defer_type_checking =
+        options.max_times_to_defer_type_checking;
+    }

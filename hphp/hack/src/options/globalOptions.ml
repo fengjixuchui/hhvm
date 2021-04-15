@@ -33,7 +33,6 @@ type t = {
   po_deregister_php_stdlib: bool;
   po_disallow_toplevel_requires: bool;
   po_disable_nontoplevel_declarations: bool;
-  po_disable_static_closures: bool;
   po_allow_unstable_features: bool;
   tco_log_inference_constraints: bool;
   tco_disallow_array_typehint: bool;
@@ -115,11 +114,15 @@ type t = {
   tco_use_direct_decl_parser: bool;
   tco_ifc_enabled: string list;
   po_enable_enum_supertyping: bool;
-  po_array_unification: bool;
+  po_hack_arr_dv_arrs: bool;
   po_interpret_soft_types_as_like_types: bool;
   tco_enable_strict_string_concat_interp: bool;
   tco_ignore_unsafe_cast: bool;
   tco_readonly: bool;
+  tco_enable_expression_trees: bool;
+  tco_allowed_expression_tree_visitors: string list;
+  tco_bitwise_math_new_code: bool;
+  tco_inc_dec_new_code: bool;
 }
 [@@deriving eq, show]
 
@@ -214,7 +217,6 @@ let default =
     po_disallow_toplevel_requires = false;
     po_deregister_php_stdlib = false;
     po_disable_nontoplevel_declarations = false;
-    po_disable_static_closures = true;
     po_allow_unstable_features = false;
     tco_log_inference_constraints = false;
     tco_disallow_array_typehint = false;
@@ -279,7 +281,7 @@ let default =
     po_enable_xhp_class_modifier = true;
     po_disable_xhp_element_mangling = true;
     po_disable_xhp_children_declarations = true;
-    po_enable_enum_classes = false;
+    po_enable_enum_classes = true;
     po_disable_modes = false;
     po_disable_hh_ignore_error = false;
     po_disable_array = true;
@@ -296,11 +298,15 @@ let default =
     tco_use_direct_decl_parser = false;
     tco_ifc_enabled = [];
     po_enable_enum_supertyping = false;
-    po_array_unification = false;
+    po_hack_arr_dv_arrs = false;
     po_interpret_soft_types_as_like_types = false;
     tco_enable_strict_string_concat_interp = false;
     tco_ignore_unsafe_cast = false;
     tco_readonly = false;
+    tco_enable_expression_trees = false;
+    tco_allowed_expression_tree_visitors = [];
+    tco_bitwise_math_new_code = false;
+    tco_inc_dec_new_code = false;
   }
 
 let make
@@ -308,7 +314,6 @@ let make
     ?(po_disallow_toplevel_requires = default.po_disallow_toplevel_requires)
     ?(po_disable_nontoplevel_declarations =
       default.po_disable_nontoplevel_declarations)
-    ?(po_disable_static_closures = default.po_disable_static_closures)
     ?(tco_log_inference_constraints = default.tco_log_inference_constraints)
     ?(tco_experimental_features = default.tco_experimental_features)
     ?(tco_migration_flags = default.tco_migration_flags)
@@ -428,13 +433,18 @@ let make
     ?(tco_use_direct_decl_parser = default.tco_use_direct_decl_parser)
     ?(tco_ifc_enabled = default.tco_ifc_enabled)
     ?(po_enable_enum_supertyping = default.po_enable_enum_supertyping)
-    ?(po_array_unification = default.po_array_unification)
+    ?(po_hack_arr_dv_arrs = default.po_hack_arr_dv_arrs)
     ?(po_interpret_soft_types_as_like_types =
       default.po_interpret_soft_types_as_like_types)
     ?(tco_enable_strict_string_concat_interp =
       default.tco_enable_strict_string_concat_interp)
     ?(tco_ignore_unsafe_cast = default.tco_ignore_unsafe_cast)
     ?(tco_readonly = default.tco_readonly)
+    ?(tco_enable_expression_trees = default.tco_enable_expression_trees)
+    ?(tco_allowed_expression_tree_visitors =
+      default.tco_allowed_expression_tree_visitors)
+    ?(tco_bitwise_math_new_code = default.tco_bitwise_math_new_code)
+    ?(tco_inc_dec_new_code = default.tco_inc_dec_new_code)
     () =
   {
     tco_experimental_features;
@@ -465,7 +475,6 @@ let make
     po_deregister_php_stdlib;
     po_disallow_toplevel_requires;
     po_disable_nontoplevel_declarations;
-    po_disable_static_closures;
     po_allow_unstable_features;
     tco_log_inference_constraints;
     tco_disallow_array_typehint;
@@ -544,11 +553,15 @@ let make
     tco_use_direct_decl_parser;
     tco_ifc_enabled;
     po_enable_enum_supertyping;
-    po_array_unification;
+    po_hack_arr_dv_arrs;
     po_interpret_soft_types_as_like_types;
     tco_enable_strict_string_concat_interp;
     tco_ignore_unsafe_cast;
     tco_readonly;
+    tco_enable_expression_trees;
+    tco_allowed_expression_tree_visitors;
+    tco_bitwise_math_new_code;
+    tco_inc_dec_new_code;
   }
 
 let tco_experimental_feature_enabled t s =
@@ -604,8 +617,6 @@ let po_deregister_php_stdlib t = t.po_deregister_php_stdlib
 
 let po_disable_nontoplevel_declarations t =
   t.po_disable_nontoplevel_declarations
-
-let po_disable_static_closures t = t.po_disable_static_closures
 
 let tco_log_inference_constraints t = t.tco_log_inference_constraints
 
@@ -792,7 +803,7 @@ let tco_use_direct_decl_parser t = t.tco_use_direct_decl_parser
 
 let po_enable_enum_supertyping t = t.po_enable_enum_supertyping
 
-let po_array_unification t = t.po_array_unification
+let po_hack_arr_dv_arrs t = t.po_hack_arr_dv_arrs
 
 let po_interpret_soft_types_as_like_types t =
   t.po_interpret_soft_types_as_like_types
@@ -801,3 +812,14 @@ let tco_enable_strict_string_concat_interp t =
   t.tco_enable_strict_string_concat_interp
 
 let tco_ignore_unsafe_cast t = t.tco_ignore_unsafe_cast
+
+let set_tco_enable_expression_trees t b =
+  { t with tco_enable_expression_trees = b }
+
+let expression_trees_enabled t = t.tco_enable_expression_trees
+
+let allowed_expression_tree_visitors t = t.tco_allowed_expression_tree_visitors
+
+let tco_bitwise_math_new_code t = t.tco_bitwise_math_new_code
+
+let tco_inc_dec_new_code t = t.tco_inc_dec_new_code

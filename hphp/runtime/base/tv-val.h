@@ -78,8 +78,8 @@ public:
    * If you do change these, you must also update the return registers used in
    * runtime/base/hash-table-*.S.
    */
-  static constexpr int type_idx = wide_tv_val ? 0 : -1;
-  static constexpr int val_idx = wide_tv_val ? 1 : 0;
+  static constexpr int type_idx = 0;
+  static constexpr int val_idx = 1;
 
   INLINE_FLATTEN tv_val();
   /* implicit */ INLINE_FLATTEN tv_val(std::nullptr_t);
@@ -143,45 +143,6 @@ private:
   >;
 
   /*
-   * Default storage type: a single TypedValue*.
-   */
-  struct storage {
-    INLINE_FLATTEN storage()
-      : m_tv{} {}
-
-    INLINE_FLATTEN storage(type_t* type, value_t* val)
-      : m_tv{reinterpret_cast<tv_t*>(val)}
-    {
-      assertx(val == nullptr || &m_tv->m_type == type);
-    }
-
-    template<typename Tag = tag_t>
-    INLINE_FLATTEN storage(type_t* type, value_t* val, with_tag_t<Tag> tag)
-      : m_tv{tag, reinterpret_cast<tv_t*>(val)}
-    {
-      assertx(val == nullptr || &m_tv->m_type == type);
-    }
-
-    INLINE_FLATTEN bool operator==(const storage& o) const {
-      return m_tv == o.m_tv;
-    }
-
-    INLINE_FLATTEN bool operator!=(const storage& o) const {
-      return m_tv != o.m_tv;
-    }
-
-    INLINE_FLATTEN type_t* type() const { return &m_tv->m_type; }
-    INLINE_FLATTEN value_t* val() const { return &m_tv->m_data; }
-    INLINE_FLATTEN bool is_set() const { return static_cast<bool>(m_tv); }
-
-    template<typename Tag = tag_t>
-    INLINE_FLATTEN with_tag_t<Tag> tag() const { return m_tv.tag(); }
-
-   private:
-    maybe_tagged_t<tv_t> m_tv;
-  };
-
-  /*
    * Wide storage type: separate pointers for the type and the value. m_type is
    * only meangingful is m_val != nullptr.
    */
@@ -226,7 +187,7 @@ private:
     value_t* m_val;
   };
 
-  using storage_t = std::conditional_t<wide_tv_val, wide_storage, storage>;
+  using storage_t = wide_storage;
   storage_t m_s;
 };
 
@@ -289,39 +250,9 @@ struct tv_val_offset_wide {
   ptrdiff_t data_offset;
 };
 
-/* representation of a tv_val_offset when wide mode is off */
-struct tv_val_offset_nonwide {
-  tv_val_offset_nonwide(ptrdiff_t offset) : offset(offset) {}
-  tv_val_offset_nonwide(ptrdiff_t type_offset, ptrdiff_t data_offset)
-    : offset(data_offset) {
-    static_assert(offsetof(TypedValue, m_data) == 0, "");
-    assertx(type_offset == data_offset + offsetof(TypedValue, m_type));
-  }
-
-  ptrdiff_t typeOffset() const { return offset + offsetof(TypedValue, m_type); }
-  ptrdiff_t dataOffset() const { return offset + offsetof(TypedValue, m_data); }
-
-  /* extract a tv_val from a given base address */
-  tv_lval apply(char* base) {
-    return reinterpret_cast<TypedValue*>(base + dataOffset());
-  }
-
-  tv_rval apply(const char* base) {
-    return reinterpret_cast<const TypedValue*>(base + dataOffset());
-  }
-
-  tv_val_offset_nonwide shift(ptrdiff_t off) const {
-    return {offset + off};
-  }
-
-  ptrdiff_t offset;
-};
-
 } // namespace detail
 
-using tv_val_offset = std::conditional<wide_tv_val,
-                                       detail::tv_val_offset_wide,
-                                       detail::tv_val_offset_nonwide>::type;
+using tv_val_offset = detail::tv_val_offset_wide;
 
 }
 

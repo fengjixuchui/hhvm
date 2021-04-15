@@ -63,11 +63,7 @@ ArrayData* convArrLikeToDictHelper(ArrayData* a);
 ArrayData* convObjToDictHelper(ObjectData* o);
 ArrayData* convArrLikeToKeysetHelper(ArrayData* a);
 ArrayData* convObjToKeysetHelper(ObjectData* o);
-ArrayData* convArrLikeToVArrHelper(ArrayData* a);
-ArrayData* convClsMethToVArrHelper(ClsMethDataRef clsmeth);
 ArrayData* convClsMethToVecHelper(ClsMethDataRef clsmeth);
-ArrayData* convArrLikeToDArrHelper(ArrayData* a);
-ArrayData* convClsMethToDArrHelper(ClsMethDataRef clsmeth);
 ArrayData* convClsMethToDictHelper(ClsMethDataRef clsmeth);
 ArrayData* convClsMethToKeysetHelper(ClsMethDataRef clsmeth);
 double convObjToDblHelper(const ObjectData* o);
@@ -132,12 +128,16 @@ TypedValue* getSPropOrNull(const Class* cls,
                            const StringData* name,
                            Class* ctx,
                            bool ignoreLateInit,
-                           bool disallowConst);
+                           bool disallowConst,
+                           bool mustBeMutable,
+                           bool mustBeReadOnly);
 TypedValue* getSPropOrRaise(const Class* cls,
                             const StringData* name,
                             Class* ctx,
                             bool ignoreLateInit,
-                            bool disallowConst);
+                            bool disallowConst,
+                            bool mustBeMutable,
+                            bool mustBeReadOnly);
 
 int64_t switchDoubleHelper(double val, int64_t base, int64_t nTargets);
 int64_t switchStringHelper(StringData* s, int64_t base, int64_t nTargets);

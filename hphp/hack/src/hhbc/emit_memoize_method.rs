@@ -19,10 +19,9 @@ use hhas_pos_rust::Span;
 use hhas_type::Info as HhasTypeInfo;
 use hhbc_ast_rust::{FcallArgs, FcallFlags, SpecialClsRef};
 use hhbc_id_rust::{class, method, Id};
-use hhbc_string_utils_rust::reified;
-use instruction_sequence_rust::{instr, InstrSeq, Result};
+use hhbc_string_utils_rust::{coeffects, reified};
+use instruction_sequence::{instr, InstrSeq, Result};
 use naming_special_names_rust::{members, user_attributes as ua};
-use ocamlrep::rc::RcOc;
 use options::{HhvmFlags, Options};
 use oxidized::{ast as T, pos::Pos};
 use runtime::TypedValue;
@@ -142,6 +141,7 @@ fn make_memoize_wrapper_method<'a>(
     let mut arg_flags = Flags::empty();
     arg_flags.set(Flags::IS_ASYNC, is_async);
     arg_flags.set(Flags::IS_REFIED, is_reified);
+    arg_flags.set(Flags::HAS_COEFFECTS_LOCAL, coeffects.has_coeffects_local());
     let mut args = Args {
         info,
         method,
@@ -176,7 +176,7 @@ fn emit_memoize_wrapper_body<'a>(
     emitter: &mut Emitter,
     env: &mut Env<'a>,
     args: &mut Args,
-) -> Result<HhasBody<'a>> {
+) -> Result<HhasBody> {
     let mut tparams: Vec<&str> = args
         .scope
         .get_tparams()
@@ -207,7 +207,7 @@ fn emit<'a>(
     hhas_params: Vec<HhasParam>,
     return_type_info: HhasTypeInfo,
     args: &Args,
-) -> Result<HhasBody<'a>> {
+) -> Result<HhasBody> {
     let pos = &args.method.span;
     let instrs = make_memoize_method_code(emitter, env, pos, &hhas_params[..], args)?;
     let instrs = emit_pos_then(pos, instrs);
@@ -416,19 +416,14 @@ fn make_wrapper<'a>(
     params: Vec<HhasParam>,
     return_type_info: HhasTypeInfo,
     args: &Args,
-) -> Result<HhasBody<'a>> {
-    let decl_vars = if args.flags.contains(Flags::IS_REFIED) {
-        vec![reified::GENERICS_LOCAL_NAME.into()]
-    } else {
-        vec![]
-    };
-    // TODO(hrust): Just clone env
-    let env_copy = emit_body::make_env(
-        RcOc::clone(&env.namespace),
-        env.scope.clone(),
-        None,
-        env.flags.contains(env::Flags::IN_RX_BODY),
-    );
+) -> Result<HhasBody> {
+    let mut decl_vars = vec![];
+    if args.flags.contains(Flags::IS_REFIED) {
+        decl_vars.push(reified::GENERICS_LOCAL_NAME.into());
+    }
+    if args.flags.contains(Flags::HAS_COEFFECTS_LOCAL) {
+        decl_vars.push(coeffects::LOCAL_NAME.into());
+    }
     emit_body::make_body(
         emitter,
         instrs,
@@ -440,7 +435,7 @@ fn make_wrapper<'a>(
         params,
         Some(return_type_info),
         None,
-        Some(env_copy),
+        Some(&env),
     )
 }
 
@@ -475,6 +470,7 @@ struct Args<'a> {
 
 bitflags! {
     pub struct Flags: u8 {
+        const HAS_COEFFECTS_LOCAL = 1 << 0;
         const IS_STATIC = 1 << 1;
         const IS_REFIED = 1 << 2;
         const WITH_LSB = 1 << 3;

@@ -37,7 +37,7 @@ SSATmp* convertClsMethToVec(IRGS& env, SSATmp* clsMeth) {
   assertx(clsMeth->isA(TClsMeth));
   auto const cls = gen(env, LdClsName, gen(env, LdClsFromClsMeth, clsMeth));
   auto const func = gen(env, LdFuncName, gen(env, LdFuncFromClsMeth, clsMeth));
-  auto vec = gen(env, AllocVArray, PackedArrayData { 2 });
+  auto vec = gen(env, AllocVec, PackedArrayData { 2 });
   gen(env, InitVecElem, IndexData { 0 }, vec, cls);
   gen(env, InitVecElem, IndexData { 1 }, vec, func);
   return vec;
@@ -61,14 +61,25 @@ SSATmp* convertClassKey(IRGS& env, SSATmp* key) {
   return key;
 }
 
-void defineStack(IRGS& env, FPInvOffset bcSPOff) {
-  // Define SP.
+void defineFrameAndStack(IRGS& env, FPInvOffset bcSPOff) {
+  // Define FP and SP.
   if (resumeMode(env) != ResumeMode::None) {
-    // rvmsp() points to the top of the stack in resumables
+    // - resumable frames live on the heap, so they do not have a stack position
+    // - fp(env) and sp(env) are backed by rvmfp() and rvmsp() registers
+    // - sp(env) points to the top of the stack at translation entry
+    // - stack base is `irSPOff` away from sp(env)
+    gen(env, DefFP, DefFPData { folly::none });
+    updateMarker(env);
+
     auto const irSPOff = bcSPOff;
     gen(env, DefRegSP, DefStackData { irSPOff, bcSPOff });
   } else {
-    // stack starts at the FP in regular functions
+    // - frames of regular functions live on the stack
+    // - fp(env) and sp(env) are backed by the same rvmfp() register
+    // - stack base is at sp(env)
+    gen(env, DefFP, DefFPData { IRSPRelOffset { 0 } });
+    updateMarker(env);
+
     auto const irSPOff = FPInvOffset { 0 };
     gen(env, DefFrameRelSP, DefStackData { irSPOff, bcSPOff }, fp(env));
   }
@@ -82,6 +93,26 @@ void defineStack(IRGS& env, FPInvOffset bcSPOff) {
     // Assert that we're in the correct function.
     gen(env, DbgAssertFunc, fp(env));
   }
+}
+
+bool handleConvNoticeLevel(
+    IRGS& env,
+    const ConvNoticeData& notice_data,
+    const char* const from,
+  const char* const to) {
+  if (LIKELY(notice_data.level == ConvNoticeLevel::None)) return false;
+
+  assertx(notice_data.reason != nullptr);
+  const auto str = makeStaticString(folly::sformat(
+    "Implicit {} to {} conversion for {}", from, to, notice_data.reason));
+  if (notice_data.level == ConvNoticeLevel::Throw) {
+    gen(env, ThrowInvalidOperation, cns(env, str));
+    return true;
+  }
+  if (notice_data.level == ConvNoticeLevel::Log) {
+    gen(env, RaiseNotice, cns(env, str));
+  }
+  return false;
 }
 
 }}}

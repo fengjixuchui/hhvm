@@ -22,7 +22,6 @@ module T = Typing_defs
 module L = Logic.Infix
 module K = Typing_cont_key
 module LSet = Local_id.Set
-module TClass = Decl_provider.Class
 
 let should_print ~user_mode ~phase =
   equal_mode user_mode Mdebug || equal_mode user_mode phase
@@ -223,20 +222,15 @@ let rec subtype ~pos t1 t2 acc =
     first_ok "mixed" tl ~f:(fun t1 -> subtype t1 t2 acc)
   | _ -> err "unhandled subtyping query"
 
-(* A constraint accumulator that registers that t1 = t2 *)
-let equivalent ~pos t1 t2 acc =
-  let subtype = subtype ~pos in
-  subtype t1 t2 (subtype t2 t1 acc)
-
 (* Overwrite subtype and equivalent catching the SubtypeFailure
    exception *)
-let (subtype, equivalent) =
+let subtype =
   let wrap f ~pos t1 t2 acc =
     try f ~pos t1 t2 acc
     with SubtypeFailure (msg, tsub, tsup) ->
       fail "subtype: %s (%a <: %a)" msg Pp.ptype tsub Pp.ptype tsup
   in
-  (wrap subtype, wrap equivalent)
+  wrap subtype
 
 (* Returns the list of free policy variables in a type *)
 let free_pvars pty =
@@ -615,7 +609,7 @@ let shape_field_name : ptype renv_ -> _ -> Typing_defs.tshape_field_name option
       | _ -> None)
   in
   match Typing_utils.shape_field_name_ this ix with
-  | Ok fld -> Some (Typing_defs.TShapeField.of_ast (fun p -> p) fld)
+  | Ok fld -> Some (Typing_defs.TShapeField.of_ast Pos_or_decl.of_raw_pos fld)
   | Error _ -> None
 
 let call_special ~pos renv env args ret = function
@@ -697,7 +691,8 @@ let call_regular ~pos renv env call_type name that_pty_opt args_pty ret_pty =
   | Cglobal (callable_name, fty) ->
     let fp = { fp_name = name; fp_this = that_pty_opt; fp_type = hole_ty } in
     let (env, call_constraint) =
-      result_from_fun_decl fp callable_name (Decl.convert_fun_type fty)
+      let fun_decl = Decl.convert_fun_type renv.re_ctx fty in
+      result_from_fun_decl fp callable_name fun_decl
     in
     let env = Env.acc env (fun acc -> call_constraint :: acc) in
     (env, ret_pty)
@@ -1237,7 +1232,8 @@ let rec expr ~pos renv (env : Env.expr_env) (((epos, ety), e) : Tast.expr) =
     | Some ptype -> (env, ptype)
     | None -> fail "encountered $this outside of a class context")
   | A.ET_Splice e
-  | A.ExpressionTree { A.et_desugared_expr = e; _ } ->
+  | A.ExpressionTree { A.et_runtime_expr = e; _ } ->
+    (* TODO: IFC should consider spliced values too *)
     expr env e
   (* TODO(T68414656): Support calls with type arguments *)
   | A.Call (e, _type_args, args, _extra_args) ->
@@ -1480,6 +1476,9 @@ let rec expr ~pos renv (env : Env.expr_env) (((epos, ety), e) : Tast.expr) =
   | A.List es ->
     let (env, ptys) = List.map_env env es ~f:expr in
     (env, Ttuple ptys)
+  | A.Tuple es ->
+    let (env, ptys) = List.map_env env es ~f:expr in
+    (env, Ttuple ptys)
   | A.Pipe ((_, dollardollar), e1, e2) ->
     let (env, t1) = expr env e1 in
     let dd_old = Env.get_local_type env dollardollar in
@@ -1497,7 +1496,7 @@ let rec expr ~pos renv (env : Env.expr_env) (((epos, ety), e) : Tast.expr) =
       let sft = { sft_ty = t; sft_optional = false; sft_policy = p } in
       ( env,
         Typing_defs.TShapeMap.add
-          (Typing_defs.TShapeField.of_ast (fun p -> p) key)
+          (Typing_defs.TShapeField.of_ast Pos_or_decl.of_raw_pos key)
           sft
           m )
     in
@@ -2162,11 +2161,12 @@ let walk_tast opts decl_env ctx =
   (fun tast -> List.concat (List.filter_map ~f:def tast))
 
 let check_valid_flow opts _ (result, implicit, simple) =
+  let pds_of_poss = List.map ~f:Pos_or_decl.of_raw_pos in
   let simple_illegal_flows =
     Logic.entailment_violations opts.opt_security_lattice simple
   in
   let to_err node =
-    ( PosSet.elements (pos_set_of_policy node),
+    ( PosSet.elements (pos_set_of_policy node) |> pds_of_poss,
       Format.asprintf "%a" Pp.policy node )
   in
   let illegal_information_flow (poss, source, sink) =
@@ -2181,9 +2181,9 @@ let check_valid_flow opts _ (result, implicit, simple) =
          callable being analysed *)
     let (primary_pos, other_poss) =
       match List.sort ~compare:Pos.compare primary_poss |> List.rev with
-      | [] -> (result.res_span, other_poss)
+      | [] -> (result.res_span, other_poss |> pds_of_poss)
       | primary :: primary_poss ->
-        (primary, List.unordered_append primary_poss other_poss)
+        (primary, List.unordered_append primary_poss other_poss |> pds_of_poss)
     in
 
     let (source, sink) = (to_err source, to_err sink) in
@@ -2199,7 +2199,7 @@ let check_valid_flow opts _ (result, implicit, simple) =
       in
       match poss with
       | [] -> (result.res_span, [])
-      | primary :: secondaries -> (primary, secondaries)
+      | primary :: secondaries -> (primary, pds_of_poss secondaries)
     in
     let (source, sink) = (to_err source, to_err sink) in
     Errors.context_implicit_policy_leakage primary secondaries source sink

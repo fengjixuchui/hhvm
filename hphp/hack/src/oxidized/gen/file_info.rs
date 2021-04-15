@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<f4e204c954fa80854c347f78bdab9f91>>
+// @generated SignedSource<<7974af893365adf7414b47e8b88a1ab9>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -95,25 +95,8 @@ pub enum Pos {
     File(NameType, ocamlrep::rc::RcOc<relative_path::RelativePath>),
 }
 
-#[derive(
-    Clone,
-    Debug,
-    Deserialize,
-    Eq,
-    FromOcamlRep,
-    Hash,
-    NoPosHash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-    ToOcamlRep
-)]
-pub struct Id(pub Pos, pub String);
+pub type Id = (Pos, String);
 
-/// The hash value of a decl AST.
-/// We use this to see if two versions of a file are "similar", i.e. their
-/// declarations only differ by position information.
 pub type HashType = Option<isize>;
 
 /// The record produced by the parsing phase.
@@ -166,6 +149,29 @@ pub struct Names {
     pub consts: s_set::SSet,
 }
 
+/// The simplified record stored in saved-state.
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    FromOcamlRep,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub struct SavedNames {
+    pub funs: s_set::SSet,
+    pub classes: s_set::SSet,
+    pub record_defs: s_set::SSet,
+    pub types: s_set::SSet,
+    pub consts: s_set::SSet,
+}
+
 /// Data structure stored in the saved state
 #[derive(
     Clone,
@@ -182,7 +188,7 @@ pub struct Names {
     ToOcamlRep
 )]
 pub struct Saved {
-    pub names: Names,
+    pub names: SavedNames,
     pub hash: Option<isize>,
     pub mode: Option<Mode>,
 }

@@ -14,7 +14,6 @@
   +----------------------------------------------------------------------+
 */
 
-#include "hphp/runtime/base/apc-stats.h"
 #include "hphp/runtime/base/array-data-defs.h"
 #include "hphp/runtime/base/bespoke-array.h"
 #include "hphp/runtime/base/bespoke/layout.h"
@@ -22,6 +21,7 @@
 #include "hphp/runtime/base/mixed-array-defs.h"
 #include "hphp/runtime/base/sort-flags.h"
 #include "hphp/runtime/base/tv-refcount.h"
+#include "hphp/runtime/base/tv-uncounted.h"
 
 namespace HPHP {
 
@@ -58,13 +58,17 @@ void BespokeArray::setLayoutIndex(bespoke::LayoutIndex index) {
   m_extra_hi16 = index.raw;
 }
 
+NO_PROFILING
 size_t BespokeArray::heapSize() const {
   return g_layout_funcs.fnHeapSize[getLayoutByte(this)](this);
 }
+
+NO_PROFILING
 void BespokeArray::scan(type_scan::Scanner& scan) const {
   return g_layout_funcs.fnScan[getLayoutByte(this)](this, scan);
 }
 
+NO_PROFILING
 ArrayData* BespokeArray::ToVanilla(const ArrayData* ad, const char* reason) {
   return g_layout_funcs.fnEscalateToVanilla[getLayoutByte(ad)](ad, reason);
 }
@@ -81,102 +85,121 @@ bool BespokeArray::checkInvariants() const {
 
 //////////////////////////////////////////////////////////////////////////////
 
-ArrayData* BespokeArray::MakeUncounted(ArrayData* ad, bool hasApcTv,
-                                       DataWalker::PointerMap* seen) {
+ArrayData* BespokeArray::MakeUncounted(
+    ArrayData* ad, DataWalker::PointerMap* seen, bool hasApcTv) {
   assertx(ad->isRefCounted());
+  auto const byte = getLayoutByte(ad);
+  auto const extra = uncountedAllocExtra(ad, hasApcTv);
+  auto const bytes = g_layout_funcs.fnHeapSize[byte](ad);
+  assertx(extra % 16 == 0);
 
-  auto const vad = ToVanilla(ad, "BespokeArray::MakeUncounted");
-  SCOPE_EXIT { decRefArr(vad); };
+  // "Help" out by copying the array's raw bytes to an uncounted allocation.
+  auto const mem = static_cast<char*>(AllocUncounted(bytes + extra));
+  auto const result = reinterpret_cast<ArrayData*>(mem + extra);
+  memcpy8(reinterpret_cast<char*>(result),
+          reinterpret_cast<char*>(ad), bytes);
+  auto const aux = ad->m_aux16 | (hasApcTv ? ArrayData::kHasApcTv : 0);
+  result->initHeader_16(HeaderKind(ad->kind()), UncountedValue, aux);
+  assertx(asBespoke(result)->layoutIndex() == asBespoke(ad)->layoutIndex());
 
-  if (seen) {
-    auto const mark = [&](TypedValue tv) {
-      if (isRefcountedType(type(tv)) && val(tv).pcnt->hasMultipleRefs()) {
-        seen->insert({val(tv).pcnt, nullptr});
-      }
-    };
-    if (vad->hasMultipleRefs()) seen->insert({vad, nullptr});
-    IterateKVNoInc(vad, [&](auto k, auto v) { mark(k); mark(v); });
-  }
+  g_layout_funcs.fnConvertToUncounted[byte](result, seen);
 
-  if (vad->hasVanillaPackedLayout()) {
-    return PackedArray::MakeUncounted(vad, hasApcTv, seen);
-  } else if (vad->hasVanillaMixedLayout()) {
-    return MixedArray::MakeUncounted(vad, hasApcTv, seen);
-  }
-  return SetArray::MakeUncounted(vad, hasApcTv, seen);
+  return result;
 }
 
 void BespokeArray::ReleaseUncounted(ArrayData* ad) {
-  if (!ad->uncountedDecRef()) return;
+  assertx(!ad->uncountedCowCheck());
   auto const byte = getLayoutByte(ad);
   g_layout_funcs.fnReleaseUncounted[byte](ad);
-  if (APCStats::IsCreated()) {
-    APCStats::getAPCStats().removeAPCUncountedBlock();
-  }
+
   auto const bytes = g_layout_funcs.fnHeapSize[byte](ad);
   auto const extra = uncountedAllocExtra(ad, ad->hasApcTv());
-  uncounted_sized_free(reinterpret_cast<char*>(ad) - extra, bytes + extra);
+  FreeUncounted(reinterpret_cast<char*>(ad) - extra, bytes + extra);
 }
 
 //////////////////////////////////////////////////////////////////////////////
 
 // ArrayData interface
+NO_PROFILING
 void BespokeArray::Release(ArrayData* ad) {
   g_layout_funcs.fnRelease[getLayoutByte(ad)](ad);
 }
+NO_PROFILING
 bool BespokeArray::IsVectorData(const ArrayData* ad) {
   return g_layout_funcs.fnIsVectorData[getLayoutByte(ad)](ad);
 }
 
 // RO access
+NO_PROFILING
 TypedValue BespokeArray::NvGetInt(const ArrayData* ad, int64_t key) {
   return g_layout_funcs.fnNvGetInt[getLayoutByte(ad)](ad, key);
 }
+NO_PROFILING
 TypedValue BespokeArray::NvGetStr(const ArrayData* ad, const StringData* key) {
   return g_layout_funcs.fnNvGetStr[getLayoutByte(ad)](ad, key);
+}
+NO_PROFILING
+TypedValue BespokeArray::NvGetIntThrow(const ArrayData* ad, int64_t key) {
+  return g_layout_funcs.fnNvGetIntThrow[getLayoutByte(ad)](ad, key);
+}
+NO_PROFILING
+TypedValue BespokeArray::NvGetStrThrow(const ArrayData* ad, const StringData* key) {
+  return g_layout_funcs.fnNvGetStrThrow[getLayoutByte(ad)](ad, key);
 }
 TypedValue BespokeArray::GetPosKey(const ArrayData* ad, ssize_t pos) {
   return g_layout_funcs.fnGetPosKey[getLayoutByte(ad)](ad, pos);
 }
+NO_PROFILING
 TypedValue BespokeArray::GetPosVal(const ArrayData* ad, ssize_t pos) {
   return g_layout_funcs.fnGetPosVal[getLayoutByte(ad)](ad, pos);
 }
+NO_PROFILING
 bool BespokeArray::ExistsInt(const ArrayData* ad, int64_t key) {
   return NvGetInt(ad, key).is_init();
 }
+NO_PROFILING
 bool BespokeArray::ExistsStr(const ArrayData* ad, const StringData* key) {
   return NvGetStr(ad, key).is_init();
 }
 
 // iteration
+NO_PROFILING
 ssize_t BespokeArray::IterBegin(const ArrayData* ad) {
   return g_layout_funcs.fnIterBegin[getLayoutByte(ad)](ad);
 }
+NO_PROFILING
 ssize_t BespokeArray::IterLast(const ArrayData* ad) {
   return g_layout_funcs.fnIterLast[getLayoutByte(ad)](ad);
 }
+NO_PROFILING
 ssize_t BespokeArray::IterEnd(const ArrayData* ad) {
   return g_layout_funcs.fnIterEnd[getLayoutByte(ad)](ad);
 }
+NO_PROFILING
 ssize_t BespokeArray::IterAdvance(const ArrayData* ad, ssize_t pos) {
   return g_layout_funcs.fnIterAdvance[getLayoutByte(ad)](ad, pos);
 }
+NO_PROFILING
 ssize_t BespokeArray::IterRewind(const ArrayData* ad, ssize_t pos) {
   return g_layout_funcs.fnIterRewind[getLayoutByte(ad)](ad, pos);
 }
 
 // RW access
+NO_PROFILING
 arr_lval BespokeArray::LvalInt(ArrayData* ad, int64_t key) {
   return g_layout_funcs.fnLvalInt[getLayoutByte(ad)](ad, key);
 }
+NO_PROFILING
 arr_lval BespokeArray::LvalStr(ArrayData* ad, StringData* key) {
   return g_layout_funcs.fnLvalStr[getLayoutByte(ad)](ad, key);
 }
+NO_PROFILING
 tv_lval BespokeArray::ElemInt(
     tv_lval lval, int64_t key, bool throwOnMissing) {
   auto const ad = lval.val().parr;
   return g_layout_funcs.fnElemInt[getLayoutByte(ad)](lval, key, throwOnMissing);
 }
+NO_PROFILING
 tv_lval BespokeArray::ElemStr(
     tv_lval lval, StringData* key, bool throwOnMissing) {
   auto const ad = lval.val().parr;
@@ -184,30 +207,33 @@ tv_lval BespokeArray::ElemStr(
 }
 
 // insertion
+NO_PROFILING
 ArrayData* BespokeArray::SetIntMove(ArrayData* ad, int64_t key, TypedValue v) {
   return g_layout_funcs.fnSetIntMove[getLayoutByte(ad)](ad, key, v);
 }
+NO_PROFILING
 ArrayData* BespokeArray::SetStrMove(ArrayData* ad, StringData* key, TypedValue v) {
   return g_layout_funcs.fnSetStrMove[getLayoutByte(ad)](ad, key, v);
 }
 
 // deletion
+NO_PROFILING
 ArrayData* BespokeArray::RemoveInt(ArrayData* ad, int64_t key) {
   return g_layout_funcs.fnRemoveInt[getLayoutByte(ad)](ad, key);
 }
+NO_PROFILING
 ArrayData* BespokeArray::RemoveStr(ArrayData* ad, const StringData* key) {
   return g_layout_funcs.fnRemoveStr[getLayoutByte(ad)](ad, key);
 }
 
 // sorting
+NO_PROFILING
 ArrayData* BespokeArray::EscalateForSort(ArrayData* ad, SortFunction sf) {
-  if (!isSortFamily(sf)) {
-    if (ad->isVArray())  return ad->toDArray(true);
-    if (ad->isVecType()) return ad->toDict(true);
-  }
+  if (!isSortFamily(sf) && ad->isVecType()) return ad->toDict(true);
   assertx(!ad->empty());
   return g_layout_funcs.fnPreSort[getLayoutByte(ad)](ad, sf);
 }
+NO_PROFILING
 ArrayData* BespokeArray::PostSort(ArrayData* ad, ArrayData* vad) {
   assertx(vad->isVanilla());
   if (ad->toDataType() != vad->toDataType()) return vad;
@@ -216,9 +242,11 @@ ArrayData* BespokeArray::PostSort(ArrayData* ad, ArrayData* vad) {
 }
 
 // high-level ops
+NO_PROFILING
 ArrayData* BespokeArray::AppendMove(ArrayData* ad, TypedValue v) {
   return g_layout_funcs.fnAppendMove[getLayoutByte(ad)](ad, v);
 }
+NO_PROFILING
 ArrayData* BespokeArray::Pop(ArrayData* ad, Variant& out) {
   return g_layout_funcs.fnPop[getLayoutByte(ad)](ad, out);
 }
@@ -230,12 +258,7 @@ void BespokeArray::OnSetEvalScalar(ArrayData*) {
 ArrayData* BespokeArray::CopyStatic(const ArrayData*) {
   always_assert(false);
 }
-ArrayData* BespokeArray::ToDVArray(ArrayData* ad, bool copy) {
-  return g_layout_funcs.fnToDVArray[getLayoutByte(ad)](ad, copy);
-}
-ArrayData* BespokeArray::ToHackArr(ArrayData* ad, bool copy) {
-  return g_layout_funcs.fnToHackArr[getLayoutByte(ad)](ad, copy);
-}
+NO_PROFILING
 ArrayData* BespokeArray::SetLegacyArray(ArrayData* ad, bool copy, bool legacy) {
   return g_layout_funcs.fnSetLegacyArray[getLayoutByte(ad)](ad, copy, legacy);
 }

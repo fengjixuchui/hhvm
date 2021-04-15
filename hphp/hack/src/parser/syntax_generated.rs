@@ -956,10 +956,9 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_anonymous_function(_: &C, anonymous_attribute_spec: Self, anonymous_static_keyword: Self, anonymous_async_keyword: Self, anonymous_function_keyword: Self, anonymous_left_paren: Self, anonymous_parameters: Self, anonymous_right_paren: Self, anonymous_ctx_list: Self, anonymous_colon: Self, anonymous_readonly_return: Self, anonymous_type: Self, anonymous_use: Self, anonymous_body: Self) -> Self {
+    fn make_anonymous_function(_: &C, anonymous_attribute_spec: Self, anonymous_async_keyword: Self, anonymous_function_keyword: Self, anonymous_left_paren: Self, anonymous_parameters: Self, anonymous_right_paren: Self, anonymous_ctx_list: Self, anonymous_colon: Self, anonymous_readonly_return: Self, anonymous_type: Self, anonymous_use: Self, anonymous_body: Self) -> Self {
         let syntax = SyntaxVariant::AnonymousFunction(Box::new(AnonymousFunctionChildren {
             anonymous_attribute_spec,
-            anonymous_static_keyword,
             anonymous_async_keyword,
             anonymous_function_keyword,
             anonymous_left_paren,
@@ -1176,10 +1175,11 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_function_call_expression(_: &C, function_call_receiver: Self, function_call_type_args: Self, function_call_left_paren: Self, function_call_argument_list: Self, function_call_right_paren: Self) -> Self {
+    fn make_function_call_expression(_: &C, function_call_receiver: Self, function_call_type_args: Self, function_call_enum_atom: Self, function_call_left_paren: Self, function_call_argument_list: Self, function_call_right_paren: Self) -> Self {
         let syntax = SyntaxVariant::FunctionCallExpression(Box::new(FunctionCallExpressionChildren {
             function_call_receiver,
             function_call_type_args,
+            function_call_enum_atom,
             function_call_left_paren,
             function_call_argument_list,
             function_call_right_paren,
@@ -1655,9 +1655,10 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_closure_type_specifier(_: &C, closure_outer_left_paren: Self, closure_function_keyword: Self, closure_inner_left_paren: Self, closure_parameter_list: Self, closure_inner_right_paren: Self, closure_contexts: Self, closure_colon: Self, closure_readonly_return: Self, closure_return_type: Self, closure_outer_right_paren: Self) -> Self {
+    fn make_closure_type_specifier(_: &C, closure_outer_left_paren: Self, closure_readonly_keyword: Self, closure_function_keyword: Self, closure_inner_left_paren: Self, closure_parameter_list: Self, closure_inner_right_paren: Self, closure_contexts: Self, closure_colon: Self, closure_readonly_return: Self, closure_return_type: Self, closure_outer_right_paren: Self) -> Self {
         let syntax = SyntaxVariant::ClosureTypeSpecifier(Box::new(ClosureTypeSpecifierChildren {
             closure_outer_left_paren,
+            closure_readonly_keyword,
             closure_function_keyword,
             closure_inner_left_paren,
             closure_parameter_list,
@@ -2580,9 +2581,8 @@ where
                 acc
             },
             SyntaxVariant::AnonymousFunction(x) => {
-                let AnonymousFunctionChildren { anonymous_attribute_spec, anonymous_static_keyword, anonymous_async_keyword, anonymous_function_keyword, anonymous_left_paren, anonymous_parameters, anonymous_right_paren, anonymous_ctx_list, anonymous_colon, anonymous_readonly_return, anonymous_type, anonymous_use, anonymous_body } = *x;
+                let AnonymousFunctionChildren { anonymous_attribute_spec, anonymous_async_keyword, anonymous_function_keyword, anonymous_left_paren, anonymous_parameters, anonymous_right_paren, anonymous_ctx_list, anonymous_colon, anonymous_readonly_return, anonymous_type, anonymous_use, anonymous_body } = *x;
                 let acc = f(anonymous_attribute_spec, acc);
-                let acc = f(anonymous_static_keyword, acc);
                 let acc = f(anonymous_async_keyword, acc);
                 let acc = f(anonymous_function_keyword, acc);
                 let acc = f(anonymous_left_paren, acc);
@@ -2740,9 +2740,10 @@ where
                 acc
             },
             SyntaxVariant::FunctionCallExpression(x) => {
-                let FunctionCallExpressionChildren { function_call_receiver, function_call_type_args, function_call_left_paren, function_call_argument_list, function_call_right_paren } = *x;
+                let FunctionCallExpressionChildren { function_call_receiver, function_call_type_args, function_call_enum_atom, function_call_left_paren, function_call_argument_list, function_call_right_paren } = *x;
                 let acc = f(function_call_receiver, acc);
                 let acc = f(function_call_type_args, acc);
+                let acc = f(function_call_enum_atom, acc);
                 let acc = f(function_call_left_paren, acc);
                 let acc = f(function_call_argument_list, acc);
                 let acc = f(function_call_right_paren, acc);
@@ -3084,8 +3085,9 @@ where
                 acc
             },
             SyntaxVariant::ClosureTypeSpecifier(x) => {
-                let ClosureTypeSpecifierChildren { closure_outer_left_paren, closure_function_keyword, closure_inner_left_paren, closure_parameter_list, closure_inner_right_paren, closure_contexts, closure_colon, closure_readonly_return, closure_return_type, closure_outer_right_paren } = *x;
+                let ClosureTypeSpecifierChildren { closure_outer_left_paren, closure_readonly_keyword, closure_function_keyword, closure_inner_left_paren, closure_parameter_list, closure_inner_right_paren, closure_contexts, closure_colon, closure_readonly_return, closure_return_type, closure_outer_right_paren } = *x;
                 let acc = f(closure_outer_left_paren, acc);
+                let acc = f(closure_readonly_keyword, acc);
                 let acc = f(closure_function_keyword, acc);
                 let acc = f(closure_inner_left_paren, acc);
                 let acc = f(closure_parameter_list, acc);
@@ -4023,7 +4025,7 @@ where
                  anonymous_class_class_keyword: ts.pop().unwrap(),
                  
              })),
-             (SyntaxKind::AnonymousFunction, 13) => SyntaxVariant::AnonymousFunction(Box::new(AnonymousFunctionChildren {
+             (SyntaxKind::AnonymousFunction, 12) => SyntaxVariant::AnonymousFunction(Box::new(AnonymousFunctionChildren {
                  anonymous_body: ts.pop().unwrap(),
                  anonymous_use: ts.pop().unwrap(),
                  anonymous_type: ts.pop().unwrap(),
@@ -4035,7 +4037,6 @@ where
                  anonymous_left_paren: ts.pop().unwrap(),
                  anonymous_function_keyword: ts.pop().unwrap(),
                  anonymous_async_keyword: ts.pop().unwrap(),
-                 anonymous_static_keyword: ts.pop().unwrap(),
                  anonymous_attribute_spec: ts.pop().unwrap(),
                  
              })),
@@ -4163,10 +4164,11 @@ where
                  isset_keyword: ts.pop().unwrap(),
                  
              })),
-             (SyntaxKind::FunctionCallExpression, 5) => SyntaxVariant::FunctionCallExpression(Box::new(FunctionCallExpressionChildren {
+             (SyntaxKind::FunctionCallExpression, 6) => SyntaxVariant::FunctionCallExpression(Box::new(FunctionCallExpressionChildren {
                  function_call_right_paren: ts.pop().unwrap(),
                  function_call_argument_list: ts.pop().unwrap(),
                  function_call_left_paren: ts.pop().unwrap(),
+                 function_call_enum_atom: ts.pop().unwrap(),
                  function_call_type_args: ts.pop().unwrap(),
                  function_call_receiver: ts.pop().unwrap(),
                  
@@ -4462,7 +4464,7 @@ where
                  dictionary_type_keyword: ts.pop().unwrap(),
                  
              })),
-             (SyntaxKind::ClosureTypeSpecifier, 10) => SyntaxVariant::ClosureTypeSpecifier(Box::new(ClosureTypeSpecifierChildren {
+             (SyntaxKind::ClosureTypeSpecifier, 11) => SyntaxVariant::ClosureTypeSpecifier(Box::new(ClosureTypeSpecifierChildren {
                  closure_outer_right_paren: ts.pop().unwrap(),
                  closure_return_type: ts.pop().unwrap(),
                  closure_readonly_return: ts.pop().unwrap(),
@@ -4472,6 +4474,7 @@ where
                  closure_parameter_list: ts.pop().unwrap(),
                  closure_inner_left_paren: ts.pop().unwrap(),
                  closure_function_keyword: ts.pop().unwrap(),
+                 closure_readonly_keyword: ts.pop().unwrap(),
                  closure_outer_left_paren: ts.pop().unwrap(),
                  
              })),
@@ -5285,7 +5288,6 @@ pub struct AnonymousClassChildren<T, V> {
 #[derive(Debug, Clone)]
 pub struct AnonymousFunctionChildren<T, V> {
     pub anonymous_attribute_spec: Syntax<T, V>,
-    pub anonymous_static_keyword: Syntax<T, V>,
     pub anonymous_async_keyword: Syntax<T, V>,
     pub anonymous_function_keyword: Syntax<T, V>,
     pub anonymous_left_paren: Syntax<T, V>,
@@ -5446,6 +5448,7 @@ pub struct IssetExpressionChildren<T, V> {
 pub struct FunctionCallExpressionChildren<T, V> {
     pub function_call_receiver: Syntax<T, V>,
     pub function_call_type_args: Syntax<T, V>,
+    pub function_call_enum_atom: Syntax<T, V>,
     pub function_call_left_paren: Syntax<T, V>,
     pub function_call_argument_list: Syntax<T, V>,
     pub function_call_right_paren: Syntax<T, V>,
@@ -5789,6 +5792,7 @@ pub struct DictionaryTypeSpecifierChildren<T, V> {
 #[derive(Debug, Clone)]
 pub struct ClosureTypeSpecifierChildren<T, V> {
     pub closure_outer_left_paren: Syntax<T, V>,
+    pub closure_readonly_keyword: Syntax<T, V>,
     pub closure_function_keyword: Syntax<T, V>,
     pub closure_inner_left_paren: Syntax<T, V>,
     pub closure_parameter_list: Syntax<T, V>,
@@ -6991,20 +6995,19 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                 })
             },
             AnonymousFunction(x) => {
-                get_index(13).and_then(|index| { match index {
+                get_index(12).and_then(|index| { match index {
                         0 => Some(&x.anonymous_attribute_spec),
-                    1 => Some(&x.anonymous_static_keyword),
-                    2 => Some(&x.anonymous_async_keyword),
-                    3 => Some(&x.anonymous_function_keyword),
-                    4 => Some(&x.anonymous_left_paren),
-                    5 => Some(&x.anonymous_parameters),
-                    6 => Some(&x.anonymous_right_paren),
-                    7 => Some(&x.anonymous_ctx_list),
-                    8 => Some(&x.anonymous_colon),
-                    9 => Some(&x.anonymous_readonly_return),
-                    10 => Some(&x.anonymous_type),
-                    11 => Some(&x.anonymous_use),
-                    12 => Some(&x.anonymous_body),
+                    1 => Some(&x.anonymous_async_keyword),
+                    2 => Some(&x.anonymous_function_keyword),
+                    3 => Some(&x.anonymous_left_paren),
+                    4 => Some(&x.anonymous_parameters),
+                    5 => Some(&x.anonymous_right_paren),
+                    6 => Some(&x.anonymous_ctx_list),
+                    7 => Some(&x.anonymous_colon),
+                    8 => Some(&x.anonymous_readonly_return),
+                    9 => Some(&x.anonymous_type),
+                    10 => Some(&x.anonymous_use),
+                    11 => Some(&x.anonymous_body),
                         _ => None,
                     }
                 })
@@ -7191,12 +7194,13 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                 })
             },
             FunctionCallExpression(x) => {
-                get_index(5).and_then(|index| { match index {
+                get_index(6).and_then(|index| { match index {
                         0 => Some(&x.function_call_receiver),
                     1 => Some(&x.function_call_type_args),
-                    2 => Some(&x.function_call_left_paren),
-                    3 => Some(&x.function_call_argument_list),
-                    4 => Some(&x.function_call_right_paren),
+                    2 => Some(&x.function_call_enum_atom),
+                    3 => Some(&x.function_call_left_paren),
+                    4 => Some(&x.function_call_argument_list),
+                    5 => Some(&x.function_call_right_paren),
                         _ => None,
                     }
                 })
@@ -7625,17 +7629,18 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                 })
             },
             ClosureTypeSpecifier(x) => {
-                get_index(10).and_then(|index| { match index {
+                get_index(11).and_then(|index| { match index {
                         0 => Some(&x.closure_outer_left_paren),
-                    1 => Some(&x.closure_function_keyword),
-                    2 => Some(&x.closure_inner_left_paren),
-                    3 => Some(&x.closure_parameter_list),
-                    4 => Some(&x.closure_inner_right_paren),
-                    5 => Some(&x.closure_contexts),
-                    6 => Some(&x.closure_colon),
-                    7 => Some(&x.closure_readonly_return),
-                    8 => Some(&x.closure_return_type),
-                    9 => Some(&x.closure_outer_right_paren),
+                    1 => Some(&x.closure_readonly_keyword),
+                    2 => Some(&x.closure_function_keyword),
+                    3 => Some(&x.closure_inner_left_paren),
+                    4 => Some(&x.closure_parameter_list),
+                    5 => Some(&x.closure_inner_right_paren),
+                    6 => Some(&x.closure_contexts),
+                    7 => Some(&x.closure_colon),
+                    8 => Some(&x.closure_readonly_return),
+                    9 => Some(&x.closure_return_type),
+                    10 => Some(&x.closure_outer_right_paren),
                         _ => None,
                     }
                 })

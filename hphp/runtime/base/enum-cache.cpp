@@ -13,7 +13,6 @@
    | license@php.net so we can mail you a copy immediately.               |
    +----------------------------------------------------------------------+
 */
-#include "hphp/runtime/base/array-provenance.h"
 #include "hphp/runtime/base/enum-cache.h"
 #include "hphp/runtime/base/tv-type.h"
 
@@ -44,13 +43,13 @@ const EnumValues* EnumCache::getValues(const Class* klass,
 }
 
 const EnumValues* EnumCache::getValuesBuiltin(const Class* klass) {
-  assertx(isEnum(klass));
+  assertx(isAnyEnum(klass));
   if (auto const values = klass->getEnumValues()) return values;
   return s_cache.getEnumValues(klass, false);
 }
 
 const EnumValues* EnumCache::getValuesStatic(const Class* klass) {
-  assertx(isEnum(klass));
+  assertx(isAnyEnum(klass));
   auto const result = [&]() -> const EnumValues* {
     if (auto const values = klass->getEnumValues()) return values;
     return s_cache.getEnumValues(klass, false, true);
@@ -87,8 +86,8 @@ const EnumValues* EnumCache::cachePersistentEnumValues(
   bool recurse,
   Array&& names,
   Array&& values) {
-  assertx(names.isHAMSafeDArray());
-  assertx(values.isHAMSafeDArray());
+  assertx(names.isDict());
+  assertx(values.isDict());
 
   std::unique_ptr<EnumValues> enums(new EnumValues());
   enums->values = ArrayData::GetScalarArray(std::move(values));
@@ -112,8 +111,8 @@ const EnumValues* EnumCache::cacheRequestEnumValues(
   Array&& names,
   Array&& values) {
 
-  assertx(names.isHAMSafeDArray());
-  assertx(values.isHAMSafeDArray());
+  assertx(names.isDict());
+  assertx(values.isDict());
 
   m_nonScalarEnumValuesMap.bind(rds::Mode::Normal, rds::LinkID{"EnumCache"});
   if (!m_nonScalarEnumValuesMap.isInit()) {
@@ -134,8 +133,8 @@ const EnumValues* EnumCache::cacheRequestEnumValues(
 const EnumValues* EnumCache::loadEnumValues(
     const Class* klass, bool recurse, bool require_static) {
   auto const numConstants = klass->numConstants();
-  auto values = Array::CreateDArray();
-  auto names = Array::CreateDArray();
+  auto values = Array::CreateDict();
+  auto names = Array::CreateDict();
   auto const consts = klass->constants();
   bool persist = true;
   for (size_t i = 0; i < numConstants; i++) {
@@ -145,7 +144,7 @@ const EnumValues* EnumCache::loadEnumValues(
     }
     // The outer condition below enables caching of enum constants defined
     // in enums included by the current class.
-    if (!(isEnum(klass)
+    if (!(isAnyEnum(klass)
         && klass->hasIncludedEnums()
         && klass->allIncludedEnums().contains(consts[i].cls->name()))) {
       if (consts[i].cls != klass && !recurse) {
@@ -197,24 +196,8 @@ const EnumValues* EnumCache::loadEnumValues(
     }
   }
 
-  assertx(names.isHAMSafeDArray());
-  assertx(values.isHAMSafeDArray());
-
-  // Tag all enums with the large enum tag. Small enums will be tagged again
-  // based on the actual PC by the reflection methods that access this cache.
-  if (RO::EvalArrayProvenance) {
-    auto const tag = arrprov::Tag::LargeEnum(klass->name());
-    if (names->isStatic()) {
-      names = Array::attach(arrprov::tagStaticArr(names.get(), tag));
-    } else {
-      arrprov::setTag(names.get(), tag);
-    }
-    if (values->isStatic()) {
-      values = Array::attach(arrprov::tagStaticArr(values.get(), tag));
-    } else {
-      arrprov::setTag(values.get(), tag);
-    }
-  }
+  assertx(names.isDict());
+  assertx(values.isDict());
 
   // If we saw dynamic constants we cannot cache the enum values across requests
   // as they may not be the same in every request.
@@ -263,17 +246,6 @@ void EnumCache::deleteEnumValues(intptr_t key) {
     delete acc->second;
     m_enumValuesMap.erase(acc);
   }
-}
-
-Array EnumCache::tagEnumWithProvenance(Array input) {
-  assertx(RO::EvalArrayProvenance);
-  assertx(IMPLIES(arrprov::arrayWantsTag(input.get()),
-                  arrprov::getTag(input.get())));
-  if (input.size() > RO::EvalArrayProvenanceLargeEnumLimit) return input;
-  assertx(input->hasVanillaMixedLayout());
-  auto const ad = MixedArray::Copy(input.get());
-  arrprov::setTag(ad, arrprov::tagFromPC());
-  return Array::attach(ad);
 }
 
 //////////////////////////////////////////////////////////////////////

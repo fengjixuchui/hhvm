@@ -36,7 +36,7 @@ let add_position_to_results
     SearchUtils.result =
   SearchUtils.(
     List.filter_map raw_results ~f:(fun r ->
-        match SymbolIndex.get_pos_for_item_opt ctx r with
+        match SymbolIndexCore.get_pos_for_item_opt ctx r with
         | Some pos ->
           Some { name = r.si_fullname; pos; result_type = r.si_kind }
         | None -> None))
@@ -258,12 +258,42 @@ let autocomplete_xhp_attributes env class_ cid id =
           (Some class_))
   )
 
-let autocomplete_xhp_enum_value
-    (attr_name : string) id_id env xhp_class_ xhp_cid =
+let autocomplete_xhp_bool_value attr_ty id_id env =
   if is_auto_complete (snd id_id) then begin
+    ac_env := Some env;
+    argument_global_type := Some Acprop;
     autocomplete_identifier := Some id_id;
-    let get_class_name (ty : Typing_defs.decl_ty) : string option =
-      let get_name = function
+
+    let is_bool_or_bool_option ty : bool =
+      let is_bool = function
+        | Tprim Tbool -> true
+        | _ -> false
+      in
+      let (_, ty_) = Typing_defs_core.deref ty in
+      match ty_ with
+      | Toption ty -> is_bool (get_node ty)
+      | _ -> is_bool ty_
+    in
+
+    if is_bool_or_bool_option attr_ty then (
+      add_partial_result "true" (Phase.locl attr_ty) SearchUtils.SI_Literal None;
+      add_partial_result
+        "false"
+        (Phase.locl attr_ty)
+        SearchUtils.SI_Literal
+        None
+    )
+  end
+
+let autocomplete_xhp_enum_value attr_ty id_id env =
+  if is_auto_complete (snd id_id) then begin
+    ac_env := Some env;
+    argument_global_type := Some Acprop;
+    autocomplete_identifier := Some id_id;
+
+    let get_class_name ty : string option =
+      let get_name : type phase. phase Typing_defs.ty_ -> _ = function
+        | Tnewtype (name, _, _) -> Some name
         | Tapply ((_, name), _) -> Some name
         | _ -> None
       in
@@ -285,15 +315,7 @@ let autocomplete_xhp_enum_value
              is_correct_class (get_class_name class_const.cc_type))
     in
 
-    let attr_type =
-      get_class_elt_types env xhp_class_ xhp_cid (Cls.props xhp_class_)
-      |> List.find ~f:(fun (id, _) ->
-             String.equal (Utils.strip_xhp_ns id) attr_name)
-    in
-
-    let attr_type_name =
-      Option.bind attr_type ~f:(fun ty -> get_class_name (snd ty))
-    in
+    let attr_type_name = get_class_name attr_ty in
 
     attr_type_name
     |> Option.iter ~f:(fun class_name ->
@@ -367,7 +389,7 @@ let tfun_to_func_details (env : Tast_env.t) (ft : Typing_defs.locl_fun_type) :
 let get_func_details_for env ty =
   let (env, ty) =
     match ty with
-    | DeclTy ty -> Tast_env.localize_with_self env ty
+    | DeclTy ty -> Tast_env.localize_with_self env ~ignore_errors:true ty
     | LoclTy ty -> (env, ty)
   in
   match Typing_defs.get_node ty with
@@ -408,8 +430,10 @@ let resolve_ty
   in
   let pos =
     match x.ty with
-    | LoclTy loclt -> loclt |> Typing_defs.get_pos |> Pos.to_absolute
-    | DeclTy declt -> declt |> Typing_defs.get_pos |> Pos.to_absolute
+    | LoclTy loclt ->
+      loclt |> Typing_defs.get_pos |> ServerPos.resolve env |> Pos.to_absolute
+    | DeclTy declt ->
+      declt |> Typing_defs.get_pos |> ServerPos.resolve env |> Pos.to_absolute
   in
   {
     res_pos = pos;
@@ -434,6 +458,47 @@ let autocomplete_typed_member ~is_static env class_ty cid mid =
 let autocomplete_static_member env ((_, ty), cid) mid =
   autocomplete_typed_member ~is_static:true env ty (Some cid) mid
 
+let autocomplete_enum_atom env f pos_atomname =
+  ac_env := Some env;
+  autocomplete_identifier := Some pos_atomname;
+  argument_global_type := Some Acclass_get;
+  let suggest_members cls =
+    match cls with
+    | Some cls ->
+      List.iter (Cls.consts cls) ~f:(fun (name, cc) ->
+          (* Filter out the constant used for ::class if present *)
+          if String.(name <> Naming_special_names.Members.mClass) then
+            add_partial_result
+              name
+              (Phase.decl cc.cc_type)
+              SearchUtils.SI_ClassConstant
+              (Some cls))
+    | _ -> ()
+  in
+  let suggest_members_from_ty env ty =
+    match get_node ty with
+    | Tclass ((_, enum_name), _, _) when Tast_env.is_enum_class env enum_name ->
+      suggest_members (Tast_env.get_class env enum_name)
+    | _ -> ()
+  in
+
+  let (_, ty) = fst f in
+  let open Typing_defs in
+  match get_node ty with
+  | Tfun { ft_params = { fp_type = { et_type = t; _ }; fp_flags; _ } :: _; _ }
+    ->
+    let is_enum_atom_ty_name name =
+      Typing_defs_flags.(is_set fp_flags_atom fp_flags)
+      && String.equal Naming_special_names.Classes.cMemberOf name
+      || String.equal Naming_special_names.Classes.cLabel name
+    in
+    (match get_node t with
+    | Tnewtype (ty_name, [enum_ty; _member_ty], _)
+      when is_enum_atom_ty_name ty_name ->
+      suggest_members_from_ty env enum_ty
+    | _ -> ())
+  | _ -> ()
+
 let visitor =
   object (self)
     inherit Tast_visitor.iter as super
@@ -441,6 +506,14 @@ let visitor =
     method! on_Id env id =
       autocomplete_id id env;
       super#on_Id env id
+
+    method! on_Call env f targs args unpack_arg =
+      (match args with
+      | ((p, _), Tast.EnumAtom n) :: _ when is_auto_complete n ->
+        autocomplete_enum_atom env f (p, n)
+      | _ -> ());
+
+      super#on_Call env f targs args unpack_arg
 
     method! on_Fun_id env id =
       autocomplete_id id env;
@@ -537,13 +610,15 @@ let visitor =
       Decl_provider.get_class (Tast_env.get_ctx env) (snd sid)
       |> Option.iter ~f:(fun (c : Cls.t) ->
              List.iter attrs ~f:(function
-                 | Tast.Xhp_simple { Aast.xs_name = id; xs_expr = value; _ } ->
+                 | Tast.Xhp_simple
+                     { Aast.xs_name = id; xs_expr = value; xs_type = ty } ->
                    (match value with
                    | (_, Tast.Id id_id) ->
                      (* This handles the situation
                           <foo:bar my-attribute={AUTO332}
                         *)
-                     autocomplete_xhp_enum_value (snd id) id_id env c (Some cid)
+                     autocomplete_xhp_enum_value ty id_id env;
+                     autocomplete_xhp_bool_value ty id_id env
                    | _ -> ());
                    if Cls.is_xhp c then
                      autocomplete_xhp_attributes env c (Some cid) id
@@ -759,7 +834,10 @@ let find_global_results
             let fixed_name = ns ^ r.si_name in
             match Tast_env.get_fun tast_env fixed_name with
             | None -> absolute_none
-            | Some fe -> Typing_defs.get_pos fe.fe_type |> Pos.to_absolute
+            | Some fe ->
+              Typing_defs.get_pos fe.fe_type
+              |> ServerPos.resolve tast_env
+              |> Pos.to_absolute
           else
             absolute_none
         in
@@ -861,7 +939,7 @@ let go_ctx
               complete_autocomplete_results );
         }
       in
-      SymbolIndex.log_symbol_index_search
+      SymbolIndexCore.log_symbol_index_search
         ~sienv
         ~start_time
         ~query_text:!auto_complete_for_global

@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<011a9592b594d9866a427776f2b581fa>>
+// @generated SignedSource<<34f655b22c3c4d78e19d6a446e4a8fa9>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -195,6 +195,8 @@ pub enum Stmt_<'a, Ex, Fb, En, Hi> {
     ),
     /// No-op, the empty statement.
     ///
+    /// {}
+    /// while (true) ;
     /// if ($foo) {} // the else is Noop here
     Noop,
     /// Block, a list of statements in curly braces.
@@ -434,8 +436,9 @@ impl<'a, Ex: TrivialDrop, Fb: TrivialDrop, En: TrivialDrop, Hi: TrivialDrop> Tri
 )]
 pub struct ExpressionTree<'a, Ex, Fb, En, Hi> {
     pub hint: &'a Hint<'a>,
-    pub src_expr: &'a Expr<'a, Ex, Fb, En, Hi>,
-    pub desugared_expr: &'a Expr<'a, Ex, Fb, En, Hi>,
+    pub splices: &'a Block<'a, Ex, Fb, En, Hi>,
+    pub virtualized_expr: &'a Expr<'a, Ex, Fb, En, Hi>,
+    pub runtime_expr: &'a Expr<'a, Ex, Fb, En, Hi>,
 }
 impl<'a, Ex: TrivialDrop, Fb: TrivialDrop, En: TrivialDrop, Hi: TrivialDrop> TrivialDrop
     for ExpressionTree<'a, Ex, Fb, En, Hi>
@@ -667,11 +670,12 @@ pub enum Expr_<'a, Ex, Fb, En, Hi> {
     ///
     /// readonly $foo
     ReadonlyExpr(&'a Expr<'a, Ex, Fb, En, Hi>),
+    /// Tuple expression.
+    ///
+    /// tuple("a", 1, $foo)
+    Tuple(&'a [&'a Expr<'a, Ex, Fb, En, Hi>]),
     /// List expression, only used in destructuring. Allows any arbitrary
     /// lvalue as a subexpression. May also nest.
-    ///
-    /// Note that tuple(1, 2) is lowered to a Call, but naming converts it to a List.
-    /// TODO: Define a separate AAST node for tuple.
     ///
     /// list($x, $y) = vec[1, 2];
     /// list(, $y) = vec[1, 2]; // skipping items
@@ -867,6 +871,46 @@ pub enum Expr_<'a, Ex, Fb, En, Hi> {
     ///
     /// TODO: Remove.
     Any,
+    /// Annotation used to record failure in subtyping or coercion of an
+    /// expression and calls to [unsafe_cast] or [enforced_cast].
+    ///
+    /// The [hole_source] indicates whether this came from an
+    /// explicit call to [unsafe_cast] or [enforced_cast] or was
+    /// generated during typing.
+    ///
+    /// Given a call to [unsafe_cast]:
+    /// ```
+    ///          function f(int $x): void { /* ... */ }
+    ///
+    ///          function g(float $x): void {
+    ///             f(unsafe_cast<float,int>($x));
+    ///          }
+    /// ```
+    /// After typing, this is represented by the following TAST fragment
+    /// ```
+    ///          Call
+    ///            ( ( (..., function(int $x): void), Id (..., "\f"))
+    ///            , []
+    ///            , [ ( (..., int)
+    ///                , Hole
+    ///                    ( ((..., float), Lvar (..., $x))
+    ///                    , float
+    ///                    , int
+    ///                    , UnsafeCast
+    ///                    )
+    ///                )
+    ///              ]
+    ///            , None
+    ///            )
+    /// ```
+    Hole(
+        &'a (
+            &'a Expr<'a, Ex, Fb, En, Hi>,
+            Hi,
+            Hi,
+            &'a oxidized::aast::HoleSource,
+        ),
+    ),
 }
 impl<'a, Ex: TrivialDrop, Fb: TrivialDrop, En: TrivialDrop, Hi: TrivialDrop> TrivialDrop
     for Expr_<'a, Ex, Fb, En, Hi>
@@ -1112,6 +1156,7 @@ impl<'a, Ex: TrivialDrop, Fb: TrivialDrop, En: TrivialDrop, Hi: TrivialDrop> Tri
 )]
 pub struct Fun_<'a, Ex, Fb, En, Hi> {
     pub span: &'a Pos<'a>,
+    pub readonly_this: Option<oxidized::ast_defs::ReadonlyKind>,
     pub annotation: En,
     pub mode: oxidized::file_info::Mode,
     pub readonly_ret: Option<oxidized::ast_defs::ReadonlyKind>,
@@ -1132,7 +1177,6 @@ pub struct Fun_<'a, Ex, Fb, En, Hi> {
     pub external: bool,
     pub namespace: &'a Nsenv<'a>,
     pub doc_comment: Option<&'a DocComment<'a>>,
-    pub static_: bool,
 }
 impl<'a, Ex: TrivialDrop, Fb: TrivialDrop, En: TrivialDrop, Hi: TrivialDrop> TrivialDrop
     for Fun_<'a, Ex, Fb, En, Hi>
@@ -1359,7 +1403,7 @@ pub struct Class_<'a, Ex, Fb, En, Hi> {
     pub implements_dynamic: bool,
     pub where_constraints: &'a [&'a WhereConstraintHint<'a>],
     pub consts: &'a [&'a ClassConst<'a, Ex, Fb, En, Hi>],
-    pub typeconsts: &'a [&'a ClassTypeconst<'a, Ex, Fb, En, Hi>],
+    pub typeconsts: &'a [&'a ClassTypeconstDef<'a, Ex, Fb, En, Hi>],
     pub vars: &'a [&'a ClassVar<'a, Ex, Fb, En, Hi>],
     pub methods: &'a [&'a Method_<'a, Ex, Fb, En, Hi>],
     pub attributes: &'a [ClassAttr<'a, Ex, Fb, En, Hi>],
@@ -1503,7 +1547,6 @@ impl<'a, Ex: TrivialDrop, Fb: TrivialDrop, En: TrivialDrop, Hi: TrivialDrop> Tri
 
 #[derive(
     Clone,
-    Copy,
     Debug,
     Eq,
     FromOcamlRepIn,
@@ -1515,18 +1558,13 @@ impl<'a, Ex: TrivialDrop, Fb: TrivialDrop, En: TrivialDrop, Hi: TrivialDrop> Tri
     Serialize,
     ToOcamlRep
 )]
-pub enum TypeconstAbstractKind<'a> {
-    TCAbstract(Option<&'a Hint<'a>>),
-    TCPartiallyAbstract,
-    TCConcrete,
+pub struct ClassAbstractTypeconst<'a> {
+    pub as_constraint: Option<&'a Hint<'a>>,
+    pub super_constraint: Option<&'a Hint<'a>>,
+    pub default: Option<&'a Hint<'a>>,
 }
-impl<'a> TrivialDrop for TypeconstAbstractKind<'a> {}
+impl<'a> TrivialDrop for ClassAbstractTypeconst<'a> {}
 
-/// This represents a type const definition. If a type const is abstract then
-/// then the type hint acts as a constraint. Any concrete definition of the
-/// type const must satisfy the constraint.
-///
-/// If the type const is not abstract then a type must be specified.
 #[derive(
     Clone,
     Debug,
@@ -1540,18 +1578,74 @@ impl<'a> TrivialDrop for TypeconstAbstractKind<'a> {}
     Serialize,
     ToOcamlRep
 )]
-pub struct ClassTypeconst<'a, Ex, Fb, En, Hi> {
-    pub abstract_: TypeconstAbstractKind<'a>,
-    pub name: Sid<'a>,
-    pub as_constraint: Option<&'a Hint<'a>>,
-    pub type_: Option<&'a Hint<'a>>,
+pub struct ClassConcreteTypeconst<'a> {
+    pub c_tc_type: &'a Hint<'a>,
+}
+impl<'a> TrivialDrop for ClassConcreteTypeconst<'a> {}
+
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub struct ClassPartiallyAbstractTypeconst<'a> {
+    pub constraint: &'a Hint<'a>,
+    pub type_: &'a Hint<'a>,
+}
+impl<'a> TrivialDrop for ClassPartiallyAbstractTypeconst<'a> {}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub enum ClassTypeconst<'a> {
+    TCAbstract(&'a ClassAbstractTypeconst<'a>),
+    TCConcrete(&'a ClassConcreteTypeconst<'a>),
+    TCPartiallyAbstract(&'a ClassPartiallyAbstractTypeconst<'a>),
+}
+impl<'a> TrivialDrop for ClassTypeconst<'a> {}
+
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub struct ClassTypeconstDef<'a, Ex, Fb, En, Hi> {
     pub user_attributes: &'a [&'a UserAttribute<'a, Ex, Fb, En, Hi>],
+    pub name: Sid<'a>,
+    pub kind: ClassTypeconst<'a>,
     pub span: &'a Pos<'a>,
     pub doc_comment: Option<&'a DocComment<'a>>,
     pub is_ctx: bool,
 }
 impl<'a, Ex: TrivialDrop, Fb: TrivialDrop, En: TrivialDrop, Hi: TrivialDrop> TrivialDrop
-    for ClassTypeconst<'a, Ex, Fb, En, Hi>
+    for ClassTypeconstDef<'a, Ex, Fb, En, Hi>
 {
 }
 
@@ -1760,5 +1854,7 @@ impl<'a, Ex: TrivialDrop, Fb: TrivialDrop, En: TrivialDrop, Hi: TrivialDrop> Tri
 }
 
 pub use oxidized::aast::NsKind;
+
+pub use oxidized::aast::HoleSource;
 
 pub use oxidized::aast::BreakContinueLevel;

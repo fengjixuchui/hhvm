@@ -9,6 +9,7 @@ mod try_finally_rewriter;
 use aast::TypeHint;
 use aast_defs::{Hint, Hint_::*};
 use ast_body::AstBody;
+use ast_class_expr_rust::ClassExpr;
 use ast_scope_rust::{Scope, ScopeItem};
 use decl_vars_rust as decl_vars;
 use emit_adata_rust as emit_adata;
@@ -21,6 +22,7 @@ use emit_type_hint_rust as emit_type_hint;
 use env::{emitter::Emitter, Env};
 use generator_rust as generator;
 use hhas_body_rust::HhasBody;
+use hhas_body_rust::HhasBodyEnv;
 use hhas_param_rust::HhasParam;
 use hhas_type::Info as HhasTypeInfo;
 use hhbc_ast_rust::{
@@ -29,7 +31,7 @@ use hhbc_ast_rust::{
 };
 use hhbc_id_rust::function;
 use hhbc_string_utils_rust as string_utils;
-use instruction_sequence_rust::{instr, unrecoverable, Error, InstrSeq, Result};
+use instruction_sequence::{flatten, instr, unrecoverable, Error, InstrSeq, Result};
 use label_rewriter_rust as label_rewriter;
 use label_rust::Label;
 use ocamlrep::rc::RcOc;
@@ -65,6 +67,7 @@ pub struct Args<'a> {
 
 bitflags! {
     pub struct Flags: u8 {
+        const HAS_COEFFECTS_LOCAL = 1 << 0;
         const SKIP_AWAITABLE = 1 << 1;
         const MEMOIZE = 1 << 2;
         const CLOSURE_BODY = 1 << 3;
@@ -75,12 +78,12 @@ bitflags! {
     }
 }
 
-pub fn emit_body_with_default_args<'a, 'b>(
+pub fn emit_body_with_default_args<'b>(
     emitter: &mut Emitter,
     namespace: RcOc<namespace_env::Env>,
     body: &'b tast::Program,
     return_value: InstrSeq,
-) -> Result<HhasBody<'a>> {
+) -> Result<HhasBody> {
     let args = Args {
         immediate_tparams: &vec![],
         class_tparam_names: &vec![],
@@ -104,14 +107,14 @@ pub fn emit_body_with_default_args<'a, 'b>(
     .map(|r| r.0)
 }
 
-pub fn emit_body<'a, 'b>(
+pub fn emit_body<'b>(
     emitter: &mut Emitter,
     namespace: RcOc<namespace_env::Env>,
     body: AstBody<'b>,
     return_value: InstrSeq,
-    scope: Scope<'a>,
+    scope: Scope<'_>,
     args: Args<'_>,
-) -> Result<(HhasBody<'a>, bool, bool)> {
+) -> Result<(HhasBody, bool, bool)> {
     let tparams = scope
         .get_tparams()
         .into_iter()
@@ -204,7 +207,7 @@ pub fn emit_body<'a, 'b>(
             params,
             Some(return_type_info),
             args.doc_comment.to_owned(),
-            Some(env),
+            Some(&env),
         )?,
         is_generator,
         is_pair_generator,
@@ -323,6 +326,10 @@ fn make_decl_vars(
         decl_vars
     };
 
+    if arg_flags.contains(Flags::HAS_COEFFECTS_LOCAL) {
+        decl_vars.insert(0, string_utils::coeffects::LOCAL_NAME.into());
+    }
+
     if !arg_flags.contains(Flags::CLOSURE_BODY)
         && immediate_tparams
             .iter()
@@ -411,8 +418,9 @@ pub fn make_body<'a>(
     mut params: Vec<HhasParam>,
     return_type_info: Option<HhasTypeInfo>,
     doc_comment: Option<DocComment>,
-    env: Option<Env<'a>>,
-) -> Result<HhasBody<'a>> {
+    opt_env: Option<&Env<'a>>,
+) -> Result<HhasBody> {
+    body_instrs = flatten(body_instrs);
     body_instrs.rewrite_user_labels(emitter.label_gen_mut());
     emit_adata::rewrite_typed_values(emitter, &mut body_instrs)?;
     if emitter
@@ -427,6 +435,24 @@ pub fn make_body<'a>(
     } else {
         emitter.iterator().count()
     };
+    let body_env = if let Some(env) = opt_env {
+        let is_namespaced = env.namespace.name.is_none();
+        if let Some(cd) = env.scope.get_class() {
+            Some(HhasBodyEnv {
+                is_namespaced,
+                class_info: Some((cd.get_kind(), cd.get_name_str().to_string())),
+                parent_name: ClassExpr::get_parent_class_name(cd),
+            })
+        } else {
+            Some(HhasBodyEnv {
+                is_namespaced,
+                class_info: None,
+                parent_name: None,
+            })
+        }
+    } else {
+        None
+    };
     Ok(HhasBody {
         body_instrs,
         decl_vars,
@@ -438,7 +464,7 @@ pub fn make_body<'a>(
         params,
         return_type_info,
         doc_comment,
-        env,
+        env: body_env,
     })
 }
 
@@ -522,7 +548,7 @@ mod atom_helpers {
     use crate::*;
     use aast_defs::ReifyKind::Erased;
     use ast_defs::Id;
-    use instruction_sequence_rust::{instr, unrecoverable, InstrSeq, Result};
+    use instruction_sequence::{instr, unrecoverable, InstrSeq, Result};
     use local::Type::Named;
     use tast::Tparam;
 
@@ -678,7 +704,7 @@ fn atom_instrs(
                                                         QueryOp::CGetQuiet,
                                                         MemberKey::ET(
                                                             "classname".into(),
-                                                            ReadOnlyOp::Mutable,
+                                                            ReadOnlyOp::Any,
                                                         ),
                                                     ),
                                                     instr::dup(),
@@ -719,7 +745,7 @@ fn atom_instrs(
                                                         )?,
                                                         instr::combine_and_resolve_type_struct(1),
                                                         instr::basec(0, MemberOpMode::ModeNone),
-                                                        instr::querym(1, QueryOp::CGetQuiet, MemberKey::ET("classname".into(), ReadOnlyOp::Mutable)),
+                                                        instr::querym(1, QueryOp::CGetQuiet, MemberKey::ET("classname".into(), ReadOnlyOp::Any)),
                                                         instr::dup(),
                                                         instr::istypec(IstypeOp::OpNull),
                                                         instr::jmpnz(label_not_a_class.clone()),

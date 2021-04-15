@@ -481,7 +481,7 @@ bool HHVM_FUNCTION(pcntl_signal,
     g_signal_handlers.bind(rds::Mode::Normal, rds::LinkID{"SignalHandlers"});
   }
   if (!g_signal_handlers.isInit()) {
-    g_signal_handlers.initWith(empty_array());
+    g_signal_handlers.initWith(empty_dict_array());
   }
   g_signal_handlers->set(signo, handler);
   g_handlerMask |= (1u << signo);
@@ -523,7 +523,7 @@ bool HHVM_FUNCTION(pcntl_sigprocmask,
     return false;
   }
 
-  oldset = Array::CreateVArray();
+  oldset = Array::CreateVec();
   for (int signum = 1; signum < Process::kNSig; ++signum) {
     auto const result = sigismember(&coldset, signum);
     if (result == 1) {

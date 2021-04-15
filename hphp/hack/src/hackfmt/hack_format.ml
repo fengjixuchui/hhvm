@@ -1390,7 +1390,6 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
     | Syntax.AnonymousFunction
         {
           anonymous_attribute_spec = attr;
-          anonymous_static_keyword = static_kw;
           anonymous_async_keyword = async_kw;
           anonymous_function_keyword = fun_kw;
           anonymous_left_paren = lp;
@@ -1407,8 +1406,6 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
         [
           handle_attribute_spec env attr ~always_split:false;
           when_present attr space;
-          t env static_kw;
-          when_present static_kw space;
           t env async_kw;
           when_present async_kw space;
           t env fun_kw;
@@ -2218,6 +2215,7 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
     | Syntax.ClosureTypeSpecifier
         {
           closure_outer_left_paren = outer_left_p;
+          closure_readonly_keyword = ro;
           closure_function_keyword = kw;
           closure_inner_left_paren = inner_left_p;
           closure_parameter_list = param_list;
@@ -2231,6 +2229,8 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
       Concat
         [
           t env outer_left_p;
+          t env ro;
+          when_present ro space;
           t env kw;
           t env inner_left_p;
           when_present param_list split;
@@ -2780,6 +2780,7 @@ and handle_possible_chaining env node =
         {
           function_call_receiver = receiver;
           function_call_type_args = targs;
+          function_call_enum_atom = _enum_atom;
           function_call_left_paren = lp;
           function_call_argument_list = args;
           function_call_right_paren = rp;
@@ -2832,6 +2833,7 @@ and handle_possible_chaining env node =
         {
           function_call_receiver = receiver;
           function_call_type_args = targs;
+          function_call_enum_atom = _enum_atom;
           function_call_left_paren = lp;
           function_call_argument_list = args;
           function_call_right_paren = rp;

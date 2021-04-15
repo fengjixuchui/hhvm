@@ -35,7 +35,7 @@ val fresh_type : env -> Pos.t -> env * locl_ty
 
 (** Same as fresh_type but takes a specific reason as parameter. *)
 val fresh_type_reason :
-  ?variance:Ast_defs.variance -> env -> Reason.t -> env * locl_ty
+  ?variance:Ast_defs.variance -> env -> Pos.t -> Reason.t -> env * locl_ty
 
 val fresh_invariant_type_var : env -> Pos.t -> env * locl_ty
 
@@ -74,32 +74,32 @@ val empty :
   droot:Typing_deps.Dep.dependent Typing_deps.Dep.variant option ->
   env
 
-val is_typedef : env -> typedef_key -> bool
+val is_typedef : env -> type_key -> bool
 
-val get_enum : env -> class_key -> class_decl option
+val get_enum : env -> type_key -> class_decl option
 
-val is_enum : env -> class_key -> bool
+val is_enum : env -> type_key -> bool
 
-val is_enum_class : env -> class_key -> bool
+val is_enum_class : env -> type_key -> bool
 
-val get_enum_constraint : env -> class_key -> decl_ty option
+val get_enum_constraint : env -> type_key -> decl_ty option
 
 (** Register the constructor of the class with the given name as a dependency
     of the class being checked. *)
-val make_depend_on_constructor : env -> string -> unit
+val make_depend_on_constructor : env -> type_key -> unit
 
 (** Get class declaration from the appropriate backend and add dependency. *)
-val get_class : env -> class_key -> class_decl option
+val get_class : env -> type_key -> class_decl option
 
-val get_class_dep : env -> class_key -> class_decl option
+val get_class_dep : env -> type_key -> class_decl option
 
 (** Get function declaration from the appropriate backend and add dependency. *)
 val get_fun : env -> Decl_provider.fun_key -> Decl_provider.fun_decl option
 
 (** Get type alias declaration from the appropriate backend and add dependency. *)
-val get_typedef : env -> typedef_key -> typedef_decl option
+val get_typedef : env -> type_key -> typedef_decl option
 
-val get_class_or_typedef : env -> class_key -> class_or_typedef_result option
+val get_class_or_typedef : env -> type_key -> class_or_typedef_result option
 
 (** Get class constant declaration from the appropriate backend and add dependency. *)
 val get_const : env -> class_decl -> string -> class_const option
@@ -117,12 +117,13 @@ val get_gconst : env -> gconst_key -> gconst_decl option
 val get_static_member : bool -> env -> class_decl -> string -> class_elt option
 
 val suggest_static_member :
-  bool -> class_decl -> string -> (Pos.t * string) option
+  bool -> class_decl -> string -> (Pos_or_decl.t * string) option
 
 (** Get class member declaration from the appropriate backend and add dependency. *)
 val get_member : bool -> env -> class_decl -> string -> class_elt option
 
-val suggest_member : bool -> class_decl -> string -> (Pos.t * string) option
+val suggest_member :
+  bool -> class_decl -> string -> (Pos_or_decl.t * string) option
 
 (** Get class constructor declaration from the appropriate backend and add dependency. *)
 val get_construct : env -> class_decl -> class_elt option * consistent_kind
@@ -154,13 +155,15 @@ val with_origin : env -> Decl_counters.origin -> (env -> env * 'a) -> env * 'a
 val with_origin2 :
   env -> Decl_counters.origin -> (env -> env * 'a * 'b) -> env * 'a * 'b
 
+val with_in_expr_tree : env -> bool -> (env -> env * 'a * 'b) -> env * 'a * 'b
+
 val is_static : env -> bool
 
 val get_val_kind : env -> Typing_defs.val_kind
 
 val get_self_ty : env -> locl_ty option
 
-val get_self_class_type : env -> (Nast.sid * exact * locl_ty list) option
+val get_self_class_type : env -> (pos_id * exact * locl_ty list) option
 
 val get_self_id : env -> string option
 
@@ -175,6 +178,31 @@ val get_parent_class : env -> class_decl option
 val get_fn_kind : env -> Ast_defs.fun_kind
 
 val get_file : env -> Relative_path.t
+
+val get_current_decl_and_file : env -> Pos_or_decl.ctx
+
+(** Check that the position is in the current decl and if it is, resolve
+    it with the current file. *)
+val fill_in_pos_filename_if_in_current_decl :
+  env -> Pos_or_decl.t -> Pos.t option
+
+(** This will check that the first position of the given reasons is in the
+    current decl and if yes use it as primary error position. If no,
+    it will error at a default position in the current file and log the failed
+    assertion.
+    This also sets the error code to the code for unification error
+    if none is provided. *)
+val unify_error_assert_primary_pos_in_current_decl :
+  env -> Errors.error_from_reasons_callback
+
+(** This will check that the first position of the given reasons is in the
+    current decl and if yes use it as primary error position. If no,
+    it will error at a default position in the current file and log the failed
+    assertion.
+    This also sets the error code to the code for invalid type hint error
+    if none is provided. *)
+val invalid_type_hint_assert_primary_pos_in_current_decl :
+  env -> Errors.error_from_reasons_callback
 
 val set_fn_kind : env -> Ast_defs.fun_kind -> env
 
@@ -263,7 +291,7 @@ val get_tpenv : env -> TPEnv.t
 val get_global_tpenv : env -> TPEnv.t
 
 val get_pos_and_kind_of_generic :
-  env -> string -> (Pos.t * Typing_kinding_defs.kind) option
+  env -> string -> (Pos_or_decl.t * Typing_kinding_defs.kind) option
 
 val get_lower_bounds : env -> string -> locl_ty list -> TPEnv.tparam_bounds
 
@@ -292,6 +320,8 @@ val add_lower_bound :
 val get_equal_bounds : env -> string -> locl_ty list -> TPEnv.tparam_bounds
 
 val get_tparams : env -> locl_ty -> SSet.t
+
+val add_lower_bound_global : env -> string -> locl_ty -> env
 
 val add_upper_bound_global : env -> string -> locl_ty -> env
 
@@ -373,11 +403,11 @@ val extract_global_inference_env : env -> env * Typing_inference_env.t_global
 
 val get_tyvar_eager_solve_fail : env -> Ident.t -> bool
 
-val get_tyvar_type_const : env -> int -> Aast.sid -> (Aast.sid * locl_ty) option
+val get_tyvar_type_const : env -> int -> pos_id -> (pos_id * locl_ty) option
 
-val set_tyvar_type_const : env -> int -> Aast.sid -> locl_ty -> env
+val set_tyvar_type_const : env -> int -> pos_id -> locl_ty -> env
 
-val get_tyvar_type_consts : env -> int -> (Aast.sid * locl_ty) SMap.t
+val get_tyvar_type_consts : env -> int -> (pos_id * locl_ty) SMap.t
 
 val initialize_tyvar_as_in :
   as_in:Typing_inference_env.t_global -> env -> int -> env
@@ -411,6 +441,8 @@ val set_env_pessimize : env -> env
 val fun_is_constructor : env -> bool
 
 val set_fun_is_constructor : env -> bool -> env
+
+val set_fun_tast_info : env -> Tast.fun_tast_info -> env
 
 val env_with_locals : env -> Typing_per_cont_env.t -> env
 

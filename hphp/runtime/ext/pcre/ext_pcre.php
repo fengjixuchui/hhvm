@@ -36,13 +36,13 @@ function preg_grep(string $pattern,
                    varray_or_darray $input,
                    int $flags = 0): mixed;
 
-<<__Native, __Pure>>
+<<__Native>>
 function preg_grep_with_error(
   string $pattern,
   varray_or_darray $input,
   inout ?int $error,
   int $flags = 0,
-): mixed;
+)[]: mixed;
 
 /**
  * Returns the error code of the last PCRE regex execution
@@ -95,14 +95,14 @@ function preg_match_all(string $pattern,
                         int $flags = 0,
                         int $offset = 0): mixed;
 
-<<__Native, __Pure>>
+<<__Native>>
 function preg_match_all_with_error(
   string $pattern,
   string $subject,
   inout ?int $error,
   int $flags = 0,
   int $offset = 0,
-): mixed;
+)[]: mixed;
 
 <<__Native, __Pure>>
 function preg_match_all_with_matches(string $pattern,
@@ -112,7 +112,7 @@ function preg_match_all_with_matches(string $pattern,
                                      int $flags = 0,
                                      int $offset = 0): mixed;
 
-<<__Native, __Pure>>
+<<__Native>>
 function preg_match_all_with_matches_and_error(
   string $pattern,
   string $subject,
@@ -121,7 +121,7 @@ function preg_match_all_with_matches_and_error(
   inout ?int $error,
   int $flags = 0,
   int $offset = 0,
-): mixed;
+)[]: mixed;
 
 /**
  * Perform a regular expression match
@@ -149,30 +149,30 @@ function preg_match_all_with_matches_and_error(
  * @return int - preg_match() returns 1 if the pattern matches given
  *   subject, 0 if it does not, or FALSE if an error occurred.
  */
-<<__Native, __Pure>>
+<<__Native>>
 function preg_match(string $pattern,
                     string $subject,
                     int $flags = 0,
-                    int $offset = 0): mixed;
+                    int $offset = 0)[]: mixed;
 
-<<__Native, __Pure>>
+<<__Native>>
 function preg_match_with_error(
   string $pattern,
   string $subject,
   inout ?int $error,
   int $flags = 0,
   int $offset = 0,
-): mixed;
+)[]: mixed;
 
-<<__Native, __Pure>>
+<<__Native>>
 function preg_match_with_matches(string $pattern,
                                  string $subject,
                                  <<__OutOnly>>
                                  inout mixed $matches,
                                  int $flags = 0,
-                                 int $offset = 0): mixed;
+                                 int $offset = 0)[]: mixed;
 
-<<__Native, __Pure>>
+<<__Native>>
 function preg_match_with_matches_and_error(
   string $pattern,
   string $subject,
@@ -181,7 +181,7 @@ function preg_match_with_matches_and_error(
   inout ?int $error,
   int $flags = 0,
   int $offset = 0,
-): mixed;
+)[]: mixed;
 
 /**
  * Quote regular expression characters
@@ -194,9 +194,9 @@ function preg_match_with_matches_and_error(
  *
  * @return string - Returns the quoted (escaped) string.
  */
-<<__IsFoldable, __Pure, __Native>>
+<<__IsFoldable, __Native>>
 function preg_quote(string $str,
-                    ?string $delimiter = NULL): string;
+                    ?string $delimiter = NULL)[]: string;
 
 /**
  * Perform a regular expression search and replace using a callback
@@ -232,6 +232,17 @@ function preg_replace_callback(mixed $pattern,
                                int $limit,
                                <<__OutOnly("KindOfInt64")>>
                                inout ?int $count): mixed;
+
+<<__Native, __Pure>>
+function preg_replace_callback_with_error(
+  mixed $pattern,
+  mixed $callback,
+  mixed $subject,
+  int $limit,
+  <<__OutOnly("KindOfInt64")>>
+  inout ?int $count,
+  inout ?int $error,
+): mixed;
 
 /**
  * Perform a regular expression search and replace using an associative array of
@@ -269,6 +280,17 @@ function preg_replace_callback_array(mixed $patterns_and_callbacks,
                                      int $limit,
                                      <<__OutOnly("KindOfInt64")>>
                                      inout ?int $count): mixed;
+
+<<__Native, __Pure>>
+function preg_replace_callback_array_with_error(
+  mixed $patterns_and_callbacks,
+  mixed $subject,
+  int $limit,
+  <<__OutOnly("KindOfInt64")>>
+  inout ?int $count,
+  inout ?int $error,
+): mixed;
+
 /**
  * Perform a regular expression search and replace
  *
@@ -324,14 +346,14 @@ function preg_replace(mixed $pattern,
                       mixed $subject,
                       int $limit = -1): mixed;
 
-<<__Native, __Pure>>
+<<__Native>>
 function preg_replace_with_error(
   mixed $pattern,
   mixed $replacement,
   mixed $subject,
   inout ?int $error,
   int $limit = -1,
-): mixed;
+)[]: mixed;
 
 <<__Native, __Pure>>
 function preg_replace_with_count(mixed $pattern,
@@ -341,7 +363,7 @@ function preg_replace_with_count(mixed $pattern,
                                  <<__OutOnly("KindOfInt64")>>
                                  inout ?int $count): mixed;
 
-<<__Native, __Pure>>
+<<__Native>>
 function preg_replace_with_count_and_error(
   mixed $pattern,
   mixed $replacement,
@@ -350,7 +372,7 @@ function preg_replace_with_count_and_error(
   <<__OutOnly("KindOfInt64")>>
   inout ?int $count,
   inout ?int $error,
-): mixed;
+)[]: mixed;
 
 /**
  * Split string by a regular expression
@@ -375,20 +397,20 @@ function preg_replace_with_count_and_error(
  * @return array - Returns an array containing substrings of subject
  *   split along boundaries matched by pattern.
  */
-<<__Native, __Pure>>
+<<__Native>>
 function preg_split(string $pattern,
                     string $subject,
                     mixed $limit = null,
-                    int $flags = 0): mixed;
+                    int $flags = 0)[]: mixed;
 
-<<__Native, __Pure>>
+<<__Native>>
 function preg_split_with_error(
   string $pattern,
   string $subject,
   inout ?int $error,
   mixed $limit = null,
   int $flags = 0,
-): mixed;
+)[]: mixed;
 
 /**
  * Replace regular expression

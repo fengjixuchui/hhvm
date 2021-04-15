@@ -87,12 +87,17 @@ Type typeToInt(Type ty) {
 
 //////////////////////////////////////////////////////////////////////
 
+bool okTypesForConstMath(Type t1, Type t2) {
+  // we're banning math on non-num types and they're gonna be rare on literals
+  // and immediately codemodded away anyway, so just kill the optimization now
+  return t1.subtypeOf(BNum) && t2.subtypeOf(BNum);
+}
+
 Type typeAdd(Type t1, Type t2) {
-  if (auto t = eval_const(t1, t2, tvAdd))             return *t;
-  if (auto t = usual_arith_conversions(t1, t2))       return *t;
-  if (t1.subtypeOf(BVArr | BDArr) && t2.subtypeOf(BVArr | BDArr)) {
-    return union_of(TVArr,TDArr);
+  if (okTypesForConstMath(t1, t2)) {
+    if (auto t = eval_const(t1, t2, tvAdd)) return *t;
   }
+  if (auto t = usual_arith_conversions(t1, t2))       return *t;
   if (t1.subtypeOf(BVec) && t2.subtypeOf(BVec))       return TVec;
   if (t1.subtypeOf(BDict) && t2.subtypeOf(BDict))     return TDict;
   if (t1.subtypeOf(BKeyset) && t2.subtypeOf(BKeyset)) return TKeyset;
@@ -100,12 +105,11 @@ Type typeAdd(Type t1, Type t2) {
 }
 
 Type typeAddO(Type t1, Type t2) {
-  if (auto t = eval_const(t1, t2, tvAddO))            return *t;
+  if (okTypesForConstMath(t1, t2)) {
+    if (auto t = eval_const(t1, t2, tvAddO))          return *t;
+  }
   if (t1.subtypeOf(BInt) && t2.subtypeOf(BInt))       return TNum;
   if (auto t = usual_arith_conversions(t1, t2))       return *t;
-  if (t1.subtypeOf(BVArr | BDArr) && t2.subtypeOf(BVArr | BDArr)) {
-    return union_of(TVArr, TDArr);
-  }
   if (t1.subtypeOf(BVec) && t2.subtypeOf(BVec))       return TVec;
   if (t1.subtypeOf(BDict) && t2.subtypeOf(BDict))     return TDict;
   if (t1.subtypeOf(BKeyset) && t2.subtypeOf(BKeyset)) return TKeyset;
@@ -114,14 +118,18 @@ Type typeAddO(Type t1, Type t2) {
 
 template <class CellOp>
 Type typeSubMulImpl(Type t1, Type t2, CellOp op) {
-  if (auto t = eval_const(t1, t2, op))          return *t;
+  if (okTypesForConstMath(t1, t2)) {
+    if (auto t = eval_const(t1, t2, op))        return *t;
+  }
   if (auto t = usual_arith_conversions(t1, t2)) return *t;
   return TInitPrim;
 }
 
 template <class CellOp>
 Type typeSubMulImplO(Type t1, Type t2, CellOp op) {
-  if (auto t = eval_const(t1, t2, op))          return *t;
+  if (okTypesForConstMath(t1, t2)) {
+    if (auto t = eval_const(t1, t2, op))        return *t;
+  }
   if (t1.subtypeOf(BInt) && t2.subtypeOf(BInt)) return TNum;
   if (auto t = usual_arith_conversions(t1, t2)) return *t;
   return TInitPrim;
@@ -134,17 +142,23 @@ Type typeSubO(Type t1, Type t2) { return typeSubMulImplO(t1, t2, tvSubO); }
 Type typeMulO(Type t1, Type t2) { return typeSubMulImplO(t1, t2, tvMulO); }
 
 Type typeDiv(Type t1, Type t2) {
-  if (auto t = eval_const(t1, t2, tvDiv)) return *t;
+  if (okTypesForConstMath(t1, t2)) {
+    if (auto t = eval_const(t1, t2, tvDiv)) return *t;
+  }
   return TInitPrim;
 }
 
 Type typeMod(Type t1, Type t2) {
-  if (auto t = eval_const(t1, t2, tvMod)) return *t;
+  if (okTypesForConstMath(t1, t2)) {
+    if (auto t = eval_const(t1, t2, tvMod)) return *t;
+  }
   return TInitPrim;
 }
 
 Type typePow(Type t1, Type t2) {
-  if (auto t = eval_const(t1, t2, tvPow)) return *t;
+  if (okTypesForConstMath(t1, t2)) {
+    if (auto t = eval_const(t1, t2, tvPow)) return *t;
+  }
   return TNum;
 }
 
@@ -236,9 +250,7 @@ Type typeSetOp(SetOpOp op, Type lhs, Type rhs) {
     // at runtime it will not be static.  For now just throw that
     // away.  TODO(#3696042): should be able to loosen_staticness here.
     if (resultTy->subtypeOf(BStr)) resultTy = TStr;
-    else if (resultTy->subtypeOf(BVArr | BDArr)) {
-      resultTy = union_of(TVArr, TDArr);
-    } else if (resultTy->subtypeOf(BVec)) resultTy = TVec;
+    else if (resultTy->subtypeOf(BVec)) resultTy = TVec;
     else if (resultTy->subtypeOf(BDict)) resultTy = TDict;
     else if (resultTy->subtypeOf(BKeyset)) resultTy = TKeyset;
 
@@ -274,10 +286,8 @@ Type typeSetOp(SetOpOp op, Type lhs, Type rhs) {
 Type typeSame(const Type& a, const Type& b) {
   // The comparison will recurse into array values, so we need to
   // loosen the likeness recursively (unlike normal).
-  auto const nsa =
-    loosen_likeness_recursively(loosen_staticness(loosen_provenance(a)));
-  auto const nsb =
-    loosen_likeness_recursively(loosen_staticness(loosen_provenance(b)));
+  auto const nsa = loosen_likeness_recursively(loosen_staticness(a));
+  auto const nsb = loosen_likeness_recursively(loosen_staticness(b));
   if (!nsa.couldBe(nsb)) return TFalse;
   return TBool;
 }

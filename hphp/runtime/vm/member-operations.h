@@ -214,7 +214,7 @@ inline TypedValue ElemVecPre(ArrayData* base, TypedValue key) {
 
 template<MOpMode mode, KeyType keyType>
 inline TypedValue ElemVec(ArrayData* base, key_type<keyType> key) {
-  assertx(base->hasVanillaPackedLayout());
+  assertx(base->isVanillaVec());
   auto const result = ElemVecPre<mode>(base, key);
   if (UNLIKELY(!result.is_init())) {
     if (mode != MOpMode::Warn && mode != MOpMode::InOut) return ElemEmptyish();
@@ -245,7 +245,7 @@ inline TypedValue ElemDictPre(ArrayData* base, TypedValue key) {
 // This helper may also be used when we know we have a MixedArray in the JIT.
 template<MOpMode mode, KeyType keyType>
 inline TypedValue ElemDict(ArrayData* base, key_type<keyType> key) {
-  assertx(base->hasVanillaMixedLayout());
+  assertx(base->isVanillaDict());
   auto const result = ElemDictPre(base, key);
   if (UNLIKELY(!result.is_init())) {
     if (mode != MOpMode::Warn && mode != MOpMode::InOut) return ElemEmptyish();
@@ -275,7 +275,7 @@ inline TypedValue ElemKeysetPre(ArrayData* base, TypedValue key) {
 
 template<MOpMode mode, KeyType keyType>
 inline TypedValue ElemKeyset(ArrayData* base, key_type<keyType> key) {
-  assertx(base->isKeysetKind());
+  assertx(base->isVanillaKeyset());
   auto result = ElemKeysetPre(base, key);
   if (UNLIKELY(!result.is_init())) {
     if (mode != MOpMode::Warn && mode != MOpMode::InOut) return ElemEmptyish();
@@ -295,8 +295,7 @@ inline TypedValue ElemBespokePre(ArrayData* base, int64_t key) {
 
 template<MOpMode mode>
 inline TypedValue ElemBespokePre(ArrayData* base, StringData* key) {
-  if ((mode == MOpMode::Warn || mode == MOpMode::InOut) &&
-      (base->isVecType() || base->isVArray())) {
+  if ((mode == MOpMode::Warn || mode == MOpMode::InOut) && base->isVecType()) {
     throwInvalidArrayKeyException(key, base);
   }
   return BespokeArray::NvGetStr(base, key);
@@ -489,10 +488,6 @@ NEVER_INLINE TypedValue ElemSlow(tv_rval base, key_type<keyType> key) {
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
       always_assert(false);
 
     case KindOfObject:
@@ -519,9 +514,9 @@ inline TypedValue Elem(tv_rval base, key_type<keyType> key) {
     auto const ad = base.val().parr;
     if (!ad->isVanilla()) {
       return ElemBespoke<mode, keyType>(ad, key);
-    } else if (ad->hasVanillaPackedLayout()) {
+    } else if (ad->isVanillaVec()) {
       return ElemVec<mode, keyType>(ad, key);
-    } else if (ad->hasVanillaMixedLayout()) {
+    } else if (ad->isVanillaDict()) {
       return ElemDict<mode, keyType>(ad, key);
     } else {
       return ElemKeyset<mode, keyType>(ad, key);
@@ -573,7 +568,7 @@ inline tv_lval ElemDBespoke(tv_lval base, key_type<keyType> key) {
 }
 
 /**
- * ElemD when base is a Vec/VArray
+ * ElemD when base is a Vec
  */
 inline tv_lval ElemDVecPre(tv_lval base, int64_t key) {
   auto const oldArr = base.val().parr;
@@ -604,10 +599,10 @@ inline tv_lval ElemDVecPre(tv_lval base, TypedValue key) {
 
 template <KeyType keyType>
 inline tv_lval ElemDVec(tv_lval base, key_type<keyType> key) {
-  assertx(tvIsVecOrVArray(base));
+  assertx(tvIsVec(base));
   assertx(tvIsPlausible(base.tv()));
   auto const result = ElemDVecPre(base, key);
-  assertx(tvIsVecOrVArray(base));
+  assertx(tvIsVec(base));
   assertx(tvIsPlausible(base.tv()));
 
   assertx(result.type() != KindOfUninit);
@@ -615,7 +610,7 @@ inline tv_lval ElemDVec(tv_lval base, key_type<keyType> key) {
 }
 
 /**
- * ElemD when base is a Dict/DArr
+ * ElemD when base is a Dict
  */
 inline tv_lval ElemDDictPre(tv_lval base, int64_t key) {
   auto const oldArr = base.val().parr;
@@ -667,10 +662,10 @@ inline tv_lval ElemDDictPre(tv_lval base, TypedValue key) {
 
 template <KeyType keyType>
 inline tv_lval ElemDDict(tv_lval base, key_type<keyType> key) {
-  assertx(tvIsDictOrDArray(base));
+  assertx(tvIsDict(base));
   assertx(tvIsPlausible(base.tv()));
   auto result = ElemDDictPre(base, key);
-  assertx(tvIsDictOrDArray(base));
+  assertx(tvIsDict(base));
   assertx(tvIsPlausible(base.tv()));
 
   assertx(result.type() != KindOfUninit);
@@ -810,13 +805,9 @@ tv_lval ElemD(tv_lval base, key_type<keyType> key) {
       return ElemDKeyset<keyType>(base, key);
     case KindOfPersistentDict:
     case KindOfDict:
-    case KindOfPersistentDArray:
-    case KindOfDArray:
       return ElemDDict<keyType>(base, key);
     case KindOfPersistentVec:
     case KindOfVec:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
       return ElemDVec<keyType>(base, key);
     case KindOfObject:
       return ElemDObject<keyType>(base, key);
@@ -905,17 +896,17 @@ inline tv_lval ElemUVecPre(tv_lval base, TypedValue key) {
 
 template <KeyType keyType>
 inline tv_lval ElemUVec(tv_lval base, key_type<keyType> key) {
-  assertx(tvIsVecOrVArray(base));
+  assertx(tvIsVec(base));
   assertx(tvIsPlausible(*base));
   auto result = ElemUVecPre(base, key);
-  assertx(tvIsVecOrVArray(base));
+  assertx(tvIsVec(base));
   assertx(tvIsPlausible(*base));
   assertx(type(result) != KindOfUninit);
   return result;
 }
 
 /**
- * ElemU when base is a Dict/DArray
+ * ElemU when base is a Dict
  */
 inline tv_lval ElemUDictPre(tv_lval base, int64_t key) {
   ArrayData* oldArr = val(base).parr;
@@ -958,10 +949,10 @@ inline tv_lval ElemUDictPre(tv_lval base, TypedValue key) {
 
 template <KeyType keyType>
 inline tv_lval ElemUDict(tv_lval base, key_type<keyType> key) {
-  assertx(tvIsDictOrDArray(base));
+  assertx(tvIsDict(base));
   assertx(tvIsPlausible(*base));
   auto result = ElemUDictPre(base, key);
-  assertx(tvIsDictOrDArray(base));
+  assertx(tvIsDict(base));
   assertx(tvIsPlausible(*base));
   assertx(type(result) != KindOfUninit);
   return result;
@@ -1060,13 +1051,9 @@ tv_lval ElemU(tv_lval base, key_type<keyType> key) {
       return ElemUKeyset<keyType>(base, key);
     case KindOfPersistentDict:
     case KindOfDict:
-    case KindOfPersistentDArray:
-    case KindOfDArray:
       return ElemUDict<keyType>(base, key);
     case KindOfPersistentVec:
     case KindOfVec:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
       return ElemUVec<keyType>(base, key);
     case KindOfObject:
       return ElemUObject<keyType>(base, key);
@@ -1148,10 +1135,6 @@ inline tv_lval NewElem(tv_lval base) {
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
       throw_cannot_use_newelem_for_lval_read(val(base).parr);
     case KindOfObject:
       return NewElemObject(base);
@@ -1362,9 +1345,8 @@ SetElemVecPre(ArrayData* a, TypedValue key, TypedValue* value) {
 
 template <KeyType keyType>
 inline void SetElemVec(tv_lval base, key_type<keyType> key, TypedValue* value) {
-  assertx(tvIsVecOrVArray(base));
+  assertx(tvIsVec(base));
   assertx(tvIsPlausible(*base));
-
   ArrayData* a = val(base).parr;
   auto const newData = SetElemVecPre(a, key, value);
   arraySetUpdateBase(newData, base);
@@ -1394,7 +1376,7 @@ SetElemDictPre(ArrayData* a, TypedValue key, TypedValue* value) {
 template <KeyType keyType>
 inline void SetElemDict(tv_lval base, key_type<keyType> key,
                         TypedValue* value) {
-  assertx(tvIsDictOrDArray(base));
+  assertx(tvIsDict(base));
   assertx(tvIsPlausible(*base));
 
   ArrayData* a = val(base).parr;
@@ -1478,10 +1460,6 @@ StringData* SetElemSlow(tv_lval base, key_type<keyType> key,
     case KindOfVec:
     case KindOfPersistentDict:
     case KindOfDict:
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
       always_assert(false);
 
     case KindOfObject:
@@ -1510,12 +1488,12 @@ inline StringData* SetElem(tv_lval base, key_type<keyType> key,
                            TypedValue* value) {
   assertx(tvIsPlausible(*base));
 
-  if (LIKELY(tvIsVecOrVArray(base))) {
+  if (LIKELY(tvIsVec(base))) {
     base.val().parr->isVanilla() ? SetElemVec<keyType>(base, key, value)
                                  : SetElemBespoke<keyType>(base, key, value);
     return nullptr;
   }
-  if (LIKELY(tvIsDictOrDArray(base))) {
+  if (LIKELY(tvIsDict(base))) {
     base.val().parr->isVanilla() ? SetElemDict<keyType>(base, key, value)
                                  : SetElemBespoke<keyType>(base, key, value);
     return nullptr;
@@ -1584,7 +1562,7 @@ inline void SetNewElemBespoke(tv_lval base, TypedValue* value) {
  * SetNewElem when base is a Vec
  */
 inline void SetNewElemVec(tv_lval base, TypedValue* value) {
-  assertx(tvIsVecOrVArray(base));
+  assertx(tvIsVec(base));
   assertx(tvIsPlausible(*base));
   auto a = val(base).parr;
   auto a2 = PackedArray::AppendMove(a, *value);
@@ -1595,7 +1573,7 @@ inline void SetNewElemVec(tv_lval base, TypedValue* value) {
  * SetNewElem when base is a Dict
  */
 inline void SetNewElemDict(tv_lval base, TypedValue* value) {
-  assertx(tvIsDictOrDArray(base));
+  assertx(tvIsDict(base));
   assertx(tvIsPlausible(*base));
   auto a = val(base).parr;
   auto a2 = MixedArray::AppendMove(a, *value);
@@ -1656,14 +1634,10 @@ inline void SetNewElem(tv_lval base, TypedValue* value) {
     case KindOfPersistentString:
     case KindOfString:
       return SetNewElemString(base);
-    case KindOfPersistentVArray:
-    case KindOfVArray:
     case KindOfPersistentVec:
     case KindOfVec:
       tvIncRefGen(*value);
       return SetNewElemVec(base, value);
-    case KindOfPersistentDArray:
-    case KindOfDArray:
     case KindOfPersistentDict:
     case KindOfDict:
       tvIncRefGen(*value);
@@ -1783,9 +1757,7 @@ inline TypedValue SetOpElem(SetOpOp op, tv_lval base,
       throwInvalidKeysetOperation();
 
     case KindOfPersistentDict:
-    case KindOfDict:
-    case KindOfPersistentDArray:
-    case KindOfDArray: {
+    case KindOfDict: {
       auto const result = ElemDDict<KeyType::Any>(base, key);
       setopBody(tvAssertPlausible(result), op, rhs);
       return *result;
@@ -1793,8 +1765,6 @@ inline TypedValue SetOpElem(SetOpOp op, tv_lval base,
 
     case KindOfPersistentVec:
     case KindOfVec:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
       return handleVec();
 
     case KindOfObject: {
@@ -1864,10 +1834,6 @@ inline TypedValue SetOpNewElem(SetOpOp op, tv_lval base, TypedValue* rhs) {
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
       throw_cannot_use_newelem_for_lval_read(val(base).parr);
 
     case KindOfObject: {
@@ -1969,14 +1935,10 @@ inline TypedValue IncDecElem(IncDecOp op, tv_lval base, TypedValue key) {
 
     case KindOfPersistentDict:
     case KindOfDict:
-    case KindOfPersistentDArray:
-    case KindOfDArray:
       return IncDecBody(op, ElemDDict<KeyType::Any>(base, key));
 
     case KindOfPersistentVec:
     case KindOfVec:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
       return IncDecBody(op, ElemDVec<KeyType::Any>(base, key));
 
     case KindOfObject: {
@@ -2051,10 +2013,6 @@ inline TypedValue IncDecNewElem(IncDecOp op, tv_lval base) {
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
       throw_cannot_use_newelem_for_lval_read(val(base).parr);
 
     case KindOfObject: {
@@ -2094,7 +2052,7 @@ inline ArrayData* UnsetElemVecPre(ArrayData* a, TypedValue key) {
 
 template <KeyType keyType>
 inline void UnsetElemVec(tv_lval base, key_type<keyType> key) {
-  assertx(tvIsVecOrVArray(base));
+  assertx(tvIsVec(base));
   assertx(tvIsPlausible(*base));
   ArrayData* a = val(base).parr;
   ArrayData* a2 = UnsetElemVecPre(a, key);
@@ -2128,7 +2086,7 @@ inline ArrayData* UnsetElemDictPre(ArrayData* a, TypedValue key) {
 
 template <KeyType keyType>
 inline void UnsetElemDict(tv_lval base, key_type<keyType> key) {
-  assertx(tvIsDictOrDArray(base));
+  assertx(tvIsDict(base));
   assertx(tvIsPlausible(*base));
   ArrayData* a = val(base).parr;
   ArrayData* a2 = UnsetElemDictPre(a, key);
@@ -2252,10 +2210,6 @@ void UnsetElemSlow(tv_lval base, key_type<keyType> key) {
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
       always_assert(false);
 
     case KindOfObject: {
@@ -2290,9 +2244,9 @@ inline void UnsetElem(tv_lval base, key_type<keyType> key) {
 
   if (tvIsArrayLike(base)) {
     auto const ad = base.val().parr;
-    if (!ad->isVanilla())       return UnsetElemBespoke<keyType>(base, key);
-    if (tvIsVecOrVArray(base))  return UnsetElemVec<keyType>(base, key);
-    if (tvIsDictOrDArray(base)) return UnsetElemDict<keyType>(base, key);
+    if (!ad->isVanilla()) return UnsetElemBespoke<keyType>(base, key);
+    if (tvIsVec(base))    return UnsetElemVec<keyType>(base, key);
+    if (tvIsDict(base))   return UnsetElemDict<keyType>(base, key);
     return UnsetElemKeyset<keyType>(base, key);
   }
   return UnsetElemSlow<keyType>(base, key);
@@ -2351,7 +2305,7 @@ bool IssetElemString(const StringData* sd, key_type<keyType> key) {
  */
 template<KeyType keyType>
 bool IssetElemVec(ArrayData* a, key_type<keyType> key) {
-  assertx(a->hasVanillaPackedLayout());
+  assertx(a->isVanillaVec());
   auto const result = ElemVec<MOpMode::None, keyType>(a, key);
   return !tvIsNull(tvAssertPlausible(result));
 }
@@ -2361,7 +2315,7 @@ bool IssetElemVec(ArrayData* a, key_type<keyType> key) {
  */
 template<KeyType keyType>
 bool IssetElemDict(ArrayData* a, key_type<keyType> key) {
-  assertx(a->hasVanillaMixedLayout());
+  assertx(a->isVanillaDict());
   auto const result = ElemDict<MOpMode::None, keyType>(a, key);
   return !tvIsNull(tvAssertPlausible(result));
 }
@@ -2371,7 +2325,7 @@ bool IssetElemDict(ArrayData* a, key_type<keyType> key) {
  */
 template<KeyType keyType>
 bool IssetElemKeyset(ArrayData* a, key_type<keyType> key) {
-  assertx(a->isKeysetKind());
+  assertx(a->isVanillaKeyset());
   auto const result = ElemKeyset<MOpMode::None, keyType>(a, key);
   return !tvIsNull(tvAssertPlausible(result));
 }
@@ -2443,10 +2397,6 @@ NEVER_INLINE bool IssetElemSlow(tv_rval base, key_type<keyType> key) {
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
       always_assert(false);
 
     case KindOfObject:
@@ -2472,9 +2422,9 @@ bool IssetElem(tv_rval base, key_type<keyType> key) {
     auto const ad = val(base).parr;
     if (!ad->isVanilla()) {
       return IssetElemBespoke<keyType>(ad, key);
-    } else if (ad->hasVanillaPackedLayout()) {
+    } else if (ad->isVanillaVec()) {
       return IssetElemVec<keyType>(ad, key);
-    } else if (ad->hasVanillaMixedLayout()) {
+    } else if (ad->isVanillaDict()) {
       return IssetElemDict<keyType>(ad, key);
     } else {
       return IssetElemKeyset<keyType>(ad, key);
@@ -2525,10 +2475,6 @@ tv_lval propPre(TypedValue& tvRef, tv_lval base) {
       return base.val().pstr->size() ? propPreNull<mode>(tvRef)
                                      : propPreStdclass<mode>(tvRef);
 
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
     case KindOfPersistentVec:
     case KindOfVec:
     case KindOfPersistentDict:
@@ -2549,7 +2495,8 @@ tv_lval propPre(TypedValue& tvRef, tv_lval base) {
 inline tv_lval nullSafeProp(TypedValue& tvRef,
                             Class* ctx,
                             tv_rval base,
-                            StringData* key) {
+                            StringData* key,
+                            ReadOnlyOp op) {
   switch (base.type()) {
     case KindOfUninit:
     case KindOfNull:
@@ -2567,10 +2514,6 @@ inline tv_lval nullSafeProp(TypedValue& tvRef,
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
     case KindOfRFunc:
     case KindOfFunc:
     case KindOfClass:
@@ -2582,7 +2525,7 @@ inline tv_lval nullSafeProp(TypedValue& tvRef,
       raise_notice("Cannot access property on non-object");
       return &tvRef;
     case KindOfObject:
-      return val(base).pobj->prop(&tvRef, ctx, key);
+      return val(base).pobj->prop(&tvRef, ctx, key, op);
   }
   not_reached();
 }
@@ -2594,30 +2537,31 @@ inline tv_lval nullSafeProp(TypedValue& tvRef,
  */
 template<MOpMode mode, KeyType keyType = KeyType::Any>
 inline tv_lval PropObj(TypedValue& tvRef, const Class* ctx,
-                       ObjectData* instance, key_type<keyType> key) {
+                       ObjectData* instance, key_type<keyType> key,
+                       ReadOnlyOp op) {
   auto keySD = prepareKey(key);
   SCOPE_EXIT { releaseKey<keyType>(keySD); };
 
   // Get property.
   if (mode == MOpMode::Define) {
-    return instance->propD(&tvRef, ctx, keySD);
+    return instance->propD(&tvRef, ctx, keySD, op);
   }
   if (mode == MOpMode::None) {
-    return instance->prop(&tvRef, ctx, keySD);
+    return instance->prop(&tvRef, ctx, keySD, op);
   }
   if (mode == MOpMode::Warn) {
-    return instance->propW(&tvRef, ctx, keySD);
+    return instance->propW(&tvRef, ctx, keySD, op);
   }
   assertx(mode == MOpMode::Unset);
-  return instance->propU(&tvRef, ctx, keySD);
+  return instance->propU(&tvRef, ctx, keySD, op);
 }
 
 template<MOpMode mode, KeyType keyType = KeyType::Any>
 inline tv_lval Prop(TypedValue& tvRef, const Class* ctx,
-                    tv_lval base, key_type<keyType> key) {
+                    tv_lval base, key_type<keyType> key, ReadOnlyOp op) {
   auto const result = propPre<mode>(tvRef, base);
   if (result.type() == KindOfNull) return result;
-  return PropObj<mode,keyType>(tvRef, ctx, instanceFromTv(result), key);
+  return PropObj<mode,keyType>(tvRef, ctx, instanceFromTv(result), key, op);
 }
 
 template <KeyType kt>
@@ -2648,19 +2592,19 @@ inline void SetPropNull(TypedValue* val) {
 }
 
 template <KeyType keyType>
-inline void SetPropObj(Class* ctx, ObjectData* instance,
-                       key_type<keyType> key, TypedValue* val) {
+inline void SetPropObj(Class* ctx, ObjectData* instance, key_type<keyType> key,
+                       TypedValue* val, ReadOnlyOp op) {
   StringData* keySD = prepareKey(key);
   SCOPE_EXIT { releaseKey<keyType>(keySD); };
 
   // Set property.
-  instance->setProp(ctx, keySD, *val);
+  instance->setProp(ctx, keySD, *val, op);
 }
 
 // $base->$key = $val
 template <bool setResult, KeyType keyType = KeyType::Any>
 inline void SetProp(Class* ctx, tv_lval base, key_type<keyType> key,
-                    TypedValue* val) {
+                    TypedValue* val, ReadOnlyOp op) {
   switch (type(base)) {
     case KindOfUninit:
     case KindOfNull:
@@ -2678,10 +2622,6 @@ inline void SetProp(Class* ctx, tv_lval base, key_type<keyType> key,
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
     case KindOfResource:
     case KindOfRFunc:
     case KindOfFunc:
@@ -2698,7 +2638,7 @@ inline void SetProp(Class* ctx, tv_lval base, key_type<keyType> key,
                                           : detail::raiseEmptyObject();
 
     case KindOfObject:
-      return SetPropObj<keyType>(ctx, HPHP::val(base).pobj, key, val);
+      return SetPropObj<keyType>(ctx, HPHP::val(base).pobj, key, val, op);
   }
   unknownBaseType(type(base));
 }
@@ -2741,10 +2681,6 @@ inline tv_lval SetOpProp(TypedValue& tvRef,
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
     case KindOfResource:
     case KindOfRFunc:
     case KindOfFunc:
@@ -2806,10 +2742,6 @@ inline TypedValue IncDecProp(
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
     case KindOfResource:
     case KindOfRFunc:
     case KindOfFunc:

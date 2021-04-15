@@ -119,7 +119,6 @@ struct
 
   and anonymous_function = {
     anonymous_attribute_spec: t;
-    anonymous_static_keyword: t;
     anonymous_async_keyword: t;
     anonymous_function_keyword: t;
     anonymous_left_paren: t;
@@ -153,6 +152,7 @@ struct
 
   and closure_type_specifier = {
     closure_outer_left_paren: t;
+    closure_readonly_keyword: t;
     closure_function_keyword: t;
     closure_inner_left_paren: t;
     closure_parameter_list: t;
@@ -663,7 +663,6 @@ struct
       }
     | AnonymousFunction of {
         anonymous_attribute_spec: t;
-        anonymous_static_keyword: t;
         anonymous_async_keyword: t;
         anonymous_function_keyword: t;
         anonymous_left_paren: t;
@@ -784,6 +783,7 @@ struct
     | FunctionCallExpression of {
         function_call_receiver: t;
         function_call_type_args: t;
+        function_call_enum_atom: t;
         function_call_left_paren: t;
         function_call_argument_list: t;
         function_call_right_paren: t;
@@ -1035,6 +1035,7 @@ struct
       }
     | ClosureTypeSpecifier of {
         closure_outer_left_paren: t;
+        closure_readonly_keyword: t;
         closure_function_keyword: t;
         closure_inner_left_paren: t;
         closure_parameter_list: t;
@@ -2015,7 +2016,6 @@ struct
 
   and anonymous_function = {
     anonymous_attribute_spec: attribute_specification option value;
-    anonymous_static_keyword: Token.t option value;
     anonymous_async_keyword: Token.t option value;
     anonymous_function_keyword: Token.t value;
     anonymous_left_paren: Token.t value;
@@ -2156,6 +2156,7 @@ struct
   and function_call_expression = {
     function_call_receiver: expression value;
     function_call_type_args: type_arguments option value;
+    function_call_enum_atom: expression option value;
     function_call_left_paren: Token.t value;
     function_call_argument_list: expression listesque value;
     function_call_right_paren: Token.t value;
@@ -2454,6 +2455,7 @@ struct
 
   and closure_type_specifier = {
     closure_outer_left_paren: Token.t value;
+    closure_readonly_keyword: Token.t option value;
     closure_function_keyword: Token.t value;
     closure_inner_left_paren: Token.t value;
     closure_parameter_list: closure_parameter_type_specifier listesque value;

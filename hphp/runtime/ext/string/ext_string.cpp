@@ -22,6 +22,7 @@
 // several times faster. See https://github.com/facebook/hhvm/issues/7133
 #include <ctype.h>
 
+#include "hphp/util/assertions.h"
 #include "hphp/runtime/ext/string/ext_string.h" // nolint - see above
 #include "hphp/util/bstring.h"
 #include "hphp/runtime/ext/hash/hash_murmur.h"
@@ -285,7 +286,7 @@ Variant HHVM_FUNCTION(hex2bin,
 
   for (; src != end; ++src) {
     int val;
-    if (isdigit(*src))                   val = 16 * (*src++ - '0');
+    if      ('0' <= *src && *src <= '9') val = 16 * (*src++ - '0');
     else if ('a' <= *src && *src <= 'f') val = 16 * (*src++ - 'a' + 10);
     else if ('A' <= *src && *src <= 'F') val = 16 * (*src++ - 'A' + 10);
     else {
@@ -293,7 +294,7 @@ Variant HHVM_FUNCTION(hex2bin,
       return false;
     }
 
-    if (isdigit(*src))                   val += (*src - '0');
+    if      ('0' <= *src && *src <= '9') val += (*src - '0');
     else if ('a' <= *src && *src <= 'f') val += (*src - 'a' + 10);
     else if ('A' <= *src && *src <= 'F') val += (*src - 'A' + 10);
     else {
@@ -688,7 +689,7 @@ Variant str_replace(const Variant& search, const Variant& replace,
   count = 0;
   if (subject.isArray()) {
     Array arr = subject.toArray();
-    Array ret = Array::CreateDArray();
+    Array ret = Array::CreateDict();
     int64_t c;
     for (ArrayIter iter(arr); iter; ++iter) {
       if (iter.second().isArray() || iter.second().is(KindOfObject)) {
@@ -996,13 +997,9 @@ String HHVM_FUNCTION(chr, const Variant& ascii) {
     case KindOfPersistentVec:
     case KindOfPersistentDict:
     case KindOfPersistentKeyset:
-    case KindOfPersistentDArray:
-    case KindOfPersistentVArray:
     case KindOfVec:
     case KindOfDict:
     case KindOfKeyset:
-    case KindOfDArray:
-    case KindOfVArray:
     case KindOfObject:
     case KindOfResource:
     case KindOfRFunc:
@@ -1547,7 +1544,7 @@ Variant HHVM_FUNCTION(count_chars,
     chars[*buf++]++;
   }
 
-  Array retarr = Array::CreateDArray();
+  Array retarr = Array::CreateDict();
   char retstr[256];
   int retlen = 0;
   switch (mode) {
@@ -1610,7 +1607,7 @@ Variant HHVM_FUNCTION(str_word_count,
   case 1:
   case 2:
     if (!str_len) {
-      return empty_array();
+      return empty_dict_array();
     }
     break;
   case 0:
@@ -1647,7 +1644,7 @@ Variant HHVM_FUNCTION(str_word_count,
     e--;
   }
 
-  Array ret = Array::CreateDArray();
+  Array ret = Array::CreateDict();
   while (p < e) {
     const char *s = p;
     while (p < e &&
@@ -1755,7 +1752,7 @@ String HHVM_FUNCTION(fb_htmlspecialchars,
   if (!extra.isNull() && !extra.isArray()) {
     raise_expected_array_warning("fb_htmlspecialchars");
   }
-  const Array& arr_extra = extra.isNull() ? empty_varray() : extra.toArray();
+  const Array& arr_extra = extra.isNull() ? empty_vec_array() : extra.toArray();
   return StringUtil::HtmlEncodeExtra(str, StringUtil::toQuoteStyle(flags),
                                      charset.data(), false, arr_extra);
 }
@@ -2232,7 +2229,7 @@ Array HHVM_FUNCTION(localeconv) {
     currlocdata = *res;
   }
 
-  Array ret = Array::CreateDArray();
+  Array ret = Array::CreateDict();
 #define SET_LOCALE_STRING(x) ret.set(s_ ## x, String(currlocdata.x, CopyString))
   SET_LOCALE_STRING(decimal_point);
   SET_LOCALE_STRING(thousands_sep);
@@ -2533,7 +2530,7 @@ Array HHVM_FUNCTION(get_html_translation_table,
 
   bool all = (table == k_HTML_ENTITIES);
 
-  Array ret = Array::CreateDArray();
+  Array ret = Array::CreateDict();
   switch (table) {
   case k_HTML_ENTITIES: {
     if (charset == cs_utf_8) {
@@ -2603,6 +2600,25 @@ String HHVM_FUNCTION(hebrevc,
                      int max_chars_per_line /* = 0 */) {
   if (hebrew_text.empty()) return hebrew_text;
   return string_convert_hebrew_string(hebrew_text, max_chars_per_line, true);
+}
+
+bool HHVM_FUNCTION(HH_str_number_coercible,
+                   const String& str) {
+  int64_t ival;
+  double dval;
+  return str.get()->isNumericWithVal(ival, dval, true /* allow_errors */)
+    != KindOfNull;
+}
+
+Variant HHVM_FUNCTION(HH_str_to_numeric,
+                      const String& str) {
+  int64_t ival;
+  double dval;
+  auto dt = str.get()->isNumericWithVal(ival, dval, true /* allow_errors */);
+  if (dt == KindOfInt64) return ival;
+  if (dt == KindOfDouble) return dval;
+  assertx(dt == KindOfNull);
+  return init_null();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -2701,6 +2717,8 @@ struct StringExtension final : Extension {
     HHVM_FE(similar_text);
     HHVM_FE(soundex);
     HHVM_FE(metaphone);
+    HHVM_FE(HH_str_number_coercible);
+    HHVM_FE(HH_str_to_numeric);
 
     HHVM_RC_INT(ENT_COMPAT, k_ENT_HTML_QUOTE_DOUBLE);
     HHVM_RC_INT(ENT_NOQUOTES, k_ENT_HTML_QUOTE_NONE);
@@ -2796,6 +2814,9 @@ struct StringExtension final : Extension {
     HHVM_RC_INT(CRYPT_STD_DES, 1);
 
     HHVM_RC_INT(CRYPT_SALT_LENGTH, 12);
+
+    HHVM_FALIAS(HH\\str_number_coercible, HH_str_number_coercible);
+    HHVM_FALIAS(HH\\str_to_numeric, HH_str_to_numeric);
 
     loadSystemlib();
   }

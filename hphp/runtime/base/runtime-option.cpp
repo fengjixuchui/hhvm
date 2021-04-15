@@ -17,8 +17,8 @@
 #include "hphp/runtime/base/runtime-option.h"
 
 #include "hphp/hack/src/hhbc/compile_ffi.h"
+#include "hphp/hack/src/parser/positioned_full_trivia_parser_ffi_types.h"
 #include "hphp/parser/scanner.h"
-#include "hphp/runtime/base/apc-file-storage.h"
 #include "hphp/runtime/base/autoload-handler.h"
 #include "hphp/runtime/base/bespoke-array.h"
 #include "hphp/runtime/base/builtin-functions.h"
@@ -79,6 +79,7 @@
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <folly/CPortability.h>
+#include <folly/DynamicConverter.h>
 #include <folly/FileUtil.h>
 #include <folly/String.h>
 #include <folly/portability/SysResource.h>
@@ -261,68 +262,153 @@ RDS_LOCAL(std::string, s_lastSeenRepoConfig);
 
 }
 
+hackc_parse_positioned_full_trivia_environment
+RepoOptions::getParserEnvironment() const {
+  return hackc_parse_positioned_full_trivia_environment {
+      true // codegen
+    , true  // hhvm_compat_mode
+    , true  // php5_compat_mode
+    , AllowNewAttributeSyntax
+    , EnableXHPClassModifier
+    , DisableXHPElementMangling
+    , false // disable_xhp_children_declarations
+    , false // disable_modes
+    , DisallowHashComments
+    , DisallowFunAndClsMethPseudoFuncs
+    , true  // array_unification
+    , true  // interpret_soft_types_as_like_types
+    };
+}
+
+std::uint32_t RepoOptions::getCompilerFlags() const {
+  std::uint32_t hhbc_flags = 0;
+  if (EmitInstMethPointers) {
+    hhbc_flags |= EMIT_INST_METH_POINTERS;
+  }
+  if (LTRAssign) {
+    hhbc_flags |= LTR_ASSIGN;
+  }
+  if (UVS) {
+    hhbc_flags |= UVS;
+  }
+  if (RuntimeOption::EvalHackArrCompatNotices) {
+    hhbc_flags |= HACK_ARR_COMPAT_NOTICES;
+  }
+  if (RuntimeOption::EvalHackArrDVArrs) {
+    hhbc_flags |= HACK_ARR_DV_ARRS;
+  }
+  if (RuntimeOption::RepoAuthoritative) {
+    hhbc_flags |= AUTHORITATIVE;
+  }
+  if (RuntimeOption::EvalJitEnableRenameFunction) {
+    hhbc_flags |= JIT_ENABLE_RENAME_FUNCTION;
+  }
+  if (RuntimeOption::EvalLogExternCompilerPerf) {
+    hhbc_flags |= LOG_EXTERN_COMPILER_PERF;
+  }
+  if (RuntimeOption::EnableIntrinsicsExtension) {
+    hhbc_flags |= ENABLE_INTRINSICS_EXTENSION;
+  }
+  if (RuntimeOption::DisableNontoplevelDeclarations) {
+    hhbc_flags |= DISABLE_NONTOPLEVEL_DECLARATIONS;
+  }
+  if (RuntimeOption::DisableStaticClosures) {
+    hhbc_flags |= DISABLE_STATIC_CLOSURES;
+  }
+  if (RuntimeOption::EvalEmitClsMethPointers) {
+    hhbc_flags |= EMIT_CLS_METH_POINTERS;
+  }
+  if (RuntimeOption::EvalEmitMethCallerFuncPointers) {
+    hhbc_flags |= EMIT_METH_CALLER_FUNC_POINTERS;
+  }
+  if (RuntimeOption::EvalRxIsEnabled) {
+    hhbc_flags |= RX_IS_ENABLED;
+  }
+  if (RuntimeOption::EvalFoldLazyClassKeys) {
+    hhbc_flags |= FOLD_LAZY_CLASS_KEYS;
+  }
+  return hhbc_flags;
+}
+
+std::string RepoOptions::getAliasedNamespacesConfig() const {
+  folly::dynamic m_config = folly::dynamic::object();
+  m_config["hhvm.aliased_namespaces"] =
+    folly::dynamic::object("global_value", folly::toDynamic(AliasedNamespaces));
+  return folly::toJson(m_config);
+}
+
+std::uint32_t RepoOptions::getFactsFlags() const {
+  int32_t flags =
+    1 << 0 |  //php5_compat_mode
+    1 << 1 |  //hhvm_compat_mode
+    AllowNewAttributeSyntax   << 2 |
+    EnableXHPClassModifier    << 3 |
+    DisableXHPElementMangling << 4;
+  return flags;
+}
+
 std::uint32_t RepoOptions::getParserFlags() const {
-  std::uint32_t parser_flags = 0;   
+  std::uint32_t parser_flags = 0;
   if (AbstractStaticProps) {
     parser_flags |= ABSTRACT_STATIC_PROPS;
-  }	
+  }
   if (AllowNewAttributeSyntax) {
     parser_flags |= ALLOW_NEW_ATTRIBUTE_SYNTAX;
-  }	
+  }
   if (AllowUnstableFeatures) {
     parser_flags |= ALLOW_UNSTABLE_FEATURES;
   }
   if (ConstDefaultFuncArgs) {
     parser_flags |= CONST_DEFAULT_FUNC_ARGS;
-  }  
+  }
   if (ConstStaticProps) {
     parser_flags |= CONST_STATIC_PROPS;
-  }	   
+  }
   if (DisableArray) {
     parser_flags |= DISABLE_ARRAY;
-  }	
+  }
   if (DisableArrayCast) {
     parser_flags |= DISABLE_ARRAY_CAST;
-  }		
+  }
   if (DisableArrayTypehint) {
     parser_flags |= DISABLE_ARRAY_TYPEHINT;
-  }		 
+  }
   if (DisableLvalAsAnExpression) {
     parser_flags |= DISABLE_LVAL_AS_AN_EXPRESSION;
-  }	
+  }
   if (DisableUnsetClassConst) {
     parser_flags |= DISABLE_UNSET_CLASS_CONST;
-  }	
+  }
   if (DisallowInstMeth) {
     parser_flags |= DISALLOW_INST_METH;
-  }	
+  }
   if (DisableXHPElementMangling) {
     parser_flags |= DISABLE_XHP_ELEMENT_MANGLING;
-  }	
+  }
   if (DisallowFunAndClsMethPseudoFuncs) {
     parser_flags |= DISALLOW_FUN_AND_CLS_METH_PSEUDO_FUNCS;
-  }	
+  }
   if (DisallowFuncPtrsInConstants) {
     parser_flags |= DISALLOW_FUNC_PTRS_IN_CONSTANTS;
-  }	
+  }
   if (DisallowHashComments) {
     parser_flags |= DISALLOW_HASH_COMMENTS;
-  }		
-  if (EnableCoroutines) {
-    parser_flags |= ENABLE_COROUTINES;
-  }	 
+  }
   if (EnableEnumClasses) {
     parser_flags |= ENABLE_ENUM_CLASSES;
-  }	 
+  }
   if (EnableXHPClassModifier) {
     parser_flags |= ENABLE_XHP_CLASS_MODIFIER;
-  }	
+  }
   if (RuntimeOption::EnableClassLevelWhereClauses) {
     parser_flags |= ENABLE_CLASS_LEVEL_WHERE_CLAUSES;
-  }	
+  }
   if (DisallowDynamicMethCallerArgs) {
     parser_flags |= DISALLOW_DYNAMIC_METH_CALLER_ARGS;
-  }	   
+  }
+  if (EnableReadonlyEnforcement) {
+    parser_flags |= ENABLE_READONLY_ENFORCEMENT;
+  }
   return parser_flags;
 }
 
@@ -807,6 +893,7 @@ std::map<std::string, std::string> RuntimeOption::IncludeRoots;
 std::map<std::string, std::string> RuntimeOption::AutoloadRoots;
 bool RuntimeOption::AutoloadEnabled;
 std::string RuntimeOption::AutoloadDBPath;
+bool RuntimeOption::AutoloadRethrowExceptions = true;
 std::string RuntimeOption::FileCache;
 std::string RuntimeOption::DefaultDocument;
 std::string RuntimeOption::GlobalDocument;
@@ -1020,7 +1107,7 @@ static inline std::string hackCompilerCommandDefault() {
 }
 
 static inline bool enableGcDefault() {
-  return RuntimeOption::EvalEagerGC || one_bit_refcount;
+  return RuntimeOption::EvalEagerGC;
 }
 
 static inline uint64_t pgoThresholdDefault() {
@@ -1514,7 +1601,6 @@ void RuntimeOption::Load(
   const std::vector<std::string>& hdfClis /* = std::vector<std::string>() */,
   std::vector<std::string>* messages /* = nullptr */,
   std::string cmd /* = "" */) {
-  ARRPROV_USE_RUNTIME_LOCATION_FORCE();
 
   // Intialize the memory manager here because various settings and
   // initializations that we do here need it
@@ -1562,7 +1648,7 @@ void RuntimeOption::Load(
         [&] (const String& f) {
           if (access(f.data(), R_OK) == 0) {
             fullpath = f.toCppString();
-            FTRACE_MOD(Trace::watchman_autoload, 3, "Parsing {}\n", fullpath);
+            FTRACE_MOD(Trace::facts, 3, "Parsing {}\n", fullpath);
             Config::ParseConfigFile(fullpath, ini, config);
             return true;
           }
@@ -2417,6 +2503,7 @@ void RuntimeOption::Load(
 
     Config::Bind(AutoloadEnabled, ini, config, "Autoload.Enabled", false);
     Config::Bind(AutoloadDBPath, ini, config, "Autoload.DBPath");
+    Config::Bind(AutoloadRethrowExceptions, ini, config, "Autoload.RethrowExceptions", true);
 
     Config::Bind(FileCache, ini, config, "Server.FileCache");
     Config::Bind(DefaultDocument, ini, config, "Server.DefaultDocument",
@@ -2912,20 +2999,16 @@ void RuntimeOption::Load(
 
   if (TraceFunctions.size()) Trace::ensureInit(getTraceOutputFile());
 
-  // arrprov is only for dvarrays. It should be off if HADVAs is on.
-  if (RO::EvalHackArrDVArrs) {
-    RO::EvalArrayProvenance = false;
-    RO::EvalLogArrayProvenance = false;
+  if (RO::EvalJitEnableRenameFunction && RO::RepoAuthoritative) {
+      throw std::runtime_error("Can't use Eval.JitEnableRenameFunction if "
+                               " RepoAuthoritative is turned on");
   }
+
+  // arrprov is no longer functional. We must clean it up.
+  RO::EvalArrayProvenance = false;
+  RO::EvalLogArrayProvenance = false;
 
   // Bespoke array-likes
-
-  // We don't support provenance for bespoke array-likes, so don't construct
-  // any at runtime if we're logging provenance instrumentation results.
-  if (RO::EvalBespokeArrayLikeMode > 0 &&
-      (RO::EvalArrayProvenance || RO::EvalLogArrayProvenance)) {
-    RO::EvalBespokeArrayLikeMode = 0;
-  }
 
   // If we're going to construct bespoke array-likes at runtime, ensure that
   // we JIT checks for these types as well. We support JIT-ing these checks
@@ -2942,10 +3025,6 @@ void RuntimeOption::Load(
 
   if (!RuntimeOption::EvalEmitClsMethPointers) {
     RuntimeOption::EvalIsCompatibleClsMethType = false;
-  }
-
-  if (RuntimeOption::EvalArrayProvenance) {
-    RuntimeOption::EvalJitForceVMRegSync = true;
   }
 
   // Coeffects

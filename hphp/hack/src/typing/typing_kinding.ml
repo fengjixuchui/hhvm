@@ -1,3 +1,10 @@
+(*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the "hack" directory of this source tree.
+ *
+ *)
 open Hh_prelude
 open Common
 open Utils
@@ -9,6 +16,7 @@ module KindDefs = Typing_kinding_defs
 module TGenConstraint = Typing_generic_constraint
 module TUtils = Typing_utils
 module Subst = Decl_subst
+module SN = Naming_special_names
 
 module Locl_Inst = struct
   let rec instantiate subst (ty : locl_ty) =
@@ -195,7 +203,9 @@ let check_typedef_usable_as_hk_type env use_pos typedef_name typedef_info =
   in
   let check_tapply r class_sid type_args =
     let decl_ty = Typing_make_type.apply r class_sid type_args in
-    let (env, locl_ty) = TUtils.localize_with_self env decl_ty in
+    let (env, locl_ty) =
+      TUtils.localize_with_self env ~ignore_errors:true decl_ty
+    in
     match get_node (TUtils.get_base_type env locl_ty) with
     | Tclass (cls_name, _, tyl) when not (List.is_empty tyl) ->
       (match Env.get_class env (snd cls_name) with
@@ -203,7 +213,7 @@ let check_typedef_usable_as_hk_type env use_pos typedef_name typedef_info =
         let tc_tparams = Cls.tparams cls in
         let ety_env =
           {
-            (TUtils.env_with_self env) with
+            (TUtils.env_with_self env ~on_error:Errors.ignore_error) with
             substs = Subst.make_locl tc_tparams tyl;
           }
         in
@@ -218,7 +228,7 @@ let check_typedef_usable_as_hk_type env use_pos typedef_name typedef_info =
                     ck
                     ty
                     ~cstr_ty
-                    (fun ?code:_ _ _ -> report_constraint ty cls_name x)
+                    (fun ?code:_ _ -> report_constraint ty cls_name x)
                 in
                 ())
           end
@@ -317,7 +327,9 @@ module Simple = struct
     | Tapply ((_, x), _argl) when String.equal x SN.Typehints.wildcard ->
       let is_higher_kinded = Simple.get_arity kind > 0 in
       if is_higher_kinded then (
-        let pos = get_reason tyarg |> Reason.to_pos in
+        let pos =
+          get_reason tyarg |> Reason.to_pos |> Pos_or_decl.unsafe_to_raw_pos
+        in
         Errors.wildcard_for_higher_kinded_type pos;
         check_well_kinded env tyarg nkind
       )
@@ -328,7 +340,7 @@ module Simple = struct
 
   and check_well_kinded_type ~allow_missing_targs env (ty : decl_ty) =
     let (r, ty_) = deref ty in
-    let use_pos = Reason.to_pos r in
+    let use_pos = Reason.to_pos r |> Pos_or_decl.unsafe_to_raw_pos in
     let check = check_well_kinded_type ~allow_missing_targs:false env in
     let check_against_tparams def_pos tyargs tparams =
       let kinds = Simple.named_kinds_of_decl_tparams tparams in
@@ -408,7 +420,7 @@ module Simple = struct
       =
     let (expected_name, expected_kind) = expected_nkind in
     let r = get_reason ty in
-    let use_pos = Reason.to_pos r in
+    let use_pos = Reason.to_pos r |> Pos_or_decl.unsafe_to_raw_pos in
     let kind_error actual_kind =
       let (def_pos, tparam_name) = expected_name in
 
@@ -454,7 +466,7 @@ module Simple = struct
       | Tgeneric (_, targs)
       | Tapply (_, targs) ->
         Errors.higher_kinded_partial_application
-          (Reason.to_pos r)
+          (Reason.to_pos r |> Pos_or_decl.unsafe_to_raw_pos)
           (List.length targs)
       | Terr
       | Tany _ ->

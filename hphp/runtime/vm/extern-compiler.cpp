@@ -34,6 +34,9 @@
 
 #include "hphp/hack/src/facts/rust_facts_ffi.h"
 #include "hphp/hack/src/hhbc/compile_ffi.h"
+#include "hphp/hack/src/hhbc/compile_ffi_types.h"
+#include "hphp/hack/src/parser/positioned_full_trivia_parser_ffi.h"
+#include "hphp/hack/src/parser/positioned_full_trivia_parser_ffi_types.h"
 #include "hphp/runtime/base/file-stream-wrapper.h"
 #include "hphp/runtime/base/ini-setting.h"
 #include "hphp/runtime/base/stream-wrapper-registry.h"
@@ -881,7 +884,8 @@ void ExternCompiler::writeProgram(
     ("file", filename)
     ("is_systemlib", !SystemLib::s_inited)
     ("for_debugger_eval", forDebuggerEval)
-    ("config_overrides", options.toDynamic());
+    ("config_overrides", options.toDynamic())
+    ("use_hhbc_by_ref", RuntimeOption::EvalEnableHhbcByRef);
   writeMessage(header, code);
 }
 
@@ -1066,8 +1070,6 @@ void ExternCompiler::start() {
   writeConfigs();
 }
 
-typedef std::unique_ptr<const char, void (*)(char const*)> rust_cstr_ptr_t;
-
 CompilerResult hackc_compile(
   const char* code,
   int len,
@@ -1101,85 +1103,29 @@ CompilerResult hackc_compile(
     }
     flags |= DUMP_SYMBOL_REFS;
 
-    auto const parser_flags = options.getParserFlags();
+    std::string aliased_namespaces = options.getAliasedNamespacesConfig();
 
-    std::uint32_t hhbc_flags = 0;
-    if (options.emitInstMethPointers()) {
-      hhbc_flags |= EMIT_INST_METH_POINTERS;
-    }
-    if (options.ltrAssign()) {
-      hhbc_flags |= LTR_ASSIGN;
-    }
-    if (options.uvs()) {
-      hhbc_flags |= UVS;
-    }
-    if (RuntimeOption::EvalHackArrCompatNotices) {
-      hhbc_flags |= HACK_ARR_COMPAT_NOTICES;
-    }
-    if (RuntimeOption::EvalHackArrDVArrs) {
-      hhbc_flags |= HACK_ARR_DV_ARRS;
-    }
-    if (RuntimeOption::RepoAuthoritative) {
-      hhbc_flags |= AUTHORITATIVE;
-    }
-    if (RuntimeOption::EvalJitEnableRenameFunction) {
-      hhbc_flags |= JIT_ENABLE_RENAME_FUNCTION;
-    }
-    if (RuntimeOption::EvalLogExternCompilerPerf) {
-      hhbc_flags |= LOG_EXTERN_COMPILER_PERF;
-    }
-    if (RuntimeOption::EnableIntrinsicsExtension) {
-      hhbc_flags |= ENABLE_INTRINSICS_EXTENSION;
-    }
-    if (RuntimeOption::DisableNontoplevelDeclarations) {
-      hhbc_flags |= DISABLE_NONTOPLEVEL_DECLARATIONS;
-    }
-    if (RuntimeOption::DisableStaticClosures) {
-      hhbc_flags |= DISABLE_STATIC_CLOSURES;
-    }
-    if (RuntimeOption::EvalEmitClsMethPointers) {
-      hhbc_flags |= EMIT_CLS_METH_POINTERS;
-    }
-    if (RuntimeOption::EvalEmitMethCallerFuncPointers) {
-      hhbc_flags |= EMIT_METH_CALLER_FUNC_POINTERS;
-    }
-    if (RuntimeOption::EvalRxIsEnabled) {
-      hhbc_flags |= RX_IS_ENABLED;
-    }
-    if (RuntimeOption::EvalArrayProvenance) {
-      hhbc_flags |= ARRAY_PROVENANCE;
-    }
-    if (RuntimeOption::EvalHackArrDVArrMark) {
-      hhbc_flags |= HACK_ARR_DV_ARR_MARK;
-    }
-    if (RuntimeOption::EvalFoldLazyClassKeys) {
-      hhbc_flags |= FOLD_LAZY_CLASS_KEYS;
-    }
-
-    std::string aliased_namespaces = ConfigBuilder()
-        .addField("hhvm.aliased_namespaces", options.aliasedNamespaces())
-        .toString();
-
-    native_environment const native_env = {
+    hackc_compile_native_environment const native_env = {
       filename,
       aliased_namespaces.data(),
       s_misc_config.data(),
       RuntimeOption::EvalEmitClassPointers,
       RuntimeOption::CheckIntOverflow,
-      hhbc_flags,
-      parser_flags,
+      options.getCompilerFlags(),
+      options.getParserFlags(),
       flags
     };
 
-    output_config const output{true, nullptr};
+    hackc_compile_output_config const output{true, nullptr};
 
     std::array<char, 256> buf;
     buf.fill(0);
-    buf_t error_buf {buf.data(), buf.size()};
-    
-    rust_cstr_ptr_t hhas{compile_from_text_cpp_ffi(&native_env, code, &output, &error_buf),
-                         &compile_from_text_free_string_cpp_ffi};
-    if (hhas) { 
+    hackc_error_buf_t error_buf {buf.data(), buf.size()};
+
+    hackc_compile_from_text_ptr hhas{
+      hackc_compile_from_text(&native_env, code, &output, &error_buf)
+    };
+    if (hhas) {
       std::string hhas_str{hhas.get()};
       return assemble_string_handle_errors(code,
                                            hhas_str,
@@ -1324,20 +1270,14 @@ ParseFactsResult extract_facts(
       verboseErrors,
       options);
   } else {
-    int32_t flags =
-      1 << 0 |  //php5_compat_mode
-      1 << 1 |  //hhvm_compat_mode
-      options.allowNewAttributeSyntax()   << 2 |
-      options.enableXHPClassModifier()    << 3 |
-      options.disableXHPElementMangling() << 4;
-
     auto const get_facts = [&](const char* source_text) -> ParseFactsResult {
       try {
-        rust_cstr_ptr_t facts{extract_as_json_cpp_ffi(flags, filename.data(), source_text, false),
-                              &extract_as_json_free_string_cpp_ffi};
+        hackc_extract_as_json_ptr facts{
+          hackc_extract_as_json(options.getFactsFlags(), filename.data(), source_text, false)
+        };
         if (facts) {
           std::string facts_str{facts.get()};
-          return FactsJSONString { facts_str };   
+          return FactsJSONString { facts_str };
         }
         return FactsJSONString { "" }; // Swallow errors from HackC
       } catch (const std::exception& e) {
@@ -1366,9 +1306,21 @@ FfpResult ffp_parse_file(
   int size,
   const RepoOptions& options
 ) {
-  return s_manager.get_hackc_pool().parse(file, contents, size, options);
+  if (RuntimeOption::EvalHackCompilerUseCompilerPool) {
+    return s_manager.get_hackc_pool().parse(file, contents, size, options);
+  } else {
+    auto const env = options.getParserEnvironment();
+    hackc_parse_positioned_full_trivia_ptr parse_tree{
+      hackc_parse_positioned_full_trivia(file.c_str(), contents, &env)
+    };
+    if (parse_tree) {
+      std::string ffp_str{parse_tree.get()};
+      return FfpJSONString { ffp_str };
+    } else {
+      return FfpJSONString { "{}" };
+    }
+  }
 }
-
 
 std::string hackc_version() {
   return s_manager.get_hackc_pool().getVersionString();

@@ -98,6 +98,7 @@ let blacklisted_types =
   [
     ("aast_defs", "LocalIdMap");
     ("aast_defs", "ByteString");
+    ("decl_defs", "Lin");
     ("decl_defs", "Linearization");
     ("decl_defs", "MroElement");
     ("errors", "FinalizedError");
@@ -135,6 +136,8 @@ let tuple_aliases =
     ("ast_defs", "Pstring");
     ("ast_defs", "PositionedByteString");
     ("errors", "Message");
+    ("file_info", "Id");
+    ("typing_reason", "PosId");
   ]
 
 (*

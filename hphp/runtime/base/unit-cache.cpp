@@ -1302,7 +1302,6 @@ std::string mangleUnitSha1(const std::string& fileSha1,
     + (RuntimeOption::EvalLogKnownMethodsAsDynamicCalls ? '1' : '0')
     + (RuntimeOption::EvalNoticeOnBuiltinDynamicCalls ? '1' : '0')
     + (RuntimeOption::EvalHackArrDVArrs ? '1' : '0')
-    + (RuntimeOption::EvalHackArrDVArrMark ? '1' : '0')
     + (RuntimeOption::EvalAssemblerFoldDefaultValues ? '1' : '0')
     + RuntimeOption::EvalHackCompilerCommand + '\0'
     + RuntimeOption::EvalHackCompilerArgs + '\0'
@@ -1322,6 +1321,8 @@ std::string mangleUnitSha1(const std::string& fileSha1,
     + std::to_string(RuntimeOption::EvalAssemblerMaxScalarSize)
     + std::to_string(RuntimeOption::EvalEmitClassPointers)
     + (RuntimeOption::EvalFoldLazyClassKeys ? '1' : '0')
+    + (RuntimeOption::EvalHackCompilerUseCompilerPool ? '1' : '0')
+    + RuntimeOption::EvalUnitCacheBreaker + '\0'
     + CoeffectsConfig::mangle()
     + opts.cacheKeySha1().toString()
     + mangleExtension(fileName)

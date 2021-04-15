@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<b301aa1a9aa2e770cdedd848c11813fe>>
+// @generated SignedSource<<b77167dedd7ce48d3b96ef7f56d7b2ba>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -119,7 +119,6 @@ pub enum Naming {
     XhpRequiredWithDefault = 2080,
     ArrayTypehintsDisallowed = 2082,
     WildcardHintDisallowed = 2084,
-    AttributeClassNameConflict = 2085,
     MethodNeedsVisibility = 2086,
     NonstaticPropertyWithLSB = 2094,
     UnsupportedTraitUseAs = 2102,
@@ -132,7 +131,6 @@ pub enum Naming {
     SelfInNonFinalFunctionPointer = 2113,
     ClassMethNonFinalCLASS = 2114,
     WildcardTypeParamDisallowed = 2115,
-    CallingAssert = 2116,
     InvalidWildcardContext = 2117,
 }
 impl TrivialDrop for Naming {}
@@ -183,16 +181,12 @@ pub enum NastCheck {
     ConstructorRequired = 3030,
     InterfaceWithPartialTypeconst = 3031,
     MultipleXhpCategory = 3032,
-    AwaitInCoroutine = 3036,
-    YieldInCoroutine = 3037,
     StaticMemoizedFunction = 3041,
-    InoutParamsInCoroutine = 3042,
     InoutParamsSpecial = 3043,
     InoutParamsMemoize = 3045,
     ReadingFromAppend = 3047,
     InoutArgumentBadExpr = 3050,
     IllegalDestructor = 3056,
-    CoroutineInConstructor = 3065,
     RequiresFinalClass = 3072,
     InterfaceUsesTrait = 3073,
     NonstaticMethodInAbstractFinalClass = 3074,
@@ -206,7 +200,7 @@ pub enum NastCheck {
     InstancePropertyInAbstractFinalClass = 3088,
     DynamicallyCallableReified = 3089,
     IllegalContext = 3090,
-    InvalidConstFunAttribute = 3091,
+    ListRvalue = 3092,
 }
 impl TrivialDrop for NastCheck {}
 
@@ -355,8 +349,6 @@ pub enum Typing {
     ArrayGetWithOptionalField = 4165,
     UnknownFieldDisallowedInShape = 4166,
     NullableCast = 4167,
-    FunctionIsNotCoroutine = 4172,
-    CoroutinnessMismatch = 4173,
     DollardollarLvalue = 4176,
     DuplicateUsingVar = 4178,
     IllegalDisposable = 4179,
@@ -397,7 +389,6 @@ pub enum Typing {
     ShapesMethodAccessWithNonExistentField = 4251,
     NonClassMember = 4252,
     AmbiguousObjectAccess = 4256,
-    CoroutineOutsideExperimental = 4271,
     RePrefixedNonString = 4274,
     BadRegexPattern = 4275,
     LateInitWithDefault = 4277,
@@ -446,9 +437,6 @@ pub enum Typing {
     EnumSubtypeMustHaveCompatibleConstraint = 4330,
     ParameterDefaultValueWrongType = 4331,
     NewtypeAliasMustSatisfyConstraint = 4332,
-    BadFunctionTypevar = 4333,
-    BadClassTypevar = 4334,
-    BadMethodTypevar = 4335,
     MissingReturnInNonVoidFunction = 4336,
     InoutReturnTypeMismatch = 4337,
     ClassConstantValueDoesNotMatchHint = 4338,
@@ -517,7 +505,6 @@ pub enum Typing {
     ConsiderMethCaller = 4407,
     EnumSupertypingReservedSyntax = 4408,
     ReadonlyValueModified = 4409,
-    ReadonlyVarMismatch = 4410,
     ReadonlyMismatch = 4411,
     ExplicitReadonlyCast = 4412,
     ReadonlyMethodCall = 4413,
@@ -525,6 +512,17 @@ pub enum Typing {
     StrictStrInterpTypeMismatch = 4415,
     InvalidMethCallerCallingConvention = 4416,
     UnsafeCast = 4417,
+    ReadonlyException = 4418,
+    InvalidTypeHint = 4419,
+    ExperimentalExpressionTrees = 4420,
+    ReturnsWithAndWithoutValue = 4421,
+    NonVoidAnnotationOnReturnVoidFun = 4422,
+    BitwiseMathInvalidArgument = 4423,
+    CyclicClassConstant = 4424,
+    PrivateDynamicRead = 4425,
+    PrivateDynamicWrite = 4426,
+    IncDecInvalidArgument = 4427,
+    ReadonlyClosureCall = 4428,
 }
 impl TrivialDrop for Typing {}
 

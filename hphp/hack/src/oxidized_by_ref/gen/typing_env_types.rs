@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<38ffcfeb198464cb9a81eda2ed24b775>>
+// @generated SignedSource<<dbb40af8d431faf469f17df4b13b470a>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -18,8 +18,6 @@ use serde::Serialize;
 use crate::*;
 
 pub use typing_defs::*;
-
-pub use crate::internal_type_set as i_ty_set;
 
 pub type LoclTy<'a> = typing_defs::Ty<'a>;
 
@@ -71,6 +69,7 @@ pub struct Env<'a> {
     pub allow_wildcards: bool,
     pub big_envs: std::cell::Cell<&'a [(&'a pos::Pos<'a>, &'a Env<'a>)]>,
     pub pessimize: bool,
+    pub fun_tast_info: Option<&'a tast::FunTastInfo>,
 }
 impl<'a> TrivialDrop for Env<'a> {}
 

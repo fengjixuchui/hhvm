@@ -76,8 +76,6 @@ type t = {
   po_disallow_toplevel_requires: bool;
   (* Flag to disable PHP's non-top-level declarations *)
   po_disable_nontoplevel_declarations: bool;
-  (* Flag to disable PHP's static closures *)
-  po_disable_static_closures: bool;
   (* Allows enabling unstable features via the __EnableUnstableFeatures attribute *)
   po_allow_unstable_features: bool;
   (* Print types of size bigger than 1000 after performing a type union. *)
@@ -278,7 +276,7 @@ type t = {
   (* Enables the enum supertyping extension *)
   po_enable_enum_supertyping: bool;
   (* Treat varray as vec, dict as dict, TODO varray_or_darray as vec_or_dict *)
-  po_array_unification: bool;
+  po_hack_arr_dv_arrs: bool;
   (* <<__Soft>> T -> ~T *)
   po_interpret_soft_types_as_like_types: bool;
   (* Restricts string concatenation and interpolation to arraykeys *)
@@ -287,6 +285,14 @@ type t = {
   tco_ignore_unsafe_cast: bool;
   (* Enable Unstable feature readonly tast check *)
   tco_readonly: bool;
+  (* Enable expression trees via unstable features flag *)
+  tco_enable_expression_trees: bool;
+  (* Allowed expression tree visitors when not enabled via unstable features flag *)
+  tco_allowed_expression_tree_visitors: string list;
+  (* Use a new error code for bitwise math operations *)
+  tco_bitwise_math_new_code: bool;
+  (* Use a new error code for post/pre increment and decrement operations *)
+  tco_inc_dec_new_code: bool;
 }
 [@@deriving eq, show]
 
@@ -294,7 +300,6 @@ val make :
   ?po_deregister_php_stdlib:bool ->
   ?po_disallow_toplevel_requires:bool ->
   ?po_disable_nontoplevel_declarations:bool ->
-  ?po_disable_static_closures:bool ->
   ?tco_log_inference_constraints:bool ->
   ?tco_experimental_features:SSet.t ->
   ?tco_migration_flags:SSet.t ->
@@ -397,11 +402,15 @@ val make :
   ?tco_use_direct_decl_parser:bool ->
   ?tco_ifc_enabled:string list ->
   ?po_enable_enum_supertyping:bool ->
-  ?po_array_unification:bool ->
+  ?po_hack_arr_dv_arrs:bool ->
   ?po_interpret_soft_types_as_like_types:bool ->
   ?tco_enable_strict_string_concat_interp:bool ->
   ?tco_ignore_unsafe_cast:bool ->
   ?tco_readonly:bool ->
+  ?tco_enable_expression_trees:bool ->
+  ?tco_allowed_expression_tree_visitors:string list ->
+  ?tco_bitwise_math_new_code:bool ->
+  ?tco_inc_dec_new_code:bool ->
   unit ->
   t
 
@@ -452,8 +461,6 @@ val po_deregister_php_stdlib : t -> bool
 val po_disallow_toplevel_requires : t -> bool
 
 val po_disable_nontoplevel_declarations : t -> bool
-
-val po_disable_static_closures : t -> bool
 
 val po_codegen : t -> bool
 
@@ -647,7 +654,7 @@ val tco_use_direct_decl_parser : t -> bool
 
 val po_enable_enum_supertyping : t -> bool
 
-val po_array_unification : t -> bool
+val po_hack_arr_dv_arrs : t -> bool
 
 val po_interpret_soft_types_as_like_types : t -> bool
 
@@ -658,3 +665,13 @@ val tco_ignore_unsafe_cast : t -> bool
 val tco_readonly : t -> bool
 
 val set_tco_readonly : t -> bool -> t
+
+val set_tco_enable_expression_trees : t -> bool -> t
+
+val expression_trees_enabled : t -> bool
+
+val allowed_expression_tree_visitors : t -> string list
+
+val tco_bitwise_math_new_code : t -> bool
+
+val tco_inc_dec_new_code : t -> bool

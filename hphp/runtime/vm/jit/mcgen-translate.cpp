@@ -185,24 +185,30 @@ std::mutex s_condVarMutex;
 
 struct TranslateWorker : JobQueueWorker<tc::FuncMetaInfo*, void*, true, true> {
   void doJob(tc::FuncMetaInfo* info) override {
-    ProfileNonVMThread nonVM;
-    HphpSession hps{Treadmill::SessionKind::TranslateWorker};
-    ARRPROV_USE_POISONED_LOCATION();
+    try {
+      ProfileNonVMThread nonVM;
+      HphpSession hps{Treadmill::SessionKind::TranslateWorker};
 
-    // Check if the func was treadmilled before the job started
-    if (!Func::isFuncIdValid(info->fid)) return;
+      // Check if the func was treadmilled before the job started
+      if (!Func::isFuncIdValid(info->fid)) return;
 
-    always_assert(!profData()->optimized(info->fid));
-
-    VMProtect _;
-    optimize(*info);
-
-    {
-      std::unique_lock<std::mutex> lock{s_condVarMutex};
       always_assert(!profData()->optimized(info->fid));
-      profData()->setOptimized(info->fid);
+
+      VMProtect _;
+      optimize(*info);
+
+      {
+        std::unique_lock<std::mutex> lock{s_condVarMutex};
+        always_assert(!profData()->optimized(info->fid));
+        profData()->setOptimized(info->fid);
+      }
+      s_condVar.notify_one();
+    } catch (std::exception& e) {
+      always_assert_flog(false,
+                         "Uncaught exception {} in RTA thread", e.what());
+    } catch (...) {
+      always_assert_flog(false, "Uncaught unknown exception in RTA thread");
     }
-    s_condVar.notify_one();
   }
 
 #if USE_JEMALLOC_EXTENT_HOOKS
@@ -519,7 +525,6 @@ void joinWorkerThreads() {
 }
 
 TranslationResult retranslate(TransArgs args, const RegionContext& ctx) {
-  ARRPROV_USE_POISONED_LOCATION();
   VMProtect _;
 
   tc::RegionTranslator translator(args.sk);
@@ -548,7 +553,6 @@ TranslationResult retranslate(TransArgs args, const RegionContext& ctx) {
 }
 
 bool retranslateOpt(FuncId funcId) {
-  ARRPROV_USE_POISONED_LOCATION();
   VMProtect _;
 
   if (isDebuggerAttachedProcess()) return false;

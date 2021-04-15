@@ -11,11 +11,7 @@ module Class = Typing_classes_heap.Api
 
 type fun_key = string
 
-type class_key = string
-
-type record_def_key = string
-
-type typedef_key = string
+type type_key = string
 
 type gconst_key = string
 
@@ -28,68 +24,6 @@ type record_def_decl = Typing_defs.record_def_type
 type typedef_decl = Typing_defs.typedef_type
 
 type gconst_decl = Typing_defs.const_decl
-
-let tracked_names : FileInfo.names option ref = ref None
-
-let start_tracking () : unit = tracked_names := Some FileInfo.empty_names
-
-let record_fun (s : string) : unit =
-  match !tracked_names with
-  | None -> ()
-  | Some names ->
-    tracked_names :=
-      Some FileInfo.{ names with n_funs = SSet.add s names.n_funs }
-
-let record_class (s : string) : unit =
-  match !tracked_names with
-  | None -> ()
-  | Some names ->
-    tracked_names :=
-      Some FileInfo.{ names with n_classes = SSet.add s names.n_classes }
-
-let record_record_def (s : string) : unit =
-  match !tracked_names with
-  | None -> ()
-  | Some names ->
-    tracked_names :=
-      Some
-        FileInfo.{ names with n_record_defs = SSet.add s names.n_record_defs }
-
-let record_typedef (s : string) : unit =
-  match !tracked_names with
-  | None -> ()
-  | Some names ->
-    tracked_names :=
-      Some FileInfo.{ names with n_types = SSet.add s names.n_types }
-
-let record_const (s : string) : unit =
-  match !tracked_names with
-  | None -> ()
-  | Some names ->
-    tracked_names :=
-      Some FileInfo.{ names with n_consts = SSet.add s names.n_consts }
-
-let stop_tracking () : FileInfo.names =
-  let res =
-    match !tracked_names with
-    | Some names -> names
-    | None ->
-      failwith
-        "Called Decl_provider.stop_tracking without corresponding start_tracking"
-  in
-  tracked_names := None;
-  res
-
-(* Run f while collecting the names of all declarations that it fetched. *)
-let with_decl_tracking f =
-  try
-    start_tracking ();
-    let res = f () in
-    (res, stop_tracking ())
-  with e ->
-    let stack = Caml.Printexc.get_raw_backtrace () in
-    let (_ : FileInfo.names) = stop_tracking () in
-    Caml.Printexc.raise_with_backtrace e stack
 
 let err_not_found (file : Relative_path.t) (name : string) : 'a =
   let err_str =
@@ -122,7 +56,7 @@ module Cache =
     end)
 
 let declare_folded_class_in_file
-    (ctx : Provider_context.t) (file : Relative_path.t) (name : string) :
+    (ctx : Provider_context.t) (file : Relative_path.t) (name : type_key) :
     Decl_defs.decl_class_type * Decl_store.class_members option =
   match Provider_context.get_backend ctx with
   | Provider_backend.Analysis -> failwith "invalid"
@@ -137,7 +71,7 @@ let declare_folded_class_in_file
 let get_class
     ?(tracing_info : Decl_counters.tracing_info option)
     (ctx : Provider_context.t)
-    (class_name : class_key) : class_decl option =
+    (class_name : type_key) : class_decl option =
   Decl_counters.count_decl ?tracing_info Decl_counters.Class class_name
   @@ fun counter ->
   (* There's a confusing matrix of possibilities:
@@ -186,7 +120,6 @@ let get_class
           | None -> None
           | Some v ->
             Cache.add class_name v;
-            record_class class_name;
             Some (counter, v)
         end
     end
@@ -205,16 +138,14 @@ let get_class
     | None -> None
     | Some obj ->
       let v : Typing_classes_heap.class_t = Obj.obj obj in
-      record_class class_name;
       Some (counter, v))
 
 let declare_fun_in_file
-    (ctx : Provider_context.t) (file : Relative_path.t) (name : string) :
+    (ctx : Provider_context.t) (file : Relative_path.t) (name : fun_key) :
     Typing_defs.fun_elt =
   match Ast_provider.find_fun_in_file ctx file name with
   | Some f ->
-    let (name, decl) = Decl_nast.fun_naming_and_decl ctx f in
-    record_fun name;
+    let (_name, decl) = Decl_nast.fun_naming_and_decl ctx f in
     decl
   | None -> err_not_found file name
 
@@ -237,7 +168,6 @@ let get_fun
           |> List.find_map ~f:(function
                  | (name, Shallow_decl_defs.Fun decl)
                    when String.equal fun_name name ->
-                   record_fun name;
                    Some decl
                  | _ -> None)
         else
@@ -260,7 +190,6 @@ let get_fun
             |> List.find_map ~f:(function
                    | (name, Shallow_decl_defs.Fun decl)
                      when String.equal fun_name name ->
-                     record_fun name;
                      Some decl
                    | _ -> None)
           else
@@ -274,19 +203,18 @@ let get_fun
     Decl_service_client.rpc_get_fun decl fun_name
 
 let declare_typedef_in_file
-    (ctx : Provider_context.t) (file : Relative_path.t) (name : string) :
+    (ctx : Provider_context.t) (file : Relative_path.t) (name : type_key) :
     Typing_defs.typedef_type =
   match Ast_provider.find_typedef_in_file ctx file name with
   | Some t ->
-    let (name, decl) = Decl_nast.typedef_naming_and_decl ctx t in
-    record_typedef name;
+    let (_name, decl) = Decl_nast.typedef_naming_and_decl ctx t in
     decl
   | None -> err_not_found file name
 
 let get_typedef
     ?(tracing_info : Decl_counters.tracing_info option)
     (ctx : Provider_context.t)
-    (typedef_name : string) : typedef_decl option =
+    (typedef_name : type_key) : typedef_decl option =
   Decl_counters.count_decl Decl_counters.Typedef ?tracing_info typedef_name
   @@ fun _counter ->
   match Provider_context.get_backend ctx with
@@ -302,7 +230,6 @@ let get_typedef
           |> List.find_map ~f:(function
                  | (name, Shallow_decl_defs.Typedef decl)
                    when String.equal typedef_name name ->
-                   record_typedef name;
                    Some decl
                  | _ -> None)
         else
@@ -311,7 +238,6 @@ let get_typedef
                 declare_typedef_in_file ctx filename typedef_name)
           in
           Decl_store.((get ()).add_typedef typedef_name tdecl);
-          record_typedef typedef_name;
           Some tdecl
       | None -> None))
   | Provider_backend.Local_memory { Provider_backend.decl_cache; _ } ->
@@ -326,7 +252,6 @@ let get_typedef
             |> List.find_map ~f:(function
                    | (name, Shallow_decl_defs.Typedef decl)
                      when String.equal typedef_name name ->
-                     record_typedef name;
                      Some decl
                    | _ -> None)
           else
@@ -340,19 +265,18 @@ let get_typedef
     Decl_service_client.rpc_get_typedef decl typedef_name
 
 let declare_record_def_in_file
-    (ctx : Provider_context.t) (file : Relative_path.t) (name : string) :
+    (ctx : Provider_context.t) (file : Relative_path.t) (name : type_key) :
     Typing_defs.record_def_type =
   match Ast_provider.find_record_def_in_file ctx file name with
   | Some rd ->
-    let (name, decl) = Decl_nast.record_def_naming_and_decl ctx rd in
-    record_record_def name;
+    let (_name, decl) = Decl_nast.record_def_naming_and_decl ctx rd in
     decl
   | None -> err_not_found file name
 
 let get_record_def
     ?(tracing_info : Decl_counters.tracing_info option)
     (ctx : Provider_context.t)
-    (record_name : string) : record_def_decl option =
+    (record_name : type_key) : record_def_decl option =
   Decl_counters.count_decl Decl_counters.Record_def ?tracing_info record_name
   @@ fun _counter ->
   match Provider_context.get_backend ctx with
@@ -368,7 +292,6 @@ let get_record_def
           |> List.find_map ~f:(function
                  | (name, Shallow_decl_defs.Record decl)
                    when String.equal record_name name ->
-                   record_record_def name;
                    Some decl
                  | _ -> None)
         else
@@ -377,7 +300,6 @@ let get_record_def
                 declare_record_def_in_file ctx filename record_name)
           in
           Decl_store.((get ()).add_recorddef record_name record_decl);
-          record_record_def record_name;
           Some record_decl
       | None -> None))
   | Provider_backend.Local_memory { Provider_backend.decl_cache; _ } ->
@@ -392,7 +314,6 @@ let get_record_def
             |> List.find_map ~f:(function
                    | (name, Shallow_decl_defs.Record decl)
                      when String.equal record_name name ->
-                     record_record_def name;
                      Some decl
                    | _ -> None)
           else
@@ -400,26 +321,24 @@ let get_record_def
               Errors.run_in_decl_mode filename (fun () ->
                   declare_record_def_in_file ctx filename record_name)
             in
-            record_record_def record_name;
             Some rdecl
         | None -> None)
   | Provider_backend.Decl_service { decl; _ } ->
     Decl_service_client.rpc_get_record_def decl record_name
 
 let declare_const_in_file
-    (ctx : Provider_context.t) (file : Relative_path.t) (name : string) :
+    (ctx : Provider_context.t) (file : Relative_path.t) (name : gconst_key) :
     gconst_decl =
   match Ast_provider.find_gconst_in_file ctx file name with
   | Some cst ->
-    let (name, decl) = Decl_nast.const_naming_and_decl ctx cst in
-    record_const name;
+    let (_name, decl) = Decl_nast.const_naming_and_decl ctx cst in
     decl
   | None -> err_not_found file name
 
 let get_gconst
     ?(tracing_info : Decl_counters.tracing_info option)
     (ctx : Provider_context.t)
-    (gconst_name : string) : gconst_decl option =
+    (gconst_name : gconst_key) : gconst_decl option =
   Decl_counters.count_decl Decl_counters.GConst ?tracing_info gconst_name
   @@ fun _counter ->
   match Provider_context.get_backend ctx with
@@ -435,7 +354,6 @@ let get_gconst
           |> List.find_map ~f:(function
                  | (name, Shallow_decl_defs.Const decl)
                    when String.equal gconst_name name ->
-                   record_const name;
                    Some decl
                  | _ -> None)
         else
@@ -444,7 +362,6 @@ let get_gconst
                 declare_const_in_file ctx filename gconst_name)
           in
           Decl_store.((get ()).add_gconst gconst_name gconst);
-          record_const gconst_name;
           Some gconst
       | None -> None))
   | Provider_backend.Local_memory { Provider_backend.decl_cache; _ } ->
@@ -459,7 +376,6 @@ let get_gconst
             |> List.find_map ~f:(function
                    | (name, Shallow_decl_defs.Const decl)
                      when String.equal gconst_name name ->
-                     record_const name;
                      Some decl
                    | _ -> None)
           else
@@ -467,7 +383,6 @@ let get_gconst
               Errors.run_in_decl_mode filename (fun () ->
                   declare_const_in_file ctx filename gconst_name)
             in
-            record_const gconst_name;
             Some gconst
         | None -> None)
   | Provider_backend.Decl_service { decl; _ } ->

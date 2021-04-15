@@ -148,7 +148,7 @@ static void freeDynPropArray(ObjectData* inst) {
   auto& table = g_context->dynPropTable;
   auto it = table.find(inst);
   assertx(it != end(table));
-  assertx(it->second.arr().isHAMSafeDArray());
+  assertx(it->second.arr().isDict());
   it->second.destroy();
   table.erase(it);
 }
@@ -323,13 +323,13 @@ Object ObjectData::iterableObject(bool& isIterable,
 Array& ObjectData::dynPropArray() const {
   assertx(getAttribute(HasDynPropArr));
   assertx(g_context->dynPropTable.count(this));
-  assertx(g_context->dynPropTable[this].arr().isHAMSafeDArray());
+  assertx(g_context->dynPropTable[this].arr().isDict());
   return g_context->dynPropTable[this].arr();
 }
 
 void ObjectData::setDynProps(const Array& newArr) {
   // don't expose the ref returned by setDynPropArr
-  (void)setDynPropArray(newArr.toDArray());
+  (void)setDynPropArray(newArr.toDict());
 }
 
 void ObjectData::reserveDynProps(int numDynamic) {
@@ -347,14 +347,14 @@ Array& ObjectData::reserveProperties(int numDynamic /* = 2 */) {
     check_non_safepoint_surprise();
   }
 
-  return
-    setDynPropArray(Array::attach(MixedArray::MakeReserveDArray(numDynamic)));
+  return setDynPropArray(Array::attach(
+      MixedArray::MakeReserveDict(numDynamic)));
 }
 
 Array& ObjectData::setDynPropArray(const Array& newArr) {
   assertx(!g_context->dynPropTable.count(this));
   assertx(!getAttribute(HasDynPropArr));
-  assertx(newArr.isHAMSafeDArray());
+  assertx(newArr.isDict());
 
   if (m_cls->forbidsDynamicProps()) {
     throw_object_forbids_dynamic_props(getClassName().data());
@@ -516,7 +516,7 @@ void ObjectData::o_getArray(Array& props,
     auto val = this->propRvalAtOffset(slot);
     props.set(StrNR(prop.name).asString(), val.tv());
   }
-  IteratePropToArrayOrderNoInc(
+  IteratePropToArrayOrder(
     this,
     [&](Slot slot, const Class::Prop& prop, tv_rval val) {
       assertx(assertTypeHint(val, slot));
@@ -573,7 +573,7 @@ Array ObjectData::toArray(bool pubOnly /* = false */,
   } else if (UNLIKELY(instanceof(DateTimeData::getClass()))) {
     return Native::data<DateTimeData>(this)->getDebugInfo();
   } else {
-    auto ret = Array::CreateDArray();
+    auto ret = Array::CreateDict();
     o_getArray(ret, pubOnly, ignoreLateInit);
     return ret;
   }
@@ -615,7 +615,7 @@ Array ObjectData::o_toIterArray(const String& context) {
       // not returning Array&; makes a copy
       return props;
     }
-    return Array::CreateDArray();
+    return Array::CreateDict();
   }
 
   size_t accessibleProps = m_cls->declPropNumAccessible();
@@ -623,7 +623,7 @@ Array ObjectData::o_toIterArray(const String& context) {
   if (getAttribute(HasDynPropArr)) {
     size += dynPropArray().size();
   }
-  Array retArray { Array::attach(MixedArray::MakeReserveMixed(size)) };
+  Array retArray { Array::attach(MixedArray::MakeReserveDict(size)) };
 
   Class* ctx = nullptr;
   if (!context.empty()) {
@@ -868,7 +868,7 @@ bool ObjectData::equal(const ObjectData& other) const {
   check_recursion_error();
 
   bool result = true;
-  IteratePropMemOrderNoInc(
+  IteratePropMemOrder(
     this,
     [&](Slot slot, const Class::Prop& prop, tv_rval thisVal) {
       auto otherVal = other.propRvalAtOffset(slot);
@@ -960,7 +960,7 @@ int64_t ObjectData::compare(const ObjectData& other) const {
   check_recursion_error();
 
   int64_t result = 0;
-  IteratePropToArrayOrderNoInc(
+  IteratePropToArrayOrder(
     this,
     [&](Slot slot, const Class::Prop& prop, tv_rval thisVal) {
       auto otherVal = other.propRvalAtOffset(slot);
@@ -1087,7 +1087,7 @@ ObjectData::~ObjectData() {
 }
 
 Object ObjectData::FromArray(ArrayData* properties) {
-  auto const props = properties->toDArray(true);
+  auto const props = properties->toDict(true);
   Object retval{SystemLib::s_stdclassClass};
   retval->setAttribute(HasDynPropArr);
   g_context->dynPropTable.emplace(retval.get(), props);
@@ -1098,6 +1098,22 @@ Object ObjectData::FromArray(ArrayData* properties) {
 NEVER_INLINE
 void ObjectData::throwMutateConstProp(Slot prop) const {
   throw_cannot_modify_const_prop(
+    getClassName().data(),
+    m_cls->declProperties()[prop].name->data()
+  );
+}
+
+NEVER_INLINE
+void ObjectData::throwMustBeMutable(Slot prop) const {
+  throw_must_be_mutable(
+    getClassName().data(),
+    m_cls->declProperties()[prop].name->data()
+  );
+}
+
+NEVER_INLINE
+void ObjectData::throwMustBeReadOnly(Slot prop) const {
+  throw_cannot_write_non_readonly_prop(
     getClassName().data(),
     m_cls->declProperties()[prop].name->data()
   );
@@ -1137,7 +1153,8 @@ ObjectData::PropLookup ObjectData::getPropImpl(
      // instantiates with false by mistake it will always see const
      forWrite
        ? bool(declProp.attrs & AttrIsConst)
-       : true
+       : true,
+     lookup.readonly
     };
   }
 
@@ -1153,11 +1170,11 @@ ObjectData::PropLookup ObjectData::getPropImpl(
       // not const since all dynamic properties are. If we may write to
       // the property we need to allow the array to escalate.
       auto const lval = arr.lval(StrNR(key), AccessFlags::Key);
-      return { lval, nullptr, kInvalidSlot, true, !forWrite };
+      return { lval, nullptr, kInvalidSlot, true, !forWrite, false };
     }
   }
 
-  return { nullptr, nullptr, kInvalidSlot, false, !forWrite };
+  return { nullptr, nullptr, kInvalidSlot, false, !forWrite, false };
 }
 
 tv_lval ObjectData::getPropLval(const Class* ctx, const StringData* key) {
@@ -1197,29 +1214,31 @@ tv_lval ObjectData::getPropIgnoreAccessibility(const StringData* key) {
 template<ObjectData::PropMode mode>
 ALWAYS_INLINE
 tv_lval ObjectData::propImpl(TypedValue* tvRef, const Class* ctx,
-                             const StringData* key) {
+                             const StringData* key, const ReadOnlyOp op) {
   auto constexpr write = (mode == PropMode::DimForWrite);
   auto constexpr read = (mode == PropMode::ReadNoWarn) ||
                         (mode == PropMode::ReadWarn);
   auto const lookup = getPropImpl<write, read, false>(ctx, key);
   auto const prop = lookup.val;
-
   if (prop) {
     if (lookup.accessible) {
-      auto const checkConstProp = [&]() {
+      auto const checkPropAttrs = [&]() {
         if (mode == PropMode::DimForWrite) {
           if (UNLIKELY(lookup.isConst) && !isBeingConstructed()) {
             throwMutateConstProp(lookup.slot);
           }
         }
+        if (lookup.readonly && op == ReadOnlyOp::Mutable) {
+          throwMustBeMutable(lookup.slot);
+        }
         return prop;
       };
 
       // Property exists, is accessible, and is not unset.
-      if (type(prop) != KindOfUninit) return checkConstProp();
+      if (type(prop) != KindOfUninit) return checkPropAttrs();
 
       if (mode == PropMode::ReadWarn) raiseUndefProp(key);
-      if (write) return checkConstProp();
+      if (write) return checkPropAttrs();
       return const_cast<TypedValue*>(&immutable_null_base);
     }
 
@@ -1258,33 +1277,37 @@ tv_lval ObjectData::propImpl(TypedValue* tvRef, const Class* ctx,
 tv_lval ObjectData::prop(
   TypedValue* tvRef,
   const Class* ctx,
-  const StringData* key
+  const StringData* key,
+  const ReadOnlyOp op
 ) {
-  return propImpl<PropMode::ReadNoWarn>(tvRef, ctx, key);
+  return propImpl<PropMode::ReadNoWarn>(tvRef, ctx, key, op);
 }
 
 tv_lval ObjectData::propW(
   TypedValue* tvRef,
   const Class* ctx,
-  const StringData* key
+  const StringData* key,
+  const ReadOnlyOp op
 ) {
-  return propImpl<PropMode::ReadWarn>(tvRef, ctx, key);
+  return propImpl<PropMode::ReadWarn>(tvRef, ctx, key, op);
 }
 
 tv_lval ObjectData::propU(
   TypedValue* tvRef,
   const Class* ctx,
-  const StringData* key
+  const StringData* key,
+  const ReadOnlyOp op
 ) {
-  return propImpl<PropMode::DimForWrite>(tvRef, ctx, key);
+  return propImpl<PropMode::DimForWrite>(tvRef, ctx, key, op);
 }
 
 tv_lval ObjectData::propD(
   TypedValue* tvRef,
   const Class* ctx,
-  const StringData* key
+  const StringData* key,
+  const ReadOnlyOp op
 ) {
-  return propImpl<PropMode::DimForWrite>(tvRef, ctx, key);
+  return propImpl<PropMode::DimForWrite>(tvRef, ctx, key, op);
 }
 
 bool ObjectData::propIsset(const Class* ctx, const StringData* key) {
@@ -1306,7 +1329,7 @@ bool ObjectData::propIsset(const Class* ctx, const StringData* key) {
   return false;
 }
 
-void ObjectData::setProp(Class* ctx, const StringData* key, TypedValue val) {
+void ObjectData::setProp(Class* ctx, const StringData* key, TypedValue val, ReadOnlyOp op) {
   assertx(tvIsPlausible(val));
   assertx(val.m_type != KindOfUninit);
 
@@ -1316,6 +1339,9 @@ void ObjectData::setProp(Class* ctx, const StringData* key, TypedValue val) {
   if (prop && lookup.accessible) {
     if (UNLIKELY(lookup.isConst) && !isBeingConstructed()) {
       throwMutateConstProp(lookup.slot);
+    }
+    if (!lookup.readonly && op == ReadOnlyOp::ReadOnly) {
+      throwMustBeReadOnly(lookup.slot);
     }
     // TODO(T61738946): We can remove the temporary here once we no longer
     // coerce class_meth types.
@@ -1530,7 +1556,7 @@ void ObjectData::raiseAbstractClassError(Class* cls) {
   raise_error("Cannot instantiate %s %s",
               (attrs & AttrInterface) ? "interface" :
               (attrs & AttrTrait)     ? "trait" :
-              (attrs & AttrEnum)      ? "enum" : "abstract class",
+              (attrs & (AttrEnum|AttrEnumClass)) ? "enum" : "abstract class",
               cls->preClass()->name()->data());
 }
 

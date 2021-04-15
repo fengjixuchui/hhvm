@@ -23,7 +23,7 @@ type lazy_class_type = {
   parents_and_traits: unit LSTable.t;  (** Names of parents and traits only *)
   members_fully_known: bool Lazy.t;
   req_ancestor_names: unit LSTable.t;
-  all_requirements: (Pos.t * decl_ty) Sequence.t;
+  all_requirements: (Pos_or_decl.t * decl_ty) Sequence.t;
   is_disposable: bool Lazy.t;
 }
 
@@ -357,6 +357,18 @@ module ApiLazy = struct
     match t with
     | Lazy (_sc, lc) -> LSTable.mem (Lazy.force lc).ih.typeconsts id
     | Eager c -> SMap.mem id c.tc_typeconsts
+
+  let get_typeconst_enforceability (decl, t) id =
+    Decl_counters.count_subdecl
+      decl
+      (Decl_counters.Get_typeconst_enforceability id)
+    @@ fun () ->
+    match t with
+    | Lazy (_sc, lc) ->
+      LSTable.get (Lazy.force lc).ih.typeconst_enforceability id
+    | Eager c ->
+      Option.map (SMap.find_opt id c.tc_typeconsts) ~f:(fun t ->
+          t.ttc_enforceable)
 
   let get_prop (decl, t) id =
     Decl_counters.count_subdecl decl (Decl_counters.Get_prop id) @@ fun () ->

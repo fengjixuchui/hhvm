@@ -1,23 +1,23 @@
 Requesting 'test_get_headers_secure.php'
-string(%d) "darray(5) {
+string(%d) "dict(5) {
   ["accept"]=>
-  varray(1) {
+  vec(1) {
     string(3) "*/*"
   }
   ["host"]=>
-  varray(1) {
+  vec(1) {
     string(%d) "%s"
   }
   ["user-agent"]=>
-  varray(1) {
+  vec(1) {
     string(%d) "%s"
   }
   ["xxxxx"]=>
-  varray(1) {
+  vec(1) {
     string(2) "45"
   }
   ["xyzzy"]=>
-  varray(3) {
+  vec(3) {
     string(2) "42"
     string(2) "43"
     string(2) "44"

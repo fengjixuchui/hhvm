@@ -246,8 +246,7 @@ TypeOrReduced builtin_is_callable(ISS& env, const php::Func* func,
   auto const res = [&]() -> folly::Optional<bool> {
     if (ty.subtypeOf(BClsMeth | BFunc)) return true;
     if (ty.subtypeOf(BArrLikeE | BKeyset) ||
-        !ty.couldBe(BClsMeth | BFunc | BVArr | BDArr |
-                    BVec | BDict | BObj | BStr)) {
+        !ty.couldBe(BClsMeth | BFunc | BVec | BDict | BObj | BStr)) {
       return false;
     }
     return {};
@@ -270,7 +269,7 @@ TypeOrReduced builtin_is_list_like(ISS& env, const php::Func* func,
   }
 
   if (!ty.couldBe(BArrLike | BClsMeth)) return TFalse;
-  if (ty.subtypeOf(BVec | BVArr | BClsMeth)) return TTrue;
+  if (ty.subtypeOf(BVec | BClsMeth)) return TTrue;
 
   switch (categorize_array(ty).cat) {
     case Type::ArrayCat::Empty:
@@ -312,7 +311,7 @@ ArrayData* impl_type_structure_opts(ISS& env,
     }
     if (check_lsb && !cnst->isNoOverride) return nullptr;
     auto const typeCns = cnst->val;
-    if (!tvIsHAMSafeDArray(&*typeCns)) return nullptr;
+    if (!tvIsDict(&*typeCns)) return nullptr;
     return resolveTSStatically(env, typeCns->m_data.parr, env.ctx.cls);
   };
   auto const cns_name = tv(getArg(env, func, fca, 1));
@@ -332,8 +331,12 @@ ArrayData* impl_type_structure_opts(ISS& env,
     }
     return nullptr;
   }
-  if (tvIsString(&*cls_or_obj)) {
-    auto const rcls = env.index.resolve_class(env.ctx, cls_or_obj->m_data.pstr);
+  if (tvIsString(&*cls_or_obj) || tvIsLazyClass(&*cls_or_obj)) {
+    auto const rcls =
+      env.index.resolve_class(env.ctx,
+                              tvIsString(&*cls_or_obj) ?
+                              cls_or_obj->m_data.pstr :
+                              cls_or_obj->m_data.plazyclass.name());
     if (!rcls || !rcls->resolved()) return nullptr;
     return result(*rcls, cns_sd, false);
   } else if (!tvIsObject(&*cls_or_obj) && !tvIsClass(&*cls_or_obj)) {
@@ -354,8 +357,7 @@ TypeOrReduced impl_builtin_type_structure(ISS& env, const php::Func* func,
   if (!ts) return NoReduced{};
   if (fca.numArgs() == 2) reduce(env, bc::PopC {});
   reduce(env, bc::PopC {});
-  RuntimeOption::EvalHackArrDVArrs
-    ? reduce(env, bc::Dict { ts }) : reduce(env, bc::Array { ts });
+  reduce(env, bc::Dict { ts });
   return Reduced{};
 }
 
@@ -450,7 +452,7 @@ bool handle_builtin(ISS& env, const php::Func* func, const FCallArgs& fca) {
 bool optimize_builtin(ISS& env, const php::Func* func, const FCallArgs& fca) {
   if (!will_reduce(env) ||
       any(env.collect.opts & CollectionOpts::Speculating) ||
-      func->attrs & (AttrInterceptable | AttrNoFCallBuiltin) ||
+      func->attrs & AttrNoFCallBuiltin ||
       (func->cls && !(func->attrs & AttrStatic))  ||
       !func->nativeInfo ||
       func->params.size() >= Native::maxFCallBuiltinArgs() ||
@@ -527,9 +529,7 @@ folly::Optional<Type> const_fold(ISS& env,
   // invokeFuncFew expects them to be unpacked.
   if (func->hasVariadicCaptureParam() && variadicsPacked) {
     if (args.empty()) return folly::none;
-    if (!isArrayType(args.back().m_type) && !isVecType(args.back().m_type)) {
-      return folly::none;
-    }
+    if (!isVecType(args.back().m_type)) return folly::none;
     auto const variadic = args.back();
     args.pop_back();
     IterateV(
@@ -543,17 +543,8 @@ folly::Optional<Type> const_fold(ISS& env,
   assertx(!RuntimeOption::EvalJit);
   return eval_cell(
     [&] {
-      auto retVal = g_context->invokeFuncFew(
+      auto const retVal = g_context->invokeFuncFew(
         func, cls, args.size(), args.data(), false, false);
-
-      if (tvIsArrayLike(retVal)) {
-        if (auto const tag = provTagHere(env)) {
-          arrprov::TagOverride _{tag};
-          auto const tagged = arrprov::tagTvRecursively(retVal, /*flags=*/0);
-          tvMove(tagged, retVal);
-        }
-      }
-
       assertx(tvIsPlausible(retVal));
       return retVal;
     }

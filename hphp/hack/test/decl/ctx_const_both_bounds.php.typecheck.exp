@@ -1,0 +1,4 @@
+File "ctx_const_both_bounds.php", line 4, characters 24-47:
+Constraints on ctx constants are not allowed (Parsing[1002])
+File "ctx_const_both_bounds.php", line 8, characters 24-56:
+Constraints on ctx constants are not allowed (Parsing[1002])

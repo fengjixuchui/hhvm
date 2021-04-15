@@ -272,72 +272,6 @@ IMPL_OPCODE_CALL(ConvResToDbl);
 IMPL_OPCODE_CALL(ConvTVToDbl);
 
 ///////////////////////////////////////////////////////////////////////////////
-// ConvToVArray
-
-static ArrayData* convObjToVArrImpl(ObjectData* obj) {
-  assertx(!RuntimeOption::EvalHackArrDVArrs);
-  auto a = castObjToVArray(obj);
-  assertx(a->isPackedKind());
-  assertx(a->isVArray());
-  decRefObj(obj);
-  return a;
-}
-
-namespace {
-
-void convToVArrHelper(IRLS& env, const IRInstruction* inst,
-                      CallSpec call, bool sync) {
-  auto const args = argGroup(env, inst).ssa(0);
-  cgCallHelper(
-    vmain(env),
-    env,
-    call,
-    callDest(env, inst),
-    sync ? SyncOptions::Sync : SyncOptions::None,
-    args
-  );
-}
-
-}
-
-void cgConvObjToVArr(IRLS& env, const IRInstruction* inst) {
-  convToVArrHelper(env, inst, CallSpec::direct(convObjToVArrImpl), true);
-}
-
-///////////////////////////////////////////////////////////////////////////////
-// ConvToDArray
-
-static ArrayData* convObjToDArrImpl(ObjectData* obj) {
-  assertx(!RuntimeOption::EvalHackArrDVArrs);
-  auto a = castObjToDArray(obj);
-  assertx(a->isMixedKind());
-  assertx(a->isDArray());
-  decRefObj(obj);
-  return a;
-}
-
-namespace {
-
-void convToDArrHelper(IRLS& env, const IRInstruction* inst,
-                      CallSpec call, bool sync) {
-  auto const args = argGroup(env, inst).ssa(0);
-  cgCallHelper(
-    vmain(env),
-    env,
-    call,
-    callDest(env, inst),
-    sync ? SyncOptions::Sync : SyncOptions::None,
-    args
-  );
-}
-
-}
-
-void cgConvObjToDArr(IRLS& env, const IRInstruction* inst) {
-  convToDArrHelper(env, inst, CallSpec::direct(convObjToDArrImpl), true);
-}
-
-///////////////////////////////////////////////////////////////////////////////
 // ConvToStr
 
 IMPL_OPCODE_CALL(ConvIntToStr);
@@ -393,10 +327,8 @@ void cgConvPtrToLval(IRLS& env, const IRInstruction* inst) {
   auto const dstLoc = irlower::dstLoc(env, inst, 0);
 
   v << copy{srcLoc.reg(), dstLoc.reg(tv_lval::val_idx)};
-  if (wide_tv_val) {
-    static_assert(TVOFF(m_data) == 0, "");
-    v << lea{srcLoc.reg()[TVOFF(m_type)], dstLoc.reg(tv_lval::type_idx)};
-  }
+  static_assert(TVOFF(m_data) == 0, "");
+  v << lea{srcLoc.reg()[TVOFF(m_type)], dstLoc.reg(tv_lval::type_idx)};
 }
 
 ///////////////////////////////////////////////////////////////////////////////

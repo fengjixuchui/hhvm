@@ -53,7 +53,7 @@ public:
   ArrayData* arrayData() { return m_arr; }
   const ArrayData* arrayData() const { return m_arr; }
   void setArrayData(ArrayData* arr) {
-    assertx(arr->isVecKind());
+    assertx(arr->isVanillaVec());
     assertx(!arr->isLegacyArray());
     m_arr = arr;
   }
@@ -164,8 +164,8 @@ public:
   void reserve(uint32_t sz);
 
   Array toPHPArrayImpl() {
-    if (!m_size) return empty_array();
-    auto ad = arrayData()->toPHPArray(true);
+    if (!m_size) return empty_dict_array();
+    auto ad = arrayData()->toDict(true);
     return ad != arrayData() ? Array::attach(ad) : Array{ad};
   }
 
@@ -254,7 +254,7 @@ public:
   }
 
   void scan(type_scan::Scanner& scanner) const {
-    scanner.scan(arrayData());
+    scanner.scan(m_arr);
     scanner.scan(m_immCopy);
   }
 

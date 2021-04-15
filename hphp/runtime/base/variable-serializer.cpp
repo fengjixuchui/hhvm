@@ -92,13 +92,12 @@ VariableSerializer::VariableSerializer(Type type, int option /* = 0 */,
 
 VariableSerializer::ArrayKind
 VariableSerializer::getKind(const ArrayData* arr) const {
-  assertx(!RuntimeOption::EvalHackArrDVArrs || arr->isNotDVArray());
   if (UNLIKELY(m_forcePHPArrays)) {
     return VariableSerializer::ArrayKind::PHP;
   } else if (UNLIKELY(m_forceHackArrays)) {
-    if (arr->isDArray() || arr->isDictType()) {
+    if (arr->isDictType()) {
       return VariableSerializer::ArrayKind::Dict;
-    } else if (arr->isVArray() || arr->isVecType()) {
+    } else if (arr->isVecType()) {
       return VariableSerializer::ArrayKind::Vec;
     }
     assertx(arr->isKeysetType());
@@ -130,37 +129,25 @@ VariableSerializer::getKind(const ArrayData* arr) const {
 
   if (serializesLegacyBit && arr->isLegacyArray()) {
     assertx(!arr->isKeysetType());
-    if (m_keepDVArrays) {
-      if (arr->isDictType() || arr->isDArray()) {
-        return VariableSerializer::ArrayKind::MarkedDArray;
-      }
-      if (arr->isVecType() || arr->isVArray()) {
-        return VariableSerializer::ArrayKind::MarkedVArray;
-      }
+    if (m_keepDVArrays && arr->isVecType()) {
+      return VariableSerializer::ArrayKind::MarkedVArray;
     }
     return VariableSerializer::ArrayKind::MarkedDArray;
   }
 
-  if (RuntimeOption::EvalHackArrDVArrs &&
-      respectsLegacyBit &&
-      arr->isLegacyArray()) {
+  if (respectsLegacyBit && arr->isLegacyArray()) {
     assertx(!arr->isKeysetType());
     if (m_keepDVArrays) {
-      if (arr->isVecType()) return VariableSerializer::ArrayKind::VArray;
-      if (arr->isDictType()) return VariableSerializer::ArrayKind::DArray;
+      return arr->isVecType() ? VariableSerializer::ArrayKind::VArray
+                              : VariableSerializer::ArrayKind::DArray;
     }
     return VariableSerializer::ArrayKind::PHP;
   }
 
   if (arr->isDictType()) return VariableSerializer::ArrayKind::Dict;
-  if (arr->isVecType()) return VariableSerializer::ArrayKind::Vec;
-  if (arr->isKeysetType())   return VariableSerializer::ArrayKind::Keyset;
-  assertx(arr->isPHPArrayType());
-  if (m_keepDVArrays) {
-    if (arr->isVArray()) return VariableSerializer::ArrayKind::VArray;
-    if (arr->isDArray()) return VariableSerializer::ArrayKind::DArray;
-  }
-  return VariableSerializer::ArrayKind::PHP;
+  if (arr->isVecType())  return VariableSerializer::ArrayKind::Vec;
+  assertx(arr->isKeysetType());
+  return VariableSerializer::ArrayKind::Keyset;
 }
 
 void VariableSerializer::pushObjectInfo(const String& objClass, char objCode) {
@@ -1560,8 +1547,12 @@ void VariableSerializer::serializeClass(const Class* cls) {
   switch (getType()) {
     case Type::VarExport:
     case Type::PHPOutput:
-      m_buf->append(cls->name());
-      m_buf->append("::class");
+      if (RuntimeOption::EvalClassAsStringVarExport) {
+        write(StrNR(cls->name()));
+      } else {
+        m_buf->append(cls->name());
+        m_buf->append("::class");
+      }
       break;
     case Type::VarDump:
       if (RuntimeOption::EvalClassAsStringVarDump) {
@@ -1597,8 +1588,12 @@ void VariableSerializer::serializeLazyClass(LazyClassData lcls) {
   switch (getType()) {
     case Type::VarExport:
     case Type::PHPOutput:
-      m_buf->append(lcls.name());
-      m_buf->append("::class");
+      if (RuntimeOption::EvalClassAsStringVarExport) {
+        write(StrNR(lcls.name()));
+      } else {
+        m_buf->append(lcls.name());
+        m_buf->append("::class");
+      }
       break;
     case Type::VarDump:
       if (RuntimeOption::EvalClassAsStringVarDump) {
@@ -1791,31 +1786,11 @@ void VariableSerializer::serializeVariant(tv_rval tv,
 
     case KindOfPersistentVec:
     case KindOfVec:
-      assertx(!isArrayKey);
-      assertx(val(tv).parr->isVecType());
-      serializeArray(val(tv).parr, skipNestCheck);
-      return;
-
     case KindOfPersistentDict:
     case KindOfDict:
-      assertx(!isArrayKey);
-      assertx(val(tv).parr->isDictType());
-      serializeArray(val(tv).parr, skipNestCheck);
-      return;
-
     case KindOfPersistentKeyset:
     case KindOfKeyset:
       assertx(!isArrayKey);
-      assertx(val(tv).parr->isKeysetType());
-      serializeArray(val(tv).parr, skipNestCheck);
-      return;
-
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
-      assertx(!isArrayKey);
-      assertx(val(tv).parr->isPHPArrayType());
       serializeArray(val(tv).parr, skipNestCheck);
       return;
 
@@ -1900,59 +1875,7 @@ void VariableSerializer::serializeArrayImpl(const ArrayData* arr,
                                             bool isVectorData) {
   using AK = VariableSerializer::ArrayKind;
   AK kind = getKind(arr);
-  writeArrayHeader(
-    arr->size(),
-    isVectorData,
-    kind
-  );
-
-  auto const write_name = [&](const StringData* name) {
-    if (m_unitFilename == name) {
-      m_buf->append("t;");
-    } else {
-      write(name->data(), name->size());
-    }
-  };
-
-  if ((m_type == Type::Internal || m_serializeProvenanceAndLegacy) &&
-      arrprov::arrayWantsTag(arr)) {
-    auto const tag = arrprov::getTag(arr);
-    if (tag.valid()) {
-      switch (tag.kind()) {
-      case arrprov::Tag::Kind::Invalid: always_assert(false);
-      case arrprov::Tag::Kind::Known: {
-        m_buf->append("p:");
-        write(tag.line());
-        write_name(tag.name());
-        break;
-      }
-      case arrprov::Tag::Kind::KnownFuncParam: {
-        m_buf->append("pf:");
-        write(tag.line());
-        write_name(tag.name());
-        break;
-      }
-      case arrprov::Tag::Kind::KnownTraitMerge: {
-        m_buf->append("pr:");
-        write_name(tag.name());
-        break;
-      }
-      case arrprov::Tag::Kind::KnownLargeEnum: {
-        m_buf->append("pe:");
-        write_name(tag.name());
-        break;
-      }
-      case arrprov::Tag::Kind::RuntimeLocation:
-        m_buf->append("pc:");
-        write_name(tag.name());
-        break;
-      case arrprov::Tag::Kind::RuntimeLocationPoison:
-        m_buf->append("pz:");
-        write_name(tag.name());
-        break;
-      }
-    }
-  }
+  writeArrayHeader(arr->size(), isVectorData, kind);
 
   IterateKV(
     arr,
@@ -1968,7 +1891,7 @@ void VariableSerializer::serializeArrayImpl(const ArrayData* arr,
 void VariableSerializer::serializeArray(const ArrayData* arr,
                                         bool skipNestCheck /* = false */) {
   if (UNLIKELY(RuntimeOption::EvalHackArrCompatSerializeNotices)) {
-    if (UNLIKELY(m_hackWarn && !m_hasHackWarned && arr->isHackArrayType())) {
+    if (UNLIKELY(m_hackWarn && !m_hasHackWarned)) {
       raise_hack_arr_compat_serialize_notice(arr);
       m_hasHackWarned = true;
     }
@@ -1980,53 +1903,10 @@ void VariableSerializer::serializeArray(const ArrayData* arr,
       raise_hack_arr_compat_serialize_notice(arr);
       m_hasKeysetWarned = true;
     }
-    if (UNLIKELY(m_phpWarn && !m_hasPHPWarned && arr->isPHPArrayType())) {
-      raise_hack_arr_compat_serialize_notice(arr);
-      m_hasPHPWarned = true;
-    }
   }
 
   const bool isVectorData = arr->isVectorData();
-
-  if (arr->isDVArray() && !m_serializeProvenanceAndLegacy &&
-      !m_forcePHPArrays && !m_forceHackArrays) {
-    auto const source = [&]() -> folly::Optional<SerializationSite> {
-      switch (getType()) {
-      case VariableSerializer::Type::JSON:
-        // json_encode only observes provenance on list-like darrays
-        return arr->isVArray() || !isVectorData
-          ? folly::none
-          : folly::make_optional(SerializationSite::JsonEncode);
-      case VariableSerializer::Type::Serialize:
-        return SerializationSite::Serialize;
-      case VariableSerializer::Type::VarExport:
-        return SerializationSite::VarExport;
-      case VariableSerializer::Type::PrintR:
-        return SerializationSite::PrintR;
-      default:
-        return folly::none;
-      }
-    }();
-    if (source && raiseArraySerializationNotices()) {
-      auto buffer = StringBuffer{};
-      if (!m_arrayInfos.empty()) {
-        auto count = 0;
-        buffer.append(" at path [");
-        for (auto const& info : m_arrayInfos) {
-          if (count++) buffer.append(',');
-          if (info.key) {
-            appendJsonEscape(buffer, info.key->data(), info.key->size(), 0);
-          } else {
-            buffer.append('?');
-          }
-        }
-        buffer.append(']');
-      }
-      raise_array_serialization_notice(*source, arr, buffer.data());
-    }
-  }
-
-  if (arr->size() == 0 && LIKELY(!arrprov::arrayWantsTag(arr))) {
+  if (arr->empty()) {
     auto const kind = getKind(arr);
     writeArrayHeader(0, isVectorData, kind);
     writeArrayFooter(kind);
@@ -2129,7 +2009,7 @@ void VariableSerializer::serializeCollection(ObjectData* obj) {
  */
 Array VariableSerializer::getSerializeProps(const ObjectData* obj) const {
   if (getType() == VariableSerializer::Type::VarExport) {
-    Array props = Array::CreateDArray();
+    Array props = Array::CreateDict();
     for (ArrayIter iter(obj->toArray(false, true)); iter; ++iter) {
       auto key = iter.first().toString();
       // Jump over any class attribute mangling
@@ -2159,7 +2039,7 @@ Array VariableSerializer::getSerializeProps(const ObjectData* obj) const {
     // When ArrayIterator is cast to an array, it returns its array object,
     // however when it's being var_dump'd or print_r'd, it shows its properties
     if (UNLIKELY(obj->instanceof(SystemLib::s_ArrayIteratorClass))) {
-      auto ret = Array::CreateDArray();
+      auto ret = Array::CreateDict();
       obj->o_getArray(ret, false, true);
       return ret;
     }
@@ -2167,7 +2047,7 @@ Array VariableSerializer::getSerializeProps(const ObjectData* obj) const {
     // Same with Closure, since it's a dynamic object but still has its own
     // different behavior for var_dump and cast to array
     if (UNLIKELY(obj->instanceof(c_Closure::classof()))) {
-      auto ret = Array::CreateDArray();
+      auto ret = Array::CreateDict();
       obj->o_getArray(ret, false, true);
       return ret;
     }
@@ -2185,7 +2065,7 @@ Array VariableSerializer::getSerializeProps(const ObjectData* obj) const {
     return ret.toArray();
   }
   if (ret.isNull()) {
-    return empty_array();
+    return empty_dict_array();
   }
   raise_error("__debugInfo() must return an array");
   not_reached();
@@ -2273,7 +2153,7 @@ void VariableSerializer::serializeObjectImpl(const ObjectData* obj) {
   if (UNLIKELY(handleSleep)) {
     assertx(!obj->isCollection());
     if (ret.isArray()) {
-      Array wanted = Array::CreateDArray();
+      Array wanted = Array::CreateDict();
       assertx(isArrayLikeType(ret.getType()));
       const Array &props = ret.asCArrRef();
       for (ArrayIter iter(props); iter; ++iter) {

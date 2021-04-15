@@ -10,26 +10,17 @@ use hhbc_by_ref_ast_scope as ast_scope;
 use hhbc_by_ref_env::emitter::Emitter;
 use hhbc_by_ref_hhbc_id::Id;
 use hhbc_by_ref_hhbc_string_utils as string_utils;
-use hhbc_by_ref_options::{HhvmFlags, Options};
+use hhbc_by_ref_options::HhvmFlags;
 use hhbc_by_ref_runtime::TypedValue;
 use naming_special_names_rust::{math, members, special_functions, typehints};
 use oxidized::{
     aast,
     aast_visitor::{visit_mut, AstParams, NodeMut, VisitorMut},
     ast as tast, ast_defs,
-    namespace_env::Env as Namespace,
     pos::Pos,
 };
 
 use itertools::Itertools;
-
-fn hack_arr_dv_arrs(opts: &Options) -> bool {
-    opts.hhvm.flags.contains(HhvmFlags::HACK_ARR_DV_ARRS)
-}
-
-fn hack_arr_dv_arr_mark(opts: &Options) -> bool {
-    opts.hhvm.flags.contains(HhvmFlags::HACK_ARR_DV_ARR_MARK)
-}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
@@ -100,12 +91,12 @@ fn try_type_intlike(s: &str) -> Option<i64> {
     }
 }
 
-fn class_const_to_typed_value<'arena>(
-    alloc: &'arena bumpalo::Bump,
+fn class_const_to_typed_value<'local_arena, 'arena>(
+    alloc: &'local_arena bumpalo::Bump,
     emitter: &Emitter<'arena>,
     cid: &tast::ClassId,
     id: &tast::Pstring,
-) -> Result<TypedValue<'arena>, Error> {
+) -> Result<TypedValue<'local_arena>, Error> {
     if id.1 == members::M_CLASS {
         let cexpr = ast_class_expr::ClassExpr::class_id_to_class_expr(
             emitter,
@@ -130,139 +121,111 @@ fn class_const_to_typed_value<'arena>(
     Err(Error::UserDefinedConstant)
 }
 
-fn varray_to_typed_value<'arena>(
-    alloc: &'arena bumpalo::Bump,
+fn varray_to_typed_value<'local_arena, 'arena>(
+    alloc: &'local_arena bumpalo::Bump,
     emitter: &Emitter<'arena>,
-    ns: &Namespace,
     fields: &[tast::Expr],
-    pos: &ast_defs::Pos,
-) -> Result<TypedValue<'arena>, Error> {
+) -> Result<TypedValue<'local_arena>, Error> {
     let tv_fields = bumpalo::collections::vec::Vec::from_iter_in(
         fields
             .iter()
-            .map(|x| expr_to_typed_value(alloc, emitter, ns, x))
+            .map(|x| expr_to_typed_value(alloc, emitter, x))
             .collect::<Result<Vec<_>, _>>()?
             .into_iter(),
         alloc,
     )
     .into_bump_slice();
-    if hack_arr_dv_arrs(emitter.options()) {
-        Ok(TypedValue::Vec((
-            tv_fields,
-            Some(pos.clone()),
-            hack_arr_dv_arr_mark(emitter.options()),
-        )))
-    } else {
-        Ok(TypedValue::VArray((tv_fields, Some(pos.clone()))))
-    }
+    Ok(TypedValue::Vec(tv_fields))
 }
 
-fn darray_to_typed_value<'arena>(
-    alloc: &'arena bumpalo::Bump,
+fn darray_to_typed_value<'local_arena, 'arena>(
+    alloc: &'local_arena bumpalo::Bump,
     emitter: &Emitter<'arena>,
-    ns: &Namespace,
     fields: &[(tast::Expr, tast::Expr)],
-    pos: &ast_defs::Pos,
-) -> Result<TypedValue<'arena>, Error> {
+) -> Result<TypedValue<'local_arena>, Error> {
     //TODO: Improve. It's a bit silly having to use a std::vector::Vec
     // here.
-    let tv_fields: Vec<(TypedValue<'arena>, TypedValue<'arena>)> = fields
+    let tv_fields: Vec<(TypedValue<'local_arena>, TypedValue<'local_arena>)> = fields
         .iter()
         .map(|(k, v)| {
             Ok((
-                key_expr_to_typed_value(alloc, emitter, ns, k)?,
-                expr_to_typed_value(alloc, emitter, ns, v)?,
+                key_expr_to_typed_value(alloc, emitter, k)?,
+                expr_to_typed_value(alloc, emitter, v)?,
             ))
         })
         .collect::<Result<_, Error>>()?;
     let tv_fields_ = update_duplicates_in_map(tv_fields);
     let fields =
         bumpalo::collections::Vec::from_iter_in(tv_fields_.into_iter(), alloc).into_bump_slice();
-    if hack_arr_dv_arrs(emitter.options()) {
-        Ok(TypedValue::Dict((
-            fields,
-            Some(pos.clone()),
-            hack_arr_dv_arr_mark(emitter.options()),
-        )))
-    } else {
-        Ok(TypedValue::DArray((fields, Some(pos.clone()))))
-    }
+    Ok(TypedValue::Dict(fields))
 }
 
-fn set_afield_to_typed_value_pair<'arena>(
-    alloc: &'arena bumpalo::Bump,
+fn set_afield_to_typed_value_pair<'local_arena, 'arena>(
+    alloc: &'local_arena bumpalo::Bump,
     e: &Emitter<'arena>,
-    ns: &Namespace,
     afield: &tast::Afield,
-) -> Result<(TypedValue<'arena>, TypedValue<'arena>), Error> {
+) -> Result<(TypedValue<'local_arena>, TypedValue<'local_arena>), Error> {
     match afield {
-        tast::Afield::AFvalue(v) => set_afield_value_to_typed_value_pair(alloc, e, ns, v),
+        tast::Afield::AFvalue(v) => set_afield_value_to_typed_value_pair(alloc, e, v),
         _ => Err(Error::unrecoverable(
             "set_afield_to_typed_value_pair: unexpected key=>value",
         )),
     }
 }
 
-fn set_afield_value_to_typed_value_pair<'arena>(
-    alloc: &'arena bumpalo::Bump,
+fn set_afield_value_to_typed_value_pair<'local_arena, 'arena>(
+    alloc: &'local_arena bumpalo::Bump,
     e: &Emitter<'arena>,
-    ns: &Namespace,
     v: &tast::Expr,
-) -> Result<(TypedValue<'arena>, TypedValue<'arena>), Error> {
-    let tv = key_expr_to_typed_value(alloc, e, ns, v)?;
+) -> Result<(TypedValue<'local_arena>, TypedValue<'local_arena>), Error> {
+    let tv = key_expr_to_typed_value(alloc, e, v)?;
     Ok((tv.clone(), tv))
 }
 
-fn afield_to_typed_value_pair<'arena>(
-    alloc: &'arena bumpalo::Bump,
+fn afield_to_typed_value_pair<'local_arena, 'arena>(
+    alloc: &'local_arena bumpalo::Bump,
     emitter: &Emitter<'arena>,
-    ns: &Namespace,
     afield: &tast::Afield,
-) -> Result<(TypedValue<'arena>, TypedValue<'arena>), Error> {
+) -> Result<(TypedValue<'local_arena>, TypedValue<'local_arena>), Error> {
     match afield {
         tast::Afield::AFvalue(_) => Err(Error::unrecoverable(
             "afield_to_typed_value_pair: unexpected value",
         )),
-        tast::Afield::AFkvalue(key, value) => {
-            kv_to_typed_value_pair(alloc, emitter, ns, key, value)
-        }
+        tast::Afield::AFkvalue(key, value) => kv_to_typed_value_pair(alloc, emitter, key, value),
     }
 }
 
-fn kv_to_typed_value_pair<'arena>(
-    alloc: &'arena bumpalo::Bump,
+fn kv_to_typed_value_pair<'local_arena, 'arena>(
+    alloc: &'local_arena bumpalo::Bump,
     emitter: &Emitter<'arena>,
-    ns: &Namespace,
     key: &tast::Expr,
     value: &tast::Expr,
-) -> Result<(TypedValue<'arena>, TypedValue<'arena>), Error> {
+) -> Result<(TypedValue<'local_arena>, TypedValue<'local_arena>), Error> {
     Ok((
-        key_expr_to_typed_value(alloc, emitter, ns, key)?,
-        expr_to_typed_value(alloc, emitter, ns, value)?,
+        key_expr_to_typed_value(alloc, emitter, key)?,
+        expr_to_typed_value(alloc, emitter, value)?,
     ))
 }
 
-fn value_afield_to_typed_value<'arena>(
-    alloc: &'arena bumpalo::Bump,
+fn value_afield_to_typed_value<'local_arena, 'arena>(
+    alloc: &'local_arena bumpalo::Bump,
     emitter: &Emitter<'arena>,
-    ns: &Namespace,
     afield: &tast::Afield,
-) -> Result<TypedValue<'arena>, Error> {
+) -> Result<TypedValue<'local_arena>, Error> {
     match afield {
-        tast::Afield::AFvalue(e) => expr_to_typed_value(alloc, emitter, ns, e),
+        tast::Afield::AFvalue(e) => expr_to_typed_value(alloc, emitter, e),
         tast::Afield::AFkvalue(_, _) => Err(Error::unrecoverable(
             "value_afield_to_typed_value: unexpected key=>value",
         )),
     }
 }
 
-fn key_expr_to_typed_value<'arena>(
-    alloc: &'arena bumpalo::Bump,
+fn key_expr_to_typed_value<'local_arena, 'arena>(
+    alloc: &'local_arena bumpalo::Bump,
     emitter: &Emitter<'arena>,
-    ns: &Namespace,
     expr: &tast::Expr,
-) -> Result<TypedValue<'arena>, Error> {
-    let tv = expr_to_typed_value(alloc, emitter, ns, expr)?;
+) -> Result<TypedValue<'local_arena>, Error> {
+    let tv = expr_to_typed_value(alloc, emitter, expr)?;
     let fold_lc = emitter
         .options()
         .hhvm
@@ -275,13 +238,12 @@ fn key_expr_to_typed_value<'arena>(
     }
 }
 
-fn keyset_value_afield_to_typed_value<'arena>(
-    alloc: &'arena bumpalo::Bump,
+fn keyset_value_afield_to_typed_value<'local_arena, 'arena>(
+    alloc: &'local_arena bumpalo::Bump,
     emitter: &Emitter<'arena>,
-    ns: &Namespace,
     afield: &tast::Afield,
-) -> Result<TypedValue<'arena>, Error> {
-    let tv = value_afield_to_typed_value(alloc, emitter, ns, afield)?;
+) -> Result<TypedValue<'local_arena>, Error> {
+    let tv = value_afield_to_typed_value(alloc, emitter, afield)?;
     let fold_lc = emitter
         .options()
         .hhvm
@@ -294,13 +256,11 @@ fn keyset_value_afield_to_typed_value<'arena>(
     }
 }
 
-fn shape_to_typed_value<'arena>(
-    alloc: &'arena bumpalo::Bump,
+fn shape_to_typed_value<'local_arena, 'arena>(
+    alloc: &'local_arena bumpalo::Bump,
     emitter: &Emitter<'arena>,
-    ns: &Namespace,
     fields: &[(tast::ShapeFieldName, tast::Expr)],
-    pos: &ast_defs::Pos,
-) -> Result<TypedValue<'arena>, Error> {
+) -> Result<TypedValue<'local_arena>, Error> {
     let a = bumpalo::collections::vec::Vec::from_iter_in(
         fields
             .iter()
@@ -338,61 +298,53 @@ fn shape_to_typed_value<'arena>(
                         )?
                     }
                 };
-                Ok((key, expr_to_typed_value(alloc, emitter, ns, expr)?))
+                Ok((key, expr_to_typed_value(alloc, emitter, expr)?))
             })
             .collect::<Result<Vec<(_, _)>, _>>()?
             .into_iter(),
         alloc,
     )
     .into_bump_slice();
-    Ok(TypedValue::DArray((a, Some(pos.clone()))))
+    Ok(TypedValue::Dict(a))
 }
 
-pub fn vec_to_typed_value<'arena>(
-    alloc: &'arena bumpalo::Bump,
+pub fn vec_to_typed_value<'local_arena, 'arena>(
+    alloc: &'local_arena bumpalo::Bump,
     e: &Emitter<'arena>,
-    ns: &Namespace,
-    pos: &Pos,
     fields: &[tast::Afield],
-) -> Result<TypedValue<'arena>, Error> {
+) -> Result<TypedValue<'local_arena>, Error> {
     //TODO: Improve. It's a bit silly having to use a std::vector::Vec
     // here.
-    let tv_fields: Result<Vec<TypedValue<'arena>>, Error> = fields
+    let tv_fields: Result<Vec<TypedValue<'local_arena>>, Error> = fields
         .iter()
-        .map(|f| value_afield_to_typed_value(alloc, e, ns, f))
+        .map(|f| value_afield_to_typed_value(alloc, e, f))
         .collect();
     let fields =
         bumpalo::collections::Vec::from_iter_in(tv_fields?.into_iter(), alloc).into_bump_slice();
-    Ok(TypedValue::Vec((
-        fields,
-        Some(pos.clone()),
-        false, // LegacyFlag
-    )))
+    Ok(TypedValue::Vec(fields))
 }
 
-pub fn expr_to_typed_value<'arena>(
-    alloc: &'arena bumpalo::Bump,
+pub fn expr_to_typed_value<'local_arena, 'arena>(
+    alloc: &'local_arena bumpalo::Bump,
     e: &Emitter<'arena>,
-    ns: &Namespace,
+
     expr: &tast::Expr,
-) -> Result<TypedValue<'arena>, Error> {
+) -> Result<TypedValue<'local_arena>, Error> {
     expr_to_typed_value_(
-        alloc, e, ns, expr, false, /*allow_maps*/
+        alloc, e, expr, false, /*allow_maps*/
         false, /*force_class_const*/
     )
 }
 
-pub fn expr_to_typed_value_<'arena>(
-    alloc: &'arena bumpalo::Bump,
+pub fn expr_to_typed_value_<'local_arena, 'arena>(
+    alloc: &'local_arena bumpalo::Bump,
     emitter: &Emitter<'arena>,
-    ns: &Namespace,
     expr: &tast::Expr,
     allow_maps: bool,
     force_class_const: bool,
-) -> Result<TypedValue<'arena>, Error> {
+) -> Result<TypedValue<'local_arena>, Error> {
     use aast::Expr_::*;
     // TODO: ML equivalent has this as an implicit parameter that defaults to false.
-    let pos = &expr.0;
     match &expr.1 {
         Int(s) => int_expr_to_typed_value(s),
         tast::Expr_::True => Ok(TypedValue::Bool(true)),
@@ -447,18 +399,18 @@ pub fn expr_to_typed_value_<'arena>(
             }
         }
 
-        Varray(fields) => varray_to_typed_value(alloc, emitter, ns, &fields.1, pos),
-        Darray(fields) => darray_to_typed_value(alloc, emitter, ns, &fields.1, pos),
+        Varray(fields) => varray_to_typed_value(alloc, emitter, &fields.1),
+        Darray(fields) => darray_to_typed_value(alloc, emitter, &fields.1),
 
         Id(id) if id.1 == math::NAN => Ok(TypedValue::float(std::f64::NAN)),
         Id(id) if id.1 == math::INF => Ok(TypedValue::float(std::f64::INFINITY)),
         Id(_) => Err(Error::UserDefinedConstant),
 
-        Collection(x) if x.0.name().eq("vec") => vec_to_typed_value(alloc, emitter, ns, pos, &x.2),
+        Collection(x) if x.0.name().eq("vec") => vec_to_typed_value(alloc, emitter, &x.2),
         Collection(x) if x.0.name().eq("keyset") => {
             let keys = bumpalo::collections::Vec::from_iter_in(
                 x.2.iter()
-                    .map(|x| keyset_value_afield_to_typed_value(alloc, emitter, ns, x))
+                    .map(|x| keyset_value_afield_to_typed_value(alloc, emitter, x))
                     .collect::<Result<Vec<_>, _>>()?
                     .into_iter()
                     .unique(),
@@ -476,18 +428,14 @@ pub fn expr_to_typed_value_<'arena>(
             let values = bumpalo::collections::Vec::from_iter_in(
                 update_duplicates_in_map(
                     x.2.iter()
-                        .map(|x| afield_to_typed_value_pair(alloc, emitter, ns, x))
+                        .map(|x| afield_to_typed_value_pair(alloc, emitter, x))
                         .collect::<Result<_, _>>()?,
                 )
                 .into_iter(),
                 alloc,
             )
             .into_bump_slice();
-            Ok(TypedValue::Dict((
-                values,
-                Some(pos.clone()),
-                false, // LegacyFlag
-            )))
+            Ok(TypedValue::Dict(values))
         }
         Collection(x)
             if allow_maps
@@ -497,37 +445,29 @@ pub fn expr_to_typed_value_<'arena>(
             let values = bumpalo::collections::Vec::from_iter_in(
                 update_duplicates_in_map(
                     x.2.iter()
-                        .map(|x| set_afield_to_typed_value_pair(alloc, emitter, ns, x))
+                        .map(|x| set_afield_to_typed_value_pair(alloc, emitter, x))
                         .collect::<Result<_, _>>()?,
                 )
                 .into_iter(),
                 alloc,
             )
             .into_bump_slice();
-            Ok(TypedValue::Dict((
-                values,
-                Some(pos.clone()),
-                false, // LegacyFlag
-            )))
+            Ok(TypedValue::Dict(values))
         }
         ValCollection(x) if x.0 == tast::VcKind::Vec || x.0 == tast::VcKind::Vector => {
             let v: Vec<_> =
                 x.2.iter()
-                    .map(|e| expr_to_typed_value(alloc, emitter, ns, e))
+                    .map(|e| expr_to_typed_value(alloc, emitter, e))
                     .collect::<Result<_, _>>()?;
             let values =
                 bumpalo::collections::Vec::from_iter_in(v.into_iter(), alloc).into_bump_slice();
-            Ok(TypedValue::Vec((
-                values,
-                Some(pos.clone()),
-                false, // LegacyFlag
-            )))
+            Ok(TypedValue::Vec(values))
         }
         ValCollection(x) if x.0 == tast::VcKind::Keyset => {
             let keys = bumpalo::collections::Vec::from_iter_in(
                 x.2.iter()
                     .map(|e| {
-                        expr_to_typed_value(alloc, emitter, ns, e).and_then(|tv| match tv {
+                        expr_to_typed_value(alloc, emitter, e).and_then(|tv| match tv {
                             TypedValue::Int(_) | TypedValue::String(_) => Ok(tv),
                             TypedValue::LazyClass(_)
                                 if emitter
@@ -553,37 +493,29 @@ pub fn expr_to_typed_value_<'arena>(
             let values = bumpalo::collections::vec::Vec::from_iter_in(
                 update_duplicates_in_map(
                     x.2.iter()
-                        .map(|e| set_afield_value_to_typed_value_pair(alloc, emitter, ns, e))
+                        .map(|e| set_afield_value_to_typed_value_pair(alloc, emitter, e))
                         .collect::<Result<Vec<_>, _>>()?,
                 )
                 .into_iter(),
                 alloc,
             )
             .into_bump_slice();
-            Ok(TypedValue::Dict((
-                values,
-                Some(pos.clone()),
-                false, // LegacyFlag
-            )))
+            Ok(TypedValue::Dict(values))
         }
         KeyValCollection(x) => {
             let values = bumpalo::collections::vec::Vec::from_iter_in(
                 update_duplicates_in_map(
                     x.2.iter()
-                        .map(|e| kv_to_typed_value_pair(alloc, emitter, ns, &e.0, &e.1))
+                        .map(|e| kv_to_typed_value_pair(alloc, emitter, &e.0, &e.1))
                         .collect::<Result<Vec<_>, _>>()?,
                 )
                 .into_iter(),
                 alloc,
             )
             .into_bump_slice();
-            Ok(TypedValue::Dict((
-                values,
-                Some(pos.clone()),
-                false, // LegacyFlag
-            )))
+            Ok(TypedValue::Dict(values))
         }
-        Shape(fields) => shape_to_typed_value(alloc, emitter, ns, fields, pos),
+        Shape(fields) => shape_to_typed_value(alloc, emitter, fields),
         ClassConst(x) => {
             if emitter.options().emit_class_pointers() == 1 && !force_class_const {
                 Err(Error::NotLiteral)
@@ -593,32 +525,32 @@ pub fn expr_to_typed_value_<'arena>(
         }
         ClassGet(_) => Err(Error::UserDefinedConstant),
         As(x) if (x.1).1.is_hlike() => {
-            expr_to_typed_value_(alloc, emitter, ns, &x.0, allow_maps, false)
+            expr_to_typed_value_(alloc, emitter, &x.0, allow_maps, false)
         }
         _ => Err(Error::NotLiteral),
     }
 }
 
-fn int_expr_to_typed_value<'arena>(s: &str) -> Result<TypedValue<'arena>, Error> {
+fn int_expr_to_typed_value<'local_arena>(s: &str) -> Result<TypedValue<'local_arena>, Error> {
     Ok(TypedValue::Int(
         try_type_intlike(&s).unwrap_or(std::i64::MAX),
     ))
 }
 
-fn update_duplicates_in_map<'arena>(
-    kvs: Vec<(TypedValue<'arena>, TypedValue<'arena>)>,
-) -> Vec<(TypedValue<'arena>, TypedValue<'arena>)> {
+fn update_duplicates_in_map<'local_arena>(
+    kvs: Vec<(TypedValue<'local_arena>, TypedValue<'local_arena>)>,
+) -> Vec<(TypedValue<'local_arena>, TypedValue<'local_arena>)> {
     kvs.into_iter()
         .collect::<IndexMap<_, _, RandomState>>()
         .into_iter()
         .collect()
 }
 
-fn cast_value<'arena>(
-    alloc: &'arena bumpalo::Bump,
+fn cast_value<'local_arena>(
+    alloc: &'local_arena bumpalo::Bump,
     hint: &tast::Hint_,
-    v: TypedValue<'arena>,
-) -> Result<TypedValue<'arena>, Error> {
+    v: TypedValue<'local_arena>,
+) -> Result<TypedValue<'local_arena>, Error> {
     match hint {
         tast::Hint_::Happly(ast_defs::Id(_, id), args) if args.is_empty() => {
             let id = string_utils::strip_hh_ns(id);
@@ -637,11 +569,11 @@ fn cast_value<'arena>(
     .ok_or(Error::NotLiteral)
 }
 
-fn unop_on_value<'arena>(
-    alloc: &'arena bumpalo::Bump,
+fn unop_on_value<'local_arena>(
+    alloc: &'local_arena bumpalo::Bump,
     unop: &ast_defs::Uop,
-    v: TypedValue<'arena>,
-) -> Result<TypedValue<'arena>, Error> {
+    v: TypedValue<'local_arena>,
+) -> Result<TypedValue<'local_arena>, Error> {
     match unop {
         ast_defs::Uop::Unot => v.not(),
         ast_defs::Uop::Uplus => v.add(&TypedValue::Int(0)),
@@ -653,12 +585,12 @@ fn unop_on_value<'arena>(
     .ok_or(Error::NotLiteral)
 }
 
-fn binop_on_values<'arena>(
-    alloc: &'arena bumpalo::Bump,
+fn binop_on_values<'local_arena>(
+    alloc: &'local_arena bumpalo::Bump,
     binop: &ast_defs::Bop,
-    v1: TypedValue<'arena>,
-    v2: TypedValue<'arena>,
-) -> Result<TypedValue<'arena>, Error> {
+    v1: TypedValue<'local_arena>,
+    v2: TypedValue<'local_arena>,
+) -> Result<TypedValue<'local_arena>, Error> {
     use ast_defs::Bop::*;
     match binop {
         Dot => v1.concat(alloc, v2),
@@ -674,7 +606,7 @@ fn binop_on_values<'arena>(
 }
 
 #[allow(clippy::needless_lifetimes)]
-fn value_to_expr_<'arena>(v: TypedValue<'arena>) -> Result<tast::Expr_, Error> {
+fn value_to_expr_<'local_arena>(v: TypedValue<'local_arena>) -> Result<tast::Expr_, Error> {
     use tast::*;
     use TypedValue::*;
     Ok(match v {
@@ -689,50 +621,22 @@ fn value_to_expr_<'arena>(v: TypedValue<'arena>) -> Result<tast::Expr_, Error> {
         Vec(_) => return Err(Error::unrecoverable("value_to_expr: vec NYI")),
         Keyset(_) => return Err(Error::unrecoverable("value_to_expr: keyset NYI")),
         HhasAdata(_) => return Err(Error::unrecoverable("value_to_expr: HhasAdata NYI")),
-        VArray((values, _)) => Expr_::mk_varray(
-            None,
-            values
-                .iter()
-                .map(|v| value_to_expr(v.clone()))
-                .collect::<Result<std::vec::Vec<_>, Error>>()?,
-        ),
-        DArray((pairs, _)) => Expr_::mk_darray(
-            None,
-            pairs
-                .iter()
-                .map(|(v1, v2)| Ok((value_to_expr(v1.clone())?, value_to_expr(v2.clone())?)))
-                .collect::<Result<std::vec::Vec<_>, Error>>()?,
-        ),
         Dict(_) => return Err(Error::unrecoverable("value_to_expr: dict NYI")),
     })
 }
 
-#[allow(clippy::needless_lifetimes)]
-fn value_to_expr<'arena>(v: TypedValue<'arena>) -> Result<tast::Expr, Error> {
-    Ok(tast::Expr(Pos::make_none(), value_to_expr_(v)?))
-}
-
-struct FolderVisitor<'a, 'arena> {
-    alloc: &'arena bumpalo::Bump,
+struct FolderVisitor<'a, 'local_arena, 'arena> {
+    alloc: &'local_arena bumpalo::Bump,
     emitter: &'a Emitter<'arena>,
-    empty_namespace: &'a Namespace,
 }
 
-impl<'a, 'arena> FolderVisitor<'a, 'arena> {
-    fn new(
-        alloc: &'arena bumpalo::Bump,
-        emitter: &'a Emitter<'arena>,
-        empty_namespace: &'a Namespace,
-    ) -> Self {
-        Self {
-            alloc,
-            emitter,
-            empty_namespace,
-        }
+impl<'a, 'local_arena, 'arena> FolderVisitor<'a, 'local_arena, 'arena> {
+    fn new(alloc: &'local_arena bumpalo::Bump, emitter: &'a Emitter<'arena>) -> Self {
+        Self { alloc, emitter }
     }
 }
 
-impl<'ast> VisitorMut<'ast> for FolderVisitor<'_, '_> {
+impl<'ast> VisitorMut<'ast> for FolderVisitor<'_, '_, '_> {
     type P = AstParams<(), Error>;
 
     fn object(&mut self) -> &mut dyn VisitorMut<'ast, P = Self::P> {
@@ -742,28 +646,21 @@ impl<'ast> VisitorMut<'ast> for FolderVisitor<'_, '_> {
     fn visit_expr_(&mut self, c: &mut (), p: &mut tast::Expr_) -> Result<(), Error> {
         p.recurse(c, self.object())?;
         let new_p = match p {
-            tast::Expr_::Cast(e) => {
-                expr_to_typed_value(self.alloc, self.emitter, self.empty_namespace, &e.1)
-                    .and_then(|v| cast_value(self.alloc, &(e.0).1, v))
-                    .map(value_to_expr_)
-                    .ok()
-            }
-            tast::Expr_::Unop(e) => {
-                expr_to_typed_value(self.alloc, self.emitter, self.empty_namespace, &e.1)
-                    .and_then(|v| unop_on_value(self.alloc, &e.0, v))
-                    .map(value_to_expr_)
-                    .ok()
-            }
-            tast::Expr_::Binop(e) => {
-                expr_to_typed_value(self.alloc, self.emitter, self.empty_namespace, &e.1)
-                    .and_then(|v1| {
-                        expr_to_typed_value(self.alloc, self.emitter, self.empty_namespace, &e.2)
-                            .and_then(|v2| {
-                                binop_on_values(self.alloc, &e.0, v1, v2).map(value_to_expr_)
-                            })
+            tast::Expr_::Cast(e) => expr_to_typed_value(self.alloc, self.emitter, &e.1)
+                .and_then(|v| cast_value(self.alloc, &(e.0).1, v))
+                .map(value_to_expr_)
+                .ok(),
+            tast::Expr_::Unop(e) => expr_to_typed_value(self.alloc, self.emitter, &e.1)
+                .and_then(|v| unop_on_value(self.alloc, &e.0, v))
+                .map(value_to_expr_)
+                .ok(),
+            tast::Expr_::Binop(e) => expr_to_typed_value(self.alloc, self.emitter, &e.1)
+                .and_then(|v1| {
+                    expr_to_typed_value(self.alloc, self.emitter, &e.2).and_then(|v2| {
+                        binop_on_values(self.alloc, &e.0, v1, v2).map(value_to_expr_)
                     })
-                    .ok()
-            }
+                })
+                .ok(),
             _ => None,
         };
         if let Some(new_p) = new_p {
@@ -773,44 +670,33 @@ impl<'ast> VisitorMut<'ast> for FolderVisitor<'_, '_> {
     }
 }
 
-pub fn fold_expr<'arena>(
+pub fn fold_expr<'local_arena, 'arena>(
     expr: &mut tast::Expr,
-    alloc: &'arena bumpalo::Bump,
+    alloc: &'local_arena bumpalo::Bump,
     e: &mut Emitter<'arena>,
-    empty_namespace: &Namespace,
 ) -> Result<(), Error> {
-    visit_mut(
-        &mut FolderVisitor::new(alloc, e, empty_namespace),
-        &mut (),
-        expr,
-    )
+    visit_mut(&mut FolderVisitor::new(alloc, e), &mut (), expr)
 }
 
-pub fn fold_program<'arena>(
+pub fn fold_program<'local_arena, 'arena>(
     p: &mut tast::Program,
-    alloc: &'arena bumpalo::Bump,
+    alloc: &'local_arena bumpalo::Bump,
     e: &mut Emitter<'arena>,
-    empty_namespace: &Namespace,
 ) -> Result<(), Error> {
-    visit_mut(
-        &mut FolderVisitor::new(alloc, e, empty_namespace),
-        &mut (),
-        p,
-    )
+    visit_mut(&mut FolderVisitor::new(alloc, e), &mut (), p)
 }
 
-pub fn literals_from_exprs<'arena>(
-    ns: &Namespace,
+pub fn literals_from_exprs<'local_arena, 'arena>(
     exprs: &mut [tast::Expr],
-    alloc: &'arena bumpalo::Bump,
+    alloc: &'local_arena bumpalo::Bump,
     e: &mut Emitter<'arena>,
-) -> Result<Vec<TypedValue<'arena>>, Error> {
+) -> Result<Vec<TypedValue<'local_arena>>, Error> {
     for expr in exprs.iter_mut() {
-        fold_expr(expr, alloc, e, ns)?;
+        fold_expr(expr, alloc, e)?;
     }
     let ret = exprs
         .iter()
-        .map(|expr| expr_to_typed_value_(alloc, e, ns, expr, false, true))
+        .map(|expr| expr_to_typed_value_(alloc, e, expr, false, true))
         .collect();
     if let Err(Error::NotLiteral) = ret {
         Err(Error::unrecoverable("literals_from_exprs: not literal"))

@@ -177,98 +177,81 @@ fn type_info_from_class_body(
     type_facts: &mut TypeFacts,
     namespaced_xhp: bool,
 ) {
-    let aux = |mut constants: Vec<String>, node| {
-        if let RequireExtendsClause(name) = node {
-            if check_require {
-                if let Some(name) = qualified_name(namespace, *name, namespaced_xhp) {
-                    type_facts.require_extends.insert(name);
+    if let List(nodes) = body {
+        for node in nodes {
+            if let RequireExtendsClause(name) = node {
+                if check_require {
+                    if let Some(name) = qualified_name(namespace, *name, namespaced_xhp) {
+                        type_facts.require_extends.insert(name);
+                    }
                 }
-            }
-        } else if let RequireImplementsClause(name) = node {
-            if check_require {
-                if let Some(name) = qualified_name(namespace, *name, namespaced_xhp) {
-                    type_facts.require_implements.insert(name);
+            } else if let RequireImplementsClause(name) = node {
+                if check_require {
+                    if let Some(name) = qualified_name(namespace, *name, namespaced_xhp) {
+                        type_facts.require_implements.insert(name);
+                    }
                 }
-            }
-        } else if let TraitUseClause(uses) = node {
-            typenames_from_list(*uses, namespace, &mut type_facts.base_types, namespaced_xhp);
-        } else if let MethodDecl(body) = node {
-            if namespace.is_empty() {
-                // in methods we collect only defines
-                constants = defines_from_method_body(constants, *body);
+            } else if let TraitUseClause(uses) = node {
+                typenames_from_list(*uses, namespace, &mut type_facts.base_types, namespaced_xhp);
+            } else if let MethodDecl(attrs, header, body) = node {
+                facts.constants =
+                    defines_from_method_body(std::mem::take(&mut facts.constants), *body);
+                // Add this method to the parser output iff it's decorated with attributes
+                let attributes = attributes_into_facts(namespace, *attrs);
+                if !attributes.is_empty() {
+                    if let FunctionDecl(name) = *header {
+                        if let Some(method_name) = qualified_name(namespace, *name, namespaced_xhp)
+                        {
+                            type_facts
+                                .methods
+                                .insert(method_name, MethodFacts { attributes });
+                        }
+                    }
+                }
             }
         }
-        constants
-    };
-    if let List(nodes) = body {
-        let facts_constants = std::mem::replace(&mut facts.constants, vec![]);
-        facts.constants = nodes.into_iter().fold(facts_constants, aux);
     }
     type_facts.attributes = attributes_into_facts(namespace, attributes);
 }
 
-fn attributes_into_facts(namespace: &str, attributes: Node) -> Attributes {
-    match attributes {
-        Node::List(nodes) => nodes
-            .into_iter()
-            .fold(Attributes::new(), |mut attributes, node| match node {
-                Node::ListItem(item) => {
-                    let attribute_values_aux = |attribute_node| match attribute_node {
-                        Node::Name(name) => {
-                            let mut attribute_values = Vec::new();
-                            attribute_values.push(name.to_string());
-                            attribute_values
-                        }
-                        Node::String(name) => {
-                            let mut attribute_values = Vec::new();
-                            attribute_values.push(name.to_unescaped_string());
-                            attribute_values
-                        }
-                        Node::List(nodes) => {
-                            nodes
-                                .into_iter()
-                                .fold(Vec::new(), |mut attribute_values, node| match node {
-                                    Node::Name(name) => {
-                                        attribute_values.push(name.to_string());
-                                        attribute_values
-                                    }
+fn attributes_into_facts(namespace: &str, attributes_node: Node) -> Attributes {
+    let mut attributes = Attributes::new();
+    if let Node::List(nodes) = attributes_node {
+        for node in nodes {
+            if let Node::ListItem(item) = node {
+                let (name_node, values_node) = *item;
+                if let Some(name) = qualified_name(namespace, name_node, false) {
+                    attributes.insert(
+                        name,
+                        if let Node::List(nodes) = values_node {
+                            let mut attribute_values = vec![];
+                            for node in nodes {
+                                match node {
                                     Node::String(name) => {
-                                        // TODO(T47593892) fold constant
                                         attribute_values.push(name.to_unescaped_string());
-                                        attribute_values
                                     }
                                     Node::ScopeResolutionExpression(expr) => {
-                                        if let (Node::Name(name), Node::Class) = *expr {
-                                            attribute_values.push(if namespace.is_empty() {
-                                                name.to_string()
-                                            } else {
-                                                namespace.to_owned() + "\\" + &name.to_string()
-                                            });
+                                        if let (name_node, Node::Class) = *expr {
+                                            if let Some(name) =
+                                                qualified_name(namespace, name_node, false)
+                                            {
+                                                attribute_values.push(name);
+                                            }
                                         }
-                                        attribute_values
                                     }
-                                    _ => attribute_values,
-                                })
-                        }
-                        _ => Vec::new(),
-                    };
-                    match &(item.0) {
-                        Node::Name(name) => {
-                            attributes.insert(name.to_string(), attribute_values_aux(item.1));
-                            attributes
-                        }
-                        Node::String(name) => {
-                            attributes
-                                .insert(name.to_unescaped_string(), attribute_values_aux(item.1));
-                            attributes
-                        }
-                        _ => attributes,
-                    }
+                                    _ => {}
+                                }
+                            }
+                            attribute_values
+                        } else {
+                            vec![]
+                        },
+                    );
                 }
-                _ => attributes,
-            }),
-        _ => Attributes::new(),
+            }
+        }
     }
+    attributes
 }
 
 fn class_decl_into_facts(
@@ -295,6 +278,7 @@ fn class_decl_into_facts(
             base_types: StringSet::new(),
             require_extends: StringSet::new(),
             require_implements: StringSet::new(),
+            methods: Methods::new(),
         };
         type_info_from_class_body(
             namespace,
@@ -371,6 +355,7 @@ fn collect(mut acc: CollectAcc, node: Node) -> CollectAcc {
                     base_types: StringSet::new(),
                     require_extends: StringSet::new(),
                     require_implements: StringSet::new(),
+                    methods: Methods::new(),
                 };
                 use_clauses_into_facts(decl.use_clauses, &mut enum_facts, &acc.0, acc.2);
                 enum_facts.base_types.insert("HH\\BuiltinEnum".into());
@@ -387,6 +372,7 @@ fn collect(mut acc: CollectAcc, node: Node) -> CollectAcc {
                     base_types: StringSet::new(),
                     require_extends: StringSet::new(),
                     require_implements: StringSet::new(),
+                    methods: Methods::new(),
                 };
                 typenames_from_list(
                     decl.extends,
@@ -420,6 +406,7 @@ fn collect(mut acc: CollectAcc, node: Node) -> CollectAcc {
                     base_types: StringSet::new(),
                     require_extends: StringSet::new(),
                     require_implements: StringSet::new(),
+                    methods: Methods::new(),
                 };
                 add_or_update_classish_decl(name.clone(), type_alias_facts, &mut acc.1.types);
                 acc.1.type_aliases.push(name);

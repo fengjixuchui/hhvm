@@ -21,6 +21,7 @@
 #include "hphp/runtime/base/resource-data.h"
 #include "hphp/runtime/base/runtime-error.h"
 #include "hphp/runtime/base/string-data.h"
+#include "hphp/runtime/base/tv-conv-notice.h"
 #include "hphp/runtime/base/tv-mutate.h"
 #include "hphp/runtime/base/tv-type.h"
 #include "hphp/runtime/base/typed-value.h"
@@ -47,10 +48,6 @@ inline bool tvToBool(TypedValue cell) {
     case KindOfDouble:        return cell.m_data.dbl != 0;
     case KindOfPersistentString:
     case KindOfString:        return cell.m_data.pstr->toBoolean();
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
     case KindOfPersistentVec:
     case KindOfVec:
     case KindOfPersistentDict:
@@ -71,7 +68,10 @@ inline bool tvToBool(TypedValue cell) {
 }
 
 inline int64_t tvToInt(
-  TypedValue cell, ConvNoticeLevel level, const StringData* notice_reason) {
+  TypedValue cell,
+  ConvNoticeLevel level,
+  const StringData* notice_reason,
+  bool notice_within_num) {
   assertx(tvIsPlausible(cell));
 
   switch (cell.m_type) {
@@ -84,20 +84,16 @@ inline int64_t tvToInt(
       return cell.m_data.num;
     case KindOfInt64:         return cell.m_data.num;
     case KindOfDouble:
-      handleConvNoticeLevel(level, "double", "int", notice_reason);
+      if (notice_within_num) handleConvNoticeLevel(level, "double", "int", notice_reason);
       return double_to_int64(cell.m_data.dbl);
     case KindOfPersistentString:
     case KindOfString:
       handleConvNoticeLevel(level, "string", "int", notice_reason);
       return cell.m_data.pstr->toInt64(10);
-    case KindOfPersistentDArray:
-    case KindOfDArray:
     case KindOfPersistentDict:
     case KindOfDict:
       handleConvNoticeLevel(level, "darray/dict", "int", notice_reason);
       return cell.m_data.parr->empty() ? 0 : 1;
-    case KindOfPersistentVArray:
-    case KindOfVArray:
     case KindOfPersistentVec:
     case KindOfVec:
       handleConvNoticeLevel(level, "varray/vec", "int", notice_reason);
@@ -131,6 +127,10 @@ inline int64_t tvToInt(
   not_reached();
 }
 
+
+inline int64_t tvToInt(TypedValue cell) {
+  return tvToInt(cell, ConvNoticeLevel::None, nullptr, true);
+}
 ///////////////////////////////////////////////////////////////////////////////
 
 template <IntishCast IC>
@@ -139,7 +139,7 @@ inline TypedValue tvToKey(TypedValue cell, const ArrayData* ad) {
 
   if (isStringType(cell.m_type)) {
     int64_t n;
-    if (IC == IntishCast::Cast && ad->intishCastKey(cell.m_data.pstr, n)) {
+    if (IC == IntishCast::Cast && ArrayData::IntishCastKey(cell.m_data.pstr, n)) {
       return make_tv<KindOfInt64>(n);
     }
     return cell;
@@ -152,13 +152,23 @@ inline TypedValue tvToKey(TypedValue cell, const ArrayData* ad) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-inline TypedNum stringToNumeric(const StringData* sd) {
-  int64_t ival;
+inline TypedNum stringToNumeric(
+  const StringData* sd,
+    ConvNoticeLevel level,
+    const StringData* notice_reason) {
+    int64_t ival;
   double dval;
   auto const dt = sd->isNumericWithVal(ival, dval, true /* allow_errors */);
+  handleConvNoticeLevel(
+    level, "string", dt == KindOfDouble ? "double" : "int", notice_reason);
   return dt == KindOfInt64 ? make_tv<KindOfInt64>(ival) :
          dt == KindOfDouble ? make_tv<KindOfDouble>(dval) :
          make_tv<KindOfInt64>(0);
+}
+
+
+inline TypedNum stringToNumeric(const StringData* sd) {
+  return stringToNumeric(sd, ConvNoticeLevel::None, nullptr);
 }
 
 inline TypedValue tvClassToString(TypedValue key) {

@@ -180,11 +180,8 @@ public:
    * If withApcTypedValue is true, space for an APCTypedValue will be
    * allocated in front of the returned pointer.
    */
-  static ArrayData* MakeUncounted(ArrayData* array,
-                                  bool withApcTypedValue = false,
-                                  DataWalker::PointerMap* m = nullptr);
-  static ArrayData* MakeUncounted(ArrayData* array, int) = delete;
-  static ArrayData* MakeUncounted(ArrayData* array, size_t) = delete;
+  static ArrayData* MakeUncounted(
+      ArrayData* array, DataWalker::PointerMap* seen, bool hasApcTv);
 
   static void Release(ArrayData*);
   static void ReleaseUncounted(ArrayData*);
@@ -230,10 +227,8 @@ private:
 public:
   const TypedValue* tvOfPos(uint32_t) const;
 
-  template <class F, bool inc = true>
+  template <class F>
   static void Iterate(const SetArray* a, F fn) {
-    if (inc) a->incRefCount();
-    SCOPE_EXIT { if (inc) decRefArr(const_cast<SetArray*>(a)); };
     auto const* elm = a->data();
     for (auto i = a->m_used; i--; elm++) {
       if (LIKELY(!elm->isTombstone())) {
@@ -403,8 +398,6 @@ public:
   static ArrayData* CopyStatic(const ArrayData*);
   static ArrayData* AppendMove(ArrayData*, TypedValue);
   static ArrayData* Pop(ArrayData*, Variant&);
-  static ArrayData* ToDVArray(ArrayData*, bool copy);
-  static ArrayData* ToHackArr(ArrayData*, bool copy);
   static void OnSetEvalScalar(ArrayData*);
   static bool Equal(const ArrayData*, const ArrayData*);
   static bool NotEqual(const ArrayData*, const ArrayData*);

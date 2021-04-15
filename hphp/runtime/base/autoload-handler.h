@@ -36,8 +36,6 @@ namespace HPHP {
 
 bool is_valid_class_name(folly::StringPiece className);
 
-struct AutoloadMapFactory;
-
 struct AutoloadHandler final : RequestEventHandler {
 
   AutoloadHandler() = default;
@@ -183,10 +181,10 @@ struct FactsFactory {
   virtual ~FactsFactory() = default;
 
   /**
-   * Return a Facts corresponding to the given root. If one doesn't exist yet,
-   * create it.
+   * Return a Facts corresponding to the given options. If one doesn't exist
+   * yet, create it.
    */
-  virtual FactsStore* getForRoot(const folly::fs::path& root) = 0;
+  virtual FactsStore* getForOptions(const RepoOptions& options) = 0;
 };
 
 }

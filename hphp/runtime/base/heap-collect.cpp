@@ -62,8 +62,7 @@ constexpr auto MaxMark = GCBits(3);
  * Eval.EnableGC - Default value of the per-request MemoryManager::m_gc_enabled
  * flag. This flag can be dynamically set/cleared by PHP via
  * ini_set("zend.enable_gc"). In turn, m_gc_enabled enables automatic background
- * garbage collection. Regardless of its value, PHP can call gc_collect_cycles()
- * for manual gc.
+ * garbage collection. If not enabled, gc_collect_cycles() won't run.
  *
  * Eval.EagerGC - If set, trigger collection after every allocation, in debug
  * builds. Has no effect in opt builds or when m_gc_enabled == false.
@@ -151,18 +150,14 @@ DEBUG_ONLY bool checkEnqueuedKind(const HeapObject* h) {
     case HeaderKind::Resource:
     case HeaderKind::ClsMeth:
     case HeaderKind::RClsMeth:
-    case HeaderKind::Packed:
-    case HeaderKind::Mixed:
-    case HeaderKind::Dict:
-    case HeaderKind::Vec:
-    case HeaderKind::Keyset:
     case HeaderKind::Cpp:
     case HeaderKind::SmallMalloc:
     case HeaderKind::BigMalloc:
     case HeaderKind::String:
     case HeaderKind::Record:
-    case HeaderKind::BespokeVArray:
-    case HeaderKind::BespokeDArray:
+    case HeaderKind::Vec:
+    case HeaderKind::Dict:
+    case HeaderKind::Keyset:
     case HeaderKind::BespokeVec:
     case HeaderKind::BespokeDict:
     case HeaderKind::BespokeKeyset:
@@ -707,6 +702,7 @@ void MemoryManager::updateNextGc() {
 }
 
 void MemoryManager::collect(const char* phase) {
+  if (!isGCEnabled()) return;
   if (empty()) return;
   rl_gcdata->t_req_age = cpu_ns()/1000 - m_req_start_micros;
   rl_gcdata->t_trigger = m_nextGC;

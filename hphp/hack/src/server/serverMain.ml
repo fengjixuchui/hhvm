@@ -145,7 +145,7 @@ module Program = struct
 end
 
 let finalize_init init_env typecheck_telemetry init_telemetry =
-  ServerProgress.send_to_monitor (MonitorRpc.PROGRESS_WARNING None);
+  ServerProgress.send_progress_warning_to_monitor None;
   (* rest is just logging/telemetry *)
   let t' = Unix.gettimeofday () in
   let heap_size = SharedMem.heap_size () in
@@ -711,15 +711,15 @@ let serve_one_iteration genv env client_provider =
    * And if the selected_client was a request, then once we discover the nature
    * of that request then ServerCommand.handle will send its own status updates too.
    *)
-  ServerProgress.send_to_monitor
-    (MonitorRpc.PROGRESS
-       (match selected_client with
-       | ClientProvider.Select_nothing ->
-         if env.ide_idle then
-           "ready"
-         else
-           "HackIDE:active"
-       | _ -> "working"));
+  ServerProgress.send_progress_to_monitor_w_timeout
+    "%s"
+    (match selected_client with
+    | ClientProvider.Select_nothing ->
+      if env.ide_idle then
+        "ready"
+      else
+        "HackIDE:active"
+    | _ -> "working");
   let env =
     match selected_client with
     | ClientProvider.Select_nothing ->
@@ -1329,32 +1329,14 @@ let setup_server ~informant_managed ~monitor_pid options config local_config =
    * overhead *)
   let gc_control = Caml.Gc.get () in
   Caml.Gc.set { gc_control with Caml.Gc.max_overhead = 200 };
-  let {
-    ServerLocalConfig.cpu_priority;
-    io_priority;
-    enable_on_nfs;
-    search_chunk_size;
-    max_bucket_size;
-    use_full_fidelity_parser;
-    interrupt_on_watchman;
-    interrupt_on_client;
-    predeclare_ide;
-    max_typechecker_worker_memory_mb;
-    _;
-  } =
+  let { ServerLocalConfig.cpu_priority; io_priority; enable_on_nfs; _ } =
     local_config
   in
   let hhconfig_version =
     config |> ServerConfig.version |> Config_file.version_to_string_opt
   in
   List.iter (ServerConfig.ignored_paths config) ~f:FilesToIgnore.ignore_path;
-  let prechecked_files =
-    ServerPrecheckedFiles.should_use options local_config
-  in
   let logging_init init_id ~is_worker =
-    let max_times_to_defer =
-      local_config.ServerLocalConfig.max_times_to_defer_type_checking
-    in
     let profile_owner = local_config.ServerLocalConfig.profile_owner in
     let profile_desc = local_config.ServerLocalConfig.profile_desc in
     Hh_logger.Level.set_min_level local_config.ServerLocalConfig.min_log_level;
@@ -1368,10 +1350,10 @@ let setup_server ~informant_managed ~monitor_pid options config local_config =
         ~hhconfig_version
         ~init_id
         ~custom_columns:(ServerArgs.custom_telemetry_data options)
+        ~rollout_flags:(ServerLocalConfig.to_rollout_flags local_config)
         ~time:(Unix.gettimeofday ())
         ~profile_owner
         ~profile_desc
-        ~max_times_to_defer
     else
       HackEventLogger.init
         ~root
@@ -1379,19 +1361,11 @@ let setup_server ~informant_managed ~monitor_pid options config local_config =
         ~init_id
         ~custom_columns:(ServerArgs.custom_telemetry_data options)
         ~informant_managed
+        ~rollout_flags:(ServerLocalConfig.to_rollout_flags local_config)
         ~time:(Unix.gettimeofday ())
-        ~search_chunk_size
         ~max_workers:num_workers
-        ~max_bucket_size
-        ~use_full_fidelity_parser
-        ~interrupt_on_watchman
-        ~interrupt_on_client
-        ~prechecked_files
-        ~predeclare_ide
-        ~max_typechecker_worker_memory_mb
         ~profile_owner
         ~profile_desc
-        ~max_times_to_defer
   in
   logging_init init_id ~is_worker:false;
   HackEventLogger.init_start
@@ -1450,7 +1424,7 @@ let setup_server ~informant_managed ~monitor_pid options config local_config =
   let workers =
     let gc_control = ServerConfig.gc_control config in
     ServerWorker.make
-      ~use_worker_clones:local_config.ServerLocalConfig.use_worker_clones
+      ~longlived_workers:local_config.ServerLocalConfig.longlived_workers
       ~nbr_procs:num_workers
       gc_control
       handle
@@ -1504,8 +1478,17 @@ let run_once options config local_config =
         Some save_result
   in
   (* Finish up by generating the output and the exit code *)
-  Hh_logger.log "Running in check mode";
-  Program.run_once_and_exit genv env save_state_results
+  match ServerArgs.concatenate_prefix genv.options with
+  | Some prefix ->
+    let prefix =
+      Relative_path.from_root ~suffix:prefix |> Relative_path.to_absolute
+    in
+    let text = ServerConcatenateAll.go genv env [prefix] in
+    print_endline text;
+    Exit.exit Exit_status.No_error
+  | _ ->
+    Hh_logger.log "Running in check mode";
+    Program.run_once_and_exit genv env save_state_results
 
 (*
  * The server monitor will pass client connections to this process

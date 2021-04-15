@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<b7ac05f028cd12d12c5150985d3066ff>>
+// @generated SignedSource<<2c61962a3037f3e2b93584705f2bb1ac>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -70,6 +70,7 @@ impl<'a> TrivialDrop for ClassConstFrom<'a> {}
 /// like D::A, or self references using self::A.
 #[derive(
     Clone,
+    Copy,
     Debug,
     Eq,
     FromOcamlRepIn,
@@ -170,7 +171,7 @@ pub struct ClassConst<'a> {
     /// identifies the class from which this const originates
     pub origin: &'a str,
     /// references to the constants used in the initializer
-    pub refs: &'a [&'a ClassConstRef<'a>],
+    pub refs: &'a [ClassConstRef<'a>],
 }
 impl<'a> TrivialDrop for ClassConst<'a> {}
 
@@ -341,8 +342,27 @@ pub struct TypeconstType<'a> {
     pub synthesized: bool,
     pub name: PosId<'a>,
     pub as_constraint: Option<&'a Ty<'a>>,
+    pub super_constraint: Option<&'a Ty<'a>>,
     pub type_: Option<&'a Ty<'a>>,
     pub origin: &'a str,
+    /// If the typeconst had the <<__Enforceable>> attribute on its
+    /// declaration, this will be [(position_of_declaration, true)].
+    ///
+    /// In legacy decl, the second element of the tuple will also be true if
+    /// the typeconst overrides some parent typeconst which had the
+    /// <<__Enforceable>> attribute. In that case, the position will point to
+    /// the declaration of the parent typeconst.
+    ///
+    /// In shallow decl, this is not the case--there is no overriding behavior
+    /// modeled here, and the second element will only be true when the
+    /// declaration of this typeconst had the attribute.
+    ///
+    /// When the second element of the tuple is false, the position will be
+    /// [Pos_or_decl.none].
+    ///
+    /// To manage the difference between legacy and shallow decl, use
+    /// [Typing_classes_heap.Api.get_typeconst_enforceability] rather than
+    /// accessing this field directly.
     pub enforceable: (&'a pos_or_decl::PosOrDecl<'a>, bool),
     pub reifiable: Option<&'a pos_or_decl::PosOrDecl<'a>>,
     pub concretized: bool,

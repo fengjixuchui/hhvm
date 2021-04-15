@@ -13,6 +13,7 @@
 open Hh_prelude
 open Aast
 open Typing_defs
+module SN = Naming_special_names
 
 (* Unpacking a hint for typing *)
 let rec hint env (p, h) =
@@ -34,14 +35,17 @@ and aast_user_attribute_to_decl_user_attribute env { ua_name; ua_params } =
           | _ -> None);
   }
 
-and aast_contexts_to_decl_capability env ctxs default_pos =
-  let default_pos = Decl_env.make_decl_pos env default_pos in
+and aast_contexts_to_decl_capability env ctxs default_pos :
+    Aast.pos * decl_ty capability =
   match ctxs with
   | Some (pos, hl) ->
-    let pos = Decl_env.make_decl_pos env pos in
     let hl = List.map ~f:(hint env) hl in
-    CapTy (Typing_make_type.intersection (Reason.Rhint pos) hl)
-  | None -> CapDefaults default_pos
+    ( pos,
+      CapTy
+        (Typing_make_type.intersection
+           (Reason.Rhint (Decl_env.make_decl_pos env pos))
+           hl) )
+  | None -> (default_pos, CapDefaults (Decl_env.make_decl_pos env default_pos))
 
 and aast_tparam_to_decl_tparam env t =
   {
@@ -72,14 +76,20 @@ and hint_ p env = function
     let t1 =
       match h1 with
       | Some h -> hint env h
-      | None -> mk (Typing_reason.Rvarray_or_darray_key p, Tprim Aast.Tarraykey)
+      | None ->
+        mk
+          ( Typing_reason.Rvarray_or_darray_key (Decl_env.make_decl_pos env p),
+            Tprim Aast.Tarraykey )
     in
     Tvarray_or_darray (t1, hint env h2)
   | Hvec_or_dict (h1, h2) ->
     let t1 =
       match h1 with
       | Some h -> hint env h
-      | None -> mk (Typing_reason.Rvec_or_dict_key p, Tprim Aast.Tarraykey)
+      | None ->
+        mk
+          ( Typing_reason.Rvec_or_dict_key (Decl_env.make_decl_pos env p),
+            Tprim Aast.Tarraykey )
     in
     Tvec_or_dict (t1, hint env h2)
   | Hprim p -> Tprim p
@@ -92,6 +102,7 @@ and hint_ p env = function
   | Hlike h -> Tlike (hint env h)
   | Hfun
       {
+        hf_is_readonly = ro;
         hf_param_tys = hl;
         hf_param_info = pil;
         hf_variadic_ty = vh;
@@ -126,18 +137,17 @@ and hint_ p env = function
             ~ifc_external:false
             ~ifc_can_call:false
             ~is_atom:false
-            ~readonly
-            ~const_function:false;
+            ~readonly;
       }
     in
-    let readonly_ret =
-      match readonly_ret with
+    let readonly_opt ro =
+      match ro with
       | Some Ast_defs.Readonly -> true
       | None -> false
     in
     let paraml = List.map2_exn hl pil ~f:make_param in
     let implicit_params =
-      let capability = aast_contexts_to_decl_capability env ctxs p in
+      let (_pos, capability) = aast_contexts_to_decl_capability env ctxs p in
       { capability }
     in
     let ret = possibly_enforced_hint env h in
@@ -158,16 +168,8 @@ and hint_ p env = function
           make_ft_flags
             Ast_defs.FSync
             ~return_disposable:false
-            ~returns_readonly:readonly_ret
-            ~readonly_this:
-              false
-              (* TODO: The constness of a function type hint is associated with
-            an attribute on the parameter, not on the hint itself.
-            Thus it's always false here, but we check for the attribute
-            in readonly_check.ml. When we decide actual syntax for this,
-            this will likely change.
-            *)
-            ~const:false;
+            ~returns_readonly:(readonly_opt readonly_ret)
+            ~readonly_this:(readonly_opt ro);
         (* TODO: handle function parameters with <<CanCall>> *)
         ft_ifc_decl = default_ifc_fun_decl;
       }

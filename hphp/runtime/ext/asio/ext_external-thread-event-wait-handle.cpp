@@ -17,7 +17,6 @@
 
 #include "hphp/runtime/ext/asio/ext_external-thread-event-wait-handle.h"
 
-#include "hphp/runtime/base/array-provenance.h"
 #include "hphp/runtime/base/exceptions.h"
 #include "hphp/runtime/ext/asio/ext_asio.h"
 #include "hphp/runtime/ext/asio/asio-external-thread-event.h"
@@ -71,12 +70,7 @@ c_ExternalThreadEventWaitHandle::Create(
   AsioExternalThreadEvent* event,
   ObjectData* priv_data
 ) {
-  auto wh = req::make<c_ExternalThreadEventWaitHandle>();
-
-  if (auto const tag = arrprov::tagFromPC()) {
-    setTag(event, tag);
-  }
-
+  auto const wh = req::make<c_ExternalThreadEventWaitHandle>();
   wh->initialize(event, priv_data);
   return wh;
 }
@@ -101,8 +95,6 @@ void c_ExternalThreadEventWaitHandle::initialize(
 }
 
 void c_ExternalThreadEventWaitHandle::destroyEvent(bool sweeping /*= false */) {
-  if (RO::EvalArrayProvenance) arrprov::clearTag(m_event);
-
   // destroy event and its private data
   m_event->release();
   m_event = nullptr;
@@ -182,14 +174,7 @@ void c_ExternalThreadEventWaitHandle::process() {
   TypedValue result;
   try {
     try {
-      if (!RO::EvalArrayProvenance) {
-        m_event->unserialize(result);
-      } else {
-        auto const tag = arrprov::getTag(m_event);
-        assertx(tag.concrete());
-        arrprov::TagOverride to{tag};
-        m_event->unserialize(result);
-      }
+      m_event->unserialize(result);
     } catch (ExtendedException& exception) {
       exception.recomputeBacktraceFromWH(this);
       throw exception;

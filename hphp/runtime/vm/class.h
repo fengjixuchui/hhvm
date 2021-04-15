@@ -116,11 +116,7 @@ using ClassPtr = AtomicSharedLowPtr<Class>;
 // compatible signatures.
 using ObjReleaseFunc = BuiltinDtorFunction;
 
-using ObjectProps = std::conditional_t<
-  wide_tv_val,
-  tv_layout::Tv7Up,
-  tv_layout::TvArray
->;
+using ObjectProps = tv_layout::Tv7Up;
 
 // As an optimization, we put multiple static props in a single RDS allocation
 // to speed up initialization and improve cache locality. Persistent props are
@@ -812,6 +808,19 @@ public:
   Slot lookupReifiedInitProp() const;
 
   /*
+   * Returns whether this closure class that uses coeffects prop
+   * to carry its coeffects
+   * Requires this to be a closure class
+   */
+  bool hasClosureCoeffectsProp() const;
+
+  /*
+   * Returns the coeffects prop's slot.
+   * @requires: hasClosureCoeffectsProp()
+   */
+  Slot getCoeffectsProp() const;
+
+  /*
    * The RepoAuthType of the declared instance property or static property at
    * `index' in the corresponding table.
    */
@@ -985,12 +994,14 @@ public:
     Slot slot;
     bool accessible;
     bool constant;
+    bool readonly;
   };
 
   struct PropSlotLookup {
     Slot slot;
     bool accessible;
     bool constant;
+    bool readonly;
   };
 
   /*
@@ -1059,10 +1070,11 @@ public:
 
   /*
    * Returns the runtime coeffect value of the class context constant.
-   * Raises an error if the context constant is not defined, is abstract or
-   * is a type/value constant.
+   * When failIsFatal is set, raises an error if the context constant
+   * is not defined, is abstract or is a type/value constant.
    */
-  RuntimeCoeffects clsCtxCnsGet(const StringData* name) const;
+  folly::Optional<RuntimeCoeffects>
+  clsCtxCnsGet(const StringData* name, bool failIsFatal) const;
 
   /*
    * Look up the actual value of a class constant.  Perform dynamic
@@ -1210,6 +1222,11 @@ public:
 
   /////////////////////////////////////////////////////////////////////////////
   // Closure subclasses.
+
+  /*
+   * Is this a subclass of Closure?
+   */
+  bool isClosureClass() const;
 
   /*
    * Is this a scoped subclass of Closure?
@@ -1577,6 +1594,11 @@ private:
      * List of enums included by an enum class
      */
     mutable IncludedEnumMap m_includedEnums;
+
+    /*
+     * List of enums included directly by this class
+     */
+    mutable VMCompactVector<ClassPtr> m_declIncludedEnums;
   };
 
   /*
@@ -1956,6 +1978,8 @@ Attr classKindAsAttr(ClassKind kind);
 bool isTrait(const Class* cls);
 bool isInterface(const Class* cls);
 bool isEnum(const Class* cls);
+bool isEnumClass(const Class* cls);
+bool isAnyEnum(const Class* cls);
 bool isAbstract(const Class* cls);
 bool isNormalClass(const Class* cls);
 
@@ -1974,6 +1998,8 @@ bool classHasPersistentRDS(const Class* cls);
  * will be raised when compiler option Eval.RaiseClassConversionWarning is true.
  */
 const StringData* classToStringHelper(const Class* cls);
+
+std::vector<Class*> prioritySerializeClasses();
 
 ///////////////////////////////////////////////////////////////////////////////
 }

@@ -11,7 +11,7 @@ use hhbc_by_ref_runtime::TypedValue;
 use oxidized::ast_defs::Pos;
 use thiserror::Error;
 
-pub type Result<'a, T = InstrSeq<'a>> = std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -38,10 +38,10 @@ pub enum InstrSeq<'a> {
     List(&'a mut [Instruct<'a>]),
     Concat(&'a mut [InstrSeq<'a>]),
 }
-
 // The slices are mutable because of `rewrite_user_labels`. This means
 // we can't derive `Clone` (because you can't have multiple mutable
-// references referring to the same resource.)
+// references referring to the same resource). It is possible to implement
+// deep copy functionality though: see `InstrSeq::clone()` below.
 
 impl<'a> std::convert::From<(&'a bumpalo::Bump, (InstrSeq<'a>, InstrSeq<'a>))> for InstrSeq<'a> {
     fn from((alloc, (i1, i2)): (&'a bumpalo::Bump, (InstrSeq<'a>, InstrSeq<'a>))) -> InstrSeq<'a> {
@@ -199,11 +199,6 @@ pub mod instr {
     pub fn lit_const<'a>(alloc: &'a bumpalo::Bump, l: InstructLitConst<'a>) -> InstrSeq<'a> {
         instr(alloc, Instruct::ILitConst(l))
     }
-
-    /* TODO(hrust): re-enable it with arg
-     pub fn lit_empty_varray() -> InstrSeq {
-        InstrSeq::lit_const(InstructLitConst::TypedValue(TypedValue::VArray(vec![])))
-    } */
 
     pub fn iterinit<'a>(
         alloc: &'a bumpalo::Bump,
@@ -376,10 +371,6 @@ pub mod instr {
 
     pub fn print<'a>(alloc: &'a bumpalo::Bump) -> InstrSeq<'a> {
         instr(alloc, Instruct::IOp(InstructOperator::Print))
-    }
-
-    pub fn cast_darray<'a>(alloc: &'a bumpalo::Bump) -> InstrSeq<'a> {
-        instr(alloc, Instruct::IOp(InstructOperator::CastDArray))
     }
 
     pub fn cast_dict<'a>(alloc: &'a bumpalo::Bump) -> InstrSeq<'a> {
@@ -765,15 +756,10 @@ pub mod instr {
         instr(alloc, Instruct::IMutator(InstructMutator::PopL(l)))
     }
 
-    pub fn initprop<'a>(
-        alloc: &'a bumpalo::Bump,
-        pid: PropId<'a>,
-        op: InitpropOp,
-        readonly_op: ReadOnlyOp,
-    ) -> InstrSeq<'a> {
+    pub fn initprop<'a>(alloc: &'a bumpalo::Bump, pid: PropId<'a>, op: InitpropOp) -> InstrSeq<'a> {
         instr(
             alloc,
-            Instruct::IMutator(InstructMutator::InitProp(pid, op, readonly_op)),
+            Instruct::IMutator(InstructMutator::InitProp(pid, op)),
         )
     }
 
@@ -793,10 +779,6 @@ pub mod instr {
         instr(alloc, Instruct::ILitConst(InstructLitConst::NewVec(i)))
     }
 
-    pub fn new_varray<'a>(alloc: &'a bumpalo::Bump, i: isize) -> InstrSeq<'a> {
-        instr(alloc, Instruct::ILitConst(InstructLitConst::NewVArray(i)))
-    }
-
     pub fn new_pair<'a>(alloc: &'a bumpalo::Bump) -> InstrSeq<'a> {
         instr(alloc, Instruct::ILitConst(InstructLitConst::NewPair))
     }
@@ -809,7 +791,10 @@ pub mod instr {
         instr(alloc, Instruct::ILitConst(InstructLitConst::AddNewElemC))
     }
 
-    pub fn switch<'a>(alloc: &'a bumpalo::Bump, labels: &'a [Label<'a>]) -> InstrSeq<'a> {
+    pub fn switch<'a>(
+        alloc: &'a bumpalo::Bump,
+        labels: bumpalo::collections::Vec<'a, Label<'a>>,
+    ) -> InstrSeq<'a> {
         instr(
             alloc,
             Instruct::IContFlow(InstructControlFlow::Switch(
@@ -826,7 +811,7 @@ pub mod instr {
 
     pub fn sswitch<'a>(
         alloc: &'a bumpalo::Bump,
-        cases: &'a [(&'a str, Label<'a>)],
+        cases: bumpalo::collections::Vec<'a, (&'a str, Label<'a>)>,
     ) -> InstrSeq<'a> {
         instr(
             alloc,
@@ -866,13 +851,6 @@ pub mod instr {
         instr(
             alloc,
             Instruct::ILitConst(InstructLitConst::NewRecord(id, keys)),
-        )
-    }
-
-    pub fn newstructdarray<'a>(alloc: &'a bumpalo::Bump, keys: &'a [&'a str]) -> InstrSeq<'a> {
-        instr(
-            alloc,
-            Instruct::ILitConst(InstructLitConst::NewStructDArray(keys)),
         )
     }
 
@@ -1540,6 +1518,10 @@ pub mod instr {
         )
     }
 
+    pub fn nativeimpl<'a>(alloc: &'a bumpalo::Bump) -> InstrSeq<'a> {
+        instr(alloc, Instruct::IMisc(InstructMisc::NativeImpl))
+    }
+
     pub fn srcloc<'a>(
         alloc: &'a bumpalo::Bump,
         line_begin: isize,
@@ -1578,6 +1560,12 @@ pub mod instr {
 }
 
 impl<'a> InstrSeq<'a> {
+    /// We can't implement `std::Clone`` because of the need for an
+    /// allocator. Instead, use this associated function.
+    pub fn clone(alloc: &'a bumpalo::Bump, s: &InstrSeq<'a>) -> InstrSeq<'a> {
+        InstrSeq::from_iter_in(alloc, InstrIter::new(s).cloned())
+    }
+
     /// We can't implement `std::Default` because of the need
     /// for an allocator. Instead, use this associated function
     /// to produce an empty instruction sequence.
@@ -1619,18 +1607,6 @@ impl<'a> InstrSeq<'a> {
             InstrSeq::new_empty(alloc)
         } else {
             InstrSeq::new_concat(non_empty.into_bump_slice_mut())
-        }
-    }
-
-    pub fn optional(
-        alloc: &'a bumpalo::Bump,
-        pred: bool,
-        instrs: std::vec::Vec<Self>,
-    ) -> InstrSeq<'a> {
-        if pred {
-            InstrSeq::gather(alloc, instrs)
-        } else {
-            InstrSeq::new_empty(alloc)
         }
     }
 
@@ -1676,7 +1652,7 @@ impl<'a> InstrSeq<'a> {
     fn get_or_put_label<'i, 'm>(
         alloc: &'a bumpalo::Bump,
         label_gen: &mut hhbc_by_ref_label::Gen,
-        name_label_map: &'m mut std::collections::HashMap<std::string::String, Label<'a>>,
+        name_label_map: &'m mut hash::HashMap<std::string::String, Label<'a>>,
         name: &'i str,
     ) -> Label<'a> {
         match name_label_map.get(name) {
@@ -1693,7 +1669,7 @@ impl<'a> InstrSeq<'a> {
         alloc: &'a bumpalo::Bump,
         label_gen: &mut hhbc_by_ref_label::Gen,
         i: &'i mut Instruct<'a>,
-        name_label_map: &'m mut std::collections::HashMap<std::string::String, Label<'a>>,
+        name_label_map: &'m mut hash::HashMap<std::string::String, Label<'a>>,
     ) {
         use Instruct::*;
         let mut get_result = |x| InstrSeq::get_or_put_label(alloc, label_gen, name_label_map, x);
@@ -1727,7 +1703,7 @@ impl<'a> InstrSeq<'a> {
         alloc: &'a bumpalo::Bump,
         label_gen: &mut hhbc_by_ref_label::Gen,
     ) {
-        let name_label_map = &mut std::collections::HashMap::new();
+        let name_label_map = &mut hash::HashMap::default();
         self.map_mut(&mut |i| {
             InstrSeq::rewrite_user_labels_instr(alloc, label_gen, i, name_label_map)
         });
@@ -1828,6 +1804,32 @@ impl<'a> InstrSeq<'a> {
         }
     }
 
+    pub fn filter_map_mut<F>(&mut self, alloc: &'a bumpalo::Bump, f: &mut F)
+    where
+        F: FnMut(&mut Instruct<'a>) -> bool,
+    {
+        match self {
+            InstrSeq::List(&mut []) => {}
+            InstrSeq::List(&mut [ref mut x]) => {
+                if !f(x) {
+                    *self = instr::empty(alloc)
+                }
+            }
+            InstrSeq::List(ref mut instr_lst) => {
+                let mut new_lst = bumpalo::vec![in alloc;];
+                for mut i in instr_lst.iter_mut() {
+                    if f(&mut i) {
+                        new_lst.push(i.clone())
+                    }
+                }
+                *self = instr::instrs(alloc, new_lst.into_bump_slice_mut())
+            }
+            InstrSeq::Concat(instrseq_lst) => instrseq_lst
+                .iter_mut()
+                .for_each(|x| x.filter_map_mut(alloc, f)),
+        }
+    }
+
     pub fn map_mut<'i, F>(&'i mut self, f: &mut F)
     where
         F: FnMut(&'i mut Instruct<'a>),
@@ -1841,9 +1843,9 @@ impl<'a> InstrSeq<'a> {
     }
 
     #[allow(clippy::result_unit_err)]
-    pub fn map_result_mut<F>(&mut self, f: &mut F) -> Result<'a, ()>
+    pub fn map_result_mut<F>(&mut self, f: &mut F) -> Result<()>
     where
-        F: FnMut(&mut Instruct<'a>) -> Result<'a, ()>,
+        F: FnMut(&mut Instruct<'a>) -> Result<()>,
     {
         match self {
             InstrSeq::List(&mut []) => Ok(()),

@@ -17,6 +17,7 @@ module Reason = Typing_reason
 module TUtils = Typing_utils
 module MakeType = Typing_make_type
 module Cls = Decl_provider.Class
+module SN = Naming_special_names
 
 let raise_xhp_required env pos ureason ty =
   let ty_str = Typing_print.error env ty in
@@ -41,7 +42,6 @@ let rec walk_and_gather_xhp_ ~env ~pos cty =
       env
       pos
       cty
-      Errors.unify_error
   in
   match get_node cty with
   | Tany _
@@ -124,11 +124,10 @@ and get_spread_attributes env pos onto_xhp cty =
      * we don't need to perform any substitutions *)
     let ety_env =
       {
-        type_expansions = [];
+        type_expansions = Typing_defs.Type_expansions.empty;
         this_ty = xhp_ty;
         substs = TUtils.make_locl_subst_for_class_tparams xhp_info tparams;
-        quiet = false;
-        on_error = Errors.unify_error;
+        on_error = Errors.ignore_error;
       }
     in
     List.map_env

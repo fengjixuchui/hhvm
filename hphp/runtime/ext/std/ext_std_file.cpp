@@ -666,10 +666,6 @@ Variant HHVM_FUNCTION(file_put_contents,
       break;
     }
 
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
     case KindOfPersistentVec:
     case KindOfVec:
     case KindOfPersistentDict:
@@ -746,9 +742,9 @@ Variant HHVM_FUNCTION(file,
   }
   String content = contents.toString();
   if (content.empty()) {
-    return empty_varray();
+    return empty_vec_array();
   }
-  auto ret = Array::CreateVArray();
+  auto ret = Array::CreateVec();
 
   char eol_marker = '\n';
   bool include_new_line = !(flags & PHP_FILE_IGNORE_NEW_LINES);
@@ -1795,7 +1791,7 @@ Variant HHVM_FUNCTION(glob,
                   &globbuf);
   if (nret == GLOB_NOMATCH) {
     globfree(&globbuf);
-    return empty_varray();
+    return empty_vec_array();
   }
 
   if (!globbuf.gl_pathc || !globbuf.gl_pathv) {
@@ -1806,7 +1802,7 @@ Variant HHVM_FUNCTION(glob,
       }
     }
     globfree(&globbuf);
-    return empty_varray();
+    return empty_vec_array();
   }
 
   if (nret) {
@@ -1814,7 +1810,7 @@ Variant HHVM_FUNCTION(glob,
     return false;
   }
 
-  auto ret = Array::CreateVArray();
+  auto ret = Array::CreateVec();
   bool basedir_limit = false;
   for (int n = 0; n < (int)globbuf.gl_pathc; n++) {
     String translated = File::TranslatePath(globbuf.gl_pathv[n]);
@@ -1844,7 +1840,7 @@ Variant HHVM_FUNCTION(glob,
   // php's glob always produces an array, but Variant::Variant(CArrRef)
   // will produce KindOfNull if given a req::ptr wrapped around null.
   if (ret.isNull()) {
-    return empty_varray();
+    return empty_vec_array();
   }
   return ret;
 }

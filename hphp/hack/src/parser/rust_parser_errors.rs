@@ -6,7 +6,7 @@
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
 use std::{matches, str::FromStr};
 use strum;
 use strum::IntoEnumIterator;
@@ -14,6 +14,7 @@ use strum_macros::{Display, EnumIter, EnumString, IntoStaticStr};
 
 use naming_special_names_rust as sn;
 
+use hash::{HashMap, HashSet};
 use oxidized::parser_options::ParserOptions;
 use parser_core_types::{
     indexed_source_text::IndexedSourceText,
@@ -63,6 +64,16 @@ enum BinopAllowsAwaitInPositions {
     BinopAllowAwaitNone,
 }
 
+#[allow(dead_code)] // Preview is currently unused
+#[derive(Eq, PartialEq)]
+enum FeatureStatus {
+    Unstable,
+    Preview,
+    // TODO: add other modes like "Advanced" or "Deprecated" if necessary.
+    // Those are just variants of "Preview" for the runtime's sake, though,
+    // and likely only need to be distinguished in the lint rule rather than here
+}
+
 #[derive(
     Clone,
     Copy,
@@ -76,12 +87,28 @@ enum BinopAllowsAwaitInPositions {
 )]
 #[strum(serialize_all = "snake_case")]
 enum UnstableFeatures {
+    // TODO: rename this from unstable to something else
     UnionIntersectionTypeHints,
     ClassLevelWhere,
     ExpressionTrees,
     EnumAtom,
     IFC,
     Readonly,
+}
+impl UnstableFeatures {
+    // Preview features are allowed to run in prod. This function decides
+    // whether the feature is considered Unstable or Previw.
+    fn get_feature_status(&self) -> FeatureStatus {
+        use FeatureStatus::*;
+        match self {
+            UnstableFeatures::UnionIntersectionTypeHints => Unstable,
+            UnstableFeatures::ClassLevelWhere => Unstable,
+            UnstableFeatures::ExpressionTrees => Unstable,
+            UnstableFeatures::EnumAtom => Unstable,
+            UnstableFeatures::IFC => Unstable,
+            UnstableFeatures::Readonly => Unstable,
+        }
+    }
 }
 
 use BinopAllowsAwaitInPositions::*;
@@ -142,19 +169,12 @@ impl<X> Strmap<X> {
             YesCase(m) => YesCase(m.into_iter().filter(|(_, x)| f(x)).collect()),
         }
     }
-
-    fn into_iter(self) -> std::collections::hash_map::IntoIter<String, X> {
-        match self {
-            NoCase(m) => m.into_iter(),
-            YesCase(m) => m.into_iter(),
-        }
-    }
 }
 
 use crate::Strmap::*;
 
 fn empty_trait_require_clauses() -> Strmap<TokenKind> {
-    NoCase(HashMap::new())
+    NoCase(HashMap::default())
 }
 
 #[derive(Clone, Debug)]
@@ -169,11 +189,11 @@ struct UsedNames {
 impl UsedNames {
     fn empty() -> Self {
         Self {
-            classes: NoCase(HashMap::new()),
-            namespaces: NoCase(HashMap::new()),
-            functions: NoCase(HashMap::new()),
-            constants: YesCase(HashMap::new()),
-            attributes: YesCase(HashMap::new()),
+            classes: NoCase(HashMap::default()),
+            namespaces: NoCase(HashMap::default()),
+            functions: NoCase(HashMap::default()),
+            constants: YesCase(HashMap::default()),
+            attributes: YesCase(HashMap::default()),
         }
     }
 }
@@ -393,7 +413,7 @@ where
         iter.find(|x| assert_fun(*x))
     }
 
-    fn enable_unstable_feature(&mut self, _node: S<'a, Token, Value>, arg: S<'a, Token, Value>) {
+    fn enable_unstable_feature(&mut self, node: S<'a, Token, Value>, arg: S<'a, Token, Value>) {
         let error_invalid_argument = |self_: &mut Self, message| {
             self_.errors.push(Self::make_error_from_node(
                 arg,
@@ -406,7 +426,23 @@ where
                 let text = self.text(&x.expression);
                 match UnstableFeatures::from_str(escaper::unquote_str(text)) {
                     Ok(feature) => {
-                        self.env.context.active_unstable_features.insert(feature);
+                        if !self.env.parser_options.po_allow_unstable_features
+                            && !self.env.is_hhi_mode()
+                            && feature.get_feature_status() == FeatureStatus::Unstable
+                        {
+                            self.errors.push(Self::make_error_from_node(
+                                node,
+                                errors::cannot_enable_unstable_feature(
+                                    format!(
+                                        "{} is unstable and unstable features are disabled",
+                                        text
+                                    )
+                                    .as_str(),
+                                ),
+                            ))
+                        } else {
+                            self.env.context.active_unstable_features.insert(feature);
+                        }
                     }
                     Err(_) => error_invalid_argument(
                         self,
@@ -1807,10 +1843,6 @@ where
             if x.readonly.is_readonly() {
                 self.check_can_use_feature(&x.readonly, &UnstableFeatures::Readonly);
             }
-            let attr = &x.attribute;
-            if self.attribute_specification_contains(attr, sn::user_attributes::CONST_FUN) {
-                self.check_can_use_feature(attr, &UnstableFeatures::Readonly);
-            }
         }
     }
 
@@ -2041,28 +2073,6 @@ where
                 }
             }
             DecoratedExpression(_) => self.decoration_errors(node),
-            _ => {}
-        }
-    }
-
-    fn function_attribute_errors(&mut self, node: S<'a, Token, Value>) {
-        match &node.children {
-            FunctionDeclaration(f)
-                if self.attribute_specification_contains(
-                    &f.attribute_spec,
-                    sn::user_attributes::CONST_FUN,
-                ) =>
-            {
-                self.check_can_use_feature(&f.attribute_spec, &UnstableFeatures::Readonly)
-            }
-            MethodishDeclaration(m)
-                if self.attribute_specification_contains(
-                    &m.attribute,
-                    sn::user_attributes::CONST_FUN,
-                ) =>
-            {
-                self.check_can_use_feature(&m.attribute, &UnstableFeatures::Readonly)
-            }
             _ => {}
         }
     }
@@ -3397,6 +3407,7 @@ where
         prop: S<'a, Token, Value>,
         p_names: &mut HashSet<String>,
         c_names: &mut HashSet<String>,
+        xhp_names: &mut HashSet<String>,
     ) {
         let mut check = |sname, names: &mut HashSet<String>| {
             let name = self.text(sname);
@@ -3432,6 +3443,13 @@ where
             }
             TypeConstDeclaration(x) => check(&x.name, c_names),
             ContextConstDeclaration(x) => check(&x.name, c_names),
+            XHPClassAttributeDeclaration(x) => {
+                for attr in Self::syntax_to_list_no_separators(&x.attributes) {
+                    if let XHPClassAttribute(x) = &attr.children {
+                        check(&x.name, xhp_names)
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -3510,8 +3528,8 @@ where
         &mut self,
         l: S<'a, Token, Value>,
     ) -> (HashSet<&'a str>, HashSet<&'a str>) {
-        let mut res: HashSet<&'a str> = HashSet::new();
-        let mut notreified: HashSet<&'a str> = HashSet::new();
+        let mut res: HashSet<&'a str> = HashSet::default();
+        let mut notreified: HashSet<&'a str> = HashSet::default();
         for p in Self::syntax_to_list_no_separators(l).rev() {
             match &p.children {
                 TypeParameter(x) => {
@@ -3556,7 +3574,7 @@ where
                     TypeParameters(x) => {
                         self.get_type_params_and_emit_shadowing_errors(&x.parameters)
                     }
-                    _ => (HashSet::new(), HashSet::new()),
+                    _ => (HashSet::default(), HashSet::default()),
                 };
 
                 let tparams: HashSet<&'a str> = reified
@@ -3866,14 +3884,16 @@ where
                 let class_body_methods =
                     || class_body_elts().filter(|x| Self::is_method_declaration(x));
 
-                let mut p_names = HashSet::<String>::new();
-                let mut c_names = HashSet::<String>::new();
+                let mut p_names = HashSet::<String>::default();
+                let mut c_names = HashSet::<String>::default();
+                let mut xhp_names = HashSet::<String>::default();
                 for elt in class_body_elts() {
                     self.check_repeated_properties_tconst_const(
                         &full_name,
                         elt,
                         &mut p_names,
                         &mut c_names,
+                        &mut xhp_names,
                     );
                 }
                 let has_abstract_fn = class_body_methods().any(&Self::has_modifier_abstract);
@@ -5099,16 +5119,7 @@ where
                 if self.attr_name(node).as_deref()
                     == Some(sn::user_attributes::ENABLE_UNSTABLE_FEATURES)
                 {
-                    if !self.env.parser_options.po_allow_unstable_features
-                        && !self.env.is_hhi_mode()
-                    {
-                        self.errors.push(Self::make_error_from_node(
-                            node,
-                            errors::invalid_use_of_enable_unstable_feature(
-                                "unstable features are disabled",
-                            ),
-                        ))
-                    } else if let Some(args) = self.attr_args(node) {
+                    if let Some(args) = self.attr_args(node) {
                         let mut args = args.peekable();
                         if args.peek().is_none() {
                             self.errors.push(Self::make_error_from_node(
@@ -5124,7 +5135,6 @@ where
                         } else {
                             args.for_each(|ref arg| self.enable_unstable_feature(node, arg))
                         }
-                    } else {
                     }
                 }
             }),
@@ -5144,7 +5154,6 @@ where
                 self.redeclaration_errors(node);
                 self.multiple_entrypoint_attribute_errors(node);
                 self.methodish_errors(node);
-                self.function_attribute_errors(node);
             }
 
             LiteralExpression(_)
@@ -5263,7 +5272,7 @@ where
                 }
 
                 let old_namespace_name = self.namespace_name.clone();
-                let mut old_names = self.names.clone();
+                let old_names = self.names.clone();
                 // reset names before diving into namespace body,
                 // keeping global function names
                 self.namespace_name = self.get_namespace_name();
@@ -5271,11 +5280,6 @@ where
                 self.names.functions = names_copy.functions.filter(|x| x.global);
                 self.fold_child_nodes(node);
 
-                // add newly declared global functions to the old set of names
-                let names_copy = std::mem::replace(&mut self.names, UsedNames::empty());
-                for (k, v) in names_copy.functions.into_iter().filter(|(_, x)| x.global) {
-                    old_names.functions.add(&k, v)
-                }
                 // resume with old set of names and pull back
                 // accumulated errors/last seen namespace type
                 self.names = old_names;
@@ -5295,9 +5299,9 @@ where
                 // Reset the function declarations
 
                 let constants =
-                    std::mem::replace(&mut self.names.constants, YesCase(HashMap::new()));
+                    std::mem::replace(&mut self.names.constants, YesCase(HashMap::default()));
                 let functions =
-                    std::mem::replace(&mut self.names.functions, NoCase(HashMap::new()));
+                    std::mem::replace(&mut self.names.functions, NoCase(HashMap::default()));
                 let trait_require_clauses = std::mem::replace(
                     &mut self.trait_require_clauses,
                     empty_trait_require_clauses(),
@@ -5310,8 +5314,6 @@ where
                 self.names.constants = constants;
             }
             PrefixedCodeExpression(_) => {
-                self.check_can_use_feature(node, &UnstableFeatures::ExpressionTrees);
-
                 prev_context = Some(self.env.context.clone());
                 self.env.context.active_expression_tree = true;
 
@@ -5398,7 +5400,7 @@ where
                 active_callable: None,
                 active_callable_attr_spec: None,
                 active_const: None,
-                active_unstable_features: HashSet::new(),
+                active_unstable_features: HashSet::default(),
                 active_expression_tree: false,
             },
             hhvm_compat_mode,

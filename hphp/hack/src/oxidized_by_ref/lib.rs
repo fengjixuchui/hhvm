@@ -27,6 +27,7 @@ pub use manual::relative_path;
 pub use manual::s_map;
 pub use manual::s_set;
 pub use manual::shape_map;
+pub use manual::symbol_name;
 pub use manual::t_shape_map;
 pub use manual::tany_sentinel;
 pub use manual::typing_continuations;
@@ -35,6 +36,7 @@ pub use manual::typing_logic;
 pub use manual::typing_set;
 
 pub mod decl_visitor;
+pub mod nast_visitor;
 
 mod gen;
 

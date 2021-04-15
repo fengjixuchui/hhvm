@@ -337,6 +337,7 @@ let rec hint
     ?(allow_wildcard = false)
     ?(allow_like = false)
     ?(in_where_clause = false)
+    ?(ignore_hack_arr = false)
     ?(tp_depth = 0)
     env
     (hh : Aast.hint) =
@@ -348,6 +349,7 @@ let rec hint
       ~allow_wildcard
       ~allow_like
       ~in_where_clause
+      ~ignore_hack_arr
       ~tp_depth
       env
       (p, h) )
@@ -369,13 +371,14 @@ and contexts env ctxs =
   in
   (pos, hl)
 
-and hfun env hl il variadic_hint ctxs h readonly_ret =
+and hfun env ro hl il variadic_hint ctxs h readonly_ret =
   let variadic_hint = Option.map variadic_hint (hint env) in
   let hl = List.map ~f:(hint env) hl in
   let ctxs = Option.map ~f:(contexts env) ctxs in
   N.Hfun
     N.
       {
+        hf_is_readonly = ro;
         hf_param_tys = hl;
         hf_param_info = il;
         hf_variadic_ty = variadic_hint;
@@ -390,6 +393,7 @@ and hint_
     ~allow_wildcard
     ~allow_like
     ~in_where_clause
+    ~ignore_hack_arr
     ?(tp_depth = 0)
     env
     (p, x) =
@@ -418,6 +422,7 @@ and hint_
   | Aast.Hfun
       Aast.
         {
+          hf_is_readonly = ro;
           hf_param_tys = hl;
           hf_param_info = il;
           hf_variadic_ty = variadic_hint;
@@ -425,10 +430,18 @@ and hint_
           hf_return_ty = h;
           hf_is_readonly_return = readonly_ret;
         } ->
-    hfun env hl il variadic_hint ctxs h readonly_ret
+    hfun env ro hl il variadic_hint ctxs h readonly_ret
   | Aast.Happly (((p, _x) as id), hl) ->
     let hint_id =
-      hint_id ~forbid_this ~allow_retonly ~allow_wildcard ~tp_depth env id hl
+      hint_id
+        ~forbid_this
+        ~allow_retonly
+        ~allow_wildcard
+        ~ignore_hack_arr
+        ~tp_depth
+        env
+        id
+        hl
     in
     (match hint_id with
     | N.Hprim _
@@ -461,6 +474,7 @@ and hint_
             ~forbid_this
             ~allow_retonly
             ~allow_wildcard:false
+            ~ignore_hack_arr:false
             ~tp_depth
             env
             root
@@ -520,13 +534,29 @@ and hint_
     N.Herr
 
 and hint_id
-    ~forbid_this ~allow_retonly ~allow_wildcard ~tp_depth env ((p, x) as id) hl
-    =
+    ~forbid_this
+    ~allow_retonly
+    ~allow_wildcard
+    ~ignore_hack_arr
+    ~tp_depth
+    env
+    ((p, x) as id)
+    hl =
   let params = (fst env).type_params in
   (* some common Xhp screw ups *)
   if String.equal x "Xhp" || String.equal x ":Xhp" || String.equal x "XHP" then
     Errors.disallowed_xhp_type p x;
-  match try_castable_hint ~forbid_this ~allow_wildcard ~tp_depth env p x hl with
+  match
+    try_castable_hint
+      ~forbid_this
+      ~allow_wildcard
+      ~ignore_hack_arr
+      ~tp_depth
+      env
+      p
+      x
+      hl
+  with
   | Some h -> h
   | None ->
     begin
@@ -634,7 +664,14 @@ and hint_id
  * instance, 'object' is not a valid annotation.  Thus callers will
  * have to handle the remaining cases. *)
 and try_castable_hint
-    ?(forbid_this = false) ?(allow_wildcard = false) ~tp_depth env p x hl =
+    ?(forbid_this = false)
+    ?(allow_wildcard = false)
+    ~ignore_hack_arr
+    ~tp_depth
+    env
+    p
+    x
+    hl =
   let hint =
     hint
       ~forbid_this
@@ -643,8 +680,9 @@ and try_castable_hint
       ~allow_retonly:false
   in
   let unif env =
-    TypecheckerOptions.array_unification
-      (Provider_context.get_tcopt (fst env).ctx)
+    (not ignore_hack_arr)
+    && TypecheckerOptions.hack_arr_dv_arrs
+         (Provider_context.get_tcopt (fst env).ctx)
   in
   let canon = String.lowercase x in
   let opt_hint =
@@ -1070,7 +1108,7 @@ and type_param ~forbid_this (genv, lenv) t =
       in
       match Naming_provider.get_type_pos genv.ctx name with
       | Some def_pos ->
-        let (def_pos, _) = GEnv.get_full_pos genv.ctx (def_pos, name) in
+        let (def_pos, _) = GEnv.get_type_full_pos genv.ctx (def_pos, name) in
         Errors.error_name_already_bound name name pos def_pos
       | None ->
         (match GEnv.type_canon_name genv.ctx name with
@@ -1298,22 +1336,32 @@ and class_const env ~in_enum_class cc =
   }
 
 and typeconst env t =
-  let abstract =
-    match t.Aast.c_tconst_abstract with
-    | Aast.TCAbstract (Some default) ->
-      Aast.TCAbstract (Some (hint env default))
-    | _ -> t.Aast.c_tconst_abstract
+  let open Aast in
+  let tconst =
+    match t.c_tconst_kind with
+    | TCAbstract { c_atc_as_constraint; c_atc_super_constraint; c_atc_default }
+      ->
+      TCAbstract
+        {
+          c_atc_as_constraint = Option.map ~f:(hint env) c_atc_as_constraint;
+          c_atc_super_constraint =
+            Option.map ~f:(hint env) c_atc_super_constraint;
+          c_atc_default = Option.map ~f:(hint env) c_atc_default;
+        }
+    | TCConcrete { c_tc_type } -> TCConcrete { c_tc_type = hint env c_tc_type }
+    | TCPartiallyAbstract { c_patc_constraint; c_patc_type } ->
+      TCPartiallyAbstract
+        {
+          c_patc_constraint = hint env c_patc_constraint;
+          c_patc_type = hint env c_patc_type;
+        }
   in
-  let as_constraint = Option.map t.Aast.c_tconst_as_constraint (hint env) in
-  let type_ = Option.map t.Aast.c_tconst_type (hint env) in
   let attrs = user_attributes env t.Aast.c_tconst_user_attributes in
   N.
     {
-      c_tconst_abstract = abstract;
-      c_tconst_name = t.Aast.c_tconst_name;
-      c_tconst_as_constraint = as_constraint;
-      c_tconst_type = type_;
       c_tconst_user_attributes = attrs;
+      c_tconst_name = t.Aast.c_tconst_name;
+      c_tconst_kind = tconst;
       c_tconst_span = t.Aast.c_tconst_span;
       c_tconst_doc_comment = t.Aast.c_tconst_doc_comment;
       c_tconst_is_ctx = t.Aast.c_tconst_is_ctx;
@@ -1477,6 +1525,7 @@ and fun_ ctx f =
   let named_fun =
     {
       N.f_annotation = ();
+      f_readonly_this = f.Aast.f_readonly_this;
       f_span = f.Aast.f_span;
       f_mode = f.Aast.f_mode;
       f_readonly_ret = f.Aast.f_readonly_ret;
@@ -1496,7 +1545,6 @@ and fun_ ctx f =
       f_external = f.Aast.f_external;
       f_namespace = f.Aast.f_namespace;
       f_doc_comment = f.Aast.f_doc_comment;
-      f_static = f.Aast.f_static;
     }
   in
   named_fun
@@ -1998,7 +2046,7 @@ and expr_ env p (e : Nast.expr_) =
     | [] ->
       Errors.naming_too_few_arguments p;
       N.Any
-    | el -> N.List (exprl env el))
+    | el -> N.Tuple (exprl env el))
   | Aast.Call ((p, Aast.Id f), tal, el, unpacked_element) ->
     N.Call
       ((p, N.Id f), targl env p tal, exprl env el, oexpr env unpacked_element)
@@ -2038,6 +2086,7 @@ and expr_ env p (e : Nast.expr_) =
   | Aast.FunctionPointer _ -> N.Any
   | Aast.Yield e -> N.Yield (afield env e)
   | Aast.Await e -> N.Await (expr env e)
+  | Aast.Tuple el -> N.Tuple (exprl env el)
   | Aast.List el -> N.List (exprl env el)
   | Aast.Cast (ty, e2) ->
     let ((p, x), hl) =
@@ -2046,7 +2095,7 @@ and expr_ env p (e : Nast.expr_) =
       | _ -> assert false
     in
     let ty =
-      match try_castable_hint ~tp_depth:1 env p x hl with
+      match try_castable_hint ~tp_depth:1 ~ignore_hack_arr:false env p x hl with
       | Some ty -> (p, ty)
       | None ->
         let h = hint env ty in
@@ -2059,8 +2108,9 @@ and expr_ env p (e : Nast.expr_) =
       N.
         {
           et_hint = hint env et.et_hint;
-          et_src_expr = expr env et.et_src_expr;
-          et_desugared_expr = expr env et.et_desugared_expr;
+          et_splices = block env et.et_splices;
+          et_virtualized_expr = expr env et.et_virtualized_expr;
+          et_runtime_expr = expr env et.et_runtime_expr;
         }
   | Aast.ET_Splice e -> N.ET_Splice (expr env e)
   | Aast.Unop (uop, e) -> N.Unop (uop, expr env e)
@@ -2089,9 +2139,15 @@ and expr_ env p (e : Nast.expr_) =
     in
     N.Eif (e1, e2opt, e3)
   | Aast.Is (e, h) ->
-    N.Is (expr env e, hint ~allow_wildcard:true ~allow_like:true env h)
+    N.Is
+      ( expr env e,
+        hint ~allow_wildcard:true ~allow_like:true ~ignore_hack_arr:true env h
+      )
   | Aast.As (e, h, b) ->
-    N.As (expr env e, hint ~allow_wildcard:true ~allow_like:true env h, b)
+    N.As
+      ( expr env e,
+        hint ~allow_wildcard:true ~allow_like:true ~ignore_hack_arr:true env h,
+        b )
   | Aast.New ((_, Aast.CIexpr (p, Aast.Id x)), tal, el, unpacked_element, _) ->
     N.New
       ( make_class_id env x,
@@ -2176,7 +2232,8 @@ and expr_ env p (e : Nast.expr_) =
   | Aast.Method_caller _
   | Aast.Smethod_id _
   | Aast.Pair _
-  | Aast.Any ->
+  | Aast.Any
+  | Aast.Hole _ ->
     Errors.internal_error
       p
       "Malformed expr: Expr not found on legacy AST: T39599317";
@@ -2197,6 +2254,7 @@ and expr_lambda env f =
   let body = { N.fb_ast = body_nast; fb_annotation = annotation } in
   {
     N.f_annotation = ();
+    f_readonly_this = f.Aast.f_readonly_this;
     f_span = f.Aast.f_span;
     f_mode = (fst env).in_mode;
     f_readonly_ret = f.Aast.f_readonly_ret;
@@ -2215,7 +2273,6 @@ and expr_lambda env f =
     f_external = f.Aast.f_external;
     f_namespace = f.Aast.f_namespace;
     f_doc_comment = f.Aast.f_doc_comment;
-    f_static = f.Aast.f_static;
   }
 
 and f_body env f_body =

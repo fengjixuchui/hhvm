@@ -30,9 +30,6 @@ mod float {
     }
 }
 
-type LegacyFlag = bool;
-type ProvTag = Option<oxidized::ast_defs::Pos>;
-
 /// We introduce a type for Hack/PHP values, mimicking what happens at
 /// runtime. Currently this is used for constant folding. By defining
 /// a special type, we ensure independence from usage: for example, it
@@ -53,18 +50,10 @@ pub enum TypedValue<'arena> {
     Null,
     // Classic PHP arrays with explicit (key,value) entries
     HhasAdata(&'arena str),
-    VArray((&'arena [Self], ProvTag)),
-    DArray((&'arena [(TypedValue<'arena>, TypedValue<'arena>)], ProvTag)),
     // Hack arrays: vectors, keysets, and dictionaries
-    Vec((&'arena [TypedValue<'arena>], ProvTag, LegacyFlag)),
+    Vec(&'arena [TypedValue<'arena>]),
     Keyset(&'arena [TypedValue<'arena>]),
-    Dict(
-        (
-            &'arena [(TypedValue<'arena>, TypedValue<'arena>)],
-            ProvTag,
-            LegacyFlag,
-        ),
-    ),
+    Dict(&'arena [(TypedValue<'arena>, TypedValue<'arena>)]),
 }
 
 mod string_ops {
@@ -94,11 +83,9 @@ impl<'arena> std::convert::From<TypedValue<'arena>> for bool {
             TypedValue::Int(i) => i != 0,
             TypedValue::Float(f) => f.to_f64() != 0.0,
             // Empty collections cast to false if empty, otherwise true
-            TypedValue::VArray((v, _)) => !v.is_empty(),
-            TypedValue::DArray((v, _)) => !v.is_empty(),
-            TypedValue::Vec((v, _, _)) => !v.is_empty(),
+            TypedValue::Vec(v) => !v.is_empty(),
             TypedValue::Keyset(v) => !v.is_empty(),
-            TypedValue::Dict((v, _, _)) => !v.is_empty(),
+            TypedValue::Dict(v) => !v.is_empty(),
             // Non-empty collections cast to true
             TypedValue::HhasAdata(_) => true,
         }
@@ -277,13 +264,21 @@ impl<'arena> TypedValue<'arena> {
 
     // String concatenation
     pub fn concat(self, alloc: &'arena bumpalo::Bump, v2: Self) -> Option<Self> {
+        fn safe_to_cast(t: &TypedValue) -> bool {
+            matches!(
+                t,
+                TypedValue::Int(_) | TypedValue::String(_) | TypedValue::LazyClass(_)
+            )
+        }
+        if !safe_to_cast(&self) || !safe_to_cast(&v2) {
+            return None;
+        }
+
         use std::convert::TryInto;
         let s1: Option<std::string::String> = self.try_into().ok();
         let s2: Option<std::string::String> = v2.try_into().ok();
         match (s1, s2) {
-            (Some(l), Some(r)) => Some(Self::String(
-                bumpalo::collections::String::from_str_in((l + &r).as_str(), alloc).into_bump_str(),
-            )),
+            (Some(l), Some(r)) => Some(Self::String(alloc.alloc_str((l + &r).as_str()))),
             _ => None,
         }
     }
@@ -339,8 +334,6 @@ impl<'arena> TypedValue<'arena> {
                 bumpalo::collections::String::from_str_in("", alloc).into_bump_str(),
             )),
             TypedValue::Uninit
-            | TypedValue::VArray(_)
-            | TypedValue::DArray(_)
             | TypedValue::Vec(_)
             | TypedValue::Keyset(_)
             | TypedValue::Dict(_) => None,

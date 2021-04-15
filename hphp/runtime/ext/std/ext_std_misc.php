@@ -40,24 +40,24 @@ function server_warmup_status_monotonic(): string;
 <<__Native>>
 function execution_context(): string;
 
-<<__Pure, __Native, __IsFoldable>>
-function array_mark_legacy(mixed $v, bool $recursive = false): mixed;
+<<__Native, __IsFoldable>>
+function array_mark_legacy(mixed $v, bool $recursive = false)[]: mixed;
 
-<<__Pure, __Native, __IsFoldable>>
-function array_unmark_legacy(mixed $v, bool $recursive = false): mixed;
+<<__Native, __IsFoldable>>
+function array_unmark_legacy(mixed $v, bool $recursive = false)[]: mixed;
 
-<<__Pure, __IsFoldable>>
-function array_mark_legacy_recursive(mixed $v): mixed {
+<<__IsFoldable>>
+function array_mark_legacy_recursive(mixed $v)[]: mixed {
   return array_mark_legacy($v, true);
 }
 
-<<__Pure, __IsFoldable>>
-function array_unmark_legacy_recursive(mixed $v): mixed {
+<<__IsFoldable>>
+function array_unmark_legacy_recursive(mixed $v)[]: mixed {
   return array_unmark_legacy($v, true);
 }
 
-<<__Pure, __Native, __IsFoldable>>
-function is_array_marked_legacy(mixed $v): bool;
+<<__Native, __IsFoldable>>
+function is_array_marked_legacy(mixed $v)[]: bool;
 
 
 
@@ -153,8 +153,8 @@ function ignore_user_abort(bool $setting = false): int;
  * byte X Back up one byte @ NUL-fill to absolute position
  * @return mixed - Returns a binary string containing data.
  */
-<<__Native, __IsFoldable, __Pure>>
-function pack(string $format, ...$args): mixed;
+<<__Native, __IsFoldable>>
+function pack(string $format, ...$args)[]: mixed;
 
 /** @param int $seconds - Halt time in seconds.
  * @return int - Returns zero on success, or FALSE on errors. If the call was
@@ -225,9 +225,9 @@ function uniqid(string $prefix = "",
  * @return mixed - Returns an associative array containing unpacked elements
  * of binary string.
  */
-<<__Native, __IsFoldable, __Pure>>
+<<__Native, __IsFoldable>>
 function unpack(string $format,
-                string $data): mixed;
+                string $data)[]: mixed;
 
 /** Returns three samples representing the average system load (the number of
  * processes in the system run queue) over the last 1, 5 and 15 minutes,
@@ -242,8 +242,8 @@ function sys_getloadavg(): varray;
  * @param mixed $v - The value being casted to a string.
  * @return string - The result of the string cast.
  */
-<<__Native, __IsFoldable, __Pure>>
-function hphp_to_string(mixed $v): string;
+<<__Native, __IsFoldable>>
+function hphp_to_string(mixed $v)[]: string;
 
 function __hhas_adata(string $incorrect_hhas_adata) {
   throw new Exception(
@@ -260,7 +260,7 @@ namespace __SystemLib {
  * @param mixed $arg2 - The second operand of max.
  * @return mixed - The max of two operands.
  */
-<<__Native, __HipHopSpecific, __IsFoldable, __Pure>>
+<<__Native, __IsFoldable, __Pure>>
 function max2(mixed $arg1, mixed $arg2): mixed;
 
 /** min2() returns the min of two operands (optimized FCallBuiltin for min).
@@ -268,7 +268,7 @@ function max2(mixed $arg1, mixed $arg2): mixed;
  * @param mixed $arg2 - The second operand of min.
  * @return mixed - The min of two operands.
  */
-<<__Native, __HipHopSpecific, __IsFoldable, __Pure>>
+<<__Native, __IsFoldable, __Pure>>
 function min2(mixed $arg1, mixed $arg2): mixed;
 
 }

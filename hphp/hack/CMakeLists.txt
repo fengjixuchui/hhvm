@@ -77,6 +77,11 @@ else()
   list(APPEND extra_link_opts ${LZ4_LIBS})
 endif()
 
+get_target_property(ZSTD_INCLUDE_DIRS zstd INTERFACE_INCLUDE_DIRECTORIES)
+list(APPEND extra_include_paths ${ZSTD_INCLUDE_DIRS})
+get_target_property(ZSTD_LIBS zstd INTERFACE_LINK_LIBRARIES)
+list(APPEND extra_link_opts ${ZSTD_LIBS})
+
 if(PC_SQLITE3_FOUND)
   list(APPEND extra_include_paths ${LIBSQLITE3_INCLUDE_DIR})
   get_filename_component(pth ${LIBSQLITE3_LIBRARY} DIRECTORY)
@@ -104,7 +109,7 @@ function(invoke_dune name target)
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     )
 
-  add_dependencies(${name} ocaml rustc cargo)
+  add_dependencies(${name} ocaml rustc cargo zstd)
   if (NOT SKIP_OPAM)
     add_dependencies(${name} opam_setup)
   endif()
@@ -114,16 +119,37 @@ invoke_dune(hack_dune_debug debug)
 invoke_dune(hack_dune_test test)
 invoke_dune(hack_dune all)
 
+set(CARGO_BUILD "${CMAKE_SOURCE_DIR}/hphp/hack/scripts/build_rust_to_ocaml.sh")
+
+add_custom_target(
+  hack_ffi
+  COMMAND
+   . "${CMAKE_CURRENT_BINARY_DIR}/dev_env.sh" &&
+    ${CARGO_BUILD} hack_parser_ffi rust_parser_ffi &&
+    ${CARGO_BUILD} rust_facts_ffi rust_facts_ffi &&
+    ${CARGO_BUILD} compile_ffi compile_ffi
+  COMMENT "Compiling Rust FFI"
+)
+
+add_dependencies(hack_ffi rustc cargo)
+# Not a true dependency, but we need to make sure we don't have two cargo/rustc
+# processes building the FFI files at the same time; this leads to intermittent
+# failures, which for some reason are particularly common on our Azure MacOS
+# build jobs
+add_dependencies(hack_dune hack_ffi)
+
 if (NOT LZ4_FOUND)
   add_dependencies(hack_dune lz4)
   add_dependencies(hack_dune_debug lz4)
   add_dependencies(hack_dune_test lz4)
+  add_dependencies(hack_ffi lz4)
 endif()
 
 if (NOT PC_SQLITE3_FOUND)
   add_dependencies(hack_dune sqlite3)
   add_dependencies(hack_dune_debug sqlite3)
   add_dependencies(hack_dune_test sqlite3)
+  add_dependencies(hack_ffi sqlite3)
 endif()
 
 # Intentionally not using `hack_dune_debug` as it generates output files of a
@@ -134,18 +160,23 @@ endif()
 add_custom_target(hack ALL DEPENDS hack_dune)
 add_custom_target(hack_test DEPENDS hack_dune_test)
 
-# libcompile_ffi_stubs.a and librust_facts_ffi_stubs.a are built by dune so we
-# need some magic to expose them as library targets to cmake for other targets
-# (e.g. hhvm) to depend on.
-set(LIBCOMPILE_PATH "${DUNE_BUILD_DIR}/libcompile_ffi_stubs.a")
+# libcompile_ffi_stubs.a, librust_facts_ffi_stubs.a, and
+# librust_parser_ffi_stubs.a need to be exposed as library targets to cmake
+# for other targets (e.g. hhvm) to depend on.
+set(LIBCOMPILE_PATH "${CMAKE_BINARY_DIR}/hphp/hack/libcompile_ffi_stubs.a")
 add_library(libcompile_ffi_stubs STATIC IMPORTED GLOBAL)
-add_dependencies(libcompile_ffi_stubs hack_dune)
+add_dependencies(libcompile_ffi_stubs hack_ffi)
 set_target_properties(libcompile_ffi_stubs PROPERTIES IMPORTED_LOCATION ${LIBCOMPILE_PATH})
 
-set(LIBRUST_PATH "${DUNE_BUILD_DIR}/librust_facts_ffi_stubs.a")
+set(LIBRUST_PATH "${CMAKE_BINARY_DIR}/hphp/hack/librust_facts_ffi_stubs.a")
 add_library(librust_facts_ffi_stubs STATIC IMPORTED GLOBAL)
-add_dependencies(librust_facts_ffi_stubs hack_dune)
+add_dependencies(librust_facts_ffi_stubs hack_ffi)
 set_target_properties(librust_facts_ffi_stubs PROPERTIES IMPORTED_LOCATION ${LIBRUST_PATH})
+
+set(LIBRUST_PARSER_PATH "${CMAKE_BINARY_DIR}/hphp/hack/librust_parser_ffi_stubs.a")
+add_library(librust_parser_ffi_stubs STATIC IMPORTED GLOBAL)
+add_dependencies(librust_parser_ffi_stubs hack_ffi)
+set_target_properties(librust_parser_ffi_stubs PROPERTIES IMPORTED_LOCATION ${LIBRUST_PARSER_PATH})
 
 configure_file(dev_env.sh.in dev_env.sh ESCAPE_QUOTES @ONLY)
 

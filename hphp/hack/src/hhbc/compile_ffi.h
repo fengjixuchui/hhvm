@@ -10,7 +10,9 @@
 #  include<stdint.h>
 #  include<stddef.h>
 
-enum env_flags {
+#  include "hphp/hack/src/hhbc/compile_ffi_types_fwd.h"
+
+enum hackc_compile_env_flags {
     IS_SYSTEMLIB=1 << 0
   , IS_EVALED=1 << 1
   , FOR_DEBUGGER_EVAL=1 << 2
@@ -18,7 +20,7 @@ enum env_flags {
   , DISABLE_TOPLEVEL_ENUMERATION=1 << 4
 };
 
-enum hhbc_flags {
+enum hackc_compile_hhbc_flags {
   LTR_ASSIGN=1 << 0
   , UVS=1 << 1
   , HACK_ARR_COMPAT_NOTICES=1 << 2
@@ -33,12 +35,12 @@ enum hhbc_flags {
   , EMIT_METH_CALLER_FUNC_POINTERS=1 << 11
   , RX_IS_ENABLED=1 << 12
   , ARRAY_PROVENANCE=1 << 13
-  , HACK_ARR_DV_ARR_MARK=1 << 14
+  // No longer using bit 14.
   , FOLD_LAZY_CLASS_KEYS=1 << 15
   , EMIT_INST_METH_POINTERS=1 << 16
 };
 
-enum parser_flags {
+enum hackc_compile_parser_flags {
    ABSTRACT_STATIC_PROPS=1 << 0
   , ALLOW_NEW_ATTRIBUTE_SYNTAX=1 << 1
   , ALLOW_UNSTABLE_FEATURES=1 << 2
@@ -54,46 +56,47 @@ enum parser_flags {
   , DISALLOW_FUN_AND_CLS_METH_PSEUDO_FUNCS=1 << 12
   , DISALLOW_FUNC_PTRS_IN_CONSTANTS=1 << 13
   , DISALLOW_HASH_COMMENTS=1 << 14
-  , ENABLE_COROUTINES=1 << 15
   , ENABLE_ENUM_CLASSES=1 << 16
   , ENABLE_XHP_CLASS_MODIFIER=1 << 17
   , DISALLOW_DYNAMIC_METH_CALLER_ARGS=1 << 18
   , ENABLE_CLASS_LEVEL_WHERE_CLAUSES=1 << 19
-};
-
-struct native_environment {
-  char const* filepath;
-  char const * aliased_namespaces;
-  char const * include_roots;
-  int32_t emit_class_pointers;
-  int32_t check_int_overflow;
-  uint32_t hhbc_flags;
-  uint32_t parser_flags;
-  uint8_t flags;
-};
-
-struct output_config {
-  bool include_header;
-  char const* output_file;
-};
-
-struct buf_t {
-  char* buf;
-  int buf_siz;
+  , ENABLE_READONLY_ENFORCEMENT=1 << 20
 };
 
 #  if defined(__cplusplus)
 extern "C" {
 #  endif /*defined(__cplusplus)*/
-char const* compile_from_text_cpp_ffi(
-       native_environment const* env
+char const* hackc_compile_from_text_cpp_ffi(
+       hackc_compile_native_environment const* env
      , char const* source_text
-     , output_config const* config
-     , buf_t* error_buf );
+     , hackc_compile_output_config const* config
+     , hackc_error_buf_t* error_buf );
 
-void compile_from_text_free_string_cpp_ffi(char const*);
+void hackc_compile_from_text_free_string_cpp_ffi(char const*);
 #  if defined(__cplusplus)
 }
+
+#  include <memory>
+
+namespace HPHP {
+
+using hackc_compile_from_text_ptr =
+  std::unique_ptr<char const, void(*)(char const*)>;
+
+inline hackc_compile_from_text_ptr
+  hackc_compile_from_text(
+      hackc_compile_native_environment const* env
+    , char const* source_text
+    , hackc_compile_output_config const* config
+    , hackc_error_buf_t* error_buf
+  ) {
+  return hackc_compile_from_text_ptr {
+      hackc_compile_from_text_cpp_ffi(env, source_text, config, error_buf)
+    , hackc_compile_from_text_free_string_cpp_ffi
+  };
+}
+
+}//namespace HPHP
 #  endif /*defined(__cplusplus)*/
 
 #endif/*!defined(COMPILE_FFI_H)*/

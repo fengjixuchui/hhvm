@@ -15,13 +15,32 @@
 */
 #include "hphp/runtime/base/apc-typed-value.h"
 
-#include "hphp/runtime/base/bespoke-array.h"
-#include "hphp/runtime/base/mixed-array.h"
-#include "hphp/runtime/base/packed-array.h"
-#include "hphp/runtime/base/set-array.h"
+#include "hphp/runtime/base/tv-uncounted.h"
 #include "hphp/runtime/ext/apc/ext_apc.h"
 
 namespace HPHP {
+
+namespace {
+APCKind getAPCKind(const ArrayData* ad) {
+  switch (ad->toPersistentDataType()) {
+    case KindOfPersistentVec:
+      return ad->isStatic() ? APCKind::StaticVec : APCKind::UncountedVec;
+    case KindOfPersistentDict:
+      return ad->isStatic() ? APCKind::StaticDict : APCKind::UncountedDict;
+    case KindOfPersistentKeyset:
+      return ad->isStatic() ? APCKind::StaticKeyset : APCKind::UncountedKeyset;
+    default:
+      always_assert(false);
+  }
+}
+}
+
+APCTypedValue::APCTypedValue(ArrayData* ad)
+    : m_handle(getAPCKind(ad), ad->toPersistentDataType()) {
+  assertx(!ad->isRefCounted());
+  m_data.arr = ad;
+  assertx(checkInvariants());
+}
 
 APCTypedValue* APCTypedValue::tvUninit() {
   static APCTypedValue* value = new APCTypedValue(KindOfUninit);
@@ -59,10 +78,6 @@ bool APCTypedValue::checkInvariants() const {
     case APCKind::StaticString: assertx(m_data.str->isStatic()); break;
     case APCKind::UncountedString: assertx(m_data.str->isUncounted()); break;
     case APCKind::LazyClass: assertx(m_data.str->isStatic()); break;
-    case APCKind::StaticArray:
-      assertx(m_data.arr->isPHPArrayType());
-      assertx(m_data.arr->isStatic());
-      break;
     case APCKind::StaticVec:
       assertx(m_data.arr->isVecType());
       assertx(m_data.arr->isStatic());
@@ -74,10 +89,6 @@ bool APCTypedValue::checkInvariants() const {
     case APCKind::StaticKeyset:
       assertx(m_data.arr->isKeysetType());
       assertx(m_data.arr->isStatic());
-      break;
-    case APCKind::UncountedArray:
-      assertx(m_data.arr->isPHPArrayType());
-      assertx(m_data.arr->isUncounted());
       break;
     case APCKind::UncountedVec:
       assertx(m_data.arr->isVecType());
@@ -104,11 +115,6 @@ bool APCTypedValue::checkInvariants() const {
     case APCKind::SharedDict:
     case APCKind::SharedLegacyDict:
     case APCKind::SharedKeyset:
-    case APCKind::SharedVArray:
-    case APCKind::SharedMarkedVArray:
-    case APCKind::SharedDArray:
-    case APCKind::SharedMarkedDArray:
-    case APCKind::SerializedArray:
     case APCKind::SerializedObject:
     case APCKind::SerializedVec:
     case APCKind::SerializedDict:
@@ -125,10 +131,9 @@ void APCTypedValue::deleteUncounted() {
   assertx(m_handle.isUncounted());
   auto kind = m_handle.kind();
   assertx(kind == APCKind::UncountedString ||
-         kind == APCKind::UncountedArray ||
-         kind == APCKind::UncountedVec ||
-         kind == APCKind::UncountedDict ||
-         kind == APCKind::UncountedKeyset);
+          kind == APCKind::UncountedVec ||
+          kind == APCKind::UncountedDict ||
+          kind == APCKind::UncountedKeyset);
 
   static_assert(std::is_trivially_destructible<APCTypedValue>::value,
                 "APCTypedValue must be trivially destructible - "
@@ -136,13 +141,10 @@ void APCTypedValue::deleteUncounted() {
                 "destroying it");
 
   if (kind == APCKind::UncountedString) {
-    StringData::ReleaseUncounted(m_data.str);
+    DecRefUncountedString(m_data.str);
   } else {
     auto const arr = m_data.arr;
-    if (arr->hasVanillaPackedLayout()) PackedArray::ReleaseUncounted(arr);
-    else if (arr->hasVanillaMixedLayout()) MixedArray::ReleaseUncounted(arr);
-    else if (arr->isKeysetKind()) SetArray::ReleaseUncounted(arr);
-    else BespokeArray::ReleaseUncounted(arr);
+    DecRefUncountedArray(arr);
     if (arr == static_cast<void*>(this + 1)) {
       return;  // *::ReleaseUncounted freed the joint allocation.
     }

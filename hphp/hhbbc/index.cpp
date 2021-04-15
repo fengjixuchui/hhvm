@@ -146,17 +146,17 @@ template<class T> using SStringToOneT =
   >;
 
 /*
- * One-to-one case insensitive map, where the keys are static strings
+ * One-to-one case sensitive map, where the keys are static strings
  * and the values are some T.
  *
  * Elements are not stable under insert/erase.
  */
-template<class T> using ISStringToOneFastT =
+template<class T> using SStringToOneFastT =
   hphp_fast_map<
     SString,
     T,
     string_data_hash,
-    string_data_isame
+    string_data_same
   >;
 
 /*
@@ -389,41 +389,24 @@ struct res::Func::FuncFamily {
   static_assert(sizeof(PFuncVec) == sizeof(uintptr_t),
                 "CompactVector must be layout compatible with a pointer");
 
-  struct Holder {
-    Holder(const Holder& o) : bits{o.bits} {}
-    explicit Holder(PFuncVec&& o) : v{std::move(o)} {}
-    explicit Holder(uintptr_t b) : bits{b & ~1} {}
-    Holder& operator=(const Holder&) = delete;
-    ~Holder() {}
-    const PFuncVec* operator->() const { return &v; }
-    uintptr_t val() const { return bits; }
-    friend auto begin(const Holder& h) { return h->begin(); }
-    friend auto end(const Holder& h) { return h->end(); }
-  private:
-    union {
-      uintptr_t bits;
-      PFuncVec  v;
-    };
-  };
-
-  FuncFamily(PFuncVec&& v, bool containsInterceptables)
-    : m_raw{Holder{std::move(v)}.val()} {
-    if (containsInterceptables) m_raw |= 1;
+  explicit FuncFamily(PFuncVec&& v) : m_v{std::move(v)} {}
+  FuncFamily(FuncFamily&& o) noexcept : m_v(std::move(o.m_v)) {}
+  FuncFamily& operator=(FuncFamily&& o) noexcept {
+    m_v = std::move(o.m_v);
+    return *this;
   }
-  FuncFamily(FuncFamily&& o) noexcept : m_raw(o.m_raw) {
-    o.m_raw = 0;
-  }
-  ~FuncFamily() {
-    Holder{m_raw & ~1}->~PFuncVec();
-  }
+  FuncFamily(const FuncFamily&) = delete;
   FuncFamily& operator=(const FuncFamily&) = delete;
 
-  bool containsInterceptables() const { return m_raw & 1; };
-  const Holder possibleFuncs() const {
-    return Holder{m_raw & ~1};
+  const PFuncVec& possibleFuncs() const {
+    return m_v;
   };
+
+  friend auto begin(const FuncFamily& ff) { return ff.m_v.begin(); }
+  friend auto end(const FuncFamily& ff) { return ff.m_v.end(); }
+
 private:
-  uintptr_t m_raw;
+  PFuncVec  m_v;
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -516,14 +499,14 @@ struct ClassInfo {
   CompactVector<php::Const> traitConsts;
 
   /*
-   * A (case-insensitive) map from class method names to the php::Func
+   * A (case-sensitive) map from class method names to the php::Func
    * associated with it.  This map is flattened across the inheritance
    * hierarchy.
    */
-  ISStringToOneT<MethTabEntry> methods;
+  SStringToOneT<MethTabEntry> methods;
 
   /*
-   * A (case-insensitive) map from class method names to associated
+   * A (case-sensitive) map from class method names to associated
    * FuncFamily objects that group the set of possibly-overriding
    * methods.
    *
@@ -533,7 +516,7 @@ struct ClassInfo {
    * Invariant: methods on this class with AttrNoOverride or
    * AttrPrivate will not have an entry in this map.
    */
-  ISStringToOneFastT<FuncFamily> methodFamilies;
+  SStringToOneFastT<FuncFamily> methodFamilies;
 
   /*
    * Subclasses of this class, including this class itself.
@@ -935,7 +918,7 @@ SString Func::name() const {
     [&] (FuncInfo* fi) { return fi->func->name; },
     [&] (const MethTabEntryPair* mte) { return mte->first; },
     [&] (FuncFamily* fa) -> SString {
-      auto const name = fa->possibleFuncs()->front()->first;
+      auto const name = fa->possibleFuncs().front()->first;
       if (debug) {
         for (DEBUG_ONLY auto const f : fa->possibleFuncs()) {
           assertx(f->first->isame(name));
@@ -1138,7 +1121,6 @@ struct Index::IndexData {
 
   bool frozen{false};
   bool ever_frozen{false};
-  bool any_interceptable_functions{false};
 
   std::unique_ptr<ArrayTypeTable::Builder> arrTableBuilder;
 
@@ -1559,8 +1541,11 @@ bool build_class_constants(BuildClsInfo& info,
       // A constant from a declared interface collides with a constant
       // (Excluding constants from interfaces a trait implements)
       // Need this check otherwise constants from traits that conflict with
-      // declared interfaces will silently lose and not conflict in the runtime
-      if (existing->cls->attrs & AttrInterface &&
+      // declared interfaces will silently lose and not conflict in the runtime.
+      // Type and Context constants can be overriden.
+      if (c.kind != ConstModifiers::Kind::Type &&
+          c.kind != ConstModifiers::Kind::Context &&
+          existing->cls->attrs & AttrInterface &&
         !(c.cls->attrs & AttrInterface && fromTrait)) {
         for (auto const& interface : info.rleaf->declInterfaces) {
           if (existing->cls == interface->cls) {
@@ -1582,7 +1567,7 @@ bool build_class_constants(BuildClsInfo& info,
 
       // A constant from an interface or from an included enum collides
       // with an existing constant.
-      if (rparent->cls->attrs & (AttrInterface | AttrEnum)) {
+      if (rparent->cls->attrs & (AttrInterface | AttrEnum | AttrEnumClass)) {
         ITRACE(2,
                "build_cls_info_rec failed for `{}' because "
                "`{}' was defined by both `{}' and `{}'\n",
@@ -2102,29 +2087,24 @@ void add_unit_to_index(IndexData& index, php::Unit& unit) {
     for (auto& m : c->methods) {
       attribute_setter(m->attrs, false, AttrNoOverride);
       index.methods.insert({m->name, m.get()});
-      if (m->attrs & AttrInterceptable) {
-        index.any_interceptable_functions = true;
-      }
 
-      if (RuntimeOption::RepoAuthoritative) {
-        uint64_t refs = 0, cur = 1;
-        bool anyInOut = false;
-        for (auto& p : m->params) {
-          if (p.inout) {
-            refs |= cur;
-            anyInOut = true;
-          }
-          // It doesn't matter that we lose parameters beyond the 64th,
-          // for those, we'll conservatively check everything anyway.
-          cur <<= 1;
+      uint64_t refs = 0, cur = 1;
+      bool anyInOut = false;
+      for (auto& p : m->params) {
+        if (p.inout) {
+          refs |= cur;
+          anyInOut = true;
         }
-        if (anyInOut) {
-          // Multiple methods with the same name will be combined in the same
-          // cell, thus we use |=. This only makes sense in WholeProgram mode
-          // since we use this field to check that no functions has its n-th
-          // parameter as inout, which requires global knowledge.
-          index.method_inout_params_by_name[m->name] |= refs;
-        }
+        // It doesn't matter that we lose parameters beyond the 64th,
+        // for those, we'll conservatively check everything anyway.
+        cur <<= 1;
+      }
+      if (anyInOut) {
+        // Multiple methods with the same name will be combined in the same
+        // cell, thus we use |=. This only makes sense in WholeProgram mode
+        // since we use this field to check that no functions has its n-th
+        // parameter as inout, which requires global knowledge.
+        index.method_inout_params_by_name[m->name] |= refs;
       }
     }
 
@@ -2149,7 +2129,6 @@ void add_unit_to_index(IndexData& index, php::Unit& unit) {
       unit.funcs.erase(i);
       continue;
     }
-    if (f->attrs & AttrInterceptable) index.any_interceptable_functions = true;
     add_symbol(index.funcs, f.get(), "function");
     ++i;
   }
@@ -2682,11 +2661,13 @@ void resolve_combinations(ClassNamingEnv& env,
 
   for (auto& included_enum_name : cls->includedEnumNames) {
     auto const included_enum = map.at(included_enum_name);
-    if (!(included_enum->cls->attrs & AttrEnum)) {
+    auto const want_attr = cls->attrs & (AttrEnum | AttrEnumClass);
+    if (!(included_enum->cls->attrs & want_attr)) {
       ITRACE(2,
              "Resolve combinations failed for `{}' because `{}' "
-             "is not an enum\n",
-             cls->name, included_enum_name);
+             "is not an enum{}\n",
+             cls->name, included_enum_name,
+             want_attr & AttrEnumClass ? " class" : "");
       return;
     }
     cinfo->includedEnums.push_back(included_enum);
@@ -2804,6 +2785,7 @@ void compute_subclass_list(IndexData& index) {
   trace_time _("compute subclass list");
   auto fixupTraits = false;
   auto fixupEnums = false;
+  auto const AnyEnum = AttrEnum | AttrEnumClass;
   for (auto& cinfo : index.allClassInfos) {
     if (cinfo->cls->attrs & AttrInterface) continue;
     for (auto& cparent : cinfo->baseList) {
@@ -2815,13 +2797,13 @@ void compute_subclass_list(IndexData& index) {
       compute_subclass_list_rec(index, cinfo.get(), cinfo.get());
     }
     // Add the included enum lists if cinfo is an enum
-    if (!(cinfo->cls->attrs & AttrEnum) &&
+    if ((cinfo->cls->attrs & AnyEnum) &&
         cinfo->cls->includedEnumNames.size()) {
       fixupEnums = true;
       compute_included_enums_list_rec(index, cinfo.get(), cinfo.get());
     }
     // Also add instantiable classes to their interface's subclassLists
-    if (cinfo->cls->attrs & (AttrTrait | AttrEnum | AttrAbstract)) continue;
+    if (cinfo->cls->attrs & (AttrTrait | AnyEnum | AttrAbstract)) continue;
     for (auto& ipair : cinfo->implInterfaces) {
       auto impl = const_cast<ClassInfo*>(ipair.second);
       impl->subclassList.push_back(cinfo.get());
@@ -2831,7 +2813,7 @@ void compute_subclass_list(IndexData& index) {
   for (auto& cinfo : index.allClassInfos) {
     auto& sub = cinfo->subclassList;
     if ((fixupTraits && cinfo->cls->attrs & AttrTrait) ||
-        (fixupEnums && cinfo->cls->attrs & AttrEnum)) {
+        (fixupEnums && cinfo->cls->attrs & AnyEnum)) {
       // traits and enums can be reached by multiple paths, so we need to
       // uniquify their subclassLists.
       std::sort(begin(sub), end(sub));
@@ -2847,7 +2829,6 @@ void compute_subclass_list(IndexData& index) {
 bool define_func_family(IndexData& index, ClassInfo* cinfo,
                         SString name, const php::Func* func = nullptr) {
   FuncFamily::PFuncVec funcs{};
-  auto containsInterceptables = false;
   for (auto const cleaf : cinfo->subclassList) {
     auto const leafFn = [&] () -> const MethTabEntryPair* {
       auto const leafFnIt = cleaf->methods.find(name);
@@ -2855,9 +2836,6 @@ bool define_func_family(IndexData& index, ClassInfo* cinfo,
       return mteFromIt(leafFnIt);
     }();
     if (!leafFn) continue;
-    if (leafFn->second.func->attrs & AttrInterceptable) {
-      containsInterceptables = true;
-    }
     funcs.push_back(leafFn);
   }
 
@@ -2906,7 +2884,7 @@ bool define_func_family(IndexData& index, ClassInfo* cinfo,
   cinfo->methodFamilies.emplace(
     std::piecewise_construct,
     std::forward_as_tuple(name),
-    std::forward_as_tuple(std::move(funcs), containsInterceptables)
+    std::forward_as_tuple(std::move(funcs))
   );
 
   return true;
@@ -3055,7 +3033,7 @@ void trace_interfaces(const IndexData& index, const ConflictGraph& cg) {
       ifaces.emplace_back(cinfo->cls);
       continue;
     }
-    if (cinfo->cls->attrs & (AttrTrait | AttrEnum | AttrAbstract)) continue;
+    if (cinfo->cls->attrs & (AttrTrait | AttrEnum | AttrEnumClass)) continue;
 
     classes.emplace_back(Cls{cinfo.get()});
     auto& vtable = classes.back().vtable;
@@ -3177,10 +3155,8 @@ void compute_iface_vtables(IndexData& index) {
       continue;
     }
 
-    // Only worry about classes that can be instantiated. If an abstract class
-    // has any concrete subclasses, those classes will make sure the right
-    // entries are in the conflict sets.
-    if (cinfo->cls->attrs & (AttrTrait | AttrEnum | AttrAbstract)) continue;
+    // Only worry about classes with methods that can be called.
+    if (cinfo->cls->attrs & (AttrTrait | AttrEnum | AttrEnumClass)) continue;
 
     for (auto& ipair : cinfo->implInterfaces) {
       ++iface_uses[ipair.second->cls];
@@ -3457,8 +3433,8 @@ void check_invariants(const ClassInfo* cinfo) {
   // Every FuncFamily is non-empty and contain functions with the same
   // name (unless its a family of ctors).
   for (auto const& mfam: cinfo->methodFamilies) {
-    always_assert(!mfam.second.possibleFuncs()->empty());
-    auto const name = mfam.second.possibleFuncs()->front()->first;
+    always_assert(!mfam.second.possibleFuncs().empty());
+    auto const name = mfam.second.possibleFuncs().front()->first;
     for (auto const pf : mfam.second.possibleFuncs()) {
       always_assert(pf->first->isame(name));
     }
@@ -3579,14 +3555,11 @@ Type context_sensitive_return_type(IndexData& data,
 //////////////////////////////////////////////////////////////////////
 
 PrepKind func_param_prep_default() {
-  return RuntimeOption::EvalJitEnableRenameFunction
-    ? PrepKind::Unknown
-    : PrepKind::Val;
+  return PrepKind::Val;
 }
 
 PrepKind func_param_prep(const php::Func* func,
                          uint32_t paramId) {
-  if (func->attrs & AttrInterceptable) return PrepKind::Unknown;
   if (paramId >= func->params.size()) {
     return PrepKind::Val;
   }
@@ -3594,14 +3567,10 @@ PrepKind func_param_prep(const php::Func* func,
 }
 
 folly::Optional<uint32_t> func_num_inout_default() {
-  if (RuntimeOption::EvalJitEnableRenameFunction) {
-    return folly::none;
-  }
   return 0;
 }
 
 folly::Optional<uint32_t> func_num_inout(const php::Func* func) {
-  if (func->attrs & AttrInterceptable) return folly::none;
   if (!func->hasInOutArgs) return 0;
   uint32_t count = 0;
   for (auto& p : func->params) count += p.inout;
@@ -3616,8 +3585,6 @@ PrepKind prep_kind_from_set(PossibleFuncRange range, uint32_t paramId) {
    * possible resolutions, HHBBC cannot deduce anything about by-val vs inout.
    * So the caller should make sure not calling this in single-unit mode.
    */
-  assertx(RuntimeOption::RepoAuthoritative);
-
   if (begin(range) == end(range)) {
     return func_param_prep_default();
   }
@@ -3654,8 +3621,6 @@ folly::Optional<uint32_t> num_inout_from_set(PossibleFuncRange range) {
    * possible resolutions, HHBBC cannot deduce anything about inout args.
    * So the caller should make sure not calling this in single-unit mode.
    */
-  assertx(RuntimeOption::RepoAuthoritative);
-
   if (begin(range) == end(range)) {
     return func_num_inout_default();
   }
@@ -3924,6 +3889,7 @@ PropLookupResult<> lookup_static_impl(IndexData& data,
       propName,
       TriBool::Yes,
       yesOrNo(prop.attrs & AttrIsConst),
+      yesOrNo(prop.attrs & AttrIsReadOnly),
       yesOrNo(prop.attrs & AttrLateInit),
       initMightRaise
     };
@@ -3934,6 +3900,7 @@ PropLookupResult<> lookup_static_impl(IndexData& data,
     return PropLookupResult<>{
       TBottom,
       propName,
+      TriBool::No,
       TriBool::No,
       TriBool::No,
       TriBool::No,
@@ -4037,6 +4004,7 @@ PropMergeResult<> merge_static_type_impl(IndexData& data,
                                          const Type& val,
                                          bool checkUB,
                                          bool ignoreConst,
+                                         bool mustBeReadOnly,
                                          bool startOnly) {
   ITRACE(
     6, "merge_static_type_impl: {} {} {} {}\n",
@@ -4118,6 +4086,11 @@ PropMergeResult<> merge_static_type_impl(IndexData& data,
             ITRACE(6, "skipping const {}::${}\n", ci->cls->name, prop.name);
             continue;
           }
+          if (mustBeReadOnly && !(prop.attrs & AttrIsReadOnly)) {
+            ITRACE(6, "skipping mutable property that must be readonly {}::${}\n",
+              ci->cls->name, prop.name);
+            continue;
+          }
           result |= merge(prop, ci);
         }
         return startOnly;
@@ -4150,6 +4123,13 @@ PropMergeResult<> merge_static_type_impl(IndexData& data,
         if (!ignoreConst && (prop.attrs & AttrIsConst)) {
           ITRACE(
             6, "{}:${} found but const, stopping\n",
+            ci->cls->name, propName
+          );
+          return notFound();
+        }
+        if (mustBeReadOnly && !(prop.attrs & AttrIsReadOnly)) {
+          ITRACE(
+            6, "{}:${} found but is mutable and must be readonly, stopping\n",
             ci->cls->name, propName
           );
           return notFound();
@@ -4712,16 +4692,11 @@ folly::Optional<res::Record> Index::resolve_record(SString recName) const {
 
 res::Class Index::resolve_class(const php::Class* cls) const {
 
-  // If we are in repo mod or it is a builtin if we find it we can return it.
-  if (RuntimeOption::RepoAuthoritative ||
-        (!RuntimeOption::EvalJitEnableRenameFunction &&
-         cls->attrs & AttrBuiltin)) {
-    auto const it = m_data->classInfo.find(cls->name);
-    if (it != end(m_data->classInfo)) {
-      auto const cinfo = it->second;
-      if (cinfo->cls == cls) {
-        return res::Class { cinfo };
-      }
+  auto const it = m_data->classInfo.find(cls->name);
+  if (it != end(m_data->classInfo)) {
+    auto const cinfo = it->second;
+    if (cinfo->cls == cls) {
+      return res::Class { cinfo };
     }
   }
 
@@ -4858,11 +4833,7 @@ Index::ConstraintResolution Index::resolve_named_type(
         return subObj(rcls);
       }
 
-      if (candidate.subtypeOf(BInitNull | BVArr | BDArr)) {
-        if (interface_supports_arrlike(rcls.name())) {
-          return union_of(TVArr, TDArr);
-        }
-      } else if (candidate.subtypeOf(BOptVec)) {
+      if (candidate.subtypeOf(BOptVec)) {
         if (interface_supports_arrlike(rcls.name())) return TVec;
       } else if (candidate.subtypeOf(BOptDict)) {
         if (interface_supports_arrlike(rcls.name())) return TDict;
@@ -4953,8 +4924,8 @@ res::Func Index::resolve_method(Context ctx,
   auto const find_extra_method = [&] {
     auto methIt = cinfo->methodFamilies.find(name);
     if (methIt == end(cinfo->methodFamilies)) return name_only();
-    if (methIt->second.possibleFuncs()->size() == 1) {
-      return res::Func { this, methIt->second.possibleFuncs()->front() };
+    if (methIt->second.possibleFuncs().size() == 1) {
+      return res::Func { this, methIt->second.possibleFuncs().front() };
     }
     // If there was a sole implementer we can resolve to a single method, even
     // if the method was not declared on the interface itself.
@@ -4995,7 +4966,6 @@ res::Func Index::resolve_method(Context ctx,
    */
   auto const methIt = cinfo->methods.find(name);
   if (methIt == end(cinfo->methods)) return find_extra_method();
-  if (methIt->second.attrs & AttrInterceptable) return name_only();
   auto const ftarget = methIt->second.func;
 
   // We need to revisit the hasPrivateAncestor code if we start being
@@ -5042,9 +5012,6 @@ res::Func Index::resolve_method(Context ctx,
       if (famIt == end(cinfo->methodFamilies)) {
         return name_only();
       }
-      if (famIt->second.containsInterceptables()) {
-        return name_only();
-      }
       return res::Func { this, &famIt->second };
     }
   }
@@ -5062,7 +5029,6 @@ Index::resolve_ctor(Context /*ctx*/, res::Class rcls, bool exact) const {
 
   auto const ctor = mteFromIt(cit);
   if (exact || ctor->second.attrs & AttrNoOverride) {
-    if (ctor->second.attrs & AttrInterceptable) return folly::none;
     create_func_info(*m_data, ctor->second.func);
     return res::Func { this, ctor };
   }
@@ -5071,7 +5037,6 @@ Index::resolve_ctor(Context /*ctx*/, res::Class rcls, bool exact) const {
 
   auto const famIt = cinfo->methodFamilies.find(s_construct.get());
   if (famIt == end(cinfo->methodFamilies)) return folly::none;
-  if (famIt->second.containsInterceptables()) return folly::none;
   return res::Func { this, &famIt->second };
 }
 
@@ -5084,15 +5049,9 @@ Index::resolve_func_helper(const php::Func* func, SString name) const {
   // no resolution
   if (func == nullptr) return name_only(false);
 
-  if (func->attrs & AttrInterceptable) return name_only(true);
-
   // single resolution, in whole-program mode, that's it
-  if (RuntimeOption::RepoAuthoritative) {
-    assertx(func->attrs & AttrUnique);
-    return do_resolve(func);
-  }
-
-  return name_only(false);
+  assertx(func->attrs & AttrUnique);
+  return do_resolve(func);
 }
 
 res::Func Index::resolve_func(Context /*ctx*/, SString name) const {
@@ -5192,10 +5151,6 @@ Index::ConstraintResolution Index::get_type_for_annotated_type(
       case KindOfDict:         return TDict;
       case KindOfPersistentKeyset:
       case KindOfKeyset:       return TKeyset;
-      case KindOfPersistentDArray:
-      case KindOfDArray:       return TDArr;
-      case KindOfPersistentVArray:
-      case KindOfVArray:       return TVArr;
       case KindOfResource:     return TRes;
       case KindOfClsMeth:      return TClsMeth;
       case KindOfRecord:       // fallthrough
@@ -5242,19 +5197,11 @@ Index::ConstraintResolution Index::get_type_for_annotated_type(
       if (candidate.subtypeOf(BInt)) return TInt;
       if (candidate.subtypeOf(BStr)) return TStr;
       return TArrKey;
-    case AnnotMetaType::VArrOrDArr:
-      assertx(!RuntimeOption::EvalHackArrDVArrs);
-      if (candidate.subtypeOf(BVArr)) return TVArr;
-      if (candidate.subtypeOf(BDArr)) return TDArr;
-      return union_of(TVArr, TDArr);
     case AnnotMetaType::VecOrDict:
       if (candidate.subtypeOf(BVec)) return TVec;
       if (candidate.subtypeOf(BDict)) return TDict;
       return union_of(TVec, TDict);
     case AnnotMetaType::ArrayLike:
-      if (candidate.subtypeOf(BVArr)) return TVArr;
-      if (candidate.subtypeOf(BDArr)) return TDArr;
-      if (candidate.subtypeOf(BVArr | BDArr)) return union_of(TVArr, TDArr);
       if (candidate.subtypeOf(BVec)) return TVec;
       if (candidate.subtypeOf(BDict)) return TDict;
       if (candidate.subtypeOf(BKeyset)) return TKeyset;
@@ -5367,10 +5314,6 @@ bool Index::is_effect_free(res::Func rfunc) const {
     [&](FuncFamily* fam) {
       return false;
     });
-}
-
-bool Index::any_interceptable_functions() const {
-  return m_data->any_interceptable_functions;
 }
 
 const php::Const* Index::lookup_class_const_ptr(Context ctx,
@@ -5631,14 +5574,13 @@ folly::Optional<uint32_t> Index::lookup_num_inout_params(
   return match<folly::Optional<uint32_t>>(
     rfunc.val,
     [&] (res::Func::FuncName s) -> folly::Optional<uint32_t> {
-      if (!RuntimeOption::RepoAuthoritative || s.renamable) return folly::none;
+      if (s.renamable) return folly::none;
       auto const it = m_data->funcs.find(s.name);
       return it != end(m_data->funcs)
        ? func_num_inout(it->second)
        : func_num_inout_default();
     },
     [&] (res::Func::MethodName s) -> folly::Optional<uint32_t> {
-      if (!RuntimeOption::RepoAuthoritative) return folly::none;
       auto const it = m_data->method_inout_params_by_name.find(s.name);
       if (it == end(m_data->method_inout_params_by_name)) {
         // There was no entry, so no method by this name takes a parameter
@@ -5655,7 +5597,6 @@ folly::Optional<uint32_t> Index::lookup_num_inout_params(
       return func_num_inout(mte->second.func);
     },
     [&] (FuncFamily* fam) -> folly::Optional<uint32_t> {
-      assertx(RuntimeOption::RepoAuthoritative);
       return num_inout_from_set(fam->possibleFuncs());
     }
   );
@@ -5666,14 +5607,13 @@ PrepKind Index::lookup_param_prep(Context /*ctx*/, res::Func rfunc,
   return match<PrepKind>(
     rfunc.val,
     [&] (res::Func::FuncName s) {
-      if (!RuntimeOption::RepoAuthoritative || s.renamable) return PrepKind::Unknown;
+      if (s.renamable) return PrepKind::Unknown;
       auto const it = m_data->funcs.find(s.name);
       return it != end(m_data->funcs)
         ? func_param_prep(it->second, paramId)
         : func_param_prep_default();
     },
     [&] (res::Func::MethodName s) {
-      if (!RuntimeOption::RepoAuthoritative) return PrepKind::Unknown;
       auto const it = m_data->method_inout_params_by_name.find(s.name);
       if (it == end(m_data->method_inout_params_by_name)) {
         // There was no entry, so no method by this name takes a parameter
@@ -5695,7 +5635,6 @@ PrepKind Index::lookup_param_prep(Context /*ctx*/, res::Func rfunc,
       return func_param_prep(mte->second.func, paramId);
     },
     [&] (FuncFamily* fam) {
-      assertx(RuntimeOption::RepoAuthoritative);
       return prep_kind_from_set(fam->possibleFuncs(), paramId);
     }
   );
@@ -5786,6 +5725,7 @@ PropLookupResult<> Index::lookup_static(Context ctx,
     return PropLookupResult<>{
       TInitCell,
       sname,
+      TriBool::Maybe,
       TriBool::Maybe,
       TriBool::Maybe,
       TriBool::Maybe,
@@ -5939,7 +5879,8 @@ PropMergeResult<> Index::merge_static_type(
     const Type& name,
     const Type& val,
     bool checkUB,
-    bool ignoreConst) const {
+    bool ignoreConst,
+    bool mustBeReadOnly) const {
   ITRACE(
     4, "merge_static_type: {} {}::${} {}\n",
     show(ctx), show(cls), show(name), show(val)
@@ -5950,7 +5891,7 @@ PropMergeResult<> Index::merge_static_type(
 
   using R = PropMergeResult<>;
 
-  // In some cases we might try to merge Bottom if we're un
+  // In some cases we might try to merge Bottom if we're in
   // unreachable code. This won't affect anything, so just skip out
   // early.
   if (val.subtypeOf(BBottom)) return R{ TBottom, TriBool::No };
@@ -5981,7 +5922,7 @@ PropMergeResult<> Index::merge_static_type(
     if (!sname) {
       // Very bad case. We don't know `cls' or the property name. This
       // mutation can be affecting anything, so merge it into all
-      // properties (this drops type information for p ublic
+      // properties (this drops type information for public
       // properties).
       ITRACE(4, "unknown class and prop. merging everything\n");
       publicMutations.mergeUnknown(ctx);
@@ -5992,6 +5933,7 @@ PropMergeResult<> Index::merge_static_type(
 
       for (auto& kv : statics) {
         if (!ignoreConst && (kv.second.attrs & AttrIsConst)) continue;
+        if (mustBeReadOnly && !(kv.second.attrs & AttrIsReadOnly)) continue;
         kv.second.ty |=
           unctx(adjust_type_for_prop(*this, *ctx.cls, kv.second.tc, val));
       }
@@ -6011,6 +5953,7 @@ PropMergeResult<> Index::merge_static_type(
     auto it = statics.find(sname);
     if (it == end(statics)) return conservative();
     if (!ignoreConst && (it->second.attrs & AttrIsConst)) return conservative();
+    if (mustBeReadOnly && !(it->second.attrs & AttrIsReadOnly)) return conservative();
 
     it->second.ty |=
       unctx(adjust_type_for_prop(*this, *ctx.cls, it->second.tc, val));
@@ -6061,6 +6004,7 @@ PropMergeResult<> Index::merge_static_type(
           val,
           checkUB,
           ignoreConst,
+          mustBeReadOnly,
           !sname && sub != cinfo
         );
         ITRACE(4, "{} -> {}\n", sub->cls->name, show(r));
@@ -6088,6 +6032,7 @@ PropMergeResult<> Index::merge_static_type(
         val,
         checkUB,
         ignoreConst,
+        mustBeReadOnly,
         false
       );
       ITRACE(4, "{} -> {}\n", cinfo->cls->name, show(r));

@@ -5,7 +5,7 @@
 
 pub type Id = usize;
 
-#[derive(Debug, Clone, PartialEq, Eq, std::cmp::Ord, std::cmp::PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, std::cmp::Ord, std::cmp::PartialOrd)]
 pub enum Label<'arena> {
     Regular(Id),
     DefaultArg(Id),
@@ -90,17 +90,6 @@ impl Gen {
     }
     pub fn next_default_arg<'arena>(&mut self, _: &'arena bumpalo::Bump) -> Label<'arena> {
         Label::DefaultArg(self.get_next())
-    }
-
-    /// Produces named label "resumeN" for use by fuzzer, where N is the next unused Id.
-    pub fn next_resume<'arena>(&mut self, alloc: &'arena bumpalo::Bump) -> Label<'arena> {
-        Label::Named(
-            bumpalo::collections::String::from_str_in(
-                (format!("resume{}", self.get_next())).as_str(),
-                alloc,
-            )
-            .into_bump_str(),
-        )
     }
 
     fn get_next(&mut self) -> Id {

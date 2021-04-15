@@ -19,6 +19,7 @@ module type S = sig
     | Informant_induced_saved_state_target of
         ServerMonitorUtils.target_saved_state
     | Saved_state_target_info of saved_state_target_info
+  [@@deriving show]
 
   (****************************************************************************)
   (* The main entry point *)
@@ -37,6 +38,8 @@ module type S = sig
   val ai_mode : options -> Ai_options.t option
 
   val check_mode : options -> bool
+
+  val concatenate_prefix : options -> string option
 
   val config : options -> (string * string) list
 
@@ -89,6 +92,8 @@ module type S = sig
   val watchman_debug_logging : options -> bool
 
   val with_saved_state : options -> saved_state_target option
+
+  val is_using_precomputed_saved_state : options -> bool
 
   val allow_non_opt_build : options -> bool
 

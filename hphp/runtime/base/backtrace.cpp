@@ -17,9 +17,11 @@
 
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/array-iterator.h"
+#include "hphp/runtime/base/bespoke-runtime.h"
 #include "hphp/runtime/base/execution-context.h"
 #include "hphp/runtime/base/rds-header.h"
 #include "hphp/runtime/base/runtime-option.h"
+#include "hphp/runtime/base/tv-uncounted.h"
 #include "hphp/runtime/ext/asio/ext_async-generator-wait-handle.h"
 #include "hphp/runtime/vm/act-rec.h"
 #include "hphp/runtime/vm/bytecode.h"
@@ -54,6 +56,19 @@ const StaticString
   s_arrow("->"),
   s_double_colon("::");
 
+namespace {
+const size_t
+  s_file_idx(0),
+  s_line_idx(1),
+  s_function_idx(2),
+  s_args_idx(3),
+  s_class_idx(4),
+  s_object_idx(5),
+  s_type_idx(6),
+  s_metadata_idx(7);
+
+static const StaticString s_stableIdentifier("HPHP::createBacktrace");
+}
 ///////////////////////////////////////////////////////////////////////////////
 
 namespace backtrace_detail {
@@ -318,33 +333,43 @@ using namespace backtrace_detail;
 ///////////////////////////////////////////////////////////////////////////////
 
 Array createBacktrace(const BacktraceArgs& btArgs) {
-  ARRPROV_USE_RUNTIME_LOCATION();
+  static const RuntimeStruct::FieldIndexVector s_structFields = {
+    {s_file_idx, s_file},
+    {s_line_idx, s_line},
+    {s_function_idx, s_function},
+    {s_args_idx, s_args},
+    {s_class_idx, s_class},
+    {s_object_idx, s_object},
+    {s_type_idx, s_type},
+    {s_metadata_idx, s_metadata},
+  };
+  static auto const s_runtimeStruct =
+    RuntimeStruct::registerRuntimeStruct(s_stableIdentifier, s_structFields);
+
   if (btArgs.isCompact()) {
     return createCompactBacktrace(btArgs.m_skipTop)->extract();
   }
 
-  auto bt = Array::CreateVArray();
+  auto bt = Array::CreateVec();
   folly::small_vector<c_WaitableWaitHandle*, 64> visitedWHs;
 
   BTContext ctx;
 
   if (g_context->m_parserFrame) {
-    bt.append(
-      make_darray(
-        s_file, VarNR(g_context->m_parserFrame->filename.get()),
-        s_line, g_context->m_parserFrame->lineNumber
-      )
-    );
+    StructDictInit frame(s_runtimeStruct, 2);
+    frame.set(s_file_idx, s_file,
+              Variant(VarNR(g_context->m_parserFrame->filename.get())));
+    frame.set(s_line_idx, s_line, g_context->m_parserFrame->lineNumber);
+    bt.append(frame.toArray());
   }
 
   // If there is a parser frame, put it at the beginning of the backtrace.
   if (btArgs.m_parserFrame) {
-    bt.append(
-      make_darray(
-        s_file, VarNR(btArgs.m_parserFrame->filename.get()),
-        s_line, btArgs.m_parserFrame->lineNumber
-      )
-    );
+    StructDictInit frame(s_runtimeStruct, 2);
+    frame.set(s_file_idx, s_file,
+              Variant(VarNR(btArgs.m_parserFrame->filename.get())));
+    frame.set(s_line_idx, s_line, btArgs.m_parserFrame->lineNumber);
+    bt.append(frame.toArray());
   }
 
   int depth = 0;
@@ -396,12 +421,13 @@ Array createBacktrace(const BacktraceArgs& btArgs) {
       auto const func = curFrm.fp->func();
       assertx(func);
 
-      DArrayInit frame(btArgs.m_parserFrame ? 4 : 2);
-      frame.set(s_file, Variant{const_cast<StringData*>(func->filename())});
-      frame.set(s_line, func->getLineNumber(curFrm.pc));
+      StructDictInit frame(s_runtimeStruct, btArgs.m_parserFrame ? 4 : 2);
+      frame.set(s_file_idx, s_file,
+                Variant{const_cast<StringData*>(func->filename())});
+      frame.set(s_line_idx, s_line, func->getLineNumber(curFrm.pc));
       if (btArgs.m_parserFrame) {
-        frame.set(s_function, s_include);
-        frame.set(s_args,
+        frame.set(s_function_idx, s_function, s_include);
+        frame.set(s_args_idx, s_args,
                   make_vec_array(VarNR(btArgs.m_parserFrame->filename.get())));
       }
       bt.append(frame.toVariant());
@@ -418,7 +444,7 @@ Array createBacktrace(const BacktraceArgs& btArgs) {
     // Do not capture frame for HPHP only functions.
     if (fp->func()->isNoInjection()) continue;
 
-    DArrayInit frame(8);
+    StructDictInit frame(s_runtimeStruct, 8);
 
     auto const curUnit = fp->func()->unit();
 
@@ -430,8 +456,8 @@ Array createBacktrace(const BacktraceArgs& btArgs) {
         : prevFunc->unit()->filepath();
 
       assertx(prevFile != nullptr);
-      frame.set(s_file, Variant{const_cast<StringData*>(prevFile)});
-      frame.set(s_line, prevFunc->getLineNumber(prev.pc));
+      frame.set(s_file_idx, s_file, Variant{const_cast<StringData*>(prevFile)});
+      frame.set(s_line_idx, s_line, prevFunc->getLineNumber(prev.pc));
     }
 
     auto funcname = fp->func()->nameWithClosureName();
@@ -442,13 +468,13 @@ Array createBacktrace(const BacktraceArgs& btArgs) {
       // First local is always $0ReifiedGenerics which comes right after params
       auto const generics = frame_local(fp, fp->func()->numParams());
       if (type(generics) != KindOfUninit) {
-        assertx(tvIsHAMSafeVArray(generics));
+        assertx(tvIsVec(generics));
         auto const reified_generics = val(generics).parr;
         funcname += mangleReifiedGenericsName(reified_generics);
       }
     }
 
-    frame.set(s_function, funcname);
+    frame.set(s_function_idx, s_function, funcname);
 
     if (!funcname.same(s_include)) {
       // Closures have an m_this but they aren't in object context.
@@ -463,14 +489,14 @@ Array createBacktrace(const BacktraceArgs& btArgs) {
           auto const reified_generics = getClsReifiedGenericsProp(ctx, fp);
           clsname += mangleReifiedGenericsName(reified_generics);
         }
-        frame.set(s_class, clsname);
+        frame.set(s_class_idx, s_class, clsname);
         if (!fp->localsDecRefd() &&
             !fp->isInlined() &&
             fp->hasThis() &&
             btArgs.m_withThis) {
-          frame.set(s_object, Object(fp->getThis()));
+          frame.set(s_object_idx, s_object, Object(fp->getThis()));
         }
-        frame.set(s_type, fp->func()->isStatic() ? s_double_colon : s_arrow);
+        frame.set(s_type_idx, s_type, fp->func()->isStatic() ? s_double_colon : s_arrow);
       }
     }
 
@@ -481,9 +507,9 @@ Array createBacktrace(const BacktraceArgs& btArgs) {
       // do nothing
     } else if (funcname.same(s_include)) {
       auto filepath = const_cast<StringData*>(curUnit->filepath());
-      frame.set(s_args, make_vec_array(filepath));
+      frame.set(s_args_idx, s_args, make_vec_array(filepath));
     } else if (fp->localsDecRefd()) {
-      frame.set(s_args, empty_vec_array());
+      frame.set(s_args_idx, s_args, empty_vec_array());
     } else {
       auto args = Array::CreateVec();
       auto const nparams = fp->func()->numNonVariadicParams();
@@ -500,7 +526,7 @@ Array createBacktrace(const BacktraceArgs& btArgs) {
         }
       }
 
-      frame.set(s_args, args);
+      frame.set(s_args_idx, s_args, args);
     }
 
     if (btArgs.m_withMetadata && !fp->localsDecRefd()) {
@@ -509,7 +535,7 @@ Array createBacktrace(const BacktraceArgs& btArgs) {
         auto const val = frame_local(fp, local);
         if (type(val) != KindOfUninit) {
           always_assert(tvIsPlausible(*val));
-          frame.set(s_metadata, Variant{variant_ref{val}});
+          frame.set(s_metadata_idx, s_metadata, Variant{variant_ref{val}});
         }
       }
     }
@@ -659,9 +685,7 @@ struct CTKHasher final {
 struct CacheDeleter final {
   void operator()(ArrayData* ad) const {
     if (!ad->isUncounted()) return;
-    Treadmill::enqueue([ad] {
-      PackedArray::ReleaseUncounted(ad);
-    });
+    Treadmill::enqueue([ad] { DecRefUncountedArray(ad); });
   }
 };
 
@@ -762,7 +786,7 @@ Array CompactTraceData::extract() const {
 }
 
 Array CompactTrace::extract() const {
-  if (size() <= 1) return Array::CreateVArray();
+  if (size() <= 1) return Array::CreateVec();
 
   Cache::ConstAccessor acc;
   if (s_cache.find(acc, m_backtrace)) {
@@ -771,9 +795,7 @@ Array CompactTrace::extract() const {
 
   auto arr = m_backtrace->extract();
   auto ins = CachedArray(
-    arr.get()->empty()
-      ? ArrayData::CreateVArray()
-      : PackedArray::MakeUncounted(arr.get()),
+    MakeUncountedArray(arr.get(), nullptr),
     CacheDeleter()
   );
   if (!s_cache.insert(m_backtrace, ins)) {

@@ -3992,8 +3992,6 @@ module Make (Token : TokenType) (SyntaxValue : SyntaxValueType) = struct
             validate_token x.anonymous_function_keyword;
           anonymous_async_keyword =
             validate_option_with validate_token x.anonymous_async_keyword;
-          anonymous_static_keyword =
-            validate_option_with validate_token x.anonymous_static_keyword;
           anonymous_attribute_spec =
             validate_option_with
               validate_attribute_specification
@@ -4011,8 +4009,6 @@ module Make (Token : TokenType) (SyntaxValue : SyntaxValueType) = struct
               invalidate_option_with
                 invalidate_attribute_specification
                 x.anonymous_attribute_spec;
-            anonymous_static_keyword =
-              invalidate_option_with invalidate_token x.anonymous_static_keyword;
             anonymous_async_keyword =
               invalidate_option_with invalidate_token x.anonymous_async_keyword;
             anonymous_function_keyword =
@@ -4565,6 +4561,8 @@ module Make (Token : TokenType) (SyntaxValue : SyntaxValueType) = struct
           function_call_argument_list =
             validate_list_with validate_expression x.function_call_argument_list;
           function_call_left_paren = validate_token x.function_call_left_paren;
+          function_call_enum_atom =
+            validate_option_with validate_expression x.function_call_enum_atom;
           function_call_type_args =
             validate_option_with
               validate_type_arguments
@@ -4586,6 +4584,10 @@ module Make (Token : TokenType) (SyntaxValue : SyntaxValueType) = struct
               invalidate_option_with
                 invalidate_type_arguments
                 x.function_call_type_args;
+            function_call_enum_atom =
+              invalidate_option_with
+                invalidate_expression
+                x.function_call_enum_atom;
             function_call_left_paren =
               invalidate_token x.function_call_left_paren;
             function_call_argument_list =
@@ -6000,6 +6002,8 @@ module Make (Token : TokenType) (SyntaxValue : SyntaxValueType) = struct
               x.closure_parameter_list;
           closure_inner_left_paren = validate_token x.closure_inner_left_paren;
           closure_function_keyword = validate_token x.closure_function_keyword;
+          closure_readonly_keyword =
+            validate_option_with validate_token x.closure_readonly_keyword;
           closure_outer_left_paren = validate_token x.closure_outer_left_paren;
         } )
     | s -> validation_fail (Some SyntaxKind.ClosureTypeSpecifier) s
@@ -6012,6 +6016,8 @@ module Make (Token : TokenType) (SyntaxValue : SyntaxValueType) = struct
           {
             closure_outer_left_paren =
               invalidate_token x.closure_outer_left_paren;
+            closure_readonly_keyword =
+              invalidate_option_with invalidate_token x.closure_readonly_keyword;
             closure_function_keyword =
               invalidate_token x.closure_function_keyword;
             closure_inner_left_paren =

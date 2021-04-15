@@ -11,6 +11,22 @@ type serialized_globals = Serialized_globals
 
 let serialize_globals () = Serialized_globals
 
+type rollout_flags = {
+  search_chunk_size: int;
+  max_bucket_size: int;
+  use_full_fidelity_parser: bool;
+  use_direct_decl_parser: bool;
+  interrupt_on_watchman: bool;
+  interrupt_on_client: bool;
+  longlived_workers: bool;
+  prechecked_files: bool;
+  predeclare_ide: bool;
+  max_typechecker_worker_memory_mb: int option;
+  max_times_to_defer_type_checking: int option;
+}
+
+let flush () = ()
+
 let deserialize_globals _ = ()
 
 let set_use_watchman _ = ()
@@ -32,52 +48,36 @@ let bad_exit _ _ _ ~is_oom:_ = ()
 let init
     ~root:_
     ~hhconfig_version:_
-    ~custom_columns:_
     ~init_id:_
+    ~custom_columns:_
     ~informant_managed:_
+    ~rollout_flags:_
     ~time:_
-    ~search_chunk_size:_
     ~max_workers:_
-    ~max_bucket_size:_
-    ~use_full_fidelity_parser:_
-    ~interrupt_on_watchman:_
-    ~interrupt_on_client:_
-    ~prechecked_files:_
-    ~predeclare_ide:_
-    ~max_typechecker_worker_memory_mb:_
     ~profile_owner:_
-    ~profile_desc:_
-    ~max_times_to_defer:_ =
+    ~profile_desc:_ =
   ()
 
 let init_worker
     ~root:_
     ~hhconfig_version:_
-    ~custom_columns:_
     ~init_id:_
+    ~custom_columns:_
+    ~rollout_flags:_
     ~time:_
     ~profile_owner:_
-    ~profile_desc:_
-    ~max_times_to_defer:_ =
+    ~profile_desc:_ =
   ()
 
-let init_monitor
-    ~from:_
-    ~custom_columns:_
-    ~proc_stack:_
-    ~search_chunk_size:_
-    ~prechecked_files:_
-    ~predeclare_ide:_
-    ~max_typechecker_worker_memory_mb:_
-    _
-    _
-    _
-    _ =
+let init_monitor ~from:_ ~custom_columns:_ ~proc_stack:_ ~rollout_flags:_ _ _ _
+    =
   ()
 
 let init_batch_tool ~init_id:_ ~root:_ ~time:_ = ()
 
 let starting_first_server _ = ()
+
+let refuse_to_restart_server ~reason:_ ~server_state:_ ~version_matches:_ = ()
 
 let init_lazy_end
     _
@@ -95,6 +95,10 @@ let server_is_partially_ready () = ()
 let server_is_ready _ = ()
 
 let load_deptable_end _ = ()
+
+let saved_state_download_and_load_done ~load_state_approach:_ ~success:_ _ = ()
+
+let tried_to_be_hg_aware_with_precomputed_saved_state_warning _ = ()
 
 let init_start ~experiments_config_meta = ignore experiments_config_meta
 
@@ -124,7 +128,7 @@ let client_start _ = ()
 
 let client_stop _ = ()
 
-let client_restart _ = ()
+let client_restart ~data:_ = ()
 
 let client_check_finish _ _ = ()
 
@@ -249,9 +253,9 @@ let parsing_end_for_init _ _ ~parsed_count:_ = ()
 
 let parsing_end_for_typecheck _ _ ~parsed_count:_ = ()
 
-let updating_deps_end _ = ()
+let updating_deps_end ?count:_ _ = ()
 
-let naming_end _ _ = ()
+let naming_end ~count:_ _ _ = ()
 
 let global_naming_end _ _ = ()
 
@@ -259,7 +263,7 @@ let run_search_end _ = ()
 
 let update_search_end _ = ()
 
-let fast_naming_end _ = ()
+let naming_from_saved_state_end _ = ()
 
 let type_decl_end _ = ()
 
@@ -441,12 +445,15 @@ module ProfileDecl = struct
 end
 
 module Rage = struct
+  let rage_start ~rageid:_ ~desc:_ ~root:_ ~from:_ ~disk_config:_ = ()
+
   let rage
       ~rageid:_
       ~desc:_
       ~root:_
       ~from:_
       ~hhconfig_version:_
+      ~disk_config:_
       ~experiments:_
       ~experiments_config_meta:_
       ~items:_

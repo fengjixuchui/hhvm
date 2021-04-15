@@ -68,11 +68,9 @@ public:
   bool isDouble()    const { return isDoubleType(getType()); }
   bool isString()    const { return isStringType(getType()); }
   bool isArray()     const { return isArrayLikeType(getType()); }
-  bool isPHPArray()  const { return isArrayType(getType()); }
   bool isVec()       const { return isVecType(getType()); }
   bool isDict()      const { return isDictType(getType()); }
   bool isKeyset()    const { return isKeysetType(getType()); }
-  bool isHackArray() const { return isHackArrayType(getType()); }
   bool isObject()    const { return isObjectType(getType()); }
   bool isResource()  const { return isResourceType(getType()); }
   bool isFunc()      const { return isFuncType(getType()); }
@@ -759,15 +757,6 @@ struct Variant : private TypedValue {
   bool isArray() const {
     return isArrayLikeType(getType());
   }
-  bool isPHPArray() const {
-    return isArrayType(getType());
-  }
-  bool isDArray() const {
-    return isArrayLikeType(getType()) && m_data.parr->isDArray();
-  }
-  bool isVArray() const {
-    return isArrayLikeType(getType()) && m_data.parr->isVArray();
-  }
   bool isVec() const {
     return isVecType(getType());
   }
@@ -776,9 +765,6 @@ struct Variant : private TypedValue {
   }
   bool isKeyset() const {
     return isKeysetType(getType());
-  }
-  bool isHackArray() const {
-    return isHackArrayType(getType());
   }
   bool isObject() const {
     return getType() == KindOfObject;
@@ -821,10 +807,6 @@ struct Variant : private TypedValue {
       case KindOfDict:
       case KindOfPersistentKeyset:
       case KindOfKeyset:
-      case KindOfPersistentDArray:
-      case KindOfDArray:
-      case KindOfPersistentVArray:
-      case KindOfVArray:
       case KindOfRFunc:
       case KindOfFunc:
       case KindOfClass:
@@ -987,7 +969,6 @@ struct Variant : private TypedValue {
     return Array::attach(tvCastToArrayLikeData<IC>(*this));
   }
   Array toPHPArray() const {
-    if (isArrayType(m_type)) return Array(m_data.parr);
     return toPHPArrayHelper();
   }
   Object toObject() const {
@@ -1023,31 +1004,8 @@ struct Variant : private TypedValue {
     return Array::attach(copy.detach().m_data.parr);
   }
 
-  Array toVArray() const {
-    if (RuntimeOption::EvalHackArrDVArrs) {
-      auto a = toVec();
-      a.setLegacyArray(RuntimeOption::EvalHackArrDVArrMark);
-      return a;
-    }
-    if (isArrayLikeType(m_type)) return asCArrRef().toVArray();
-    auto copy = *this;
-    tvCastToVArrayInPlace(copy.asTypedValue());
-    assertx(copy.isPHPArray() && copy.asCArrRef().isVArray());
-    return Array::attach(copy.detach().m_data.parr);
-  }
-
-  Array toDArray() const {
-    if (RuntimeOption::EvalHackArrDVArrs) {
-      auto a = toDict();
-      a.setLegacyArray(RuntimeOption::EvalHackArrDVArrMark);
-      return a;
-    }
-    if (isArrayLikeType(m_type)) return asCArrRef().toDArray();
-    auto copy = *this;
-    tvCastToDArrayInPlace(copy.asTypedValue());
-    assertx(copy.isPHPArray() && copy.asCArrRef().isDArray());
-    return Array::attach(copy.detach().m_data.parr);
-  }
+  Array toVArray() const { return toVec(); }
+  Array toDArray() const { return toDict(); }
 
   template <typename T>
   typename std::enable_if<std::is_base_of<ResourceData,T>::value, bool>::type
@@ -1478,8 +1436,6 @@ private:
       case KindOfVec:
       case KindOfDict:
       case KindOfKeyset:
-      case KindOfDArray:
-      case KindOfVArray:
         assertx(m_data.parr->checkCount());
         return;
       case KindOfClsMeth:
@@ -1560,13 +1516,13 @@ inline void concat_assign(tv_lval lhs, const String& s2) {
 //////////////////////////////////////////////////////////////////////
 
 inline Array& forceToArray(Variant& var) {
-  if (!var.isArray()) var = Variant(Array::Create());
+  if (!var.isArray()) var = Variant(Array::CreateDict());
   return var.asArrRef();
 }
 
 inline Array& forceToArray(tv_lval lval) {
   if (!isArrayLikeType(lval.type())) {
-    tvMove(make_array_like_tv(ArrayData::Create()), lval);
+    tvMove(make_array_like_tv(ArrayData::CreateDict()), lval);
   }
   return asArrRef(lval);
 }
@@ -1579,20 +1535,6 @@ inline Array& forceToDict(Variant& var) {
 inline Array& forceToDict(tv_lval lval) {
   if (!isDictType(lval.type())) {
     tvSet(make_tv<KindOfDict>(ArrayData::CreateDict()), lval);
-  }
-  return asArrRef(lval);
-}
-
-inline Array& forceToDArray(Variant& var) {
-  if (!tvIsHAMSafeDArray(var.asTypedValue())) {
-    var = Variant(Array::CreateDArray());
-  }
-  return var.asArrRef();
-}
-
-inline Array& forceToDArray(tv_lval lval) {
-  if (!tvIsHAMSafeDArray(lval)) {
-    tvMove(make_array_like_tv(ArrayData::CreateDArray()), lval);
   }
   return asArrRef(lval);
 }
@@ -1627,7 +1569,7 @@ inline bool isa_non_null(const Variant& v) {
 // and type-array
 template <IntishCast IC>
 ALWAYS_INLINE TypedValue Array::convertKey(TypedValue k) const {
-  return tvToKey<IC>(k, m_arr ? m_arr.get() : ArrayData::Create());
+  return tvToKey<IC>(k, m_arr ? m_arr.get() : ArrayData::CreateDict());
 }
 template <IntishCast IC>
 ALWAYS_INLINE TypedValue Array::convertKey(const Variant& k) const {

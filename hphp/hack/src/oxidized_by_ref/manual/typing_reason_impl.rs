@@ -37,6 +37,7 @@ impl<'a> Reason<'a> {
             | RwitnessFromDecl(p)
             | Ridx((p, _))
             | RidxVector(p)
+            | RidxVectorFromDecl(p)
             | Rforeach(p)
             | Rasyncforeach(p)
             | Rarith(p)
@@ -69,7 +70,7 @@ impl<'a> Reason<'a> {
             | Rtypeconst((Rnone, (p, _), _, _))
             | RarrayFilter((p, _))
             | RnullsafeOp(p)
-            | RtconstNoCstr(PosId(p, _))
+            | RtconstNoCstr((p, _))
             | Rpredicated((p, _))
             | Ris(p)
             | Ras(p)
@@ -92,6 +93,7 @@ impl<'a> Reason<'a> {
             | RincdecDynamic(p)
             | RtypeVariable(p)
             | RtypeVariableGenerics((p, _, _))
+            | RglobalTypeVariableGenerics((p, _, _))
             | RsolveFail(p)
             | RcstrOnGenerics((p, _))
             | RlambdaParam((p, _))
@@ -106,8 +108,9 @@ impl<'a> Reason<'a> {
             | RetBoolean(p)
             | RdefaultCapability(p)
             | RconcatOperand(p)
-            | RinterpOperand(p) => Some(p),
-            RarrayUnification(p) => Some(p),
+            | RinterpOperand(p)
+            | RsoundDynamicCallable(p) => Some(p),
+            RhackArrDvArrs(p) => Some(p),
             RlostInfo((_, r, _))
             | Rinstantiate((_, _, r))
             | Rtypeconst((r, _, _, _))

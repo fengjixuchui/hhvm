@@ -120,13 +120,12 @@ void emitCalleeGenericsChecks(IRGS& env, const Func* callee, SSATmp* callFlags,
     },
     [&] {
       // Generics were passed. Make them visible on the stack.
-      auto const type = RuntimeOption::EvalHackArrDVArrs ? TVec : TVArr;
-      auto const generics = pushed ? topC(env) : apparate(env, type);
+      auto const generics = pushed ? topC(env) : apparate(env, TVec);
       updateMarker(env);
       env.irb->exceptionStackBoundary();
 
       // Generics may be known if we are inlining.
-      if (generics->hasConstVal(type)) {
+      if (generics->hasConstVal(TVec)) {
         auto const genericsArr = generics->arrLikeVal();
         auto const& genericsDef =
           callee->getReifiedGenericsInfo().m_typeParamInfo;
@@ -185,8 +184,7 @@ void emitCalleeGenericsChecks(IRGS& env, const Func* callee, SSATmp* callFlags,
 
       // Push an empty array, as the remainder of the prologue assumes generics
       // are on the stack.
-      arrprov::TagOverride ap_override{arrprov::tagFromSK(env.bcState)};
-      push(env, cns(env, ArrayData::CreateVArray()));
+      push(env, cns(env, ArrayData::CreateVec()));
       updateMarker(env);
       env.irb->exceptionStackBoundary();
     }
@@ -220,8 +218,7 @@ void emitCalleeArgumentArityChecks(IRGS& env, const Func* callee,
 
     // Pass unpack args to the raiseTooManyArgumentsPrologue() helper, which
     // will use them to report the correct number and also take care of decref.
-    auto const type = RuntimeOption::EvalHackArrDVArrs ? TVec : TVArr;
-    auto const unpackArgsArr = gen(env, AssertType, type, unpackArgs);
+    auto const unpackArgsArr = gen(env, AssertType, TVec, unpackArgs);
     gen(env, RaiseTooManyArg, FuncData { callee }, unpackArgsArr);
   }
 }
@@ -255,30 +252,46 @@ void emitCalleeDynamicCallChecks(IRGS& env, const Func* callee,
 }
 
 void emitCalleeCoeffectChecks(IRGS& env, const Func* callee,
-                              SSATmp* callFlags, uint32_t argc,
-                              SSATmp* prologueCtx) {
+                              SSATmp* callFlags, SSATmp* providedCoeffects,
+                              uint32_t argc, SSATmp* prologueCtx) {
   assertx(callee);
   assertx(callFlags);
 
-  if (!CoeffectsConfig::enabled()) return;
+  if (!CoeffectsConfig::enabled()) {
+    if (callee->hasCoeffectsLocal()) {
+      push(env, cns(env, RuntimeCoeffects::none().value()));
+      updateMarker(env);
+      env.irb->exceptionStackBoundary();
+    }
+    return;
+  }
   auto const requiredCoeffects = [&] {
-    auto result = cns(env, callee->staticCoeffects().toRequired().value());
-    if (!callee->hasCoeffectRules()) return result;
+    auto required = cns(env, callee->requiredCoeffects().value());
+    if (!callee->hasCoeffectRules()) return required;
     for (auto const& rule : callee->getCoeffectRules()) {
       if (auto const coeffect = rule.emitJit(env, callee, argc, prologueCtx)) {
-        result = gen(env, AndInt, result, coeffect);
+        required = gen(env, AndInt, required, coeffect);
       }
     }
-    return result;
+    if (callee->hasCoeffectsLocal()) {
+      push(env, required);
+      updateMarker(env);
+      env.irb->exceptionStackBoundary();
+    }
+    return required;
   }();
+
+  // If ambient coeffects are directly provided use them, otherwise extract
+  // them from callFlags
+  if (!providedCoeffects) {
+    providedCoeffects =
+      gen(env, Lshr, callFlags, cns(env, CallFlags::CoeffectsStart));
+  }
 
   ifThen(
     env,
     [&] (Block* taken) {
       // providedCoeffects & (~requiredCoeffects) == 0
-
-      auto const providedCoeffects =
-        gen(env, Lshr, callFlags, cns(env, CallFlags::CoeffectsStart));
 
       // The unused higher order bits of requiredCoeffects will be 0
       // We want to flip the used lower order bits
@@ -292,8 +305,8 @@ void emitCalleeCoeffectChecks(IRGS& env, const Func* callee,
     },
     [&] {
       hint(env, Block::Hint::Unlikely);
-      gen(env, RaiseCoeffectsCallViolation, FuncData{callee}, callFlags,
-          requiredCoeffects);
+      gen(env, RaiseCoeffectsCallViolation, FuncData{callee},
+          providedCoeffects, requiredCoeffects);
     }
   );
 }
@@ -361,7 +374,7 @@ void emitCalleeChecks(IRGS& env, const Func* callee, uint32_t argc,
   emitCalleeGenericsChecks(env, callee, callFlags, false);
   emitCalleeArgumentArityChecks(env, callee, argc);
   emitCalleeDynamicCallChecks(env, callee, callFlags);
-  emitCalleeCoeffectChecks(env, callee, callFlags, argc, prologueCtx);
+  emitCalleeCoeffectChecks(env, callee, callFlags, nullptr, argc, prologueCtx);
   emitCalleeImplicitContextChecks(env, callee);
 
   // Emit early stack overflow check if necessary.
@@ -373,7 +386,11 @@ void emitCalleeChecks(IRGS& env, const Func* callee, uint32_t argc,
 } // namespace
 
 void emitInitFuncInputs(IRGS& env, const Func* callee, uint32_t argc) {
-  // Reified generics were initialized by emitCalleeGenericsChecks().
+  if (argc == callee->numParams()) return;
+
+  // Generics and coeffects are already initialized
+  auto const coeffects = callee->hasCoeffectsLocal()
+    ? popC(env, DataTypeGeneric) : nullptr;
   auto const generics = callee->hasReifiedGenerics()
     ? popC(env, DataTypeGeneric) : nullptr;
 
@@ -386,11 +403,8 @@ void emitInitFuncInputs(IRGS& env, const Func* callee, uint32_t argc) {
 
   if (argc < callee->numParams()) {
     // Push an empty array for `...$args'.
-    arrprov::TagOverride _(RO::EvalArrayProvenance
-      ? arrprov::Tag::Param(callee, numParams)
-      : arrprov::Tag{});
     assertx(callee->hasVariadicCaptureParam());
-    push(env, cns(env, ArrayData::CreateVArray()));
+    push(env, cns(env, ArrayData::CreateVec()));
     ++argc;
   } else if (argc > callee->numParams()) {
     // Extra arguments already popped by emitCalleeArgumentArityChecks().
@@ -400,8 +414,9 @@ void emitInitFuncInputs(IRGS& env, const Func* callee, uint32_t argc) {
 
   assertx(argc == callee->numParams());
 
-  // Place generics in the correct position.
+  // Place generics and coeffects in the correct position.
   if (generics != nullptr) push(env, generics);
+  if (coeffects != nullptr) push(env, coeffects);
 }
 
 namespace {
@@ -456,20 +471,31 @@ void emitInitFuncLocals(IRGS& env, const Func* callee, SSATmp* prologueCtx) {
    */
   constexpr auto kMaxLocalsInitUnroll = 9;
 
-  // Parameters, generics and closure use variables are already initialized.
+  // Parameters, generics and coeffects are already initialized.
   auto numInited = callee->numParams();
-  if (callee->hasReifiedGenerics()) ++numInited;
+  if (callee->hasReifiedGenerics()) {
+    // Currently does not work with closures
+    assertx(!callee->isClosureBody());
+    assertx(callee->reifiedGenericsLocalId() == numInited);
+    ++numInited;
+  }
+  if (callee->hasCoeffectsLocal()) {
+    assertx(callee->coeffectsLocalId() == numInited);
+    ++numInited;
+  }
 
   // Push the closure's use variables (stored in closure object properties).
   if (callee->isClosureBody()) {
     auto const cls = callee->implCls();
-    auto const numUses = cls->numDeclProperties();
+    auto const numUses =
+      cls->numDeclProperties() - (cls->hasClosureCoeffectsProp() ? 1 : 0);
 
     for (auto i = 0; i < numUses; ++i) {
+      auto const slot = i + (cls->hasClosureCoeffectsProp() ? 1 : 0);
       auto const ty =
-        typeFromRAT(cls->declPropRepoAuthType(i), callee->cls()) & TCell;
+        typeFromRAT(cls->declPropRepoAuthType(slot), callee->cls()) & TCell;
       auto const addr = gen(env, LdPropAddr,
-                            IndexData { cls->propSlotToIndex(i) },
+                            IndexData { cls->propSlotToIndex(slot) },
                             ty.lval(Ptr::Prop), prologueCtx);
       auto const prop = gen(env, LdMem, ty, addr);
       gen(env, IncRef, prop);
@@ -525,7 +551,11 @@ void emitJmpFuncBody(IRGS& env, const Func* callee, uint32_t argc) {
 
 namespace {
 
-void definePrologueStack(IRGS& env, const Func* callee, uint32_t argc) {
+void definePrologueFrameAndStack(IRGS& env, const Func* callee, uint32_t argc) {
+  // Define caller's frame. It is unknown if/where it lives on the stack.
+  gen(env, DefFP, DefFPData { folly::none });
+  updateMarker(env);
+
   // The stack base of prologues points to the stack without the potentially
   // uninitialized space reserved for ActRec and inouts. The rvmsp() register
   // points to the future ActRec. The stack contains additional `argc' inputs
@@ -554,7 +584,7 @@ void emitFuncPrologue(IRGS& env, const Func* callee, uint32_t argc,
                       TransID transID) {
   assertx(argc <= callee->numNonVariadicParams() + 1);
 
-  definePrologueStack(env, callee, argc);
+  definePrologueFrameAndStack(env, callee, argc);
 
   // Define register inputs before doing anything else that may clobber them.
   auto const callFlags = gen(env, DefCallFlags);

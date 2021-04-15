@@ -96,7 +96,7 @@ bool HHVM_FUNCTION(trait_exists, const String& trait_name,
 bool HHVM_FUNCTION(enum_exists, const String& enum_name,
                    bool autoload /* = true */) {
   Class* cls = Class::get(enum_name.get(), autoload);
-  return cls && isEnum(cls);
+  return cls && isAnyEnum(cls);
 }
 
 Variant HHVM_FUNCTION(get_class_methods, const Variant& class_or_object) {
@@ -111,7 +111,7 @@ Variant HHVM_FUNCTION(get_class_methods, const Variant& class_or_object) {
 Array HHVM_FUNCTION(get_class_constants, const String& className) {
   auto const cls = Class::load(className.get());
   if (cls == NULL) {
-    return empty_darray();
+    return empty_dict_array();
   }
 
   auto const numConstants = cls->numConstants();
@@ -353,7 +353,7 @@ Variant HHVM_FUNCTION(property_exists, const Variant& class_or_object,
 }
 
 Array HHVM_FUNCTION(get_object_vars, const Object& object) {
-  return object->o_toIterArray(ctxClassName()).toDArray();
+  return object->o_toIterArray(ctxClassName()).toDict();
 }
 
 ///////////////////////////////////////////////////////////////////////////////

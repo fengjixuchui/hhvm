@@ -9,8 +9,6 @@
 
 module PositionedSyntax = Full_fidelity_positioned_syntax
 module PositionedToken = Full_fidelity_positioned_token
-module SyntaxKind = Full_fidelity_syntax_kind
-module SyntaxTree = Full_fidelity_syntax_tree
 module TokenKind = Full_fidelity_token_kind
 open Hh_prelude
 
@@ -589,8 +587,6 @@ let is_method_static (method_object : PositionedSyntax.syntax) : bool =
           List.exists
             (syntax_node_to_list h.function_modifiers)
             ~f:(is_specific_token Static)
-        | AnonymousFunction { anonymous_static_keyword = static; _ } ->
-          is_specific_token Static static
         | _ -> false)))
 
 let is_function_async (function_object : PositionedSyntax.syntax) : bool =

@@ -17,6 +17,7 @@ open Typing_env_return_info
 module Dep = Typing_deps.Dep
 module Inf = Typing_inference_env
 module LID = Local_id
+module SN = Naming_special_names
 module SG = SN.Superglobals
 module LEnvC = Typing_per_cont_env
 module C = Typing_continuations
@@ -47,6 +48,25 @@ let get_deps_mode env = Provider_context.get_deps_mode env.decl_env.Decl_env.ctx
 let get_ctx env = env.decl_env.Decl_env.ctx
 
 let get_file env = env.genv.file
+
+let get_current_decl env =
+  Option.map env.decl_env.Decl_env.droot ~f:Typing_deps.Dep.to_decl_reference
+
+let get_current_decl_and_file env : Pos_or_decl.ctx =
+  { Pos_or_decl.file = get_file env; decl = get_current_decl env }
+
+let fill_in_pos_filename_if_in_current_decl env pos =
+  Pos_or_decl.fill_in_filename_if_in_current_decl
+    ~current_decl_and_file:(get_current_decl_and_file env)
+    pos
+
+let unify_error_assert_primary_pos_in_current_decl env =
+  Errors.unify_error_assert_primary_pos_in_current_decl
+    ~current_decl_and_file:(get_current_decl_and_file env)
+
+let invalid_type_hint_assert_primary_pos_in_current_decl env =
+  Errors.invalid_type_hint_assert_primary_pos_in_current_decl
+    ~current_decl_and_file:(get_current_decl_and_file env)
 
 let get_tracing_info env = env.tracing_info
 
@@ -104,10 +124,10 @@ let wrap_inference_env_call_env : env -> (Inf.t -> Inf.t) -> env =
 let expand_var env r v =
   wrap_inference_env_call env (fun env -> Inf.expand_var env r v)
 
-let fresh_type_reason ?variance env r =
+let fresh_type_reason ?variance env p r =
   log_env_change_ "fresh_type_reason" env
   @@ wrap_inference_env_call env (fun env ->
-         Inf.fresh_type_reason ?variance env r)
+         Inf.fresh_type_reason ?variance env p r)
 
 let fresh_type env p =
   log_env_change_ "fresh_type" env
@@ -409,6 +429,22 @@ let add_upper_bound_global env name ty =
   in
   { env with global_tpenv = TPEnv.add_upper_bound tpenv name ty }
 
+let add_lower_bound_global env name ty =
+  let tpenv =
+    let (env, ty) = expand_type env ty in
+    match deref ty with
+    | (r, Tgeneric (formal_super, [])) ->
+      TPEnv.add_upper_bound
+        env.global_tpenv
+        formal_super
+        (mk (r, Tgeneric (name, [])))
+    | (_r, Tgeneric (_formal_super, _targs)) ->
+      (* TODO(T70068435) Revisit this when implementing bounds on HK generic vars *)
+      env.global_tpenv
+    | _ -> env.global_tpenv
+  in
+  { env with global_tpenv = TPEnv.add_lower_bound tpenv name ty }
+
 (* Add a single new upper bound [ty] to generic parameter [name] in the local
  * type parameter environment of [env].
  * If the optional [intersect] operation is supplied, then use this to avoid
@@ -465,7 +501,9 @@ let add_fresh_generic_parameter_by_kind env prefix kind =
   let name = iterate 1 in
   let env = { env with fresh_typarams = SSet.add name env.fresh_typarams } in
   let env =
-    env_with_tpenv env (TPEnv.add ~def_pos:Pos.none name kind (get_tpenv env))
+    env_with_tpenv
+      env
+      (TPEnv.add ~def_pos:Pos_or_decl.none name kind (get_tpenv env))
   in
   (env, name)
 
@@ -598,6 +636,7 @@ let empty ?origin ?(mode = FileInfo.Mstrict) ctx file ~droot =
     allow_wildcards = false;
     big_envs = ref [];
     pessimize = false;
+    fun_tast_info = None;
   }
 
 let set_env_pessimize env =
@@ -610,6 +649,9 @@ let set_env_pessimize env =
   { env with pessimize }
 
 let set_env_function_pos env function_pos = { env with function_pos }
+
+let set_fun_tast_info env fun_tast_info =
+  { env with fun_tast_info = Some fun_tast_info }
 
 let set_condition_type env n ty =
   {
@@ -626,7 +668,7 @@ let set_fun_is_constructor env is_ctor =
   { env with genv = { env.genv with fun_is_ctor = is_ctor } }
 
 let make_depend_on_class env class_name =
-  let dep = Dep.Class class_name in
+  let dep = Dep.Type class_name in
   Option.iter env.decl_env.droot (fun root ->
       Typing_deps.add_idep (get_deps_mode env) root dep);
   ()
@@ -675,7 +717,7 @@ let is_typedef env x =
   | Some Naming_types.TTypedef -> true
   | _ -> false
 
-let get_class (env : env) (name : string) : Cls.t option =
+let get_class (env : env) (name : Decl_provider.type_key) : Cls.t option =
   let res =
     print_size
       "class"
@@ -733,8 +775,8 @@ let get_enum_constraint env x =
     | Some e -> e.te_constraint)
 
 let get_enum env x =
-  match get_class_or_typedef env x with
-  | Some (ClassResult tc) when Option.is_some (Cls.enum_type tc) -> Some tc
+  match get_class env x with
+  | Some tc when Option.is_some (Cls.enum_type tc) -> Some tc
   | _ -> None
 
 let is_enum env x =
@@ -773,7 +815,7 @@ let get_const env class_ mid =
   Cls.get_const class_ mid
 
 let consts env class_ =
-  if not (Pos.is_hhi (Cls.pos class_)) then
+  if not (Pos_or_decl.is_hhi (Cls.pos class_)) then
     make_depend_on_class env (Cls.name class_);
   Cls.consts class_
 
@@ -945,6 +987,13 @@ let with_origin2 env origin f =
   let env = { env with tracing_info = ti1 } in
   (env, r1, r2)
 
+let with_in_expr_tree env in_expr_tree f =
+  let old_in_expr_tree = env.in_expr_tree in
+  let env = { env with in_expr_tree } in
+  let (env, r1, r2) = f env in
+  let env = { env with in_expr_tree = old_in_expr_tree } in
+  (env, r1, r2)
+
 let is_static env = env.genv.static
 
 let get_val_kind env = env.genv.val_kind
@@ -1093,6 +1142,14 @@ let get_local_in_ctx env ?error_if_undef_at_pos:p x ctx_opt =
     || Fake.is_valid ctx.LEnvC.fake_members x
   in
   let error_if_pos_provided posopt ctx =
+    (* Is this local variable something the user could write, or an
+       internal variable used in desugaring? *)
+    let denotable_local (lid : LID.t) : bool =
+      (* Allow $foo or $_bar1 but not $#foo or $0bar. *)
+      let local_regexp = Str.regexp "^\\$[a-zA-z_][a-zA-Z0-9_]*$" in
+      Str.string_match local_regexp (LID.to_string lid) 0
+    in
+
     match posopt with
     | Some p ->
       let lid = LID.to_string x in
@@ -1101,10 +1158,10 @@ let get_local_in_ctx env ?error_if_undef_at_pos:p x ctx_opt =
         let all_locals =
           LID.Map.fold
             (fun k v acc ->
-              if String.is_prefix ~prefix:"$#" (LID.to_string k) then
-                acc
+              if denotable_local k then
+                (k, v) :: acc
               else
-                (k, v) :: acc)
+                acc)
             ctx.LEnvC.local_types
             []
         in
@@ -1364,6 +1421,7 @@ let save local_tpenv env =
     Tast.tpenv = TPEnv.union local_tpenv env.global_tpenv;
     Tast.condition_types = env.genv.condition_types;
     Tast.pessimize = env.pessimize;
+    Tast.fun_tast_info = env.fun_tast_info;
   }
 
 (* Compute the type variables appearing covariantly (positively)

@@ -63,14 +63,37 @@ struct TransLocMaker {
   /*
    * If loc contains a valid location, reset the frontiers of all code and data
    * blocks to the positions recorded by the last call to markStart().
+   * Return the range being rolled back without writing to it.
    */
-  void rollback() {
-    if (empty()) return;
+  TransRange rollback() {
+    if (empty()) {
+      return TransRange {
+        {nullptr, nullptr},
+        {nullptr, nullptr},
+        {nullptr, nullptr},
+        {nullptr, nullptr},
+      };
+    }
 
+    // During a rollback we must be careful for cases where we failed to
+    // reserve the dword in cold and frozen that is intended to store the size.
+    // In those cases we must ensure the ranges are still valid (their end is
+    // after their beginning).
+    auto coldEnd = cache.cold().frontier();
+    if (coldEnd == coldStart) coldEnd += sizeof(uint32_t);
+    auto frozenEnd = cache.frozen().frontier();
+    if (frozenEnd == frozenStart) frozenEnd += sizeof(uint32_t);
+    auto const range = TransRange{
+      {mainStart, cache.main().frontier()},
+      {coldStart + sizeof(uint32_t), coldEnd},
+      {frozenStart + sizeof(uint32_t), frozenEnd},
+      {dataStart, cache.data().frontier()}
+    };
     cache.main().setFrontier(mainStart);
     cache.cold().setFrontier(coldStart);
     cache.frozen().setFrontier(frozenStart);
     cache.data().setFrontier(dataStart);
+    return range;
   }
 
   TransRange range() const {

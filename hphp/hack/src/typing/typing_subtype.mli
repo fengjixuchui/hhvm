@@ -2,18 +2,6 @@ module Env = Typing_env
 open Typing_defs
 open Typing_env_types
 
-module ConditionTypes : sig
-  val try_get_class_for_condition_type :
-    env ->
-    decl_ty ->
-    ((Ast_defs.pos * string) * Decl_provider.class_decl) option
-
-  val try_get_method_from_condition_type :
-    env -> decl_ty -> bool -> string -> class_elt option
-
-  val localize_condition_type : env -> decl_ty -> locl_ty
-end
-
 (** Non-side-effecting test for subtypes.
     result = true implies ty1 <: ty2
     result = false implies NOT ty1 <: ty2 OR we don't know
@@ -57,7 +45,7 @@ val sub_type :
   ?coerce:Typing_logic.coercion_direction option ->
   locl_ty ->
   locl_ty ->
-  Errors.typing_error_callback ->
+  Errors.error_from_reasons_callback ->
   env
 
 (**
@@ -66,14 +54,42 @@ val sub_type :
  *)
 val sub_type_or_fail : env -> locl_ty -> locl_ty -> (unit -> unit) -> env
 
+(**
+ * As above but only return the modified environment as [Ok] when the assertion
+ * is satisfiable and the original environment as [Err] otherwise.
+*)
+val sub_type_res :
+  env ->
+  ?coerce:Typing_logic.coercion_direction option ->
+  locl_ty ->
+  locl_ty ->
+  Errors.error_from_reasons_callback ->
+  (env, env) result
+
 val sub_type_with_dynamic_as_bottom :
-  env -> locl_ty -> locl_ty -> Errors.typing_error_callback -> env
+  env -> locl_ty -> locl_ty -> Errors.error_from_reasons_callback -> env
+
+val sub_type_with_dynamic_as_bottom_res :
+  env ->
+  locl_ty ->
+  locl_ty ->
+  Errors.error_from_reasons_callback ->
+  (env, env) result
 
 val sub_type_i :
-  env -> internal_type -> internal_type -> Errors.typing_error_callback -> env
+  env ->
+  internal_type ->
+  internal_type ->
+  Errors.error_from_reasons_callback ->
+  env
 
 val add_constraint :
-  Pos.t -> env -> Ast_defs.constraint_kind -> locl_ty -> locl_ty -> env
+  env ->
+  Ast_defs.constraint_kind ->
+  locl_ty ->
+  locl_ty ->
+  Errors.error_from_reasons_callback ->
+  env
 
 val add_constraints :
   Pos.t -> env -> (locl_ty * Ast_defs.constraint_kind * locl_ty) list -> env
@@ -85,12 +101,12 @@ val simplify_subtype_i :
   env ->
   internal_type ->
   internal_type ->
-  on_error:Errors.typing_error_callback ->
+  on_error:Errors.error_from_reasons_callback ->
   env * Typing_logic.subtype_prop
 
 val subtype_funs :
   check_return:bool ->
-  on_error:Errors.typing_error_callback ->
+  on_error:Errors.error_from_reasons_callback ->
   Reason.t ->
   locl_fun_type ->
   Reason.t ->
@@ -108,5 +124,5 @@ val subtype_funs :
 val prop_to_env :
   env ->
   Typing_logic.subtype_prop ->
-  Errors.typing_error_callback ->
+  Errors.error_from_reasons_callback ->
   env * Typing_logic.subtype_prop

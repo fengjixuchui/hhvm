@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<05bda80718dc449ad79bb2414be15fe2>>
+// @generated SignedSource<<26152ee8b9ef6f6a752a5a896406416d>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -51,7 +51,6 @@ pub struct GlobalOptions<'a> {
     pub po_deregister_php_stdlib: bool,
     pub po_disallow_toplevel_requires: bool,
     pub po_disable_nontoplevel_declarations: bool,
-    pub po_disable_static_closures: bool,
     pub po_allow_unstable_features: bool,
     pub tco_log_inference_constraints: bool,
     pub tco_disallow_array_typehint: bool,
@@ -133,10 +132,14 @@ pub struct GlobalOptions<'a> {
     pub tco_use_direct_decl_parser: bool,
     pub tco_ifc_enabled: &'a [&'a str],
     pub po_enable_enum_supertyping: bool,
-    pub po_array_unification: bool,
+    pub po_hack_arr_dv_arrs: bool,
     pub po_interpret_soft_types_as_like_types: bool,
     pub tco_enable_strict_string_concat_interp: bool,
     pub tco_ignore_unsafe_cast: bool,
     pub tco_readonly: bool,
+    pub tco_enable_expression_trees: bool,
+    pub tco_allowed_expression_tree_visitors: &'a [&'a str],
+    pub tco_bitwise_math_new_code: bool,
+    pub tco_inc_dec_new_code: bool,
 }
 impl<'a> TrivialDrop for GlobalOptions<'a> {}

@@ -15,45 +15,45 @@ class Code {
   }
 
   // Lifting literals.
-  public static function intLiteral(
+  public static function liftInt(
     int $_,
   ): ExprTree<Code, Code::TAst, ExampleInt> {
     throw new Exception();
   }
-  public static function floatLiteral(
+  public static function liftFloat(
     float $_,
   ): ExprTree<Code, Code::TAst, ExampleFloat> {
     throw new Exception();
   }
-  public static function boolLiteral(bool $_):
+  public static function liftBool(bool $_):
     ExprTree<Code, Code::TAst, ExampleBool>
   {
     throw new Exception();
   }
-  public static function stringLiteral(string $_):
+  public static function liftString(string $_):
     ExprTree<Code, Code::TAst, ExampleString>
   {
     throw new Exception();
   }
-  public static function nullLiteral(): ExprTree<Code, Code::TAst, null> {
+  public static function liftNull(): ExprTree<Code, Code::TAst, null> {
     throw new Exception();
   }
-  public static function voidLiteral(): ExprTree<Code, Code::TAst, ExampleVoid> {
+  public static function liftVoid(): ExprTree<Code, Code::TAst, ExampleVoid> {
     throw new Exception();
   }
 
   // Symbols
-  public static function symbol<T>(
+  public static function liftSymbol<T>(
     (function(ExampleContext): Awaitable<ExprTree<Code, Code::TAst, T>>) $_,
   ): ExprTree<Code, Code::TAst, T> {
     throw new Exception();
   }
 
   // Expressions
-  public function localVar(?ExprPos $_, string $_): Code::TAst {
+  public function visitLocal(?ExprPos $_, string $_): Code::TAst {
     throw new Exception();
   }
-  public function lambdaLiteral(
+  public function visitLambda(
     ?ExprPos $_,
     vec<string> $_args,
     vec<Code::TAst> $_body,
@@ -62,7 +62,7 @@ class Code {
   }
 
   // Operators
-  public function methCall(
+  public function visitMethCall(
     ?ExprPos $_,
     Code::TAst $_,
     string $_,
@@ -72,7 +72,7 @@ class Code {
   }
 
   // Old style operators
-  public function call<T>(
+  public function visitCall<T>(
     ?ExprPos $_,
     Code::TAst $_callee,
     vec<Code::TAst> $_args,
@@ -80,7 +80,7 @@ class Code {
     throw new Exception();
   }
 
-  public function assign(
+  public function visitAssign(
     ?ExprPos $_,
     Code::TAst $_,
     Code::TAst $_,
@@ -88,7 +88,7 @@ class Code {
     throw new Exception();
   }
 
-  public function ternary(
+  public function visitTernary(
     ?ExprPos $_,
     Code::TAst $_condition,
     ?Code::TAst $_truthy,
@@ -98,7 +98,7 @@ class Code {
   }
 
   // Statements.
-  public function ifStatement(
+  public function visitIf(
     ?ExprPos $_,
     Code::TAst $_cond,
     vec<Code::TAst> $_then_body,
@@ -106,32 +106,32 @@ class Code {
   ): Code::TAst {
     throw new Exception();
   }
-  public function whileStatement(
+  public function visitWhile(
     ?ExprPos $_,
     Code::TAst $_cond,
     vec<Code::TAst> $_body,
   ): Code::TAst {
     throw new Exception();
   }
-  public function returnStatement(
+  public function visitReturn(
     ?ExprPos $_,
-    ?Code::TAst $_,
-  ): Code::TAst {
-    throw new Exception();
-  }
-  public function forStatement(
-    ?ExprPos $_,
-    vec<Code::TAst> $_,
     Code::TAst $_,
+  ): Code::TAst {
+    throw new Exception();
+  }
+  public function visitFor(
+    ?ExprPos $_,
+    vec<Code::TAst> $_,
+    ?Code::TAst $_,
     vec<Code::TAst> $_,
     vec<Code::TAst> $_,
   ): Code::TAst {
     throw new Exception();
   }
-  public function breakStatement(?ExprPos $_): Code::TAst {
+  public function visitBreak(?ExprPos $_): Code::TAst {
     throw new Exception();
   }
-  public function continueStatement(?ExprPos $_,): Code::TAst {
+  public function visitContinue(?ExprPos $_,): Code::TAst {
     throw new Exception();
   }
 
@@ -189,6 +189,13 @@ abstract class ExampleInt extends ExampleMixed {
   public abstract function __lessThanEqual(ExampleInt $_): ExampleBool;
   public abstract function __greaterThan(ExampleInt $_): ExampleBool;
   public abstract function __greaterThanEqual(ExampleInt $_): ExampleBool;
+
+  public abstract function __amp(ExampleInt $_): ExampleInt;
+  public abstract function __bar(ExampleInt $_): ExampleInt;
+  public abstract function __caret(ExampleInt $_): ExampleInt;
+  public abstract function __lessThanLessThan(ExampleInt $_): ExampleInt;
+  public abstract function __greaterThanGreaterThan(ExampleInt $_): ExampleInt;
+  public abstract function __tilde(): ExampleInt;
 }
 
 abstract class ExampleBool extends ExampleMixed {

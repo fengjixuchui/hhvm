@@ -18,6 +18,7 @@
 
 #include "hphp/runtime/base/hash-table-x64.h"
 #include "hphp/runtime/base/string-data.h"
+#include "hphp/runtime/base/tv-uncounted.h"
 
 // NvGetStr is implemented in assembly in hash-table-x64.S, additional macros
 // are defined for various offsets in hash-table-x64.h
@@ -220,7 +221,7 @@ struct HashTable : HashTableCommon {
   static ALWAYS_INLINE
   ArrayType* uncountedAlloc(uint32_t scale, size_t extra = 0) {
     auto const size = computeAllocBytes(scale) + extra;
-    auto const mem = uncounted_malloc(size);
+    auto const mem = AllocUncounted(size);
     return reinterpret_cast<ArrayType*>(reinterpret_cast<char*>(mem) + extra);
   }
 
@@ -308,9 +309,6 @@ protected:
     InitHash(table, scale);
     return table;
   }
-
-  // Hash table should be initialized before the header.
-  static void InitSmallHash(ArrayType* a);
 
   static ALWAYS_INLINE bool hitIntKey(const Elm& e, int64_t ki) {
     assertx(!e.isInvalid());
@@ -465,14 +463,14 @@ protected:
 private:
   static ALWAYS_INLINE
   ArrayType* asArrayType(ArrayData* ad) {
-    assertx(ad->hasVanillaMixedLayout() || ad->isKeysetKind());
+    assertx(ad->isVanillaDict() || ad->isVanillaKeyset());
     auto a = static_cast<ArrayType*>(ad);
     assertx(a->checkInvariants());
     return a;
   }
   static ALWAYS_INLINE
   const ArrayType* asArrayType(const ArrayData* ad) {
-    assertx(ad->hasVanillaMixedLayout() || ad->isKeysetKind());
+    assertx(ad->isVanillaDict() || ad->isVanillaKeyset());
     auto a = static_cast<const ArrayType*>(ad);
     assertx(a->checkInvariants());
     return a;

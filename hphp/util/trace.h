@@ -93,7 +93,6 @@ namespace Trace {
       TM(traceAsync)  /* Meta: lazy writes to disk */ \
       TM(apc)           \
       TM(asmx64)        \
-      TM(asmppc64)      \
       TM(atomicvector)  \
       TM(bcinterp)      \
       TM(bespoke)       \
@@ -111,6 +110,7 @@ namespace Trace {
       TM(ehframe)       \
       TM(emitter)       \
       TM(extern_compiler) \
+      TM(facts)         \
       TM(fixup)         \
       TM(fr)            \
       TM(funcorder)     \
@@ -201,7 +201,6 @@ namespace Trace {
       TM(vasm_copy)     \
       TM(vasm_graph_color) \
       TM(vasm_phi)      \
-      TM(watchman_autoload) \
       TM(xenon)         \
       TM(xls)           \
       TM(xls_stats)     \

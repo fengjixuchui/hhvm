@@ -660,7 +660,6 @@ const StaticString
   s_access("access");
 
 Array init_ini_settings(const std::string& settings) {
-  ARRPROV_USE_RUNTIME_LOCATION();
   String s(settings.c_str(), CopyString);
   auto var = Variant::attach(HHVM_FN(json_decode)(s, true));
 
@@ -805,7 +804,7 @@ Array init_cli_globals(int argc, char** argv, int xhprof, Array& ini,
       retEnv.set(String(envvar.first), String(envvar.second));
     }
   } else {
-    retEnv = empty_array();
+    retEnv = empty_dict_array();
   }
 
   for (auto env = envp; *env; ++env) {
@@ -1765,7 +1764,7 @@ int cli_openfd_unsafe(const String& filename, int flags, mode_t mode,
 }
 
 Array cli_env() {
-  return tl_env ? *tl_env : empty_array();
+  return tl_env ? *tl_env : empty_dict_array();
 }
 
 bool is_cli_server_mode() { return tl_cliSock != -1; }
@@ -1775,7 +1774,7 @@ uint64_t cli_server_api_version() {
     return s_cliServerComputedVersion;
   }
   std::string key;
-  for (const auto it : s_extensionHandlers) {
+  for (const auto& it : s_extensionHandlers) {
     key += it.first.c_str();
   }
   s_cliServerComputedVersion = murmur_hash_64A(

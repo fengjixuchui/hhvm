@@ -13,11 +13,13 @@
          ];
        sc_typeconsts =
        [{ Shallow_decl_defs.stc_abstract = Typing_defs.TCConcrete;
-          stc_as_constraint = None; stc_name = ([8:14-18], "TInt");
+          stc_as_constraint = None; stc_super_constraint = None;
+          stc_name = ([8:14-18], "TInt");
           stc_type = (Some (Rhint ([8:21-24]), (Tprim Tint)));
           stc_enforceable = ([Pos.none], false); stc_reifiable = None };
          { Shallow_decl_defs.stc_abstract = Typing_defs.TCConcrete;
-           stc_as_constraint = None; stc_name = ([9:14-20], "TShape");
+           stc_as_constraint = None; stc_super_constraint = None;
+           stc_name = ([9:14-20], "TShape");
            stc_type =
            (Some (Rhint ([9:23-11:4]),
                   (Tshape (Typing_defs_core.Closed_shape,
@@ -57,8 +59,7 @@
                    fp_flags =
                    (make_fp_flags ~accept_disposable:false ~has_default:false
                      ~mode:Typing_defs_core.FPnormal ~ifc_external:false
-                     ~ifc_can_call:false ~is_atom:false ~readonly:false
-                     ~const_function:false);
+                     ~ifc_can_call:false ~is_atom:false ~readonly:false);
                     }
                   ];
                 ft_implicit_params =
@@ -68,8 +69,7 @@
                   et_type = (Rhint ([13:37-41]), (Tprim Tvoid)) };
                 ft_flags =
                 (make_ft_flags FSync ~return_disposable:false
-                  ~returns_readonly:false ~readonly_this:false
-                  ~is_const:false);
+                  ~returns_readonly:false ~readonly_this:false);
                 ft_ifc_decl = FDPolicied {PUBLIC} }));
           sm_visibility = Public; sm_deprecated = None; sm_flags = (empty) }
          ];

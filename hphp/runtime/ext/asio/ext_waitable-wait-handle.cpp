@@ -145,8 +145,8 @@ c_WaitableWaitHandle::throwCycleException(c_WaitableWaitHandle* child) const {
 
 
 Array c_WaitableWaitHandle::getDependencyStack() {
-  if (isFinished()) return empty_varray();
-  auto result = Array::CreateVArray();
+  if (isFinished()) return empty_vec_array();
+  auto result = Array::CreateVec();
   hphp_hash_set<c_WaitableWaitHandle*> visited;
   auto current_handle = this;
   auto session = AsioSession::Get();

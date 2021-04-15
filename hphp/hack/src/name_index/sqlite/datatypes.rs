@@ -65,14 +65,6 @@ impl FromSql for SqliteKindOfType {
 pub(crate) mod convert {
     use super::*;
 
-    pub fn ids_to_string(ids: &[Id]) -> String {
-        let ids = ids
-            .into_iter()
-            .map(|id| id.1.clone())
-            .collect::<Vec<String>>();
-        ids.join("|")
-    }
-
     pub fn mode_to_i64(mode: Option<Mode>) -> Option<i64> {
         match mode {
             Some(mode) => Some(match mode {
@@ -105,12 +97,12 @@ pub(crate) mod convert {
         i64::from_ne_bytes(b)
     }
 
-    pub fn name_to_hash(dep_type: deps_rust::DepType, name: &str) -> i64 {
+    pub fn name_to_hash(dep_type: typing_deps_hash::DepType, name: &str) -> i64 {
         // For naming we use 32-bit hashes, because we're only going to use
         // the LSBs anyways.
         let naming_hash = make_naming_hash(name);
-        let dep_hash = deps_rust::hash1(HashMode::Hash32Bit, dep_type, name.as_bytes());
-        let result = deps_rust::combine_hashes(dep_hash, naming_hash);
+        let dep_hash = typing_deps_hash::hash1(HashMode::Hash32Bit, dep_type, name.as_bytes());
+        let result = typing_deps_hash::combine_hashes(dep_hash, naming_hash);
         result
     }
 }

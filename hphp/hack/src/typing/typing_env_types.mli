@@ -8,7 +8,6 @@
  *)
 
 open Typing_defs
-module ITySet = Internal_type_set
 
 (* Local environment includes types of locals and bounds on type parameters. *)
 type local_env = {
@@ -40,6 +39,8 @@ type env = {
   allow_wildcards: bool;
   big_envs: (Pos.t * env) list ref;
   pessimize: bool;
+  (* This is only filled in after type-checking the function in question *)
+  fun_tast_info: Tast.fun_tast_info option;
 }
 
 and genv = {

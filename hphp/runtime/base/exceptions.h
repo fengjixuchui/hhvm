@@ -142,7 +142,7 @@ struct RequestOOMKilledException : ResourceExceededException {
     : ResourceExceededException(
         folly::sformat("request aborted due to memory pressure, "
                        "used {} bytes", usedBytes),
-        empty_varray())
+        empty_vec_array())
     , m_usedBytes(usedBytes)
   {}
   const size_t m_usedBytes;
@@ -170,6 +170,12 @@ struct PhpFileDoesNotExistException : ExtendedException {
   }
   EXCEPTION_COMMON_IMPL(PhpFileDoesNotExistException);
 };
+
+/*
+ * An exception meant to be caught immediately in the JIT.
+ */
+struct CppDummyException {};
+constexpr CppDummyException kDummyException;
 
 //////////////////////////////////////////////////////////////////////
 

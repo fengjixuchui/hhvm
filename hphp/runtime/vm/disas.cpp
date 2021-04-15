@@ -671,7 +671,7 @@ void print_class_constant(Output& out, const PreClass::Const* cns) {
     not_reached();
   }();
   if (cns->isAbstract()) {
-    out.fmtln(".const {}{};", cns->name(), kind);
+    out.fmtln(".const {}{} isAbstract;", cns->name(), kind);
     return;
   }
   out.fmtln(".const {}{} = {};", cns->name(), kind,
@@ -743,7 +743,7 @@ void print_enum_includes(Output& out, const PreClass* cls) {
 }
 
 void print_cls_enum_ty(Output& out, const PreClass* cls) {
-  if (cls->attrs() & AttrEnum) {
+  if (cls->attrs() & (AttrEnum|AttrEnumClass)) {
     out.fmtln(".enum_ty <{}>;", type_constraint(cls->enumBaseTy()));
   }
 }

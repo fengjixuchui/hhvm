@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<15e749b7ce7e591198da94cd26045ff6>>
+// @generated SignedSource<<f45540ea9b404a8fa1163c46a654a000>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -1020,6 +1020,9 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
     pub fn mk_readonly_expr(p0: Expr<Ex, Fb, En, Hi>) -> Self {
         Expr_::ReadonlyExpr(Box::new(p0))
     }
+    pub fn mk_tuple(p0: Vec<Expr<Ex, Fb, En, Hi>>) -> Self {
+        Expr_::Tuple(p0)
+    }
     pub fn mk_list(p0: Vec<Expr<Ex, Fb, En, Hi>>) -> Self {
         Expr_::List(p0)
     }
@@ -1119,6 +1122,9 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
     }
     pub fn mk_any() -> Self {
         Expr_::Any
+    }
+    pub fn mk_hole(p0: Expr<Ex, Fb, En, Hi>, p1: Hi, p2: Hi, p3: HoleSource) -> Self {
+        Expr_::Hole(Box::new((p0, p1, p2, p3)))
     }
     pub fn is_darray(&self) -> bool {
         match self {
@@ -1288,6 +1294,12 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
             _ => false,
         }
     }
+    pub fn is_tuple(&self) -> bool {
+        match self {
+            Expr_::Tuple(..) => true,
+            _ => false,
+        }
+    }
     pub fn is_list(&self) -> bool {
         match self {
             Expr_::List(..) => true,
@@ -1441,6 +1453,12 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
     pub fn is_any(&self) -> bool {
         match self {
             Expr_::Any => true,
+            _ => false,
+        }
+    }
+    pub fn is_hole(&self) -> bool {
+        match self {
+            Expr_::Hole(..) => true,
             _ => false,
         }
     }
@@ -1612,6 +1630,12 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
     pub fn as_readonly_expr(&self) -> Option<&Expr<Ex, Fb, En, Hi>> {
         match self {
             Expr_::ReadonlyExpr(p0) => Some(&p0),
+            _ => None,
+        }
+    }
+    pub fn as_tuple(&self) -> Option<&Vec<Expr<Ex, Fb, En, Hi>>> {
+        match self {
+            Expr_::Tuple(p0) => Some(p0),
             _ => None,
         }
     }
@@ -1799,6 +1823,12 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
             _ => None,
         }
     }
+    pub fn as_hole(&self) -> Option<(&Expr<Ex, Fb, En, Hi>, &Hi, &Hi, &HoleSource)> {
+        match self {
+            Expr_::Hole(p0) => Some((&p0.0, &p0.1, &p0.2, &p0.3)),
+            _ => None,
+        }
+    }
     pub fn as_darray_mut(
         &mut self,
     ) -> Option<(
@@ -1979,6 +2009,12 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
     pub fn as_readonly_expr_mut(&mut self) -> Option<&mut Expr<Ex, Fb, En, Hi>> {
         match self {
             Expr_::ReadonlyExpr(p0) => Some(p0.as_mut()),
+            _ => None,
+        }
+    }
+    pub fn as_tuple_mut(&mut self) -> Option<&mut Vec<Expr<Ex, Fb, En, Hi>>> {
+        match self {
+            Expr_::Tuple(p0) => Some(p0),
             _ => None,
         }
     }
@@ -2183,6 +2219,14 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
             _ => None,
         }
     }
+    pub fn as_hole_mut(
+        &mut self,
+    ) -> Option<(&mut Expr<Ex, Fb, En, Hi>, &mut Hi, &mut Hi, &mut HoleSource)> {
+        match self {
+            Expr_::Hole(p0) => Some((&mut p0.0, &mut p0.1, &mut p0.2, &mut p0.3)),
+            _ => None,
+        }
+    }
     pub fn as_darray_into(
         self,
     ) -> Option<(
@@ -2349,6 +2393,12 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
     pub fn as_readonly_expr_into(self) -> Option<Expr<Ex, Fb, En, Hi>> {
         match self {
             Expr_::ReadonlyExpr(p0) => Some(*p0),
+            _ => None,
+        }
+    }
+    pub fn as_tuple_into(self) -> Option<Vec<Expr<Ex, Fb, En, Hi>>> {
+        match self {
+            Expr_::Tuple(p0) => Some(p0),
             _ => None,
         }
     }
@@ -2531,6 +2581,12 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
     pub fn as_enum_atom_into(self) -> Option<String> {
         match self {
             Expr_::EnumAtom(p0) => Some(p0),
+            _ => None,
+        }
+    }
+    pub fn as_hole_into(self) -> Option<(Expr<Ex, Fb, En, Hi>, Hi, Hi, HoleSource)> {
+        match self {
+            Expr_::Hole(p0) => Some(((*p0).0, (*p0).1, (*p0).2, (*p0).3)),
             _ => None,
         }
     }
@@ -2998,49 +3054,85 @@ impl CaType {
         }
     }
 }
-impl TypeconstAbstractKind {
-    pub fn mk_tcabstract(p0: Option<Hint>) -> Self {
-        TypeconstAbstractKind::TCAbstract(p0)
+impl ClassTypeconst {
+    pub fn mk_tcabstract(p0: ClassAbstractTypeconst) -> Self {
+        ClassTypeconst::TCAbstract(p0)
     }
-    pub fn mk_tcpartially_abstract() -> Self {
-        TypeconstAbstractKind::TCPartiallyAbstract
+    pub fn mk_tcconcrete(p0: ClassConcreteTypeconst) -> Self {
+        ClassTypeconst::TCConcrete(p0)
     }
-    pub fn mk_tcconcrete() -> Self {
-        TypeconstAbstractKind::TCConcrete
+    pub fn mk_tcpartially_abstract(p0: ClassPartiallyAbstractTypeconst) -> Self {
+        ClassTypeconst::TCPartiallyAbstract(p0)
     }
     pub fn is_tcabstract(&self) -> bool {
         match self {
-            TypeconstAbstractKind::TCAbstract(..) => true,
-            _ => false,
-        }
-    }
-    pub fn is_tcpartially_abstract(&self) -> bool {
-        match self {
-            TypeconstAbstractKind::TCPartiallyAbstract => true,
+            ClassTypeconst::TCAbstract(..) => true,
             _ => false,
         }
     }
     pub fn is_tcconcrete(&self) -> bool {
         match self {
-            TypeconstAbstractKind::TCConcrete => true,
+            ClassTypeconst::TCConcrete(..) => true,
             _ => false,
         }
     }
-    pub fn as_tcabstract(&self) -> Option<&Option<Hint>> {
+    pub fn is_tcpartially_abstract(&self) -> bool {
         match self {
-            TypeconstAbstractKind::TCAbstract(p0) => Some(p0),
+            ClassTypeconst::TCPartiallyAbstract(..) => true,
+            _ => false,
+        }
+    }
+    pub fn as_tcabstract(&self) -> Option<&ClassAbstractTypeconst> {
+        match self {
+            ClassTypeconst::TCAbstract(p0) => Some(p0),
             _ => None,
         }
     }
-    pub fn as_tcabstract_mut(&mut self) -> Option<&mut Option<Hint>> {
+    pub fn as_tcconcrete(&self) -> Option<&ClassConcreteTypeconst> {
         match self {
-            TypeconstAbstractKind::TCAbstract(p0) => Some(p0),
+            ClassTypeconst::TCConcrete(p0) => Some(p0),
             _ => None,
         }
     }
-    pub fn as_tcabstract_into(self) -> Option<Option<Hint>> {
+    pub fn as_tcpartially_abstract(&self) -> Option<&ClassPartiallyAbstractTypeconst> {
         match self {
-            TypeconstAbstractKind::TCAbstract(p0) => Some(p0),
+            ClassTypeconst::TCPartiallyAbstract(p0) => Some(p0),
+            _ => None,
+        }
+    }
+    pub fn as_tcabstract_mut(&mut self) -> Option<&mut ClassAbstractTypeconst> {
+        match self {
+            ClassTypeconst::TCAbstract(p0) => Some(p0),
+            _ => None,
+        }
+    }
+    pub fn as_tcconcrete_mut(&mut self) -> Option<&mut ClassConcreteTypeconst> {
+        match self {
+            ClassTypeconst::TCConcrete(p0) => Some(p0),
+            _ => None,
+        }
+    }
+    pub fn as_tcpartially_abstract_mut(&mut self) -> Option<&mut ClassPartiallyAbstractTypeconst> {
+        match self {
+            ClassTypeconst::TCPartiallyAbstract(p0) => Some(p0),
+            _ => None,
+        }
+    }
+    pub fn as_tcabstract_into(self) -> Option<ClassAbstractTypeconst> {
+        match self {
+            ClassTypeconst::TCAbstract(p0) => Some(p0),
+            _ => None,
+        }
+    }
+    pub fn as_tcconcrete_into(self) -> Option<ClassConcreteTypeconst> {
+        match self {
+            ClassTypeconst::TCConcrete(p0) => Some(p0),
+            _ => None,
+        }
+    }
+    pub fn as_tcpartially_abstract_into(self) -> Option<ClassPartiallyAbstractTypeconst> {
+        match self {
+            ClassTypeconst::TCPartiallyAbstract(p0) => Some(p0),
             _ => None,
         }
     }
@@ -3360,6 +3452,35 @@ impl NsKind {
     pub fn is_nsconst(&self) -> bool {
         match self {
             NsKind::NSConst => true,
+            _ => false,
+        }
+    }
+}
+impl HoleSource {
+    pub fn mk_typing() -> Self {
+        HoleSource::Typing
+    }
+    pub fn mk_unsafe_cast() -> Self {
+        HoleSource::UnsafeCast
+    }
+    pub fn mk_enforced_cast() -> Self {
+        HoleSource::EnforcedCast
+    }
+    pub fn is_typing(&self) -> bool {
+        match self {
+            HoleSource::Typing => true,
+            _ => false,
+        }
+    }
+    pub fn is_unsafe_cast(&self) -> bool {
+        match self {
+            HoleSource::UnsafeCast => true,
+            _ => false,
+        }
+    }
+    pub fn is_enforced_cast(&self) -> bool {
+        match self {
+            HoleSource::EnforcedCast => true,
             _ => false,
         }
     }

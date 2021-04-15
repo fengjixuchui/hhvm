@@ -44,6 +44,7 @@
 #include "hphp/runtime/vm/jit/write-lease.h"
 
 #include "hphp/util/disasm.h"
+#include "hphp/util/logger.h"
 #include "hphp/util/mutex.h"
 #include "hphp/util/rds-local.h"
 #include "hphp/util/trace.h"
@@ -632,21 +633,23 @@ void Translator::translate(folly::Optional<CodeCache::View> view) {
     }
     CGMeta fixups;
     TransLocMaker maker{*view};
-    maker.markStart();
     try {
+      view->alignForTranslation();
+      maker.markStart();
       emitVunit(*vunit, unit.get(), *view, fixups,
                 mcgen::dumpTCAnnotation(kind) ? getAnnotations()
                                               : nullptr);
     } catch (const DataBlockFull& dbFull) {
-      always_assert(!view->isLocal());
       if (dbFull.name == "hot") {
+        always_assert(!view->isLocal());
         code().disableHot();
         // Rollback tags and try again.
         maker.rollback();
         fixups.clear();
         continue;
       }
-      auto const range = maker.markEnd();
+      // Rollback so the area can be used by something else.
+      auto const range = maker.rollback();
       auto const bytes = range.main.size() + range.cold.size() +
                          range.frozen.size();
       // There should be few of these.  They mean there is wasted work
@@ -657,6 +660,9 @@ void Translator::translate(folly::Optional<CodeCache::View> view) {
         e.setStr("data_block", dbFull.name);
         e.setInt("bytes_dropped", bytes);
       });
+      if (RuntimeOption::ServerExecutionMode()) {
+        Logger::Warning("TC area %s filled up!", dbFull.name.c_str());
+      }
       reset();
       return;
     }
@@ -709,9 +715,10 @@ void Translator::relocate() {
       auto dstView = crb.getMaybeReusedView(finalView, range);
       auto& srcView = transMeta->view;
       TransLocMaker maker{dstView};
-      maker.markStart();
 
       try {
+        dstView.alignForTranslation();
+        maker.markStart();
         auto origin = range.data;
         if (!origin.empty()) {
           dstView.data().bytes(origin.size(),
@@ -742,6 +749,8 @@ void Translator::relocate() {
           code().disableHot();
           continue;
         }
+        // Rollback so the area can be used by something else.
+        maker.rollback();
         auto const bytes = range.main.size() + range.cold.size() +
                            range.frozen.size();
         // There should be few of these.  They mean there is wasted work

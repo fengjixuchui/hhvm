@@ -141,7 +141,6 @@ void commitGlobalData(std::unique_ptr<ArrayTypeTable::Builder> arrTable,
   gd.PHP7_NoHexNumerics          = RuntimeOption::PHP7_NoHexNumerics;
   gd.PHP7_Substr                 = RuntimeOption::PHP7_Substr;
   gd.PHP7_Builtins               = RuntimeOption::PHP7_Builtins;
-  gd.EnableRenameFunction        = RuntimeOption::EvalJitEnableRenameFunction;
   gd.HardGenericsUB              = RuntimeOption::EvalEnforceGenericsUB >= 2;
   gd.HackArrCompatNotices        = RuntimeOption::EvalHackArrCompatNotices;
   gd.EnableIntrinsicsExtension   = RuntimeOption::EnableIntrinsicsExtension;
@@ -156,7 +155,6 @@ void commitGlobalData(std::unique_ptr<ArrayTypeTable::Builder> arrTable,
   gd.LogKnownMethodsAsDynamicCalls =
     RuntimeOption::EvalLogKnownMethodsAsDynamicCalls;
   gd.EnableArgsInBacktraces      = RuntimeOption::EnableArgsInBacktraces;
-  gd.ArrayProvenance             = RuntimeOption::EvalArrayProvenance;
   gd.NoticeOnBuiltinDynamicCalls =
     RuntimeOption::EvalNoticeOnBuiltinDynamicCalls;
   gd.InitialNamedEntityTableSize =
@@ -167,7 +165,6 @@ void commitGlobalData(std::unique_ptr<ArrayTypeTable::Builder> arrTable,
     RuntimeOption::EvalHackArrCompatIsVecDictNotices;
   gd.HackArrCompatSerializeNotices =
     RuntimeOption::EvalHackArrCompatSerializeNotices;
-  gd.HackArrDVArrs = RuntimeOption::EvalHackArrDVArrs;
   gd.AbortBuildOnVerifyError = RuntimeOption::EvalAbortBuildOnVerifyError;
   gd.EmitClassPointers = RuntimeOption::EvalEmitClassPointers;
   gd.EmitClsMethPointers = RuntimeOption::EvalEmitClsMethPointers;
@@ -185,9 +182,6 @@ void commitGlobalData(std::unique_ptr<ArrayTypeTable::Builder> arrTable,
   gd.NoticeOnCoerceForBitOp =
     RuntimeOption::EvalNoticeOnCoerceForBitOp;
 
-  for (auto a : Option::APCProfile) {
-    gd.APCProfile.emplace_back(StringData::MakeStatic(folly::StringPiece(a)));
-  }
   for (auto const& elm : RuntimeOption::ConstantFunctions) {
     gd.ConstantFunctions.push_back(elm);
   }

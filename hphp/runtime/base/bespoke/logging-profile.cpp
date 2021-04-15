@@ -19,6 +19,7 @@
 
 #include "hphp/runtime/base/bespoke/logging-array.h"
 #include "hphp/runtime/base/bespoke/layout.h"
+#include "hphp/runtime/base/bespoke/struct-dict.h"
 #include "hphp/runtime/base/memory-manager-defs.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/server/memory-stats.h"
@@ -81,19 +82,27 @@ SrcKey canonicalize(SrcKey sk) {
 
 // If the given source always produces a particular static array, return it.
 ArrayData* getStaticArray(LoggingProfileKey key) {
-  if (key.slot != kInvalidSlot) {
-    auto const index = key.cls->propSlotToIndex(key.slot);
-    auto const tv = key.cls->declPropInit()[index].val.tv();
-    return tvIsArrayLike(tv) ? tv.val().parr : nullptr;
+  switch (key.locationType) {
+    case LocationType::Runtime:
+      return nullptr;
+
+    case LocationType::Property: {
+      auto const index = key.cls->propSlotToIndex(key.slot);
+      auto const tv = key.cls->declPropInit()[index].val.tv();
+      return tvIsArrayLike(tv) ? tv.val().parr : nullptr;
+    }
+
+    case LocationType::SrcKey: {
+      auto const op = key.sk.op();
+      if (op != Op::Vec && op != Op::Dict && op != Op::Keyset) {
+        return nullptr;
+      }
+      auto const unit = key.sk.func()->unit();
+      auto const result = unit->lookupArrayId(getImm(key.sk.pc(), 0).u_AA);
+      return const_cast<ArrayData*>(result);
+    }
   }
-  auto const op = key.sk.op();
-  if (op != Op::Array && op != Op::Vec &&
-      op != Op::Dict && op != Op::Keyset) {
-    return nullptr;
-  }
-  auto const unit = key.sk.func()->unit();
-  auto const result = unit->lookupArrayId(getImm(key.sk.pc(), 0).u_AA);
-  return const_cast<ArrayData*>(result);
+  always_assert(false);
 }
 
 template <typename M, typename L, typename K>
@@ -354,12 +363,24 @@ void LoggingProfile::setStaticBespokeArray(BespokeArray* bad) {
 
   staticBespokeArray = bad;
 
-  if (key.slot != kInvalidSlot) {
+  if (key.locationType == LocationType::Property) {
     auto const index = key.cls->propSlotToIndex(key.slot);
     auto props = const_cast<Class::PropInitVec*>(&key.cls->declPropInit());
     auto const lval = (*props)[index].val;
     assertx(tvIsArrayLike(lval));
     lval.val().parr = bad;
+  }
+}
+
+jit::ArrayLayout LoggingProfile::getLayout() const {
+  return layout.load(std::memory_order_acquire);
+}
+
+void LoggingProfile::setLayout(jit::ArrayLayout layout) {
+  this->layout.store(layout, std::memory_order_release);
+  if (key.isRuntimeLocation() && layout.is_struct()) {
+    // TODO(mcolavita): setLayout should trigger setStaticBespokeArray.
+    key.runtimeStruct->applyLayout(StructLayout::As(layout.bespokeLayout()));
   }
 }
 
@@ -376,6 +397,14 @@ SinkProfile::SinkProfile(SinkProfileKey key, jit::ArrayLayout layout)
   : key(key)
   , layout(layout)
 {}
+
+jit::ArrayLayout SinkProfile::getLayout() const {
+  return layout.load(std::memory_order_acquire);
+}
+
+void SinkProfile::setLayout(jit::ArrayLayout layout) {
+  this->layout.store(layout, std::memory_order_release);
+}
 
 void SinkProfile::update(const ArrayData* ad) {
   folly::SharedMutex::ReadHolder lock{s_profilingLock};
@@ -740,7 +769,7 @@ bool exportSortedProfiles(FILE* file, const ProfileOutputData& profileData) {
                   sourceProfile->data->sampleCount.load(), sourceData.weight);
     LOG_OR_RETURN(file, "  {}\n", sourceProfile->key.toStringDetail());
     LOG_OR_RETURN(file, "  Selected Layout: {}\n",
-                  sourceProfile->layout.describe());
+                  sourceProfile->getLayout().describe());
     LOG_OR_RETURN(file, "  {} reads, {} writes\n",
                   sourceData.readCount, sourceData.writeCount);
 
@@ -784,7 +813,7 @@ bool exportSortedSinks(FILE* file, const std::vector<SinkOutputData>& sinks) {
                   sink.weight, sink.loggedCount);
     LOG_OR_RETURN(file, "  {}\n", sk.showInst());
     LOG_OR_RETURN(file, "  Selected Layout: {}\n",
-                  sink.profile->layout.describe());
+                  sink.profile->getLayout().describe());
 
     if (!exportTypeCounts(file, "Array", sink.arrCounts)) return false;
     if (!exportTypeCounts(file, "Key",   sink.keyCounts)) return false;
@@ -905,13 +934,9 @@ std::vector<SinkOutputData> sortSinkData() {
 
 void stopProfiling() {
   assertx(allowBespokeArrayLikes());
-  assertx(s_profiling.load(std::memory_order_relaxed));
-
-  {
-    auto expected = true;
-    folly::SharedMutex::WriteHolder lock{s_profilingLock};
-    if (!s_profiling.compare_exchange_strong(expected, false)) return;
-  }
+  assertx(s_profiling.load(std::memory_order_acquire));
+  folly::SharedMutex::WriteHolder lock{s_profilingLock};
+  s_profiling.store(false, std::memory_order_release);
 }
 
 namespace {
@@ -976,10 +1001,9 @@ bool shouldLogAtSrcKey(SrcKey sk) {
     return false;
   }
 
-  // Don't profile static arrays used for TypeStruct tests. Rather than using
-  // these arrays, we almost always just do a DataType check on the value.
-  if ((sk.op() == Op::Array || sk.op() == Op::Dict) &&
-      sk.advanced().op() == Op::IsTypeStructC) {
+  // Don't profile static dicts used for TypeStruct tests. Rather than using
+  // these dicts, we almost always just do a DataType check on the value.
+  if (sk.op() == Op::Dict && sk.advanced().op() == Op::IsTypeStructC) {
     FTRACE(5, "Skipping static array used for TypeStruct test.\n");
     return false;
   }
@@ -1032,6 +1056,14 @@ LoggingProfile* getLoggingProfile(LoggingProfileKey key) {
 LoggingProfile* getLoggingProfile(SrcKey sk) {
   if (!shouldLogAtSrcKey(sk)) return nullptr;
   return getLoggingProfile(LoggingProfileKey(canonicalize(sk)));
+}
+
+LoggingProfile* getLoggingProfile(RuntimeStruct* runtimeStruct) {
+  auto const profile = runtimeStruct->m_profile.load(std::memory_order_relaxed);
+  if (profile) return profile;
+  auto const newProfile = getLoggingProfile(LoggingProfileKey(runtimeStruct));
+  runtimeStruct->m_profile.store(newProfile, std::memory_order_relaxed);
+  return newProfile;
 }
 
 LoggingProfile* getLoggingProfile(const Class* cls, Slot slot) {

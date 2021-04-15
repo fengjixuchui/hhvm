@@ -50,14 +50,13 @@ bool loadsCell(const IRInstruction& inst) {
     switch (arch()) {
     case Arch::X64: return true;
     case Arch::ARM: return true;
-    case Arch::PPC64: return true;
     }
     not_reached();
   }();
 
   switch (inst.op()) {
   case LdMem:
-    return arch_allows && (!wide_tv_val || inst.src(0)->isA(TPtrToCell));
+    return arch_allows && inst.src(0)->isA(TPtrToCell);
 
   case LdVecElem:
     return arch_allows && PackedArray::stores_typed_values;
@@ -100,7 +99,6 @@ bool storesCell(const IRInstruction& inst, uint32_t srcIdx) {
   switch (arch()) {
   case Arch::X64: break;
   case Arch::ARM: break;
-  case Arch::PPC64: return false;
   }
 
   // If this function returns true for an operand, then the register allocator
@@ -118,7 +116,7 @@ bool storesCell(const IRInstruction& inst, uint32_t srcIdx) {
   case InitVecElem:
     return srcIdx == 1 && PackedArray::stores_typed_values;
   case StMem:
-    return srcIdx == 1 && (!wide_tv_val || inst.src(0)->isA(TPtrToCell));
+    return srcIdx == 1 && inst.src(0)->isA(TPtrToCell);
   default:
     return false;
   }

@@ -33,16 +33,13 @@ module Dep : sig
     | Fun : string -> 'a variant
         (** Represents either a global function depending on something, or
         something depending on a global function. *)
-    | Class : string -> 'a variant
-        (** Represents either a class depending on something, or something
-        depending on a class. *)
+    | Type : string -> 'a variant
+        (** Represents either a class/typedef/recorddef/trait/interface depending on something,
+        or something depending on one. *)
     | Extends : string -> dependency variant
         (** Represents another class depending on a class via an
         inheritance-like mechanism (`extends`, `implements`, `use`, `require
         extends`, `require implements`, etc.) *)
-    | RecordDef : string -> 'a variant
-        (** Represents either a record depending on something, or something
-        depending on a record. *)
     | Const : string * string -> dependency variant
         (** Represents something depending on a class constant. *)
     | Cstr : string -> dependency variant

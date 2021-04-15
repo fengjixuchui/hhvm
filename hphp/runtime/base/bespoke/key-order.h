@@ -23,6 +23,7 @@
 namespace HPHP {
 
 struct ArrayData;
+
 namespace bespoke {
 
 // KeyOrder represents insertion order of static string keys.
@@ -30,15 +31,12 @@ struct KeyOrder {
   using KeyOrderData = std::vector<LowStringPtr>;
   using const_iterator = KeyOrderData::const_iterator;
 
-  // All KeyOrders of length > kMaxLen that have the same prefix
-  // are grouped together.
-  constexpr static size_t kMaxLen = 16;
-
   KeyOrder insert(const StringData*) const;
   KeyOrder remove(const StringData*) const;
   KeyOrder pop() const;
   const_iterator begin() const;
   const_iterator end() const;
+  size_t size() const;
 
   // A "valid" KeyOrder is one that can be used to make a struct layout, and
   // that can be merged with other valid layouts. An "empty" layout is valid,
@@ -72,5 +70,38 @@ struct KeyOrderHash {
     return std::hash<const KeyOrder::KeyOrderData*>{}(ko.m_keys);
   }
 };
+
+// Wrapper around std::atomic offering copy construction/assignment. Meant to
+// be used as a value type for containers when we've properly synchronized all
+// potential internal value copies on that container (e.g. resizes).
+//
+// TODO(kshaunak): Move this wrapper to a utilities file.
+template <typename T>
+struct CopyAtomic {
+  /* implicit */ CopyAtomic(T value): value(value) {}
+
+  CopyAtomic(const CopyAtomic<T>& other)
+    : value(other.value.load(std::memory_order_acquire))
+  {}
+
+  CopyAtomic& operator=(const CopyAtomic<T>& other) {
+    value = other.value.load(std::memory_order_acquire);
+  }
+
+  operator T() const {
+    return value;
+  }
+
+  std::atomic<T> value;
+};
+
+// TODO(kshaunak): We can switch this over to a folly::F14Map.
+using KeyOrderMap =
+  std::unordered_map<KeyOrder, CopyAtomic<size_t>, KeyOrderHash>;
+
+// Return a KeyOrder in "canonical form" (for now: sorted) that includes all
+// keys in the given map. If the map has too many keys, or keys of the wrong
+// type, this function will return an invalid KeyOrder.
+KeyOrder collectKeyOrder(const KeyOrderMap& map);
 
 }}

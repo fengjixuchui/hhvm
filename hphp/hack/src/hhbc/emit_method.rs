@@ -15,8 +15,8 @@ use hhas_method_rust::{HhasMethod, HhasMethodFlags};
 use hhas_pos_rust::Span;
 use hhbc_id_rust::method;
 use hhbc_string_utils_rust as string_utils;
-use instruction_sequence_rust::{instr, Result};
-use naming_special_names_rust::{special_idents, user_attributes};
+use instruction_sequence::{instr, Result};
+use naming_special_names_rust::{classes, special_idents, user_attributes};
 use ocamlrep::rc::RcOc;
 use options::{HhvmFlags, Options};
 use oxidized::{ast as T, ast_defs};
@@ -147,11 +147,22 @@ pub fn from_ast<'a>(
             .unwrap_or(&class.namespace),
     );
     let mut coeffects = HhasCoeffects::from_ast(&method.ctxs, &method.params);
-    if coeffects.get_static_coeffects().is_empty() && is_closure_body {
-        coeffects = emitter
+    if method.ctxs == None && is_closure_body {
+        let parent_coeffects = emitter
             .emit_global_state()
-            .get_lambda_coeffects_of_scope(&class.name.1, &method.name.1)
-            .clone()
+            .get_lambda_coeffects_of_scope(&class.name.1, &method.name.1);
+        coeffects = parent_coeffects.inherit_to_child_closure()
+    }
+    if is_native_opcode_impl
+        && (class.name.1.as_str() == classes::GENERATOR
+            || class.name.1.as_str() == classes::ASYNC_GENERATOR)
+    {
+        match method.name.1.as_str() {
+            "send" | "raise" | "throw" | "next" | "rewind" => {
+                coeffects = coeffects.with_gen_coeffect()
+            }
+            _ => {}
+        }
     }
     let (ast_body_block, is_rx_body, rx_disabled) = if !coeffects.is_any_rx() {
         (&method.body.ast, false, false)
@@ -202,6 +213,10 @@ pub fn from_ast<'a>(
         flags.set(emit_body::Flags::NATIVE, is_native);
         flags.set(emit_body::Flags::RX_BODY, is_rx_body);
         flags.set(emit_body::Flags::ASYNC, is_async);
+        flags.set(
+            emit_body::Flags::HAS_COEFFECTS_LOCAL,
+            coeffects.has_coeffects_local(),
+        );
         emit_body::emit_body(
             emitter,
             namespace,

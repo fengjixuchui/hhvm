@@ -79,7 +79,9 @@ let type_does_not_require_init env ty_opt =
   match ty_opt with
   | None -> true
   | Some ty ->
-    let (env, ty) = Typing_phase.localize_with_self env ty in
+    let (env, ty) =
+      Typing_phase.localize_with_self env ~ignore_errors:true ty
+    in
     let null = Typing_make_type.null Typing_reason.Rnone in
     Typing_subtype.is_sub_type env null ty
     ||
@@ -166,7 +168,7 @@ module Env = struct
       if not @@ SMap.is_empty uninit then
         SMap.bindings uninit
         |> List.map ~f:fst
-        |> Errors.constructor_required sc.sc_name);
+        |> Errors.constructor_required c.c_name);
 
     let ( add_init_not_required_props,
           add_trait_props,
@@ -226,17 +228,17 @@ let is_whitelisted = function
 let is_lateinit cv =
   Naming_attributes.mem SN.UserAttributes.uaLateInit cv.cv_user_attributes
 
-let class_prop_pos class_name prop_name ctx : Pos.t =
+let class_prop_pos class_name prop_name ctx : Pos_or_decl.t =
   match Decl_provider.get_class ctx class_name with
-  | None -> Pos.none
+  | None -> Pos_or_decl.none
   | Some decl ->
     (match Decl_provider.Class.get_prop decl prop_name with
-    | None -> Pos.none
+    | None -> Pos_or_decl.none
     | Some elt ->
       let member_origin = elt.Typing_defs.ce_origin in
       if shallow_decl_enabled ctx then
         match Shallow_classes_provider.get ctx member_origin with
-        | None -> Pos.none
+        | None -> Pos_or_decl.none
         | Some sc ->
           let prop =
             List.find_exn sc.Shallow_decl_defs.sc_props ~f:(fun prop ->
@@ -250,13 +252,13 @@ let class_prop_pos class_name prop_name ctx : Pos.t =
           Ast_provider.find_class_in_file ctx fn x
         in
         (match get_class_by_name ctx member_origin with
-        | None -> Pos.none
+        | None -> Pos_or_decl.none
         | Some cls ->
           let cv =
             List.find_exn cls.Aast.c_vars ~f:(fun cv ->
                 String.equal (snd cv.Aast.cv_id) prop_name)
           in
-          fst cv.Aast.cv_id))
+          Pos_or_decl.of_raw_pos @@ fst cv.Aast.cv_id))
 
 let rec class_ tenv c =
   if not FileInfo.(equal_mode c.c_mode Mhhi) then
@@ -568,6 +570,7 @@ and expr_ env acc p e =
     acc
   | Yield e -> afield acc e
   | Await e -> expr acc e
+  | Tuple el -> List.fold_left ~f:expr ~init:acc el
   | List _ ->
     (* List is always an lvalue *)
     acc
@@ -629,6 +632,7 @@ and expr_ env acc p e =
   | FunctionPointer _ -> acc
   | ET_Splice e -> expr acc e
   | ReadonlyExpr e -> expr acc e
+  | Hole (e, _, _, _) -> expr acc e
 
 and case env acc = function
   | Default (_, b)

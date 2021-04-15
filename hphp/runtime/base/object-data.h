@@ -501,6 +501,12 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
 
   [[noreturn]] NEVER_INLINE
   void throwMutateConstProp(Slot prop) const;
+  
+  [[noreturn]] NEVER_INLINE
+  void throwMustBeMutable(Slot prop) const;
+  
+  [[noreturn]] NEVER_INLINE
+  void throwMustBeReadOnly(Slot prop) const;
 
  public:
   // never box the lval returned from getPropLval; use propB instead
@@ -520,6 +526,7 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
     Slot slot;
     bool accessible;
     bool isConst;
+    bool readonly;
   };
 
   template <bool forWrite, bool forRead, bool ignoreLateInit>
@@ -533,19 +540,19 @@ struct ObjectData : Countable, type_scan::MarkCollectable<ObjectData> {
   };
 
   template<PropMode mode>
-  tv_lval propImpl(TypedValue* tvRef, const Class* ctx, const StringData* key);
+  tv_lval propImpl(TypedValue* tvRef, const Class* ctx, const StringData* key, const ReadOnlyOp op = ReadOnlyOp::Any);
 
   void setDynProp(const StringData* key, TypedValue val);
 
  public:
-  tv_lval prop(TypedValue* tvRef, const Class* ctx, const StringData* key);
-  tv_lval propW(TypedValue* tvRef, const Class* ctx, const StringData* key);
-  tv_lval propU(TypedValue* tvRef, const Class* ctx, const StringData* key);
-  tv_lval propD(TypedValue* tvRef, const Class* ctx, const StringData* key);
+  tv_lval prop(TypedValue* tvRef, const Class* ctx, const StringData* key, const ReadOnlyOp op);
+  tv_lval propW(TypedValue* tvRef, const Class* ctx, const StringData* key, const ReadOnlyOp op);
+  tv_lval propU(TypedValue* tvRef, const Class* ctx, const StringData* key, const ReadOnlyOp op);
+  tv_lval propD(TypedValue* tvRef, const Class* ctx, const StringData* key, const ReadOnlyOp op);
 
   bool propIsset(const Class* ctx, const StringData* key);
 
-  void setProp(Class* ctx, const StringData* key, TypedValue val);
+  void setProp(Class* ctx, const StringData* key, TypedValue val, ReadOnlyOp op = ReadOnlyOp::Any);
   tv_lval setOpProp(TypedValue& tvRef, Class* ctx, SetOpOp op,
                     const StringData* key, TypedValue* val);
 

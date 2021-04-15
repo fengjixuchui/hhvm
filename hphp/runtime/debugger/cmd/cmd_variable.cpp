@@ -263,7 +263,7 @@ bool CmdVariable::onServer(DebuggerProxy &proxy) {
 
   auto const& denv = g_context->getDebuggerEnv();
   if (m_frame >= 0 && !denv.isNull()) {
-    IterateKVNoInc(denv.get(), [&] (TypedValue k, TypedValue v) {
+    IterateKV(denv.get(), [&] (TypedValue k, TypedValue v) {
       if (!m_variables.exists(k)) m_variables.set(k, v, true);
     });
   }
@@ -295,7 +295,7 @@ bool CmdVariable::onServer(DebuggerProxy &proxy) {
 
   // Variable name might not exist.
   if (!m_variables.exists(m_varName, true /* isKey */)) {
-    m_variables = Array::CreateDArray();
+    m_variables = Array::CreateDict();
     return proxy.sendToClient(this);
   }
 
@@ -309,7 +309,7 @@ bool CmdVariable::onServer(DebuggerProxy &proxy) {
   if (!m_filter.empty() && m_varName.find(m_filter, 0, false) < 0) {
     auto const fullvalue = DebuggerClient::FormatVariable(value);
     if (fullvalue.find(m_filter, 0, false) < 0) {
-      m_variables = Array::CreateDArray();
+      m_variables = Array::CreateDict();
     }
   }
 

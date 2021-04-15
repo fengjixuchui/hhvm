@@ -10,7 +10,6 @@
 (* cf: typing_env_types_sig.mli - These files should be the same *)
 open Hh_prelude
 open Typing_defs
-module ITySet = Internal_type_set
 
 type locl_ty = Typing_defs.locl_ty
 
@@ -67,6 +66,8 @@ type env = {
   allow_wildcards: bool;
   big_envs: (Pos.t * env) list ref;
   pessimize: bool;
+  (* This is only filled in after type-checking the function in question *)
+  fun_tast_info: Tast.fun_tast_info option;
 }
 
 and genv = {

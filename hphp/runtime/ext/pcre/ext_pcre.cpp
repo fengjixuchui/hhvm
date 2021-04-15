@@ -180,13 +180,25 @@ Variant HHVM_FUNCTION(preg_replace_callback,
                            limit, &count, true, false);
 }
 
+Variant HHVM_FUNCTION(preg_replace_callback_with_error,
+                      const Variant& pattern,
+                      const Variant& callback,
+                      const Variant& subject,
+                      int limit,
+                      int64_t& count,
+                      Variant& error) {
+  PregWithErrorGuard guard(error);
+  return HHVM_FN(preg_replace_callback)(pattern, callback, subject,
+                                        limit, count);
+}
+
 static Variant preg_replace_callback_array_impl(
   const Variant& patterns_and_callbacks,
   const Array& subjects,
   int limit,
   int64_t& total_count) {
 
-  Array ret = Array::CreateDArray();
+  Array ret = Array::CreateDict();
   auto key = 0;
   total_count = 0;
   for (ArrayIter s_iter(subjects); s_iter; ++s_iter) {
@@ -239,12 +251,12 @@ Variant HHVM_FUNCTION(preg_replace_callback_array,
       raise_warning("Not a valid callback function %s",
                     iter.second().toString().data());
       return subject.isString() ? empty_string_variant()
-                                : Variant(empty_array());
+                                : Variant(empty_dict_array());
     }
   }
 
   if (subject.isString()) {
-    Array subject_arr = Array::CreateDArray();
+    Array subject_arr = Array::CreateDict();
     subject_arr.set(0, subject.toString());
     Variant ret = preg_replace_callback_array_impl(
       patterns_and_callbacks, subject_arr, limit, count
@@ -259,6 +271,17 @@ Variant HHVM_FUNCTION(preg_replace_callback_array,
     // No warning is given here, just return null
     return init_null();
   }
+}
+
+Variant HHVM_FUNCTION(preg_replace_callback_array_with_error,
+                      const Variant& patterns_and_callbacks,
+                      const Variant& subject,
+                      int limit,
+                      int64_t& count,
+                      Variant& error) {
+  PregWithErrorGuard guard(error);
+  return HHVM_FN(preg_replace_callback_array)(patterns_and_callbacks, subject,
+                                              limit, count);
 }
 
 Variant HHVM_FUNCTION(preg_filter, const Variant& pattern, const Variant& callback,
@@ -409,7 +432,9 @@ struct PcreExtension final : Extension {
     HHVM_FE(preg_replace_with_count);
     HHVM_FE(preg_replace_with_count_and_error);
     HHVM_FE(preg_replace_callback);
+    HHVM_FE(preg_replace_callback_with_error);
     HHVM_FE(preg_replace_callback_array);
+    HHVM_FE(preg_replace_callback_array_with_error);
     HHVM_FE(preg_split);
     HHVM_FE(preg_split_with_error);
     HHVM_FE(preg_quote);

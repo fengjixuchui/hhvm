@@ -71,7 +71,7 @@ impl<'a> Arena for TypeBuilder<'a> {
 // as though they appear in the source, so we get the position
 // from the definition e.g. in hhi file.
 fn mk_special_id(name: &'static str) -> PosId<'static> {
-    PosId(Pos::none(), name)
+    (Pos::none(), name)
 }
 
 impl<'a> TypeBuilder<'a> {
@@ -131,6 +131,16 @@ impl<'a> TypeBuilder<'a> {
     pub fn prim(&'a self, reason: &'a Reason<'a>, kind: PrimKind) -> &'a Ty<'a> {
         self.mk(reason, Ty_::Tprim(self.alloc(kind)))
     }
+
+    pub fn shape(
+        &'a self,
+        reason: &'a Reason<'a>,
+        kind: ShapeKind,
+        map: t_shape_map::TShapeMap<'a, &'a ShapeFieldType<'a>>,
+    ) -> &'a Ty<'a> {
+        self.mk(reason, Ty_::Tshape(self.alloc((kind, map))))
+    }
+
     pub fn class(
         &'a self,
         reason: &'a Reason<'a>,

@@ -167,7 +167,7 @@ let enable_sound_dynamic = GlobalOptions.tco_enable_sound_dynamic
 
 let use_direct_decl_parser = GlobalOptions.tco_use_direct_decl_parser
 
-let array_unification = GlobalOptions.po_array_unification
+let hack_arr_dv_arrs = GlobalOptions.po_hack_arr_dv_arrs
 
 let interpret_soft_types_as_like_types =
   GlobalOptions.po_interpret_soft_types_as_like_types
@@ -180,3 +180,15 @@ let ignore_unsafe_cast = GlobalOptions.tco_ignore_unsafe_cast
 let set_readonly = GlobalOptions.set_tco_readonly
 
 let readonly = GlobalOptions.tco_readonly
+
+let set_tco_enable_expression_trees =
+  GlobalOptions.set_tco_enable_expression_trees
+
+let expression_trees_enabled = GlobalOptions.expression_trees_enabled
+
+let allowed_expression_tree_visitors =
+  GlobalOptions.allowed_expression_tree_visitors
+
+let bitwise_math_new_code = GlobalOptions.tco_bitwise_math_new_code
+
+let inc_dec_new_code = GlobalOptions.tco_inc_dec_new_code

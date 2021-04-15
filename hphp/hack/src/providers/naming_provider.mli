@@ -18,13 +18,18 @@ val get_const_path : Provider_context.t -> string -> Relative_path.t option
 the reverse naming table. *)
 val get_const_pos : Provider_context.t -> string -> FileInfo.pos option
 
+(** Resolve the given name+FileInfo.pos (which might only have filename) into
+an actual position, by parsing the AST if necessary *)
+val get_const_full_pos :
+  Provider_context.t -> FileInfo.pos * string -> Pos.t option
+
 (** Record that a global constant with the given name was declared at the
 given position. *)
 val add_const : Provider_backend.t -> string -> FileInfo.pos -> unit
 
 (** Remove all global constants with the given names from the reverse naming
 table. *)
-val remove_const_batch : Provider_backend.t -> SSet.t -> unit
+val remove_const_batch : Provider_backend.t -> string list -> unit
 
 (** Determine whether a global function with the given name is declared in
 the reverse naming table. *)
@@ -34,12 +39,14 @@ val fun_exists : Provider_context.t -> string -> bool
 the reverse naming table. *)
 val get_fun_path : Provider_context.t -> string -> Relative_path.t option
 
-(** Retrieve the full position of a given name and its corresponding FileInfo. *)
-val get_full_pos : Provider_context.t -> FileInfo.pos * string -> Pos.t option
-
 (** Look up the position at which the given global function was declared in
 the reverse naming table. *)
 val get_fun_pos : Provider_context.t -> string -> FileInfo.pos option
+
+(** Resolve the given name+FileInfo.pos (which might only have filename) into
+an actual position, by parsing the AST if necessary *)
+val get_fun_full_pos :
+  Provider_context.t -> FileInfo.pos * string -> Pos.t option
 
 (** Look up the canonical name for the given global function.
 THIS IS A BAD API. The reverse-naming-table should solely be a multimap from
@@ -57,7 +64,7 @@ val add_fun : Provider_backend.t -> string -> FileInfo.pos -> unit
 
 (** Remove all global functions with the given names from the reverse naming
 table. *)
-val remove_fun_batch : Provider_backend.t -> SSet.t -> unit
+val remove_fun_batch : Provider_backend.t -> string list -> unit
 
 (** Record that a type (one of [Naming_types.kind_of_type] was declared at
 the given position. These types all live in the same namespace, unlike
@@ -70,11 +77,16 @@ val add_type :
   unit
 
 (** Remove all types with the given names from the reverse naming table. *)
-val remove_type_batch : Provider_backend.t -> SSet.t -> unit
+val remove_type_batch : Provider_backend.t -> string list -> unit
 
 (** Look up the position at which the given type was declared in the reverse
 naming table. *)
 val get_type_pos : Provider_context.t -> string -> FileInfo.pos option
+
+(** Resolve the given name+FileInfo.pos (which might only have filename) into
+an actual position, by parsing the AST if necessary *)
+val get_type_full_pos :
+  Provider_context.t -> FileInfo.pos * string -> Pos.t option
 
 (** Look up the file path declaring the given type in the reverse naming
 table. *)
@@ -157,3 +169,6 @@ called. Only needed because checking for duplicate names using the functions
 in `Naming_global`s requires updating the reverse naming table. When that is
 no longer the case, this function won't be necessary. *)
 val with_quarantined_writes : f:(unit -> 'a) -> 'a
+
+(** Resolve a decl position to a raw position using a provider context. *)
+val resolve_position : Provider_context.t -> Pos_or_decl.t -> Pos.t

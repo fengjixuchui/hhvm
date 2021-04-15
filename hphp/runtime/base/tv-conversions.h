@@ -61,10 +61,6 @@ X(Resource)
 #undef X
 
 template<typename T>
-enable_if_lval_t<T, void> tvCastToVArrayInPlace(T tv);
-template<typename T>
-enable_if_lval_t<T, void> tvCastToDArrayInPlace(T tv);
-template<typename T>
 enable_if_lval_t<T, void> tvCastToStringInPlace(T tv);
 void tvSetLegacyArrayInPlace(tv_lval tv, bool isLegacy);
 
@@ -78,10 +74,9 @@ String tvCastToString(TypedValue tv);
 template <IntishCast IC = IntishCast::None>
 Array tvCastToArrayLike(TypedValue tv);
 
+StringData* tvCastToStringData(TypedValue tv);
 StringData* tvCastToStringData(
-   TypedValue tv,
-   const ConvNoticeLevel notice_level = ConvNoticeLevel::None,
-   const StringData* reason = nullptr);
+   TypedValue tv, const ConvNoticeLevel, const StringData* notice_reason);
 template <IntishCast IC /* = IntishCast::None */>
 ArrayData* tvCastToArrayLikeData(TypedValue tv);
 ObjectData* tvCastToObjectData(TypedValue tv);
@@ -90,9 +85,12 @@ ObjectData* tvCastToObjectData(TypedValue tv);
  * Convert a cell to various raw data types, without changing the TypedValue.
  */
 bool tvToBool(TypedValue);
+int64_t tvToInt(TypedValue);
 int64_t tvToInt(TypedValue,
-                const ConvNoticeLevel = ConvNoticeLevel::None,
-                const StringData* = nullptr);
+                const ConvNoticeLevel,
+                const StringData* notice_reason,
+                bool notice_within_num = true);
+
 double tvToDouble(TypedValue);
 
 /*
@@ -107,6 +105,8 @@ TypedValue tvToKey(TypedValue cell, const ArrayData* ad);
  * the number).
  */
 TypedNum stringToNumeric(const StringData*);
+TypedNum stringToNumeric(
+    const StringData*, const ConvNoticeLevel, const StringData* notice_reason);
 
 TypedValue tvClassToString(TypedValue key);
 

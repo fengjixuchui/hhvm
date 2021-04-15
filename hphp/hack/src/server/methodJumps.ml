@@ -10,7 +10,6 @@
 open Hh_prelude
 open ServerCommandTypes.Method_jumps
 open Typing_defs
-module Reason = Typing_reason
 module Cls = Decl_provider.Class
 
 let string_filter_to_method_jump_filter = function
@@ -44,7 +43,10 @@ let get_overridden_methods ctx origin_class get_or_method dest_class acc =
           match or_mthd with
           | Some or_mthd when String.equal or_mthd.ce_origin origin_class ->
             let get_pos (lazy ty) =
-              ty |> Typing_defs.get_pos |> Pos.to_absolute
+              ty
+              |> Typing_defs.get_pos
+              |> Naming_provider.resolve_position ctx
+              |> Pos.to_absolute
             in
             {
               orig_name = m_name;
@@ -70,9 +72,13 @@ let check_if_extends_class_and_find_methods
     in
     {
       orig_name = target_class_name;
-      orig_pos = Pos.to_absolute target_class_pos;
+      orig_pos =
+        Pos.to_absolute
+        @@ Naming_provider.resolve_position ctx
+        @@ target_class_pos;
       dest_name = Cls.name c;
-      dest_pos = Pos.to_absolute (Cls.pos c);
+      dest_pos =
+        Pos.to_absolute @@ Naming_provider.resolve_position ctx @@ Cls.pos c;
       orig_p_name = "";
       dest_p_name = "";
     }
@@ -176,9 +182,15 @@ let get_ancestor_classes_and_methods ctx cls ~filter acc =
           in
           {
             orig_name = Utils.strip_ns (Cls.name cls);
-            orig_pos = Pos.to_absolute (Cls.pos cls);
+            orig_pos =
+              Cls.pos cls
+              |> Naming_provider.resolve_position ctx
+              |> Pos.to_absolute;
             dest_name = Utils.strip_ns (Cls.name c);
-            dest_pos = Pos.to_absolute (Cls.pos c);
+            dest_pos =
+              Cls.pos c
+              |> Naming_provider.resolve_position ctx
+              |> Pos.to_absolute;
             orig_p_name = "";
             dest_p_name = "";
           }

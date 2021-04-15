@@ -881,7 +881,6 @@ pub struct AnonymousClassChildren<'a, T, V> {
 #[derive(Debug, Clone)]
 pub struct AnonymousFunctionChildren<'a, T, V> {
     pub attribute_spec: Syntax<'a, T, V>,
-    pub static_keyword: Syntax<'a, T, V>,
     pub async_keyword: Syntax<'a, T, V>,
     pub function_keyword: Syntax<'a, T, V>,
     pub left_paren: Syntax<'a, T, V>,
@@ -1042,6 +1041,7 @@ pub struct IssetExpressionChildren<'a, T, V> {
 pub struct FunctionCallExpressionChildren<'a, T, V> {
     pub receiver: Syntax<'a, T, V>,
     pub type_args: Syntax<'a, T, V>,
+    pub enum_atom: Syntax<'a, T, V>,
     pub left_paren: Syntax<'a, T, V>,
     pub argument_list: Syntax<'a, T, V>,
     pub right_paren: Syntax<'a, T, V>,
@@ -1385,6 +1385,7 @@ pub struct DictionaryTypeSpecifierChildren<'a, T, V> {
 #[derive(Debug, Clone)]
 pub struct ClosureTypeSpecifierChildren<'a, T, V> {
     pub outer_left_paren: Syntax<'a, T, V>,
+    pub readonly_keyword: Syntax<'a, T, V>,
     pub function_keyword: Syntax<'a, T, V>,
     pub inner_left_paren: Syntax<'a, T, V>,
     pub parameter_list: Syntax<'a, T, V>,

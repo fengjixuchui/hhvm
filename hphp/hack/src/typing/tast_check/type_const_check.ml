@@ -18,20 +18,20 @@ let handler =
   object
     inherit Tast_visitor.handler_base
 
-    method! at_class_typeconst
-        env { c_tconst_abstract; c_tconst_name = (p, name); _ } =
+    method! at_class_typeconst_def
+        env { c_tconst_kind; c_tconst_name = (p, name); _ } =
       Option.(
         let cls_opt = Tast_env.get_self_id env >>= Tast_env.get_class env in
         match cls_opt with
         | None -> ()
         | Some cls ->
           begin
-            match (Cls.kind cls, c_tconst_abstract) with
+            match (Cls.kind cls, c_tconst_kind) with
             | (Ast_defs.Cnormal, TCAbstract _) ->
               Errors.implement_abstract
                 ~is_final:(Cls.final cls)
-                (Cls.pos cls)
-                p
+                (Cls.pos cls |> Pos_or_decl.unsafe_to_raw_pos)
+                (p |> Pos_or_decl.of_raw_pos)
                 "type constant"
                 name
             | _ -> ()
@@ -44,11 +44,13 @@ let handler =
                 match (tc.ttc_abstract, tc.ttc_type) with
                 | (TCAbstract (Some ty), _)
                 | ((TCPartiallyAbstract | TCConcrete), Some ty) ->
-                  if snd tc.ttc_enforceable then
-                    let pos = fst tc.ttc_enforceable in
+                  let (pos, enforceable) =
+                    Option.value_exn (Cls.get_typeconst_enforceability cls name)
+                  in
+                  if enforceable then
                     Typing_enforceable_hint.validate_type
                       env
-                      (fst tc.ttc_name)
+                      (fst tc.ttc_name |> Pos_or_decl.unsafe_to_raw_pos)
                       ty
                       (Errors.invalid_enforceable_type "constant" (pos, name))
                 | _ -> ()

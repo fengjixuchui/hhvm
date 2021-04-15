@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<4701d9ccab86648e4f4ce8cbc12fc84e>>
+// @generated SignedSource<<ecfb8c707b685019119c42c0c9f524fd>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -52,25 +52,8 @@ pub enum Pos<'a> {
 }
 impl<'a> TrivialDrop for Pos<'a> {}
 
-#[derive(
-    Clone,
-    Debug,
-    Eq,
-    FromOcamlRepIn,
-    Hash,
-    NoPosHash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-    ToOcamlRep
-)]
-pub struct Id<'a>(pub Pos<'a>, pub &'a str);
-impl<'a> TrivialDrop for Id<'a> {}
+pub type Id<'a> = (Pos<'a>, &'a str);
 
-/// The hash value of a decl AST.
-/// We use this to see if two versions of a file are "similar", i.e. their
-/// declarations only differ by position information.
 pub type HashType<'a> = Option<isize>;
 
 /// The record produced by the parsing phase.
@@ -101,6 +84,29 @@ pub struct FileInfo<'a> {
 impl<'a> TrivialDrop for FileInfo<'a> {}
 
 pub use oxidized::file_info::Names;
+
+/// The simplified record stored in saved-state.
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub struct SavedNames<'a> {
+    pub funs: s_set::SSet<'a>,
+    pub classes: s_set::SSet<'a>,
+    pub record_defs: s_set::SSet<'a>,
+    pub types: s_set::SSet<'a>,
+    pub consts: s_set::SSet<'a>,
+}
+impl<'a> TrivialDrop for SavedNames<'a> {}
 
 pub use oxidized::file_info::Saved;
 

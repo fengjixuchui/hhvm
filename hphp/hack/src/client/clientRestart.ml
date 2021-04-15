@@ -11,7 +11,11 @@ open Hh_prelude
 
 let main (env : ClientStart.env) : Exit_status.t Lwt.t =
   HackEventLogger.set_from env.ClientStart.from;
-  HackEventLogger.client_restart ();
+  HackEventLogger.client_restart
+    ~data:
+      (Config_file.Utils.parse_hhconfig_and_hh_conf_to_json
+         ~root:env.ClientStart.root
+         ~server_local_config_path:ServerLocalConfig.path);
   if
     MonitorConnection.server_exists (ServerFiles.lock_file env.ClientStart.root)
   then

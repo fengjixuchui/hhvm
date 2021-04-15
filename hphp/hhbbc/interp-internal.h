@@ -416,6 +416,7 @@ bool canDefinitelyCallWithoutCoeffectViolation(const php::Func* caller,
                              callee->staticCoeffects.end());
 }
 
+const StaticString s___NEVER_INLINE("__NEVER_INLINE");
 bool shouldAttemptToFold(ISS& env, const php::Func* func, const FCallArgs& fca,
              Type context, bool maybeDynamic) {
   if (!func ||
@@ -437,6 +438,10 @@ bool shouldAttemptToFold(ISS& env, const php::Func* func, const FCallArgs& fca,
       (RuntimeOption::EvalNoticeOnBuiltinDynamicCalls &&
        (func->attrs & AttrBuiltin)) ||
       (dyn_call_error_level(func) > 0))) {
+    return false;
+  }
+
+  if (func->userAttributes.count(s___NEVER_INLINE.get())) {
     return false;
   }
 
@@ -902,18 +907,10 @@ bool isTrackedThisProp(ISS& env, SString name) {
   return thisPropRaw(env, name);
 }
 
-bool isMaybeLateInitThisProp(ISS& env, SString name) {
-  if (!env.ctx.cls) return false;
-  for (auto const& prop : env.ctx.cls->properties) {
-    if (prop.name == name &&
-        (prop.attrs & AttrPrivate) &&
-        !(prop.attrs & AttrStatic)
-       ) {
-      return prop.attrs & AttrLateInit;
-    }
-  }
+bool isMaybeThisPropAttr(ISS& env, SString name, Attr attr) {
+  auto const prop = thisPropRaw(env, name);
   // Prop either doesn't exist, or is on an unflattened trait. Be conservative.
-  return true;
+  return prop ? prop->attrs & attr : true;
 }
 
 void killThisProps(ISS& env) {
@@ -952,7 +949,7 @@ void mergeThisProp(ISS& env, SString name, Type type) {
   if (!elem) return;
   auto adjusted = adjust_type_for_prop(
     env.index, *env.ctx.cls, elem->tc,
-    loosen_vecish_or_dictish(loosen_all(type)));
+    loosen_vec_or_dict(loosen_all(type)));
   elem->ty |= std::move(adjusted);
 }
 
@@ -996,21 +993,6 @@ void killPrivateStatics(ISS& env) {
 
 //////////////////////////////////////////////////////////////////////
 // misc
-
-arrprov::Tag provTagHere(ISS& env) {
-  if (!RO::EvalArrayProvenance) return arrprov::Tag{};
-  auto const idx = env.srcLoc;
-  // We might have a negative index into the srcLoc table if the
-  // bytecode was copied from another unit, e.g. from a trait ${X}inits
-  if (idx < 0) return arrprov::Tag::TraitMerge(env.ctx.unit->filename);
-  auto const unit = env.ctx.func && env.ctx.func->originalUnit
-    ? env.ctx.func->originalUnit
-    : env.ctx.unit;
-  return arrprov::Tag::Known(
-    unit->filename,
-    static_cast<int>(unit->srcLocs[idx].past.line)
-  );
-}
 
 void badPropInitialValue(ISS& env) {
   FTRACE(2, "    badPropInitialValue\n");

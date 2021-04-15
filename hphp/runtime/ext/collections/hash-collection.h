@@ -52,14 +52,14 @@ struct HashCollection : ObjectData {
   template <IntishCast intishCast = IntishCast::None>
   Array toPHPArrayImpl() {
     if (!m_size) {
-      return empty_array();
+      return empty_dict_array();
     }
 
     ArrayData* ad;
     if (intishCast == IntishCast::None) {
-      ad = arrayData()->toPHPArray(true);
+      ad = arrayData()->toDict(true);
     } else if (intishCast == IntishCast::Cast) {
-      ad = arrayData()->toPHPArrayIntishCast(true);
+      ad = arrayData()->toDictIntishCast(true);
     } else {
       always_assert(false);
     }
@@ -457,7 +457,7 @@ struct HashCollection : ObjectData {
   MixedArray* arrayData() { return m_arr; }
   const MixedArray* arrayData() const { return m_arr; }
   void setArrayData(MixedArray* arr) {
-    assertx(arr->isDictKind());
+    assertx(arr->isVanillaDict());
     assertx(!arr->isLegacyArray());
     m_arr = arr;
   }
@@ -617,7 +617,7 @@ struct HashCollection : ObjectData {
   void warnOnStrIntDup() const;
 
   void scan(type_scan::Scanner& scanner) const {
-    scanner.scan(arrayData());
+    scanner.scan(m_arr);
     scanner.scan(m_immCopy);
   }
 
@@ -633,7 +633,7 @@ struct HashCollection : ObjectData {
     ~SortTmp() {
       if (m_h->arrayData() != m_ad) {
         Array tmp = Array::attach(m_h->arrayData());
-        assertx(m_ad->isDictKind());
+        assertx(m_ad->isVanillaDict());
         m_h->setArrayData(static_cast<MixedArray*>(m_ad));
       }
     }

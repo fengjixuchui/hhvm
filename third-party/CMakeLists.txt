@@ -51,7 +51,9 @@ list(APPEND EXTRA_INCLUDE_PATHS
 list(APPEND THIRD_PARTY_MODULES forks/timelib)
 list(APPEND EXTRA_INCLUDE_PATHS "${TP_DIR}/forks/timelib")
 
-add_subdirectory(zstd) # Required by folly
+# Required by folly
+add_subdirectory(double-conversion)
+add_subdirectory(zstd)
 
 list(APPEND THIRD_PARTY_MODULES folly)
 list(APPEND EXTRA_INCLUDE_PATHS "${TP_DIR}/forks/folly/src")
@@ -114,12 +116,6 @@ if(NOT LIBSQLITE3_LIBRARY)
   list(APPEND EXTRA_INCLUDE_PATHS "${TP_DIR}/forks/libsqlite3")
 endif()
 
-# Add bundled double-conversion if the system one will not be used
-if(NOT DOUBLE_CONVERSION_FOUND)
-  list(APPEND THIRD_PARTY_MODULES double-conversion)
-  list(APPEND EXTRA_INCLUDE_PATHS "${TP_DIR}/double-conversion")
-endif()
-
 # Add bundled PCRE if the system one will not be used
 find_package(PCRE)
 if(NOT PCRE_LIBRARY)
@@ -149,21 +145,7 @@ add_subdirectory(boost)
 
 ##### libsodium #####
 
-add_library(libsodium INTERFACE)
-add_custom_target(libsodiumMaybeBuild)
-find_package(LibSodium 1.0.9)
-if (LIBSODIUM_INCLUDE_DIRS AND LIBSODIUM_LIBRARIES)
-  message(STATUS "Using system libsodium ${LIBSODIUM_VERSION}")
-else()
-  message(STATUS "Using third-party bundled libsodium")
-  add_dependencies(libsodiumMaybeBuild libsodiumBuild)
-  add_subdirectory(libsodium EXCLUDE_FROM_ALL)
-endif()
-target_include_directories(libsodium INTERFACE ${LIBSODIUM_INCLUDE_DIRS})
-target_link_libraries(libsodium INTERFACE ${LIBSODIUM_LIBRARIES})
-add_definitions("-DHAVE_LIBSODIUM")
-list(APPEND EXTRA_INCLUDE_PATHS "${LIBSODIUM_INCLUDE_DIRS}")
-list(APPEND THIRD_PARTY_DEFINITIONS "-DHAVE_LIBSODIUM")
+add_subdirectory(libsodium)
 
 ##### rustc #####
 

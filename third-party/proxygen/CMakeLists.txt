@@ -49,7 +49,6 @@ HHVM_REMOVE_MATCHES_FROM_LISTS(
   # Quic
   "/HQ"
   "Quic"
-  "/http/HTTP3ErrorCode.cpp"
 )
 list(APPEND CXX_SOURCES ${files})
 list(APPEND CXX_SOURCES "${PROXYGEN_EXTERNAL_DIR}/http_parser/http_parser_cpp.cpp")
@@ -82,9 +81,6 @@ if (NOT MSVC)
 endif()
 add_library(hphp_proxygen STATIC ${CXX_SOURCES})
 target_include_directories(hphp_proxygen PUBLIC ${PROXYGEN_GENERATED_ROOT})
-
-add_dependencies(hphp_proxygen libsodiumMaybeBuild)
-target_include_directories(hphp_proxygen PUBLIC "${LIBSODIUM_INCLUDE_DIRS}")
 
 target_link_libraries(hphp_proxygen wangle zstd boost
   fizz libsodium

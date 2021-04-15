@@ -33,6 +33,7 @@
 #include "hphp/runtime/ext/string/ext_string.h"
 
 #include <folly/tracing/StaticTracepoint.h>
+#include <folly/Random.h>
 
 namespace HPHP {
 
@@ -187,8 +188,16 @@ void throwArrayIndexException(const ArrayData* ad, const int64_t index) {
 }
 
 void throwArrayKeyException(const ArrayData* ad, const StringData* key) {
-  assertx(ad->isDArray() || ad->isDictType());
+  assertx(ad->isDictType());
   throwOOBArrayKeyException(key, ad);
+}
+
+void throwMustBeReadOnlyException(const Class* cls, const StringData* propName) {
+  throw_cannot_write_non_readonly_prop(cls->name()->data(), propName->data());                
+}
+
+void throwMustBeMutableException(const Class* cls, const StringData* propName) {
+  throw_must_be_mutable(cls->name()->data(), propName->data());                
 }
 
 std::string formatParamInOutMismatch(const char* fname, uint32_t index,
@@ -237,7 +246,7 @@ std::string formatArgumentErrMsg(const Func* func, const char* amount,
                                  uint32_t expected, uint32_t got) {
   return folly::sformat(
     "{}() expects {} {} parameter{}, {} given",
-    func->fullName()->data(),
+    func->fullNameWithClosureName(),
     amount,
     expected,
     expected == 1 ? "" : "s",
@@ -283,10 +292,10 @@ void raiseTooManyArgumentsPrologue(const Func* func, ArrayData* unpackArgs) {
 
 //////////////////////////////////////////////////////////////////////
 
-void raiseCoeffectsCallViolation(const Func* callee, const CallFlags flags,
+void raiseCoeffectsCallViolation(const Func* callee,
+                                 RuntimeCoeffects provided,
                                  RuntimeCoeffects required) {
   assertx(CoeffectsConfig::enabled());
-  auto const provided = flags.coeffects();
   auto const errMsg = folly::sformat(
     "Call to {}() requires [{}] coeffects but {}() provided [{}]",
     callee->fullNameWithClosureName(),
@@ -299,10 +308,34 @@ void raiseCoeffectsCallViolation(const Func* callee, const CallFlags flags,
 
   assertx(!provided.canCall(required));
   if (provided.canCallWithWarning(required)) {
+    auto const coinflip = []{
+      auto const rate = RO::EvalCoeffectViolationWarningSampleRate;
+      return rate > 0 && folly::Random::rand32(rate) == 0;
+    }();
+    if (!coinflip) return;
     raise_warning(errMsg);
   } else {
     SystemLib::throwBadMethodCallExceptionObject(errMsg);
   }
+}
+
+void raiseCoeffectsFunParamTypeViolation(TypedValue tv,
+                                         int32_t paramIdx) {
+  auto const errMsg =
+    folly::sformat("Coeffect rule requires parameter at position {} to be a "
+                   "closure object, function/method pointer or null but "
+                   "{} given",
+                   paramIdx + 1, describe_actual_type(&tv));
+  raise_warning(errMsg);
+}
+
+void raiseCoeffectsFunParamCoeffectRulesViolation(const Func* f) {
+  assertx(f);
+  auto const errMsg =
+    folly::sformat("Function/method pointer to {}() contains polymorphic "
+                   "coeffects but is used as a coeffect rule",
+                   f->fullNameWithClosureName());
+  raise_warning(errMsg);
 }
 
 //////////////////////////////////////////////////////////////////////

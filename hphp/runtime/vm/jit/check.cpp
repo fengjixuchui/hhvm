@@ -428,16 +428,10 @@ bool checkOperandTypes(const IRInstruction* inst, const IRUnit* /*unit*/) {
     ++curSrc;
   };
 
-  auto checkArr = [&] (bool is_kv, bool is_const) {
+  auto checkStructDict = [&]() {
     auto const t = src()->type();
-    auto const cond_type = RuntimeOption::EvalHackArrDVArrs
-      ? (is_kv ? TDict : TVec)
-      : (is_kv ? TDArr : TVArr);
-    if (is_const) {
-      auto expected = folly::sformat("constant {}", t.toString());
-      check(src()->hasConstVal(cond_type), t, expected.c_str());
-    } else {
-      check(src()->isA(cond_type), t, nullptr);
+    if (t != TBottom) {
+      check(t.arrSpec().is_struct(), Type(), "TArrLike=StructDict");
     }
     ++curSrc;
   };
@@ -510,12 +504,9 @@ using TypeNames::TCA;
                         }                                                   \
                       }
 #define SBespokeArr   checkBespokeArr();
-#define SMonotypeVec  checkMonotypeArr(TVArr|TVec);
-#define SMonotypeDict checkMonotypeArr(TDArr|TDict);
-#define SKnownArrLike S(VArr,DArr,Vec,Dict,Keyset)
-#define SVArr         checkArr(false /* is_kv */, false /* is_const */);
-#define SDArr         checkArr(true  /* is_kv */, false /* is_const */);
-#define CDArr         checkArr(true  /* is_kv */, true  /* is_const */);
+#define SMonotypeVec  checkMonotypeArr(TVec);
+#define SMonotypeDict checkMonotypeArr(TDict);
+#define SStructDict   checkStructDict();
 #define ND
 #define DMulti
 #define DSetElem
@@ -557,9 +548,7 @@ using TypeNames::TCA;
 #define DFirstKey
 #define DLastKey
 #define DLoggingArrLike
-#define DVArr
-#define DDArr
-#define DStaticDArr
+#define DStructDict
 #define DCol
 #define DMemoKey
 #define DLvalOfPtr
@@ -581,14 +570,10 @@ using TypeNames::TCA;
 #undef AK
 #undef C
 #undef CStr
-#undef SVar
-#undef SVArr
-#undef SVArrOrNull
-#undef SDArr
-#undef CDArr
 #undef SBespokeArr
 #undef SMonotypeVec
 #undef SMonotypeDict
+#undef SStructDict
 #undef SKnownArrLike
 
 #undef ND
@@ -626,9 +611,7 @@ using TypeNames::TCA;
 #undef DKeysetFirstElem
 #undef DKeysetLastElem
 #undef DLoggingArrLike
-#undef DVArr
-#undef DDArr
-#undef DStaticDArr
+#undef DStructDict
 #undef DCol
 #undef DUnion
 #undef DMemoKey

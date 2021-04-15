@@ -90,6 +90,7 @@ let expr_name = function
   | A.PrefixedString _ -> "PrefixedString"
   | A.Yield _ -> "Yield"
   | A.Await _ -> "Await"
+  | A.Tuple _ -> "Tuple"
   | A.List _ -> "List"
   | A.Cast _ -> "Cast"
   | A.Unop _ -> "Unop"
@@ -117,3 +118,4 @@ let expr_name = function
   | A.EnumAtom _ -> "EnumAtom"
   | A.Any -> "Any"
   | A.ReadonlyExpr _ -> "Readonly"
+  | A.Hole _ -> "Hole"

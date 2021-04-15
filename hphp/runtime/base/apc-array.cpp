@@ -23,10 +23,8 @@
 #include "hphp/runtime/base/apc-string.h"
 #include "hphp/runtime/base/apc-typed-value.h"
 #include "hphp/runtime/base/array-iterator.h"
-#include "hphp/runtime/base/array-provenance.h"
-#include "hphp/runtime/base/bespoke-array.h"
 #include "hphp/runtime/base/data-walker.h"
-
+#include "hphp/runtime/base/tv-uncounted.h"
 #include "hphp/runtime/ext/apc/ext_apc.h"
 
 namespace HPHP {
@@ -46,15 +44,16 @@ size_t getMemSize(DataWalker::PointerMap* seenArrs) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-template <typename A, typename B, typename C>
+template <typename A, typename B>
 ALWAYS_INLINE
 APCHandle::Pair
 APCArray::MakeSharedImpl(ArrayData* arr, APCHandleLevel level,
-                         A shared, B uncounted, C serialized) {
+                         A shared, B serialized) {
   if (level == APCHandleLevel::Outer) {
     auto const seenArrs = apcExtension::ShareUncounted ?
       req::make_unique<DataWalker::PointerMap>() : nullptr;
-    // only need to call traverseData() on the toplevel array
+
+    // We only need to call traverseData() on the top-level array.
     DataWalker walker(DataWalker::LookupFeature::DetectNonPersistable);
     DataWalker::DataFeature features =
       walker.traverseData(arr, seenArrs.get());
@@ -69,7 +68,7 @@ APCArray::MakeSharedImpl(ArrayData* arr, APCHandleLevel level,
         tl_heap->getAllocated() - tl_heap->getDeallocated() :
         seenArrs.get() ? getMemSize(seenArrs.get()) :
         ::HPHP::getMemSize(arr, true);
-      auto const uncounted_arr = uncounted(seenArrs.get());
+      auto const uncounted_arr = MakeUncountedArray(arr, seenArrs.get());
       auto const size = use_jemalloc ?
         tl_heap->getAllocated() - tl_heap->getDeallocated() - base_size :
         base_size;
@@ -82,67 +81,20 @@ APCArray::MakeSharedImpl(ArrayData* arr, APCHandleLevel level,
 }
 
 APCHandle::Pair
-APCArray::MakeSharedArray(ArrayData* arr, APCHandleLevel level,
-                          bool unserializeObj) {
-  assertx(arr->isPHPArrayType());
-  if (auto const value = APCTypedValue::HandlePersistent(
-        APCTypedValue::StaticArr{}, APCTypedValue::UncountedArr{}, arr)) {
-    return value;
-  }
-  return MakeSharedImpl(
-    arr,
-    level,
-    [&]() {
-      auto const add_prov = [arr] (APCHandle::Pair pair) {
-        auto const a = APCArray::fromHandle(pair.handle);
-        assertx(arrprov::arrayWantsTag(a) == arrprov::arrayWantsTag(arr));
-        if (UNLIKELY(RO::EvalArrayProvenance)) {
-          if (auto const tag = arrprov::getTag(arr)) {
-            arrprov::setTag(a, tag);
-          }
-        }
-        return pair;
-      };
-
-      if (arr->isVArray()) {
-        assertx(!RuntimeOption::EvalHackArrDVArrs);
-        return add_prov(MakePacked(arr,
-                                   arr->isLegacyArray() ?
-                                     APCKind::SharedMarkedVArray :
-                                     APCKind::SharedVArray,
-                                   unserializeObj));
-      } else {
-        assertx(arr->isDArray());
-        assertx(!RuntimeOption::EvalHackArrDVArrs);
-        return add_prov(MakeHash(arr,
-                                 arr->isLegacyArray() ?
-                                   APCKind::SharedMarkedDArray :
-                                   APCKind::SharedDArray,
-                                 unserializeObj));
-      }
-    },
-    [&](DataWalker::PointerMap* m) { return MakeUncountedArray(arr, m); },
-    [&](StringData* s) { return APCString::MakeSerializedArray(s); }
-  );
-}
-
-APCHandle::Pair
 APCArray::MakeSharedVec(ArrayData* vec, APCHandleLevel level,
                         bool unserializeObj) {
   assertx(vec->isVecType());
-  if (auto const value = APCTypedValue::HandlePersistent(
-        APCTypedValue::StaticVec{}, APCTypedValue::UncountedVec{}, vec)) {
+  if (auto const value = APCTypedValue::HandlePersistent(vec)) {
     return value;
   }
   return MakeSharedImpl(
     vec,
     level,
     [&] {
-      return MakePacked(vec,
-          vec->isLegacyArray() ? APCKind::SharedLegacyVec : APCKind::SharedVec,
-          unserializeObj);
+      auto const kind = vec->isLegacyArray() ? APCKind::SharedLegacyVec
+                                             : APCKind::SharedVec;
+      return MakePacked(vec, kind, unserializeObj);
     },
-    [&](DataWalker::PointerMap* m) { return MakeUncountedVec(vec, m); },
     [&](StringData* s) { return APCString::MakeSerializedVec(s); }
   );
 }
@@ -151,20 +103,17 @@ APCHandle::Pair
 APCArray::MakeSharedDict(ArrayData* dict, APCHandleLevel level,
                          bool unserializeObj) {
   assertx(dict->isDictType());
-  if (auto const value = APCTypedValue::HandlePersistent(
-        APCTypedValue::StaticDict{}, APCTypedValue::UncountedDict{}, dict)) {
+  if (auto const value = APCTypedValue::HandlePersistent(dict)) {
     return value;
   }
   return MakeSharedImpl(
     dict,
     level,
     [&] {
-      return MakeHash(
-        dict,
-        dict->isLegacyArray() ? APCKind::SharedLegacyDict : APCKind::SharedDict,
-        unserializeObj);
+      auto const kind = dict->isLegacyArray() ? APCKind::SharedLegacyDict
+                                              : APCKind::SharedDict;
+      return MakeHash(dict, kind, unserializeObj);
     },
-    [&](DataWalker::PointerMap* m) { return MakeUncountedDict(dict, m); },
     [&](StringData* s) { return APCString::MakeSerializedDict(s); }
   );
 }
@@ -173,25 +122,20 @@ APCHandle::Pair
 APCArray::MakeSharedKeyset(ArrayData* keyset, APCHandleLevel level,
                            bool unserializeObj) {
   assertx(keyset->isKeysetType());
-  if (auto const value = APCTypedValue::HandlePersistent(
-        APCTypedValue::StaticKeyset{}, APCTypedValue::UncountedKeyset{},
-        keyset)) {
+  if (auto const value = APCTypedValue::HandlePersistent(keyset)) {
     return value;
   }
   return MakeSharedImpl(
     keyset,
     level,
     [&]() { return MakePacked(keyset, APCKind::SharedKeyset, unserializeObj); },
-    [&](DataWalker::PointerMap* m) { return MakeUncountedKeyset(keyset, m); },
     [&](StringData* s) { return APCString::MakeSerializedKeyset(s); }
   );
 }
 
-APCHandle::Pair APCArray::MakeSharedEmptyVArray() {
+APCHandle::Pair APCArray::MakeSharedEmptyVec() {
   void* p = apc_malloc(sizeof(APCArray));
-  APCArray* arr = new (p) APCArray(PackedCtor{},
-                                   APCKind::SharedVArray,
-                                   0);
+  APCArray* arr = new (p) APCArray(PackedCtor{}, APCKind::SharedVec, 0);
   return {arr->getHandle(), sizeof(APCArray)};
 }
 
@@ -199,14 +143,11 @@ APCHandle::Pair APCArray::MakeHash(ArrayData* arr, APCKind kind,
                                    bool unserializeObj) {
   auto const num = arr->size();
   auto const cap = num > 2 ? folly::nextPowTwo(num) : 2;
-  auto const prov_off = arrprov::arrayWantsTag(arr) ? arrprov::kAPCTagSize : 0;
   auto const allocSize = sizeof(APCArray)
                        + sizeof(int) * cap
-                       + sizeof(Bucket) * num
-                       + prov_off;
-  auto p = reinterpret_cast<char*>(apc_malloc(allocSize)) + prov_off;
+                       + sizeof(Bucket) * num;
+  auto p = reinterpret_cast<char*>(apc_malloc(allocSize));
   auto ret = new (p) APCArray(HashedCtor{}, kind, cap);
-  if (prov_off) arrprov::clearTag(ret);
 
   for (int i = 0; i < cap; i++) ret->hash()[i] = -1;
 
@@ -227,7 +168,7 @@ APCHandle::Pair APCArray::MakeHash(ArrayData* arr, APCKind kind,
     );
   } catch (...) {
     ret->~APCArray();
-    apc_sized_free(p - prov_off, allocSize);
+    apc_sized_free(p, allocSize);
     throw;
   }
 
@@ -235,73 +176,20 @@ APCHandle::Pair APCArray::MakeHash(ArrayData* arr, APCKind kind,
 }
 
 APCHandle* APCArray::MakeUncountedArray(
-    ArrayData* array,
-    DataWalker::PointerMap* m) {
+    ArrayData* ad, DataWalker::PointerMap* seen) {
   assertx(apcExtension::UseUncounted);
-  assertx(array->isPHPArrayType());
-  auto data = [&]{
-    if (array->hasVanillaPackedLayout()) {
-      return PackedArray::MakeUncounted(array, true, m);
-    } else if (array->hasVanillaMixedLayout()) {
-      return MixedArray::MakeUncounted(array, true, m);
-    } else {
-      return BespokeArray::MakeUncounted(array, true, m);
-    }
-  }();
-  auto mem = reinterpret_cast<APCTypedValue*>(data) - 1;
-  auto value = new(mem) APCTypedValue(APCTypedValue::UncountedArr{}, data);
-  return value->getHandle();
-}
-
-APCHandle* APCArray::MakeUncountedVec(
-    ArrayData* vec,
-    DataWalker::PointerMap* m) {
-  assertx(apcExtension::UseUncounted);
-  assertx(vec->isVecType());
-  auto data = vec->isVanilla()
-    ? PackedArray::MakeUncounted(vec, true, m)
-    : BespokeArray::MakeUncounted(vec, true, m);
-  auto mem = reinterpret_cast<APCTypedValue*>(data) - 1;
-  auto value = new(mem) APCTypedValue(APCTypedValue::UncountedVec{}, data);
-  return value->getHandle();
-}
-
-APCHandle* APCArray::MakeUncountedDict(
-    ArrayData* dict,
-    DataWalker::PointerMap* m) {
-  assertx(apcExtension::UseUncounted);
-  assertx(dict->isDictType());
-  auto data = dict->isVanilla()
-    ? MixedArray::MakeUncounted(dict, true, m)
-    : BespokeArray::MakeUncounted(dict, true, m);
-  auto mem = reinterpret_cast<APCTypedValue*>(data) - 1;
-  auto value = new(mem) APCTypedValue(APCTypedValue::UncountedDict{}, data);
-  return value->getHandle();
-}
-
-APCHandle* APCArray::MakeUncountedKeyset(
-    ArrayData* keyset,
-    DataWalker::PointerMap* m) {
-  assertx(apcExtension::UseUncounted);
-  assertx(keyset->isKeysetType());
-  auto data = keyset->isVanilla()
-    ? SetArray::MakeUncounted(keyset, true)
-    : BespokeArray::MakeUncounted(keyset, true, m);
-  auto mem = reinterpret_cast<APCTypedValue*>(data) - 1;
-  auto value = new(mem) APCTypedValue(APCTypedValue::UncountedKeyset{}, data);
+  auto const data = ::HPHP::MakeUncountedArray(ad, seen, true);
+  auto const mem = reinterpret_cast<APCTypedValue*>(data) - 1;
+  auto const value = new (mem) APCTypedValue(data);
   return value->getHandle();
 }
 
 APCHandle::Pair APCArray::MakePacked(ArrayData* arr, APCKind kind,
                                      bool unserializeObj) {
   auto const num_elems = arr->size();
-  auto const prov_off = arrprov::arrayWantsTag(arr) ? arrprov::kAPCTagSize : 0;
-  auto const allocSize = sizeof(APCArray)
-                       + sizeof(APCHandle*) * num_elems
-                       + prov_off;
-  auto p = reinterpret_cast<char*>(apc_malloc(allocSize)) + prov_off;
+  auto const allocSize = sizeof(APCArray) + sizeof(APCHandle*) * num_elems;
+  auto p = reinterpret_cast<char*>(apc_malloc(allocSize));
   auto ret = new (p) APCArray(PackedCtor{}, kind, num_elems);
-  if (prov_off) arrprov::clearTag(ret);
 
   size_t i = 0;
   auto size = allocSize;
@@ -320,7 +208,7 @@ APCHandle::Pair APCArray::MakePacked(ArrayData* arr, APCKind kind,
   } catch (...) {
     ret->m_size = i;
     ret->~APCArray();
-    apc_sized_free(p - prov_off, allocSize);
+    apc_sized_free(p, allocSize);
     throw;
   }
 
@@ -329,9 +217,8 @@ APCHandle::Pair APCArray::MakePacked(ArrayData* arr, APCKind kind,
 
 void APCArray::Delete(APCHandle* handle) {
   auto const arr = APCArray::fromHandle(handle);
-  auto const prov_off = arrprov::arrayWantsTag(arr) ? arrprov::kAPCTagSize : 0;
   arr->~APCArray();
-  apc_free(reinterpret_cast<char*>(arr) - prov_off);
+  apc_free(reinterpret_cast<char*>(arr));
 }
 
 APCArray::~APCArray() {

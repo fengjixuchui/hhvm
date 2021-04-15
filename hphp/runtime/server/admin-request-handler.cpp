@@ -16,7 +16,6 @@
 
 #include "hphp/runtime/server/admin-request-handler.h"
 
-#include "hphp/runtime/base/apc-file-storage.h"
 #include "hphp/runtime/base/apc-stats.h"
 #include "hphp/runtime/base/datetime.h"
 #include "hphp/runtime/base/hhprof.h"
@@ -360,7 +359,6 @@ void AdminRequestHandler::handleRequest(Transport *transport) {
         "/hugepage:        show stats about hugepage usage\n"
         "/jit-des-info:    show information about deserialized profile data\n"
 
-        "/const-ss:        get const_map_size\n"
         "/static-strings:  get number of static strings\n"
         "/static-strings-rds: ... that correspond to defined constants\n"
         "/dump-static-strings: dump static strings to /tmp/static_strings\n"
@@ -374,7 +372,6 @@ void AdminRequestHandler::handleRequest(Transport *transport) {
         "/dump-apc-info:   show basic APC stats\n"
         "/dump-apc-meta:   dump meta information for all objects in APC to\n"
         "                  /tmp/apc_dump_meta\n"
-        "/advise-out-apc:  forcibly madvise out APC prime data\n"
         "/random-apc:      dump the key and size of a random APC entry\n"
         "    count         number of entries to return\n"
         "/treadmill:       dump treadmill information\n"
@@ -736,10 +733,6 @@ void AdminRequestHandler::handleRequest(Transport *transport) {
       transport->sendString(msg, 200);
     }
 
-    if (strncmp(cmd.c_str(), "const-ss", 8) == 0 &&
-        handleConstSizeRequest(cmd, transport)) {
-      break;
-    }
     if (strncmp(cmd.c_str(), "static-strings", 14) == 0 &&
         handleStaticStringsRequest(cmd, transport)) {
       break;
@@ -796,16 +789,6 @@ void AdminRequestHandler::handleRequest(Transport *transport) {
 
     if (cmd == "warmup-status") {
       transport->sendString(jit::tc::warmupStatusString());
-      break;
-    }
-
-    if (cmd == "advise-out-apc") {
-      if (!apcExtension::Enable) {
-        transport->sendString("No APC\n");
-        break;
-      }
-      apc_advise_out();
-      transport->sendString("Done\n");
       break;
     }
 
@@ -897,18 +880,8 @@ void AdminRequestHandler::handleRequest(Transport *transport) {
       size_t allocated = call_mallctl("stats.allocated");
       size_t active = call_mallctl("stats.active");
       size_t mapped = call_mallctl("stats.mapped");
+      auto const low_mapped = alloc::getLowMapped();
 
-#if USE_JEMALLOC_EXTENT_HOOKS
-      size_t low_mapped = 0;
-      // The low range [1G, 4G) is divided into two ranges, and shared by 3
-      // arenas.
-      low_mapped += alloc::getRange(alloc::AddrRangeClass::VeryLow).used();
-      low_mapped += alloc::getRange(alloc::AddrRangeClass::Low).used();
-#else
-      size_t low_mapped = call_mallctl(
-          folly::sformat("stats.arenas.{}.mapped",
-                         low_arena).c_str());
-#endif
       std::ostringstream stats;
       stats << "<jemalloc-stats>" << endl;
       stats << "  <allocated>" << allocated << "</allocated>" << endl;
@@ -1121,7 +1094,7 @@ bool AdminRequestHandler::handleCheckRequest(const std::string &cmd,
 
     if (RuntimeOption::EvalEnableReusableTC) {
       auto const memInfos = jit::tc::getTCMemoryUsage();
-      for (auto const info : memInfos) {
+      for (auto const& info : memInfos) {
         appendStat(folly::format("tc-{}-allocs", info.name).str(), info.allocs);
         appendStat(folly::format("tc-{}-frees", info.name).str(), info.frees);
         appendStat(folly::format("tc-{}-free-size", info.name).str(),
@@ -1365,22 +1338,6 @@ bool AdminRequestHandler::handleCPUProfilerRequest(const std::string &cmd,
   return false;
 }
 #endif
-
-bool AdminRequestHandler::handleConstSizeRequest(const std::string &cmd,
-                                                 Transport *transport) {
-  if (!apcExtension::EnableConstLoad && cmd == "const-ss") {
-    transport->sendString("Not Enabled\n");
-    return true;
-  }
-  if (cmd == "const-ss") {
-    std::ostringstream result;
-    size_t size = get_const_map_size();
-    result << "{ \"hphp.const_map.size\":" << size << "}\n";
-    transport->sendString(result.str());
-    return true;
-  }
-  return false;
-}
 
 bool AdminRequestHandler::handleStaticStringsRequest(const std::string& cmd,
                                                      Transport* transport) {

@@ -97,7 +97,7 @@ type subtype_env = {
    * dynamic is treated as a sub-type of all types.
    *)
   coerce: TL.coercion_direction option;
-  on_error: Errors.typing_error_callback;
+  on_error: Errors.error_from_reasons_callback;
 }
 
 let coercing_from_dynamic se =
@@ -141,61 +141,6 @@ let detect_attempting_dynamic_coercion_reason r ty =
       | _ -> (r, ty))
     | _ -> (r, ty))
   | _ -> (r, ty)
-
-module ConditionTypes = struct
-  let try_get_class_for_condition_type (env : env) (ty : decl_ty) =
-    match TUtils.try_unwrap_class_type ty with
-    | None -> None
-    | Some (_, ((_, x) as sid), _) ->
-      begin
-        match Env.get_class env x with
-        | None -> None
-        | Some cls -> Some (sid, cls)
-      end
-
-  let try_get_method_from_condition_type
-      (env : env) (ty : decl_ty) (is_static : bool) (method_name : string) =
-    match try_get_class_for_condition_type env ty with
-    | Some (_, cls) ->
-      let get =
-        if is_static then
-          Cls.get_smethod
-        else
-          Cls.get_method
-      in
-      get cls method_name
-    | None -> None
-
-  let localize_condition_type (env : env) (ty : decl_ty) : locl_ty =
-    (* if condition type is generic - we cannot specify type argument in attribute.
-       For cases when we check if containing type is a subtype of condition type
-       if condition type is generic instantiate it with TAny's *)
-    let do_localize ty =
-      let ty =
-        match try_get_class_for_condition_type env ty with
-        | None -> ty
-        | Some (((p, _) as sid), cls) ->
-          let tparams = Cls.tparams cls in
-          if List.is_empty tparams then
-            ty
-          else
-            let params =
-              List.map tparams ~f:(fun { tp_name = (p, x); _ } ->
-                  (* TODO(T69551141) handle type arguments *)
-                  MakeType.generic (Reason.Rwitness_from_decl p) x)
-            in
-            let subst = Decl_instantiate.make_subst tparams [] in
-            let ty = MakeType.apply (Reason.Rwitness_from_decl p) sid params in
-            Decl_instantiate.instantiate subst ty
-      in
-      let ety_env = Phase.env_with_self env in
-      let (_, t) = Phase.localize ~ety_env env ty in
-      t
-    in
-    match deref ty with
-    | (r, Toption ty) -> mk (Reason.localize r, Toption (do_localize ty))
-    | _ -> do_localize ty
-end
 
 (* Given a pair of types `ty_sub` and `ty_super` attempt to apply simplifications
  * and add to the accumulated constraints in `constraints` any necessary and
@@ -619,10 +564,7 @@ and simplify_subtype_i
     | (Reason.Rcstr_on_generics (p, tparam), _)
     | (_, Reason.Rcstr_on_generics (p, tparam)) ->
       Errors.violated_constraint p tparam left right subtype_env.on_error
-    | _ ->
-      let claim = List.hd_exn left in
-      let reasons = List.tl_exn left @ right in
-      subtype_env.on_error claim reasons
+    | _ -> subtype_env.on_error (left @ right)
   in
   let fail () = fail_with_suffix [] in
   let ( ||| ) = ( ||| ) ~fail in
@@ -764,7 +706,8 @@ and simplify_subtype_i
           let arity_error f =
             let (epos, fpos, prefix) =
               match r_super with
-              | Reason.Runpack_param (epos, fpos, c) -> (epos, fpos, c)
+              | Reason.Runpack_param (epos, fpos, c) ->
+                (Pos_or_decl.of_raw_pos epos, fpos, c)
               | _ -> (Reason.to_pos r_super, Reason.to_pos r, 0)
             in
             invalid_env_with env (fun () ->
@@ -773,10 +716,10 @@ and simplify_subtype_i
                   (prefix + len_ts)
                   epos
                   fpos
-                  (Some subtype_env.on_error))
+                  subtype_env.on_error)
           in
           if len_ts < len_required then
-            arity_error Errors.typing_too_few_args
+            arity_error Errors.typing_too_few_args_w_callback
           else
             let len_optional = List.length d_optional in
             let (ts_required, remain) = List.split_n ts len_required in
@@ -809,7 +752,7 @@ and simplify_subtype_i
             | ([], None) -> valid env
             | (_, None) ->
               (* Elements remain but we have nowhere to put them *)
-              arity_error Errors.typing_too_many_args
+              arity_error Errors.typing_too_many_args_w_callback
         in
 
         begin
@@ -841,9 +784,7 @@ and simplify_subtype_i
                 match d_kind with
                 | SplatUnpack ->
                   (* Allow splatting of arbitrary Traversables *)
-                  let (env, ty_inner) =
-                    Env.fresh_type env (Reason.to_pos r_super)
-                  in
+                  let (env, ty_inner) = Env.fresh_type env Pos.none in
                   let traversable = MakeType.traversable r_super ty_inner in
                   env
                   |> simplify_subtype ~subtype_env ~this_ty ty_sub traversable
@@ -1149,12 +1090,11 @@ and simplify_subtype_i
             in
             let ety_env =
               {
-                type_expansions = [];
+                type_expansions = Typing_defs.Type_expansions.empty;
                 substs =
                   TUtils.make_locl_subst_for_class_tparams class_ty tyl_super;
                 this_ty = Option.value this_ty ~default:ty_super;
-                on_error = subtype_env.on_error;
-                quiet = true;
+                on_error = Errors.ignore_error;
               }
             in
             let lower_bounds_super = Cls.lower_bounds_on_this class_ty in
@@ -1283,7 +1223,6 @@ and simplify_subtype_i
           valid env
         | (_, Tprim Aast_defs.(Tresource | Tnoreturn))
         | (_, Tnonnull)
-        | (_, Tfun _)
         | (_, Tshape (Open_shape, _))
         | (_, Tvar _)
         | (_, Tunapplied_alias _)
@@ -1300,6 +1239,9 @@ and simplify_subtype_i
         | (_, Tvec_or_dict (_, ty))
         | (_, Tvarray_or_darray (_, ty)) ->
           simplify_subtype ~subtype_env ty ty_super env
+        (* Implement (function(dynamic, ..., dynamic): dynamic <: dynamic *)
+        | (r, Tfun ft) ->
+          simplify_subtype_fun_dynamic ~subtype_env r ft ty_super env
         | (_, Toption ty) ->
           (match deref ty with
           (* Special case mixed <: dynamic for better error message *)
@@ -1341,6 +1283,12 @@ and simplify_subtype_i
               | [_tykey; tyval] ->
                 (* No need to check the key argument since it's an arraykey *)
                 simplify_subtype ~subtype_env tyval ty_super env
+              | _ ->
+                (* This ill-formed type should have been caught earlier *)
+                valid env
+            else if String.equal class_name SN.Classes.cAwaitable then
+              match tyargs with
+              | [tyarg] -> simplify_subtype ~subtype_env tyarg ty_super env
               | _ ->
                 (* This ill-formed type should have been caught earlier *)
                 valid env
@@ -1465,14 +1413,14 @@ and simplify_subtype_i
           &&& simplify_subtype ~subtype_env ~this_ty tv_sub tv_super
         | (Tvarray tv_sub, Tvarray_or_darray (tk_super, tv_super)) ->
           let pos = get_pos lty in
-          let tk_sub = MakeType.int (Reason.Ridx_vector pos) in
+          let tk_sub = MakeType.int (Reason.Ridx_vector_from_decl pos) in
           env
           |> simplify_subtype ~subtype_env ~this_ty tk_sub tk_super
           &&& simplify_subtype ~subtype_env ~this_ty tv_sub tv_super
         | (Tclass ((_, n), _, [tv_sub]), Tvec_or_dict (tk_super, tv_super))
           when String.equal n SN.Collections.cVec ->
           let pos = get_pos lty in
-          let tk_sub = MakeType.int (Reason.Ridx_vector pos) in
+          let tk_sub = MakeType.int (Reason.Ridx_vector_from_decl pos) in
           env
           |> simplify_subtype ~subtype_env ~this_ty tk_sub tk_super
           &&& simplify_subtype ~subtype_env ~this_ty tv_sub tv_super
@@ -1660,13 +1608,12 @@ and simplify_subtype_i
               in
               let ety_env =
                 {
-                  type_expansions = [];
+                  type_expansions = Typing_defs.Type_expansions.empty;
                   substs =
                     TUtils.make_locl_subst_for_class_tparams class_sub tyl_sub;
                   (* TODO: do we need this? *)
                   this_ty = Option.value this_ty ~default:ty_sub;
-                  quiet = true;
-                  on_error = subtype_env.on_error;
+                  on_error = Errors.ignore_error;
                 }
               in
               let up_obj = Cls.get_ancestor class_sub cid_super in
@@ -1888,7 +1835,7 @@ and simplify_subtype_has_member
     TypecheckerOptions.method_call_inference (Env.get_tcopt env)
   in
   let {
-    hm_name = name;
+    hm_name = (name_pos, name_) as name;
     hm_type = member_ty;
     hm_class_id = class_id;
     hm_explicit_targs = explicit_targs;
@@ -1941,7 +1888,7 @@ and simplify_subtype_has_member
         let targ_equal (_, (_, hint1)) (_, (_, hint2)) =
           Aast_defs.equal_hint_ hint1 hint2
         in
-        String.equal (snd name_sub) (snd name)
+        String.equal (snd name_sub) name_
         && class_id_equal cid_sub class_id
         && Option.equal
              (List.equal targ_equal)
@@ -1962,8 +1909,8 @@ and simplify_subtype_has_member
         invalid env ~fail:(fun () ->
             Errors.null_member_read
               ~is_method
-              (snd name)
-              (fst name)
+              name_
+              name_pos
               (Reason.to_string "This can be null" r_null))
     | (r_option, Toption option_ty) when using_new_method_call_inference ->
       if Option.is_some nullsafe then
@@ -1983,16 +1930,16 @@ and simplify_subtype_has_member
               Errors.top_member_read
                 ~is_method
                 ~is_nullable:true
-                (snd name)
-                (fst name)
+                name_
+                name_pos
                 (Typing_print.error env ty_sub)
                 (Reason.to_pos r_option))
         | _ ->
           invalid env ~fail:(fun () ->
               Errors.null_member_read
                 ~is_method
-                (snd name)
-                (fst name)
+                name_
+                name_pos
                 (Reason.to_string "This can be null" r_option)))
     | (_, Tintersection tyl)
       when let (_, non_ty_opt, _) = find_type_with_exact_negation env tyl in
@@ -2005,14 +1952,14 @@ and simplify_subtype_has_member
           Errors.top_member_read
             ~is_method
             ~is_nullable:true
-            (snd name)
-            (fst name)
+            name_
+            name_pos
             (Typing_print.error env ty_sub)
             (Reason.to_pos r_inter))
     | (r_inter, Tintersection tyl) when using_new_method_call_inference ->
       let (env, tyl) = List.map_env ~f:Env.expand_type env tyl in
       let subtype_fresh_has_member_ty env ty_sub =
-        let (env, fresh_tyvar) = Env.fresh_type env (get_pos member_ty) in
+        let (env, fresh_tyvar) = Env.fresh_type env name_pos in
         let env = Env.set_tyvar_variance env fresh_tyvar in
         let fresh_has_member_ty =
           mk_constraint_type
@@ -2037,7 +1984,6 @@ and simplify_subtype_has_member
                 env
                 Reason.Rnone
                 var
-                subtype_env.on_error
             | None -> env
           in
           (env, Some fresh_tyvar)
@@ -2078,7 +2024,7 @@ and simplify_subtype_has_member
       let (errors, (env, (obj_get_ty, _tal))) =
         Errors.do_ (fun () ->
             Typing_object_get.obj_get
-              ~obj_pos:(Reason.to_pos r)
+              ~obj_pos:name_pos
               ~is_method
               ~inst_meth:false
               ~coerce_from_ty:None
@@ -2086,7 +2032,7 @@ and simplify_subtype_has_member
               ~explicit_targs
               ~class_id
               ~member_id:name
-              ~on_error:subtype_env.on_error
+              ~on_error:Errors.unify_error
               env
               ty_sub)
       in
@@ -2094,7 +2040,8 @@ and simplify_subtype_has_member
         if Errors.is_empty errors then
           valid env
         else
-          invalid env ~fail:(fun () -> Errors.merge_into_current errors)
+          invalid env ~fail:(fun () ->
+              Errors.apply_callback_to_errors errors subtype_env.on_error)
       in
       prop &&& simplify_subtype ~subtype_env ~this_ty obj_get_ty member_ty)
 
@@ -2223,7 +2170,6 @@ and simplify_subtype_params
     env
     |> simplify_param_modes ~subtype_env sub super
     &&& simplify_param_readonly ~subtype_env sub super
-    &&& simplify_param_constfun ~subtype_env sub super
     &&& simplify_param_accept_disposable ~subtype_env sub super
     &&& begin
           if check_params_ifc then
@@ -2269,7 +2215,7 @@ and simplify_subtype_implicit_params
         subtype_env with
         on_error =
           begin
-            fun ?code:_ _ _ ->
+            fun ?code:_ _ ->
             let expected = Typing_coeffects.get_type sub_cap in
             let got = Typing_coeffects.get_type super_cap in
             Errors.coeffect_subtyping_error
@@ -2373,24 +2319,6 @@ and simplify_param_readonly ~subtype_env sub super env =
       env
   else
     valid env
-
-and simplify_param_constfun ~subtype_env sub super env =
-  (* The sub param here (as with all simplify_param_* functions)
-  is actually the parameter on ft_super, since params are contravariant *)
-  let { fp_pos = pos1; _ } = sub in
-  let { fp_pos = pos2; _ } = super in
-  match (get_fp_const_function sub, get_fp_const_function super) with
-  | (false, true) ->
-    invalid
-      ~fail:(fun () ->
-        Errors.readonly_mismatch_on_error
-          "Mismatched constness of function parameter"
-          pos1
-          ~reason_sub:[(pos1, "This parameter is a regular function")]
-          ~reason_super:[(pos2, "But this parameter requires a const function")]
-          subtype_env.on_error)
-      env
-  | _ -> valid env
 
 and ifc_policy_matches (ifc1 : ifc_fun_decl) (ifc2 : ifc_fun_decl) =
   match (ifc1, ifc2) with
@@ -2518,6 +2446,33 @@ and simplify_subtype_possibly_enforced
     ~(subtype_env : subtype_env) et_sub et_super =
   simplify_subtype ~subtype_env et_sub.et_type et_super.et_type
 
+(* Special case of function type subtype dynamic.
+ *   (function(ty1,...,tyn):ty <: dynamic)
+ *   iff
+ *   dynamic <: ty1 & ... & dynamic <: tyn & ty <: dynamic
+ *)
+and simplify_subtype_fun_dynamic
+    ~(subtype_env : subtype_env)
+    (_r_sub : Reason.t)
+    (ft_sub : locl_fun_type)
+    ty_dyn
+    env : env * TL.subtype_prop =
+  let ty_dyn_enf = { et_enforced = Unenforced; et_type = ty_dyn } in
+  env
+  (* Contravariant subtyping on parameters *)
+  |> begin
+       match ft_sub.ft_arity with
+       | Fvariadic { fp_type; _ } ->
+         simplify_subtype ~subtype_env ty_dyn fp_type.et_type
+       | _ -> valid
+     end
+  &&& simplify_supertype_params_with_variadic
+        ~subtype_env
+        ft_sub.ft_params
+        ty_dyn_enf
+  &&& (* Finally do covariant subtryping on return type *)
+  simplify_subtype ~subtype_env ft_sub.ft_ret.et_type ty_dyn
+
 (* This implements basic subtyping on non-generic function types:
  *   (1) return type behaves covariantly
  *   (2) parameter types behave contravariantly
@@ -2588,19 +2543,28 @@ and simplify_subtype_funs
 (* One of the main entry points to this module *)
 and sub_type_i
     ~subtype_env (env : env) (ty_sub : internal_type) (ty_super : internal_type)
-    : env =
-  Env.log_env_change "sub_type" env
-  @@
+    : (env, env) result =
   let old_env = env in
   let (env, success) =
     sub_type_inner ~subtype_env env ~this_ty:None ty_sub ty_super
   in
   if success then
-    env
+    Ok (Env.log_env_change "sub_type" old_env env)
   else
-    old_env
+    Error (Env.log_env_change "sub_type" old_env old_env)
 
 and sub_type
+    env ?(coerce = None) (ty_sub : locl_ty) (ty_super : locl_ty) on_error =
+  sub_type_i
+    ~subtype_env:(make_subtype_env ~coerce on_error)
+    env
+    (LoclType ty_sub)
+    (LoclType ty_super)
+  |> function
+  | Ok env -> env
+  | Error env -> env
+
+and sub_type_res
     env ?(coerce = None) (ty_sub : locl_ty) (ty_super : locl_ty) on_error =
   sub_type_i
     ~subtype_env:(make_subtype_env ~coerce on_error)
@@ -2718,7 +2682,7 @@ and props_to_env env remain props on_error =
         match disj_props with
         | [] ->
           (* For now let it fail later when calling
-        process_simplify_subtype_result on the remaining constraints. *)
+             process_simplify_subtype_result on the remaining constraints. *)
           props_to_env env (TL.invalid ~fail:f :: remain) props on_error
         | prop :: disj_props' ->
           let (env', other) = props_to_env env remain [prop] on_error in
@@ -2852,10 +2816,10 @@ and sub_type_inner
 
 and is_sub_type_alt_i ~ignore_generic_params ~no_top_bottom ~coerce env ty1 ty2
     =
-  let (this_ty, pos) =
+  let this_ty =
     match ty1 with
-    | LoclType ty1 -> (Some ty1, get_pos ty1)
-    | ConstraintType _ -> (None, Pos.none)
+    | LoclType ty1 -> Some ty1
+    | ConstraintType _ -> None
   in
   let (_env, prop) =
     simplify_subtype_i
@@ -2864,7 +2828,7 @@ and is_sub_type_alt_i ~ignore_generic_params ~no_top_bottom ~coerce env ty1 ty2
            ~ignore_generic_params
            ~no_top_bottom
            ~coerce
-           (Errors.unify_error_at pos))
+           Errors.ignore_error)
       ~this_ty
       (* It is weird that this can cause errors, but I am wary to discard them.
        * Using the generic unify_error to maintain current behavior. *)
@@ -3117,11 +3081,10 @@ let decompose_subtype_add_bound
  * hold in order for t <: u.
  *)
 let rec decompose_subtype
-    p
     (env : env)
     (ty_sub : locl_ty)
     (ty_super : locl_ty)
-    (on_error : Errors.typing_error_callback) : env =
+    (on_error : Errors.error_from_reasons_callback) : env =
   log_subtype
     ~level:2
     ~this_ty:None
@@ -3137,14 +3100,14 @@ let rec decompose_subtype
       ty_super
       env
   in
-  decompose_subtype_add_prop p env prop
+  decompose_subtype_add_prop env prop
 
-and decompose_subtype_add_prop p env prop =
+and decompose_subtype_add_prop env prop =
   match prop with
   | TL.Conj props ->
-    List.fold_left ~f:(decompose_subtype_add_prop p) ~init:env props
+    List.fold_left ~f:decompose_subtype_add_prop ~init:env props
   | TL.Disj (_, []) -> Env.mark_inconsistent env
-  | TL.Disj (_, [prop']) -> decompose_subtype_add_prop p env prop'
+  | TL.Disj (_, [prop']) -> decompose_subtype_add_prop env prop'
   | TL.Disj _ ->
     Typing_log.log_prop 2 env.function_pos "decompose_subtype_add_prop" env prop;
     env
@@ -3157,22 +3120,18 @@ and decompose_subtype_add_prop p env prop =
 
 (* Decompose a general constraint *)
 and decompose_constraint
-    p
     (env : env)
     (ck : Ast_defs.constraint_kind)
     (ty_sub : locl_ty)
-    (ty_super : locl_ty) : env =
+    (ty_super : locl_ty)
+    on_error : env =
   (* constraints are caught based on reason, not error callback. Using unify_error *)
   match ck with
-  | Ast_defs.Constraint_as ->
-    decompose_subtype p env ty_sub ty_super (Errors.unify_error_at p)
-  | Ast_defs.Constraint_super ->
-    decompose_subtype p env ty_super ty_sub (Errors.unify_error_at p)
+  | Ast_defs.Constraint_as -> decompose_subtype env ty_sub ty_super on_error
+  | Ast_defs.Constraint_super -> decompose_subtype env ty_super ty_sub on_error
   | Ast_defs.Constraint_eq ->
-    let env =
-      decompose_subtype p env ty_sub ty_super (Errors.unify_error_at p)
-    in
-    decompose_subtype p env ty_super ty_sub (Errors.unify_error_at p)
+    let env = decompose_subtype env ty_sub ty_super on_error in
+    decompose_subtype env ty_super ty_sub on_error
 
 (* Given a constraint ty1 ck ty2 where ck is AS, SUPER or =,
  * add bounds to type parameters in the environment that necessarily
@@ -3197,11 +3156,11 @@ and decompose_constraint
 let constraint_iteration_limit = 20
 
 let add_constraint
-    p
     (env : env)
     (ck : Ast_defs.constraint_kind)
     (ty_sub : locl_ty)
-    (ty_super : locl_ty) : env =
+    (ty_super : locl_ty)
+    on_error : env =
   log_subtype
     ~level:1
     ~this_ty:None
@@ -3210,7 +3169,7 @@ let add_constraint
     ty_sub
     ty_super;
   let oldsize = Env.get_tpenv_size env in
-  let env = decompose_constraint p env ck ty_sub ty_super in
+  let env = decompose_constraint env ck ty_sub ty_super on_error in
   let ( = ) = Int.equal in
   if Env.get_tpenv_size env = oldsize then
     env
@@ -3235,12 +3194,7 @@ let add_constraint
                     (Typing_set.elements (Env.get_upper_bounds env x []))
                     ~init:env
                     ~f:(fun env ty_super' ->
-                      decompose_subtype
-                        p
-                        env
-                        ty_sub'
-                        ty_super'
-                        (Errors.unify_error_at p))))
+                      decompose_subtype env ty_sub' ty_super' on_error)))
         in
         if Int.equal (Env.get_tpenv_size env) oldsize then
           env
@@ -3250,14 +3204,16 @@ let add_constraint
     iter 0 env
 
 let add_constraints p env constraints =
-  let add_constraint env (ty1, ck, ty2) = add_constraint p env ck ty1 ty2 in
+  let add_constraint env (ty1, ck, ty2) =
+    add_constraint env ck ty1 ty2 (Errors.unify_error_at p)
+  in
   List.fold_left constraints ~f:add_constraint ~init:env
 
-let sub_type_with_dynamic_as_bottom
+let sub_type_with_dynamic_as_bottom_res
     (env : env)
     (ty_sub : locl_ty)
     (ty_super : locl_ty)
-    (on_error : Errors.typing_error_callback) : env =
+    (on_error : Errors.error_from_reasons_callback) : (env, env) result =
   let env_change_log = Env.log_env_change "coercion" env in
   log_subtype
     ~level:1
@@ -3279,13 +3235,19 @@ let sub_type_with_dynamic_as_bottom
   let (env, prop) = prop_to_env env prop on_error in
   let env = Env.add_subtype_prop env prop in
   let succeeded = process_simplify_subtype_result prop in
-  let env =
-    if succeeded then
-      env
-    else
-      old_env
-  in
-  env_change_log env
+  if succeeded then
+    Ok (env_change_log env)
+  else
+    Error (env_change_log old_env)
+
+let sub_type_with_dynamic_as_bottom
+    (env : env)
+    (ty_sub : locl_ty)
+    (ty_super : locl_ty)
+    (on_error : Errors.error_from_reasons_callback) : env =
+  match sub_type_with_dynamic_as_bottom_res env ty_sub ty_super on_error with
+  | Ok env -> env
+  | Error env -> env
 
 let simplify_subtype_i env ty_sub ty_super ~on_error =
   simplify_subtype_i
@@ -3300,6 +3262,9 @@ let simplify_subtype_i env ty_sub ty_super ~on_error =
 
 let sub_type_i env ty1 ty2 on_error =
   sub_type_i ~subtype_env:(make_subtype_env ~coerce:None on_error) env ty1 ty2
+  |> function
+  | Ok env -> env
+  | Error env -> env
 
 let subtype_funs
     ~(check_return : bool)
@@ -3333,13 +3298,16 @@ let subtype_funs
     old_env
 
 let sub_type_or_fail env ty1 ty2 fail =
-  sub_type env ty1 ty2 (fun ?code:_ _ _ -> fail ())
+  sub_type env ty1 ty2 (fun ?code:_ _ -> fail ())
 
 let set_fun_refs () =
   Typing_utils.sub_type_ref := sub_type;
+  Typing_utils.sub_type_res_ref := sub_type_res;
   Typing_utils.sub_type_i_ref := sub_type_i;
   Typing_utils.sub_type_with_dynamic_as_bottom_ref :=
     sub_type_with_dynamic_as_bottom;
+  Typing_utils.sub_type_with_dynamic_as_bottom_res_ref :=
+    sub_type_with_dynamic_as_bottom_res;
   Typing_utils.add_constraint_ref := add_constraint;
   Typing_utils.is_sub_type_ref := is_sub_type;
   Typing_utils.is_sub_type_for_coercion_ref := is_sub_type_for_coercion;

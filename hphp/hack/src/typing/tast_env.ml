@@ -44,7 +44,9 @@ let print_error_ty = Typing_print.error
 let print_ty_with_identity env phase_ty sym_occurrence sym_definition =
   match phase_ty with
   | Typing_defs.DeclTy ty ->
-    let (env, ty) = Typing_phase.localize_with_self env ty in
+    let (env, ty) =
+      Typing_phase.localize_with_self env ~ignore_errors:true ty
+    in
     Typing_print.full_with_identity env ty sym_occurrence sym_definition
   | Typing_defs.LoclTy ty ->
     Typing_print.full_with_identity env ty sym_occurrence sym_definition
@@ -176,7 +178,7 @@ let is_sub_type_for_union env ty_sub ty_super =
 
 let referenced_typeconsts env root ids =
   let root = hint_to_ty env root in
-  let ety_env = Typing_phase.env_with_self env in
+  let ety_env = Typing_phase.env_with_self env ~on_error:Errors.ignore_error in
   Typing_taccess.referenced_typeconsts env ety_env (root, ids)
 
 let empty ctx = Typing_env.empty ctx Relative_path.default ~droot:None
@@ -203,14 +205,26 @@ let restore_saved_env env saved_env =
         env.Env.inference_env
         saved_env.Tast.inference_env;
     Env.global_tpenv = saved_env.Tast.tpenv;
+    Env.fun_tast_info = saved_env.Tast.fun_tast_info;
   }
 
 module EnvFromDef = Typing_env_from_def
 open Tast
 
-let restore_method_env env m = restore_saved_env env m.m_annotation
+let check_fun_tast_info_present env = function
+  | Some _ -> ()
+  | None ->
+    Errors.internal_error
+      env.Typing_env_types.function_pos
+      "fun_tast_info of a function or method was not filled in before TAST checking"
 
-let restore_fun_env env f = restore_saved_env env f.f_annotation
+let restore_method_env env m =
+  let se = m.m_annotation in
+  restore_saved_env env se
+
+let restore_fun_env env f =
+  let se = f.f_annotation in
+  restore_saved_env env se
 
 let fun_env ctx f =
   let ctx =
@@ -281,3 +295,25 @@ let set_allow_wildcards env =
 let get_allow_wildcards env = env.Typing_env_types.allow_wildcards
 
 let is_enum_class env c = Typing_env.is_enum_class env c
+
+let extract_from_fun_tast_info env extractor default_value =
+  let fun_tast_info = env.Typing_env_types.fun_tast_info in
+  check_fun_tast_info_present env fun_tast_info;
+  match fun_tast_info with
+  | Some fun_tast_info -> extractor fun_tast_info
+  | None ->
+    (* In this case, check_fun_tast_info_present reported an error already *)
+    default_value
+
+let fun_has_implicit_return (env : t) =
+  extract_from_fun_tast_info env (fun info -> info.has_implicit_return) false
+
+let named_fun_body_is_unsafe (env : t) =
+  extract_from_fun_tast_info env (fun info -> info.named_body_is_unsafe) false
+
+let get_const env cls name = Typing_env.get_const env cls name
+
+let consts env cls = Typing_env.consts env cls
+
+let fill_in_pos_filename_if_in_current_decl =
+  Typing_env.fill_in_pos_filename_if_in_current_decl

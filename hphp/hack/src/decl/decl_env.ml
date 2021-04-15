@@ -22,13 +22,11 @@ let root_decl_reference env =
 
 let make_decl_pos env pos =
   (* TODO: fail if root_decl_reference returns None *)
-  Option.fold (root_decl_reference env) ~init:pos ~f:(fun pos decl ->
-      Pos_or_decl.make_decl_pos pos decl)
+  Pos_or_decl.make_decl_pos_of_option pos (root_decl_reference env)
 
-let make_decl_posed env pos =
+let make_decl_posed env posed =
   (* TODO: fail if root_decl_reference returns None *)
-  Option.fold (root_decl_reference env) ~init:pos ~f:(fun pos decl ->
-      Positioned.make_for_decl pos decl)
+  Positioned.make_for_decl_of_option posed (root_decl_reference env)
 
 let tcopt env = Provider_context.get_tcopt env.ctx
 
@@ -37,7 +35,7 @@ let deps_mode env = Provider_context.get_deps_mode env.ctx
 let is_hhi cd = Pos_or_decl.is_hhi cd.dc_pos
 
 let add_wclass env x =
-  let dep = Dep.Class x in
+  let dep = Dep.Type x in
   Option.iter env.droot (fun root ->
       Typing_deps.add_idep (deps_mode env) root dep);
   ()
@@ -45,7 +43,7 @@ let add_wclass env x =
 let add_extends_dependency env x =
   let deps_mode = deps_mode env in
   Option.iter env.droot (fun root ->
-      let dep = Dep.Class x in
+      let dep = Dep.Type x in
       Typing_deps.add_idep deps_mode root (Dep.Extends x);
       Typing_deps.add_idep deps_mode root dep);
   ()

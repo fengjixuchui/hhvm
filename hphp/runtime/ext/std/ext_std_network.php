@@ -183,7 +183,7 @@ function fsockopen(string $hostname,
  *
  * @return int - Returns the size of the http request.
  */
-<<__Native, __HipHopSpecific>>
+<<__Native>>
 function get_http_request_size(): int;
 
 /**
@@ -396,8 +396,8 @@ function http_response_code(int $response_code = 0): mixed;
  *
  * @return string - Returns a string representation of the address.
  */
-<<__IsFoldable, __Pure, __Native>>
-function inet_ntop(string $in_addr): mixed;
+<<__IsFoldable, __Native>>
+function inet_ntop(string $in_addr)[]: mixed;
 
 /**
  * Converts a packed internet address to a human readable representation
@@ -405,16 +405,16 @@ function inet_ntop(string $in_addr): mixed;
  * @param string $in_addr - A 32bit IPv4, or 128bit IPv6 address.
  * @return null|string - Returns a string representation of the address.
  */
-<<__IsFoldable, __Pure, __Native>>
-function inet_ntop_nullable(string $in_addr): ?string;
+<<__IsFoldable, __Native>>
+function inet_ntop_nullable(string $in_addr)[]: ?string;
 
 /**
  * inet_ntop() using the folly library. Used for performance benchmarking.
  * @param string $in_addr - A 32bit IPv4, or 128bit IPv6 address.
  * @return null|string - Returns a string representation of the address.
  */
-<<__IsFoldable, __Pure, __Native>>
-function inet_ntop_folly(string $in_addr): ?string;
+<<__IsFoldable, __Native>>
+function inet_ntop_folly(string $in_addr)[]: ?string;
 
 /**
  * Converts a human readable IP address to its packed in_addr representation
@@ -426,8 +426,8 @@ function inet_ntop_folly(string $in_addr): ?string;
  *   example, an IPv4 address without dots or an IPv6 address without
  *   colons).
  */
-<<__IsFoldable, __Pure, __Native>>
-function inet_pton(string $address): mixed;
+<<__IsFoldable, __Native>>
+function inet_pton(string $address)[]: mixed;
 
 /**
  * Converts a string containing an (IPv4) Internet Protocol dotted address
@@ -438,8 +438,8 @@ function inet_pton(string $address): mixed;
  * @return int - Returns the IPv4 address or FALSE if ip_address is
  *   invalid.
  */
-<<__IsFoldable, __Pure, __Native>>
-function ip2long(string $ip_address): mixed;
+<<__IsFoldable, __Native>>
+function ip2long(string $ip_address)[]: mixed;
 
 /**
  * Converts an (IPv4) Internet network address into a string in Internet
@@ -449,8 +449,8 @@ function ip2long(string $ip_address): mixed;
  *
  * @return string - Returns the Internet IP address as a string.
  */
-<<__IsFoldable, __Pure, __Native>>
-function long2ip(string $proper_address): string;
+<<__IsFoldable, __Native>>
+function long2ip(string $proper_address)[]: string;
 
 /**
  * Open connection to system logger

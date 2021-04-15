@@ -26,10 +26,14 @@ let expand_typedef_ ?(force_expand = false) ety_env env r (x : string) argl =
   let { td_pos; td_vis; td_tparams; td_type; td_constraint } =
     unsafe_opt @@ Typing_env.get_typedef env x
   in
-  match Typing_defs.has_expanded ety_env x with
-  | Some report ->
+  let (ety_env, has_cycle) =
+    Typing_defs.add_type_expansion_check_cycles ety_env (td_pos, x)
+  in
+  match has_cycle with
+  | Some initial_taccess_pos_opt ->
     (* Only report a cycle if it's through the specified definition *)
-    if report then Errors.cyclic_typedef td_pos pos;
+    Option.iter initial_taccess_pos_opt ~f:(fun initial_taccess_pos ->
+        Errors.cyclic_typedef initial_taccess_pos pos);
     (env, (ety_env, MakeType.err r))
   | None ->
     let should_expand =
@@ -37,17 +41,19 @@ let expand_typedef_ ?(force_expand = false) ety_env env r (x : string) argl =
       ||
       match td_vis with
       | Aast.Opaque ->
-        Relative_path.equal (Pos.filename td_pos) (Env.get_file env)
+        Relative_path.equal
+          (Pos.filename (Pos_or_decl.unsafe_to_raw_pos td_pos))
+          (Env.get_file env)
       | Aast.Transparent -> true
     in
-    (* Quiet: don't report errors in expanded definition.
-     * These will have been reported at the definition site already. *)
     let ety_env =
       {
         ety_env with
-        type_expansions = (false, td_pos, x) :: ety_env.type_expansions;
         substs = Subst.make_locl td_tparams argl;
-        quiet = true;
+        on_error =
+          (* Don't report errors in expanded definition.
+           * These will have been reported at the definition site already. *)
+          Errors.ignore_error;
       }
     in
     let (env, expanded_ty) =
@@ -83,7 +89,7 @@ let rec force_expand_typedef ~ety_env env (t : locl_ty) =
       expand_typedef_ ~force_expand:true ety_env env r x argl
     in
     force_expand_typedef ~ety_env env ty
-  | _ -> (env, t, List.rev_map ety_env.type_expansions (fun (_, x, _) -> x))
+  | _ -> (env, t, Typing_defs.Type_expansions.positions ety_env.type_expansions)
 
 (*****************************************************************************)
 (*****************************************************************************)

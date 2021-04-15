@@ -5,29 +5,36 @@ namespace {
 /** Serialize data into a compact format that can be unserialized by
  * fb_unserialize().
  *
- * WARNING: FB_SERIALIZE_HACK_ARRAYS_AND_KEYSETS mode has been added in March
- * 2020, and support for underlying serialization format may not yet be
- * available in all non-Hack implementations yet. Caution is adviced when using
- * FB_SERIALIZE_HACK_ARRAYS_AND_KEYSETS for serializing data, which may be
- * deserialized outside of Hack.
- *
  * @param mixed $thing - What to serialize. Note that objects are not
  * supported.
- * @param options bitmask of options: FB_SERIALIZE_HACK_ARRAYS,
- * FB_SERIALIZE_HACK_ARRAYS_AND_KEYSETS.
+ * @param options bitmask of options:
+ *
+ * FB_SERIALIZE_VARRAY_DARRAY
+ * FB_SERIALIZE_HACK_ARRAYS
+ * FB_SERIALIZE_HACK_ARRAYS_AND_KEYSETS
+ * FB_SERIALIZE_POST_HACK_ARRAY_MIGRATION
+ *
+ * Of these options, the last one is the best to use: it works on vecs, dicts,
+ * and keysets, and deserializes the result with no change to types or values.
+ *
+ * All other modes are deficient to the post-HAM mode in some way:
+ *
+ *  - VARRAY_DARRAY rejects keysets, and does intish-cast-ing of dict keys.
+ *  - HACK_ARRAYS rejects keysets, and converts legacy vecs inputs to dicts.
+ *  - HACK_ARRAYS_AND_KEYSETS converts legacy vec inputs to dicts.
+ *
  * @return mixed - Serialized data.
  */
-<<__HipHopSpecific, __Native, __Pure>>
-function fb_serialize(mixed $thing, int $options = 0): mixed;
+<<__Native>>
+function fb_serialize(mixed $thing, int $options = 0)[]: mixed;
 
 /** Unserialize previously fb_serialize()-ed data.
  * @param mixed $thing - What to unserialize.
  * @param mixed $success - Whether it was successful or not.
- * @param options bitmask of options: FB_SERIALIZE_HACK_ARRAYS,
- * FB_SERIALIZE_HACK_ARRAYS_AND_KEYSETS.
+ * @param options bitmask of options (see fb_serialize for details)
  * @return mixed - Unserialized data.
  */
-<<__HipHopSpecific, __Native>>
+<<__Native>>
 function fb_unserialize(mixed $thing,
                         <<__OutOnly("KindOfBoolean")>>
                         inout mixed $success,
@@ -48,8 +55,8 @@ function fb_unserialize(mixed $thing,
  *    results on deserialization, so we want to make it the new default.
  * @return mixed - Serialized data.
  */
-<<__HipHopSpecific, __Native, __Pure>>
-function fb_compact_serialize(mixed $thing, int $options = 0): mixed;
+<<__Native>>
+function fb_compact_serialize(mixed $thing, int $options = 0)[]: mixed;
 
 /** Unserialize a previously fb_compact_serialize()-ed data.
  * @param mixed $thing - What to unserialize.
@@ -58,7 +65,7 @@ function fb_compact_serialize(mixed $thing, int $options = 0): mixed;
  * what the decoding error was, if it failed.
  * @return mixed - Unserialized data.
  */
-<<__HipHopSpecific, __Native>>
+<<__Native>>
 function fb_compact_unserialize(mixed $thing,
                                 <<__OutOnly("KindOfBoolean")>>
                                 inout mixed $success,
@@ -88,7 +95,7 @@ function fb_compact_unserialize(mixed $thing,
  * @param mixed $data - Extra data to pass to the handler when intercepting
  * @return bool - TRUE if successful, FALSE otherwise
  */
-<<__HipHopSpecific, __Native>>
+<<__Native>>
 function fb_intercept(string $name,
                       mixed $handler,
                       mixed $data = null): bool;
@@ -120,7 +127,7 @@ function fb_intercept(string $name,
  * set by individual function names, will be removed.
  * @return bool - TRUE if successful, FALSE otherwise
  */
-<<__HipHopSpecific, __Native>>
+<<__Native>>
 function fb_intercept2(string $name, mixed $handler): bool;
 
 /** Rename a function, so that a function can be called with the new name.
@@ -133,7 +140,7 @@ function fb_intercept2(string $name, mixed $handler): bool;
  * @param string $new_func_name - What is the new name.
  * @return bool - TRUE if successful, FALSE otherwise.
  */
-<<__HipHopSpecific, __Native("NoFCallBuiltin")>>
+<<__Native("NoFCallBuiltin")>>
 function fb_rename_function(string $orig_func_name,
                             string $new_func_name): bool;
 
@@ -142,7 +149,7 @@ function fb_rename_function(string $orig_func_name,
  * @param mixed $input - What string to sanitize.
  * @return bool - Sanitized string.
  */
-<<__HipHopSpecific, __Native, __Pure>>
+<<__Native, __Pure>>
 function fb_utf8ize(inout mixed $input): bool;
 
 /** Count the number of UTF-8 code points in string or byte count if it's not
@@ -151,7 +158,7 @@ function fb_utf8ize(inout mixed $input): bool;
  * @return int - Returns the count of code points if valid UTF-8 else byte
  * count.
  */
-<<__HipHopSpecific, __Native, __IsFoldable, __Pure>>
+<<__Native, __IsFoldable, __Pure>>
 function fb_utf8_strlen_deprecated(string $input): int;
 
 /** Count the number of UTF-8 code points in string, substituting U+FFFD for
@@ -160,8 +167,8 @@ function fb_utf8_strlen_deprecated(string $input): int;
  * @return int - Returns the number of code points interpreting string as
  * UTF-8.
  */
-<<__HipHopSpecific, __Native, __IsFoldable, __Pure>>
-function fb_utf8_strlen(string $input): int;
+<<__Native, __IsFoldable>>
+function fb_utf8_strlen(string $input)[]: int;
 
 /** Cuts a portion of str specified by the start and length parameters.
  * @param string $str - The original string.
@@ -180,10 +187,10 @@ function fb_utf8_strlen(string $input): int;
  * length parameters.  If str is shorter than start characters long, the empty
  * string will be returned.
  */
-<<__HipHopSpecific, __Native, __IsFoldable, __Pure>>
+<<__Native, __IsFoldable>>
 function fb_utf8_substr(string $str,
                         int $start,
-                        int $length = PHP_INT_MAX): string;
+                        int $length = PHP_INT_MAX)[]: string;
 
 /** Returns code coverage data collected so far. Turn on code coverage by
  * Eval.RecordCodeCoverage or by using fb_enable_code_coverage and call this
@@ -193,17 +200,17 @@ function fb_utf8_substr(string $str,
  * @param bool $flush - Whether to clear data after this function call.
  * @return darray<string,mixed>|false
  */
-<<__HipHopSpecific, __Native>>
+<<__Native>>
 function fb_get_code_coverage(bool $flush): mixed;
 
 /** Enables code coverage. The coverage information is cleared.
  */
-<<__HipHopSpecific, __Native("NoFCallBuiltin")>>
+<<__Native("NoFCallBuiltin")>>
 function fb_enable_code_coverage(): void;
 
 /** Disables and returns code coverage. The coverage information is cleared.
  */
-<<__HipHopSpecific, __Native("NoFCallBuiltin")>>
+<<__Native("NoFCallBuiltin")>>
 function fb_disable_code_coverage(): darray<string, mixed>;
 
 /** Toggles the compression status of HipHop output, if headers have already
@@ -211,20 +218,20 @@ function fb_disable_code_coverage(): darray<string, mixed>;
  * @param bool $new_value - The new value for the compression state.
  * @return bool - The old value.
  */
-<<__HipHopSpecific, __Native>>
+<<__Native>>
 function fb_output_compression(bool $new_value): bool;
 
 /** Set a callback function that is called when php tries to exit.
  * @param mixed $function - The callback to invoke. An exception object will
  * be passed to the function
  */
-<<__HipHopSpecific, __Native>>
+<<__Native>>
 function fb_set_exit_callback(mixed $function): void;
 
 /** Get stats on flushing the last data chunk from server.
  * @return int - Total number of bytes flushed since last flush
  */
-<<__HipHopSpecific, __Native>>
+<<__Native>>
 function fb_get_last_flush_size(): int;
 
 /** Gathers the statistics of the file named by filename, like lstat(), except
@@ -252,7 +259,7 @@ namespace HH {
 /** Disables and returns code coverage that contains file to coverage frequency.
  * The coverage information is cleared.
  */
-<<__HipHopSpecific, __Native("NoFCallBuiltin")>>
+<<__Native("NoFCallBuiltin")>>
 function disable_code_coverage_with_frequency(): darray<string, mixed>;
 
 /** Returns an int for the upper (first) 64 bits of an md5 hash of a string.
@@ -268,8 +275,8 @@ function disable_code_coverage_with_frequency(): darray<string, mixed>;
  * The faster and quite effective xxhash64 is generally recommended for
  * non-crypto hashing needs when no backward compatibility is needed.
  */
-<<__Native, __IsFoldable, __Pure>>
-function non_crypto_md5_upper(string $str): int;
+<<__Native, __IsFoldable>>
+function non_crypto_md5_upper(string $str)[]: int;
 
 /** Returns an int for the lower (last) 64 bits of an md5 hash of a string.
  * The MD5 hash, usually presented as a hex value, is taken as big endian, and
@@ -284,8 +291,8 @@ function non_crypto_md5_upper(string $str): int;
  * The faster and quite effective xxhash64 is generally recommended for
  * non-crypto hashing needs when no backward compatibility is needed.
  */
-<<__Native, __IsFoldable, __Pure>>
-function non_crypto_md5_lower(string $str): int;
+<<__Native, __IsFoldable>>
+function non_crypto_md5_lower(string $str)[]: int;
 
 /** Returns the overflow part of multiplying two ints, as if they were unsigned.
  * In other words, this returns the upper 64 bits of the full product of

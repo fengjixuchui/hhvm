@@ -806,11 +806,10 @@ ss.serialize_field("anonymous_class_implements_list", &self.with(implements_list
 ss.serialize_field("anonymous_class_body", &self.with(body))?;
       ss.end()
 } 
-SyntaxVariant::AnonymousFunction (AnonymousFunctionChildren{attribute_spec,static_keyword,async_keyword,function_keyword,left_paren,parameters,right_paren,ctx_list,colon,readonly_return,type_,use_,body} ) => {
-      let mut ss = s.serialize_struct("", 14)?;
+SyntaxVariant::AnonymousFunction (AnonymousFunctionChildren{attribute_spec,async_keyword,function_keyword,left_paren,parameters,right_paren,ctx_list,colon,readonly_return,type_,use_,body} ) => {
+      let mut ss = s.serialize_struct("", 13)?;
       ss.serialize_field("kind", "anonymous_function")?;
       ss.serialize_field("anonymous_attribute_spec", &self.with(attribute_spec))?;
-ss.serialize_field("anonymous_static_keyword", &self.with(static_keyword))?;
 ss.serialize_field("anonymous_async_keyword", &self.with(async_keyword))?;
 ss.serialize_field("anonymous_function_keyword", &self.with(function_keyword))?;
 ss.serialize_field("anonymous_left_paren", &self.with(left_paren))?;
@@ -986,11 +985,12 @@ ss.serialize_field("isset_argument_list", &self.with(argument_list))?;
 ss.serialize_field("isset_right_paren", &self.with(right_paren))?;
       ss.end()
 } 
-SyntaxVariant::FunctionCallExpression (FunctionCallExpressionChildren{receiver,type_args,left_paren,argument_list,right_paren} ) => {
-      let mut ss = s.serialize_struct("", 6)?;
+SyntaxVariant::FunctionCallExpression (FunctionCallExpressionChildren{receiver,type_args,enum_atom,left_paren,argument_list,right_paren} ) => {
+      let mut ss = s.serialize_struct("", 7)?;
       ss.serialize_field("kind", "function_call_expression")?;
       ss.serialize_field("function_call_receiver", &self.with(receiver))?;
 ss.serialize_field("function_call_type_args", &self.with(type_args))?;
+ss.serialize_field("function_call_enum_atom", &self.with(enum_atom))?;
 ss.serialize_field("function_call_left_paren", &self.with(left_paren))?;
 ss.serialize_field("function_call_argument_list", &self.with(argument_list))?;
 ss.serialize_field("function_call_right_paren", &self.with(right_paren))?;
@@ -1375,10 +1375,11 @@ ss.serialize_field("dictionary_type_members", &self.with(members))?;
 ss.serialize_field("dictionary_type_right_angle", &self.with(right_angle))?;
       ss.end()
 } 
-SyntaxVariant::ClosureTypeSpecifier (ClosureTypeSpecifierChildren{outer_left_paren,function_keyword,inner_left_paren,parameter_list,inner_right_paren,contexts,colon,readonly_return,return_type,outer_right_paren} ) => {
-      let mut ss = s.serialize_struct("", 11)?;
+SyntaxVariant::ClosureTypeSpecifier (ClosureTypeSpecifierChildren{outer_left_paren,readonly_keyword,function_keyword,inner_left_paren,parameter_list,inner_right_paren,contexts,colon,readonly_return,return_type,outer_right_paren} ) => {
+      let mut ss = s.serialize_struct("", 12)?;
       ss.serialize_field("kind", "closure_type_specifier")?;
       ss.serialize_field("closure_outer_left_paren", &self.with(outer_left_paren))?;
+ss.serialize_field("closure_readonly_keyword", &self.with(readonly_keyword))?;
 ss.serialize_field("closure_function_keyword", &self.with(function_keyword))?;
 ss.serialize_field("closure_inner_left_paren", &self.with(inner_left_paren))?;
 ss.serialize_field("closure_parameter_list", &self.with(parameter_list))?;

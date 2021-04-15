@@ -21,6 +21,7 @@
 #include "hphp/runtime/base/bespoke/logging-profile.h"
 #include "hphp/runtime/base/bespoke/monotype-dict.h"
 #include "hphp/runtime/base/bespoke/monotype-vec.h"
+#include "hphp/runtime/base/bespoke/struct-dict.h"
 #include "hphp/runtime/base/mixed-array.h"
 #include "hphp/runtime/base/packed-array.h"
 #include "hphp/runtime/base/set-array.h"
@@ -30,10 +31,12 @@
 #include "hphp/runtime/vm/jit/irlower-internal.h"
 #include "hphp/runtime/vm/jit/ir-opcode.h"
 #include "hphp/runtime/vm/jit/minstr-helpers.h"
+#include "hphp/runtime/vm/jit/translator-inline.h"
 
 namespace HPHP { namespace jit { namespace irlower {
 
 //////////////////////////////////////////////////////////////////////////////
+// Generic BespokeArrays
 
 namespace {
 static void logGuardFailure(TypedValue tv, uint16_t layout, uint64_t sk) {
@@ -91,24 +94,50 @@ void cgProfileArrLikeProps(IRLS& env, const IRInstruction* inst) {
 //    - the ones on the vanilla arrays (Packed, Mixed, Set);
 //    - failing all those options, the CallSpec Generic
 //
-#define CALL_TARGET(Type, Fn, Generic)                                    \
-  [&]{                                                                    \
-    auto const layout = Type.arrSpec().layout();                          \
-    if (layout.bespoke()) {                                               \
-      auto const vtable = layout.bespokeLayout()->vtable();               \
-      if (vtable->fn##Fn) {                                               \
-        return CallSpec::direct(vtable->fn##Fn);                          \
-      } else {                                                            \
-        return CallSpec::direct(BespokeArray::Fn);                        \
-      }                                                                   \
-    }                                                                     \
-    if (layout.vanilla()) {                                               \
-      if (arr <= (TVArr|TVec))  return CallSpec::direct(PackedArray::Fn); \
-      if (arr <= (TDArr|TDict)) return CallSpec::direct(MixedArray::Fn);  \
-      if (arr <= TKeyset)       return CallSpec::direct(SetArray::Fn);    \
-    }                                                                     \
-    return Generic;                                                       \
+#define CALL_TARGET(Type, Fn, Generic)                              \
+  [&]{                                                              \
+    auto const layout = Type.arrSpec().layout();                    \
+    if (layout.bespoke()) {                                         \
+      auto const vtable = layout.bespokeLayout()->vtable();         \
+      if (vtable->fn##Fn) {                                         \
+        return CallSpec::direct(vtable->fn##Fn);                    \
+      } else {                                                      \
+        return CallSpec::direct(BespokeArray::Fn);                  \
+      }                                                             \
+    }                                                               \
+    if (layout.vanilla()) {                                         \
+      if (arr <= TVec)    return CallSpec::direct(PackedArray::Fn); \
+      if (arr <= TDict)   return CallSpec::direct(MixedArray::Fn);  \
+      if (arr <= TKeyset) return CallSpec::direct(SetArray::Fn);    \
+    }                                                               \
+    return Generic;                                                 \
   }()
+
+#define CALL_TARGET_SYNTH(Type, Fn, Generic)                                 \
+  [&]{                                                                       \
+    auto const layout = Type.arrSpec().layout();                             \
+    if (layout.bespoke()) {                                                  \
+      auto const vtable = layout.bespokeLayout()->vtable();                  \
+      if (vtable->fn##Fn) {                                                  \
+        return CallSpec::direct(vtable->fn##Fn);                             \
+      } else {                                                               \
+        return CallSpec::direct(BespokeArray::Fn);                           \
+      }                                                                      \
+    }                                                                        \
+    if (layout.vanilla()) {                                                  \
+      if (arr <= TVec) {                                                     \
+        return CallSpec::direct(SynthesizedArrayFunctions<PackedArray>::Fn); \
+      }                                                                      \
+      if (arr <= TDict) {                                                    \
+        return CallSpec::direct(SynthesizedArrayFunctions<MixedArray>::Fn);  \
+      }                                                                      \
+      if (arr <= TKeyset) {                                                  \
+        return CallSpec::direct(SynthesizedArrayFunctions<SetArray>::Fn);    \
+      }                                                                      \
+    }                                                                        \
+    return Generic;                                                          \
+  }()
+
 
 CallSpec destructorForArrayLike(Type arr) {
   assertx(arr <= TArrLike);
@@ -130,6 +159,26 @@ void cgBespokeGet(IRLS& env, const IRInstruction* inst) {
   auto const target = (key <= TInt)
     ? CALL_TARGET(arr, NvGetInt, getInt)
     : CALL_TARGET(arr, NvGetStr, getStr);
+
+  auto& v = vmain(env);
+  auto const args = argGroup(env, inst).ssa(0).ssa(1);
+  cgCallHelper(v, env, target, callDestTV(env, inst), SyncOptions::Sync, args);
+}
+
+void cgBespokeGetThrow(IRLS& env, const IRInstruction* inst) {
+  using GetInt = TypedValue (ArrayData::*)(int64_t) const;
+  using GetStr = TypedValue (ArrayData::*)(const StringData*) const;
+
+  auto const getInt =
+    CallSpec::method(static_cast<GetInt>(&ArrayData::getThrow));
+  auto const getStr =
+    CallSpec::method(static_cast<GetStr>(&ArrayData::getThrow));
+
+  auto const arr = inst->src(0)->type();
+  auto const key = inst->src(1)->type();
+  auto const target = (key <= TInt)
+    ? CALL_TARGET_SYNTH(arr, NvGetIntThrow, getInt)
+    : CALL_TARGET_SYNTH(arr, NvGetStrThrow, getStr);
 
   auto& v = vmain(env);
   auto const args = argGroup(env, inst).ssa(0).ssa(1);
@@ -269,7 +318,7 @@ void cgBespokeElem(IRLS& env, const IRInstruction* inst) {
     using namespace MInstrHelpers;
     auto const throwOnMissing = inst->src(2)->boolVal();
     if (layout.vanilla()) {
-      if (arr->isA(TDArr|TDict)) {
+      if (arr->isA(TDict)) {
         return key->isA(TStr)
           ? CallSpec::direct(throwOnMissing ? elemDictSD : elemDictSU)
           : CallSpec::direct(throwOnMissing ? elemDictID : elemDictIU);
@@ -288,6 +337,7 @@ void cgBespokeElem(IRLS& env, const IRInstruction* inst) {
 }
 
 //////////////////////////////////////////////////////////////////////////////
+// MonotypeVec and MonotypeDict
 
 namespace {
 using MonotypeDict = bespoke::MonotypeDict<int64_t>;
@@ -375,6 +425,85 @@ void cgLdMonotypeVecElem(IRLS& env, const IRInstruction* inst) {
 
   loadTV(vmain(env), inst->dst()->type(), dstLoc(env, inst, 0),
          type, value);
+}
+
+//////////////////////////////////////////////////////////////////////////////
+// StructDict
+
+using bespoke::StructDict;
+using bespoke::StructLayout;
+
+void cgAllocBespokeStructDict(IRLS& env, const IRInstruction* inst) {
+  auto const extra = inst->extra<AllocBespokeStructDict>();
+  auto& v = vmain(env);
+
+  auto const target = CallSpec::direct(StructDict::AllocStructDict);
+  auto const args = argGroup(env, inst)
+    .imm(StructLayout::As(extra->layout.bespokeLayout()));
+
+  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::None, args);
+}
+
+void cgNewBespokeStructDict(IRLS& env, const IRInstruction* inst) {
+  auto const sp = srcLoc(env, inst, 0).reg();
+  auto const extra = inst->extra<NewBespokeStructDict>();
+  auto& v = vmain(env);
+
+  auto const n = static_cast<size_t>((extra->numSlots + 7) & ~7);
+  auto const slots = reinterpret_cast<uint8_t*>(v.allocData<uint64_t>(n / 8));
+  for (auto i = 0; i < extra->numSlots; i++) {
+    slots[i] = safe_cast<uint8_t>(extra->slots[i]);
+  }
+  for (auto i = extra->numSlots; i < n; i++) {
+    slots[i] = static_cast<uint8_t>(KindOfUninit);
+  }
+
+  auto const target = CallSpec::direct(StructDict::MakeStructDict);
+  auto const args = argGroup(env, inst)
+    .imm(StructLayout::As(extra->layout.bespokeLayout()))
+    .imm(extra->numSlots)
+    .dataPtr(slots)
+    .addr(sp, cellsToBytes(extra->offset.offset));
+
+  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::None, args);
+}
+
+void cgLdStructDictElem(IRLS& env, const IRInstruction* inst) {
+  auto const rarr = srcLoc(env, inst, 0).reg();
+  auto const arr = inst->src(0);
+  auto layout = arr->type().arrSpec().layout();
+  auto const slayout = bespoke::StructLayout::As(layout.bespokeLayout());
+  auto const key = inst->src(1);
+  assertx(key->hasConstVal());
+  auto const slot = slayout->keySlot(key->strVal());
+  if (slot == kInvalidSlot) {
+    assertx(inst->dst()->isA(TUninit));
+    return;
+  }
+  auto const type = rarr[slayout->typeOffsetForSlot(slot)];
+  auto const value = rarr[slayout->valueOffsetForSlot(slot)];
+  loadTV(vmain(env), inst->dst()->type(), dstLoc(env, inst, 0),
+         type, value);
+}
+
+void cgStructDictSet(IRLS& env, const IRInstruction* inst) {
+  auto const arr = inst->src(0);
+  auto layout = arr->type().arrSpec().layout();
+  auto const slayout = bespoke::StructLayout::As(layout.bespokeLayout());
+  auto const key = inst->src(1);
+  assertx(key->hasConstVal());
+  auto& v = vmain(env);
+  auto const keyStr = key->strVal();
+  auto const slot = slayout->keySlot(keyStr);
+  if (slot != kInvalidSlot) {
+    auto const target = CallSpec::direct(bespoke::StructDict::SetStrInSlot);
+    auto const args = argGroup(env, inst).ssa(0).imm(slot).typedValue(2);
+    cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
+  } else {
+    auto const target = CallSpec::direct(bespoke::StructDict::SetStrMove);
+    auto const args = argGroup(env, inst).ssa(0).immPtr(keyStr).typedValue(2);
+    cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
+  }
 }
 
 //////////////////////////////////////////////////////////////////////////////

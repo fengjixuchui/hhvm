@@ -429,7 +429,7 @@ int VariablesCommand::addLocals(
 
   // Append the debugger specific environment.
   if (!g_context->getDebuggerEnv().isNull()) {
-    IterateKVNoInc(
+    IterateKV(
       g_context->getDebuggerEnv().get(),
       [&] (TypedValue k, TypedValue v) {
         if (locals.exists(k, true) || !isStringType(type(k))) return;
@@ -666,14 +666,6 @@ const char* VariablesCommand::getTypeName(const Variant& variable) {
     // Could we use getDataTypeString for these, too?
     case KindOfBoolean: return "bool";
     case KindOfInt64:   return "int";
-
-    // Same for these - let's distinguish array types.
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
-      return "array";
-
     case KindOfUninit:
     case KindOfNull:
     case KindOfDouble:
@@ -755,10 +747,6 @@ const VariablesCommand::VariableValue VariablesCommand::getVariableValue(
 
     case KindOfPersistentVec:
     case KindOfVec:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
-    case KindOfPersistentDArray:
-    case KindOfDArray:
     case KindOfPersistentDict:
     case KindOfDict:
     case KindOfPersistentKeyset:

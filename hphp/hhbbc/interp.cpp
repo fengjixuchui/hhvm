@@ -81,13 +81,12 @@ bool poppable(Op op) {
     case Op::Int:
     case Op::Double:
     case Op::String:
-    case Op::Array:
     case Op::Vec:
     case Op::Dict:
     case Op::Keyset:
-    case Op::NewDArray:
     case Op::NewDictArray:
     case Op::NewCol:
+    case Op::LazyClass:
       return true;
     default:
       return false;
@@ -141,10 +140,9 @@ ArrayData** add_elem_array(ISS& env) {
   auto& bc = env.replacedBcs[idx - env.unchangedBcs];
   auto arr = [&] () -> const ArrayData** {
     switch (bc.op) {
-      case Op::Array:   return &bc.Array.arr1;
+      case Op::Vec:     return &bc.Vec.arr1;
       case Op::Dict:    return &bc.Dict.arr1;
       case Op::Keyset:  return &bc.Keyset.arr1;
-      case Op::Vec:     return &bc.Vec.arr1;
       case Op::Concat:  return nullptr;
       default:          not_reached();
     }
@@ -169,20 +167,10 @@ bool start_add_elem(ISS& env, Type& ty, Op op) {
   auto const arr = value->m_data.parr;
   env.replacedBcs.push_back(
     [&] () -> Bytecode {
-      if (arr->isKeysetType()) {
-        return bc::Keyset { arr };
-      }
-      if (arr->isVecType()) {
-        return bc::Vec { arr };
-      }
-      if (arr->isDictType()) {
-        return bc::Dict { arr };
-      }
-      if (arr->isPHPArrayType()) {
-        return bc::Array { arr };
-      }
-
-      not_reached();
+      if (arr->isVecType())    return bc::Vec { arr };
+      if (arr->isDictType())   return bc::Dict { arr };
+      if (arr->isKeysetType()) return bc::Keyset { arr };
+      always_assert(false);
     }()
   );
   env.replacedBcs.back().srcLoc = env.srcLoc;
@@ -204,32 +192,7 @@ template <typename Fn>
 bool mutate_add_elem_array(ISS& env, Fn&& mutate) {
   auto const arr = add_elem_array(env);
   if (!arr) return false;
-
-  if (!RuntimeOption::EvalArrayProvenance) {
-    mutate(arr);
-    return true;
-  }
-
-  // We need to propagate the provenance info in case we promote *arr from
-  // static to counted (or if its representation changes in some other way)...
-  auto const ham = HAMSandwich::FromSArr(*arr);
-
   mutate(arr);
-
-  // ...which means we'll have to setTag if
-  //   - the array still needs a tag AND
-  //   - the set op cleared the provenance bit somehow
-  //     (representation changed or we CoWed a static array)
-  if (arrprov::arrayWantsTag(*arr) && !arrprov::getTag(*arr).valid()) {
-    auto const tag = ham.rawProvTag();
-    assertx(tag.has_value());
-    assertx(tag->valid());
-    arrprov::setTag(*arr, *tag);
-  }
-
-  // Make sure that, if provenance is enabled and the array wants a tag, we
-  // definitely assigned one leaving this op.
-  assertx(!arrprov::arrayWantsTag(*arr) || arrprov::getTag(*arr).valid());
   return true;
 }
 
@@ -551,8 +514,9 @@ LocalId equivLocalRange(ISS& env, const LocalRange& range) {
 }
 
 SString getNameFromType(const Type& t) {
-  if (!t.subtypeOf(BStr)) return nullptr;
+  if (!t.subtypeOf(BStr) && !t.subtypeOf(BLazyCls)) return nullptr;
   if (is_specialized_string(t)) return sval_of(t);
+  if (is_specialized_lazycls(t)) return lazyclsval_of(t);
   return nullptr;
 }
 
@@ -703,7 +667,7 @@ resolveTSStaticallyImpl(ISS& env, hphp_fast_set<SArray>& seenTs, SArray ts,
                                                            cnsName.m_data.pstr,
                                                            true);
         if (!cnst || !cnst->val || cnst->kind != ConstModifiers::Kind::Type
-            || !tvIsHAMSafeDArray(&*cnst->val)) {
+            || !tvIsDict(&*cnst->val)) {
           return nullptr;
         }
         if (checkNoOverrideOnFirst && i == 0 && !cnst->isNoOverride) {
@@ -884,13 +848,6 @@ void in(ISS& env, const bc::String& op) {
   push(env, sval(op.str1));
 }
 
-void in(ISS& env, const bc::Array& op) {
-  assertx(op.arr1->isPHPArrayType());
-  assertx(!RuntimeOption::EvalHackArrDVArrs || op.arr1->isNotDVArray());
-  effect_free(env);
-  push(env, aval(op.arr1));
-}
-
 void in(ISS& env, const bc::Vec& op) {
   assertx(op.arr1->isVecType());
   effect_free(env);
@@ -914,44 +871,10 @@ void in(ISS& env, const bc::NewDictArray& op) {
   push(env, op.arg1 == 0 ? dict_empty() : some_dict_empty());
 }
 
-void in(ISS& env, const bc::NewVArray& op) {
-  assertx(!RuntimeOption::EvalHackArrDVArrs);
-  auto elems = std::vector<Type>{};
-  elems.reserve(op.arg1);
-  for (auto i = uint32_t{0}; i < op.arg1; ++i) {
-    elems.push_back(std::move(topC(env, op.arg1 - i - 1)));
-  }
-  discard(env, op.arg1);
-  push(env, arr_packed_varray(std::move(elems), provTagHere(env)));
-  effect_free(env);
-  constprop(env);
-}
-
-void in(ISS& env, const bc::NewDArray& op) {
-  assertx(!RuntimeOption::EvalHackArrDVArrs);
-  effect_free(env);
-  auto const tag = provTagHere(env);
-  push(env, op.arg1 == 0 ? aempty_darray(tag) : some_aempty_darray(tag));
-}
-
 void in(ISS& env, const bc::NewRecord& op) {
   discard(env, op.keys.size());
   auto const rrec = env.index.resolve_record(op.str1);
   push(env, rrec ? exactRecord(*rrec) : TRecord);
-}
-
-void in(ISS& env, const bc::NewStructDArray& op) {
-  assertx(!RuntimeOption::EvalHackArrDVArrs);
-  auto map = MapElems{};
-  for (auto it = op.keys.end(); it != op.keys.begin(); ) {
-    map.emplace_front(
-      make_tv<KindOfPersistentString>(*--it),
-      MapElem::SStrKey(popC(env))
-    );
-  }
-  push(env, arr_map_darray(std::move(map), provTagHere(env)));
-  effect_free(env);
-  constprop(env);
 }
 
 void in(ISS& env, const bc::NewStructDict& op) {
@@ -1034,7 +957,7 @@ void in(ISS& env, const bc::AddElemC&) {
 
   auto outTy = [&] (const Type& key) -> folly::Optional<Type> {
     if (!key.subtypeOf(BArrKey)) return folly::none;
-    if (inTy.subtypeOf(BDictish)) {
+    if (inTy.subtypeOf(BDict)) {
       auto const r = array_like_set(std::move(inTy), key, v);
       if (!r.second) return r.first;
     }
@@ -1086,7 +1009,7 @@ void in(ISS& env, const bc::AddNewElemC&) {
   auto inTy = (env.state.stack.end() - 2).unspecialize();
 
   auto outTy = [&] () -> folly::Optional<Type> {
-    if (inTy.subtypeOf(BVecish | BKeyset)) {
+    if (inTy.subtypeOf(BVec | BKeyset)) {
       auto const r = array_like_newelem(std::move(inTy), v);
       if (!r.second) return r.first;
     }
@@ -1547,8 +1470,7 @@ bool sameJmpImpl(ISS& env, Op sameOp, const JmpOp& jmp) {
   if (ty0.couldBe(BLazyCls) && ty1.couldBe(BStr)) return false;
   if (ty1.couldBe(BLazyCls) && ty0.couldBe(BStr)) return false;
 
-  // We need to loosen provenance here because it doesn't affect same / equal.
-  auto isect = intersection_of(loosen_provenance(ty0), loosen_provenance(ty1));
+  auto isect = intersection_of(ty0, ty1);
 
   // Unfortunately, floating point negative zero and positive zero are
   // different, but are identical using as far as Same is concerened. We should
@@ -1758,27 +1680,11 @@ void castImpl(ISS& env, Type target, void(*fn)(TypedValue*)) {
   if (t.subtypeOf(target)) return reduce(env);
   popC(env);
 
-  auto const needsRuntimeProvenance =
-    RO::EvalArrayProvenance &&
-    env.ctx.func->attrs & AttrProvenanceSkipFrame &&
-    target.subtypeOf(BVArr | BDArr);
-
-  if (fn && !needsRuntimeProvenance) {
+  if (fn) {
     if (auto val = tv(t)) {
-      // Legacy dvarrays may raise a notice on cast. In order to simplify the
-      // rollout of these notices, we don't const-fold casts on these arrays.
-      auto const may_raise_notice = [&]{
-        if (!tvIsArrayLike(*val)) return false;
-        auto const ad = val->m_data.parr;
-        if (!ad->isLegacyArray()) return false;
-        return (ad->isDArray() && target.is(BDict)) ||
-               (ad->isVArray() && target.is(BVec));
-      }();
-      if (!may_raise_notice) {
-        if (auto result = eval_cell([&] { fn(&*val); return *val; })) {
-          constprop(env);
-          target = *result;
-        }
+      if (auto result = eval_cell([&] { fn(&*val); return *val; })) {
+        constprop(env);
+        target = *result;
       }
     }
   }
@@ -1803,18 +1709,6 @@ void in(ISS& env, const bc::CastVec&)    {
 
 void in(ISS& env, const bc::CastKeyset&) {
   castImpl(env, TKeyset, tvCastToKeysetInPlace);
-}
-
-void in(ISS& env, const bc::CastVArray&)  {
-  assertx(!RuntimeOption::EvalHackArrDVArrs);
-  arrprov::TagOverride tag_override{provTagHere(env)};
-  castImpl(env, TVArr, tvCastToVArrayInPlace);
-}
-
-void in(ISS& env, const bc::CastDArray&)  {
-  assertx(!RuntimeOption::EvalHackArrDVArrs);
-  arrprov::TagOverride tag_override{provTagHere(env)};
-  castImpl(env, TDArr, tvCastToDArrayInPlace);
 }
 
 void in(ISS& env, const bc::DblAsBits&) {
@@ -1890,7 +1784,8 @@ bool isTypeHelper(ISS& env,
                   LocalId location,
                   Op op,
                   const JmpOp& jmp) {
-  if (typeOp == IsTypeOp::Scalar || typeOp == IsTypeOp::LegacyArrLike) {
+  if (typeOp == IsTypeOp::Scalar || typeOp == IsTypeOp::LegacyArrLike ||
+      typeOp == IsTypeOp::Func) {
     return false;
   }
 
@@ -2441,10 +2336,17 @@ void in(ISS& env, const bc::CGetS& op) {
   if (lookup.found == TriBool::No || lookup.ty.subtypeOf(BBottom)) {
     return throws();
   }
+  
+  if (op.subop1 == ReadOnlyOp::Mutable && lookup.readOnly == TriBool::Yes) {
+    return throws();
+  }
+  auto const mightReadOnlyThrow =
+    op.subop1 == ReadOnlyOp::Mutable && lookup.readOnly == TriBool::Maybe;
 
   if (lookup.found == TriBool::Yes &&
       lookup.lateInit == TriBool::No &&
       !lookup.classInitMightRaise &&
+      !mightReadOnlyThrow &&
       tcls.subtypeOf(BCls) &&
       tname.subtypeOf(BStr)) {
     effect_free(env);
@@ -2486,18 +2388,14 @@ void in(ISS& env, const bc::ClassGetC& op) {
 void in(ISS& env, const bc::ClassGetTS& op) {
   // TODO(T31677864): implement real optimizations
   auto const ts = popC(env);
-  auto const requiredTSType = RuntimeOption::EvalHackArrDVArrs ? BDict : BDArr;
-  if (!ts.couldBe(requiredTSType)) {
+  if (!ts.couldBe(BDict)) {
     push(env, TBottom);
     push(env, TBottom);
     return;
   }
 
-  auto const& genericsType =
-    RuntimeOption::EvalHackArrDVArrs ? TOptVec : TOptVArr;
-
   push(env, TCls);
-  push(env, genericsType);
+  push(env, TOptVec);
 }
 
 void in(ISS& env, const bc::AKExists&) {
@@ -2568,7 +2466,7 @@ void in(ISS& env, const bc::GetMemoKeyL& op) {
   // usual). Converting an object to a memo key might invoke PHP code if it has
   // the IMemoizeParam interface, and if it doesn't, we'll throw.
   if (!locCouldBeUninit(env, op.nloc1.id) &&
-      !inTy.couldBe(BObj | BVecish | BDictish)) {
+      !inTy.couldBe(BObj | BVec | BDict)) {
     effect_free(env);
     constprop(env);
   }
@@ -2854,6 +2752,8 @@ void isTypeLImpl(ISS& env, const Op& op) {
   case IsTypeOp::Scalar: return push(env, TBool);
   case IsTypeOp::LegacyArrLike: return push(env, TBool);
   case IsTypeOp::Obj: return isTypeObj(env, loc);
+  case IsTypeOp::Func:
+    return loc.couldBe(TFunc) ? push(env, TBool) : push(env, TFalse);
   default: return isTypeImpl(env, loc, type_of_istype(op.subop2));
   }
 }
@@ -2870,6 +2770,8 @@ void isTypeCImpl(ISS& env, const Op& op) {
   case IsTypeOp::Scalar: return push(env, TBool);
   case IsTypeOp::LegacyArrLike: return push(env, TBool);
   case IsTypeOp::Obj: return isTypeObj(env, t1);
+  case IsTypeOp::Func:
+    return t1.couldBe(TFunc) ? push(env, TBool) : push(env, TFalse);
   default: return isTypeImpl(env, t1, type_of_istype(op.subop1));
   }
 }
@@ -2944,14 +2846,11 @@ bool isValidTypeOpForIsAs(const IsTypeOp& op) {
     case IsTypeOp::Vec:
     case IsTypeOp::Dict:
     case IsTypeOp::Keyset:
-    case IsTypeOp::VArray:
-    case IsTypeOp::DArray:
     case IsTypeOp::ArrLike:
     case IsTypeOp::LegacyArrLike:
     case IsTypeOp::Scalar:
     case IsTypeOp::ClsMeth:
     case IsTypeOp::Func:
-    case IsTypeOp::PHPArr:
     case IsTypeOp::Class:
       return false;
   }
@@ -3018,9 +2917,9 @@ void isTypeStructImpl(ISS& env, SArray inputTS) {
     case TypeStructure::Kind::T_shape:
       return check(ts_type, TDict);
     case TypeStructure::Kind::T_dict:
-      return check(ts_type, TDArr);
+      return check(ts_type);
     case TypeStructure::Kind::T_vec:
-      return check(ts_type, TVArr);
+      return check(ts_type);
     case TypeStructure::Kind::T_nothing:
     case TypeStructure::Kind::T_noreturn:
       return result(TFalse);
@@ -3180,8 +3079,7 @@ void in(ISS& env, const bc::IsLateBoundCls& op) {
 }
 
 void in(ISS& env, const bc::IsTypeStructC& op) {
-  auto const requiredTSType = RuntimeOption::EvalHackArrDVArrs ? BDict : BDArr;
-  if (!topC(env).couldBe(requiredTSType)) {
+  if (!topC(env).couldBe(BDict)) {
     popC(env);
     popC(env);
     return unreachable(env);
@@ -3229,7 +3127,6 @@ void in(ISS& env, const bc::ThrowAsTypeStructException& op) {
 void in(ISS& env, const bc::CombineAndResolveTypeStruct& op) {
   assertx(op.arg1 > 0);
   auto valid = true;
-  auto const requiredTSType = RuntimeOption::EvalHackArrDVArrs ? TDict : TDArr;
   auto const first = tv(topC(env));
   if (first && isValidTSType(*first, false)) {
     auto const ts = first->m_data.parr;
@@ -3237,9 +3134,7 @@ void in(ISS& env, const bc::CombineAndResolveTypeStruct& op) {
     if (op.arg1 == 1) {
       if (canReduceToDontResolve(ts, true)) return reduce(env);
       if (auto const resolved = resolveTSStatically(env, ts, env.ctx.cls)) {
-        return RuntimeOption::EvalHackArrDVArrs
-          ? reduce(env, bc::PopC {}, bc::Dict  { resolved })
-          : reduce(env, bc::PopC {}, bc::Array { resolved });
+        return reduce(env, bc::PopC {}, bc::Dict  { resolved });
       }
     }
     // Optimize double input that needs a single combination and looks of the
@@ -3268,20 +3163,19 @@ void in(ISS& env, const bc::CombineAndResolveTypeStruct& op) {
 
   for (int i = 0; i < op.arg1; ++i) {
     auto const t = popC(env);
-    valid &= t.couldBe(requiredTSType);
+    valid &= t.couldBe(BDict);
   }
   if (!valid) return unreachable(env);
   nothrow(env);
-  push(env, requiredTSType);
+  push(env, TDict);
 }
 
 void in(ISS& env, const bc::RecordReifiedGeneric& op) {
   // TODO(T31677864): implement real optimizations
   auto const t = popC(env);
-  auto const required = RuntimeOption::EvalHackArrDVArrs ? BVec : BVArr;
-  if (!t.couldBe(required)) return unreachable(env);
-  if (t.subtypeOf(required)) nothrow(env);
-  push(env, RuntimeOption::EvalHackArrDVArrs ? TSVec : TSVArr);
+  if (!t.couldBe(BVec)) return unreachable(env);
+  if (t.subtypeOf(BVec)) nothrow(env);
+  push(env, TSVec);
 }
 
 void in(ISS& env, const bc::CheckReifiedGenericMismatch& op) {
@@ -3399,7 +3293,9 @@ void in(ISS& env, const bc::SetS& op) {
     tcls,
     tname,
     val,
-    true
+    true,
+    false,
+    op.subop1 == ReadOnlyOp::ReadOnly
   );
 
   if (merge.throws == TriBool::Yes || merge.adjusted.subtypeOf(BBottom)) {
@@ -3582,7 +3478,7 @@ bool fcallCanSkipRepack(ISS& env, const FCallArgs& fca, const res::Func& func) {
 
   // Repack not needed if unpack args have the correct type.
   auto const unpackArgs = topC(env, fca.hasGenerics() ? 1 : 0);
-  return unpackArgs.subtypeOf(RuntimeOption::EvalHackArrDVArrs ? BVec : BVArr);
+  return unpackArgs.subtypeOf(BVec);
 }
 
 template<class FCallWithFCA>
@@ -3706,15 +3602,6 @@ bool fcallTryFold(
       repl.push_back(bc::PopU {});
     }
     repl.push_back(gen_constant(*v));
-
-    auto const needsRuntimeProvenance =
-      RO::EvalArrayProvenance &&
-      foldableFunc->attrs & AttrProvenanceSkipFrame;
-    if (needsRuntimeProvenance) {
-      repl.push_back(bc::Int { 0 });
-      repl.push_back(bc::TagProvenanceHere {});
-    }
-
     reduce(env, std::move(repl));
     return true;
   }
@@ -3858,7 +3745,7 @@ void in(ISS& env, const bc::FCallFuncD& op) {
 
   if (op.fca.hasGenerics()) {
     auto const tsList = topC(env);
-    if (!tsList.couldBe(RuntimeOption::EvalHackArrDVArrs ? BVec : BVArr)) {
+    if (!tsList.couldBe(BVec)) {
       return unreachable(env);
     }
 
@@ -3966,11 +3853,7 @@ void in(ISS& env, const bc::ResolveRFunc& op) {
 void in(ISS& env, const bc::ResolveObjMethod& op) {
   popC(env);
   popC(env);
-  if (RuntimeOption::EvalHackArrDVArrs) {
-    push(env, TVec);
-  } else {
-    push(env, TVArr);
-  }
+  push(env, TVec);
 }
 
 namespace {
@@ -4052,9 +3935,9 @@ void in(ISS& env, const bc::ResolveClass& op) {
   }
 }
 
-void in(ISS& env, const bc::LazyClass&) {
-  // TODO: T70712990: Specialize HHBBC types for lazy classes
-  push(env, TLazyCls);
+void in(ISS& env, const bc::LazyClass& op) {
+  effect_free(env);
+  push(env, lazyclsval(op.str1));
 }
 
 namespace {
@@ -4180,7 +4063,7 @@ void fcallObjMethodImpl(ISS& env, const Op& op, SString methName, bool dynamic,
 void in(ISS& env, const bc::FCallObjMethodD& op) {
   if (op.fca.hasGenerics()) {
     auto const tsList = topC(env);
-    if (!tsList.couldBe(RuntimeOption::EvalHackArrDVArrs ? BVec : BVArr)) {
+    if (!tsList.couldBe(BVec)) {
       return unreachable(env);
     }
 
@@ -4892,8 +4775,7 @@ void in(ISS& env, const bc::VerifyParamType& op) {
 
 void in(ISS& env, const bc::VerifyParamTypeTS& op) {
   auto const a = topC(env);
-  auto const requiredTSType = RuntimeOption::EvalHackArrDVArrs ? BDict : BDArr;
-  if (!a.couldBe(requiredTSType)) {
+  if (!a.couldBe(BDict)) {
     unreachable(env);
     popC(env);
     return;
@@ -4916,8 +4798,7 @@ void in(ISS& env, const bc::VerifyParamTypeTS& op) {
       resolveTSStatically(env, inputTS->m_data.parr, env.ctx.cls);
     if (resolvedTS && resolvedTS != inputTS->m_data.parr) {
       reduce(env, bc::PopC {});
-      RuntimeOption::EvalHackArrDVArrs ? reduce(env, bc::Dict { resolvedTS })
-                                       : reduce(env, bc::Array { resolvedTS });
+      reduce(env, bc::Dict { resolvedTS });
       reduce(env, bc::VerifyParamTypeTS { op.loc1 });
       return;
     }
@@ -4970,19 +4851,10 @@ void verifyRetImpl(ISS& env, const TCVec& tcs,
       dont_reduce = true;
     }
 
-    // VerifyRetType will convert TClsMeth to TVec/TVArr/TArr implicitly
+    // VerifyRetType will convert TClsMeth to TVec implicitly
     if (stackT.couldBe(BClsMeth) && RO::EvalIsCompatibleClsMethType) {
       if (tcT.couldBe(BVec)) {
         stackT |= TVec;
-        dont_reduce = true;
-      }
-      if (tcT.couldBe(BVArr)) {
-        stackT |= TVArr;
-        dont_reduce = true;
-      }
-      if (tcT.couldBe(BVArr | BDArr)) {
-        stackT |= TVArr;
-        stackT |= TDArr;
         dont_reduce = true;
       }
     }
@@ -5055,8 +4927,7 @@ void in(ISS& env, const bc::VerifyRetTypeC& /*op*/) {
 
 void in(ISS& env, const bc::VerifyRetTypeTS& /*op*/) {
   auto const a = topC(env);
-  auto const requiredTSType = RuntimeOption::EvalHackArrDVArrs ? BDict : BDArr;
-  if (!a.couldBe(requiredTSType)) {
+  if (!a.couldBe(BDict)) {
     unreachable(env);
     popC(env);
     return;
@@ -5078,8 +4949,7 @@ void in(ISS& env, const bc::VerifyRetTypeTS& /*op*/) {
       resolveTSStatically(env, inputTS->m_data.parr, env.ctx.cls);
     if (resolvedTS && resolvedTS != inputTS->m_data.parr) {
       reduce(env, bc::PopC {});
-      RuntimeOption::EvalHackArrDVArrs ? reduce(env, bc::Dict { resolvedTS })
-                                       : reduce(env, bc::Array { resolvedTS });
+      reduce(env, bc::Dict { resolvedTS });
       reduce(env, bc::VerifyRetTypeTS {});
       return;
     }
@@ -5348,15 +5218,6 @@ void in(ISS& env, const bc::ArrayUnmarkLegacy&) {
   implArrayMarkLegacy(env, false);
 }
 
-void in(ISS& env, const bc::TagProvenanceHere&) {
-  auto in = topC(env, 1);
-  auto out = loosen_provenance(loosen_staticness(loosen_values(std::move(in))));
-
-  popC(env);
-  popC(env);
-  push(env, std::move(out));
-}
-
 void in(ISS& env, const bc::CheckProp&) {
   if (env.ctx.cls->attrs & AttrNoOverride) {
     return reduce(env, bc::False {});
@@ -5400,6 +5261,7 @@ void in(ISS& env, const bc::InitProp& op) {
     } else {
       badPropInitialValue(env);
       prop.attrs = (Attr)(prop.attrs & ~AttrInitialSatisfiesTC);
+      continue;
     }
 
     auto const v = tv(t);

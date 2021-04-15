@@ -367,13 +367,24 @@ void emitCreateCl(IRGS& env, uint32_t numParams, uint32_t clsIx) {
 
   auto const closure = gen(env, ConstructClosure, ClassData(cls), live_ctx);
 
+  auto const hasCoeffectsProp = cls->hasClosureCoeffectsProp();
+  if (hasCoeffectsProp) numParams++;
+
+  assertx(cls->numDeclProperties() == numParams);
+
   SSATmp** args = (SSATmp**)alloca(sizeof(SSATmp*) * numParams);
   for (int32_t i = 0; i < numParams; ++i) {
-    args[numParams - i - 1] = popCU(env);
+    auto const slot = numParams - i - 1;
+    if (hasCoeffectsProp && slot == cls->getCoeffectsProp()) {
+      assertx(cls->getCoeffectsProp() == 0);
+      assertx(cls->propSlotToIndex(slot) == slot);
+      args[slot] = curRequiredCoeffects(env);
+    } else {
+      args[slot] = popCU(env);
+    }
   }
 
-  int32_t propId = 0;
-  for (; propId < numParams; ++propId) {
+  for (int32_t propId = 0; propId < numParams; ++propId) {
     gen(
       env,
       StClosureArg,
@@ -383,18 +394,7 @@ void emitCreateCl(IRGS& env, uint32_t numParams, uint32_t clsIx) {
     );
   }
 
-  assertx(cls->numDeclProperties() == numParams);
-
   push(env, closure);
-}
-
-void emitNewDArray(IRGS& env, uint32_t capacity) {
-  assertx(!RuntimeOption::EvalHackArrDVArrs);
-  if (capacity == 0) {
-    push(env, cns(env, ArrayData::CreateDArray()));
-  } else {
-    push(env, gen(env, NewDArray, cns(env, capacity)));
-  }
 }
 
 void emitNewDictArray(IRGS& env, uint32_t capacity) {
@@ -415,15 +415,8 @@ void emitNewKeysetArray(IRGS& env, uint32_t numArgs) {
   push(env, array);
 }
 
-namespace {
-
-ALWAYS_INLINE
-void emitNewPackedLayoutArray(IRGS& env, uint32_t numArgs, Opcode op) {
-  auto const array = gen(
-    env,
-    op,
-    PackedArrayData { numArgs }
-  );
+void emitNewVec(IRGS& env, uint32_t numArgs) {
+  auto const array = gen(env, AllocVec, PackedArrayData { numArgs });
   if (numArgs > RuntimeOption::EvalHHIRMaxInlineInitPackedElements) {
     gen(
       env,
@@ -452,22 +445,7 @@ void emitNewPackedLayoutArray(IRGS& env, uint32_t numArgs, Opcode op) {
   push(env, array);
 }
 
-}
-
-void emitNewVec(IRGS& env, uint32_t numArgs) {
-  emitNewPackedLayoutArray(env, numArgs, AllocVec);
-}
-
-void emitNewVArray(IRGS& env, uint32_t numArgs) {
-  emitNewPackedLayoutArray(env, numArgs, AllocVArray);
-}
-
-namespace {
-
-// `make` is an op that allocates the new struct and stores the values to it.
-// `alloc` is an op that just does the allocation, letting us inline stores.
-void newStructImpl(IRGS& env, const ImmVector& immVec,
-                   Opcode make, Opcode alloc) {
+void emitNewStructDict(IRGS& env, const ImmVector& immVec) {
   auto const numArgs = immVec.size();
   auto const ids = immVec.vec32();
 
@@ -480,13 +458,13 @@ void newStructImpl(IRGS& env, const ImmVector& immVec,
   }
 
   if (numArgs > RuntimeOption::EvalHHIRMaxInlineInitMixedElements) {
-    auto const arr = gen(env, make, extra, sp(env));
+    auto const arr = gen(env, NewStructDict, extra, sp(env));
     discard(env, numArgs);
     push(env, arr);
     return;
   }
 
-  auto const arr = gen(env, alloc, extra);
+  auto const arr = gen(env, AllocStructDict, extra);
   for (int i = 0; i < numArgs; ++i) {
     auto const index = numArgs - i - 1;
     auto const data = KeyedIndexData(index, extra.keys[index]);
@@ -495,25 +473,14 @@ void newStructImpl(IRGS& env, const ImmVector& immVec,
   push(env, arr);
 }
 
-}
-
-void emitNewStructDArray(IRGS& env, const ImmVector& immVec) {
-  assertx(!RuntimeOption::EvalHackArrDVArrs);
-  newStructImpl(env, immVec, NewStructDArray, AllocStructDArray);
-}
-
-void emitNewStructDict(IRGS& env, const ImmVector& immVec) {
-  newStructImpl(env, immVec, NewStructDict, AllocStructDict);
-}
-
 void emitAddElemC(IRGS& env) {
   // This is just to peek at the types; they'll be consumed for real down below
   // and we don't want to constrain it if we're just going to InterpOne.
   auto const kt = topC(env, BCSPRelOffset{1}, DataTypeGeneric)->type();
   auto const at = topC(env, BCSPRelOffset{2}, DataTypeGeneric)->type();
 
-  // This operation is not defined for TKeyset, TVec, and TVArr
-  if (!at.subtypeOfAny(TDict, TDArr)) {
+  // This operation is only defined for dicts.
+  if (!(at <= TDict)) {
     PUNT(AddElemC-BadArr);
   } else if (!kt.subtypeOfAny(TInt, TStr, TCls, TLazyCls)) {
     interpOne(env, at.unspecialize(), 3);
@@ -532,25 +499,14 @@ void emitAddElemC(IRGS& env) {
 
 void emitAddNewElemC(IRGS& env) {
   auto const arrType = topC(env, BCSPRelOffset{1})->type();
-  // This operation is not defined for TDict and TDArr
-  if (!arrType.subtypeOfAny(TKeyset, TVec, TVArr)) {
+  // This operation is only defined for vecs and keysets.
+  if (!arrType.subtypeOfAny(TKeyset, TVec)) {
     return interpOne(env);
   }
   auto const val = popC(env, DataTypeGeneric);
   auto const arr = popC(env);
-  push(
-    env,
-    gen(
-      env,
-      [&]{
-        if (arr->type().subtypeOfAny(TVArr, TVec))  return AddNewElemVec;
-        if (arr->isA(TKeyset))                      return AddNewElemKeyset;
-        always_assert(false);
-      }(),
-      arr,
-      val
-    )
-  );
+  auto const op = arr->isA(TVec) ? AddNewElemVec : AddNewElemKeyset;
+  push(env, gen(env, op, arr, val));
   decRef(env, val);
 }
 
@@ -617,7 +573,7 @@ void emitCheckReifiedGenericMismatch(IRGS& env) {
     return;
   }
   auto const reified = popC(env);
-  if (!reified->isA(RO::EvalHackArrDVArrs ? TVec : TVArr)) {
+  if (!reified->isA(TVec)) {
     PUNT(CheckReifiedGenericMismatch-InvalidTS);
   }
   gen(env, CheckClsReifiedGenericMismatch, ClassData{cls}, reified);

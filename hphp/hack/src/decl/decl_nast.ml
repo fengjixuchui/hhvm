@@ -39,12 +39,12 @@ and fun_decl (ctx : Provider_context.t) (f : Nast.fun_) : Typing_defs.fun_elt =
 and fun_decl_in_env (env : Decl_env.env) ~(is_lambda : bool) (f : Nast.fun_) :
     Typing_defs.fun_elt =
   let ifc_decl = FunUtils.find_policied_attribute f.f_user_attributes in
-  let is_const = FunUtils.has_constfun_attribute f.f_user_attributes in
   let return_disposable =
     FunUtils.has_return_disposable_attribute f.f_user_attributes
   in
+  let ft_readonly_this = Option.is_some f.f_readonly_this in
   let params = FunUtils.make_params env ~is_lambda f.f_params in
-  let capability =
+  let (_pos, capability) =
     Decl_hint.aast_contexts_to_decl_capability env f.f_ctxs (fst f.f_name)
   in
   let ret_ty =
@@ -79,7 +79,7 @@ and fun_decl_in_env (env : Decl_env.env) ~(is_lambda : bool) (f : Nast.fun_) :
   let fe_pos = Decl_env.make_decl_pos env @@ fst f.f_name in
   let fe_type =
     mk
-      ( Reason.Rwitness_from_decl (fst f.f_name),
+      ( Reason.Rwitness_from_decl fe_pos,
         Tfun
           {
             ft_arity = arity;
@@ -93,8 +93,7 @@ and fun_decl_in_env (env : Decl_env.env) ~(is_lambda : bool) (f : Nast.fun_) :
                 f.f_fun_kind
                 ~return_disposable
                 ~returns_readonly:(Option.is_some f.f_readonly_ret)
-                ~readonly_this:false
-                ~const:is_const;
+                ~readonly_this:ft_readonly_this;
             (* TODO: handle const attribute *)
             ft_ifc_decl = ifc_decl;
           } )
@@ -124,7 +123,7 @@ let record_def_decl (ctx : Provider_context.t) (rd : Nast.record_def) :
   let env =
     {
       Decl_env.mode = FileInfo.Mstrict;
-      droot = Some (Typing_deps.Dep.RecordDef (Ast_defs.get_id rd_name));
+      droot = Some (Typing_deps.Dep.Type (Ast_defs.get_id rd_name));
       ctx;
     }
   in
@@ -176,7 +175,7 @@ and typedef_decl (ctx : Provider_context.t) (tdef : Nast.typedef) :
   } =
     tdef
   in
-  let dep = Typing_deps.Dep.Class tid in
+  let dep = Typing_deps.Dep.Type tid in
   let env = { Decl_env.mode; droot = Some dep; ctx } in
   let td_tparams = List.map params (FunUtils.type_param env) in
   let td_type = Decl_hint.hint env concrete_type in

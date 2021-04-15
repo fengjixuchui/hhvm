@@ -226,8 +226,8 @@ void beginInlining(IRGS& env,
   auto const numArgsInclUnpack = fca.numArgs + (fca.hasUnpack() ? 1U : 0U);
 
   // For cost calculation, use the most permissive coeffect
-  auto const coeffects =
-    curFunc(env) ? curCoeffects(env) : RuntimeCoeffects::none();
+  auto const coeffects = curFunc(env)
+    ? curCoeffects(env) : cns(env, RuntimeCoeffects::none().value());
 
   auto const callFlags = cns(env, CallFlags(
     fca.hasGenerics(),
@@ -235,13 +235,14 @@ void beginInlining(IRGS& env,
     returnTarget.asyncEagerOffset != kInvalidOffset,
     0, // call offset unused by the logic below
     0,
-    coeffects
+    RuntimeCoeffects::none() // coeffects may not be known statically
   ).value());
 
   // Callee checks and input initialization.
   emitCalleeGenericsChecks(env, target, callFlags, fca.hasGenerics());
   emitCalleeDynamicCallChecks(env, target, callFlags);
-  emitCalleeCoeffectChecks(env, target, callFlags, numArgsInclUnpack, ctx);
+  emitCalleeCoeffectChecks(env, target, callFlags, coeffects,
+                           numArgsInclUnpack, ctx);
   emitCalleeImplicitContextChecks(env, target);
   emitInitFuncInputs(env, target, numArgsInclUnpack);
 
@@ -287,10 +288,12 @@ void beginInlining(IRGS& env,
   }();
 
   auto const numTotalInputs =
-    target->numParams() + (target->hasReifiedGenerics() ? 1U : 0U);
+    target->numParams()
+    + (target->hasReifiedGenerics() ? 1U : 0U)
+    + (target->hasCoeffectsLocal() ? 1U : 0U);
   jit::vector<SSATmp*> inputs{numTotalInputs};
   for (auto i = 0; i < numTotalInputs; ++i) {
-    inputs[numTotalInputs - i - 1] = popC(env);
+    inputs[numTotalInputs - i - 1] = popCU(env);
   }
 
   // NB: Now that we've popped the callee's arguments off the stack
@@ -456,19 +459,10 @@ void pushInlineFrame(IRGS& env, const InlineFrame& inlineFrame) {
 InlineFrame implInlineReturn(IRGS& env, bool suspend) {
   assertx(resumeMode(env) == ResumeMode::None);
 
-  auto const& fs = env.irb->fs();
-
-  // The offset of our caller's FP relative to our own.
-  auto const callerFPOff =
-    // Offset of the (unchanged) vmsp relative to our fp...
-    - fs.irSPOff()
-    // ...plus the offset of our parent's fp relative to vmsp.
-    + FPInvOffset{0}.to<IRSPRelOffset>(fs.callerIRSPOff()).offset;
-
   auto const calleeFp = fp(env);
   auto const prevFp = calleeFp->inst()->src(1);
   // Return to the caller function.
-  gen(env, InlineReturn, FPRelOffsetData { callerFPOff }, fp(env), prevFp);
+  gen(env, InlineReturn, fp(env), prevFp);
   gen(env, EndInlining, calleeFp);
 
   return popInlineFrame(env);

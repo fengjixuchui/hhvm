@@ -121,7 +121,8 @@ static Array HHVM_FUNCTION(get_defined_constants, bool categorize /*=false */) {
 }
 
 static String HHVM_FUNCTION(get_include_path) {
-  return IniSetting::Get("include_path");
+  static StaticString s_include_path("include_path");
+  return IniSetting::Get(s_include_path);
 }
 
 static void HHVM_FUNCTION(restore_include_path) {
@@ -470,7 +471,7 @@ static Array HHVM_FUNCTION(getopt, const String& options,
     free_longopts(opt_vec);
   };
 
-  Array ret = Array::CreateDArray();
+  Array ret = Array::CreateDict();
 
   Variant val;
   int optchr = 0;

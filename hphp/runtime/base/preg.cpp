@@ -31,9 +31,10 @@
 #include "hphp/runtime/base/container-functions.h"
 #include "hphp/runtime/base/execution-context.h"
 #include "hphp/runtime/base/ini-setting.h"
+#include "hphp/runtime/base/init-fini-node.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/string-util.h"
-#include "hphp/runtime/base/init-fini-node.h"
+#include "hphp/runtime/base/tv-uncounted.h"
 #include "hphp/runtime/base/zend-functions.h"
 #include "hphp/runtime/vm/debug/debug.h"
 #include "hphp/runtime/vm/treadmill.h"
@@ -97,7 +98,7 @@ private:
     }
   };
 
-  typedef folly::AtomicHashArray<const StringData*, const pcre_cache_entry*,
+  typedef folly::AtomicHashArray<StringData*, const pcre_cache_entry*,
           string_data_hash, ahm_string_data_same> StaticCache;
   typedef ConcurrentLRUCache<LRUCacheKey, EntryPtr,
           LRUCacheKey::HashCompare> LRUCache;
@@ -216,7 +217,7 @@ public:
   void reinit(CacheKind kind);
   bool find(Accessor& accessor, const StringData* key,
             TempKeyCache& keyCache);
-  void insert(Accessor& accessor, const StringData* regex,
+  void insert(Accessor& accessor, StringData* regex,
               TempKeyCache& keyCache, const pcre_cache_entry* ent);
   void dump(folly::File& file);
   size_t size() const;
@@ -372,13 +373,11 @@ void PCRECache::DestroyStatic(StaticCache* cache) {
   // std::unordered_map.  If you change the cache type make sure that property
   // holds or fix this function.
   static_assert(std::is_same<PCRECache::StaticCache,
-      folly::AtomicHashArray<const StringData*, const pcre_cache_entry*,
+      folly::AtomicHashArray<StringData*, const pcre_cache_entry*,
                              string_data_hash, ahm_string_data_same>>::value,
       "StaticCache must be an AtomicHashArray or this destructor is wrong.");
   for (auto& it : *cache) {
-    if (it.first->isUncounted()) {
-      StringData::ReleaseUncounted(it.first);
-    }
+    DecRefUncountedString(it.first);
     delete it.second;
   }
   StaticCache::destroy(cache);
@@ -467,7 +466,7 @@ void PCRECache::clearStatic() {
 
 void PCRECache::insert(
   Accessor& accessor,
-  const StringData* regex,
+  StringData* regex,
   TempKeyCache& keyCache,
   const pcre_cache_entry* ent
 ) {
@@ -480,17 +479,16 @@ void PCRECache::insert(
           clearStatic();
         }
         auto const cache = m_staticCache.load(std::memory_order_acquire);
-        auto const key =
-          regex->isStatic() ||
-          (regex->isUncounted() && regex->uncountedIncRef()) ?
-          regex : StringData::MakeUncounted(regex->slice());
+        auto const key = !regex->persistentIncRef()
+          ? StringData::MakeUncounted(regex->slice())
+          : regex;
         auto pair = cache->insert(StaticCachePair(key, ent));
         if (pair.second) {
           // Inserted, container owns the pointer
           accessor = ent;
         } else {
           // Not inserted, caller needs to own the pointer
-          if (regex->isUncounted()) StringData::ReleaseUncounted(key);
+          DecRefUncountedString(key);
           accessor = EntryPtr(ent);
         }
       }
@@ -694,7 +692,7 @@ static bool get_pcre_fullinfo(pcre_cache_entry* pce) {
 
 static bool
 pcre_get_compiled_regex_cache(PCRECache::Accessor& accessor,
-                              const StringData* regex) {
+                              StringData* regex) {
   PCRECache::TempKeyCache tkc;
 
   /* Try to lookup the cached regex entry, and if successful, just pass
@@ -1030,7 +1028,7 @@ Variant preg_grep(const String& pattern, const Array& input, int flags /* = 0 */
   const bool hackArrOutput = flags & PREG_FB_HACK_ARRAYS;
 
   /* Initialize return array */
-  auto ret = hackArrOutput ? Array::CreateDict() : Array::CreateDArray();
+  auto ret = hackArrOutput ? Array::CreateDict() : Array::CreateDict();
 
   /* Go through the input array */
   bool invert = (flags & PREG_GREP_INVERT);
@@ -1074,7 +1072,7 @@ Variant preg_grep(const String& pattern, const Array& input, int flags /* = 0 */
 
 ///////////////////////////////////////////////////////////////////////////////
 
-static Variant preg_match_impl(const StringData* pattern,
+static Variant preg_match_impl(StringData* pattern,
                                const StringData* subject,
                                Variant* subpats, int flags, int start_offset,
                                bool global) {
@@ -1090,7 +1088,7 @@ static Variant preg_match_impl(const StringData* pattern,
   pcre_extra extra;
   init_local_extra(&extra, pce->extra);
   if (subpats) {
-    *subpats = hackArrOutput ? Array::CreateDict() : Array::CreateDArray();
+    *subpats = hackArrOutput ? Array::CreateDict() : Array::CreateDict();
   }
   int exec_options = 0;
 
@@ -1138,11 +1136,11 @@ static Variant preg_match_impl(const StringData* pattern,
   /* Allocate match sets array and initialize the values. */
 
   /* An array of sets of matches for each subpattern after a global match */
-  auto match_sets = hackArrOutput ? Array::CreateDict() : Array::CreateDArray();
+  auto match_sets = hackArrOutput ? Array::CreateDict() : Array::CreateDict();
   if (global && subpats_order == PREG_PATTERN_ORDER) {
     for (int i = 0; i < num_subpats; i++) {
       match_sets.set(i,
-        hackArrOutput ? Array::CreateDict() : Array::CreateDArray());
+        hackArrOutput ? Array::CreateDict() : Array::CreateDict());
     }
   }
 
@@ -1223,7 +1221,7 @@ static Variant preg_match_impl(const StringData* pattern,
           } else {
             auto result_set = hackArrOutput
               ? Array::CreateDict()
-              : Array::CreateDArray();
+              : Array::CreateDict();
 
             /* Add all the subpatterns to it */
             for (i = 0; i < count; i++) {
@@ -1333,7 +1331,7 @@ Variant preg_match(const String& pattern, const String& subject,
   return preg_match(pattern.get(), subject.get(), matches, flags, offset);
 }
 
-Variant preg_match(const StringData* pattern, const StringData* subject,
+Variant preg_match(StringData* pattern, const StringData* subject,
                    Variant* matches /* = nullptr */, int flags /* = 0 */,
                    int offset /* = 0 */) {
   return preg_match_impl(pattern, subject, matches, flags, offset, false);
@@ -1345,7 +1343,7 @@ Variant preg_match_all(const String& pattern, const String& subject,
   return preg_match_all(pattern.get(), subject.get(), matches, flags, offset);
 }
 
-Variant preg_match_all(const StringData* pattern, const StringData* subject,
+Variant preg_match_all(StringData* pattern, const StringData* subject,
                        Variant* matches /* = nullptr */,
                        int flags /* = 0 */, int offset /* = 0 */) {
   return preg_match_impl(pattern, subject, matches, flags, offset, true);
@@ -1356,7 +1354,7 @@ Variant preg_match_all(const StringData* pattern, const StringData* subject,
 static String preg_do_repl_func(const Variant& function, const String& subject,
                                 int* offsets, const char* const* subpat_names,
                                 int count) {
-  Array subpats = Array::CreateDArray();
+  Array subpats = Array::CreateDict();
   for (int i = 0; i < count; i++) {
     auto off1 = offsets[i<<1];
     auto off2 = offsets[(i<<1)+1];
@@ -1620,7 +1618,7 @@ static Variant php_replace_in_subject(const Variant& regex, const Variant& repla
   }
 
   if (callable || !replace.isArray()) {
-    Array arr = regex.toDArray();
+    Array arr = regex.toDict();
     for (ArrayIter iterRegex(arr); iterRegex; ++iterRegex) {
       String regex_entry = iterRegex.second().toString();
       auto ret = php_pcre_replace(regex_entry, subject, replace, callable,
@@ -1635,8 +1633,8 @@ static Variant php_replace_in_subject(const Variant& regex, const Variant& repla
     return preg_return_no_error(std::move(subject));
   }
 
-  Array arrReplace = replace.toDArray();
-  Array arrRegex = regex.toDArray();
+  Array arrReplace = replace.toDict();
+  Array arrRegex = regex.toDict();
   ArrayIter iterReplace(arrReplace);
   for (ArrayIter iterRegex(arrRegex); iterRegex; ++iterRegex) {
     String regex_entry = iterRegex.second().toString();
@@ -1683,8 +1681,8 @@ Variant preg_replace_impl(const Variant& pattern, const Variant& replacement,
     return preg_return_no_error(std::move(ret));
   }
 
-  Array return_value = Array::CreateDArray();
-  Array arrSubject = subject.toDArray();
+  Array return_value = Array::CreateDict();
+  Array arrSubject = subject.toDict();
   for (ArrayIter iter(arrSubject); iter; ++iter) {
     auto old_replace_count = replace_count;
     String subject_entry = iter.second().toString();
@@ -1762,7 +1760,7 @@ Variant preg_split(const String& pattern, const String& subject,
   const bool hackArrOutput = flags & PREG_FB_HACK_ARRAYS;
 
   // Get next piece if no limit or limit not yet reached and something matched
-  Array result = hackArrOutput ? Array::CreateDict() : Array::CreateDArray();
+  Array result = hackArrOutput ? Array::CreateDict() : Array::CreateDict();
   int g_notempty = 0;   /* If the match should not be empty */
   int utf8_check = 0;
   PCRECache::Accessor bump_accessor;
@@ -2036,7 +2034,7 @@ Variant php_split(const String& spliton, const String& str, int count,
     return false;
   }
 
-  Array return_value = Array::CreateVArray();
+  Array return_value = Array::CreateVec();
   regmatch_t subs[1];
 
   /* churn through str, generating array entries as we go */

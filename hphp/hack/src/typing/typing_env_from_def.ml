@@ -30,13 +30,17 @@ let fun_env ?origin ctx f =
 let get_self_from_c c =
   let tparams =
     List.map c.c_tparams (fun { tp_name = (p, s); _ } ->
-        mk (Reason.Rwitness_from_decl p, Tgeneric (s, [])))
+        mk
+          ( Reason.Rwitness_from_decl (Pos_or_decl.of_raw_pos p),
+            Tgeneric (s, []) ))
   in
-  mk (Reason.Rwitness_from_decl (fst c.c_name), Tapply (c.c_name, tparams))
+  let (name_pos, name) = c.c_name in
+  let name_pos = Pos_or_decl.of_raw_pos name_pos in
+  mk (Reason.Rwitness_from_decl name_pos, Tapply ((name_pos, name), tparams))
 
 let class_env ?origin ctx c =
   let file = Pos.filename (fst c.c_name) in
-  let droot = Some (Typing_deps.Dep.Class (snd c.c_name)) in
+  let droot = Some (Typing_deps.Dep.Type (snd c.c_name)) in
   let env = Env.empty ?origin ctx file ~mode:c.c_mode ~droot in
   (* Set up self identifier and type *)
   let self_id = snd c.c_name in
@@ -53,7 +57,7 @@ let class_env ?origin ctx c =
     | Ast_defs.Cabstract
     | Ast_defs.Ctrait
     | Ast_defs.Cnormal ->
-      Typing_phase.localize_with_self env self
+      Typing_phase.localize_with_self env ~ignore_errors:true self
   in
   let env = Env.set_self env self_id self_ty in
   (* In order to type-check a class, we need to know what "parent"
@@ -76,13 +80,13 @@ let class_env ?origin ctx c =
 
 let record_def_env ?origin ctx rd =
   let file = Pos.filename (fst rd.rd_name) in
-  let droot = Some (Typing_deps.Dep.Class (snd rd.rd_name)) in
+  let droot = Some (Typing_deps.Dep.Type (snd rd.rd_name)) in
   let env = Env.empty ?origin ctx file ~droot in
   env
 
 let typedef_env ?origin ctx t =
   let file = Pos.filename (fst t.t_kind) in
-  let droot = Some (Typing_deps.Dep.Class (snd t.t_name)) in
+  let droot = Some (Typing_deps.Dep.Type (snd t.t_name)) in
   let env = Env.empty ?origin ctx file ~mode:t.t_mode ~droot in
   env
 

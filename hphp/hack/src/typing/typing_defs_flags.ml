@@ -34,8 +34,6 @@ let ft_flags_returns_mutable    = 1 lsl 1
 
 let ft_flags_returns_void_to_rx = 1 lsl 2
 
-let ft_flags_is_coroutine       = 1 lsl 3
-
 let ft_flags_async              = 1 lsl 4
 
 let ft_flags_generator          = 1 lsl 5
@@ -57,8 +55,6 @@ let ft_flags_returns_readonly = 1 lsl 10
 
 let ft_flags_readonly_this = 1 lsl 11
 
-let ft_flags_is_const = 1 lsl 12
-
 (* Class element flags *)
 let ce_flags_abstract            = 1 lsl 0
 
@@ -75,6 +71,8 @@ let ce_flags_const               = 1 lsl 6
 let ce_flags_lateinit            = 1 lsl 7
 
 let ce_flags_dynamicallycallable = 1 lsl 8
+
+let ce_flags_sound_dynamic_callable = 1 lsl 9
 
 (* Three bits used to encode optional XHP attr.
  * Set 1<<10 (0x400) if xa_has_default=true
@@ -111,5 +109,3 @@ let fp_flags_atom              = 1 lsl 5
 
 (* 6 and 7 are taken by mutability parameters above *)
 let fp_flags_readonly          = 1 lsl 8
-
-let fp_flags_const_function = 1 lsl 9

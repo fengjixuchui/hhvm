@@ -92,6 +92,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "as-slice"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "45403b49e3954a4b8428a0ac21a4b7afadccf92bfd96273f1a58cd4812496ae0"
+dependencies = [
+ "generic-array 0.12.4",
+ "generic-array 0.13.3",
+ "generic-array 0.14.4",
+ "stable_deref_trait",
+]
+
+[[package]]
 name = "ast_body"
 version = "0.0.0"
 dependencies = [
@@ -107,7 +119,7 @@ dependencies = [
  "env",
  "hhbc_ast_rust",
  "hhbc_string_utils_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "naming_special_names_rust",
  "oxidized",
 ]
@@ -199,7 +211,7 @@ dependencies = [
  "block-padding",
  "byte-tools",
  "byteorder",
- "generic-array",
+ "generic-array 0.12.4",
 ]
 
 [[package]]
@@ -234,6 +246,54 @@ name = "byte-tools"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3b5ca7a04898ad4bcd41c90c5285445ff5b791899bb1b0abdd2a2aa791211d7"
+
+[[package]]
+name = "bytecode_printer"
+version = "0.0.0"
+dependencies = [
+ "bstr",
+ "bumpalo",
+ "core_utils_rust",
+ "escaper",
+ "hhbc_by_ref_ast_class_expr",
+ "hhbc_by_ref_ast_scope",
+ "hhbc_by_ref_emit_type_hint",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_hhas_adata",
+ "hhbc_by_ref_hhas_attribute",
+ "hhbc_by_ref_hhas_body",
+ "hhbc_by_ref_hhas_class",
+ "hhbc_by_ref_hhas_coeffects",
+ "hhbc_by_ref_hhas_constant",
+ "hhbc_by_ref_hhas_function",
+ "hhbc_by_ref_hhas_method",
+ "hhbc_by_ref_hhas_param",
+ "hhbc_by_ref_hhas_pos",
+ "hhbc_by_ref_hhas_program",
+ "hhbc_by_ref_hhas_property",
+ "hhbc_by_ref_hhas_record_def",
+ "hhbc_by_ref_hhas_symbol_refs",
+ "hhbc_by_ref_hhas_type",
+ "hhbc_by_ref_hhas_type_const",
+ "hhbc_by_ref_hhas_typedef",
+ "hhbc_by_ref_hhbc_ast",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_hhbc_string_utils",
+ "hhbc_by_ref_instruction_sequence",
+ "hhbc_by_ref_iterator",
+ "hhbc_by_ref_label",
+ "hhbc_by_ref_local",
+ "hhbc_by_ref_options",
+ "hhbc_by_ref_runtime",
+ "indexmap",
+ "itertools",
+ "lazy_static",
+ "naming_special_names_rust",
+ "ocaml_helper",
+ "oxidized",
+ "regex",
+ "thiserror",
+]
 
 [[package]]
 name = "byteorder"
@@ -285,7 +345,7 @@ dependencies = [
  "hhas_coeffects",
  "hhbc_id_rust",
  "hhbc_string_utils_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "itertools",
  "naming_special_names_rust",
  "ocamlrep",
@@ -305,37 +365,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "compile_ffi"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "atty",
- "compile_rust",
- "libc",
- "log",
- "ocamlrep",
- "ocamlrep_derive",
- "ocamlrep_ocamlpool",
- "oxidized",
- "parser_core_types",
- "serde_json",
- "stack_limit",
-]
-
-[[package]]
-name = "compile_rust"
+name = "compile"
 version = "0.0.0"
 dependencies = [
  "aast_parser",
  "anyhow",
  "bitflags",
  "elaborate_namespaces_visitor",
- "emit_program_rust",
+ "emit_program",
  "env",
- "hhas_program_rust",
+ "hhas_program",
  "hhbc_ast_rust",
  "hhbc_hhas_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "itertools",
  "ocamlrep",
  "ocamlrep_derive",
@@ -344,6 +386,25 @@ dependencies = [
  "parser_core_types",
  "profile_rust",
  "rewrite_program",
+ "stack_limit",
+]
+
+[[package]]
+name = "compile_ffi"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "atty",
+ "compile",
+ "hhbc_by_ref_compile",
+ "libc",
+ "log",
+ "ocamlrep",
+ "ocamlrep_derive",
+ "ocamlrep_ocamlpool",
+ "oxidized",
+ "parser_core_types",
+ "serde_json",
  "stack_limit",
 ]
 
@@ -552,6 +613,7 @@ dependencies = [
  "ocamlrep_ocamlpool",
  "once_cell",
  "oxidized",
+ "typing_deps_hash",
 ]
 
 [[package]]
@@ -566,7 +628,7 @@ version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3d0c8c8752312f9713efd397ff63acb9f85585afbf179282e720e7704954dd5"
 dependencies = [
- "generic-array",
+ "generic-array 0.12.4",
 ]
 
 [[package]]
@@ -627,7 +689,7 @@ dependencies = [
  "hhbc_ast_rust",
  "hhbc_id_rust",
  "hhbc_string_utils_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "options",
  "runtime",
 ]
@@ -643,7 +705,7 @@ dependencies = [
  "escaper",
  "hhas_attribute_rust",
  "hhbc_id_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "naming_special_names_rust",
  "oxidized",
  "runtime",
@@ -654,6 +716,7 @@ name = "emit_body_rust"
 version = "0.0.0"
 dependencies = [
  "ast_body",
+ "ast_class_expr_rust",
  "ast_scope_rust",
  "bitflags",
  "bstr",
@@ -673,7 +736,7 @@ dependencies = [
  "hhbc_id_rust",
  "hhbc_string_utils_rust",
  "indexmap",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "iterator",
  "itertools",
  "label_rewriter_rust",
@@ -722,11 +785,10 @@ dependencies = [
  "hhbc_ast_rust",
  "hhbc_id_rust",
  "hhbc_string_utils_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "label_rust",
  "local",
  "naming_special_names_rust",
- "options",
  "oxidized",
  "runtime",
 ]
@@ -745,7 +807,7 @@ dependencies = [
  "hhas_pos_rust",
  "hhbc_id_rust",
  "hhbc_string_utils_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "oxidized",
 ]
 
@@ -767,7 +829,7 @@ dependencies = [
  "hhbc_id_rust",
  "hhbc_string_utils_rust",
  "indexmap",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "itertools",
  "label_rust",
  "lazy_static",
@@ -786,7 +848,7 @@ version = "0.0.0"
 dependencies = [
  "emit_pos_rust",
  "hhbc_ast_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "oxidized",
 ]
 
@@ -797,7 +859,7 @@ dependencies = [
  "emit_attribute_rust",
  "env",
  "hhas_attribute_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "itertools",
  "oxidized",
 ]
@@ -823,7 +885,7 @@ dependencies = [
  "hhbc_ast_rust",
  "hhbc_id_rust",
  "hhbc_string_utils_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "itertools",
  "local",
  "naming_special_names_rust",
@@ -839,7 +901,7 @@ version = "0.0.0"
 dependencies = [
  "emit_fatal_rust",
  "hhas_param_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "local",
  "oxidized",
 ]
@@ -867,10 +929,9 @@ dependencies = [
  "hhbc_ast_rust",
  "hhbc_id_rust",
  "hhbc_string_utils_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "local",
  "naming_special_names_rust",
- "ocamlrep",
  "options",
  "oxidized",
  "runtime",
@@ -893,7 +954,7 @@ dependencies = [
  "hhas_pos_rust",
  "hhbc_id_rust",
  "hhbc_string_utils_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "itertools",
  "naming_special_names_rust",
  "ocamlrep",
@@ -911,7 +972,7 @@ dependencies = [
  "emit_param_rust",
  "env",
  "hhas_body_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "local",
  "oxidized",
 ]
@@ -930,7 +991,7 @@ dependencies = [
  "hhas_param_rust",
  "hhas_type",
  "hhbc_string_utils_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "local",
  "options",
  "oxidized",
@@ -940,12 +1001,12 @@ dependencies = [
 name = "emit_pos_rust"
 version = "0.0.0"
 dependencies = [
- "instruction_sequence_rust",
+ "instruction_sequence",
  "oxidized",
 ]
 
 [[package]]
-name = "emit_program_rust"
+name = "emit_program"
 version = "0.0.0"
 dependencies = [
  "bitflags",
@@ -958,9 +1019,9 @@ dependencies = [
  "emit_symbol_refs_rust",
  "emit_typedef_rust",
  "env",
- "hhas_program_rust",
+ "hhas_program",
  "hhbc_ast_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "ocamlrep",
  "oxidized",
 ]
@@ -981,7 +1042,7 @@ dependencies = [
  "hhbc_ast_rust",
  "hhbc_id_rust",
  "hhbc_string_utils_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "naming_special_names_rust",
  "oxidized",
  "runtime",
@@ -1000,7 +1061,7 @@ dependencies = [
  "hhas_type",
  "hhbc_id_rust",
  "hhbc_string_utils_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "oxidized",
 ]
 
@@ -1020,7 +1081,7 @@ version = "0.0.0"
 dependencies = [
  "hhbc_id_rust",
  "hhbc_string_utils_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "naming_special_names_rust",
  "options",
  "oxidized",
@@ -1035,7 +1096,7 @@ dependencies = [
  "hhas_type",
  "hhbc_id_rust",
  "hhbc_string_utils_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "naming_special_names_rust",
  "oxidized",
 ]
@@ -1053,7 +1114,7 @@ dependencies = [
  "hhas_type",
  "hhas_typedef_rust",
  "hhbc_id_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "oxidized",
  "runtime",
 ]
@@ -1070,7 +1131,7 @@ dependencies = [
  "hhas_xhp_attribute_rust",
  "hhbc_id_rust",
  "hhbc_string_utils_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "naming_special_names_rust",
  "oxidized",
 ]
@@ -1203,11 +1264,30 @@ dependencies = [
 
 [[package]]
 name = "generic-array"
-version = "0.12.3"
+version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c68f0274ae0e023facc3c97b2e00f076be70e254bc851d972503b328db79b2ec"
+checksum = "ffdf9f34f1447443d37393cc6c2b8313aebddcd96906caf34e54c68d8e57d7bd"
 dependencies = [
  "typenum",
+]
+
+[[package]]
+name = "generic-array"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f797e67af32588215eaaab8327027ee8e71b9dd0b2b26996aedf20c030fce309"
+dependencies = [
+ "typenum",
+]
+
+[[package]]
+name = "generic-array"
+version = "0.14.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "501466ecc8a30d1d3b7fc9229b122b2ce8ed6e9d9223f1138d4babb253e51817"
+dependencies = [
+ "typenum",
+ "version_check",
 ]
 
 [[package]]
@@ -1248,7 +1328,25 @@ version = "3.49.0"
 dependencies = [
  "aast_parser_ffi",
  "positioned_by_ref_parser_ffi",
+ "positioned_full_trivia_parser_ffi",
  "verify_parser_ffi",
+]
+
+[[package]]
+name = "hash"
+version = "0.0.0"
+dependencies = [
+ "indexmap",
+ "rustc-hash",
+]
+
+[[package]]
+name = "hash32"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4041af86e63ac4298ce40e5cca669066e75b6f1aa3390fe2561ffa5e1d9f4cc"
+dependencies = [
+ "byteorder",
 ]
 
 [[package]]
@@ -1258,6 +1356,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7afe4a420e3fe79967a00898cc1f4db7c8a49a9333a29f8a4bd76a253d5cd04"
 dependencies = [
  "ahash",
+]
+
+[[package]]
+name = "heapless"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "634bd4d29cbf24424d0a4bfcbf80c6960129dc24424752a7d1d1390607023422"
+dependencies = [
+ "as-slice",
+ "generic-array 0.14.4",
+ "hash32",
+ "stable_deref_trait",
 ]
 
 [[package]]
@@ -1314,8 +1424,9 @@ dependencies = [
  "anyhow",
  "atty",
  "bumpalo",
- "compile_rust",
+ "compile",
  "direct_decl_parser",
+ "hhbc_by_ref_compile",
  "multifile_rust",
  "ocamlrep",
  "options",
@@ -1393,10 +1504,9 @@ dependencies = [
 name = "hhas_body_rust"
 version = "0.0.0"
 dependencies = [
- "env",
  "hhas_param_rust",
  "hhas_type",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "oxidized",
 ]
 
@@ -1436,7 +1546,7 @@ dependencies = [
  "emit_expression_rust",
  "env",
  "hhbc_id_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "oxidized",
  "runtime",
 ]
@@ -1486,7 +1596,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "hhas_program_rust"
+name = "hhas_program"
 version = "0.0.0"
 dependencies = [
  "hhas_adata_rust",
@@ -1509,7 +1619,7 @@ dependencies = [
  "hhas_attribute_rust",
  "hhas_type",
  "hhbc_id_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "oxidized",
  "runtime",
 ]
@@ -1573,6 +1683,1016 @@ dependencies = [
 ]
 
 [[package]]
+name = "hhbc_by_ref_adata_state"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_hhas_adata",
+ "hhbc_by_ref_runtime",
+]
+
+[[package]]
+name = "hhbc_by_ref_ast_body"
+version = "0.0.0"
+dependencies = [
+ "itertools",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_ast_class_expr"
+version = "0.0.0"
+dependencies = [
+ "hhbc_by_ref_ast_scope",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_hhbc_ast",
+ "hhbc_by_ref_hhbc_string_utils",
+ "hhbc_by_ref_instruction_sequence",
+ "naming_special_names_rust",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_ast_constant_folder"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_ast_class_expr",
+ "hhbc_by_ref_ast_scope",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_hhbc_string_utils",
+ "hhbc_by_ref_options",
+ "hhbc_by_ref_runtime",
+ "indexmap",
+ "itertools",
+ "naming_special_names_rust",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_ast_scope"
+version = "0.0.0"
+dependencies = [
+ "hhbc_by_ref_hhas_coeffects",
+ "itertools",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_closure_convert"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hash",
+ "hhbc_by_ref_ast_body",
+ "hhbc_by_ref_ast_constant_folder",
+ "hhbc_by_ref_ast_scope",
+ "hhbc_by_ref_decl_vars",
+ "hhbc_by_ref_emit_fatal",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_global_state",
+ "hhbc_by_ref_hhas_coeffects",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_hhbc_string_utils",
+ "hhbc_by_ref_instruction_sequence",
+ "hhbc_by_ref_options",
+ "hhbc_by_ref_unique_id_builder",
+ "hhbc_by_ref_unique_list",
+ "itertools",
+ "naming_special_names_rust",
+ "ocamlrep",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_compile"
+version = "0.0.0"
+dependencies = [
+ "aast_parser",
+ "anyhow",
+ "bitflags",
+ "bumpalo",
+ "bytecode_printer",
+ "elaborate_namespaces_visitor",
+ "hhbc_by_ref_emit_program",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_hhas_program",
+ "hhbc_by_ref_hhbc_ast",
+ "hhbc_by_ref_instruction_sequence",
+ "hhbc_by_ref_options",
+ "hhbc_by_ref_rewrite_program",
+ "itertools",
+ "ocamlrep",
+ "ocamlrep_derive",
+ "oxidized",
+ "parser_core_types",
+ "profile_rust",
+ "stack_limit",
+]
+
+[[package]]
+name = "hhbc_by_ref_decl_vars"
+version = "0.0.0"
+dependencies = [
+ "hash",
+ "hhbc_by_ref_ast_body",
+ "hhbc_by_ref_hhas_param",
+ "hhbc_by_ref_unique_id_builder",
+ "hhbc_by_ref_unique_list",
+ "naming_special_names_rust",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_emit_adata"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_adata_state",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_hhas_adata",
+ "hhbc_by_ref_hhbc_ast",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_hhbc_string_utils",
+ "hhbc_by_ref_instruction_sequence",
+ "hhbc_by_ref_options",
+ "hhbc_by_ref_runtime",
+]
+
+[[package]]
+name = "hhbc_by_ref_emit_attribute"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "escaper",
+ "hhbc_by_ref_ast_constant_folder",
+ "hhbc_by_ref_emit_expression",
+ "hhbc_by_ref_emit_fatal",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_hhas_attribute",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_instruction_sequence",
+ "hhbc_by_ref_runtime",
+ "naming_special_names_rust",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_emit_body"
+version = "0.0.0"
+dependencies = [
+ "bitflags",
+ "bstr",
+ "bumpalo",
+ "hash",
+ "hhbc_by_ref_ast_body",
+ "hhbc_by_ref_ast_class_expr",
+ "hhbc_by_ref_ast_scope",
+ "hhbc_by_ref_decl_vars",
+ "hhbc_by_ref_emit_adata",
+ "hhbc_by_ref_emit_expression",
+ "hhbc_by_ref_emit_fatal",
+ "hhbc_by_ref_emit_param",
+ "hhbc_by_ref_emit_pos",
+ "hhbc_by_ref_emit_type_hint",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_generator",
+ "hhbc_by_ref_hhas_body",
+ "hhbc_by_ref_hhas_param",
+ "hhbc_by_ref_hhas_type",
+ "hhbc_by_ref_hhbc_ast",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_hhbc_string_utils",
+ "hhbc_by_ref_instruction_sequence",
+ "hhbc_by_ref_iterator",
+ "hhbc_by_ref_label",
+ "hhbc_by_ref_label_rewriter",
+ "hhbc_by_ref_local",
+ "hhbc_by_ref_options",
+ "hhbc_by_ref_runtime",
+ "hhbc_by_ref_scope",
+ "hhbc_by_ref_statement_state",
+ "hhbc_by_ref_unique_id_builder",
+ "indexmap",
+ "itertools",
+ "lazy_static",
+ "naming_special_names_rust",
+ "ocamlrep",
+ "oxidized",
+ "regex",
+]
+
+[[package]]
+name = "hhbc_by_ref_emit_class"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_emit_attribute",
+ "hhbc_by_ref_emit_body",
+ "hhbc_by_ref_emit_expression",
+ "hhbc_by_ref_emit_fatal",
+ "hhbc_by_ref_emit_memoize_method",
+ "hhbc_by_ref_emit_method",
+ "hhbc_by_ref_emit_pos",
+ "hhbc_by_ref_emit_property",
+ "hhbc_by_ref_emit_symbol_refs",
+ "hhbc_by_ref_emit_type_constant",
+ "hhbc_by_ref_emit_type_hint",
+ "hhbc_by_ref_emit_xhp",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_hhas_attribute",
+ "hhbc_by_ref_hhas_class",
+ "hhbc_by_ref_hhas_coeffects",
+ "hhbc_by_ref_hhas_constant",
+ "hhbc_by_ref_hhas_method",
+ "hhbc_by_ref_hhas_param",
+ "hhbc_by_ref_hhas_pos",
+ "hhbc_by_ref_hhas_property",
+ "hhbc_by_ref_hhas_type",
+ "hhbc_by_ref_hhas_type_const",
+ "hhbc_by_ref_hhas_xhp_attribute",
+ "hhbc_by_ref_hhbc_ast",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_hhbc_string_utils",
+ "hhbc_by_ref_instruction_sequence",
+ "hhbc_by_ref_label",
+ "hhbc_by_ref_local",
+ "hhbc_by_ref_runtime",
+ "naming_special_names_rust",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_emit_constant"
+version = "0.0.0"
+dependencies = [
+ "core_utils_rust",
+ "hhbc_by_ref_emit_body",
+ "hhbc_by_ref_emit_type_hint",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_hhas_coeffects",
+ "hhbc_by_ref_hhas_constant",
+ "hhbc_by_ref_hhas_function",
+ "hhbc_by_ref_hhas_pos",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_hhbc_string_utils",
+ "hhbc_by_ref_instruction_sequence",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_emit_expression"
+version = "0.0.0"
+dependencies = [
+ "bstr",
+ "bumpalo",
+ "hash",
+ "hhbc_by_ref_ast_class_expr",
+ "hhbc_by_ref_ast_constant_folder",
+ "hhbc_by_ref_emit_adata",
+ "hhbc_by_ref_emit_fatal",
+ "hhbc_by_ref_emit_pos",
+ "hhbc_by_ref_emit_symbol_refs",
+ "hhbc_by_ref_emit_type_constant",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_hhas_symbol_refs",
+ "hhbc_by_ref_hhbc_ast",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_hhbc_string_utils",
+ "hhbc_by_ref_instruction_sequence",
+ "hhbc_by_ref_label",
+ "hhbc_by_ref_local",
+ "hhbc_by_ref_options",
+ "hhbc_by_ref_runtime",
+ "hhbc_by_ref_scope",
+ "indexmap",
+ "itertools",
+ "lazy_static",
+ "naming_special_names_rust",
+ "oxidized",
+ "regex",
+]
+
+[[package]]
+name = "hhbc_by_ref_emit_fatal"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_emit_pos",
+ "hhbc_by_ref_hhbc_ast",
+ "hhbc_by_ref_instruction_sequence",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_emit_file_attributes"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_emit_attribute",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_hhas_attribute",
+ "hhbc_by_ref_instruction_sequence",
+ "itertools",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_emit_function"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_ast_scope",
+ "hhbc_by_ref_emit_attribute",
+ "hhbc_by_ref_emit_body",
+ "hhbc_by_ref_emit_memoize_helpers",
+ "hhbc_by_ref_emit_param",
+ "hhbc_by_ref_emit_pos",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_hhas_attribute",
+ "hhbc_by_ref_hhas_body",
+ "hhbc_by_ref_hhas_coeffects",
+ "hhbc_by_ref_hhas_function",
+ "hhbc_by_ref_hhas_param",
+ "hhbc_by_ref_hhas_pos",
+ "hhbc_by_ref_hhas_type",
+ "hhbc_by_ref_hhbc_ast",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_hhbc_string_utils",
+ "hhbc_by_ref_instruction_sequence",
+ "hhbc_by_ref_local",
+ "hhbc_by_ref_options",
+ "hhbc_by_ref_runtime",
+ "itertools",
+ "naming_special_names_rust",
+ "ocamlrep",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_emit_memoize_helpers"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_emit_fatal",
+ "hhbc_by_ref_hhas_param",
+ "hhbc_by_ref_instruction_sequence",
+ "hhbc_by_ref_local",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_emit_memoize_method"
+version = "0.0.0"
+dependencies = [
+ "bitflags",
+ "bumpalo",
+ "hhbc_by_ref_ast_scope",
+ "hhbc_by_ref_emit_attribute",
+ "hhbc_by_ref_emit_body",
+ "hhbc_by_ref_emit_fatal",
+ "hhbc_by_ref_emit_memoize_helpers",
+ "hhbc_by_ref_emit_param",
+ "hhbc_by_ref_emit_pos",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_hhas_attribute",
+ "hhbc_by_ref_hhas_body",
+ "hhbc_by_ref_hhas_coeffects",
+ "hhbc_by_ref_hhas_method",
+ "hhbc_by_ref_hhas_param",
+ "hhbc_by_ref_hhas_pos",
+ "hhbc_by_ref_hhas_type",
+ "hhbc_by_ref_hhbc_ast",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_hhbc_string_utils",
+ "hhbc_by_ref_instruction_sequence",
+ "hhbc_by_ref_local",
+ "hhbc_by_ref_options",
+ "hhbc_by_ref_runtime",
+ "naming_special_names_rust",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_emit_method"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_ast_scope",
+ "hhbc_by_ref_emit_attribute",
+ "hhbc_by_ref_emit_body",
+ "hhbc_by_ref_emit_fatal",
+ "hhbc_by_ref_emit_memoize_helpers",
+ "hhbc_by_ref_emit_native_opcode",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_hhas_attribute",
+ "hhbc_by_ref_hhas_coeffects",
+ "hhbc_by_ref_hhas_method",
+ "hhbc_by_ref_hhas_pos",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_hhbc_string_utils",
+ "hhbc_by_ref_instruction_sequence",
+ "hhbc_by_ref_options",
+ "itertools",
+ "naming_special_names_rust",
+ "ocamlrep",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_emit_native_opcode"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_ast_scope",
+ "hhbc_by_ref_emit_body",
+ "hhbc_by_ref_emit_fatal",
+ "hhbc_by_ref_emit_param",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_hhas_body",
+ "hhbc_by_ref_instruction_sequence",
+ "hhbc_by_ref_local",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_emit_param"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_ast_scope",
+ "hhbc_by_ref_emit_attribute",
+ "hhbc_by_ref_emit_expression",
+ "hhbc_by_ref_emit_fatal",
+ "hhbc_by_ref_emit_pos",
+ "hhbc_by_ref_emit_type_hint",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_hhas_param",
+ "hhbc_by_ref_hhas_type",
+ "hhbc_by_ref_hhbc_string_utils",
+ "hhbc_by_ref_instruction_sequence",
+ "hhbc_by_ref_local",
+ "hhbc_by_ref_options",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_emit_pos"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_instruction_sequence",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_emit_program"
+version = "0.0.0"
+dependencies = [
+ "bitflags",
+ "bumpalo",
+ "hhbc_by_ref_emit_adata",
+ "hhbc_by_ref_emit_class",
+ "hhbc_by_ref_emit_constant",
+ "hhbc_by_ref_emit_file_attributes",
+ "hhbc_by_ref_emit_function",
+ "hhbc_by_ref_emit_record_def",
+ "hhbc_by_ref_emit_symbol_refs",
+ "hhbc_by_ref_emit_typedef",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_hhas_program",
+ "hhbc_by_ref_hhbc_ast",
+ "hhbc_by_ref_instruction_sequence",
+ "ocamlrep",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_emit_property"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_ast_constant_folder",
+ "hhbc_by_ref_emit_attribute",
+ "hhbc_by_ref_emit_expression",
+ "hhbc_by_ref_emit_fatal",
+ "hhbc_by_ref_emit_pos",
+ "hhbc_by_ref_emit_type_hint",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_hhas_property",
+ "hhbc_by_ref_hhas_type",
+ "hhbc_by_ref_hhbc_ast",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_hhbc_string_utils",
+ "hhbc_by_ref_instruction_sequence",
+ "hhbc_by_ref_runtime",
+ "naming_special_names_rust",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_emit_record_def"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_ast_constant_folder",
+ "hhbc_by_ref_emit_fatal",
+ "hhbc_by_ref_emit_type_hint",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_hhas_pos",
+ "hhbc_by_ref_hhas_record_def",
+ "hhbc_by_ref_hhas_type",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_hhbc_string_utils",
+ "hhbc_by_ref_instruction_sequence",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_emit_symbol_refs"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_hhas_symbol_refs",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_symbol_refs_state",
+]
+
+[[package]]
+name = "hhbc_by_ref_emit_type_constant"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_hhbc_string_utils",
+ "hhbc_by_ref_instruction_sequence",
+ "hhbc_by_ref_options",
+ "hhbc_by_ref_runtime",
+ "naming_special_names_rust",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_emit_type_hint"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_emit_fatal",
+ "hhbc_by_ref_hhas_type",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_hhbc_string_utils",
+ "hhbc_by_ref_instruction_sequence",
+ "naming_special_names_rust",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_emit_typedef"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_emit_attribute",
+ "hhbc_by_ref_emit_body",
+ "hhbc_by_ref_emit_type_constant",
+ "hhbc_by_ref_emit_type_hint",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_hhas_pos",
+ "hhbc_by_ref_hhas_type",
+ "hhbc_by_ref_hhas_typedef",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_instruction_sequence",
+ "hhbc_by_ref_runtime",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_emit_xhp"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_emit_method",
+ "hhbc_by_ref_emit_property",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_hhas_method",
+ "hhbc_by_ref_hhas_property",
+ "hhbc_by_ref_hhas_xhp_attribute",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_hhbc_string_utils",
+ "hhbc_by_ref_instruction_sequence",
+ "naming_special_names_rust",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_env"
+version = "0.0.0"
+dependencies = [
+ "bitflags",
+ "bumpalo",
+ "hhbc_by_ref_adata_state",
+ "hhbc_by_ref_ast_body",
+ "hhbc_by_ref_ast_scope",
+ "hhbc_by_ref_global_state",
+ "hhbc_by_ref_iterator",
+ "hhbc_by_ref_label",
+ "hhbc_by_ref_local",
+ "hhbc_by_ref_options",
+ "hhbc_by_ref_statement_state",
+ "hhbc_by_ref_symbol_refs_state",
+ "ocamlrep",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_generator"
+version = "0.0.0"
+dependencies = [
+ "hhbc_by_ref_ast_body",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_global_state"
+version = "0.0.0"
+dependencies = [
+ "hhbc_by_ref_hhas_coeffects",
+ "hhbc_by_ref_unique_id_builder",
+ "lazy_static",
+ "ocamlrep",
+ "ocamlrep_derive",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_hhas_adata"
+version = "0.0.0"
+dependencies = [
+ "hhbc_by_ref_runtime",
+]
+
+[[package]]
+name = "hhbc_by_ref_hhas_attribute"
+version = "0.0.0"
+dependencies = [
+ "hhbc_by_ref_runtime",
+ "naming_special_names_rust",
+]
+
+[[package]]
+name = "hhbc_by_ref_hhas_body"
+version = "0.0.0"
+dependencies = [
+ "hhbc_by_ref_hhas_param",
+ "hhbc_by_ref_hhas_type",
+ "hhbc_by_ref_instruction_sequence",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_hhas_class"
+version = "0.0.0"
+dependencies = [
+ "bitflags",
+ "hhbc_by_ref_hhas_attribute",
+ "hhbc_by_ref_hhas_coeffects",
+ "hhbc_by_ref_hhas_constant",
+ "hhbc_by_ref_hhas_method",
+ "hhbc_by_ref_hhas_pos",
+ "hhbc_by_ref_hhas_property",
+ "hhbc_by_ref_hhas_type",
+ "hhbc_by_ref_hhas_type_const",
+ "hhbc_by_ref_hhbc_id",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_hhas_coeffects"
+version = "0.0.0"
+dependencies = [
+ "hhbc_by_ref_hhbc_string_utils",
+ "naming_special_names_rust",
+ "ocamlrep",
+ "ocamlrep_derive",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_hhas_constant"
+version = "0.0.0"
+dependencies = [
+ "hhbc_by_ref_ast_constant_folder",
+ "hhbc_by_ref_emit_expression",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_instruction_sequence",
+ "hhbc_by_ref_runtime",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_hhas_function"
+version = "0.0.0"
+dependencies = [
+ "bitflags",
+ "hhbc_by_ref_hhas_attribute",
+ "hhbc_by_ref_hhas_body",
+ "hhbc_by_ref_hhas_coeffects",
+ "hhbc_by_ref_hhas_param",
+ "hhbc_by_ref_hhas_pos",
+ "hhbc_by_ref_hhbc_id",
+]
+
+[[package]]
+name = "hhbc_by_ref_hhas_method"
+version = "0.0.0"
+dependencies = [
+ "bitflags",
+ "hhbc_by_ref_hhas_attribute",
+ "hhbc_by_ref_hhas_body",
+ "hhbc_by_ref_hhas_coeffects",
+ "hhbc_by_ref_hhas_pos",
+ "hhbc_by_ref_hhbc_id",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_hhas_param"
+version = "0.0.0"
+dependencies = [
+ "hhbc_by_ref_hhas_attribute",
+ "hhbc_by_ref_hhas_type",
+ "hhbc_by_ref_label",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_hhas_pos"
+version = "0.0.0"
+dependencies = [
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_hhas_program"
+version = "0.0.0"
+dependencies = [
+ "hhbc_by_ref_hhas_adata",
+ "hhbc_by_ref_hhas_attribute",
+ "hhbc_by_ref_hhas_class",
+ "hhbc_by_ref_hhas_constant",
+ "hhbc_by_ref_hhas_function",
+ "hhbc_by_ref_hhas_record_def",
+ "hhbc_by_ref_hhas_symbol_refs",
+ "hhbc_by_ref_hhas_typedef",
+ "hhbc_by_ref_hhbc_ast",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_hhas_property"
+version = "0.0.0"
+dependencies = [
+ "bitflags",
+ "hhbc_by_ref_hhas_attribute",
+ "hhbc_by_ref_hhas_type",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_instruction_sequence",
+ "hhbc_by_ref_runtime",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_hhas_record_def"
+version = "0.0.0"
+dependencies = [
+ "hhbc_by_ref_hhas_pos",
+ "hhbc_by_ref_hhas_type",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_runtime",
+]
+
+[[package]]
+name = "hhbc_by_ref_hhas_symbol_refs"
+version = "0.0.0"
+
+[[package]]
+name = "hhbc_by_ref_hhas_type"
+version = "0.0.0"
+dependencies = [
+ "bitflags",
+]
+
+[[package]]
+name = "hhbc_by_ref_hhas_type_const"
+version = "0.0.0"
+dependencies = [
+ "hhbc_by_ref_runtime",
+]
+
+[[package]]
+name = "hhbc_by_ref_hhas_typedef"
+version = "0.0.0"
+dependencies = [
+ "hhbc_by_ref_hhas_attribute",
+ "hhbc_by_ref_hhas_pos",
+ "hhbc_by_ref_hhas_type",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_runtime",
+]
+
+[[package]]
+name = "hhbc_by_ref_hhas_xhp_attribute"
+version = "0.0.0"
+dependencies = [
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_hhbc_ast"
+version = "0.0.0"
+dependencies = [
+ "bitflags",
+ "bumpalo",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_iterator",
+ "hhbc_by_ref_label",
+ "hhbc_by_ref_local",
+ "hhbc_by_ref_runtime",
+]
+
+[[package]]
+name = "hhbc_by_ref_hhbc_id"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_hhbc_string_utils",
+]
+
+[[package]]
+name = "hhbc_by_ref_hhbc_string_utils"
+version = "0.0.0"
+dependencies = [
+ "escaper",
+ "lazy_static",
+ "libc",
+ "naming_special_names_rust",
+ "ocaml_helper",
+ "pretty_assertions",
+ "regex",
+]
+
+[[package]]
+name = "hhbc_by_ref_instruction_sequence"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hash",
+ "hhbc_by_ref_hhbc_ast",
+ "hhbc_by_ref_iterator",
+ "hhbc_by_ref_label",
+ "hhbc_by_ref_local",
+ "hhbc_by_ref_runtime",
+ "itertools",
+ "oxidized",
+ "pretty_assertions",
+ "thiserror",
+]
+
+[[package]]
+name = "hhbc_by_ref_iterator"
+version = "0.0.0"
+
+[[package]]
+name = "hhbc_by_ref_label"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+]
+
+[[package]]
+name = "hhbc_by_ref_label_rewriter"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hash",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_hhas_param",
+ "hhbc_by_ref_hhbc_ast",
+ "hhbc_by_ref_instruction_sequence",
+ "hhbc_by_ref_label",
+]
+
+[[package]]
+name = "hhbc_by_ref_local"
+version = "0.0.0"
+dependencies = [
+ "indexmap",
+ "naming_special_names_rust",
+]
+
+[[package]]
+name = "hhbc_by_ref_options"
+version = "0.0.0"
+dependencies = [
+ "bitflags",
+ "fnv",
+ "hhbc_by_ref_options_serde",
+ "itertools",
+ "lazy_static",
+ "lru",
+ "pretty_assertions",
+ "serde",
+ "serde_derive",
+ "serde_json",
+]
+
+[[package]]
+name = "hhbc_by_ref_options_serde"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "hhbc_by_ref_rewrite_program"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_closure_convert",
+ "hhbc_by_ref_emit_fatal",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_instruction_sequence",
+ "hhbc_by_ref_rewrite_xml",
+ "ocamlrep",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_rewrite_xml"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_emit_symbol_refs",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_hhbc_id",
+ "hhbc_by_ref_instruction_sequence",
+ "naming_special_names_rust",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_runtime"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_scope"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_env",
+ "hhbc_by_ref_instruction_sequence",
+ "hhbc_by_ref_iterator",
+ "hhbc_by_ref_label",
+ "hhbc_by_ref_local",
+]
+
+[[package]]
+name = "hhbc_by_ref_statement_state"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_instruction_sequence",
+ "oxidized",
+]
+
+[[package]]
+name = "hhbc_by_ref_symbol_refs_state"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "hhbc_by_ref_hhas_symbol_refs",
+]
+
+[[package]]
+name = "hhbc_by_ref_unique_id_builder"
+version = "0.0.0"
+
+[[package]]
+name = "hhbc_by_ref_unique_list"
+version = "0.0.0"
+dependencies = [
+ "indexmap",
+]
+
+[[package]]
 name = "hhbc_hhas_rust"
 version = "0.0.0"
 dependencies = [
@@ -1594,7 +2714,7 @@ dependencies = [
  "hhas_method_rust",
  "hhas_param_rust",
  "hhas_pos_rust",
- "hhas_program_rust",
+ "hhas_program",
  "hhas_property_rust",
  "hhas_record_def_rust",
  "hhas_symbol_refs_rust",
@@ -1605,7 +2725,7 @@ dependencies = [
  "hhbc_id_rust",
  "hhbc_string_utils_rust",
  "indexmap",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "iterator",
  "itertools",
  "label_rust",
@@ -1687,7 +2807,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "instruction_sequence_rust"
+name = "instruction_sequence"
 version = "0.0.0"
 dependencies = [
  "hhbc_ast_rust",
@@ -1742,7 +2862,7 @@ dependencies = [
  "env",
  "hhas_param_rust",
  "hhbc_ast_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "label_rust",
 ]
 
@@ -1824,8 +2944,7 @@ dependencies = [
  "bstr",
  "bumpalo",
  "escaper",
- "fnv",
- "hh_autoimport_rust",
+ "hash",
  "html_entities",
  "itertools",
  "lazy_static",
@@ -1919,11 +3038,11 @@ dependencies = [
 name = "names"
 version = "0.0.0"
 dependencies = [
- "deps_rust",
  "md-5",
  "ocamlrep",
  "oxidized",
  "rusqlite",
+ "typing_deps_hash",
 ]
 
 [[package]]
@@ -1942,6 +3061,7 @@ dependencies = [
 name = "naming_special_names_rust"
 version = "0.0.0"
 dependencies = [
+ "hash",
  "lazy_static",
 ]
 
@@ -1992,23 +3112,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "ocaml"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b497481786e5fa6606783d684f5eb0671721fac38efae1930e8a58f4335b9d2a"
-
-[[package]]
 name = "ocaml_helper"
 version = "0.0.0"
 dependencies = [
  "pretty_assertions",
-]
-
-[[package]]
-name = "ocamlpool_rust"
-version = "0.0.0"
-dependencies = [
- "ocaml",
 ]
 
 [[package]]
@@ -2054,8 +3161,6 @@ name = "ocamlrep_ocamlpool"
 version = "0.0.0"
 dependencies = [
  "bumpalo",
- "ocaml",
- "ocamlpool_rust",
  "ocamlrep",
 ]
 
@@ -2190,10 +3295,12 @@ dependencies = [
 name = "parser"
 version = "0.0.0"
 dependencies = [
+ "heapless",
  "operator",
  "parser_core_types",
  "smart_constructors",
  "stack_limit",
+ "static_assertions",
 ]
 
 [[package]]
@@ -2259,6 +3366,20 @@ dependencies = [
  "parser",
  "positioned_smart_constructors",
  "serde",
+ "stack_limit",
+]
+
+[[package]]
+name = "positioned_full_trivia_parser_ffi"
+version = "0.0.0"
+dependencies = [
+ "bumpalo",
+ "libc",
+ "ocamlrep",
+ "oxidized",
+ "parser_core_types",
+ "positioned_full_trivia_parser",
+ "serde_json",
  "stack_limit",
 ]
 
@@ -2506,7 +3627,7 @@ dependencies = [
  "closure_convert_rust",
  "emit_fatal_rust",
  "env",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "oxidized",
  "rewrite_xml",
 ]
@@ -2518,7 +3639,7 @@ dependencies = [
  "emit_symbol_refs_rust",
  "env",
  "hhbc_id_rust",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "naming_special_names_rust",
  "oxidized",
 ]
@@ -2575,6 +3696,7 @@ name = "rust_parser_errors"
 version = "0.0.0"
 dependencies = [
  "escaper",
+ "hash",
  "hh_autoimport_rust",
  "itertools",
  "lazy_static",
@@ -2616,6 +3738,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustc-hash"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
+
+[[package]]
 name = "rustc_version"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2644,7 +3772,7 @@ name = "scope_rust"
 version = "0.0.0"
 dependencies = [
  "env",
- "instruction_sequence_rust",
+ "instruction_sequence",
  "iterator",
  "label_rust",
  "local",
@@ -2740,6 +3868,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "stable_deref_trait"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
+
+[[package]]
 name = "stack_limit"
 version = "0.0.0"
 dependencies = [
@@ -2750,7 +3884,7 @@ dependencies = [
 name = "statement_state"
 version = "0.0.0"
 dependencies = [
- "instruction_sequence_rust",
+ "instruction_sequence",
  "oxidized",
 ]
 
@@ -2938,9 +4072,9 @@ dependencies = [
 
 [[package]]
 name = "typenum"
-version = "1.11.2"
+version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d2783fe2d6b8c1101136184eb41be8b1ad379e4657050b8aaff0c79ee7575f9"
+checksum = "879f6906492a7cd215bfa4cf595b600146ccfac0c79bcbd1f3000162af5e8b06"
 
 [[package]]
 name = "typing_collections_rust"
@@ -2960,6 +4094,14 @@ dependencies = [
  "oxidized",
  "oxidized_by_ref",
  "typing_collections_rust",
+]
+
+[[package]]
+name = "typing_deps_hash"
+version = "0.0.0"
+dependencies = [
+ "fnv",
+ "oxidized",
 ]
 
 [[package]]

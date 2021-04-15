@@ -135,10 +135,7 @@ let check_final_method parent_class_elt class_elt on_error =
     (* we have a final method being overridden by a user-declared method *)
     let (lazy parent_pos) = parent_class_elt.ce_pos in
     let (lazy pos) = class_elt.ce_pos in
-    Errors.override_final
-      ~parent:parent_pos
-      ~child:pos
-      ~on_error:(Some on_error)
+    Errors.override_final ~parent:parent_pos ~child:pos ~on_error
 
 let check_dynamically_callable member_name parent_class_elt class_elt on_error =
   if
@@ -233,7 +230,7 @@ let check_override
    * "Class ... does not correctly implement all required members" message *)
   let on_error =
     if String.equal class_elt.ce_origin (Cls.name class_) then
-      Errors.unify_error
+      Env.unify_error_assert_primary_pos_in_current_decl env
     else
       on_error
   in
@@ -282,16 +279,17 @@ let check_override
       ( if is_method then
         `method_
       else
-        `property );
+        `property )
+      ~current_decl_and_file:(Env.get_current_decl_and_file env);
   if check_params then (
-    let on_error ?code:_ claim reasons =
+    let on_error ?code:_ reasons =
       ( if is_method then
         Errors.bad_method_override
       else
         Errors.bad_prop_override )
         pos
         member_name
-        (claim :: reasons)
+        reasons
         on_error
     in
     let (lazy fty_child) = class_elt.ce_type in
@@ -349,13 +347,7 @@ let check_override
         on_error
     | _ ->
       if get_ce_const class_elt then
-        Typing_ops.sub_type_decl_on_error
-          pos
-          Typing_reason.URnone
-          env
-          on_error
-          fty_child
-          fty_parent
+        Typing_phase.sub_type_decl env fty_child fty_parent on_error
       else
         Typing_ops.unify_decl
           pos
@@ -476,7 +468,8 @@ let check_const_override
       Errors.abstract_concrete_override
         class_const.cc_pos
         parent_class_const.cc_pos
-        `constant;
+        `constant
+        ~current_decl_and_file:(Env.get_current_decl_and_file env);
   Phase.sub_type_decl
     env
     class_const.cc_type
@@ -492,7 +485,7 @@ let check_members
     check_private
     env
     (parent_class, psubst)
-    (class_, subst)
+    (class_pos, class_, subst)
     on_error
     (mem_source, parent_members, get_member) =
   let parent_members =
@@ -547,7 +540,7 @@ let check_members
         if not (Pos_or_decl.is_hhi (Cls.pos parent_class)) then
           Typing_deps.add_idep
             (Env.get_deps_mode env)
-            (Dep.Class (Cls.name class_))
+            (Dep.Type (Cls.name class_))
             dep;
         check_override
           ~check_member_unique
@@ -559,7 +552,45 @@ let check_members
           parent_class_elt
           class_elt
           on_error
-      | _ -> env)
+      | _ ->
+        (* if class implements dynamic, all inherited methods should be dynamically callable *)
+        ( if
+          TypecheckerOptions.enable_sound_dynamic
+            (Provider_context.get_tcopt (Env.get_ctx env))
+          && Cls.get_implements_dynamic class_
+          && not (Cls.get_implements_dynamic parent_class)
+          (* TODO: ideally refactor so the last test is not systematically performed on all methods *)
+        then
+          match mem_source with
+          | `FromMethod ->
+            if not (Typing_defs.get_ce_sound_dynamic_callable parent_class_elt)
+            then
+              (* since the attribute is missing run the inter check *)
+              let (lazy (ty : decl_ty)) = parent_class_elt.ce_type in
+              (match get_node ty with
+              | Tfun fun_ty ->
+                if
+                  not
+                    (Typing_dynamic.sound_dynamic_interface_check_from_fun_ty
+                       env
+                       fun_ty)
+                then
+                  Errors.method_is_not_dynamically_callable
+                    class_pos
+                    member_name
+                    (Cls.name class_)
+                    false
+                    (Some
+                       ( Lazy.force parent_class_elt.ce_pos,
+                         parent_class_elt.ce_origin ))
+                    None
+              | _ -> ())
+          | `FromSMethod
+          | `FromSProp
+          | `FromProp
+          | `FromConstructor ->
+            () );
+        env)
 
 (*****************************************************************************)
 (* Before checking that a class implements an interface, we have to
@@ -624,7 +655,8 @@ let default_constructor_ce class_ =
         ~lsb:false
         ~synthesized:true
         ~dynamicallycallable:false
-        ~readonly_prop:false;
+        ~readonly_prop:false
+        ~sound_dynamic_callable:false;
   }
 
 (* When an interface defines a constructor, we check that they are compatible *)
@@ -657,7 +689,7 @@ let check_constructors env parent_class class_ psubst subst on_error =
         if not (Pos_or_decl.is_hhi (Cls.pos parent_class)) then
           Typing_deps.add_idep
             (Env.get_deps_mode env)
-            (Dep.Class (Cls.name class_))
+            (Dep.Type (Cls.name class_))
             (Dep.Cstr parent_cstr.ce_origin);
         check_override
           env
@@ -688,19 +720,31 @@ let check_constructors env parent_class class_ psubst subst on_error =
 (** Checks if a child is compatible with the type constant of its parent.
     This requires the child's constraint and assigned type to be a subtype of
     the parent's type constant. *)
-let tconst_subsumption env class_name parent_typeconst child_typeconst on_error
-    =
+let tconst_subsumption
+    env
+    class_name
+    parent_typeconst
+    parent_tconst_enforceable
+    child_typeconst
+    on_error =
   let (pos, name) = child_typeconst.ttc_name in
   let parent_pos = fst parent_typeconst.ttc_name in
   match (parent_typeconst.ttc_abstract, child_typeconst.ttc_abstract) with
   | (TCAbstract (Some _), TCAbstract None) ->
-    Errors.override_no_default_typeconst pos parent_pos;
+    Errors.override_no_default_typeconst
+      pos
+      parent_pos
+      ~current_decl_and_file:(Env.get_current_decl_and_file env);
     env
   | ((TCConcrete | TCPartiallyAbstract), TCAbstract _) ->
     (* It is valid for abstract class to extend a concrete class, but it cannot
      * redefine already concrete members as abstract.
      * See typecheck/tconst/subsume_tconst5.php test case for example. *)
-    Errors.abstract_concrete_override pos parent_pos `typeconst;
+    Errors.abstract_concrete_override
+      pos
+      parent_pos
+      `typeconst
+      ~current_decl_and_file:(Env.get_current_decl_and_file env);
     env
   | _ ->
     let inherited = not (String.equal child_typeconst.ttc_origin class_name) in
@@ -713,7 +757,7 @@ let tconst_subsumption env class_name parent_typeconst child_typeconst on_error
       if inherited then
         on_error
       else
-        Errors.unify_error
+        Env.unify_error_assert_primary_pos_in_current_decl env
     in
 
     (* Check that the child's constraint is compatible with the parent. If the
@@ -723,37 +767,50 @@ let tconst_subsumption env class_name parent_typeconst child_typeconst on_error
     let default =
       MakeType.generic (Reason.Rtconst_no_cstr child_typeconst.ttc_name) name
     in
-    let child_cstr =
-      match child_typeconst.ttc_abstract with
-      | TCAbstract _ ->
-        Some (Option.value child_typeconst.ttc_as_constraint ~default)
-      | _ -> child_typeconst.ttc_as_constraint
-    in
-    let env =
+    let check_cstrs reason env sub super =
       Option.value ~default:env
       @@ Option.map2
-           child_cstr
-           parent_typeconst.ttc_as_constraint
-           ~f:
-             (Typing_ops.sub_type_decl_on_error
-                pos
-                Reason.URsubsume_tconst_cstr
-                env
-                on_error)
+           sub
+           super
+           ~f:(Typing_ops.sub_type_decl ~on_error pos reason env)
+    in
+    let (child_super_cstr, child_as_cstr) =
+      match child_typeconst.ttc_abstract with
+      | TCAbstract _ ->
+        ( Some (Option.value child_typeconst.ttc_super_constraint ~default),
+          Some (Option.value child_typeconst.ttc_as_constraint ~default) )
+      | _ ->
+        (child_typeconst.ttc_super_constraint, child_typeconst.ttc_as_constraint)
+    in
+    let env =
+      check_cstrs
+        Reason.URsubsume_tconst_cstr
+        env
+        child_as_cstr
+        parent_typeconst.ttc_as_constraint
+    in
+    let env =
+      check_cstrs
+        Reason.URsubsume_tconst_cstr
+        env
+        parent_typeconst.ttc_super_constraint
+        child_super_cstr
     in
 
     (* Check that the child's assigned type satisifies parent constraint *)
     let env =
-      Option.value ~default:env
-      @@ Option.map2
-           child_typeconst.ttc_type
-           parent_typeconst.ttc_as_constraint
-           ~f:
-             (Typing_ops.sub_type_decl_on_error
-                pos
-                Reason.URtypeconst_cstr
-                env
-                on_error)
+      check_cstrs
+        Reason.URtypeconst_cstr
+        env
+        child_typeconst.ttc_type
+        parent_typeconst.ttc_as_constraint
+    in
+    let env =
+      check_cstrs
+        Reason.URtypeconst_cstr
+        env
+        parent_typeconst.ttc_super_constraint
+        child_typeconst.ttc_type
     in
 
     (* Don't recheck inherited type constants: errors will
@@ -764,7 +821,7 @@ let tconst_subsumption env class_name parent_typeconst child_typeconst on_error
       match
         ( child_typeconst.ttc_abstract,
           child_typeconst.ttc_type,
-          parent_typeconst.ttc_enforceable )
+          parent_tconst_enforceable )
       with
       | (TCAbstract (Some ty), _, (pos, true))
       | ((TCPartiallyAbstract | TCConcrete), Some ty, (pos, true)) ->
@@ -774,7 +831,7 @@ let tconst_subsumption env class_name parent_typeconst child_typeconst on_error
         in
         Typing_enforceable_hint.validate_type
           tast_env
-          (fst child_typeconst.ttc_name)
+          (fst child_typeconst.ttc_name |> Pos_or_decl.unsafe_to_raw_pos)
           ty
           emit_error
       | _ ->
@@ -807,11 +864,11 @@ let tconst_subsumption env class_name parent_typeconst child_typeconst on_error
           x
           y
       else
-        Typing_ops.sub_type_decl_on_error
+        Typing_ops.sub_type_decl
+          ~on_error
           pos
           Reason.URsubsume_tconst_assign
           env
-          on_error
           y
           x
     in
@@ -824,7 +881,20 @@ let tconst_subsumption env class_name parent_typeconst child_typeconst on_error
 let check_typeconst_override
     env implements class_ parent_tconst tconst parent_class on_error =
   let tconst_check parent_tconst tconst () =
-    tconst_subsumption env (Cls.name class_) parent_tconst tconst on_error
+    let parent_tconst_enforceable =
+      (* We know that this typeconst exists in the parent (else we would not
+         have successfully looked up [parent_tconst]), so we know that
+         [get_typeconst_enforceability] will return Some. *)
+      Option.value_exn
+        (Cls.get_typeconst_enforceability parent_class (snd tconst.ttc_name))
+    in
+    tconst_subsumption
+      env
+      (Cls.name class_)
+      parent_tconst
+      parent_tconst_enforceable
+      tconst
+      on_error
   in
   let env =
     check_ambiguous_inheritance
@@ -920,7 +990,8 @@ let check_typeconsts env implements parent_class class_ on_error =
           (fst parent_tconst.ttc_name);
         env)
 
-let check_consts env implements parent_class class_ psubst subst on_error =
+let check_consts
+    env implements parent_class (name_pos, class_) psubst subst on_error =
   let (pconsts, consts) = (Cls.consts parent_class, Cls.consts class_) in
   let pconsts = instantiate_consts psubst pconsts in
   let consts = instantiate_consts subst consts in
@@ -948,7 +1019,7 @@ let check_consts env implements parent_class class_ psubst subst on_error =
           Errors.member_not_implemented
             const_name
             parent_const.cc_pos
-            (Cls.pos class_)
+            name_pos
             (Cls.pos parent_class);
           env
       ) else
@@ -958,7 +1029,8 @@ let check_consts env implements parent_class class_ psubst subst on_error =
  *   "Class ... does not correctly implement all required members"
  * message pointing at the class being checked.
  *)
-let check_class_implements env implements parent_class class_ on_error =
+let check_class_implements
+    env implements parent_class (name_pos, class_) on_error =
   let get_interfaces acc x =
     let (_, (_, name), _) = TUtils.unwrap_class_type x in
     match Env.get_class env name with
@@ -972,7 +1044,14 @@ let check_class_implements env implements parent_class class_ on_error =
   let psubst = Inst.make_subst (Cls.tparams parent_class) parent_tparaml in
   let subst = Inst.make_subst (Cls.tparams class_) tparaml in
   let env =
-    check_consts env implements parent_class class_ psubst subst on_error
+    check_consts
+      env
+      implements
+      parent_class
+      (name_pos, class_)
+      psubst
+      subst
+      on_error
   in
   let memberl = make_all_members ~parent_class ~child_class:class_ in
   let env = check_constructors env parent_class class_ psubst subst on_error in
@@ -986,20 +1065,19 @@ let check_class_implements env implements parent_class class_ on_error =
         check_privates
         env
         (parent_class, psubst)
-        (class_, subst)
+        (name_pos, class_, subst)
         on_error)
 
 (*****************************************************************************)
 (* The externally visible function *)
 (*****************************************************************************)
 
-let check_implements env implements parent_type type_to_be_checked =
+let check_implements env implements parent_type (name_pos, type_to_be_checked) =
   let (_, parent_name, parent_tparaml) = TUtils.unwrap_class_type parent_type in
-  let (_, name, tparaml) = TUtils.unwrap_class_type type_to_be_checked in
-  let (name_pos, name_str) = name in
+  let (_, (_, name), tparaml) = TUtils.unwrap_class_type type_to_be_checked in
   let (parent_name_pos, parent_name_str) = parent_name in
   let parent_class = Env.get_class env (snd parent_name) in
-  let class_ = Env.get_class env (snd name) in
+  let class_ = Env.get_class env name in
   match (parent_class, class_) with
   | (None, _)
   | (_, None) ->
@@ -1011,16 +1089,16 @@ let check_implements env implements parent_type type_to_be_checked =
       env
       implements
       parent_class
-      class_
-      (fun ?code:_ claim reasons ->
+      (name_pos, class_)
+      (fun ?code:_ reasons ->
         (* sadly, enum error reporting requires this to keep the error in the file
            with the enum *)
         if String.equal parent_name_str SN.Classes.cHH_BuiltinEnum then
-          Errors.bad_enum_decl name_pos (claim :: reasons)
+          Errors.bad_enum_decl name_pos reasons
         else
           Errors.bad_decl_override
             parent_name_pos
             parent_name_str
             name_pos
-            name_str
-            (claim :: reasons))
+            name
+            reasons)

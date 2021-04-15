@@ -357,7 +357,7 @@ void register_variable(Array& variables, char *name, const Variant& value,
       }
 
       if (!index) {
-        symtable->append(make_persistent_array_like_tv(ArrayData::Create()));
+        symtable->append(make_persistent_array_like_tv(ArrayData::CreateDict()));
         auto const key = symtable->get()->getKey(symtable->get()->iter_last());
         symtable = &asArrRef(symtable->lval(key));
       } else {
@@ -366,7 +366,7 @@ void register_variable(Array& variables, char *name, const Variant& value,
           symtable->convertKey<IntishCast::Cast>(key_str.asTypedValue());
         auto const v = symtable->lookup(key);
         if (isNullType(v.type()) || !isArrayLikeType(v.type())) {
-          symtable->set(key, make_persistent_array_like_tv(ArrayData::Create()));
+          symtable->set(key, make_persistent_array_like_tv(ArrayData::CreateDict()));
         }
         symtable = &asArrRef(symtable->lval(key));
       }
@@ -504,9 +504,7 @@ static void handle_exception_helper(bool& ret,
         !context->getExitCallback().isNull() &&
         is_callable(context->getExitCallback())) {
       Array stack = e.getBacktrace();
-      Array argv = make_vec_array_tagged(ARRPROV_HERE(),
-                                         *rl_exit_code,
-                                         stack);
+      Array argv = make_vec_array(*rl_exit_code, stack);
       vm_call_user_func(context->getExitCallback(), argv);
     }
   } catch (const PhpFileDoesNotExistException& e) {
@@ -685,12 +683,11 @@ init_command_line_globals(
   const std::map<std::string, std::string>& serverVariables,
   const std::map<std::string, std::string>& envVariables
 ) {
-  ARRPROV_USE_RUNTIME_LOCATION();
   auto& variablesOrder = RID().getVariablesOrder();
 
   if (variablesOrder.find('e') != std::string::npos ||
       variablesOrder.find('E') != std::string::npos) {
-    auto envArr = Array::CreateDArray();
+    auto envArr = Array::CreateDict();
     process_env_variables(envArr, envp, envVariables);
     envArr.set(s_HPHP, 1);
     envArr.set(s_HHVM, 1);
@@ -704,9 +701,6 @@ init_command_line_globals(
     case Arch::ARM:
       envArr.set(s_HHVM_ARCH, "arm");
       break;
-    case Arch::PPC64:
-      envArr.set(s_HHVM_ARCH, "ppc64");
-      break;
     }
     php_global_set(s__ENV, std::move(envArr));
   }
@@ -715,7 +709,7 @@ init_command_line_globals(
 
   if (variablesOrder.find('s') != std::string::npos ||
       variablesOrder.find('S') != std::string::npos) {
-    auto serverArr = Array::CreateDArray();
+    auto serverArr = Array::CreateDict();
     process_env_variables(serverArr, envp, envVariables);
     time_t now;
     struct timeval tp = {0};
@@ -2321,6 +2315,7 @@ static void update_constants_and_options() {
 }
 
 void hphp_thread_init() {
+  init_current_pthread_stack_limits();
 #if USE_JEMALLOC_EXTENT_HOOKS
   arenas_thread_init();
 #endif
@@ -2379,7 +2374,7 @@ void cli_client_init() {
   *s_sessionInitialized = true;
 }
 
-void hphp_process_init() {
+void init_current_pthread_stack_limits() {
   pthread_attr_t attr;
 // Linux+GNU extension
 #if defined(_GNU_SOURCE) && defined(__linux__)
@@ -2398,6 +2393,10 @@ void hphp_process_init() {
     Logger::Error("pthread_attr_destroy failed after checking stack limits");
     _exit(1);
   }
+}
+
+void hphp_process_init() {
+  init_current_pthread_stack_limits();
   BootStats::mark("pthread_init");
 
   Process::InitProcessStatics();
@@ -2489,31 +2488,6 @@ void hphp_process_init() {
   InitFiniNode::ProcessInit();
   BootStats::mark("extra_process_init");
 
-  std::unique_ptr<std::thread> apcLoadingThread;
-  if (!apcExtension::PrimeLibrary.empty()) {
-    apcLoadingThread = std::make_unique<std::thread>([&] {
-        hphp_thread_init();
-        SCOPE_EXIT {
-          hphp_thread_exit();
-        };
-        ProfileNonVMThread nonVM;
-        hphp_session_init(Treadmill::SessionKind::APCPrime);
-        SCOPE_EXIT {
-          hphp_context_exit();
-          hphp_session_exit();
-        };
-        UnlimitSerializationScope unlimit;
-        // TODO(9755792): Add real execution mode for snapshot generation.
-        if (apcExtension::PrimeLibraryUpgradeDest != "") {
-          Timer timer(Timer::WallTime, "optimizeApcPrime");
-          apc_load(apcExtension::LoadThread);
-        } else {
-          apc_load(apcExtension::LoadThread);
-        }
-      }
-    );
-  }
-
   if (RuntimeOption::RepoAuthoritative &&
       !RuntimeOption::EvalJitSerdesFile.empty() &&
       jit::mcgen::retranslateAllEnabled()) {
@@ -2596,16 +2570,6 @@ void hphp_process_init() {
   context->~ExecutionContext();
   new (context) ExecutionContext();
   BootStats::mark("ExecutionContext");
-
-  if (apcLoadingThread) {
-    apcLoadingThread->join();
-  }
-  // TODO(9755792): Add real execution mode for snapshot generation.
-  if (apcExtension::PrimeLibraryUpgradeDest != "") {
-    Logger::Info("APC PrimeLibrary upgrade mode completed; exiting.");
-    hphp_process_exit();
-    exit(0);
-  }
 }
 
 static void handle_exception(bool& ret, ExecutionContext* context,

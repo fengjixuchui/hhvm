@@ -20,6 +20,7 @@
 #include <folly/Memory.h>
 
 #include "hphp/runtime/base/array-iterator.h"
+#include "hphp/runtime/base/coeffects-config.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/vm/repo.h"
 #include "hphp/runtime/vm/repo-autoload-map-builder.h"
@@ -95,7 +96,6 @@ PreClassEmitter::Prop::Prop(const PreClassEmitter* pce,
   , m_ubs(ubs)
   , m_userAttributes(userAttributes)
 {
-  m_mangledName = PreClass::manglePropName(pce->name(), n, attrs);
   memcpy(&m_val, val, sizeof(TypedValue));
 }
 
@@ -203,13 +203,14 @@ bool PreClassEmitter::addAbstractConstant(const StringData* n,
     return false;
   }
   PreClassEmitter::Const cns(n, typeConstraint, nullptr, nullptr,
-                             StaticCoeffects::none(), kind, true, fromTrait);
+                             {}, kind, true, fromTrait);
   m_constMap.add(cns.name(), cns);
   return true;
 }
 
 bool PreClassEmitter::addContextConstant(const StringData* n,
-                                         StaticCoeffects coeffects,
+                                         PreClassEmitter::Const::CoeffectsVec&&
+                                           coeffects,
                                          const bool isAbstract,
                                          const bool fromTrait) {
   auto it = m_constMap.find(n);
@@ -217,7 +218,8 @@ bool PreClassEmitter::addContextConstant(const StringData* n,
     return false;
   }
   PreClassEmitter::Const cns(n, nullptr, nullptr, nullptr,
-                             coeffects, ConstModifiers::Kind::Context,
+                             std::move(coeffects),
+                             ConstModifiers::Kind::Context,
                              isAbstract, fromTrait);
   m_constMap.add(cns.name(), cns);
   return true;
@@ -238,14 +240,14 @@ bool PreClassEmitter::addConstant(const StringData* n,
   }
   TypedValue tvVal;
   if (kind == ConstModifiers::Kind::Type && !typeStructure.empty())  {
-    assertx(typeStructure.isHAMSafeDArray());
+    assertx(typeStructure.isDict());
     tvVal = make_persistent_array_like_tv(typeStructure.get());
     assertx(tvIsPlausible(tvVal));
   } else {
     tvVal = *val;
   }
   PreClassEmitter::Const cns(n, typeConstraint, &tvVal, phpCode,
-                             StaticCoeffects::none(), kind, false, fromTrait);
+                             {}, kind, false, fromTrait);
   m_constMap.add(cns.name(), cns);
   return true;
 }
@@ -280,7 +282,9 @@ void PreClassEmitter::commit(RepoTxn& txn) const {
 
 const StaticString
   s_nativedata("__nativedata"),
-  s_DynamicallyConstructible("__DynamicallyConstructible");
+  s_DynamicallyConstructible("__DynamicallyConstructible"),
+  s_invoke("__invoke"),
+  s_coeffectsProp("86coeffects");
 
 PreClass* PreClassEmitter::create(Unit& unit, bool saveLineTable) const {
   Attr attrs = m_attrs;
@@ -302,6 +306,16 @@ PreClass* PreClassEmitter::create(Unit& unit, bool saveLineTable) const {
     attrs = Attr(attrs & ~AttrDynamicallyConstructible);
     return val(rate).num;
   }();
+
+  auto const invoke = lookupMethod(s_invoke.get());
+  if (invoke && invoke->isClosureBody) {
+    attrs |= AttrIsClosureClass;
+    if (!invoke->coeffectRules.empty()) {
+      assertx(invoke->coeffectRules.size() == 1);
+      assertx(invoke->coeffectRules[0].isClosureInheritFromParent());
+      attrs |= AttrHasClosureCoeffectsProp;
+    }
+  }
 
   assertx(attrs & AttrPersistent || SystemLib::s_inited);
 
@@ -361,6 +375,22 @@ PreClass* PreClassEmitter::create(Unit& unit, bool saveLineTable) const {
   pc->m_methods.create(methodBuild);
 
   PreClass::PropMap::Builder propBuild;
+  if (pc->attrs() & AttrHasClosureCoeffectsProp) {
+    TypedValue tvInit;
+    tvWriteUninit(tvInit);
+
+    propBuild.add(s_coeffectsProp.get(), PreClass::Prop(pc.get(),
+      s_coeffectsProp.get(),
+      AttrPrivate|AttrSystemInitialValue,
+      staticEmptyString(),
+      TypeConstraint(),
+      CompactVector<TypeConstraint>{},
+      staticEmptyString(),
+      tvInit,
+      RepoAuthType{},
+      UserAttributeMap{}
+    ));
+  }
   for (unsigned i = 0; i < m_propMap.size(); ++i) {
     const Prop& prop = m_propMap[i];
     propBuild.add(prop.name(), PreClass::Prop(pc.get(),
@@ -383,7 +413,11 @@ PreClass* PreClassEmitter::create(Unit& unit, bool saveLineTable) const {
     tvaux.constModifiers() = {};
     if (const_.kind() == ConstModifiers::Kind::Context) {
       tvaux.constModifiers().setIsAbstract(const_.isAbstract());
-      tvaux.constModifiers().setCoeffects(const_.coeffects());
+      auto coeffects = StaticCoeffects::none();
+      for (auto const& coeffect : const_.coeffects()) {
+        coeffects |= CoeffectsConfig::fromName(coeffect->toCppString());
+      }
+      tvaux.constModifiers().setCoeffects(coeffects);
     } else {
       if (const_.isAbstract()) {
         tvWriteUninit(tvaux);

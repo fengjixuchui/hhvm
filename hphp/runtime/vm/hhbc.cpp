@@ -130,22 +130,23 @@ int immSize(Op op, ArgType type, PC immPC) {
   }
 
   if (type == KA) {
+    // 1 byte for member code, 1 byte for readonly op
     switch (decode_raw<MemberCode>(pc)) {
       case MW:
         return 1;
       case MEC: case MPC:
-        return 1 + encoded_iva_size(decode_raw<uint8_t>(pc));
+        return 2 + encoded_iva_size(decode_raw<uint8_t>(pc));
       case MEL: case MPL: {
         auto nextPC = pc;
         auto const nameSize = encoded_iva_size(decode_raw<uint8_t>(pc));
         nextPC += nameSize;
         auto const locSize = encoded_iva_size(decode_raw<uint8_t>(nextPC));
-        return 1 + nameSize + locSize;
+        return 2 + nameSize + locSize;
       }
       case MEI:
-        return 1 + sizeof(int64_t);
+        return 2 + sizeof(int64_t);
       case MET: case MPT: case MQT:
-        return 1 + sizeof(Id);
+        return 2 + sizeof(Id);
     }
     not_reached();
   }
@@ -581,15 +582,10 @@ FlavorDesc instrInputFlavor(PC op, uint32_t idx) {
 void staticArrayStreamer(const ArrayData* ad, std::string& out) {
   if (ad->isLegacyArray()) out += "legacy_";
 
+  assertx(ad->isVecType() || ad->isDictType() || ad->isKeysetType());
   if (ad->isVecType()) out += "vec(";
-  else if (ad->isDictType()) out += "dict(";
-  else if (ad->isKeysetType()) out += "keyset(";
-  else {
-    assertx(ad->isPHPArrayType());
-    if (ad->isVArray()) out += "varray(";
-    else if (ad->isDArray()) out += "darray(";
-    else out += "array(";
-  }
+  if (ad->isDictType()) out += "dict(";
+  if (ad->isKeysetType()) out += "keyset(";
 
   if (!ad->empty()) {
     bool comma = false;
@@ -612,15 +608,6 @@ void staticArrayStreamer(const ArrayData* ad, std::string& out) {
     }
   }
   out += ")";
-
-  if (RO::EvalArrayProvenance) {
-    auto const tag = arrprov::getTag(ad);
-    if (tag.valid()) {
-      out += " [";
-      out += tag.toString();
-      out += "]";
-    }
-  }
 }
 
 void staticStreamer(const TypedValue* tv, std::string& out) {
@@ -647,10 +634,6 @@ void staticStreamer(const TypedValue* tv, std::string& out) {
     case KindOfLazyClass:
       out += tv->m_data.plazyclass.name()->data();
       return;
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
     case KindOfPersistentVec:
     case KindOfVec:
     case KindOfPersistentDict:
@@ -1077,7 +1060,7 @@ X(CudOp,          static_cast<int>(CudOp::IgnoreIter))
 X(SpecialClsRef,  static_cast<int>(SpecialClsRef::Self))
 X(IsLogAsDynamicCallOp,
                   static_cast<int>(IsLogAsDynamicCallOp::LogAsDynamicCall))
-X(ReadOnlyOp,     static_cast<int>(ReadOnlyOp::Mutable))
+X(ReadOnlyOp,     static_cast<int>(ReadOnlyOp::Any))
 #undef X
 
 //////////////////////////////////////////////////////////////////////

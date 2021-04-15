@@ -12,6 +12,7 @@ open Aast
 open Typing_defs
 module Env = Tast_env
 module MakeType = Typing_make_type
+module SN = Naming_special_names
 
 let is_awaitable env ty =
   let mixed = MakeType.mixed Typing_reason.none in
@@ -151,7 +152,9 @@ let visitor =
       | Is (e, hint)
       | As (e, hint, _) ->
         let hint_ty = Env.hint_to_ty env hint in
-        let (env, hint_ty) = Env.localize_with_self env hint_ty in
+        let (env, hint_ty) =
+          Env.localize_with_self env ~ignore_errors:true hint_ty
+        in
         let ctx' =
           if is_awaitable env hint_ty then
             allow_awaitable

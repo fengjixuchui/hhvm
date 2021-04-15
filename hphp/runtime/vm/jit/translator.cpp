@@ -105,17 +105,13 @@ static const struct {
   { OpInt,         {None,             Stack1,       OutInt64        }},
   { OpDouble,      {None,             Stack1,       OutDouble       }},
   { OpString,      {None,             Stack1,       OutStringImm    }},
-  { OpArray,       {None,             Stack1,       OutArrayImm     }},
   { OpDict,        {None,             Stack1,       OutDictImm      }},
   { OpKeyset,      {None,             Stack1,       OutKeysetImm    }},
   { OpVec,         {None,             Stack1,       OutVecImm       }},
   { OpNewDictArray,   {None,          Stack1,       OutDict         }},
-  { OpNewStructDArray,{StackN,        Stack1,       OutDArray       }},
   { OpNewStructDict,  {StackN,        Stack1,       OutDict         }},
   { OpNewVec,         {StackN,        Stack1,       OutVec          }},
   { OpNewKeysetArray, {StackN,        Stack1,       OutKeyset       }},
-  { OpNewVArray,   {StackN,           Stack1,       OutVArray       }},
-  { OpNewDArray,   {None,             Stack1,       OutDArray       }},
   { OpAddElemC,    {StackTop3,        Stack1,       OutModifiedInput3 }},
   { OpAddNewElemC, {StackTop2,        Stack1,       OutModifiedInput2 }},
   { OpNewCol,      {None,             Stack1,       OutObject       }},
@@ -175,8 +171,6 @@ static const struct {
   { OpCastDict,    {Stack1,           Stack1,       OutDict         }},
   { OpCastKeyset,  {Stack1,           Stack1,       OutKeyset       }},
   { OpCastVec,     {Stack1,           Stack1,       OutVec          }},
-  { OpCastVArray,  {Stack1,           Stack1,       OutVArray        }},
-  { OpCastDArray,  {Stack1,           Stack1,       OutDArray        }},
   { OpDblAsBits,   {Stack1,           Stack1,       OutInt64        }},
   { OpInstanceOf,  {StackTop2,        Stack1,       OutBoolean      }},
   { OpInstanceOfD, {Stack1,           Stack1,       OutPredBool     }},
@@ -185,7 +179,7 @@ static const struct {
   { OpThrowAsTypeStructException,
                    {StackTop2,        None,         OutNone         }},
   { OpCombineAndResolveTypeStruct,
-                   {StackN,           Stack1,       OutDArray       }},
+                   {StackN,           Stack1,       OutDict         }},
   { OpSelect,      {StackTop3,        Stack1,       OutUnknown      }},
   { OpPrint,       {Stack1,           Stack1,       OutInt64        }},
   { OpClone,       {Stack1,           Stack1,       OutObject       }},
@@ -326,7 +320,7 @@ static const struct {
   { OpParent,      {None,             Stack1,       OutClass        }},
   { OpLateBoundCls,{None,             Stack1,       OutClass        }},
   { OpRecordReifiedGeneric,
-                   {Stack1,           Stack1,       OutVArray       }},
+                   {Stack1,           Stack1,       OutVec          }},
   { OpCheckReifiedGenericMismatch,
                    {Stack1,           None,         OutNone         }},
   { OpNativeImpl,  {None,             None,         OutNone         }},
@@ -335,7 +329,6 @@ static const struct {
   { OpArrayIdx,    {StackTop3,        Stack1,       OutUnknown      }},
   { OpArrayMarkLegacy,   {StackTop2,  Stack1,       OutUnknown      }},
   { OpArrayUnmarkLegacy, {StackTop2,  Stack1,       OutUnknown      }},
-  { OpTagProvenanceHere, {StackTop2,  Stack1,       OutUnknown      }},
   { OpCheckProp,   {None,             Stack1,       OutBoolean      }},
   { OpInitProp,    {Stack1,           None,         OutNone         }},
   { OpSilence,     {Local|DontGuardAny,
@@ -353,7 +346,7 @@ static const struct {
   { OpResolveMethCaller,
                    {None,             Stack1,       OutFunc         }},
   { OpResolveObjMethod,
-                   {StackTop2,        Stack1,       OutVArray       }},
+                   {StackTop2,        Stack1,       OutVec          }},
   { OpResolveClsMethod,
                    {Stack1,           Stack1,       OutClsMeth      }},
   { OpResolveClsMethodD,
@@ -404,7 +397,8 @@ static const struct {
                                       Stack1,       OutUnknown      }},
   { OpSetM,        {Stack1|BStackN|MBase|MKey,
                                       Stack1,       OutUnknown      }},
-  { OpSetRangeM,   {BStackN|MBase,    None,         OutNone         }},
+  { OpSetRangeM,   {StackTop3|BStackN|MBase,
+                                      None,         OutNone         }},
   { OpIncDecM,     {BStackN|MBase|MKey,
                                       Stack1,       OutUnknown      }},
   { OpSetOpM,      {Stack1|BStackN|MBase|MKey,
@@ -487,7 +481,6 @@ int64_t getStackPopped(PC pc) {
     case Op::UnsetM:
     case Op::NewVec:
     case Op::NewKeysetArray:
-    case Op::NewVArray:
     case Op::ConcatN:
     case Op::CombineAndResolveTypeStruct:
     case Op::CreateCl:
@@ -501,7 +494,6 @@ int64_t getStackPopped(PC pc) {
       return getImm(pc, 0).u_IVA + 3;
 
     case Op::NewRecord:
-    case Op::NewStructDArray:
     case Op::NewStructDict:
       return getImmVector(pc).size();
 
@@ -647,6 +639,22 @@ size_t memberKeyImmIdx(Op op) {
 #undef FCA
 #undef O
 
+unsigned localRangeImmIdx(Op op) {
+  switch (op) {
+    case Op::AwaitAll:
+    case Op::MemoSet:
+    case Op::MemoSetEager:
+      return 0;
+    case Op::MemoGet:
+      return 1;
+    case Op::MemoGetEager:
+      return 2;
+    default:
+      always_assert_flog("op {} doesn't have LocalRange!\n", opcodeToName(op));
+      return -1;
+  }
+}
+
 /*
  * Get location metadata for the inputs of `ni'.
  */
@@ -699,7 +707,6 @@ InputInfoVec getInputs(const NormalizedInstruction& ni, FPInvOffset bcSPOff) {
       switch (ni.op()) {
       case Op::NewVec:
       case Op::NewKeysetArray:
-      case Op::NewVArray:
       case Op::CombineAndResolveTypeStruct:
       case Op::ConcatN:
         return ni.imm[0].u_IVA;
@@ -765,7 +772,7 @@ InputInfoVec getInputs(const NormalizedInstruction& ni, FPInvOffset bcSPOff) {
   }
 
   if (flags & LocalRange) {
-    auto const& range = ni.imm[1].u_LAR;
+    auto const& range = ni.imm[localRangeImmIdx(ni.op())].u_LAR;
     SKTRACE(1, sk, "getInputs: localRange %d+%d\n",
             range.first, range.count);
     for (int i = 0; i < range.count; ++i) {
@@ -824,7 +831,6 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::Jmp:
   case Op::JmpNS:
   case Op::ClsCnsD:
-  case Op::NewStructDArray:
   case Op::NewStructDict:
   case Op::Switch:
   case Op::SSwitch:
@@ -868,14 +874,12 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::AKExists:
   case Op::AddElemC:
   case Op::AddNewElemC:
-  case Op::Array:
   case Op::Dict:
   case Op::Keyset:
   case Op::Vec:
   case Op::ArrayIdx:
   case Op::ArrayMarkLegacy:
   case Op::ArrayUnmarkLegacy:
-  case Op::TagProvenanceHere:
   case Op::BareThis:
   case Op::BitNot:
   case Op::CGetG:
@@ -890,8 +894,6 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::CastDict:
   case Op::CastKeyset:
   case Op::CastVec:
-  case Op::CastVArray:
-  case Op::CastDArray:
   case Op::DblAsBits:
   case Op::CheckProp:
   case Op::CheckThis:
@@ -960,8 +962,6 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::NewDictArray:
   case Op::NewVec:
   case Op::NewKeysetArray:
-  case Op::NewVArray:
-  case Op::NewDArray:
   case Op::NewObj:
   case Op::NewObjR:
   case Op::NewObjD:
@@ -1148,13 +1148,12 @@ void translateDispatch(irgen::IRGS& irgs,
 
 Type flavorToType(FlavorDesc f) {
   switch (f) {
-    case NOV: not_reached();
-
-    case CV: return TCell;  // TODO(#3029148) this could be InitCell
+    case CV:  return TInitCell;
     case CUV: return TCell;
-    case UV: return TUninit;
+    case UV:  return TUninit;
+    case NOV: break;
   }
-  not_reached();
+  always_assert(false);
 }
 
 }

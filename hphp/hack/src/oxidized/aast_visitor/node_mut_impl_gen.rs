@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<2f7b2605669bcd10833557be7d603143>>
+// @generated SignedSource<<0c14e203dd7bee35a57ef6956b41b112>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -212,6 +212,25 @@ impl<P: Params> NodeMut<P> for Catch<P::Ex, P::Fb, P::En, P::Hi> {
         Ok(())
     }
 }
+impl<P: Params> NodeMut<P> for ClassAbstractTypeconst {
+    fn accept<'node>(
+        &'node mut self,
+        c: &mut P::Context,
+        v: &mut dyn VisitorMut<'node, P = P>,
+    ) -> Result<(), P::Error> {
+        v.visit_class_abstract_typeconst(c, self)
+    }
+    fn recurse<'node>(
+        &'node mut self,
+        c: &mut P::Context,
+        v: &mut dyn VisitorMut<'node, P = P>,
+    ) -> Result<(), P::Error> {
+        self.as_constraint.accept(c, v)?;
+        self.super_constraint.accept(c, v)?;
+        self.default.accept(c, v)?;
+        Ok(())
+    }
+}
 impl<P: Params> NodeMut<P> for ClassAttr<P::Ex, P::Fb, P::En, P::Hi> {
     fn accept<'node>(
         &'node mut self,
@@ -235,6 +254,23 @@ impl<P: Params> NodeMut<P> for ClassAttr<P::Ex, P::Fb, P::En, P::Hi> {
                 Ok(())
             }
         }
+    }
+}
+impl<P: Params> NodeMut<P> for ClassConcreteTypeconst {
+    fn accept<'node>(
+        &'node mut self,
+        c: &mut P::Context,
+        v: &mut dyn VisitorMut<'node, P = P>,
+    ) -> Result<(), P::Error> {
+        v.visit_class_concrete_typeconst(c, self)
+    }
+    fn recurse<'node>(
+        &'node mut self,
+        c: &mut P::Context,
+        v: &mut dyn VisitorMut<'node, P = P>,
+    ) -> Result<(), P::Error> {
+        self.c_tc_type.accept(c, v)?;
+        Ok(())
     }
 }
 impl<P: Params> NodeMut<P> for ClassConst<P::Ex, P::Fb, P::En, P::Hi> {
@@ -350,7 +386,25 @@ impl<P: Params> NodeMut<P> for ClassKind {
         }
     }
 }
-impl<P: Params> NodeMut<P> for ClassTypeconst<P::Ex, P::Fb, P::En, P::Hi> {
+impl<P: Params> NodeMut<P> for ClassPartiallyAbstractTypeconst {
+    fn accept<'node>(
+        &'node mut self,
+        c: &mut P::Context,
+        v: &mut dyn VisitorMut<'node, P = P>,
+    ) -> Result<(), P::Error> {
+        v.visit_class_partially_abstract_typeconst(c, self)
+    }
+    fn recurse<'node>(
+        &'node mut self,
+        c: &mut P::Context,
+        v: &mut dyn VisitorMut<'node, P = P>,
+    ) -> Result<(), P::Error> {
+        self.constraint.accept(c, v)?;
+        self.type_.accept(c, v)?;
+        Ok(())
+    }
+}
+impl<P: Params> NodeMut<P> for ClassTypeconst {
     fn accept<'node>(
         &'node mut self,
         c: &mut P::Context,
@@ -363,11 +417,38 @@ impl<P: Params> NodeMut<P> for ClassTypeconst<P::Ex, P::Fb, P::En, P::Hi> {
         c: &mut P::Context,
         v: &mut dyn VisitorMut<'node, P = P>,
     ) -> Result<(), P::Error> {
-        self.abstract_.accept(c, v)?;
-        self.name.accept(c, v)?;
-        self.as_constraint.accept(c, v)?;
-        self.type_.accept(c, v)?;
+        match self {
+            ClassTypeconst::TCAbstract(a0) => {
+                a0.accept(c, v)?;
+                Ok(())
+            }
+            ClassTypeconst::TCConcrete(a0) => {
+                a0.accept(c, v)?;
+                Ok(())
+            }
+            ClassTypeconst::TCPartiallyAbstract(a0) => {
+                a0.accept(c, v)?;
+                Ok(())
+            }
+        }
+    }
+}
+impl<P: Params> NodeMut<P> for ClassTypeconstDef<P::Ex, P::Fb, P::En, P::Hi> {
+    fn accept<'node>(
+        &'node mut self,
+        c: &mut P::Context,
+        v: &mut dyn VisitorMut<'node, P = P>,
+    ) -> Result<(), P::Error> {
+        v.visit_class_typeconst_def(c, self)
+    }
+    fn recurse<'node>(
+        &'node mut self,
+        c: &mut P::Context,
+        v: &mut dyn VisitorMut<'node, P = P>,
+    ) -> Result<(), P::Error> {
         self.user_attributes.accept(c, v)?;
+        self.name.accept(c, v)?;
+        self.kind.accept(c, v)?;
         self.span.accept(c, v)?;
         self.doc_comment.accept(c, v)?;
         self.is_ctx.accept(c, v)?;
@@ -798,6 +879,10 @@ impl<P: Params> NodeMut<P> for Expr_<P::Ex, P::Fb, P::En, P::Hi> {
                 a0.accept(c, v)?;
                 Ok(())
             }
+            Expr_::Tuple(a0) => {
+                a0.accept(c, v)?;
+                Ok(())
+            }
             Expr_::List(a0) => {
                 a0.accept(c, v)?;
                 Ok(())
@@ -928,6 +1013,13 @@ impl<P: Params> NodeMut<P> for Expr_<P::Ex, P::Fb, P::En, P::Hi> {
                 Ok(())
             }
             Expr_::Any => Ok(()),
+            Expr_::Hole(a) => {
+                a.0.accept(c, v)?;
+                v.visit_hi(c, &mut a.1)?;
+                v.visit_hi(c, &mut a.2)?;
+                a.3.accept(c, v)?;
+                Ok(())
+            }
         }
     }
 }
@@ -945,8 +1037,9 @@ impl<P: Params> NodeMut<P> for ExpressionTree<P::Ex, P::Fb, P::En, P::Hi> {
         v: &mut dyn VisitorMut<'node, P = P>,
     ) -> Result<(), P::Error> {
         self.hint.accept(c, v)?;
-        self.src_expr.accept(c, v)?;
-        self.desugared_expr.accept(c, v)?;
+        self.splices.accept(c, v)?;
+        self.virtualized_expr.accept(c, v)?;
+        self.runtime_expr.accept(c, v)?;
         Ok(())
     }
 }
@@ -1073,6 +1166,7 @@ impl<P: Params> NodeMut<P> for Fun_<P::Ex, P::Fb, P::En, P::Hi> {
         v: &mut dyn VisitorMut<'node, P = P>,
     ) -> Result<(), P::Error> {
         self.span.accept(c, v)?;
+        self.readonly_this.accept(c, v)?;
         v.visit_en(c, &mut self.annotation)?;
         self.mode.accept(c, v)?;
         self.readonly_ret.accept(c, v)?;
@@ -1091,7 +1185,6 @@ impl<P: Params> NodeMut<P> for Fun_<P::Ex, P::Fb, P::En, P::Hi> {
         self.external.accept(c, v)?;
         self.namespace.accept(c, v)?;
         self.doc_comment.accept(c, v)?;
-        self.static_.accept(c, v)?;
         Ok(())
     }
 }
@@ -1212,6 +1305,7 @@ impl<P: Params> NodeMut<P> for HintFun {
         c: &mut P::Context,
         v: &mut dyn VisitorMut<'node, P = P>,
     ) -> Result<(), P::Error> {
+        self.is_readonly.accept(c, v)?;
         self.param_tys.accept(c, v)?;
         self.param_info.accept(c, v)?;
         self.variadic_ty.accept(c, v)?;
@@ -1320,6 +1414,26 @@ impl<P: Params> NodeMut<P> for Hint_ {
                 a0.accept(c, v)?;
                 Ok(())
             }
+        }
+    }
+}
+impl<P: Params> NodeMut<P> for HoleSource {
+    fn accept<'node>(
+        &'node mut self,
+        c: &mut P::Context,
+        v: &mut dyn VisitorMut<'node, P = P>,
+    ) -> Result<(), P::Error> {
+        v.visit_hole_source(c, self)
+    }
+    fn recurse<'node>(
+        &'node mut self,
+        c: &mut P::Context,
+        v: &mut dyn VisitorMut<'node, P = P>,
+    ) -> Result<(), P::Error> {
+        match self {
+            HoleSource::Typing => Ok(()),
+            HoleSource::UnsafeCast => Ok(()),
+            HoleSource::EnforcedCast => Ok(()),
         }
     }
 }
@@ -1843,29 +1957,6 @@ impl<P: Params> NodeMut<P> for TypeHint<P::Hi> {
         v.visit_hi(c, &mut self.0)?;
         self.1.accept(c, v)?;
         Ok(())
-    }
-}
-impl<P: Params> NodeMut<P> for TypeconstAbstractKind {
-    fn accept<'node>(
-        &'node mut self,
-        c: &mut P::Context,
-        v: &mut dyn VisitorMut<'node, P = P>,
-    ) -> Result<(), P::Error> {
-        v.visit_typeconst_abstract_kind(c, self)
-    }
-    fn recurse<'node>(
-        &'node mut self,
-        c: &mut P::Context,
-        v: &mut dyn VisitorMut<'node, P = P>,
-    ) -> Result<(), P::Error> {
-        match self {
-            TypeconstAbstractKind::TCAbstract(a0) => {
-                a0.accept(c, v)?;
-                Ok(())
-            }
-            TypeconstAbstractKind::TCPartiallyAbstract => Ok(()),
-            TypeconstAbstractKind::TCConcrete => Ok(()),
-        }
     }
 }
 impl<P: Params> NodeMut<P> for Typedef<P::Ex, P::Fb, P::En, P::Hi> {

@@ -45,8 +45,7 @@ void throw_bad_array_operand(const ArrayData* ad) {
     if (ad->isVecType()) return "vecs";
     if (ad->isDictType()) return "dicts";
     if (ad->isKeysetType()) return "keysets";
-    assertx(ad->isPHPArrayType());
-    return "arrays";
+    always_assert(false);
   }();
   SystemLib::throwInvalidOperationExceptionObject(
     folly::sformat(
@@ -97,12 +96,29 @@ TypedValue make_dbl(double d)  { return make_tv<KindOfDouble>(d); }
 TypedNum numericConvHelper(TypedValue cell) {
   assertx(tvIsPlausible(cell));
 
+
+  auto handleConvToIntNotice = [&](const char* from) {
+    handleConvNoticeLevel(
+      flagToConvNoticeLevel(RuntimeOption::EvalNoticeOnCoerceForMath),
+      from,
+      "int",
+      s_ConvNoticeReasonMath.get());
+  };
+
+  auto stringToNumeric_ = [](const StringData* str) {
+    return stringToNumeric(str,
+      flagToConvNoticeLevel(RuntimeOption::EvalNoticeOnCoerceForMath),
+      s_ConvNoticeReasonMath.get());
+  };
+
   switch (cell.m_type) {
     case KindOfUninit:
     case KindOfNull:
+      handleConvToIntNotice("null");
       return make_int(0);
 
     case KindOfBoolean:
+      handleConvToIntNotice("bool");
       return make_int(cell.m_data.num);
 
     case KindOfRFunc:
@@ -112,19 +128,15 @@ TypedNum numericConvHelper(TypedValue cell) {
       invalidFuncConversion("int");
 
     case KindOfClass:
-      return stringToNumeric(classToStringHelper(cell.m_data.pclass));
+      return stringToNumeric_(classToStringHelper(cell.m_data.pclass));
 
     case KindOfLazyClass:
-      return stringToNumeric(lazyClassToStringHelper(cell.m_data.plazyclass));
+      return stringToNumeric_(lazyClassToStringHelper(cell.m_data.plazyclass));
 
     case KindOfString:
     case KindOfPersistentString:
-      return stringToNumeric(cell.m_data.pstr);
+      return stringToNumeric_(cell.m_data.pstr);
 
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
     case KindOfPersistentVec:
     case KindOfVec:
     case KindOfPersistentDict:
@@ -142,9 +154,11 @@ TypedNum numericConvHelper(TypedValue cell) {
     case KindOfRecord:
       raise_error(Strings::RECORD_NOT_SUPPORTED);
     case KindOfObject:
+      handleConvToIntNotice("object");
       return make_int(cell.m_data.pobj->toInt64());
 
     case KindOfResource:
+      handleConvToIntNotice("resource");
       return make_int(cell.m_data.pres->data()->o_toInt64());
 
     case KindOfInt64:
@@ -431,6 +445,15 @@ void stringIncDecOp(Op op, tv_lval cell, StringData* sd) {
   double dval;
   auto const dt = sd->isNumericWithVal(ival, dval, false /* allow_errors */);
 
+  if (RuntimeOption::EvalNoticeOnCoerceForIncDec > 0 &&
+      (dt == KindOfInt64 || dt == KindOfDouble)) {
+    handleConvNoticeLevel(
+      flagToConvNoticeLevel(RuntimeOption::EvalNoticeOnCoerceForIncDec),
+      "string",
+      dt == KindOfInt64 ? "int" : "double",
+      s_ConvNoticeReasonIncDec.get());
+  }
+
   if (dt == KindOfInt64) {
     decRefStr(sd);
     tvCopy(make_int(ival), cell);
@@ -524,10 +547,6 @@ void tvIncDecOp(Op op, tv_lval cell) {
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
     case KindOfObject:
     case KindOfResource:
     case KindOfClsMeth:
@@ -545,9 +564,28 @@ const StaticString s_1("1");
 
 struct IncBase {
   void dblCase(tv_lval cell) const { ++val(cell).dbl; }
-  void nullCase(tv_lval cell) const { tvCopy(make_int(1), cell); }
+  void nullCase(tv_lval cell) const {
+    if (RuntimeOption::EvalNoticeOnCoerceForIncDec > 0) {
+      handleConvNoticeLevel(
+        flagToConvNoticeLevel(RuntimeOption::EvalNoticeOnCoerceForIncDec),
+        "null",
+        "int",
+        s_ConvNoticeReasonIncDec.get());
+    }
+    tvCopy(make_int(1), cell);
+  }
 
   TypedValue emptyString() const {
+    if (RuntimeOption::EvalNoticeOnCoerceForIncDec > 0) {
+      const auto level =
+        flagToConvNoticeLevel(RuntimeOption::EvalNoticeOnCoerceForIncDec);
+      const auto str = "Increment on empty string";
+      if (level == ConvNoticeLevel::Throw) {
+        SystemLib::throwInvalidOperationExceptionObject(str);
+      } else if (level == ConvNoticeLevel::Log) {
+        raise_notice(str);
+      }
+    }
     return make_tv<KindOfPersistentString>(s_1.get());
   }
 
@@ -587,7 +625,16 @@ struct IncO : IncBase {
 
 struct DecBase {
   void dblCase(tv_lval cell) { --val(cell).dbl; }
-  TypedValue emptyString() const { return make_int(-1); }
+  TypedValue emptyString() const {
+    if (RuntimeOption::EvalNoticeOnCoerceForIncDec > 0) {
+      handleConvNoticeLevel(
+        flagToConvNoticeLevel(RuntimeOption::EvalNoticeOnCoerceForIncDec),
+        "string",
+        "int",
+        s_ConvNoticeReasonIncDec.get());
+    }
+    return make_int(-1);
+  }
   void nullCase(tv_lval) const {}
   void nonNumericString(tv_lval cell) const {
     raise_notice("Decrement on string '%s'", val(cell).pstr->data());
@@ -672,8 +719,15 @@ TypedValue tvPow(TypedValue c1, TypedValue c2) {
 }
 
 TypedValue tvMod(TypedValue c1, TypedValue c2) {
-  auto const i1 = tvToInt(c1);
-  auto const i2 = tvToInt(c2);
+  auto toIntWithNotice = [](TypedValue i) {
+    return tvToInt(
+          i,
+          flagToConvNoticeLevel(RuntimeOption::EvalNoticeOnCoerceForMath),
+          s_ConvNoticeReasonMath.get(),
+          false);
+  };
+  auto const i1 = toIntWithNotice(c1);
+  auto const i2 = toIntWithNotice(c2);
   if (UNLIKELY(i2 == 0)) {
     SystemLib::throwDivisionByZeroExceptionObject();
   }
@@ -842,10 +896,6 @@ void tvBitNot(TypedValue& cell) {
     case KindOfDict:
     case KindOfPersistentKeyset:
     case KindOfKeyset:
-    case KindOfPersistentDArray:
-    case KindOfDArray:
-    case KindOfPersistentVArray:
-    case KindOfVArray:
     case KindOfObject:
     case KindOfResource:
     case KindOfClsMeth:

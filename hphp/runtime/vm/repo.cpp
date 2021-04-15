@@ -222,7 +222,6 @@ void Repo::loadGlobalData(bool readGlobalTables /* = true */) {
           BlobDecoder decoder = query.getBlob(0, true);
           auto& arrayTypeTable = globalArrayTypeTable();
           decoder(arrayTypeTable);
-          decoder(s_globalData.APCProfile);
           decoder(s_globalData.ConstantFunctions);
           decoder.assertDone();
         }
@@ -256,22 +255,11 @@ void Repo::loadGlobalData(bool readGlobalTables /* = true */) {
     RuntimeOption::PHP7_NoHexNumerics       = s_globalData.PHP7_NoHexNumerics;
     RuntimeOption::PHP7_Substr              = s_globalData.PHP7_Substr;
     RuntimeOption::EvalCheckPropTypeHints   = s_globalData.CheckPropTypeHints;
-    RuntimeOption::EvalHackArrDVArrs        = s_globalData.HackArrDVArrs;
+    RuntimeOption::EvalHackArrDVArrs        = true; // TODO(kshaunak): Clean up.
 
-    // arrprov is only for dvarrays. It should be off if HADVAs is on.
-    always_assert(IMPLIES(RO::EvalHackArrDVArrs, !RO::EvalArrayProvenance));
-    always_assert(IMPLIES(RO::EvalHackArrDVArrs, !RO::EvalLogArrayProvenance));
+    always_assert(!RO::EvalArrayProvenance);
+    always_assert(!RO::EvalLogArrayProvenance);
 
-    /*
-     * We only should enable array provenance at runtime if it was enabled in
-     * the repo AND we have logging enabled--otherwise it's pointless to do the
-     * bookkeeping
-     *
-     * Also--just because array provenance wasn't enabled in the repo doesn't
-     * mean it can't be explicitly enabled at runtime
-     */
-    RuntimeOption::EvalArrayProvenance = RuntimeOption::EvalArrayProvenance ||
-      (s_globalData.ArrayProvenance && RuntimeOption::EvalLogArrayProvenance);
     RuntimeOption::EnableArgsInBacktraces = s_globalData.EnableArgsInBacktraces;
     RuntimeOption::EvalAbortBuildOnVerifyError =
       s_globalData.AbortBuildOnVerifyError;
@@ -358,7 +346,6 @@ void Repo::saveGlobalData(GlobalData&& newData,
     query.bindStdString("@key", key);
     BlobEncoder encoder{true};
     encoder(globalArrayTypeTable());
-    encoder(s_globalData.APCProfile);
     encoder(s_globalData.ConstantFunctions);
     query.bindBlob("@data", encoder, /* static */ true);
     query.exec();
@@ -389,7 +376,6 @@ void Repo::saveGlobalData(GlobalData&& newData,
 std::unique_ptr<Unit> Repo::loadUnit(const folly::StringPiece name,
                                      const SHA1& sha1,
                                      const Native::FuncTable& nativeFuncs) {
-  ARRPROV_USE_RUNTIME_LOCATION();
   if (m_dbc == nullptr) return nullptr;
   tracing::Block _{
     "repo-load-unit", [&] { return tracing::Props{}.add("name", name); }

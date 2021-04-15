@@ -175,6 +175,7 @@ struct PropLookupResult {
   SString name; // The statically known name of the string, if any
   TriBool found; // If the property was found
   TriBool isConst; // If the property is AttrConst
+  TriBool readOnly; // If the property is AttrIsReadOnly
   TriBool lateInit; // If the property is AttrLateInit
   bool classInitMightRaise; // If class initialization during the
                             // property access can raise (unlike the
@@ -188,6 +189,7 @@ inline PropLookupResult<T>& operator|=(PropLookupResult<T>& a,
   a.ty |= b.ty;
   a.found |= b.found;
   a.isConst |= b.isConst;
+  a.readOnly |= b.readOnly;
   a.lateInit |= b.lateInit;
   a.classInitMightRaise |= b.classInitMightRaise;
   return a;
@@ -204,7 +206,7 @@ struct PropMergeResult {
   T adjusted; // The merged type, potentially adjusted according to
               // the prop's type-constraint (it's the subtype of the
               // merged type that would succeed).
-  TriBool throws; // Whether the mutation this merge representations
+  TriBool throws; // Whether the mutation this merge represents
                   // can throw.
 };
 
@@ -994,7 +996,8 @@ struct Index {
                                       const Type& name,
                                       const Type& val,
                                       bool checkUB = false,
-                                      bool ignoreConst = false) const;
+                                      bool ignoreConst = false,
+                                      bool mustBeReadOnly = false) const;
 
   /*
    * Initialize the initial types for public static properties. This should be
@@ -1153,11 +1156,6 @@ struct Index {
    */
   bool is_effect_free(res::Func rfunc) const;
   bool is_effect_free(const php::Func* func) const;
-
-  /*
-   * Return true if there are any interceptable functions
-   */
-  bool any_interceptable_functions() const;
 
   /*
    * Do any necessary fixups to a return type.

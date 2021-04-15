@@ -11,12 +11,12 @@ use aast_parser::{
 };
 use anyhow::{anyhow, *};
 use bitflags::bitflags;
-use emit_program_rust::{self as emit_program, emit_program, FromAstFlags};
+use emit_program::FromAstFlags;
 use env::emitter::Emitter;
-use hhas_program_rust::HhasProgram;
+use hhas_program::HhasProgram;
 use hhbc_ast_rust::FatalOp;
 use hhbc_hhas_rust::{context::Context, print_program, Write};
-use instruction_sequence_rust::Error;
+use instruction_sequence::Error;
 use itertools::{Either, Either::*};
 use ocamlrep::{rc::RcOc, FromError, FromOcamlRep, Value};
 use ocamlrep_derive::{FromOcamlRep, ToOcamlRep};
@@ -79,12 +79,11 @@ bitflags! {
         const LOG_EXTERN_COMPILER_PERF=1 << 6;
         const ENABLE_INTRINSICS_EXTENSION=1 << 7;
         const DISABLE_NONTOPLEVEL_DECLARATIONS=1 << 8;
-        const DISABLE_STATIC_CLOSURES=1 << 9;
         const EMIT_CLS_METH_POINTERS=1 << 10;
         const EMIT_METH_CALLER_FUNC_POINTERS=1 << 11;
         const RX_IS_ENABLED=1 << 12;
         const ARRAY_PROVENANCE=1 << 13;
-        const HACK_ARR_DV_ARR_MARK=1 << 14;
+        // No longer using bit 14.
         const FOLD_LAZY_CLASS_KEYS=1 << 15;
         const EMIT_INST_METH_POINTERS=1 << 16;
     }
@@ -106,11 +105,12 @@ bitflags! {
         const DISALLOW_FUN_AND_CLS_METH_PSEUDO_FUNCS=1 << 12;
         const DISALLOW_FUNC_PTRS_IN_CONSTANTS=1 << 13;
         const DISALLOW_HASH_COMMENTS=1 << 14;
-        const ENABLE_COROUTINES=1 << 15;
+        // No longer using bit 15.
         const ENABLE_ENUM_CLASSES=1 << 16;
         const ENABLE_XHP_CLASS_MODIFIER=1 << 17;
         const DISALLOW_DYNAMIC_METH_CALLER_ARGS=1 << 18;
         const ENABLE_CLASS_LEVEL_WHERE_CLAUSES=1 << 19;
+        const ENABLE_READONLY_ENFORCEMENT=1 << 20;
   }
 }
 
@@ -155,9 +155,6 @@ impl HHBCFlags {
         if self.contains(HHBCFlags::HACK_ARR_COMPAT_NOTICES) {
             f |= HhvmFlags::HACK_ARR_COMPAT_NOTICES;
         }
-        if self.contains(HHBCFlags::HACK_ARR_DV_ARR_MARK) {
-            f |= HhvmFlags::HACK_ARR_DV_ARR_MARK;
-        }
         if self.contains(HHBCFlags::HACK_ARR_DV_ARRS) {
             f |= HhvmFlags::HACK_ARR_DV_ARRS;
         }
@@ -177,9 +174,6 @@ impl HHBCFlags {
         let mut f = PhpismFlags::empty();
         if self.contains(HHBCFlags::DISABLE_NONTOPLEVEL_DECLARATIONS) {
             f |= PhpismFlags::DISABLE_NONTOPLEVEL_DECLARATIONS;
-        }
-        if self.contains(HHBCFlags::DISABLE_STATIC_CLOSURES) {
-            f |= PhpismFlags::DISABLE_STATIC_CLOSURES;
         }
         f
     }
@@ -241,9 +235,6 @@ impl ParserFlags {
         if self.contains(ParserFlags::DISALLOW_HASH_COMMENTS) {
             f |= LangFlags::DISALLOW_HASH_COMMENTS;
         }
-        if self.contains(ParserFlags::ENABLE_COROUTINES) {
-            f |= LangFlags::ENABLE_COROUTINES;
-        }
         if self.contains(ParserFlags::ENABLE_ENUM_CLASSES) {
             f |= LangFlags::ENABLE_ENUM_CLASSES;
         }
@@ -255,6 +246,9 @@ impl ParserFlags {
         }
         if self.contains(ParserFlags::DISALLOW_DYNAMIC_METH_CALLER_ARGS) {
             f |= LangFlags::DISALLOW_DYNAMIC_METH_CALLER_ARGS;
+        }
+        if self.contains(ParserFlags::ENABLE_READONLY_ENFORCEMENT) {
+            f |= LangFlags::ENABLE_READONLY_ENFORCEMENT;
         }
         f
     }
@@ -465,7 +459,7 @@ fn emit<'p, S: AsRef<str>>(
     if env.flags.contains(EnvFlags::IS_SYSTEMLIB) {
         flags |= FromAstFlags::IS_SYSTEMLIB;
     }
-    emit_program(emitter, flags, namespace, ast)
+    emit_program::emit_program(emitter, flags, namespace, ast)
 }
 
 fn emit_fatal<'a>(
@@ -490,7 +484,6 @@ fn create_parser_options(opts: &Options) -> ParserOptions {
     popt.po_disallow_silence = false;
     popt.po_disable_nontoplevel_declarations =
         phpism_flags(PhpismFlags::DISABLE_NONTOPLEVEL_DECLARATIONS);
-    popt.po_disable_static_closures = phpism_flags(PhpismFlags::DISABLE_STATIC_CLOSURES);
     popt.po_disable_lval_as_an_expression =
         hack_lang_flags(LangFlags::DISABLE_LVAL_AS_AN_EXPRESSION);
     popt.po_enable_class_level_where_clauses =

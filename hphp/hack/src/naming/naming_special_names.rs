@@ -109,9 +109,8 @@ pub mod collections {
 }
 
 pub mod members {
+    use hash::{HashMap, HashSet};
     use lazy_static::lazy_static;
-    use std::collections::HashMap;
-    use std::collections::HashSet;
 
     pub const M_CLASS: &str = "class";
 
@@ -174,7 +173,7 @@ pub mod members {
         pub static ref AS_LOWERCASE_SET: HashSet<String> = {
             AS_SET
                 .iter()
-                .fold(HashSet::<String>::new(), |mut set, special_name| {
+                .fold(HashSet::<String>::default(), |mut set, special_name| {
                     set.insert(special_name.to_ascii_lowercase());
                     set
                 })
@@ -183,7 +182,7 @@ pub mod members {
             vec![__CALL, __CALL_STATIC, __GET, __ISSET, __SET, __UNSET]
                 .iter()
                 .fold(
-                    HashMap::<String, &'static str>::new(),
+                    HashMap::<String, &'static str>::default(),
                     |mut set, special_name| {
                         set.insert(special_name.to_ascii_lowercase(), special_name);
                         set
@@ -213,8 +212,6 @@ pub mod user_attributes {
 
     pub const CONST: &str = "__Const";
 
-    pub const CONST_FUN: &str = "__ConstFun";
-
     pub const DEPRECATED: &str = "__Deprecated";
 
     pub const ENTRY_POINT: &str = "__EntryPoint";
@@ -224,8 +221,6 @@ pub mod user_attributes {
     pub const MEMOIZE_LSB: &str = "__MemoizeLSB";
 
     pub const PHP_STD_LIB: &str = "__PHPStdLib";
-
-    pub const HIPHOP_SPECIFIC: &str = "__HipHopSpecific";
 
     pub const ACCEPT_DISPOSABLE: &str = "__AcceptDisposable";
 
@@ -271,6 +266,8 @@ pub mod user_attributes {
 
     pub const EXTERNAL: &str = "__External";
 
+    pub const SOUND_DYNAMIC_CALLABLE: &str = "__SoundDynamicCallable";
+
     lazy_static! {
         static ref AS_SET: HashSet<&'static str> = vec![
             OVERRIDE,
@@ -281,7 +278,6 @@ pub mod user_attributes {
             MEMOIZE,
             MEMOIZE_LSB,
             PHP_STD_LIB,
-            HIPHOP_SPECIFIC,
             ACCEPT_DISPOSABLE,
             RETURN_DISPOSABLE,
             LSB,
@@ -304,6 +300,7 @@ pub mod user_attributes {
             POLICIED,
             INFERFLOWS,
             EXTERNAL,
+            SOUND_DYNAMIC_CALLABLE,
         ]
         .into_iter()
         .collect();
@@ -337,8 +334,8 @@ pub mod user_attributes {
 }
 
 pub mod attribute_kinds {
+    use hash::HashMap;
     use lazy_static::lazy_static;
-    use std::collections::HashMap;
 
     pub const CLS: &str = "\\HH\\ClassAttribute";
 
@@ -364,6 +361,8 @@ pub mod attribute_kinds {
 
     pub const LAMBDA: &str = "\\HH\\LambdaAttribute";
 
+    pub const ENUM_CLS: &str = "\\HH\\EnumClassAttribute";
+
     pub static PLAIN_ENGLISH: &[(&str, &str)] = &[
         (CLS, "a class"),
         (ENUM, "an enum"),
@@ -377,6 +376,7 @@ pub mod attribute_kinds {
         (FILE, "a file"),
         (TYPE_CONST, "a type constant"),
         (LAMBDA, "a lambda expression"),
+        (ENUM_CLS, "an enum class"),
     ];
 
     lazy_static! {

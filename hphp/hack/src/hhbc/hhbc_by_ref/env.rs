@@ -27,7 +27,7 @@ bitflags! {
 /// `'a` is an AST lifetime, `'arena` the lifetime of the `InstrSeq`
 /// arena.
 #[derive(Clone, Debug)]
-pub struct Env<'a, 'arena> {
+pub struct Env<'a, 'arena: 'a> {
     pub arena: &'arena bumpalo::Bump,
     pub flags: Flags,
     pub jump_targets_gen: jump_targets::Gen<'arena>,
@@ -50,13 +50,13 @@ impl<'a, 'arena> Env<'a, 'arena> {
         }
     }
 
-    pub fn with_allows_array_append<F, R>(&mut self, f: F) -> R
+    pub fn with_allows_array_append<F, R>(&mut self, alloc: &'arena bumpalo::Bump, f: F) -> R
     where
-        F: FnOnce(&mut Self) -> R,
+        F: FnOnce(&'arena bumpalo::Bump, &mut Self) -> R,
     {
         let old = self.flags.contains(Flags::ALLOWS_ARRAY_APPEND);
         self.flags.set(Flags::ALLOWS_ARRAY_APPEND, true);
-        let r = f(self);
+        let r = f(alloc, self);
         self.flags.set(Flags::ALLOWS_ARRAY_APPEND, old);
         r
     }
@@ -104,7 +104,7 @@ impl<'a, 'arena> Env<'a, 'arena> {
         F: FnOnce(&mut Self, &mut Emitter<'arena>, &[tast::Stmt]) -> R,
     {
         self.jump_targets_gen
-            .with_loop(label_break, label_continue, iterator, b);
+            .with_loop(label_break, label_continue, iterator);
         self.run_and_release_ids(e, |env, e| f(env, e, b))
     }
 
@@ -118,7 +118,7 @@ impl<'a, 'arena> Env<'a, 'arena> {
     where
         F: FnOnce(&mut Self, &mut Emitter<'arena>, &[tast::Case]) -> R,
     {
-        self.jump_targets_gen.with_switch(end_label, cases);
+        self.jump_targets_gen.with_switch(end_label);
         self.run_and_release_ids(e, |env, e| f(env, e, cases))
     }
 
@@ -133,8 +133,7 @@ impl<'a, 'arena> Env<'a, 'arena> {
     where
         F: FnOnce(&mut Self, &mut Emitter<'arena>, &[tast::Stmt], &[tast::Catch]) -> R,
     {
-        self.jump_targets_gen
-            .with_try_catch(finally_label, try_block, catch_block);
+        self.jump_targets_gen.with_try_catch(finally_label);
         self.run_and_release_ids(e, |env, e| f(env, e, try_block, catch_block))
     }
 
@@ -148,7 +147,7 @@ impl<'a, 'arena> Env<'a, 'arena> {
     where
         F: FnOnce(&mut Self, &mut Emitter<'arena>, &[tast::Stmt]) -> R,
     {
-        self.jump_targets_gen.with_try(finally_label, block);
+        self.jump_targets_gen.with_try(finally_label);
         self.run_and_release_ids(e, |env, e| f(env, e, block))
     }
 
@@ -161,7 +160,7 @@ impl<'a, 'arena> Env<'a, 'arena> {
     where
         F: FnOnce(&mut Self, &mut Emitter<'arena>, &[tast::Stmt]) -> R,
     {
-        self.jump_targets_gen.with_finally(block);
+        self.jump_targets_gen.with_finally();
         self.run_and_release_ids(e, |env, e| f(env, e, block))
     }
 
@@ -175,7 +174,7 @@ impl<'a, 'arena> Env<'a, 'arena> {
     where
         F: FnOnce(&mut Self, &mut Emitter<'arena>, &[tast::Stmt]) -> R,
     {
-        self.jump_targets_gen.with_using(finally_label, block);
+        self.jump_targets_gen.with_using(finally_label);
         self.run_and_release_ids(e, |env, e| f(env, e, block))
     }
 
@@ -183,7 +182,7 @@ impl<'a, 'arena> Env<'a, 'arena> {
     where
         F: FnOnce(&mut Self, &mut Emitter<'arena>, &AstBody) -> R,
     {
-        self.jump_targets_gen.with_function(defs);
+        self.jump_targets_gen.with_function();
         self.run_and_release_ids(e, |env, e| f(env, e, defs))
     }
 

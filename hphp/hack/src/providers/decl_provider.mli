@@ -10,11 +10,7 @@
 
 type fun_key = string
 
-type class_key = string
-
-type record_def_key = string
-
-type typedef_key = string
+type type_key = string
 
 type gconst_key = string
 
@@ -32,8 +28,6 @@ type typedef_decl = Typing_defs.typedef_type
 
 type gconst_decl = Typing_defs.const_decl
 
-val with_decl_tracking : (unit -> 'a) -> 'a * FileInfo.names
-
 val prepare_for_typecheck :
   Provider_context.t -> Relative_path.t -> string -> unit
 
@@ -46,19 +40,19 @@ val get_fun :
 val get_class :
   ?tracing_info:Decl_counters.tracing_info ->
   Provider_context.t ->
-  class_key ->
+  type_key ->
   class_decl option
 
 val get_record_def :
   ?tracing_info:Decl_counters.tracing_info ->
   Provider_context.t ->
-  record_def_key ->
+  type_key ->
   record_def_decl option
 
 val get_typedef :
   ?tracing_info:Decl_counters.tracing_info ->
   Provider_context.t ->
-  typedef_key ->
+  type_key ->
   typedef_decl option
 
 val get_gconst :

@@ -8,19 +8,11 @@
  *)
 
 open Hh_prelude
-open File_content
 open String_utils
 open Sys_utils
 open Typing_env_types
 module Inf = Typing_inference_env
 module Cls = Decl_provider.Class
-
-module StringAnnotation = struct
-  type t = string
-
-  let pp fmt str = Format.pp_print_string fmt str
-end
-
 module PS = Full_fidelity_positioned_syntax
 module PositionedTree = Full_fidelity_syntax_tree.WithSyntax (PS)
 
@@ -30,10 +22,6 @@ module PositionedTree = Full_fidelity_syntax_tree.WithSyntax (PS)
 
 type mode =
   | Ifc of string * string
-  | Ai of Ai_options.t
-  | Autocomplete
-  | Autocomplete_manually_invoked
-  | Ffp_autocomplete
   | Color
   | Coverage
   | Cst_search
@@ -120,12 +108,7 @@ let print_error format ?(oc = stderr) l =
     | Errors.Raw -> (fun e -> Errors.to_string e)
     | Errors.Highlighted -> Highlighted_error_formatter.to_string
   in
-  let absolute_errors =
-    if use_canonical_filenames () then
-      Errors.to_absolute l
-    else
-      Errors.to_absolute_for_test l
-  in
+  let absolute_errors = Errors.to_absolute l in
   Out_channel.output_string oc (formatter absolute_errors)
 
 let write_error_list format errors oc max_errors =
@@ -204,7 +187,6 @@ let parse_options () =
     set_mode (Ifc (!ifc_mode, lattice)) ();
     batch_mode := true
   in
-  let set_ai x = set_mode (Ai (Ai_options.prepare ~server:false x)) () in
   let error_format = ref Errors.Highlighted in
   let forbid_nullable_cast = ref false in
   let deregister_attributes = ref None in
@@ -277,12 +259,14 @@ let parse_options () =
   let disallow_fun_and_cls_meth_pseudo_funcs = ref false in
   let disallow_inst_meth = ref false in
   let use_direct_decl_parser = ref false in
-  let enable_enum_classes = ref false in
+  let disable_enum_classes = ref false in
   let enable_enum_supertyping = ref false in
-  let array_unification = ref false in
+  let hack_arr_dv_arrs = ref true in
   let interpret_soft_types_as_like_types = ref false in
   let enable_strict_string_concat_interp = ref false in
   let ignore_unsafe_cast = ref false in
+  let bitwise_math_new_code = ref false in
+  let inc_dec_new_code = ref false in
   let naming_table = ref None in
   let root = ref None in
   let sharedmem_config = ref SharedMem.default_config in
@@ -300,27 +284,15 @@ let parse_options () =
       ( "--ifc",
         Arg.Tuple [Arg.String (fun m -> ifc_mode := m); Arg.String set_ifc],
         " Run the flow analysis" );
-      ("--ai", Arg.String set_ai, " Run the abstract interpreter (Zoncolan)");
       ( "--deregister-attributes",
         Arg.Unit (set_bool deregister_attributes),
         " Ignore all functions with attribute '__PHPStdLib'" );
-      ( "--auto-complete",
-        Arg.Unit (set_mode Autocomplete),
-        " Produce autocomplete suggestions as if triggered by trigger character"
-      );
-      ( "--auto-complete-manually-invoked",
-        Arg.Unit (set_mode Autocomplete_manually_invoked),
-        " Produce autocomplete suggestions as if manually triggered by user" );
       ( "--auto-namespace-map",
         Arg.String
           (fun m ->
             auto_namespace_map :=
               Some (ServerConfig.convert_auto_namespace_to_map m)),
         " Alias namespaces" );
-      ( "--ffp-auto-complete",
-        Arg.Unit (set_mode Ffp_autocomplete),
-        " Produce autocomplete suggestions using the full-fidelity parse tree"
-      );
       ( "--no-call-coeffects",
         Arg.Unit (fun () -> call_coeffects := false),
         "Turns off call coeffects" );
@@ -646,14 +618,14 @@ let parse_options () =
       ( "--use-direct-decl-parser",
         Arg.Set use_direct_decl_parser,
         "Use direct decl parser" );
-      ( "--enable-enum-classes",
-        Arg.Set enable_enum_classes,
-        "Enable the enum classes extension." );
+      ( "--disable-enum-classes",
+        Arg.Set disable_enum_classes,
+        "Disable the enum classes extension." );
       ( "--enable-enum-supertyping",
         Arg.Set enable_enum_supertyping,
         "Enable the enum supertyping extension." );
-      ( "--array-unification",
-        Arg.Set array_unification,
+      ( "--hack-arr-dv-arrs",
+        Arg.Set hack_arr_dv_arrs,
         "Varray and darray become vec and dict." );
       ( "--interpret-soft-types-as-like-types",
         Arg.Set interpret_soft_types_as_like_types,
@@ -667,6 +639,13 @@ let parse_options () =
       ( "--ignore-unsafe-cast",
         Arg.Set ignore_unsafe_cast,
         "Ignore unsafe_cast and retain the original type of the expression" );
+      ( "--bitwise-math-new-code",
+        Arg.Set bitwise_math_new_code,
+        "Use new error code in bitwise math operations." );
+      ( "--inc-dec-new-code",
+        Arg.Set inc_dec_new_code,
+        "Use new error code in post- and pre-increment and decrement operations."
+      );
     ]
   in
   let options = Arg.align ~limit:25 options in
@@ -799,13 +778,15 @@ let parse_options () =
         else
           [] )
       ~tco_use_direct_decl_parser:!use_direct_decl_parser
-      ~po_enable_enum_classes:!enable_enum_classes
+      ~po_enable_enum_classes:(not !disable_enum_classes)
       ~po_enable_enum_supertyping:!enable_enum_supertyping
-      ~po_array_unification:!array_unification
+      ~po_hack_arr_dv_arrs:!hack_arr_dv_arrs
       ~po_interpret_soft_types_as_like_types:!interpret_soft_types_as_like_types
       ~tco_enable_strict_string_concat_interp:
         !enable_strict_string_concat_interp
       ~tco_ignore_unsafe_cast:!ignore_unsafe_cast
+      ~tco_bitwise_math_new_code:!bitwise_math_new_code
+      ~tco_inc_dec_new_code:!inc_dec_new_code
       ()
   in
   Errors.allowed_fixme_codes_strict :=
@@ -837,27 +818,6 @@ let parse_options () =
           tcopt.GlobalOptions.tco_experimental_features;
     }
   in
-  (* Configure symbol index settings *)
-  let namespace_map = GlobalOptions.po_auto_namespace_map tcopt in
-  let sienv =
-    SymbolIndex.initialize
-      ~globalrev:None
-      ~gleanopt:tcopt
-      ~namespace_map
-      ~provider_name:"LocalIndex"
-      ~quiet:true
-      ~ignore_hh_version:false
-      ~savedstate_file_opt:!symbolindex_file
-      ~workers:None
-  in
-  let sienv =
-    {
-      sienv with
-      SearchUtils.sie_resolve_signatures = true;
-      SearchUtils.sie_resolve_positions = true;
-      SearchUtils.sie_resolve_local_decl = true;
-    }
-  in
   ( {
       files = fns;
       extra_builtins = !extra_builtins;
@@ -870,7 +830,6 @@ let parse_options () =
       out_extension = !out_extension;
       verbosity = !verbosity;
     },
-    sienv,
     root,
     !naming_table,
     !sharedmem_config )
@@ -1078,17 +1037,10 @@ let parse_and_name ctx files_contents =
       parsed_files
   in
   Relative_path.Map.iter files_info (fun fn fileinfo ->
-      Errors.run_in_context fn Errors.Naming (fun () ->
-          let { FileInfo.funs; classes; record_defs; typedefs; consts; _ } =
-            fileinfo
-          in
-          Naming_global.make_env
-            ctx
-            ~funs
-            ~classes
-            ~record_defs
-            ~typedefs
-            ~consts));
+      let (errors, _failed_naming_fns) =
+        Naming_global.ndecl_file_error_if_already_bound ctx fn fileinfo
+      in
+      Errors.merge_into_current errors);
   (parsed_files, files_info)
 
 let parse_name_and_decl ctx files_contents =
@@ -1399,24 +1351,11 @@ let dump_debug_glean_deps
       ( Typing_deps.Dep.dependency Typing_deps.Dep.variant
       * Typing_deps.Dep.dependent Typing_deps.Dep.variant )
       HashSet.t) =
-  let json_opt = Glean_dependency_graph.convert_deps_to_json ~deps in
+  let json_opt = Glean_dependency_graph_convert.convert_deps_to_json ~deps in
   match json_opt with
   | Some json_obj ->
     Printf.printf "%s\n" (Hh_json.json_to_string ~pretty:true json_obj)
   | None -> Printf.printf "No dependencies\n"
-
-let scan_files_for_symbol_index
-    (filename : Relative_path.t)
-    (sienv : SearchUtils.si_env)
-    (ctx : Provider_context.t) : SearchUtils.si_env =
-  let files_contents = Multifile.file_to_files filename in
-  let (_, individual_file_info) = parse_name_and_decl ctx files_contents in
-  let fileinfo_list = Relative_path.Map.values individual_file_info in
-  let transformed_list =
-    List.map fileinfo_list ~f:(fun fileinfo ->
-        (filename, SearchUtils.Full fileinfo, SearchUtils.TypeChecker))
-  in
-  SymbolIndex.update_files ~ctx ~sienv ~paths:transformed_list
 
 let handle_mode
     mode
@@ -1432,8 +1371,7 @@ let handle_mode
     out_extension
     dbg_deps
     dbg_glean_deps
-    ~verbosity
-    (sienv : SearchUtils.si_env) =
+    ~verbosity =
   let expect_single_file () : Relative_path.t =
     match filenames with
     | [x] -> x
@@ -1497,105 +1435,6 @@ let handle_mode
     iter_over_files (fun filename ->
         Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
             process_file filename))
-  | Ai ai_options ->
-    if not (List.is_empty parse_errors) then
-      List.iter ~f:(print_error error_format) parse_errors
-    else
-      let to_check =
-        Relative_path.Map.filter files_info ~f:(fun _p i ->
-            let open FileInfo in
-            match i.file_mode with
-            | None
-            | Some Mstrict ->
-              true
-            | _ -> false)
-      in
-      let errors =
-        check_file ~verbosity ctx [] to_check error_format max_errors
-      in
-      if not (List.is_empty errors) then
-        List.iter ~f:(print_error error_format) errors
-      else
-        Ai.do_ files_info ai_options ctx
-  | Autocomplete
-  | Autocomplete_manually_invoked ->
-    let path = expect_single_file () in
-    let contents = cat (Relative_path.to_absolute path) in
-    (* Search backwards: there should only be one /real/ case. If there's multiple, *)
-    (* guess that the others are preceding explanation comments *)
-    let offset =
-      Str.search_backward
-        (Str.regexp AutocompleteTypes.autocomplete_token)
-        contents
-        (String.length contents)
-    in
-    let pos = File_content.offset_to_position contents offset in
-    let is_manually_invoked =
-      match mode with
-      | Autocomplete_manually_invoked -> true
-      | _ -> false
-    in
-    let (ctx, entry) =
-      Provider_context.add_or_overwrite_entry_contents ~ctx ~path ~contents
-    in
-    let autocomplete_context =
-      ServerAutoComplete.get_autocomplete_context
-        ~file_content:contents
-        ~pos
-        ~is_manually_invoked
-    in
-    let sienv = scan_files_for_symbol_index path sienv ctx in
-    let result =
-      ServerAutoComplete.go_at_auto332_ctx
-        ~ctx
-        ~entry
-        ~sienv
-        ~autocomplete_context
-    in
-    List.iter
-      ~f:
-        begin
-          fun r ->
-          AutocompleteTypes.(Printf.printf "%s %s\n" r.res_name r.res_ty)
-        end
-      result.Utils.With_complete_flag.value
-  | Ffp_autocomplete ->
-    iter_over_files (fun path ->
-        try
-          let sienv = scan_files_for_symbol_index path sienv ctx in
-          let (ctx, entry) = Provider_context.add_entry_if_missing ~ctx ~path in
-          (* TODO: Use a magic word/symbol to identify autocomplete location instead *)
-          let args_regex = Str.regexp "AUTOCOMPLETE [1-9][0-9]* [1-9][0-9]*" in
-          let position =
-            try
-              let file_text = Provider_context.read_file_contents_exn entry in
-              let _ = Str.search_forward args_regex file_text 0 in
-              let raw_flags = Str.matched_string file_text in
-              match split ' ' raw_flags with
-              | [_; row; column] ->
-                { line = int_of_string row; column = int_of_string column }
-              | _ -> failwith "Invalid test file: no flags found"
-            with Caml.Not_found ->
-              failwith "Invalid test file: no flags found"
-          in
-          let result =
-            FfpAutocompleteService.auto_complete
-              ctx
-              entry
-              position
-              ~filter_by_token:true
-              ~sienv
-          in
-          match result with
-          | [] -> Printf.printf "No result found\n"
-          | res ->
-            List.iter res ~f:(fun r ->
-                AutocompleteTypes.(Printf.printf "%s\n" r.res_name))
-        with
-        | Failure msg
-        | Invalid_argument msg ->
-          Printf.printf "%s\n" msg;
-          exit 1)
   | Color ->
     Relative_path.Map.iter files_info (fun fn fileinfo ->
         if Relative_path.Map.mem builtins fn then
@@ -1614,7 +1453,9 @@ let handle_mode
           ()
         else
           let (tast, _) = Typing_check_utils.type_file ctx fn fileinfo in
-          let type_acc = ServerCoverageMetric.accumulate_types ctx tast fn in
+          let type_acc =
+            ServerCoverageMetricUtils.accumulate_types ctx tast fn
+          in
           print_coverage type_acc)
   | Cst_search ->
     let path = expect_single_file () in
@@ -1638,12 +1479,12 @@ let handle_mode
   | Dump_symbol_info ->
     iter_over_files (fun filename ->
         match Relative_path.Map.find_opt files_info filename with
-        | Some fileinfo ->
-          let raw_result =
-            SymbolInfoService.helper ctx [] [(filename, fileinfo)]
+        | Some _fileinfo ->
+          let raw_result = SymbolInfoServiceUtils.helper ctx [] [filename] in
+          let result = SymbolInfoServiceUtils.format_result raw_result in
+          let result_json =
+            ServerCommandTypes.Symbol_info_service.to_json result
           in
-          let result = SymbolInfoService.format_result raw_result in
-          let result_json = ClientSymbolInfo.to_json result in
           print_endline (Hh_json.json_to_multiline result_json)
         | None -> ())
   | Lint ->
@@ -1666,7 +1507,7 @@ let handle_mode
           lint_errors
       in
       let lint_errors = List.map ~f:Lint.to_absolute lint_errors in
-      ServerLint.output_text stdout lint_errors error_format;
+      ServerLintTypes.output_text stdout lint_errors error_format;
       exit 2
     ) else
       Printf.printf "No lint errors\n"
@@ -1700,7 +1541,9 @@ let handle_mode
                   naming_table
                   None
               in
-              ClientMethodJumps.print_readable ancestors ~find_children:false;
+              ServerCommandTypes.Method_jumps.print_readable
+                ancestors
+                ~find_children:false;
               Printf.printf "\n");
           Printf.printf "\n";
           List.iter fileinfo.FileInfo.classes (fun (_p, class_) ->
@@ -1716,7 +1559,9 @@ let handle_mode
                   naming_table
                   None
               in
-              ClientMethodJumps.print_readable children ~find_children:true;
+              ServerCommandTypes.Method_jumps.print_readable
+                children
+                ~find_children:true;
               Printf.printf "\n")
         ))
   | Identify_symbol (line, column) ->
@@ -1821,7 +1666,9 @@ let handle_mode
             ~init:SMap.empty
         in
         let patched =
-          ClientRefactor.apply_patches_to_file_contents file_contents patches
+          ServerRefactorTypes.apply_patches_to_file_contents
+            file_contents
+            patches
         in
         let print_filename = not @@ Int.equal (SMap.cardinal patched) 1 in
         SMap.iter
@@ -1870,7 +1717,7 @@ let handle_mode
               @@ "should only happen with prechecked files "
               ^ "which are not a thing in hh_single_type_check"))
     in
-    ClientFindRefs.print_ide_readable results
+    ClientFindRefsPrint.print_ide_readable results
   | Go_to_impl (line, column) ->
     let filename = expect_single_file () in
     let deps_mode = Provider_context.get_deps_mode ctx in
@@ -1913,7 +1760,7 @@ let handle_mode
             @@ "should only happen with prechecked files "
             ^ "which are not a thing in hh_single_type_check"
         in
-        ClientFindRefs.print_ide_readable results))
+        ClientFindRefsPrint.print_ide_readable results))
   | Highlight_refs (line, column) ->
     let path = expect_single_file () in
     let (ctx, entry) = Provider_context.add_entry_if_missing ~ctx ~path in
@@ -2194,7 +2041,7 @@ let handle_mode
                         Printf.sprintf " (%s)" modifiers )))
               |> Sequence.to_list
             in
-            Printf.printf "%s:\n" (Utils.strip_ns classname);
+            Printf.printf "%s:\n" classname;
             List.iter linearization ~f:(Printf.printf "  %s\n")))
 
 (*****************************************************************************)
@@ -2216,20 +2063,12 @@ let decl_and_run_mode
     }
     (popt : TypecheckerOptions.t)
     (hhi_root : Path.t)
-    (naming_table_path : string option)
-    (sienv : SearchUtils.si_env) : unit =
+    (naming_table_path : string option) : unit =
   Ident.track_names := true;
   let builtins =
     if no_builtins then
       Relative_path.Map.empty
     else
-      (* Note that the regular `.hhi` files have already been written to disk
-      with `Hhi.get_root ()` *)
-      let magic_builtins =
-        match mode with
-        | Ifc _ -> magic_builtins
-        | _ -> magic_builtins
-      in
       let extra_builtins =
         let add_file_content map filename =
           Relative_path.create Relative_path.Dummy filename
@@ -2371,12 +2210,10 @@ let decl_and_run_mode
     out_extension
     dbg_deps
     dbg_glean_deps
-    sienv
     ~verbosity
 
 let main_hack
     ({ tcopt; _ } as opts)
-    (sienv : SearchUtils.si_env)
     (root : Path.t)
     (naming_table : string option)
     (sharedmem_config : SharedMem.config) : unit =
@@ -2392,7 +2229,7 @@ let main_hack
       Relative_path.set_path_prefix Relative_path.Root root;
       Relative_path.set_path_prefix Relative_path.Hhi hhi_root;
       Relative_path.set_path_prefix Relative_path.Tmp (Path.make "tmp");
-      decl_and_run_mode opts tcopt hhi_root naming_table sienv;
+      decl_and_run_mode opts tcopt hhi_root naming_table;
       TypingLogger.flush_buffers ())
 
 (* command line driver *)
@@ -2405,13 +2242,5 @@ let () =
        it breaks the testsuite where the output is compared to the
        expected one (i.e. in given file without CRLF). *)
     Out_channel.set_binary_mode stdout true;
-  let (options, sienv, root, naming_table, sharedmem_config) =
-    parse_options ()
-  in
-  Unix.handle_unix_error
-    main_hack
-    options
-    sienv
-    root
-    naming_table
-    sharedmem_config
+  let (options, root, naming_table, sharedmem_config) = parse_options () in
+  Unix.handle_unix_error main_hack options root naming_table sharedmem_config

@@ -1012,7 +1012,7 @@ void VariableUnserializer::unserializeVariant(
             if (!TypeStructure::coerceToTypeStructureList_SERDE_ONLY(t)) {
               throwInvalidOFormat(clsName);
             }
-            assertx(tvIsHAMSafeVArray(t));
+            assertx(tvIsVec(t));
             obj = Object{cls, t.val().parr};
           } else {
             obj = Object{cls};
@@ -1218,11 +1218,11 @@ Array VariableUnserializer::unserializeArray() {
     throwArraySizeOutOfBounds();
   }
 
-  auto const provTag = unserializeProvenanceTag();
+  unserializeProvenanceTag();
 
   if (size == 0) {
     expectChar('}');
-    return Array::CreateDArray(provTag);
+    return Array::CreateDict();
   }
   // For large arrays, do a naive pre-check for OOM.
   auto const allocsz = MixedArray::computeAllocBytesFromMaxElms(size);
@@ -1247,14 +1247,13 @@ Array VariableUnserializer::unserializeArray() {
 
   check_non_safepoint_surprise();
   expectChar('}');
-  if (provTag) arrprov::setTag(arr.get(), provTag);
   return arr;
 }
 
-arrprov::Tag VariableUnserializer::unserializeProvenanceTag() {
+void VariableUnserializer::unserializeProvenanceTag() {
   if (type() != VariableUnserializer::Type::Internal &&
       type() != VariableUnserializer::Type::Serialize) {
-    return {};
+    return;
   }
 
   auto const read_line = [&]() -> int {
@@ -1278,52 +1277,25 @@ arrprov::Tag VariableUnserializer::unserializeProvenanceTag() {
     }
   };
 
-  // Used for arrprov::Tag kinds that are defined by their name alone.
-  auto const expect_name = [&]() -> const StringData* {
-    readChar();
-    expectChar(':');
-    auto const name = read_name();
-    expectChar(';');
-    return name;
-  };
-
-  if (peek() != 'p') {
-    return {};
-  }
+  if (peek() != 'p') return;
   expectChar('p');
 
-  // We assert that we don't construct a non-trivial arrprov::Tag when arrprov
-  // is disabled, because doing so is expensive. We must construct them lazily.
-#define FINISH(x) (RO::EvalArrayProvenance ? arrprov::Tag::x : arrprov::Tag{})
-
-  if (peek() == ':') {
-    auto const line = read_line();
-    auto const name = read_name();
+  auto const peeked = peek();
+  if (peeked == ':') {
+    read_line();
+    read_name();
     expectChar(';');
-    return FINISH(Known(name, line));
-  } else if (peek() == 'f') {
+  } else if (peeked == 'f') {
     readChar();
-    auto const line = read_line();
-    auto const name = read_name();
+    read_line();
+    read_name();
     expectChar(';');
-    return FINISH(Param(name, line));
-  } else if (peek() == 'r') {
-    auto const name = expect_name();
-    return FINISH(TraitMerge(name));
-  } else if (peek() == 'e') {
-    auto const name = expect_name();
-    return FINISH(LargeEnum(name));
-  } if (peek() == 'c') {
-    auto const name = expect_name();
-    return FINISH(RuntimeLocation(name));
-  } if (peek() == 'z') {
-    auto const name = expect_name();
-    return FINISH(RuntimeLocationPoison(name));
-  } else {
-    return {};
+  } else if (peeked == 'c' || peeked == 'e' || peeked == 'r' || peeked == 'z') {
+    readChar();
+    expectChar(':');
+    read_name();
+    expectChar(';');
   }
-
-#undef FINISH
 }
 
 Array VariableUnserializer::unserializeDict() {
@@ -1406,25 +1378,12 @@ Array VariableUnserializer::unserializeVArray() {
     throwArraySizeOutOfBounds();
   }
 
-  auto const provTag = unserializeProvenanceTag();
+  unserializeProvenanceTag();
 
   if (size == 0) {
     expectChar('}');
-    if (m_type != Type::Serialize) {
-      return Array::attach(provTag
-        ? arrprov::tagStaticArr(staticEmptyVArray(), provTag)
-        : staticEmptyVArray()
-      );
-    }
-    return m_forceDArrays
-      ? Array::attach(provTag
-          ? arrprov::tagStaticArr(staticEmptyDArray(), provTag)
-          : staticEmptyDArray()
-        )
-      : Array::attach(provTag
-          ? arrprov::tagStaticArr(staticEmptyVArray(), provTag)
-          : staticEmptyVArray()
-        );
+    if (m_type != Type::Serialize) return Array::CreateVec();
+    return m_forceDArrays ? Array::CreateDict() : Array::CreateVec();
   }
 
   auto const oomCheck = [&](size_t allocsz) {
@@ -1462,7 +1421,6 @@ Array VariableUnserializer::unserializeVArray() {
 
   check_non_safepoint_surprise();
   expectChar('}');
-  if (provTag) arrprov::setTag(arr.get(), provTag);
   return arr;
 }
 
@@ -1475,14 +1433,11 @@ Array VariableUnserializer::unserializeDArray() {
     throwArraySizeOutOfBounds();
   }
 
-  auto const provTag = unserializeProvenanceTag();
+  unserializeProvenanceTag();
 
   if (size == 0) {
     expectChar('}');
-    return Array::attach(provTag
-      ? arrprov::tagStaticArr(staticEmptyDArray(), provTag)
-      : staticEmptyDArray()
-    );
+    return Array::CreateDict();
   }
 
   // For large arrays, do a naive pre-check for OOM.
@@ -1504,7 +1459,6 @@ Array VariableUnserializer::unserializeDArray() {
 
   check_non_safepoint_surprise();
   expectChar('}');
-  if (provTag) arrprov::setTag(arr.get(), provTag);
   return arr;
 }
 

@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<9516b27a5156a418ec8707140231fd1b>>
+// @generated SignedSource<<ed7cc613e4f0c8aa427140921885a219>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -124,6 +124,13 @@ pub trait VisitorMut<'node> {
     ) -> Result<(), <Self::P as Params>::Error> {
         p.recurse(c, self.object())
     }
+    fn visit_class_abstract_typeconst(
+        &mut self,
+        c: &mut <Self::P as Params>::Context,
+        p: &'node mut ClassAbstractTypeconst,
+    ) -> Result<(), <Self::P as Params>::Error> {
+        p.recurse(c, self.object())
+    }
     fn visit_class_attr(
         &mut self,
         c: &mut <Self::P as Params>::Context,
@@ -133,6 +140,13 @@ pub trait VisitorMut<'node> {
             <Self::P as Params>::En,
             <Self::P as Params>::Hi,
         >,
+    ) -> Result<(), <Self::P as Params>::Error> {
+        p.recurse(c, self.object())
+    }
+    fn visit_class_concrete_typeconst(
+        &mut self,
+        c: &mut <Self::P as Params>::Context,
+        p: &'node mut ClassConcreteTypeconst,
     ) -> Result<(), <Self::P as Params>::Error> {
         p.recurse(c, self.object())
     }
@@ -191,10 +205,24 @@ pub trait VisitorMut<'node> {
     ) -> Result<(), <Self::P as Params>::Error> {
         p.recurse(c, self.object())
     }
+    fn visit_class_partially_abstract_typeconst(
+        &mut self,
+        c: &mut <Self::P as Params>::Context,
+        p: &'node mut ClassPartiallyAbstractTypeconst,
+    ) -> Result<(), <Self::P as Params>::Error> {
+        p.recurse(c, self.object())
+    }
     fn visit_class_typeconst(
         &mut self,
         c: &mut <Self::P as Params>::Context,
-        p: &'node mut ClassTypeconst<
+        p: &'node mut ClassTypeconst,
+    ) -> Result<(), <Self::P as Params>::Error> {
+        p.recurse(c, self.object())
+    }
+    fn visit_class_typeconst_def(
+        &mut self,
+        c: &mut <Self::P as Params>::Context,
+        p: &'node mut ClassTypeconstDef<
             <Self::P as Params>::Ex,
             <Self::P as Params>::Fb,
             <Self::P as Params>::En,
@@ -455,6 +483,13 @@ pub trait VisitorMut<'node> {
     ) -> Result<(), <Self::P as Params>::Error> {
         p.recurse(c, self.object())
     }
+    fn visit_hole_source(
+        &mut self,
+        c: &mut <Self::P as Params>::Context,
+        p: &'node mut HoleSource,
+    ) -> Result<(), <Self::P as Params>::Error> {
+        p.recurse(c, self.object())
+    }
     fn visit_id(
         &mut self,
         c: &mut <Self::P as Params>::Context,
@@ -624,13 +659,6 @@ pub trait VisitorMut<'node> {
         &mut self,
         c: &mut <Self::P as Params>::Context,
         p: &'node mut TypeHint<<Self::P as Params>::Hi>,
-    ) -> Result<(), <Self::P as Params>::Error> {
-        p.recurse(c, self.object())
-    }
-    fn visit_typeconst_abstract_kind(
-        &mut self,
-        c: &mut <Self::P as Params>::Context,
-        p: &'node mut TypeconstAbstractKind,
     ) -> Result<(), <Self::P as Params>::Error> {
         p.recurse(c, self.object())
     }

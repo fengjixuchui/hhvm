@@ -33,7 +33,6 @@ impl Default for GlobalOptions {
             po_deregister_php_stdlib: false,
             po_disallow_toplevel_requires: false,
             po_disable_nontoplevel_declarations: false,
-            po_disable_static_closures: true,
             po_allow_unstable_features: false,
             tco_log_inference_constraints: false,
             tco_disallow_array_typehint: false,
@@ -98,7 +97,7 @@ impl Default for GlobalOptions {
             symbol_write_ignore_paths: vec![],
             symbol_write_index_paths: vec![],
             symbol_write_include_hhi: true,
-            po_enable_enum_classes: false,
+            po_enable_enum_classes: true,
             po_disable_modes: false,
             po_disable_hh_ignore_error: false,
             po_disable_array: false,
@@ -115,11 +114,15 @@ impl Default for GlobalOptions {
             tco_use_direct_decl_parser: false,
             tco_ifc_enabled: vec![],
             po_enable_enum_supertyping: false,
-            po_array_unification: false,
+            po_hack_arr_dv_arrs: false,
             po_interpret_soft_types_as_like_types: false,
             tco_enable_strict_string_concat_interp: false,
             tco_ignore_unsafe_cast: false,
             tco_readonly: false,
+            tco_enable_expression_trees: false,
+            tco_allowed_expression_tree_visitors: vec![],
+            tco_bitwise_math_new_code: false,
+            tco_inc_dec_new_code: false,
         }
     }
 }

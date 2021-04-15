@@ -91,6 +91,7 @@ struct Vunit;
   O(popframe, Inone, Un, Dn)\
   O(recordstack, Inone, Un, Dn)\
   O(recordbasenativesp, Inone, Un, Dn)\
+  O(unrecordbasenativesp, Inone, Un, Dn)\
   O(spill, Inone, U(s), D(d))\
   O(spillbi, I(s), Un, D(d))\
   O(spillli, I(s), Un, D(d))\
@@ -354,12 +355,6 @@ struct Vunit;
   O(mrs, I(s), Un, D(r))\
   O(msr, I(s), U(r), Dn)\
   O(ubfmli, I(mr) I(ms), U(s), D(d))\
-  /* ppc64 instructions */\
-  O(fcmpo, Inone, U(s0) U(s1), D(sf))\
-  O(fcmpu, Inone, U(s0) U(s1), D(sf))\
-  O(fctidz, Inone, U(s), D(d) D(sf))\
-  O(mflr, Inone, Un, D(d))\
-  O(mtlr, Inone, U(s), Dn)\
   /* */
 
 /*
@@ -568,6 +563,7 @@ struct conjureuse { Vreg c; };
  * ActRec on the vm stack.
  */
 struct recordbasenativesp {};
+struct unrecordbasenativesp {};
 
 /*
  * Pseudo-instructions used to represent where Vregs are moved to/from
@@ -1252,15 +1248,6 @@ struct mrs { Immed s; Vreg64 r; };
 struct msr { Vreg64 r; Immed s; };
 struct ubfmli { Immed mr, ms; Vreg32 s, d; };
 
-/*
- * ppc64 intrinsics.
- */
-struct fcmpo { VregDbl s0; VregDbl s1; VregSF sf; };
-struct fcmpu { VregDbl s0; VregDbl s1; VregSF sf; };
-struct fctidz { VregDbl s; VregDbl d; VregSF sf; };
-struct mflr { Vreg64 d; };
-struct mtlr { Vreg64 s; };
-
 ///////////////////////////////////////////////////////////////////////////////
 
 struct Vinstr {
@@ -1428,6 +1415,17 @@ inline bool isCall(const Vinstr& inst) { return isCall(inst.op); }
  * fixed and uniform width.
  */
 Width width(Vinstr::Opcode op);
+
+/*
+ * Returns whether the instruction has an indirect fixup
+ */
+bool instrHasIndirectFixup(const Vinstr&);
+
+/*
+ * Updates the rip offset of the indirect fixup by spill amount
+ * Requires: instrHasIndirectFixup()
+ */
+void updateIndirectFixupBySpill(Vinstr&, size_t);
 
 ///////////////////////////////////////////////////////////////////////////////
 

@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<d89da6eecb4756b94a5fef4f310bfb43>>
+// @generated SignedSource<<818c988502579bceff20743df01d00ce>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -361,21 +361,6 @@ impl<'a> Node<'a> for FunType<'a> {
         }
     }
 }
-impl<'a> Node<'a> for Id<'a> {
-    fn accept(&'a self, v: &mut dyn Visitor<'a>) {
-        v.visit_id(self)
-    }
-    fn recurse(&'a self, v: &mut dyn Visitor<'a>) {
-        match self {
-            Id(ref __binding_0, ref __binding_1) => {
-                {
-                    __binding_0.accept(v)
-                }
-                { __binding_1.accept(v) }
-            }
-        }
-    }
-}
 impl<'a> Node<'a> for IfcFunDecl<'a> {
     fn accept(&'a self, v: &mut dyn Visitor<'a>) {
         v.visit_ifc_fun_decl(self)
@@ -394,21 +379,6 @@ impl<'a> Node<'a> for PosByteString<'a> {
     fn recurse(&'a self, v: &mut dyn Visitor<'a>) {
         match self {
             PosByteString(ref __binding_0, ref __binding_1) => {
-                {
-                    __binding_0.accept(v)
-                }
-                { __binding_1.accept(v) }
-            }
-        }
-    }
-}
-impl<'a> Node<'a> for PosId<'a> {
-    fn accept(&'a self, v: &mut dyn Visitor<'a>) {
-        v.visit_pos_id(self)
-    }
-    fn recurse(&'a self, v: &mut dyn Visitor<'a>) {
-        match self {
-            PosId(ref __binding_0, ref __binding_1) => {
                 {
                     __binding_0.accept(v)
                 }
@@ -704,10 +674,11 @@ impl<'a> Node<'a> for ShallowTypeconst<'a> {
             ShallowTypeconst {
                 abstract_: ref __binding_0,
                 as_constraint: ref __binding_1,
-                name: ref __binding_2,
-                type_: ref __binding_3,
-                enforceable: ref __binding_4,
-                reifiable: ref __binding_5,
+                super_constraint: ref __binding_2,
+                name: ref __binding_3,
+                type_: ref __binding_4,
+                enforceable: ref __binding_5,
+                reifiable: ref __binding_6,
             } => {
                 {
                     __binding_0.accept(v)
@@ -724,7 +695,10 @@ impl<'a> Node<'a> for ShallowTypeconst<'a> {
                 {
                     __binding_4.accept(v)
                 }
-                { __binding_5.accept(v) }
+                {
+                    __binding_5.accept(v)
+                }
+                { __binding_6.accept(v) }
             }
         }
     }
@@ -779,6 +753,7 @@ impl<'a> Node<'a> for T_<'a> {
             T_::RwitnessFromDecl(ref __binding_0) => __binding_0.accept(v),
             T_::Ridx(ref __binding_0) => __binding_0.accept(v),
             T_::RidxVector(ref __binding_0) => __binding_0.accept(v),
+            T_::RidxVectorFromDecl(ref __binding_0) => __binding_0.accept(v),
             T_::Rforeach(ref __binding_0) => __binding_0.accept(v),
             T_::Rasyncforeach(ref __binding_0) => __binding_0.accept(v),
             T_::Rarith(ref __binding_0) => __binding_0.accept(v),
@@ -840,6 +815,7 @@ impl<'a> Node<'a> for T_<'a> {
             T_::RimplicitUpperBound(ref __binding_0) => __binding_0.accept(v),
             T_::RtypeVariable(ref __binding_0) => __binding_0.accept(v),
             T_::RtypeVariableGenerics(ref __binding_0) => __binding_0.accept(v),
+            T_::RglobalTypeVariableGenerics(ref __binding_0) => __binding_0.accept(v),
             T_::RsolveFail(ref __binding_0) => __binding_0.accept(v),
             T_::RcstrOnGenerics(ref __binding_0) => __binding_0.accept(v),
             T_::RlambdaParam(ref __binding_0) => __binding_0.accept(v),
@@ -853,10 +829,11 @@ impl<'a> Node<'a> for T_<'a> {
             T_::Rsplice(ref __binding_0) => __binding_0.accept(v),
             T_::RetBoolean(ref __binding_0) => __binding_0.accept(v),
             T_::RdefaultCapability(ref __binding_0) => __binding_0.accept(v),
-            T_::RarrayUnification(ref __binding_0) => __binding_0.accept(v),
+            T_::RhackArrDvArrs(ref __binding_0) => __binding_0.accept(v),
             T_::RconcatOperand(ref __binding_0) => __binding_0.accept(v),
             T_::RinterpOperand(ref __binding_0) => __binding_0.accept(v),
             T_::RdynamicCoercion(ref __binding_0) => __binding_0.accept(v),
+            T_::RsoundDynamicCallable(ref __binding_0) => __binding_0.accept(v),
         }
     }
 }
