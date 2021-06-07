@@ -50,6 +50,9 @@ function get_expect_file_and_type($test, $options) {
     'hhvm.expectf',
   ];
   if (isset($options['repo'])) {
+    if (file_exists($test . '.hphpc_assert')) {
+      return varray[$test . '.hphpc_assert', 'expectf'];
+    }
     if (file_exists($test . '.hhbbc_assert')) {
       return varray[$test . '.hhbbc_assert', 'expectf'];
     }
@@ -95,7 +98,7 @@ function jit_serialize_option(string $cmd, $test, $options, $serialize) {
   $serialized = test_repo($options, $test) . "/jit.dump";
   $cmds = explode(' -- ', $cmd, 2);
   $cmds[0] .=
-    ' --count=' . ($serialize ? $options['jit-serialize'] + 1 : 1) .
+    ' --count=' . ($serialize ? (int)$options['jit-serialize'] + 1 : 1) .
     " -vEval.JitSerdesFile=" . $serialized .
     " -vEval.JitSerdesMode=" . ($serialize ? 'Serialize' : 'DeserializeOrFail').
     ($serialize ? " -vEval.JitSerializeOptProfRequests=1" : '');
@@ -891,7 +894,7 @@ function hhvm_cmd_impl(
     ];
 
     if ($autoload_db_prefix !== null) {
-      $args[] = '-vAutoload.DBPath='.escapeshellarg("$autoload_db_prefix.$mode_num");
+      $args[] = '-vAutoload.DB.Path='.escapeshellarg("$autoload_db_prefix.$mode_num");
     }
 
     if (isset($options['hackc'])) {
@@ -900,7 +903,7 @@ function hhvm_cmd_impl(
     }
 
     if (isset($options['retranslate-all'])) {
-      $args[] = '--count='.($options['retranslate-all'] * 2);
+      $args[] = '--count='.((int)$options['retranslate-all'] * 2);
       $args[] = '-vEval.JitPGO=true';
       $args[] = '-vEval.JitRetranslateAllRequest='.$options['retranslate-all'];
       // Set to timeout.  We want requests to trigger retranslate all.
@@ -940,6 +943,7 @@ function hhvm_cmd_impl(
 
     if (isset($options['bespoke'])) {
       $args[] = '-vEval.BespokeArrayLikeMode=1';
+      $args[] = '-vServer.APC.MemModelTreadmill=true';
     }
 
     if (!isset($options['repo'])) {
@@ -1047,6 +1051,7 @@ function hhvm_cmd(
   }
 
   $env = $_ENV;
+  $env['LC_ALL'] = 'C';
 
   // Apply the --env option
   if (isset($options['env'])) {
@@ -2004,12 +2009,15 @@ function child_main(
  *
  * Currently supported operations:
  *   os [not] <os_name> # matches if we are (or are not) on the named OS
+ *   file <path> # matches if the file at the (possibly relative) path exists
  *   euid [not] root # matches if we are (or are not) running as root (euid==0)
  *   extension <extension_name> # matches if the named extension is available
  *   function <function_name> # matches if the named function is available
  *   class <class_name> # matches if the named class is available
  *   method <class_name> <method name> # matches if the method is available
  *   const <constant_name> # matches if the named constant is available
+ *   # matches if any named locale is available for the named LC_* category
+ *   locale LC_<something> <locale name>[ <another locale name>]
  *
  * Several functions in this implementation return RunifResult. Valid sets of
  * keys are:
@@ -2066,6 +2074,28 @@ function runif_os_matches(varray<string> $words): RunifResult {
   );
 }
 
+function runif_file_matches(varray<string> $words): RunifResult {
+  /* This implementation has a trade-off. On the one hand, we could get more
+   * accurate results if we do the check in a process with the same configs as
+   * the test via runif_test_for_feature (e.g. if config differences make a
+   * file we can see invisible to the test). However, this check was added to
+   * skip tests where the test configs depend on a file that may be absent, in
+   * which case hhvm configured the same way as the test cannot run. By doing
+   * the check ourselves we can successfully skip such tests.
+   */
+  if (count($words) !== 1) {
+    return shape('valid' => false, 'error' => "malformed 'file' match");
+  }
+  if (file_exists($words[0])) {
+    return shape('valid' => true, 'match' => true);
+  }
+  return shape(
+    'valid' => true,
+    'match' => false,
+    'skip_reason' => 'skip-runif-file',
+  );
+}
+
 function runif_test_for_feature(
   darray<string, mixed> $options,
   string $test,
@@ -2087,7 +2117,7 @@ function runif_test_for_feature(
   list($hhvm, $_) = hhvm_cmd($options_without_repo, $test, $tmp, true);
   $hhvm = $hhvm[0];
   // Remove any --count <n> from the command
-  $hhvm = preg_replace('/ --count[ =][\d+][\s]{0,}/', ' ', $hhvm);
+  $hhvm = preg_replace('/ --count[ =]\d+/', '', $hhvm);
   // some tests set open_basedir to a restrictive value, override to permissive
   $hhvm .= ' -dopen_basedir= ';
 
@@ -2219,6 +2249,34 @@ function runif_const_matches(
   );
 }
 
+function runif_locale_matches(
+  darray<string, mixed> $options,
+  string $test,
+  varray<string> $words,
+): RunifResult {
+  if (count($words) < 2) {
+    return shape('valid' => false, 'error' => "malformed 'locale' match");
+  }
+  $category = array_shift(inout $words);
+  if (!preg_match('/^LC_[A-Z]+$/', $category)) {
+    return shape('valid' => false, 'error' => "bad locale category '$category'");
+  }
+  $locale_args = implode(', ', array_map($word ==> "'$word'", $words));
+  $matches = runif_test_for_feature(
+    $options,
+    $test,
+    "defined('$category') && (false !== setlocale($category, $locale_args))",
+  );
+  if ($matches) {
+    return shape('valid' => true, 'match' => true);
+  }
+  return shape(
+    'valid' => true,
+    'match' => false,
+    'skip_reason' => 'skip-runif-locale',
+  );
+}
+
 function runif_should_skip_test(
   darray<string, mixed> $options,
   string $test,
@@ -2239,7 +2297,7 @@ function runif_should_skip_test(
       return shape('valid' => false, 'error' => "malformed line '$line'");
     }
     foreach ($words as $word) {
-      if (!preg_match('/^\w+$/', $word)) {
+      if (!preg_match('|^[\w/.-]+$|', $word)) {
         return shape(
           'valid' => false,
           'error' => "bad word '$word' in line '$line'",
@@ -2252,6 +2310,9 @@ function runif_should_skip_test(
     switch ($type) {
       case 'os':
         $result = runif_os_matches($words);
+        break;
+      case 'file':
+        $result = runif_file_matches($words);
         break;
       case 'euid':
         $result = runif_euid_matches($options, $test, $words);
@@ -2270,6 +2331,9 @@ function runif_should_skip_test(
         break;
       case 'const':
         $result = runif_const_matches($options, $test, $words);
+        break;
+      case 'locale':
+        $result = runif_locale_matches($options, $test, $words);
         break;
       default:
         return shape('valid' => false, 'error' => "bad match type '$type'");
@@ -2338,19 +2402,21 @@ function should_skip_test_simple(
 function skipif_should_skip_test(
   darray<string, mixed> $options,
   string $test,
-): ?string {
+): RunifResult {
   $skipif_test = find_test_ext($test, 'skipif');
   if (!$skipif_test) {
-    return null;
+    return shape('valid' => true, 'match' => true);
   }
 
-  // For now, run the .skipif in non-repo since building a repo for it is hard.
+  // Run the .skipif in non-repo mode since building a repo for it is
+  // inconvenient and the same features should be available. Pick the mode
+  // arbitrarily for the same reason.
   $options_without_repo = $options;
   unset($options_without_repo['repo']);
-
   list($hhvm, $_) = hhvm_cmd($options_without_repo, $test, $skipif_test);
-  // running .skipif, arbitrarily picking a mode
   $hhvm = $hhvm[0];
+  // Remove any --count <n> from the command
+  $hhvm = preg_replace('/ --count[ =]\d+/', '', $hhvm);
 
   $descriptorspec = darray[
     0 => varray["pipe", "r"],
@@ -2360,26 +2426,30 @@ function skipif_should_skip_test(
   $pipes = null;
   $process = proc_open("$hhvm $test 2>&1", $descriptorspec, inout $pipes);
   if (!is_resource($process)) {
-    // This is weird. We can't run HHVM but we probably shouldn't skip the test
-    // since on a broken build everything will show up as skipped and give you a
-    // SHIPIT.
-    return null;
+    return shape(
+      'valid' => false,
+      'error' => 'proc_open failed while running skipif'
+    );
   }
 
   fclose($pipes[0]);
-  $output = stream_get_contents($pipes[1]);
+  $output = trim(stream_get_contents($pipes[1]));
   fclose($pipes[1]);
   proc_close($process);
 
-  // The standard php5 .skipif semantics is if the .skipif outputs ANYTHING
-  // then it should be skipped. This is a poor design, but I'll just add a
-  // small blacklist of things that are really bad if they are output so we
-  // surface the errors in the tests themselves.
-  if (stripos($output, 'segmentation fault') !== false) {
-    return null;
+  // valid output is empty or a single line starting with 'skip'
+  // everything else must result in a test failure
+  if ($output === '') {
+    return shape('valid' => true, 'match' => true);
   }
-
-  return strlen($output) === 0 ? null : 'skip-skipif';
+  if (preg_match('/^skip.*$/', $output)) {
+    return shape(
+      'valid' => true,
+      'match' => false,
+      'skip_reason' => 'skip-skipif',
+    );
+  }
+  return shape('valid' => false, 'error' => "invalid skipif output '$output'");
 }
 
 function comp_line($l1, $l2, $is_reg) {
@@ -2676,7 +2746,8 @@ function run_config_post($outputs, $test, $options) {
   file_put_contents(Status::getTestOutputPath($test, 'out'), $output);
 
   $check_hhbbc_error = isset($options['repo'])
-    && file_exists($test . '.hhbbc_assert');
+    && (file_exists($test . '.hhbbc_assert') ||
+        file_exists($test . '.hphpc_assert'));
 
   // hhvm redirects errors to stdout, so anything on stderr is really bad.
   if ($stderr && !$check_hhbbc_error) {
@@ -2690,11 +2761,11 @@ function run_config_post($outputs, $test, $options) {
   $repeats = 0;
   if (!$check_hhbbc_error) {
     if (isset($options['retranslate-all'])) {
-      $repeats = $options['retranslate-all'] * 2;
+      $repeats = (int)$options['retranslate-all'] * 2;
     }
 
     if (isset($options['recycle-tc'])) {
-      $repeats = $options['recycle-tc'];
+      $repeats = (int)$options['recycle-tc'];
     }
 
     if (isset($options['cli-server'])) {
@@ -2889,13 +2960,21 @@ function run_test($options, $test) {
   if ($skip_reason !== null) return $skip_reason;
 
   if (!($options['no-skipif'] ?? false)) {
-    $skip_reason = skipif_should_skip_test($options, $test);
-    if ($skip_reason !== null) return $skip_reason;
-
     $result = runif_should_skip_test($options, $test);
     if (!$result['valid']) {
       invariant($result['error'] is string, 'missing runif error');
       Status::writeDiff($test, 'Invalid .runif file: ' . $result['error']);
+      return false;
+    }
+    if (!$result['match']) {
+      invariant($result['skip_reason'] is string, 'missing skip_reason');
+      return $result['skip_reason'];
+    }
+
+    $result = skipif_should_skip_test($options, $test);
+    if (!$result['valid']) {
+      invariant($result['error'] is string, 'missing skipif error');
+      Status::writeDiff($test, $result['error']);
       return false;
     }
     if (!$result['match']) {
@@ -2923,7 +3002,7 @@ function run_test($options, $test) {
       return 'skip-norepo';
     }
     if (file_exists($test.'.onlyjumpstart') &&
-       (!isset($options['jit-serialize']) || $options['jit-serialize'] < 1)) {
+       (!isset($options['jit-serialize']) || (int)$options['jit-serialize'] < 1)) {
       return 'skip-onlyjumpstart';
     }
 
@@ -2941,7 +3020,10 @@ function run_test($options, $test) {
 
     $program = isset($options['hackc']) ? "hackc" : "hhvm";
 
-    if (file_exists($test . '.hhbbc_assert')) {
+    if (file_exists($test . '.hphpc_assert')) {
+      $hphp = hphp_cmd($options, $test, $program);
+      return run_foreach_config($options, $test, varray[$hphp], $hhvm_env);
+    } else if (file_exists($test . '.hhbbc_assert')) {
       $hphp = hphp_cmd($options, $test, $program);
       if (repo_separate($options, $test)) {
         $result = exec_with_stack($hphp);
@@ -3136,7 +3218,7 @@ function msg_loop($num_tests, $queue) {
 
     if ($do_progress) {
       $total_run = (Status::$skipped + Status::$failed + Status::$passed);
-      $bar_cols = ($cols - 45);
+      $bar_cols = ((int)$cols - 45);
 
       $passed_ticks  = round($bar_cols * (Status::$passed  / $num_tests));
       $skipped_ticks = round($bar_cols * (Status::$skipped / $num_tests));
@@ -3367,7 +3449,7 @@ function start_server_proc($options, $config, $port) {
   $command = hhvm_cmd_impl(
     $options,
     $config,
-    null, // we do not pass Autoload.DBPath to the server process
+    null, // we do not pass Autoload.DB.Path to the server process
     '-m', 'server',
     "-vServer.Port=$port",
     "-vServer.Type=proxygen",

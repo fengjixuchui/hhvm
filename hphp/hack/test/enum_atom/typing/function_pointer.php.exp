@@ -1,0 +1,8 @@
+File "function_pointer.php", line 23, characters 12-22:
+Function pointer on functions/methods using __Atom is not supported. (Typing[4437])
+  File "function_pointer.php", line 13, characters 58-59:
+  __Atom is used here.
+File "function_pointer.php", line 32, characters 8-10:
+Function pointer on functions/methods using __Atom is not supported. (Typing[4437])
+  File "function_pointer.php", line 27, characters 42-43:
+  __Atom is used here.

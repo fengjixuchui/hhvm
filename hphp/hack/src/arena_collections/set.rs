@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::map::{Map, MapIter};
 use arena_trait::{Arena, TrivialDrop};
@@ -12,15 +12,19 @@ use ocamlrep::{FromOcamlRepIn, ToOcamlRep};
 /// An arena-allocated map.
 ///
 /// See `Map` for more info.
-#[derive(Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(bound(deserialize = "K: 'de + arena_deserializer::DeserializeInArena<'de>"))]
 #[must_use]
-pub struct Set<'a, K>(Map<'a, K, ()>);
+pub struct Set<'a, K>(
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)] Map<'a, K, ()>,
+);
 
 impl<'a, K> Clone for Set<'a, K> {
     fn clone(&self) -> Self {
         Set(self.0.clone())
     }
 }
+arena_deserializer::impl_deserialize_in_arena!(Set<'arena, K>);
 
 impl<'a, K> Copy for Set<'a, K> {}
 
@@ -90,15 +94,15 @@ impl<'a, K> Set<'a, K> {
     pub const fn empty() -> Self {
         Set(Map::empty())
     }
+
+    pub fn count(self) -> usize {
+        self.0.count()
+    }
 }
 
 impl<'a, K: Ord> Set<'a, K> {
     pub fn is_empty(self) -> bool {
         self.0.is_empty()
-    }
-
-    pub fn count(self) -> usize {
-        self.0.count()
     }
 }
 

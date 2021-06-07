@@ -211,16 +211,9 @@ struct ConcurrentTableSharedStore {
    * Set the value for `key' to `val'.  If there was an existing value, it is
    * overwritten.
    *
-   * The requested ttl is limited by the ApcTTLLimit, unless we're overwriting
-   * a primed key.
+   * The requested ttl is limited by the ApcTTLLimit.
    */
   void set(const String& key, const Variant& val, int64_t max_ttl, int64_t bump_ttl);
-
-  /*
-   * Set the value for `key' to `val', without any TTL, even if it wasn't
-   * a primed key.
-   */
-  void setWithoutTTL(const String& key, const Variant& val);
 
   /*
    * Increment the value for the key `key' by step, iff it is present,
@@ -250,7 +243,7 @@ struct ConcurrentTableSharedStore {
    * it succeeds (the key exists in apc, is unexpired, and the expiration
    * was actually adjusted), false otherwise.
    */
-  bool bumpTTL(const String& key, int64_t new_ttl);
+  bool extendTTL(const String& key, int64_t new_ttl);
 
   /*
    * Returns the size of an entry if it exists. Sets `found` to true if it
@@ -382,7 +375,8 @@ private:
 
   using Map = APCMap<const char*,StoreValue,CharHashCompare>;
   using ExpirationPair = std::pair<intptr_t,time_t>;
-  using ExpMap = tbb::concurrent_hash_map<intptr_t,int>;
+  enum class ExpNil {};
+  using ExpSet = tbb::concurrent_hash_map<intptr_t,ExpNil>;
 
   struct ExpirationCompare {
     bool operator()(const ExpirationPair& p1, const ExpirationPair& p2) const {
@@ -392,8 +386,8 @@ private:
 
 private:
   bool checkExpire(const String& keyStr, Map::const_accessor& acc);
-  bool eraseImpl(const char*, bool, int64_t, ExpMap::accessor* expAcc);
-  bool storeImpl(const String&, const Variant&, int64_t, int64_t, bool, bool);
+  bool eraseImpl(const char*, bool, int64_t, ExpSet::accessor* expAcc);
+  bool storeImpl(const String&, const Variant&, int64_t, int64_t, bool);
   bool handlePromoteObj(const String&, APCHandle*, const Variant&);
   void dumpKeyAndValue(std::ostream&);
   static EntryInfo makeEntryInfo(const char*, StoreValue*, int64_t curr_time);
@@ -408,7 +402,7 @@ private:
    * We can't (easily) remove items from m_expQueue, so if we add a
    * new entry every time an item is updated we could end up with a
    * lot of copies of the same key in the queue. To avoid that, we use
-   * m_expMap, and only add an entry to the queue if there isn't one
+   * m_expSet, and only add an entry to the queue if there isn't one
    * already.
    *
    * In the current implementation, that means that if an element is
@@ -417,11 +411,11 @@ private:
    * again with the new expiry time.
    *
    * This implementation uses the apc key's address as the key into
-   * m_expMap, and as the identifier in ExpirationPair. We ensure that
-   * the m_expMap entry is removed before the apc key is freed, and
+   * m_expSet, and as the identifier in ExpirationPair. We ensure that
+   * the m_expSet entry is removed before the apc key is freed, and
    * guarantee that the key is valid as a char* if it exists in
-   * m_expMap. If the entry subsequently pops off m_expQueue, we check
-   * to see if its in m_expMap, and only try to purge it from apc if
+   * m_expSet. If the entry subsequently pops off m_expQueue, we check
+   * to see if its in m_expSet, and only try to purge it from apc if
    * its found.
    *
    * Note that its possible that the apc key was freed and
@@ -431,7 +425,7 @@ private:
    */
   tbb::concurrent_priority_queue<ExpirationPair,
                                  ExpirationCompare> m_expQueue;
-  ExpMap m_expMap;
+  ExpSet m_expSet;
   std::atomic<time_t> m_lastPurgeTime{0};
 };
 

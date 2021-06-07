@@ -9,12 +9,12 @@
 
 open Hh_prelude
 open Typing_defs
+open Typing_defs_core
 open Utils
 open String_utils
 open SearchUtils
 include AutocompleteTypes
 open Tast
-module Tast = Aast
 module Phase = Typing_phase
 module Cls = Decl_provider.Class
 
@@ -241,6 +241,9 @@ let autocomplete_member ~is_static env class_ cid id =
     )
   )
 
+(*
+  Autocompletion for XHP attribute names in an XHP literal.
+*)
 let autocomplete_xhp_attributes env class_ cid id =
   (* This is used for "<nt:fb:text |" XHP attributes, in which case  *)
   (* class_ is ":nt:fb:text" and its attributes are in tc_props.     *)
@@ -285,7 +288,57 @@ let autocomplete_xhp_bool_value attr_ty id_id env =
     )
   end
 
-let autocomplete_xhp_enum_value attr_ty id_id env =
+(*
+  Autocompletion for the value of an attribute in an XHP literals with the enum type,
+  defined with the following syntax:
+  attribute enum {"some value", "some other value"} my-attribute;
+*)
+let autocomplete_xhp_enum_attribute_value attr_name ty id_id env cls =
+  if is_auto_complete (snd id_id) then begin
+    ac_env := Some env;
+    argument_global_type := Some Acprop;
+    autocomplete_identifier := Some id_id;
+
+    let attr_origin =
+      Cls.props cls
+      |> List.find ~f:(fun (name, _) -> String.equal (":" ^ attr_name) name)
+      |> Option.map ~f:(fun (_, { ce_origin = n; _ }) -> n)
+      |> Option.bind ~f:(fun cls_name ->
+             Decl_provider.get_class (Tast_env.get_ctx env) cls_name)
+    in
+
+    let enum_values =
+      match attr_origin with
+      | Some cls -> Cls.xhp_enum_values cls
+      | None -> SMap.empty
+    in
+
+    let add_enum_value_result xev =
+      let suggestion = function
+        | Ast_defs.XEV_Int value -> string_of_int value
+        | Ast_defs.XEV_String value -> "\"" ^ value ^ "\""
+      in
+      add_partial_result
+        (suggestion xev)
+        (Phase.locl ty)
+        SearchUtils.SI_Enum
+        None
+    in
+    match SMap.find_opt (":" ^ attr_name) enum_values with
+    | Some enum_values -> List.iter enum_values add_enum_value_result
+    | None -> ()
+  end
+
+(*
+  Autocompletion for the value of an attribute in an XHP literals
+  with type that is an enum class. i.e.
+
+    enum MyEnum {}
+    class :foo {
+      attribute MyEnum my-attribute;
+    }
+*)
+let autocomplete_xhp_enum_class_value attr_ty id_id env =
   if is_auto_complete (snd id_id) then begin
     ac_env := Some env;
     argument_global_type := Some Acprop;
@@ -389,7 +442,7 @@ let tfun_to_func_details (env : Tast_env.t) (ft : Typing_defs.locl_fun_type) :
 let get_func_details_for env ty =
   let (env, ty) =
     match ty with
-    | DeclTy ty -> Tast_env.localize_with_self env ~ignore_errors:true ty
+    | DeclTy ty -> Tast_env.localize_no_subst env ~ignore_errors:true ty
     | LoclTy ty -> (env, ty)
   in
   match Typing_defs.get_node ty with
@@ -458,9 +511,9 @@ let autocomplete_typed_member ~is_static env class_ty cid mid =
 let autocomplete_static_member env ((_, ty), cid) mid =
   autocomplete_typed_member ~is_static:true env ty (Some cid) mid
 
-let autocomplete_enum_atom env f pos_atomname =
+let autocomplete_enum_class_label_call env fty pos_labelname =
   ac_env := Some env;
-  autocomplete_identifier := Some pos_atomname;
+  autocomplete_identifier := Some pos_labelname;
   argument_global_type := Some Acclass_get;
   let suggest_members cls =
     match cls with
@@ -482,22 +535,105 @@ let autocomplete_enum_atom env f pos_atomname =
     | _ -> ()
   in
 
-  let (_, ty) = fst f in
   let open Typing_defs in
-  match get_node ty with
+  match get_node fty with
   | Tfun { ft_params = { fp_type = { et_type = t; _ }; fp_flags; _ } :: _; _ }
     ->
-    let is_enum_atom_ty_name name =
+    let is_enum_class_label_ty_name name =
       Typing_defs_flags.(is_set fp_flags_atom fp_flags)
       && String.equal Naming_special_names.Classes.cMemberOf name
       || String.equal Naming_special_names.Classes.cLabel name
     in
     (match get_node t with
     | Tnewtype (ty_name, [enum_ty; _member_ty], _)
-      when is_enum_atom_ty_name ty_name ->
+      when is_enum_class_label_ty_name ty_name ->
       suggest_members_from_ty env enum_ty
     | _ -> ())
   | _ -> ()
+
+let autocomplete_enum_class_label_id env id pos_labelname =
+  let opt_ty = Tast_env.get_fun env id in
+  match opt_ty with
+  | None -> ()
+  | Some fun_elt ->
+    let dty = fun_elt.fe_type in
+    let (env, lty) = Tast_env.localize_no_subst env ~ignore_errors:true dty in
+    autocomplete_enum_class_label_call env lty pos_labelname
+
+(* Zip two lists together. If the two lists have different lengths,
+   take the shortest. *)
+let rec zip_truncate (xs : 'a list) (ys : 'b list) : ('a * 'b) list =
+  match (xs, ys) with
+  | (x :: xs, y :: ys) -> (x, y) :: zip_truncate xs ys
+  | _ -> []
+
+(* Get the names of string literal keys in this shape type. *)
+let shape_string_keys (sm : 'a TShapeMap.t) : string list =
+  let fields = TShapeMap.keys sm in
+  List.filter_map fields ~f:(fun field ->
+      match field with
+      | TSFlit_str (_, s) -> Some s
+      | _ -> None)
+
+let unwrap_holes (e : Tast.expr) : Tast.expr =
+  match snd e with
+  | Aast.Hole (e, _, _, _) -> e
+  | _ -> e
+
+(* If we see a call to a function that takes a shape argument, offer
+   completions for field names in shape literals.
+
+   takes_shape(shape('x' => 123, '|'));
+
+ *)
+let autocomplete_shape_literal_in_call
+    env (ft : Typing_defs.locl_fun_type) (args : Tast.expr list) : unit =
+  let add_shape_key_result pos key =
+    ac_env := Some env;
+    autocomplete_identifier := Some (pos, key);
+    argument_global_type := Some Acshape_key;
+
+    let ty = Tprim Aast_defs.Tstring in
+    let reason = Typing_reason.Rwitness pos in
+    let ty = mk (reason, ty) in
+    add_partial_result key (Phase.locl ty) SI_Literal None
+  in
+
+  (* If this shape field name is of the form "fooAUTO332", return "foo". *)
+  let shape_field_autocomplete_prefix (sfn : Ast_defs.shape_field_name) :
+      string option =
+    match sfn with
+    | Ast_defs.SFlit_str (_, name) when is_auto_complete name ->
+      Some (strip_suffix name)
+    | _ -> None
+  in
+
+  let args = List.map args ~f:unwrap_holes in
+
+  List.iter
+    ~f:(fun (arg, expected_ty) ->
+      match arg with
+      | ((pos, _), Aast.Shape kvs) ->
+        (* We're passing a shape literal as this function argument. *)
+        List.iter kvs ~f:(fun (name, _val) ->
+            match shape_field_autocomplete_prefix name with
+            | Some prefix ->
+              (* This shape key is being autocompleted. *)
+              let (_, ty_) =
+                Typing_defs_core.deref expected_ty.fp_type.et_type
+              in
+              (match ty_ with
+              | Tshape (_, fields) ->
+                (* This parameter is known to be a concrete shape type. *)
+                let keys = shape_string_keys fields in
+                let matching_keys =
+                  List.filter keys ~f:(String.is_prefix ~prefix)
+                in
+                List.iter matching_keys ~f:(add_shape_key_result pos)
+              | _ -> ())
+            | _ -> ())
+      | _ -> ())
+    (zip_truncate args ft.ft_params)
 
 let visitor =
   object (self)
@@ -509,8 +645,9 @@ let visitor =
 
     method! on_Call env f targs args unpack_arg =
       (match args with
-      | ((p, _), Tast.EnumAtom n) :: _ when is_auto_complete n ->
-        autocomplete_enum_atom env f (p, n)
+      | ((p, _), Aast.EnumClassLabel (_, n)) :: _ when is_auto_complete n ->
+        let (_, fty) = fst f in
+        autocomplete_enum_class_label_call env fty (p, n)
       | _ -> ());
 
       super#on_Call env f targs args unpack_arg
@@ -533,8 +670,8 @@ let visitor =
 
     method! on_Class_get env cid mid in_parens =
       match mid with
-      | Tast.CGstring p -> autocomplete_static_member env cid p
-      | Tast.CGexpr _ -> super#on_Class_get env cid mid in_parens
+      | Aast.CGstring p -> autocomplete_static_member env cid p
+      | Aast.CGexpr _ -> super#on_Class_get env cid mid in_parens
 
     method! on_Class_const env cid mid =
       autocomplete_static_member env cid mid;
@@ -542,22 +679,22 @@ let visitor =
 
     method! on_Obj_get env obj mid ognf =
       (match mid with
-      | (_, Tast.Id mid) ->
+      | (_, Aast.Id mid) ->
         autocomplete_typed_member ~is_static:false env (get_type obj) None mid
       | _ -> ());
       super#on_Obj_get env obj mid ognf
 
     method! on_expr env expr =
       (match expr with
-      | (_, Tast.Array_get (arr, Some ((pos, _), key))) ->
+      | (_, Aast.Array_get (arr, Some ((pos, _), key))) ->
         let ty = get_type arr in
         let (_, ty) = Tast_env.expand_type env ty in
         begin
-          match Typing_defs.get_node ty with
-          | Typing_defs.Tshape (_, fields) ->
+          match get_node ty with
+          | Tshape (_, fields) ->
             (match key with
-            | Tast.Id (_, mid) -> autocomplete_shape_key env fields (pos, mid)
-            | Tast.String mid ->
+            | Aast.Id (_, mid) -> autocomplete_shape_key env fields (pos, mid)
+            | Aast.String mid ->
               (* autocomplete generally assumes that there's a token ending with the suffix; *)
               (* This isn't the case for `$shape['a`, unless it's at the end of the file *)
               let offset =
@@ -589,6 +726,14 @@ let visitor =
             | _ -> ())
           | _ -> ()
         end
+      | (_, Aast.Call (((_, recv_ty), _), _, args, _)) ->
+        (match deref recv_ty with
+        | (_r, Tfun ft) -> autocomplete_shape_literal_in_call env ft args
+        | _ -> ())
+      (* Autocomplete is using ...#AUTO332 so is parsed as an EnumClassLabel *)
+      | ((p, _), Aast.EnumClassLabel (Some (_, id), n)) when is_auto_complete n
+        ->
+        autocomplete_enum_class_label_id env id (p, n)
       | _ -> ());
       super#on_expr env expr
 
@@ -610,25 +755,31 @@ let visitor =
       Decl_provider.get_class (Tast_env.get_ctx env) (snd sid)
       |> Option.iter ~f:(fun (c : Cls.t) ->
              List.iter attrs ~f:(function
-                 | Tast.Xhp_simple
+                 | Aast.Xhp_simple
                      { Aast.xs_name = id; xs_expr = value; xs_type = ty } ->
                    (match value with
-                   | (_, Tast.Id id_id) ->
+                   | (_, Aast.Id id_id) ->
                      (* This handles the situation
                           <foo:bar my-attribute={AUTO332}
                         *)
-                     autocomplete_xhp_enum_value ty id_id env;
+                     autocomplete_xhp_enum_attribute_value
+                       (snd id)
+                       ty
+                       id_id
+                       env
+                       c;
+                     autocomplete_xhp_enum_class_value ty id_id env;
                      autocomplete_xhp_bool_value ty id_id env
                    | _ -> ());
                    if Cls.is_xhp c then
                      autocomplete_xhp_attributes env c (Some cid) id
                    else
                      autocomplete_member ~is_static:false env c (Some cid) id
-                 | Tast.Xhp_spread _ -> ()));
+                 | Aast.Xhp_spread _ -> ()));
       super#on_Xml env sid attrs el
 
     method! on_class_ env cls =
-      List.iter cls.Tast.c_uses ~f:(fun hint ->
+      List.iter cls.Aast.c_uses ~f:(fun hint ->
           match snd hint with
           | Aast.Happly (sid, params) ->
             autocomplete_trait_only sid;
@@ -637,12 +788,12 @@ let visitor =
 
       (* If we don't clear out c_uses we'll end up overwriting the trait
        completion as soon as we get to on_Happly. *)
-      super#on_class_ env { cls with Tast.c_uses = [] }
+      super#on_class_ env { cls with Aast.c_uses = [] }
   end
 
 let auto_complete_suffix_finder =
   object
-    inherit [_] Tast.reduce
+    inherit [_] Aast.reduce
 
     method zero = false
 
@@ -678,7 +829,7 @@ class local_types =
 
     method! on_method_ env m =
       if method_contains_cursor m then (
-        if not m.Tast.m_static then
+        if not m.Aast.m_static then
           self#add Typing_defs.this (Tast_env.get_self_ty_exn env);
         super#on_method_ env m
       )
@@ -686,12 +837,12 @@ class local_types =
     method! on_expr env e =
       let ((_, ty), e_) = e in
       match e_ with
-      | Tast.Lvar (_, id) ->
+      | Aast.Lvar (_, id) ->
         if matches_auto_complete_suffix (Local_id.get_name id) then
           after_cursor <- true
         else
           self#add id ty
-      | Tast.Binop (Ast_defs.Eq _, e1, e2) ->
+      | Aast.Binop (Ast_defs.Eq _, e1, e2) ->
         (* Process the rvalue before the lvalue, since the lvalue is annotated
          with its type after the assignment. *)
         self#on_expr env e2;
@@ -699,8 +850,8 @@ class local_types =
       | _ -> super#on_expr env e
 
     method! on_fun_param _ fp =
-      let id = Local_id.make_unscoped fp.Tast.param_name in
-      let (_, ty) = fp.Tast.param_annotation in
+      let id = Local_id.make_unscoped fp.Aast.param_name in
+      let (_, ty) = fp.Aast.param_annotation in
       self#add id ty
   end
 

@@ -535,13 +535,24 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
       ->
       Concat
         [
-          t env where;
-          Space;
-          handle_possible_list env constraints ~after_each:(fun is_last ->
-              if is_last then
-                Nothing
-              else
-                Space);
+          WithRule
+            ( Rule.Parental,
+              Concat
+                [
+                  Space;
+                  Split;
+                  t env where;
+                  Nest
+                    [
+                      handle_possible_list
+                        env
+                        constraints
+                        ~before_each:space_split
+                        ~handle_last:
+                          (transform_last_arg env ~allow_trailing:false)
+                        ~handle_element:(transform_argish_item env);
+                    ];
+                ] );
         ]
     | Syntax.WhereConstraint
         {
@@ -1589,14 +1600,6 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           t env kw;
           transform_argish env ~allow_trailing:false left_p args right_p;
         ]
-    | Syntax.DefineExpression
-        {
-          define_keyword = kw;
-          define_left_paren = left_p;
-          define_argument_list = args;
-          define_right_paren = right_p;
-        } ->
-      Concat [t env kw; transform_argish env left_p args right_p]
     | Syntax.ParenthesizedExpression
         {
           parenthesized_expression_left_paren = left_p;
@@ -2533,7 +2536,7 @@ let rec t (env : Env.t) (node : Syntax.t) : Doc.t =
           t env semicolon;
           Newline;
         ]
-    | Syntax.EnumAtomExpression _ -> transform_simple env node)
+    | Syntax.EnumClassLabelExpression _ -> transform_simple env node)
 
 and when_present node f =
   match Syntax.syntax node with
@@ -2780,7 +2783,7 @@ and handle_possible_chaining env node =
         {
           function_call_receiver = receiver;
           function_call_type_args = targs;
-          function_call_enum_atom = _enum_atom;
+          function_call_enum_class_label = _enum_class_label;
           function_call_left_paren = lp;
           function_call_argument_list = args;
           function_call_right_paren = rp;
@@ -2833,7 +2836,7 @@ and handle_possible_chaining env node =
         {
           function_call_receiver = receiver;
           function_call_type_args = targs;
-          function_call_enum_atom = _enum_atom;
+          function_call_enum_class_label = _enum_class_label;
           function_call_left_paren = lp;
           function_call_argument_list = args;
           function_call_right_paren = rp;

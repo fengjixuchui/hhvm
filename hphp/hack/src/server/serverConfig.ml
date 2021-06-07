@@ -357,6 +357,8 @@ let load ~silent config_filename options : t * ServerLocalConfig.t =
       ?tco_complex_coercion:(bool_opt "complex_coercion" config)
       ?tco_disable_partially_abstract_typeconsts:
         (bool_opt "disable_partially_abstract_typeconsts" config)
+      ?tco_disallow_partially_abstract_typeconst_definitions:
+        (bool_opt "disallow_partially_abstract_typeconst_definitions" config)
       ~error_codes_treated_strictly:
         (prepare_error_codes_treated_strictly config)
       ?tco_check_xhp_attribute:(bool_opt "check_xhp_attribute" config)
@@ -401,6 +403,10 @@ let load ~silent config_filename options : t * ServerLocalConfig.t =
         (string_list_opt "symbol_write_ignore_paths" config)
       ?symbol_write_index_paths:
         (string_list_opt "symbol_write_index_paths" config)
+      ?symbol_write_index_paths_file:
+        (string_opt "symbol_write_index_paths_file" config)
+      ?symbol_write_index_paths_file_output:
+        (string_opt "symbol_write_index_paths_file_output" config)
       ?symbol_write_include_hhi:(bool_opt "symbol_write_include_hhi" config)
       ?po_disallow_func_ptrs_in_constants:
         (bool_opt "disallow_func_ptrs_in_constants" config)
@@ -419,6 +425,7 @@ let load ~silent config_filename options : t * ServerLocalConfig.t =
       ?tco_report_pos_from_reason:(bool_opt "report_pos_from_reason" config)
       ?tco_typecheck_sample_rate:(float_opt "typecheck_sample_rate" config)
       ?tco_enable_sound_dynamic:(bool_opt "enable_sound_dynamic_type" config)
+      ?tco_enable_modules:(bool_opt "enable_modules" config)
       ?po_disallow_hash_comments:(bool_opt "disallow_hash_comments" config)
       ?po_disallow_fun_and_cls_meth_pseudo_funcs:
         (bool_opt "disallow_fun_and_cls_meth_pseudo_funcs" config)
@@ -438,8 +445,14 @@ let load ~silent config_filename options : t * ServerLocalConfig.t =
         (Option.map
            (string_list_opt "allowed_expression_tree_visitors" config)
            ~f:(fun l -> List.map l ~f:Utils.add_ns))
-      ?tco_bitwise_math_new_code:(bool_opt "bitwise_math_new_code" config)
-      ?tco_inc_dec_new_code:(bool_opt "inc_dec_new_code" config)
+      ?tco_math_new_code:(bool_opt "math_new_code" config)
+      ?tco_typeconst_concrete_concrete_error:
+        (bool_opt "typeconst_concrete_concrete_error" config)
+      ?tco_meth_caller_only_public_visibility:
+        (bool_opt "meth_caller_only_public_visibility" config)
+      ?tco_require_extends_implements_ancestors:
+        (bool_opt "require_extends_implements_ancestors" config)
+      ?tco_strict_value_equality:(bool_opt "strict_value_equality" config)
       ()
   in
   Errors.allowed_fixme_codes_strict :=

@@ -16,6 +16,7 @@
 
 #include "hphp/runtime/base/object-data.h"
 
+#include "hphp/runtime/base/datatype.h"
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/collections.h"
@@ -297,7 +298,7 @@ Object ObjectData::iterableObject(bool& isIterable,
   }
   Object obj(this);
   while (obj->instanceof(SystemLib::s_IteratorAggregateClass)) {
-    auto iterator = obj->o_invoke_few_args(s_getIterator, 0);
+    auto iterator = obj->o_invoke_few_args(s_getIterator, RuntimeCoeffects::fixme(), 0);
     if (!iterator.isObject()) break;
     auto o = iterator.getObjectData();
     if (o->isIterator()) {
@@ -378,7 +379,10 @@ tv_lval ObjectData::makeDynProp(const StringData* key) {
   if (RuntimeOption::EvalNoticeOnCreateDynamicProp) {
     raiseCreateDynamicProp(key);
   }
-  return reserveProperties().lvalForce(StrNR(key), AccessFlags::Key);
+  if (!reserveProperties().exists(StrNR(key))) {
+    reserveProperties().set(StrNR(key), make_tv<KindOfNull>());
+  }
+  return reserveProperties().lval(StrNR(key), AccessFlags::Key);
 }
 
 void ObjectData::setDynProp(const StringData* key, TypedValue val) {
@@ -719,42 +723,29 @@ Variant ObjectData::o_invoke(const String& s, const Variant& params,
     return Variant(Variant::NullInit());
   }
   return Variant::attach(
-    g_context->invokeFunc(ctx, params)
+    g_context->invokeFunc(ctx, params, RuntimeCoeffects::fixme())
   );
 }
 
-#define INVOKE_FEW_ARGS_IMPL3                        \
-  const Variant& a0, const Variant& a1, const Variant& a2
-#define INVOKE_FEW_ARGS_IMPL6                        \
-  INVOKE_FEW_ARGS_IMPL3,                             \
-  const Variant& a3, const Variant& a4, const Variant& a5
-#define INVOKE_FEW_ARGS_IMPL10                       \
-  INVOKE_FEW_ARGS_IMPL6,                             \
-  const Variant& a6, const Variant& a7, const Variant& a8, const Variant& a9
-#define INVOKE_FEW_ARGS_IMPL_ARGS INVOKE_FEW_ARGS(IMPL,INVOKE_FEW_ARGS_COUNT)
-
-Variant ObjectData::o_invoke_few_args(const String& s, int count,
-                                      INVOKE_FEW_ARGS_IMPL_ARGS) {
+Variant ObjectData::o_invoke_few_args(const String& s,
+                                      RuntimeCoeffects providedCoeffects,
+                                      int count,
+                                      const Variant& a0 /* = uninit_variant*/,
+                                      const Variant& a1 /* = uninit_variant*/,
+                                      const Variant& a2 /* = uninit_variant*/,
+                                      const Variant& a3 /* = uninit_variant*/,
+                                      const Variant& a4 /* = uninit_variant*/) {
 
   CallCtx ctx;
   if (!decode_invoke(s, this, true, ctx)) {
     return Variant(Variant::NullInit());
   }
 
-  TypedValue args[INVOKE_FEW_ARGS_COUNT];
+  TypedValue args[5];
   switch(count) {
     default: not_implemented();
-#if INVOKE_FEW_ARGS_COUNT > 6
-    case 10: tvCopy(*a9.asTypedValue(), args[9]);
-    case  9: tvCopy(*a8.asTypedValue(), args[8]);
-    case  8: tvCopy(*a7.asTypedValue(), args[7]);
-    case  7: tvCopy(*a6.asTypedValue(), args[6]);
-#endif
-#if INVOKE_FEW_ARGS_COUNT > 3
-    case  6: tvCopy(*a5.asTypedValue(), args[5]);
     case  5: tvCopy(*a4.asTypedValue(), args[4]);
     case  4: tvCopy(*a3.asTypedValue(), args[3]);
-#endif
     case  3: tvCopy(*a2.asTypedValue(), args[2]);
     case  2: tvCopy(*a1.asTypedValue(), args[1]);
     case  1: tvCopy(*a0.asTypedValue(), args[0]);
@@ -762,7 +753,7 @@ Variant ObjectData::o_invoke_few_args(const String& s, int count,
   }
 
   return Variant::attach(
-    g_context->invokeFuncFew(ctx, count, args)
+    g_context->invokeFuncFew(ctx, count, args, providedCoeffects)
   );
 }
 
@@ -819,7 +810,8 @@ ObjectData* ObjectData::clone() {
     assertx(method);
     clone->unlockObject();
     SCOPE_EXIT { clone->lockObject(); };
-    g_context->invokeMethodV(clone.get(), method, InvokeArgs{}, false);
+    g_context->invokeMethodV(clone.get(), method, InvokeArgs{},
+                             RuntimeCoeffects::fixme());
   }
   return clone.detach();
 }
@@ -925,7 +917,12 @@ int64_t ObjectData::compare(const ObjectData& other) const {
     return DateTimeData::compare(this, &other);
   }
   // Return 1 for different classes to match PHP7 behavior.
-  if (getVMClass() != other.getVMClass()) return 1;
+  if (getVMClass() != other.getVMClass()) {
+    handleConvNoticeForCmp(
+      folly::sformat("object of class {}", classname_cstr()).c_str(),
+      folly::sformat("object of class {}", other.classname_cstr()).c_str());
+    return 1;
+  }
   if (UNLIKELY(instanceof(SimpleXMLElement_classof()))) {
     if (RuntimeOption::EvalNoticeOnSimpleXMLBehavior) {
       raise_notice("SimpleXMLElement comparison");
@@ -1020,7 +1017,8 @@ void ObjectData::setReifiedGenerics(Class* cls, ArrayData* reifiedTypes) {
   auto const arg = make_array_like_tv(reifiedTypes);
   auto const meth = cls->lookupMethod(s_86reifiedinit.get());
   assertx(meth != nullptr);
-  g_context->invokeMethod(this, meth, InvokeArgs(&arg, 1));
+  g_context->invokeMethod(this, meth, InvokeArgs(&arg, 1),
+                          RuntimeCoeffects::fixme());
 }
 
 // called from jit code
@@ -1214,7 +1212,8 @@ tv_lval ObjectData::getPropIgnoreAccessibility(const StringData* key) {
 template<ObjectData::PropMode mode>
 ALWAYS_INLINE
 tv_lval ObjectData::propImpl(TypedValue* tvRef, const Class* ctx,
-                             const StringData* key, const ReadOnlyOp op) {
+                             const StringData* key, const ReadOnlyOp op,
+                             bool* roProp) {
   auto constexpr write = (mode == PropMode::DimForWrite);
   auto constexpr read = (mode == PropMode::ReadNoWarn) ||
                         (mode == PropMode::ReadWarn);
@@ -1228,8 +1227,14 @@ tv_lval ObjectData::propImpl(TypedValue* tvRef, const Class* ctx,
             throwMutateConstProp(lookup.slot);
           }
         }
-        if (lookup.readonly && op == ReadOnlyOp::Mutable) {
-          throwMustBeMutable(lookup.slot);
+        if (lookup.readonly) {
+          if (op == ReadOnlyOp::CheckROCOW &&
+            (!isRefcountedType(lookup.val.type()) || hasPersistentFlavor(lookup.val.type()))) {
+            assertx(roProp);
+            *roProp = true;
+          } else if (op == ReadOnlyOp::Mutable || op == ReadOnlyOp::CheckROCOW) {
+            throwMustBeMutable(lookup.slot);
+          }
         }
         return prop;
       };
@@ -1278,9 +1283,10 @@ tv_lval ObjectData::prop(
   TypedValue* tvRef,
   const Class* ctx,
   const StringData* key,
-  const ReadOnlyOp op
+  const ReadOnlyOp op,
+  bool* roProp
 ) {
-  return propImpl<PropMode::ReadNoWarn>(tvRef, ctx, key, op);
+  return propImpl<PropMode::ReadNoWarn>(tvRef, ctx, key, op, roProp);
 }
 
 tv_lval ObjectData::propW(
@@ -1296,18 +1302,20 @@ tv_lval ObjectData::propU(
   TypedValue* tvRef,
   const Class* ctx,
   const StringData* key,
-  const ReadOnlyOp op
+  const ReadOnlyOp op,
+  bool* roProp
 ) {
-  return propImpl<PropMode::DimForWrite>(tvRef, ctx, key, op);
+  return propImpl<PropMode::DimForWrite>(tvRef, ctx, key, op, roProp);
 }
 
 tv_lval ObjectData::propD(
   TypedValue* tvRef,
   const Class* ctx,
   const StringData* key,
-  const ReadOnlyOp op
+  const ReadOnlyOp op,
+  bool* roProp
 ) {
-  return propImpl<PropMode::DimForWrite>(tvRef, ctx, key, op);
+  return propImpl<PropMode::DimForWrite>(tvRef, ctx, key, op, roProp);
 }
 
 bool ObjectData::propIsset(const Class* ctx, const StringData* key) {
@@ -1601,29 +1609,30 @@ void ObjectData::raiseImplicitInvokeToString() const {
   raise_notice("Implicitly invoked %s::__toString", m_cls->name()->data());
 }
 
-Variant ObjectData::InvokeSimple(ObjectData* obj, const StaticString& name) {
+Variant ObjectData::InvokeSimple(ObjectData* obj, const StaticString& name,
+                                 RuntimeCoeffects providedCoeffects) {
   auto const meth = obj->methodNamed(name.get());
   return meth
-    ? g_context->invokeMethodV(obj, meth, InvokeArgs{}, false)
+    ? g_context->invokeMethodV(obj, meth, InvokeArgs{}, providedCoeffects)
     : uninit_null();
 }
 
-Variant ObjectData::invokeSleep() {
-  return InvokeSimple(this, s___sleep);
+Variant ObjectData::invokeSleep(RuntimeCoeffects provided) {
+  return InvokeSimple(this, s___sleep, provided);
 }
 
 Variant ObjectData::invokeToDebugDisplay() {
-  return InvokeSimple(this, s___toDebugDisplay);
+  return InvokeSimple(this, s___toDebugDisplay, RuntimeCoeffects::fixme());
 }
 
-Variant ObjectData::invokeWakeup() {
+Variant ObjectData::invokeWakeup(RuntimeCoeffects provided) {
   unlockObject();
   SCOPE_EXIT { lockObject(); };
-  return InvokeSimple(this, s___wakeup);
+  return InvokeSimple(this, s___wakeup, provided);
 }
 
 Variant ObjectData::invokeDebugInfo() {
-  return InvokeSimple(this, s___debugInfo);
+  return InvokeSimple(this, s___debugInfo, RuntimeCoeffects::fixme());
 }
 
 String ObjectData::invokeToString() {
@@ -1646,7 +1655,8 @@ String ObjectData::invokeToString() {
   if (RuntimeOption::EvalNoticeOnImplicitInvokeToString) {
     raiseImplicitInvokeToString();
   }
-  auto const tv = g_context->invokeMethod(this, method, InvokeArgs{}, false);
+  auto const tv = g_context->invokeMethod(this, method, InvokeArgs{},
+                                          RuntimeCoeffects::fixme());
   if (!isStringType(tv.m_type) &&
       !isClassType(tv.m_type) &&
       !isLazyClassType(tv.m_type)) {

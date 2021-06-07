@@ -175,6 +175,7 @@ type decl_class_type = {
   dc_kind: Ast_defs.class_kind;
   dc_is_xhp: bool;
   dc_has_xhp_keyword: bool;
+  dc_module: string option;
   dc_name: string;
   dc_pos: Pos_or_decl.t;
   dc_tparams: decl_tparam list;
@@ -189,12 +190,13 @@ type decl_class_type = {
   dc_smethods: element SMap.t;
   dc_construct: element option * consistent_kind;
   dc_ancestors: decl_ty SMap.t;
-  dc_implements_dynamic: bool;
+  dc_support_dynamic_type: bool;
   dc_req_ancestors: requirement list;
   dc_req_ancestors_extends: SSet.t;
   dc_extends: SSet.t;
   dc_sealed_whitelist: SSet.t option;
   dc_xhp_attr_deps: SSet.t;
+  dc_xhp_enum_values: Ast_defs.xhp_enum_value list SMap.t;
   dc_enum_type: enum_type option;
   dc_decl_errors: Errors.t option; [@opaque]
   dc_condition_types: SSet.t;

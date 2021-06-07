@@ -77,7 +77,8 @@ let rec freshen_inside_ty env ty =
   | Terr
   | Tdynamic
   | Tobject
-  | Tprim _ ->
+  | Tprim _
+  | Tneg _ ->
     default ()
   | Tgeneric (name, tyl) ->
     if List.is_empty tyl then
@@ -162,7 +163,7 @@ let rec freshen_inside_ty env ty =
   | Tunapplied_alias _ -> default ()
 
 and freshen_ty env ty =
-  Env.fresh_invariant_type_var env (get_pos ty |> Pos_or_decl.unsafe_to_raw_pos)
+  Env.fresh_type_invariant env (get_pos ty |> Pos_or_decl.unsafe_to_raw_pos)
 
 and freshen_possibly_enforced_ty env ety =
   let (env, et_type) = freshen_ty env ety.et_type in
@@ -195,11 +196,24 @@ let bind env var (ty : locl_ty) =
         else
           r)
   in
+  (* Remember the T::Tx involving this variable before we erase that from
+   * the env.
+   *)
+  let tconsts = Env.get_tyvar_type_consts env var in
   (* Update the variance *)
   let env = Env.update_variance_after_bind env var ty in
   (* Unify the variable *)
   let ty = Utils.err_if_var_in_ty env var ty in
   let env = Env.add env var ty in
+  (* Make sure we don't project from this variable if it is bound to
+   * nothing, as it will lead to type holes.
+   *)
+  ( if Typing_utils.is_nothing env ty && not (SMap.is_empty tconsts) then
+    let (_, ((proj_pos, name), _)) = SMap.choose tconsts in
+    Errors.unresolved_type_variable_projection
+      (Env.get_tyvar_pos env var)
+      name
+      ~proj_pos );
   env
 
 (* Solve type variable var by assigning it to the union of its lower bounds.
@@ -552,38 +566,6 @@ let solve_all_unsolved_tyvars_gi env =
   let env = Env.set_allow_solve_globals env old_allow_solve_globals in
   env
 
-let unsolved_invariant_tyvars_under_union_and_intersection env ty =
-  let rec find_tyvars (env, tyvars) ty =
-    let (env, ty) = Env.expand_type env ty in
-    match get_node ty with
-    | Tvar v -> (env, (get_reason ty, v) :: tyvars)
-    | Toption ty -> find_tyvars (env, tyvars) ty
-    | Tunion tyl
-    | Tintersection tyl ->
-      List.fold tyl ~init:(env, tyvars) ~f:find_tyvars
-    | Terr
-    | Tany _
-    | Tdynamic
-    | Tnonnull
-    | Tprim _
-    | Tclass _
-    | Tobject
-    | Tgeneric _
-    | Tnewtype _
-    | Tdependent _
-    | Tvarray _
-    | Tdarray _
-    | Tvarray_or_darray _
-    | Tvec_or_dict _
-    | Ttuple _
-    | Tshape _
-    | Tfun _
-    | Taccess _
-    | Tunapplied_alias _ ->
-      (env, tyvars)
-  in
-  find_tyvars (env, []) ty
-
 (* Expand an already-solved type variable, and solve an unsolved type variable
  * by binding it to the union of its lower bounds, with covariant and contravariant
  * components of the type suitably "freshened". For example,
@@ -592,19 +574,22 @@ let unsolved_invariant_tyvars_under_union_and_intersection env ty =
  *    #1 := vec<#2>  where C <: #2
  *)
 let expand_type_and_solve env ?(freshen = true) ~description_of_expected p ty =
-  let (env, unsolved_invariant_tyvars) =
-    unsolved_invariant_tyvars_under_union_and_intersection env ty
-  in
+  let vars_solved_to_nothing = ref [] in
   let (env', ety) =
     Typing_utils.simplify_unions env ty ~on_tyvar:(fun env r v ->
         let env = always_solve_tyvar_down ~freshen env r v in
-        Env.expand_var env r v)
+        let (env, ety) = Env.expand_var env r v in
+        (match get_node ety with
+        | Tunion [] ->
+          vars_solved_to_nothing := (r, v) :: !vars_solved_to_nothing
+        | _ -> ());
+        (env, ety))
   in
   let (env', ety) = Env.expand_type env' ety in
-  match (unsolved_invariant_tyvars, get_node ety) with
+  match (!vars_solved_to_nothing, get_node ety) with
   | (_ :: _, Tunion []) ->
     let env =
-      List.fold unsolved_invariant_tyvars ~init:env ~f:(fun env (r, v) ->
+      List.fold !vars_solved_to_nothing ~init:env ~f:(fun env (r, v) ->
           Errors.unknown_type
             description_of_expected
             p
@@ -638,7 +623,7 @@ let widen env widen_concrete_type ty =
     (* Don't widen the `this` type, because the field type changes up the hierarchy
      * so we lose precision
      *)
-    | (_, Tdependent (DTthis, _)) -> (env, ty)
+    | (_, Tgeneric ("this", [])) -> (env, ty)
     (* For other abstract types, just widen to the bound, if possible *)
     | (_, Tdependent (_, ty))
     | (_, Tnewtype (_, _, ty)) ->

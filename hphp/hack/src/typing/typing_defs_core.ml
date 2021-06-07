@@ -164,20 +164,7 @@ type consistent_kind =
   | FinalClass
 [@@deriving eq, show]
 
-(* A dependent type consists of a base kind which indicates what the type is
- * dependent on. It is either dependent on:
- *  - The type 'this'
- *  - A class
- *  - An expression
- *
- * Dependent types also have a path component (derived from accessing a type
- * constant). Thus the dependent type (`expr 0, ['A', 'B', 'C']) roughly means
- * "The type resulting from accessing the type constant A then the type constant
- * B and then the type constant C on the expression reference by 0"
- *)
 type dependent_type =
-  (* Type that is the subtype of the late bound type within a class. *)
-  | DTthis
   (* A reference to some expression. For example:
    *
    *  $x->foo()
@@ -207,10 +194,17 @@ type 'ty tparam = {
 type 'ty where_constraint = 'ty * Ast_defs.constraint_kind * 'ty
 [@@deriving eq, show]
 
+type collection_style =
+  | VecStyle
+  | DictStyle
+  | KeysetStyle
+  | ArraykeyStyle
+[@@deriving eq, show, ord]
+
 type enforcement =
   | Unenforced
   | Enforced
-  | PartiallyEnforced
+  | PartiallyEnforced of collection_style * pos_id
 [@@deriving eq, show, ord]
 
 type 'phase ty = 'phase Reason.t_ * 'phase ty_
@@ -371,6 +365,7 @@ and _ ty_ =
        * If exact=Exact, then this represents instances of *exactly* this class
        * If exact=Nonexact, this also includes subclasses
        *)
+  | Tneg : Aast.tprim -> locl_phase ty_
 
 and 'phase taccess_type = 'phase ty * pos_id
 
@@ -684,6 +679,10 @@ module Pp = struct
            a1);
       Format.fprintf fmt "@,]@]";
       Format.fprintf fmt "@,))@]"
+    | Tneg a0 ->
+      Format.fprintf fmt "(@[<2>Tneg@ ";
+      Aast.pp_tprim fmt a0;
+      Format.fprintf fmt "@])"
 
   and pp_ty_list : type a. Format.formatter -> a ty list -> unit =
    fun fmt tyl ->

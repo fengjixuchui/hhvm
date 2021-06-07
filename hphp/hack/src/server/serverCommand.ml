@@ -11,7 +11,7 @@ open Hh_prelude
 open Utils
 open ServerCommandTypes
 
-exception Nonfatal_rpc_exception of exn * string * ServerEnv.env
+exception Nonfatal_rpc_exception of Exception.t * ServerEnv.env
 
 (* Some client commands require full check to be run in order to update global
  * state that they depend on *)
@@ -53,9 +53,13 @@ let rpc_command_needs_full_check : type a. a t -> bool =
   | STATS -> false
   | DISCONNECT -> false
   | STATUS_SINGLE _ -> false
+  | STATUS_SINGLE_REMOTE_EXECUTION _ -> true
+  | STATUS_REMOTE_EXECUTION _ -> true
+  | STATUS_MULTI_REMOTE_EXECUTION _ -> true
   | INFER_TYPE _ -> false
   | INFER_TYPE_BATCH _ -> false
   | INFER_TYPE_ERROR _ -> false
+  | TAST_HOLES _ -> false
   | IDE_HOVER _ -> false
   | DOCBLOCK_AT _ -> false
   | DOCBLOCK_FOR_SYMBOL _ -> false
@@ -138,6 +142,26 @@ let full_recheck_if_needed' genv env reason profiling =
 
 let force_remote = function
   | Rpc (_metadata, STATUS status) -> status.remote
+  | _ -> false
+
+let rpc_files : type a. a t -> Relative_path.Set.t = function
+  | STATUS_SINGLE_REMOTE_EXECUTION fn ->
+    Relative_path.Set.singleton (Relative_path.create_detect_prefix fn)
+  | STATUS_MULTI_REMOTE_EXECUTION fns ->
+    List.fold fns ~init:Relative_path.Set.empty ~f:(fun acc fn ->
+        Relative_path.Set.add acc (Relative_path.create_detect_prefix fn))
+  | _ -> Relative_path.Set.empty
+
+let force_remote_execution_files = function
+  | Rpc (_metadata, x) -> rpc_files x
+  | _ -> Relative_path.Set.empty
+
+let rpc_remote_execution : type a. a t -> bool = function
+  | STATUS_REMOTE_EXECUTION _ -> true
+  | _ -> false
+
+let force_remote_execution = function
+  | Rpc (_metadata, x) -> rpc_remote_execution x
   | _ -> false
 
 let ignore_ide = function
@@ -229,14 +253,12 @@ let actually_handle genv client msg full_recheck_needed ~is_stale env =
     Full_fidelity_parser_profiling.start_profiling ();
     let (new_env, response) =
       try ServerRpc.handle ~is_stale genv env cmd
-      with e ->
-        let stack = Caml.Printexc.get_raw_backtrace () in
+      with exn ->
+        let e = Exception.wrap exn in
         if ServerCommandTypes.is_critical_rpc cmd then
-          Caml.Printexc.raise_with_backtrace e stack
+          Exception.reraise e
         else
-          raise
-            (Nonfatal_rpc_exception
-               (e, Caml.Printexc.raw_backtrace_to_string stack, env))
+          raise (Nonfatal_rpc_exception (e, env))
     in
     let parsed_files = Full_fidelity_parser_profiling.stop_profiling () in
     ClientProvider.track client ~key:Connection_tracker.Server_end_handle;
@@ -285,9 +307,18 @@ let handle
   ClientProvider.track client ~key:Connection_tracker.Server_waiting_for_cmd;
   let msg = ClientProvider.read_client_msg client in
   ClientProvider.track client ~key:Connection_tracker.Server_got_cmd;
-  ServerProgress.send_progress_to_monitor_w_timeout
+  ServerProgress.send_progress
+    ~include_in_logs:false
     "%s"
     (ServerCommandTypesUtils.status_describe_cmd msg);
+  let env =
+    {
+      env with
+      ServerEnv.remote_execution_files = force_remote_execution_files msg;
+      ServerEnv.remote_execution = force_remote_execution msg;
+    }
+  in
+  if env.ServerEnv.remote_execution then Re.initialize_lease ();
   let env = { env with ServerEnv.remote = force_remote msg } in
   let full_recheck_needed = command_needs_full_check msg in
   let is_stale = ServerEnv.(env.last_recheck_loop_stats.updates_stale) in

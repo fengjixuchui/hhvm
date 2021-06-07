@@ -265,11 +265,20 @@ void emitCalleeCoeffectChecks(IRGS& env, const Func* callee,
     }
     return;
   }
+
+  // If ambient coeffects are directly provided use them, otherwise extract
+  // them from callFlags
+  if (!providedCoeffects) {
+    providedCoeffects =
+      gen(env, Lshr, callFlags, cns(env, CallFlags::CoeffectsStart));
+  }
+
   auto const requiredCoeffects = [&] {
     auto required = cns(env, callee->requiredCoeffects().value());
     if (!callee->hasCoeffectRules()) return required;
     for (auto const& rule : callee->getCoeffectRules()) {
-      if (auto const coeffect = rule.emitJit(env, callee, argc, prologueCtx)) {
+      if (auto const coeffect = rule.emitJit(env, callee, argc, prologueCtx,
+                                             providedCoeffects)) {
         required = gen(env, AndInt, required, coeffect);
       }
     }
@@ -280,13 +289,6 @@ void emitCalleeCoeffectChecks(IRGS& env, const Func* callee,
     }
     return required;
   }();
-
-  // If ambient coeffects are directly provided use them, otherwise extract
-  // them from callFlags
-  if (!providedCoeffects) {
-    providedCoeffects =
-      gen(env, Lshr, callFlags, cns(env, CallFlags::CoeffectsStart));
-  }
 
   ifThen(
     env,
@@ -326,6 +328,22 @@ void emitCalleeImplicitContextChecks(IRGS& env, const Func* callee) {
         " has implicit context but is marked with __NoContext");
       auto const msg = cns(env, makeStaticString(str));
       gen(env, ThrowInvalidOperation, msg);
+    }
+  );
+}
+
+void emitCalleeRecordFuncCoverage(IRGS& env, const Func* callee) {
+  if (RO::RepoAuthoritative || !RO::EvalEnableFuncCoverage) return;
+  if (callee->isNoInjection() || callee->isMethCaller()) return;
+
+  ifThen(
+    env,
+    [&] (Block* taken) {
+      gen(env, CheckFuncNeedsCoverage, FuncData{callee}, taken);
+    },
+    [&] {
+      hint(env, Block::Hint::Unlikely);
+      gen(env, RecordFuncCall, FuncData{callee});
     }
   );
 }
@@ -376,6 +394,7 @@ void emitCalleeChecks(IRGS& env, const Func* callee, uint32_t argc,
   emitCalleeDynamicCallChecks(env, callee, callFlags);
   emitCalleeCoeffectChecks(env, callee, callFlags, nullptr, argc, prologueCtx);
   emitCalleeImplicitContextChecks(env, callee);
+  emitCalleeRecordFuncCoverage(env, callee);
 
   // Emit early stack overflow check if necessary.
   if (stack_check_kind(callee, argc) == StackCheck::Early) {
@@ -396,9 +415,18 @@ void emitInitFuncInputs(IRGS& env, const Func* callee, uint32_t argc) {
 
   // Push Uninit for un-passed arguments.
   auto const numParams = callee->numNonVariadicParams();
-  while (argc < numParams) {
-    push(env, cns(env, TUninit));
-    ++argc;
+  if (argc < numParams) {
+    auto const kMaxArgsInitUnroll = 10;
+    auto const count = numParams - argc;
+    if (count <= kMaxArgsInitUnroll) {
+      while (argc < numParams) {
+        push(env, cns(env, TUninit));
+        ++argc;
+      }
+    } else {
+      pushMany(env, cns(env, TUninit), count);
+      argc = numParams;
+    }
   }
 
   if (argc < callee->numParams()) {
@@ -438,8 +466,8 @@ void emitSpillFrame(IRGS& env, const Func* callee, uint32_t argc,
 
   gen(env, DefFuncEntryFP, FuncData { callee },
       fp(env), sp(env), callFlags, ctx);
-  auto const irSPOff = FPInvOffset { 0 };
-  auto const bcSPOff = FPInvOffset { callee->numSlotsInFrame() };
+  auto const irSPOff = SBInvOffset { -callee->numSlotsInFrame() };
+  auto const bcSPOff = SBInvOffset { 0 };
   gen(env, DefFrameRelSP, DefStackData { irSPOff, bcSPOff }, fp(env));
 
   // We have updated stack and entered the context of the callee.
@@ -537,7 +565,7 @@ void emitJmpFuncBody(IRGS& env, const Func* callee, uint32_t argc) {
     ReqBindJmp,
     ReqBindJmpData {
       SrcKey { callee, callee->getEntryForNumArgs(argc), ResumeMode::None },
-      FPInvOffset { callee->numSlotsInFrame() },
+      SBInvOffset { 0 },
       spOffBCFromIRSP(env)
     },
     sp(env),
@@ -561,8 +589,8 @@ void definePrologueFrameAndStack(IRGS& env, const Func* callee, uint32_t argc) {
   // points to the future ActRec. The stack contains additional `argc' inputs
   // below the ActRec.
   auto const cells = callee->numInOutParamsForArgs(argc) + kNumActRecCells;
-  auto const irSPOff = FPInvOffset { safe_cast<int32_t>(cells) };
-  auto const bcSPOff = FPInvOffset { safe_cast<int32_t>(cells + argc) };
+  auto const irSPOff = SBInvOffset { safe_cast<int32_t>(cells) };
+  auto const bcSPOff = SBInvOffset { safe_cast<int32_t>(cells + argc) };
   gen(env, DefRegSP, DefStackData { irSPOff, bcSPOff });
 
   // Now that the stack is initialized, update the BC marker and perform

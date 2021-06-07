@@ -17,7 +17,8 @@
 #include "hphp/compiler/option.h"
 
 #include "hphp/runtime/vm/bytecode.h"
-#include "hphp/runtime/vm/repo.h"
+#include "hphp/runtime/vm/repo-file.h"
+#include "hphp/runtime/vm/repo-global-data.h"
 #include "hphp/runtime/vm/runtime-compiler.h"
 #include "hphp/runtime/vm/unit.h"
 
@@ -91,7 +92,9 @@ void ProcessInit() {
 
   if (RuntimeOption::RepoAuthoritative) {
     LitstrTable::init();
-    Repo::get().loadGlobalData();
+    LitarrayTable::init();
+    RepoFile::loadGlobalTables(RO::RepoLitstrLazyLoad);
+    RepoFile::globalData().load();
   }
   StringData::markSymbolsLoaded();
 

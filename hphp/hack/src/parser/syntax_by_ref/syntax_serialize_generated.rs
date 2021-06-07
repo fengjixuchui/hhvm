@@ -967,15 +967,6 @@ ss.serialize_field("eval_argument", &self.with(argument))?;
 ss.serialize_field("eval_right_paren", &self.with(right_paren))?;
       ss.end()
 } 
-SyntaxVariant::DefineExpression (DefineExpressionChildren{keyword,left_paren,argument_list,right_paren} ) => {
-      let mut ss = s.serialize_struct("", 5)?;
-      ss.serialize_field("kind", "define_expression")?;
-      ss.serialize_field("define_keyword", &self.with(keyword))?;
-ss.serialize_field("define_left_paren", &self.with(left_paren))?;
-ss.serialize_field("define_argument_list", &self.with(argument_list))?;
-ss.serialize_field("define_right_paren", &self.with(right_paren))?;
-      ss.end()
-} 
 SyntaxVariant::IssetExpression (IssetExpressionChildren{keyword,left_paren,argument_list,right_paren} ) => {
       let mut ss = s.serialize_struct("", 5)?;
       ss.serialize_field("kind", "isset_expression")?;
@@ -985,12 +976,12 @@ ss.serialize_field("isset_argument_list", &self.with(argument_list))?;
 ss.serialize_field("isset_right_paren", &self.with(right_paren))?;
       ss.end()
 } 
-SyntaxVariant::FunctionCallExpression (FunctionCallExpressionChildren{receiver,type_args,enum_atom,left_paren,argument_list,right_paren} ) => {
+SyntaxVariant::FunctionCallExpression (FunctionCallExpressionChildren{receiver,type_args,enum_class_label,left_paren,argument_list,right_paren} ) => {
       let mut ss = s.serialize_struct("", 7)?;
       ss.serialize_field("kind", "function_call_expression")?;
       ss.serialize_field("function_call_receiver", &self.with(receiver))?;
 ss.serialize_field("function_call_type_args", &self.with(type_args))?;
-ss.serialize_field("function_call_enum_atom", &self.with(enum_atom))?;
+ss.serialize_field("function_call_enum_class_label", &self.with(enum_class_label))?;
 ss.serialize_field("function_call_left_paren", &self.with(left_paren))?;
 ss.serialize_field("function_call_argument_list", &self.with(argument_list))?;
 ss.serialize_field("function_call_right_paren", &self.with(right_paren))?;
@@ -1549,11 +1540,12 @@ SyntaxVariant::ListItem (ListItemChildren{item,separator} ) => {
 ss.serialize_field("list_separator", &self.with(separator))?;
       ss.end()
 } 
-SyntaxVariant::EnumAtomExpression (EnumAtomExpressionChildren{hash,expression} ) => {
-      let mut ss = s.serialize_struct("", 3)?;
-      ss.serialize_field("kind", "enum_atom")?;
-      ss.serialize_field("enum_atom_hash", &self.with(hash))?;
-ss.serialize_field("enum_atom_expression", &self.with(expression))?;
+SyntaxVariant::EnumClassLabelExpression (EnumClassLabelExpressionChildren{qualifier,hash,expression} ) => {
+      let mut ss = s.serialize_struct("", 4)?;
+      ss.serialize_field("kind", "enum_class_label")?;
+      ss.serialize_field("enum_class_label_qualifier", &self.with(qualifier))?;
+ss.serialize_field("enum_class_label_hash", &self.with(hash))?;
+ss.serialize_field("enum_class_label_expression", &self.with(expression))?;
       ss.end()
 } 
 

@@ -12,7 +12,7 @@
  (name server_symbol_info_service_utils)
  (wrapped false)
  (modules symbolInfoServiceUtils)
- (libraries 
+ (libraries
   ast_provider
   naming
   server_command_types
@@ -26,7 +26,7 @@
  (name server_codemod_type_printer)
  (wrapped false)
  (modules codemodTypePrinter)
- (libraries 
+ (libraries
     typing_defs
     tast
     utils_core
@@ -37,7 +37,7 @@
  (name server_global_inference)
  (wrapped false)
  (modules serverGlobalInference)
- (libraries 
+ (libraries
    full_fidelity
    server_codemod_type_printer
    tast
@@ -120,7 +120,7 @@
   (wrapped false)
   (modules
     colorFile)
-  (libraries 
+  (libraries
     typing_defs
     ide_rpc_api_types
     utils_core
@@ -132,7 +132,7 @@
   (wrapped false)
   (modules
     fileOutline)
-  (libraries 
+  (libraries
     search
     utils_core
   )
@@ -193,10 +193,22 @@
   (preprocess (pps lwt_ppx ppx_deriving.std)))
 
 (library
+  (name server_files)
+  (wrapped false)
+  (modules
+    serverFiles)
+  (libraries
+    core_kernel
+    hhi
+    global_config
+    sys_utils
+    utils_core)
+  (preprocess (pps lwt_ppx ppx_deriving.std)))
+
+(library
   (name server_utils)
   (wrapped false)
   (modules
-    serverFiles
     serverUtils)
   (libraries
     core_kernel
@@ -204,10 +216,10 @@
     decl
     decl_class
     hhi
-    global_config
     procs_bucket
     procs_procs
     relative_path
+    server_files
     server_monitor
     sys_utils
     utils_core
@@ -233,7 +245,8 @@
     serverLintTypes
     serverNotifierTypes
     serverRageTypes
-    serverRefactorTypes)
+    serverRefactorTypes
+    tastHolesService)
   (libraries
     connection_tracker
     full_fidelity
@@ -365,7 +378,7 @@
   (wrapped false)
   (modules serverSearch)
   (preprocess (pps lwt_ppx ppx_deriving.std))
-  (libraries  
+  (libraries
     server_autocomplete_services
     search
     search_utils
@@ -373,6 +386,71 @@
     hh_json
     pos
   )
+)
+
+(library
+  (name server_infer_type)
+  (wrapped false)
+  (modules serverInferType
+    serverInferTypeError
+    serverCollectTastHoles)
+  (libraries
+    annotated_ast
+    ast
+    hh_json
+    pos
+    provider_context
+    server_command_types
+    tast
+    tast_provider
+    typing
+    utils_core)
+  (preprocess (pps lwt_ppx ppx_deriving.std))
+)
+
+(library
+  (name server_docblock_at)
+  (wrapped false)
+  (modules serverDocblockAt)
+  (libraries
+    ast
+    collections
+    decl_provider
+    naming_provider
+    parser
+    pos
+    provider_context
+    relative_path
+    search
+    search_utils
+    server_command_types
+    server_services
+    symbol
+    typing_defs
+    utils_core)
+  (preprocess (pps lwt_ppx ppx_deriving.std))
+)
+
+(library
+  (name server_hover)
+  (wrapped false)
+  (modules serverHover)
+  (libraries
+    decl_provider
+    naming_special_names
+    pos
+    provider_context
+    server_command_types
+    server_docblock_at
+    server_infer_type
+    server_services
+    symbol
+    tast
+    tast_provider
+    typing
+    utils_core
+    )
+  (preprocess (pps lwt_ppx ppx_deriving.std))
 )
 
 (library
@@ -389,7 +467,6 @@
     serverCoverageMetric
     serverConcatenateAll
     serverDebug
-    serverDocblockAt
     serverDynamicView
     serverError
     serverExtractStandalone
@@ -398,11 +475,8 @@
     serverFormat
     serverHotClasses
     serverHotClassesDescription
-    serverHover
     serverIdle
-    serverInferType
     serverInferTypeBatch
-    serverInferTypeError
     serverInvalidateUnits
     serverLint
     serverMethodJumps
@@ -415,11 +489,15 @@
     serverSignatureHelp
     serverStamp
     serverStatusSingle
+    serverStatusSingleRemoteExecution
+    serverStatusRemoteExecution
+    serverStatusMultiRemoteExecution
     serverTypeCheck
     serverTypeDefinition
     serverWorker
     symbolInfoService)
   (libraries
+    base64
     buffered_line_reader
     cgroup
     coverage_level
@@ -437,8 +515,11 @@
     server_api
     server_codemod_type_printer
     server_coverage_metric_utils
+    server_docblock_at
     server_env
     server_find_refs
+    server_hover
+    server_infer_type
     server_prechecked_files
     server_remote_utils
     server_revision_tracker
@@ -448,6 +529,7 @@
     tast_provider
     typing
     typing_service_api
+    typing_check_job
     utils_core
     version
     watchman_utils

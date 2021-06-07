@@ -85,22 +85,6 @@ type method_instantiation = {
   explicit_targs: Tast.targ list;
 }
 
-let env_with_self ?report_cycle env ~on_error : expand_env =
-  let this_ty =
-    mk
-      ( Reason.none,
-        match Env.get_self_ty env with
-        | None -> TUtils.tany env (* Error already reported in naming phase *)
-        | Some ty -> TUtils.this_of ty )
-  in
-  {
-    type_expansions =
-      Typing_defs.Type_expansions.empty_w_cycle_report ~report_cycle;
-    substs = SMap.empty;
-    this_ty;
-    on_error;
-  }
-
 (*****************************************************************************)
 (* Transforms a declaration phase type into a localized type. This performs
  * common operations that are necessary for this operation, specifically:
@@ -115,7 +99,7 @@ let env_with_self ?report_cycle env ~on_error : expand_env =
 (*****************************************************************************)
 
 let rec localize ~(ety_env : expand_env) env (dty : decl_ty) =
-  Typing_log.log_localize ~level:1 dty
+  Typing_log.log_localize ~level:1 ety_env dty
   @@
   let tvar_or_localize ~ety_env env r ty ~i =
     if
@@ -171,7 +155,12 @@ let rec localize ~(ety_env : expand_env) env (dty : decl_ty) =
         in
         begin
           match
-            (localize_targs_by_kind ~ety_env env targs arg_kinds, replace_with)
+            ( localize_targs_by_kind
+                ~ety_env:{ ety_env with expand_visible_newtype = true }
+                env
+                targs
+                arg_kinds,
+              replace_with )
           with
           | ((env, _), Some repl_ty) -> (env, mk (r, repl_ty))
           | ((env, locl_tyargs), None) ->
@@ -318,7 +307,7 @@ and localize_targs_by_kind
 and localize_targ_by_kind (env, ety_env) ty (nkind : KindDefs.Simple.named_kind)
     =
   match deref ty with
-  | (r, Tapply ((_, x), _argl)) when String.equal x SN.Typehints.wildcard ->
+  | (r, Tapply ((pos, x), _argl)) when String.equal x SN.Typehints.wildcard ->
     let r = Typing_reason.localize r in
     let (name, kind) = nkind in
     let is_higher_kinded = KindDefs.Simple.get_arity kind > 0 in
@@ -334,6 +323,7 @@ and localize_targ_by_kind (env, ety_env) ty (nkind : KindDefs.Simple.named_kind)
            as done below *)
         Env.add_fresh_generic_parameter_by_kind
           env
+          pos
           (snd name)
           full_kind_without_bounds
       in
@@ -381,7 +371,12 @@ and localize_class_instantiation ~ety_env env r sid tyargs class_info =
   | None ->
     (* Without class info, we don't know the kinds of the arguments.
        We assume they are non-HK types. *)
-    let (env, tyl) = List.map_env env tyargs (localize ~ety_env) in
+    let (env, tyl) =
+      List.map_env
+        env
+        tyargs
+        (localize ~ety_env:{ ety_env with expand_visible_newtype = true })
+    in
     (env, mk (r, Tclass (sid, Nonexact, tyl)))
   | Some class_info ->
     (match Cls.enum_type class_info with
@@ -430,7 +425,11 @@ and localize_class_instantiation ~ety_env env r sid tyargs class_info =
             sid
             class_info
         else
-          localize_targs_by_kind ~ety_env env tyargs nkinds
+          localize_targs_by_kind
+            ~ety_env:{ ety_env with expand_visible_newtype = true }
+            env
+            tyargs
+            nkinds
       in
       (env, mk (r, Tclass (sid, Nonexact, tyl))))
 
@@ -440,7 +439,13 @@ and localize_typedef_instantiation ~ety_env env r type_name tyargs typedef_info
   | Some typedef_info ->
     let tparams = typedef_info.Typing_defs.td_tparams in
     let nkinds = KindDefs.Simple.named_kinds_of_decl_tparams tparams in
-    let (env, tyargs) = localize_targs_by_kind ~ety_env env tyargs nkinds in
+    let (env, tyargs) =
+      localize_targs_by_kind
+        ~ety_env:{ ety_env with expand_visible_newtype = true }
+        env
+        tyargs
+        nkinds
+    in
     TUtils.expand_typedef ety_env env r type_name tyargs
   | None ->
     (* This must be unreachable. We only call localize_typedef_instantiation if we *know* that
@@ -452,12 +457,6 @@ and localize_typedef_instantiation ~ety_env env r type_name tyargs typedef_info
  *)
 and localize_with_kind
     ~ety_env env (dty : decl_ty) (expected_kind : KindDefs.Simple.kind) =
-  let is_newtype typedef =
-    (* FIXME This function should be somewhere else *)
-    match typedef.Typing_defs.td_vis with
-    | Aast_defs.Transparent -> false
-    | Aast_defs.Opaque -> true
-  in
   let (r, dty_) = deref dty in
   let r = Typing_reason.localize r in
   let arity = KindDefs.Simple.get_arity expected_kind in
@@ -480,11 +479,11 @@ and localize_with_kind
           else
             (env, mk (Reason.none, Terr))
         | Some (Env.TypedefResult typedef) ->
-          if is_newtype typedef then
+          if Typing_env.is_typedef_visible env typedef then
+            (env, mk (r, Tunapplied_alias name))
+          else
             (* The bound is unused until the newtype is fully applied, thus supplying dummy Tany *)
             (env, mk (r, Tnewtype (name, [], mk (Reason.none, make_tany ()))))
-          else
-            (env, mk (r, Tunapplied_alias name))
         | None ->
           (* We are expected to localize a higher-kinded type, but are given an unknown class name.
                 Not much we can do. *)
@@ -537,12 +536,11 @@ and localize_cstr_ty ~ety_env env ty tp_name =
  * the type parameters to the provided types.
  *)
 and localize_ft
-    ?(instantiation : method_instantiation option) ~ety_env ~def_pos env ft =
-  (* If no explicit type parameters are provided, set the instantiated type parameter to
-   * initially point to unresolved, so that it can grow and eventually be a subtype of
-   * something like "mixed".
-   * If explicit type parameters are provided, just instantiate tvarl to them.
-   *)
+    ?(instantiation : method_instantiation option)
+    ~ety_env
+    ~def_pos
+    env
+    (ft : decl_ty fun_type) =
   let (env, substs) =
     match instantiation with
     | Some { explicit_targs; use_name = _; use_pos } ->
@@ -571,7 +569,9 @@ and localize_ft
   in
   let ety_env = { ety_env with substs } in
   (* Localize the constraints for a type parameter declaration *)
-  let rec localize_tparam ~nested env t =
+  let rec localize_tparam :
+      nested:bool -> env -> decl_ty tparam -> env * locl_ty tparam =
+   fun ~nested env t ->
     let (env, cstrl) =
       (* TODO(T70068435)
         For nested type parameters (i.e., type parameters of type parameters),
@@ -611,7 +611,7 @@ and localize_ft
   in
   (* Grab and store the old tpenvs *)
   let old_tpenv = Env.get_tpenv env in
-  let old_global_tpenv = env.global_tpenv in
+  let old_global_tpenv = env.tpenv in
   (* Always localize tparams so they are available for later Tast check *)
   let (env, tparams) =
     List.map_env env ft.ft_tparams (localize_tparam ~nested:false)
@@ -712,10 +712,12 @@ and localize_ft
  *)
 and check_tparams_constraints ~use_pos ~ety_env env tparams =
   let check_tparam_constraints env t =
-    List.fold_left t.tp_constraints ~init:env ~f:(fun env (ck, ty) ->
-        let (env, ty) = localize_cstr_ty ~ety_env env ty t.tp_name in
-        match SMap.find_opt (snd t.tp_name) ety_env.substs with
-        | Some x_ty ->
+    match SMap.find_opt (snd t.tp_name) ety_env.substs with
+    | Some ty ->
+      List.fold_left t.tp_constraints ~init:env ~f:(fun env (ck, cstr_ty) ->
+          let (env, cstr_ty) =
+            localize_cstr_ty ~ety_env env cstr_ty t.tp_name
+          in
           Typing_log.(
             log_with_level env "generics" 1 (fun () ->
                 log_types
@@ -724,32 +726,26 @@ and check_tparams_constraints ~use_pos ~ety_env env tparams =
                   [
                     Log_head
                       ( "check_tparams_constraints: check_tparams_constraint",
-                        [Log_type ("ty", ty); Log_type ("x_ty", x_ty)] );
+                        [Log_type ("cstr_ty", cstr_ty); Log_type ("ty", ty)] );
                   ]));
-          TGenConstraint.check_tparams_constraint
-            env
-            ~use_pos
-            t.tp_name
-            ck
-            ty
-            x_ty
-        | None -> env)
+          TGenConstraint.check_tparams_constraint env ~use_pos ck ~cstr_ty ty)
+    | None -> env
   in
   List.fold_left tparams ~init:env ~f:check_tparam_constraints
 
 and check_where_constraints
     ~in_class ~use_pos ~ety_env ~definition_pos env cstrl =
-  List.fold_left cstrl ~init:env ~f:(fun env (ty1, ck, ty2) ->
-      let (env, ty1) = localize ~ety_env env ty1 in
-      let (env, ty2) = localize ~ety_env env ty2 in
+  List.fold_left cstrl ~init:env ~f:(fun env (ty, ck, cstr_ty) ->
+      let (env, ty) = localize ~ety_env env ty in
+      let (env, cstr_ty) = localize ~ety_env env cstr_ty in
       TGenConstraint.check_where_constraint
         ~in_class
         env
         ~use_pos
         ~definition_pos
         ck
-        ty2
-        ty1)
+        ~cstr_ty
+        ty)
 
 (**
  * If a type annotation for a class is missing type arguments, create a type variable
@@ -776,7 +772,7 @@ and localize_missing_tparams_class_for_global_inference env r sid class_ =
   let c_ty = mk (r, Tclass (sid, Nonexact, tyl)) in
   let ety_env =
     {
-      type_expansions = Typing_defs.Type_expansions.empty;
+      empty_expand_env with
       this_ty = c_ty;
       substs = Subst.make_locl tparams tyl;
       on_error = Errors.unify_error_at Pos.none;
@@ -798,10 +794,10 @@ and localize_missing_tparams_class_for_global_inference env r sid class_ =
   in
   (env, tyl)
 
-(* Like localize_with_self, but uses the supplied kind, enabling support
+(* Like localize_no_subst, but uses the supplied kind, enabling support
    for higher-kinded types *)
-let localize_with_self_and_kind env ~on_error ?report_cycle ty kind =
-  let ety_env = env_with_self env ~on_error ?report_cycle in
+let localize_no_subst_and_kind env ~on_error ty kind =
+  let ety_env = empty_expand_env_with_on_error on_error in
   localize_with_kind ~ety_env env ty kind
 
 (** Localize an explicit type argument to a constructor or function. We
@@ -824,7 +820,7 @@ let localize_targ_with_kind
     let ty = Decl_hint.hint env.decl_env hint in
     if check_well_kinded then Kinding.Simple.check_well_kinded env ty nkind;
     let (env, ty) =
-      localize_with_self_and_kind
+      localize_no_subst_and_kind
         env
         ~on_error:(Errors.invalid_type_hint hint_pos)
         ty
@@ -961,14 +957,21 @@ let localize_targs
 (* Performs no substitutions of generics and initializes Tthis to
  * Env.get_self env
  *)
-let localize_with_self_ env ~on_error ?report_cycle ty =
-  let ety_env = env_with_self env ~on_error ?report_cycle in
+let localize_no_subst_ env ~on_error ?report_cycle ty =
+  let ety_env =
+    {
+      empty_expand_env with
+      type_expansions =
+        Typing_defs.Type_expansions.empty_w_cycle_report ~report_cycle;
+      on_error;
+    }
+  in
   localize env ty ~ety_env
 
-let localize_hint_with_self env ~ignore_errors ?report_cycle h =
+let localize_hint_no_subst env ~ignore_errors ?report_cycle h =
   let (pos, _) = h in
   let h = Decl_hint.hint env.decl_env h in
-  localize_with_self_
+  localize_no_subst_
     env
     ~on_error:
       ( if ignore_errors then
@@ -978,12 +981,8 @@ let localize_hint_with_self env ~ignore_errors ?report_cycle h =
     ?report_cycle
     h
 
-let localize_hint ~ety_env env hint =
-  let hint_ty = Decl_hint.hint env.decl_env hint in
-  localize ~ety_env env hint_ty
-
-let localize_with_self env ~ignore_errors ty =
-  localize_with_self_
+let localize_no_subst env ~ignore_errors ty =
+  localize_no_subst_
     env
     ~on_error:
       ( if ignore_errors then
@@ -993,14 +992,13 @@ let localize_with_self env ~ignore_errors ty =
       )
     ty
 
-let localize_possibly_enforced_with_self env ~ignore_errors ety =
-  let (env, et_type) = localize_with_self env ~ignore_errors ety.et_type in
+let localize_possibly_enforced_no_subst env ~ignore_errors ety =
+  let (env, et_type) = localize_no_subst env ~ignore_errors ety.et_type in
   (env, { ety with et_type })
 
 let localize_targs_and_check_constraints
     ~exact
     ~check_well_kinded
-    ~check_constraints
     ~def_pos
     ~use_pos
     ?(check_explicit_targs = true)
@@ -1026,20 +1024,15 @@ let localize_targs_and_check_constraints
       ( Reason.Rwitness (fst class_id),
         Tclass (Positioned.of_raw_positioned class_id, exact, targs_tys) )
   in
-  let env =
-    if check_constraints then
-      let ety_env =
-        {
-          type_expansions = Typing_defs.Type_expansions.empty;
-          this_ty;
-          substs = Subst.make_locl tparaml targs_tys;
-          on_error = Errors.unify_error_at use_pos;
-        }
-      in
-      check_tparams_constraints ~use_pos ~ety_env env tparaml
-    else
-      env
+  let ety_env =
+    {
+      empty_expand_env with
+      this_ty;
+      substs = Subst.make_locl tparaml targs_tys;
+      on_error = Errors.unify_error_at use_pos;
+    }
   in
+  let env = check_tparams_constraints ~use_pos ~ety_env env tparaml in
   (env, this_ty, type_argl)
 
 (* Add generic parameters to the environment, localize their bounds, and
@@ -1072,8 +1065,8 @@ let localize_and_add_where_constraints ~ety_env (env : env) where_constraints =
 (* Helper functions *)
 
 let sub_type_decl env ty1 ty2 on_error =
-  let (env, ty1) = localize_with_self env ~ignore_errors:true ty1 in
-  let (env, ty2) = localize_with_self env ~ignore_errors:true ty2 in
+  let (env, ty1) = localize_no_subst env ~ignore_errors:true ty1 in
+  let (env, ty2) = localize_no_subst env ~ignore_errors:true ty2 in
   TUtils.sub_type env ty1 ty2 on_error
 
 let add_constraints env constraints on_error =
@@ -1095,20 +1088,16 @@ let localize_and_add_ast_generic_parameters_and_where_constraints
     List.map tparams ~f:(Decl_hint.aast_tparam_to_decl_tparam env.decl_env)
   in
   let ety_env =
-    env_with_self
-      env
-      ~on_error:
-        ( if ignore_errors then
-          Errors.ignore_error
-        else
-          Env.invalid_type_hint_assert_primary_pos_in_current_decl env )
+    empty_expand_env_with_on_error
+      ( if ignore_errors then
+        Errors.ignore_error
+      else
+        Env.invalid_type_hint_assert_primary_pos_in_current_decl env )
   in
   let env = localize_and_add_generic_parameters ~ety_env env tparams in
   let env = localize_and_add_where_constraints ~ety_env env where_constraints in
   env
 
-let () = TUtils.localize_with_self_ref := localize_with_self
+let () = TUtils.localize_no_subst_ref := localize_no_subst
 
 let () = TUtils.localize_ref := localize
-
-let () = TUtils.env_with_self_ref := env_with_self

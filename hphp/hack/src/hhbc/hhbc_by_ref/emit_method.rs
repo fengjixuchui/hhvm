@@ -148,7 +148,12 @@ pub fn from_ast<'a, 'arena>(
             .get(&class_name)
             .unwrap_or(&class.namespace),
     );
-    let mut coeffects = HhasCoeffects::from_ast(&method.ctxs, &method.params);
+    let mut coeffects = HhasCoeffects::from_ast(
+        &method.ctxs,
+        &method.params,
+        &method.tparams,
+        &class.tparams,
+    );
     if method.ctxs == None && is_closure_body {
         let parent_coeffects = emitter
             .emit_global_state()
@@ -166,25 +171,16 @@ pub fn from_ast<'a, 'arena>(
             _ => {}
         }
     }
-    let (ast_body_block, is_rx_body, rx_disabled) = if !coeffects.is_any_rx() {
-        (&method.body.ast, false, false)
-    } else {
-        match hhbc_by_ref_hhas_coeffects::halves_of_is_enabled_body(&method.body) {
-            None => (&method.body.ast, true, false),
-            Some((enabled_body, disabled_body)) => {
-                if emitter
-                    .options()
-                    .hhvm
-                    .flags
-                    .contains(hhbc_by_ref_options::HhvmFlags::RX_IS_ENABLED)
-                {
-                    (enabled_body, true, false)
-                } else {
-                    (disabled_body, false, true)
-                }
+    if emitter.systemlib() {
+        match (class.name.1.as_str(), method.name.1.as_str()) {
+            ("\\__SystemLib\\MethCallerHelper", "__invoke")
+            | ("\\__SystemLib\\DynMethCallerHelper", "__invoke") => {
+                coeffects = coeffects.with_caller()
             }
+            _ => {}
         }
-    };
+    }
+    let ast_body_block = &method.body.ast;
     let (body, is_generator, is_pair_generator) = if is_native_opcode_impl {
         (
             emit_native_opcode::emit_body(
@@ -213,7 +209,6 @@ pub fn from_ast<'a, 'arena>(
         flags.set(emit_body::Flags::MEMOIZE, is_memoize);
         flags.set(emit_body::Flags::CLOSURE_BODY, is_closure_body);
         flags.set(emit_body::Flags::NATIVE, is_native);
-        flags.set(emit_body::Flags::RX_BODY, is_rx_body);
         flags.set(emit_body::Flags::ASYNC, is_async);
         flags.set(
             emit_body::Flags::HAS_COEFFECTS_LOCAL,
@@ -267,7 +262,6 @@ pub fn from_ast<'a, 'arena>(
     flags.set(HhasMethodFlags::IS_CLOSURE_BODY, is_closure_body);
     flags.set(HhasMethodFlags::IS_INTERCEPTABLE, is_interceptable);
     flags.set(HhasMethodFlags::IS_MEMOIZE_IMPL, is_memoize);
-    flags.set(HhasMethodFlags::RX_DISABLED, rx_disabled);
     flags.set(HhasMethodFlags::NO_INJECTION, is_no_injection);
     Ok(HhasMethod {
         attributes,

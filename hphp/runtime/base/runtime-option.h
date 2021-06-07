@@ -110,6 +110,7 @@ struct RepoOptions {
   H(bool,           DisallowDynamicMethCallerArgs,    false)          \
   H(bool,           DisallowInstMeth,                 false)          \
   H(bool,           EnableReadonlyEnforcement,        false)          \
+  H(bool,           EscapeBrace,                      false)          \
   /**/
 
   /**/
@@ -477,6 +478,8 @@ struct RuntimeOption {
 
   static bool AutoloadEnabled;
   static std::string AutoloadDBPath;
+  static std::string AutoloadDBPerms;
+  static std::string AutoloadDBGroup;
   static bool AutoloadRethrowExceptions;
 
   static std::string FileCache;
@@ -646,9 +649,6 @@ struct RuntimeOption {
   // Disables non-top-level declarations
   // true => error, false => default behaviour
   static bool DisableNontoplevelDeclarations;
-  // Disables static closures
-  // true => error, false => default behaviour
-  static bool DisableStaticClosures;
   // Enables the class-level where constraints
   // true => allow the feature, false => disable the feature
   static bool EnableClassLevelWhereClauses;
@@ -712,6 +712,7 @@ struct RuntimeOption {
    *  2 - Code coverage enabled                                         \
    */                                                                   \
   F(uint32_t, EnableCodeCoverage,      0)                               \
+  F(bool, EnableFuncCoverage,          false)                           \
   /* Whether to use the embedded hackc binary */                        \
   F(bool, HackCompilerUseEmbedded,     facebook)                        \
   /* Whether to trust existing versions of the extracted compiler */    \
@@ -757,9 +758,7 @@ struct RuntimeOption {
   F(bool, HHBBCTestCompression,        false)                           \
   F(bool, EnablePerRepoOptions,        true)                            \
   F(bool, CachePerRepoOptionsPath,     true)                            \
-  F(bool, RaiseOnCaseInsensitiveLookup,true)                            \
-  F(bool, EnableHhbcByRef,             true)                            \
-  F(uint32_t, RaiseOnCaseInsensitiveLookupSampleRate, 1)                \
+  F(bool, LogHackcMemStats,            false)                           \
   /*
     CheckPropTypeHints:
     0 - No checks or enforcement of property type hints.
@@ -825,10 +824,11 @@ struct RuntimeOption {
   F(uint32_t, JitMaxTranslations,      10)                              \
   F(uint32_t, JitMaxProfileTranslations, 30)                            \
   F(uint32_t, JitTraceletLiveLocsLimit, 2000)                           \
+  F(uint32_t, JitTraceletEagerGuardsLimit, 0)                           \
   F(uint32_t, JitTraceletGuardsLimit,  5)                               \
   F(uint64_t, JitGlobalTranslationLimit, -1)                            \
   F(int64_t, JitMaxRequestTranslationTime, -1)                          \
-  F(uint32_t, JitMaxRegionInstrs,      1347)                            \
+  F(uint32_t, JitMaxRegionInstrs,      2000)                            \
   F(uint32_t, JitMaxLiveRegionInstrs,  50)                              \
   F(uint32_t, JitMaxAwaitAllUnroll,    8)                               \
   F(bool, JitProfileWarmupRequests,    false)                           \
@@ -897,7 +897,7 @@ struct RuntimeOption {
   F(uint32_t, HHIRInliningMinVasmCostLimit, 10000)                      \
   F(uint32_t, HHIRInliningMaxVasmCostLimit, 40000)                      \
   F(uint32_t, HHIRAlwaysInlineVasmCostLimit, 4800)                      \
-  F(uint32_t, HHIRInliningMaxDepth,    1000)                            \
+  F(uint32_t, HHIRInliningMaxDepth,    5)                               \
   F(double,   HHIRInliningVasmCallerExp, .5)                            \
   F(double,   HHIRInliningVasmCalleeExp, .5)                            \
   F(double,   HHIRInliningDepthExp, 0)                                  \
@@ -905,10 +905,8 @@ struct RuntimeOption {
   F(uint32_t, HHIRInliningMaxReturnLocals, 40)                          \
   F(uint32_t, HHIRInliningMaxInitObjProps, 12)                          \
   F(bool,     HHIRInliningIgnoreHints, !debug)                          \
-  F(bool,     HHIRInliningUseStackedCost, true)                         \
+  F(bool,     HHIRInliningUseStackedCost, false)                        \
   F(bool,     HHIRInliningUseLayoutBlocks, false)                       \
-  F(bool, HHIRInlineFrameOpts,         true)                            \
-  F(bool, HHIRPartialInlineFrameOpts,  true)                            \
   F(bool, HHIRAlwaysInterpIgnoreHint,  !debug)                          \
   F(bool, HHIRGenerateAsserts,         false)                           \
   F(bool, HHIRDeadCodeElim,            true)                            \
@@ -928,6 +926,7 @@ struct RuntimeOption {
   /* How many elements to inline for packed- or mixed-array inits. */   \
   F(uint32_t, HHIRMaxInlineInitPackedElements, 8)                       \
   F(uint32_t, HHIRMaxInlineInitMixedElements,  4)                       \
+  F(uint32_t, HHIRMaxInlineInitStructElements, 8)                       \
   F(double, HHIROffsetArrayProfileThreshold, 0.85)                      \
   F(double, HHIRSmallArrayProfileThreshold, 0.8)                        \
   F(double, HHIRMissingArrayProfileThreshold, 0.8)                      \
@@ -1002,7 +1001,6 @@ struct RuntimeOption {
   F(bool, NewTHPHotText,               false)                           \
   F(bool, FileBackedColdArena,         useFileBackedArenaDefault())     \
   F(string, ColdArenaFileDir,          "/tmp")                          \
-  F(uint32_t, LowArenaMinAddr,         1u << 30)                        \
   F(uint32_t, MaxHotTextHugePages,     hotTextHugePagesDefault())       \
   F(uint32_t, MaxLowMemHugePages,      hugePagesSoundNice() ? 8 : 0)    \
   F(uint32_t, MaxHighArenaHugePages,   0)                               \
@@ -1115,14 +1113,21 @@ struct RuntimeOption {
    *     sample rate specified by EmitLoggingArraySampleRate. If the    \
    *     sample rate is 0, logging arrays are never constructed.        \
    *     Logging arrays are only created before RTA has begun. */       \
-  F(int32_t, BespokeArrayLikeMode, 0)                                   \
+  F(int32_t, BespokeArrayLikeMode, 2)                                   \
   F(uint64_t, BespokeEscalationSampleRate, 0)                           \
-  F(uint64_t, EmitLoggingArraySampleRate, 1000)                         \
+  F(uint64_t, EmitLoggingArraySampleRate, 17)                           \
   F(string, ExportLoggingArrayDataPath, "")                             \
   /* Should we use structs? If so, how big can they get? Due to how we  \
    * represent structs, we can't make any with more than 255 keys. */   \
   F(bool, EmitBespokeStructDicts, true)                                 \
-  F(uint8_t, BespokeStructDictMaxNumKeys, 64)                           \
+  F(uint8_t, BespokeStructDictMaxNumKeys, 245)                          \
+  F(double, BespokeStructDictKeyCoverageThreshold, 95.0)                \
+  F(uint8_t, BespokeStructDictMinKeys, 4)                               \
+  F(double, BespokeStructDictMaxSizeRatio, 256.0)                       \
+  /* What is the maximum number of keys to track in key order           \
+   * profiles? */                                                       \
+  F(uint64_t, BespokeMaxTrackedKeys, 245)                               \
+  F(bool, EmitAPCBespokeArrays, true)                                   \
   /* Should we use monotypes? */                                        \
   F(bool, EmitBespokeMonotypes, false)                                  \
   /* Choice of layout selection algorithms:                             \
@@ -1133,9 +1138,26 @@ struct RuntimeOption {
    * 2 - Specialize sources on vanilla, but sinks on top. */            \
   F(int32_t, BespokeArraySpecializationMode, 0)                         \
   /* We will use specialized layouts for a given array if they cover    \
-   * the given percent of operations logged during profiling. */        \
+   * the given percent of operations logged during profiling.           \
+   *                                                                    \
+   * We can generate code for a bespoke sink in three ways:             \
+   *  1. We can do "top codegen" that handles any array layout.         \
+   *  2. We can specialize on a layout and fall back to top codegen.    \
+   *  3. We can specialize on a layout and side-exit on guard failure.  \
+   *                                                                    \
+   * We use a couple heuristics to choose between these options. If we  \
+   * see one layout that covers `SideExitThreshold` percent cases, and  \
+   * we saw at most `SideExitMaxSources` sources reach this sink, with  \
+   * at least `SideExitMinSampleCount` samples each, we'll side-exit.   \
+   *                                                                    \
+   * Else, if one layout covers `SpecializationThreshold` percent, we   \
+   * will specialize and fall back to top codegen. Otherwise, we'll do  \
+   * top codegen. */                                                    \
   F(double, BespokeArraySourceSpecializationThreshold, 95.0)            \
   F(double, BespokeArraySinkSpecializationThreshold,   95.0)            \
+  F(double, BespokeArraySinkSideExitThreshold, 95.0)                    \
+  F(uint64_t, BespokeArraySinkSideExitMaxSources, 64)                   \
+  F(uint64_t, BespokeArraySinkSideExitMinSampleCount, 4)                \
   /* Raise notices on various array operations which may present        \
    * compatibility issues with Hack arrays.                             \
    *                                                                    \
@@ -1277,6 +1299,7 @@ struct RuntimeOption {
    */                                                                   \
   F(StringToIntMap, CoeffectEnforcementLevels, {})                      \
   F(uint32_t, CoeffectViolationWarningSampleRate, 1)                    \
+  F(uint32_t, ContextConstantWarningSampleRate, 1)                      \
   /*                                                                    \
    * 0 - Nothing                                                        \
    * 1 - Warn                                                           \
@@ -1386,8 +1409,14 @@ struct RuntimeOption {
   F(int32_t, NoticeOnCoerceForIncDec, 0)                                \
   /* 0 nothing, 1 notice, 2 error */                                    \
   F(int32_t, NoticeOnCoerceForMath, 0)                                  \
+  /* 0 nothing, 1 notice, 2 error */                                    \
+  F(int32_t, NoticeOnCoerceForCmp, 0)                                   \
   F(string, TaoMigrationOverride, std::string(""))                      \
   F(string, SRRouteMigrationOverride, std::string(""))                  \
+  F(int32_t, SampleRequestTearing, 0)                                   \
+  F(bool, EnableAbstractContextConstants, true)                         \
+  F(bool, TypeconstAbstractDefaultReflectionIsAbstract, false)          \
+  F(bool, AbstractContextConstantUninitAccess, false)                   \
   /* */
 
 private:
@@ -1478,9 +1507,6 @@ public:
 
   // SimpleXML options
   static bool SimpleXMLEmptyNamespaceMatchesAll;
-
-  // Cookie options
-  static bool AllowDuplicateCookies;
 
 #ifdef FACEBOOK
   // fb303 server

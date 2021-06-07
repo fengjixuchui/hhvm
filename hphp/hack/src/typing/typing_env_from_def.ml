@@ -19,10 +19,11 @@ module MakeType = Typing_make_type
 
 open Aast
 
-let fun_env ?origin ctx f =
+let fun_env ?origin ctx fd =
+  let f = fd.fd_fun in
   let file = Pos.filename (fst f.f_name) in
   let droot = Some (Typing_deps.Dep.Fun (snd f.f_name)) in
-  let env = Env.empty ?origin ctx file ~mode:f.f_mode ~droot in
+  let env = Env.empty ?origin ctx file ~mode:fd.fd_mode ~droot in
   env
 
 (* Given a class definition construct a type consisting of the
@@ -57,9 +58,18 @@ let class_env ?origin ctx c =
     | Ast_defs.Cabstract
     | Ast_defs.Ctrait
     | Ast_defs.Cnormal ->
-      Typing_phase.localize_with_self env ~ignore_errors:true self
+      Typing_phase.localize_no_subst env ~ignore_errors:true self
   in
   let env = Env.set_self env self_id self_ty in
+  let env =
+    Env.add_upper_bound env Naming_special_names.Typehints.this self_ty
+  in
+  let env =
+    if c.c_final then
+      Env.add_lower_bound env Naming_special_names.Typehints.this self_ty
+    else
+      env
+  in
   (* In order to type-check a class, we need to know what "parent"
    * refers to. Sometimes people write "parent::", when that happens,
    * we need to know the type of parent.

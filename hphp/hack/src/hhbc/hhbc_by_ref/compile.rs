@@ -11,7 +11,7 @@ use aast_parser::{
 };
 use anyhow::{anyhow, *};
 use bitflags::bitflags;
-use bytecode_printer::{context::Context, print_program, Write};
+use bytecode_printer::{print_program, Context, Write};
 use hhbc_by_ref_emit_program::{self as emit_program, emit_program, FromAstFlags};
 use hhbc_by_ref_env::emitter::Emitter;
 use hhbc_by_ref_hhas_program::HhasProgram;
@@ -68,6 +68,7 @@ bitflags! {
     }
 
 }
+
 bitflags! {
       pub struct HHBCFlags: u32 {
         const LTR_ASSIGN=1 << 0;
@@ -79,6 +80,7 @@ bitflags! {
         const LOG_EXTERN_COMPILER_PERF=1 << 6;
         const ENABLE_INTRINSICS_EXTENSION=1 << 7;
         const DISABLE_NONTOPLEVEL_DECLARATIONS=1 << 8;
+        // No longer using bit 9.
         const EMIT_CLS_METH_POINTERS=1 << 10;
         const EMIT_METH_CALLER_FUNC_POINTERS=1 << 11;
         const RX_IS_ENABLED=1 << 12;
@@ -88,6 +90,7 @@ bitflags! {
         const EMIT_INST_METH_POINTERS=1 << 16;
     }
 }
+
 bitflags! {
     pub struct ParserFlags: u32 {
         const ABSTRACT_STATIC_PROPS=1 << 0;
@@ -110,6 +113,8 @@ bitflags! {
         const ENABLE_XHP_CLASS_MODIFIER=1 << 17;
         const DISALLOW_DYNAMIC_METH_CALLER_ARGS=1 << 18;
         const ENABLE_CLASS_LEVEL_WHERE_CLAUSES=1 << 19;
+        const ENABLE_READONLY_ENFORCEMENT=1 << 20;
+        const ESCAPE_BRACE=1 << 21;
   }
 }
 
@@ -245,6 +250,12 @@ impl ParserFlags {
         }
         if self.contains(ParserFlags::DISALLOW_DYNAMIC_METH_CALLER_ARGS) {
             f |= LangFlags::DISALLOW_DYNAMIC_METH_CALLER_ARGS;
+        }
+        if self.contains(ParserFlags::ENABLE_READONLY_ENFORCEMENT) {
+            f |= LangFlags::ENABLE_READONLY_ENFORCEMENT;
+        }
+        if self.contains(ParserFlags::ESCAPE_BRACE) {
+            f |= LangFlags::ESCAPE_BRACE;
         }
         f
     }
@@ -518,6 +529,7 @@ fn create_parser_options(opts: &Options) -> ParserOptions {
             LangFlags::DISALLOW_FUN_AND_CLS_METH_PSEUDO_FUNCS,
         ),
         po_disallow_inst_meth: hack_lang_flags(LangFlags::DISALLOW_INST_METH),
+        po_escape_brace: hack_lang_flags(LangFlags::ESCAPE_BRACE),
         ..Default::default()
     }
 }

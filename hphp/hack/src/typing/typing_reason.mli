@@ -154,7 +154,13 @@ type _ t_ =
   | Rconcat_operand : Pos.t -> locl_phase t_
   | Rinterp_operand : Pos.t -> locl_phase t_
   | Rdynamic_coercion of locl_phase t_
-  | Rsound_dynamic_callable : Pos_or_decl.t -> 'phase t_
+  | Rsupport_dynamic_type : Pos_or_decl.t -> 'phase t_
+  | Rdynamic_partial_enforcement :
+      Pos_or_decl.t * string * locl_phase t_
+      -> locl_phase t_
+  | Rrigid_tvar_escape :
+      Pos.t * string * string * locl_phase t_
+      -> locl_phase t_
 
 type t = locl_phase t_
 
@@ -175,6 +181,8 @@ val expr_display_id_map : int IMap.t ref
 
 val get_expr_display_id : int -> int
 
+val get_expr_display_id_map : unit -> int IMap.t
+
 val to_constructor_string : 'phase t_ -> string
 
 val pp : Format.formatter -> 'phase t_ -> unit
@@ -188,7 +196,7 @@ type ureason =
   | URforeach
   | URthrow
   | URvector
-  | URkey
+  | URkey of string
   | URvalue
   | URawait
   | URyield
@@ -231,6 +239,3 @@ val string_of_ureason : ureason -> string
 val none : 'phase t_
 
 val compare : 'phase t_ -> 'phase t_ -> int
-
-val explain_generic_constraint :
-  Pos.t -> 'phase t_ -> string -> (Pos_or_decl.t * string) list -> unit

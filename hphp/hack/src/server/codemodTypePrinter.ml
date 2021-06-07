@@ -38,14 +38,14 @@ let rec print_ty_exn ?(allow_nothing = false) ty =
   match get_node ty with
   | Tprim p -> print_tprim p
   | Tunion [] when allow_nothing -> "nothing"
-  | Tdependent (DTthis, _) -> "this"
   | Tany _
   | Terr
   | Tvar _
   | Tdependent _
   | Tunion _
   | Tintersection _
-  | Tobject ->
+  | Tobject
+  | Tneg _ ->
     raise Non_denotable
   | Tnonnull -> "nonnull"
   | Tdynamic -> "dynamic"

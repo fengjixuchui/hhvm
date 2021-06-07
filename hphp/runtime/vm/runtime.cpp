@@ -193,11 +193,11 @@ void throwArrayKeyException(const ArrayData* ad, const StringData* key) {
 }
 
 void throwMustBeReadOnlyException(const Class* cls, const StringData* propName) {
-  throw_cannot_write_non_readonly_prop(cls->name()->data(), propName->data());                
+  throw_cannot_write_non_readonly_prop(cls->name()->data(), propName->data());
 }
 
 void throwMustBeMutableException(const Class* cls, const StringData* propName) {
-  throw_must_be_mutable(cls->name()->data(), propName->data());                
+  throw_must_be_mutable(cls->name()->data(), propName->data());
 }
 
 std::string formatParamInOutMismatch(const char* fname, uint32_t index,
@@ -296,15 +296,39 @@ void raiseCoeffectsCallViolation(const Func* callee,
                                  RuntimeCoeffects provided,
                                  RuntimeCoeffects required) {
   assertx(CoeffectsConfig::enabled());
+  auto const callerName = [&] {
+    VMRegAnchor _;
+    if (!vmfp()) {
+      // VM is entering to the first frame
+      return String{makeStaticString("[vm-entry]")};
+    }
+    String result;
+    walkStack([&] (const ActRec* fp, Offset) {
+      assertx(fp);
+      auto const func = fp->func();
+      assertx(func);
+      if (func->hasCoeffectRules() &&
+          func->getCoeffectRules().size() == 1 &&
+          func->getCoeffectRules()[0].isCaller()) {
+        return false; // keep going
+      }
+      result = func->fullNameWithClosureName();
+      return true;
+    });
+    assertx(!result.isNull());
+    return result;
+  }();
+
   auto const errMsg = folly::sformat(
     "Call to {}() requires [{}] coeffects but {}() provided [{}]",
     callee->fullNameWithClosureName(),
     required.toString(),
-    fromLeaf([] (const ActRec* fp, Offset) {
-      return fp->func()->fullNameWithClosureName();
-    }),
+    callerName,
     provided.toString()
   );
+
+  FTRACE_MOD(Trace::coeffects, 1, "{}\n {:016b} -> {:016b}\n",
+             errMsg, provided.value(), required.value());
 
   assertx(!provided.canCall(required));
   if (provided.canCallWithWarning(required)) {

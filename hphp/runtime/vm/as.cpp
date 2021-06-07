@@ -649,7 +649,6 @@ struct AsmState {
 
   void finishClass() {
     assertx(!fe && !re);
-    ue->addPreClassEmitter(pce);
     pce = 0;
     enumTySet = false;
   }
@@ -682,15 +681,6 @@ struct AsmState {
   }
 
   void finishFunction() {
-    if (fe->isRxDisabled) {
-      auto& coeffects = fe->staticCoeffects;
-      bool isPureBody =
-        std::any_of(coeffects.begin(), coeffects.end(), CoeffectsConfig::isPure);
-      bool isRxBody =
-        std::any_of(coeffects.begin(), coeffects.end(), CoeffectsConfig::isAnyRx);
-      if (!isRxBody || isPureBody) error("isRxDisabled on non-rx func");
-    }
-
     finishSection();
 
     // Stack depth should be 0 at the end of a function body
@@ -722,6 +712,7 @@ struct AsmState {
     fe = 0;
     labelMap.clear();
     numItersSet = false;
+    numClosuresSet = false;
     initStackDepth = StackDepth();
     initStackDepth.setBase(*this, 0);
     currentStackDepth = &initStackDepth;
@@ -784,13 +775,13 @@ struct AsmState {
   FuncEmitter* fe{nullptr};
   std::map<std::string,Label> labelMap;
   bool numItersSet{false};
+  bool numClosuresSet{false};
   bool enumTySet{false};
   StackDepth initStackDepth;
   StackDepth* currentStackDepth{&initStackDepth};
   std::vector<std::unique_ptr<StackDepth>> unnamedStackDepths;
   int minStackDepth{0};
   int maxUnnamed{-1};
-  std::set<std::string,stdltistr> hoistables;
   Location::Range srcLoc{-1,-1,-1,-1};
   hphp_fast_map<SymbolRef,
                 CompactVector<std::string>,
@@ -1826,6 +1817,20 @@ void parse_numiters(AsmState& as) {
 }
 
 /*
+ * directive-numclosures : integer ';'
+ *                       ;
+ */
+void parse_numclosures(AsmState& as) {
+  if (as.numClosuresSet) {
+    as.error("only one .numclosures directive may appear in a given function");
+  }
+  int32_t count = read_opcode_arg<int32_t>(as);
+  as.numClosuresSet = true;
+  as.fe->setNumClosures(count);
+  as.in.expectWs(';');
+}
+
+/*
  * directive-declvars : var-name* ';'
  *                    ;
  *
@@ -1895,33 +1900,72 @@ void parse_coeffects_cc_param(AsmState& as) {
 }
 
 /*
- * directive-coeffects_cc_this : ctx-name* ';'
+ * directive-coeffects_cc_this : type-name* ctx-name ';'
  *                             ;
  */
 void parse_coeffects_cc_this(AsmState& as) {
-  while (true) {
-    as.in.skipWhitespace();
-    std::string name;
-    if (!as.in.readword(name)) break;
-    as.fe->coeffectRules.emplace_back(
-      CoeffectRule(CoeffectRule::CCThis{}, makeStaticString(name)));
+  std::vector<LowStringPtr> names;
+  std::string name;
+  while (as.in.readword(name)) {
+    auto sstr = makeStaticString(name);
+    if (as.in.peek() == ';') {
+      as.fe->coeffectRules.emplace_back(
+        CoeffectRule(CoeffectRule::CCThis{}, names, sstr));
+      break;
+    }
+    names.push_back(sstr);
   }
   as.in.expectWs(';');
 }
 
 /*
- * directive-coeffects_closure_inherit_from_parent ';'
+ * directive-coeffects_cc_reified : [isClass] index type-name* ctx-name ';'
+ *                                ;
  */
-void parse_coeffects_closure_inherit_from_parent(AsmState& as) {
-  assertx(as.fe->isClosureBody);
-  as.fe->coeffectRules.emplace_back(
-    CoeffectRule(CoeffectRule::ClosureInheritFromParent{}));
+void parse_coeffects_cc_reified(AsmState& as) {
+  std::vector<LowStringPtr> names;
+  std::string name;
+
+  as.in.skipWhitespace();
+  auto const is_class = as.in.tryConsume("isClass");
+  as.in.skipWhitespace();
+  auto const pos = read_opcode_arg<uint32_t>(as);
+  while (as.in.readword(name)) {
+    auto sstr = makeStaticString(name);
+    if (as.in.peek() == ';') {
+      as.fe->coeffectRules.emplace_back(
+        CoeffectRule(CoeffectRule::CCReified{}, is_class, pos, names, sstr));
+      break;
+    }
+    names.push_back(sstr);
+  }
   as.in.expectWs(';');
 }
 
+/*
+ * directive-coeffects_closure_parent_scope ';'
+ */
+void parse_coeffects_closure_parent_scope(AsmState& as) {
+  assertx(as.fe->isClosureBody);
+  as.fe->coeffectRules.emplace_back(
+    CoeffectRule(CoeffectRule::ClosureParentScope{}));
+  as.in.expectWs(';');
+}
+
+/*
+ * directive-coeffects_generator_this ';'
+ */
 void parse_coeffects_generator_this(AsmState& as) {
   assertx(!SystemLib::s_inited);
   as.fe->coeffectRules.emplace_back(CoeffectRule(CoeffectRule::GeneratorThis{}));
+  as.in.expectWs(';');
+}
+
+/*
+ * directive-coeffects_caller ';'
+ */
+void parse_coeffects_caller(AsmState& as) {
+  as.fe->coeffectRules.emplace_back(CoeffectRule(CoeffectRule::Caller{}));
   as.in.expectWs(';');
 }
 
@@ -2205,16 +2249,22 @@ void parse_function_body(AsmState& as, int nestLevel /* = 0 */) {
       if (word == ".try") { parse_try_catch(as, nestLevel); continue; }
       if (word == ".srcloc") { parse_srcloc(as, nestLevel); continue; }
       if (word == ".doc") { parse_func_doccomment(as); continue; }
+      if (word == ".numclosures") { parse_numclosures(as); continue; }
       if (word == ".coeffects_static") { parse_coeffects_static(as); continue; }
       if (word == ".coeffects_fun_param") { parse_coeffects_fun_param(as); continue; }
       if (word == ".coeffects_cc_param") { parse_coeffects_cc_param(as); continue; }
       if (word == ".coeffects_cc_this") { parse_coeffects_cc_this(as); continue; }
-      if (word == ".coeffects_closure_inherit_from_parent") {
-        parse_coeffects_closure_inherit_from_parent(as);
+      if (word == ".coeffects_cc_reified") { parse_coeffects_cc_reified(as); continue; }
+      if (word == ".coeffects_closure_parent_scope") {
+        parse_coeffects_closure_parent_scope(as);
         continue;
       }
       if (word == ".coeffects_generator_this") {
         parse_coeffects_generator_this(as);
+        continue;
+      }
+      if (word == ".coeffects_caller") {
+        parse_coeffects_caller(as);
         continue;
       }
       as.error("unrecognized directive `" + word + "' in function");
@@ -2596,8 +2646,6 @@ void parse_function_flags(AsmState& as) {
       as.fe->isClosureBody = true;
     } else if (flag == "isPairGenerator") {
       as.fe->isPairGenerator = true;
-    } else if (flag == "isRxDisabled") {
-      as.fe->isRxDisabled = true;
     } else {
       as.error("Unexpected function flag \"" + flag + "\"");
     }
@@ -2982,7 +3030,9 @@ void parse_class_constant(AsmState& as) {
                       staticEmptyString(), &tvInit,
                       staticEmptyString(),
                       kind,
-                      false);
+                      false,
+                      Array{},
+                      isAbstract);
 }
 
 /*
@@ -3014,11 +3064,11 @@ void parse_context_constant(AsmState& as) {
   as.in.expectWs(';');
 
   // temporarily drop the abstract ones until runtime is fixed
-  if (isAbstract) return;
+  if (isAbstract && !RuntimeOption::EvalEnableAbstractContextConstants) return;
 
   DEBUG_ONLY auto added =
     as.pce->addContextConstant(makeStaticString(name), std::move(coeffects),
-                               false /* isAbstract */);
+                               isAbstract);
   assertx(added);
 }
 
@@ -3242,32 +3292,6 @@ void parse_record_body(AsmState& as) {
   as.in.expect('}');
 }
 
-PreClass::Hoistable compute_hoistable(AsmState& as,
-                                      const std::string &name,
-                                      const std::string &parentName) {
-  auto &pce = *as.pce;
-  bool system = pce.attrs() & AttrBuiltin;
-
-  if (pce.methods().size() == 1 && pce.methods()[0]->isClosureBody) {
-    return PreClass::NotHoistable;
-  }
-  if (!system) {
-    if (!pce.interfaces().empty() ||
-        !pce.usedTraits().empty() ||
-        !pce.requirements().empty() ||
-        (pce.attrs() & (AttrEnum|AttrEnumClass))) {
-      return PreClass::Mergeable;
-    }
-    if (!parentName.empty() && !as.hoistables.count(parentName)) {
-      return PreClass::MaybeHoistable;
-    }
-  }
-  as.hoistables.insert(name);
-
-  return pce.attrs() & AttrUnique ?
-    PreClass::AlwaysHoistable : PreClass::MaybeHoistable;
-}
-
 /*
  * directive-class : upper-bound-list ?"top" attribute-list identifier
  *                   ?line-range extension-clause implements-clause '{'
@@ -3347,7 +3371,7 @@ void parse_class(AsmState& as) {
     as.in.expect(')');
   }
 
-  as.pce = as.ue->newBarePreClassEmitter(name, PreClass::MaybeHoistable);
+  as.pce = as.ue->newPreClassEmitter(name);
   as.pce->init(line0,
                line1,
                attrs,
@@ -3363,8 +3387,6 @@ void parse_class(AsmState& as) {
 
   as.in.expectWs('{');
   parse_class_body(as, attrs & AttrIsConst, ubs);
-
-  as.pce->setHoistable(compute_hoistable(as, name, parentName));
 
   as.finishClass();
 }
@@ -3421,7 +3443,6 @@ void parse_record(AsmState& as) {
   as.in.expectWs('{');
   parse_record_body(as);
 
-  as.ue->pushMergeableRecord(as.re->id());
   assertx(!as.fe && !as.pce);
   as.re = nullptr;
 }
@@ -3517,8 +3538,6 @@ void parse_alias(AsmState& as) {
     te->setTypeStructure(ArrNR(ArrayData::GetScalarArray(std::move(ts))));
   }
 
-  as.ue->pushMergeableId(Unit::MergeKind::TypeAlias, te->id());
-
   as.in.expectWs(';');
 }
 
@@ -3544,8 +3563,7 @@ void parse_constant(AsmState& as) {
   if (type(constant.val) == KindOfUninit) {
     constant.val.m_data.pcnt = reinterpret_cast<MaybeCountable*>(Unit::getCns);
   }
-  auto const cid = as.ue->addConstant(constant);
-  as.ue->pushMergeableId(Unit::MergeKind::Define, cid);
+  as.ue->addConstant(constant);
 }
 
 /*

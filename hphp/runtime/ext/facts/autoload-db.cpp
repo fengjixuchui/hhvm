@@ -17,12 +17,21 @@
 #include <atomic>
 #include <chrono>
 #include <exception>
+#include <fcntl.h>
+#include <grp.h>
+#include <string>
+#include <sys/types.h>
+#include <unistd.h>
 #include <utility>
 
+#include <folly/experimental/io/FsUtil.h>
 #include <folly/json.h>
 
 #include "hphp/runtime/ext/facts/autoload-db.h"
 #include "hphp/runtime/ext/facts/file-facts.h"
+#include "hphp/util/assertions.h"
+#include "hphp/util/hash.h"
+#include "hphp/util/logger.h"
 #include "hphp/util/trace.h"
 
 TRACE_SET_MOD(facts);
@@ -30,7 +39,62 @@ TRACE_SET_MOD(facts);
 namespace HPHP {
 namespace Facts {
 
+DBData::DBData(
+    folly::fs::path path, SQLite::OpenMode rwMode, ::gid_t gid, ::mode_t perms)
+    : m_path{std::move(path)}, m_rwMode{rwMode}, m_gid{gid}, m_perms{perms} {
+  always_assert(m_path.is_absolute());
+
+  // Coerce DB permissions into unix owner/group/other bits
+  FTRACE(
+      3,
+      "Coercing DB permission bits {} to {}\n",
+      m_perms,
+      (m_perms | 0600) & 0666);
+  m_perms |= 0600;
+  m_perms &= 0666;
+}
+
+bool DBData::operator==(const DBData& rhs) const {
+  return m_path == rhs.m_path && m_rwMode == rhs.m_rwMode &&
+         m_gid == rhs.m_gid && m_perms == rhs.m_perms;
+}
+
+std::string DBData::toString() const {
+  return folly::sformat("DBData({}, {}, {})", m_path.native(), m_gid, m_perms);
+}
+
+size_t DBData::hash() const {
+  return folly::hash::hash_combine(
+      hash_string_cs(m_path.native().c_str(), m_path.native().size()),
+      std::hash<gid_t>{}(m_gid),
+      std::hash<mode_t>{}(m_perms));
+}
+
 namespace {
+
+/**
+ * Create the given file if it doesn't exist, setting its group ownership and
+ * permissions along the way.
+ */
+void setFilePerms(const folly::fs::path& path, ::gid_t gid, ::mode_t perms) {
+  FTRACE(
+      3, "Creating {} with gid={} and perms={}\n", path.native(), gid, perms);
+  int dbFd = ::open(path.native().c_str(), O_CREAT, perms);
+  if (dbFd == -1) {
+    FTRACE(1, "Could not open DB at {}: errno={}", path.native(), errno);
+    return;
+  }
+  SCOPE_EXIT {
+    ::close(dbFd);
+  };
+  if (::fchown(dbFd, -1, gid) == -1) {
+    FTRACE(
+        1, "Could not chown({}, -1, {}): errno={}", path.native(), gid, errno);
+  }
+  if (::fchmod(dbFd, perms) == -1) {
+    FTRACE(1, "Could not chmod({}, {}): errno={}", path.native(), perms, errno);
+  }
+}
 
 // Representation of inheritance kinds in the DB
 
@@ -113,6 +177,15 @@ void createSchema(SQLiteTxn& txn) {
            " attribute_value TEXT NULL,"
            " UNIQUE (typeid, attribute_name, attribute_position)"
            ")");
+
+  txn.exec("CREATE TABLE IF NOT EXISTS method_attributes ("
+           " typeid INTEGER NOT NULL REFERENCES type_details ON DELETE CASCADE,"
+           " method TEXT NOT NULL,"
+           " attribute_name TEXT NOT NULL,"
+           " attribute_position INTEGER NULL,"
+           " attribute_value TEXT NULL,"
+           " UNIQUE (typeid, attribute_name, attribute_position)"
+           ")");
 }
 
 void rebuildIndices(SQLiteTxn& txn) {
@@ -147,6 +220,17 @@ void rebuildIndices(SQLiteTxn& txn) {
   txn.exec("CREATE INDEX IF NOT EXISTS "
            "type_attributes__attribute_name__typeid__attribute_position"
            " ON type_attributes (attribute_name, typeid, attribute_position)");
+
+  // method_attributes
+  txn.exec(
+      "CREATE INDEX IF NOT EXISTS "
+      "method_attributes__attribute_name__typeid__method__attribute_position"
+      " ON method_attributes ("
+      "  attribute_name,"
+      "  typeid,"
+      "  method,"
+      "  attribute_position"
+      ")");
 }
 
 TypeKind toTypeKind(const std::string_view kind) {
@@ -306,7 +390,7 @@ struct TypeStmts {
             " JOIN all_paths USING (pathid)"
             " WHERE base_name = @base"
             " AND kind = @kind")}
-      , m_insertAttribute{db.prepare(
+      , m_insertTypeAttribute{db.prepare(
             "INSERT OR IGNORE INTO type_attributes ("
             " typeid,"
             " attribute_name,"
@@ -320,18 +404,50 @@ struct TypeStmts {
             "  @attribute_position,"
             "  @attribute_value"
             " )")}
-      , m_getAttributes{db.prepare("SELECT DISTINCT attribute_name"
-                                   " FROM type_attributes"
-                                   "  JOIN type_details USING (typeid)"
-                                   "  JOIN all_paths USING (pathid)"
-                                   " WHERE name=@type AND path = @path")}
-      , m_getAttributeArgs{db.prepare("SELECT attribute_value"
-                                      " FROM type_attributes"
-                                      "  JOIN type_details USING (typeid)"
-                                      "  JOIN all_paths USING (pathid)"
-                                      " WHERE name = @type"
-                                      " AND path = @path"
-                                      " AND attribute_name = @attribute_name")}
+      , m_insertMethodAttribute{db.prepare(
+            "INSERT OR IGNORE INTO method_attributes ("
+            " typeid,"
+            " method,"
+            " attribute_name,"
+            " attribute_position,"
+            " attribute_value"
+            ")"
+            " VALUES ("
+            "  (SELECT typeid FROM type_details JOIN all_paths USING (pathid)"
+            "   WHERE name=@type AND path=@path),"
+            "  @method,"
+            "  @attribute_name,"
+            "  @attribute_position,"
+            "  @attribute_value"
+            " )")}
+      , m_getTypeAttributes{db.prepare("SELECT DISTINCT attribute_name"
+                                       " FROM type_attributes"
+                                       "  JOIN type_details USING (typeid)"
+                                       "  JOIN all_paths USING (pathid)"
+                                       " WHERE name=@type AND path = @path")}
+      , m_getMethodAttributes{db.prepare(
+            "SELECT DISTINCT attribute_name"
+            " FROM method_attributes"
+            "  JOIN type_details USING (typeid)"
+            "  JOIN all_paths USING (pathid)"
+            " WHERE name=@type AND method=@method AND path = @path")}
+      , m_getTypeAttributeArgs{db.prepare(
+            "SELECT attribute_value"
+            " FROM type_attributes"
+            "  JOIN type_details USING (typeid)"
+            "  JOIN all_paths USING (pathid)"
+            " WHERE name = @type"
+            " AND path = @path"
+            " AND attribute_name = @attribute_name")}
+      , m_getMethodAttributeArgs{db.prepare(
+            "SELECT attribute_value"
+            " FROM method_attributes"
+            "  JOIN type_details USING (typeid)"
+            "  JOIN all_paths USING (pathid)"
+            " WHERE name = @type"
+            " AND method = @method"
+            " AND path = @path"
+            " AND attribute_name = @attribute_name")}
       , m_getTypesWithAttribute{db.prepare(
             "SELECT name, path from type_details"
             " JOIN all_paths USING (pathid)"
@@ -340,6 +456,12 @@ struct TypeStmts {
             "   WHERE attribute_name = @attribute_name"
             "   AND type_attributes.typeid=type_details.typeid"
             " )")}
+      , m_getMethodsWithAttribute{db.prepare(
+            "SELECT name, method, path"
+            " FROM type_details"
+            "  JOIN method_attributes USING (typeid)"
+            "  JOIN all_paths USING (pathid)"
+            " WHERE attribute_name = @attribute_name")}
       , m_getCorrectCase{db.prepare(
             "SELECT name FROM type_details WHERE name=@name")}
       , m_getAll{db.prepare("SELECT name, path from type_details JOIN "
@@ -353,10 +475,14 @@ struct TypeStmts {
   SQLiteStmt m_insertBaseType;
   SQLiteStmt m_getBaseTypes;
   SQLiteStmt m_getDerivedTypes;
-  SQLiteStmt m_insertAttribute;
-  SQLiteStmt m_getAttributes;
-  SQLiteStmt m_getAttributeArgs;
+  SQLiteStmt m_insertTypeAttribute;
+  SQLiteStmt m_insertMethodAttribute;
+  SQLiteStmt m_getTypeAttributes;
+  SQLiteStmt m_getMethodAttributes;
+  SQLiteStmt m_getTypeAttributeArgs;
+  SQLiteStmt m_getMethodAttributeArgs;
   SQLiteStmt m_getTypesWithAttribute;
+  SQLiteStmt m_getMethodsWithAttribute;
   SQLiteStmt m_getCorrectCase;
   SQLiteStmt m_getAll;
 };
@@ -440,17 +566,29 @@ struct AutoloadDBImpl final : public AutoloadDB {
 
   ~AutoloadDBImpl() override = default;
 
-  static AutoloadDBImpl
-  get(const folly::fs::path& path, SQLite::OpenMode mode) {
-    assertx(path.is_absolute());
+  static AutoloadDBImpl get(const DBData& dbData) {
+    assertx(dbData.m_path.is_absolute());
     auto db = [&]() {
       try {
-        return SQLite::connect(path.native(), mode);
+        return SQLite::connect(dbData.m_path.native(), dbData.m_rwMode);
       } catch (SQLiteExc& e) {
         throw std::runtime_error{folly::sformat(
-            "Couldn't open or create native Facts DB at {}", path.native())};
+            "Couldn't open or create native Facts DB at {}",
+            dbData.m_path.native())};
       }
     }();
+    if (dbData.m_rwMode == SQLite::OpenMode::ReadWrite) {
+      // If writable, ensure the DB has the correct owner and permissions.
+      setFilePerms(dbData.m_path, dbData.m_gid, dbData.m_perms);
+      setFilePerms(
+          folly::fs::path{dbData.m_path} += "-shm",
+          dbData.m_gid,
+          dbData.m_perms);
+      setFilePerms(
+          folly::fs::path{dbData.m_path} += "-wal",
+          dbData.m_gid,
+          dbData.m_perms);
+    }
     if (!db.isReadOnly()) {
       try {
         db.setJournalMode(SQLite::JournalMode::WAL);
@@ -472,7 +610,7 @@ struct AutoloadDBImpl final : public AutoloadDB {
       rebuildIndices(txn);
       db.setBusyTimeout(60'000);
       txn.commit();
-      FTRACE(3, "Connected to SQLite DB at {}.\n", path.native());
+      FTRACE(3, "Connected to SQLite DB at {}.\n", dbData.m_path.native());
     }
 
     return AutoloadDBImpl{std::move(db)};
@@ -636,7 +774,7 @@ struct AutoloadDBImpl final : public AutoloadDB {
     if (it == m_derivedTypeStmts.end()) {
       return m_derivedTypeStmts
           .insert(
-              {{kinds, deriveKinds},
+              {std::make_tuple(kinds, deriveKinds),
                m_db.prepare(
                    getTransitiveDerivedTypesQueryStr(kinds, deriveKinds))})
           .first->second;
@@ -671,7 +809,7 @@ struct AutoloadDBImpl final : public AutoloadDB {
       const folly::dynamic* attributeValue) override {
 
     std::string attrValueJson;
-    auto query = txn.query(m_typeStmts.m_insertAttribute);
+    auto query = txn.query(m_typeStmts.m_insertTypeAttribute);
 
     auto const attributeValueKey = "@attribute_value";
     if (attributeValue) {
@@ -696,6 +834,42 @@ struct AutoloadDBImpl final : public AutoloadDB {
     query.step();
   }
 
+  void insertMethodAttribute(
+      SQLiteTxn& txn,
+      const folly::fs::path& path,
+      std::string_view type,
+      std::string_view method,
+      std::string_view attributeName,
+      std::optional<int> attributePosition,
+      const folly::dynamic* attributeValue) override {
+
+    std::string attrValueJson;
+    auto query = txn.query(m_typeStmts.m_insertMethodAttribute);
+
+    auto const attributeValueKey = "@attribute_value";
+    if (attributeValue) {
+      attrValueJson = folly::toJson(*attributeValue);
+      query.bindString(attributeValueKey, attrValueJson);
+    } else {
+      query.bindNull(attributeValueKey);
+    }
+
+    auto const attributePositionKey = "@attribute_position";
+    if (attributePosition) {
+      query.bindInt(attributePositionKey, *attributePosition);
+    } else {
+      query.bindNull(attributePositionKey);
+    }
+
+    query.bindString("@type", type);
+    query.bindString("@method", method);
+    query.bindString("@path", path.native());
+    query.bindString("@attribute_name", attributeName);
+
+    FTRACE(5, "Running {}\n", query.sql());
+    query.step();
+  }
+
   void analyze() override {
     m_db.analyze();
   }
@@ -704,7 +878,7 @@ struct AutoloadDBImpl final : public AutoloadDB {
       SQLiteTxn& txn,
       const std::string_view type,
       const folly::fs::path& path) override {
-    auto query = txn.query(m_typeStmts.m_getAttributes);
+    auto query = txn.query(m_typeStmts.m_getTypeAttributes);
     query.bindString("@type", type);
     query.bindString("@path", path.native());
     std::vector<std::string> results;
@@ -715,25 +889,81 @@ struct AutoloadDBImpl final : public AutoloadDB {
     return results;
   }
 
-  std::vector<std::pair<std::string, folly::fs::path>> getTypesWithAttribute(
-      SQLiteTxn& txn, const std::string_view attributeName) override {
-    auto query = txn.query(m_typeStmts.m_getTypesWithAttribute);
-    query.bindString("@attribute_name", attributeName);
-    std::vector<std::pair<std::string, folly::fs::path>> results;
+  std::vector<std::string> getAttributesOfMethod(
+      SQLiteTxn& txn,
+      std::string_view type,
+      std::string_view method,
+      const folly::fs::path& path) override {
+    auto query = txn.query(m_typeStmts.m_getMethodAttributes);
+    query.bindString("@type", type);
+    query.bindString("@method", method);
+    query.bindString("@path", path.native());
+    std::vector<std::string> results;
     FTRACE(5, "Running {}\n", query.sql());
     for (query.step(); query.row(); query.step()) {
-      results.emplace_back(query.getString(0), std::string{query.getString(1)});
+      results.emplace_back(query.getString(0));
     }
     return results;
   }
 
-  std::vector<folly::dynamic> getAttributeArgs(
+  std::vector<TypeDeclaration> getTypesWithAttribute(
+      SQLiteTxn& txn, const std::string_view attributeName) override {
+    auto query = txn.query(m_typeStmts.m_getTypesWithAttribute);
+    query.bindString("@attribute_name", attributeName);
+    std::vector<TypeDeclaration> results;
+    FTRACE(5, "Running {}\n", query.sql());
+    for (query.step(); query.row(); query.step()) {
+      results.push_back(TypeDeclaration{
+          .m_type = std::string{query.getString(0)},
+          .m_path = folly::fs::path{std::string{query.getString(1)}}});
+    }
+    return results;
+  }
+
+  std::vector<MethodDeclaration> getMethodsWithAttribute(
+      SQLiteTxn& txn, std::string_view attributeName) override {
+    auto query = txn.query(m_typeStmts.m_getMethodsWithAttribute);
+    query.bindString("@attribute_name", attributeName);
+    std::vector<MethodDeclaration> results;
+    FTRACE(5, "Running {}\n", query.sql());
+    for (query.step(); query.row(); query.step()) {
+      results.push_back(MethodDeclaration{
+          .m_type = std::string{query.getString(0)},
+          .m_method = std::string{query.getString(1)},
+          .m_path = folly::fs::path{std::string{query.getString(2)}}});
+    }
+    return results;
+  }
+
+  std::vector<folly::dynamic> getTypeAttributeArgs(
       SQLiteTxn& txn,
       const std::string_view type,
       const std::string_view path,
       const std::string_view attributeName) override {
-    auto query = txn.query(m_typeStmts.m_getAttributeArgs);
+    auto query = txn.query(m_typeStmts.m_getTypeAttributeArgs);
     query.bindString("@type", type);
+    query.bindString("@path", path);
+    query.bindString("@attribute_name", attributeName);
+    FTRACE(5, "Running {}\n", query.sql());
+    std::vector<folly::dynamic> args;
+    for (query.step(); query.row(); query.step()) {
+      auto arg = query.getNullableString(0);
+      if (arg) {
+        args.push_back(folly::parseJson(*arg));
+      }
+    }
+    return args;
+  }
+
+  std::vector<folly::dynamic> getMethodAttributeArgs(
+      SQLiteTxn& txn,
+      std::string_view type,
+      std::string_view method,
+      std::string_view path,
+      std::string_view attributeName) override {
+    auto query = txn.query(m_typeStmts.m_getMethodAttributeArgs);
+    query.bindString("@type", type);
+    query.bindString("@method", method);
     query.bindString("@path", path);
     query.bindString("@attribute_name", attributeName);
     FTRACE(5, "Running {}\n", query.sql());
@@ -911,12 +1141,11 @@ AutoloadDB::~AutoloadDB() = default;
 
 THREAD_LOCAL(AutoloadDBThreadLocal, t_adb);
 
-AutoloadDB& getDB(const folly::fs::path& dbPath, SQLite::OpenMode mode) {
-  assertx(dbPath.is_absolute());
+AutoloadDB& getDB(const DBData& dbData) {
   AutoloadDBThreadLocal& dbVault = *t_adb.get();
-  auto& dbPtr = dbVault[{dbPath.native(), mode}];
+  auto& dbPtr = dbVault[{dbData.m_path.native(), dbData.m_rwMode}];
   if (!dbPtr) {
-    dbPtr = std::make_unique<AutoloadDBImpl>(AutoloadDBImpl::get(dbPath, mode));
+    dbPtr = std::make_unique<AutoloadDBImpl>(AutoloadDBImpl::get(dbData));
   }
   return *dbPtr;
 }

@@ -206,6 +206,7 @@ bool hasObviousStackOutput(const Bytecode& op, const Interp& interp) {
   case Op::NewCol:
   case Op::NewPair:
   case Op::ClassName:
+  case Op::LazyClassFromClass:
   case Op::File:
   case Op::Dir:
   case Op::Concat:
@@ -349,54 +350,6 @@ void insert_assertions(VisitContext& visit, BlockId bid, State state) {
     blk->fallthrough = fallthrough;
     blk->hhbcs = std::move(newBCs);
   }
-}
-
-//////////////////////////////////////////////////////////////////////
-
-template<class Gen>
-bool propagate_constants(const Bytecode& op, State& state, Gen gen) {
-  auto const numPop  = op.numPop();
-  auto const numPush = op.numPush();
-  auto const stkSize = state.stack.size();
-  constexpr auto numCells = 4;
-  TypedValue constVals[numCells];
-
-  // All outputs of the instruction must have constant types for this
-  // to be allowed.
-  for (auto i = size_t{0}; i < numPush; ++i) {
-    auto const& ty = state.stack[stkSize - i - 1].type;
-    if (i < numCells) {
-      auto const v = tv(ty);
-      if (!v) return false;
-      constVals[i] = *v;
-    } else if (!is_scalar(ty)) {
-      return false;
-    }
-  }
-
-  // Pop the inputs, and push the constants.
-  for (auto i = size_t{0}; i < numPop; ++i) {
-    DEBUG_ONLY auto flavor = op.popFlavor(i);
-    assertx(flavor != Flavor::U);
-    // Even for CU we only support C's.
-    gen(bc::PopC {});
-  }
-
-  for (auto i = size_t{0}; i < numPush; ++i) {
-    auto const v = i < numCells ?
-      constVals[i] : *tv(state.stack[stkSize - i - 1].type);
-    gen(gen_constant(v));
-    state.stack[stkSize - i - 1].type = from_cell(v);
-  }
-
-  return true;
-}
-
-bool propagate_constants(const Bytecode& bc, State& state,
-                         BytecodeVec& out) {
-  return propagate_constants(bc, state, [&] (const Bytecode& bc) {
-      out.push_back(bc);
-    });
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -861,7 +814,7 @@ Bytecode gen_constant(const TypedValue& cell) {
     case KindOfClsMeth:
     case KindOfRClsMeth:
     case KindOfRecord:
-      always_assert(0 && "invalid constant in propagate_constants");
+      always_assert(0 && "invalid constant in gen_constant");
   }
   not_reached();
 }

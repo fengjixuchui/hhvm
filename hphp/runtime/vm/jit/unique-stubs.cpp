@@ -377,7 +377,7 @@ TCA emitFuncPrologueRedispatchUnpack(CodeBlock& main, CodeBlock& cold,
         v.makeVcallArgs({{flags, func, numArgs, savedRip}}),
         v.makeTuple({numNewArgs}),
         {done, ctch},
-        Fixup::indirect(prs.qwordsPushed(), FPInvOffset{0}),
+        Fixup::indirect(prs.qwordsPushed(), SBInvOffset{0}),
         DestType::SSA
       };
 
@@ -696,6 +696,45 @@ TCA emitInterpGenRet(CodeBlock& cb, DataBlock& data) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+template<class Handler>
+TCA emitHandleServiceRequest(CodeBlock& cb, DataBlock& data, Handler handler) {
+  alignCacheLine(cb);
+
+  return vwrap(cb, data, [&] (Vout& v) {
+    auto const bcOff = v.makeReg();
+    auto const spOff = v.makeReg();
+    v << copy{rarg(0), bcOff};
+    v << copy{rarg(1), spOff};
+
+    storeVmfp(v);
+
+    auto const ret = v.makeReg();
+    v << vcall{
+      CallSpec::direct(handler),
+      v.makeVcallArgs({{bcOff, spOff}}),
+      v.makeTuple({ret}),
+      Fixup::none(),
+      DestType::SSA
+    };
+
+    // We did not initialize rvmsp(), but it might be needed by the next
+    // translation. Luckily, handleRetranslateOpt() synced vmsp(), so load
+    // it from there.
+    loadVmsp(v);
+
+    v << jmpr{ret, vm_regs_with_sp()};
+  });
+}
+
+TCA emitHandleRetranslate(CodeBlock& cb, DataBlock& data) {
+  return emitHandleServiceRequest(cb, data, svcreq::handleRetranslate);
+}
+TCA emitHandleRetranslateOpt(CodeBlock& cb, DataBlock& data) {
+  return emitHandleServiceRequest(cb, data, svcreq::handleRetranslateOpt);
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
 TCA emitBindCallStub(CodeBlock& cb, DataBlock& data) {
   return vwrap(cb, data, [] (Vout& v) {
     v << stublogue{false};
@@ -916,7 +955,7 @@ TCA emitDecRefGeneric(CodeBlock& cb, DataBlock& data) {
       if (!fullFrame) {
         // The stub frame's saved RIP is at %rsp[8] before we saved the
         // caller-saved registers.
-        v << syncpoint{Fixup::indirect(prs.qwordsPushed(), FPInvOffset{0})};
+        v << syncpoint{Fixup::indirect(prs.qwordsPushed(), SBInvOffset{0})};
       }
     };
 
@@ -1023,7 +1062,7 @@ TCA emitHandleSRHelper(CodeBlock& cb, DataBlock& data) {
   return vwrap(cb, data, [] (Vout& v) {
     storeVmfp(v);
 
-    // Combine ServiceRequest and FPInvOffset into one pushable 64-bit reg.
+    // Combine ServiceRequest and SBInvOffset into one pushable 64-bit reg.
     static_assert(folly::kIsLittleEndian,
         "Packing two 32-bit ints into one 64-bit for ReqInfo.");
     auto const spOffShifted = v.makeReg();
@@ -1298,6 +1337,9 @@ void UniqueStubs::emitAll(CodeCache& code, Debug::DebugInfo& dbg) {
   ADD(asyncGenRetHelper, hotView(), emitInterpGenRet<true>(hot(), data));
   ADD(retInlHelper, hotView(), emitInterpRet(hot(), data));
 
+  ADD(handleRetranslate, view, emitHandleRetranslate(cold, data));
+  ADD(handleRetranslateOpt, view, emitHandleRetranslateOpt(cold, data));
+
   ADD(immutableBindCallStub, view, emitBindCallStub(cold, data));
 
   ADD(decRefGeneric,  hotView(), emitDecRefGeneric(hot(), data));
@@ -1416,17 +1458,19 @@ RegSet interp_one_cf_regs() {
   return vm_regs_with_sp() | rarg(2);
 }
 
-void emitInterpReq(Vout& v, SrcKey sk, FPInvOffset spOff) {
+void emitInterpReq(Vout& v, SrcKey sk, SBInvOffset spOff) {
   if (sk.resumeMode() == ResumeMode::None) {
-    v << lea{rvmfp()[-cellsToBytes(spOff.offset)], rvmsp()};
+    auto const frameRelOff = spOff.offset + sk.func()->numSlotsInFrame();
+    v << lea{rvmfp()[-cellsToBytes(frameRelOff)], rvmsp()};
   }
   v << copy{v.cns(sk.pc()), rarg(0)};
   v << jmpi{tc::ustubs().interpHelper, arg_regs(1)};
 }
 
-void emitInterpReqNoTranslate(Vout& v, SrcKey sk, FPInvOffset spOff) {
+void emitInterpReqNoTranslate(Vout& v, SrcKey sk, SBInvOffset spOff) {
   if (sk.resumeMode() == ResumeMode::None) {
-    v << lea{rvmfp()[-cellsToBytes(spOff.offset)], rvmsp()};
+    auto const frameRelOff = spOff.offset + sk.func()->numSlotsInFrame();
+    v << lea{rvmfp()[-cellsToBytes(frameRelOff)], rvmsp()};
   }
   v << store{v.cns(sk.pc()), rvmtl()[rds::kVmpcOff]};
   v << jmpi{tc::ustubs().interpHelperNoTranslate, arg_regs(1)};

@@ -267,6 +267,9 @@ void setStackForBase(ISS& env, Type ty) {
   FTRACE(4, "      stk[{:02}] := {}\n", locSlot, show(ty));
   assertx(locSlot < env.state.stack.size());
 
+  if (env.undo) {
+    env.undo->onStackWrite(locSlot, std::move(env.state.stack[locSlot].type));
+  }
   env.state.stack[locSlot] = StackElem { std::move(ty), NoLocalId };
 }
 
@@ -977,9 +980,8 @@ Effects miProp(ISS& env, bool, MOpMode mode, Type key, ReadOnlyOp op) {
    */
   if (isUnset && couldBeThisObj(env, env.collect.mInstrState.base)) {
     if (name) {
-      auto const elem = thisPropRaw(env, name);
-      if (elem && elem->ty.couldBe(BUninit)) {
-        mergeThisProp(env, name, TInitNull);
+      if (auto const elem = thisPropType(env, name)) {
+        if (elem->couldBe(BUninit)) mergeThisProp(env, name, TInitNull);
       }
     } else {
       mergeEachThisPropRaw(env, [&] (const Type& ty) {
@@ -992,14 +994,14 @@ Effects miProp(ISS& env, bool, MOpMode mode, Type key, ReadOnlyOp op) {
     auto const optThisTy = thisTypeFromContext(env.index, env.ctx);
     auto const thisTy    = optThisTy ? *optThisTy : TObj;
     if (name) {
-      auto const elem = thisPropRaw(env, name);
-      if (elem && elem->attrs & AttrIsReadOnly && op == ReadOnlyOp::Mutable) {
+      if (op == ReadOnlyOp::Mutable &&
+          isDefinitelyThisPropAttr(env, name, AttrIsReadOnly)) {
         return Effects::AlwaysThrows;
       }
-      
+
       auto const ty = [&] {
         if (update) {
-          if (elem) return elem->ty;
+          if (auto const elem = thisPropType(env, name)) return *elem;
         } else {
           if (auto const propTy = thisPropAsCell(env, name)) return *propTy;
         }
@@ -1398,17 +1400,19 @@ Effects miFinalCGetProp(ISS& env, int32_t nDiscard, const Type& key,
 
   if (name) {
     if (mustBeThisObj(env, env.collect.mInstrState.base)) {
-      if (auto const t = thisPropAsCell(env, name)) {
-        push(env, *t);
+      if (auto t = thisPropAsCell(env, name)) {
+        push(env, std::move(*t));
         if (mustBeMutable && isMaybeThisPropAttr(env, name, AttrIsReadOnly)) {
-          return Effects::Throws;  
+          return Effects::Throws;
         }
         if (t->subtypeOf(BBottom)) return Effects::AlwaysThrows;
-        if (isMaybeThisPropAttr(env, name, AttrLateInit)) return Effects::Throws;
+        if (isMaybeThisPropAttr(env, name, AttrLateInit)) {
+          return Effects::Throws;
+        }
         if (quiet) return Effects::None;
-        auto const elem = thisPropRaw(env, name);
-        assertx(elem);
-        return elem->ty.couldBe(BUninit) ? Effects::Throws : Effects::None;
+        auto const elem = thisPropType(env, name);
+        assertx(elem.has_value());
+        return elem->couldBe(BUninit) ? Effects::Throws : Effects::None;
       }
     }
     auto ty = [&] {
@@ -1442,13 +1446,13 @@ Effects miFinalSetProp(ISS& env, int32_t nDiscard, const Type& key, ReadOnlyOp o
     push(env, std::move(ty));
     return Effects::Throws;
   };
-  
+
   auto const alwaysThrows = [&] {
     discard(env, nDiscard);
     push(env, TBottom);
     return Effects::AlwaysThrows;
   };
-  
+
   if (op == ReadOnlyOp::ReadOnly && !isMaybeThisPropAttr(env, name, AttrIsReadOnly)) {
     return alwaysThrows();
   }
@@ -1457,7 +1461,7 @@ Effects miFinalSetProp(ISS& env, int32_t nDiscard, const Type& key, ReadOnlyOp o
     if (!name) {
       mergeEachThisPropRaw(
         env,
-        [&] (Type propTy) {
+        [&] (const Type& propTy) {
           return propTy.couldBe(BInitCell) ? t1 : TBottom;
         }
       );
@@ -2040,13 +2044,14 @@ void in(ISS& env, const bc::BaseSC& op) {
       // These don't mutate the base, so AttrConst does not apply
       break;
   }
-  
+
   // Whether we might potentially throw because of AttrIsReadOnly
   if (op.subop4 == ReadOnlyOp::Mutable && lookup.readOnly == TriBool::Yes) {
     return unreachable(env);
   }
   auto const mightReadOnlyThrow =
-    (op.subop4 == ReadOnlyOp::Mutable && lookup.readOnly == TriBool::Maybe);
+    (op.subop4 == ReadOnlyOp::Mutable && lookup.readOnly == TriBool::Maybe) ||
+    (op.subop4 == ReadOnlyOp::CheckROCOW && lookup.readOnly != TriBool::No);
 
   // Loading the base from a static property can be considered
   // effect_free if there's no possibility of throwing. This requires

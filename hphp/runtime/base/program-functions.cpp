@@ -80,6 +80,7 @@
 #include "hphp/runtime/vm/jit/tc.h"
 #include "hphp/runtime/vm/jit/translator.h"
 #include "hphp/runtime/vm/repo.h"
+#include "hphp/runtime/vm/repo-file.h"
 #include "hphp/runtime/vm/runtime-compiler.h"
 #include "hphp/runtime/vm/treadmill.h"
 
@@ -611,6 +612,7 @@ static void handle_resource_exceeded_exception() {
     RID().triggerTimeout(TimeoutCPUTime);
   } catch (RequestMemoryExceededException&) {
     setSurpriseFlag(MemExceededFlag);
+    RID().setRequestOOMFlag();
   } catch (...) {}
 }
 
@@ -1004,6 +1006,25 @@ static bool set_execution_mode(folly::StringPiece mode) {
   return false;
 }
 
+static void init_repo_file() {
+  if (!RO::RepoAuthoritative) return;
+  auto const path = [] {
+    if (!RO::RepoLocalPath.empty())   return RO::RepoLocalPath;
+    if (!RO::RepoCentralPath.empty()) return RO::RepoCentralPath;
+    if (auto const env = getenv("HHVM_REPO_CENTRAL_PATH")) {
+      std::string p{env};
+      replacePlaceholders(p);
+      return p;
+    }
+    always_assert(
+      false &&
+      "Either Repo.LocalPath or Repo.CentralPath must be set in "
+      "RepoAuthoritative mode"
+    );
+  }();
+  RepoFile::init(path);
+}
+
 /* Reads a file into the OS page cache, with rate limiting. */
 static bool readahead_rate(const char* path, int64_t mbPerSec) {
   int ret = open(path, O_RDONLY);
@@ -1076,6 +1097,9 @@ static int start_server(const std::string &username, int xhprof) {
 #endif
   // Include hugetlb pages in core dumps.
   Process::SetCoreDumpHugePages();
+
+  init_repo_file();
+  BootStats::mark("init_repo_file");
 
   hphp_process_init();
   SCOPE_EXIT {
@@ -1434,22 +1458,9 @@ std::vector<int> get_executable_lines(const Unit* compiled) {
   std::vector<int> lines;
 
   compiled->forEachFunc([&](const Func* func) {
-    auto loadedTable = LineTable{};
-    auto lineTable = func->getLineTable();
-
-    if (!lineTable) {
-      // If it's not in the repo we have no line information for this func so just continue.
-      if (compiled->repoID() == RepoIdInvalid) return false;
-
-      // Don't do loadLineTable here to avoid storing the line table in the cache,
-      // we likely won't access it again.
-      auto& frp = Repo::get().frp();
-      frp.getFuncLineTable[compiled->repoID()].get(compiled->sn(), func->sn(), loadedTable);
-      lineTable = &loadedTable;
-    }
-
-    lines.reserve(lines.size() + lineTable->size());
-    for (auto& ent : *lineTable) lines.push_back(ent.val());
+    auto const lineTable = func->getOrLoadLineTableCopy();
+    lines.reserve(lines.size() + lineTable.size());
+    for (auto& ent : lineTable) lines.push_back(ent.val());
     return false;
   });
 
@@ -1519,6 +1530,7 @@ static int execute_program_impl(int argc, char** argv) {
      "lint specified file")
     ("show,w", value<std::string>(&po.show),
      "output specified file and do nothing else")
+    ("check-repo", "attempt to load repo and then exit")
     ("temp-file",
      "file specified is temporary and removed after execution")
     ("count", value<int>(&po.count)->default_value(1),
@@ -1991,6 +2003,16 @@ static int execute_program_impl(int argc, char** argv) {
     exit(HPHP_EXIT_FAILURE);
   }
 
+  if (vm.count("check-repo")) {
+    always_assert(RO::RepoAuthoritative);
+    init_repo_file();
+    LitstrTable::init();
+    LitarrayTable::init();
+    RepoFile::loadGlobalTables(RO::RepoLitstrLazyLoad);
+    RepoFile::globalData().load();
+    return 0;
+  }
+
   // Initialize compiler state
   hphp_compiler_init();
 
@@ -2011,23 +2033,59 @@ static int execute_program_impl(int argc, char** argv) {
       tempFile = po.lint;
     }
 
-    hphp_process_init();
-    SCOPE_EXIT { hphp_process_exit(); };
+    if (!registrationComplete) {
+      folly::SingletonVault::singleton()->registrationComplete();
+      registrationComplete = true;
+    }
+
+    compilers_start();
+    hphp_thread_init();
+    g_context.getCheck();
+    SCOPE_EXIT { hphp_thread_exit(); };
+
+    // Initialize compiler state
+    hphp_compiler_init();
+
+    SystemLib::s_inited = true;
+
+    // Ensure write to SystemLib::s_inited is visible by other threads.
+    std::atomic_thread_fence(std::memory_order_release);
 
     try {
-      auto const filename = makeStaticString(po.lint.c_str());
-      auto const unit = lookupUnit(filename, "", nullptr,
-                                   Native::s_noNativeFuncs, false);
-      if (unit == nullptr) {
-        throw FileOpenException(po.lint);
+      auto const file = [&] {
+        if (!FileUtil::isAbsolutePath(po.lint)) {
+          return SourceRootInfo::GetCurrentSourceRoot() + po.lint;
+        }
+        return po.lint;
+      }();
+
+      std::fstream fs{file, std::ios::in};
+      if (!fs) throw FileOpenException(po.lint);
+      std::stringstream contents;
+      contents << fs.rdbuf();
+
+      auto const repoOptions = RepoOptions::forFile(file.c_str());
+
+      auto const str = contents.str();
+      auto const sha1 =
+        SHA1{mangleUnitSha1(string_sha1(str), file, repoOptions)};
+
+      // Disable any cache hooks because they're generally not useful
+      // if we're just going to lint (and they might be expensive).
+      g_unit_emitter_cache_hook = nullptr;
+
+      auto const unit = compile_file(
+        str.c_str(), str.size(), sha1, file.c_str(),
+        Native::s_noNativeFuncs, repoOptions, nullptr
+      );
+      if (!unit) {
+        std::cerr << "Unable to compile \"" << file << "\"\n";
+        return 1;
       }
       if (auto const info = unit->getFatalInfo()) {
         raise_parse_error(unit->filepath(), info->m_fatalMsg.c_str(),
                           info->m_fatalLoc);
       }
-    } catch (FileOpenException& e) {
-      Logger::Error(e.getMessage());
-      return 1;
     } catch (const FatalErrorException& e) {
       RuntimeOption::CallUserHandlerOnFatals = false;
       RuntimeOption::AlwaysLogUnhandledExceptions = false;
@@ -2088,6 +2146,7 @@ static int execute_program_impl(int argc, char** argv) {
     }
 
     int ret = 0;
+    init_repo_file();
     hphp_process_init();
     SCOPE_EXIT { hphp_process_exit(); };
 

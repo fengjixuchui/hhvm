@@ -151,6 +151,8 @@ type t = {
   tco_complex_coercion: bool;
   (* Treat partially abstract typeconsts like concrete typeconsts, disable overriding type *)
   tco_disable_partially_abstract_typeconsts: bool;
+  (* Ban definitions of partially abstract typeconsts *)
+  tco_disallow_partially_abstract_typeconst_definitions: bool;
   (* Set of codes to be treated as if they were in strict mode files *)
   error_codes_treated_strictly: ISet.t;
   (* static check xhp required attribute *)
@@ -216,6 +218,10 @@ type t = {
   symbol_write_ignore_paths: string list;
   (* When set, write indexing data for these filepaths only. Relative to repository root, eg: bar.php for root|bar.php *)
   symbol_write_index_paths: string list;
+  (* A file which contains a list of Relative_path.t (one per line) to index *)
+  symbol_write_index_paths_file: string option;
+  (* Write the list of Relative_path.t to this file instead of indexing. Useful for sharding *)
+  symbol_write_index_paths_file_output: string option;
   (* Write symbol indexing data for hhi files *)
   symbol_write_include_hhi: bool;
   (* Flag to disallow HH\fun and HH\class_meth in constants and constant initializers *)
@@ -267,6 +273,8 @@ type t = {
   po_disallow_fun_and_cls_meth_pseudo_funcs: bool;
   (* Disable parsing of inst_meth() *)
   po_disallow_inst_meth: bool;
+  (* Escape brace in \{$x} *)
+  po_escape_brace: bool;
   (* Enable use of the direct decl parser for parsing type signatures. *)
   tco_use_direct_decl_parser: bool;
   (* Enable ifc on the specified list of path prefixes
@@ -287,12 +295,22 @@ type t = {
   tco_readonly: bool;
   (* Enable expression trees via unstable features flag *)
   tco_enable_expression_trees: bool;
+  (* Enable unstable feature: modules *)
+  tco_enable_modules: bool;
   (* Allowed expression tree visitors when not enabled via unstable features flag *)
   tco_allowed_expression_tree_visitors: string list;
-  (* Use a new error code for bitwise math operations *)
-  tco_bitwise_math_new_code: bool;
-  (* Use a new error code for post/pre increment and decrement operations *)
-  tco_inc_dec_new_code: bool;
+  (* Use a new error code for math operations: addition, subtraction,
+  division, multiplication, exponentiation *)
+  tco_math_new_code: bool;
+  (* Raise an error when a concrete type constant is overridden by a concrete type constant
+    in a child class. *)
+  tco_typeconst_concrete_concrete_error: bool;
+  (* meth_caller can only reference public methods *)
+  tco_meth_caller_only_public_visibility: bool;
+  (* Consider `require extends` and `require implements` as ancestors when checking a class *)
+  tco_require_extends_implements_ancestors: bool;
+  (* Emit an error when "==" or "!=" is used to compare values that are incompatible types *)
+  tco_strict_value_equality: bool;
 }
 [@@deriving eq, show]
 
@@ -346,6 +364,7 @@ val make :
   ?tco_simple_pessimize:float ->
   ?tco_complex_coercion:bool ->
   ?tco_disable_partially_abstract_typeconsts:bool ->
+  ?tco_disallow_partially_abstract_typeconst_definitions:bool ->
   ?error_codes_treated_strictly:ISet.t ->
   ?tco_check_xhp_attribute:bool ->
   ?tco_check_redundant_generics:bool ->
@@ -377,6 +396,8 @@ val make :
   ?symbol_write_hhi_path:string ->
   ?symbol_write_ignore_paths:string list ->
   ?symbol_write_index_paths:string list ->
+  ?symbol_write_index_paths_file:string ->
+  ?symbol_write_index_paths_file_output:string ->
   ?symbol_write_include_hhi:bool ->
   ?po_disallow_func_ptrs_in_constants:bool ->
   ?tco_error_php_lambdas:bool ->
@@ -399,6 +420,7 @@ val make :
   ?po_disallow_hash_comments:bool ->
   ?po_disallow_fun_and_cls_meth_pseudo_funcs:bool ->
   ?po_disallow_inst_meth:bool ->
+  ?po_escape_brace:bool ->
   ?tco_use_direct_decl_parser:bool ->
   ?tco_ifc_enabled:string list ->
   ?po_enable_enum_supertyping:bool ->
@@ -408,9 +430,13 @@ val make :
   ?tco_ignore_unsafe_cast:bool ->
   ?tco_readonly:bool ->
   ?tco_enable_expression_trees:bool ->
+  ?tco_enable_modules:bool ->
   ?tco_allowed_expression_tree_visitors:string list ->
-  ?tco_bitwise_math_new_code:bool ->
-  ?tco_inc_dec_new_code:bool ->
+  ?tco_math_new_code:bool ->
+  ?tco_typeconst_concrete_concrete_error:bool ->
+  ?tco_meth_caller_only_public_visibility:bool ->
+  ?tco_require_extends_implements_ancestors:bool ->
+  ?tco_strict_value_equality:bool ->
   unit ->
   t
 
@@ -540,6 +566,8 @@ val tco_complex_coercion : t -> bool
 
 val tco_disable_partially_abstract_typeconsts : t -> bool
 
+val tco_disallow_partially_abstract_typeconst_definitions : t -> bool
+
 val error_codes_treated_strictly : t -> ISet.t
 
 val tco_check_xhp_attribute : t -> bool
@@ -608,6 +636,10 @@ val symbol_write_ignore_paths : t -> string list
 
 val symbol_write_index_paths : t -> string list
 
+val symbol_write_index_paths_file : t -> string option
+
+val symbol_write_index_paths_file_output : t -> string option
+
 val symbol_write_include_hhi : t -> bool
 
 val po_disallow_func_ptrs_in_constants : t -> bool
@@ -650,6 +682,8 @@ val po_disallow_fun_and_cls_meth_pseudo_funcs : t -> bool
 
 val po_disallow_inst_meth : t -> bool
 
+val po_escape_brace : t -> bool
+
 val tco_use_direct_decl_parser : t -> bool
 
 val po_enable_enum_supertyping : t -> bool
@@ -668,10 +702,20 @@ val set_tco_readonly : t -> bool -> t
 
 val set_tco_enable_expression_trees : t -> bool -> t
 
+val tco_enable_modules : t -> bool
+
+val set_tco_enable_modules : t -> bool -> t
+
 val expression_trees_enabled : t -> bool
 
 val allowed_expression_tree_visitors : t -> string list
 
-val tco_bitwise_math_new_code : t -> bool
+val tco_math_new_code : t -> bool
 
-val tco_inc_dec_new_code : t -> bool
+val tco_typeconst_concrete_concrete_error : t -> bool
+
+val tco_meth_caller_only_public_visibility : t -> bool
+
+val tco_require_extends_implements_ancestors : t -> bool
+
+val tco_strict_value_equality : t -> bool

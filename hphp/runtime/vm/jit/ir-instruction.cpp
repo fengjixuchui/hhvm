@@ -209,6 +209,7 @@ bool consumesRefImpl(const IRInstruction* inst, int srcNo) {
       return srcNo == 0;
 
     case InitVecElem:
+    case InitStructElem:
       return srcNo == 1;
 
     case InitVecElemLoop:

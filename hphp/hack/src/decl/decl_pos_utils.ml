@@ -131,7 +131,11 @@ struct
     | Rconcat_operand p -> Rconcat_operand (pos p)
     | Rinterp_operand p -> Rinterp_operand (pos p)
     | Rdynamic_coercion r -> Rdynamic_coercion (reason r)
-    | Rsound_dynamic_callable p -> Rsound_dynamic_callable (pos_or_decl p)
+    | Rsupport_dynamic_type p -> Rsupport_dynamic_type (pos_or_decl p)
+    | Rdynamic_partial_enforcement (p, cn, r) ->
+      Rdynamic_partial_enforcement (pos_or_decl p, cn, reason r)
+    | Rrigid_tvar_escape (p, v, w, r) ->
+      Rrigid_tvar_escape (pos p, v, w, reason r)
 
   let rec ty t =
     let (p, x) = deref t in
@@ -212,23 +216,29 @@ struct
       cc_refs = cc.cc_refs;
     }
 
-  and typeconst_abstract_kind = function
-    | TCAbstract default -> TCAbstract (ty_opt default)
-    | TCPartiallyAbstract -> TCPartiallyAbstract
-    | TCConcrete -> TCConcrete
+  and typeconst = function
+    | TCAbstract { atc_as_constraint; atc_super_constraint; atc_default } ->
+      TCAbstract
+        {
+          atc_as_constraint = ty_opt atc_as_constraint;
+          atc_super_constraint = ty_opt atc_super_constraint;
+          atc_default = ty_opt atc_default;
+        }
+    | TCPartiallyAbstract { patc_constraint; patc_type } ->
+      TCPartiallyAbstract
+        { patc_constraint = ty patc_constraint; patc_type = ty patc_type }
+    | TCConcrete { tc_type } -> TCConcrete { tc_type = ty tc_type }
 
-  and typeconst tc =
+  and typeconst_type tc =
     {
-      ttc_abstract = typeconst_abstract_kind tc.ttc_abstract;
       ttc_synthesized = tc.ttc_synthesized;
       ttc_name = positioned_id tc.ttc_name;
-      ttc_as_constraint = ty_opt tc.ttc_as_constraint;
-      ttc_super_constraint = ty_opt tc.ttc_super_constraint;
-      ttc_type = ty_opt tc.ttc_type;
+      ttc_kind = typeconst tc.ttc_kind;
       ttc_origin = tc.ttc_origin;
       ttc_enforceable = Tuple.T2.map_fst ~f:pos_or_decl tc.ttc_enforceable;
       ttc_reifiable = Option.map tc.ttc_reifiable pos_or_decl;
       ttc_concretized = tc.ttc_concretized;
+      ttc_is_ctx = tc.ttc_is_ctx;
     }
 
   and user_attribute { ua_name; ua_classname_params } =
@@ -256,11 +266,13 @@ struct
       dc_is_xhp = dc.dc_is_xhp;
       dc_has_xhp_keyword = dc.dc_has_xhp_keyword;
       dc_is_disposable = dc.dc_is_disposable;
+      dc_module = dc.dc_module;
       dc_name = dc.dc_name;
       dc_pos = dc.dc_pos;
       dc_extends = dc.dc_extends;
       dc_sealed_whitelist = dc.dc_sealed_whitelist;
       dc_xhp_attr_deps = dc.dc_xhp_attr_deps;
+      dc_xhp_enum_values = dc.dc_xhp_enum_values;
       dc_req_ancestors = List.map dc.dc_req_ancestors requirement;
       dc_req_ancestors_extends = dc.dc_req_ancestors_extends;
       dc_tparams = List.map dc.dc_tparams type_param;
@@ -273,14 +285,14 @@ struct
           end
           dc.dc_substs;
       dc_consts = SMap.map class_const dc.dc_consts;
-      dc_typeconsts = SMap.map typeconst dc.dc_typeconsts;
+      dc_typeconsts = SMap.map typeconst_type dc.dc_typeconsts;
       dc_props = dc.dc_props;
       dc_sprops = dc.dc_sprops;
       dc_methods = dc.dc_methods;
       dc_smethods = dc.dc_smethods;
       dc_construct = dc.dc_construct;
       dc_ancestors = SMap.map ty dc.dc_ancestors;
-      dc_implements_dynamic = dc.dc_implements_dynamic;
+      dc_support_dynamic_type = dc.dc_support_dynamic_type;
       dc_enum_type = Option.map dc.dc_enum_type enum_type;
       dc_decl_errors = None;
       dc_condition_types = dc.dc_condition_types;
@@ -298,6 +310,7 @@ struct
 
   and typedef tdef =
     {
+      td_module = tdef.td_module;
       td_pos = pos_or_decl tdef.td_pos;
       td_vis = tdef.td_vis;
       td_tparams = List.map tdef.td_tparams type_param;
@@ -312,16 +325,18 @@ struct
       sc_is_xhp = sc.sc_is_xhp;
       sc_has_xhp_keyword = sc.sc_has_xhp_keyword;
       sc_kind = sc.sc_kind;
+      sc_module = sc.sc_module;
       sc_name = positioned_id sc.sc_name;
       sc_tparams = List.map sc.sc_tparams type_param;
       sc_where_constraints = List.map sc.sc_where_constraints where_constraint;
       sc_extends = List.map sc.sc_extends ty;
       sc_uses = List.map sc.sc_uses ty;
       sc_xhp_attr_uses = List.map sc.sc_xhp_attr_uses ty;
+      sc_xhp_enum_values = sc.sc_xhp_enum_values;
       sc_req_extends = List.map sc.sc_req_extends ty;
       sc_req_implements = List.map sc.sc_req_implements ty;
       sc_implements = List.map sc.sc_implements ty;
-      sc_implements_dynamic = sc.sc_implements_dynamic;
+      sc_support_dynamic_type = sc.sc_support_dynamic_type;
       sc_consts = List.map sc.sc_consts shallow_class_const;
       sc_typeconsts = List.map sc.sc_typeconsts shallow_typeconst;
       sc_props = List.map sc.sc_props shallow_prop;
@@ -343,14 +358,12 @@ struct
 
   and shallow_typeconst stc =
     {
-      stc_abstract = typeconst_abstract_kind stc.stc_abstract;
-      stc_as_constraint = Option.map stc.stc_as_constraint ty;
-      stc_super_constraint = Option.map stc.stc_super_constraint ty;
+      stc_kind = typeconst stc.stc_kind;
       stc_name = positioned_id stc.stc_name;
-      stc_type = Option.map stc.stc_type ty;
       stc_enforceable =
         (pos_or_decl (fst stc.stc_enforceable), snd stc.stc_enforceable);
       stc_reifiable = Option.map stc.stc_reifiable pos_or_decl;
+      stc_is_ctx = stc.stc_is_ctx;
     }
 
   and shallow_prop sp =

@@ -61,6 +61,8 @@ module Api : sig
 
   val name : t -> string
 
+  val get_module : t -> string option
+
   val pos : t -> Pos_or_decl.t
 
   val tparams : t -> decl_tparam list
@@ -85,6 +87,8 @@ module Api : sig
 
   val enum_type : t -> enum_type option
 
+  val xhp_enum_values : t -> Ast_defs.xhp_enum_value list SMap.t
+
   val sealed_whitelist : t -> SSet.t option
 
   val decl_errors : t -> Errors.t option
@@ -95,7 +99,7 @@ module Api : sig
 
   val requires_ancestor : t -> string -> bool
 
-  val get_implements_dynamic : t -> bool
+  val get_support_dynamic_type : t -> bool
 
   val extends : t -> string -> bool
 

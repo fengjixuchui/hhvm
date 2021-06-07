@@ -65,7 +65,6 @@ struct Vunit;
   O(bindaddr, I(addr) I(target) I(spOff), Un, Dn)\
   O(fallback, I(target) I(spOff), U(args), Dn)\
   O(fallbackcc, I(cc) I(target) I(spOff), U(sf) U(args), Dn)\
-  O(retransopt, I(sk) I(spOff), U(args), Dn)\
   /* vasm intrinsics */\
   O(copy, Inone, UH(s,d), DH(d,s))\
   O(copy2, Inone, UH(s0,d0) UH(s1,d1), DH(d0,s0) DH(d1,s1))\
@@ -387,7 +386,7 @@ struct Vunit;
 
 struct bindjmp {
   explicit bindjmp(SrcKey target,
-                   FPInvOffset spOff,
+                   SBInvOffset spOff,
                    RegSet args)
     : target{target}
     , spOff(spOff)
@@ -395,7 +394,7 @@ struct bindjmp {
   {}
 
   SrcKey target;
-  FPInvOffset spOff;
+  SBInvOffset spOff;
   RegSet args;
 };
 
@@ -403,7 +402,7 @@ struct bindjcc {
   explicit bindjcc(ConditionCode cc,
                    VregSF sf,
                    SrcKey target,
-                   FPInvOffset spOff,
+                   SBInvOffset spOff,
                    RegSet args)
     : cc{cc}
     , sf{sf}
@@ -415,12 +414,12 @@ struct bindjcc {
   ConditionCode cc;
   VregSF sf;
   SrcKey target;
-  FPInvOffset spOff;
+  SBInvOffset spOff;
   RegSet args;
 };
 
 struct bindaddr {
-  explicit bindaddr(VdataPtr<TCA> addr, SrcKey target, FPInvOffset spOff)
+  explicit bindaddr(VdataPtr<TCA> addr, SrcKey target, SBInvOffset spOff)
     : addr(addr)
     , target(target)
     , spOff(spOff)
@@ -428,12 +427,12 @@ struct bindaddr {
 
   VdataPtr<TCA> addr;
   SrcKey target;
-  FPInvOffset spOff;
+  SBInvOffset spOff;
 };
 
 struct fallback {
   explicit fallback(SrcKey target,
-                    FPInvOffset spOff,
+                    SBInvOffset spOff,
                     RegSet args)
     : target{target}
     , spOff(spOff)
@@ -441,7 +440,7 @@ struct fallback {
   {}
 
   SrcKey target;
-  FPInvOffset spOff;
+  SBInvOffset spOff;
   RegSet args;
 };
 
@@ -449,7 +448,7 @@ struct fallbackcc {
   explicit fallbackcc(ConditionCode cc,
                       VregSF sf,
                       SrcKey target,
-                      FPInvOffset spOff,
+                      SBInvOffset spOff,
                       RegSet args)
     : cc{cc}
     , sf{sf}
@@ -461,21 +460,7 @@ struct fallbackcc {
   ConditionCode cc;
   VregSF sf;
   SrcKey target;
-  FPInvOffset spOff;
-  RegSet args;
-};
-
-struct retransopt {
-  explicit retransopt(SrcKey sk,
-                      FPInvOffset spOff,
-                      RegSet args)
-    : sk(sk)
-    , spOff(spOff)
-    , args{args}
-  {}
-
-  SrcKey sk;
-  FPInvOffset spOff;
+  SBInvOffset spOff;
   RegSet args;
 };
 

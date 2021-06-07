@@ -47,11 +47,11 @@ struct LdClsPropOptions {
   const ReadOnlyOp readOnlyCheck;
   bool raise;
   bool ignoreLateInit;
-  bool disallowConst;
+  bool writeMode;
 };
 
 ClsPropLookup ldClsPropAddrKnown(IRGS&, const Class*, const StringData*, bool);
-ClsPropLookup ldClsPropAddr(IRGS&, SSATmp*, SSATmp*, const LdClsPropOptions&);
+ClsPropLookup ldClsPropAddr(IRGS&, SSATmp*, SSATmp*, SSATmp*, const LdClsPropOptions&);
 
 //////////////////////////////////////////////////////////////////////
 

@@ -13,7 +13,9 @@ class TypeErrorAtPosDriver(CommonTestDriver):
     auto_namespace_map = '{"PHP": "HH\\\\Lib\\\\PHP"}'
     repo_dir = "hphp/hack/test/integration/data/holes"
 
-    def write_load_config(self, use_saved_state: bool = False) -> None:
+    def write_load_config(
+        self, use_serverless_ide: bool = False, use_saved_state: bool = False
+    ) -> None:
         with open(os.path.join(self.repo_dir, ".hhconfig"), "w") as f:
             f.write(
                 """
@@ -86,6 +88,8 @@ class TestTypeErrorAtPos(TestCase[TypeErrorAtPosDriver]):
             ("call_single.php", [(7, 10), (10, 10)]),
             ("call_multiple.php", [(7, 5), (7, 8)]),
             ("call_unpack.php", [(7, 8)]),
+            ("return_expr_only.php", [(5, 10), (5, 21)]),
+            ("return_and_fn_arg.php", [(5, 10), (5, 21)]),
         ]
 
         for (file_name, positions) in cases:

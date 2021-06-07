@@ -1153,17 +1153,6 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_define_expression(_: &C, define_keyword: Self, define_left_paren: Self, define_argument_list: Self, define_right_paren: Self) -> Self {
-        let syntax = SyntaxVariant::DefineExpression(Box::new(DefineExpressionChildren {
-            define_keyword,
-            define_left_paren,
-            define_argument_list,
-            define_right_paren,
-        }));
-        let value = V::from_values(syntax.iter_children().map(|child| &child.value));
-        Self::make(syntax, value)
-    }
-
     fn make_isset_expression(_: &C, isset_keyword: Self, isset_left_paren: Self, isset_argument_list: Self, isset_right_paren: Self) -> Self {
         let syntax = SyntaxVariant::IssetExpression(Box::new(IssetExpressionChildren {
             isset_keyword,
@@ -1175,11 +1164,11 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_function_call_expression(_: &C, function_call_receiver: Self, function_call_type_args: Self, function_call_enum_atom: Self, function_call_left_paren: Self, function_call_argument_list: Self, function_call_right_paren: Self) -> Self {
+    fn make_function_call_expression(_: &C, function_call_receiver: Self, function_call_type_args: Self, function_call_enum_class_label: Self, function_call_left_paren: Self, function_call_argument_list: Self, function_call_right_paren: Self) -> Self {
         let syntax = SyntaxVariant::FunctionCallExpression(Box::new(FunctionCallExpressionChildren {
             function_call_receiver,
             function_call_type_args,
-            function_call_enum_atom,
+            function_call_enum_class_label,
             function_call_left_paren,
             function_call_argument_list,
             function_call_right_paren,
@@ -1871,10 +1860,11 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_enum_atom_expression(_: &C, enum_atom_hash: Self, enum_atom_expression: Self) -> Self {
-        let syntax = SyntaxVariant::EnumAtomExpression(Box::new(EnumAtomExpressionChildren {
-            enum_atom_hash,
-            enum_atom_expression,
+    fn make_enum_class_label_expression(_: &C, enum_class_label_qualifier: Self, enum_class_label_hash: Self, enum_class_label_expression: Self) -> Self {
+        let syntax = SyntaxVariant::EnumClassLabelExpression(Box::new(EnumClassLabelExpressionChildren {
+            enum_class_label_qualifier,
+            enum_class_label_hash,
+            enum_class_label_expression,
         }));
         let value = V::from_values(syntax.iter_children().map(|child| &child.value));
         Self::make(syntax, value)
@@ -2723,14 +2713,6 @@ where
                 let acc = f(eval_right_paren, acc);
                 acc
             },
-            SyntaxVariant::DefineExpression(x) => {
-                let DefineExpressionChildren { define_keyword, define_left_paren, define_argument_list, define_right_paren } = *x;
-                let acc = f(define_keyword, acc);
-                let acc = f(define_left_paren, acc);
-                let acc = f(define_argument_list, acc);
-                let acc = f(define_right_paren, acc);
-                acc
-            },
             SyntaxVariant::IssetExpression(x) => {
                 let IssetExpressionChildren { isset_keyword, isset_left_paren, isset_argument_list, isset_right_paren } = *x;
                 let acc = f(isset_keyword, acc);
@@ -2740,10 +2722,10 @@ where
                 acc
             },
             SyntaxVariant::FunctionCallExpression(x) => {
-                let FunctionCallExpressionChildren { function_call_receiver, function_call_type_args, function_call_enum_atom, function_call_left_paren, function_call_argument_list, function_call_right_paren } = *x;
+                let FunctionCallExpressionChildren { function_call_receiver, function_call_type_args, function_call_enum_class_label, function_call_left_paren, function_call_argument_list, function_call_right_paren } = *x;
                 let acc = f(function_call_receiver, acc);
                 let acc = f(function_call_type_args, acc);
-                let acc = f(function_call_enum_atom, acc);
+                let acc = f(function_call_enum_class_label, acc);
                 let acc = f(function_call_left_paren, acc);
                 let acc = f(function_call_argument_list, acc);
                 let acc = f(function_call_right_paren, acc);
@@ -3237,10 +3219,11 @@ where
                 let acc = f(list_separator, acc);
                 acc
             },
-            SyntaxVariant::EnumAtomExpression(x) => {
-                let EnumAtomExpressionChildren { enum_atom_hash, enum_atom_expression } = *x;
-                let acc = f(enum_atom_hash, acc);
-                let acc = f(enum_atom_expression, acc);
+            SyntaxVariant::EnumClassLabelExpression(x) => {
+                let EnumClassLabelExpressionChildren { enum_class_label_qualifier, enum_class_label_hash, enum_class_label_expression } = *x;
+                let acc = f(enum_class_label_qualifier, acc);
+                let acc = f(enum_class_label_hash, acc);
+                let acc = f(enum_class_label_expression, acc);
                 acc
             },
 
@@ -3354,7 +3337,6 @@ where
             SyntaxVariant::NullableAsExpression {..} => SyntaxKind::NullableAsExpression,
             SyntaxVariant::ConditionalExpression {..} => SyntaxKind::ConditionalExpression,
             SyntaxVariant::EvalExpression {..} => SyntaxKind::EvalExpression,
-            SyntaxVariant::DefineExpression {..} => SyntaxKind::DefineExpression,
             SyntaxVariant::IssetExpression {..} => SyntaxKind::IssetExpression,
             SyntaxVariant::FunctionCallExpression {..} => SyntaxKind::FunctionCallExpression,
             SyntaxVariant::FunctionPointerExpression {..} => SyntaxKind::FunctionPointerExpression,
@@ -3422,7 +3404,7 @@ where
             SyntaxVariant::IntersectionTypeSpecifier {..} => SyntaxKind::IntersectionTypeSpecifier,
             SyntaxVariant::ErrorSyntax {..} => SyntaxKind::ErrorSyntax,
             SyntaxVariant::ListItem {..} => SyntaxKind::ListItem,
-            SyntaxVariant::EnumAtomExpression {..} => SyntaxKind::EnumAtomExpression,
+            SyntaxVariant::EnumClassLabelExpression {..} => SyntaxKind::EnumClassLabelExpression,
         }
     }
 
@@ -4150,13 +4132,6 @@ where
                  eval_keyword: ts.pop().unwrap(),
                  
              })),
-             (SyntaxKind::DefineExpression, 4) => SyntaxVariant::DefineExpression(Box::new(DefineExpressionChildren {
-                 define_right_paren: ts.pop().unwrap(),
-                 define_argument_list: ts.pop().unwrap(),
-                 define_left_paren: ts.pop().unwrap(),
-                 define_keyword: ts.pop().unwrap(),
-                 
-             })),
              (SyntaxKind::IssetExpression, 4) => SyntaxVariant::IssetExpression(Box::new(IssetExpressionChildren {
                  isset_right_paren: ts.pop().unwrap(),
                  isset_argument_list: ts.pop().unwrap(),
@@ -4168,7 +4143,7 @@ where
                  function_call_right_paren: ts.pop().unwrap(),
                  function_call_argument_list: ts.pop().unwrap(),
                  function_call_left_paren: ts.pop().unwrap(),
-                 function_call_enum_atom: ts.pop().unwrap(),
+                 function_call_enum_class_label: ts.pop().unwrap(),
                  function_call_type_args: ts.pop().unwrap(),
                  function_call_receiver: ts.pop().unwrap(),
                  
@@ -4596,9 +4571,10 @@ where
                  list_item: ts.pop().unwrap(),
                  
              })),
-             (SyntaxKind::EnumAtomExpression, 2) => SyntaxVariant::EnumAtomExpression(Box::new(EnumAtomExpressionChildren {
-                 enum_atom_expression: ts.pop().unwrap(),
-                 enum_atom_hash: ts.pop().unwrap(),
+             (SyntaxKind::EnumClassLabelExpression, 3) => SyntaxVariant::EnumClassLabelExpression(Box::new(EnumClassLabelExpressionChildren {
+                 enum_class_label_expression: ts.pop().unwrap(),
+                 enum_class_label_hash: ts.pop().unwrap(),
+                 enum_class_label_qualifier: ts.pop().unwrap(),
                  
              })),
              _ => panic!("from_children called with wrong number of children"),
@@ -5429,14 +5405,6 @@ pub struct EvalExpressionChildren<T, V> {
 }
 
 #[derive(Debug, Clone)]
-pub struct DefineExpressionChildren<T, V> {
-    pub define_keyword: Syntax<T, V>,
-    pub define_left_paren: Syntax<T, V>,
-    pub define_argument_list: Syntax<T, V>,
-    pub define_right_paren: Syntax<T, V>,
-}
-
-#[derive(Debug, Clone)]
 pub struct IssetExpressionChildren<T, V> {
     pub isset_keyword: Syntax<T, V>,
     pub isset_left_paren: Syntax<T, V>,
@@ -5448,7 +5416,7 @@ pub struct IssetExpressionChildren<T, V> {
 pub struct FunctionCallExpressionChildren<T, V> {
     pub function_call_receiver: Syntax<T, V>,
     pub function_call_type_args: Syntax<T, V>,
-    pub function_call_enum_atom: Syntax<T, V>,
+    pub function_call_enum_class_label: Syntax<T, V>,
     pub function_call_left_paren: Syntax<T, V>,
     pub function_call_argument_list: Syntax<T, V>,
     pub function_call_right_paren: Syntax<T, V>,
@@ -5943,9 +5911,10 @@ pub struct ListItemChildren<T, V> {
 }
 
 #[derive(Debug, Clone)]
-pub struct EnumAtomExpressionChildren<T, V> {
-    pub enum_atom_hash: Syntax<T, V>,
-    pub enum_atom_expression: Syntax<T, V>,
+pub struct EnumClassLabelExpressionChildren<T, V> {
+    pub enum_class_label_qualifier: Syntax<T, V>,
+    pub enum_class_label_hash: Syntax<T, V>,
+    pub enum_class_label_expression: Syntax<T, V>,
 }
 
 
@@ -6056,7 +6025,6 @@ pub enum SyntaxVariant<T, V> {
     NullableAsExpression(Box<NullableAsExpressionChildren<T, V>>),
     ConditionalExpression(Box<ConditionalExpressionChildren<T, V>>),
     EvalExpression(Box<EvalExpressionChildren<T, V>>),
-    DefineExpression(Box<DefineExpressionChildren<T, V>>),
     IssetExpression(Box<IssetExpressionChildren<T, V>>),
     FunctionCallExpression(Box<FunctionCallExpressionChildren<T, V>>),
     FunctionPointerExpression(Box<FunctionPointerExpressionChildren<T, V>>),
@@ -6124,7 +6092,7 @@ pub enum SyntaxVariant<T, V> {
     IntersectionTypeSpecifier(Box<IntersectionTypeSpecifierChildren<T, V>>),
     ErrorSyntax(Box<ErrorSyntaxChildren<T, V>>),
     ListItem(Box<ListItemChildren<T, V>>),
-    EnumAtomExpression(Box<EnumAtomExpressionChildren<T, V>>),
+    EnumClassLabelExpression(Box<EnumClassLabelExpressionChildren<T, V>>),
 }
 
 impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
@@ -7173,16 +7141,6 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                     }
                 })
             },
-            DefineExpression(x) => {
-                get_index(4).and_then(|index| { match index {
-                        0 => Some(&x.define_keyword),
-                    1 => Some(&x.define_left_paren),
-                    2 => Some(&x.define_argument_list),
-                    3 => Some(&x.define_right_paren),
-                        _ => None,
-                    }
-                })
-            },
             IssetExpression(x) => {
                 get_index(4).and_then(|index| { match index {
                         0 => Some(&x.isset_keyword),
@@ -7197,7 +7155,7 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                 get_index(6).and_then(|index| { match index {
                         0 => Some(&x.function_call_receiver),
                     1 => Some(&x.function_call_type_args),
-                    2 => Some(&x.function_call_enum_atom),
+                    2 => Some(&x.function_call_enum_class_label),
                     3 => Some(&x.function_call_left_paren),
                     4 => Some(&x.function_call_argument_list),
                     5 => Some(&x.function_call_right_paren),
@@ -7823,10 +7781,11 @@ impl<'a, T, V> SyntaxChildrenIterator<'a, T, V> {
                     }
                 })
             },
-            EnumAtomExpression(x) => {
-                get_index(2).and_then(|index| { match index {
-                        0 => Some(&x.enum_atom_hash),
-                    1 => Some(&x.enum_atom_expression),
+            EnumClassLabelExpression(x) => {
+                get_index(3).and_then(|index| { match index {
+                        0 => Some(&x.enum_class_label_qualifier),
+                    1 => Some(&x.enum_class_label_hash),
+                    2 => Some(&x.enum_class_label_expression),
                         _ => None,
                     }
                 })

@@ -335,15 +335,12 @@ and synthesize_defaults
     ((typeconsts, consts) :
       Typing_defs.typeconst_type SMap.t * Typing_defs.class_const SMap.t) :
     Typing_defs.typeconst_type SMap.t * Typing_defs.class_const SMap.t =
-  match tc.ttc_abstract with
-  | TCAbstract (Some default) ->
+  match tc.ttc_kind with
+  | TCAbstract { atc_default = Some default; _ } ->
     let concrete =
       {
         tc with
-        ttc_abstract = TCConcrete;
-        ttc_as_constraint = None;
-        ttc_super_constraint = None;
-        ttc_type = Some default;
+        ttc_kind = TCConcrete { tc_type = default };
         ttc_concretized = true;
       }
     in
@@ -477,7 +474,14 @@ and class_decl
     Decl_enum.rewrite_class
       c.sc_name
       enum
-      Option.(enum_inner_ty >>= fun t -> t.ttc_type)
+      Option.(
+        enum_inner_ty >>= fun t ->
+        (* TODO(T88552052) can make logic more explicit now, enum members appear to
+         * only need abstract without default and concrete type consts *)
+        match t.ttc_kind with
+        | TCConcrete { tc_type } -> Some tc_type
+        | TCPartiallyAbstract { patc_type; _ } -> Some patc_type
+        | TCAbstract { atc_default; _ } -> atc_default)
       (fun x -> SMap.find_opt x impl)
       consts
   in
@@ -498,6 +502,7 @@ and class_decl
       dc_is_xhp = c.sc_is_xhp;
       dc_has_xhp_keyword = c.sc_has_xhp_keyword;
       dc_is_disposable = is_disposable;
+      dc_module = c.sc_module;
       dc_name = snd c.sc_name;
       dc_pos = fst c.sc_name;
       dc_tparams = c.sc_tparams;
@@ -511,10 +516,11 @@ and class_decl
       dc_smethods = SMap.map fst static_methods;
       dc_construct = Tuple.T2.map_fst ~f:(Option.map ~f:fst) cstr;
       dc_ancestors = impl;
-      dc_implements_dynamic = c.sc_implements_dynamic;
+      dc_support_dynamic_type = c.sc_support_dynamic_type;
       dc_extends = extends;
       dc_sealed_whitelist = sealed_whitelist;
       dc_xhp_attr_deps = xhp_attr_deps;
+      dc_xhp_enum_values = c.sc_xhp_enum_values;
       dc_req_ancestors = req_ancestors;
       dc_req_ancestors_extends = req_ancestors_extends;
       dc_enum_type = enum;
@@ -624,7 +630,7 @@ and build_constructor
           ~override:false
           ~dynamicallycallable:false
           ~readonly_prop:false
-          ~sound_dynamic_callable:false;
+          ~support_dynamic_type:false;
       elt_visibility = vis;
       elt_origin = class_name;
       elt_deprecated = method_.sm_deprecated;
@@ -632,10 +638,12 @@ and build_constructor
   in
   let fe =
     {
+      fe_module = None;
       fe_pos = pos;
       fe_deprecated = method_.sm_deprecated;
       fe_type = method_.sm_type;
       fe_php_std_lib = false;
+      fe_support_dynamic_type = false;
     }
   in
   (if write_shmem then Decl_store.((get ()).add_constructor class_name fe));
@@ -704,7 +712,7 @@ and prop_decl
           ~abstract:(sp_abstract sp)
           ~dynamicallycallable:false
           ~readonly_prop:(sp_readonly sp)
-          ~sound_dynamic_callable:false;
+          ~support_dynamic_type:false;
       elt_visibility = vis;
       elt_origin = snd c.sc_name;
       elt_deprecated = None;
@@ -742,7 +750,7 @@ and static_prop_decl
           ~synthesized:false
           ~dynamicallycallable:false
           ~readonly_prop:(sp_readonly sp)
-          ~sound_dynamic_callable:false;
+          ~support_dynamic_type:false;
       elt_visibility = vis;
       elt_origin = snd c.sc_name;
       elt_deprecated = None;
@@ -772,7 +780,7 @@ and typeconst_structure
     mk (r, Tapply (tsid, [mk (r, Taccess (mk (r, Tthis), stc.stc_name))]))
   in
   let abstract =
-    match stc.stc_abstract with
+    match stc.stc_kind with
     | TCAbstract _ -> true
     | _ -> false
   in
@@ -820,16 +828,14 @@ and typeconst_fold
     in
     let tc =
       {
-        ttc_abstract = stc.stc_abstract;
         ttc_synthesized = false;
         ttc_name = stc.stc_name;
-        ttc_as_constraint = stc.stc_as_constraint;
-        ttc_super_constraint = stc.stc_super_constraint;
-        ttc_type = stc.stc_type;
+        ttc_kind = stc.stc_kind;
         ttc_origin = c_name;
         ttc_enforceable = enforceable;
         ttc_reifiable = reifiable;
         ttc_concretized = false;
+        ttc_is_ctx = stc.stc_is_ctx;
       }
     in
     let typeconsts = SMap.add (snd stc.stc_name) tc typeconsts in
@@ -854,6 +860,7 @@ and method_decl_acc
       parent_vis
     | _ -> visibility (snd c.sc_name) m.sm_visibility
   in
+  let support_dynamic_type = sm_support_dynamic_type m in
   let elt =
     {
       elt_flags =
@@ -868,7 +875,7 @@ and method_decl_acc
           ~lateinit:false
           ~dynamicallycallable:(sm_dynamicallycallable m)
           ~readonly_prop:false
-          ~sound_dynamic_callable:(sm_sound_dynamic_callable m);
+          ~support_dynamic_type;
       elt_visibility = vis;
       elt_origin = snd c.sc_name;
       elt_deprecated = m.sm_deprecated;
@@ -876,10 +883,12 @@ and method_decl_acc
   in
   let fe =
     {
+      fe_module = None;
       fe_pos = pos;
       fe_deprecated = None;
       fe_type = m.sm_type;
       fe_php_std_lib = false;
+      fe_support_dynamic_type = support_dynamic_type;
     }
   in
   ( if write_shmem then

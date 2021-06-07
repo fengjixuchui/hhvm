@@ -27,6 +27,8 @@ namespace HH\Contexts\Unsafe {
   // = \HH\Capabilities\RxLocal & \HH\Capabilities\ImplicitPolicyLocal;
 
   type write_props = mixed;
+  type read_globals = \HH\Capabilities\ReadGlobals;
+  type globals = \HH\Capabilities\AccessGlobals;
 
   type policied = mixed;
   type policied_shallow = \HH\Capabilities\ImplicitPolicyLocal;
@@ -35,7 +37,7 @@ namespace HH\Contexts\Unsafe {
   type policied_of_shallow<T> = \HH\Capabilities\ImplicitPolicyOfLocal<T>;
   type policied_of_local<T> = \HH\Contexts\defaults;
 
-  type rx = mixed;
-  type rx_shallow = \HH\Capabilities\RxLocal;
+  type rx = \HH\Contexts\defaults;
+  type rx_shallow = \HH\Contexts\defaults;
   type rx_local = \HH\Contexts\defaults;
 }

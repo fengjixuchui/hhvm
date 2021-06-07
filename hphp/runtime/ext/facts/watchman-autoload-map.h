@@ -58,7 +58,7 @@ struct WatchmanAutoloadMap final
    */
   WatchmanAutoloadMap(
       folly::fs::path root,
-      folly::fs::path dbPath,
+      DBData dbData,
       folly::dynamic queryExpr,
       Watchman& watchmanClient);
 
@@ -66,7 +66,7 @@ struct WatchmanAutoloadMap final
    * Create in static mode, where we trust the DB at `dbPath` and never modify
    * it.
    */
-  WatchmanAutoloadMap(folly::fs::path root, folly::fs::path dbPath);
+  WatchmanAutoloadMap(folly::fs::path root, DBData dbData);
 
   ~WatchmanAutoloadMap() override;
   WatchmanAutoloadMap(const WatchmanAutoloadMap&) = delete;
@@ -123,8 +123,12 @@ struct WatchmanAutoloadMap final
 
   Array getTypesWithAttribute(const String& attr) override;
   Array getTypeAliasesWithAttribute(const String& attr) override;
+  Array getMethodsWithAttribute(const String& attr) override;
   Array getTypeAttributes(const String& type) override;
+  Array getMethodAttributes(const String& type, const String& method) override;
   Array getTypeAttrArgs(const String& type, const String& attr) override;
+  Array getMethodAttrArgs(
+      const String& type, const String& method, const String& attr) override;
 
   Array getAllTypes() override;
   Array getAllFunctions() override;
@@ -217,10 +221,10 @@ private:
    * Filter the given `types` down to only those with the given attributes.
    */
   template <typename T>
-  std::vector<T>
-  filterByAttribute(std::vector<T> types, const AttributeFilterData& filter);
+  std::vector<T> filterTypesByAttribute(
+      std::vector<T> types, const AttributeFilterData& filter);
   template <typename T, typename TypeGetFn>
-  std::vector<T> filterByAttribute(
+  std::vector<T> filterTypesByAttribute(
       std::vector<T> types,
       const AttributeFilterData& filter,
       TypeGetFn typeGetFn);

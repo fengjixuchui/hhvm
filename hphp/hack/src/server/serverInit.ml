@@ -14,7 +14,7 @@ open ServerEnv
 module SLC = ServerLocalConfig
 include ServerInitTypes
 
-let run_search (genv : ServerEnv.genv) (env : ServerEnv.env) (t : float) :
+let run_search (genv : ServerEnv.genv) (env : ServerEnv.env) :
     SearchUtils.si_env =
   let ctx = Provider_utils.ctx_from_server_env env in
   let sienv = env.local_symbol_table in
@@ -22,12 +22,9 @@ let run_search (genv : ServerEnv.genv) (env : ServerEnv.env) (t : float) :
     SearchServiceRunner.should_run_completely
       genv
       sienv.SearchUtils.sie_provider
-  then (
-    (* The duration is already logged by SearchServiceRunner *)
-    let sienv = SearchServiceRunner.run_completely ctx sienv in
-    HackEventLogger.update_search_end t;
-    sienv
-  ) else
+  then
+    SearchServiceRunner.run_completely ctx sienv
+  else
     sienv
 
 let save_state
@@ -81,8 +78,9 @@ let save_state
     Some result
 
 let post_init genv (env, t) =
-  let (env, t) = ServerAiInit.ai_check genv env.naming_table env t in
+  let (env, _t) = ServerAiInit.ai_check genv env.naming_table env t in
   (* Configure symbol index settings *)
+  ServerProgress.send_progress "updating search index...";
   let namespace_map = GlobalOptions.po_auto_namespace_map env.tcopt in
   let env =
     {
@@ -101,7 +99,7 @@ let post_init genv (env, t) =
           ~workers:genv.workers;
     }
   in
-  let env = { env with local_symbol_table = run_search genv env t } in
+  let env = { env with local_symbol_table = run_search genv env } in
   SharedMem.init_done ();
   env
 
@@ -188,7 +186,7 @@ let lazy_saved_state_init genv env root load_state_approach profiling =
       stack;
     (match next_step with
     | Exit_status.No_error ->
-      ServerProgress.send_progress_warning_to_monitor (Some user_message);
+      ServerProgress.send_warning (Some user_message);
       (* print the memory stats for saved-state init gathered before it failed *)
       CgroupProfiler.print_summary_memory_table ~event:`Init;
       let fall_back_to_full_init profiling =

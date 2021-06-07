@@ -225,7 +225,8 @@ let get_defs ast =
       ~f:(fun def ((acc1, acc2, acc3, acc4, acc5) as acc) ->
         Aast.(
           match def with
-          | Fun f -> (FileInfo.pos_full f.f_name :: acc1, acc2, acc3, acc4, acc5)
+          | Fun f ->
+            (FileInfo.pos_full f.fd_fun.f_name :: acc1, acc2, acc3, acc4, acc5)
           | Class c ->
             (acc1, FileInfo.pos_full c.c_name :: acc2, acc3, acc4, acc5)
           | RecordDef rd ->
@@ -270,7 +271,8 @@ let ast_deregister_attributes_mapper =
       let toplevels =
         List.filter toplevels (fun toplevel ->
             match toplevel with
-            | Fun f when self#ignored_attr env f.f_user_attributes -> false
+            | Fun f when self#ignored_attr env f.fd_fun.f_user_attributes ->
+              false
             | Class c when self#ignored_attr env c.c_user_attributes -> false
             | _ -> true)
       in
@@ -596,6 +598,8 @@ module Visitor_DEPRECATED = struct
 
       method on_method_ : 'a -> method_ -> 'a
 
+      method on_fun_def : 'a -> fun_def -> 'a
+
       method on_fun_ : 'a -> fun_ -> 'a
 
       method on_class_ : 'a -> class_ -> 'a
@@ -618,7 +622,7 @@ module Visitor_DEPRECATED = struct
 
       method on_markup : 'a -> pstring -> 'a
 
-      method on_enum_atom : 'a -> string -> 'a
+      method on_enum_class_label : 'a -> sid option -> string -> 'a
 
       method on_function_ptr_id :
         'a -> (Pos.t, func_body_ann, unit, unit) function_ptr_id -> 'a
@@ -832,7 +836,8 @@ module Visitor_DEPRECATED = struct
         | Import (_, e) -> this#on_expr acc e
         | Collection (_, tal, fl) -> this#on_collection acc tal fl
         | ET_Splice e -> this#on_et_splice acc e
-        | EnumAtom sid -> this#on_enum_atom acc sid
+        | EnumClassLabel (opt_sid, name) ->
+          this#on_enum_class_label acc opt_sid name
         | ReadonlyExpr e -> this#on_readonly_expr acc e
         | Hole (e, _, _, _) -> this#on_expr acc e
 
@@ -1133,6 +1138,8 @@ module Visitor_DEPRECATED = struct
         let acc = List.fold_left c.c_methods ~f:this#on_method_ ~init:acc in
         acc
 
+      method on_fun_def acc f = this#on_fun_ acc f.fd_fun
+
       method on_class_typeconst_def acc t =
         let acc = this#on_id acc t.c_tconst_name in
         match t.c_tconst_kind with
@@ -1206,7 +1213,13 @@ module Visitor_DEPRECATED = struct
         in
         acc
 
-      method on_enum_atom acc s = this#on_string acc s
+      method on_enum_class_label acc opt_sid name =
+        let acc =
+          match opt_sid with
+          | Some sid -> this#on_id acc sid
+          | None -> acc
+        in
+        this#on_string acc name
 
       method on_function_ptr_id acc fpi =
         match fpi with
@@ -1227,7 +1240,7 @@ module Visitor_DEPRECATED = struct
 
       method on_def acc =
         function
-        | Fun f -> this#on_fun_ acc f
+        | Fun f -> this#on_fun_def acc f
         | Class c -> this#on_class_ acc c
         | RecordDef rd -> this#on_record_def acc rd
         | Stmt s -> this#on_stmt acc s

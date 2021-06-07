@@ -66,36 +66,6 @@ using BuiltinDtorFunction = LowPtr<void(ObjectData*, const Class*)>;
  * differ since names may have different meanings.  For example, if the
  * PreClass "extends Foo", and Foo is defined differently in different
  * requests, we will make a different Class.
- *
- * Hoistability:
- *
- *    When a Unit is loaded at run time, each PreClass in the Unit which is
- *    determined to be `hoistable' will be loaded by the runtime (in the order
- *    they appear in the source) before the Unit's pseudo-main is executed.
- *    The hoistability rules ensure that loading a PreClass which is determined
- *    to be hoistable will never cause the autoload facility to be invoked.
- *
- *    A class is considered `hoistable' iff the following conditions apply:
- *
- *      - It's defined at the top level.
- *
- *      - There is no other definition for a class of the same name in
- *        its Unit.
- *
- *      - It uses no traits.  (It may however *be* a trait.)
- *
- *      - It implements no interfaces.  (It may however *be* an interface.)
- *
- *      - It is not an enum.
- *
- *      - It has no parent OR
- *           The parent is hoistable and defined earlier in the unit OR
- *           The parent is already defined when the unit is required
- *
- *    The very last condition here (parent already defined when the unit is
- *    required) is not known at parse time.  This leads to the Maybe/Always
- *    split below.
- *
  */
 struct PreClass : AtomicCountable {
   friend struct PreClassEmitter;
@@ -104,13 +74,6 @@ struct PreClass : AtomicCountable {
 
   /////////////////////////////////////////////////////////////////////////////
   // Types.
-
-  enum Hoistable {
-    NotHoistable,
-    Mergeable,
-    MaybeHoistable,
-    AlwaysHoistable,
-  };
 
   /*
    * Instance property information.
@@ -169,7 +132,12 @@ struct PreClass : AtomicCountable {
     const TypedValueAux& val()   const { return m_val; }
     const StringData* phpCode()  const { return m_phpCode; }
     bool isFromTrait()     const { return m_fromTrait; }
-    bool isAbstract()      const { return m_val.constModifiers().isAbstract(); }
+    bool isAbstractAndUninit()   const {
+      return m_val.constModifiers().isAbstract() && !m_val.is_init();
+    }
+    bool isAbstract()            const {
+      return m_val.constModifiers().isAbstract();
+    }
     ConstModifiers::Kind kind()  const { return m_val.constModifiers().kind(); }
     StaticCoeffects coeffects()  const;
 
@@ -279,9 +247,9 @@ struct PreClass : AtomicCountable {
   };
 
 private:
-  typedef IndexedStringMap<Func*,false,Slot> MethodMap;
-  typedef IndexedStringMap<Prop,true,Slot> PropMap;
-  typedef IndexedStringMap<Const,true,Slot> ConstMap;
+  typedef IndexedStringMap<Func*,Slot> MethodMap;
+  typedef IndexedStringMap<Prop,Slot> PropMap;
+  typedef IndexedStringMap<Const,Slot> ConstMap;
 
 public:
   typedef VMFixedVector<LowStringPtr> InterfaceVec;
@@ -297,7 +265,7 @@ public:
 
   PreClass(Unit* unit, int line1, int line2, const StringData* n,
            Attr attrs, const StringData* parent, const StringData* docComment,
-           Id id, Hoistable hoistable);
+           Id id);
   ~PreClass();
 
   void atomicRelease();
@@ -318,7 +286,6 @@ public:
   const StringData* name()         const { return m_name; }
   const StringData* parent()       const { return m_parent; }
   const StringData* docComment()   const { return m_docComment; }
-  Hoistable         hoistability() const { return m_hoistable; }
 
   int64_t dynConstructSampleRate() const {
     return m_dynConstructSampleRate;
@@ -458,7 +425,6 @@ private:
   int m_line2;
   Id m_id;
   Attr m_attrs;
-  Hoistable m_hoistable;
   LowStringPtr m_name;
   LowStringPtr m_parent;
   LowStringPtr m_docComment;

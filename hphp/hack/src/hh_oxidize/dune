@@ -12,9 +12,12 @@
     output
     hh_oxidize
     oxidized_module
+    rust_type
     state
     stringify
     utils)
   (preprocess (pps ppx_deriving.std))
   (libraries
+    core_kernel
+    core_kernel.caml_unix
     signed_source collections ocaml-compiler-libs.common))

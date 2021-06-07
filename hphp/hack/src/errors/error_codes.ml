@@ -230,6 +230,8 @@ module NastCheck = struct
     | IllegalContext [@value 3090]
     (* | InvalidConstFunAttributeDEPRECATED [@value 3091] *)
     | ListRvalue [@value 3092]
+    | PartiallyAbstractTypeconstDefinition [@value 3093]
+    | EntryPointGenerics [@value 3094]
   [@@deriving enum, show { with_path = false }]
 
   let err_code = to_enum
@@ -353,7 +355,7 @@ module Typing = struct
     (* | VoidParameterDEPRECATED [@value 4114] *)
     | WrongExtendKind [@value 4115]
     | GenericUnify [@value 4116]
-    | NullsafeNotNeeded [@value 4117]
+    (* | NullsafeNotNeeded [@value 4117] *)
     | TrivialStrictEq [@value 4118]
     | VoidUsage [@value 4119]
     | DeclaredCovariant [@value 4120]
@@ -586,10 +588,10 @@ module Typing = struct
     | AbstractFunctionPointer [@value 4391]
     | UnnecessaryAttribute [@value 4392]
     | InheritedMethodCaseDiffers [@value 4393]
-    | AtomUnknown [@value 4394]
+    | EnumClassLabelUnknown [@value 4394]
     | AtomInvalidParameter [@value 4395]
-    | AtomAsExpression [@value 4396]
-    | AtomInvalidArgument [@value 4397]
+    | EnumClassLabelAsExpression [@value 4396]
+    | EnumClassLabelInvalidArgument [@value 4397]
     | IFCInternalError [@value 4398]
     | IFCExternalContravariant [@value 4399]
     | IFCPolicyMismatch [@value 4400]
@@ -621,6 +623,21 @@ module Typing = struct
     | PrivateDynamicWrite [@value 4426]
     | IncDecInvalidArgument [@value 4427]
     | ReadonlyClosureCall [@value 4428]
+    | MathInvalidArgument [@value 4429]
+    | TypeconstConcreteConcreteOverride [@value 4430]
+    | PrivateMethCaller [@value 4431]
+    | ProtectedMethCaller [@value 4432]
+    | BadConditionalSupportDynamic [@value 4433]
+    | ReadonlyInvalidAsMut [@value 4434]
+    | InvalidKeysetValue [@value 4435]
+    | UnresolvedTypeVariableProjection [@value 4436]
+    | FunctionPointerWithAtom [@value 4437]
+    | InvalidEchoArgument [@value 4438]
+    | DiamondTraitMethod [@value 4439]
+    | ReifiedStaticMethodInExprTree [@value 4440]
+    | InvariantViolated [@value 4441]
+    | RigidTVarEscape [@value 4442]
+    | StrictEqValueIncompatibleTypes [@value 4443]
   [@@deriving enum, show { with_path = false }]
 
   let err_code = to_enum

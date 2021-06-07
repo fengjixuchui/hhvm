@@ -162,7 +162,6 @@ module WithToken (Token : TokenType) = struct
       | NullableAsExpression _ -> SyntaxKind.NullableAsExpression
       | ConditionalExpression _ -> SyntaxKind.ConditionalExpression
       | EvalExpression _ -> SyntaxKind.EvalExpression
-      | DefineExpression _ -> SyntaxKind.DefineExpression
       | IssetExpression _ -> SyntaxKind.IssetExpression
       | FunctionCallExpression _ -> SyntaxKind.FunctionCallExpression
       | FunctionPointerExpression _ -> SyntaxKind.FunctionPointerExpression
@@ -234,7 +233,7 @@ module WithToken (Token : TokenType) = struct
       | IntersectionTypeSpecifier _ -> SyntaxKind.IntersectionTypeSpecifier
       | ErrorSyntax _ -> SyntaxKind.ErrorSyntax
       | ListItem _ -> SyntaxKind.ListItem
-      | EnumAtomExpression _ -> SyntaxKind.EnumAtomExpression
+      | EnumClassLabelExpression _ -> SyntaxKind.EnumClassLabelExpression
 
     let kind node = to_kind (syntax node)
 
@@ -472,8 +471,6 @@ module WithToken (Token : TokenType) = struct
 
     let is_eval_expression = has_kind SyntaxKind.EvalExpression
 
-    let is_define_expression = has_kind SyntaxKind.DefineExpression
-
     let is_isset_expression = has_kind SyntaxKind.IssetExpression
 
     let is_function_call_expression = has_kind SyntaxKind.FunctionCallExpression
@@ -629,7 +626,8 @@ module WithToken (Token : TokenType) = struct
 
     let is_list_item = has_kind SyntaxKind.ListItem
 
-    let is_enum_atom_expression = has_kind SyntaxKind.EnumAtomExpression
+    let is_enum_class_label_expression =
+      has_kind SyntaxKind.EnumClassLabelExpression
 
     let is_loop_statement node =
       is_for_statement node
@@ -1764,18 +1762,6 @@ module WithToken (Token : TokenType) = struct
         let acc = f acc eval_argument in
         let acc = f acc eval_right_paren in
         acc
-      | DefineExpression
-          {
-            define_keyword;
-            define_left_paren;
-            define_argument_list;
-            define_right_paren;
-          } ->
-        let acc = f acc define_keyword in
-        let acc = f acc define_left_paren in
-        let acc = f acc define_argument_list in
-        let acc = f acc define_right_paren in
-        acc
       | IssetExpression
           {
             isset_keyword;
@@ -1792,14 +1778,14 @@ module WithToken (Token : TokenType) = struct
           {
             function_call_receiver;
             function_call_type_args;
-            function_call_enum_atom;
+            function_call_enum_class_label;
             function_call_left_paren;
             function_call_argument_list;
             function_call_right_paren;
           } ->
         let acc = f acc function_call_receiver in
         let acc = f acc function_call_type_args in
-        let acc = f acc function_call_enum_atom in
+        let acc = f acc function_call_enum_class_label in
         let acc = f acc function_call_left_paren in
         let acc = f acc function_call_argument_list in
         let acc = f acc function_call_right_paren in
@@ -2432,9 +2418,15 @@ module WithToken (Token : TokenType) = struct
         let acc = f acc list_item in
         let acc = f acc list_separator in
         acc
-      | EnumAtomExpression { enum_atom_hash; enum_atom_expression } ->
-        let acc = f acc enum_atom_hash in
-        let acc = f acc enum_atom_expression in
+      | EnumClassLabelExpression
+          {
+            enum_class_label_qualifier;
+            enum_class_label_hash;
+            enum_class_label_expression;
+          } ->
+        let acc = f acc enum_class_label_qualifier in
+        let acc = f acc enum_class_label_hash in
+        let acc = f acc enum_class_label_expression in
         acc
 
     (* The order that the children are returned in should match the order
@@ -3407,19 +3399,6 @@ module WithToken (Token : TokenType) = struct
       | EvalExpression
           { eval_keyword; eval_left_paren; eval_argument; eval_right_paren } ->
         [eval_keyword; eval_left_paren; eval_argument; eval_right_paren]
-      | DefineExpression
-          {
-            define_keyword;
-            define_left_paren;
-            define_argument_list;
-            define_right_paren;
-          } ->
-        [
-          define_keyword;
-          define_left_paren;
-          define_argument_list;
-          define_right_paren;
-        ]
       | IssetExpression
           {
             isset_keyword;
@@ -3434,7 +3413,7 @@ module WithToken (Token : TokenType) = struct
           {
             function_call_receiver;
             function_call_type_args;
-            function_call_enum_atom;
+            function_call_enum_class_label;
             function_call_left_paren;
             function_call_argument_list;
             function_call_right_paren;
@@ -3442,7 +3421,7 @@ module WithToken (Token : TokenType) = struct
         [
           function_call_receiver;
           function_call_type_args;
-          function_call_enum_atom;
+          function_call_enum_class_label;
           function_call_left_paren;
           function_call_argument_list;
           function_call_right_paren;
@@ -4046,8 +4025,17 @@ module WithToken (Token : TokenType) = struct
         [intersection_left_paren; intersection_types; intersection_right_paren]
       | ErrorSyntax { error_error } -> [error_error]
       | ListItem { list_item; list_separator } -> [list_item; list_separator]
-      | EnumAtomExpression { enum_atom_hash; enum_atom_expression } ->
-        [enum_atom_hash; enum_atom_expression]
+      | EnumClassLabelExpression
+          {
+            enum_class_label_qualifier;
+            enum_class_label_hash;
+            enum_class_label_expression;
+          } ->
+        [
+          enum_class_label_qualifier;
+          enum_class_label_hash;
+          enum_class_label_expression;
+        ]
 
     let children node = children_from_syntax node.syntax
 
@@ -5032,19 +5020,6 @@ module WithToken (Token : TokenType) = struct
       | EvalExpression
           { eval_keyword; eval_left_paren; eval_argument; eval_right_paren } ->
         ["eval_keyword"; "eval_left_paren"; "eval_argument"; "eval_right_paren"]
-      | DefineExpression
-          {
-            define_keyword;
-            define_left_paren;
-            define_argument_list;
-            define_right_paren;
-          } ->
-        [
-          "define_keyword";
-          "define_left_paren";
-          "define_argument_list";
-          "define_right_paren";
-        ]
       | IssetExpression
           {
             isset_keyword;
@@ -5062,7 +5037,7 @@ module WithToken (Token : TokenType) = struct
           {
             function_call_receiver;
             function_call_type_args;
-            function_call_enum_atom;
+            function_call_enum_class_label;
             function_call_left_paren;
             function_call_argument_list;
             function_call_right_paren;
@@ -5070,7 +5045,7 @@ module WithToken (Token : TokenType) = struct
         [
           "function_call_receiver";
           "function_call_type_args";
-          "function_call_enum_atom";
+          "function_call_enum_class_label";
           "function_call_left_paren";
           "function_call_argument_list";
           "function_call_right_paren";
@@ -5690,8 +5665,17 @@ module WithToken (Token : TokenType) = struct
       | ErrorSyntax { error_error } -> ["error_error"]
       | ListItem { list_item; list_separator } ->
         ["list_item"; "list_separator"]
-      | EnumAtomExpression { enum_atom_hash; enum_atom_expression } ->
-        ["enum_atom_hash"; "enum_atom_expression"]
+      | EnumClassLabelExpression
+          {
+            enum_class_label_qualifier;
+            enum_class_label_hash;
+            enum_class_label_expression;
+          } ->
+        [
+          "enum_class_label_qualifier";
+          "enum_class_label_hash";
+          "enum_class_label_expression";
+        ]
 
     let rec to_json_ ?(with_value = false) ?(ignore_missing = false) node =
       let open Hh_json in
@@ -6842,20 +6826,6 @@ module WithToken (Token : TokenType) = struct
           [eval_keyword; eval_left_paren; eval_argument; eval_right_paren] ) ->
         EvalExpression
           { eval_keyword; eval_left_paren; eval_argument; eval_right_paren }
-      | ( SyntaxKind.DefineExpression,
-          [
-            define_keyword;
-            define_left_paren;
-            define_argument_list;
-            define_right_paren;
-          ] ) ->
-        DefineExpression
-          {
-            define_keyword;
-            define_left_paren;
-            define_argument_list;
-            define_right_paren;
-          }
       | ( SyntaxKind.IssetExpression,
           [
             isset_keyword;
@@ -6874,7 +6844,7 @@ module WithToken (Token : TokenType) = struct
           [
             function_call_receiver;
             function_call_type_args;
-            function_call_enum_atom;
+            function_call_enum_class_label;
             function_call_left_paren;
             function_call_argument_list;
             function_call_right_paren;
@@ -6883,7 +6853,7 @@ module WithToken (Token : TokenType) = struct
           {
             function_call_receiver;
             function_call_type_args;
-            function_call_enum_atom;
+            function_call_enum_class_label;
             function_call_left_paren;
             function_call_argument_list;
             function_call_right_paren;
@@ -7551,9 +7521,18 @@ module WithToken (Token : TokenType) = struct
       | (SyntaxKind.ErrorSyntax, [error_error]) -> ErrorSyntax { error_error }
       | (SyntaxKind.ListItem, [list_item; list_separator]) ->
         ListItem { list_item; list_separator }
-      | (SyntaxKind.EnumAtomExpression, [enum_atom_hash; enum_atom_expression])
-        ->
-        EnumAtomExpression { enum_atom_hash; enum_atom_expression }
+      | ( SyntaxKind.EnumClassLabelExpression,
+          [
+            enum_class_label_qualifier;
+            enum_class_label_hash;
+            enum_class_label_expression;
+          ] ) ->
+        EnumClassLabelExpression
+          {
+            enum_class_label_qualifier;
+            enum_class_label_hash;
+            enum_class_label_expression;
+          }
       | (SyntaxKind.Missing, []) -> Missing
       | (SyntaxKind.SyntaxList, items) -> SyntaxList items
       | _ ->
@@ -9024,23 +9003,6 @@ module WithToken (Token : TokenType) = struct
         let value = ValueBuilder.value_from_syntax syntax in
         make syntax value
 
-      let make_define_expression
-          define_keyword
-          define_left_paren
-          define_argument_list
-          define_right_paren =
-        let syntax =
-          DefineExpression
-            {
-              define_keyword;
-              define_left_paren;
-              define_argument_list;
-              define_right_paren;
-            }
-        in
-        let value = ValueBuilder.value_from_syntax syntax in
-        make syntax value
-
       let make_isset_expression
           isset_keyword isset_left_paren isset_argument_list isset_right_paren =
         let syntax =
@@ -9058,7 +9020,7 @@ module WithToken (Token : TokenType) = struct
       let make_function_call_expression
           function_call_receiver
           function_call_type_args
-          function_call_enum_atom
+          function_call_enum_class_label
           function_call_left_paren
           function_call_argument_list
           function_call_right_paren =
@@ -9067,7 +9029,7 @@ module WithToken (Token : TokenType) = struct
             {
               function_call_receiver;
               function_call_type_args;
-              function_call_enum_atom;
+              function_call_enum_class_label;
               function_call_left_paren;
               function_call_argument_list;
               function_call_right_paren;
@@ -9963,9 +9925,17 @@ module WithToken (Token : TokenType) = struct
         let value = ValueBuilder.value_from_syntax syntax in
         make syntax value
 
-      let make_enum_atom_expression enum_atom_hash enum_atom_expression =
+      let make_enum_class_label_expression
+          enum_class_label_qualifier
+          enum_class_label_hash
+          enum_class_label_expression =
         let syntax =
-          EnumAtomExpression { enum_atom_hash; enum_atom_expression }
+          EnumClassLabelExpression
+            {
+              enum_class_label_qualifier;
+              enum_class_label_hash;
+              enum_class_label_expression;
+            }
         in
         let value = ValueBuilder.value_from_syntax syntax in
         make syntax value

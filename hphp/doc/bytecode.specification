@@ -727,11 +727,12 @@ instruction in the group perform similar actions but take different kinds of
 inputs to specify the location to access.
 
 There are numerous instructions which incorporate a readonly immediate.
-These opcodes can be Mutable, Any, or ReadOnly, and specify the
+These opcodes can be Mutable, Any, ReadOnly, or CheckROCOW, and specify the
 readonlyness constraint on the property read/written by the instruction.
 The Any immediate is equivalent to no runtime check. The ReadOnly immediate 
 specifies this property must be readonly. The Mutable immediate specifies
-this property must be mutable.
+this property must be mutable. The CheckROCOW immediate specifies this property
+can be readonly, if it is COW, and otherwise must be mutable.
 
 The member instructions provide functionality to operate on elements and
 properties. Many of these instructions incorporate a readonly immediate
@@ -962,6 +963,9 @@ ClassName    [C:Class] ->  [C:Static Str]
 
   Push the name of the class in $1 as a string.
 
+LazyClassFromClass    [C:Class] ->  [C:LazyClass]
+
+  Push the lazy class corresponding to the class in $1.
 
 3. Operator instructions
 ------------------------
@@ -1529,7 +1533,7 @@ SetOpG <op>    [C C]  ->  [C]
   opcodes:
     Add, Sub, Mul, Div, Mod, Shl, Shr, Concat, BitAnd, BitOr, BitXor.
 
-SetOpS <op> <readonly op>    [C C:Class C]  ->  [C]
+SetOpS <op>    [C C:Class C]  ->  [C]
 
   Set op static property. This instruction first computes x = (string)$3. Next
   it checks if class $2 has an accessible static property named x. If it
@@ -1579,7 +1583,7 @@ IncDecG <op>    [C]  ->  [C]
   If op is PostDec, this instruction pushes v onto the stack and then it
   executes --v.
 
-IncDecS <op> <readonly op>    [C C:Class]  ->  [C]
+IncDecS <op>    [C C:Class]  ->  [C]
 
   Increment/decrement static property. This instruction first computes x =
   (string)$2. Next it checks if class $1 has an accessible static property
@@ -2664,7 +2668,7 @@ SetM <stack count> <member key>    [... C]  ->  [C]
 
   Set{Prop,Elem} or SetNewElem member operation.
 
-SetRangeM <stack count> <op> <elem size> <readonly op> [... C C C]  ->  []
+SetRangeM <stack count> <op> <elem size> [... C C C]  ->  []
 
   Store raw data into a string, optionally reversing the order of elements
   based on op, which may be Forward or Reverse.

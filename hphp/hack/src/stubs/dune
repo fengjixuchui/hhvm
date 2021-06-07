@@ -80,12 +80,23 @@
   (preprocess
     (pps lwt_ppx ppx_deriving.std)))
 
+
+(library
+  (name typing_service_delegate_types_stubs)
+  (wrapped false)
+  (modules
+    typing_service_delegate_types)
+  (preprocess
+    (pps lwt_ppx ppx_deriving.std)))
+
+
 (library
   (name typing_service_api_stubs)
   (wrapped false)
   (modules
     typing_service_delegate)
   (libraries
+    typing_service_delegate_types_stubs
     typing_service_api)
   (preprocess
     (pps lwt_ppx ppx_deriving.std)))
@@ -142,6 +153,14 @@
   (wrapped false)
   (modules
     decl_ipc_ffi_externs)
+  (preprocess
+    (pps lwt_ppx ppx_deriving.std)))
+
+(library
+  (name re_stubs)
+  (wrapped false)
+  (modules re)
+  (libraries errors relative_path typing_deps)
   (preprocess
     (pps lwt_ppx ppx_deriving.std)))
 
@@ -242,5 +261,13 @@
   (wrapped false)
   (modules
     startup_initializer)
+  (preprocess
+    (pps lwt_ppx ppx_deriving.std)))
+
+(library
+  (name formatting_stubs)
+  (wrapped false)
+  (modules
+    formatting)
   (preprocess
     (pps lwt_ppx ppx_deriving.std)))

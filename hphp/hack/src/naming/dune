@@ -28,9 +28,9 @@
   (preprocess (pps ppx_deriving.std)))
 
 (library
-  (name naming_attributes_deprecated)
+  (name naming_attributes_params)
   (modules
-    naming_attributes_deprecated)
+    naming_attributes_params)
   (libraries
     annotated_ast
     naming_attributes
@@ -39,6 +39,15 @@
     naming_special_names
     nast
     nast_eval
+    pos)
+  (preprocess (pps ppx_deriving.std)))
+
+(library
+  (name naming_ast_print)
+  (modules
+    naming_ast_print)
+  (libraries
+    nast
     pos)
   (preprocess (pps ppx_deriving.std)))
 
@@ -68,6 +77,7 @@
     fileutils
     heap_shared_mem
     heap_shared_mem_hash
+    logging
     naming_types
     relative_path
     sqlite3

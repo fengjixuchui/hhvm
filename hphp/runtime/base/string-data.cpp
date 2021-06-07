@@ -83,7 +83,7 @@ const SymbolPrefix* getSymbolPrefix(const StringData* sd) {
 }
 
 bool StringData::isSymbol() const {
-  return m_aux16 >> 8;
+  return (m_aux16 >> 8) & kIsSymbolMask;
 }
 
 void StringData::markSymbolsLoaded() {
@@ -116,6 +116,21 @@ ptrdiff_t StringData::isSymbolOffset() {
 
 ptrdiff_t StringData::cachedClassOffset() {
   return offsetof(SymbolPrefix, cls) - sizeof(SymbolPrefix);
+}
+
+//////////////////////////////////////////////////////////////////////
+
+ptrdiff_t StringData::colorOffset() {
+  return offsetof(StringData, m_aux16);
+}
+
+uint16_t StringData::color() const {
+  return m_aux16 & kColorMask;
+}
+
+void StringData::setColor(uint16_t color) {
+  assertx((color & ~kColorMask) == 0);
+  m_aux16 |= color;
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -156,11 +171,12 @@ StringData* StringData::MakeSharedAt(folly::StringPiece sl, MemBlock range) {
 #endif
   auto const count = trueStatic ? StaticValue : UncountedValue;
   if (symbol) {
-    sd->initHeader_16(HeaderKind::String, count, 1 << 8);
+    auto constexpr aux = kIsSymbolMask << 8 | kInvalidColor;
+    sd->initHeader_16(HeaderKind::String, count, aux);
     getSymbolPrefix(sd)->cls = nullptr;
     getSymbolPrefix(sd)->ne = nullptr;
   } else {
-    sd->initHeader(HeaderKind::String, count);
+    sd->initHeader_16(HeaderKind::String, count, kInvalidColor);
   }
   sd->m_len = sl.size(); // m_hash is computed soon.
 

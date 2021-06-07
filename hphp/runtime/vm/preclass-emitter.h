@@ -182,11 +182,10 @@ struct PreClassEmitter {
     bool m_fromTrait;
   };
 
-  typedef IndexedStringMap<Prop, true, Slot> PropMap;
-  typedef IndexedStringMap<Const, true, Slot> ConstMap;
+  typedef IndexedStringMap<Prop, Slot> PropMap;
+  typedef IndexedStringMap<Const, Slot> ConstMap;
 
-  PreClassEmitter(UnitEmitter& ue, Id id, const std::string& name,
-                  PreClass::Hoistable hoistable);
+  PreClassEmitter(UnitEmitter& ue, Id id, const std::string& name);
   ~PreClassEmitter();
 
 
@@ -199,8 +198,6 @@ struct PreClassEmitter {
   const StringData* name() const { return m_name; }
   Attr attrs() const { return m_attrs; }
   void setAttrs(Attr attrs) { m_attrs = attrs; }
-  void setHoistable(PreClass::Hoistable h) { m_hoistable = h; }
-  PreClass::Hoistable hoistability() const { return m_hoistable; }
   void setEnumBaseTy(TypeConstraint ty) { m_enumBaseTy = ty; }
   const TypeConstraint& enumBaseTy() const { return m_enumBaseTy; }
   Id id() const { return m_id; }
@@ -250,7 +247,8 @@ struct PreClassEmitter {
                    const ConstModifiers::Kind kind =
                     ConstModifiers::Kind::Value,
                    const bool fromTrait = false,
-                   const Array& typeStructure = Array{});
+                   const Array& typeStructure = Array{},
+                   const bool isAbstract = false);
   bool addContextConstant(const StringData* n,
                           Const::CoeffectsVec&& coeffects,
                           const bool isAbstract, const bool fromTrait = false);
@@ -285,7 +283,7 @@ struct PreClassEmitter {
 
   void commit(RepoTxn& txn) const; // throws(RepoExc)
 
-  PreClass* create(Unit& unit, bool saveLineTable = false) const;
+  PreClass* create(Unit& unit) const;
 
   template<class SerDe> void serdeMetaData(SerDe&);
 
@@ -315,7 +313,6 @@ struct PreClassEmitter {
   LowStringPtr m_docComment;
   TypeConstraint m_enumBaseTy;
   Id m_id;
-  PreClass::Hoistable m_hoistable;
   Slot m_ifaceVtableSlot{kInvalidSlot};
   int m_memoizeInstanceSerial{0};
 
@@ -343,8 +340,7 @@ struct PreClassRepoProxy : RepoProxy {
   struct InsertPreClassStmt : public RepoProxy::Stmt {
     InsertPreClassStmt(Repo& repo, int repoId) : Stmt(repo, repoId) {}
     void insert(const PreClassEmitter& pce, RepoTxn& txn, int64_t unitSn,
-                Id preClassId, const StringData* name,
-                PreClass::Hoistable hoistable); // throws(RepoExc)
+                Id preClassId, const StringData* name); // throws(RepoExc)
   };
 
   struct GetPreClassesStmt : public RepoProxy::Stmt {

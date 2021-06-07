@@ -1,6 +1,10 @@
 <?hh
 
-type ExprTreeInferredType<T> = ?(function(): T);
+type ExprTreeInfo = shape(
+  'splices' => dict<string, mixed>,
+  'functions' => vec<mixed>,
+  'static_methods' => vec<mixed>,
+);
 
 function concat_arg_list(vec<string> $args): string {
   return implode(",", $args);
@@ -13,102 +17,68 @@ function concat_block(vec<string> $block): string {
 class Code {
   const type TAst = string;
 
+    // Virtual types (These do not have to be implemented)
+  public static function intType(): ExampleInt {
+    throw new Exception();
+  }
+  public static function floatType(): ExampleFloat {
+    throw new Exception();
+  }
+  public static function boolType(): ExampleBool {
+    throw new Exception();
+  }
+  public static function stringType(): ExampleString {
+    throw new Exception();
+  }
+  public static function nullType(): null {
+    throw new Exception();
+  }
+  public static function voidType(): ExampleVoid {
+    throw new Exception();
+  }
+  public static function symbolType<T>(
+    (function(ExampleContext): Awaitable<ExprTree<Code, Code::TAst, T>>) $_,
+  ): T {
+    throw new Exception();
+  }
+
   public static function makeTree<TVisitor as Code, TInfer>(
     ?ExprPos $pos,
-    dict<string, mixed> $spliced_values,
+    ExprTreeInfo $metadata,
     (function(TVisitor): Code::TAst) $ast,
-    ExprTreeInferredType<TInfer> $null,
   ): ExprTree<TVisitor, Code::TAst, TInfer> {
-    return new ExprTree($pos, $spliced_values, $ast, $null);
+    return new ExprTree($pos, $metadata, $ast);
   }
 
-  // Lifting literals.
-  public static function liftInt(
-    int $i,
-  ): ExprTree<Code, Code::TAst, ExampleInt> {
-    return new ExprTree(
-      null,
-      dict[],
-      (Code $_) ==> (string)$i,
-      () ==> {
-        throw new Exception();
-      },
-    );
+  // Desugared nodes (These should be implemented)
+  public function visitInt(?ExprPos $_, int $i): string {
+    return (string)$i;
+  }
+  public function visitFloat(?ExprPos $_, float $f): string {
+    return (string)$f;
+  }
+  public function visitBool(?ExprPos $_, bool $b): string {
+    return $b ? "true" : "false";
+  }
+  public function visitString(?ExprPos $_, string $s): string {
+    return "\"$s\"";
+  }
+  public function visitNull(?ExprPos $_): string {
+    return "null";
   }
 
-  public static function liftFloat(
-    float $f,
-  ): ExprTree<Code, Code::TAst, ExampleFloat> {
-    return new ExprTree(
-      null,
-      dict[],
-      (Code $_) ==> (string)$f,
-      () ==> {
-        throw new Exception();
-      },
-    );
-  }
-
-  public static function liftBool(
-    bool $b,
-  ): ExprTree<Code, Code::TAst, ExampleBool> {
-    return new ExprTree(
-      null,
-      dict[],
-      (Code $_) ==> $b ? "true" : "false",
-      () ==> {
-        throw new Exception();
-      },
-    );
-  }
-
-  public static function liftString(
-    string $s,
-  ): ExprTree<Code, Code::TAst, ExampleString> {
-    return new ExprTree(
-      null,
-      dict[],
-      (Code $_) ==> "\"$s\"",
-      () ==> {
-        throw new Exception();
-      },
-    );
-  }
-
-  public static function liftNull(): ExprTree<Code, Code::TAst, null> {
-    return new ExprTree(
-      null,
-      dict[],
-      (Code $_) ==> "null",
-      () ==> {
-        throw new Exception();
-      },
-    );
-  }
-
-  public static function liftVoid(): ExprTree<Code, Code::TAst, ExampleVoid> {
-    return new ExprTree(
-      null,
-      dict[],
-      (Code $_) ==> "void",
-      () ==> {
-        throw new Exception();
-      },
-    );
-  }
-
-  // Symbols
-  public static function liftSymbol<T>(
+  public function visitGlobalFunction<T>(
+    ?ExprPos $_,
     (function(ExampleContext): Awaitable<ExprTree<Code, Code::TAst, T>>) $_,
-  ): ExprTree<Code, Code::TAst, T> {
-    return new ExprTree(
-      null,
-      dict[],
-      (Code $_) ==> "function_ptr",
-      () ==> {
-        throw new Exception();
-      },
-    );
+  ): Code::TAst {
+    return "function_ptr";
+  }
+
+  public function visitStaticMethod<T>(
+    ?ExprPos $_,
+    (function(ExampleContext): Awaitable<ExprTree<Code, Code::TAst, T>>) $_,
+  ): Code::TAst {
+    return "function_ptr";
   }
 
   // Expressions
@@ -124,14 +94,22 @@ class Code {
     return "(".concat_arg_list($args).")"." ==> {\n".concat_block($body)."}";
   }
 
-  // Operators
-  public function visitMethCall(
+  // New operators
+  public function visitBinop(
     ?ExprPos $_,
-    Code::TAst $callee,
+    string $lhs,
     string $op,
-    vec<Code::TAst> $args,
-  ): Code::TAst {
-    return $callee."->".$op."(".concat_arg_list($args).")";
+    string $rhs,
+  ): string {
+    return "$lhs $op $rhs";
+  }
+
+  public function visitUnop(
+    ?ExprPos $_,
+    string $op,
+    string $operand,
+  ): string {
+    return "$op $operand";
   }
 
   public function visitCall<T>(
@@ -182,7 +160,10 @@ class Code {
     return "while (".$cond.") {\n".concat_block($body)."}";
   }
 
-  public function visitReturn(?ExprPos $_, Code::TAst $return_val): Code::TAst {
+  public function visitReturn(?ExprPos $_, ?Code::TAst $return_val): Code::TAst {
+    if ($return_val is null) {
+      return "return;";
+    }
     return "return ".$return_val.";";
   }
 
@@ -230,9 +211,8 @@ final class ExprTree<TVisitor, TResult, +TInfer>
   implements Spliceable<TVisitor, TResult, TInfer> {
   public function __construct(
     private ?ExprPos $pos,
-    private dict<string, mixed> $spliced_values,
+    private ExprTreeInfo $metadata,
     private (function(TVisitor): TResult) $ast,
-    private ExprTreeInferredType<TInfer> $err,
   ) {}
 
   public function visit(TVisitor $v): TResult {
@@ -244,19 +224,11 @@ final class ExprTree<TVisitor, TResult, +TInfer>
   }
 
   public function getSplices(): dict<string, mixed> {
-    return $this->spliced_values;
+    return $this->metadata['splices'];
   }
 }
 
-final class ExprPos {
-  public function __construct(
-    public string $filepath,
-    public int $begin_line,
-    public int $begin_col,
-    public int $end_line,
-    public int $end_col,
-  ) {}
-}
+type ExprPos = shape(...);
 
 abstract class ExampleMixed {
   public abstract function __tripleEquals(ExampleMixed $_): ExampleBool;

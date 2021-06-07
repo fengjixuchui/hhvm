@@ -24,6 +24,7 @@
 
 #include "hphp/runtime/base/array-init.h"
 #include "hphp/runtime/base/array-iterator.h"
+#include "hphp/runtime/base/request-injection-data.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/type-array.h"
 #include "hphp/runtime/base/type-string.h"
@@ -75,6 +76,29 @@ std::optional<folly::fs::path> resolvePathRelativeToRoot(
 
 namespace HPHP {
 namespace Facts {
+
+namespace {
+
+/**
+ * Cancel the request timeout when created, restart the request timeout when
+ * destroyed.
+ */
+struct TimeoutSuspender {
+  TimeoutSuspender() : m_timeoutSeconds{RID().getTimeout()} {
+    RID().setTimeout(0);
+  }
+  ~TimeoutSuspender() {
+    RID().setTimeout(m_timeoutSeconds);
+  }
+  int m_timeoutSeconds{0};
+
+  TimeoutSuspender(const TimeoutSuspender&) = delete;
+  TimeoutSuspender& operator=(const TimeoutSuspender&) = delete;
+  TimeoutSuspender(TimeoutSuspender&&) = delete;
+  TimeoutSuspender& operator=(TimeoutSuspender&&) = delete;
+};
+
+} // namespace
 
 constexpr std::string_view kKindFilterKey{"kind"};
 constexpr std::string_view kDeriveKindFilterKey{"derive_kind"};
@@ -168,7 +192,9 @@ struct AttributeFilterData {
     assertx(attrFilters);
     AttributeFilterData filters;
     IterateV(attrFilters, [&](TypedValue v) {
-      if (!tvIsArrayLike(v)) return;
+      if (!tvIsArrayLike(v)) {
+        return;
+      }
       filters.m_attrs.insert(createAttrFilterFromShape(v.m_data.parr));
     });
     return filters;
@@ -418,6 +444,22 @@ Array makeVecOfString(StringPtrIterable&& vector, Predicate&& predicate) {
   return ret.toArray();
 }
 
+/**
+ * Convert a C++ StringData structure into a Hack `vec<(string, string)>`.
+ */
+Array makeVecOfStringString(const std::vector<MethodDecl<StringData>>& vector) {
+  auto ret = VecInit{vector.size()};
+  for (auto const& [typeDecl, method] : vector) {
+    auto stringStringTuple = VecInit{2};
+    stringStringTuple.append(
+        make_tv<KindOfPersistentString>(typeDecl.m_name.get()));
+    stringStringTuple.append(make_tv<KindOfPersistentString>(method.get()));
+
+    ret.append(stringStringTuple.toArray());
+  }
+  return ret.toArray();
+}
+
 TypedValue tvFromDynamic(folly::dynamic&& dy) {
   if (dy.isBool()) {
     return make_tv<KindOfBoolean>(std::move(dy).getBool());
@@ -479,22 +521,21 @@ Array makeDictOfStringToString(PairContainer&& vector) {
 
 WatchmanAutoloadMap::WatchmanAutoloadMap(
     folly::fs::path root,
-    folly::fs::path dbPath,
+    DBData dbData,
     folly::dynamic queryExpr,
     Watchman& watchmanClient)
     : m_updateExec{1, make_thread_factory("Autoload update")}
     , m_root{std::move(root)}
-    , m_map{m_root, std::move(dbPath)}
+    , m_map{m_root, std::move(dbData)}
     , m_watchmanData{
           {.m_queryExpr = getQuery(std::move(queryExpr)),
            .m_watchmanClient = watchmanClient}} {
 }
 
-WatchmanAutoloadMap::WatchmanAutoloadMap(
-    folly::fs::path root, folly::fs::path dbPath)
+WatchmanAutoloadMap::WatchmanAutoloadMap(folly::fs::path root, DBData dbData)
     : m_updateExec{1, make_thread_factory("Autoload update")}
     , m_root{std::move(root)}
-    , m_map{m_root, std::move(dbPath), SQLite::OpenMode::ReadOnly} {
+    , m_map{m_root, std::move(dbData)} {
 }
 
 WatchmanAutoloadMap::~WatchmanAutoloadMap() {
@@ -505,6 +546,8 @@ WatchmanAutoloadMap::~WatchmanAutoloadMap() {
 }
 
 void WatchmanAutoloadMap::ensureUpdated() {
+  TimeoutSuspender suspendTimeoutsDuringUpdate;
+
   folly::Future<folly::Unit> updateFuture = update();
   updateFuture.wait();
   auto const& res = std::move(updateFuture).result();
@@ -601,6 +644,9 @@ folly::Future<folly::Unit> WatchmanAutoloadMap::updateImpl() {
                   "Got a watchman error: {}\n", folly::toJson(result))};
             }
 
+            // isFresh means we either didn't pass Watchman a "since" token,
+            // or it means that Watchman has restarted after the point in time
+            // that our "since" token represents.
             bool isFresh = [&]() {
               auto const& fresh = result["is_fresh_instance"];
               return fresh.isBool() && fresh.asBool();
@@ -609,12 +655,11 @@ folly::Future<folly::Unit> WatchmanAutoloadMap::updateImpl() {
             auto [alteredPathsAndHashes, deletedPaths] =
                 isFresh ? getFreshDelta(result) : getIncrementalDelta(result);
 
-            // In CLI standalone mode, empty updates to the SQLite DB
-            // can cause unacceptably slow "hello world" performance.
-            if (!RuntimeOption::ServerExecutionMode() && LIKELY(!isFresh) &&
-                LIKELY(alteredPathsAndHashes.empty()) &&
+            // We need to update the DB if Watchman has restarted or if
+            // something's changed on the filesystem. Otherwise, there's no
+            // need to update the DB.
+            if (LIKELY(!isFresh) && LIKELY(alteredPathsAndHashes.empty()) &&
                 LIKELY(deletedPaths.empty())) {
-              FTRACE(3, "CLI standalone mode, bailing early.\n");
               return;
             }
 
@@ -948,7 +993,7 @@ Array WatchmanAutoloadMap::getBaseTypes(
     addBaseTypes(DeriveKind::RequireImplements);
   }
 
-  return makeVecOfString(filterByAttribute(
+  return makeVecOfString(filterTypesByAttribute(
       filterByKind(std::move(baseTypes), filters.m_kindFilters),
       filters.m_attrFilters));
 }
@@ -984,7 +1029,7 @@ Array WatchmanAutoloadMap::getDerivedTypes(
     addDerivedTypes(DeriveKind::RequireImplements);
   }
 
-  return makeVecOfString(filterByAttribute(
+  return makeVecOfString(filterTypesByAttribute(
       filterByKind(std::move(derivedTypes), filters.m_kindFilters),
       filters.m_attrFilters));
 }
@@ -999,7 +1044,7 @@ Array WatchmanAutoloadMap::getTransitiveDerivedTypes(
 
 Array WatchmanAutoloadMap::getTransitiveDerivedTypes(
     const String& baseType, const InheritanceFilterData& filters) {
-  auto derivedTypeInfo = filterByAttribute(
+  auto derivedTypeInfo = filterTypesByAttribute(
       m_map.getTransitiveDerivedTypes(
           *baseType.get(),
           filters.m_kindFilters.toMask(),
@@ -1037,14 +1082,30 @@ Array WatchmanAutoloadMap::getTypeAliasesWithAttribute(const String& attr) {
       });
 }
 
+Array WatchmanAutoloadMap::getMethodsWithAttribute(const String& attr) {
+  return makeVecOfStringString(m_map.getMethodsWithAttribute(*attr.get()));
+}
+
 Array WatchmanAutoloadMap::getTypeAttributes(const String& type) {
   return makeVecOfString(m_map.getAttributesOfType(*type.get()));
+}
+
+Array WatchmanAutoloadMap::getMethodAttributes(
+    const String& type, const String& method) {
+  return makeVecOfString(
+      m_map.getAttributesOfMethod(*type.get(), *method.get()));
 }
 
 Array WatchmanAutoloadMap::getTypeAttrArgs(
     const String& type, const String& attribute) {
   return makeVecOfDynamic(
-      m_map.getAttributeArgs(*type.get(), *attribute.get()));
+      m_map.getTypeAttributeArgs(*type.get(), *attribute.get()));
+}
+
+Array WatchmanAutoloadMap::getMethodAttrArgs(
+    const String& type, const String& method, const String& attribute) {
+  return makeVecOfDynamic(m_map.getMethodAttributeArgs(
+      *type.get(), *method.get(), *attribute.get()));
 }
 
 Array WatchmanAutoloadMap::getAllTypes() {
@@ -1095,16 +1156,16 @@ WatchmanAutoloadMap::filterByKind(
 }
 
 template <typename T>
-std::vector<T> WatchmanAutoloadMap::filterByAttribute(
+std::vector<T> WatchmanAutoloadMap::filterTypesByAttribute(
     std::vector<T> types, const AttributeFilterData& filter) {
-  return filterByAttribute(
+  return filterTypesByAttribute(
       std::move(types),
       filter,
       [](T type) -> Symbol<StringData, SymKind::Type> { return type; });
 }
 
 template <typename T, typename TypeGetFn>
-std::vector<T> WatchmanAutoloadMap::filterByAttribute(
+std::vector<T> WatchmanAutoloadMap::filterTypesByAttribute(
     std::vector<T> types,
     const AttributeFilterData& filter,
     TypeGetFn typeGetFn) {
@@ -1132,7 +1193,7 @@ std::vector<T> WatchmanAutoloadMap::filterByAttribute(
 
     // Check that each of our argument constraints is satisfied by the
     // attribute's argument.
-    auto args = m_map.getAttributeArgs(type, attr);
+    auto args = m_map.getTypeAttributeArgs(type, attr);
     for (auto const& [i, argFilter] : argFilters) {
       if (i >= args.size() || args[i] != argFilter) {
         return false;

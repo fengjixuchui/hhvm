@@ -32,15 +32,19 @@ interface JsonSerializable {
  *   TRUE, FALSE and NULL respectively. NULL is returned if the json cannot
  *   be decoded or if the encoded data is deeper than the recursion limit.
  */
-<<__Native, __Pure>>
+<<__Native>>
 function json_decode(string $json,
                      bool $assoc = false,
                      int $depth = 512,
-                     int $options = 0): mixed;
+                     int $options = 0)[]: mixed;
 
 /**
- * Like json_decode, but includes json_last_error(_msg) results.
- */
+ * json_decode, but populates $error in case of error.
+ *
+ * If the function runs normally with no errors, then $error is set to null.
+ * Otherwise, if an error occurs, $error is set to a tuple of (error code
+ * constant, description) from the list defined in builtins_json.hhi.
+ * */
 <<__Native>>
 function json_decode_with_error(
   string $json,
@@ -64,48 +68,36 @@ function json_decode_with_error(
  *
  * @return mixed - Returns a JSON encoded string on success .
  */
-<<__Native, __Pure>>
+<<__Native>>
 function json_encode(mixed $value,
                      int $options = 0,
-                     int $depth = 512): mixed;
+                     int $depth = 512)[defaults]: mixed;
 
 
 /**
- * Like json_encode, but includes json_last_error(_msg) results.
- */
+ * json_encode, but populates $error in case of error.
+ *
+ * If the function runs normally with no errors, then $error is set to null.
+ * Otherwise, if an error occurs, $error is set to a tuple of (error code
+ * constant, description) from the list defined in builtins_json.hhi.
+ * */
 <<__Native>>
 function json_encode_with_error(
   mixed $value,
   inout ?(int, string) $error,
   int $options = 0,
   int $depth = 512,
+)[defaults]: mixed;
+
+/**
+ * Like json_encode_with_error but has pure coeffects.
+ * Encoding objects implementing JsonSerializable with an impure jsonSerialize
+ * will result in coeffect violations.
+ */
+<<__Native>>
+function json_encode_pure(
+  mixed $value,
+  inout ?(int, string) $error,
+  int $options = 0,
+  int $depth = 512,
 )[]: mixed;
-
-/**
- * Returns the error string of the last json_encode() or json_decode() call
- *
- * @return string - Returns the error message on success or NULL with
- *   wrong parameters.
- */
-<<__Native, __NonRx('Reads from a global')>>
-function json_last_error_msg(): string;
-
-/**
- * Returns the last error occurred
- *
- * @return int - Returns an integer, the value can be one of the
- *   following constants:   JSON error codes    Constant Meaning
- *   Availability     JSON_ERROR_NONE No error has occurred
- *   JSON_ERROR_DEPTH The maximum stack depth has been exceeded
- *   JSON_ERROR_STATE_MISMATCH Invalid or malformed JSON
- *   JSON_ERROR_CTRL_CHAR Control character error, possibly incorrectly
- *   encoded    JSON_ERROR_SYNTAX Syntax error    JSON_ERROR_UTF8 Malformed
- *   UTF-8 characters, possibly incorrectly encoded PHP 5.3.3
- *   JSON_ERROR_RECURSION One or more recursive references in the value to
- *   be encoded PHP 5.5.0   JSON_ERROR_INF_OR_NAN  One or more NAN or INF
- *   values in the value to be encoded  PHP 5.5.0
- *   JSON_ERROR_UNSUPPORTED_TYPE A value of a type that cannot be encoded
- *   was given PHP 5.5.0
- */
-<<__Native, __NonRx('Reads from a global')>>
-function json_last_error(): int;

@@ -23,10 +23,10 @@ let no_incremental_check (options : ServerArgs.options) : bool =
 
 let indexing ?hhi_filter (genv : ServerEnv.genv) :
     Relative_path.t list Bucket.next * float =
-  ServerProgress.send_progress_to_monitor_w_timeout "indexing";
+  ServerProgress.send_progress "indexing";
   let t = Unix.gettimeofday () in
   let get_next =
-    ServerFiles.make_next
+    ServerUtils.make_next
       ?hhi_filter
       ~indexer:(genv.indexer FindUtils.file_filter)
       ~extra_roots:(ServerConfig.extra_paths genv.config)
@@ -49,9 +49,8 @@ let parsing
   @@ fun () ->
   begin
     match count with
-    | None -> ServerProgress.send_progress_to_monitor_w_timeout "%s" "parsing"
-    | Some c ->
-      ServerProgress.send_progress_to_monitor_w_timeout "parsing %d files" c
+    | None -> ServerProgress.send_progress "%s" "parsing"
+    | Some c -> ServerProgress.send_progress "parsing %d files" c
   end;
   let quick = lazy_parse in
   let ctx = Provider_utils.ctx_from_server_env env in
@@ -107,8 +106,7 @@ let naming
     ~(profiling : CgroupProfiler.Profiling.t) : ServerEnv.env * float =
   CgroupProfiler.collect_cgroup_stats ~profiling ~stage:profile_label
   @@ fun () ->
-  ServerProgress.send_progress_to_monitor_w_timeout
-    "resolving symbol references";
+  ServerProgress.send_progress "resolving symbol references";
   let ctx = Provider_utils.ctx_from_server_env env in
   let env =
     Naming_table.fold
@@ -220,6 +218,9 @@ let type_check
       let longlived_workers =
         genv.local_config.ServerLocalConfig.longlived_workers
       in
+      let remote_execution =
+        genv.local_config.ServerLocalConfig.remote_execution
+      in
       let ctx = Provider_utils.ctx_from_server_env env in
       CgroupProfiler.collect_cgroup_stats ~profiling ~stage:profile_label
       @@ fun () ->
@@ -232,6 +233,7 @@ let type_check
         files_to_check
         ~memory_cap
         ~longlived_workers
+        ~remote_execution
         ~check_info:(ServerCheckUtils.get_check_info genv env)
     in
     hh_log_heap ();

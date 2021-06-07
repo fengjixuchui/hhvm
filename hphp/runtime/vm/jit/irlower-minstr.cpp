@@ -87,8 +87,9 @@ void implProp(IRLS& env, const IRInstruction* inst) {
 
   auto const args = propArgs(env, inst)
     .memberKeyS(1)
-    .ssa(2)
-    .imm(static_cast<int32_t>(inst->extra<PropData>()->op));
+    .ssa(3)
+    .imm(static_cast<int32_t>(inst->extra<PropData>()->op))
+    .ssa(2);
 
   auto const target = [&] {
     if (inst->is(PropDX)) {
@@ -122,8 +123,9 @@ void cgPropQ(IRLS& env, const IRInstruction* inst) {
 
   auto const args = propArgs(env, inst)
     .ssa(1)
-    .ssa(2)
-    .imm(static_cast<int32_t>(inst->extra<ReadOnlyData>()->op));;
+    .ssa(3)
+    .imm(static_cast<int32_t>(inst->extra<ReadOnlyData>()->op))
+    .ssa(2);
 
   auto helper = inst->src(0)->isA(TObj)
     ? CallSpec::direct(propCOQ)
@@ -278,10 +280,11 @@ void implElem(IRLS& env, const IRInstruction* inst) {
   auto const mode = inst->extra<MOpModeData>()->mode;
   auto const key  = inst->src(1);
   auto const sync = SyncOptions::Sync;
-  auto const args = elemArgs(env, inst);
+  auto args = elemArgs(env, inst);
 
   if (inst->is(ElemDX)) {
     assertx(mode == MOpMode::Define);
+    args.ssa(2);
     BUILD_OPTAB(ELEMD_HELPER_TABLE, getKeyType(key));
     cgCallHelper(vmain(env), env, target, callDest(env, inst), sync, args);
     return;
@@ -289,6 +292,7 @@ void implElem(IRLS& env, const IRInstruction* inst) {
 
   if (inst->is(ElemUX)) {
     assertx(mode == MOpMode::Unset);
+    args.ssa(2);
     BUILD_OPTAB(ELEMU_HELPER_TABLE, getKeyType(key));
     cgCallHelper(vmain(env), env, target, callDest(env, inst), sync, args);
     return;

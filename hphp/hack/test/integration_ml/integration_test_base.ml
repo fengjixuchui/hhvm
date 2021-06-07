@@ -17,7 +17,7 @@ open Coverage_level
 open Coverage_level_defs
 open Int.Replace_polymorphic_compare
 
-exception Integration_test_tailure
+exception Integration_test_failure
 
 let root = "/"
 
@@ -56,6 +56,7 @@ let test_init_common ?(hhi_files = []) () =
   else
     did_init := true;
 
+  Unix.putenv "HH_TEST_MODE" "1";
   Printexc.record_backtrace true;
   EventLogger.init_fake ();
   Relative_path.set_path_prefix Relative_path.Root (Path.make root);
@@ -188,7 +189,7 @@ let prepend_root x = root ^ x
 let fail x =
   print_endline x;
   Caml.Printexc.(get_callstack 100 |> print_raw_backtrace stderr);
-  raise Integration_test_tailure
+  raise Integration_test_failure
 
 (******************************************************************************(
  * Utility functions to help format/throw errors for informative errors
@@ -601,8 +602,6 @@ let load_state
     ?(local_changes = [])
     ?(load_hhi_files = false)
     ?(use_precheked_files = ServerLocalConfig.(default.prechecked_files))
-    ?(disable_conservative_redecl =
-      ServerLocalConfig.(default.disable_conservative_redecl))
     ?(load_decls_from_saved_state =
       ServerLocalConfig.(default.load_decls_from_saved_state))
     ?(enable_naming_table_fallback = false)
@@ -622,7 +621,6 @@ let load_state
           lazy_init = true;
           prechecked_files = use_precheked_files;
           predeclare_ide = true;
-          disable_conservative_redecl;
           load_decls_from_saved_state;
           naming_sqlite_path =
             ( if enable_naming_table_fallback then

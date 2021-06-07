@@ -203,6 +203,12 @@ module ApiShallow = struct
     | Lazy (sc, _lc) -> sc.sc_enum_type
     | Eager c -> c.tc_enum_type
 
+  let xhp_enum_values (decl, t) =
+    Decl_counters.count_subdecl decl Decl_counters.Xhp_enum_values @@ fun () ->
+    match t with
+    | Lazy (sc, _lc) -> sc.sc_xhp_enum_values
+    | Eager c -> c.tc_xhp_enum_values
+
   let sealed_whitelist (decl, t) =
     Decl_counters.count_subdecl decl Decl_counters.Sealed_whitelist @@ fun () ->
     let get_sealed_whitelist sc =
@@ -215,18 +221,24 @@ module ApiShallow = struct
     | Lazy (sc, _lc) -> get_sealed_whitelist sc
     | Eager c -> c.tc_sealed_whitelist
 
+  let get_module (decl, t) =
+    Decl_counters.count_subdecl decl Decl_counters.Module @@ fun () ->
+    match t with
+    | Lazy (sc, _lc) -> sc.sc_module
+    | Eager c -> c.tc_module
+
   let decl_errors (decl, t) =
     Decl_counters.count_subdecl decl Decl_counters.Decl_errors @@ fun () ->
     match t with
     | Lazy _ -> None
     | Eager c -> c.tc_decl_errors
 
-  let get_implements_dynamic (decl, t) =
-    Decl_counters.count_subdecl decl Decl_counters.Implements_dynamic
+  let get_support_dynamic_type (decl, t) =
+    Decl_counters.count_subdecl decl Decl_counters.Support_dynamic_type
     @@ fun () ->
     match t with
-    | Lazy (sc, _lc) -> sc.sc_implements_dynamic
-    | Eager c -> c.tc_implements_dynamic
+    | Lazy (sc, _lc) -> sc.sc_support_dynamic_type
+    | Eager c -> c.tc_support_dynamic_type
 
   let all_where_constraints_on_this t =
     (* tally is already done by where_constraints *)

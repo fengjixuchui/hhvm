@@ -42,7 +42,6 @@
   (name tast)
   (wrapped false)
   (modules
-    ide_tast_cache
     tast_env
     tast_expand
     tast_utils
@@ -147,8 +146,9 @@
     typing_arithmetic
     typing_array_access
     typing_attributes
-    typing_check_decls
+    typing_type_wellformedness
     typing_debug
+    typing_escape
     typing_extends
     typing_exts
     typing_func_terminality
@@ -240,11 +240,27 @@
   (preprocess (pps ppx_deriving.std)))
 
 (library
+  (name typing_check_job)
+  (wrapped false)
+  (modules
+    typing_check_job
+    typing_check_utils)
+  (libraries
+    core_kernel
+    errors
+    file_info
+    nast
+    heap_global_storage
+    re_stubs
+    typing
+    typing_deps)
+  (preprocess (pps ppx_deriving.std)))
+
+(library
   (name typing_check)
   (wrapped false)
   (modules
-    typing_check_service
-    typing_check_utils)
+    typing_check_service)
   (libraries
     biglist
     cgroup
@@ -259,9 +275,11 @@
     procs_bucket
     server_monitor
     counters
+    re_stubs
     typing
     typing_defs
     typing_deps
+    typing_check_job
     typing_service_api
     typing_service_api_stubs
     vfs)

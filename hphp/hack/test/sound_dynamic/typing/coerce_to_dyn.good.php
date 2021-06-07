@@ -1,6 +1,6 @@
 <?hh
 
-<<__SoundDynamicCallable>>
+<<__SupportDynamicType>>
 class C {
   public function m() : void {}
 }
@@ -61,8 +61,8 @@ function test_shape(shape('x' => int, ?'y' => vec<C>) $s) : void {
   d($s);
 }
 
-<<__SoundDynamicCallable>>
-class D<T> {}
+<<__SupportDynamicType>>
+class D<<<__NoRequireDynamic>> T> {}
 
 class E {}
 

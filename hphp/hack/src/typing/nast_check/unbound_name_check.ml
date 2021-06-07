@@ -188,12 +188,13 @@ let handler ctx =
       in
       new_env
 
-    method! at_fun_ env f =
+    method! at_fun_def env fd =
+      let f = fd.Aast.fd_fun in
       let new_env =
         {
           env with
           droot = Typing_deps.Dep.Fun (snd f.Aast.f_name);
-          mode = f.Aast.f_mode;
+          mode = fd.Aast.fd_mode;
           type_params = extend_type_params env.type_params f.Aast.f_tparams;
         }
       in
@@ -289,6 +290,17 @@ let handler ctx =
         { env with class_id_allow_typedef = true }
       | Aast.Obj_get (_, (_, Aast.Id (p, name)), _, _) ->
         { env with seen_names = SMap.add name p env.seen_names }
+      | Aast.EnumClassLabel (Some cname, _) ->
+        let allow_typedef = (* we might reconsider this ? *) false in
+        let () =
+          check_type_name
+            env
+            ~allow_typedef
+            ~allow_generics:false
+            ~kind:Errors.ClassContext
+            cname
+        in
+        env
       | _ -> env
 
     method! at_shape_field_name env sfn =

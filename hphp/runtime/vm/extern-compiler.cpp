@@ -181,10 +181,13 @@ folly::Optional<std::string> hackcExtractPath() {
 }
 
 std::string hackcCommand() {
+  std::string log_stats = RuntimeOption::EvalLogHackcMemStats ?
+    " --enable-logging-stats" : "";
+
   if (auto path = hackcExtractPath()) {
-    return *path + " " + RuntimeOption::EvalHackCompilerArgs;
+    return folly::to<std::string>(*path, " ", RuntimeOption::EvalHackCompilerArgs, log_stats);
   }
-  return RuntimeOption::EvalHackCompilerCommand;
+  return RuntimeOption::EvalHackCompilerCommand + log_stats;
 }
 
 struct CompileException : Exception {
@@ -627,15 +630,16 @@ ParseFactsResult extract_facts_worker(const CompilerGuard& compiler,
 
 namespace {
 CompilerResult assemble_string_handle_errors(const char* code,
-                                             const std::string& hhas,
+                                             const char* hhas,
+                                             size_t hhas_size,
                                              const char* filename,
                                              const SHA1& sha1,
                                              const Native::FuncTable& nativeFuncs,
                                              bool& internal_error,
                                              CompileAbortMode mode) {
   try {
-    return assemble_string(hhas.data(),
-                           hhas.length(),
+    return assemble_string(hhas,
+                           hhas_size,
                            filename,
                            sha1,
                            nativeFuncs,
@@ -707,7 +711,8 @@ CompilerResult CompilerPool::compile(const char* code,
     hhas,
     [&] (const ExternCompiler::Hhas& s) -> CompilerResult {
       return assemble_string_handle_errors(code,
-                                           s.s,
+                                           s.s.data(),
+                                           s.s.size(),
                                            filename,
                                            sha1,
                                            nativeFuncs,
@@ -885,7 +890,7 @@ void ExternCompiler::writeProgram(
     ("is_systemlib", !SystemLib::s_inited)
     ("for_debugger_eval", forDebuggerEval)
     ("config_overrides", options.toDynamic())
-    ("use_hhbc_by_ref", RuntimeOption::EvalEnableHhbcByRef);
+    ("log_hackc_mem_stats", RuntimeOption::EvalLogHackcMemStats);
   writeMessage(header, code);
 }
 
@@ -1126,9 +1131,9 @@ CompilerResult hackc_compile(
       hackc_compile_from_text(&native_env, code, &output, &error_buf)
     };
     if (hhas) {
-      std::string hhas_str{hhas.get()};
       return assemble_string_handle_errors(code,
-                                           hhas_str,
+                                           hhas.get(),
+                                           strlen(hhas.get()),
                                            filename,
                                            sha1,
                                            nativeFuncs,
@@ -1273,7 +1278,7 @@ ParseFactsResult extract_facts(
     auto const get_facts = [&](const char* source_text) -> ParseFactsResult {
       try {
         hackc_extract_as_json_ptr facts{
-          hackc_extract_as_json(options.getFactsFlags(), filename.data(), source_text, false)
+          hackc_extract_as_json(options.getFactsFlags(), filename.data(), source_text, true)
         };
         if (facts) {
           std::string facts_str{facts.get()};
@@ -1364,8 +1369,11 @@ UnitCompiler::create(const char* code,
   }
 }
 
-std::unique_ptr<UnitEmitter> HackcUnitCompiler::compile(CompileAbortMode mode) {
-  bool ice = false;
+std::unique_ptr<UnitEmitter> HackcUnitCompiler::compile(
+    bool& cacheHit,
+    CompileAbortMode mode) {
+  auto ice = false;
+  cacheHit = false;
   auto res = hackc_compile(m_code,
                            m_codeLen,
                            m_filename,
@@ -1414,8 +1422,9 @@ std::unique_ptr<UnitEmitter> HackcUnitCompiler::compile(CompileAbortMode mode) {
 }
 
 std::unique_ptr<UnitEmitter>
-CacheUnitCompiler::compile(CompileAbortMode mode) {
+CacheUnitCompiler::compile(bool& cacheHit, CompileAbortMode mode) {
   assertx(g_unit_emitter_cache_hook);
+  cacheHit = true;
   return g_unit_emitter_cache_hook(
     m_filename,
     m_sha1,
@@ -1424,6 +1433,7 @@ CacheUnitCompiler::compile(CompileAbortMode mode) {
       if (!m_fallback) m_fallback = m_makeFallback();
       assertx(m_fallback);
       return m_fallback->compile(
+        cacheHit,
         wantsICE ? mode : CompileAbortMode::AllErrorsNull
       );
     },

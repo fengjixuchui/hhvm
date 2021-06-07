@@ -16,8 +16,7 @@
 
 #pragma once
 
-#include <vector>
-#include <string>
+#include "hphp/runtime/base/locale.h"
 #include "hphp/util/locale-portability.h"
 #include "hphp/util/rds-local.h"
 #include "hphp/util/thread-local.h"
@@ -25,14 +24,6 @@
 namespace HPHP {
 
 struct ThreadSafeLocaleHandler {
-private:
-  typedef struct {
-    int category;
-    int category_mask;
-    std::string category_str;
-    std::string locale_str;
-  } CategoryAndLocaleMap;
-
 public:
   ThreadSafeLocaleHandler();
   ~ThreadSafeLocaleHandler();
@@ -40,13 +31,14 @@ public:
   const char* actuallySetLocale(int category, const char* locale);
   struct lconv* localeconv();
 
+  static std::shared_ptr<Locale> getRequestLocale();
+  static void setRequestLocale(std::shared_ptr<Locale>);
+
 private:
   void generate_LC_ALL_String();
 
-  std::vector<CategoryAndLocaleMap> m_category_locale_map;
-#ifndef _MSC_VER
-  locale_t m_locale;
-#endif
+  std::string m_lc_all;
+  std::shared_ptr<Locale> m_locale;  
 };
 
 extern RDS_LOCAL(ThreadSafeLocaleHandler, g_thread_safe_locale_handler);

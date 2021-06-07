@@ -218,7 +218,6 @@ static CallMap s_callMap {
     {InitSProps,         &Class::initSProps, DNone, SSync,
                            {{extra(&ClassData::cls)}}},
     {DebugBacktrace,     debug_backtrace_jit, DSSA, SSync, {{SSA, 0}}},
-    {DebugBacktraceFast, debug_backtrace_fast, DSSA, SSync, {}},
     {InitThrowableFileAndLine,
                          throwable_init_file_and_line_from_builtin,
                            DNone, debug ? SSync : SNone, {{SSA, 0}}},
@@ -382,14 +381,18 @@ static CallMap s_callMap {
                           {{SSA, 0}, {SSA, 1}}},
     {CmpRes,             static_cast<ResCmpFnInt>(compare), DSSA, SSync,
                           {{SSA, 0}, {SSA, 1}}},
+    {RaiseBadComparisonViolation,
+                           static_cast<void (*)(TypedValue, TypedValue)>(
+                             handleConvNoticeForCmp), DNone, SSync,
+                          {{TV, 0}, {TV, 1}}},
 
     /* Static prop helpers */
     {LdClsPropAddrOrNull,
                          getSPropOrNull, DSSA, SSync,
-                           {{SSA, 0}, {SSA, 1}, {SSA, 2}, {SSA, 3}, {SSA, 4}, {SSA, 5}, {SSA, 6}}},
+                           {{SSA, 0}, {SSA, 1}, {SSA, 2}, {SSA, 3}, {SSA, 4}, {SSA, 5}, {SSA, 6}, {SSA, 7}, {SSA, 8}}},
     {LdClsPropAddrOrRaise,
                          getSPropOrRaise, DSSA, SSync,
-                           {{SSA, 0}, {SSA, 1}, {SSA, 2}, {SSA, 3}, {SSA, 4}, {SSA, 5}, {SSA, 6}}},
+                           {{SSA, 0}, {SSA, 1}, {SSA, 2}, {SSA, 3}, {SSA, 4}, {SSA, 5}, {SSA, 6}, {SSA, 7}, {SSA, 8}}},
 
     {ProfileProp,        &PropertyProfile::incCount, DNone, SNone,
                            {{SSA, 0}, {SSA, 1}}},

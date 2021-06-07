@@ -24,6 +24,7 @@
 #include <folly/Optional.h>
 
 #include "hphp/util/file-cache.h"
+#include "hphp/util/hash-map.h"
 #include "hphp/util/mutex.h"
 #include "hphp/hhbbc/hhbbc.h"
 
@@ -52,7 +53,7 @@ struct Package {
   void addStaticDirectory(const std::string& path);
   void addSourceDirectory(const std::string& path, bool force);
 
-  bool parse(bool check, std::thread& unit_emitter_thread);
+  bool parse(bool check);
   bool parseImpl(const std::string* fileName);
 
   AnalysisResultPtr getAnalysisResult() { return m_ar;}
@@ -60,6 +61,9 @@ struct Package {
   int getFileCount() const { return m_filesToParse.size();}
   int getLineCount() const { return m_lineCount;}
   int getCharCount() const { return m_charCount;}
+
+  size_t getTotalParses() const { return m_totalParses.load(); }
+  size_t getParseCacheHits() const { return m_parseCacheHits.load(); }
 
   void saveStatsToFile(const char *filename, int totalSeconds) const;
 
@@ -74,8 +78,9 @@ private:
     std::unique_ptr<UnitEmitter> org_ue);
 
   std::string m_root;
-  std::set<std::string> m_filesToParse;
-
+  folly_concurrent_hash_map_simd<
+    std::string, std::unique_ptr<std::string>
+  > m_filesToParse;
   void *m_dispatcher;
 
   Mutex m_mutex;
@@ -83,13 +88,14 @@ private:
   int m_lineCount;
   int m_charCount;
 
+  std::atomic<size_t> m_parseCacheHits;
+  std::atomic<size_t> m_totalParses;
+
   std::shared_ptr<FileCache> m_fileCache;
   std::map<std::string,bool> m_directories;
   std::set<std::string> m_staticDirectories;
   std::set<std::string> m_extraStaticFiles;
   std::map<std::string,std::string> m_discoveredStaticFiles;
-  folly::Optional<HHBBC::UnitEmitterQueue> m_ueq;
-  hphp_fast_set<std::string> m_locally_cached_bytecode;
 };
 
 ///////////////////////////////////////////////////////////////////////////////

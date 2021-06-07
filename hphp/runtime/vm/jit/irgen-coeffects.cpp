@@ -32,6 +32,18 @@ namespace jit {
 namespace irgen {
 namespace {
 
+SSATmp* resolveTypeConstantChain(IRGS& env, const Func* f, SSATmp* cls,
+                                 const std::vector<LowStringPtr>& types) {
+  auto result = cls;
+  auto const ctx = f->isMethod() ? cns(env, f->implCls()) : cns(env, nullptr);
+  for (auto const type : types) {
+    auto const name =
+      gen(env, LdClsTypeCnsClsName, result, cns(env, type.get()));
+    result = gen(env, LdCls, name, ctx);
+  }
+  return result;
+}
+
 SSATmp* emitCCParam(IRGS& env, const Func* f, uint32_t numArgsInclUnpack,
                     uint32_t paramIdx, const StringData* name) {
   if (paramIdx >= numArgsInclUnpack) return nullptr;
@@ -59,12 +71,75 @@ SSATmp* emitCCParam(IRGS& env, const Func* f, uint32_t numArgsInclUnpack,
   );
 }
 
-SSATmp* emitCCThis(IRGS& env, const Func* f, const StringData* name,
+SSATmp* emitCCThis(IRGS& env, const Func* f,
+                   const std::vector<LowStringPtr>& types,
+                   const StringData* name,
                    SSATmp* prologueCtx) {
   assertx(!f->isClosureBody());
   assertx(f->isMethod());
-  auto const cls =
+  auto const ctxCls =
     f->isStatic() ? prologueCtx : gen(env, LdObjClass, prologueCtx);
+  auto const cls = resolveTypeConstantChain(env, f, ctxCls, types);
+  return gen(env, LookupClsCtxCns, cls, cns(env, name));
+}
+
+const StaticString s_classname("classname");
+
+SSATmp* emitCCReified(IRGS& env, const Func* f,
+                      const std::vector<LowStringPtr>& types,
+                      const StringData* name,
+                      uint32_t idx,
+                      SSATmp* prologueCtx,
+                      bool isClass) {
+  assertx(!f->isClosureBody());
+  auto const generics = [&] {
+    if (isClass) {
+      assertx(f->isMethod() &&
+              !f->isStatic() &&
+              prologueCtx &&
+              f->cls()->hasReifiedGenerics());
+      auto const slot = f->cls()->lookupReifiedInitProp();
+      assertx(slot != kInvalidSlot);
+      auto const addr = gen(
+        env,
+        LdPropAddr,
+        IndexData { f->cls()->propSlotToIndex(slot) },
+        TLvalToPropVec,
+        prologueCtx
+      );
+      return gen(env, LdMem, TVec, addr);
+    }
+    assertx(f->hasReifiedGenerics());
+    // The existence of the generic is checked by emitCalleeGenericsChecks
+    return topC(env);
+  }();
+  auto const data = BespokeGetData { BespokeGetData::KeyState::Present };
+  auto const generic = gen(env, BespokeGet, data, generics, cns(env, idx));
+  auto const classname_maybe = gen(
+    env,
+    BespokeGet,
+    BespokeGetData { BespokeGetData::KeyState::Unknown },
+    gen(env, AssertType, TDict, generic),
+    cns(env, s_classname.get())
+  );
+  auto const classname = cond(
+    env,
+    [&] (Block* taken) {
+      return gen(env, CheckType, TStr, taken, classname_maybe);
+    },
+    [&] (SSATmp* s) {
+      return s;
+    },
+    [&] {
+      hint(env, Block::Hint::Unlikely);
+      auto const msg = Strings::INVALID_REIFIED_COEFFECT_CLASSNAME;
+      gen(env, RaiseError, cns(env, makeStaticString(msg)));
+      return cns(env, staticEmptyString());
+    }
+  );
+  auto const ctx = isClass ? cns(env, f->cls()) : cns(env, nullptr);
+  auto const ctxCls = gen(env, LdCls, classname, ctx);
+  auto const cls = resolveTypeConstantChain(env, f, ctxCls, types);
   return gen(env, LookupClsCtxCns, cls, cns(env, name));
 }
 
@@ -82,7 +157,44 @@ SSATmp* emitFunParam(IRGS& env, const Func* f, uint32_t numArgsInclUnpack,
     return cns(env, RuntimeCoeffects::full().value());
   };
 
+  auto const handleFunc = [&](SSATmp* func) {
+    return cond(
+      env,
+      [&] (Block* taken) {
+        auto const data = AttrData { AttrHasCoeffectRules };
+        auto const success = gen(env, FuncHasAttr, data, func);
+        gen(env, JmpNZero, taken, success);
+      },
+      [&] {
+        // Static coeffects
+        return gen(env, LdFuncRequiredCoeffects, func);
+      },
+      [&] {
+        // Rules
+        hint(env, Block::Hint::Unlikely);
+        gen(env, RaiseCoeffectsFunParamCoeffectRulesViolation, func);
+        return cns(env, RuntimeCoeffects::full().value());
+      }
+    );
+  };
+
+  auto const fnFromName = [&](SSATmp* clsName, SSATmp* methodName) {
+    auto const cls = gen(env, LdCls, clsName, cns(env, nullptr));
+    auto const data = OptClassData { nullptr };
+    return gen(env, LdObjMethodD, data, cls, methodName);
+  };
+
   auto const objSuccess = [&](SSATmp* obj) {
+    auto const getClsOrMethod = [&](bool is_cls, bool is_dyn) {
+      auto const cls = is_dyn
+        ? SystemLib::s_DynMethCallerHelperClass : SystemLib::s_MethCallerHelperClass;
+      auto const idx = cls->propSlotToIndex(is_cls ? Slot{0} : Slot{1});
+      auto const prop = gen(
+        env, LdPropAddr, IndexData{idx}, TStr.lval(Ptr::Prop), obj);
+      auto const ret = gen(env, LdMem, TStr, prop);
+      gen(env, IncRef, ret);
+      return ret;
+    };
     auto const cls = gen(env, LdObjClass, obj);
     return cond(
       env,
@@ -113,16 +225,50 @@ SSATmp* emitFunParam(IRGS& env, const Func* f, uint32_t numArgsInclUnpack,
           }
         );
       },
+      [&] (Block* taken) {
+        auto const success =
+          gen(env, EqCls, cls, cns(env, SystemLib::s_MethCallerHelperClass));
+        gen(env, JmpZero, taken, success);
+      },
+      [&] {
+        return handleFunc(fnFromName(getClsOrMethod(true, false),
+                                     getClsOrMethod(false, false)));
+      },
+      [&] (Block* taken) {
+        auto const success =
+          gen(env, EqCls, cls, cns(env, SystemLib::s_DynMethCallerHelperClass));
+        gen(env, JmpZero, taken, success);
+      },
+      [&] {
+        return handleFunc(fnFromName(getClsOrMethod(true, true),
+                                     getClsOrMethod(false, true)));
+      },
       fail
     );
   };
 
   auto const fnPtrs = [&] {
-    auto const is_any_func_type = [&] (Block* toFail) {
+    auto const isAnyFuncType = [&] (Block* toFail) {
       return cond(
         env,
         [&] (Block* taken) { return gen(env, CheckType, TFunc, taken, tv); },
-        [&] (SSATmp* func) { return func; },
+        [&] (SSATmp* func) {
+          return cond(
+            env,
+            [&] (Block* taken) {
+              auto const success =
+                gen(env, FuncHasAttr, AttrData { AttrIsMethCaller }, func);
+              gen(env, JmpZero, taken, success);
+            },
+            [&] {
+              return fnFromName(
+                gen(env, LdMethCallerName, MethCallerData{true}, func),
+                gen(env, LdMethCallerName, MethCallerData{false}, func)
+              );
+            },
+            [&] { return func; }
+          );
+        },
         [&] (Block* taken) { return gen(env, CheckType, TRFunc, taken, tv); },
         [&] (SSATmp* ptr)  { return gen(env, LdFuncFromRFunc, ptr); },
         [&] (Block* taken) { return gen(env, CheckType, TClsMeth, taken, tv); },
@@ -136,27 +282,7 @@ SSATmp* emitFunParam(IRGS& env, const Func* f, uint32_t numArgsInclUnpack,
         }
       );
     };
-    auto const handle_func = [&](SSATmp* func) {
-      return cond(
-        env,
-        [&] (Block* taken) {
-          auto const data = AttrData { AttrHasCoeffectRules };
-          auto const success = gen(env, FuncHasAttr, data, func);
-          gen(env, JmpNZero, taken, success);
-        },
-        [&] {
-          // Static coeffects
-          return gen(env, LdFuncRequiredCoeffects, func);
-        },
-        [&] {
-          // Rules
-          hint(env, Block::Hint::Unlikely);
-          gen(env, RaiseCoeffectsFunParamCoeffectRulesViolation, func);
-          return cns(env, RuntimeCoeffects::full().value());
-        }
-      );
-    };
-    return cond(env, is_any_func_type, handle_func, fail);
+    return cond(env, isAnyFuncType, handleFunc, fail);
   };
 
   return cond(
@@ -170,8 +296,7 @@ SSATmp* emitFunParam(IRGS& env, const Func* f, uint32_t numArgsInclUnpack,
 
 }
 
-SSATmp* emitClosureInheritFromParent(IRGS& env, const Func* f,
-                                     SSATmp* prologueCtx) {
+SSATmp* emitClosureParentScope(IRGS& env, const Func* f, SSATmp* prologueCtx) {
   assertx(prologueCtx);
   assertx(f->isClosureBody());
   auto const cls = f->implCls();
@@ -227,6 +352,10 @@ SSATmp* emitGeneratorThis(IRGS& env, const Func* f, SSATmp* prologueCtx) {
   );
 }
 
+SSATmp* emitCaller(SSATmp* provided) {
+  return provided;
+}
+
 } // namespace
 } // irgen
 } // jit
@@ -234,19 +363,25 @@ SSATmp* emitGeneratorThis(IRGS& env, const Func* f, SSATmp* prologueCtx) {
 jit::SSATmp* CoeffectRule::emitJit(jit::irgen::IRGS& env,
                                    const Func* f,
                                    uint32_t numArgsInclUnpack,
-                                   jit::SSATmp* prologueCtx) const {
+                                   jit::SSATmp* prologueCtx,
+                                   jit::SSATmp* providedCoeffects) const {
   using namespace jit::irgen;
   switch (m_type) {
     case Type::CCParam:
       return emitCCParam(env, f, numArgsInclUnpack, m_index, m_name);
     case Type::CCThis:
-      return emitCCThis(env, f, m_name, prologueCtx);
+      return emitCCThis(env, f, m_types, m_name, prologueCtx);
+    case Type::CCReified:
+      return emitCCReified(env, f, m_types, m_name, m_index, prologueCtx,
+                           m_isClass);
     case Type::FunParam:
       return emitFunParam(env, f, numArgsInclUnpack, m_index);
-    case Type::ClosureInheritFromParent:
-      return emitClosureInheritFromParent(env, f, prologueCtx);
+    case Type::ClosureParentScope:
+      return emitClosureParentScope(env, f, prologueCtx);
     case Type::GeneratorThis:
       return emitGeneratorThis(env, f, prologueCtx);
+    case Type::Caller:
+      return emitCaller(providedCoeffects);
     case Type::Invalid:
       always_assert(false);
   }

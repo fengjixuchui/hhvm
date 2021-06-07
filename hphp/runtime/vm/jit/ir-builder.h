@@ -39,7 +39,7 @@ namespace HPHP { namespace jit { namespace irgen {
 ///////////////////////////////////////////////////////////////////////////////
 
 struct ExnStackState {
-  FPInvOffset syncedSpLevel{0};
+  SBInvOffset syncedSpLevel{0};
 };
 
 /*
@@ -114,8 +114,8 @@ struct IRBuilder {
    *
    * These simply constrain the location, then delegate to fs().
    */
-  const LocalState& local(uint32_t id, GuardConstraint gc);
-  const StackState& stack(IRSPRelOffset offset, GuardConstraint gc);
+  LocalState local(uint32_t id, GuardConstraint gc);
+  StackState stack(IRSPRelOffset offset, GuardConstraint gc);
   SSATmp* valueOf(Location l, GuardConstraint gc);
   Type     typeOf(Location l, GuardConstraint gc);
 
@@ -371,7 +371,7 @@ private:
 
   // Keeps the block to branch to (if any) in case a guard fails.
   // This holds nullptr if the guard failures should perform a service
-  // request (REQ_RETRANSLATE or REQ_BIND_JMP).
+  // request (StubType::Retranslate or REQ_BIND_JMP).
   Block* m_guardFailBlock{nullptr};
 };
 
@@ -399,4 +399,3 @@ struct BlockPusher {
 ///////////////////////////////////////////////////////////////////////////////
 
 }}}
-

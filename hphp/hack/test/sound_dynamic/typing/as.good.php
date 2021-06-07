@@ -1,7 +1,7 @@
 <?hh
 
-<<__SoundDynamicCallable>>
-class B<T> {
+<<__SupportDynamicType>>
+class B<<<__NoRequireDynamic>> T> {
 }
 
 function f(B<int> $i, B<int> $j) : void {

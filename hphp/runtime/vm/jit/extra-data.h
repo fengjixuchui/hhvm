@@ -719,7 +719,7 @@ struct DefFPData : IRExtraData {
  * Stack pointer offset.
  */
 struct DefStackData : IRExtraData {
-  explicit DefStackData(FPInvOffset irSPOff, FPInvOffset bcSPOff)
+  explicit DefStackData(SBInvOffset irSPOff, SBInvOffset bcSPOff)
     : irSPOff(irSPOff)
     , bcSPOff(bcSPOff)
   {}
@@ -746,8 +746,8 @@ struct DefStackData : IRExtraData {
     );
   }
 
-  FPInvOffset irSPOff;  // offset from stack base to vmsp()
-  FPInvOffset bcSPOff;  // offset from stack base to top of the stack
+  SBInvOffset irSPOff;  // offset from stack base to vmsp()
+  SBInvOffset bcSPOff;  // offset from stack base to top of the stack
 };
 
 /*
@@ -790,7 +790,7 @@ struct IsAsyncData : IRExtraData {
 };
 
 struct LdBindAddrData : IRExtraData {
-  explicit LdBindAddrData(SrcKey sk, FPInvOffset bcSPOff)
+  explicit LdBindAddrData(SrcKey sk, SBInvOffset bcSPOff)
     : sk(sk)
     , bcSPOff(bcSPOff)
   {}
@@ -809,7 +809,7 @@ struct LdBindAddrData : IRExtraData {
   }
 
   SrcKey sk;
-  FPInvOffset bcSPOff;
+  SBInvOffset bcSPOff;
 };
 
 struct LdSSwitchData : IRExtraData {
@@ -858,7 +858,7 @@ struct LdSSwitchData : IRExtraData {
   int64_t     numCases;
   const Elm*  cases;
   SrcKey      defaultSk;
-  FPInvOffset bcSPOff;
+  SBInvOffset bcSPOff;
 };
 
 struct ProfileSwitchData : IRExtraData {
@@ -895,7 +895,7 @@ struct JmpSwitchData : IRExtraData {
     JmpSwitchData* sd = new (arena) JmpSwitchData;
     sd->cases = cases;
     sd->targets = new (arena) SrcKey[cases];
-    sd->spOffBCFromFP = spOffBCFromFP;
+    sd->spOffBCFromStackBase = spOffBCFromStackBase;
     sd->spOffBCFromIRSP = spOffBCFromIRSP;
     std::copy(targets, targets + cases, const_cast<SrcKey*>(sd->targets));
     return sd;
@@ -908,14 +908,14 @@ struct JmpSwitchData : IRExtraData {
   size_t stableHash() const {
     return folly::hash::hash_combine(
       std::hash<int32_t>()(cases),
-      std::hash<int32_t>()(spOffBCFromFP.offset),
+      std::hash<int32_t>()(spOffBCFromStackBase.offset),
       std::hash<int32_t>()(spOffBCFromIRSP.offset)
     );
   }
 
   bool equals(const JmpSwitchData& o) const {
     if (cases != o.cases) return false;
-    if (spOffBCFromFP != o.spOffBCFromFP) return false;
+    if (spOffBCFromStackBase != o.spOffBCFromStackBase) return false;
     if (spOffBCFromIRSP != o.spOffBCFromIRSP) return false;
     for (int64_t i = 0; i < cases; i++) {
       if (targets[i] != o.targets[i]) return false;
@@ -925,7 +925,7 @@ struct JmpSwitchData : IRExtraData {
 
   int32_t cases;       // number of cases
   SrcKey* targets;     // srckeys for all targets
-  FPInvOffset spOffBCFromFP;
+  SBInvOffset spOffBCFromStackBase;
   IRSPRelOffset spOffBCFromIRSP;
 };
 
@@ -949,7 +949,7 @@ struct LdTVAuxData : IRExtraData {
 
 struct ReqBindJmpData : IRExtraData {
   explicit ReqBindJmpData(const SrcKey& target,
-                          FPInvOffset invSPOff,
+                          SBInvOffset invSPOff,
                           IRSPRelOffset irSPOff)
     : target(target)
     , invSPOff(invSPOff)
@@ -958,7 +958,7 @@ struct ReqBindJmpData : IRExtraData {
 
   std::string show() const {
     return folly::sformat(
-      "{}, FPInv {}, IRSP {}",
+      "{}, SBInv {}, IRSP {}",
       target.offset(), invSPOff.offset, irSPOff.offset
     );
   }
@@ -976,7 +976,7 @@ struct ReqBindJmpData : IRExtraData {
   }
 
   SrcKey target;
-  FPInvOffset invSPOff;
+  SBInvOffset invSPOff;
   IRSPRelOffset irSPOff;
 };
 
@@ -1592,6 +1592,37 @@ struct NewBespokeStructData : IRExtraData {
   Slot* slots;
 };
 
+struct InitStructPositionsData : IRExtraData {
+  InitStructPositionsData(ArrayLayout layout, uint32_t numSlots, Slot* slots)
+    : layout(layout), numSlots(numSlots), slots(slots) {}
+
+  std::string show() const;
+
+  size_t stableHash() const {
+    auto hash = folly::hash::hash_combine(
+      std::hash<uint16_t>()(layout.toUint16()),
+      std::hash<uint32_t>()(numSlots)
+    );
+    for (auto i = 0; i < numSlots; i++) {
+      hash = folly::hash::hash_combine(hash, slots[i]);
+    }
+    return hash;
+  }
+
+  bool equals(const InitStructPositionsData& o) const {
+    if (layout != o.layout) return false;
+    if (numSlots != o.numSlots) return false;
+    for (auto i = 0; i < numSlots; i++) {
+      if (slots[i] != o.slots[i]) return false;
+    }
+    return true;
+  }
+
+  ArrayLayout layout;
+  uint32_t numSlots;
+  Slot* slots;
+};
+
 struct PackedArrayData : IRExtraData {
   explicit PackedArrayData(uint32_t size) : size(size) {}
   std::string show() const { return folly::format("{}", size).str(); }
@@ -2139,6 +2170,29 @@ struct LocalIdRange : IRExtraData {
   uint32_t start, end;
 };
 
+struct StackRange : IRExtraData {
+  StackRange(IRSPRelOffset start, uint32_t count)
+    : start(start)
+    , count(count)
+  {}
+
+  std::string show() const {
+    return folly::sformat("[{}, {})", start.offset, start.offset + count);
+  }
+
+  size_t stableHash() const {
+    return folly::hash::hash_combine(std::hash<int32_t>()(start.offset),
+                                     std::hash<int32_t>()(count));
+  }
+
+  bool equals(const StackRange& o) const {
+    return start == o.start && count == o.count;
+  }
+
+  IRSPRelOffset start;
+  uint32_t count;
+};
+
 struct FuncEntryData : IRExtraData {
   FuncEntryData(const Func* func, uint32_t argc)
     : func(func)
@@ -2641,6 +2695,7 @@ X(ResolveTypeStruct,            ResolveTypeStructData);
 X(ExtendsClass,                 ExtendsClassData);
 X(CheckStk,                     IRSPRelOffsetData);
 X(StStk,                        IRSPRelOffsetData);
+X(StStkRange,                   StackRange);
 X(StOutValue,                   IndexData);
 X(LdOutAddr,                    IndexData);
 X(AssertStk,                    IRSPRelOffsetData);
@@ -2706,12 +2761,14 @@ X(NewStructDict,                NewStructData);
 X(NewRecord,                    NewStructData);
 X(AllocStructDict,              NewStructData);
 X(AllocBespokeStructDict,       ArrayLayoutData);
+X(InitStructPositions,          InitStructPositionsData);
 X(NewBespokeStructDict,         NewBespokeStructData);
 X(AllocVec,                     PackedArrayData);
 X(NewKeysetArray,               NewKeysetArrayData);
 X(InitVecElemLoop,              InitPackedArrayLoopData);
 X(InitVecElem,                  IndexData);
 X(InitDictElem,                 KeyedIndexData);
+X(InitStructElem,               KeyedIndexData);
 X(CreateAAWH,                   CreateAAWHData);
 X(CountWHNotDone,               CountWHNotDoneData);
 X(CheckDictOffset,              IndexData);
@@ -2808,6 +2865,8 @@ X(LdClsTypeCns,                 LdClsTypeCnsData);
 X(ConvTVToStr,                  ConvNoticeData);
 X(ConvTVToInt,                  ConvNoticeData);
 X(ConvObjToInt,                 ConvNoticeData);
+X(CheckFuncNeedsCoverage,       FuncData);
+X(RecordFuncCall,               FuncData);
 
 #undef X
 

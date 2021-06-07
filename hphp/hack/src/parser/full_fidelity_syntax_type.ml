@@ -768,12 +768,6 @@ struct
         eval_argument: t;
         eval_right_paren: t;
       }
-    | DefineExpression of {
-        define_keyword: t;
-        define_left_paren: t;
-        define_argument_list: t;
-        define_right_paren: t;
-      }
     | IssetExpression of {
         isset_keyword: t;
         isset_left_paren: t;
@@ -783,7 +777,7 @@ struct
     | FunctionCallExpression of {
         function_call_receiver: t;
         function_call_type_args: t;
-        function_call_enum_atom: t;
+        function_call_enum_class_label: t;
         function_call_left_paren: t;
         function_call_argument_list: t;
         function_call_right_paren: t;
@@ -1142,9 +1136,10 @@ struct
         list_item: t;
         list_separator: t;
       }
-    | EnumAtomExpression of {
-        enum_atom_hash: t;
-        enum_atom_expression: t;
+    | EnumClassLabelExpression of {
+        enum_class_label_qualifier: t;
+        enum_class_label_hash: t;
+        enum_class_label_expression: t;
       }
 end
 
@@ -1221,7 +1216,6 @@ struct
     | ExprNullableAs of nullable_as_expression
     | ExprConditional of conditional_expression
     | ExprEval of eval_expression
-    | ExprDefine of define_expression
     | ExprIsset of isset_expression
     | ExprFunctionCall of function_call_expression
     | ExprFunctionPointer of function_pointer_expression
@@ -1245,7 +1239,7 @@ struct
     | ExprXHP of xhp_expression
     | ExprShape of shape_expression
     | ExprTuple of tuple_expression
-    | ExprEnumAtom of enum_atom_expression
+    | ExprEnumClassLabel of enum_class_label_expression
 
   and specifier =
     | SpecSimple of simple_type_specifier
@@ -1344,7 +1338,6 @@ struct
     | LambdaNullableAs of nullable_as_expression
     | LambdaConditional of conditional_expression
     | LambdaEval of eval_expression
-    | LambdaDefine of define_expression
     | LambdaIsset of isset_expression
     | LambdaFunctionCall of function_call_expression
     | LambdaFunctionPointer of function_pointer_expression
@@ -1393,7 +1386,6 @@ struct
     | CExprNullableAs of nullable_as_expression
     | CExprConditional of conditional_expression
     | CExprEval of eval_expression
-    | CExprDefine of define_expression
     | CExprIsset of isset_expression
     | CExprFunctionCall of function_call_expression
     | CExprFunctionPointer of function_pointer_expression
@@ -2139,13 +2131,6 @@ struct
     eval_right_paren: Token.t value;
   }
 
-  and define_expression = {
-    define_keyword: Token.t value;
-    define_left_paren: Token.t value;
-    define_argument_list: expression listesque value;
-    define_right_paren: Token.t value;
-  }
-
   and isset_expression = {
     isset_keyword: Token.t value;
     isset_left_paren: Token.t value;
@@ -2156,7 +2141,7 @@ struct
   and function_call_expression = {
     function_call_receiver: expression value;
     function_call_type_args: type_arguments option value;
-    function_call_enum_atom: expression option value;
+    function_call_enum_class_label: expression option value;
     function_call_left_paren: Token.t value;
     function_call_argument_list: expression listesque value;
     function_call_right_paren: Token.t value;
@@ -2576,9 +2561,10 @@ struct
     intersection_right_paren: Token.t value;
   }
 
-  and enum_atom_expression = {
-    enum_atom_hash: Token.t value;
-    enum_atom_expression: Token.t value;
+  and enum_class_label_expression = {
+    enum_class_label_qualifier: expression option value;
+    enum_class_label_hash: Token.t value;
+    enum_class_label_expression: Token.t value;
   }
   [@@deriving show]
 end

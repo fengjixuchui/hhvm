@@ -73,7 +73,6 @@ bitflags! {
         const MEMOIZE = 1 << 2;
         const CLOSURE_BODY = 1 << 3;
         const NATIVE = 1 << 4;
-        const RX_BODY = 1 << 5;
         const ASYNC = 1 << 6;
         const DEBUGGER_MODIFY_PROGRAM = 1 << 7;
     }
@@ -162,13 +161,7 @@ pub fn emit_body<'b, 'arena>(
         &body,
         args.flags,
     )?;
-    let mut env = make_env(
-        alloc,
-        namespace,
-        scope,
-        args.call_context,
-        args.flags.contains(Flags::RX_BODY),
-    );
+    let mut env = make_env(alloc, namespace, scope, args.call_context);
 
     set_emit_statement_state(
         alloc,
@@ -185,6 +178,14 @@ pub fn emit_body<'b, 'arena>(
     env.jump_targets_gen.reset();
 
     let should_reserve_locals = set_function_jmp_targets(emitter, &mut env);
+    let num_closures = match emitter
+        .emit_global_state()
+        .num_closures
+        .get(&get_unique_id_for_scope(&env.scope))
+    {
+        Some(num) => *num,
+        None => 0,
+    };
     let local_gen = emitter.local_gen_mut();
     local_gen.reset(params.len() + decl_vars.len());
     if should_reserve_locals {
@@ -211,6 +212,7 @@ pub fn emit_body<'b, 'arena>(
             decl_vars,
             false, // is_memoize_wrapper
             false, // is_memoize_wrapper_lsb
+            num_closures,
             upper_bounds,
             shadowed_tparams,
             params,
@@ -393,12 +395,10 @@ pub fn make_env<'a, 'arena>(
     namespace: RcOc<namespace_env::Env>,
     scope: Scope<'a>,
     call_context: Option<String>,
-    is_rx_body: bool,
 ) -> Env<'a, 'arena> {
     let mut env = Env::default(alloc, namespace);
     env.call_context = call_context;
     env.scope = scope;
-    env.with_rx_body(is_rx_body);
     env
 }
 
@@ -428,6 +428,7 @@ pub fn make_body<'a, 'arena>(
     decl_vars: Vec<String>,
     is_memoize_wrapper: bool,
     is_memoize_wrapper_lsb: bool,
+    num_closures: u32,
     upper_bounds: Vec<(String, Vec<HhasTypeInfo>)>,
     shadowed_tparams: Vec<String>,
     mut params: Vec<HhasParam<'arena>>,
@@ -435,7 +436,6 @@ pub fn make_body<'a, 'arena>(
     doc_comment: Option<DocComment>,
     opt_env: Option<&Env<'a, 'arena>>,
 ) -> Result<HhasBody<'arena>> {
-    body_instrs.rewrite_user_labels(alloc, emitter.label_gen_mut());
     emit_adata::rewrite_typed_values(alloc, emitter, &mut body_instrs)?;
     if emitter
         .options()
@@ -473,6 +473,7 @@ pub fn make_body<'a, 'arena>(
         num_iters,
         is_memoize_wrapper,
         is_memoize_wrapper_lsb,
+        num_closures,
         upper_bounds,
         shadowed_tparams,
         params,
@@ -630,8 +631,8 @@ mod atom_helpers {
         pos: &Pos,
         cls_instrs: InstrSeq<'arena>,
         msg: &str,
-        label_not_a_class: Label<'arena>,
-        label_done: Label<'arena>,
+        label_not_a_class: Label,
+        label_done: Label,
     ) -> Result<InstrSeq<'arena>> {
         let param_name = &param.name;
         let loc =
@@ -676,8 +677,8 @@ fn atom_instrs<'a, 'arena>(
             "__Atom param type hint unavailable",
         )),
         TypeHint(_, Some(Hint(_, h))) => {
-            let label_done = emitter.label_gen_mut().next_regular(alloc);
-            let label_not_a_class = emitter.label_gen_mut().next_regular(alloc);
+            let label_done = emitter.label_gen_mut().next_regular();
+            let label_not_a_class = emitter.label_gen_mut().next_regular();
             match &**h {
                 Happly(ast_defs::Id(_, ref ctor), vec) if ctor == "\\HH\\MemberOf" => {
                     match &vec[..] {
@@ -1020,7 +1021,6 @@ pub fn emit_deprecation_info<'a, 'arena>(
                         instr::fcallfuncd(
                             alloc,
                             FcallArgs::new(
-                                alloc,
                                 FcallFlags::default(),
                                 1,
                                 bumpalo::vec![in alloc;].into_bump_slice(),
@@ -1213,15 +1213,7 @@ fn set_function_jmp_targets<'a, 'arena>(
     emitter: &mut Emitter<'arena>,
     env: &mut Env<'a, 'arena>,
 ) -> bool {
-    use ScopeItem::*;
-    let function_state_key = match env.scope.items.as_slice() {
-        [] => get_unique_id_for_main(),
-        [.., Class(cls), Method(md)] | [.., Class(cls), Method(md), Lambda(_)] => {
-            get_unique_id_for_method(cls.get_name_str(), md.get_name_str())
-        }
-        [.., Function(fun)] => get_unique_id_for_function(fun.get_name_str()),
-        _ => panic!("unexpected scope shape"),
-    };
+    let function_state_key = get_unique_id_for_scope(&env.scope);
     emitter
         .emit_global_state()
         .functions_with_finally

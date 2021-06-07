@@ -105,6 +105,7 @@ static const struct {
   { OpInt,         {None,             Stack1,       OutInt64        }},
   { OpDouble,      {None,             Stack1,       OutDouble       }},
   { OpString,      {None,             Stack1,       OutStringImm    }},
+  { OpLazyClass,   {None,             Stack1,       OutLazyClass    }},
   { OpDict,        {None,             Stack1,       OutDictImm      }},
   { OpKeyset,      {None,             Stack1,       OutKeysetImm    }},
   { OpVec,         {None,             Stack1,       OutVecImm       }},
@@ -126,6 +127,7 @@ static const struct {
   { OpDir,         {None,             Stack1,       OutString       }},
   { OpMethod,      {None,             Stack1,       OutString       }},
   { OpClassName,   {Stack1,           Stack1,       OutString       }},
+  { OpLazyClassFromClass, {Stack1,    Stack1,       OutLazyClass    }},
   { OpFuncCred,    {None,             Stack1,       OutObject       }},
 
   /*** 3. Operator instructions ***/
@@ -362,7 +364,6 @@ static const struct {
 
   // TODO (T61651936): ResolveClass may return a classptr or a string
   { OpResolveClass,{None,             Stack1,       OutUnknown      }},
-  { OpLazyClass,   {None,             Stack1,       OutLazyClass    }},
 
   /*** 14. Generator instructions ***/
 
@@ -655,10 +656,26 @@ unsigned localRangeImmIdx(Op op) {
   }
 }
 
+uint32_t getLocalOperand(const NormalizedInstruction& ni) {
+  auto const idx = localImmIdx(ni.op());
+  auto const argu = ni.imm[idx];
+  switch (immType(ni.op(), idx)) {
+    case ArgType::LA:
+      return argu.u_LA;
+    case ArgType::NLA:
+      return argu.u_NLA.id;
+    case ArgType::ILA:
+      return argu.u_ILA;
+    default:
+      always_assert(false);
+  }
+  not_reached();
+}
+
 /*
  * Get location metadata for the inputs of `ni'.
  */
-InputInfoVec getInputs(const NormalizedInstruction& ni, FPInvOffset bcSPOff) {
+InputInfoVec getInputs(const NormalizedInstruction& ni, SBInvOffset bcSPOff) {
   InputInfoVec inputs;
   if (isAlwaysNop(ni)) return inputs;
 
@@ -692,13 +709,13 @@ InputInfoVec getInputs(const NormalizedInstruction& ni, FPInvOffset bcSPOff) {
   if (flags & StackI) {
     inputs.emplace_back(Location::Stack {
       BCSPRelOffset{safe_cast<int32_t>(ni.imm[0].u_IVA)}.
-        to<FPInvOffset>(bcSPOff)
+        to<SBInvOffset>(bcSPOff)
     });
   }
   if (flags & StackI2) {
     inputs.emplace_back(Location::Stack {
       BCSPRelOffset{safe_cast<int32_t>(ni.imm[1].u_IVA)}.
-        to<FPInvOffset>(bcSPOff)
+        to<SBInvOffset>(bcSPOff)
     });
   }
 
@@ -753,22 +770,9 @@ InputInfoVec getInputs(const NormalizedInstruction& ni, FPInvOffset bcSPOff) {
   }
 
   if (flags & Local) {
-    auto const loc = [&]() {
-      auto const idx = localImmIdx(ni.op());
-      auto const argu = ni.imm[idx];
-      switch (immType(ni.op(), idx)) {
-        case ArgType::LA:
-          return argu.u_LA;
-        case ArgType::NLA:
-          return argu.u_NLA.id;
-        case ArgType::ILA:
-          return argu.u_ILA;
-        default:
-          always_assert(false);
-      }
-    }();
+    auto const loc = getLocalOperand(ni);
     SKTRACE(1, sk, "getInputs: local %d\n", loc);
-    inputs.emplace_back(Location::Local { uint32_t(loc) });
+    inputs.emplace_back(Location::Local{loc});
   }
 
   if (flags & LocalRange) {
@@ -790,7 +794,7 @@ InputInfoVec getInputs(const NormalizedInstruction& ni, FPInvOffset bcSPOff) {
       case MEC:
       case MPC:
         inputs.emplace_back(Location::Stack {
-          BCSPRelOffset{int32_t(mk.iva)}.to<FPInvOffset>(bcSPOff)
+          BCSPRelOffset{int32_t(mk.iva)}.to<SBInvOffset>(bcSPOff)
         });
         break;
       case MW:
@@ -818,6 +822,40 @@ InputInfoVec getInputs(const NormalizedInstruction& ni, FPInvOffset bcSPOff) {
     for (auto& info : inputs) info.dontGuard = true;
   }
   return inputs;
+}
+
+/*
+ * Get the list of output locals written by the `ni' instruction.
+ */
+jit::fast_set<uint32_t> getLocalOutputs(const NormalizedInstruction& ni) {
+  fast_set<uint32_t> locals;
+  auto const op = ni.op();
+
+  if (isIteratorOp(op)) {
+    auto const ita = ni.imm[0].u_ITA;
+    locals.insert(ita.valId);
+    if (ita.hasKey()) locals.insert(ita.keyId);
+  } else {
+    auto const info = getInstrInfo(op);
+    if (info.out & Local) {
+      auto const id = getLocalOperand(ni);
+      locals.insert(id);
+    }
+    if (info.out & LocalRange) {
+      auto const& range = ni.imm[localRangeImmIdx(op)].u_LAR;
+      for (unsigned i = 0; i < range.count; ++i) {
+        locals.insert(range.first + i);
+      }
+    }
+    if (info.out & MKey) {
+      auto const mk = ni.imm[memberKeyImmIdx(op)].u_KA;
+      if (mk.mcode == MEL || mk.mcode == MPL) {
+        locals.insert(mk.local.id);
+      }
+    }
+  }
+
+  return locals;
 }
 
 bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
@@ -956,6 +994,7 @@ bool dontGuardAnyInputs(const NormalizedInstruction& ni) {
   case Op::Mod:
   case Op::Pow:
   case Op::ClassName:
+  case Op::LazyClassFromClass:
   case Op::NativeImpl:
   case Op::NewCol:
   case Op::NewPair:
@@ -1191,9 +1230,8 @@ void translateInstr(irgen::IRGS& irgs, const NormalizedInstruction& ni) {
 
   if (ni.forceSurpriseCheck) surpriseCheck(irgs);
 
-  handleBespokeInputs(irgs, ni, [&](irgen::IRGS& env) {
+  translateDispatchBespoke(irgs, ni, [&](irgen::IRGS& env) {
     translateDispatch(env, ni);
-    handleVanillaOutputs(env, ni.source);
   });
 
   FTRACE(3, "\nTranslated {}: {} with state:\n{}\n",

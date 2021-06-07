@@ -31,11 +31,18 @@ function preg_filter(mixed $pattern,
  * @return array - Returns an array indexed using the keys from the input
  *   array.
  */
-<<__Native, __Pure>>
+<<__Native>>
 function preg_grep(string $pattern,
                    varray_or_darray $input,
-                   int $flags = 0): mixed;
+                   int $flags = 0)[]: mixed;
 
+/**
+ * preg_grep, but populates $error in case of error.
+ *
+ * If the function runs normally with no errors, then $error is set to null.
+ * Otherwise, if an error occurs, $error is set to an error code constant from
+ * the list defined in builtins_preg.hhi.
+ */
 <<__Native>>
 function preg_grep_with_error(
   string $pattern,
@@ -43,18 +50,6 @@ function preg_grep_with_error(
   inout ?int $error,
   int $flags = 0,
 )[]: mixed;
-
-/**
- * Returns the error code of the last PCRE regex execution
- *
- * @return int - Returns one of the following constants (explained on
- *   their own page):  PREG_NO_ERROR PREG_INTERNAL_ERROR
- *   PREG_BACKTRACK_LIMIT_ERROR (see also pcre.backtrack_limit)
- *   PREG_RECURSION_LIMIT_ERROR (see also pcre.recursion_limit)
- *   PREG_BAD_UTF8_ERROR PREG_BAD_UTF8_OFFSET_ERROR (since PHP 5.3.0)
- */
-<<__Native, __NonRx('Reads from global')>>
-function preg_last_error(): int;
 
 /**
  * Perform a global regular expression match
@@ -89,12 +84,19 @@ function preg_last_error(): int;
  * @return int - Returns the number of full pattern matches (which might
  *   be zero), or FALSE if an error occurred.
  */
-<<__Native, __Pure>>
+<<__Native>>
 function preg_match_all(string $pattern,
                         string $subject,
                         int $flags = 0,
-                        int $offset = 0): mixed;
+                        int $offset = 0)[]: mixed;
 
+/**
+ * preg_match_all, but populates $error in case of error.
+ *
+ * If the function runs normally with no errors, then $error is set to null.
+ * Otherwise, if an error occurs, $error is set to an error code constant from
+ * the list defined in builtins_preg.hhi.
+ */
 <<__Native>>
 function preg_match_all_with_error(
   string $pattern,
@@ -104,14 +106,21 @@ function preg_match_all_with_error(
   int $offset = 0,
 )[]: mixed;
 
-<<__Native, __Pure>>
+<<__Native>>
 function preg_match_all_with_matches(string $pattern,
                                      string $subject,
                                      <<__OutOnly>>
                                      inout mixed $matches,
                                      int $flags = 0,
-                                     int $offset = 0): mixed;
+                                     int $offset = 0)[]: mixed;
 
+/**
+ * preg_match_all_with_matches, but populates $error in case of error.
+ *
+ * If the function runs normally with no errors, then $error is set to null.
+ * Otherwise, if an error occurs, $error is set to an error code constant from
+ * the list defined in builtins_preg.hhi.
+ */
 <<__Native>>
 function preg_match_all_with_matches_and_error(
   string $pattern,
@@ -155,6 +164,13 @@ function preg_match(string $pattern,
                     int $flags = 0,
                     int $offset = 0)[]: mixed;
 
+/**
+ * preg_match, but populates $error in case of error.
+ *
+ * If the function runs normally with no errors, then $error is set to null.
+ * Otherwise, if an error occurs, $error is set to an error code constant from
+ * the list defined in builtins_preg.hhi.
+ */
 <<__Native>>
 function preg_match_with_error(
   string $pattern,
@@ -172,6 +188,13 @@ function preg_match_with_matches(string $pattern,
                                  int $flags = 0,
                                  int $offset = 0)[]: mixed;
 
+/**
+ * preg_match_with_matches, but populates $error in case of error.
+ *
+ * If the function runs normally with no errors, then $error is set to null.
+ * Otherwise, if an error occurs, $error is set to an error code constant from
+ * the list defined in builtins_preg.hhi.
+ */
 <<__Native>>
 function preg_match_with_matches_and_error(
   string $pattern,
@@ -225,15 +248,22 @@ function preg_quote(string $str,
  *   return value is NULL   If matches are found, the new subject will be
  *   returned, otherwise subject will be returned unchanged.
  */
-<<__Native, __Pure>>
+<<__Native>>
 function preg_replace_callback(mixed $pattern,
                                mixed $callback,
                                mixed $subject,
                                int $limit,
                                <<__OutOnly("KindOfInt64")>>
-                               inout ?int $count): mixed;
+                               inout ?int $count)[defaults]: mixed;
 
-<<__Native, __Pure>>
+/**
+ * preg_replace_callback, but populates $error in case of error.
+ *
+ * If the function runs normally with no errors, then $error is set to null.
+ * Otherwise, if an error occurs, $error is set to an error code constant from
+ * the list defined in builtins_preg.hhi.
+ */
+<<__Native>>
 function preg_replace_callback_with_error(
   mixed $pattern,
   mixed $callback,
@@ -242,7 +272,7 @@ function preg_replace_callback_with_error(
   <<__OutOnly("KindOfInt64")>>
   inout ?int $count,
   inout ?int $error,
-): mixed;
+)[defaults]: mixed;
 
 /**
  * Perform a regular expression search and replace using an associative array of
@@ -274,14 +304,21 @@ function preg_replace_callback_with_error(
  *   return value is NULL   If matches are found, the new subject will be
  *   returned, otherwise subject will be returned unchanged.
  */
-<<__Native, __Pure>>
+<<__Native>>
 function preg_replace_callback_array(mixed $patterns_and_callbacks,
                                      mixed $subject,
                                      int $limit,
                                      <<__OutOnly("KindOfInt64")>>
-                                     inout ?int $count): mixed;
+                                     inout ?int $count)[defaults]: mixed;
 
-<<__Native, __Pure>>
+/**
+ * preg_replace_callback_array, but populates $error in case of error.
+ *
+ * If the function runs normally with no errors, then $error is set to null.
+ * Otherwise, if an error occurs, $error is set to an error code constant from
+ * the list defined in builtins_preg.hhi.
+ */
+<<__Native>>
 function preg_replace_callback_array_with_error(
   mixed $patterns_and_callbacks,
   mixed $subject,
@@ -289,7 +326,7 @@ function preg_replace_callback_array_with_error(
   <<__OutOnly("KindOfInt64")>>
   inout ?int $count,
   inout ?int $error,
-): mixed;
+)[defaults]: mixed;
 
 /**
  * Perform a regular expression search and replace
@@ -340,12 +377,19 @@ function preg_replace_callback_array_with_error(
  *   the new subject will be returned, otherwise subject will be returned
  *   unchanged or NULL if an error occurred.
  */
-<<__Native, __Pure>>
+<<__Native>>
 function preg_replace(mixed $pattern,
                       mixed $replacement,
                       mixed $subject,
-                      int $limit = -1): mixed;
+                      int $limit = -1)[]: mixed;
 
+/**
+ * preg_replace, but populates $error in case of error.
+ *
+ * If the function runs normally with no errors, then $error is set to null.
+ * Otherwise, if an error occurs, $error is set to an error code constant from
+ * the list defined in builtins_preg.hhi.
+ */
 <<__Native>>
 function preg_replace_with_error(
   mixed $pattern,
@@ -355,14 +399,21 @@ function preg_replace_with_error(
   int $limit = -1,
 )[]: mixed;
 
-<<__Native, __Pure>>
+<<__Native>>
 function preg_replace_with_count(mixed $pattern,
                                  mixed $replacement,
                                  mixed $subject,
                                  int $limit,
                                  <<__OutOnly("KindOfInt64")>>
-                                 inout ?int $count): mixed;
+                                 inout ?int $count)[]: mixed;
 
+/**
+ * preg_replace_with_count, but populates $error in case of error.
+ *
+ * If the function runs normally with no errors, then $error is set to null.
+ * Otherwise, if an error occurs, $error is set to an error code constant from
+ * the list defined in builtins_preg.hhi.
+ */
 <<__Native>>
 function preg_replace_with_count_and_error(
   mixed $pattern,
@@ -403,6 +454,13 @@ function preg_split(string $pattern,
                     mixed $limit = null,
                     int $flags = 0)[]: mixed;
 
+/**
+ * preg_split, but populates $error in case of error.
+ *
+ * If the function runs normally with no errors, then $error is set to null.
+ * Otherwise, if an error occurs, $error is set to an error code constant from
+ * the list defined in builtins_preg.hhi.
+ */
 <<__Native>>
 function preg_split_with_error(
   string $pattern,

@@ -215,6 +215,11 @@ let string_of_class_kind kind ~is_enum_class =
 let string_of_param_kind = function
   | Pinout -> "inout"
 
+let swap_variance = function
+  | Covariant -> Contravariant
+  | Contravariant -> Covariant
+  | Invariant -> Invariant
+
 module ShapeField = struct
   type t = shape_field_name
 
@@ -253,3 +258,14 @@ module ShapeMap = struct
 end
 
 module ShapeSet = Set.Make (ShapeField)
+
+(** Literal values that can occur in XHP enum properties.
+ *
+ * class :my-xhp-class {
+ *   attribute enum {'big', 'small'} my-prop;
+ * }
+ *)
+type xhp_enum_value =
+  | XEV_Int of int
+  | XEV_String of string
+[@@deriving eq, show]

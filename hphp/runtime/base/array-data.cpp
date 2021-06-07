@@ -35,6 +35,7 @@
 #include "hphp/runtime/base/variable-serializer.h"
 #include "hphp/runtime/server/memory-stats.h"
 #include "hphp/runtime/vm/interp-helpers.h"
+#include "hphp/runtime/vm/reverse-data-map.h"
 
 #include "hphp/util/exception.h"
 
@@ -45,6 +46,7 @@ namespace HPHP {
 
 const StaticString
   s_InvalidKeysetOperationMsg{"Invalid operation on keyset"},
+  s_ReadOnlyCollectionMutationMsg{"Read-Only collections cannot be mutated."},
   s_VarrayUnsetMsg{"varrays do not support unsetting non-end elements"},
   s_VecUnsetMsg{"Vecs do not support unsetting non-end elements"};
 ///////////////////////////////////////////////////////////////////////////////
@@ -234,6 +236,9 @@ void ArrayData::GetScalarArray(ArrayData** parr) {
 
   // TODO(T68458896): allocSize rounds up to size class, which we shouldn't do.
   MemoryStats::LogAlloc(AllocKind::StaticArray, allocSize(ad));
+  if (RuntimeOption::EvalEnableReverseDataMap) {
+    data_map::register_start(ad);
+  }
 
   s_cachedHash.first = ad;
   assertx(hashArrayPortion(ad) == s_cachedHash.second);
@@ -826,6 +831,10 @@ void throwOOBArrayKeyException(const StringData* key, const ArrayData* ad) {
 
 void throwInvalidKeysetOperation() {
   SystemLib::throwInvalidOperationExceptionObject(s_InvalidKeysetOperationMsg);
+}
+
+void throwReadOnlyCollectionMutation() {
+  SystemLib::throwInvalidOperationExceptionObject(s_ReadOnlyCollectionMutationMsg);
 }
 
 void throwVarrayUnsetException() {

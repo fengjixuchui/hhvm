@@ -42,22 +42,16 @@ inline bool FuncEmitter::useGlobalIds() const {
   return m_ue.useGlobalIds();
 }
 
-inline void FuncEmitter::setIds(int sn, Id id) {
-  m_sn = sn;
-  m_id = id;
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 // Bytecode
 
 inline const unsigned char* FuncEmitter::bc() const {
-  return m_bc;
+  return m_bc.ptr();
 }
 
 inline Offset FuncEmitter::bcPos() const {
   return m_bclen;
 }
-
 
 ///////////////////////////////////////////////////////////////////////////////
 // Bytecode emit.
@@ -103,22 +97,27 @@ inline void FuncEmitter::emitNamedLocal(NamedLocal loc) {
 
 template<class T>
 void FuncEmitter::emitImpl(T n, int64_t pos) {
+  assertx(m_bc.isPtr());
   auto c = (unsigned char*)&n;
   if (pos == -1) {
     // Make sure m_bc is large enough.
+    auto p = m_bc.ptr();
     while (m_bclen + sizeof(T) > m_bcmax) {
       // If m_bcmax is 0 we haven't allocated a buffer yet so start with a size
       // of BCMaxInit
       m_bcmax = m_bcmax == 0 ? BCMaxInit : m_bcmax << 1;
-      m_bc = (unsigned char*)realloc(m_bc, m_bcmax);
+      p = (unsigned char*)realloc(p, m_bcmax);
     }
-    memcpy(&m_bc[m_bclen], c, sizeof(T));
+    memcpy(&p[m_bclen], c, sizeof(T));
+    m_bc = Func::BCPtr::FromPtr(p);
     m_bclen += sizeof(T);
   } else {
     assertx(pos + sizeof(T) <= m_bclen);
+    auto p = m_bc.ptr();
     for (uint32_t i = 0; i < sizeof(T); ++i) {
-      m_bc[pos + i] = c[i];
+      p[pos + i] = c[i];
     }
+    m_bc = Func::BCPtr::FromPtr(p);
   }
 }
 
@@ -145,6 +144,15 @@ inline Id FuncEmitter::numLiveIterators() const {
 inline void FuncEmitter::setNumIterators(Id numIterators) {
   assertx(m_numIterators == 0);
   m_numIterators = numIterators;
+}
+
+inline Id FuncEmitter::numClosures() const {
+  return m_numClosures;
+}
+
+inline void FuncEmitter::setNumClosures(Id numClosures) {
+  assertx(m_numClosures == 0);
+  m_numClosures = numClosures;
 }
 
 inline void FuncEmitter::setNumLiveIterators(Id id) {
@@ -207,7 +215,12 @@ inline bool FuncEmitter::hasSourceLocInfo() const {
 }
 
 inline const LineTable& FuncEmitter::lineTable() const {
-  return m_lineTable;
+  auto const p = m_lineTable.ptr();
+  if (!p) {
+    static LineTable empty;
+    return empty;
+  }
+  return *p;
 }
 
 ///////////////////////////////////////////////////////////////////////////////

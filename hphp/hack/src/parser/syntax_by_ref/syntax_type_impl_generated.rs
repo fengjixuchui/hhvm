@@ -1159,17 +1159,6 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_define_expression(ctx: &C, keyword: Self, left_paren: Self, argument_list: Self, right_paren: Self) -> Self {
-        let syntax = SyntaxVariant::DefineExpression(ctx.get_arena().alloc(DefineExpressionChildren {
-            keyword,
-            left_paren,
-            argument_list,
-            right_paren,
-        }));
-        let value = V::from_values(syntax.iter_children().map(|child| &child.value));
-        Self::make(syntax, value)
-    }
-
     fn make_isset_expression(ctx: &C, keyword: Self, left_paren: Self, argument_list: Self, right_paren: Self) -> Self {
         let syntax = SyntaxVariant::IssetExpression(ctx.get_arena().alloc(IssetExpressionChildren {
             keyword,
@@ -1181,11 +1170,11 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_function_call_expression(ctx: &C, receiver: Self, type_args: Self, enum_atom: Self, left_paren: Self, argument_list: Self, right_paren: Self) -> Self {
+    fn make_function_call_expression(ctx: &C, receiver: Self, type_args: Self, enum_class_label: Self, left_paren: Self, argument_list: Self, right_paren: Self) -> Self {
         let syntax = SyntaxVariant::FunctionCallExpression(ctx.get_arena().alloc(FunctionCallExpressionChildren {
             receiver,
             type_args,
-            enum_atom,
+            enum_class_label,
             left_paren,
             argument_list,
             right_paren,
@@ -1877,8 +1866,9 @@ where
         Self::make(syntax, value)
     }
 
-    fn make_enum_atom_expression(ctx: &C, hash: Self, expression: Self) -> Self {
-        let syntax = SyntaxVariant::EnumAtomExpression(ctx.get_arena().alloc(EnumAtomExpressionChildren {
+    fn make_enum_class_label_expression(ctx: &C, qualifier: Self, hash: Self, expression: Self) -> Self {
+        let syntax = SyntaxVariant::EnumClassLabelExpression(ctx.get_arena().alloc(EnumClassLabelExpressionChildren {
+            qualifier,
             hash,
             expression,
         }));

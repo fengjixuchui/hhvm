@@ -482,7 +482,7 @@ TEST(AliasClass, IterUnion) {
 TEST(AliasClass, FrameUnion) {
   IRUnit unit{test_context};
   auto const bcctx = BCContext { BCMarker::Dummy(), 0 };
-  auto const dsData = DefStackData { FPInvOffset { 0 }, FPInvOffset { 0 } };
+  auto const dsData = DefStackData { SBInvOffset { 0 }, SBInvOffset { 0 } };
   auto const biData = BeginInliningData { IRSPRelOffset { 0 }, nullptr, 0, 0 };
   auto const SP = unit.gen(DefRegSP, bcctx, dsData)->dst();
   auto const FP1 = unit.gen(DefFP, bcctx, DefFPData { folly::none })->dst();
@@ -524,7 +524,7 @@ TEST(AliasClass, Pointees) {
   auto const bcctx = BCContext { BCMarker::Dummy(), 0 };
   auto ptr = unit.gen(LdMBase, bcctx, TLvalToCell)->dst();
   auto const acls = pointee(ptr);
-  EXPECT_EQ(AHeapAny | ALocalAny | AStackAny | AMIStateTempBase | ARdsAny, acls);
+  EXPECT_EQ(AHeapAny | ALocalAny | AStackAny | AMIStateTempBase | AMIStateROProp | ARdsAny, acls);
 }
 
 //////////////////////////////////////////////////////////////////////

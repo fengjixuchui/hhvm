@@ -274,18 +274,16 @@ inline int Func::line2() const {
 }
 
 inline const StringData* Func::docComment() const {
-  return shared()->m_docComment;
+  auto const ex = extShared();
+  return ex ? ex->m_docComment : staticEmptyString();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 // Bytecode.
 
 inline PC Func::entry() const {
-  const auto pc = shared()->m_bc.load(std::memory_order_relaxed);
-  if (pc != nullptr) {
-    return pc;
-  }
-  return const_cast<Func*>(this)->loadBytecode();
+  auto const bc = shared()->m_bc.copy();
+  return bc.isPtr() ? bc.ptr() : const_cast<Func*>(this)->loadBytecode();
 }
 
 inline Offset Func::bclen() const {
@@ -611,10 +609,6 @@ inline void Func::setRequiredCoeffects(RuntimeCoeffects c) {
 
 inline StaticCoeffectNamesMap Func::staticCoeffectNames() const {
   return shared()->m_staticCoeffectNames;
-}
-
-inline bool Func::isRxDisabled() const {
-  return shared()->m_allFlags.m_isRxDisabled;
 }
 
 inline bool Func::hasCoeffectsLocal() const {

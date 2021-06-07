@@ -200,15 +200,26 @@ TypeOrReduced builtin_array_key_cast(ISS& env, const php::Func* func,
     retTy |= TInt;
   }
   if (ty.couldBe(BCls)) {
-    if (ty.strictSubtypeOf(TCls)) {
-      auto cname = dcls_of(ty).cls.name();
-      retTy |= sval(cname);
+    if (is_specialized_cls(ty)) {
+      auto const dcls = dcls_of(ty);
+      if (dcls.type == DCls::Exact) {
+        auto cname = dcls_of(ty).cls.name();
+        retTy |= sval(cname);
+      } else {
+        retTy |= TSStr;
+      }
     } else {
-      retTy |= TStr;
+      retTy |= TSStr;
     }
   }
-  // TODO: T70712990: Specialize lazy class types
-  if (ty.couldBe(BLazyCls)) retTy |= TStr;
+  if (ty.couldBe(BLazyCls)) {
+    if (is_specialized_lazycls(ty)) {
+      auto cname = lazyclsval_of(ty);
+      retTy |= sval(cname);
+    } else {
+      retTy |= TSStr;
+    }
+  }
   if (ty.couldBe(BStr)) {
     retTy |= [&] {
       if (ty.subtypeOf(BSStr)) {
@@ -320,7 +331,7 @@ ArrayData* impl_type_structure_opts(ISS& env,
   auto const cns_sd = cns_name->m_data.pstr;
   if (!cls_or_obj) {
     if (auto const last = op_from_slot(env, 1)) {
-      if (last->op == Op::ClassName) {
+      if (last->op == Op::ClassName || last->op == Op::LazyClassFromClass) {
         if (auto const prev = op_from_slot(env, 1, 1)) {
           if (prev->op == Op::LateBoundCls) {
             if (!env.ctx.cls) return fail();
@@ -544,7 +555,8 @@ folly::Optional<Type> const_fold(ISS& env,
   return eval_cell(
     [&] {
       auto const retVal = g_context->invokeFuncFew(
-        func, cls, args.size(), args.data(), false, false);
+        func, cls, args.size(), args.data(), RuntimeCoeffects::fixme(),
+        false, false);
       assertx(tvIsPlausible(retVal));
       return retVal;
     }

@@ -145,7 +145,7 @@ module Program = struct
 end
 
 let finalize_init init_env typecheck_telemetry init_telemetry =
-  ServerProgress.send_progress_warning_to_monitor None;
+  ServerProgress.send_warning None;
   (* rest is just logging/telemetry *)
   let t' = Unix.gettimeofday () in
   let heap_size = SharedMem.heap_size () in
@@ -186,11 +186,9 @@ let shutdown_persistent_client client env =
 (* we have no alternative but to depend on Sys_error strings *)
 
 let handle_connection_exception
-    ~(env : ServerEnv.env)
-    ~(client : ClientProvider.client)
-    ~(exn : exn)
-    ~(stack : string) : ServerEnv.env =
-  match exn with
+    ~(env : ServerEnv.env) ~(client : ClientProvider.client) (e : Exception.t) :
+    ServerEnv.env =
+  match Exception.to_exn e with
   | ClientProvider.Client_went_away
   | ServerCommandTypes.Read_command_timeout ->
     ClientProvider.shutdown_client client;
@@ -208,9 +206,11 @@ let handle_connection_exception
     ClientProvider.shutdown_client client;
     env
   | exn ->
-    HackEventLogger.handle_connection_exception exn (Utils.Callstack stack);
-    EventLogger.master_exception exn stack;
-    Printf.fprintf stderr "Error: %s\n%s\n%!" (Exn.to_string exn) stack;
+    let e = Exception.wrap exn in
+    HackEventLogger.handle_connection_exception "inner" e;
+    Hh_logger.log
+      "HANDLE_CONNECTION_EXCEPTION(inner) %s"
+      (Exception.to_string e);
     ClientProvider.shutdown_client client;
     env
 
@@ -224,16 +224,11 @@ let handle_connection_exception
  * wrapping the return value to make it match return type of f *)
 let handle_connection_try return client env f =
   try f () with
-  | ServerCommand.Nonfatal_rpc_exception (exn, original_stack, env) ->
-    let stack = Printexc.get_backtrace () in
-    let stack =
-      Printf.sprintf "STACK=%s\nRAISED AT=%s\n" original_stack stack
-    in
-    return (handle_connection_exception ~env ~client ~exn ~stack)
+  | ServerCommand.Nonfatal_rpc_exception (e, env) ->
+    return (handle_connection_exception ~env ~client e)
   | exn ->
-    let stack = Printexc.get_backtrace () in
-    let stack = Printf.sprintf "RAISED AT=%s\n" stack in
-    return (handle_connection_exception ~env ~client ~exn ~stack)
+    let e = Exception.wrap exn in
+    return (handle_connection_exception ~env ~client e)
 
 let handle_connection_ genv env client =
   ClientProvider.track
@@ -279,24 +274,30 @@ let handle_connection_ genv env client =
       ServerUtils.Done (f env)
   | ServerCommandTypes.Non_persistent -> ServerCommand.handle genv env client
 
-let report_persistent_exception
-    ~(e : exn)
-    ~(stack : string)
-    ~(client : ClientProvider.client)
-    ~(is_fatal : bool) : unit =
+let handle_persistent_connection_exception
+    ~(client : ClientProvider.client) ~(is_fatal : bool) (e : Exception.t) :
+    unit =
   let open Marshal_tools in
-  let message = Exn.to_string e in
+  let remote_e =
+    {
+      message = Exception.get_ctor_string e;
+      stack = Exception.get_backtrace_string e |> Exception.clean_stack;
+    }
+  in
   let push =
     if is_fatal then
-      ServerCommandTypes.FATAL_EXCEPTION { message; stack }
+      ServerCommandTypes.FATAL_EXCEPTION remote_e
     else
-      ServerCommandTypes.NONFATAL_EXCEPTION { message; stack }
+      ServerCommandTypes.NONFATAL_EXCEPTION remote_e
   in
   begin
     try ClientProvider.send_push_message_to_client client push with _ -> ()
   end;
-  EventLogger.master_exception e stack;
-  Printf.eprintf "Error: %s\n%s\n%!" message stack
+  HackEventLogger.handle_persistent_connection_exception "inner" ~is_fatal e;
+  Hh_logger.error
+    "HANDLE_PERSISTENT_CONNECTION_EXCEPTION(inner) %s"
+    (Exception.to_string e);
+  ()
 
 (* Same as handle_connection_try, but for persistent clients *)
 [@@@warning "-52"]
@@ -315,13 +316,13 @@ let handle_persistent_connection_try return client env f =
       env
       (shutdown_persistent_client client)
       ~needs_writes:(Some "Client_went_away")
-  | ServerCommand.Nonfatal_rpc_exception (e, stack, env) ->
-    report_persistent_exception ~e ~stack ~client ~is_fatal:false;
+  | ServerCommand.Nonfatal_rpc_exception (e, env) ->
+    handle_persistent_connection_exception ~client ~is_fatal:false e;
     return env (fun env -> env) ~needs_writes:None
-  | e ->
-    let stack = Printexc.get_backtrace () in
-    report_persistent_exception ~e ~stack ~client ~is_fatal:true;
-    let needs_writes = Some (Caml.Printexc.to_string e ^ "\n" ^ stack) in
+  | exn ->
+    let e = Exception.wrap exn in
+    handle_persistent_connection_exception ~client ~is_fatal:true e;
+    let needs_writes = Some (Exception.to_string e) in
     return env (shutdown_persistent_client client) ~needs_writes
 
 [@@@warning "+52"]
@@ -434,7 +435,7 @@ let rec recheck_until_no_changes_left acc genv env select_outcome =
     match select_outcome with
     | ClientProvider.Select_new _ -> `Sync
     | ClientProvider.Select_nothing ->
-      if start_time -. env.last_notifier_check_time > 0.5 then
+      if Float.(start_time - env.last_notifier_check_time > 0.5) then
         `Async
       else
         `Skip
@@ -458,7 +459,7 @@ let rec recheck_until_no_changes_left acc genv env select_outcome =
     | _ -> true)
     && (* "average person types [...] between 190 and 200 characters per minute"
         * 60/200 = 0.3 *)
-    start_time -. env.last_command_time > 0.3
+    Float.(start_time - env.last_command_time > 0.3)
   in
   (* saving any file is our trigger to start full recheck *)
   let env =
@@ -486,7 +487,7 @@ let rec recheck_until_no_changes_left acc genv env select_outcome =
             * rechecks and us restarting them. We're going to heavily favor edits and
             * restart only after a longer period since last edit. Note that we'll still
             * start full recheck immediately after any file save. *)
-           && start_time -. env.last_command_time > 5.0 ->
+           && Float.(start_time - env.last_command_time > 5.0) ->
       let still_there =
         try
           ClientProvider.ping client;
@@ -711,7 +712,8 @@ let serve_one_iteration genv env client_provider =
    * And if the selected_client was a request, then once we discover the nature
    * of that request then ServerCommand.handle will send its own status updates too.
    *)
-  ServerProgress.send_progress_to_monitor_w_timeout
+  ServerProgress.send_progress
+    ~include_in_logs:false
     "%s"
     (match selected_client with
     | ClientProvider.Select_nothing ->
@@ -850,10 +852,12 @@ let serve_one_iteration genv env client_provider =
           in
           HackEventLogger.handled_connection t_start_recheck;
           env
-        with e ->
-          let stack = Utils.Callstack (Printexc.get_backtrace ()) in
-          HackEventLogger.handle_connection_exception e stack;
-          Hh_logger.log "Handling client failed. Ignoring.";
+        with exn ->
+          let e = Exception.wrap exn in
+          HackEventLogger.handle_connection_exception "outer" e;
+          Hh_logger.log
+            "HANDLE_CONNECTION_EXCEPTION(outer) [ignoring request] %s"
+            (Exception.to_string e);
           env
       end
   in
@@ -884,10 +888,15 @@ let serve_one_iteration genv env client_provider =
         in
         HackEventLogger.handled_persistent_connection t_start_recheck;
         env
-      with e ->
-        let stack = Utils.Callstack (Printexc.get_backtrace ()) in
-        HackEventLogger.handle_persistent_connection_exception e stack;
-        Hh_logger.log "Handling persistent client failed. Ignoring.";
+      with exn ->
+        let e = Exception.wrap exn in
+        HackEventLogger.handle_persistent_connection_exception
+          "outer"
+          e
+          ~is_fatal:true;
+        Hh_logger.log
+          "HANDLE_PERSISTENT_CONNECTION_EXCEPTION(outer) [ignoring request] %s"
+          (Exception.to_string e);
         env
     ) else
       env
@@ -1086,9 +1095,6 @@ let setup_interrupts env client_provider =
 let serve genv env in_fds =
   if genv.local_config.ServerLocalConfig.ide_parser_cache then
     Ide_parser_cache.enable ();
-  if genv.local_config.ServerLocalConfig.ide_tast_cache then
-    Ide_tast_cache.enable ();
-
   (* During server lifetime dependency table can be not up-to-date. Because of
    * that, we ban access to it be default, forcing the code trying to read it to
    * take it into account, either by explcitely enabling reads (and being fine
@@ -1236,6 +1242,7 @@ let program_init genv env =
     }
   in
   Hh_logger.log "Waiting for daemon(s) to be ready...";
+  ServerProgress.send_progress "wrapping up init...";
   genv.wait_until_ready ();
   ServerStamp.touch_stamp ();
   let informant_use_xdb =
@@ -1311,8 +1318,24 @@ let setup_server ~informant_managed ~monitor_pid options config local_config =
     SharedMem.init ~num_workers (ServerConfig.sharedmem_config config)
   in
   let init_id = Random_id.short_string () in
-  Exit.set_finale_file_for_eventual_exit
-    (ServerFiles.server_finale_file (Unix.getpid ()));
+  let pid = Unix.getpid () in
+  let server_finale_file = ServerFiles.server_finale_file pid in
+  let server_progress_file = ServerFiles.server_progress_file pid in
+  let server_receipt_to_monitor_file =
+    ServerFiles.server_receipt_to_monitor_file pid
+  in
+  Exit.prepare_server_specific_files
+    ~server_finale_file
+    ~server_progress_file
+    ~server_receipt_to_monitor_file;
+  ServerCommandTypesUtils.write_progress_file
+    ~server_progress_file
+    ~server_progress:
+      {
+        ServerCommandTypes.server_warning = None;
+        server_progress = "starting up";
+        server_timestamp = Unix.gettimeofday ();
+      };
   Hh_logger.log "Version: %s" Hh_version.version;
   Hh_logger.log "Hostname: %s" (Unix.gethostname ());
   let root = ServerArgs.root options in
@@ -1523,13 +1546,11 @@ let daemon_main
       monitor_pid,
       priority_in_fd,
       force_dormant_start_only_in_fd )
-    (default_ic, default_oc) =
+    (default_ic, _default_oc) =
   (* Avoid leaking this fd further *)
   let () = Unix.set_close_on_exec priority_in_fd in
   let () = Unix.set_close_on_exec force_dormant_start_only_in_fd in
   let default_in_fd = Daemon.descr_of_in_channel default_ic in
-  let default_out_fd = Daemon.descr_of_out_channel default_oc in
-  ServerProgress.make_pipe_to_monitor default_out_fd;
 
   (* Restore the root directory and other global states from monitor *)
   ServerGlobalState.restore state 0;

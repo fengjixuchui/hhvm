@@ -149,7 +149,13 @@ type _ t_ =
   | Rconcat_operand : Pos.t -> locl_phase t_
   | Rinterp_operand : Pos.t -> locl_phase t_
   | Rdynamic_coercion of locl_phase t_
-  | Rsound_dynamic_callable : Pos_or_decl.t -> 'phase t_
+  | Rsupport_dynamic_type : Pos_or_decl.t -> 'phase t_
+  | Rdynamic_partial_enforcement :
+      Pos_or_decl.t * string * locl_phase t_
+      -> locl_phase t_
+  | Rrigid_tvar_escape :
+      Pos.t * string * string * locl_phase t_
+      -> locl_phase t_
 
 type t = locl_phase t_
 
@@ -184,7 +190,7 @@ let rec localize : decl_phase t_ -> locl_phase t_ = function
   | Rtconst_no_cstr id -> Rtconst_no_cstr id
   | Rdefault_capability p -> Rdefault_capability p
   | Rdynamic_coercion r -> Rdynamic_coercion r
-  | Rsound_dynamic_callable p -> Rsound_dynamic_callable p
+  | Rsupport_dynamic_type p -> Rsupport_dynamic_type p
   | Rglobal_type_variable_generics (p, tp, n) ->
     Rglobal_type_variable_generics (p, tp, n)
 
@@ -590,8 +596,16 @@ let rec to_string : type ph. string -> ph t_ -> (Pos_or_decl.t * string) list =
   | Rconcat_operand _ -> [(p, "Expected `string` or `int`")]
   | Rinterp_operand _ -> [(p, "Expected `string` or `int`")]
   | Rdynamic_coercion r -> to_string prefix r
-  | Rsound_dynamic_callable _ ->
+  | Rsupport_dynamic_type _ ->
     [(p, prefix ^ " because method must be callable in a dynamic context")]
+  | Rdynamic_partial_enforcement (p, cn, r_orig) ->
+    to_string prefix r_orig
+    @ [(p, "while allowing dynamic to flow into " ^ Utils.strip_all_ns cn)]
+  | Rrigid_tvar_escape (p, what, tvar, r_orig) ->
+    let tvar = Markdown_lite.md_codify tvar in
+    ( Pos_or_decl.of_raw_pos p,
+      prefix ^ " because " ^ tvar ^ " escaped from " ^ what )
+    :: to_string ("  where " ^ tvar ^ " originates from") r_orig
 
 and to_pos : type ph. ph t_ -> Pos_or_decl.t =
  fun r ->
@@ -624,7 +638,7 @@ and to_raw_pos : type ph. ph t_ -> Pos_or_decl.t =
   | Rglobal_type_variable_generics (p, _, _)
   | Ridx_vector_from_decl p
   | Rinout_param p
-  | Rsound_dynamic_callable p
+  | Rsupport_dynamic_type p
   | Rglobal_class_prop p ->
     p
   | Rwitness p
@@ -682,7 +696,8 @@ and to_raw_pos : type ph. ph t_ -> Pos_or_decl.t =
   | Ret_boolean p
   | Rhack_arr_dv_arrs p
   | Rconcat_operand p
-  | Rinterp_operand p ->
+  | Rinterp_operand p
+  | Rrigid_tvar_escape (p, _, _, _) ->
     Pos_or_decl.of_raw_pos p
   | Rinvariant_generic (r, _)
   | Rcontravariant_generic (r, _)
@@ -694,6 +709,7 @@ and to_raw_pos : type ph. ph t_ -> Pos_or_decl.t =
   | Rtypeconst (r, _, _, _) ->
     to_raw_pos r
   | Rdynamic_coercion r -> to_raw_pos r
+  | Rdynamic_partial_enforcement (p, _, _) -> p
 
 (* This is a mapping from internal expression ids to a standardized int.
  * Used for outputting cleaner error messages to users
@@ -708,6 +724,8 @@ and get_expr_display_id id =
     let n = IMap.cardinal map + 1 in
     expr_display_id_map := IMap.add id n map;
     n
+
+and get_expr_display_id_map () = !expr_display_id_map
 
 and expr_dep_type_reason_string = function
   | ERexpr id ->
@@ -820,7 +838,9 @@ let to_constructor_string : type ph. ph t_ -> string = function
   | Rconcat_operand _ -> "Rconcat_operand"
   | Rinterp_operand _ -> "Rinterp_operand"
   | Rdynamic_coercion _ -> "Rdynamic_coercion"
-  | Rsound_dynamic_callable _ -> "Rsound_dynamic_callable"
+  | Rsupport_dynamic_type _ -> "Rsupport_dynamic_type"
+  | Rdynamic_partial_enforcement _ -> "Rdynamic_partial_enforcement"
+  | Rrigid_tvar_escape _ -> "Rrigid_tvar_escape"
 
 let pp fmt r =
   let pos = to_raw_pos r in
@@ -836,7 +856,7 @@ type ureason =
   | URforeach
   | URthrow
   | URvector
-  | URkey
+  | URkey of string
   | URvalue
   | URawait
   | URyield
@@ -883,7 +903,7 @@ let string_of_ureason = function
   | URforeach -> "Invalid `foreach`"
   | URthrow -> "Invalid exception"
   | URvector -> "Some elements in this collection are incompatible"
-  | URkey -> "The keys of this `Map` are incompatible"
+  | URkey s -> "The keys of this " ^ strip_ns s ^ " are incompatible"
   | URvalue -> "The values of this `Map` are incompatible"
   | URawait -> "`await` can only operate on an `Awaitable`"
   | URyield -> "Invalid `yield`"
@@ -939,15 +959,3 @@ let compare : type phase. phase t_ -> phase t_ -> int =
     Pos_or_decl.compare (to_raw_pos r1) (to_raw_pos r2)
 
 let none = Rnone
-
-(*****************************************************************************)
-(* When the subtyping fails because of a constraint. *)
-(*****************************************************************************)
-
-let explain_generic_constraint p_inst reason name messages =
-  let pos = to_pos reason in
-  Errors.explain_constraint
-    ~use_pos:p_inst
-    ~definition_pos:pos
-    ~param_name:name
-    messages

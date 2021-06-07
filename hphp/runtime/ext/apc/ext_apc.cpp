@@ -194,7 +194,6 @@ void apcExtension::moduleInit() {
 
   HHVM_FE(apc_add);
   HHVM_FE(apc_store);
-  HHVM_FE(apc_store_as_primed_do_not_use);
   HHVM_FE(apc_fetch);
   HHVM_FE(apc_delete);
   HHVM_FE(apc_clear_cache);
@@ -315,29 +314,6 @@ Variant HHVM_FUNCTION(apc_store,
   return Variant(true);
 }
 
-/**
- * Stores the key in a similar fashion as "priming" would do (no TTL limit).
- * Using this function is equivalent to adding your key to apc_prime.so.
- */
-bool HHVM_FUNCTION(apc_store_as_primed_do_not_use,
-                   const String& key,
-                   const Variant& var) {
-  if (!apcExtension::Enable) return false;
-  if (key.empty()) {
-    raise_invalid_argument_warning("apc key: (empty string)");
-    return false;
-  }
-  if (isKeyInvalid(key)) {
-    raise_invalid_argument_warning("apc key: (contains invalid characters)");
-    return false;
-  }
-  apc_store().setWithoutTTL(key, var);
-  if (RuntimeOption::EnableAPCStats) {
-    ServerStats::Log("apc.write", 1);
-  }
-  return true;
-}
-
 Variant HHVM_FUNCTION(apc_add,
                       const Variant& key_or_array,
                       const Variant& var /* = null */,
@@ -399,7 +375,7 @@ bool HHVM_FUNCTION(apc_extend_ttl, const String& key, int64_t new_ttl) {
   if (!apcExtension::Enable) return false;
 
   if (new_ttl < 0) return false;
-  return apc_store().bumpTTL(key, new_ttl);
+  return apc_store().extendTTL(key, new_ttl);
 }
 
 TypedValue HHVM_FUNCTION(apc_fetch, const Variant& key, bool& success) {
@@ -786,17 +762,13 @@ int apc_rfc1867_progress(apc_rfc1867_data* rfc1867ApcData, unsigned int event,
 ///////////////////////////////////////////////////////////////////////////////
 // apc serialization
 
-String apc_serialize(const_variant_ref value,
-                     APCSerializeMode mode /* = Normal */) {
+String apc_serialize(const_variant_ref value) {
   auto const enableApcSerialize = apcExtension::EnableApcSerialize;
   VariableSerializer::Type sType =
     enableApcSerialize ?
       VariableSerializer::Type::APCSerialize :
       VariableSerializer::Type::Internal;
-  auto const options = enableApcSerialize && mode == APCSerializeMode::Prime
-    ? VariableSerializer::kAPC_PRIME_SERIALIZE
-    : 0;
-  VariableSerializer vs(sType, options);
+  VariableSerializer vs(sType);
   return vs.serialize(value, true);
 }
 

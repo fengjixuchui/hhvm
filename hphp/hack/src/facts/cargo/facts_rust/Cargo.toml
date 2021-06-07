@@ -12,8 +12,9 @@ digest = "0.8"
 facts_parser = { path = "../../../parser/api/cargo/facts_parser" }
 facts_smart_constructors = { path = "../facts_smart_constructors" }
 hex = "0.4"
-hhbc_string_utils_rust = { path = "../../../hhbc/cargo/string_utils" }
+hhbc_by_ref_hhbc_string_utils = { path = "../../../hhbc/hhbc_by_ref/cargo/hhbc_by_ref_hhbc_string_utils" }
 md-5 = "0.8"
+naming_special_names_rust = { path = "../../../naming" }
 ocamlrep = { path = "../../../ocamlrep" }
 oxidized = { path = "../../../oxidized" }
 parser_core_types = { path = "../../../parser/cargo/core_types" }
@@ -24,3 +25,15 @@ sha-1 = "0.8"
 
 [dev-dependencies]
 pretty_assertions = "0.6"
+
+[profile.release]
+incremental = false
+
+[profile.dev]
+incremental = false
+
+[profile.test]
+incremental = false
+
+[profile.bench]
+incremental = false

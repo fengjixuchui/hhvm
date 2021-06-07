@@ -26,16 +26,15 @@ let check_param : env -> Nast.fun_param -> unit =
     let rec check_memoizable : env -> locl_ty -> unit =
      fun env ty ->
       let (env, ty) = Env.expand_type env ty in
-      let ety_env =
-        Typing_phase.env_with_self env ~on_error:Errors.ignore_error
-      in
+      let ety_env = empty_expand_env in
       let (env, ty, _) = Typing_tdef.force_expand_typedef ~ety_env env ty in
       match get_node ty with
       | Tprim (Tnull | Tarraykey | Tbool | Tint | Tfloat | Tstring | Tnum)
       | Tnonnull
       | Tany _
       | Terr
-      | Tdynamic ->
+      | Tdynamic
+      | Tneg _ ->
         ()
       | Tprim (Tvoid | Tresource | Tnoreturn) -> error ty
       | Toption ty -> check_memoizable env ty
@@ -96,6 +95,7 @@ let check_param : env -> Nast.fun_param -> unit =
               ~obj_pos:param_pos
               ~is_method:true
               ~inst_meth:false
+              ~meth_caller:false
               ~nullsafe:None
               ~coerce_from_ty:None
               ~explicit_targs:[]
@@ -124,7 +124,7 @@ let check_param : env -> Nast.fun_param -> unit =
   | Some hint ->
     let (hint_pos, _) = hint in
     let (env, ty) =
-      Typing_phase.localize_hint_with_self env ~ignore_errors:true hint
+      Typing_phase.localize_hint_no_subst env ~ignore_errors:true hint
     in
     check_memoizable env hint_pos ty
 

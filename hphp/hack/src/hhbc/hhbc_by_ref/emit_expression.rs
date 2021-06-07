@@ -126,22 +126,22 @@ mod inout_locals {
         }
     }
 
-    pub(super) type AliasInfoMap = HashMap<String, AliasInfo>;
+    pub(super) type AliasInfoMap<'ast> = HashMap<&'ast str, AliasInfo>;
 
-    pub(super) fn new_alias_info_map() -> AliasInfoMap {
+    pub(super) fn new_alias_info_map<'ast>() -> AliasInfoMap<'ast> {
         HashMap::default()
     }
 
-    fn add_write(name: String, i: usize, map: &mut AliasInfoMap) {
-        map.entry(name).or_default().add_write(i as isize);
+    fn add_write<'ast>(name: &'ast str, i: usize, map: &mut AliasInfoMap<'ast>) {
+        map.entry(name.as_ref()).or_default().add_write(i as isize);
     }
 
-    fn add_inout(name: String, i: usize, map: &mut AliasInfoMap) {
-        map.entry(name).or_default().add_inout(i as isize);
+    fn add_inout<'ast>(name: &'ast str, i: usize, map: &mut AliasInfoMap<'ast>) {
+        map.entry(name.as_ref()).or_default().add_inout(i as isize);
     }
 
-    fn add_use(name: String, map: &mut AliasInfoMap) {
-        map.entry(name).or_default().add_use();
+    fn add_use<'ast>(name: &'ast str, map: &mut AliasInfoMap<'ast>) {
+        map.entry(name.as_ref()).or_default().add_use();
     }
 
     // determines if value of a local 'name' that appear in parameter 'i'
@@ -164,10 +164,10 @@ mod inout_locals {
         }
     }
 
-    pub(super) fn collect_written_variables<'a, 'arena>(
-        env: &Env<'a, 'arena>,
-        args: &[tast::Expr],
-    ) -> AliasInfoMap {
+    pub(super) fn collect_written_variables<'ast, 'arena>(
+        env: &Env<'ast, 'arena>,
+        args: &'ast [tast::Expr],
+    ) -> AliasInfoMap<'ast> {
         let mut acc = HashMap::default();
         args.iter()
             .enumerate()
@@ -175,12 +175,12 @@ mod inout_locals {
         acc
     }
 
-    fn handle_arg<'a, 'arena>(
-        env: &Env<'a, 'arena>,
+    fn handle_arg<'ast, 'arena>(
+        env: &Env<'ast, 'arena>,
         is_top: bool,
         i: usize,
-        arg: &tast::Expr,
-        acc: &mut AliasInfoMap,
+        arg: &'ast tast::Expr,
+        acc: &mut AliasInfoMap<'ast>,
     ) {
         use tast::{Expr, Expr_};
         let Expr(_, e) = arg;
@@ -188,17 +188,17 @@ mod inout_locals {
         if let Some((ast_defs::ParamKind::Pinout, Expr(_, Expr_::Lvar(lid)))) = e.as_callconv() {
             let Lid(_, lid) = &**lid;
             if !is_local_this(env, &lid) {
-                add_use(lid.1.to_string(), acc);
+                add_use(&lid.1, acc);
                 return if is_top {
-                    add_inout(lid.1.to_string(), i, acc);
+                    add_inout(lid.1.as_str(), i, acc);
                 } else {
-                    add_write(lid.1.to_string(), i, acc);
+                    add_write(lid.1.as_str(), i, acc);
                 };
             }
         }
         // $v
         if let Some(Lid(_, (_, id))) = e.as_lvar() {
-            return add_use(id.to_string(), acc);
+            return add_use(id.as_str(), acc);
         }
         // dive into argument value
         aast_visitor::visit(
@@ -209,17 +209,16 @@ mod inout_locals {
         .unwrap();
     }
 
-    struct Visitor<'a, 'arena: 'a>(PhantomData<&'arena &'a ()>);
+    struct Visitor<'r, 'arena>(PhantomData<(&'arena (), &'r ())>);
 
-    pub struct Ctx<'a, 'arena: 'a> {
-        // TODO(shiqicao): Change AliasInfoMap to AliasInfoMap<'ast>
-        state: &'a mut AliasInfoMap,
-        env: &'a Env<'a, 'arena>,
+    pub struct Ctx<'r, 'ast: 'r, 'arena: 'r> {
+        state: &'r mut AliasInfoMap<'ast>,
+        env: &'r Env<'ast, 'arena>,
         i: usize,
     }
 
-    impl<'ast, 'a, 'arena: 'a> aast_visitor::Visitor<'ast> for Visitor<'a, 'arena> {
-        type P = aast_visitor::AstParams<Ctx<'a, 'arena>, ()>;
+    impl<'r, 'ast: 'r, 'arena: 'r> aast_visitor::Visitor<'ast> for Visitor<'r, 'arena> {
+        type P = aast_visitor::AstParams<Ctx<'r, 'ast, 'arena>, ()>;
 
         fn object(&mut self) -> &mut dyn aast_visitor::Visitor<'ast, P = Self::P> {
             self
@@ -227,7 +226,7 @@ mod inout_locals {
 
         fn visit_expr_(
             &mut self,
-            c: &mut Ctx<'a, 'arena>,
+            c: &mut Ctx<'r, 'ast, 'arena>,
             p: &'ast tast::Expr_,
         ) -> std::result::Result<(), ()> {
             // f(inout $v) or f(&$v)
@@ -260,23 +259,23 @@ mod inout_locals {
                     // $v
                     tast::Expr_::Lvar(expr) => {
                         let Lid(_, (_, id)) = &**expr;
-                        add_use(id.to_string(), &mut c.state);
+                        add_use(id, &mut c.state);
                     }
                     _ => {}
                 })
             }
         }
-    } // impl<'ast, 'a, 'arena:'a> aast_visitor::Visitor<'ast> for Visitor<'a, 'arena>
+    } // impl<'ast, 'a, 'arena> aast_visitor::Visitor<'ast> for Visitor<'a, 'arena>
 
     // collect lvars on the left hand side of '=' operator
-    fn collect_lvars_hs<'a, 'arena>(ctx: &mut Ctx<'a, 'arena>, expr: &tast::Expr) {
+    fn collect_lvars_hs<'r, 'ast, 'arena>(ctx: &mut Ctx<'r, 'ast, 'arena>, expr: &'ast tast::Expr) {
         let tast::Expr(_, e) = expr;
         match &*e {
             tast::Expr_::Lvar(lid) => {
                 let Lid(_, lid) = &**lid;
                 if !is_local_this(&ctx.env, &lid) {
-                    add_use(lid.1.to_string(), &mut ctx.state);
-                    add_write(lid.1.to_string(), ctx.i, &mut ctx.state);
+                    add_use(lid.1.as_str(), &mut ctx.state);
+                    add_write(lid.1.as_str(), ctx.i, &mut ctx.state);
                 }
             }
             tast::Expr_::List(exprs) => exprs.iter().for_each(|expr| collect_lvars_hs(ctx, expr)),
@@ -387,7 +386,7 @@ pub fn emit_expr<'a, 'arena>(
     let tast::Expr(pos, expr) = expression;
     match expr {
         Expr_::Float(_)
-        | Expr_::EnumAtom(_)
+        | Expr_::EnumClassLabel(_)
         | Expr_::String(_)
         | Expr_::Int(_)
         | Expr_::Null
@@ -525,9 +524,11 @@ pub fn emit_expr<'a, 'arena>(
             pos,
             "list() can only be used as an lvar. Did you mean to use tuple()?",
         )),
-        Expr_::Tuple(_) => {
-            unimplemented!("TODO: generate Tuple nodes in lowerer and update codegen")
-        }
+        Expr_::Tuple(e) => Ok(emit_pos_then(
+            alloc,
+            pos,
+            emit_collection(emitter, env, expression, &mk_afvalues(&e), None)?,
+        )),
 
         Expr_::Any => Err(unrecoverable("Cannot codegen from an Any node")),
         Expr_::This | Expr_::Lplaceholder(_) | Expr_::Dollardollar(_) => {
@@ -883,7 +884,7 @@ pub fn emit_await<'a, 'arena>(
             inline_gena_call(emitter, env, &args[0])
         }
         _ => {
-            let after_await = emitter.label_gen_mut().next_regular(alloc);
+            let after_await = emitter.label_gen_mut().next_regular();
             let instrs = match e {
                 tast::Expr_::Call(c) => {
                     emit_call_expr(emitter, env, pos, Some(after_await.clone()), &*c)?
@@ -913,7 +914,7 @@ fn inline_gena_call<'a, 'arena>(
 ) -> Result<InstrSeq<'arena>> {
     let alloc = env.arena;
     let load_arr = emit_expr(emitter, env, arg)?;
-    let async_eager_label = emitter.label_gen_mut().next_regular(alloc);
+    let async_eager_label = emitter.label_gen_mut().next_regular();
 
     scope::with_unnamed_local(alloc, emitter, |alloc, e, arr_local| {
         let before = InstrSeq::gather(
@@ -934,7 +935,6 @@ fn inline_gena_call<'a, 'arena>(
                 instr::fcallclsmethodd(
                     alloc,
                     FcallArgs::new(
-                        alloc,
                         FcallFlags::default(),
                         1,
                         bumpalo::vec![in alloc;].into_bump_slice(),
@@ -987,8 +987,8 @@ fn emit_iter<
         let iter_id = e.iterator_mut().get();
         let val_id = e.local_gen_mut().get_unnamed();
         let key_id = e.local_gen_mut().get_unnamed();
-        let loop_end = e.label_gen_mut().next_regular(alloc);
-        let loop_next = e.label_gen_mut().next_regular(alloc);
+        let loop_end = e.label_gen_mut().next_regular();
+        let loop_next = e.label_gen_mut().next_regular();
         let iter_args = IterArgs {
             iter_id,
             key_id: Some(key_id),
@@ -1519,6 +1519,7 @@ fn emit_dynamic_collection<'a, 'arena>(
         E_::Collection(v) if (v.0).1 == "vec" => {
             emit_value_only_collection(e, env, pos, fields, InstructLitConst::NewVec)
         }
+        E_::Tuple(_) => emit_value_only_collection(e, env, pos, fields, InstructLitConst::NewVec),
         E_::ValCollection(v) if v.0 == tast::VcKind::Keyset => {
             emit_value_only_collection(e, env, pos, fields, InstructLitConst::NewKeysetArray)
         }
@@ -1732,7 +1733,7 @@ fn emit_call_isset_exprs<'a, 'arena>(
         )),
         [expr] => emit_call_isset_expr(e, env, pos, expr),
         _ => {
-            let its_done = e.label_gen_mut().next_regular(alloc);
+            let its_done = e.label_gen_mut().next_regular();
             Ok(InstrSeq::gather(
                 alloc,
                 vec![
@@ -1843,7 +1844,7 @@ fn emit_call<'a, 'arena>(
     targs: &[tast::Targ],
     args: &[tast::Expr],
     uarg: Option<&tast::Expr>,
-    async_eager_label: Option<Label<'arena>>,
+    async_eager_label: Option<Label>,
 ) -> Result<InstrSeq<'arena>> {
     let alloc = env.arena;
     if let Some(ast_defs::Id(_, s)) = expr.as_id() {
@@ -2104,15 +2105,8 @@ fn emit_call_lhs_and_fcall<'a, 'arena>(
                     null_flavor: &tast::OgNullFlavor,
                     mut fcall_args,
                 | {
-                    let name: method::Type<'arena> = (
-                        alloc,
-                        bumpalo::collections::String::from_str_in(
-                            string_utils::strip_global_ns(id),
-                            alloc,
-                        )
-                        .into_bump_str(),
-                    )
-                        .into();
+                    let name: method::Type<'arena> =
+                        (alloc, string_utils::strip_global_ns(id)).into();
                     let obj = emit_object_expr(e, env, obj)?;
                     let generics = emit_generics(e, env, &mut fcall_args)?;
                     let null_flavor = from_ast_null_flavor(*null_flavor);
@@ -2166,7 +2160,6 @@ fn emit_call_lhs_and_fcall<'a, 'arena>(
                                     }
                                     Some(fid) => {
                                         let fcall_args = FcallArgs::new(
-                                            alloc,
                                             FcallFlags::default(),
                                             1,
                                             bumpalo::vec![in alloc;].into_bump_slice(),
@@ -2238,15 +2231,7 @@ fn emit_call_lhs_and_fcall<'a, 'arena>(
                     cexpr = reified_var_cexpr;
                 }
             }
-            let method_id: method::Type = (
-                alloc,
-                bumpalo::collections::String::from_str_in(
-                    string_utils::strip_global_ns(&id),
-                    alloc,
-                )
-                .into_bump_str(),
-            )
-                .into();
+            let method_id: method::Type = (alloc, string_utils::strip_global_ns(&id)).into();
             Ok(match cexpr {
                 // Statically known
                 ClassExpr::Id(ast_defs::Id(_, cname)) => {
@@ -2356,16 +2341,7 @@ fn emit_call_lhs_and_fcall<'a, 'arena>(
                     tast::ClassGetExpr::CGstring((pos, id)) => Ok(emit_pos_then(
                         alloc,
                         pos,
-                        instr::cgetl(
-                            alloc,
-                            local::Type::Named(
-                                bumpalo::collections::String::from_str_in(
-                                    id.to_string().as_str(),
-                                    alloc,
-                                )
-                                .into_bump_str(),
-                            ),
-                        ),
+                        instr::cgetl(alloc, local::Type::Named(alloc.alloc_str(id.as_str()))),
                     )),
                     tast::ClassGetExpr::CGexpr(expr) => emit_expr(e, env, expr),
                 };
@@ -2489,15 +2465,7 @@ fn emit_call_lhs_and_fcall<'a, 'arena>(
                 "max" if num_args == 2 && !flags.contains(FcallFlags::HAS_UNPACK) => {
                     function::Type::<'arena>::from_ast_name(alloc, "__SystemLib\\max2")
                 }
-                _ => (
-                    alloc,
-                    bumpalo::collections::String::from_str_in(
-                        string_utils::strip_global_ns(&id.1),
-                        alloc,
-                    )
-                    .into_bump_str(),
-                )
-                    .into(),
+                _ => (alloc, string_utils::strip_global_ns(&id.1)).into(),
             };
             let generics = emit_generics(e, env, &mut fcall_args)?;
             Ok((
@@ -2513,12 +2481,7 @@ fn emit_call_lhs_and_fcall<'a, 'arena>(
         }
         E_::String(s) => {
             // TODO(hrust) should be able to accept `let fq_id = function::from_raw_string(s);`
-            let fq_id = (
-                alloc,
-                bumpalo::collections::String::from_str_in(s.to_string().as_str(), alloc)
-                    .into_bump_str(),
-            )
-                .into();
+            let fq_id = (alloc, s.to_string().as_str()).into();
             let generics = emit_generics(e, env, &mut fcall_args)?;
             Ok((
                 InstrSeq::gather(
@@ -2701,7 +2664,7 @@ fn get_fcall_args<'arena>(
     alloc: &'arena bumpalo::Bump,
     args: &[tast::Expr],
     uarg: Option<&tast::Expr>,
-    async_eager_label: Option<Label<'arena>>,
+    async_eager_label: Option<Label>,
     context: Option<String>,
     lock_while_unwinding: bool,
 ) -> FcallArgs<'arena> {
@@ -2711,7 +2674,6 @@ fn get_fcall_args<'arena>(
     flags.set(FcallFlags::HAS_UNPACK, uarg.is_some());
     flags.set(FcallFlags::LOCK_WHILE_UNWINDING, lock_while_unwinding);
     FcallArgs::new(
-        alloc,
         flags,
         num_rets,
         bumpalo::collections::Vec::from_iter_in(args.iter().map(is_inout_arg), alloc)
@@ -2772,9 +2734,16 @@ fn emit_special_function<'a, 'arena>(
         ))),
         ("unsafe_cast", &[]) => Ok(Some(instr::null(alloc))),
         ("unsafe_cast", args) => Ok(Some(emit_expr(e, env, &args[0])?)),
-
+        ("HH\\Readonly\\as_mut", args) if args.len() == 1 => Ok(Some(emit_expr(e, env, &args[0])?)),
+        ("HH\\Readonly\\as_mut", _) => Err(emit_fatal::raise_fatal_runtime(
+            pos,
+            format!(
+                "HH\\Readonly\\as_mut() expects exactly 1 parameter, {} given",
+                nargs.to_string()
+            ),
+        )),
         ("HH\\invariant", args) if args.len() >= 2 => {
-            let l = e.label_gen_mut().next_regular(alloc);
+            let l = e.label_gen_mut().next_regular();
             let expr_id = tast::Expr(
                 pos.clone(),
                 tast::Expr_::mk_id(ast_defs::Id(
@@ -2909,15 +2878,11 @@ fn emit_special_function<'a, 'arena>(
                     alloc,
                     (
                         alloc,
-                        bumpalo::collections::String::from_str_in(
-                            string_utils::strip_global_ns(
-                                // FIXME: This is not safe--string literals are binary strings.
-                                // There's no guarantee that they're valid UTF-8.
-                                unsafe { std::str::from_utf8_unchecked(func_name.as_slice()) },
-                            ),
-                            alloc,
-                        )
-                        .into_bump_str(),
+                        string_utils::strip_global_ns(
+                            // FIXME: This is not safe--string literals are binary strings.
+                            // There's no guarantee that they're valid UTF-8.
+                            unsafe { std::str::from_utf8_unchecked(func_name.as_slice()) },
+                        ),
                     )
                         .into(),
                 ))),
@@ -3051,13 +3016,7 @@ fn emit_special_function<'a, 'arena>(
                 vec![
                     instr::cgetl(
                         alloc,
-                        local::Type::Named(
-                            bumpalo::collections::String::from_str_in(
-                                local_id::get_name(&param.1),
-                                alloc,
-                            )
-                            .into_bump_str(),
-                        ),
+                        local::Type::Named(alloc.alloc_str(local_id::get_name(&param.1))),
                     ),
                     instr::whresult(alloc),
                 ],
@@ -3066,10 +3025,7 @@ fn emit_special_function<'a, 'arena>(
         ("__hhvm_internal_getmemokeyl", &[E(_, E_::Lvar(ref param))]) if e.systemlib() => {
             Ok(Some(instr::getmemokeyl(
                 alloc,
-                local::Type::Named(
-                    bumpalo::collections::String::from_str_in(local_id::get_name(&param.1), alloc)
-                        .into_bump_str(),
-                ),
+                local::Type::Named(alloc.alloc_str(local_id::get_name(&param.1))),
             )))
         }
         ("HH\\array_mark_legacy", _) if args.len() == 1 || args.len() == 2 => {
@@ -3173,12 +3129,7 @@ fn emit_class_meth<'a, 'arena>(
         .contains(HhvmFlags::EMIT_CLS_METH_POINTERS)
     {
         let method_id = match &meth.1 {
-            E_::String(method_name) => (
-                alloc,
-                bumpalo::collections::String::from_str_in(method_name.to_string().as_str(), alloc)
-                    .into_bump_str(),
-            )
-                .into(),
+            E_::String(method_name) => (alloc, method_name.to_string().as_str()).into(),
             _ => return Err(unrecoverable("emit_class_meth: unhandled method")),
         };
         if let Some((cid, (_, id))) = cls.1.as_class_const() {
@@ -3200,15 +3151,11 @@ fn emit_class_meth<'a, 'arena>(
                 alloc,
                 (
                     alloc,
-                    bumpalo::collections::String::from_str_in(
-                        string_utils::strip_global_ns(
-                            // FIXME: This is not safe--string literals are binary strings.
-                            // There's no guarantee that they're valid UTF-8.
-                            unsafe { std::str::from_utf8_unchecked(class_name.as_slice()) },
-                        ),
-                        alloc,
-                    )
-                    .into_bump_str(),
+                    string_utils::strip_global_ns(
+                        // FIXME: This is not safe--string literals are binary strings.
+                        // There's no guarantee that they're valid UTF-8.
+                        unsafe { std::str::from_utf8_unchecked(class_name.as_slice()) },
+                    ),
                 )
                     .into(),
                 method_id,
@@ -3318,6 +3265,8 @@ fn get_call_builtin_func_info<'arena>(id: impl AsRef<str>) -> Option<(usize, Ins
         "HH\\dict" => Some((1, IOp(CastDict))),
         "HH\\varray" => Some((1, IOp(CastVec))),
         "HH\\darray" => Some((1, IOp(CastDict))),
+        // TODO: enforce that this returns readonly
+        "HH\\global_readonly_get" => Some((1, IGet(CGetG))),
         "HH\\global_get" => Some((1, IGet(CGetG))),
         "HH\\global_isset" => Some((1, IIsset(IssetG))),
         _ => None,
@@ -3338,15 +3287,8 @@ fn emit_function_pointer<'a, 'arena>(
         // class_meth
         tast::FunctionPtrId::FPClassConst(cid, method_id) => {
             // TODO(hrust) should accept `let method_id = method::Type::from_ast_name(&(cc.1).1);`
-            let method_id: method::Type<'arena> = (
-                alloc,
-                bumpalo::collections::String::from_str_in(
-                    string_utils::strip_global_ns(&method_id.1),
-                    alloc,
-                )
-                .into_bump_str(),
-            )
-                .into();
+            let method_id: method::Type<'arena> =
+                (alloc, string_utils::strip_global_ns(&method_id.1)).into();
             emit_class_meth_native(e, env, pos, cid, method_id, targs)?
         }
     };
@@ -3361,9 +3303,7 @@ fn emit_hh_fun<'a, 'arena>(
     fname: &str,
 ) -> Result<InstrSeq<'arena>> {
     let alloc = env.arena;
-    let fname =
-        bumpalo::collections::String::from_str_in(string_utils::strip_global_ns(fname), alloc)
-            .into_bump_str();
+    let fname = string_utils::strip_global_ns(fname);
     if has_non_tparam_generics_targs(env, targs) {
         let generics = emit_reified_targs(
             e,
@@ -3494,7 +3434,7 @@ fn emit_call_expr<'a, 'arena>(
     e: &mut Emitter<'arena>,
     env: &Env<'a, 'arena>,
     pos: &Pos,
-    async_eager_label: Option<Label<'arena>>,
+    async_eager_label: Option<Label>,
     (expr, targs, args, uarg): &(
         tast::Expr,
         Vec<tast::Targ>,
@@ -3599,13 +3539,7 @@ pub fn emit_reified_generic_instrs<'arena>(
     let base = if is_fun {
         instr::basel(
             alloc,
-            local::Type::Named(
-                bumpalo::collections::String::from_str_in(
-                    string_utils::reified::GENERICS_LOCAL_NAME,
-                    alloc,
-                )
-                .into_bump_str(),
-            ),
+            local::Type::Named(alloc.alloc_str(string_utils::reified::GENERICS_LOCAL_NAME)),
             MemberOpMode::Warn,
         )
     } else {
@@ -4547,8 +4481,8 @@ fn emit_conditional_expr<'a, 'arena>(
     let alloc = env.arena;
     Ok(match etrue.as_ref() {
         Some(etrue) => {
-            let false_label = e.label_gen_mut().next_regular(alloc);
-            let end_label = e.label_gen_mut().next_regular(alloc);
+            let false_label = e.label_gen_mut().next_regular();
+            let end_label = e.label_gen_mut().next_regular();
             let r = emit_jmpz(e, env, etest, false_label)?;
             // only emit false branch if false_label is used
             let false_branch = if r.is_label_used {
@@ -4588,7 +4522,7 @@ fn emit_conditional_expr<'a, 'arena>(
             )
         }
         None => {
-            let end_label = e.label_gen_mut().next_regular(alloc);
+            let end_label = e.label_gen_mut().next_regular();
             let efalse_instr = emit_expr(e, env, efalse)?;
             let etest_instr = emit_expr(e, env, etest)?;
             InstrSeq::gather(
@@ -4672,14 +4606,18 @@ fn emit_class_const<'a, 'arena>(
         }
         _ => {
             let load_const = if string_utils::is_class(&id.1) {
-                instr::classname(alloc)
+                if e.options().emit_class_pointers() == 2 {
+                    instr::lazyclassfromclass(alloc)
+                } else {
+                    instr::classname(alloc)
+                }
             } else {
                 // TODO(hrust) enabel `let const_id = r#const::Type::from_ast_name(&id.1);`,
                 // `from_ast_name` should be able to accpet Cow<str>
                 let const_id: r#const::Type = (alloc, string_utils::strip_global_ns(&id.1)).into();
                 instr::clscns(alloc, const_id)
             };
-            if string_utils::is_class(&id.1) && e.options().emit_class_pointers() > 0 {
+            if string_utils::is_class(&id.1) && e.options().emit_class_pointers() == 1 {
                 emit_load_class_ref(e, env, pos, cexpr)
             } else {
                 Ok(InstrSeq::gather(
@@ -4995,8 +4933,8 @@ fn emit_null_coalesce_assignment<'a, 'arena>(
     e2: &tast::Expr,
 ) -> Result<InstrSeq<'arena>> {
     let alloc = env.arena;
-    let end_label = e.label_gen_mut().next_regular(alloc);
-    let do_set_label = e.label_gen_mut().next_regular(alloc);
+    let end_label = e.label_gen_mut().next_regular();
+    let do_set_label = e.label_gen_mut().next_regular();
     let l_nonnull = e.local_gen_mut().get_unnamed();
     let (quiet_instr, querym_n_unpopped) = emit_quiet_expr(e, env, pos, e1, true)?;
     let emit_popc_n = |n_unpopped| match n_unpopped {
@@ -5034,8 +4972,8 @@ fn emit_short_circuit_op<'a, 'arena>(
     expr: &tast::Expr,
 ) -> Result<InstrSeq<'arena>> {
     let alloc = env.arena;
-    let its_true = e.label_gen_mut().next_regular(alloc);
-    let its_done = e.label_gen_mut().next_regular(alloc);
+    let its_true = e.label_gen_mut().next_regular();
+    let its_done = e.label_gen_mut().next_regular();
     let jmp_instrs = emit_jmpnz(e, env, expr, its_true)?;
     Ok(if jmp_instrs.is_fallthrough {
         InstrSeq::gather(
@@ -5102,7 +5040,7 @@ fn emit_binop<'a, 'arena>(
             Some(op) => emit_lval_op(e, env, pos, LValOp::SetOp(op), e1, Some(e2), false),
         },
         B::QuestionQuestion => {
-            let end_label = e.label_gen_mut().next_regular(alloc);
+            let end_label = e.label_gen_mut().next_regular();
             let rhs = emit_expr(e, env, e2)?;
             Ok(InstrSeq::gather(
                 alloc,
@@ -5180,8 +5118,8 @@ fn emit_as<'a, 'arena>(
         let arg_local = e.local_gen_mut().get_unnamed();
         let type_struct_local = e.local_gen_mut().get_unnamed();
         let (ts_instrs, is_static) = emit_reified_arg(e, env, pos, true, h)?;
-        let then_label = e.label_gen_mut().next_regular(alloc);
-        let done_label = e.label_gen_mut().next_regular(alloc);
+        let then_label = e.label_gen_mut().next_regular();
+        let done_label = e.label_gen_mut().next_regular();
         let main_block = |ts_instrs, resolve| {
             InstrSeq::gather(
                 alloc,
@@ -5345,7 +5283,6 @@ pub fn emit_set_range_expr<'a, 'arena>(
                         .expect("StackIndex overflow"),
                     kind.size.try_into().expect("Setrange size overflow"),
                     kind.op,
-                    ReadOnlyOp::Any,
                 )),
             ),
         ],
@@ -5987,6 +5924,7 @@ fn can_use_as_rhs_in_list_assignment(expr: &tast::Expr_) -> Result<bool> {
         | E_::Yield(_)
         | E_::Cast(_)
         | E_::Eif(_)
+        | E_::Tuple(_)
         | E_::Varray(_)
         | E_::Darray(_)
         | E_::Collection(_)
@@ -6254,8 +6192,8 @@ fn emit_final_static_op<'arena>(
     use LValOp as L;
     Ok(match op {
         L::Set => instr::sets(alloc, ReadOnlyOp::Any),
-        L::SetOp(op) => instr::setops(alloc, op, ReadOnlyOp::Any),
-        L::IncDec(op) => instr::incdecs(alloc, op, ReadOnlyOp::Any),
+        L::SetOp(op) => instr::setops(alloc, op),
+        L::IncDec(op) => instr::incdecs(alloc, op),
         L::Unset => {
             let pos = match prop {
                 tast::ClassGetExpr::CGstring((pos, _))
@@ -6791,7 +6729,7 @@ pub fn emit_jmpnz<'a, 'arena>(
     e: &mut Emitter<'arena>,
     env: &Env<'a, 'arena>,
     expr: &tast::Expr,
-    label: Label<'arena>,
+    label: Label,
 ) -> Result<EmitJmpResult<'arena>> {
     let alloc: &'arena bumpalo::Bump = env.arena;
     let tast::Expr(pos, expr_) = expr;
@@ -6835,7 +6773,7 @@ pub fn emit_jmpnz<'a, 'arena>(
                         }
                     }
                     E::Binop(bo) if bo.0.is_ampamp() => {
-                        let skip_label = e.label_gen_mut().next_regular(alloc);
+                        let skip_label = e.label_gen_mut().next_regular();
                         let r1 = emit_jmpz(e, env, &bo.1, skip_label)?;
                         if !r1.is_fallthrough {
                             EmitJmpResult {
@@ -6932,7 +6870,7 @@ pub fn emit_jmpz<'a, 'arena>(
     e: &mut Emitter<'arena>,
     env: &Env<'a, 'arena>,
     expr: &tast::Expr,
-    label: Label<'arena>,
+    label: Label,
 ) -> std::result::Result<EmitJmpResult<'arena>, hhbc_by_ref_instruction_sequence::Error> {
     let alloc: &'arena bumpalo::Bump = env.arena;
     let tast::Expr(pos, expr_) = expr;
@@ -6960,7 +6898,7 @@ pub fn emit_jmpz<'a, 'arena>(
                 match expr_ {
                     E::Unop(uo) if uo.0 == U::Unot => emit_jmpnz(e, env, &uo.1, label)?,
                     E::Binop(bo) if bo.0.is_barbar() => {
-                        let skip_label = e.label_gen_mut().next_regular(alloc);
+                        let skip_label = e.label_gen_mut().next_regular();
                         let r1 = emit_jmpnz(e, env, &bo.1, skip_label)?;
                         if !r1.is_fallthrough {
                             EmitJmpResult {

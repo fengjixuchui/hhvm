@@ -80,29 +80,30 @@ ARRAY_OPS
 // Internal storage detail of EventMap.
 struct EventKey;
 
-// The type of location a profile is attached to.
-enum class LocationType : uint8_t {
-  SrcKey,
-  Property,
-  Runtime
-};
+struct APCKey { size_t hash; };
 
 using EventMap = folly::F14FastMap<uint64_t, CopyAtomic<size_t>>;
 
-// We profile some bytecodes (array constructors or casts) and prop init vals.
-struct LoggingProfileKey {
-  struct TbbHashCompare;
+// The type of location a profile is attached to.
+enum class LocationType : uint8_t {
+  SrcKey,
+  APCKey,
+  InstanceProperty,
+  StaticProperty,
+  Runtime,
+};
 
+struct LoggingProfileKey {
   explicit LoggingProfileKey(SrcKey sk)
     : sk(sk)
     , slot(kInvalidSlot)
     , locationType(LocationType::SrcKey)
   {}
 
-  explicit LoggingProfileKey(const Class* cls, Slot slot)
-    : cls(cls)
-    , slot(slot)
-    , locationType(LocationType::Property)
+  explicit LoggingProfileKey(APCKey ak)
+    : ak(ak)
+    , slot(kInvalidSlot)
+    , locationType(LocationType::APCKey)
   {}
 
   explicit LoggingProfileKey(RuntimeStruct* runtimeStruct)
@@ -110,6 +111,28 @@ struct LoggingProfileKey {
     , slot(kInvalidSlot)
     , locationType(LocationType::Runtime)
   {}
+
+  explicit LoggingProfileKey(const Class* cls, Slot slot, bool isStatic)
+    : cls(cls)
+    , slot(slot)
+    , locationType(isStatic ? LocationType::StaticProperty
+                            : LocationType::InstanceProperty)
+  {}
+
+  bool operator==(const LoggingProfileKey& o) const {
+    return locationType == o.locationType && ptr == o.ptr && slot == o.slot;
+  }
+
+  bool checkInvariants() const {
+    DEBUG_ONLY auto const prop =
+      locationType == LocationType::InstanceProperty ||
+      locationType == LocationType::StaticProperty;
+    assertx(prop == (slot != kInvalidSlot));
+    assertx(IMPLIES(
+      locationType == LocationType::Runtime,
+      runtimeStruct != nullptr));
+    return true;
+  }
 
   bool isRuntimeLocation() const {
     return locationType == LocationType::Runtime;
@@ -119,9 +142,11 @@ struct LoggingProfileKey {
     switch (locationType) {
       case LocationType::SrcKey:
         return {sk.op()};
-      case LocationType::Property:
+      case LocationType::InstanceProperty:
         return {Op::NewObjD};
+      case LocationType::APCKey:
       case LocationType::Runtime:
+      case LocationType::StaticProperty:
         return folly::none;
     }
     always_assert(false);
@@ -129,11 +154,17 @@ struct LoggingProfileKey {
 
   std::string toString() const {
     switch (locationType) {
+      case LocationType::APCKey:
+        return folly::sformat("APC:{:08x}", ak.hash);
       case LocationType::SrcKey:
         return sk.getSymbol();
-      case LocationType::Property: {
+      case LocationType::InstanceProperty: {
         auto const& prop = cls->declProperties()[slot];
         return folly::sformat("{}->{}", cls->name(), prop.name);
+      }
+      case LocationType::StaticProperty: {
+        auto const& prop = cls->staticProperties()[slot];
+        return folly::sformat("{}::{}", cls->name(), prop.name);
       }
       case LocationType::Runtime:
         return runtimeStruct->toString()->toCppString();
@@ -145,44 +176,45 @@ struct LoggingProfileKey {
     switch (locationType) {
       case LocationType::SrcKey:
         return sk.showInst();
-      case LocationType::Property:
+      case LocationType::InstanceProperty:
         return folly::sformat("NewObjD \"{}\"", cls->name());
+      case LocationType::APCKey:
       case LocationType::Runtime:
-        return runtimeStruct->toString()->toCppString();
+      case LocationType::StaticProperty:
+        return toString();
     }
     always_assert(false);
   }
 
   size_t stableHash() const {
-    switch (locationType) {
-      case LocationType::SrcKey:
-        return SrcKey::StableHasher()(sk);
-      case LocationType::Property:
-        return cls->stableHash() ^ slot;
-      case LocationType::Runtime:
-        return runtimeStruct->stableHash();
-    }
-    always_assert(false);
+    auto const base = [&]{
+      switch (locationType) {
+        case LocationType::APCKey:
+          return ak.hash;
+        case LocationType::SrcKey:
+          return SrcKey::StableHasher()(sk);
+        case LocationType::InstanceProperty:
+        case LocationType::StaticProperty:
+          return cls->stableHash() ^ slot;
+        case LocationType::Runtime:
+          return runtimeStruct->stableHash();
+      }
+      always_assert(false);
+    }();
+    return folly::hash::hash_combine(static_cast<size_t>(locationType), base);
   }
 
   union {
     SrcKey sk;
+    APCKey ak;
     const Class* cls;
     RuntimeStruct* runtimeStruct;
     uintptr_t ptr;
   };
-  // The logical slot of a property on cls, or kInvalidSlot if sk is set.
+
+  // The logical slot of a property on cls. kInvalidSlot for other types.
   Slot slot;
   LocationType locationType;
-};
-
-struct LoggingProfileKey::TbbHashCompare {
-  static size_t hash(const LoggingProfileKey& key) {
-    return folly::hash::hash_combine(hash_int64(key.ptr), key.slot, key.locationType);
-  }
-  static bool equal(const LoggingProfileKey& a, const LoggingProfileKey& b) {
-    return a.ptr == b.ptr && a.slot == b.slot && a.locationType == b.locationType;
-  }
 };
 
 // We'll store a LoggingProfile for each array construction site SrcKey.
@@ -244,16 +276,27 @@ struct LoggingProfile {
   jit::ArrayLayout getLayout() const;
   void setLayout(jit::ArrayLayout layout);
 
+  // List of static string keys guaranteed to be present at a StructDict source.
+  // Note that this list is not exhaustive. For example, it does not capture
+  // the keys in a RuntimeStruct source.
+  std::vector<const StringData*> knownStructKeys() const;
+
 private:
   void logEventImpl(const EventKey& key);
 
 public:
-  LoggingProfileKey key;
+  const LoggingProfileKey key;
   std::unique_ptr<LoggingProfileData> data;
 
 private:
   std::atomic<jit::ArrayLayout> layout = jit::ArrayLayout::Bottom();
   BespokeArray* staticBespokeArray = nullptr;
+};
+
+// The decision we make at each layout-sensitive sink.
+struct SinkLayout {
+  jit::ArrayLayout layout = jit::ArrayLayout::Bottom();
+  bool sideExit = true;
 };
 
 // We split sinks by profiling tracelet so we can condition on array type.
@@ -285,30 +328,31 @@ struct SinkProfile {
     KeyOrderMap keyOrders;
   };
 
-  jit::ArrayLayout getLayout() const;
-  void setLayout(jit::ArrayLayout layout);
+  SinkLayout getLayout() const;
+  void setLayout(SinkLayout layout);
 
   void update(const ArrayData* ad);
 
   explicit SinkProfile(SinkProfileKey key);
-  SinkProfile(SinkProfileKey key, jit::ArrayLayout layout);
+  SinkProfile(SinkProfileKey key, SinkLayout layout);
 
   void releaseData() { data.reset(); }
 
 public:
-  SinkProfileKey key;
+  const SinkProfileKey key;
   std::unique_ptr<SinkProfileData> data;
 
 private:
-  std::atomic<jit::ArrayLayout> layout = jit::ArrayLayout::Bottom();
+  std::atomic<SinkLayout> layout = {};
 };
 
 // Return a profile for the given (valid) SrcKey. If no profile for the SrcKey
 // exists, a new one is made. If we're done profiling or it's not useful to
 // profile this bytecode, this function will return nullptr.
 LoggingProfile* getLoggingProfile(SrcKey sk);
-LoggingProfile* getLoggingProfile(const Class* cls, Slot slot);
+LoggingProfile* getLoggingProfile(APCKey ak);
 LoggingProfile* getLoggingProfile(RuntimeStruct* runtimeStruct);
+LoggingProfile* getLoggingProfile(const Class* cls, Slot slot, bool isStatic);
 
 // Return a profile for the given profiling tracelet and (valid) sink SrcKey.
 // If no profile for the sink exists, a new one is made. May return nullptr.
@@ -325,12 +369,13 @@ void startExportProfiles();
 void eachSource(std::function<void(LoggingProfile& profile)> fn);
 void eachSink(std::function<void(SinkProfile& profile)> fn);
 void deserializeSource(LoggingProfileKey key, jit::ArrayLayout layout);
-void deserializeSink(SinkProfileKey key, jit::ArrayLayout layout);
+void deserializeSink(SinkProfileKey key, SinkLayout layout);
 size_t countSources();
 size_t countSinks();
 
 // Accessors for logged events. TODO(kshaunak): Expose a better API.
-ArrayOp getArrayOp(uint64_t key);
+ArrayOp getEventArrayOp(uint64_t key);
+LowStringPtr getEventStrKey(uint64_t key);
 
 }}
 

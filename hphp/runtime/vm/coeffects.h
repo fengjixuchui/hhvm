@@ -44,6 +44,18 @@ struct RuntimeCoeffects {
     return RuntimeCoeffects::fromValue(std::numeric_limits<storage_t>::max());
   }
 
+  static RuntimeCoeffects defaults();
+  static RuntimeCoeffects pure();
+  static RuntimeCoeffects policied_of();
+  static RuntimeCoeffects write_this_props();
+
+  // This function is a placeholder to indicate that the correct coeffect needs
+  // to be indentified and passed in its place
+  static RuntimeCoeffects fixme() {
+    return RuntimeCoeffects::defaults();
+  }
+
+
   uint16_t value() const { return m_data; }
 
   const std::string toString() const;
@@ -69,7 +81,7 @@ private:
 struct StaticCoeffects {
   using storage_t = RuntimeCoeffects::storage_t;
 
-  const folly::Optional<std::string> toString() const;
+  const std::string toString() const;
 
   RuntimeCoeffects toAmbient() const;
   RuntimeCoeffects toRequired() const;
@@ -87,8 +99,11 @@ struct StaticCoeffects {
     return StaticCoeffects::fromValue(0);
   }
 
-  // This operator is equivalent to & of [coeffectA & coeffectB]
-  StaticCoeffects& operator|=(const StaticCoeffects);
+  static StaticCoeffects defaults();
+  static StaticCoeffects write_this_props();
+
+  // This operator is equivalent to | of [coeffectA | coeffectB]
+  StaticCoeffects& operator&=(const StaticCoeffects);
 
   template<class SerDe>
   void serde(SerDe& sd) {
@@ -113,8 +128,10 @@ struct CoeffectRule final {
   struct FunParam {};
   struct CCParam {};
   struct CCThis {};
-  struct ClosureInheritFromParent {};
+  struct CCReified {};
+  struct ClosureParentScope {};
   struct GeneratorThis {};
+  struct Caller {};
 
   CoeffectRule() = default;
 
@@ -132,25 +149,45 @@ struct CoeffectRule final {
     , m_name(ctx_name)
   { assertx(ctx_name); }
 
-  CoeffectRule(CCThis, const StringData* ctx_name)
+  CoeffectRule(CCThis,
+               std::vector<LowStringPtr> types,
+               const StringData* ctx_name)
     : m_type(Type::CCThis)
+    , m_types(types)
     , m_name(ctx_name)
   { assertx(ctx_name); }
 
-  explicit CoeffectRule(ClosureInheritFromParent)
-    : m_type(Type::ClosureInheritFromParent)
+  CoeffectRule(CCReified,
+               bool is_class,
+               uint32_t index,
+               std::vector<LowStringPtr> types,
+               const StringData* ctx_name)
+    : m_type(Type::CCReified)
+    , m_isClass(is_class)
+    , m_index(index)
+    , m_types(types)
+    , m_name(ctx_name)
+  { assertx(ctx_name); }
+
+  explicit CoeffectRule(ClosureParentScope)
+    : m_type(Type::ClosureParentScope)
   {}
 
   explicit CoeffectRule(GeneratorThis)
     : m_type(Type::GeneratorThis)
   {}
 
-  RuntimeCoeffects emit(const Func*, uint32_t, void*) const;
-  jit::SSATmp* emitJit(jit::irgen::IRGS&, const Func*,
-                       uint32_t, jit::SSATmp*) const;
+  explicit CoeffectRule(Caller)
+    : m_type(Type::Caller)
+  {}
 
-  bool isClosureInheritFromParent() const;
+  RuntimeCoeffects emit(const Func*, uint32_t, void*, RuntimeCoeffects) const;
+  jit::SSATmp* emitJit(jit::irgen::IRGS&, const Func*,
+                       uint32_t, jit::SSATmp*, jit::SSATmp*) const;
+
+  bool isClosureParentScope() const;
   bool isGeneratorThis() const;
+  bool isCaller() const;
 
   folly::Optional<std::string> toString(const Func*) const;
   std::string getDirectiveString() const;
@@ -165,13 +202,17 @@ private:
     FunParam,
     CCParam,
     CCThis,
-    ClosureInheritFromParent,
+    CCReified,
+    ClosureParentScope,
     GeneratorThis,
+    Caller,
   };
 
   Type m_type{Type::Invalid};
+  bool m_isClass{false};
   uint32_t m_index{0};
-  LowPtr<const StringData> m_name{nullptr};
+  std::vector<LowStringPtr> m_types{};
+  LowStringPtr m_name{nullptr};
 };
 
 ///////////////////////////////////////////////////////////////////////////////

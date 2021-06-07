@@ -127,17 +127,21 @@ tv_lval ldGblAddrDefHelper(StringData* name);
 TypedValue* getSPropOrNull(const Class* cls,
                            const StringData* name,
                            Class* ctx,
+                           bool* roProp,
                            bool ignoreLateInit,
-                           bool disallowConst,
+                           bool writeMode,
                            bool mustBeMutable,
-                           bool mustBeReadOnly);
+                           bool mustBeReadOnly,
+                           bool checkROCOW);
 TypedValue* getSPropOrRaise(const Class* cls,
                             const StringData* name,
                             Class* ctx,
+                            bool* roProp,
                             bool ignoreLateInit,
-                            bool disallowConst,
+                            bool writeMode,
                             bool mustBeMutable,
-                            bool mustBeReadOnly);
+                            bool mustBeReadOnly,
+                            bool checkROCOW);
 
 int64_t switchDoubleHelper(double val, int64_t base, int64_t nTargets);
 int64_t switchStringHelper(StringData* s, int64_t base, int64_t nTargets);
@@ -188,6 +192,9 @@ ArrayData* loadClsTypeCnsHelper(
   const StringData* name,
   bool no_throw_on_undefined
 );
+
+StringData* loadClsTypeCnsClsNameHelper(const Class* cls,
+                                        const StringData* name);
 
 void raiseCoeffectsCallViolationHelper(const Func*, uint64_t, uint64_t);
 

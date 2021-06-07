@@ -142,7 +142,9 @@ function clear_static_memoization(?string $cls, ?string $func = null) : bool;
 <<__Native>>
 function ffp_parse_string_native(string $program): string;
 
-function ffp_parse_string(string $program)[]: darray {
+newtype ParseTree = darray;
+
+function ffp_parse_string(string $program)[]: ParseTree {
   $json = ffp_parse_string_native($program);
   // 2048 is MAX_JSON_DEPTH to avoid making a global constant
   return \json_decode($json, true, 2048);
@@ -455,6 +457,26 @@ function get_executable_lines(string $file): mixed;
 <<__Native>>
 function hphp_get_logger_request_id(): int;
 
+/**
+ * Enables recording of called functions in the current request. The server must
+ * not be in repo authoritative mode and Eval.EnableFuncCoverage must be set,
+ * additionally coverage must not already have been enabled in the current
+ * request (or must have been disabled via a call to collect_function_coverage).
+ */
+<<__Native>>
+function enable_function_coverage(): void;
+
+/**
+ * Returns a dict keyed on functions called since enable_function_coverage was
+ * last called, with the paths of the files defining them as values,
+ * and disables collection of further function coverage.
+ *
+ * The enable_function_coverage function must have been called prior to this
+ * function.
+ */
+<<__Native>>
+function collect_function_coverage(): dict<string, string>;
+
 } // HH
 
 namespace HH\Rx {
@@ -544,6 +566,24 @@ namespace HH\ReifiedGenerics {
 
 }
 
+namespace HH\Coeffects {
+
+  /**
+   * Creates an unsafe way to call a function by providing defaults coeffects
+   */
+  <<__Native>>
+  function backdoor((function()[defaults]: Tout) $f)[]: mixed;
+
+  /**
+   * Entry point for policied_of functions
+   */
+  <<__Native>>
+  function enter_policied_of(
+    (function()[policied_of]: Tout) $f
+  )[defaults]: mixed;
+
+}
+
 namespace __SystemLib {
 
 <<__Native, __IsFoldable, __Pure>>
@@ -552,25 +592,25 @@ function is_dynamically_callable_inst_method(
     string $method
 ): bool;
 
-<<__Native, __Pure, __MaybeMutable>>
+<<__Native>>
 function reflection_class_get_name(
     mixed $class,
-): string;
+)[]: string;
 
-<<__Native, __Pure, __MaybeMutable>>
+<<__Native>>
 function reflection_class_is_abstract(
     mixed $class,
-): bool;
+)[]: bool;
 
-<<__Native, __Pure, __MaybeMutable>>
+<<__Native>>
 function reflection_class_is_final(
     mixed $class,
-): bool;
+)[]: bool;
 
-<<__Native, __Pure, __MaybeMutable>>
+<<__Native>>
 function reflection_class_is_interface(
     mixed $class,
-): bool;
+)[]: bool;
 
 
 }

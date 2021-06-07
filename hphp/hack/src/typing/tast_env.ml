@@ -44,9 +44,7 @@ let print_error_ty = Typing_print.error
 let print_ty_with_identity env phase_ty sym_occurrence sym_definition =
   match phase_ty with
   | Typing_defs.DeclTy ty ->
-    let (env, ty) =
-      Typing_phase.localize_with_self env ~ignore_errors:true ty
-    in
+    let (env, ty) = Typing_phase.localize_no_subst env ~ignore_errors:true ty in
     Typing_print.full_with_identity env ty sym_occurrence sym_definition
   | Typing_defs.LoclTy ty ->
     Typing_print.full_with_identity env ty sym_occurrence sym_definition
@@ -73,6 +71,10 @@ let get_class_or_typedef env x =
   | Some (Typing_env.ClassResult cd) -> Some (ClassResult cd)
   | Some (Typing_env.TypedefResult td) -> Some (TypedefResult td)
   | None -> None
+
+let is_in_expr_tree = Typing_env.is_in_expr_tree
+
+let set_in_expr_tree = Typing_env.set_in_expr_tree
 
 let is_static = Typing_env.is_static
 
@@ -148,7 +150,7 @@ let hint_to_ty env = Decl_hint.hint env.Typing_env_types.decl_env
 
 let localize env ety_env = Typing_phase.localize ~ety_env env
 
-let localize_with_self = Typing_phase.localize_with_self
+let localize_no_subst = Typing_phase.localize_no_subst
 
 let get_upper_bounds = Typing_env.get_upper_bounds
 
@@ -178,7 +180,7 @@ let is_sub_type_for_union env ty_sub ty_super =
 
 let referenced_typeconsts env root ids =
   let root = hint_to_ty env root in
-  let ety_env = Typing_phase.env_with_self env ~on_error:Errors.ignore_error in
+  let ety_env = Typing_defs.empty_expand_env in
   Typing_taccess.referenced_typeconsts env ety_env (root, ids)
 
 let empty ctx = Typing_env.empty ctx Relative_path.default ~droot:None
@@ -204,7 +206,7 @@ let restore_saved_env env saved_env =
       Typing_inference_env.simple_merge
         env.Env.inference_env
         saved_env.Tast.inference_env;
-    Env.global_tpenv = saved_env.Tast.tpenv;
+    Env.tpenv = saved_env.Tast.tpenv;
     Env.fun_tast_info = saved_env.Tast.fun_tast_info;
   }
 
@@ -226,11 +228,12 @@ let restore_fun_env env f =
   let se = f.f_annotation in
   restore_saved_env env se
 
-let fun_env ctx f =
+let fun_env ctx fd =
+  let f = fd.fd_fun in
   let ctx =
     Provider_context.map_tcopt ctx ~f:(fun _tcopt -> f.f_annotation.tcopt)
   in
-  let env = EnvFromDef.fun_env ~origin:Decl_counters.Tast ctx f in
+  let env = EnvFromDef.fun_env ~origin:Decl_counters.Tast ctx fd in
   restore_fun_env env f
 
 let class_env ctx c =
@@ -284,6 +287,8 @@ let get_enum = Typing_env.get_enum
 let is_typedef = Typing_env.is_typedef
 
 let get_typedef = Typing_env.get_typedef
+
+let is_typedef_visible = Typing_env.is_typedef_visible
 
 let is_enum = Typing_env.is_enum
 

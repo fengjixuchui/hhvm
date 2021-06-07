@@ -5,7 +5,7 @@
 // LICENSE file in the "hack" directory of this source tree.
 
 use facts_rust as facts;
-use hhbc_string_utils_rust::without_xhp_mangling;
+use hhbc_by_ref_hhbc_string_utils::without_xhp_mangling;
 use libc::c_char;
 use ocamlrep::{bytes_from_ocamlrep, ptr::UnsafeOcamlPtr};
 use ocamlrep_ocamlpool::ocaml_ffi;
@@ -40,6 +40,7 @@ unsafe extern "C" fn hackc_extract_as_json_cpp_ffi(
             ((1 << 2) & flags) != 0, // allow_new_attribute_syntax
             ((1 << 3) & flags) != 0, // enable_xhp_class_modifier
             ((1 << 4) & flags) != 0, // disable_xhp_element_mangling
+            ((1 << 5) & flags) != 0, // disallow_hash_comments
             filename,
             text,
             mangle_xhp,
@@ -88,6 +89,7 @@ ocaml_ffi! {
             ((1 << 2) & flags) != 0, // allow_new_attribute_syntax
             ((1 << 3) & flags) != 0, // enable_xhp_class_modifier
             ((1 << 4) & flags) != 0, // disable_xhp_element_mangling
+            ((1 << 5) & flags) != 0, // disallow_hash_comments
             filename,
             text,
             mangle_xhp,
@@ -101,6 +103,7 @@ fn extract_as_json_ffi0(
     allow_new_attribute_syntax: bool,
     enable_xhp_class_modifier: bool,
     disable_xhp_element_mangling: bool,
+    disallow_hash_comments: bool,
     filename: RelativePath,
     text: &[u8],
     mangle_xhp: bool,
@@ -112,6 +115,7 @@ fn extract_as_json_ffi0(
         enable_xhp_class_modifier,
         disable_xhp_element_mangling,
         filename,
+        disallow_hash_comments,
     };
     if mangle_xhp {
         extract_as_json(text, opts)

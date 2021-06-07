@@ -20,17 +20,16 @@ bitflags! {
         const NEEDS_LOCAL_THIS =    0b0000_0001;
         const IN_TRY =              0b0000_0010;
         const ALLOWS_ARRAY_APPEND = 0b0000_0100;
-        const IN_RX_BODY =          0b0000_1000;
     }
 }
 
 /// `'a` is an AST lifetime, `'arena` the lifetime of the `InstrSeq`
 /// arena.
 #[derive(Clone, Debug)]
-pub struct Env<'a, 'arena: 'a> {
+pub struct Env<'a, 'arena> {
     pub arena: &'arena bumpalo::Bump,
     pub flags: Flags,
-    pub jump_targets_gen: jump_targets::Gen<'arena>,
+    pub jump_targets_gen: jump_targets::Gen,
     pub scope: Scope<'a>,
     pub namespace: RcOc<NamespaceEnv>,
     pub call_context: Option<String>,
@@ -67,12 +66,6 @@ impl<'a, 'arena> Env<'a, 'arena> {
         }
     }
 
-    pub fn with_rx_body(&mut self, in_rx_body: bool) {
-        if in_rx_body {
-            self.flags |= Flags::IN_RX_BODY;
-        }
-    }
-
     pub fn with_pipe_var(&mut self, local: hhbc_by_ref_local::Type<'arena>) {
         self.pipe_var = Some(local);
     }
@@ -94,8 +87,8 @@ impl<'a, 'arena> Env<'a, 'arena> {
     pub fn do_in_loop_body<R, F>(
         &mut self,
         e: &mut Emitter<'arena>,
-        label_break: Label<'arena>,
-        label_continue: Label<'arena>,
+        label_break: Label,
+        label_continue: Label,
         iterator: Option<hhbc_by_ref_iterator::Id>,
         b: &[tast::Stmt],
         f: F,
@@ -111,7 +104,7 @@ impl<'a, 'arena> Env<'a, 'arena> {
     pub fn do_in_switch_body<R, F>(
         &mut self,
         e: &mut Emitter<'arena>,
-        end_label: Label<'arena>,
+        end_label: Label,
         cases: &[tast::Case],
         f: F,
     ) -> R
@@ -125,7 +118,7 @@ impl<'a, 'arena> Env<'a, 'arena> {
     pub fn do_in_try_catch_body<R, F>(
         &mut self,
         e: &mut Emitter<'arena>,
-        finally_label: Label<'arena>,
+        finally_label: Label,
         try_block: &[tast::Stmt],
         catch_block: &[tast::Catch],
         f: F,
@@ -140,7 +133,7 @@ impl<'a, 'arena> Env<'a, 'arena> {
     pub fn do_in_try_body<R, F>(
         &mut self,
         e: &mut Emitter<'arena>,
-        finally_label: Label<'arena>,
+        finally_label: Label,
         block: &[tast::Stmt],
         f: F,
     ) -> R
@@ -167,7 +160,7 @@ impl<'a, 'arena> Env<'a, 'arena> {
     pub fn do_in_using_body<R, F>(
         &mut self,
         e: &mut Emitter<'arena>,
-        finally_label: Label<'arena>,
+        finally_label: Label,
         block: &[tast::Stmt],
         f: F,
     ) -> R

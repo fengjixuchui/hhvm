@@ -25,16 +25,17 @@ module SN = Naming_special_names
 (* Section declaring the type of a function *)
 (*****************************************************************************)
 
-let rec fun_naming_and_decl (ctx : Provider_context.t) (f : Nast.fun_) :
+let rec fun_naming_and_decl (ctx : Provider_context.t) (f : Nast.fun_def) :
     string * Typing_defs.fun_elt =
-  let f = Errors.ignore_ (fun () -> Naming.fun_ ctx f) in
+  let f = Errors.ignore_ (fun () -> Naming.fun_def ctx f) in
   let fe = fun_decl ctx f in
-  (snd f.f_name, fe)
+  (snd f.fd_fun.f_name, fe)
 
-and fun_decl (ctx : Provider_context.t) (f : Nast.fun_) : Typing_defs.fun_elt =
-  let dep = Dep.Fun (snd f.f_name) in
-  let env = { Decl_env.mode = f.f_mode; droot = Some dep; ctx } in
-  fun_decl_in_env env ~is_lambda:false f
+and fun_decl (ctx : Provider_context.t) (f : Nast.fun_def) : Typing_defs.fun_elt
+    =
+  let dep = Dep.Fun (snd f.fd_fun.f_name) in
+  let env = { Decl_env.mode = f.fd_mode; droot = Some dep; ctx } in
+  fun_decl_in_env env ~is_lambda:false f.fd_fun
 
 and fun_decl_in_env (env : Decl_env.env) ~(is_lambda : bool) (f : Nast.fun_) :
     Typing_defs.fun_elt =
@@ -68,13 +69,21 @@ and fun_decl_in_env (env : Decl_env.env) ~(is_lambda : bool) (f : Nast.fun_) :
     List.map f.f_where_constraints (FunUtils.where_constraint env)
   in
   let fe_deprecated =
-    Naming_attributes_deprecated.deprecated
+    Naming_attributes_params.deprecated
       ~kind:"function"
       f.f_name
       f.f_user_attributes
   in
   let fe_php_std_lib =
     Naming_attributes.mem SN.UserAttributes.uaPHPStdLib f.f_user_attributes
+  in
+  let fe_support_dynamic_type =
+    Naming_attributes.mem
+      SN.UserAttributes.uaSupportDynamicType
+      f.f_user_attributes
+  in
+  let fe_module =
+    Naming_attributes_params.get_module_attribute f.f_user_attributes
   in
   let fe_pos = Decl_env.make_decl_pos env @@ fst f.f_name in
   let fe_type =
@@ -98,7 +107,14 @@ and fun_decl_in_env (env : Decl_env.env) ~(is_lambda : bool) (f : Nast.fun_) :
             ft_ifc_decl = ifc_decl;
           } )
   in
-  { fe_pos; fe_type; fe_deprecated; fe_php_std_lib }
+  {
+    fe_pos;
+    fe_module;
+    fe_type;
+    fe_deprecated;
+    fe_php_std_lib;
+    fe_support_dynamic_type;
+  }
 
 (*****************************************************************************)
 (* Dealing with records *)
@@ -116,7 +132,7 @@ let record_def_decl (ctx : Provider_context.t) (rd : Nast.record_def) :
     rd_fields;
     rd_namespace = _;
     rd_span;
-    rd_user_attributes = _;
+    rd_user_attributes;
   } =
     rd
   in
@@ -141,7 +157,11 @@ let record_def_decl (ctx : Provider_context.t) (rd : Nast.record_def) :
         | Some _ -> (id, Typing_defs.HasDefaultValue)
         | None -> (id, ValueRequired))
   in
+  let rdt_module =
+    Naming_attributes_params.get_module_attribute rd_user_attributes
+  in
   {
+    rdt_module;
     rdt_name = Decl_env.make_decl_posed env rd_name;
     rdt_extends = Option.map ~f:(Decl_env.make_decl_posed env) extends;
     rdt_fields = fields;
@@ -166,7 +186,7 @@ and typedef_decl (ctx : Provider_context.t) (tdef : Nast.typedef) :
     t_tparams = params;
     t_constraint = tcstr;
     t_kind = concrete_type;
-    t_user_attributes = _;
+    t_user_attributes;
     t_namespace = _;
     t_mode = mode;
     t_vis = td_vis;
@@ -181,7 +201,10 @@ and typedef_decl (ctx : Provider_context.t) (tdef : Nast.typedef) :
   let td_type = Decl_hint.hint env concrete_type in
   let td_constraint = Option.map tcstr (Decl_hint.hint env) in
   let td_pos = Decl_env.make_decl_pos env name_pos in
-  { td_vis; td_tparams; td_constraint; td_type; td_pos }
+  let td_module =
+    Naming_attributes_params.get_module_attribute t_user_attributes
+  in
+  { td_module; td_vis; td_tparams; td_constraint; td_type; td_pos }
 
 let typedef_naming_and_decl (ctx : Provider_context.t) (tdef : Nast.typedef) :
     string * Typing_defs.typedef_type =

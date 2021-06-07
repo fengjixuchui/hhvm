@@ -377,9 +377,9 @@ module RecheckCapture = struct
           ~default:default.sample_threshold
           config
       in
-      if sample_threshold > 1.0 then
+      if Float.(sample_threshold > 1.0) then
         1.0
-      else if sample_threshold < 0.0 then
+      else if Float.(sample_threshold < 0.0) then
         0.0
       else
         sample_threshold
@@ -417,10 +417,14 @@ type t = {
   enable_fuzzy_search: bool;
   lazy_parse: bool;
   lazy_init: bool;
-  (* Limit the number of clients that can sit in purgatory waiting
+  (* Monitor: Limit the number of clients that can sit in purgatory waiting
    * for a server to be started because we don't want this to grow
    * unbounded. *)
   max_purgatory_clients: int;
+  (* Monitor: how many seconds the monitor waits after handoff before closing the FD, or -1 to wait for server receipt *)
+  monitor_fd_close_delay: int;
+  (* Monitor: should ClientConnect respect backpressure from server/monitor? *)
+  monitor_backpressure: bool;
   search_chunk_size: int;
   io_priority: int;
   cpu_priority: int;
@@ -429,7 +433,10 @@ type t = {
   shm_dirs: string list;
   state_loader_timeouts: State_loader_config.timeouts;
   max_workers: int option;
+  (* max_bucket_size is the default bucket size for ALL users of MultiWorker unless they provide a specific override max_size *)
   max_bucket_size: int;
+  (* for dirty names (in saved-state-init and changed-file scenarios) we can use small buckets to avoid long poles *)
+  small_buckets_for_dirty_names: bool;
   (* See HhMonitorInformant. *)
   use_dummy_informant: bool;
   informant_min_distance_restart: int;
@@ -440,6 +447,14 @@ type t = {
   trace_parsing: bool;
   prechecked_files: bool;
   enable_type_check_filter_files: bool;
+  (* whether clientLsp should use serverless-ide *)
+  ide_serverless: bool;
+  (* whether clientLsp should use ranked autocomplete *)
+  ide_ranked_autocomplete: bool;
+  (* whether clientLsp should use ffp-autocomplete *)
+  ide_ffp_autocomplete: bool;
+  (* like [symbolindex_search_provider] but for IDE *)
+  ide_symbolindex_search_provider: string;
   (* Let the user configure which files to type check and
    * which files to ignore. This flag is not expected to be
    * rolled out broadly, rather it is meant to be used by
@@ -447,27 +462,14 @@ type t = {
   predeclare_ide: bool;
   max_typechecker_worker_memory_mb: int option;
   longlived_workers: bool;
+  remote_execution: bool;
   hg_aware: bool;
   hg_aware_parsing_restart_threshold: int;
   hg_aware_redecl_restart_threshold: int;
   hg_aware_recheck_restart_threshold: int;
-  (* Flag to disable conservative behavior in incremental-mode typechecks.
-   *
-   * By default, when a class has changed and we do not have access to the old
-   * version of its declaration (and thus cannot determine HOW it has changed),
-   * we conservatively redeclare the entire set of files where the class or any
-   * of its members were referenced. Likewise for definitions of functions or
-   * global constants.
-   *
-   * This flag disables that behavior--instead, when a class has changed, we
-   * only redeclare files with an Extends dependency on the class, and we do not
-   * redeclare any files when a function or global constant changes.
-   *)
-  disable_conservative_redecl: bool;
   (* forces Hulk *)
   force_remote_type_check: bool;
   ide_parser_cache: bool;
-  ide_tast_cache: bool;
   (* When enabled, save hot class declarations (for now, specified in a special
      file in the repository) when generating a saved state. *)
   store_decls_in_saved_state: bool;
@@ -521,7 +523,7 @@ type t = {
   enable_naming_table_fallback: bool;
   (* Download dependency graph from DevX infra. *)
   enable_devx_dependency_graph: bool;
-  (* Selects a search provider for autocomplete and symbol search *)
+  (* Selects a search provider for autocomplete and symbol search; see also [ide_symbolindex_search_provider] *)
   symbolindex_search_provider: string;
   symbolindex_quiet: bool;
   symbolindex_file: string option;
@@ -572,6 +574,12 @@ let default =
     lazy_parse = false;
     lazy_init = false;
     max_purgatory_clients = 400;
+    monitor_fd_close_delay =
+      ( if Sys_utils.is_apple_os () then
+        2
+      else
+        0 );
+    monitor_backpressure = false;
     search_chunk_size = 0;
     io_priority = 7;
     cpu_priority = 10;
@@ -580,6 +588,7 @@ let default =
     shm_dirs = [GlobalConfig.shm_dir; GlobalConfig.tmp_dir];
     max_workers = None;
     max_bucket_size = Bucket.max_size ();
+    small_buckets_for_dirty_names = false;
     state_loader_timeouts = State_loader_config.default_timeouts;
     use_dummy_informant = true;
     informant_min_distance_restart = 100;
@@ -590,16 +599,18 @@ let default =
     trace_parsing = false;
     prechecked_files = false;
     enable_type_check_filter_files = false;
+    ide_serverless = false;
+    ide_ranked_autocomplete = false;
+    ide_ffp_autocomplete = false;
     predeclare_ide = false;
     max_typechecker_worker_memory_mb = None;
     longlived_workers = false;
+    remote_execution = false;
     hg_aware = false;
     hg_aware_parsing_restart_threshold = 0;
     hg_aware_redecl_restart_threshold = 0;
     hg_aware_recheck_restart_threshold = 0;
-    disable_conservative_redecl = false;
     ide_parser_cache = false;
-    ide_tast_cache = false;
     store_decls_in_saved_state = false;
     load_decls_from_saved_state = false;
     idle_gc_slice = 0;
@@ -623,6 +634,9 @@ let default =
     enable_naming_table_fallback = false;
     enable_devx_dependency_graph = false;
     symbolindex_search_provider = "SqliteIndex";
+    (* the code actually doesn't use this default for ide_symbolindex_search_provider;
+    it defaults to whatever was computed for symbolindex_search_provider. *)
+    ide_symbolindex_search_provider = "SqliteIndex";
     symbolindex_quiet = false;
     symbolindex_file = None;
     tico_invalidate_files = false;
@@ -829,6 +843,16 @@ let load_ fn ~silent ~current_version overrides =
   let max_purgatory_clients =
     int_ "max_purgatory_clients" ~default:default.max_purgatory_clients config
   in
+  let monitor_fd_close_delay =
+    int_ "monitor_fd_close_delay" ~default:default.monitor_fd_close_delay config
+  in
+  let monitor_backpressure =
+    bool_if_min_version
+      "monitor_backpressure"
+      ~default:default.monitor_backpressure
+      ~current_version
+      config
+  in
   let search_chunk_size =
     int_ "search_chunk_size" ~default:default.search_chunk_size config
   in
@@ -911,6 +935,13 @@ let load_ fn ~silent ~current_version overrides =
   let max_bucket_size =
     int_ "max_bucket_size" ~default:default.max_bucket_size config
   in
+  let small_buckets_for_dirty_names =
+    bool_if_min_version
+      "small_buckets_for_dirty_names"
+      ~default:default.small_buckets_for_dirty_names
+      ~current_version
+      config
+  in
   let interrupt_on_watchman =
     bool_if_min_version
       "interrupt_on_watchman"
@@ -953,6 +984,21 @@ let load_ fn ~silent ~current_version overrides =
       ~current_version
       config
   in
+  (* ide_serverless CANNOT use bool_if_min_version, since it's needed before we yet know root/version *)
+  let ide_serverless =
+    bool_ "ide_serverless" ~default:default.ide_serverless config
+  in
+  (* ide_ranked_autocomplete CANNOT use bool_if_min_version, since it's needed before we yet know root/version *)
+  let ide_ranked_autocomplete =
+    bool_
+      "ide_ranked_autocomplete"
+      ~default:default.ide_ranked_autocomplete
+      config
+  in
+  (* ide_ffp_autocomplete CANNOT use bool_if_min_version, since it's needed before we yet know root/version *)
+  let ide_ffp_autocomplete =
+    bool_ "ide_ffp_autocomplete" ~default:default.ide_ffp_autocomplete config
+  in
   let predeclare_ide =
     bool_if_min_version
       "predeclare_ide"
@@ -970,17 +1016,17 @@ let load_ fn ~silent ~current_version overrides =
       ~current_version
       config
   in
+  let remote_execution =
+    bool_if_min_version
+      "remote_execution"
+      ~default:default.remote_execution
+      ~current_version
+      config
+  in
   let hg_aware =
     bool_if_min_version
       "hg_aware"
       ~default:default.hg_aware
-      ~current_version
-      config
-  in
-  let disable_conservative_redecl =
-    bool_if_min_version
-      "disable_conservative_redecl"
-      ~default:default.disable_conservative_redecl
       ~current_version
       config
   in
@@ -1020,13 +1066,6 @@ let load_ fn ~silent ~current_version overrides =
     bool_if_min_version
       "ide_parser_cache"
       ~default:default.ide_parser_cache
-      ~current_version
-      config
-  in
-  let ide_tast_cache =
-    bool_if_min_version
-      "ide_tast_cache"
-      ~default:default.ide_tast_cache
       ~current_version
       config
   in
@@ -1118,6 +1157,12 @@ let load_ fn ~silent ~current_version overrides =
     string_
       "symbolindex_search_provider"
       ~default:default.symbolindex_search_provider
+      config
+  in
+  let ide_symbolindex_search_provider =
+    string_
+      "ide_symbolindex_search_provider"
+      ~default:symbolindex_search_provider
       config
   in
   let symbolindex_quiet =
@@ -1217,6 +1262,8 @@ let load_ fn ~silent ~current_version overrides =
     load_state_natively;
     load_state_natively_64bit;
     max_purgatory_clients;
+    monitor_fd_close_delay;
+    monitor_backpressure;
     type_decl_bucket_size;
     extend_fast_bucket_size;
     enable_on_nfs;
@@ -1231,6 +1278,7 @@ let load_ fn ~silent ~current_version overrides =
     shm_dirs;
     max_workers;
     max_bucket_size;
+    small_buckets_for_dirty_names;
     state_loader_timeouts;
     use_dummy_informant;
     informant_min_distance_restart;
@@ -1241,16 +1289,19 @@ let load_ fn ~silent ~current_version overrides =
     trace_parsing;
     prechecked_files;
     enable_type_check_filter_files;
+    ide_serverless;
+    ide_ranked_autocomplete;
+    ide_ffp_autocomplete;
+    ide_symbolindex_search_provider;
     predeclare_ide;
     max_typechecker_worker_memory_mb;
     longlived_workers;
+    remote_execution;
     hg_aware;
     hg_aware_parsing_restart_threshold;
     hg_aware_redecl_restart_threshold;
     hg_aware_recheck_restart_threshold;
-    disable_conservative_redecl;
     ide_parser_cache;
-    ide_tast_cache;
     store_decls_in_saved_state;
     load_decls_from_saved_state;
     idle_gc_slice;
@@ -1298,17 +1349,13 @@ let load ~silent ~current_version config_overrides =
 let to_rollout_flags (options : t) : HackEventLogger.rollout_flags =
   HackEventLogger.
     {
-      search_chunk_size = options.search_chunk_size;
-      max_bucket_size = options.max_bucket_size;
-      use_full_fidelity_parser = options.use_full_fidelity_parser;
       use_direct_decl_parser = options.use_direct_decl_parser;
-      interrupt_on_watchman = options.interrupt_on_watchman;
-      interrupt_on_client = options.interrupt_on_client;
       longlived_workers = options.longlived_workers;
-      prechecked_files = options.prechecked_files;
-      predeclare_ide = options.predeclare_ide;
-      max_typechecker_worker_memory_mb =
-        options.max_typechecker_worker_memory_mb;
       max_times_to_defer_type_checking =
         options.max_times_to_defer_type_checking;
+      monitor_fd_close_delay = options.monitor_fd_close_delay;
+      monitor_backpressure = options.monitor_backpressure;
+      enable_devx_dependency_graph = options.enable_devx_dependency_graph;
+      small_buckets_for_dirty_names = options.small_buckets_for_dirty_names;
+      symbolindex_search_provider = options.symbolindex_search_provider;
     }

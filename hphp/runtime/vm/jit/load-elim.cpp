@@ -611,10 +611,17 @@ Flags handle_assert(Local& env, const IRInstruction& inst) {
   if (!acls) return FNone{};
 
   auto const meta = env.global.ainfo.find(canonicalize(*acls));
-  auto const tloc = find_tracked(env, meta);
-  if (!tloc) {
+  if (!meta) {
     FTRACE(4, "      untracked assert\n");
     return FNone{};
+  }
+
+  auto const tloc = &env.state.tracked[meta->index];
+  if (!env.state.avail[meta->index]) {
+    // We know nothing about the location. Initialize it with our typeParam.
+    tloc->knownValue = nullptr;
+    tloc->knownType = inst.typeParam();
+    env.state.avail.set(meta->index);
   }
 
   tloc->knownType &= inst.typeParam();
@@ -667,10 +674,7 @@ Flags handle_end_catch(Local& env, const IRInstruction& inst) {
   }
   assertx(data->stublogue != EndCatchData::FrameMode::Stublogue);
   auto const numLocals = inst.func()->numLocals();
-  auto const numStackElems =
-    inst.marker().spOff().offset -
-    (inst.marker().resumeMode() != ResumeMode::None
-      ? 0 : inst.func()->numSlotsInFrame());
+  auto const numStackElems = inst.marker().bcSPOff() - SBInvOffset{0};
 
   if (numStackElems + numLocals > kMaxTrackedFrameElems) {
     FTRACE(4, "      non-reducible EndCatch - too many values\n");

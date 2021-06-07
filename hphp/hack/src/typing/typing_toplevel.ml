@@ -29,6 +29,9 @@ module Subst = Decl_subst
 module EnvFromDef = Typing_env_from_def
 module Partial = Partial_provider
 module TUtils = Typing_utils
+module TCO = TypecheckerOptions
+module Cls = Decl_provider.Class
+module SN = Naming_special_names
 
 (* The two following functions enable us to retrieve the function (or class)
   header from the shared mem. Note that they only return a non None value if
@@ -143,7 +146,7 @@ let make_param_local_ty env decl_hint param =
           env
           ty
       in
-      Phase.localize_with_self env ~ignore_errors:false ty
+      Phase.localize_no_subst env ~ignore_errors:false ty
   in
   let ty =
     match get_node ty with
@@ -241,11 +244,114 @@ let get_ctx_vars ctxs =
     ~default:[]
     ctxs
 
-let fun_def ctx f :
+let function_dynamically_callable
+    env f params_decl_ty variadicity_decl_ty ret_locl_ty =
+  let env = { env with in_support_dynamic_type_method_check = true } in
+  let interface_check =
+    Typing_dynamic.sound_dynamic_interface_check
+      env
+      (variadicity_decl_ty :: params_decl_ty)
+      ret_locl_ty
+  in
+  let function_body_check () =
+    (* Here the body of the function is typechecked again to ensure it is safe
+     * to call it from a dynamic context (eg. under dyn..dyn->dyn assumptions).
+     * The code below must be kept in sync with with the fun_def checks.
+     *)
+    let make_dynamic pos =
+      Typing_make_type.dynamic (Reason.Rsupport_dynamic_type pos)
+    in
+    let dynamic_return_ty = make_dynamic (get_pos ret_locl_ty) in
+    let dynamic_return_info =
+      Typing_env_return_info.
+        {
+          return_type = MakeType.unenforced dynamic_return_ty;
+          return_disposable = false;
+          return_explicit = true;
+          return_dynamically_callable = true;
+        }
+    in
+    let (env, param_tys) =
+      List.zip_exn f.f_params params_decl_ty
+      |> List.map_env env ~f:(fun env (param, hint) ->
+             let dyn_ty =
+               make_dynamic @@ Pos_or_decl.of_raw_pos param.param_pos
+             in
+             let ty =
+               match hint with
+               | Some ty when Typing_enforceability.is_enforceable env ty ->
+                 Typing_make_type.intersection
+                   (Reason.Rsupport_dynamic_type Pos_or_decl.none)
+                   [ty; dyn_ty]
+               | _ -> dyn_ty
+             in
+             make_param_local_ty env (Some ty) param)
+    in
+    let params_need_immutable = get_ctx_vars f.f_ctxs in
+    let (env, _) =
+      (* In this pass, bind_param_and_check receives a pair where the lhs is
+       * either Tdynamic or TInstersection of the original type and TDynamic,
+       * but the fun_param is still referencing the source hint. We amend
+       * the source hint to keep in in sync before calling bind_param
+       * so the right enforcement is computed.
+       *)
+      let bind_param_and_check env lty_and_param =
+        let (ty, param) = lty_and_param in
+        let name = param.param_name in
+        let (hi, hopt) = param.param_type_hint in
+        let hopt =
+          Option.map hopt ~f:(fun (p, h) ->
+              if Typing_utils.is_tintersection env ty then
+                (p, Hintersection [(p, h); (p, Hdynamic)])
+              else
+                (p, Hdynamic))
+        in
+        let param_type_hint = (hi, hopt) in
+        let param = (ty, { param with param_type_hint }) in
+        let immutable =
+          List.exists ~f:(String.equal name) params_need_immutable
+        in
+        let (env, fun_param) = Typing.bind_param ~immutable env param in
+        (env, fun_param)
+      in
+      List.map_env env (List.zip_exn param_tys f.f_params) bind_param_and_check
+    in
+
+    let pos = fst f.f_name in
+    let (env, t_variadic) =
+      get_callable_variadicity
+        ~partial_callback:(Partial.should_check_error (Env.get_mode env))
+        ~pos
+        env
+        (Some (make_dynamic @@ Pos_or_decl.of_raw_pos pos))
+        f.f_variadic
+    in
+    let env =
+      set_tyvars_variance_in_callable env dynamic_return_ty param_tys t_variadic
+    in
+    let disable =
+      Naming_attributes.mem
+        SN.UserAttributes.uaDisableTypecheckerInternal
+        f.f_user_attributes
+    in
+
+    Errors.try_
+      (fun () ->
+        let (_ : env * Tast.stmt list) =
+          Typing.fun_ ~disable env dynamic_return_info pos f.f_body f.f_fun_kind
+        in
+        ())
+      (fun error ->
+        Errors.function_is_not_dynamically_callable pos (snd f.f_name) error)
+  in
+  if not interface_check then function_body_check ()
+
+let fun_def ctx fd :
     (Tast.fun_def * Typing_inference_env.t_global_with_pos) option =
+  let f = fd.fd_fun in
   Counters.count Counters.Category.Typecheck @@ fun () ->
   Errors.run_with_span f.f_span @@ fun () ->
-  let env = EnvFromDef.fun_env ~origin:Decl_counters.TopLevel ctx f in
+  let env = EnvFromDef.fun_env ~origin:Decl_counters.TopLevel ctx fd in
   with_timeout env f.f_name ~do_:(fun env ->
       (* reset the expression dependent display ids for each function body *)
       Reason.expr_display_id_map := IMap.empty;
@@ -257,11 +363,13 @@ let fun_def ctx f :
       let env =
         Typing.attributes_check_def env SN.AttributeKinds.fn f.f_user_attributes
       in
-      let (env, file_attrs) = Typing.file_attributes env f.f_file_attributes in
+      let (env, file_attrs) =
+        Typing.file_attributes env fd.fd_file_attributes
+      in
       let (env, cap_ty, unsafe_cap_ty) =
         Typing.type_capability env f.f_ctxs f.f_unsafe_ctxs (fst f.f_name)
       in
-      Typing_check_decls.fun_ env f;
+      Typing_type_wellformedness.fun_ env f;
       let env =
         Phase.localize_and_add_ast_generic_parameters_and_where_constraints
           env
@@ -270,6 +378,11 @@ let fun_def ctx f :
           f.f_where_constraints
       in
       let env = Env.set_fn_kind env f.f_fun_kind in
+      let env =
+        Env.set_module
+          env
+          (Naming_attributes_params.get_module_attribute f.f_user_attributes)
+      in
       let (return_decl_ty, params_decl_ty, variadicity_decl_ty) =
         merge_decl_header_with_hints
           ~params:f.f_params
@@ -284,7 +397,7 @@ let fun_def ctx f :
           (env, Typing_return.make_default_return ~is_method:false env f.f_name)
         | Some ty ->
           let localize env ty =
-            Phase.localize_with_self env ~ignore_errors:false ty
+            Phase.localize_no_subst env ~ignore_errors:false ty
           in
           Typing_return.make_return_type localize env ty
       in
@@ -303,6 +416,7 @@ let fun_def ctx f :
           return_ty
           return_decl_ty
       in
+      let sound_dynamic_check_saved_env = env in
       let (env, param_tys) =
         List.zip_exn f.f_params params_decl_ty
         |> List.map_env env ~f:(fun env (param, hint) ->
@@ -362,12 +476,29 @@ let fun_def ctx f :
       in
       let env = Typing_solver.close_tyvars_and_solve env in
       let env = Typing_solver.solve_all_unsolved_tyvars env in
-      let fundef =
+
+      let check_support_dynamic_type =
+        Naming_attributes.mem
+          SN.UserAttributes.uaSupportDynamicType
+          f.f_user_attributes
+      in
+      if
+        TypecheckerOptions.enable_sound_dynamic
+          (Provider_context.get_tcopt (Env.get_ctx env))
+        && check_support_dynamic_type
+      then
+        function_dynamically_callable
+          sound_dynamic_check_saved_env
+          f
+          params_decl_ty
+          variadicity_decl_ty
+          return_ty;
+
+      let fun_ =
         {
           Aast.f_annotation = Env.save local_tpenv env;
           Aast.f_readonly_this = f.f_readonly_this;
           Aast.f_span = f.f_span;
-          Aast.f_mode = f.f_mode;
           Aast.f_readonly_ret = f.f_readonly_ret;
           Aast.f_ret = (return_ty, hint_of_type_hint f.f_ret);
           Aast.f_name = f.f_name;
@@ -378,12 +509,18 @@ let fun_def ctx f :
           Aast.f_ctxs = f.f_ctxs;
           Aast.f_unsafe_ctxs = f.f_unsafe_ctxs;
           Aast.f_fun_kind = f.f_fun_kind;
-          Aast.f_file_attributes = file_attrs;
           Aast.f_user_attributes = user_attributes;
           Aast.f_body = { Aast.fb_ast = tb; fb_annotation = () };
           Aast.f_external = f.f_external;
-          Aast.f_namespace = f.f_namespace;
           Aast.f_doc_comment = f.f_doc_comment;
+        }
+      in
+      let fundef =
+        {
+          Aast.fd_mode = fd.fd_mode;
+          Aast.fd_fun = fun_;
+          Aast.fd_file_attributes = file_attrs;
+          Aast.fd_namespace = fd.fd_namespace;
         }
       in
       let (_env, global_inference_env) = Env.extract_global_inference_env env in
@@ -391,15 +528,24 @@ let fun_def ctx f :
 
 let method_dynamically_callable
     env cls m params_decl_ty variadicity_decl_ty ret_locl_ty =
+  let env = { env with in_support_dynamic_type_method_check = true } in
+  (* Add `dynamic` lower and upper bound to any type parameters that are not marked <<__NoRequireDynamic>> *)
+  let env_with_require_dynamic =
+    Typing_dynamic.add_require_dynamic_bounds env cls
+  in
   let interface_check =
     Typing_dynamic.sound_dynamic_interface_check
-      env
+      env_with_require_dynamic
       (variadicity_decl_ty :: params_decl_ty)
       ret_locl_ty
   in
   let method_body_check () =
+    (* Here the body of the method is typechecked again to ensure it is safe
+     * to call it from a dynamic context (eg. under dyn..dyn->dyn assumptions).
+     * The code below must be kept in sync with with the method_def checks.
+     *)
     let make_dynamic pos =
-      Typing_make_type.dynamic (Reason.Rsound_dynamic_callable pos)
+      Typing_make_type.dynamic (Reason.Rsupport_dynamic_type pos)
     in
     let dynamic_return_ty = make_dynamic (get_pos ret_locl_ty) in
     let dynamic_return_info =
@@ -421,7 +567,7 @@ let method_dynamically_callable
                match hint with
                | Some ty when Typing_enforceability.is_enforceable env ty ->
                  Typing_make_type.intersection
-                   (Reason.Rsound_dynamic_callable Pos_or_decl.none)
+                   (Reason.Rsupport_dynamic_type Pos_or_decl.none)
                    [ty; dyn_ty]
                | _ -> dyn_ty
              in
@@ -457,18 +603,13 @@ let method_dynamically_callable
       List.map_env env (List.zip_exn param_tys m.m_params) bind_param_and_check
     in
 
-    let variadic_pos =
-      match m.m_variadic with
-      | FVvariadicArg fp -> fp.param_pos
-      | FVellipsis p -> p
-      | FVnonVariadic -> Pos.none
-    in
+    let pos = fst m.m_name in
     let (env, t_variadic) =
       get_callable_variadicity
         ~partial_callback:(Partial.should_check_error (Env.get_mode env))
-        ~pos:variadic_pos
+        ~pos
         env
-        (Some (make_dynamic @@ Pos_or_decl.of_raw_pos variadic_pos))
+        (Some (make_dynamic @@ Pos_or_decl.of_raw_pos pos))
         m.m_variadic
     in
     let env =
@@ -476,10 +617,10 @@ let method_dynamically_callable
     in
 
     let env =
-      if Cls.get_implements_dynamic cls then
+      if Cls.get_support_dynamic_type cls then
         let this_ty =
           Typing_make_type.intersection
-            (Reason.Rsound_dynamic_callable Pos_or_decl.none)
+            (Reason.Rsupport_dynamic_type Pos_or_decl.none)
             [Env.get_local env this; make_dynamic Pos_or_decl.none]
         in
         Env.set_local env this this_ty Pos.none
@@ -492,11 +633,10 @@ let method_dynamically_callable
         SN.UserAttributes.uaDisableTypecheckerInternal
         m.m_user_attributes
     in
-    let pos = fst m.m_name in
 
     Errors.try_
       (fun () ->
-        let _ =
+        let (_ : env * Tast.stmt list) =
           Typing.fun_
             ~abstract:m.m_abstract
             ~disable
@@ -513,9 +653,9 @@ let method_dynamically_callable
           (snd m.m_name)
           (Cls.name cls)
           ( Naming_attributes.mem
-              SN.UserAttributes.uaSoundDynamicCallable
+              SN.UserAttributes.uaSupportDynamicType
               m.m_user_attributes
-          || Cls.get_implements_dynamic cls )
+          || Cls.get_support_dynamic_type cls )
           None
           (Some error))
   in
@@ -563,7 +703,7 @@ let method_def env cls m =
       let env =
         match Env.get_self_ty env with
         | Some ty when not (Env.is_static env) ->
-          Env.set_local env this ty Pos.none
+          Env.set_local env this (MakeType.this (get_reason ty)) Pos.none
         | _ -> env
       in
       let env =
@@ -595,10 +735,8 @@ let method_def env cls m =
            * late static type
            *)
           let ety_env =
-            Phase.env_with_self
-              env
-              ~on_error:
-                (Env.invalid_type_hint_assert_primary_pos_in_current_decl env)
+            empty_expand_env_with_on_error
+              (Env.invalid_type_hint_assert_primary_pos_in_current_decl env)
           in
           Typing_return.make_return_type (Phase.localize ~ety_env) env ret
       in
@@ -688,19 +826,19 @@ let method_def env cls m =
       let env = Typing_solver.solve_all_unsolved_tyvars env in
 
       (* if the enclosing class implements dynamic, or the method is annotated with
-       * <<__SoundDynamicCallable>>, check that the method is dynamically callable *)
-      let check_sound_dynamic_callable =
+       * <<__SupportDynamicType>>, check that the method is dynamically callable *)
+      let check_support_dynamic_type =
         (not env.inside_constructor)
-        && ( Cls.get_implements_dynamic cls
+        && ( Cls.get_support_dynamic_type cls
              && not (Aast.equal_visibility m.m_visibility Private)
            || Naming_attributes.mem
-                SN.UserAttributes.uaSoundDynamicCallable
+                SN.UserAttributes.uaSupportDynamicType
                 m.m_user_attributes )
       in
       if
         TypecheckerOptions.enable_sound_dynamic
           (Provider_context.get_tcopt (Env.get_ctx env))
-        && check_sound_dynamic_callable
+        && check_support_dynamic_type
       then
         method_dynamically_callable
           sound_dynamic_check_saved_env
@@ -810,8 +948,8 @@ let rec check_implements_or_extends_unique impl =
         List.partition_map rest (fun (h, ty) ->
             match get_node ty with
             | Tapply ((pos', name'), _) when String.equal name name' ->
-              `Fst pos'
-            | _ -> `Snd (h, ty))
+              First pos'
+            | _ -> Second (h, ty))
       in
       if not (List.is_empty pos_list) then
         Errors.duplicate_interface (fst hint) name pos_list;
@@ -994,13 +1132,15 @@ let check_extend_abstract_prop ~is_final p seq =
  *)
 let check_extend_abstract_typeconst ~is_final p seq =
   List.iter seq (fun (x, tc) ->
-      if Option.is_none tc.ttc_type then
+      match tc.ttc_kind with
+      | TCAbstract _ ->
         Errors.implement_abstract
           ~is_final
           p
           (fst tc.ttc_name)
           "type constant"
-          x)
+          x
+      | _ -> ())
 
 let check_extend_abstract_const ~is_final p seq =
   List.iter seq (fun (x, cc) ->
@@ -1095,7 +1235,7 @@ let typeconst_def
         { c_atc_as_constraint; c_atc_super_constraint; c_atc_default = Some ty }
       ->
       let (env, ty) =
-        Phase.localize_hint_with_self
+        Phase.localize_hint_no_subst
           ~ignore_errors:false
           ~report_cycle:(pos, name)
           env
@@ -1105,7 +1245,7 @@ let typeconst_def
         match c_atc_as_constraint with
         | Some as_ ->
           let (env, as_) =
-            Phase.localize_hint_with_self ~ignore_errors:false env as_
+            Phase.localize_hint_no_subst ~ignore_errors:false env as_
           in
           Type.sub_type
             pos
@@ -1120,7 +1260,7 @@ let typeconst_def
         match c_atc_super_constraint with
         | Some super ->
           let (env, super) =
-            Phase.localize_hint_with_self ~ignore_errors:false env super
+            Phase.localize_hint_no_subst ~ignore_errors:false env super
           in
           Type.sub_type
             pos
@@ -1134,10 +1274,10 @@ let typeconst_def
       env
     | TCPartiallyAbstract { c_patc_constraint = cstr; c_patc_type = ty } ->
       let (env, cstr) =
-        Phase.localize_hint_with_self ~ignore_errors:false env cstr
+        Phase.localize_hint_no_subst ~ignore_errors:false env cstr
       in
       let (env, ty) =
-        Phase.localize_hint_with_self
+        Phase.localize_hint_no_subst
           ~ignore_errors:false
           ~report_cycle:(pos, name)
           env
@@ -1146,7 +1286,7 @@ let typeconst_def
       Type.sub_type pos Reason.URtypeconst_cstr env ty cstr Errors.unify_error
     | TCConcrete { c_tc_type = ty } ->
       let (env, _ty) =
-        Phase.localize_hint_with_self
+        Phase.localize_hint_no_subst
           ~ignore_errors:false
           ~report_cycle:(pos, name)
           env
@@ -1156,7 +1296,7 @@ let typeconst_def
     | _ -> env
   in
 
-  (* TODO(typeconsts): should this check be happening for defaults
+  (* TODO(T88552052): should this check be happening for defaults
    * Does this belong here at all? *)
   let env =
     match c_tconst_kind with
@@ -1229,7 +1369,7 @@ let class_const_def ~in_enum_class c env cc =
       let ty = Decl_hint.hint env.decl_env h in
       let ty = Typing_enforceability.compute_enforced_ty env ty in
       let (env, ty) =
-        Phase.localize_possibly_enforced_with_self env ~ignore_errors:false ty
+        Phase.localize_possibly_enforced_no_subst env ~ignore_errors:false ty
       in
       (* Removing the HH\MemberOf wrapper in case of enum classes so the
        * following call to expr_* has the right expected type
@@ -1340,7 +1480,7 @@ let class_var_def ~is_static cls env cv =
     | Some decl_cty ->
       let decl_cty = Typing_enforceability.compute_enforced_ty env decl_cty in
       let (env, cty) =
-        Phase.localize_possibly_enforced_with_self
+        Phase.localize_possibly_enforced_no_subst
           env
           ~ignore_errors:false
           decl_cty
@@ -1408,19 +1548,22 @@ let class_var_def ~is_static cls env cv =
   if
     TypecheckerOptions.enable_sound_dynamic
       (Provider_context.get_tcopt (Env.get_ctx env))
-    && Cls.get_implements_dynamic cls
+    && Cls.get_support_dynamic_type cls
     && not (Aast.equal_visibility cv.cv_visibility Private)
   then begin
+    let env_with_require_dynamic =
+      Typing_dynamic.add_require_dynamic_bounds env cls
+    in
     Option.iter decl_cty (fun ty ->
         Typing_dynamic.check_property_sound_for_dynamic_write
           ~on_error:Errors.property_is_not_enforceable
-          env
+          env_with_require_dynamic
           (Cls.name cls)
           cv.cv_id
           ty);
     Typing_dynamic.check_property_sound_for_dynamic_read
       ~on_error:Errors.property_is_not_dynamic
-      env
+      env_with_require_dynamic
       (Cls.name cls)
       cv.cv_id
       cv_type_ty
@@ -1457,6 +1600,11 @@ let class_def_ env c tc =
     Typing.attributes_check_def env kind c.c_user_attributes
   in
   let (env, file_attrs) = Typing.file_attributes env c.c_file_attributes in
+  let env =
+    Env.set_module
+      env
+      (Naming_attributes_params.get_module_attribute c.c_user_attributes)
+  in
   let ctx = Env.get_ctx env in
   if
     (not Ast_defs.(equal_class_kind c.c_kind Ctrait))
@@ -1533,7 +1681,6 @@ let class_def_ env c tc =
     | Some e -> check_cstr_dep (hints_and_decl_tys e.e_includes)
     | _ -> ()
   end;
-  let impl = extends @ implements @ uses in
   let env =
     Phase.localize_and_add_ast_generic_parameters_and_where_constraints
       env
@@ -1547,9 +1694,8 @@ let class_def_ env c tc =
       ~use_pos:pc
       ~definition_pos:(Pos_or_decl.of_raw_pos pc)
       ~ety_env:
-        (Phase.env_with_self
-           env
-           ~on_error:(Env.unify_error_assert_primary_pos_in_current_decl env))
+        (empty_expand_env_with_on_error
+           (Env.unify_error_assert_primary_pos_in_current_decl env))
       env
       (Cls.where_constraints tc)
   in
@@ -1557,7 +1703,7 @@ let class_def_ env c tc =
   check_no_generic_static_property env tc;
   let check_where_constraints env ((p, _hint), decl_ty) =
     let (env, locl_ty) =
-      Phase.localize_with_self env ~ignore_errors:false decl_ty
+      Phase.localize_no_subst env ~ignore_errors:false decl_ty
     in
     match get_node (TUtils.get_base_type env locl_ty) with
     | Tclass (cls, _, tyl) ->
@@ -1566,10 +1712,8 @@ let class_def_ env c tc =
         let tc_tparams = Cls.tparams cls in
         let ety_env =
           {
-            (Phase.env_with_self
-               env
-               ~on_error:
-                 (Env.unify_error_assert_primary_pos_in_current_decl env))
+            (empty_expand_env_with_on_error
+               (Env.unify_error_assert_primary_pos_in_current_decl env))
             with
             substs = Subst.make_locl tc_tparams tyl;
           }
@@ -1584,9 +1728,83 @@ let class_def_ env c tc =
       | _ -> env)
     | _ -> env
   in
+  let impl = extends @ implements @ uses in
+  let impl =
+    if
+      TypecheckerOptions.require_extends_implements_ancestors
+        (Env.get_tcopt env)
+    then
+      impl @ req_extends @ req_implements
+    else
+      impl
+  in
   let env = List.fold impl ~init:env ~f:check_where_constraints in
   check_parent env c tc;
   check_parents_sealed env c tc;
+  let _ =
+    if c.c_support_dynamic_type then
+      (* Any class that extends a class or implements an interface
+       * that declares <<__SupportDynamicType>> must itself declare
+       * <<__SupportDynamicType>>. This is checked elsewhere. But if any generic
+       * parameters are not marked <<__NoRequireDynamic>> then we must check that the
+       * conditional support for dynamic is sound.
+       * We require that
+       *    If t <: dynamic
+       *    and C<T1,..,Tn> extends t
+       *    then C<T1,...,Tn> <: dynamic
+       *)
+      let dynamic_ty =
+        MakeType.dynamic (Reason.Rdynamic_coercion (Reason.Rwitness pc))
+      in
+      let env =
+        List.fold (extends @ implements) ~init:env ~f:(fun env (_, ty) ->
+            let (env, lty) =
+              Phase.localize_no_subst env ~ignore_errors:true ty
+            in
+            match get_node lty with
+            | Tclass ((_, name), _, _) ->
+              begin
+                match Env.get_class env name with
+                | Some c when Cls.get_support_dynamic_type c ->
+                  let env_with_assumptions =
+                    Typing_subtype.add_constraint
+                      env
+                      Ast_defs.Constraint_as
+                      lty
+                      dynamic_ty
+                      (Errors.unify_error_at pc)
+                  in
+                  begin
+                    match Env.get_self_ty env with
+                    | Some self_ty ->
+                      TUtils.sub_type
+                        ~coerce:(Some Typing_logic.CoerceToDynamic)
+                        env_with_assumptions
+                        self_ty
+                        dynamic_ty
+                        (fun ?code:_ reasons ->
+                          let message =
+                            Typing_print.full_strip_ns_decl env ty
+                            ^ " is subtype of dynamic implies "
+                            ^ Typing_print.full_strip_ns env self_ty
+                            ^ " is subtype of dynamic"
+                          in
+                          Errors.bad_conditional_support_dynamic
+                            pc
+                            ~child:c_name
+                            ~parent:name
+                            message
+                            reasons)
+                    | _ -> env
+                  end
+                | _ -> env
+              end
+            | _ -> env)
+      in
+      env
+    else
+      env
+  in
 
   let is_final = Cls.final tc in
   if
@@ -1671,8 +1889,8 @@ let class_def_ env c tc =
           | (_, Happly ((_, name), _)) -> Some name
           | _ -> None)
     in
-    let error_parent_implements_dynamic parent f =
-      Errors.parent_implements_dynamic
+    let error_parent_support_dynamic_type parent f =
+      Errors.parent_support_dynamic_type
         (fst c.c_name)
         (snd c.c_name, c.c_kind)
         (Cls.name parent, Cls.kind parent)
@@ -1684,32 +1902,17 @@ let class_def_ env c tc =
           begin
             match Cls.kind parent_type with
             | Ast_defs.Cnormal
-            | Ast_defs.Cabstract ->
-              (* ensure that we implement dynamic if we are a subclass of a class that implements dynamic
-               * upward well-formedness checks are performed in Typing_extends *)
-              if
-                Cls.get_implements_dynamic parent_type
-                && not c.c_implements_dynamic
-              then
-                error_parent_implements_dynamic
-                  parent_type
-                  c.c_implements_dynamic
+            | Ast_defs.Cabstract
             | Ast_defs.Cinterface ->
+              (* ensure that we implement dynamic if we are a subclass/subinterface of a class/interface
+               * that implements dynamic.  Upward well-formedness checks are performed in Typing_extends *)
               if
-                (not c.c_implements_dynamic)
-                && Cls.get_implements_dynamic parent_type
+                Cls.get_support_dynamic_type parent_type
+                && not c.c_support_dynamic_type
               then
-                error_parent_implements_dynamic parent_type false
-              else if
-                Ast_defs.is_c_interface c.c_kind
-                && not
-                     (Bool.equal
-                        (Cls.get_implements_dynamic parent_type)
-                        c.c_implements_dynamic)
-              then
-                error_parent_implements_dynamic
+                error_parent_support_dynamic_type
                   parent_type
-                  c.c_implements_dynamic
+                  c.c_support_dynamic_type
             | _ -> ()
           end
         | None -> ()) );
@@ -1735,7 +1938,7 @@ let class_def_ env c tc =
       Aast.c_xhp_category = c.c_xhp_category;
       Aast.c_reqs = c.c_reqs;
       Aast.c_implements = c.c_implements;
-      Aast.c_implements_dynamic = c.c_implements_dynamic;
+      Aast.c_support_dynamic_type = c.c_support_dynamic_type;
       Aast.c_where_constraints = c.c_where_constraints;
       Aast.c_consts = typed_consts;
       Aast.c_typeconsts = typed_typeconsts;
@@ -1765,7 +1968,7 @@ let class_def ctx c =
   let tc = Env.get_class env name in
   let env = Env.set_env_pessimize env in
   Typing_helpers.add_decl_errors (Option.bind tc Cls.decl_errors);
-  Typing_check_decls.class_ env c;
+  Typing_type_wellformedness.class_ env c;
   NastInitCheck.class_ env c;
   match tc with
   | None ->
@@ -1799,7 +2002,7 @@ let gconst_def ctx cst =
       let ty = Decl_hint.hint env.decl_env hint in
       let ty = Typing_enforceability.compute_enforced_ty env ty in
       let (env, dty) =
-        Phase.localize_possibly_enforced_with_self env ~ignore_errors:false ty
+        Phase.localize_possibly_enforced_no_subst env ~ignore_errors:false ty
       in
       let (env, te, value_type) =
         let expected =
@@ -1840,9 +2043,7 @@ let gconst_def ctx cst =
 let record_field env f =
   let (id, hint, e) = f in
   let (p, _) = hint in
-  let (env, cty) =
-    Phase.localize_hint_with_self env ~ignore_errors:false hint
-  in
+  let (env, cty) = Phase.localize_hint_no_subst env ~ignore_errors:false hint in
   let expected = ExpectedTy.make p Reason.URhint cty in
   match e with
   | Some e ->

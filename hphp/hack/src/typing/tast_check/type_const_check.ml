@@ -36,14 +36,23 @@ let handler =
                 name
             | _ -> ()
           end;
+          ( if
+            TypecheckerOptions.disallow_partially_abstract_typeconst_definitions
+              (Tast_env.get_tcopt env)
+          then
+            match c_tconst_kind with
+            | TCPartiallyAbstract _ ->
+              Errors.partially_abstract_typeconst_definition p
+            | _ -> () );
           begin
             match Cls.get_typeconst cls name with
             | None -> ()
             | Some tc ->
               begin
-                match (tc.ttc_abstract, tc.ttc_type) with
-                | (TCAbstract (Some ty), _)
-                | ((TCPartiallyAbstract | TCConcrete), Some ty) ->
+                match tc.ttc_kind with
+                | TCAbstract { atc_default = Some ty; _ }
+                | TCPartiallyAbstract { patc_type = ty; _ }
+                | TCConcrete { tc_type = ty } ->
                   let (pos, enforceable) =
                     Option.value_exn (Cls.get_typeconst_enforceability cls name)
                   in

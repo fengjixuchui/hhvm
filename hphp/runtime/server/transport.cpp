@@ -50,20 +50,7 @@ namespace HPHP {
 static const char HTTP_RESPONSE_STATS_PREFIX[] = "http_response_";
 const StaticString s_defaultCharset("default_charset");
 
-Transport::Transport()
-  : m_instructions(0), m_sleepTime(0), m_usleepTime(0),
-    m_nsleepTimeS(0), m_nsleepTimeN(0), m_url(nullptr),
-    m_postData(nullptr), m_postDataParsed(false),
-    m_chunkedEncoding(false), m_headerSent(false),
-    m_responseCode(-1), m_firstHeaderSet(false), m_firstHeaderLine(0),
-    m_responseSize(0), m_responseTotalSize(0), m_responseSentSize(0),
-    m_flushTimeUs(0), m_sendEnded(false), m_sendContentType(true),
-    m_isSSL(false), m_threadType(ThreadType::RequestThread) {
-  memset(&m_queueTime, 0, sizeof(m_queueTime));
-  memset(&m_wallTime, 0, sizeof(m_wallTime));
-  memset(&m_cpuTime, 0, sizeof(m_cpuTime));
-  m_chunksSentSizes.clear();
-}
+Transport::Transport() {}
 
 Transport::~Transport() {
   if (m_url) {
@@ -72,7 +59,6 @@ Transport::~Transport() {
   if (m_postData) {
     free(m_postData);
   }
-  m_chunksSentSizes.clear();
 }
 
 void Transport::onRequestStart(const timespec &queueTime) {
@@ -207,30 +193,6 @@ void Transport::parsePostParams() {
   }
 }
 
-bool Transport::paramExists(const char *name,
-                            Method method /* = Method::GET */) {
-  assertx(name && *name);
-  if (method == Method::GET || method == Method::AUTO) {
-    if (m_url == nullptr) {
-      parseGetParams();
-    }
-    if (m_getParams.find(name) != m_getParams.end()) {
-      return true;
-    }
-  }
-
-  if (method == Method::POST || method == Method::AUTO) {
-    if (!m_postDataParsed) {
-      parsePostParams();
-    }
-    if (m_postParams.find(name) != m_postParams.end()) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 std::string Transport::getParam(const char *name,
                                 Method method /* = Method::GET */) {
   assertx(name && *name);
@@ -285,7 +247,7 @@ void Transport::getArrayParam(const char *name,
     }
     ParamMap::const_iterator iter = m_getParams.find(name);
     if (iter != m_getParams.end()) {
-      const std::vector<const char *> &params = iter->second;
+      auto const& params = iter->second;
       values.insert(values.end(), params.begin(), params.end());
     }
   }
@@ -296,7 +258,7 @@ void Transport::getArrayParam(const char *name,
     }
     ParamMap::const_iterator iter = m_postParams.find(name);
     if (iter != m_postParams.end()) {
-      const std::vector<const char *> &params = iter->second;
+      auto const& params = iter->second;
       values.insert(values.end(), params.begin(), params.end());
     }
   }
@@ -410,23 +372,23 @@ void Transport::removeHeader(const char *name) {
   if (name && *name) {
     m_responseHeaders.erase(name);
     if (strcasecmp(name, "Set-Cookie") == 0) {
-      m_responseCookiesList.clear();
+      m_responseCookies.clear();
     }
   }
 }
 
 void Transport::removeAllHeaders() {
   m_responseHeaders.clear();
-  m_responseCookiesList.clear();
+  m_responseCookies.clear();
 }
 
 void Transport::getResponseHeaders(HeaderMap &headers) {
   headers = m_responseHeaders;
 
-  std::vector<std::string> &cookies = headers["Set-Cookie"];
-  std::list<std::string> cookies_existing = getCookieLines();
-  cookies.insert(cookies.end(), cookies_existing.begin(),
-     cookies_existing.end());
+  auto& cookies = headers["Set-Cookie"];
+  for (auto& cookie : m_responseCookies) {
+    cookies.push_back(cookie.second);
+  }
 }
 
 void Transport::addToCommaSeparatedHeader(const char* name, const char* value) {
@@ -605,35 +567,10 @@ bool Transport::setCookie(const String& name, const String& value, int64_t expir
   // last cookie for a given name-domain-path triplet.
   String dedup_key = name + "\n" + domain + "\n" + path;
 
-  m_responseCookiesList.emplace(m_responseCookiesList.end(),
-    dedup_key.data(), cookie);
+  m_responseCookies[dedup_key.data()] = cookie;
 
   return true;
 }
-
-std::list<std::string> Transport::getCookieLines() {
-  std::list<std::string> ret;
-  if (RuntimeOption::AllowDuplicateCookies) {
-    for(CookieList::const_iterator iter = m_responseCookiesList.begin();
-        iter != m_responseCookiesList.end(); ++iter) {
-      ret.push_back(iter->second);
-    }
-  } else {
-    // We will dedupe with last-one-wins semantics by walking backwards and
-    // including only those whose dedupe key we have not seen yet, then
-    // reversing the list
-    std::unordered_set<std::string> already_seen;
-    for(auto iter = m_responseCookiesList.crbegin();
-        iter != m_responseCookiesList.crend(); ++iter) {
-      if (already_seen.find(iter->first) == already_seen.end()) {
-        ret.push_front(iter->second);
-        already_seen.insert(iter->first);
-      }
-    }
-  }
-  return ret;
-}
-
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -641,16 +578,14 @@ void Transport::prepareHeaders(bool precompressed, bool chunked,
     const StringHolder &response, const StringHolder& orig_response) {
   for (HeaderMap::const_iterator iter = m_responseHeaders.begin();
        iter != m_responseHeaders.end(); ++iter) {
-    const std::vector<std::string> &values = iter->second;
+    const auto& values = iter->second;
     for (unsigned int i = 0; i < values.size(); i++) {
       addHeaderImpl(iter->first.c_str(), values[i].c_str());
     }
   }
 
-  const std::list<std::string> cookies = getCookieLines();
-  for (std::list<std::string>::const_iterator iter = cookies.begin();
-       iter != cookies.end(); ++iter) {
-    addHeaderImpl("Set-Cookie", iter->c_str());
+  for (auto& cookie : m_responseCookies) {
+    addHeaderImpl("Set-Cookie", cookie.second.c_str());
   }
 
   auto& compressor = getCompressor();

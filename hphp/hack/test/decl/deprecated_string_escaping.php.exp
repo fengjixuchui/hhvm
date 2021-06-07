@@ -2,6 +2,7 @@
   (Shallow_decl_defs.Fun
      { Typing_defs.fe_deprecated =
        (Some "The function single is deprecated: can't write an apostrophe without escaping in single quotes");
+       fe_module = None;
        fe_type =
        (Rwitness_from_decl ([4:10-16]),
         (Tfun
@@ -15,11 +16,13 @@
              (make_ft_flags FSync ~return_disposable:false
                ~returns_readonly:false ~readonly_this:false);
              ft_ifc_decl = FDPolicied {PUBLIC} }));
-       fe_pos = [4:10-16]; fe_php_std_lib = false }));
+       fe_pos = [4:10-16]; fe_php_std_lib = false;
+       fe_support_dynamic_type = false }));
   ("\\double",
    (Shallow_decl_defs.Fun
       { Typing_defs.fe_deprecated =
         (Some "The function double is deprecated: other escapes like \n and \t available in double quotes");
+        fe_module = None;
         fe_type =
         (Rwitness_from_decl ([7:10-16]),
          (Tfun
@@ -33,7 +36,8 @@
               (make_ft_flags FSync ~return_disposable:false
                 ~returns_readonly:false ~readonly_this:false);
               ft_ifc_decl = FDPolicied {PUBLIC} }));
-        fe_pos = [7:10-16]; fe_php_std_lib = false }))
+        fe_pos = [7:10-16]; fe_php_std_lib = false;
+        fe_support_dynamic_type = false }))
   ]
 
 They matched!

@@ -16,6 +16,8 @@ external is_nfs : string -> bool = "hh_is_nfs"
 
 external is_apple_os : unit -> bool = "hh_sysinfo_is_apple_os"
 
+external freopen : string -> string -> Unix.file_descr -> unit = "hh_freopen"
+
 let get_env name = (try Some (Sys.getenv name) with Caml.Not_found -> None)
 
 let getenv_user () =
@@ -432,10 +434,9 @@ let splitext filename =
   (root, ext)
 
 let is_test_mode () =
-  try
-    ignore @@ Sys.getenv "HH_TEST_MODE";
-    true
-  with _ -> false
+  match (Sys.getenv_opt "HH_TEST_MODE", Sys.getenv_opt "BUCK_PROJECT_ROOT") with
+  | (None, None) -> false
+  | _ -> true
 
 let sleep ~seconds = ignore @@ Unix.select [] [] [] seconds
 
@@ -660,3 +661,83 @@ external get_gc_time : unit -> float * float = "hh_get_gc_time"
 module For_test = struct
   let find_oom_in_dmesg_output = find_oom_in_dmesg_output
 end
+
+let protected_read_exn (filename : string) : string =
+  (* We can't use the standard Disk.cat because we need to read from an existing (locked)
+  fd for the file; not open the file a second time and read from that. *)
+  let cat_from_fd (fd : Unix.file_descr) : string =
+    let total = Unix.lseek fd 0 Unix.SEEK_END in
+    let _0 = Unix.lseek fd 0 Unix.SEEK_SET in
+    let buf = Bytes.create total in
+    let rec rec_read offset =
+      if offset = total then
+        ()
+      else
+        let bytes_read = Unix.read fd buf offset (total - offset) in
+        if bytes_read = 0 then raise End_of_file;
+        rec_read (offset + bytes_read)
+    in
+    rec_read 0;
+    Bytes.to_string buf
+  in
+  (* Unix has no way to atomically create a file and lock it; fnctl inherently
+  only works on an existing file. There's therefore a race where the writer
+  might create the file before locking it, but we get our read lock in first.
+  We'll work around this with a hacky sleep+retry. Other solutions would be
+  to have the file always exist, or to use a separate .lock file. *)
+  let rec retry_if_empty () =
+    let fd = Unix.openfile filename [Unix.O_RDONLY] 0o666 in
+    let content =
+      Utils.try_finally
+        ~f:(fun () ->
+          Unix.lockf fd Unix.F_RLOCK 0;
+          cat_from_fd fd)
+        ~finally:(fun () -> Unix.close fd)
+    in
+    if String.is_empty content then
+      let () = Unix.sleepf 0.001 in
+      retry_if_empty ()
+    else
+      content
+  in
+  retry_if_empty ()
+
+let protected_write_exn (filename : string) (content : string) : unit =
+  if String.is_empty content then failwith "Empty content not supported.";
+  with_umask 0o000 (fun () ->
+      let fd = Unix.openfile filename [Unix.O_RDWR; Unix.O_CREAT] 0o666 in
+      Utils.try_finally
+        ~f:(fun () ->
+          Unix.lockf fd Unix.F_LOCK 0;
+          let _written =
+            Unix.write_substring fd content 0 (String.length content)
+          in
+          Unix.ftruncate fd (String.length content))
+        ~finally:(fun () -> Unix.close fd))
+
+let redirect_stdout_and_stderr_to_file (filename : string) : unit =
+  let old_stdout = Unix.dup Unix.stdout in
+  let old_stderr = Unix.dup Unix.stderr in
+  Utils.try_finally
+    ~finally:(fun () ->
+      (* Those two old_* handles must be closed so as not to have dangling FDs.
+      Neither success nor failure path holds onto them: the success path ignores
+      then, and the failure path dups them. That's why we can close them here. *)
+      (try Unix.close old_stdout with _ -> ());
+      (try Unix.close old_stderr with _ -> ());
+      ())
+    ~f:(fun () ->
+      try
+        (* We want both stdout and stderr to be redirected to the same file.
+        Do not attempt to open a file that's already open:
+        https://wiki.sei.cmu.edu/confluence/display/c/FIO24-C.+Do+not+open+a+file+that+is+already+open
+        Use dup for this scenario instead:
+        https://stackoverflow.com/questions/15155314/redirect-stdout-and-stderr-to-the-same-file-and-restore-it *)
+        freopen filename "w" Unix.stdout;
+        Unix.dup2 Unix.stdout Unix.stderr;
+        ()
+      with exn ->
+        let e = Exception.wrap exn in
+        (try Unix.dup2 old_stdout Unix.stdout with _ -> ());
+        (try Unix.dup2 old_stderr Unix.stderr with _ -> ());
+        Exception.reraise e)

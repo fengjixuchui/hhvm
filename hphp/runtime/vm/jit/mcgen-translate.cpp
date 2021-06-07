@@ -55,6 +55,8 @@
 #include "hphp/util/numa.h"
 #include "hphp/util/trace.h"
 
+#include "hphp/zend/zend-strtod.h"
+
 TRACE_SET_MOD(mcg);
 
 namespace HPHP { namespace jit { namespace mcgen {
@@ -241,14 +243,13 @@ void enqueueRetranslateOptRequest(tc::FuncMetaInfo* info) {
 }
 
 void createSrcRecs(const Func* func) {
-  auto spOff = FPInvOffset { func->numSlotsInFrame() };
   auto const profData = globalProfData();
 
   auto create_one = [&] (Offset off) {
     auto const sk = SrcKey { func, off, ResumeMode::None };
     if (off == 0 ||
         profData->dvFuncletTransId(sk) != kInvalidTransID) {
-      tc::createSrcRec(sk, spOff);
+      tc::createSrcRec(sk, SBInvOffset{0});
     }
   };
 
@@ -371,9 +372,7 @@ void retranslateAll() {
   // 2) Perform bespoke coloring and finalize the layout hierarchy.
   //    Jumpstart consumers use the coloring computed by the seeder.
 
-  if (allowBespokeArrayLikes() && !isJitDeserializing()) {
-    bespoke::selectBespokeLayouts();
-  }
+  if (allowBespokeArrayLikes()) bespoke::selectBespokeLayouts();
 
   // 3) Check if we should dump profile data. We may exit here in
   //    SerializeAndExit mode, without really doing the JIT, unless
@@ -548,7 +547,7 @@ TranslationResult retranslate(TransArgs args, const RegionContext& ctx) {
     return TranslationResult::failTransiently();
   }
 
-  translator.relocate();
+  translator.relocate(false);
   return TranslationResult{translator.publish()};
 }
 
@@ -622,6 +621,7 @@ void checkRetranslateAll(bool force) {
       std::unique_lock<std::mutex> lock{s_rtaThreadMutex};
       s_retranslateAllThread = std::thread([] {
         rds::local::init();
+        zend_get_bigint_data();
         SCOPE_EXIT { rds::local::fini(); };
         retranslateAll();
       });
@@ -632,6 +632,7 @@ void checkRetranslateAll(bool force) {
       BootStats::Block timer("retranslateall",
                              RuntimeOption::ServerExecutionMode());
       rds::local::init();
+      zend_get_bigint_data();
       SCOPE_EXIT { rds::local::fini(); };
       retranslateAll();
     });

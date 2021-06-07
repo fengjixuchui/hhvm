@@ -99,19 +99,4 @@ inline void LitstrTable::setWriting() {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// ID helpers.
-
-inline bool isUnitLitstrId(Id id) {
-  return id >= kUnitLitstrOffset;
-}
-
-inline Id encodeUnitLitstrId(Id id) {
-  return id + kUnitLitstrOffset;
-}
-
-inline Id decodeUnitLitstrId(Id id) {
-  return id - kUnitLitstrOffset;
-}
-
-///////////////////////////////////////////////////////////////////////////////
 }

@@ -26,6 +26,7 @@ aast::XhpAttribute
 ast_defs::Bop
 ast_defs::Id
 ast_defs::ShapeFieldName
+ast_defs::XhpEnumValue
 decl_defs::ConditionTypeName
 decl_defs::LinearizationKind
 decl_defs::MethodReactivity
@@ -113,6 +114,7 @@ t_shape_map::TShapeMap
 typing_cont_key::TypingContKey
 typing_defs_core::Capability
 typing_defs_core::CeVisibility
+typing_defs_core::CollectionStyle
 typing_defs_core::ConsistentKind
 typing_defs_core::ConstraintType
 typing_defs_core::ConstraintType_
@@ -134,6 +136,7 @@ typing_defs_core::Reactivity
 typing_defs_core::ShapeKind
 typing_defs_core::TshapeFieldName
 typing_defs_core::Ty_
+typing_defs_core::UserAttributeParam
 typing_defs_core::ValKind
 typing_defs_core::XhpAttr
 typing_defs_core::XhpAttrTag
@@ -142,6 +145,7 @@ typing_defs_flags::FunTypeFlags
 typing_defs::CeVisibility
 typing_defs::ClassConstFrom
 typing_defs::ClassConstRef
+typing_defs::CollectionStyle
 typing_defs::ConsistentKind
 typing_defs::ConstraintType
 typing_defs::DeserializationError
@@ -157,7 +161,7 @@ typing_defs::PosString
 typing_defs::RecordFieldReq
 typing_defs::ShapeKind
 typing_defs::Ty_
-typing_defs::TypeconstAbstractKind
+typing_defs::Typeconst
 typing_defs::ValKind
 typing_defs::XhpAttr
 typing_defs::XhpAttrTag

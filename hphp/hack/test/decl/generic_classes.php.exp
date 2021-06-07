@@ -2,16 +2,16 @@
   (Shallow_decl_defs.Class
      { Shallow_decl_defs.sc_mode = Mstrict; sc_final = false;
        sc_is_xhp = false; sc_has_xhp_keyword = false; sc_kind = Cnormal;
-       sc_name = ([3:7-10], "\\Bag");
+       sc_module = None; sc_name = ([3:7-10], "\\Bag");
        sc_tparams =
        [{ Typing_defs_core.tp_variance = Invariant;
           tp_name = ([3:11-12], "T"); tp_tparams = []; tp_constraints = [];
           tp_reified = Erased; tp_user_attributes = [] }
          ];
        sc_where_constraints = []; sc_extends = []; sc_uses = [];
-       sc_xhp_attr_uses = []; sc_req_extends = []; sc_req_implements = [];
-       sc_implements = []; sc_implements_dynamic = false; sc_consts = [];
-       sc_typeconsts = [];
+       sc_xhp_attr_uses = []; sc_xhp_enum_values = {}; sc_req_extends = [];
+       sc_req_implements = []; sc_implements = [];
+       sc_support_dynamic_type = false; sc_consts = []; sc_typeconsts = [];
        sc_props =
        [{ Shallow_decl_defs.sp_name = ([4:13-18], "data");
           sp_xhp_attr = None;
@@ -75,16 +75,16 @@
    (Shallow_decl_defs.Class
       { Shallow_decl_defs.sc_mode = Mstrict; sc_final = false;
         sc_is_xhp = false; sc_has_xhp_keyword = false; sc_kind = Cnormal;
-        sc_name = ([15:7-23], "\\ContravariantBag");
+        sc_module = None; sc_name = ([15:7-23], "\\ContravariantBag");
         sc_tparams =
         [{ Typing_defs_core.tp_variance = Contravariant;
            tp_name = ([15:25-26], "T"); tp_tparams = []; tp_constraints = [];
            tp_reified = Erased; tp_user_attributes = [] }
           ];
         sc_where_constraints = []; sc_extends = []; sc_uses = [];
-        sc_xhp_attr_uses = []; sc_req_extends = []; sc_req_implements = [];
-        sc_implements = []; sc_implements_dynamic = false; sc_consts = [];
-        sc_typeconsts = [];
+        sc_xhp_attr_uses = []; sc_xhp_enum_values = {}; sc_req_extends = [];
+        sc_req_implements = []; sc_implements = [];
+        sc_support_dynamic_type = false; sc_consts = []; sc_typeconsts = [];
         sc_props =
         [{ Shallow_decl_defs.sp_name = ([16:13-18], "data");
            sp_xhp_attr = None;
@@ -130,16 +130,16 @@
    (Shallow_decl_defs.Class
       { Shallow_decl_defs.sc_mode = Mstrict; sc_final = false;
         sc_is_xhp = false; sc_has_xhp_keyword = false; sc_kind = Cnormal;
-        sc_name = ([23:7-19], "\\CovariantBag");
+        sc_module = None; sc_name = ([23:7-19], "\\CovariantBag");
         sc_tparams =
         [{ Typing_defs_core.tp_variance = Covariant;
            tp_name = ([23:21-22], "T"); tp_tparams = []; tp_constraints = [];
            tp_reified = Erased; tp_user_attributes = [] }
           ];
         sc_where_constraints = []; sc_extends = []; sc_uses = [];
-        sc_xhp_attr_uses = []; sc_req_extends = []; sc_req_implements = [];
-        sc_implements = []; sc_implements_dynamic = false; sc_consts = [];
-        sc_typeconsts = [];
+        sc_xhp_attr_uses = []; sc_xhp_enum_values = {}; sc_req_extends = [];
+        sc_req_implements = []; sc_implements = [];
+        sc_support_dynamic_type = false; sc_consts = []; sc_typeconsts = [];
         sc_props =
         [{ Shallow_decl_defs.sp_name = ([24:13-18], "data");
            sp_xhp_attr = None;

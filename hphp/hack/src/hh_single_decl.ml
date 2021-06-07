@@ -243,8 +243,13 @@ let () =
       ignored_arg "--extra-builtin";
       ignored_flag "--disallow-inst-meth";
       ignored_flag "--ignore-unsafe-cast";
-      ignored_flag "--bitwise-math-new-code";
       ignored_flag "--inc-dec-new-code";
+      ignored_flag "--math-new-code";
+      ignored_flag "--disallow-partially-abstract-typeconst-definitions";
+      ignored_flag "--typeconst-concrete-concrete-error";
+      ignored_arg "--meth-caller-only-public-visibility";
+      ignored_flag "--require-extends-implements-ancestors";
+      ignored_flag "--strict-value-equality";
     ]
     set_file
     usage;

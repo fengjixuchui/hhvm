@@ -489,10 +489,6 @@ where
         <Self as SyntaxSmartConstructors<S, TF, State>>::make_eval_expression(self, arg0, arg1, arg2, arg3)
     }
 
-    fn make_define_expression(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<S, TF, State>>::make_define_expression(self, arg0, arg1, arg2, arg3)
-    }
-
     fn make_isset_expression(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
         <Self as SyntaxSmartConstructors<S, TF, State>>::make_isset_expression(self, arg0, arg1, arg2, arg3)
     }
@@ -761,8 +757,8 @@ where
         <Self as SyntaxSmartConstructors<S, TF, State>>::make_list_item(self, arg0, arg1)
     }
 
-    fn make_enum_atom_expression(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {
-        <Self as SyntaxSmartConstructors<S, TF, State>>::make_enum_atom_expression(self, arg0, arg1)
+    fn make_enum_class_label_expression(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
+        <Self as SyntaxSmartConstructors<S, TF, State>>::make_enum_class_label_expression(self, arg0, arg1, arg2)
     }
 
 }

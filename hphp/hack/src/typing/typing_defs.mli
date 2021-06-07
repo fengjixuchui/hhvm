@@ -58,9 +58,11 @@ type class_elt = {
 
 type fun_elt = {
   fe_deprecated: string option;
+  fe_module: string option;
   fe_type: decl_ty;
   fe_pos: Pos_or_decl.t;
   fe_php_std_lib: bool;
+  fe_support_dynamic_type: bool;
 }
 [@@deriving show]
 
@@ -80,6 +82,7 @@ type record_field_req =
 [@@deriving show]
 
 type record_def_type = {
+  rdt_module: string option;
   rdt_name: pos_id;
   rdt_extends: pos_id option;
   rdt_fields: (pos_id * record_field_req) list;
@@ -101,6 +104,7 @@ and class_type = {
   tc_is_xhp: bool;
   tc_has_xhp_keyword: bool;
   tc_is_disposable: bool;
+  tc_module: string option;
   tc_name: string;
   tc_pos: Pos_or_decl.t;
   tc_tparams: decl_tparam list;
@@ -113,31 +117,43 @@ and class_type = {
   tc_smethods: class_elt SMap.t;
   tc_construct: class_elt option * consistent_kind;
   tc_ancestors: decl_ty SMap.t;
-  tc_implements_dynamic: bool;
+  tc_support_dynamic_type: bool;
   tc_req_ancestors: requirement list;
   tc_req_ancestors_extends: SSet.t;
   tc_extends: SSet.t;
   tc_enum_type: enum_type option;
   tc_sealed_whitelist: SSet.t option;
+  tc_xhp_enum_values: Ast_defs.xhp_enum_value list SMap.t;
   tc_decl_errors: Errors.t option; [@opaque]
 }
 
-and typeconst_abstract_kind =
-  | TCAbstract of decl_ty option
-  | TCPartiallyAbstract
-  | TCConcrete
+and abstract_typeconst = {
+  atc_as_constraint: decl_ty option;
+  atc_super_constraint: decl_ty option;
+  atc_default: decl_ty option;
+}
+
+and concrete_typeconst = { tc_type: decl_ty }
+
+and partially_abstract_typeconst = {
+  patc_constraint: decl_ty;
+  patc_type: decl_ty;
+}
+
+and typeconst =
+  | TCAbstract of abstract_typeconst
+  | TCConcrete of concrete_typeconst
+  | TCPartiallyAbstract of partially_abstract_typeconst
 
 and typeconst_type = {
-  ttc_abstract: typeconst_abstract_kind;
   ttc_synthesized: bool;
   ttc_name: pos_id;
-  ttc_as_constraint: decl_ty option;
-  ttc_super_constraint: decl_ty option;
-  ttc_type: decl_ty option;
+  ttc_kind: typeconst;
   ttc_origin: string;
   ttc_enforceable: Pos_or_decl.t * bool;
   ttc_reifiable: Pos_or_decl.t option;
   ttc_concretized: bool;
+  ttc_is_ctx: bool;
 }
 
 and enum_type = {
@@ -149,6 +165,7 @@ and enum_type = {
 [@@deriving show]
 
 type typedef_type = {
+  td_module: string option;
   td_pos: Pos_or_decl.t;
   td_vis: Aast.typedef_visibility;
   td_tparams: decl_tparam list;
@@ -188,10 +205,18 @@ end
 (** Tracks information about how a type was expanded *)
 type expand_env = {
   type_expansions: Type_expansions.t;
+  expand_visible_newtype: bool;
+      (** Allow to expand visible `newtype`, i.e. opaque types defined in the current file.
+          True by default. *)
   substs: locl_ty SMap.t;
   this_ty: locl_ty;
   on_error: Errors.error_from_reasons_callback;
 }
+
+val empty_expand_env : expand_env
+
+val empty_expand_env_with_on_error :
+  Errors.error_from_reasons_callback -> expand_env
 
 (** Returns:
     - [None] if there was no cycle
@@ -227,6 +252,8 @@ val is_generic_equal_to : string -> 'a ty -> bool
 val is_prim : Aast.tprim -> 'a ty -> bool
 
 val is_union : 'a ty -> bool
+
+val is_neg : locl_ty -> bool
 
 val is_constraint_type_union : constraint_type -> bool
 
@@ -399,8 +426,7 @@ val equal_decl_ft_params :
 val equal_decl_ft_implicit_params :
   decl_ty fun_implicit_params -> decl_ty fun_implicit_params -> bool
 
-val equal_typeconst_abstract_kind :
-  typeconst_abstract_kind -> typeconst_abstract_kind -> bool
+val equal_typeconst : typeconst -> typeconst -> bool
 
 val equal_enum_type : enum_type -> enum_type -> bool
 
@@ -435,7 +461,7 @@ val get_ce_readonly_prop : class_elt -> bool
 
 val get_ce_dynamicallycallable : class_elt -> bool
 
-val get_ce_sound_dynamic_callable : class_elt -> bool
+val get_ce_support_dynamic_type : class_elt -> bool
 
 val xhp_attr_to_ce_flags : xhp_attr option -> Hh_prelude.Int.t
 
@@ -454,7 +480,7 @@ val make_ce_flags :
   lateinit:bool ->
   dynamicallycallable:bool ->
   readonly_prop:bool ->
-  sound_dynamic_callable:bool ->
+  support_dynamic_type:bool ->
   Hh_prelude.Int.t
 
 val error_Tunapplied_alias_in_illegal_context : unit -> 'a

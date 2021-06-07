@@ -51,7 +51,7 @@ let validator =
     method! on_tfun acc r _ = this#invalid acc r "a function type"
 
     method! on_typeconst acc class_ is_concrete typeconst =
-      match typeconst.ttc_abstract with
+      match typeconst.ttc_kind with
       | _ when Option.is_some typeconst.ttc_reifiable || is_concrete ->
         super#on_typeconst acc class_ is_concrete typeconst
       | _ ->
@@ -64,7 +64,10 @@ let validator =
     method! on_taccess acc r (root, ids) =
       let acc =
         match acc.reification with
-        | Unresolved -> this#on_type acc root
+        | Unresolved ->
+          (match get_node root with
+          | Tthis -> { acc with reification = Resolved }
+          | _ -> this#on_type acc root)
         | Resolved -> acc
       in
       super#on_taccess acc r (root, ids)

@@ -454,7 +454,7 @@ Variant HHVM_FUNCTION(hphp_invoke_method, const Variant& obj,
   ctx.dynamic = true;
 
   return Variant::attach(
-    g_context->invokeFunc(ctx, params)
+    g_context->invokeFunc(ctx, params, RuntimeCoeffects::fixme())
   );
 }
 
@@ -574,7 +574,7 @@ Array implTypeStructure(const Variant& cls_or_obj,
       raise_error("Non-existent type alias %s", name.get()->data());
     }
 
-    auto const typeStructure = typeAlias->typeStructure;
+    auto const typeStructure = typeAlias->typeStructure();
     assertx(!typeStructure.empty());
     assertx(typeStructure.isDict());
     Array resolved;
@@ -866,9 +866,9 @@ static Array HHVM_METHOD(ReflectionFunctionAbstract, getRetTypeInfo) {
   return retTypeInfo.toArray();
 }
 
-static Array HHVM_METHOD(ReflectionFunctionAbstract, getReifiedTypeParamInfo) {
-  auto const func = ReflectionFuncHandle::GetFuncFor(this_);
-  auto const& info = func->getReifiedGenericsInfo();
+namespace {
+
+const Array reified_generics_info_to_array(const ReifiedGenericsInfo& info) {
   VArrayInit arr(info.m_typeParamInfo.size());
   for (auto tparam : info.m_typeParamInfo) {
     DArrayInit tparamArr(3);
@@ -878,6 +878,13 @@ static Array HHVM_METHOD(ReflectionFunctionAbstract, getReifiedTypeParamInfo) {
     arr.append(tparamArr.toArray());
   }
   return arr.toArray();
+}
+
+} // namespace
+
+static Array HHVM_METHOD(ReflectionFunctionAbstract, getReifiedTypeParamInfo) {
+  auto const func = ReflectionFuncHandle::GetFuncFor(this_);
+  return reified_generics_info_to_array(func->getReifiedGenericsInfo());
 }
 
 const StaticString s_pure("pure");
@@ -1448,7 +1455,7 @@ void addClassConstantNames(const Class* cls,
 
   const Class::Const* consts = cls->constants();
   for (size_t i = 0; i < numConsts; i++) {
-    if (consts[i].cls == cls && !consts[i].isAbstract()
+    if (consts[i].cls == cls && !consts[i].isAbstractAndUninit()
         && consts[i].kind() == ConstModifiers::Kind::Value) {
       st->add(const_cast<StringData*>(consts[i].name.get()));
     }
@@ -1531,7 +1538,7 @@ static Array HHVM_STATIC_METHOD(
   return orderedConstantsHelper(
     get_class_from_name(clsname),
     [](Class::Const c) -> bool {
-      return c.isAbstract() && c.kind() == ConstModifiers::Kind::Value;
+      return c.isAbstractAndUninit() && c.kind() == ConstModifiers::Kind::Value;
     }
   );
 }
@@ -1584,6 +1591,11 @@ static Array HHVM_METHOD(ReflectionClass, getAttributesRecursiveNamespaced) {
   } while ((currentCls = currentCls->parent()));
 
   return ret;
+}
+
+static Array HHVM_METHOD(ReflectionClass, getReifiedTypeParamInfo) {
+  auto const cls = ReflectionClassHandle::GetClassFor(this_);
+  return reified_generics_info_to_array(cls->getReifiedGenericsInfo());
 }
 
 static Array HHVM_STATIC_METHOD(
@@ -1745,7 +1757,11 @@ static String HHVM_METHOD(ReflectionTypeConstant, getName) {
 
 static bool HHVM_METHOD(ReflectionTypeConstant, isAbstract) {
   auto const cns = ReflectionConstHandle::GetConstFor(this_);
-  return cns->isAbstract();
+  if (RO::EvalTypeconstAbstractDefaultReflectionIsAbstract) {
+    return cns->isAbstract();
+  } else {
+    return cns->isAbstractAndUninit();
+  }
 }
 
 // helper for getAssignedTypeText
@@ -1763,7 +1779,7 @@ static String HHVM_METHOD(ReflectionTypeConstant, getAssignedTypeHint) {
     auto const preCls = cls->preClass();
     auto typeCns = preCls->lookupConstant(cns->name);
     assertx(typeCns->kind() == ConstModifiers::Kind::Type);
-    assertx(!typeCns->isAbstract());
+    assertx(!typeCns->isAbstractAndUninit());
     assertx(isArrayLikeType(typeCns->val().m_type));
     return TypeStructure::toString(Array::attach(typeCns->val().m_data.parr),
       TypeStructure::TSDisplayType::TSDisplayTypeReflection);
@@ -2071,13 +2087,13 @@ static String HHVM_METHOD(ReflectionTypeAlias, __init, const String& name) {
   }
 
   ReflectionTypeAliasHandle::Get(this_)->setTypeAlias(typeAlias);
-  return String::attach(const_cast<StringData*>(typeAlias->name.get()));
+  return String::attach(const_cast<StringData*>(typeAlias->name()));
 }
 
 static Array HHVM_METHOD(ReflectionTypeAlias, getTypeStructure) {
   auto const req = ReflectionTypeAliasHandle::GetTypeAliasFor(this_);
   assertx(req);
-  auto const typeStructure = req->typeStructure;
+  auto const typeStructure = req->typeStructure();
   assertx(!typeStructure.empty());
   assertx(typeStructure.isDict());
   return typeStructure;
@@ -2086,7 +2102,7 @@ static Array HHVM_METHOD(ReflectionTypeAlias, getTypeStructure) {
 static String HHVM_METHOD(ReflectionTypeAlias, getAssignedTypeText) {
   auto const req = ReflectionTypeAliasHandle::GetTypeAliasFor(this_);
   assertx(req);
-  auto const typeStructure = req->typeStructure;
+  auto const typeStructure = req->typeStructure();
   assertx(!typeStructure.empty());
   assertx(typeStructure.isDict());
   return TypeStructure::toString(typeStructure,
@@ -2096,7 +2112,7 @@ static String HHVM_METHOD(ReflectionTypeAlias, getAssignedTypeText) {
 static Array HHVM_METHOD(ReflectionTypeAlias, getAttributesNamespaced) {
   auto const req = ReflectionTypeAliasHandle::GetTypeAliasFor(this_);
   assertx(req);
-  auto const userAttrs = req->userAttrs;
+  auto const userAttrs = req->userAttrs();
 
   DArrayInit ai(userAttrs.size());
   for (auto& attr : userAttrs) {
@@ -2108,7 +2124,7 @@ static Array HHVM_METHOD(ReflectionTypeAlias, getAttributesNamespaced) {
 static String HHVM_METHOD(ReflectionTypeAlias, getFileName) {
   auto const req = ReflectionTypeAliasHandle::GetTypeAliasFor(this_);
   assertx(req);
-  auto file = req->unit->filepath();
+  auto file = req->unit()->filepath();
   if (!file) file = staticEmptyString();
   if (file->data()[0] != '/') {
     return SourceRootInfo::RelativeToPhpRoot(StrNR(file));
@@ -2230,6 +2246,8 @@ struct ReflectionExtension final : Extension {
 
     HHVM_ME(ReflectionClass, getAttributesNamespaced);
     HHVM_ME(ReflectionClass, getAttributesRecursiveNamespaced);
+
+    HHVM_ME(ReflectionClass, getReifiedTypeParamInfo);
 
     HHVM_STATIC_ME(ReflectionClass, getClassPropertyInfo);
     HHVM_ME(ReflectionClass, getDynamicPropertyInfos);

@@ -45,6 +45,12 @@ pub trait FlattenSmartConstructors<'src, State>
         Self::zero(SyntaxKind::SyntaxList)
     }
 
+    fn begin_enumerator(&mut self) {}
+
+    fn begin_enum_class_enumerator(&mut self) {}
+
+    fn begin_constant_declarator(&mut self) {}
+
     fn make_end_of_file(&mut self, arg0: Self::R) -> Self::R {
         if Self::is_zero(&arg0) {
           Self::zero(SyntaxKind::EndOfFile)
@@ -861,14 +867,6 @@ pub trait FlattenSmartConstructors<'src, State>
         }
     }
 
-    fn make_define_expression(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) {
-          Self::zero(SyntaxKind::DefineExpression)
-        } else {
-          self.flatten(SyntaxKind::DefineExpression, vec!(arg0, arg1, arg2, arg3))
-        }
-    }
-
     fn make_isset_expression(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R, arg3: Self::R) -> Self::R {
         if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) && Self::is_zero(&arg3) {
           Self::zero(SyntaxKind::IssetExpression)
@@ -1405,11 +1403,11 @@ pub trait FlattenSmartConstructors<'src, State>
         }
     }
 
-    fn make_enum_atom_expression(&mut self, arg0: Self::R, arg1: Self::R) -> Self::R {
-        if Self::is_zero(&arg0) && Self::is_zero(&arg1) {
-          Self::zero(SyntaxKind::EnumAtomExpression)
+    fn make_enum_class_label_expression(&mut self, arg0: Self::R, arg1: Self::R, arg2: Self::R) -> Self::R {
+        if Self::is_zero(&arg0) && Self::is_zero(&arg1) && Self::is_zero(&arg2) {
+          Self::zero(SyntaxKind::EnumClassLabelExpression)
         } else {
-          self.flatten(SyntaxKind::EnumAtomExpression, vec!(arg0, arg1))
+          self.flatten(SyntaxKind::EnumClassLabelExpression, vec!(arg0, arg1, arg2))
         }
     }
 

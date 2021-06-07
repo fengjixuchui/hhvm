@@ -1,5 +1,5 @@
 (*
- * Copyright (c) 2015, Facebook, Inc.
+ * Copyrighd (c) 2015, Facebook, Inc.
  * All rights reserved.
  *
  * This source code is licensed under the MIT license found in the
@@ -10,7 +10,6 @@
 open Hh_prelude
 open Typing_defs_flags
 include Typing_defs_core
-module SN = Naming_special_names
 
 (** Origin of Class Constant References:
     In order to be able to detect cycle definitions like
@@ -96,9 +95,11 @@ type class_elt = {
 
 type fun_elt = {
   fe_deprecated: string option;
+  fe_module: string option;
   fe_type: decl_ty;
   fe_pos: Pos_or_decl.t;
   fe_php_std_lib: bool;
+  fe_support_dynamic_type: bool;
 }
 [@@deriving show]
 
@@ -120,6 +121,7 @@ type record_field_req =
 [@@deriving show]
 
 type record_def_type = {
+  rdt_module: string option;
   rdt_name: pos_id;
   rdt_extends: pos_id option;
   rdt_fields: (pos_id * record_field_req) list;
@@ -160,6 +162,7 @@ and class_type = {
   tc_is_xhp: bool;
   tc_has_xhp_keyword: bool;
   tc_is_disposable: bool;
+  tc_module: string option;
   tc_name: string;
   tc_pos: Pos_or_decl.t;
   tc_tparams: decl_tparam list;
@@ -175,27 +178,39 @@ and class_type = {
   tc_ancestors: decl_ty SMap.t;
       (** This includes all the classes, interfaces and traits this class is
        * using. *)
-  tc_implements_dynamic: bool;  (** Whether the class is coercible to dynamic *)
+  tc_support_dynamic_type: bool;
+      (** Whether the class is coercible to dynamic *)
   tc_req_ancestors: requirement list;
   tc_req_ancestors_extends: SSet.t;  (** the extends of req_ancestors *)
   tc_extends: SSet.t;
   tc_enum_type: enum_type option;
   tc_sealed_whitelist: SSet.t option;
+  tc_xhp_enum_values: Ast_defs.xhp_enum_value list SMap.t;
   tc_decl_errors: Errors.t option; [@opaque]
 }
 
-and typeconst_abstract_kind =
-  | TCAbstract of decl_ty option
-  | TCPartiallyAbstract
-  | TCConcrete
+and abstract_typeconst = {
+  atc_as_constraint: decl_ty option;
+  atc_super_constraint: decl_ty option;
+  atc_default: decl_ty option;
+}
+
+and concrete_typeconst = { tc_type: decl_ty }
+
+and partially_abstract_typeconst = {
+  patc_constraint: decl_ty;
+  patc_type: decl_ty;
+}
+
+and typeconst =
+  | TCAbstract of abstract_typeconst
+  | TCConcrete of concrete_typeconst
+  | TCPartiallyAbstract of partially_abstract_typeconst
 
 and typeconst_type = {
-  ttc_abstract: typeconst_abstract_kind;
   ttc_synthesized: bool;
   ttc_name: pos_id;
-  ttc_as_constraint: decl_ty option;
-  ttc_super_constraint: decl_ty option;
-  ttc_type: decl_ty option;
+  ttc_kind: typeconst;
   ttc_origin: string;
   ttc_enforceable: Pos_or_decl.t * bool;
       (** If the typeconst had the <<__Enforceable>> attribute on its
@@ -218,6 +233,7 @@ and typeconst_type = {
           accessing this field directly. *)
   ttc_reifiable: Pos_or_decl.t option;
   ttc_concretized: bool;
+  ttc_is_ctx: bool;
 }
 
 and enum_type = {
@@ -229,6 +245,7 @@ and enum_type = {
 [@@deriving show]
 
 type typedef_type = {
+  td_module: string option;
   td_pos: Pos_or_decl.t;
   td_vis: Aast.typedef_visibility;
   td_tparams: decl_tparam list;
@@ -328,13 +345,28 @@ end
 (** Tracks information about how a type was expanded *)
 type expand_env = {
   type_expansions: Type_expansions.t;
+  expand_visible_newtype: bool;
+      (** Allow to expand visible `newtype`, i.e. opaque types defined in the current file.
+          True by default. *)
   substs: locl_ty SMap.t;
   this_ty: locl_ty;
       (** The type that is substituted for `this` in signatures. It should be
-       * set to an expression dependent type if appropraite
+       * set to an expression dependent type if appropriate
        *)
   on_error: Errors.error_from_reasons_callback;
 }
+
+let empty_expand_env =
+  {
+    type_expansions = Type_expansions.empty;
+    expand_visible_newtype = true;
+    substs = SMap.empty;
+    this_ty =
+      mk (Reason.none, Tgeneric (Naming_special_names.Typehints.this, []));
+    on_error = Errors.ignore_error;
+  }
+
+let empty_expand_env_with_on_error on_error = { empty_expand_env with on_error }
 
 let add_type_expansion_check_cycles env exp =
   let (type_expansions, has_cycle) =
@@ -406,6 +438,11 @@ let is_union t =
   | Tunion _ -> true
   | _ -> false
 
+let is_neg t =
+  match get_node t with
+  | Tneg _ -> true
+  | _ -> false
+
 let is_constraint_type_union t =
   match deref_constraint_type t with
   | (_, TCunion _) -> true
@@ -441,6 +478,7 @@ let is_union_or_inter_type (ty : locl_ty) =
     true
   | Terr
   | Tnonnull
+  | Tneg _
   | Tdynamic
   | Tobject
   | Tany _
@@ -492,12 +530,13 @@ let get_param_mode callconv =
 
 module DependentKind = struct
   let to_string = function
-    | DTthis -> SN.Typehints.this
     | DTexpr i ->
       let display_id = Reason.get_expr_display_id i in
       "<expr#" ^ string_of_int display_id ^ ">"
 
-  let is_generic_dep_ty s = String_utils.is_substring "::" s
+  let is_generic_dep_ty s =
+    String_utils.is_substring "::" s
+    || String.equal s Naming_special_names.Typehints.this
 end
 
 module ShapeFieldMap = struct
@@ -583,6 +622,7 @@ let ty_con_ordinal_ : type a. a ty_ -> int = function
   | Tdependent _ -> 202
   | Tobject -> 203
   | Tclass _ -> 204
+  | Tneg _ -> 205
 
 (* Compare two types syntactically, ignoring reason information and other
  * small differences that do not affect type inference behaviour. This
@@ -617,6 +657,7 @@ let rec ty__compare : type a. ?normalize_lists:bool -> a ty_ -> a ty_ -> int =
     | (Tvarray ty, Tvarray ty2) ->
       ty_compare ty ty2
     | (Tdarray (tk, tv), Tdarray (tk2, tv2))
+    | (Tvec_or_dict (tk, tv), Tvec_or_dict (tk2, tv2))
     | (Tvarray_or_darray (tk, tv), Tvarray_or_darray (tk2, tv2)) ->
       begin
         match ty_compare tk tk2 with
@@ -682,6 +723,7 @@ let rec ty__compare : type a. ?normalize_lists:bool -> a ty_ -> a ty_ -> int =
         | 0 -> String.compare (snd id1) (snd id2)
         | n -> n
       end
+    | (Tneg ty1, Tneg ty2) -> Aast_defs.compare_tprim ty1 ty2
     | (Tnonnull, Tnonnull) -> 0
     | (Tdynamic, Tdynamic) -> 0
     | (Tobject, Tobject) -> 0
@@ -690,7 +732,7 @@ let rec ty__compare : type a. ?normalize_lists:bool -> a ty_ -> a ty_ -> int =
         | Tvec_or_dict _ | Tfun _ | Tintersection _ | Tunion _ | Ttuple _
         | Tgeneric _ | Tnewtype _ | Tdependent _ | Tclass _ | Tshape _ | Tvar _
         | Tunapplied_alias _ | Tnonnull | Tdynamic | Terr | Tobject | Taccess _
-        | Tany _ ),
+        | Tany _ | Tneg _ ),
         _ ) ->
       ty_con_ordinal_ ty_1 - ty_con_ordinal_ ty_2
   and shape_field_type_compare :
@@ -702,10 +744,10 @@ let rec ty__compare : type a. ?normalize_lists:bool -> a ty_ -> a ty_ -> int =
     | 0 -> Bool.compare optional1 optional2
     | n -> n
   and user_attribute_compare ua1 ua2 =
-    let { ua_name = name1; ua_classname_params = classname_params1 } = ua1 in
-    let { ua_name = name2; ua_classname_params = classname_params2 } = ua2 in
+    let { ua_name = name1; ua_classname_params = params1 } = ua1 in
+    let { ua_name = name2; ua_classname_params = params2 } = ua2 in
     match String.compare (snd name1) (snd name2) with
-    | 0 -> List.compare String.compare classname_params1 classname_params2
+    | 0 -> List.compare String.compare params1 params2
     | n -> n
   and user_attributes_compare ual1 ual2 =
     List.compare user_attribute_compare ual1 ual2
@@ -1118,15 +1160,27 @@ let equal_decl_fun_type fty1 fty2 =
   && equal_decl_fun_arity fty1 fty2
   && Int.equal fty1.ft_flags fty2.ft_flags
 
-let equal_typeconst_abstract_kind ak1 ak2 =
-  match (ak1, ak2) with
-  | (TCAbstract ty1, TCAbstract ty2) -> Option.equal equal_decl_ty ty1 ty2
-  | (TCPartiallyAbstract, TCPartiallyAbstract) -> true
-  | (TCConcrete, TCConcrete) -> true
-  | (TCAbstract _, _)
-  | (TCPartiallyAbstract, _)
-  | (TCConcrete, _) ->
-    false
+let equal_abstract_typeconst at1 at2 =
+  Option.equal equal_decl_ty at1.atc_as_constraint at2.atc_as_constraint
+  && Option.equal
+       equal_decl_ty
+       at1.atc_super_constraint
+       at2.atc_super_constraint
+  && Option.equal equal_decl_ty at1.atc_default at2.atc_default
+
+let equal_partially_abstract_typeconst pat1 pat2 =
+  equal_decl_ty pat1.patc_constraint pat2.patc_constraint
+  && equal_decl_ty pat1.patc_type pat2.patc_type
+
+let equal_concrete_typeconst ct1 ct2 = equal_decl_ty ct1.tc_type ct2.tc_type
+
+let equal_typeconst t1 t2 =
+  match (t1, t2) with
+  | (TCAbstract at1, TCAbstract at2) -> equal_abstract_typeconst at1 at2
+  | (TCPartiallyAbstract pat1, TCPartiallyAbstract pat2) ->
+    equal_partially_abstract_typeconst pat1 pat2
+  | (TCConcrete ct1, TCConcrete ct2) -> equal_concrete_typeconst ct1 ct2
+  | _ -> false
 
 let equal_enum_type et1 et2 =
   equal_decl_ty et1.te_base et2.te_base
@@ -1187,13 +1241,13 @@ let get_ce_readonly_prop ce = is_set ce_flags_readonly_prop ce.ce_flags
 let get_ce_dynamicallycallable ce =
   is_set ce_flags_dynamicallycallable ce.ce_flags
 
-let get_ce_sound_dynamic_callable ce =
-  is_set ce_flags_sound_dynamic_callable ce.ce_flags
+let get_ce_support_dynamic_type ce =
+  is_set ce_flags_support_dynamic_type ce.ce_flags
 
 let xhp_attr_to_ce_flags xa =
   match xa with
   | None -> 0x0
-  | Some { xa_tag; xa_has_default } ->
+  | Some { xa_tag; xa_has_default; _ } ->
     Int.bit_or
       ( if xa_has_default then
         ce_flags_xa_has_default
@@ -1235,7 +1289,7 @@ let make_ce_flags
     ~lateinit
     ~dynamicallycallable
     ~readonly_prop
-    ~sound_dynamic_callable =
+    ~support_dynamic_type =
   let flags = 0 in
   let flags = set_bit ce_flags_abstract abstract flags in
   let flags = set_bit ce_flags_final final flags in
@@ -1248,7 +1302,7 @@ let make_ce_flags
   let flags = Int.bit_or flags (xhp_attr_to_ce_flags xhp_attr) in
   let flags = set_bit ce_flags_readonly_prop readonly_prop flags in
   let flags =
-    set_bit ce_flags_sound_dynamic_callable sound_dynamic_callable flags
+    set_bit ce_flags_support_dynamic_type support_dynamic_type flags
   in
   flags
 

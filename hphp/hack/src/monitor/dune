@@ -10,10 +10,11 @@
     marshal_tools
     messages
     relative_path
+    server_command_types
+    server_files
     socket
     sys_utils
     utils_config_file
-    utils_scheduler
     watchman)
   (preprocess
     (pps lwt_ppx ppx_deriving.std)))

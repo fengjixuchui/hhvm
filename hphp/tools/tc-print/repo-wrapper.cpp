@@ -25,12 +25,15 @@
 #include "hphp/runtime/base/program-functions.h"
 #include "hphp/runtime/base/config.h"
 #include "hphp/runtime/vm/native.h"
+#include "hphp/runtime/vm/repo-file.h"
+#include "hphp/runtime/vm/repo-global-data.h"
 #include "hphp/runtime/vm/runtime.h"
+#include "hphp/runtime/vm/unit-emitter.h"
 
 namespace HPHP { namespace jit {
 
 RepoWrapper::RepoWrapper(const char* repoSchema,
-                         const std::string& configFile,
+                         const std::string& repoFileName,
                          const bool shouldPrint) {
   if (setenv("HHVM_RUNTIME_REPO_SCHEMA", repoSchema, 1 /* overwrite */)) {
     fprintf(stderr, "Could not set repo schema");
@@ -38,36 +41,35 @@ RepoWrapper::RepoWrapper(const char* repoSchema,
   }
 
   if (shouldPrint) {
-    printf("# Config file: %s\n", configFile.c_str());
     printf("# Repo schema: %s\n", repoSchemaId().begin());
   }
 
   register_process_init();
-  initialize_repo();
   hphp_thread_init();
   g_context.getCheck();
   IniSetting::Map ini = IniSetting::Map::object;
   Hdf config;
-  if (!configFile.empty()) {
-    Config::ParseConfigFile(configFile, ini, config);
-    // Disable logging to suppress harmless errors about setrlimit.
-    config["Log"]["Level"] = "None";
-  }
   RuntimeOption::Load(ini, config);
   RuntimeOption::RepoCommit = false;
-  hphp_compiler_init();
 
-  repo = &Repo::get();
+  hasRepo = !repoFileName.empty();
+  if (hasRepo) RepoFile::init(repoFileName);
+
+  hphp_compiler_init();
 
   RuntimeOption::AlwaysUseRelativePath = false;
   RuntimeOption::SafeFileAccess = false;
   RuntimeOption::EvalAllowHhas = true;
   RuntimeOption::SandboxMode = true; // So we get Unit::m_funcTable
+  RuntimeOption::RepoAuthoritative = true;
   Option::WholeProgram = false;
 
   LitstrTable::init();
-  RuntimeOption::RepoAuthoritative = repo->hasGlobalData();
-  repo->loadGlobalData();
+  LitarrayTable::init();
+  if (hasRepo) {
+    RepoFile::loadGlobalTables(false);
+    RepoFile::globalData().load();
+  }
 
   std::string hhasLib;
   auto const phpLib = get_systemlib(&hhasLib);
@@ -99,15 +101,27 @@ void RepoWrapper::addUnit(Unit* unit) {
 }
 
 Unit* RepoWrapper::getUnit(SHA1 sha1) {
+  if (!hasRepo) return nullptr;
+
   CacheType::const_iterator it = unitCache.find(sha1);
   if (it != unitCache.end()) return it->second;
-  auto unit = repo->loadUnit("", sha1, Native::s_noNativeFuncs).release();
+
+  auto const unit = [&] () -> Unit* {
+    auto const path = RepoFile::findUnitPath(sha1);
+    if (!path) return nullptr;
+    auto const ue =
+      RepoFile::loadUnitEmitter(path, path, Native::s_noNativeFuncs, false);
+    if (!ue) return nullptr;
+    return ue->create().release();
+  }();
 
   if (unit) unitCache.insert({sha1, unit});
   return unit;
 }
 
 Func* RepoWrapper::getFunc(SHA1 sha1, Id funcSn) {
+  if (!hasRepo) return nullptr;
+
   auto const unit = getUnit(sha1);
   if (!unit) {
     return nullptr;

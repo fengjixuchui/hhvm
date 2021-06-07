@@ -227,6 +227,9 @@ struct State {
   BlockSet spRecordedIn{};
   BlockSet spRecordedOut{};
 
+  // Whether each block contain an unrecordbasenativesp
+  BlockSet hasUnrecordbasenativesp{};
+
   // All physical registers (including ignored), which have a def in a
   // block
   jit::vector<RegSet> physDefs;
@@ -930,6 +933,7 @@ void calculate_liveness(State& state, const BlockSet* changed = nullptr) {
     assertx(state.physChangedBefore.size() == unit.blocks.size());
     assertx(state.spRecordedIn.size() == unit.blocks.size());
     assertx(state.spRecordedOut.size() == unit.blocks.size());
+    assertx(state.hasUnrecordbasenativesp.size() == unit.blocks.size());
     assertx(changed->size() == unit.blocks.size());
   } else {
     state.liveIn.resize(unit.blocks.size());
@@ -941,6 +945,7 @@ void calculate_liveness(State& state, const BlockSet* changed = nullptr) {
     state.physChangedBefore.resize(unit.blocks.size());
     state.spRecordedIn.resize(unit.blocks.size());
     state.spRecordedOut.resize(unit.blocks.size());
+    state.hasUnrecordbasenativesp.resize(unit.blocks.size());
   }
 
   auto const processBlock = [&] (Vlabel b,
@@ -948,7 +953,8 @@ void calculate_liveness(State& state, const BlockSet* changed = nullptr) {
                                  VregSet& k,
                                  VregSet& u,
                                  RegSet& r,
-                                 bool& spRecorded) {
+                                 bool& spRecorded,
+                                 bool& hasUnrecordbasenativesp) {
     auto& block = unit.blocks[b];
     for (auto& inst : boost::adaptors::reverse(block.code)) {
       auto const& defs = defs_set_cached(state, inst);
@@ -962,6 +968,9 @@ void calculate_liveness(State& state, const BlockSet* changed = nullptr) {
         assert_flog(!spRecorded, "Block B{} {} initiailizes native SP, "
                     "but already initialized.", b, show(unit, inst));
         spRecorded = true;
+      }
+      if (inst.op == Vinstr::unrecordbasenativesp) {
+        hasUnrecordbasenativesp = true;
       }
     }
     g -= state.flags;
@@ -980,12 +989,14 @@ void calculate_liveness(State& state, const BlockSet* changed = nullptr) {
       auto& u = state.uses[b];
       auto& r = state.physDefs[b];
       bool spRecorded = state.spRecordedIn[b];
+      bool hasUnrecordbasenativesp = false;
       g.reset();
       k.reset();
       u.reset();
       r = RegSet{};
-      processBlock(b, g, k, u, r, spRecorded);
+      processBlock(b, g, k, u, r, spRecorded, hasUnrecordbasenativesp);
       state.spRecordedOut[b] = spRecorded;
+      state.hasUnrecordbasenativesp[b] = hasUnrecordbasenativesp;
       for (auto const succ : succs(unit.blocks[b])) {
         state.spRecordedIn[succ] = spRecorded;
       }
@@ -995,7 +1006,8 @@ void calculate_liveness(State& state, const BlockSet* changed = nullptr) {
       VregSet u;
       RegSet r;
       bool spRecorded = state.spRecordedIn[b];
-      processBlock(b, g, k, u, r, spRecorded);
+      bool hasUnrecordbasenativesp = false;
+      processBlock(b, g, k, u, r, spRecorded, hasUnrecordbasenativesp);
       always_assert(g == state.gens[b]);
       always_assert(k == state.defs[b]);
       always_assert(u == state.uses[b]);
@@ -1004,6 +1016,8 @@ void calculate_liveness(State& state, const BlockSet* changed = nullptr) {
       for (auto const succ : succs(unit.blocks[b])) {
         always_assert(state.spRecordedIn[succ] == spRecorded);
       }
+      always_assert(state.hasUnrecordbasenativesp[b] ==
+                    hasUnrecordbasenativesp);
     }
 
     state.liveIn[b].reset();
@@ -6052,6 +6066,46 @@ ProcessCopyResults process_copy_spills(State& state,
   return {addedBefore + addedAfter, addedBefore};
 }
 
+size_t process_unrecordbasenativesp_spills(State& state,
+                                           Vlabel b,
+                                           size_t instIdx,
+                                           SpillerState& spiller,
+                                           SpillerResults& results) {
+  auto rematAvail = spiller.gp.inReg | spiller.simd.inReg;
+  auto const reloads = spiller.inMem();
+  size_t added = 0;
+  results.ssaize |= reloads;
+  spiller.dropDead(reloads, nullptr, b, instIdx);
+  for (auto const r : reloads) {
+    auto s = spiller.forReg(r);
+    s->inMem.remove(r);
+    s->inReg.add(r);
+  }
+  vmodify(
+    state.unit, b, instIdx,
+    [&] (Vout& v) {
+      for (auto const r : reloads) {
+        assertx(!r.isPhys());
+        auto const inst = reload_with_remat(
+          state,
+          b,
+          instIdx,
+          rematAvail,
+          r,
+          r
+        );
+        if (inst.op != Vinstr::reload) results.rematerialized.add(r);
+        v << inst;
+        ++added;
+        rematAvail.add(r);
+      }
+      return 0;
+    }
+  );
+  results.changed[b] = true;
+  return added;
+}
+
 // Run spiller logic for normal instructions (not phis or copies). Return the
 // number of instructions inserted.
 size_t process_inst_spills(State& state,
@@ -6369,6 +6423,7 @@ SpillerResults process_spills(State& state,
     };
 
     if (!needsSpilling.perBlock[b].any &&
+        !state.hasUnrecordbasenativesp[b] &&
         !state.uses[b].intersects(spiller.inMem())) {
       // Be efficient if there's no potential spills to worry about.
       process_spills_skip(state, b, spiller, results);
@@ -6394,12 +6449,21 @@ SpillerResults process_spills(State& state,
         // not use any spilled registers, we can process it more
         // efficiently.
         if (!needsSpilling.perBlock[b](instIdx - addedInsts) &&
-            !uses_set_cached(state, inst).intersects(spiller.inMem())) {
+            !uses_set_cached(state, inst).intersects(spiller.inMem()) &&
+            inst.op != Vinstr::unrecordbasenativesp) {
           process_inst_spills_fast(state, inst, b, instIdx, spiller, results);
           continue;
         }
 
         switch (inst.op) {
+          case Vinstr::unrecordbasenativesp: {
+            auto const added =
+              process_unrecordbasenativesp_spills(state, b, instIdx,
+                                                  spiller, results);
+            addedInsts += added;
+            instIdx += added;
+            break;
+          }
           case Vinstr::phijmp: {
             auto const added =
               process_phijmp_spills(state, b, instIdx, inst, spiller, results);
@@ -8927,7 +8991,10 @@ struct FreeRegs {
   // chooses the color, and does not mark it as taken or modify any
   // other internal state. If the Vreg represents a spill, it will be
   // chosen from the pre-computed spill colors. Otherwise, a physical
-  // register is chosen to try to maximize satisfied hints.
+  // register is chosen to try to maximize satisfied hints. A physical
+  // register which is part of `physUses' will not be selected (doing
+  // so would not be valid, as this represents the physical registers
+  // used by this instruction, which must remain as they are).
   //
   // For the register case, the heuristic may decide to migrate a
   // (already taken) physical register to a different (free) physical
@@ -8952,7 +9019,7 @@ struct FreeRegs {
   };
 
   template <typename W>
-  Coloring choose(Vreg r, W&& moveWeight) const {
+  Coloring choose(Vreg r, RegSet physUses, W&& moveWeight) const {
     // Find best physical register for a Vreg, choosing from the set
     // of registers in "mask".
     auto const findBest = [&] (RegSet mask) -> Coloring {
@@ -9079,7 +9146,7 @@ struct FreeRegs {
                 info.penaltyIdx < state->penalties.size());
         auto const& penalties = state->penalties[info.penaltyIdx];
         return buildPhysWeights(
-          r, mask, [&] (PhysReg r) { return penalties[r]; }
+          r, mask - physUses, [&] (PhysReg r) { return penalties[r]; }
         );
       }();
 
@@ -9112,7 +9179,7 @@ struct FreeRegs {
         // Build a candidate list to move the Vreg to. We only support
         // moving to a free physical register.
         auto const moveWeights = buildPhysWeights(
-          assignedTo, mask & regs,
+          assignedTo, (mask & regs) - physUses,
           [&] (PhysReg r) { return movePenalties[r]; }
         );
 
@@ -9568,6 +9635,7 @@ size_t color_inst(State& state,
     // will move a Vreg if it resides in the destination.
     auto const coloring = free.choose(
       r,
+      uses.physRegs(),
       [&] (Vreg from, Vreg to) -> int64_t {
         // Move weight calculation. This matches the logic below for
         // determining whether a copy is actually needed.
@@ -10048,7 +10116,8 @@ size_t color_block_initialize(
     // Choose a physical register for this Vreg. "Moving" here is
     // free, because it just results in a change to a previous
     // assignment.
-    auto const coloring = free.choose(r, [] (Vreg, Vreg) { return 0; });
+    auto const coloring =
+      free.choose(r, RegSet{}, [] (Vreg, Vreg) { return 0; });
     assert_found_color(r, coloring.color);
 
     auto const selected = color_reg(coloring.color);
@@ -10071,7 +10140,8 @@ size_t color_block_initialize(
       if (!is_colorable(info.regClass)) continue;
       assertx(is_color_none(info.color));
 
-      auto const coloring = free.choose(defs[i], [] (Vreg, Vreg) { return 0; });
+      auto const coloring =
+        free.choose(defs[i], RegSet{}, [] (Vreg, Vreg) { return 0; });
       assert_found_color(defs[i], coloring.color);
       info.color = coloring.color;
 

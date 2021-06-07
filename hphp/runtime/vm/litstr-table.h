@@ -25,11 +25,6 @@
 
 namespace HPHP {
 
-/*
- * Unit litstr Id's are all above this mark.
- */
-constexpr int kUnitLitstrOffset = 0x40000000;
-
 ///////////////////////////////////////////////////////////////////////////////
 
 /*
@@ -152,16 +147,6 @@ private:
  * Lazy load helper that is safe to call concurrently.
  */
 StringData* loadLitstrById(Id id);
-
-///////////////////////////////////////////////////////////////////////////////
-// ID helpers.
-
-/*
- * Functions for differentiating unit-local Id's from global litstrId's.
- */
-bool isUnitLitstrId(Id id);
-Id encodeUnitLitstrId(Id id);
-Id decodeUnitLitstrId(Id id);
 
 ///////////////////////////////////////////////////////////////////////////////
 }

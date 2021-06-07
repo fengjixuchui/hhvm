@@ -94,6 +94,7 @@ enum UnstableFeatures {
     EnumAtom,
     IFC,
     Readonly,
+    Modules,
 }
 impl UnstableFeatures {
     // Preview features are allowed to run in prod. This function decides
@@ -104,9 +105,10 @@ impl UnstableFeatures {
             UnstableFeatures::UnionIntersectionTypeHints => Unstable,
             UnstableFeatures::ClassLevelWhere => Unstable,
             UnstableFeatures::ExpressionTrees => Unstable,
-            UnstableFeatures::EnumAtom => Unstable,
+            UnstableFeatures::EnumAtom => Preview,
             UnstableFeatures::IFC => Unstable,
-            UnstableFeatures::Readonly => Unstable,
+            UnstableFeatures::Readonly => Preview,
+            UnstableFeatures::Modules => Unstable,
         }
     }
 }
@@ -1531,13 +1533,22 @@ where
             || name == sn::user_attributes::EXTERNAL
     }
 
-    fn check_ifc_enabled(&mut self, attrs: S<'a, Token, Value>) {
+    fn is_module_attribute(&self, name: &str) -> bool {
+        name == sn::user_attributes::MODULE
+    }
+
+    fn check_attr_enabled(&mut self, attrs: S<'a, Token, Value>) {
         for node in Self::attr_spec_to_node_list(attrs) {
             match self.attr_name(node) {
-                Some(n) if self.is_ifc_attribute(n) => {
-                    self.check_can_use_feature(node, &UnstableFeatures::IFC)
+                Some(n) => {
+                    if self.is_ifc_attribute(n) {
+                        self.check_can_use_feature(node, &UnstableFeatures::IFC)
+                    }
+                    if self.is_module_attribute(n) {
+                        self.check_can_use_feature(node, &UnstableFeatures::Modules)
+                    }
                 }
-                _ => {}
+                None => {}
             }
         }
     }
@@ -1643,7 +1654,7 @@ where
             }
             FunctionDeclaration(fd) => {
                 let function_attrs = &fd.attribute_spec;
-                self.check_ifc_enabled(function_attrs);
+                self.check_attr_enabled(function_attrs);
                 self.invalid_modifier_errors("Top-level functions", node, |kind| {
                     kind == TokenKind::Async
                 });
@@ -1656,7 +1667,7 @@ where
                     .extract_function_name(&md.function_decl_header)
                     .unwrap_or("");
                 let method_attrs = &md.attribute;
-                self.check_ifc_enabled(method_attrs);
+                self.check_attr_enabled(method_attrs);
                 self.produce_error(
                     |self_, x| self_.methodish_contains_memoize(x),
                     node,
@@ -1710,7 +1721,7 @@ where
                 self.produce_error(
                     |self_, x| self_.methodish_non_abstract_without_body_not_native(x),
                     node,
-                    || errors::error2015(class_name, method_name),
+                    || errors::error2015,
                     fun_semicolon,
                 );
                 self.produce_error(
@@ -2566,7 +2577,7 @@ where
             _ => {
                 self.errors.push(Self::make_error_from_node(
                     node,
-                    errors::instanceof_new_unknown_node(node.kind().to_string()),
+                    errors::new_unknown_node(node.kind().to_string()),
                 ));
             }
         }
@@ -3032,6 +3043,10 @@ where
                     .env
                     .parser_options
                     .po_disallow_fun_and_cls_meth_pseudo_funcs;
+
+                if Self::strip_ns(self.text(recv)) == Self::strip_ns(sn::readonly::AS_MUT) {
+                    self.check_can_use_feature(recv, &UnstableFeatures::Readonly);
+                }
 
                 if self.text(recv) == Self::strip_hh_ns(sn::autoimported_functions::FUN_)
                     && fun_and_clsmeth_disabled
@@ -3759,6 +3774,8 @@ where
                 }
             }
 
+            self.check_attr_enabled(&cd.attribute);
+
             let classish_is_sealed = self.attr_spec_contains_sealed(&cd.attribute);
 
             // Given a ClassishDeclaration node, test whether or not length of
@@ -3832,6 +3849,7 @@ where
                     errors::no_const_interfaces_traits_enums,
                 ))
             }
+
             if self.attr_spec_contains_const(&cd.attribute)
                 && Self::is_token_kind(&cd.keyword, TokenKind::Class)
                 && Self::list_contains_predicate(|x| x.is_abstract(), &cd.modifiers)
@@ -3936,6 +3954,8 @@ where
 
     fn alias_errors(&mut self, node: S<'a, Token, Value>) {
         if let AliasDeclaration(ad) = &node.children {
+            let attrs = &ad.attribute_spec;
+            self.check_attr_enabled(&attrs);
             if Self::token_kind(&ad.keyword) == Some(TokenKind::Type) && !ad.constraint.is_missing()
             {
                 self.errors
@@ -4745,6 +4765,7 @@ where
     fn enum_decl_errors(&mut self, node: S<'a, Token, Value>) {
         if let EnumDeclaration(x) = &node.children {
             let attrs = &x.attribute_spec;
+            self.check_attr_enabled(&attrs);
             if self.attr_spec_contains_const(attrs) {
                 self.errors.push(Self::make_error_from_node(
                     node,
@@ -5338,7 +5359,9 @@ where
                 }
                 _ => {}
             },
-            EnumAtomExpression(_) => self.check_can_use_feature(node, &UnstableFeatures::EnumAtom),
+            EnumClassLabelExpression(_) => {
+                self.check_can_use_feature(node, &UnstableFeatures::EnumAtom)
+            }
             OldAttributeSpecification(x) => {
                 let attributes_string = self.text(&x.attributes);
                 let has_atom = attributes_string

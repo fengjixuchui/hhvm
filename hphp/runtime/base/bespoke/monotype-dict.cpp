@@ -201,7 +201,7 @@ ArrayData* EmptyMonotypeDict::EscalateToVanilla(
   return legacy ? staticEmptyMarkedDictArray() : staticEmptyDictArray();
 }
 void EmptyMonotypeDict::ConvertToUncounted(
-    Self* ad, DataWalker::PointerMap* seen) {
+    Self* madIn, const MakeUncountedEnv& env) {
   // All EmptyMonotypeDicts are static, so we should never make them uncounted.
   always_assert(false);
 }
@@ -710,7 +710,7 @@ arr_lval MonotypeDict<Key>::elemImpl(Key key, K k, bool throwOnMissing) {
   mad->setLayoutIndex(getLayoutIndex<Key>(dtp, layoutIndex()));
 
   static_assert(folly::kIsLittleEndian);
-  auto const type_ptr = reinterpret_cast<DataType*>(&mad->m_extra_hi16);
+  auto const type_ptr = reinterpret_cast<DataType*>(&mad->m_layout_index.raw);
   assertx(*type_ptr == mad->type());
   return arr_lval{mad, type_ptr, const_cast<Value*>(&elm->val)};
 }
@@ -884,7 +884,7 @@ MonotypeDict<Key>* MonotypeDict<Key>::copy() {
   bcopy32_inline(ad, this, bytes);
 
   auto const aux = packSizeIndexAndAuxBits(sizeIndex(), auxBits());
-  ad->initHeader_16(m_kind, OneReference, aux);
+  ad->initHeader_16(HeaderKind::BespokeDict, OneReference, aux);
   ad->copyHash(this);
   ad->incRefElms();
 
@@ -954,7 +954,7 @@ MonotypeDict<Key>* MonotypeDict<Key>::resize(uint8_t index, bool copy) {
   bcopy32_inline(ad, this, bytes);
 
   auto const aux = packSizeIndexAndAuxBits(index, auxBits());
-  ad->initHeader_16(m_kind, OneReference, aux);
+  ad->initHeader_16(HeaderKind::BespokeDict, OneReference, aux);
   ad->initHash();
 
   // We don't want to check the chain condition on each insert, so we use a
@@ -1062,7 +1062,7 @@ const typename MonotypeDict<Key>::Index* MonotypeDict<Key>::indices() const {
 
 template <typename Key>
 DataType MonotypeDict<Key>::type() const {
-  return DataType(int8_t(m_extra_hi16 & 0xff));
+  return DataType(int8_t(m_layout_index.raw & 0xff));
 }
 
 template <typename Key>
@@ -1129,16 +1129,16 @@ ArrayData* MonotypeDict<Key>::EscalateToVanilla(
 
 template <typename Key>
 void MonotypeDict<Key>::ConvertToUncounted(
-    Self* mad, DataWalker::PointerMap* seen) {
+    Self* mad, const MakeUncountedEnv& env) {
   auto const dt = mad->type();
 
   mad->forEachElm([&](auto i, auto elm) {
     auto const elm_mut = const_cast<Elm*>(elm);
     if constexpr (std::is_same<Key, StringData*>::value) {
-      elm_mut->key = MakeUncountedString(elm_mut->key, seen);
+      elm_mut->key = MakeUncountedString(elm_mut->key, env);
     }
     auto dt_mut = dt;
-    ConvertTvToUncounted(tv_lval(&dt_mut, &elm_mut->val), seen);
+    ConvertTvToUncounted(tv_lval(&dt_mut, &elm_mut->val), env);
     assertx(equivDataTypes(dt_mut, dt));
   });
 

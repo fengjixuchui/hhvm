@@ -2,13 +2,14 @@
   (Shallow_decl_defs.Class
      { Shallow_decl_defs.sc_mode = Mstrict; sc_final = false;
        sc_is_xhp = false; sc_has_xhp_keyword = false; sc_kind = Cnormal;
-       sc_name = ([3:7-8], "\\A"); sc_tparams = [];
+       sc_module = None; sc_name = ([3:7-8], "\\A"); sc_tparams = [];
        sc_where_constraints = []; sc_extends = []; sc_uses = [];
-       sc_xhp_attr_uses = []; sc_req_extends = []; sc_req_implements = [];
+       sc_xhp_attr_uses = []; sc_xhp_enum_values = {}; sc_req_extends = [];
+       sc_req_implements = [];
        sc_implements =
        [(Rhint ([3:20-45]),
          (Tapply (([3:20-45], "\\HH\\TypeParameterAttribute"), [])))];
-       sc_implements_dynamic = false; sc_consts = []; sc_typeconsts = [];
+       sc_support_dynamic_type = false; sc_consts = []; sc_typeconsts = [];
        sc_props = []; sc_sprops = [];
        sc_constructor =
        (Some { Shallow_decl_defs.sm_name = ([4:19-30], "__construct");
@@ -35,7 +36,7 @@
    (Shallow_decl_defs.Class
       { Shallow_decl_defs.sc_mode = Mstrict; sc_final = false;
         sc_is_xhp = false; sc_has_xhp_keyword = false; sc_kind = Cnormal;
-        sc_name = ([7:7-8], "\\C");
+        sc_module = None; sc_name = ([7:7-8], "\\C");
         sc_tparams =
         [{ Typing_defs_core.tp_variance = Invariant;
            tp_name = ([7:36-38], "T1"); tp_tparams = []; tp_constraints = [];
@@ -49,11 +50,12 @@
            }
           ];
         sc_where_constraints = []; sc_extends = []; sc_uses = [];
-        sc_xhp_attr_uses = []; sc_req_extends = []; sc_req_implements = [];
-        sc_implements = []; sc_implements_dynamic = false; sc_consts = [];
-        sc_typeconsts = []; sc_props = []; sc_sprops = [];
-        sc_constructor = None; sc_static_methods = []; sc_methods = [];
-        sc_user_attributes = []; sc_enum_type = None }))
+        sc_xhp_attr_uses = []; sc_xhp_enum_values = {}; sc_req_extends = [];
+        sc_req_implements = []; sc_implements = [];
+        sc_support_dynamic_type = false; sc_consts = []; sc_typeconsts = [];
+        sc_props = []; sc_sprops = []; sc_constructor = None;
+        sc_static_methods = []; sc_methods = []; sc_user_attributes = [];
+        sc_enum_type = None }))
   ]
 
 They matched!

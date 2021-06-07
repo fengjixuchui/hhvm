@@ -127,11 +127,10 @@ let widen_class_for_obj_get ~is_method ~nullsafe member_name env ty =
             | Some basety ->
               let ety_env =
                 {
-                  type_expansions = Typing_defs.Type_expansions.empty;
+                  empty_expand_env with
                   substs =
                     TUtils.make_locl_subst_for_class_tparams class_info tyl;
                   this_ty = ty;
-                  on_error = Errors.ignore_error;
                 }
               in
               let (env, basety) = Phase.localize ~ety_env env basety in
@@ -187,35 +186,107 @@ let rec make_nullable_member_type env ~is_method id_pos pos ty =
     in
     (env, MakeType.nullable_locl (Reason.Rnullsafe_op pos) ty)
 
+(* Return true if the `this` type appears in a covariant
+ * (resp. contravariant, if contra=true) position in ty.
+ *)
+let rec this_appears_covariantly ~contra env ty =
+  match get_node ty with
+  | Tthis -> not contra
+  | Ttuple tyl
+  | Tunion tyl
+  | Tintersection tyl ->
+    List.exists tyl (this_appears_covariantly ~contra env)
+  | Tfun ft ->
+    this_appears_covariantly ~contra env ft.ft_ret.et_type
+    || List.exists ft.ft_params (fun fp ->
+           this_appears_covariantly ~contra:(not contra) env fp.fp_type.et_type)
+  | Tshape (_, fm) ->
+    let fields = TShapeMap.elements fm in
+    List.exists fields (fun (_, f) ->
+        this_appears_covariantly ~contra env f.sft_ty)
+  | Taccess (ty, _)
+  | Tlike ty
+  | Toption ty
+  | Tvarray ty ->
+    this_appears_covariantly ~contra env ty
+  | Tdarray (ty1, ty2)
+  | Tvec_or_dict (ty1, ty2)
+  | Tvarray_or_darray (ty1, ty2) ->
+    this_appears_covariantly ~contra env ty1
+    || this_appears_covariantly ~contra env ty2
+  | Tapply (pos_name, tyl) ->
+    let rec this_appears_covariantly_params tparams tyl =
+      match (tparams, tyl) with
+      | (tp :: tparams, ty :: tyl) ->
+        begin
+          match tp.tp_variance with
+          | Ast_defs.Covariant -> this_appears_covariantly ~contra env ty
+          | Ast_defs.Contravariant ->
+            this_appears_covariantly ~contra:(not contra) env ty
+          | Ast_defs.Invariant ->
+            this_appears_covariantly ~contra env ty
+            || this_appears_covariantly ~contra:(not contra) env ty
+        end
+        || this_appears_covariantly_params tparams tyl
+      | _ -> false
+    in
+    let tparams =
+      match Typing_env.get_class_or_typedef env (snd pos_name) with
+      | Some (Typing_env.TypedefResult { td_tparams; _ }) -> td_tparams
+      | Some (Typing_env.ClassResult cls) -> Cls.tparams cls
+      | None -> []
+    in
+    this_appears_covariantly_params tparams tyl
+  | Tmixed
+  | Tany _
+  | Terr
+  | Tnonnull
+  | Tdynamic
+  | Tprim _
+  | Tvar _
+  | Tgeneric _ ->
+    false
+
 (* We know that the receiver is a concrete class: not a generic with
  * bounds, or a Tunion. *)
 let rec obj_get_concrete_ty
     ~inst_meth
+    ~meth_caller
     ~is_method
     ~coerce_from_ty
     ?(explicit_targs = [])
     ~this_ty
-    ~dep_kind
+    ~this_ty_conjunct
     ~is_parent_call
+    ~dep_kind
     env
     concrete_ty
     (id_pos, id_str)
     on_error =
-  let default () = (env, (Typing_utils.mk_tany env id_pos, [])) in
-  (* We will substitute `this` in the function signature with `this_ty`. But first,
-   * transform it according to the dependent kind dep_kind that was derived from the
-   * class_id in the original call to obj_get. See Typing_dependent_type.ml for
-   * more details.
-   *)
-  let (env, this_ty) =
-    Typing_dependent_type.ExprDepTy.make_with_dep_kind env dep_kind this_ty
+  Typing_log.(
+    log_with_level env "obj_get" 2 (fun () ->
+        log_types
+          (Pos_or_decl.of_raw_pos id_pos)
+          env
+          [
+            Log_head
+              ( "obj_get_concrete_ty",
+                [
+                  Log_type ("concrete_ty", concrete_ty);
+                  Log_type ("this_ty", this_ty);
+                ] );
+          ]));
+  let default_err_res =
+    Option.map ~f:(fun (_, _, ty) -> Ok ty) coerce_from_ty
+  in
+  let default () =
+    (env, (Typing_utils.mk_tany env id_pos, []), default_err_res)
   in
   let mk_ety_env class_info paraml =
     {
-      type_expansions = Typing_defs.Type_expansions.empty;
+      empty_expand_env with
       this_ty;
       substs = TUtils.make_locl_subst_for_class_tparams class_info paraml;
-      on_error = Errors.ignore_error;
     }
   in
   let read_context = Option.is_none coerce_from_ty in
@@ -234,6 +305,7 @@ let rec obj_get_concrete_ty
       in
       obj_get_inner
         ~inst_meth
+        ~meth_caller
         ~is_method
         ~nullsafe:None
         ~obj_pos:(Reason.to_pos r |> Pos_or_decl.unsafe_to_raw_pos)
@@ -241,6 +313,7 @@ let rec obj_get_concrete_ty
         ~coerce_from_ty
         ~is_nonnull:true
         ~this_ty
+        ~this_ty_conjunct
         ~is_parent_call
         ~dep_kind
         env
@@ -330,7 +403,7 @@ let rec obj_get_concrete_ty
                 ft_ifc_decl = default_ifc_fun_decl;
               }
             in
-            (env, (mk (Reason.Rnone, Tfun ft), []))
+            (env, (mk (Reason.Rnone, Tfun ft), []), None)
           | None when String.equal id_str SN.Members.__construct ->
             (* __construct is not an instance method and shouldn't be invoked directly *)
             let () = Errors.magic (id_pos, id_str) in
@@ -355,26 +428,24 @@ let rec obj_get_concrete_ty
                     ce_origin;
                     _;
                   } ->
-                begin
-                  match get_node this_ty with
-                  | Tdependent (DTthis, _) -> ()
-                  | _ ->
-                    if not (String.equal member_ce.ce_origin ce_origin) then
-                      Errors.ambiguous_object_access
-                        id_pos
-                        id_str
-                        (get_pos member_)
-                        (TUtils.string_of_visibility old_vis)
-                        (get_pos old_member)
-                        self_id
-                        (snd x)
-                end
+                if not (String.equal member_ce.ce_origin ce_origin) then
+                  Errors.ambiguous_object_access
+                    id_pos
+                    id_str
+                    (get_pos member_)
+                    (TUtils.string_of_visibility old_vis)
+                    (get_pos old_member)
+                    self_id
+                    (snd x)
               | _ -> () );
             TVis.check_obj_access ~use_pos:id_pos ~def_pos:mem_pos env vis;
             TVis.check_deprecated ~use_pos:id_pos ~def_pos:mem_pos ce_deprecated;
             if is_parent_call && get_ce_abstract member_ce then
               Errors.parent_abstract_call id_str id_pos mem_pos;
             let member_decl_ty = Typing_enum.member_type env member_ce in
+            let widen_this =
+              this_appears_covariantly ~contra:true env member_decl_ty
+            in
             let ety_env = mk_ety_env class_info paraml in
             let (env, member_ty, tal, et_enforced) =
               match deref member_decl_ty with
@@ -397,7 +468,7 @@ let rec obj_get_concrete_ty
                     env
                     ft
                 in
-                let (env, ft) =
+                let (env, ft1) =
                   Phase.(
                     localize_ft
                       ~instantiation:
@@ -411,7 +482,40 @@ let rec obj_get_concrete_ty
                       env
                       ft)
                 in
-                let ft_ty = mk (Typing_reason.localize r, Tfun ft) in
+                let ft_ty1 =
+                  Typing_dynamic.relax_method_type
+                    env
+                    ( Cls.get_support_dynamic_type class_info
+                    || get_ce_support_dynamic_type member_ce )
+                    r
+                    ft1
+                in
+                let (env, ft_ty) =
+                  if widen_this then
+                    let ety_env = { ety_env with this_ty = this_ty_conjunct } in
+                    let (env, ft2) =
+                      Phase.(
+                        localize_ft
+                          ~instantiation:
+                            {
+                              use_name = strip_ns id_str;
+                              use_pos = id_pos;
+                              explicit_targs;
+                            }
+                          ~ety_env:
+                            { ety_env with on_error = Errors.ignore_error }
+                          ~def_pos:mem_pos
+                          env
+                          ft)
+                    in
+                    let ft_ty2 = mk (Typing_reason.localize r, Tfun ft2) in
+                    Inter.intersect_list
+                      env
+                      (Typing_reason.localize r)
+                      [ft_ty1; ft_ty2]
+                  else
+                    (env, ft_ty1)
+                in
                 (env, ft_ty, explicit_targs, Unenforced)
               | _ ->
                 let is_xhp_attr = Option.is_some (get_ce_xhp_attr member_ce) in
@@ -427,15 +531,22 @@ let rec obj_get_concrete_ty
             in
             if inst_meth then
               TVis.check_inst_meth_access ~use_pos:id_pos ~def_pos:mem_pos vis;
+            if
+              meth_caller
+              && TypecheckerOptions.meth_caller_only_public_visibility
+                   (Env.get_tcopt env)
+            then
+              TVis.check_meth_caller_access ~use_pos:id_pos ~def_pos:mem_pos vis;
             let (env, (member_ty, tal)) =
               if Cls.has_upper_bounds_on_this_from_constraints class_info then
-                let ((env, (ty, tal)), succeed) =
-                  Errors.try_with_error
+                let ((env, (ty, tal), _), succeed) =
+                  Errors.try_
                     (fun () ->
                       (get_member_from_constraints env class_info, true))
-                    (fun () ->
+                    (fun _ ->
                       (* No eligible functions found in constraints *)
-                      ((env, (MakeType.mixed Reason.Rnone, [])), false))
+                      ( (env, (MakeType.mixed Reason.Rnone, []), default_err_res),
+                        false ))
                 in
                 if succeed then
                   let (env, member_ty) =
@@ -447,20 +558,23 @@ let rec obj_get_concrete_ty
               else
                 (env, (member_ty, tal))
             in
-            let env =
+            let (env, err_res) =
               Option.value_map
                 coerce_from_ty
-                ~default:env
+                ~default:(env, None)
                 ~f:(fun (p, ur, ty) ->
-                  Typing_coercion.coerce_type
-                    p
-                    ur
-                    env
-                    ty
-                    { et_type = member_ty; et_enforced }
-                    Errors.unify_error)
+                  Result.fold
+                    ~ok:(fun env -> (env, Some (Ok ty)))
+                    ~error:(fun env -> (env, Some (Error (ty, member_ty))))
+                  @@ Typing_coercion.coerce_type_res
+                       p
+                       ur
+                       env
+                       ty
+                       { et_type = member_ty; et_enforced }
+                       Errors.unify_error)
             in
-            (env, (member_ty, tal))
+            (env, (member_ty, tal), err_res)
         end
         (* match member_info *)
     end
@@ -474,14 +588,14 @@ let rec obj_get_concrete_ty
        *)
       match Env.get_self_class env with
       | Some self_class
-        when Cls.get_implements_dynamic self_class || not (Cls.final self_class)
-        ->
+        when Cls.get_support_dynamic_type self_class
+             || not (Cls.final self_class) ->
         (match Env.get_member is_method env self_class id_str with
         | Some { ce_visibility = Vprivate _; ce_type = (lazy ty); _ }
           when not is_method ->
           ( if read_context then
             let (env, locl_ty) =
-              Phase.localize_with_self ~ignore_errors:true env ty
+              Phase.localize_no_subst ~ignore_errors:true env ty
             in
             Typing_dynamic.check_property_sound_for_dynamic_read
               ~on_error:Errors.private_property_is_not_dynamic
@@ -499,7 +613,7 @@ let rec obj_get_concrete_ty
         | _ -> ())
       | _ -> () );
     let ty = MakeType.dynamic (Reason.Rdynamic_prop id_pos) in
-    (env, (ty, []))
+    (env, (ty, []), None)
   | (_, Tobject)
   | (_, Tany _)
   | (_, Terr) ->
@@ -541,6 +655,7 @@ let rec obj_get_concrete_ty
 
 and nullable_obj_get
     ~inst_meth
+    ~meth_caller
     ~obj_pos
     ~is_method
     ~nullsafe
@@ -548,6 +663,7 @@ and nullable_obj_get
     ~coerce_from_ty
     ~is_nonnull
     ~this_ty
+    ~this_ty_conjunct
     ~is_parent_call
     ~dep_kind
     env
@@ -558,9 +674,10 @@ and nullable_obj_get
     ty =
   match nullsafe with
   | Some r_null ->
-    let (env, (method_, tal)) =
+    let (env, (method_, tal), err_res) =
       obj_get_inner
         ~inst_meth
+        ~meth_caller
         ~obj_pos
         ~is_method
         ~nullsafe
@@ -568,6 +685,7 @@ and nullable_obj_get
         ~coerce_from_ty
         ~is_nonnull
         ~this_ty
+        ~this_ty_conjunct
         ~is_parent_call
         ~dep_kind
         env
@@ -581,7 +699,7 @@ and nullable_obj_get
         make_nullable_member_type ~is_method env id_pos p1 method_
       | _ -> (env, method_)
     in
-    (env, (ty, tal))
+    (env, (ty, tal), err_res)
   | None ->
     (match deref ety1 with
     | (r, Toption opt_ty) ->
@@ -618,7 +736,9 @@ and nullable_obj_get
           Errors.null_member_write
       in
       err ~is_method id_str id_pos (Reason.to_string "This can be null" r));
-    (env, (TUtils.terr env (get_reason ety1), []))
+    ( env,
+      (TUtils.terr env (get_reason ety1), []),
+      Option.map ~f:(fun (_, _, ty) -> Ok ty) coerce_from_ty )
 
 (* Helper method for obj_get that decomposes the type ty1.
  * The additional parameter this_ty represents the type that will be substitued
@@ -635,6 +755,7 @@ and nullable_obj_get
  *)
 and obj_get_inner
     ~inst_meth
+    ~meth_caller
     ~is_method
     ~nullsafe
     ~obj_pos
@@ -642,33 +763,66 @@ and obj_get_inner
     ~is_nonnull
     ~explicit_targs
     ~this_ty
+    ~this_ty_conjunct
     ~is_parent_call
     ~dep_kind
     env
-    ty1
+    receiver_ty
     ((id_pos, id_str) as id)
     on_error =
+  Typing_log.(
+    log_with_level env "obj_get" 2 (fun () ->
+        log_types
+          (Pos_or_decl.of_raw_pos id_pos)
+          env
+          [
+            Log_head
+              ( "obj_get_inner",
+                [
+                  Log_type ("receiver_ty", receiver_ty);
+                  Log_type ("this_ty", this_ty);
+                ] );
+          ]));
+  let (env, ety1') = Env.expand_type env receiver_ty in
+  let was_var = is_tyvar ety1' in
+  let fold_errs errs =
+    List.fold_left errs ~init:(Ok []) ~f:(fun acc err ->
+        match (acc, err) with
+        | (Ok xs, Ok x) -> Ok (x :: xs)
+        | (Ok xs, Error (x, y)) -> Error (x :: xs, y :: xs)
+        | (Error (xs, ys), Ok x) -> Error (x :: xs, x :: ys)
+        | (Error (xs, ys), Error (x, y)) -> Error (x :: xs, y :: ys))
+  in
+  let fold_opt_errs opt_errs = Option.(map ~f:fold_errs @@ all opt_errs) in
+
   let (env, ety1) =
     if is_method then
       if TypecheckerOptions.method_call_inference (Env.get_tcopt env) then
-        Env.expand_type env ty1
+        Env.expand_type env receiver_ty
       else
         Typing_solver.expand_type_and_solve
           env
           ~description_of_expected:"an object"
           obj_pos
-          ty1
+          receiver_ty
     else
       Typing_solver.expand_type_and_narrow
         env
         ~description_of_expected:"an object"
         (widen_class_for_obj_get ~is_method ~nullsafe id_str)
         obj_pos
-        ty1
+        receiver_ty
+  in
+  let (env, ety1) =
+    if was_var then
+      Typing_dependent_type.ExprDepTy.make_with_dep_kind env dep_kind ety1
+    else
+      (env, ety1)
   in
   let nullable_obj_get ~read_context ty =
     nullable_obj_get
       ~inst_meth
+      ~meth_caller
       ~obj_pos
       ~is_method
       ~nullsafe
@@ -676,6 +830,7 @@ and obj_get_inner
       ~coerce_from_ty
       ~is_nonnull
       ~this_ty:ty
+      ~this_ty_conjunct:ty
       ~is_parent_call
       ~dep_kind
       env
@@ -690,24 +845,41 @@ and obj_get_inner
   let read_context = Option.is_none coerce_from_ty in
   match deref ety1 with
   | (r, Tunion tyl) ->
-    let (env, resultl) =
-      List.map_env env tyl (fun env ty ->
-          obj_get_inner
-            ~inst_meth
-            ~obj_pos
-            ~is_method
-            ~nullsafe
-            ~explicit_targs
-            ~coerce_from_ty
-            ~is_nonnull
-            ~this_ty:ty
-            ~is_parent_call
-            ~dep_kind
-            env
-            ty
-            id
-            on_error)
+    let (env, resultl, err_res_opts) =
+      List.fold_left tyl ~init:(env, [], []) ~f:(fun (env, tys, errs) ty ->
+          let (env, ty, err_res) =
+            obj_get_inner
+              ~inst_meth
+              ~meth_caller
+              ~obj_pos
+              ~is_method
+              ~nullsafe
+              ~explicit_targs
+              ~coerce_from_ty
+              ~is_nonnull
+              ~this_ty:ty
+              ~this_ty_conjunct:ty
+              ~is_parent_call
+              ~dep_kind
+              env
+              ty
+              id
+              on_error
+          in
+          (env, ty :: tys, err_res :: errs))
     in
+    let err_res =
+      Option.map
+        ~f:
+          (Result.fold
+             ~ok:(fun tys -> Ok (Typing_make_type.union Reason.none tys))
+             ~error:(fun (actuals, expecteds) ->
+               Error
+                 ( Typing_make_type.union Reason.none actuals,
+                   Typing_make_type.union Reason.none expecteds )))
+      @@ fold_opt_errs err_res_opts
+    in
+
     (* TODO: decide what to do about methods with differing generic arity.
      * See T55414751 *)
     let tal =
@@ -717,19 +889,20 @@ and obj_get_inner
     in
     let tyl = List.map ~f:fst resultl in
     let (env, ty) = Union.union_list env r tyl in
-    (env, (ty, tal))
+    (env, (ty, tal), err_res)
   | (r, Tintersection tyl) ->
     let is_nonnull =
       is_nonnull
       || Typing_solver.is_sub_type
            env
-           ty1
+           receiver_ty
            (Typing_make_type.nonnull Reason.none)
     in
-    let (env, resultl) =
-      TUtils.run_on_intersection env tyl ~f:(fun env ty ->
+    let (env, resultl, err_res_opts) =
+      TUtils.run_on_intersection_res env tyl ~f:(fun env ty ->
           obj_get_inner
             ~inst_meth
+            ~meth_caller
             ~obj_pos
             ~is_method
             ~nullsafe
@@ -737,12 +910,24 @@ and obj_get_inner
             ~coerce_from_ty
             ~is_nonnull
             ~this_ty
+            ~this_ty_conjunct:ty
             ~is_parent_call
             ~dep_kind
             env
             ty
             id
             on_error)
+    in
+    let err_res =
+      Option.map
+        ~f:
+          (Result.fold
+             ~ok:(fun tys -> Ok (Typing_make_type.intersection Reason.none tys))
+             ~error:(fun (actuals, expecteds) ->
+               Error
+                 ( Typing_make_type.intersection Reason.none actuals,
+                   Typing_make_type.intersection Reason.none expecteds )))
+      @@ fold_opt_errs err_res_opts
     in
     (* TODO: decide what to do about methods with differing generic arity.
      * See T55414751 *)
@@ -753,32 +938,12 @@ and obj_get_inner
     in
     let tyl = List.map ~f:fst resultl in
     let (env, ty) = Inter.intersect_list env r tyl in
-    (env, (ty, tal))
-  | (r, Tdependent (dep, ty)) ->
-    let dep_kind =
-      ( r,
-        match dep with
-        | DTexpr id -> Typing_dependent_type.ExprDepTy.Dep_Expr id
-        | DTthis -> Typing_dependent_type.ExprDepTy.Dep_This )
-    in
-    obj_get_inner
-      ~inst_meth
-      ~obj_pos
-      ~is_method
-      ~nullsafe
-      ~explicit_targs
-      ~coerce_from_ty
-      ~is_nonnull
-      ~this_ty
-      ~is_parent_call
-      ~dep_kind
-      env
-      ty
-      id
-      on_error
+    (env, (ty, tal), err_res)
+  | (_, Tdependent (_, ty))
   | (_, Tnewtype (_, _, ty)) ->
     obj_get_inner
       ~inst_meth
+      ~meth_caller
       ~obj_pos
       ~is_method
       ~nullsafe
@@ -786,13 +951,14 @@ and obj_get_inner
       ~coerce_from_ty
       ~is_nonnull
       ~this_ty
+      ~this_ty_conjunct
       ~is_parent_call
       ~dep_kind
       env
       ty
       id
       on_error
-  | (r, Tgeneric _) ->
+  | (r, Tgeneric (_name, _)) ->
     let (env, tyl) = TUtils.get_concrete_supertypes env ety1 in
     if List.is_empty tyl then (
       let err =
@@ -812,7 +978,9 @@ and obj_get_inner
         (Typing_print.error env ety1)
         (Reason.to_pos r)
         on_error;
-      (env, (err_witness env id_pos, []))
+      ( env,
+        (err_witness env id_pos, []),
+        Option.map coerce_from_ty ~f:(fun (_, _, ty) -> Ok ty) )
     ) else
       let (env, ty) = Typing_intersection.intersect_list env r tyl in
       let (env, ty) =
@@ -823,6 +991,7 @@ and obj_get_inner
       in
       obj_get_inner
         ~inst_meth
+        ~meth_caller
         ~obj_pos
         ~is_method
         ~nullsafe
@@ -830,6 +999,7 @@ and obj_get_inner
         ~coerce_from_ty
         ~is_nonnull
         ~this_ty
+        ~this_ty_conjunct
         ~is_parent_call
         ~dep_kind
         env
@@ -847,14 +1017,16 @@ and obj_get_inner
       id_str
       id_pos
       (Reason.to_string "It is unknown" r);
-    (env, (TUtils.terr env r, []))
+    (env, (TUtils.terr env r, []), None)
   | (_, _) ->
     obj_get_concrete_ty
       ~inst_meth
+      ~meth_caller
       ~is_method
       ~explicit_targs
       ~coerce_from_ty
       ~this_ty
+      ~this_ty_conjunct
       ~is_parent_call
       ~dep_kind
       env
@@ -862,13 +1034,113 @@ and obj_get_inner
       id
       on_error
 
-(* Look up the type of the property or method id in the type ty1 of the
+(* Look up the type of the property or method id in the type receiver_ty of the
  * receiver and use the function k to postprocess the result.
  * Return any fresh type variables that were substituted for generic type
  * parameters in the type of the property or method.
  *
- * Essentially, if ty1 is a concrete type, e.g., class C, then k is applied
- * to the type of the property id in C; and if ty1 is an unresolved type,
+ * Essentially, if receiver_ty is a concrete type, e.g., class C, then k is applied
+ * to the type of the property id in C; and if receiver_ty is an unresolved type,
+ * e.g., a union of classes (C1 | ... | Cn), then k is applied to the type
+ * of the property id in each Ci and the results are collected into an
+ * unresolved type.
+ *
+ *)
+let obj_get_with_err
+    ~obj_pos
+    ~is_method
+    ~inst_meth
+    ~meth_caller
+    ~nullsafe
+    ~coerce_from_ty
+    ~explicit_targs
+    ~class_id
+    ~member_id
+    ~on_error
+    ?parent_ty
+    env
+    receiver_ty =
+  Typing_log.(
+    log_with_level env "obj_get" 1 (fun () ->
+        log_types
+          (Pos_or_decl.of_raw_pos obj_pos)
+          env
+          [Log_head ("obj_get", [Log_type ("receiver_ty", receiver_ty)])]));
+  let (env, receiver_ty) =
+    if is_method then
+      if TypecheckerOptions.method_call_inference (Env.get_tcopt env) then
+        Env.expand_type env receiver_ty
+      else
+        Typing_solver.expand_type_and_solve
+          env
+          ~description_of_expected:"an object"
+          obj_pos
+          receiver_ty
+    else
+      Typing_solver.expand_type_and_narrow
+        env
+        ~description_of_expected:"an object"
+        (widen_class_for_obj_get ~is_method ~nullsafe (snd member_id))
+        obj_pos
+        receiver_ty
+  in
+
+  (* We will substitute `this` in the function signature with `this_ty`. But first,
+   * transform it according to the dependent kind dep_kind that was derived from the
+   * class_id in the original call to obj_get. See Typing_dependent_type.ml for
+   * more details.
+   *)
+  let dep_kind =
+    Typing_dependent_type.ExprDepTy.from_cid
+      env
+      (get_reason receiver_ty)
+      class_id
+  in
+  let (env, receiver_ty) =
+    Typing_dependent_type.ExprDepTy.make_with_dep_kind env dep_kind receiver_ty
+  in
+  let receiver_or_parent_ty =
+    match parent_ty with
+    | Some ty -> ty
+    | None -> receiver_ty
+  in
+  let is_parent_call = Nast.equal_class_id_ class_id Aast.CIparent in
+  let (env, ty, err_res_opt) =
+    obj_get_inner
+      ~inst_meth
+      ~meth_caller
+      ~is_method
+      ~nullsafe
+      ~obj_pos
+      ~explicit_targs
+      ~coerce_from_ty
+      ~is_nonnull:false
+      ~is_parent_call
+      ~dep_kind
+      ~this_ty:receiver_ty
+      ~this_ty_conjunct:receiver_ty
+      env
+      receiver_or_parent_ty
+      member_id
+      on_error
+  in
+  let err_opt =
+    match err_res_opt with
+    | None
+    | Some (Ok _) ->
+      None
+    | Some (Error (actual_ty, expected_ty)) -> Some (actual_ty, expected_ty)
+  in
+
+  (env, ty, err_opt)
+
+(* Look up the type of the property or method id in the type receiver_ty of the
+ * receiver and use the function k to postprocess the result.
+ * Return any fresh type variables that were substituted for generic type
+ * parameters in the type of the property or method.
+ *
+ * Essentially, if receiver_ty is a concrete type, e.g., class C, then k is applied
+ * to the type of the property id in C; and if receiver_ty is an unresolved type,
  * e.g., a union of classes (C1 | ... | Cn), then k is applied to the type
  * of the property id in each Ci and the results are collected into an
  * unresolved type.
@@ -878,6 +1150,7 @@ let obj_get
     ~obj_pos
     ~is_method
     ~inst_meth
+    ~meth_caller
     ~nullsafe
     ~coerce_from_ty
     ~explicit_targs
@@ -886,28 +1159,21 @@ let obj_get
     ~on_error
     ?parent_ty
     env
-    ty =
-  let dep_kind =
-    Typing_dependent_type.ExprDepTy.from_cid env (get_reason ty) class_id
+    receiver_ty =
+  let (env, ty, _err_opt) =
+    obj_get_with_err
+      ~obj_pos
+      ~is_method
+      ~inst_meth
+      ~meth_caller
+      ~nullsafe
+      ~coerce_from_ty
+      ~explicit_targs
+      ~class_id
+      ~member_id
+      ~on_error
+      ?parent_ty
+      env
+      receiver_ty
   in
-  let ty1 =
-    match parent_ty with
-    | Some ty -> ty
-    | None -> ty
-  in
-  let is_parent_call = Nast.equal_class_id_ class_id Aast.CIparent in
-  obj_get_inner
-    ~inst_meth
-    ~is_method
-    ~nullsafe
-    ~obj_pos
-    ~explicit_targs
-    ~coerce_from_ty
-    ~is_nonnull:false
-    ~is_parent_call
-    ~this_ty:ty
-    ~dep_kind
-    env
-    ty1
-    member_id
-    on_error
+  (env, ty)

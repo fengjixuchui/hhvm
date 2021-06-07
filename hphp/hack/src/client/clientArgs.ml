@@ -540,6 +540,9 @@ let parse_check_args cmd =
         " (mode) rename a symbol, Usage: --refactor "
         ^ "[\"Class\", \"Function\", \"Method\"] <Current Name> <New Name>" );
       ("--remote", Arg.Set remote, " force remote type checking");
+      ( "--remote-execution",
+        Arg.Unit (fun () -> set_mode MODE_STATUS_REMOTE_EXECUTION),
+        "force type checking with remote execution" );
       ( "--remove-dead-fixme",
         Arg.Int
           begin
@@ -644,6 +647,12 @@ let parse_check_args cmd =
         Arg.String (fun x -> set_mode (MODE_STATUS_SINGLE x)),
         "<path> Return errors in file with provided name (give '-' for stdin)"
       );
+      ( "--single-remote-execution",
+        Arg.String (fun x -> set_mode (MODE_STATUS_SINGLE_REMOTE_EXECUTION x)),
+        "<path> Return (errors, dep_edges) in file with provided name" );
+      ( "--multi-remote-execution",
+        Arg.Unit (fun () -> set_mode MODE_STATUS_MULTI_REMOTE_EXECUTION),
+        "<paths> Return (errors, dep_edges) in files with provided names" );
       ("--sort-results", Arg.Set sort_results, " sort output for CST search.");
       ( "--stats",
         Arg.Unit (fun () -> set_mode MODE_STATS),
@@ -677,6 +686,9 @@ let parse_check_args cmd =
         Arg.String (fun x -> set_mode (MODE_TYPE_ERROR_AT_POS x)),
         " (mode) show type error at a given position in file [line:character]"
       );
+      ( "--tast-holes",
+        Arg.String (fun x -> set_mode (MODE_TAST_HOLES x)),
+        " (mode) return all TAST Holes in a given file" );
       ( "--verbose-on",
         Arg.Unit (fun () -> set_mode (MODE_VERBOSE true)),
         " (mode) turn on verbose server log" );
@@ -734,6 +746,7 @@ let parse_check_args cmd =
     match (mode, args) with
     | (MODE_LINT, _)
     | (MODE_CONCATENATE_ALL, _)
+    | (MODE_STATUS_MULTI_REMOTE_EXECUTION, _)
     | (MODE_FILE_DEPENDENTS, _) ->
       (Wwwroot.get None, args)
     | (_, []) -> (Wwwroot.get None, [])
@@ -938,7 +951,7 @@ let parse_stop_args () =
   in
   CStop { ClientStop.root; from = !from }
 
-let parse_lsp_args ~(init_id : string) =
+let parse_lsp_args () =
   let usage =
     Printf.sprintf
       "Usage: %s lsp [OPTION]...\nRuns a persistent language service\n"
@@ -946,26 +959,16 @@ let parse_lsp_args ~(init_id : string) =
   in
   let from = ref "" in
   let config = ref [] in
-  let use_ffp_autocomplete = ref false in
-  let use_ranked_autocomplete = ref false in
-  let use_serverless_ide = ref false in
   let verbose = ref false in
   let options =
     [
-      (* Please keep these sorted in the alphabetical order *)
-      ("--enhanced-hover", Arg.Unit (fun () -> ()), " [legacy] no-op");
-      ( "--ffp-autocomplete",
-        Arg.Set use_ffp_autocomplete,
-        " [experimental] use the full-fidelity parser based autocomplete " );
       Common_argspecs.from from;
       Common_argspecs.config config;
-      ( "--ranked-autocomplete",
-        Arg.Set use_ranked_autocomplete,
-        " [experimental] display ranked autocompletion results" );
-      ( "--serverless-ide",
-        Arg.Set use_serverless_ide,
-        " [experimental] provide IDE services from hh_client instead of hh_server"
-      );
+      (* Please keep these sorted in the alphabetical order *)
+      ("--enhanced-hover", Arg.Unit (fun () -> ()), " [legacy] no-op");
+      ("--ffp-autocomplete", Arg.Unit (fun () -> ()), " [legacy] no-op");
+      ("--ranked-autocomplete", Arg.Unit (fun () -> ()), " [legacy] no-op");
+      ("--serverless-ide", Arg.Unit (fun () -> ()), " [legacy] no-op");
       ( "--verbose",
         Arg.Set verbose,
         " verbose logs to stderr and `hh --ide-logname` and `--lsp-logname`" );
@@ -974,17 +977,7 @@ let parse_lsp_args ~(init_id : string) =
   in
   let args = parse_without_command options usage "lsp" in
   match args with
-  | [] ->
-    CLsp
-      {
-        ClientLsp.from = !from;
-        config = !config;
-        use_ffp_autocomplete = !use_ffp_autocomplete;
-        use_ranked_autocomplete = !use_ranked_autocomplete;
-        use_serverless_ide = !use_serverless_ide;
-        verbose = !verbose;
-        init_id;
-      }
+  | [] -> CLsp { ClientLsp.from = !from; config = !config; verbose = !verbose }
   | _ ->
     Printf.printf "%s\n" usage;
     exit 2
@@ -1187,14 +1180,14 @@ invocations of `hh` faster.|}
       replay_token = !replay_token;
     }
 
-let parse_args ~(init_id : string) : command =
+let parse_args () : command =
   match parse_command () with
   | (CKNone | CKCheck) as cmd -> parse_check_args cmd
   | CKStart -> parse_start_args ()
   | CKStop -> parse_stop_args ()
   | CKRestart -> parse_restart_args ()
   | CKDebug -> parse_debug_args ()
-  | CKLsp -> parse_lsp_args ~init_id
+  | CKLsp -> parse_lsp_args ()
   | CKRage -> parse_rage_args ()
   | CKDownloadSavedState -> parse_download_saved_state_args ()
 
@@ -1208,3 +1201,15 @@ let root = function
   | CDownloadSavedState { ClientDownloadSavedState.root; _ } ->
     Some root
   | CLsp _ -> None
+
+let config = function
+  | CCheck { ClientEnv.config; _ }
+  | CStart { ClientStart.config; _ }
+  | CRestart { ClientStart.config; _ }
+  | CLsp { ClientLsp.config; _ } ->
+    Some config
+  | CStop _
+  | CDebug _
+  | CDownloadSavedState _
+  | CRage _ ->
+    None

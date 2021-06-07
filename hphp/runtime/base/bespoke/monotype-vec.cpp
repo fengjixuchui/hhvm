@@ -169,8 +169,8 @@ ArrayData* EmptyMonotypeVec::EscalateToVanilla(const EmptyMonotypeVec* ead,
   return legacy ? staticEmptyMarkedVec() : staticEmptyVec();
 }
 
-void EmptyMonotypeVec::ConvertToUncounted(EmptyMonotypeVec*,
-                                          DataWalker::PointerMap*) {
+void EmptyMonotypeVec::ConvertToUncounted(
+    EmptyMonotypeVec* madIn, const MakeUncountedEnv& env) {
   // All EmptyMonotypeVecs are static, so we should never make them uncounted.
   always_assert(false);
 }
@@ -409,8 +409,8 @@ MonotypeVec* MonotypeVec::copyHelper(uint8_t newSizeIndex, bool incRef) const {
   auto const bytes = sizeof(MonotypeVec) + m_size * sizeof(Value);
   memcpy16_inline(mad, this, size_t(bytes + 15) & ~size_t(15));
 
-  mad->initHeader_16(m_kind, OneReference,
-                     packSizeIndexAndAuxBits(newSizeIndex, auxBits()));
+  auto const aux = packSizeIndexAndAuxBits(newSizeIndex, auxBits());
+  mad->initHeader_16(HeaderKind::BespokeVec, OneReference, aux);
 
   if (incRef) mad->incRefValues();
 
@@ -429,7 +429,7 @@ MonotypeVec* MonotypeVec::grow() {
 }
 
 DataType MonotypeVec::type() const {
-  return DataType(int8_t(m_extra_hi16 & 0xff));
+  return DataType(int8_t(m_layout_index.raw & 0xff));
 }
 
 MonotypeVec* MonotypeVec::prepareForInsert() {
@@ -505,13 +505,13 @@ ArrayData* MonotypeVec::EscalateToVanilla(const MonotypeVec* mad,
   return mad->escalateWithCapacity(mad->size(), reason);
 }
 
-void MonotypeVec::ConvertToUncounted(MonotypeVec* madIn,
-                                     DataWalker::PointerMap* seen) {
+void MonotypeVec::ConvertToUncounted(
+    MonotypeVec* madIn, const MakeUncountedEnv& env) {
   auto const oldType = madIn->type();
   for (uint32_t i = 0; i < madIn->size(); i++) {
     DataType dt = oldType;
     auto const lval = tv_lval(&dt, &madIn->rawData()[i]);
-    ConvertTvToUncounted(lval, seen);
+    ConvertTvToUncounted(lval, env);
     assertx(equivDataTypes(dt, madIn->type()));
   }
   auto const newType = hasPersistentFlavor(oldType)
@@ -583,7 +583,7 @@ arr_lval MonotypeVec::elemImpl(int64_t k, bool throwOnMissing) {
   mad->setLayoutIndex(getLayoutIndex(dt_modulo_persistence(dt)));
 
   static_assert(folly::kIsLittleEndian);
-  auto const type_ptr = reinterpret_cast<DataType*>(&mad->m_extra_hi16);
+  auto const type_ptr = reinterpret_cast<DataType*>(&mad->m_layout_index.raw);
   assertx(*type_ptr == mad->type());
   return arr_lval{mad, type_ptr, &mad->valueRefUnchecked(k)};
 }

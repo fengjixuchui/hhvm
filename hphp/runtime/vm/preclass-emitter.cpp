@@ -107,12 +107,10 @@ PreClassEmitter::Prop::~Prop() {
 
 PreClassEmitter::PreClassEmitter(UnitEmitter& ue,
                                  Id id,
-                                 const std::string& n,
-                                 PreClass::Hoistable hoistable)
+                                 const std::string& n)
   : m_ue(ue)
   , m_name(preClassName(n))
-  , m_id(id)
-  , m_hoistable(hoistable) {}
+  , m_id(id) {}
 
 void PreClassEmitter::init(int line1, int line2, Attr attrs,
                            const StringData* parent,
@@ -231,7 +229,8 @@ bool PreClassEmitter::addConstant(const StringData* n,
                                   const StringData* phpCode,
                                   const ConstModifiers::Kind kind,
                                   const bool fromTrait,
-                                  const Array& typeStructure) {
+                                  const Array& typeStructure,
+                                  const bool isAbstract) {
   assertx(kind == ConstModifiers::Kind::Value ||
           kind == ConstModifiers::Kind::Type);
   ConstMap::Builder::const_iterator it = m_constMap.find(n);
@@ -246,8 +245,8 @@ bool PreClassEmitter::addConstant(const StringData* n,
   } else {
     tvVal = *val;
   }
-  PreClassEmitter::Const cns(n, typeConstraint, &tvVal, phpCode,
-                             {}, kind, false, fromTrait);
+  PreClassEmitter::Const cns(n, typeConstraint, &tvVal, phpCode, {}, kind,
+                             isAbstract, fromTrait);
   m_constMap.add(cns.name(), cns);
   return true;
 }
@@ -272,7 +271,7 @@ void PreClassEmitter::commit(RepoTxn& txn) const {
   int repoId = m_ue.m_repoId;
   int64_t usn = m_ue.m_sn;
   pcrp.insertPreClass[repoId]
-      .insert(*this, txn, usn, m_id, m_name, m_hoistable);
+      .insert(*this, txn, usn, m_id, m_name);
 
   for (MethodVec::const_iterator it = m_methods.begin();
        it != m_methods.end(); ++it) {
@@ -286,7 +285,7 @@ const StaticString
   s_invoke("__invoke"),
   s_coeffectsProp("86coeffects");
 
-PreClass* PreClassEmitter::create(Unit& unit, bool saveLineTable) const {
+PreClass* PreClassEmitter::create(Unit& unit) const {
   Attr attrs = m_attrs;
   if (attrs & AttrPersistent &&
       !RuntimeOption::RepoAuthoritative && SystemLib::s_inited) {
@@ -312,7 +311,7 @@ PreClass* PreClassEmitter::create(Unit& unit, bool saveLineTable) const {
     attrs |= AttrIsClosureClass;
     if (!invoke->coeffectRules.empty()) {
       assertx(invoke->coeffectRules.size() == 1);
-      assertx(invoke->coeffectRules[0].isClosureInheritFromParent());
+      assertx(invoke->coeffectRules[0].isClosureParentScope());
       attrs |= AttrHasClosureCoeffectsProp;
     }
   }
@@ -321,8 +320,7 @@ PreClass* PreClassEmitter::create(Unit& unit, bool saveLineTable) const {
 
   auto pc = std::make_unique<PreClass>(
     &unit, m_line1, m_line2, m_name,
-    attrs, m_parent, m_docComment, m_id,
-    m_hoistable);
+    attrs, m_parent, m_docComment, m_id);
   pc->m_interfaces = m_interfaces;
   pc->m_includedEnums = m_enumIncludes;
   pc->m_usedTraits = m_usedTraits;
@@ -362,7 +360,7 @@ PreClass* PreClassEmitter::create(Unit& unit, bool saveLineTable) const {
   PreClass::MethodMap::Builder methodBuild;
   for (MethodVec::const_iterator it = m_methods.begin();
        it != m_methods.end(); ++it) {
-    Func* f = (*it)->create(unit, pc.get(), saveLineTable);
+    Func* f = (*it)->create(unit, pc.get());
     if (f->attrs() & AttrTrait) {
       if (pc->m_numDeclMethods == -1) {
         pc->m_numDeclMethods = it - m_methods.begin();
@@ -411,20 +409,28 @@ PreClass* PreClassEmitter::create(Unit& unit, bool saveLineTable) const {
     const Const& const_ = m_constMap[i];
     TypedValueAux tvaux;
     tvaux.constModifiers() = {};
+    tvaux.constModifiers().setIsAbstract(const_.isAbstract());
     if (const_.kind() == ConstModifiers::Kind::Context) {
-      tvaux.constModifiers().setIsAbstract(const_.isAbstract());
-      auto coeffects = StaticCoeffects::none();
-      for (auto const& coeffect : const_.coeffects()) {
-        coeffects |= CoeffectsConfig::fromName(coeffect->toCppString());
-      }
+      auto const coeffects = [&] {
+        if (const_.coeffects().empty()) return StaticCoeffects::defaults();
+        auto coeffects =
+          CoeffectsConfig::fromName(const_.coeffects()[0]->toCppString());
+        for (auto const& coeffect : const_.coeffects()) {
+          coeffects &= CoeffectsConfig::fromName(coeffect->toCppString());
+        }
+        return coeffects;
+      }();
       tvaux.constModifiers().setCoeffects(coeffects);
-    } else {
-      if (const_.isAbstract()) {
-        tvWriteUninit(tvaux);
-        tvaux.constModifiers().setIsAbstract(true);
+      if (!const_.coeffects().empty()) {
+        tvCopy(make_tv<KindOfInt64>(0), tvaux); // dummy value for m_data
       } else {
+        tvWriteUninit(tvaux);
+      }
+    } else {
+      if (const_.valOption()) {
         tvCopy(const_.val(), tvaux);
-        tvaux.constModifiers().setIsAbstract(false);
+      } else {
+        tvWriteUninit(tvaux);
       }
     }
 
@@ -452,7 +458,7 @@ PreClass* PreClassEmitter::create(Unit& unit, bool saveLineTable) const {
 }
 
 template<class SerDe> void PreClassEmitter::serdeMetaData(SerDe& sd) {
-  // NOTE: name, hoistable, and a few other fields currently
+  // NOTE: name and a few other fields currently
   // serialized outside of this.
   sd(m_line1)
     (m_line2)
@@ -496,7 +502,7 @@ void PreClassRepoProxy::createSchema(int repoId, RepoTxn& txn) {
   {
     auto createQuery = folly::sformat(
       "CREATE TABLE {} "
-      "(unitSn INTEGER, preClassId INTEGER, name TEXT, hoistable INTEGER, "
+      "(unitSn INTEGER, preClassId INTEGER, name TEXT, "
       " extraData BLOB, PRIMARY KEY (unitSn, preClassId));",
       m_repo.table(repoId, "PreClass"));
     txn.exec(createQuery);
@@ -506,12 +512,11 @@ void PreClassRepoProxy::createSchema(int repoId, RepoTxn& txn) {
 void PreClassRepoProxy::InsertPreClassStmt
                       ::insert(const PreClassEmitter& pce, RepoTxn& txn,
                                int64_t unitSn, Id preClassId,
-                               const StringData* name,
-                               PreClass::Hoistable hoistable) {
+                               const StringData* name) {
   if (!prepared()) {
     auto insertQuery = folly::sformat(
       "INSERT INTO {} "
-      "VALUES(@unitSn, @preClassId, @name, @hoistable, @extraData);",
+      "VALUES(@unitSn, @preClassId, @name, @extraData);",
       m_repo.table(m_repoId, "PreClass"));
     txn.prepare(*this, insertQuery);
   }
@@ -522,7 +527,6 @@ void PreClassRepoProxy::InsertPreClassStmt
   query.bindInt64("@unitSn", unitSn);
   query.bindId("@preClassId", preClassId);
   query.bindStringPiece("@name", nm);
-  query.bindInt("@hoistable", hoistable);
   const_cast<PreClassEmitter&>(pce).serdeMetaData(extraBlob);
   query.bindBlob("@extraData", extraBlob, /* static */ true);
   query.exec();
@@ -533,7 +537,7 @@ void PreClassRepoProxy::GetPreClassesStmt
   auto txn = RepoTxn{m_repo.begin()};
   if (!prepared()) {
     auto selectQuery = folly::sformat(
-      "SELECT preClassId, name, hoistable, extraData "
+      "SELECT preClassId, name, extraData "
       "FROM {} "
       "WHERE unitSn == @unitSn ORDER BY preClassId ASC;",
       m_repo.table(m_repoId, "PreClass"));
@@ -546,10 +550,8 @@ void PreClassRepoProxy::GetPreClassesStmt
     if (query.row()) {
       Id preClassId;          /**/ query.getId(0, preClassId);
       std::string name;       /**/ query.getStdString(1, name);
-      int hoistable;          /**/ query.getInt(2, hoistable);
-      BlobDecoder extraBlob = /**/ query.getBlob(3, ue.useGlobalIds());
-      PreClassEmitter* pce = ue.newPreClassEmitter(
-        name, (PreClass::Hoistable)hoistable);
+      BlobDecoder extraBlob = /**/ query.getBlob(2, ue.useGlobalIds());
+      PreClassEmitter* pce = ue.newPreClassEmitter(name);
       pce->serdeMetaData(extraBlob);
       if (!SystemLib::s_inited) {
         assertx(pce->attrs() & AttrPersistent);

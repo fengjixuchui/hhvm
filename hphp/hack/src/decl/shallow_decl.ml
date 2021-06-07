@@ -29,20 +29,29 @@ let gather_constants =
       let refs = super#on_expr acc expr in
       let refs =
         match snd expr with
-        | Class_const (class_id, (_, name)) ->
-          begin
-            match snd class_id with
-            | CI from -> CCRSet.add (From (snd from), name) refs
-            | CIself -> CCRSet.add (Self, name) refs
-            (* not allowed *)
-            | CIexpr _
-            | CIstatic
-            | CIparent ->
-              refs
-          end
+        | Class_const ((_, CI (_, from)), (_, name)) ->
+          CCRSet.add (From from, name) refs
+        | Class_const ((_, CIself), (_, name)) -> CCRSet.add (Self, name) refs
+        (* Following two cases are for function-pointers "const mixed X = S::i<>".
+        These shouldn't really be counted as refs for our purposes. But we're including
+        them solely for reason of parity with the direct-decl-parser, which does count them. *)
+        | FunctionPointer (FP_class_const ((_, CI (_, from)), (_, name)), _targs)
+          ->
+          CCRSet.add (From from, name) refs
+        | FunctionPointer (FP_class_const ((_, CIself), (_, name)), _targs) ->
+          CCRSet.add (Self, name) refs
         | _ -> refs
       in
       CCRSet.union refs acc
+
+    method! on_SFclass_const acc (_, class_id) (_, name) =
+      (* TODO: recognize "self::F"... The shape key "shape(self::F => 1)" is
+      represented by SFclass_const with class_id just the string literal "self".
+      However, by the time this visitor is called, it has already been resolved
+      into a class-name. Therefore this place in the code is unable to properly
+      reconstruct "self::F" shape keys. *)
+      let ref = (From class_id, name) in
+      CCRSet.add ref acc
   end
 
 let class_const env (cc : Nast.class_const) =
@@ -91,27 +100,37 @@ let class_const env (cc : Nast.class_const) =
     }
 
 let typeconst env c tc =
+  (* We keep contexts as intersection and do not simplify empty or singleton
+   * ones.
+   *)
   match c.c_kind with
   | Ast_defs.Cenum -> None
   | Ast_defs.Ctrait
   | Ast_defs.Cinterface
   | Ast_defs.Cabstract
   | Ast_defs.Cnormal ->
-    let (abstract, as_constraint, super_constraint, ty) =
+    let stc_kind =
       match tc.c_tconst_kind with
       | Aast.TCAbstract
-          { c_atc_as_constraint; c_atc_super_constraint; c_atc_default } ->
-        ( TCAbstract (Option.map ~f:(Decl_hint.hint env) c_atc_default),
-          Option.map ~f:(Decl_hint.hint env) c_atc_as_constraint,
-          Option.map ~f:(Decl_hint.hint env) c_atc_super_constraint,
-          None )
-      | Aast.TCConcrete { c_tc_type } ->
-        (TCConcrete, None, None, Some (Decl_hint.hint env c_tc_type))
-      | Aast.TCPartiallyAbstract { c_patc_constraint; c_patc_type } ->
-        ( TCPartiallyAbstract,
-          Some (Decl_hint.hint env c_patc_constraint),
-          None,
-          Some (Decl_hint.hint env c_patc_type) )
+          {
+            c_atc_as_constraint = a;
+            c_atc_super_constraint = s;
+            c_atc_default = d;
+          } ->
+        Typing_defs.TCAbstract
+          {
+            atc_as_constraint = Option.map ~f:(Decl_hint.hint env) a;
+            atc_super_constraint = Option.map ~f:(Decl_hint.hint env) s;
+            atc_default = Option.map ~f:(Decl_hint.hint env) d;
+          }
+      | Aast.TCConcrete { c_tc_type = t } ->
+        Typing_defs.TCConcrete { tc_type = Decl_hint.hint env t }
+      | Aast.TCPartiallyAbstract { c_patc_constraint = c; c_patc_type = t } ->
+        Typing_defs.TCPartiallyAbstract
+          {
+            patc_constraint = Decl_hint.hint env c;
+            patc_type = Decl_hint.hint env t;
+          }
     in
     let attributes = tc.c_tconst_user_attributes in
     let enforceable =
@@ -126,13 +145,11 @@ let typeconst env c tc =
     in
     Some
       {
-        stc_abstract = abstract;
         stc_name = Decl_env.make_decl_posed env tc.c_tconst_name;
-        stc_as_constraint = as_constraint;
-        stc_super_constraint = super_constraint;
-        stc_type = ty;
+        stc_kind;
         stc_enforceable = enforceable;
         stc_reifiable = Option.map ~f:(Decl_env.make_decl_pos env) reifiable;
+        stc_is_ctx = tc.c_tconst_is_ctx;
       }
 
 let make_xhp_attr cv =
@@ -263,12 +280,12 @@ let method_ env m =
   let php_std_lib =
     Attrs.mem SN.UserAttributes.uaPHPStdLib m.m_user_attributes
   in
-  let sound_dynamic_callable =
-    Attrs.mem SN.UserAttributes.uaSoundDynamicCallable m.m_user_attributes
+  let support_dynamic_type =
+    Attrs.mem SN.UserAttributes.uaSupportDynamicType m.m_user_attributes
   in
   let ft = method_type env m in
   let sm_deprecated =
-    Naming_attributes_deprecated.deprecated
+    Naming_attributes_params.deprecated
       ~kind:"method"
       m.m_name
       m.m_user_attributes
@@ -285,8 +302,16 @@ let method_ env m =
         ~override
         ~dynamicallycallable:has_dynamicallycallable
         ~php_std_lib
-        ~sound_dynamic_callable;
+        ~support_dynamic_type;
   }
+
+let xhp_enum_values props =
+  List.fold props ~init:SMap.empty ~f:(fun acc prop ->
+      match prop.cv_xhp_attr with
+      | Some { xai_enum_values = []; _ } -> acc
+      | Some { xai_enum_values; _ } ->
+        SMap.add (snd prop.cv_id) xai_enum_values acc
+      | None -> acc)
 
 let class_ ctx c =
   let (errs, result) =
@@ -297,12 +322,21 @@ let class_ ctx c =
     let hint = Decl_hint.hint env in
     let (req_extends, req_implements) = split_reqs c in
     let (static_vars, vars) = split_vars c in
+    let sc_xhp_enum_values = xhp_enum_values vars in
     let (constructor, statics, rest) = split_methods c in
     let sc_extends = List.map ~f:hint c.c_extends in
     let sc_uses = List.map ~f:hint c.c_uses in
     let sc_req_extends = List.map ~f:hint req_extends in
     let sc_req_implements = List.map ~f:hint req_implements in
     let sc_implements = List.map ~f:hint c.c_implements in
+    let sc_user_attributes =
+      List.map
+        c.c_user_attributes
+        ~f:(Decl_hint.aast_user_attribute_to_decl_user_attribute env)
+    in
+    let sc_module =
+      Naming_attributes_params.get_module_attribute c.c_user_attributes
+    in
     let where_constraints =
       List.map c.c_where_constraints (FunUtils.where_constraint env)
     in
@@ -320,16 +354,18 @@ let class_ ctx c =
       sc_is_xhp = c.c_is_xhp;
       sc_has_xhp_keyword = c.c_has_xhp_keyword;
       sc_kind = c.c_kind;
+      sc_module;
       sc_name = Decl_env.make_decl_posed env c.c_name;
       sc_tparams = List.map c.c_tparams (FunUtils.type_param env);
       sc_where_constraints = where_constraints;
       sc_extends;
       sc_uses;
       sc_xhp_attr_uses = List.map ~f:hint c.c_xhp_attr_uses;
+      sc_xhp_enum_values;
       sc_req_extends;
       sc_req_implements;
       sc_implements;
-      sc_implements_dynamic = c.c_implements_dynamic;
+      sc_support_dynamic_type = c.c_support_dynamic_type;
       sc_consts = List.filter_map c.c_consts (class_const env);
       sc_typeconsts = List.filter_map c.c_typeconsts (typeconst env c);
       sc_props = List.map ~f:(prop env) vars;
@@ -337,10 +373,7 @@ let class_ ctx c =
       sc_constructor = Option.map ~f:(method_ env) constructor;
       sc_static_methods = List.map ~f:(method_ env) statics;
       sc_methods = List.map ~f:(method_ env) rest;
-      sc_user_attributes =
-        List.map
-          c.c_user_attributes
-          ~f:(Decl_hint.aast_user_attribute_to_decl_user_attribute env);
+      sc_user_attributes;
       sc_enum_type = Option.map c.c_enum (enum_type hint);
     }
   in

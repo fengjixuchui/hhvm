@@ -133,9 +133,9 @@ let fresh_type env p =
   log_env_change_ "fresh_type" env
   @@ wrap_inference_env_call env (fun env -> Inf.fresh_type env p)
 
-let fresh_invariant_type_var env p =
-  log_env_change_ "fresh_invariant_type_var" env
-  @@ wrap_inference_env_call env (fun env -> Inf.fresh_invariant_type_var env p)
+let fresh_type_invariant env p =
+  log_env_change_ "fresh_type_invariant" env
+  @@ wrap_inference_env_call env (fun env -> Inf.fresh_type_invariant env p)
 
 let new_global_tyvar env ?i r =
   log_env_change_ "new_global_tyvar" env
@@ -348,29 +348,29 @@ let get_tpenv env =
   | None -> TPEnv.empty
   | Some entry -> entry.Typing_per_cont_env.tpenv
 
-let get_global_tpenv env = env.global_tpenv
+let get_global_tpenv env = env.tpenv
 
 let get_pos_and_kind_of_generic env name =
   match TPEnv.get_with_pos name (get_tpenv env) with
   | Some r -> Some r
-  | None -> TPEnv.get_with_pos name env.global_tpenv
+  | None -> TPEnv.get_with_pos name env.tpenv
 
 let get_lower_bounds env name tyargs =
   let tpenv = get_tpenv env in
   let local = TPEnv.get_lower_bounds tpenv name tyargs in
-  let global = TPEnv.get_lower_bounds env.global_tpenv name tyargs in
+  let global = TPEnv.get_lower_bounds env.tpenv name tyargs in
   TySet.union local global
 
 let get_upper_bounds env name tyargs =
   let tpenv = get_tpenv env in
   let local = TPEnv.get_upper_bounds tpenv name tyargs in
-  let global = TPEnv.get_upper_bounds env.global_tpenv name tyargs in
+  let global = TPEnv.get_upper_bounds env.tpenv name tyargs in
   TySet.union local global
 
 let get_reified env name =
   let tpenv = get_tpenv env in
   let local = TPEnv.get_reified tpenv name in
-  let global = TPEnv.get_reified env.global_tpenv name in
+  let global = TPEnv.get_reified env.tpenv name in
   match (local, global) with
   | (Reified, _)
   | (_, Reified) ->
@@ -383,13 +383,19 @@ let get_reified env name =
 let get_enforceable env name =
   let tpenv = get_tpenv env in
   let local = TPEnv.get_enforceable tpenv name in
-  let global = TPEnv.get_enforceable env.global_tpenv name in
+  let global = TPEnv.get_enforceable env.tpenv name in
   local || global
 
 let get_newable env name =
   let tpenv = get_tpenv env in
   let local = TPEnv.get_newable tpenv name in
-  let global = TPEnv.get_newable env.global_tpenv name in
+  let global = TPEnv.get_newable env.tpenv name in
+  local || global
+
+let get_require_dynamic env name =
+  let tpenv = get_tpenv env in
+  let local = TPEnv.get_require_dynamic tpenv name in
+  let global = TPEnv.get_require_dynamic env.tpenv name in
   local || global
 
 (* Get bounds that are both an upper and lower of a given generic *)
@@ -411,39 +417,33 @@ let env_with_tpenv env tpenv =
       };
   }
 
-let env_with_global_tpenv env global_tpenv = { env with global_tpenv }
+let env_with_global_tpenv env tpenv = { env with tpenv }
 
 let add_upper_bound_global env name ty =
   let tpenv =
     let (env, ty) = expand_type env ty in
     match deref ty with
     | (r, Tgeneric (formal_super, [])) ->
-      TPEnv.add_lower_bound
-        env.global_tpenv
-        formal_super
-        (mk (r, Tgeneric (name, [])))
+      TPEnv.add_lower_bound env.tpenv formal_super (mk (r, Tgeneric (name, [])))
     | (_r, Tgeneric (_formal_super, _targs)) ->
       (* TODO(T70068435) Revisit this when implementing bounds on HK generic vars *)
-      env.global_tpenv
-    | _ -> env.global_tpenv
+      env.tpenv
+    | _ -> env.tpenv
   in
-  { env with global_tpenv = TPEnv.add_upper_bound tpenv name ty }
+  { env with tpenv = TPEnv.add_upper_bound tpenv name ty }
 
 let add_lower_bound_global env name ty =
   let tpenv =
     let (env, ty) = expand_type env ty in
     match deref ty with
     | (r, Tgeneric (formal_super, [])) ->
-      TPEnv.add_upper_bound
-        env.global_tpenv
-        formal_super
-        (mk (r, Tgeneric (name, [])))
+      TPEnv.add_upper_bound env.tpenv formal_super (mk (r, Tgeneric (name, [])))
     | (_r, Tgeneric (_formal_super, _targs)) ->
       (* TODO(T70068435) Revisit this when implementing bounds on HK generic vars *)
-      env.global_tpenv
-    | _ -> env.global_tpenv
+      env.tpenv
+    | _ -> env.tpenv
   in
-  { env with global_tpenv = TPEnv.add_lower_bound tpenv name ty }
+  { env with tpenv = TPEnv.add_lower_bound tpenv name ty }
 
 (* Add a single new upper bound [ty] to generic parameter [name] in the local
  * type parameter environment of [env].
@@ -478,19 +478,16 @@ let is_generic_parameter env name =
   TPEnv.mem name (get_tpenv env) || SSet.mem name env.fresh_typarams
 
 let get_generic_parameters env =
-  TPEnv.get_names (TPEnv.union (get_tpenv env) env.global_tpenv)
+  TPEnv.get_tparam_names (TPEnv.union (get_tpenv env) env.tpenv)
 
-let get_tpenv_size env =
-  TPEnv.size (get_tpenv env) + TPEnv.size env.global_tpenv
+let get_tpenv_size env = TPEnv.size (get_tpenv env) + TPEnv.size env.tpenv
 
 let is_consistent env = TPEnv.is_consistent (get_tpenv env)
 
 let mark_inconsistent env =
   env_with_tpenv env (TPEnv.mark_inconsistent (get_tpenv env))
 
-(* Generate a fresh generic parameter with a specified prefix but distinct
- * from all generic parameters in the environment *)
-let add_fresh_generic_parameter_by_kind env prefix kind =
+let fresh_param_name env prefix : env * string =
   let rec iterate i =
     let name = Printf.sprintf "%s#%d" prefix i in
     if is_generic_parameter env name then
@@ -500,14 +497,18 @@ let add_fresh_generic_parameter_by_kind env prefix kind =
   in
   let name = iterate 1 in
   let env = { env with fresh_typarams = SSet.add name env.fresh_typarams } in
+  (env, name)
+
+(* Generate a fresh generic parameter with a specified prefix but distinct
+ * from all generic parameters in the environment *)
+let add_fresh_generic_parameter_by_kind env pos prefix kind =
+  let (env, name) = fresh_param_name env prefix in
   let env =
-    env_with_tpenv
-      env
-      (TPEnv.add ~def_pos:Pos_or_decl.none name kind (get_tpenv env))
+    env_with_tpenv env (TPEnv.add ~def_pos:pos name kind (get_tpenv env))
   in
   (env, name)
 
-let add_fresh_generic_parameter env prefix ~reified ~enforceable ~newable =
+let add_fresh_generic_parameter env pos prefix ~reified ~enforceable ~newable =
   let kind =
     KDefs.
       {
@@ -516,10 +517,11 @@ let add_fresh_generic_parameter env prefix ~reified ~enforceable ~newable =
         reified;
         enforceable;
         newable;
+        require_dynamic = true;
         parameters = [];
       }
   in
-  add_fresh_generic_parameter_by_kind env prefix kind
+  add_fresh_generic_parameter_by_kind env pos prefix kind
 
 let is_fresh_generic_parameter name =
   String.contains name '#' && not (DependentKind.is_generic_dep_ty name)
@@ -561,6 +563,7 @@ let get_tpenv_tparams env =
               reified = _;
               enforceable = _;
               newable = _;
+              require_dynamic = _;
               (* FIXME what to do here? it seems dangerous to just traverse *)
               parameters = _;
             }
@@ -602,6 +605,7 @@ let empty ?origin ?(mode = FileInfo.Mstrict) ctx file ~droot =
     in_case = false;
     in_expr_tree = false;
     inside_constructor = false;
+    in_support_dynamic_type_method_check = false;
     decl_env = { mode; droot; ctx };
     tracing_info =
       Option.map origin ~f:(fun origin -> { Decl_counters.origin; file });
@@ -629,8 +633,9 @@ let empty ?origin ?(mode = FileInfo.Mstrict) ctx file ~droot =
         fun_kind = Ast_defs.FSync;
         fun_is_ctor = false;
         file;
+        this_module = None;
       };
-    global_tpenv = TPEnv.empty;
+    tpenv = TPEnv.empty;
     log_levels = TypecheckerOptions.log_levels (Provider_context.get_tcopt ctx);
     inference_env = Inf.empty_inference_env;
     allow_wildcards = false;
@@ -716,6 +721,16 @@ let is_typedef env x =
   match Naming_provider.get_type_kind (get_ctx env) x with
   | Some Naming_types.TTypedef -> true
   | _ -> false
+
+let is_typedef_visible env ?(expand_visible_newtype = true) td =
+  let { Typing_defs.td_vis; td_pos; _ } = td in
+  match td_vis with
+  | Aast.Opaque ->
+    expand_visible_newtype
+    && Relative_path.equal
+         (Pos.filename (Pos_or_decl.unsafe_to_raw_pos td_pos))
+         (get_file env)
+  | Aast.Transparent -> true
 
 let get_class (env : env) (name : Decl_provider.type_key) : Cls.t option =
   let res =
@@ -994,6 +1009,10 @@ let with_in_expr_tree env in_expr_tree f =
   let env = { env with in_expr_tree = old_in_expr_tree } in
   (env, r1, r2)
 
+let is_in_expr_tree env = env.in_expr_tree
+
+let set_in_expr_tree env b = { env with in_expr_tree = b }
+
 let is_static env = env.genv.static
 
 let get_val_kind env = env.genv.val_kind
@@ -1030,6 +1049,10 @@ let set_fn_kind env fn_type =
   let genv = env.genv in
   let genv = { genv with fun_kind = fn_type } in
   { env with genv }
+
+let set_module env m = { env with genv = { env.genv with this_module = m } }
+
+let get_module env = env.genv.this_module
 
 let set_self env self_id self_ty =
   let genv = env.genv in
@@ -1385,16 +1408,16 @@ end
 (* Sets up/cleans up the environment when typing anonymous function / lambda *)
 (*****************************************************************************)
 
-let closure lenv env f =
-  (* Setting up the environment. *)
+let closure env f =
+  (* Remember parts of the environment specific to the enclosing function
+     that will be overwritten when typing a lambda *)
   let old_lenv = env.lenv in
   let old_return = get_return env in
   let old_params = get_params env in
   let outer_fun_kind = get_fn_kind env in
-  let env = { env with lenv } in
   (* Typing *)
   let (env, ret) = f env in
-  (* Cleaning up the environment. *)
+  (* Restore the environment fields that were clobbered *)
   let env = { env with lenv = old_lenv } in
   let env = set_params env old_params in
   let env = set_return env old_return in
@@ -1418,7 +1441,7 @@ let save local_tpenv env =
   {
     Tast.tcopt = get_tcopt env;
     Tast.inference_env = env.inference_env;
-    Tast.tpenv = TPEnv.union local_tpenv env.global_tpenv;
+    Tast.tpenv = TPEnv.union local_tpenv env.tpenv;
     Tast.condition_types = env.genv.condition_types;
     Tast.pessimize = env.pessimize;
     Tast.fun_tast_info = env.fun_tast_info;
@@ -1457,7 +1480,8 @@ and get_tyvars_i env (ty : internal_type) =
     | Terr
     | Tdynamic
     | Tobject
-    | Tprim _ ->
+    | Tprim _
+    | Tneg _ ->
       (env, ISet.empty, ISet.empty)
     | Toption ty -> get_tyvars env ty
     | Ttuple tyl

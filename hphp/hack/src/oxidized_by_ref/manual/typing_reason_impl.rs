@@ -109,8 +109,10 @@ impl<'a> Reason<'a> {
             | RdefaultCapability(p)
             | RconcatOperand(p)
             | RinterpOperand(p)
-            | RsoundDynamicCallable(p) => Some(p),
-            RhackArrDvArrs(p) => Some(p),
+            | RsupportDynamicType(p)
+            | RdynamicPartialEnforcement((p, _, _))
+            | RhackArrDvArrs(p)
+            | RrigidTvarEscape((p, _, _, _)) => Some(p),
             RlostInfo((_, r, _))
             | Rinstantiate((_, _, r))
             | Rtypeconst((r, _, _, _))

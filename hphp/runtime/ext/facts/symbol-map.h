@@ -31,6 +31,7 @@
 #include <folly/futures/Future.h>
 #include <folly/futures/FutureSplitter.h>
 
+#include "hphp/runtime/ext/facts/attribute-map.h"
 #include "hphp/runtime/ext/facts/autoload-db.h"
 #include "hphp/runtime/ext/facts/file-facts.h"
 #include "hphp/runtime/ext/facts/inheritance-info.h"
@@ -38,15 +39,42 @@
 #include "hphp/runtime/ext/facts/path-symbols-map.h"
 #include "hphp/runtime/ext/facts/string-ptr.h"
 #include "hphp/runtime/ext/facts/symbol-types.h"
-#include "hphp/runtime/ext/facts/type-attribute-map.h"
 #include "hphp/util/assertions.h"
+#include "hphp/util/hash-map.h"
 #include "hphp/util/hash-set.h"
 #include "hphp/util/sha1.h"
+#include "hphp/util/sqlite-wrapper.h"
 
 namespace HPHP {
 namespace Facts {
 
-struct UpdateDBWorkItem;
+struct UpdateDBWorkItem {
+  std::string m_since;
+  std::string m_clock;
+  std::vector<folly::fs::path> m_alteredPaths;
+  std::vector<folly::fs::path> m_deletedPaths;
+  std::vector<FileFacts> m_alteredPathFacts;
+};
+
+template <typename S> struct TypeDecl {
+  Symbol<S, SymKind::Type> m_name;
+  Path<S> m_path;
+
+  bool operator==(const TypeDecl<S>& o) const;
+
+  std::vector<Symbol<S, SymKind::Type>>
+  getAttributesFromDB(AutoloadDB& db, SQLiteTxn& txn) const;
+};
+
+template <typename S> struct MethodDecl {
+  TypeDecl<S> m_type;
+  Symbol<S, SymKind::Function> m_method;
+
+  bool operator==(const MethodDecl<S>& o) const;
+
+  std::vector<Symbol<S, SymKind::Type>>
+  getAttributesFromDB(AutoloadDB& db, SQLiteTxn& txn) const;
+};
 
 /**
  * Stores and updates one PathToSymbolsMap for each kind of symbol.
@@ -59,9 +87,10 @@ struct UpdateDBWorkItem;
  * information the DB doesn't have.
  */
 template <typename S> struct SymbolMap {
+
   explicit SymbolMap(
       folly::fs::path root,
-      folly::fs::path dbPath,
+      DBData dbData,
       SQLite::OpenMode dbMode = SQLite::OpenMode::ReadWrite);
   SymbolMap() = delete;
   SymbolMap(const SymbolMap&) = delete;
@@ -184,6 +213,21 @@ template <typename S> struct SymbolMap {
   getTypesAndTypeAliasesWithAttribute(const S& attr);
 
   /**
+   * Return the attributes of a method
+   */
+  std::vector<Symbol<S, SymKind::Type>> getAttributesOfMethod(
+      Symbol<S, SymKind::Type> type, Symbol<S, SymKind::Function> method);
+  std::vector<Symbol<S, SymKind::Type>>
+  getAttributesOfMethod(const S& type, const S& method);
+
+  /**
+   * Return the methods with a given attribute
+   */
+  std::vector<MethodDecl<S>>
+  getMethodsWithAttribute(Symbol<S, SymKind::Type> attr);
+  std::vector<MethodDecl<S>> getMethodsWithAttribute(const S& attr);
+
+  /**
    * Return the argument at the given position of a given type with a given
    * attribute.
    *
@@ -207,10 +251,17 @@ template <typename S> struct SymbolMap {
    * You can check that the type is defined with `getTypeFile()`, and you can
    * check that the type has the given attribute with `getAttributesOfType()`.
    */
-  std::vector<folly::dynamic> getAttributeArgs(
+  std::vector<folly::dynamic> getTypeAttributeArgs(
       Symbol<S, SymKind::Type> type, Symbol<S, SymKind::Type> attribute);
   std::vector<folly::dynamic>
-  getAttributeArgs(const S& type, const S& attribute);
+  getTypeAttributeArgs(const S& type, const S& attribute);
+
+  std::vector<folly::dynamic> getMethodAttributeArgs(
+      Symbol<S, SymKind::Type> type,
+      Symbol<S, SymKind::Function> method,
+      Symbol<S, SymKind::Type> attribute);
+  std::vector<folly::dynamic>
+  getMethodAttributeArgs(const S& type, const S& method, const S& attribute);
 
   /**
    * Return whether the given type is, for example, a class or interface.
@@ -401,7 +452,12 @@ template <typename S> struct SymbolMap {
     /**
      * Maps between types and the attributes that decorate them.
      */
-    TypeAttributeMap<S> m_typeAttrs;
+    AttributeMap<S, TypeDecl<S>> m_typeAttrs;
+
+    /**
+     * Maps between methods and the attributes that decorate them.
+     */
+    AttributeMap<S, MethodDecl<S>> m_methodAttrs;
 
     /**
      * 40-byte hex strings representing the last-known SHA1 checksums of
@@ -412,8 +468,7 @@ template <typename S> struct SymbolMap {
     /**
      * Parse the given path and store all its data in the map.
      */
-    void
-    updatePath(Path<S> path, FileFacts facts);
+    void updatePath(Path<S> path, FileFacts facts);
 
     /**
      * Remove the given path from the map, along with all data associated with
@@ -505,16 +560,8 @@ private:
 
   const folly::fs::path m_root;
   const std::string m_schemaHash;
-  const folly::fs::path m_dbPath;
+  const DBData m_dbData;
   const SQLite::OpenMode m_dbMode{SQLite::OpenMode::ReadWrite};
-};
-
-struct UpdateDBWorkItem {
-  std::string m_since;
-  std::string m_clock;
-  std::vector<folly::fs::path> m_alteredPaths;
-  std::vector<folly::fs::path> m_deletedPaths;
-  std::vector<FileFacts> m_alteredPathFacts;
 };
 
 } // namespace Facts

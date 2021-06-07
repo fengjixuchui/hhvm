@@ -35,6 +35,7 @@
 #include "hphp/runtime/base/repo-auth-type-array.h"
 #include "hphp/runtime/vm/type-constraint.h"
 
+#include "hphp/hhbbc/hhbbc.h"
 #include "hphp/hhbbc/misc.h"
 
 namespace HPHP { namespace HHBBC {
@@ -49,6 +50,7 @@ struct Context;
 struct ContextHash;
 struct CallContext;
 struct PropertiesInfo;
+struct MethodsInfo;
 
 extern const Type TCell;
 
@@ -87,9 +89,8 @@ enum class Dep : uintptr_t {
   /* This dependency should trigger when the bad initial prop value bit for a
    * class changes */
   PropBadInitialValues = (1u << 3),
-  /* This dependency should trigger when a public static property with a
-   * particular name changes */
-  PublicSPropName = (1u << 4),
+  /* This dependency should trigger when a public static property changes */
+  PublicSProp = (1u << 4),
   /* This dependency means that we refused to do inline analysis on
    * this function due to inline analysis depth. The dependency will
    * trigger if the target function becomes effect-free, or gets a
@@ -101,13 +102,14 @@ enum class Dep : uintptr_t {
 /*
  * A DependencyContext encodes enough of the context to record a dependency - a
  * php::Func, if we're doing private property analysis and its a suitable class,
- * a php::Class, or a public static property with a particular name.
+ * a php::Class, or a public static property.
  */
 
 enum class DependencyContextType : uint16_t {
   Func,
   Class,
-  PropName
+  Prop,
+  FuncFamily
 };
 
 using DependencyContext = CompactTaggedPtr<const void, DependencyContextType>;
@@ -563,14 +565,6 @@ std::string show(const Class&);
  * "update" step in between whole program analysis rounds).
  */
 struct Index {
-
-  struct NonUniqueSymbolException : std::exception {
-    explicit NonUniqueSymbolException(std::string msg) : msg(msg) {}
-    const char* what() const noexcept override { return msg.c_str(); }
-  private:
-    std::string msg;
-  };
-
   /*
    * Create an Index for a php::Program.  Performs some initial
    * analysis of the program.
@@ -622,7 +616,7 @@ struct Index {
    * Throw away data structures that won't be needed after the emit
    * stage.
    */
-  void cleanup_post_emit();
+  void cleanup_post_emit(php::ProgramPtr program);
 
   /*
    * The Index contains a Builder for an ArrayTypeTable.
@@ -824,7 +818,8 @@ struct Index {
    * Return the best known return type for a resolved function, in a
    * context insensitive way.  Returns TInitCell at worst.
    */
-  Type lookup_return_type(Context, res::Func, Dep dep = Dep::ReturnTy) const;
+  Type lookup_return_type(Context, MethodsInfo*, res::Func,
+                          Dep dep = Dep::ReturnTy) const;
 
   /*
    * Return the best known return type for a resolved function, given
@@ -834,20 +829,24 @@ struct Index {
    * order to interpret the callee with these argument types.
    */
   Type lookup_return_type(Context caller,
+                          MethodsInfo*,
                           const CompactVector<Type>& args,
                           const Type& context,
                           res::Func,
                           Dep dep = Dep::ReturnTy) const;
 
   /*
-   * Look up the return type for an unresolved function.  The
-   * interpreter should not use this routine---it's for stats or debug
-   * dumps.
+   * Look up raw return type information for an unresolved
+   * function. This is the best known return type, and the number of
+   * refinements done to that type.
+   *
+   * This function does not register a dependency on the return type
+   * information.
    *
    * Nothing may be writing to the index when this function is used,
    * but concurrent readers are allowed.
    */
-  Type lookup_return_type_raw(const php::Func*) const;
+  std::pair<Type, size_t> lookup_return_type_raw(const php::Func*) const;
 
   /*
    * Return the best known types of a closure's used variables (on
@@ -1004,6 +1003,13 @@ struct Index {
    * done after rewriting initial property values, as that affects the types.
    */
   void init_public_static_prop_types();
+
+  /*
+   * Initialize the initial "may have bad initial value" bit for
+   * properties. By initially setting this before analysis, we save
+   * redundant re-analyzes.
+   */
+  void preinit_bad_initial_prop_values();
 
   /*
    * Refine the types of the class constants defined by an 86cinit,

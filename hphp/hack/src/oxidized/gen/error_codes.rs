@@ -3,12 +3,13 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<b77167dedd7ce48d3b96ef7f56d7b2ba>>
+// @generated SignedSource<<2b3508ee49fb6a423969a8223aa1355e>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
 
 use arena_trait::TrivialDrop;
+use eq_modulo_pos::EqModuloPos;
 use no_pos_hash::NoPosHash;
 use ocamlrep_derive::FromOcamlRep;
 use ocamlrep_derive::FromOcamlRepIn;
@@ -25,6 +26,7 @@ use crate::*;
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -41,6 +43,7 @@ pub enum Parsing {
     XhpParsingError = 1007,
 }
 impl TrivialDrop for Parsing {}
+arena_deserializer::impl_deserialize_in_arena!(Parsing);
 
 #[derive(
     Clone,
@@ -48,6 +51,7 @@ impl TrivialDrop for Parsing {}
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -134,6 +138,7 @@ pub enum Naming {
     InvalidWildcardContext = 2117,
 }
 impl TrivialDrop for Naming {}
+arena_deserializer::impl_deserialize_in_arena!(Naming);
 
 #[derive(
     Clone,
@@ -141,6 +146,7 @@ impl TrivialDrop for Naming {}
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -201,8 +207,11 @@ pub enum NastCheck {
     DynamicallyCallableReified = 3089,
     IllegalContext = 3090,
     ListRvalue = 3092,
+    PartiallyAbstractTypeconstDefinition = 3093,
+    EntryPointGenerics = 3094,
 }
 impl TrivialDrop for NastCheck {}
+arena_deserializer::impl_deserialize_in_arena!(NastCheck);
 
 #[derive(
     Clone,
@@ -210,6 +219,7 @@ impl TrivialDrop for NastCheck {}
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -309,7 +319,6 @@ pub enum Typing {
     VisibilityExtends = 4113,
     WrongExtendKind = 4115,
     GenericUnify = 4116,
-    NullsafeNotNeeded = 4117,
     TrivialStrictEq = 4118,
     VoidUsage = 4119,
     DeclaredCovariant = 4120,
@@ -489,10 +498,10 @@ pub enum Typing {
     AbstractFunctionPointer = 4391,
     UnnecessaryAttribute = 4392,
     InheritedMethodCaseDiffers = 4393,
-    AtomUnknown = 4394,
+    EnumClassLabelUnknown = 4394,
     AtomInvalidParameter = 4395,
-    AtomAsExpression = 4396,
-    AtomInvalidArgument = 4397,
+    EnumClassLabelAsExpression = 4396,
+    EnumClassLabelInvalidArgument = 4397,
     IFCInternalError = 4398,
     IFCExternalContravariant = 4399,
     IFCPolicyMismatch = 4400,
@@ -523,8 +532,24 @@ pub enum Typing {
     PrivateDynamicWrite = 4426,
     IncDecInvalidArgument = 4427,
     ReadonlyClosureCall = 4428,
+    MathInvalidArgument = 4429,
+    TypeconstConcreteConcreteOverride = 4430,
+    PrivateMethCaller = 4431,
+    ProtectedMethCaller = 4432,
+    BadConditionalSupportDynamic = 4433,
+    ReadonlyInvalidAsMut = 4434,
+    InvalidKeysetValue = 4435,
+    UnresolvedTypeVariableProjection = 4436,
+    FunctionPointerWithAtom = 4437,
+    InvalidEchoArgument = 4438,
+    DiamondTraitMethod = 4439,
+    ReifiedStaticMethodInExprTree = 4440,
+    InvariantViolated = 4441,
+    RigidTVarEscape = 4442,
+    StrictEqValueIncompatibleTypes = 4443,
 }
 impl TrivialDrop for Typing {}
+arena_deserializer::impl_deserialize_in_arena!(Typing);
 
 #[derive(
     Clone,
@@ -532,6 +557,7 @@ impl TrivialDrop for Typing {}
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -547,3 +573,4 @@ pub enum Init {
     ForwardCompatibilityBelowMinimum = 8002,
 }
 impl TrivialDrop for Init {}
+arena_deserializer::impl_deserialize_in_arena!(Init);

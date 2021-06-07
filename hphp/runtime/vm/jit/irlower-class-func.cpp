@@ -55,6 +55,17 @@ void cgLdClsName(IRLS& env, const IRInstruction* inst) {
                dst, sizeof(LowStringPtr));
 }
 
+void cgLdLazyCls(IRLS& env, const IRInstruction* inst) {
+  auto const dst = dstLoc(env, inst, 0).reg();
+  auto const src = srcLoc(env, inst, 0).reg();
+  auto& v = vmain(env);
+
+  auto const preclass = v.makeReg();
+  v << load{src[Class::preClassOff()], preclass};
+  emitLdLowPtr(v, preclass[PreClass::nameOffset()],
+               dst, sizeof(LowStringPtr));
+}
+
 void cgLdLazyClsName(IRLS& env, const IRInstruction* inst) {
   auto const dst = dstLoc(env, inst, 0).reg();
   auto const lazyClsData = srcLoc(env, inst, 0).reg();
@@ -64,11 +75,8 @@ void cgLdLazyClsName(IRLS& env, const IRInstruction* inst) {
 
 void cgMethodExists(IRLS& env, const IRInstruction* inst) {
   auto const args = argGroup(env, inst).ssa(0).ssa(1);
-  auto const sync = RO::EvalRaiseOnCaseInsensitiveLookup
-                      ? SyncOptions::Sync : SyncOptions::None;
-
   cgCallHelper(vmain(env), env, CallSpec::direct(methodExistsHelper),
-               callDest(env, inst), sync, args);
+               callDest(env, inst), SyncOptions::None, args);
 }
 
 void cgLdClsMethod(IRLS& env, const IRInstruction* inst) {

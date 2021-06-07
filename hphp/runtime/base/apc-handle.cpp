@@ -15,15 +15,16 @@
 */
 #include "hphp/runtime/base/apc-handle.h"
 
-#include "hphp/runtime/base/apc-typed-value.h"
-#include "hphp/runtime/base/apc-string.h"
 #include "hphp/runtime/base/apc-array.h"
-#include "hphp/runtime/base/apc-object.h"
+#include "hphp/runtime/base/apc-bespoke.h"
+#include "hphp/runtime/base/apc-clsmeth.h"
 #include "hphp/runtime/base/apc-collection.h"
 #include "hphp/runtime/base/apc-named-entity.h"
+#include "hphp/runtime/base/apc-object.h"
 #include "hphp/runtime/base/apc-rclass-meth.h"
 #include "hphp/runtime/base/apc-rfunc.h"
-#include "hphp/runtime/base/apc-clsmeth.h"
+#include "hphp/runtime/base/apc-string.h"
+#include "hphp/runtime/base/apc-typed-value.h"
 #include "hphp/runtime/base/mixed-array.h"
 #include "hphp/runtime/ext/apc/ext_apc.h"
 #include "hphp/runtime/vm/class-meth-data-ref.h"
@@ -35,7 +36,6 @@ namespace HPHP {
 const StaticString s_invalidMethCaller("Cannot store meth_caller in APC");
 
 APCHandle::Pair APCHandle::Create(const_variant_ref source,
-                                  bool serialized,
                                   APCHandleLevel level,
                                   bool unserializeObj) {
   auto const cell = source.asTypedValue();
@@ -102,11 +102,6 @@ APCHandle::Pair APCHandle::Create(const_variant_ref source,
     case KindOfPersistentString:
     case KindOfString: {
       auto const s = val(cell).pstr;
-      if (serialized) {
-        // It is priming, and there might not be the right class definitions
-        // for unserialization.
-        return APCString::MakeSerializedObject(apc_reserialize(String{s}));
-      }
       if (auto const value = APCTypedValue::HandlePersistent(s)) {
         return value;
       }
@@ -193,14 +188,12 @@ Variant APCHandle::toLocalHelper() const {
     case APCKind::PersistentClass:
     case APCKind::LazyClass:
     case APCKind::PersistentClsMeth:
+    case APCKind::StaticArray:
+    case APCKind::StaticBespoke:
     case APCKind::StaticString:
+    case APCKind::UncountedArray:
+    case APCKind::UncountedBespoke:
     case APCKind::UncountedString:
-    case APCKind::StaticVec:
-    case APCKind::UncountedVec:
-    case APCKind::StaticDict:
-    case APCKind::UncountedDict:
-    case APCKind::StaticKeyset:
-    case APCKind::UncountedKeyset:
       not_reached();
 
     case APCKind::FuncEntity:
@@ -279,10 +272,8 @@ void APCHandle::deleteShared() {
       return;
     case APCKind::Int:
     case APCKind::Double:
+    case APCKind::StaticArray:
     case APCKind::StaticString:
-    case APCKind::StaticVec:
-    case APCKind::StaticDict:
-    case APCKind::StaticKeyset:
     case APCKind::PersistentFunc:
     case APCKind::PersistentClass:
     case APCKind::LazyClass:
@@ -334,9 +325,12 @@ void APCHandle::deleteShared() {
       APCRClsMeth::Delete(this);
       return;
 
-    case APCKind::UncountedVec:
-    case APCKind::UncountedDict:
-    case APCKind::UncountedKeyset:
+    case APCKind::StaticBespoke:
+      freeAPCBespoke(APCTypedValue::fromHandle(this));
+      return;
+
+    case APCKind::UncountedArray:
+    case APCKind::UncountedBespoke:
     case APCKind::UncountedString:
       assertx(false);
       return;
@@ -378,17 +372,13 @@ bool APCHandle::checkInvariants() const {
     case APCKind::UncountedString:
       assertx(m_type == KindOfPersistentString);
       return true;
-    case APCKind::StaticVec:
-    case APCKind::UncountedVec:
-      assertx(m_type == KindOfPersistentVec);
-      return true;
-    case APCKind::StaticDict:
-    case APCKind::UncountedDict:
-      assertx(m_type == KindOfPersistentDict);
-      return true;
-    case APCKind::StaticKeyset:
-    case APCKind::UncountedKeyset:
-      assertx(m_type == KindOfPersistentKeyset);
+    case APCKind::StaticArray:
+    case APCKind::StaticBespoke:
+    case APCKind::UncountedArray:
+    case APCKind::UncountedBespoke:
+      assertx(m_type == KindOfPersistentVec ||
+              m_type == KindOfPersistentDict ||
+              m_type == KindOfPersistentKeyset);
       return true;
     case APCKind::FuncEntity:
     case APCKind::ClassEntity:

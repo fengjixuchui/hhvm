@@ -170,8 +170,6 @@ SSATmp* opt_is_subclass_of(IRGS& env, const ParamPrep& params) {
 }
 
 SSATmp* opt_method_exists(IRGS& env, const ParamPrep& params) {
-  // We might need to raise a notice, so lets not optimize
-  if (RO::EvalRaiseOnCaseInsensitiveLookup) return nullptr;
   if (params.size() != 2) return nullptr;
 
   auto const meth = params[1].value;
@@ -729,7 +727,8 @@ SSATmp* opt_foldable(IRGS& env,
     SCOPE_EXIT{ RID().setJitFolding(false); };
 
     auto retVal = g_context->invokeFunc(func, args.toArray(), nullptr,
-                                        const_cast<Class*>(cls), false);
+                                        const_cast<Class*>(cls),
+                                        RuntimeCoeffects::fixme(), false);
     SCOPE_EXIT { tvDecRefGen(retVal); };
     assertx(tvIsPlausible(retVal));
 
@@ -1834,7 +1833,7 @@ SSATmp* builtinCall(IRGS& env,
   // so there's nothing for FrameState to do.
   auto const retOff = [&] () -> folly::Optional<IRSPRelOffset> {
     if (params.forNativeImpl && !catchMaker.inlining()) {
-      assertx(spOffBCFromFP(env) == FPInvOffset{callee->numSlotsInFrame()});
+      assertx(spOffBCFromStackBase(env) == spOffEmpty(env));
       return folly::none;
     }
     return offsetFromIRSP(

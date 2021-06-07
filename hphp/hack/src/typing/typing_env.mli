@@ -31,18 +31,48 @@ val get_ctx : env -> Provider_context.t
 
 val get_tracing_info : env -> Decl_counters.tracing_info option
 
+(** Functions related to type variable scopes *)
+
+(**
+  Open a new "type variable" scope and record this in the environment.
+  Within this scope, you can
+  - generate fresh type variables, using [fresh_type_X] functions
+  - query the currently fresh type variables, using [get_current_tyvars]
+  - close the scope
+
+  The usual usage pattern within type inference is:
+
+  1. Open a type variable scope using [open_tyvars] before checking an AST node.
+
+  2. Check the AST node; generate fresh type variables as necessary; make calls
+     to subtyping functions such as [Typing_ops.sub_type] that will record constraints
+     on those type variables.
+
+  3. Call [set_tyvar_variance] on the type of the expression to correctly set the
+     variance of the type variables.
+
+  4. Call [Typing_solver.close_tyvars_and_solve] to solve type variables that can
+     be solved immediately, and close the type variable scope.
+*)
+val open_tyvars : env -> Pos.t -> env
+
+(** Generate a fresh type variable type with variance not yet recorded *)
 val fresh_type : env -> Pos.t -> env * locl_ty
 
-(** Same as fresh_type but takes a specific reason as parameter. *)
+(** Generate a fresh type variable type with optional variance and
+    the given reason information *)
 val fresh_type_reason :
   ?variance:Ast_defs.variance -> env -> Pos.t -> Reason.t -> env * locl_ty
 
-val fresh_invariant_type_var : env -> Pos.t -> env * locl_ty
+(** Generate a fresh type variable type that is assumed to be invariant, so
+    it won't be solved automatically at the end of the scope *)
+val fresh_type_invariant : env -> Pos.t -> env * locl_ty
 
-val open_tyvars : env -> Pos.t -> env
-
+(** What type variables are fresh in the current scope? *)
 val get_current_tyvars : env -> Ident.t list
 
+(** Close the current type variable scope.
+    You might want to call [Typing_solver.close_tyvars_and_solve] instead. *)
 val close_tyvars : env -> env
 
 val add : env -> ?tyvar_pos:Pos.t -> int -> locl_ty -> env
@@ -75,6 +105,9 @@ val empty :
   env
 
 val is_typedef : env -> type_key -> bool
+
+val is_typedef_visible :
+  env -> ?expand_visible_newtype:bool -> typedef_type -> bool
 
 val get_enum : env -> type_key -> class_decl option
 
@@ -157,6 +190,10 @@ val with_origin2 :
 
 val with_in_expr_tree : env -> bool -> (env -> env * 'a * 'b) -> env * 'a * 'b
 
+val is_in_expr_tree : env -> bool
+
+val set_in_expr_tree : env -> bool -> env
+
 val is_static : env -> bool
 
 val get_val_kind : env -> Typing_defs.val_kind
@@ -205,6 +242,10 @@ val invalid_type_hint_assert_primary_pos_in_current_decl :
   env -> Errors.error_from_reasons_callback
 
 val set_fn_kind : env -> Ast_defs.fun_kind -> env
+
+val set_module : env -> string option -> env
+
+val get_module : env -> string option
 
 val set_self : env -> string -> locl_ty -> env
 
@@ -302,6 +343,8 @@ val get_reified : env -> string -> Aast.reify_kind
 val get_enforceable : env -> string -> bool
 
 val get_newable : env -> string -> bool
+
+val get_require_dynamic : env -> string -> bool
 
 val add_upper_bound :
   ?intersect:(locl_ty -> locl_ty list -> locl_ty list) ->
@@ -417,11 +460,14 @@ val copy_tyvar_from_genv_to_env :
 
 val get_all_tyvars : env -> Ident.t list
 
+val fresh_param_name : env -> string -> env * string
+
 val add_fresh_generic_parameter_by_kind :
-  env -> string -> Typing_kinding_defs.kind -> env * string
+  env -> Pos_or_decl.t -> string -> Typing_kinding_defs.kind -> env * string
 
 val add_fresh_generic_parameter :
   env ->
+  Pos_or_decl.t ->
   string ->
   reified:Aast.reify_kind ->
   enforceable:bool ->
@@ -448,7 +494,7 @@ val env_with_locals : env -> Typing_per_cont_env.t -> env
 
 val reinitialize_locals : env -> env
 
-val closure : local_env -> env -> (env -> env * 'a) -> env * 'a
+val closure : env -> (env -> env * 'a) -> env * 'a
 
 val in_try : env -> (env -> env * 'a) -> env * 'a
 

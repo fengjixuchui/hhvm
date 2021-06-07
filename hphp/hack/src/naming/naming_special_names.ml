@@ -74,13 +74,19 @@ module Collections = struct
   (* concrete classes *)
   let cVector = "\\HH\\Vector"
 
+  let cMutableVector = "\\HH\\MutableVector"
+
   let cImmVector = "\\HH\\ImmVector"
 
   let cSet = "\\HH\\Set"
 
+  let cMutableSet = "\\HH\\MutableSet"
+
   let cImmSet = "\\HH\\ImmSet"
 
   let cMap = "\\HH\\Map"
+
+  let cMutableMap = "\\HH\\MutableMap"
 
   let cImmMap = "\\HH\\ImmMap"
 
@@ -247,6 +253,8 @@ module UserAttributes = struct
 
   let uaMemoizeLSB = "__MemoizeLSB"
 
+  let uaPolicyShardedMemoize = "__PolicyShardedMemoize"
+
   let uaPHPStdLib = "__PHPStdLib"
 
   let uaAcceptDisposable = "__AcceptDisposable"
@@ -307,7 +315,11 @@ module UserAttributes = struct
 
   let uaAtom = "__Atom"
 
-  let uaSoundDynamicCallable = "__SoundDynamicCallable"
+  let uaSupportDynamicType = "__SupportDynamicType"
+
+  let uaNoRequireDynamic = "__NoRequireDynamic"
+
+  let uaModule = "__Module"
 
   let as_map =
     AttributeKinds.(
@@ -320,6 +332,7 @@ module UserAttributes = struct
           (uaEntryPoint, [fn]);
           (uaMemoize, [fn; mthd]);
           (uaMemoizeLSB, [mthd]);
+          (uaPolicyShardedMemoize, [fn; mthd]);
           (uaPHPStdLib, [cls; fn; mthd]);
           (uaAcceptDisposable, [parameter]);
           (uaReturnDisposable, [fn; mthd; lambda]);
@@ -345,7 +358,9 @@ module UserAttributes = struct
           (uaExternal, [parameter]);
           (uaCanCall, [parameter]);
           (uaAtom, [parameter]);
-          (uaSoundDynamicCallable, [cls; mthd]);
+          (uaSupportDynamicType, [fn; cls; mthd]);
+          (uaNoRequireDynamic, [typeparam]);
+          (uaModule, [fn; cls; file; typealias; enum; enumcls]);
         ])
 
   (* These are names which are allowed in the systemlib but not in normal programs *)
@@ -364,14 +379,12 @@ end
 
 (* Tested before \\-prepending name-canonicalization *)
 module SpecialFunctions = struct
-  let tuple = "tuple" (* pseudo-function *)
-
   let echo = "echo" (* pseudo-function *)
 
   let hhas_adata = "__hhas_adata"
 
   let is_special_function =
-    let all_special_functions = HashSet.of_list [tuple; echo; hhas_adata] in
+    let all_special_functions = HashSet.of_list [echo; hhas_adata] in
     (fun x -> HashSet.mem all_special_functions x)
 end
 
@@ -756,6 +769,8 @@ module UnstableFeatures = struct
   let readonly = "readonly"
 
   let expression_trees = "expression_trees"
+
+  let modules = "modules"
 end
 
 module Coeffects = struct
@@ -768,6 +783,12 @@ module Coeffects = struct
   let unsafe_contexts = contexts ^ "\\Unsafe"
 end
 
+module Readonly = struct
+  let prefix = "\\HH\\Readonly\\"
+
+  let as_mut = prefix ^ "as_mut"
+end
+
 module Capabilities = struct
   let defaults = Coeffects.contexts ^ "\\defaults"
 
@@ -775,7 +796,9 @@ module Capabilities = struct
 
   let writeProperty = prefix ^ "WriteProperty"
 
-  let accessStaticVariable = prefix ^ "AccessStaticVariable"
+  let accessGlobals = prefix ^ "AccessGlobals"
+
+  let readGlobals = prefix ^ "ReadGlobals"
 
   let io = prefix ^ "IO"
 

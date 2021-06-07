@@ -171,7 +171,7 @@ void cgCall(IRLS& env, const IRInstruction* inst) {
   auto const marker = inst->marker();
   auto const fixupBcOff = marker.fixupBcOff();
   auto const fixupSpOff =
-    marker.spOff() - extra->numInputs() - kNumActRecCells - extra->numOut;
+    marker.bcSPOff() - extra->numInputs() - kNumActRecCells - extra->numOut;
   v << syncpoint{Fixup::direct(fixupBcOff, fixupSpOff)};
   v << unwind{done, label(env, inst->taken())};
   v = done;
@@ -472,7 +472,7 @@ void cgCheckInOuts(IRLS& env, const IRInstruction* inst)  {
     } else {
       auto const shared = v.makeReg();
       v << load{func[Func::sharedOff()], shared};
-      v << load{shared[Func::sharedInOutBitPtrOff()], bitsPtr};
+      v << load{shared[Func::extSharedInOutBitPtrOff()], bitsPtr};
       bitsOff -= sizeof(uint64_t);
     }
 

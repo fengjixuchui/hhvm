@@ -125,6 +125,9 @@ let complex_coercion = GlobalOptions.tco_complex_coercion
 let disable_partially_abstract_typeconsts =
   GlobalOptions.tco_disable_partially_abstract_typeconsts
 
+let disallow_partially_abstract_typeconst_definitions =
+  GlobalOptions.tco_disallow_partially_abstract_typeconst_definitions
+
 let check_xhp_attribute = GlobalOptions.tco_check_xhp_attribute
 
 let check_redundant_generics = GlobalOptions.tco_check_redundant_generics
@@ -186,9 +189,22 @@ let set_tco_enable_expression_trees =
 
 let expression_trees_enabled = GlobalOptions.expression_trees_enabled
 
+let enable_modules = GlobalOptions.tco_enable_modules
+
+let set_modules = GlobalOptions.set_tco_enable_modules
+
 let allowed_expression_tree_visitors =
   GlobalOptions.allowed_expression_tree_visitors
 
-let bitwise_math_new_code = GlobalOptions.tco_bitwise_math_new_code
+let math_new_code = GlobalOptions.tco_math_new_code
 
-let inc_dec_new_code = GlobalOptions.tco_inc_dec_new_code
+let typeconst_concrete_concrete_error =
+  GlobalOptions.tco_typeconst_concrete_concrete_error
+
+let meth_caller_only_public_visibility =
+  GlobalOptions.tco_meth_caller_only_public_visibility
+
+let require_extends_implements_ancestors =
+  GlobalOptions.tco_require_extends_implements_ancestors
+
+let strict_value_equality = GlobalOptions.tco_strict_value_equality

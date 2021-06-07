@@ -159,15 +159,7 @@ Variant BaseMap::firstValue() {
 
 Variant BaseMap::lastKey() {
   if (!m_size) return uninit_variant;
-  // TODO Task# 4281431: If nthElmPos(n) is optimized to
-  // walk backward from the end when n > m_size/2, then
-  // we could use that here instead of having to use a
-  // manual while loop.
-  uint32_t pos = posLimit() - 1;
-  while (isTombstone(pos)) {
-    assertx(pos > 0);
-    --pos;
-  }
+  uint32_t pos = nthElmPos(m_size - 1);
   if (data()[pos].hasIntKey()) {
     return data()[pos].ikey;
   }
@@ -177,15 +169,7 @@ Variant BaseMap::lastKey() {
 
 Variant BaseMap::lastValue() {
   if (!m_size) return uninit_variant;
-  // TODO Task# 4281431: If nthElmPos(n) is optimized to
-  // walk backward from the end when n > m_size/2, then
-  // we could use that here instead of having to use a
-  // manual while loop.
-  uint32_t pos = posLimit() - 1;
-  while (isTombstone(pos)) {
-    assertx(pos > 0);
-    --pos;
-  }
+  uint32_t pos = nthElmPos(m_size - 1);
   return tvAsCVarRef(&data()[pos].data);
 }
 
@@ -210,11 +194,7 @@ Variant BaseMap::pop() {
     SystemLib::throwInvalidOperationExceptionObject("Cannot pop empty Map");
   }
   mutate();
-  auto e = elmLimit() - 1;
-  for (;; --e) {
-    assertx(e >= data());
-    if (!isTombstone(e)) break;
-  }
+  auto e = data() + nthElmPos(m_size - 1);
   Variant ret = tvAsCVarRef(&e->data);
   auto h = e->hash();
   auto ei = e->hasIntKey() ? findForRemove(e->ikey, h) :
@@ -228,11 +208,7 @@ Variant BaseMap::popFront() {
     SystemLib::throwInvalidOperationExceptionObject("Cannot pop empty Map");
   }
   mutate();
-  auto e = data();
-  for (;; ++e) {
-    assertx(e != elmLimit());
-    if (!isTombstone(e)) break;
-  }
+  auto e = data() + nthElmPos(0);
   Variant ret = tvAsCVarRef(&e->data);
   auto h = e->hash();
   auto ei = e->hasIntKey() ? findForRemove(e->ikey, h) :
@@ -243,45 +219,16 @@ Variant BaseMap::popFront() {
 
 void BaseMap::setImpl(int64_t k, TypedValue tv) {
   assertx(canMutateBuffer());
-  auto h = hash_int64(k);
-retry:
-  auto p = findForInsert(k, h);
-  assertx(MixedArray::isValidIns(p));
-  if (MixedArray::isValidPos(*p)) {
-    auto& e = data()[(int32_t)*p];
-    tvMove(tv, e.data);
-    return;
-  }
-  if (UNLIKELY(isFull())) {
-    makeRoom();
-    goto retry;
-  }
-  auto& e = allocElm(p);
-  tvCopy(tv, e.data);
-  e.setIntKey(k, h);
-  arrayData()->mutableKeyTypes()->recordInt();
-  updateNextKI(k);
+  auto ad = MixedArray::SetIntMove(arrayData(), k, tv);
+  setArrayData(MixedArray::asMixed(ad));
+  m_size = arrayData()->m_size;
 }
 
 void BaseMap::setImpl(StringData* key, TypedValue tv) {
   assertx(canMutateBuffer());
-retry:
-  strhash_t h = key->hash();
-  auto p = findForInsert(key, h);
-  assertx(MixedArray::isValidIns(p));
-  if (MixedArray::isValidPos(*p)) {
-    auto& e = data()[(int32_t)*p];
-    tvMove(tv, e.data);
-    return;
-  }
-  if (UNLIKELY(isFull())) {
-    makeRoom();
-    goto retry;
-  }
-  auto& e = allocElm(p);
-  tvCopy(tv, e.data);
-  e.setStrKey(key, h);
-  arrayData()->mutableKeyTypes()->recordStr(key);
+  auto ad = MixedArray::SetStrMove(arrayData(), key, tv);
+  setArrayData(MixedArray::asMixed(ad));
+  m_size = arrayData()->m_size;
 }
 
 void BaseMap::set(int64_t k, TypedValue val) {

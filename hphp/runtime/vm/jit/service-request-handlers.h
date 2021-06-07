@@ -40,6 +40,23 @@ namespace svcreq {
 TCA handleServiceRequest(ReqInfo& info) noexcept;
 
 /*
+ * Handle a request to retranslate the code at the given current location.
+ * Reached from the last translation at the same SrcKey when no existing
+ * translations support the incoming types.
+ *
+ * The smash targets of a retranslate are stored in SrcRec::m_tailFallbackJumps.
+ */
+TCA handleRetranslate(Offset bcOff, SBInvOffset spOff) noexcept;
+
+/*
+ * Handle a request to retranslate the current function, leveraging profiling
+ * data to produce a set of larger, more optimized translations. Only used when
+ * PGO is enabled. Execution will resume at `bcOff' whether or not retranslation
+ * is successful.
+ */
+TCA handleRetranslateOpt(Offset bcOff, SBInvOffset spOff) noexcept;
+
+/*
  * Handle a situation where the translated code in the TC executes a return
  * for a frame that was pushed by the interpreter, i.e. there is no TCA to
  * return to.

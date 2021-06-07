@@ -8,7 +8,6 @@
  *)
 
 open Hh_prelude
-module MC = MonitorConnection
 
 type 'env handle_command_result =
   (* Command was fully handled, and this is the new environment. *)
@@ -39,27 +38,6 @@ let shutdown_client (_ic, oc) =
     Unix.shutdown cli Unix.SHUTDOWN_ALL;
     Out_channel.close oc
   with _ -> ()
-
-let hh_monitor_config root =
-  ServerMonitorUtils.
-    {
-      lock_file = ServerFiles.lock_file root;
-      socket_file = ServerFiles.socket_file root;
-      server_log_file = ServerFiles.log_link root;
-      monitor_log_file = ServerFiles.monitor_log_link root;
-    }
-
-let shut_down_server ~tracker root =
-  MC.connect_and_shut_down ~tracker (hh_monitor_config root)
-
-let connect_to_monitor ~tracker ~timeout root =
-  MC.connect_once ~tracker ~timeout (hh_monitor_config root)
-
-let server_progress ~tracker ~timeout root =
-  MC.connect_to_monitor_and_get_server_progress
-    ~tracker
-    ~timeout
-    (hh_monitor_config root)
 
 let log_and_get_sharedmem_load_telemetry () : Telemetry.t =
   let telemetry = Telemetry.create () in
@@ -204,3 +182,42 @@ let with_exit_on_exception f =
   with exn ->
     let stack = Utils.Callstack (Printexc.get_backtrace ()) in
     exit_on_exception exn ~stack
+
+(* Return all the files that we need to typecheck *)
+let make_next
+    ?(hhi_filter = FindUtils.is_hack)
+    ~(indexer : unit -> string list)
+    ~(extra_roots : Path.t list) : Relative_path.t list Bucket.next =
+  let next_files_root =
+    Utils.compose (List.map ~f:Relative_path.(create Root)) indexer
+  in
+  let hhi_root = Hhi.get_hhi_root () in
+  let next_files_hhi =
+    Utils.compose
+      (List.map ~f:Relative_path.(create Hhi))
+      (Find.make_next_files ~name:"hhi" ~filter:hhi_filter hhi_root)
+  in
+  let rec concat_next_files l () =
+    match l with
+    | [] -> []
+    | hd :: tl ->
+      begin
+        match hd () with
+        | [] -> concat_next_files tl ()
+        | x -> x
+      end
+  in
+  let next_files_extra =
+    List.map
+      ~f:(fun root ->
+        Utils.compose
+          (List.map ~f:Relative_path.create_detect_prefix)
+          (Find.make_next_files ~filter:FindUtils.file_filter root))
+      extra_roots
+    |> concat_next_files
+  in
+  fun () ->
+    let next =
+      concat_next_files [next_files_hhi; next_files_extra; next_files_root] ()
+    in
+    Bucket.of_list next

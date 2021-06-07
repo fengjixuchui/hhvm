@@ -63,6 +63,7 @@ let to_class_type
         dc_is_xhp;
         dc_has_xhp_keyword;
         dc_is_disposable;
+        dc_module;
         dc_name;
         dc_pos;
         dc_tparams;
@@ -76,12 +77,13 @@ let to_class_type
         dc_smethods;
         dc_construct;
         dc_ancestors;
-        dc_implements_dynamic;
+        dc_support_dynamic_type;
         dc_req_ancestors;
         dc_req_ancestors_extends;
         dc_extends;
         dc_sealed_whitelist;
         dc_xhp_attr_deps = _;
+        dc_xhp_enum_values;
         dc_enum_type;
         dc_decl_errors;
         dc_condition_types = _;
@@ -172,6 +174,7 @@ let to_class_type
     tc_is_xhp = dc_is_xhp;
     tc_has_xhp_keyword = dc_has_xhp_keyword;
     tc_is_disposable = dc_is_disposable;
+    tc_module = dc_module;
     tc_name = dc_name;
     tc_pos = dc_pos;
     tc_tparams = dc_tparams;
@@ -184,11 +187,12 @@ let to_class_type
     tc_smethods = ft_map_elements find_static_method dc_smethods;
     tc_construct;
     tc_ancestors = dc_ancestors;
-    tc_implements_dynamic = dc_implements_dynamic;
+    tc_support_dynamic_type = dc_support_dynamic_type;
     tc_req_ancestors = dc_req_ancestors;
     tc_req_ancestors_extends = dc_req_ancestors_extends;
     tc_extends = dc_extends;
     tc_enum_type = dc_enum_type;
     tc_sealed_whitelist = dc_sealed_whitelist;
+    tc_xhp_enum_values = dc_xhp_enum_values;
     tc_decl_errors = dc_decl_errors;
   }

@@ -43,7 +43,14 @@ let member_type env member_ce =
              (Cls.enum_type tc)
              Option.(
                Cls.get_typeconst tc Naming_special_names.FB.tInner >>= fun t ->
-               t.ttc_type)
+               (* TODO(T88552052) This code was taking the default of abstract
+                * type constants as a value *)
+               match t.ttc_kind with
+               | TCConcrete { tc_type = t }
+               | TCPartiallyAbstract { patc_type = t; _ }
+               | TCAbstract { atc_default = Some t; _ } ->
+                 Some t
+               | TCAbstract { atc_default = None; _ } -> None)
              (Cls.get_ancestor tc)
          with
         | None -> default_result
@@ -130,7 +137,14 @@ let enum_class_check env tc consts const_types =
       (Cls.enum_type tc)
       Option.(
         Cls.get_typeconst tc Naming_special_names.FB.tInner >>= fun t ->
-        t.ttc_type)
+        (* TODO(T88552052) This code was taking the default of abstract
+         * type constants as a value *)
+        match t.ttc_kind with
+        | TCConcrete { tc_type = t }
+        | TCPartiallyAbstract { patc_type = t; _ }
+        | TCAbstract { atc_default = Some t; _ } ->
+          Some t
+        | TCAbstract { atc_default = None; _ } -> None)
       (Cls.get_ancestor tc)
   in
   match enum_info_opt with
@@ -142,14 +156,12 @@ let enum_class_check env tc consts const_types =
         interface = ty_interface;
       } ->
     let (env, ty_exp) =
-      Phase.localize_with_self env ~ignore_errors:false ty_exp
+      Phase.localize_no_subst env ~ignore_errors:false ty_exp
     in
     let (env, ty_interface) =
       match ty_interface with
       | Some dty ->
-        let (env, lty) =
-          Phase.localize_with_self env ~ignore_errors:false dty
-        in
+        let (env, lty) = Phase.localize_no_subst env ~ignore_errors:false dty in
         (env, Some lty)
       | None -> (env, None)
     in
@@ -168,7 +180,7 @@ let enum_class_check env tc consts const_types =
       match ty_constraint with
       | None -> env
       | Some ty ->
-        let (env, ty) = Phase.localize_with_self env ~ignore_errors:false ty in
+        let (env, ty) = Phase.localize_no_subst env ~ignore_errors:false ty in
         let env =
           enum_check_type
             env

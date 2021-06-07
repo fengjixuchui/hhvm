@@ -110,6 +110,9 @@ using LocalState = LocationState<LTag::Local>;
 using StackState = LocationState<LTag::Stack>;
 using MBaseState = LocationState<LTag::MBase>;
 
+using LocalStateMap = jit::hash_map<uint32_t,LocalState>;
+using StackStateMap = jit::hash_map<SBInvOffset,StackState,SBInvOffset::Hash>;
+
 /*
  * MBRState tracks the value and type of the member base register pointer.
  *
@@ -152,12 +155,12 @@ struct FrameState {
    * - `irSPOff` is an offset from the logical stack base to `spValue`
    */
   SSATmp* spValue{nullptr};
-  FPInvOffset irSPOff{0};
+  SBInvOffset irSPOff{0};
 
   /*
    * Depth of the in-memory eval stack.
    */
-  FPInvOffset bcSPOff{0};
+  SBInvOffset bcSPOff{0};
 
   /*
    * Tracks whether we are currently in the stublogue context. This is set in
@@ -181,17 +184,21 @@ struct FrameState {
   bool stackModified{false};
 
   /*
-   * The values in the eval stack in memory, either above or below the current
-   * spValue pointer.  These are indexed relative to the base of the eval stack
-   * for the whole function.
+   * Whether the tracking of all locals has been cleared since the unit's entry.
    */
-  jit::vector<StackState> stack;
+  bool localsCleared{false};
 
   /*
-   * Vector of local variable information; sized for numLocals on the curFunc
-   * (if the state is initialized).
+   * The values in the eval stack in memory, either above or below the current
+   * spValue pointer.  This is keyed by the offset to the base of the eval stack
+   * for the whole function (SBInvOffset).
    */
-  jit::vector<LocalState> locals;
+  StackStateMap stack;
+
+  /*
+   * Maps the local ids to local variable information.
+   */
+  LocalStateMap locals;
 
   /*
    * Values and types of the member base register and its pointee.
@@ -314,8 +321,8 @@ struct FrameStateMgr final {
   SSATmp*     fp()                const { return cur().fpValue; }
   SSATmp*     sp()                const { return cur().spValue; }
   SSATmp*     ctx()               const { return cur().ctx; }
-  FPInvOffset irSPOff()           const { return cur().irSPOff; }
-  FPInvOffset bcSPOff()           const { return cur().bcSPOff; }
+  SBInvOffset irSPOff()           const { return cur().irSPOff; }
+  SBInvOffset bcSPOff()           const { return cur().bcSPOff; }
   bool        stublogue()         const { return cur().stublogue; }
   bool        stackModified()     const { return cur().stackModified; }
 
@@ -329,7 +336,7 @@ struct FrameStateMgr final {
    *
    * @requires: inlineDepth() > 0
    */
-  FPInvOffset callerIRSPOff() const {
+  SBInvOffset callerIRSPOff() const {
     return caller().irSPOff;
   }
 
@@ -340,7 +347,7 @@ struct FrameStateMgr final {
    * frame.
    */
   void resetStackModified()             { cur().stackModified = false; }
-  void setBCSPOff(FPInvOffset o)        { cur().bcSPOff = o; }
+  void setBCSPOff(SBInvOffset o)        { cur().bcSPOff = o; }
   void incBCSPDepth(int32_t n = 1)      { cur().bcSPOff += n; }
   void decBCSPDepth(int32_t n = 1)      { cur().bcSPOff -= n; }
 
@@ -348,9 +355,20 @@ struct FrameStateMgr final {
    * Return the LocationState for local `id' or stack element at `off' in the
    * most-inlined frame.
    */
-  const LocalState& local(uint32_t id) const;
-  const StackState& stack(IRSPRelOffset off) const;
-  const StackState& stack(FPInvOffset off) const;
+  LocalState local(uint32_t id) const;
+  StackState stack(IRSPRelOffset off) const;
+  StackState stack(SBInvOffset off) const;
+
+  /*
+   * Return whether the given location is currently being tracked.
+   */
+  bool tracked(Location l) const;
+
+  /*
+   * Return whether the state of the locals have even been cleared since the
+   * unit's entry.
+   */
+  bool localsCleared() const { return cur().localsCleared; }
 
   /*
    * Generic accessors for LocationState members.
@@ -358,7 +376,7 @@ struct FrameStateMgr final {
   SSATmp* valueOf(Location l) const;
   Type typeOf(Location l) const;
   Type predictedTypeOf(Location l) const;
-  const TypeSourceSet& typeSrcsOf(Location l) const;
+  TypeSourceSet typeSrcsOf(Location l) const;
 
   /*
    * Return tracked state for the member base register.
@@ -411,7 +429,7 @@ private:
   LocalState& localState(uint32_t);
   LocalState& localState(Location l); // @requires: l.tag() == LTag::Local
   StackState& stackState(IRSPRelOffset);
-  StackState& stackState(FPInvOffset);
+  StackState& stackState(SBInvOffset);
   StackState& stackState(Location l); // @requires: l.tag() == LTag::Stack
 
   /*
@@ -420,7 +438,7 @@ private:
   bool checkInvariants() const;
   void updateMInstr(const IRInstruction*);
   void updateMBase(const IRInstruction*);
-  void initStack(SSATmp* sp, FPInvOffset irSPOff, FPInvOffset bcSPOff);
+  void initStack(SSATmp* sp, SBInvOffset irSPOff, SBInvOffset bcSPOff);
   void uninitStack();
   void trackInlineCall(const IRInstruction* inst);
   void trackInlineReturn();
@@ -494,4 +512,3 @@ private:
 ///////////////////////////////////////////////////////////////////////////////
 
 }}}
-

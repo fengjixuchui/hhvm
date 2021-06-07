@@ -171,10 +171,13 @@ let print_textEdit (edit : TextEdit.t) : json =
     JSON_Object
       [("range", print_range edit.range); ("newText", JSON_String edit.newText)])
 
+let print_textEdits (r : TextEdit.t list) : json =
+  JSON_Array (List.map r ~f:print_textEdit)
+
 let print_workspaceEdit (r : WorkspaceEdit.t) : json =
   WorkspaceEdit.(
     let print_workspace_edit_changes (uri, text_edits) =
-      (uri, JSON_Array (List.map ~f:print_textEdit text_edits))
+      (uri, print_textEdits text_edits)
     in
     JSON_Object
       [
@@ -726,7 +729,7 @@ let print_completionItem (item : Completion.completionItem) : json =
           | None
           | Some [] ->
             None
-          | Some l -> Some (JSON_Array (List.map l ~f:print_textEdit)) );
+          | Some l -> Some (print_textEdits l) );
         ("command", Option.map item.command print_command);
         ("data", item.data);
       ])
@@ -851,7 +854,7 @@ let parse_documentFormatting (params : json option) : DocumentFormatting.params
   }
 
 let print_documentFormatting (r : DocumentFormatting.result) : json =
-  JSON_Array (List.map r ~f:print_textEdit)
+  print_textEdits r
 
 let parse_documentRangeFormatting (params : json option) :
     DocumentRangeFormatting.params =
@@ -863,7 +866,7 @@ let parse_documentRangeFormatting (params : json option) :
   }
 
 let print_documentRangeFormatting (r : DocumentRangeFormatting.result) : json =
-  JSON_Array (List.map r ~f:print_textEdit)
+  print_textEdits r
 
 let parse_documentOnTypeFormatting (params : json option) :
     DocumentOnTypeFormatting.params =
@@ -877,7 +880,18 @@ let parse_documentOnTypeFormatting (params : json option) :
 
 let print_documentOnTypeFormatting (r : DocumentOnTypeFormatting.result) : json
     =
-  JSON_Array (List.map r ~f:print_textEdit)
+  print_textEdits r
+
+let parse_willSaveWaitUntil (params : json option) : WillSaveWaitUntil.params =
+  let open WillSaveWaitUntil in
+  {
+    textDocument =
+      Jget.obj_exn params "textDocument" |> parse_textDocumentIdentifier;
+    reason =
+      Jget.int_exn params "reason"
+      |> textDocumentSaveReason_of_enum
+      |> Option.value ~default:Manual;
+  }
 
 (************************************************************************)
 
@@ -1252,6 +1266,7 @@ let get_uri_opt (m : lsp_message) : Lsp.documentUri option =
   | RequestMessage (_, ShowMessageRequestRequest _)
   | RequestMessage (_, ShowStatusRequestFB _)
   | RequestMessage (_, RageRequestFB)
+  | RequestMessage (_, WillSaveWaitUntilRequest _)
   | NotificationMessage ExitNotification
   | NotificationMessage (CancelRequestNotification _)
   | NotificationMessage (LogMessageNotification _)
@@ -1296,6 +1311,7 @@ let request_name_to_string (request : lsp_request) : string =
   | HackTestStartServerRequestFB -> "$test/startHhServer"
   | HackTestStopServerRequestFB -> "$test/stopHhServer"
   | HackTestShutdownServerlessRequestFB -> "$test/shutdownServerlessIde"
+  | WillSaveWaitUntilRequest _ -> "textDocument/willSaveWaitUntil"
   | UnknownRequest (method_, _params) -> method_
 
 let result_name_to_string (result : lsp_result) : string =
@@ -1328,6 +1344,7 @@ let result_name_to_string (result : lsp_result) : string =
   | HackTestStopServerResultFB -> "$test/stopHhServer"
   | HackTestShutdownServerlessResultFB -> "$test/shutdownServerlessIde"
   | RegisterCapabilityRequestResult -> "client/registerCapability"
+  | WillSaveWaitUntilResult _ -> "textDocument/willSaveWaitUntil"
   | ErrorResult e -> "ERROR/" ^ e.Error.message
 
 let notification_name_to_string (notification : lsp_notification) : string =
@@ -1421,6 +1438,8 @@ let parse_lsp_request (method_ : string) (params : json option) : lsp_request =
   | "$test/startHhServer" -> HackTestStartServerRequestFB
   | "$test/stopHhServer" -> HackTestStopServerRequestFB
   | "$test/shutdownServerlessIde" -> HackTestShutdownServerlessRequestFB
+  | "textDocument/willSaveWaitUntil" ->
+    WillSaveWaitUntilRequest (parse_willSaveWaitUntil params)
   | "window/showMessageRequest"
   | "window/showStatus"
   | _ ->
@@ -1486,6 +1505,7 @@ let parse_lsp_result (request : lsp_request) (result : json) : lsp_result =
   | HackTestStartServerRequestFB
   | HackTestStopServerRequestFB
   | HackTestShutdownServerlessRequestFB
+  | WillSaveWaitUntilRequest _
   | UnknownRequest _ ->
     raise
       (Error.LspException
@@ -1555,6 +1575,7 @@ let print_lsp_request (id : lsp_id) (request : lsp_request) : json =
     | HackTestStartServerRequestFB
     | HackTestStopServerRequestFB
     | HackTestShutdownServerlessRequestFB
+    | WillSaveWaitUntilRequest _
     | UnknownRequest _ ->
       failwith ("Don't know how to print request " ^ method_)
   in
@@ -1599,6 +1620,7 @@ let print_lsp_response (id : lsp_id) (result : lsp_result) : json =
     | ShowStatusResultFB _
     | RegisterCapabilityRequestResult ->
       failwith ("Don't know how to print result " ^ method_)
+    | WillSaveWaitUntilResult r -> print_textEdits r
     | ErrorResult e -> print_error e
   in
   match result with

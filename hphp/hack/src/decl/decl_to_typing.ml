@@ -74,7 +74,7 @@ let shallow_method_to_class_elt child_class mro subst meth : class_elt =
         ~override:(sm_override meth)
         ~dynamicallycallable:(sm_dynamicallycallable meth)
         ~readonly_prop:false
-        ~sound_dynamic_callable:(sm_sound_dynamic_callable meth)
+        ~support_dynamic_type:(sm_support_dynamic_type meth)
       (* The readonliness of the method is on the type *);
   }
 
@@ -129,7 +129,7 @@ let shallow_prop_to_telt child_class mro subst prop : tagged_elt =
             ~synthesized:false
             ~dynamicallycallable:false
             ~readonly_prop:(sp_readonly prop)
-            ~sound_dynamic_callable:false;
+            ~support_dynamic_type:false;
       };
   }
 
@@ -182,14 +182,16 @@ let typeconst_structure mro class_name stc =
   let ts_ty =
     mk (r, Tapply (tsid, [mk (r, Taccess (mk (r, Tthis), stc.stc_name))]))
   in
+  (* TODO(T88552052) this belongs under the umbrella of distinctions between
+   * abstract type constants with and without defaults *)
   let abstract =
-    match stc.stc_abstract with
-    | TCAbstract (Some _)
+    match stc.stc_kind with
+    | TCAbstract { atc_default = Some _; _ }
       when not (is_set mro_passthrough_abstract_typeconst mro.mro_flags) ->
       false
     | TCAbstract _ -> true
-    | TCPartiallyAbstract
-    | TCConcrete ->
+    | TCPartiallyAbstract _
+    | TCConcrete _ ->
       false
   in
   ( snd stc.stc_name,
@@ -204,64 +206,46 @@ let typeconst_structure mro class_name stc =
 
 let shallow_typeconst_to_typeconst_type child_class mro subst stc =
   let {
-    stc_abstract;
-    stc_as_constraint;
-    stc_super_constraint;
+    stc_kind = ttc_kind;
     stc_name = ttc_name;
-    stc_type;
     stc_enforceable = ttc_enforceable;
     stc_reifiable = ttc_reifiable;
+    stc_is_ctx = ttc_is_ctx;
   } =
     stc
   in
   let child_and_mro_same = String.equal child_class mro.mro_name in
-  let (as_constraint, super_constraint) =
+  let ttc_kind =
     if child_and_mro_same then
-      (stc_as_constraint, stc_super_constraint)
+      ttc_kind
     else
-      ( Option.map stc_as_constraint (Decl_instantiate.instantiate subst),
-        Option.map stc_super_constraint (Decl_instantiate.instantiate subst) )
-  in
-  let ty =
-    if child_and_mro_same then
-      stc_type
-    else
-      Option.map stc_type (Decl_instantiate.instantiate subst)
-  in
-  let abstract =
-    match stc_abstract with
-    | TCAbstract default_opt when not child_and_mro_same ->
-      TCAbstract (Option.map default_opt (Decl_instantiate.instantiate subst))
-    | _ -> stc_abstract
+      Decl_instantiate.instantiate_typeconst subst ttc_kind
   in
   let ttc_origin = mro.mro_name in
   let typeconst =
-    match abstract with
-    | TCAbstract (Some default)
+    match ttc_kind with
+    | TCAbstract { atc_default = Some default; _ }
       when not (is_set mro_passthrough_abstract_typeconst mro.mro_flags) ->
+      (* concretization of abstract type constant with default *)
       {
-        ttc_abstract = TCConcrete;
         ttc_synthesized = is_set mro_via_req_extends mro.mro_flags;
         ttc_name;
-        ttc_as_constraint = None;
-        ttc_super_constraint = None;
-        ttc_type = Some default;
+        ttc_kind = TCConcrete { tc_type = default };
         ttc_origin;
         ttc_enforceable;
         ttc_reifiable;
+        ttc_is_ctx;
         ttc_concretized = true;
       }
     | _ ->
       {
-        ttc_abstract = abstract;
         ttc_synthesized = is_set mro_via_req_extends mro.mro_flags;
         ttc_name;
-        ttc_as_constraint = as_constraint;
-        ttc_super_constraint = super_constraint;
-        ttc_type = ty;
+        ttc_kind;
         ttc_origin;
         ttc_enforceable;
         ttc_reifiable;
+        ttc_is_ctx;
         ttc_concretized = false;
       }
   in

@@ -42,7 +42,7 @@
 #include "hphp/runtime/base/program-functions.h"
 #include "hphp/runtime/vm/as.h"
 #include "hphp/runtime/vm/extern-compiler.h"
-#include "hphp/runtime/vm/repo.h"
+#include "hphp/runtime/vm/func-emitter.h"
 #include "hphp/runtime/vm/unit-emitter.h"
 #include "hphp/util/exception.h"
 #include "hphp/util/job-queue.h"
@@ -60,7 +60,8 @@ const StaticString s___EntryPoint("__EntryPoint");
 ///////////////////////////////////////////////////////////////////////////////
 
 Package::Package(const char* root, bool /*bShortTags*/ /* = true */)
-    : m_dispatcher(nullptr), m_lineCount(0), m_charCount(0) {
+    : m_dispatcher(nullptr), m_lineCount(0), m_charCount(0)
+    , m_parseCacheHits{0}, m_totalParses{0} {
   m_root = FileUtil::normalizeDir(root);
   m_ar = std::make_shared<AnalysisResult>();
   m_fileCache = std::make_shared<FileCache>();
@@ -235,15 +236,22 @@ using ParserDispatcher = JobQueueDispatcher<ParserWorker>;
 void Package::addSourceFile(const std::string& fileName,
                             bool check /* = false */) {
   if (!fileName.empty()) {
-    auto canonFileName =
+    auto const canonFileName =
       FileUtil::canonicalize(String(fileName)).toCppString();
-    auto const file = [&] {
-      Lock lock(m_mutex);
-      auto const info = m_filesToParse.insert(canonFileName);
-      return info.second && m_dispatcher ? &*info.first : nullptr;
+
+    auto const file = [&] () -> const std::string* {
+      if (auto const it = m_filesToParse.find(canonFileName);
+          it != m_filesToParse.end()) {
+        return nullptr;
+      }
+      auto const result = m_filesToParse.insert(
+        canonFileName,
+        std::make_unique<std::string>(canonFileName)
+      );
+      return result.second ? result.first->second.get() : nullptr;
     }();
 
-    if (file) {
+    if (m_dispatcher && file) {
       static_cast<ParserDispatcher*>(m_dispatcher)->enqueue({file, check});
     }
   }
@@ -283,73 +291,18 @@ void Package::addSourceDirectory(const std::string& path,
     });
 }
 
-bool Package::parse(bool check, std::thread& unit_emitter_thread) {
+bool Package::parse(bool check) {
   if (m_filesToParse.empty() && m_directories.empty()) {
     return true;
   }
 
   auto const threadCount = Option::ParserThreadCount <= 0 ?
     1 : Option::ParserThreadCount;
+  Logger::Info("parsing using %d threads", threadCount);
 
   // process system lib files which were deferred during process-init
   // (if necessary).
   auto syslib_ues = m_ar->getHhasFiles();
-  if (RuntimeOption::RepoCommit &&
-      RuntimeOption::RepoLocalPath.size() &&
-      RuntimeOption::RepoLocalMode == RepoMode::ReadWrite) {
-    m_ueq.emplace();
-    // Since we'll modify the repo RuntimeOptions after creating this
-    // thread, we need to block until the thread initialize its repo.
-    folly::Baton<> repoBaton;
-    // note useHHBBC is needed because when program is set, m_ar might
-    // be cleared before the thread finishes running, so we would
-    // segfault trying to check it. Note that when program is *not*
-    // set, we wait for the thread to finish before clearing m_ar (so
-    // the guarded addHhasFile is safe).
-    unit_emitter_thread = std::thread {
-      [&, useHHBBC{m_ar->program().get() != nullptr}] {
-        HphpSessionAndThread _(Treadmill::SessionKind::CompilerEmit);
-        static const unsigned kBatchSize = 8;
-        std::vector<std::unique_ptr<UnitEmitter>> batched_ues;
-        folly::Optional<Timer> timer;
-
-        auto commitSome = [&] {
-          batchCommit(batched_ues, false);
-          if (!useHHBBC) {
-            for (auto& ue : batched_ues) {
-              m_ar->addHhasFile(std::move(ue));
-            }
-          }
-          batched_ues.clear();
-        };
-
-        // Initialize the repo and then notify the creating the thread
-        // that it's been created.
-        Repo::get();
-        repoBaton.post();
-        while (auto ue = m_ueq->pop()) {
-          if (!timer) timer.emplace(Timer::WallTime, "Caching parsed units...");
-          batched_ues.push_back(std::move(ue));
-          if (batched_ues.size() == kBatchSize) {
-            commitSome();
-          }
-        }
-        if (batched_ues.size()) commitSome();
-      }
-    };
-
-    // Wait for unit_emitter_thread to initialize its copy of the
-    // repo. Once this happens, its safe to modify RuntimeOptions.
-    repoBaton.wait();
-  }
-
-  if (RuntimeOption::RepoLocalPath.size() &&
-      RuntimeOption::RepoLocalMode != RepoMode::Closed) {
-    auto units = Repo::get().enumerateUnits(RepoIdLocal, false);
-    for (auto& elm : units) {
-      m_locally_cached_bytecode.insert(elm.first);
-    }
-  }
 
   HphpSession _(Treadmill::SessionKind::CompilerEmit);
 
@@ -362,8 +315,8 @@ bool Package::parse(bool check, std::thread& unit_emitter_thread) {
   auto const files = std::move(m_filesToParse);
 
   dispatcher.start();
-  for (auto const& file : files) {
-    addSourceFile(file, check);
+  for (auto const& p : files) {
+    addSourceFile(*p.second, check);
   }
   for (auto const& dir : m_directories) {
     addSourceDirectory(dir.first, dir.second);
@@ -375,13 +328,6 @@ bool Package::parse(bool check, std::thread& unit_emitter_thread) {
   syslib_ues.clear();
 
   dispatcher.waitEmpty();
-
-  if (m_ueq) {
-    m_ueq->push(nullptr);
-    if (!m_ar->program().get()) {
-      unit_emitter_thread.join();
-    }
-  }
 
   m_dispatcher = nullptr;
 
@@ -400,12 +346,7 @@ void Package::addUnitEmitter(std::unique_ptr<UnitEmitter> ue) {
   }
   if (m_ar->program().get()) {
     HHBBC::add_unit_to_program(ue.get(), *m_ar->program());
-  }
-  // m_repoId != -1 means it was read from the local repo - so there's
-  // no need to write it back.
-  if (m_ueq && ue->m_repoId == -1) {
-    m_ueq->push(std::move(ue));
-  } else if (!m_ar->program().get()) {
+  } else {
     m_ar->addHhasFile(std::move(ue));
   }
 }
@@ -491,6 +432,8 @@ bool Package::parseImpl(const std::string* fileName) {
       };
       SHA1 sha1{string_sha1(content)};
 
+      ++m_totalParses;
+
       std::unique_ptr<UnitEmitter> ue{
         assemble_string(content.data(), content.size(), fileName->c_str(), sha1,
                         Native::s_noNativeFuncs)
@@ -534,26 +477,6 @@ bool Package::parseImpl(const std::string* fileName) {
   auto const sha1 = SHA1{mangleUnitSha1(string_sha1(content),
                                         *fileName,
                                         options)};
-  if (RuntimeOption::RepoLocalPath.size() &&
-      RuntimeOption::RepoLocalMode != RepoMode::Closed &&
-      m_locally_cached_bytecode.count(*fileName)) {
-    // Try the repo; if it's not already there, invoke the compiler.
-    if (auto ue = Repo::get().urp().loadEmitter(
-          *fileName, sha1, Native::s_noNativeFuncs
-        )) {
-      if (is_symlink) {
-        ue = createSymlinkWrapper(fullPath, *fileName, std::move(ue));
-        if (!ue) {
-          // If the symlink contains no EntryPoint we don't do anything but it
-          // is still success
-          return true;
-        }
-      }
-      addUnitEmitter(std::move(ue));
-      report(0);
-      return true;
-    }
-  }
 
   auto const mode =
     RO::EvalAbortBuildOnCompilerError ? CompileAbortMode::AllErrors :
@@ -567,7 +490,10 @@ bool Package::parseImpl(const std::string* fileName) {
     Native::s_noNativeFuncs, false, options);
   assertx(uc);
   try {
-    auto ue = uc->compile(mode);
+    ++m_totalParses;
+    auto cacheHit = false;
+    auto ue = uc->compile(cacheHit, mode);
+    if (cacheHit) ++m_parseCacheHits;
     if (ue && !ue->m_ICE) {
       if (is_symlink) {
         ue = createSymlinkWrapper(fullPath, *fileName, std::move(ue));

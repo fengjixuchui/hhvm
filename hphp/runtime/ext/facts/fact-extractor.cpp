@@ -68,19 +68,33 @@ std::vector<std::string> move_str_vec(folly::dynamic* stringList) {
   return ret;
 }
 
-std::vector<TypeAttribute> move_attr_vec(folly::dynamic* attrList) {
+std::vector<Attribute> move_attr_vec(folly::dynamic* attrList) {
   if (attrList == nullptr) {
     return {};
   }
 
-  std::vector<TypeAttribute> ret;
+  std::vector<Attribute> ret;
   for (auto& item : attrList->items()) {
-    TypeAttribute attr;
+    Attribute attr;
     attr.m_name = item.first.getString();
     for (auto& arg : std::move(item.second)) {
       attr.m_args.push_back(std::move(arg));
     }
     ret.push_back(std::move(attr));
+  }
+  return ret;
+}
+
+std::vector<MethodDetails> move_method_vec(folly::dynamic* methodList) {
+  if (!methodList) {
+    return {};
+  }
+  std::vector<MethodDetails> ret;
+  ret.reserve(methodList->size());
+  for (auto& [method, details] : methodList->items()) {
+    ret.push_back(MethodDetails{
+        .m_name = method.getString(),
+        .m_attributes = move_attr_vec(details.get_ptr("attributes"))});
   }
   return ret;
 }
@@ -92,14 +106,15 @@ std::vector<TypeDetails> move_type_vec(folly::dynamic* types) {
   std::vector<TypeDetails> ret;
   for (auto& type : *types) {
     auto typeKind = fromString(std::move(type.at("kindOf")).getString());
-    ret.push_back(
-        {std::move(type.at("name")).getString(),
-         typeKind,
-         static_cast<int>(std::move(type.at("flags")).getInt()),
-         move_str_vec(type.get_ptr("baseTypes")),
-         move_attr_vec(type.get_ptr("attributes")),
-         move_str_vec(type.get_ptr("requireExtends")),
-         move_str_vec(type.get_ptr("requireImplements"))});
+    ret.push_back(TypeDetails{
+        .m_name = std::move(type.at("name")).getString(),
+        .m_kind = typeKind,
+        .m_flags = static_cast<int>(std::move(type.at("flags")).getInt()),
+        .m_baseTypes = move_str_vec(type.get_ptr("baseTypes")),
+        .m_attributes = move_attr_vec(type.get_ptr("attributes")),
+        .m_requireExtends = move_str_vec(type.get_ptr("requireExtends")),
+        .m_requireImplements = move_str_vec(type.get_ptr("requireImplements")),
+        .m_methods = move_method_vec(type.get_ptr("methods"))});
   }
   return ret;
 }
@@ -186,7 +201,9 @@ std::vector<folly::Try<FileFacts>> facts_from_paths(
     const std::vector<PathAndHash>& pathsAndHashes) {
 
   folly::CPUThreadPoolExecutor exec{
-      std::min(RuntimeOption::EvalHackCompilerWorkers, pathsAndHashes.size()),
+      std::min(
+          RuntimeOption::EvalHackCompilerWorkers,
+          static_cast<uint64_t>(pathsAndHashes.size())),
       make_thread_factory("FactExtractor")};
 
   // If we defined a fancy memcache Extractor in closed-source code, use that.

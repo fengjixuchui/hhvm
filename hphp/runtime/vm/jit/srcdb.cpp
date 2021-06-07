@@ -35,24 +35,6 @@ namespace HPHP { namespace jit {
 
 TRACE_SET_MOD(trans)
 
-void IncomingBranch::relocate(RelocationInfo& rel) {
-  // compute adjustedTarget before altering the smash address,
-  // because it might be a 5-byte nop
-  TCA adjustedTarget = rel.adjustedAddressAfter(target());
-
-  if (TCA adjusted = rel.adjustedAddressAfter(toSmash())) {
-    m_ptr.set(m_ptr.tag(), adjusted);
-  }
-
-  if (adjustedTarget) {
-    FTRACE_MOD(Trace::mcg, 1, "Patching: 0x{:08x} from 0x{:08x} to 0x{:08x}\n",
-               (uintptr_t)toSmash(), (uintptr_t)target(),
-               (uintptr_t)adjustedTarget);
-
-    patch(adjustedTarget);
-  }
-}
-
 void IncomingBranch::patch(TCA dest) {
   switch (type()) {
     case Tag::JMP:
@@ -120,21 +102,6 @@ void TransLoc::setFrozenStart(TCA newStart) {
   m_frozenOff = tc::addrToOffset(newStart);
 }
 
-/*
- * The fallback translation is where to jump to if the
- * currently-translating translation's checks fail.
- *
- * The current heuristic we use for translation chaining is to assume
- * the most common cases are probably translated first, so we chain
- * new translations on the end.  This means if we have to fallback
- * from the currently-translating translation we jump to the "anchor"
- * translation (which just is a REQ_RETRANSLATE).
- */
-TCA SrcRec::getFallbackTranslation() const {
-  assertx(m_anchorTranslation);
-  return m_anchorTranslation;
-}
-
 void SrcRec::chainFrom(IncomingBranch br) {
   assertx(br.type() == IncomingBranch::Tag::ADDR ||
           tc::isValidCodeAddress(br.toSmash()));
@@ -174,12 +141,12 @@ void SrcRec::newTranslation(TransLoc loc,
    *
    * It's (mostly) ok if someone is running in this code while we do
    * this: we hold the write lease, they'll instead jump to the anchor
-   * and do REQ_RETRANSLATE and failing to get the write lease they'll
+   * and do handleRetranslate() and failing to get the write lease they'll
    * interp.  FIXME: Unfortunately, right now, in an unlikely race
    * another thread could create another translation with the same
    * type specialization that we just created in this case.  (If we
    * happen to release the write lease after they jump but before they
-   * get into REQ_RETRANSLATE, they'll acquire it and generate a
+   * get into handleRetranslate(), they'll acquire it and generate a
    * translation possibly for this same situation.)
    */
   for (auto& br : m_tailFallbackJumps) {
@@ -202,41 +169,6 @@ void SrcRec::smashFallbacksToStub(TCA stub) {
   TRACE(1, "SrcRec(%p)::smashFallbacksToStub @%p, ", this, stub);
   for (auto& br : m_tailFallbackJumps) br.patch(stub);
   m_tailFallbackJumps.clear();
-}
-
-void SrcRec::relocate(RelocationInfo& rel) {
-  tc::assertOwnsCodeLock();
-
-  auto srLock = writelock();
-  if (auto adjusted = rel.adjustedAddressAfter(m_anchorTranslation)) {
-    m_anchorTranslation = adjusted;
-  }
-
-  if (auto adjusted = rel.adjustedAddressAfter(m_topTranslation.get())) {
-    m_topTranslation = adjusted;
-  }
-
-  for (auto &t : m_translations) {
-    if (TCA adjusted = rel.adjustedAddressAfter(t.mainStart())) {
-      t.setMainStart(adjusted);
-    }
-
-    if (TCA adjusted = rel.adjustedAddressAfter(t.coldStart())) {
-      t.setColdStart(adjusted);
-    }
-
-    if (TCA adjusted = rel.adjustedAddressAfter(t.frozenStart())) {
-      t.setFrozenStart(adjusted);
-    }
-  }
-
-  for (auto &ib : m_tailFallbackJumps) {
-    ib.relocate(rel);
-  }
-
-  for (auto &ib : m_incomingBranches) {
-    ib.relocate(rel);
-  }
 }
 
 void SrcRec::patchIncomingBranches(TCA newStart) {
@@ -276,16 +208,16 @@ void SrcRec::removeIncomingBranchesInRange(TCA start, TCA frontier) {
   m_incomingBranches.setEnd(end);
 }
 
-void SrcRec::replaceOldTranslations() {
+void SrcRec::replaceOldTranslations(TCA retransStub) {
   auto srLock = writelock();
 
-  // Everyone needs to give up on old translations; send them to the anchor,
-  // which is a REQ_RETRANSLATE.
+  // Everyone needs to give up on old translations; send them to the provided
+  // retranslate stub.
   auto translations = std::move(m_translations);
   m_tailFallbackJumps.clear();
   m_topTranslation = nullptr;
   assertx(!RuntimeOption::RepoAuthoritative || RuntimeOption::EvalJitPGO);
-  patchIncomingBranches(m_anchorTranslation);
+  patchIncomingBranches(retransStub);
 
   // Now that we've smashed all the IBs for these translations they should be
   // unreachable-- to prevent a race we treadmill here and then reclaim their

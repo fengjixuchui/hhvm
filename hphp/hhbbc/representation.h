@@ -318,6 +318,11 @@ struct Func : FuncBase {
   IterId numIters;
 
   /*
+   * The number of closures used within this function.
+   */
+  ClosureId numClosures;
+
+  /*
    * Entry point to the function when the number of passed args is
    * equal to the number of parameters.
    */
@@ -372,13 +377,13 @@ struct Func : FuncBase {
    */
   bool isReified : 1;
 
-  bool isRxDisabled: 1;
-
   bool noContextSensitiveAnalysis: 1;
 
   bool hasInOutArgs : 1;
 
   bool sampleDynamicCalls : 1;
+
+  bool hasCreateCl : 1; // Function has CreateCl opcode
 
   /*
    * Type parameter upper bounds. May be enforced and used for optimizations.
@@ -498,12 +503,6 @@ struct Class : ClassBase {
    * Which unit defined this class.
    */
   Unit* unit;
-
-  /*
-   * Hoistability of this class.  See the description in class.h
-   * formation on hoistability.
-   */
-  PreClass::Hoistable hoistability;
 
   /*
    * Name of the parent class.

@@ -37,11 +37,12 @@ pub(crate) fn emit_wrapper_function<'a, 'arena>(
     original_id: function::Type<'arena>,
     renamed_id: &function::Type<'arena>,
     deprecation_info: &Option<&[TypedValue<'arena>]>,
-    f: &'a T::Fun_,
+    fd: &'a T::FunDef,
 ) -> Result<HhasFunction<'arena>> {
+    let f = &fd.fun;
     emit_memoize_helpers::check_memoize_possible(&(f.name).0, &f.params, false)?;
     let scope = Scope {
-        items: vec![ScopeItem::Function(ast_scope::Fun::new_ref(f))],
+        items: vec![ScopeItem::Function(ast_scope::Fun::new_ref(fd))],
     };
     let mut tparams = scope
         .get_tparams()
@@ -61,7 +62,7 @@ pub(crate) fn emit_wrapper_function<'a, 'arena>(
         .tparams
         .iter()
         .any(|tp| tp.reified.is_reified() || tp.reified.is_soft_reified());
-    let mut env = Env::default(alloc, RcOc::clone(&f.namespace)).with_scope(scope);
+    let mut env = Env::default(alloc, RcOc::clone(&fd.namespace)).with_scope(scope);
     let body_instrs = make_memoize_function_code(
         alloc,
         emitter,
@@ -74,9 +75,8 @@ pub(crate) fn emit_wrapper_function<'a, 'arena>(
         f.fun_kind.is_fasync(),
         is_reified,
     )?;
-    let coeffects = HhasCoeffects::from_ast(&f.ctxs, &f.params);
+    let coeffects = HhasCoeffects::from_ast(&f.ctxs, &f.params, &f.tparams, vec![]);
     let has_coeffects_local = coeffects.has_coeffects_local();
-    env.with_rx_body(coeffects.is_any_rx_or_pure());
     let body = make_wrapper_body(
         alloc,
         emitter,
@@ -147,9 +147,9 @@ fn make_memoize_function_with_params_code<'a, 'arena>(
     is_reified: bool,
 ) -> Result<InstrSeq<'arena>> {
     let param_count = hhas_params.len();
-    let notfound = e.label_gen_mut().next_regular(alloc);
-    let suspended_get = e.label_gen_mut().next_regular(alloc);
-    let eager_set = e.label_gen_mut().next_regular(alloc);
+    let notfound = e.label_gen_mut().next_regular();
+    let suspended_get = e.label_gen_mut().next_regular();
+    let eager_set = e.label_gen_mut().next_regular();
     // The local that contains the reified generics is the first non parameter local,
     // so the first local is parameter count + 1 when there are reified = generics
     let add_refied = usize::from(is_reified);
@@ -163,7 +163,6 @@ fn make_memoize_function_with_params_code<'a, 'arena>(
         let mut fcall_flags = FcallFlags::default();
         fcall_flags.set(FcallFlags::HAS_GENERICS, is_reified);
         FcallArgs::new(
-            alloc,
             fcall_flags,
             1,
             &[],
@@ -257,13 +256,12 @@ fn make_memoize_function_no_params_code<'a, 'arena>(
     renamed_id: function::Type<'arena>,
     is_async: bool,
 ) -> Result<InstrSeq<'arena>> {
-    let notfound = e.label_gen_mut().next_regular(alloc);
-    let suspended_get = e.label_gen_mut().next_regular(alloc);
-    let eager_set = e.label_gen_mut().next_regular(alloc);
+    let notfound = e.label_gen_mut().next_regular();
+    let suspended_get = e.label_gen_mut().next_regular();
+    let eager_set = e.label_gen_mut().next_regular();
     let deprecation_body =
         emit_body::emit_deprecation_info(alloc, &env.scope, deprecation_info, e.systemlib())?;
     let fcall_args = FcallArgs::new(
-        alloc,
         FcallFlags::default(),
         1,
         &[],
@@ -337,6 +335,7 @@ fn make_wrapper_body<'a, 'arena>(
         decl_vars,
         true,   /* is_memoize_wrapper */
         false,  /* is_memoize_wrapper_lsb */
+        0,      /* num closures */
         vec![], /* upper_bounds */
         vec![], /* shadowed_tparams */
         params,

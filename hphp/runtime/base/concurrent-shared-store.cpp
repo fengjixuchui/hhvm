@@ -115,21 +115,22 @@ EntryInfo::Type EntryInfo::getAPCType(const APCHandle* handle) {
     case APCKind::PersistentClsMeth:
     case APCKind::FuncEntity:
     case APCKind::ClsMeth:
+    case APCKind::StaticArray:
+    case APCKind::StaticBespoke:
     case APCKind::StaticString:
-    case APCKind::StaticVec:
-    case APCKind::StaticDict:
-    case APCKind::StaticKeyset:
       return EntryInfo::Type::Uncounted;
     case APCKind::UncountedString:
       return EntryInfo::Type::UncountedString;
     case APCKind::SharedString:
       return EntryInfo::Type::APCString;
-    case APCKind::UncountedVec:
-      return EntryInfo::Type::UncountedVec;
-    case APCKind::UncountedDict:
-      return EntryInfo::Type::UncountedDict;
-    case APCKind::UncountedKeyset:
-      return EntryInfo::Type::UncountedKeyset;
+    case APCKind::UncountedArray:
+    case APCKind::UncountedBespoke:
+      switch (handle->type()) {
+        case KindOfPersistentVec:    return EntryInfo::Type::UncountedVec;
+        case KindOfPersistentDict:   return EntryInfo::Type::UncountedDict;
+        case KindOfPersistentKeyset: return EntryInfo::Type::UncountedKeyset;
+        default: always_assert(false);
+      }
     case APCKind::SerializedVec:
       return EntryInfo::Type::SerializedVec;
     case APCKind::SerializedDict:
@@ -395,7 +396,7 @@ bool ConcurrentTableSharedStore::eraseKey(const String& key) {
 bool ConcurrentTableSharedStore::eraseImpl(const char* key,
                                            bool expired,
                                            int64_t oldestLive,
-                                           ExpMap::accessor* expAcc) {
+                                           ExpSet::accessor* expAcc) {
   assertx(key);
 
   SharedMutex::ReadHolder l(m_lock);
@@ -412,8 +413,8 @@ bool ConcurrentTableSharedStore::eraseImpl(const char* key,
       // If we got an expAcc it means that we are iterating over m_expQueue and
       // expiring things. But if the item is not expired yet we need to put it back
       // into the queue with the correct expire time. It happens if expire time was
-      // updated either by apc_extend_tll or by setting a new value with a TTL on
-      // an existing key
+      // updated either by apc_extend_ttl or by setting a new value with a TTL on
+      // an existing key.
       if (expAcc) {
         auto ikey = intptr_t(acc->first);
         m_expQueue.push({ ikey, expiry });
@@ -462,28 +463,28 @@ bool ConcurrentTableSharedStore::eraseImpl(const char* key,
   const void* vpkey = acc->first;
   /*
    * Note that we have a delicate situation here; purgeExpired obtains
-   * the ExpMap accessor, and then the Map accessor, while eraseImpl
+   * the ExpSet accessor, and then the Map accessor, while eraseImpl
    * (called from other sites) apparently obtains the Map accessor
-   * followed by the ExpMap accessor.
+   * followed by the ExpSet accessor.
    *
    * This does not result in deadlock, because the Map accessor is
    * released by m_vars.erase. But we need this ordering to ensure
-   * that as long as you hold an accessor to m_expMap, its key
+   * that as long as you hold an accessor to m_expSet, its key
    * converted to a char* will be a valid c-string.
    */
   m_vars.erase(acc);
   if (expAcc) {
-    m_expMap.erase(*expAcc);
+    m_expSet.erase(*expAcc);
   } else {
     /*
-     * Note that we can't just call m_expMap.erase(intptr_t(vpkey))
+     * Note that we can't just call m_expSet.erase(intptr_t(vpkey))
      * here. That will remove the element and not block, even if
-     * we hold an ExpMap::accessor to the element in another thread,
+     * we hold an ExpSet::accessor to the element in another thread,
      * which would allow us to proceed and free vpkey.
      */
-    ExpMap::accessor eAcc;
-    if (m_expMap.find(eAcc, intptr_t(vpkey))) {
-      m_expMap.erase(eAcc);
+    ExpSet::accessor eAcc;
+    if (m_expSet.find(eAcc, intptr_t(vpkey))) {
+      m_expSet.erase(eAcc);
     }
   }
   free(const_cast<void*>(vpkey));
@@ -509,8 +510,8 @@ void ConcurrentTableSharedStore::purgeExpired() {
       m_expQueue.push(tmp);
       break;
     }
-    ExpMap::accessor acc;
-    if (m_expMap.find(acc, tmp.first)) {
+    ExpSet::accessor acc;
+    if (m_expSet.find(acc, tmp.first)) {
       FTRACE(3, "Expiring {}...", (char*)tmp.first);
       if (eraseImpl((char*)tmp.first, true, oldestLive, &acc)) {
         FTRACE(3, "succeeded\n");
@@ -607,12 +608,12 @@ bool ConcurrentTableSharedStore::checkExpire(const String& keyStr,
         FTRACE(3, "Deferred expire: {}\n", show(*sval));
         sval->expireTime.store(1, std::memory_order_release);
         auto const key = intptr_t(acc->first);
-        // release acc so the m_expMap.erase won't deadlock with a
+        // release acc so the m_expSet.erase won't deadlock with a
         // concurrent purgeExpired.
         acc.release();
         // make sure purgeExpired doesn't kill it before we have a
         // chance to refill it.
-        m_expMap.erase(key);
+        m_expSet.erase(key);
         g_context->enqueueAPCDeferredExpire(keyStr);
         return true;
       }
@@ -720,8 +721,7 @@ int64_t ConcurrentTableSharedStore::inc(const String& key, int64_t step,
   s_hotCache.clearValue(sval);
 
   auto const ret = oldHandle->toLocal().toInt64() + step;
-  auto const pair = APCHandle::Create(VarNR{ret}, false,
-                                      APCHandleLevel::Outer, false);
+  auto const pair = APCHandle::Create(VarNR{ret}, APCHandleLevel::Outer, false);
   APCStats::getAPCStats().updateAPCValue(pair.handle, pair.size,
                                          oldHandle, sval.dataSize,
                                          sval.rawExpire() == 0, false);
@@ -751,8 +751,7 @@ bool ConcurrentTableSharedStore::cas(const String& key, int64_t old,
     return false;
   }
 
-  auto const pair = APCHandle::Create(VarNR{val}, false,
-                                      APCHandleLevel::Outer, false);
+  auto const pair = APCHandle::Create(VarNR{val}, APCHandleLevel::Outer, false);
   APCStats::getAPCStats().updateAPCValue(pair.handle, pair.size,
                                          oldHandle, sval.dataSize,
                                          sval.rawExpire() == 0, false);
@@ -791,8 +790,9 @@ int64_t ConcurrentTableSharedStore::size(const String& key, bool& found) {
   return sval->dataSize;
 }
 
-static int64_t adjust_ttl(int64_t ttl, bool overwritePrime) {
-  if (apcExtension::TTLLimit > 0 && !overwritePrime) {
+// Apply APC.TTLLimit, if it is configured.
+static int64_t apply_ttl_limit(int64_t ttl) {
+  if (apcExtension::TTLLimit > 0) {
     if (ttl == 0 || ttl > apcExtension::TTLLimit) {
       return apcExtension::TTLLimit;
     }
@@ -800,7 +800,7 @@ static int64_t adjust_ttl(int64_t ttl, bool overwritePrime) {
   return ttl;
 }
 
-bool ConcurrentTableSharedStore::bumpTTL(const String& key, int64_t new_ttl) {
+bool ConcurrentTableSharedStore::extendTTL(const String& key, int64_t new_ttl) {
   SharedMutex::ReadHolder l(m_lock);
   Map::accessor acc;
   if (!m_vars.find(acc, tagStringData(key.get()))) {
@@ -812,7 +812,7 @@ bool ConcurrentTableSharedStore::bumpTTL(const String& key, int64_t new_ttl) {
   auto old_expire = sval.rawExpire();
   if (!old_expire) return false; // Already infinite TTL
 
-  new_ttl = adjust_ttl(new_ttl, false);
+  new_ttl = apply_ttl_limit(new_ttl);
   // This API can't be used to breach the ttl cap.
   if (new_ttl == 0) {
     sval.expireTime.store(0, std::memory_order_release);
@@ -835,34 +835,28 @@ bool ConcurrentTableSharedStore::add(const String& key,
                                      const Variant& val,
                                      int64_t max_ttl,
                                      int64_t bump_ttl) {
-  return storeImpl(key, val, max_ttl, bump_ttl, false, true);
+  return storeImpl(key, val, max_ttl, bump_ttl, false);
 }
 
 void ConcurrentTableSharedStore::set(const String& key,
                                      const Variant& val,
                                      int64_t max_ttl,
                                      int64_t bump_ttl) {
-  storeImpl(key, val, max_ttl, bump_ttl, true, true);
-}
-
-void ConcurrentTableSharedStore::setWithoutTTL(const String& key,
-                                               const Variant& val) {
-  storeImpl(key, val, 0, 0, true, false);
+  storeImpl(key, val, max_ttl, bump_ttl, true);
 }
 
 bool ConcurrentTableSharedStore::storeImpl(const String& key,
                                            const Variant& value,
                                            int64_t max_ttl,
                                            int64_t bump_ttl,
-                                           bool overwrite,
-                                           bool limit_ttl) {
+                                           bool overwrite) {
   StoreValue *sval;
   auto keyLen = key.size();
 
   // We need to do this before we acquire any locks. Serializing objects can
   // reenter the VM (__sleep) and certain operations may cause us to throw for
   // types that cannot be serialized to APC.
-  auto svar = APCHandle::Create(value, false, APCHandleLevel::Outer, false);
+  auto svar = APCHandle::Create(value, APCHandleLevel::Outer, false);
 
   char* const kcp = strdup(key.data());
 
@@ -893,7 +887,7 @@ bool ConcurrentTableSharedStore::storeImpl(const String& key,
       APCStats::getAPCStats().addKey(keyLen);
     }
 
-    int64_t adjustedMaxTTL = adjust_ttl(max_ttl, !limit_ttl);
+    int64_t adjustedMaxTTL = apply_ttl_limit(max_ttl);
     if (adjustedMaxTTL > apcExtension::TTLMaxFinite) {
       adjustedMaxTTL = 0;
     }
@@ -928,7 +922,7 @@ bool ConcurrentTableSharedStore::storeImpl(const String& key,
     expiry = sval->queueExpire();
     if (expiry) {
       auto ikey = intptr_t(acc->first);
-      if (m_expMap.insert({ ikey, 0 })) {
+      if (m_expSet.insert({ ikey, ExpNil{} })) {
         m_expQueue.push({ ikey, expiry });
       }
     }

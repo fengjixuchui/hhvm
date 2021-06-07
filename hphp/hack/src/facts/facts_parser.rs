@@ -4,7 +4,8 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 
-use hhbc_string_utils_rust::mangle_xhp_id;
+use hhbc_by_ref_hhbc_string_utils::mangle_xhp_id;
+use naming_special_names_rust::user_attributes;
 use ocamlrep::rc::RcOc;
 use oxidized::relative_path::RelativePath;
 use parser_core_types::parser_env::ParserEnv;
@@ -21,6 +22,7 @@ pub struct ExtractAsJsonOpts {
     pub enable_xhp_class_modifier: bool,
     pub disable_xhp_element_mangling: bool,
     pub filename: RelativePath,
+    pub disallow_hash_comments: bool,
 }
 
 pub fn extract_as_json(text: &[u8], opts: ExtractAsJsonOpts) -> Option<String> {
@@ -35,6 +37,7 @@ pub fn from_text(text: &[u8], opts: ExtractAsJsonOpts) -> Option<Facts> {
         enable_xhp_class_modifier,
         disable_xhp_element_mangling,
         filename,
+        disallow_hash_comments,
     } = opts;
     let text = SourceText::make(RcOc::new(filename), text);
     let env = ParserEnv {
@@ -43,6 +46,7 @@ pub fn from_text(text: &[u8], opts: ExtractAsJsonOpts) -> Option<Facts> {
         allow_new_attribute_syntax,
         enable_xhp_class_modifier,
         disable_xhp_element_mangling,
+        disallow_hash_comments,
         ..ParserEnv::default()
     };
     let (root, errors, has_script_content) = facts_parser::parse_script(&text, env, None);
@@ -200,8 +204,7 @@ fn type_info_from_class_body(
                 let attributes = attributes_into_facts(namespace, *attrs);
                 if !attributes.is_empty() {
                     if let FunctionDecl(name) = *header {
-                        if let Some(method_name) = qualified_name(namespace, *name, namespaced_xhp)
-                        {
+                        if let Some(method_name) = qualified_name("", *name, namespaced_xhp) {
                             type_facts
                                 .methods
                                 .insert(method_name, MethodFacts { attributes });
@@ -220,7 +223,20 @@ fn attributes_into_facts(namespace: &str, attributes_node: Node) -> Attributes {
         for node in nodes {
             if let Node::ListItem(item) = node {
                 let (name_node, values_node) = *item;
+                // For now, built-ins are hardcoded to always be in the current namespace
+                if let Name(name) = &name_node {
+                    let name = name.to_string();
+                    if user_attributes::AS_SET.contains(name.as_str()) {
+                        // Skip builtins
+                        continue;
+                    }
+                }
                 if let Some(name) = qualified_name(namespace, name_node, false) {
+                    // Make sure we don't miss a correctly-namespaced built-in like `\__Memoize`
+                    if user_attributes::AS_SET.contains(name.as_str()) {
+                        // Skip builtins
+                        continue;
+                    }
                     attributes.insert(
                         name,
                         if let Node::List(nodes) = values_node {
@@ -446,7 +462,7 @@ fn collect(mut acc: CollectAcc, node: Node) -> CollectAcc {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hhbc_string_utils_rust::without_xhp_mangling;
+    use hhbc_by_ref_hhbc_string_utils::without_xhp_mangling;
 
     #[test]
     fn xhp_mangling() {

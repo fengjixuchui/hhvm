@@ -21,7 +21,6 @@
 
 #include "hphp/runtime/vm/jit/tc.h"
 
-#include "hphp/util/stack-trace.h"
 
 namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
@@ -29,23 +28,6 @@ namespace HPHP {
 namespace FSM {
 
 const StringData* null_key;
-
-bool is_in_request_context() {
-  return !g_context.isNull() && !jit::tc::tl_is_jitting;
-}
-
-void log_to_scuba(const StringData* key_in_hashtable,
-                  const StringData* key_for_query) {
-  auto const rate = RO::EvalRaiseOnCaseInsensitiveLookupSampleRate;
-  if (!StructuredLog::coinflip(rate)) return;
-  StructuredLogEntry sample;
-  sample.setStr("key_in_hashtable", key_in_hashtable->data());
-  sample.setStr("key_for_query", key_for_query->data());
-
-  StackTrace st;
-  sample.setStackTrace("stack", st);
-  StructuredLog::log("hhvm_case_insensitive_access", sample);
-}
 
 } // FSM
 

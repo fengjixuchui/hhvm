@@ -295,8 +295,17 @@ let parsing genv env to_check ~stop_at_errors profiling =
     }
   in
   SharedMem.collect `gentle;
+  let max_size =
+    if genv.local_config.ServerLocalConfig.small_buckets_for_dirty_names then
+      Some 1
+    else
+      None
+  in
   let get_next =
-    MultiWorker.next genv.workers (Relative_path.Set.elements disk_files)
+    MultiWorker.next
+      genv.workers
+      (Relative_path.Set.elements disk_files)
+      ?max_size
   in
   let ctx = Provider_utils.ctx_from_server_env env in
   let (fast, errors, failed_parsing) =
@@ -549,6 +558,12 @@ module FullCheckKind : CheckKindType = struct
         (Relative_path.Set.of_list (Relative_path.Map.keys phase_2_decl_defs))
         to_recheck
     in
+    let to_recheck =
+      if Relative_path.Set.is_empty env.remote_execution_files then
+        to_recheck
+      else
+        env.remote_execution_files
+    in
     (to_recheck, Relative_path.Set.empty)
 
   let get_env_after_decl ~old_env ~naming_table ~failed_naming =
@@ -688,7 +703,10 @@ module LazyCheckKind : CheckKindType = struct
         (Relative_path.Set.of_list (Relative_path.Map.keys phase_2_decl_defs))
         to_recheck_now
     in
-    (to_recheck_now, to_recheck_later)
+    if Relative_path.Set.is_empty env.remote_execution_files then
+      (to_recheck_now, to_recheck_later)
+    else
+      (env.remote_execution_files, Relative_path.Set.empty)
 
   let get_env_after_decl ~old_env ~naming_table ~failed_naming =
     {
@@ -846,6 +864,7 @@ functor
       changed: Typing_deps.DepSet.t;
       oldified_defs: FileInfo.names;
       to_recheck1: Relative_path.Set.t;
+      to_recheck1_deps: Typing_deps.DepSet.t;
       to_redecl_phase2_deps: Typing_deps.DepSet.t;
     }
 
@@ -863,14 +882,11 @@ functor
         Decl_redecl_service.errors = _;
         changed;
         to_redecl = to_redecl_phase2_deps;
-        to_recheck = to_recheck1;
+        to_recheck = to_recheck1_deps;
       } =
         CgroupProfiler.collect_cgroup_stats ~profiling ~stage:"redecl phase 1"
         @@ fun () ->
         Decl_redecl_service.redo_type_decl
-          ~conservative_redecl:
-            (not
-               genv.local_config.ServerLocalConfig.disable_conservative_redecl)
           ~bucket_size
           ctx
           genv.workers
@@ -883,13 +899,23 @@ functor
       let oldified_defs =
         snd @@ Decl_utils.split_defs oldified_defs defs_to_redecl
       in
-      let to_recheck1 = Typing_deps.Files.get_files to_recheck1 in
-      { changed; oldified_defs; to_recheck1; to_redecl_phase2_deps }
+      let to_recheck1 = Typing_deps.Files.get_files to_recheck1_deps in
+      {
+        changed;
+        oldified_defs;
+        to_recheck1;
+        to_recheck1_deps;
+        to_redecl_phase2_deps;
+      }
 
     type redecl_phase2_result = {
       errors_after_phase2: Errors.t;
       needs_phase2_redecl: Relative_path.Set.t;
       to_recheck2: Relative_path.Set.t;
+      to_recheck2_deps: Typing_deps.DepSet.t;
+          (** Note that the intuitive property
+            [get_files to_recheck2_deps == to_recheck2] does NOT hold. That's
+            because in a lazy check, we might add files open in the IDE *)
     }
 
     let do_redecl_phase2
@@ -917,14 +943,11 @@ functor
         Decl_redecl_service.errors = errorl';
         changed = _;
         to_redecl = _;
-        to_recheck = to_recheck2;
+        to_recheck = to_recheck2_deps;
       } =
         CgroupProfiler.collect_cgroup_stats ~profiling ~stage:"redecl phase 2"
         @@ fun () ->
         Decl_redecl_service.redo_type_decl
-          ~conservative_redecl:
-            (not
-               genv.local_config.ServerLocalConfig.disable_conservative_redecl)
           ~bucket_size
           ctx
           genv.workers
@@ -943,7 +966,7 @@ functor
           (* Redeclarations completed now. *)
           fast_redecl_phase2_now
       in
-      let to_recheck2 = Typing_deps.Files.get_files to_recheck2 in
+      let to_recheck2 = Typing_deps.Files.get_files to_recheck2_deps in
       let to_recheck2 =
         Relative_path.Set.union
           to_recheck2
@@ -952,20 +975,55 @@ functor
              env
              ctx)
       in
-      { errors_after_phase2 = errors; needs_phase2_redecl; to_recheck2 }
+      {
+        errors_after_phase2 = errors;
+        needs_phase2_redecl;
+        to_recheck2;
+        to_recheck2_deps;
+      }
 
     (** Merge the results of the two redecl phases. *)
     let merge_redecl_results
         ~(fast : FileInfo.names Relative_path.Map.t)
         ~(fast_redecl_phase2_now : FileInfo.names Relative_path.Map.t)
         ~(to_recheck1 : Relative_path.Set.t)
+        ~(to_recheck1_deps : Typing_deps.DepSet.t)
         ~(to_recheck2 : Relative_path.Set.t)
-        ~(to_redecl_phase2 : Relative_path.Set.t) :
-        Naming_table.fast * Relative_path.Set.t =
+        ~(to_recheck2_deps : Typing_deps.DepSet.t)
+        ~(to_redecl_phase2 : Relative_path.Set.t)
+        ~(to_redecl_phase2_deps : Typing_deps.DepSet.t) :
+        Naming_table.fast * Relative_path.Set.t * Typing_deps.DepSet.t lazy_t =
       let fast = Relative_path.Map.union fast fast_redecl_phase2_now in
-      let to_recheck = Relative_path.Set.union to_recheck1 to_recheck2 in
-      let to_recheck = Relative_path.Set.union to_recheck to_redecl_phase2 in
-      (fast, to_recheck)
+      (* I want to make sure the way we compute to_recheck in terms of files
+       * vs. in terms of toplevel symbol hashes does not diverge. Therefore,
+       * instead of duplicating the unioning logic, I put the logic in a
+       * polymorphic helper function *)
+      let calc_to_recheck
+          (type a)
+          ~(union : a -> a -> a)
+          ~(to_recheck1 : a)
+          ~(to_recheck2 : a)
+          ~(to_redecl_phase2 : a) =
+        let to_recheck = union to_recheck1 to_recheck2 in
+        let to_recheck = union to_recheck to_redecl_phase2 in
+        to_recheck
+      in
+      let to_recheck =
+        calc_to_recheck
+          ~union:Relative_path.Set.union
+          ~to_recheck1
+          ~to_recheck2
+          ~to_redecl_phase2
+      in
+      let to_recheck_deps =
+        lazy
+          (calc_to_recheck
+             ~union:Typing_deps.DepSet.union
+             ~to_recheck1:to_recheck1_deps
+             ~to_recheck2:to_recheck2_deps
+             ~to_redecl_phase2:to_redecl_phase2_deps)
+      in
+      (fast, to_recheck, to_recheck_deps)
 
     type type_checking_result = {
       env: ServerEnv.env;
@@ -1019,6 +1077,7 @@ functor
           ~interrupt
           ~memory_cap
           ~longlived_workers
+          ~remote_execution:env.ServerEnv.remote_execution
           ~check_info:(get_check_info genv env)
           ~profiling
       in
@@ -1048,6 +1107,13 @@ functor
       (* ... leaving only things that we actually checked, and which can be
        * removed from needs_recheck *)
       let needs_recheck = Relative_path.Set.diff needs_recheck files_to_check in
+      let needs_recheck =
+        if Relative_path.Set.is_empty env.remote_execution_files then
+          needs_recheck
+        else
+          (* We never need to recheck in RE single mode *)
+          Relative_path.Set.empty
+      in
       let errors =
         Errors.(incremental_update_set errors errorl' files_to_check Typing)
       in
@@ -1105,8 +1171,18 @@ functor
       (* `start_time` is when the recheck_loop started and includes preliminaries like
        * reading about file-change notifications and communicating with client.
        * We record all our telemetry uniformally with respect to this start.
-       * `t` is legacy, used for ad-hoc duration reporting within this function. *)
-      let telemetry = Telemetry.create () in
+       * `t` is legacy, used for ad-hoc duration reporting within this function.
+       * For the following, env.int_env.why_needed_full_init is set to Some by
+       * ServerLazyInit, and we include it here, and then it's subsequently
+       * set to None at the end of this method by the call to [get_env_after_typing].
+       * Thus, if it's present here, it means the typecheck we're about to do is
+       * the initial one of a lazy init. *)
+      let telemetry =
+        Telemetry.create ()
+        |> Telemetry.object_opt
+             ~key:"init"
+             ~value:env.ServerEnv.init_env.ServerEnv.why_needed_full_init
+      in
       let env =
         if CheckKind.is_full then
           { env with full_check_status = Full_check_started }
@@ -1149,7 +1225,7 @@ functor
       (* PARSING ***************************************************************)
       debug_print_path_set genv "files_to_parse" files_to_parse;
 
-      ServerProgress.send_progress_to_monitor_w_timeout
+      ServerProgress.send_progress
         ~include_in_logs:false
         "parsing %d files"
         reparse_count;
@@ -1196,7 +1272,7 @@ functor
       in
 
       (* NAMING ****************************************************************)
-      ServerProgress.send_progress_to_monitor_w_timeout
+      ServerProgress.send_progress
         ~include_in_logs:false
         "resolving symbol references";
       let logstring = "Naming" in
@@ -1238,9 +1314,7 @@ functor
       in
 
       (* REDECL PHASE 1 ********************************************************)
-      ServerProgress.send_progress_to_monitor_w_timeout
-        ~include_in_logs:false
-        "determining changes";
+      ServerProgress.send_progress ~include_in_logs:false "determining changes";
       let count = Relative_path.Map.cardinal fast in
       let logstring =
         Printf.sprintf "Type declaration (phase 1) for %d files" count
@@ -1266,7 +1340,13 @@ functor
        only source of class information needing recomputing is linearizations.
        These are invalidated by Decl_redecl_service.redo_type_decl in phase 1,
        and are lazily recomputed as needed. *)
-      let { changed; oldified_defs; to_recheck1; to_redecl_phase2_deps } =
+      let {
+        changed;
+        oldified_defs;
+        to_recheck1;
+        to_recheck1_deps;
+        to_redecl_phase2_deps;
+      } =
         do_redecl_phase1 genv env ~fast ~naming_table ~oldified_defs ~profiling
       in
       let to_redecl_phase2 =
@@ -1320,7 +1400,7 @@ functor
       let telemetry =
         Telemetry.duration telemetry ~key:"redecl2_now_end" ~start_time
       in
-      ServerProgress.send_progress_to_monitor_w_timeout
+      ServerProgress.send_progress
         ~include_in_logs:false
         "evaluating type declarations of %d files"
         count;
@@ -1364,11 +1444,19 @@ functor
        of changed classes.
 
        When shallow_class_decl is enabled, there is no need to do phase 2. *)
-      let (errors, needs_phase2_redecl, to_recheck2) =
+      let (errors, needs_phase2_redecl, to_recheck2, to_recheck2_deps) =
         if shallow_decl_enabled ctx then
-          (errors, Relative_path.Set.empty, Relative_path.Set.empty)
+          ( errors,
+            Relative_path.Set.empty,
+            Relative_path.Set.empty,
+            Typing_deps.DepSet.make env.deps_mode )
         else
-          let { errors_after_phase2; needs_phase2_redecl; to_recheck2 } =
+          let {
+            errors_after_phase2;
+            needs_phase2_redecl;
+            to_recheck2;
+            to_recheck2_deps;
+          } =
             do_redecl_phase2
               genv
               env
@@ -1380,23 +1468,25 @@ functor
               ~to_redecl_phase2_deps
               ~profiling
           in
-          (errors_after_phase2, needs_phase2_redecl, to_recheck2)
+          ( errors_after_phase2,
+            needs_phase2_redecl,
+            to_recheck2,
+            to_recheck2_deps )
       in
       let telemetry =
         Telemetry.duration telemetry ~key:"redecl2_end" ~start_time
       in
 
-      (* We have changed declarations, which means that typed ASTs could have
-       * changed too. *)
-      Ide_tast_cache.invalidate ();
-
-      let (fast, to_recheck) =
+      let (fast, to_recheck, to_recheck_deps) =
         merge_redecl_results
           ~fast
           ~fast_redecl_phase2_now
           ~to_recheck1
+          ~to_recheck1_deps
           ~to_recheck2
+          ~to_recheck2_deps
           ~to_redecl_phase2
+          ~to_redecl_phase2_deps
       in
       let hs = SharedMem.heap_size () in
       HackEventLogger.second_redecl_end t hs;
@@ -1407,7 +1497,6 @@ functor
         |> Telemetry.duration ~key:"redecl2_end2_merge" ~start_time
         |> Telemetry.int_ ~key:"redecl2_end2_heap_size" ~value:hs
       in
-
       ServerRevisionTracker.typing_changed
         genv.local_config
         (Relative_path.Set.cardinal to_recheck);
@@ -1417,6 +1506,23 @@ functor
           ~key:"revtrack2_typing_changed_end"
           ~start_time
       in
+
+      (* we use lazy here to avoid expensive string generation when logging
+       * is not enabled *)
+      Hh_logger.log_lazy ~category:"fanout_information"
+      @@ lazy
+           Hh_json.(
+             json_to_string
+             @@ JSON_Object
+                  [
+                    ("tag", string_ "incremental_fanout");
+                    ( "hashes",
+                      array_
+                        string_
+                        Typing_deps.(
+                          List.map ~f:Dep.to_hex_string
+                          @@ DepSet.elements (Lazy.force to_recheck_deps)) );
+                  ]);
 
       let env =
         CheckKind.get_env_after_decl ~old_env:env ~naming_table ~failed_naming
@@ -1502,7 +1608,7 @@ functor
           ~changed_files:files_to_parse
           ~parse_t
       in
-      ServerProgress.send_progress_to_monitor_w_timeout
+      ServerProgress.send_progress
         ~include_in_logs:false
         "typechecking %d files"
         to_recheck_count;
@@ -1731,7 +1837,7 @@ let type_check_unsafe genv env kind start_time profiling =
 
   (* CAUTION! Lots of alerts/dashboards depend on the exact string of check_kind *)
   HackEventLogger.with_check_kind check_kind @@ fun () ->
-  Printf.eprintf "******************************************\n";
+  Hh_logger.log "******************************************";
   match kind with
   | Lazy_check ->
     Hh_logger.log
@@ -1782,7 +1888,16 @@ let type_check_unsafe genv env kind start_time profiling =
         ServerCommandTypes.Done_global_typecheck { is_truncated; shown; total }
       in
       ServerBusyStatus.send env msg );
-    let telemetry = Telemetry.duration telemetry ~key:"sent_done" ~start_time in
+    let telemetry =
+      telemetry
+      |> Telemetry.duration ~key:"sent_done" ~start_time
+      |> Telemetry.bool_
+           ~key:"diag_subscribe"
+           ~value:(Option.is_some env.ServerEnv.diag_subscribe)
+      (* If an IDE client is connected [env.diag_subscribe], let's log telemetry about
+        this fact. This way we can look at all recheck telemetry and determine how often
+        it's done with an IDE connected, hence presumably how long users wait in the IDE. *)
+    in
     (env, res, telemetry)
 
 let type_check genv env kind start_time profiling =

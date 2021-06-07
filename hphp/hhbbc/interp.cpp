@@ -243,6 +243,7 @@ void ensure_mutable(ISS& env, uint32_t id) {
  * previous instruction, just rewind.
  */
 int kill_by_slot(ISS& env, int slot) {
+  assertx(!env.undo);
   auto const id = id_from_slot(env, slot);
   assertx(id != StackElem::NoId);
   auto const sz = env.state.stack.size();
@@ -293,6 +294,7 @@ void insert_after_slot(ISS& env, int slot,
                        int numPop, int numPush, const Type* types,
                        const BytecodeVec& bcs) {
   assertx(can_insert_after_slot(env, slot));
+  assertx(!env.undo);
   auto const id = id_from_slot(env, slot);
   assertx(id != StackElem::NoId);
   ensure_mutable(env, id + 1);
@@ -333,6 +335,7 @@ void replace_last_op(ISS& env, Bytecode&& bc) {
   assertx(newPops <= oldPops);
 
   if (newPush != oldPush || newPops != oldPops) {
+    assertx(!env.undo);
     env.state.stack.rewind(oldPops - newPops, oldPush - newPush);
   }
   ITRACE(2, "(replace: {}->{}\n",
@@ -376,6 +379,7 @@ const Bytecode* last_op(ISS& env, int idx /* = 0 */) {
  * inputs, and commit a constant-generating bytecode.
  */
 void rewind(ISS& env, const Bytecode& bc) {
+  assertx(!env.undo);
   ITRACE(2, "(rewind: {}\n", show(env.ctx.func, bc));
   env.state.stack.rewind(numPop(bc), numPush(bc));
 }
@@ -391,6 +395,7 @@ void rewind(ISS& env, const Bytecode& bc) {
  */
 void rewind(ISS& env, int n) {
   assertx(n);
+  assertx(!env.undo);
   while (env.replacedBcs.size()) {
     rewind(env, env.replacedBcs.back());
     env.replacedBcs.pop_back();
@@ -954,6 +959,8 @@ void in(ISS& env, const bc::AddElemC&) {
   auto const promoteMayThrow = (promotion == Promotion::YesMightThrow);
 
   auto inTy = (env.state.stack.end() - 3).unspecialize();
+  // Unspecialize modifies the stack location
+  if (env.undo) env.undo->onStackWrite(env.state.stack.size() - 3, inTy);
 
   auto outTy = [&] (const Type& key) -> folly::Optional<Type> {
     if (!key.subtypeOf(BArrKey)) return folly::none;
@@ -1007,6 +1014,8 @@ void in(ISS& env, const bc::AddElemC&) {
 void in(ISS& env, const bc::AddNewElemC&) {
   auto v = topC(env);
   auto inTy = (env.state.stack.end() - 2).unspecialize();
+  // Unspecialize modifies the stack location
+  if (env.undo) env.undo->onStackWrite(env.state.stack.size() - 2, inTy);
 
   auto outTy = [&] () -> folly::Optional<Type> {
     if (inTy.subtypeOf(BVec | BKeyset)) {
@@ -1148,6 +1157,21 @@ void in(ISS& env, const bc::ClassName& op) {
   }
   popC(env);
   push(env, TSStr);
+}
+
+void in(ISS& env, const bc::LazyClassFromClass&) {
+  auto const ty = topC(env);
+  if (ty.subtypeOf(BCls) && is_specialized_cls(ty)) {
+    auto const dcls = dcls_of(ty);
+    if (dcls.type == DCls::Exact) {
+      return reduce(env,
+                    bc::PopC {},
+                    bc::LazyClass { dcls.cls.name() });
+    }
+    effect_free(env);
+  }
+  popC(env);
+  push(env, TLazyCls);
 }
 
 void concatHelper(ISS& env, uint32_t n) {
@@ -1567,35 +1591,21 @@ void in(ISS& env, const bc::Same&)  { sameImpl<false>(env); }
 void in(ISS& env, const bc::NSame&) { sameImpl<true>(env); }
 
 template<class Fun>
-void binOpBoolImpl(ISS& env, Fun fun) {
+void binOpBoolImpl(ISS& env, Fun fun, bool checkSameTypes) {
   auto const t1 = popC(env);
   auto const t2 = popC(env);
-  auto const v1 = tv(t1);
-  auto const v2 = tv(t2);
-  if (v1 && v2) {
-    if (auto r = eval_cell_value([&]{ return fun(*v2, *v1); })) {
-      constprop(env);
-      return push(env, *r ? TTrue : TFalse);
+  if (t1 == t2 || !checkSameTypes) {
+    auto const v1 = tv(t1);
+    auto const v2 = tv(t2);
+    if (v1 && v2) {
+      if (auto r = eval_cell_value([&]{ return fun(*v2, *v1); })) {
+        constprop(env);
+        return push(env, *r ? TTrue : TFalse);
+      }
     }
   }
   // TODO_4: evaluate when these can throw, non-constant type stuff.
   push(env, TBool);
-}
-
-template<class Fun>
-void binOpInt64Impl(ISS& env, Fun fun) {
-  auto const t1 = popC(env);
-  auto const t2 = popC(env);
-  auto const v1 = tv(t1);
-  auto const v2 = tv(t2);
-  if (v1 && v2) {
-    if (auto r = eval_cell_value([&]{ return ival(fun(*v2, *v1)); })) {
-      constprop(env);
-      return push(env, std::move(*r));
-    }
-  }
-  // TODO_4: evaluate when these can throw, non-constant type stuff.
-  push(env, TInt);
 }
 
 void in(ISS& env, const bc::Eq&) {
@@ -1605,7 +1615,7 @@ void in(ISS& env, const bc::Eq&) {
     discard(env, 2);
     return push(env, TTrue);
   }
-  binOpBoolImpl(env, [&] (TypedValue c1, TypedValue c2) { return tvEqual(c1, c2); });
+  binOpBoolImpl(env, [&] (TypedValue c1, TypedValue c2) { return tvEqual(c1, c2); }, false);
 }
 void in(ISS& env, const bc::Neq&) {
   auto rs = resolveSame<false>(env);
@@ -1614,19 +1624,32 @@ void in(ISS& env, const bc::Neq&) {
     discard(env, 2);
     return push(env, TFalse);
   }
-  binOpBoolImpl(env, [&] (TypedValue c1, TypedValue c2) { return !tvEqual(c1, c2); });
+  binOpBoolImpl(env, [&] (TypedValue c1, TypedValue c2) { return !tvEqual(c1, c2); }, false);
 }
 void in(ISS& env, const bc::Lt&) {
-  binOpBoolImpl(env, [&] (TypedValue c1, TypedValue c2) { return tvLess(c1, c2); });
+  binOpBoolImpl(env, [&] (TypedValue c1, TypedValue c2) { return tvLess(c1, c2); }, true);
 }
 void in(ISS& env, const bc::Gt&) {
-  binOpBoolImpl(env, [&] (TypedValue c1, TypedValue c2) { return tvGreater(c1, c2); });
+  binOpBoolImpl(env, [&] (TypedValue c1, TypedValue c2) { return tvGreater(c1, c2); }, true);
 }
-void in(ISS& env, const bc::Lte&) { binOpBoolImpl(env, tvLessOrEqual); }
-void in(ISS& env, const bc::Gte&) { binOpBoolImpl(env, tvGreaterOrEqual); }
+void in(ISS& env, const bc::Lte&) { binOpBoolImpl(env, tvLessOrEqual, true); }
+void in(ISS& env, const bc::Gte&) { binOpBoolImpl(env, tvGreaterOrEqual, true); }
 
 void in(ISS& env, const bc::Cmp&) {
-  binOpInt64Impl(env, [&] (TypedValue c1, TypedValue c2) { return tvCompare(c1, c2); });
+  auto const t1 = popC(env);
+  auto const t2 = popC(env);
+  if (t1 == t2) {
+    auto const v1 = tv(t1);
+    auto const v2 = tv(t2);
+    if (v1 && v2) {
+      if (auto r = eval_cell_value([&]{ return ival(tvCompare(*v2, *v1)); })) {
+        constprop(env);
+        return push(env, std::move(*r));
+      }
+    }
+  }
+  // TODO_4: evaluate when these can throw, non-constant type stuff.
+  push(env, TInt);
 }
 
 void castBoolImpl(ISS& env, const Type& t, bool negate) {
@@ -1896,6 +1919,7 @@ std::pair<Type, bool> memoizeImplRetType(ISS& env) {
 
   auto retTy = env.index.lookup_return_type(
     env.ctx,
+    &env.collect.methods,
     args,
     ctxType,
     memo_impl_func
@@ -2336,7 +2360,7 @@ void in(ISS& env, const bc::CGetS& op) {
   if (lookup.found == TriBool::No || lookup.ty.subtypeOf(BBottom)) {
     return throws();
   }
-  
+
   if (op.subop1 == ReadOnlyOp::Mutable && lookup.readOnly == TriBool::Yes) {
     return throws();
   }
@@ -3098,6 +3122,13 @@ void in(ISS& env, const bc::IsTypeStructC& op) {
       );
     }
     if (auto const val = get_ts_this_type_access(a->m_data.parr)) {
+      auto const classconst_bc = []() -> Bytecode {
+        if (RuntimeOption::EvalEmitClassPointers == 2) {
+          return bc::LazyClassFromClass {};
+        } else {
+          return bc::ClassName {};
+        }
+      }();
       // Convert `$x is this::T` into
       // `$x is type_structure_no_throw(static::class, 'T')`
       // to take advantage of the caching that comes with the type_structure
@@ -3107,7 +3138,7 @@ void in(ISS& env, const bc::IsTypeStructC& op) {
         bc::NullUninit {},
         bc::NullUninit {},
         bc::LateBoundCls {},
-        bc::ClassName {},
+        classconst_bc,
         bc::String {val},
         bc::FCallFuncD {FCallArgs(2), s_hh_type_structure_no_throw.get()},
         bc::IsTypeStructC { TypeStructResolveOp::DontResolve }
@@ -3481,52 +3512,54 @@ bool fcallCanSkipRepack(ISS& env, const FCallArgs& fca, const res::Func& func) {
   return unpackArgs.subtypeOf(BVec);
 }
 
-template<class FCallWithFCA>
+template<typename FCallWithFCA>
 bool fcallOptimizeChecks(
   ISS& env,
   const FCallArgs& fca,
   const res::Func& func,
-  FCallWithFCA fcallWithFCA
+  FCallWithFCA fcallWithFCA,
+  folly::Optional<uint32_t> inOutNum
 ) {
-  auto const numOut = env.index.lookup_num_inout_params(env.ctx, func);
-  if (fca.enforceInOut() && numOut == fca.numRets() - 1) {
-    bool match = true;
-    for (auto i = 0; i < fca.numArgs(); ++i) {
-      auto const kind = env.index.lookup_param_prep(env.ctx, func, i);
-      if (kind == PrepKind::Unknown) {
-        match = false;
-        break;
+  if (fca.enforceInOut()) {
+    if (inOutNum == fca.numRets() - 1) {
+      bool match = true;
+      for (auto i = 0; i < fca.numArgs(); ++i) {
+        auto const kind = env.index.lookup_param_prep(env.ctx, func, i);
+        if (kind == PrepKind::Unknown) {
+          match = false;
+          break;
+        }
+
+        if (kind != (fca.isInOut(i) ? PrepKind::InOut : PrepKind::Val)) {
+          // The function/method may not exist, in which case we should raise a
+          // different error. Just defer the checks to the runtime.
+          if (!func.exactFunc()) return false;
+
+          // inout mismatch
+          auto const exCls = makeStaticString("InvalidArgumentException");
+          auto const err = makeStaticString(formatParamInOutMismatch(
+                                              func.name()->data(), i, !fca.isInOut(i)));
+
+          reduce(
+            env,
+            bc::NewObjD { exCls },
+            bc::Dup {},
+            bc::NullUninit {},
+            bc::String { err },
+            bc::FCallCtor { FCallArgs(1), staticEmptyString() },
+            bc::PopC {},
+            bc::LockObj {},
+            bc::Throw {}
+          );
+          return true;
+        }
       }
 
-      if (kind != (fca.isInOut(i) ? PrepKind::InOut : PrepKind::Val)) {
-        // The function/method may not exist, in which case we should raise a
-        // different error. Just defer the checks to the runtime.
-        if (!func.exactFunc()) return false;
-
-        // inout mismatch
-        auto const exCls = makeStaticString("InvalidArgumentException");
-        auto const err = makeStaticString(formatParamInOutMismatch(
-          func.name()->data(), i, !fca.isInOut(i)));
-
-        reduce(
-          env,
-          bc::NewObjD { exCls },
-          bc::Dup {},
-          bc::NullUninit {},
-          bc::String { err },
-          bc::FCallCtor { FCallArgs(1), staticEmptyString() },
-          bc::PopC {},
-          bc::LockObj {},
-          bc::Throw {}
-        );
+      if (match) {
+        // Optimize away the runtime inout-ness check.
+        reduce(env, fcallWithFCA(fca.withoutInOut()));
         return true;
       }
-    }
-
-    if (match) {
-      // Optimize away the runtime inout-ness check.
-      reduce(env, fcallWithFCA(fca.withoutInOut()));
-      return true;
     }
   }
 
@@ -3670,7 +3703,7 @@ void pushCallReturnType(ISS& env, Type&& ty, const FCallArgs& fca) {
 const StaticString s_defined { "defined" };
 const StaticString s_function_exists { "function_exists" };
 
-template<class FCallWithFCA>
+template<typename FCallWithFCA>
 void fcallKnownImpl(
   ISS& env,
   const FCallArgs& fca,
@@ -3678,7 +3711,8 @@ void fcallKnownImpl(
   Type context,
   bool nullsafe,
   uint32_t numExtraInputs,
-  FCallWithFCA fcallWithFCA
+  FCallWithFCA fcallWithFCA,
+  folly::Optional<uint32_t> inOutNum
 ) {
   auto const numArgs = fca.numArgs();
   auto returnType = [&] {
@@ -3689,8 +3723,10 @@ void fcallKnownImpl(
     }
 
     auto ty = fca.hasUnpack()
-      ? env.index.lookup_return_type(env.ctx, func)
-      : env.index.lookup_return_type(env.ctx, args, context, func);
+      ? env.index.lookup_return_type(env.ctx, &env.collect.methods, func)
+      : env.index.lookup_return_type(
+          env.ctx, &env.collect.methods, args, context, func
+        );
     if (nullsafe) ty = opt(std::move(ty));
     return ty;
   }();
@@ -3709,8 +3745,10 @@ void fcallKnownImpl(
 
   // If there's a caller/callee inout mismatch, then the call will
   // always fail.
-  if (auto const numInOut = env.index.lookup_num_inout_params(env.ctx, func)) {
-    if (*numInOut + 1 != fca.numRets()) returnType = TBottom;
+  if (fca.enforceInOut()) {
+    if (inOutNum && (*inOutNum + 1 != fca.numRets())) {
+      returnType = TBottom;
+    }
   }
 
   for (auto i = uint32_t{0}; i < numExtraInputs; ++i) popC(env);
@@ -3762,7 +3800,11 @@ void in(ISS& env, const bc::FCallFuncD& op) {
     return bc::FCallFuncD { std::move(fca), op.str2 };
   };
 
-  if (fcallOptimizeChecks(env, op.fca, rfunc, updateBC) ||
+  auto const numInOut = op.fca.enforceInOut()
+    ? env.index.lookup_num_inout_params(env.ctx, rfunc)
+    : folly::none;
+
+  if (fcallOptimizeChecks(env, op.fca, rfunc, updateBC, numInOut) ||
       fcallTryFold(env, op.fca, rfunc, TBottom, false, 0)) {
     return;
   }
@@ -3771,7 +3813,7 @@ void in(ISS& env, const bc::FCallFuncD& op) {
     if (optimize_builtin(env, func, op.fca)) return;
   }
 
-  fcallKnownImpl(env, op.fca, rfunc, TBottom, false, 0, updateBC);
+  fcallKnownImpl(env, op.fca, rfunc, TBottom, false, 0, updateBC, numInOut);
 }
 
 namespace {
@@ -3821,8 +3863,12 @@ void fcallFuncStr(ISS& env, const bc::FCallFunc& op) {
     return bc::FCallFunc { std::move(fca) };
   };
 
-  if (fcallOptimizeChecks(env, op.fca, rfunc, updateBC)) return;
-  fcallKnownImpl(env, op.fca, rfunc, TBottom, false, 1, updateBC);
+  auto const numInOut = op.fca.enforceInOut()
+    ? env.index.lookup_num_inout_params(env.ctx, rfunc)
+    : folly::none;
+
+  if (fcallOptimizeChecks(env, op.fca, rfunc, updateBC, numInOut)) return;
+  fcallKnownImpl(env, op.fca, rfunc, TBottom, false, 1, updateBC, numInOut);
 }
 
 } // namespace
@@ -4042,8 +4088,12 @@ void fcallObjMethodImpl(ISS& env, const Op& op, SString methName, bool dynamic,
   auto const clsTy = objcls(ctxTy);
   auto const rfunc = env.index.resolve_method(ctx, clsTy, methName);
 
+  auto const numInOut = op.fca.enforceInOut()
+    ? env.index.lookup_num_inout_params(env.ctx, rfunc)
+    : folly::none;
+
   auto const canFold = !mayUseNullsafe && !mayThrowNonObj;
-  if (fcallOptimizeChecks(env, op.fca, rfunc, updateBC) ||
+  if (fcallOptimizeChecks(env, op.fca, rfunc, updateBC, numInOut) ||
       (canFold && fcallTryFold(env, op.fca, rfunc, ctxTy, dynamic,
                                extraInput ? 1 : 0))) {
     return;
@@ -4054,7 +4104,7 @@ void fcallObjMethodImpl(ISS& env, const Op& op, SString methName, bool dynamic,
   }
 
   fcallKnownImpl(env, op.fca, rfunc, ctxTy, mayUseNullsafe, extraInput ? 1 : 0,
-                 updateBC);
+                 updateBC, numInOut);
   refineLoc();
 }
 
@@ -4133,7 +4183,11 @@ void fcallClsMethodImpl(ISS& env, const Op& op, Type clsTy, SString methName,
   auto const ctx = getCallContext(env, op.fca);
   auto const rfunc = env.index.resolve_method(ctx, clsTy, methName);
 
-  if (fcallOptimizeChecks(env, op.fca, rfunc, updateBC) ||
+  auto const numInOut = op.fca.enforceInOut()
+    ? env.index.lookup_num_inout_params(env.ctx, rfunc)
+    : folly::none;
+
+  if (fcallOptimizeChecks(env, op.fca, rfunc, updateBC, numInOut) ||
       fcallTryFold(env, op.fca, rfunc, clsTy, dynamic, numExtraInputs)) {
     return;
   }
@@ -4143,7 +4197,7 @@ void fcallClsMethodImpl(ISS& env, const Op& op, Type clsTy, SString methName,
   }
 
   fcallKnownImpl(env, op.fca, rfunc, clsTy, false /* nullsafe */,
-                 numExtraInputs, updateBC);
+                 numExtraInputs, updateBC, numInOut);
 }
 
 } // namespace
@@ -4229,7 +4283,11 @@ void fcallClsMethodSImpl(ISS& env, const Op& op, SString methName, bool dynamic,
 
   auto const rfunc = env.index.resolve_method(env.ctx, clsTy, methName);
 
-  if (fcallOptimizeChecks(env, op.fca, rfunc, updateBC) ||
+  auto const numInOut = op.fca.enforceInOut()
+    ? env.index.lookup_num_inout_params(env.ctx, rfunc)
+    : folly::none;
+
+  if (fcallOptimizeChecks(env, op.fca, rfunc, updateBC, numInOut) ||
       fcallTryFold(env, op.fca, rfunc, ctxCls(env), dynamic,
                    extraInput ? 1 : 0)) {
     return;
@@ -4240,7 +4298,7 @@ void fcallClsMethodSImpl(ISS& env, const Op& op, SString methName, bool dynamic,
   }
 
   fcallKnownImpl(env, op.fca, rfunc, ctxCls(env), false /* nullsafe */,
-                 extraInput ? 1 : 0, updateBC);
+                 extraInput ? 1 : 0, updateBC, numInOut);
 }
 
 } // namespace
@@ -4429,8 +4487,12 @@ void in(ISS& env, const bc::FCallCtor& op) {
     return bc::FCallCtor { std::move(fca), op.str2 };
   };
 
+  auto const numInOut = op.fca.enforceInOut()
+    ? env.index.lookup_num_inout_params(env.ctx, *rfunc)
+    : folly::none;
+
   auto const canFold = obj.subtypeOf(BObj);
-  if (fcallOptimizeChecks(env, op.fca, *rfunc, updateFCA) ||
+  if (fcallOptimizeChecks(env, op.fca, *rfunc, updateFCA, numInOut) ||
       (canFold && fcallTryFold(env, op.fca, *rfunc,
                                obj, false /* dynamic */, 0))) {
     return;
@@ -4442,7 +4504,7 @@ void in(ISS& env, const bc::FCallCtor& op) {
   }
 
   fcallKnownImpl(env, op.fca, *rfunc, obj, false /* nullsafe */, 0,
-                 updateFCA);
+                 updateFCA, numInOut);
 }
 
 void in(ISS& env, const bc::LockObj& op) {
@@ -4847,7 +4909,7 @@ void verifyRetImpl(ISS& env, const TCVec& tcs,
     // VerifyRetType will convert a TCls to a TStr implicitly
     // (and possibly warn)
     if (tcT.couldBe(BStr) && stackT.couldBe(BCls | BLazyCls)) {
-      stackT |= TStr;
+      stackT |= TSStr;
       dont_reduce = true;
     }
 
@@ -5708,6 +5770,7 @@ RunFlags run(Interp& interp, const State& in, PropagateFn propagate) {
       if (!env.reprocess) break;
       FTRACE(2, "  Reprocess mutated block {}\n", interp.bid);
       assertx(env.unchangedBcs < retryOffset || env.replacedBcs.size());
+      assertx(!env.undo);
       retryOffset = env.unchangedBcs;
       retryBcs = std::move(env.replacedBcs);
       env.unchangedBcs = 0;

@@ -7,92 +7,51 @@
  *
  *)
 
-type pipe_from_server = Unix.file_descr
+open Hh_prelude
 
-type seconds = int
+(** latest_progress is the progress message we most recently wrote to server_progress_file *)
+let latest_progress : string ref = ref "server about to start up"
 
-let make_pipe_from_server (fd : Unix.file_descr) : pipe_from_server = fd
+(** latest_warning is the warning message we most recently wrote to server_progress_file *)
+let latest_warning : string option ref = ref None
 
-let read_from_server (fd : pipe_from_server) :
-    MonitorRpc.server_to_monitor_message option =
-  try
-    let (readable, _, _) = Unix.select [fd] [] [] 0.0 in
-    if readable = [] then
-      None
-    else
-      Some (Marshal_tools.from_fd_with_preamble fd)
-  with e ->
-    (* If something went wrong here, the system is likely in broken state
-     * (the server died). We'll keep going so that monitor
-     * can resolve this (by restarting the server / exiting itself *)
-    let stack = Printexc.get_backtrace () in
-    Hh_logger.exc stack e;
-    None
-
-let pipe_to_monitor_ref : Unix.file_descr option ref = ref None
-
-let previous_message : MonitorRpc.server_to_monitor_message option ref =
-  ref None
-
-let make_pipe_to_monitor (fd : Unix.file_descr) : unit =
-  pipe_to_monitor_ref := Some fd
-
-type timeout_outcome =
-  | Did_time_out
-  | Did_not_time_out
-
-let send_with_timeout ~(timeout : seconds) fd msg : timeout_outcome =
-  Timeout.with_timeout
-    ~timeout
-    ~on_timeout:(fun _ -> Did_time_out)
-    ~do_:(fun timeout ->
-      let (_ : int) = Marshal_tools.to_fd_with_preamble ~timeout fd msg in
-      Did_not_time_out)
-
-let send_without_timeout fd msg : unit =
-  let (_ : int) = Marshal_tools.to_fd_with_preamble fd msg in
+let write_progress_file () =
+  let pid = Unix.getpid () in
+  let server_progress_file = ServerFiles.server_progress_file pid in
+  let server_progress =
+    ServerCommandTypes.
+      {
+        server_progress = !latest_progress;
+        server_warning = !latest_warning;
+        server_timestamp = Unix.gettimeofday ();
+      }
+  in
+  ServerCommandTypesUtils.write_progress_file
+    ~server_progress_file
+    ~server_progress;
   ()
 
-let send_to_monitor
-    (type res)
-    (send_to_fd : _ -> _ -> res)
-    ~(default : res)
-    (msg : MonitorRpc.server_to_monitor_message) : res =
-  match !pipe_to_monitor_ref with
-  | None ->
-    (* This function can be invoked in non-server code paths,
-     * when there is no monitor. *)
-    default
-  | Some fd ->
-    begin
-      match (msg, !previous_message) with
-      | (msg, Some previous_message) when msg = previous_message ->
-        (* Avoid sending the same message repeatedly. *)
-        default
-      | _ ->
-        previous_message := Some msg;
-        send_to_fd fd msg
-    end
+let send_warning s =
+  begin
+    match (!latest_warning, s) with
+    | (Some latest, Some s) when String.equal latest s -> ()
+    | (None, None) -> ()
+    | (_, _) ->
+      latest_warning := s;
+      write_progress_file ()
+  end;
+  ()
 
-let send_to_monitor_with_timeout ~(timeout : seconds) msg : timeout_outcome =
-  send_to_monitor (send_with_timeout ~timeout) ~default:Did_not_time_out msg
-
-let send_to_monitor_without_timout msg : unit =
-  send_to_monitor send_without_timeout ~default:() msg
-
-let send_progress_to_monitor_w_timeout : ?include_in_logs:bool -> _ =
- fun ?(include_in_logs = true) fmt ->
+let send_progress ?(include_in_logs = true) fmt =
   let f s =
     if include_in_logs then Hh_logger.log "%s" s;
-    let (_ : timeout_outcome) =
-      send_to_monitor_with_timeout ~timeout:1 (MonitorRpc.PROGRESS s)
-    in
+    if not (String.equal !latest_progress s) then begin
+      latest_progress := s;
+      write_progress_file ()
+    end;
     ()
   in
   Printf.ksprintf f fmt
-
-let send_progress_warning_to_monitor msg =
-  send_to_monitor_without_timout (MonitorRpc.PROGRESS_WARNING msg)
 
 (* The message will look roughly like this:
   <operation> <done_count>/<total_count> <unit> <percent done> <extra>*)
@@ -103,7 +62,7 @@ let make_percentage_progress_message
     ~(unit : string)
     ~(extra : string option) : string =
   let unit =
-    if unit = "" then
+    if String.equal unit "" then
       unit
     else
       unit ^ " "
@@ -122,13 +81,13 @@ let make_percentage_progress_message
   | Some extra -> main_message ^ " " ^ extra
   | None -> main_message
 
-let send_percentage_progress_to_monitor_w_timeout
+let send_percentage_progress
     ~(operation : string)
     ~(done_count : int)
     ~(total_count : int)
     ~(unit : string)
     ~(extra : string option) : unit =
-  send_progress_to_monitor_w_timeout
+  send_progress
     ~include_in_logs:false
     "%s"
     (make_percentage_progress_message

@@ -21,6 +21,16 @@
 #include "hphp/runtime/base/execution-context.h"
 #include "hphp/util/rds-local.h"
 
+#include <dlfcn.h>
+#ifdef __APPLE__
+#include <xlocale.h>
+#endif
+
+#ifdef __APPLE__
+// On MacOS we have and use localeconv_l, but we emulate it on other platforms
+#include <locale.h>
+#endif
+
 /*
  * This class reimplements the setlocale() and localeconv() functions
  * in a thread-safe manner and provides stronger symbols for them than
@@ -51,39 +61,7 @@ namespace HPHP {
 RDS_LOCAL(ThreadSafeLocaleHandler, g_thread_safe_locale_handler);
 RDS_LOCAL(struct lconv, g_thread_safe_localeconv_data);
 
-static const locale_t s_null_locale = (locale_t) 0;
-
 ThreadSafeLocaleHandler::ThreadSafeLocaleHandler() {
-#define FILL_IN_CATEGORY_LOCALE_MAP(category) \
-  {category, category ## _MASK, #category, ""}
-  m_category_locale_map = {
-      FILL_IN_CATEGORY_LOCALE_MAP(LC_CTYPE),
-      FILL_IN_CATEGORY_LOCALE_MAP(LC_NUMERIC),
-      FILL_IN_CATEGORY_LOCALE_MAP(LC_TIME),
-      FILL_IN_CATEGORY_LOCALE_MAP(LC_COLLATE),
-      FILL_IN_CATEGORY_LOCALE_MAP(LC_MONETARY),
-      #ifndef _MSC_VER
-      FILL_IN_CATEGORY_LOCALE_MAP(LC_MESSAGES),
-      #endif
-      FILL_IN_CATEGORY_LOCALE_MAP(LC_ALL),
-      #if !defined(__APPLE__) && !defined(_MSC_VER)
-      FILL_IN_CATEGORY_LOCALE_MAP(LC_PAPER),
-      FILL_IN_CATEGORY_LOCALE_MAP(LC_NAME),
-      FILL_IN_CATEGORY_LOCALE_MAP(LC_ADDRESS),
-      FILL_IN_CATEGORY_LOCALE_MAP(LC_TELEPHONE),
-      FILL_IN_CATEGORY_LOCALE_MAP(LC_MEASUREMENT),
-      FILL_IN_CATEGORY_LOCALE_MAP(LC_IDENTIFICATION),
-      #endif
-  };
-#undef FILL_IN_CATEGORY_LOCALE_MAP
-
-#ifdef _MSC_VER
-  _configthreadlocale(_ENABLE_PER_THREAD_LOCALE);
-  ::setlocale(LC_ALL, "C");
-#else
-  m_locale = s_null_locale;
-#endif
-
   reset();
 }
 
@@ -92,117 +70,42 @@ ThreadSafeLocaleHandler::~ThreadSafeLocaleHandler() {
 }
 
 void ThreadSafeLocaleHandler::reset() {
-#ifdef _MSC_VER
-  ::setlocale(LC_ALL, "C");
-#else
-  if (m_locale != s_null_locale) {
-    freelocale(m_locale);
-    m_locale = s_null_locale;
-  }
-
-  uselocale(LC_GLOBAL_LOCALE);
-#endif
+  auto next = Locale::getCLocale();
+  uselocale(next->get());
+  m_locale = next;
 }
 
 const char* ThreadSafeLocaleHandler::actuallySetLocale(
   int category, const char* locale_cstr) {
-  if (category < 0 || category >= m_category_locale_map.size()) {
+  if (category < 0) {
     return nullptr;
   }
 
   if (locale_cstr == nullptr) {
     if (category == LC_ALL) {
       generate_LC_ALL_String();
+      return m_lc_all.c_str();
     }
 
-    return m_category_locale_map[category].locale_str.c_str();
+    return m_locale->querylocale(LocaleCategory, category);
   }
 
   if (category != LC_ALL && strchr(locale_cstr, '=') != nullptr) {
     return nullptr;
   }
 
-#ifdef _MSC_VER
-  // Windows doesn't accept POSIX as a valid
-  // locale, use C instead.
-  if (!strcmp(locale_cstr, "POSIX"))
-    locale_cstr = "C";
-
-  if (::setlocale(category, locale_cstr) == nullptr)
+  auto new_locale = m_locale->newlocale(LocaleCategory, category, locale_cstr);
+  if (!new_locale) {
     return nullptr;
-#else
-  locale_t new_locale = newlocale(
-    m_category_locale_map[category].category_mask,
-    locale_cstr,
-    m_locale
-  );
+  }
 
-  if (new_locale == s_null_locale) {
+  if (!uselocale(new_locale->get())) {
     return nullptr;
   }
 
   m_locale = new_locale;
-  uselocale(m_locale);
-#endif
 
-  if (category == LC_ALL) {
-    if (strchr(locale_cstr, ';') != nullptr) {
-      /*
-       * We need to parse out any semi-colon delimited categories and locales
-       * and store them separately in the appropriate
-       * category_locale_map.locale_str
-       *
-       * We are not validating the string for correctness of format.
-       * The newlocale() call already did that for us.
-       */
-      char *locale_cstr_copy = strdup(locale_cstr);
-
-      for (char *start_ptr = locale_cstr_copy, *group_save = nullptr;;
-           start_ptr = nullptr) {
-        char *group = strtok_r(start_ptr, ";", &group_save);
-        if (group == nullptr) {
-          break;
-        }
-
-        char *key = nullptr, *value = nullptr;
-        int count = 0;
-        for (char *item_ptr = group, *item_save = nullptr;;
-             count++, item_ptr = nullptr) {
-          char *item = strtok_r(item_ptr, "=", &item_save);
-          if (item == nullptr) {
-            break;
-          }
-
-          if (count == 0) {
-            key = item;
-          } else if (count == 1) {
-            value = item;
-          }
-        }
-
-        /* Completely naive search.
-         * If this is a bottleneck it can be converted into a hash-map
-         */
-        for (auto &i : m_category_locale_map) {
-          if (i.category_str == key) {
-            i.locale_str = value ? value : "";
-            break;
-          }
-        }
-      }
-
-      free(locale_cstr_copy);
-    } else {
-      /* Copy the locale into all categories */
-      for (auto &i : m_category_locale_map) {
-        i.locale_str = locale_cstr;
-      }
-    }
-  } else {
-    m_category_locale_map[category].locale_str = locale_cstr;
-  }
-
-  return locale_cstr;
+  return m_locale->querylocale(LocaleCategory, category);
 }
 
 #ifdef _MSC_VER
@@ -221,7 +124,7 @@ struct lconv* ThreadSafeLocaleHandler::localeconv() {
   // is) we can just use that.
   // TODO is the memcpy even necessary?
   struct lconv *ptr = g_thread_safe_localeconv_data.get();
-  struct lconv *l = localeconv_l(m_locale);
+  struct lconv *l = localeconv_l(m_locale->get());
   memcpy(ptr, l, sizeof(struct lconv));
   return ptr;
 }
@@ -270,35 +173,50 @@ struct lconv* ThreadSafeLocaleHandler::localeconv() {
 #endif
 
 void ThreadSafeLocaleHandler::generate_LC_ALL_String() {
+  auto names = m_locale->getAllCategoryLocaleNames();
+
   bool same = true;
-  for (auto &i : m_category_locale_map) {
-    if (i.category == LC_ALL) {
+  // Arbitrary - if anything != CTYPE then they're not all the same
+  const auto lc_type = names.at("LC_CTYPE");
+  for (const auto& [category, name] : names) {
+    if (category == "LC_ALL") {
       continue;
     }
 
-    if (i.locale_str != m_category_locale_map[LC_CTYPE].locale_str) {
+    if (name != lc_type) {
       same = false;
       break;
     }
   }
 
-  auto &all_locale_str = m_category_locale_map[LC_ALL].locale_str;
   if (same) {
-    all_locale_str = m_category_locale_map[LC_CTYPE].locale_str;
-  } else {
-    all_locale_str.clear();
+    m_lc_all = names.at("LC_ALL");
+    return;
+  }
 
-    for (auto &i : m_category_locale_map) {
-      if (i.category == LC_ALL) {
-        continue;
-      }
+  m_lc_all.clear();
 
-      all_locale_str.append(i.category_str + "=" + i.locale_str + ";");
+  for (const auto &[category, name] : names) {
+    if (category == "LC_ALL") {
+      continue;
     }
 
-    /* Remove trailing semicolon */
-    all_locale_str.resize(all_locale_str.size() - 1);
+    m_lc_all.append(category + "=" + name + ";");
   }
+
+  /* Remove trailing semicolon */
+  m_lc_all.resize(m_lc_all.size() - 1);
+}
+
+std::shared_ptr<Locale> ThreadSafeLocaleHandler::getRequestLocale() {
+  return HPHP::g_thread_safe_locale_handler->m_locale;
+}
+
+void ThreadSafeLocaleHandler::setRequestLocale(std::shared_ptr<Locale> loc) {
+  if (!uselocale(loc->get())) {
+    return;
+  }
+  HPHP::g_thread_safe_locale_handler->m_locale = loc;
 }
 
 }

@@ -128,7 +128,9 @@ protected:
                       "autoload_", std::hash<std::string>{}(root), "_db.sql3");
     m_wrappers.push_back(SymbolMapWrapper{
         std::make_unique<SymbolMap<std::string>>(
-            std::move(root), std::move(dbPath)),
+            std::move(root),
+            DBData::readWrite(
+                std::move(dbPath), static_cast<::gid_t>(-1), 0644)),
         std::move(exec)});
     return *m_wrappers.back().m_map;
   }
@@ -1682,18 +1684,18 @@ TEST_F(SymbolMapTest, GetTypesAndTypeAliasesWithAttribute) {
             [&](auto const& attr) { return attr.slice() == "Foo"; }),
         someClassAttrs.end());
     {
-      auto args = m1.getAttributeArgs("SomeClass", "Foo");
+      auto args = m1.getTypeAttributeArgs("SomeClass", "Foo");
       EXPECT_EQ(args.size(), 2);
       EXPECT_EQ(args.at(0), "apple");
       EXPECT_EQ(args.at(1), 38);
     }
     {
-      auto args = m1.getAttributeArgs("SomeClass", "Bar");
+      auto args = m1.getTypeAttributeArgs("SomeClass", "Bar");
       EXPECT_EQ(args.size(), 1);
       EXPECT_EQ(args.at(0), nullptr);
     }
     {
-      auto args = m1.getAttributeArgs("SomeClass", "Baz");
+      auto args = m1.getTypeAttributeArgs("SomeClass", "Baz");
       EXPECT_TRUE(args.empty());
     }
   }
@@ -1735,7 +1737,7 @@ TEST_F(SymbolMapTest, GetTypesAndTypeAliasesWithAttribute) {
     EXPECT_TRUE(collectionContains(fooTypes, "SomeClass"));
     EXPECT_TRUE(collectionContains(fooTypes, "SomeTypeAlias"));
 
-    auto fooArgs = m2.getAttributeArgs("SomeTypeAlias", "Foo");
+    auto fooArgs = m2.getTypeAttributeArgs("SomeTypeAlias", "Foo");
     EXPECT_EQ(fooArgs.size(), 2);
     EXPECT_EQ(fooArgs.at(0), 42);
     EXPECT_EQ(fooArgs.at(1), "a");
@@ -1757,18 +1759,18 @@ TEST_F(SymbolMapTest, GetTypesAndTypeAliasesWithAttribute) {
         barTypes.end());
   }
   {
-    auto args = m1.getAttributeArgs("SomeClass", "Foo");
+    auto args = m1.getTypeAttributeArgs("SomeClass", "Foo");
     EXPECT_EQ(args.size(), 2);
     EXPECT_EQ(args.at(0), "apple");
     EXPECT_EQ(args.at(1), 38);
   }
   {
-    auto args = m1.getAttributeArgs("SomeClass", "Bar");
+    auto args = m1.getTypeAttributeArgs("SomeClass", "Bar");
     EXPECT_EQ(args.size(), 1);
     EXPECT_EQ(args.at(0), nullptr);
   }
   {
-    auto args = m1.getAttributeArgs("SomeClass", "Baz");
+    auto args = m1.getTypeAttributeArgs("SomeClass", "Baz");
     EXPECT_TRUE(args.empty());
   }
   {
@@ -1808,6 +1810,45 @@ TEST_F(SymbolMapTest, getTypesWithAttributeFiltersDuplicateDefs) {
   EXPECT_EQ(fooTypes.size(), 1);
   EXPECT_EQ(fooTypes.at(0).slice(), "SomeClass");
   EXPECT_EQ(m2.getTypeFile("SomeClass"), p1.native());
+}
+
+TEST_F(SymbolMapTest, GetMethodsWithAttribute) {
+  auto& m1 = make("/var/www");
+
+  FileFacts ff1{
+      .m_types =
+          {
+              TypeDetails{
+                  .m_name = "C1",
+                  .m_methods = {MethodDetails{
+                      .m_name = "m1",
+                      .m_attributes = {{.m_name = "A1", .m_args = {1}}}}}},
+          },
+      .m_sha1hex = kSHA};
+  folly::fs::path p1{"some/path1.php"};
+  m1.update("", "1", {p1}, {}, {ff1});
+
+  auto testMap = [&p1](auto& m) {
+    auto methods = m.getMethodsWithAttribute("A1");
+    ASSERT_EQ(methods.size(), 1);
+    EXPECT_EQ(methods[0].m_type.m_name.slice(), "C1");
+    EXPECT_EQ(methods[0].m_type.m_path.slice(), p1.native());
+    EXPECT_EQ(methods[0].m_method.slice(), "m1");
+
+    auto attrs = m.getAttributesOfMethod("C1", "m1");
+    ASSERT_EQ(attrs.size(), 1);
+    EXPECT_EQ(attrs[0].slice(), "A1");
+
+    auto args = m.getMethodAttributeArgs("C1", "m1", "A1");
+    ASSERT_EQ(args.size(), 1);
+    EXPECT_EQ(args[0], 1);
+  };
+  testMap(m1);
+
+  m1.waitForDBUpdate();
+  auto& m2 = make("/var/www");
+  m2.update("1", "1", {}, {}, {});
+  testMap(m2);
 }
 
 TEST_F(SymbolMapTest, TransitiveSubtypes) {

@@ -26,6 +26,7 @@
 #include "hphp/runtime/base/packed-array.h"
 #include "hphp/runtime/base/set-array.h"
 
+#include "hphp/runtime/vm/jit/code-gen-cf.h"
 #include "hphp/runtime/vm/jit/code-gen-helpers.h"
 #include "hphp/runtime/vm/jit/irlower.h"
 #include "hphp/runtime/vm/jit/irlower-internal.h"
@@ -329,6 +330,7 @@ void cgBespokeElem(IRLS& env, const IRInstruction* inst) {
           : CallSpec::direct(elemKeysetIU);
       }
     }
+    args.ssa(3);
     return key->isA(TStr)
       ? CallSpec::direct(throwOnMissing ? elemSD : elemSU)
       : CallSpec::direct(throwOnMissing ? elemID : elemIU);
@@ -430,18 +432,75 @@ void cgLdMonotypeVecElem(IRLS& env, const IRInstruction* inst) {
 //////////////////////////////////////////////////////////////////////////////
 // StructDict
 
+namespace {
+
 using bespoke::StructDict;
 using bespoke::StructLayout;
+
+// Returns none if the layout is an abstract struct layout.
+folly::Optional<Slot> getStructSlot(const SSATmp* arr, const SSATmp* key) {
+  assertx(key->hasConstVal(TStr));
+  auto const layout = arr->type().arrSpec().layout();
+  assertx(layout.is_struct());
+
+  if (!layout.bespokeLayout()->isConcrete()) return folly::none;
+
+  auto const slayout = bespoke::StructLayout::As(layout.bespokeLayout());
+  return slayout->keySlot(key->strVal());
+}
+
+}
 
 void cgAllocBespokeStructDict(IRLS& env, const IRInstruction* inst) {
   auto const extra = inst->extra<AllocBespokeStructDict>();
   auto& v = vmain(env);
 
+  auto const layout = StructLayout::As(extra->layout.bespokeLayout());
   auto const target = CallSpec::direct(StructDict::AllocStructDict);
   auto const args = argGroup(env, inst)
-    .imm(StructLayout::As(extra->layout.bespokeLayout()));
+    .imm(layout->sizeIndex())
+    .imm(layout->extraInitializer());
 
   cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::None, args);
+}
+
+void cgInitStructPositions(IRLS& env, const IRInstruction* inst) {
+  auto const arr = inst->src(0);
+  auto const rarr = srcLoc(env, inst, 0).reg();
+  auto const extra = inst->extra<InitStructPositions>();
+  auto& v = vmain(env);
+
+  v << storel{v.cns(extra->numSlots), rarr[ArrayData::offsetofSize()]};
+
+  auto const layout = arr->type().arrSpec().layout();
+  auto const slayout = bespoke::StructLayout::As(layout.bespokeLayout());
+
+  auto constexpr kSlotsPerStore = 8;
+  auto const padBytes = slayout->positionOffset() & 0x7;
+  for (auto i = 0; i < extra->numSlots + padBytes; i += kSlotsPerStore) {
+    uint64_t slots = 0;
+    for (auto j = 0; j < kSlotsPerStore; j++) {
+      auto const index = i + j - padBytes;
+      auto const slot = 0 <= index && index < extra->numSlots
+        ? safe_cast<uint8_t>(extra->slots[index])
+        : static_cast<uint8_t>(KindOfUninit);
+      slots = slots | (safe_cast<uint64_t>(slot) << (j * 8));
+    }
+    auto const offset = slayout->positionOffset() + i - padBytes;
+    assertx((offset % kSlotsPerStore) == 0);
+    v << store{v.cns(slots), rarr[offset]};
+  }
+}
+
+void cgInitStructElem(IRLS& env, const IRInstruction* inst) {
+  auto const arr = inst->src(0);
+  auto const layout = arr->type().arrSpec().layout();
+  auto const slayout = bespoke::StructLayout::As(layout.bespokeLayout());
+  auto const rarr = srcLoc(env, inst, 0).reg();
+  auto const slot = inst->extra<InitStructElem>()->index;
+  auto const type = rarr[slayout->typeOffsetForSlot(slot)];
+  auto const data = rarr[slayout->valueOffsetForSlot(slot)];
+  storeTV(vmain(env), inst->src(1)->type(), srcLoc(env, inst, 1), type, data);
 }
 
 void cgNewBespokeStructDict(IRLS& env, const IRInstruction* inst) {
@@ -458,9 +517,11 @@ void cgNewBespokeStructDict(IRLS& env, const IRInstruction* inst) {
     slots[i] = static_cast<uint8_t>(KindOfUninit);
   }
 
+  auto const layout = StructLayout::As(extra->layout.bespokeLayout());
   auto const target = CallSpec::direct(StructDict::MakeStructDict);
   auto const args = argGroup(env, inst)
-    .imm(StructLayout::As(extra->layout.bespokeLayout()))
+    .imm(layout->sizeIndex())
+    .imm(layout->extraInitializer())
     .imm(extra->numSlots)
     .dataPtr(slots)
     .addr(sp, cellsToBytes(extra->offset.offset));
@@ -469,41 +530,223 @@ void cgNewBespokeStructDict(IRLS& env, const IRInstruction* inst) {
 }
 
 void cgLdStructDictElem(IRLS& env, const IRInstruction* inst) {
-  auto const rarr = srcLoc(env, inst, 0).reg();
   auto const arr = inst->src(0);
-  auto layout = arr->type().arrSpec().layout();
-  auto const slayout = bespoke::StructLayout::As(layout.bespokeLayout());
   auto const key = inst->src(1);
-  assertx(key->hasConstVal());
-  auto const slot = slayout->keySlot(key->strVal());
-  if (slot == kInvalidSlot) {
-    assertx(inst->dst()->isA(TUninit));
+  auto const slot = getStructSlot(arr, key);
+
+  if (!slot) return cgBespokeGet(env, inst);
+
+  if (*slot == kInvalidSlot) {
+    always_assert(inst->dst()->isA(TUninit));
     return;
   }
-  auto const type = rarr[slayout->typeOffsetForSlot(slot)];
-  auto const value = rarr[slayout->valueOffsetForSlot(slot)];
-  loadTV(vmain(env), inst->dst()->type(), dstLoc(env, inst, 0),
-         type, value);
+
+  auto const layout = arr->type().arrSpec().layout();
+  auto const slayout = bespoke::StructLayout::As(layout.bespokeLayout());
+
+  auto const rarr = srcLoc(env, inst, 0).reg();
+  auto const type = rarr[slayout->typeOffsetForSlot(*slot)];
+  auto const data = rarr[slayout->valueOffsetForSlot(*slot)];
+  loadTV(vmain(env), inst->dst()->type(), dstLoc(env, inst, 0), type, data);
+}
+
+void cgStructDictGetWithColor(IRLS& env, const IRInstruction* inst) {
+  auto const arr = inst->src(0);
+  auto const key = inst->src(1);
+  auto const dst = dstLoc(env, inst, 0);
+
+  auto const rarr = srcLoc(env, inst, 0).reg();
+  auto const rkey = srcLoc(env, inst, 1).reg();
+
+  auto& v = vmain(env);
+
+  auto const makeNonstaticCall =
+    [&](Vout& v, const Vreg& value, const Vreg& type) {
+      auto const target =
+        CallSpec::direct(bespoke::StructDict::NvGetStrNonStatic);
+      auto const args = argGroup(env, inst).ssa(0).ssa(1);
+      cgCallHelper(v, env, target, callDest(value, type), SyncOptions::Sync,
+                   args);
+    };
+
+  // Is the key certain to be non-static? If so, invoke the non-static helper.
+  if (!key->type().maybe(TStaticStr)) {
+    makeNonstaticCall(v, dst.reg(0), dst.reg(1));
+    return;
+  }
+
+  // 1) Read the string's color. This may be junk if the string is non-static.
+  auto constexpr layoutMask = StructLayout::kMaxColor;
+  auto constexpr hashEntrySize =
+    sizeof(bespoke::StructLayout::PerfectHashEntry);
+  auto const getColor = [&] {
+    auto const colorMasked = [&] {
+      static_assert(folly::isPowTwo(layoutMask + 1));
+      static_assert(layoutMask <= std::numeric_limits<uint8_t>::max());
+      auto const colorPremask = v.makeReg();
+      v << loadzbq{rkey[StringData::colorOffset()], colorPremask};
+      if (layoutMask == std::numeric_limits<uint8_t>::max()) {
+        return colorPremask;
+      } else {
+        auto const colorMasked = v.makeReg();
+        v << andqi{uint8_t(layoutMask), colorPremask, colorMasked, v.makeReg()};
+        return colorMasked;
+      }
+    }();
+
+    static_assert(hashEntrySize == 8 || hashEntrySize == 16);
+    if constexpr (hashEntrySize == 16) {
+      // Without lowptr enabled, we have to use a 16-byte stride.
+      auto const colorFinal = v.makeReg();
+      v << lea{colorMasked[colorMasked], colorFinal};
+      return colorFinal;
+    } else {
+      return colorMasked;
+    }
+  };
+
+  auto constexpr strHashOffset =
+          offsetof(bespoke::StructLayout::PerfectHashEntry, str);
+  auto constexpr valHashOffset =
+          offsetof(bespoke::StructLayout::PerfectHashEntry, valueOffset);
+  auto constexpr typeHashOffset =
+          offsetof(bespoke::StructLayout::PerfectHashEntry, typeOffset);
+
+  // 2) Obtain the addresses of the string, value offset, and type offset in
+  // the perfect hash table.
+  auto const tuple = [&] {
+    auto const layout = arr->type().arrSpec().layout();
+    assertx(layout.is_struct());
+
+    // 2a) If the layout is known, we can obtain its perfect hash table address
+    // statically.
+    if (layout.bespokeLayout()->isConcrete()) {
+      auto const hashTable = (uintptr_t)
+        bespoke::StructLayout::hashTableForLayout(layout.bespokeLayout());
+      auto const base = v.cns(hashTable);
+
+      auto const entryWithOffset = [&]() -> std::function<Vptr(size_t)> {
+        if (key->hasConstVal(TStr)) {
+          return [&](size_t off) {
+            auto const offWithColor =
+              (key->strVal()->color() & layoutMask) * hashEntrySize + off;
+            return base[offWithColor];
+          };
+        }
+
+        auto const color = getColor();
+        return [=](size_t off) { return base[color * 8 + off]; };
+      }();
+
+      return std::make_tuple(
+        entryWithOffset(strHashOffset),
+        entryWithOffset(valHashOffset),
+        entryWithOffset(typeHashOffset)
+      );
+    }
+
+    // 2b) Otherwise, we'll have to index into the table set to find the
+    // layout's perfect hash table.
+    auto const hashTableSet = (uintptr_t) bespoke::StructLayout::hashTableSet();
+    auto const layoutIndex = v.makeReg();
+    v << loadzwq{rarr[ArrayData::offsetOfBespokeIndex()], layoutIndex};
+
+    auto constexpr hashTableSize =
+      sizeof(bespoke::StructLayout::PerfectHashTable);
+    static_assert(folly::isPowTwo(hashTableSize));
+    auto const layoutShift =
+      safe_cast<uint8_t>(folly::findLastSet(hashTableSize) - 1);
+    auto const hashTableOffset = v.makeReg();
+
+    v << shlqi{layoutShift, layoutIndex, hashTableOffset, v.makeReg()};
+
+    auto const entryWithOffset = [&]() -> std::function<Vptr(size_t)> {
+      if (key->hasConstVal(TStr)) {
+        return [&](size_t off) {
+          auto const offWithColor =
+            (key->strVal()->color() & layoutMask) * hashEntrySize + off;
+          return hashTableOffset[v.cns(hashTableSet) + offWithColor];
+        };
+      }
+
+      auto const base = v.makeReg();
+      v << lea{hashTableOffset[v.cns(hashTableSet)], base};
+      auto const color = getColor();
+      return [=](size_t off) { return base[color * 8 + off]; };
+    }();
+
+    return std::make_tuple(
+      entryWithOffset(strHashOffset),
+      entryWithOffset(valHashOffset),
+      entryWithOffset(typeHashOffset)
+    );
+  }();
+
+  auto const strPtr = std::get<0>(tuple);
+  auto const valPtr = std::get<1>(tuple);
+  auto const typePtr = std::get<2>(tuple);
+
+  // 3) Retrieve the string pointer from the perfect hash table.
+  auto const hashStr = v.makeReg();
+  emitLdLowPtr(v, strPtr, hashStr, sizeof(LowStringPtr));
+
+  // 4) Check if the string pointer matches.
+  auto const sf = v.makeReg();
+  v << cmpq{rkey, hashStr, sf};
+  cond(v, v, CC_E, sf, v.makeTuple({dst.reg(0), dst.reg(1)}),
+    [&] (Vout& v) {
+      // 4a) The string matched! Load the value and type offsets out of the
+      // perfect hash table, and use them to index into the struct.
+      auto const valueOff = v.makeReg();
+      auto const typeOff = v.makeReg();
+      v << loadzwq{valPtr, valueOff};
+      v << loadzwq{typePtr, typeOff};
+      auto const value = v.makeReg();
+      auto const type = v.makeReg();
+      v << load{rarr[valueOff], value};
+      v << loadb{rarr[typeOff], type};
+      return v.makeTuple({value, type});
+    },
+    [&] (Vout& v) {
+      // 4b) The string did not match. If the key is static, then we know the
+      // field is absent. If the key is non-static, we fall back to the
+      // non-static lookup routine.
+      if (key->type() <= TStaticStr) {
+        return v.makeTuple({v.cns(0), v.cns(KindOfUninit)});
+      }
+
+      auto const value = v.makeReg();
+      auto const type = v.makeReg();
+      auto const sf = emitCmpRefCount(v, StaticValue, rkey);
+      cond(v, v, CC_E, sf, v.makeTuple({value, type}),
+        [&] (Vout& v) {
+          return v.makeTuple({v.cns(0), v.cns(KindOfUninit)});
+        },
+        [&] (Vout& v) {
+          auto const callValue = v.makeReg();
+          auto const callType = v.makeReg();
+          makeNonstaticCall(v, callValue, callType);
+          return v.makeTuple({callValue, callType});
+        },
+        StringTag{}
+      );
+      return v.makeTuple({value, type});
+    },
+    StringTag{}
+  );
 }
 
 void cgStructDictSet(IRLS& env, const IRInstruction* inst) {
   auto const arr = inst->src(0);
-  auto layout = arr->type().arrSpec().layout();
-  auto const slayout = bespoke::StructLayout::As(layout.bespokeLayout());
   auto const key = inst->src(1);
-  assertx(key->hasConstVal());
+  auto const slot = getStructSlot(arr, key);
+
+  if (!slot || (*slot == kInvalidSlot)) return cgBespokeSet(env, inst);
+
   auto& v = vmain(env);
-  auto const keyStr = key->strVal();
-  auto const slot = slayout->keySlot(keyStr);
-  if (slot != kInvalidSlot) {
-    auto const target = CallSpec::direct(bespoke::StructDict::SetStrInSlot);
-    auto const args = argGroup(env, inst).ssa(0).imm(slot).typedValue(2);
-    cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
-  } else {
-    auto const target = CallSpec::direct(bespoke::StructDict::SetStrMove);
-    auto const args = argGroup(env, inst).ssa(0).immPtr(keyStr).typedValue(2);
-    cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
-  }
+  auto const target = CallSpec::direct(bespoke::StructDict::SetStrInSlot);
+  auto const args = argGroup(env, inst).ssa(0).imm(*slot).typedValue(2);
+  cgCallHelper(v, env, target, callDest(env, inst), SyncOptions::Sync, args);
 }
 
 //////////////////////////////////////////////////////////////////////////////

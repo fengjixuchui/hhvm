@@ -3,12 +3,13 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<d70bc429a32d48431b2b8c0638e42804>>
+// @generated SignedSource<<decee4ccd3abb79c5935d9dd1d687074>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
 
 use arena_trait::TrivialDrop;
+use eq_modulo_pos::EqModuloPos;
 use no_pos_hash::NoPosHash;
 use ocamlrep_derive::FromOcamlRep;
 use ocamlrep_derive::FromOcamlRepIn;
@@ -34,6 +35,7 @@ pub use shape_map::ShapeMap;
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     Hash,
     NoPosHash,
@@ -55,6 +57,7 @@ pub type IsReified = bool;
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -72,12 +75,14 @@ pub enum ImportFlavor {
     RequireOnce,
 }
 impl TrivialDrop for ImportFlavor {}
+arena_deserializer::impl_deserialize_in_arena!(ImportFlavor);
 
 #[derive(
     Clone,
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     Hash,
     NoPosHash,
@@ -100,6 +105,7 @@ pub enum XhpChild {
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -116,12 +122,14 @@ pub enum XhpChildOp {
     ChildQuestion,
 }
 impl TrivialDrop for XhpChildOp {}
+arena_deserializer::impl_deserialize_in_arena!(XhpChildOp);
 
 #[derive(
     Clone,
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     Hash,
     NoPosHash,
@@ -140,6 +148,7 @@ pub type VariadicHint = Option<Hint>;
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     Hash,
     NoPosHash,
@@ -156,6 +165,7 @@ pub struct Contexts(pub Pos, pub Vec<Hint>);
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     Hash,
     NoPosHash,
@@ -175,6 +185,7 @@ pub struct HfParamInfo {
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     Hash,
     NoPosHash,
@@ -199,6 +210,7 @@ pub struct HintFun {
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     Hash,
     NoPosHash,
@@ -263,6 +275,7 @@ pub enum Hint_ {
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -286,12 +299,14 @@ pub enum Tprim {
     Tnoreturn,
 }
 impl TrivialDrop for Tprim {}
+arena_deserializer::impl_deserialize_in_arena!(Tprim);
 
 #[derive(
     Clone,
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     Hash,
     NoPosHash,
@@ -312,6 +327,7 @@ pub struct ShapeFieldInfo {
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     Hash,
     NoPosHash,
@@ -332,6 +348,7 @@ pub struct NastShapeInfo {
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -348,6 +365,7 @@ pub enum KvcKind {
     Dict,
 }
 impl TrivialDrop for KvcKind {}
+arena_deserializer::impl_deserialize_in_arena!(KvcKind);
 
 #[derive(
     Clone,
@@ -355,6 +373,7 @@ impl TrivialDrop for KvcKind {}
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -374,6 +393,7 @@ pub enum VcKind {
     Keyset,
 }
 impl TrivialDrop for VcKind {}
+arena_deserializer::impl_deserialize_in_arena!(VcKind);
 
 #[derive(
     Clone,
@@ -381,6 +401,7 @@ impl TrivialDrop for VcKind {}
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -398,6 +419,7 @@ pub enum UseAsVisibility {
     UseAsFinal,
 }
 impl TrivialDrop for UseAsVisibility {}
+arena_deserializer::impl_deserialize_in_arena!(UseAsVisibility);
 
 #[derive(
     Clone,
@@ -405,6 +427,7 @@ impl TrivialDrop for UseAsVisibility {}
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -420,12 +443,14 @@ pub enum TypedefVisibility {
     Opaque,
 }
 impl TrivialDrop for TypedefVisibility {}
+arena_deserializer::impl_deserialize_in_arena!(TypedefVisibility);
 
 #[derive(
     Clone,
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     Hash,
     NoPosHash,
@@ -447,6 +472,7 @@ pub struct Enum_ {
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     Hash,
     NoPosHash,
@@ -464,6 +490,7 @@ pub struct WhereConstraintHint(pub Hint, pub ast_defs::ConstraintKind, pub Hint)
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -480,3 +507,4 @@ pub enum ReifyKind {
     Reified,
 }
 impl TrivialDrop for ReifyKind {}
+arena_deserializer::impl_deserialize_in_arena!(ReifyKind);

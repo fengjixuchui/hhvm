@@ -234,6 +234,27 @@ let check_override
     else
       on_error
   in
+  let check_compatible_sound_dynamic_attributes
+      member_name parent_class (class_ : Cls.t) parent_class_elt class_elt =
+    if
+      TypecheckerOptions.enable_sound_dynamic
+        (Provider_context.get_tcopt (Env.get_ctx env))
+      && ( Cls.get_support_dynamic_type parent_class
+         || get_ce_support_dynamic_type parent_class_elt )
+      && not
+           ( Cls.get_support_dynamic_type class_
+           || get_ce_support_dynamic_type class_elt )
+    then
+      let (lazy pos) = class_elt.ce_pos in
+      let (lazy parent_pos) = parent_class_elt.ce_pos in
+      Errors.override_method_support_dynamic_type
+        pos
+        parent_pos
+        parent_class_elt.ce_origin
+        member_name
+        on_error
+  in
+
   if is_method mem_source then begin
     (* We first verify that we aren't overriding a final method *)
     (* we only check for final overrides on methods, not properties *)
@@ -326,6 +347,12 @@ let check_override
            * which is checked elsewhere *)
           env
         | _ ->
+          check_compatible_sound_dynamic_attributes
+            member_name
+            parent_class
+            class_
+            parent_class_elt
+            class_elt;
           Typing_subtype_method.(
             (* Add deps here when we override *)
             subtype_method_decl
@@ -557,38 +584,49 @@ let check_members
         ( if
           TypecheckerOptions.enable_sound_dynamic
             (Provider_context.get_tcopt (Env.get_ctx env))
-          && Cls.get_implements_dynamic class_
-          && not (Cls.get_implements_dynamic parent_class)
+          && Cls.get_support_dynamic_type class_
+          && not (Cls.get_support_dynamic_type parent_class)
           (* TODO: ideally refactor so the last test is not systematically performed on all methods *)
         then
-          match mem_source with
-          | `FromMethod ->
-            if not (Typing_defs.get_ce_sound_dynamic_callable parent_class_elt)
-            then
-              (* since the attribute is missing run the inter check *)
-              let (lazy (ty : decl_ty)) = parent_class_elt.ce_type in
-              (match get_node ty with
-              | Tfun fun_ty ->
+          match Cls.kind parent_class with
+          | Ast_defs.Cabstract
+          | Ast_defs.Cnormal
+          | Ast_defs.Ctrait ->
+            begin
+              match mem_source with
+              | `FromMethod ->
                 if
-                  not
-                    (Typing_dynamic.sound_dynamic_interface_check_from_fun_ty
-                       env
-                       fun_ty)
+                  not (Typing_defs.get_ce_support_dynamic_type parent_class_elt)
                 then
-                  Errors.method_is_not_dynamically_callable
-                    class_pos
-                    member_name
-                    (Cls.name class_)
-                    false
-                    (Some
-                       ( Lazy.force parent_class_elt.ce_pos,
-                         parent_class_elt.ce_origin ))
-                    None
-              | _ -> ())
-          | `FromSMethod
-          | `FromSProp
-          | `FromProp
-          | `FromConstructor ->
+                  (* since the attribute is missing run the inter check *)
+                  let (lazy (ty : decl_ty)) = parent_class_elt.ce_type in
+                  (match get_node ty with
+                  | Tfun fun_ty ->
+                    if
+                      not
+                        (Typing_dynamic
+                         .sound_dynamic_interface_check_from_fun_ty
+                           env
+                           fun_ty)
+                    then
+                      Errors.method_is_not_dynamically_callable
+                        class_pos
+                        member_name
+                        (Cls.name class_)
+                        false
+                        (Some
+                           ( Lazy.force parent_class_elt.ce_pos,
+                             parent_class_elt.ce_origin ))
+                        None
+                  | _ -> ())
+              | `FromSMethod
+              | `FromSProp
+              | `FromProp
+              | `FromConstructor ->
+                ()
+            end
+          | Ast_defs.Cinterface
+          | Ast_defs.Cenum ->
             () );
         env)
 
@@ -656,7 +694,7 @@ let default_constructor_ce class_ =
         ~synthesized:true
         ~dynamicallycallable:false
         ~readonly_prop:false
-        ~sound_dynamic_callable:false;
+        ~support_dynamic_type:false;
   }
 
 (* When an interface defines a constructor, we check that they are compatible *)
@@ -729,14 +767,15 @@ let tconst_subsumption
     on_error =
   let (pos, name) = child_typeconst.ttc_name in
   let parent_pos = fst parent_typeconst.ttc_name in
-  match (parent_typeconst.ttc_abstract, child_typeconst.ttc_abstract) with
-  | (TCAbstract (Some _), TCAbstract None) ->
+  match (parent_typeconst.ttc_kind, child_typeconst.ttc_kind) with
+  | ( TCAbstract { atc_default = Some _; _ },
+      TCAbstract { atc_default = None; _ } ) ->
     Errors.override_no_default_typeconst
       pos
       parent_pos
       ~current_decl_and_file:(Env.get_current_decl_and_file env);
     env
-  | ((TCConcrete | TCPartiallyAbstract), TCAbstract _) ->
+  | ((TCConcrete _ | TCPartiallyAbstract _), TCAbstract _) ->
     (* It is valid for abstract class to extend a concrete class, but it cannot
      * redefine already concrete members as abstract.
      * See typecheck/tconst/subsume_tconst5.php test case for example. *)
@@ -762,55 +801,110 @@ let tconst_subsumption
 
     (* Check that the child's constraint is compatible with the parent. If the
      * parent has a constraint then the child must also have a constraint if it
-     * is abstract
+     * is abstract.
+     *
+     * Check that the child's assigned type satisifies parent constraint
      *)
     let default =
       MakeType.generic (Reason.Rtconst_no_cstr child_typeconst.ttc_name) name
+    in
+    let is_coeffect =
+      parent_typeconst.ttc_is_ctx || child_typeconst.ttc_is_ctx
     in
     let check_cstrs reason env sub super =
       Option.value ~default:env
       @@ Option.map2
            sub
            super
-           ~f:(Typing_ops.sub_type_decl ~on_error pos reason env)
+           ~f:(Typing_ops.sub_type_decl ~is_coeffect ~on_error pos reason env)
     in
-    let (child_super_cstr, child_as_cstr) =
-      match child_typeconst.ttc_abstract with
-      | TCAbstract _ ->
-        ( Some (Option.value child_typeconst.ttc_super_constraint ~default),
-          Some (Option.value child_typeconst.ttc_as_constraint ~default) )
-      | _ ->
-        (child_typeconst.ttc_super_constraint, child_typeconst.ttc_as_constraint)
-    in
+    (* TODO(T88552052) This can be greatly simplified by adopting the { A = S..T } representation
+     * from DOT and implementing the Typ-<:-Typ rule, Amin 2016 *)
     let env =
-      check_cstrs
-        Reason.URsubsume_tconst_cstr
-        env
-        child_as_cstr
-        parent_typeconst.ttc_as_constraint
-    in
-    let env =
-      check_cstrs
-        Reason.URsubsume_tconst_cstr
-        env
-        parent_typeconst.ttc_super_constraint
-        child_super_cstr
-    in
+      match parent_typeconst.ttc_kind with
+      | TCAbstract
+          {
+            atc_as_constraint = p_as_opt;
+            atc_super_constraint = p_super_opt;
+            _;
+          } ->
+        begin
+          match child_typeconst.ttc_kind with
+          | TCAbstract
+              {
+                atc_as_constraint = c_as_opt;
+                atc_super_constraint = c_super_opt;
+                _;
+              } ->
+            (* TODO(T88552052) this transformation can be done with mixed and nothing *)
+            let c_as_opt = Some (Option.value c_as_opt ~default) in
+            let c_super_opt = Some (Option.value c_super_opt ~default) in
 
-    (* Check that the child's assigned type satisifies parent constraint *)
-    let env =
-      check_cstrs
-        Reason.URtypeconst_cstr
+            let env =
+              check_cstrs Reason.URsubsume_tconst_cstr env c_as_opt p_as_opt
+            in
+            check_cstrs Reason.URsubsume_tconst_cstr env p_super_opt c_super_opt
+          | TCPartiallyAbstract { patc_constraint = c_as; patc_type = c_t } ->
+            let env =
+              check_cstrs Reason.URsubsume_tconst_cstr env (Some c_as) p_as_opt
+            in
+            let env =
+              check_cstrs Reason.URtypeconst_cstr env (Some c_t) p_as_opt
+            in
+            check_cstrs Reason.URtypeconst_cstr env p_super_opt (Some c_t)
+          | TCConcrete { tc_type = c_t } ->
+            let env =
+              check_cstrs Reason.URtypeconst_cstr env (Some c_t) p_as_opt
+            in
+            check_cstrs Reason.URtypeconst_cstr env p_super_opt (Some c_t)
+        end
+      | TCPartiallyAbstract { patc_constraint = p_as; _ } ->
+        (* TODO(T88552052) Can do abstract_concrete_override check here *)
+        begin
+          match child_typeconst.ttc_kind with
+          | TCPartiallyAbstract { patc_constraint = c_as; patc_type = c_t } ->
+            let env =
+              Typing_ops.sub_type_decl
+                ~on_error
+                pos
+                Reason.URsubsume_tconst_cstr
+                env
+                c_as
+                p_as
+            in
+            Typing_ops.sub_type_decl
+              ~on_error
+              pos
+              Reason.URtypeconst_cstr
+              env
+              c_t
+              p_as
+          | TCConcrete { tc_type = c_t } ->
+            Typing_ops.sub_type_decl
+              ~on_error
+              pos
+              Reason.URtypeconst_cstr
+              env
+              c_t
+              p_as
+          | _ -> env
+        end
+      | TCConcrete _ ->
+        begin
+          match child_typeconst.ttc_kind with
+          | TCConcrete _ ->
+            if
+              TypecheckerOptions.typeconst_concrete_concrete_error
+                (Env.get_tcopt env)
+              && not inherited
+            then
+              Errors.typeconst_concrete_concrete_override
+                ~current_decl_and_file:(Env.get_current_decl_and_file env)
+                pos
+                parent_pos
+          | _ -> ()
+        end;
         env
-        child_typeconst.ttc_type
-        parent_typeconst.ttc_as_constraint
-    in
-    let env =
-      check_cstrs
-        Reason.URtypeconst_cstr
-        env
-        parent_typeconst.ttc_super_constraint
-        child_typeconst.ttc_type
     in
 
     (* Don't recheck inherited type constants: errors will
@@ -818,13 +912,11 @@ let tconst_subsumption
     ( if inherited then
       ()
     else
-      match
-        ( child_typeconst.ttc_abstract,
-          child_typeconst.ttc_type,
-          parent_tconst_enforceable )
-      with
-      | (TCAbstract (Some ty), _, (pos, true))
-      | ((TCPartiallyAbstract | TCConcrete), Some ty, (pos, true)) ->
+      match (child_typeconst.ttc_kind, parent_tconst_enforceable) with
+      | (TCAbstract { atc_default = Some ty; _ }, (pos, true))
+      | ( ( TCPartiallyAbstract { patc_type = ty; _ }
+          | TCConcrete { tc_type = ty } ),
+          (pos, true) ) ->
         let tast_env = Tast_env.typing_env_as_tast_env env in
         let emit_error =
           Errors.invalid_enforceable_type "constant" (pos, name)
@@ -845,11 +937,14 @@ let tconst_subsumption
     );
 
     (* If the parent cannot be overridden, we unify the types otherwise we ensure
-     * the child's assigned type is compatible with the parent's *)
+     * the child's assigned type is compatible with the parent's
+     *
+     * TODO(T88552052) restrict concrete typeconst overriding
+     *)
     let parent_is_final =
-      match parent_typeconst.ttc_abstract with
-      | TCConcrete -> true
-      | TCPartiallyAbstract ->
+      match parent_typeconst.ttc_kind with
+      | TCConcrete _ -> true
+      | TCPartiallyAbstract _ ->
         TypecheckerOptions.disable_partially_abstract_typeconsts
           (Env.get_tcopt env)
       | TCAbstract _ -> false
@@ -872,10 +967,18 @@ let tconst_subsumption
           y
           x
     in
+    (* TODO(T88552052) this fetching of types is a temporary hack; this whole check will be eliminated *)
+    let opt_type__LEGACY t =
+      match t.ttc_kind with
+      | TCPartiallyAbstract { patc_type = t; _ }
+      | TCConcrete { tc_type = t } ->
+        Some t
+      | TCAbstract _ -> None
+    in
     Option.value ~default:env
     @@ Option.map2
-         parent_typeconst.ttc_type
-         child_typeconst.ttc_type
+         (opt_type__LEGACY parent_typeconst)
+         (opt_type__LEGACY child_typeconst)
          ~f:(check env)
 
 let check_typeconst_override
@@ -908,31 +1011,32 @@ let check_typeconst_override
   in
   let (pos, name) = tconst.ttc_name in
   let parent_pos = fst parent_tconst.ttc_name in
-  (* Temporarily skip checks on context constants *)
+  (* Temporarily skip checks on context constants
+   *
+   * TODO(T89366955) elimninate this check *)
   let is_context_constant =
-    match (parent_tconst.ttc_abstract, tconst.ttc_abstract) with
-    | (TCAbstract (Some hint1), TCAbstract (Some hint2)) ->
+    match (parent_tconst.ttc_kind, tconst.ttc_kind) with
+    | ( TCAbstract { atc_default = Some hint1; _ },
+        TCAbstract { atc_default = Some hint2; _ } ) ->
       (match (deref hint1, deref hint2) with
       | ((_, Tintersection _), _)
       | (_, (_, Tintersection _)) ->
         true
       | _ -> false)
-    | (TCAbstract (Some hint), _)
-    | (_, TCAbstract (Some hint)) ->
+    | (TCAbstract { atc_default = Some hint; _ }, _)
+    | (_, TCAbstract { atc_default = Some hint; _ }) ->
       (match deref hint with
       | (_, Tintersection _) -> true
       | _ -> false)
     | _ -> false
   in
-  (match
-     ( parent_tconst.ttc_type,
-       tconst.ttc_type,
-       parent_tconst.ttc_abstract,
-       tconst.ttc_abstract )
-   with
-  | (Some _, Some _, _, _)
-  | (_, Some _, TCAbstract (Some _), _)
-  | (_, _, TCAbstract (Some _), TCAbstract (Some _)) ->
+  (match (parent_tconst.ttc_kind, tconst.ttc_kind) with
+  | ( (TCConcrete _ | TCPartiallyAbstract _),
+      (TCConcrete _ | TCPartiallyAbstract _) )
+  | ( TCAbstract { atc_default = Some _; _ },
+      (TCConcrete _ | TCPartiallyAbstract _) )
+  | ( TCAbstract { atc_default = Some _; _ },
+      TCAbstract { atc_default = Some _; _ } ) ->
     if
       (not is_context_constant)
       && (not tconst.ttc_synthesized)
@@ -947,10 +1051,10 @@ let check_typeconst_override
            name
     then
       let child_is_abstract =
-        match tconst.ttc_abstract with
-        | TCConcrete -> false
+        match tconst.ttc_kind with
+        | TCConcrete _ -> false
         | TCAbstract _
-        | TCPartiallyAbstract ->
+        | TCPartiallyAbstract _ ->
           true
       in
       Errors.interface_typeconst_multiple_defs

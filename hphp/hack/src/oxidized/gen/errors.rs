@@ -3,12 +3,13 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<9028fb2c752ac1caf06a5a669b1e43cb>>
+// @generated SignedSource<<6756569e803c8b7d523498ecd0364456>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
 
 use arena_trait::TrivialDrop;
+use eq_modulo_pos::EqModuloPos;
 use no_pos_hash::NoPosHash;
 use ocamlrep_derive::FromOcamlRep;
 use ocamlrep_derive::FromOcamlRepIn;
@@ -36,6 +37,7 @@ pub type Message<A> = (A, String);
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -54,6 +56,7 @@ pub enum Phase {
     Typing,
 }
 impl TrivialDrop for Phase {}
+arena_deserializer::impl_deserialize_in_arena!(Phase);
 
 #[derive(
     Clone,
@@ -61,6 +64,7 @@ impl TrivialDrop for Phase {}
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -76,6 +80,7 @@ pub enum Severity {
     Error,
 }
 impl TrivialDrop for Severity {}
+arena_deserializer::impl_deserialize_in_arena!(Severity);
 
 #[derive(
     Clone,
@@ -83,6 +88,7 @@ impl TrivialDrop for Severity {}
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -99,6 +105,7 @@ pub enum Format {
     Highlighted,
 }
 impl TrivialDrop for Format {}
+arena_deserializer::impl_deserialize_in_arena!(Format);
 
 #[derive(
     Clone,
@@ -106,6 +113,7 @@ impl TrivialDrop for Format {}
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -126,6 +134,7 @@ pub enum NameContext {
     RecordContext,
 }
 impl TrivialDrop for NameContext {}
+arena_deserializer::impl_deserialize_in_arena!(NameContext);
 
 /// Results of single file analysis.
 pub type FileT<A> = phase_map::PhaseMap<Vec<A>>;
@@ -138,6 +147,7 @@ pub type FilesT<A> = relative_path::map::Map<FileT<A>>;
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     Hash,
     NoPosHash,
@@ -158,6 +168,7 @@ pub type Error = Error_<pos::Pos, pos_or_decl::PosOrDecl>;
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     Hash,
     NoPosHash,
@@ -174,6 +185,7 @@ pub struct AppliedFixme(pub pos::Pos, pub isize);
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     Hash,
     NoPosHash,

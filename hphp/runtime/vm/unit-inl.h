@@ -22,35 +22,11 @@
 #include "hphp/runtime/base/type-string.h"
 #include "hphp/runtime/base/repo-auth-type-array.h"
 #include "hphp/runtime/vm/hhbc-codec.h"
+#include "hphp/runtime/vm/litarray-table.h"
 #include "hphp/runtime/vm/litstr-table.h"
 #include "hphp/runtime/vm/unit-util.h"
 
 namespace HPHP {
-
-///////////////////////////////////////////////////////////////////////////////
-// Unit::MergeInfo.
-
-inline Func** Unit::MergeInfo::funcBegin() const {
-  return (Func**)m_mergeables;
-}
-
-inline Func** Unit::MergeInfo::funcEnd() const {
-  return funcBegin() + m_firstHoistablePreClass;
-}
-
-inline
-Unit::MergeInfo::FuncRange Unit::MergeInfo::funcs() const {
-  return { funcBegin(), funcEnd() };
-}
-
-inline
-Unit::MergeInfo::MutableFuncRange Unit::MergeInfo::mutableFuncs() const {
-  return { funcBegin(), funcEnd() };
-}
-
-inline void*& Unit::MergeInfo::mergeableObj(int idx) {
-  return m_mergeables[idx];
-}
 
 ///////////////////////////////////////////////////////////////////////////////
 // Basic accessors.
@@ -219,18 +195,18 @@ inline size_t Unit::numLitstrs() const {
 }
 
 inline bool Unit::isLitstrId(Id id) const {
-  if (!isUnitLitstrId(id)) {
+  if (!isUnitId(id)) {
     return LitstrTable::get().contains(id);
   }
-  auto unitID = decodeUnitLitstrId(id);
+  auto unitID = decodeUnitId(id);
   return m_extended && getExtended()->m_namedInfo.contains(unitID);
 }
 
 inline StringData* Unit::lookupLitstrId(Id id) const {
-  if (!isUnitLitstrId(id)) {
+  if (!isUnitId(id)) {
     return LitstrTable::get().lookupLitstrId(id);
   }
-  auto unitID = decodeUnitLitstrId(id);
+  auto unitID = decodeUnitId(id);
   return getExtended()->m_namedInfo.lookupLitstr(unitID);
 }
 
@@ -239,10 +215,10 @@ inline const NamedEntity* Unit::lookupNamedEntityId(Id id) const {
 }
 
 inline NamedEntityPair Unit::lookupNamedEntityPairId(Id id) const {
-  if (!isUnitLitstrId(id)) {
+  if (!isUnitId(id)) {
     return LitstrTable::get().lookupNamedEntityPairId(id);
   }
-  auto unitID = decodeUnitLitstrId(id);
+  auto unitID = decodeUnitId(id);
   return getExtended()->m_namedInfo.lookupNamedEntityPair(unitID);
 }
 
@@ -250,12 +226,17 @@ inline NamedEntityPair Unit::lookupNamedEntityPairId(Id id) const {
 // Arrays.
 
 inline size_t Unit::numArrays() const {
-  return m_arrays.size();
+  if (!m_extended) return 0;
+  return getExtended()->m_arrays.size();
 }
 
 inline const ArrayData* Unit::lookupArrayId(Id id) const {
-  assertx(id < m_arrays.size());
-  return m_arrays[id];
+  if (!isUnitId(id)) {
+    return LitarrayTable::get().lookupLitarrayId(id);
+  }
+  auto unitID = decodeUnitId(id);
+  assertx(unitID < getExtended()->m_arrays.size());
+  return getExtended()->m_arrays[unitID];
 }
 
 inline const RepoAuthType::Array* Unit::lookupArrayTypeId(Id id) const {
@@ -265,12 +246,7 @@ inline const RepoAuthType::Array* Unit::lookupArrayTypeId(Id id) const {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// Funcs and PreClasses and RecordDescs.
-
-inline Func* Unit::lookupFuncId(Id id) const {
-  assertx(id < Id(mergeInfo()->m_firstHoistablePreClass));
-  return mergeInfo()->funcBegin()[id];
-}
+// PreClasses and RecordDescs.
 
 inline PreClass* Unit::lookupPreClassId(Id id) const {
   assertx(id < Id(m_preClasses.size()));
@@ -282,8 +258,14 @@ inline PreRecordDesc* Unit::lookupPreRecordId(Id id) const {
   return m_preRecords[id].get();
 }
 
-inline Unit::FuncRange Unit::funcs() const {
-  return mergeInfo()->funcs();
+inline const Constant* Unit::lookupConstantId(Id id) const {
+  assertx(id < Id(m_constants.size()));
+  return &m_constants[id];
+}
+
+inline const PreTypeAlias* Unit::lookupTypeAliasId(Id id) const {
+  assertx(id < Id(m_typeAliases.size()));
+  return &m_typeAliases[id];
 }
 
 inline folly::Range<PreClassPtr*> Unit::preclasses() {
@@ -302,6 +284,22 @@ inline folly::Range<const PreRecordDescPtr*> Unit::prerecords() const {
   return { m_preRecords.data(), m_preRecords.size() };
 }
 
+///////////////////////////////////////////////////////////////////////////////
+// Funcs
+
+inline Func* Unit::lookupFuncId(Id id) const {
+  assertx(id < Id(m_funcs.size()));
+  return m_funcs[id];
+}
+
+inline folly::Range<Func**> Unit::funcs() {
+  return { m_funcs.begin(), m_funcs.end() };
+}
+
+inline folly::Range<Func* const*> Unit::funcs() const {
+  return { m_funcs.begin(), m_funcs.end() };
+}
+
 template<class Fn> void Unit::forEachFunc(Fn fn) const {
   for (auto& func : funcs()) {
     if (fn(func)) {
@@ -309,8 +307,7 @@ template<class Fn> void Unit::forEachFunc(Fn fn) const {
     }
   }
   for (auto& c : preclasses()) {
-    auto methods = FuncRange{c->methods(), c->methods() + c->numMethods()};
-    for (auto& method : methods) {
+    for (auto& method : c->allMethods()) {
       if (fn(method)) {
         return;
       }
@@ -369,7 +366,7 @@ inline const RecordDesc* Unit::lookupUniqueRecDesc(const StringData* name) {
 // Merge.
 
 inline bool Unit::isEmpty() const {
-  return m_mergeState.load(std::memory_order_relaxed) & MergeState::Empty;
+  return m_mergeState.load(std::memory_order_relaxed) == MergeState::Merged;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -385,6 +382,21 @@ inline void Unit::setInterpretOnly() {
 
 inline UserAttributeMap Unit::metaData() const {
   return m_metaData;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// ID helpers.
+
+inline bool isUnitId(Id id) {
+  return id >= kUnitIdOffset;
+}
+
+inline Id encodeUnitId(Id id) {
+  return id + kUnitIdOffset;
+}
+
+inline Id decodeUnitId(Id id) {
+  return id - kUnitIdOffset;
 }
 
 ///////////////////////////////////////////////////////////////////////////////

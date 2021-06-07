@@ -1,7 +1,11 @@
 File "t30337175.php", line 18, characters 3-5:
-Some type constraint(s) here are violated (Typing[4323])
-  File "t30337175.php", line 14, characters 14-14:
-  `T` is a constrained type parameter
+Can't access a type constant Tc from an unresolved type (Typing[4436])
+  File "t30337175.php", line 14, characters 57-58:
+  Access happens here
+  File "t30337175.php", line 18, characters 3-5:
+  Disambiguate the types using explicit type annotations here.
+File "t30337175.php", line 18, characters 3-5:
+Some type arguments violate their constraints (Typing[4323])
   File "t30337175.php", line 8, characters 19-24:
   Expected `string`
   File "t30337175.php", line 14, characters 57-58:
@@ -15,9 +19,7 @@ Some type constraint(s) here are violated (Typing[4323])
   File "t30337175.php", line 14, characters 19-19:
     on an object of type E
 File "t30337175.php", line 18, characters 3-5:
-Some type constraint(s) here are violated (Typing[4323])
-  File "t30337175.php", line 14, characters 14-14:
-  `T` is a constrained type parameter
+Some type arguments violate their constraints (Typing[4323])
   File "t30337175.php", line 11, characters 19-21:
   Expected `int`
   File "t30337175.php", line 14, characters 57-58:

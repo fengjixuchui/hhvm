@@ -17,7 +17,6 @@
 #pragma once
 
 #include "hphp/runtime/base/countable.h"
-#include "hphp/runtime/base/data-walker.h"
 #include "hphp/runtime/base/datatype.h"
 #include "hphp/runtime/base/header-kind.h"
 #include "hphp/runtime/base/runtime-option.h"
@@ -39,6 +38,7 @@ namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 
 struct Array;
+struct MakeUncountedEnv;
 struct String;
 struct StringData;
 struct Variant;
@@ -46,6 +46,19 @@ struct Variant;
 namespace bespoke {
   struct LoggingArray;
   struct MonotypeVec;
+
+  // Type-safe layout index, so that we can't mix it up with other ints.
+  struct LayoutIndex {
+    bool operator==(LayoutIndex o) const { return raw == o.raw; }
+    bool operator!=(LayoutIndex o) const { return raw != o.raw; }
+    bool operator<(LayoutIndex o) const { return raw < o.raw; }
+
+    // We use the high byte of the index for type tests and virtual dispatch.
+    uint8_t byte() const { return raw >> 8; }
+
+  public:
+    uint16_t raw;
+  };
 }
 
 /*
@@ -125,9 +138,9 @@ struct ArrayData : MaybeCountable {
   static auto constexpr kSampledArray = 8;
 
   /*
-   * See notes on the m_extra field for constraints on this value.
+   * See notes on the m_layout_index field for constraints on this value.
    */
-  static auto constexpr kDefaultVanillaArrayExtra = uint32_t(-1);
+  static auto constexpr kVanillaLayoutIndex = bespoke::LayoutIndex { 0xffff };
 
   /////////////////////////////////////////////////////////////////////////////
   // Creation and destruction.
@@ -470,7 +483,7 @@ public:
    * Return a new uncounted version of the given array. The array must be a
    * refcounted array - otherwise, we should call persistentIncRef() instead.
    */
-  ArrayData* makeUncounted(DataWalker::PointerMap* seen, bool hasApcTv);
+  ArrayData* makeUncounted(const MakeUncountedEnv& env, bool hasApcTv);
 
   /////////////////////////////////////////////////////////////////////////////
   // Other functions.
@@ -504,9 +517,11 @@ public:
    */
   static constexpr size_t offsetofSize() { return offsetof(ArrayData, m_size); }
   static constexpr size_t sizeofSize() { return sizeof(m_size); }
+  static constexpr size_t offsetofExtra() { return offsetof(ArrayData, m_extra); }
+  static constexpr size_t sizeofExtra() { return sizeof(m_extra); }
 
   static constexpr size_t offsetOfBespokeIndex() {
-    return offsetof(ArrayData, m_extra_hi16);
+    return offsetof(ArrayData, m_layout_index);
   }
 
   const StrKeyTable& missingKeySideTable() const {
@@ -605,26 +620,28 @@ protected:
   uint32_t m_size;
 
   /*
-   * m_extra is used to store extra data for BespokeArray. For now, we require
-   * that for vanilla arrays, m_extra always equals kDefaultVanillaArrayExtra.
+   * m_layout_index identifies the array's layout. For vanilla arrays, it's
+   * always kVanillaLayoutIndex. For bespoke arrays, it's the index of some
+   * concrete bespoke::Layout hidden class.
    *
-   * We may modify this field to include "array-provenance-like" info that
-   * could help us removing legacy marks.
+   * m_extra_lo8, m_extra_hi8, and m_extra_lo16 are for use by each concrete
+   * array class. We don't constrain the values in these fields in any way.
    *
-   * When the array is bespoke:
-   *
-   *   m_extra_lo16: For private BespokeArray use. We don't constrain the value
-   *                 in this field - different layouts can use it differently.
-   *
-   *   m_extra_hi16: The bespoke LayoutIndex.
+   * m_extra is provided for fast initialization of all of these fields.
    */
   union {
-    uint32_t m_extra;
     struct {
       /* NB the names are definitely little-endian centric but whatever */
-      uint16_t m_extra_lo16;
-      uint16_t m_extra_hi16;
+      union {
+        struct {
+          uint8_t m_extra_lo8;
+          uint8_t m_extra_hi8;
+        };
+        uint16_t m_extra_lo16;
+      };
+      bespoke::LayoutIndex m_layout_index;
     };
+    uint32_t m_extra;
   };
 };
 
@@ -738,7 +755,7 @@ struct ArrayFunctions {
   ArrayData* (*pop[NK])(ArrayData*, Variant& value);
   void (*onSetEvalScalar[NK])(ArrayData*);
   ArrayData* (*makeUncounted[NK])(
-    ArrayData*, DataWalker::PointerMap*, bool hasApcTv);
+    ArrayData*, const MakeUncountedEnv& env, bool hasApcTv);
 };
 
 extern const ArrayFunctions g_array_funcs;
@@ -760,6 +777,7 @@ extern const ArrayFunctions g_array_funcs;
                                             const ArrayData* ad);
 [[noreturn]] void throwFalseyPromoteException(const char* type);
 [[noreturn]] void throwInvalidKeysetOperation();
+[[noreturn]] void throwReadOnlyCollectionMutation();
 [[noreturn]] void throwVarrayUnsetException();
 [[noreturn]] void throwVecUnsetException();
 

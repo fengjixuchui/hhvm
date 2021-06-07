@@ -16,13 +16,60 @@
 
 #include "hphp/runtime/vm/repo-global-data.h"
 
+#include "hphp/runtime/base/builtin-functions.h"
+#include "hphp/runtime/base/variable-unserializer.h"
+
 #include <folly/Format.h>
 
 namespace HPHP {
 
 //////////////////////////////////////////////////////////////////////
 
-std::string show(const Repo::GlobalData& gd) {
+void RepoGlobalData::load(bool loadConstantFuncs) const {
+  RO::EnableIntrinsicsExtension                 = EnableIntrinsicsExtension;
+  RO::PHP7_Builtins                             = PHP7_Builtins;
+  RO::PHP7_NoHexNumerics                        = PHP7_NoHexNumerics;
+  RO::PHP7_Substr                               = PHP7_Substr;
+  RO::EvalCheckPropTypeHints                    = CheckPropTypeHints;
+  RO::EnableArgsInBacktraces                    = EnableArgsInBacktraces;
+  RO::EvalAbortBuildOnVerifyError               = AbortBuildOnVerifyError;
+  RO::StrictArrayFillKeys                       = StrictArrayFillKeys;
+  RO::EvalIsCompatibleClsMethType               = IsCompatibleClsMethType;
+  RO::EvalEmitClassPointers                     = EmitClassPointers;
+  RO::EvalEmitClsMethPointers                   = EmitClsMethPointers;
+  RO::EvalForbidDynamicCallsWithAttr            = ForbidDynamicCallsWithAttr;
+  RO::EvalHackArrCompatIsVecDictNotices         = HackArrCompatIsVecDictNotices;
+  RO::EvalRaiseClassConversionWarning           = RaiseClassConversionWarning;
+  RO::EvalClassPassesClassname                  = ClassPassesClassname;
+  RO::EvalClassnameNotices                      = ClassnameNotices;
+  RO::EvalClassIsStringNotices                  = ClassIsStringNotices;
+  RO::EvalRaiseClsMethConversionWarning         = RaiseClsMethConversionWarning;
+  RO::EvalNoticeOnCoerceForStrConcat            = NoticeOnCoerceForStrConcat;
+  RO::EvalNoticeOnCoerceForBitOp                = NoticeOnCoerceForBitOp;
+  RO::EvalHackArrDVArrs                         = true; // TODO(kshaunak): Clean up.
+
+  if (HardGenericsUB) RO::EvalEnforceGenericsUB = 2;
+
+  always_assert(!RO::EvalArrayProvenance);
+  always_assert(!RO::EvalLogArrayProvenance);
+
+  if (loadConstantFuncs) {
+    RO::ConstantFunctions.clear();
+    for (auto const& elm : ConstantFunctions) {
+      auto result = RO::ConstantFunctions.emplace(
+        elm.first, make_tv<KindOfUninit>()
+      );
+      if (result.second) {
+        tvAsVariant(result.first->second) = unserialize_from_string(
+          elm.second, VariableUnserializer::Type::Internal
+        );
+        tvAsVariant(result.first->second).setEvalScalar();
+      }
+    }
+  }
+}
+
+std::string show(const RepoGlobalData& gd) {
   std::string out;
 #define SHOW(x) folly::format(&out, "  {}: {}\n", #x, gd.x)
   SHOW(InitialNamedEntityTableSize);
@@ -53,10 +100,12 @@ std::string show(const Repo::GlobalData& gd) {
   SHOW(RaiseClassConversionWarning);
   SHOW(ClassPassesClassname);
   SHOW(ClassnameNotices);
+  SHOW(ClassIsStringNotices);
   SHOW(RaiseClsMethConversionWarning);
   SHOW(StrictArrayFillKeys);
   SHOW(NoticeOnCoerceForStrConcat);
   SHOW(NoticeOnCoerceForBitOp);
+  SHOW(TypeconstInterfaceInheritanceDefaults);
 #undef SHOW
   return out;
 }

@@ -101,21 +101,21 @@ module MethodFlags = struct
   let override_bit               = 1 lsl 2
   let dynamicallycallable_bit    = 1 lsl 3
   let php_std_lib_bit            = 1 lsl 4
-  let sound_dynamic_callable_bit = 1 lsl 5
+  let support_dynamic_type_bit = 1 lsl 5
 
   let get_abstract               = is_set abstract_bit
   let get_final                  = is_set final_bit
   let get_override               = is_set override_bit
   let get_dynamicallycallable    = is_set dynamicallycallable_bit
   let get_php_std_lib            = is_set php_std_lib_bit
-  let get_sound_dynamic_callable = is_set sound_dynamic_callable_bit
+  let get_support_dynamic_type = is_set support_dynamic_type_bit
 
   let set_abstract               = set_bit abstract_bit
   let set_final                  = set_bit final_bit
   let set_override               = set_bit override_bit
   let set_dynamicallycallable    = set_bit dynamicallycallable_bit
   let set_php_std_lib            = set_bit php_std_lib_bit
-  let set_sound_dynamic_callable = set_bit sound_dynamic_callable_bit
+  let set_support_dynamic_type = set_bit support_dynamic_type_bit
 
   let make
       ~abstract
@@ -123,7 +123,7 @@ module MethodFlags = struct
       ~override
       ~dynamicallycallable
       ~php_std_lib
-      ~sound_dynamic_callable
+      ~support_dynamic_type
       =
     empty
     |> set_abstract abstract
@@ -131,7 +131,7 @@ module MethodFlags = struct
     |> set_override override
     |> set_dynamicallycallable dynamicallycallable
     |> set_php_std_lib php_std_lib
-    |> set_sound_dynamic_callable sound_dynamic_callable
+    |> set_support_dynamic_type support_dynamic_type
 
   let pp fmt t =
     if t = empty then
@@ -160,18 +160,23 @@ type shallow_class_const = {
   scc_abstract: bool;
   scc_name: Typing_defs.pos_id;
   scc_type: decl_ty;
+      (** This field is used for two different meanings in two different places...
+      enum class A:arraykey {int X="a";} -- here X.scc_type=\HH\MemberOf<A,int>
+      enum B:int as arraykey {X="a"; Y=1; Z=B::X;} -- here X.scc_type=string, Y.scc_type=int, Z.scc_type=TAny
+      In the later case, the scc_type is just a simple syntactic attempt to retrieve the type from the initializer. *)
   scc_refs: Typing_defs.class_const_ref list;
+      (** This is a list of all scope-resolution operators "A::B" that are mentioned in the const initializer,
+      for members of regular-enums and enum-class-enums to detect circularity of initializers.
+      We don't yet have a similar mechanism for top-level const initializers. *)
 }
 [@@deriving eq, show]
 
 type shallow_typeconst = {
-  stc_abstract: typeconst_abstract_kind;
-  stc_as_constraint: decl_ty option;
-  stc_super_constraint: decl_ty option;
   stc_name: Typing_defs.pos_id;
-  stc_type: decl_ty option;
+  stc_kind: Typing_defs.typeconst;
   stc_enforceable: Pos_or_decl.t * bool;
   stc_reifiable: Pos_or_decl.t option;
+  stc_is_ctx: bool;
 }
 [@@deriving eq, show]
 
@@ -199,16 +204,18 @@ type shallow_class = {
   sc_is_xhp: bool;
   sc_has_xhp_keyword: bool;
   sc_kind: Ast_defs.class_kind;
+  sc_module: string option;
   sc_name: Typing_defs.pos_id;
   sc_tparams: decl_tparam list;
   sc_where_constraints: decl_where_constraint list;
   sc_extends: decl_ty list;
   sc_uses: decl_ty list;
   sc_xhp_attr_uses: decl_ty list;
+  sc_xhp_enum_values: Ast_defs.xhp_enum_value list SMap.t;
   sc_req_extends: decl_ty list;
   sc_req_implements: decl_ty list;
   sc_implements: decl_ty list;
-  sc_implements_dynamic: bool;
+  sc_support_dynamic_type: bool;
   sc_consts: shallow_class_const list;
   sc_typeconsts: shallow_typeconst list;
   sc_props: shallow_prop list;
@@ -245,8 +252,8 @@ let sm_dynamicallycallable sm = MethodFlags.get_dynamicallycallable sm.sm_flags
 
 let sm_php_std_lib sm = MethodFlags.get_php_std_lib sm.sm_flags
 
-let sm_sound_dynamic_callable sm =
-  MethodFlags.get_sound_dynamic_callable sm.sm_flags
+let sm_support_dynamic_type sm =
+  MethodFlags.get_support_dynamic_type sm.sm_flags
 
 type fun_decl = fun_elt [@@deriving show]
 

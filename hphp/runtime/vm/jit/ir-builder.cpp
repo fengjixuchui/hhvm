@@ -98,6 +98,7 @@ bool IRBuilder::shouldConstrainGuards() const {
 void IRBuilder::appendInstruction(IRInstruction* inst) {
   FTRACE(1, "  append {}\n", inst->toString());
   assertx(inst->marker().valid());
+  assertx(checkOperandTypes(inst));
   if (inst->is(Nop, DefConst)) return;
 
   if (shouldConstrainGuards()) {
@@ -502,7 +503,7 @@ void IRBuilder::exceptionStackBoundary() {
    * trace that the unwinder won't be able to see.
    */
   FTRACE(2, "exceptionStackBoundary()\n");
-  assertx(m_state.bcSPOff() == curMarker().spOff());
+  assertx(m_state.bcSPOff() == curMarker().bcSPOff());
   m_exnStack.syncedSpLevel = m_state.bcSPOff();
   m_state.resetStackModified();
 }
@@ -740,12 +741,12 @@ uint32_t IRBuilder::numGuards() const {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-const LocalState& IRBuilder::local(uint32_t id, GuardConstraint gc) {
+LocalState IRBuilder::local(uint32_t id, GuardConstraint gc) {
   constrainLocal(id, gc, "");
   return m_state.local(id);
 }
 
-const StackState& IRBuilder::stack(IRSPRelOffset offset, GuardConstraint gc) {
+StackState IRBuilder::stack(IRSPRelOffset offset, GuardConstraint gc) {
   constrainStack(offset, gc);
   return m_state.stack(offset);
 }
@@ -767,7 +768,7 @@ Location IRBuilder::loc(uint32_t id) const {
   return Location::Local { id };
 }
 Location IRBuilder::stk(IRSPRelOffset off) const {
-  auto const fpRel = off.to<FPInvOffset>(m_state.irSPOff());
+  auto const fpRel = off.to<SBInvOffset>(m_state.irSPOff());
   return Location::Stack { fpRel };
 }
 

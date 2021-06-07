@@ -23,6 +23,8 @@
 
 namespace HPHP { namespace bespoke {
 
+TRACE_SET_MOD(bespoke);
+
 namespace {
 
 const StaticString s_extraKey("...");
@@ -47,12 +49,9 @@ folly::SharedMutex s_keyOrderLock;
 
 KeyOrder KeyOrder::insert(const StringData* k) const {
   if (!k->isStatic() || !m_keys) return KeyOrder::MakeInvalid();
-  if (std::find(m_keys->begin(), m_keys->end(), k) != m_keys->end()) {
-    return *this;
-  }
-  if (isTooLong()) return *this;
+  if (isTooLong() || contains(k)) return *this;
   KeyOrderData newOrder{*m_keys};
-  auto const full = m_keys->size() == RO::EvalBespokeStructDictMaxNumKeys;
+  auto const full = m_keys->size() == RO::EvalBespokeMaxTrackedKeys;
   newOrder.push_back(full ? s_extraKey.get() : k);
   return Make(newOrder);
 }
@@ -92,8 +91,8 @@ KeyOrder::KeyOrder(const KeyOrderData* keys)
 
 KeyOrder::KeyOrderData KeyOrder::trimKeyOrder(const KeyOrderData& ko) {
   KeyOrderData res{ko};
-  if (res.size() > RO::EvalBespokeStructDictMaxNumKeys) {
-    res.resize(RO::EvalBespokeStructDictMaxNumKeys);
+  if (res.size() > RO::EvalBespokeMaxTrackedKeys) {
+    res.resize(RO::EvalBespokeMaxTrackedKeys);
     res.push_back(s_extraKey.get());
   }
   return res;
@@ -136,7 +135,7 @@ KeyOrder KeyOrder::MakeInvalid() {
 
 bool KeyOrder::isTooLong() const {
   assertx(m_keys);
-  return m_keys->size() > RO::EvalBespokeStructDictMaxNumKeys;
+  return m_keys->size() > RO::EvalBespokeMaxTrackedKeys;
 }
 
 size_t KeyOrder::size() const {
@@ -152,24 +151,43 @@ bool KeyOrder::valid() const {
   return m_keys && !isTooLong();
 }
 
+bool KeyOrder::contains(const StringData* val) const {
+  assertx(valid());
+  return std::find(m_keys->begin(), m_keys->end(), val) != m_keys->end();
+}
+
 KeyOrder::const_iterator KeyOrder::begin() const {
-  assertx(m_keys);
+  assertx(valid());
   return m_keys->begin();
 }
 
 KeyOrder::const_iterator KeyOrder::end() const {
-  assertx(m_keys);
+  assertx(valid());
   return m_keys->end();
 }
 
 KeyOrder collectKeyOrder(const KeyOrderMap& keyOrderMap) {
   std::unordered_set<const StringData*> keys;
+  uint64_t weightedSizeSum = 0;
+  uint64_t weight = 0;
   for (auto const& pair : keyOrderMap) {
     if (!pair.first.valid()) return pair.first;
+    weightedSizeSum += pair.first.size() * pair.second;
+    weight += pair.second;
     keys.insert(pair.first.begin(), pair.first.end());
   }
 
-  if (keys.size() > RO::EvalBespokeStructDictMaxNumKeys) {
+  if (weight == 0 || keys.size() > RO::EvalBespokeStructDictMaxNumKeys) {
+    return KeyOrder::MakeInvalid();
+  }
+
+  auto const weightedAvg = (double)weightedSizeSum / weight;
+  auto const scale =
+    (keys.size() + RO::EvalBespokeStructDictMinKeys) /
+    (weightedAvg + RO::EvalBespokeStructDictMinKeys);
+  // If the final merged key size is significantly larger than the average
+  // key order size, creating a StructDict will waste memory.
+  if (scale > RO::EvalBespokeStructDictMaxSizeRatio) {
     return KeyOrder::MakeInvalid();
   }
 
@@ -180,6 +198,17 @@ KeyOrder collectKeyOrder(const KeyOrderMap& keyOrderMap) {
   std::sort(sorted.begin(), sorted.end(),
             [](auto a, auto b) { return a->compare(b) < 0; });
   return KeyOrder::Make(sorted);
+}
+
+void mergeKeyOrderMap(KeyOrderMap& dst, const KeyOrderMap& src) {
+  for (auto const& [key, count] : src) {
+    auto iter = dst.find(key);
+    if (iter == dst.end()) {
+      dst.emplace(key, count);
+    } else {
+      iter->second = iter->second + count;
+    }
+  }
 }
 
 }}

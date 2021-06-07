@@ -10,6 +10,7 @@ module Hack_bucket = Bucket
 open Hh_prelude
 module Bucket = Hack_bucket
 open Typing_service_types
+open Typing_check_job
 
 (*
 ####
@@ -129,91 +130,6 @@ let neutral : unit -> typing_result =
     jobs_finished_early = Measure.create ();
   }
 
-(*****************************************************************************)
-(* The job that will be run on the workers *)
-(*****************************************************************************)
-
-let handle_exn_as_error : type res. Pos.t -> (unit -> res option) -> res option
-    =
- fun pos f ->
-  try f () with
-  | WorkerCancel.Worker_should_exit as e ->
-    (* Cancellation requests must be re-raised *)
-    raise e
-  | e ->
-    Errors.exception_occurred pos (Exception.wrap e);
-    None
-
-let type_fun (ctx : Provider_context.t) (fn : Relative_path.t) (x : string) :
-    (Tast.def * Typing_inference_env.t_global_with_pos) option =
-  match Ast_provider.find_fun_in_file ~full:true ctx fn x with
-  | Some f ->
-    handle_exn_as_error f.Aast.f_span (fun () ->
-        let fun_ = Naming.fun_ ctx f in
-        Nast_check.def ctx (Aast.Fun fun_);
-        let def_opt =
-          Typing_toplevel.fun_def ctx fun_
-          |> Option.map ~f:(fun (f, global_tvenv) -> (Aast.Fun f, global_tvenv))
-        in
-        Option.iter def_opt (fun (f, _) -> Tast_check.def ctx f);
-        def_opt)
-  | None -> None
-
-let type_class (ctx : Provider_context.t) (fn : Relative_path.t) (x : string) :
-    (Tast.def * Typing_inference_env.t_global_with_pos list) option =
-  match Ast_provider.find_class_in_file ~full:true ctx fn x with
-  | Some cls ->
-    handle_exn_as_error cls.Aast.c_span (fun () ->
-        let class_ = Naming.class_ ctx cls in
-        Nast_check.def ctx (Aast.Class class_);
-        let def_opt =
-          Typing_toplevel.class_def ctx class_
-          |> Option.map ~f:(fun (c, global_tvenv) ->
-                 (Aast.Class c, global_tvenv))
-        in
-        Option.iter def_opt (fun (f, _) -> Tast_check.def ctx f);
-        def_opt)
-  | None -> None
-
-let type_record_def
-    (ctx : Provider_context.t) (fn : Relative_path.t) (x : string) :
-    Tast.def option =
-  match Ast_provider.find_record_def_in_file ~full:true ctx fn x with
-  | Some rd ->
-    handle_exn_as_error rd.Aast.rd_span (fun () ->
-        let rd = Naming.record_def ctx rd in
-        Nast_check.def ctx (Aast.RecordDef rd);
-
-        let def = Aast.RecordDef (Typing_toplevel.record_def_def ctx rd) in
-        Tast_check.def ctx def;
-        Some def)
-  | None -> None
-
-let check_typedef (ctx : Provider_context.t) (fn : Relative_path.t) (x : string)
-    : Tast.def option =
-  match Ast_provider.find_typedef_in_file ~full:true ctx fn x with
-  | Some t ->
-    handle_exn_as_error Pos.none (fun () ->
-        let typedef = Naming.typedef ctx t in
-        Nast_check.def ctx (Aast.Typedef typedef);
-        let ret = Typing.typedef_def ctx typedef in
-        let def = Aast.Typedef ret in
-        Tast_check.def ctx def;
-        Some def)
-  | None -> None
-
-let check_const (ctx : Provider_context.t) (fn : Relative_path.t) (x : string) :
-    Tast.def option =
-  match Ast_provider.find_gconst_in_file ~full:true ctx fn x with
-  | None -> None
-  | Some cst ->
-    handle_exn_as_error cst.Aast.cst_span (fun () ->
-        let cst = Naming.global_const ctx cst in
-        Nast_check.def ctx (Aast.Constant cst);
-        let def = Aast.Constant (Typing_toplevel.gconst_def ctx cst) in
-        Tast_check.def ctx def;
-        Some def)
-
 let should_enable_deferring
     (opts : GlobalOptions.t) (file : check_file_computation) =
   match GlobalOptions.tco_max_times_to_defer_type_checking opts with
@@ -224,6 +140,16 @@ type process_file_results = {
   errors: Errors.t;
   deferred_decls: Deferred_decl.deferment list;
 }
+
+let process_file_remote_execution
+    (_dynamic_view_files : Relative_path.Set.t)
+    (ctx : Provider_context.t)
+    (errors : Errors.t)
+    (file : check_file_computation) : process_file_results =
+  let fn = file.path in
+  let deps_mode = Provider_context.get_deps_mode ctx in
+  let errors' = Re.process_file fn deps_mode in
+  { errors = Errors.merge errors' errors; deferred_decls = [] }
 
 let process_file
     (dynamic_view_files : Relative_path.Set.t)
@@ -455,6 +381,7 @@ let process_files
     (progress : computation_progress)
     ~(memory_cap : int option)
     ~(longlived_workers : bool)
+    ~(remote_execution : bool)
     ~(check_info : check_info) : typing_result * computation_progress =
   if not longlived_workers then SharedMem.invalidate_caches ();
   File_provider.local_changes_push_sharedmem_stack ();
@@ -508,7 +435,10 @@ let process_files
         match fn with
         | Check file ->
           let process_file () =
-            process_file dynamic_view_files ctx errors file
+            if remote_execution then
+              process_file_remote_execution dynamic_view_files ctx errors file
+            else
+              process_file dynamic_view_files ctx errors file
           in
           let result =
             if check_info.profile_log then (
@@ -634,6 +564,7 @@ let load_and_process_files
     (progress : computation_progress)
     ~(memory_cap : int option)
     ~(longlived_workers : bool)
+    ~(remote_execution : bool)
     ~(check_info : check_info) : typing_result * computation_progress =
   (* When the type-checking worker receives SIGUSR1, display a position which
      corresponds approximately with the function/expression being checked. *)
@@ -647,6 +578,7 @@ let load_and_process_files
     progress
     ~memory_cap
     ~longlived_workers
+    ~remote_execution
     ~check_info
 
 (*****************************************************************************)
@@ -732,7 +664,7 @@ let merge
   let delegate_progress =
     Typing_service_delegate.get_progress !delegate_state
   in
-  ServerProgress.send_percentage_progress_to_monitor_w_timeout
+  ServerProgress.send_percentage_progress
     ~operation:"typechecking"
     ~done_count:!files_checked_count
     ~total_count:files_initial_count
@@ -858,6 +790,7 @@ let process_in_parallel
     ~(interrupt : 'a MultiWorker.interrupt_config)
     ~(memory_cap : int option)
     ~(longlived_workers : bool)
+    ~(remote_execution : bool)
     ~(check_info : check_info) :
     typing_result * Delegate.state * Telemetry.t * 'a * Relative_path.t list =
   let record = Measure.create () in
@@ -870,7 +803,7 @@ let process_in_parallel
   let delegate_progress =
     Typing_service_delegate.get_progress !delegate_state
   in
-  ServerProgress.send_percentage_progress_to_monitor_w_timeout
+  ServerProgress.send_percentage_progress
     ~operation:"typechecking"
     ~done_count:0
     ~total_count:files_initial_count
@@ -891,6 +824,7 @@ let process_in_parallel
       dynamic_view_files
       ~memory_cap
       ~longlived_workers
+      ~remote_execution
       ~check_info
   in
   let job (typing_result : typing_result) (progress : progress) =
@@ -968,10 +902,10 @@ module TestMocking = struct
           match computation with
           | Check { path; _ } ->
             if is_cancelled path then
-              `Fst path
+              First path
             else
-              `Snd computation
-          | _ -> `Snd computation)
+              Second computation
+          | _ -> Second computation)
     in
     (* Only cancel once to avoid infinite loops *)
     cancelled := Relative_path.Set.empty;
@@ -1011,6 +945,7 @@ let go_with_interrupt
     ~(interrupt : 'a MultiWorker.interrupt_config)
     ~(memory_cap : int option)
     ~(longlived_workers : bool)
+    ~(remote_execution : bool)
     ~(check_info : check_info)
     ~(profiling : CgroupProfiler.Profiling.t) :
     (Errors.t, Delegate.state, Telemetry.t, 'a) job_result =
@@ -1018,14 +953,15 @@ let go_with_interrupt
   let sample_rate = GlobalOptions.tco_typecheck_sample_rate opts in
   let fnl = BigList.create fnl in
   let fnl =
-    if sample_rate >= 1.0 then
+    if Float.(sample_rate >= 1.0) then
       fnl
     else
       let result =
         BigList.filter
           ~f:(fun x ->
-            float (Base.String.hash (Relative_path.suffix x) mod 1000000)
-            <= sample_rate *. 1000000.0)
+            Float.(
+              float (Base.String.hash (Relative_path.suffix x) mod 1000000)
+              <= sample_rate *. 1000000.0))
           fnl
       in
       Hh_logger.log
@@ -1053,6 +989,7 @@ let go_with_interrupt
           progress
           ~memory_cap:None
           ~longlived_workers
+          ~remote_execution
           ~check_info
       in
       ( typing_result,
@@ -1081,6 +1018,7 @@ let go_with_interrupt
         ~interrupt
         ~memory_cap
         ~longlived_workers
+        ~remote_execution
         ~check_info
     end
   in
@@ -1132,6 +1070,7 @@ let go
     (fnl : Relative_path.t list)
     ~(memory_cap : int option)
     ~(longlived_workers : bool)
+    ~(remote_execution : bool)
     ~(check_info : check_info) : Errors.t * Delegate.state * Telemetry.t =
   let interrupt = MultiThreadedCall.no_interrupt () in
   let (res, delegate_state, telemetry, (), cancelled) =
@@ -1145,6 +1084,7 @@ let go
       ~interrupt
       ~memory_cap
       ~longlived_workers
+      ~remote_execution
       ~check_info
       ~profiling
   in

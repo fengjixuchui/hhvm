@@ -16,7 +16,9 @@ class ExtractStandaloneDriver(CommonTestDriver):
     error_file_ext = ".err"
     auto_namespace_map = '{"PHP": "HH\\\\Lib\\\\PHP"}'
 
-    def write_load_config(self, use_saved_state: bool = False) -> None:
+    def write_load_config(
+        self, use_serverless_ide: bool = False, use_saved_state: bool = False
+    ) -> None:
         with open(os.path.join(self.repo_dir, ".hhconfig"), "w") as f:
             f.write(
                 """
@@ -218,6 +220,9 @@ class TestExtractStandalone(TestCase[ExtractStandaloneDriver]):
             "\\opaque_with_user_attr",
             "\\transparent_with_user_attr",
             "\\with_constr_prop_with_user_attr",
+            "\\with_where_constraint",
+            "\\with_open_shape",
+            "\\TestExtractConstruct::__construct",
         ]
 
         for function_name in function_names:

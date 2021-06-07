@@ -23,6 +23,7 @@
 #include "hphp/runtime/base/bespoke-array.h"
 #include "hphp/runtime/base/builtin-functions.h"
 #include "hphp/runtime/base/collections.h"
+#include "hphp/runtime/base/datatype.h"
 #include "hphp/runtime/base/mixed-array.h"
 #include "hphp/runtime/base/packed-array.h"
 #include "hphp/runtime/base/req-root.h"
@@ -771,7 +772,7 @@ inline tv_lval ElemDObject(tv_lval base, key_type<keyType> key) {
  * Intermediate elem operation for defining member instructions.
  */
 template<KeyType keyType = KeyType::Any>
-tv_lval ElemD(tv_lval base, key_type<keyType> key) {
+tv_lval ElemD(tv_lval base, key_type<keyType> key, bool roProp) {
   assertx(tvIsPlausible(base.tv()));
 
   // ElemD helpers hand out lvals to immutable_null_base in cases where we know
@@ -780,6 +781,10 @@ tv_lval ElemD(tv_lval base, key_type<keyType> key) {
 
   if (tvIsArrayLike(base) && !base.val().parr->isVanilla()) {
     return ElemDBespoke<keyType>(base, key);
+  }
+
+  if (roProp && (!hasPersistentFlavor(base.type()) && isRefcountedType(base.type()))) {
+    throwReadOnlyCollectionMutation();
   }
 
   switch (base.type()) {
@@ -1002,7 +1007,7 @@ inline tv_lval ElemUObject(tv_lval base, key_type<keyType> key) {
  * Intermediate Elem operation for an unsetting member instruction.
  */
 template <KeyType keyType = KeyType::Any>
-tv_lval ElemU(tv_lval base, key_type<keyType> key) {
+tv_lval ElemU(tv_lval base, key_type<keyType> key, bool roProp) {
   assertx(tvIsPlausible(*base));
 
   // ElemU helpers hand out lvals to immutable_null_base in cases where we know
@@ -1011,6 +1016,10 @@ tv_lval ElemU(tv_lval base, key_type<keyType> key) {
 
   if (tvIsArrayLike(base) && !base.val().parr->isVanilla()) {
     return ElemUBespoke<keyType>(base, key);
+  }
+
+  if (roProp && (!hasPersistentFlavor(type(base)) && isRefcountedType(type(base)))) {
+    throwReadOnlyCollectionMutation();
   }
 
   switch (type(base)) {
@@ -2496,7 +2505,8 @@ inline tv_lval nullSafeProp(TypedValue& tvRef,
                             Class* ctx,
                             tv_rval base,
                             StringData* key,
-                            ReadOnlyOp op) {
+                            ReadOnlyOp op,
+                            bool* roProp = nullptr) {
   switch (base.type()) {
     case KindOfUninit:
     case KindOfNull:
@@ -2525,7 +2535,7 @@ inline tv_lval nullSafeProp(TypedValue& tvRef,
       raise_notice("Cannot access property on non-object");
       return &tvRef;
     case KindOfObject:
-      return val(base).pobj->prop(&tvRef, ctx, key, op);
+      return val(base).pobj->prop(&tvRef, ctx, key, op, roProp);
   }
   not_reached();
 }
@@ -2538,13 +2548,13 @@ inline tv_lval nullSafeProp(TypedValue& tvRef,
 template<MOpMode mode, KeyType keyType = KeyType::Any>
 inline tv_lval PropObj(TypedValue& tvRef, const Class* ctx,
                        ObjectData* instance, key_type<keyType> key,
-                       ReadOnlyOp op) {
+                       ReadOnlyOp op, bool* roProp = nullptr) {
   auto keySD = prepareKey(key);
   SCOPE_EXIT { releaseKey<keyType>(keySD); };
 
   // Get property.
   if (mode == MOpMode::Define) {
-    return instance->propD(&tvRef, ctx, keySD, op);
+    return instance->propD(&tvRef, ctx, keySD, op, roProp);
   }
   if (mode == MOpMode::None) {
     return instance->prop(&tvRef, ctx, keySD, op);
@@ -2553,15 +2563,16 @@ inline tv_lval PropObj(TypedValue& tvRef, const Class* ctx,
     return instance->propW(&tvRef, ctx, keySD, op);
   }
   assertx(mode == MOpMode::Unset);
-  return instance->propU(&tvRef, ctx, keySD, op);
+  return instance->propU(&tvRef, ctx, keySD, op, roProp);
 }
 
 template<MOpMode mode, KeyType keyType = KeyType::Any>
 inline tv_lval Prop(TypedValue& tvRef, const Class* ctx,
-                    tv_lval base, key_type<keyType> key, ReadOnlyOp op) {
+                    tv_lval base, key_type<keyType> key, ReadOnlyOp op,
+                    bool* roProp = nullptr) {
   auto const result = propPre<mode>(tvRef, base);
   if (result.type() == KindOfNull) return result;
-  return PropObj<mode,keyType>(tvRef, ctx, instanceFromTv(result), key, op);
+  return PropObj<mode,keyType>(tvRef, ctx, instanceFromTv(result), key, op, roProp);
 }
 
 template <KeyType kt>

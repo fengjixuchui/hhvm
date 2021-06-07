@@ -68,6 +68,10 @@ val get_class : env -> Decl_provider.type_key -> Decl_provider.class_decl option
 val get_class_or_typedef :
   env -> Decl_provider.type_key -> class_or_typedef_result option
 
+val is_in_expr_tree : env -> bool
+
+val set_in_expr_tree : env -> bool -> env
+
 (** Return {true} when in the definition of a static property or method. *)
 val is_static : env -> bool
 
@@ -152,7 +156,7 @@ val localize :
     {!quiet} silences certain errors because those errors have already fired
     and/or are not appropriate at the time we call localize.
     *)
-val localize_with_self :
+val localize_no_subst :
   env -> ignore_errors:bool -> Typing_defs.decl_ty -> env * Tast.ty
 
 (** Get the upper bounds of the type parameter with the given name.
@@ -259,6 +263,9 @@ val is_xhp_child : env -> Pos.t -> Tast.ty -> bool
 val get_enum : env -> Decl_provider.type_key -> Decl_provider.class_decl option
 
 val is_typedef : env -> Decl_provider.type_key -> bool
+
+val is_typedef_visible :
+  env -> ?expand_visible_newtype:bool -> Typing_defs.typedef_type -> bool
 
 val get_typedef :
   env -> Decl_provider.type_key -> Decl_provider.typedef_decl option

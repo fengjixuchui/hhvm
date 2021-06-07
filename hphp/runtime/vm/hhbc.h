@@ -556,6 +556,7 @@ constexpr uint32_t kMaxConcatN = 4;
   O(ClsCnsD,         TWO(SA,SA),       NOV,             ONE(CV),    NF) \
   O(ClsCnsL,         ONE(LA),          ONE(CV),         ONE(CV),    NF) \
   O(ClassName,       NA,               ONE(CV),         ONE(CV),    NF) \
+  O(LazyClassFromClass, NA,            ONE(CV),         ONE(CV),    NF) \
   O(File,            NA,               NOV,             ONE(CV),    NF) \
   O(Dir,             NA,               NOV,             ONE(CV),    NF) \
   O(Method,          NA,               NOV,             ONE(CV),    NF) \
@@ -647,13 +648,11 @@ constexpr uint32_t kMaxConcatN = 4;
   O(SetOpL,          TWO(LA,                                            \
                        OA(SetOpOp)),   ONE(CV),         ONE(CV),    NF) \
   O(SetOpG,          ONE(OA(SetOpOp)), TWO(CV,CV),      ONE(CV),    NF) \
-  O(SetOpS,          TWO(OA(SetOpOp), OA(ReadOnlyOp)),                  \
-                                       THREE(CV,CV,CV), ONE(CV),    NF) \
+  O(SetOpS,          ONE(OA(SetOpOp)), THREE(CV,CV,CV), ONE(CV),    NF) \
   O(IncDecL,         TWO(NLA, OA(IncDecOp)),                            \
                                        NOV,             ONE(CV),    NF) \
   O(IncDecG,         ONE(OA(IncDecOp)),ONE(CV),         ONE(CV),    NF) \
-  O(IncDecS,         TWO(OA(IncDecOp), OA(ReadOnlyOp)),                 \
-                                       TWO(CV,CV),      ONE(CV),    NF) \
+  O(IncDecS,         ONE(OA(IncDecOp)),TWO(CV,CV),      ONE(CV),    NF) \
   O(UnsetL,          ONE(LA),          NOV,             NOV,        NF) \
   O(UnsetG,          NA,               ONE(CV),         NOV,        NF) \
                                                                         \
@@ -771,7 +770,7 @@ constexpr uint32_t kMaxConcatN = 4;
   O(QueryM,          THREE(IVA, OA(QueryMOp), KA),                      \
                                        MFINAL,          ONE(CV),    NF) \
   O(SetM,            TWO(IVA, KA),     C_MFINAL(1),     ONE(CV),    NF) \
-  O(SetRangeM,       FOUR(IVA, IVA, OA(SetRangeOp), OA(ReadOnlyOp)),    \
+  O(SetRangeM,       THREE(IVA, IVA, OA(SetRangeOp)),                   \
                                        C_MFINAL(3),     NOV,        NF) \
   O(IncDecM,         THREE(IVA, OA(IncDecOp), KA),                      \
                                        MFINAL,          ONE(CV),    NF) \
@@ -1017,6 +1016,15 @@ constexpr bool isJmp(Op opcode) {
     opcode == Op::JmpNS ||
     opcode == Op::JmpZ  ||
     opcode == Op::JmpNZ;
+}
+
+constexpr bool isObjectConstructorOp(Op opcode) {
+  return
+    opcode == Op::NewObj ||
+    opcode == Op::NewObjD ||
+    opcode == Op::NewObjR ||
+    opcode == Op::NewObjRD ||
+    opcode == Op::NewObjS;
 }
 
 constexpr bool isArrLikeConstructorOp(Op opcode) {

@@ -14,7 +14,6 @@ open Typing_env_types
 module SN = Naming_special_names
 module Reason = Typing_reason
 module Env = Typing_env
-module ShapeMap = Aast.ShapeMap
 module TySet = Typing_set
 module Cls = Decl_provider.Class
 module MakeType = Typing_make_type
@@ -36,6 +35,7 @@ let expand_typedef x = !expand_typedef_ref x
 type sub_type =
   env ->
   ?coerce:Typing_logic.coercion_direction option ->
+  ?is_coeffect:bool ->
   locl_ty ->
   locl_ty ->
   Errors.error_from_reasons_callback ->
@@ -59,6 +59,7 @@ let sub_type_res x = !sub_type_res_ref x
 
 type sub_type_i =
   env ->
+  ?is_coeffect:bool ->
   internal_type ->
   internal_type ->
   Errors.error_from_reasons_callback ->
@@ -66,7 +67,19 @@ type sub_type_i =
 
 let (sub_type_i_ref : sub_type_i ref) = ref (not_implemented "sub_type_i")
 
-let sub_type_i x = !sub_type_i_ref x
+let sub_type_i ?(is_coeffect = false) x = !sub_type_i_ref ~is_coeffect x
+
+type sub_type_i_res =
+  env ->
+  internal_type ->
+  internal_type ->
+  Errors.error_from_reasons_callback ->
+  (env, env) result
+
+let (sub_type_i_res_ref : sub_type_i_res ref) =
+  ref (not_implemented "sub_type_i_res")
+
+let sub_type_i_res x = !sub_type_i_res_ref x
 
 type sub_type_with_dynamic_as_bottom =
   env -> locl_ty -> locl_ty -> Errors.error_from_reasons_callback -> env
@@ -93,8 +106,6 @@ let sub_type_with_dynamic_as_bottom_res x =
 
 type is_sub_type_type = env -> locl_ty -> locl_ty -> bool
 
-type is_sub_type_i_type = env -> internal_type -> internal_type -> bool
-
 let (is_sub_type_ref : is_sub_type_type ref) =
   ref (not_implemented "is_sub_type")
 
@@ -102,8 +113,6 @@ let is_sub_type x = !is_sub_type_ref x
 
 let (is_sub_type_for_coercion_ref : is_sub_type_type ref) =
   ref (not_implemented "is_sub_type_for_coercion")
-
-let is_sub_type_for_coercion x = !is_sub_type_for_coercion_ref x
 
 let (is_sub_type_for_union_ref :
       (env ->
@@ -197,8 +206,6 @@ type fold_union = env -> Reason.t -> locl_ty list -> env * locl_ty
 
 let (fold_union_ref : fold_union ref) = ref (not_implemented "fold_union")
 
-let fold_union x = !fold_union_ref x
-
 type simplify_unions =
   env ->
   ?on_tyvar:(env -> Reason.t -> Ident.t -> env * locl_ty) ->
@@ -232,12 +239,12 @@ let (simplify_intersections_ref : simplify_intersections ref) =
 
 let simplify_intersections x = !simplify_intersections_ref x
 
-type localize_with_self = env -> ignore_errors:bool -> decl_ty -> env * locl_ty
+type localize_no_subst = env -> ignore_errors:bool -> decl_ty -> env * locl_ty
 
-let (localize_with_self_ref : localize_with_self ref) =
-  ref (not_implemented "localize_with_self")
+let (localize_no_subst_ref : localize_no_subst ref) =
+  ref (not_implemented "localize_no_subst")
 
-let localize_with_self x = !localize_with_self_ref x
+let localize_no_subst x = !localize_no_subst_ref x
 
 type localize = ety_env:expand_env -> env -> decl_ty -> env * locl_ty
 
@@ -246,36 +253,9 @@ let (localize_ref : localize ref) =
 
 let localize x = !localize_ref x
 
-type env_with_self =
-  ?report_cycle:Pos.t * string ->
-  env ->
-  on_error:Errors.error_from_reasons_callback ->
-  expand_env
-
-let env_with_self_ref : env_with_self ref =
-  ref (fun ?report_cycle:_ _ ~on_error:_ ->
-      (not_implemented "env_with_self" () : _))
-
-let env_with_self ?report_cycle x = !env_with_self_ref ?report_cycle x
-
-let rec strip_this ty =
-  match get_node ty with
-  | Tdependent (DTthis, ty) -> ty
-  | Tunion tyl -> mk (get_reason ty, Tunion (List.map tyl strip_this))
-  | Tintersection tyl ->
-    mk (get_reason ty, Tintersection (List.map tyl strip_this))
-  | _ -> ty
-
-(* Convenience function for creating `this` types *)
-let this_of ty = Tdependent (DTthis, strip_this ty)
-
 (*****************************************************************************)
-(* Returns true if a type is optional *)
+(* Checking properties of types *)
 (*****************************************************************************)
-
-let is_option env ty =
-  let null = MakeType.null Reason.Rnone in
-  is_sub_type_for_union env null ty
 
 let is_mixed_i env ty =
   let mixed = LoclType (MakeType.mixed Reason.Rnone) in
@@ -288,6 +268,34 @@ let is_nothing_i env ty =
   is_sub_type_for_union_i env ty nothing
 
 let is_nothing env ty = is_nothing_i env (LoclType ty)
+
+let is_dynamic env ty =
+  let dynamic = MakeType.dynamic Reason.Rnone in
+  (is_sub_type_for_union ~coerce:None env dynamic ty && not (is_mixed env ty))
+  || is_sub_type_for_union ~coerce:None env ty dynamic
+     && not (is_nothing env ty)
+
+let rec is_any env ty =
+  let (env, ty) = Env.expand_type env ty in
+  match get_node ty with
+  | Tany _
+  | Terr ->
+    true
+  | Tunion tyl -> List.for_all tyl (is_any env)
+  | Tintersection tyl -> List.exists tyl (is_any env)
+  | _ -> false
+
+let is_tunion env ty =
+  let (_env, ty) = Env.expand_type env ty in
+  match get_node ty with
+  | Tunion _ -> true
+  | _ -> false
+
+let is_tintersection env ty =
+  let (_env, ty) = Env.expand_type env ty in
+  match get_node ty with
+  | Tintersection _ -> true
+  | _ -> false
 
 (** Simplify unions and intersections of constraint
 types which involve mixed or nothing. *)
@@ -422,45 +430,27 @@ let run_on_intersection :
   in
   (env, resl)
 
-(*****************************************************************************)
-(* Dynamicism  *)
-(*****************************************************************************)
-let is_dynamic env ty =
-  let dynamic = MakeType.dynamic Reason.Rnone in
-  (is_sub_type_for_union ~coerce:None env dynamic ty && not (is_mixed env ty))
-  || is_sub_type_for_union ~coerce:None env ty dynamic
-     && not (is_nothing env ty)
+(** As above but allow functions which also return subtyping/coercion error
+    information *)
+let run_on_intersection_res env ~f tyl =
+  let g env ty =
+    let (env, a, b) = f env ty in
+    (env, (a, b))
+  in
+  let (env, pairs) = run_on_intersection env ~f:g tyl in
+  let (res, errs) = List.unzip pairs in
+  (env, res, errs)
 
-(*****************************************************************************)
-(* Check if type is any or a variant thereof  *)
-(*****************************************************************************)
+let run_on_intersection_key_value_res env ~f tyl =
+  let g env ty =
+    let (env, a, b, c) = f env ty in
+    (env, (a, b, c))
+  in
+  let (env, triples) = run_on_intersection env ~f:g tyl in
+  let (res, key_errs, errs) = List.unzip3 triples in
+  (env, res, key_errs, errs)
 
-let rec is_any env ty =
-  let (env, ty) = Env.expand_type env ty in
-  match get_node ty with
-  | Tany _
-  | Terr ->
-    true
-  | Tunion tyl -> List.for_all tyl (is_any env)
-  | Tintersection tyl -> List.exists tyl (is_any env)
-  | _ -> false
-
-let is_tunion env ty =
-  let (_env, ty) = Env.expand_type env ty in
-  match get_node ty with
-  | Tunion _ -> true
-  | _ -> false
-
-let is_tintersection env ty =
-  let (_env, ty) = Env.expand_type env ty in
-  match get_node ty with
-  | Tintersection _ -> true
-  | _ -> false
-
-(*****************************************************************************)
 (* Gets the base type of an abstract type *)
-(*****************************************************************************)
-
 let rec get_base_type env ty =
   let (env, ty) = Env.expand_type env ty in
   match get_node ty with
@@ -503,7 +493,6 @@ let shape_field_name_ this field =
     match field with
     | (p, Int name) -> Ok (Ast_defs.SFlit_int (p, name))
     | (p, String name) -> Ok (Ast_defs.SFlit_str (p, name))
-    | (p, EnumAtom name) -> Ok (Ast_defs.SFlit_str (p, name))
     | (_, Class_const ((_, CI x), y)) -> Ok (Ast_defs.SFclass_const (x, y))
     | (_, Class_const ((_, CIself), y)) ->
       (match force this with
@@ -533,7 +522,7 @@ let shape_field_name :
     None
 
 (*****************************************************************************)
-(* *)
+(* Class types *)
 (*****************************************************************************)
 
 let string_of_visibility = function

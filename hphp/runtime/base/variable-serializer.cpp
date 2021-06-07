@@ -637,10 +637,7 @@ void VariableSerializer::write(const char *v, int len /* = -1 */,
 }
 
 void VariableSerializer::write(const String& v) {
-  if (m_type == Type::APCSerialize &&
-      !(m_option & kAPC_PRIME_SERIALIZE) &&
-      !v.isNull() &&
-      v.get()->isStatic()) {
+  if (m_type == Type::APCSerialize && !v.isNull() && v.get()->isStatic()) {
     union {
       char buf[8];
       StringData *sd;
@@ -659,7 +656,9 @@ void VariableSerializer::write(const Object& v) {
 
     if (v.instanceof(s_JsonSerializable)) {
       assertx(!v->isCollection());
-      Variant ret = v->o_invoke_few_args(s_jsonSerialize, 0);
+      auto const providedCoeffects =
+        m_pure ? RuntimeCoeffects::pure() : RuntimeCoeffects::defaults();
+      Variant ret = v->o_invoke_few_args(s_jsonSerialize, providedCoeffects, 0);
       // for non objects or when $this is not returned
       if (!ret.isObject() || ret.getObjectData() != v.get()) {
         if (ret.isArray() || ret.isObject()) {
@@ -1680,11 +1679,21 @@ void VariableSerializer::serializeClsMeth(
       m_buf->append("}\n");
       break;
 
+    case Type::JSON: {
+      auto const kind = getKind(empty_vec_array().get());
+      writeArrayHeader(2 /* size */, true /* isVectorData */, kind);
+      writeArrayKey(VarNR(0), kind);
+      writeArrayValue(VarNR(clsName), kind);
+      writeArrayKey(VarNR(1), kind);
+      writeArrayValue(VarNR(funcName), kind);
+      writeArrayFooter(kind);
+      break;
+    }
+
     case Type::Serialize:
     case Type::Internal:
     case Type::APCSerialize:
-    case Type::DebuggerSerialize:
-    case Type::JSON: {
+    case Type::DebuggerSerialize: {
       if (!RO::EvalIsCompatibleClsMethType) {
         SystemLib::throwInvalidOperationExceptionObject(
           "Unable to serialize class meth pointer"
@@ -2088,7 +2097,7 @@ void VariableSerializer::serializeObjectImpl(const ObjectData* obj) {
     if (obj->instanceof(SystemLib::s_SerializableClass)) {
       assertx(!obj->isCollection());
       ret =
-        const_cast<ObjectData*>(obj)->o_invoke_few_args(s_serialize, 0);
+        const_cast<ObjectData*>(obj)->o_invoke_few_args(s_serialize, RuntimeCoeffects::fixme(), 0);
       if (ret.isString()) {
         writeSerializableObject(obj->getClassName(), ret.toString());
       } else if (ret.isNull()) {
@@ -2129,7 +2138,9 @@ void VariableSerializer::serializeObjectImpl(const ObjectData* obj) {
     }
     if (obj->getVMClass()->rtAttribute(Class::HasSleep)) {
       handleSleep = true;
-      ret = const_cast<ObjectData*>(obj)->invokeSleep();
+      auto const providedCoeffects =
+        m_pure ? RuntimeCoeffects::pure() : RuntimeCoeffects::defaults();
+      ret = const_cast<ObjectData*>(obj)->invokeSleep(providedCoeffects);
     }
     if (obj->hasNativeData()) {
       auto* ndi = cls->getNativeDataInfo();

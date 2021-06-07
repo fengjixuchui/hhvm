@@ -596,7 +596,6 @@ std::string func_flag_list(const FuncInfo& finfo) {
   if (func->isAsync()) flags.push_back("isAsync");
   if (func->isClosureBody()) flags.push_back("isClosureBody");
   if (func->isPairGenerator()) flags.push_back("isPairGenerator");
-  if (func->isRxDisabled()) flags.push_back("isRxDisabled");
 
   std::string strflags = folly::join(" ", flags);
   if (!strflags.empty()) return " " + strflags + " ";
@@ -655,27 +654,40 @@ std::string member_tv_initializer(TypedValue cell) {
 }
 
 void print_class_constant(Output& out, const PreClass::Const* cns) {
-  if (cns->kind() == ConstModifiers::Kind::Context) {
-    auto const coeffect_str = cns->coeffects().toString();
-    out.fmtln(".ctx {} {};",
-              cns->name(),
-              coeffect_str ? *coeffect_str : std::string("defaults"));
-    return;
+  switch (cns->kind()) {
+    case ConstModifiers::Kind::Context:
+      out.indent();
+      out.fmt(".ctx {}", cns->name());
+      if (cns->isAbstract()) {
+        out.fmt(" isAbstract");
+      }
+      if (!cns->isAbstractAndUninit()) {
+        out.fmt(" {}", cns->coeffects().toString());
+      }
+      out.fmt(";");
+      out.nl();
+      break;
+    case ConstModifiers::Kind::Value:
+      if (cns->isAbstract()) {
+        out.fmtln(".const {} isAbstract;", cns->name());
+      } else {
+        // Class constants use uninit to indicate initialization with 86cinit
+        out.fmtln(".const {} = {};", cns->name(), member_tv_initializer(cns->val()));
+      }
+      break;
+    case ConstModifiers::Kind::Type:
+      out.indent();
+      out.fmt(".const {} isType", cns->name());
+      if (cns->isAbstract()) {
+        out.fmt(" isAbstract");
+      }
+      if (cns->val().is_init()) {
+        out.fmt(" = {}", member_tv_initializer(cns->val()));
+      }
+      out.fmt(";");
+      out.nl();
+      break;
   }
-  auto const kind = [&] {
-    switch (cns->kind()) {
-      case ConstModifiers::Kind::Value:   return "";
-      case ConstModifiers::Kind::Type:    return " isType";
-      case ConstModifiers::Kind::Context: not_reached();
-    }
-    not_reached();
-  }();
-  if (cns->isAbstract()) {
-    out.fmtln(".const {}{} isAbstract;", cns->name(), kind);
-    return;
-  }
-  out.fmtln(".const {}{} = {};", cns->name(), kind,
-    member_tv_initializer(cns->val()));
 }
 
 template<class T>
@@ -933,8 +945,9 @@ void print_unit_metadata(Output& out, const Unit* unit) {
     }
   }
   for (auto i = size_t{0}; i < unit->numArrays(); ++i) {
-    auto const ad = unit->lookupArrayId(i);
-    out.fmtln(".adata A_{} = {};", i, escaped_long(ad));
+    auto const unitId = encodeUnitId(i);
+    auto const ad = unit->lookupArrayId(unitId);
+    out.fmtln(".adata A_{} = {};", unitId, escaped_long(ad));
   }
   out.nl();
 }

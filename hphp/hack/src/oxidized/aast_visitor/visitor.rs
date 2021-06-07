@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<6f3673b7ccd9b97f9f4886d904e1869a>>
+// @generated SignedSource<<a4707a93d20c378d9e734ff70ffcf204>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -368,6 +368,18 @@ pub trait Visitor<'node> {
         &mut self,
         c: &mut <Self::P as Params>::Context,
         p: &'node FileAttribute<
+            <Self::P as Params>::Ex,
+            <Self::P as Params>::Fb,
+            <Self::P as Params>::En,
+            <Self::P as Params>::Hi,
+        >,
+    ) -> Result<(), <Self::P as Params>::Error> {
+        p.recurse(c, self.object())
+    }
+    fn visit_fun_def(
+        &mut self,
+        c: &mut <Self::P as Params>::Context,
+        p: &'node FunDef<
             <Self::P as Params>::Ex,
             <Self::P as Params>::Fb,
             <Self::P as Params>::En,
@@ -803,6 +815,13 @@ pub trait Visitor<'node> {
         &mut self,
         c: &mut <Self::P as Params>::Context,
         p: &'node XhpChildOp,
+    ) -> Result<(), <Self::P as Params>::Error> {
+        p.recurse(c, self.object())
+    }
+    fn visit_xhp_enum_value(
+        &mut self,
+        c: &mut <Self::P as Params>::Context,
+        p: &'node XhpEnumValue,
     ) -> Result<(), <Self::P as Params>::Error> {
         p.recurse(c, self.object())
     }

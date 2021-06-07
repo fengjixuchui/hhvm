@@ -120,6 +120,15 @@ AliasClass pointee(
       return APropAny;
     }
 
+    if (type <= TPtrToMISBool) {
+      if (ptr->hasConstVal() && ptr->rawVal() == 0) {
+        // nullptr roProp pointer, representing an instruction that doesn't use
+        // it.
+        return AEmpty;
+      }
+      return AMIStateROProp;
+    }
+
     if (type <= TMemToMISCell) {
       if (sinst->is(LdMIStateAddr)) {
         return mis_from_offset(sinst->src(0)->intVal());
@@ -195,7 +204,7 @@ AliasClass pointee(
   if (type.maybe(TMemToFrameCell))   ret = ret | ALocalAny;
   if (type.maybe(TMemToPropCell))    ret = ret | APropAny;
   if (type.maybe(TMemToElemCell))    ret = ret | AElemAny;
-  if (type.maybe(TMemToMISCell))     ret = ret | AMIStateTempBase;
+  if (type.maybe(TMemToMISCell))     ret = ret | AMIStateTempBase | AMIStateROProp;
   if (type.maybe(TMemToClsInitCell)) ret = ret | AHeapAny;
   if (type.maybe(TMemToClsCnsCell))  ret = ret | AHeapAny;
   if (type.maybe(TMemToSPropCell))   ret = ret | ARdsAny;
@@ -359,15 +368,17 @@ GeneralEffects may_reenter(const IRInstruction& inst, GeneralEffects x) {
       auto const fp = canonical(inst.marker().fp());
       if (fp->inst()->is(BeginInlining)) {
         assertx(inst.marker().resumeMode() == ResumeMode::None);
-        auto const fpOffset = fp->inst()->extra<BeginInlining>()->spOffset;
-        auto const numStackElemsFromFP = inst.marker().spOff() - FPInvOffset{0};
-        return fpOffset - numStackElemsFromFP;
+        auto const extra = fp->inst()->extra<BeginInlining>();
+        auto const fpOffset = extra->spOffset;
+        auto const numSlotsInFrame = extra->func->numSlotsInFrame();
+        auto const numStackElems = inst.marker().bcSPOff() - SBInvOffset{0};
+        return fpOffset - numSlotsInFrame - numStackElems;
       }
 
       assertx(fp->inst()->is(DefFP, DefFuncEntryFP));
       auto const sp = inst.marker().sp();
       auto const irSPOff = sp->inst()->extra<DefStackData>()->irSPOff;
-      return inst.marker().spOff().to<IRSPRelOffset>(irSPOff);
+      return inst.marker().bcSPOff().to<IRSPRelOffset>(irSPOff);
     }();
 
     auto const killed_stack = stack_below(offset);
@@ -464,12 +475,13 @@ GeneralEffects interp_one_effects(const IRInstruction& inst) {
  * Construct effects for member instructions that take &tvRef as their last
  * argument.
  *
- * These instructions never load tvRef, but they might store to it.
+ * These instructions never load tvRef or roProp, but they might store to it.
  */
 MemEffects minstr_with_tvref(const IRInstruction& inst) {
   auto const srcs = inst.srcs();
   assertx(srcs.back()->isA(TMemToMISCell));
-  auto const loads = AHeapAny | all_pointees(srcs.subpiece(0, srcs.size() - 1));
+  assertx(inst.src(2)->isA(TMemToMISBool));
+  auto const loads = AHeapAny | all_pointees(srcs.subpiece(0, srcs.size() - 2));
   auto const stores = AHeapAny | all_pointees(inst);
   return may_load_store(loads, stores);
 }
@@ -577,7 +589,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     auto const stack_kills = stack_below(inst.extra<EndCatch>()->offset);
     return ExitEffects {
       AUnknown,
-      stack_kills | AMIStateTempBase | AMIStateBase
+      stack_kills | AMIStateTempBase | AMIStateBase | AMIStateROProp
     };
   }
 
@@ -585,7 +597,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     auto const stack_kills = stack_below(inst.extra<EnterTCUnwind>()->offset);
     return ExitEffects {
       AUnknown,
-      stack_kills | AMIStateTempBase | AMIStateBase
+      stack_kills | AMIStateTempBase | AMIStateBase | AMIStateROProp
     };
   }
 
@@ -979,6 +991,9 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case StMBase:
     return PureStore { AMIStateBase, inst.src(0), nullptr };
 
+  case LdMROProp:
+    return PureLoad { AMIStateROProp };
+
   case FinishMemberOp:
     return may_load_store_kill(AEmpty, AEmpty, AMIStateAny);
 
@@ -1056,6 +1071,13 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     return PureStore { AElemS { arr, key }, val, arr };
   }
 
+  case InitStructElem: {
+    auto const arr = inst.src(0);
+    auto const val = inst.src(1);
+    auto const key = inst.extra<InitStructElem>()->key;
+    return PureStore { AElemS { arr, key }, val, arr };
+  }
+
   case LdMonotypeDictVal: {
     // TODO(mcolavita): When we have a type-array-elem method to get the key
     // of an arbitrary array-like type, use that to narrow this load.
@@ -1076,6 +1098,8 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     auto const key = inst.src(1);
     return PureLoad { AElemS { base, key->strVal() } };
   }
+  case StructDictGetWithColor:
+    return PureLoad { AElemSAny };
 
   case DictGetK:
   case KeysetGetK:
@@ -1130,7 +1154,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ProfileArrLikeProps:
     // These ops may read anything referenced by the input array or object,
     // but not any of the locals or stack frame slots.
-    return may_load_store(AHeapAny | livefp(inst), AEmpty);
+    return may_load_store(AHeapAny, AEmpty);
 
   case NewKeysetArray:
     {
@@ -1364,8 +1388,8 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
 
   /*
    * Intermediate minstr operations. In addition to a base pointer like the
-   * operations above, these may take a pointer to MInstrState::tvRef, which
-   * they may store to (but not read from).
+   * operations above, these may take a pointer to MInstrState::tvRef and
+   * MInstrState::roProp, which they may store to (but not read from).
    */
   case PropX:
   case PropDX:
@@ -1419,6 +1443,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case AllocBespokeStructDict:
   case ConvDblToStr:
   case ConvIntToStr:
+  case InitStructPositions:
     return IrrelevantEffects {};
 
   case AllocObj:
@@ -1441,6 +1466,17 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
       inst.src(1),
       nullptr
     };
+
+  case StStkRange: {
+    auto const extra = inst.extra<StStkRange>();
+    auto const startOff = extra->start;
+    auto const count = extra->count;
+    return PureStore {
+      AStack::range(startOff, startOff + static_cast<int32_t>(count)),
+      inst.src(1),
+      nullptr
+    };
+  }
 
   case StOutValue:
     // Technically these writes affect the caller's stack, but there is no way
@@ -1591,6 +1627,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ConvDblToInt:
   case DblAsBits:
   case LdMIStateAddr:
+  case LdMROPropAddr:
   case LdClsCns:
   case LdSubClsCns:
   case LdSubClsCnsClsName:
@@ -1611,6 +1648,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case InstanceOfIfaceVtable:
   case IsTypeStructCached:
   case LdTVAux:
+  case MethodExists:
   case GetTime:
   case GetTimeNs:
   case ProfileInstanceCheck:
@@ -1621,10 +1659,9 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ProfileIsTypeStruct:
   case LdLazyClsName:
   case DirFromFilepath:
+  case CheckFuncNeedsCoverage:
+  case RecordFuncCall:
     return IrrelevantEffects {};
-  case MethodExists:
-    if (!RO::EvalRaiseOnCaseInsensitiveLookup) return IrrelevantEffects {};
-    return may_load_store(AHeapAny, AHeapAny);
 
   case LookupClsCns:
   case LookupClsCtxCns:
@@ -1755,6 +1792,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case ExtendsClass:
   case LdUnwinderValue:
   case LdClsName:
+  case LdLazyCls:
   case LdAFWHActRec:
   case LdContActRec:
   case LdContField:
@@ -1849,6 +1887,10 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
 
   case LdClsPropAddrOrNull:   // may run 86{s,p}init, which can autoload
   case LdClsPropAddrOrRaise:  // raises errors, and 86{s,p}init
+    return may_load_store(
+      AHeapAny,
+      AHeapAny | all_pointees(inst)
+    );
   case Clone:
   case ThrowArrayIndexException:
   case ThrowArrayKeyException:
@@ -1945,6 +1987,7 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case PropTypeRedefineCheck: // Can raise and autoload
   case HandleRequestSurprise:
   case BespokeEscalateToVanilla:
+  case RaiseBadComparisonViolation:
     return may_load_store(AHeapAny, AHeapAny);
 
   case AddNewElemVec:
@@ -1963,7 +2006,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
 
   // debug_backtrace() traverses stack and WaitHandles on the heap.
   case DebugBacktrace:
-  case DebugBacktraceFast:
     return may_load_store(AHeapAny|ALocalAny|AStackAny, AHeapAny);
 
   // This instruction doesn't touch memory we track, except that it may

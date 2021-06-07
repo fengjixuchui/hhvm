@@ -12,17 +12,14 @@ type serialized_globals = Serialized_globals
 let serialize_globals () = Serialized_globals
 
 type rollout_flags = {
-  search_chunk_size: int;
-  max_bucket_size: int;
-  use_full_fidelity_parser: bool;
   use_direct_decl_parser: bool;
-  interrupt_on_watchman: bool;
-  interrupt_on_client: bool;
   longlived_workers: bool;
-  prechecked_files: bool;
-  predeclare_ide: bool;
-  max_typechecker_worker_memory_mb: int option;
   max_times_to_defer_type_checking: int option;
+  monitor_fd_close_delay: int;
+  monitor_backpressure: bool;
+  enable_devx_dependency_graph: bool;
+  small_buckets_for_dirty_names: bool;
+  symbolindex_search_provider: string;
 }
 
 let flush () = ()
@@ -43,7 +40,9 @@ let set_from _ = ()
 
 let set_hhconfig_version _ = ()
 
-let bad_exit _ _ _ ~is_oom:_ = ()
+let set_rollout_flags _ = ()
+
+let typechecker_exit _ _ _ ~is_oom:_ = ()
 
 let init
     ~root:_
@@ -69,8 +68,15 @@ let init_worker
     ~profile_desc:_ =
   ()
 
-let init_monitor ~from:_ ~custom_columns:_ ~proc_stack:_ ~rollout_flags:_ _ _ _
-    =
+let init_monitor
+    ~from:_
+    ~custom_columns:_
+    ~proc_stack:_
+    ~hhconfig_version:_
+    ~rollout_flags:_
+    _
+    _
+    _ =
   ()
 
 let init_batch_tool ~init_id:_ ~root:_ ~time:_ = ()
@@ -78,6 +84,11 @@ let init_batch_tool ~init_id:_ ~root:_ ~time:_ = ()
 let starting_first_server _ = ()
 
 let refuse_to_restart_server ~reason:_ ~server_state:_ ~version_matches:_ = ()
+
+let server_receipt_to_monitor_write_exn ~server_receipt_to_monitor_file:_ _ = ()
+
+let server_receipt_to_monitor_read_exn ~server_receipt_to_monitor_file:_ _ _ =
+  ()
 
 let init_lazy_end
     _
@@ -122,15 +133,15 @@ let client_set_mode _ = ()
 
 let serverless_ide_set_root _ = ()
 
-let client_check () = ()
-
 let client_start _ = ()
 
 let client_stop _ = ()
 
 let client_restart ~data:_ = ()
 
-let client_check_finish _ _ = ()
+let client_check_start () = ()
+
+let client_check _ _ = ()
 
 let client_lsp_method_handled
     ~root:_
@@ -173,6 +184,15 @@ let serverless_ide_destroy_ok _ = ()
 
 let serverless_ide_destroy_error _ _ _ = ()
 
+let server_hung_up
+    ~external_exit_status:_
+    ~underlying_exit_status:_
+    ~client_exn:_
+    ~client_stack:_
+    ~server_stack:_
+    ~server_msg:_ =
+  ()
+
 let client_bad_exit ~command_name:_ _ _ = ()
 
 let glean_globalrev_supplied ~globalrev:_ = ()
@@ -195,15 +215,13 @@ let ranked_autocomplete_request_duration ~start_time:_ = ()
 
 let monitor_dead_but_typechecker_alive () = ()
 
-let client_connect_to_monitor_timeout () = ()
-
 let client_established_connection _ = ()
 
 let client_establish_connection_exception _ = ()
 
-let client_connect_once _ = ()
+let client_connect_once ~t_start:_ = ()
 
-let client_connect_once_busy _ = ()
+let client_connect_once_failure ~t_start:_ _ = ()
 
 let client_connect_autostart () = ()
 
@@ -223,7 +241,7 @@ let handle_connection_exception _ _ = ()
 
 let handled_persistent_connection _ = ()
 
-let handle_persistent_connection_exception _ _ = ()
+let handle_persistent_connection_exception _ _ ~is_fatal:_ = ()
 
 let handled_command
     _ ~start_t:_ ~major_gc_time:_ ~minor_gc_time:_ ~parsed_files:_ =
@@ -261,9 +279,11 @@ let global_naming_end _ _ = ()
 
 let run_search_end _ = ()
 
-let update_search_end _ = ()
+let update_search_end _ _ = ()
 
 let naming_from_saved_state_end _ = ()
+
+let naming_sqlite_local_changes_nonempty _ = ()
 
 let type_decl_end _ = ()
 
@@ -273,7 +293,11 @@ let second_redecl_end _ _ = ()
 
 let type_check_primary_position_bug ~current_file:_ ~message:_ ~stack:_ = ()
 
-let type_check_exn_bug ~path:_ ~pos:_ ~e:_ = ()
+let type_check_exn_bug ~typechecking_is_deferring:_ ~path:_ ~pos:_ ~e:_ = ()
+
+let invariant_violation_bug
+    ~typechecking_is_deferring:_ ~path:_ ~pos:_ ~desc:_ _ =
+  ()
 
 let type_check_end
     _ ~heap_size:_ ~started_count:_ ~count:_ ~experiments:_ ~start_t:_ =
@@ -373,12 +397,6 @@ let informant_watcher_starting_server_from_settling _ = ()
 (** Server Monitor events *)
 let accepting_on_socket_exception _ = ()
 
-let ack_and_handoff_exception _ = ()
-
-let accepted_client_fd _ = ()
-
-let client_connection_sent _ = ()
-
 let malformed_build_id _ = ()
 
 let send_fd_failure _ = ()
@@ -392,7 +410,9 @@ let init_watchman_failed _ = ()
 
 let restarting_watchman_subscription _ = ()
 
-let uncaught_exception _ = ()
+let watchman_uncaught_exception _ = ()
+
+let monitor_giving_up_exception _ = ()
 
 let processed_clients _ = ()
 
@@ -408,6 +428,12 @@ let search_symbol_index
   ()
 
 let shallow_decl_errors_emitted _ = ()
+
+let server_progress_write_exn ~server_progress_file:_ _ = ()
+
+let server_progress_read_exn ~server_progress_file:_ _ = ()
+
+let worker_exception _ = ()
 
 module ProfileTypeCheck = struct
   let process_file ~recheck_id:_ ~path:_ ~telemetry:_ = ()

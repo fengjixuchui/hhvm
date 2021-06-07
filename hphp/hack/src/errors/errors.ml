@@ -64,6 +64,8 @@ let current_context : (Relative_path.t * phase) ref =
 
 let current_span : Pos.t ref = ref Pos.none
 
+let ignore_pos_outside_current_span : bool ref = ref false
+
 let allow_errors_in_default_path = ref true
 
 module PhaseMap = Reordered_argument_map (WrappedMap.Make (struct
@@ -662,7 +664,8 @@ let check_pos_msg :
   (* If error is reported inside the current span, or no span has been set but the error
    * is reported in the current file, then accept the error *)
   if
-    Pos.contains current_span pos
+    !ignore_pos_outside_current_span
+    || Pos.contains current_span pos
     || Pos.equal current_span Pos.none
        && Relative_path.equal (Pos.filename pos) current_file
     || Relative_path.equal current_file Relative_path.default
@@ -1646,6 +1649,14 @@ let interface_typeconst_multiple_defs
         ^ "." );
     ]
 
+let typeconst_concrete_concrete_override pos parent_pos =
+  add_error_assert_primary_pos_in_current_decl
+    (Typing.err_code Typing.TypeconstConcreteConcreteOverride)
+    [
+      (pos, "Cannot re-declare this type constant");
+      (parent_pos, "Previously defined here");
+    ]
+
 let const_without_typehint sid =
   let (pos, name) = sid in
   let msg =
@@ -1885,12 +1896,6 @@ let abstract_with_body (p, _) =
     p
     "This method is declared as abstract, but has a body"
 
-let not_abstract_without_body (p, _) =
-  add
-    (NastCheck.err_code NastCheck.NotAbstractWithoutBody)
-    p
-    "This method is not declared as abstract, it must have a body"
-
 let mk_not_abstract_without_typeconst (p, _) =
   {
     code = NastCheck.err_code NastCheck.NotAbstractWithoutTypeconst;
@@ -1921,6 +1926,12 @@ let interface_with_partial_typeconst tconst_pos =
     (NastCheck.err_code NastCheck.InterfaceWithPartialTypeconst)
     tconst_pos
     "An interface cannot contain a partially abstract type constant"
+
+let partially_abstract_typeconst_definition pos =
+  add
+    (NastCheck.err_code NastCheck.PartiallyAbstractTypeconstDefinition)
+    pos
+    "`as` constraints are only legal on abstract type constants"
 
 let mk_multiple_xhp_category pos =
   {
@@ -2064,6 +2075,12 @@ let entrypoint_arguments pos =
     (NastCheck.err_code NastCheck.EntryPointArguments)
     pos
     "`__EntryPoint` functions cannot take arguments."
+
+let entrypoint_generics pos =
+  add
+    (NastCheck.err_code NastCheck.EntryPointGenerics)
+    pos
+    "`__EntryPoint` functions cannot have generic parameters."
 
 let variadic_memoize pos =
   add
@@ -2224,6 +2241,25 @@ let bad_decl_override parent_pos parent_name pos name msgl =
   in
   (* This is a cascading error message *)
   add_list (Typing.err_code Typing.BadDeclOverride) msg1 (msg2 :: msgl)
+
+let method_import_via_diamond
+    pos class_name method_pos method_name trace1 trace2 =
+  let class_name = Markdown_lite.md_codify (strip_ns class_name) in
+  let method_name = Markdown_lite.md_codify (strip_ns method_name) in
+  let msg1 =
+    ( pos,
+      "Class "
+      ^ class_name
+      ^ " inherits trait method "
+      ^ method_name
+      ^ " via multiple traits.  Remove the multiple paths or override the method"
+    )
+  in
+  let msg2 = (method_pos, "Trait method is defined here") in
+  add_list
+    (Typing.err_code Typing.DiamondTraitMethod)
+    msg1
+    ((msg2 :: trace1) @ trace2)
 
 let bad_method_override
     pos member_name msgl (on_error : error_from_reasons_callback) =
@@ -2422,22 +2458,20 @@ let unification_cycle pos ty =
     []
 
 let violated_constraint
-    p_cstr
-    (p_tparam, tparam)
-    left
-    right
-    (on_error : error_from_reasons_callback) =
+    violated_constraints reasons (on_error : error_from_reasons_callback) =
+  let msgs =
+    List.concat_map violated_constraints ~f:(fun (p_cstr, (p_tparam, tparam)) ->
+        [
+          ( p_tparam,
+            Printf.sprintf
+              "%s is a constrained type parameter"
+              (Markdown_lite.md_codify tparam) );
+          (p_cstr, "This type constraint is violated");
+        ])
+  in
   on_error
     ~code:(Typing.err_code Typing.TypeConstraintViolation)
-    ( [
-        (p_cstr, "Some type constraint(s) are violated here");
-        ( p_tparam,
-          Printf.sprintf
-            "%s is a constrained type parameter"
-            (Markdown_lite.md_codify tparam) );
-      ]
-    @ left
-    @ right )
+    (msgs @ reasons)
 
 let method_variance pos =
   add
@@ -2445,30 +2479,12 @@ let method_variance pos =
     pos
     "Covariance or contravariance is not allowed in type parameter of method or function."
 
-let explain_constraint ~(use_pos : Pos.t) ~definition_pos ~param_name reasons =
-  let inst_msg = "Some type constraint(s) here are violated" in
-  (* There may be multiple constraints instantiated at one spot; avoid
-   * duplicating the instantiation message *)
-  let msgl =
-    match reasons with
-    | [] -> []
-    | claim :: reasons ->
-      let (p, msg) = claim in
-      if
-        String.equal msg inst_msg
-        && Pos_or_decl.equal p (Pos_or_decl.of_raw_pos use_pos)
-      then
-        reasons
-      else
-        claim :: reasons
-  in
-  let name = strip_ns param_name in
+let explain_constraint ~(use_pos : Pos.t) : error_from_reasons_callback =
+ fun ?code:_ reasons ->
   add_list
     (Typing.err_code Typing.TypeConstraintViolation)
-    (use_pos, inst_msg)
-    ( ( definition_pos,
-        Markdown_lite.md_codify name ^ " is a constrained type parameter" )
-    :: msgl )
+    (use_pos, "Some type arguments violate their constraints")
+    reasons
 
 let explain_where_constraint ~in_class ~use_pos ~definition_pos reasons =
   let callsite_ty =
@@ -2735,6 +2751,22 @@ let protected_inst_meth ~def_pos ~use_pos =
     (Typing.err_code Typing.ProtectedInstMeth)
     ( use_pos,
       "You cannot use this method with `inst_meth` (whether you are in the same class hierarchy or not)."
+    )
+    [(def_pos, "It is declared as `protected` here")]
+
+let private_meth_caller ~def_pos ~use_pos =
+  add_list
+    (Typing.err_code Typing.PrivateMethCaller)
+    ( use_pos,
+      "You cannot access this method with `meth_caller` (even from the same class hierarchy)"
+    )
+    [(def_pos, "It is declared as `private` here")]
+
+let protected_meth_caller ~def_pos ~use_pos =
+  add_list
+    (Typing.err_code Typing.ProtectedMethCaller)
+    ( use_pos,
+      "You cannot access this method with `meth_caller` (even from the same class hierarchy)"
     )
     [(def_pos, "It is declared as `protected` here")]
 
@@ -3281,11 +3313,10 @@ let fun_variadicity_hh_vs_php56
 let ellipsis_strict_mode ~require pos =
   let msg =
     match require with
-    | `Type -> "Cannot use `...` without a **type hint** in strict mode."
     | `Param_name ->
-      "Cannot use `...` without a **parameter name** in strict mode."
+      "Variadic function arguments require a name in strict mode, e.g. `...$args`."
     | `Type_and_param_name ->
-      "Cannot use `...` without a **type hint** and **parameter name** in strict mode."
+      "Variadic function arguments require a name and type in strict mode, e.g. `int ...$args`."
   in
   add (Typing.err_code Typing.EllipsisStrictMode) pos msg
 
@@ -3465,6 +3496,13 @@ let unify_error ?code claim reasons =
 let unify_error_at : Pos.t -> error_from_reasons_callback =
  (fun pos ?code reasons -> unify_error ?code (pos, "Typing error") reasons)
 
+let rigid_tvar_escape_at : Pos.t -> string -> error_from_reasons_callback =
+ fun pos what ?code:_ reasons ->
+  add_list
+    (Typing.err_code Typing.RigidTVarEscape)
+    (pos, "Rigid type variable escapes its " ^ what)
+    reasons
+
 let invalid_type_hint : Pos.t -> error_from_reasons_callback =
  fun pos ?code reasons ->
   add_list
@@ -3547,6 +3585,8 @@ let bitwise_math_invalid_argument =
   maybe_unify_error Typing.BitwiseMathInvalidArgument
 
 let inc_dec_invalid_argument = maybe_unify_error Typing.IncDecInvalidArgument
+
+let math_invalid_argument = maybe_unify_error Typing.MathInvalidArgument
 
 let using_error pos has_await ?code:_ claim reasons =
   let (note, cls) =
@@ -4214,12 +4254,6 @@ let missing_xhp_required_attr pos attr ty_reason_msg =
     (pos, msg)
     ty_reason_msg
 
-let nullsafe_not_needed p nonnull_witness =
-  add_list
-    (Typing.err_code Typing.NullsafeNotNeeded)
-    (p, "You are using the `?->` operator but this object cannot be null. ")
-    nonnull_witness
-
 let generic_at_runtime p prefix =
   add
     (Typing.err_code Typing.ErasedGenericAtRuntime)
@@ -4260,6 +4294,15 @@ let comparison_invalid_types p left right =
   in
   add_list
     (Typing.err_code Typing.ComparisonInvalidTypes)
+    (p, msg)
+    (left @ right)
+
+let strict_eq_value_incompatible_types p left right =
+  let msg =
+    "The arguments to this value equality test are not the same types or are not the allowed types (int, bool, float, string, vec, keyset, dict). The behavior for this test is changing and will soon either be universally false or throw an exception."
+  in
+  add_list
+    (Typing.err_code Typing.StrictEqValueIncompatibleTypes)
     (p, msg)
     (left @ right)
 
@@ -4660,6 +4703,15 @@ let invalid_arraykey_read = invalid_arraykey Typing.InvalidArrayKeyRead
 
 let invalid_arraykey_write = invalid_arraykey Typing.InvalidArrayKeyWrite
 
+let invalid_keyset_value pos (cpos, ctype) (vpos, vtype) =
+  add_list
+    (Typing.err_code Typing.InvalidKeysetValue)
+    (pos, "Keyset values must be arraykeys")
+    [
+      (cpos, "This container is " ^ ctype);
+      (vpos, String.capitalize vtype ^ " is not an arraykey");
+    ]
+
 let invalid_sub_string pos ty =
   add (Typing.err_code Typing.InvalidSubString) pos
   @@ "Expected an object convertible to string but got "
@@ -4688,20 +4740,43 @@ let invalid_arraykey_constraint pos t =
     ^ t
     ^ ", which cannot be used as an arraykey (string | int)" )
 
-let exception_occurred pos e =
+let internal_compiler_error_msg =
+  Printf.sprintf
+    "Encountered an internal compiler error while typechecking this. %s %s"
+    Error_message_sentinel.remediation_message
+    Error_message_sentinel.please_file_a_bug_message
+
+let exception_occurred ~typechecking_is_deferring pos e =
   let pos_str = pos |> Pos.to_absolute |> Pos.string in
-  HackEventLogger.type_check_exn_bug ~path:(Pos.filename pos) ~pos:pos_str ~e;
+  HackEventLogger.type_check_exn_bug
+    ~typechecking_is_deferring
+    ~path:(Pos.filename pos)
+    ~pos:pos_str
+    ~e;
   Hh_logger.error
     "Exception while typechecking at position %s\n%s"
     pos_str
     (Exception.to_string e);
-  add
-    (Typing.err_code Typing.ExceptionOccurred)
-    pos
-    (Printf.sprintf
-       "An exception occurred while typechecking this. Please try %s. %s"
-       (Markdown_lite.md_codify "hh restart")
-       Error_message_sentinel.please_file_a_bug_message)
+  add (Typing.err_code Typing.ExceptionOccurred) pos internal_compiler_error_msg
+
+let invariant_violation
+    ~typechecking_is_deferring ~report_to_user ~desc pos telemetry =
+  let pos_str = pos |> Pos.to_absolute |> Pos.string in
+  HackEventLogger.invariant_violation_bug
+    ~typechecking_is_deferring
+    ~path:(Pos.filename pos)
+    ~pos:pos_str
+    ~desc
+    telemetry;
+  Hh_logger.error
+    "Invariant violation at position %s\n%s"
+    pos_str
+    Telemetry.(telemetry |> string_ ~key:"desc" ~value:desc |> to_string);
+  if report_to_user then
+    add
+      (Typing.err_code Typing.InvariantViolated)
+      pos
+      internal_compiler_error_msg
 
 let redundant_covariant pos msg suggest =
   add
@@ -5033,17 +5108,24 @@ let call_coeffect_error
     ]
 
 let op_coeffect_error
-    ~locally_available ~available_pos ~err_code ~required op op_pos =
+    ~locally_available
+    ~available_pos
+    ~err_code
+    ~required
+    ?(suggestion = [])
+    op
+    op_pos =
   add_list
     err_code
     ( op_pos,
       op ^ " requires " ^ required ^ ", which is not provided by the context."
     )
-    [
-      ( available_pos,
-        "The local (enclosing) context provides " ^ locally_available );
-      context_definitions_msg ();
-    ]
+    ( [
+        ( available_pos,
+          "The local (enclosing) context provides " ^ locally_available );
+      ]
+    @ suggestion
+    @ [context_definitions_msg ()] )
 
 let abstract_function_pointer cname meth_name call_pos decl_pos =
   let cname = strip_ns cname in
@@ -5173,26 +5255,31 @@ let atom_invalid_generic pos name =
       ^ Naming_special_names.UserAttributes.uaAtom )
     []
 
-let atom_unknown pos atom_name class_name =
+let enum_class_label_unknown pos label_name class_name =
   let class_name = strip_ns class_name in
   add_list
-    (Typing.err_code Typing.AtomUnknown)
-    (pos, "Unknown constant " ^ atom_name ^ " in " ^ class_name)
+    (Typing.err_code Typing.EnumClassLabelUnknown)
+    (pos, "Unknown constant " ^ label_name ^ " in " ^ class_name)
     []
 
-let atom_as_expr pos =
+let enum_class_label_as_expr pos =
   add_list
-    (Typing.err_code Typing.AtomAsExpression)
+    (Typing.err_code Typing.EnumClassLabelAsExpression)
     ( pos,
-      "Atoms are not allowed in this position. They are only allowed "
-      ^ "in function call, if the function parameter is annotated with "
-      ^ Naming_special_names.UserAttributes.uaAtom )
+      "Enum class labels are not allowed in this position. They are only allowed "
+      ^ "in function calls)" )
     []
 
-let atom_invalid_argument pos =
+let enum_class_label_invalid_argument pos ~is_proj =
+  let msg =
+    if is_proj then
+      ", not a class constant projection."
+    else
+      "."
+  in
   add_list
-    (Typing.err_code Typing.AtomInvalidArgument)
-    (pos, "An atom is required here, not a class constant projection")
+    (Typing.err_code Typing.EnumClassLabelInvalidArgument)
+    (pos, "An enum class label is required here" ^ msg)
     []
 
 let ifc_internal_error pos reason =
@@ -5204,18 +5291,37 @@ let ifc_internal_error pos reason =
     ^ ". If you see this error and aren't expecting it, please `hh rage` and let the Hack team know."
     )
 
-let parent_implements_dynamic
+let override_method_support_dynamic_type
+    child_pos
+    parent_pos
+    parent_origin
+    name
+    (on_error : error_from_reasons_callback) =
+  let parent_origin = strip_ns parent_origin in
+  on_error
+    ~code:(Typing.err_code Typing.ImplementsDynamic)
+    [
+      ( child_pos,
+        "Method "
+        ^ name
+        ^ " must be declared <<__SupportDynamicType>> because it overrides method in class "
+        ^ parent_origin
+        ^ " which does." );
+      (parent_pos, "Overridden method is defined here.");
+    ]
+
+let parent_support_dynamic_type
     pos
     (child_name, child_kind)
     (parent_name, parent_kind)
-    child_implements_dynamic =
-  let kind_to_strings = function
+    child_support_dynamic_type =
+  let kind_to_string = function
     | Ast_defs.Cabstract
     | Ast_defs.Cnormal ->
-      ("class ", "implement ")
-    | Ast_defs.Ctrait -> ("trait ", "implement ")
-    | Ast_defs.Cinterface -> ("interface ", "extend ")
-    | Ast_defs.Cenum -> (* cannot happen *) ("", "")
+      "class "
+    | Ast_defs.Ctrait -> "trait "
+    | Ast_defs.Cinterface -> "interface "
+    | Ast_defs.Cenum -> (* cannot happen *) ""
   in
   let kinds_to_use child_kind parent_kind =
     match (child_kind, parent_kind) with
@@ -5228,35 +5334,42 @@ let parent_implements_dynamic
     | (_, _) -> ""
   in
   let child_name = Markdown_lite.md_codify (strip_ns child_name) in
-  let (child_kind_s, action) = kind_to_strings child_kind in
+  let child_kind_s = kind_to_string child_kind in
   let parent_name = Markdown_lite.md_codify (strip_ns parent_name) in
-  let (parent_kind_s, _) = kind_to_strings parent_kind in
+  let parent_kind_s = kind_to_string parent_kind in
   add
     (Typing.err_code Typing.ImplementsDynamic)
     pos
     ( String.capitalize child_kind_s
     ^ child_name
-    ^ ( if child_implements_dynamic then
+    ^ ( if child_support_dynamic_type then
         " cannot "
       else
         " must " )
-    ^ action
-    ^ "dynamic because it "
+    ^ "declare <<__SupportDynamicType>> because it "
     ^ kinds_to_use child_kind parent_kind
     ^ parent_kind_s
     ^ parent_name
     ^ " which does"
     ^
-    if child_implements_dynamic then
+    if child_support_dynamic_type then
       " not"
     else
       "" )
+
+let function_is_not_dynamically_callable pos function_name error =
+  let function_name = Markdown_lite.md_codify (strip_ns function_name) in
+  let nested_error_reason = claim_as_reason error.claim :: error.reasons in
+  add_list
+    (Typing.err_code Typing.ImplementsDynamic)
+    (pos, "Function  " ^ function_name ^ " is not dynamically callable.")
+    nested_error_reason
 
 let method_is_not_dynamically_callable
     pos
     method_name
     class_name
-    sound_dynamic_callable_attribute
+    support_dynamic_type_attribute
     parent_class_opt
     error_opt =
   let method_name = Markdown_lite.md_codify (strip_ns method_name) in
@@ -5286,7 +5399,7 @@ let method_is_not_dynamically_callable
   in
 
   let attribute_reason =
-    match sound_dynamic_callable_attribute with
+    match support_dynamic_type_attribute with
     | true -> []
     | false ->
       [
@@ -5295,7 +5408,7 @@ let method_is_not_dynamically_callable
           ^ method_name
           ^ " is not enforceable. "
           ^ "Try adding the <<"
-          ^ Naming_special_names.UserAttributes.uaSoundDynamicCallable
+          ^ Naming_special_names.UserAttributes.uaSupportDynamicType
           ^ ">> attribute to "
           ^ "the method to check if its code is safe for dynamic calling." );
       ]
@@ -5426,6 +5539,12 @@ let readonly_mismatch prefix pos ~reason_sub ~reason_super =
     (pos, prefix)
     (reason_sub @ reason_super)
 
+let readonly_invalid_as_mut pos =
+  add
+    (Typing.err_code Typing.ReadonlyInvalidAsMut)
+    pos
+    "Only primitive value types can be converted to mutable."
+
 let readonly_exception pos =
   add
     (Typing.err_code Typing.ReadonlyException)
@@ -5518,6 +5637,53 @@ let cyclic_class_constant pos class_name constant_name =
       ^ strip_ns class_name )
     []
 
+let bad_conditional_support_dynamic pos ~child ~parent statement reasons =
+  add_list
+    (Typing.err_code Typing.BadConditionalSupportDynamic)
+    ( pos,
+      "Class "
+      ^ strip_ns child
+      ^ " must support dynamic at least as often as "
+      ^ strip_ns parent
+      ^ ":\n"
+      ^ statement )
+    reasons
+
+let unresolved_type_variable_projection pos tname ~proj_pos =
+  add_list
+    (Typing.err_code Typing.UnresolvedTypeVariableProjection)
+    (pos, "Can't access a type constant " ^ tname ^ " from an unresolved type")
+    [
+      (proj_pos, "Access happens here");
+      ( Pos_or_decl.of_raw_pos pos,
+        "Disambiguate the types using explicit type annotations here." );
+    ]
+
+let function_pointer_with_atom pos fpos =
+  add_list
+    (Typing.err_code Typing.FunctionPointerWithAtom)
+    (pos, "Function pointer on functions/methods using __Atom is not supported.")
+    [(fpos, "__Atom is used here.")]
+
+let reified_static_method_in_expr_tree pos =
+  add
+    (Typing.err_code Typing.ReifiedStaticMethodInExprTree)
+    pos
+    "Static method calls on reified generics are not permitted in Expression Trees."
+
+let invalid_echo_argument_at pos ?code reasons =
+  let msg =
+    "Invalid "
+    ^ Markdown_lite.md_codify "echo"
+    ^ "/"
+    ^ Markdown_lite.md_codify "print"
+    ^ " argument"
+  in
+  add_list
+    (Option.value code ~default:(Typing.err_code Typing.InvalidEchoArgument))
+    (pos, msg)
+    reasons
+
 (*****************************************************************************)
 (* Printing *)
 (*****************************************************************************)
@@ -5581,15 +5747,33 @@ let has_no_errors (f : unit -> 'a) : bool =
       true)
     (fun _ -> false)
 
+(* Runs f2 on the result only if f1 returns has no errors. *)
+let try_if_no_errors f1 f2 =
+  let (result, error_opt) =
+    try_with_result
+      (fun () ->
+        let result = f1 () in
+        (result, None))
+      (fun (result, _none) error -> (result, Some error))
+  in
+  match error_opt with
+  | Some err ->
+    add_error err;
+    result
+  | None -> f2 result
+
 (*****************************************************************************)
 (* Do. *)
 (*****************************************************************************)
 
 let ignore_ f =
   let allow_errors_in_default_path_copy = !allow_errors_in_default_path in
+  let ignore_pos_outside_current_span_copy = !ignore_pos_outside_current_span in
   set_allow_errors_in_default_path true;
+  ignore_pos_outside_current_span := true;
   let (_, result) = do_ f in
   set_allow_errors_in_default_path allow_errors_in_default_path_copy;
+  ignore_pos_outside_current_span := ignore_pos_outside_current_span_copy;
   result
 
 let try_when f ~when_ ~do_ =

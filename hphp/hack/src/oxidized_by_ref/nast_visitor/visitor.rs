@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<61dd5abdb00d3834567cad14fd1b5f02>>
+// @generated SignedSource<<81ac03c31c1d5d874433a4f4ee9fc2a2>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -172,6 +172,12 @@ pub trait Visitor<'a> {
     fn visit_file_attribute(
         &mut self,
         p: &'a FileAttribute<'a, &'a crate::pos::Pos<'a>, crate::nast::FuncBodyAnn<'a>, (), ()>,
+    ) {
+        p.recurse(self.object())
+    }
+    fn visit_fun_def(
+        &mut self,
+        p: &'a FunDef<'a, &'a crate::pos::Pos<'a>, crate::nast::FuncBodyAnn<'a>, (), ()>,
     ) {
         p.recurse(self.object())
     }
@@ -355,7 +361,7 @@ pub trait Visitor<'a> {
     ) {
         p.recurse(self.object())
     }
-    fn visit_xhp_attr_info(&mut self, p: &'a XhpAttrInfo) {
+    fn visit_xhp_attr_info(&mut self, p: &'a XhpAttrInfo<'a>) {
         p.recurse(self.object())
     }
     fn visit_xhp_attr_tag(&mut self, p: &'a XhpAttrTag) {
@@ -371,6 +377,9 @@ pub trait Visitor<'a> {
         p.recurse(self.object())
     }
     fn visit_xhp_child_op(&mut self, p: &'a XhpChildOp) {
+        p.recurse(self.object())
+    }
+    fn visit_xhp_enum_value(&mut self, p: &'a XhpEnumValue<'a>) {
         p.recurse(self.object())
     }
     fn visit_xhp_simple(

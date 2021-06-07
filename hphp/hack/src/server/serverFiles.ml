@@ -7,9 +7,7 @@
  *
  *)
 
-module HhBucket = Bucket
 open Hh_prelude
-module Bucket = HhBucket
 open Utils
 open String_utils
 
@@ -49,41 +47,10 @@ let monitor_log_link root = path_of_root root "monitor_log"
 let server_finale_file (pid : int) : string =
   Filename.concat GlobalConfig.tmp_dir (spf "%d.fin" pid)
 
-(* Return all the files that we need to typecheck *)
-let make_next
-    ?(hhi_filter = FindUtils.is_hack)
-    ~(indexer : unit -> string list)
-    ~(extra_roots : Path.t list) : Relative_path.t list Bucket.next =
-  let next_files_root =
-    compose (List.map ~f:Relative_path.(create Root)) indexer
-  in
-  let hhi_root = Hhi.get_hhi_root () in
-  let next_files_hhi =
-    compose
-      (List.map ~f:Relative_path.(create Hhi))
-      (Find.make_next_files ~name:"hhi" ~filter:hhi_filter hhi_root)
-  in
-  let rec concat_next_files l () =
-    match l with
-    | [] -> []
-    | hd :: tl ->
-      begin
-        match hd () with
-        | [] -> concat_next_files tl ()
-        | x -> x
-      end
-  in
-  let next_files_extra =
-    List.map
-      ~f:(fun root ->
-        compose
-          (List.map ~f:Relative_path.create_detect_prefix)
-          (Find.make_next_files ~filter:FindUtils.file_filter root))
-      extra_roots
-    |> concat_next_files
-  in
-  fun () ->
-    let next =
-      concat_next_files [next_files_hhi; next_files_extra; next_files_root] ()
-    in
-    Bucket.of_list next
+let server_progress_file (pid : int) : string =
+  Filename.concat GlobalConfig.tmp_dir (spf "progress.%d.json" pid)
+
+let server_receipt_to_monitor_file (pid : int) : string =
+  Filename.concat
+    GlobalConfig.tmp_dir
+    (spf "server_receipt_to_monitor.%d.json" pid)

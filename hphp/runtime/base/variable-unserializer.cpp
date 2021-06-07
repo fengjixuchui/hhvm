@@ -43,8 +43,8 @@
 #include "hphp/runtime/ext/std/ext_std_classobj.h"
 
 #include "hphp/runtime/vm/native-data.h"
+#include "hphp/runtime/vm/repo-file.h"
 #include "hphp/runtime/vm/repo-global-data.h"
-#include "hphp/runtime/vm/repo.h"
 
 #include "hphp/runtime/vm/jit/perf-counters.h"
 
@@ -341,8 +341,10 @@ Variant VariableUnserializer::unserialize() {
     StructuredLog::logSerDes(fmt.c_str(), "des", ser, v);
   }
 
+  auto const providedCoeffects =
+    m_pure ? RuntimeCoeffects::pure() : RuntimeCoeffects::defaults();
   for (auto& obj : m_sleepingObjects) {
-    obj->invokeWakeup();
+    obj->invokeWakeup(providedCoeffects);
   }
 
   return v;
@@ -562,7 +564,7 @@ void VariableUnserializer::unserializeProp(ObjectData* obj,
 
   unserializePropertyValue(t, nProp);
   if (!RuntimeOption::RepoAuthoritative) return;
-  if (!Repo::get().global().HardPrivatePropInference) return;
+  if (!RepoFile::globalData().HardPrivatePropInference) return;
 
   /*
    * We assume for performance reasons in repo authoriative mode that
@@ -1041,7 +1043,7 @@ void VariableUnserializer::unserializeVariant(
           bool hasSerializedNativeData = false;
           bool checkRepoAuthType =
             RuntimeOption::RepoAuthoritative &&
-            Repo::get().global().HardPrivatePropInference;
+            RepoFile::globalData().HardPrivatePropInference;
           Class* objCls = obj->getVMClass();
           // Try fast case.
           if (remainingProps >= objCls->numDeclProperties() -
@@ -1197,7 +1199,7 @@ void VariableUnserializer::unserializeVariant(
         raise_warning("Class %s has no unserializer",
                       obj->getClassName().data());
       } else {
-        obj->o_invoke_few_args(s_unserialize, 1, serialized);
+        obj->o_invoke_few_args(s_unserialize, RuntimeCoeffects::fixme(), 1, serialized);
       }
 
       tvMove(make_tv<KindOfObject>(obj.detach()), self);
@@ -1695,19 +1697,9 @@ void VariableUnserializer::unserializeSet(ObjectData* obj, int64_t sz,
     Variant k;
     unserializeVariant(k.asTypedValue(), UnserializeMode::ColKey);
     if (k.isInteger()) {
-      auto h = k.toInt64();
-      auto tv = set->findForUnserialize(h);
-      // Be robust against manually crafted inputs with conflicting elements
-      if (UNLIKELY(!tv)) continue;
-      tv->m_type = KindOfInt64;
-      tv->m_data.num = h;
+      set->add(k.toInt64());
     } else if (k.isString()) {
-      auto key = k.getStringData();
-      auto tv = set->findForUnserialize(key);
-      if (UNLIKELY(!tv)) continue;
-      // This increments the string's refcount twice, once for
-      // the key and once for the value
-      tvDup(make_tv<KindOfString>(key), *tv);
+      set->add(k.getStringData());
     } else {
       throwInvalidHashKey(obj);
     }

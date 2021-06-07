@@ -215,13 +215,8 @@ pub const error2010: Error = Cow::Borrowed(concat!(
     "parameter lists of constructors)."
 ));
 pub const error2014: Error = Cow::Borrowed("An abstract method cannot have a method body.");
-pub fn error2015(class_name: &str, method_name: &str) -> Error {
-    Cow::Owned(format!(
-        "Non-abstract method `{}::{}` must contain body",
-        class_name.to_string(),
-        method_name.to_string(),
-    ))
-}
+pub const error2015: Error = Cow::Borrowed("A method must have a body or be marked `abstract`.");
+
 pub fn error2016(class_name: &str, method_name: &str) -> Error {
     Cow::Owned(format!(
         "Cannot declare abstract method `{}::{}` `private`",
@@ -344,7 +339,9 @@ pub const error2066: Error = Cow::Borrowed(concat!(
     "this one."
 ));
 pub const error2068: Error = Cow::Borrowed("`hh` blocks and `php` blocks cannot be mixed.");
-pub const invalid_octal_integer: Error = Cow::Borrowed("Invalid octal integers");
+pub fn invalid_integer_digit(int_kind: ocaml_helper::IntKind) -> Error {
+    Cow::Owned(format!("Invalid digit for {} integers", int_kind))
+}
 pub const prefixed_invalid_string_kind: Error =
     Cow::Borrowed("Only double-quoted strings may be prefixed.");
 pub const illegal_interpolated_brace_with_embedded_dollar_expression: Error =
@@ -393,9 +390,9 @@ pub const instanceof_missing_subscript_index: Error = Cow::Borrowed(concat!(
     "A subscript expression `[]` on the right side of an ",
     "instanceof operator must have an index",
 ));
-pub fn instanceof_new_unknown_node(msg: &str) -> Error {
+pub fn new_unknown_node(msg: &str) -> Error {
     Cow::Owned(format!(
-        "Unexpected node on right hand side of `new` or `instanceof`: `{}`",
+        "`new` requires a class name or local variable, but got: `{}`",
         msg.to_string(),
     ))
 }
@@ -989,8 +986,35 @@ pub fn effect_polymorphic_memoized(kind: &str) -> Error {
     ))
 }
 
+pub fn effect_policied_memoized(kind: &str) -> Error {
+    Cow::Owned(format!(
+        "This {} can only be memoized using __PolicyShardedMemoize because it has policied context",
+        kind
+    ))
+}
+
 pub const lambda_effect_polymorphic: Error =
     Cow::Borrowed("A lambda cannot have polymorphic context");
 
 pub const inst_meth_disabled: Error =
     Cow::Borrowed("`inst_meth()` is disabled; use a lambda `(...) ==> {...}` instead");
+
+pub const invalid_atom_location: Error =
+    Cow::Borrowed("`__Atom` attribute can only appear on the first parameter of a function");
+
+pub const as_mut_single_argument: Error =
+    Cow::Borrowed("HH\\Readonly\\as_mut takes a single value-typed expression as an argument.");
+
+pub fn out_of_int_range(int: &str) -> Error {
+    Cow::Owned(format!(
+        "{} is out of the range of 64-bit float values",
+        int.to_string(),
+    ))
+}
+
+pub fn out_of_float_range(float: &str) -> Error {
+    Cow::Owned(format!(
+        "{} is out of the range of 64-bit float values",
+        float.to_string(),
+    ))
+}

@@ -71,16 +71,10 @@ let on_the_fly_decl_file ctx errors fn =
  *)
 (*****************************************************************************)
 
-let compute_classes_deps
-    ctx ~conservative_redecl old_classes new_classes acc classes =
+let compute_classes_deps ctx old_classes new_classes acc classes =
   let (changed, to_redecl, to_recheck) = acc in
   let (rc, rdd, rdc) =
-    Decl_compare.get_classes_deps
-      ~ctx
-      ~conservative_redecl
-      old_classes
-      new_classes
-      classes
+    Decl_compare.get_classes_deps ~ctx old_classes new_classes classes
   in
   let changed = DepSet.union rc changed in
   let to_redecl = DepSet.union rdd to_redecl in
@@ -93,11 +87,8 @@ let compute_classes_deps
  *)
 (*****************************************************************************)
 
-let compute_funs_deps
-    ctx ~conservative_redecl old_funs (changed, to_redecl, to_recheck) funs =
-  let (rc, rdd, rdc) =
-    Decl_compare.get_funs_deps ~ctx ~conservative_redecl old_funs funs
-  in
+let compute_funs_deps ctx old_funs (changed, to_redecl, to_recheck) funs =
+  let (rc, rdd, rdc) = Decl_compare.get_funs_deps ~ctx old_funs funs in
   let changed = DepSet.union rc changed in
   let to_redecl = DepSet.union rdd to_redecl in
   let to_recheck = DepSet.union rdc to_recheck in
@@ -109,28 +100,16 @@ let compute_funs_deps
  *)
 (*****************************************************************************)
 
-let compute_types_deps
-    ctx ~conservative_redecl old_types (changed, to_redecl, to_recheck) types =
+let compute_types_deps ctx old_types (changed, to_redecl, to_recheck) types =
   let (rc, rdc) = Decl_compare.get_types_deps ~ctx old_types types in
   let changed = DepSet.union rc changed in
-  let to_redecl =
-    if conservative_redecl then
-      DepSet.union rdc to_redecl
-    else
-      to_redecl
-  in
   let to_recheck = DepSet.union rdc to_recheck in
   (changed, to_redecl, to_recheck)
 
-let compute_record_defs_deps
-    ctx ~conservative_redecl old_record_defs acc record_defs =
+let compute_record_defs_deps ctx old_record_defs acc record_defs =
   let (changed, to_redecl, to_recheck) = acc in
   let (rc, rdd, rdc) =
-    Decl_compare.get_record_defs_deps
-      ~ctx
-      ~conservative_redecl
-      old_record_defs
-      record_defs
+    Decl_compare.get_record_defs_deps ~ctx old_record_defs record_defs
   in
   let changed = DepSet.union rc changed in
   let to_redecl = DepSet.union rdd to_redecl in
@@ -144,14 +123,8 @@ let compute_record_defs_deps
 (*****************************************************************************)
 
 let compute_gconsts_deps
-    ctx
-    ~conservative_redecl
-    old_gconsts
-    (changed, to_redecl, to_recheck)
-    gconsts =
-  let (rc, rdd, rdc) =
-    Decl_compare.get_gconsts_deps ~ctx ~conservative_redecl old_gconsts gconsts
-  in
+    ctx old_gconsts (changed, to_redecl, to_recheck) gconsts =
+  let (rc, rdd, rdc) = Decl_compare.get_gconsts_deps ~ctx old_gconsts gconsts in
   let changed = DepSet.union rc changed in
   let to_redecl = DepSet.union rdd to_redecl in
   let to_recheck = DepSet.union rdc to_recheck in
@@ -176,7 +149,7 @@ let on_the_fly_decl_files filel =
   (* Redeclaring the files *)
   redeclare_files filel
 
-let compute_deps ctx ~conservative_redecl fast (filel : Relative_path.t list) =
+let compute_deps ctx fast (filel : Relative_path.t list) =
   let infol = List.map filel (fun fn -> Relative_path.Map.find fast fn) in
   let names =
     List.fold_left infol ~f:FileInfo.merge_names ~init:FileInfo.empty_names
@@ -188,35 +161,20 @@ let compute_deps ctx ~conservative_redecl fast (filel : Relative_path.t list) =
   let acc = (empty, empty, empty) in
   (* Fetching everything at once is faster *)
   let old_funs = Decl_heap.Funs.get_old_batch n_funs in
-  let acc = compute_funs_deps ctx ~conservative_redecl old_funs acc n_funs in
+  let acc = compute_funs_deps ctx old_funs acc n_funs in
   let old_types = Decl_heap.Typedefs.get_old_batch n_types in
-  let acc = compute_types_deps ctx ~conservative_redecl old_types acc n_types in
+  let acc = compute_types_deps ctx old_types acc n_types in
   let old_record_defs = Decl_heap.RecordDefs.get_old_batch n_record_defs in
-  let acc =
-    compute_record_defs_deps
-      ctx
-      ~conservative_redecl
-      old_record_defs
-      acc
-      n_record_defs
-  in
+  let acc = compute_record_defs_deps ctx old_record_defs acc n_record_defs in
   let old_consts = Decl_heap.GConsts.get_old_batch n_consts in
-  let acc =
-    compute_gconsts_deps ctx ~conservative_redecl old_consts acc n_consts
-  in
+  let acc = compute_gconsts_deps ctx old_consts acc n_consts in
   let acc =
     if shallow_decl_enabled ctx then
       acc
     else
       let old_classes = Decl_heap.Classes.get_old_batch n_classes in
       let new_classes = Decl_heap.Classes.get_batch n_classes in
-      compute_classes_deps
-        ctx
-        ~conservative_redecl
-        old_classes
-        new_classes
-        acc
-        n_classes
+      compute_classes_deps ctx old_classes new_classes acc n_classes
   in
   let (changed, to_redecl, to_recheck) = acc in
   (changed, to_redecl, to_recheck)
@@ -232,14 +190,11 @@ let load_and_on_the_fly_decl_files ctx _ filel =
     Out_channel.flush stdout;
     raise e
 
-let load_and_compute_deps
-    ctx ~conservative_redecl _acc (filel : Relative_path.t list) :
+let load_and_compute_deps ctx _acc (filel : Relative_path.t list) :
     DepSet.t * DepSet.t * DepSet.t * int =
   try
     let fast = OnTheFlyStore.load () in
-    let (changed, to_redecl, to_recheck) =
-      compute_deps ctx ~conservative_redecl fast filel
-    in
+    let (changed, to_redecl, to_recheck) = compute_deps ctx fast filel in
     (changed, to_redecl, to_recheck, List.length filel)
   with e ->
     Printf.printf "Error: %s\n" (Exn.to_string e);
@@ -253,7 +208,7 @@ let load_and_compute_deps
 let merge_on_the_fly
     files_initial_count files_declared_count (count, errorl1) errorl2 =
   files_declared_count := !files_declared_count + count;
-  ServerProgress.send_percentage_progress_to_monitor_w_timeout
+  ServerProgress.send_percentage_progress
     ~operation:"declaring"
     ~done_count:!files_declared_count
     ~total_count:files_initial_count
@@ -275,7 +230,7 @@ let merge_compute_deps
       DepSet.union to_recheck1 to_recheck2 )
   in
 
-  ServerProgress.send_percentage_progress_to_monitor_w_timeout
+  ServerProgress.send_percentage_progress
     ~operation:"computing dependencies of"
     ~done_count:!files_computed_count
     ~total_count:files_initial_count
@@ -288,7 +243,6 @@ let merge_compute_deps
 (* The parallel worker *)
 (*****************************************************************************)
 let parallel_on_the_fly_decl
-    ~(conservative_redecl : bool)
     (ctx : Provider_context.t)
     (workers : MultiWorker.worker list option)
     (bucket_size : int)
@@ -300,7 +254,7 @@ let parallel_on_the_fly_decl
     let files_declared_count = ref 0 in
     let t = Unix.gettimeofday () in
     Hh_logger.log ~lvl "Declaring on-the-fly %d files" files_initial_count;
-    ServerProgress.send_percentage_progress_to_monitor_w_timeout
+    ServerProgress.send_percentage_progress
       ~operation:"declaring"
       ~done_count:!files_declared_count
       ~total_count:files_initial_count
@@ -317,7 +271,7 @@ let parallel_on_the_fly_decl
     let t = Hh_logger.log_duration ~lvl "Finished declaring on-the-fly" t in
     Hh_logger.log ~lvl "Computing dependencies of %d files" files_initial_count;
     let files_computed_count = ref 0 in
-    ServerProgress.send_percentage_progress_to_monitor_w_timeout
+    ServerProgress.send_percentage_progress
       ~operation:"computing dependencies of"
       ~done_count:!files_computed_count
       ~total_count:files_initial_count
@@ -326,7 +280,7 @@ let parallel_on_the_fly_decl
     let (changed, to_redecl, to_recheck) =
       MultiWorker.call
         workers
-        ~job:(load_and_compute_deps ctx ~conservative_redecl)
+        ~job:(load_and_compute_deps ctx)
         ~neutral:(compute_deps_neutral (Provider_context.get_deps_mode ctx))
         ~merge:(merge_compute_deps files_initial_count files_computed_count)
         ~next:(MultiWorker.next ~max_size:bucket_size workers fnl)
@@ -452,7 +406,7 @@ let merge_dependent_classes
     (dependent_classes, filtered)
     acc =
   classes_filtered_count := !classes_filtered_count + filtered;
-  ServerProgress.send_percentage_progress_to_monitor_w_timeout
+  ServerProgress.send_percentage_progress
     ~operation:"filtering"
     ~done_count:!classes_filtered_count
     ~total_count:classes_initial_count
@@ -474,7 +428,7 @@ let filter_dependent_classes_parallel
     let classes_filtered_count = ref 0 in
     let t = Unix.gettimeofday () in
     Hh_logger.log ~lvl "Filtering %d dependent classes" classes_initial_count;
-    ServerProgress.send_percentage_progress_to_monitor_w_timeout
+    ServerProgress.send_percentage_progress
       ~operation:"filtering"
       ~done_count:!classes_filtered_count
       ~total_count:classes_initial_count
@@ -516,7 +470,7 @@ let merge_elements
   classes_processed_count := !classes_processed_count + count;
 
   let acc = SMap.union elements acc in
-  ServerProgress.send_percentage_progress_to_monitor_w_timeout
+  ServerProgress.send_percentage_progress
     ~operation:"getting members of"
     ~done_count:!classes_processed_count
     ~total_count:classes_initial_count
@@ -550,7 +504,7 @@ let get_elems
         Decl_class_elements.get_for_classes ~old classes
       else
         let classes_processed_count = ref 0 in
-        ServerProgress.send_percentage_progress_to_monitor_w_timeout
+        ServerProgress.send_percentage_progress
           ~operation:"getting members of"
           ~done_count:!classes_processed_count
           ~total_count:classes_initial_count
@@ -578,7 +532,6 @@ let redo_type_decl
     (ctx : Provider_context.t)
     (workers : MultiWorker.worker list option)
     ~(bucket_size : int)
-    ~(conservative_redecl : bool)
     (get_classes : Relative_path.t -> SSet.t)
     ~(previously_oldified_defs : FileInfo.names)
     ~(defs : FileInfo.names Relative_path.Map.t) : redo_type_decl_result =
@@ -604,18 +557,10 @@ let redo_type_decl
   let (errors, changed, to_redecl, to_recheck) =
     if List.length fnl < 10 then
       let ((_declared : int), errors) = on_the_fly_decl_files ctx fnl in
-      let (changed, to_redecl, to_recheck) =
-        compute_deps ctx ~conservative_redecl defs fnl
-      in
+      let (changed, to_redecl, to_recheck) = compute_deps ctx defs fnl in
       (errors, changed, to_redecl, to_recheck)
     else
-      parallel_on_the_fly_decl
-        ~conservative_redecl
-        ctx
-        workers
-        bucket_size
-        defs
-        fnl
+      parallel_on_the_fly_decl ctx workers bucket_size defs fnl
   in
   let (changed, to_recheck) =
     if shallow_decl_enabled ctx then (

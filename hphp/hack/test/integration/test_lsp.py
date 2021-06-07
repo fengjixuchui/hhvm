@@ -26,11 +26,11 @@ class InsertTextFormat(enum.Enum):
 
 
 class LspTestDriver(common_tests.CommonTestDriver):
-    def write_load_config(self, use_saved_state: bool = False) -> None:
+    def write_load_config(
+        self, use_serverless_ide: bool = False, use_saved_state: bool = False
+    ) -> None:
         # Will use the .hhconfig already in the repo directory
         # As for hh.conf, we'll write it explicitly each test.
-        # Note that hh.conf uses lower-case...
-        use_saved_state_str = "true" if use_saved_state else "false"
         with open(os.path.join(self.repo_dir, "hh.conf"), "w") as f:
             f.write(
                 """
@@ -47,8 +47,10 @@ lazy_parse = {use_saved_state}
 lazy_init2 = {use_saved_state}
 symbolindex_search_provider = SqliteIndex
 allow_unstable_features = true
+ide_serverless = {use_serverless_ide}
 """.format(
-                    use_saved_state=use_saved_state_str
+                    use_saved_state=str(use_saved_state).lower(),
+                    use_serverless_ide=str(use_serverless_ide).lower(),
                 )
             )
 
@@ -205,9 +207,7 @@ class TestLsp(TestCase[LspTestDriver]):
         elif use_serverless_ide:
             self.test_driver.stop_hh_server()
 
-        with LspCommandProcessor.create(
-            self.test_driver.test_env, use_serverless_ide=use_serverless_ide
-        ) as lsp:
+        with LspCommandProcessor.create(self.test_driver.test_env) as lsp:
             observed_transcript = lsp.communicate(test)
 
         self.write_observed(test_name, observed_transcript)
@@ -249,7 +249,7 @@ class TestLsp(TestCase[LspTestDriver]):
 
     def prepare_server_environment(self) -> None:
         self.maxDiff = None
-        self.test_driver.write_load_config()
+        self.test_driver.write_load_config(use_serverless_ide=False)
         self.test_driver.start_hh_server()
         (output, err, _) = self.test_driver.run_check()
         if "Error: Ran out of retries" in err:
@@ -258,7 +258,9 @@ class TestLsp(TestCase[LspTestDriver]):
 
     def prepare_serverless_ide_environment(self) -> Mapping[str, str]:
         self.maxDiff = None
-        self.test_driver.write_load_config(use_saved_state=False)
+        self.test_driver.write_load_config(
+            use_serverless_ide=True, use_saved_state=False
+        )
         naming_table_saved_state_path = (
             self.test_driver.write_naming_table_saved_state()
         )
@@ -294,7 +296,7 @@ class TestLsp(TestCase[LspTestDriver]):
             self.test_driver.stop_hh_server()
 
         with LspCommandProcessor.create(
-            self.test_driver.test_env, use_serverless_ide=use_serverless_ide
+            self.test_driver.test_env
         ) as lsp_command_processor:
             (observed_transcript, error_details) = spec.run(
                 lsp_command_processor=lsp_command_processor, variables=variables
@@ -3642,7 +3644,7 @@ class TestLsp(TestCase[LspTestDriver]):
                         "openClose": True,
                         "change": 2,
                         "willSave": False,
-                        "willSaveWaitUntil": False,
+                        "willSaveWaitUntil": True,
                         "save": {"includeText": False},
                     },
                     "hoverProvider": True,
@@ -4057,7 +4059,10 @@ class TestLsp(TestCase[LspTestDriver]):
                     "position": {"line": 62, "character": 25},
                 },
                 result={
-                    "contents": [{"language": "hack", "value": "public ?string name"}],
+                    "contents": [
+                        {"language": "hack", "value": "public ?string name"},
+                        ":xhp:enum-attribute::name docblock",
+                    ],
                     "range": {
                         "start": {"line": 62, "character": 22},
                         "end": {"line": 62, "character": 26},
@@ -4128,7 +4133,10 @@ class TestLsp(TestCase[LspTestDriver]):
                     "position": {"line": 69, "character": 22},
                 },
                 result={
-                    "contents": [{"language": "hack", "value": "public ?string name"}],
+                    "contents": [
+                        {"language": "hack", "value": "public ?string name"},
+                        ":xhp:enum-attribute::name docblock",
+                    ],
                     "range": {
                         "start": {"line": 69, "character": 20},
                         "end": {"line": 69, "character": 24},
@@ -6147,8 +6155,8 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
         self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=True)
 
     def test_status_stopped(self) -> None:
-        variables = dict(self.prepare_serverless_ide_environment())
-        variables.update(self.setup_php_file("hover.php"))
+        self.prepare_server_environment()
+        variables = self.setup_php_file("hover.php")
         self.test_driver.stop_hh_server()
 
         spec = (
@@ -6173,8 +6181,8 @@ If you want to examine the raw LSP logs, you can check the `.sent.log` and
         self.run_spec(spec, variables, wait_for_server=False, use_serverless_ide=False)
 
     def test_status_running(self) -> None:
-        variables = dict(self.prepare_serverless_ide_environment())
-        variables.update(self.setup_php_file("hover.php"))
+        self.prepare_server_environment()
+        variables = self.setup_php_file("hover.php")
 
         spec = (
             self.initialize_spec(

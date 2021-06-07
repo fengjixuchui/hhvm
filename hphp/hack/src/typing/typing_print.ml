@@ -133,7 +133,8 @@ module Full = struct
         ( if show_verbose env then
           match et_enforced with
           | Enforced -> text "enforced" ^^ Space
-          | PartiallyEnforced -> text "partially enforced" ^^ Space
+          | PartiallyEnforced (_, (_, cn)) ->
+            text ("partially enforced " ^ cn) ^^ Space
           | Unenforced -> Nothing
         else
           Nothing );
@@ -409,6 +410,7 @@ module Full = struct
         | _ -> Concat [text "?"; k ty]
       end
     | Tprim x -> tprim x
+    | Tneg x -> Concat [text "not "; tprim x]
     | Tvar n ->
       let (_, ety) = Env.expand_type env (mk (Reason.Rnone, Tvar n)) in
       begin
@@ -471,18 +473,7 @@ module Full = struct
     | Tgeneric (s, tyl) ->
       to_doc s ^^ list "<" k tyl ">"
     | Tdependent (dep, cstr) ->
-      let cstr_info =
-        if
-          !debug_mode
-          ||
-          match dep with
-          | DTexpr _ -> true
-          | _ -> false
-        then
-          Concat [Space; text "as"; Space; k cstr]
-        else
-          Nothing
-      in
+      let cstr_info = Concat [Space; text "as"; Space; k cstr] in
       Concat [to_doc @@ DependentKind.to_string dep; cstr_info]
     (* Don't strip_ns here! We want the FULL type, including the initial slash.
       *)
@@ -736,7 +727,7 @@ module Full = struct
         | ({ type_ = XhpLiteralAttr _; name; _ }, _)
         | ({ type_ = ClassConst _; name; _ }, _)
         | ({ type_ = GConst; name; _ }, _)
-        | ({ type_ = EnumAtom _; name; _ }, _) ->
+        | ({ type_ = EnumClassLabel _; name; _ }, _) ->
           Concat [ty text_strip_ns ISet.empty env x; Space; text_strip_ns name]
         | _ -> ty text_strip_ns ISet.empty env x)
     in
@@ -825,6 +816,7 @@ module ErrorString = struct
          prints with a different function (namely Full.locl_ty)  *)
       failwith "Tunapplied_alias is not a type"
     | Taccess (_ty, _id) -> "a type constant"
+    | Tneg p -> "not a " ^ tprim p
 
   and inst env tyl =
     if List.is_empty tyl then
@@ -840,9 +832,7 @@ module ErrorString = struct
   and dependent dep =
     let x = strip_ns @@ DependentKind.to_string dep in
     match dep with
-    | DTthis
-    | DTexpr _ ->
-      "the expression dependent type " ^ x
+    | DTexpr _ -> "the expression dependent type " ^ x
 
   and union env l =
     let (null, nonnull) =
@@ -962,11 +952,6 @@ module Json = struct
       @@ kind p "path"
       @ [("type", obj @@ kind (get_pos ty) "expr")]
       @ as_type ty
-    | (p, Tdependent (DTthis, ty)) ->
-      obj
-      @@ kind p "path"
-      @ [("type", obj @@ kind (get_pos ty) "this")]
-      @ as_type ty
     | (p, Toption ty) ->
       begin
         match get_node ty with
@@ -974,6 +959,7 @@ module Json = struct
         | _ -> obj @@ kind p "nullable" @ args [ty]
       end
     | (p, Tprim tp) -> obj @@ kind p "primitive" @ name (prim tp)
+    | (p, Tneg tp) -> obj @@ kind p "negation" @ name (prim tp)
     | (p, Tclass ((_, cid), _, tys)) ->
       obj @@ kind p "class" @ name cid @ args tys
     | (p, Tobject) -> obj @@ kind p "object"
@@ -1130,8 +1116,7 @@ module Json = struct
                   "Cannot deserialize path-dependent type involving an expression"
                 ~keytrace
             | "this" ->
-              aux_as json ~keytrace >>= fun as_ty ->
-              ty (Tdependent (DTthis, as_ty))
+              aux_as json ~keytrace >>= fun _as_ty -> ty (Tgeneric ("this", []))
             | path_kind ->
               deserialization_error
                 ~message:("Unknown path kind: " ^ path_kind)
@@ -1556,38 +1541,33 @@ module PrintClass = struct
   let typeconst
       ctx
       {
-        ttc_abstract = _;
         ttc_synthesized = synthetic;
         ttc_name = tc_name;
-        ttc_as_constraint = as_constraint;
-        ttc_super_constraint = super_constraint;
-        ttc_type = tc_type;
+        ttc_kind = kind;
         ttc_origin = origin;
         ttc_enforceable = (_, enforceable);
         ttc_reifiable = reifiable;
         ttc_concretized = _;
+        ttc_is_ctx = _;
       } =
     let name = snd tc_name in
     let ty x = Full.to_string_decl ctx x in
-    let as_constraint =
-      match as_constraint with
-      | None -> ""
-      | Some x -> " as " ^ ty x
-    in
-    let super_constraint =
-      match super_constraint with
-      | None -> ""
-      | Some x -> " super " ^ ty x
-    in
-    let type_ =
-      match tc_type with
-      | None -> ""
-      | Some x -> " = " ^ ty x
+    let type_info =
+      match kind with
+      | TCConcrete { tc_type = t } -> Printf.sprintf " = %s" (ty t)
+      | TCPartiallyAbstract { patc_constraint = c; patc_type = t } ->
+        Printf.sprintf " as %s = %s" (ty c) (ty t)
+      | TCAbstract
+          { atc_as_constraint = a; atc_super_constraint = s; atc_default = d }
+        ->
+        let m = Option.value_map ~default:"" in
+        let a = m a (fun x -> Printf.sprintf " as %s" (ty x)) in
+        let s = m s (fun x -> Printf.sprintf " super %s" (ty x)) in
+        let d = m d (fun x -> Printf.sprintf " = %s" (ty x)) in
+        a ^ s ^ d
     in
     name
-    ^ as_constraint
-    ^ super_constraint
-    ^ type_
+    ^ type_info
     ^ " (origin:"
     ^ origin
     ^ ")"
@@ -1734,7 +1714,8 @@ end
 
 module PrintTypedef = struct
   let typedef ctx = function
-    | { td_pos; td_vis = _; td_tparams; td_constraint; td_type } ->
+    | { td_pos; td_module = _; td_vis = _; td_tparams; td_constraint; td_type }
+      ->
       let tparaml_s = PrintClass.tparam_list ctx td_tparams in
       let constr_s =
         match td_constraint with
@@ -1821,6 +1802,7 @@ let coercion_direction cd =
   match cd with
   | CoerceToDynamic -> "to"
   | CoerceFromDynamic -> "from"
+  | PartialCoerceFromDynamic (_, (_, cn)) -> "partial from " ^ cn
 
 let subtype_prop env prop =
   let rec subtype_prop = function
@@ -1913,4 +1895,4 @@ let coeffects env ty =
   with
   | UndesugarableCoeffect _ -> to_string ty
   | Defaults ->
-    "the default capability set {AccessStaticVariable, Output, WriteProperty}"
+    "the default capability set {AccessGlobals, Output, WriteProperty}"

@@ -38,6 +38,7 @@ let single_ctx_path env path =
     (Relative_path.create_detect_prefix path)
     (ServerCommandTypes.FileName path)
 
+(* Might raise {!Naming_table.File_info_not_found} *)
 let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
  fun genv env ~is_stale -> function
   | STATUS { max_errors; _ } ->
@@ -69,6 +70,19 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
   | STATUS_SINGLE (fn, max_errors) ->
     let ctx = Provider_utils.ctx_from_server_env env in
     (env, take_max_errors (ServerStatusSingle.go fn ctx) max_errors)
+  | STATUS_SINGLE_REMOTE_EXECUTION fn ->
+    let ctx = Provider_utils.ctx_from_server_env env in
+    let (errors, dep_edges) = ServerStatusSingleRemoteExecution.go fn ctx in
+    (env, (errors, dep_edges))
+  | STATUS_REMOTE_EXECUTION max_errors ->
+    (* let ctx = Provider_utils.ctx_from_server_env env in *)
+    let errors = ServerStatusRemoteExecution.go env in
+    let (error_list, dropped_count) = take_max_errors errors max_errors in
+    (env, (error_list, dropped_count))
+  | STATUS_MULTI_REMOTE_EXECUTION fns ->
+    let ctx = Provider_utils.ctx_from_server_env env in
+    let (errors, dep_edges) = ServerStatusMultiRemoteExecution.go fns ctx in
+    (env, (errors, dep_edges))
   | COVERAGE_LEVELS (path, file_input) ->
     let path = Relative_path.create_detect_prefix path in
     let (ctx, entry) = single_ctx env path file_input in
@@ -94,6 +108,18 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
     let tcopt = { tcopt with GlobalOptions.tco_dynamic_view = dynamic_view } in
     let env = { env with tcopt } in
     (env, ServerInferTypeBatch.go genv.workers positions env)
+  | TAST_HOLES (file_input, hole_filter) ->
+    let path =
+      match file_input with
+      | FileName fn -> Relative_path.create_detect_prefix fn
+      | FileContent _ -> Relative_path.create_detect_prefix ""
+    in
+    let (ctx, entry) = single_ctx env path file_input in
+    let result =
+      Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
+          ServerCollectTastHoles.go_ctx ~ctx ~entry ~hole_filter)
+    in
+    (env, result)
   | INFER_TYPE_ERROR (file_input, line, column) ->
     let path =
       match file_input with
@@ -167,6 +193,7 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
         ~disable_legacy_attribute_syntax:false
         ~enable_xhp_class_modifier:false
         ~disable_xhp_element_mangling:false
+        ~disallow_hash_comments:true
         ~filename:Relative_path.default
         ~text:contents
     in

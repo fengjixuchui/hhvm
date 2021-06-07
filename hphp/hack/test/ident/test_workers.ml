@@ -21,7 +21,7 @@ module Ids =
     end)
 
 let entry =
-  WorkerController.register_entry_point ~restore:(fun () ~(worker_id : int) ->
+  WorkerControllerEntryPoint.register ~restore:(fun () ~(worker_id : int) ->
       Hh_logger.set_id (Printf.sprintf "test_workers %d" worker_id))
 
 let () =
@@ -89,6 +89,7 @@ let () =
   let all_ids_len = num_jobs * ids_per_job in
   let all_ids = Array.create ~len:all_ids_len 0 in
   for job_id = 0 to num_jobs - 1 do
+    (* Might raise {!SharedMem.Shared_mem_not_found} *)
     let ids = Ids.find_unsafe job_id in
     for i = 0 to ids_per_job - 1 do
       all_ids.((job_id * ids_per_job) + i) <- ids.(i)

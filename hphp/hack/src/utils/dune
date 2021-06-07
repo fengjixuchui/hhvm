@@ -39,15 +39,6 @@
     sys_utils))
 
 (library
-  (name utils_scheduler)
-  (wrapped false)
-  (modules
-    scheduler)
-  (preprocess (pps lwt_ppx ppx_deriving.std ppx_deriving.enum))
-  (libraries
-    utils_core))
-
-(library
   (name utils_www_root)
   (wrapped false)
   (modules
@@ -228,3 +219,10 @@
   (preprocess (pps lwt_ppx ppx_deriving.std ppx_deriving.enum))
   (libraries utils_core)
   (modules bigList))
+
+(library
+  (name memory_stats)
+  (wrapped false)
+  (preprocess (pps lwt_ppx ppx_deriving.std ppx_deriving.enum))
+  (libraries utils_core sys_utils)
+  (modules memory_stats))

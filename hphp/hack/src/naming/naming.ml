@@ -66,7 +66,7 @@ module Env : sig
 
   val make_top_level_env : Provider_context.t -> genv * lenv
 
-  val make_fun_decl_genv : Provider_context.t -> Nast.fun_ -> genv
+  val make_fun_decl_genv : Provider_context.t -> Nast.fun_def -> genv
 
   val make_file_attributes_env :
     Provider_context.t -> FileInfo.mode -> Aast.nsenv -> genv * lenv
@@ -157,7 +157,11 @@ end = struct
     }
 
   let make_fun_decl_genv ctx f =
-    make_fun_genv ctx f.Aast.f_tparams f.Aast.f_mode f.Aast.f_namespace
+    make_fun_genv
+      ctx
+      f.Aast.fd_fun.Aast.f_tparams
+      f.Aast.fd_mode
+      f.Aast.fd_namespace
 
   let make_const_genv ctx cst =
     {
@@ -931,7 +935,7 @@ let rec class_ ctx c =
     N.c_xhp_category = c.Aast.c_xhp_category;
     N.c_reqs = req_extends @ req_implements;
     N.c_implements = implements;
-    N.c_implements_dynamic = c.Aast.c_implements_dynamic;
+    N.c_support_dynamic_type = c.Aast.c_support_dynamic_type;
     N.c_where_constraints = where_constraints;
     N.c_consts = consts;
     N.c_typeconsts = typeconsts;
@@ -953,9 +957,7 @@ and user_attributes env attrl =
   let seen = Caml.Hashtbl.create 0 in
   let validate_seen ua_name =
     let (pos, name) = ua_name in
-    let existing_attr_pos =
-      (try Some (Caml.Hashtbl.find seen name) with Caml.Not_found -> None)
-    in
+    let existing_attr_pos = Caml.Hashtbl.find_opt seen name in
     match existing_attr_pos with
     | Some p ->
       Errors.duplicate_user_attribute ua_name p;
@@ -1038,7 +1040,14 @@ and xhp_attribute_decl env (h, cv, tag, maybe_enum) =
   let hint_ = ((), hint_) in
   let hint_ = Aast.type_hint_option_map hint_ ~f:(hint env) in
   let (expr, _) = class_prop_expr_is_xhp env cv in
-  let xhp_attr_info = Some { N.xai_tag = tag } in
+  let enum_values =
+    match cv.Aast.cv_xhp_attr with
+    | Some xai -> xai.Aast.xai_enum_values
+    | None -> []
+  in
+  let xhp_attr_info =
+    Some { N.xai_tag = tag; N.xai_enum_values = enum_values }
+  in
   {
     N.cv_final = cv.Aast.cv_final;
     N.cv_xhp_attr = xhp_attr_info;
@@ -1173,7 +1182,7 @@ and class_prop_expr_is_xhp env cv =
   (expr, is_xhp)
 
 and make_xhp_attr = function
-  | true -> Some { N.xai_tag = None }
+  | true -> Some { N.xai_tag = None; N.xai_enum_values = [] }
   | false -> None
 
 and class_prop_static env cv =
@@ -1278,11 +1287,10 @@ and check_constant_expr env (pos, e) =
   | Aast.Call ((_, Aast.Id (_, cn)), _, el, unpacked_element)
     when String.equal cn SN.AutoimportedFunctions.fun_
          || String.equal cn SN.AutoimportedFunctions.class_meth
-         || String.equal cn SN.StdlibFunctions.array_mark_legacy
-         (* Tuples are not really function calls, they are just parsed that way*)
-         || String.equal cn SN.SpecialFunctions.tuple ->
+         || String.equal cn SN.StdlibFunctions.array_mark_legacy ->
     arg_unpack_unexpected unpacked_element;
     List.for_all el ~f:(check_constant_expr env)
+  | Aast.Tuple el -> List.for_all el ~f:(check_constant_expr env)
   | Aast.FunctionPointer ((Aast.FP_id _ | Aast.FP_class_const _), _) -> true
   | Aast.Collection (id, _, l) ->
     let (p, cn) = NS.elaborate_id (fst env).namespace NS.ElaborateClass id in
@@ -1478,15 +1486,30 @@ and extend_tparams genv paraml =
   in
   { genv with type_params = params }
 
-and fun_ ctx f =
-  let genv = Env.make_fun_decl_genv ctx f in
+and fun_def ctx fd =
+  let genv = Env.make_fun_decl_genv ctx fd in
+  let fd =
+    elaborate_namespaces#on_fun_def
+      (Naming_elaborate_namespaces_endo.make_env genv.namespace)
+      fd
+  in
+  let file_attributes =
+    file_attributes ctx fd.Aast.fd_mode fd.Aast.fd_file_attributes
+  in
+  let f = fun_ genv fd.Aast.fd_fun in
+  let named_fun_def =
+    {
+      N.fd_fun = f;
+      fd_mode = fd.Aast.fd_mode;
+      fd_namespace = fd.Aast.fd_namespace;
+      fd_file_attributes = file_attributes;
+    }
+  in
+  named_fun_def
+
+and fun_ genv f =
   let lenv = Env.empty_local None in
   let env = (genv, lenv) in
-  let f =
-    elaborate_namespaces#on_fun_def
-      (Naming_elaborate_namespaces_endo.make_env (fst env).namespace)
-      f
-  in
   let where_constraints =
     type_where_constraints env f.Aast.f_where_constraints
   in
@@ -1519,15 +1542,11 @@ and fun_ ctx f =
   in
   let f_ctxs = Option.map ~f:(contexts env) f.Aast.f_ctxs in
   let f_unsafe_ctxs = Option.map ~f:(contexts env) f.Aast.f_unsafe_ctxs in
-  let file_attributes =
-    file_attributes ctx f.Aast.f_mode f.Aast.f_file_attributes
-  in
   let named_fun =
     {
       N.f_annotation = ();
       f_readonly_this = f.Aast.f_readonly_this;
       f_span = f.Aast.f_span;
-      f_mode = f.Aast.f_mode;
       f_readonly_ret = f.Aast.f_readonly_ret;
       f_ret = h;
       f_name = f.Aast.f_name;
@@ -1541,9 +1560,7 @@ and fun_ ctx f =
       f_fun_kind = f_kind;
       f_variadic = variadicity;
       f_user_attributes = user_attributes env f.Aast.f_user_attributes;
-      f_file_attributes = file_attributes;
       f_external = f.Aast.f_external;
-      f_namespace = f.Aast.f_namespace;
       f_doc_comment = f.Aast.f_doc_comment;
     }
   in
@@ -2039,9 +2056,7 @@ and expr_ env p (e : Nast.expr_) =
         Errors.naming_too_many_arguments p;
         N.Any
     end
-  | Aast.Call ((p, Aast.Id (_, cn)), _, el, unpacked_element)
-    when String.equal cn SN.SpecialFunctions.tuple ->
-    arg_unpack_unexpected unpacked_element;
+  | Aast.Tuple el ->
     (match el with
     | [] ->
       Errors.naming_too_few_arguments p;
@@ -2086,7 +2101,6 @@ and expr_ env p (e : Nast.expr_) =
   | Aast.FunctionPointer _ -> N.Any
   | Aast.Yield e -> N.Yield (afield env e)
   | Aast.Await e -> N.Await (expr env e)
-  | Aast.Tuple el -> N.Tuple (exprl env el)
   | Aast.List el -> N.List (exprl env el)
   | Aast.Cast (ty, e2) ->
     let ((p, x), hl) =
@@ -2219,7 +2233,9 @@ and expr_ env p (e : Nast.expr_) =
   | Aast.Import _ -> N.Any
   | Aast.Omitted -> N.Omitted
   | Aast.Callconv (kind, e) -> N.Callconv (kind, expr env e)
-  | Aast.EnumAtom x -> N.EnumAtom x
+  | Aast.EnumClassLabel (opt_sid, x) ->
+    let () = Option.iter ~f:check_name opt_sid in
+    N.EnumClassLabel (opt_sid, x)
   | Aast.ReadonlyExpr e -> N.ReadonlyExpr (expr env e)
   (* The below were not found on the AST.ml so they are not implemented here *)
   | Aast.ValCollection _
@@ -2256,7 +2272,6 @@ and expr_lambda env f =
     N.f_annotation = ();
     f_readonly_this = f.Aast.f_readonly_this;
     f_span = f.Aast.f_span;
-    f_mode = (fst env).in_mode;
     f_readonly_ret = f.Aast.f_readonly_ret;
     f_ret = h;
     f_name = f.Aast.f_name;
@@ -2268,10 +2283,8 @@ and expr_lambda env f =
     f_body = body;
     f_fun_kind = f.Aast.f_fun_kind;
     f_variadic = variadicity;
-    f_file_attributes = [];
     f_user_attributes = user_attributes env f.Aast.f_user_attributes;
     f_external = f.Aast.f_external;
-    f_namespace = f.Aast.f_namespace;
     f_doc_comment = f.Aast.f_doc_comment;
   }
 
@@ -2472,7 +2485,7 @@ let program ctx ast =
   let top_level_env = ref (Env.make_top_level_env ctx) in
   let rec aux acc def =
     match def with
-    | Aast.Fun f -> N.Fun (fun_ ctx f) :: acc
+    | Aast.Fun f -> N.Fun (fun_def ctx f) :: acc
     | Aast.Class c -> N.Class (class_ ctx c) :: acc
     | Aast.Stmt (_, Aast.Noop)
     | Aast.Stmt (_, Aast.Markup _) ->

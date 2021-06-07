@@ -171,7 +171,12 @@ bool ArrayLayout::monotype() const {
 
 bool ArrayLayout::is_struct() const {
   auto const index = layoutIndex();
-  return index && index->byte() == bespoke::kStructLayoutByte;
+  return index && bespoke::StructLayout::IsStructLayout(*index);
+}
+
+bool ArrayLayout::is_concrete() const {
+  auto const layout = bespokeLayout();
+  return layout && layout->isConcrete();
 }
 
 const bespoke::Layout* ArrayLayout::bespokeLayout() const {
@@ -215,12 +220,7 @@ ArrayData* ArrayLayout::apply(ArrayData* ad) const {
 
   auto const result = [&]() -> ArrayData* {
     if (vanilla() || logging()) return ad;
-    if (monotype()) return bespoke::maybeMonoify(ad);
-    if (is_struct()) {
-      auto const layout = bespoke::StructLayout::As(bespokeLayout());
-      return bespoke::StructDict::MakeFromVanilla(ad, layout);
-    }
-    return nullptr;
+    return bespokeLayout()->coerce(ad);
   }();
 
   SCOPE_ASSERT_DETAIL("ArrayLayout::apply") { return describe(); };
@@ -297,13 +297,18 @@ void write_source_key(ProfDataSerializer& ser, const LoggingProfileKey& key) {
     case bespoke::LocationType::SrcKey:
       write_srckey(ser, key.sk);
       break;
-    case bespoke::LocationType::Property:
-      write_raw(ser, key.slot);
+    case bespoke::LocationType::APCKey:
+      write_raw(ser, key.ak);
+      break;
+    case bespoke::LocationType::InstanceProperty:
+    case bespoke::LocationType::StaticProperty:
       write_class(ser, key.cls);
+      write_raw(ser, key.slot);
       break;
     case bespoke::LocationType::Runtime:
       write_string(ser, key.runtimeStruct->getStableIdentifier());
       break;
+    default: always_assert(false);
   }
 }
 
@@ -313,18 +318,21 @@ LoggingProfileKey read_source_key(ProfDataDeserializer& des) {
   switch (key.locationType) {
     case bespoke::LocationType::SrcKey:
       key.sk = read_srckey(des);
-      key.slot = kInvalidSlot;
       break;
-    case bespoke::LocationType::Property:
-      read_raw(des, key.slot);
+    case bespoke::LocationType::APCKey:
+      read_raw(des, key.ak);
+      break;
+    case bespoke::LocationType::InstanceProperty:
+    case bespoke::LocationType::StaticProperty:
       key.cls = read_class(des);
+      read_raw(des, key.slot);
       break;
     case bespoke::LocationType::Runtime: {
       auto const stableIdentifier = read_string(des);
       key.runtimeStruct = RuntimeStruct::findById(stableIdentifier);
-      key.slot = kInvalidSlot;
       break;
     }
+    default: always_assert(false);
   }
   return key;
 }
@@ -338,6 +346,18 @@ SinkProfileKey read_sink_key(ProfDataDeserializer& des) {
   auto const trans = read_raw<TransID>(des);
   return SinkProfileKey(trans, read_srckey(des));
 }
+
+void write_sink_layout(ProfDataSerializer& ser, bespoke::SinkLayout sl) {
+  write_raw(ser, sl.layout);
+  write_raw(ser, sl.sideExit);
+}
+
+bespoke::SinkLayout read_sink_layout(ProfDataDeserializer& des) {
+  auto result = bespoke::SinkLayout{};
+  result.layout = read_layout(des);
+  read_raw(des, result.sideExit);
+  return result;
+}
 }
 
 struct RuntimeStructSerde {
@@ -346,10 +366,10 @@ struct RuntimeStructSerde {
     write_string(ser, runtimeStruct->m_stableIdentifier);
 
     write_raw(ser, runtimeStruct->m_fields.size());
-    for (size_t i = 0; i < runtimeStruct->m_fields.size(); i++) {
-      if (runtimeStruct->m_fields[i]) {
+    for (auto const key : runtimeStruct->m_fields) {
+      if (key) {
         write_raw(ser, true);
-        write_string(ser, runtimeStruct->m_fields[i]);
+        write_string(ser, key);
       } else {
         write_raw(ser, false);
       }
@@ -393,7 +413,7 @@ void serializeBespokeLayouts(ProfDataSerializer& ser) {
   // because they are the only dynamically-constructed layouts.
   std::vector<const StructLayout*> layouts;
   bespoke::eachLayout([&](auto const& layout) {
-    if (!ArrayLayout(&layout).is_struct()) return;
+    if (!layout.isConcrete() || !ArrayLayout(&layout).is_struct()) return;
     layouts.push_back(StructLayout::As(&layout));
   });
   write_raw(ser, layouts.size());
@@ -402,7 +422,7 @@ void serializeBespokeLayouts(ProfDataSerializer& ser) {
     write_key_order(ser, layout->keyOrder());
   }
 
-  // Serialize the runtime sources
+  // Serialize the runtime sources.
   std::vector<const RuntimeStruct*> runtimeStructs;
   RuntimeStruct::eachRuntimeStruct([&](RuntimeStruct* runtimeStruct) {
     runtimeStructs.push_back(runtimeStruct);
@@ -421,15 +441,22 @@ void serializeBespokeLayouts(ProfDataSerializer& ser) {
   write_raw(ser, bespoke::countSinks());
   bespoke::eachSink([&](auto const& profile) {
     write_sink_key(ser, profile.key);
-    write_raw(ser, profile.getLayout());
+    write_sink_layout(ser, profile.getLayout());
   });
 }
 
 void deserializeBespokeLayouts(ProfDataDeserializer& des) {
+  always_assert(bespoke::countSources() == 0);
+  always_assert(bespoke::countSinks() == 0);
+  bespoke::setLoggingEnabled(false);
+  always_assert(bespoke::countSources() == 0);
+  always_assert(bespoke::countSinks() == 0);
+
   auto const layouts = read_raw<size_t>(des);
   for (auto i = 0; i < layouts; i++) {
     auto const index = read_raw<bespoke::LayoutIndex>(des);
-    StructLayout::Deserialize(index, read_key_order(des));
+    auto const layout = StructLayout::Deserialize(index, read_key_order(des));
+    layout->createColoringHashMap();
   }
   auto const runtimeStructs = read_raw<size_t>(des);
   for (auto i = 0; i < runtimeStructs; i++) {
@@ -437,13 +464,17 @@ void deserializeBespokeLayouts(ProfDataDeserializer& des) {
   }
   auto const sources = read_raw<size_t>(des);
   for (auto i = 0; i < sources; i++) {
+    assertx(bespoke::countSources() == i);
     auto const key = read_source_key(des);
     bespoke::deserializeSource(key, read_layout(des));
+    assertx(bespoke::countSources() == i + 1);
   }
   auto const sinks = read_raw<size_t>(des);
   for (auto i = 0; i < sinks; i++) {
+    assertx(bespoke::countSinks() == i);
     auto const key = read_sink_key(des);
-    bespoke::deserializeSink(key, read_layout(des));
+    bespoke::deserializeSink(key, read_sink_layout(des));
+    assertx(bespoke::countSinks() == i + 1);
   }
   bespoke::Layout::FinalizeHierarchy();
 }

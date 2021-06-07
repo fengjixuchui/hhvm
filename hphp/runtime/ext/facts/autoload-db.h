@@ -36,6 +36,49 @@ namespace HPHP {
 namespace Facts {
 
 /**
+ * Metadata about where the DB should be and what permissions it should have.
+ */
+struct DBData {
+
+  static DBData readOnly(folly::fs::path path) {
+    return DBData{
+        std::move(path),
+        SQLite::OpenMode::ReadOnly,
+        static_cast<::gid_t>(-1),
+        0};
+  }
+
+  static DBData readWrite(folly::fs::path path, ::gid_t gid, ::mode_t perms) {
+    return DBData{std::move(path), SQLite::OpenMode::ReadWrite, gid, perms};
+  }
+
+  bool operator==(const DBData& rhs) const;
+
+  /**
+   * Render the DBData as a string
+   */
+  std::string toString() const;
+
+  /**
+   * Hash the DBData into an int
+   */
+  size_t hash() const;
+
+  folly::fs::path m_path;
+  SQLite::OpenMode m_rwMode;
+  ::gid_t m_gid;
+  ::mode_t m_perms;
+
+private:
+  DBData() = delete;
+  DBData(
+      folly::fs::path path,
+      SQLite::OpenMode rwMode,
+      ::gid_t gid,
+      ::mode_t perms);
+};
+
+/**
  * Holds prepared statements to interact with the autoload SQLite DB.
  *
  * Instantiated as a thread-local in `t_adb`.
@@ -120,10 +163,20 @@ struct AutoloadDB {
       DeriveKindMask deriveKinds = kDeriveKindAll) = 0;
 
   // Attributes
+
   virtual void insertTypeAttribute(
       SQLiteTxn& txn,
       const folly::fs::path& path,
       std::string_view type,
+      std::string_view attributeName,
+      std::optional<int> attributePosition,
+      const folly::dynamic* attributeValue) = 0;
+
+  virtual void insertMethodAttribute(
+      SQLiteTxn& txn,
+      const folly::fs::path& path,
+      std::string_view type,
+      std::string_view method,
       std::string_view attributeName,
       std::optional<int> attributePosition,
       const folly::dynamic* attributeValue) = 0;
@@ -137,14 +190,39 @@ struct AutoloadDB {
   virtual std::vector<std::string> getAttributesOfType(
       SQLiteTxn& txn, std::string_view type, const folly::fs::path& path) = 0;
 
-  virtual std::vector<folly::dynamic> getAttributeArgs(
+  virtual std::vector<std::string> getAttributesOfMethod(
+      SQLiteTxn& txn,
+      std::string_view type,
+      std::string_view method,
+      const folly::fs::path& path) = 0;
+
+  virtual std::vector<folly::dynamic> getTypeAttributeArgs(
       SQLiteTxn& txn,
       std::string_view type,
       std::string_view path,
       std::string_view attributeName) = 0;
 
-  virtual std::vector<std::pair<std::string, folly::fs::path>>
+  virtual std::vector<folly::dynamic> getMethodAttributeArgs(
+      SQLiteTxn& txn,
+      std::string_view type,
+      std::string_view method,
+      std::string_view path,
+      std::string_view attributeName) = 0;
+
+  struct TypeDeclaration {
+    std::string m_type;
+    folly::fs::path m_path;
+  };
+  virtual std::vector<TypeDeclaration>
   getTypesWithAttribute(SQLiteTxn& txn, std::string_view attributeName) = 0;
+
+  struct MethodDeclaration {
+    std::string m_type;
+    std::string m_method;
+    folly::fs::path m_path;
+  };
+  virtual std::vector<MethodDeclaration>
+  getMethodsWithAttribute(SQLiteTxn& txn, std::string_view attributeName) = 0;
 
   virtual std::string
   getTypeCorrectCase(SQLiteTxn& txn, std::string_view type) = 0;
@@ -255,9 +333,7 @@ using AutoloadDBThreadLocal = hphp_hash_map<
 
 extern THREAD_LOCAL(AutoloadDBThreadLocal, t_adb);
 
-AutoloadDB& getDB(
-    const folly::fs::path& dbPath,
-    SQLite::OpenMode mode = SQLite::OpenMode::ReadWrite);
+AutoloadDB& getDB(const DBData& dbData);
 
 } // namespace Facts
 } // namespace HPHP

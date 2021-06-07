@@ -1,6 +1,6 @@
 [("\\id",
   (Shallow_decl_defs.Fun
-     { Typing_defs.fe_deprecated = None;
+     { Typing_defs.fe_deprecated = None; fe_module = None;
        fe_type =
        (Rwitness_from_decl ([31:10-12]),
         (Tfun
@@ -31,10 +31,11 @@
              (make_ft_flags FSync ~return_disposable:false
                ~returns_readonly:false ~readonly_this:false);
              ft_ifc_decl = FDPolicied {PUBLIC} }));
-       fe_pos = [31:10-12]; fe_php_std_lib = false }));
+       fe_pos = [31:10-12]; fe_php_std_lib = false;
+       fe_support_dynamic_type = false }));
   ("\\other_id",
    (Shallow_decl_defs.Fun
-      { Typing_defs.fe_deprecated = None;
+      { Typing_defs.fe_deprecated = None; fe_module = None;
         fe_type =
         (Rwitness_from_decl ([35:10-18]),
          (Tfun
@@ -65,10 +66,11 @@
               (make_ft_flags FSync ~return_disposable:false
                 ~returns_readonly:false ~readonly_this:false);
               ft_ifc_decl = FDPolicied {PUBLIC} }));
-        fe_pos = [35:10-18]; fe_php_std_lib = false }));
+        fe_pos = [35:10-18]; fe_php_std_lib = false;
+        fe_support_dynamic_type = false }));
   ("\\braced_id",
    (Shallow_decl_defs.Fun
-      { Typing_defs.fe_deprecated = None;
+      { Typing_defs.fe_deprecated = None; fe_module = None;
         fe_type =
         (Rwitness_from_decl ([39:10-19]),
          (Tfun
@@ -100,7 +102,8 @@
               (make_ft_flags FSync ~return_disposable:false
                 ~returns_readonly:false ~readonly_this:false);
               ft_ifc_decl = FDPolicied {PUBLIC} }));
-        fe_pos = [39:10-19]; fe_php_std_lib = false }))
+        fe_pos = [39:10-19]; fe_php_std_lib = false;
+        fe_support_dynamic_type = false }))
   ]
 
 They matched!

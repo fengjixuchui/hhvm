@@ -25,10 +25,13 @@
 
 namespace HPHP { namespace bespoke {
 
+using LayoutWeightVector =
+  std::vector<std::pair<const StructLayout*, double>>;
+
 // Layout selection. We'll call selectBespokeLayouts in RTA, and then we'll
 // be able to use layoutForSource / layoutForSink for optimized code.
 jit::ArrayLayout layoutForSource(SrcKey sk);
-jit::ArrayLayout layoutForSink(const jit::TransIDSet& ids, SrcKey sk);
+SinkLayout layoutForSink(const jit::TransIDSet& ids, SrcKey sk);
 void selectBespokeLayouts();
 
 }}

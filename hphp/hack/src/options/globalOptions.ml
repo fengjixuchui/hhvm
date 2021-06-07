@@ -59,6 +59,7 @@ type t = {
   tco_simple_pessimize: float;
   tco_complex_coercion: bool;
   tco_disable_partially_abstract_typeconsts: bool;
+  tco_disallow_partially_abstract_typeconst_definitions: bool;
   error_codes_treated_strictly: ISet.t;
   tco_check_xhp_attribute: bool;
   tco_check_redundant_generics: bool;
@@ -90,6 +91,8 @@ type t = {
   symbol_write_hhi_path: string;
   symbol_write_ignore_paths: string list;
   symbol_write_index_paths: string list;
+  symbol_write_index_paths_file: string option;
+  symbol_write_index_paths_file_output: string option;
   symbol_write_include_hhi: bool;
   po_disallow_func_ptrs_in_constants: bool;
   tco_error_php_lambdas: bool;
@@ -111,6 +114,7 @@ type t = {
   po_disallow_hash_comments: bool;
   po_disallow_fun_and_cls_meth_pseudo_funcs: bool;
   po_disallow_inst_meth: bool;
+  po_escape_brace: bool;
   tco_use_direct_decl_parser: bool;
   tco_ifc_enabled: string list;
   po_enable_enum_supertyping: bool;
@@ -120,9 +124,13 @@ type t = {
   tco_ignore_unsafe_cast: bool;
   tco_readonly: bool;
   tco_enable_expression_trees: bool;
+  tco_enable_modules: bool;
   tco_allowed_expression_tree_visitors: string list;
-  tco_bitwise_math_new_code: bool;
-  tco_inc_dec_new_code: bool;
+  tco_math_new_code: bool;
+  tco_typeconst_concrete_concrete_error: bool;
+  tco_meth_caller_only_public_visibility: bool;
+  tco_require_extends_implements_ancestors: bool;
+  tco_strict_value_equality: bool;
 }
 [@@deriving eq, show]
 
@@ -243,6 +251,7 @@ let default =
     tco_simple_pessimize = 0.0;
     tco_complex_coercion = false;
     tco_disable_partially_abstract_typeconsts = false;
+    tco_disallow_partially_abstract_typeconst_definitions = false;
     error_codes_treated_strictly = ISet.of_list [];
     tco_check_xhp_attribute = false;
     tco_check_redundant_generics = false;
@@ -274,6 +283,8 @@ let default =
     symbol_write_hhi_path = "hhi";
     symbol_write_ignore_paths = [];
     symbol_write_index_paths = [];
+    symbol_write_index_paths_file = None;
+    symbol_write_index_paths_file_output = None;
     symbol_write_include_hhi = true;
     po_disallow_func_ptrs_in_constants = false;
     tco_error_php_lambdas = false;
@@ -295,6 +306,7 @@ let default =
     po_disallow_hash_comments = false;
     po_disallow_fun_and_cls_meth_pseudo_funcs = false;
     po_disallow_inst_meth = false;
+    po_escape_brace = false;
     tco_use_direct_decl_parser = false;
     tco_ifc_enabled = [];
     po_enable_enum_supertyping = false;
@@ -304,9 +316,13 @@ let default =
     tco_ignore_unsafe_cast = false;
     tco_readonly = false;
     tco_enable_expression_trees = false;
+    tco_enable_modules = false;
     tco_allowed_expression_tree_visitors = [];
-    tco_bitwise_math_new_code = false;
-    tco_inc_dec_new_code = false;
+    tco_math_new_code = false;
+    tco_typeconst_concrete_concrete_error = false;
+    tco_meth_caller_only_public_visibility = true;
+    tco_require_extends_implements_ancestors = false;
+    tco_strict_value_equality = false;
   }
 
 let make
@@ -367,6 +383,8 @@ let make
     ?(tco_complex_coercion = default.tco_complex_coercion)
     ?(tco_disable_partially_abstract_typeconsts =
       default.tco_disable_partially_abstract_typeconsts)
+    ?(tco_disallow_partially_abstract_typeconst_definitions =
+      default.tco_disallow_partially_abstract_typeconst_definitions)
     ?(error_codes_treated_strictly = default.error_codes_treated_strictly)
     ?(tco_check_xhp_attribute = default.tco_check_xhp_attribute)
     ?(tco_check_redundant_generics = default.tco_check_redundant_generics)
@@ -403,6 +421,8 @@ let make
     ?(symbol_write_hhi_path = default.symbol_write_hhi_path)
     ?(symbol_write_ignore_paths = default.symbol_write_ignore_paths)
     ?(symbol_write_index_paths = default.symbol_write_index_paths)
+    ?symbol_write_index_paths_file
+    ?symbol_write_index_paths_file_output
     ?(symbol_write_include_hhi = default.symbol_write_include_hhi)
     ?(po_disallow_func_ptrs_in_constants =
       default.po_disallow_func_ptrs_in_constants)
@@ -430,6 +450,7 @@ let make
     ?(po_disallow_fun_and_cls_meth_pseudo_funcs =
       default.po_disallow_fun_and_cls_meth_pseudo_funcs)
     ?(po_disallow_inst_meth = default.po_disallow_inst_meth)
+    ?(po_escape_brace = default.po_escape_brace)
     ?(tco_use_direct_decl_parser = default.tco_use_direct_decl_parser)
     ?(tco_ifc_enabled = default.tco_ifc_enabled)
     ?(po_enable_enum_supertyping = default.po_enable_enum_supertyping)
@@ -441,10 +462,17 @@ let make
     ?(tco_ignore_unsafe_cast = default.tco_ignore_unsafe_cast)
     ?(tco_readonly = default.tco_readonly)
     ?(tco_enable_expression_trees = default.tco_enable_expression_trees)
+    ?(tco_enable_modules = default.tco_enable_modules)
     ?(tco_allowed_expression_tree_visitors =
       default.tco_allowed_expression_tree_visitors)
-    ?(tco_bitwise_math_new_code = default.tco_bitwise_math_new_code)
-    ?(tco_inc_dec_new_code = default.tco_inc_dec_new_code)
+    ?(tco_math_new_code = default.tco_math_new_code)
+    ?(tco_typeconst_concrete_concrete_error =
+      default.tco_typeconst_concrete_concrete_error)
+    ?(tco_meth_caller_only_public_visibility =
+      default.tco_meth_caller_only_public_visibility)
+    ?(tco_require_extends_implements_ancestors =
+      default.tco_require_extends_implements_ancestors)
+    ?(tco_strict_value_equality = default.tco_strict_value_equality)
     () =
   {
     tco_experimental_features;
@@ -498,6 +526,7 @@ let make
     tco_simple_pessimize;
     tco_complex_coercion;
     tco_disable_partially_abstract_typeconsts;
+    tco_disallow_partially_abstract_typeconst_definitions;
     error_codes_treated_strictly;
     tco_check_xhp_attribute;
     tco_check_redundant_generics;
@@ -529,6 +558,8 @@ let make
     symbol_write_hhi_path;
     symbol_write_ignore_paths;
     symbol_write_index_paths;
+    symbol_write_index_paths_file;
+    symbol_write_index_paths_file_output;
     symbol_write_include_hhi;
     po_disallow_func_ptrs_in_constants;
     tco_error_php_lambdas;
@@ -550,6 +581,7 @@ let make
     po_disallow_hash_comments;
     po_disallow_fun_and_cls_meth_pseudo_funcs;
     po_disallow_inst_meth;
+    po_escape_brace;
     tco_use_direct_decl_parser;
     tco_ifc_enabled;
     po_enable_enum_supertyping;
@@ -559,9 +591,13 @@ let make
     tco_ignore_unsafe_cast;
     tco_readonly;
     tco_enable_expression_trees;
+    tco_enable_modules;
     tco_allowed_expression_tree_visitors;
-    tco_bitwise_math_new_code;
-    tco_inc_dec_new_code;
+    tco_math_new_code;
+    tco_typeconst_concrete_concrete_error;
+    tco_meth_caller_only_public_visibility;
+    tco_require_extends_implements_ancestors;
+    tco_strict_value_equality;
   }
 
 let tco_experimental_feature_enabled t s =
@@ -682,6 +718,9 @@ let tco_complex_coercion t = t.tco_complex_coercion
 let tco_disable_partially_abstract_typeconsts t =
   t.tco_disable_partially_abstract_typeconsts
 
+let tco_disallow_partially_abstract_typeconst_definitions t =
+  t.tco_disallow_partially_abstract_typeconst_definitions
+
 let error_codes_treated_strictly t = t.error_codes_treated_strictly
 
 let tco_check_xhp_attribute t = t.tco_check_xhp_attribute
@@ -744,6 +783,11 @@ let symbol_write_ignore_paths t = t.symbol_write_ignore_paths
 
 let symbol_write_index_paths t = t.symbol_write_index_paths
 
+let symbol_write_index_paths_file t = t.symbol_write_index_paths_file
+
+let symbol_write_index_paths_file_output t =
+  t.symbol_write_index_paths_file_output
+
 let symbol_write_include_hhi t = t.symbol_write_include_hhi
 
 let set_global_inference t = { t with tco_global_inference = true }
@@ -799,6 +843,8 @@ let po_disallow_fun_and_cls_meth_pseudo_funcs t =
 
 let po_disallow_inst_meth t = t.po_disallow_inst_meth
 
+let po_escape_brace t = t.po_escape_brace
+
 let tco_use_direct_decl_parser t = t.tco_use_direct_decl_parser
 
 let po_enable_enum_supertyping t = t.po_enable_enum_supertyping
@@ -818,8 +864,21 @@ let set_tco_enable_expression_trees t b =
 
 let expression_trees_enabled t = t.tco_enable_expression_trees
 
+let tco_enable_modules t = t.tco_enable_modules
+
+let set_tco_enable_modules t b = { t with tco_enable_modules = b }
+
 let allowed_expression_tree_visitors t = t.tco_allowed_expression_tree_visitors
 
-let tco_bitwise_math_new_code t = t.tco_bitwise_math_new_code
+let tco_math_new_code t = t.tco_math_new_code
 
-let tco_inc_dec_new_code t = t.tco_inc_dec_new_code
+let tco_typeconst_concrete_concrete_error t =
+  t.tco_typeconst_concrete_concrete_error
+
+let tco_meth_caller_only_public_visibility t =
+  t.tco_meth_caller_only_public_visibility
+
+let tco_require_extends_implements_ancestors t =
+  t.tco_require_extends_implements_ancestors
+
+let tco_strict_value_equality t = t.tco_strict_value_equality

@@ -32,8 +32,6 @@
 #include "hphp/runtime/vm/jit/punt.h"
 #include "hphp/runtime/vm/vm-regs.h"
 
-#include <tbb/concurrent_hash_map.h>
-
 #include <algorithm>
 #include <atomic>
 
@@ -100,6 +98,7 @@ ArrayData* makeSampledArray(ArrayData* vad) {
     if (vad->isVanillaDict())  return MixedArray::Copy(vad);
     return SetArray::Copy(vad);
   }();
+  assertx(result->hasExactlyOneRef());
   result->setSampledArrayInPlace();
   return result;
 }
@@ -126,14 +125,12 @@ const ArrayData* maybeMakeLoggingArray(const ArrayData* ad) {
   return maybeMakeLoggingArray(const_cast<ArrayData*>(ad));
 }
 
-ArrayData* maybeMakeLoggingArray(
-    ArrayData* ad, RuntimeStruct* structHandle) {
+ArrayData* maybeMakeLoggingArray(ArrayData* ad, RuntimeStruct* structHandle) {
   if (!g_emitLoggingArrays.load(std::memory_order_acquire)) return ad;
+  if (structHandle == nullptr) return ad;
 
   auto const profile = getLoggingProfile(structHandle);
-  assertx(profile);
-
-  return maybeMakeLoggingArray(ad, profile);
+  return profile ? maybeMakeLoggingArray(ad, profile) : ad;
 }
 
 ArrayData* maybeMakeLoggingArray(ArrayData* ad, LoggingProfile* profile) {
@@ -158,9 +155,10 @@ ArrayData* maybeMakeLoggingArray(ArrayData* ad, LoggingProfile* profile) {
     if (shouldTestBespokeArrayLikes()) return true;
     if (RO::EvalEmitLoggingArraySampleRate == 0) return false;
 
+    // We want the first sample to be vanilla and the second to be logged.
     auto const skCount = profile->data->sampleCount++;
     FTRACE(5, "Observe SrcKey count: {}\n", skCount);
-    return (skCount - 1) % RO::EvalEmitLoggingArraySampleRate == 0;
+    return skCount % RO::EvalEmitLoggingArraySampleRate == 1;
   }();
 
   if (!shouldEmitBespoke) {
@@ -190,6 +188,15 @@ ArrayData* maybeMakeLoggingArray(ArrayData* ad, LoggingProfile* profile) {
   return lad;
 }
 
+void profileArrLikeLval(tv_lval lval, LoggingProfile* profile) {
+  assertx(tvIsArrayLike(lval));
+  if (!profile) return;
+  auto const ad = maybeMakeLoggingArray(lval.val().parr, profile);
+  if (ad->isRefCounted()) lval.type() = dt_with_rc(lval.type());
+  lval.val().parr = ad;
+  assertx(tvIsPlausible(*lval));
+}
+
 void profileArrLikeProps(ObjectData* obj) {
   if (!g_emitLoggingArrays.load(std::memory_order_acquire)) return;
 
@@ -200,10 +207,22 @@ void profileArrLikeProps(ObjectData* obj) {
     if (cls->declProperties()[slot].attrs & AttrIsConst) continue;
     auto lval = obj->propLvalAtOffset(slot);
     if (!tvIsArrayLike(lval)) continue;
-    auto const profile = getLoggingProfile(cls, slot);
-    if (!profile) continue;
-    auto const arr = maybeMakeLoggingArray(lval.val().parr, profile);
-    tvCopy(make_array_like_tv(arr), lval);
+    profileArrLikeLval(lval, getLoggingProfile(cls, slot, false));
+  }
+}
+
+void profileArrLikeStaticProps(const Class* cls) {
+  if (!g_emitLoggingArrays.load(std::memory_order_acquire)) return;
+
+  for (auto slot = 0; slot < cls->numStaticProperties(); slot++) {
+    auto const link = cls->sPropLink(slot);
+    auto const& prop = cls->staticProperties()[slot];
+    auto const owned = (prop.cls == cls && !link.isPersistent()) ||
+                       prop.attrs & AttrLSB;
+    if (!owned) continue;
+    auto lval = &link->val;
+    if (!tvIsArrayLike(lval)) continue;
+    profileArrLikeLval(lval, getLoggingProfile(cls, slot, true));
   }
 }
 
@@ -233,7 +252,8 @@ LoggingArray* LoggingArray::Make(ArrayData* ad, LoggingProfile* profile,
   assertx(ad->isVanilla());
 
   auto lad = static_cast<LoggingArray*>(tl_heap->objMallocIndex(kSizeIndex));
-  lad->initHeader_16(getBespokeKind(ad->kind()), OneReference, ad->auxBits());
+  auto const aux = ad->isLegacyArray() ? kLegacyArray : 0;
+  lad->initHeader_16(getBespokeKind(ad->kind()), OneReference, aux);
   lad->m_size = ad->size();
   lad->setLayoutIndex(kLayoutIndex);
   lad->wrapped = ad;
@@ -251,7 +271,30 @@ LoggingArray* LoggingArray::MakeStatic(ArrayData* ad, LoggingProfile* profile) {
   auto const size = sizeof(LoggingArray);
   auto lad = static_cast<LoggingArray*>(
       RO::EvalLowStaticArrays ? low_malloc(size) : uncounted_malloc(size));
-  lad->initHeader_16(getBespokeKind(ad->kind()), StaticValue, ad->auxBits());
+  auto const aux = ad->isLegacyArray() ? kLegacyArray : 0;
+  lad->initHeader_16(getBespokeKind(ad->kind()), StaticValue, aux);
+  lad->m_size = ad->size();
+  lad->setLayoutIndex(kLayoutIndex);
+  lad->wrapped = ad;
+  lad->profile = profile;
+  lad->entryTypes = EntryTypes::ForArray(ad);
+  lad->keyOrder = KeyOrder::ForArray(ad);
+  assertx(lad->checkInvariants());
+  return lad;
+}
+
+LoggingArray* LoggingArray::MakeUncounted(
+    ArrayData* ad, LoggingProfile* profile, bool hasApcTv) {
+  assertx(ad->isVanilla());
+  assertx(ad->isStatic() || ad->isUncounted());
+
+  auto const bytes = sizeof(LoggingArray);
+  auto const extra = uncountedAllocExtra(ad, hasApcTv);
+  auto const mem = static_cast<char*>(AllocUncounted(bytes + extra));
+  auto const lad = reinterpret_cast<LoggingArray*>(mem + extra);
+  auto const aux = (ad->isLegacyArray() ? kLegacyArray : 0) |
+                   (hasApcTv ? kHasApcTv : 0);
+  lad->initHeader_16(getBespokeKind(ad->kind()), StaticValue, aux);
   lad->m_size = ad->size();
   lad->setLayoutIndex(kLayoutIndex);
   lad->wrapped = ad;
@@ -308,9 +351,9 @@ ArrayData* LoggingArray::EscalateToVanilla(
 }
 
 void LoggingArray::ConvertToUncounted(
-    LoggingArray* lad, DataWalker::PointerMap* seen) {
+    LoggingArray* lad, const MakeUncountedEnv& env) {
   logEvent(lad, ArrayOp::ConvertToUncounted);
-  lad->wrapped = MakeUncountedArray(lad->wrapped, seen);
+  lad->wrapped = MakeUncountedArray(lad->wrapped, env);
 }
 
 void LoggingArray::ReleaseUncounted(LoggingArray* lad) {

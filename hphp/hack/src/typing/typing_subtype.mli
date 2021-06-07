@@ -1,4 +1,3 @@
-module Env = Typing_env
 open Typing_defs
 open Typing_env_types
 
@@ -43,6 +42,7 @@ val can_sub_type : env -> locl_ty -> locl_ty -> bool
 val sub_type :
   env ->
   ?coerce:Typing_logic.coercion_direction option ->
+  ?is_coeffect:bool ->
   locl_ty ->
   locl_ty ->
   Errors.error_from_reasons_callback ->
@@ -53,6 +53,10 @@ val sub_type :
  * code and message list provided by subtyping.
  *)
 val sub_type_or_fail : env -> locl_ty -> locl_ty -> (unit -> unit) -> env
+
+(** As above but with a `result` type indicating if subtyping failed *)
+val sub_type_or_fail_res :
+  env -> locl_ty -> locl_ty -> (unit -> unit) -> (env, env) result
 
 (**
  * As above but only return the modified environment as [Ok] when the assertion
@@ -78,10 +82,18 @@ val sub_type_with_dynamic_as_bottom_res :
 
 val sub_type_i :
   env ->
+  ?is_coeffect:bool ->
   internal_type ->
   internal_type ->
   Errors.error_from_reasons_callback ->
   env
+
+val sub_type_i_res :
+  env ->
+  internal_type ->
+  internal_type ->
+  Errors.error_from_reasons_callback ->
+  (env, env) result
 
 val add_constraint :
   env ->
@@ -98,6 +110,7 @@ val add_constraints :
 val set_fun_refs : unit -> unit
 
 val simplify_subtype_i :
+  ?is_coeffect:bool ->
   env ->
   internal_type ->
   internal_type ->

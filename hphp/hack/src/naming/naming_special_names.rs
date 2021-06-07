@@ -220,6 +220,8 @@ pub mod user_attributes {
 
     pub const MEMOIZE_LSB: &str = "__MemoizeLSB";
 
+    pub const POLICY_SHARDED_MEMOIZE: &str = "__PolicyShardedMemoize";
+
     pub const PHP_STD_LIB: &str = "__PHPStdLib";
 
     pub const ACCEPT_DISPOSABLE: &str = "__AcceptDisposable";
@@ -266,10 +268,12 @@ pub mod user_attributes {
 
     pub const EXTERNAL: &str = "__External";
 
-    pub const SOUND_DYNAMIC_CALLABLE: &str = "__SoundDynamicCallable";
+    pub const SUPPORT_DYNAMIC_TYPE: &str = "__SupportDynamicType";
+
+    pub const MODULE: &str = "__Module";
 
     lazy_static! {
-        static ref AS_SET: HashSet<&'static str> = vec![
+        pub static ref AS_SET: HashSet<&'static str> = vec![
             OVERRIDE,
             CONSISTENT_CONSTRUCT,
             CONST,
@@ -300,14 +304,15 @@ pub mod user_attributes {
             POLICIED,
             INFERFLOWS,
             EXTERNAL,
-            SOUND_DYNAMIC_CALLABLE,
+            SUPPORT_DYNAMIC_TYPE,
+            MODULE,
         ]
         .into_iter()
         .collect();
     }
 
     pub fn is_memoized(name: &str) -> bool {
-        name == MEMOIZE || name == MEMOIZE_LSB
+        name == MEMOIZE || name == MEMOIZE_LSB || name == POLICY_SHARDED_MEMOIZE
     }
 
     // TODO(hrust) these should probably be added to the above map/fields, too
@@ -389,8 +394,6 @@ pub mod attribute_kinds {
 pub mod special_functions {
     use lazy_static::lazy_static;
 
-    pub const TUPLE: &str = "tuple"; /* pseudo-function */
-
     pub const ECHO: &str = "echo"; /* pseudo-function */
 
     pub const HHAS_ADATA: &str = "__hhas_adata";
@@ -398,7 +401,7 @@ pub mod special_functions {
     pub fn is_special_function(x: &str) -> bool {
         lazy_static! {
             static ref ALL_SPECIAL_FUNCTIONS: Vec<&'static str> =
-                vec![TUPLE, ECHO, HHAS_ADATA,].into_iter().collect();
+                vec![ECHO, HHAS_ADATA,].into_iter().collect();
         }
         ALL_SPECIAL_FUNCTIONS.contains(&x)
     }
@@ -719,7 +722,15 @@ pub mod hh {
 pub mod rx {
     pub const IS_ENABLED: &str = "\\HH\\Rx\\IS_ENABLED";
 }
+
+pub mod readonly {
+    pub const AS_MUT: &str = "\\HH\\Readonly\\as_mut";
+}
+
 pub mod coeffects {
+    use lazy_static::lazy_static;
+    use std::collections::HashSet;
+
     pub const DEFAULTS: &str = "defaults";
 
     pub const RX_LOCAL: &str = "rx_local";
@@ -727,6 +738,8 @@ pub mod coeffects {
     pub const RX_SHALLOW: &str = "rx_shallow";
 
     pub const RX: &str = "rx";
+
+    pub const WRITE_THIS_PROPS: &str = "write_this_props";
 
     pub const WRITE_PROPS: &str = "write_props";
 
@@ -743,6 +756,18 @@ pub mod coeffects {
     pub const POLICIED_OF: &str = "policied_of";
 
     pub const PURE: &str = "pure";
+
+    pub const READ_GLOBALS: &str = "read_globals";
+
+    pub const GLOBALS: &str = "globals";
+
+    pub fn is_any_policied(x: &str) -> bool {
+        lazy_static! {
+            static ref POLICIED_SET: HashSet<&'static str> =
+                vec![POLICIED, POLICIED_OF,].into_iter().collect();
+        }
+        POLICIED_SET.contains(x)
+    }
 }
 
 pub mod shapes {

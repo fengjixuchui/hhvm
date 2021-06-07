@@ -3,15 +3,17 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<5fdd5b9b03c090aff40b0cf2b457064c>>
+// @generated SignedSource<<74d71c953804cf70e0a7e39a1ac50593>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
 
 use arena_trait::TrivialDrop;
+use eq_modulo_pos::EqModuloPos;
 use no_pos_hash::NoPosHash;
 use ocamlrep_derive::FromOcamlRepIn;
 use ocamlrep_derive::ToOcamlRep;
+use serde::Deserialize;
 use serde::Serialize;
 
 #[allow(unused_imports)]
@@ -45,7 +47,9 @@ pub type FilesT<'a, A> = relative_path::map::Map<'a, FileT<'a, A>>;
 #[derive(
     Clone,
     Debug,
+    Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRepIn,
     Hash,
     NoPosHash,
@@ -53,12 +57,18 @@ pub type FilesT<'a, A> = relative_path::map::Map<'a, FileT<'a, A>>;
     Serialize,
     ToOcamlRep
 )]
+#[serde(bound(
+    deserialize = "PrimPos: 'de + arena_deserializer::DeserializeInArena<'de>, Pos: 'de + arena_deserializer::DeserializeInArena<'de>"
+))]
 pub struct Error_<'a, PrimPos, Pos> {
     pub code: oxidized::errors::ErrorCode,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub claim: &'a Message<'a, PrimPos>,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub reasons: &'a [&'a Message<'a, Pos>],
 }
 impl<'a, PrimPos: TrivialDrop, Pos: TrivialDrop> TrivialDrop for Error_<'a, PrimPos, Pos> {}
+arena_deserializer::impl_deserialize_in_arena!(Error_<'arena, PrimPos, Pos>);
 
 pub type Error<'a> = Error_<'a, &'a pos::Pos<'a>, &'a pos_or_decl::PosOrDecl<'a>>;
 
@@ -66,7 +76,9 @@ pub type Error<'a> = Error_<'a, &'a pos::Pos<'a>, &'a pos_or_decl::PosOrDecl<'a>
     Clone,
     Copy,
     Debug,
+    Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRepIn,
     Hash,
     NoPosHash,
@@ -76,12 +88,18 @@ pub type Error<'a> = Error_<'a, &'a pos::Pos<'a>, &'a pos_or_decl::PosOrDecl<'a>
     Serialize,
     ToOcamlRep
 )]
-pub struct AppliedFixme<'a>(pub &'a pos::Pos<'a>, pub isize);
+pub struct AppliedFixme<'a>(
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)] pub &'a pos::Pos<'a>,
+    pub isize,
+);
 impl<'a> TrivialDrop for AppliedFixme<'a> {}
+arena_deserializer::impl_deserialize_in_arena!(AppliedFixme<'arena>);
 
 #[derive(
     Clone,
+    Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRepIn,
     Hash,
     NoPosHash,
@@ -92,7 +110,9 @@ impl<'a> TrivialDrop for AppliedFixme<'a> {}
     ToOcamlRep
 )]
 pub struct Errors<'a>(
-    pub FilesT<'a, &'a Error<'a>>,
-    pub FilesT<'a, AppliedFixme<'a>>,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)] pub FilesT<'a, &'a Error<'a>>,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
+    pub  FilesT<'a, AppliedFixme<'a>>,
 );
 impl<'a> TrivialDrop for Errors<'a> {}
+arena_deserializer::impl_deserialize_in_arena!(Errors<'arena>);

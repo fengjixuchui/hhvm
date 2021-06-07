@@ -36,9 +36,7 @@ namespace HPHP { namespace jit {
 
 TRACE_SET_MOD(mcg);
 
-// This value should be enough bytes to emit a REQ_RETRANSLATE: lea (4 or 7
-// bytes), movq (10 bytes), and jmp (5 bytes). We then add some extra slack for
-// safety.
+// FIXME: kMinTranslationBytes is probably no longer needed
 static constexpr int kMinTranslationBytes = 32;
 static constexpr size_t kRoundUp = 2ull << 20;
 
@@ -147,13 +145,17 @@ CodeCache::CodeCache()
   if (use_lowptr) {
     // in LOWPTR builds, TC must fit below lowArenaMinAddr().  If it doesn't, we
     // shrink things to make it so.
-    if (currBase + (32u << 20) > lowArenaMinAddr()) {
+    auto const lowArenaStart = lowArenaMinAddr();
+    if (RuntimeOption::ServerExecutionMode()) {
+      Logger::Info("lowArenaMinAddr(): 0x%lx", lowArenaStart);
+    }
+    if (currBase + (32u << 20) > lowArenaStart) {
       fprintf(stderr, "brk is too big for LOWPTR build\n");
       exit(1);
     }
     auto const endAddr = currBase + m_totalSize;
-    if (endAddr > lowArenaMinAddr()) {
-      cutTCSizeTo(lowArenaMinAddr() - kRoundUp - currBase - thread_local_size);
+    if (endAddr > lowArenaStart) {
+      cutTCSizeTo(lowArenaStart - kRoundUp - currBase - thread_local_size);
       new (this) CodeCache;
       return;
     }
@@ -208,7 +210,7 @@ CodeCache::CodeCache()
     if (CodeCache::AutoTCShift) {
       allocationSize += kRoundUp;
     }
-    base = (uint8_t*)low_malloc(allocationSize);
+    base = (uint8_t*)lower_malloc(allocationSize);
     if (!base) {
       fprintf(stderr, "could not allocate %zd bytes for translation cache\n",
               allocationSize);
@@ -383,8 +385,8 @@ CodeCache::View CodeCache::view(TransKind kind) {
   return view;
 }
 
-void CodeCache::View::alignForTranslation() {
-  main().alignFrontier(tc::Translator::kTranslationAlign);
+void CodeCache::View::alignForTranslation(bool alignMain) {
+  if (alignMain) main().alignFrontier(tc::Translator::kTranslationAlign);
   cold().alignFrontier(tc::Translator::kTranslationAlign);
   data().alignFrontier(tc::Translator::kTranslationAlign);
   frozen().alignFrontier(tc::Translator::kTranslationAlign);

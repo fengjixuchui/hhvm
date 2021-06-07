@@ -425,7 +425,6 @@ struct BespokeAccessor : public Accessor {
   explicit BespokeAccessor(
       IterSpecialization specialization, ArrayLayout layout) {
     arr_type = getArrType(specialization).narrowToLayout(layout);
-    key_type = getKeyType(specialization);
     pos_type = TInt;
     iter_type = specialization;
     this->layout = layout;
@@ -461,9 +460,6 @@ struct BespokeAccessor : public Accessor {
   SSATmp* advancePos(IRGS& env, SSATmp* pos, int16_t offset) const override {
     return gen(env, AddInt, pos, cns(env, offset));
   }
-
-private:
-  Type key_type;
 };
 
 std::unique_ptr<Accessor> getAccessor(
@@ -775,7 +771,8 @@ void specializeIterInit(IRGS& env, Offset doneOffset,
     if (!allowBespokeArrayLikes()) return ArrayLayout::Vanilla();
     auto const dt = getArrType(iter_type).toDataType();
     if (!arrayTypeCouldBeBespoke(dt)) return ArrayLayout::Vanilla();
-    return bespoke::layoutForSink(env.profTransIDs, curSrcKey(env));
+    auto const sl = bespoke::layoutForSink(env.profTransIDs, curSrcKey(env));
+    return sl.sideExit ? sl.layout : ArrayLayout::Top();
   }();
   iter_type.bespoke = layout.bespoke();
   auto const accessor = getAccessor(iter_type, layout);
@@ -786,8 +783,8 @@ void specializeIterInit(IRGS& env, Offset doneOffset,
   if (!iter_type.specialized) {
     FTRACE(2, "Failure: no profiled specialization.\n");
     return despecialize();
-  } else if (!layout.vanilla() && !layout.monotype()) {
-    FTRACE(2, "Failure: not a vanilla or monotype layout.\n");
+  } else if (!layout.vanilla() && !layout.monotype() && !layout.is_struct()) {
+    FTRACE(2, "Failure: not a vanilla, monotype, or struct layout.\n");
     return despecialize();
   } else if (iter && iter->iter_type.as_byte != iter_type.as_byte) {
     FTRACE(2, "Failure: specialization mismatch: {}\n", show(iter->iter_type));

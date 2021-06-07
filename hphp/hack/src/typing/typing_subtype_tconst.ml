@@ -1,6 +1,5 @@
 open Typing_defs
 module Env = Typing_env
-module Phase = Typing_phase
 module ITySet = Internal_type_set
 module Utils = Typing_utils
 
@@ -17,7 +16,7 @@ let make_type_const_equal
   let rec make_equal env ty =
     match ty with
     | LoclType ty ->
-      let ety_env = Phase.env_with_self env ~on_error:Errors.ignore_error in
+      let ety_env = empty_expand_env in
       let (env, tytconst) =
         Utils.expand_typeconst
           ety_env
@@ -110,7 +109,7 @@ let get_tyvar_type_const env var tconstid ~on_error =
   | Some (_pos, ty) -> (env, ty)
   | None ->
     let var_pos = Env.get_tyvar_pos env var in
-    let (env, tvar) = Env.fresh_invariant_type_var env var_pos in
+    let (env, tvar) = Env.fresh_type_invariant env var_pos in
     Typing_log.log_new_tvar_for_tconst env (var_pos, var) tconstid tvar;
     let env = add_tyvar_type_const env var tconstid tvar ~on_error in
     (env, tvar)

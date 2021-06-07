@@ -17,27 +17,6 @@ type process_file_results = {
 val should_enable_deferring :
   GlobalOptions.t -> Typing_service_types.check_file_computation -> bool
 
-val type_fun :
-  Provider_context.t ->
-  Relative_path.t ->
-  string ->
-  (Tast.def * Typing_inference_env.t_global_with_pos) option
-
-val type_class :
-  Provider_context.t ->
-  Relative_path.t ->
-  string ->
-  (Tast.def * Typing_inference_env.t_global_with_pos list) option
-
-val type_record_def :
-  Provider_context.t -> Relative_path.t -> string -> Tast.def option
-
-val check_typedef :
-  Provider_context.t -> Relative_path.t -> string -> Tast.def option
-
-val check_const :
-  Provider_context.t -> Relative_path.t -> string -> Tast.def option
-
 val process_file :
   Relative_path.Set.t ->
   Provider_context.t ->
@@ -55,6 +34,7 @@ val go :
   Relative_path.t list ->
   memory_cap:int option ->
   longlived_workers:bool ->
+  remote_execution:bool ->
   check_info:Typing_service_types.check_info ->
   Errors.t * Typing_service_delegate.state * Telemetry.t
 
@@ -68,6 +48,7 @@ val go_with_interrupt :
   interrupt:'a MultiWorker.interrupt_config ->
   memory_cap:int option ->
   longlived_workers:bool ->
+  remote_execution:bool ->
   check_info:Typing_service_types.check_info ->
   profiling:CgroupProfiler.Profiling.t ->
   (Errors.t, Typing_service_delegate.state, Telemetry.t, 'a) job_result

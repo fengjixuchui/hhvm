@@ -460,9 +460,11 @@ where
             | TokenKind::Require
             | TokenKind::Require_once => self.parse_inclusion_expression(),
             TokenKind::Isset => self.parse_isset_expression(),
-            TokenKind::Define => self.parse_define_expression(),
             TokenKind::Eval => self.parse_eval_expression(),
-            TokenKind::Hash => self.parse_atom(),
+            TokenKind::Hash => {
+                let qualifier = S!(make_missing, self, self.pos());
+                self.parse_enum_class_label(qualifier)
+            }
             TokenKind::Empty => {
                 self.with_error(Errors::empty_expression_illegal);
                 let token = self.next_token_non_reserved_as_name();
@@ -521,31 +523,6 @@ where
             self.continue_from(parser1);
             let (left, args, right) = self.parse_expression_list_opt();
             S!(make_isset_expression, self, keyword, left, args, right)
-        } else {
-            self.parse_as_name_or_error()
-        }
-    }
-
-    fn parse_define_expression(&mut self) -> S::R {
-        // TODO: This is a PHP-ism. Open questions:
-        // * Should we allow a trailing comma? See D4273242 for discussion.
-        // * Is there any restriction on the kind of expression the arguments can be?
-        //   They must be string, value, bool, but do they have to be compile-time
-        //   constants, for instance?
-        // * Should this be an error in strict mode? You should use const instead.
-        // * Should this be in the specification?
-        // * PHP requires that there be at least two arguments; should we require
-        //   that? if so, should we give the error in the parser or a later pass?
-        //   is define case-insensitive?
-        //
-        // TODO: The original Hack and HHVM parsers accept "define" as an
-        // identifier, so we do too; consider whether it should be reserved.
-        let mut parser1 = self.clone();
-        let keyword = parser1.assert_token(TokenKind::Define);
-        if parser1.peek_token_kind() == TokenKind::LeftParen {
-            self.continue_from(parser1);
-            let (left, args, right) = self.parse_expression_list_opt();
-            S!(make_define_expression, self, keyword, left, args, right)
         } else {
             self.parse_as_name_or_error()
         }
@@ -1163,9 +1140,10 @@ where
                 self.parse_scope_resolution_expression(type_specifier)
             }
             TokenKind::Hash | TokenKind::LeftParen => {
-                let enum_atom = match self.peek_token_kind() {
-                    TokenKind::Hash => self.parse_atom(),
-                    _ => S!(make_missing, self, self.pos()),
+                let missing = S!(make_missing, self, self.pos());
+                let enum_class_label = match self.peek_token_kind() {
+                    TokenKind::Hash => self.parse_enum_class_label(missing),
+                    _ => missing,
                 };
                 let (left, args, right) = self.parse_expression_list_opt();
                 S!(
@@ -1173,7 +1151,7 @@ where
                     self,
                     term,
                     type_arguments,
-                    enum_atom,
+                    enum_class_label,
                     left,
                     args,
                     right
@@ -1352,7 +1330,13 @@ where
                         TokenKind::PlusPlus | TokenKind::MinusMinus => {
                             self.parse_postfix_unary(term)
                         }
-                        TokenKind::Hash | TokenKind::LeftParen => self.parse_function_call(term),
+                        TokenKind::Hash => {
+                            self.parse_function_call_or_enum_class_label_expression(term)
+                        }
+                        TokenKind::LeftParen => {
+                            let missing = S!(make_missing, self, self.pos());
+                            self.parse_function_call(missing, term)
+                        }
                         TokenKind::LeftBracket | TokenKind::LeftBrace => self.parse_subscript(term),
                         TokenKind::Question => {
                             let token = self.assert_token(TokenKind::Question);
@@ -1626,15 +1610,40 @@ where
         S!(make_constructor_call, self, designator, left, args, right)
     }
 
-    fn parse_function_call(&mut self, receiver: S::R) -> S::R {
+    fn parse_function_call_or_enum_class_label_expression(&mut self, term: S::R) -> S::R {
+        // SPEC
+        // fully-qualified-label:
+        //   term '#' name
+        // function-call-with-label:
+        //   term '#' name '(' ... ')'
+        let hash = self.assert_token(TokenKind::Hash);
+        let label_name = self.require_name();
+        if self.peek_token_kind() == TokenKind::LeftParen {
+            let missing = S!(make_missing, self, self.pos());
+            let enum_class_label = S!(
+                make_enum_class_label_expression,
+                self,
+                missing,
+                hash,
+                label_name
+            );
+            self.parse_function_call(enum_class_label, term)
+        } else {
+            S!(
+                make_enum_class_label_expression,
+                self,
+                term,
+                hash,
+                label_name
+            )
+        }
+    }
+
+    fn parse_function_call(&mut self, enum_class_label: S::R, receiver: S::R) -> S::R {
         // SPEC
         // function-call-expression:
         //   postfix-expression  (  argument-expression-list-opt  )
         let type_arguments = S!(make_missing, self, self.pos());
-        let enum_atom = match self.peek_token_kind() {
-            TokenKind::Hash => self.parse_atom(),
-            _ => S!(make_missing, self, self.pos()),
-        };
         let old_enabled = self.allow_as_expressions();
         self.allow_as_expressions = true;
         let (left, args, right) = self.parse_expression_list_opt();
@@ -1643,7 +1652,7 @@ where
             self,
             receiver,
             type_arguments,
-            enum_atom,
+            enum_class_label,
             left,
             args,
             right
@@ -3065,9 +3074,15 @@ where
         S!(make_scope_resolution_expression, self, qualifier, op, name)
     }
 
-    fn parse_atom(&mut self) -> S::R {
+    fn parse_enum_class_label(&mut self, qualifier: S::R) -> S::R {
         let hash = self.assert_token(TokenKind::Hash);
-        let atom_name = self.require_name();
-        S!(make_enum_atom_expression, self, hash, atom_name)
+        let label_name = self.require_name();
+        S!(
+            make_enum_class_label_expression,
+            self,
+            qualifier,
+            hash,
+            label_name
+        )
     }
 }

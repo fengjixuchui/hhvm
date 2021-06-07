@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<90d5df1e603b8e764f9b4769927c6909>>
+// @generated SignedSource<<5fcc0994184f990f8ec4409c3fdf0bd5>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -233,6 +233,7 @@ pub enum EnvAnnot {
     Refinement,
 }
 impl TrivialDrop for EnvAnnot {}
+arena_deserializer::impl_deserialize_in_arena!(EnvAnnot);
 
 #[derive(
     Clone,
@@ -806,10 +807,10 @@ pub enum Expr_<Ex, Fb, En, Hi> {
     ///
     /// ${$foo}
     ETSplice(Box<Expr<Ex, Fb, En, Hi>>),
-    /// Enum atom used for enum classes.
+    /// Label used for enum classes.
     ///
-    /// #field_name
-    EnumAtom(String),
+    /// enum_name#label_name or #label_name
+    EnumClassLabel(Box<(Option<Sid>, String)>),
     /// Placeholder for expressions that aren't understood by parts of
     /// the toolchain.
     ///
@@ -1053,7 +1054,6 @@ pub struct Fun_<Ex, Fb, En, Hi> {
     pub span: Pos,
     pub readonly_this: Option<ast_defs::ReadonlyKind>,
     pub annotation: En,
-    pub mode: file_info::Mode,
     pub readonly_ret: Option<ast_defs::ReadonlyKind>,
     pub ret: TypeHint<Hi>,
     pub name: Sid,
@@ -1066,11 +1066,9 @@ pub struct Fun_<Ex, Fb, En, Hi> {
     pub body: FuncBody<Ex, Fb, En, Hi>,
     pub fun_kind: ast_defs::FunKind,
     pub user_attributes: Vec<UserAttribute<Ex, Fb, En, Hi>>,
-    pub file_attributes: Vec<FileAttribute<Ex, Fb, En, Hi>>,
     /// true if this declaration has no body because it is an
     /// external function declaration (e.g. from an HHI file)
     pub external: bool,
-    pub namespace: Nsenv,
     pub doc_comment: Option<DocComment>,
 }
 
@@ -1261,6 +1259,7 @@ pub enum EmitId {
     EmitId(isize),
     Anonymous,
 }
+arena_deserializer::impl_deserialize_in_arena!(EmitId);
 
 #[derive(
     Clone,
@@ -1299,7 +1298,7 @@ pub struct Class_<Ex, Fb, En, Hi> {
     pub xhp_category: Option<(Pos, Vec<Pstring>)>,
     pub reqs: Vec<(ClassHint, IsExtends)>,
     pub implements: Vec<ClassHint>,
-    pub implements_dynamic: bool,
+    pub support_dynamic_type: bool,
     pub where_constraints: Vec<WhereConstraintHint>,
     pub consts: Vec<ClassConst<Ex, Fb, En, Hi>>,
     pub typeconsts: Vec<ClassTypeconstDef<Ex, Fb, En, Hi>>,
@@ -1343,6 +1342,7 @@ pub enum XhpAttrTag {
     LateInit,
 }
 impl TrivialDrop for XhpAttrTag {}
+arena_deserializer::impl_deserialize_in_arena!(XhpAttrTag);
 
 #[derive(
     Clone,
@@ -1548,12 +1548,10 @@ pub struct ClassTypeconstDef<Ex, Fb, En, Hi> {
 
 #[derive(
     Clone,
-    Copy,
     Debug,
     Deserialize,
     Eq,
     FromOcamlRep,
-    FromOcamlRepIn,
     Hash,
     NoPosHash,
     Ord,
@@ -1563,7 +1561,8 @@ pub struct ClassTypeconstDef<Ex, Fb, En, Hi> {
     ToOcamlRep
 )]
 pub struct XhpAttrInfo {
-    pub xai_tag: Option<XhpAttrTag>,
+    pub tag: Option<XhpAttrTag>,
+    pub enum_values: Vec<ast_defs::XhpEnumValue>,
 }
 
 #[derive(
@@ -1720,7 +1719,26 @@ pub struct RecordDef<Ex, Fb, En, Hi> {
 
 pub type RecordHint = Hint;
 
-pub type FunDef<Ex, Fb, En, Hi> = Fun_<Ex, Fb, En, Hi>;
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    FromOcamlRep,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub struct FunDef<Ex, Fb, En, Hi> {
+    pub namespace: Nsenv,
+    pub file_attributes: Vec<FileAttribute<Ex, Fb, En, Hi>>,
+    pub mode: file_info::Mode,
+    pub fun: Fun_<Ex, Fb, En, Hi>,
+}
 
 #[derive(
     Clone,
@@ -1773,6 +1791,7 @@ pub enum NsKind {
     NSConst,
 }
 impl TrivialDrop for NsKind {}
+arena_deserializer::impl_deserialize_in_arena!(NsKind);
 
 #[derive(
     Clone,
@@ -1796,6 +1815,7 @@ pub enum HoleSource {
     EnforcedCast,
 }
 impl TrivialDrop for HoleSource {}
+arena_deserializer::impl_deserialize_in_arena!(HoleSource);
 
 #[derive(
     Clone,

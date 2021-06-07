@@ -14,18 +14,25 @@ open Hh_json_helpers
 
 (* All hack-specific code relating to LSP goes in here. *)
 
-type env = {
+type args = {
   from: string;
   config: (string * string) list;
-  use_ffp_autocomplete: bool;
-  use_ranked_autocomplete: bool;
-  use_serverless_ide: bool;
   verbose: bool;
-  init_id: string;
 }
 
-(** This is env.from, but maybe modified in the light of the initialize request *)
+type env = {
+  args: args;
+  init_id: string;
+  use_serverless_ide: bool;
+  use_ffp_autocomplete: bool;
+  use_ranked_autocomplete: bool;
+}
+
+(** This gets initialized to env.from, but maybe modified in the light of the initialize request *)
 let from = ref "[init]"
+
+(** This gets initialized in the initialize request *)
+let ref_local_config : ServerLocalConfig.t option ref = ref None
 
 (** We cache the state of the typecoverageToggle button, so that when Hack restarts,
   dynamic view stays in sync with the button in Nuclide *)
@@ -88,7 +95,7 @@ type server_message = {
 type server_conn = {
   ic: Timeout.in_channel;
   oc: Out_channel.t;
-  server_finale_file: string;
+  server_specific_files: ServerCommandTypes.server_specific_files;
   pending_messages: server_message Queue.t;
       (** ones that arrived during current rpc *)
 }
@@ -198,6 +205,7 @@ let initialize_params_exc () : Lsp.Initialize.params =
   | None -> failwith "initialize_params not yet received"
   | Some initialize_params -> initialize_params
 
+(** root only becomes available after the initialize message *)
 let get_root_opt () : Path.t option =
   match !initialize_params_ref with
   | None -> None
@@ -205,7 +213,12 @@ let get_root_opt () : Path.t option =
     let path = Some (Lsp_helpers.get_root initialize_params) in
     Some (Wwwroot.get path)
 
+(** root only becomes available after the initialize message *)
 let get_root_exn () : Path.t = Option.value_exn (get_root_opt ())
+
+(** local_config only becomes available after the initialize message *)
+let get_local_config_exn () : ServerLocalConfig.t =
+  Option.value_exn !ref_local_config
 
 (** We remember the last version of .hhconfig, and hack_rc_mode switch,
 so that if they change then we know we must terminate and be restarted. *)
@@ -720,6 +733,8 @@ let read_message_from_server (server : server_conn) : event Lwt.t =
       Lwt.return (Server_message { push; has_updated_server_state = false })
     | Hello -> Lwt.return Server_hello
     | Ping -> failwith "unexpected ping on persistent connection"
+    | Monitor_failed_to_handoff ->
+      failwith "unexpected monitor_failed_to_handoff on persistent connection"
   with e ->
     let message = Exn.to_string e in
     let stack = Printexc.get_backtrace () in
@@ -1150,7 +1165,7 @@ let start_server ~(env : env) (root : Path.t) : unit =
       save_64bit = None;
       dynamic_view = !cached_toggle_state;
       prechecked = None;
-      config = env.config;
+      config = env.args.config;
       custom_telemetry_data = [];
       allow_non_opt_build = false;
     }
@@ -1173,6 +1188,7 @@ let rec connect_client ~(env : env) (root : Path.t) ~(autostart : bool) :
         ClientConnect.root;
         from = !from;
         autostart;
+        local_config = get_local_config_exn ();
         force_dormant_start = false;
         watchman_debug_logging = false;
         (* If you want this, start the server manually in terminal. *)
@@ -1199,18 +1215,18 @@ let rec connect_client ~(env : env) (root : Path.t) ~(autostart : bool) :
         and doesn't provide benefits in serverless-ide. *)
         use_priority_pipe = not env.use_serverless_ide;
         prechecked = None;
-        config = env.config;
+        config = env.args.config;
         custom_telemetry_data = [];
         allow_non_opt_build = false;
       }
     in
     try%lwt
-      let%lwt ClientConnect.{ channels = (ic, oc); server_finale_file; _ } =
+      let%lwt ClientConnect.{ channels = (ic, oc); server_specific_files; _ } =
         ClientConnect.connect env_connect
       in
       can_autostart_after_mismatch := false;
       let pending_messages = Queue.create () in
-      Lwt.return { ic; oc; pending_messages; server_finale_file }
+      Lwt.return { ic; oc; pending_messages; server_specific_files }
     with Exit_with Build_id_mismatch when !can_autostart_after_mismatch ->
       (* Raised when the server was running an old version. We'll retry once.   *)
       log "connect_client: build_id_mismatch";
@@ -1539,7 +1555,7 @@ let run_ide_service
       ~root
       ~naming_table_load_info
       ~use_ranked_autocomplete:env.use_ranked_autocomplete
-      ~config:env.config
+      ~config:env.args.config
       ~open_files
   in
   log_debug "initialize_from_saved_state.done";
@@ -1592,7 +1608,7 @@ let on_status_restart_action
     let ide_args =
       {
         ClientIdeMessage.init_id = env.init_id;
-        verbose_to_stderr = env.verbose;
+        verbose_to_stderr = env.args.verbose;
         verbose_to_file = !verbose_to_file;
       }
     in
@@ -1678,13 +1694,19 @@ let get_hh_server_status (state : state) : ShowStatusFB.params option =
         int_of_float (time -. ienv.first_start_time) |> string_of_int
     in
     (* TODO: better to report time that hh_server has spent initializing *)
-    let tracker = Connection_tracker.create () in
     let (progress, warning) =
-      match
-        ServerUtils.server_progress ~tracker ~timeout:3 (get_root_exn ())
-      with
-      | Error _ -> ("connecting", None)
-      | Ok (progress, warning) -> (progress, warning)
+      let open ServerCommandTypes in
+      match state with
+      | In_init { In_init_env.conn; _ }
+      | Main_loop { Main_env.conn; _ } ->
+        let server_progress_file =
+          conn.server_specific_files.ServerCommandTypes.server_progress_file
+        in
+        let server_progress =
+          ServerCommandTypesUtils.read_progress_file ~server_progress_file
+        in
+        (server_progress.server_progress, server_progress.server_warning)
+      | _ -> ("connecting", None)
     in
     (* [progress] comes from ServerProgress.ml, sent to the monitor, and now we've fetched
     it from the monitor. It's a string "op X/Y units (%)" e.g. "typechecking 5/16 files (78%)",
@@ -3198,6 +3220,23 @@ let do_documentFormatting
     action
     params.options
 
+let do_willSaveWaitUntil
+    (editor_open_files : Lsp.TextDocumentItem.t UriMap.t)
+    (params : WillSaveWaitUntil.params) : WillSaveWaitUntil.result =
+  let uri = params.WillSaveWaitUntil.textDocument.TextDocumentIdentifier.uri in
+  let lsp_doc = UriMap.find uri editor_open_files in
+  let content = lsp_doc.Lsp.TextDocumentItem.text in
+  match Formatting.is_formattable content with
+  | true ->
+    let open DocumentFormatting in
+    do_documentFormatting
+      editor_open_files
+      {
+        textDocument = params.WillSaveWaitUntil.textDocument;
+        options = { tabSize = 2; insertSpaces = true };
+      }
+  | false -> []
+
 let do_signatureHelp
     (conn : server_conn)
     (ref_unblocked_time : float ref)
@@ -3381,12 +3420,7 @@ let do_diagnostics
   (* this is "(uris_with_diagnostics \ uris_without) U uris_with" *)
   UriSet.union (UriSet.diff uris_with_diagnostics uris_without) uris_with
 
-let do_initialize ~(env : env) (root : Path.t) : Initialize.result =
-  let server_args = ServerArgs.default_options ~root:(Path.to_string root) in
-  let server_args = ServerArgs.set_config server_args env.config in
-  let server_local_config =
-    snd @@ ServerConfig.load ~silent:true ServerConfig.filename server_args
-  in
+let do_initialize (local_config : ServerLocalConfig.t) : Initialize.result =
   Initialize.
     {
       server_capabilities =
@@ -3396,7 +3430,7 @@ let do_initialize ~(env : env) (root : Path.t) : Initialize.result =
               want_openClose = true;
               want_change = IncrementalSync;
               want_willSave = false;
-              want_willSaveWaitUntil = false;
+              want_willSaveWaitUntil = true;
               want_didSave = Some { includeText = false };
             };
           hoverProvider = true;
@@ -3425,7 +3459,7 @@ let do_initialize ~(env : env) (root : Path.t) : Initialize.result =
           documentLinkProvider = None;
           executeCommandProvider = None;
           implementationProvider =
-            server_local_config.ServerLocalConfig.go_to_implementation;
+            local_config.ServerLocalConfig.go_to_implementation;
           typeCoverageProviderFB = true;
           rageProviderFB = true;
         };
@@ -3918,9 +3952,14 @@ let handle_client_message
     | (Pre_init, _, RequestMessage (id, InitializeRequest initialize_params)) ->
       let open Initialize in
       initialize_params_ref := Some initialize_params;
+
+      (* There's a lot of global-mutable-variable initialization we can only do after
+      we get root, here in the handler of the initialize request. The function
+      [get_root_exn] becomes available after we've set up initialize_params_ref, above. *)
       let root = get_root_exn () in
-      (* calculated from initialize_params_ref *)
+      Relative_path.set_path_prefix Relative_path.Root root;
       set_up_hh_logger_for_client_lsp root;
+
       (* Following is a hack. Atom incorrectly passes '--from vscode', rendering us
       unable to distinguish Atom from VSCode. But Atom is now frozen at vscode client
       v3.14. So by looking at the version, we can at least distinguish that it's old. *)
@@ -3928,11 +3967,23 @@ let handle_client_message
         (not
            initialize_params.client_capabilities.textDocument.declaration
              .declarationLinkSupport)
-        && String.equal env.from "vscode"
+        && String.equal env.args.from "vscode"
       then begin
         from := "vscode_pre314";
         HackEventLogger.set_from !from
       end;
+
+      (* The function [get_local_config_exn] becomes available after we've set ref_local_config. *)
+      let server_args =
+        ServerArgs.default_options ~root:(Path.to_string root)
+      in
+      let server_args = ServerArgs.set_config server_args env.args.config in
+      let local_config =
+        snd @@ ServerConfig.load ~silent:true ServerConfig.filename server_args
+      in
+      ref_local_config := Some local_config;
+      HackEventLogger.set_rollout_flags
+        (ServerLocalConfig.to_rollout_flags local_config);
 
       let%lwt version = read_hhconfig_version () in
       HackEventLogger.set_hhconfig_version
@@ -3941,7 +3992,6 @@ let handle_client_message
       hhconfig_version_and_switch := version_and_switch;
       let%lwt new_state = connect ~env !state in
       state := new_state;
-      Relative_path.set_path_prefix Relative_path.Root root;
       (* If editor sent 'trace: on' then that will turn on verbose_to_file. But we won't turn off
       verbose here, since the command-line argument --verbose trumps initialization params. *)
       begin
@@ -3951,7 +4001,7 @@ let handle_client_message
         | Initialize.Verbose ->
           set_verbose_to_file ~ide_service ~env ~tracking_id true
       end;
-      let result = do_initialize ~env root in
+      let result = do_initialize local_config in
       respond_jsonrpc ~powered_by:Language_server id (InitializeResult result);
 
       begin
@@ -4238,6 +4288,15 @@ let handle_client_message
         ~powered_by:Language_server
         id
         (DocumentOnTypeFormattingResult result);
+      Lwt.return_some
+        { result_count = List.length result; result_extra_telemetry = None }
+    (* textDocument/willSaveWaitUntil request *)
+    | (_, _, RequestMessage (id, WillSaveWaitUntilRequest params)) ->
+      let result = do_willSaveWaitUntil editor_open_files params in
+      respond_jsonrpc
+        ~powered_by:Language_server
+        id
+        (WillSaveWaitUntilResult result);
       Lwt.return_some
         { result_count = List.length result; result_extra_telemetry = None }
     (* editor buffer events *)
@@ -4703,12 +4762,35 @@ let handle_tick
     ~terminate_on_failure:false;
   Lwt.return_none
 
-let main (env : env) : Exit_status.t Lwt.t =
+let main (args : args) ~(init_id : string) : Exit_status.t Lwt.t =
   Printexc.record_backtrace true;
-  from := env.from;
+  from := args.from;
   HackEventLogger.set_from !from;
 
-  if env.verbose then begin
+  (* The hh.conf can't fully be loaded without root, since it has flags like "foo=^4.53" that
+  depend on the version= line we read from root/.hhconfig. But nevertheless we need right now
+  a few hh.conf flags that control clientLsp and which aren't done that way. So we'll read
+  those flags right now. *)
+  let versionless_local_config =
+    ServerLocalConfig.load
+      ~silent:true
+      ~current_version:(Config_file.parse_version None)
+      (SMap.of_list args.config)
+  in
+  let env =
+    {
+      args;
+      init_id;
+      use_ffp_autocomplete =
+        versionless_local_config.ServerLocalConfig.ide_ffp_autocomplete;
+      use_ranked_autocomplete =
+        versionless_local_config.ServerLocalConfig.ide_ranked_autocomplete;
+      use_serverless_ide =
+        versionless_local_config.ServerLocalConfig.ide_serverless;
+    }
+  in
+
+  if env.args.verbose then begin
     Hh_logger.Level.set_min_level_stderr Hh_logger.Level.Debug;
     Hh_logger.Level.set_min_level_file Hh_logger.Level.Debug
   end else begin
@@ -4727,8 +4809,8 @@ let main (env : env) : Exit_status.t Lwt.t =
            (ClientIdeService.make
               {
                 ClientIdeMessage.init_id = env.init_id;
-                verbose_to_stderr = env.verbose;
-                verbose_to_file = env.verbose;
+                verbose_to_stderr = env.args.verbose;
+                verbose_to_file = env.args.verbose;
               }))
     else
       None
@@ -4821,7 +4903,8 @@ let main (env : env) : Exit_status.t Lwt.t =
           match !state with
           | Main_loop { Main_env.conn; _ }
           | In_init { In_init_env.conn; _ } ->
-            ClientConnect.get_finale_data conn.server_finale_file
+            ClientConnect.get_finale_data
+              conn.server_specific_files.ServerCommandTypes.server_finale_file
           | _ -> None
         in
         let server_finale_stack =

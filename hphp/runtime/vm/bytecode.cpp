@@ -1154,6 +1154,16 @@ OPTBLD_INLINE void iopClassName() {
   );
 }
 
+OPTBLD_INLINE void iopLazyClassFromClass() {
+  auto const cls  = vmStack().topC();
+  if (!isClassType(cls->m_type)) {
+    raise_error("Attempting to get name of non-class");
+  }
+  auto const cname = cls->m_data.pclass->name();
+  auto const lclass = LazyClassData::create(cname);
+  vmStack().replaceC<KindOfLazyClass>(lclass);
+}
+
 OPTBLD_INLINE void iopInt(int64_t imm) {
   vmStack().pushInt(imm);
 }
@@ -1327,10 +1337,6 @@ OPTBLD_INLINE void iopCnsE(const StringData* s) {
   }
   auto const c1 = vmStack().allocC();
   tvCopy(cns, *c1);
-}
-
-OPTBLD_INLINE void iopDefCns(uint32_t cid) {
-  vmfp()->func()->unit()->defCns(cid);
 }
 
 OPTBLD_INLINE void iopClsCns(const StringData* clsCnsName) {
@@ -1597,21 +1603,24 @@ void maybeMakeLoggingArrayAfterCast(TypedValue* tv) {
 }
 }
 
+OPTBLD_INLINE void iopCastVec() {
+  TypedValue* c1 = vmStack().topC();
+  if (tvIsVec(c1)) return;
+  tvCastToVecInPlace(c1);
+  maybeMakeLoggingArrayAfterCast(c1);
+}
+
 OPTBLD_INLINE void iopCastDict() {
   TypedValue* c1 = vmStack().topC();
+  if (tvIsDict(c1)) return;
   tvCastToDictInPlace(c1);
   maybeMakeLoggingArrayAfterCast(c1);
 }
 
 OPTBLD_INLINE void iopCastKeyset() {
   TypedValue* c1 = vmStack().topC();
+  if (tvIsKeyset(c1)) return;
   tvCastToKeysetInPlace(c1);
-  maybeMakeLoggingArrayAfterCast(c1);
-}
-
-OPTBLD_INLINE void iopCastVec() {
-  TypedValue* c1 = vmStack().topC();
-  tvCastToVecInPlace(c1);
   maybeMakeLoggingArrayAfterCast(c1);
 }
 
@@ -2604,8 +2613,14 @@ OPTBLD_INLINE void iopBaseSC(uint32_t keyIdx,
     throw_cannot_modify_static_const_prop(class_->name()->data(),
       name->data());
   }
-  if (lookup.readonly && op == ReadOnlyOp::Mutable) {
-    throw_must_be_mutable(class_->name()->data(), name->data());
+
+  if (lookup.readonly && (op == ReadOnlyOp::Mutable || op == ReadOnlyOp::CheckROCOW)) {
+    if (op == ReadOnlyOp::CheckROCOW &&
+     (!isRefcountedType(lookup.val->m_type) || hasPersistentFlavor(lookup.val->m_type))) {
+      mstate.roProp = true;
+    } else {
+      throw_must_be_mutable(class_->name()->data(), name->data());
+    }
   }
   mstate.base = tv_lval(lookup.val);
 }
@@ -2646,10 +2661,12 @@ static OPTBLD_INLINE void propDispatch(MOpMode mode, TypedValue key, ReadOnlyOp 
         return Prop<MOpMode::Warn>(mstate.tvTempBase, ctx, mstate.base, key, op);
       case MOpMode::Define:
         return Prop<MOpMode::Define,KeyType::Any>(
-          mstate.tvTempBase, ctx, mstate.base, key, op
+          mstate.tvTempBase, ctx, mstate.base, key, op, &mstate.roProp
         );
       case MOpMode::Unset:
-        return Prop<MOpMode::Unset>(mstate.tvTempBase, ctx, mstate.base, key, op);
+        return Prop<MOpMode::Unset>(
+          mstate.tvTempBase, ctx, mstate.base, key, op, &mstate.roProp
+        );
       case MOpMode::InOut:
         always_assert_flog(false, "MOpMode::InOut can only occur on Elem");
     }
@@ -2660,18 +2677,18 @@ static OPTBLD_INLINE void propDispatch(MOpMode mode, TypedValue key, ReadOnlyOp 
 static OPTBLD_INLINE void propQDispatch(MOpMode mode, TypedValue key, ReadOnlyOp op) {
   auto& mstate = vmMInstrState();
   auto ctx = arGetContextClass(vmfp());
-  
+
   assertx(mode == MOpMode::None || mode == MOpMode::Warn);
   assertx(key.m_type == KindOfPersistentString);
   mstate.base = nullSafeProp(mstate.tvTempBase, ctx, mstate.base,
-                             key.m_data.pstr, op);
+                             key.m_data.pstr, op, &mstate.roProp);
 }
 
 static OPTBLD_INLINE
 void elemDispatch(MOpMode mode, TypedValue key) {
   auto& mstate = vmMInstrState();
   auto const b = mstate.base;
-  
+
   auto const baseValueToLval = [&](TypedValue base) {
     mstate.tvTempBase = base;
     return tv_lval { &mstate.tvTempBase };
@@ -2686,9 +2703,9 @@ void elemDispatch(MOpMode mode, TypedValue key) {
       case MOpMode::InOut:
         return baseValueToLval(Elem<MOpMode::InOut>(b, key));
       case MOpMode::Define:
-        return ElemD(b, key);
+        return ElemD(b, key, mstate.roProp);
       case MOpMode::Unset:
-        return ElemU(b, key);
+        return ElemU(b, key, mstate.roProp);
     }
     always_assert(false);
   }();
@@ -2804,9 +2821,7 @@ OPTBLD_INLINE void iopSetM(uint32_t nDiscard, MemberKey mk) {
   mFinal(mstate, nDiscard, result);
 }
 
-OPTBLD_INLINE void iopSetRangeM(
-  uint32_t nDiscard, uint32_t size, SetRangeOp op, ReadOnlyOp /*rop*/
-) {
+OPTBLD_INLINE void iopSetRangeM( uint32_t nDiscard, uint32_t size, SetRangeOp op) {
   auto& mstate = vmMInstrState();
   auto const count = tvCastToInt64(*vmStack().indC(0));
   auto const src = *vmStack().indC(1);
@@ -3449,7 +3464,7 @@ OPTBLD_INLINE void iopSetOpG(SetOpOp op) {
   vmStack().discard();
 }
 
-OPTBLD_INLINE void iopSetOpS(SetOpOp op, ReadOnlyOp /*op*/) {
+OPTBLD_INLINE void iopSetOpS(SetOpOp op) {
   TypedValue* fr = vmStack().topC();
   TypedValue* clsCell = vmStack().indC(1);
   TypedValue* propn = vmStack().indTV(2);
@@ -3518,7 +3533,7 @@ OPTBLD_INLINE void iopIncDecG(IncDecOp op) {
   tvCopy(IncDecBody(op, gbl), *nameCell);
 }
 
-OPTBLD_INLINE void iopIncDecS(IncDecOp op, ReadOnlyOp /*rop*/) {
+OPTBLD_INLINE void iopIncDecS(IncDecOp op) {
   SpropState ss(vmStack(), false);
   if (!(ss.visible && ss.accessible)) {
     raise_error("Invalid static property access: %s::%s",
@@ -3584,6 +3599,7 @@ bool doFCall(CallFlags callFlags, const Func* func, uint32_t numArgsInclUnpack,
   calleeDynamicCallChecks(func, callFlags.isDynamicCall());
   calleeCoeffectChecks(func, callFlags.coeffects(), numArgsInclUnpack, ctx);
   calleeImplicitContextChecks(func);
+  func->recordCall();
   initFuncInputs(func, numArgsInclUnpack);
 
   ar->m_sfp = vmfp();
@@ -3649,7 +3665,7 @@ void* takeCtx(NoCtx) {
 
 template<bool dynamic, typename Ctx>
 void fcallImpl(PC origpc, PC& pc, const FCallArgs& fca, const Func* func,
-               Ctx&& ctx, bool logAsDynamicCall = true) {
+               Ctx&& ctx, bool logAsDynamicCall = true, bool isCtor = false) {
   if (fca.enforceInOut()) callerInOutChecks(func, fca);
   if (dynamic && logAsDynamicCall) callerDynamicCallChecks(func);
   checkStack(vmStack(), func, 0);
@@ -3677,7 +3693,7 @@ void fcallImpl(PC origpc, PC& pc, const FCallArgs& fca, const Func* func,
     fca.asyncEagerOffset != kInvalidOffset && func->supportsAsyncEagerReturn(),
     Offset(origpc - vmfp()->func()->entry()),
     0,  // generics bitmap not used by interpreter
-    vmfp()->coeffects()
+    vmfp()->providedCoeffectsForCall(isCtor)
   );
 
   doFCall(callFlags, func, numArgsInclUnpack, takeCtx(std::forward<Ctx>(ctx)),
@@ -4324,6 +4340,7 @@ ObjectData* newObjImpl(Class* cls, ArrayData* reified_types) {
     : ObjectData::newInstance<true>(cls);
   TRACE(2, "NewObj: just new'ed an instance of class %s: %p\n",
         cls->name()->data(), this_);
+  bespoke::profileArrLikeProps(this_);
   return this_;
 }
 
@@ -4338,7 +4355,6 @@ void newObjDImpl(Id id, ArrayData* reified_types) {
   auto this_ = newObjImpl(cls, reified_types);
   if (reified_types) vmStack().popC();
   vmStack().pushObjectNoRc(this_);
-  bespoke::profileArrLikeProps(this_);
 }
 
 } // namespace
@@ -4425,7 +4441,7 @@ OPTBLD_INLINE void iopFCallCtor(PC origpc, PC& pc, FCallArgs fca,
   // fcallImpl() will do further checks before spilling the ActRec. If any
   // of these checks fail, make sure it gets decref'd only via ctx.
   tvWriteNull(*vmStack().indC(fca.numInputs() + (kNumActRecCells - 1)));
-  fcallImpl<false>(origpc, pc, fca, func, Object::attach(obj));
+  fcallImpl<false>(origpc, pc, fca, func, Object::attach(obj), true, true);
 }
 
 OPTBLD_INLINE void iopLockObj() {

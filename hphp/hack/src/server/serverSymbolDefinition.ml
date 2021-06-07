@@ -67,9 +67,9 @@ let get_member_def (ctx : Provider_context.t) (x : class_element) =
     let (consts, abs_consts) =
       List.partition_map c.c_consts (fun cc ->
           if Option.is_some cc.cc_expr then
-            `Fst cc
+            First cc
           else
-            `Snd cc)
+            Second cc)
     in
     let name_matches cc = String.equal (snd cc.cc_id) member_name in
     let res =
@@ -185,7 +185,7 @@ let go ctx ast result =
           result.SymbolOccurrence.pos
     end
   | SymbolOccurrence.Attribute _ -> None
-  | SymbolOccurrence.EnumAtom (class_name, _member_name) ->
+  | SymbolOccurrence.EnumClassLabel (class_name, _member_name) ->
     summarize_class_typedef ctx class_name
 
 let get_definition_cst_node_from_pos ctx entry kind pos =
@@ -206,6 +206,7 @@ let get_definition_cst_node_from_pos ctx entry kind pos =
         | (SymbolDefinition.Class, SyntaxKind.ClassishDeclaration)
         | (SymbolDefinition.Method, SyntaxKind.MethodishDeclaration)
         | (SymbolDefinition.Property, SyntaxKind.PropertyDeclaration)
+        | (SymbolDefinition.Property, SyntaxKind.XHPClassAttribute)
         | (SymbolDefinition.RecordDef, SyntaxKind.RecordDeclaration)
         | (SymbolDefinition.Const, SyntaxKind.ConstDeclaration)
         | (SymbolDefinition.Enum, SyntaxKind.EnumDeclaration)

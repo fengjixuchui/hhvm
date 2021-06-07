@@ -199,8 +199,8 @@ inline void ArrayData::onSetEvalScalar() {
 
 NO_PROFILING
 inline ArrayData* ArrayData::makeUncounted(
-    DataWalker::PointerMap* seen, bool hasApcTv) {
-  return g_array_funcs.makeUncounted[kind()](this, seen, hasApcTv);
+    const MakeUncountedEnv& env, bool hasApcTv) {
+  return g_array_funcs.makeUncounted[kind()](this, env, hasApcTv);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -249,30 +249,35 @@ inline TypedValue ArrayData::get(const StringData* k) const {
   return g_array_funcs.nvGetStr[kind()](this, k);
 }
 
+NO_PROFILING
 inline TypedValue ArrayData::getThrow(int64_t k) const {
   auto const res = get(k);
   if (!res.is_init()) throw kDummyException;
   return res;
 }
 
+NO_PROFILING
 inline TypedValue ArrayData::getThrow(const StringData* k) const {
   auto const res = get(k);
   if (!res.is_init()) throw kDummyException;
   return res;
 }
 
+NO_PROFILING
 inline TypedValue ArrayData::get(int64_t k, bool error) const {
   auto const result = get(k);
   if (error && !result.is_init()) getNotFound(k);
   return result;
 }
 
+NO_PROFILING
 inline TypedValue ArrayData::get(const StringData* k, bool error) const {
   auto const result = get(k);
   if (error && !result.is_init()) getNotFound(k);
   return result;
 }
 
+NO_PROFILING
 inline TypedValue ArrayData::get(TypedValue k, bool error) const {
   assertx(IsValidKey(k));
   return detail::isIntKey(k) ? get(detail::getIntKey(k), error)

@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<ea5c28e946353201951cee83edb11abb>>
+// @generated SignedSource<<319e66303d478db900af50684c882c73>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -78,6 +78,7 @@ pub struct GlobalOptions {
     pub tco_simple_pessimize: f64,
     pub tco_complex_coercion: bool,
     pub tco_disable_partially_abstract_typeconsts: bool,
+    pub tco_disallow_partially_abstract_typeconst_definitions: bool,
     pub error_codes_treated_strictly: i_set::ISet,
     pub tco_check_xhp_attribute: bool,
     pub tco_check_redundant_generics: bool,
@@ -109,6 +110,8 @@ pub struct GlobalOptions {
     pub symbol_write_hhi_path: String,
     pub symbol_write_ignore_paths: Vec<String>,
     pub symbol_write_index_paths: Vec<String>,
+    pub symbol_write_index_paths_file: Option<String>,
+    pub symbol_write_index_paths_file_output: Option<String>,
     pub symbol_write_include_hhi: bool,
     pub po_disallow_func_ptrs_in_constants: bool,
     pub tco_error_php_lambdas: bool,
@@ -130,6 +133,7 @@ pub struct GlobalOptions {
     pub po_disallow_hash_comments: bool,
     pub po_disallow_fun_and_cls_meth_pseudo_funcs: bool,
     pub po_disallow_inst_meth: bool,
+    pub po_escape_brace: bool,
     pub tco_use_direct_decl_parser: bool,
     pub tco_ifc_enabled: Vec<String>,
     pub po_enable_enum_supertyping: bool,
@@ -139,7 +143,11 @@ pub struct GlobalOptions {
     pub tco_ignore_unsafe_cast: bool,
     pub tco_readonly: bool,
     pub tco_enable_expression_trees: bool,
+    pub tco_enable_modules: bool,
     pub tco_allowed_expression_tree_visitors: Vec<String>,
-    pub tco_bitwise_math_new_code: bool,
-    pub tco_inc_dec_new_code: bool,
+    pub tco_math_new_code: bool,
+    pub tco_typeconst_concrete_concrete_error: bool,
+    pub tco_meth_caller_only_public_visibility: bool,
+    pub tco_require_extends_implements_ancestors: bool,
+    pub tco_strict_value_equality: bool,
 }

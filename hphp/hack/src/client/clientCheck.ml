@@ -16,6 +16,9 @@ module Rpc = ServerCommandTypes
 module SyntaxTree =
   Full_fidelity_syntax_tree.WithSyntax (Full_fidelity_positioned_syntax)
 
+(** This is initialized at the start of [main] *)
+let ref_local_config : ServerLocalConfig.t option ref = ref None
+
 module SaveStateResultPrinter = ClientResultPrinter.Make (struct
   type t = SaveStateServiceTypes.save_state_result
 
@@ -132,6 +135,7 @@ let connect ?(use_priority_pipe = false) args =
       {
         root;
         from;
+        local_config = Option.value_exn !ref_local_config;
         autostart;
         force_dormant_start;
         deadline;
@@ -207,12 +211,16 @@ let filter_real_paths paths =
         prerr_endlinef "Could not find file '%s'" fn;
         None)
 
-let main (args : client_check_env) : Exit_status.t Lwt.t =
+let main (args : client_check_env) (local_config : ServerLocalConfig.t) :
+    Exit_status.t Lwt.t =
+  ref_local_config := Some local_config;
+  (* That's a hack, just to avoid having to pass local_config into loads of callsites
+  in this module. *)
   let mode_s = ClientEnv.mode_to_string args.mode in
   HackEventLogger.set_from args.from;
   HackEventLogger.client_set_mode mode_s;
 
-  HackEventLogger.client_check ();
+  HackEventLogger.client_check_start ();
 
   let%lwt (exit_status, telemetry) =
     match args.mode with
@@ -494,6 +502,46 @@ let main (args : client_check_env) : Exit_status.t Lwt.t =
       in
       ClientTypeErrorAtPos.go ty args.output_json;
       Lwt.return (Exit_status.No_error, telemetry)
+    | MODE_TAST_HOLES arg ->
+      let parse_hole_filter = function
+        | "any" -> Some Rpc.Tast_hole.Any
+        | "typing" -> Some Rpc.Tast_hole.Typing
+        | "cast" -> Some Rpc.Tast_hole.Cast
+        | _ -> None
+      in
+
+      let (filename, hole_src_opt) =
+        try
+          match Str.(split (regexp ":") arg) with
+          | [filename; filter_str] ->
+            let fn = expand_path filename in
+            (match parse_hole_filter filter_str with
+            | Some filter -> (ServerCommandTypes.FileName fn, filter)
+            | _ -> raise Exit)
+          | [part] ->
+            (match parse_hole_filter part with
+            | Some src_opt ->
+              let content = Sys_utils.read_stdin_to_string () in
+              (ServerCommandTypes.FileContent content, src_opt)
+            | _ ->
+              let fn = expand_path part in
+              (* No hole source specified; default to `Typing` *)
+              (ServerCommandTypes.FileName fn, Rpc.Tast_hole.Typing))
+          | _ -> raise Exit
+        with
+        | Exit ->
+          Printf.eprintf
+            "Invalid argument; expected an argument of the form [filename](:[any|typing|cast])? or [any|typing|cast]\n";
+          raise Exit_status.(Exit_with Input_error)
+        | exn ->
+          Printf.eprintf "An unexpected error occured: %s" (Exn.to_string exn);
+          raise exn
+      in
+      let%lwt (ty, telemetry) =
+        rpc args @@ Rpc.TAST_HOLES (filename, hole_src_opt)
+      in
+      ClientTastHoles.go ty args.output_json;
+      Lwt.return (Exit_status.No_error, telemetry)
     | MODE_FUN_DEPS_AT_POS_BATCH positions ->
       let positions = parse_positions positions in
       let%lwt (responses, telemetry) =
@@ -612,9 +660,14 @@ let main (args : client_check_env) : Exit_status.t Lwt.t =
           args.error_format
           args.max_errors
       in
-      Lwt.return
-        ( exit_status,
-          Telemetry.object_ telemetry ~key:"no_prechecked" ~value:telemetry1 )
+      let telemetry =
+        telemetry
+        |> Telemetry.object_ ~key:"no_prechecked" ~value:telemetry1
+        |> Telemetry.object_opt
+             ~key:"last_recheck_stats"
+             ~value:status.Rpc.Server_status.last_recheck_stats
+      in
+      Lwt.return (exit_status, telemetry)
     | MODE_STATUS_SINGLE filename ->
       let file_input =
         match filename with
@@ -643,6 +696,48 @@ let main (args : client_check_env) : Exit_status.t Lwt.t =
           args.max_errors
       in
       Lwt.return (exit_status, telemetry)
+    | MODE_STATUS_REMOTE_EXECUTION ->
+      let%lwt ((error_list, dropped_count), telemetry) =
+        rpc args (Rpc.STATUS_REMOTE_EXECUTION args.max_errors)
+      in
+      let status =
+        {
+          error_list;
+          dropped_count;
+          Rpc.Server_status.liveness = Rpc.Live_status;
+          has_unsaved_changes = false;
+          last_recheck_stats = None;
+        }
+      in
+      let exit_status =
+        ClientCheckStatus.go
+          status
+          args.output_json
+          args.from
+          args.error_format
+          args.max_errors
+      in
+      Lwt.return (exit_status, telemetry)
+    | MODE_STATUS_SINGLE_REMOTE_EXECUTION filename ->
+      let file_input = expand_path filename in
+      let%lwt ((error_list, deps), telemetry) =
+        rpc args (Rpc.STATUS_SINGLE_REMOTE_EXECUTION file_input)
+      in
+      print_endline "DISCOVERED DEP EDGES:";
+      print_endline deps;
+      print_endline "ERRORS:";
+      print_endline error_list;
+      Lwt.return (Exit_status.No_error, telemetry)
+    | MODE_STATUS_MULTI_REMOTE_EXECUTION ->
+      let paths = filter_real_paths args.paths in
+      let%lwt ((error_list, deps), telemetry) =
+        rpc args (Rpc.STATUS_MULTI_REMOTE_EXECUTION paths)
+      in
+      print_endline "DISCOVERED DEP EDGES:";
+      print_endline deps;
+      print_endline "ERRORS:";
+      print_endline error_list;
+      Lwt.return (Exit_status.No_error, telemetry)
     | MODE_SEARCH (query, type_) ->
       let%lwt (results, telemetry) = rpc args @@ Rpc.SEARCH (query, type_) in
       ClientSearch.go results args.output_json;
@@ -889,5 +984,5 @@ let main (args : client_check_env) : Exit_status.t Lwt.t =
       let%lwt ((), telemetry) = rpc args @@ Rpc.VERBOSE verbose in
       Lwt.return (Exit_status.No_error, telemetry)
   in
-  HackEventLogger.client_check_finish exit_status telemetry;
+  HackEventLogger.client_check exit_status telemetry;
   Lwt.return exit_status

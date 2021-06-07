@@ -39,13 +39,15 @@ type subdecl_kind =
   | Kind
   | Is_xhp
   | Name
+  | Module
   | Pos
   | Tparams
   | Where_constraints
   | Enum_type
+  | Xhp_enum_values
   | Sealed_whitelist
   | Decl_errors
-  | Implements_dynamic
+  | Support_dynamic_type
   (* Lazy *)
   | Linearization
   | Construct

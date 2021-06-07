@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<818c988502579bceff20743df01d00ce>>
+// @generated SignedSource<<4afacd48b4e84aae405cb941954f021f>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -16,6 +16,28 @@ use crate::{
     aast_defs::*, ast_defs::*, direct_decl_parser::*, shallow_decl_defs::*, t_shape_map::*,
     typing_defs::*, typing_defs_core::*, typing_reason::*,
 };
+impl<'a> Node<'a> for AbstractTypeconst<'a> {
+    fn accept(&'a self, v: &mut dyn Visitor<'a>) {
+        v.visit_abstract_typeconst(self)
+    }
+    fn recurse(&'a self, v: &mut dyn Visitor<'a>) {
+        match self {
+            AbstractTypeconst {
+                as_constraint: ref __binding_0,
+                super_constraint: ref __binding_1,
+                default: ref __binding_2,
+            } => {
+                {
+                    __binding_0.accept(v)
+                }
+                {
+                    __binding_1.accept(v)
+                }
+                { __binding_2.accept(v) }
+            }
+        }
+    }
+}
 impl<'a> Node<'a> for ArgPosition {
     fn accept(&'a self, v: &mut dyn Visitor<'a>) {
         v.visit_arg_position(self)
@@ -102,6 +124,31 @@ impl<'a> Node<'a> for ClassKind {
         }
     }
 }
+impl<'a> Node<'a> for CollectionStyle {
+    fn accept(&'a self, v: &mut dyn Visitor<'a>) {
+        v.visit_collection_style(self)
+    }
+    fn recurse(&'a self, v: &mut dyn Visitor<'a>) {
+        match self {
+            CollectionStyle::VecStyle => {}
+            CollectionStyle::DictStyle => {}
+            CollectionStyle::KeysetStyle => {}
+            CollectionStyle::ArraykeyStyle => {}
+        }
+    }
+}
+impl<'a> Node<'a> for ConcreteTypeconst<'a> {
+    fn accept(&'a self, v: &mut dyn Visitor<'a>) {
+        v.visit_concrete_typeconst(self)
+    }
+    fn recurse(&'a self, v: &mut dyn Visitor<'a>) {
+        match self {
+            ConcreteTypeconst {
+                tc_type: ref __binding_0,
+            } => __binding_0.accept(v),
+        }
+    }
+}
 impl<'a> Node<'a> for ConstDecl<'a> {
     fn accept(&'a self, v: &mut dyn Visitor<'a>) {
         v.visit_const_decl(self)
@@ -162,12 +209,11 @@ impl<'a> Node<'a> for DependentType {
     }
     fn recurse(&'a self, v: &mut dyn Visitor<'a>) {
         match self {
-            DependentType::DTthis => {}
             DependentType::DTexpr(ref __binding_0) => __binding_0.accept(v),
         }
     }
 }
-impl<'a> Node<'a> for Enforcement {
+impl<'a> Node<'a> for Enforcement<'a> {
     fn accept(&'a self, v: &mut dyn Visitor<'a>) {
         v.visit_enforcement(self)
     }
@@ -175,7 +221,7 @@ impl<'a> Node<'a> for Enforcement {
         match self {
             Enforcement::Unenforced => {}
             Enforcement::Enforced => {}
-            Enforcement::PartiallyEnforced => {}
+            Enforcement::PartiallyEnforced(ref __binding_0) => __binding_0.accept(v),
         }
     }
 }
@@ -250,9 +296,11 @@ impl<'a> Node<'a> for FunElt<'a> {
         match self {
             FunElt {
                 deprecated: ref __binding_0,
-                type_: ref __binding_1,
-                pos: ref __binding_2,
-                php_std_lib: ref __binding_3,
+                module: ref __binding_1,
+                type_: ref __binding_2,
+                pos: ref __binding_3,
+                php_std_lib: ref __binding_4,
+                support_dynamic_type: ref __binding_5,
             } => {
                 {
                     __binding_0.accept(v)
@@ -263,7 +311,13 @@ impl<'a> Node<'a> for FunElt<'a> {
                 {
                     __binding_2.accept(v)
                 }
-                { __binding_3.accept(v) }
+                {
+                    __binding_3.accept(v)
+                }
+                {
+                    __binding_4.accept(v)
+                }
+                { __binding_5.accept(v) }
             }
         }
     }
@@ -372,6 +426,24 @@ impl<'a> Node<'a> for IfcFunDecl<'a> {
         }
     }
 }
+impl<'a> Node<'a> for PartiallyAbstractTypeconst<'a> {
+    fn accept(&'a self, v: &mut dyn Visitor<'a>) {
+        v.visit_partially_abstract_typeconst(self)
+    }
+    fn recurse(&'a self, v: &mut dyn Visitor<'a>) {
+        match self {
+            PartiallyAbstractTypeconst {
+                constraint: ref __binding_0,
+                type_: ref __binding_1,
+            } => {
+                {
+                    __binding_0.accept(v)
+                }
+                { __binding_1.accept(v) }
+            }
+        }
+    }
+}
 impl<'a> Node<'a> for PosByteString<'a> {
     fn accept(&'a self, v: &mut dyn Visitor<'a>) {
         v.visit_pos_byte_string(self)
@@ -427,11 +499,12 @@ impl<'a> Node<'a> for RecordDefType<'a> {
     fn recurse(&'a self, v: &mut dyn Visitor<'a>) {
         match self {
             RecordDefType {
-                name: ref __binding_0,
-                extends: ref __binding_1,
-                fields: ref __binding_2,
-                abstract_: ref __binding_3,
-                pos: ref __binding_4,
+                module: ref __binding_0,
+                name: ref __binding_1,
+                extends: ref __binding_2,
+                fields: ref __binding_3,
+                abstract_: ref __binding_4,
+                pos: ref __binding_5,
             } => {
                 {
                     __binding_0.accept(v)
@@ -445,7 +518,10 @@ impl<'a> Node<'a> for RecordDefType<'a> {
                 {
                     __binding_3.accept(v)
                 }
-                { __binding_4.accept(v) }
+                {
+                    __binding_4.accept(v)
+                }
+                { __binding_5.accept(v) }
             }
         }
     }
@@ -485,25 +561,27 @@ impl<'a> Node<'a> for ShallowClass<'a> {
                 is_xhp: ref __binding_2,
                 has_xhp_keyword: ref __binding_3,
                 kind: ref __binding_4,
-                name: ref __binding_5,
-                tparams: ref __binding_6,
-                where_constraints: ref __binding_7,
-                extends: ref __binding_8,
-                uses: ref __binding_9,
-                xhp_attr_uses: ref __binding_10,
-                req_extends: ref __binding_11,
-                req_implements: ref __binding_12,
-                implements: ref __binding_13,
-                implements_dynamic: ref __binding_14,
-                consts: ref __binding_15,
-                typeconsts: ref __binding_16,
-                props: ref __binding_17,
-                sprops: ref __binding_18,
-                constructor: ref __binding_19,
-                static_methods: ref __binding_20,
-                methods: ref __binding_21,
-                user_attributes: ref __binding_22,
-                enum_type: ref __binding_23,
+                module: ref __binding_5,
+                name: ref __binding_6,
+                tparams: ref __binding_7,
+                where_constraints: ref __binding_8,
+                extends: ref __binding_9,
+                uses: ref __binding_10,
+                xhp_attr_uses: ref __binding_11,
+                xhp_enum_values: ref __binding_12,
+                req_extends: ref __binding_13,
+                req_implements: ref __binding_14,
+                implements: ref __binding_15,
+                support_dynamic_type: ref __binding_16,
+                consts: ref __binding_17,
+                typeconsts: ref __binding_18,
+                props: ref __binding_19,
+                sprops: ref __binding_20,
+                constructor: ref __binding_21,
+                static_methods: ref __binding_22,
+                methods: ref __binding_23,
+                user_attributes: ref __binding_24,
+                enum_type: ref __binding_25,
             } => {
                 {
                     __binding_0.accept(v)
@@ -574,7 +652,13 @@ impl<'a> Node<'a> for ShallowClass<'a> {
                 {
                     __binding_22.accept(v)
                 }
-                { __binding_23.accept(v) }
+                {
+                    __binding_23.accept(v)
+                }
+                {
+                    __binding_24.accept(v)
+                }
+                { __binding_25.accept(v) }
             }
         }
     }
@@ -672,13 +756,11 @@ impl<'a> Node<'a> for ShallowTypeconst<'a> {
     fn recurse(&'a self, v: &mut dyn Visitor<'a>) {
         match self {
             ShallowTypeconst {
-                abstract_: ref __binding_0,
-                as_constraint: ref __binding_1,
-                super_constraint: ref __binding_2,
-                name: ref __binding_3,
-                type_: ref __binding_4,
-                enforceable: ref __binding_5,
-                reifiable: ref __binding_6,
+                name: ref __binding_0,
+                kind: ref __binding_1,
+                enforceable: ref __binding_2,
+                reifiable: ref __binding_3,
+                is_ctx: ref __binding_4,
             } => {
                 {
                     __binding_0.accept(v)
@@ -692,13 +774,7 @@ impl<'a> Node<'a> for ShallowTypeconst<'a> {
                 {
                     __binding_3.accept(v)
                 }
-                {
-                    __binding_4.accept(v)
-                }
-                {
-                    __binding_5.accept(v)
-                }
-                { __binding_6.accept(v) }
+                { __binding_4.accept(v) }
             }
         }
     }
@@ -833,7 +909,9 @@ impl<'a> Node<'a> for T_<'a> {
             T_::RconcatOperand(ref __binding_0) => __binding_0.accept(v),
             T_::RinterpOperand(ref __binding_0) => __binding_0.accept(v),
             T_::RdynamicCoercion(ref __binding_0) => __binding_0.accept(v),
-            T_::RsoundDynamicCallable(ref __binding_0) => __binding_0.accept(v),
+            T_::RsupportDynamicType(ref __binding_0) => __binding_0.accept(v),
+            T_::RdynamicPartialEnforcement(ref __binding_0) => __binding_0.accept(v),
+            T_::RrigidTvarEscape(ref __binding_0) => __binding_0.accept(v),
         }
     }
 }
@@ -965,18 +1043,19 @@ impl<'a> Node<'a> for Ty_<'a> {
             Ty_::Tdependent(ref __binding_0) => __binding_0.accept(v),
             Ty_::Tobject => {}
             Ty_::Tclass(ref __binding_0) => __binding_0.accept(v),
+            Ty_::Tneg(ref __binding_0) => __binding_0.accept(v),
         }
     }
 }
-impl<'a> Node<'a> for TypeconstAbstractKind<'a> {
+impl<'a> Node<'a> for Typeconst<'a> {
     fn accept(&'a self, v: &mut dyn Visitor<'a>) {
-        v.visit_typeconst_abstract_kind(self)
+        v.visit_typeconst(self)
     }
     fn recurse(&'a self, v: &mut dyn Visitor<'a>) {
         match self {
-            TypeconstAbstractKind::TCAbstract(ref __binding_0) => __binding_0.accept(v),
-            TypeconstAbstractKind::TCPartiallyAbstract => {}
-            TypeconstAbstractKind::TCConcrete => {}
+            Typeconst::TCAbstract(ref __binding_0) => __binding_0.accept(v),
+            Typeconst::TCConcrete(ref __binding_0) => __binding_0.accept(v),
+            Typeconst::TCPartiallyAbstract(ref __binding_0) => __binding_0.accept(v),
         }
     }
 }
@@ -987,11 +1066,12 @@ impl<'a> Node<'a> for TypedefType<'a> {
     fn recurse(&'a self, v: &mut dyn Visitor<'a>) {
         match self {
             TypedefType {
-                pos: ref __binding_0,
-                vis: ref __binding_1,
-                tparams: ref __binding_2,
-                constraint: ref __binding_3,
-                type_: ref __binding_4,
+                module: ref __binding_0,
+                pos: ref __binding_1,
+                vis: ref __binding_2,
+                tparams: ref __binding_3,
+                constraint: ref __binding_4,
+                type_: ref __binding_5,
             } => {
                 {
                     __binding_0.accept(v)
@@ -1005,7 +1085,10 @@ impl<'a> Node<'a> for TypedefType<'a> {
                 {
                     __binding_3.accept(v)
                 }
-                { __binding_4.accept(v) }
+                {
+                    __binding_4.accept(v)
+                }
+                { __binding_5.accept(v) }
             }
         }
     }
@@ -1107,6 +1190,17 @@ impl<'a> Node<'a> for XhpAttrTag {
         match self {
             XhpAttrTag::Required => {}
             XhpAttrTag::Lateinit => {}
+        }
+    }
+}
+impl<'a> Node<'a> for XhpEnumValue<'a> {
+    fn accept(&'a self, v: &mut dyn Visitor<'a>) {
+        v.visit_xhp_enum_value(self)
+    }
+    fn recurse(&'a self, v: &mut dyn Visitor<'a>) {
+        match self {
+            XhpEnumValue::XEVInt(ref __binding_0) => __binding_0.accept(v),
+            XhpEnumValue::XEVString(ref __binding_0) => __binding_0.accept(v),
         }
     }
 }

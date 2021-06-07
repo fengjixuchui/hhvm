@@ -54,6 +54,7 @@
 #include <folly/Bits.h>
 #include <folly/MapUtil.h>
 #include <folly/Optional.h>
+#include <folly/Random.h>
 
 #include <algorithm>
 #include <iostream>
@@ -508,14 +509,8 @@ Class::~Class() {
     for (auto i = 0; i < n; ++i) {
       m_sPropCache[i].~Link();
     }
-
-    auto const bytes = n * sizeof(*m_sPropCache);
-    if (m_useStaticMultiPropCache) {
-      auto const offset = getStaticMultiPropValuesOffset();
-      vm_sized_free(mutStaticMultiPropValues(), bytes + offset);
-    } else {
-      vm_sized_free(m_sPropCache, bytes);
-    }
+    using LinkT = std::remove_pointer<decltype(m_sPropCache)>::type;
+    vm_sized_free(m_sPropCache, n * sizeof(LinkT));
   }
 
   for (auto i = size_t{}, n = numMethods(); i < n; i++) {
@@ -643,11 +638,6 @@ void Class::releaseSProps() {
     if (sProp.cls == this || (sProp.attrs & AttrLSB)) {
       unbindLink(&m_sPropCache[i], rds::SPropCache{this, i});
     }
-  }
-
-  if (m_useStaticMultiPropCache) {
-    auto const cache = mutStaticMultiPropCache();
-    unbindLink(&cache->link, rds::SMultiPropCache{this});
   }
 }
 
@@ -876,7 +866,8 @@ void Class::initProps() const {
     // through the inheritance chain.
     for (auto it = m_pinitVec.rbegin(); it != m_pinitVec.rend(); ++it) {
       DEBUG_ONLY auto retval = g_context->invokeFunc(
-        *it, init_null_variant, nullptr, const_cast<Class*>(this), false
+        *it, init_null_variant, nullptr, const_cast<Class*>(this),
+        RuntimeCoeffects::fixme(), false
       );
       assertx(retval.m_type == KindOfNull);
     }
@@ -932,43 +923,39 @@ void Class::initSProps() const {
 
   initSPropHandles();
 
-  if (m_useStaticMultiPropCache) {
-    auto const cache = getStaticMultiPropCache();
-    auto const bytes = cache->count * sizeof(TypedValue);
-    memcpy16_inline(cache->link.get(), getStaticMultiPropValues(), bytes);
-  } else {
-    // Perform scalar inits.
-    for (Slot slot = 0, n = m_staticProperties.size(); slot < n; ++slot) {
-      auto const& sProp = m_staticProperties[slot];
-      // TODO(T61738946): We can remove the temporary here once we no longer
-      // coerce class_meth types.
-      auto val = sProp.val;
+  // Perform scalar inits.
+  for (Slot slot = 0, n = m_staticProperties.size(); slot < n; ++slot) {
+    auto const& sProp = m_staticProperties[slot];
+    // TODO(T61738946): We can remove the temporary here once we no longer
+    // coerce class_meth types.
+    auto val = sProp.val;
 
-      if ((sProp.cls == this && !m_sPropCache[slot].isPersistent()) ||
-          sProp.attrs & AttrLSB) {
-        if (RuntimeOption::EvalCheckPropTypeHints > 0 &&
-            !(sProp.attrs & (AttrInitialSatisfiesTC|AttrSystemInitialValue)) &&
-            sProp.val.m_type != KindOfUninit) {
-          if (sProp.typeConstraint.isCheckable()) {
-            sProp.typeConstraint.verifyStaticProperty(
-              &val,
-              this,
-              sProp.cls,
-              sProp.name
-            );
-          }
-          if (RuntimeOption::EvalEnforceGenericsUB > 0) {
-            for (auto const& ub : sProp.ubs) {
-              if (ub.isCheckable()) {
-                ub.verifyStaticProperty(&val, this, sProp.cls, sProp.name);
-              }
+    if ((sProp.cls == this && !m_sPropCache[slot].isPersistent()) ||
+        sProp.attrs & AttrLSB) {
+      if (RuntimeOption::EvalCheckPropTypeHints > 0 &&
+          !(sProp.attrs & (AttrInitialSatisfiesTC|AttrSystemInitialValue)) &&
+          sProp.val.m_type != KindOfUninit) {
+        if (sProp.typeConstraint.isCheckable()) {
+          sProp.typeConstraint.verifyStaticProperty(
+            &val,
+            this,
+            sProp.cls,
+            sProp.name
+          );
+        }
+        if (RuntimeOption::EvalEnforceGenericsUB > 0) {
+          for (auto const& ub : sProp.ubs) {
+            if (ub.isCheckable()) {
+              ub.verifyStaticProperty(&val, this, sProp.cls, sProp.name);
             }
           }
         }
-        m_sPropCache[slot]->val = val;
       }
+      m_sPropCache[slot]->val = val;
     }
   }
+
+  bespoke::profileArrLikeStaticProps(this);
 
   // If there are non-scalar initializers (i.e. 86sinit or 86linit methods),
   // run them now.
@@ -977,14 +964,14 @@ void Class::initSProps() const {
     for (unsigned i = 0, n = m_sinitVec.size(); i < n; i++) {
       DEBUG_ONLY auto retval = g_context->invokeFunc(
         m_sinitVec[i], init_null_variant, nullptr, const_cast<Class*>(this),
-        false
+        RuntimeCoeffects::fixme(), false
       );
       assertx(retval.m_type == KindOfNull);
     }
     for (unsigned i = 0, n = m_linitVec.size(); i < n; i++) {
       DEBUG_ONLY auto retval = g_context->invokeFunc(
         m_linitVec[i], init_null_variant, nullptr, const_cast<Class*>(this),
-        false
+        RuntimeCoeffects::fixme(), false
       );
       assertx(retval.m_type == KindOfNull);
     }
@@ -1155,23 +1142,6 @@ void Class::initSPropHandles() const {
     }
   }
 
-  rds::Handle multiPropHandle = rds::kUninitHandle;
-  TypedValue* multiPropValues = nullptr;
-  auto cur = 0;
-
-  // Bind the multi-prop handle so we can use it to initialize individual props.
-  // TODO(kshaunak): Perhaps these initialize methods should not be const...
-  if (m_useStaticMultiPropCache) {
-    auto const cls = const_cast<Class*>(this);
-    auto const cache = cls->mutStaticMultiPropCache();
-    cache->link = rds::bind<StaticMultiPropData, rds::Mode::Local>(
-      rds::SMultiPropCache{this},
-      (cache->count - 1) * sizeof(TypedValue)
-    );
-    multiPropHandle = cache->link.handle();
-    multiPropValues = cls->mutStaticMultiPropValues();
-  }
-
   // Bind all the static prop handles.
   for (Slot slot = 0, n = m_staticProperties.size(); slot < n; ++slot) {
     auto& propHandle = m_sPropCache[slot];
@@ -1186,14 +1156,7 @@ void Class::initSPropHandles() const {
         propHandle.bind(rds::Mode::Persistent, rds::SPropCache{this, slot}, tv);
       } else {
         allPersistentHandles = false;
-        if (m_useStaticMultiPropCache) {
-          using LinkT = std::remove_pointer<decltype(m_sPropCache)>::type;
-          propHandle = LinkT(multiPropHandle + cur * sizeof(StaticPropData));
-          multiPropValues[cur] = sProp.val;
-          cur++;
-        } else {
-          propHandle.bind(rds::Mode::Local, rds::SPropCache{this, slot});
-        }
+        propHandle.bind(rds::Mode::Local, rds::SPropCache{this, slot});
       }
     } else {
       auto const realSlot = sProp.cls->lookupSProp(sProp.name);
@@ -1480,7 +1443,7 @@ bool Class::hasClosureCoeffectsProp() const {
   if (!(attrs() & AttrHasClosureCoeffectsProp)) return false;
   assertx(getCachedInvoke()->hasCoeffectRules());
   assertx(getCachedInvoke()->getCoeffectRules().size() == 1);
-  assertx(getCachedInvoke()->getCoeffectRules()[0].isClosureInheritFromParent());
+  assertx(getCachedInvoke()->getCoeffectRules()[0].isClosureParentScope());
   return true;
 }
 
@@ -1498,11 +1461,17 @@ const StaticString s_classname("classname");
 folly::Optional<RuntimeCoeffects>
 Class::clsCtxCnsGet(const StringData* name, bool failIsFatal) const {
   auto const slot = m_constants.findIndex(name);
+  auto const coinflip = []{
+    auto const rate = RO::EvalContextConstantWarningSampleRate;
+    return rate > 0 && folly::Random::rand32(rate) == 0;
+  };
 
   if (slot == kInvalidSlot) {
     if (!failIsFatal) return folly::none;
-    // TODO: Once coeffect migration is done, convert this back to raise_error
-    raise_warning("Context constant %s does not exist", name->data());
+    if (coinflip()) {
+      // TODO: Once coeffect migration is done, convert this back to raise_error
+      raise_warning("Context constant %s does not exist", name->data());
+    }
     return RuntimeCoeffects::full();
   }
   auto const& cns = m_constants[slot];
@@ -1511,10 +1480,12 @@ Class::clsCtxCnsGet(const StringData* name, bool failIsFatal) const {
     raise_error("%s is a %s, looking for a context constant",
                 name->data(), ConstModifiers::show(cns.kind()));
   }
-  if (cns.isAbstract()) {
+  if (cns.isAbstractAndUninit()) {
     if (!failIsFatal) return folly::none;
-    // TODO: Once coeffect migration is done, convert this back to raise_error
-    raise_warning("Context constant %s is abstract", name->data());
+    if (RO::EvalAbstractContextConstantUninitAccess || coinflip()) {
+      // TODO: Once coeffect migration is done, convert this back to raise_error
+      raise_warning("Context constant %s is abstract", name->data());
+    }
     return RuntimeCoeffects::full();
   }
 
@@ -1693,6 +1664,7 @@ TypedValue Class::clsCnsGet(const StringData* clsCnsName,
                const_cast<Class*>(this),
                1,
                args,
+               RuntimeCoeffects::fixme(),
                false,
                false
              );
@@ -1734,7 +1706,7 @@ const TypedValue* Class::cnsNameToTV(const StringData* clsCnsName,
   always_assert(what != ConstModifiers::Kind::Context);
   clsCnsInd = m_constants.findIndex(clsCnsName);
   if (clsCnsInd == kInvalidSlot) return nullptr;
-  if (m_constants[clsCnsInd].isAbstract()) return nullptr;
+  if (m_constants[clsCnsInd].isAbstractAndUninit()) return nullptr;
 
   auto const kind = m_constants[clsCnsInd].kind();
   if (kind != what) return nullptr;
@@ -1749,7 +1721,7 @@ Slot Class::clsCnsSlot(
 ) const {
   auto slot = m_constants.findIndex(name);
   if (slot == kInvalidSlot) return slot;
-  if (!allowAbstract && m_constants[slot].isAbstract()) return kInvalidSlot;
+  if (!allowAbstract && m_constants[slot].isAbstractAndUninit()) return kInvalidSlot;
   return m_constants[slot].kind() == want ? slot : kInvalidSlot;
 }
 
@@ -2299,11 +2271,11 @@ void Class::importTraitConsts(ConstMap::Builder& builder) {
                   existingConst.cls->name()->data());
     }
 
-    if (tConst.isAbstract()) {
+    if (tConst.isAbstractAndUninit()) {
       return;
     }
 
-    if (existingConst.isAbstract()) {
+    if (existingConst.isAbstractAndUninit()) {
       existingConst.cls = tConst.cls;
       existingConst.val = tConst.val;
       return;
@@ -2442,24 +2414,31 @@ void Class::setConstants() {
                     existingConst.cls->name()->data());
       }
 
-      if (iConst.isAbstract()) {
+      if (iConst.isAbstractAndUninit()) {
         continue;
       }
 
       if (existingConst.isAbstract()) {
+        // the case where the incoming constant is abstract without a default is covered above
+        // there are two remaining cases:
+        //   - the incoming constant is abstract with a default
+        //   - the incoming constant is concrete
+        // In both situations, the incoming constant should win, and separate bookkeeping will
+        // cover situations where there are multiple competing defaults.
         existingConst.cls = iConst.cls;
         existingConst.val = iConst.val;
-        continue;
-      }
-
-      if (existingConst.cls != iConst.cls) {
-        raise_error("%s cannot inherit the %s %s from %s, because "
+      } else { // existing is concrete
+        // the existing constant will win over any incoming abstracts and retain a fatal when two
+        // concrete constants collide
+        if (!iConst.isAbstract() && existingConst.cls != iConst.cls) {
+          raise_error("%s cannot inherit the %s %s from %s, because "
                     "it was previously inherited from %s",
                     m_preClass->name()->data(),
                     ConstModifiers::show(iConst.kind()),
                     iConst.name->data(),
                     iConst.cls->name()->data(),
                     existingConst.cls->name()->data());
+        }
       }
     }
   }
@@ -2501,8 +2480,8 @@ void Class::setConstants() {
           }
         }
       }
-      if (preConst->isAbstract() &&
-          !builder[it2->second].isAbstract()) {
+      if (preConst->isAbstractAndUninit() &&
+          !builder[it2->second].isAbstractAndUninit()) {
         raise_error("Cannot re-declare as abstract previously defined "
                     "%s %s::%s in %s",
                     ConstModifiers::show(builder[it2->second].kind()),
@@ -2537,7 +2516,7 @@ void Class::setConstants() {
   if (!(attrs() & (AttrTrait | AttrInterface | AttrAbstract))) {
     for (Slot i = 0; i < builder.size(); i++) {
       const Const& constant = builder[i];
-      if (constant.isAbstract()) {
+      if (constant.isAbstractAndUninit()) {
         raise_error("Class %s contains abstract %s (%s) and "
                     "must therefore be declared abstract or define "
                     "the remaining constants",
@@ -2553,7 +2532,7 @@ void Class::setConstants() {
     (attrs() & (AttrAbstract | AttrFinal)) == (AttrAbstract | AttrFinal)) {
     for (Slot i = 0; i < builder.size(); i++) {
       const Const& constant = builder[i];
-      if (constant.isAbstract()) {
+      if (constant.isAbstractAndUninit()) {
         raise_error(
           "Class %s contains abstract %s (%s) and "
           "therefore cannot be declared 'abstract final'",
@@ -2703,85 +2682,12 @@ void Class::sortOwnPropsInitVec(uint32_t first, uint32_t past,
   }
 }
 
-size_t Class::getStaticMultiPropValuesOffset() const {
-  auto const cache = getStaticMultiPropCache();
-  return cache->count * sizeof(TypedValue) + sizeof(StaticMultiPropCache);
-}
-
-const TypedValue* Class::getStaticMultiPropValues() const {
-  auto const offset = getStaticMultiPropValuesOffset();
-  return reinterpret_cast<const TypedValue*>(
-    reinterpret_cast<const char*>(m_sPropCache) - offset
-  );
-}
-
-const StaticMultiPropCache* Class::getStaticMultiPropCache() const {
-  assertx(m_useStaticMultiPropCache);
-  return reinterpret_cast<const StaticMultiPropCache*>(
-    reinterpret_cast<const char*>(m_sPropCache) - sizeof(StaticMultiPropCache)
-  );
-}
-
-TypedValue* Class::mutStaticMultiPropValues() {
-  return const_cast<TypedValue*>(getStaticMultiPropValues());
-}
-
-StaticMultiPropCache* Class::mutStaticMultiPropCache() {
-  return const_cast<StaticMultiPropCache*>(getStaticMultiPropCache());
-}
-
 void Class::setupSProps() {
-  m_useStaticMultiPropCache = false;
-
   auto const n = m_staticProperties.size();
   if (!n) return;
 
-  // Determine if we should use the multi-prop optimization for this class.
-  Slot numNonPersistentPropHandles = 0;
-  bool allNonPersistentSPropsSatisfyInitialTC = true;
-  auto const usePersistentHandles = shouldUsePersistentHandles(this);
-
-  for (Slot slot = 0; slot < n; ++slot) {
-    auto const& sProp = m_staticProperties[slot];
-
-    if (sProp.cls == this || (sProp.attrs & AttrLSB)) {
-      if (!(usePersistentHandles && (sProp.attrs & AttrPersistent))) {
-        if (!(sProp.attrs & (AttrInitialSatisfiesTC|AttrSystemInitialValue))) {
-          allNonPersistentSPropsSatisfyInitialTC = false;
-          break;
-        }
-        ++numNonPersistentPropHandles;
-      }
-    }
-  }
-
-  m_useStaticMultiPropCache =
-    allNonPersistentSPropsSatisfyInitialTC &&
-    numNonPersistentPropHandles != 0;
-
   using LinkT = std::remove_pointer<decltype(m_sPropCache)>::type;
-
-  auto const bytes = n * sizeof(LinkT);
-
-  if (m_useStaticMultiPropCache) {
-
-    // Pre-allocate space before m_sPropCache to store our optimization data.
-    auto const prefix =
-      numNonPersistentPropHandles * sizeof(TypedValue) +
-      sizeof(StaticMultiPropCache);
-    auto const ptr = reinterpret_cast<char*>(vm_malloc(bytes + prefix));
-    m_sPropCache = reinterpret_cast<LinkT*>(ptr + prefix);
-
-    // Initialize the optimization data, but don't bind the link - that's done
-    // lazily in initSPropHandles, like the single-prop links.
-    auto const cache = mutStaticMultiPropCache();
-    using MultiLinkT = std::remove_pointer<decltype(&cache->link)>::type;
-    new (&cache->link) MultiLinkT;
-    cache->count = numNonPersistentPropHandles;
-
-  } else {
-    m_sPropCache = reinterpret_cast<LinkT*>(vm_malloc(bytes));
-  }
+  m_sPropCache = reinterpret_cast<LinkT*>(vm_malloc(n * sizeof(LinkT)));
 
   for (unsigned i = 0; i < n; ++i) {
     new (&m_sPropCache[i]) LinkT;
@@ -3790,8 +3696,12 @@ void Class::setInterfaceVtables() {
     cursor += nMethods * sizeof(LowPtr<Func>);
     if (vtableVec[slot].vtable != nullptr) {
       raise_error("Static analysis failure: "
-                  "%s was expected to fatal at runtime, but didn't",
-                  m_preClass->name()->data());
+                  "%s was expected to fatal at runtime, but didn't "
+                  "(interfaces %s and %s share slot %d)",
+                  m_preClass->name()->data(),
+                  iface->preClass()->name()->data(),
+                  vtableVec[slot].iface->preClass()->name()->data(),
+                  slot);
     }
     vtableVec[slot].vtable = vtable;
     vtableVec[slot].iface = iface;

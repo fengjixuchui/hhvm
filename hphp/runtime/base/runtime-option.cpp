@@ -51,6 +51,7 @@
 #include "hphp/util/arch.h"
 #include "hphp/util/atomic-vector.h"
 #include "hphp/util/build-info.h"
+#include "hphp/util/bump-mapper.h"
 #include "hphp/util/cpuid.h"
 #include "hphp/util/current-executable.h" // @donotremove
 #include "hphp/util/file-cache.h"
@@ -282,51 +283,28 @@ RepoOptions::getParserEnvironment() const {
 
 std::uint32_t RepoOptions::getCompilerFlags() const {
   std::uint32_t hhbc_flags = 0;
-  if (EmitInstMethPointers) {
-    hhbc_flags |= EMIT_INST_METH_POINTERS;
-  }
-  if (LTRAssign) {
-    hhbc_flags |= LTR_ASSIGN;
-  }
-  if (UVS) {
-    hhbc_flags |= UVS;
-  }
-  if (RuntimeOption::EvalHackArrCompatNotices) {
-    hhbc_flags |= HACK_ARR_COMPAT_NOTICES;
-  }
-  if (RuntimeOption::EvalHackArrDVArrs) {
-    hhbc_flags |= HACK_ARR_DV_ARRS;
-  }
-  if (RuntimeOption::RepoAuthoritative) {
-    hhbc_flags |= AUTHORITATIVE;
-  }
-  if (RuntimeOption::EvalJitEnableRenameFunction) {
-    hhbc_flags |= JIT_ENABLE_RENAME_FUNCTION;
-  }
-  if (RuntimeOption::EvalLogExternCompilerPerf) {
-    hhbc_flags |= LOG_EXTERN_COMPILER_PERF;
-  }
-  if (RuntimeOption::EnableIntrinsicsExtension) {
-    hhbc_flags |= ENABLE_INTRINSICS_EXTENSION;
-  }
-  if (RuntimeOption::DisableNontoplevelDeclarations) {
-    hhbc_flags |= DISABLE_NONTOPLEVEL_DECLARATIONS;
-  }
-  if (RuntimeOption::DisableStaticClosures) {
-    hhbc_flags |= DISABLE_STATIC_CLOSURES;
-  }
-  if (RuntimeOption::EvalEmitClsMethPointers) {
-    hhbc_flags |= EMIT_CLS_METH_POINTERS;
-  }
-  if (RuntimeOption::EvalEmitMethCallerFuncPointers) {
-    hhbc_flags |= EMIT_METH_CALLER_FUNC_POINTERS;
-  }
-  if (RuntimeOption::EvalRxIsEnabled) {
-    hhbc_flags |= RX_IS_ENABLED;
-  }
-  if (RuntimeOption::EvalFoldLazyClassKeys) {
-    hhbc_flags |= FOLD_LAZY_CLASS_KEYS;
-  }
+
+  #define HHBC_FLAGS()                                          \
+    SETFLAGS(LTRAssign, 0)                                      \
+    SETFLAGS(UVS, 1)                                            \
+    SETFLAGS(RuntimeOption::EvalHackArrCompatNotices, 2)        \
+    SETFLAGS(RuntimeOption::EvalHackArrDVArrs, 3)               \
+    SETFLAGS(RuntimeOption::RepoAuthoritative, 4)               \
+    SETFLAGS(RuntimeOption::EvalJitEnableRenameFunction, 5)     \
+    SETFLAGS(RuntimeOption::EvalLogExternCompilerPerf, 6)       \
+    SETFLAGS(RuntimeOption::EnableIntrinsicsExtension, 7)       \
+    SETFLAGS(RuntimeOption::DisableNontoplevelDeclarations, 8)  \
+    SETFLAGS(RuntimeOption::EvalEmitClsMethPointers, 10)        \
+    SETFLAGS(RuntimeOption::EvalEmitMethCallerFuncPointers, 11) \
+    SETFLAGS(RuntimeOption::EvalRxIsEnabled, 12)                \
+    SETFLAGS(RuntimeOption::EvalArrayProvenance, 13)            \
+    SETFLAGS(RuntimeOption::EvalFoldLazyClassKeys, 15)          \
+    SETFLAGS(EmitInstMethPointers,16)                           \
+
+  #define SETFLAGS(flag, n)                                     \
+    if (flag) {hhbc_flags |= 1 << n;}
+    HHBC_FLAGS()
+  #undef SETFLAGS
   return hhbc_flags;
 }
 
@@ -349,66 +327,34 @@ std::uint32_t RepoOptions::getFactsFlags() const {
 
 std::uint32_t RepoOptions::getParserFlags() const {
   std::uint32_t parser_flags = 0;
-  if (AbstractStaticProps) {
-    parser_flags |= ABSTRACT_STATIC_PROPS;
-  }
-  if (AllowNewAttributeSyntax) {
-    parser_flags |= ALLOW_NEW_ATTRIBUTE_SYNTAX;
-  }
-  if (AllowUnstableFeatures) {
-    parser_flags |= ALLOW_UNSTABLE_FEATURES;
-  }
-  if (ConstDefaultFuncArgs) {
-    parser_flags |= CONST_DEFAULT_FUNC_ARGS;
-  }
-  if (ConstStaticProps) {
-    parser_flags |= CONST_STATIC_PROPS;
-  }
-  if (DisableArray) {
-    parser_flags |= DISABLE_ARRAY;
-  }
-  if (DisableArrayCast) {
-    parser_flags |= DISABLE_ARRAY_CAST;
-  }
-  if (DisableArrayTypehint) {
-    parser_flags |= DISABLE_ARRAY_TYPEHINT;
-  }
-  if (DisableLvalAsAnExpression) {
-    parser_flags |= DISABLE_LVAL_AS_AN_EXPRESSION;
-  }
-  if (DisableUnsetClassConst) {
-    parser_flags |= DISABLE_UNSET_CLASS_CONST;
-  }
-  if (DisallowInstMeth) {
-    parser_flags |= DISALLOW_INST_METH;
-  }
-  if (DisableXHPElementMangling) {
-    parser_flags |= DISABLE_XHP_ELEMENT_MANGLING;
-  }
-  if (DisallowFunAndClsMethPseudoFuncs) {
-    parser_flags |= DISALLOW_FUN_AND_CLS_METH_PSEUDO_FUNCS;
-  }
-  if (DisallowFuncPtrsInConstants) {
-    parser_flags |= DISALLOW_FUNC_PTRS_IN_CONSTANTS;
-  }
-  if (DisallowHashComments) {
-    parser_flags |= DISALLOW_HASH_COMMENTS;
-  }
-  if (EnableEnumClasses) {
-    parser_flags |= ENABLE_ENUM_CLASSES;
-  }
-  if (EnableXHPClassModifier) {
-    parser_flags |= ENABLE_XHP_CLASS_MODIFIER;
-  }
-  if (RuntimeOption::EnableClassLevelWhereClauses) {
-    parser_flags |= ENABLE_CLASS_LEVEL_WHERE_CLAUSES;
-  }
-  if (DisallowDynamicMethCallerArgs) {
-    parser_flags |= DISALLOW_DYNAMIC_METH_CALLER_ARGS;
-  }
-  if (EnableReadonlyEnforcement) {
-    parser_flags |= ENABLE_READONLY_ENFORCEMENT;
-  }
+
+  #define PARSER_FLAGS()                                       \
+    SETFLAGS(AbstractStaticProps, 0)                           \
+    SETFLAGS(AllowNewAttributeSyntax, 1)                       \
+    SETFLAGS(AllowUnstableFeatures, 2)                         \
+    SETFLAGS(ConstDefaultFuncArgs, 3)                          \
+    SETFLAGS(ConstStaticProps, 4)                              \
+    SETFLAGS(DisableArray, 5)                                  \
+    SETFLAGS(DisableArrayCast, 6)                              \
+    SETFLAGS(DisableArrayTypehint, 7)                          \
+    SETFLAGS(DisableLvalAsAnExpression, 8)                     \
+    SETFLAGS(DisableUnsetClassConst, 9)                        \
+    SETFLAGS(DisallowInstMeth, 10)                             \
+    SETFLAGS(DisableXHPElementMangling, 11)                    \
+    SETFLAGS(DisallowFunAndClsMethPseudoFuncs, 12)             \
+    SETFLAGS(DisallowFuncPtrsInConstants, 13)                  \
+    SETFLAGS(DisallowHashComments, 14)                         \
+    SETFLAGS(EnableEnumClasses,16)                             \
+    SETFLAGS(EnableXHPClassModifier,17)                        \
+    SETFLAGS(DisallowDynamicMethCallerArgs, 18)                \
+    SETFLAGS(EnableReadonlyEnforcement, 19)                    \
+    SETFLAGS(RuntimeOption::EnableClassLevelWhereClauses, 20)  \
+    SETFLAGS(EscapeBrace, 21)
+
+  #define SETFLAGS(flag, n)                                    \
+    if (flag) {parser_flags |= 1 << n;}
+    PARSER_FLAGS()
+  #undef SETFLAGS
   return parser_flags;
 }
 
@@ -893,6 +839,8 @@ std::map<std::string, std::string> RuntimeOption::IncludeRoots;
 std::map<std::string, std::string> RuntimeOption::AutoloadRoots;
 bool RuntimeOption::AutoloadEnabled;
 std::string RuntimeOption::AutoloadDBPath;
+std::string RuntimeOption::AutoloadDBPerms{"0644"};
+std::string RuntimeOption::AutoloadDBGroup;
 bool RuntimeOption::AutoloadRethrowExceptions = true;
 std::string RuntimeOption::FileCache;
 std::string RuntimeOption::DefaultDocument;
@@ -1011,7 +959,6 @@ uint64_t RuntimeOption::DisableCallUserFunc = 0;
 uint64_t RuntimeOption::DisableCallUserFuncArray = 0;
 uint64_t RuntimeOption::DisableConstant = 0;
 bool RuntimeOption::DisableNontoplevelDeclarations = false;
-bool RuntimeOption::DisableStaticClosures = false;
 bool RuntimeOption::EnableClassLevelWhereClauses = false;
 
 #ifdef HHVM_DYNAMIC_EXTENSION_DIR
@@ -1349,8 +1296,6 @@ int64_t RuntimeOption::PregRecursionLimit = 100000;
 bool RuntimeOption::EnablePregErrorLog = true;
 
 bool RuntimeOption::SimpleXMLEmptyNamespaceMatchesAll = false;
-
-bool RuntimeOption::AllowDuplicateCookies = true;
 
 bool RuntimeOption::EnableHotProfiler = true;
 int RuntimeOption::ProfilerTraceBuffer = 2000000;
@@ -1898,9 +1843,6 @@ void RuntimeOption::Load(
     Config::Bind(DisableNontoplevelDeclarations, ini, config,
                  "Hack.Lang.Phpism.DisableNontoplevelDeclarations",
                  DisableNontoplevelDeclarations);
-    Config::Bind(DisableStaticClosures, ini, config,
-                 "Hack.Lang.Phpism.DisableStaticClosures",
-                 DisableStaticClosures);
     Config::Bind(DisableConstant, ini, config,
                  "Hack.Lang.Phpism.DisableConstant",
                  DisableConstant);
@@ -2068,6 +2010,11 @@ void RuntimeOption::Load(
       low_2m_pages(EvalMaxLowMemHugePages);
       high_2m_pages(EvalMaxHighArenaHugePages);
     }
+#if USE_JEMALLOC_EXTENT_HOOKS
+    g_useTHPUponHugeTLBFailure =
+      Config::GetBool(ini, config, "Eval.UseTHPUponHugeTLBFailure",
+                      g_useTHPUponHugeTLBFailure);
+#endif
     s_enable_static_arena =
       Config::GetBool(ini, config, "Eval.UseTLStaticArena", true);
 
@@ -2502,8 +2449,11 @@ void RuntimeOption::Load(
     IncludeSearchPaths.insert(IncludeSearchPaths.begin(), ".");
 
     Config::Bind(AutoloadEnabled, ini, config, "Autoload.Enabled", false);
-    Config::Bind(AutoloadDBPath, ini, config, "Autoload.DBPath");
-    Config::Bind(AutoloadRethrowExceptions, ini, config, "Autoload.RethrowExceptions", true);
+    Config::Bind(AutoloadDBPath, ini, config, "Autoload.DB.Path");
+    Config::Bind(AutoloadDBPerms, ini, config, "Autoload.DB.Perms", "0644");
+    Config::Bind(AutoloadDBGroup, ini, config, "Autoload.DB.Group");
+    Config::Bind(AutoloadRethrowExceptions, ini, config,
+                 "Autoload.RethrowExceptions", true);
 
     Config::Bind(FileCache, ini, config, "Server.FileCache");
     Config::Bind(DefaultDocument, ini, config, "Server.DefaultDocument",
@@ -2594,8 +2544,6 @@ void RuntimeOption::Load(
                  "Server.LightProcessStrictUser", false);
     Config::Bind(ForceServerNameToHeader, ini, config,
                  "Server.ForceServerNameToHeader");
-    Config::Bind(AllowDuplicateCookies, ini, config,
-                 "Server.AllowDuplicateCookies", false);
     Config::Bind(PathDebug, ini, config, "Server.PathDebug", false);
     Config::Bind(ServerUser, ini, config, "Server.User", "");
     Config::Bind(AllowRunAsRoot, ini, config, "Server.AllowRunAsRoot", false);
@@ -3010,15 +2958,8 @@ void RuntimeOption::Load(
 
   // Bespoke array-likes
 
-  // If we're going to construct bespoke array-likes at runtime, ensure that
-  // we JIT checks for these types as well. We support JIT-ing these checks
-  // even if there are no runtime bespokes as way to test our guard logic.
-  if (RO::EvalBespokeArrayLikeMode == 0) {
-    bespoke::setLoggingEnabled(false);
-  } else {
-    auto const log = !isJitDeserializing();
-    bespoke::setLoggingEnabled(log);
-  }
+  auto const enable_logging = RO::EvalBespokeArrayLikeMode != 0;
+  bespoke::setLoggingEnabled(enable_logging);
   specializeVanillaDestructors();
 
   // Hack Array Compats
@@ -3039,7 +2980,13 @@ void RuntimeOption::Load(
 ///////////////////////////////////////////////////////////////////////////////
 
 uintptr_t lowArenaMinAddr() {
-  return RuntimeOption::EvalLowArenaMinAddr;
+  const char* str = getenv("HHVM_LOW_ARENA_START");
+  if (str == nullptr) return 1u << 30;
+  uintptr_t start = 0;
+  if (sscanf(str, "0x%lx", &start) == 1) return start;
+  if (sscanf(str, "%lu", &start) == 1) return start;
+  fprintf(stderr, "Bad environment variable HHVM_LOW_ARENA_START: %s\n", str);
+  abort();
 }
 
 ///////////////////////////////////////////////////////////////////////////////

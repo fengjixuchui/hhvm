@@ -26,23 +26,23 @@ namespace HPHP { namespace jit { namespace irgen {
 ///////////////////////////////////////////////////////////////////////////////
 
 /*
- * If this bytecode makes use of the layout of any of its array-like inputs,
- * handle the cases where they have some non-vanilla "bespoke" layout. The rest
- * of irgen may assume that these cases never occur.
- *
- * Having this hook allows us to handle these cases in wildly different ways
- * based on runtime flags, profiling vs. optimizing, etc.
+ * Any extra locations that we should guard for a layout-sensitive bytecode.
+ * Right now, this method only considers FCall bytecodes, because all other
+ * layout-sensitive bytecodes already guard their inputs to DataTypeSpecific.
  */
-void handleBespokeInputs(IRGS&, const NormalizedInstruction&,
-                         std::function<void(IRGS&)> emitVanilla);
+jit::vector<Location> guardsForBespoke(const IRGS& env, SrcKey sk);
 
 /*
- * After emitting code for the given SrcKey, call this method to perform any
- * bespoke operations on its output. Typically operates on array constructors.
+ * If this bytecode is a bespoke array source or sink, this dispatch method
+ * will hijack irgen and emit bespoke IR (possibly in addition to vanilla IR).
+ *
+ * In general, for a source or sink, this helper will emit profiling code in
+ * profiling translations and use the chosen layout in optimized translations.
+ * There are lots of special cases, though - see the implementation.
  */
-void handleVanillaOutputs(IRGS&, SrcKey);
+void translateDispatchBespoke(IRGS&, const NormalizedInstruction&,
+                              std::function<void(IRGS&)> emitVanilla);
 
 ///////////////////////////////////////////////////////////////////////////////
 
 }}}
-

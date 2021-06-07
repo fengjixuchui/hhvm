@@ -44,6 +44,9 @@ val get_files_changed_since_baseline :
 
 val get_file_info : t -> Relative_path.t -> FileInfo.t option
 
+exception File_info_not_found
+
+(** Might raise {!File_info_not_found} *)
 val get_file_info_unsafe : t -> Relative_path.t -> FileInfo.t
 
 (** Look up the files declaring the symbols provided in the given set of
@@ -74,11 +77,6 @@ val create : FileInfo.t Relative_path.Map.t -> t
 
 (* The common path for loading a save state from a SQLite database *)
 val load_from_sqlite : Provider_context.t -> string -> t
-
-(* This function is intended for incremental naming table saved state
-    creation. It does not update the reverse naming table, so it should not
-    be used when loading the naming table in type checking scenarios. *)
-val load_from_sqlite_for_batch_update : Provider_context.t -> string -> t
 
 (* This function is intended for applying naming changes relative
   to the source code version on which the naming table was first created.

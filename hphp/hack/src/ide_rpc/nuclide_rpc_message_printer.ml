@@ -51,6 +51,24 @@ let infer_type_error_response_to_json
            expected_type_json;
        ])
 
+let tast_holes_response_to_json holes =
+  let f
+      ( actual_type_str,
+        actual_type_json,
+        expected_type_str,
+        expected_type_json,
+        pos ) =
+    Hh_json.JSON_Object
+      [
+        ("actual_type", Hh_json.string_ actual_type_str);
+        ("full_actual_type", json_of_string actual_type_json);
+        ("expected_type", Hh_json.string_ expected_type_str);
+        ("full_expected_type", json_of_string expected_type_json);
+        ("pos", Pos.multiline_json_no_filename pos);
+      ]
+  in
+  Hh_json.JSON_Array (List.map ~f holes)
+
 let identify_symbol_response_to_json results =
   let get_definition_data = function
     | Some x ->
@@ -75,7 +93,7 @@ let identify_symbol_response_to_json results =
       | Typeconst _ -> "typeconst"
       | GConst -> "global_const"
       | Attribute _ -> "attribute"
-      | EnumAtom _ -> "enum_atom")
+      | EnumClassLabel _ -> "enum_class_label")
   in
   let symbol_to_json (occurrence, definition) =
     let (definition_pos, definition_span, definition_id) =

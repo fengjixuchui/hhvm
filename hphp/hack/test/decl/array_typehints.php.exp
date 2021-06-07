@@ -1,6 +1,6 @@
 [("\\a2",
   (Shallow_decl_defs.Fun
-     { Typing_defs.fe_deprecated = None;
+     { Typing_defs.fe_deprecated = None; fe_module = None;
        fe_type =
        (Rwitness_from_decl ([3:10-12]),
         (Tfun
@@ -18,10 +18,11 @@
              (make_ft_flags FSync ~return_disposable:false
                ~returns_readonly:false ~readonly_this:false);
              ft_ifc_decl = FDPolicied {PUBLIC} }));
-       fe_pos = [3:10-12]; fe_php_std_lib = false }));
+       fe_pos = [3:10-12]; fe_php_std_lib = false;
+       fe_support_dynamic_type = false }));
   ("\\v0",
    (Shallow_decl_defs.Fun
-      { Typing_defs.fe_deprecated = None;
+      { Typing_defs.fe_deprecated = None; fe_module = None;
         fe_type =
         (Rwitness_from_decl ([7:10-12]),
          (Tfun
@@ -36,10 +37,11 @@
               (make_ft_flags FSync ~return_disposable:false
                 ~returns_readonly:false ~readonly_this:false);
               ft_ifc_decl = FDPolicied {PUBLIC} }));
-        fe_pos = [7:10-12]; fe_php_std_lib = false }));
+        fe_pos = [7:10-12]; fe_php_std_lib = false;
+        fe_support_dynamic_type = false }));
   ("\\v1",
    (Shallow_decl_defs.Fun
-      { Typing_defs.fe_deprecated = None;
+      { Typing_defs.fe_deprecated = None; fe_module = None;
         fe_type =
         (Rwitness_from_decl ([11:10-12]),
          (Tfun
@@ -56,10 +58,11 @@
               (make_ft_flags FSync ~return_disposable:false
                 ~returns_readonly:false ~readonly_this:false);
               ft_ifc_decl = FDPolicied {PUBLIC} }));
-        fe_pos = [11:10-12]; fe_php_std_lib = false }));
+        fe_pos = [11:10-12]; fe_php_std_lib = false;
+        fe_support_dynamic_type = false }));
   ("\\d0",
    (Shallow_decl_defs.Fun
-      { Typing_defs.fe_deprecated = None;
+      { Typing_defs.fe_deprecated = None; fe_module = None;
         fe_type =
         (Rwitness_from_decl ([15:10-12]),
          (Tfun
@@ -77,10 +80,11 @@
               (make_ft_flags FSync ~return_disposable:false
                 ~returns_readonly:false ~readonly_this:false);
               ft_ifc_decl = FDPolicied {PUBLIC} }));
-        fe_pos = [15:10-12]; fe_php_std_lib = false }));
+        fe_pos = [15:10-12]; fe_php_std_lib = false;
+        fe_support_dynamic_type = false }));
   ("\\d2",
    (Shallow_decl_defs.Fun
-      { Typing_defs.fe_deprecated = None;
+      { Typing_defs.fe_deprecated = None; fe_module = None;
         fe_type =
         (Rwitness_from_decl ([19:10-12]),
          (Tfun
@@ -98,10 +102,11 @@
               (make_ft_flags FSync ~return_disposable:false
                 ~returns_readonly:false ~readonly_this:false);
               ft_ifc_decl = FDPolicied {PUBLIC} }));
-        fe_pos = [19:10-12]; fe_php_std_lib = false }));
+        fe_pos = [19:10-12]; fe_php_std_lib = false;
+        fe_support_dynamic_type = false }));
   ("\\vd0",
    (Shallow_decl_defs.Fun
-      { Typing_defs.fe_deprecated = None;
+      { Typing_defs.fe_deprecated = None; fe_module = None;
         fe_type =
         (Rwitness_from_decl ([23:10-13]),
          (Tfun
@@ -120,10 +125,11 @@
               (make_ft_flags FSync ~return_disposable:false
                 ~returns_readonly:false ~readonly_this:false);
               ft_ifc_decl = FDPolicied {PUBLIC} }));
-        fe_pos = [23:10-13]; fe_php_std_lib = false }));
+        fe_pos = [23:10-13]; fe_php_std_lib = false;
+        fe_support_dynamic_type = false }));
   ("\\vd1",
    (Shallow_decl_defs.Fun
-      { Typing_defs.fe_deprecated = None;
+      { Typing_defs.fe_deprecated = None; fe_module = None;
         fe_type =
         (Rwitness_from_decl ([27:10-13]),
          (Tfun
@@ -142,10 +148,11 @@
               (make_ft_flags FSync ~return_disposable:false
                 ~returns_readonly:false ~readonly_this:false);
               ft_ifc_decl = FDPolicied {PUBLIC} }));
-        fe_pos = [27:10-13]; fe_php_std_lib = false }));
+        fe_pos = [27:10-13]; fe_php_std_lib = false;
+        fe_support_dynamic_type = false }));
   ("\\vd2",
    (Shallow_decl_defs.Fun
-      { Typing_defs.fe_deprecated = None;
+      { Typing_defs.fe_deprecated = None; fe_module = None;
         fe_type =
         (Rwitness_from_decl ([31:10-13]),
          (Tfun
@@ -163,10 +170,11 @@
               (make_ft_flags FSync ~return_disposable:false
                 ~returns_readonly:false ~readonly_this:false);
               ft_ifc_decl = FDPolicied {PUBLIC} }));
-        fe_pos = [31:10-13]; fe_php_std_lib = false }));
+        fe_pos = [31:10-13]; fe_php_std_lib = false;
+        fe_support_dynamic_type = false }));
   ("\\vd3",
    (Shallow_decl_defs.Fun
-      { Typing_defs.fe_deprecated = None;
+      { Typing_defs.fe_deprecated = None; fe_module = None;
         fe_type =
         (Rwitness_from_decl ([35:10-13]),
          (Tfun
@@ -180,7 +188,8 @@
               (make_ft_flags FSync ~return_disposable:false
                 ~returns_readonly:false ~readonly_this:false);
               ft_ifc_decl = FDPolicied {PUBLIC} }));
-        fe_pos = [35:10-13]; fe_php_std_lib = false }))
+        fe_pos = [35:10-13]; fe_php_std_lib = false;
+        fe_support_dynamic_type = false }))
   ]
 
 They matched!

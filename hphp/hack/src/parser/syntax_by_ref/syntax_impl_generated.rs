@@ -127,7 +127,6 @@ impl<T: LexableToken, V> Syntax<'_, T, V> {
             SyntaxVariant::NullableAsExpression {..} => SyntaxKind::NullableAsExpression,
             SyntaxVariant::ConditionalExpression {..} => SyntaxKind::ConditionalExpression,
             SyntaxVariant::EvalExpression {..} => SyntaxKind::EvalExpression,
-            SyntaxVariant::DefineExpression {..} => SyntaxKind::DefineExpression,
             SyntaxVariant::IssetExpression {..} => SyntaxKind::IssetExpression,
             SyntaxVariant::FunctionCallExpression {..} => SyntaxKind::FunctionCallExpression,
             SyntaxVariant::FunctionPointerExpression {..} => SyntaxKind::FunctionPointerExpression,
@@ -195,7 +194,7 @@ impl<T: LexableToken, V> Syntax<'_, T, V> {
             SyntaxVariant::IntersectionTypeSpecifier {..} => SyntaxKind::IntersectionTypeSpecifier,
             SyntaxVariant::ErrorSyntax {..} => SyntaxKind::ErrorSyntax,
             SyntaxVariant::ListItem {..} => SyntaxKind::ListItem,
-            SyntaxVariant::EnumAtomExpression {..} => SyntaxKind::EnumAtomExpression,
+            SyntaxVariant::EnumClassLabelExpression {..} => SyntaxKind::EnumClassLabelExpression,
         }
     }
 }

@@ -91,13 +91,10 @@ module ExprDepTy = struct
   let make_with_dep_kind env dep_kind ty =
     let (r_dep_ty, dep_ty) = dep_kind in
     let apply env ty =
-      let dep_ty =
-        match dep_ty with
-        | Dep_Cls _ -> DTexpr (Ident.tmp ())
-        | Dep_This -> DTthis
-        | Dep_Expr id -> DTexpr id
-      in
-      (env, mk (r_dep_ty, Tdependent (dep_ty, ty)))
+      match dep_ty with
+      | Dep_Cls _ -> (env, mk (r_dep_ty, Tdependent (DTexpr (Ident.tmp ()), ty)))
+      | Dep_This -> (env, ty)
+      | Dep_Expr id -> (env, mk (r_dep_ty, Tdependent (DTexpr id, ty)))
     in
     let rec make env ty =
       let (env, ty) = Env.expand_type env ty in
@@ -153,7 +150,7 @@ module ExprDepTy = struct
       | ( _,
           ( Tobject | Tnonnull | Tprim _ | Tshape _ | Ttuple _ | Tdynamic
           | Tvarray _ | Tdarray _ | Tvarray_or_darray _ | Tvec_or_dict _
-          | Tfun _ | Tany _ | Tvar _ | Terr ) ) ->
+          | Tfun _ | Tany _ | Tvar _ | Terr | Tneg _ ) ) ->
         (env, ty)
     in
     make env ty

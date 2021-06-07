@@ -52,6 +52,20 @@ impl<'src> SmartConstructors for DirectDeclSmartConstructors<'src> {
         <Self as FlattenSmartConstructors<'src, Self>>::make_list(self, items, offset)
     }
 
+    fn begin_enumerator(&mut self) {
+        <Self as FlattenSmartConstructors<'src, Self>>::begin_enumerator(self)
+    }
+
+    fn begin_enum_class_enumerator(&mut self) {
+        <Self as FlattenSmartConstructors<'src, Self>>::begin_enum_class_enumerator(self)
+    }
+
+    fn begin_constant_declarator(&mut self) {
+        <Self as FlattenSmartConstructors<'src, Self>>::begin_constant_declarator(self)
+    }
+
+
+
     fn make_end_of_file(&mut self, token: Self::R) -> Self::R {
         <Self as FlattenSmartConstructors<'src, Self>>::make_end_of_file(self, token)
     }
@@ -460,16 +474,12 @@ impl<'src> SmartConstructors for DirectDeclSmartConstructors<'src> {
         <Self as FlattenSmartConstructors<'src, Self>>::make_eval_expression(self, keyword, left_paren, argument, right_paren)
     }
 
-    fn make_define_expression(&mut self, keyword: Self::R, left_paren: Self::R, argument_list: Self::R, right_paren: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, Self>>::make_define_expression(self, keyword, left_paren, argument_list, right_paren)
-    }
-
     fn make_isset_expression(&mut self, keyword: Self::R, left_paren: Self::R, argument_list: Self::R, right_paren: Self::R) -> Self::R {
         <Self as FlattenSmartConstructors<'src, Self>>::make_isset_expression(self, keyword, left_paren, argument_list, right_paren)
     }
 
-    fn make_function_call_expression(&mut self, receiver: Self::R, type_args: Self::R, enum_atom: Self::R, left_paren: Self::R, argument_list: Self::R, right_paren: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, Self>>::make_function_call_expression(self, receiver, type_args, enum_atom, left_paren, argument_list, right_paren)
+    fn make_function_call_expression(&mut self, receiver: Self::R, type_args: Self::R, enum_class_label: Self::R, left_paren: Self::R, argument_list: Self::R, right_paren: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, Self>>::make_function_call_expression(self, receiver, type_args, enum_class_label, left_paren, argument_list, right_paren)
     }
 
     fn make_function_pointer_expression(&mut self, receiver: Self::R, type_args: Self::R) -> Self::R {
@@ -732,8 +742,8 @@ impl<'src> SmartConstructors for DirectDeclSmartConstructors<'src> {
         <Self as FlattenSmartConstructors<'src, Self>>::make_list_item(self, item, separator)
     }
 
-    fn make_enum_atom_expression(&mut self, hash: Self::R, expression: Self::R) -> Self::R {
-        <Self as FlattenSmartConstructors<'src, Self>>::make_enum_atom_expression(self, hash, expression)
+    fn make_enum_class_label_expression(&mut self, qualifier: Self::R, hash: Self::R, expression: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, Self>>::make_enum_class_label_expression(self, qualifier, hash, expression)
     }
 
 }

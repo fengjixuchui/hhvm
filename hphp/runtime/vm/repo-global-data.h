@@ -15,9 +15,10 @@
 */
 #pragma once
 
-#include "hphp/runtime/vm/repo.h"
-#include "hphp/runtime/base/repo-auth-type-array.h"
-#include "hphp/runtime/base/repo-autoload-map.h"
+#include "hphp/runtime/base/config.h"
+
+#include <cstdint>
+#include <vector>
 
 namespace HPHP {
 
@@ -28,9 +29,7 @@ namespace HPHP {
  *
  * Only used in RepoAuthoritative mode.  See loadGlobalData().
  */
-struct Repo::GlobalData {
-  GlobalData() {}
-
+struct RepoGlobalData {
   /*
    * Copy of InitialNamedEntityTableSize for hhbbc to use.
    */
@@ -54,7 +53,7 @@ struct Repo::GlobalData {
    * This changes program behavior because this type hints that are checked
    * at runtime will enable additional HHBBC optimizations.
    */
-   bool HardGenericsUB = false;
+  bool HardGenericsUB = false;
 
   /*
    * Indicates whether a repo was compiled with HardPrivatePropInference.
@@ -150,6 +149,9 @@ struct Repo::GlobalData {
   /* Whether passing (lazy) classes to classname can raise a notice */
   bool ClassnameNotices = false;
 
+  /* Whether checking is string on (lazy) classes can raise a notice */
+  bool ClassIsStringNotices = false;
+
   /* Whether implicit class meth conversions can raise a warning */
   bool RaiseClsMethConversionWarning = false;
 
@@ -159,14 +161,24 @@ struct Repo::GlobalData {
   /* Whether implicit coercions for bit ops trigger logs/exceptions */
   int32_t NoticeOnCoerceForBitOp = 0;
 
+  /* New behavior for inheritance of abstract type constants with defaults */
+  bool TypeconstInterfaceInheritanceDefaults = false;
+
   /*
    * The Hack.Lang.StrictArrayFillKeys option the repo was compiled with.
    */
   HackStrictOption StrictArrayFillKeys = HackStrictOption::OFF;
 
-  std::vector<std::pair<std::string,TypedValue>> ConstantFunctions;
+  std::vector<std::pair<std::string,std::string>> ConstantFunctions;
 
-  std::unique_ptr<RepoAutoloadMap> AutoloadMap = nullptr;
+  // Load the appropriate options into their matching
+  // RuntimeOptions. If `loadConstantFuncs' is true, also deserialize
+  // ConstantFunctions and store it in RuntimeOptions (this can only
+  // be done if the memory manager is initialized).
+  void load(bool loadConstantFuncs = true) const;
+
+  // NB: Only use C++ types in this struct because we want to be able
+  // to serde it before memory manager and family are set up.
 
   template<class SerDe> void serde(SerDe& sd) {
     sd(InitialNamedEntityTableSize)
@@ -198,15 +210,18 @@ struct Repo::GlobalData {
       (RaiseClassConversionWarning)
       (ClassPassesClassname)
       (ClassnameNotices)
+      (ClassIsStringNotices)
       (RaiseClsMethConversionWarning)
       (StrictArrayFillKeys)
       (NoticeOnCoerceForStrConcat)
       (NoticeOnCoerceForBitOp)
+      (TypeconstInterfaceInheritanceDefaults)
+      (ConstantFunctions)
       ;
   }
 };
 
-std::string show(const Repo::GlobalData& gd);
+std::string show(const RepoGlobalData& gd);
 
 //////////////////////////////////////////////////////////////////////
 

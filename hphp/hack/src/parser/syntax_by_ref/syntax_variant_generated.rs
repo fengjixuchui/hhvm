@@ -128,7 +128,6 @@ pub enum SyntaxVariant<'a, T, V> {
     NullableAsExpression(&'a NullableAsExpressionChildren<'a, T, V>),
     ConditionalExpression(&'a ConditionalExpressionChildren<'a, T, V>),
     EvalExpression(&'a EvalExpressionChildren<'a, T, V>),
-    DefineExpression(&'a DefineExpressionChildren<'a, T, V>),
     IssetExpression(&'a IssetExpressionChildren<'a, T, V>),
     FunctionCallExpression(&'a FunctionCallExpressionChildren<'a, T, V>),
     FunctionPointerExpression(&'a FunctionPointerExpressionChildren<'a, T, V>),
@@ -196,7 +195,7 @@ pub enum SyntaxVariant<'a, T, V> {
     IntersectionTypeSpecifier(&'a IntersectionTypeSpecifierChildren<'a, T, V>),
     ErrorSyntax(&'a ErrorSyntaxChildren<'a, T, V>),
     ListItem(&'a ListItemChildren<'a, T, V>),
-    EnumAtomExpression(&'a EnumAtomExpressionChildren<'a, T, V>),
+    EnumClassLabelExpression(&'a EnumClassLabelExpressionChildren<'a, T, V>),
 }
 
 #[derive(Debug, Clone)]
@@ -1022,14 +1021,6 @@ pub struct EvalExpressionChildren<'a, T, V> {
 }
 
 #[derive(Debug, Clone)]
-pub struct DefineExpressionChildren<'a, T, V> {
-    pub keyword: Syntax<'a, T, V>,
-    pub left_paren: Syntax<'a, T, V>,
-    pub argument_list: Syntax<'a, T, V>,
-    pub right_paren: Syntax<'a, T, V>,
-}
-
-#[derive(Debug, Clone)]
 pub struct IssetExpressionChildren<'a, T, V> {
     pub keyword: Syntax<'a, T, V>,
     pub left_paren: Syntax<'a, T, V>,
@@ -1041,7 +1032,7 @@ pub struct IssetExpressionChildren<'a, T, V> {
 pub struct FunctionCallExpressionChildren<'a, T, V> {
     pub receiver: Syntax<'a, T, V>,
     pub type_args: Syntax<'a, T, V>,
-    pub enum_atom: Syntax<'a, T, V>,
+    pub enum_class_label: Syntax<'a, T, V>,
     pub left_paren: Syntax<'a, T, V>,
     pub argument_list: Syntax<'a, T, V>,
     pub right_paren: Syntax<'a, T, V>,
@@ -1536,7 +1527,8 @@ pub struct ListItemChildren<'a, T, V> {
 }
 
 #[derive(Debug, Clone)]
-pub struct EnumAtomExpressionChildren<'a, T, V> {
+pub struct EnumClassLabelExpressionChildren<'a, T, V> {
+    pub qualifier: Syntax<'a, T, V>,
     pub hash: Syntax<'a, T, V>,
     pub expression: Syntax<'a, T, V>,
 }

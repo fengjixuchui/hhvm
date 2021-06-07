@@ -113,6 +113,7 @@ let parse_one_file ~(path : Relative_path.t) : si_capture =
       ~disable_legacy_attribute_syntax:false
       ~enable_xhp_class_modifier:false
       ~disable_xhp_element_mangling:false
+      ~disallow_hash_comments:true
       ~filename:path
       ~text
   in
@@ -167,7 +168,7 @@ let parallel_parse
     ~next:(MultiWorker.next workers files)
 
 let entry =
-  WorkerController.register_entry_point ~restore:(fun () ~(worker_id : int) ->
+  WorkerControllerEntryPoint.register ~restore:(fun () ~(worker_id : int) ->
       Hh_logger.set_id (Printf.sprintf "indexBuilder %d" worker_id))
 
 (* Create one worker per cpu *)

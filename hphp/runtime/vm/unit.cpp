@@ -33,6 +33,7 @@
 
 #include <tbb/concurrent_hash_map.h>
 
+#include "hphp/system/systemlib.h"
 #include "hphp/util/alloc.h"
 #include "hphp/util/assertions.h"
 #include "hphp/util/compilation-flags.h"
@@ -114,19 +115,6 @@ std::atomic<size_t> Unit::s_createdUnits{0};
 std::atomic<size_t> Unit::s_liveUnits{0};
 
 ///////////////////////////////////////////////////////////////////////////////
-// MergeInfo.
-
-Unit::MergeInfo* Unit::MergeInfo::alloc(size_t size) {
-  MergeInfo* mi = (MergeInfo*)malloc(
-    sizeof(MergeInfo) + size * sizeof(void*));
-  mi->m_firstHoistablePreClass = 0;
-  mi->m_firstMergeablePreClass = 0;
-  mi->m_mergeablesSize = size;
-  return mi;
-}
-
-
-///////////////////////////////////////////////////////////////////////////////
 // Construction and destruction.
 
 Unit::Unit()
@@ -146,10 +134,7 @@ Unit::~Unit() {
     data_map::deregister(this);
   }
 
-  auto const mi = mergeInfo();
-  if (mi) {
-    for (auto const func : mi->mutableFuncs()) Func::destroy(func);
-  }
+  for (auto const func : funcs()) Func::destroy(func);
 
   // ExecutionContext and the TC may retain references to Class'es, so
   // it is possible for Class'es to outlive their Unit.
@@ -174,8 +159,6 @@ Unit::~Unit() {
       }
     }
   }
-
-  free(mi);
 
   --s_liveUnits;
 }
@@ -465,19 +448,19 @@ Variant Unit::getCns(const StringData* name) {
     func &&
     "The function should have been autoloaded when we loaded the constant");
   return Variant::attach(
-    g_context->invokeFuncFew(func, nullptr, 0, nullptr, false, false)
+    g_context->invokeFuncFew(func, nullptr, 0, nullptr,
+                             RuntimeCoeffects::fixme(), false, false)
   );
 }
 
-void Unit::defCns(Id id) {
-  assertx(id < m_constants.size());
-  auto constant = &m_constants[id];
+void Unit::defCns(const Constant* constant) {
   auto const cnsName = constant->name;
   FTRACE(3, "  Defining def {}\n", cnsName->data());
   auto const cnsVal = constant->val;
 
-  if (constant->attrs & Attr::AttrPersistent &&
-      bindPersistentCns(cnsName, cnsVal)) {
+  if (constant->attrs & Attr::AttrPersistent) {
+    DEBUG_ONLY auto res = bindPersistentCns(cnsName, cnsVal);
+    assertx(res);
     return;
   }
 
@@ -526,23 +509,16 @@ namespace {
 
 TypeAlias typeAliasFromRecordDesc(const PreTypeAlias* thisType,
                                   RecordDesc* rec) {
-  TypeAlias req;
-  req.unit = thisType->unit;
-  req.name = thisType->name;
+  TypeAlias req(thisType);
   req.nullable = thisType->nullable;
   req.type = AnnotType::Record;
   req.rec = rec;
-  req.userAttrs = thisType->userAttrs;
-  assertx(thisType->typeStructure.isDict());
-  req.typeStructure = thisType->typeStructure;
   return req;
 }
 
 TypeAlias typeAliasFromClass(const PreTypeAlias* thisType,
                              Class *klass) {
-  TypeAlias req;
-  req.unit = thisType->unit;
-  req.name = thisType->name;
+  TypeAlias req(thisType);
   req.nullable = thisType->nullable;
   if (isEnum(klass)) {
     // If the class is an enum, pull out the actual base type.
@@ -555,13 +531,10 @@ TypeAlias typeAliasFromClass(const PreTypeAlias* thisType,
     req.type = AnnotType::Object;
     req.klass = klass;
   }
-  req.userAttrs = thisType->userAttrs;
-  assertx(thisType->typeStructure.isDict());
-  req.typeStructure = thisType->typeStructure;
   return req;
 }
 
-TypeAlias resolveTypeAlias(Unit* unit, const PreTypeAlias* thisType) {
+TypeAlias resolveTypeAlias(Unit* unit, const PreTypeAlias* thisType, bool failIsFatal) {
   /*
    * If this type alias is a KindOfObject and the name on the right
    * hand side was another type alias, we will bind the name to the
@@ -574,7 +547,7 @@ TypeAlias resolveTypeAlias(Unit* unit, const PreTypeAlias* thisType) {
    * ensure it exists at this point.
    */
   if (thisType->type != AnnotType::Object) {
-    return TypeAlias::From(*thisType);
+    return TypeAlias::From(thisType);
   }
 
   /*
@@ -599,28 +572,29 @@ TypeAlias resolveTypeAlias(Unit* unit, const PreTypeAlias* thisType) {
   }
 
   if (auto targetTd = targetNE->getCachedTypeAlias()) {
-    return TypeAlias::From(*targetTd, *thisType);
+    return TypeAlias::From(*targetTd, thisType);
   }
 
   if (auto rec = Unit::lookupRecordDesc(targetNE)) {
     return typeAliasFromRecordDesc(thisType, rec);
   }
 
-  if (AutoloadHandler::s_instance->autoloadNamedType(
+  if (failIsFatal &&
+      AutoloadHandler::s_instance->autoloadNamedType(
         StrNR(const_cast<StringData*>(typeName))
       )) {
     if (auto klass = Class::lookup(targetNE)) {
       return typeAliasFromClass(thisType, klass);
     }
     if (auto targetTd = targetNE->getCachedTypeAlias()) {
-      return TypeAlias::From(*targetTd, *thisType);
+      return TypeAlias::From(*targetTd, thisType);
     }
     if (auto rec = Unit::lookupRecordDesc(targetNE)) {
       return typeAliasFromRecordDesc(thisType, rec);
     }
   }
 
-  return TypeAlias::Invalid(*thisType);
+  return TypeAlias::Invalid(thisType);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -652,9 +626,7 @@ const TypeAlias* Unit::loadTypeAlias(const StringData* name,
   return target;
 }
 
-Unit::DefTypeAliasResult Unit::defTypeAlias(Id id, bool failIsFatal) {
-  assertx(id < m_typeAliases.size());
-  auto thisType = &m_typeAliases[id];
+const TypeAlias* Unit::defTypeAlias(const PreTypeAlias* thisType, bool failIsFatal) {
   FTRACE(3, "  Defining type alias {}\n", thisType->name->data());
   auto nameList = NamedEntity::get(thisType->name);
   const StringData* typeName = thisType->value;
@@ -671,53 +643,53 @@ Unit::DefTypeAliasResult Unit::defTypeAlias(Id id, bool failIsFatal) {
     };
     if (nameList->isPersistentTypeAlias()) {
       // We may have cached the fully resolved type in a previous request.
-      if (resolveTypeAlias(this, thisType) != *current) {
-        if (!failIsFatal) return Unit::DefTypeAliasResult::Fail;
+      if (resolveTypeAlias(this, thisType, failIsFatal) != *current) {
+        if (!failIsFatal) return nullptr;
         raiseIncompatible();
       }
-      return Unit::DefTypeAliasResult::Persistent;
+      return current;
     }
     if (!current->compat(*thisType)) {
-      if (!failIsFatal) return Unit::DefTypeAliasResult::Fail;
+      if (!failIsFatal) return nullptr;
       raiseIncompatible();
     }
     assertx(!RO::RepoAuthoritative);
-    return Unit::DefTypeAliasResult::Normal;
+    return current;
   }
 
   // There might also be a class or record with this name already.
   auto existingKind = nameList->checkSameName<PreTypeAlias>();
   if (existingKind) {
-    if (!failIsFatal) return Unit::DefTypeAliasResult::Fail;
+    if (!failIsFatal) return nullptr;
     FrameRestore _(thisType);
     raise_error("The name %s is already defined as a %s",
                 thisType->name->data(), existingKind);
     not_reached();
   }
 
-  auto resolved = resolveTypeAlias(this, thisType);
+  auto resolved = resolveTypeAlias(this, thisType, failIsFatal);
   if (resolved.invalid) {
-    if (!failIsFatal) return Unit::DefTypeAliasResult::Fail;
+    if (!failIsFatal) return nullptr;
     FrameRestore _(thisType);
     raise_error("Unknown type or class %s", typeName->data());
     not_reached();
   }
 
-  auto const persistent = (thisType->attrs & AttrPersistent) &&
-    (!resolved.klass || classHasPersistentRDS(resolved.klass)) &&
-    (!resolved.rec || recordHasPersistentRDS(resolved.rec));
+  auto const isPersistent = (thisType->attrs & AttrPersistent);
+  if (isPersistent) {
+    assertx(!resolved.klass || classHasPersistentRDS(resolved.klass));
+    assertx(!resolved.rec || recordHasPersistentRDS(resolved.rec));
+  }
 
   nameList->m_cachedTypeAlias.bind(
-    persistent ? rds::Mode::Persistent : rds::Mode::Normal,
+    isPersistent ? rds::Mode::Persistent : rds::Mode::Normal,
     rds::LinkName{"TypeAlias", thisType->name},
     &resolved
   );
-  if (nameList->m_cachedTypeAlias.isPersistent()) {
-    return Unit::DefTypeAliasResult::Persistent;
+  if (!nameList->m_cachedTypeAlias.isPersistent()) {
+    nameList->setCachedTypeAlias(resolved);
   }
-
-  nameList->setCachedTypeAlias(resolved);
-  return Unit::DefTypeAliasResult::Normal;
+  return nameList->getCachedTypeAlias();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -791,90 +763,8 @@ void Unit::initialMerge() {
     data_map::register_start(this);
   }
 
-  int state = 0;
-  bool needsCompact = false;
-  m_mergeState.store(MergeState::Merging, std::memory_order_relaxed);
-
-  auto const mi = m_mergeInfo.load(std::memory_order_relaxed);
-  bool allFuncsUnique = RuntimeOption::RepoAuthoritative;
-  for (auto& func : mi->mutableFuncs()) {
-    if (allFuncsUnique) {
-      allFuncsUnique = (func->attrs() & AttrUnique);
-    }
+  for (auto& func : funcs()) {
     Func::bind(func);
-    if (rds::isPersistentHandle(func->funcHandle())) {
-      needsCompact = true;
-    }
-  }
-  if (allFuncsUnique) state |= MergeState::UniqueFuncs;
-
-  if (RuntimeOption::RepoAuthoritative || !SystemLib::s_inited) {
-    /*
-     * The mergeables array begins with the hoistable Func*s,
-     * followed by the (potentially) hoistable Class*s.
-     *
-     * If the Unit is merge only, it then contains enough information
-     * to simulate executing the pseudomain. Normally, this is just
-     * the Class*s that might not be hoistable. In RepoAuthoritative
-     * mode it also includes assignments of the form:
-     *  $GLOBALS[string-literal] = scalar;
-     * defines of the form:
-     *  define(string-literal, scalar);
-     * and requires.
-     *
-     * These cases are differentiated using the bottom 3 bits
-     * of the pointer. In the case of a define or a global,
-     * the pointer will be followed by a TypedValue representing
-     * the value being defined/assigned.
-     */
-    int ix = mi->m_firstHoistablePreClass;
-    int end = mi->m_firstMergeablePreClass;
-    while (ix < end) {
-      PreClass* pre = (PreClass*)mi->mergeableObj(ix++);
-      if (pre->attrs() & AttrUnique) {
-        needsCompact = true;
-      }
-    }
-
-    ix = mi->m_firstMergeablePreClass;
-    end = mi->m_mergeablesSize;
-    while (ix < end) {
-      void *obj = mi->mergeableObj(ix);
-      auto k = MergeKind(uintptr_t(obj) & 7);
-      switch (k) {
-        case MergeKind::UniqueDefinedClass:
-        case MergeKind::Done:
-          not_reached();
-        case MergeKind::TypeAlias: {
-          auto const aliasId = static_cast<Id>(intptr_t(obj)) >> 3;
-          if (m_typeAliases[aliasId].attrs & AttrPersistent) {
-            needsCompact = true;
-          }
-          break;
-        }
-        case MergeKind::Class:
-          if (static_cast<PreClass*>(obj)->attrs() & AttrUnique) {
-            needsCompact = true;
-          }
-          break;
-        case MergeKind::Record: {
-          auto const recordId = static_cast<Id>(intptr_t(obj)) >> 3;
-          if (m_preRecords[recordId]->attrs() & AttrPersistent) {
-            needsCompact = true;
-          }
-          break;
-        }
-        case MergeKind::Define: {
-          auto const constantId = static_cast<Id>(intptr_t(obj)) >> 3;
-          if (m_constants[constantId].attrs & AttrPersistent) {
-            needsCompact = true;
-          }
-          break;
-        }
-      }
-      ix++;
-    }
-    if (needsCompact) state |= MergeState::NeedsCompact;
   }
 
   if (!RO::RepoAuthoritative && RO::EvalEnablePerFileCoverage) {
@@ -883,17 +773,13 @@ void Unit::initialMerge() {
       rds::LinkName{"UnitCoverage", origFilepath()}
     );
   }
-  m_mergeState.store(MergeState::Merged | state, std::memory_order_relaxed);
+
+  m_mergeState.store(MergeState::InitialMerged, std::memory_order_relaxed);
 }
 
 void Unit::merge() {
-  if (m_mergeState.load(std::memory_order_relaxed) & MergeState::Empty) {
+  if (LIKELY(m_mergeState.load(std::memory_order_relaxed) == MergeState::Merged)) {
     return;
-  }
-  if (UNLIKELY(!(m_mergeState.load(std::memory_order_relaxed) &
-                 MergeState::Merged))) {
-    SimpleLock lock(unitInitLock);
-    initialMerge();
   }
 
   if (m_fatalInfo) {
@@ -902,155 +788,109 @@ void Unit::merge() {
                       m_fatalInfo->m_fatalLoc);
   }
 
+  auto mergeTypes = MergeTypes::Everything;
+  if (UNLIKELY((m_mergeState.load(std::memory_order_relaxed) == MergeState::Unmerged))) {
+    SimpleLock lock(unitInitLock);
+    initialMerge();
+  } else if (!RuntimeOption::RepoAuthoritative && !SystemLib::s_inited && RuntimeOption::EvalJitEnableRenameFunction) {
+    mergeTypes = MergeTypes::Function;
+  }
+
   if (UNLIKELY(isDebuggerAttached())) {
-    mergeImpl<true>(mergeInfo());
+    mergeImpl<true>(mergeTypes);
   } else {
-    mergeImpl<false>(mergeInfo());
+    mergeImpl<false>(mergeTypes);
+  }
+
+  if (RuntimeOption::RepoAuthoritative || (!SystemLib::s_inited && !RuntimeOption::EvalJitEnableRenameFunction)) {
+    m_mergeState.store(MergeState::Merged, std::memory_order_relaxed);
   }
 }
 
-static size_t compactMergeInfo(Unit::MergeInfo* in, Unit::MergeInfo* out,
-                               const Unit::TypeAliasVec& aliasInfo,
-                               const Unit::ConstantVec& constantInfo,
-                               const CompactVector<PreRecordDescPtr>& recordInfo) {
-  using MergeKind = Unit::MergeKind;
+namespace {
+RDS_LOCAL(hphp_fast_set<const Unit*>, rl_mergedUnits);
+}
 
-  Func** it = in->funcBegin();
-  Func** fend = in->funcEnd();
-  Func** iout = nullptr;
-  unsigned ix, end, oix = 0;
+void Unit::logTearing() {
+  assertx(!RO::RepoAuthoritative);
+  assertx(RO::EvalSampleRequestTearing);
+  assertx(g_context);
 
-  if (out) {
-    if (in != out) memcpy(out, in, uintptr_t(it) - uintptr_t(in));
-    iout = out->funcBegin();
-  }
+  auto const repoOptions = g_context->getRepoOptionsForRequest();
+  auto repoRoot = folly::fs::path(repoOptions->path()).parent_path();
 
-  size_t delta = 0;
-  while (it != fend) {
-    Func* func = *it++;
-    if (rds::isPersistentHandle(func->funcHandle())) {
-      delta++;
-    } else if (iout) {
-      *iout++ = func;
+  for (auto const u : *rl_mergedUnits) {
+    assertx(!u->isSystemLib());
+    auto const loaded = lookupUnit(const_cast<StringData*>(u->origFilepath()),
+                                   "", nullptr, Native::s_noNativeFuncs, true);
+
+    if (loaded != u && (!loaded || loaded->sha1() != u->sha1())) {
+      StructuredLogEntry ent;
+
+      auto const tpath = [&] () -> std::string {
+        auto const orig = folly::fs::path(u->origFilepath()->data());
+        if (repoRoot.size() > orig.size()) return orig.native();
+        if (!std::equal(repoRoot.begin(), repoRoot.end(), orig.begin())) {
+          return orig.native();
+        }
+        return orig.lexically_relative(repoRoot).native();
+      }();
+      ent.setStr("filepath", tpath);
+      ent.setStr("same_bc",
+                 loaded && loaded->bcSha1() == u->bcSha1() ? "true" : "false");
+      ent.setStr("removed", loaded ? "false" : "true");
+
+      StructuredLog::log("hhvm_sandbox_file_tearing", ent);
     }
   }
 
-  if (out) {
-    oix = out->m_firstHoistablePreClass -= delta;
+  rl_mergedUnits->clear();
+}
+
+template <typename T, typename I>
+static bool defineSymbols(const T& symbols, boost::dynamic_bitset<>& define, bool failIsFatal, Stats::StatCounter counter, I lambda) {
+  auto i = define.find_first();
+  if (failIsFatal) {
+    if (i == define.npos) i = define.find_first();
   }
 
-  ix = in->m_firstHoistablePreClass;
-  end = in->m_firstMergeablePreClass;
-  for (; ix < end; ++ix) {
-    void* obj = in->mergeableObj(ix);
-    assertx((uintptr_t(obj) & 1) == 0);
-    PreClass* pre = (PreClass*)obj;
-    if (pre->attrs() & AttrUnique) {
-      Class* cls = pre->namedEntity()->clsList();
-      assertx(cls && !cls->m_next);
-      assertx(cls->preClass() == pre);
-      if (rds::isPersistentHandle(cls->classHandle())) {
-        delta++;
-      } else if (out) {
-        out->mergeableObj(oix++) = (void*)(uintptr_t(cls) | 1);
-      }
-    } else if (out) {
-      out->mergeableObj(oix++) = obj;
+  bool madeProgress = false;
+  for (; i != define.npos; i = define.find_next(i)) {
+    auto& symbol = symbols[i];
+    Stats::inc(Stats::UnitMerge_mergeable);
+    Stats::inc(counter);
+    auto res = lambda(symbol);
+    if (res) {
+      define.reset(i);
+      madeProgress = true;
     }
   }
-
-  if (out) {
-    out->m_firstMergeablePreClass = oix;
-  }
-
-  end = in->m_mergeablesSize;
-  while (ix < end) {
-    void* obj = in->mergeableObj(ix++);
-    auto k = MergeKind(uintptr_t(obj) & 7);
-    switch (k) {
-      case MergeKind::Class: {
-        PreClass* pre = (PreClass*)obj;
-        if (pre->attrs() & AttrUnique) {
-          Class* cls = pre->namedEntity()->clsList();
-          assertx(cls && !cls->m_next);
-          assertx(cls->preClass() == pre);
-          if (rds::isPersistentHandle(cls->classHandle())) {
-            delta++;
-          } else if (out) {
-            out->mergeableObj(oix++) = (void*)
-              (uintptr_t(cls) | uintptr_t(MergeKind::UniqueDefinedClass));
-          }
-        } else if (out) {
-          out->mergeableObj(oix++) = obj;
-        }
-        break;
-      }
-      case MergeKind::Record: {
-        auto const recordId = static_cast<Id>(intptr_t(obj)) >> 3;
-        if (recordInfo[recordId]->attrs() & AttrPersistent) {
-          delta++;
-        } else if (out) {
-          out->mergeableObj(oix++) = obj;
-        }
-        break;
-      }
-      case MergeKind::TypeAlias: {
-        auto const aliasId = static_cast<Id>(intptr_t(obj)) >> 3;
-        if (aliasInfo[aliasId].attrs & AttrPersistent) {
-          delta++;
-        } else if (out) {
-          out->mergeableObj(oix++) = obj;
-        }
-        break;
-      }
-      case MergeKind::UniqueDefinedClass:
-        not_reached();
-      case MergeKind::Define: {
-        auto const constantId = static_cast<Id>(intptr_t(obj)) >> 3;
-        if (constantInfo[constantId].attrs & AttrPersistent) {
-          delta++;
-        } else if (out) {
-          out->mergeableObj(oix++) = obj;
-        }
-        break;
-      }
-
-      case MergeKind::Done:
-        not_reached();
-    }
-  }
-  if (out) {
-    // copy the MergeKind::Done marker
-    out->mergeableObj(oix) = in->mergeableObj(ix);
-    out->m_mergeablesSize = oix;
-  }
-  return delta;
+  return madeProgress;
 }
 
 template <bool debugger>
-void Unit::mergeImpl(MergeInfo* mi) {
-  assertx(m_mergeState.load(std::memory_order_relaxed) & MergeState::Merged);
+void Unit::mergeImpl(MergeTypes mergeTypes) {
+  assertx(m_mergeState.load(std::memory_order_relaxed) >= MergeState::InitialMerged);
   autoTypecheck(this);
 
-  FTRACE(1, "Merging unit {} ({} elements to define)\n",
-         this->m_origFilepath->data(), mi->m_mergeablesSize);
+  if (!RO::RepoAuthoritative &&
+      !isSystemLib() &&
+      !origFilepath()->empty() &&
+      g_context && g_context->m_shouldSampleUnitTearing) {
+    rl_mergedUnits->emplace(this);
+  }
 
-  Func** it = mi->funcBegin();
-  Func** fend = mi->funcEnd();
-  if (it != fend) {
-    if (LIKELY((m_mergeState.load(std::memory_order_relaxed) &
-                MergeState::UniqueFuncs) != 0)) {
-      do {
-        Func* func = *it;
-        assertx(func->isUnique());
+  FTRACE(1, "Merging unit {} ({} funcs, {} constants, {} typealieses, {} classes, {} records)\n",
+         this->m_origFilepath->data(), m_funcs.size(), m_constants.size(), m_typeAliases.size(),
+         m_preClasses.size(), m_preRecords.size());
+
+  if (mergeTypes & MergeTypes::Function) {
+    for (auto func : funcs()) {
+      if (func->isUnique()) {
+        assertx(func->isPersistent());
         auto const handle = func->funcHandle();
-        if (rds::isNormalHandle(handle)) {
-          rds::handleToRef<LowPtr<Func>, rds::Mode::Normal>(handle) = func;
-          rds::initHandle(handle);
-        } else {
-          assertx(rds::isPersistentHandle(handle));
-          rds::handleToRef<LowPtr<Func>, rds::Mode::Persistent>(handle) = func;
-        }
+        assertx(rds::isPersistentHandle(handle));
+        rds::handleToRef<LowPtr<Func>, rds::Mode::Persistent>(handle) = func;
 
         auto const ne = func->getNamedEntity();
         auto const f = ne->uniqueFunc();
@@ -1059,249 +899,61 @@ void Unit::mergeImpl(MergeInfo* mi) {
           continue;
         }
         ne->setUniqueFunc(func);
+
         if (debugger) phpDebuggerDefFuncHook(func);
-      } while (++it != fend);
-    } else {
-      do {
-        Func* func = *it;
-        Func::def(func, debugger);
-      } while (++it != fend);
-    }
-  }
-
-  int first = mi->m_firstHoistablePreClass;
-  int end = mi->m_firstMergeablePreClass;
-
-  int ix = first;
-
-  FTRACE(3, "ix: {}, end: {}, total: {}\n", ix, end, mi->m_mergeablesSize);
-
-  boost::dynamic_bitset<> define(mi->m_mergeablesSize - first);
-  // iterate over all the potentially hoistable classes
-  // with no fatals on failure
-  for (; ix < end; ++ix) {
-    // The first time this unit is merged, if the classes turn out to be all
-    // unique and defined, we replace the PreClass*'s with the corresponding
-    // Class*'s, with the low-order bit marked.
-    PreClass* pre = (PreClass*)mi->mergeableObj(ix);
-    if (LIKELY(uintptr_t(pre) & 1)) {
-      Stats::inc(Stats::UnitMerge_hoistable);
-      Class* cls = (Class*)(uintptr_t(pre) & ~1);
-      FTRACE(3, "  Merging cls {}\n", cls->name()->data());
-      auto const handle = cls->classHandle();
-      auto const handle_persistent = rds::isPersistentHandle(handle);
-      if (cls->isPersistent()) {
-        Stats::inc(Stats::UnitMerge_hoistable_persistent);
-      }
-      if (Stats::enabled() && handle_persistent) {
-        Stats::inc(Stats::UnitMerge_hoistable_persistent_cache);
-      }
-      if (Class* parent = cls->parent()) {
-        auto const parent_handle = parent->classHandle();
-        auto const parent_handle_persistent =
-          rds::isPersistentHandle(parent_handle);
-        if (parent->isPersistent()) {
-          Stats::inc(Stats::UnitMerge_hoistable_persistent_parent);
-        }
-        if (Stats::enabled() && parent_handle_persistent) {
-          Stats::inc(Stats::UnitMerge_hoistable_persistent_parent_cache);
-        }
-        auto const parent_cls_present =
-          rds::isHandleInit(parent_handle) &&
-          rds::handleToRef<LowPtr<Class>, rds::Mode::NonLocal>(parent_handle);
-        if (UNLIKELY(!parent_cls_present)) {
-          define.set(ix - first);
-          continue;
-        }
-      }
-      if (handle_persistent) {
-        rds::handleToRef<LowPtr<Class>, rds::Mode::Persistent>(handle) = cls;
       } else {
-        assertx(rds::isNormalHandle(handle));
-        rds::handleToRef<LowPtr<Class>, rds::Mode::Normal>(handle) = cls;
-        rds::initHandle(handle);
+        assertx(func->isPersistent() == ((this->isSystemLib() && !RuntimeOption::EvalJitEnableRenameFunction) || RuntimeOption::RepoAuthoritative));
+        Func::def(func, debugger);
       }
-      if (debugger) phpDebuggerDefClassHook(cls);
-    } else {
-      if (UNLIKELY(!Class::def(pre, false))) define.set(ix - first);
     }
   }
-  // iterate over everything else and add to define set
-  assertx(ix == end);
-  while (ix < mi->m_mergeablesSize) {
-    void* obj = mi->mergeableObj(ix);
-    auto k = MergeKind(uintptr_t(obj) & 7);
-    if (k == MergeKind::Done) break;
-    define.set(ix - first);
-    ix++;
-  }
 
-  FTRACE(4, "  {} top level entities left to define\n", define.count());
+  if (mergeTypes & MergeTypes::NotFunction) {
+    for (auto& constant : m_constants) {
+      Stats::inc(Stats::UnitMerge_mergeable);
+      Stats::inc(Stats::UnitMerge_mergeable_define);
 
-  // iterate over the define set until we can make no progress
-  // if there are still things left to be define, at that point just fatal.
-  bool failIsFatal = false;
-  // We'll exit this while loop either by defining everything or fataling
-  while (!define.none()) {
-    bool madeProgress = false;
-    auto i = define.find_first();
-    if (failIsFatal) {
-      // If we are about to fail, we need to give the error message of first
-      // non hoistable in order maintain backwards compat
-      while (i != define.npos && i < end - first) i = define.find_next(i);
-      if (i == define.npos) i = define.find_first();
+      assertx((!!(constant.attrs & AttrPersistent)) == (this->isSystemLib() || RuntimeOption::RepoAuthoritative));
+      defCns(&constant);
     }
-    for (; i != define.npos; i = define.find_next(i)) {
-      void* obj = mi->mergeableObj(i + first);
 
-      // Consider the above optimization
-      if (i < end - first && UNLIKELY(uintptr_t(obj) & 1)) {
-        Class* cls = (Class*)(uintptr_t(obj) & ~1);
-        if (Class::def(cls->preClass(), failIsFatal)) {
-          madeProgress = true;
-          define.reset(i);
-        }
-        continue;
-      }
+    boost::dynamic_bitset<> preClasses(m_preClasses.size());
+    preClasses.set();
+    boost::dynamic_bitset<> preRecords(m_preRecords.size());
+    preRecords.set();
+    boost::dynamic_bitset<> typeAliases(m_typeAliases.size());
+    typeAliases.set();
 
-      auto k = MergeKind(uintptr_t(obj) & 7);
-      switch (k) {
-        case MergeKind::Class: {
-          Stats::inc(Stats::UnitMerge_mergeable);
-          Stats::inc(Stats::UnitMerge_mergeable_class);
-          auto cls = (PreClass*)obj;
-          assertx(cls->isPersistent() == (this->isSystemLib() || RuntimeOption::RepoAuthoritative));
-          if (Class::def(cls, failIsFatal)) {
-            madeProgress = true;
-            define.reset(i);
-          }
-          continue;
-        }
+    bool failIsFatal = false;
+    do {
+      bool madeProgress = false;
+      madeProgress = defineSymbols(m_preClasses, preClasses, failIsFatal,
+                                   Stats::UnitMerge_mergeable_class,
+                                   [&](const PreClassPtr& preClass) {
+                                     // Anonymous classes doesn't need to be defined because they will be defined when used
+                                     if (PreClassEmitter::IsAnonymousClassName(preClass->name()->toCppString())) {
+                                       return true;
+                                     }
+                                     assertx(preClass->isPersistent() == (this->isSystemLib() || RuntimeOption::RepoAuthoritative));
+                                     return Class::def(preClass.get(), failIsFatal) != nullptr;
+                                   }) || madeProgress;
 
-        case MergeKind::UniqueDefinedClass: {
-          Stats::inc(Stats::UnitMerge_mergeable);
-          Stats::inc(Stats::UnitMerge_mergeable_unique);
-          Class* other = nullptr;
-          Class* cls = (Class*)((char*)obj - (int)k);
-          FTRACE(3, "  Merging cls {}\n", cls->name()->data());
-          auto const handle = cls->classHandle();
-          auto const handle_persistent = rds::isPersistentHandle(handle);
-          if (cls->isPersistent()) {
-            Stats::inc(Stats::UnitMerge_mergeable_unique_persistent);
-          }
-          if (Stats::enabled() && handle_persistent) {
-            Stats::inc(Stats::UnitMerge_mergeable_unique_persistent_cache);
-          }
-          Class::Avail avail = cls->avail(other, true);
-          if (UNLIKELY(avail == Class::Avail::Fail)) {
-            if (!failIsFatal) continue;
-            raise_error("unknown class %s", other->name()->data());
-          }
-          madeProgress = true;
-          define.reset(i);
-          assertx(avail == Class::Avail::True);
-          if (handle_persistent) {
-            rds::handleToRef<LowPtr<Class>,
-                             rds::Mode::Persistent>(handle) = cls;
-          } else {
-            assertx(rds::isNormalHandle(handle));
-            rds::handleToRef<LowPtr<Class>,
-                             rds::Mode::Normal>(handle) = cls;
-            rds::initHandle(handle);
-          }
-          if (debugger) phpDebuggerDefClassHook(cls);
-          continue;
-        }
+      madeProgress = defineSymbols(m_preRecords, preRecords, failIsFatal,
+                                   Stats::UnitMerge_mergeable_record,
+                                   [&](const PreRecordDescPtr& preRecord) {
+                                     assertx(preRecord->isPersistent() == (this->isSystemLib() || RuntimeOption::RepoAuthoritative));
+                                     return defRecordDesc(preRecord.get(), failIsFatal) != nullptr;
+                                   }) || madeProgress;
 
-        case MergeKind::Define: {
-          Stats::inc(Stats::UnitMerge_mergeable);
-          Stats::inc(Stats::UnitMerge_mergeable_define);
-          auto const constantId = static_cast<Id>(intptr_t(obj)) >> 3;
-          defCns(constantId);
-          madeProgress = true;
-          define.reset(i);
-          continue;
-        }
-
-        case MergeKind::TypeAlias: {
-          Stats::inc(Stats::UnitMerge_mergeable);
-          Stats::inc(Stats::UnitMerge_mergeable_typealias);
-          auto const aliasId = static_cast<Id>(intptr_t(obj)) >> 3;
-          auto const def = defTypeAlias(aliasId, failIsFatal);
-          if (def == Unit::DefTypeAliasResult::Fail) continue;
-          if (def == Unit::DefTypeAliasResult::Normal) {
-            auto& attrs = m_typeAliases[aliasId].attrs;
-            if (attrs & AttrPersistent) {
-              attrs = static_cast<Attr>(attrs & ~AttrPersistent);
-            }
-          }
-          madeProgress = true;
-          define.reset(i);
-          continue;
-        }
-
-        case MergeKind::Record: {
-          Stats::inc(Stats::UnitMerge_mergeable);
-          Stats::inc(Stats::UnitMerge_mergeable_record);
-          auto const recordId = static_cast<Id>(intptr_t(obj)) >> 3;
-          auto const r = lookupPreRecordId(recordId);
-          assertx(r->isPersistent() == (this->isSystemLib() || RuntimeOption::RepoAuthoritative));
-          if (defRecordDesc(r, failIsFatal)) {
-            madeProgress = true;
-            define.reset(i);
-          }
-          continue;
-        }
-
-        case MergeKind::Done:
-          not_reached();
-          return;
-      }
-    }
-    if (!madeProgress) failIsFatal = true;
-  }
-
-  if (UNLIKELY(m_mergeState.load(std::memory_order_relaxed) &
-               MergeState::NeedsCompact)) {
-    SimpleLock lock(unitInitLock);
-    if (!(m_mergeState.load(std::memory_order_relaxed) &
-          MergeState::NeedsCompact)) {
-      return;
-    }
-    /*
-     * All the classes are known to be unique, and we just got
-     * here, so all were successfully defined. We can now go
-     * back and convert all MergeKind::Class entries to
-     * MergeKind::UniqueDefinedClass, and all hoistable
-     * classes to their Class*'s instead of PreClass*'s.
-     *
-     * We can also remove any Persistent Class/Func*'s,
-     * and any requires of modules that are (now) empty
-     */
-    size_t delta = compactMergeInfo(mi, nullptr, m_typeAliases,
-                                    m_constants, m_preRecords);
-    MergeInfo* newMi = mi;
-    if (delta) {
-      newMi = MergeInfo::alloc(mi->m_mergeablesSize - delta);
-    }
-    /*
-     * In the case where mi == newMi, there's an apparent
-     * race here. Although we have a lock, so we're the only
-     * ones modifying this, there could be any number of
-     * readers. But thats ok, because it doesnt matter
-     * whether they see the old contents or the new.
-     */
-    compactMergeInfo(mi, newMi, m_typeAliases, m_constants, m_preRecords);
-    if (newMi != mi) {
-      this->m_mergeInfo.store(newMi, std::memory_order_release);
-      Treadmill::deferredFree(mi);
-      if (newMi->m_mergeablesSize == 0) {
-        m_mergeState.fetch_or(MergeState::Empty,
-                              std::memory_order_relaxed);
-      }
-    }
-    m_mergeState.fetch_and(~MergeState::NeedsCompact,
-                           std::memory_order_relaxed);
+      // We do type alias last because they may depend on classes or records that needs to be define first
+      madeProgress = defineSymbols(m_typeAliases, typeAliases, failIsFatal,
+                                   Stats::UnitMerge_mergeable_typealias,
+                                   [&](const PreTypeAlias& typeAlias) {
+                                     assertx((!!(typeAlias.attrs & AttrPersistent)) == (this->isSystemLib() || RuntimeOption::RepoAuthoritative));
+                                     return defTypeAlias(&typeAlias, failIsFatal);
+                                   }) || madeProgress;
+      if (!madeProgress) failIsFatal = true;
+    } while (typeAliases.any() || preClasses.any() || preRecords.any());
   }
 }
 

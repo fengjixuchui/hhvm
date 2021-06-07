@@ -163,37 +163,34 @@ let create_root_from_type_constant ctx env root (_class_pos, class_name) class_
       (* Don't report errors in expanded definition or constraint.
        * These will have been reported at the definition site already. *)
       let ety_env = { ety_env with on_error = Errors.ignore_error } in
-      (match typeconst with
+      (match typeconst.ttc_kind with
       (* Concrete type constants *)
-      | { ttc_type = Some ty; ttc_as_constraint = None; _ } ->
+      | TCConcrete { tc_type = ty } ->
         let (env, ty) = Phase.localize ~ety_env env ty in
         let ty = map_reason ty ~f:(make_reason env id root) in
         (env, Exact ty)
       (* A type constant with default can be seen as abstract or exact, depending
        * on the root and base of the access. *)
-      | {
-       ttc_type = Some ty;
-       ttc_as_constraint = Some _;
-       ttc_super_constraint;
-       _;
-      } ->
+      | TCPartiallyAbstract { patc_type = ty; _ } ->
         let (env, ty) = Phase.localize ~ety_env env ty in
         let ty = map_reason ty ~f:(make_reason env id root) in
         if Cls.final class_ || Option.is_none ctx.base then
           (env, Exact ty)
         else
-          let (env, lower_bounds) = to_tys env ttc_super_constraint in
+          let lower_bounds = TySet.empty in
           let upper_bounds = TySet.singleton ty in
           (env, abstract_or_exact env ~lower_bounds ~upper_bounds)
       (* Abstract type constant without constraint. *)
-      | { ttc_as_constraint = None; ttc_super_constraint = None; _ } ->
+      | TCAbstract { atc_as_constraint = None; atc_super_constraint = None; _ }
+        ->
         ( env,
           abstract_or_exact
             env
             ~lower_bounds:TySet.empty
             ~upper_bounds:TySet.empty )
       (* Abstract type constants with constraint *)
-      | { ttc_as_constraint = upper; ttc_super_constraint = lower; _ } ->
+      | TCAbstract
+          { atc_as_constraint = upper; atc_super_constraint = lower; _ } ->
         let (env, lower_bounds) = to_tys env lower in
         let (env, upper_bounds) = to_tys env upper in
         (env, abstract_or_exact env ~lower_bounds ~upper_bounds)))
@@ -274,7 +271,7 @@ let rec type_of_result ~ignore_errors ctx env root res =
   let type_with_bound env as_tyvar name ~lower_bounds ~upper_bounds =
     match as_tyvar with
     | Some tyvar_pos ->
-      let (env, tvar) = Env.fresh_invariant_type_var env tyvar_pos in
+      let (env, tvar) = Env.fresh_type_invariant env tyvar_pos in
       Log.log_new_tvar_for_tconst_access env tyvar_pos tvar name ctx.id;
       (env, tvar)
     | None ->
@@ -456,7 +453,8 @@ let rec expand ctx env root : _ * result =
   | Ttuple _
   | Tfun _
   | Tdynamic
-  | Toption _ ->
+  | Toption _
+  | Tneg _ ->
     (env, Missing err)
 
 (** Expands a type constant access like A::T to its definition. *)

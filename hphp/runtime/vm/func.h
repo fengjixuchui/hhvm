@@ -29,6 +29,7 @@
 #include "hphp/runtime/vm/indexed-string-map.h"
 #include "hphp/runtime/vm/iter.h"
 #include "hphp/runtime/vm/reified-generics-info.h"
+#include "hphp/runtime/vm/repo-file.h"
 #include "hphp/runtime/vm/type-constraint.h"
 #include "hphp/runtime/vm/unit.h"
 
@@ -93,6 +94,8 @@ struct EHEnt {
   template<class SerDe> void serde(SerDe& sd);
 };
 
+///////////////////////////////////////////////////////////////////////////////
+
 template <typename T, size_t Expected, size_t Actual = sizeof(T)>
 constexpr bool CheckSize() { static_assert(Expected == Actual); return true; };
 
@@ -119,6 +122,7 @@ constexpr bool CheckSize() { static_assert(Expected == Actual); return true; };
 struct Func final {
   friend struct FuncEmitter;
   friend struct FuncRepoProxy;
+  friend struct UnitEmitter;
 
 #ifndef USE_LOWPTR
   // DO NOT access it directly, instead use Func::getFuncVec()
@@ -395,8 +399,6 @@ struct Func final {
    */
   PC entry() const;
   Offset bclen() const;
-
-  PC loadBytecode();
 
   /*
    * Whether a given PC or Offset (from the beginning of the unit) is within
@@ -827,12 +829,6 @@ struct Func final {
   StaticCoeffectNamesMap staticCoeffectNames() const;
 
   /*
-   * Is this the version of the function body with reactivity disabled via
-   * if (Rx\IS_ENABLED) ?
-   */
-  bool isRxDisabled() const;
-
-  /*
    * Does this function use coeffects local to store its ambient coeffects?
    */
   bool hasCoeffectsLocal() const;
@@ -1119,6 +1115,40 @@ struct Func final {
    */
   int8_t& maybeIntercepted() const;
 
+  /*
+   * When function call based coverage is enabled for the current request,
+   * records a call to `this`. The no check version asserts that function
+   * coverage has already been enabled and the function is both eligible to be
+   * covered and has not yet been seen.
+   */
+  void recordCall() const;
+  void recordCallNoCheck() const;
+
+  /*
+   * EnableCoverage enables recording of called functions for the current
+   * request.
+   */
+  static void EnableCoverage();
+
+  /*
+   * GetCoverage returns a keyset of called functions and disables further
+   * coverage for the current request until reenabled by EnableCoverage.
+   */
+  static Array GetCoverage();
+
+  /*
+   * RDS based counter (uint32_t) that when zero indicates coverage is disabled
+   * and when non-zero indicates an index which can be used to short circuit
+   * tests that functions have been covered.
+   */
+  static rds::Handle GetCoverageIndex();
+
+  /*
+   * Get an RDS counter (uint32_t) that can be compared against GetCoverageIndex
+   * to determine if the function has been covered in the current request.
+   */
+  rds::Handle getCoverageHandle() const;
+
   /////////////////////////////////////////////////////////////////////////////
   // Public setters.
   //
@@ -1170,8 +1200,8 @@ struct Func final {
     return offsetof(Func, m_u);
   }
 
-  static constexpr ptrdiff_t sharedInOutBitPtrOff() {
-    return offsetof(SharedData, m_inoutBitPtr);
+  static constexpr ptrdiff_t extSharedInOutBitPtrOff() {
+    return offsetof(ExtendedSharedData, m_inoutBitPtr);
   }
 
   static constexpr ptrdiff_t sharedAllFlags() {
@@ -1229,7 +1259,10 @@ struct Func final {
   // SharedData.
 
 private:
-  using NamedLocalsMap = IndexedStringMap<LowStringPtr, true, Id>;
+  using NamedLocalsMap = IndexedStringMap<LowStringPtr, Id>;
+
+  using BCPtr = TokenOrPtr<unsigned char>;
+  using LineTablePtr = TokenOrPtr<LineTable>;
 
   // Some 16-bit values in SharedData are stored as small deltas if they fit
   // under this limit.  If not, they're set to the limit value and an
@@ -1240,9 +1273,8 @@ private:
    * Properties shared by all clones of a Func.
    */
   struct SharedData : AtomicCountable {
-    SharedData(unsigned char const* bc, Offset bclen, PreClass* preClass,
-               int sn, int line1, int line2, bool isPhpLeafFn,
-               const StringData* docComment);
+    SharedData(BCPtr bc, Offset bclen, PreClass* preClass,
+               int sn, int line1, int line2, bool isPhpLeafFn);
     ~SharedData();
 
     /*
@@ -1257,13 +1289,9 @@ private:
      * here or reorder anything.
      */
     // (There's a 32-bit integer in the AtomicCountable base class here.)
-    std::atomic<unsigned char const*> m_bc{nullptr};
+    LockFreePtrWrapper<BCPtr> m_bc;
     PreClass* m_preClass;
     int m_line1;
-    LowStringPtr m_docComment;
-    // Bits 64 and up of the inout-ness guards (the first 64 bits are in
-    // Func::m_inoutBitVal for faster access).
-    uint64_t* m_inoutBitPtr;
     ParamInfoVec m_params;
     NamedLocalsMap m_localNames;
     EHEntVec m_ehtab;
@@ -1285,7 +1313,6 @@ private:
         bool m_isMemoizeWrapperLSB : true;
         bool m_isPhpLeafFn : true;
         bool m_hasReifiedGenerics : true;
-        bool m_isRxDisabled : true;
         bool m_hasParamsWithMultiUBs : true;
         bool m_hasReturnWithMultiUBs : true;
       };
@@ -1329,9 +1356,11 @@ private:
     uint32_t m_cti_size; // size of cti code
     uint16_t m_numLocals;
     uint16_t m_numIterators;
+
     mutable LockFreePtrWrapper<VMCompactVector<LineInfo>> m_lineMap;
+    mutable LockFreePtrWrapper<LineTablePtr> m_lineTable;
   };
-  static_assert(CheckSize<SharedData, use_lowptr ? 152 : 184>(), "");
+  static_assert(CheckSize<SharedData, use_lowptr ? 152 : 176>(), "");
 
   /*
    * If this Func represents a native function or is exceptionally large
@@ -1348,6 +1377,7 @@ private:
     }
     ExtendedSharedData(const ExtendedSharedData&) = delete;
     ExtendedSharedData(ExtendedSharedData&&) = delete;
+    ~ExtendedSharedData();
 
     ArFunction m_arFuncPtr;
     NativeFunction m_nativeFuncPtr;
@@ -1361,8 +1391,12 @@ private:
     MaybeDataType m_hniReturnType;
     RuntimeCoeffects m_shallowCoeffectsWithLocals{RuntimeCoeffects::none()};
     int64_t m_dynCallSampleRate;
+    // Bits 64 and up of the inout-ness guards (the first 64 bits are in
+    // Func::m_inoutBitVal for faster access).
+    uint64_t* m_inoutBitPtr = nullptr;
+    LowStringPtr m_docComment;
   };
-  static_assert(CheckSize<ExtendedSharedData, use_lowptr ? 272 : 304>(), "");
+  static_assert(CheckSize<ExtendedSharedData, use_lowptr ? 288 : 312>(), "");
 
   /*
    * SharedData accessors for internal use.
@@ -1407,15 +1441,8 @@ private:
     ExtendedLineInfo,
     pointer_hash<SharedData>
   >;
-  using LineTableStash = tbb::concurrent_hash_map<
-    const SharedData*,
-    LineTable,
-    pointer_hash<SharedData>
-  >;
 
   static ExtendedLineInfoCache s_extendedLineInfo;
-
-  static LineTableStash s_lineTables;
 
   /////////////////////////////////////////////////////////////////////////////
   // Internal methods.
@@ -1432,6 +1459,8 @@ private:
                    std::vector<ParamInfo>& pBuilder);
   void finishedEmittingParams(std::vector<ParamInfo>& pBuilder);
   void setNamedEntity(const NamedEntity*);
+
+  PC loadBytecode();
 
   /////////////////////////////////////////////////////////////////////////////
   // Internal types.
@@ -1613,7 +1642,8 @@ public:
    */
   bool getOffsetRange(Offset offset, OffsetRange& range) const;
 
-  void stashLineTable(LineTable table) const;
+  void setLineTable(LineTable);
+  void setLineTable(LineTablePtr::Token);
 
   void stashExtendedLineTable(SourceLocTable table) const;
 
@@ -1622,10 +1652,10 @@ public:
   LineToOffsetRangeVecMap getLineToOffsetRangeVecMap() const;
 
   const LineTable* getLineTable() const;
+  LineTable getOrLoadLineTableCopy() const;
 
 private:
-  const LineTable& loadLineTable() const;
-  void cleanupLocationCache() const;
+  const LineTable& getOrLoadLineTable() const;
 
   /////////////////////////////////////////////////////////////////////////////
   // Constants.
@@ -1775,8 +1805,7 @@ inline tracing::Props traceProps(const Func* f) {
  */
 size_t hhbc_arena_capacity();
 
-const unsigned char*
-allocateBCRegion(const unsigned char* bc, size_t bclen);
+unsigned char* allocateBCRegion(const unsigned char* bc, size_t bclen);
 void freeBCRegion(const unsigned char* bc, size_t bclen);
 
 ///////////////////////////////////////////////////////////////////////////////

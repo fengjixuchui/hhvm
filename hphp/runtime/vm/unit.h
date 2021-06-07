@@ -71,6 +71,17 @@ enum class UnitOrigin {
   Eval = 1
 };
 
+enum MergeTypes : uint8_t {
+  None        = 0,
+  Function    = 1 << 0,
+  NotFunction = 1 << 1,
+  Everything  = 3,
+};
+
+constexpr MergeTypes operator&(MergeTypes a, MergeTypes b) { return MergeTypes((int)a & (int)b); }
+constexpr MergeTypes operator^(MergeTypes a, MergeTypes b) { return MergeTypes((int)a ^ (int)b); }
+constexpr MergeTypes operator~(MergeTypes a) { return MergeTypes((int)MergeTypes::Everything - (int)a); }
+
 /////////////////////////////////////////////////////////////////////////////
 //
 // Fatal info
@@ -144,84 +155,18 @@ private:
    */
   enum MergeState : uint8_t {
     Unmerged      = 0,
-    Merging       = 1 << 0,
-    Merged        = 1 << 1,
-    UniqueFuncs   = 1 << 2,
-    NeedsCompact  = 1 << 3,
-    Empty         = 1 << 5
+    InitialMerged = 1,
+    Merged        = 2,
   };
 
 public:
   /*
-   * Information on all the mergeable defs within a Unit.
-   *
-   * Allocated with a variable-length pointer array in m_mergeables, structured
-   * as follows:
-   *  - the Unit's pseudomain
-   *  - hoistable functions (i.e., toplevel functions that need to be available
-   *    from the beginning of the pseudomain)
-   *  - all other mergeable objects, with the bottom three bits of the pointer
-   *    tagged with a MergeKind
-   */
-  struct MergeInfo {
-    using FuncRange = folly::Range<Func* const*>;
-    using MutableFuncRange = folly::Range<Func**>;
-
-    /*
-     * Allocate a new MergeInfo with `num' mergeables.
-     */
-    static MergeInfo* alloc(size_t num);
-
-    /*
-     * Iterators.
-     *
-     * funcNonMain() is in (funcBegin, funcEnd].
-     */
-    Func** funcBegin() const;
-    Func** funcEnd() const;
-
-    /*
-     * Ranges.
-     *
-     * All ranges end at funcEnd().
-     */
-    FuncRange funcs() const;
-    MutableFuncRange mutableFuncs() const;
-
-    /*
-     * Get a reference or pointer to the mergeable at index `idx'.
-     */
-    void*& mergeableObj(int idx);
-
-    unsigned m_firstHoistablePreClass;
-    unsigned m_firstMergeablePreClass;
-    unsigned m_mergeablesSize;
-    void*    m_mergeables[1];
-  };
-
-  /*
-   * Type of a mergeable object.
-   *
-   * This is encoded in the lowest three bits of a pointer to the object.
-   */
-  enum class MergeKind {
-    Class               = 0,  // Class is required to be 0 for correctness.
-    UniqueDefinedClass  = 1,
-    Define              = 2,  // Toplevel scalar define.
-    TypeAlias           = 3,
-    Record              = 4,
-    Done                = 5,
-    // We can add two more kind here; this has to fit in 3 bits.
-  };
-
-  /*
    * Range types.
    */
-  using FuncRange = MergeInfo::FuncRange;
-  using MutableFuncRange = MergeInfo::MutableFuncRange;
   using PreClassPtrVec = VMCompactVector<PreClassPtr>;
   using TypeAliasVec = VMCompactVector<PreTypeAlias>;
   using ConstantVec = VMFixedVector<Constant>;
+  using FuncVec = VMCompactVector<Func*>;
 
   /////////////////////////////////////////////////////////////////////////////
   // Construction and destruction.
@@ -453,15 +398,22 @@ public:
   Func* lookupFuncId(Id id) const;
   PreClass* lookupPreClassId(Id id) const;
   PreRecordDesc* lookupPreRecordId(Id id) const;
+  const Constant* lookupConstantId(Id id) const;
+  const PreTypeAlias* lookupTypeAliasId(Id id) const;
 
   /*
-   * Range over all Funcs or PreClasses or RecordDescs in the Unit.
+   * Range over all PreClasses or RecordDescs in the Unit.
    */
-  FuncRange funcs() const;
   folly::Range<PreClassPtr*> preclasses();
   folly::Range<const PreClassPtr*> preclasses() const;
   folly::Range<PreRecordDescPtr*> prerecords();
   folly::Range<const PreRecordDescPtr*> prerecords() const;
+
+  /////////////////////////////////////////////////////////////////////////////
+  // Funcs.
+
+  folly::Range<Func**> funcs();
+  folly::Range<Func* const*> funcs() const;
 
   // Return the cached EntryPoint
   Func* getCachedEntryPoint() const;
@@ -527,9 +479,9 @@ public:
   folly::Range<const Constant*> constants() const;
 
   /*
-   * Define the constant given by `id'
+   * Define the constant
    */
-  void defCns(Id id);
+  void defCns(const Constant* constant);
 
   static Variant getCns(const StringData* name);
 
@@ -601,12 +553,9 @@ public:
    * unless failIsFatal is unset
    *
    * Returns:
-   *   Persistent: Type alias is successfully defined and is persistent
-   *   Normal: Type alias is successfully defined and is not persistent
-   *   Fail: Type alias is not successfully defined
+   *   true if we succeeded otherwise false
    */
-  enum class DefTypeAliasResult { Fail, Normal, Persistent };
-  Unit::DefTypeAliasResult defTypeAlias(Id id, bool failIsFatal = true);
+  const TypeAlias* defTypeAlias(const PreTypeAlias* typeAlias, bool failIsFatal = true);
 
   /////////////////////////////////////////////////////////////////////////////
   // File attributes.
@@ -663,6 +612,12 @@ public:
   void setInterpretOnly();
 
   /*
+   * Log any units which were changed on disk after having been loaded by the
+   * current request.
+   */
+  static void logTearing();
+
+  /*
    * Get parse/runtime failure information if this unit is created as
    * a result of one.
    */
@@ -699,12 +654,9 @@ public:
 private:
   void initialMerge();
   template<bool debugger>
-  void mergeImpl(MergeInfo* mi);
+  void mergeImpl(MergeTypes mergeTypes);
   UnitExtended* getExtended();
   const UnitExtended* getExtended() const;
-  MergeInfo* mergeInfo() const {
-    return m_mergeInfo.load(std::memory_order_acquire);
-  }
 
   /////////////////////////////////////////////////////////////////////////////
   // Data members.
@@ -713,7 +665,6 @@ private:
   // without checking perf!
 private:
   LowStringPtr m_origFilepath{nullptr};
-  std::atomic<MergeInfo*> m_mergeInfo{nullptr};
 
   int8_t m_repoId{-1};
   /*
@@ -726,6 +677,7 @@ private:
   bool m_serialized : 1;
   bool m_ICE : 1; // was this unit the result of an internal compiler error
 
+  FuncVec m_funcs;
   PreClassPtrVec m_preClasses;
   TypeAliasVec m_typeAliases;
   ConstantVec m_constants;
@@ -743,7 +695,6 @@ private:
   int64_t m_sn{-1};             // Note: could be 32-bit
   SHA1 m_sha1;
   SHA1 m_bcSha1;
-  VMFixedVector<const ArrayData*> m_arrays;
   UserAttributeMap m_metaData;
   UserAttributeMap m_fileAttributes;
   std::unique_ptr<FatalInfo> m_fatalInfo{nullptr};
@@ -761,6 +712,7 @@ struct UnitExtended : Unit {
   UnitExtended() { m_extended = true; }
 
   NamedEntityPairTable m_namedInfo;
+  VMFixedVector<const ArrayData*> m_arrays;
   ArrayTypeTable m_arrayTypeTable;
 
   // Used by Unit prefetcher:
@@ -776,6 +728,21 @@ struct UnitExtended : Unit {
   std::atomic<int64_t> m_lastTouchRequest{0};
   std::atomic<TouchClock::time_point> m_lastTouchTime{TouchClock::time_point{}};
 };
+
+///////////////////////////////////////////////////////////////////////////////
+// ID helpers.
+
+/*
+ * Unit litstr Id's are all above this mark.
+ */
+constexpr int kUnitIdOffset = 0x40000000;
+
+/*
+ * Functions for differentiating unit-local Id's from global Id's.
+ */
+bool isUnitId(Id id);
+Id encodeUnitId(Id id);
+Id decodeUnitId(Id id);
 
 ///////////////////////////////////////////////////////////////////////////////
 }

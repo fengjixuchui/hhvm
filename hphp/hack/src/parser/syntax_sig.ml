@@ -638,12 +638,6 @@ module type Syntax_S = sig
         eval_argument: t;
         eval_right_paren: t;
       }
-    | DefineExpression of {
-        define_keyword: t;
-        define_left_paren: t;
-        define_argument_list: t;
-        define_right_paren: t;
-      }
     | IssetExpression of {
         isset_keyword: t;
         isset_left_paren: t;
@@ -653,7 +647,7 @@ module type Syntax_S = sig
     | FunctionCallExpression of {
         function_call_receiver: t;
         function_call_type_args: t;
-        function_call_enum_atom: t;
+        function_call_enum_class_label: t;
         function_call_left_paren: t;
         function_call_argument_list: t;
         function_call_right_paren: t;
@@ -1012,9 +1006,10 @@ module type Syntax_S = sig
         list_item: t;
         list_separator: t;
       }
-    | EnumAtomExpression of {
-        enum_atom_hash: t;
-        enum_atom_expression: t;
+    | EnumClassLabelExpression of {
+        enum_class_label_qualifier: t;
+        enum_class_label_hash: t;
+        enum_class_label_expression: t;
       }
 
   val rust_parse :
@@ -1288,8 +1283,6 @@ module type Syntax_S = sig
 
   val make_eval_expression : t -> t -> t -> t -> t
 
-  val make_define_expression : t -> t -> t -> t -> t
-
   val make_isset_expression : t -> t -> t -> t -> t
 
   val make_function_call_expression : t -> t -> t -> t -> t -> t -> t
@@ -1425,7 +1418,7 @@ module type Syntax_S = sig
 
   val make_list_item : t -> t -> t
 
-  val make_enum_atom_expression : t -> t -> t
+  val make_enum_class_label_expression : t -> t -> t -> t
 
   val position : Relative_path.t -> t -> Pos.t option
 
@@ -1639,8 +1632,6 @@ module type Syntax_S = sig
 
   val is_eval_expression : t -> bool
 
-  val is_define_expression : t -> bool
-
   val is_isset_expression : t -> bool
 
   val is_function_call_expression : t -> bool
@@ -1775,7 +1766,7 @@ module type Syntax_S = sig
 
   val is_list_item : t -> bool
 
-  val is_enum_atom_expression : t -> bool
+  val is_enum_class_label_expression : t -> bool
 
   val is_specific_token : TokenKind.t -> t -> bool
 

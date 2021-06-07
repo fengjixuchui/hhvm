@@ -391,6 +391,24 @@ struct UniqueStubs {
    */
   TCA handleSRHelper;
 
+  /*
+   * Handle a request to retranslate the code at the given current location.
+   * See svcreq::handleRetranslate() for more details.
+   *
+   * @reached:  jmp from TC
+   * @context:  func body
+   */
+  TCA handleRetranslate;
+
+  /*
+   * Handle a request to retranslate the current function in optimized mode.
+   * See svcreq::handleRetranslateOpt() for more details.
+   *
+   * @reached:  jmp from TC
+   * @context:  func body
+   */
+  TCA handleRetranslateOpt;
+
   /////////////////////////////////////////////////////////////////////////////
 
   /*
@@ -449,8 +467,8 @@ RegSet interp_one_cf_regs();
 /*
  * Emit code to `v' which jumps to interpHelper with the proper arguments.
  */
-void emitInterpReq(Vout& v, SrcKey sk, FPInvOffset spOff);
-void emitInterpReqNoTranslate(Vout& v, SrcKey sk, FPInvOffset spOff);
+void emitInterpReq(Vout& v, SrcKey sk, SBInvOffset spOff);
+void emitInterpReqNoTranslate(Vout& v, SrcKey sk, SBInvOffset spOff);
 
 ///////////////////////////////////////////////////////////////////////////////
 

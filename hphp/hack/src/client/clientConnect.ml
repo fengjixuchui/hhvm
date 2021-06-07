@@ -8,7 +8,6 @@
  *)
 
 open Hh_prelude
-module SMUtils = ServerMonitorUtils
 
 let log ?tracker ?connection_log_id s =
   let id =
@@ -20,11 +19,10 @@ let log ?tracker ?connection_log_id s =
   | Some id -> Hh_logger.log ("[%s] [client-connect] " ^^ s) id
   | None -> Hh_logger.log ("[client-connect] " ^^ s)
 
-exception Server_hung_up of Exit.finale_data option
-
 type env = {
   root: Path.t;
   from: string;
+  local_config: ServerLocalConfig.t;
   autostart: bool;
   force_dormant_start: bool;
   deadline: float option;
@@ -53,7 +51,7 @@ type conn = {
   t_received_hello: float;
   t_sent_connection_type: float;
   channels: Timeout.in_channel * Out_channel.t;
-  server_finale_file: string;
+  server_specific_files: ServerCommandTypes.server_specific_files;
   conn_progress_callback: (string option -> unit) option;
   conn_root: Path.t;
   conn_deadline: float option;
@@ -83,51 +81,68 @@ let tty_progress_reporter () =
           (Tty.spinner ~angery_reaccs_only ())
       : unit )
 
-(* what is the server doing? or None if nothing *)
-let progress : string ref = ref "connecting"
+(** What is the latest progress message written by the server into a file?
+We store this in a mutable variable, so we can know whether it's changed and hence whether
+to display the warning banner. *)
+let latest_server_progress : ServerCommandTypes.server_progress ref =
+  ref
+    ServerCommandTypes.
+      {
+        server_progress = "connecting";
+        server_warning = None;
+        server_timestamp = 0.;
+      }
 
-(* if the server has something not going right, what? *)
-let progress_warning : string option ref = ref None
-
-let check_progress (root : Path.t) : unit =
-  let tracker = Connection_tracker.create () in
-  log ~tracker "ClientConnect.check_progress...";
-  match ServerUtils.server_progress ~tracker ~timeout:3 root with
-  | Ok (msg, warning) ->
+(** This reads from the progress file and assigns into mutable variable "latest_status_progress",
+and returns whether there was new status. *)
+let check_progress ~(server_progress_file : string) : bool =
+  let open ServerCommandTypes in
+  let server_progress =
+    ServerCommandTypesUtils.read_progress_file ~server_progress_file
+  in
+  if
+    not
+      (Float.equal
+         server_progress.server_timestamp
+         !latest_server_progress.server_timestamp)
+  then begin
     log
-      ~tracker
-      "check_progress: %s / %s"
-      msg
-      (Option.value warning ~default:"[none]");
-    progress := msg;
-    progress_warning := warning
-  | Error e ->
-    log
-      ~tracker
-      "check_progress: %s"
-      (ServerMonitorUtils.show_connection_error e)
+      "check_progress: [%s] %s / %s"
+      (Utils.timestring server_progress.server_timestamp)
+      server_progress.server_progress
+      (Option.value server_progress.server_warning ~default:"[none]");
+    latest_server_progress := server_progress;
+    true
+  end else
+    false
 
-let delta_t : float = 3.0
-
-let query_and_show_progress
-    (progress_callback : string option -> unit) ~(root : Path.t) : unit =
-  let had_warning = Option.is_some !progress_warning in
-  check_progress root;
+let show_progress
+    (progress_callback : string option -> unit) ~(server_progress_file : string)
+    : unit =
+  let open ServerCommandTypes in
+  let had_warning = Option.is_some !latest_server_progress.server_warning in
+  let (_any_changes : bool) = check_progress ~server_progress_file in
   if not had_warning then
-    Option.iter !progress_warning ~f:(Printf.eprintf "\n%s\n%!");
-  let progress = !progress in
+    Option.iter
+      !latest_server_progress.server_warning
+      ~f:(Printf.eprintf "\n%s\n%!");
+  let progress = !latest_server_progress.server_progress in
   let final_suffix =
-    if Option.is_some !progress_warning then
+    if Option.is_some !latest_server_progress.server_warning then
       " - this can take a long time, see warning above]"
     else
       "]"
   in
-  progress_callback (Some ("[" ^ progress ^ final_suffix))
+  (* We always show progress, even if there were no changes, just so the user
+  can see the spinner keep turning around. It looks better that way for things
+  like "loading saved-state" which would otherwise look stuck for 30s. *)
+  progress_callback (Some ("[" ^ progress ^ final_suffix));
+  ()
 
 let check_for_deadline deadline_opt =
   let now = Unix.time () in
   match deadline_opt with
-  | Some deadline when now >. deadline ->
+  | Some deadline when Float.(now > deadline) ->
     log
       "check_for_deadline expired: %s > %s"
       (Utils.timestring now)
@@ -143,9 +158,12 @@ let rec wait_for_server_message
     ~(expected_message : 'a ServerCommandTypes.message_type option)
     ~(ic : Timeout.in_channel)
     ~(deadline : float option)
-    ~(server_finale_file : string)
+    ~(server_specific_files : ServerCommandTypes.server_specific_files)
     ~(progress_callback : (string option -> unit) option)
     ~(root : Path.t) : 'a ServerCommandTypes.message_type Lwt.t =
+  let server_progress_file =
+    server_specific_files.ServerCommandTypes.server_progress_file
+  in
   check_for_deadline deadline;
   let%lwt (readable, _, _) =
     Lwt_utils.select
@@ -155,30 +173,37 @@ let rec wait_for_server_message
       1.0
   in
   if List.is_empty readable then (
-    Option.iter progress_callback ~f:(query_and_show_progress ~root);
+    Option.iter progress_callback ~f:(show_progress ~server_progress_file);
     wait_for_server_message
       ~connection_log_id
       ~expected_message
       ~ic
       ~deadline
-      ~server_finale_file
+      ~server_specific_files
       ~progress_callback
       ~root
   ) else
+    (* an inline module to define this exception type, used internally in the function *)
+    let module M = struct
+      exception Monitor_failed_to_handoff
+    end in
     try%lwt
       let fd = Timeout.descr_of_in_channel ic in
       let msg : 'a ServerCommandTypes.message_type =
         Marshal_tools.from_fd_with_preamble fd
       in
-      let is_ping =
+      let (is_ping, is_handoff_failed) =
         match msg with
-        | ServerCommandTypes.Ping -> true
-        | _ -> false
+        | ServerCommandTypes.Ping -> (true, false)
+        | ServerCommandTypes.Monitor_failed_to_handoff -> (false, true)
+        | _ -> (false, false)
       in
       let matches_expected =
         Option.value_map ~default:true ~f:(Poly.( = ) msg) expected_message
       in
-      if matches_expected && not is_ping then (
+      if is_handoff_failed then
+        raise M.Monitor_failed_to_handoff
+      else if matches_expected && not is_ping then (
         log
           ~connection_log_id
           "wait_for_server_message: got expected %s"
@@ -191,36 +216,84 @@ let rec wait_for_server_message
           "wait_for_server_message: didn't want %s"
           (ServerCommandTypesUtils.debug_describe_message_type msg);
         if not is_ping then
-          Option.iter progress_callback ~f:(query_and_show_progress ~root);
+          Option.iter progress_callback ~f:(show_progress ~server_progress_file);
         wait_for_server_message
           ~connection_log_id
           ~expected_message
           ~ic
           ~deadline
-          ~server_finale_file
+          ~server_specific_files
           ~progress_callback
           ~root
       )
     with
-    | (End_of_file | Sys_error _) as e ->
-      let e = Exception.wrap e in
-      let finale_data = get_finale_data server_finale_file in
+    | (End_of_file | Sys_error _ | M.Monitor_failed_to_handoff) as exn ->
+      let e = Exception.wrap exn in
+      let finale_data =
+        get_finale_data
+          server_specific_files.ServerCommandTypes.server_finale_file
+      in
+      let client_exn = Exception.get_ctor_string e in
+      let client_stack =
+        e |> Exception.get_backtrace_string |> Exception.clean_stack
+      in
+      (* log to logfile *)
       log
         ~connection_log_id
-        "wait_for_server_message: %s\nfinale_data: %s"
-        (e |> Exception.to_string |> Exception.clean_stack)
+        "SERVER_HUNG_UP [%s]\nfinale_data: %s\n%s"
+        client_exn
         (Option.value_map
            finale_data
            ~f:Exit.show_finale_data
-           ~default:"[none]");
+           ~default:"[none]")
+        client_stack;
+      (* stderr *)
+      let msg =
+        match (exn, finale_data) with
+        | (M.Monitor_failed_to_handoff, None) -> "Hack server is too busy."
+        | (_, None) ->
+          "Hack server disconnected suddenly. It might have crashed."
+        | (_, Some finale_data) ->
+          Printf.sprintf
+            "Hack server disconnected suddenly [%s]\n%s"
+            (Exit_status.show finale_data.Exit.exit_status)
+            (Option.value ~default:"" finale_data.Exit.msg)
+      in
+      Printf.eprintf "%s\n" msg;
+      (* spinner *)
       Option.iter progress_callback ~f:(fun callback -> callback None);
-      raise (Server_hung_up finale_data)
+      (* exception, caught by hh_client.ml and logged.
+      In most cases we report that find_hh.sh should simply retry the failed command.
+      There are only two cases where we say it shouldn't. *)
+      let underlying_exit_status =
+        Option.map finale_data ~f:(fun d -> d.Exit.exit_status)
+      in
+      let external_exit_status =
+        match underlying_exit_status with
+        | Some
+            Exit_status.(
+              Failed_to_load_should_abort | Server_non_opt_build_mode) ->
+          Exit_status.Server_hung_up_should_abort
+        | _ -> Exit_status.Server_hung_up_should_retry
+      in
+      (* log to telemetry *)
+      HackEventLogger.server_hung_up
+        ~external_exit_status
+        ~underlying_exit_status
+        ~client_exn
+        ~client_stack
+        ~server_stack:
+          (Option.map
+             finale_data
+             ~f:(fun { Exit.stack = Utils.Callstack stack; _ } -> stack))
+        ~server_msg:(Option.bind finale_data ~f:(fun d -> d.Exit.msg));
+      raise (Exit_status.Exit_with external_exit_status)
 
 let wait_for_server_hello
     (connection_log_id : string)
     (ic : Timeout.in_channel)
     (deadline : float option)
-    (server_finale_file : string)
+    (server_specific_files : ServerCommandTypes.server_specific_files)
     (progress_callback : (string option -> unit) option)
     (root : Path.t) : unit Lwt.t =
   let%lwt (_ : 'a ServerCommandTypes.message_type) =
@@ -229,35 +302,15 @@ let wait_for_server_hello
       ~expected_message:(Some ServerCommandTypes.Hello)
       ~ic
       ~deadline
-      ~server_finale_file
+      ~server_specific_files
       ~progress_callback
       ~root
   in
   Lwt.return_unit
 
-let with_server_hung_up (f : unit -> 'a Lwt.t) : 'a Lwt.t =
-  try%lwt f () with
-  | Server_hung_up (Some finale_data) ->
-    Printf.eprintf
-      "Hack server disconnected suddenly [%s]\n%s\n"
-      (Exit_status.show finale_data.Exit.exit_status)
-      (Option.value ~default:"" finale_data.Exit.msg);
-    (match finale_data.Exit.exit_status with
-    | Exit_status.Failed_to_load_should_abort
-    | Exit_status.Server_non_opt_build_mode ->
-      raise Exit_status.(Exit_with Server_hung_up_should_abort)
-    | _ -> raise Exit_status.(Exit_with Server_hung_up_should_retry))
-  | Server_hung_up None ->
-    Printf.eprintf "Hack server disconnected suddenly. It might have crashed.\n";
-    raise Exit_status.(Exit_with Server_hung_up_should_retry)
-
-let rec connect
-    ?(first_attempt = false)
-    ?(allow_macos_hack = true)
-    (env : env)
-    (start_time : float) : conn Lwt.t =
+let rec connect ?(allow_macos_hack = true) (env : env) (start_time : float) :
+    conn Lwt.t =
   check_for_deadline env.deadline;
-  let connect_once_start_t = Unix.time () in
   let handoff_options =
     {
       MonitorRpc.force_dormant_start = env.force_dormant_start;
@@ -273,25 +326,48 @@ let rec connect
   in
   let tracker = Connection_tracker.create () in
   let connection_log_id = Connection_tracker.log_id tracker in
-  log ~connection_log_id "ClientConnect.connect: attempting connect_to_monitor";
+  (* We'll attempt to connect, with timeout up to [env.deadline]. Effectively, the
+  unix process list will be where we store our (unbounded) queue of incoming client requests,
+  each of them waiting for the monitor's incoming socket to become available; if there's a backlog
+  in the monitor->server pipe and the monitor's incoming queue is full, then the monitor's incoming
+  socket will become only available after the server has finished a request, and the monitor gets to
+  send its next handoff, and take the next item off its incoming queue.
+  If the deadline is infinite, I arbitrarily picked 60s as the timeout coupled with "will retry..."
+  if it timed out. That's because I distrust infinite timeouts, just in case something got stuck for
+  unknown causes, and maybe retrying the connection attempt will get it unstuck? -- a sort of
+  "try turning it off then on again". This timeout must be comfortably longer than the monitor's
+  own 30s timeout in serverMonitor.hand_off_client_connection_wrapper to handoff to the server;
+  if it were shorter, then the monitor's incoming queue would be entirely full of requests that
+  were all stale by the time it got to handle them. *)
+  let timeout =
+    match
+      (env.local_config.ServerLocalConfig.monitor_backpressure, env.deadline)
+    with
+    | (false, _) -> 1
+    | (true, None) -> 60
+    | (true, Some deadline) ->
+      Int.max 1 (int_of_float (deadline -. Unix.gettimeofday ()))
+  in
+  log
+    ~connection_log_id
+    "ClientConnect.connect: attempting MonitorConnection.connect_once (%ds)"
+    timeout;
   let conn =
-    ServerUtils.connect_to_monitor ~tracker ~timeout:1 env.root handoff_options
+    MonitorConnection.connect_once ~tracker ~timeout env.root handoff_options
   in
   let t_connected_to_monitor = Unix.gettimeofday () in
-  HackEventLogger.client_connect_once connect_once_start_t;
   match conn with
-  | Ok (ic, oc, server_finale_file) ->
+  | Ok (ic, oc, server_specific_files) ->
     log
       ~connection_log_id
       "ClientConnect.connect: successfully connected to monitor.";
     let%lwt () =
       if env.do_post_handoff_handshake then
-        with_server_hung_up @@ fun () ->
         wait_for_server_hello
           connection_log_id
           ic
           env.deadline
-          server_finale_file
+          server_specific_files
           env.progress_callback
           env.root
       else
@@ -341,32 +417,45 @@ let rec connect
           t_sent_connection_type = 0.;
           (* placeholder, until we actually send it *)
           channels = (ic, oc);
-          server_finale_file;
+          server_specific_files;
           conn_progress_callback = env.progress_callback;
           conn_root = env.root;
           conn_deadline = env.deadline;
           from = env.from;
         }
   | Error e ->
-    log
-      ~tracker
-      "connect: error %s"
-      (ServerMonitorUtils.show_connection_error e);
-    if first_attempt then
-      Printf.eprintf
-        "For more detailed logs, try `tail -f $(hh_client --monitor-logname) $(hh_client --logname)`\n";
     (match e with
-    | SMUtils.Server_died
-    | SMUtils.Monitor_connection_failure _ ->
+    | ServerMonitorUtils.(
+        Connect_to_monitor_failure
+          {
+            server_exists = true;
+            failure_phase = Connect_open_socket;
+            failure_reason = Connect_timeout;
+          })
+      when not env.local_config.ServerLocalConfig.monitor_backpressure ->
+      (* If server+monitor are too busy, this is manifest either as timeouts
+      during Connect_open_socket (this case) or receiving SERVER_HUNG_UP in
+      [wait_for_server_message] above. Arbitrarily, we fail fatally in this
+      first case, but we fail with Exit_status.Server_hung_up_should_retry in
+      the second case above causing find_hh.sh to reattempt after exponential
+      backoff. See discussion in T85425990. *)
+      Printf.eprintf
+        "\nError: Hh_server is overloaded with too many concurrent requests. Giving up.\n%!";
+      raise Exit_status.(Exit_with Monitor_connection_failure)
+    | ServerMonitorUtils.Server_died
+    | ServerMonitorUtils.(
+        Connect_to_monitor_failure { server_exists = true; _ }) ->
+      log ~tracker "connect: no response yet from server; will retry...";
       Unix.sleepf 0.1;
       connect env start_time
-    | SMUtils.Server_missing_exn _
-    | SMUtils.Server_missing_timeout _ ->
+    | ServerMonitorUtils.(
+        Connect_to_monitor_failure { server_exists = false; _ }) ->
       log ~tracker "connect: autostart=%b" env.autostart;
       if env.autostart then (
         let {
           root;
           from;
+          local_config = _;
           autostart = _;
           force_dormant_start = _;
           deadline = _;
@@ -422,31 +511,20 @@ let rec connect
           );
         raise Exit_status.(Exit_with No_server_running_should_retry)
       )
-    | SMUtils.Server_dormant_out_of_retries ->
+    | ServerMonitorUtils.Server_dormant_out_of_retries ->
       Printf.eprintf
         ( "Ran out of retries while waiting for Mercurial to finish rebase. Starting "
         ^^ "the server in the middle of rebase is strongly not recommended and you should "
         ^^ "first finish the rebase before retrying. If you really "
         ^^ "know what you're doing, maybe try --force-dormant-start\n%!" );
       raise Exit_status.(Exit_with Out_of_retries)
-    | SMUtils.Server_dormant ->
+    | ServerMonitorUtils.Server_dormant ->
       Printf.eprintf
         ( "Error: No server running and connection limit reached for waiting"
         ^^ " on next server to be started. Please wait patiently. If you really"
         ^^ " know what you're doing, maybe try --force-dormant-start\n%!" );
       raise Exit_status.(Exit_with No_server_running_should_retry)
-    | SMUtils.Monitor_socket_not_ready _ ->
-      HackEventLogger.client_connect_once_busy start_time;
-      Unix.sleepf 0.1;
-      connect env start_time
-    | SMUtils.Monitor_establish_connection_timeout ->
-      (* This should only happen if the Monitor is being DDOSed or has
-       * wedged itself. To ameliorate inadvertent self DDOSing by hh_clients,
-       * we don't auto-retry a connection when the Monitor is busy .*)
-      HackEventLogger.client_connect_once_busy start_time;
-      Printf.eprintf "\nError: Monitor is busy. Giving up!\n%!";
-      raise Exit_status.(Exit_with Monitor_connection_failure)
-    | SMUtils.Build_id_mismatched mismatch_info_opt ->
+    | ServerMonitorUtils.Build_id_mismatched mismatch_info_opt ->
       ServerMonitorUtils.(
         Printf.eprintf
           "hh_server's version doesn't match the client's, so it will exit.\n";
@@ -491,9 +569,7 @@ let rec connect
 let connect (env : env) : conn Lwt.t =
   let start_time = Unix.time () in
   try%lwt
-    let%lwt ({ channels = (_, oc); _ } as conn) =
-      connect ~first_attempt:true env start_time
-    in
+    let%lwt ({ channels = (_, oc); _ } as conn) = connect env start_time in
     HackEventLogger.client_established_connection start_time;
     if env.do_post_handoff_handshake then
       ServerCommandLwt.send_connection_type oc ServerCommandTypes.Non_persistent;
@@ -514,7 +590,7 @@ let rpc :
        t_received_hello;
        t_sent_connection_type;
        channels = (ic, oc);
-       server_finale_file;
+       server_specific_files;
        conn_progress_callback = progress_callback;
        conn_root;
        conn_deadline = deadline;
@@ -527,14 +603,13 @@ let rpc :
   Marshal.to_channel oc (ServerCommandTypes.Rpc (metadata, cmd)) [];
   Out_channel.flush oc;
   let t_sent_cmd = Unix.gettimeofday () in
-  with_server_hung_up @@ fun () ->
   let%lwt res =
     wait_for_server_message
       ~connection_log_id
       ~expected_message:None
       ~ic
       ~deadline
-      ~server_finale_file
+      ~server_specific_files
       ~progress_callback
       ~root:conn_root
   in
@@ -557,6 +632,8 @@ let rpc :
   | ServerCommandTypes.Push _ -> failwith "unexpected 'push' RPC response"
   | ServerCommandTypes.Hello -> failwith "unexpected 'hello' RPC response"
   | ServerCommandTypes.Ping -> failwith "unexpected 'ping' RPC response"
+  | ServerCommandTypes.Monitor_failed_to_handoff ->
+    failwith "unexpected 'monitor_failed_to_handoff' RPC response"
 
 let rpc_with_retry
     (conn_f : unit -> conn Lwt.t)

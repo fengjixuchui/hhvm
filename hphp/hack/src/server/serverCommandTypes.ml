@@ -284,6 +284,13 @@ module Extract_standalone = struct
     | Method of string * string
 end
 
+module Tast_hole = struct
+  type filter =
+    | Typing
+    | Cast
+    | Any
+end
+
 type file_input =
   | FileName of string
   | FileContent of string
@@ -320,11 +327,17 @@ type _ t =
   | STATUS_SINGLE :
       file_input * int option
       -> (Errors.finalized_error list * int) t
+  | STATUS_SINGLE_REMOTE_EXECUTION : string -> (string * string) t
+  | STATUS_REMOTE_EXECUTION :
+      int option
+      -> (Errors.finalized_error list * int) t
+  | STATUS_MULTI_REMOTE_EXECUTION : string list -> (string * string) t
   | INFER_TYPE : file_input * int * int * bool -> InferAtPosService.result t
   | INFER_TYPE_BATCH :
       (string * int * int * (int * int) option) list * bool
       -> string list t
   | INFER_TYPE_ERROR : file_input * int * int -> InferErrorAtPosService.result t
+  | TAST_HOLES : file_input * Tast_hole.filter -> TastHolesService.result t
   | IDE_HOVER : string * int * int -> HoverService.result t
   | DOCBLOCK_AT :
       (string * int * int * string option * SearchUtils.si_kind)
@@ -459,9 +472,9 @@ and busy_status =
   | Done_local_typecheck
   | Doing_global_typecheck of global_typecheck_kind
   | Done_global_typecheck of {
-      is_truncated: bool;
-      shown: int;
-      total: int;
+      shown: int;  (** How many errors did we push in DIAGNOSTICS? *)
+      total: int;  (** How many errors total were there? *)
+      is_truncated: bool;  (** Whether shown DIAGNOSTICS weren't all of them *)
     }
 
 and global_typecheck_kind =
@@ -470,16 +483,31 @@ and global_typecheck_kind =
   | Remote_blocking of string
 
 type 'a message_type =
-  (* Only sent to persistent connections. *)
-  | Push of push
-  (* records the time at which hh_server started handling *)
-  | Response of 'a * Connection_tracker.t
-  (* Hello is the first message sent after handoff. It's used for both *)
-  (* persistent and non-persistent connections. *)
   | Hello
-  (* Pings can be sent to non-persistent connection after Hello and before
-   * sending RPC response. *)
+      (** Hello is the first message sent to the client by the server, for both persistent and non-persistent *)
+  | Monitor_failed_to_handoff
+      (** However, if the handoff failed, this will be sent instead of Hello, and the connection terminated. *)
   | Ping
+      (** Server sometimes sends these, after Hello and before Response, to check if client fd is still open *)
+  | Response of 'a * Connection_tracker.t
+      (** Response message is the response to an RPC. For non-persistent, the server will close fd after this. *)
+  | Push of push
+      (** This is how errors are sent; only sent to persistent connections. *)
 
 (** Timeout on reading the command from the client - client probably frozen. *)
 exception Read_command_timeout
+
+(** Invariant: the progress file is created almost immediately upon server startup,
+certainly before any messages are exchanged; it is deleted upon clean exit.
+The server_finale_file is created by Exit.exit and left there. *)
+type server_specific_files = {
+  server_finale_file: string;  (** just before exit, server will write here *)
+  server_progress_file: string;  (** server will write progress to this file *)
+}
+
+(** These are human-readable messages, shown at command-line and within the editor. *)
+type server_progress = {
+  server_progress: string;  (** e.g. "typechecking 5/15 files" *)
+  server_warning: string option;  (** e.g. "typechecking will be slow" *)
+  server_timestamp: float;
+}

@@ -17,6 +17,8 @@
 
 #include "hphp/runtime/base/bespoke/logging-profile.h"
 
+#include "hphp/runtime/base/backtrace.h"
+#include "hphp/runtime/base/bespoke/key-coloring.h"
 #include "hphp/runtime/base/bespoke/logging-array.h"
 #include "hphp/runtime/base/bespoke/layout.h"
 #include "hphp/runtime/base/bespoke/struct-dict.h"
@@ -25,10 +27,10 @@
 #include "hphp/runtime/server/memory-stats.h"
 #include "hphp/runtime/vm/jit/mcgen-translate.h"
 #include "hphp/runtime/vm/vm-regs.h"
+#include "hphp/util/hash-map.h"
 
 #include <folly/SharedMutex.h>
 #include <folly/String.h>
-#include <tbb/concurrent_hash_map.h>
 
 #include <algorithm>
 #include <atomic>
@@ -73,22 +75,37 @@ ARRAY_OPS
   not_reached();
 }
 
+// Some SrcKeys cannot be used as bespoke sources or sinks, because they
+// don't round-trip through serialization. We hit this case for the SrcKeys
+// of eval'd functions, and possibly others.
+bool serializable(SrcKey sk) {
+  assertx(sk.valid());
+  return !sk.unit()->origFilepath()->empty();
+}
+
 // SrcKey includes more information than just the (Func, Offset) pair,
 // but we want all our logging to be grouped by these two fields alone.
 SrcKey canonicalize(SrcKey sk) {
   assertx(sk.valid());
+  assertx(serializable(sk));
   return SrcKey(sk.func(), sk.offset(), ResumeMode::None);
 }
 
 // If the given source always produces a particular static array, return it.
 ArrayData* getStaticArray(LoggingProfileKey key) {
   switch (key.locationType) {
+    case LocationType::APCKey:
     case LocationType::Runtime:
       return nullptr;
 
-    case LocationType::Property: {
+    case LocationType::InstanceProperty: {
       auto const index = key.cls->propSlotToIndex(key.slot);
       auto const tv = key.cls->declPropInit()[index].val.tv();
+      return tvIsArrayLike(tv) ? tv.val().parr : nullptr;
+    }
+
+    case LocationType::StaticProperty: {
+      auto const tv = key.cls->staticProperties()[key.slot].val;
       return tvIsArrayLike(tv) ? tv.val().parr : nullptr;
     }
 
@@ -155,6 +172,11 @@ struct alignas(8) EventKey {
 
   ArrayOp getOp() const {
     return m_op;
+  }
+
+  LowStringPtr getStrKey() const {
+    if (m_key_spec != Spec::Str32) return nullptr;
+    return (const StringData*)safe_cast<uintptr_t>(m_key);
   }
 
   std::string toString() const;
@@ -268,6 +290,7 @@ LoggingProfile::LoggingProfile(LoggingProfileKey key, jit::ArrayLayout layout)
   , layout(layout)
   , staticBespokeArray(nullptr)
 {
+  assertx(!s_profiling.load(std::memory_order_acquire));
   if (layout.vanilla()) return;
   if (auto const ad = getStaticArray(key)) {
     setStaticBespokeArray(BespokeArray::asBespoke(layout.apply(ad)));
@@ -277,7 +300,6 @@ LoggingProfile::LoggingProfile(LoggingProfileKey key, jit::ArrayLayout layout)
 double LoggingProfile::getSampleCountMultiplier() const {
   assertx(data);
   if (data->loggingArraysEmitted == 0) return 0;
-
   return data->sampleCount / (double) data->loggingArraysEmitted;
 }
 
@@ -285,7 +307,6 @@ uint64_t LoggingProfile::getTotalEvents() const {
   assertx(data);
   size_t total = 0;
   for (auto const& event : data->events) total += event.second;
-
   return total;
 }
 
@@ -363,12 +384,19 @@ void LoggingProfile::setStaticBespokeArray(BespokeArray* bad) {
 
   staticBespokeArray = bad;
 
-  if (key.locationType == LocationType::Property) {
+  if (key.locationType == LocationType::InstanceProperty) {
     auto const index = key.cls->propSlotToIndex(key.slot);
     auto props = const_cast<Class::PropInitVec*>(&key.cls->declPropInit());
     auto const lval = (*props)[index].val;
-    assertx(tvIsArrayLike(lval));
     lval.val().parr = bad;
+    assertx(tvIsPlausible(*lval));
+  }
+
+  if (key.locationType == LocationType::StaticProperty) {
+    auto const sprops = key.cls->staticProperties();
+    auto const tv = const_cast<TypedValue*>(&sprops[key.slot].val);
+    tv->m_data.parr = bad;
+    assertx(tvIsPlausible(*tv));
   }
 }
 
@@ -377,11 +405,33 @@ jit::ArrayLayout LoggingProfile::getLayout() const {
 }
 
 void LoggingProfile::setLayout(jit::ArrayLayout layout) {
+  assertx(layout.vanilla() || layout.bespokeLayout()->isConcrete());
   this->layout.store(layout, std::memory_order_release);
   if (key.isRuntimeLocation() && layout.is_struct()) {
     // TODO(mcolavita): setLayout should trigger setStaticBespokeArray.
     key.runtimeStruct->applyLayout(StructLayout::As(layout.bespokeLayout()));
   }
+}
+
+std::vector<const StringData*> LoggingProfile::knownStructKeys() const {
+  std::vector<const StringData*> ret;
+  if (key.op() == Op::NewStructDict) {
+    auto const imms = getImmVector(key.sk.pc());
+    auto const size = safe_cast<uint32_t>(imms.size());
+    for (auto i = 0; i < size; ++i) {
+      auto const keyStr = key.sk.unit()->lookupLitstrId(imms.vec32()[i]);
+      ret.push_back(keyStr);
+    }
+    return ret;
+  }
+  auto const ad = data->staticSampledArray;
+  if (ad && ad->isVanillaDict()) {
+    MixedArray::IterateKV(MixedArray::asMixed(ad), [&](auto k, auto) {
+      if (tvIsString(k)) ret.push_back(val(k).pstr);
+    });
+    return ret;
+  }
+  return ret;
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -393,16 +443,18 @@ SinkProfile::SinkProfile(SinkProfileKey key)
   assertx(s_profiling.load(std::memory_order_acquire));
 }
 
-SinkProfile::SinkProfile(SinkProfileKey key, jit::ArrayLayout layout)
+SinkProfile::SinkProfile(SinkProfileKey key, SinkLayout layout)
   : key(key)
   , layout(layout)
-{}
+{
+  assertx(!s_profiling.load(std::memory_order_acquire));
+}
 
-jit::ArrayLayout SinkProfile::getLayout() const {
+SinkLayout SinkProfile::getLayout() const {
   return layout.load(std::memory_order_acquire);
 }
 
-void SinkProfile::setLayout(jit::ArrayLayout layout) {
+void SinkProfile::setLayout(SinkLayout layout) {
   this->layout.store(layout, std::memory_order_release);
 }
 
@@ -701,18 +753,31 @@ struct SinkOutputData {
   uint64_t weight = 0;
 };
 
+struct LoggingProfileKeyHash {
+  size_t operator()(const LoggingProfileKey& key) const {
+    return folly::hash::hash_combine(
+      hash_int64(key.ptr), key.slot, key.locationType);
+  }
+};
+
+struct SinkProfileKeyHash {
+  size_t operator()(const SinkProfileKey& key) const {
+    return folly::hash::hash_combine(
+      hash_int64(key.first), key.second.toAtomicInt());
+  }
+};
+
 using ProfileOutputData = std::vector<SourceOutputData>;
-using ProfileMap = tbb::concurrent_hash_map<LoggingProfileKey, LoggingProfile*,
-                                            LoggingProfileKey::TbbHashCompare>;
+using ProfileMap = folly_concurrent_hash_map_simd<
+  LoggingProfileKey, LoggingProfile*, LoggingProfileKeyHash,
+  std::equal_to<LoggingProfileKey>>;
+using SinkMap = folly_concurrent_hash_map_simd<
+  SinkProfileKey, SinkProfile*, SinkProfileKeyHash,
+  std::equal_to<SinkProfileKey>>;
 
-using SinkProfileKeyHashCompare = pairHashCompare<
-  TransID, SrcKey, integralHashCompare<TransID>, SrcKey::TbbHashCompare>;
-using SinkMap = tbb::concurrent_hash_map<
-  SinkProfileKey, SinkProfile*, SinkProfileKeyHashCompare>;
-
+std::thread s_exportProfilesThread;
 ProfileMap s_profileMap;
 SinkMap s_sinkMap;
-std::thread s_exportProfilesThread;
 
 template<typename... Ts>
 bool logToFile(FILE* file, Ts&&... args) {
@@ -812,8 +877,9 @@ bool exportSortedSinks(FILE* file, const std::vector<SinkOutputData>& sinks) {
                   sk.getSymbol(), sink.sampledCount,
                   sink.weight, sink.loggedCount);
     LOG_OR_RETURN(file, "  {}\n", sk.showInst());
-    LOG_OR_RETURN(file, "  Selected Layout: {}\n",
-                  sink.profile->getLayout().describe());
+    auto const sl = sink.profile->getLayout();
+    LOG_OR_RETURN(file, "  Selected Layout: {}\n", sl.layout.describe());
+    LOG_OR_RETURN(file, "  Guard: {}\n", sl.sideExit ? "side-exit" : "diamond");
 
     if (!exportTypeCounts(file, "Array", sink.arrCounts)) return false;
     if (!exportTypeCounts(file, "Key",   sink.keyCounts)) return false;
@@ -839,6 +905,10 @@ bool exportLayouts(FILE* file) {
   LOG_OR_RETURN(file, "========================================================================\n");
   LOG_OR_RETURN(file, "Layouts:\n\n");
   LOG_OR_RETURN(file, "{}", Layout::dumpAllLayouts());
+
+  LOG_OR_RETURN(file, "========================================================================\n");
+  LOG_OR_RETURN(file, "Coloring info:\n\n");
+  LOG_OR_RETURN(file, "{}", dumpColoringInfo());
 
   return true;
 }
@@ -941,13 +1011,9 @@ void stopProfiling() {
 
 namespace {
 void freeProfileData() {
-  if (shouldTestBespokeArrayLikes()) {
-    // When testing bespoke array-likes, we use the data struct to cache
-    // logging and monotype arrays. Therefore, we do not free them after layout
-    // selection.
-    return;
-  }
-
+  // When testing bespoke array-likes, we cache logging and monotype arrays
+  // in LoggingProfileData, so we do not free them after layout selection.
+  if (shouldTestBespokeArrayLikes()) return;
   eachSource([](auto& x) { x.releaseData(); });
   eachSink([](auto& x) { x.releaseData(); });
 }
@@ -985,12 +1051,8 @@ void waitOnExportProfiles() {
 
 namespace {
 void freeStaticArray(ArrayData* ad) {
-  // TODO(T80237666): Make this code less fragile by moving this logic next
-  // to the corresponding allocation logic in HashTable::staticAlloc().
   assertx(ad->isStatic());
-  auto const extra = ad->hasStrKeyTable()
-    ? (sizeof(StrKeyTable) + 15) & ~15ull
-    : 0;
+  auto const extra = uncountedAllocExtra(ad, /*apc_tv=*/false);
   auto const alloc = reinterpret_cast<char*>(ad) - extra;
   RO::EvalLowStaticArrays ? low_free(alloc) : uncounted_free(alloc);
 }
@@ -998,6 +1060,11 @@ void freeStaticArray(ArrayData* ad) {
 bool shouldLogAtSrcKey(SrcKey sk) {
   if (!sk.valid()) {
     FTRACE(5, "VMRegAnchor failed for maybeMakeLoggingArray.\n");
+    return false;
+  }
+
+  if (!serializable(sk)) {
+    FTRACE(5, "Cannot create bespoke source for non-serializable source.\n");
     return false;
   }
 
@@ -1012,14 +1079,16 @@ bool shouldLogAtSrcKey(SrcKey sk) {
 }
 
 LoggingProfile* getLoggingProfile(LoggingProfileKey key) {
+  assertx(key.checkInvariants());
   assertx(allowBespokeArrayLikes());
-  {
-    ProfileMap::const_accessor it;
-    if (s_profileMap.find(it, key)) return it->second;
+  auto const it = s_profileMap.find(key);
+  if (it != s_profileMap.end()) {
+    assertx(it->second->key == key);
+    return it->second;
   }
 
-  // Hold the read mutex for the duration of the mutation so that export
-  // cannot begin until the mutation is complete.
+  // Hold the read mutex while we're constructing the new profile so that we
+  // cannot stop profiling until this mutation is complete.
   folly::SharedMutex::ReadHolder lock{s_profilingLock};
   if (!s_profiling.load(std::memory_order_acquire)) return nullptr;
 
@@ -1030,13 +1099,8 @@ LoggingProfile* getLoggingProfile(LoggingProfileKey key) {
     profile->data->staticSampledArray = ad->makeSampledStaticArray();
   }
 
-  auto const result = [&]{
-    ProfileMap::accessor insert;
-    if (s_profileMap.insert(insert, key)) {
-      insert->second = profile.release();
-    }
-    return insert->second;
-  }();
+  auto const pair = s_profileMap.insert({key, profile.get()});
+  if (pair.second) profile.release();
 
   // If the array was static, we must either log the new static memory we used
   // or free that memory, depending on whether we won the race to set profile.
@@ -1049,6 +1113,9 @@ LoggingProfile* getLoggingProfile(LoggingProfileKey key) {
       MemoryStats::LogAlloc(AllocKind::StaticArray, allocSize(ad));
     }
   }
+
+  auto const result = pair.first->second;
+  assertx(result->key == key);
   return result;
 }
 }
@@ -1056,6 +1123,10 @@ LoggingProfile* getLoggingProfile(LoggingProfileKey key) {
 LoggingProfile* getLoggingProfile(SrcKey sk) {
   if (!shouldLogAtSrcKey(sk)) return nullptr;
   return getLoggingProfile(LoggingProfileKey(canonicalize(sk)));
+}
+
+LoggingProfile* getLoggingProfile(APCKey ak) {
+  return getLoggingProfile(LoggingProfileKey(ak));
 }
 
 LoggingProfile* getLoggingProfile(RuntimeStruct* runtimeStruct) {
@@ -1066,37 +1137,34 @@ LoggingProfile* getLoggingProfile(RuntimeStruct* runtimeStruct) {
   return newProfile;
 }
 
-LoggingProfile* getLoggingProfile(const Class* cls, Slot slot) {
-  if (cls->declProperties()[slot].name == s_86reified_prop.get()) {
+LoggingProfile* getLoggingProfile(const Class* cls, Slot slot, bool isStatic) {
+  if (!isStatic && cls->declProperties()[slot].name == s_86reified_prop.get()) {
     return nullptr;
   }
-  return getLoggingProfile(LoggingProfileKey(cls, slot));
+  return getLoggingProfile(LoggingProfileKey(cls, slot, isStatic));
 }
 
-SinkProfile* getSinkProfile(TransID id, SrcKey skRaw) {
+SinkProfile* getSinkProfile(TransID id, SrcKey sk) {
   assertx(allowBespokeArrayLikes());
-  auto const key = SinkProfileKey { id, canonicalize(skRaw) };
-  {
-    SinkMap::const_accessor it;
-    if (s_sinkMap.find(it, key)) return it->second;
+  if (!serializable(sk)) return nullptr;
+  auto const key = SinkProfileKey { id, canonicalize(sk) };
+  auto const it = s_sinkMap.find(key);
+  if (it != s_sinkMap.end()) {
+    assertx(it->second->key == key);
+    return it->second;
   }
 
-  // Hold the read mutex for the duration of the mutation so that export cannot
-  // begin until the mutation is complete.
+  // Hold the read mutex while we're constructing the new profile so that we
+  // cannot stop profiling until this mutation is complete.
   folly::SharedMutex::ReadHolder lock{s_profilingLock};
   if (!s_profiling.load(std::memory_order_acquire)) return nullptr;
 
   auto profile = std::make_unique<SinkProfile>(key);
+  auto const pair = s_sinkMap.insert({key, profile.get()});
+  if (pair.second) profile.release();
 
-  auto const result = [&]{
-    SinkMap::accessor insert;
-    if (s_sinkMap.insert(insert, key)) {
-      insert->second = profile.release();
-    }
-    return insert->second;
-  }();
-
-  // Don't hold the lock while we free profile.
+  auto const result = pair.first->second;
+  assertx(result->key == key);
   return result;
 }
 
@@ -1108,35 +1176,39 @@ SrcKey getSrcKey() {
   if (tl_regState != VMRegState::CLEAN || vmfp() == nullptr) {
     return SrcKey();
   }
-  auto const fp = vmfp();
-  auto const func = fp->func();
-  if (!func->contains(vmpc())) return SrcKey();
-
-  auto const result = SrcKey(func, vmpc(), ResumeMode::None);
-  assertx(canonicalize(result) == result);
-  return result;
+  return fromLeaf([&](const ActRec* ar, Offset offset) {
+    auto const result = SrcKey(ar->func(), offset, ResumeMode::None);
+    if (!serializable(result)) return SrcKey();
+    assertx(canonicalize(result) == result);
+    return result;
+  });
 }
 
 void eachSource(std::function<void(LoggingProfile& profile)> fn) {
   assertx(!s_profiling.load(std::memory_order_acquire));
-  for (auto& it : s_profileMap) fn(*it.second);
+  for (auto& it : s_profileMap) {
+    assertx(it.first == it.second->key);
+    fn(*it.second);
+  }
 }
 
 void eachSink(std::function<void(SinkProfile& profile)> fn) {
   assertx(!s_profiling.load(std::memory_order_acquire));
-  for (auto& it : s_sinkMap) fn(*it.second);
+  for (auto& it : s_sinkMap) {
+    assertx(it.first == it.second->key);
+    fn(*it.second);
+  }
 }
 
 void deserializeSource(LoggingProfileKey key, jit::ArrayLayout layout) {
-  ProfileMap::accessor insert;
-  always_assert(s_profileMap.insert(insert, key));
-  insert->second = new LoggingProfile(key, layout);
+  assertx(key.checkInvariants());
+  auto const profile = new LoggingProfile(key, layout);
+  always_assert(s_profileMap.insert({key, profile}).second);
 }
 
-void deserializeSink(SinkProfileKey key, jit::ArrayLayout layout) {
-  SinkMap::accessor insert;
-  always_assert(s_sinkMap.insert(insert, key));
-  insert->second = new SinkProfile(key, layout);
+void deserializeSink(SinkProfileKey key, SinkLayout sl) {
+  auto const profile = new SinkProfile(key, sl);
+  always_assert(s_sinkMap.insert({key, profile}).second);
 }
 
 size_t countSources() {
@@ -1147,8 +1219,12 @@ size_t countSinks() {
   return s_sinkMap.size();
 }
 
-ArrayOp getArrayOp(uint64_t key) {
+ArrayOp getEventArrayOp(uint64_t key) {
   return EventKey(key).getOp();
+}
+
+LowStringPtr getEventStrKey(uint64_t key) {
+  return EventKey(key).getStrKey();
 }
 
 //////////////////////////////////////////////////////////////////////////////

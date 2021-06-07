@@ -25,6 +25,9 @@
 
 #include "hphp/runtime/base/repo-auth-type-array.h"
 
+#include "hphp/runtime/vm/repo-autoload-map-builder.h"
+#include "hphp/runtime/vm/repo-file.h"
+
 #include "hphp/util/hash-map.h"
 #include "hphp/util/hash-set.h"
 #include "hphp/util/hash.h"
@@ -89,22 +92,22 @@ OpcodeSet make_bytecode_map(SinglePassReadableRange& bcs);
 
 //////////////////////////////////////////////////////////////////////
 
-void hard_constprop(bool);
-
-//////////////////////////////////////////////////////////////////////
-
 struct UnitEmitterQueue : Synchronizable {
-  // Add another ue. Adding nullptr marks us done.
+  explicit UnitEmitterQueue(RepoAutoloadMapBuilder* b = nullptr,
+                            bool storeUnitEmitters = false)
+    : m_storeUnitEmitters{storeUnitEmitters}
+    , m_repoBuilder{b} {}
+
   void push(std::unique_ptr<UnitEmitter> ue);
+  void finish();
   // Get the next ue, or nullptr to indicate we're done.
-  std::unique_ptr<UnitEmitter> pop();
-  // Fetch any remaining ues.
-  // Must be called in single threaded mode, after we've stopped adding ues.
-  void fetch(std::vector<std::unique_ptr<UnitEmitter>>& ues);
-  // Clear done flag, and get us ready for reuse.
-  void reset();
+  folly::Optional<RepoFileBuilder::EncodedUE> pop();
+  std::unique_ptr<UnitEmitter> popUnitEmitter();
  private:
+  bool m_storeUnitEmitters;
+  std::deque<RepoFileBuilder::EncodedUE> m_encoded;
   std::deque<std::unique_ptr<UnitEmitter>> m_ues;
+  RepoAutoloadMapBuilder* m_repoBuilder;
   std::atomic<bool> m_done{};
 };
 
@@ -120,10 +123,6 @@ void add_unit_to_program(const UnitEmitter* ue, php::Program& program);
 
 /*
  * Perform whole-program optimization on a set of UnitEmitters.
- *
- * Currently this process relies on some information from HPHPc.  It
- * expects traits are already flattened (it might be wrong if they
- * aren't).
  */
 void whole_program(php::ProgramPtr program,
                    UnitEmitterQueue& ueq,
@@ -140,5 +139,72 @@ int main(int argc, char** argv);
 
 //////////////////////////////////////////////////////////////////////
 
-}}
+// Export set of functions to check for symbol uniqueness. This lets
+// hphpc use the same logic and keep the same error messages.
 
+struct NonUniqueSymbolException : std::exception {
+  explicit NonUniqueSymbolException(std::string msg) : msg(msg) {}
+  const char* what() const noexcept override { return msg.c_str(); }
+private:
+  std::string msg;
+};
+
+template <typename T, typename R>
+void add_symbol(R& map, T t, const char* type) {
+  assertx(t->attrs & AttrUnique);
+  assertx(t->attrs & AttrPersistent);
+
+  auto const name = t->name;
+  auto const ret = map.emplace(name, std::move(t));
+  if (ret.second) return;
+
+  auto const filename = [] (auto const& unit) -> std::string {
+    if (!unit) return "BUILTIN";
+    return unit->filename->toCppString();
+  };
+
+  throw NonUniqueSymbolException{
+    folly::sformat(
+      "More than one {} with the name {}. In {} and {}",
+      type,
+      t->name,
+      filename(t->unit),
+      filename(ret.first->second->unit)
+    )
+  };
+}
+
+template <typename T, typename E>
+void validate_uniqueness(const T& t, const E& other) {
+  auto const iter = other.find(t->name);
+  if (iter == other.end()) return;
+
+  auto const filename = [] (auto const& unit) -> std::string {
+    if (!unit) return "BUILTIN";
+    return unit->filename->toCppString();
+  };
+
+  throw NonUniqueSymbolException{
+    folly::sformat(
+      "More than one symbol with the name {}. In {} and {}",
+      t->name,
+      filename(t->unit),
+      filename(iter->second->unit)
+    ).c_str()
+  };
+}
+
+template <typename T, typename R, typename E, typename F>
+void add_symbol(R& map,
+                T t,
+                const char* type,
+                const E& other1,
+                const F& other2) {
+  validate_uniqueness(t, other1);
+  validate_uniqueness(t, other2);
+  add_symbol(map, std::move(t), type);
+}
+
+//////////////////////////////////////////////////////////////////////
+
+}}

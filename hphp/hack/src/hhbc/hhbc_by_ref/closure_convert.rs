@@ -138,8 +138,12 @@ impl<'a> Env<'a> {
         )
     }
 
-    fn with_function(&mut self, fd: &Fun_) -> Result<()> {
-        self.with_function_like(ScopeItem::Function(ast_scope::Fun::new_rc(fd)), false, fd)
+    fn with_function(&mut self, fd: &FunDef) -> Result<()> {
+        self.with_function_like(
+            ScopeItem::Function(ast_scope::Fun::new_rc(fd)),
+            false,
+            &fd.fun,
+        )
     }
 
     fn with_method(&mut self, md: &Method_) -> Result<()> {
@@ -154,7 +158,7 @@ impl<'a> Env<'a> {
 
     fn with_lambda(&mut self, fd: &Fun_) -> Result<()> {
         let is_async = fd.fun_kind.is_async();
-        let coeffects = HhasCoeffects::from_ast(&fd.ctxs, &fd.params);
+        let coeffects = HhasCoeffects::from_ast(&fd.ctxs, &fd.params, vec![], vec![]);
 
         let lambda = Lambda {
             is_async,
@@ -165,7 +169,7 @@ impl<'a> Env<'a> {
 
     fn with_longlambda(&mut self, fd: &Fun_) -> Result<()> {
         let is_async = fd.fun_kind.is_async();
-        let coeffects = HhasCoeffects::from_ast(&fd.ctxs, &fd.params);
+        let coeffects = HhasCoeffects::from_ast(&fd.ctxs, &fd.params, vec![], vec![]);
 
         let long_lambda = LongLambda {
             is_async,
@@ -238,10 +242,10 @@ struct State {
     captured_vars: UniqueList<String>,
     captured_this: bool,
     captured_generics: UniqueList<String>,
-    // Closure classes and hoisted inline classes
-    hoisted_classes: Vec<Class_>,
+    // Closure classes
+    closures: Vec<Class_>,
     /// Hoisted meth_caller functions
-    named_hoisted_functions: SMap<Fun_>,
+    named_hoisted_functions: SMap<FunDef>,
     // The current namespace environment
     namespace: RcOc<namespace_env::Env>,
     // Empty namespace as constructed by parser
@@ -261,7 +265,7 @@ impl State {
             captured_vars: UniqueList::new(),
             captured_this: false,
             captured_generics: UniqueList::new(),
-            hoisted_classes: vec![],
+            closures: vec![],
             named_hoisted_functions: SMap::new(),
             current_function_state: PerFunctionState::default(),
             global_state: GlobalState::default(),
@@ -277,6 +281,7 @@ impl State {
         key: String,
         fun: PerFunctionState,
         coeffects_of_scope: HhasCoeffects,
+        num_closures: u32,
     ) {
         if fun.has_finally {
             self.global_state.functions_with_finally.insert(key.clone());
@@ -285,7 +290,10 @@ impl State {
         if !coeffects_of_scope.get_static_coeffects().is_empty() {
             self.global_state
                 .lambda_coeffects_of_scope
-                .insert(key, coeffects_of_scope);
+                .insert(key.clone(), coeffects_of_scope);
+        }
+        if num_closures > 0 {
+            self.global_state.num_closures.insert(key, num_closures);
         }
     }
 
@@ -302,7 +310,7 @@ impl State {
 }
 
 fn total_class_count(env: &Env, st: &State) -> usize {
-    st.hoisted_classes.len() + env.defined_class_count
+    st.closures.len() + env.defined_class_count
 }
 
 fn should_capture_var(env: &Env, var: &str) -> bool {
@@ -444,6 +452,7 @@ fn make_closure(
     fun_tparams: Vec<Tparam>,
     class_tparams: Vec<Tparam>,
     is_static: bool,
+    mode: Mode,
     mut fd: Fun_,
 ) -> (Fun_, Class_) {
     let md = Method_ {
@@ -493,7 +502,7 @@ fn make_closure(
     let cd = Class_ {
         span: p.clone(),
         annotation: fd.annotation,
-        mode: fd.mode,
+        mode,
         user_attributes: vec![],
         file_attributes: vec![],
         final_: false,
@@ -513,7 +522,7 @@ fn make_closure(
         xhp_category: None,
         reqs: vec![],
         implements: vec![],
-        implements_dynamic: false,
+        support_dynamic_type: false,
         where_constraints: vec![],
         consts: vec![],
         typeconsts: vec![],
@@ -737,6 +746,7 @@ fn convert_lambda<'a>(
         fun_tparams,
         class_tparams,
         is_static,
+        get_scope_fmode(&env.scope),
         fd,
     );
 
@@ -768,6 +778,7 @@ fn convert_lambda<'a>(
         get_unique_id_for_method(&cd.name.1, &cd.methods.first().unwrap().name.1),
         function_state,
         coeffects_of_scope,
+        0,
     );
     // back to using env instead of lambda_env here
 
@@ -779,7 +790,7 @@ fn convert_lambda<'a>(
         st.captured_generics.add(x.to_string());
     }
 
-    st.hoisted_classes.push(cd);
+    st.closures.push(cd);
     Ok(Expr_::mk_efun(inline_fundef, use_vars))
 }
 
@@ -800,6 +811,17 @@ fn make_fn_param(pos: Pos, lid: &LocalId, is_variadic: bool, is_inout: bool) -> 
         user_attributes: vec![],
         visibility: None,
     }
+}
+
+fn get_scope_fmode(scope: &Scope) -> Mode {
+    scope
+        .iter()
+        .find_map(|item| match item {
+            ScopeItem::Class(cd) => Some(cd.get_mode()),
+            ScopeItem::Function(fd) => Some(fd.get_mode()),
+            _ => None,
+        })
+        .unwrap_or(Mode::Mstrict)
 }
 
 fn convert_meth_caller_to_func_ptr(
@@ -889,11 +911,10 @@ fn convert_meth_caller_to_func_ptr(
         ),
     );
 
-    let fd = Fun_ {
+    let f = Fun_ {
         span: pos(),
         annotation: dummy_saved_env,
         readonly_this: None, // TODO(readonly): readonly_this in closure_convert
-        mode: get_scope_fmode(&env.scope),
         readonly_ret: None,
         ret: TypeHint((), None),
         name: Id(pos(), mangle_name.clone()),
@@ -904,8 +925,8 @@ fn convert_meth_caller_to_func_ptr(
             make_fn_param(pos(), &obj_var.1, false, false),
             variadic_param,
         ],
-        ctxs: None,        // TODO(T70095684)
-        unsafe_ctxs: None, // TODO(T70095684)
+        ctxs: Some(Contexts(pos(), vec![])),
+        unsafe_ctxs: None,
         body: FuncBody {
             ast: vec![
                 Stmt(pos(), Stmt_::Expr(Box::new(assert_invariant))),
@@ -918,33 +939,20 @@ fn convert_meth_caller_to_func_ptr(
             name: Id(pos(), "__MethCaller".into()),
             params: vec![Expr(pos(), Expr_::String(cname.into()))],
         }],
-        file_attributes: vec![],
         external: false,
-        namespace: RcOc::clone(&st.state.empty_namespace),
         doc_comment: None,
+    };
+    let fd = FunDef {
+        file_attributes: vec![],
+        namespace: RcOc::clone(&st.state.empty_namespace),
+        mode: get_scope_fmode(&env.scope),
+        fun: f,
     };
     st.state.named_hoisted_functions.insert(mangle_name, fd);
     fun_handle
 }
 
-fn make_dyn_meth_caller_lambda(
-    env: &Env,
-    st: &mut ClosureConvertVisitor,
-    pos: &Pos,
-    cexpr: &Expr,
-    fexpr: &Expr,
-    force: bool,
-) -> Expr_ {
-    fn get_scope_fmode(scope: &Scope) -> Mode {
-        scope
-            .iter()
-            .find_map(|item| match item {
-                ScopeItem::Class(cd) => Some(cd.get_mode()),
-                ScopeItem::Function(fd) => Some(fd.get_mode()),
-                _ => None,
-            })
-            .unwrap_or(Mode::Mstrict)
-    }
+fn make_dyn_meth_caller_lambda(pos: &Pos, cexpr: &Expr, fexpr: &Expr, force: bool) -> Expr_ {
     // TODO: Move dummy variable to tasl.rs once it exists.
     let dummy_saved_env = ();
     let pos = || pos.clone();
@@ -985,8 +993,7 @@ fn make_dyn_meth_caller_lambda(
         span: pos(),
         annotation: dummy_saved_env,
         readonly_this: None, // TODO: readonly_this in closure_convert
-        mode: get_scope_fmode(&env.scope),
-        readonly_ret: None, // TODO: readonly_ret in closure convert
+        readonly_ret: None,  // TODO: readonly_ret in closure convert
         ret: TypeHint((), None),
         name: Id(pos(), ";anonymous".to_string()),
         tparams: vec![],
@@ -997,17 +1004,15 @@ fn make_dyn_meth_caller_lambda(
             make_fn_param(pos(), &meth_var.1, false, false),
             variadic_param,
         ],
-        ctxs: None,        // TODO(T70095684)
-        unsafe_ctxs: None, // TODO(T70095684)
+        ctxs: Some(Contexts(pos(), vec![])),
+        unsafe_ctxs: None,
         body: FuncBody {
             ast: vec![Stmt(pos(), Stmt_::Return(Box::new(Some(invoke_method))))],
             annotation: (),
         },
         fun_kind: FunKind::FSync,
         user_attributes: attrs,
-        file_attributes: vec![],
         external: false,
-        namespace: RcOc::clone(&st.state.empty_namespace),
         doc_comment: None,
     };
     let expr_id = |name: String| Expr(pos(), Expr_::mk_id(Id(pos(), name)));
@@ -1102,6 +1107,7 @@ impl<'ast, 'a> VisitorMut<'ast> for ClosureConvertVisitor<'a> {
             get_unique_id_for_method(cls.get_name_str(), &md.name.1),
             function_state,
             HhasCoeffects::default(),
+            self.state.closure_cnt_per_fun,
         );
         visit_mut(self, &mut env, &mut md.params)
     }
@@ -1126,14 +1132,15 @@ impl<'ast, 'a> VisitorMut<'ast> for ClosureConvertVisitor<'a> {
                 let mut env = env.clone();
                 env.with_function(&x)?;
                 self.state.reset_function_counts();
-                let function_state = convert_function_like_body(self, &mut env, &mut x.body)?;
+                let function_state = convert_function_like_body(self, &mut env, &mut x.fun.body)?;
                 self.state.record_function_state(
-                    get_unique_id_for_function(&x.name.1),
+                    get_unique_id_for_function(&x.fun.name.1),
                     function_state,
                     HhasCoeffects::default(),
+                    self.state.closure_cnt_per_fun,
                 );
-                visit_mut(self, &mut env, &mut x.params)?;
-                visit_mut(self, &mut env, &mut x.user_attributes)
+                visit_mut(self, &mut env, &mut x.fun.params)?;
+                visit_mut(self, &mut env, &mut x.fun.user_attributes)
             }
             _ => def.recurse(env, self.object()),
         }
@@ -1253,8 +1260,7 @@ impl<'ast, 'a> VisitorMut<'ast> for ClosureConvertVisitor<'a> {
                     false
                 };
                 if let [cexpr, fexpr] = &mut *x.2 {
-                    let mut res =
-                        make_dyn_meth_caller_lambda(env, self, &*pos, &cexpr, &fexpr, force);
+                    let mut res = make_dyn_meth_caller_lambda(&*pos, &cexpr, &fexpr, force);
                     res.recurse(env, self.object())?;
                     res
                 } else {
@@ -1651,12 +1657,11 @@ fn extract_debugger_main(
         0..0,
         0,
     );
-    let fd = Fun_ {
+    let f = Fun_ {
         span: pos,
         annotation: (),
         readonly_this: None, // TODO(readonly): readonly_this in closure_convert
-        mode: Mode::Mstrict,
-        readonly_ret: None, // TODO(readonly): readonly_ret in closure_convert
+        readonly_ret: None,  // TODO(readonly): readonly_ret in closure_convert
         ret: TypeHint((), None),
         name: Id(Pos::make_none(), "include".into()),
         tparams: vec![],
@@ -1674,10 +1679,14 @@ fn extract_debugger_main(
             name: Id(Pos::make_none(), "__DebuggerMain".into()),
             params: vec![],
         }],
-        file_attributes: vec![],
         external: false,
-        namespace: RcOc::clone(empty_namespace),
         doc_comment: None,
+    };
+    let fd = FunDef {
+        namespace: RcOc::clone(empty_namespace),
+        file_attributes: vec![],
+        mode: Mode::Mstrict,
+        fun: f,
     };
     let mut new_defs = vec![Def::mk_fun(fd)];
     new_defs.append(&mut defs);
@@ -1759,6 +1768,7 @@ pub fn convert_toplevel_prog<'local_arena, 'arena>(
         get_unique_id_for_main(),
         visitor.state.current_function_state.clone(),
         HhasCoeffects::default(),
+        0,
     );
     hoist_toplevel_functions(&mut new_defs);
     let named_fun_defs = visitor
@@ -1768,7 +1778,7 @@ pub fn convert_toplevel_prog<'local_arena, 'arena>(
         .map(|(_, fd)| Def::mk_fun(fd));
     *defs = named_fun_defs.collect();
     defs.extend(new_defs.drain(..));
-    for class in visitor.state.hoisted_classes.into_iter() {
+    for class in visitor.state.closures.into_iter() {
         defs.push(Def::mk_class(class));
     }
     *e.emit_global_state_mut() = visitor.state.global_state;

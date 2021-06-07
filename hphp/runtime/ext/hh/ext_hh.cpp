@@ -40,6 +40,7 @@
 #include "hphp/runtime/base/variable-serializer.h"
 #include "hphp/runtime/ext/fb/ext_fb.h"
 #include "hphp/runtime/ext/collections/ext_collections-pair.h"
+#include "hphp/runtime/ext/std/ext_std_closure.h"
 #include "hphp/runtime/vm/class-meth-data-ref.h"
 #include "hphp/runtime/vm/extern-compiler.h"
 #include "hphp/runtime/vm/memo-cache.h"
@@ -337,7 +338,7 @@ void serialize_memoize_obj(StringBuffer& sb, int depth, ObjectData* obj) {
   if (obj->isCollection()) {
     serialize_memoize_col(sb, depth, obj);
   } else if (obj->instanceof(s_IMemoizeParam)) {
-    Variant ser = obj->o_invoke_few_args(s_getInstanceKey, 0);
+    Variant ser = obj->o_invoke_few_args(s_getInstanceKey, RuntimeCoeffects::fixme(), 0);
     serialize_memoize_code(sb, SER_MC_OBJECT);
     serialize_memoize_string_data(sb, ser.toString().get());
   } else {
@@ -1133,6 +1134,44 @@ int64_t HHVM_FUNCTION(set_implicit_context_by_index, int64_t index) {
   return prev_index;
 }
 
+namespace {
+
+Variant coeffects_call_helper(const Variant& function, const char* name,
+                              RuntimeCoeffects coeffects,
+                              bool getCoeffectsFromClosure) {
+  CallCtx ctx;
+  vm_decode_function(function, ctx);
+  if (!ctx.func) {
+    raise_error("%s expects first argument to be a closure or a "
+                "function pointer",
+                name);
+  }
+  if (getCoeffectsFromClosure &&
+      ctx.func->hasCoeffectRules() &&
+      ctx.func->getCoeffectRules().size() == 1 &&
+      ctx.func->getCoeffectRules()[0].isClosureParentScope()) {
+    assertx(ctx.func->isClosureBody());
+    auto const closure = reinterpret_cast<c_Closure*>(ctx.this_);
+    coeffects = closure->getCoeffects();
+  }
+  return Variant::attach(
+    g_context->invokeFunc(ctx.func, init_null_variant, ctx.this_, ctx.cls,
+                          coeffects, ctx.dynamic)
+  );
+}
+
+} // namespace
+
+Variant HHVM_FUNCTION(coeffects_backdoor, const Variant& function) {
+  return coeffects_call_helper(function, "HH\\Coeffects\\backdoor",
+                               RuntimeCoeffects::defaults(), true);
+}
+
+Variant HHVM_FUNCTION(enter_policied_of, const Variant& function) {
+  return coeffects_call_helper(function, "HH\\Coeffects\\enter_policied_of",
+                               RuntimeCoeffects::policied_of(), false);
+}
+
 bool HHVM_FUNCTION(is_dynamically_callable_inst_method, StringArg cls,
                                                         StringArg meth) {
   if (auto const c = Class::load(cls.get())) {
@@ -1242,6 +1281,14 @@ int64_t HHVM_FUNCTION(hphp_get_logger_request_id) {
   return Logger::GetRequestId();
 }
 
+void HHVM_FUNCTION(enable_function_coverage) {
+  Func::EnableCoverage();
+}
+
+Array HHVM_FUNCTION(collect_function_coverage) {
+  return Func::GetCoverage();
+}
+
 static struct HHExtension final : Extension {
   HHExtension(): Extension("hh", NO_EXTENSION_VERSION_YET) { }
   void moduleInit() override {
@@ -1281,6 +1328,8 @@ static struct HHExtension final : Extension {
     X(set_implicit_context_by_index);
     X(get_executable_lines);
     X(hphp_get_logger_request_id);
+    X(enable_function_coverage);
+    X(collect_function_coverage);
 #undef X
 #define X(nm) HHVM_NAMED_FE(HH\\rqtrace\\nm, HHVM_FN(nm))
     X(is_enabled);
@@ -1296,6 +1345,9 @@ static struct HHExtension final : Extension {
     X(AUTOLOAD_MAP_KIND_OF_CONSTANT, Constant);
     X(AUTOLOAD_MAP_KIND_OF_TYPE_ALIAS, TypeAlias);
 #undef X
+
+    HHVM_NAMED_FE(HH\\Coeffects\\backdoor, HHVM_FN(coeffects_backdoor));
+    HHVM_NAMED_FE(HH\\Coeffects\\enter_policied_of, HHVM_FN(enter_policied_of));
 
     HHVM_NAMED_FE(__SystemLib\\is_dynamically_callable_inst_method,
                   HHVM_FN(is_dynamically_callable_inst_method));

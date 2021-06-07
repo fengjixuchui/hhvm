@@ -17,6 +17,11 @@ let class_type r name tyl =
 
 let prim_type r t = mk (r, Tprim t)
 
+let neg r t =
+  match t with
+  | Nast.Tnull -> mk (r, Tnonnull)
+  | _ -> mk (r, Tneg t)
+
 let traversable r ty = class_type r SN.Collections.cTraversable [ty]
 
 let keyed_traversable r kty vty =
@@ -116,6 +121,8 @@ let ty_object r = mk (r, Tobject)
 let tyvar r v = mk (r, Tvar v)
 
 let generic ?(type_args = []) r n = mk (r, Tgeneric (n, type_args))
+
+let this r = mk (r, Tgeneric (SN.Typehints.this, []))
 
 let err r = mk (r, Terr)
 

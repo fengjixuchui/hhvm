@@ -23,10 +23,12 @@
 #include "hphp/util/functional.h"
 #include "hphp/util/gzip.h"
 #include "hphp/util/string-holder.h"
+#include "hphp/util/tiny-vector.h"
+
+#include "proxygen/lib/http/HTTPHeaders.h"
 
 #include <list>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -38,15 +40,8 @@ struct Variant;
 struct ResponseCompressorManager;
 struct StructuredLogEntry;
 
-/**
- * For storing headers and cookies.
- */
-template <typename V>
-using CaseInsenMap =
-  std::unordered_map<std::string, V, string_hashi, string_eqstri>;
-
-using HeaderMap = CaseInsenMap<std::vector<std::string>>;
-using CookieList = std::vector<std::pair<std::string, std::string>>;
+using HeaderMap = hphp_fast_string_imap<TinyVector<std::string>>;
+using CookieMap = hphp_fast_string_map<std::string>;
 
 struct ITransportHeaders {
   enum class Method {
@@ -61,6 +56,7 @@ struct ITransportHeaders {
   virtual std::string getCommand() = 0; // URL with params stripped
   virtual std::string getHeader(const char *name) = 0;
   virtual const HeaderMap& getHeaders() = 0;
+  virtual const proxygen::HTTPHeaders* getProxygenHeaders() { return nullptr; }
   virtual Method getMethod() = 0;
   virtual const char *getMethodName() = 0;
   virtual const void *getPostData(size_t &size) = 0;
@@ -351,12 +347,6 @@ public:
   std::string getCommand();
 
   /**
-   * Whether a parameter exists. Normally this is not needed to know, unless
-   * "null" is different from an empty string or 0.
-   */
-  bool paramExists(const char *name, Method method = Method::GET);
-
-  /**
    * Get value of a parameter. Returns empty string is not present.
    */
   std::string getParam(const char *name, Method method = Method::GET);
@@ -467,56 +457,55 @@ protected:
    * token's start char * addresses in ParamMaps. Therefore, this entire
    * process is very efficient without excessive string copying.
    */
-  using ParamMap = hphp_hash_map<const char*, std::vector<const char*>,
+  using ParamMap = hphp_fast_map<const char*, TinyVector<const char*>,
                                  cstr_hash, eqstr>;
 
   // timers and other perf data
-  timespec m_queueTime;
-  timespec m_wallTime;
-  timespec m_cpuTime;
+  timespec m_queueTime{};
+  timespec m_wallTime{};
+  timespec m_cpuTime{};
 
-  int64_t m_instructions;
+  int64_t m_instructions{};
 
-  int64_t m_sleepTime;
-  int64_t m_usleepTime;
-  int64_t m_nsleepTimeS;
-  int32_t m_nsleepTimeN;
+  int64_t m_sleepTime{};
+  int64_t m_usleepTime{};
+  int64_t m_nsleepTimeS{};
+  int32_t m_nsleepTimeN{};
 
   std::unique_ptr<StructuredLogEntry> m_structLogEntry;
 
   // input
-  char *m_url;
-  char *m_postData;
-  bool m_postDataParsed;
+  char *m_url{};
+  char *m_postData{};
   ParamMap m_getParams;
   ParamMap m_postParams;
+  bool m_postDataParsed{};
 
   // output
-  bool m_chunkedEncoding;
-  bool m_headerSent;
-  int m_responseCode;
+  bool m_chunkedEncoding{};
+  bool m_headerSent{};
+  bool m_firstHeaderSet{};
+  bool m_sendEnded{};
+  bool m_sendContentType{true};
+  bool m_isSSL{};
+  int m_responseCode{-1};
   std::string m_responseCodeInfo;
   HeaderMap m_responseHeaders;
-  bool m_firstHeaderSet;
   std::string m_firstHeaderFile;
-  int m_firstHeaderLine;
-  CookieList m_responseCookiesList;
-  int m_responseSize;
-  int m_responseTotalSize; // including added headers
-  int m_responseSentSize;
-  int64_t m_flushTimeUs;
-  bool m_sendEnded;
+  int m_firstHeaderLine{};
+  int m_responseSize{};
+  CookieMap m_responseCookies;
+  int m_responseTotalSize{}; // including added headers
+  int m_responseSentSize{};
+  int64_t m_flushTimeUs{};
 
   std::vector<int> m_chunksSentSizes;
 
   std::string m_mimeType;
-  bool m_sendContentType;
 
   std::unique_ptr<ResponseCompressorManager> m_compressor;
 
-  bool m_isSSL;
-
-  ThreadType m_threadType;
+  ThreadType m_threadType{ThreadType::RequestThread};
 
   folly::Optional<rqtrace::Trace> m_requestTrace;
 
@@ -530,7 +519,6 @@ protected:
 
   ResponseCompressorManager& getCompressor();
 
-
 private:
   StringHolder compressResponse(const char *data, int size, bool last);
   void prepareHeaders(bool precompressed, bool chunked,
@@ -539,4 +527,3 @@ private:
 
 ///////////////////////////////////////////////////////////////////////////////
 }
-

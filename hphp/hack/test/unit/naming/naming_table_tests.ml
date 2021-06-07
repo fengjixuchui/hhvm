@@ -286,7 +286,7 @@ let test_local_changes () =
       let changes_since_baseline_path = "/tmp/base_plus_changes" in
       Naming_table.save_changes_since_baseline
         backed_naming_table
-        changes_since_baseline_path;
+        ~destination_path:changes_since_baseline_path;
       let (changes_since_baseline : Naming_table.changes_since_baseline) =
         Marshal.from_string (Disk.cat changes_since_baseline_path) 0
       in
@@ -582,7 +582,9 @@ let test_naming_table_hash () =
     "Expected foo lower bound to be correct (this test must be updated if the hashing logic changes)";
   Asserter.Bool_asserter.assert_equals
     true
-    (foo_lower_bound <= foo_naming_hash)
+    Int64.(
+      Typing_deps.NamingHash.to_int64 foo_lower_bound
+      <= Typing_deps.NamingHash.to_int64 foo_naming_hash)
     (Printf.sprintf
        "sanity check: foo_lower_bound (%d) <= foo_naming_hash (%d)"
        (hash_to_int foo_lower_bound)
@@ -598,7 +600,9 @@ let test_naming_table_hash () =
     "Expected foo upper bound to be correct";
   Asserter.Bool_asserter.assert_equals
     true
-    (foo_naming_hash <= foo_upper_bound)
+    Int64.(
+      Typing_deps.NamingHash.to_int64 foo_naming_hash
+      <= Typing_deps.NamingHash.to_int64 foo_upper_bound)
     (Printf.sprintf
        "sanity check: foo_naming_hash (%d) <= foo_upper_bound (%d)"
        (hash_to_int foo_naming_hash)
@@ -629,7 +633,7 @@ let test_naming_table_query_by_dep_hash () =
       in
       let db_path = Option.value_exn db_path in
       Asserter.Relative_path_asserter.assert_list_equals
-        [Relative_path.from_root "qux.php"]
+        [Relative_path.from_root ~suffix:"qux.php"]
         ( Typing_deps.Dep.GConst "\\Qux"
         |> Typing_deps.Dep.make hash_mode
         |> Naming_sqlite.get_const_paths_by_dep_hash db_path
@@ -644,7 +648,7 @@ let test_naming_table_query_by_dep_hash () =
         "Look up non-existent const by dep hash should return empty list";
 
       Asserter.Relative_path_asserter.assert_list_equals
-        [Relative_path.from_root "bar.php"]
+        [Relative_path.from_root ~suffix:"bar.php"]
         ( Typing_deps.Dep.Fun "\\bar"
         |> Typing_deps.Dep.make hash_mode
         |> Naming_sqlite.get_fun_paths_by_dep_hash db_path
@@ -659,7 +663,7 @@ let test_naming_table_query_by_dep_hash () =
         "Look up non-existent fun by dep hash should return empty list";
 
       Asserter.Relative_path_asserter.assert_list_equals
-        [Relative_path.from_root "foo.php"]
+        [Relative_path.from_root ~suffix:"foo.php"]
         ( Typing_deps.Dep.Type "\\Foo"
         |> Typing_deps.Dep.make hash_mode
         |> Naming_sqlite.get_type_paths_by_dep_hash db_path
@@ -674,7 +678,7 @@ let test_naming_table_query_by_dep_hash () =
         "Look up non-existent class by dep hash should return empty list";
 
       Asserter.Relative_path_asserter.assert_list_equals
-        [Relative_path.from_root "baz.php"]
+        [Relative_path.from_root ~suffix:"baz.php"]
         ( Typing_deps.Dep.Type "\\Baz"
         |> Typing_deps.Dep.make hash_mode
         |> Naming_sqlite.get_type_paths_by_dep_hash db_path
@@ -689,7 +693,7 @@ let test_naming_table_query_by_dep_hash () =
         "Look up non-existent typedef by dep hash should return empty list";
 
       Asserter.Relative_path_asserter.assert_list_equals
-        [Relative_path.from_root "qux.php"]
+        [Relative_path.from_root ~suffix:"qux.php"]
         ( Typing_deps.Dep.GConst "\\Qux"
         |> Typing_deps.Dep.make hash_mode
         |> Typing_deps.DepSet.singleton deps_mode
@@ -697,7 +701,7 @@ let test_naming_table_query_by_dep_hash () =
         |> Relative_path.Set.elements )
         "Bulk lookup for const should be correct";
       Asserter.Relative_path_asserter.assert_list_equals
-        [Relative_path.from_root "bar.php"]
+        [Relative_path.from_root ~suffix:"bar.php"]
         ( Typing_deps.Dep.Fun "\\bar"
         |> Typing_deps.Dep.make hash_mode
         |> Typing_deps.DepSet.singleton deps_mode
@@ -705,7 +709,7 @@ let test_naming_table_query_by_dep_hash () =
         |> Relative_path.Set.elements )
         "Bulk lookup for fun should be correct";
       Asserter.Relative_path_asserter.assert_list_equals
-        [Relative_path.from_root "baz.php"]
+        [Relative_path.from_root ~suffix:"baz.php"]
         ( Typing_deps.Dep.Type "\\Baz"
         |> Typing_deps.Dep.make hash_mode
         |> Typing_deps.DepSet.singleton deps_mode
@@ -715,9 +719,9 @@ let test_naming_table_query_by_dep_hash () =
 
       Asserter.Relative_path_asserter.assert_list_equals
         [
-          Relative_path.from_root "bar.php";
-          Relative_path.from_root "baz.php";
-          Relative_path.from_root "qux.php";
+          Relative_path.from_root ~suffix:"bar.php";
+          Relative_path.from_root ~suffix:"baz.php";
+          Relative_path.from_root ~suffix:"qux.php";
         ]
         ( Typing_deps.DepSet.make deps_mode
         |> Typing_deps.DepSet.union
@@ -740,13 +744,15 @@ let test_naming_table_query_by_dep_hash () =
       let baz_file_info = FileInfo.empty_t in
       let bar_file_info =
         {
+          (* Might raise {!Naming_table.File_info_not_found} *)
           (Naming_table.get_file_info_unsafe
              backed_naming_table
-             (Relative_path.from_root "bar.php"))
+             (Relative_path.from_root ~suffix:"bar.php"))
           with
           FileInfo.classes =
             [
-              ( FileInfo.File (FileInfo.Class, Relative_path.from_root "bar.php"),
+              ( FileInfo.File
+                  (FileInfo.Class, Relative_path.from_root ~suffix:"bar.php"),
                 "\\Baz" );
             ];
         }
@@ -755,17 +761,17 @@ let test_naming_table_query_by_dep_hash () =
       let new_naming_table =
         Naming_table.update
           new_naming_table
-          (Relative_path.from_root "baz.php")
+          (Relative_path.from_root ~suffix:"baz.php")
           baz_file_info
       in
       let new_naming_table =
         Naming_table.update
           new_naming_table
-          (Relative_path.from_root "bar.php")
+          (Relative_path.from_root ~suffix:"bar.php")
           bar_file_info
       in
       Asserter.Relative_path_asserter.assert_list_equals
-        [Relative_path.from_root "bar.php"]
+        [Relative_path.from_root ~suffix:"bar.php"]
         ( Typing_deps.Dep.Type "\\Baz"
         |> Typing_deps.Dep.make hash_mode
         |> Typing_deps.DepSet.singleton deps_mode

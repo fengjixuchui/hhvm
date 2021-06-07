@@ -20,10 +20,14 @@
 #include <folly/Format.h>
 #include <folly/Singleton.h>
 
+#include "hphp/runtime/base/autoload-handler.h"
 #include "hphp/runtime/base/repo-autoload-map.h"
+
 #include "hphp/runtime/vm/blob-helper.h"
 #include "hphp/runtime/vm/repo-autoload-map-builder.h"
+#include "hphp/runtime/vm/repo-file.h"
 #include "hphp/runtime/vm/repo-global-data.h"
+
 #include "hphp/runtime/server/xbox-server.h"
 
 #include "hphp/util/assertions.h"
@@ -47,7 +51,7 @@ const char* Repo::kMagicProduct =
   "facebook.com HipHop Virtual Machine bytecode repository";
 const char* Repo::kDbs[RepoIdCount] = { "main",   // Central.
                                         "local"}; // Local.
-Repo::GlobalData Repo::s_globalData;
+RepoGlobalData Repo::s_globalData;
 bool Repo::s_deleteLocalOnFailure;
 
 void initialize_repo() {
@@ -66,10 +70,12 @@ void initialize_repo() {
 THREAD_LOCAL(Repo, t_dh);
 
 Repo& Repo::get() {
+  assertx(!RO::RepoAuthoritative);
   return *t_dh.get();
 }
 
 void Repo::shutdown() {
+  assertx(!RO::RepoAuthoritative);
   t_dh.destroy();
 }
 
@@ -97,6 +103,7 @@ bool Repo::prefork() {
 
 void Repo::postfork(pid_t pid) {
   folly::SingletonVault::singleton()->reenableInstances();
+  RepoFile::postfork();
   XboxServer::Restart();
   if (pid == 0) {
     Logger::ResetPid();
@@ -119,7 +126,7 @@ Repo::Repo()
     m_txDepth(0), m_rollback(false), m_beginStmt(*this),
     m_rollbackStmt(*this), m_commitStmt(*this), m_urp(*this), m_pcrp(*this),
     m_rrp(*this), m_frp(*this), m_lsrp(*this), m_numOpenRepos(0) {
-
+  assertx(!RO::RepoAuthoritative);
   ++s_nRepos;
   connect();
 }
@@ -235,7 +242,9 @@ void Repo::loadGlobalData(bool readGlobalTables /* = true */) {
             throw RepoExc("Can't find key = 'autoloadmap' in %s", tbl.c_str());
           }
           BlobDecoder decoder = query.getBlob(0, true);
-          s_globalData.AutoloadMap = RepoAutoloadMapBuilder::serde(decoder);
+          AutoloadHandler::setRepoAutoloadMap(
+            RepoAutoloadMapBuilder::serde(decoder)
+          );
         }
       }
 
@@ -284,6 +293,8 @@ void Repo::loadGlobalData(bool readGlobalTables /* = true */) {
       s_globalData.ClassPassesClassname;
     RO::EvalClassnameNotices =
       s_globalData.ClassnameNotices;
+    RO::EvalClassIsStringNotices =
+      s_globalData.ClassIsStringNotices;
     RO::EvalRaiseClsMethConversionWarning =
       s_globalData.RaiseClsMethConversionWarning;
 
@@ -295,7 +306,15 @@ void Repo::loadGlobalData(bool readGlobalTables /* = true */) {
 
     RuntimeOption::ConstantFunctions.clear();
     for (auto const& elm : s_globalData.ConstantFunctions) {
-      RuntimeOption::ConstantFunctions.insert(elm);
+      auto result = RuntimeOption::ConstantFunctions.emplace(
+        elm.first, make_tv<KindOfUninit>()
+      );
+      if (result.second) {
+        tvAsVariant(result.first->second) = unserialize_from_string(
+          elm.second, VariableUnserializer::Type::Internal
+        );
+        tvAsVariant(result.first->second).setEvalScalar();
+      }
     }
     return;
   }
@@ -308,7 +327,7 @@ void Repo::loadGlobalData(bool readGlobalTables /* = true */) {
   } else {
     // We should always have a global data section in RepoAuthoritative
     // mode, or the repo is messed up.
-    std::fprintf(stderr, "Failed to load Repo::GlobalData:\n");
+    std::fprintf(stderr, "Failed to load RepoGlobalData:\n");
     for (auto& f : failures) {
       std::fprintf(stderr, "  %s\n", f.c_str());
     }
@@ -318,7 +337,7 @@ void Repo::loadGlobalData(bool readGlobalTables /* = true */) {
   exit(1);
 }
 
-void Repo::saveGlobalData(GlobalData&& newData,
+void Repo::saveGlobalData(RepoGlobalData&& newData,
                           const RepoAutoloadMapBuilder& autoloadMapBuilder) {
   s_globalData = std::move(newData);
 

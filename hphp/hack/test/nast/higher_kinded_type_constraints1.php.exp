@@ -1,3 +1,7 @@
+
+
+(Relative_path.Dummy, "higher_kinded_type_constraints1.php"):
+
 [(Typedef
     { t_annotation = (); t_name = ([10:6-8], "\\T2"); t_tparams = []; 
       t_constraint = None; t_kind = ([10:11-16], Hmixed); t_user_attributes = []; 
@@ -69,7 +73,7 @@
          ];
        c_extends = []; c_uses = []; c_use_as_alias = []; c_insteadof_alias = []; 
        c_xhp_attr_uses = []; c_xhp_category = None; c_reqs = []; c_implements = []; 
-       c_implements_dynamic = false; c_where_constraints = []; c_consts = []; 
+       c_support_dynamic_type = false; c_where_constraints = []; c_consts = []; 
        c_typeconsts = []; c_vars = []; c_methods = []; c_attributes = []; 
        c_xhp_children = []; c_xhp_attrs = [];
        c_namespace =
@@ -79,3 +83,4 @@
          ns_disable_xhp_element_mangling = false };
        c_user_attributes = []; c_file_attributes = []; c_enum = None; 
        c_doc_comment = None; c_emit_id = None })
+  ]

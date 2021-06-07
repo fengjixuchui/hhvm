@@ -10,7 +10,7 @@ open Hh_prelude
 
 (* This should stay at toplevel in order to be executed before [Daemon.check_entry_point]. *)
 let entry =
-  WorkerController.register_entry_point ~restore:Batch_global_state.restore
+  WorkerControllerEntryPoint.register ~restore:Batch_global_state.restore
 
 let catch_and_classify_exceptions : 'x 'b. ('x -> 'b) -> 'x -> 'b =
  fun f x ->
@@ -21,7 +21,9 @@ let catch_and_classify_exceptions : 'x 'b. ('x -> 'b) -> 'x -> 'b =
   | Decl_defs.Decl_not_found x ->
     Hh_logger.log "Decl_not_found %s" x;
     Exit.exit Exit_status.Decl_not_found
-  | Caml.Not_found -> Exit.exit Exit_status.Worker_not_found_exception
+  | Not_found_s _
+  | Caml.Not_found ->
+    Exit.exit Exit_status.Worker_not_found_exception
 
 let make_tmp_dir () =
   let tmpdir = Path.make (Tmp.temp_dir GlobalConfig.tmp_dir "files") in

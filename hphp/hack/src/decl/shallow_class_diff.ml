@@ -52,7 +52,7 @@ let diff_members
         diff_member old_member new_member
         |> Option.value_map ~default:diff ~f:(fun ch -> SMap.add diff name ch))
 
-let diff_const c1 c2 : member_change option =
+let diff_const (c1 : shallow_class_const) c2 : member_change option =
   let c1 = Decl_pos_utils.NormalizeSig.shallow_class_const c1 in
   let c2 = Decl_pos_utils.NormalizeSig.shallow_class_const c2 in
   if equal_shallow_class_const c1 c2 then
@@ -67,15 +67,15 @@ let diff_typeconst tc1 tc2 : member_change option =
   let tc2 = Decl_pos_utils.NormalizeSig.shallow_typeconst tc2 in
   if equal_shallow_typeconst tc1 tc2 then
     None
-  else if
-    not
-      (Typing_defs.equal_typeconst_abstract_kind
-         tc1.stc_abstract
-         tc2.stc_abstract)
-  then
-    Some Changed_inheritance
   else
-    Some Modified
+    let open Typing_defs in
+    match (tc1.stc_kind, tc2.stc_kind) with
+    | (TCAbstract _, TCAbstract _)
+    | (TCPartiallyAbstract _, TCPartiallyAbstract _)
+    | (TCConcrete _, TCConcrete _) ->
+      Some Modified
+    | (_, (TCAbstract _ | TCPartiallyAbstract _ | TCConcrete _)) ->
+      Some Changed_inheritance
 
 let diff_prop p1 p2 : member_change option =
   let p1 = Decl_pos_utils.NormalizeSig.shallow_prop p1 in

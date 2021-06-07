@@ -71,7 +71,8 @@ module Locl_Inst = struct
       let ty1 = instantiate subst ty1 in
       let ty2 = instantiate subst ty2 in
       Tvec_or_dict (ty1, ty2)
-    | (Tobject | Tvar _ | Tdynamic | Tnonnull | Tany _ | Terr | Tprim _) as x ->
+    | (Tobject | Tvar _ | Tdynamic | Tnonnull | Tany _ | Terr | Tprim _ | Tneg _)
+      as x ->
       x
     | Ttuple tyl ->
       let tyl = List.map tyl (instantiate subst) in
@@ -166,7 +167,7 @@ end
   type Bar<T2> = Foo<T2>;
 
   Here, T2 of Bar implicitly has the bound T2 as num. However, in the current design, we only
-  ever check that when expaning Bar, the argument in place of T2 satisfies all the
+  ever check that when expanding Bar, the argument in place of T2 satisfies all the
   implicit bounds.
   However, this is not feasible for using aliases and newtypes as higher-kinded types, where we
   use them without expanding them.
@@ -204,7 +205,7 @@ let check_typedef_usable_as_hk_type env use_pos typedef_name typedef_info =
   let check_tapply r class_sid type_args =
     let decl_ty = Typing_make_type.apply r class_sid type_args in
     let (env, locl_ty) =
-      TUtils.localize_with_self env ~ignore_errors:true decl_ty
+      TUtils.localize_no_subst env ~ignore_errors:true decl_ty
     in
     match get_node (TUtils.get_base_type env locl_ty) with
     | Tclass (cls_name, _, tyl) when not (List.is_empty tyl) ->
@@ -212,10 +213,7 @@ let check_typedef_usable_as_hk_type env use_pos typedef_name typedef_info =
       | Some cls ->
         let tc_tparams = Cls.tparams cls in
         let ety_env =
-          {
-            (TUtils.env_with_self env ~on_error:Errors.ignore_error) with
-            substs = Subst.make_locl tc_tparams tyl;
-          }
+          { empty_expand_env with substs = Subst.make_locl tc_tparams tyl }
         in
         iter2_shortest
           begin

@@ -24,6 +24,7 @@
 #include <folly/Optional.h>
 
 #include "hphp/hhbbc/index.h"
+#include "hphp/hhbbc/interp.h"
 #include "hphp/hhbbc/misc.h"
 #include "hphp/hhbbc/type-system.h"
 #include "hphp/hhbbc/bc.h"
@@ -428,6 +429,45 @@ State with_throwable_only(const Index& env, const State&);
 //////////////////////////////////////////////////////////////////////
 
 /*
+ * Undo log for mutations to the interp state. If mutating state, this
+ * records enough information to undo that mutation and restore the
+ * state to the previous values.
+ */
+struct StateMutationUndo {
+  // Marks an instruction boundary, along with the flags during
+  // interp.
+  struct Mark {
+    bool wasPEI = true;
+    bool unreachable = false;
+    decltype(StepFlags::mayReadLocalSet) mayReadLocalSet;
+  };
+  // Push to the stack (undone by a pop)
+  struct Push {};
+  // Pop from the stack (undone by pushing the recorded type)
+  struct Pop { Type t; };
+  // Location modification (undone by changing the local slot to the
+  // recorded type)
+  struct Local { LocalId id; Type t; };
+  // Stack modification (undone by changing the stack slot to the
+  // recorded type).
+  struct Stack { size_t idx; Type t; };
+  using Events = boost::variant<Push, Pop, Local, Stack, Mark>;
+
+  std::vector<Events> events;
+
+  void onPush() { events.emplace_back(Push{}); }
+  void onPop(Type old) { events.emplace_back(Pop{ std::move(old) }); }
+  void onStackWrite(size_t idx, Type old) {
+    events.emplace_back(Stack{ idx, std::move(old) });
+  }
+  void onLocalWrite(LocalId l, Type old) {
+    events.emplace_back(Local{ l, std::move(old) });
+  }
+};
+
+//////////////////////////////////////////////////////////////////////
+
+/*
  * PropertiesInfo packages the PropState for private instance and
  * static properties, which is cross-block information collected in
  * CollectedInfo.
@@ -441,17 +481,55 @@ State with_throwable_only(const Index& env, const State&);
 struct PropertiesInfo {
   PropertiesInfo(const Index&, Context, ClassAnalysis*);
 
-  PropState& privateProperties();
-  PropState& privateStatics();
-  const PropState& privateProperties() const;
-  const PropState& privateStatics() const;
+  const PropStateElem<>* readPrivateProp(SString name) const;
+  const PropStateElem<>* readPrivateStatic(SString name) const;
+
+  void mergeInPrivateProp(const Index& index,
+                          SString name,
+                          const Type& t);
+  void mergeInPrivateStatic(const Index& index,
+                            SString name,
+                            const Type& t,
+                            bool ignoreConst,
+                            bool mustBeReadOnly);
+
+  void mergeInPrivateStaticPreAdjusted(SString name, const Type& t);
+
+  void mergeInAllPrivateProps(const Index&, const Type&);
+  void mergeInAllPrivateStatics(const Index&, const Type&,
+                                bool ignoreConst,
+                                bool mustBeReadOnly);
 
   void setBadPropInitialValues();
+
+  const PropState& privatePropertiesRaw() const;
+  const PropState& privateStaticsRaw() const;
 
 private:
   ClassAnalysis* const m_cls;
   PropState m_privateProperties;
   PropState m_privateStatics;
+  const php::Func* m_func;
+};
+
+//////////////////////////////////////////////////////////////////////
+
+/*
+ * Encapsulates information about the current class's methods during
+ * class-at-a-time analysis. This might be more refined than the
+ * information in the Index.
+ */
+struct MethodsInfo {
+  MethodsInfo(Context, ClassAnalysis*);
+
+  // Look up the best known return type for the current class's
+  // method, return folly::none if not known, or if the Func is not a
+  // method of the current class.
+  folly::Optional<Type> lookupReturnType(const php::Func&);
+
+private:
+  ClassAnalysis* m_cls;
+  const php::Func* m_func;
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -515,13 +593,12 @@ struct CollectedInfo {
 
   ClosureUseVarMap closureUseTypes;
   PropertiesInfo props;
+  MethodsInfo methods;
   hphp_fast_set<std::pair<const php::Func*, BlockId>>
     unfoldableFuncs;
   bool effectFree{true};
   bool hasInvariantIterBase{false};
   CollectionOpts opts{};
-  bool (*propagate_constants)(const Bytecode& bc, State& state,
-                              BytecodeVec& out) = nullptr;
   /*
    * See FuncAnalysisResult for details.
    */
@@ -575,7 +652,6 @@ bool merge_into(State&, const State&);
  * See analyze.cpp for details on when this is needed.
  */
 bool widen_into(State&, const State&);
-void widen_props(PropState&);
 
 //////////////////////////////////////////////////////////////////////
 

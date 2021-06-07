@@ -39,7 +39,7 @@ let () =
     Sys.sigint
     (Sys.Signal_handle (fun _ -> raise Exit_status.(Exit_with Interrupted)));
   let init_id = Random_id.short_string () in
-  let command = ClientArgs.parse_args ~init_id in
+  let command = ClientArgs.parse_args () in
   let command_name =
     match command with
     | ClientCommand.CCheck _ -> "Check"
@@ -52,12 +52,11 @@ let () =
     | ClientCommand.CRage _ -> "Rage"
   in
 
-  (* Set up logging. *)
+  (* The global variable Relative_path.root must be initialized for a wide variety of things *)
   let root = ClientArgs.root command in
-  HackEventLogger.client_init
-    ~init_id
-    ~custom_columns:(ClientCommand.get_custom_telemetry_data command)
-    (Option.value root ~default:Path.dummy_path);
+  Option.iter root ~f:(Relative_path.set_path_prefix Relative_path.Root);
+
+  (* We'll chose where Hh_logger.log gets sent *)
   Hh_logger.Level.set_min_level_file Hh_logger.Level.Info;
   Hh_logger.Level.set_min_level_stderr Hh_logger.Level.Error;
   Hh_logger.set_id (Printf.sprintf "%s#%s" command_name init_id);
@@ -81,16 +80,49 @@ let () =
     "[hh_client] %s"
     (String.concat ~sep:" " (Array.to_list Sys.argv));
 
+  HackEventLogger.client_init
+    ~init_id
+    ~custom_columns:(ClientCommand.get_custom_telemetry_data command)
+    (Option.value root ~default:Path.dummy_path);
+  (* we also have to patch up HackEventLogger with stuff we learn from root, if available... *)
+  let local_config =
+    match root with
+    | None -> None
+    | Some root ->
+      (* The code to load hh.conf (ServerLocalConfig) is a bit weirdly factored.
+      It requires a ServerArgs structure, solely to pick out --config options. We
+      dont have ServerArgs (we only have client args!) but we do parse --config
+      options and will patch them onto a fake ServerArgs. *)
+      let fake_server_args =
+        ServerArgs.default_options_with_check_mode ~root:(Path.to_string root)
+      in
+      let fake_server_args =
+        match ClientArgs.config command with
+        | None -> fake_server_args
+        | Some config -> ServerArgs.set_config fake_server_args config
+      in
+      let (config, local_config) =
+        ServerConfig.load ~silent:true ServerConfig.filename fake_server_args
+      in
+      HackEventLogger.set_hhconfig_version
+        (ServerConfig.version config |> Config_file.version_to_string_opt);
+      HackEventLogger.set_rollout_flags
+        (ServerLocalConfig.to_rollout_flags local_config);
+      Some local_config
+  in
+
   try
     let exit_status =
       match command with
       | ClientCommand.CCheck check_env ->
-        Lwt_main.run (ClientCheck.main check_env)
+        Lwt_main.run
+          (ClientCheck.main check_env (Option.value_exn local_config))
       | ClientCommand.CStart env -> Lwt_main.run (ClientStart.main env)
       | ClientCommand.CStop env -> Lwt_main.run (ClientStop.main env)
       | ClientCommand.CRestart env -> Lwt_main.run (ClientRestart.main env)
-      | ClientCommand.CLsp env -> Lwt_main.run (ClientLsp.main env)
-      | ClientCommand.CDebug env -> Lwt_main.run (ClientDebug.main env)
+      | ClientCommand.CLsp args -> Lwt_main.run (ClientLsp.main args ~init_id)
+      | ClientCommand.CDebug env ->
+        Lwt_main.run (ClientDebug.main env (Option.value_exn local_config))
       | ClientCommand.CRage env -> Lwt_main.run (ClientRage.main env)
       | ClientCommand.CDownloadSavedState env ->
         Lwt_main.run (ClientDownloadSavedState.main env)
@@ -108,8 +140,10 @@ let () =
     in
     Hh_logger.log
       ~lvl
-      "hh_client bad exit: %s - %s\n%s"
+      "CLIENT_BAD_EXIT client_command=%s exit_status=%s exit_code=%d exn=%s stack=%s"
+      command_name
       (Exit_status.show es)
+      (Exit_status.exit_code es)
       (Exception.get_ctor_string e)
       (Exception.get_backtrace_string e |> Exception.clean_stack);
     HackEventLogger.client_bad_exit ~command_name es e;

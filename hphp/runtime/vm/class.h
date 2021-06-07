@@ -91,14 +91,6 @@ struct StaticPropData {
 };
 
 /*
- * Utility wrapper for an array of multiple, contiguously-allocated static
- * properties. Allows distinguishing them via type_scan::Index.
- */
-struct StaticMultiPropData {
-  TypedValue val;
-};
-
-/*
  * Class kinds---classes, interfaces, traits, and enums.
  *
  * "Normal class" refers to any classes that are not interfaces, traits, enums.
@@ -117,14 +109,6 @@ using ClassPtr = AtomicSharedLowPtr<Class>;
 using ObjReleaseFunc = BuiltinDtorFunction;
 
 using ObjectProps = tv_layout::Tv7Up;
-
-// As an optimization, we put multiple static props in a single RDS allocation
-// to speed up initialization and improve cache locality. Persistent props are
-// not included here - they get separate, persistent RDS handles.
-struct StaticMultiPropCache {
-  rds::Link<StaticMultiPropData, rds::Mode::Local> link;
-  uint32_t count;
-};
 
 /*
  * Class represents the full definition of a user class in a given request
@@ -244,7 +228,12 @@ struct Class : AtomicCountable {
     StringData* pointedClsName;
 #endif
 
-    bool isAbstract() const { return val.constModifiers().isAbstract(); }
+    bool isAbstractAndUninit() const {
+      return val.constModifiers().isAbstract() && !val.is_init();
+    }
+    bool isAbstract() const {
+      return val.constModifiers().isAbstract();
+    }
     ConstModifiers::Kind kind() const { return val.constModifiers().kind(); }
 
     StringData* getPointedClsName() const {
@@ -394,12 +383,12 @@ struct Class : AtomicCountable {
   /*
    * Container types.
    */
-  using MethodMap         = FixedStringMap<Slot, false, Slot>;
-  using MethodMapBuilder  = FixedStringMapBuilder<Func*, Slot, false, Slot>;
-  using InterfaceMap      = IndexedStringMap<LowPtr<Class>, true, int>;
-  using IncludedEnumMap   = IndexedStringMap<LowPtr<Class>, true, int>;
+  using MethodMap         = FixedStringMap<Slot, Slot>;
+  using MethodMapBuilder  = FixedStringMapBuilder<Func*, Slot, Slot>;
+  using InterfaceMap      = IndexedStringMap<LowPtr<Class>, int>;
+  using IncludedEnumMap   = IndexedStringMap<LowPtr<Class>, int>;
   using RequirementMap    = IndexedStringMap<
-                              const PreClass::ClassRequirement*, true, int>;
+                              const PreClass::ClassRequirement*, int>;
   using TraitAliasVec     = vm_vector<PreClass::TraitAliasRule::NamePair>;
 
   /*
@@ -727,9 +716,6 @@ public:
    * Look up a method by name.
    *
    * Return null if no such method exists.
-   *
-   * If the method name lookup matches case insensitively but not case
-   * sensitively, we raise a notice.
    */
   Func* lookupMethod(const StringData* methName) const;
 
@@ -1610,9 +1596,9 @@ private:
   // Internal types.
 
 private:
-  using ConstMap = IndexedStringMap<Const,true,Slot>;
-  using PropMap  = IndexedStringMap<Prop,true,Slot>;
-  using SPropMap = IndexedStringMap<SProp,true,Slot>;
+  using ConstMap = IndexedStringMap<Const,Slot>;
+  using PropMap  = IndexedStringMap<Prop,Slot>;
+  using SPropMap = IndexedStringMap<SProp,Slot>;
 
   /////////////////////////////////////////////////////////////////////////////
   // Private methods.
@@ -1698,12 +1684,6 @@ private:
   void initLSBMemoHandles();
   void checkPropTypeRedefinitions() const;
   void checkPropInitialValues() const;
-
-  size_t getStaticMultiPropValuesOffset() const;
-  const TypedValue* getStaticMultiPropValues() const;
-  const StaticMultiPropCache* getStaticMultiPropCache() const;
-  TypedValue* mutStaticMultiPropValues();
-  StaticMultiPropCache* mutStaticMultiPropCache();
 
   void setupSProps();
 
@@ -1820,27 +1800,6 @@ private:
    */
   mutable rds::Link<bool, rds::Mode::NonLocal> m_sPropCacheInit;
 
-/*
- * We may store data for the static multi-prop optimization inline before
- * the static prop link array, as below. (Persistent props won't appear in the
- * multi-prop initial values list; they don't need per-request initialization.)
- *
- * Case 1: m_useStaticMultiPropCache == false
- *
- *    m_sPropCache -> | rds::Link: StaticProp 0
- *                    | rds::Link: StaticProp 1
- *                    ...
- *
- * Case 2: m_sPropOptimizationEnabled == true
- *
- *                    | TypedValue: multi-prop initial value 0
- *                    | TypedValue: multi-prop initial value 1
- *                    ...
- *                    | StaticMultiPropCache
- *    m_sPropCache -> | rds::Link: StaticProp 0
- *                    | rds::Link: StaticProp 1
- *                    ...
- */
   mutable rds::Link<
     StaticPropData,
     rds::Mode::NonNormal
@@ -1899,9 +1858,7 @@ private:
    */
   mutable bool m_serialized : 1;
 
-  mutable bool m_useStaticMultiPropCache : 1;
-
-  // NB: 6 bits available here (in USE_LOWPTR builds).
+  // NB: 7 bits available here (in USE_LOWPTR builds).
 
   ClassPtr m_parent;
 

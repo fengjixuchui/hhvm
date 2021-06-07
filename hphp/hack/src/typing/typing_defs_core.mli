@@ -133,20 +133,7 @@ type consistent_kind =
   | FinalClass
 [@@deriving eq, show]
 
-(* A dependent type consists of a base kind which indicates what the type is
- * dependent on. It is either dependent on:
- *  - The type 'this'
- *  - A class
- *  - An expression
- *
- * Dependent types also have a path component (derived from accessing a type
- * constant). Thus the dependent type (`expr 0, ['A', 'B', 'C']) roughly means
- * "The type resulting from accessing the type constant A then the type constant
- * B and then the type constant C on the expression reference by 0"
- *)
 type dependent_type =
-  (* Type that is the subtype of the late bound type within a class. *)
-  | DTthis
   (* A reference to some expression. For example:
    *
    *  $x->foo()
@@ -176,15 +163,26 @@ type 'ty tparam = {
 type 'ty where_constraint = 'ty * Ast_defs.constraint_kind * 'ty
 [@@deriving eq, show]
 
+type collection_style =
+  (* A collection with a single generic w/o upper or lower bound *)
+  | VecStyle
+  (* A collection with two generics, the first with arraykey as upper bound *)
+  | DictStyle
+  (* A collection with a single generic with arraykey upper bound *)
+  | KeysetStyle
+  (* an arraykey *)
+  | ArraykeyStyle
+[@@deriving eq, show, ord]
+
 type enforcement =
   (* The consumer doesn't enforce the type at runtime *)
   | Unenforced
   (* The consumer enforces the type at runtime *)
   | Enforced
   (* The consumer enforces part of the type at runtime, e.g.,
-   * in C<int> it enforces that the value is a C, but does not enforce the
+   * in vec<t> it enforces that the value is a vec, but does not enforce the
    * type argument. *)
-  | PartiallyEnforced
+  | PartiallyEnforced of collection_style * pos_id
 [@@deriving eq, show, ord]
 
 (* = Reason.t * 'phase ty_ *)
@@ -335,6 +333,7 @@ and _ ty_ =
    * If exact=Nonexact, this also includes subclasses
    *)
   | Tclass : pos_id * exact * locl_ty list -> locl_phase ty_
+  | Tneg : Aast.tprim -> locl_phase ty_
 
 and 'phase taccess_type = 'phase ty * pos_id
 
@@ -525,8 +524,8 @@ type has_member = {
   hm_type: locl_ty;
   hm_class_id: Nast.class_id_;
       (** This is required to check ambiguous object access, where sometimes
-  HHVM would access the private member of a parent class instead of the
-  one from the current class. *)
+          HHVM would access the private member of a parent class instead of the
+          one from the current class. *)
   hm_explicit_targs: Nast.targ list option;
       (* - For a "has-property" constraint, this is `None`
        * - For a "has-method" constraint, this is `Some targs`, where targs

@@ -294,7 +294,7 @@ let possibly_enforced_type_as_value env et =
   Atom
     ( (match et.et_enforced with
       | Enforced -> "enforced "
-      | PartiallyEnforced -> "partially enforced"
+      | PartiallyEnforced _ -> "partially enforced "
       | Unenforced -> "")
     ^ Typing_print.debug env et.et_type )
 
@@ -345,6 +345,7 @@ let rec tparam_info_as_value env tpinfo =
           reified;
           enforceable;
           newable;
+          require_dynamic;
           parameters;
         } =
     tpinfo
@@ -356,6 +357,7 @@ let rec tparam_info_as_value env tpinfo =
       ("reified", reify_kind_as_value reified);
       ("enforceable", bool_as_value enforceable);
       ("newable", bool_as_value newable);
+      ("require_dynamic", bool_as_value require_dynamic);
       ("parameters", named_tparam_info_list_as_value env parameters);
     ]
 
@@ -398,7 +400,8 @@ let continuations_map_as_value f m =
        m
        SMap.empty)
 
-let local_as_value env (ty, _pos, _expr_id) = type_as_value env ty
+let local_as_value env (ty, _pos, expr_id) =
+  Atom (Printf.sprintf "%s [expr_id=%d]" (Typing_print.debug env ty) expr_id)
 
 let per_cont_env_as_value env per_cont_env =
   continuations_map_as_value
@@ -506,6 +509,7 @@ let genv_as_value env genv =
     fun_kind;
     fun_is_ctor;
     file = _;
+    this_module;
   } =
     genv
   in
@@ -520,6 +524,9 @@ let genv_as_value env genv =
         ("fun_kind", string_as_value (fun_kind_to_string fun_kind));
         ("fun_is_ctor", bool_as_value fun_is_ctor);
       ]
+    @ (match this_module with
+      | Some this_module -> [("this_module", string_as_value this_module)]
+      | None -> [])
     @ (match parent with
       | Some (parent_id, parent_ty) ->
         [
@@ -560,7 +567,8 @@ let env_as_value env =
     in_case;
     in_expr_tree;
     inside_constructor;
-    global_tpenv;
+    in_support_dynamic_type_method_check;
+    tpenv;
     log_levels = _;
     allow_wildcards;
     inference_env;
@@ -581,7 +589,9 @@ let env_as_value env =
       ("in_case", bool_as_value in_case);
       ("in_expr_tree", bool_as_value in_expr_tree);
       ("inside_constructor", bool_as_value inside_constructor);
-      ("global_tpenv", tpenv_as_value env global_tpenv);
+      ( "in_support_dynamic_type_method_check",
+        bool_as_value in_support_dynamic_type_method_check );
+      ("tpenv", tpenv_as_value env tpenv);
       ("allow_wildcards", bool_as_value allow_wildcards);
       ( "inference_env",
         Typing_inference_env.Log.inference_env_as_value inference_env );
@@ -659,6 +669,15 @@ let log_types p env items =
       in
       go items)
 
+let log_escape ?(level = 1) p env msg vars =
+  log_with_level env "escape" level (fun () ->
+      log_pos_or_decl p (fun () ->
+          indentEnv ~color:(Normal Yellow) msg (fun () -> ());
+          if not (List.is_empty vars) then (
+            lnewline ();
+            List.iter vars (lprintf (Normal Green) "%s ")
+          )))
+
 let log_global_inference_env p env global_tvenv =
   log_position p (fun () ->
       log_value env @@ Inf.Log.global_inference_env_as_value global_tvenv)
@@ -731,7 +750,7 @@ let log_type_access ~level root (p, type_const_name) (env, result_ty) =
       ] );
   (env, result_ty)
 
-let log_localize ~level (decl_ty : decl_ty) (env, result_ty) =
+let log_localize ~level ety_env (decl_ty : decl_ty) (env, result_ty) =
   ( log_with_level env "localize" ~level @@ fun () ->
     log_types
       (get_pos result_ty)
@@ -740,6 +759,11 @@ let log_localize ~level (decl_ty : decl_ty) (env, result_ty) =
         Log_head
           ( "Localizing",
             [
+              Log_head
+                ( Printf.sprintf
+                    "expand_visible_newtype: %b"
+                    ety_env.expand_visible_newtype,
+                  [] );
               Log_decl_type ("decl type", decl_ty);
               Log_type ("result", result_ty);
             ] );

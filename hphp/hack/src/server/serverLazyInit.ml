@@ -555,7 +555,6 @@ let names_to_deps (deps_mode : Typing_deps_mode.t) (names : FileInfo.names) :
   let deps =
     add_deps_of_sset (fun n -> Dep.Fun n) n_funs (DepSet.make deps_mode)
   in
-  let deps = add_deps_of_sset (fun n -> Dep.FunName n) n_funs deps in
   let deps = add_deps_of_sset (fun n -> Dep.Type n) n_classes deps in
   let deps = add_deps_of_sset (fun n -> Dep.Type n) n_record_defs deps in
   let deps = add_deps_of_sset (fun n -> Dep.Type n) n_types deps in
@@ -611,7 +610,6 @@ let get_files_to_undecl_and_recheck
     ~defs:dirty_names;
   let { Decl_redecl_service.to_redecl; to_recheck; _ } =
     Decl_redecl_service.redo_type_decl
-      ~conservative_redecl:false
       ~bucket_size
       ctx
       genv.workers
@@ -620,10 +618,27 @@ let get_files_to_undecl_and_recheck
       ~defs:fast
   in
   Decl_redecl_service.remove_old_defs ctx ~bucket_size genv.workers dirty_names;
-  let deps = Typing_deps.add_all_deps env.deps_mode to_redecl in
-  let deps = Typing_deps.DepSet.union deps to_recheck in
+  let to_recheck_deps = Typing_deps.add_all_deps env.deps_mode to_redecl in
+  let to_recheck_deps = Typing_deps.DepSet.union to_recheck_deps to_recheck in
   let files_to_undecl = Typing_deps.Files.get_files to_redecl in
-  let files_to_recheck = Typing_deps.Files.get_files deps in
+  let files_to_recheck = Typing_deps.Files.get_files to_recheck_deps in
+  (* we use lazy here to avoid expensive string generation when logging
+       * is not enabled *)
+  Hh_logger.log_lazy ~category:"fanout_information"
+  @@ lazy
+       Hh_json.(
+         json_to_string
+         @@ JSON_Object
+              [
+                ("tag", string_ "saved_state_init_fanout");
+                ( "hashes",
+                  array_
+                    string_
+                    Typing_deps.(
+                      List.map ~f:Dep.to_hex_string
+                      @@ DepSet.elements to_recheck_deps) );
+              ]);
+
   (files_to_undecl, files_to_recheck)
 
 (* We start off with a list of files that have changed since the state was
@@ -881,7 +896,7 @@ let initialize_naming_table
     (env : ServerEnv.env)
     (profiling : CgroupProfiler.Profiling.t) : ServerEnv.env * float =
   SharedMem.cleanup_sqlite ();
-  ServerProgress.send_progress_to_monitor_w_timeout "%s" progress_message;
+  ServerProgress.send_progress "%s" progress_message;
   let (get_next, count, t) =
     match fnl with
     | Some fnl ->
@@ -928,11 +943,6 @@ let write_symbol_info_init
     (genv : ServerEnv.genv)
     (env : ServerEnv.env)
     (profiling : CgroupProfiler.Profiling.t) : ServerEnv.env * float =
-  let out_dir =
-    match ServerArgs.write_symbol_info genv.options with
-    | None -> failwith "No write directory specified for --write-symbol-info"
-    | Some s -> s
-  in
   let (env, t) =
     initialize_naming_table
       "write symbol info initialization"
@@ -952,13 +962,17 @@ let write_symbol_info_init
   in
   let (env, t) = naming env t ~profile_label:"naming" ~profiling in
   let index_paths = env.swriteopt.symbol_write_index_paths in
+  let index_paths_file = env.swriteopt.symbol_write_index_paths_file in
   let files =
-    if List.length index_paths > 0 then
-      List.fold index_paths ~init:[] ~f:(fun acc path ->
-          if Sys.file_exists path then
-            Relative_path.from_root ~suffix:path :: acc
-          else
-            acc)
+    if List.length index_paths > 0 || Option.is_some index_paths_file then
+      List.concat
+        [
+          Option.value_map index_paths_file ~default:[] ~f:In_channel.read_lines
+          |> List.map ~f:Relative_path.storage_of_string;
+          index_paths
+          |> List.filter ~f:Sys.file_exists
+          |> List.map ~f:(fun path -> Relative_path.from_root ~suffix:path);
+        ]
     else
       let fast = Naming_table.to_fast env.naming_table in
       let failed_parsing = Errors.get_failed_files env.errorl Errors.Parsing in
@@ -983,28 +997,39 @@ let write_symbol_info_init
             else
               path :: acc)
   in
-  (* Ensure we are writing to fresh files *)
-  let is_invalid =
-    try
-      if not (Sys.is_directory out_dir) then
-        true
-      else
-        Array.length (Sys.readdir out_dir) > 0
-    with _ ->
-      Sys_utils.mkdir_p out_dir;
-      false
-  in
-  if is_invalid then failwith "JSON write directory is invalid or non-empty";
+  match env.swriteopt.symbol_write_index_paths_file_output with
+  | Some output ->
+    List.map ~f:Relative_path.storage_to_string files
+    |> Out_channel.write_lines output;
+    (env, t)
+  | None ->
+    let out_dir =
+      match ServerArgs.write_symbol_info genv.options with
+      | None -> failwith "No write directory specified for --write-symbol-info"
+      | Some s -> s
+    in
+    (* Ensure we are writing to fresh files *)
+    let is_invalid =
+      try
+        if not (Sys.is_directory out_dir) then
+          true
+        else
+          Array.length (Sys.readdir out_dir) > 0
+      with _ ->
+        Sys_utils.mkdir_p out_dir;
+        false
+    in
+    if is_invalid then failwith "JSON write directory is invalid or non-empty";
 
-  Hh_logger.log "Writing JSON to: %s" out_dir;
+    Hh_logger.log "Writing JSON to: %s" out_dir;
 
-  let ctx = Provider_utils.ctx_from_server_env env in
-  let root_path = env.swriteopt.symbol_write_root_path in
-  let hhi_path = env.swriteopt.symbol_write_hhi_path in
-  (* TODO(milliechen): log memory for this step *)
-  Symbol_info_writer.go genv.workers ctx out_dir root_path hhi_path files;
+    let ctx = Provider_utils.ctx_from_server_env env in
+    let root_path = env.swriteopt.symbol_write_root_path in
+    let hhi_path = env.swriteopt.symbol_write_hhi_path in
+    (* TODO(milliechen): log memory for this step *)
+    Symbol_info_writer.go genv.workers ctx out_dir root_path hhi_path files;
 
-  (env, t)
+    (env, t)
 
 (* If we fail to load a saved state, fall back to typechecking everything *)
 let full_init
@@ -1224,7 +1249,13 @@ let post_saved_state_initialization
   @@ fun () -> Fixme_provider.remove_batch parsing_files );
   let parsing_files_list = Relative_path.Set.elements parsing_files in
   (* Parse dirty files only *)
-  let next = MultiWorker.next genv.workers parsing_files_list in
+  let max_size =
+    if genv.local_config.ServerLocalConfig.small_buckets_for_dirty_names then
+      Some 1
+    else
+      None
+  in
+  let next = MultiWorker.next genv.workers parsing_files_list ?max_size in
   let (env, t) =
     parsing
       genv
@@ -1362,7 +1393,7 @@ let saved_state_init
         t
   in
 
-  ServerProgress.send_progress_to_monitor_w_timeout "loading saved state";
+  ServerProgress.send_progress "loading saved state";
 
   let ctx = Provider_utils.ctx_from_server_env env in
   (* A historical quirk: we allowed the timeout once while downloading+loading *)
@@ -1407,8 +1438,7 @@ let saved_state_init
   match state_result with
   | Error err -> Error err
   | Ok state_result ->
-    ServerProgress.send_progress_to_monitor_w_timeout
-      "loading saved state succeeded";
+    ServerProgress.send_progress "loading saved state succeeded";
     let (env, t) =
       post_saved_state_initialization ~state_result ~env ~genv profiling
     in

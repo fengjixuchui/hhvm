@@ -3,16 +3,18 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<74f801ede66ced0325fc5b74b58ab83a>>
+// @generated SignedSource<<e8b6511be6269ea07e77e8342650ee94>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
 
 use arena_trait::TrivialDrop;
+use eq_modulo_pos::EqModuloPos;
 use no_pos_hash::NoPosHash;
 use ocamlrep_derive::FromOcamlRep;
 use ocamlrep_derive::FromOcamlRepIn;
 use ocamlrep_derive::ToOcamlRep;
+use serde::Deserialize;
 use serde::Serialize;
 
 #[allow(unused_imports)]
@@ -53,7 +55,9 @@ pub use typing_defs::*;
 #[derive(
     Clone,
     Debug,
+    Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRepIn,
     Hash,
     NoPosHash,
@@ -64,17 +68,22 @@ pub use typing_defs::*;
     ToOcamlRep
 )]
 pub struct SubstContext<'a> {
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub subst: s_map::SMap<'a, &'a Ty<'a>>,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub class_context: &'a str,
     pub from_req_extends: bool,
 }
 impl<'a> TrivialDrop for SubstContext<'a> {}
+arena_deserializer::impl_deserialize_in_arena!(SubstContext<'arena>);
 
 #[derive(
     Clone,
     Copy,
     Debug,
+    Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -96,12 +105,15 @@ pub enum SourceType {
     ReqExtends,
 }
 impl TrivialDrop for SourceType {}
+arena_deserializer::impl_deserialize_in_arena!(SourceType);
 
 #[derive(
     Clone,
     Copy,
     Debug,
+    Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -117,11 +129,14 @@ pub enum LinearizationKind {
     AncestorTypes,
 }
 impl TrivialDrop for LinearizationKind {}
+arena_deserializer::impl_deserialize_in_arena!(LinearizationKind);
 
 #[derive(
     Clone,
     Debug,
+    Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRepIn,
     Hash,
     NoPosHash,
@@ -138,42 +153,71 @@ pub struct DeclClassType<'a> {
     pub final_: bool,
     pub is_disposable: bool,
     pub const_: bool,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub deferred_init_members: s_set::SSet<'a>,
     pub kind: oxidized::ast_defs::ClassKind,
     pub is_xhp: bool,
     pub has_xhp_keyword: bool,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
+    pub module: Option<&'a str>,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub name: &'a str,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub pos: &'a pos_or_decl::PosOrDecl<'a>,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub tparams: &'a [&'a Tparam<'a>],
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub where_constraints: &'a [&'a WhereConstraint<'a>],
     /// class name to the subst_context that must be applied to that class
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub substs: s_map::SMap<'a, &'a SubstContext<'a>>,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub consts: s_map::SMap<'a, &'a ClassConst<'a>>,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub typeconsts: s_map::SMap<'a, &'a TypeconstType<'a>>,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub props: s_map::SMap<'a, &'a Element<'a>>,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub sprops: s_map::SMap<'a, &'a Element<'a>>,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub methods: s_map::SMap<'a, &'a Element<'a>>,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub smethods: s_map::SMap<'a, &'a Element<'a>>,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub construct: (Option<&'a Element<'a>>, ConsistentKind),
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub ancestors: s_map::SMap<'a, &'a Ty<'a>>,
-    pub implements_dynamic: bool,
+    pub support_dynamic_type: bool,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub req_ancestors: &'a [&'a Requirement<'a>],
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub req_ancestors_extends: s_set::SSet<'a>,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub extends: s_set::SSet<'a>,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub sealed_whitelist: Option<s_set::SSet<'a>>,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub xhp_attr_deps: s_set::SSet<'a>,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
+    pub xhp_enum_values: s_map::SMap<'a, &'a [ast_defs::XhpEnumValue<'a>]>,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub enum_type: Option<&'a EnumType<'a>>,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub decl_errors: Option<&'a errors::Errors<'a>>,
     /// this field is used to prevent condition types being filtered
     /// in Decl_redecl_service.is_dependent_class_of_any
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub condition_types: s_set::SSet<'a>,
 }
 impl<'a> TrivialDrop for DeclClassType<'a> {}
+arena_deserializer::impl_deserialize_in_arena!(DeclClassType<'arena>);
 
 #[derive(
     Clone,
     Debug,
+    Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRepIn,
     Hash,
     NoPosHash,
@@ -185,8 +229,12 @@ impl<'a> TrivialDrop for DeclClassType<'a> {}
 )]
 pub struct Element<'a> {
     pub flags: isize,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub origin: &'a str,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub visibility: CeVisibility<'a>,
+    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub deprecated: Option<&'a str>,
 }
 impl<'a> TrivialDrop for Element<'a> {}
+arena_deserializer::impl_deserialize_in_arena!(Element<'arena>);

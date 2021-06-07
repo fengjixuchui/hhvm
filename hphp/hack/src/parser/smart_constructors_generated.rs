@@ -34,6 +34,11 @@ pub trait SmartConstructors: Clone {
     fn make_missing(&mut self, offset : usize) -> Self::R;
     fn make_token(&mut self, arg0: Token<Self>) -> Self::R;
     fn make_list(&mut self, arg0: Vec<Self::R>, offset: usize) -> Self::R;
+
+    fn begin_enumerator(&mut self) {}
+    fn begin_enum_class_enumerator(&mut self) {}
+    fn begin_constant_declarator(&mut self) {}
+
     fn make_end_of_file(&mut self, arg0 : Self::R) -> Self::R;
     fn make_script(&mut self, arg0 : Self::R) -> Self::R;
     fn make_qualified_name(&mut self, arg0 : Self::R) -> Self::R;
@@ -136,7 +141,6 @@ pub trait SmartConstructors: Clone {
     fn make_nullable_as_expression(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R;
     fn make_conditional_expression(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R) -> Self::R;
     fn make_eval_expression(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R;
-    fn make_define_expression(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R;
     fn make_isset_expression(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R) -> Self::R;
     fn make_function_call_expression(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R, arg3 : Self::R, arg4 : Self::R, arg5 : Self::R) -> Self::R;
     fn make_function_pointer_expression(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R;
@@ -204,6 +208,6 @@ pub trait SmartConstructors: Clone {
     fn make_intersection_type_specifier(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R;
     fn make_error(&mut self, arg0 : Self::R) -> Self::R;
     fn make_list_item(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R;
-    fn make_enum_atom_expression(&mut self, arg0 : Self::R, arg1 : Self::R) -> Self::R;
+    fn make_enum_class_label_expression(&mut self, arg0 : Self::R, arg1 : Self::R, arg2 : Self::R) -> Self::R;
 
 }

@@ -3,12 +3,13 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<7e14de26f8c384fdbf7fe318bcd73e87>>
+// @generated SignedSource<<b6ccb15b845887e53b5c91f0545ce6b6>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
 
 use arena_trait::TrivialDrop;
+use eq_modulo_pos::EqModuloPos;
 use no_pos_hash::NoPosHash;
 use ocamlrep_derive::FromOcamlRep;
 use ocamlrep_derive::FromOcamlRepIn;
@@ -30,6 +31,7 @@ pub type Id_ = String;
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     Hash,
     NoPosHash,
@@ -52,6 +54,7 @@ pub type PositionedByteString = (Pos, bstr::BString);
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     Hash,
     NoPosHash,
@@ -73,6 +76,7 @@ pub enum ShapeFieldName {
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -89,6 +93,7 @@ pub enum Variance {
     Invariant,
 }
 impl TrivialDrop for Variance {}
+arena_deserializer::impl_deserialize_in_arena!(Variance);
 
 #[derive(
     Clone,
@@ -96,6 +101,7 @@ impl TrivialDrop for Variance {}
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -112,6 +118,7 @@ pub enum ConstraintKind {
     ConstraintSuper,
 }
 impl TrivialDrop for ConstraintKind {}
+arena_deserializer::impl_deserialize_in_arena!(ConstraintKind);
 
 pub type Reified = bool;
 
@@ -121,6 +128,7 @@ pub type Reified = bool;
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -139,6 +147,7 @@ pub enum ClassKind {
     Cenum,
 }
 impl TrivialDrop for ClassKind {}
+arena_deserializer::impl_deserialize_in_arena!(ClassKind);
 
 #[derive(
     Clone,
@@ -146,6 +155,7 @@ impl TrivialDrop for ClassKind {}
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -160,6 +170,7 @@ pub enum ParamKind {
     Pinout,
 }
 impl TrivialDrop for ParamKind {}
+arena_deserializer::impl_deserialize_in_arena!(ParamKind);
 
 #[derive(
     Clone,
@@ -167,6 +178,7 @@ impl TrivialDrop for ParamKind {}
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -181,6 +193,7 @@ pub enum ReadonlyKind {
     Readonly,
 }
 impl TrivialDrop for ReadonlyKind {}
+arena_deserializer::impl_deserialize_in_arena!(ReadonlyKind);
 
 #[derive(
     Clone,
@@ -188,6 +201,7 @@ impl TrivialDrop for ReadonlyKind {}
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -203,6 +217,7 @@ pub enum OgNullFlavor {
     OGNullsafe,
 }
 impl TrivialDrop for OgNullFlavor {}
+arena_deserializer::impl_deserialize_in_arena!(OgNullFlavor);
 
 #[derive(
     Clone,
@@ -210,6 +225,7 @@ impl TrivialDrop for OgNullFlavor {}
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -227,12 +243,14 @@ pub enum FunKind {
     FAsyncGenerator,
 }
 impl TrivialDrop for FunKind {}
+arena_deserializer::impl_deserialize_in_arena!(FunKind);
 
 #[derive(
     Clone,
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     Hash,
     NoPosHash,
@@ -276,6 +294,7 @@ pub enum Bop {
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -298,6 +317,7 @@ pub enum Uop {
     Usilence,
 }
 impl TrivialDrop for Uop {}
+arena_deserializer::impl_deserialize_in_arena!(Uop);
 
 #[derive(
     Clone,
@@ -305,6 +325,7 @@ impl TrivialDrop for Uop {}
     Debug,
     Deserialize,
     Eq,
+    EqModuloPos,
     FromOcamlRep,
     FromOcamlRepIn,
     Hash,
@@ -321,3 +342,29 @@ pub enum Visibility {
     Protected,
 }
 impl TrivialDrop for Visibility {}
+arena_deserializer::impl_deserialize_in_arena!(Visibility);
+
+/// Literal values that can occur in XHP enum properties.
+///
+/// class :my-xhp-class {
+///   attribute enum {'big', 'small'} my-prop;
+/// }
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    EqModuloPos,
+    FromOcamlRep,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub enum XhpEnumValue {
+    XEVInt(isize),
+    XEVString(String),
+}

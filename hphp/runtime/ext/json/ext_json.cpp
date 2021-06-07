@@ -89,13 +89,6 @@ const int64_t k_JSON_ERROR_UNSUPPORTED_TYPE
   = json_error_codes::JSON_ERROR_UNSUPPORTED_TYPE;
 
 ///////////////////////////////////////////////////////////////////////////////
-int64_t HHVM_FUNCTION(json_last_error) {
-  return (int) json_get_last_error_code();
-}
-
-String HHVM_FUNCTION(json_last_error_msg) {
-  return json_get_last_error_msg();
-}
 
 // Handles output of `json_encode` with fallback value for
 // partial output on errors, and `false` otherwise.
@@ -119,8 +112,8 @@ Variant json_guard_error_result(const String& partial_error_output,
   return false;
 }
 
-TypedValue HHVM_FUNCTION(json_encode, const Variant& value,
-                         int64_t options, int64_t depth) {
+TypedValue json_encode_impl(const Variant& value, int64_t options,
+                            int64_t depth, bool pure) {
   // Special case for resource since VariableSerializer does not take care of it
   if (value.isResource()) {
     json_set_last_error_code(json_error_codes::JSON_ERROR_UNSUPPORTED_TYPE);
@@ -139,6 +132,7 @@ TypedValue HHVM_FUNCTION(json_encode, const Variant& value,
   if (options & k_JSON_FB_WARN_VEC_LIKE_DARRAYS) vs.setVecLikeDArrayWarn();
   if (options & k_JSON_FB_WARN_DICT_LIKE_DARRAYS) vs.setDictLikeDArrayWarn();
   if (options & k_JSON_FB_IGNORE_LATEINIT) vs.setIgnoreLateInit();
+  if (pure) vs.setPure();
 
   String json = vs.serializeValue(value, !(options & k_JSON_FB_UNLIMITED));
   assertx(json.get() != nullptr);
@@ -153,12 +147,18 @@ TypedValue HHVM_FUNCTION(json_encode, const Variant& value,
   return tvReturn(std::move(json));
 }
 
-TypedValue HHVM_FUNCTION(json_encode_with_error, const Variant& value,
-                         Variant& error, int64_t options, int64_t depth) {
+TypedValue HHVM_FUNCTION(json_encode, const Variant& value,
+                         int64_t options, int64_t depth) {
+  return json_encode_impl(value, options, depth, false);
+}
+
+TypedValue json_encode_with_error_impl(const Variant& value, Variant& error,
+                                       int64_t options, int64_t depth,
+                                       bool pure) {
   // fn is pure, so prior state must be preserved and restored
   auto prior_error_code = json_get_last_error_code();
 
-  auto result = HHVM_FN(json_encode)(value, options, depth);
+  auto result = json_encode_impl(value, options, depth, pure);
 
   auto error_code = json_get_last_error_code();
   if (error_code == k_JSON_ERROR_NONE) {
@@ -170,6 +170,16 @@ TypedValue HHVM_FUNCTION(json_encode_with_error, const Variant& value,
   json_set_last_error_code(prior_error_code);
 
   return result;
+}
+
+TypedValue HHVM_FUNCTION(json_encode_with_error, const Variant& value,
+                         Variant& error, int64_t options, int64_t depth) {
+  return json_encode_with_error_impl(value, error, options, depth, false);
+}
+
+TypedValue HHVM_FUNCTION(json_encode_pure, const Variant& value,
+                         Variant& error, int64_t options, int64_t depth) {
+  return json_encode_with_error_impl(value, error, options, depth, true);
 }
 
 TypedValue HHVM_FUNCTION(json_decode, const String& json,
@@ -345,10 +355,9 @@ struct JsonExtension final : Extension {
     HHVM_RC_INT(JSON_ERROR_INF_OR_NAN, k_JSON_ERROR_INF_OR_NAN);
     HHVM_RC_INT(JSON_ERROR_UNSUPPORTED_TYPE, k_JSON_ERROR_UNSUPPORTED_TYPE);
 
-    HHVM_FE(json_last_error);
-    HHVM_FE(json_last_error_msg);
     HHVM_FE(json_encode);
     HHVM_FE(json_encode_with_error);
+    HHVM_FE(json_encode_pure);
     HHVM_FE(json_decode);
     HHVM_FE(json_decode_with_error);
 

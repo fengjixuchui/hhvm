@@ -92,10 +92,10 @@ struct UnitEmitter {
   /*
    * Instatiate a runtime Unit*.
    */
-  std::unique_ptr<Unit> create(bool saveLineTable = false) const;
+  std::unique_ptr<Unit> create() const;
 
   template<typename SerDe> void serdeMetaData(SerDe&);
-  template<typename SerDe> void serde(SerDe&);
+  template<typename SerDe> void serde(SerDe&, bool lazy);
 
   /*
    * Serialize this emitter and then deserialize it into a new emitter
@@ -154,6 +154,11 @@ struct UnitEmitter {
   Id mergeArray(const ArrayData* a);
 
   /*
+   * Merge a scalar array into the table for the Unit.
+   */
+  Id mergeUnitArray(const ArrayData* a);
+
+  /*
    * Clear and rebuild the array type table from the builder.
    */
   void repopulateArrayTypeTable(const ArrayTypeTable::Builder&);
@@ -177,11 +182,6 @@ struct UnitEmitter {
    * Does /not/ add it to the FE vector.
    */
   FuncEmitter* newMethodEmitter(const StringData* name, PreClassEmitter* pce);
-
-  /*
-   * Add `fe' to the FE vector.
-   */
-  void appendTopEmitter(std::unique_ptr<FuncEmitter>&& fe);
 
   /*
    * Create a new function for `fe'.
@@ -214,26 +214,9 @@ struct UnitEmitter {
   Id pceId(folly::StringPiece clsName);
 
   /*
-   * Add a PreClassEmitter to the hoistability tracking data structures.
-   *
-   * @see: PreClass::Hoistable
-   */
-  void addPreClassEmitter(PreClassEmitter* pce);
-
-  /*
    * Create a new PreClassEmitter and add it to all the PCE data structures.
-   *
-   * @see: PreClass::Hoistable
    */
-  PreClassEmitter* newPreClassEmitter(const std::string& name,
-                                      PreClass::Hoistable hoistable);
-  /*
-   * Create a new PreClassEmitter without adding it to the hoistability
-   * tracking data structures.
-   * It should be added later with addPreClassEmitter.
-   */
-  PreClassEmitter* newBarePreClassEmitter(const std::string& name,
-                                          PreClass::Hoistable hoistable);
+  PreClassEmitter* newPreClassEmitter(const std::string& name);
 
   RecordEmitter* newRecordEmitter(const std::string& name);
 
@@ -268,36 +251,15 @@ struct UnitEmitter {
   // Constants.
 
   /*
-   * Const reference to all of the Unit's type aliases.
+   * Reference to all of the Unit's type aliases.
    */
+  std::vector<Constant>& constants();
   const std::vector<Constant>& constants() const;
 
   /*
    * Add a new constant to the Unit.
    */
   Id addConstant(const Constant& c);
-
-  /////////////////////////////////////////////////////////////////////////////
-  // Mergeables.
-  //
-  // See unit.h for documentation of Unit merging.
-
-  /*
-   * Append a PreClassEmitter to the UnitEmitter's list of mergeables.
-   */
-  void pushMergeableClass(PreClassEmitter* e);
-
-  /*
-   * Add a TypeAlias to the UnitEmitter's list of mergeables.
-   */
-  void pushMergeableId(Unit::MergeKind kind, const Id id);
-  void insertMergeableId(Unit::MergeKind kind, int ix, const Id id);
-
-  /*
-   * Add a Record to the UnitEmitter's list of mergeables.
-   */
-  void pushMergeableRecord(const Id id);
-  void insertMergeableRecord(int ix, const Id id);
 
   /////////////////////////////////////////////////////////////////////////////
   // Other methods.
@@ -379,19 +341,7 @@ private:
    */
   std::vector<RecordEmitter*> m_reVec;
 
-  /*
-   * Hoistability tables.
-   */
-  bool m_allClassesHoistable;
-  hphp_hash_set<const StringData*,
-                string_data_hash,
-                string_data_isame> m_hoistablePreClassSet;
-  std::list<Id> m_hoistablePceIdList;
-
-  /*
-   * Mergeables tables.
-   */
-  std::vector<std::pair<Unit::MergeKind, Id>> m_mergeableStmts;
+  mutable std::mutex m_verifyLock;
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -477,16 +427,6 @@ struct UnitRepoProxy : public RepoProxy {
     GetUnitArraysStmt(Repo& repo, int repoId) : Stmt(repo, repoId) {}
     void get(UnitEmitter& ue); // throws(RepoExc)
   };
-  struct InsertUnitMergeableStmt : public RepoProxy::Stmt {
-    InsertUnitMergeableStmt(Repo& repo, int repoId) : Stmt(repo, repoId) {}
-    void insert(RepoTxn& txn, int64_t unitSn,
-                int ix, Unit::MergeKind kind,
-                Id id); // throws(RepoExc)
-  };
-  struct GetUnitMergeablesStmt : public RepoProxy::Stmt {
-    GetUnitMergeablesStmt(Repo& repo, int repoId) : Stmt(repo, repoId) {}
-    void get(UnitEmitter& ue); // throws(RepoExc)
-  };
 
 #define URP_IOP(o) URP_OP(Insert##o, insert##o)
 #define URP_GOP(o) URP_OP(Get##o, get##o)
@@ -502,9 +442,7 @@ struct UnitRepoProxy : public RepoProxy {
   URP_IOP(UnitArray) \
   URP_GOP(UnitArrays) \
   URP_IOP(UnitConstant) \
-  URP_GOP(UnitConstants) \
-  URP_IOP(UnitMergeable) \
-  URP_GOP(UnitMergeables)
+  URP_GOP(UnitConstants)
 
 #define URP_OP(c, o) \
   c##Stmt o[RepoIdCount];

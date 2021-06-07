@@ -52,9 +52,9 @@ struct LayoutTest {
 
   bool accepts(uint16_t val) const {
     switch (mode) {
-      case Mode::And1Byte: return ((val >> 8) & imm) == 0;
+      case Mode::And1Byte: return ((val >> 8) & uint8_t(imm)) == 0;
       case Mode::And2Byte: return (val & imm) == 0;
-      case Mode::Cmp1Byte: return (val >> 8) == imm;
+      case Mode::Cmp1Byte: return (val >> 8) == uint8_t(imm);
       case Mode::Cmp2Byte: return val == imm;
     }
     always_assert(false);
@@ -76,24 +76,11 @@ const ArrayData* maybeMakeLoggingArray(const ArrayData*);
 ArrayData* maybeMakeLoggingArray(ArrayData*, RuntimeStruct*);
 ArrayData* maybeMakeLoggingArray(ArrayData*, LoggingProfile*);
 ArrayData* makeBespokeForTesting(ArrayData*, LoggingProfile*);
+void profileArrLikeStaticProps(const Class*);
 void profileArrLikeProps(ObjectData*);
 void setLoggingEnabled(bool);
 void selectBespokeLayouts();
 void waitOnExportProfiles();
-
-// Type-safe layout index, so that we can't mix it up with other ints.
-struct LayoutIndex {
-  bool operator==(LayoutIndex o) const { return raw == o.raw; }
-  bool operator!=(LayoutIndex o) const { return raw != o.raw; }
-  bool operator<(LayoutIndex o) const { return raw < o.raw; }
-
-  // We use the high byte of the index for type tests and virtual dispatch.
-  uint8_t byte() const { return raw >> 8; }
-
-public:
-  uint16_t raw;
-};
-
 }
 
 /*
@@ -129,7 +116,7 @@ public:
 
   // Bespoke arrays can be converted to uncounted values for APC.
   static ArrayData* MakeUncounted(
-      ArrayData* array, DataWalker::PointerMap* seen, bool hasApcTv);
+      ArrayData* array, const MakeUncountedEnv& env, bool hasApcTv);
   static void ReleaseUncounted(ArrayData*);
 
 private:

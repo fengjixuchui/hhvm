@@ -10,7 +10,6 @@
 open Hh_prelude
 open Decl_defs
 open Decl_subst
-open Reordered_argument_collections
 open Shallow_decl_defs
 open Typing_defs
 module DTT = Decl_to_typing
@@ -84,18 +83,6 @@ let filter_for_const_lookup lin =
   Sequence.filter lin ~f:(fun mro ->
       not (is_set mro_xhp_attrs_only mro.mro_flags))
 
-module SPairSet = Reordered_argument_set (Caml.Set.Make (struct
-  type t = string * string
-
-  (* Equivalent to polymorphic compare; written explicitly for perf reasons *)
-  let compare (a1, a2) (b1, b2) =
-    let r = String.compare a1 b1 in
-    if Int.( <> ) r 0 then
-      r
-    else
-      String.compare a2 b2
-end))
-
 let filter_target ~target ~f list =
   match target with
   | AllMembers -> list
@@ -103,32 +90,18 @@ let filter_target ~target ~f list =
     list |> List.find ~f:(fun x -> String.equal s (f x)) |> Option.to_list
 
 (** Given a linearization filtered for method lookup, return a [Sequence.t]
-    containing each method (as an {!tagged_elt}) in linearization order, with
-    method redeclarations already handled (that is, methods arising from a
-    redeclaration appear in the sequence as regular methods, and trait methods
-    which were redeclared do not appear in the sequence). *)
+    containing each method (as an {!tagged_elt}) in linearization order. *)
 let methods ~target ~static child_class_name lin =
-  Sequence.unfold ~init:(SPairSet.empty, lin) ~f:(fun (removed, seq) ->
-      match Sequence.next seq with
-      | None -> None
-      | Some ((mro, cls, subst), rest) ->
-        let methods =
-          if static then
-            cls.sc_static_methods
-          else
-            cls.sc_methods
-        in
-        let cid = mro.mro_name in
-        let methods_seq =
-          methods
-          |> filter_target ~target ~f:(fun { sm_name = (_, n); _ } -> n)
-          |> Sequence.of_list
-          |> Sequence.filter ~f:(fun sm ->
-                 not (SPairSet.mem removed (cid, snd sm.sm_name)))
-          |> Sequence.map
-               ~f:(DTT.shallow_method_to_telt child_class_name mro subst)
-        in
-        Some (methods_seq, (removed, rest)))
+  lin
+  |> Sequence.map ~f:(fun (mro, cls, subst) ->
+         ( if static then
+           cls.sc_static_methods
+         else
+           cls.sc_methods )
+         |> filter_target ~target ~f:(fun { sm_name = (_, n); _ } -> n)
+         |> Sequence.of_list
+         |> Sequence.map
+              ~f:(DTT.shallow_method_to_telt child_class_name mro subst))
   |> Sequence.concat
 
 (** Given a linearization filtered for property lookup, return a [Sequence.t]
@@ -286,7 +259,10 @@ let consts ~target ctx child_class_name get_typeconst get_ancestor lin =
              cls.sc_enum_type
              Option.(
                get_typeconst Naming_special_names.FB.tInner >>= fun t ->
-               t.ttc_type)
+               match t.ttc_kind with
+               | TCConcrete { tc_type } -> Some tc_type
+               | TCPartiallyAbstract { patc_type; _ } -> Some patc_type
+               | TCAbstract { atc_default; _ } -> atc_default)
              get_ancestor) )
   in
   let consts_and_typeconst_structures =
@@ -369,12 +345,14 @@ let make_typeconst_cache class_name lin =
     ~get_single_seq
     ~is_canonical:(fun t ->
       String.equal t.ttc_origin class_name
-      || equal_typeconst_abstract_kind t.ttc_abstract TCConcrete
-         && not t.ttc_concretized)
+      ||
+      match t.ttc_kind with
+      | TCConcrete _ -> not t.ttc_concretized
+      | _ -> false)
     ~merge:
       begin
         fun ~earlier:descendant_tc ~later:ancestor_tc ->
-        match (descendant_tc.ttc_abstract, ancestor_tc.ttc_abstract) with
+        match (descendant_tc.ttc_kind, ancestor_tc.ttc_kind) with
         (* This covers the following case:
          *
          * interface I1 { abstract const type T; }
@@ -384,7 +362,7 @@ let make_typeconst_cache class_name lin =
          *
          * Then C::T == I2::T since I2::T is not abstract.
          *)
-        | (TCAbstract _, (TCConcrete | TCPartiallyAbstract)) -> ancestor_tc
+        | (TCAbstract _, (TCConcrete _ | TCPartiallyAbstract _)) -> ancestor_tc
         (* NB: The following comment (written in D1825740) claims that this arm is
          necessary to cover the example it describes. But this example does not
          exercise this arm--the interface appears earlier in the linearization
@@ -406,7 +384,7 @@ let make_typeconst_cache class_name lin =
          * Then C::T == I::T since P::T has a constraint and thus can be
          * overridden by its child, while I::T cannot be overridden.
          *)
-        | (TCPartiallyAbstract, TCConcrete) -> ancestor_tc
+        | (TCPartiallyAbstract _, TCConcrete _) -> ancestor_tc
         (* This covers the following case
          *
          * interface I {
@@ -422,7 +400,9 @@ let make_typeconst_cache class_name lin =
          * C::T must come from A, not I, as A provides the default that will synthesize
          * into a concrete type constant in C.
          *)
-        | (TCAbstract None, TCAbstract (Some _)) -> ancestor_tc
+        | ( TCAbstract { atc_default = None; _ },
+            TCAbstract { atc_default = Some _; _ } ) ->
+          ancestor_tc
         (* When a type constant is declared in multiple parents we need to make a
          * subtle choice of what type we inherit. For example, in:
          *
@@ -436,10 +416,10 @@ let make_typeconst_cache class_name lin =
          * and requires the user to explicitly declare T in C.
          *)
         | (TCAbstract _, TCAbstract _)
-        | (TCPartiallyAbstract, (TCAbstract _ | TCPartiallyAbstract))
-        | (TCConcrete, (TCAbstract _ | TCPartiallyAbstract)) ->
+        | (TCPartiallyAbstract _, (TCAbstract _ | TCPartiallyAbstract _))
+        | (TCConcrete _, (TCAbstract _ | TCPartiallyAbstract _)) ->
           descendant_tc
-        | (TCConcrete, TCConcrete) ->
+        | (TCConcrete _, TCConcrete _) ->
           if descendant_tc.ttc_concretized && not ancestor_tc.ttc_concretized
           then
             ancestor_tc

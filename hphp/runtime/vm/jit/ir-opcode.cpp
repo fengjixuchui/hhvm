@@ -303,6 +303,7 @@ bool opcodeMayRaise(Opcode opc) {
   case Clone:
   case CmpArrLike:
   case CmpObj:
+  case CmpStrInt:
   case ConcatIntStr:
   case ConcatStr3:
   case ConcatStr4:
@@ -345,7 +346,9 @@ bool opcodeMayRaise(Opcode opc) {
   case GtArrLike:
   case GteArrLike:
   case GteObj:
+  case GteStrInt:
   case GtObj:
+  case GtStrInt:
   case HandleRequestSurprise:
   case IncDecElem:
   case IncDecProp:
@@ -387,7 +390,9 @@ bool opcodeMayRaise(Opcode opc) {
   case LtArrLike:
   case LteArrLike:
   case LteObj:
+  case LteStrInt:
   case LtObj:
+  case LtStrInt:
   case MapGet:
   case MapSet:
   case NativeImpl:
@@ -406,6 +411,7 @@ bool opcodeMayRaise(Opcode opc) {
   case PropQ:
   case PropTypeRedefineCheck:
   case PropX:
+  case RaiseBadComparisonViolation:
   case RaiseClsMethPropConvertNotice:
   case RaiseCoeffectsCallViolation:
   case RaiseCoeffectsFunParamCoeffectRulesViolation:
@@ -520,6 +526,7 @@ bool opcodeMayRaise(Opcode opc) {
   case CheckCold:
   case CheckDictKeys:
   case CheckDictOffset:
+  case CheckFuncNeedsCoverage:
   case CheckImplicitContextNull:
   case CheckInit:
   case CheckInitMem:
@@ -547,7 +554,6 @@ bool opcodeMayRaise(Opcode opc) {
   case CmpInt:
   case CmpRes:
   case CmpStr:
-  case CmpStrInt:
   case ColIsEmpty:
   case ColIsNEmpty:
   case Conjure:
@@ -593,7 +599,6 @@ bool opcodeMayRaise(Opcode opc) {
   case DbgTrashStk:
   case DblAsBits:
   case DebugBacktrace:
-  case DebugBacktraceFast:
   case DecRef:
   case DecRefNZ:
   case DefCallCtx:
@@ -656,11 +661,9 @@ bool opcodeMayRaise(Opcode opc) {
   case GteInt:
   case GteRes:
   case GteStr:
-  case GteStrInt:
   case GtInt:
   case GtRes:
   case GtStr:
-  case GtStrInt:
   case HasReifiedGenerics:
   case HasToString:
   case IncCallCounter:
@@ -670,6 +673,8 @@ bool opcodeMayRaise(Opcode opc) {
   case InitDictElem:
   case InitObjMemoSlots:
   case InitObjProps:
+  case InitStructElem:
+  case InitStructPositions:
   case InitThrowableFileAndLine:
   case InitVecElem:
   case InitVecElemLoop:
@@ -752,6 +757,7 @@ bool opcodeMayRaise(Opcode opc) {
   case LdIterBase:
   case LdIterEnd:
   case LdIterPos:
+  case LdLazyCls:
   case LdLazyClsName:
   case LdLoc:
   case LdLocAddr:
@@ -789,6 +795,8 @@ bool opcodeMayRaise(Opcode opc) {
   case LdMonotypeDictKey:
   case LdMonotypeDictVal:
   case LdMonotypeVecElem:
+  case LdMROProp:
+  case LdMROPropAddr:
   case LdStructDictElem:
   case LdVecElem:
   case LdVecElemAddr:
@@ -813,11 +821,9 @@ bool opcodeMayRaise(Opcode opc) {
   case LteInt:
   case LteRes:
   case LteStr:
-  case LteStrInt:
   case LtInt:
   case LtRes:
   case LtStr:
-  case LtStrInt:
   case MapIsset:
   case MarkRDSInitialized:
   case MemoGetInstanceCache:
@@ -832,6 +838,7 @@ bool opcodeMayRaise(Opcode opc) {
   case MemoSetStaticValue:
   case MemoSetLSBCache:
   case MemoSetLSBValue:
+  case MethodExists:
   case Mod:
   case Mov:
   case MulDbl:
@@ -868,11 +875,13 @@ bool opcodeMayRaise(Opcode opc) {
   case ProfileInstanceCheck:
   case ProfileIsTypeStruct:
   case ProfileKeysetAccess:
+  case ProfileMethod:
   case ProfileProp:
   case ProfileSwitchDest:
   case ProfileType:
   case RBTraceEntry:
   case RBTraceMsg:
+  case RecordFuncCall:
   case ReqBindJmp:
   case ReqRetranslate:
   case ReqRetranslateOpt:
@@ -906,8 +915,10 @@ bool opcodeMayRaise(Opcode opc) {
   case StOutValue:
   case StrictlyIntegerConv:
   case StringIsset:
+  case StructDictGetWithColor:
   case StructDictSet:
   case StStk:
+  case StStkRange:
   case SubDbl:
   case SubInt:
   case SubIntO:
@@ -920,9 +931,6 @@ bool opcodeMayRaise(Opcode opc) {
   case XorInt:
   case ZeroErrorLevel:
     return false;
-  case MethodExists:
-  case ProfileMethod:
-    return RO::EvalRaiseOnCaseInsensitiveLookup;
   }
   not_reached();
 }

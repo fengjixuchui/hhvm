@@ -117,7 +117,7 @@ const Unit* curUnit(const Env& env) {
   return irgen::curUnit(env.irgs);
 }
 
-FPInvOffset curSpOffset(const Env& env) {
+SBInvOffset curSpOffset(const Env& env) {
   return env.irgs.irb->fs().bcSPOff();
 }
 
@@ -167,6 +167,14 @@ bool instructionEndsRegion(const Env& env) {
   return false;
 }
 
+Type getLiveType(const jit::vector<RegionContext::LiveType>& liveTypes,
+                 const Location& loc) {
+  for (auto const& lt : liveTypes) {
+    if (lt.location == loc) return lt.type;
+  }
+  return TCell;
+}
+
 /*
  * Populate most fields of the NormalizedInstruction, assuming its sk
  * has already been set. Returns false iff the region should be
@@ -177,7 +185,52 @@ bool prepareInstruction(Env& env) {
   new (&env.inst) NormalizedInstruction(env.sk, curUnit(env));
   irgen::prepareForNextHHBC(env.irgs, env.sk);
 
-  auto const inputInfos = getInputs(env.inst, env.irgs.irb->fs().bcSPOff());
+  auto inputInfos = getInputs(env.inst, env.irgs.irb->fs().bcSPOff());
+  for (auto const loc : irgen::guardsForBespoke(env.irgs, env.sk)) {
+    FTRACE(1, "prepareInstruction: adding bespoke guard: {}\n", show(loc));
+    inputInfos.emplace_back(loc);
+  }
+
+  auto const op = env.inst.op();
+  auto& fs = env.irgs.irb->fs();
+
+  auto addGuardIfUntracked = [&](Location loc) {
+    FTRACE(1, "prepareInstruction: input: {}\n", show(loc));
+    if (!fs.tracked(loc) &&
+        (loc.tag() != LTag::Local || !fs.localsCleared())) {
+      auto const type = getLiveType(env.ctx.liveTypes, loc);
+      assert_flog(type <= TCell, "loc = {}: type = {}", show(loc), type);
+      irgen::checkType(env.irgs, loc, type, env.ctx.sk.offset());
+    }
+  };
+
+  // Guard any input that hasn't been guarded yet.
+  for (auto const& input : inputInfos) {
+    addGuardIfUntracked(input.loc);
+  }
+
+  // Guard any output local that hasn't been guarded yet -- they'll be read to
+  // be decref'd.
+  auto const outputLocals = getLocalOutputs(env.inst);
+  for (auto locId : outputLocals) {
+    addGuardIfUntracked(Location::Local{locId});
+  }
+
+  // AssertRAT* instructions are special: they refine the type of a location
+  // without taking it as an input.  The location will start to be tracked by
+  // FrameState after these instructions, so we need to first guard them since
+  // the guards may provide additional type information.
+  if (op == OpAssertRATL) {
+    auto loc = Location::Local{safe_cast<uint32_t>(env.inst.imm[0].u_ILA)};
+    addGuardIfUntracked(loc);
+  }
+  if (op == OpAssertRATStk) {
+    auto const bcSPOff = env.irgs.irb->fs().bcSPOff();
+    auto const sbInvOff =
+      BCSPRelOffset{safe_cast<int32_t>(env.inst.imm[0].u_IVA)}.
+        to<SBInvOffset>(bcSPOff);
+    addGuardIfUntracked(Location::Stack{sbInvOff});
+  }
 
   // Check all the inputs for unknown values.
   for (auto const& input : inputInfos) {
@@ -190,7 +243,7 @@ bool prepareInstruction(Env& env) {
 
   addInstruction(env);
 
-  if (isFCall(env.inst.op())) {
+  if (isFCall(op)) {
     auto const asyncEagerOffset = env.inst.imm[0].u_FCA.asyncEagerOffset;
     if (asyncEagerOffset != kInvalidOffset) {
       // Note that the arc between the block containing asyncEagerOffset and
@@ -315,7 +368,7 @@ void visitGuards(IRUnit& unit, F func) {
           auto const irSPOff = defSP->extra<DefStackData>()->irSPOff;
 
           func(&inst,
-               Location::Stack{irSPRel.to<FPInvOffset>(irSPOff)},
+               Location::Stack{irSPRel.to<SBInvOffset>(irSPOff)},
                inst.typeParam());
           break;
         }
@@ -412,15 +465,25 @@ RegionDescPtr form_region(Env& env) {
   };
 
   env.irgs.irb->setGuardFailBlock(irgen::makeExit(env.irgs));
+  const bool eager =
+    env.ctx.liveTypes.size() <= RuntimeOption::EvalJitTraceletEagerGuardsLimit;
 
   for (auto const& lt : env.ctx.liveTypes) {
-    auto t = lt.type;
-    assertx(t <= TCell);
-    irgen::checkType(env.irgs, lt.location, t, env.ctx.sk.offset());
+    // Local and stack slots are lazily guarded when there are too many live
+    // locations; but MBase is always eagerly guarded.
+    if (eager || lt.location.tag() == LTag::MBase) {
+      auto t = lt.type;
+      assertx(t <= TCell);
+      irgen::checkType(env.irgs, lt.location, t, env.ctx.sk.offset());
+    }
   }
   env.irgs.irb->resetGuardFailBlock();
 
-  irgen::gen(env.irgs, EndGuards);
+  // EndGuards is used to mark the end of the guards, allowing visitGuards to
+  // avoid scanning through the entire unit.  We only insert EndGuards if all
+  // guards were eagerly inserted because, with lazy guarding, the guards will
+  // be emitted later.
+  if (eager) irgen::gen(env.irgs, EndGuards);
 
   for (bool firstInst = true; true; firstInst = false) {
     assertx(env.numBCInstrs >= 0);

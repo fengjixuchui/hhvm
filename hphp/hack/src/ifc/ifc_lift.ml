@@ -124,9 +124,6 @@ let rec ty ?prefix ?lump renv (t : T.locl_ty) =
         f_ret = ty fun_ty.T.ft_ret.T.et_type;
         f_exn = class_ty ?lump renv Decl.exception_id;
       }
-  | T.Tdependent (T.DTthis, tbound) ->
-    (* TODO(T72024862): This treatment ignores late static binding. *)
-    ty tbound
   | T.Toption t ->
     let tnull = Tnull (get_policy ?prefix lump renv) in
     Tunion [tnull; ty t]
@@ -158,3 +155,4 @@ let rec ty ?prefix ?lump renv (t : T.locl_ty) =
   | T.Tobject -> fail "Tobject"
   | T.Taccess (_locl_ty, _ids) -> fail "Taccess"
   | T.Tunapplied_alias _ -> fail "Tunapplied_alias"
+  | T.Tneg _ -> fail "Tneg"

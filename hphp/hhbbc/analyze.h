@@ -71,6 +71,13 @@ struct FuncAnalysisResult {
   Type inferredReturn;
 
   /*
+   * The number of times that inferredReturn was refined inside
+   * analyze_class. We need this to track accurately the total number
+   * of refinements.
+   */
+  size_t localReturnRefinements = 0;
+
+  /*
    * If the function returns one of its parameters, the index of that
    * parameter. MaxLocalId and above indicate that it doesn't return a
    * parameter.
@@ -142,6 +149,58 @@ struct FuncAnalysis : FuncAnalysisResult {
 };
 
 /*
+ * Store the worklist of functions to be analyzed during
+ * class-at-a-time analysis (along with intra-class dependencies).
+ */
+struct ClassAnalysisWorklist {
+  const php::Func* next();
+
+  void scheduleForProp(SString name);
+  void scheduleForPropMutate(SString name);
+  void scheduleForReturnType(const php::Func& callee);
+
+  void addPropDep(SString name, const php::Func& f) {
+    propDeps[name].emplace(&f);
+  }
+  void addPropMutateDep(SString name, const php::Func& f) {
+    propMutateDeps[name].emplace(&f);
+  }
+  void addReturnTypeDep(const php::Func& callee, const php::Func& f) {
+    returnTypeDeps[&callee].emplace(&f);
+  }
+
+  bool empty() const { return worklist.empty(); }
+
+  // Put a func on the worklist. Return true if the func was
+  // scheduled, false if it was already on the list.
+  bool schedule(const php::Func& f);
+
+  const hphp_fast_set<const php::Func*>*
+  depsForReturnType(const php::Func& f) const {
+    auto const it = returnTypeDeps.find(&f);
+    if (it == returnTypeDeps.end()) return nullptr;
+    return &it->second;
+  }
+
+private:
+  hphp_fast_set<const php::Func*> inWorklist;
+  std::deque<const php::Func*> worklist;
+
+  template <typename T> using Deps =
+    hphp_fast_map<T, hphp_fast_set<const php::Func*>>;
+  Deps<SString> propDeps;
+  Deps<SString> propMutateDeps;
+  Deps<const php::Func*> returnTypeDeps;
+};
+
+struct ClassAnalysisWork {
+  ClassAnalysisWorklist worklist;
+  hphp_fast_map<const php::Func*, Type> returnTypes;
+  hphp_fast_map<const php::Func*, hphp_fast_set<SString>> propMutators;
+  bool propsRefined = false;
+};
+
+/*
  * The result of a class-at-a-time analysis.
  */
 struct ClassAnalysis {
@@ -162,6 +221,8 @@ struct ClassAnalysis {
   // Inferred types for private instance and static properties.
   PropState privateProperties;
   PropState privateStatics;
+
+  ClassAnalysisWork* work{nullptr};
 
   // Whether this class might have a bad initial value for a property.
   bool badPropInitialValues{false};
@@ -204,18 +265,65 @@ FuncAnalysis analyze_func_inline(const Index&,
 ClassAnalysis analyze_class(const Index&, const Context&);
 
 /*
- * Propagate a block input State to each instruction in the block.
- *
- * Returns a vector that is parallel to the instruction array in the
- * block, with one extra element.  The vector contains a state before
- * each instruction, and the StepFlags for executing that instruction.
- *
- * The last element in the vector contains the state after the last
- * instruction in the block, with undefined StepFlags.
+ * Represents the various interp state at some particular instruction
+ * within a block, with an ability to "rewind" the state to previous
+ * instructions (up until the entry of the block).
+ */
+struct PropagatedStates {
+  // Initialize with the end of block state, and the gathered undo log
+  // corresponding to that block interp.
+  PropagatedStates(State&&, StateMutationUndo);
+
+  // Rewind the state one instruction. Must not be at the beginning of
+  // the block.
+  void next();
+
+  // Stack and local types:
+  const CompactVector<Type>& stack() const { return m_stack; }
+  const CompactVector<Type>& locals() const { return m_locals; }
+
+  // The type for a particular local *after* the current instruction
+  // runs.
+  const Type& localAfter(LocalId id) const {
+    for (auto const& p : m_afterLocals) {
+      if (p.first == id) return p.second;
+    }
+    assertx(id < m_locals.size());
+    return m_locals[id];
+  }
+
+  // The value pushed by current instruction (IE, the top of the stack
+  // before next()).
+  const folly::Optional<Type>& lastPush() const { return m_lastPush; }
+
+  // Interp flags for the current instruction.
+  bool wasPEI() const { return currentMark().wasPEI; }
+  bool unreachable() const { return currentMark().unreachable; }
+  auto const& mayReadLocalSet() const { return currentMark().mayReadLocalSet; }
+
+private:
+  const StateMutationUndo::Mark& currentMark() const {
+    assertx(!m_undos.events.empty());
+    auto const mark =
+      boost::get<StateMutationUndo::Mark>(&m_undos.events.back());
+    assertx(mark);
+    return *mark;
+  }
+
+  folly::Optional<Type> m_lastPush;
+  CompactVector<Type> m_stack;
+  CompactVector<Type> m_locals;
+  CompactVector<std::pair<LocalId, Type>> m_afterLocals;
+  StateMutationUndo m_undos;
+};
+
+/*
+ * Interpret a block and return a PropagatedStates corresponding to
+ * the state at the end of the block.
  *
  * Pre: stateIn.initialized == true
  */
-std::vector<std::pair<State,StepFlags>>
+PropagatedStates
 locally_propagated_states(const Index&,
                           const AnalysisContext&,
                           CollectedInfo& collect,
@@ -225,7 +333,7 @@ locally_propagated_states(const Index&,
 /*
  * Propagate a block input State to find the output state for a particular
  * target of the block.  This is used to update the in state for a block added
- * to the CFG in betwee analysis rounds.
+ * to the CFG in between analysis rounds.
  */
 State locally_propagated_bid_state(const Index& index,
                                    const AnalysisContext& ctx,

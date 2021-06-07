@@ -308,8 +308,6 @@ module Make (Token : TokenType) (SyntaxValue : SyntaxValueType) = struct
       tag validate_conditional_expression (fun x -> ExprConditional x) x
     | Syntax.EvalExpression _ ->
       tag validate_eval_expression (fun x -> ExprEval x) x
-    | Syntax.DefineExpression _ ->
-      tag validate_define_expression (fun x -> ExprDefine x) x
     | Syntax.IssetExpression _ ->
       tag validate_isset_expression (fun x -> ExprIsset x) x
     | Syntax.FunctionCallExpression _ ->
@@ -386,8 +384,8 @@ module Make (Token : TokenType) (SyntaxValue : SyntaxValueType) = struct
       tag validate_shape_expression (fun x -> ExprShape x) x
     | Syntax.TupleExpression _ ->
       tag validate_tuple_expression (fun x -> ExprTuple x) x
-    | Syntax.EnumAtomExpression _ ->
-      tag validate_enum_atom_expression (fun x -> ExprEnumAtom x) x
+    | Syntax.EnumClassLabelExpression _ ->
+      tag validate_enum_class_label_expression (fun x -> ExprEnumClassLabel x) x
     | s -> aggregation_fail Def.Expression s
 
   and invalidate_expression : expression invalidator =
@@ -424,7 +422,6 @@ module Make (Token : TokenType) (SyntaxValue : SyntaxValueType) = struct
     | ExprNullableAs thing -> invalidate_nullable_as_expression (value, thing)
     | ExprConditional thing -> invalidate_conditional_expression (value, thing)
     | ExprEval thing -> invalidate_eval_expression (value, thing)
-    | ExprDefine thing -> invalidate_define_expression (value, thing)
     | ExprIsset thing -> invalidate_isset_expression (value, thing)
     | ExprFunctionCall thing ->
       invalidate_function_call_expression (value, thing)
@@ -463,7 +460,8 @@ module Make (Token : TokenType) (SyntaxValue : SyntaxValueType) = struct
     | ExprXHP thing -> invalidate_xhp_expression (value, thing)
     | ExprShape thing -> invalidate_shape_expression (value, thing)
     | ExprTuple thing -> invalidate_tuple_expression (value, thing)
-    | ExprEnumAtom thing -> invalidate_enum_atom_expression (value, thing)
+    | ExprEnumClassLabel thing ->
+      invalidate_enum_class_label_expression (value, thing)
 
   and validate_specifier : specifier validator =
    fun x ->
@@ -789,8 +787,6 @@ module Make (Token : TokenType) (SyntaxValue : SyntaxValueType) = struct
       tag validate_conditional_expression (fun x -> LambdaConditional x) x
     | Syntax.EvalExpression _ ->
       tag validate_eval_expression (fun x -> LambdaEval x) x
-    | Syntax.DefineExpression _ ->
-      tag validate_define_expression (fun x -> LambdaDefine x) x
     | Syntax.IssetExpression _ ->
       tag validate_isset_expression (fun x -> LambdaIsset x) x
     | Syntax.FunctionCallExpression _ ->
@@ -916,7 +912,6 @@ module Make (Token : TokenType) (SyntaxValue : SyntaxValueType) = struct
     | LambdaNullableAs thing -> invalidate_nullable_as_expression (value, thing)
     | LambdaConditional thing -> invalidate_conditional_expression (value, thing)
     | LambdaEval thing -> invalidate_eval_expression (value, thing)
-    | LambdaDefine thing -> invalidate_define_expression (value, thing)
     | LambdaIsset thing -> invalidate_isset_expression (value, thing)
     | LambdaFunctionCall thing ->
       invalidate_function_call_expression (value, thing)
@@ -1015,8 +1010,6 @@ module Make (Token : TokenType) (SyntaxValue : SyntaxValueType) = struct
       tag validate_conditional_expression (fun x -> CExprConditional x) x
     | Syntax.EvalExpression _ ->
       tag validate_eval_expression (fun x -> CExprEval x) x
-    | Syntax.DefineExpression _ ->
-      tag validate_define_expression (fun x -> CExprDefine x) x
     | Syntax.IssetExpression _ ->
       tag validate_isset_expression (fun x -> CExprIsset x) x
     | Syntax.FunctionCallExpression _ ->
@@ -1132,7 +1125,6 @@ module Make (Token : TokenType) (SyntaxValue : SyntaxValueType) = struct
     | CExprNullableAs thing -> invalidate_nullable_as_expression (value, thing)
     | CExprConditional thing -> invalidate_conditional_expression (value, thing)
     | CExprEval thing -> invalidate_eval_expression (value, thing)
-    | CExprDefine thing -> invalidate_define_expression (value, thing)
     | CExprIsset thing -> invalidate_isset_expression (value, thing)
     | CExprFunctionCall thing ->
       invalidate_function_call_expression (value, thing)
@@ -4498,33 +4490,6 @@ module Make (Token : TokenType) (SyntaxValue : SyntaxValueType) = struct
       Syntax.value = v;
     }
 
-  and validate_define_expression : define_expression validator = function
-    | { Syntax.syntax = Syntax.DefineExpression x; value = v } ->
-      ( v,
-        {
-          define_right_paren = validate_token x.define_right_paren;
-          define_argument_list =
-            validate_list_with validate_expression x.define_argument_list;
-          define_left_paren = validate_token x.define_left_paren;
-          define_keyword = validate_token x.define_keyword;
-        } )
-    | s -> validation_fail (Some SyntaxKind.DefineExpression) s
-
-  and invalidate_define_expression : define_expression invalidator =
-   fun (v, x) ->
-    {
-      Syntax.syntax =
-        Syntax.DefineExpression
-          {
-            define_keyword = invalidate_token x.define_keyword;
-            define_left_paren = invalidate_token x.define_left_paren;
-            define_argument_list =
-              invalidate_list_with invalidate_expression x.define_argument_list;
-            define_right_paren = invalidate_token x.define_right_paren;
-          };
-      Syntax.value = v;
-    }
-
   and validate_isset_expression : isset_expression validator = function
     | { Syntax.syntax = Syntax.IssetExpression x; value = v } ->
       ( v,
@@ -4561,8 +4526,10 @@ module Make (Token : TokenType) (SyntaxValue : SyntaxValueType) = struct
           function_call_argument_list =
             validate_list_with validate_expression x.function_call_argument_list;
           function_call_left_paren = validate_token x.function_call_left_paren;
-          function_call_enum_atom =
-            validate_option_with validate_expression x.function_call_enum_atom;
+          function_call_enum_class_label =
+            validate_option_with
+              validate_expression
+              x.function_call_enum_class_label;
           function_call_type_args =
             validate_option_with
               validate_type_arguments
@@ -4584,10 +4551,10 @@ module Make (Token : TokenType) (SyntaxValue : SyntaxValueType) = struct
               invalidate_option_with
                 invalidate_type_arguments
                 x.function_call_type_args;
-            function_call_enum_atom =
+            function_call_enum_class_label =
               invalidate_option_with
                 invalidate_expression
-                x.function_call_enum_atom;
+                x.function_call_enum_class_label;
             function_call_left_paren =
               invalidate_token x.function_call_left_paren;
             function_call_argument_list =
@@ -6547,23 +6514,35 @@ module Make (Token : TokenType) (SyntaxValue : SyntaxValueType) = struct
       Syntax.value = v;
     }
 
-  and validate_enum_atom_expression : enum_atom_expression validator = function
-    | { Syntax.syntax = Syntax.EnumAtomExpression x; value = v } ->
+  and validate_enum_class_label_expression :
+      enum_class_label_expression validator = function
+    | { Syntax.syntax = Syntax.EnumClassLabelExpression x; value = v } ->
       ( v,
         {
-          enum_atom_expression = validate_token x.enum_atom_expression;
-          enum_atom_hash = validate_token x.enum_atom_hash;
+          enum_class_label_expression =
+            validate_token x.enum_class_label_expression;
+          enum_class_label_hash = validate_token x.enum_class_label_hash;
+          enum_class_label_qualifier =
+            validate_option_with
+              validate_expression
+              x.enum_class_label_qualifier;
         } )
-    | s -> validation_fail (Some SyntaxKind.EnumAtomExpression) s
+    | s -> validation_fail (Some SyntaxKind.EnumClassLabelExpression) s
 
-  and invalidate_enum_atom_expression : enum_atom_expression invalidator =
+  and invalidate_enum_class_label_expression :
+      enum_class_label_expression invalidator =
    fun (v, x) ->
     {
       Syntax.syntax =
-        Syntax.EnumAtomExpression
+        Syntax.EnumClassLabelExpression
           {
-            enum_atom_hash = invalidate_token x.enum_atom_hash;
-            enum_atom_expression = invalidate_token x.enum_atom_expression;
+            enum_class_label_qualifier =
+              invalidate_option_with
+                invalidate_expression
+                x.enum_class_label_qualifier;
+            enum_class_label_hash = invalidate_token x.enum_class_label_hash;
+            enum_class_label_expression =
+              invalidate_token x.enum_class_label_expression;
           };
       Syntax.value = v;
     }

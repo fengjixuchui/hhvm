@@ -30,6 +30,7 @@ type mode =
   | Errors
   | Lint
   | Dump_deps
+  | Dump_dep_hashes
   | Identify_symbol of int * int
   | Find_local of int * int
   | Get_member of string
@@ -46,6 +47,7 @@ type mode =
   | Linearization
   | Go_to_impl of int * int
   | Dump_glean_deps
+  | Hover of (int * int) option
 
 type options = {
   files: string list;
@@ -58,6 +60,7 @@ type options = {
   batch_mode: bool;
   out_extension: string;
   verbosity: int;
+  should_print_position: bool;
 }
 
 (** If the user passed --root, then all pathnames have to be canonicalized.
@@ -212,6 +215,7 @@ let parse_options () =
   let simple_pessimize = ref 0.0 in
   let complex_coercion = ref false in
   let disable_partially_abstract_typeconsts = ref false in
+  let disallow_partially_abstract_typeconst_definitions = ref false in
   let rust_parser_errors = ref false in
   let symbolindex_file = ref None in
   let check_xhp_attribute = ref false in
@@ -265,19 +269,26 @@ let parse_options () =
   let interpret_soft_types_as_like_types = ref false in
   let enable_strict_string_concat_interp = ref false in
   let ignore_unsafe_cast = ref false in
-  let bitwise_math_new_code = ref false in
-  let inc_dec_new_code = ref false in
+  let math_new_code = ref false in
+  let typeconst_concrete_concrete_error = ref false in
+  let meth_caller_only_public_visibility = ref true in
+  let require_extends_implements_ancestors = ref false in
+  let strict_value_equality = ref false in
   let naming_table = ref None in
   let root = ref None in
   let sharedmem_config = ref SharedMem.default_config in
+  let print_position = ref true in
   let options =
     [
+      ( "--no-print-position",
+        Arg.Unit (fun _ -> print_position := false),
+        " Don't print positions while printing TASTs and NASTs" );
       ( "--naming-table",
         Arg.String (fun s -> naming_table := Some s),
-        "Naming table, to look up undefined symbols; needs --root" );
+        " Naming table, to look up undefined symbols; needs --root" );
       ( "--root",
         Arg.String (fun s -> root := Some s),
-        "Root for where to look up undefined symbols; needs --naming-table" );
+        " Root for where to look up undefined symbols; needs --naming-table" );
       ( "--extra-builtin",
         Arg.String (fun f -> extra_builtins := f :: !extra_builtins),
         " HHI file to parse and declare" );
@@ -295,13 +306,13 @@ let parse_options () =
         " Alias namespaces" );
       ( "--no-call-coeffects",
         Arg.Unit (fun () -> call_coeffects := false),
-        "Turns off call coeffects" );
+        " Turns off call coeffects" );
       ( "--no-local-coeffects",
         Arg.Unit (fun () -> local_coeffects := false),
-        "Turns off local coeffects" );
+        " Turns off local coeffects" );
       ( "--no-strict-contexts",
         Arg.Unit (fun () -> strict_contexts := false),
-        "Do not enforce contexts to be defined within Contexts namespace" );
+        " Do not enforce contexts to be defined within Contexts namespace" );
       ("--colour", Arg.Unit (set_mode Color), " Produce colour output");
       ("--color", Arg.Unit (set_mode Color), " Produce color output");
       ("--coverage", Arg.Unit (set_mode Coverage), " Produce coverage output");
@@ -328,8 +339,11 @@ let parse_options () =
         " Don't use builtins (e.g. ConstSet); implied by --root" );
       ( "--out-extension",
         Arg.String (fun s -> out_extension := s),
-        "output file extension (default .out)" );
+        " output file extension (default .out)" );
       ("--dump-deps", Arg.Unit (set_mode Dump_deps), " Print dependencies");
+      ( "--dump-dep-hashes",
+        Arg.Unit (set_mode Dump_dep_hashes),
+        " Print dependency hashes" );
       ( "--dump-glean-deps",
         Arg.Unit (set_mode Dump_glean_deps),
         " Print dependencies in the Glean format" );
@@ -368,13 +382,13 @@ let parse_options () =
         ^ " (requires --global-inference)." );
       ( "--global-inference",
         Arg.Set global_inference,
-        "Global type inference to infer missing type annotations." );
+        " Global type inference to infer missing type annotations." );
       ( "--ordered-solving",
         Arg.Set ordered_solving,
-        "Optimized solver for type variables. Experimental." );
+        " Optimized solver for type variables. Experimental." );
       ( "--reinfer-types",
         Arg.String (fun s -> reinfer_types := Str.split (Str.regexp ", *") s),
-        "List of type hint to be ignored and infered again using global inference."
+        " List of type hint to be ignored and infered again using global inference."
       );
       ( "--find-refs",
         Arg.Tuple
@@ -488,6 +502,9 @@ let parse_options () =
       ( "--disable-partially-abstract-typeconsts",
         Arg.Set disable_partially_abstract_typeconsts,
         " Treat partially abstract type constants as concrete type constants" );
+      ( "--disallow-partially-abstract-typeconst-definitions",
+        Arg.Set disallow_partially_abstract_typeconst_definitions,
+        " Raise error when partially abstract type constant is defined" );
       ( "--rust-parser-errors",
         Arg.Bool (fun x -> rust_parser_errors := x),
         " Use rust parser error checker" );
@@ -496,7 +513,7 @@ let parse_options () =
         " Load the symbol index from this file" );
       ( "--enable-class-level-where-clauses",
         Arg.Set enable_class_level_where_clauses,
-        "Enables support for class-level where clauses" );
+        " Enables support for class-level where clauses" );
       ( "--disallow-trait-reuse",
         Arg.Unit (set_bool disallow_trait_reuse),
         " Forbid a class from using a trait already used in a parent class" );
@@ -543,58 +560,58 @@ let parse_options () =
       ("--glean-port", Arg.Int (fun x -> glean_port := x), " glean port number");
       ( "--glean-reponame",
         Arg.String (fun str -> glean_reponame := str),
-        "glean repo name" );
+        " glean repo name" );
       ( "--disallow-func-ptrs-in-constants",
         Arg.Set disallow_func_ptrs_in_constants,
         " Disallow use of HH\\fun and HH\\class_meth in constants and constant initializers"
       );
       ( "--disallow-php-lambdas",
         Arg.Set error_php_lambdas,
-        "Disallow php style anonymous functions." );
+        " Disallow php style anonymous functions." );
       ( "--disallow-discarded-nullable-awaitables",
         Arg.Set disallow_discarded_nullable_awaitables,
-        "Error on using discarded nullable awaitables" );
+        " Error on using discarded nullable awaitables" );
       ( "--disable-xhp-element-mangling",
         Arg.Set disable_xhp_element_mangling,
-        "Disable mangling of XHP elements :foo. That is, :foo:bar is now \\foo\\bar, not xhp_foo__bar"
+        " Disable mangling of XHP elements :foo. That is, :foo:bar is now \\foo\\bar, not xhp_foo__bar"
       );
       ( "--disable-xhp-children-declarations",
         Arg.Set disable_xhp_children_declarations,
-        "Disable XHP children declarations, e.g. children (foo, bar+)" );
+        " Disable XHP children declarations, e.g. children (foo, bar+)" );
       ( "--enable-xhp-class-modifier",
         Arg.Set enable_xhp_class_modifier,
-        "Enable the XHP class modifier, xhp class name {} will define an xhp class."
+        " Enable the XHP class modifier, xhp class name {} will define an xhp class."
       );
       ( "--verbose",
         Arg.Int (fun v -> verbosity := v),
-        "Verbosity as an integer." );
-      ("--disable-modes", Arg.Set disable_modes, "Treat partial as strict");
+        " Verbosity as an integer." );
+      ("--disable-modes", Arg.Set disable_modes, " Treat partial as strict");
       ( "--disable-hh-ignore-error",
         Arg.Set disable_hh_ignore_error,
-        "Treat HH_IGNORE_ERROR comments as normal comments" );
+        " Treat HH_IGNORE_ERROR comments as normal comments" );
       ( "--enable-systemlib-annotations",
         Arg.Set enable_systemlib_annotations,
-        "Enable systemlib annotations" );
+        " Enable systemlib annotations" );
       ( "--enable-higher-kinded-types",
         Arg.Set enable_higher_kinded_types,
-        "Enable support for higher-kinded types" );
+        " Enable support for higher-kinded types" );
       ( "--allowed-fixme-codes-strict",
         Arg.String
           (fun s -> allowed_fixme_codes_strict := Some (comma_string_to_iset s)),
-        "List of fixmes that are allowed in strict mode." );
+        " List of fixmes that are allowed in strict mode." );
       ( "--allowed-fixme-codes-partial",
         Arg.String
           (fun s ->
             allowed_fixme_codes_partial := Some (comma_string_to_iset s)),
-        "List of fixmes that are allowed in partial mode." );
+        " List of fixmes that are allowed in partial mode." );
       ( "--codes-not-raised-partial",
         Arg.String
           (fun s -> codes_not_raised_partial := Some (comma_string_to_iset s)),
-        "List of error codes that are not raised in partial mode." );
+        " List of error codes that are not raised in partial mode." );
       ( "--allowed-decl-fixme-codes",
         Arg.String
           (fun s -> allowed_decl_fixme_codes := Some (comma_string_to_iset s)),
-        "List of fixmes that are allowed in declarations." );
+        " List of fixmes that are allowed in declarations." );
       ( "--method-call-inference",
         Arg.Set method_call_inference,
         " Infer constraints for method calls. NB: incompatible with like types."
@@ -605,49 +622,84 @@ let parse_options () =
       );
       ( "--enable-sound-dynamic-type",
         Arg.Set enable_sound_dynamic,
-        "Enforce sound dynamic types.  Experimental." );
+        " Enforce sound dynamic types.  Experimental." );
       ( "--disallow-hash-comments",
         Arg.Set disallow_hash_comments,
-        "Disallow #-style comments (besides hashbangs)." );
+        " Disallow #-style comments (besides hashbangs)." );
       ( "--disallow-fun-and-cls-meth-pseudo-funcs",
         Arg.Set disallow_fun_and_cls_meth_pseudo_funcs,
-        "Disable parsing of fun() and class_meth()." );
+        " Disable parsing of fun() and class_meth()." );
       ( "--disallow-inst-meth",
         Arg.Set disallow_inst_meth,
-        "Disable parsing of inst_meth()." );
+        " Disable parsing of inst_meth()." );
       ( "--use-direct-decl-parser",
         Arg.Set use_direct_decl_parser,
-        "Use direct decl parser" );
+        " Use direct decl parser" );
       ( "--disable-enum-classes",
         Arg.Set disable_enum_classes,
-        "Disable the enum classes extension." );
+        " Disable the enum classes extension." );
       ( "--enable-enum-supertyping",
         Arg.Set enable_enum_supertyping,
-        "Enable the enum supertyping extension." );
+        " Enable the enum supertyping extension." );
       ( "--hack-arr-dv-arrs",
         Arg.Set hack_arr_dv_arrs,
-        "Varray and darray become vec and dict." );
+        " Varray and darray become vec and dict." );
       ( "--interpret-soft-types-as-like-types",
         Arg.Set interpret_soft_types_as_like_types,
-        "Types declared with <<__Soft>> (runtime logs but doesn't throw) become like types."
+        " Types declared with <<__Soft>> (runtime logs but doesn't throw) become like types."
       );
       ( "--enable-strict-string-concat-interp",
         Arg.Set enable_strict_string_concat_interp,
-        "Require arguments are arraykey types in string concatenation and
-        interpolation."
+        " Require arguments are arraykey types in string concatenation and interpolation."
       );
       ( "--ignore-unsafe-cast",
         Arg.Set ignore_unsafe_cast,
-        "Ignore unsafe_cast and retain the original type of the expression" );
-      ( "--bitwise-math-new-code",
-        Arg.Set bitwise_math_new_code,
-        "Use new error code in bitwise math operations." );
-      ( "--inc-dec-new-code",
-        Arg.Set inc_dec_new_code,
-        "Use new error code in post- and pre-increment and decrement operations."
+        " Ignore unsafe_cast and retain the original type of the expression" );
+      ( "--math-new-code",
+        Arg.Set math_new_code,
+        " Use a new error code for math operations: addition, subtraction, division, multiplication, exponentiation"
+      );
+      ( "--typeconst-concrete-concrete-error",
+        Arg.Set typeconst_concrete_concrete_error,
+        " Raise an error when a concrete type constant is overridden by a concrete type constant in a child class."
+      );
+      ( "--meth-caller-only-public-visibility",
+        Arg.Bool (fun x -> meth_caller_only_public_visibility := x),
+        " Controls whether meth_caller can be used on non-public methods" );
+      ( "--hover",
+        Arg.Tuple
+          [
+            Arg.Int (fun x -> line := x);
+            Arg.Int (fun column -> set_mode (Hover (Some (!line, column))) ());
+          ],
+        "<pos> Display hover tooltip" );
+      ( "--hover-at-caret",
+        Arg.Unit (fun () -> set_mode (Hover None) ()),
+        " Show the hover information indicated by // ^ hover-at-caret" );
+      ( "--require-extends-implements-ancestors",
+        Arg.Set require_extends_implements_ancestors,
+        " Consider `require extends` and `require implements` as ancestors when checking a class"
+      );
+      ( "--strict-value-equality",
+        Arg.Set strict_value_equality,
+        " Emit an error when \"==\" or \"!=\" is used to compare values that are incompatible types."
       );
     ]
   in
+
+  (* Sanity check that all option descriptions are well-formed. *)
+  List.iter options ~f:(fun (_, _, description) ->
+      if
+        String.is_prefix description ~prefix:" "
+        || String.is_prefix description ~prefix:"<"
+      then
+        ()
+      else
+        failwith
+          (Printf.sprintf
+             "Descriptions should start with <foo> or a leading space, got: %S"
+             description));
+
   let options = Arg.align ~limit:25 options in
   Arg.parse options (fun fn -> fn_ref := fn :: !fn_ref) usage;
   let fns =
@@ -729,6 +781,8 @@ let parse_options () =
       ~tco_complex_coercion:!complex_coercion
       ~tco_disable_partially_abstract_typeconsts:
         !disable_partially_abstract_typeconsts
+      ~tco_disallow_partially_abstract_typeconst_definitions:
+        !disallow_partially_abstract_typeconst_definitions
       ~log_levels:!log_levels
       ~po_rust_parser_errors:!rust_parser_errors
       ~po_enable_class_level_where_clauses:!enable_class_level_where_clauses
@@ -785,8 +839,13 @@ let parse_options () =
       ~tco_enable_strict_string_concat_interp:
         !enable_strict_string_concat_interp
       ~tco_ignore_unsafe_cast:!ignore_unsafe_cast
-      ~tco_bitwise_math_new_code:!bitwise_math_new_code
-      ~tco_inc_dec_new_code:!inc_dec_new_code
+      ~tco_math_new_code:!math_new_code
+      ~tco_typeconst_concrete_concrete_error:!typeconst_concrete_concrete_error
+      ~tco_meth_caller_only_public_visibility:
+        !meth_caller_only_public_visibility
+      ~tco_require_extends_implements_ancestors:
+        !require_extends_implements_ancestors
+      ~tco_strict_value_equality:!strict_value_equality
       ()
   in
   Errors.allowed_fixme_codes_strict :=
@@ -829,6 +888,7 @@ let parse_options () =
       batch_mode = !batch_mode;
       out_extension = !out_extension;
       verbosity = !verbosity;
+      should_print_position = !print_position;
     },
     root,
     !naming_table,
@@ -1112,6 +1172,7 @@ let add_newline contents =
   ^ "\n"
   ^ String.sub contents after_header (String.length contents - after_header)
 
+(* Might raise {!SharedMem.Shared_mem_not_found} *)
 let get_decls defs =
   ( SSet.fold
       (fun x acc -> Decl_heap.Typedefs.find_unsafe x :: acc)
@@ -1271,6 +1332,25 @@ let merge_global_inference_env_in_tast gienv tast =
   in
   env_merger#go tast
 
+(* Given source code containing the string "^ hover-at-caret", return
+   the line and column of the position indicated. *)
+let hover_at_caret_pos (src : string) : int * int =
+  let lines = String.split_lines src in
+  match
+    List.findi lines ~f:(fun _ line ->
+        String.is_substring line ~substring:"^ hover-at-caret")
+  with
+  | Some (line_num, line_src) ->
+    let col_num =
+      String.lfindi line_src ~f:(fun _ c ->
+          match c with
+          | '^' -> true
+          | _ -> false)
+    in
+    (line_num, Option.value_exn col_num + 1)
+  | None ->
+    failwith "Could not find any occurrence of ^ hover-at-caret in source code"
+
 (**
  * Compute TASTs for some files, then expand all type variables.
  *)
@@ -1298,9 +1378,29 @@ let compute_tasts_expand_types ctx ~verbosity files_info interesting_files =
   let tasts = Relative_path.Map.map tasts (Tast_expand.expand_program ctx) in
   (errors, tasts, gi_solved)
 
-let print_tasts tasts ctx =
-  let print_tast = Typing_ast_print.print_tast ctx in
-  Relative_path.Map.iter tasts (fun _k (tast : Tast.program) -> print_tast tast)
+let print_nasts ~should_print_position nasts filenames =
+  List.iter filenames (fun filename ->
+      match Relative_path.Map.find_opt nasts filename with
+      | None ->
+        Printf.eprintf
+          "Could not find nast for file %s\n"
+          (Relative_path.show filename);
+        Printf.eprintf "Available nasts:\n";
+        Relative_path.Map.iter nasts ~f:(fun path _ ->
+            Printf.eprintf "  %s\n" (Relative_path.show path))
+      | Some nast ->
+        Printf.printf "\n\n%s:\n\n" (Relative_path.show filename);
+        if should_print_position then
+          Naming_ast_print.print_nast nast
+        else
+          Naming_ast_print.print_nast_without_position nast)
+
+let print_tasts ~should_print_position tasts ctx =
+  Relative_path.Map.iter tasts (fun _k (tast : Tast.program) ->
+      if should_print_position then
+        Typing_ast_print.print_tast ctx tast
+      else
+        Typing_ast_print.print_tast_without_position ctx tast)
 
 let typecheck_tasts tasts tcopt (filename : Relative_path.t) =
   let env = Typing_env.empty tcopt filename ~droot:None in
@@ -1357,6 +1457,70 @@ let dump_debug_glean_deps
     Printf.printf "%s\n" (Hh_json.json_to_string ~pretty:true json_obj)
   | None -> Printf.printf "No dependencies\n"
 
+let dump_dep_hashes (nast : Nast.program) : unit =
+  let process_variant x =
+    let open Typing_deps in
+    let dep = Dep.make Typing_deps_mode.Hash64Bit x in
+    Printf.printf "%s %s\n" (Dep.to_hex_string dep) (Dep.variant_to_string x)
+  in
+  let handler =
+    let open Typing_deps.Dep in
+    let open Aast in
+    object
+      inherit [_] Aast.iter as super
+
+      method! on_fun_ env x =
+        process_variant @@ Fun (snd x.f_name);
+        super#on_fun_ env x
+
+      method! on_method_ cls x =
+        process_variant
+        @@
+        if x.m_static then
+          SMethod (Option.value_exn cls, snd x.m_name)
+        else
+          Method (Option.value_exn cls, snd x.m_name);
+        super#on_method_ cls x
+
+      method! on_class_ _cls x =
+        process_variant @@ Type (snd x.c_name);
+        process_variant @@ Cstr (snd x.c_name);
+        process_variant @@ Extends (snd x.c_name);
+        process_variant @@ AllMembers (snd x.c_name);
+        super#on_class_ (Some (snd x.c_name)) x
+
+      method! on_class_const cls x =
+        process_variant @@ Const (Option.value_exn cls, snd x.cc_id);
+        super#on_class_const cls x
+
+      method! on_class_typeconst_def cls x =
+        process_variant @@ Const (Option.value_exn cls, snd x.c_tconst_name);
+        super#on_class_typeconst_def cls x
+
+      method! on_class_var cls x =
+        process_variant
+        @@
+        if x.cv_is_static then
+          SProp (Option.value_exn cls, snd x.cv_id)
+        else
+          Prop (Option.value_exn cls, snd x.cv_id);
+        super#on_class_var cls x
+
+      method! on_typedef _cls x =
+        process_variant @@ Type (snd x.t_name);
+        super#on_typedef (Some (snd x.t_name)) x
+
+      method! on_gconst cls x =
+        process_variant @@ GConst (snd x.cst_name);
+        super#on_gconst cls x
+
+      method! on_record_def _cls x =
+        process_variant @@ Type (snd x.rd_name);
+        super#on_record_def (Some (snd x.rd_name)) x
+    end
+  in
+  handler#on_program None nast
+
 let handle_mode
     mode
     filenames
@@ -1371,6 +1535,7 @@ let handle_mode
     out_extension
     dbg_deps
     dbg_glean_deps
+    ~should_print_position
     ~verbosity =
   let expect_single_file () : Relative_path.t =
     match filenames with
@@ -1515,6 +1680,10 @@ let handle_mode
     Relative_path.Map.iter files_info (fun fn fileinfo ->
         ignore @@ Typing_check_utils.check_defs ctx fn fileinfo);
     if Hashtbl.length dbg_deps > 0 then dump_debug_deps dbg_deps
+  | Dump_dep_hashes ->
+    iter_over_files (fun _ ->
+        let nasts = create_nasts ctx files_info in
+        Relative_path.Map.iter nasts ~f:(fun _ nast -> dump_dep_hashes nast))
   | Dump_glean_deps ->
     Relative_path.Map.iter files_info (fun fn fileinfo ->
         ignore @@ Typing_check_utils.check_defs ctx fn fileinfo);
@@ -1533,6 +1702,7 @@ let handle_mode
                 "Ancestors of %s and their overridden methods:\n"
                 class_;
               let ancestors =
+                (* Might raise {!Naming_table.File_info_not_found} *)
                 MethodJumps.get_inheritance
                   ctx
                   class_
@@ -1551,6 +1721,7 @@ let handle_mode
                 "Children of %s and the methods they override:\n"
                 class_;
               let children =
+                (* Might raise {!Naming_table.File_info_not_found} *)
                 MethodJumps.get_inheritance
                   ctx
                   class_
@@ -1597,18 +1768,17 @@ let handle_mode
         in
         FileOutline.print ~short_pos:true results)
   | Dump_nast ->
-    iter_over_files (fun filename ->
-        let nasts = create_nasts ctx files_info in
-        let nast = Relative_path.Map.find nasts filename in
-        let formatter = Format.formatter_of_out_channel Stdlib.stdout in
-        Format.pp_set_margin formatter 200;
-        Nast.pp_program formatter nast)
+    let nasts = create_nasts ctx files_info in
+    print_nasts
+      ~should_print_position
+      nasts
+      (Relative_path.Map.keys files_contents)
   | Dump_tast ->
     let (errors, tasts, _gi_solved) =
       compute_tasts_expand_types ctx ~verbosity files_info files_contents
     in
     print_errors_if_present (parse_errors @ Errors.get_sorted_error_list errors);
-    print_tasts tasts ctx
+    print_tasts ~should_print_position tasts ctx
   | Check_tast ->
     iter_over_files (fun filename ->
         let files_contents =
@@ -1618,7 +1788,7 @@ let handle_mode
         let (errors, tasts, _gi_solved) =
           compute_tasts_expand_types ctx ~verbosity files_info files_contents
         in
-        print_tasts tasts ctx;
+        print_tasts ~should_print_position tasts ctx;
         if not @@ Errors.is_empty errors then (
           print_errors error_format errors max_errors;
           Printf.printf "Did not typecheck the TAST as there are typing errors.";
@@ -1837,6 +2007,7 @@ let handle_mode
     if not (List.is_empty errors) then exit 2
   | Decl_compare ->
     let filename = expect_single_file () in
+    (* Might raise {!SharedMem.Shared_mem_not_found} *)
     test_decl_compare ctx filename builtins files_contents files_info
   | Shallow_class_diff ->
     print_errors_if_present parse_errors;
@@ -1917,38 +2088,37 @@ let handle_mode
             Printf.sprintf " from %s" (Utils.strip_ns origin)
         in
         let ty =
-          match ttc.Typing_defs.ttc_abstract with
-          | Typing_defs.TCConcrete ->
-            (match ttc.Typing_defs.ttc_type with
-            | None -> "= None"
-            | Some ty -> "= " ^ ty_to_string ty)
-          | Typing_defs.TCAbstract default ->
+          let open Typing_defs in
+          match ttc.ttc_kind with
+          | TCConcrete { tc_type = ty } -> "= " ^ ty_to_string ty
+          | TCAbstract
+              {
+                atc_as_constraint = as_cstr;
+                atc_super_constraint = _;
+                atc_default = default;
+              } ->
             String.concat
               ~sep:" "
               (List.filter_map
                  [
-                   Option.map ttc.Typing_defs.ttc_as_constraint ~f:(fun ty ->
-                       "as " ^ ty_to_string ty);
+                   Option.map as_cstr ~f:(fun ty -> "as " ^ ty_to_string ty);
                    Option.map default ~f:(fun ty -> "= " ^ ty_to_string ty);
                  ]
                  ~f:(fun x -> x))
-          | Typing_defs.TCPartiallyAbstract ->
+          | TCPartiallyAbstract { patc_constraint; patc_type } ->
             String.concat
               ~sep:" "
-              (List.filter_map
-                 [
-                   Option.map ttc.Typing_defs.ttc_as_constraint ~f:(fun ty ->
-                       "as " ^ ty_to_string ty);
-                   Option.map ttc.Typing_defs.ttc_type ~f:(fun ty ->
-                       "= " ^ ty_to_string ty);
-                 ]
-                 ~f:(fun x -> x))
+              [
+                "as " ^ ty_to_string patc_constraint;
+                "= " ^ ty_to_string patc_type;
+              ]
         in
         let abstract =
-          match ttc.Typing_defs.ttc_abstract with
-          | Typing_defs.TCConcrete -> ""
-          | Typing_defs.TCAbstract _ -> "abstract "
-          | Typing_defs.TCPartiallyAbstract -> "partially abstract "
+          Typing_defs.(
+            match ttc.ttc_kind with
+            | TCConcrete _ -> ""
+            | TCAbstract _ -> "abstract "
+            | TCPartiallyAbstract _ -> "partially abstract ")
         in
         Printf.printf "  %stypeconst%s: %s %s\n" abstract from mid ty);
       ())
@@ -1973,76 +2143,96 @@ let handle_mode
         List.iter classes ~f:(fun (_, classname) ->
             if not !is_first then Printf.printf "\n";
             is_first := false;
-            let { Decl_linearize.lin_members; _ } =
+            let { Decl_linearize.lin_members; Decl_linearize.lin_ancestors } =
               Decl_linearize.get_linearizations ctx classname
             in
-            let linearization =
-              Sequence.map lin_members (fun mro ->
-                  let name = Utils.strip_ns mro.Decl_defs.mro_name in
-                  let env =
-                    Typing_env.empty ctx Relative_path.default ~droot:None
-                  in
-                  let targs =
-                    List.map
-                      mro.Decl_defs.mro_type_args
-                      (Typing_print.full_strip_ns_decl env)
-                  in
-                  let targs =
-                    if List.is_empty targs then
-                      ""
+            let display mro =
+              let name = Utils.strip_ns mro.Decl_defs.mro_name in
+              let env =
+                Typing_env.empty ctx Relative_path.default ~droot:None
+              in
+              let targs =
+                List.map
+                  mro.Decl_defs.mro_type_args
+                  (Typing_print.full_strip_ns_decl env)
+              in
+              let targs =
+                if List.is_empty targs then
+                  ""
+                else
+                  "<" ^ String.concat ~sep:", " targs ^ ">"
+              in
+              Decl_defs.(
+                let modifiers =
+                  [
+                    ( if Option.is_some mro.mro_required_at then
+                      Some "requirement"
+                    else if
+                    is_set mro_via_req_extends mro.mro_flags
+                    || is_set mro_via_req_impl mro.mro_flags
+                  then
+                      Some "synthesized"
                     else
-                      "<" ^ String.concat ~sep:", " targs ^ ">"
-                  in
-                  Decl_defs.(
-                    let modifiers =
-                      [
-                        ( if Option.is_some mro.mro_required_at then
-                          Some "requirement"
-                        else if
-                        is_set mro_via_req_extends mro.mro_flags
-                        || is_set mro_via_req_impl mro.mro_flags
-                      then
-                          Some "synthesized"
-                        else
-                          None );
-                        ( if is_set mro_xhp_attrs_only mro.mro_flags then
-                          Some "xhp_attrs_only"
-                        else
-                          None );
-                        ( if is_set mro_consts_only mro.mro_flags then
-                          Some "consts_only"
-                        else
-                          None );
-                        ( if is_set mro_copy_private_members mro.mro_flags then
-                          Some "copy_private_members"
-                        else
-                          None );
-                        ( if
-                          is_set
-                            mro_passthrough_abstract_typeconst
-                            mro.mro_flags
-                        then
-                          Some "PAT"
-                        else
-                          None );
-                        Option.map mro.mro_trait_reuse ~f:(fun c ->
-                            "trait reuse via " ^ c);
-                      ]
-                      |> List.filter_map ~f:(fun x -> x)
-                      |> String.concat ~sep:", "
-                    in
-                    Printf.sprintf
-                      "%s%s%s"
-                      name
-                      targs
-                      ( if String.equal modifiers "" then
-                        ""
-                      else
-                        Printf.sprintf " (%s)" modifiers )))
-              |> Sequence.to_list
+                      None );
+                    ( if is_set mro_xhp_attrs_only mro.mro_flags then
+                      Some "xhp_attrs_only"
+                    else
+                      None );
+                    ( if is_set mro_consts_only mro.mro_flags then
+                      Some "consts_only"
+                    else
+                      None );
+                    ( if is_set mro_copy_private_members mro.mro_flags then
+                      Some "copy_private_members"
+                    else
+                      None );
+                    ( if is_set mro_passthrough_abstract_typeconst mro.mro_flags
+                    then
+                      Some "PAT"
+                    else
+                      None );
+                    Option.map mro.mro_trait_reuse ~f:(fun c ->
+                        "trait reuse via " ^ c);
+                  ]
+                  |> List.filter_map ~f:(fun x -> x)
+                  |> String.concat ~sep:", "
+                in
+                Printf.sprintf
+                  "%s%s%s"
+                  name
+                  targs
+                  ( if String.equal modifiers "" then
+                    ""
+                  else
+                    Printf.sprintf " (%s)" modifiers ))
             in
-            Printf.printf "%s:\n" classname;
-            List.iter linearization ~f:(Printf.printf "  %s\n")))
+            let member_linearization =
+              Sequence.map lin_members display |> Sequence.to_list
+            in
+            let ancestor_linearization =
+              Sequence.map lin_ancestors display |> Sequence.to_list
+            in
+            Printf.printf "Member Linearization %s:\n" classname;
+            List.iter member_linearization ~f:(Printf.printf "  %s\n");
+            Printf.printf "Ancestor Linearization %s:\n" classname;
+            List.iter ancestor_linearization ~f:(Printf.printf "  %s\n")))
+  | Hover pos_given ->
+    let filename = expect_single_file () in
+    let (ctx, entry) =
+      Provider_context.add_entry_if_missing ~ctx ~path:filename
+    in
+    let (line, column) =
+      match pos_given with
+      | Some (line, column) -> (line, column)
+      | None ->
+        let src = Provider_context.read_file_contents_exn entry in
+        hover_at_caret_pos src
+    in
+    let results = ServerHover.go_quarantined ~ctx ~entry ~line ~column in
+    let print result =
+      Printf.printf "%s\n" (HoverService.string_of_result result)
+    in
+    List.iter results print
 
 (*****************************************************************************)
 (* Main entry point *)
@@ -2060,6 +2250,7 @@ let decl_and_run_mode
       batch_mode;
       out_extension;
       verbosity;
+      should_print_position;
     }
     (popt : TypecheckerOptions.t)
     (hhi_root : Path.t)
@@ -2210,6 +2401,7 @@ let decl_and_run_mode
     out_extension
     dbg_deps
     dbg_glean_deps
+    ~should_print_position
     ~verbosity
 
 let main_hack

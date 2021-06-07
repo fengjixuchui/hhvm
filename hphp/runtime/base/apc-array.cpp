@@ -62,8 +62,7 @@ APCArray::MakeSharedImpl(ArrayData* arr, APCHandleLevel level,
       return serialized(s.get());
     }
 
-    if (apcExtension::UseUncounted && !features.hasNonPersistable &&
-        !arr->empty()) {
+    if (apcExtension::UseUncounted && !features.hasNonPersistable) {
       auto const base_size = use_jemalloc ?
         tl_heap->getAllocated() - tl_heap->getDeallocated() :
         seenArrs.get() ? getMemSize(seenArrs.get()) :
@@ -156,11 +155,11 @@ APCHandle::Pair APCArray::MakeHash(ArrayData* arr, APCKind kind,
     IterateKV(
       arr,
       [&](TypedValue k, TypedValue v) {
-        auto key = APCHandle::Create(VarNR(k), false,
-                                     APCHandleLevel::Inner, unserializeObj);
+        auto key = APCHandle::Create(VarNR(k), APCHandleLevel::Inner,
+                                     unserializeObj);
         size += key.size;
-        auto val = APCHandle::Create(VarNR(v), false,
-                                     APCHandleLevel::Inner, unserializeObj);
+        auto val = APCHandle::Create(VarNR(v), APCHandleLevel::Inner,
+                                     unserializeObj);
         size += val.size;
         ret->add(key.handle, val.handle);
         return false;
@@ -178,10 +177,9 @@ APCHandle::Pair APCArray::MakeHash(ArrayData* arr, APCKind kind,
 APCHandle* APCArray::MakeUncountedArray(
     ArrayData* ad, DataWalker::PointerMap* seen) {
   assertx(apcExtension::UseUncounted);
-  auto const data = ::HPHP::MakeUncountedArray(ad, seen, true);
-  auto const mem = reinterpret_cast<APCTypedValue*>(data) - 1;
-  auto const value = new (mem) APCTypedValue(data);
-  return value->getHandle();
+  auto const env = MakeUncountedEnv { seen };
+  auto const data = ::HPHP::MakeUncountedArray(ad, env, true);
+  return APCTypedValue::ForArray(data)->getHandle();
 }
 
 APCHandle::Pair APCArray::MakePacked(ArrayData* arr, APCKind kind,
@@ -197,8 +195,8 @@ APCHandle::Pair APCArray::MakePacked(ArrayData* arr, APCKind kind,
     IterateV(
       arr,
       [&](TypedValue v) {
-        auto val = APCHandle::Create(VarNR(v), false,
-                                     APCHandleLevel::Inner, unserializeObj);
+        auto val = APCHandle::Create(VarNR(v), APCHandleLevel::Inner,
+                                     unserializeObj);
         size += val.size;
         ret->vals()[i++] = val.handle;
         return false;

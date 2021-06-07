@@ -123,7 +123,6 @@ type t =
   | NullableAsExpression
   | ConditionalExpression
   | EvalExpression
-  | DefineExpression
   | IssetExpression
   | FunctionCallExpression
   | FunctionPointerExpression
@@ -191,7 +190,7 @@ type t =
   | IntersectionTypeSpecifier
   | ErrorSyntax
   | ListItem
-  | EnumAtomExpression
+  | EnumClassLabelExpression
 [@@deriving show, eq]
 
 let to_string kind =
@@ -301,7 +300,6 @@ let to_string kind =
   | NullableAsExpression -> "nullable_as_expression"
   | ConditionalExpression -> "conditional_expression"
   | EvalExpression -> "eval_expression"
-  | DefineExpression -> "define_expression"
   | IssetExpression -> "isset_expression"
   | FunctionCallExpression -> "function_call_expression"
   | FunctionPointerExpression -> "function_pointer_expression"
@@ -369,4 +367,4 @@ let to_string kind =
   | IntersectionTypeSpecifier -> "intersection_type_specifier"
   | ErrorSyntax -> "error"
   | ListItem -> "list_item"
-  | EnumAtomExpression -> "enum_atom"
+  | EnumClassLabelExpression -> "enum_class_label"

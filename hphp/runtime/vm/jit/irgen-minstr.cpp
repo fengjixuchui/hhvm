@@ -357,12 +357,10 @@ SSATmp* checkInitProp(IRGS& env,
                       SSATmp* baseAsObj,
                       SSATmp* propAddr,
                       SSATmp* key,
-                      bool doWarn,
-                      bool doDefine) {
+                      bool doWarn) {
   assertx(key->isA(TStaticStr));
   assertx(baseAsObj->isA(TObj));
   assertx(propAddr->type() <= TLvalToCell);
-  assertx(!doWarn || !doDefine);
 
   auto const needsCheck = doWarn && propAddr->type().deref().maybe(TUninit);
   if (!needsCheck) return propAddr;
@@ -396,7 +394,6 @@ std::pair<SSATmp*, SSATmp*> emitPropSpecialized(
   MOpMode mode,
   PropInfo propInfo
 ) {
-  assertx(mode != MOpMode::Warn || mode != MOpMode::Unset);
   auto const doWarn   = mode == MOpMode::Warn;
   auto const doDefine = mode == MOpMode::Define || mode == MOpMode::Unset;
 
@@ -414,7 +411,7 @@ std::pair<SSATmp*, SSATmp*> emitPropSpecialized(
         obj
       );
       return !propInfo.lateInit
-        ? checkInitProp(env, obj, addr, key, doWarn, doDefine)
+        ? checkInitProp(env, obj, addr, key, doWarn)
         : addr;
     }
 
@@ -947,9 +944,10 @@ SSATmp* propGenericImpl(IRGS& env, MOpMode mode, SSATmp* base, SSATmp* key,
   }
 
   auto const tvRef = propTvRefPtr(env, base, key);
-  if (nullsafe) return gen(env, PropQ, ReadOnlyData { rop }, base, key, tvRef);
+  auto const roProp = gen(env, LdMROPropAddr);
+  if (nullsafe) return gen(env, PropQ, ReadOnlyData { rop }, base, key, roProp, tvRef);
   auto const op = define ? PropDX : PropX;
-  return gen(env, op, PropData { mode, rop }, base, key, tvRef);
+  return gen(env, op, PropData { mode, rop }, base, key, roProp, tvRef);
 }
 
 SSATmp* propImpl(IRGS& env, MOpMode mode, SSATmp* key, bool nullsafe, ReadOnlyOp op) {
@@ -964,7 +962,8 @@ SSATmp* propImpl(IRGS& env, MOpMode mode, SSATmp* key, bool nullsafe, ReadOnlyOp
 
   auto const propInfo =
     getCurrentPropertyOffset(env, base, key->type(), false);
-  if (!propInfo || propInfo->isConst || mode == MOpMode::Unset) {
+  if (!propInfo || propInfo->isConst || mode == MOpMode::Unset ||
+    (propInfo->readOnly && op == ReadOnlyOp::CheckROCOW)) {
     return propGenericImpl(env, mode, base, key, nullsafe, op);
   }
   if (propInfo->readOnly && op == ReadOnlyOp::Mutable) {
@@ -1138,14 +1137,10 @@ SSATmp* keysetElemImpl(IRGS& env, MOpMode mode, Type baseType, SSATmp* key) {
 const StaticString s_OP_NOT_SUPPORTED_STRING(Strings::OP_NOT_SUPPORTED_STRING);
 
 SSATmp* elemImpl(IRGS& env, MOpMode mode, SSATmp* key) {
-  DEBUG_ONLY auto const warn = mode == MOpMode::Warn;
   auto const unset = mode == MOpMode::Unset;
   auto const define = mode == MOpMode::Define;
 
   auto const baseType = env.irb->fs().mbase().type;
-
-  assertx(!define || !unset);
-  assertx(!define || !warn);
 
   if (baseType <= TVec)    return vecElemImpl(env, mode, baseType, key);
   if (baseType <= TDict)   return dictElemImpl(env, mode, baseType, key);
@@ -1166,8 +1161,9 @@ SSATmp* elemImpl(IRGS& env, MOpMode mode, SSATmp* key) {
   auto const base = ldMBase(env);
   auto const data = MOpModeData { mode };
   if (define || unset) {
+    auto const roProp = gen(env, LdMROProp);
     auto const op = define ? ElemDX : ElemUX;
-    return gen(env, op, data, base, key);
+    return gen(env, op, data, base, key, roProp);
   }
   auto const value = gen(env, ElemX, data, base, key);
   return baseValueToLval(env, value);
@@ -1601,7 +1597,8 @@ void emitBaseSC(IRGS& env,
   auto const writeMode = mode == MOpMode::Define || mode == MOpMode::Unset;
 
   const LdClsPropOptions opts { op, true, false, writeMode };
-  auto const spropPtr = ldClsPropAddr(env, cls, name, opts).propPtr;
+  auto const roProp = gen(env, LdMROPropAddr);
+  auto const spropPtr = ldClsPropAddr(env, cls, name, roProp, opts).propPtr;
   stMBase(env, spropPtr);
 }
 
@@ -1733,8 +1730,7 @@ void emitSetM(IRGS& env, uint32_t nDiscard, MemberKey mk) {
 void emitSetRangeM(IRGS& env,
                    uint32_t nDiscard,
                    uint32_t size,
-                   SetRangeOp op,
-                   ReadOnlyOp /*rop*/) {
+                   SetRangeOp op) {
   auto const count = gen(env, ConvTVToInt, ConvNoticeData{}, topC(env));
   auto const src = topC(env, BCSPRelOffset{1});
   auto const offset = gen(env, ConvTVToInt, ConvNoticeData{}, topC(env, BCSPRelOffset{2}));

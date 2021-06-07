@@ -131,7 +131,12 @@ fn make_memoize_wrapper_method<'a, 'arena>(
     let is_async = method.fun_kind.is_fasync();
     // __Memoize is not allowed on lambdas, so we never need to inherit the rx
     // level from the declaring scope when we're in a Memoize wrapper
-    let coeffects = HhasCoeffects::from_ast(&method.ctxs, &method.params);
+    let coeffects = HhasCoeffects::from_ast(
+        &method.ctxs,
+        &method.params,
+        &method.tparams,
+        &class.tparams,
+    );
     let is_reified = method
         .tparams
         .iter()
@@ -153,7 +158,6 @@ fn make_memoize_wrapper_method<'a, 'arena>(
         method_id: &name,
         flags: arg_flags,
     };
-    env.with_rx_body(coeffects.is_any_rx_or_pure());
     let body = emit_memoize_wrapper_body(emitter, env, &mut args)?;
     let mut flags = HhasMethodFlags::empty();
     flags.set(HhasMethodFlags::IS_STATIC, method.static_);
@@ -235,9 +239,9 @@ fn make_memoize_method_with_params_code<'a, 'arena>(
 ) -> Result<InstrSeq<'arena>> {
     let alloc = env.arena;
     let mut param_count = hhas_params.len();
-    let notfound = emitter.label_gen_mut().next_regular(alloc);
-    let suspended_get = emitter.label_gen_mut().next_regular(alloc);
-    let eager_set = emitter.label_gen_mut().next_regular(alloc);
+    let notfound = emitter.label_gen_mut().next_regular();
+    let suspended_get = emitter.label_gen_mut().next_regular();
+    let eager_set = emitter.label_gen_mut().next_regular();
     // The local that contains the reified generics is the first non parameter local,
     // so the first local is parameter count + 1 when there are reified = generics
     let add_refied = usize::from(args.flags.contains(Flags::IS_REFIED));
@@ -257,17 +261,9 @@ fn make_memoize_method_with_params_code<'a, 'arena>(
             fcall_flags |= FcallFlags::HAS_GENERICS;
         };
         if args.flags.contains(Flags::IS_ASYNC) {
-            FcallArgs::new(
-                alloc,
-                fcall_flags,
-                1,
-                &[],
-                Some(eager_set),
-                param_count,
-                None,
-            )
+            FcallArgs::new(fcall_flags, 1, &[], Some(eager_set), param_count, None)
         } else {
-            FcallArgs::new(alloc, fcall_flags, 1, &[], None, param_count, None)
+            FcallArgs::new(fcall_flags, 1, &[], None, param_count, None)
         }
     };
     let (reified_get, reified_memokeym) = if !args.flags.contains(Flags::IS_REFIED) {
@@ -377,9 +373,9 @@ fn make_memoize_method_no_params_code<'a, 'arena>(
     emitter: &mut Emitter<'arena>,
     args: &Args<'_, 'a, 'arena>,
 ) -> Result<InstrSeq<'arena>> {
-    let notfound = emitter.label_gen_mut().next_regular(alloc);
-    let suspended_get = emitter.label_gen_mut().next_regular(alloc);
-    let eager_set = emitter.label_gen_mut().next_regular(alloc);
+    let notfound = emitter.label_gen_mut().next_regular();
+    let suspended_get = emitter.label_gen_mut().next_regular();
+    let eager_set = emitter.label_gen_mut().next_regular();
     let deprecation_body = emit_body::emit_deprecation_info(
         alloc,
         args.scope,
@@ -388,7 +384,6 @@ fn make_memoize_method_no_params_code<'a, 'arena>(
     )?;
 
     let fcall_args = FcallArgs::new(
-        alloc,
         FcallFlags::default(),
         1,
         &[],
@@ -484,6 +479,7 @@ fn make_wrapper<'a, 'arena>(
         decl_vars,
         true,
         args.flags.contains(Flags::WITH_LSB),
+        0,
         vec![], /* upper_bounds */
         vec![], /* shadowed_tparams */
         params,

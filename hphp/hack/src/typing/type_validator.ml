@@ -46,15 +46,22 @@ class virtual type_validator =
     method on_alias acc _ _ tyl ty =
       List.fold_left (ty :: tyl) ~f:this#on_type ~init:acc
 
-    method on_typeconst acc _ _ typeconst =
-      let acc =
-        Option.fold ~f:this#on_type ~init:acc typeconst.ttc_as_constraint
-      in
-      let acc =
-        Option.fold ~f:this#on_type ~init:acc typeconst.ttc_super_constraint
-      in
-      let acc = Option.fold ~f:this#on_type ~init:acc typeconst.ttc_type in
-      acc
+    (* TODO(T88552052) is_concrete is a strange pattern here. The bool is used
+     * to signal when a partially abstract type constant is directly accessed
+     * in a way that would result in the value being used instead of
+     * getting a constrained abstract type. This logic can be cleaned up by
+     * eliminating partially abstract type constants and only using ttc_kind *)
+    method on_typeconst acc _class _is_concrete typeconst =
+      match typeconst.ttc_kind with
+      | TCConcrete { tc_type } -> this#on_type acc tc_type
+      | TCPartiallyAbstract { patc_constraint; patc_type } ->
+        let acc = this#on_type acc patc_constraint in
+        this#on_type acc patc_type
+      | TCAbstract { atc_as_constraint; atc_super_constraint; atc_default } ->
+        let acc = Option.fold ~f:this#on_type ~init:acc atc_as_constraint in
+        let acc = Option.fold ~f:this#on_type ~init:acc atc_super_constraint in
+        let acc = Option.fold ~f:this#on_type ~init:acc atc_default in
+        acc
 
     method! on_taccess acc _r (root, id) =
       let (env, root) = Env.localize acc.env acc.ety_env root in
@@ -70,13 +77,13 @@ class virtual type_validator =
                 Decl_provider.Class.get_typeconst class_ (snd id)
                 >>= fun typeconst ->
                 let is_concrete =
-                  match typeconst.ttc_abstract with
-                  | TCConcrete -> true
+                  match typeconst.ttc_kind with
+                  | TCConcrete _ -> true
                   (* This handles the case for partially abstract type constants. In this case
                    * we know the assigned type will be chosen if the root is the same as the
                    * concrete supertype of the root.
                    *)
-                  | TCPartiallyAbstract when phys_equal root ty -> true
+                  | TCPartiallyAbstract _ when phys_equal root ty -> true
                   | _ -> false
                 in
                 let ety_env = { acc.ety_env with this_ty = ty } in
@@ -93,9 +100,17 @@ class virtual type_validator =
         this#on_enum acc r (pos, name)
       else
         match Env.get_class_or_typedef acc.env name with
-        | Some
-            (Env.TypedefResult
-              { td_pos; td_vis; td_tparams; td_type; td_constraint }) ->
+        | Some (Env.TypedefResult td) ->
+          let {
+            td_pos = _;
+            td_vis = _;
+            td_module = _;
+            td_tparams;
+            td_type;
+            td_constraint;
+          } =
+            td
+          in
           if SSet.mem name acc.expanded_typedefs then
             acc
           else
@@ -107,19 +122,15 @@ class virtual type_validator =
             in
             let subst = Decl_instantiate.make_subst td_tparams tyl in
             let td_type = Decl_instantiate.instantiate subst td_type in
-            (match td_vis with
-            | Aast.Opaque
-              when not
-                     (Relative_path.equal
-                        (Pos.filename (Pos_or_decl.unsafe_to_raw_pos td_pos))
-                        (Env.get_file acc.env)) ->
+            if Env.is_typedef_visible acc.env td then
+              this#on_alias acc r (pos, name) tyl td_type
+            else
               let td_constraint =
                 match td_constraint with
                 | None -> mk (r, Tmixed)
                 | Some ty -> Decl_instantiate.instantiate subst ty
               in
               this#on_newtype acc r (pos, name) tyl td_constraint td_type
-            | _ -> this#on_alias acc r (pos, name) tyl td_type)
         | _ -> this#on_class acc r (pos, name) tyl
 
     (* Use_pos is the primary error position *)
@@ -131,13 +142,11 @@ class virtual type_validator =
             env;
             ety_env =
               {
-                type_expansions = Typing_defs.Type_expansions.empty;
-                substs = SMap.empty;
+                Typing_defs.empty_expand_env with
                 this_ty =
                   Option.value
                     (Env.get_self_ty env)
                     ~default:(MakeType.nothing Reason.none);
-                on_error = Errors.ignore_error;
               };
             expanded_typedefs = SSet.empty;
             validity = Valid;
