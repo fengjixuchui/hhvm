@@ -10,7 +10,6 @@
 open Hh_prelude
 open Aast
 open Typing_defs
-open Type_validator
 open Typing_reified_check (* validator *)
 
 module Env = Tast_env
@@ -110,7 +109,8 @@ let verify_call_targs env expr_pos decl_pos tparams targs =
     Errors.require_args_reify decl_pos expr_pos
   else
     (* Unequal_lengths case handled elsewhere *)
-    List.iter2 tparams targs ~f:(verify_targ_valid env Resolved) |> ignore
+    List.iter2 tparams targs ~f:(verify_targ_valid env Type_validator.Resolved)
+    |> ignore
 
 let handler =
   object
@@ -226,7 +226,7 @@ let handler =
             let tparams = Cls.tparams tc in
             ignore
               (List.iter2 tparams hints ~f:(fun tp hint ->
-                   verify_targ_valid env Unresolved tp ((), hint)))
+                   verify_targ_valid env Type_validator.Unresolved tp ((), hint)))
           | _ -> ()
         end
       | _ -> ()
@@ -234,7 +234,7 @@ let handler =
     method! at_tparam env tparam =
       (* Can't use Attributes.mem here because of a conflict between Nast.user_attributes and Tast.user_attributes *)
       if
-        List.exists tparam.tp_user_attributes (fun { ua_name; _ } ->
+        List.exists tparam.tp_user_attributes ~f:(fun { ua_name; _ } ->
             String.equal UA.uaNewable (snd ua_name))
       then
         verify_has_consistent_bound env tparam

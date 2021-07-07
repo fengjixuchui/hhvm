@@ -17,9 +17,9 @@ type rollout_flags = {
   max_times_to_defer_type_checking: int option;
   monitor_fd_close_delay: int;
   monitor_backpressure: bool;
-  enable_devx_dependency_graph: bool;
   small_buckets_for_dirty_names: bool;
   symbolindex_search_provider: string;
+  require_saved_state: bool;
 }
 
 let flush () = ()
@@ -92,7 +92,6 @@ let server_receipt_to_monitor_read_exn ~server_receipt_to_monitor_file:_ _ _ =
 
 let init_lazy_end
     _
-    ~informant_use_xdb:_
     ~load_script_timeout:_
     ~state_distance:_
     ~approach_name:_
@@ -107,7 +106,13 @@ let server_is_ready _ = ()
 
 let load_deptable_end _ = ()
 
-let saved_state_download_and_load_done ~load_state_approach:_ ~success:_ _ = ()
+let saved_state_download_and_load_done
+    ~load_state_approach:_
+    ~success:_
+    ~state_result:_
+    ~load_state_natively_64bit:_
+    _ =
+  ()
 
 let tried_to_be_hg_aware_with_precomputed_saved_state_warning _ = ()
 
@@ -299,6 +304,10 @@ let invariant_violation_bug
     ~typechecking_is_deferring:_ ~path:_ ~pos:_ ~desc:_ _ =
   ()
 
+let naming_invariant_violation_bug
+    ~desc:_ ~name:_ ~file:_ ~canonical:_ ~canonical_file:_ =
+  ()
+
 let type_check_end
     _ ~heap_size:_ ~started_count:_ ~count:_ ~experiments:_ ~start_t:_ =
   ()
@@ -446,6 +455,22 @@ end
 module CGroup = struct
   let profile
       ~cgroup:_ ~event:_ ~stage:_ ~metric:_ ~start:_ ~delta:_ ~hwm_delta:_ =
+    ()
+end
+
+module ReHulk = struct
+  let profile
+      ~recheck_id:_
+      ~start_time:_
+      ~action:_
+      ~re_worker:_
+      ~queued_duration:_
+      ~input_upload_duration:_
+      ~input_fetch_duration:_
+      ~output_upload_duration:_
+      ~output_fetch_duration:_
+      ~worker_duration:_
+      ~execution_duration:_ =
     ()
 end
 

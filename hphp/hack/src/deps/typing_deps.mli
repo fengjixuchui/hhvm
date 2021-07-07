@@ -186,6 +186,9 @@ val allow_dependency_table_reads : Mode.t -> bool -> bool
 val add_idep :
   Mode.t -> Dep.dependent Dep.variant -> Dep.dependency Dep.variant -> unit
 
+val idep_exists :
+  Mode.t -> Dep.dependent Dep.variant -> Dep.dependency Dep.variant -> bool
+
 val add_idep_directly_to_graph :
   Mode.t -> dependent:Dep.t -> dependency:Dep.t -> unit
 
@@ -252,6 +255,10 @@ val add_typing_deps : Mode.t -> DepSet.t -> DepSet.t
 
 (* add_extend_deps and add_typing_deps chained together *)
 val add_all_deps : Mode.t -> DepSet.t -> DepSet.t
+
+module Telemetry : sig
+  val depgraph_delta_num_edges : Mode.t -> int option
+end
 
 module ForTest : sig
   val compute_dep_hash : Mode.hash_mode -> 'a Dep.variant -> int

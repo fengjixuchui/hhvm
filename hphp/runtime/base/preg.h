@@ -19,7 +19,6 @@
 #include "hphp/runtime/base/type-string.h"
 
 #include <folly/File.h>
-#include <folly/Optional.h>
 
 #include <cstdint>
 #include <cstddef>
@@ -29,7 +28,6 @@
 #define PREG_PATTERN_ORDER          1
 #define PREG_SET_ORDER              2
 #define PREG_OFFSET_CAPTURE         (1<<8)
-#define PREG_FB_HACK_ARRAYS         (1<<30)
 #define PREG_FB__PRIVATE__HSL_IMPL  (1<<29)
 
 #define PREG_SPLIT_NO_EMPTY         (1<<0)
@@ -56,16 +54,23 @@ namespace HPHP {
 struct Array;
 struct Variant;
 
+/*
+  * Optimization: If the pattern defines a literal substring,
+  * compare the strings directly (i.e. memcmp) instead of performing
+  * the full regular expression evaluation.
+  */
 struct pcre_literal_data {
   pcre_literal_data(const char* pattern, int coptions);
 
   bool isLiteral() const;
-  bool matches(const StringData* subject, int pos, int* offsets) const;
+  bool match_start() const { return options & PCRE_ANCHORED; }
+  bool match_end() const { return options & PCRE_DOLLAR_ENDONLY; }
+  bool case_insensitive() const { return options & PCRE_CASELESS; }
+  bool matches(const StringData* subject, int pos, int* offsets,
+               int extra_options) const;
 
-  folly::Optional<std::string> literal_str;
-  bool match_start{false};
-  bool match_end{false};
-  bool case_insensitive{false};
+  Optional<std::string> literal_str;
+  int options;
 };
 
 struct pcre_cache_entry {
@@ -178,4 +183,3 @@ struct PregWithErrorGuard {
 ///////////////////////////////////////////////////////////////////////////////
 
 }
-

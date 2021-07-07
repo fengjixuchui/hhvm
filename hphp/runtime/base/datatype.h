@@ -21,10 +21,10 @@
 #include <string>
 
 #include <folly/Format.h>
-#include <folly/Optional.h>
 
 #include "hphp/util/assertions.h"
 #include "hphp/util/low-ptr.h"
+#include "hphp/util/optional.h"
 #include "hphp/util/portability.h"
 
 namespace HPHP {
@@ -93,7 +93,7 @@ constexpr int8_t udt(size_t index, bool counted) {
   DT(Resource,         udt(6,  true))  \
   DT(RFunc,            udt(7,  true))  \
   DT(RClsMeth,         udt(8,  true))  \
-  DT(ClsMeth,          udt(9,  !use_lowptr)) \
+  DT(ClsMeth,          udt(9,  false)) \
   DT(Boolean,          udt(10, false)) \
   DT(Int64,            udt(11, false)) \
   DT(Double,           udt(12, false)) \
@@ -143,8 +143,7 @@ constexpr DataType kExtraInvalidDataType = static_cast<DataType>(0);
 auto constexpr kMinDataType = ut_t(KindOfPersistentDict);
 auto constexpr kMaxDataType = ut_t(KindOfNull);
 auto constexpr kMinRefCountedDataType = ut_t(KindOfDict);
-auto constexpr kMaxRefCountedDataType =
-  use_lowptr ? ut_t(KindOfRClsMeth) : ut_t(KindOfClsMeth);
+auto constexpr kMaxRefCountedDataType = ut_t(KindOfRClsMeth);
 
 /*
  * A DataType is a refcounted type if and only if it has this bit set.
@@ -193,7 +192,7 @@ constexpr DataType dt_modulo_persistence(DataType dt) {
  * context.  Users who wish to use (DataType|KindOfNoneType|KindOfAnyType)
  * should consider dying in a fire.
  */
-using MaybeDataType = folly::Optional<DataType>;
+using MaybeDataType = Optional<DataType>;
 
 /*
  * Extracts the DataType from the given type
@@ -277,7 +276,7 @@ constexpr bool isRealType(DataType t) {
  * Whether a builtin return or param type is not a simple type.
  *
  * This is different from isRefcountedType because builtins can accept and
- * return Variants, and we use folly::none to denote these cases.
+ * return Variants, and we use std::nullopt to denote these cases.
  */
 inline bool isBuiltinByRef(MaybeDataType t) {
   return t != KindOfNull &&
@@ -392,6 +391,7 @@ bool operator>=(DataType, DataType) = delete;
   case KindOfPersistentVec: \
   case KindOfPersistentDict: \
   case KindOfPersistentKeyset: \
+  case KindOfClsMeth:       \
   case KindOfFunc:          \
   case KindOfClass:         \
   case KindOfLazyClass
@@ -428,4 +428,3 @@ template<> class FormatValue<HPHP::DataType> {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-

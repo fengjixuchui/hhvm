@@ -19,7 +19,6 @@
 #include <string>
 
 #include <folly/Format.h>
-#include <folly/Optional.h>
 #include <folly/ScopeGuard.h>
 
 #include "hphp/util/bisector.h"
@@ -388,11 +387,11 @@ bool srcsCanSpanCall(const IRInstruction& inst) {
   return true;
 }
 
-folly::Optional<uint32_t> pure_store_bit(Local& env, AliasClass acls) {
+Optional<uint32_t> pure_store_bit(Local& env, AliasClass acls) {
   if (auto const meta = env.global.ainfo.find(canonicalize(acls))) {
     return meta->index;
   }
-  return folly::none;
+  return std::nullopt;
 }
 
 void set_movable_store(Local& env, uint32_t bit, IRInstruction& inst) {
@@ -864,9 +863,12 @@ IRInstruction* resolve_flat(Global& genv, Block* blk, uint32_t id,
       auto const st = stores[j++];
       auto si = st->src(i);
       if (!si->inst()->is(DefConst) && si->type().admitsSingleVal()) {
-        si = genv.unit.cns(si->type());
+        // If edges do not all have the same SSATmp src,
+        // rewrite srcs with constant values to use DefConst.
+        phiInputs[edge.from()] = genv.unit.cns(si->type());
+      } else {
+        phiInputs[edge.from()] = si;
       }
-      phiInputs[edge.from()] = si;
       if (temp == nullptr) temp = si;
       if (si != temp) same = false;
     }
@@ -1412,7 +1414,7 @@ void fix_inlined_call(Global& genv, IRInstruction* call, SSATmp* fp) {
 }
 
 struct FPState {
-  PC catchPC;      // PC at dominating BeginCatch or nullptr
+  SrcKey catchSk;  // SrcKey at dominating BeginCatch or SrcKey{}
   int exitDepth;   // number of live frames at end of block
   SSATmp* entry;   // live fp at start of block
   SSATmp* exit;    // live fp at end of block
@@ -1509,7 +1511,7 @@ void insert_eager_sync(Global& genv, IRInstruction& endCatch) {
 void fix_inline_frames(Global& genv) {
   using ECM = EndCatchData::CatchMode;
   StateVector<Block,FPState> blockState{
-    genv.unit, FPState{nullptr, 0, nullptr, nullptr, nullptr}
+    genv.unit, FPState{SrcKey{}, 0, nullptr, nullptr, nullptr}
   };
   const BlockList rpoBlocks{genv.poBlockList.rbegin(), genv.poBlockList.rend()};
   auto const rpoIDs = numberBlocks(genv.unit, rpoBlocks);
@@ -1536,7 +1538,7 @@ void fix_inline_frames(Global& genv) {
     blk->forEachPred([&] (Block* pred) {
       auto const& bs = blockState[pred];
       needFixup |= bs.exit && state.entry && state.entry != bs.exit;
-      if (bs.catchPC) state.catchPC = bs.catchPC;
+      if (bs.catchSk.valid()) state.catchSk = bs.catchSk;
       if (bs.catchFP) state.catchFP = bs.catchFP;
 
       if (!bs.exit) return;
@@ -1561,7 +1563,7 @@ void fix_inline_frames(Global& genv) {
     }
 
     auto fp = state.entry;
-    folly::Optional<IRSPRelOffset> lastSync;
+    Optional<IRSPRelOffset> lastSync;
     populate_ancestor_frames(fp, published_frames);
     assertx(published_frames.size() == state.exitDepth);
 
@@ -1591,8 +1593,10 @@ void fix_inline_frames(Global& genv) {
         assertx(parent->is(BeginInlining));
 
         InlineCallData data;
-        data.syncVmpc = state.catchPC;
+        data.syncVmpc = state.catchSk.valid() ? state.catchSk.pc() : nullptr;
         data.spOffset = parent->extra<BeginInlining>()->spOffset;
+        data.returnSk = parent->marker().sk().advanced();
+        data.returnSPOff = parent->marker().bcSPOff() - kNumActRecCells + 1;
         genv.unit.replace(&inst, InlineCall, data, parent->dst(), fp);
         // fallthrough to the InlineCall logic
       }
@@ -1600,7 +1604,8 @@ void fix_inline_frames(Global& genv) {
       if (inst.is(InlineCall)) {
         fp = inst.src(0);
         published_frames.push_back(fp);
-        inst.extra<InlineCall>()->syncVmpc = state.catchPC;
+        inst.extra<InlineCall>()->syncVmpc = state.catchSk.valid()
+          ? state.catchSk.pc() : nullptr;
       }
 
       if (inst.is(DefFP, DefFuncEntryFP)) {
@@ -1618,7 +1623,7 @@ void fix_inline_frames(Global& genv) {
       }
 
       if (inst.is(BeginCatch)) {
-        state.catchPC = inst.marker().sk().pc();
+        state.catchSk = inst.marker().sk();
         state.catchFP = fp;
       }
       if (inst.is(EndCatch)) {

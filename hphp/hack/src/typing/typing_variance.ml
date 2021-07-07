@@ -158,7 +158,7 @@ let detailed_message variance pos stack =
   | [((p, _, _) as r)] -> [(p, reason_to_string ~sign:false r)]
   | _ ->
     (pos, reason_stack_to_string variance stack)
-    :: List.map stack (fun ((p, _, _) as r) ->
+    :: List.map stack ~f:(fun ((p, _, _) as r) ->
            (p, reason_to_string ~sign:true r))
 
 (*****************************************************************************)
@@ -256,7 +256,7 @@ let make_tparam_variance : Nast.tparam -> variance =
 let check_final_this_pos_variance : variance -> Pos.t -> Nast.class_ -> unit =
  fun env_variance rpos class_ ->
   if class_.Aast.c_final then
-    List.iter class_.Aast.c_tparams (fun t ->
+    List.iter class_.Aast.c_tparams ~f:(fun t ->
         match (env_variance, t.Aast.tp_variance) with
         | (Vcontravariant _, (Ast_defs.Covariant | Ast_defs.Contravariant)) ->
           Errors.contravariant_this
@@ -285,7 +285,7 @@ let get_class_variance : Typing_env_types.env -> Ast_defs.id -> _ =
       | None -> []
     in
 
-    List.map tparams make_decl_tparam_variance
+    List.map tparams ~f:make_decl_tparam_variance
 
 let rec get_typarams tenv root env (ty : decl_ty) =
   let empty = (SMap.empty, SMap.empty) in
@@ -820,7 +820,8 @@ let class_property : Env.t -> Nast.class_var -> unit =
         match prop.Aast.cv_visibility with
         | Aast.Private -> ()
         | Aast.Public
-        | Aast.Protected ->
+        | Aast.Protected
+        | Aast.Internal ->
           let variance =
             make_variance Rproperty (Ast_defs.get_pos h) Ast_defs.Invariant
           in
@@ -862,7 +863,8 @@ let class_method : Env.t -> Nast.class_ -> Nast.method_ -> unit =
        and contravariant type parameters in any position in the type *)
       ()
     | Aast.Public
-    | Aast.Protected ->
+    | Aast.Protected
+    | Aast.Internal ->
       if (class_.Aast.c_final || m_final) && m_static then
         ()
       else
@@ -993,6 +995,7 @@ let typedef : Typing_env_types.env -> Nast.typedef -> unit =
     t_namespace = _;
     t_span = _;
     t_emit_id = _;
+    t_is_ctx = _;
   } =
     typedef
   in

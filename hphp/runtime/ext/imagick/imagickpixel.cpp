@@ -37,7 +37,7 @@ Array createImagickPixelArray(size_t num, PixelWand* wands[], bool owner) {
   if (wands == nullptr) {
     return Array();
   } else {
-    VArrayInit ret(num);
+    VecInit ret(num);
     for (int i = 0; i < num; ++i) {
       ret.append(createImagickPixel(wands[i], owner));
     }
@@ -171,7 +171,7 @@ static Array HHVM_METHOD(ImagickPixel, getHSL) {
   auto wand = getPixelWandResource(Object{this_});
   double hue, saturation, luminosity;
   PixelGetHSL(wand->getWand(), &hue, &saturation, &luminosity);
-  return make_darray(
+  return make_dict_array(
     s_hue, hue,
     s_saturation, saturation,
     s_luminosity, luminosity);

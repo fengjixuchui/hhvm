@@ -78,12 +78,6 @@ struct RepoGlobalData {
    */
   bool PHP7_Substr = false;
 
-  /*
-   * Are Hack array compatibility notices enabled? If so, certain optimizations
-   * may be disabled.
-   */
-  bool HackArrCompatNotices = false;
-  bool HackArrCompatIsVecDictNotices = false;
   bool HackArrCompatSerializeNotices = false;
 
   /*
@@ -161,8 +155,8 @@ struct RepoGlobalData {
   /* Whether implicit coercions for bit ops trigger logs/exceptions */
   int32_t NoticeOnCoerceForBitOp = 0;
 
-  /* New behavior for inheritance of abstract type constants with defaults */
-  bool TypeconstInterfaceInheritanceDefaults = false;
+  /* Constants from traits behave like constants from interfaces (error on conflict) */
+  bool TraitConstantInterfaceBehavior = false;
 
   /*
    * The Hack.Lang.StrictArrayFillKeys option the repo was compiled with.
@@ -189,8 +183,6 @@ struct RepoGlobalData {
       (PHP7_NoHexNumerics)
       (PHP7_Substr)
       (PHP7_Builtins)
-      (HackArrCompatNotices)
-      (HackArrCompatIsVecDictNotices)
       (HackArrCompatSerializeNotices)
       (EnableIntrinsicsExtension)
       (ForbidDynamicCallsToFunc)
@@ -215,7 +207,7 @@ struct RepoGlobalData {
       (StrictArrayFillKeys)
       (NoticeOnCoerceForStrConcat)
       (NoticeOnCoerceForBitOp)
-      (TypeconstInterfaceInheritanceDefaults)
+      (TraitConstantInterfaceBehavior)
       (ConstantFunctions)
       ;
   }

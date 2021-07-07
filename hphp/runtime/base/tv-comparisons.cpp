@@ -17,6 +17,8 @@
 
 #include <type_traits>
 
+#include "hphp/runtime/base/datatype.h"
+#include "hphp/runtime/base/tv-conv-notice.h"
 #include "hphp/runtime/base/tv-conversions.h"
 #include "hphp/runtime/base/comparisons.h"
 #include "hphp/runtime/base/mixed-array.h"
@@ -53,8 +55,46 @@ bool vecSameHelper(const ArrayData* ad1, const ArrayData* ad2) {
 
 template<class Op> constexpr bool isEqualityOp();
 
-template<class Op> void handleConvNotice(const char* lhs, const char* rhs) {
-  if constexpr (!isEqualityOp<Op>()) handleConvNoticeForCmp(lhs, rhs);
+template<class Op>
+void handleConvNotice(const std::string& lhs, const std::string& rhs) {
+  if constexpr (isEqualityOp<Op>()) {
+    handleConvNoticeForEq(lhs.c_str(), rhs.c_str());
+  } else {
+    handleConvNoticeForCmp(lhs.c_str(), rhs.c_str());
+  }
+}
+
+
+/*
+ * Return whether two DataTypes for primitive types are "equivalent" including
+ * testing for in-progress migrations
+ */
+bool equivDataTypesIncludingMigrations(DataType t1, DataType t2) {
+  if (equivDataTypes(t1, t2)) return true;
+  if (RO::EvalIsCompatibleClsMethType &&
+      ((t1 == KindOfClsMeth && equivDataTypes(t2, KindOfVec)) ||
+        (equivDataTypes(t1, KindOfVec) && t2 == KindOfClsMeth))) {
+    return true;
+  }
+
+  if (!RO::EvalRaiseClassConversionWarning) {
+    const auto isStringOrClassish = [](DataType t) {
+      return isStringType(t) || isClassType(t) || isLazyClassType(t);
+    };
+    return isStringOrClassish(t1) && isStringOrClassish(t2);
+  }
+  return false;
+}
+
+template<class Op> bool shouldMaybeTriggerConvNotice(
+    DataType d1, DataType d2, typename Op::RetType res) {
+  if (equivDataTypesIncludingMigrations(d1, d2)) return false;
+  // if eq op, only notice if the comparison was true
+  if constexpr (isEqualityOp<Op>()) return res;
+  // only applies to comparison ops
+  if ((d1 == KindOfInt64  && d2 == KindOfDouble) ||
+      (d1 == KindOfDouble && d2 == KindOfInt64)) return false;
+  return true;
 }
 
 /*
@@ -69,32 +109,19 @@ template<class Op> void handleConvNotice(const char* lhs, const char* rhs) {
  * See below for the implementations of the Op template parameter.
  */
 
-template<class Op> typename Op::RetType tvRelOpBoolImpl(
-  Op op, TypedValue cell, bool val, bool should_check_coercion);
-
-template<class Op>
-typename Op::RetType tvRelOp(Op op, TypedValue cell, bool val) {
-  return tvRelOpBoolImpl(op, cell, val, true);
-}
-
 template<class Op>
 typename Op::RetType tvRelOpNull(Op op, TypedValue cell) {
   if (isStringType(cell.m_type)) {
-    handleConvNotice<Op>("string", "null");
     return op(cell.m_data.pstr, staticEmptyString());
   } else if (cell.m_type == KindOfObject) {
-    handleConvNotice<Op>("object", "null");
     return op(true, false);
   } else {
-    if (!isNullType(cell.m_type)) {
-      handleConvNotice<Op>(describe_actual_type(&cell).c_str(), "null");
-    }
-    return tvRelOpBoolImpl(op, cell, false, false);
+    return tvRelOp(op, cell, false);
   }
 }
 
-template<class Op> typename Op::RetType tvRelOpBoolImpl(
-  Op op, TypedValue cell, bool val, bool should_check_coercion) {
+template<class Op>
+typename Op::RetType tvRelOp(Op op, TypedValue cell, bool val) {
   if (UNLIKELY(isArrayLikeType(cell.m_type))) {
     return op(cell.m_data.parr, val);
   } else if (UNLIKELY(isClsMethType(cell.m_type))) {
@@ -106,16 +133,12 @@ template<class Op> typename Op::RetType tvRelOpBoolImpl(
   } else if (UNLIKELY(isRClsMethType(cell.m_type))) {
     return op(cell.m_data.prclsmeth, val);
   } else {
-    if (!isBoolType(cell.m_type) && should_check_coercion) {
-      handleConvNotice<Op>(describe_actual_type(&cell).c_str(), "bool");
-    }
     return op(tvToBool(cell), val);
   }
 }
 
 template<class Op, typename Num>
 auto strRelOp(Op op, TypedValue cell, Num val, const StringData* str) {
-  handleConvNotice<Op>("string", std::is_integral_v<Num> ? "int" : "float");
   auto const num = stringToNumeric(str);
   return num.m_type == KindOfInt64 ? op(num.m_data.num, val) :
          num.m_type == KindOfDouble ? op(num.m_data.dbl, val) :
@@ -129,11 +152,9 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, int64_t val) {
   switch (cell.m_type) {
     case KindOfUninit:
     case KindOfNull:
-      handleConvNotice<Op>("null", "int");
       return op(false, !!val);
 
     case KindOfBoolean:
-      handleConvNotice<Op>("bool", "int");
       return op(!!cell.m_data.num, val != 0);
 
     case KindOfInt64:
@@ -160,14 +181,9 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, int64_t val) {
 
     case KindOfObject:
       if (cell.m_data.pobj->isCollection()) return op.collectionVsNonObj();
-      {
-        // do the conversion first since it throws most of the time
-        const auto res = op(cell.m_data.pobj->toInt64(), val);
-        handleConvNotice<Op>("object", "int");
-        return res;
-      }
+      return op(cell.m_data.pobj->toInt64(), val);
+
     case KindOfResource:
-      handleConvNotice<Op>("resource", "int");
       return op(cell.m_data.pres->data()->o_toInt64(), val);
 
     case KindOfFunc:
@@ -202,12 +218,10 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, double val) {
   switch (cell.m_type) {
     case KindOfUninit:
     case KindOfNull:
-      handleConvNotice<Op>("null", "float");
       return op(false, val != 0);
 
     case KindOfBoolean:
-      handleConvNotice<Op>("bool", "float");
-      return op(!!cell.m_data.num, val != 0);
+       return op(!!cell.m_data.num, val != 0);
 
     case KindOfInt64:
       return op(cell.m_data.num, val);
@@ -233,14 +247,9 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, double val) {
 
     case KindOfObject:
       if (cell.m_data.pobj->isCollection()) return op.collectionVsNonObj();
-      {
-        // do the conversion first since it throws most of the time
-        const auto res = op(cell.m_data.pobj->toDouble(), val);
-        handleConvNotice<Op>("object", "float");
-        return res;
-      }
+      return op(cell.m_data.pobj->toDouble(), val);
+
     case KindOfResource:
-      handleConvNotice<Op>("resource", "float");
       return op(cell.m_data.pres->data()->o_toDouble(), val);
 
     case KindOfFunc:
@@ -276,22 +285,18 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const StringData* val) {
   switch (cell.m_type) {
     case KindOfUninit:
     case KindOfNull:
-      handleConvNotice<Op>("null", "string");
       return op(staticEmptyString(), val);
 
     case KindOfInt64: {
-      handleConvNotice<Op>("int", "string");
-      auto const num = stringToNumeric(val);
+       auto const num = stringToNumeric(val);
       return num.m_type == KindOfInt64  ? op(cell.m_data.num, num.m_data.num) :
              num.m_type == KindOfDouble ? op(cell.m_data.num, num.m_data.dbl) :
              op(cell.m_data.num, 0);
     }
     case KindOfBoolean:
-      handleConvNotice<Op>("bool", "string");
       return op(!!cell.m_data.num, val->toBoolean());
 
     case KindOfDouble: {
-      handleConvNotice<Op>("float", "string");
       auto const num = stringToNumeric(val);
       return num.m_type == KindOfInt64  ? op(cell.m_data.dbl, num.m_data.num) :
              num.m_type == KindOfDouble ? op(cell.m_data.dbl, num.m_data.dbl) :
@@ -321,12 +326,10 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const StringData* val) {
         String str(od->invokeToString());
         return op(str.get(), val);
       }
-      handleConvNotice<Op>("object", "string");
       return op(true, false);
     }
 
     case KindOfResource: {
-      handleConvNotice<Op>("resource", "string");
       auto const rd = cell.m_data.pres;
       return op(rd->data()->o_toDouble(), val->toDouble());
     }
@@ -366,18 +369,15 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const ObjectData* od) {
       String str(obj->invokeToString());
       return op(sd, str.get());
     }
-    handleConvNotice<Op>("string", "object");
     return op(false, true);
   };
 
   switch (cell.m_type) {
     case KindOfUninit:
     case KindOfNull:
-      handleConvNotice<Op>("null", "object");
       return op(false, true);
 
     case KindOfBoolean:
-      handleConvNotice<Op>("bool", "object");
       return op(!!cell.m_data.num, od->toBoolean());
 
     case KindOfInt64:
@@ -385,7 +385,6 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const ObjectData* od) {
       {
         // do the conversion first since it throws most of the time
         const auto res = op(cell.m_data.num, od->toInt64());
-        handleConvNotice<Op>("int", "object");
         return res;
       }
 
@@ -394,7 +393,6 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const ObjectData* od) {
       {
         // do the conversion first since it throws most of the time
         const auto res = op(cell.m_data.dbl, od->toDouble());
-        handleConvNotice<Op>("float", "object");
         return res;
       }
 
@@ -418,7 +416,6 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const ObjectData* od) {
       return op(cell.m_data.pobj, od);
 
     case KindOfResource:
-      handleConvNotice<Op>("resource", "object");
       return op(false, true);
 
     case KindOfFunc:
@@ -460,24 +457,19 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const ResourceData* rd) {
   switch (cell.m_type) {
     case KindOfUninit:
     case KindOfNull:
-      handleConvNotice<Op>("null", "resource");
       return op(false, true);
 
     case KindOfBoolean:
-      handleConvNotice<Op>("bool", "resource");
       return op(!!cell.m_data.num, rd->o_toBoolean());
 
     case KindOfInt64:
-      handleConvNotice<Op>("int", "resource");
       return op(cell.m_data.num, rd->o_toInt64());
 
     case KindOfDouble:
-      handleConvNotice<Op>("float", "resource");
       return op(cell.m_data.dbl, rd->o_toDouble());
 
     case KindOfPersistentString:
     case KindOfString: {
-      handleConvNotice<Op>("string", "resource");
       auto const str = cell.m_data.pstr;
       return op(str->toDouble(), rd->o_toDouble());
     }
@@ -495,25 +487,21 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const ResourceData* rd) {
       return op.keysetVsNonKeyset();
 
     case KindOfObject:
-      handleConvNotice<Op>("object", "resource");
       return op(true, false);
 
     case KindOfResource:
       return op(cell.m_data.pres->data(), rd);
 
-    case KindOfFunc: {
+    case KindOfFunc:
       return op.funcVsNonFunc();
-    }
 
     case KindOfClass: {
       auto const str = classToStringHelper(cell.m_data.pclass);
-      handleConvNotice<Op>("string", "resource");
       return op(str->toDouble(), rd->o_toDouble());
     }
 
     case KindOfLazyClass: {
       auto const str = lazyClassToStringHelper(cell.m_data.plazyclass);
-      handleConvNotice<Op>("string", "resource");
       return op(str->toDouble(), rd->o_toDouble());
     }
 
@@ -551,6 +539,7 @@ typename Op::RetType tvRelOpVec(Op op, TypedValue cell, const ArrayData* a) {
     if (cell.m_type == KindOfNull) return op(false, a);
     if (isDictType(cell.m_type)) return op.dictVsNonDict();
     if (isKeysetType(cell.m_type)) return op.keysetVsNonKeyset();
+    if (isClsMethType(cell.m_type)) return op.clsmethVsNonClsMeth();
     return op.vecVsNonVec();
   }
 
@@ -567,6 +556,7 @@ typename Op::RetType tvRelOpDict(Op op, TypedValue cell, const ArrayData* a) {
     if (cell.m_type == KindOfNull) return op(false, a);
     if (isVecType(cell.m_type)) return op.vecVsNonVec();
     if (isKeysetType(cell.m_type)) return op.keysetVsNonKeyset();
+    if (isClsMethType(cell.m_type)) return op.clsmethVsNonClsMeth();
     return op.dictVsNonDict();
   }
 
@@ -583,6 +573,7 @@ typename Op::RetType tvRelOpKeyset(Op op, TypedValue cell, const ArrayData* a) {
     if (cell.m_type == KindOfNull) return op(false, a);
     if (isVecType(cell.m_type)) return op.vecVsNonVec();
     if (isDictType(cell.m_type)) return op.dictVsNonDict();
+    if (isClsMethType(cell.m_type)) return op.clsmethVsNonClsMeth();
     return op.keysetVsNonKeyset();
   }
 
@@ -600,6 +591,7 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, ClsMethDataRef clsMeth) {
     case KindOfDouble:
     case KindOfPersistentString:
     case KindOfString:
+    case KindOfFunc:
     case KindOfClass:
     case KindOfLazyClass:
     case KindOfResource:
@@ -631,9 +623,6 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, ClsMethDataRef clsMeth) {
 
     case KindOfRecord:
       return op.recordVsNonRecord();
-
-    case KindOfFunc:
-      return op.funcVsNonFunc();
   }
   not_reached();
 }
@@ -711,7 +700,8 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const Func* val) {
   assertx(tvIsPlausible(cell));
   assertx(val != nullptr);
 
-  if (!isFuncType(type(cell))) {
+  if (UNLIKELY(!isFuncType(type(cell)))) {
+    if (isClsMethType(cell.m_type)) return op.clsmethVsNonClsMeth();
     return op.funcVsNonFunc();
   }
 
@@ -726,22 +716,18 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, LazyClassData val) {
   switch (cell.m_type) {
     case KindOfUninit:
     case KindOfNull:
-      handleConvNotice<Op>("null", "string");
       return op(staticEmptyString(), lazyClassToStringHelper(val));
 
     case KindOfInt64: {
-      handleConvNotice<Op>("int", "string");
       auto const num = stringToNumeric(lazyClassToStringHelper(val));
       return num.m_type == KindOfInt64  ? op(cell.m_data.num, num.m_data.num) :
              num.m_type == KindOfDouble ? op(cell.m_data.num, num.m_data.dbl) :
              op(cell.m_data.num, 0);
     }
     case KindOfBoolean:
-      handleConvNotice<Op>("bool", "string");
       return op(!!cell.m_data.num, true);
 
     case KindOfDouble: {
-      handleConvNotice<Op>("double", "string");
       auto const num = stringToNumeric(lazyClassToStringHelper(val));
       return num.m_type == KindOfInt64  ? op(cell.m_data.dbl, num.m_data.num) :
              num.m_type == KindOfDouble ? op(cell.m_data.dbl, num.m_data.dbl) :
@@ -771,12 +757,10 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, LazyClassData val) {
         String str(od->invokeToString());
         return op(str.get(), lazyClassToStringHelper(val));
       }
-      handleConvNotice<Op>("object", "string");
       return op(true, false);
     }
 
     case KindOfResource: {
-      handleConvNotice<Op>("resource", "string");
       auto const rd = cell.m_data.pres;
       return op(rd->data()->o_toDouble(),
                 lazyClassToStringHelper(val)->toDouble());
@@ -814,22 +798,18 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const Class* val) {
   switch (cell.m_type) {
     case KindOfUninit:
     case KindOfNull:
-      handleConvNotice<Op>("null", "string");
       return op(staticEmptyString(), classToStringHelper(val));
 
     case KindOfInt64: {
-      handleConvNotice<Op>("int", "string");
       auto const num = stringToNumeric(classToStringHelper(val));
       return num.m_type == KindOfInt64  ? op(cell.m_data.num, num.m_data.num) :
              num.m_type == KindOfDouble ? op(cell.m_data.num, num.m_data.dbl) :
              op(cell.m_data.num, 0);
     }
     case KindOfBoolean:
-      handleConvNotice<Op>("bool", "string");
       return op(!!cell.m_data.num, true);
 
     case KindOfDouble: {
-      handleConvNotice<Op>("double", "string");
       auto const num = stringToNumeric(classToStringHelper(val));
       return num.m_type == KindOfInt64  ? op(cell.m_data.dbl, num.m_data.num) :
              num.m_type == KindOfDouble ? op(cell.m_data.dbl, num.m_data.dbl) :
@@ -859,12 +839,10 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const Class* val) {
         String str(od->invokeToString());
         return op(str.get(), classToStringHelper(val));
       }
-      handleConvNotice<Op>("object", "string");
       return op(true, false);
     }
 
     case KindOfResource: {
-      handleConvNotice<Op>("resource", "string");
       auto const rd = cell.m_data.pres;
       return op(rd->data()->o_toDouble(), classToStringHelper(val)->toDouble());
     }
@@ -893,36 +871,51 @@ typename Op::RetType tvRelOp(Op op, TypedValue cell, const Class* val) {
   not_reached();
 }
 
+struct Eq;
+
 template<class Op>
 typename Op::RetType tvRelOp(Op op, TypedValue c1, TypedValue c2) {
   assertx(tvIsPlausible(c1));
   assertx(tvIsPlausible(c2));
 
-  switch (c2.m_type) {
-  case KindOfUninit:
-  case KindOfNull:         return tvRelOpNull(op, c1);
-  case KindOfInt64:        return tvRelOp(op, c1, c2.m_data.num);
-  case KindOfBoolean:      return tvRelOp(op, c1, !!c2.m_data.num);
-  case KindOfDouble:       return tvRelOp(op, c1, c2.m_data.dbl);
-  case KindOfPersistentString:
-  case KindOfString:       return tvRelOp(op, c1, c2.m_data.pstr);
-  case KindOfPersistentVec:
-  case KindOfVec:          return tvRelOpVec(op, c1, c2.m_data.parr);
-  case KindOfPersistentDict:
-  case KindOfDict:         return tvRelOpDict(op, c1, c2.m_data.parr);
-  case KindOfPersistentKeyset:
-  case KindOfKeyset:       return tvRelOpKeyset(op, c1, c2.m_data.parr);
-  case KindOfObject:       return tvRelOp(op, c1, c2.m_data.pobj);
-  case KindOfResource:     return tvRelOp(op, c1, c2.m_data.pres);
-  case KindOfRFunc:        return tvRelOp(op, c1, c2.m_data.prfunc);
-  case KindOfFunc:         return tvRelOp(op, c1, c2.m_data.pfunc);
-  case KindOfClass:        return tvRelOp(op, c1, c2.m_data.pclass);
-  case KindOfLazyClass:    return tvRelOp(op, c1, c2.m_data.plazyclass);
-  case KindOfClsMeth:      return tvRelOp(op, c1, c2.m_data.pclsmeth);
-  case KindOfRClsMeth:     return tvRelOp(op, c1, c2.m_data.prclsmeth);
-  case KindOfRecord:       return tvRelOp(op, c1, c2.m_data.prec);
+  if (std::is_same_v<Op, Eq> && useStrictEquality() &&
+      !equivDataTypesIncludingMigrations(c1.m_type, c2.m_type)) {
+    return false;
   }
-  not_reached();
+
+  const auto res = [&](){
+    switch (c2.m_type) {
+    case KindOfUninit:
+    case KindOfNull:         return tvRelOpNull(op, c1);
+    case KindOfInt64:        return tvRelOp(op, c1, c2.m_data.num);
+    case KindOfBoolean:      return tvRelOp(op, c1, !!c2.m_data.num);
+    case KindOfDouble:       return tvRelOp(op, c1, c2.m_data.dbl);
+    case KindOfPersistentString:
+    case KindOfString:       return tvRelOp(op, c1, c2.m_data.pstr);
+    case KindOfPersistentVec:
+    case KindOfVec:          return tvRelOpVec(op, c1, c2.m_data.parr);
+    case KindOfPersistentDict:
+    case KindOfDict:         return tvRelOpDict(op, c1, c2.m_data.parr);
+    case KindOfPersistentKeyset:
+    case KindOfKeyset:       return tvRelOpKeyset(op, c1, c2.m_data.parr);
+    case KindOfObject:       return tvRelOp(op, c1, c2.m_data.pobj);
+    case KindOfResource:     return tvRelOp(op, c1, c2.m_data.pres);
+    case KindOfRFunc:        return tvRelOp(op, c1, c2.m_data.prfunc);
+    case KindOfFunc:         return tvRelOp(op, c1, c2.m_data.pfunc);
+    case KindOfClass:        return tvRelOp(op, c1, c2.m_data.pclass);
+    case KindOfLazyClass:    return tvRelOp(op, c1, c2.m_data.plazyclass);
+    case KindOfClsMeth:      return tvRelOp(op, c1, c2.m_data.pclsmeth);
+    case KindOfRClsMeth:     return tvRelOp(op, c1, c2.m_data.prclsmeth);
+    case KindOfRecord:       return tvRelOp(op, c1, c2.m_data.prec);
+    }
+    not_reached();
+  }();
+  // put it after in case the original comparison throws
+  if (shouldMaybeTriggerConvNotice<Op>(c1.m_type, c2.m_type, res)) {
+    handleConvNotice<Op>(
+      describe_actual_type(&c1), describe_actual_type(&c2));
+  }
+  return res;
 }
 
 /*
@@ -953,13 +946,9 @@ struct Eq {
     return sd1->equal(sd2);
   }
   bool operator()(const ArrayData* ad, bool val) const {
-    // @dizzy note to self, when dealign with eq notices, trigger a notice here
-    // and ensure we handle the null case with correct message
     return !ad->empty() == val;
   }
   bool operator()(bool val, const ArrayData* ad) const {
-    // @dizzy note to self, when dealign with eq notices, trigger a notice here
-    // and ensure we handle the null case with correct message
     return val == !ad->empty();
   }
 
@@ -1019,8 +1008,6 @@ struct Eq {
     throw_rec_non_rec_compare_exception();
   }
   bool clsmethVsNonClsMeth() const { return false; }
-
-  bool warnOnClsMethNonClsMeth() const { return false; }
 
   bool operator()(ClsMethDataRef c1, ClsMethDataRef c2) const {
     return c1 == c2;
@@ -1126,10 +1113,6 @@ struct CompareBase {
   }
   RetType clsmethVsNonClsMeth() const {
     throw_clsmeth_compare_exception();
-  }
-
-  bool warnOnClsMethNonClsMeth() const {
-    return RuntimeOption::EvalRaiseClsMethComparisonWarning;
   }
 
   bool operator()(const Func* f1, const Func* f2) const {
@@ -1416,42 +1399,83 @@ bool tvSame(TypedValue c1, TypedValue c2) {
 
 //////////////////////////////////////////////////////////////////////
 
-bool tvEqual(TypedValue cell, bool val) {
-  return tvRelOp(Eq(), cell, val);
+template<class Op, DataType DT, typename T>
+typename Op::RetType tvRelOp(TypedValue cell, T val) {
+  if (std::is_same_v<Op, Eq> && useStrictEquality() &&
+      !equivDataTypesIncludingMigrations(cell.m_type, DT)) {
+    return false;
+  }
+
+  typename Op::RetType res;
+  if constexpr (DT == DataType::Vec) res         = tvRelOpVec(Op(), cell, val);
+  else if constexpr (DT == DataType::Dict) res   = tvRelOpDict(Op(), cell, val);
+  else if constexpr (DT == DataType::Keyset) res = tvRelOpKeyset(Op(), cell, val);
+  else res = tvRelOp(Op(), cell, val);
+
+  // put it after in case the original comparison throws
+  if (shouldMaybeTriggerConvNotice<Op>(cell.m_type, DT, res)) {
+    const char* rhs = [&]() {
+      switch(DT) {
+        case DataType::Boolean:  return "bool";
+        case DataType::Int64:    return "int";
+        case DataType::Double:   return "float";
+        case DataType::String:   return "string";
+        case DataType::Vec:      return "vec";
+        case DataType::Dict:     return "dict";
+        case DataType::Keyset:   return "keyset";
+        case DataType::Resource: return "resource";
+        case DataType::ClsMeth:  return "clsmeth";
+        case DataType::Object:
+          return cell.val().pobj->getVMClass()->name()->data();
+      }
+      not_reached();
+    }();
+    handleConvNotice<Op>(describe_actual_type(&cell), rhs);
+  }
+  return res;
 }
 
-bool tvEqual(TypedValue cell, int64_t val) {
-  return tvRelOp(Eq(), cell, val);
-}
-
-bool tvEqual(TypedValue cell, double val) {
-  return tvRelOp(Eq(), cell, val);
-}
-
-bool tvEqual(TypedValue cell, const StringData* val) {
-  return tvRelOp(Eq(), cell, val);
-}
-
-bool tvEqual(TypedValue cell, const ArrayData* val) {
-  if (val->isVecType()) return tvRelOpVec(Eq(), cell, val);
-  if (val->isDictType()) return tvRelOpDict(Eq(), cell, val);
-  if (val->isKeysetType()) return tvRelOpKeyset(Eq(), cell, val);
+template<class Op>
+typename Op::RetType tvRelOpArr(TypedValue cell, const ArrayData* val) {
+  if (val->isVecType())    return tvRelOp<Op, DataType::Vec>(cell, val);
+  if (val->isDictType())   return tvRelOp<Op, DataType::Dict>(cell, val);
+  if (val->isKeysetType()) return tvRelOp<Op, DataType::Keyset>(cell, val);
   not_reached();
 }
 
+bool tvEqual(TypedValue cell, bool val) {
+  return tvRelOp<Eq, DataType::Boolean>(cell, val);
+}
+
+bool tvEqual(TypedValue cell, int64_t val) {
+  return tvRelOp<Eq, DataType::Int64>(cell, val);
+}
+
+bool tvEqual(TypedValue cell, double val) {
+  return tvRelOp<Eq, DataType::Double>(cell, val);
+}
+
+bool tvEqual(TypedValue cell, const StringData* val) {
+  return tvRelOp<Eq, DataType::String>(cell, val);
+}
+
+bool tvEqual(TypedValue cell, const ArrayData* val) {
+  return tvRelOpArr<Eq>(cell, val);
+}
+
 bool tvEqual(TypedValue cell, const ObjectData* val) {
-  return tvRelOp(Eq(), cell, val);
+  return tvRelOp<Eq, DataType::Object>(cell, val);
 }
 
 bool tvEqual(TypedValue cell, const ResourceData* val) {
-  return tvRelOp(Eq(), cell, val);
+  return tvRelOp<Eq, DataType::Resource>(cell, val);
 }
 bool tvEqual(TypedValue cell, const ResourceHdr* val) {
-  return tvRelOp(Eq(), cell, val);
+  return tvRelOp<Eq, DataType::Resource>(cell, val);
 }
 
 bool tvEqual(TypedValue cell, ClsMethDataRef val) {
-  return tvRelOp(Eq(), cell, val);
+  return tvRelOp<Eq, DataType::ClsMeth>(cell, val);
 }
 
 bool tvEqual(TypedValue c1, TypedValue c2) {
@@ -1459,41 +1483,38 @@ bool tvEqual(TypedValue c1, TypedValue c2) {
 }
 
 bool tvLess(TypedValue cell, bool val) {
-  return tvRelOp(Lt(), cell, val);
+  return tvRelOp<Lt, DataType::Boolean>(cell, val);
 }
 
 bool tvLess(TypedValue cell, int64_t val) {
-  return tvRelOp(Lt(), cell, val);
+  return tvRelOp<Lt, DataType::Int64>(cell, val);
 }
 
 bool tvLess(TypedValue cell, double val) {
-  return tvRelOp(Lt(), cell, val);
+  return tvRelOp<Lt, DataType::Double>(cell, val);
 }
 
 bool tvLess(TypedValue cell, const StringData* val) {
-  return tvRelOp(Lt(), cell, val);
+  return tvRelOp<Lt, DataType::String>(cell, val);
 }
 
 bool tvLess(TypedValue cell, const ArrayData* val) {
-  if (val->isVecType()) return tvRelOpVec(Lt(), cell, val);
-  if (val->isDictType()) return tvRelOpDict(Lt(), cell, val);
-  if (val->isKeysetType()) return tvRelOpKeyset(Lt(), cell, val);
-  not_reached();
+  return tvRelOpArr<Lt>(cell, val);
 }
 
 bool tvLess(TypedValue cell, const ObjectData* val) {
-  return tvRelOp(Lt(), cell, val);
+  return tvRelOp<Lt, DataType::Object>(cell, val);
 }
 
 bool tvLess(TypedValue cell, const ResourceData* val) {
-  return tvRelOp(Lt(), cell, val);
+  return tvRelOp<Lt, DataType::Resource>(cell, val);
 }
 bool tvLess(TypedValue cell, const ResourceHdr* val) {
-  return tvRelOp(Lt(), cell, val);
+  return tvRelOp<Lt, DataType::Resource>(cell, val);
 }
 
 bool tvLess(TypedValue cell, ClsMethDataRef val) {
-  return tvRelOp(Lt(), cell, val);
+  return tvRelOp<Lt, DataType::ClsMeth>(cell, val);
 }
 
 bool tvLess(TypedValue tv1, TypedValue tv2) {
@@ -1501,41 +1522,38 @@ bool tvLess(TypedValue tv1, TypedValue tv2) {
 }
 
 bool tvGreater(TypedValue cell, bool val) {
-  return tvRelOp(Gt(), cell, val);
+  return tvRelOp<Gt, DataType::Boolean>(cell, val);
 }
 
 bool tvGreater(TypedValue cell, int64_t val) {
-  return tvRelOp(Gt(), cell, val);
+  return tvRelOp<Gt, DataType::Int64>(cell, val);
 }
 
 bool tvGreater(TypedValue cell, double val) {
-  return tvRelOp(Gt(), cell, val);
+  return tvRelOp<Gt, DataType::Double>(cell, val);
 }
 
 bool tvGreater(TypedValue cell, const StringData* val) {
-  return tvRelOp(Gt(), cell, val);
+  return tvRelOp<Gt, DataType::String>(cell, val);
 }
 
 bool tvGreater(TypedValue cell, const ArrayData* val) {
-  if (val->isVecType()) return tvRelOpVec(Gt(), cell, val);
-  if (val->isDictType()) return tvRelOpDict(Gt(), cell, val);
-  if (val->isKeysetType()) return tvRelOpKeyset(Gt(), cell, val);
-  not_reached();
+  return tvRelOpArr<Gt>(cell, val);
 }
 
 bool tvGreater(TypedValue cell, const ObjectData* val) {
-  return tvRelOp(Gt(), cell, val);
+  return tvRelOp<Gt, DataType::Object>(cell, val);
 }
 
 bool tvGreater(TypedValue cell, const ResourceData* val) {
-  return tvRelOp(Gt(), cell, val);
+  return tvRelOp<Gt, DataType::Resource>(cell, val);
 }
 bool tvGreater(TypedValue cell, const ResourceHdr* val) {
-  return tvRelOp(Gt(), cell, val);
+  return tvRelOp<Gt, DataType::Resource>(cell, val);
 }
 
 bool tvGreater(TypedValue cell, ClsMethDataRef val) {
-  return tvRelOp(Gt(), cell, val);
+  return tvRelOp<Gt, DataType::ClsMeth>(cell, val);
 }
 
 bool tvGreater(TypedValue tv1, TypedValue tv2) {
@@ -1545,41 +1563,38 @@ bool tvGreater(TypedValue tv1, TypedValue tv2) {
 //////////////////////////////////////////////////////////////////////
 
 int64_t tvCompare(TypedValue cell, bool val) {
-  return tvRelOp(Cmp(), cell, val);
+  return tvRelOp<Cmp, DataType::Boolean>(cell, val);
 }
 
 int64_t tvCompare(TypedValue cell, int64_t val) {
-  return tvRelOp(Cmp(), cell, val);
+  return tvRelOp<Cmp, DataType::Int64>(cell, val);
 }
 
 int64_t tvCompare(TypedValue cell, double val) {
-  return tvRelOp(Cmp(), cell, val);
+  return tvRelOp<Cmp, DataType::Double>(cell, val);
 }
 
 int64_t tvCompare(TypedValue cell, const StringData* val) {
-  return tvRelOp(Cmp(), cell, val);
+  return tvRelOp<Cmp, DataType::String>(cell, val);
 }
 
 int64_t tvCompare(TypedValue cell, const ArrayData* val) {
-  if (val->isVecType()) return tvRelOpVec(Cmp(), cell, val);
-  if (val->isDictType()) return tvRelOpDict(Cmp(), cell, val);
-  if (val->isKeysetType()) return tvRelOpKeyset(Cmp(), cell, val);
-  not_reached();
+  return tvRelOpArr<Cmp>(cell, val);
 }
 
 int64_t tvCompare(TypedValue cell, const ObjectData* val) {
-  return tvRelOp(Cmp(), cell, val);
+  return tvRelOp<Cmp, DataType::Object>(cell, val);
 }
 
 int64_t tvCompare(TypedValue cell, const ResourceData* val) {
-  return tvRelOp(Cmp(), cell, val);
+  return tvRelOp<Cmp, DataType::Resource>(cell, val);
 }
 int64_t tvCompare(TypedValue cell, const ResourceHdr* val) {
-  return tvRelOp(Cmp(), cell, val);
+  return tvRelOp<Cmp, DataType::Resource>(cell, val);
 }
 
 int64_t tvCompare(TypedValue cell, ClsMethDataRef val) {
-  return tvRelOp(Cmp(), cell, val);
+  return tvRelOp<Cmp, DataType::ClsMeth>(cell, val);
 }
 
 int64_t tvCompare(TypedValue tv1, TypedValue tv2) {

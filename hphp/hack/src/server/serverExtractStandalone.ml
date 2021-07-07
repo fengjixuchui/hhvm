@@ -5,7 +5,6 @@
  * LICENSE file in the "hack" directory of this source tree.
  *
  *)
-
 open Hh_prelude
 module Cmd = ServerCommandTypes.Extract_standalone
 module SourceText = Full_fidelity_source_text
@@ -569,7 +568,7 @@ end = struct
           let method_ = Nast_helper.get_method_exn ctx class_name method_name in
           method_.Aast.m_span)
     in
-    SourceText.make filename @@ Pos.get_text_from_pos file_content pos
+    SourceText.make filename @@ Pos.get_text_from_pos ~content:file_content pos
 end
 
 (* -- Dependency extraction logic ------------------------------------------- *)
@@ -818,8 +817,9 @@ end = struct
               @@ Nast_helper.get_method ctx cls_name "__construct"
             | _ -> ())
           | Type _ ->
-            List.iter (Class.all_ancestors cls) (fun (_, ty) -> add_dep ty);
-            List.iter (Class.all_ancestor_reqs cls) (fun (_, ty) -> add_dep ty);
+            List.iter (Class.all_ancestors cls) ~f:(fun (_, ty) -> add_dep ty);
+            List.iter (Class.all_ancestor_reqs cls) ~f:(fun (_, ty) ->
+                add_dep ty);
             Option.iter
               (Class.enum_type cls)
               ~f:(fun Typing_defs.{ te_base; te_constraint; te_includes; _ } ->
@@ -854,11 +854,18 @@ end = struct
         | _ -> raise UnexpectedDependency))
 
   and add_user_attr_deps ctx env user_attrs =
-    List.iter user_attrs ~f:(fun Aast.{ ua_name = (_, cls); _ } ->
+    List.iter
+      user_attrs
+      ~f:(fun Aast.{ ua_name = (_, cls); ua_params = exprs } ->
         if not @@ String.is_prefix ~prefix:"__" cls then (
           do_add_dep ctx env @@ Typing_deps.Dep.Type cls;
           do_add_dep ctx env @@ Typing_deps.Dep.Cstr cls
-        ))
+        );
+        List.iter exprs ~f:(function
+            | (_, Aast.(Class_get ((_, CI (_, cls)), _, _)))
+            | (_, Aast.(Class_const ((_, CI (_, cls)), _))) ->
+              do_add_dep ctx env @@ Typing_deps.Dep.Type cls
+            | _ -> ()))
 
   and add_class_attr_deps
       ctx env Aast.{ c_user_attributes = attrs; c_tparams = tparams; _ } =
@@ -905,9 +912,21 @@ end = struct
     add_user_attr_deps ctx env attrs
 
   and add_tparam_attr_deps
-      ctx env Aast.{ tp_user_attributes = attrs; tp_parameters = tparams; _ } =
+      ctx
+      env
+      Aast.
+        {
+          tp_user_attributes = attrs;
+          tp_parameters = tparams;
+          tp_constraints = cstrs;
+          _;
+        } =
     add_user_attr_deps ctx env attrs;
-    List.iter tparams ~f:(add_tparam_attr_deps ctx env)
+    List.iter tparams ~f:(add_tparam_attr_deps ctx env);
+    List.iter cstrs ~f:(function
+        | (_, (_, Aast.Happly ((_, cls_name), _))) ->
+          do_add_dep ctx env (Typing_deps.Dep.Type cls_name)
+        | _ -> ())
 
   let add_impls ~ctx ~env ~cls acc ancestor_name =
     let open Typing_deps.Dep in
@@ -1069,7 +1088,7 @@ module Grouped : sig
     t list
 end = struct
   let strip_ns obj_name =
-    match String.rsplit2 obj_name '\\' with
+    match String.rsplit2 obj_name ~on:'\\' with
     | Some (_, name) -> name
     | None -> obj_name
 
@@ -1206,6 +1225,7 @@ end = struct
     | Ast_defs.Private -> Fmt.string ppf "private"
     | Ast_defs.Public -> Fmt.string ppf "public"
     | Ast_defs.Protected -> Fmt.string ppf "protected"
+    | Ast_defs.Internal -> Fmt.string ppf "internal"
 
   let pp_paramkind ppf =
     Ast_defs.(
@@ -1321,7 +1341,7 @@ end = struct
           }) ->
       let hf_param_kinds =
         List.map hf_param_info ~f:(fun i ->
-            Option.bind i (fun i -> i.Aast.hfparam_kind))
+            Option.bind i ~f:(fun i -> i.Aast.hfparam_kind))
       in
       let pp_typed_param ppf kp =
         Fmt.(
@@ -1566,7 +1586,9 @@ end = struct
     | Aast.Int str
     | Aast.Float str ->
       Fmt.string ppf str
-    | Aast.String str -> Fmt.(quote string) ppf str
+    | Aast.String str ->
+      Fmt.(quote string) ppf
+      @@ String.substr_replace_all ~pattern:"'" ~with_:"\\'" str
     | Aast.String2 exprs -> Fmt.(quote @@ list ~sep:sp pp_expr) ppf exprs
     | Aast.PrefixedString (pfx, expr) ->
       Fmt.(pair ~sep:nop string @@ quote pp_expr) ppf (pfx, expr)
@@ -1671,7 +1693,6 @@ end = struct
     | Aast.Method_caller _
     | Aast.Smethod_id _
     | Aast.ET_Splice _
-    | Aast.Any
     | Aast.Omitted ->
       ()
 
@@ -2036,6 +2057,7 @@ end = struct
 
     let pp_typedef_visiblity ppf = function
       | Aast_defs.Transparent -> Fmt.string ppf "type"
+      | Aast_defs.Tinternal -> Fmt.string ppf "type"
       | Aast_defs.Opaque -> Fmt.string ppf "newtype"
 
     let pp_fixme ppf code = Fmt.pf ppf "/* HH_FIXME[%d] */@." code
@@ -2116,6 +2138,10 @@ end = struct
 
     val is_method : t -> method_name:string -> bool
 
+    val method_props : t -> SSet.t option
+
+    val prop_name : t -> string option
+
     val mk_target_method : Provider_context.t -> Cmd.target -> t
 
     val mk_prop :
@@ -2173,26 +2199,44 @@ end = struct
       | EltTargetMethod (line, _) ->
         line
 
+    let method_props = function
+      | EltMethod (_, _, Aast.{ m_params; _ }) ->
+        Some
+          ( SSet.of_list
+          @@ List.filter_map
+               m_params
+               ~f:(fun Aast.{ param_name; param_visibility; _ } ->
+                 Option.map ~f:(fun _ -> param_name) param_visibility) )
+      | _ -> None
+
+    let prop_name = function
+      | EltProp { name; _ } -> Some name
+      | _ -> None
+
     let compare elt1 elt2 = Int.compare (line elt2) (line elt1)
 
     let mk_target_method ctx tgt =
       let pos = Target.pos ctx tgt in
       EltTargetMethod (Pos.line pos, Target.source_text ctx tgt)
 
-    let mk_const ctx Aast.{ cc_id = (pos, name); cc_expr; cc_type; _ } =
+    let mk_const ctx Aast.{ cc_id = (pos, name); cc_kind; cc_type; _ } =
+      let open Aast in
       let is_abstract =
-        Option.value_map ~default:true ~f:Fn.(const false) cc_expr
+        match cc_kind with
+        | CCAbstract _ -> true
+        | CCConcrete _ -> false
       in
       let (type_, init_val) =
-        match (cc_type, cc_expr) with
+        match (cc_type, cc_kind) with
         | (Some hint, _) -> (Some hint, Some (init_value ctx hint))
-        | (_, Some (e_pos, e_)) ->
+        | (_, CCAbstract (Some (e_pos, e_)))
+        | (_, CCConcrete (e_pos, e_)) ->
           (match Decl_utils.infer_const e_ with
           | Some tprim ->
             let hint = (e_pos, Aast.Hprim tprim) in
             (None, Some (init_value ctx hint))
           | None -> raise Unsupported)
-        | (None, None) -> (None, None)
+        | (None, CCAbstract None) -> (None, None)
       in
       let line = Pos.line pos in
       EltConst { name; line; is_abstract; type_; init_val }
@@ -2548,6 +2592,18 @@ end = struct
       elements: Class_elt.t list;
     }
 
+    let filter_constructor_props elts =
+      let ctr_props =
+        Option.value ~default:SSet.empty
+        @@ Option.bind ~f:Class_elt.method_props
+        @@ List.find elts ~f:(fun elt ->
+               Class_elt.is_method elt ~method_name:"__construct")
+      in
+      List.filter elts ~f:(fun elt ->
+          Option.value_map ~default:true ~f:(fun prop_name ->
+              not @@ SSet.mem prop_name ctr_props)
+          @@ Class_elt.prop_name elt)
+
     let of_class Aast.{ c_uses; c_reqs; _ } class_elts =
       let (req_extends, req_implements) =
         List.partition_map c_reqs ~f:(fun (s, extends) ->
@@ -2556,13 +2612,11 @@ end = struct
             else
               Second s)
       in
-
-      {
-        uses = c_uses;
-        req_extends;
-        req_implements;
-        elements = List.sort ~compare:Class_elt.compare class_elts;
-      }
+      let elements =
+        filter_constructor_props
+        @@ List.sort ~compare:Class_elt.compare class_elts
+      in
+      { uses = c_uses; req_extends; req_implements; elements }
 
     let pp_use_extend ppf = function
       | ([], [], []) ->
@@ -2864,7 +2918,7 @@ end = struct
     if List.is_empty (SyntaxTree.all_errors tree) then
       tree
     else (
-      List.iter (SyntaxTree.all_errors tree) (print_error source_text);
+      List.iter (SyntaxTree.all_errors tree) ~f:(print_error source_text);
       raise Hackfmt_error.InvalidSyntax
     )
 

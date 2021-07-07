@@ -53,6 +53,8 @@ pub mod classes {
 
     pub const STRINGISH: &str = "\\Stringish";
 
+    pub const STRINGISH_OBJECT: &str = "\\StringishObject";
+
     pub const XHP_CHILD: &str = "\\XHPChild";
 
     pub const IMEMOIZE_PARAM: &str = "\\HH\\IMemoizeParam";
@@ -260,7 +262,7 @@ pub mod user_attributes {
 
     pub const ENUM_CLASS: &str = "__EnumClass";
 
-    pub const ATOM: &str = "__Atom";
+    pub const VIA_LABEL: &str = "__ViaLabel";
 
     pub const POLICIED: &str = "__Policied";
 
@@ -271,6 +273,8 @@ pub mod user_attributes {
     pub const SUPPORT_DYNAMIC_TYPE: &str = "__SupportDynamicType";
 
     pub const MODULE: &str = "__Module";
+
+    pub const INTERNAL: &str = "__Internal";
 
     lazy_static! {
         pub static ref AS_SET: HashSet<&'static str> = vec![
@@ -300,7 +304,7 @@ pub mod user_attributes {
             NEVER_INLINE,
             ENABLE_UNSTABLE_FEATURES,
             ENUM_CLASS,
-            ATOM,
+            VIA_LABEL,
             POLICIED,
             INFERFLOWS,
             EXTERNAL,
@@ -743,15 +747,13 @@ pub mod coeffects {
 
     pub const WRITE_PROPS: &str = "write_props";
 
+    pub const CONTROLLED: &str = "controlled";
+
     pub const POLICIED_LOCAL: &str = "policied_local";
 
     pub const POLICIED_SHALLOW: &str = "policied_shallow";
 
     pub const POLICIED: &str = "policied";
-
-    pub const POLICIED_OF_LOCAL: &str = "policied_of_local";
-
-    pub const POLICIED_OF_SHALLOW: &str = "policied_of_shallow";
 
     pub const POLICIED_OF: &str = "policied_of";
 
@@ -838,6 +840,41 @@ pub mod math {
     pub const NAN: &str = "NAN";
     pub const INF: &str = "INF";
     pub const NEG_INF: &str = "-INF";
+}
+
+pub mod expression_trees {
+    pub const MAKE_TREE: &str = "makeTree";
+
+    pub const INT_TYPE: &str = "intType";
+    pub const FLOAT_TYPE: &str = "floatType";
+    pub const BOOL_TYPE: &str = "boolType";
+    pub const STRING_TYPE: &str = "stringType";
+    pub const NULL_TYPE: &str = "nullType";
+    pub const VOID_TYPE: &str = "voidType";
+    pub const SYMBOL_TYPE: &str = "symbolType";
+
+    pub const VISIT_INT: &str = "visitInt";
+    pub const VISIT_FLOAT: &str = "visitFloat";
+    pub const VISIT_BOOL: &str = "visitBool";
+    pub const VISIT_STRING: &str = "visitString";
+    pub const VISIT_NULL: &str = "visitNull";
+    pub const VISIT_BINOP: &str = "visitBinop";
+    pub const VISIT_UNOP: &str = "visitUnop";
+    pub const VISIT_LOCAL: &str = "visitLocal";
+    pub const VISIT_LAMBDA: &str = "visitLambda";
+    pub const VISIT_GLOBAL_FUNCTION: &str = "visitGlobalFunction";
+    pub const VISIT_STATIC_METHOD: &str = "visitStaticMethod";
+    pub const VISIT_CALL: &str = "visitCall";
+    pub const VISIT_ASSIGN: &str = "visitAssign";
+    pub const VISIT_TERNARY: &str = "visitTernary";
+    pub const VISIT_IF: &str = "visitIf";
+    pub const VISIT_WHILE: &str = "visitWhile";
+    pub const VISIT_RETURN: &str = "visitReturn";
+    pub const VISIT_FOR: &str = "visitFor";
+    pub const VISIT_BREAK: &str = "visitBreak";
+    pub const VISIT_CONTINUE: &str = "visitContinue";
+
+    pub const SPLICE: &str = "splice";
 }
 
 #[cfg(test)]

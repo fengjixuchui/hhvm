@@ -72,6 +72,7 @@ struct Vgen {
 
   static void emitVeneers(Venv& env) {}
   static void handleLiterals(Venv& env) {}
+  static void retargetBinds(Venv& env);
   static void patch(Venv& env);
   static void pad(CodeBlock& cb);
 
@@ -83,6 +84,7 @@ struct Vgen {
   }
 
   // intrinsics
+  void emit(const prefetch& i) { a.prefetch(i.m.mr()); }
   void emit(const copy& i);
   void emit(const copy2& i);
   void emit(const debugtrap& /*i*/) { a.int3(); }
@@ -199,6 +201,7 @@ struct Vgen {
   void emit(const jmpr& i) { a.jmp(i.target); }
   void emit(const jmpm& i) { a.prefix(i.target.mr()).jmp(i.target); }
   void emit(const jmpi& i);
+  void emit(const ldbindretaddr& i);
   void emit(const lea& i);
   void emit(const leap& i) { a.lea(i.s, i.d); }
   void emit(const leav& i);
@@ -270,6 +273,7 @@ struct Vgen {
   void emit(subli i) { binary(i); a.subl(i.s0, i.d); }
   void emit(subq i) { noncommute(i); a.subq(i.s0, i.d); }
   void emit(subqi i) { binary(i); a.subq(i.s0, i.d); }
+  void emit(const subqim& i);
   void emit(subsd i) { noncommute(i); a.subsd(i.s0, i.d); }
   void emit(const testb& i) { a.testb(i.s0, i.s1); }
   void emit(const testbi& i) { a.testb(i.s0, i.s1); }
@@ -398,19 +402,6 @@ bool ccImplies(ConditionCode a, ConditionCode b) {
   always_assert(false);
 }
 
-static CodeAddress toReal(Venv& env, CodeAddress a) {
-  if (env.text.main().code.contains(a)) {
-    return env.text.main().code.toDestAddress(a);
-  }
-  if (env.text.cold().code.contains(a)) {
-    return env.text.cold().code.toDestAddress(a);
-  }
-  if (env.text.frozen().code.contains(a)) {
-    return env.text.frozen().code.toDestAddress(a);
-  }
-  return a;
-}
-
 /*
  * When two jccs go to the same destination, the cc of the first is compatible
  * with the cc of the second, and they're within a one-byte offset of each
@@ -418,15 +409,18 @@ static CodeAddress toReal(Venv& env, CodeAddress a) {
  * relocator to shrink the first one, and the extra jmp shouldn't matter since
  * we try to only do this to rarely taken jumps.
  */
-void retargetJumps(Venv& env,
-                   const jit::hash_map<TCA, jit::vector<TCA>>& jccs) {
+template<typename Key, typename Hash>
+jit::hash_set<TCA> retargetJumps(
+  Venv& env,
+  const jit::hash_map<Key, jit::vector<TCA>, Hash>& jccs
+) {
   jit::hash_set<TCA> retargeted;
   for (auto& pair : jccs) {
     auto const& jmps = pair.second;
     if (jmps.size() < 2) continue;
 
     for (size_t i = 0; i < jmps.size(); ++i) {
-      DecodedInstruction di(toReal(env, jmps[i]), jmps[i]);
+      DecodedInstruction di(env.text.toDestAddress(jmps[i]), jmps[i]);
       // Don't bother if the jump is already a short jump.
       if (di.size() != 6) continue;
 
@@ -436,7 +430,7 @@ void retargetJumps(Venv& env,
         // dest that's more than a one-byte offset away.
         if (delta < 0 || !deltaFits(delta, sz::byte)) continue;
 
-        DecodedInstruction dj(toReal(env, jmps[j]), jmps[j]);
+        DecodedInstruction dj(env.text.toDestAddress(jmps[j]), jmps[j]);
         if (!ccImplies(di.jccCondCode(), dj.jccCondCode())) continue;
 
         di.setPicAddress(jmps[j]);
@@ -461,39 +455,78 @@ void retargetJumps(Venv& env,
     }
   }
 
-  // Finally, remove any retargeted jmps from inProgressTailJumps.
-  if (!retargeted.empty()) {
-    GrowableVector<IncomingBranch> newTailJumps;
-    for (auto& jmp : env.meta.inProgressTailJumps) {
-      if (retargeted.count(jmp.toSmash()) == 0) {
-        newTailJumps.push_back(jmp);
-      }
+  return retargeted;
+}
+
+namespace {
+  struct SrcKeyBoolTupleHasher {
+    size_t operator()(std::tuple<SrcKey, bool> v) const {
+      return folly::hash::hash_combine(
+        std::get<0>(v).toAtomicInt(),
+        std::get<1>(v)
+      );
     }
-    env.meta.inProgressTailJumps.swap(newTailJumps);
-  }
-  // If the retarged jumps were smashable, now they aren't anymore, so remove
-  // them from smashableJumpData.
-  for (auto jmp : retargeted) {
-    if (env.meta.smashableJumpData.erase(jmp) > 0) {
-      FTRACE(3, "retargetJumps: removed {} from smashableJumpData\n", jmp);
+  };
+}
+
+template<class X64Asm>
+void Vgen<X64Asm>::retargetBinds(Venv& env) {
+  if (RuntimeOption::EvalJitRetargetJumps < 1) return;
+
+  // The target is unique per the SrcKey and the fallback flag.
+  jit::hash_map<
+    std::pair<SrcKey, bool>,
+    jit::vector<TCA>,
+    SrcKeyBoolTupleHasher
+  > binds;
+
+  for (auto const& b : env.meta.smashableBinds) {
+    if (b.smashable.type() == IncomingBranch::Tag::JCC) {
+      binds[std::make_pair(b.sk, b.fallback)]
+        .emplace_back(b.smashable.toSmash());
     }
   }
+
+  auto const retargeted = retargetJumps(env, std::move(binds));
+  if (retargeted.empty()) return;
+
+  // Finally, remove any retargeted jmps from inProgressTailJumps and
+  // smashableBinds.
+  GrowableVector<IncomingBranch> newTailJumps;
+  for (auto& jmp : env.meta.inProgressTailJumps) {
+    if (retargeted.count(jmp.toSmash()) == 0) {
+      newTailJumps.push_back(jmp);
+    }
+  }
+  env.meta.inProgressTailJumps.swap(newTailJumps);
+
+  decltype(env.meta.smashableBinds) newBinds;
+  for (auto& bind : env.meta.smashableBinds) {
+    if (retargeted.count(bind.smashable.toSmash()) == 0) {
+      newBinds.push_back(bind);
+    } else {
+      FTRACE(3, "retargetBinds: removed {} from smashableBinds\n",
+             bind.smashable.toSmash());
+    }
+  }
+  env.meta.smashableBinds.swap(newBinds);
 }
 
 template<class X64Asm>
 void Vgen<X64Asm>::patch(Venv& env) {
   for (auto const& p : env.jmps) {
     assertx(env.addrs[p.target]);
-    X64Asm::patchJmp(toReal(env, p.instr), p.instr, env.addrs[p.target]);
+    X64Asm::patchJmp(
+      env.text.toDestAddress(p.instr), p.instr, env.addrs[p.target]);
   }
 
   auto const optLevel = RuntimeOption::EvalJitRetargetJumps;
   jit::hash_map<TCA, jit::vector<TCA>> jccs;
   for (auto const& p : env.jccs) {
     assertx(env.addrs[p.target]);
-    X64Asm::patchJcc(toReal(env, p.instr), p.instr, env.addrs[p.target]);
-    if (optLevel >= 2 ||
-        (optLevel == 1 && p.target >= env.unit.blocks.size())) {
+    X64Asm::patchJcc(
+      env.text.toDestAddress(p.instr), p.instr, env.addrs[p.target]);
+    if (optLevel >= 2) {
       jccs[env.addrs[p.target]].emplace_back(p.instr);
     }
   }
@@ -502,7 +535,7 @@ void Vgen<X64Asm>::patch(Venv& env) {
 
   for (auto const& p : env.leas) {
     assertx(env.vaddrs[p.target]);
-    DecodedInstruction di(toReal(env, p.instr), p.instr);
+    DecodedInstruction di(env.text.toDestAddress(p.instr), p.instr);
     assertx(di.hasPicOffset());
     di.setPicAddress(env.vaddrs[p.target]);
   }
@@ -683,7 +716,7 @@ void Vgen<X64Asm>::emit(const calls& i) {
 template<class X64Asm>
 void Vgen<X64Asm>::emit(const stubret& i) {
   if (i.saveframe) {
-    a.pop(rvmfp());
+    a.pop(x64::rvmfp());
   } else {
     a.addq(8, reg::rsp);
   }
@@ -719,7 +752,7 @@ template<class X64Asm>
 void Vgen<X64Asm>::emit(const phpret& i) {
   a.push(i.fp[AROFF(m_savedRip)]);
   if (!i.noframe) {
-    a.loadq(i.fp[AROFF(m_sfp)], rvmfp());
+    a.loadq(i.fp[AROFF(m_sfp)], x64::rvmfp());
   }
   a.ret();
 }
@@ -808,6 +841,12 @@ void Vgen<X64Asm>::emit(const addqim& i) {
 }
 
 template<class X64Asm>
+void Vgen<X64Asm>::emit(const subqim& i) {
+  auto mref = i.m.mr();
+  a.prefix(mref).subq(i.s0, mref);
+}
+
+template<class X64Asm>
 void Vgen<X64Asm>::emit(const cloadq& i) {
   auto m = i.t;
   always_assert(!m.index.isValid()); // not supported, but could be later.
@@ -889,6 +928,13 @@ void Vgen<X64Asm>::emit(const jmpi& i) {
 }
 
 template<class X64Asm>
+void Vgen<X64Asm>::emit(const ldbindretaddr& i) {
+  auto const addr = a.frontier();
+  emit(leap{reg::rip[(intptr_t)addr], i.d});
+  env.ldbindretaddrs.push_back({addr, i.target, i.spOff});
+}
+
+template<class X64Asm>
 void Vgen<X64Asm>::emit(const lea& i) {
   assertx(i.s.seg == Segment::DS);
   // could do this in a simplify pass
@@ -902,7 +948,7 @@ void Vgen<X64Asm>::emit(const lea& i) {
 template<class X64Asm>
 void Vgen<X64Asm>::emit(const leav& i) {
   auto const addr = a.frontier();
-  emit(leap{reg::rip[0xdeadbeef], i.d});
+  emit(leap{reg::rip[(intptr_t)addr], i.d});
   env.leas.push_back({addr, i.s});
 }
 
@@ -1054,7 +1100,7 @@ void lower(Vunit& unit, pushpm& inst, Vlabel b, size_t i) {
 
 void lower(Vunit& unit, stublogue& inst, Vlabel b, size_t i) {
   if (inst.saveframe) {
-    unit.blocks[b].code[i] = push{rvmfp()};
+    unit.blocks[b].code[i] = push{x64::rvmfp()};
   } else {
     unit.blocks[b].code[i] = lea{reg::rsp[-8], reg::rsp};
   }
@@ -1172,8 +1218,8 @@ void lowerForX64(Vunit& unit) {
 
 void stressTestLiveness(Vunit& unit) {
   auto const blocks = sortBlocks(unit);
-  auto const livein = computeLiveness(unit, abi(), blocks);
-  auto const gp_regs = abi().gpUnreserved;
+  auto const livein = computeLiveness(unit, x64::abi(), blocks);
+  auto const gp_regs = x64::abi().gpUnreserved;
 
   for (auto b : blocks) {
     auto& block = unit.blocks[b];

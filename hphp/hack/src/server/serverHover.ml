@@ -43,7 +43,7 @@ let make_hover_const_definition entry def_opt =
   | Some def ->
     [
       Pos.get_text_from_pos
-        (Provider_context.read_file_contents_exn entry)
+        ~content:(Provider_context.read_file_contents_exn entry)
         def.SymbolDefinition.span;
     ]
   | _ -> []
@@ -218,8 +218,7 @@ let make_hover_attr_docs name =
   | "__ProvenanceSkipFrame" ->
     [
       "Don't track Hack arrays created by this function."
-      ^ " This is useful when migrating code from PHP arrays to Hack arrays."
-      ^ "\n\nThe HHVM option LogArrayProvenance is necessary to observe array provenance.";
+      ^ " This is useful when migrating code from PHP arrays to Hack arrays.";
     ]
   | "__Reifiable" ->
     [

@@ -121,7 +121,6 @@ constexpr bool CheckSize() { static_assert(Expected == Actual); return true; };
  */
 struct Func final {
   friend struct FuncEmitter;
-  friend struct FuncRepoProxy;
   friend struct UnitEmitter;
 
 #ifndef USE_LOWPTR
@@ -158,7 +157,7 @@ struct Func final {
     template<class SerDe> void serde(SerDe& sd);
 
     // Typehint for builtins.
-    MaybeDataType builtinType{folly::none};
+    MaybeDataType builtinType{std::nullopt};
     // Flags as defined by the Flags enum.
     uint8_t flags{0};
     // DV initializer funclet offset.
@@ -450,12 +449,12 @@ struct Func final {
   // Return type.                                                       [const]
 
   /*
-   * CPP builtin's return type. Returns folly::none if function is not a CPP
+   * CPP builtin's return type. Returns std::nullopt if function is not a CPP
    * builtin.
    *
    * There are a number of caveats regarding this value:
    *
-   *    - If the return type is folly::none, the return is a Variant.
+   *    - If the return type is std::nullopt, the return is a Variant.
    *
    *    - If the return type is a string, array-like, object, ref, or resource
    *      type, null may also be returned.
@@ -956,7 +955,7 @@ struct Func final {
    * N.B. When errors are enabled for dynamic calls this overrides that behavior
    *      for functions which specify it.
    */
-  folly::Optional<int64_t> dynCallSampleRate() const;
+  Optional<int64_t> dynCallSampleRate() const;
 
   /*
    * Is this a meth_caller func?
@@ -1090,8 +1089,6 @@ struct Func final {
 
   void prettyPrint(std::ostream& out, const PrintOpts& = PrintOpts()) const;
 
-  void prettyPrintInstruction(std::ostream& out, Offset offset) const;
-
   /*
    * Print function attributes to out.
    */
@@ -1164,13 +1161,6 @@ struct Func final {
   void setHasPrivateAncestor(bool b);
   void setMethodSlot(Slot s);
   void setGenerated(bool b);
-
-  // Return true, and set the m_serialized flag, iff this Func hasn't
-  // been serialized yet (see prof-data-serialize.cpp).
-  bool serialize() const;
-
-  // Returns true if this function has already been serialized.
-  bool wasSerialized() const { return m_serialized; }
 
   /////////////////////////////////////////////////////////////////////////////
   // Offset accessors.                                                 [static]
@@ -1716,7 +1706,6 @@ private:
   bool m_isPreFunc : 1;
   bool m_hasPrivateAncestor : 1;
   bool m_shouldSampleJit : 1;
-  bool m_serialized : 1;
   bool m_hasForeignThis : 1;
   bool m_registeredInDataMap : 1;
   // 2 free bits
@@ -1766,6 +1755,13 @@ struct PrologueID {
     return m_funcId == other.m_funcId && m_nargs == other.m_nargs;
   }
 
+  struct Eq {
+    bool operator()(const PrologueID& pid1,
+                    const PrologueID& pid2) const {
+      return pid1 == pid2;
+    }
+  };
+
   struct Hasher {
     size_t operator()(PrologueID pid) const {
       return pid.funcId().toInt() + (size_t(pid.nargs()) << 32);
@@ -1776,6 +1772,8 @@ struct PrologueID {
   FuncId   m_funcId{FuncId::Invalid};
   uint32_t m_nargs{0xffffffff};
 };
+
+std::string show(PrologueID pid);
 
 ///////////////////////////////////////////////////////////////////////////////
 

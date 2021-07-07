@@ -194,8 +194,6 @@ function determine_flags(OptionMap $opts): string {
     'opt-ir'          => '-v Eval.HHIRGenerateAsserts=0 ',
     'jit-gdb'         => '-v Eval.JitNoGdb=false ',
     'no-pgo'          => '-v Eval.JitPGO=false ',
-    'hadva'           => '-v Eval.HackArrDVArrs=true '.
-                         '-v Eval.HackArrDVArrMark=true ',
     'hphpd'           => '-m debug ',
     'server'          => '-m server ',
   };
@@ -306,8 +304,7 @@ function compile_a_repo(bool $unoptimized, OptionMap $opts): string {
 function repo_auth_flags(string $flags, string $repo): string {
   return $flags .
     '-v Repo.Authoritative=true '.
-    '-v Repo.Local.Mode=r- '.
-    "-v Repo.Local.Path=$repo ";
+    "-v Repo.Path=$repo ";
 }
 
 function compile_with_hphp(string $flags, OptionMap $opts): string {
@@ -324,7 +321,11 @@ function do_jumpstart(string $flags, OptionMap $opts): string {
   $hhvm = get_hhvm_path($opts);
   $prof = '/tmp/jit.prof.'.posix_getpid();
   $requests = $opts->get('jit-serialize');
-  $cmd = "$hhvm $flags --file ".argv_for_shell()
+  $filename = argv_for_shell();
+  if (strlen($filename) === 0) {
+    throw new Error('Jumpstart expects a file!');
+  }
+  $cmd = "$hhvm $flags --file $filename"
     ." -v Eval.JitSerdesFile=$prof"
     .' -v Eval.JitSerdesMode=SerializeAndExit'
     .' >/dev/null 2>&1';
@@ -362,7 +363,12 @@ function run_hhvm(OptionMap $opts): void {
     $pfx .= 'perf record -g -o ' . $opts['perf'] . ' ';
   }
   $hhvm = get_hhvm_path($opts);
-  $cmd = "$pfx $hhvm $flags --file ".argv_for_shell();
+  $filename = argv_for_shell();
+  if (strlen($filename) === 0) {
+    $cmd = "$pfx $hhvm $flags";
+  } else {
+    $cmd = "$pfx $hhvm $flags --file $filename";
+  }
   if ($opts->containsKey('print-command')) {
     echo "\n$cmd\n\n";
   } else {
@@ -399,7 +405,13 @@ function help(): void {
 "   debugging/development tasks.  (Basically shorthands for various\n".
 "   common combinations of RuntimeOption things.)\n".
 "\n".
-"   You might consider adding a bash alias or symlinking it to ~/bin.\n",
+"   You might consider adding a bash alias:\n".
+"\n".
+"      #!/bin/bash\n".
+"      hphp/tools/hhvm_wrapper.php \"$@\"\n".
+"\n".
+"   Note: this alias will only work from repo root. That's intended,\n".
+"   as that's where the script will look for a compiled HHVM binary.\n",
     my_option_map(),
   );
 

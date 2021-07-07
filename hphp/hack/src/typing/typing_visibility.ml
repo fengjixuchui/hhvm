@@ -14,72 +14,67 @@ module Env = Typing_env
 module TUtils = Typing_utils
 module Cls = Decl_provider.Class
 
-let is_private_visible env x self_id =
-  if String.equal x self_id then
+(* Is a private member defined on class/trait [origin_id] visible
+ * from code in class/trait [self_id]?
+ *
+ * For almost all circumstances, this is just a case of checking
+ * that they are the same, *except* for the special case of
+ * where-constraints on the this type defined on a trait, for example:
+ *
+ * class C { private static function foo():void { } }
+ * trait TR where this = C {
+ *   ...C::foo...
+ * }
+ *)
+let is_private_visible env origin_id self_id =
+  if String.equal origin_id self_id then
     None
   else
-    let my_class = Env.get_class env self_id in
-    let their_class = Env.get_class env x in
-    match (my_class, their_class) with
-    | (Some my_class, Some their_class) ->
-      let make_tany _ = mk (Reason.Rnone, Typing_defs.make_tany ()) in
-      let my_class_ty =
-        Typing_make_type.class_type
-          Reason.Rnone
-          self_id
-          (List.map (Cls.tparams my_class) make_tany)
-      in
-      let their_class_ty =
-        Typing_make_type.class_type
-          Reason.Rnone
-          x
-          (List.map (Cls.tparams their_class) make_tany)
-      in
-      if
-        Typing_utils.is_sub_type env my_class_ty their_class_ty
-        && Typing_utils.is_sub_type env their_class_ty my_class_ty
-      then
-        None
-      else
-        Some "You cannot access this member"
-    | (_, _) -> Some "You cannot access this member"
+    let in_bounds bounds =
+      List.exists bounds ~f:(fun t ->
+          match get_node t with
+          | Tapply ((_, name), _) -> String.equal origin_id name
+          | _ -> false)
+    in
+    match Env.get_class env self_id with
+    | Some cls
+      when Ast_defs.(equal_class_kind (Cls.kind cls) Ctrait)
+           && in_bounds (Cls.upper_bounds_on_this_from_constraints cls)
+           && in_bounds (Cls.lower_bounds_on_this_from_constraints cls) ->
+      None
+    | _ -> Some "You cannot access this member"
 
-let is_protected_visible env x self_id =
-  if String.equal x self_id then
+(* Is super_id an ancestor of sub_id, including through requires steps? *)
+let rec has_ancestor_including_req env sub_id super_id =
+  String.equal sub_id super_id
+  ||
+  match Env.get_class env sub_id with
+  | None -> false
+  | Some cls ->
+    Cls.has_ancestor cls super_id
+    ||
+    let bounds = Cls.upper_bounds_on_this cls in
+    List.exists bounds ~f:(fun ty ->
+        match get_node ty with
+        | Tapply ((_, name), _) -> has_ancestor_including_req env name super_id
+        | _ -> false)
+
+let is_protected_visible env origin_id self_id =
+  if has_ancestor_including_req env self_id origin_id then
     None
   else
-    let my_class = Env.get_class env self_id in
-    let their_class = Env.get_class env x in
-    match (my_class, their_class) with
-    | (Some my_class, Some their_class) ->
-      (* Children can call parent's protected methods and
-       * parents can call children's protected methods (like a
-       * constructor) *)
-      let make_tany _ = mk (Reason.Rnone, Typing_defs.make_tany ()) in
-      let my_class_ty =
-        Typing_make_type.class_type
-          Reason.Rnone
-          self_id
-          (List.map (Cls.tparams my_class) make_tany)
-      in
-      let their_class_ty =
-        Typing_make_type.class_type
-          Reason.Rnone
-          x
-          (List.map (Cls.tparams their_class) make_tany)
-      in
-      if
-        Typing_utils.is_sub_type env my_class_ty their_class_ty
-        || Cls.extends their_class self_id
-        || (not (Cls.members_fully_known my_class))
-        (* This is for the case where type generics are emitted *)
-        || Cls.has_ancestor my_class x
-      then
+    match Env.get_class env origin_id with
+    | None -> None
+    | Some origin_class ->
+      (* Parents can call direct children's protected methods
+       * (like a constructor)
+       *)
+      if Cls.has_ancestor origin_class self_id then
         None
       else
         Some
-          ("Cannot access this protected member, you don't extend " ^ strip_ns x)
-    | (_, _) -> None
+          ( "Cannot access this protected member, you don't extend "
+          ^ strip_ns origin_id )
 
 let is_private_visible_for_class env x self_id cid class_ =
   match cid with
@@ -110,6 +105,52 @@ let is_private_visible_for_class env x self_id cid class_ =
       Some
         "Private members cannot be accessed dynamically. Did you mean to use 'self::'?"
 
+let is_internal_visible env mname =
+  match Env.get_module env with
+  | None -> Some "You cannot access internal members outside of a module"
+  | Some m ->
+    if String.equal m mname then
+      None
+    else
+      Some
+        (Printf.sprintf
+           "You cannot access internal members from module `%s` in module `%s`"
+           mname
+           m)
+
+let check_internal_access ~use_pos ~in_signature ~def_pos env internal modul =
+  if internal then
+    let cur_module = Env.get_module env in
+    match modul with
+    | Some m when not (Option.equal String.equal modul cur_module) ->
+      Errors.module_mismatch use_pos def_pos cur_module m
+    | _ ->
+      if in_signature && not (Env.get_internal env) then
+        Errors.module_hint ~use_pos ~def_pos
+
+let check_classname_access ~use_pos ~in_signature env cls =
+  check_internal_access
+    ~use_pos
+    ~in_signature
+    ~def_pos:(Cls.pos cls)
+    env
+    (Cls.internal cls)
+    (Cls.get_module cls)
+
+let check_typedef_access ~use_pos ~in_signature env td =
+  let internal =
+    match td.td_vis with
+    | Tinternal -> true
+    | _ -> false
+  in
+  check_internal_access
+    ~use_pos
+    ~in_signature
+    ~def_pos:td.td_pos
+    env
+    internal
+    td.td_module
+
 let is_visible_for_obj env vis =
   match vis with
   | Vpublic -> None
@@ -121,6 +162,7 @@ let is_visible_for_obj env vis =
     (match Env.get_self_id env with
     | None -> Some "You cannot access this member"
     | Some self_id -> is_protected_visible env x self_id)
+  | Vinternal m -> is_internal_visible env m
 
 (* The only permitted way to access an LSB property is via
    static::, ClassName::, or $class_name:: *)
@@ -142,6 +184,7 @@ let is_lsb_accessible env vis =
     (match Env.get_self_id env with
     | None -> Some "You cannot access this member"
     | Some self_id -> is_protected_visible env x self_id)
+  | Vinternal m -> is_internal_visible env m
 
 let is_lsb_visible_for_class env vis cid =
   match is_lsb_permitted cid with
@@ -169,6 +212,7 @@ let is_visible_for_class env (vis, lsb) cid cty =
           Some
             "You cannot access protected members using the trait's name (did you mean to use static:: or self::?)"
         | _ -> is_protected_visible env x self_id))
+    | Vinternal m -> is_internal_visible env m
 
 let is_visible env (vis, lsb) cid class_ =
   let msg_opt =

@@ -8,7 +8,7 @@
        sc_req_extends = []; sc_req_implements = []; sc_implements = [];
        sc_support_dynamic_type = false;
        sc_consts =
-       [{ Shallow_decl_defs.scc_abstract = false;
+       [{ Shallow_decl_defs.scc_abstract = Typing_defs.CCConcrete;
           scc_name = ([6:16-19], "KEY");
           scc_type = (Rhint ([6:9-15]), (Tprim Tstring)); scc_refs = [] }
          ];
@@ -63,7 +63,7 @@
                    fp_flags =
                    (make_fp_flags ~accept_disposable:false ~has_default:false
                      ~mode:Typing_defs_core.FPnormal ~ifc_external:false
-                     ~ifc_can_call:false ~is_atom:false ~readonly:false);
+                     ~ifc_can_call:false ~via_label:false ~readonly:false);
                     }
                   ];
                 ft_implicit_params =

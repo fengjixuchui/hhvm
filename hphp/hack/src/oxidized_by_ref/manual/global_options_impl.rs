@@ -23,6 +23,7 @@ const DEFAULT: GlobalOptions<'_> = GlobalOptions {
     tco_remote_max_batch_size: 8000,
     tco_remote_min_batch_size: 5000,
     tco_num_remote_workers: 0,
+    tco_stream_errors: false,
     so_remote_version_specifier: None,
     so_remote_worker_vfs_checkout_threshold: 0,
     so_naming_sqlite_path: None,
@@ -116,7 +117,6 @@ const DEFAULT: GlobalOptions<'_> = GlobalOptions {
     tco_use_direct_decl_parser: false,
     tco_ifc_enabled: &[],
     po_enable_enum_supertyping: false,
-    po_hack_arr_dv_arrs: false,
     po_interpret_soft_types_as_like_types: false,
     tco_enable_strict_string_concat_interp: false,
     tco_ignore_unsafe_cast: false,
@@ -129,6 +129,7 @@ const DEFAULT: GlobalOptions<'_> = GlobalOptions {
     tco_meth_caller_only_public_visibility: true,
     tco_require_extends_implements_ancestors: false,
     tco_strict_value_equality: false,
+    tco_enforce_sealed_subclasses: false,
 };
 
 impl GlobalOptions<'static> {

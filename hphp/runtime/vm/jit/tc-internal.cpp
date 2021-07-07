@@ -33,8 +33,8 @@
 #include "hphp/runtime/vm/jit/perf-counters.h"
 #include "hphp/runtime/vm/jit/prof-data.h"
 #include "hphp/runtime/vm/jit/relocation.h"
+#include "hphp/runtime/vm/jit/service-requests.h"
 #include "hphp/runtime/vm/jit/srcdb.h"
-#include "hphp/runtime/vm/jit/stub-alloc.h"
 #include "hphp/runtime/vm/jit/tc-prologue.h"
 #include "hphp/runtime/vm/jit/tc-record.h"
 #include "hphp/runtime/vm/jit/timer.h"
@@ -391,17 +391,6 @@ bool isHotCodeAddress(TCA addr) {
   return g_code->hot().contains(addr);
 }
 
-void freeTCStub(TCA stub) {
-  // We need to lock the code because s_freeStubs.push() writes to the stub and
-  // the metadata to protect s_freeStubs itself.
-  auto codeLock = lockCode();
-  auto metaLock = lockMetadata();
-
-  assertx(code().frozen().contains(stub));
-
-  markStubFreed(stub);
-}
-
 void checkFreeProfData() {
   // In PGO mode, we free all the profiling data once the main code area reaches
   // its maximum usage and either the hot area is also full or all the functions
@@ -504,7 +493,7 @@ LocalTCBuffer::LocalTCBuffer(Address start, size_t initialSize) {
 }
 
 OptView LocalTCBuffer::view() {
-  if (!valid()) return folly::none;
+  if (!valid()) return std::nullopt;
   return CodeCache::View(m_main, m_cold, m_frozen, m_data, true);
 }
 
@@ -516,7 +505,7 @@ Translator::Translator(SrcKey sk, TransKind kind)
 
 Translator::~Translator() = default;
 
-folly::Optional<TranslationResult>
+Optional<TranslationResult>
 Translator::acquireLeaseAndRequisitePaperwork() {
   computeKind();
 
@@ -583,12 +572,13 @@ TranslationResult::Scope Translator::shouldTranslate(bool noSizeLimit) {
   return ::HPHP::jit::tc::shouldTranslate(sk, kind);
 }
 
-void Translator::translate(folly::Optional<CodeCache::View> view) {
+Optional<TranslationResult>
+Translator::translate(Optional<CodeCache::View> view) {
   if (isProfiling(kind)) {
     transId = profData()->allocTransID();
   }
 
-  if (!newTranslation()) return;
+  if (!newTranslation()) return TranslationResult::failForProcess();
 
   WorkloadStats::EnsureInit();
   WorkloadStats guard(WorkloadStats::InTrans);
@@ -606,7 +596,8 @@ void Translator::translate(folly::Optional<CodeCache::View> view) {
   }
 
   // Check for translation failure.
-  if (!vunit) return;
+  // TODO: categorize failure
+  if (!vunit) return TranslationResult::failTransiently();
 
   Timer timer(Timer::mcg_finishTranslation);
 
@@ -618,7 +609,7 @@ void Translator::translate(folly::Optional<CodeCache::View> view) {
   };
 
   auto codeLock = lockCode(false);
-  if (!view.hasValue()) {
+  if (!view.has_value()) {
     if (RuntimeOption::EvalEnableReusableTC) {
       auto const initialSize = 256;
       m_localBuffer = std::make_unique<uint8_t[]>(initialSize);
@@ -634,7 +625,7 @@ void Translator::translate(folly::Optional<CodeCache::View> view) {
   // Tag the translation start, and build the trans meta.
   // Generate vasm into the code view, retrying if we fill hot.
   while (true) {
-    if (!view.hasValue() || !view->isLocal()) {
+    if (!view.has_value() || !view->isLocal()) {
       view.emplace(code().view(kind));
     }
     CGMeta fixups;
@@ -671,7 +662,7 @@ void Translator::translate(folly::Optional<CodeCache::View> view) {
         Logger::Warning("TC area %s filled up!", dbFull.name.c_str());
       }
       reset();
-      return;
+      return TranslationResult::failForProcess();
     }
     transMeta.emplace(*view);
     transMeta->fixups = std::move(fixups);
@@ -692,19 +683,21 @@ void Translator::translate(folly::Optional<CodeCache::View> view) {
   if (!RuntimeOption::EvalJitLogAllInlineRegions.empty()) {
     logFrames(*vunit);
   }
+
+  return std::nullopt;
 }
 
 bool Translator::translateSuccess() const {
   return transMeta.has_value();
 }
 
-void Translator::relocate(bool alignMain) {
-  assertx(transMeta.hasValue());
+Optional<TranslationResult> Translator::relocate(bool alignMain) {
+  assertx(transMeta.has_value());
   // Code emitted directly is relocated during emission (or emitted
   // directly in place).
   if (!transMeta->view.isLocal()) {
     assertx(!RuntimeOption::EvalEnableReusableTC);
-    return;
+    return std::nullopt;
   }
 
   WorkloadStats::EnsureInit();
@@ -769,7 +762,7 @@ void Translator::relocate(bool alignMain) {
           e.setInt("bytes_dropped", bytes);
         });
         reset();
-        return;
+        return TranslationResult::failForProcess();
       }
       transMeta->range = maker.markEnd();
       transMeta->view = finalView;
@@ -779,24 +772,73 @@ void Translator::relocate(bool alignMain) {
   adjustForRelocation(rel);
   adjustMetaDataForRelocation(rel, nullptr, fixups);
   adjustCodeForRelocation(rel, fixups);
+  return std::nullopt;
 }
 
-TCA Translator::publish() {
-  assertx(transMeta.hasValue());
+Optional<TranslationResult> Translator::bindOutgoingEdges() {
+  assertx(transMeta.has_value());
+  auto& meta = transMeta->fixups;
+  for (auto& b : meta.smashableBinds) {
+    // We can't bind to fallback translations, so use the stub. they do not
+    // exist yet outside of retranslate all, which has a different mechanism
+    // to achieve that.
+    if (b.fallback) {
+      auto const stub = svcreq::getOrEmitStub(
+        svcreq::StubType::Retranslate, b.sk, b.spOff);
+      if (stub == nullptr) {
+        reset();
+        return TranslationResult::failForProcess();
+      }
+      b.smashable.patch(stub);
+      continue;
+    }
+
+    auto sr = createSrcRec(b.sk, b.spOff);
+    if (sr == nullptr) {
+      reset();
+      return TranslationResult::failForProcess();
+    }
+
+    // If the target is translated, bind it.
+    if (sr->getTopTranslation()) {
+      auto srLock = sr->writelock();
+      if (sr->getTopTranslation()) {
+        sr->chainFrom(b.smashable);
+        continue;
+      }
+    }
+
+    // May need a stub, so create it.
+    auto const stub = svcreq::getOrEmitStub(
+      svcreq::StubType::Translate, b.sk, b.spOff);
+    if (stub == nullptr) {
+      reset();
+      return TranslationResult::failForProcess();
+    }
+
+    auto srLock = sr->writelock();
+    sr->chainFrom(b.smashable, stub);
+  }
+
+  return std::nullopt;
+}
+
+TranslationResult Translator::publish() {
+  assertx(transMeta.has_value());
   auto codeLock = lockCode();
   auto metaLock = lockMetadata();
   publishMetaInternal();
   publishCodeInternal();
-  return transMeta->range.loc().entry();
+  return TranslationResult{transMeta->range.loc().entry()};
 }
 
 void Translator::publishMetaInternal() {
-  assertx(transMeta.hasValue());
+  assertx(transMeta.has_value());
   this->publishMetaImpl();
 }
 
 void Translator::publishCodeInternal() {
-  assertx(transMeta.hasValue());
+  assertx(transMeta.has_value());
   this->publishCodeImpl();
   updateCodeSizeCounters();
 }

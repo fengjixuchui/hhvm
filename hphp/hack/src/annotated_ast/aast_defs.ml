@@ -34,6 +34,7 @@ type visibility = Ast_defs.visibility =
   | Private [@visitors.name "visibility_Private"]
   | Public [@visitors.name "visibility_Public"]
   | Protected [@visitors.name "visibility_Protected"]
+  | Internal [@visitors.name "visibility_Internal"]
 [@@deriving eq, ord, show { with_path = false }]
 
 type local_id = (Local_id.t[@visitors.opaque])
@@ -182,6 +183,7 @@ and use_as_visibility =
 and typedef_visibility =
   | Transparent
   | Opaque
+  | Tinternal
 
 and enum_ = {
   e_base: hint;
@@ -238,6 +240,7 @@ let string_of_visibility vis =
   | Private -> "private"
   | Public -> "public"
   | Protected -> "protected"
+  | Internal -> "internal"
 
 let string_of_use_as_visibility vis =
   match vis with

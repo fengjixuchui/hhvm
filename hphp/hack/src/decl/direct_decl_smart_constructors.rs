@@ -40,11 +40,11 @@ use oxidized_by_ref::{
     shape_map::ShapeField,
     t_shape_map::TShapeField,
     typing_defs::{
-        self, AbstractTypeconst, Capability::*, ConcreteTypeconst, ConstDecl, Enforcement,
-        EnumType, FunArity, FunElt, FunImplicitParams, FunParam, FunParams, FunType, IfcFunDecl,
-        ParamMode, PartiallyAbstractTypeconst, PosByteString, PosId, PosString, PossiblyEnforcedTy,
-        RecordFieldReq, ShapeFieldType, ShapeKind, TaccessType, Tparam, TshapeFieldName, Ty, Ty_,
-        Typeconst, TypedefType, WhereConstraint, XhpAttrTag,
+        self, AbstractTypeconst, Capability::*, ClassConstKind, ConcreteTypeconst, ConstDecl,
+        Enforcement, EnumType, FunArity, FunElt, FunImplicitParams, FunParam, FunParams, FunType,
+        IfcFunDecl, ParamMode, PartiallyAbstractTypeconst, PosByteString, PosId, PosString,
+        PossiblyEnforcedTy, RecordFieldReq, ShapeFieldType, ShapeKind, TaccessType, Tparam,
+        TshapeFieldName, Ty, Ty_, Typeconst, TypedefType, WhereConstraint, XhpAttrTag,
     },
     typing_defs_flags::{FunParamFlags, FunTypeFlags},
     typing_reason::Reason,
@@ -61,10 +61,10 @@ type SK = SyntaxKind;
 type SSet<'a> = arena_collections::SortedSet<'a, &'a str>;
 
 #[derive(Clone)]
-pub struct DirectDeclSmartConstructors<'a> {
+pub struct DirectDeclSmartConstructors<'a, 'text, S: SourceTextAllocator<'text, 'a>> {
     pub token_factory: SimpleTokenFactoryImpl<CompactToken>,
 
-    pub source_text: IndexedSourceText<'a>,
+    pub source_text: IndexedSourceText<'text>,
     pub arena: &'a bumpalo::Bump,
     pub decls: Decls<'a>,
     // const_refs will accumulate all scope-resolution-expressions it enconuters while it's "Some"
@@ -77,14 +77,17 @@ pub struct DirectDeclSmartConstructors<'a> {
     type_parameters: Rc<Vec<'a, SSet<'a>>>,
 
     previous_token_kind: TokenKind,
+
+    source_text_allocator: S,
 }
 
-impl<'a> DirectDeclSmartConstructors<'a> {
+impl<'a, 'text, S: SourceTextAllocator<'text, 'a>> DirectDeclSmartConstructors<'a, 'text, S> {
     pub fn new(
         opts: &'a DeclParserOptions<'a>,
-        src: &SourceText<'a>,
+        src: &SourceText<'text>,
         file_mode: Mode,
         arena: &'a Bump,
+        source_text_allocator: S,
     ) -> Self {
         let source_text = IndexedSourceText::new(src.clone());
         let path = source_text.source_text().file_path();
@@ -113,6 +116,7 @@ impl<'a> DirectDeclSmartConstructors<'a> {
             // we would parse a token and the previous token kind would be
             // EndOfFile.
             previous_token_kind: TokenKind::EndOfFile,
+            source_text_allocator,
         }
     }
 
@@ -142,7 +146,7 @@ impl<'a> DirectDeclSmartConstructors<'a> {
         // qualified name in the original source text instead of copying it.
         let source_len = pos.end_cnum() - pos.start_cnum();
         if source_len == len {
-            let qualified_name = self.str_from_utf8(self.source_text_at_pos(pos));
+            let qualified_name: &'a str = self.str_from_utf8(self.source_text_at_pos(pos));
             return Id(pos, qualified_name);
         }
         // Allocate `len` bytes and fill them with the fully qualified name.
@@ -291,6 +295,30 @@ impl<'a> DirectDeclSmartConstructors<'a> {
     }
 }
 
+pub trait SourceTextAllocator<'text, 'target>: Clone {
+    fn alloc(&self, text: &'text str) -> &'target str;
+}
+
+#[derive(Clone)]
+pub struct NoSourceTextAllocator;
+
+impl<'text> SourceTextAllocator<'text, 'text> for NoSourceTextAllocator {
+    #[inline]
+    fn alloc(&self, text: &'text str) -> &'text str {
+        text
+    }
+}
+
+#[derive(Clone)]
+pub struct ArenaSourceTextAllocator<'arena>(pub &'arena bumpalo::Bump);
+
+impl<'text, 'arena> SourceTextAllocator<'text, 'arena> for ArenaSourceTextAllocator<'arena> {
+    #[inline]
+    fn alloc(&self, text: &'text str) -> &'arena str {
+        self.0.alloc_str(text)
+    }
+}
+
 fn prefix_slash<'a>(arena: &'a Bump, name: &str) -> &'a str {
     let mut s = String::with_capacity_in(1 + name.len(), arena);
     s.push('\\');
@@ -310,14 +338,6 @@ fn concat<'a>(arena: &'a Bump, str1: &str, str2: &str) -> &'a str {
     result.push_str(str1);
     result.push_str(str2);
     result.into_bump_str()
-}
-
-fn str_from_utf8<'a>(arena: &'a Bump, slice: &'a [u8]) -> &'a str {
-    if let Ok(s) = std::str::from_utf8(slice) {
-        s
-    } else {
-        String::from_utf8_lossy_in(slice, arena).into_bump_str()
-    }
 }
 
 fn strip_dollar_prefix<'a>(name: &'a str) -> &'a str {
@@ -944,13 +964,14 @@ struct Attributes<'a> {
     ifc_attribute: IfcFunDecl<'a>,
     external: bool,
     can_call: bool,
-    atom: bool,
+    via_label: bool,
     soft: bool,
     support_dynamic_type: bool,
     module: Option<&'a str>,
+    internal: bool,
 }
 
-impl<'a> DirectDeclSmartConstructors<'a> {
+impl<'a, 'text, S: SourceTextAllocator<'text, 'a>> DirectDeclSmartConstructors<'a, 'text, S> {
     fn add_class(&mut self, name: &'a str, decl: &'a shallow_decl_defs::ShallowClass<'a>) {
         self.decls.add(name, Decl::Class(decl), self.arena);
     }
@@ -981,7 +1002,7 @@ impl<'a> DirectDeclSmartConstructors<'a> {
         concat(self.arena, str1, str2)
     }
 
-    fn token_bytes(&self, token: &CompactToken) -> &'a [u8] {
+    fn token_bytes(&self, token: &CompactToken) -> &'text [u8] {
         self.source_text
             .source_text()
             .sub(token.start_offset(), token.width())
@@ -990,8 +1011,23 @@ impl<'a> DirectDeclSmartConstructors<'a> {
     // Check that the slice is valid UTF-8. If it is, return a &str referencing
     // the same data. Otherwise, copy the slice into our arena using
     // String::from_utf8_lossy_in, and return a reference to the arena str.
-    fn str_from_utf8(&self, slice: &'a [u8]) -> &'a str {
-        str_from_utf8(self.arena, slice)
+    fn str_from_utf8(&self, slice: &'text [u8]) -> &'a str {
+        if let Ok(s) = std::str::from_utf8(slice) {
+            self.source_text_allocator.alloc(s)
+        } else {
+            String::from_utf8_lossy_in(slice, self.arena).into_bump_str()
+        }
+    }
+
+    // Check that the slice is valid UTF-8. If it is, return a &str referencing
+    // the same data. Otherwise, copy the slice into our arena using
+    // String::from_utf8_lossy_in, and return a reference to the arena str.
+    fn str_from_utf8_for_bytes_in_arena(&self, slice: &'a [u8]) -> &'a str {
+        if let Ok(s) = std::str::from_utf8(slice) {
+            s
+        } else {
+            String::from_utf8_lossy_in(slice, self.arena).into_bump_str()
+        }
     }
 
     fn merge(
@@ -1110,7 +1146,6 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                         PrefixedString(_) => Some(Ty_::Tprim(arena.alloc(aast::Tprim::Tstring))),
                         Unop(&(_op, expr)) => expr_to_ty(arena, expr),
                         Hole(&(expr, _, _, _)) => expr_to_ty(arena, expr),
-                        Any => Some(TANY_),
 
                         ArrayGet(_) | As(_) | Await(_) | Binop(_) | Call(_) | Callconv(_)
                         | Cast(_) | ClassConst(_) | ClassGet(_) | Clone(_) | Collection(_)
@@ -1147,27 +1182,19 @@ impl<'a> DirectDeclSmartConstructors<'a> {
             Node::Token(t) if t.kind() == TokenKind::Varray => {
                 let pos = self.token_pos(t);
                 let tany = self.alloc(Ty(self.alloc(Reason::hint(pos)), TANY_));
-                let ty_ = if self.opts.hack_arr_dv_arrs {
-                    Ty_::Tapply(self.alloc((
-                        (self.token_pos(t), naming_special_names::collections::VEC),
-                        self.alloc([tany]),
-                    )))
-                } else {
-                    Ty_::Tvarray(tany)
-                };
+                let ty_ = Ty_::Tapply(self.alloc((
+                    (self.token_pos(t), naming_special_names::collections::VEC),
+                    self.alloc([tany]),
+                )));
                 Some(self.alloc(Ty(self.alloc(Reason::hint(pos)), ty_)))
             }
             Node::Token(t) if t.kind() == TokenKind::Darray => {
                 let pos = self.token_pos(t);
                 let tany = self.alloc(Ty(self.alloc(Reason::hint(pos)), TANY_));
-                let ty_ = if self.opts.hack_arr_dv_arrs {
-                    Ty_::Tapply(self.alloc((
-                        (self.token_pos(t), naming_special_names::collections::DICT),
-                        self.alloc([tany, tany]),
-                    )))
-                } else {
-                    Ty_::Tdarray(self.alloc((tany, tany)))
-                };
+                let ty_ = Ty_::Tapply(self.alloc((
+                    (self.token_pos(t), naming_special_names::collections::DICT),
+                    self.alloc([tany, tany]),
+                )));
                 Some(self.alloc(Ty(self.alloc(Reason::hint(pos)), ty_)))
             }
             Node::Token(t) if t.kind() == TokenKind::This => {
@@ -1198,16 +1225,7 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                         "nothing" => Ty_::Tunion(&[]),
                         "nonnull" => Ty_::Tnonnull,
                         "dynamic" => Ty_::Tdynamic,
-                        "varray_or_darray" => {
-                            let key_type = self.varray_or_darray_key(pos);
-                            let value_type = self.alloc(Ty(self.alloc(Reason::hint(pos)), TANY_));
-                            if self.opts.hack_arr_dv_arrs {
-                                Ty_::TvecOrDict(self.alloc((key_type, value_type)))
-                            } else {
-                                Ty_::TvarrayOrDarray(self.alloc((key_type, value_type)))
-                            }
-                        }
-                        "vec_or_dict" => {
+                        "varray_or_darray" | "vec_or_dict" => {
                             let key_type = self.vec_or_dict_key(pos);
                             let value_type = self.alloc(Ty(self.alloc(Reason::hint(pos)), TANY_));
                             Ty_::TvecOrDict(self.alloc((key_type, value_type)))
@@ -1241,10 +1259,11 @@ impl<'a> DirectDeclSmartConstructors<'a> {
             ifc_attribute: default_ifc_fun_decl(),
             external: false,
             can_call: false,
-            atom: false,
+            via_label: false,
             soft: false,
             support_dynamic_type: false,
             module: None,
+            internal: false,
         };
 
         let nodes = match node {
@@ -1262,7 +1281,7 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                         attributes.deprecated = attribute
                             .string_literal_params
                             .first()
-                            .map(|&x| self.str_from_utf8(x));
+                            .map(|&x| self.str_from_utf8_for_bytes_in_arena(x));
                     }
                     "__Reifiable" => attributes.reifiable = Some(attribute.name.0),
                     "__LateInit" => {
@@ -1300,7 +1319,7 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                             attribute
                                 .string_literal_params
                                 .first()
-                                .map(|&x| self.str_from_utf8(x))
+                                .map(|&x| self.str_from_utf8_for_bytes_in_arena(x))
                         };
                         // Take the classname param by default
                         attributes.ifc_attribute =
@@ -1321,8 +1340,8 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                     "__CanCall" => {
                         attributes.can_call = true;
                     }
-                    "__Atom" => {
-                        attributes.atom = true;
+                    naming_special_names::user_attributes::VIA_LABEL => {
+                        attributes.via_label = true;
                     }
                     "__Soft" => {
                         attributes.soft = true;
@@ -1334,7 +1353,10 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                         attributes.module = attribute
                             .string_literal_params
                             .first()
-                            .map(|&x| self.str_from_utf8(x));
+                            .map(|&x| self.str_from_utf8_for_bytes_in_arena(x));
+                    }
+                    "__Internal" => {
+                        attributes.internal = true;
                     }
                     _ => {}
                 }
@@ -1600,8 +1622,8 @@ impl<'a> DirectDeclSmartConstructors<'a> {
                             if attributes.can_call {
                                 flags |= FunParamFlags::IFC_CAN_CALL
                             }
-                            if attributes.atom {
-                                flags |= FunParamFlags::ATOM
+                            if attributes.via_label {
+                                flags |= FunParamFlags::VIA_LABEL
                             }
                             if readonly {
                                 flags |= FunParamFlags::READONLY
@@ -1768,19 +1790,7 @@ impl<'a> DirectDeclSmartConstructors<'a> {
         ))
     }
 
-    /// The type used when a `varray_or_darray` typehint is missing its key type argument.
-    fn varray_or_darray_key(&self, pos: &'a Pos<'a>) -> &'a Ty<'a> {
-        if self.opts.hack_arr_dv_arrs {
-            self.vec_or_dict_key(pos)
-        } else {
-            self.alloc(Ty(
-                self.alloc(Reason::RvarrayOrDarrayKey(pos)),
-                Ty_::Tprim(self.alloc(aast::Tprim::Tarraykey)),
-            ))
-        }
-    }
-
-    fn source_text_at_pos(&self, pos: &'a Pos<'a>) -> &'a [u8] {
+    fn source_text_at_pos(&self, pos: &'a Pos<'a>) -> &'text [u8] {
         let start = pos.start_cnum();
         let end = pos.end_cnum();
         self.source_text.source_text().sub(start, end - start)
@@ -1853,6 +1863,10 @@ impl<'a> DirectDeclSmartConstructors<'a> {
             ))),
             Ty_::Tvarray(ty) => Ty_::Tvarray(self.convert_tapply_to_tgeneric(ty)),
             Ty_::TvarrayOrDarray(&(tk, tv)) => Ty_::TvarrayOrDarray(self.alloc((
+                self.convert_tapply_to_tgeneric(tk),
+                self.convert_tapply_to_tgeneric(tv),
+            ))),
+            Ty_::TvecOrDict(&(tk, tv)) => Ty_::TvecOrDict(self.alloc((
                 self.convert_tapply_to_tgeneric(tk),
                 self.convert_tapply_to_tgeneric(tv),
             ))),
@@ -2208,7 +2222,9 @@ impl<'a, 'b> DoubleEndedIterator for NodeIterHelper<'a, 'b> {
     }
 }
 
-impl<'a> FlattenOp for DirectDeclSmartConstructors<'a> {
+impl<'a, 'text, S: SourceTextAllocator<'text, 'a>> FlattenOp
+    for DirectDeclSmartConstructors<'a, 'text, S>
+{
     type S = Node<'a>;
 
     fn flatten(&self, kind: SyntaxKind, lst: std::vec::Vec<Self::S>) -> Self::S {
@@ -2259,8 +2275,9 @@ impl<'a> FlattenOp for DirectDeclSmartConstructors<'a> {
     }
 }
 
-impl<'a> FlattenSmartConstructors<'a, DirectDeclSmartConstructors<'a>>
-    for DirectDeclSmartConstructors<'a>
+impl<'a, 'text, S: SourceTextAllocator<'text, 'a>>
+    FlattenSmartConstructors<'a, DirectDeclSmartConstructors<'a, 'text, S>>
+    for DirectDeclSmartConstructors<'a, 'text, S>
 {
     fn make_token(&mut self, token: CompactToken) -> Self::R {
         let token_text = |this: &Self| this.str_from_utf8(this.token_bytes(&token));
@@ -2782,83 +2799,52 @@ impl<'a> FlattenSmartConstructors<'a, DirectDeclSmartConstructors<'a>>
             Some(id) => id,
             None => return Node::Ignored(SK::GenericTypeSpecifier),
         };
-        if class_id.1.trim_start_matches("\\") == "varray_or_darray" {
-            let id_pos = class_id.0;
-            let pos = self.merge(id_pos, self.get_pos(type_arguments));
-            let type_arguments = type_arguments.as_slice(self.arena);
-            let ty_ = match type_arguments {
-                [tk, tv] => {
-                    let tup = self.alloc((
-                        self.node_to_ty(*tk)
-                            .unwrap_or_else(|| self.tany_with_pos(id_pos)),
-                        self.node_to_ty(*tv)
-                            .unwrap_or_else(|| self.tany_with_pos(id_pos)),
-                    ));
-
-                    if self.opts.hack_arr_dv_arrs {
-                        Ty_::TvecOrDict(tup)
-                    } else {
-                        Ty_::TvarrayOrDarray(tup)
+        match class_id.1.trim_start_matches("\\") {
+            "varray_or_darray" | "vec_or_dict" => {
+                let id_pos = class_id.0;
+                let pos = self.merge(id_pos, self.get_pos(type_arguments));
+                let type_arguments = type_arguments.as_slice(self.arena);
+                let ty_ = match type_arguments {
+                    [tk, tv] => Ty_::TvecOrDict(
+                        self.alloc((
+                            self.node_to_ty(*tk)
+                                .unwrap_or_else(|| self.tany_with_pos(id_pos)),
+                            self.node_to_ty(*tv)
+                                .unwrap_or_else(|| self.tany_with_pos(id_pos)),
+                        )),
+                    ),
+                    [tv] => Ty_::TvecOrDict(
+                        self.alloc((
+                            self.vec_or_dict_key(pos),
+                            self.node_to_ty(*tv)
+                                .unwrap_or_else(|| self.tany_with_pos(id_pos)),
+                        )),
+                    ),
+                    _ => TANY_,
+                };
+                self.hint_ty(pos, ty_)
+            }
+            _ => {
+                let Id(pos, class_type) = class_id;
+                match class_type.rsplit('\\').next() {
+                    Some(name) if self.is_type_param_in_scope(name) => {
+                        let pos = self.merge(pos, self.get_pos(type_arguments));
+                        let type_arguments = self.slice(
+                            type_arguments
+                                .iter()
+                                .filter_map(|&node| self.node_to_ty(node)),
+                        );
+                        let ty_ = Ty_::Tgeneric(self.alloc((name, type_arguments)));
+                        self.hint_ty(pos, ty_)
                     }
-                }
-                [tv] => {
-                    let tup = self.alloc((
-                        self.varray_or_darray_key(pos),
-                        self.node_to_ty(*tv)
-                            .unwrap_or_else(|| self.tany_with_pos(id_pos)),
-                    ));
-                    if self.opts.hack_arr_dv_arrs {
-                        Ty_::TvecOrDict(tup)
-                    } else {
-                        Ty_::TvarrayOrDarray(tup)
+                    _ => {
+                        let class_type = self.elaborate_raw_id(class_type);
+                        self.make_apply(
+                            (pos, class_type),
+                            type_arguments,
+                            self.get_pos(type_arguments),
+                        )
                     }
-                }
-                _ => TANY_,
-            };
-            self.hint_ty(pos, ty_)
-        } else if class_id.1.trim_start_matches("\\") == "vec_or_dict" {
-            let id_pos = class_id.0;
-            let pos = self.merge(id_pos, self.get_pos(type_arguments));
-            let type_arguments = type_arguments.as_slice(self.arena);
-            let ty_ = match type_arguments {
-                [tk, tv] => Ty_::TvecOrDict(
-                    self.alloc((
-                        self.node_to_ty(*tk)
-                            .unwrap_or_else(|| self.tany_with_pos(id_pos)),
-                        self.node_to_ty(*tv)
-                            .unwrap_or_else(|| self.tany_with_pos(id_pos)),
-                    )),
-                ),
-                [tv] => Ty_::TvecOrDict(
-                    self.alloc((
-                        self.vec_or_dict_key(pos),
-                        self.node_to_ty(*tv)
-                            .unwrap_or_else(|| self.tany_with_pos(id_pos)),
-                    )),
-                ),
-                _ => TANY_,
-            };
-            self.hint_ty(pos, ty_)
-        } else {
-            let Id(pos, class_type) = class_id;
-            match class_type.rsplit('\\').next() {
-                Some(name) if self.is_type_param_in_scope(name) => {
-                    let pos = self.merge(pos, self.get_pos(type_arguments));
-                    let type_arguments = self.slice(
-                        type_arguments
-                            .iter()
-                            .filter_map(|&node| self.node_to_ty(node)),
-                    );
-                    let ty_ = Ty_::Tgeneric(self.alloc((name, type_arguments)));
-                    self.hint_ty(pos, ty_)
-                }
-                _ => {
-                    let class_type = self.elaborate_raw_id(class_type);
-                    self.make_apply(
-                        (pos, class_type),
-                        type_arguments,
-                        self.get_pos(type_arguments),
-                    )
                 }
             }
         }
@@ -2950,10 +2936,14 @@ impl<'a> FlattenSmartConstructors<'a, DirectDeclSmartConstructors<'a>>
         let typedef = self.alloc(TypedefType {
             module: parsed_attributes.module,
             pos,
-            vis: match keyword.token_kind() {
-                Some(TokenKind::Type) => aast::TypedefVisibility::Transparent,
-                Some(TokenKind::Newtype) => aast::TypedefVisibility::Opaque,
-                _ => aast::TypedefVisibility::Transparent,
+            vis: if parsed_attributes.internal {
+                aast::TypedefVisibility::Tinternal
+            } else {
+                match keyword.token_kind() {
+                    Some(TokenKind::Type) => aast::TypedefVisibility::Transparent,
+                    Some(TokenKind::Newtype) => aast::TypedefVisibility::Opaque,
+                    _ => aast::TypedefVisibility::Transparent,
+                }
             },
             tparams,
             constraint,
@@ -3198,6 +3188,7 @@ impl<'a> FlattenSmartConstructors<'a, DirectDeclSmartConstructors<'a>>
                 });
                 let fun_elt = self.alloc(FunElt {
                     module: parsed_attributes.module,
+                    internal: parsed_attributes.internal,
                     deprecated,
                     type_,
                     pos,
@@ -3333,13 +3324,18 @@ impl<'a> FlattenSmartConstructors<'a, DirectDeclSmartConstructors<'a>>
                     self.alloc(self.slice(consts.iter().filter_map(|cst| match cst {
                         Node::ConstInitializer(&(name, initializer, refs)) => {
                             let id = name.as_id()?;
+                            let modifiers = read_member_modifiers(modifiers.iter());
+                            let abstract_ = if modifiers.is_abstract {
+                                ClassConstKind::CCAbstract(!initializer.is_ignored())
+                            } else {
+                                ClassConstKind::CCConcrete
+                            };
                             let ty = ty
                                 .or_else(|| self.infer_const(name, initializer))
                                 .unwrap_or_else(|| tany());
-                            let modifiers = read_member_modifiers(modifiers.iter());
                             Some(Node::Const(self.alloc(
                                 shallow_decl_defs::ShallowClassConst {
-                                    abstract_: modifiers.is_abstract,
+                                    abstract_,
                                     name: id.into(),
                                     type_: ty,
                                     refs,
@@ -4038,10 +4034,20 @@ impl<'a> FlattenSmartConstructors<'a, DirectDeclSmartConstructors<'a>>
             attributes.dynamically_callable,
         );
         flags.set(MethodFlags::PHP_STD_LIB, attributes.php_std_lib);
+        let visibility = match modifiers.visibility {
+            aast::Visibility::Public => {
+                if attributes.internal {
+                    aast::Visibility::Internal
+                } else {
+                    aast::Visibility::Public
+                }
+            }
+            _ => modifiers.visibility,
+        };
         let method = self.alloc(ShallowMethod {
             name: id,
             type_: ty,
-            visibility: modifiers.visibility,
+            visibility,
             deprecated,
             flags,
         });
@@ -4196,7 +4202,7 @@ impl<'a> FlattenSmartConstructors<'a, DirectDeclSmartConstructors<'a>>
 
         Node::Const(
             self.alloc(ShallowClassConst {
-                abstract_: false,
+                abstract_: ClassConstKind::CCConcrete,
                 name: id.into(),
                 type_: self
                     .infer_const(name, value)
@@ -4344,7 +4350,7 @@ impl<'a> FlattenSmartConstructors<'a, DirectDeclSmartConstructors<'a>>
         )));
         let type_ = self.alloc(Ty(self.alloc(Reason::hint(pos)), type_));
         Node::Const(self.alloc(ShallowClassConst {
-            abstract_: false,
+            abstract_: ClassConstKind::CCConcrete,
             name: name.into(),
             type_,
             refs,
@@ -4521,17 +4527,13 @@ impl<'a> FlattenSmartConstructors<'a, DirectDeclSmartConstructors<'a>>
         };
         self.hint_ty(
             self.merge_positions(varray_keyword, greater_than),
-            if self.opts.hack_arr_dv_arrs {
-                Ty_::Tapply(self.alloc((
-                    (
-                        self.get_pos(varray_keyword),
-                        naming_special_names::collections::VEC,
-                    ),
-                    self.alloc([tparam]),
-                )))
-            } else {
-                Ty_::Tvarray(tparam)
-            },
+            Ty_::Tapply(self.alloc((
+                (
+                    self.get_pos(varray_keyword),
+                    naming_special_names::collections::VEC,
+                ),
+                self.alloc([tparam]),
+            ))),
         )
     }
 
@@ -4550,17 +4552,13 @@ impl<'a> FlattenSmartConstructors<'a, DirectDeclSmartConstructors<'a>>
         let value_type = self.node_to_ty(value_type).unwrap_or(TANY);
         self.hint_ty(
             pos,
-            if self.opts.hack_arr_dv_arrs {
-                Ty_::Tapply(self.alloc((
-                    (
-                        self.get_pos(darray),
-                        naming_special_names::collections::DICT,
-                    ),
-                    self.alloc([key_type, value_type]),
-                )))
-            } else {
-                Ty_::Tdarray(self.alloc((key_type, value_type)))
-            },
+            Ty_::Tapply(self.alloc((
+                (
+                    self.get_pos(darray),
+                    naming_special_names::collections::DICT,
+                ),
+                self.alloc([key_type, value_type]),
+            ))),
         )
     }
 

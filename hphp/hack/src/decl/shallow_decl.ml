@@ -54,38 +54,44 @@ let gather_constants =
       CCRSet.add ref acc
   end
 
+let make_visibility attrs = function
+  | Public when Attrs.mem SN.UserAttributes.uaInternal attrs -> Internal
+  | vis -> vis
+
 let class_const env (cc : Nast.class_const) =
   let gather_constants = gather_constants#on_expr CCRSet.empty in
-  let { cc_id = name; cc_type = h; cc_expr = e; cc_doc_comment = _ } = cc in
+  let { cc_id = name; cc_type = h; cc_kind = k; cc_doc_comment = _ } = cc in
   let pos = Decl_env.make_decl_pos env (fst name) in
-  let (ty, abstract, scc_refs) =
-    (* Optional hint h, optional expression e *)
-    match (h, e) with
-    | (Some h, Some e) -> (Decl_hint.hint env h, false, gather_constants e)
-    | (Some h, None) -> (Decl_hint.hint env h, true, CCRSet.empty)
-    | (None, Some e) ->
-      let (e_pos, e_) = e in
-      let cc_refs = gather_constants e in
-      begin
-        match Decl_utils.infer_const e_ with
-        | Some tprim ->
-          ( mk
+  let (abstract, scc_refs) =
+    match k with
+    | CCAbstract (Some default) -> (CCAbstract true, gather_constants default)
+    | CCAbstract None -> (CCAbstract false, CCRSet.empty)
+    | CCConcrete e -> (CCConcrete, gather_constants e)
+  in
+  let ty =
+    match h with
+    | Some h -> Decl_hint.hint env h
+    | None ->
+      (* Error recovery for when a type hint is missing on a constant *)
+      (match k with
+      | CCAbstract (Some (e_pos, e_))
+      | CCConcrete (e_pos, e_) ->
+        begin
+          match Decl_utils.infer_const e_ with
+          | Some tprim ->
+            mk
               ( Reason.Rwitness_from_decl (Decl_env.make_decl_pos env e_pos),
-                Tprim tprim ),
-            false,
-            cc_refs )
-        | None ->
-          (* Typing will take care of rejecting constants that have neither
-           * an initializer nor a literal initializer *)
-          ( mk (Reason.Rwitness_from_decl pos, Typing_defs.make_tany ()),
-            false,
-            cc_refs )
-      end
-    | (None, None) ->
-      (* Typing will take care of rejecting constants that have neither
-       * an initializer nor a literal initializer *)
-      let r = Reason.Rwitness_from_decl pos in
-      (mk (r, Typing_defs.make_tany ()), true, CCRSet.empty)
+                Tprim tprim )
+          | None ->
+            (* Typing will take care of rejecting constants that have neither
+             * an initializer nor a literal initializer *)
+            mk (Reason.Rwitness_from_decl pos, Typing_defs.make_tany ())
+        end
+      | CCAbstract None ->
+        (* Typing will take care of rejecting constants that have neither
+         * an initializer nor a literal initializer *)
+        let r = Reason.Rwitness_from_decl pos in
+        mk (r, Typing_defs.make_tany ()))
   in
   (* dropping to list to avoid the memory cost of a set. We don't really
    * need a set once the elements are generated.
@@ -153,7 +159,7 @@ let typeconst env c tc =
       }
 
 let make_xhp_attr cv =
-  Option.map cv.cv_xhp_attr (fun xai ->
+  Option.map cv.cv_xhp_attr ~f:(fun xai ->
       {
         xa_tag =
           (match xai.xai_tag with
@@ -177,11 +183,12 @@ let prop env cv =
   let php_std_lib =
     Attrs.mem SN.UserAttributes.uaPHPStdLib cv.cv_user_attributes
   in
+  let vis = make_visibility cv.cv_user_attributes cv.cv_visibility in
   {
     sp_name = Decl_env.make_decl_posed env cv.cv_id;
     sp_xhp_attr = make_xhp_attr cv;
     sp_type = ty;
-    sp_visibility = cv.cv_visibility;
+    sp_visibility = vis;
     sp_flags =
       PropFlags.make
         ~const
@@ -209,11 +216,12 @@ and static_prop env cv =
   let php_std_lib =
     Attrs.mem SN.UserAttributes.uaPHPStdLib cv.cv_user_attributes
   in
+  let vis = make_visibility cv.cv_user_attributes cv.cv_visibility in
   {
     sp_name = (cv_pos, id);
     sp_xhp_attr = make_xhp_attr cv;
     sp_type = ty;
-    sp_visibility = cv.cv_visibility;
+    sp_visibility = vis;
     sp_flags =
       PropFlags.make
         ~const
@@ -251,9 +259,9 @@ let method_type env m =
     | FVellipsis p -> Fvariadic (FunUtils.make_ellipsis_param_ty env p)
     | FVnonVariadic -> Fstandard
   in
-  let tparams = List.map m.m_tparams (FunUtils.type_param env) in
+  let tparams = List.map m.m_tparams ~f:(FunUtils.type_param env) in
   let where_constraints =
-    List.map m.m_where_constraints (FunUtils.where_constraint env)
+    List.map m.m_where_constraints ~f:(FunUtils.where_constraint env)
   in
   {
     ft_arity = arity;
@@ -290,10 +298,11 @@ let method_ env m =
       m.m_name
       m.m_user_attributes
   in
+  let vis = make_visibility m.m_user_attributes m.m_visibility in
   {
     sm_name = Decl_env.make_decl_posed env m.m_name;
     sm_type = mk (Reason.Rwitness_from_decl pos, Tfun ft);
-    sm_visibility = m.m_visibility;
+    sm_visibility = vis;
     sm_deprecated;
     sm_flags =
       MethodFlags.make
@@ -338,13 +347,13 @@ let class_ ctx c =
       Naming_attributes_params.get_module_attribute c.c_user_attributes
     in
     let where_constraints =
-      List.map c.c_where_constraints (FunUtils.where_constraint env)
+      List.map c.c_where_constraints ~f:(FunUtils.where_constraint env)
     in
     let enum_type hint e =
       {
         te_base = hint e.e_base;
-        te_constraint = Option.map e.e_constraint hint;
-        te_includes = List.map e.e_includes hint;
+        te_constraint = Option.map e.e_constraint ~f:hint;
+        te_includes = List.map e.e_includes ~f:hint;
         te_enum_class = e.e_enum_class;
       }
     in
@@ -356,7 +365,7 @@ let class_ ctx c =
       sc_kind = c.c_kind;
       sc_module;
       sc_name = Decl_env.make_decl_posed env c.c_name;
-      sc_tparams = List.map c.c_tparams (FunUtils.type_param env);
+      sc_tparams = List.map c.c_tparams ~f:(FunUtils.type_param env);
       sc_where_constraints = where_constraints;
       sc_extends;
       sc_uses;
@@ -366,15 +375,15 @@ let class_ ctx c =
       sc_req_implements;
       sc_implements;
       sc_support_dynamic_type = c.c_support_dynamic_type;
-      sc_consts = List.filter_map c.c_consts (class_const env);
-      sc_typeconsts = List.filter_map c.c_typeconsts (typeconst env c);
+      sc_consts = List.filter_map c.c_consts ~f:(class_const env);
+      sc_typeconsts = List.filter_map c.c_typeconsts ~f:(typeconst env c);
       sc_props = List.map ~f:(prop env) vars;
       sc_sprops = List.map ~f:(static_prop env) static_vars;
       sc_constructor = Option.map ~f:(method_ env) constructor;
       sc_static_methods = List.map ~f:(method_ env) statics;
       sc_methods = List.map ~f:(method_ env) rest;
       sc_user_attributes;
-      sc_enum_type = Option.map c.c_enum (enum_type hint);
+      sc_enum_type = Option.map c.c_enum ~f:(enum_type hint);
     }
   in
   if not (Errors.is_empty errs) then (

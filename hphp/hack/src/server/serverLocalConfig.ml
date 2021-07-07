@@ -428,10 +428,8 @@ type t = {
   search_chunk_size: int;
   io_priority: int;
   cpu_priority: int;
-  saved_state_cache_limit: int;
   can_skip_deptable: bool;
   shm_dirs: string list;
-  state_loader_timeouts: State_loader_config.timeouts;
   max_workers: int option;
   (* max_bucket_size is the default bucket size for ALL users of MultiWorker unless they provide a specific override max_size *)
   max_bucket_size: int;
@@ -440,13 +438,13 @@ type t = {
   (* See HhMonitorInformant. *)
   use_dummy_informant: bool;
   informant_min_distance_restart: int;
-  informant_use_xdb: bool;
   use_full_fidelity_parser: bool;
   interrupt_on_watchman: bool;
   interrupt_on_client: bool;
   trace_parsing: bool;
   prechecked_files: bool;
   enable_type_check_filter_files: bool;
+  re_worker: bool;
   (* whether clientLsp should use serverless-ide *)
   ide_serverless: bool;
   (* whether clientLsp should use ranked autocomplete *)
@@ -521,8 +519,6 @@ type t = {
   (* Enables the reverse naming table to fall back to SQLite for queries. *)
   naming_sqlite_path: string option;
   enable_naming_table_fallback: bool;
-  (* Download dependency graph from DevX infra. *)
-  enable_devx_dependency_graph: bool;
   (* Selects a search provider for autocomplete and symbol search; see also [ide_symbolindex_search_provider] *)
   symbolindex_search_provider: string;
   symbolindex_quiet: bool;
@@ -549,6 +545,8 @@ type t = {
   go_to_implementation: bool;
   (* Allows unstabled features to be enabled within a file via the '__EnableUnstableFeatures' attribute *)
   allow_unstable_features: bool;
+  stream_errors: bool;
+      (** Whether to send errors to client as soon as they are discovered. *)
   watchman: Watchman.t;
   (* If enabled, saves naming table into a temp folder and uploads it to the remote typechecker *)
   save_and_upload_naming_table: bool;
@@ -583,22 +581,20 @@ let default =
     search_chunk_size = 0;
     io_priority = 7;
     cpu_priority = 10;
-    saved_state_cache_limit = 20;
     can_skip_deptable = true;
     shm_dirs = [GlobalConfig.shm_dir; GlobalConfig.tmp_dir];
     max_workers = None;
     max_bucket_size = Bucket.max_size ();
     small_buckets_for_dirty_names = false;
-    state_loader_timeouts = State_loader_config.default_timeouts;
     use_dummy_informant = true;
     informant_min_distance_restart = 100;
-    informant_use_xdb = false;
     use_full_fidelity_parser = true;
     interrupt_on_watchman = false;
     interrupt_on_client = false;
     trace_parsing = false;
     prechecked_files = false;
     enable_type_check_filter_files = false;
+    re_worker = false;
     ide_serverless = false;
     ide_ranked_autocomplete = false;
     ide_ffp_autocomplete = false;
@@ -632,7 +628,6 @@ let default =
     remote_transport_channel = None;
     naming_sqlite_path = None;
     enable_naming_table_fallback = false;
-    enable_devx_dependency_graph = false;
     symbolindex_search_provider = "SqliteIndex";
     (* the code actually doesn't use this default for ide_symbolindex_search_provider;
     it defaults to whatever was computed for symbolindex_search_provider. *)
@@ -651,6 +646,7 @@ let default =
     profile_desc = "";
     go_to_implementation = true;
     allow_unstable_features = false;
+    stream_errors = false;
     watchman = Watchman.default;
     save_and_upload_naming_table = false;
   }
@@ -661,46 +657,6 @@ let path =
     with _ -> BuildOptions.system_config_path
   in
   Filename.concat dir "hh.conf"
-
-let state_loader_timeouts_ ~default config =
-  State_loader_config.(
-    let package_fetch_timeout =
-      int_
-        "state_loader_timeout_package_fetch"
-        ~default:default.package_fetch_timeout
-        config
-    in
-    let find_exact_state_timeout =
-      int_
-        "state_loader_timeout_find_exact_state"
-        ~default:default.find_exact_state_timeout
-        config
-    in
-    let find_nearest_state_timeout =
-      int_
-        "state_loader_timeout_find_nearest_state"
-        ~default:default.find_nearest_state_timeout
-        config
-    in
-    let current_hg_rev_timeout =
-      int_
-        "state_loader_timeout_current_hg_rev"
-        ~default:default.current_hg_rev_timeout
-        config
-    in
-    let current_base_rev_timeout =
-      int_
-        "state_loader_timeout_current_base_rev_timeout"
-        ~default:default.current_base_rev_timeout
-        config
-    in
-    {
-      State_loader_config.package_fetch_timeout;
-      find_exact_state_timeout;
-      find_nearest_state_timeout;
-      current_hg_rev_timeout;
-      current_base_rev_timeout;
-    })
 
 let apply_overrides ~silent ~current_version ~config ~overrides =
   (* First of all, apply the CLI overrides so the settings below could be specified
@@ -876,9 +832,6 @@ let load_ fn ~silent ~current_version overrides =
       ~current_version
       config
   in
-  let state_loader_timeouts =
-    state_loader_timeouts_ ~default:State_loader_config.default_timeouts config
-  in
   let use_dummy_informant =
     bool_if_min_version
       "use_dummy_informant"
@@ -892,13 +845,6 @@ let load_ fn ~silent ~current_version overrides =
       ~default:default.informant_min_distance_restart
       config
   in
-  let informant_use_xdb =
-    bool_if_min_version
-      "informant_use_xdb_v5"
-      ~default:default.informant_use_xdb
-      ~current_version
-      config
-  in
   let type_decl_bucket_size =
     int_ "type_decl_bucket_size" ~default:default.type_decl_bucket_size config
   in
@@ -910,12 +856,6 @@ let load_ fn ~silent ~current_version overrides =
   in
   let io_priority = int_ "io_priority" ~default:default.io_priority config in
   let cpu_priority = int_ "cpu_priority" ~default:default.cpu_priority config in
-  let saved_state_cache_limit =
-    int_
-      "saved_state_cache_limit"
-      ~default:default.saved_state_cache_limit
-      config
-  in
   let can_skip_deptable =
     bool_if_min_version
       "can_skip_deptable"
@@ -981,6 +921,13 @@ let load_ fn ~silent ~current_version overrides =
     bool_if_min_version
       "enable_type_check_filter_files"
       ~default:default.enable_type_check_filter_files
+      ~current_version
+      config
+  in
+  let re_worker =
+    bool_if_min_version
+      "re_worker"
+      ~default:default.re_worker
       ~current_version
       config
   in
@@ -1140,13 +1087,6 @@ let load_ fn ~silent ~current_version overrides =
       ~current_version
       config
   in
-  let enable_devx_dependency_graph =
-    bool_if_min_version
-      "enable_devx_dependency_graph"
-      ~default:default.enable_devx_dependency_graph
-      ~current_version
-      config
-  in
   let naming_sqlite_path =
     if enable_naming_table_fallback then
       string_opt "naming_sqlite_path" config
@@ -1243,6 +1183,13 @@ let load_ fn ~silent ~current_version overrides =
       ~current_version
       config
   in
+  let stream_errors =
+    bool_if_min_version
+      "stream_errors"
+      ~default:default.stream_errors
+      ~current_version
+      config
+  in
   let save_and_upload_naming_table =
     bool_if_min_version
       "save_and_upload_naming_table"
@@ -1273,22 +1220,20 @@ let load_ fn ~silent ~current_version overrides =
     search_chunk_size;
     io_priority;
     cpu_priority;
-    saved_state_cache_limit;
     can_skip_deptable;
     shm_dirs;
     max_workers;
     max_bucket_size;
     small_buckets_for_dirty_names;
-    state_loader_timeouts;
     use_dummy_informant;
     informant_min_distance_restart;
-    informant_use_xdb;
     use_full_fidelity_parser;
     interrupt_on_watchman;
     interrupt_on_client;
     trace_parsing;
     prechecked_files;
     enable_type_check_filter_files;
+    re_worker;
     ide_serverless;
     ide_ranked_autocomplete;
     ide_ffp_autocomplete;
@@ -1323,7 +1268,6 @@ let load_ fn ~silent ~current_version overrides =
     remote_transport_channel;
     naming_sqlite_path;
     enable_naming_table_fallback;
-    enable_devx_dependency_graph;
     symbolindex_search_provider;
     symbolindex_quiet;
     symbolindex_file;
@@ -1338,6 +1282,7 @@ let load_ fn ~silent ~current_version overrides =
     profile_desc;
     go_to_implementation;
     allow_unstable_features;
+    stream_errors;
     watchman;
     force_remote_type_check;
     save_and_upload_naming_table;
@@ -1355,7 +1300,7 @@ let to_rollout_flags (options : t) : HackEventLogger.rollout_flags =
         options.max_times_to_defer_type_checking;
       monitor_fd_close_delay = options.monitor_fd_close_delay;
       monitor_backpressure = options.monitor_backpressure;
-      enable_devx_dependency_graph = options.enable_devx_dependency_graph;
       small_buckets_for_dirty_names = options.small_buckets_for_dirty_names;
       symbolindex_search_provider = options.symbolindex_search_provider;
+      require_saved_state = options.require_saved_state;
     }

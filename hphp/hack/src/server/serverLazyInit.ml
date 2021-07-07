@@ -96,7 +96,12 @@ let merge_saved_state_futures
     (genv : genv)
     (ctx : Provider_context.t)
     (dependency_table_saved_state_future :
-      (State_loader.native_load_result, load_state_error) result Future.t)
+      ( ( Saved_state_loader.Naming_and_dep_table_info.main_artifacts,
+          Saved_state_loader.Naming_and_dep_table_info.additional_info )
+        Saved_state_loader.load_result,
+        ServerInitTypes.load_state_error )
+      result
+      Future.t)
     (naming_table_saved_state_future :
       ( ( Saved_state_loader.Naming_table_info.main_artifacts,
           Saved_state_loader.Naming_table_info.additional_info )
@@ -112,14 +117,14 @@ let merge_saved_state_futures
     match dependency_table_saved_state_result with
     | Error error ->
       Hh_logger.log
-        "Unhandled error from State_loader: %s"
+        "Unhandled Future.error from state loader: %s"
         (Future.error_to_string error);
       let e = Exception.wrap_unraised (Future.error_to_exn error) in
       let exn = Exception.to_exn e in
       let stack = Utils.Callstack (Exception.get_backtrace_string e) in
       Error (Load_state_unhandled_exception { exn; stack })
     | Ok (Error error) -> Error error
-    | Ok (Ok result) ->
+    | Ok (Ok deptable_result) ->
       let ( downloaded_naming_table_path,
             naming_table_manifold_path,
             dirty_naming_files ) =
@@ -160,13 +165,41 @@ let merge_saved_state_futures
         ServerArgs.ignore_hh_version genv.ServerEnv.options
       in
       let fail_if_missing = not genv.local_config.SLC.can_skip_deptable in
+      let {
+        Saved_state_loader.main_artifacts;
+        additional_info;
+        changed_files = _;
+        manifold_path = _;
+        corresponding_rev;
+        mergebase_rev;
+        is_cached = _;
+      } =
+        deptable_result
+      in
+      let {
+        Saved_state_loader.Naming_and_dep_table_info.naming_table_path =
+          deptable_naming_table_blob_path;
+        dep_table_path;
+        legacy_hot_decls_path;
+        shallow_hot_decls_path;
+        errors_path;
+      } =
+        main_artifacts
+      in
+      let {
+        Saved_state_loader.Naming_and_dep_table_info.mergebase_global_rev;
+        dep_table_is_64bit;
+        dirty_files_promise;
+      } =
+        additional_info
+      in
       let deptable =
         deptable_with_filename
-          ~is_64bit:result.State_loader.deptable_is_64bit
-          result.State_loader.deptable_fn
+          ~is_64bit:dep_table_is_64bit
+          (Path.to_string dep_table_path)
       in
       lock_and_load_deptable
-        ~base_file_name:result.State_loader.naming_table_path
+        ~base_file_name:(Path.to_string deptable_naming_table_blob_path)
         ~deptable
         ~ignore_hh_version
         ~fail_if_missing;
@@ -178,40 +211,42 @@ let merge_saved_state_futures
       let (old_naming_table, old_errors) =
         SaveStateService.load_saved_state
           ctx
-          ~naming_table_path:result.State_loader.naming_table_path
+          ~naming_table_path:(Path.to_string deptable_naming_table_blob_path)
           ~naming_table_fallback_path
           ~load_decls
           ~shallow_decls
-          ~hot_decls_paths:result.State_loader.hot_decls_paths
-          ~errors_path:result.State_loader.errors_path
+          ~legacy_hot_decls_path:(Path.to_string legacy_hot_decls_path)
+          ~shallow_hot_decls_path:(Path.to_string shallow_hot_decls_path)
+          ~errors_path:(Path.to_string errors_path)
       in
       let t = Unix.time () in
-      (match result.State_loader.dirty_files |> Future.get ~timeout:200 with
+      (match dirty_files_promise |> Future.get ~timeout:200 with
       | Error error -> Error (Load_state_dirty_files_failure error)
       | Ok
           {
-            State_loader.master_changes = dirty_master_files;
+            Saved_state_loader.Naming_and_dep_table_info.master_changes =
+              dirty_master_files;
             local_changes = dirty_local_files;
           } ->
         let () = HackEventLogger.state_loader_dirty_files t in
         let dirty_naming_files = Relative_path.Set.of_list dirty_naming_files in
-        let dirty_master_files = Relative_path.Set.of_list dirty_master_files in
-        let dirty_local_files = Relative_path.Set.of_list dirty_local_files in
+        let dirty_master_files = dirty_master_files in
+        let dirty_local_files = dirty_local_files in
         Ok
           {
-            naming_table_fn = result.State_loader.naming_table_path;
-            deptable_fn = result.State_loader.deptable_fn;
-            deptable_is_64bit = result.State_loader.deptable_is_64bit;
+            naming_table_fn = Path.to_string deptable_naming_table_blob_path;
+            deptable_fn = Path.to_string dep_table_path;
+            deptable_is_64bit = dep_table_is_64bit;
             naming_table_fallback_fn = naming_table_fallback_path;
-            corresponding_rev = result.State_loader.corresponding_rev;
-            mergebase_rev = result.State_loader.mergebase_rev;
-            mergebase = result.State_loader.mergebase;
+            corresponding_rev = Hg.Hg_rev corresponding_rev;
+            mergebase_rev = mergebase_global_rev;
+            mergebase = Future.of_value (Some mergebase_rev);
             dirty_naming_files;
             dirty_master_files;
             dirty_local_files;
             old_naming_table;
             old_errors;
-            state_distance = Some result.State_loader.state_distance;
+            state_distance = None;
             naming_table_manifold_path;
           })
   in
@@ -239,29 +274,11 @@ let merge_saved_state_futures
   wait_until_ready future
 
 let download_and_load_state_exn
-    ~(target : ServerMonitorUtils.target_saved_state option)
-    ~(genv : ServerEnv.genv)
-    ~(ctx : Provider_context.t)
-    ~(root : Path.t) : (loaded_info, load_state_error) result =
-  let open ServerMonitorUtils in
-  let saved_state_handle =
-    match target with
-    | None -> None
-    | Some
-        { saved_state_everstore_handle; target_global_rev; watchman_mergebase }
-      ->
-      Some
-        {
-          State_loader.saved_state_everstore_handle;
-          saved_state_for_rev = Hg.Global_rev target_global_rev;
-          watchman_mergebase;
-        }
-  in
+    ~(genv : ServerEnv.genv) ~(ctx : Provider_context.t) ~(root : Path.t) :
+    (loaded_info, load_state_error) result =
   let ignore_hh_version = ServerArgs.ignore_hh_version genv.options in
-  let ignore_hhconfig = ServerArgs.saved_state_ignore_hhconfig genv.options in
-  let use_prechecked_files =
-    ServerPrecheckedFiles.should_use genv.options genv.local_config
-  in
+  (* TODO(hverr): Support the ignore_hhconfig flag, how to do this with Watchman? *)
+  let _ignore_hhconfig = ServerArgs.saved_state_ignore_hhconfig genv.options in
   let naming_table_saved_state_future =
     if genv.local_config.ServerLocalConfig.enable_naming_table_fallback then begin
       Hh_logger.log "Starting naming table download.";
@@ -282,95 +299,32 @@ let download_and_load_state_exn
       Future.of_value (Ok None)
   in
   let dependency_table_saved_state_future :
-      (State_loader.native_load_result, load_state_error) result Future.t =
-    if
-      genv.local_config.ServerLocalConfig.enable_devx_dependency_graph
-      && Option.is_none saved_state_handle
-    then begin
-      Hh_logger.log "Downloading dependency graph from DevX infra";
-      let loader_future =
-        State_loader_futures.load
-          ~watchman_opts:
-            Saved_state_loader.Watchman_options.{ root; sockname = None }
-          ~ignore_hh_version
-          ~saved_state_type:
-            (Saved_state_loader.Naming_and_dep_table
-               {
-                 is_64bit =
-                   genv.local_config.ServerLocalConfig.load_state_natively_64bit;
-               })
-        |> Future.with_timeout ~timeout:60
-      in
-      let loader_future =
-        Future.continue_with loader_future @@ function
-        | Error e -> Error (Load_state_saved_state_loader_failure e)
-        | Ok v -> Ok v
-      in
-      let ( >>= ) :
-          ('a, 'err) result Future.t ->
-          ('a -> ('b, 'err) result Future.t) ->
-          ('b, 'err) result Future.t =
-       fun res f ->
-        Future.continue_with_future res (function
-            | Ok r -> f r
-            | Error e -> Future.of_value (Error e))
-      in
-      loader_future >>= fun load_result ->
-      let open Saved_state_loader in
-      let open Saved_state_loader.Naming_and_dep_table_info in
-      (* TODO(hverr): This conversion should be removed once we fully
-         deprecate the legacy dependency graph downlaoder. *)
-      let legacy_result =
-        {
-          State_loader.naming_table_path =
-            Path.to_string load_result.main_artifacts.naming_table_path;
-          corresponding_rev = Hg.Hg_rev load_result.corresponding_rev;
-          mergebase_rev = load_result.additional_info.mergebase_global_rev;
-          mergebase = Future.of_value (Some load_result.mergebase_rev);
-          is_cached = load_result.is_cached;
-          state_distance = 0;
-          deptable_fn = Path.to_string load_result.main_artifacts.dep_table_path;
-          deptable_is_64bit = load_result.additional_info.dep_table_is_64bit;
-          dirty_files =
-            Future.continue_with
-              load_result.additional_info.dirty_files_promise
-              (fun { master_changes; local_changes } ->
-                State_loader.
-                  {
-                    master_changes = Relative_path.Set.elements master_changes;
-                    local_changes = Relative_path.Set.elements local_changes;
-                  });
-          hot_decls_paths =
-            State_loader.
-              {
-                legacy_hot_decls_path =
-                  Path.to_string
-                    load_result.main_artifacts.legacy_hot_decls_path;
-                shallow_hot_decls_path =
-                  Path.to_string
-                    load_result.main_artifacts.shallow_hot_decls_path;
-              };
-          errors_path = Path.to_string load_result.main_artifacts.errors_path;
-        }
-      in
-      Future.of_value (Ok legacy_result)
-    end else begin
-      Hh_logger.log "Falling back on legacy dependency graph downloader";
-      let load_result =
-        State_loader.mk_state_future
-          ~config:genv.local_config.SLC.state_loader_timeouts
-          ~load_64bit:genv.local_config.SLC.load_state_natively_64bit
-          ?saved_state_handle
-          ~config_hash:(ServerConfig.config_hash genv.config)
-          root
-          ~ignore_hh_version
-          ~ignore_hhconfig
-          ~use_prechecked_files
-      in
-      Future.continue_with load_result @@ function
-      | Error e -> Error (Load_state_loader_failure e)
+      ( ( Saved_state_loader.Naming_and_dep_table_info.main_artifacts,
+          Saved_state_loader.Naming_and_dep_table_info.additional_info )
+        Saved_state_loader.load_result,
+        ServerInitTypes.load_state_error )
+      result
+      Future.t =
+    Hh_logger.log "Downloading dependency graph from DevX infra";
+    let loader_future =
+      State_loader_futures.load
+        ~watchman_opts:
+          Saved_state_loader.Watchman_options.{ root; sockname = None }
+        ~ignore_hh_version
+        ~saved_state_type:
+          (Saved_state_loader.Naming_and_dep_table
+             {
+               is_64bit =
+                 genv.local_config.ServerLocalConfig.load_state_natively_64bit;
+             })
+      |> Future.with_timeout ~timeout:60
+    in
+    let loader_future =
+      Future.continue_with loader_future @@ function
+      | Error e -> Error (Load_state_saved_state_loader_failure e)
       | Ok v -> Ok v
-    end
+    in
+    loader_future
   in
   merge_saved_state_futures
     genv
@@ -412,14 +366,11 @@ let use_precomputed_state_exn
   let load_decls = genv.local_config.SLC.load_decls_from_saved_state in
   let shallow_decls = genv.local_config.SLC.shallow_class_decl in
   let naming_table_fallback_path = get_naming_table_fallback_path genv None in
-  let hot_decls_paths =
-    State_loader.
-      {
-        legacy_hot_decls_path =
-          ServerArgs.legacy_hot_decls_path_for_target_info info;
-        shallow_hot_decls_path =
-          ServerArgs.shallow_hot_decls_path_for_target_info info;
-      }
+  let legacy_hot_decls_path =
+    ServerArgs.legacy_hot_decls_path_for_target_info info
+  in
+  let shallow_hot_decls_path =
+    ServerArgs.shallow_hot_decls_path_for_target_info info
   in
   let errors_path = ServerArgs.errors_path_for_target_info info in
   let (old_naming_table, old_errors) =
@@ -431,7 +382,8 @@ let use_precomputed_state_exn
       ~naming_table_fallback_path
       ~load_decls
       ~shallow_decls
-      ~hot_decls_paths
+      ~legacy_hot_decls_path
+      ~shallow_hot_decls_path
       ~errors_path
   in
   {
@@ -472,7 +424,7 @@ let naming_from_saved_state
     | Some _ ->
       (* Set the SQLite fallback path for the reverse naming table, then block out all entries in
       any dirty files to make sure we properly handle file deletes. *)
-      Relative_path.Set.iter parsing_files (fun k ->
+      Relative_path.Set.iter parsing_files ~f:(fun k ->
           match Naming_table.get_file_info old_naming_table k with
           | None ->
             (* If we can't find the file in [old_naming_table] we don't consider that an error, since
@@ -500,7 +452,7 @@ let naming_from_saved_state
     they'll be named by our caller, next). We assume the old naming-table came from a clean
     state, which is why we skip checking for "already bound" conditions. *)
       let old_hack_names =
-        Naming_table.filter old_naming_table (fun k _v ->
+        Naming_table.filter old_naming_table ~f:(fun k _v ->
             not (Relative_path.Set.mem parsing_files k))
       in
       Naming_table.fold old_hack_names ~init:() ~f:(fun k info () ->
@@ -534,7 +486,7 @@ let get_dirty_fast
           |> Option.map ~f:FileInfo.simplify
         in
         let fast =
-          Option.merge dirty_old_fast dirty_fast FileInfo.merge_names
+          Option.merge dirty_old_fast dirty_fast ~f:FileInfo.merge_names
         in
         match fast with
         | Some fast -> Relative_path.Map.add acc ~key:fn ~data:fast
@@ -581,7 +533,7 @@ let get_files_to_undecl_and_recheck
       ~init:Relative_path.Map.empty
       ~f:(fun path acc ->
         match Relative_path.Map.find_opt dirty_fast path with
-        | Some info -> Relative_path.Map.add acc path info
+        | Some info -> Relative_path.Map.add acc ~key:path ~data:info
         | None -> acc)
   in
   let get_classes path =
@@ -591,9 +543,9 @@ let get_files_to_undecl_and_recheck
     in
     let new_names = Relative_path.Map.find_opt new_fast path in
     let classes_from_names x = x.FileInfo.n_classes in
-    let old_classes = Option.map old_names classes_from_names in
-    let new_classes = Option.map new_names classes_from_names in
-    Option.merge old_classes new_classes SSet.union
+    let old_classes = Option.map old_names ~f:classes_from_names in
+    let new_classes = Option.map new_names ~f:classes_from_names in
+    Option.merge old_classes new_classes ~f:SSet.union
     |> Option.value ~default:SSet.empty
   in
   let dirty_names =
@@ -817,6 +769,12 @@ let type_check_dirty
                   dirty_files_changed_hash)
              ~is_ide_file:(fun _ -> false)
     in
+    let files_to_check =
+      if genv.ServerEnv.local_config.ServerLocalConfig.re_worker then
+        []
+      else
+        files_to_check
+    in
     let init_telemetry =
       telemetry
       |> Telemetry.int_
@@ -990,7 +948,7 @@ let write_symbol_info_init
           | Some _ ->
             if
               (exclude_hhi && Relative_path.is_hhi (Relative_path.prefix path))
-              || List.exists ignore_paths (fun ignore ->
+              || List.exists ignore_paths ~f:(fun ignore ->
                      String.equal (Relative_path.S.to_string path) ignore)
             then
               acc
@@ -1052,7 +1010,9 @@ let full_init
         profiling
     in
     if not is_check_mode then
-      SearchServiceRunner.update_fileinfo_map env.naming_table SearchUtils.Init;
+      SearchServiceRunner.update_fileinfo_map
+        env.naming_table
+        ~source:SearchUtils.Init;
     let fast = Naming_table.to_fast env.naming_table in
     let failed_parsing = Errors.get_failed_files env.errorl Errors.Parsing in
     let fast =
@@ -1097,7 +1057,9 @@ let full_init
     let (env, t) = naming env t ~profile_label:"naming" ~profiling in
     let fnl = Relative_path.Map.keys fast in
     if not is_check_mode then
-      SearchServiceRunner.update_fileinfo_map env.naming_table SearchUtils.Init;
+      SearchServiceRunner.update_fileinfo_map
+        env.naming_table
+        ~source:SearchUtils.Init;
     let type_check_result =
       type_check
         genv
@@ -1270,7 +1232,7 @@ let post_saved_state_initialization
   in
   SearchServiceRunner.update_fileinfo_map
     env.naming_table
-    SearchUtils.TypeChecker;
+    ~source:SearchUtils.TypeChecker;
   let ctx = Provider_utils.ctx_from_server_env env in
   let t =
     update_files
@@ -1407,10 +1369,7 @@ let saved_state_init
       match load_state_approach with
       | Precomputed info ->
         Ok (use_precomputed_state_exn genv ctx info profiling)
-      | Load_state_natively ->
-        download_and_load_state_exn ~target:None ~genv ~ctx ~root
-      | Load_state_natively_with_target target ->
-        download_and_load_state_exn ~target:(Some target) ~genv ~ctx ~root
+      | Load_state_natively -> download_and_load_state_exn ~genv ~ctx ~root
     in
     state_result
   in
@@ -1425,7 +1384,7 @@ let saved_state_init
       with
       | Error error -> Error error
       | Ok loaded_info ->
-        let changed_while_parsing = get_updates_exn genv root in
+        let changed_while_parsing = get_updates_exn ~genv ~root in
         Ok (loaded_info, changed_while_parsing)
     with exn ->
       let stack = Utils.Callstack (Printexc.get_backtrace ()) in
@@ -1434,6 +1393,12 @@ let saved_state_init
   HackEventLogger.saved_state_download_and_load_done
     ~load_state_approach:(show_load_state_approach load_state_approach)
     ~success:(Result.is_ok state_result)
+    ~state_result:
+      (match state_result with
+      | Error _ -> None
+      | Ok (i, _) -> Some (show_loaded_info i))
+    ~load_state_natively_64bit:
+      genv.local_config.ServerLocalConfig.load_state_natively_64bit
     t;
   match state_result with
   | Error err -> Error err

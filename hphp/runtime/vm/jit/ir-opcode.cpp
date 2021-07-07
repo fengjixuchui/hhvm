@@ -203,7 +203,7 @@ bool isGuardOp(Opcode opc) {
   }
 }
 
-folly::Optional<Opcode> negateCmpOp(Opcode opc) {
+Optional<Opcode> negateCmpOp(Opcode opc) {
   switch (opc) {
     case GtBool:              return LteBool;
     case GteBool:             return LtBool;
@@ -260,20 +260,19 @@ folly::Optional<Opcode> negateCmpOp(Opcode opc) {
     case EqRes:               return NeqRes;
     case NeqRes:              return EqRes;
 
-    default:                  return folly::none;
+    default:                  return std::nullopt;
   }
 }
 
 bool opcodeMayRaise(Opcode opc) {
   switch (opc) {
-  case NSameArrLike:
-  case SameArrLike:
-    return RuntimeOption::EvalHackArrCompatCheckCompare;
-
   case IsTypeStruct:
-    return RuntimeOption::EvalHackArrIsShapeTupleNotices ||
-           RuntimeOption::EvalIsExprEnableUnresolvedWarning ||
+    return RuntimeOption::EvalIsExprEnableUnresolvedWarning ||
            RuntimeOption::EvalIsVecNotices;
+
+  case EqStr:
+  case NeqStr:
+    return (bool)RuntimeOption::EvalNoticeOnCoerceForEq;
 
   case AddNewElemKeyset:
   case AFWHPrepareChild:
@@ -342,6 +341,7 @@ bool opcodeMayRaise(Opcode opc) {
   case ElemX:
   case EqArrLike:
   case EqObj:
+  case EqStrInt:
   case GetMemoKey:
   case GtArrLike:
   case GteArrLike:
@@ -398,8 +398,10 @@ bool opcodeMayRaise(Opcode opc) {
   case NativeImpl:
   case NeqArrLike:
   case NeqObj:
+  case NeqStrInt:
   case NewKeysetArray:
   case NewRecord:
+  case NSameArrLike:
   case OODeclExists:
   case OrdStrIdx:
   case OutlineSetOp:
@@ -420,7 +422,6 @@ bool opcodeMayRaise(Opcode opc) {
   case RaiseErrorOnInvalidIsAsExpressionType:
   case RaiseForbiddenDynCall:
   case RaiseForbiddenDynConstruct:
-  case RaiseHackArrCompatNotice:
   case RaiseNotice:
   case RaiseStrToClassNotice:
   case RaiseTooManyArg:
@@ -430,6 +431,7 @@ bool opcodeMayRaise(Opcode opc) {
   case RecordReifiedGenericsAndGetTSList:
   case ResolveTypeStruct:
   case ReturnHook:
+  case SameArrLike:
   case SetElem:
   case SetNewElem:
   case SetNewElemDict:
@@ -641,8 +643,6 @@ bool opcodeMayRaise(Opcode opc) {
   case EqPtrIter:
   case EqRecDesc:
   case EqRes:
-  case EqStr:
-  case EqStrInt:
   case EqStrPtr:
   case ExtendsClass:
   case FinishMemberOp:
@@ -825,6 +825,7 @@ bool opcodeMayRaise(Opcode opc) {
   case LtRes:
   case LtStr:
   case MapIsset:
+  case MarkRDSAccess:
   case MarkRDSInitialized:
   case MemoGetInstanceCache:
   case MemoGetInstanceValue:
@@ -848,8 +849,6 @@ bool opcodeMayRaise(Opcode opc) {
   case NeqDbl:
   case NeqInt:
   case NeqRes:
-  case NeqStr:
-  case NeqStrInt:
   case NewClsMeth:
   case NewRClsMeth:
   case NewCol:
@@ -883,6 +882,7 @@ bool opcodeMayRaise(Opcode opc) {
   case RBTraceMsg:
   case RecordFuncCall:
   case ReqBindJmp:
+  case ReqInterpBBNoTranslate:
   case ReqRetranslate:
   case ReqRetranslateOpt:
   case ReserveVecNewElem:

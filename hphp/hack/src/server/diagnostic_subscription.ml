@@ -10,77 +10,52 @@ open Hh_prelude
 open Reordered_argument_collections
 module RP = Relative_path
 
-(* Throttle errors - pause pushing errors after editor is aware of errors in
- * that many files. Resume when user fixes some of them. *)
-let errors_limit = 10
-
 type errors = Errors.error list
 
+type id = int [@@deriving show]
+
 type t = {
-  id: int;
-  (* Hack server indexes (in ServerEnv.errorl) errors based on where they were
-   * GENERATED: for example A -> decl -> e means that error e is uncovered
-   * during declaration of A. But the error itself can be reported in completely
-   * different file (like As parent C).
-   *
-   * Things like IDE don't want this mapping - when asking about A they want to
-   * get all errors REPORTED, not GENERATED in A. local_errors maintains reverse
-   * mapping from files with reported errors to files that cause them to be
-   * reported, i.e A -> [A, C] means that A is a file that IDE cares about and
-   * to get its error list we need to analyse A and C.
-   *
-   * To keep things responsive, we'll keep
-   *
-   * |local_errors| < max (errors_limit , |priority_files| + |pushed_errors|)
-   *
-   * i.e we always report things in priority_files, and if we reported some
-   * errors in a file, we'll keep them fresh until they are fixed. If after
-   * that we still report errors in less than errors_limit files, we'll "top up"
-   * with errors from some arbitrary files *)
-  local_errors: RP.Set.t RP.Map.t;
-  (* Copy of errors most recently pushed to subscribers, used to avoid pushing
-   * no-op duplicates *)
+  id: id;
+      (** Unique ID used by users of this module to distinguish multiple subscriptions. *)
+  error_limit: int;
+  diagnosed_files: RP.Set.t;
+      (** Files to send diagnostic for. We don't send diagnostic for all the files with errors
+          for performance reason: to keep things responsive, we'll keep make sure to push
+          at most [errors_limit] errors. *)
   pushed_errors: errors RP.Map.t;
       [@printer
         fun fmt errors ->
           RP.Map.pp
             (fun fmt -> Format.fprintf fmt "%d")
             fmt
-            (RP.Map.map errors List.length)]
-  (* Union of all values in local_errors *)
-  sources: Relative_path.Set.t;
+            (RP.Map.map errors ~f:List.length)]
+      (** Copy of errors most recently pushed to subscribers, used to avoid pushing
+          no-op duplicates *)
   has_new_errors: bool;
-  is_truncated: bool;
-      (* was 'local_errors' truncated with respect to all the errors? *)
+  is_truncated: int option;
+      (** [None] if [diagnosed_files] contains all the files with errors,
+          [Some n] with n the total number of errors otherwise *)
 }
 [@@deriving show]
 
-let filter_filter map_map ~f =
-  RP.Map.map map_map ~f:(fun v -> RP.Set.filter v ~f:(fun e -> f e))
-  |> RP.Map.filter ~f:(fun _ v -> not @@ RP.Set.is_empty v)
-
-let error_filename e = Errors.get_pos e |> Pos.filename
+(** Throttle errors - pause pushing errors after editor is aware of that many errors.
+    Resume when user fixes some of them. *)
+let default_error_limit = 1000
 
 let get_id ds = ds.id
 
-let error_sources ds = ds.sources
+let diagnosed_files ds = ds.diagnosed_files
 
-(* Update diagnostics subscription based on an incremental recheck that
- * was done. *)
+let set_error_limit : t -> int -> t =
+ (fun diag error_limit -> { diag with error_limit })
+
+(** Update diagnostics subscription based on an incremental recheck that
+    was done. *)
 let update
     ds
     ~(* to keep things responsive in a scenario with thousands of errors,
       * we'll drop some of them. priority_files will never have errors dropped *)
     priority_files
-    ~(* set of files that were reparsed during incremental recheck. If a file is
-      * in this set, but not in global_errors, it means that it doesn't have
-      * errors any more *)
-    reparsed
-    ~(* rechecked is used exactly the same as reparsed. It's split in two
-      * arguments because those collections are stored as two different
-      * structures in ServerTypeCheck and we don't want to force the caller
-      * to merge them. *)
-    rechecked
     ~(* new set of errors after incremental recheck *)
     global_errors
     ~(* If incremental recheck was not full, only a subset of errors in
@@ -88,130 +63,116 @@ let update
       * subset to be union of priority_files and Diagnsotic_subscription.sources
       *)
     full_check_done =
-  (* Update local_errors with possibly changed priority_files *)
-  let local_errors =
-    RP.Set.fold priority_files ~init:ds.local_errors ~f:(fun path acc ->
-        (* We already track this file. *)
-        if RP.Map.mem acc path then
-          acc
-        (* Initially the only known source of errors in a file is that file
-         * itself. There might be more errors that will eventually be reported in
-      * this file, but we'll not know them until next full check. *)
-        else
-          RP.Map.add acc path (RP.Set.singleton path))
+  let { diagnosed_files; error_limit; _ } = ds in
+  let diagnosed_files = RP.Set.union diagnosed_files priority_files in
+  (* Remove files which no longer have errors *)
+  let (error_count, diagnosed_files) =
+    RP.Set.fold
+      diagnosed_files
+      ~init:(0, RP.Set.empty)
+      ~f:(fun file (count, diagnosed_files) ->
+        let errors = Errors.get_file_errors global_errors file in
+        let n = Errors.per_file_error_count errors in
+        let diagnosed_files =
+          if Int.equal 0 n then
+            diagnosed_files
+          else
+            RP.Set.add diagnosed_files file
+        in
+        let count = n + count in
+        (count, diagnosed_files))
   in
-  (* Merge rechecked and reparsed into single collection. *)
-  let rechecked = RP.Set.union reparsed rechecked in
-  (* Look through rechecked files for more sources of tracked files *)
-  let local_errors =
-    RP.Set.fold rechecked ~init:local_errors ~f:(fun source acc ->
-        Errors.fold_errors_in global_errors ~source ~init:acc ~f:(fun e acc ->
-            let file = error_filename e in
-            match RP.Map.find_opt acc file with
-            | None -> acc (* not an IDE-relevant file *)
-            | Some sources -> RP.Map.add acc file (RP.Set.add sources source)))
-  in
-  (* Remove sources that no longer produce errors in files we care about *)
-  let local_errors =
-    filter_filter local_errors ~f:(fun source ->
-        Errors.fold_errors_in global_errors ~source ~init:false ~f:(fun e acc ->
-            acc || RP.Map.mem local_errors (error_filename e)))
-  in
-  (* If we've done a full check, that it's safe to look through all of the
-   * errors in global_errors, no only those that were just rechecked *)
-  let (is_truncated, local_errors) =
+  (* If we've done a full check, then it's safe to look through all of the
+   * errors in global_errors, not only those that were just rechecked *)
+  let (is_truncated, diagnosed_files) =
     if not full_check_done then
-      (false, local_errors)
+      (None, diagnosed_files)
     else
-      Errors.fold_errors
-        global_errors
-        ~init:(false, local_errors)
-        ~f:(fun source e (is_truncated, acc) ->
-          let file = error_filename e in
-          match RP.Map.find_opt acc file with
-          | Some sources ->
-            (* Add a source to already tracked file *)
-            (is_truncated, RP.Map.add acc file (RP.Set.add sources source))
-          | None when RP.Map.cardinal acc < errors_limit ->
-            (* not an IDE-relevant file, but we still have room for it *)
-            (is_truncated, RP.Map.add acc file (RP.Set.singleton source))
-          | None ->
-            (* we're at error limit, ignore *)
-            (true, acc))
+      let (diagnosed_files, error_count, is_truncated) =
+        (* Add files to diagnosed_files until we've reached the error limit. *)
+        Errors.fold_per_file
+          global_errors
+          ~init:(diagnosed_files, error_count, false)
+          ~f:(fun file errors (diagnosed_files, error_count, is_truncated) ->
+            if RP.Set.mem diagnosed_files file then
+              (diagnosed_files, error_count, is_truncated)
+            else
+              let n = Errors.per_file_error_count errors in
+              let error_count = error_count + n in
+              if is_truncated || error_count > error_limit then
+                (diagnosed_files, error_count, true)
+              else
+                let diagnosed_files = RP.Set.add diagnosed_files file in
+                (diagnosed_files, error_count, false))
+      in
+      let is_truncated =
+        if is_truncated then
+          Some error_count
+        else
+          None
+      in
+      (is_truncated, diagnosed_files)
   in
-  let sources =
-    RP.Map.fold local_errors ~init:RP.Set.empty ~f:(fun _ x acc ->
-        RP.Set.union acc x)
-  in
-  { ds with local_errors; has_new_errors = true; is_truncated; sources }
+  { ds with diagnosed_files; has_new_errors = true; is_truncated }
 
-let of_id ~id ~init =
+let of_id ?error_limit ~initial_errors id =
   let res =
     {
       id;
-      local_errors = RP.Map.empty;
+      error_limit = Option.value error_limit ~default:default_error_limit;
+      diagnosed_files = RP.Set.empty;
       pushed_errors = RP.Map.empty;
-      sources = RP.Set.empty;
       has_new_errors = false;
-      is_truncated = false;
+      is_truncated = None;
     }
   in
   update
     res
     ~priority_files:Relative_path.Set.empty
-    ~reparsed:Relative_path.Set.empty
-    ~rechecked:Relative_path.Set.empty
-    ~global_errors:init
+    ~global_errors:initial_errors
     ~full_check_done:true
 
-(** Return and record errors as send to subscriber. [ds] is current diagnostics
+(** Return and record errors to send to subscriber. [ds] is current diagnostics
     subscription used to choose which errors from global error list to push. *)
 let pop_errors ds ~global_errors =
   if not ds.has_new_errors then
-    (ds, SMap.empty)
+    (ds, SMap.empty, None)
   else
-    (* Go over tracked files...*)
     let new_pushed_errors =
-      RP.Map.mapi ds.local_errors (fun path sources ->
-          (* ... and sources of errors reported in them... *)
-          RP.Set.fold sources ~init:[] ~f:(fun source acc ->
-              (* ... and the errors themselves... *)
-              Errors.fold_errors_in
-                global_errors
-                ~source
-                ~init:acc
-                ~f:(fun e acc ->
-                  (* ... filtering out ones irrelevant to tracked files. *)
-                  if not (RP.equal (error_filename e) path) then
-                    acc
-                  else
-                    e :: acc))
-          |> Errors.sort)
+      RP.Set.fold
+        ds.diagnosed_files
+        ~init:RP.Map.empty
+        ~f:(fun diagnosed_file new_pushed_errors ->
+          let errors =
+            Errors.errors_in_file global_errors diagnosed_file |> Errors.sort
+          in
+          RP.Map.add new_pushed_errors ~key:diagnosed_file ~data:errors)
     in
     (* Ignore unchanged errors, add "[]" messages for cleared errors. *)
-    let results =
+    let errors_to_send =
       RP.Map.merge ds.pushed_errors new_pushed_errors ~f:(fun _ old new_ ->
           match (old, new_) with
+          | (None, None) -> None
           | (None, Some new_) -> Some new_
-          | (Some old, Some new_)
-            when not (List.equal Errors.equal_error old new_) ->
-            Some new_
-          | (Some _, None) -> Some []
-          | (Some _, Some _)
-          | (None, None) ->
-            (* error is unchanged, ignore *)
-            None)
+          | (Some _, None) -> (* Erase previous diagnostics *) Some []
+          | (Some old, Some new_) when List.equal Errors.equal_error old new_ ->
+            (* Errors haven't changed, do not send anything for that file. *)
+            None
+          | (Some _, Some new_) ->
+            (* Errors have changed, send the new list. *)
+            Some new_)
     in
     (* Convert to absolute paths *)
-    let results =
-      RP.Map.fold results ~init:SMap.empty ~f:(fun path el acc ->
+    let errors_to_send =
+      RP.Map.fold errors_to_send ~init:SMap.empty ~f:(fun path el acc ->
           SMap.add
             acc
-            (Relative_path.to_absolute path)
-            (List.map el ~f:Errors.to_absolute))
+            ~key:(Relative_path.to_absolute path)
+            ~data:(List.map el ~f:Errors.to_absolute))
     in
     ( { ds with pushed_errors = new_pushed_errors; has_new_errors = false },
-      results )
+      errors_to_send,
+      ds.is_truncated )
 
 let get_pushed_error_length ds =
   let length =

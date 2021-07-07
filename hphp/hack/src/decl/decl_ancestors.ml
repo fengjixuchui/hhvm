@@ -21,11 +21,6 @@ let all_ancestors ~lin_ancestors_drop_one =
   Sequence.map lin_ancestors_drop_one ~f:(fun mro ->
       (mro.mro_name, type_of_mro_element mro))
 
-let parents_and_traits ~lin_ancestors_drop_one =
-  lin_ancestors_drop_one
-  |> Sequence.filter ~f:(fun mro -> not (is_set mro_consts_only mro.mro_flags))
-  |> Sequence.map ~f:(fun mro -> (mro.mro_name, ()))
-
 let members_fully_known ~lin_ancestors_drop_one =
   lazy
     (Sequence.for_all lin_ancestors_drop_one ~f:(fun mro ->
@@ -43,7 +38,7 @@ let all_requirements ~lin_members =
   |> Sequence.filter ~f:(fun mro ->
          not (is_set mro_xhp_attrs_only mro.mro_flags))
   |> Sequence.filter_map ~f:(fun mro ->
-         Option.map mro.mro_required_at (fun pos ->
+         Option.map mro.mro_required_at ~f:(fun pos ->
              (pos, type_of_mro_element mro)))
 
 let is_disposable ~lin_members =

@@ -52,6 +52,7 @@ struct IncomingBranch {
     JMP,
     JCC,
     ADDR,
+    LDADDR,
   };
 
   using Opaque = CompactTaggedPtr<void>::Opaque;
@@ -65,6 +66,9 @@ struct IncomingBranch {
   static IncomingBranch addr(TCA* from) {
     return IncomingBranch(Tag::ADDR, TCA(from));
   }
+  static IncomingBranch ldaddr(TCA from) {
+    return IncomingBranch(Tag::LDADDR, from);
+  }
 
   Opaque getOpaque() const {
     return m_ptr.getOpaque();
@@ -77,7 +81,9 @@ struct IncomingBranch {
     m_ptr.set(m_ptr.tag(), addr);
   }
   void patch(TCA dest);
+  bool optimize();
   TCA target() const;
+  std::string show() const;
 private:
   explicit IncomingBranch(Tag type, TCA toSmash) {
     m_ptr.set(type, toSmash);
@@ -178,7 +184,7 @@ struct SrcRec final {
    * The following functions are used during creation of new translations.
    * May only be called when holding the lock for this SrcRec.
    */
-  void chainFrom(IncomingBranch br);
+  void chainFrom(IncomingBranch br, TCA stub = nullptr);
 
   const GrowableVector<IncomingBranch>& incomingBranches() const {
     return m_incomingBranches;
@@ -202,7 +208,7 @@ struct SrcRec final {
   void newTranslation(TransLoc newStart,
                       GrowableVector<IncomingBranch>& inProgressTailBranches);
   void smashFallbacksToStub(TCA stub);
-  void replaceOldTranslations(TCA retransStub);
+  void replaceOldTranslations(TCA transStub);
   size_t numTrans() const {
     auto srLock = readlock();
     return translations().size();

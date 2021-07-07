@@ -72,14 +72,13 @@ namespace HH\Contexts {
    * Typing_make_type.default_capability for performance reasons. The alias is
    * still present so that it may be directly used as [defaults]
    */
-  type defaults = nothing; // an infinite set of all capabilities
-
-  // TODO(coeffects) after implementing lower bounds on const ctx/type, do:
-  /* = (
+  type defaults = (
     \HH\Capabilities\WriteProperty &
     \HH\Capabilities\AccessGlobals &
+    \HH\Capabilities\RxLocal &
+    \HH\Capabilities\ImplicitPolicyLocal &
     \HH\Capabilities\IO
-  ); */
+  );
 
   /**
    * Described at the top of this file; this indicates that a method could
@@ -116,23 +115,15 @@ namespace HH\Contexts {
     \HH\Capabilities\IO &
     \HH\Capabilities\WriteProperty
   );
-  // type policied_of_shallow<T> = (\HH\Capabilities\ImplicitPolicyOfShallow<T> & policied_of<T>);
-  type policied_of_shallow<T> = (
-    \HH\Capabilities\ImplicitPolicyOfShallow<T> &
-    \HH\Capabilities\ReadGlobals &
-    \HH\Capabilities\IO &
-    \HH\Capabilities\WriteProperty
-  );
-  // type policied_of_local<T> = (\HH\Capabilities\ImplicitPolicyOfLocal<T> & policied_of_shallow<T>);
-  type policied_of_local<T> = (
-    \HH\Capabilities\ImplicitPolicyOfLocal<T> &
-    \HH\Capabilities\ReadGlobals &
-    \HH\Capabilities\IO &
-    \HH\Capabilities\WriteProperty
-  );
 
   type read_globals = \HH\Capabilities\ReadGlobals;
   type globals = \HH\Capabilities\AccessGlobals;
+
+  type codegen =
+    // maybe: ( \HH\Capabilities\ReadGlobals & ... )
+    \HH\Capabilities\WriteProperty
+  ;
+  type codegen_unsafe = codegen;
 
   type rx = (\HH\Capabilities\Rx & \HH\Capabilities\WriteProperty);
   // type rx_shallow = (\HH\Capabilities\RxShallow & rx);

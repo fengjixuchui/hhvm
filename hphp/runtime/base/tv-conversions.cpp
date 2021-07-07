@@ -116,7 +116,6 @@ enable_if_lval_t<T, void> tvCastToBooleanInPlace(T tv) {
         continue;
 
       case KindOfClsMeth:
-        tvDecRefClsMeth(tv);
         b = true;
         continue;
 
@@ -225,7 +224,6 @@ enable_if_lval_t<T, void> tvCastToDoubleInPlace(T tv) {
         }
         raiseClsMethConvertWarningHelper("double");
         d = 1.0;
-        tvDecRefClsMeth(tv);
         continue;
 
       case KindOfRClsMeth:
@@ -317,7 +315,6 @@ enable_if_lval_t<T, void> tvCastToInt64InPlace(T tv) {
         }
         raiseClsMethConvertWarningHelper("int");
         i = 1;
-        tvDecRefClsMeth(tv);
         continue;
 
       case KindOfRClsMeth:
@@ -486,9 +483,7 @@ enable_if_lval_t<T, void> tvCastToStringInPlace(T tv) {
     }
 
     case KindOfClsMeth:
-      SystemLib::throwInvalidOperationExceptionObject(
-        "clsmeth to string conversion"
-      );
+      throwInvalidClsMethToType("string");
 
     case KindOfRClsMeth:
       raise_convert_rcls_meth_to_type("string");
@@ -589,9 +584,7 @@ StringData* tvCastToStringData(
     }
 
     case KindOfClsMeth:
-      SystemLib::throwInvalidOperationExceptionObject(
-        "clsmeth to string conversion"
-      );
+      throwInvalidClsMethToType("string");
 
     case KindOfRClsMeth:
       raise_convert_rcls_meth_to_type("string");
@@ -742,11 +735,10 @@ enable_if_lval_t<T, void> tvCastToArrayInPlace(T tv) {
           throwInvalidClsMethToType("array");
         }
         raiseClsMethConvertWarningHelper("array");
-        a = make_map_array(
-          0, val(tv).pclsmeth->getClsStr(),
-          1, val(tv).pclsmeth->getFuncStr()
+        a = make_dict_array(
+            0, val(tv).pclsmeth->getClsStr(),
+            1, val(tv).pclsmeth->getFuncStr()
         ).detach();
-        tvDecRefClsMeth(tv);
         continue;
       }
 
@@ -847,13 +839,14 @@ enable_if_lval_t<T, void> tvCastToVecInPlace(T tv) {
 
       case KindOfClsMeth: {
         if (!RO::EvalIsCompatibleClsMethType) {
-          throwInvalidClsMethToType("vec");
+          SystemLib::throwInvalidOperationExceptionObject(
+            "ClsMeth to vec conversion"
+          );
         }
         raiseClsMethConvertWarningHelper("vec");
         a = make_vec_array(
           val(tv).pclsmeth->getClsStr(), val(tv).pclsmeth->getFuncStr()
         ).detach();
-        tvDecRefClsMeth(tv);
         continue;
       }
 
@@ -951,13 +944,14 @@ enable_if_lval_t<T, void> tvCastToDictInPlace(T tv) {
 
       case KindOfClsMeth: {
         if (!RO::EvalIsCompatibleClsMethType) {
-          throwInvalidClsMethToType("dict");
+          SystemLib::throwInvalidOperationExceptionObject(
+            "ClsMeth to dict conversion"
+          );
         }
         raiseClsMethConvertWarningHelper("dict");
         a = make_dict_array(
           0, val(tv).pclsmeth->getClsStr(),
           1, val(tv).pclsmeth->getFuncStr()).detach();
-        tvDecRefClsMeth(tv);
         continue;
       }
 
@@ -1055,14 +1049,15 @@ enable_if_lval_t<T, void> tvCastToKeysetInPlace(T tv) {
 
       case KindOfClsMeth: {
         if (!RO::EvalIsCompatibleClsMethType) {
-          throwInvalidClsMethToType("keyset");
+          SystemLib::throwInvalidOperationExceptionObject(
+            "ClsMeth to keyset conversion"
+          );
         }
         raiseClsMethConvertWarningHelper("keyset");
         a = make_keyset_array(
           const_cast<StringData*>(val(tv).pclsmeth->getCls()->name()),
           const_cast<StringData*>(val(tv).pclsmeth->getFunc()->name())
         ).detach();
-        tvDecRefClsMeth(tv);
         continue;
       }
 
@@ -1118,7 +1113,7 @@ ObjectData* tvCastToObjectData(TypedValue tv) {
         throwInvalidClsMethToType("object");
       }
       raiseClsMethConvertWarningHelper("object");
-      auto const arr = make_darray(0, val(tv).pclsmeth->getClsStr(),
+      auto const arr = make_dict_array(0, val(tv).pclsmeth->getClsStr(),
                                    1, val(tv).pclsmeth->getFuncStr());
       return ObjectData::FromArray(arr.get()).detach();
     }
@@ -1153,9 +1148,6 @@ enable_if_lval_t<T, void> tvCastToResourceInPlace(T tv) {
       case KindOfRClsMeth:
         tvDecRefCountable(tv);
         continue;
-      case KindOfClsMeth:
-        tvDecRefClsMeth(tv);
-        continue;
       case KindOfResource:
         // no op, return
         return;
@@ -1170,7 +1162,7 @@ enable_if_lval_t<T, void> tvCastToResourceInPlace(T tv) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-char const *conv_notice_level_names[] = { "None", "Log", "Throw" };
+char const *conv_notice_level_names[] = { "None", "Log", "Throw", "Change" };
 
 const char* convOpToName(ConvNoticeLevel level) {
   return conv_notice_level_names[
@@ -1194,29 +1186,54 @@ void handleConvNoticeLevel(
     folly::sformat("Implicit {} to {} conversion for {}", from, to, reason));
 }
 
-void handleConvNoticeForCmp(const char* lhs, const char* rhs) {
-  const auto level =
-    flagToConvNoticeLevel(RuntimeOption::EvalNoticeOnCoerceForCmp);
-  if (LIKELY(level == ConvNoticeLevel::None)) return;
-  if (strcmp(lhs, rhs) > 0) std::swap(lhs, rhs);
-  handleConvNoticeLevelImpl(
-    level,
-    folly::sformat("Comparing {} and {} using a relational operator", lhs, rhs));
+namespace {
+void handleConvNoticeForCmpOrEq(
+  int runtime_option,
+  const char* const format,
+  const char* lhs,
+  const char* rhs);
 }
 
 void handleConvNoticeForCmp(TypedValue lhs, TypedValue rhs) {
   handleConvNoticeForCmp(
-    describe_actual_type(&lhs).c_str(),
-    describe_actual_type(&rhs).c_str());
+    describe_actual_type(&lhs).c_str(), describe_actual_type(&rhs).c_str());
+}
+void handleConvNoticeForCmp(const char* lhs, const char* rhs) {
+  handleConvNoticeForCmpOrEq(
+    RuntimeOption::EvalNoticeOnCoerceForCmp, lhs, rhs, "a relational operator");
+}
+
+void handleConvNoticeForEq(TypedValue lhs, TypedValue rhs) {
+  handleConvNoticeForEq(
+    describe_actual_type(&lhs).c_str(), describe_actual_type(&rhs).c_str());
+}
+void handleConvNoticeForEq(const char* lhs, const char* rhs) {
+  handleConvNoticeForCmpOrEq(
+    RuntimeOption::EvalNoticeOnCoerceForEq, lhs, rhs, "equality");
 }
 
 namespace {
+
+void handleConvNoticeForCmpOrEq(
+  int runtime_option,
+  const char* lhs,
+  const char* rhs,
+  const char* const with) {
+  const auto level = flagToConvNoticeLevel(runtime_option);
+  if (LIKELY(level == ConvNoticeLevel::None)) return;
+  if (strcmp(lhs, rhs) > 0) std::swap(lhs, rhs);
+  handleConvNoticeLevelImpl(
+    level, folly::sformat("Comparing {} and {} using {}", lhs, rhs, with));
+}
+
 void handleConvNoticeLevelImpl(ConvNoticeLevel level, const std::string& str) {
   if (level == ConvNoticeLevel::Throw) {
     SystemLib::throwInvalidOperationExceptionObject(str);
   } else if (level == ConvNoticeLevel::Log) {
     raise_notice(str);
   }
+  // we should never be getting here if conv level is change
+  always_assert(level != ConvNoticeLevel::Change);
 }
 }
 

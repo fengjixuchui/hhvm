@@ -75,10 +75,10 @@ let log_if_diag_subscribe_changed
     Hh_logger.log "Diag_subscribe: %s - %s!" title disposition
 
 let print_defs prefix defs =
-  List.iter defs (fun (_, fname) -> Printf.printf "  %s %s\n" prefix fname)
+  List.iter defs ~f:(fun (_, fname) -> Printf.printf "  %s %s\n" prefix fname)
 
 let print_fast_pos fast_pos =
-  SMap.iter fast_pos (fun x (funs, classes) ->
+  SMap.iter fast_pos ~f:(fun x (funs, classes) ->
       Printf.printf "File: %s\n" x;
       print_defs "Fun" funs;
       print_defs "Class" classes);
@@ -87,10 +87,10 @@ let print_fast_pos fast_pos =
   ()
 
 let print_fast fast =
-  SMap.iter fast (fun x (funs, classes) ->
+  SMap.iter fast ~f:(fun x (funs, classes) ->
       Printf.printf "File: %s\n" x;
-      SSet.iter funs (Printf.printf "  Fun %s\n");
-      SSet.iter classes (Printf.printf "  Class %s\n"));
+      SSet.iter funs ~f:(Printf.printf "  Fun %s\n");
+      SSet.iter classes ~f:(Printf.printf "  Class %s\n"));
   Printf.printf "\n";
   Out_channel.flush stdout;
   ()
@@ -183,7 +183,7 @@ let add_old_decls old_naming_table fast =
 (*****************************************************************************)
 
 let remove_decls env fast_parsed =
-  Relative_path.Map.iter fast_parsed (fun fn _ ->
+  Relative_path.Map.iter fast_parsed ~f:(fun fn _ ->
       match Naming_table.get_file_info env.naming_table fn with
       | None -> ()
       | Some
@@ -229,16 +229,16 @@ let get_files_with_stale_errors
         (* Looking at global files *)
         Errors.fold_errors errors ~phase ~init ~f:(fun source error acc ->
             f source error acc)
-    | Some sources ->
+    | Some files ->
       fun phase init f ->
-        (* Looking only at subset of error sources *)
-        Relative_path.Set.fold sources ~init ~f:(fun source acc ->
+        (* Looking only at subset of files *)
+        Relative_path.Set.fold files ~init ~f:(fun file acc ->
             Errors.fold_errors_in
               errors
-              ~source
+              ~file
               ~phase
               ~init:acc
-              ~f:(fun error acc -> f source error acc))
+              ~f:(fun error acc -> f file error acc))
   in
   List.fold phases ~init:Relative_path.Set.empty ~f:(fun acc phase ->
       fold phase acc (fun source error acc ->
@@ -315,7 +315,7 @@ let parsing genv env to_check ~stop_at_errors profiling =
 
   SearchServiceRunner.update_fileinfo_map
     (Naming_table.create fast)
-    SearchUtils.TypeChecker;
+    ~source:SearchUtils.TypeChecker;
 
   (* During integration tests, we want to pretend that search is run
     synchronously *)
@@ -364,7 +364,9 @@ let update_naming_table env fast_parsed profiling =
     @@ fun () ->
     let ctx = Provider_utils.ctx_from_server_env env in
     let deps_mode = Provider_context.get_deps_mode ctx in
-    Relative_path.Map.iter fast_parsed (Typing_deps.Files.update_file deps_mode);
+    Relative_path.Map.iter
+      fast_parsed
+      ~f:(Typing_deps.Files.update_file deps_mode);
     Naming_table.update_many env.naming_table fast_parsed
   in
   naming_table
@@ -390,7 +392,7 @@ let declare_names env fast_parsed =
           | None -> acc
           (* this should not happen - failed_naming should be
                          a subset of keys in naming_table *)
-          | Some v -> Relative_path.Map.add acc k v))
+          | Some v -> Relative_path.Map.add acc ~key:k ~data:v))
   in
   remove_decls env fast_parsed;
   let ctx = Provider_utils.ctx_from_server_env env in
@@ -613,13 +615,13 @@ end
 module LazyCheckKind : CheckKindType = struct
   let get_files_to_parse env = (env.ide_needs_parsing, true)
 
-  let ide_error_sources env =
+  let ide_diagnosed_files env =
     match env.diag_subscribe with
-    | Some ds -> Diagnostic_subscription.error_sources ds
+    | Some ds -> Diagnostic_subscription.diagnosed_files ds
     | None -> Relative_path.Set.empty
 
   let is_ide_file env x =
-    Relative_path.Set.mem (ide_error_sources env) x
+    Relative_path.Set.mem (ide_diagnosed_files env) x
     || Relative_path.Set.mem env.editor_open_files x
 
   let get_defs_to_redecl ~reparsed ~env ~ctx =
@@ -627,7 +629,7 @@ module LazyCheckKind : CheckKindType = struct
      * to files that are relevant to IDE *)
     get_files_with_stale_errors
       ~reparsed
-      ~filter:(Some (ide_error_sources env))
+      ~filter:(Some (ide_diagnosed_files env))
       ~phases:[Errors.Decl]
       ~errors:env.errorl
       ~ctx
@@ -657,7 +659,7 @@ module LazyCheckKind : CheckKindType = struct
     if Typing_deps.DepSet.cardinal to_redecl_phase2_deps > 1000 then
       (* inspecting tons of dependencies would take more time that just
       * rechecking all relevant files. *)
-      Relative_path.Set.union env.editor_open_files (ide_error_sources env)
+      Relative_path.Set.union env.editor_open_files (ide_diagnosed_files env)
     else
       Typing_deps.DepSet.fold
         to_redecl_phase2_deps
@@ -690,7 +692,7 @@ module LazyCheckKind : CheckKindType = struct
       get_files_with_stale_errors
         ~ctx
         ~reparsed
-        ~filter:(Some (ide_error_sources env))
+        ~filter:(Some (ide_diagnosed_files env))
         ~phases:[Errors.Decl; Errors.Typing]
         ~errors:env.errorl
     in
@@ -799,7 +801,12 @@ functor
             ~f:
               begin
                 fun acc phase ->
-                Errors.(incremental_update_set acc empty path phase)
+                Errors.(
+                  incremental_update_set
+                    ~old:acc
+                    ~new_:empty
+                    ~rechecked:path
+                    phase)
               end)
 
     type parsing_result = {
@@ -820,7 +827,12 @@ functor
       in
       let errors = env.errorl in
       let errors =
-        Errors.(incremental_update_set errors errorl files_to_parse Parsing)
+        Errors.(
+          incremental_update_set
+            ~old:errors
+            ~new_:errorl
+            ~rechecked:files_to_parse
+            Parsing)
       in
       let errors = clear_failed_parsing errors failed_parsing in
       (env, { parse_errors = errors; failed_parsing; fast_parsed })
@@ -845,7 +857,12 @@ functor
         @@ fun () ->
         let (errorl', failed_naming, fast) = declare_names env fast_parsed in
         let errors =
-          Errors.(incremental_update_map errors errorl' fast Naming)
+          Errors.(
+            incremental_update_map
+              ~old:errors
+              ~new_:errorl'
+              ~rechecked:fast
+              Naming)
         in
         (* failed_naming can be a superset of keys in fast - see comment in
          * Naming_global.ndecl_file *)
@@ -957,7 +974,11 @@ functor
       in
       let errors =
         Errors.(
-          incremental_update_map errors errorl' fast_redecl_phase2_now Decl)
+          incremental_update_map
+            ~old:errors
+            ~new_:errorl'
+            ~rechecked:fast_redecl_phase2_now
+            Decl)
       in
       let needs_phase2_redecl =
         diff_set_and_map_keys
@@ -971,9 +992,9 @@ functor
         Relative_path.Set.union
           to_recheck2
           (CheckKind.get_to_recheck2_approximation
-             to_redecl_phase2_deps
-             env
-             ctx)
+             ~to_redecl_phase2_deps
+             ~env
+             ~ctx)
       in
       {
         errors_after_phase2 = errors;
@@ -1062,35 +1083,47 @@ functor
       let longlived_workers =
         genv.local_config.ServerLocalConfig.longlived_workers
       in
-      let fnl = Relative_path.Set.elements files_to_check in
-      let (errorl', delegate_state, telemetry, env', cancelled) =
+      let diag_subscribe_before = env.diag_subscribe in
+
+      let (errorl', telemetry, env, cancelled) =
         let ctx = Provider_utils.ctx_from_server_env env in
         CgroupProfiler.collect_cgroup_stats ~profiling ~stage:"type check"
         @@ fun () ->
-        Typing_check_service.go_with_interrupt
-          ctx
-          genv.workers
-          env.typing_service.delegate_state
-          telemetry
-          dynamic_view_files
-          fnl
-          ~interrupt
-          ~memory_cap
-          ~longlived_workers
-          ~remote_execution:env.ServerEnv.remote_execution
-          ~check_info:(get_check_info genv env)
-          ~profiling
+        let ( errorl,
+              delegate_state,
+              telemetry,
+              env,
+              diagnostic_pusher,
+              cancelled ) =
+          Typing_check_service.go_with_interrupt
+            ~diagnostic_pusher:env.ServerEnv.diagnostic_pusher
+            ctx
+            genv.workers
+            env.typing_service.delegate_state
+            telemetry
+            dynamic_view_files
+            (files_to_check |> Relative_path.Set.elements)
+            ~interrupt
+            ~memory_cap
+            ~longlived_workers
+            ~remote_execution:env.ServerEnv.remote_execution
+            ~check_info:(get_check_info genv env)
+            ~profiling
+        in
+        let env =
+          {
+            env with
+            diagnostic_pusher =
+              Option.value diagnostic_pusher ~default:env.diagnostic_pusher;
+            typing_service = { env.typing_service with delegate_state };
+          }
+        in
+        (errorl, telemetry, env, cancelled)
       in
       log_if_diag_subscribe_changed
         "type_checking.go_with_interrupt"
-        ~before:env.diag_subscribe
-        ~after:env'.diag_subscribe;
-      let env =
-        {
-          env' with
-          typing_service = { env'.typing_service with delegate_state };
-        }
-      in
+        ~before:diag_subscribe_before
+        ~after:env.diag_subscribe;
       (* Add new things that need to be rechecked *)
       let needs_recheck =
         Relative_path.Set.union env.needs_recheck lazy_check_later
@@ -1115,7 +1148,12 @@ functor
           Relative_path.Set.empty
       in
       let errors =
-        Errors.(incremental_update_set errors errorl' files_to_check Typing)
+        Errors.(
+          incremental_update_set
+            ~old:errors
+            ~new_:errorl'
+            ~rechecked:files_to_check
+            Typing)
       in
       let (env, _future) : ServerEnv.env * string Future.t option =
         ServerRecheckCapture.update_after_recheck
@@ -1136,8 +1174,6 @@ functor
             Diagnostic_subscription.update
               x
               ~priority_files:env.editor_open_files
-              ~reparsed:files_to_parse
-              ~rechecked:files_to_check
               ~global_errors:errors
               ~full_check_done)
       in
@@ -1391,10 +1427,10 @@ functor
         else
           CheckKind.get_defs_to_redecl_phase2
             genv
-            fast
-            naming_table
-            to_redecl_phase2
-            env
+            ~decl_defs:fast
+            ~naming_table
+            ~to_redecl_phase2
+            ~env
       in
       let count = Relative_path.Map.cardinal fast_redecl_phase2_now in
       let telemetry =
@@ -1593,7 +1629,7 @@ functor
       let files_to_check =
         remove_failed_parsing_set
           files_to_check
-          stop_at_errors
+          ~stop_at_errors
           env
           failed_parsing
       in
@@ -1676,6 +1712,11 @@ functor
         |> Telemetry.object_
              ~key:"hash"
              ~value:(ServerUtils.log_and_get_sharedmem_load_telemetry ())
+        |> Telemetry.int_opt
+             ~key:"depgraph_delta_num_edges"
+             ~value:
+               (Typing_deps.Telemetry.depgraph_delta_num_edges
+                  (Provider_context.get_deps_mode ctx))
         |> Telemetry.int_ ~key:"typecheck_heap_size" ~value:heap_size
         |> Telemetry.int_
              ~key:"typecheck_to_recheck_count"
@@ -1724,11 +1765,11 @@ functor
       (* WRAP-UP ***************************************************************)
       let env =
         CheckKind.get_env_after_typing
-          env
-          errors
-          needs_phase2_redecl
-          needs_recheck
-          diag_subscribe
+          ~old_env:env
+          ~errorl:errors
+          ~needs_phase2_redecl
+          ~needs_recheck
+          ~diag_subscribe
       in
 
       (* STATS LOGGING *********************************************************)
@@ -1808,14 +1849,12 @@ functor
   end
 
 (** This function is used to get the variant constructor names of
-    the check kind type. The names are used in at least 4 places:
+    the check kind type. The names are used in a few places:
     - the `type_check_unsafe` function below:
       - logs the names into the server log
       - uses HackEventLogger to log the names as the check_kind column value
       - lots of dashboards depend on it
     - serverMain writes it into telemetry
-    - HhMonitorInformant greps for it in the server log in order to set
-        HackEventLogger's is_lazy_incremental column to true/false
 *)
 let check_kind_to_string = function
   | Full_check -> "Full_check"
@@ -1878,15 +1917,13 @@ let type_check_unsafe genv env kind start_time profiling =
       |> Telemetry.object_ ~key:"core" ~value:core_telemetry
     in
     ( if is_full_check_done env.full_check_status then
-      let total = Errors.count env.ServerEnv.errorl in
       let (is_truncated, shown) =
         match env.ServerEnv.diag_subscribe with
-        | None -> (false, 0)
+        | None -> (None, 0)
         | Some ds -> Diagnostic_subscription.get_pushed_error_length ds
       in
-      let msg =
-        ServerCommandTypes.Done_global_typecheck { is_truncated; shown; total }
-      in
+      let total = Option.value is_truncated ~default:shown in
+      let msg = ServerCommandTypes.Done_global_typecheck { shown; total } in
       ServerBusyStatus.send env msg );
     let telemetry =
       telemetry

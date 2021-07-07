@@ -29,8 +29,6 @@
 #include "hphp/runtime/vm/jit/write-lease.h"
 #include "hphp/util/growable-vector.h"
 
-#include <folly/Optional.h>
-
 #include <memory>
 #include <string>
 #include <vector>
@@ -45,7 +43,7 @@ struct TransEnv;
 struct TransLoc;
 struct Vunit;
 
-using OptView = folly::Optional<CodeCache::View>;
+using OptView = Optional<CodeCache::View>;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -113,7 +111,7 @@ struct Translator {
   explicit Translator(SrcKey sk, TransKind kind = TransKind::Invalid);
   virtual ~Translator();
 
-  virtual folly::Optional<TranslationResult> getCached() = 0;
+  virtual Optional<TranslationResult> getCached() = 0;
   virtual void resetCached() = 0;
   virtual void setCachedForProcessFail() = 0;
   virtual void smashBackup() = 0;
@@ -121,19 +119,25 @@ struct Translator {
   // Returns a TCA for already translated code if found, this can be nullptr if
   // the desired behavior is to trigger use of non jited code.  If none is
   // returned the locks for translation were successfully acquired.
-  folly::Optional<TranslationResult> acquireLeaseAndRequisitePaperwork();
+  Optional<TranslationResult> acquireLeaseAndRequisitePaperwork();
   // Check on tc sizes and make sure we are looking to translate more
   // translations of the specified type.
   TranslationResult::Scope shouldTranslate(bool noSizeLimit = false);
   // Generate and emit machine code into the provided view (if given) otherwise
   // the default view.
-  void translate(folly::Optional<CodeCache::View> view = folly::none);
+  Optional<TranslationResult>
+  translate(Optional<CodeCache::View> view = std::nullopt);
 
   bool translateSuccess() const;
 
   // Relocate the generated machine code to its final location.  This may be a
   // no-op if it was initially emitted into the correct location.
-  void relocate(bool alignMain);
+  Optional<TranslationResult> relocate(bool alignMain);
+
+  // Bind the outgoing edges either directly to already existing translations,
+  // or to a service request stub requesting a translation.
+  Optional<TranslationResult> bindOutgoingEdges();
+
   // Publish the translation starts, ends etc. into the required metadata
   // structures.  This includes publishing them as debug info, but also caching
   // the translation start in a manner that would be detected in
@@ -141,7 +145,7 @@ struct Translator {
   // be released, and if the translation isn't properly recorded in the SrcKey
   // database (or other equivalent structure) we may end up with duplicate
   // translations.
-  TCA publish();
+  TranslationResult publish();
   void publishMetaInternal();
   void publishCodeInternal();
   TCA entry() const {
@@ -169,7 +173,7 @@ struct Translator {
   std::unique_ptr<Vunit> vunit;
 
 protected:
-  folly::Optional<LeaseHolder> m_lease{};
+  Optional<LeaseHolder> m_lease{};
 
   struct TransMeta {
     explicit TransMeta(CodeCache::View view)
@@ -195,7 +199,7 @@ protected:
   // until successful translation.  This metadata is the output of the
   // translation pipeline.  Publishing uses this info to write start addresses
   // and ranges to make the code executable.
-  folly::Optional<TransMeta> transMeta{};
+  Optional<TransMeta> transMeta{};
 
   virtual void computeKind() = 0;
   virtual Annotations* getAnnotations() = 0;
@@ -313,11 +317,10 @@ void freeProfCode();
 SrcRec* findSrcRec(SrcKey sk);
 
 /*
- * Create a SrcRec for sk with an sp offset of spOff. If checkLength
- * is true, then false will be returned if there's not enough space
- * for any stubs. Otherwise true will be returned.
+ * Create a SrcRec for sk with an sp offset of spOff if it doesn't exist and
+ * return it. If there's not enough TC space for any stubs, return nullptr.
  */
-bool createSrcRec(SrcKey sk, SBInvOffset spOff, bool checkLength = false);
+SrcRec* createSrcRec(SrcKey sk, SBInvOffset spOff);
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -326,7 +329,7 @@ bool createSrcRec(SrcKey sk, SBInvOffset spOff, bool checkLength = false);
  *
  * Must be held even if the current thread owns the global write lease.
  */
-void assertOwnsCodeLock(OptView v = folly::none);
+void assertOwnsCodeLock(OptView v = std::nullopt);
 
 /*
  * Assert ownership of the tc metadata by this thread.
@@ -414,11 +417,6 @@ void reclaimFunction(const Func* func);
  * replaceOldTranslations() on a SrcRec
  */
 void reclaimTranslations(GrowableVector<TransLoc>&& trans);
-
-/*
- * Free an ephemeral stub.
- */
-void freeTCStub(TCA stub);
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -533,23 +531,6 @@ int recordedFuncs();
  * smashed in the process of replaceOldTranslations()
  */
 void recordJump(TCA toSmash, SrcRec* sr);
-
-/*
- * Insert a jump to destSk at toSmash. If no top translation for destSk exists
- * no action is performed. On return, the value of smashed indicated whether a
- * new address was written into the TC.
- */
-TCA bindJmp(TCA toSmash, SrcKey destSk, bool& smashed);
-TCA bindJmpToStub(TCA toSmash, TCA oldTarget, TCA stub,
-                  SrcKey destSk, bool& smashed);
-
-/*
- * Insert the address for branches to destSk at toSmash. Upon return, the value
- * of smashed indicates whether an address was written into the TC.
- */
-TCA bindAddr(TCA toSmash, SrcKey destSk, bool& smashed);
-TCA bindAddrToStub(TCA toSmash, TCA oldTarget, TCA stub,
-                   SrcKey destSk, bool& smashed);
 
 /*
  * Bind a call to start at toSmash, where start is the prologue for callee, when

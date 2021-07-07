@@ -162,7 +162,7 @@ let print_errors_if_present (errors : Errors.error list) =
   if not (List.is_empty errors) then (
     let errors_output = Errors.convert_errors_to_string errors in
     Printf.printf "Errors:\n";
-    List.iter errors_output (fun err_output ->
+    List.iter errors_output ~f:(fun err_output ->
         Printf.printf "  %s\n" err_output)
   )
 
@@ -265,7 +265,6 @@ let parse_options () =
   let use_direct_decl_parser = ref false in
   let disable_enum_classes = ref false in
   let enable_enum_supertyping = ref false in
-  let hack_arr_dv_arrs = ref true in
   let interpret_soft_types_as_like_types = ref false in
   let enable_strict_string_concat_interp = ref false in
   let ignore_unsafe_cast = ref false in
@@ -278,6 +277,7 @@ let parse_options () =
   let root = ref None in
   let sharedmem_config = ref SharedMem.default_config in
   let print_position = ref true in
+  let enforce_sealed_subclasses = ref false in
   let options =
     [
       ( "--no-print-position",
@@ -641,9 +641,6 @@ let parse_options () =
       ( "--enable-enum-supertyping",
         Arg.Set enable_enum_supertyping,
         " Enable the enum supertyping extension." );
-      ( "--hack-arr-dv-arrs",
-        Arg.Set hack_arr_dv_arrs,
-        " Varray and darray become vec and dict." );
       ( "--interpret-soft-types-as-like-types",
         Arg.Set interpret_soft_types_as_like_types,
         " Types declared with <<__Soft>> (runtime logs but doesn't throw) become like types."
@@ -684,6 +681,9 @@ let parse_options () =
         Arg.Set strict_value_equality,
         " Emit an error when \"==\" or \"!=\" is used to compare values that are incompatible types."
       );
+      ( "--enable-sealed-subclasses",
+        Arg.Set enforce_sealed_subclasses,
+        " Require all __Sealed arguments to be subclasses" );
     ]
   in
 
@@ -741,7 +741,7 @@ let parse_options () =
       sharedmem_config :=
         ServerConfig.make_sharedmem_config
           config
-          (ServerArgs.default_options root)
+          (ServerArgs.default_options ~root)
           ServerLocalConfig.default;
       (* Path.make canonicalizes it, i.e. resolves symlinks *)
       Path.make root
@@ -834,7 +834,6 @@ let parse_options () =
       ~tco_use_direct_decl_parser:!use_direct_decl_parser
       ~po_enable_enum_classes:(not !disable_enum_classes)
       ~po_enable_enum_supertyping:!enable_enum_supertyping
-      ~po_hack_arr_dv_arrs:!hack_arr_dv_arrs
       ~po_interpret_soft_types_as_like_types:!interpret_soft_types_as_like_types
       ~tco_enable_strict_string_concat_interp:
         !enable_strict_string_concat_interp
@@ -846,6 +845,7 @@ let parse_options () =
       ~tco_require_extends_implements_ancestors:
         !require_extends_implements_ancestors
       ~tco_strict_value_equality:!strict_value_equality
+      ~tco_enforce_sealed_subclasses:!enforce_sealed_subclasses
       ()
   in
   Errors.allowed_fixme_codes_strict :=
@@ -957,9 +957,9 @@ let print_global_inference_env
     env ~step_name state_errors error_format max_errors =
   let print_header s =
     print_endline "";
-    print_endline (String.map s (const '='));
+    print_endline (String.map s ~f:(const '='));
     print_endline s;
-    print_endline (String.map s (const '='))
+    print_endline (String.map s ~f:(const '='))
   in
   print_header (Printf.sprintf "%sd environment" step_name);
   Typing_log.hh_show_full_env Pos.none env;
@@ -1014,7 +1014,7 @@ let global_inference_merge_and_solve
   print_global_inference_envs ctx ~verbosity gienvs;
   let gienv = merge_global_inference_envs_opt ctx gienvs in
   print_merged_global_inference_env ~verbosity gienv error_format max_errors;
-  let gienv = Option.map gienv solve_global_inference_env in
+  let gienv = Option.map gienv ~f:solve_global_inference_env in
   print_solved_global_inference_env ~verbosity gienv error_format max_errors;
   gienv
 
@@ -1054,6 +1054,8 @@ let create_nasts ctx files_info =
   in
   Relative_path.Map.mapi ~f:build_nast files_info
 
+(** This is an almost-pure function which returns what we get out of parsing.
+The only side-effect it has is on the global errors list. *)
 let parse_and_name ctx files_contents =
   let parsed_files =
     Relative_path.Map.mapi files_contents ~f:(fun fn contents ->
@@ -1096,23 +1098,37 @@ let parse_and_name ctx files_contents =
         end
       parsed_files
   in
-  Relative_path.Map.iter files_info (fun fn fileinfo ->
-      let (errors, _failed_naming_fns) =
-        Naming_global.ndecl_file_error_if_already_bound ctx fn fileinfo
-      in
-      Errors.merge_into_current errors);
   (parsed_files, files_info)
 
+(** This function is used for gathering naming and parsing errors,
+and the side-effect of updating the global reverse naming table (and
+picking up duplicate-name errors along the way), and for the side effect
+of updating the decl heap (and picking up decling errors along the way). *)
 let parse_name_and_decl ctx files_contents =
   Errors.do_ (fun () ->
       let (parsed_files, files_info) = parse_and_name ctx files_contents in
-      Relative_path.Map.iter parsed_files (fun fn _ ->
+      Relative_path.Map.iter files_info ~f:(fun fn fileinfo ->
+          let (errors, _failed_naming_fns) =
+            Naming_global.ndecl_file_error_if_already_bound ctx fn fileinfo
+          in
+          Errors.merge_into_current errors);
+      Relative_path.Map.iter parsed_files ~f:(fun fn _ ->
           Errors.run_in_context fn Errors.Decl (fun () ->
               Decl.make_env ~sh:SharedMem.Uses ctx fn));
 
       files_info)
 
-let parse_name_and_shallow_decl ctx filename file_contents :
+(** This function is used solely for its side-effect of putting decls into shared-mem *)
+let add_decls_to_heap ctx files_contents =
+  Errors.ignore_ (fun () ->
+      let (parsed_files, _files_info) = parse_and_name ctx files_contents in
+      Relative_path.Map.iter parsed_files ~f:(fun fn _ ->
+          Errors.run_in_context fn Errors.Decl (fun () ->
+              Decl.make_env ~sh:SharedMem.Uses ctx fn)));
+  ()
+
+(** This function doesn't have side-effects. Its sole job is to return shallow decls. *)
+let get_shallow_decls ctx filename file_contents :
     Shallow_decl_defs.shallow_class SMap.t =
   Errors.ignore_ (fun () ->
       let files_contents = Relative_path.Map.singleton filename file_contents in
@@ -1129,19 +1145,19 @@ let test_shallow_class_diff popt filename =
   let filename_after = Relative_path.to_absolute filename ^ ".after" in
   let contents1 = Sys_utils.cat (Relative_path.to_absolute filename) in
   let contents2 = Sys_utils.cat filename_after in
-  let decls1 = parse_name_and_shallow_decl popt filename contents1 in
-  let decls2 = parse_name_and_shallow_decl popt filename contents2 in
+  let decls1 = get_shallow_decls popt filename contents1 in
+  let decls2 = get_shallow_decls popt filename contents2 in
   let decls =
     SMap.merge (fun _ a b -> Some (a, b)) decls1 decls2 |> SMap.bindings
   in
   let diffs =
-    List.map decls (fun (cid, old_and_new) ->
+    List.map decls ~f:(fun (cid, old_and_new) ->
         ( Utils.strip_ns cid,
           match old_and_new with
           | (Some c1, Some c2) -> Shallow_class_diff.diff_class c1 c2
           | _ -> ClassDiff.Major_change ))
   in
-  List.iter diffs (fun (cid, diff) ->
+  List.iter diffs ~f:(fun (cid, diff) ->
       Format.printf "%s: %a@." cid ClassDiff.pp diff)
 
 let add_newline contents =
@@ -1162,15 +1178,18 @@ let add_newline contents =
   let after_header =
     if
       String.length contents > after_shebang + 2
-      && String.equal (String.sub contents after_shebang 2) "<?"
+      && String.equal (String.sub contents ~pos:after_shebang ~len:2) "<?"
     then
       String.index_from_exn contents after_shebang '\n' + 1
     else
       after_shebang
   in
-  String.sub contents 0 after_header
+  String.sub contents ~pos:0 ~len:after_header
   ^ "\n"
-  ^ String.sub contents after_header (String.length contents - after_header)
+  ^ String.sub
+      contents
+      ~pos:after_header
+      ~len:(String.length contents - after_header)
 
 (* Might raise {!SharedMem.Shared_mem_not_found} *)
 let get_decls defs =
@@ -1261,7 +1280,7 @@ let test_decl_compare ctx filenames builtins files_contents files_info =
     let get_classes path =
       match Relative_path.Map.find_opt files_info path with
       | None -> SSet.empty
-      | Some info -> SSet.of_list @@ List.map info.FileInfo.classes snd
+      | Some info -> SSet.of_list @@ List.map info.FileInfo.classes ~f:snd
     in
     (* We need to oldify, not remove, for ClassEltDiff to work *)
     Decl_redecl_service.oldify_type_decl
@@ -1274,12 +1293,12 @@ let test_decl_compare ctx filenames builtins files_contents files_info =
       ~collect_garbage:false;
 
     let files_contents = Relative_path.Map.map files_contents ~f:add_newline in
-    let (_, _) = parse_name_and_decl ctx files_contents in
+    add_decls_to_heap ctx files_contents;
     let (typedefs2, funs2, classes2) = get_decls defs in
     let deps_mode = Provider_context.get_deps_mode ctx in
-    List.iter2_exn typedefs1 typedefs2 compare_typedefs;
-    List.iter2_exn funs1 funs2 compare_funs;
-    List.iter2_exn classes1 classes2 (compare_classes deps_mode);
+    List.iter2_exn typedefs1 typedefs2 ~f:compare_typedefs;
+    List.iter2_exn funs1 funs2 ~f:compare_funs;
+    List.iter2_exn classes1 classes2 ~f:(compare_classes deps_mode);
     ()
 
 (* Returns a list of Tast defs, along with associated type environments. *)
@@ -1296,7 +1315,7 @@ let compute_tasts ctx files_info interesting_files :
       let nasts = create_nasts ctx files_info in
       (* Interesting files are usually the non hhi ones. *)
       let filter_non_interesting nasts =
-        Relative_path.Map.merge nasts interesting_files (fun _k nast x ->
+        Relative_path.Map.merge nasts interesting_files ~f:(fun _k nast x ->
             match (nast, x) with
             | (Some nast, Some _) -> Some nast
             | _ -> None)
@@ -1371,15 +1390,15 @@ let compute_tasts_expand_types ctx ~verbosity files_info interesting_files =
       let tasts =
         Relative_path.Map.map
           tasts
-          (merge_global_inference_env_in_tast gienv ctx)
+          ~f:(merge_global_inference_env_in_tast gienv ctx)
       in
       (tasts, Some gi_solved)
   in
-  let tasts = Relative_path.Map.map tasts (Tast_expand.expand_program ctx) in
+  let tasts = Relative_path.Map.map tasts ~f:(Tast_expand.expand_program ctx) in
   (errors, tasts, gi_solved)
 
 let print_nasts ~should_print_position nasts filenames =
-  List.iter filenames (fun filename ->
+  List.iter filenames ~f:(fun filename ->
       match Relative_path.Map.find_opt nasts filename with
       | None ->
         Printf.eprintf
@@ -1396,7 +1415,7 @@ let print_nasts ~should_print_position nasts filenames =
           Naming_ast_print.print_nast_without_position nast)
 
 let print_tasts ~should_print_position tasts ctx =
-  Relative_path.Map.iter tasts (fun _k (tast : Tast.program) ->
+  Relative_path.Map.iter tasts ~f:(fun _k (tast : Tast.program) ->
       if should_print_position then
         Typing_ast_print.print_tast ctx tast
       else
@@ -1542,7 +1561,7 @@ let handle_mode
     | [x] -> x
     | _ -> die "Only single file expected"
   in
-  let iter_over_files f : unit = List.iter filenames f in
+  let iter_over_files f : unit = List.iter filenames ~f in
   match mode with
   | Ifc (mode, lattice) ->
     (* Timing mode is same as check except we print out the time it takes to
@@ -1601,7 +1620,7 @@ let handle_mode
         Provider_utils.respect_but_quarantine_unsaved_changes ~ctx ~f:(fun () ->
             process_file filename))
   | Color ->
-    Relative_path.Map.iter files_info (fun fn fileinfo ->
+    Relative_path.Map.iter files_info ~f:(fun fn fileinfo ->
         if Relative_path.Map.mem builtins fn then
           ()
         else
@@ -1613,7 +1632,7 @@ let handle_mode
             failwith
               ("HH_FIXMEs not found for path " ^ Relative_path.to_absolute fn))
   | Coverage ->
-    Relative_path.Map.iter files_info (fun fn fileinfo ->
+    Relative_path.Map.iter files_info ~f:(fun fn fileinfo ->
         if Relative_path.Map.mem builtins fn then
           ()
         else
@@ -1677,7 +1696,7 @@ let handle_mode
     ) else
       Printf.printf "No lint errors\n"
   | Dump_deps ->
-    Relative_path.Map.iter files_info (fun fn fileinfo ->
+    Relative_path.Map.iter files_info ~f:(fun fn fileinfo ->
         ignore @@ Typing_check_utils.check_defs ctx fn fileinfo);
     if Hashtbl.length dbg_deps > 0 then dump_debug_deps dbg_deps
   | Dump_dep_hashes ->
@@ -1685,19 +1704,19 @@ let handle_mode
         let nasts = create_nasts ctx files_info in
         Relative_path.Map.iter nasts ~f:(fun _ nast -> dump_dep_hashes nast))
   | Dump_glean_deps ->
-    Relative_path.Map.iter files_info (fun fn fileinfo ->
+    Relative_path.Map.iter files_info ~f:(fun fn fileinfo ->
         ignore @@ Typing_check_utils.check_defs ctx fn fileinfo);
     dump_debug_glean_deps dbg_glean_deps
   | Dump_inheritance ->
     let open ServerCommandTypes.Method_jumps in
     let deps_mode = Provider_context.get_deps_mode ctx in
     let naming_table = Naming_table.create files_info in
-    Naming_table.iter naming_table (Typing_deps.Files.update_file deps_mode);
-    Naming_table.iter naming_table (fun fn fileinfo ->
+    Naming_table.iter naming_table ~f:(Typing_deps.Files.update_file deps_mode);
+    Naming_table.iter naming_table ~f:(fun fn fileinfo ->
         if Relative_path.Map.mem builtins fn then
           ()
         else (
-          List.iter fileinfo.FileInfo.classes (fun (_p, class_) ->
+          List.iter fileinfo.FileInfo.classes ~f:(fun (_p, class_) ->
               Printf.printf
                 "Ancestors of %s and their overridden methods:\n"
                 class_;
@@ -1716,7 +1735,7 @@ let handle_mode
                 ~find_children:false;
               Printf.printf "\n");
           Printf.printf "\n";
-          List.iter fileinfo.FileInfo.classes (fun (_p, class_) ->
+          List.iter fileinfo.FileInfo.classes ~f:(fun (_p, class_) ->
               Printf.printf
                 "Children of %s and the methods they override:\n"
                 class_;
@@ -1759,7 +1778,7 @@ let handle_mode
     in
     let result = ServerFindLocals.go ~ctx ~entry ~line ~char in
     let print pos = Printf.printf "%s\n" (Pos.string_no_file pos) in
-    List.iter result print
+    List.iter result ~f:print
   | Outline ->
     iter_over_files (fun filename ->
         let file = cat (Relative_path.to_absolute filename) in
@@ -1850,7 +1869,7 @@ let handle_mode
     let path = expect_single_file () in
     let deps_mode = Provider_context.get_deps_mode ctx in
     let naming_table = Naming_table.create files_info in
-    Naming_table.iter naming_table (Typing_deps.Files.update_file deps_mode);
+    Naming_table.iter naming_table ~f:(Typing_deps.Files.update_file deps_mode);
     let genv = ServerEnvBuild.default_genv in
     let init_id = Random_id.short_string () in
     (* TODO(hverr): Figure out 64-bit *)
@@ -1892,7 +1911,7 @@ let handle_mode
     let filename = expect_single_file () in
     let deps_mode = Provider_context.get_deps_mode ctx in
     let naming_table = Naming_table.create files_info in
-    Naming_table.iter naming_table (Typing_deps.Files.update_file deps_mode);
+    Naming_table.iter naming_table ~f:(Typing_deps.Files.update_file deps_mode);
     let genv = ServerEnvBuild.default_genv in
     let init_id = Random_id.short_string () in
     (* TODO(hverr): Figure out 64-bit mode *)
@@ -2063,10 +2082,10 @@ let handle_mode
       | None -> ()
       | Some cc ->
         let abstract =
-          if cc.Typing_defs.cc_abstract then
-            "abstract "
-          else
-            ""
+          Typing_defs.(
+            match cc.cc_abstract with
+            | CCAbstract _ -> "abstract "
+            | CCConcrete -> "")
         in
         let origin = cc.Typing_defs.cc_origin in
         let from =
@@ -2154,7 +2173,7 @@ let handle_mode
               let targs =
                 List.map
                   mro.Decl_defs.mro_type_args
-                  (Typing_print.full_strip_ns_decl env)
+                  ~f:(Typing_print.full_strip_ns_decl env)
               in
               let targs =
                 if List.is_empty targs then
@@ -2207,10 +2226,10 @@ let handle_mode
                     Printf.sprintf " (%s)" modifiers ))
             in
             let member_linearization =
-              Sequence.map lin_members display |> Sequence.to_list
+              Sequence.map lin_members ~f:display |> Sequence.to_list
             in
             let ancestor_linearization =
-              Sequence.map lin_ancestors display |> Sequence.to_list
+              Sequence.map lin_ancestors ~f:display |> Sequence.to_list
             in
             Printf.printf "Member Linearization %s:\n" classname;
             List.iter member_linearization ~f:(Printf.printf "  %s\n");
@@ -2232,7 +2251,7 @@ let handle_mode
     let print result =
       Printf.printf "%s\n" (HoverService.string_of_result result)
     in
-    List.iter results print
+    List.iter results ~f:print
 
 (*****************************************************************************)
 (* Main entry point *)
@@ -2355,7 +2374,7 @@ let decl_and_run_mode
       | None ->
         let set = HashSet.create () in
         HashSet.add set root;
-        Hashtbl.set dbg_deps obj set
+        Hashtbl.set dbg_deps ~key:obj ~data:set
     in
     Typing_deps.add_dependency_callback "get_debug_trace" get_debug_trace
   | _ -> ());

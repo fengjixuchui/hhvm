@@ -58,8 +58,6 @@ module GEnv = struct
     | Some pos -> (pos, name)
     | None -> file_disappeared_under_our_feet (pos, name)
 
-  let type_canon_name ctx name = Naming_provider.get_type_canon_name ctx name
-
   let type_pos ctx name =
     match Naming_provider.get_type_pos ctx name with
     | Some pos ->
@@ -76,8 +74,6 @@ module GEnv = struct
       let (p, _) = get_type_full_pos ctx (pos, name) in
       Some (p, kind)
     | None -> None
-
-  let fun_canon_name ctx name = Naming_provider.get_fun_canon_name ctx name
 
   let fun_pos ctx name =
     match Naming_provider.get_fun_pos ctx name with
@@ -102,26 +98,87 @@ module GEnv = struct
       let (p, _) = get_const_full_pos ctx (pos, name) in
       Some p
     | None -> None
-
-  let compare_pos ctx p q name =
-    FileInfo.(
-      match (p, q) with
-      | (Full p', Full q') -> Pos.compare p' q' = 0
-      | ((File (Fun, _) as p'), Full q')
-      | (Full q', (File (Fun, _) as p')) ->
-        let p' = fst (get_fun_full_pos ctx (p', name)) in
-        Pos.compare p' q' = 0
-      | ((File (Const, _) as p'), Full q')
-      | (Full q', (File (Const, _) as p')) ->
-        let p' = fst (get_const_full_pos ctx (p', name)) in
-        Pos.compare p' q' = 0
-      | ((File ((Class | Typedef | RecordDef), _) as p'), Full q')
-      | (Full q', (File ((Class | Typedef | RecordDef), _) as p')) ->
-        let p' = fst (get_type_full_pos ctx (p', name)) in
-        Pos.compare p' q' = 0
-      | (File (x, fn1), File (y, fn2)) ->
-        Relative_path.equal fn1 fn2 && equal_name_type x y)
 end
+
+(** Given name-and-position [id], compared to the [canonical_id] name-and-position,
+this judges whether we should report [id] as "already bound".
+
+This is surprising. Notionally you'd expect that the mere existence of
+a canonical_id means that we should report [id] as already-bound.
+But this function has some historical quirks:
+- The function was written to support [id] being a file-only
+  position. But in practice it's always a full position that comes
+  from parsing. If we encounter a file-only position, we log this
+  anomalous path.
+- The function was written so that if you declare [id], but it's
+  in the exact same file+position as [canonical_id], then you must
+  be declaring the same name and hence shouldn't report it as
+  already-bound. This path should never arise (since a file's
+  previous names all get removed before we decl that file);
+  we log this anomalous path.
+- From the way this function is invoked, [canonical_id] should
+  always be either in a different file (meaning that the user declared
+  a symbol in the currently-being-declared file which conflicts with another
+  file), or in the same file (meaning that the user declared two conflicting
+  symbols in the same file). The parameter [current_file_symbols_acc]
+  gathers all the symbol positions we've declared so far from the current file.
+  If we encounter a [canonical_id] that's in the same file but not already in
+  [current_file_symbols_acc], that's anomalous, and we log it.
+*)
+let should_report_duplicate
+    (ctx : Provider_context.t)
+    (current_file_symbols_acc : FileInfo.pos list)
+    ~(id : FileInfo.id)
+    ~(canonical_id : FileInfo.id) : bool =
+  let open FileInfo in
+  let (p, name) = id in
+  let (pc, canonical) = canonical_id in
+  (* helper, for the various paths below which want to log a bug *)
+  let bug ~(desc : string) : unit =
+    HackEventLogger.naming_invariant_violation_bug
+      ~desc
+      ~name
+      ~file:(FileInfo.get_pos_filename p)
+      ~canonical
+      ~canonical_file:(Some (FileInfo.get_pos_filename pc))
+  in
+  (* Detect anomaly where we're given a file-only [id] *)
+  begin
+    match p with
+    | Full _ -> ()
+    | File _ -> bug ~desc:"file_only_p"
+  end;
+  let is_same_pos =
+    match (pc, p) with
+    | (Full a, Full b) -> Pos.compare a b = 0
+    | ((File (Fun, _) as a), Full b)
+    | (Full b, (File (Fun, _) as a)) ->
+      let a = fst (GEnv.get_fun_full_pos ctx (a, canonical)) in
+      Pos.compare a b = 0
+    | ((File (Const, _) as a), Full b)
+    | (Full b, (File (Const, _) as a)) ->
+      let a = fst (GEnv.get_const_full_pos ctx (a, canonical)) in
+      Pos.compare a b = 0
+    | ((File ((Class | Typedef | RecordDef), _) as a), Full b)
+    | (Full b, (File ((Class | Typedef | RecordDef), _) as a)) ->
+      let a = fst (GEnv.get_type_full_pos ctx (a, canonical)) in
+      Pos.compare a b = 0
+    | (File (a, fna), File (b, fnb)) ->
+      Relative_path.equal fna fnb && equal_name_type a b
+  in
+  (* Detect anomaly if [id] and [canonical_id] are identical positions *)
+  if is_same_pos then bug ~desc:"same";
+  (* Detect anomaly where [canonical_id] is in the same file but not found in [current_file_symbols_acc] *)
+  if
+    (not is_same_pos)
+    && Relative_path.equal
+         (FileInfo.get_pos_filename pc)
+         (FileInfo.get_pos_filename p)
+    && not (List.mem current_file_symbols_acc pc ~equal:FileInfo.equal_pos)
+  then
+    bug ~desc:"same_file_not_acc";
+  (* Finally, should we report duplicates? Generally yes, except in that same anomalous case! *)
+  not is_same_pos
 
 (* The primitives to manipulate the naming environment *)
 module Env = struct
@@ -144,9 +201,9 @@ module Env = struct
       let backend = Provider_context.get_backend ctx in
       Naming_provider.add_fun backend name (FileInfo.File (FileInfo.Fun, fn))
 
-  let new_cid_skip_if_already_bound ctx fn (_p, name) cid_kind =
-    let mode =
-      match cid_kind with
+  let new_type_skip_if_already_bound ctx fn ~kind (_p, name) =
+    let name_type =
+      match kind with
       | Naming_types.TClass -> FileInfo.Class
       | Naming_types.TTypedef -> FileInfo.Typedef
       | Naming_types.TRecordDef -> FileInfo.RecordDef
@@ -157,69 +214,94 @@ module Env = struct
       let backend = Provider_context.get_backend ctx in
       (* We store redundant info in this case, but if the position is a *)
       (* Full position, we don't store the kind, so this is necessary *)
-      Naming_provider.add_type backend name (FileInfo.File (mode, fn)) cid_kind
-
-  let new_class_skip_if_already_bound ctx fn cid =
-    new_cid_skip_if_already_bound ctx fn cid Naming_types.TClass
-
-  let new_record_decl_skip_if_already_bound ctx fn cid =
-    new_cid_skip_if_already_bound ctx fn cid Naming_types.TRecordDef
-
-  let new_typedef_skip_if_already_bound ctx fn cid =
-    new_cid_skip_if_already_bound ctx fn cid Naming_types.TTypedef
+      Naming_provider.add_type backend name (FileInfo.File (name_type, fn)) kind
 
   let new_global_const_skip_if_already_bound ctx fn (_p, name) =
     let backend = Provider_context.get_backend ctx in
     Naming_provider.add_const backend name (FileInfo.File (FileInfo.Const, fn))
 
-  let new_fun_error_if_already_bound ctx (p, name) =
+  let new_fun_error_if_already_bound
+      (ctx : Provider_context.t)
+      (current_file_symbols_acc : FileInfo.pos list)
+      (id : FileInfo.id) : FileInfo.pos list =
+    let (p, name) = id in
     match Naming_provider.get_fun_canon_name ctx name with
     | Some canonical ->
-      let p' = Option.value_exn (Naming_provider.get_fun_pos ctx canonical) in
-      if not @@ GEnv.compare_pos ctx p' p canonical then
-        let (p, name) = GEnv.get_fun_full_pos ctx (p, name) in
-        let (p', canonical) = GEnv.get_fun_full_pos ctx (p', canonical) in
-        Errors.error_name_already_bound name canonical p p'
+      let pc = Option.value_exn (Naming_provider.get_fun_pos ctx canonical) in
+      begin
+        if
+        should_report_duplicate
+          ctx
+          current_file_symbols_acc
+          ~id
+          ~canonical_id:(pc, canonical)
+      then
+          let (p, name) = GEnv.get_fun_full_pos ctx (p, name) in
+          let (pc, canonical) = GEnv.get_fun_full_pos ctx (pc, canonical) in
+          Errors.error_name_already_bound name canonical p pc
+      end;
+      current_file_symbols_acc
     | None ->
       let backend = Provider_context.get_backend ctx in
-      Naming_provider.add_fun backend name p
+      Naming_provider.add_fun backend name p;
+      p :: current_file_symbols_acc
 
-  let new_cid_error_if_already_bound ctx cid_kind (p, name) =
-    if not (check_type_not_typehint ctx (p, name)) then
-      ()
+  let new_type_error_if_already_bound
+      (ctx : Provider_context.t)
+      ~(kind : Naming_types.kind_of_type)
+      (current_file_symbols_acc : FileInfo.pos list)
+      (id : FileInfo.id) : FileInfo.pos list =
+    if not (check_type_not_typehint ctx id) then
+      current_file_symbols_acc
     else
+      let (p, name) = id in
       match Naming_provider.get_type_canon_name ctx name with
       | Some canonical ->
-        let p' =
+        let pc =
           Option.value_exn (Naming_provider.get_type_pos ctx canonical)
         in
-        if not @@ GEnv.compare_pos ctx p' p canonical then
-          let (p, name) = GEnv.get_type_full_pos ctx (p, name) in
-          let (p', canonical) = GEnv.get_type_full_pos ctx (p', canonical) in
-          Errors.error_name_already_bound name canonical p p'
+        begin
+          if
+          should_report_duplicate
+            ctx
+            current_file_symbols_acc
+            ~id
+            ~canonical_id:(pc, canonical)
+        then
+            let (p, name) = GEnv.get_type_full_pos ctx (p, name) in
+            let (pc, canonical) = GEnv.get_type_full_pos ctx (pc, canonical) in
+            Errors.error_name_already_bound name canonical p pc
+        end;
+        current_file_symbols_acc
       | None ->
         let backend = Provider_context.get_backend ctx in
-        Naming_provider.add_type backend name p cid_kind
+        Naming_provider.add_type backend name p kind;
+        p :: current_file_symbols_acc
 
-  let new_class_error_if_already_bound ctx =
-    new_cid_error_if_already_bound ctx Naming_types.TClass
-
-  let new_record_decl_error_if_already_bound ctx =
-    new_cid_error_if_already_bound ctx Naming_types.TRecordDef
-
-  let new_typedef_error_if_already_bound ctx =
-    new_cid_error_if_already_bound ctx Naming_types.TTypedef
-
-  let new_global_const_error_if_already_bound ctx (p, x) =
-    match Naming_provider.get_const_pos ctx x with
-    | Some p' ->
-      if not @@ GEnv.compare_pos ctx p' p x then
-        let (p, x) = GEnv.get_const_full_pos ctx (p, x) in
-        let (p', x) = GEnv.get_const_full_pos ctx (p', x) in
-        Errors.error_name_already_bound x x p p'
+  let new_global_const_error_if_already_bound
+      (ctx : Provider_context.t)
+      (current_file_symbols_acc : FileInfo.pos list)
+      (id : FileInfo.id) : FileInfo.pos list =
+    let (p, name) = id in
+    match Naming_provider.get_const_pos ctx name with
+    | Some pc ->
+      begin
+        if
+        should_report_duplicate
+          ctx
+          current_file_symbols_acc
+          ~id
+          ~canonical_id:(pc, name)
+      then
+          let (p, name) = GEnv.get_const_full_pos ctx (p, name) in
+          let (pc, name) = GEnv.get_const_full_pos ctx (pc, name) in
+          Errors.error_name_already_bound name name p pc
+      end;
+      current_file_symbols_acc
     | None ->
       let backend = Provider_context.get_backend ctx in
-      Naming_provider.add_const backend x p
+      Naming_provider.add_const backend name p;
+      p :: current_file_symbols_acc
 end
 
 (*****************************************************************************)
@@ -235,32 +317,55 @@ let remove_decls ~backend ~funs ~classes ~record_defs ~typedefs ~consts =
 (*****************************************************************************)
 
 let make_env_error_if_already_bound ctx fileinfo =
-  List.iter fileinfo.FileInfo.funs (Env.new_fun_error_if_already_bound ctx);
-  List.iter fileinfo.FileInfo.classes (Env.new_class_error_if_already_bound ctx);
-  List.iter
-    fileinfo.FileInfo.record_defs
-    (Env.new_record_decl_error_if_already_bound ctx);
-  List.iter
-    fileinfo.FileInfo.typedefs
-    (Env.new_typedef_error_if_already_bound ctx);
-  List.iter
-    fileinfo.FileInfo.consts
-    (Env.new_global_const_error_if_already_bound ctx)
+  (* funs *)
+  let (_ : FileInfo.pos list) =
+    List.fold
+      fileinfo.FileInfo.funs
+      ~init:[]
+      ~f:(Env.new_fun_error_if_already_bound ctx)
+  in
+  (* types *)
+  let current_file_symbols_acc =
+    List.fold
+      fileinfo.FileInfo.classes
+      ~init:[]
+      ~f:(Env.new_type_error_if_already_bound ctx ~kind:Naming_types.TClass)
+  in
+  let current_file_symbols_acc =
+    List.fold
+      fileinfo.FileInfo.record_defs
+      ~init:current_file_symbols_acc
+      ~f:(Env.new_type_error_if_already_bound ctx ~kind:Naming_types.TRecordDef)
+  in
+  let (_ : FileInfo.pos list) =
+    List.fold
+      fileinfo.FileInfo.typedefs
+      ~init:current_file_symbols_acc
+      ~f:(Env.new_type_error_if_already_bound ctx ~kind:Naming_types.TTypedef)
+  in
+  (* consts *)
+  let (_ : FileInfo.pos list) =
+    List.fold
+      fileinfo.FileInfo.consts
+      ~init:[]
+      ~f:(Env.new_global_const_error_if_already_bound ctx)
+  in
+  ()
 
 let make_env_skip_if_already_bound ctx fn fileinfo =
-  List.iter fileinfo.FileInfo.funs (Env.new_fun_skip_if_already_bound ctx fn);
+  List.iter fileinfo.FileInfo.funs ~f:(Env.new_fun_skip_if_already_bound ctx fn);
   List.iter
     fileinfo.FileInfo.classes
-    (Env.new_class_skip_if_already_bound ctx fn);
+    ~f:(Env.new_type_skip_if_already_bound ctx fn ~kind:Naming_types.TClass);
   List.iter
     fileinfo.FileInfo.record_defs
-    (Env.new_record_decl_skip_if_already_bound ctx fn);
+    ~f:(Env.new_type_skip_if_already_bound ctx fn ~kind:Naming_types.TRecordDef);
   List.iter
     fileinfo.FileInfo.typedefs
-    (Env.new_typedef_skip_if_already_bound ctx fn);
+    ~f:(Env.new_type_skip_if_already_bound ctx fn ~kind:Naming_types.TTypedef);
   List.iter
     fileinfo.FileInfo.consts
-    (Env.new_global_const_skip_if_already_bound ctx fn);
+    ~f:(Env.new_global_const_skip_if_already_bound ctx fn);
   ()
 
 (*****************************************************************************)
@@ -328,10 +433,12 @@ let ndecl_file_error_if_already_bound ctx fn fileinfo =
      * were actually duplicates?
      *)
     let type_canon_pos name =
-      GEnv.type_canon_name ctx name |> Option.bind ~f:(GEnv.type_pos ctx)
+      Naming_provider.get_type_canon_name ctx name
+      |> Option.bind ~f:(GEnv.type_pos ctx)
     in
     let fun_canon_pos name =
-      GEnv.fun_canon_name ctx name |> Option.bind ~f:(GEnv.fun_pos ctx)
+      Naming_provider.get_fun_canon_name ctx name
+      |> Option.bind ~f:(GEnv.fun_pos ctx)
     in
 
     let failed = Relative_path.Set.singleton fn in

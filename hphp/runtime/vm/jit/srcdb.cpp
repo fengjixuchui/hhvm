@@ -52,7 +52,21 @@ void IncomingBranch::patch(TCA dest) {
       *addr = dest;
       break;
     }
+    case Tag::LDADDR: {
+      smashMovq(toSmash(), (uint64_t)dest);
+      break;
+    }
   }
+}
+
+bool IncomingBranch::optimize() {
+  switch (type()) {
+    case Tag::JMP: return optimizeSmashedJmp(toSmash());
+    case Tag::JCC: return optimizeSmashedJcc(toSmash());
+    case Tag::ADDR: return false;
+    case Tag::LDADDR: return false;
+  }
+  always_assert(false);
 }
 
 TCA IncomingBranch::target() const {
@@ -65,8 +79,24 @@ TCA IncomingBranch::target() const {
 
     case Tag::ADDR:
       return *reinterpret_cast<TCA*>(toSmash());
+
+    case Tag::LDADDR:
+      return reinterpret_cast<TCA>(smashableMovqImm(toSmash()));
   }
   always_assert(false);
+}
+
+std::string IncomingBranch::show() const {
+  auto const typeStr = [&] {
+    switch (type()) {
+      case Tag::JMP: return "jmp";
+      case Tag::JCC: return "jcc";
+      case Tag::ADDR: return "addr";
+      case Tag::LDADDR: return "ldaddr";
+    }
+    always_assert(false);
+  }();
+  return folly::sformat("{}@{}", typeStr, toSmash());
 }
 
 TCA TransLoc::entry() const {
@@ -102,10 +132,11 @@ void TransLoc::setFrozenStart(TCA newStart) {
   m_frozenOff = tc::addrToOffset(newStart);
 }
 
-void SrcRec::chainFrom(IncomingBranch br) {
+void SrcRec::chainFrom(IncomingBranch br, TCA stub) {
   assertx(br.type() == IncomingBranch::Tag::ADDR ||
           tc::isValidCodeAddress(br.toSmash()));
-  TCA destAddr = getTopTranslation();
+  TCA destAddr = getTopTranslation() ? getTopTranslation() : stub;
+  assertx(destAddr);
   m_incomingBranches.push_back(br);
   TRACE(1, "SrcRec(%p)::chainFrom %p -> %p (type %d); %zd incoming branches\n",
         this,
@@ -208,16 +239,16 @@ void SrcRec::removeIncomingBranchesInRange(TCA start, TCA frontier) {
   m_incomingBranches.setEnd(end);
 }
 
-void SrcRec::replaceOldTranslations(TCA retransStub) {
+void SrcRec::replaceOldTranslations(TCA transStub) {
   auto srLock = writelock();
 
   // Everyone needs to give up on old translations; send them to the provided
-  // retranslate stub.
+  // translate stub.
   auto translations = std::move(m_translations);
   m_tailFallbackJumps.clear();
   m_topTranslation = nullptr;
   assertx(!RuntimeOption::RepoAuthoritative || RuntimeOption::EvalJitPGO);
-  patchIncomingBranches(retransStub);
+  patchIncomingBranches(transStub);
 
   // Now that we've smashed all the IBs for these translations they should be
   // unreachable-- to prevent a race we treadmill here and then reclaim their

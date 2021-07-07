@@ -45,7 +45,6 @@
 #include "hphp/runtime/vm/extern-compiler.h"
 #include "hphp/runtime/vm/memo-cache.h"
 #include "hphp/runtime/vm/repo-global-data.h"
-#include "hphp/runtime/vm/repo.h"
 #include "hphp/runtime/vm/runtime.h"
 #include "hphp/runtime/vm/vm-regs.h"
 #include "hphp/util/file.h"
@@ -396,13 +395,15 @@ void serialize_memoize_tv(StringBuffer& sb, int depth, TypedValue tv) {
       break;
 
     case KindOfClass:
-      serialize_memoize_code(sb, SER_MC_CLS);
-      serialize_memoize_string_data(sb, tv.m_data.pclass->name());
+      serialize_memoize_code(sb, SER_MC_STRING);
+      serialize_memoize_string_data(
+        sb, classToStringHelper(tv.m_data.pclass));
       break;
 
     case KindOfLazyClass:
-      serialize_memoize_code(sb, SER_MC_CLS);
-      serialize_memoize_string_data(sb, tv.m_data.plazyclass.name());
+      serialize_memoize_code(sb, SER_MC_STRING);
+      serialize_memoize_string_data(
+        sb, lazyClassToStringHelper(tv.m_data.plazyclass));
       break;
 
     case KindOfPersistentString:
@@ -500,6 +501,11 @@ TypedValue serialize_memoize_param_str(StringData* str) {
   return serialize_memoize_string_top(str);
 }
 
+TypedValue serialize_memoize_param_lazycls(LazyClassData lcls) {
+  return serialize_memoize_string_top(
+    const_cast<StringData*>(lazyClassToStringHelper(lcls)));
+}
+
 TypedValue serialize_memoize_param_dbl(double val) {
   StringBuffer sb;
   serialize_memoize_code(sb, SER_MC_DOUBLE);
@@ -519,6 +525,10 @@ TypedValue HHVM_FUNCTION(serialize_memoize_param, TypedValue param) {
     return serialize_memoize_string_top(param.m_data.pstr);
   } else if (type == KindOfUninit || type == KindOfNull) {
     return make_tv<KindOfPersistentString>(s_nullMemoKey.get());
+  } else if (isLazyClassType(type)) {
+    return serialize_memoize_string_top(
+      const_cast<StringData*>(
+        lazyClassToStringHelper(param.m_data.plazyclass)));
   } else if (type == KindOfBoolean) {
     return make_tv<KindOfPersistentString>(
       param.m_data.num ? s_trueMemoKey.get() : s_falseMemoKey.get()
@@ -1101,7 +1111,7 @@ int64_t HHVM_FUNCTION(set_implicit_context, StringArg keyarg,
     vec.push_back(std::make_pair(p.first, p.second.second));
   }
   std::sort(vec.begin(), vec.end(), [](const Elem e1, const Elem e2) {
-                                      return compare(e1.first, e1.first);
+                                      return e1.first->compare(e2.first);
                                     });
   StringBuffer sb;
   for (auto const& e : vec) {

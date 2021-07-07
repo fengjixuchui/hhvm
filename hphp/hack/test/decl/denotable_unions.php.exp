@@ -25,6 +25,7 @@
   ("\\f",
    (Shallow_decl_defs.Fun
       { Typing_defs.fe_deprecated = None; fe_module = None;
+        fe_internal = false;
         fe_type =
         (Rwitness_from_decl ([9:10-11]),
          (Tfun
@@ -45,7 +46,7 @@
                  fp_flags =
                  (make_fp_flags ~accept_disposable:false ~has_default:false
                    ~mode:Typing_defs_core.FPnormal ~ifc_external:false
-                   ~ifc_can_call:false ~is_atom:false ~readonly:false);
+                   ~ifc_can_call:false ~via_label:false ~readonly:false);
                   }
                 ];
               ft_implicit_params = { capability = (CapDefaults [9:10-11]) };
@@ -61,6 +62,7 @@
   ("\\g",
    (Shallow_decl_defs.Fun
       { Typing_defs.fe_deprecated = None; fe_module = None;
+        fe_internal = false;
         fe_type =
         (Rwitness_from_decl ([10:10-11]),
          (Tfun
@@ -82,7 +84,7 @@
                  fp_flags =
                  (make_fp_flags ~accept_disposable:false ~has_default:false
                    ~mode:Typing_defs_core.FPnormal ~ifc_external:false
-                   ~ifc_can_call:false ~is_atom:false ~readonly:false);
+                   ~ifc_can_call:false ~via_label:false ~readonly:false);
                   }
                 ];
               ft_implicit_params = { capability = (CapDefaults [10:10-11]) };

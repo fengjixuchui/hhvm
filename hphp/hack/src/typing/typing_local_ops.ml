@@ -35,9 +35,9 @@ let enforce_local_capability
     mk_required
     (fun available required ->
       Errors.op_coeffect_error
-        ~locally_available:(Typing_print.coeffects env available)
+        ~locally_available:(Typing_coeffects.pretty env available)
         ~available_pos:(Typing_defs.get_pos available)
-        ~required:(Typing_print.coeffects env required)
+        ~required:(Typing_coeffects.pretty env required)
         ~err_code
         ~suggestion
         op
@@ -71,6 +71,16 @@ let enforce_mutable_static_variable ?msg (op_pos : Pos.t) env =
     "Creating mutable references to static properties"
     op_pos
     env
+
+(* Temporarily FIXMEable error for memoizing objects. Once ~65 current cases are removed
+we can change this *)
+let enforce_memoize_object =
+  enforce_local_capability
+    ~err_code:
+      (Error_codes.Typing.err_code
+         Error_codes.Typing.MemoizeObjectWithoutGlobals)
+    Capabilities.(mk accessGlobals)
+    "Memoizing object parameters"
 
 let enforce_io =
   enforce_local_capability Capabilities.(mk io) "`echo` or `print` builtin"
@@ -125,7 +135,9 @@ let rec is_byval_collection_or_string_or_any_type env ty =
     | Tunapplied_alias _ ->
       Typing_defs.error_Tunapplied_alias_in_illegal_context ()
   in
-  let (_, tl) = Typing_utils.get_concrete_supertypes env ty in
+  let (_, tl) =
+    Typing_utils.get_concrete_supertypes ~abstract_enum:true env ty
+  in
   List.for_all tl ~f:check
 
 let mutating_this_in_ctor env e : bool =
@@ -170,9 +182,9 @@ let check_assignment_or_unset_target
     capability_required =
   let fail =
     Errors.op_coeffect_error
-      ~locally_available:(Typing_print.coeffects env capability_available)
+      ~locally_available:(Typing_coeffects.pretty env capability_available)
       ~available_pos:(Typing_defs.get_pos capability_available)
-      ~required:(Typing_print.coeffects env capability_required)
+      ~required:(Typing_coeffects.pretty env capability_required)
       ~err_code:(Error_codes.Typing.err_code Error_codes.Typing.OpCoeffects)
   in
   let ((p, _), _) = te1 in

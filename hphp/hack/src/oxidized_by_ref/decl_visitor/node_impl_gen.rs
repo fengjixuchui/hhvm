@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<4afacd48b4e84aae405cb941954f021f>>
+// @generated SignedSource<<c5889324a6fd13dd572d4f8e554bf81e>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -92,6 +92,17 @@ impl<'a> Node<'a> for ClassConstFrom<'a> {
         match self {
             ClassConstFrom::Self_ => {}
             ClassConstFrom::From(ref __binding_0) => __binding_0.accept(v),
+        }
+    }
+}
+impl<'a> Node<'a> for ClassConstKind {
+    fn accept(&'a self, v: &mut dyn Visitor<'a>) {
+        v.visit_class_const_kind(self)
+    }
+    fn recurse(&'a self, v: &mut dyn Visitor<'a>) {
+        match self {
+            ClassConstKind::CCAbstract(ref __binding_0) => __binding_0.accept(v),
+            ClassConstKind::CCConcrete => {}
         }
     }
 }
@@ -297,10 +308,11 @@ impl<'a> Node<'a> for FunElt<'a> {
             FunElt {
                 deprecated: ref __binding_0,
                 module: ref __binding_1,
-                type_: ref __binding_2,
-                pos: ref __binding_3,
-                php_std_lib: ref __binding_4,
-                support_dynamic_type: ref __binding_5,
+                internal: ref __binding_2,
+                type_: ref __binding_3,
+                pos: ref __binding_4,
+                php_std_lib: ref __binding_5,
+                support_dynamic_type: ref __binding_6,
             } => {
                 {
                     __binding_0.accept(v)
@@ -317,7 +329,10 @@ impl<'a> Node<'a> for FunElt<'a> {
                 {
                     __binding_4.accept(v)
                 }
-                { __binding_5.accept(v) }
+                {
+                    __binding_5.accept(v)
+                }
+                { __binding_6.accept(v) }
             }
         }
     }
@@ -905,7 +920,6 @@ impl<'a> Node<'a> for T_<'a> {
             T_::Rsplice(ref __binding_0) => __binding_0.accept(v),
             T_::RetBoolean(ref __binding_0) => __binding_0.accept(v),
             T_::RdefaultCapability(ref __binding_0) => __binding_0.accept(v),
-            T_::RhackArrDvArrs(ref __binding_0) => __binding_0.accept(v),
             T_::RconcatOperand(ref __binding_0) => __binding_0.accept(v),
             T_::RinterpOperand(ref __binding_0) => __binding_0.accept(v),
             T_::RdynamicCoercion(ref __binding_0) => __binding_0.accept(v),
@@ -1101,6 +1115,7 @@ impl<'a> Node<'a> for TypedefVisibility {
         match self {
             TypedefVisibility::Transparent => {}
             TypedefVisibility::Opaque => {}
+            TypedefVisibility::Tinternal => {}
         }
     }
 }
@@ -1143,6 +1158,7 @@ impl<'a> Node<'a> for Visibility {
             Visibility::Private => {}
             Visibility::Public => {}
             Visibility::Protected => {}
+            Visibility::Internal => {}
         }
     }
 }

@@ -267,7 +267,7 @@ inline bool Class::isDynamicallyConstructible() const {
   return attrs() & AttrDynamicallyConstructible;
 }
 
-inline folly::Optional<int64_t> Class::dynConstructSampleRate() const {
+inline Optional<int64_t> Class::dynConstructSampleRate() const {
   auto const rate = preClass()->dynConstructSampleRate();
   if (rate < 0) return {};
   return rate;
@@ -418,16 +418,6 @@ inline bool Class::forbidsDynamicProps() const {
   return attrs() & AttrForbidDynamicProps;
 }
 
-inline bool Class::serialize() const {
-  if (m_serialized) return false;
-  m_serialized = true;
-  return true;
-}
-
-inline bool Class::wasSerialized() const {
-  return m_serialized;
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 // Property initialization.
 
@@ -496,10 +486,6 @@ Class::sPropLink(Slot index) const {
   assertx(m_sPropCacheInit.bound());
   assertx(numStaticProperties() > index);
   return m_sPropCache[index];
-}
-
-inline rds::Link<bool, rds::Mode::NonLocal> Class::sPropInitLink() const {
-  return m_sPropCacheInit;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -726,7 +712,14 @@ inline Class* Class::lookup(const NamedEntity* ne) {
 }
 
 inline Class* Class::lookup(const StringData* name) {
-  return lookup(NamedEntity::get(name));
+  if (name->isSymbol()) {
+    if (auto const result = name->getCachedClass()) return result;
+  }
+  auto const result = lookup(NamedEntity::get(name));
+  if (name->isSymbol() && result && classHasPersistentRDS(result)) {
+    const_cast<StringData*>(name)->setCachedClass(result);
+  }
+  return result;
 }
 
 inline const Class* Class::lookupUniqueInContext(const NamedEntity* ne,
@@ -774,12 +767,20 @@ inline Class* Class::load(const StringData* name) {
 }
 
 inline Class* Class::get(const StringData* name, bool tryAutoload) {
+  if (name->isSymbol()) {
+    if (auto const result = name->getCachedClass()) return result;
+  }
+  auto const orig = name;
   String normStr;
   auto ne = NamedEntity::get(name, true, &normStr);
   if (normStr) {
     name = normStr.get();
   }
-  return get(ne, name, tryAutoload);
+  auto const result = get(ne, name, tryAutoload);
+  if (orig->isSymbol() && result && classHasPersistentRDS(result)) {
+    const_cast<StringData*>(orig)->setCachedClass(result);
+  }
+  return result;
 }
 
 ///////////////////////////////////////////////////////////////////////////////

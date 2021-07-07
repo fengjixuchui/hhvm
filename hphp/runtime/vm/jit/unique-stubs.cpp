@@ -726,6 +726,9 @@ TCA emitHandleServiceRequest(CodeBlock& cb, DataBlock& data, Handler handler) {
   });
 }
 
+TCA emitHandleTranslate(CodeBlock& cb, DataBlock& data) {
+  return emitHandleServiceRequest(cb, data, svcreq::handleTranslate);
+}
 TCA emitHandleRetranslate(CodeBlock& cb, DataBlock& data) {
   return emitHandleServiceRequest(cb, data, svcreq::handleRetranslate);
 }
@@ -776,25 +779,19 @@ TCA emitBindCallStub(CodeBlock& cb, DataBlock& data) {
 
 struct ResumeHelperEntryPoints {
   TCA resumeHelper;
-  TCA handleResume;
   TCA reenterTC;
-  TCA resumeHelperNoTranslate;
-  TCA handleResumeNoTranslate;
 };
 
-ResumeHelperEntryPoints emitResumeHelpers(CodeBlock& cb, DataBlock& data) {
-  ResumeHelperEntryPoints rh;
+TCA emitResumeHelpers(CodeBlock& cb, DataBlock& data, UniqueStubs& us,
+                      ResumeHelperEntryPoints& rh) {
+  alignCacheLine(cb);
 
-  rh.resumeHelper = vwrap(cb, data, [] (Vout& v) {
-    v << ldimmb{0, rarg(0)};
-    v << fallthru{arg_regs(1)};
-  });
-
-  rh.handleResume = vwrap(cb, data, [] (Vout& v) {
+  auto const handleResume = vwrap(cb, data, [] (Vout& v) {
     loadVmfp(v);
 
     auto const handler = reinterpret_cast<TCA>(svcreq::handleResume);
     v << call{handler, arg_regs(1)};
+    v << fallthru{RegSet{rret()}};
   });
 
   rh.reenterTC = vwrap(cb, data, [] (Vout& v) {
@@ -808,47 +805,24 @@ ResumeHelperEntryPoints emitResumeHelpers(CodeBlock& cb, DataBlock& data) {
     v << jmpr{target, php_return_regs()};
   });
 
-  rh.resumeHelperNoTranslate = vwrap(cb, data, [] (Vout& v) {
-    v << ldimmb{0, rarg(0)};
-    v << fallthru{arg_regs(1)};
-  });
+  auto const emitOne = [&] (svcreq::ResumeFlags flags, bool syncVMRegs) {
+    return vwrap(cb, data, [&] (Vout& v) {
+      if (syncVMRegs) storeVMRegs(v);
+      v << ldimmb{flags.m_asByte, rarg(0)};
+      v << jmpi{handleResume, arg_regs(1)};
+    });
+  };
 
-  rh.handleResumeNoTranslate = vwrap(cb, data, [&] (Vout& v) {
-    loadVmfp(v);
+  us.resumeHelper = rh.resumeHelper = emitOne(
+    svcreq::ResumeFlags(), false);
+  us.resumeHelperNoTranslate = emitOne(
+    svcreq::ResumeFlags().noTranslate(), false);
+  us.interpHelper = emitOne(
+     svcreq::ResumeFlags().interpFirst(), true);
+  us.interpHelperNoTranslate = emitOne(
+     svcreq::ResumeFlags().noTranslate().interpFirst(), true);
 
-    auto const handler =
-      reinterpret_cast<TCA>(svcreq::handleResumeNoTranslate);
-    v << call{handler};
-    v << jmpi{rh.reenterTC, RegSet{rret()}};
-  });
-
-  return rh;
-}
-
-TCA emitResumeInterpHelpers(CodeBlock& cb, DataBlock& data, UniqueStubs& us,
-                            ResumeHelperEntryPoints& rh) {
-  alignCacheLine(cb);
-
-  rh = emitResumeHelpers(cb, data);
-
-  us.resumeHelper = rh.resumeHelper;
-  us.resumeHelperNoTranslate = rh.resumeHelperNoTranslate;
-
-  us.interpHelper = vwrap(cb, data, [] (Vout& v) {
-    v << store{rarg(0), rvmtl()[rds::kVmpcOff]};
-  });
-  us.interpHelperSyncedPC = vwrap(cb, data, [&] (Vout& v) {
-    storeVMRegs(v);
-    v << ldimmb{1, rarg(0)};
-    v << jmpi{rh.handleResume, RegSet(rarg(0))};
-  });
-  us.interpHelperNoTranslate = vwrap(cb, data, [&] (Vout& v) {
-    storeVMRegs(v);
-    v << ldimmb{1, rarg(0)};
-    v << jmpi{rh.handleResumeNoTranslate, RegSet(rarg(1))};
-  });
-
-  return us.resumeHelper;
+  return handleResume;
 }
 
 TCA emitInterpOneCFHelper(CodeBlock& cb, DataBlock& data, Op op,
@@ -1056,55 +1030,6 @@ TCA emitEnterTCHelper(CodeBlock& cb, DataBlock& data, UniqueStubs& us) {
   });
 }
 
-TCA emitHandleSRHelper(CodeBlock& cb, DataBlock& data) {
-  alignCacheLine(cb);
-
-  return vwrap(cb, data, [] (Vout& v) {
-    storeVmfp(v);
-
-    // Combine ServiceRequest and SBInvOffset into one pushable 64-bit reg.
-    static_assert(folly::kIsLittleEndian,
-        "Packing two 32-bit ints into one 64-bit for ReqInfo.");
-    auto const spOffShifted = v.makeReg();
-    auto const reqAndSpOff = v.makeReg();
-    v << shlqi{32, r_svcreq_spoff(), spOffShifted, v.makeReg()};
-    v << orq{r_svcreq_req(), spOffShifted, reqAndSpOff, v.makeReg()};
-
-    // Pack the service request args into a svcreq::ReqInfo on the stack.
-    assertx(!(svcreq::kMaxArgs & 1));
-    for (auto i = svcreq::kMaxArgs; i >= 2; i -= 2) {
-      v << pushp{r_svcreq_arg(i - 1), r_svcreq_arg(i - 2)};
-    }
-    v << pushp{r_svcreq_stub(), reqAndSpOff};
-
-    // Call mcg->handleServiceRequest(rsp()).
-    auto const sp = v.makeReg();
-    v << copy{rsp(), sp};
-
-    auto const ret = v.makeReg();
-
-    v << vcall{
-      CallSpec::direct(svcreq::handleServiceRequest),
-      v.makeVcallArgs({{sp}}),
-      v.makeTuple({ret}),
-      Fixup::none(),
-      DestType::SSA
-    };
-
-    // Pop the ReqInfo off the stack.
-    auto const reqinfo_sz = static_cast<int>(sizeof(svcreq::ReqInfo));
-    v << lea{rsp()[reqinfo_sz], rsp()};
-
-    // rvmtl() was preserved by the callee, but rvmsp() and rvmfp() might've
-    // changed if we interpreted anything.  Reload them.  Also load the return
-    // regs; if we're not returning, it's a spurious load.
-    loadVMRegs(v);
-    loadReturnRegs(v);
-
-    v << jmpr{ret, php_return_regs()};
-  });
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 
 TCA emitEndCatchHelper(CodeBlock& cb, DataBlock& data, UniqueStubs& us) {
@@ -1219,6 +1144,7 @@ TCA emitUnwinderAsyncRet(CodeBlock& cb, DataBlock& data) {
   alignCacheLine(cb);
   alignJmpTarget(cb);
   return vwrap(cb, data, [&] (Vout& v) {
+    markRDSAccess(v, g_unwind_rds.handle());
     v << load{rvmtl()[unwinderFSWHOff()], rret_data()};
     v << movzbq{v.cns(KindOfObject), rret_type()};
     v << pushm{rvmtl()[unwinderSavedRipOff()]};
@@ -1231,6 +1157,7 @@ TCA emitUnwinderAsyncNullRet(CodeBlock& cb, DataBlock& data) {
   alignCacheLine(cb);
   alignJmpTarget(cb);
   return vwrap(cb, data, [&] (Vout& v) {
+    markRDSAccess(v, g_unwind_rds.handle());
     v << movzbq{v.cns(KindOfUninit), rret_type()};
     v << pushm{rvmtl()[unwinderSavedRipOff()]};
     v << load{rvmtl()[rds::kVmspOff], rvmsp()};
@@ -1306,7 +1233,6 @@ void UniqueStubs::emitAll(CodeCache& code, Debug::DebugInfo& dbg) {
       [&] { return emitEnterTCHelper(main, data, *this); }));
 
   // These guys are required by a number of other stubs.
-  ADD(handleSRHelper, hotView(), emitHandleSRHelper(hot(), data));
   ADD(endCatchHelper, hotView(), emitEndCatchHelper(hot(), data, *this));
   EMIT(
     "endCatchStublogueHelpers",
@@ -1335,8 +1261,8 @@ void UniqueStubs::emitAll(CodeCache& code, Debug::DebugInfo& dbg) {
   ADD(retHelper, hotView(), emitInterpRet(hot(), data));
   ADD(genRetHelper, view, emitInterpGenRet<false>(cold, data));
   ADD(asyncGenRetHelper, hotView(), emitInterpGenRet<true>(hot(), data));
-  ADD(retInlHelper, hotView(), emitInterpRet(hot(), data));
 
+  ADD(handleTranslate, view, emitHandleTranslate(cold, data));
   ADD(handleRetranslate, view, emitHandleRetranslate(cold, data));
   ADD(handleRetranslateOpt, view, emitHandleRetranslateOpt(cold, data));
 
@@ -1354,9 +1280,9 @@ void UniqueStubs::emitAll(CodeCache& code, Debug::DebugInfo& dbg) {
 
   ResumeHelperEntryPoints rh;
   EMIT(
-    "resumeInterpHelpers",
+    "resumeHelpers",
     hotView(),
-    [&] { return emitResumeInterpHelpers(hot(), data, *this, rh); }
+    [&] { return emitResumeHelpers(hot(), data, *this, rh); }
   );
   emitInterpOneCFHelpers(cold, data, *this, view, rh, code, dbg);
 
@@ -1463,8 +1389,8 @@ void emitInterpReq(Vout& v, SrcKey sk, SBInvOffset spOff) {
     auto const frameRelOff = spOff.offset + sk.func()->numSlotsInFrame();
     v << lea{rvmfp()[-cellsToBytes(frameRelOff)], rvmsp()};
   }
-  v << copy{v.cns(sk.pc()), rarg(0)};
-  v << jmpi{tc::ustubs().interpHelper, arg_regs(1)};
+  v << store{v.cns(sk.pc()), rvmtl()[rds::kVmpcOff]};
+  v << jmpi{tc::ustubs().interpHelper, RegSet{}};
 }
 
 void emitInterpReqNoTranslate(Vout& v, SrcKey sk, SBInvOffset spOff) {
@@ -1473,7 +1399,7 @@ void emitInterpReqNoTranslate(Vout& v, SrcKey sk, SBInvOffset spOff) {
     v << lea{rvmfp()[-cellsToBytes(frameRelOff)], rvmsp()};
   }
   v << store{v.cns(sk.pc()), rvmtl()[rds::kVmpcOff]};
-  v << jmpi{tc::ustubs().interpHelperNoTranslate, arg_regs(1)};
+  v << jmpi{tc::ustubs().interpHelperNoTranslate, RegSet{}};
 }
 
 ///////////////////////////////////////////////////////////////////////////////

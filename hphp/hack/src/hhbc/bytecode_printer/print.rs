@@ -371,7 +371,11 @@ fn print_ctx_constant<W: Write>(
     if c.is_abstract {
         w.write(" isAbstract")?;
     }
-    if let Some(coeffects) = HhasCoeffects::vec_to_string(&c.coeffects, |c| c.to_string()) {
+    if let Some(coeffects) = HhasCoeffects::vec_to_string(&c.coeffects.0, |c| c.to_string()) {
+        w.write(" ")?;
+        w.write(coeffects)?;
+    }
+    if let Some(coeffects) = HhasCoeffects::vec_to_string(&c.coeffects.1, |c| c.to_string()) {
         w.write(" ")?;
         w.write(coeffects)?;
     }
@@ -1838,7 +1842,9 @@ fn print_misc<W: Write>(w: &mut W, misc: &InstructMisc) -> Result<(), W::Error> 
             w.write(" ")?;
             w.write(s)
         }
-        M::AssertRATStk(n, s) => concat_str_by(w, " ", ["AssertRATStk", n.to_string().as_str(), s]),
+        M::AssertRATStk(n, s) => {
+            concat_str_by(w, " ", ["AssertRATStk", n.to_string().as_str(), s.as_str()])
+        }
         M::GetMemoKeyL(local) => {
             w.write("GetMemoKeyL ")?;
             print_local(w, local)

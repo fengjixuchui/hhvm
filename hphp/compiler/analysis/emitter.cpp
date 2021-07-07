@@ -27,7 +27,9 @@
 #include "hphp/runtime/base/request-info.h"
 #include "hphp/runtime/vm/disas.h"
 #include "hphp/runtime/vm/extern-compiler.h"
-#include "hphp/runtime/vm/repo.h"
+#include "hphp/runtime/vm/func-emitter.h"
+#include "hphp/runtime/vm/preclass-emitter.h"
+#include "hphp/runtime/vm/record-emitter.h"
 #include "hphp/runtime/vm/repo-autoload-map-builder.h"
 #include "hphp/runtime/vm/repo-file.h"
 #include "hphp/runtime/vm/repo-global-data.h"
@@ -143,7 +145,6 @@ RepoGlobalData getGlobalData() {
   gd.PHP7_Substr                 = RuntimeOption::PHP7_Substr;
   gd.PHP7_Builtins               = RuntimeOption::PHP7_Builtins;
   gd.HardGenericsUB              = RuntimeOption::EvalEnforceGenericsUB >= 2;
-  gd.HackArrCompatNotices        = RuntimeOption::EvalHackArrCompatNotices;
   gd.EnableIntrinsicsExtension   = RuntimeOption::EnableIntrinsicsExtension;
   gd.ForbidDynamicCallsToFunc    = RuntimeOption::EvalForbidDynamicCallsToFunc;
   gd.ForbidDynamicCallsWithAttr  =
@@ -162,8 +163,6 @@ RepoGlobalData getGlobalData() {
     RuntimeOption::EvalInitialNamedEntityTableSize;
   gd.InitialStaticStringTableSize =
     RuntimeOption::EvalInitialStaticStringTableSize;
-  gd.HackArrCompatIsVecDictNotices =
-    RuntimeOption::EvalHackArrCompatIsVecDictNotices;
   gd.HackArrCompatSerializeNotices =
     RuntimeOption::EvalHackArrCompatSerializeNotices;
   gd.AbortBuildOnVerifyError = RuntimeOption::EvalAbortBuildOnVerifyError;
@@ -183,6 +182,8 @@ RepoGlobalData getGlobalData() {
     RuntimeOption::EvalNoticeOnCoerceForStrConcat;
   gd.NoticeOnCoerceForBitOp =
     RuntimeOption::EvalNoticeOnCoerceForBitOp;
+  gd.TraitConstantInterfaceBehavior =
+    RuntimeOption::EvalTraitConstantInterfaceBehavior;
 
   for (auto const& elm : RuntimeOption::ConstantFunctions) {
     auto const s = internal_serialize(tvAsCVarRef(elm.second));
@@ -336,12 +337,12 @@ void emitAllHHBC(AnalysisResultPtr&& ar) {
         genText(ues_to_print, outputPath);
       };
 
-      folly::Optional<RepoAutoloadMapBuilder> autoloadMapBuilder;
-      folly::Optional<RepoFileBuilder> repoBuilder;
-      folly::Optional<SymbolSets> symbolSets;
+      Optional<RepoAutoloadMapBuilder> autoloadMapBuilder;
+      Optional<RepoFileBuilder> repoBuilder;
+      Optional<SymbolSets> symbolSets;
       if (Option::GenerateBinaryHHBC) {
         autoloadMapBuilder.emplace();
-        repoBuilder.emplace(RuntimeOption::RepoCentralPath);
+        repoBuilder.emplace(RuntimeOption::RepoPath);
         symbolSets.emplace();
       }
 
@@ -409,7 +410,7 @@ void emitAllHHBC(AnalysisResultPtr&& ar) {
         }
       );
 
-      folly::Optional<Timer> commitTime;
+      Optional<Timer> commitTime;
       while (auto encoded = ueq.pop()) {
         if (!commitTime) {
           commitTime.emplace(Timer::WallTime, "committing units to repo");
@@ -489,11 +490,7 @@ Unit* hphp_compiler_parse(const char* code, int codeLen, const SHA1& sha1,
   SCOPE_EXIT { RID().setJitFolding(prevFolding); };
 
   try {
-    UnitOrigin unitOrigin = UnitOrigin::File;
-    if (!filename) {
-      filename = "";
-      unitOrigin = UnitOrigin::Eval;
-    }
+    if (!filename) filename = "";
 
     std::unique_ptr<UnitEmitter> ue;
     // Check if this file contains raw hip hop bytecode instead of
@@ -523,30 +520,11 @@ Unit* hphp_compiler_parse(const char* code, int codeLen, const SHA1& sha1,
       }
     }
 
-    // NOTE: Repo errors are ignored!
-    if (!RO::RepoAuthoritative) {
-      Repo::get().commitUnit(ue.get(), unitOrigin, false);
-    }
-
-    if (RO::EvalStressUnitSerde) ue = ue->stressSerde();
     unit = ue->create();
     if (BuiltinSymbols::s_systemAr) {
       assertx(ue->m_filepath->data()[0] == '/' &&
               ue->m_filepath->data()[1] == ':');
       BuiltinSymbols::s_systemAr->addHhasFile(std::move(ue));
-    } else {
-      ue.reset();
-
-      if (unit->sn() == -1 && !RO::RepoAuthoritative && RO::RepoCommit) {
-        // the unit was not committed to the Repo, probably because
-        // another thread did it first. Try to use the winner.
-        auto u = Repo::get().loadUnit(filename ? filename : "",
-                                      sha1,
-                                      nativeFuncs);
-        if (u != nullptr) {
-          return u.release();
-        }
-      }
     }
 
     return unit.release();

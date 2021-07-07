@@ -74,8 +74,8 @@ namespace backtrace_detail {
 
 BTContext::BTContext() {
   // don't attempt to read locals
-  auto const flags = 1U << ActRec::LocalsDecRefd;
-  auto const handler = (intptr_t)jit::tc::ustubs().retInlHelper;
+  auto const flags = (1U << ActRec::LocalsDecRefd) | (1U << ActRec::IsInlined);
+  auto const handler = (intptr_t)jit::tc::ustubs().retHelper;
   fakeAR[0].m_sfp = &fakeAR[1];
   fakeAR[1].m_sfp = &fakeAR[0];
   fakeAR[0].m_savedRip = fakeAR[1].m_savedRip = handler;
@@ -681,7 +681,7 @@ void CompactTraceData::insert(const ActRec* fp, int32_t prevPc) {
 }
 
 Array CompactTraceData::extract() const {
-  VArrayInit aInit(m_frames.size());
+  VecInit aInit(m_frames.size());
   for (int idx = 0; idx < m_frames.size(); ++idx) {
     auto const prev = idx < m_frames.size() - 1 ? &m_frames[idx + 1] : nullptr;
     DArrayInit frame(6);

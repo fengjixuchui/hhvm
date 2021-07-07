@@ -79,8 +79,8 @@
 #include "hphp/runtime/vm/jit/prof-data.h"
 #include "hphp/runtime/vm/jit/tc.h"
 #include "hphp/runtime/vm/jit/translator.h"
-#include "hphp/runtime/vm/repo.h"
 #include "hphp/runtime/vm/repo-file.h"
+#include "hphp/runtime/vm/repo-global-data.h"
 #include "hphp/runtime/vm/runtime-compiler.h"
 #include "hphp/runtime/vm/treadmill.h"
 
@@ -170,8 +170,6 @@ namespace HPHP {
 ///////////////////////////////////////////////////////////////////////////////
 // Forward declarations.
 
-void initialize_repo();
-
 /*
  * XXX: VM process initialization is handled through a function
  * pointer so libhphp_runtime.a can be linked into programs that don't
@@ -253,7 +251,7 @@ static RDS_LOCAL(bool, s_sessionInitialized);
 
 static void process_cmd_arguments(int argc, char **argv) {
   php_global_set(s_argc, Variant(argc));
-  VArrayInit argvArray(argc);
+  VecInit argvArray(argc);
   for (int i = 0; i < argc; i++) {
     argvArray.append(String(argv[i]));
   }
@@ -1008,21 +1006,8 @@ static bool set_execution_mode(folly::StringPiece mode) {
 
 static void init_repo_file() {
   if (!RO::RepoAuthoritative) return;
-  auto const path = [] {
-    if (!RO::RepoLocalPath.empty())   return RO::RepoLocalPath;
-    if (!RO::RepoCentralPath.empty()) return RO::RepoCentralPath;
-    if (auto const env = getenv("HHVM_REPO_CENTRAL_PATH")) {
-      std::string p{env};
-      replacePlaceholders(p);
-      return p;
-    }
-    always_assert(
-      false &&
-      "Either Repo.LocalPath or Repo.CentralPath must be set in "
-      "RepoAuthoritative mode"
-    );
-  }();
-  RepoFile::init(path);
+  assertx(!RO::RepoPath.empty());
+  RepoFile::init(RO::RepoPath);
 }
 
 /* Reads a file into the OS page cache, with rate limiting. */
@@ -1142,13 +1127,14 @@ static int start_server(const std::string &username, int xhprof) {
 
   std::unique_ptr<std::thread> readaheadThread;
 
-  if (RuntimeOption::RepoLocalReadaheadRate > 0 &&
-      !RuntimeOption::RepoLocalPath.empty()) {
+  if (RO::RepoAuthoritative &&
+      RO::RepoLocalReadaheadRate > 0 &&
+      !RO::RepoPath.empty()) {
     HttpServer::CheckMemAndWait();
     readaheadThread = std::make_unique<std::thread>([&] {
         assertx(RuntimeOption::ServerExecutionMode());
         BootStats::Block timer("Readahead Repo", true);
-        auto path = RuntimeOption::RepoLocalPath.c_str();
+        auto path = RuntimeOption::RepoPath.c_str();
         Logger::Info("readahead %s", path);
 #ifdef __linux__
         // glibc doesn't have a wrapper for ioprio_set(), so we need to use
@@ -1302,7 +1288,6 @@ int execute_program(int argc, char **argv) {
   int ret_code = -1;
   try {
     try {
-      initialize_repo();
       ret_code = execute_program_impl(argc, argv);
     } catch (const Exception& e) {
       Logger::Error("Uncaught exception: %s", e.what());
@@ -1666,7 +1651,8 @@ static int execute_program_impl(int argc, char** argv) {
   if (vm.count("version")) {
     cout << "HipHop VM";
     cout << " " << HHVM_VERSION;
-    cout << " (" << (debug ? "dbg" : "rel") << ")\n";
+    cout << " (" << (debug ? "dbg" : "rel") << ")";
+    cout << " (" << (use_lowptr ? "lowptr" : "non-lowptr") << ")\n";
     cout << "Compiler: " << compilerId() << "\n";
     cout << "Repo schema: " << repoSchemaId() << "\n";
     return 0;
@@ -1816,8 +1802,6 @@ static int execute_program_impl(int argc, char** argv) {
       }
       return file;
     }(po.file.empty() ? po.args[0] : po.file);
-
-    RuntimeOption::RepoCommit = false; // avoid initializing a repo
 
     std::fstream fs(file, std::ios::in);
     if (!fs) {
@@ -2115,13 +2099,12 @@ static int execute_program_impl(int argc, char** argv) {
     prepare_args(new_argc, new_argv, po.args, po.file.c_str());
 
     std::string const cliFile = !po.file.empty() ? po.file :
-                                new_argv[0] ? new_argv[0] : "";
+                                 new_argv[0] ? new_argv[0] : "";
     if (po.mode != "debug" && po.mode != "eval" && cliFile.empty()) {
       std::cerr << "Nothing to do. Either pass a hack file to run, or "
         "use -m server\n";
       return 1;
     }
-    Repo::setCliFile(cliFile);
 
     if (po.mode == "eval" && po.args.empty()) {
       std::cerr << "Nothing to do. Pass a command to run with mode eval\n";
@@ -2551,22 +2534,66 @@ void hphp_process_init() {
       !RuntimeOption::EvalJitSerdesFile.empty() &&
       jit::mcgen::retranslateAllEnabled()) {
     auto const mode = RuntimeOption::EvalJitSerdesMode;
+    auto const numWorkers = RuntimeOption::EvalJitWorkerThreadsForSerdes ?
+        RuntimeOption::EvalJitWorkerThreadsForSerdes : Process::GetCPUCount();
+
+    auto const deserialize = [&] (auto const& f) {
+#if USE_JEMALLOC_EXTENT_HOOKS
+      auto const numArenas =
+        std::min(RO::EvalJitWorkerArenas,
+                 std::max(RO::EvalJitWorkerThreads, numWorkers));
+      setup_extra_arenas(numArenas);
+#endif
+      return f(
+        RO::EvalJitSerdesFile,
+        RO::EvalJitParallelDeserialize ? numWorkers : 1,
+        false
+      );
+    };
+
+    auto const rta = [&] (const std::string& mark, bool skipSerialize) {
+      BootStats::mark(mark);
+      BootStats::set("prof_data_source_host",
+                     jit::ProfData::buildHost()->toCppString());
+      BootStats::set("prof_data_timestamp", jit::ProfData::buildTime());
+      RO::EvalJitProfileRequests = 0;
+      RO::EvalJitWorkerThreads = numWorkers;
+      // Run retranslateAll asynchronously, without waiting for it to finish
+      // here.
+      jit::mcgen::checkRetranslateAll(true, skipSerialize);
+    };
+
+    auto const tryPartialDeserialize = [&] {
+      if (!isJitSerializing()) return;
+      if (!jit::serializeOptProfEnabled()) return;
+      if (!RO::EvalJitSerializeOptProfRestart) return;
+
+      if (RO::ServerExecutionMode()) {
+        Logger::FInfo("Attempting to deserialize partial profile-data file: {}",
+                      RO::EvalJitSerdesFile);
+      }
+
+      auto const success = deserialize(jit::tryDeserializePartialProfData);
+      if (success) {
+        if (RO::ServerExecutionMode()) {
+          Logger::FInfo("Successfully deserialized partial profile-data file. "
+                        "Loaded {} units with {} workers",
+                        numLoadedUnits(), numWorkers);
+        }
+        rta("jit::tryDeserializePartialProfData", true);
+      } else if (RO::ServerExecutionMode()) {
+        Logger::FInfo("Failed deserializing partial profile-data file. "
+                      "Proceeding normally");
+      }
+    };
+
     if (isJitDeserializing()) {
       if (RuntimeOption::ServerExecutionMode()) {
         Logger::FInfo("JitDeserializeFrom: {}",
                       RuntimeOption::EvalJitSerdesFile);
       }
-      auto const numWorkers = RuntimeOption::EvalJitWorkerThreadsForSerdes ?
-        RuntimeOption::EvalJitWorkerThreadsForSerdes : Process::GetCPUCount();
-#if USE_JEMALLOC_EXTENT_HOOKS
-      auto const numArenas =
-        std::min(RuntimeOption::EvalJitWorkerArenas,
-                 std::max(RuntimeOption::EvalJitWorkerThreads, numWorkers));
-      setup_extra_arenas(numArenas);
-#endif
-      auto const errMsg = jit::deserializeProfData(
-        RuntimeOption::EvalJitSerdesFile,
-        RuntimeOption::EvalJitParallelDeserialize ? numWorkers : 1);
+
+      auto const errMsg = deserialize(jit::deserializeProfData);
 
       if (mode == JitSerdesMode::DeserializeAndDelete) {
         // Delete the serialized profile data when we finish reading
@@ -2582,16 +2609,8 @@ void hphp_process_init() {
           Logger::FInfo("JitDeserialize: Loaded {} Units with {} workers",
                         numLoadedUnits(), numWorkers);
         }
-        BootStats::mark("jit::deserializeProfData");
-        BootStats::set("prof_data_source_host",
-                       jit::ProfData::buildHost()->toCppString());
-        BootStats::set("prof_data_timestamp", jit::ProfData::buildTime());
-        RuntimeOption::EvalJitProfileRequests = 0;
-        RuntimeOption::EvalJitWorkerThreads = numWorkers;
+        rta("jit::deserializeProfData", false);
 
-        // Run retranslateAll asynchronously, without waiting for it to finish
-        // here.
-        jit::mcgen::checkRetranslateAll(true);
         if (mode == JitSerdesMode::DeserializeAndExit) {
           if (RuntimeOption::ServerExecutionMode()) {
             Logger::Info("JitDeserialize finished; exiting");
@@ -2614,10 +2633,15 @@ void hphp_process_init() {
           Logger::Info(errMsg +
                        ", scheduling one time serialization and restart");
           RuntimeOption::EvalJitSerdesMode = JitSerdesMode::SerializeAndExit;
+          tryPartialDeserialize();
         } else {
           Logger::Info(errMsg + ", will profile then retranslateAll");
         }
       }
+    } else {
+      // We're not deserializing. Check if we're serializing and if we
+      // have a partial file. If so, deserialize it and do a RTA.
+      tryPartialDeserialize();
     }
   }
 

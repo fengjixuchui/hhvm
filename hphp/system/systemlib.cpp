@@ -209,27 +209,31 @@ Object AllocSoapFaultObject(const Variant& code,
                                  const Variant& header /* = uninit_variant */) {
   return createAndConstruct(
     s_SoapFaultClass,
-    make_varray(code, message, actor, detail, name, header)
+    make_vec_array(code, message, actor, detail, name, header)
   );
 }
 
 Object AllocLazyKVZipIterableObject(const Variant& mp) {
   return createAndConstruct(s_LazyKVZipIterableClass,
-                            make_varray(mp));
+                            make_vec_array(mp));
 }
 
 Object AllocLazyIterableViewObject(const Variant& iterable) {
   return createAndConstruct(s_LazyIterableViewClass,
-                            make_varray(iterable));
+                            make_vec_array(iterable));
 }
 
 Object AllocLazyKeyedIterableViewObject(const Variant& iterable) {
   return createAndConstruct(s_LazyKeyedIterableViewClass,
-                            make_varray(iterable));
+                            make_vec_array(iterable));
 }
 
 Object AllocUndefinedVariableExceptionObject(const Variant& message) {
   return createAndConstructThrowable(s_UndefinedVariableExceptionClass, message);
+}
+
+Object AllocTypecastExceptionObject(const Variant& message) {
+  return createAndConstructThrowable(s_TypecastExceptionClass, message);
 }
 
 void throwExceptionObject(const Variant& message) {
@@ -313,6 +317,10 @@ void throwUndefinedPropertyExceptionObject(const Variant& message) {
 
 void throwUndefinedVariableExceptionObject(const Variant& message) {
   throw_object(AllocUndefinedVariableExceptionObject(message));
+}
+
+void throwTypecastExceptionObject(const Variant& message) {
+  throw_object(AllocTypecastExceptionObject(message));
 }
 
 #define ALLOC_OBJECT_STUB(name)                                         \

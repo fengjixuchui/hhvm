@@ -19,7 +19,6 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <queue>
 #include <string>
 #include <vector>
@@ -36,6 +35,7 @@
 #include "hphp/runtime/ext/facts/file-facts.h"
 #include "hphp/runtime/ext/facts/inheritance-info.h"
 #include "hphp/runtime/ext/facts/lazy-two-way-map.h"
+#include "hphp/runtime/ext/facts/path-methods-map.h"
 #include "hphp/runtime/ext/facts/path-symbols-map.h"
 #include "hphp/runtime/ext/facts/string-ptr.h"
 #include "hphp/runtime/ext/facts/symbol-types.h"
@@ -54,26 +54,6 @@ struct UpdateDBWorkItem {
   std::vector<folly::fs::path> m_alteredPaths;
   std::vector<folly::fs::path> m_deletedPaths;
   std::vector<FileFacts> m_alteredPathFacts;
-};
-
-template <typename S> struct TypeDecl {
-  Symbol<S, SymKind::Type> m_name;
-  Path<S> m_path;
-
-  bool operator==(const TypeDecl<S>& o) const;
-
-  std::vector<Symbol<S, SymKind::Type>>
-  getAttributesFromDB(AutoloadDB& db, SQLiteTxn& txn) const;
-};
-
-template <typename S> struct MethodDecl {
-  TypeDecl<S> m_type;
-  Symbol<S, SymKind::Function> m_method;
-
-  bool operator==(const MethodDecl<S>& o) const;
-
-  std::vector<Symbol<S, SymKind::Type>>
-  getAttributesFromDB(AutoloadDB& db, SQLiteTxn& txn) const;
 };
 
 /**
@@ -105,7 +85,7 @@ template <typename S> struct SymbolMap {
    * Return nullptr if the type is not defined, or if the type is defined in
    * more than one file.
    */
-  std::optional<Symbol<S, SymKind::Type>> getTypeName(const S& type);
+  Optional<Symbol<S, SymKind::Type>> getTypeName(const S& type);
 
   /**
    * Return the one and only definition for the given symbol.
@@ -228,6 +208,18 @@ template <typename S> struct SymbolMap {
   std::vector<MethodDecl<S>> getMethodsWithAttribute(const S& attr);
 
   /**
+   * Return the attributes of a file
+   */
+  std::vector<Symbol<S, SymKind::Type>> getAttributesOfFile(Path<S> path);
+
+  /**
+   * Return the files with a given attribute
+   */
+  std::vector<Path<S>>
+  getFilesWithAttribute(Symbol<S, SymKind::Type> attr);
+  std::vector<Path<S>> getFilesWithAttribute(const S& attr);
+
+  /**
    * Return the argument at the given position of a given type with a given
    * attribute.
    *
@@ -263,6 +255,11 @@ template <typename S> struct SymbolMap {
   std::vector<folly::dynamic>
   getMethodAttributeArgs(const S& type, const S& method, const S& attribute);
 
+  std::vector<folly::dynamic> getFileAttributeArgs(
+      Path<S> path,
+      Symbol<S, SymKind::Type> attribute);
+  std::vector<folly::dynamic> getFileAttributeArgs(Path<S> path, const S& attribute);
+
   /**
    * Return whether the given type is, for example, a class or interface.
    *
@@ -281,7 +278,7 @@ template <typename S> struct SymbolMap {
   /**
    * Return a hash representing the given path's last-known checksum.
    */
-  std::optional<SHA1> getSha1Hash(Path<S> path) const;
+  Optional<SHA1> getSha1Hash(Path<S> path) const;
 
   /**
    * For each file, update the SymbolMap with the given file facts.
@@ -392,6 +389,7 @@ template <typename S> struct SymbolMap {
     PathToSymbolsMap<S, SymKind::Type> m_typePath;
     PathToSymbolsMap<S, SymKind::Function> m_functionPath;
     PathToSymbolsMap<S, SymKind::Constant> m_constantPath;
+    PathToMethodsMap<S> m_methodPath;
 
     /**
      * Future chain and queue holding the work that needs to be done before the
@@ -418,7 +416,7 @@ template <typename S> struct SymbolMap {
         defs.push_back({path, {kind, flags}});
       }
 
-      std::optional<std::pair<TypeKind, int>>
+      Optional<std::pair<TypeKind, int>>
       getKindAndFlags(Symbol<S, SymKind::Type> type, Path<S> path) const {
         auto const it = m_map.find(type);
         if (it == m_map.end()) {
@@ -458,6 +456,11 @@ template <typename S> struct SymbolMap {
      * Maps between methods and the attributes that decorate them.
      */
     AttributeMap<S, MethodDecl<S>> m_methodAttrs;
+
+    /**
+     * Maps between files and the attributes that decorate them.
+     */
+    AttributeMap<S, Path<S>> m_fileAttrs;
 
     /**
      * 40-byte hex strings representing the last-known SHA1 checksums of
@@ -526,7 +529,7 @@ private:
   /**
    * Helper function to read from and write to m_synchronizedData.
    *
-   * readFn: ((const Data&) -> std::optional<Ret>)
+   * readFn: ((const Data&) -> Optional<Ret>)
    * GetFromDBFn: ((AutoloadDB&, SQLiteTxn&) -> DataFromDB)
    * writeFn: ((Data&, DataFromDB) -> Ret)
    */

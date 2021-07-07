@@ -23,7 +23,6 @@
 #include "hphp/runtime/base/tv-refcount.h"
 #include "hphp/runtime/base/type-variant.h"
 #include "hphp/runtime/vm/func.h"
-#include "hphp/runtime/vm/repo.h"
 #include "hphp/runtime/vm/repo-global-data.h"
 #include "hphp/runtime/vm/vm-regs.h"
 
@@ -118,46 +117,52 @@ Block* make_opt_catch(IRGS& env, const ParamPrep& params) {
 }
 
 SSATmp* is_a_impl(IRGS& env, const ParamPrep& params, bool subclassOnly) {
-  if (params.size() != 3) return nullptr;
+  auto const nparams = params.size();
+  if (nparams != 2 && nparams != 3) return nullptr;
 
-  auto const allowClass  = params[2].value;
-  auto const cls_        = params[1].value;
-  auto const obj         = params[0].value;
+  auto const obj = params[0].value;
+  auto const cls = params[1].value;
+  auto const allowClass = nparams == 3 ? params[2].value : cns(env, false);
 
-  if (!obj->isA(TObj) ||
-      (!cls_->hasConstVal(TStr) && !cls_->isA(TCls)) ||
+  if (!obj->type().subtypeOfAny(TCls, TObj) ||
+      !cls->type().subtypeOfAny(TCls, TLazyCls, TStr) ||
       !allowClass->isA(TBool)) {
     return nullptr;
   }
 
-  auto const objCls = gen(env, LdObjClass, obj);
+  auto const lhs = obj->isA(TObj) ? gen(env, LdObjClass, obj) : obj;
+  auto const rhs = [&] {
+    if (cls->isA(TStr)) {
+      return gen(env, LookupClsRDS, cls);
+    }
+    if (cls->isA(TLazyCls)) {
+      auto const cname = gen(env, LdLazyClsName, cls);
+      return gen(env, LookupClsRDS, cname);
+    }
+    return cls;
+  }();
 
-  SSATmp* testCls = nullptr;
-  if (cls_->isA(TStr)) {
-    auto const cls = lookupUniqueClass(env, cls_->strVal());
-    if (!cls) return nullptr;
-    testCls = cns(env, cls);
-  } else {
-    testCls = cls_;
-  }
-
-  // is_a() finishes here.
-  if (!subclassOnly) return gen(env, InstanceOf, objCls, testCls);
-
-  // is_subclass_of() needs to check that the LHS doesn't have the same class as
-  // as the RHS.
   return cond(
     env,
-    [&] (Block* taken) {
-      auto const eq = gen(env, EqCls, objCls, testCls);
-      gen(env, JmpNZero, taken, eq);
+    [&](Block* taken) {
+      return gen(env, CheckNonNull, taken, rhs);
     },
-    [&] {
-      return gen(env, InstanceOf, objCls, testCls);
+    [&](SSATmp* rhs) {
+      // is_a() finishes here.
+      if (!subclassOnly) return gen(env, InstanceOf, lhs, rhs);
+
+      // is_subclass_of() also needs to check that LHS and RHS don't match.
+      return cond(
+        env,
+        [&](Block* match) {
+          auto const eq = gen(env, EqCls, lhs, rhs);
+          gen(env, JmpNZero, match, eq);
+        },
+        [&]{ return gen(env, InstanceOf, lhs, rhs); },
+        [&]{ return cns(env, false); }
+      );
     },
-    [&] {
-      return cns(env, false);
-    }
+    [&]{ return cns(env, false); }
   );
 }
 
@@ -181,9 +186,7 @@ SSATmp* opt_method_exists(IRGS& env, const ParamPrep& params) {
   return gen(env, MethodExists, cls, meth);
 }
 
-const StaticString
-  s_conv_clsmeth_to_varray("Implicit clsmeth to varray conversion"),
-  s_conv_clsmeth_to_vec("Implicit clsmeth to vec conversion");
+const StaticString s_conv_clsmeth_to_vec("Implicit clsmeth to vec conversion");
 
 void raiseClsMethToVecWarningHelper(IRGS& env, const ParamPrep& params) {
   assertx(RO::EvalIsCompatibleClsMethType);
@@ -532,12 +535,14 @@ SSATmp* impl_opt_type_structure(IRGS& env, const ParamPrep& params,
   auto const clsNameTmp = params[0].value;
   auto const cnsNameTmp = params[1].value;
 
-  if (!clsNameTmp->isA(TStr)) return nullptr;
+  if (!clsNameTmp->isA(TStr|TCls|TLazyCls)) return nullptr;
   if (!cnsNameTmp->hasConstVal(TStaticStr)) return nullptr;
   auto const cnsName = cnsNameTmp->strVal();
 
   auto const clsTmp = [&] () -> SSATmp* {
-    if (clsNameTmp->inst()->is(LdClsName)) {
+    if (clsNameTmp->isA(TCls)) return clsNameTmp;
+    if (clsNameTmp->inst()->is(LdClsName) ||
+        clsNameTmp->inst()->is(LdLazyCls)) {
       return clsNameTmp->inst()->src(0);
     }
     return ldCls(env, clsNameTmp, make_opt_catch(env, params));
@@ -1794,7 +1799,7 @@ SSATmp* builtinCall(IRGS& env,
     uint32_t aoff = params.ctx ? 3 : 2;
     for (auto i = uint32_t{0}; i < params.size(); ++i) {
       if (!params[i].isInOut) continue;
-      auto ty = [&] () -> folly::Optional<Type> {
+      auto ty = [&] () -> Optional<Type> {
         auto const r = builtinOutType(callee, i);
         if (r.isKnownDataType()) return r;
         return {};
@@ -1831,10 +1836,10 @@ SSATmp* builtinCall(IRGS& env,
   // non-inlined NativeImpl. In that case, there shouldn't be anything
   // on the stack and any out parameters point to the caller's stack,
   // so there's nothing for FrameState to do.
-  auto const retOff = [&] () -> folly::Optional<IRSPRelOffset> {
+  auto const retOff = [&] () -> Optional<IRSPRelOffset> {
     if (params.forNativeImpl && !catchMaker.inlining()) {
       assertx(spOffBCFromStackBase(env) == spOffEmpty(env));
-      return folly::none;
+      return std::nullopt;
     }
     return offsetFromIRSP(
       env,
@@ -2507,7 +2512,7 @@ void memoGetImpl(IRGS& env,
         return gen(
           env,
           MemoGetInstanceValue,
-          MemoValueInstanceData { memoInfo.first, func, folly::none, loadAux },
+          MemoValueInstanceData { memoInfo.first, func, std::nullopt, loadAux },
           notFound,
           retTy,
           this_
@@ -2523,7 +2528,7 @@ void memoGetImpl(IRGS& env,
           types.data(),
           func,
           memoInfo.second,
-          folly::none,
+          std::nullopt,
           loadAux
         },
         notFound,
@@ -2544,7 +2549,7 @@ void memoGetImpl(IRGS& env,
             func,
             keys,
             types.data(),
-            folly::none,
+            std::nullopt,
             loadAux
           },
           notFound,
@@ -2556,7 +2561,7 @@ void memoGetImpl(IRGS& env,
       return gen(
         env,
         MemoGetLSBValue,
-        MemoValueStaticData { func, folly::none, loadAux },
+        MemoValueStaticData { func, std::nullopt, loadAux },
         notFound,
         retTy,
         lsbCls
@@ -2568,7 +2573,7 @@ void memoGetImpl(IRGS& env,
       return gen(
         env,
         MemoGetStaticCache,
-        MemoCacheStaticData { func, keys, types.data(), folly::none, loadAux },
+        MemoCacheStaticData { func, keys, types.data(), std::nullopt, loadAux },
         notFound,
         retTy,
         fp(env)
@@ -2577,7 +2582,7 @@ void memoGetImpl(IRGS& env,
     return gen(
       env,
       MemoGetStaticValue,
-      MemoValueStaticData { func, folly::none, loadAux },
+      MemoValueStaticData { func, std::nullopt, loadAux },
       notFound,
       retTy
     );
@@ -2668,8 +2673,8 @@ void memoSetImpl(IRGS& env, LocalRange keys, bool eager) {
 
   auto const func = curFunc(env);
 
-  auto const asyncEager = [&] () -> folly::Optional<bool> {
-    if (!func->isAsyncFunction()) return folly::none;
+  auto const asyncEager = [&] () -> Optional<bool> {
+    if (!func->isAsyncFunction()) return std::nullopt;
     return eager;
   }();
 

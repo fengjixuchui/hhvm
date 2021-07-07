@@ -36,7 +36,6 @@
 #include "hphp/runtime/vm/jit/service-requests.h"
 #include "hphp/runtime/vm/jit/smashable-instr.h"
 #include "hphp/runtime/vm/jit/srcdb.h"
-#include "hphp/runtime/vm/jit/stub-alloc.h"
 #include "hphp/runtime/vm/jit/timer.h"
 #include "hphp/runtime/vm/jit/trans-db.h"
 #include "hphp/runtime/vm/jit/trans-rec.h"
@@ -91,9 +90,9 @@ void invalidateSrcKey(SrcKey sk, SBInvOffset spOff) {
   }
 
   // Retranslate stub must exist, as createSrcRec() created it.
-  auto const retransStub = svcreq::getOrEmitStub(
-    svcreq::StubType::Retranslate, sk, spOff);
-  always_assert(retransStub);
+  auto const transStub = svcreq::getOrEmitStub(
+    svcreq::StubType::Translate, sk, spOff);
+  always_assert(transStub);
 
   /*
    * Since previous translations aren't reachable from here, we know we
@@ -104,7 +103,7 @@ void invalidateSrcKey(SrcKey sk, SBInvOffset spOff) {
              "Replacing translations from sk: {} " "to SrcRec addr={}\n",
              showShort(sk), (void*)sr);
   Trace::Indent _i;
-  sr->replaceOldTranslations(retransStub);
+  sr->replaceOldTranslations(transStub);
 }
 
 void invalidateFuncProfSrcKeys(const Func* func) {
@@ -168,17 +167,20 @@ void relocateOptFunc(FuncMetaInfo& info,
     // last emitted prologue.
     const bool alignMain = !regionTranslator || nRegions != 1;
     translator->relocate(alignMain);
+    if (!translator->translateSuccess()) {
+      if (failedBytes) *failedBytes += bytes;
+      continue;
+    }
 
-    if (translator->entry()) {
-      always_assert(code().inHotOrMain(translator->entry()));
-      if (prologueTranslator) {
-        const auto pid = PrologueID(func, prologueTranslator->paramIndex());
-        prologueTCAs[pid] = translator->entry();
-      } else if (regionTranslator) {
-        srcKeyTrans[regionTranslator->sk].emplace_back(translator->entry());
-      }
-    } else if (failedBytes) {
-      *failedBytes += bytes;
+    translator->bindOutgoingEdges();
+    if (!translator->translateSuccess()) continue;
+
+    always_assert(code().inHotOrMain(translator->entry()));
+    if (prologueTranslator) {
+      const auto pid = PrologueID(func, prologueTranslator->paramIndex());
+      prologueTCAs[pid] = translator->entry();
+    } else if (regionTranslator) {
+      srcKeyTrans[regionTranslator->sk].emplace_back(translator->entry());
     }
   }
 }
@@ -288,20 +290,16 @@ void smashOptCalls(CGMeta& meta,
 }
 
 /*
- * Find the jump target for jumps of kind `jumpKind' within the translation
- * corresponding to `curEntry' going to the SrcRec corresponding to `vec'.
- * `curEntry' is the TCA of the start of the current tracelet.  For prologues
- * this is nullptr.  It is used while smashing retranslations of the same
- * srckey.
+ * Find the jump target for jumps within the translation corresponding to
+ * `curEntry' going to the SrcRec corresponding to `vec'.  `curEntry' is the TCA
+ * of the start of the current tracelet.  For prologues this is nullptr.  It is
+ * used while smashing retranslations of the same srckey.  `isRetrans` indicate
+ * whether this is a fallback jump to the next translation.
  */
 TCA findJumpTarget(TCA curEntry,
                    const jit::vector<TCA>& vec,
-                   CGMeta::JumpKind jumpKind) {
+                   bool isRetrans) {
   always_assert(vec.size() > 0);
-
-  using Kind = CGMeta::JumpKind;
-  const bool isRetrans = jumpKind == Kind::Fallback ||
-                         jumpKind == Kind::Fallbackcc;
 
   // It may seem like !isRetrans should imply that none of the elements in the
   // retranslation chain vector is the curEntry.  In practice self loops may
@@ -332,70 +330,41 @@ TCA findJumpTarget(TCA curEntry,
  * tracked metadata in meta)  going to the optimized translations in
  * `srcKeyTrans'.
  */
-void smashOptJumps(CGMeta& meta,
+void smashOptBinds(CGMeta& meta,
                    TCA entry,  // nullptr for prologues
                    const SrcKeyTransMap& srcKeyTrans) {
-  using Kind = CGMeta::JumpKind;
-
   jit::hash_set<TCA> smashed;
-  jit::hash_set<TCA> smashedOldTargets;
-  decltype(meta.smashableJumpData) newSmashableJumpData;
+  decltype(meta.smashableBinds) newBinds;
 
-  for (auto& pair : meta.smashableJumpData) {
-    auto jump = pair.first;
-    auto   sk = pair.second.sk;
-    auto kind = pair.second.kind;
-    auto it = srcKeyTrans.find(sk);
+  for (auto& bind : meta.smashableBinds) {
+    auto it = srcKeyTrans.find(bind.sk);
     if (it == srcKeyTrans.end()) {
-      newSmashableJumpData.emplace(pair);
+      newBinds.emplace_back(bind);
       continue;
     }
     const auto& transVec = it->second;
-    TCA succTCA = findJumpTarget(entry, transVec, kind);
+    TCA succTCA = findJumpTarget(entry, transVec, bind.fallback);
     if (succTCA == nullptr) {
-      newSmashableJumpData.emplace(pair);
+      newBinds.emplace_back(bind);
       continue;
     }
 
-    DEBUG_ONLY auto kindStr = [&] {
-      switch (kind) {
-        case Kind::Bindjmp:    return "bindjmp";
-        case Kind::Bindjcc:    return "bindjcc";
-        case Kind::Fallback:   return "fallback";
-        case Kind::Fallbackcc: return "fallbackcc";
-      }
-      not_reached();
-    }();
-
-    FTRACE(3, "smashOptJumps: found candidate jump @ {}, kind = {}, "
-           "target SrcKey {}\n",
-           jump, kindStr, showShort(sk));
-    assertx(code().inHotOrMainOrColdOrFrozen(jump));
+    FTRACE(3, "smashOptBinds: found candidate bind @ {}, target SrcKey {}, "
+           "fallback = {}\n",
+           bind.smashable.show(), showShort(bind.sk), bind.fallback);
+    // The bound ADDR pointer may not belong to the data segment, as is the case
+    // with SSwitchMap (see #10347945)
+    assertx(code().inHotOrMainOrColdOrFrozen(bind.smashable.toSmash()) ||
+            bind.smashable.type() == IncomingBranch::Tag::ADDR);
     assertx(code().inHotOrMainOrColdOrFrozen(succTCA));
-    TCA prevTarget = nullptr;
-    switch (kind) {
-      case Kind::Bindjmp:
-      case Kind::Fallback: {
-        prevTarget = smashableJmpTarget(jump);
-        smashJmp(jump, succTCA);
-        optimizeSmashedJmp(jump);
-        break;
-      }
-      case Kind::Bindjcc:
-      case Kind::Fallbackcc: {
-        prevTarget = smashableJccTarget(jump);
-        smashJcc(jump, succTCA);
-        optimizeSmashedJcc(jump);
-        break;
-      }
-    }
-    smashed.insert(jump);
-    smashedOldTargets.insert(prevTarget);
-    meta.smashableLocations.erase(jump);
+    bind.smashable.patch(succTCA);
+    bind.smashable.optimize();
+    smashed.insert(bind.smashable.toSmash());
+    meta.smashableLocations.erase(bind.smashable.toSmash());
   }
 
   // Remove jumps that were smashed from meta.smashableJumpData.
-  meta.smashableJumpData.swap(newSmashableJumpData);
+  meta.smashableBinds.swap(newBinds);
 
   // If any of the jumps we smashed was a tail jump (i.e. going to a
   // retranslation of the entry SrcKey), then remove it from the set of
@@ -405,24 +374,11 @@ void smashOptJumps(CGMeta& meta,
     if (smashed.count(jump.toSmash()) == 0) {
       newTailJumps.push_back(jump);
     } else {
-      FTRACE(3, "smashOptJumps: removing {} from inProgressTailJumps\n",
+      FTRACE(3, "smashOptBinds: removing {} from inProgressTailJumps\n",
              jump.toSmash());
     }
   }
   meta.inProgressTailJumps.swap(newTailJumps);
-
-  // If any smashed jumps had corresponding stubs, then remove those stubs from
-  // meta and free their memory.
-  std::vector<TCA> newReusedStubs;
-  for (auto tca : meta.reusedStubs) {
-    if (smashedOldTargets.count(tca) == 0) {
-      newReusedStubs.push_back(tca);
-    } else {
-      FTRACE(3, "smashOptJumps: freeing dead reused stub @ {}\n", tca);
-      markStubFreed(tca);
-    }
-  }
-  meta.reusedStubs.swap(newReusedStubs);
 }
 
 /*
@@ -443,10 +399,10 @@ void smashOptSortedOptFuncs(std::vector<FuncMetaInfo>& infos,
       assertx(code().inHotOrMainOrColdOrFrozen(translator->entry()));
 
       if (isPrologue(translator->kind)) {
-        smashOptJumps(translator->meta(), nullptr, srcKeyTrans);
+        smashOptBinds(translator->meta(), nullptr, srcKeyTrans);
       } else {
         smashOptCalls(translator->meta(), prologueTCAs);
-        smashOptJumps(translator->meta(), translator->entry(), srcKeyTrans);
+        smashOptBinds(translator->meta(), translator->entry(), srcKeyTrans);
       }
     }
   }
@@ -539,17 +495,16 @@ SrcRec* findSrcRec(SrcKey sk) {
   return srcDB().find(sk);
 }
 
-bool createSrcRec(SrcKey sk, SBInvOffset spOff, bool checkLength) {
-  if (srcDB().find(sk)) return true;
+SrcRec* createSrcRec(SrcKey sk, SBInvOffset spOff) {
+  if (auto const sr = srcDB().find(sk)) return sr;
 
   // invalidateSrcKey() depends on existence of this stub.
-  auto const retransStub = svcreq::getOrEmitStub(
-    svcreq::StubType::Retranslate, sk, spOff);
-  if (checkLength && !retransStub) return false;
-  assertx(retransStub);
+  auto const transStub = svcreq::getOrEmitStub(
+    svcreq::StubType::Translate, sk, spOff);
+  if (!transStub) return nullptr;
 
   auto metaLock = lockMetadata();
-  if (srcDB().find(sk)) return true;
+  if (auto const sr = srcDB().find(sk)) return sr;
 
   SKTRACE(1, sk, "inserting SrcRec\n");
 
@@ -558,7 +513,7 @@ bool createSrcRec(SrcKey sk, SBInvOffset spOff, bool checkLength) {
     recordFuncSrcRec(sk.func(), sr);
   }
 
-  return true;
+  return sr;
 }
 
 
@@ -644,7 +599,7 @@ void RegionTranslator::computeKind() {
   }
 }
 
-folly::Optional<TranslationResult> RegionTranslator::getCached() {
+Optional<TranslationResult> RegionTranslator::getCached() {
   auto const srcRec = srcDB().find(sk);
   auto const numTrans = srcRec->numTrans();
   if (prevNumTranslations != -1 && prevNumTranslations != numTrans) {
@@ -659,7 +614,7 @@ folly::Optional<TranslationResult> RegionTranslator::getCached() {
   // getCached is called while the lease is held to check the
   // number of translations in the srcRec is not over max
   // capacity.
-  if (!m_lease || !(*m_lease)) return folly::none;
+  if (!m_lease || !(*m_lease)) return std::nullopt;
   // Check for potential interp anchor translation
   if (kind == TransKind::Profile) {
     if (numTrans > RuntimeOption::EvalJitMaxProfileTranslations) {
@@ -671,7 +626,7 @@ folly::Optional<TranslationResult> RegionTranslator::getCached() {
     always_assert(numTrans == RuntimeOption::EvalJitMaxTranslations + 1);
     return TranslationResult{srcRec->getTopTranslation()};
   }
-  return folly::none;
+  return std::nullopt;
 }
 
 void RegionTranslator::resetCached() {
@@ -739,7 +694,8 @@ void RegionTranslator::gen() {
     optIndex,
     kind,
     sk,
-    region.get()
+    region.get(),
+    PrologueID(),
   };
   unit = irGenRegion(*region, ctx, pconds);
   assertx(unit);

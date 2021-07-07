@@ -1162,18 +1162,19 @@ void CurlResource::handle_exception() {
   try {
     throw;
   } catch (const Object& e) {
-    m_exception.assign(e);
+    m_exception.emplace(e);
   } catch (Exception& e) {
-    m_exception.assign(e.clone());
+    m_exception.emplace(e.clone());
   } catch (std::exception& e) {
-    m_exception.assign(
+    m_exception.emplace(
       new FatalErrorException(0,
                               "Unexpected error in curl callback: %s",
                               e.what())
     );
   } catch (...) {
-    m_exception.assign(
-      new FatalErrorException("Unknown error in curl callback"));
+    m_exception.emplace(
+      new FatalErrorException("Unknown error in curl callback")
+    );
   }
 }
 
@@ -1328,7 +1329,7 @@ int CurlResource::curl_progress(void* p,
     log_native_stack("unexpected curl_progress");
   }
 
-  VArrayInit pai(5);
+  VecInit pai(5);
   pai.append(Resource(curl));
   pai.append(dltotal);
   pai.append(dlnow);

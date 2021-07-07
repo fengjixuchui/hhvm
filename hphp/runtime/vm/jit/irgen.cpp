@@ -154,8 +154,12 @@ void checkCoverage(IRGS& env) {
     env,
     [&] (Block* next) { gen(env, CheckRDSInitialized, next, handle); },
     [&] {
+      // Exit to the interpreter at the current SrcKey location.
       hint(env, Block::Hint::Unlikely);
-      gen(env, Jmp, makeExitSlow(env));
+      auto const irSP = spOffBCFromIRSP(env);
+      auto const invSP = spOffBCFromStackBase(env);
+      auto const rbjData = ReqBindJmpData { curSrcKey(env), invSP, irSP };
+      gen(env, ReqInterpBBNoTranslate, rbjData, sp(env), fp(env));
     }
   );
 }
@@ -255,12 +259,12 @@ Type provenType(const IRGS& env, const Location& loc) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-void endBlock(IRGS& env, Offset next) {
+void endBlock(IRGS& env, SrcKey nextSk) {
   // If there's no fp, we've already executed a RetCtrl or similar, so there's
   // no reason to try to jump anywhere now. We can probably drop the fp check
   // here and rely on the unreachable check alone.
   if (!fp(env) || env.irb->inUnreachableState()) return;
-  jmpImpl(env, next);
+  jmpImpl(env, nextSk);
 }
 
 void prepareForNextHHBC(IRGS& env, SrcKey newSk) {

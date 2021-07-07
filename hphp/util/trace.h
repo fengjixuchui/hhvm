@@ -167,6 +167,7 @@ namespace Trace {
       TM(objprof)       \
       TM(perf_mem_event) \
       TM(pgo)           \
+      TM(preg)          \
       TM(print_profiles)  \
       TM(printir)       \
       TM(printir_json)  \
@@ -187,6 +188,7 @@ namespace Trace {
       TM(statgroups)    \
       TM(stats)         \
       TM(strobelight)   \
+      TM(taint)         \
       TM(targetcache)   \
       TM(tcspace)       \
       TM(trans)         \
@@ -527,4 +529,3 @@ class FormatValue<Val,
   const Val& m_val;
 };
 }
-

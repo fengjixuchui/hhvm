@@ -37,7 +37,6 @@
 #include "hphp/runtime/server/source-root-info.h"
 #include "hphp/runtime/vm/debugger-hook.h"
 #include "hphp/runtime/vm/extern-compiler.h"
-#include "hphp/runtime/vm/repo.h"
 #include "hphp/runtime/vm/repo-file.h"
 #include "hphp/runtime/vm/runtime-compiler.h"
 #include "hphp/runtime/vm/treadmill.h"
@@ -58,7 +57,6 @@
 
 #include <folly/AtomicHashMap.h>
 #include <folly/FileUtil.h>
-#include <folly/Optional.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/executors/task_queue/PriorityUnboundedBlockingQueue.h>
 #include <folly/portability/Fcntl.h>
@@ -78,7 +76,7 @@ namespace {
 
 //////////////////////////////////////////////////////////////////////
 
-using OptLog = folly::Optional<StructuredLogEntry>;
+using OptLog = Optional<StructuredLogEntry>;
 
 struct LogTimer {
   LogTimer(const char* name, OptLog& ent)
@@ -442,7 +440,7 @@ bool canBeBoundToPath(const CachedFilePtr& cachedUnit,
   return canBeBoundToPath(cachedUnit->cu.unit, path);
 }
 
-folly::Optional<String> readFileAsString(const StringData* path,
+Optional<String> readFileAsString(const StringData* path,
                                          Stream::Wrapper* w) {
   tracing::Block _{
     "read-file", [&] { return tracing::Props{}.add("path", path); }
@@ -453,11 +451,11 @@ folly::Optional<String> readFileAsString(const StringData* path,
     // We only allow normal file streams, which cannot re-enter
     assertx(w->isNormalFileStream());
     if (auto const f = w->open(StrNR(path), "r", 0, nullptr)) return f->read();
-    return folly::none;
+    return std::nullopt;
   }
 
   auto const fd = open(path->data(), O_RDONLY);
-  if (fd < 0) return folly::none;
+  if (fd < 0) return std::nullopt;
   auto file = req::make<PlainFile>(fd);
   return file->read();
 }
@@ -604,12 +602,6 @@ CachedFilePtr createUnitFromFile(const StringData* const path,
   // Compile a new Unit from contents
   auto const compileNew = [&] {
     s_unitActualCompiles->increment();
-
-    // Try the repo; if it's not already there, invoke the compiler.
-    if (auto unit = Repo::get().loadUnit(path->slice(), sha1, nativeFuncs)) {
-      flags = FileLoadFlags::kHitDisk;
-      return unit.release();
-    }
 
     LogTimer compileTimer("compile_ms", ent);
     rqtrace::EventGuard trace{"COMPILE_UNIT"};
@@ -1253,7 +1245,6 @@ void logLoad(
     }
     ent.setStr("sha1", u->sha1().toString());
     ent.setStr("repo_sn", folly::to<std::string>(u->sn()));
-    ent.setStr("repo_id", folly::to<std::string>(u->repoID()));
 
     int bclen = 0;
     u->forEachFunc([&](auto const& func) {
@@ -1330,8 +1321,6 @@ std::string mangleUnitSha1(const std::string& fileSha1,
     + (RuntimeOption::EvalGenerateDocComments ? '1' : '0')
     + (RuntimeOption::EnableXHP ? '1' : '0')
     + (RuntimeOption::EvalEnableCallBuiltin ? '1' : '0')
-    + (RuntimeOption::EvalHackArrCompatNotices ? '1' : '0')
-    + (RuntimeOption::EvalHackArrCompatIsVecDictNotices ? '1' : '0')
     + (RuntimeOption::EvalHackArrCompatSerializeNotices ? '1' : '0')
     + (RuntimeOption::EvalHackCompilerUseEmbedded ? '1' : '0')
     + (RuntimeOption::EvalHackCompilerVerboseErrors ? '1' : '0')
@@ -1344,7 +1333,6 @@ std::string mangleUnitSha1(const std::string& fileSha1,
     + (RuntimeOption::EvalForbidDynamicCallsWithAttr ? '1' : '0')
     + (RuntimeOption::EvalLogKnownMethodsAsDynamicCalls ? '1' : '0')
     + (RuntimeOption::EvalNoticeOnBuiltinDynamicCalls ? '1' : '0')
-    + (RuntimeOption::EvalHackArrDVArrs ? '1' : '0')
     + (RuntimeOption::EvalAssemblerFoldDefaultValues ? '1' : '0')
     + RuntimeOption::EvalHackCompilerCommand + '\0'
     + RuntimeOption::EvalHackCompilerArgs + '\0'
@@ -1356,7 +1344,6 @@ std::string mangleUnitSha1(const std::string& fileSha1,
     + (RuntimeOption::EvalIsVecNotices ? '1' : '0')
     + (RuntimeOption::EvalIsCompatibleClsMethType ? '1' : '0')
     + (RuntimeOption::EvalHackRecords ? '1' : '0')
-    + (RuntimeOption::EvalArrayProvenance ? '1' : '0')
     + (RuntimeOption::EvalAllowHhas ? '1' : '0')
     + std::to_string(RuntimeOption::EvalEnforceGenericsUB)
     + (RuntimeOption::EvalEmitMethCallerFuncPointers ? '1' : '0')
@@ -1365,6 +1352,7 @@ std::string mangleUnitSha1(const std::string& fileSha1,
     + (RuntimeOption::EvalFoldLazyClassKeys ? '1' : '0')
     + (RuntimeOption::EvalHackCompilerUseCompilerPool ? '1' : '0')
     + (RuntimeOption::EvalEnableAbstractContextConstants ? '1': '0')
+    + (RuntimeOption::EvalTraitConstantInterfaceBehavior ? '1' : '0')
     + RuntimeOption::EvalUnitCacheBreaker + '\0'
     + CoeffectsConfig::mangle()
     + opts.cacheKeySha1().toString()
@@ -1461,8 +1449,6 @@ void invalidateUnit(StringData* path) {
   };
   erase(s_nonRepoUnitCache);
   for (auto const& p : s_perUserUnitCaches) erase(*p.second);
-
-  Repo::get().forgetUnit(path->data());
 }
 
 String resolveVmInclude(const StringData* path,
@@ -1625,7 +1611,7 @@ void prefetchUnit(StringData* requestedPath,
     !RID().hasSafeFileAccess() &&
     (RuntimeOption::SandboxMode || !RuntimeOption::AlwaysUseRelativePath);
 
-  folly::Optional<struct stat> fileStat;
+  Optional<struct stat> fileStat;
   const StringData* path = nullptr;
   if (!deferResolveVmInclude) {
     // We can't safely defer resolveVmInclude(). Do it now.

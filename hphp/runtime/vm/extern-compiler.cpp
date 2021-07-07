@@ -18,6 +18,9 @@
 
 #include <cinttypes>
 #include <condition_variable>
+#include <fstream>
+#include <iterator>
+#include <memory>
 #include <mutex>
 #include <signal.h>
 #include <sstream>
@@ -37,11 +40,13 @@
 #include "hphp/hack/src/hhbc/compile_ffi_types.h"
 #include "hphp/hack/src/parser/positioned_full_trivia_parser_ffi.h"
 #include "hphp/hack/src/parser/positioned_full_trivia_parser_ffi_types.h"
+#include "hphp/runtime/base/autoload-map.h"
+#include "hphp/runtime/base/autoload-handler.h"
 #include "hphp/runtime/base/file-stream-wrapper.h"
 #include "hphp/runtime/base/ini-setting.h"
 #include "hphp/runtime/base/stream-wrapper-registry.h"
 #include "hphp/runtime/vm/native.h"
-#include "hphp/runtime/vm/repo.h"
+#include "hphp/runtime/vm/hhvm_decl_provider.h"
 #include "hphp/runtime/vm/unit-emitter.h"
 #include "hphp/util/atomic-vector.h"
 #include "hphp/util/embedded-data.h"
@@ -90,8 +95,8 @@ THREAD_LOCAL(std::string, tl_extractPath);
 std::mutex s_extractLock;
 std::string s_extractPath;
 
-folly::Optional<std::string> hackcExtractPath() {
-  if (!RuntimeOption::EvalHackCompilerUseEmbedded) return folly::none;
+Optional<std::string> hackcExtractPath() {
+  if (!RuntimeOption::EvalHackCompilerUseEmbedded) return std::nullopt;
 
   auto check = [] (const std::string& s) {
     if (s.empty()) return false;
@@ -123,7 +128,7 @@ folly::Optional<std::string> hackcExtractPath() {
   embedded_data desc;
   if (!get_embedded_data("hackc_binary", &desc)) {
     Logger::Error("Embedded hackc binary is missing");
-    return folly::none;
+    return std::nullopt;
   }
   auto const binary = [&]() -> std::string {
     auto const cbinary = read_embedded_data(desc);
@@ -162,19 +167,19 @@ folly::Optional<std::string> hackcExtractPath() {
     Logger::FError(
       "Unable to create temp file for hackc binary: {}", folly::errnoStr(errno)
     );
-    return folly::none;
+    return std::nullopt;
   }
 
   if (folly::writeFull(fd, binary.data(), binary.size()) == -1) {
     Logger::FError(
       "Failed to write extern hackc binary: {}", folly::errnoStr(errno)
     );
-    return folly::none;
+    return std::nullopt;
   }
 
   if (chmod(fallback.data(), 0755) != 0) {
     Logger::Error("Unable to mark hackc binary as writable");
-    return folly::none;
+    return std::nullopt;
   }
 
   return set(fallback);
@@ -935,7 +940,7 @@ private:
 
   std::atomic<bool> m_started{false};
   std::mutex m_compilers_start_lock;
-  folly::Optional<std::string> m_username;
+  Optional<std::string> m_username;
 } s_manager;
 
 struct UseLightDelegate final {
@@ -1099,6 +1104,9 @@ CompilerResult hackc_compile(
       mode
     );
   } else {
+
+    using namespace ::HPHP::hackc::compile;
+
     std::uint8_t flags = 0;
     if(forDebuggerEval) {
       flags |= FOR_DEBUGGER_EVAL;
@@ -1106,11 +1114,18 @@ CompilerResult hackc_compile(
     if(!SystemLib::s_inited) {
       flags |= IS_SYSTEMLIB;
     }
+    if (RuntimeOption::EvalEnableDecl) {
+      flags |= ENABLE_DECL;
+    }
     flags |= DUMP_SYMBOL_REFS;
+
+    HhvmDeclProvider decl_provider;
 
     std::string aliased_namespaces = options.getAliasedNamespacesConfig();
 
-    hackc_compile_native_environment const native_env = {
+    native_environment const native_env{
+      &hhvm_decl_provider_get_decl,
+      &decl_provider,
       filename,
       aliased_namespaces.data(),
       s_misc_config.data(),
@@ -1121,11 +1136,11 @@ CompilerResult hackc_compile(
       flags
     };
 
-    hackc_compile_output_config const output{true, nullptr};
+    output_config const output{true, nullptr};
 
     std::array<char, 256> buf;
     buf.fill(0);
-    hackc_error_buf_t error_buf {buf.data(), buf.size()};
+    error_buf_t error_buf {buf.data(), buf.size()};
 
     hackc_compile_from_text_ptr hhas{
       hackc_compile_from_text(&native_env, code, &output, &error_buf)

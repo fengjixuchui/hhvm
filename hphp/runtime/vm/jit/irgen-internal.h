@@ -930,11 +930,17 @@ void defineFrameAndStack(IRGS& env, SBInvOffset bcSPOff);
 
 //////////////////////////////////////////////////////////////////////
 
+inline void profileRDSAccess(IRGS& env, rds::Handle handle) {
+  if (!rds::shouldProfileAccesses() || !isProfiling(env.context.kind)) return;
+  gen(env, MarkRDSAccess, RDSHandleData { handle });
+}
+
+//////////////////////////////////////////////////////////////////////
+
 /*
  * Determines correct course of action based on notice_data and acts upon it.
- * Returns true if an exception throw is emitted.
  */
-bool handleConvNoticeLevel(
+void handleConvNoticeLevel(
   IRGS& env,
   const ConvNoticeData& notice_data,
   const char* const from,

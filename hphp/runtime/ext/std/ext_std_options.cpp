@@ -84,7 +84,7 @@ static TypedValue HHVM_FUNCTION(get_extension_funcs, const String& module_name) 
   if (!extension) return make_tv<KindOfBoolean>(false);
 
   auto const& fns = extension->getExtensionFunctions();
-  VArrayInit result(fns.size());
+  VecInit result(fns.size());
   for (auto const& fn : fns) {
     result.append(Variant(fn));
   }
@@ -138,7 +138,7 @@ static String HHVM_FUNCTION(set_include_path, const Variant& new_include_path) {
 }
 
 static Array HHVM_FUNCTION(get_included_files) {
-  VArrayInit vai{g_context->m_evaledFilesOrder.size()};
+  VecInit vai{g_context->m_evaledFilesOrder.size()};
   for (auto& file : g_context->m_evaledFilesOrder) {
     vai.append(Variant{const_cast<StringData*>(file)});
   }
@@ -516,7 +516,7 @@ static Array HHVM_FUNCTION(getopt, const String& options,
       if (ret.exists(optname_int)) {
         auto const lval = ret.lval(optname_int);
         if (!isArrayLikeType(lval.type())) {
-          ret.set(optname_int, make_varray(Variant::wrap(lval.tv()), val));
+          ret.set(optname_int, make_vec_array(Variant::wrap(lval.tv()), val));
         } else {
           asArrRef(lval).append(val);
         }
@@ -529,7 +529,7 @@ static Array HHVM_FUNCTION(getopt, const String& options,
       if (ret.exists(key)) {
         auto const lval = ret.lval(key);
         if (!isArrayLikeType(lval.type())) {
-          ret.set(key, make_varray(Variant::wrap(lval.tv()), val));
+          ret.set(key, make_vec_array(Variant::wrap(lval.tv()), val));
         } else {
           asArrRef(lval).append(val);
         }
@@ -591,7 +591,7 @@ static Array HHVM_FUNCTION(getrusage, int64_t who /* = 0 */) {
       folly::errnoStr(errno).c_str());
   }
 
-  return make_darray(
+  return make_dict_array(
     PHP_RUSAGE_PARA(ru_oublock),
     PHP_RUSAGE_PARA(ru_inblock),
     PHP_RUSAGE_PARA(ru_msgsnd),
@@ -750,7 +750,7 @@ String HHVM_FUNCTION(php_sapi_name) {
 
 #ifdef _WIN32
 const char* php_get_edition_name(DWORD majVer, DWORD minVer);
-folly::Optional<String> php_get_windows_name();
+Optional<String> php_get_windows_name();
 String php_get_windows_cpu();
 #endif
 

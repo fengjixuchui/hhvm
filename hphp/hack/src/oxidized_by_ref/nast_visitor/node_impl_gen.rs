@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<f6e6e72baa266506c0cf733cf3ccfcff>>
+// @generated SignedSource<<91dc43f57aa9f7a47b7550728f0a5aec>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -193,7 +193,7 @@ impl<'a> Node<'a>
             ClassConst {
                 type_: ref __binding_0,
                 id: ref __binding_1,
-                expr: ref __binding_2,
+                kind: ref __binding_2,
                 doc_comment: ref __binding_3,
             } => {
                 {
@@ -207,6 +207,19 @@ impl<'a> Node<'a>
                 }
                 { __binding_3.accept(v) }
             }
+        }
+    }
+}
+impl<'a> Node<'a>
+    for ClassConstKind<'a, &'a crate::pos::Pos<'a>, crate::nast::FuncBodyAnn<'a>, (), ()>
+{
+    fn accept(&'a self, v: &mut dyn Visitor<'a>) {
+        v.visit_class_const_kind(self)
+    }
+    fn recurse(&'a self, v: &mut dyn Visitor<'a>) {
+        match self {
+            ClassConstKind::CCAbstract(ref __binding_0) => __binding_0.accept(v),
+            ClassConstKind::CCConcrete(ref __binding_0) => __binding_0.accept(v),
         }
     }
 }
@@ -768,7 +781,6 @@ impl<'a> Node<'a> for Expr_<'a, &'a crate::pos::Pos<'a>, crate::nast::FuncBodyAn
             Expr_::Pair(ref __binding_0) => __binding_0.accept(v),
             Expr_::ETSplice(ref __binding_0) => __binding_0.accept(v),
             Expr_::EnumClassLabel(ref __binding_0) => __binding_0.accept(v),
-            Expr_::Any => {}
             Expr_::Hole(ref __binding_0) => __binding_0.accept(v),
         }
     }
@@ -1678,6 +1690,7 @@ impl<'a> Node<'a> for Typedef<'a, &'a crate::pos::Pos<'a>, crate::nast::FuncBody
                 namespace: ref __binding_8,
                 span: ref __binding_9,
                 emit_id: ref __binding_10,
+                is_ctx: ref __binding_11,
             } => {
                 {
                     __binding_0.accept(v)
@@ -1709,7 +1722,10 @@ impl<'a> Node<'a> for Typedef<'a, &'a crate::pos::Pos<'a>, crate::nast::FuncBody
                 {
                     __binding_9.accept(v)
                 }
-                { __binding_10.accept(v) }
+                {
+                    __binding_10.accept(v)
+                }
+                { __binding_11.accept(v) }
             }
         }
     }
@@ -1722,6 +1738,7 @@ impl<'a> Node<'a> for TypedefVisibility {
         match self {
             TypedefVisibility::Transparent => {}
             TypedefVisibility::Opaque => {}
+            TypedefVisibility::Tinternal => {}
         }
     }
 }
@@ -1859,6 +1876,7 @@ impl<'a> Node<'a> for Visibility {
             Visibility::Private => {}
             Visibility::Public => {}
             Visibility::Protected => {}
+            Visibility::Internal => {}
         }
     }
 }

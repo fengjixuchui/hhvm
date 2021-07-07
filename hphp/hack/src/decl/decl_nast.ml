@@ -64,9 +64,9 @@ and fun_decl_in_env (env : Decl_env.env) ~(is_lambda : bool) (f : Nast.fun_) :
     | FVellipsis p -> Fvariadic (FunUtils.make_ellipsis_param_ty env p)
     | FVnonVariadic -> Fstandard
   in
-  let tparams = List.map f.f_tparams (FunUtils.type_param env) in
+  let tparams = List.map f.f_tparams ~f:(FunUtils.type_param env) in
   let where_constraints =
-    List.map f.f_where_constraints (FunUtils.where_constraint env)
+    List.map f.f_where_constraints ~f:(FunUtils.where_constraint env)
   in
   let fe_deprecated =
     Naming_attributes_params.deprecated
@@ -84,6 +84,9 @@ and fun_decl_in_env (env : Decl_env.env) ~(is_lambda : bool) (f : Nast.fun_) :
   in
   let fe_module =
     Naming_attributes_params.get_module_attribute f.f_user_attributes
+  in
+  let fe_internal =
+    Naming_attributes_params.has_internal_attribute f.f_user_attributes
   in
   let fe_pos = Decl_env.make_decl_pos env @@ fst f.f_name in
   let fe_type =
@@ -110,6 +113,7 @@ and fun_decl_in_env (env : Decl_env.env) ~(is_lambda : bool) (f : Nast.fun_) :
   {
     fe_pos;
     fe_module;
+    fe_internal;
     fe_type;
     fe_deprecated;
     fe_php_std_lib;
@@ -192,17 +196,24 @@ and typedef_decl (ctx : Provider_context.t) (tdef : Nast.typedef) :
     t_vis = td_vis;
     t_span = _;
     t_emit_id = _;
+    t_is_ctx = _;
   } =
     tdef
   in
   let dep = Typing_deps.Dep.Type tid in
   let env = { Decl_env.mode; droot = Some dep; ctx } in
-  let td_tparams = List.map params (FunUtils.type_param env) in
+  let td_tparams = List.map params ~f:(FunUtils.type_param env) in
   let td_type = Decl_hint.hint env concrete_type in
-  let td_constraint = Option.map tcstr (Decl_hint.hint env) in
+  let td_constraint = Option.map tcstr ~f:(Decl_hint.hint env) in
   let td_pos = Decl_env.make_decl_pos env name_pos in
   let td_module =
     Naming_attributes_params.get_module_attribute t_user_attributes
+  in
+  let td_vis =
+    if Naming_attributes_params.has_internal_attribute t_user_attributes then
+      Tinternal
+    else
+      td_vis
   in
   { td_module; td_vis; td_tparams; td_constraint; td_type; td_pos }
 

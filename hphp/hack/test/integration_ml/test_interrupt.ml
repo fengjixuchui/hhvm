@@ -84,7 +84,7 @@ let test () =
       profile_decling = Typing_service_types.DeclingOff;
     }
   in
-  let (errors, _delegate_state, _telemetry, (), cancelled) =
+  let (errors, _delegate_state, _telemetry, (), diag_pusher, cancelled) =
     Typing_check_service.go_with_interrupt
       ctx
       workers
@@ -95,10 +95,11 @@ let test () =
       ~interrupt
       ~memory_cap:None
       ~longlived_workers:false
-      ~remote_execution:false
+      ~remote_execution:None
       ~check_info
       ~profiling:CgroupProfiler.Profiling.empty
   in
+  assert (Option.is_none diag_pusher);
   (* Assert that we got the errors in bar2 only... *)
   Test.assert_errors errors expected_errors;
 

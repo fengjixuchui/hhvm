@@ -187,16 +187,6 @@ struct UniqueStubs {
   TCA asyncGenRetHelper;  // version for async generators
 
   /*
-   * Return from a function when the ActRec was pushed by an inlined call.
-   *
-   * This is the same as retHelper, but is kept separate to aid in debugging.
-   *
-   * @reached:  phpret from TC
-   * @context:  func body (after returning to caller)
-   */
-  TCA retInlHelper;
-
-  /*
    * Return from a resumed async function.
    *
    * Store result into the AsyncFunctionWaitHandle, mark it as finished and
@@ -264,16 +254,13 @@ struct UniqueStubs {
    * Like resumeHelper, but interpret a basic block first to ensure we make
    * forward progress.
    *
-   * interpHelper expects the correct value of vmpc to be in the first argument
-   * register and syncs it, whereas interpHelperSyncedPC expects vmpc to be
-   * synced a priori.  Both stubs will sync the vmsp and vmfp registers to
-   * vmRegs before passing control to the interpreter.
+   * Expects vmpc to be synced. Both stubs will sync the vmsp and vmfp registers
+   * to vmRegs before passing control to the interpreter.
    *
    * @reached:  jmp from TC
    * @context:  func body
    */
   TCA interpHelper;
-  TCA interpHelperSyncedPC;
   TCA interpHelperNoTranslate;
 
   /*
@@ -381,15 +368,13 @@ struct UniqueStubs {
   TCA throwExceptionWhileUnwinding;
 
   /*
-   * Service request helper.
-   *
-   * Packs service request arguments into a struct on the stack before calling
-   * the C++ service request handler.
+   * Handle a request to translate the code at the given current location.
+   * See svcreq::handleTranslate() for more details.
    *
    * @reached:  jmp from TC
    * @context:  func body
    */
-  TCA handleSRHelper;
+  TCA handleTranslate;
 
   /*
    * Handle a request to retranslate the code at the given current location.

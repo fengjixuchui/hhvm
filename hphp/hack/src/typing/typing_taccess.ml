@@ -373,18 +373,6 @@ let rec expand ctx env root : _ * result =
         let ctx = { ctx with allow_abstract } in
         create_root_from_type_constant ctx env root cls ci
     end
-  | Tvarray _
-  | Tdarray _
-  | Tvec_or_dict _
-  | Tvarray_or_darray _ ->
-    let { id = (_, tconst); _ } = ctx in
-    (match tconst with
-    (* harcode the constants for coeffects until HAM finishes *)
-    | "C"
-    | "CMut" ->
-      (* TODO point to something real with this reason *)
-      (env, Exact (Typing_make_type.mixed Reason.Rnone))
-    | _ -> (env, Missing err))
   | Tgeneric (s, tyargs) ->
     let ctx =
       let generics_seen = TySet.add root ctx.generics_seen in
@@ -399,7 +387,7 @@ let rec expand ctx env root : _ * result =
       TySet.elements
         (TySet.diff (Env.get_upper_bounds env s tyargs) ctx.generics_seen)
     in
-    let (env, resl) = List.map_env env upper_bounds (expand ctx) in
+    let (env, resl) = List.map_env env upper_bounds ~f:(expand ctx) in
     let res = intersect_results err resl in
     (env, update_class_name env ctx.id s res)
   | Tdependent (dep_ty, ty) ->
@@ -421,17 +409,17 @@ let rec expand ctx env root : _ * result =
           let (_env, t) = Env.expand_type env t in
           is_tyvar t)
     in
-    let (env, resl) = List.map_env env tyl_nonvars (expand ctx) in
+    let (env, resl) = List.map_env env tyl_nonvars ~f:(expand ctx) in
     let result = intersect_results err resl in
     begin
       match result with
       | Missing _ ->
-        let (env, resl) = List.map_env env tyl_vars (expand ctx) in
+        let (env, resl) = List.map_env env tyl_vars ~f:(expand ctx) in
         (env, intersect_results err resl)
       | _ -> (env, result)
     end
   | Tunion tyl ->
-    let (env, resl) = List.map_env env tyl (expand ctx) in
+    let (env, resl) = List.map_env env tyl ~f:(expand ctx) in
     let result = union_results err resl in
     (env, result)
   | Tvar n ->
@@ -451,6 +439,10 @@ let rec expand ctx env root : _ * result =
   | Tprim _
   | Tshape _
   | Ttuple _
+  | Tvarray _
+  | Tdarray _
+  | Tvec_or_dict _
+  | Tvarray_or_darray _
   | Tfun _
   | Tdynamic
   | Toption _
@@ -497,7 +489,9 @@ let referenced_typeconsts env ety_env (root, ids) =
     ~f:
       begin
         fun ((env, root), acc) (pos, tconst) ->
-        let (env, tyl) = Typing_utils.get_concrete_supertypes env root in
+        let (env, tyl) =
+          Typing_utils.get_concrete_supertypes ~abstract_enum:true env root
+        in
         let acc =
           List.fold tyl ~init:acc ~f:(fun acc ty ->
               let (env, ty) = Env.expand_type env ty in

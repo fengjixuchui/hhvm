@@ -285,41 +285,25 @@ bool handleConvNoticeLevel(
   const ConvNoticeData* notice_data,
   const char* const from,
   const char* const to) {
-  if (LIKELY(notice_data->level == ConvNoticeLevel::None)) return false;
-
+  // do this check here because if notice level is none, reason may be nullptr
+  if (notice_data->level == ConvNoticeLevel::None) return false;
   assertx(notice_data->reason != nullptr);
-  const auto str = makeStaticString(folly::sformat(
-    "Implicit {} to {} conversion for {}", from, to, notice_data->reason));
-  if (notice_data->level == ConvNoticeLevel::Throw) {
-    gen(env, ThrowInvalidOperation, trace, cns(env, str));
-    return true;
+  always_assert(notice_data->level != ConvNoticeLevel::Change);
+  const auto str = cns(env, makeStaticString(folly::sformat(
+    "Implicit {} to {} conversion for {}", from, to, notice_data->reason)));
+  switch(notice_data->level) {
+    case ConvNoticeLevel::Throw:
+      gen(env, ThrowInvalidOperation, trace, str);
+      return true;
+    case ConvNoticeLevel::Log:
+      gen(env, RaiseNotice, trace, str);
+    // FALLTHROUGH
+    case ConvNoticeLevel::None:
+      return false;
+    case ConvNoticeLevel::Change:
+      not_reached();
   }
-  if (notice_data->level == ConvNoticeLevel::Log) {
-    gen(env, RaiseNotice, trace, cns(env, str));
-  }
-  return false;
-}
-
-// return true if throws
-bool handleConvNoticeCmp(
-    State& env,
-    Block* trace,
-    const char* lhs,
-    const char* rhs) {
-  const auto level =
-    flagToConvNoticeLevel(RuntimeOption::EvalNoticeOnCoerceForCmp);
-  if (LIKELY(level == ConvNoticeLevel::None)) return false;
-  if (strcmp(lhs, rhs) > 0) std::swap(lhs, rhs);
-  const auto str = makeStaticString(folly::sformat(
-    "Comparing {} and {} using a relational operator", lhs, rhs));
-  if (level == ConvNoticeLevel::Throw) {
-    gen(env, ThrowInvalidOperation, trace, cns(env, str));
-    return true;
-  }
-  if (level == ConvNoticeLevel::Log) {
-    gen(env, RaiseNotice, trace, cns(env, str));
-  }
-  return false;
+  not_reached();
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -407,9 +391,22 @@ SSATmp* simplifyLookupClsCtxCns(State& env, const IRInstruction* inst) {
 }
 
 SSATmp* simplifyLdCls(State& env, const IRInstruction* inst) {
-  if (inst->src(0)->inst()->is(LdClsName) ||
-      inst->src(0)->inst()->is(LdLazyCls)) {
-    return inst->src(0)->inst()->src(0);
+  auto const str = inst->src(0);
+  auto const cls = inst->src(1);
+  if (str->inst()->is(LdClsName)) {
+    return str->inst()->src(0);
+  }
+  if (str->inst()->is(LdLazyClsName)) {
+    auto const lcls = str->inst()->src(0);
+    if (lcls->inst()->is(LdLazyCls)) {
+      return lcls->inst()->src(0);
+    }
+  }
+  if (str->hasConstVal() && (cls->hasConstVal(TCls) || cls->isA(TNullptr))) {
+    auto const sval = str->strVal();
+    auto const cval = cls->hasConstVal(TCls) ? cls->clsVal() : nullptr;
+    auto const result = Class::lookupUniqueInContext(sval, cval, nullptr);
+    if (result) return cns(env, result);
   }
   return nullptr;
 }
@@ -917,6 +914,7 @@ SSATmp* xorTrueImpl(State& env, SSATmp* src) {
 
   // !(X cmp Y) --> X opposite_cmp Y
   if (auto const negated = negateCmpOp(op)) {
+    if (opcodeMayRaise(op)) return nullptr;
     auto const s0 = inst->src(0);
     auto const s1 = inst->src(1);
     // We can't add new uses to reference counted types without a more
@@ -1036,6 +1034,7 @@ static bool cmpOp(Opcode opc, T a, U b) {
   switch (opc) {
   case GtBool:
   case GtInt:
+  case GtDbl:
   case GtStr:
   case GtStrInt:
   case GtObj:
@@ -1043,6 +1042,7 @@ static bool cmpOp(Opcode opc, T a, U b) {
   case GtRes: return a > b;
   case GteBool:
   case GteInt:
+  case GteDbl:
   case GteStr:
   case GteStrInt:
   case GteObj:
@@ -1050,6 +1050,7 @@ static bool cmpOp(Opcode opc, T a, U b) {
   case GteRes: return a >= b;
   case LtBool:
   case LtInt:
+  case LtDbl:
   case LtStr:
   case LtStrInt:
   case LtObj:
@@ -1057,6 +1058,7 @@ static bool cmpOp(Opcode opc, T a, U b) {
   case LtRes: return a < b;
   case LteBool:
   case LteInt:
+  case LteDbl:
   case LteStr:
   case LteStrInt:
   case LteObj:
@@ -1067,6 +1069,7 @@ static bool cmpOp(Opcode opc, T a, U b) {
   case SameArrLike:
   case EqBool:
   case EqInt:
+  case EqDbl:
   case EqStr:
   case EqStrInt:
   case EqObj:
@@ -1077,6 +1080,7 @@ static bool cmpOp(Opcode opc, T a, U b) {
   case NSameArrLike:
   case NeqBool:
   case NeqInt:
+  case NeqDbl:
   case NeqStr:
   case NeqStrInt:
   case NeqObj:
@@ -1209,6 +1213,22 @@ SSATmp* cmpIntImpl(State& env,
   return nullptr;
 }
 
+SSATmp* cmpDblImpl(State& env,
+                   Opcode opc,
+                   const IRInstruction* const inst,
+                   SSATmp* left,
+                   SSATmp* right) {
+  assertx(left->type() <= TDbl);
+  assertx(right->type() <= TDbl);
+
+  // Identity optimization is not safe because Nan's compare unequal.
+  if (left->hasConstVal() && right->hasConstVal()) {
+    return cns(env, cmpOp(opc, left->dblVal(), right->dblVal()));
+  }
+
+  return nullptr;
+}
+
 SSATmp* cmpStrImpl(State& env,
                    Opcode opc,
                    const IRInstruction* const inst,
@@ -1235,7 +1255,19 @@ SSATmp* cmpStrImpl(State& env,
           env,
           cmpOp(opc, left->strVal()->same(right->strVal()), true)
         );
-      } else {
+      } else if (opc == EqStr || opc == NeqStr) {
+        // if we're going to be converting these to num and then comparing an
+        // int and a float, block this fold because it needs to trigger a notice
+        int64_t lval; double dval;
+        auto ret1 = left->strVal()->isNumericWithVal(lval, dval, 0);
+        auto ret2 = right->strVal()->isNumericWithVal(lval, dval, 0);
+        if (ret1 == ret2 || ret1 == KindOfNull || ret2 == KindOfNull) {
+          return cns(
+            env,
+            cmpOp(opc, left->strVal()->equal(right->strVal()), true)
+          );
+        }
+      } else{
         return cns(
           env,
           cmpOp(opc, left->strVal()->compare(right->strVal()), 0)
@@ -1262,13 +1294,15 @@ SSATmp* cmpStrImpl(State& env,
   // Comparisons against the empty string can be optimized to checks on the
   // string length.
   if (right->hasConstVal() && right->strVal()->empty()) {
+    const auto op =
+     opc == EqStr || opc == SameStr || opc == LteStr ? EqInt : NeqInt;
     switch (opc) {
       case EqStr:
+      case NeqStr: return gen(env, op, gen(env, LdStrLen, left), cns(env, 0));
       case SameStr:
-      case LteStr: return newInst(EqInt, gen(env, LdStrLen, left), cns(env, 0));
-      case NeqStr:
+      case LteStr:
       case NSameStr:
-      case GtStr: return newInst(NeqInt, gen(env, LdStrLen, left), cns(env, 0));
+      case GtStr: return newInst(op, gen(env, LdStrLen, left), cns(env, 0));
       case LtStr: return cns(env, false);
       case GteStr: return cns(env, true);
       default: always_assert(false);
@@ -1306,13 +1340,7 @@ SSATmp* cmpStrIntImpl(State& env,
         default: always_assert(false);
       }
     }(opc);
-    const auto dblval = gen(env, ConvIntToDbl, right);
-    if (opc != EqStrInt && opc != NeqStrInt) {
-      if (handleConvNoticeCmp(env, inst->taken(), "string", "int")) {
-        return cns(env, TBottom);
-      }
-    }
-    return gen(env, dblOpc, cns(env, sd), dblval);
+    return gen(env, dblOpc, cns(env, sd), gen(env, ConvIntToDbl, right));
   } else {
     auto const intOpc = [](Opcode opcode) {
       switch (opcode) {
@@ -1325,11 +1353,6 @@ SSATmp* cmpStrIntImpl(State& env,
         default: always_assert(false);
       }
     }(opc);
-    if (opc != EqStrInt && opc != NeqStrInt) {
-      if (handleConvNoticeCmp(env, inst->taken(), "string", "int")) {
-        return cns(env, TBottom);
-      }
-    }
     return gen(
       env, intOpc, cns(env, type == KindOfNull ? (int64_t)0 : si), right);
   }
@@ -1438,6 +1461,13 @@ X(LteInt, Int)
 X(EqInt, Int)
 X(NeqInt, Int)
 
+X(GtDbl, Dbl)
+X(GteDbl, Dbl)
+X(LtDbl, Dbl)
+X(LteDbl, Dbl)
+X(EqDbl, Dbl)
+X(NeqDbl, Dbl)
+
 X(GtStr, Str)
 X(GteStr, Str)
 X(LtStr, Str)
@@ -1542,6 +1572,17 @@ SSATmp* simplifyCmpInt(State& env, const IRInstruction* inst) {
   return nullptr;
 }
 
+SSATmp* simplifyCmpDbl(State& env, const IRInstruction* inst) {
+  auto const left = inst->src(0);
+  auto const right = inst->src(1);
+  assertx(left->type() <= TDbl);
+  assertx(right->type() <= TDbl);
+  if (left->hasConstVal() && right->hasConstVal()) {
+    return cns(env, HPHP::compare(left->dblVal(), right->dblVal()));
+  }
+  return nullptr;
+}
+
 SSATmp* simplifyCmpStr(State& env, const IRInstruction* inst) {
   auto const left = inst->src(0);
   auto const right = inst->src(1);
@@ -1583,12 +1624,9 @@ SSATmp* simplifyCmpStrInt(State& env, const IRInstruction* inst) {
   double sd;
   auto const type =
     left->strVal()->isNumericWithVal(si, sd, true /* allow errors */);
-  const auto ret = type == KindOfDouble
+  return type == KindOfDouble
     ? gen(env, CmpDbl, cns(env, sd), gen(env, ConvIntToDbl, right))
     : gen(env, CmpInt, cns(env, type == KindOfNull ? (int64_t)0 : si), right);
-  return handleConvNoticeCmp(env, inst->taken(), "string", "int")
-    ? cns(env, TBottom)
-    : ret;
 }
 
 SSATmp* simplifyCmpRes(State& env, const IRInstruction* inst) {
@@ -1658,6 +1696,15 @@ SSATmp* instanceOfImpl(State& env, SSATmp* ssatmp1, ClassSpec spec2) {
     InstanceBits::init();
     if (InstanceBits::lookup(cls2->name()) != 0) {
       return gen(env, InstanceOfBitmask, ssatmp1, cns(env, cls2->name()));
+    }
+  }
+
+  // If spec2 is an interface and we've assigned it a vtable slot, use that.
+  if (spec2.exact() && isInterface(cls2) && RO::RepoAuthoritative) {
+    auto const slot = cls2->preClass()->ifaceVtableSlot();
+    if (slot != kInvalidSlot) {
+      auto const data = InstanceOfIfaceVtableData{spec2.cls(), true};
+      return gen(env, InstanceOfIfaceVtable, data, ssatmp1);
     }
   }
 
@@ -1758,8 +1805,8 @@ SSATmp* simplifyInstanceOfIface(State& env, const IRInstruction* inst) {
   auto const src1 = inst->src(0);
   auto const src2 = inst->src(1);
 
-  auto const cls2 = Class::lookupUniqueInContext(src2->strVal(),
-                                                     inst->ctx(), nullptr);
+  auto const cls2 = Class::lookupUniqueInContext(
+      src2->strVal(), inst->ctx(), nullptr);
   assertx(cls2 && isInterface(cls2));
   auto const spec2 = ClassSpec{cls2, ClassSpec::ExactTag{}};
 
@@ -2004,6 +2051,8 @@ SSATmp* simplifyConvArrLikeToKeyset(State& env, const IRInstruction* inst) {
 }
 
 SSATmp* simplifyConvClsMethToVec(State& env, const IRInstruction* inst) {
+  assertx(RO::EvalIsCompatibleClsMethType);
+  if (RO::EvalRaiseClsMethConversionWarning) return nullptr;
   auto const src = inst->src(0);
   if (src->hasConstVal()) {
     auto const clsmeth = src->clsmethVal();
@@ -2014,6 +2063,8 @@ SSATmp* simplifyConvClsMethToVec(State& env, const IRInstruction* inst) {
 }
 
 SSATmp* simplifyConvClsMethToDict(State& env, const IRInstruction* inst) {
+  assertx(RO::EvalIsCompatibleClsMethType);
+  if (RO::EvalRaiseClsMethConversionWarning) return nullptr;
   auto const src = inst->src(0);
   if (src->hasConstVal()) {
     auto const clsmeth = src->clsmethVal();
@@ -2025,6 +2076,8 @@ SSATmp* simplifyConvClsMethToDict(State& env, const IRInstruction* inst) {
 }
 
 SSATmp* simplifyConvClsMethToKeyset(State& env, const IRInstruction* inst) {
+  assertx(RO::EvalIsCompatibleClsMethType);
+  if (RO::EvalRaiseClsMethConversionWarning) return nullptr;
   auto const src = inst->src(0);
   if (src->hasConstVal()) {
     auto const clsmeth = src->clsmethVal();
@@ -2134,12 +2187,11 @@ const StaticString
     s_msgVecToStr("Vec to string conversion"),
     s_msgDictToStr("Dict to string conversion"),
     s_msgKeysetToStr("Keyset to string conversion"),
-    s_msgFuncToStr("Func to string conversion"),
-    s_msgFuncToInt("Func to int conversion"),
-    s_msgFuncToDbl("Func to double conversion"),
-    s_msgClsMethToStr("clsmeth to string conversion"),
-    s_msgClsMethToInt("Implicit clsmeth to int conversion"),
-    s_msgClsMethToDbl("Implicit clsmeth to double conversion");
+    s_msgClsMethToStr("Cannot convert clsmeth to string"),
+    s_msgClsMethToInt("Cannot convert clsmeth to int"),
+    s_msgClsMethToIntImpl("Implicit clsmeth to int conversion"),
+    s_msgClsMethToDbl("Cannot convert clsmeth to double"),
+    s_msgClsMethToDblImpl("Implicit clsmeth to double conversion");
 }
 
 SSATmp* simplifyConvTVToBool(State& env, const IRInstruction* inst) {
@@ -2279,9 +2331,14 @@ SSATmp* simplifyConvTVToInt(State& env, const IRInstruction* inst) {
   if (srcType <= TStr)  return genWithConvNoticePrim(ConvStrToInt, "string");
   if (srcType <= TObj)  return gen(env, ConvObjToInt, *notice_data, catchTrace, src);
   if (srcType <= TRes)  return genWithConvNoticePrim(ConvResToInt, "resource");
-  if (srcType <= TClsMeth)  {
+  if (srcType <= TClsMeth) {
+    if (!RO::EvalIsCompatibleClsMethType) {
+      gen(env, ThrowInvalidOperation, catchTrace,
+          cns(env, s_msgClsMethToInt.get()));
+      return cns(env, TBottom);
+    }
     if (RuntimeOption::EvalRaiseClsMethConversionWarning) {
-      gen(env, RaiseNotice, catchTrace, cns(env, s_msgClsMethToInt.get()));
+      gen(env, RaiseNotice, catchTrace, cns(env, s_msgClsMethToIntImpl.get()));
     }
     return cns(env, 1);
   }
@@ -2312,9 +2369,14 @@ SSATmp* simplifyConvTVToDbl(State& env, const IRInstruction* inst) {
   if (srcType <= TStr)  return gen(env, ConvStrToDbl, src);
   if (srcType <= TObj)  return gen(env, ConvObjToDbl, inst->taken(), src);
   if (srcType <= TRes)  return gen(env, ConvResToDbl, src);
-  if (srcType <= TClsMeth)  {
+  if (srcType <= TClsMeth) {
+    if (!RO::EvalIsCompatibleClsMethType) {
+      gen(env, ThrowInvalidOperation, catchTrace,
+          cns(env, s_msgClsMethToDbl.get()));
+      return cns(env, TBottom);
+    }
     if (RuntimeOption::EvalRaiseClsMethConversionWarning) {
-      gen(env, RaiseNotice, catchTrace, cns(env, s_msgClsMethToDbl.get()));
+      gen(env, RaiseNotice, catchTrace, cns(env, s_msgClsMethToDblImpl.get()));
     }
     return cns(env, 1.0);
   }
@@ -2392,6 +2454,13 @@ SSATmp* simplifyCheckRDSInitialized(State& env, const IRInstruction* inst) {
 SSATmp* simplifyMarkRDSInitialized(State& env, const IRInstruction* inst) {
   auto const handle = inst->extra<MarkRDSInitialized>()->handle;
   if (!rds::isNormalHandle(handle)) return gen(env, Nop);
+  return nullptr;
+}
+
+SSATmp* simplifyMarkRDSAccess(State& env, const IRInstruction* inst) {
+  auto const handle = inst->extra<MarkRDSAccess>()->handle;
+  auto const profile = rds::profileForHandle(handle);
+  if (profile == rds::kUninitHandle) return gen(env, Nop);
   return nullptr;
 }
 
@@ -2752,8 +2821,8 @@ SSATmp* simplifyCheckVecBounds(State& env, const IRInstruction* inst) {
   auto const idx   = inst->src(1);
 
   auto const idxVal = idx->hasConstVal()
-    ? folly::Optional<int64_t>(idx->intVal())
-    : folly::none;
+    ? Optional<int64_t>(idx->intVal())
+    : std::nullopt;
   switch (vecBoundsStaticCheck(array->type(), idxVal)) {
   case VecBounds::In:       return gen(env, Nop);
   case VecBounds::Out:      return gen(env, Jmp, inst->taken());
@@ -3382,10 +3451,15 @@ SSATmp* simplifyLdLazyClsName(State& env, const IRInstruction* inst) {
     cns(env, src->lclsVal().name()) : nullptr;
 }
 
-SSATmp* simplifyLookupClsRDS(State& /*env*/, const IRInstruction* inst) {
-  auto const name = inst->src(0);
-  if (name->inst()->is(LdClsName)) {
-    return name->inst()->src(0);
+SSATmp* simplifyLookupClsRDS(State& env, const IRInstruction* inst) {
+  auto const str = inst->src(0);
+  if (str->inst()->is(LdClsName, LdLazyCls)) {
+    return str->inst()->src(0);
+  }
+  if (str->hasConstVal()) {
+    auto const sval = str->strVal();
+    auto const result = Class::lookupUniqueInContext(sval, nullptr, nullptr);
+    if (result) return cns(env, result);
   }
   return nullptr;
 }
@@ -3647,7 +3721,10 @@ SSATmp* simplifyGetMemoKey(State& env, const IRInstruction* inst) {
   auto const src = inst->src(0);
 
   if (auto ret = simplifyGetMemoKeyScalar(env, inst)) return ret;
-  if (src->isA(TUncounted|TStr)) return gen(env, GetMemoKeyScalar, src);
+  if (src->isA(TUncounted|TStr) &&
+      !RuntimeOption::EvalRaiseClassConversionWarning) {
+    return gen(env, GetMemoKeyScalar, src);
+  }
   return nullptr;
 }
 
@@ -3684,6 +3761,28 @@ SSATmp* simplifyCheckClsMethFunc(State& env, const IRInstruction* inst) {
   return nullptr;
 }
 
+SSATmp* simplifyNewClsMeth(State& env, const IRInstruction* inst) {
+  auto const cls = inst->src(0);
+  auto const func = inst->src(1);
+  if (!cls->hasConstVal() || !func->hasConstVal()) return nullptr;
+  auto const clsmeth = ClsMethDataRef::create(
+      const_cast<Class*>(cls->clsVal()),
+      const_cast<Func*>(func->funcVal()));
+  return cns(env, clsmeth);
+}
+
+SSATmp* simplifyLdClsFromClsMeth(State& env, const IRInstruction* inst) {
+  auto const clsmeth = inst->src(0);
+  if (!clsmeth->hasConstVal()) return nullptr;
+  return cns(env, clsmeth->clsmethVal()->getCls());
+}
+
+SSATmp* simplifyLdFuncFromClsMeth(State& env, const IRInstruction* inst) {
+  auto const clsmeth = inst->src(0);
+  if (!clsmeth->hasConstVal()) return nullptr;
+  return cns(env, clsmeth->clsmethVal()->getFunc());
+}
+
 //////////////////////////////////////////////////////////////////////
 
 SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
@@ -3708,6 +3807,7 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
       X(CheckInitMem)
       X(CheckRDSInitialized)
       X(MarkRDSInitialized)
+      X(MarkRDSAccess)
       X(CheckLoc)
       X(CheckMBase)
       X(CheckInOuts)
@@ -3838,6 +3938,13 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
       X(EqInt)
       X(NeqInt)
       X(CmpInt)
+      X(GtDbl)
+      X(GteDbl)
+      X(LtDbl)
+      X(LteDbl)
+      X(EqDbl)
+      X(NeqDbl)
+      X(CmpDbl)
       X(GtStr)
       X(GteStr)
       X(LtStr)
@@ -3908,7 +4015,10 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
       X(StrictlyIntegerConv)
       X(RaiseErrorOnInvalidIsAsExpressionType)
       X(LdFrameCls)
+      X(NewClsMeth)
       X(CheckClsMethFunc)
+      X(LdClsFromClsMeth)
+      X(LdFuncFromClsMeth)
       X(StructDictGetWithColor)
 #undef X
       default: break;
@@ -3941,15 +4051,13 @@ SSATmp* simplifyWork(State& env, const IRInstruction* inst) {
 Block* unreachableBlock(IRUnit& unit, BCContext ctx) {
   auto const unreachableBlock = unit.defBlock(1, Block::Hint::Unused);
   makeInstruction(
-    [&] (IRInstruction* inst) -> SSATmp* {
+    [&] (IRInstruction* inst) -> void {
       unreachableBlock->push_back(unit.clone(inst));
-      return inst->dst(0);
     },
     Unreachable,
     ctx,
     ASSERT_REASON
   );
-
   return unreachableBlock;
 }
 
@@ -4129,6 +4237,7 @@ void simplifyPass(IRUnit& unit) {
   auto const markUnreachable = [&] (Block* block) {
     // Any code that's postdominated by Unreachable is also unreachable, so
     // erase everything else in this block.
+    if (block->back().hasDst()) block->back().setDst(nullptr);
     unit.replace(&block->back(), Unreachable, ASSERT_REASON);
     for (auto it = block->skipHeader(), end = block->backIter(); it != end;) {
       auto toErase = it;

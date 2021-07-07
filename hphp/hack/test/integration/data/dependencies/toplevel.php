@@ -204,6 +204,12 @@ function with_expr_in_user_attrs(): void {
   $_ = my_keys(vec[]);
 }
 
+<<MyUserAttr(SimpleClass::class)>>
+type WithClassNameInAttr= int;
+
+<<MyUserAttr('blah \' blah blah')>>
+type WithEscapedCharInAttr= int;
+
 <<MyUserAttr('blah')>>
 type TransparentWithUserAttr = int;
 
@@ -220,6 +226,10 @@ function enum_with_user_attr(EnumWithUserAttr $x): void {}
 function transparent_with_user_attr(TransparentWithUserAttr $x): void {}
 
 function opaque_with_user_attr(OpaqueWithUserAttr $x): void {}
+
+function with_escaped_char_in_attr(WithEscapedCharInAttr $_): void {}
+
+function with_class_name_in_attr(WithClassNameInAttr $_): void {}
 
 <<MyUserAttr('blah')>>
 class WithUserAttr {
@@ -305,3 +315,9 @@ function with_where_constraint(): void {
 
 
 function with_open_shape(shape(...) $x): void {}
+
+function with_tparam_constraint(WithTparamConstraint<IAsConstraint> $_) : void {}
+
+function with_prop_in_construct() : void {
+  $x = new WithPropInConstruct(1);
+}

@@ -24,7 +24,6 @@
 #include "hphp/runtime/vm/jit/prof-data.h"
 #include "hphp/runtime/vm/jit/service-requests.h"
 #include "hphp/runtime/vm/jit/smashable-instr.h"
-#include "hphp/runtime/vm/jit/stub-alloc.h"
 #include "hphp/runtime/vm/jit/tc.h"
 #include "hphp/runtime/vm/jit/translator-inline.h"
 #include "hphp/runtime/vm/jit/unwind-itanium.h"
@@ -176,52 +175,6 @@ TranslationResult getTranslation(SrcKey sk) {
   );
 }
 
-/*
- * Runtime service handler that patches a jmp to the translation of u:dest from
- * toSmash.
- */
-TranslationResult bindJmp(TCA toSmash,
-                          SrcKey destSk,
-                          SBInvOffset spOff,
-                          ServiceRequest req,
-                          TCA oldStub,
-                          bool& smashed) {
-  auto const result = getTranslation(destSk);
-  if (!result.addr()) {
-    if (result.isProcessPersistentFailure()) {
-      // If we couldn't make a new translation, and we won't be able
-      // to make any new translations for the remainder of the process
-      // lifetime, we can just burn in a call to
-      // handleResumeNoTranslate.
-      if (auto const stub = emit_interp_no_translate_stub(spOff, destSk)) {
-        // We still need to create a SrcRec (if one doesn't already
-        // exist) to manage the locking correctly. This can fail.
-        if (!tc::createSrcRec(destSk, liveSpOff(), true)) return result;
-        if (req == REQ_BIND_ADDR) {
-          tc::bindAddrToStub(toSmash, oldStub, stub, destSk, smashed);
-        } else {
-          assertx(req == REQ_BIND_JMP);
-          tc::bindJmpToStub(toSmash, oldStub, stub, destSk, smashed);
-        }
-      }
-    }
-    return result;
-  }
-
-  if (req == REQ_BIND_ADDR) {
-    if (auto const addr = tc::bindAddr(toSmash, destSk, smashed)) {
-      return TranslationResult{addr};
-    }
-  } else {
-    assertx(req == REQ_BIND_JMP);
-    if (auto const addr = tc::bindJmp(toSmash, destSk, smashed)) {
-      return TranslationResult{addr};
-    }
-  }
-
-  return TranslationResult::failTransiently();
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 
 }
@@ -260,7 +213,7 @@ TCA resume(SrcKey sk, TranslationResult transResult) noexcept {
     if (auto const addr = transResult.addr()) return addr;
     vmpc() = sk.pc();
     return transResult.scope() == TranslationResult::Scope::Transient
-      ? tc::ustubs().interpHelperSyncedPC
+      ? tc::ustubs().interpHelper
       : tc::ustubs().interpHelperNoTranslate;
   }();
 
@@ -275,35 +228,18 @@ TCA resume(SrcKey sk, TranslationResult transResult) noexcept {
 
 }
 
-TCA handleServiceRequest(ReqInfo& info) noexcept {
-  FTRACE(1, "handleServiceRequest {}\n", svcreq::to_name(info.req));
-
+TCA handleTranslate(Offset bcOff, SBInvOffset spOff) noexcept {
   assert_native_stack_aligned();
 
   // This is a lie, only vmfp() is synced. We will sync vmsp() below and vmpc()
   // later if we are going to use the resume helper.
   tl_regState = VMRegState::CLEAN;
-  vmsp() = Stack::anyFrameStackBase(vmfp()) - info.spOff.offset;
+  vmsp() = Stack::anyFrameStackBase(vmfp()) - spOff.offset;
 
-  if (Trace::moduleEnabled(Trace::ringbuffer, 1)) {
-    Trace::ringbufferEntry(
-      Trace::RBTypeServiceReq, (uint64_t)info.req, (uint64_t)info.args[0].tca
-    );
-  }
+  FTRACE(1, "handleTranslate {}\n", vmfp()->func()->fullName()->data());
 
-  auto smashed = false;
-  auto const toSmash = info.args[0].tca;
-  auto const sk = SrcKey::fromAtomicInt(info.args[1].sk);
-  auto const transResult =
-    bindJmp(toSmash, sk, liveSpOff(), info.req, info.stub, smashed);
-
-  if (smashed && info.stub) {
-    auto const stub = info.stub;
-    FTRACE(3, "Freeing stub {} on treadmill\n", stub);
-    Treadmill::enqueue([stub] { tc::freeTCStub(stub); });
-  }
-
-  return resume(sk, transResult);
+  auto const sk = SrcKey { liveFunc(), bcOff, liveResumeMode() };
+  return resume(sk, getTranslation(sk));
 }
 
 TCA handleRetranslate(Offset bcOff, SBInvOffset spOff) noexcept {
@@ -317,7 +253,7 @@ TCA handleRetranslate(Offset bcOff, SBInvOffset spOff) noexcept {
   FTRACE(1, "handleRetranslate {}\n", vmfp()->func()->fullName()->data());
 
   INC_TPC(retranslate);
-  auto const sk = SrcKey{ liveFunc(), bcOff, liveResumeMode() };
+  auto const sk = SrcKey { liveFunc(), bcOff, liveResumeMode() };
   auto const context = getContext(sk, tc::profileFunc(sk.func()));
   auto const transResult = mcgen::retranslate(TransArgs{sk}, context);
   SKTRACE(2, sk, "retranslated @%p\n", transResult.addr());
@@ -409,9 +345,16 @@ TCA handleBindCall(TCA toSmash, Func* func, int32_t numArgs) {
   }
 }
 
-TCA handleResume(bool interpFirst) {
+std::string ResumeFlags::show() const {
+  std::vector<std::string> flags;
+  if (m_noTranslate) flags.emplace_back("noTranslate");
+  if (m_interpFirst) flags.emplace_back("interpFirst");
+  return folly::join(", ", flags);
+}
+
+TCA handleResume(ResumeFlags flags) {
   assert_native_stack_aligned();
-  FTRACE(1, "handleResume({})\n", interpFirst);
+  FTRACE(1, "handleResume({})\n", flags.show());
 
   if (!vmRegsUnsafe().pc) return tc::ustubs().callToExit;
 
@@ -420,16 +363,28 @@ TCA handleResume(bool interpFirst) {
   auto sk = liveSK();
   FTRACE(2, "handleResume: sk: {}\n", showShort(sk));
 
-  TCA start;
-  if (interpFirst) {
-    start = nullptr;
-    INC_TPC(interp_bb_force);
-  } else {
-    auto const trans = getTranslation(sk);
-    start = trans.isRequestPersistentFailure()
-      ? tc::ustubs().interpHelperNoTranslate
-      : trans.addr();
-  }
+  auto const findOrTranslate = [&] () -> TCA {
+    if (!flags.m_noTranslate) {
+      auto const trans = getTranslation(sk);
+      return trans.isRequestPersistentFailure()
+        ? tc::ustubs().interpHelperNoTranslate
+        : trans.addr();
+    }
+
+    if (auto const sr = tc::findSrcRec(sk)) {
+      if (auto const tca = sr->getTopTranslation()) {
+        if (LIKELY(RID().getJit())) {
+          SKTRACE(2, sk, "handleResume: found %p\n", tca);
+          return tca;
+        }
+      }
+    }
+    return nullptr;
+  };
+
+  TCA start = nullptr;
+  if (!flags.m_interpFirst) start = findOrTranslate();
+  if (!flags.m_noTranslate && flags.m_interpFirst) INC_TPC(interp_bb_force);
 
   vmJitReturnAddr() = nullptr;
   vmJitCalledFrame() = vmfp();
@@ -440,68 +395,8 @@ TCA handleResume(bool interpFirst) {
   // created, if the lease holder dropped it).
   if (!start) {
     WorkloadStats guard(WorkloadStats::InInterp);
-
     tracing::BlockNoTrace _{"dispatch-bb"};
 
-    while (!start) {
-      INC_TPC(interp_bb);
-      if (auto const retAddr = HPHP::dispatchBB()) {
-        start = retAddr;
-        break;
-      }
-
-      assertx(vmpc());
-      sk = liveSK();
-
-      auto const trans = getTranslation(sk);
-      start = trans.isRequestPersistentFailure()
-        ? tc::ustubs().interpHelperNoTranslate
-        : trans.addr();
-    }
-  }
-
-  if (Trace::moduleEnabled(Trace::ringbuffer, 1)) {
-    auto skData = sk.valid() ? sk.toAtomicInt() : uint64_t(-1LL);
-    Trace::ringbufferEntry(Trace::RBTypeResumeTC, skData, (uint64_t)start);
-  }
-
-  tl_regState = VMRegState::DIRTY;
-  return start;
-}
-
-TCA handleResumeNoTranslate(bool interpFirst) {
-  assert_native_stack_aligned();
-  FTRACE(1, "handleResumeNoTranslate({})\n", interpFirst);
-
-  if (!vmRegsUnsafe().pc) return tc::ustubs().callToExit;
-
-  tl_regState = VMRegState::CLEAN;
-
-  auto sk = liveSK();
-  FTRACE(2, "handleResumeNoTranslate: sk: {}\n", showShort(sk));
-
-  auto const find = [&] () -> TCA {
-    if (auto const sr = tc::findSrcRec(sk)) {
-      if (auto const tca = sr->getTopTranslation()) {
-        if (LIKELY(RID().getJit())) {
-          SKTRACE(2, sk, "handleResumeNoTranslate: found %p\n", tca);
-          return tca;
-        }
-      }
-    }
-    return nullptr;
-  };
-
-  TCA start = nullptr;
-  if (!interpFirst) start = find();
-
-  vmJitReturnAddr() = nullptr;
-  vmJitCalledFrame() = vmfp();
-  SCOPE_EXIT { vmJitCalledFrame() = nullptr; };
-
-  if (!start) {
-    WorkloadStats guard(WorkloadStats::InInterp);
-    tracing::BlockNoTrace _{"dispatch-bb"};
     do {
       INC_TPC(interp_bb);
       if (auto const retAddr = HPHP::dispatchBB()) {
@@ -509,7 +404,7 @@ TCA handleResumeNoTranslate(bool interpFirst) {
       } else {
         assertx(vmpc());
         sk = liveSK();
-        start = find();
+        start = findOrTranslate();
       }
     } while (!start);
   }

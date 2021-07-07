@@ -21,9 +21,9 @@ use parser_core_types::compact_token::CompactToken;
 use parser_core_types::token_factory::SimpleTokenFactoryImpl;
 use smart_constructors::SmartConstructors;
 
-use crate::{DirectDeclSmartConstructors, Node};
+use crate::{DirectDeclSmartConstructors, Node, SourceTextAllocator};
 
-impl<'src> SmartConstructors for DirectDeclSmartConstructors<'src> {
+impl<'src, 'text, S: SourceTextAllocator<'text, 'src>> SmartConstructors for DirectDeclSmartConstructors<'src, 'text, S> {
     type State = Self;
     type TF = SimpleTokenFactoryImpl<CompactToken>;
     type R = Node<'src>;
@@ -136,6 +136,10 @@ impl<'src> SmartConstructors for DirectDeclSmartConstructors<'src> {
 
     fn make_alias_declaration(&mut self, attribute_spec: Self::R, keyword: Self::R, name: Self::R, generic_parameter: Self::R, constraint: Self::R, equal: Self::R, type_: Self::R, semicolon: Self::R) -> Self::R {
         <Self as FlattenSmartConstructors<'src, Self>>::make_alias_declaration(self, attribute_spec, keyword, name, generic_parameter, constraint, equal, type_, semicolon)
+    }
+
+    fn make_context_alias_declaration(&mut self, attribute_spec: Self::R, keyword: Self::R, name: Self::R, generic_parameter: Self::R, as_constraint: Self::R, equal: Self::R, context: Self::R, semicolon: Self::R) -> Self::R {
+        <Self as FlattenSmartConstructors<'src, Self>>::make_context_alias_declaration(self, attribute_spec, keyword, name, generic_parameter, as_constraint, equal, context, semicolon)
     }
 
     fn make_property_declaration(&mut self, attribute_spec: Self::R, modifiers: Self::R, type_: Self::R, declarators: Self::R, semicolon: Self::R) -> Self::R {

@@ -68,7 +68,7 @@ void defineFrameAndStack(IRGS& env, SBInvOffset bcSPOff) {
     // - fp(env) and sp(env) are backed by rvmfp() and rvmsp() registers
     // - sp(env) points to the top of the stack at translation entry
     // - stack base is `irSPOff` away from sp(env)
-    gen(env, DefFP, DefFPData { folly::none });
+    gen(env, DefFP, DefFPData { std::nullopt });
     updateMarker(env);
 
     auto const irSPOff = bcSPOff;
@@ -95,24 +95,22 @@ void defineFrameAndStack(IRGS& env, SBInvOffset bcSPOff) {
   }
 }
 
-bool handleConvNoticeLevel(
+void handleConvNoticeLevel(
     IRGS& env,
     const ConvNoticeData& notice_data,
     const char* const from,
   const char* const to) {
-  if (LIKELY(notice_data.level == ConvNoticeLevel::None)) return false;
+  if (LIKELY(notice_data.level == ConvNoticeLevel::None)) return;
 
   assertx(notice_data.reason != nullptr);
   const auto str = makeStaticString(folly::sformat(
     "Implicit {} to {} conversion for {}", from, to, notice_data.reason));
   if (notice_data.level == ConvNoticeLevel::Throw) {
     gen(env, ThrowInvalidOperation, cns(env, str));
-    return true;
   }
   if (notice_data.level == ConvNoticeLevel::Log) {
     gen(env, RaiseNotice, cns(env, str));
   }
-  return false;
 }
 
 }}}

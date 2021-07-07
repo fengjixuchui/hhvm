@@ -26,8 +26,6 @@
 #include "hphp/util/bitset.h"
 #include "hphp/util/low-ptr.h"
 
-#include <folly/Optional.h>
-
 #include <cstdint>
 #include <type_traits>
 
@@ -285,26 +283,15 @@ constexpr bool operator>(Mem a, Mem b) {
   c(LazyCls,         bits_t::bit<26>())                                 \
 /**/
 
+#define UNCCOUNTED_INIT_UNION \
+  kInitNull|kBool|kInt|kDbl|kPersistent|kFunc|kCls|kRecDesc|kLazyCls|kClsMeth
+
+#define INIT_CELL_UNION \
+  kUncountedInit|kStr|kArrLike|kObj|kRes|kRecord|kRFunc|kRClsMeth
+
 /*
  * This list should be in non-decreasing order of specificity.
  */
-#ifdef USE_LOWPTR
-#define UNCCOUNTED_INIT_UNION \
-        kInitNull|kBool|kInt|kDbl|kPersistent|kFunc|kCls|kRecDesc|kLazyCls| \
-        kClsMeth
-#else
-#define UNCCOUNTED_INIT_UNION \
-        kInitNull|kBool|kInt|kDbl|kPersistent|kFunc|kCls|kRecDesc|kLazyCls
-#endif
-
-#ifdef USE_LOWPTR
-#define INIT_CELL_UNION kUncountedInit|kStr|kArrLike|kObj|kRes|kRecord| \
-                        kRFunc|kRClsMeth
-#else
-#define INIT_CELL_UNION kUncountedInit|kStr|kArrLike|kObj|kRes|kRecord| \
-                        kClsMeth|kRFunc|kRClsMeth
-#endif
-
 #define IRT_PHP_UNIONS(c)                                               \
   c(Null,                kUninit|kInitNull)                             \
   c(PersistentStr,       kStaticStr|kUncountedStr)                      \
@@ -346,15 +333,9 @@ constexpr bool operator>(Mem a, Mem b) {
 /*
  * Cell, Counted, Init, PtrToCell, etc...
  */
-#ifdef USE_LOWPTR
 #define COUNTED_INIT_UNION \
   kCountedStr|kCountedVec|kCountedDict|kCountedKeyset|kObj|kRes| \
   kRecord|kRFunc|kRClsMeth
-#else
-#define COUNTED_INIT_UNION \
-  kCountedStr|kCountedVec|kCountedDict|kCountedKeyset|kObj|kRes| \
-  kRecord|kClsMeth|kRFunc|kRClsMeth
-#endif
 
 #define IRT_SPECIAL                                           \
   /* Bottom and Top use IRTX to specify a custom Ptr kind */  \
@@ -601,10 +582,10 @@ public:
   /*
    * Return a const type for `tv'. `cns' will assert if given a type
    * which isn't allowed to have constants, while `tryCns' will return
-   * folly::none.
+   * std::nullopt.
    */
   static Type cns(TypedValue tv);
-  static folly::Optional<Type> tryCns(TypedValue tv);
+  static Optional<Type> tryCns(TypedValue tv);
 
   /*
    * If this represents a constant value, return the most specific strict
@@ -907,7 +888,7 @@ private:
   };
 };
 
-using OptType = folly::Optional<Type>;
+using OptType = Optional<Type>;
 
 /////////////////////////////////////////////////////////////////////////////
 

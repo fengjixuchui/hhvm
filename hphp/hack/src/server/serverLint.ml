@@ -45,7 +45,7 @@ let lint tcopt _acc (files_with_contents : lint_target list) =
 
 let lint_and_filter tcopt code acc fnl =
   let lint_errs = lint tcopt acc fnl in
-  List.filter lint_errs (fun err -> Lint.get_code err = code)
+  List.filter lint_errs ~f:(fun err -> Lint.get_code err = code)
 
 let lint_all genv ctx code =
   let next =
@@ -65,7 +65,7 @@ let lint_all genv ctx code =
       ~neutral:[]
       ~next
   in
-  List.map errs Lint.to_absolute
+  List.map errs ~f:Lint.to_absolute
 
 let create_rp : string -> RP.t = Relative_path.create Relative_path.Root
 
@@ -103,7 +103,8 @@ let lint_single_xcontroller ctx name =
   let module Cls = Decl_provider.Class in
   match Decl_provider.get_class ctx name with
   | Some class_ ->
-    if Cls.extends class_ "\\XControllerBase" && not (Cls.abstract class_) then
+    if Cls.has_ancestor class_ "\\XControllerBase" && not (Cls.abstract class_)
+    then
       Linting_service.lint_xcontroller
         ctx
         Cls.(pos class_ |> Naming_provider.resolve_position ctx, name class_)

@@ -110,7 +110,7 @@ SSATmp* cns(IRGS& env, Args&&... args) {
 /*
  * Type checks and assertions.
  */
-void checkType(IRGS&, const Location&, Type, Offset dest);
+void checkType(IRGS&, const Location&, Type, SrcKey dest);
 void assertTypeStack(IRGS&, BCSPRelOffset, Type);
 void assertTypeLocal(IRGS&, uint32_t id, Type);
 void assertTypeLocation(IRGS&, const Location&, Type);
@@ -169,7 +169,7 @@ void finishHHBC(IRGS&);
  */
 void endRegion(IRGS&);
 void endRegion(IRGS&, SrcKey);
-void endBlock(IRGS&, Offset next);
+void endBlock(IRGS&, SrcKey nextSk);
 
 /*
  * When we're done creating the IRUnit, this function must be called to ensure

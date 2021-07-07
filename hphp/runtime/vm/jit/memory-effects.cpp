@@ -25,8 +25,6 @@
 #include "hphp/runtime/vm/jit/ssa-tmp.h"
 #include "hphp/runtime/vm/jit/type-array-elem.h"
 
-#include <folly/Optional.h>
-
 namespace HPHP { namespace jit {
 
 namespace {
@@ -72,7 +70,7 @@ AliasClass pointee(
       std::find(dsts.begin(), dsts.end(), canonPtr) - dsts.begin();
     always_assert(dstIdx >= 0 && dstIdx < sinst->numDsts());
 
-    folly::Optional<jit::flat_set<const IRInstruction*>> label_set;
+    Optional<jit::flat_set<const IRInstruction*>> label_set;
     if (visited_labels == nullptr) {
       label_set.emplace();
       visited_labels = &label_set.value();
@@ -87,7 +85,7 @@ AliasClass pointee(
     return ret;
   }
 
-  auto specific = [&] () -> folly::Optional<AliasClass> {
+  auto specific = [&] () -> Optional<AliasClass> {
     if (type <= TBottom) return AEmpty;
 
     if (type <= TMemToFrameCell) {
@@ -187,10 +185,10 @@ AliasClass pointee(
         return AElemAny;
       }
 
-      return folly::none;
+      return std::nullopt;
     }
 
-    return folly::none;
+    return std::nullopt;
   }();
 
   if (specific) return *specific;
@@ -501,6 +499,11 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
     return ExitEffects {
       AUnknown,
       stack_below(inst.extra<ReqBindJmp>()->irSPOff)
+    };
+  case ReqInterpBBNoTranslate:
+    return ExitEffects {
+      AUnknown,
+      stack_below(inst.extra<ReqInterpBBNoTranslate>()->irSPOff)
     };
   case ReqRetranslate:
     return ExitEffects {
@@ -1013,6 +1016,8 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
       AEmpty,
       ARds { inst.extra<MarkRDSInitialized>()->handle }
     );
+  case MarkRDSAccess:
+    return IrrelevantEffects{};
 
   case InitProps:
     return may_load_store(
@@ -1901,7 +1906,6 @@ MemEffects memory_effects_impl(const IRInstruction& inst) {
   case RaiseError:
   case RaiseNotice:
   case RaiseWarning:
-  case RaiseHackArrCompatNotice:
   case RaiseForbiddenDynCall:
   case RaiseForbiddenDynConstruct:
   case RaiseStrToClassNotice:

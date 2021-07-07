@@ -72,23 +72,11 @@ let collection r ty = class_type r SN.Collections.cCollection [ty]
 let spliceable r ty1 ty2 ty3 =
   class_type r SN.Classes.cSpliceable [ty1; ty2; ty3]
 
-let varray_or_darray ~unification r kty vty =
-  if unification then
-    mk (r, Tvec_or_dict (kty, vty))
-  else
-    mk (r, Tvarray_or_darray (kty, vty))
+let varray_or_darray r kty vty = mk (r, Tvec_or_dict (kty, vty))
 
-let varray ~unification r ty =
-  if unification then
-    vec r ty
-  else
-    mk (r, Tvarray ty)
+let varray r ty = vec r ty
 
-let darray ~unification r kty vty =
-  if unification then
-    dict r kty vty
-  else
-    mk (r, Tdarray (kty, vty))
+let darray r kty vty = dict r kty vty
 
 let int r = prim_type r Nast.Tint
 
@@ -200,17 +188,20 @@ let simple_variadic_splat r ty =
              d_kind = SplatUnpack;
            } ))
 
-let default_capability p : locl_ty = nothing (Reason.Rdefault_capability p)
+let write_property_capability r : locl_ty =
+  class_type r SN.Capabilities.writeProperty []
 
-(* ^ TODO(coeffects) after implementing lower bounds on const ctx/type, do:
+let default_capability p : locl_ty =
+  let r = Reason.Rdefault_capability p in
   intersection
-    Reason.Rnone
-    [
-      class_type
-        Reason.Rnone
-        Naming_special_names.Capabilities.accessStaticVariable
-        [];
-      class_type Reason.Rnone Naming_special_names.Capabilities.writeProperty [];
-      class_type Reason.Rnone Naming_special_names.Capabilities.output [];
-    ]
- *)
+    r
+    Naming_special_names.Capabilities.
+      [
+        class_type r writeProperty [];
+        class_type r accessGlobals [];
+        class_type r rxLocal [];
+        class_type r implicitPolicyLocal [];
+        class_type r io [];
+      ]
+
+let default_capability_unsafe p : locl_ty = mixed (Reason.Rhint p)

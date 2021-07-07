@@ -425,7 +425,7 @@ void pdo_raise_impl_error(sp_PDOResource rsrc, PDOStatement* stmt,
   if (dbh->error_mode != PDO_ERRMODE_EXCEPTION) {
     raise_warning("%s", err.c_str());
   } else {
-    VArrayInit info(2);
+    VecInit info(2);
     info.append(String(*pdo_err, CopyString));
     info.append(0LL);
     throw_pdo_exception(info.toArray(), "%s",
@@ -458,7 +458,7 @@ void pdo_handle_error(sp_PDOResource rsrc, PDOStatement* stmt) {
   String supp;
   Array info;
   if (dbh->support(PDOConnection::MethodFetchErr)) {
-    info = make_varray(String(*pdo_err, CopyString));
+    info = make_vec_array(String(*pdo_err, CopyString));
     if (dbh->fetchErr(stmt, info)) {
       if (info.exists(1)) {
         native_code = info[1].toInt64();

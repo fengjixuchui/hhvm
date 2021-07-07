@@ -39,7 +39,6 @@ bool isReturnHelper(void* address) {
   return tca == u.retHelper ||
          tca == u.genRetHelper ||
          tca == u.asyncGenRetHelper ||
-         tca == u.retInlHelper ||
          tca == u.callToExit;
 }
 
@@ -65,11 +64,6 @@ void ActRec::setJitReturn(void* retAddr) {
 
 bool ActRec::skipFrame() const {
   return func() && func()->isSkipFrame();
-}
-
-bool ActRec::isInlined() const {
-  return reinterpret_cast<jit::TCA>(m_savedRip) ==
-    jit::tc::ustubs().retInlHelper;
 }
 
 ///////////////////////////////////////////////////////////////////////////////

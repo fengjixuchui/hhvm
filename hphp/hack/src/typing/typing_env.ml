@@ -634,6 +634,7 @@ let empty ?origin ?(mode = FileInfo.Mstrict) ctx file ~droot =
         fun_is_ctor = false;
         file;
         this_module = None;
+        this_internal = false;
       };
     tpenv = TPEnv.empty;
     log_levels = TypecheckerOptions.log_levels (Provider_context.get_tcopt ctx);
@@ -674,14 +675,14 @@ let set_fun_is_constructor env is_ctor =
 
 let make_depend_on_class env class_name =
   let dep = Dep.Type class_name in
-  Option.iter env.decl_env.droot (fun root ->
+  Option.iter env.decl_env.droot ~f:(fun root ->
       Typing_deps.add_idep (get_deps_mode env) root dep);
   ()
 
 let make_depend_on_constructor env class_name =
   make_depend_on_class env class_name;
   let dep = Dep.Cstr class_name in
-  Option.iter env.decl_env.droot (fun root ->
+  Option.iter env.decl_env.droot ~f:(fun root ->
       Typing_deps.add_idep (get_deps_mode env) root dep);
   ()
 
@@ -730,7 +731,10 @@ let is_typedef_visible env ?(expand_visible_newtype = true) td =
     && Relative_path.equal
          (Pos.filename (Pos_or_decl.unsafe_to_raw_pos td_pos))
          (get_file env)
-  | Aast.Transparent -> true
+  | Aast.Transparent
+  (* Internal types are not opaque, but they may be inaccessible altogether *)
+  | Aast.Tinternal ->
+    true
 
 let get_class (env : env) (name : Decl_provider.type_key) : Cls.t option =
   let res =
@@ -777,7 +781,7 @@ let get_fun env x =
   | Some fd when Pos_or_decl.is_hhi fd.fe_pos -> res
   | _ ->
     let dep = Typing_deps.Dep.Fun x in
-    Option.iter env.decl_env.Decl_env.droot (fun root ->
+    Option.iter env.decl_env.Decl_env.droot ~f:(fun root ->
         Typing_deps.add_idep (get_deps_mode env) root dep);
     res
 
@@ -814,7 +818,7 @@ let get_typeconst env class_ mid =
   if not (Pos_or_decl.is_hhi (Cls.pos class_)) then begin
     let dep = Dep.Const (Cls.name class_, mid) in
     make_depend_on_class env (Cls.name class_);
-    Option.iter env.decl_env.droot (fun root ->
+    Option.iter env.decl_env.droot ~f:(fun root ->
         Typing_deps.add_idep (get_deps_mode env) root dep)
   end;
   Cls.get_typeconst class_ mid
@@ -824,7 +828,7 @@ let get_const env class_ mid =
   if not (Pos_or_decl.is_hhi (Cls.pos class_)) then begin
     let dep = Dep.Const (Cls.name class_, mid) in
     make_depend_on_class env (Cls.name class_);
-    Option.iter env.decl_env.droot (fun root ->
+    Option.iter env.decl_env.droot ~f:(fun root ->
         Typing_deps.add_idep (get_deps_mode env) root dep)
   end;
   Cls.get_const class_ mid
@@ -848,7 +852,7 @@ let get_gconst env cst_name =
   | Some cst when Pos_or_decl.is_hhi cst.cd_pos -> res
   | _ ->
     let dep = Dep.GConst cst_name in
-    Option.iter env.decl_env.droot (fun root ->
+    Option.iter env.decl_env.droot ~f:(fun root ->
         Typing_deps.add_idep (get_deps_mode env) root dep);
     res
 
@@ -872,11 +876,11 @@ let get_static_member is_method env class_ mid =
         else
           Dep.SProp (x, mid)
       in
-      Option.iter env.decl_env.droot (fun root ->
+      Option.iter env.decl_env.droot ~f:(fun root ->
           Typing_deps.add_idep (get_deps_mode env) root dep)
     in
     add_dep (Cls.name class_);
-    Option.iter ce_opt (fun ce -> add_dep ce.ce_origin)
+    Option.iter ce_opt ~f:(fun ce -> add_dep ce.ce_origin)
   end;
 
   ce_opt
@@ -921,7 +925,7 @@ let get_member is_method env class_ mid =
       else
         Dep.Prop (x, mid)
     in
-    Option.iter env.decl_env.droot (fun root ->
+    Option.iter env.decl_env.droot ~f:(fun root ->
         Typing_deps.add_idep (get_deps_mode env) root dep)
   in
   (* The type of a member is stored separately in the heap. This means that
@@ -936,7 +940,7 @@ let get_member is_method env class_ mid =
   in
   if not (Pos_or_decl.is_hhi (Cls.pos class_)) then
     make_depend_on_class env (Cls.name class_);
-  Option.iter ce_opt (fun ce ->
+  Option.iter ce_opt ~f:(fun ce ->
       add_dep (Cls.name class_);
       add_dep ce.ce_origin);
   ce_opt
@@ -956,7 +960,7 @@ let get_construct env class_ =
     make_depend_on_constructor env (Cls.name class_);
     Option.iter
       (fst (Cls.construct class_))
-      (fun ce -> make_depend_on_constructor env ce.ce_origin)
+      ~f:(fun ce -> make_depend_on_constructor env ce.ce_origin)
   end;
   Cls.construct class_
 
@@ -1053,6 +1057,10 @@ let set_fn_kind env fn_type =
 let set_module env m = { env with genv = { env.genv with this_module = m } }
 
 let get_module env = env.genv.this_module
+
+let set_internal env b = { env with genv = { env.genv with this_internal = b } }
+
+let get_internal env = env.genv.this_internal
 
 let set_self env self_id self_ty =
   let genv = env.genv in
@@ -1517,7 +1525,7 @@ and get_tyvars_i env (ty : internal_type) =
       else begin
         match get_typedef env name with
         | Some { td_tparams; _ } ->
-          let variancel = List.map td_tparams (fun t -> t.tp_variance) in
+          let variancel = List.map td_tparams ~f:(fun t -> t.tp_variance) in
           get_tyvars_variance_list (env, ISet.empty, ISet.empty) variancel tyl
         | None -> (env, ISet.empty, ISet.empty)
       end
@@ -1525,7 +1533,9 @@ and get_tyvars_i env (ty : internal_type) =
     | Tgeneric (_, tyl) ->
       (* TODO(T69931993) Once implementing variance support for HK types, query
         tyvar env here for list of variances *)
-      let variancel = List.replicate (List.length tyl) Ast_defs.Invariant in
+      let variancel =
+        List.replicate ~num:(List.length tyl) Ast_defs.Invariant
+      in
       get_tyvars_variance_list (env, ISet.empty, ISet.empty) variancel tyl
     | Tclass ((_, cid), _, tyl) ->
       if List.is_empty tyl then
@@ -1533,7 +1543,9 @@ and get_tyvars_i env (ty : internal_type) =
       else begin
         match get_class env cid with
         | Some cls ->
-          let variancel = List.map (Cls.tparams cls) (fun t -> t.tp_variance) in
+          let variancel =
+            List.map (Cls.tparams cls) ~f:(fun t -> t.tp_variance)
+          in
           get_tyvars_variance_list (env, ISet.empty, ISet.empty) variancel tyl
         | None -> (env, ISet.empty, ISet.empty)
       end

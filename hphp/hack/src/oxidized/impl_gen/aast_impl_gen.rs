@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<34216162c7cc5c2cc142e95077881c92>>
+// @generated SignedSource<<4b50a3363fe9f8b98afc2502e04907a8>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -1120,9 +1120,6 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
     pub fn mk_enum_class_label(p0: Option<Sid>, p1: String) -> Self {
         Expr_::EnumClassLabel(Box::new((p0, p1)))
     }
-    pub fn mk_any() -> Self {
-        Expr_::Any
-    }
     pub fn mk_hole(p0: Expr<Ex, Fb, En, Hi>, p1: Hi, p2: Hi, p3: HoleSource) -> Self {
         Expr_::Hole(Box::new((p0, p1, p2, p3)))
     }
@@ -1447,12 +1444,6 @@ impl<Ex, Fb, En, Hi> Expr_<Ex, Fb, En, Hi> {
     pub fn is_enum_class_label(&self) -> bool {
         match self {
             Expr_::EnumClassLabel(..) => true,
-            _ => false,
-        }
-    }
-    pub fn is_any(&self) -> bool {
-        match self {
-            Expr_::Any => true,
             _ => false,
         }
     }
@@ -3050,6 +3041,62 @@ impl CaType {
     pub fn as_caenum_into(self) -> Option<Vec<String>> {
         match self {
             CaType::CAEnum(p0) => Some(p0),
+            _ => None,
+        }
+    }
+}
+impl<Ex, Fb, En, Hi> ClassConstKind<Ex, Fb, En, Hi> {
+    pub fn mk_ccabstract(p0: Option<Expr<Ex, Fb, En, Hi>>) -> Self {
+        ClassConstKind::CCAbstract(p0)
+    }
+    pub fn mk_ccconcrete(p0: Expr<Ex, Fb, En, Hi>) -> Self {
+        ClassConstKind::CCConcrete(p0)
+    }
+    pub fn is_ccabstract(&self) -> bool {
+        match self {
+            ClassConstKind::CCAbstract(..) => true,
+            _ => false,
+        }
+    }
+    pub fn is_ccconcrete(&self) -> bool {
+        match self {
+            ClassConstKind::CCConcrete(..) => true,
+            _ => false,
+        }
+    }
+    pub fn as_ccabstract(&self) -> Option<&Option<Expr<Ex, Fb, En, Hi>>> {
+        match self {
+            ClassConstKind::CCAbstract(p0) => Some(p0),
+            _ => None,
+        }
+    }
+    pub fn as_ccconcrete(&self) -> Option<&Expr<Ex, Fb, En, Hi>> {
+        match self {
+            ClassConstKind::CCConcrete(p0) => Some(p0),
+            _ => None,
+        }
+    }
+    pub fn as_ccabstract_mut(&mut self) -> Option<&mut Option<Expr<Ex, Fb, En, Hi>>> {
+        match self {
+            ClassConstKind::CCAbstract(p0) => Some(p0),
+            _ => None,
+        }
+    }
+    pub fn as_ccconcrete_mut(&mut self) -> Option<&mut Expr<Ex, Fb, En, Hi>> {
+        match self {
+            ClassConstKind::CCConcrete(p0) => Some(p0),
+            _ => None,
+        }
+    }
+    pub fn as_ccabstract_into(self) -> Option<Option<Expr<Ex, Fb, En, Hi>>> {
+        match self {
+            ClassConstKind::CCAbstract(p0) => Some(p0),
+            _ => None,
+        }
+    }
+    pub fn as_ccconcrete_into(self) -> Option<Expr<Ex, Fb, En, Hi>> {
+        match self {
+            ClassConstKind::CCConcrete(p0) => Some(p0),
             _ => None,
         }
     }

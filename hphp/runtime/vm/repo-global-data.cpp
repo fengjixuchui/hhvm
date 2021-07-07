@@ -38,7 +38,6 @@ void RepoGlobalData::load(bool loadConstantFuncs) const {
   RO::EvalEmitClassPointers                     = EmitClassPointers;
   RO::EvalEmitClsMethPointers                   = EmitClsMethPointers;
   RO::EvalForbidDynamicCallsWithAttr            = ForbidDynamicCallsWithAttr;
-  RO::EvalHackArrCompatIsVecDictNotices         = HackArrCompatIsVecDictNotices;
   RO::EvalRaiseClassConversionWarning           = RaiseClassConversionWarning;
   RO::EvalClassPassesClassname                  = ClassPassesClassname;
   RO::EvalClassnameNotices                      = ClassnameNotices;
@@ -46,12 +45,9 @@ void RepoGlobalData::load(bool loadConstantFuncs) const {
   RO::EvalRaiseClsMethConversionWarning         = RaiseClsMethConversionWarning;
   RO::EvalNoticeOnCoerceForStrConcat            = NoticeOnCoerceForStrConcat;
   RO::EvalNoticeOnCoerceForBitOp                = NoticeOnCoerceForBitOp;
-  RO::EvalHackArrDVArrs                         = true; // TODO(kshaunak): Clean up.
+  RO::EvalTraitConstantInterfaceBehavior        = TraitConstantInterfaceBehavior;
 
   if (HardGenericsUB) RO::EvalEnforceGenericsUB = 2;
-
-  always_assert(!RO::EvalArrayProvenance);
-  always_assert(!RO::EvalLogArrayProvenance);
 
   if (loadConstantFuncs) {
     RO::ConstantFunctions.clear();
@@ -80,7 +76,6 @@ std::string show(const RepoGlobalData& gd) {
   SHOW(PHP7_NoHexNumerics);
   SHOW(PHP7_Builtins);
   SHOW(PHP7_Substr);
-  SHOW(HackArrCompatNotices);
   SHOW(HackArrCompatSerializeNotices);
   SHOW(EnableIntrinsicsExtension);
   SHOW(ForbidDynamicCallsToFunc);
@@ -105,7 +100,7 @@ std::string show(const RepoGlobalData& gd) {
   SHOW(StrictArrayFillKeys);
   SHOW(NoticeOnCoerceForStrConcat);
   SHOW(NoticeOnCoerceForBitOp);
-  SHOW(TypeconstInterfaceInheritanceDefaults);
+  SHOW(TraitConstantInterfaceBehavior);
 #undef SHOW
   return out;
 }

@@ -3814,7 +3814,7 @@ static Variant _php_mb_regex_ereg_search_exec(const String& pattern,
       {
         beg = MBSTRG(search_regs)->beg[0];
         end = MBSTRG(search_regs)->end[0];
-        ret = make_varray(beg, end - beg);
+        ret = make_vec_array(beg, end - beg);
       }
       break;
     case 2:
@@ -3920,7 +3920,7 @@ static Variant _php_mb_regex_ereg_exec(const Variant& pattern, const String& str
   int string_len = str.size();
   match_len = regions->end[0] - regions->beg[0];
 
-  VArrayInit regsPai(regions->num_regs);
+  VecInit regsPai(regions->num_regs);
   for (i = 0; i < regions->num_regs; i++) {
     beg = regions->beg[i];
     end = regions->end[i];

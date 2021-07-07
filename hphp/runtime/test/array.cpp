@@ -55,7 +55,7 @@ TEST(Array, Constructors) {
   EXPECT_FALSE(arr.isVec());
   EXPECT_FALSE(arr.isKeyset());
 
-  arr = make_varray(0);
+  arr = make_vec_array(0);
   EXPECT_TRUE(!arr.empty());
   EXPECT_TRUE(arr.size() == 1);
   EXPECT_TRUE(arr.length() == 1);
@@ -65,7 +65,7 @@ TEST(Array, Constructors) {
   EXPECT_FALSE(arr.isDict());
   EXPECT_FALSE(arr.isKeyset());
 
-  arr = make_varray("test");
+  arr = make_vec_array("test");
   EXPECT_TRUE(!arr.empty());
   EXPECT_TRUE(arr.size() == 1);
   EXPECT_TRUE(arr.length() == 1);
@@ -76,7 +76,7 @@ TEST(Array, Constructors) {
   EXPECT_FALSE(arr.isKeyset());
 
   Array arrCopy = arr;
-  arr = make_varray(arrCopy);
+  arr = make_vec_array(arrCopy);
   EXPECT_TRUE(!arr.empty());
   EXPECT_TRUE(arr.size() == 1);
   EXPECT_TRUE(arr.length() == 1);
@@ -116,7 +116,7 @@ TEST(Array, Constructors) {
 }
 
 TEST(Array, Iteration) {
-  Array arr = make_map_array("n1", "v1", "n2", "v2");
+  Array arr = make_dict_array("n1", "v1", "n2", "v2");
   int i = 0;
   for (ArrayIter iter = arr.begin(); iter; ++iter, ++i) {
     if (i == 0) {
@@ -183,7 +183,7 @@ TEST(Array, Conversions) {
   EXPECT_TRUE(arr0.toDouble() == 0.0);
   EXPECT_TRUE(arr0.toString().empty());
 
-  Array arr1 = make_varray("test");
+  Array arr1 = make_vec_array("test");
   EXPECT_TRUE(arr1.toBoolean() == true);
   EXPECT_TRUE(arr1.toByte() == 1);
   EXPECT_TRUE(arr1.toInt16() == 1);
@@ -252,13 +252,13 @@ TEST(Array, Offsets) {
     Array arr;
     arr.set(0, "v1");
     arr.set(1, "v2");
-    EXPECT_TRUE(same_arrays(arr, make_varray("v1", "v2").toDict()));
+    EXPECT_TRUE(same_arrays(arr, make_vec_array("v1", "v2").toDict()));
   }
   {
     Array arr;
     arr.set(s_n1, "v1");
     arr.set(s_n2, "v2");
-    EXPECT_TRUE(same_arrays(arr, make_map_array("n1", "v1", "n2", "v2")));
+    EXPECT_TRUE(same_arrays(arr, make_dict_array("n1", "v1", "n2", "v2")));
   }
   {
     Array arr = Array::CreateDict();
@@ -266,7 +266,7 @@ TEST(Array, Offsets) {
     Variant v2 = String("v2");
     arr.set(0, *v1.asTypedValue());
     arr.set(1, *v2.asTypedValue());
-    EXPECT_TRUE(same_arrays(arr, make_varray("v1", "v2").toDict()));
+    EXPECT_TRUE(same_arrays(arr, make_vec_array("v1", "v2").toDict()));
   }
   {
     Array arr = Array::CreateDict();
@@ -274,14 +274,14 @@ TEST(Array, Offsets) {
     Variant v2 = String("v2");
     arr.set(s_n1, *v1.asTypedValue());
     arr.set(s_n2, *v2.asTypedValue());
-    EXPECT_TRUE(same_arrays(arr, make_map_array("n1", "v1", "n2", "v2")));
+    EXPECT_TRUE(same_arrays(arr, make_dict_array("n1", "v1", "n2", "v2")));
   }
   {
     Array arr = Array::CreateDict();
     Variant name = "name";
     Variant value = String("value");
     arr.set(name, *value.asTypedValue());
-    EXPECT_TRUE(same_arrays(arr, make_map_array("name", "value")));
+    EXPECT_TRUE(same_arrays(arr, make_dict_array("name", "value")));
   }
   {
     Array arr = Array::CreateVec();
@@ -372,9 +372,9 @@ TEST(Array, Membership) {
     EXPECT_TRUE(arr.exists(0));
     arr.remove(0);
     EXPECT_TRUE(!arr.exists(0));
-    EXPECT_TRUE(same_arrays(arr, make_map_array(1, "v2")));
+    EXPECT_TRUE(same_arrays(arr, make_dict_array(1, "v2")));
     arr.append("v3");
-    EXPECT_TRUE(same_arrays(arr, make_map_array(1, "v2", 2, "v3")));
+    EXPECT_TRUE(same_arrays(arr, make_dict_array(1, "v2", 2, "v3")));
   }
   {
     const String s_0("0");
@@ -410,19 +410,19 @@ TEST(Array, Membership) {
     EXPECT_TRUE(arr.exists(s_n1));
     arr.remove(s_n1);
     EXPECT_TRUE(!arr.exists(s_n1));
-    EXPECT_TRUE(same_arrays(arr, make_map_array(s_n2, "v2")));
+    EXPECT_TRUE(same_arrays(arr, make_dict_array(s_n2, "v2")));
     arr.append("v3");
-    EXPECT_TRUE(same_arrays(arr, make_map_array("n2", "v2", 0, "v3")));
+    EXPECT_TRUE(same_arrays(arr, make_dict_array("n2", "v2", 0, "v3")));
   }
   {
     Array arr;
     arr.append(Variant("test"));
-    EXPECT_TRUE(same_arrays(arr, make_varray("test").toDict()));
+    EXPECT_TRUE(same_arrays(arr, make_vec_array("test").toDict()));
   }
   {
     Array arr = Array::CreateVec();
     arr.append(Variant("test"));
-    EXPECT_TRUE(same_arrays(arr, make_varray("test")));
+    EXPECT_TRUE(same_arrays(arr, make_vec_array("test")));
   }
   {
     Array arr = Array::CreateDict();
@@ -493,19 +493,19 @@ TEST(Array, Membership) {
 
 TEST(Array, IsVectorData) {
   {
-    Array arr = make_map_array(0, "a", 1, "b");
+    Array arr = make_dict_array(0, "a", 1, "b");
     EXPECT_TRUE(arr->isVectorData());
   }
   {
-    Array arr = make_map_array(1, "a", 0, "b");
+    Array arr = make_dict_array(1, "a", 0, "b");
     EXPECT_TRUE(!arr->isVectorData());
   }
   {
-    Array arr = make_map_array(1, "a", 2, "b");
+    Array arr = make_dict_array(1, "a", 2, "b");
     EXPECT_TRUE(!arr->isVectorData());
   }
   {
-    Array arr = make_map_array(1, "a");
+    Array arr = make_dict_array(1, "a");
     arr.set(0, "b");
     EXPECT_TRUE(!arr->isVectorData());
   }

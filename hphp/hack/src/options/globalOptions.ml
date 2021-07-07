@@ -25,6 +25,7 @@ type t = {
   tco_remote_max_batch_size: int;
   tco_remote_min_batch_size: int;
   tco_num_remote_workers: int;
+  tco_stream_errors: bool;
   so_remote_version_specifier: string option;
   so_remote_worker_vfs_checkout_threshold: int;
   so_naming_sqlite_path: string option;
@@ -118,7 +119,6 @@ type t = {
   tco_use_direct_decl_parser: bool;
   tco_ifc_enabled: string list;
   po_enable_enum_supertyping: bool;
-  po_hack_arr_dv_arrs: bool;
   po_interpret_soft_types_as_like_types: bool;
   tco_enable_strict_string_concat_interp: bool;
   tco_ignore_unsafe_cast: bool;
@@ -131,10 +131,9 @@ type t = {
   tco_meth_caller_only_public_visibility: bool;
   tco_require_extends_implements_ancestors: bool;
   tco_strict_value_equality: bool;
+  tco_enforce_sealed_subclasses: bool;
 }
 [@@deriving eq, show]
-
-let tco_experimental_isarray = "is_array"
 
 (**
  * Insist on instantiations for all generic types, even in non-strict files
@@ -184,7 +183,6 @@ let tco_experimental_all =
   |> List.fold_right
        SSet.add
        [
-         tco_experimental_isarray;
          tco_experimental_generics_arity;
          tco_experimental_forbid_nullable_cast;
          tco_experimental_disallow_static_memoized;
@@ -217,6 +215,7 @@ let default =
     tco_remote_max_batch_size = 8_000;
     tco_remote_min_batch_size = 5_000;
     tco_num_remote_workers = 4;
+    tco_stream_errors = false;
     so_remote_version_specifier = None;
     so_remote_worker_vfs_checkout_threshold = 10000;
     so_naming_sqlite_path = None;
@@ -310,7 +309,6 @@ let default =
     tco_use_direct_decl_parser = false;
     tco_ifc_enabled = [];
     po_enable_enum_supertyping = false;
-    po_hack_arr_dv_arrs = false;
     po_interpret_soft_types_as_like_types = false;
     tco_enable_strict_string_concat_interp = false;
     tco_ignore_unsafe_cast = false;
@@ -323,6 +321,7 @@ let default =
     tco_meth_caller_only_public_visibility = true;
     tco_require_extends_implements_ancestors = false;
     tco_strict_value_equality = false;
+    tco_enforce_sealed_subclasses = false;
   }
 
 let make
@@ -349,6 +348,7 @@ let make
     ?(tco_remote_max_batch_size = default.tco_remote_max_batch_size)
     ?(tco_remote_min_batch_size = default.tco_remote_min_batch_size)
     ?(tco_num_remote_workers = default.tco_num_remote_workers)
+    ?(tco_stream_errors = default.tco_stream_errors)
     ?so_remote_version_specifier
     ?(so_remote_worker_vfs_checkout_threshold =
       default.so_remote_worker_vfs_checkout_threshold)
@@ -454,7 +454,6 @@ let make
     ?(tco_use_direct_decl_parser = default.tco_use_direct_decl_parser)
     ?(tco_ifc_enabled = default.tco_ifc_enabled)
     ?(po_enable_enum_supertyping = default.po_enable_enum_supertyping)
-    ?(po_hack_arr_dv_arrs = default.po_hack_arr_dv_arrs)
     ?(po_interpret_soft_types_as_like_types =
       default.po_interpret_soft_types_as_like_types)
     ?(tco_enable_strict_string_concat_interp =
@@ -473,6 +472,7 @@ let make
     ?(tco_require_extends_implements_ancestors =
       default.tco_require_extends_implements_ancestors)
     ?(tco_strict_value_equality = default.tco_strict_value_equality)
+    ?(tco_enforce_sealed_subclasses = default.tco_enforce_sealed_subclasses)
     () =
   {
     tco_experimental_features;
@@ -492,6 +492,7 @@ let make
     tco_remote_max_batch_size;
     tco_remote_min_batch_size;
     tco_num_remote_workers;
+    tco_stream_errors;
     so_remote_version_specifier;
     so_remote_worker_vfs_checkout_threshold;
     so_naming_sqlite_path;
@@ -585,7 +586,6 @@ let make
     tco_use_direct_decl_parser;
     tco_ifc_enabled;
     po_enable_enum_supertyping;
-    po_hack_arr_dv_arrs;
     po_interpret_soft_types_as_like_types;
     tco_enable_strict_string_concat_interp;
     tco_ignore_unsafe_cast;
@@ -598,6 +598,7 @@ let make
     tco_meth_caller_only_public_visibility;
     tco_require_extends_implements_ancestors;
     tco_strict_value_equality;
+    tco_enforce_sealed_subclasses;
   }
 
 let tco_experimental_feature_enabled t s =
@@ -639,6 +640,8 @@ let tco_remote_max_batch_size t = t.tco_remote_max_batch_size
 let tco_remote_min_batch_size t = t.tco_remote_min_batch_size
 
 let tco_num_remote_workers t = t.tco_num_remote_workers
+
+let tco_stream_errors t = t.tco_stream_errors
 
 let so_remote_version_specifier t = t.so_remote_version_specifier
 
@@ -849,8 +852,6 @@ let tco_use_direct_decl_parser t = t.tco_use_direct_decl_parser
 
 let po_enable_enum_supertyping t = t.po_enable_enum_supertyping
 
-let po_hack_arr_dv_arrs t = t.po_hack_arr_dv_arrs
-
 let po_interpret_soft_types_as_like_types t =
   t.po_interpret_soft_types_as_like_types
 
@@ -882,3 +883,5 @@ let tco_require_extends_implements_ancestors t =
   t.tco_require_extends_implements_ancestors
 
 let tco_strict_value_equality t = t.tco_strict_value_equality
+
+let tco_enforce_sealed_subclasses t = t.tco_enforce_sealed_subclasses

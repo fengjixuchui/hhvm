@@ -18,7 +18,6 @@
 #include "hphp/util/compilation-flags.h"
 #include "hphp/util/safe-cast.h"
 
-#include <folly/Optional.h>
 #include <tbb/concurrent_vector.h>
 
 #include <atomic>
@@ -30,9 +29,10 @@ namespace HPHP { namespace rds {
 namespace detail {
 
 Handle alloc(Mode mode, size_t numBytes, size_t align,
-             type_scan::Index tyIndex);
+             type_scan::Index tyIndex, const Symbol* symbol);
 Handle allocUnlocked(Mode mode, size_t numBytes, size_t align,
-                     type_scan::Index tyIndex);
+                     type_scan::Index tyIndex,
+                     const Symbol* symbol);
 Handle bindImpl(Symbol key, Mode mode, size_t sizeBytes,
                 size_t align, type_scan::Index tyIndex);
 Handle attachImpl(Symbol key);
@@ -69,9 +69,10 @@ extern std::atomic<size_t> s_local_alloc_descs_size;
 
 //////////////////////////////////////////////////////////////////////
 
-template<class T, Mode M>
+template<class T, Mode M, bool P>
 T* handleToPtr(void* base, Handle h) {
   using namespace detail;
+  if (P && UNLIKELY(shouldProfileAccesses())) markAccess(h);
   if (M == Mode::Persistent) {
     assertx(isPersistentHandle(h));
     return reinterpret_cast<T*>(s_persistent_base + h);
@@ -85,19 +86,19 @@ T* handleToPtr(void* base, Handle h) {
   return reinterpret_cast<T*>(vp);
 }
 
-template<class T, Mode M>
+template<class T, Mode M, bool P>
 T* handleToPtr(Handle h) {
-  return handleToPtr<T, M>(tl_base, h);
+  return handleToPtr<T, M, P>(tl_base, h);
 }
 
-template<class T, Mode M>
+template<class T, Mode M, bool P>
 T& handleToRef(void* base, Handle h) {
-  return *handleToPtr<T, M>(base, h);
+  return *handleToPtr<T, M, P>(base, h);
 }
 
-template<class T, Mode M>
+template<class T, Mode M, bool P>
 T& handleToRef(Handle h) {
-  return *handleToPtr<T, M>(h);
+  return *handleToPtr<T, M, P>(h);
 }
 
 template<Mode M>
@@ -191,6 +192,11 @@ T* Link<T,M>::get() const {
 }
 
 template<class T, Mode M>
+T* Link<T,M>::getNoProfile() const {
+  return handleToPtr<T, M, false>(handle());
+}
+
+template<class T, Mode M>
 bool Link<T,M>::bound() const {
   return isHandleBound(raw());
 }
@@ -223,6 +229,13 @@ bool Link<T,M>::isInit() const {
   return !maybe<Mode::Normal>(M) ||
     (M == Mode::Normal && isHandleInit(handle(), NormalTag{})) ||
     isHandleInit(handle());
+}
+
+template<class T, Mode M>
+bool Link<T,M>::isInitNoProfile() const {
+  return !maybe<Mode::Normal>(M) ||
+    (M == Mode::Normal && isHandleInitNoProfile(handle(), NormalTag{})) ||
+    isHandleInitNoProfile(handle());
 }
 
 template<class T, Mode M>
@@ -314,7 +327,8 @@ Link<T,M> alloc() {
   return Link<T,M>(
     detail::allocUnlocked(
       M, sizeof(T), Align,
-      type_scan::getIndexForScan<T>()
+      type_scan::getIndexForScan<T>(),
+      nullptr
     )
   );
 }
@@ -339,9 +353,10 @@ inline bool isPersistentHandle(Handle handle) {
 
 ////////////////////////////////////////////////////////////////////
 
+template <bool P>
 inline GenNumber genNumberOf(Handle handle) {
   assertx(isNormalHandle(handle));
-  return handleToRef<GenNumber, Mode::Normal>(genNumberHandleFrom(handle));
+  return handleToRef<GenNumber, Mode::Normal, P>(genNumberHandleFrom(handle));
 }
 
 inline Handle genNumberHandleFrom(Handle handle) {
@@ -361,9 +376,19 @@ inline bool isHandleInit(Handle handle) {
          isHandleInit(handle, NormalTag{});
 }
 
+inline bool isHandleInitNoProfile(Handle handle) {
+  return !isNormalHandle(handle) ||
+         isHandleInitNoProfile(handle, NormalTag{});
+}
+
 inline bool isHandleInit(Handle handle, NormalTag) {
   assertx(isNormalHandle(handle));
   return genNumberOf(handle) == currentGenNumber();
+}
+
+inline bool isHandleInitNoProfile(Handle handle, NormalTag) {
+  assertx(isNormalHandle(handle));
+  return genNumberOf<false>(handle) == currentGenNumber();
 }
 
 inline void initHandle(Handle handle) {
@@ -380,11 +405,17 @@ inline void uninitHandle(Handle handle) {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+inline bool shouldProfileAccesses() {
+  return isJitSerializing() && RO::EvalReorderRDS;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
 template <typename F> inline void forEachNormalAlloc(F f) {
   auto size = detail::s_normal_alloc_descs_size.load(std::memory_order_acquire);
   for (const auto& desc : detail::s_normal_alloc_descs) {
     if (!(size--)) break;
-    if (!isHandleInit(desc.handle, NormalTag{})) continue;
+    if (!isHandleInitNoProfile(desc.handle, NormalTag{})) continue;
     f(static_cast<char*>(tl_base) + desc.handle, desc.size, desc.index);
   }
 }
@@ -400,4 +431,3 @@ template <typename F> inline void forEachLocalAlloc(F f) {
 ///////////////////////////////////////////////////////////////////////////////
 
 }}
-

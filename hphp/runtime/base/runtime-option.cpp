@@ -16,7 +16,6 @@
 
 #include "hphp/runtime/base/runtime-option.h"
 
-#include "hphp/hack/src/hhbc/compile_ffi.h"
 #include "hphp/hack/src/parser/positioned_full_trivia_parser_ffi_types.h"
 #include "hphp/parser/scanner.h"
 #include "hphp/runtime/base/autoload-handler.h"
@@ -276,19 +275,17 @@ RepoOptions::getParserEnvironment() const {
     , false // disable_modes
     , DisallowHashComments
     , DisallowFunAndClsMethPseudoFuncs
-    , true  // array_unification
     , true  // interpret_soft_types_as_like_types
     };
 }
 
+// Mapping must match HHBCFlags in compile.rs
 std::uint32_t RepoOptions::getCompilerFlags() const {
   std::uint32_t hhbc_flags = 0;
 
   #define HHBC_FLAGS()                                          \
     SETFLAGS(LTRAssign, 0)                                      \
     SETFLAGS(UVS, 1)                                            \
-    SETFLAGS(RuntimeOption::EvalHackArrCompatNotices, 2)        \
-    SETFLAGS(RuntimeOption::EvalHackArrDVArrs, 3)               \
     SETFLAGS(RuntimeOption::RepoAuthoritative, 4)               \
     SETFLAGS(RuntimeOption::EvalJitEnableRenameFunction, 5)     \
     SETFLAGS(RuntimeOption::EvalLogExternCompilerPerf, 6)       \
@@ -297,7 +294,6 @@ std::uint32_t RepoOptions::getCompilerFlags() const {
     SETFLAGS(RuntimeOption::EvalEmitClsMethPointers, 10)        \
     SETFLAGS(RuntimeOption::EvalEmitMethCallerFuncPointers, 11) \
     SETFLAGS(RuntimeOption::EvalRxIsEnabled, 12)                \
-    SETFLAGS(RuntimeOption::EvalArrayProvenance, 13)            \
     SETFLAGS(RuntimeOption::EvalFoldLazyClassKeys, 15)          \
     SETFLAGS(EmitInstMethPointers,16)                           \
 
@@ -325,6 +321,7 @@ std::uint32_t RepoOptions::getFactsFlags() const {
   return flags;
 }
 
+// Mapping must match ParserFlags in compile.rs
 std::uint32_t RepoOptions::getParserFlags() const {
   std::uint32_t parser_flags = 0;
 
@@ -377,16 +374,16 @@ const RepoOptions& RepoOptions::forFile(const char* path) {
     return ::stat(path, st);
   };
 
-  auto const wrapped_open = [&](const char* path) -> folly::Optional<String> {
+  auto const wrapped_open = [&](const char* path) -> Optional<String> {
     if (wrapper) {
       if (auto const file = wrapper->open(path, "r", 0, nullptr)) {
         return file->read();
       }
-      return folly::none;
+      return std::nullopt;
     }
 
     auto const fd = open(path, O_RDONLY);
-    if (fd < 0) return folly::none;
+    if (fd < 0) return std::nullopt;
     auto file = req::make<PlainFile>(fd);
     return file->read();
 
@@ -504,8 +501,8 @@ std::string RepoOptions::toJSON() const {
   return folly::toJson(toDynamic());
 }
 
-folly::dynamic RepoOptions::toDynamic() const {
-  folly::dynamic json = folly::dynamic::object();
+void RepoOptions::calcDynamic() {
+  m_cachedDynamic = folly::dynamic::object();
 #define OUT(key, var)                                \
   {                                                  \
     auto const ini_name = Config::IniName(key);      \
@@ -514,7 +511,7 @@ folly::dynamic RepoOptions::toDynamic() const {
     entry["global_value"] = ini_value;               \
     entry["local_value"] = ini_value;                \
     entry["access"] = 4;                             \
-    json[ini_name] = entry;                          \
+    m_cachedDynamic[ini_name] = entry;               \
   }
 
 #define N(_, n, ...) OUT(#n, n)
@@ -529,8 +526,6 @@ AUTOLOADFLAGS();
 #undef E
 
 #undef OUT
-
-  return json;
 }
 
 const RepoOptions& RepoOptions::defaults() {
@@ -585,6 +580,7 @@ AUTOLOADFLAGS();
 
   filterNamespaces();
   calcCacheKey();
+  calcDynamic();
 }
 
 void RepoOptions::initDefaults(const Hdf& hdf, const IniSettingMap& ini) {
@@ -1153,7 +1149,7 @@ uint64_t ahotDefault() {
   return RuntimeOption::RepoAuthoritative ? 4 << 20 : 0;
 }
 
-folly::Optional<folly::fs::path> RuntimeOption::GetHomePath(
+Optional<folly::fs::path> RuntimeOption::GetHomePath(
   const folly::StringPiece user) {
 
   auto homePath = folly::fs::path{RuntimeOption::SandboxHome}
@@ -1231,6 +1227,7 @@ hphp_string_imap<TypedValue> RuntimeOption::ConstantFunctions;
 bool RuntimeOption::RecordCodeCoverage = false;
 std::string RuntimeOption::CodeCoverageOutputFile;
 
+std::string RuntimeOption::RepoPath;
 RepoMode RuntimeOption::RepoLocalMode = RepoMode::ReadOnly;
 std::string RuntimeOption::RepoLocalPath;
 RepoMode RuntimeOption::RepoCentralMode = RepoMode::ReadWrite;
@@ -1887,6 +1884,9 @@ void RuntimeOption::Load(
     Config::Bind(repoLocalMode, ini, config, "Repo.Local.Mode", repoModeToStr(RepoLocalMode));
     RepoLocalMode = parseRepoMode(repoLocalMode, "Local", RepoMode::ReadOnly);
 
+    // Repo.Path
+    Config::Bind(RepoPath, ini, config, "Repo.Path", RepoPath);
+
     // Repo.Local.Path
     Config::Bind(RepoLocalPath, ini, config, "Repo.Local.Path");
     if (RepoLocalPath.empty()) {
@@ -1912,6 +1912,7 @@ void RuntimeOption::Load(
 
     replacePlaceholders(RepoLocalPath);
     replacePlaceholders(RepoCentralPath);
+    replacePlaceholders(RepoPath);
 
     Config::Bind(RepoJournal, ini, config, "Repo.Journal", RepoJournal);
     Config::Bind(RepoCommit, ini, config, "Repo.Commit",
@@ -1927,6 +1928,23 @@ void RuntimeOption::Load(
                  "Repo.LocalReadaheadConcurrent", false);
     Config::Bind(RepoBusyTimeoutMS, ini, config,
                  "Repo.BusyTimeoutMS", RepoBusyTimeoutMS);
+
+    if (RepoPath.empty()) {
+      if (!RepoLocalPath.empty()) {
+        RepoPath = RepoLocalPath;
+      } else if (!RepoCentralPath.empty()) {
+        RepoPath = RepoCentralPath;
+      } else if (auto const env = getenv("HHVM_REPO_CENTRAL_PATH")) {
+        RepoPath = env;
+        replacePlaceholders(RepoPath);
+      } else {
+        always_assert_flog(
+          !RepoAuthoritative,
+          "Either Repo.Path, Repo.LocalPath, or Repo.CentralPath "
+          "must be set in RepoAuthoritative mode"
+        );
+      }
+    }
   }
 
   if (use_jemalloc) {
@@ -2951,10 +2969,6 @@ void RuntimeOption::Load(
       throw std::runtime_error("Can't use Eval.JitEnableRenameFunction if "
                                " RepoAuthoritative is turned on");
   }
-
-  // arrprov is no longer functional. We must clean it up.
-  RO::EvalArrayProvenance = false;
-  RO::EvalLogArrayProvenance = false;
 
   // Bespoke array-likes
 

@@ -76,8 +76,8 @@
 #include "hphp/runtime/vm/named-entity.h"
 #include "hphp/runtime/vm/named-entity-defs.h"
 #include "hphp/runtime/vm/preclass.h"
+#include "hphp/runtime/vm/preclass-emitter.h"
 #include "hphp/runtime/vm/record.h"
-#include "hphp/runtime/vm/repo.h"
 #include "hphp/runtime/vm/reverse-data-map.h"
 #include "hphp/runtime/vm/treadmill.h"
 #include "hphp/runtime/vm/type-alias.h"
@@ -120,7 +120,6 @@ std::atomic<size_t> Unit::s_liveUnits{0};
 Unit::Unit()
   : m_interpretOnly(false)
   , m_extended(false)
-  , m_serialized(false)
   , m_ICE(false)
 {
   ++s_createdUnits;
@@ -880,7 +879,7 @@ void Unit::mergeImpl(MergeTypes mergeTypes) {
     rl_mergedUnits->emplace(this);
   }
 
-  FTRACE(1, "Merging unit {} ({} funcs, {} constants, {} typealieses, {} classes, {} records)\n",
+  FTRACE(1, "Merging unit {} ({} funcs, {} constants, {} typealiases, {} classes, {} records)\n",
          this->m_origFilepath->data(), m_funcs.size(), m_constants.size(), m_typeAliases.size(),
          m_preClasses.size(), m_preRecords.size());
 
@@ -979,7 +978,7 @@ Array getClassesWithAttrInfo(Attr attrs, bool inverse = false) {
     }
   });
   if (builtins.empty()) return non_builtins;
-  auto all = VArrayInit(builtins.size() + non_builtins.size());
+  auto all = VecInit(builtins.size() + non_builtins.size());
   for (auto i = builtins.size(); i > 0; i--) {
     all.append(builtins.lookup(safe_cast<int64_t>(i - 1)));
   }

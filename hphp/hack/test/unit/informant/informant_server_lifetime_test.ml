@@ -1,53 +1,10 @@
 open Hh_prelude
-
-module Target_saved_state_comparator = struct
-  type t = ServerMonitorUtils.target_saved_state
-
-  let to_string
-      {
-        ServerMonitorUtils.saved_state_everstore_handle;
-        target_global_rev;
-        watchman_mergebase;
-      } =
-    Printf.sprintf
-      ( "(Target saved state. everstore handle: %s. global_rev: %d."
-      ^^ " watchman_mergebase: %s)" )
-      saved_state_everstore_handle
-      target_global_rev
-      (Option.value_map
-         watchman_mergebase
-         ~default:"None"
-         ~f:ServerMonitorUtils.watchman_mergebase_to_string)
-
-  let is_equal x y = Poly.(x = y)
-end
-
 module Int_asserter = Asserter.Int_asserter
-module Target_saved_state_opt_comparator =
-  Asserter.Make_option_comparator (Target_saved_state_comparator)
-
-module Start_server_args_comparator = struct
-  (** We only care about this arg and drop the rest. *)
-  type t = ServerMonitorUtils.target_saved_state option
-
-  let to_string state =
-    let state_string = Target_saved_state_opt_comparator.to_string state in
-    Printf.sprintf "(Start server call args: %s)" state_string
-
-  let is_equal x y = Target_saved_state_opt_comparator.is_equal x y
-end
-
-module Start_server_args_opt_comparator =
-  Asserter.Make_option_comparator (Start_server_args_comparator)
-module Start_server_args_opt_asserter =
-  Asserter.Make_asserter (Start_server_args_opt_comparator)
 
 module type Mock_server_config_sig = sig
   include ServerMonitorUtils.Server_config with type server_start_options = unit
 
   val get_start_server_count : unit -> int
-
-  val get_last_start_server_call : unit -> Start_server_args_comparator.t option
 
   val get_kill_server_count : unit -> int
 end
@@ -73,10 +30,7 @@ module Tools = struct
       use_dummy = false;
       watchman_debug_logging = false;
       min_distance_restart = 100;
-      use_xdb = true;
-      saved_state_cache_limit = 20;
       ignore_hh_version = false;
-      ignore_hhconfig = false;
       is_saved_state_precomputed = false;
     }
 end
@@ -107,23 +61,12 @@ let make_test test =
 
       let start_server_count = ref 0
 
-      let last_start_server_call = ref None
-
-      let start_server
-          ?(target_saved_state : _)
-          ~informant_managed:_
-          ~prior_exit_status:_
-          _start_options =
-        last_start_server_call := Some target_saved_state;
+      let start_server ~informant_managed:_ ~prior_exit_status:_ _start_options
+          =
         start_server_count := !start_server_count + 1;
         fake_process_data
 
       let get_start_server_count () = !start_server_count
-
-      let get_last_start_server_call () = !last_start_server_call
-
-      let on_server_exit : ServerMonitorUtils.monitor_config -> unit =
-       (fun _ -> ())
 
       let kill_server_count = ref 0
 
@@ -138,7 +81,6 @@ let make_test test =
       let is_saved_state_precomputed _ = false
     end : Mock_server_config_sig )
   in
-  Xdb.Mocking.reset_find_nearest ();
   Tools.set_hg_to_global_rev_map ();
   fun () ->
     Tempfile.with_tempdir (fun temp_dir ->
@@ -151,11 +93,9 @@ let test_no_event mock_server_config temp_dir =
   let module Test_monitor =
     ServerMonitor.Make_monitor (Mock_server_config) (HhMonitorInformant)
   in
-  let last_call = Mock_server_config.get_last_start_server_call () in
-  let expected = None in
-  Start_server_args_opt_asserter.assert_equals
-    expected
-    last_call
+  Int_asserter.assert_equals
+    0
+    (Mock_server_config.get_start_server_count ())
     "Before starting monitor, start_server should not have been called.";
   let monitor =
     Test_monitor.start_monitor
@@ -169,12 +109,10 @@ let test_no_event mock_server_config temp_dir =
       (Tools.monitor_config temp_dir)
   in
   ignore monitor;
-  let last_call = Mock_server_config.get_last_start_server_call () in
-  let expected = Some None in
-  Start_server_args_opt_asserter.assert_equals
-    expected
-    last_call
-    "Start server should have been called, but with None for target_saved_state";
+  Int_asserter.assert_equals
+    1
+    (Mock_server_config.get_start_server_count ())
+    "Start server should have been called";
   true
 
 let test_restart_server_with_target_saved_state mock_server_config temp_dir =
@@ -185,11 +123,9 @@ let test_restart_server_with_target_saved_state mock_server_config temp_dir =
     ServerMonitor.Make_monitor (Mock_server_config) (HhMonitorInformant)
   in
   Watchman.Mocking.init_returns @@ Some "Fake name for watchman instance";
-  let last_call = Mock_server_config.get_last_start_server_call () in
-  let expected = None in
-  Start_server_args_opt_asserter.assert_equals
-    expected
-    last_call
+  Int_asserter.assert_equals
+    0
+    (Mock_server_config.get_start_server_count ())
     "Before starting monitor, start_server should not have been called.";
   Hg.Mocking.current_working_copy_base_rev_returns
     (Future.of_value Tools.global_rev_1);
@@ -205,12 +141,10 @@ let test_restart_server_with_target_saved_state mock_server_config temp_dir =
       (Tools.monitor_config temp_dir)
   in
   let monitor = Test_monitor.check_and_run_loop_once monitor in
-  let last_call = Mock_server_config.get_last_start_server_call () in
-  let expected = Some None in
-  Start_server_args_opt_asserter.assert_equals
-    expected
-    last_call
-    "First call of start server should have no target saved state";
+  Int_asserter.assert_equals
+    1
+    (Mock_server_config.get_start_server_count ())
+    "First call of start server";
   Tools.set_xdb
     ~state_global_rev:200
     ~for_global_rev:200
@@ -220,27 +154,10 @@ let test_restart_server_with_target_saved_state mock_server_config temp_dir =
     Tools.hg_rev_200;
   let monitor = Test_monitor.check_and_run_loop_once monitor in
   ignore monitor;
-  let last_call = Mock_server_config.get_last_start_server_call () in
-  let expected_mergebase =
-    {
-      ServerMonitorUtils.mergebase_global_rev = 200;
-      files_changed = SSet.empty;
-      watchman_clock = "dummy_clock";
-    }
-  in
-  let state_target =
-    {
-      ServerMonitorUtils.saved_state_everstore_handle =
-        "dummy_handle_for_global_200";
-      target_global_rev = 200;
-      watchman_mergebase = Some expected_mergebase;
-    }
-  in
-  let expected = Some (Some state_target) in
-  Start_server_args_opt_asserter.assert_equals
-    expected
-    last_call
-    "Should be starting fresh server with target saved state after significant Changed_merge_base";
+  Int_asserter.assert_equals
+    2
+    (Mock_server_config.get_start_server_count ())
+    "Should be starting fresh server";
   true
 
 let test_server_restart_suppressed_on_hhconfig_version_change
@@ -256,11 +173,9 @@ let test_server_restart_suppressed_on_hhconfig_version_change
     ServerMonitor.Make_monitor (Mock_server_config) (HhMonitorInformant)
   in
   Watchman.Mocking.init_returns @@ Some "Fake name for watchman instance";
-  let last_call = Mock_server_config.get_last_start_server_call () in
-  let expected = None in
-  Start_server_args_opt_asserter.assert_equals
-    expected
-    last_call
+  Int_asserter.assert_equals
+    0
+    (Mock_server_config.get_start_server_count ())
     "Before starting monitor, start_server should not have been called.";
   Hg.Mocking.current_working_copy_base_rev_returns
     (Future.of_value Tools.global_rev_1);
@@ -277,12 +192,10 @@ let test_server_restart_suppressed_on_hhconfig_version_change
       (Tools.monitor_config temp_dir)
   in
   let monitor = Test_monitor.check_and_run_loop_once monitor in
-  let last_call = Mock_server_config.get_last_start_server_call () in
-  let expected = Some None in
-  Start_server_args_opt_asserter.assert_equals
-    expected
-    last_call
-    "First call of start server should have no target saved state";
+  Int_asserter.assert_equals
+    1
+    (Mock_server_config.get_start_server_count ())
+    "First call of start server";
 
   (* ----------------------------- End of copy-pasta ---------------------------- *)
   let start_server_count = Mock_server_config.get_start_server_count () in
@@ -337,7 +250,9 @@ let setup_global_test_state () =
   Relative_path.(set_path_prefix Root (Path.make "/tmp"));
   Relative_path.(set_path_prefix Root (Path.make Sys_utils.temp_dir_name));
   let hhconfig_path = Relative_path.(create Root "/tmp/.hhconfig") in
-  Disk.write_file (Relative_path.to_absolute hhconfig_path) "assume_php = false"
+  Disk.write_file
+    ~file:(Relative_path.to_absolute hhconfig_path)
+    ~contents:"assume_php = false"
 
 let tests =
   [

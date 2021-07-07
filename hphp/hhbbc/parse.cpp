@@ -63,6 +63,7 @@ namespace {
 const StaticString s_Closure("Closure");
 const StaticString s_toString("__toString");
 const StaticString s_Stringish("Stringish");
+const StaticString s_StringishObject("StringishObject");
 const StaticString s_XHPChild("XHPChild");
 const StaticString s_attr_Deprecated("__Deprecated");
 const StaticString s___NoContextSensitiveAnalysis(
@@ -763,8 +764,8 @@ std::unique_ptr<php::Func> parse_func(ParseUnitState& puState,
 
   /*
    * Builtin functions get some extra information.  The returnType flag is only
-   * non-folly::none for these, but note that something may be a builtin and
-   * still have a folly::none return type.
+   * non-std::nullopt for these, but note that something may be a builtin and
+   * still have a std::nullopt return type.
    */
   if (fe.isNative) {
     auto const f = [&] () -> HPHP::Func* {
@@ -833,22 +834,24 @@ void parse_methods(ParseUnitState& puState,
 }
 
 void add_stringish(php::Class* cls) {
-  // The runtime adds Stringish to any class providing a __toString() function,
+  // The runtime adds StringishObject to any class providing a __toString() function,
   // so we mirror that here to make sure analysis of interfaces is correct.
-  // All Stringish are also XHPChild, so handle it here as well.
-  if (cls->attrs & AttrInterface && cls->name->isame(s_Stringish.get())) {
+  // All StringishObjects are also XHPChild, so handle it here as well.
+  if (cls->attrs & AttrInterface && cls->name->isame(s_StringishObject.get())) {
     return;
   }
 
   bool hasXHP = false;
   for (auto& iface : cls->interfaceNames) {
-    if (iface->isame(s_Stringish.get())) return;
+    if (iface->isame(s_StringishObject.get())) return;
     if (iface->isame(s_XHPChild.get())) { hasXHP = true; }
   }
 
   for (auto& func : cls->methods) {
     if (func->name->isame(s_toString.get())) {
-      FTRACE(2, "Adding Stringish and XHPChild to {}\n", cls->name->data());
+      FTRACE(2, "Adding Stringish, StringishObject and XHPChild to {}\n", cls->name->data());
+      cls->interfaceNames.push_back(s_StringishObject.get());
+      // leave this here so tests don't diverge. It's not technically necessary
       cls->interfaceNames.push_back(s_Stringish.get());
       if (!hasXHP && !cls->name->isame(s_XHPChild.get())) {
         cls->interfaceNames.push_back(s_XHPChild.get());

@@ -44,7 +44,6 @@
 #include "hphp/runtime/vm/native-data.h"
 #include "hphp/runtime/vm/native-prop-handler.h"
 #include "hphp/runtime/vm/jit/translator-inline.h"
-#include "hphp/runtime/vm/repo.h"
 #include "hphp/runtime/vm/repo-global-data.h"
 
 #include "hphp/system/systemlib.h"
@@ -266,18 +265,22 @@ bool ObjectData::toBooleanImpl() const noexcept {
   return false;
 }
 
-int64_t ObjectData::toInt64Impl() const noexcept {
-  // SimpleXMLElement is the only class that has proper custom int casting.
-  assertx(instanceof(SimpleXMLElement_classof()));
+int64_t ObjectData::toInt64() const {
+  /* SimpleXMLElement is the only class that has proper custom num casting. */
+  if (LIKELY(!instanceof(SimpleXMLElement_classof()))) {
+    throwObjToIntException(classname_cstr());
+  }
   if (RuntimeOption::EvalNoticeOnSimpleXMLBehavior) {
     raise_notice("SimpleXMLElement to integer cast");
   }
   return SimpleXMLElement_objectCast(this, KindOfInt64).toInt64();
 }
 
-double ObjectData::toDoubleImpl() const noexcept {
-  // SimpleXMLElement is the only class that has custom double casting.
-  assertx(instanceof(SimpleXMLElement_classof()));
+double ObjectData::toDouble() const {
+  /* SimpleXMLElement is the only class that has proper custom num casting. */
+  if (LIKELY(!instanceof(SimpleXMLElement_classof()))) {
+    throwObjToDoubleException(classname_cstr());
+  }
   if (RuntimeOption::EvalNoticeOnSimpleXMLBehavior) {
     raise_notice("SimpleXMLElement to double cast");
   }
@@ -573,7 +576,7 @@ Array ObjectData::toArray(bool pubOnly /* = false */,
     );
     not_reached();
   } else if (UNLIKELY(instanceof(c_Closure::classof()))) {
-    return make_varray(Object(const_cast<ObjectData*>(this)));
+    return make_vec_array(Object(const_cast<ObjectData*>(this)));
   } else if (UNLIKELY(instanceof(DateTimeData::getClass()))) {
     return Native::data<DateTimeData>(this)->getDebugInfo();
   } else {
@@ -1551,12 +1554,14 @@ void ObjectData::unsetProp(Class* ctx, const StringData* key) {
   }
 }
 
-void ObjectData::raiseObjToIntNotice(const char* clsName) {
-  raise_notice("Object of class %s could not be converted to int", clsName);
+void ObjectData::throwObjToIntException(const char* clsName) {
+  SystemLib::throwTypecastExceptionObject(folly::sformat(
+    "Object of class {} could not be converted to int", clsName));
 }
 
-void ObjectData::raiseObjToDoubleNotice(const char* clsName) {
-  raise_notice("Object of class %s could not be converted to float", clsName);
+void ObjectData::throwObjToDoubleException(const char* clsName) {
+  SystemLib::throwTypecastExceptionObject(folly::sformat(
+    "Object of class {} could not be converted to float", clsName));
 }
 
 void ObjectData::raiseAbstractClassError(Class* cls) {

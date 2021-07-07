@@ -64,11 +64,13 @@ enum BinopAllowsAwaitInPositions {
     BinopAllowAwaitNone,
 }
 
-#[allow(dead_code)] // Preview is currently unused
+#[allow(dead_code)] // Deprecated is currently unused
 #[derive(Eq, PartialEq)]
 enum FeatureStatus {
     Unstable,
     Preview,
+    Migration,
+    Deprecated,
     // TODO: add other modes like "Advanced" or "Deprecated" if necessary.
     // Those are just variants of "Preview" for the runtime's sake, though,
     // and likely only need to be distinguished in the lint rule rather than here
@@ -91,10 +93,12 @@ enum UnstableFeatures {
     UnionIntersectionTypeHints,
     ClassLevelWhere,
     ExpressionTrees,
-    EnumAtom,
+    EnumClassLabel,
     IFC,
     Readonly,
     Modules,
+    ContextAliasDeclaration,
+    ClassConstDefault,
 }
 impl UnstableFeatures {
     // Preview features are allowed to run in prod. This function decides
@@ -105,10 +109,12 @@ impl UnstableFeatures {
             UnstableFeatures::UnionIntersectionTypeHints => Unstable,
             UnstableFeatures::ClassLevelWhere => Unstable,
             UnstableFeatures::ExpressionTrees => Unstable,
-            UnstableFeatures::EnumAtom => Preview,
+            UnstableFeatures::EnumClassLabel => Preview,
             UnstableFeatures::IFC => Unstable,
             UnstableFeatures::Readonly => Preview,
             UnstableFeatures::Modules => Unstable,
+            UnstableFeatures::ContextAliasDeclaration => Unstable,
+            UnstableFeatures::ClassConstDefault => Unstable,
         }
     }
 }
@@ -1534,7 +1540,7 @@ where
     }
 
     fn is_module_attribute(&self, name: &str) -> bool {
-        name == sn::user_attributes::MODULE
+        name == sn::user_attributes::MODULE || name == sn::user_attributes::INTERNAL
     }
 
     fn check_attr_enabled(&mut self, attrs: S<'a, Token, Value>) {
@@ -3975,6 +3981,30 @@ where
 
                 self.check_type_name(&ad.name, name, location)
             }
+        } else if let ContextAliasDeclaration(cad) = &node.children {
+            self.check_can_use_feature(node, &UnstableFeatures::ContextAliasDeclaration);
+            let attrs = &cad.attribute_spec;
+            self.check_attr_enabled(&attrs);
+            if Self::token_kind(&cad.keyword) == Some(TokenKind::Type)
+                && !cad.as_constraint.is_missing()
+            {
+                self.errors
+                    .push(Self::make_error_from_node(&cad.keyword, errors::error2034))
+            }
+            if !cad.name.is_missing() {
+                let name = self.text(&cad.name);
+                let location = Self::make_location_of_node(&cad.name);
+                if let TypeConstant(_) = &cad.context.children {
+                    if self.env.is_typechecker() {
+                        self.errors.push(Self::make_error_from_node(
+                            &cad.context,
+                            errors::type_alias_to_type_constant,
+                        ))
+                    }
+                }
+
+                self.check_type_name(&cad.name, name, location)
+            }
         }
     }
 
@@ -4461,12 +4491,9 @@ where
 
     fn const_decl_errors(&mut self, node: S<'a, Token, Value>) {
         if let ConstantDeclarator(cd) = &node.children {
-            self.produce_error(
-                |self_, x| self_.constant_abstract_with_initializer(x),
-                &cd.initializer,
-                || errors::error2051,
-                &cd.initializer,
-            );
+            if self.constant_abstract_with_initializer(&cd.initializer) {
+                self.check_can_use_feature(node, &UnstableFeatures::ClassConstDefault);
+            }
 
             self.produce_error(
                 |self_, x| self_.constant_concrete_without_initializer(x),
@@ -5219,7 +5246,7 @@ where
 
             TypeConstDeclaration(_) => self.type_const_modifier_errors(node),
 
-            AliasDeclaration(_) => self.alias_errors(node),
+            AliasDeclaration(_) | ContextAliasDeclaration(_) => self.alias_errors(node),
             ConstantDeclarator(_) => self.const_decl_errors(node),
             NamespaceBody(_) | NamespaceEmptyBody(_) | NamespaceDeclaration(_) => {
                 self.mixed_namespace_errors(node)
@@ -5360,15 +5387,15 @@ where
                 _ => {}
             },
             EnumClassLabelExpression(_) => {
-                self.check_can_use_feature(node, &UnstableFeatures::EnumAtom)
+                self.check_can_use_feature(node, &UnstableFeatures::EnumClassLabel)
             }
             OldAttributeSpecification(x) => {
                 let attributes_string = self.text(&x.attributes);
-                let has_atom = attributes_string
+                let has_via_label = attributes_string
                     .split(',')
-                    .any(|attr| attr.trim() == sn::user_attributes::ATOM);
-                if has_atom {
-                    self.check_can_use_feature(node, &UnstableFeatures::EnumAtom)
+                    .any(|attr| attr.trim() == sn::user_attributes::VIA_LABEL);
+                if has_via_label {
+                    self.check_can_use_feature(node, &UnstableFeatures::EnumClassLabel)
                 }
             }
             _ => {}

@@ -11,12 +11,21 @@ open Hh_prelude
 let go (filenames : string list) ctx =
   let dep_edges = HashSet.create () in
   let multi_remote_execution_trace root obj =
-    HashSet.add dep_edges (root, obj)
+    if
+      not
+        (Typing_deps.idep_exists (Provider_context.get_deps_mode ctx) root obj)
+    then
+      HashSet.add dep_edges (root, obj)
   in
   Typing_deps.add_dependency_callback
     "multi_remote_execution_trace"
     multi_remote_execution_trace;
-  let paths = List.map ~f:Relative_path.create_detect_prefix filenames in
+  (* filter out non-existent files *)
+  let paths =
+    List.filter_map filenames ~f:(fun file ->
+        Sys_utils.realpath file
+        |> Option.map ~f:Relative_path.create_detect_prefix)
+  in
   let errors =
     List.fold_left paths ~init:Errors.empty ~f:(fun acc path ->
         let (ctx, entry) = Provider_context.add_entry_if_missing ~ctx ~path in

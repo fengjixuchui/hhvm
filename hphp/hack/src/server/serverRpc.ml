@@ -74,7 +74,7 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
     let ctx = Provider_utils.ctx_from_server_env env in
     let (errors, dep_edges) = ServerStatusSingleRemoteExecution.go fn ctx in
     (env, (errors, dep_edges))
-  | STATUS_REMOTE_EXECUTION max_errors ->
+  | STATUS_REMOTE_EXECUTION (_, max_errors) ->
     (* let ctx = Provider_utils.ctx_from_server_env env in *)
     let errors = ServerStatusRemoteExecution.go env in
     let (error_list, dropped_count) = take_max_errors errors max_errors in
@@ -286,7 +286,7 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
           |> map_env ~f:to_absolute))
   | GO_TO_IMPL go_to_impl_action ->
     Done_or_retry.(
-      ServerGoToImpl.go go_to_impl_action genv env
+      ServerGoToImpl.go ~action:go_to_impl_action ~genv ~env
       |> map_env ~f:ServerFindRefs.to_absolute)
   | IDE_FIND_REFS (labelled_file, line, column, include_defs) ->
     Done_or_retry.(
@@ -373,7 +373,7 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
   | SEARCH (query, type_) ->
     let ctx = Provider_utils.ctx_from_server_env env in
     let lst = env.ServerEnv.local_symbol_table in
-    (env, ServerSearch.go ctx query type_ lst)
+    (env, ServerSearch.go ctx query ~kind_filter:type_ lst)
   | COVERAGE_COUNTS path -> (env, ServerCoverageMetric.go path genv env)
   | LINT fnl ->
     let ctx = Provider_utils.ctx_from_server_env env in
@@ -393,7 +393,7 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
     let legacy_format_options =
       { Lsp.DocumentFormatting.tabSize = 2; insertSpaces = true }
     in
-    (env, ServerFormat.go content from to_ legacy_format_options)
+    (env, ServerFormat.go ~content from to_ legacy_format_options)
   | AI_QUERY _ -> (env, "Ai_query is deprecated")
   | DUMP_FULL_FIDELITY_PARSE file -> (env, FullFidelityParseService.go file)
   | OPEN_FILE (path, contents) ->
@@ -456,18 +456,25 @@ let handle : type a. genv -> env -> is_stale:bool -> a t -> env * a =
         is_complete = true;
       } )
   | DISCONNECT -> (ServerFileSync.clear_sync_data env, ())
-  | SUBSCRIBE_DIAGNOSTIC id ->
-    let init =
-      if is_full_check_done env.full_check_status then
-        env.errorl
-      else
-        Errors.empty
-    in
-    let new_env =
-      { env with diag_subscribe = Some (Diagnostic_subscription.of_id id init) }
-    in
-    let () = Hh_logger.log "Diag_subscribe: SUBSCRIBE %d" id in
-    (new_env, ())
+  | SUBSCRIBE_DIAGNOSTIC { id; error_limit } ->
+    if TypecheckerOptions.stream_errors env.tcopt then
+      (env, ())
+    else
+      let initial_errors =
+        if is_full_check_done env.full_check_status then
+          env.errorl
+        else
+          Errors.empty
+      in
+      let new_env =
+        {
+          env with
+          diag_subscribe =
+            Some (Diagnostic_subscription.of_id id ~initial_errors ?error_limit);
+        }
+      in
+      let () = Hh_logger.log "Diag_subscribe: SUBSCRIBE %d" id in
+      (new_env, ())
   | UNSUBSCRIBE_DIAGNOSTIC id ->
     let diag_subscribe =
       match env.diag_subscribe with

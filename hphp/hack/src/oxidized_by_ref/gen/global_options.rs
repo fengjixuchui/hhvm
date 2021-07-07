@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<2f28e28e507bb1f48d1ffa2425d67521>>
+// @generated SignedSource<<1786eeac1f4eb8e556f5889d764e0240>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -49,6 +49,7 @@ pub struct GlobalOptions<'a> {
     pub tco_remote_max_batch_size: isize,
     pub tco_remote_min_batch_size: isize,
     pub tco_num_remote_workers: isize,
+    pub tco_stream_errors: bool,
     #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub so_remote_version_specifier: Option<&'a str>,
     pub so_remote_worker_vfs_checkout_threshold: isize,
@@ -162,7 +163,6 @@ pub struct GlobalOptions<'a> {
     #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub tco_ifc_enabled: &'a [&'a str],
     pub po_enable_enum_supertyping: bool,
-    pub po_hack_arr_dv_arrs: bool,
     pub po_interpret_soft_types_as_like_types: bool,
     pub tco_enable_strict_string_concat_interp: bool,
     pub tco_ignore_unsafe_cast: bool,
@@ -176,6 +176,7 @@ pub struct GlobalOptions<'a> {
     pub tco_meth_caller_only_public_visibility: bool,
     pub tco_require_extends_implements_ancestors: bool,
     pub tco_strict_value_equality: bool,
+    pub tco_enforce_sealed_subclasses: bool,
 }
 impl<'a> TrivialDrop for GlobalOptions<'a> {}
 arena_deserializer::impl_deserialize_in_arena!(GlobalOptions<'arena>);

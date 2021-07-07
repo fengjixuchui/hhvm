@@ -18,8 +18,6 @@
 
 #include <type_traits>
 
-#include <folly/Optional.h>
-
 #include "hphp/runtime/base/repo-auth-type.h"
 #include "hphp/runtime/base/typed-value.h"
 #include "hphp/runtime/base/types.h"
@@ -703,12 +701,12 @@ constexpr uint32_t kMaxConcatN = 4;
   O(LIterNext,       THREE(ITA,LA,BA), NOV,             NOV,        CF) \
   O(IterFree,        ONE(IA),          NOV,             NOV,        NF) \
   O(LIterFree,       TWO(IA,LA),       NOV,             NOV,        NF) \
-  O(Incl,            NA,               ONE(CV),         ONE(CV),    CF) \
-  O(InclOnce,        NA,               ONE(CV),         ONE(CV),    CF) \
-  O(Req,             NA,               ONE(CV),         ONE(CV),    CF) \
-  O(ReqOnce,         NA,               ONE(CV),         ONE(CV),    CF) \
-  O(ReqDoc,          NA,               ONE(CV),         ONE(CV),    CF) \
-  O(Eval,            NA,               ONE(CV),         ONE(CV),    CF) \
+  O(Incl,            NA,               ONE(CV),         ONE(CV),    NF) \
+  O(InclOnce,        NA,               ONE(CV),         ONE(CV),    NF) \
+  O(Req,             NA,               ONE(CV),         ONE(CV),    NF) \
+  O(ReqOnce,         NA,               ONE(CV),         ONE(CV),    NF) \
+  O(ReqDoc,          NA,               ONE(CV),         ONE(CV),    NF) \
+  O(Eval,            NA,               ONE(CV),         ONE(CV),    NF) \
   O(This,            NA,               NOV,             ONE(CV),    NF) \
   O(BareThis,        ONE(OA(BareThisOp)),                               \
                                        NOV,             ONE(CV),    NF) \
@@ -947,11 +945,11 @@ bool subopValid(Subop);
 /*
  * Try to parse a string into a subop name of a given type.
  *
- * Returns folly::none if the string is not recognized as that type of
+ * Returns std::nullopt if the string is not recognized as that type of
  * subop.
  */
 template<class SubOpType>
-folly::Optional<SubOpType> nameToSubop(const char*);
+Optional<SubOpType> nameToSubop(const char*);
 
 using OffsetList = std::vector<Offset>;
 

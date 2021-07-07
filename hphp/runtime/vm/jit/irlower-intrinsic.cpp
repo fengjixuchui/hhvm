@@ -186,7 +186,7 @@ void getMemoKeyImpl(IRLS& env, const IRInstruction* inst, bool sync) {
 
   auto args = argGroup(env, inst);
   if (s->isA(TKeyset) || s->isA(TArrLike) || s->isA(TObj) || s->isA(TStr) ||
-      s->isA(TDbl)) {
+      s->isA(TDbl) || s->isA(TLazyCls)) {
     args.ssa(0, s->isA(TDbl));
   } else {
     args.typedValue(0);
@@ -195,7 +195,10 @@ void getMemoKeyImpl(IRLS& env, const IRInstruction* inst, bool sync) {
   auto const target = [&]{
     if (s->isA(TKeyset))  return CallSpec::direct(serialize_memoize_param_set);
     if (s->isA(TArrLike)) return CallSpec::direct(serialize_memoize_param_arr);
-    if (s->isA(TStr))     return CallSpec::direct(serialize_memoize_param_str);
+    if (s->isA(TStr)) return CallSpec::direct(serialize_memoize_param_str);
+    if (s->isA(TLazyCls)) {
+      return CallSpec::direct(serialize_memoize_param_lazycls);
+    }
     if (s->isA(TDbl))     return CallSpec::direct(serialize_memoize_param_dbl);
     if (s->isA(TObj)) {
       auto const ty = s->type();
@@ -284,7 +287,14 @@ void doMemoGetValue(
   auto& v = vmain(env);
   auto const sf = checkRDSHandleInitialized(v, handle);
   fwdJcc(v, env, CC_NE, sf, inst->taken());
-  loadTV(v, inst->dst(), dstLoc(env, inst, 0), getHandleAddr(handle), loadAux);
+  markRDSAccess(v, handle);
+  loadTV(
+    v,
+    inst->dst(),
+    dstLoc(env, inst, 0),
+    getHandleAddr(handle),
+    loadAux
+  );
 }
 
 template<typename HandleT>
@@ -294,20 +304,21 @@ void doMemoSetValue(
   HandleT handle,
   Type memoTy,
   uint32_t valIndex,
-  folly::Optional<bool> asyncEager
+  Optional<bool> asyncEager
 ) {
   auto& v = vmain(env);
   auto const val = inst->src(valIndex);
   auto const valLoc = srcLoc(env, inst, valIndex);
 
-  auto const aux = [&] () -> folly::Optional<AuxUnion> {
-    if (!asyncEager) return folly::none;
+  auto const aux = [&] () -> Optional<AuxUnion> {
+    if (!asyncEager) return std::nullopt;
     return *asyncEager
       ? AuxUnion{std::numeric_limits<uint32_t>::max()}
       : AuxUnion{0};
   }();
 
   auto const store = [&] {
+    markRDSAccess(v, handle);
     if (!aux) return storeTV(v, getHandleAddr(handle), valLoc, val);
     storeTVWithAux(v, getHandleAddr(handle), valLoc, val, *aux);
   };
@@ -324,6 +335,7 @@ void doMemoSetValue(
   unlikelyIfThenElse(
     v, vcold(env), CC_E, sf,
     [&](Vout& v) {
+      markRDSAccess(v, handle);
       auto const handleAddr = v.makeReg();
       v << lea{getHandleAddr(handle), handleAddr};
       cgCallHelper(
@@ -363,6 +375,7 @@ void doMemoGetCache(
   auto const sf = checkRDSHandleInitialized(v, handle);
   fwdJcc(v, env, CC_NE, sf, inst->taken());
 
+  markRDSAccess(v, handle);
   auto const cachePtr = v.makeReg();
   v << load{getHandleAddr(handle), cachePtr};
 
@@ -435,16 +448,18 @@ void doMemoSetCache(
   ifThen(
     v, CC_NE, sf,
     [&](Vout& v) {
+      markRDSAccess(v, handle);
       v << storeqi{0, getHandleAddr(handle)};
       markRDSHandleInitialized(v, handle);
     }
   );
 
+  markRDSAccess(v, handle);
   auto const handleAddr = v.makeReg();
   v << lea{getHandleAddr(handle), handleAddr};
 
-  auto const aux = [&] () -> folly::Optional<AuxUnion> {
-    if (!extra->asyncEager) return folly::none;
+  auto const aux = [&] () -> Optional<AuxUnion> {
+    if (!extra->asyncEager) return std::nullopt;
     return *extra->asyncEager
       ? AuxUnion{std::numeric_limits<uint32_t>::max()}
       : AuxUnion{0};
@@ -615,8 +630,8 @@ void cgMemoSetInstanceValue(IRLS& env, const IRInstruction* inst) {
 
   // Store it (overwriting any previous value).
 
-  auto const aux = [&] () -> folly::Optional<AuxUnion> {
-    if (!extra->asyncEager) return folly::none;
+  auto const aux = [&] () -> Optional<AuxUnion> {
+    if (!extra->asyncEager) return std::nullopt;
     return *extra->asyncEager
       ? AuxUnion{std::numeric_limits<uint32_t>::max()}
       : AuxUnion{0};
@@ -784,8 +799,8 @@ void cgMemoSetInstanceCache(IRLS& env, const IRInstruction* inst) {
     obj[slotOff + TVOFF(m_type)]
   };
 
-  auto const aux = [&] () -> folly::Optional<AuxUnion> {
-    if (!extra->asyncEager) return folly::none;
+  auto const aux = [&] () -> Optional<AuxUnion> {
+    if (!extra->asyncEager) return std::nullopt;
     return *extra->asyncEager
       ? AuxUnion{std::numeric_limits<uint32_t>::max()}
       : AuxUnion{0};

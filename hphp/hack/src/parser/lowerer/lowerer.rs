@@ -3761,19 +3761,19 @@ where
                 let return_type = Self::mp_optional(Self::p_hint, type_, env)?;
                 let suspension_kind = Self::mk_suspension_kind_(has_async);
                 let name = Self::pos_name(name, env)?;
-                // Detect if multiple __Atom attribute are used. At most one is allowed,
+                // Detect if multiple __ViaLabel attributes are used. At most one is allowed,
                 // and if present, it must be on the first parameter.
                 if !parameters.is_empty() {
                     for param in parameters[1..].iter() {
                         if param
                             .user_attributes
                             .iter()
-                            .any(|attr| attr.name.1 == special_attrs::ATOM)
+                            .any(|attr| attr.name.1 == special_attrs::VIA_LABEL)
                         {
                             Self::raise_parsing_error(
                                 node,
                                 env,
-                                &syntax_error::invalid_atom_location,
+                                &syntax_error::invalid_via_label_location(),
                             )
                         }
                     }
@@ -4236,6 +4236,8 @@ where
         };
         match &node.children {
             ConstDeclaration(c) => {
+                let kinds = Self::p_kinds(&c.modifiers, env)?;
+                let has_abstract = kinds.has(modifier::ABSTRACT);
                 // TODO: make wrap `type_` `doc_comment` by `Rc` in ClassConst to avoid clone
                 let type_ = Self::mp_optional(Self::p_hint, &c.type_specifier, env)?;
                 // ocaml's behavior is that if anything throw, it will
@@ -4246,19 +4248,20 @@ where
                         match &n.children {
                             ConstantDeclarator(c) => {
                                 let id = Self::pos_name(&c.name, e)?;
-                                let expr = if n.is_abstract() {
-                                    None
-                                } else {
-                                    Self::mp_optional(
+                                use aast::ClassConstKind::*;
+                                let kind = if has_abstract {
+                                    CCAbstract(Self::mp_optional(
                                         Self::p_simple_initializer,
                                         &c.initializer,
                                         e,
-                                    )?
+                                    )?)
+                                } else {
+                                    CCConcrete(Self::p_simple_initializer(&c.initializer, e)?)
                                 };
                                 Ok(ast::ClassConst {
                                     type_: type_.clone(),
                                     id,
-                                    expr,
+                                    kind,
                                     doc_comment: doc_comment_opt.clone(),
                                 })
                             }
@@ -5156,6 +5159,51 @@ where
                     kind: Self::p_hint(&c.type_, env)?,
                     span: Self::p_pos(node, env),
                     emit_id: None,
+                    is_ctx: false,
+                })])
+            }
+            ContextAliasDeclaration(c) => {
+                let tparams = Self::p_tparam_l(false, &c.generic_parameter, env)?;
+                for tparam in tparams.iter() {
+                    if tparam.reified != ast::ReifyKind::Erased {
+                        Self::raise_parsing_error(node, env, &syntax_error::invalid_reified)
+                    }
+                }
+                let (_super_constraint, as_constraint) =
+                    Self::p_ctx_constraints(&c.as_constraint, env)?;
+
+                let pos_name = Self::pos_name(&c.name, env)?;
+                if let Some(first_char) = pos_name.1.chars().nth(0) {
+                    if first_char.is_lowercase() {
+                        Self::raise_parsing_error(
+                            &c.name,
+                            env,
+                            &syntax_error::user_ctx_should_be_caps(&pos_name.1),
+                        )
+                    }
+                }
+                Ok(vec![ast::Def::mk_typedef(ast::Typedef {
+                    annotation: (),
+                    name: pos_name,
+                    tparams,
+                    constraint: as_constraint,
+                    user_attributes: itertools::concat(
+                        c.attribute_spec
+                            .syntax_node_to_list_skip_separator()
+                            .map(|attr| Self::p_user_attribute(attr, env))
+                            .collect::<Result<Vec<Vec<_>>, _>>()?,
+                    ),
+                    namespace: Self::mk_empty_ns_env(env),
+                    mode: env.file_mode(),
+                    vis: match Self::token_kind(&c.keyword) {
+                        Some(TK::Type) => ast::TypedefVisibility::Transparent,
+                        Some(TK::Newtype) => ast::TypedefVisibility::Opaque,
+                        _ => Self::missing_syntax("kind", &c.keyword, env)?,
+                    },
+                    kind: Self::p_context_list_to_intersection(&c.context, env)?.unwrap(),
+                    span: Self::p_pos(node, env),
+                    emit_id: None,
+                    is_ctx: true,
                 })])
             }
             EnumDeclaration(c) => {
@@ -5165,7 +5213,7 @@ where
                             Enumerator(c) => Ok(ast::ClassConst {
                                 type_: None,
                                 id: Self::pos_name(&c.name, e)?,
-                                expr: Some(Self::p_expr(&c.value, e)?),
+                                kind: ast::ClassConstKind::CCConcrete(Self::p_expr(&c.value, e)?),
                                 doc_comment: None,
                             }),
                             _ => Self::missing_syntax("enumerator", n, e),
@@ -5312,7 +5360,7 @@ where
                             let class_const = ast::ClassConst {
                                 type_: Some(full_type),
                                 id: name,
-                                expr: Some(initial_value),
+                                kind: ast::ClassConstKind::CCConcrete(initial_value),
                                 doc_comment: None,
                             };
                             enum_class.consts.push(class_const)

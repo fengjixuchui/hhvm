@@ -52,6 +52,7 @@
     type_mapper
     type_parameter_env_ops
     type_validator
+    typing_algebra
     typing_async
     typing_coeffects
     typing_coercion
@@ -98,7 +99,6 @@
     typing_subtype_tconst
     typing_taccess
     typing_tdef
-    typing_unify
     typing_union
     typing_utils
     typing_variance
@@ -267,6 +267,7 @@
     core_kernel
     decl_counters
     decl_service
+    diagnostic_pusher
     errors
     file_info
     nast
@@ -281,7 +282,7 @@
     typing_deps
     typing_check_job
     typing_service_api
-    typing_service_api_stubs
+    typing_service_delegate
     vfs)
   (preprocess (pps ppx_deriving.std)))
 

@@ -50,6 +50,8 @@ module Classes = struct
 
   let cStringish = "\\Stringish"
 
+  let cStringishObject = "\\StringishObject"
+
   let cXHPChild = "\\XHPChild"
 
   let cIMemoizeParam = "\\HH\\IMemoizeParam"
@@ -64,7 +66,7 @@ module Classes = struct
 
   let cMemberOf = "\\HH\\MemberOf"
 
-  let cLabel = "\\HH\\Label"
+  let cEnumClassLabel = "\\HH\\EnumClass\\Label"
 
   (* Classes that can be spliced into ExpressionTrees *)
   let cSpliceable = "\\Spliceable"
@@ -313,13 +315,15 @@ module UserAttributes = struct
 
   let uaCanCall = "__CanCall"
 
-  let uaAtom = "__Atom"
+  let uaViaLabel = "__ViaLabel"
 
   let uaSupportDynamicType = "__SupportDynamicType"
 
   let uaNoRequireDynamic = "__NoRequireDynamic"
 
   let uaModule = "__Module"
+
+  let uaInternal = "__Internal"
 
   let as_map =
     AttributeKinds.(
@@ -357,10 +361,21 @@ module UserAttributes = struct
           (uaInferFlows, [fn; mthd]);
           (uaExternal, [parameter]);
           (uaCanCall, [parameter]);
-          (uaAtom, [parameter]);
+          (uaViaLabel, [parameter]);
           (uaSupportDynamicType, [fn; cls; mthd]);
           (uaNoRequireDynamic, [typeparam]);
           (uaModule, [fn; cls; file; typealias; enum; enumcls]);
+          ( uaInternal,
+            [
+              fn;
+              mthd;
+              cls;
+              instProperty;
+              staticProperty;
+              typealias;
+              enum;
+              enumcls;
+            ] );
         ])
 
   (* These are names which are allowed in the systemlib but not in normal programs *)
@@ -416,7 +431,7 @@ module SpecialIdents = struct
   let tmp_var_prefix = "__tmp$"
 
   let is_tmp_var name =
-    String.length name > 6 && String.(sub name 0 6 = tmp_var_prefix)
+    String.length name > 6 && String.(sub name ~pos:0 ~len:6 = tmp_var_prefix)
 
   let assert_tmp_var name = assert (is_tmp_var name)
 end
@@ -447,7 +462,7 @@ module PseudoFunctions = struct
 
   let die = "\\die"
 
-  let unsafe_cast = "\\unsafe_cast"
+  let unsafe_cast = "\\HH\\FIXME\\UNSAFE_CAST"
 
   let all_pseudo_functions =
     HashSet.of_list
@@ -800,7 +815,73 @@ module Capabilities = struct
 
   let readGlobals = prefix ^ "ReadGlobals"
 
+  let implicit_policy = prefix ^ "ImplicitPolicy"
+
+  let implicitPolicyLocal = prefix ^ "ImplicitPolicyLocal"
+
   let io = prefix ^ "IO"
 
   let rx = prefix ^ "Rx"
+
+  let rxLocal = rx ^ "Local"
+end
+
+module ExpressionTrees = struct
+  let makeTree = "makeTree"
+
+  let intType = "intType"
+
+  let floatType = "floatType"
+
+  let boolType = "boolType"
+
+  let stringType = "stringType"
+
+  let nullType = "nullType"
+
+  let voidType = "voidType"
+
+  let symbolType = "symbolType"
+
+  let visitInt = "visitInt"
+
+  let visitFloat = "visitFloat"
+
+  let visitBool = "visitBool"
+
+  let visitString = "visitString"
+
+  let visitNull = "visitNull"
+
+  let visitBinop = "visitBinop"
+
+  let visitUnop = "visitUnop"
+
+  let visitLocal = "visitLocal"
+
+  let visitLambda = "visitLambda"
+
+  let visitGlobalFunction = "visitGlobalFunction"
+
+  let visitStaticMethod = "visitStaticMethod"
+
+  let visitCall = "visitCall"
+
+  let visitAssign = "visitAssign"
+
+  let visitTernary = "visitTernary"
+
+  let visitIf = "visitIf"
+
+  let visitWhile = "visitWhile"
+
+  let visitReturn = "visitReturn"
+
+  let visitFor = "visitFor"
+
+  let visitBreak = "visitBreak"
+
+  let visitContinue = "visitContinue"
+
+  let splice = "splice"
 end

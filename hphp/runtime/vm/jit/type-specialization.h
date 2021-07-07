@@ -21,8 +21,6 @@
 #include "hphp/runtime/vm/class.h"
 #include "hphp/runtime/vm/jit/array-layout.h"
 
-#include <folly/Optional.h>
-
 #include <cstdint>
 
 namespace HPHP {
@@ -55,6 +53,7 @@ struct ArraySpec {
   constexpr ArraySpec();
   explicit ArraySpec(ArrayLayout layout);
   explicit ArraySpec(const RepoAuthType::Array* type);
+  ArraySpec(ArrayLayout layout, const RepoAuthType::Array* type);
 
   /*
    * Update the layout of the ArraySpec wit the given info, if it is possible
@@ -331,4 +330,3 @@ private:
 }}
 
 #include "hphp/runtime/vm/jit/type-specialization-inl.h"
-

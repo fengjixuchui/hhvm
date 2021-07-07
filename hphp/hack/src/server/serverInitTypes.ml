@@ -8,8 +8,6 @@
  *)
 
 type load_state_error =
-  (* an error reported by mk_state_future for downloading saved-state *)
-  | Load_state_loader_failure of State_loader.error
   (* an error reported when downloading saved-state through [Saved_state_loader] *)
   | Load_state_saved_state_loader_failure of Saved_state_loader.load_error
   (* an error fetching list of dirty files from hg *)
@@ -22,11 +20,17 @@ type load_state_error =
       stack: Utils.callstack;
     }
 
+type load_state_verbose_error = {
+  message: string;
+  stack: Utils.callstack;
+  auto_retry: bool;
+  environment: string option;
+}
+[@@deriving show]
+
 type load_state_approach =
-  | Precomputed of (ServerArgs.saved_state_target_info[@opaque])
+  | Precomputed of ServerArgs.saved_state_target_info
   | Load_state_natively
-  | Load_state_natively_with_target of
-      (ServerMonitorUtils.target_saved_state[@opaque])
 [@@deriving show]
 
 type remote_init = {
@@ -52,10 +56,8 @@ type init_result =
 
 (** returns human-readable string, an indication of whether auto-retry is sensible, and stack *)
 let load_state_error_to_verbose_string (err : load_state_error) :
-    State_loader.verbose_error =
-  let open State_loader in
+    load_state_verbose_error =
   match err with
-  | Load_state_loader_failure err -> State_loader.error_string_verbose err
   | Load_state_saved_state_loader_failure err ->
     (* TODO(hverr): Construct verbose errors with all fields properly set *)
     {
@@ -107,20 +109,21 @@ type loaded_info = {
   naming_table_fallback_fn: string option;
   corresponding_rev: Hg.rev;
   mergebase_rev: Hg.global_rev option;
-  mergebase: Hg.hg_rev option Future.t;
+  mergebase: Hg.hg_rev option Future.t; [@opaque]
   (* Files changed between the loaded naming table saved state and current revision. *)
-  dirty_naming_files: Relative_path.Set.t;
+  dirty_naming_files: Relative_path.Set.t; [@printer Relative_path.Set.pp_large]
   (* Files changed between saved state revision and current public merge base *)
-  dirty_master_files: Relative_path.Set.t;
+  dirty_master_files: Relative_path.Set.t; [@printer Relative_path.Set.pp_large]
   (* Files changed between public merge base and current revision *)
-  dirty_local_files: Relative_path.Set.t;
-  old_naming_table: Naming_table.t;
-  old_errors: SaveStateServiceTypes.saved_state_errors;
+  dirty_local_files: Relative_path.Set.t; [@printer Relative_path.Set.pp_large]
+  old_naming_table: Naming_table.t; [@opaque]
+  old_errors: SaveStateServiceTypes.saved_state_errors; [@opaque]
   state_distance: int option;
   (* The manifold path for naming table saved state, to be used by remote type checker
      for downloading the naming table in the case of a saved-state init *)
   naming_table_manifold_path: string option;
 }
+[@@deriving show]
 
 (* Laziness *)
 type lazy_level =

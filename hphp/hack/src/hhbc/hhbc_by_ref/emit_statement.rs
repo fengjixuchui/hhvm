@@ -4,6 +4,7 @@
 // LICENSE file in the "hack" directory of this source tree.
 use crate::try_finally_rewriter as tfr;
 
+use decl_provider::DeclProvider;
 use hhbc_by_ref_emit_expression::{self as emit_expr, emit_await, emit_expr, LValOp, Setrange};
 use hhbc_by_ref_emit_fatal as emit_fatal;
 use hhbc_by_ref_emit_pos::{emit_pos, emit_pos_then};
@@ -17,15 +18,16 @@ use hhbc_by_ref_local as local;
 use hhbc_by_ref_scope::scope;
 use hhbc_by_ref_statement_state::StatementState;
 
+use ffi::Slice;
 use lazy_static::lazy_static;
 use naming_special_names_rust::{special_functions, special_idents, superglobals};
 use oxidized::{aast as a, ast as tast, ast_defs, local_id, pos::Pos};
 use regex::Regex;
 
 // Expose a mutable ref to state for emit_body so that it can set it appropriately
-pub(crate) fn set_state<'arena>(
+pub(crate) fn set_state<'arena, 'decl, D: DeclProvider<'decl>>(
     alloc: &'arena bumpalo::Bump,
-    e: &mut Emitter<'arena>,
+    e: &mut Emitter<'arena, 'decl, D>,
     state: StatementState<'arena>,
 ) {
     *e.emit_statement_state_mut(alloc) = state;
@@ -35,8 +37,8 @@ pub(crate) type Level = usize;
 
 // Wrapper functions
 
-fn emit_return<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_return<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
 ) -> Result<InstrSeq<'arena>> {
     tfr::emit_return(e, false, env)
@@ -75,8 +77,8 @@ fn set_bytes_kind(name: &str) -> Option<Setrange> {
     })
 }
 
-pub fn emit_stmt<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+pub fn emit_stmt<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     stmt: &tast::Stmt,
 ) -> Result<InstrSeq<'arena>> {
@@ -242,8 +244,8 @@ pub fn emit_stmt<'a, 'arena>(
     }
 }
 
-fn emit_case<'c, 'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_case<'c, 'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     case: &'c tast::Case,
 ) -> Result<(
@@ -264,8 +266,8 @@ fn emit_case<'c, 'a, 'arena>(
     })
 }
 
-fn emit_check_case<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_check_case<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     scrutinee_expr: &tast::Expr,
     (case_expr, case_handler_label): (&tast::Expr, Label),
@@ -298,8 +300,8 @@ fn emit_check_case<'a, 'arena>(
     })
 }
 
-fn emit_awaitall<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_awaitall<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     pos: &Pos,
     el: &[(Option<tast::Lid>, tast::Expr)],
@@ -313,8 +315,8 @@ fn emit_awaitall<'a, 'arena>(
     }
 }
 
-fn emit_awaitall_single<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_awaitall_single<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     pos: &Pos,
     lval: &Option<tast::Lid>,
@@ -341,8 +343,8 @@ fn emit_awaitall_single<'a, 'arena>(
     })
 }
 
-fn emit_awaitall_multi<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_awaitall_multi<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     pos: &Pos,
     el: &[(Option<tast::Lid>, tast::Expr)],
@@ -350,22 +352,23 @@ fn emit_awaitall_multi<'a, 'arena>(
 ) -> Result<InstrSeq<'arena>> {
     let alloc = env.arena;
     scope::with_unnamed_locals(alloc, e, |alloc, e| {
-        let load_args = InstrSeq::gather(
-            alloc,
-            el.iter()
-                .map(|(_, expr)| emit_expr::emit_expr(e, env, expr))
-                .collect::<Result<Vec<_>>>()?,
-        );
-        let locals: Vec<local::Type> = el
-            .iter()
-            .map(|(lvar, _)| match lvar {
+        let mut instrs = vec![];
+        for (_, expr) in el.iter() {
+            instrs.push(emit_expr::emit_expr(e, env, expr)?)
+        }
+        let load_args = InstrSeq::gather(alloc, instrs);
+
+        let mut locals: Vec<local::Type> = vec![];
+        for (lvar, _) in el.iter() {
+            locals.push(match lvar {
                 None => e.local_gen_mut().get_unnamed(),
                 Some(tast::Lid(_, id)) => e
                     .local_gen_mut()
                     .init_unnamed_for_tempname(local_id::get_name(&id))
                     .to_owned(),
-            })
-            .collect();
+            });
+        }
+
         let init_locals = InstrSeq::gather(
             alloc,
             locals
@@ -378,27 +381,26 @@ fn emit_awaitall_multi<'a, 'arena>(
             alloc,
             locals.iter().map(|l| instr::unsetl(alloc, *l)).collect(),
         );
-        let unpack = InstrSeq::gather(
-            alloc,
-            locals
-                .iter()
-                .map(|l| {
-                    let label_done = e.label_gen_mut().next_regular();
-                    InstrSeq::gather(
-                        alloc,
-                        vec![
-                            instr::pushl(alloc, *l),
-                            instr::dup(alloc),
-                            instr::istypec(alloc, IstypeOp::OpNull),
-                            instr::jmpnz(alloc, label_done),
-                            instr::whresult(alloc),
-                            instr::label(alloc, label_done),
-                            instr::popl(alloc, *l),
-                        ],
-                    )
-                })
-                .collect(),
-        );
+        let mut instrs = vec![];
+        for l in locals.iter() {
+            instrs.push({
+                let label_done = e.label_gen_mut().next_regular();
+                InstrSeq::gather(
+                    alloc,
+                    vec![
+                        instr::pushl(alloc, *l),
+                        instr::dup(alloc),
+                        instr::istypec(alloc, IstypeOp::OpNull),
+                        instr::jmpnz(alloc, label_done),
+                        instr::whresult(alloc),
+                        instr::label(alloc, label_done),
+                        instr::popl(alloc, *l),
+                    ],
+                )
+            });
+        }
+
+        let unpack = InstrSeq::gather(alloc, instrs);
         let await_all = InstrSeq::gather(
             alloc,
             vec![instr::awaitall_list(alloc, locals), instr::popc(alloc)],
@@ -418,8 +420,8 @@ fn emit_awaitall_multi<'a, 'arena>(
     })
 }
 
-fn emit_using<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_using<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     using: &tast::UsingStmt,
 ) -> Result<InstrSeq<'arena>> {
@@ -529,7 +531,7 @@ fn emit_using<'a, 'arena>(
             };
 
             let emit_finally = |
-                e: &mut Emitter<'arena>,
+                e: &mut Emitter<'arena, 'decl, D>,
                 local: local::Type<'arena>,
                 has_await: bool,
                 is_block_scoped: bool,
@@ -568,7 +570,7 @@ fn emit_using<'a, 'arena>(
                             FcallArgs::new(
                                 FcallFlags::empty(),
                                 1,
-                                bumpalo::vec![in alloc;].into_bump_slice(),
+                                Slice::new(bumpalo::vec![in alloc;].into_bump_slice()),
                                 async_eager_label,
                                 0,
                                 env.call_context
@@ -643,9 +645,9 @@ fn block_pos(block: &tast::Block) -> Result<Pos> {
     }
 }
 
-fn emit_cases<'a, 'arena>(
+fn emit_cases<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
     env: &mut Env<'a, 'arena>,
-    e: &mut Emitter<'arena>,
+    e: &mut Emitter<'arena, 'decl, D>,
     pos: &Pos,
     break_label: Label,
     scrutinee_expr: &tast::Expr,
@@ -739,8 +741,8 @@ fn emit_cases<'a, 'arena>(
     }
 }
 
-fn emit_switch<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_switch<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     pos: &Pos,
     scrutinee_expr: &tast::Expr,
@@ -778,8 +780,8 @@ fn is_empty_block(b: &[tast::Stmt]) -> bool {
     b.iter().all(|s| s.1.is_noop())
 }
 
-fn emit_try_catch_finally<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_try_catch_finally<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     pos: &Pos,
     r#try: &[tast::Stmt],
@@ -788,7 +790,7 @@ fn emit_try_catch_finally<'a, 'arena>(
 ) -> Result<InstrSeq<'arena>> {
     let is_try_block_empty = false;
     let emit_try_block =
-        |env: &mut Env<'a, 'arena>, e: &mut Emitter<'arena>, finally_start: Label| {
+        |env: &mut Env<'a, 'arena>, e: &mut Emitter<'arena, 'decl, D>, finally_start: Label| {
             env.do_in_try_catch_body(e, finally_start, r#try, catch, |env, e, t, c| {
                 emit_try_catch(e, env, pos, t, c)
             })
@@ -796,8 +798,8 @@ fn emit_try_catch_finally<'a, 'arena>(
     e.local_scope(|e| emit_try_finally_(e, env, pos, emit_try_block, finally, is_try_block_empty))
 }
 
-fn emit_try_finally<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_try_finally<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     pos: &Pos,
     try_block: &[tast::Stmt],
@@ -805,7 +807,7 @@ fn emit_try_finally<'a, 'arena>(
 ) -> Result<InstrSeq<'arena>> {
     let is_try_block_empty = is_empty_block(try_block);
     let emit_try_block =
-        |env: &mut Env<'a, 'arena>, e: &mut Emitter<'arena>, finally_start: Label| {
+        |env: &mut Env<'a, 'arena>, e: &mut Emitter<'arena, 'decl, D>, finally_start: Label| {
             env.do_in_try_body(e, finally_start, try_block, emit_block)
         };
     e.local_scope(|e| {
@@ -823,9 +825,11 @@ fn emit_try_finally<'a, 'arena>(
 fn emit_try_finally_<
     'a,
     'arena,
-    E: Fn(&mut Env<'a, 'arena>, &mut Emitter<'arena>, Label) -> Result<InstrSeq<'arena>>,
+    'decl,
+    D: DeclProvider<'decl>,
+    E: Fn(&mut Env<'a, 'arena>, &mut Emitter<'arena, 'decl, D>, Label) -> Result<InstrSeq<'arena>>,
 >(
-    e: &mut Emitter<'arena>,
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     pos: &Pos,
     emit_try_block: E,
@@ -940,9 +944,9 @@ fn emit_try_finally_<
     ))
 }
 
-fn make_finally_catch<'arena>(
+fn make_finally_catch<'arena, 'decl, D: DeclProvider<'decl>>(
     alloc: &'arena bumpalo::Bump,
-    e: &mut Emitter<'arena>,
+    e: &mut Emitter<'arena, 'decl, D>,
     exn_local: local::Type<'arena>,
     finally_body: InstrSeq<'arena>,
 ) -> InstrSeq<'arena> {
@@ -971,8 +975,8 @@ fn make_finally_catch<'arena>(
     )
 }
 
-fn emit_try_catch<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_try_catch<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     pos: &Pos,
     try_block: &[tast::Stmt],
@@ -981,8 +985,8 @@ fn emit_try_catch<'a, 'arena>(
     e.local_scope(|e| emit_try_catch_(e, env, pos, try_block, catch_list))
 }
 
-fn emit_try_catch_<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_try_catch_<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     pos: &Pos,
     try_block: &[tast::Stmt],
@@ -1017,8 +1021,8 @@ fn emit_try_catch_<'a, 'arena>(
     ))
 }
 
-fn emit_catch<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_catch<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     pos: &Pos,
     end_label: Label,
@@ -1051,8 +1055,8 @@ fn emit_catch<'a, 'arena>(
     ))
 }
 
-fn emit_foreach<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_foreach<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     pos: &Pos,
     collection: &tast::Expr,
@@ -1068,8 +1072,8 @@ fn emit_foreach<'a, 'arena>(
     })
 }
 
-fn emit_foreach_<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_foreach_<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     pos: &Pos,
     collection: &tast::Expr,
@@ -1121,8 +1125,8 @@ fn emit_foreach_<'a, 'arena>(
     })
 }
 
-fn emit_foreach_await<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_foreach_await<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     pos: &Pos,
     collection: &tast::Expr,
@@ -1170,7 +1174,7 @@ fn emit_foreach_await<'a, 'arena>(
                     FcallArgs::new(
                         FcallFlags::empty(),
                         1,
-                        bumpalo::vec![in alloc;].into_bump_slice(),
+                        Slice::new(bumpalo::vec![in alloc;].into_bump_slice()),
                         Some(async_eager_label),
                         0,
                         None,
@@ -1207,8 +1211,8 @@ fn emit_foreach_await<'a, 'arena>(
 // - value_local - local variable to store a foreach-value
 // - key_preamble - list of instructions to populate foreach-key
 // - value_preamble - list of instructions to populate foreach-value
-fn emit_iterator_key_value_storage<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_iterator_key_value_storage<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     iterator: &tast::AsExpr,
 ) -> Result<(
@@ -1301,8 +1305,8 @@ fn emit_iterator_key_value_storage<'a, 'arena>(
     }
 }
 
-fn emit_iterator_lvalue_storage<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_iterator_lvalue_storage<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     lvalue: &tast::Expr,
     local: local::Type<'arena>,
@@ -1345,8 +1349,8 @@ fn emit_iterator_lvalue_storage<'a, 'arena>(
     }
 }
 
-fn emit_load_list_elements<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_load_list_elements<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     path: Vec<InstrSeq<'arena>>,
     es: &[tast::Expr],
@@ -1375,8 +1379,8 @@ fn emit_load_list_elements<'a, 'arena>(
     ))
 }
 
-fn emit_load_list_element<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_load_list_element<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     mut path: Vec<InstrSeq<'arena>>,
     i: usize,
@@ -1451,8 +1455,8 @@ fn emit_load_list_element<'a, 'arena>(
 // Here, we need to construct l-value operations that access the [0] (for $a->f)
 // and [1;0] (for $b[0]) and [1;1] (for $c->g) indices of the array returned
 // from the `next` method.
-fn emit_foreach_await_key_value_storage<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_foreach_await_key_value_storage<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     iterator: &tast::AsExpr,
 ) -> Result<InstrSeq<'arena>> {
@@ -1475,8 +1479,8 @@ fn emit_foreach_await_key_value_storage<'a, 'arena>(
 // value) that is prepended onto the indices needed for list destructuring
 //
 // TODO: we don't need unnamed local if the target is a local
-fn emit_foreach_await_lvalue_storage<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_foreach_await_lvalue_storage<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     lvalue: &tast::Expr,
     indices: &[isize],
@@ -1508,8 +1512,8 @@ fn emit_foreach_await_lvalue_storage<'a, 'arena>(
     })
 }
 
-fn emit_stmts<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_stmts<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     stl: &[tast::Stmt],
 ) -> Result<InstrSeq<'arena>> {
@@ -1522,16 +1526,16 @@ fn emit_stmts<'a, 'arena>(
     ))
 }
 
-fn emit_block<'a, 'arena>(
+fn emit_block<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
     env: &mut Env<'a, 'arena>,
-    emitter: &mut Emitter<'arena>,
+    emitter: &mut Emitter<'arena, 'decl, D>,
     block: &[tast::Stmt],
 ) -> Result<InstrSeq<'arena>> {
     emit_stmts(emitter, env, block)
 }
 
-fn emit_do<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_do<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     body: &[tast::Stmt],
     cond: &tast::Expr,
@@ -1553,8 +1557,8 @@ fn emit_do<'a, 'arena>(
     ))
 }
 
-fn emit_while<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_while<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     cond: &tast::Expr,
     body: &[tast::Stmt],
@@ -1588,8 +1592,8 @@ fn emit_while<'a, 'arena>(
     ))
 }
 
-fn emit_for<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_for<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     e1: &Vec<tast::Expr>,
     e2: &Option<tast::Expr>,
@@ -1600,8 +1604,8 @@ fn emit_for<'a, 'arena>(
     let break_label = e.label_gen_mut().next_regular();
     let cont_label = e.label_gen_mut().next_regular();
     let start_label = e.label_gen_mut().next_regular();
-    fn emit_cond<'a, 'arena>(
-        emitter: &mut Emitter<'arena>,
+    fn emit_cond<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+        emitter: &mut Emitter<'arena, 'decl, D>,
         env: &mut Env<'a, 'arena>,
         jmpz: bool,
         label: Label,
@@ -1657,8 +1661,8 @@ fn emit_for<'a, 'arena>(
     ))
 }
 
-pub fn emit_dropthrough_return<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+pub fn emit_dropthrough_return<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
 ) -> Result<InstrSeq<'arena>> {
     let alloc = env.arena;
@@ -1679,8 +1683,8 @@ pub fn emit_dropthrough_return<'a, 'arena>(
     }
 }
 
-pub fn emit_final_stmt<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+pub fn emit_final_stmt<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     stmt: &tast::Stmt,
 ) -> Result<InstrSeq<'arena>> {
@@ -1695,8 +1699,8 @@ pub fn emit_final_stmt<'a, 'arena>(
     }
 }
 
-pub fn emit_final_stmts<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+pub fn emit_final_stmts<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     block: &[tast::Stmt],
 ) -> Result<InstrSeq<'arena>> {
@@ -1718,8 +1722,8 @@ pub fn emit_final_stmts<'a, 'arena>(
     }
 }
 
-pub fn emit_markup<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+pub fn emit_markup<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     (_, s): &tast::Pstring,
     check_for_hashbang: bool,
@@ -1771,8 +1775,8 @@ pub fn emit_markup<'a, 'arena>(
     Ok(markup)
 }
 
-fn emit_break<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_break<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     pos: &Pos,
 ) -> InstrSeq<'arena> {
@@ -1780,8 +1784,8 @@ fn emit_break<'a, 'arena>(
     tfr::emit_break_or_continue(e, Flags::IS_BREAK, env, pos, 1)
 }
 
-fn emit_continue<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_continue<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     pos: &Pos,
 ) -> InstrSeq<'arena> {
@@ -1789,8 +1793,8 @@ fn emit_continue<'a, 'arena>(
     tfr::emit_break_or_continue(e, Flags::empty(), env, pos, 1)
 }
 
-fn emit_await_assignment<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_await_assignment<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     pos: &Pos,
     lval: &tast::Expr,
@@ -1833,8 +1837,8 @@ fn emit_await_assignment<'a, 'arena>(
     }
 }
 
-fn emit_if<'a, 'arena>(
-    e: &mut Emitter<'arena>,
+fn emit_if<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     pos: &Pos,
     condition: &tast::Expr,

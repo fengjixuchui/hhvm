@@ -1,13 +1,13 @@
 <?hh
 
 class X {
-  public function foo($y) {
+  <<__DynamicallyCallable>> public function foo($y) {
     call_user_func(varray[$y, 'foo']);
     $y::foo();
   }
 }
 class Y {
-  public static function foo() {
+  <<__DynamicallyCallable>> public static function foo() {
     var_dump(__METHOD__);
     static::bar();
   }
@@ -19,6 +19,6 @@ class Y {
 <<__EntryPoint>>
 function main_1883() {
 $x = new X;
-$x->foo('y');
+$x->foo('Y');
 $x->foo(new Y);
 }

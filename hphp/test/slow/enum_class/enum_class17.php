@@ -1,11 +1,11 @@
 <?hh
-<<file: __EnableUnstableFeatures('enum_atom')>>
+<<file: __EnableUnstableFeatures('enum_class_label')>>
 
 interface IBox {}
 class Box<T> implements IBox {
   public function __construct(public T $data) {}
 }
-function f<reify X, T>(<<__Atom>> HH\MemberOf<X, Box<T>> $elt) : T {
+function f<reify X, T>(<<__ViaLabel>> HH\MemberOf<X, Box<T>> $elt) : T {
     return $elt->data;
 }
 

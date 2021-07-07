@@ -28,8 +28,6 @@
 #include "hphp/runtime/ext/std/ext_std_math.h"
 #include "hphp/runtime/ext/string/ext_string.h"
 
-#include <folly/Optional.h>
-
 #include <set>
 #include <utility>
 #include <vector>
@@ -396,7 +394,7 @@ Variant ArrayUtil::RandomKeys(const Array& input, int num_req /* = 1 */) {
   }
   php_array_data_shuffle(indices);
 
-  VArrayInit ret(num_req);
+  VecInit ret(num_req);
   for (int i = 0; i < num_req; i++) {
     ssize_t pos = indices[i];
     ret.append(input->getKey(pos));

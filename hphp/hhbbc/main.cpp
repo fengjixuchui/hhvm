@@ -38,6 +38,7 @@
 #include "hphp/runtime/base/vm-worker.h"
 #include "hphp/hhvm/process-init.h"
 #include "hphp/runtime/vm/native.h"
+#include "hphp/runtime/vm/preclass-emitter.h"
 #include "hphp/runtime/vm/repo-autoload-map-builder.h"
 #include "hphp/runtime/vm/repo-file.h"
 #include "hphp/runtime/vm/repo-global-data.h"
@@ -297,7 +298,6 @@ RepoGlobalData get_global_data() {
   gd.PHP7_NoHexNumerics          = RuntimeOption::PHP7_NoHexNumerics;
   gd.PHP7_Substr                 = RuntimeOption::PHP7_Substr;
   gd.PHP7_Builtins               = RuntimeOption::PHP7_Builtins;
-  gd.HackArrCompatNotices        = RuntimeOption::EvalHackArrCompatNotices;
   gd.EnableIntrinsicsExtension   = RuntimeOption::EnableIntrinsicsExtension;
   gd.ForbidDynamicCallsToFunc    = RuntimeOption::EvalForbidDynamicCallsToFunc;
   gd.ForbidDynamicCallsToClsMeth =
@@ -313,8 +313,6 @@ RepoGlobalData get_global_data() {
   gd.EnableArgsInBacktraces      = RuntimeOption::EnableArgsInBacktraces;
   gd.NoticeOnBuiltinDynamicCalls =
     RuntimeOption::EvalNoticeOnBuiltinDynamicCalls;
-  gd.HackArrCompatIsVecDictNotices =
-    RuntimeOption::EvalHackArrCompatIsVecDictNotices;
   gd.HackArrCompatSerializeNotices =
     RuntimeOption::EvalHackArrCompatSerializeNotices;
   gd.InitialNamedEntityTableSize  =
@@ -339,6 +337,8 @@ RepoGlobalData get_global_data() {
     RuntimeOption::EvalNoticeOnCoerceForStrConcat;
   gd.NoticeOnCoerceForBitOp =
     RuntimeOption::EvalNoticeOnCoerceForBitOp;
+  gd.TraitConstantInterfaceBehavior =
+    RuntimeOption::EvalTraitConstantInterfaceBehavior;
 
   for (auto const& elm : RuntimeOption::ConstantFunctions) {
     auto const s = internal_serialize(tvAsCVarRef(elm.second));
@@ -385,7 +385,7 @@ void compile_repo() {
   {
     RepoFileBuilder repoBuilder{output_repo};
 
-    folly::Optional<trace_time> timer;
+    Optional<trace_time> timer;
     while (auto ue = ueq.pop()) {
       if (!timer) timer.emplace("writing output repo");
       repoBuilder.add(*ue);
@@ -497,8 +497,6 @@ int main(int argc, char** argv) try {
 
   // When running hhbbc, these option is loaded from GD, and will override CLI.
   // When running hhvm, these option is not loaded from GD, but read from CLI.
-  RO::EvalHackArrCompatNotices                  = gd.HackArrCompatNotices;
-  RO::EvalHackArrCompatCheckCompare             = gd.HackArrCompatNotices;
   RO::EvalForbidDynamicCallsToFunc              = gd.ForbidDynamicCallsToFunc;
   RO::EvalForbidDynamicCallsToClsMeth           = gd.ForbidDynamicCallsToClsMeth;
   RO::EvalForbidDynamicCallsToInstMeth          = gd.ForbidDynamicCallsToInstMeth;
@@ -506,7 +504,6 @@ int main(int argc, char** argv) try {
   RO::EvalForbidDynamicCallsWithAttr            = gd.ForbidDynamicCallsWithAttr;
   RO::EvalLogKnownMethodsAsDynamicCalls         = gd.LogKnownMethodsAsDynamicCalls;
   RO::EvalNoticeOnBuiltinDynamicCalls           = gd.NoticeOnBuiltinDynamicCalls;
-  RO::EvalHackArrCompatIsVecDictNotices         = gd.HackArrCompatIsVecDictNotices;
   RO::EvalHackArrCompatSerializeNotices         = gd.HackArrCompatSerializeNotices;
   RO::EvalAbortBuildOnVerifyError               = gd.AbortBuildOnVerifyError;
   RO::EnableArgsInBacktraces                    = gd.EnableArgsInBacktraces;
@@ -521,9 +518,8 @@ int main(int argc, char** argv) try {
   RO::EvalNoticeOnCoerceForStrConcat            = gd.NoticeOnCoerceForStrConcat;
   RO::EvalNoticeOnCoerceForBitOp                = gd.NoticeOnCoerceForBitOp;
   RO::StrictArrayFillKeys                       = gd.StrictArrayFillKeys;
-  RO::EvalHackArrDVArrs                         = true; // TODO(kshaunak): Clean it up.
-  RO::EvalArrayProvenance                       = false; // TODO(kshaunak): Clean it up.
   RO::EvalEnforceGenericsUB                     = gd.HardGenericsUB ? 2 : 1;
+  RO::EvalTraitConstantInterfaceBehavior        = gd.TraitConstantInterfaceBehavior;
 
   if (print_bytecode_stats_and_exit) {
     print_repo_bytecode_stats();

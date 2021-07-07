@@ -60,6 +60,7 @@ HPHP::jit::mcgen::(anonymous namespace)::s_bumpers
 HPHP::jit::tl_debuggerCatches
 HPHP::jit::VMProtect::is_protected
 HPHP::rds::(anonymous namespace)::s_hasFullInit
+HPHP::rds::(anonymous namespace)::s_settingPreAssignments
 HPHP::rds::local::detail::rl_hotSection
 HPHP::rds::tl_base
 HPHP::Intl::s_lctranslit
@@ -122,3 +123,7 @@ HPHP::(anonymous namespace)::tl_cti_cache
 
 # Outlining data caches are background JIT thread local
 HPHP::jit::(anonymous namespace)::tl_dataStorePtr
+
+# Probably can be moved to a global (D29176455), thread local instead of RDS as
+# a cherry-pickable leak fix
+HPHP::(anonymous namespace)::c_hsl_locale

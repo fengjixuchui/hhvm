@@ -234,6 +234,12 @@ struct Class : AtomicCountable {
     bool isAbstract() const {
       return val.constModifiers().isAbstract();
     }
+    void concretize() {
+      // Type constant is abstract and has a default
+      assertx(isAbstract() && val.is_init());
+      val.constModifiers().setIsAbstract(false);
+    }
+
     ConstModifiers::Kind kind() const { return val.constModifiers().kind(); }
 
     StringData* getPointedClsName() const {
@@ -632,7 +638,7 @@ public:
   /*
    * If the class is called dynamically should we sample the calls?
    */
-  folly::Optional<int64_t> dynConstructSampleRate() const;
+  Optional<int64_t> dynConstructSampleRate() const;
 
 
   /////////////////////////////////////////////////////////////////////////////
@@ -829,19 +835,6 @@ public:
    */
   bool forbidsDynamicProps() const;
 
-  /*
-   * Return true, and set the m_serialized flag, iff this Class hasn't
-   * been serialized yet (see prof-data-serialize.cpp).
-   *
-   * Not thread safe - caller is responsible for any necessary locking.
-   */
-  bool serialize() const;
-
-  /*
-   * Return true if this class was already serialized.
-   */
-  bool wasSerialized() const;
-
   /////////////////////////////////////////////////////////////////////////////
   // Property initialization.                                           [const]
 
@@ -947,7 +940,6 @@ public:
    */
   rds::Handle sPropHandle(Slot index) const;
   rds::Link<StaticPropData, rds::Mode::NonNormal> sPropLink(Slot index) const;
-  rds::Link<bool, rds::Mode::NonLocal> sPropInitLink() const;
 
   /*
    * Get the PropInitVec for the current request.
@@ -1059,7 +1051,7 @@ public:
    * When failIsFatal is set, raises an error if the context constant
    * is not defined, is abstract or is a type/value constant.
    */
-  folly::Optional<RuntimeCoeffects>
+  Optional<RuntimeCoeffects>
   clsCtxCnsGet(const StringData* name, bool failIsFatal) const;
 
   /*
@@ -1318,7 +1310,7 @@ public:
   /*
    * Get the underlying enum base type if this is an enum.
    *
-   * A return of folly::none represents the `mixed' type.
+   * A return of std::nullopt represents the `mixed' type.
    */
   MaybeDataType enumBaseTy() const;
 
@@ -1478,6 +1470,8 @@ private:
      * methods are present.
      */
     rds::Handle* m_handles{nullptr};
+
+    VMCompactVector<std::pair<rds::Symbol, rds::Handle>> m_symbols;
   };
 
   struct ExtraData {
@@ -1853,10 +1847,6 @@ private:
 
   bool m_needsInitThrowable : 1;
   bool m_hasDeepInitProps : 1;
-  /*
-   * Whether this class has been serialized yet.
-   */
-  mutable bool m_serialized : 1;
 
   // NB: 7 bits available here (in USE_LOWPTR builds).
 

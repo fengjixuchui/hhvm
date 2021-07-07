@@ -74,7 +74,9 @@ let rec walk_and_gather_xhp_ ~env ~pos cty =
   | Tgeneric _
   | Tdependent _
   | Tnewtype _ ->
-    let (env, tyl) = TUtils.get_concrete_supertypes env cty in
+    let (env, tyl) =
+      TUtils.get_concrete_supertypes ~abstract_enum:true env cty
+    in
     walk_list_and_gather_xhp env pos tyl
   | Tclass ((_, c), _, tyl) ->
     begin
@@ -120,7 +122,7 @@ and get_spread_attributes env pos onto_xhp cty =
   let xhp_to_attrs env (xhp_ty, tparams, xhp_info) =
     let attrs = xhp_attributes_for_class xhp_info in
     (* Compute the intersection and then localize the types *)
-    let attrs = List.filter attrs (fun (k, _) -> SSet.mem k onto_attrs) in
+    let attrs = List.filter attrs ~f:(fun (k, _) -> SSet.mem k onto_attrs) in
     (* XHP does not allow generics in the class declaration, so
      * we don't need to perform any substitutions *)
     let ety_env =

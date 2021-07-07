@@ -2105,7 +2105,7 @@ Variant HHVM_METHOD(SoapServer, getfunctions) {
   } else if (data->m_soap_functions.functions_all) {
     auto funcs1 = Unit::getSystemFunctions();
     auto funcs2 = Unit::getUserFunctions();
-    VArrayInit init(funcs1.size() + funcs2.size());
+    VecInit init(funcs1.size() + funcs2.size());
     IterateV(funcs1.get(), [&](TypedValue tv) { init.append(tv); });
     IterateV(funcs2.get(), [&](TypedValue tv) { init.append(tv); });
     return init.toArray();
@@ -2607,7 +2607,7 @@ Variant HHVM_METHOD(SoapClient, soapcallImpl,
     soap_headers = input_headers;
   } else if (input_headers.isObject() &&
              input_headers.toObject().instanceof(SoapHeader::getClass())) {
-    soap_headers = make_varray(input_headers);
+    soap_headers = make_vec_array(input_headers);
   } else{
     raise_warning("Invalid SOAP header");
     return init_null();
@@ -2761,7 +2761,7 @@ Variant HHVM_METHOD(SoapClient, __getFunctions) {
   SoapClientScope ss(this_);
 
   if (data->m_sdl) {
-    VArrayInit ret(data->m_sdl->functionsOrder.size());
+    VecInit ret(data->m_sdl->functionsOrder.size());
     for (const auto& func: data->m_sdl->functionsOrder) {
       StringBuffer sb;
       function_to_string(data->m_sdl->functions[func], sb);
@@ -2777,7 +2777,7 @@ Variant HHVM_METHOD(SoapClient, __getTypes) {
   SoapClientScope ss(this_);
 
   if (data->m_sdl) {
-    VArrayInit ret(data->m_sdl->types.size());
+    VecInit ret(data->m_sdl->types.size());
     for (const auto& type: data->m_sdl->types) {
       StringBuffer sb;
       type_to_string(type.get(), sb, 0);
@@ -2960,7 +2960,7 @@ Variant HHVM_METHOD(SoapClient, __setcookie,
   auto* data = Native::data<SoapClient>(this_);
   // FIXME: data->m_cookies is a write-only value
   if (!value.isNull()) {
-    data->m_cookies.set(name, make_varray(value.toString()));
+    data->m_cookies.set(name, make_vec_array(value.toString()));
   } else {
     data->m_cookies.remove(name);
   }
@@ -2988,7 +2988,7 @@ bool HHVM_METHOD(SoapClient, __setsoapheaders,
     data->m_default_headers = arr;
   } else if (headers.isObject() &&
              headers.toObject().instanceof(SoapHeader::getClass())) {
-    data->m_default_headers = make_varray(headers);
+    data->m_default_headers = make_vec_array(headers);
   } else {
     raise_warning("Invalid SOAP header");
   }

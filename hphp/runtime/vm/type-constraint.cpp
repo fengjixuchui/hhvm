@@ -32,7 +32,6 @@
 #include "hphp/runtime/vm/hhbc.h"
 #include "hphp/runtime/vm/jit/translator-inline.h"
 #include "hphp/runtime/vm/repo-global-data.h"
-#include "hphp/runtime/vm/repo.h"
 #include "hphp/runtime/vm/runtime.h"
 #include "hphp/runtime/vm/unit.h"
 #include "hphp/runtime/vm/unit-util.h"
@@ -255,7 +254,7 @@ MaybeDataType TypeConstraint::underlyingDataTypeResolved() const {
     !hasConstraint() || isTypeVar() || isTypeConstant(),
     isMixed()));
 
-  if (!isPrecise()) return folly::none;
+  if (!isPrecise()) return std::nullopt;
 
   auto t = underlyingDataType();
   assertx(t);
@@ -280,7 +279,7 @@ MaybeDataType TypeConstraint::underlyingDataTypeResolved() const {
       if (metatype == MetaType::Precise) {
         t = getAnnotDataType(td->type);
       } else {
-        t = folly::none;
+        t = std::nullopt;
       }
     } else {
       c = td->klass;
@@ -991,7 +990,6 @@ void castClsMeth(tv_lval c, F make) {
     val(c).pclsmeth->getClsStr(),
     val(c).pclsmeth->getFuncStr()
   ).detach();
-  tvDecRefClsMeth(c);
   val(c).parr = a;
   type(c) = a->toDataType();
 }
@@ -1018,7 +1016,7 @@ void TypeConstraint::verifyOutParamFail(const Func* func,
       raise_clsmeth_compat_type_hint_outparam_notice(
         func, displayName(func->cls()), paramNum);
     }
-    castClsMeth(c, make_varray<String,String>);
+    castClsMeth(c, make_vec_array<String,String>);
     return;
   }
 
@@ -1091,7 +1089,7 @@ void TypeConstraint::verifyPropFail(const Class* thisCls,
     // Only trigger coercion logic if property type hints are soft
     if ((RO::EvalCheckPropTypeHints != 3) ||
         (isUpperBound() && RO::EvalEnforceGenericsUB < 2)) return;
-    castClsMeth(val, make_varray<String,String>);
+    castClsMeth(val, make_vec_array<String,String>);
     return;
   }
 
@@ -1139,10 +1137,10 @@ void TypeConstraint::verifyFail(const Func* func, tv_lval c,
 
   if (isClsMethType(c.type()) && convertClsMethToArrLike()) {
     if (RuntimeOption::EvalVecHintNotices) {
-      auto const i = id == ReturnId ? folly::none : folly::make_optional(id);
+      auto const i = id == ReturnId ? std::nullopt : make_optional(id);
       raise_clsmeth_compat_type_hint(func, name, i);
     }
-    castClsMeth(c, make_varray<String,String>);
+    castClsMeth(c, make_vec_array<String,String>);
     return;
   }
 
@@ -1256,6 +1254,7 @@ MemoKeyConstraint memoKeyConstraintFromTC(const TypeConstraint& tc) {
           return tc.isNullable() ? MK::IntOrNull : MK::Int;
         case KindOfPersistentString:
         case KindOfString:
+        case KindOfLazyClass:
           return tc.isNullable() ? MK::StrOrNull : MK::Str;
         case KindOfObject:
           return tc.isNullable() ? MK::ObjectOrNull : MK::Object;
@@ -1276,13 +1275,14 @@ MemoKeyConstraint memoKeyConstraintFromTC(const TypeConstraint& tc) {
         case KindOfFunc:
         case KindOfRClsMeth:
         case KindOfClass:
-        case KindOfLazyClass:
           always_assert_flog(false, "Unexpected DataType");
       }
       not_reached();
     }
     case AnnotMetaType::ArrayKey:
       return tc.isNullable() ? MK::None : MK::IntOrStr;
+    case AnnotMetaType::Classname:
+      return tc.isNullable() ? MK::StrOrNull : MK::Str;
     case AnnotMetaType::Mixed:
     case AnnotMetaType::Nothing:
     case AnnotMetaType::NoReturn:
@@ -1294,7 +1294,6 @@ MemoKeyConstraint memoKeyConstraintFromTC(const TypeConstraint& tc) {
     case AnnotMetaType::Number:
     case AnnotMetaType::VecOrDict:
     case AnnotMetaType::ArrayLike:
-    case AnnotMetaType::Classname:
       return MK::None;
   }
   not_reached();

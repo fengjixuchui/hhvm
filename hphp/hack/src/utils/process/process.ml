@@ -91,7 +91,7 @@ let rec maybe_consume
   else
     let start_t = Unix.time () in
     Option.iter !fd_ref ~f:(fun fd ->
-        match Unix.select [fd] [] [] max_time with
+        match Sys_utils.select_non_intr [fd] [] [] max_time with
         | ([], _, _) -> ()
         | _ ->
           let bytes_read = Unix.read fd buffer 0 chunk_size in
@@ -100,7 +100,9 @@ let rec maybe_consume
             Unix.close fd;
             fd_ref := None
           ) else
-            let chunk = String.sub (Bytes.to_string buffer) 0 bytes_read in
+            let chunk =
+              String.sub (Bytes.to_string buffer) ~pos:0 ~len:bytes_read
+            in
             Stack.push chunk acc;
             let consumed_t = Unix.time () -. start_t in
             let max_time = max_time -. consumed_t in

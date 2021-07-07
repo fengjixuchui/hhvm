@@ -86,7 +86,7 @@ struct ProfTransRec {
    * Construct a ProfTransRec attached to a RegionDescPtr (region must be
    * non-null), for a profiling translation.
    */
-  ProfTransRec(Offset lastBcOff, SrcKey sk, RegionDescPtr region,
+  ProfTransRec(SrcKey lastSk, SrcKey sk, RegionDescPtr region,
                uint32_t asmSize);
 
   /*
@@ -112,31 +112,13 @@ struct ProfTransRec {
   }
 
   /*
-   * First BC offset in this translation.
-   */
-  Offset startBcOff() const {
-    assertx(m_kind == TransKind::Profile);
-    return m_region->start().offset();
-  }
-
-  /*
-   * Last BC offset in this translation.
-   *
-   * Precondition: kind() == TransKind::Profile
-   */
-  Offset lastBcOff()  const {
-    assertx(m_kind == TransKind::Profile);
-    return m_lastBcOff;
-  }
-
-  /*
    * SrcKey for last offset in translation.
    *
    * Precondition: kind() == TransKind::Profile
    */
   SrcKey lastSrcKey() const {
     assertx(m_kind == TransKind::Profile);
-    return SrcKey{m_sk, m_lastBcOff};
+    return m_lastSk;
   }
 
   /*
@@ -236,8 +218,9 @@ private:
   }
 
   TransKind m_kind;
+  uint32_t m_asmSize;  // size of the machine code
   union {
-    Offset m_lastBcOff; // offset of the last bytecode instr
+    SrcKey m_lastSk;    // SrcKey of the last bytecode instr
                         // for non-prologue translations
     int m_prologueArgs; // for prologues
   };
@@ -246,7 +229,6 @@ private:
     RegionDescPtr   m_region; // for TransProfile translations
     CallerRecPtr    m_callers; // for TransProfPrologue translations
   };
-  uint32_t m_asmSize;  // size of the machine code
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -303,6 +285,14 @@ struct ProfData {
     s_tag.store(makeStaticString(tag), std::memory_order_relaxed);
     s_buildTime.store(buildTime, std::memory_order_relaxed);
     s_wasDeserialized.store(true, std::memory_order_relaxed);
+  }
+
+  static size_t prevProfSize() {
+    return s_prevProfSize.load(std::memory_order_relaxed);
+  }
+  static void setPrevProfSize(size_t s) {
+    assertx(isJitSerializing());
+    s_prevProfSize.store(s, std::memory_order_relaxed);
   }
 
   /*
@@ -671,6 +661,7 @@ struct ProfData {
   static std::atomic<StringData*> s_buildHost;
   static std::atomic<StringData*> s_tag;
   static std::atomic<int64_t> s_buildTime;
+  static std::atomic<size_t> s_prevProfSize;
 };
 
 //////////////////////////////////////////////////////////////////////

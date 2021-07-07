@@ -126,9 +126,7 @@ struct VariableSerializer {
 
   // MarkedVArray and MarkedDArray are used for serialization formats, which
   // can distinguish between all 3 possible array states (unmarked varray,
-  // unmarked vec, marked varray/vec).
-  // In post-EvalHackArrDVArrs MarkedVArray/MarkedDArray correspond to marked
-  // vec/dict.
+  // unmarked vec, marked varray/vec). Now corresponds to marked vec/dict.
   enum class ArrayKind { PHP, Dict, Vec, Keyset, VArray, DArray,
                          MarkedVArray, MarkedDArray };
 
@@ -304,7 +302,6 @@ private:
     bool first_element; // whether this is first array element
     int  indent_delta;  // the extra indent to serialize this object
     int  size;          // the number of elements in the array
-    LowStringPtr key;   // the current element's key, used for HAM logging
   };
   req::vector<ArrayInfo> m_arrayInfos;
 
@@ -347,4 +344,3 @@ extern const StaticString s_serializedNativeDataKey;
 
 ///////////////////////////////////////////////////////////////////////////////
 }
-

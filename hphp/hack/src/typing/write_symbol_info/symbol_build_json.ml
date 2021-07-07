@@ -14,15 +14,10 @@ open Aast
 open Ast_defs
 open Hh_json
 open Hh_prelude
-open Namespace_env
 open Symbol_json_util
 
 let build_id_json fact_id =
   JSON_Object [("id", JSON_Number (string_of_int fact_id))]
-
-let build_comment_json_nested comment =
-  let valid_comment = check_utf8 comment in
-  JSON_Object [("key", JSON_String valid_comment)]
 
 let build_file_json_nested filepath =
   JSON_Object [("key", JSON_String filepath)]
@@ -58,19 +53,19 @@ let build_qname_json_nested qname =
   in
   JSON_Object [("key", JSON_Object fields)]
 
-(* Returns a singleton list containing the JSON field if there
-is a non-empty namespace in the nsenv, or else an empty list *)
-let build_namespace_decl_json_nested nsenv =
-  match nsenv.ns_name with
-  | None -> [] (* Global namespace *)
-  | Some "" -> []
-  | Some ns ->
-    [
-      ( "namespace_",
-        JSON_Object
-          [("key", JSON_Object [("name", build_namespaceqname_json_nested ns)])]
-      );
-    ]
+let build_method_decl_nested meth_name con_name con_type =
+  let cont_decl = JSON_Object [("name", build_qname_json_nested con_name)] in
+  let nested_cont_decl =
+    JSON_Object [(con_type, JSON_Object [("key", cont_decl)])]
+  in
+  let meth_decl =
+    JSON_Object
+      [
+        ("name", build_name_json_nested meth_name);
+        ("container", nested_cont_decl);
+      ]
+  in
+  JSON_Object [("key", meth_decl)]
 
 let build_type_json_nested type_name =
   (* Remove namespace slash from type, if present *)
@@ -94,7 +89,8 @@ let build_attributes_json_nested source_map attrs =
           List.fold_right attr.ua_params ~init:[] ~f:(fun ((pos, _), _) acc ->
               let fp = Relative_path.to_absolute (Pos.filename pos) in
               match SMap.find_opt fp source_map with
-              | Some st -> JSON_String (source_at_span st pos) :: acc
+              | Some st ->
+                JSON_String (strip_nested_quotes (source_at_span st pos)) :: acc
               | None -> acc)
         in
         let fields =
@@ -144,7 +140,7 @@ let build_decl_target_json json = JSON_Object [("declaration", json)]
 
 let build_file_lines_json filepath lineLengths endsInNewline hasUnicodeOrTabs =
   let lengths =
-    List.map lineLengths (fun len -> JSON_Number (string_of_int len))
+    List.map lineLengths ~f:(fun len -> JSON_Number (string_of_int len))
   in
   JSON_Object
     [
@@ -181,7 +177,8 @@ let build_parameter_json
   let fields =
     match def_val with
     | None -> fields
-    | Some expr -> ("defaultValue", JSON_String expr) :: fields
+    | Some expr ->
+      ("defaultValue", JSON_String (strip_nested_quotes expr)) :: fields
   in
   JSON_Object fields
 
@@ -215,7 +212,7 @@ let build_signature_json ctx source_map params vararg ret_ty =
       p.param_is_variadic
       p.param_user_attributes
   in
-  let parameters = List.map params (fun param -> build_param param) in
+  let parameters = List.map params ~f:(fun param -> build_param param) in
   let parameters =
     match vararg with
     | FVnonVariadic -> parameters
@@ -260,7 +257,7 @@ let build_variance_json variance =
 
 let build_type_param_json ctx source_map tp =
   let (_, name) = tp.tp_name in
-  let constraints = List.map tp.tp_constraints (build_constraint_json ctx) in
+  let constraints = List.map tp.tp_constraints ~f:(build_constraint_json ctx) in
   JSON_Object
     [
       ("name", build_name_json_nested name);
@@ -277,6 +274,7 @@ let build_visibility_json (visibility : Aast.visibility) =
     | Private -> 0
     | Protected -> 1
     | Public -> 2
+    | Internal -> 3
   in
   JSON_Number (string_of_int num)
 
@@ -316,7 +314,7 @@ let build_container_decl_json_ref container_type fact_id =
   JSON_Object [("container", container_json)]
 
 let build_enum_decl_json_ref fact_id =
-  JSON_Object [("enum_", build_id_json fact_id)]
+  build_container_decl_json_ref "enum_" fact_id
 
 let build_enumerator_decl_json_ref fact_id =
   JSON_Object [("enumerator", build_id_json fact_id)]

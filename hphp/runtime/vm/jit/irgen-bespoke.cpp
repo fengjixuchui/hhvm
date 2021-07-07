@@ -35,8 +35,6 @@
 #include "hphp/util/tiny-vector.h"
 #include "hphp/util/trace.h"
 
-#include <folly/Optional.h>
-
 namespace HPHP { namespace jit { namespace irgen {
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -701,20 +699,20 @@ const StaticString
 
 // If this call is to a layout-sensitive callee, returns it. Does not do any
 // validation of e.g. whether we can inline the callee.
-folly::Optional<LayoutSensitiveCall>
+Optional<LayoutSensitiveCall>
 getLayoutSensitiveCall(const IRGS& env, SrcKey sk) {
-  if (sk.op() != Op::FCallClsMethodD) return folly::none;
+  if (sk.op() != Op::FCallClsMethodD) return std::nullopt;
 
   auto const cls  = sk.unit()->lookupLitstrId(getImm(sk.pc(), 2).u_SA);
   auto const func = sk.unit()->lookupLitstrId(getImm(sk.pc(), 3).u_SA);
 
-  if (!cls->isame(s_HH_Shapes.get())) return folly::none;
+  if (!cls->isame(s_HH_Shapes.get())) return std::nullopt;
 
   if (func->isame(s_at.get()))        return LayoutSensitiveCall::ShapesAt;
   if (func->isame(s_idx.get()))       return LayoutSensitiveCall::ShapesIdx;
   if (func->isame(s_keyExists.get())) return LayoutSensitiveCall::ShapesExists;
 
-  return folly::none;
+  return std::nullopt;
 }
 
 // If this call is layout-sensitive and we can specialize it, returns a pair
@@ -821,7 +819,7 @@ void translateDispatchBespoke(IRGS& env, const NormalizedInstruction& ni) {
   }
 }
 
-folly::Optional<Location> getVanillaLocation(const IRGS& env, SrcKey sk) {
+Optional<Location> getVanillaLocation(const IRGS& env, SrcKey sk) {
   auto const op = sk.op();
   auto const soff = env.irb->fs().bcSPOff();
 
@@ -851,23 +849,23 @@ folly::Optional<Location> getVanillaLocation(const IRGS& env, SrcKey sk) {
     }
 
     case Op::FCallClsMethodD: {
-      if (!canSpecializeCall(env, sk)) return folly::none;
+      if (!canSpecializeCall(env, sk)) return std::nullopt;
       auto const numArgs = safe_cast<int32_t>(getImm(sk.pc(), 0).u_FCA.numArgs);
       return {Location::Stack{soff - numArgs + 1}};
     }
 
     default:
-      return folly::none;
+      return std::nullopt;
   }
   always_assert(false);
 }
 
 // Returns a location that we should do some layout-sensitive guards for.
 // Unlike getVanillaLocation, this helper checks known types.
-folly::Optional<Location> getLocationToGuard(const IRGS& env, SrcKey sk) {
+Optional<Location> getLocationToGuard(const IRGS& env, SrcKey sk) {
   // If this check fails, the bytecode is not layout-sensitive.
   auto const loc = getVanillaLocation(env, sk);
-  if (!loc) return folly::none;
+  if (!loc) return std::nullopt;
 
   // Even if the bytecode is layout-sensitive, it may be applied to e.g. an
   // object input, or our known types may be too general for us to guard.
@@ -878,7 +876,7 @@ folly::Optional<Location> getLocationToGuard(const IRGS& env, SrcKey sk) {
   FTRACE_MOD(Trace::hhir, 2, "At {}: {}: location {}: {} {} layout guard\n",
              sk.offset(), opcodeToName(sk.op()), show(*loc), type,
              needsGuard ? "needs" : "does not need");
-  return needsGuard ? loc : folly::none;
+  return needsGuard ? loc : std::nullopt;
 }
 
 // Decide on what layout to specialize code for. In live translations,
@@ -903,7 +901,7 @@ jit::ArrayLayout guardToLayout(
   }
 
   if (sl.sideExit && !RO::EvalBespokeEscalationSampleRate) {
-    checkType(env, loc, target, bcOff(env));
+    checkType(env, loc, target, curSrcKey(env));
     return sl.layout;
   }
 
@@ -913,7 +911,7 @@ jit::ArrayLayout guardToLayout(
     env,
     [&](Block* taken) {
       env.irb->setGuardFailBlock(taken);
-      checkType(env, loc, target, bcOff(env));
+      checkType(env, loc, target, curSrcKey(env));
       env.irb->resetGuardFailBlock();
     },
     [&]{
@@ -944,7 +942,7 @@ jit::ArrayLayout guardToLayout(
         }
         auto const next = [&]{
           IRUnit::Hinter next_hinter(env.irb->unit(), next_hint);
-          return getBlock(env, nextBcOff(env));
+          return getBlock(env, nextSrcKey(env));
         }();
         gen(env, Jmp, next);
       }
@@ -984,7 +982,7 @@ void emitLoggingDiamond(
     env,
     [&](Block* taken) {
       env.irb->setGuardFailBlock(taken);
-      checkType(env, loc, TVanillaArrLike, bcOff(env));
+      checkType(env, loc, TVanillaArrLike, curSrcKey(env));
       env.irb->resetGuardFailBlock();
 
       emitVanilla(env);
@@ -1131,7 +1129,7 @@ void skipTrivialCast(IRGS& env, Op op) {
   auto const input = topC(env);
   if (!input->type().maybe(type)) return;
 
-  auto const next = getBlock(env, nextBcOff(env));
+  auto const next = getBlock(env, nextSrcKey(env));
   if (input->isA(type)) gen(env, Jmp, next);
   ifThen(env,
     [&](Block* taken) { gen(env, CheckType, type, taken, input); },

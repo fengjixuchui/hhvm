@@ -150,7 +150,7 @@ let on_the_fly_decl_files filel =
   redeclare_files filel
 
 let compute_deps ctx fast (filel : Relative_path.t list) =
-  let infol = List.map filel (fun fn -> Relative_path.Map.find fast fn) in
+  let infol = List.map filel ~f:(fun fn -> Relative_path.Map.find fast fn) in
   let names =
     List.fold_left infol ~f:FileInfo.merge_names ~init:FileInfo.empty_names
   in
@@ -565,7 +565,10 @@ let redo_type_decl
   let (changed, to_recheck) =
     if shallow_decl_enabled ctx then (
       let AffectedDeps.{ changed = changed'; mro_invalidated; needs_recheck } =
-        Shallow_decl_compare.compute_class_fanout ctx get_classes fnl
+        Shallow_decl_compare.compute_class_fanout
+          ctx
+          ~get_classes_in_file:get_classes
+          fnl
       in
       let changed = DepSet.union changed changed' in
       let to_recheck = DepSet.union to_recheck needs_recheck in

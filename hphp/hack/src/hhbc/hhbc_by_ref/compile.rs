@@ -12,6 +12,7 @@ use aast_parser::{
 use anyhow::{anyhow, *};
 use bitflags::bitflags;
 use bytecode_printer::{print_program, Context, Write};
+use decl_provider::{DeclProvider, NoDeclProvider};
 use hhbc_by_ref_emit_program::{self as emit_program, emit_program, FromAstFlags};
 use hhbc_by_ref_env::emitter::Emitter;
 use hhbc_by_ref_hhas_program::HhasProgram;
@@ -65,6 +66,7 @@ bitflags! {
         const FOR_DEBUGGER_EVAL = 1 << 2;
         const DUMP_SYMBOL_REFS = 1 << 3;
         const DISABLE_TOPLEVEL_ELABORATION = 1 << 4;
+        const ENABLE_DECL = 1 << 5;
     }
 
 }
@@ -73,8 +75,8 @@ bitflags! {
       pub struct HHBCFlags: u32 {
         const LTR_ASSIGN=1 << 0;
         const UVS=1 << 1;
-        const HACK_ARR_COMPAT_NOTICES=1 << 2;
-        const HACK_ARR_DV_ARRS=1 << 3;
+        // No longer using bit 2.
+        // No longer using bit 3.
         const AUTHORITATIVE=1 << 4;
         const JIT_ENABLE_RENAME_FUNCTION=1 << 5;
         const LOG_EXTERN_COMPILER_PERF=1 << 6;
@@ -91,6 +93,7 @@ bitflags! {
     }
 }
 
+// Mapping must match getParserFlags() in runtime-option.cpp
 bitflags! {
     pub struct ParserFlags: u32 {
         const ABSTRACT_STATIC_PROPS=1 << 0;
@@ -112,8 +115,8 @@ bitflags! {
         const ENABLE_ENUM_CLASSES=1 << 16;
         const ENABLE_XHP_CLASS_MODIFIER=1 << 17;
         const DISALLOW_DYNAMIC_METH_CALLER_ARGS=1 << 18;
-        const ENABLE_CLASS_LEVEL_WHERE_CLAUSES=1 << 19;
-        const ENABLE_READONLY_ENFORCEMENT=1 << 20;
+        const ENABLE_READONLY_ENFORCEMENT=1 << 19;
+        const ENABLE_CLASS_LEVEL_WHERE_CLAUSES=1 << 20;
         const ESCAPE_BRACE=1 << 21;
   }
 }
@@ -155,12 +158,6 @@ impl HHBCFlags {
         }
         if self.contains(HHBCFlags::FOLD_LAZY_CLASS_KEYS) {
             f |= HhvmFlags::FOLD_LAZY_CLASS_KEYS;
-        }
-        if self.contains(HHBCFlags::HACK_ARR_COMPAT_NOTICES) {
-            f |= HhvmFlags::HACK_ARR_COMPAT_NOTICES;
-        }
-        if self.contains(HHBCFlags::HACK_ARR_DV_ARRS) {
-            f |= HhvmFlags::HACK_ARR_DV_ARRS;
         }
         if self.contains(HHBCFlags::JIT_ENABLE_RENAME_FUNCTION) {
             f |= HhvmFlags::JIT_ENABLE_RENAME_FUNCTION;
@@ -315,6 +312,7 @@ where
         opts,
         is_systemlib,
         env.flags.contains(EnvFlags::FOR_DEBUGGER_EVAL),
+        NoDeclProvider,
     );
     let prog = emit_program::emit_fatal_program(FatalOp::Parse, &Pos::make_none(), err_msg);
     let prog = prog.map_err(|e| anyhow!("Unhandled Emitter error: {}", e))?;
@@ -342,15 +340,16 @@ where
     W::Error: Send + Sync + 'static, // required by anyhow::Error
 {
     let source_text = SourceText::make(RcOc::new(env.filepath.clone()), text);
-    from_text_(env, stack_limit, writer, source_text, None)
+    from_text_(env, stack_limit, writer, source_text, None, NoDeclProvider)
 }
 
-pub fn from_text_<W, S: AsRef<str>>(
+pub fn from_text_<'decl, W, S: AsRef<str>, D: DeclProvider<'decl>>(
     env: &Env<S>,
     stack_limit: &StackLimit,
     writer: &mut W,
     source_text: SourceText,
     native_env: Option<&NativeEnv<S>>,
+    decl_provider: D,
 ) -> anyhow::Result<Option<Profile>>
 where
     W: Write,
@@ -366,6 +365,7 @@ where
         opts,
         env.flags.contains(EnvFlags::IS_SYSTEMLIB),
         env.flags.contains(EnvFlags::FOR_DEBUGGER_EVAL),
+        decl_provider,
     );
 
     let namespace_env = RcOc::new(NamespaceEnv::empty(
@@ -428,9 +428,9 @@ where
     }
 }
 
-fn rewrite_and_emit<'p, 'arena, S: AsRef<str>>(
+fn rewrite_and_emit<'p, 'arena, 'decl, D: DeclProvider<'decl>, S: AsRef<str>>(
     alloc: &'arena bumpalo::Bump,
-    emitter: &mut Emitter<'arena>,
+    emitter: &mut Emitter<'arena, 'decl, D>,
     env: &Env<S>,
     namespace_env: RcOc<NamespaceEnv>,
     ast: &'p mut Tast::Program,
@@ -449,18 +449,18 @@ fn rewrite_and_emit<'p, 'arena, S: AsRef<str>>(
     }
 }
 
-fn rewrite<'p, 'arena>(
+fn rewrite<'p, 'arena, 'decl, D: DeclProvider<'decl>>(
     alloc: &'arena bumpalo::Bump,
-    emitter: &mut Emitter<'arena>,
+    emitter: &mut Emitter<'arena, 'decl, D>,
     ast: &'p mut Tast::Program,
     namespace_env: RcOc<NamespaceEnv>,
 ) -> Result<(), Error> {
     rewrite_program(alloc, emitter, ast, namespace_env)
 }
 
-fn emit<'p, 'arena, S: AsRef<str>>(
+fn emit<'p, 'arena, 'decl, D: DeclProvider<'decl>, S: AsRef<str>>(
     alloc: &'arena bumpalo::Bump,
-    emitter: &mut Emitter<'arena>,
+    emitter: &mut Emitter<'arena, 'decl, D>,
     env: &Env<S>,
     namespace: RcOc<NamespaceEnv>,
     ast: &'p mut Tast::Program,
@@ -475,6 +475,21 @@ fn emit<'p, 'arena, S: AsRef<str>>(
     if env.flags.contains(EnvFlags::IS_SYSTEMLIB) {
         flags |= FromAstFlags::IS_SYSTEMLIB;
     }
+
+    // TODO: Currently decls are not used anywhere in emitter, so
+    //   we can't tell from bytecode whether decl provider can resolve
+    //   symbol successfully. So for ad hoc testing, output decl provider
+    //   result to file. Why output to a file, since here we can't access
+    //   HHVM's logger. REMOVE THIS AFTER FRIST DECL PROVIDER IS USED IN
+    //   EMITTER.
+    /*
+    if !env.flags.contains(EnvFlags::IS_SYSTEMLIB) {
+        let foo = emitter.decl_provider.get_decl("\\DeclTest");
+        let ss = format!("{:#?}", foo);
+        std::fs::write("/tmp/hackc_compile_debug.txt", ss).unwrap();
+    }
+    */
+
     emit_program(alloc, emitter, flags, namespace, ast)
 }
 
@@ -631,6 +646,7 @@ pub fn expr_to_string_lossy<S: AsRef<str>>(env: &Env<S>, expr: &Tast::Expr) -> S
         opts,
         env.flags.contains(EnvFlags::IS_SYSTEMLIB),
         env.flags.contains(EnvFlags::FOR_DEBUGGER_EVAL),
+        NoDeclProvider,
     );
     let ctx = Context::new(
         &mut emitter,

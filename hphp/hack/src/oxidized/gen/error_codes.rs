@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<2b3508ee49fb6a423969a8223aa1355e>>
+// @generated SignedSource<<7b6ece6fd3757122be4863d2d7e2ced8>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -499,7 +499,7 @@ pub enum Typing {
     UnnecessaryAttribute = 4392,
     InheritedMethodCaseDiffers = 4393,
     EnumClassLabelUnknown = 4394,
-    AtomInvalidParameter = 4395,
+    ViaLabelInvalidParameter = 4395,
     EnumClassLabelAsExpression = 4396,
     EnumClassLabelInvalidArgument = 4397,
     IFCInternalError = 4398,
@@ -540,13 +540,17 @@ pub enum Typing {
     ReadonlyInvalidAsMut = 4434,
     InvalidKeysetValue = 4435,
     UnresolvedTypeVariableProjection = 4436,
-    FunctionPointerWithAtom = 4437,
+    FunctionPointerWithViaLabel = 4437,
     InvalidEchoArgument = 4438,
     DiamondTraitMethod = 4439,
     ReifiedStaticMethodInExprTree = 4440,
     InvariantViolated = 4441,
     RigidTVarEscape = 4442,
     StrictEqValueIncompatibleTypes = 4443,
+    ModuleError = 4444,
+    SealedNotSubtype = 4445,
+    ModuleHintError = 4446,
+    MemoizeObjectWithoutGlobals = 4447,
 }
 impl TrivialDrop for Typing {}
 arena_deserializer::impl_deserialize_in_arena!(Typing);

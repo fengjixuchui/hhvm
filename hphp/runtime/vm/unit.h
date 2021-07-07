@@ -119,7 +119,7 @@ using FuncTable      = VMCompactVector<const Func*>;
 /*
  * Sum of all Unit::m_bclen
  */
-extern ServiceData::ExportedTimeSeries* g_hhbc_size;
+extern ServiceData::ExportedCounter* g_hhbc_size;
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -134,7 +134,6 @@ extern ServiceData::ExportedTimeSeries* g_hhbc_size;
 struct Unit {
   friend struct UnitExtended;
   friend struct UnitEmitter;
-  friend struct UnitRepoProxy;
 
   /////////////////////////////////////////////////////////////////////////////
   // Types.
@@ -184,9 +183,8 @@ public:
   // Basic accessors.                                                   [const]
 
   /*
-   * Repo ID and serial number.
+   * Serial number.
    */
-  int repoID() const;
   int64_t sn() const;
 
   /*
@@ -634,14 +632,6 @@ public:
    */
   SymbolRefs* claimSymbolRefsForPrefetch();
 
-  // Return true, and set the m_serialized flag, iff this Unit hasn't
-  // been serialized yet (see prof-data-serialize.cpp).
-  bool serialize() const {
-    if (m_serialized) return false;
-    const_cast<Unit*>(this)->m_serialized = true;
-    return true;
-  }
-
   // Total number of Units ever created
   static size_t createdUnitCount() { return s_createdUnits; }
 
@@ -666,7 +656,6 @@ private:
 private:
   LowStringPtr m_origFilepath{nullptr};
 
-  int8_t m_repoId{-1};
   /*
    * m_mergeState is read without a lock, but only written to under
    * unitInitLock (see unit.cpp).
@@ -674,7 +663,6 @@ private:
   std::atomic<uint8_t> m_mergeState{MergeState::Unmerged};
   bool m_interpretOnly : 1;
   bool m_extended : 1;
-  bool m_serialized : 1;
   bool m_ICE : 1; // was this unit the result of an internal compiler error
 
   FuncVec m_funcs;

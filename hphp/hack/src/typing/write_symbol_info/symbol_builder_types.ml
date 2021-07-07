@@ -31,6 +31,8 @@ type predicate =
   | InterfaceDefinition
   | MethodDeclaration
   | MethodDefinition
+  | MethodOverrides
+  | NamespaceDeclaration
   | PropertyDeclaration
   | PropertyDefinition
   | TraitDeclaration
@@ -38,6 +40,7 @@ type predicate =
   | TypeConstDeclaration
   | TypeConstDefinition
   | TypedefDeclaration
+  | TypedefDefinition
 
 type glean_json = {
   classConstDeclaration: json list;
@@ -61,6 +64,8 @@ type glean_json = {
   interfaceDefinition: json list;
   methodDeclaration: json list;
   methodDefinition: json list;
+  methodOverrides: json list;
+  namespaceDeclaration: json list;
   propertyDeclaration: json list;
   propertyDefinition: json list;
   traitDeclaration: json list;
@@ -68,6 +73,7 @@ type glean_json = {
   typeConstDeclaration: json list;
   typeConstDefinition: json list;
   typedefDeclaration: json list;
+  typedefDefinition: json list;
 }
 
 type result_progress = {
@@ -79,8 +85,9 @@ type result_progress = {
 type file_info =
   Relative_path.t * Tast.program * Full_fidelity_source_text.t option
 
-(* Containers that can be in inheritance relationships *)
-type container_type =
+(* Containers in inheritance relationships which share the four member
+types (excludes enum) *)
+type parent_container_type =
   | ClassContainer
   | InterfaceContainer
   | TraitContainer

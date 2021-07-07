@@ -213,7 +213,7 @@ struct MixedPHPArrayInitBase : ArrayInitBase<TArray, KindOfUninit> {
 
   /*
    * Extension code should avoid using ArrayInit, and instead use DArrayInit
-   * or VArrayInit. If you really want to create a plain PHP array, your only
+   * or VecInit. If you really want to create a plain PHP array, your only
    * option now is to use a mixed array.
    *
    * For large array allocations, consider passing CheckAllocation, which will
@@ -464,6 +464,11 @@ struct PackedArrayInitBase final : ArrayInitBase<TArray, DT> {
     return append(*v.asTypedValue());
   }
 
+  PackedArrayInitBase& setLegacyArray(bool legacy) {
+    this->m_arr->setLegacyArrayInPlace(legacy);
+    return *this;
+  }
+
 };
 
 /*
@@ -472,104 +477,6 @@ struct PackedArrayInitBase final : ArrayInitBase<TArray, DT> {
 using VecInit = PackedArrayInitBase<detail::Vec, KindOfVec>;
 
 ///////////////////////////////////////////////////////////////////////////////
-
-struct VArrayInit {
-  explicit VArrayInit(size_t n)
-    : m_arr(PackedArray::MakeReserveVec(n))
-#ifndef NDEBUG
-    , m_addCount(0)
-    , m_expectedCount(n)
-#endif
-  {
-    assertx(m_arr->hasExactlyOneRef());
-  }
-
-  VArrayInit(VArrayInit&& other) noexcept
-    : m_arr(other.m_arr)
-#ifndef NDEBUG
-    , m_addCount(other.m_addCount)
-    , m_expectedCount(other.m_expectedCount)
-#endif
-  {
-    assertx(!m_arr || m_arr->isVecType());
-    other.m_arr = nullptr;
-#ifndef NDEBUG
-    other.m_expectedCount = 0;
-#endif
-  }
-
-  VArrayInit(const VArrayInit&) = delete;
-  VArrayInit& operator=(const VArrayInit&) = delete;
-
-  ~VArrayInit() {
-    // In case an exception interrupts the initialization.
-    assertx(!m_arr || (m_arr->hasExactlyOneRef() && m_arr->isVecType()));
-    if (m_arr) m_arr->release();
-  }
-
-  VArrayInit& append(TypedValue tv) {
-    performOp([&]{ return PackedArray::AppendInPlace(m_arr, tvToInit(tv)); });
-    return *this;
-  }
-  VArrayInit& append(const Variant& v) {
-    return append(*v.asTypedValue());
-  }
-
-  VArrayInit& setLegacyArray(bool legacy) {
-    m_arr->setLegacyArrayInPlace(legacy);
-    return *this;
-  }
-
-  Variant toVariant() {
-    assertx(m_arr->hasExactlyOneRef());
-    assertx(m_arr->isVecType());
-    auto const ptr = m_arr;
-    m_arr = nullptr;
-#ifndef NDEBUG
-    m_expectedCount = 0; // reset; no more adds allowed
-#endif
-    return Variant(ptr, ptr->toDataType(), Variant::ArrayInitCtor{});
-  }
-
-  Array toArray() {
-    assertx(m_arr->hasExactlyOneRef());
-    assertx(m_arr->isVecType());
-    auto const ptr = m_arr;
-    m_arr = nullptr;
-#ifndef NDEBUG
-    m_expectedCount = 0; // reset; no more adds allowed
-#endif
-    return Array(ptr, Array::ArrayInitCtor::Tag);
-  }
-
-  ArrayData* create() {
-    assertx(m_arr->hasExactlyOneRef());
-    assertx(m_arr->isVecType());
-    auto const ptr = m_arr;
-    m_arr = nullptr;
-#ifndef NDEBUG
-    m_expectedCount = 0; // reset; no more adds allowed
-#endif
-    return ptr;
-  }
-
-private:
-
-  template<class Operation>
-  ALWAYS_INLINE void performOp(Operation oper) {
-    DEBUG_ONLY auto newp = oper();
-    // Array escalation must not happen during these reserved initializations.
-    assertx(newp == m_arr);
-    // You cannot add/set more times than you reserved with ArrayInit.
-    assertx(++m_addCount <= m_expectedCount);
-  }
-
-  ArrayData* m_arr;
-#ifndef NDEBUG
-  size_t m_addCount;
-  size_t m_expectedCount;
-#endif
-};
 
 struct DArrayInit {
   explicit DArrayInit(size_t n)
@@ -807,10 +714,10 @@ struct KeysetInit : ArrayInitBase<SetArray, KindOfKeyset> {
 
 namespace make_array_detail {
 
-  inline void varray_impl(VArrayInit&) {}
+  inline void varray_impl(VecInit&) {}
 
   template<class Val, class... Vals>
-  void varray_impl(VArrayInit& init, Val&& val, Vals&&... vals) {
+  void varray_impl(VecInit& init, Val&& val, Vals&&... vals) {
     init.append(Variant(std::forward<Val>(val)));
     varray_impl(init, std::forward<Vals>(vals)...);
   }
@@ -828,14 +735,6 @@ namespace make_array_detail {
   inline int64_t init_key(int64_t k) { return k; }
   inline const String& init_key(const String& k) { return k; }
   inline const String init_key(StringData* k) { return String{k}; }
-
-  inline void map_impl(ArrayInit&) {}
-
-  template<class Key, class Val, class... KVPairs>
-  void map_impl(ArrayInit& init, Key&& key, Val&& val, KVPairs&&... kvpairs) {
-    init.set(init_key(std::forward<Key>(key)), Variant(std::forward<Val>(val)));
-    map_impl(init, std::forward<KVPairs>(kvpairs)...);
-  }
 
   inline String darray_init_key(const char* s) { return String(s); }
   inline int64_t darray_init_key(int k) { return k; }
@@ -885,21 +784,6 @@ namespace make_array_detail {
 }
 
 /*
- * Helper for creating packed varrays.
- *
- * Usage:
- *
- *   auto newArray = make_varray(1, 2, 3, 4);
- */
-template<class... Vals>
-Array make_varray(Vals&&... vals) {
-  static_assert(sizeof...(vals), "use Array::CreateVec() instead");
-  VArrayInit init(sizeof...(vals));
-  make_array_detail::varray_impl(init, std::forward<Vals>(vals)...);
-  return init.toArray();
-}
-
-/*
  * Helper for creating Hack vec arrays (vector-like).
  *
  * Usage:
@@ -911,45 +795,6 @@ Array make_vec_array(Vals&&... vals) {
   static_assert(sizeof...(vals), "use Array::CreateVec() instead");
   VecInit init(sizeof...(vals));
   make_array_detail::vec_impl(init, std::forward<Vals>(vals)...);
-  return init.toArray();
-}
-
-/*
- * Helper for creating dicts. TODO(kshaunak): Rename to make_dict.
- * Takes pairs of arguments for the keys and values.
- *
- * Usage:
- *
- *   auto newArray = make_map_array(keyOne, valueOne,
- *                                  otherKey, otherValue);
- *
- * TODO(T58820726): Remove by migrating remaining callers.
- */
-template<class... KVPairs>
-Array make_map_array(KVPairs&&... kvpairs) {
-  static_assert(
-    sizeof...(kvpairs) % 2 == 0, "make_map_array needs key value pairs");
-  ArrayInit init(sizeof...(kvpairs) / 2, ArrayInit::Map{});
-  make_array_detail::map_impl(init, std::forward<KVPairs>(kvpairs)...);
-  return init.toArray();
-}
-
-/*
- * Helper for creating darrays.  Takes pairs of arguments for the keys and
- * values.
- *
- * Usage:
- *
- *   auto newArray = make_darray(keyOne, valueOne, otherKey, otherValue);
- *
- */
-template<class... KVPairs>
-Array make_darray(KVPairs&&... kvpairs) {
-  static_assert(sizeof...(kvpairs), "use Array::CreateDict() instead");
-  static_assert(
-    sizeof...(kvpairs) % 2 == 0, "make_darray needs key value pairs");
-  DArrayInit init(sizeof...(kvpairs) / 2);
-  make_array_detail::darray_impl(init, std::forward<KVPairs>(kvpairs)...);
   return init.toArray();
 }
 

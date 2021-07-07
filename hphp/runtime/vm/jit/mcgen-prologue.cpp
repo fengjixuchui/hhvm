@@ -109,11 +109,12 @@ bool regeneratePrologue(TransID prologueTransId, tc::FuncMetaInfo& info) {
           TranslationResult::Scope::Success) {
         return false;
       }
-      translator.translate();
-      if (translator.translateSuccess()) {
-        translator.relocate(true);
-        translator.publish();
-      }
+      UNUSED auto const result = [&] {
+        if (auto const res = translator.translate()) return *res;
+        if (auto const res = translator.relocate(true)) return *res;
+        if (auto const res = translator.bindOutgoingEdges()) return *res;
+        return translator.publish();
+      }();
     }
   }
 
@@ -230,13 +231,10 @@ TranslationResult getFuncPrologue(Func* func, int nPassed) {
   auto const tcAddr = translator.acquireLeaseAndRequisitePaperwork();
   if (tcAddr) return *tcAddr;
 
-  translator.translate();
-  if (!translator.translateSuccess()) {
-    return TranslationResult::failTransiently();
-  }
-
-  translator.relocate(true);
-  return TranslationResult{translator.publish()};
+  if (auto const res = translator.translate()) return *res;
+  if (auto const res = translator.relocate(true)) return *res;
+  if (auto const res = translator.bindOutgoingEdges()) return *res;
+  return translator.publish();
 }
 
 }}}

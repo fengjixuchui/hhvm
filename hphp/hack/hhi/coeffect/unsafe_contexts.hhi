@@ -8,6 +8,9 @@
  *
  */
 
+// see contexts.hhi for more details
+<<file:__EnableUnstableFeatures('union_intersection_type_hints')>>
+
 /**
  * As an unsafe extension and for the purpose of top-level migration,
  * we additionally map certain contexts to a (set of) capabilities that
@@ -23,19 +26,19 @@
  */
 namespace HH\Contexts\Unsafe {
   type defaults = mixed;
-  // TODO(coeffects) after implementing lower bounds on const ctx/type, do:
-  // = \HH\Capabilities\RxLocal & \HH\Capabilities\ImplicitPolicyLocal;
 
   type write_props = mixed;
-  type read_globals = \HH\Capabilities\ReadGlobals;
-  type globals = \HH\Capabilities\AccessGlobals;
+  type read_globals = mixed;
+  type globals = mixed;
 
   type policied = mixed;
   type policied_shallow = \HH\Capabilities\ImplicitPolicyLocal;
   type policied_local = \HH\Contexts\defaults;
   type policied_of<T> = mixed;
-  type policied_of_shallow<T> = \HH\Capabilities\ImplicitPolicyOfLocal<T>;
-  type policied_of_local<T> = \HH\Contexts\defaults;
+
+  type codegen = mixed;
+  // TODO(coeffects) make this purer later
+  type codegen_unsafe = \HH\Contexts\defaults;
 
   type rx = \HH\Contexts\defaults;
   type rx_shallow = \HH\Contexts\defaults;

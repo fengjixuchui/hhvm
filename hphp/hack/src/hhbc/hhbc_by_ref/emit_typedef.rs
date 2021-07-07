@@ -2,6 +2,7 @@
 //
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
+use decl_provider::DeclProvider;
 use hhbc_by_ref_emit_attribute as emit_attribute;
 use hhbc_by_ref_emit_body as emit_body;
 use hhbc_by_ref_emit_type_constant as emit_type_constant;
@@ -17,19 +18,27 @@ use oxidized::{aast_defs::Hint, ast as tast};
 
 use std::collections::BTreeMap;
 
-pub fn emit_typedefs_from_program<'a, 'arena>(
+pub fn emit_typedefs_from_program<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
     alloc: &'arena bumpalo::Bump,
-    e: &mut Emitter<'arena>,
+    e: &mut Emitter<'arena, 'decl, D>,
     prog: &'a [tast::Def],
 ) -> Result<Vec<Typedef<'arena>>> {
     prog.iter()
-        .filter_map(|def| def.as_typedef().map(|td| emit_typedef(alloc, e, td)))
+        .filter_map(|def| {
+            def.as_typedef().and_then(|td| {
+                if !td.is_ctx {
+                    Some(emit_typedef(alloc, e, td))
+                } else {
+                    None
+                }
+            })
+        })
         .collect()
 }
 
-fn emit_typedef<'a, 'arena>(
+fn emit_typedef<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
     alloc: &'arena bumpalo::Bump,
-    emitter: &mut Emitter<'arena>,
+    emitter: &mut Emitter<'arena, 'decl, D>,
     typedef: &'a tast::Typedef,
 ) -> Result<Typedef<'arena>> {
     let name = class::Type::<'arena>::from_ast_name(alloc, &typedef.name.1);
@@ -67,9 +76,9 @@ fn kind_to_type_info<'arena>(
     emit_type_hint::hint_to_type_info(alloc, &Kind::TypeDef, false, h.1.is_hoption(), tparams, h)
 }
 
-fn kind_to_type_structure<'arena>(
+fn kind_to_type_structure<'arena, 'decl, D: DeclProvider<'decl>>(
     alloc: &'arena bumpalo::Bump,
-    emitter: &mut Emitter<'arena>,
+    emitter: &mut Emitter<'arena, 'decl, D>,
     tparams: &[&str],
     h: Hint,
     is_opaque: bool,

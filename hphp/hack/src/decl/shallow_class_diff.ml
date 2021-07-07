@@ -24,13 +24,13 @@ let merge_member_lists
         if SMap.mem map name then
           map
         else
-          SMap.add map name (Some x, None))
+          SMap.add map ~key:name ~data:(Some x, None))
   in
   List.fold l2 ~init:map ~f:(fun map y ->
       let name = get_name y in
       match SMap.find_opt map name with
-      | Some (x, None) -> SMap.add map name (x, Some y)
-      | None -> SMap.add map name (None, Some y)
+      | Some (x, None) -> SMap.add map ~key:name ~data:(x, Some y)
+      | None -> SMap.add map ~key:name ~data:(None, Some y)
       | Some (_, Some _) -> map)
 
 let diff_members
@@ -45,19 +45,22 @@ let diff_members
       | (None, Some member)
         when (not Ast_defs.(equal_class_kind class_kind Ctrait))
              && is_private member ->
-        SMap.add diff name Private_change
-      | (Some _, None) -> SMap.add diff name Removed
-      | (None, Some _) -> SMap.add diff name Added
+        SMap.add diff ~key:name ~data:Private_change
+      | (Some _, None) -> SMap.add diff ~key:name ~data:Removed
+      | (None, Some _) -> SMap.add diff ~key:name ~data:Added
       | (Some old_member, Some new_member) ->
         diff_member old_member new_member
-        |> Option.value_map ~default:diff ~f:(fun ch -> SMap.add diff name ch))
+        |> Option.value_map ~default:diff ~f:(fun ch ->
+               SMap.add diff ~key:name ~data:ch))
 
 let diff_const (c1 : shallow_class_const) c2 : member_change option =
   let c1 = Decl_pos_utils.NormalizeSig.shallow_class_const c1 in
   let c2 = Decl_pos_utils.NormalizeSig.shallow_class_const c2 in
   if equal_shallow_class_const c1 c2 then
     None
-  else if Bool.( <> ) c1.scc_abstract c2.scc_abstract then
+  else if
+    not (Typing_defs.equal_class_const_kind c1.scc_abstract c2.scc_abstract)
+  then
     Some Changed_inheritance
   else
     Some Modified
@@ -187,8 +190,8 @@ let mro_inputs_equal (c1 : shallow_class) (c2 : shallow_class) : bool =
   && Ast_defs.equal_class_kind c1.sc_kind c2.sc_kind
   && Option.equal
        equal_shallow_method
-       (List.find c1.sc_methods is_to_string)
-       (List.find c2.sc_methods is_to_string)
+       (List.find c1.sc_methods ~f:is_to_string)
+       (List.find c2.sc_methods ~f:is_to_string)
   && List.equal Poly.( = ) c1.sc_tparams c2.sc_tparams
   && List.equal Poly.( = ) c1.sc_extends c2.sc_extends
   && List.equal Poly.( = ) c1.sc_implements c2.sc_implements
@@ -222,7 +225,7 @@ let remove_members_except_to_string sc =
     sc_sprops = [];
     sc_static_methods = [];
     sc_methods =
-      List.filter sc.sc_methods (fun m ->
+      List.filter sc.sc_methods ~f:(fun m ->
           String.equal (snd m.sm_name) SN.Members.__toString);
   }
 

@@ -19,8 +19,6 @@ type t = {
   option_relabel: bool;
   option_php7_uvs: bool;
   option_php7_ltr_assign: bool;
-  option_hack_arr_compat_notices: bool;
-  option_hack_arr_dv_arrs: bool;
   option_repo_authoritative: bool;
   option_jit_enable_rename_function: bool;
   option_doc_root: string;
@@ -73,8 +71,6 @@ let default =
      * body. Semantic diff doesn't care about labels, but for visual diff against
      * HHVM it's helpful to renumber in order that the labels match more closely *)
     option_relabel = true;
-    option_hack_arr_compat_notices = false;
-    option_hack_arr_dv_arrs = false;
     option_repo_authoritative = false;
     option_jit_enable_rename_function = false;
     option_doc_root = "";
@@ -128,10 +124,6 @@ let relabel o = o.option_relabel
 let enable_uniform_variable_syntax o = o.option_php7_uvs
 
 let php7_ltr_assign o = o.option_php7_ltr_assign
-
-let hack_arr_compat_notices o = o.option_hack_arr_compat_notices
-
-let hack_arr_dv_arrs o = o.option_hack_arr_dv_arrs
 
 let repo_authoritative o = o.option_repo_authoritative
 
@@ -238,8 +230,6 @@ let to_string o =
       Printf.sprintf "enable_uniform_variable_syntax: %B"
       @@ enable_uniform_variable_syntax o;
       Printf.sprintf "php7_ltr_assign: %B" @@ php7_ltr_assign o;
-      Printf.sprintf "hack_arr_compat_notices: %B" @@ hack_arr_compat_notices o;
-      Printf.sprintf "hack_arr_dv_arrs: %B" @@ hack_arr_dv_arrs o;
       Printf.sprintf "repo_authoritative: %B" @@ repo_authoritative o;
       Printf.sprintf "jit_enable_rename_function: %B"
       @@ jit_enable_rename_function o;
@@ -317,10 +307,6 @@ let set_option options name value =
     { options with option_php7_ltr_assign = as_bool value }
   | "hhvm.php7.uvs" -> { options with option_php7_uvs = as_bool value }
   | "hack.compiler.relabel" -> { options with option_relabel = as_bool value }
-  | "eval.hackarrcompatnotices" ->
-    { options with option_hack_arr_compat_notices = as_bool value }
-  | "eval.hackarrdvarrs" ->
-    { options with option_hack_arr_dv_arrs = as_bool value }
   | "hhvm.repo_authoritative" ->
     { options with option_repo_authoritative = as_bool value }
   | "eval.jitenablerenamefunction" ->
@@ -444,7 +430,7 @@ let get_value_from_config_string_array config key =
   let json_opt = get_value_from_config_ config key in
   match json_opt with
   | None -> None
-  | Some (J.JSON_Array fs) -> Some (List.map fs J.get_string_exn)
+  | Some (J.JSON_Array fs) -> Some (List.map fs ~f:J.get_string_exn)
   | _ -> raise (Arg.Bad ("Expected list of strings at " ^ key))
 
 let get_value_from_config_string_to_string_map config key =
@@ -480,10 +466,6 @@ let value_setters =
       { opts with option_php7_uvs = v = 1 } );
     ( set_value "hhvm.php7.ltr_assign" get_value_from_config_int @@ fun opts v ->
       { opts with option_php7_ltr_assign = v = 1 } );
-    ( set_value "hhvm.hack_arr_compat_notices" get_value_from_config_int
-    @@ fun opts v -> { opts with option_hack_arr_compat_notices = v = 1 } );
-    ( set_value "hhvm.hack_arr_dv_arrs" get_value_from_config_int
-    @@ fun opts v -> { opts with option_hack_arr_dv_arrs = v = 1 } );
     ( set_value "hhvm.repo.authoritative" get_value_from_config_int
     @@ fun opts v -> { opts with option_repo_authoritative = v = 1 } );
     ( set_value "hhvm.jit_enable_rename_function" get_value_from_config_int
@@ -659,7 +641,7 @@ let from_configs_rust ~(jsons : string list) ~(args : string list) : t =
     ~init:default
     (Some (Hh_json.json_of_string merged))
 
-let get_default () = from_configs_rust [] []
+let get_default () = from_configs_rust ~jsons:[] ~args:[]
 
 (* Construct an instance of Hhbc_options.t from the options passed in as well as
  * as specified in `-v str` on the command line.

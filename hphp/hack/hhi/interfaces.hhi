@@ -43,7 +43,7 @@ namespace HH {
   \HH\Rx\Traversable::class
 )>>
 interface Traversable<+Tv> {
-  abstract const ctx C = [defaults];
+
 }
 
 /**
@@ -91,8 +91,8 @@ interface KeyedTraversable<+Tk, +Tv> extends Traversable<Tv> {}
  */
 <<__Sealed(KeyedContainer::class)>>
 interface Container<+Tv> extends \HH\Rx\Traversable<Tv> {
-  const ctx C = [];
-  abstract const ctx CMut;
+
+
 }
 
 /**
@@ -844,8 +844,12 @@ interface XHPChild {}
  * objects: that is, objects that provide the __toString method
  */
 
-interface Stringish extends XHPChild {
-  <<__Deprecated('Use `stringish_cast(<expression>)` instead.')>>
+interface Stringish extends XHPChild {}
+
+/**
+ * StringishObject represents values of Stringish that are specifically objects
+ */
+interface StringishObject extends Stringish {
   public function __toString(): string;
 }
 

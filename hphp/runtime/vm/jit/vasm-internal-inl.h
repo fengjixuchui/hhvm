@@ -93,11 +93,6 @@ bool is_empty_catch(const Vblock& block);
 void register_catch_block(const Venv& env, const Venv::LabelPatch& p);
 
 /*
- * Emit a service request stub and register a patch point as needed.
- */
-void emit_svcreq_stub(Venv& env, const Venv::SvcReqPatch& p);
-
-/*
  * Arch-independent emitters.
  *
  * Return true if the instruction was supported.
@@ -110,6 +105,7 @@ bool emit(Venv& env, const callphps& i);
 bool emit(Venv& env, const bindjmp& i);
 bool emit(Venv& env, const bindjcc& i);
 bool emit(Venv& env, const bindaddr& i);
+bool emit(Venv& env, const ldbindaddr& i);
 bool emit(Venv& env, const fallback& i);
 bool emit(Venv& env, const fallbackcc& i);
 bool emit(Venv& env, const movqs& i);
@@ -207,6 +203,40 @@ void check_nop_interval(Venv& env, const Vinstr& inst,
         nop_counter = nop_interval;
       }
       break;
+  }
+}
+
+template<class Vemit>
+void emitLdBindRetAddrStubs(Venv& env) {
+  jit::fast_map<SrcKey, CodeAddress, SrcKey::Hasher> stubs;
+  env.cb = &env.text.areas().back().code;
+
+  for (auto const& ldbindretaddr : env.ldbindretaddrs) {
+    CodeAddress stub = [&] {
+      auto const i = stubs.find(ldbindretaddr.target);
+      if (i != stubs.end()) return i->second;
+
+      auto const start = env.cb->frontier();
+      stubs.insert({ldbindretaddr.target, start});
+
+      // Store return value to the stack.
+      Vemit(env).emit(store{rret_data(), rvmsp()[TVOFF(m_data)]});
+      Vemit(env).emit(store{rret_type(), rvmsp()[TVOFF(m_type)]});
+
+      // Bind jump to the translation.
+      emit(env, bindjmp{
+        ldbindretaddr.target,
+        ldbindretaddr.spOff,
+        cross_trace_regs_resumed()
+      });
+
+      return start;
+    }();
+
+    auto const addr = env.unit.makeAddr();
+    assertx(env.vaddrs.size() == addr);
+    env.vaddrs.push_back(stub);
+    env.leas.push_back({ldbindretaddr.instr, addr});
   }
 }
 
@@ -314,18 +344,20 @@ void vasm_emit(Vunit& unit, Vtext& text, CGMeta& fixups,
     irmu.register_block_end();
   }
 
+  emitLdBindRetAddrStubs<Vemit>(env);
+
   Vemit::emitVeneers(env);
 
   Vemit::handleLiterals(env);
-
-  // Emit service request stubs and register patch points.
-  for (auto& p : env.stubs) emit_svcreq_stub(env, p);
 
   // Bind any Vaddrs that correspond to Vlabels.
   for (auto const& p : env.pending_vaddrs) {
     assertx(env.addrs[p.target]);
     env.vaddrs[p.vaddr] = env.addrs[p.target];
   }
+
+  // Retarget smashable binds.
+  Vemit::retargetBinds(env);
 
   // Patch up jump targets and friends.
   Vemit::patch(env);

@@ -273,7 +273,7 @@ inline variant_ref::operator const_variant_ref() const {
 struct Variant : private TypedValue {
   friend variant_ref;
 
-  // Used by VariantTraits to create a folly::Optional-like
+  // Used by VariantTraits to create a Optional-like
   // optional Variant which fits in 16 bytes.
   using Optional = OptionalVariant;
 
@@ -351,7 +351,6 @@ struct Variant : private TypedValue {
   /* implicit */ Variant(const ClsMethDataRef v) {
     m_type = KindOfClsMeth;
     m_data.pclsmeth = v;
-    incRefClsMeth(v);
   }
 
   /*
@@ -1437,9 +1436,6 @@ private:
       case KindOfDict:
       case KindOfKeyset:
         assertx(m_data.parr->checkCount());
-        return;
-      case KindOfClsMeth:
-        assertx(checkCountClsMeth(m_data.pclsmeth));
         return;
       case KindOfRClsMeth:
         assertx(m_data.prclsmeth->checkCount());

@@ -242,7 +242,7 @@ void emitGuards(irgen::IRGS& irgs,
     auto const type = preCond.type;
     auto const loc  = preCond.location;
     assertx(IMPLIES(type.arrSpec(), irgs.context.kind == TransKind::Live));
-    irgen::checkType(irgs, loc, type, bcOff);
+    irgen::checkType(irgs, loc, type, sk);
   }
 
   // Finish emitting guards, and emit profiling counters.
@@ -273,11 +273,11 @@ void emitGuards(irgen::IRGS& irgs,
 /*
  * Returns the id of the next region block in workQ whose
  * corresponding IR block is currently reachable from the IR unit's
- * entry, or folly::none if no such block exists.  Furthermore, any
+ * entry, or std::nullopt if no such block exists.  Furthermore, any
  * unreachable blocks appearing before the first reachable block are
  * moved to the end of workQ.
  */
-folly::Optional<RegionDesc::BlockId> nextReachableBlock(
+Optional<RegionDesc::BlockId> nextReachableBlock(
   jit::queue<RegionDesc::BlockId>& workQ,
   const irgen::IRBuilder& irb,
   const BlockIdToIRBlockMap& blockIdToIRBlock
@@ -294,7 +294,7 @@ folly::Optional<RegionDesc::BlockId> nextReachableBlock(
     // reachable after processing some of the other blocks.
     workQ.push(regionBlockId);
   }
-  return folly::none;
+  return std::nullopt;
 }
 
 /*
@@ -371,7 +371,7 @@ static bool isSimpleOp(Op op) {
       op == Op::IsTypeC ||
       op == Op::Add ||
       op == Op::Sub ||
-      op == Op::Mul || 
+      op == Op::Mul ||
       op == Op::Div ||
       op == Op::Mod ||
       op == Op::Pow ||
@@ -383,8 +383,8 @@ static bool isSimpleOp(Op op) {
       op == Op::CastInt;
 }
 
-folly::Optional<unsigned> scheduleSurprise(const RegionDesc::Block& block) {
-  folly::Optional<unsigned> checkIdx;
+Optional<unsigned> scheduleSurprise(const RegionDesc::Block& block) {
+  Optional<unsigned> checkIdx;
   auto sk = block.start();
   for (unsigned i = 0; i < block.length(); ++i, sk.advance(block.func())) {
     auto const backwards = [&]{
@@ -462,7 +462,7 @@ TranslateResult irGenRegionImpl(irgen::IRGS& irgs,
     // Set the first callee block as a successor to the FCall's block and
     // "fallthrough" from the caller into the callee's first block.
     setIRBlock(irgs, region.entry()->id(), region, blockIdToIRBlock);
-    irgen::endBlock(irgs, region.start().offset());
+    irgen::endBlock(irgs, region.start());
   }
 
   RegionDesc::BlockIdSet processedBlocks;
@@ -577,7 +577,7 @@ TranslateResult irGenRegionImpl(irgen::IRGS& irgs,
             irgen::endRegion(irgs);
           }
         } else if (instrAllowsFallThru(inst.op())) {
-          irgen::endBlock(irgs, inst.nextSk().offset());
+          irgen::endBlock(irgs, inst.nextSk());
         }
       }
     }

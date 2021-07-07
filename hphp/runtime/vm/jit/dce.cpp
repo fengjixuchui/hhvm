@@ -100,8 +100,6 @@ bool canDCE(IRInstruction* inst) {
   case GteStr:
   case LtStr:
   case LteStr:
-  case EqStr:
-  case NeqStr:
   case SameStr:
   case NSameStr:
   case CmpStr:
@@ -319,17 +317,12 @@ bool canDCE(IRInstruction* inst) {
   case ConvObjToDict:
   case ConvArrLikeToKeyset:
   case ConvObjToKeyset:
+  case ConvClsMethToDict:
+  case ConvClsMethToKeyset:
+  case ConvClsMethToVec:
   case LdOutAddr:
     return !opcodeMayRaise(inst->op()) &&
       (!inst->consumesReferences() || inst->producesReference());
-
-  case ConvClsMethToDict:
-  case ConvClsMethToKeyset:
-  case ConvClsMethToVec: {
-    bool consumeRef = use_lowptr ? false : inst->consumesReferences();
-    return !opcodeMayRaise(inst->op()) &&
-      (!consumeRef || inst->producesReference());
-  }
 
   case DbgTraceCall:
   case AKExistsObj:
@@ -478,6 +471,7 @@ bool canDCE(IRInstruction* inst) {
   case StLocRange:
   case EagerSyncVMRegs:
   case ReqBindJmp:
+  case ReqInterpBBNoTranslate:
   case ReqRetranslate:
   case ReqRetranslateOpt:
   case IncRef:
@@ -519,7 +513,6 @@ bool canDCE(IRInstruction* inst) {
   case RaiseNotice:
   case ThrowArrayIndexException:
   case ThrowArrayKeyException:
-  case RaiseHackArrCompatNotice:
   case RaiseForbiddenDynCall:
   case RaiseForbiddenDynConstruct:
   case RaiseCoeffectsCallViolation:
@@ -700,6 +693,7 @@ bool canDCE(IRInstruction* inst) {
   case ResolveTypeStruct:
   case CheckRDSInitialized:
   case MarkRDSInitialized:
+  case MarkRDSAccess:
   case ProfileProp:
   case ProfileIsTypeStruct:
   case StFrameCtx:
@@ -717,6 +711,8 @@ bool canDCE(IRInstruction* inst) {
     return false;
 
   case IsTypeStruct:
+  case EqStr:
+  case NeqStr:
     return !opcodeMayRaise(inst->op());
 
   case EqArrLike:
@@ -857,7 +853,23 @@ void processCatchBlock(IRUnit& unit, DceState& state, Block* block,
   auto constexpr numTrackedSlots = 64;
   auto constexpr wholeRange = std::make_pair(0, numTrackedSlots);
   auto const stackTop = block->back().extra<EndCatch>()->offset;
-  auto const stackRange = AStack::range(stackTop, stackTop + numTrackedSlots);
+  auto const stackRange = [&] {
+    // If the catch block occurs within an inlined frame the outer stack
+    // locations (those above the inlined frame) are not dead and cannot be
+    // elided as we may not throw through the outer callers.
+    if (block->back().src(0)->inst()->is(BeginInlining)) {
+      auto const extra = block->back().src(0)->inst()->extra<BeginInlining>();
+      auto const spOff = extra->spOffset;
+      assertx(stackTop <= spOff);
+      if (spOff < stackTop + numTrackedSlots) {
+        return AStack::range(stackTop, spOff);
+      }
+    }
+    return AStack::range(stackTop, stackTop + numTrackedSlots);
+  }();
+
+  // Nothing to optimize if the stack is empty
+  if (stackRange.size() == 0) return;
 
   std::bitset<numTrackedSlots> usedLocations = {};
   // stores that are only read by the EndCatch

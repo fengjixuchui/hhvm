@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<bd00c1fe5c75465dc4762ed651d74b42>>
+// @generated SignedSource<<7f3ef06725b91a26a71826c5079f644c>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -288,9 +288,34 @@ impl<P: Params> NodeMut<P> for ClassConst<P::Ex, P::Fb, P::En, P::Hi> {
     ) -> Result<(), P::Error> {
         self.type_.accept(c, v)?;
         self.id.accept(c, v)?;
-        self.expr.accept(c, v)?;
+        self.kind.accept(c, v)?;
         self.doc_comment.accept(c, v)?;
         Ok(())
+    }
+}
+impl<P: Params> NodeMut<P> for ClassConstKind<P::Ex, P::Fb, P::En, P::Hi> {
+    fn accept<'node>(
+        &'node mut self,
+        c: &mut P::Context,
+        v: &mut dyn VisitorMut<'node, P = P>,
+    ) -> Result<(), P::Error> {
+        v.visit_class_const_kind(c, self)
+    }
+    fn recurse<'node>(
+        &'node mut self,
+        c: &mut P::Context,
+        v: &mut dyn VisitorMut<'node, P = P>,
+    ) -> Result<(), P::Error> {
+        match self {
+            ClassConstKind::CCAbstract(a0) => {
+                a0.accept(c, v)?;
+                Ok(())
+            }
+            ClassConstKind::CCConcrete(a0) => {
+                a0.accept(c, v)?;
+                Ok(())
+            }
+        }
     }
 }
 impl<P: Params> NodeMut<P> for ClassGetExpr<P::Ex, P::Fb, P::En, P::Hi> {
@@ -1013,7 +1038,6 @@ impl<P: Params> NodeMut<P> for Expr_<P::Ex, P::Fb, P::En, P::Hi> {
                 a.1.accept(c, v)?;
                 Ok(())
             }
-            Expr_::Any => Ok(()),
             Expr_::Hole(a) => {
                 a.0.accept(c, v)?;
                 v.visit_hi(c, &mut a.1)?;
@@ -2001,6 +2025,7 @@ impl<P: Params> NodeMut<P> for Typedef<P::Ex, P::Fb, P::En, P::Hi> {
         self.namespace.accept(c, v)?;
         self.span.accept(c, v)?;
         self.emit_id.accept(c, v)?;
+        self.is_ctx.accept(c, v)?;
         Ok(())
     }
 }
@@ -2020,6 +2045,7 @@ impl<P: Params> NodeMut<P> for TypedefVisibility {
         match self {
             TypedefVisibility::Transparent => Ok(()),
             TypedefVisibility::Opaque => Ok(()),
+            TypedefVisibility::Tinternal => Ok(()),
         }
     }
 }
@@ -2188,6 +2214,7 @@ impl<P: Params> NodeMut<P> for Visibility {
             Visibility::Private => Ok(()),
             Visibility::Public => Ok(()),
             Visibility::Protected => Ok(()),
+            Visibility::Internal => Ok(()),
         }
     }
 }

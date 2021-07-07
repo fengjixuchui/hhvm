@@ -32,7 +32,6 @@
 #include "hphp/runtime/vm/class.h"
 #include "hphp/runtime/vm/cti.h"
 #include "hphp/runtime/vm/reified-generics.h"
-#include "hphp/runtime/vm/repo.h"
 #include "hphp/runtime/vm/repo-file.h"
 #include "hphp/runtime/vm/repo-global-data.h"
 #include "hphp/runtime/vm/reverse-data-map.h"
@@ -100,7 +99,6 @@ Func::Func(Unit& unit, const StringData* name, Attr attrs)
   , m_isPreFunc(false)
   , m_hasPrivateAncestor(false)
   , m_shouldSampleJit(StructuredLog::coinflip(RuntimeOption::EvalJitSampleRate))
-  , m_serialized(false)
   , m_hasForeignThis(false)
   , m_registeredInDataMap(false)
   , m_unit(&unit)
@@ -118,7 +116,6 @@ Func::Func(
   , m_isPreFunc(false)
   , m_hasPrivateAncestor(false)
   , m_shouldSampleJit(StructuredLog::coinflip(RuntimeOption::EvalJitSampleRate))
-  , m_serialized(false)
   , m_hasForeignThis(false)
   , m_registeredInDataMap(false)
   , m_unit(&unit)
@@ -700,10 +697,10 @@ void Func::prettyPrint(std::ostream& out, const PrintOpts& opts) const {
       return;
     }
 
-    const auto bc = entry();
-    const auto* it = &bc[startOffset];
+    auto it = at(startOffset);
+    auto const stop = at(stopOffset);
     int prevLineNum = -1;
-    while (it < &bc[stopOffset]) {
+    while (it < stop) {
       if (opts.showLines) {
         int lineNum = getLineNumber(offsetOf(it));
         if (lineNum != prevLineNum) {
@@ -712,19 +709,13 @@ void Func::prettyPrint(std::ostream& out, const PrintOpts& opts) const {
         }
       }
 
-      out << std::string(opts.indentSize, ' ');
-      prettyPrintInstruction(out, offsetOf(it));
+      out << std::string(opts.indentSize, ' ')
+          << std::setw(4) << offsetOf(it) << ": "
+          << instrToString(it, this)
+          << std::endl;
       it += instrLen(it);
     }
   }
-}
-
-void Func::prettyPrintInstruction(std::ostream& out, Offset offset) const {
-  const auto bc = entry();
-  const auto* it = &bc[offset];
-  out << std::setw(4) << (it - bc) << ": "
-    << instrToString(it, this)
-    << std::endl;
 }
 
 
@@ -1283,6 +1274,13 @@ void Func::EnableCoverage() {
   if (!*tl_saved_coverage_index) *tl_saved_coverage_index = 1;
   *s_coverage_index = (*tl_saved_coverage_index)++;
   tl_called_functions.emplace(Array::CreateDict());
+}
+
+std::string show(PrologueID pid) {
+  auto func = pid.func();
+  return folly::sformat("{}(id 0x{:#x}) # of args: {}",
+                        func->fullName()->data(),
+                        pid.funcId().toInt(), pid.nargs());
 }
 
 Array Func::GetCoverage() {

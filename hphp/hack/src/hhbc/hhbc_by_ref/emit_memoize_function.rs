@@ -2,6 +2,8 @@
 //
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
+use decl_provider::DeclProvider;
+use ffi::Slice;
 use hhbc_by_ref_ast_scope::{self as ast_scope, Scope, ScopeItem};
 use hhbc_by_ref_emit_attribute as emit_attribute;
 use hhbc_by_ref_emit_body as emit_body;
@@ -31,9 +33,9 @@ pub(crate) fn is_interceptable(opts: &Options) -> bool {
         && !opts.repo_flags.contains(RepoFlags::AUTHORITATIVE)
 }
 
-pub(crate) fn emit_wrapper_function<'a, 'arena>(
+pub(crate) fn emit_wrapper_function<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
     alloc: &'arena bumpalo::Bump,
-    emitter: &mut Emitter<'arena>,
+    emitter: &mut Emitter<'arena, 'decl, D>,
     original_id: function::Type<'arena>,
     renamed_id: &function::Type<'arena>,
     deprecation_info: &Option<&[TypedValue<'arena>]>,
@@ -103,9 +105,9 @@ pub(crate) fn emit_wrapper_function<'a, 'arena>(
     })
 }
 
-fn make_memoize_function_code<'a, 'arena>(
+fn make_memoize_function_code<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
     alloc: &'arena bumpalo::Bump,
-    e: &mut Emitter<'arena>,
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     pos: &Pos,
     deprecation_info: Option<&[TypedValue<'arena>]>,
@@ -134,9 +136,9 @@ fn make_memoize_function_code<'a, 'arena>(
     Ok(emit_pos_then(alloc, pos, fun))
 }
 
-fn make_memoize_function_with_params_code<'a, 'arena>(
+fn make_memoize_function_with_params_code<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
     alloc: &'arena bumpalo::Bump,
-    e: &mut Emitter<'arena>,
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     pos: &Pos,
     deprecation_info: Option<&[TypedValue<'arena>]>,
@@ -165,7 +167,7 @@ fn make_memoize_function_with_params_code<'a, 'arena>(
         FcallArgs::new(
             fcall_flags,
             1,
-            &[],
+            Slice::new(&[]),
             if is_async { Some(eager_set) } else { None },
             param_count,
             None,
@@ -248,9 +250,9 @@ fn make_memoize_function_with_params_code<'a, 'arena>(
     ))
 }
 
-fn make_memoize_function_no_params_code<'a, 'arena>(
+fn make_memoize_function_no_params_code<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
     alloc: &'arena bumpalo::Bump,
-    e: &mut Emitter<'arena>,
+    e: &mut Emitter<'arena, 'decl, D>,
     env: &mut Env<'a, 'arena>,
     deprecation_info: Option<&[TypedValue<'arena>]>,
     renamed_id: function::Type<'arena>,
@@ -264,7 +266,7 @@ fn make_memoize_function_no_params_code<'a, 'arena>(
     let fcall_args = FcallArgs::new(
         FcallFlags::default(),
         1,
-        &[],
+        Slice::new(&[]),
         if is_async { Some(eager_set) } else { None },
         0,
         None,
@@ -311,9 +313,9 @@ fn make_memoize_function_no_params_code<'a, 'arena>(
     ))
 }
 
-fn make_wrapper_body<'a, 'arena>(
+fn make_wrapper_body<'a, 'arena, 'decl, D: DeclProvider<'decl>>(
     alloc: &'arena bumpalo::Bump,
-    emitter: &mut Emitter<'arena>,
+    emitter: &mut Emitter<'arena, 'decl, D>,
     env: Env<'a, 'arena>,
     return_type_info: HhasTypeInfo,
     params: Vec<HhasParam<'arena>>,

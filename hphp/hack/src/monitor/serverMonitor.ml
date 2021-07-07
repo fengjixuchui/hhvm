@@ -110,7 +110,7 @@ module Sent_fds_collector = struct
     let (ready, notready) =
       List.partition_tf
         !handed_off_fds_to_close
-        (fun { fd_close_time; tracker; m2s_sequence_number; _ } ->
+        ~f:(fun { fd_close_time; tracker; m2s_sequence_number; _ } ->
           match fd_close_time with
           | Fd_close_immediate ->
             log
@@ -197,7 +197,7 @@ struct
     Marshal_tools.to_fd_with_preamble fd msg |> ignore
 
   let setup_handler_for_signals handler signals =
-    List.iter signals (fun signal ->
+    List.iter signals ~f:(fun signal ->
         Sys_utils.set_signal signal (Sys.Signal_handle handler))
 
   let setup_autokill_server_on_exit process =
@@ -217,13 +217,9 @@ struct
     let (ready_socket_l, _, _) = Unix.select [socket] [] [] 1.0 in
     not (List.is_empty ready_socket_l)
 
-  let start_server ?target_saved_state ~informant_managed options exit_status =
+  let start_server ~informant_managed options exit_status =
     let server_process =
-      SC.start_server
-        ?target_saved_state
-        ~prior_exit_status:exit_status
-        ~informant_managed
-        options
+      SC.start_server ~prior_exit_status:exit_status ~informant_managed options
     in
     setup_autokill_server_on_exit server_process;
     Alive server_process
@@ -273,14 +269,10 @@ struct
     0 = Config_file.compare_versions env.current_version new_version
 
   (* Actually starts a new server. *)
-  let start_new_server ?target_saved_state env exit_status =
+  let start_new_server env exit_status =
     let informant_managed = Informant.is_managing env.informant in
     let new_server =
-      start_server
-        ?target_saved_state
-        ~informant_managed
-        env.server_start_options
-        exit_status
+      start_server ~informant_managed env.server_start_options exit_status
     in
     let env = set_server env new_server in
     { env with retries = env.retries + 1 }
@@ -288,17 +280,14 @@ struct
   (* Kill the server (if it's running) and restart it - maybe. Obeying the rules
    * of state transitions. See docs on the ServerProcess.server_process ADT for
    * state transitions. *)
-  let kill_and_maybe_restart_server ?target_saved_state env exit_status =
+  let kill_and_maybe_restart_server env exit_status =
     (* We're going to collect all FDs right here and now. This will be done again below,
     in [kill_server_with_check], but Informant.reinit might take too long or might throw. *)
     Sent_fds_collector.collect_all_fds ();
-    (* Ideally, all restarts should be triggered by Changed_merge_base notification
-     * which generate target mini state. There are other kind of restarts too, mostly
-     * related to server crashing - if we just restart and keep going, we risk
+    (* Iff we just restart and keep going, we risk
      * Changed_merge_base eventually arriving and restarting the already started server
      * for no reason. Re-issuing merge base query here should bring the Monitor and Server
      * understanding of current revision to be the same *)
-    if Option.is_none target_saved_state then Informant.reinit env.informant;
     kill_server_with_check env.server;
     let kill_signal_time = Unix.gettimeofday () in
     wait_for_server_exit_with_check env.server kill_signal_time;
@@ -320,7 +309,7 @@ struct
     | (Died_config_changed, _) ->
       (* Now we can start a new instance safely.
        * See diagram on ServerProcess.server_process docs. *)
-      start_new_server ?target_saved_state env exit_status
+      start_new_server env exit_status
     | (Not_yet_started, false)
     | (Alive _, false)
     | (Died_unexpectedly _, false) ->
@@ -334,7 +323,7 @@ struct
     | (Died_unexpectedly _, true) ->
       (* Start new server instance because config matches.
        * See diagram on ServerProcess.server_process docs. *)
-      start_new_server ?target_saved_state env exit_status
+      start_new_server env exit_status
 
   let read_version fd =
     (* WARNING! Don't use the (slow) HackEventLogger here, in the inner loop non-failure path. *)
@@ -679,17 +668,43 @@ struct
         | (0, _) ->
           (* "pid=0" means the pid we waited for (i.e. process) hasn't yet died/stopped *)
           env
+        | (_, Unix.WEXITED 0) ->
+          (* "pid<>0, WEXITED 0" means the process had a clean exit *)
+          set_server env (Died_unexpectedly (proc_stat, false))
         | (_, _) ->
-          (* "pid<>0" means the pid has died or received a stop signal *)
-          let oom_code = Exit_status.(exit_code Out_of_shared_memory) in
-          let was_oom =
+          (* this case is any kind of unexpected exit *)
+          let is_oom =
             match proc_stat with
-            | Unix.WEXITED code when code = oom_code -> true
+            | Unix.WEXITED code
+              when (code = Exit_status.(exit_code Out_of_shared_memory))
+                   || code = Exit_status.(exit_code Worker_oomed) ->
+              true
             | _ -> Sys_utils.check_dmesg_for_oom process.pid "hh_server"
           in
-          SC.on_server_exit monitor_config;
-          ServerProcessTools.check_exit_status proc_stat process monitor_config;
-          set_server env (Died_unexpectedly (proc_stat, was_oom)))
+          let (exit_kind, exit_code) = Exit_status.unpack proc_stat in
+          let time_taken = Unix.time () -. process.start_t in
+          ServerCommandTypesUtils.write_progress_file
+            ~server_progress_file:
+              process.server_specific_files
+                .ServerCommandTypes.server_progress_file
+            ~server_progress:
+              ServerCommandTypes.
+                {
+                  server_progress = "writing crash logs";
+                  server_warning = None;
+                  server_timestamp = Unix.gettimeofday ();
+                };
+          Hh_logger.log
+            "TYPECHECKER_EXIT exit_kind=%s exit_code=%d is_oom=%b"
+            exit_kind
+            exit_code
+            is_oom;
+          HackEventLogger.typechecker_exit
+            time_taken
+            proc_stat
+            (monitor_config.server_log_file, monitor_config.monitor_log_file)
+            ~is_oom;
+          set_server env (Died_unexpectedly (proc_stat, is_oom)))
       | Not_yet_started
       | Died_config_changed
       | Died_unexpectedly _ ->
@@ -768,15 +783,15 @@ struct
     let max_sql_retries = 3 in
     match (informant_report, env.server) with
     | (Informant_sig.Move_along, Died_config_changed) -> env
-    | (Informant_sig.Restart_server _, Died_config_changed) ->
+    | (Informant_sig.Restart_server, Died_config_changed) ->
       Hh_logger.log "%s"
       @@ "Ignoring Informant directed restart - waiting for next client "
       ^ "connection to verify server version first";
       env
-    | (Informant_sig.Restart_server target_saved_state, _) ->
+    | (Informant_sig.Restart_server, _) ->
       Hh_logger.log "Informant directed server restart. Restarting server.";
       HackEventLogger.informant_induced_restart ();
-      kill_and_maybe_restart_server ?target_saved_state env exit_status
+      kill_and_maybe_restart_server env exit_status
     | (Informant_sig.Move_along, _) ->
       if
         (is_watchman_failed || is_watchman_fresh_instance)
@@ -914,7 +929,7 @@ struct
     (* If the client started the server, it opened an FD before forking, so it
      * can be notified when the monitor socket is ready. The FD number was
      * passed in program args. *)
-    Option.iter waiting_client (fun fd ->
+    Option.iter waiting_client ~f:(fun fd ->
         let oc = Unix.out_channel_of_descr fd in
         try
           Out_channel.output_string oc (ServerMonitorUtils.ready ^ "\n");

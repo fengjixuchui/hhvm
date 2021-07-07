@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "hphp/runtime/vm/jit/abi.h"
 #include "hphp/runtime/vm/jit/containers.h"
 #include "hphp/runtime/vm/jit/vasm.h"
 #include "hphp/runtime/vm/jit/vasm-instr.h"
@@ -41,8 +42,12 @@ struct Venv {
    */
   struct LabelPatch { CodeAddress instr; Vlabel target; };
   struct AddrPatch { CodeAddress instr; Vaddr target; };
-  struct SvcReqPatch { CodeAddress jmp, jcc; Vinstr svcreq; };
   struct VaddrBind { Vaddr vaddr; Vlabel target; };
+  struct LdBindRetAddrPatch {
+    CodeAddress instr;
+    SrcKey target;
+    SBInvOffset spOff;
+  };
 
   Venv(Vunit& unit, Vtext& text, CGMeta& meta);
 
@@ -68,23 +73,8 @@ struct Venv {
   jit::vector<AddrPatch> leas;
   jit::vector<LabelPatch> jmps, jccs;
   jit::vector<LabelPatch> catches;
+  jit::vector<LdBindRetAddrPatch> ldbindretaddrs;
   jit::vector<std::pair<TCA,IStack>> stacks;
-
-  /*
-   * Stubs that need to be emitted and patched into service request callsites.
-   *
-   * In vasm_emit(), we lower service request instructions (e.g., bindjmp) to
-   * their inline functionality (e.g., a smashable jump), and add a record in
-   * `stubs' so that we can emit the requisite stub and patch in its address
-   * after the rest of the unit is emitted.
-   *
-   * The stubs are emitted separately because they are not truly part of the
-   * unit; they are hit once, and then the jump to them is smashed.
-   *
-   * The delayed emit avoids the edge case where we run out of stub space and
-   * both the service request and its stub have the same destination.
-   */
-  jit::vector<SvcReqPatch> stubs;
 };
 
 /*

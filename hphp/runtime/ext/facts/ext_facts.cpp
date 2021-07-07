@@ -18,7 +18,6 @@
 #include <functional>
 #include <iomanip>
 #include <mutex>
-#include <optional>
 #include <pwd.h>
 #include <sstream>
 #include <string>
@@ -47,8 +46,8 @@
 #include "hphp/runtime/ext/extension.h"
 #include "hphp/runtime/ext/facts/autoload-db.h"
 #include "hphp/runtime/ext/facts/ext_facts.h"
+#include "hphp/runtime/ext/facts/facts-store.h"
 #include "hphp/runtime/ext/facts/string-ptr.h"
-#include "hphp/runtime/ext/facts/watchman-autoload-map.h"
 #include "hphp/runtime/ext/facts/watchman.h"
 #include "hphp/runtime/vm/treadmill.h"
 #include "hphp/util/assertions.h"
@@ -385,11 +384,14 @@ struct Facts final : Extension {
     HHVM_NAMED_FE(
         HH\\Facts\\methods_with_attribute,
         HHVM_FN(facts_methods_with_attribute));
+    HHVM_NAMED_FE(
+        HH\\Facts\\files_with_attribute, HHVM_FN(facts_files_with_attribute));
     HHVM_NAMED_FE(HH\\Facts\\type_attributes, HHVM_FN(facts_type_attributes));
     HHVM_NAMED_FE(
         HH\\Facts\\type_alias_attributes, HHVM_FN(facts_type_alias_attributes));
     HHVM_NAMED_FE(
         HH\\Facts\\method_attributes, HHVM_FN(facts_method_attributes));
+    HHVM_NAMED_FE(HH\\Facts\\file_attributes, HHVM_FN(facts_file_attributes));
     HHVM_NAMED_FE(
         HH\\Facts\\type_attribute_parameters,
         HHVM_FN(facts_type_attribute_parameters));
@@ -399,6 +401,9 @@ struct Facts final : Extension {
     HHVM_NAMED_FE(
         HH\\Facts\\method_attribute_parameters,
         HHVM_FN(facts_method_attribute_parameters));
+    HHVM_NAMED_FE(
+        HH\\Facts\\file_attribute_parameters,
+        HHVM_FN(facts_file_attribute_parameters));
     HHVM_NAMED_FE(HH\\Facts\\all_types, HHVM_FN(facts_all_types));
     HHVM_NAMED_FE(HH\\Facts\\all_functions, HHVM_FN(facts_all_functions));
     HHVM_NAMED_FE(HH\\Facts\\all_constants, HHVM_FN(facts_all_constants));
@@ -441,11 +446,11 @@ struct Facts final : Extension {
     return m_data->m_expirationTime;
   }
 
-  const std::optional<std::string>& getWatchmanDefaultSocket() const {
+  const Optional<std::string>& getWatchmanDefaultSocket() const {
     return m_data->m_watchmanDefaultSocket;
   }
 
-  const std::optional<std::string>& getWatchmanRootSocket() const {
+  const Optional<std::string>& getWatchmanRootSocket() const {
     return m_data->m_watchmanRootSocket;
   }
 
@@ -470,20 +475,20 @@ private:
   // your new member is destroyed at the right time.
   struct FactsData {
     std::chrono::seconds m_expirationTime{30 * 60};
-    std::optional<std::string> m_watchmanDefaultSocket;
-    std::optional<std::string> m_watchmanRootSocket;
+    Optional<std::string> m_watchmanDefaultSocket;
+    Optional<std::string> m_watchmanRootSocket;
     hphp_hash_set<std::string> m_excludedRepos;
     folly::ConcurrentHashMap<std::string, std::shared_ptr<Watchman>>
         m_watchmanClients{};
     std::unique_ptr<WatchmanAutoloadMapFactory> m_mapFactory;
   };
-  std::optional<FactsData> m_data;
+  Optional<FactsData> m_data;
 
   /**
    * Discover who owns the given repo and return the Watchman socket
    * corresponding to that user.
    */
-  std::optional<std::string> getPerUserWatchmanSocket() {
+  Optional<std::string> getPerUserWatchmanSocket() {
     IniSetting::Map ini = IniSetting::Map::object;
     Hdf config;
     auto* repoOptions = g_context->getRepoOptionsForRequest();
@@ -543,7 +548,7 @@ private:
 FactsStore*
 WatchmanAutoloadMapFactory::getForOptions(const RepoOptions& options) {
 
-  auto mapKey = [&]() -> std::optional<WatchmanAutoloadMapKey> {
+  auto mapKey = [&]() -> Optional<WatchmanAutoloadMapKey> {
     try {
       auto mk = WatchmanAutoloadMapKey::get(options);
       if (!mk.isAutoloadableRepo()) {
@@ -583,25 +588,22 @@ WatchmanAutoloadMapFactory::getForOptions(const RepoOptions& options) {
         mapKey->m_root.native(),
         mapKey->m_dbData.m_path.native());
     return m_maps
-        .insert(
-            {*mapKey,
-             std::make_shared<WatchmanAutoloadMap>(
-                 mapKey->m_root, mapKey->m_dbData)})
+        .insert({*mapKey, make_trusted_facts(mapKey->m_root, mapKey->m_dbData)})
         .first->second.get();
   }
 
   assertx(mapKey->m_queryExpr.isObject());
-  auto map = std::make_shared<WatchmanAutoloadMap>(
-      mapKey->m_root,
-      mapKey->m_dbData,
-      mapKey->m_queryExpr,
-      s_ext.getWatchmanClient(mapKey->m_root));
 
-  if (RuntimeOption::ServerExecutionMode()) {
-    map->subscribe();
-  }
-
-  return m_maps.insert({*mapKey, std::move(map)}).first->second.get();
+  return m_maps
+      .insert(
+          {*mapKey,
+           make_watchman_facts(
+               mapKey->m_root,
+               mapKey->m_dbData,
+               mapKey->m_queryExpr,
+               s_ext.getWatchmanClient(mapKey->m_root),
+               RuntimeOption::ServerExecutionMode())})
+      .first->second.get();
 }
 
 void WatchmanAutoloadMapFactory::garbageCollectUnusedAutoloadMaps(
@@ -657,7 +659,7 @@ bool HHVM_FUNCTION(facts_enabled) {
 
 Variant HHVM_FUNCTION(facts_db_path, const String& rootStr) {
   // Turn rootStr into an absolute path.
-  auto root = [&]() -> std::optional<folly::fs::path> {
+  auto root = [&]() -> Optional<folly::fs::path> {
     folly::fs::path maybeRoot{rootStr.get()->slice()};
     if (maybeRoot.is_absolute()) {
       return maybeRoot;
@@ -784,6 +786,10 @@ Array HHVM_FUNCTION(facts_methods_with_attribute, const String& attr) {
   return Facts::getFactsOrThrow().getMethodsWithAttribute(attr);
 }
 
+Array HHVM_FUNCTION(facts_files_with_attribute, const String& attr) {
+  return Facts::getFactsOrThrow().getFilesWithAttribute(attr);
+}
+
 Array HHVM_FUNCTION(facts_type_attributes, const String& type) {
   return Facts::getFactsOrThrow().getTypeAttributes(type);
 }
@@ -795,6 +801,10 @@ Array HHVM_FUNCTION(facts_type_alias_attributes, const String& typeAlias) {
 Array HHVM_FUNCTION(
     facts_method_attributes, const String& type, const String& method) {
   return Facts::getFactsOrThrow().getMethodAttributes(type, method);
+}
+
+Array HHVM_FUNCTION(facts_file_attributes, const String& file) {
+  return Facts::getFactsOrThrow().getFileAttributes(file);
 }
 
 Array HHVM_FUNCTION(
@@ -815,6 +825,11 @@ Array HHVM_FUNCTION(
     const String& method,
     const String& attr) {
   return Facts::getFactsOrThrow().getMethodAttrArgs(type, method, attr);
+}
+
+Array HHVM_FUNCTION(
+    facts_file_attribute_parameters, const String& file, const String& attr) {
+  return Facts::getFactsOrThrow().getFileAttrArgs(file, attr);
 }
 
 Array HHVM_FUNCTION(facts_all_types) {

@@ -55,7 +55,7 @@ let get_shallow_classes_and_substs
           | None -> true
           | Some filter -> BloomFilter.mem filter hash)
   in
-  Sequence.filter_map lin (fun mro ->
+  Sequence.filter_map lin ~f:(fun mro ->
       match Shallow_classes_provider.get ctx mro.mro_name with
       | None -> None
       | Some cls ->
@@ -101,7 +101,12 @@ let methods ~target ~static child_class_name lin =
          |> filter_target ~target ~f:(fun { sm_name = (_, n); _ } -> n)
          |> Sequence.of_list
          |> Sequence.map
-              ~f:(DTT.shallow_method_to_telt child_class_name mro subst))
+              ~f:
+                (DTT.shallow_method_to_telt
+                   child_class_name
+                   cls.sc_module
+                   mro
+                   subst))
   |> Sequence.concat
 
 (** Given a linearization filtered for property lookup, return a [Sequence.t]
@@ -116,7 +121,12 @@ let props ~target ~static child_class_name lin =
          |> filter_target ~target ~f:(fun { sp_name = (_, n); _ } -> n)
          |> Sequence.of_list
          |> Sequence.map
-              ~f:(DTT.shallow_prop_to_telt child_class_name mro subst))
+              ~f:
+                (DTT.shallow_prop_to_telt
+                   child_class_name
+                   cls.sc_module
+                   mro
+                   subst))
   |> Sequence.concat
 
 (** Return true if the element is private and not marked with the __LSB
@@ -135,7 +145,8 @@ let is_private elt =
   | Vprivate _ when get_ce_lsb elt -> false
   | Vprivate _ -> true
   | Vprotected _
-  | Vpublic ->
+  | Vpublic
+  | Vinternal _ ->
     false
 
 let is_private_or_protected elt =
@@ -147,7 +158,9 @@ let is_private_or_protected elt =
   | Vprivate _
   | Vprotected _ ->
     true
-  | Vpublic -> false
+  | Vpublic
+  | Vinternal _ ->
+    false
 
 let chown_private_or_protected child_class_name ancestor_sig =
   let ce_visibility =
@@ -164,7 +177,7 @@ let chown_private_or_protected child_class_name ancestor_sig =
 let filter_or_chown_privates
     (child_class_name : string) (lin : DTT.tagged_elt Sequence.t) :
     (string * class_elt) Sequence.t =
-  Sequence.filter_map lin (fun DTT.{ id; inherit_when_private; elt } ->
+  Sequence.filter_map lin ~f:(fun DTT.{ id; inherit_when_private; elt } ->
       let ancestor_name = elt.ce_origin in
       let is_inherited = String.( <> ) ancestor_name child_class_name in
       if is_private elt && is_inherited && not inherit_when_private then
@@ -263,7 +276,7 @@ let consts ~target ctx child_class_name get_typeconst get_ancestor lin =
                | TCConcrete { tc_type } -> Some tc_type
                | TCPartiallyAbstract { patc_type; _ } -> Some patc_type
                | TCAbstract { atc_default; _ } -> atc_default)
-             get_ancestor) )
+             ~get_ancestor) )
   in
   let consts_and_typeconst_structures =
     lin
@@ -302,19 +315,20 @@ let make_consts_cache class_name lin =
   let get_single_seq target =
     lin (SingleMember target) |> Sequence.map ~f:snd
   in
+  let ( = ) = Typing_defs.equal_class_const_kind in
   LSTable.make
     (lin AllMembers)
     ~get_single_seq
     ~is_canonical:(fun cc ->
-      String.equal cc.cc_origin class_name || not cc.cc_abstract)
+      String.equal cc.cc_origin class_name || cc.cc_abstract = CCConcrete)
     ~merge:
       begin
         fun ~earlier ~later ->
         if String.equal earlier.cc_origin class_name then
           earlier
-        else if not earlier.cc_abstract then
+        else if earlier.cc_abstract = CCConcrete then
           earlier
-        else if not later.cc_abstract then
+        else if later.cc_abstract = CCConcrete then
           later
         else
           earlier
@@ -448,7 +462,12 @@ let constructor_elt child_class_name (mro, cls, subst) =
   let elt =
     Option.map
       cls.sc_constructor
-      ~f:(DTT.shallow_method_to_class_elt child_class_name mro subst)
+      ~f:
+        (DTT.shallow_method_to_class_elt
+           child_class_name
+           cls.sc_module
+           mro
+           subst)
   in
   (elt, consistent)
 

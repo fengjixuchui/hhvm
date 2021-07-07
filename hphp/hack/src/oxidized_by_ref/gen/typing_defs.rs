@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<aab50a397c2ac841c77d8da4ffa924e0>>
+// @generated SignedSource<<04216bbf1b8affc9fd2a723cb2948af8>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -174,6 +174,8 @@ pub struct FunElt<'a> {
     pub deprecated: Option<&'a str>,
     #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub module: Option<&'a str>,
+    /// Top-level functions have limited visibilities
+    pub internal: bool,
     #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub type_: &'a Ty<'a>,
     #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
@@ -183,6 +185,29 @@ pub struct FunElt<'a> {
 }
 impl<'a> TrivialDrop for FunElt<'a> {}
 arena_deserializer::impl_deserialize_in_arena!(FunElt<'arena>);
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    EqModuloPos,
+    FromOcamlRepIn,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
+pub enum ClassConstKind {
+    CCAbstract(bool),
+    CCConcrete,
+}
+impl TrivialDrop for ClassConstKind {}
+arena_deserializer::impl_deserialize_in_arena!(ClassConstKind);
 
 #[derive(
     Clone,
@@ -201,7 +226,7 @@ arena_deserializer::impl_deserialize_in_arena!(FunElt<'arena>);
 )]
 pub struct ClassConst<'a> {
     pub synthesized: bool,
-    pub abstract_: bool,
+    pub abstract_: ClassConstKind,
     #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
     pub pos: &'a pos_or_decl::PosOrDecl<'a>,
     #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
@@ -306,88 +331,6 @@ pub struct Requirement<'a>(
 );
 impl<'a> TrivialDrop for Requirement<'a> {}
 arena_deserializer::impl_deserialize_in_arena!(Requirement<'arena>);
-
-#[derive(
-    Clone,
-    Debug,
-    Deserialize,
-    Eq,
-    EqModuloPos,
-    FromOcamlRepIn,
-    Hash,
-    NoPosHash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-    ToOcamlRep
-)]
-pub struct ClassType<'a> {
-    pub need_init: bool,
-    /// Whether the typechecker knows of all (non-interface) ancestors
-    /// and thus knows all accessible members of this class
-    /// This is not the case if one ancestor at least could not be found.
-    pub members_fully_known: bool,
-    pub abstract_: bool,
-    pub final_: bool,
-    pub const_: bool,
-    /// When a class is abstract (or in a trait) the initialization of
-    /// a protected member can be delayed
-    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
-    pub deferred_init_members: s_set::SSet<'a>,
-    pub kind: oxidized::ast_defs::ClassKind,
-    pub is_xhp: bool,
-    pub has_xhp_keyword: bool,
-    pub is_disposable: bool,
-    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
-    pub module: Option<&'a str>,
-    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
-    pub name: &'a str,
-    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
-    pub pos: &'a pos_or_decl::PosOrDecl<'a>,
-    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
-    pub tparams: &'a [&'a Tparam<'a>],
-    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
-    pub where_constraints: &'a [&'a WhereConstraint<'a>],
-    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
-    pub consts: s_map::SMap<'a, &'a ClassConst<'a>>,
-    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
-    pub typeconsts: s_map::SMap<'a, &'a TypeconstType<'a>>,
-    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
-    pub props: s_map::SMap<'a, &'a ClassElt<'a>>,
-    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
-    pub sprops: s_map::SMap<'a, &'a ClassElt<'a>>,
-    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
-    pub methods: s_map::SMap<'a, &'a ClassElt<'a>>,
-    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
-    pub smethods: s_map::SMap<'a, &'a ClassElt<'a>>,
-    /// the consistent_kind represents final constructor or __ConsistentConstruct
-    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
-    pub construct: (Option<&'a ClassElt<'a>>, ConsistentKind),
-    /// This includes all the classes, interfaces and traits this class is
-    /// using.
-    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
-    pub ancestors: s_map::SMap<'a, &'a Ty<'a>>,
-    /// Whether the class is coercible to dynamic
-    pub support_dynamic_type: bool,
-    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
-    pub req_ancestors: &'a [&'a Requirement<'a>],
-    /// the extends of req_ancestors
-    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
-    pub req_ancestors_extends: s_set::SSet<'a>,
-    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
-    pub extends: s_set::SSet<'a>,
-    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
-    pub enum_type: Option<&'a EnumType<'a>>,
-    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
-    pub sealed_whitelist: Option<s_set::SSet<'a>>,
-    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
-    pub xhp_enum_values: s_map::SMap<'a, &'a [ast_defs::XhpEnumValue<'a>]>,
-    #[serde(deserialize_with = "arena_deserializer::arena", borrow)]
-    pub decl_errors: Option<&'a errors::Errors<'a>>,
-}
-impl<'a> TrivialDrop for ClassType<'a> {}
-arena_deserializer::impl_deserialize_in_arena!(ClassType<'arena>);
 
 #[derive(
     Clone,

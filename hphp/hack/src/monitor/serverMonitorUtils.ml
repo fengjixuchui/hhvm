@@ -34,16 +34,6 @@ type watchman_mergebase = {
 }
 [@@deriving show]
 
-(* Informant-induced restart may specify the saved state
- * we should load from. *)
-type target_saved_state = {
-  saved_state_everstore_handle: string;
-  (* The global revision to which the above handle corresponds to. *)
-  target_global_rev: int;
-  watchman_mergebase: watchman_mergebase option;
-}
-[@@deriving show]
-
 let watchman_mergebase_to_string
     { mergebase_global_rev; files_changed; watchman_clock } =
   Printf.sprintf
@@ -58,7 +48,6 @@ module type Server_config = sig
   (* Start the server. Optionally takes in the exit code of the previously
    * running server that exited. *)
   val start_server :
-    ?target_saved_state:target_saved_state ->
     informant_managed:bool ->
     prior_exit_status:int option ->
     server_start_options ->
@@ -70,9 +59,6 @@ module type Server_config = sig
     ServerProcess.process_data -> float (* Kill signal time *) -> unit
 
   val wait_pid : ServerProcess.process_data -> int * Unix.process_status
-
-  (* Callback to run when server exits *)
-  val on_server_exit : monitor_config -> unit
 
   val is_saved_state_precomputed : server_start_options -> bool
 end

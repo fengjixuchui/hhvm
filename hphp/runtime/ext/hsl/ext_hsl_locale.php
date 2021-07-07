@@ -42,3 +42,8 @@ function newlocale_mask(int $mask, string $locale, Locale $base): Locale;
 function newlocale_category(int $category, string $locale, Locale $base): Locale;
 
 } // namespace _Locale
+
+namespace HH\Lib\Locale {
+  final class InvalidLocaleException extends \Exception {
+  }
+}

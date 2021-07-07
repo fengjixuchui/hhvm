@@ -29,16 +29,19 @@ let check_param : env -> Nast.fun_param -> unit =
       let ety_env = empty_expand_env in
       let (env, ty, _) = Typing_tdef.force_expand_typedef ~ety_env env ty in
       match get_node ty with
-      | Tprim (Tnull | Tarraykey | Tbool | Tint | Tfloat | Tstring | Tnum)
+      | Tprim (Tnull | Tarraykey | Tbool | Tint | Tfloat | Tstring | Tnum) -> ()
       | Tnonnull
       | Tany _
       | Terr
       | Tdynamic
       | Tneg _ ->
+        let (_ : Typing_env_types.env) =
+          Typing_local_ops.enforce_memoize_object pos env
+        in
         ()
       | Tprim (Tvoid | Tresource | Tnoreturn) -> error ty
       | Toption ty -> check_memoizable env ty
-      | Ttuple tyl -> List.iter tyl (check_memoizable env)
+      | Ttuple tyl -> List.iter tyl ~f:(check_memoizable env)
       (* Just accept all generic types for now. Stricter check_memoizables to come later. *)
       | Tgeneric _ ->
         (* FIXME fun fact:
@@ -57,7 +60,7 @@ let check_param : env -> Nast.fun_param -> unit =
        *)
       | Tunion tyl
       | Tintersection tyl ->
-        List.iter tyl (check_memoizable env)
+        List.iter tyl ~f:(check_memoizable env)
       | Tvarray ty
       | Tdarray (_, ty)
       | Tvec_or_dict (_, ty)
@@ -79,12 +82,22 @@ let check_param : env -> Nast.fun_param -> unit =
             env
             (LoclType ty)
             (LoclType container_type)
-            (Errors.unify_error_at pos)
+            ~on_error:(Errors.unify_error_at pos)
         in
         let (env, prop) =
           SubType.prop_to_env env props (Errors.unify_error_at pos)
         in
         let is_container = Typing_logic.is_valid prop in
+
+        let mixed = MakeType.mixed Reason.none in
+        let hackarray = MakeType.any_array Reason.none mixed mixed in
+        let is_hackarray = Typing_utils.is_sub_type env ty hackarray in
+        let env =
+          if not is_hackarray then
+            Typing_local_ops.enforce_memoize_object pos env
+          else
+            env
+        in
         let env = Env.set_tyvar_variance env container_type in
         let env = Typing_solver.close_tyvars_and_solve env in
         if is_container then

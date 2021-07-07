@@ -31,12 +31,18 @@ type tagged_elt = {
   elt: Typing_defs.class_elt;
 }
 
-let base_visibility origin_class_name = function
+let base_visibility origin_class_name module_name = function
   | Public -> Vpublic
   | Private -> Vprivate origin_class_name
   | Protected -> Vprotected origin_class_name
+  | Internal ->
+    begin
+      match module_name with
+      | Some m -> Vinternal m
+      | None -> failwith "internal outside of a module"
+    end
 
-let shallow_method_to_class_elt child_class mro subst meth : class_elt =
+let shallow_method_to_class_elt child_class mname mro subst meth : class_elt =
   let {
     sm_name = (pos, _);
     sm_type = ty;
@@ -46,7 +52,7 @@ let shallow_method_to_class_elt child_class mro subst meth : class_elt =
   } =
     meth
   in
-  let visibility = base_visibility mro.mro_name sm_visibility in
+  let visibility = base_visibility mro.mro_name mname sm_visibility in
   let ty =
     lazy
       begin
@@ -78,19 +84,19 @@ let shallow_method_to_class_elt child_class mro subst meth : class_elt =
       (* The readonliness of the method is on the type *);
   }
 
-let shallow_method_to_telt child_class mro subst meth : tagged_elt =
+let shallow_method_to_telt child_class mname mro subst meth : tagged_elt =
   {
     id = snd meth.sm_name;
     inherit_when_private = is_set mro_copy_private_members mro.mro_flags;
-    elt = shallow_method_to_class_elt child_class mro subst meth;
+    elt = shallow_method_to_class_elt child_class mname mro subst meth;
   }
 
-let shallow_prop_to_telt child_class mro subst prop : tagged_elt =
+let shallow_prop_to_telt child_class mname mro subst prop : tagged_elt =
   let { sp_xhp_attr = xhp_attr; sp_name; sp_type; sp_visibility; sp_flags = _ }
       =
     prop
   in
-  let visibility = base_visibility mro.mro_name sp_visibility in
+  let visibility = base_visibility mro.mro_name mname sp_visibility in
   let ty =
     lazy
       begin
@@ -134,13 +140,20 @@ let shallow_prop_to_telt child_class mro subst prop : tagged_elt =
   }
 
 let shallow_const_to_class_const child_class mro subst const =
-  let { scc_abstract = cc_abstract; scc_name; scc_type; scc_refs } = const in
+  let { scc_abstract; scc_name; scc_type; scc_refs } = const in
   let ty =
     let ty = scc_type in
     if String.equal child_class mro.mro_name then
       ty
     else
       Decl_instantiate.instantiate subst ty
+  in
+  let cc_abstract =
+    match scc_abstract with
+    | CCAbstract true
+      when not (is_set mro_passthrough_abstract_typeconst mro.mro_flags) ->
+      CCConcrete
+    | _ -> scc_abstract
   in
   ( snd scc_name,
     {
@@ -163,7 +176,7 @@ let classname_const : Typing_defs.pos_id -> string * Typing_defs.class_const =
   in
   ( SN.Members.mClass,
     {
-      cc_abstract = false;
+      cc_abstract = CCConcrete;
       cc_pos = pos;
       cc_synthesized = true;
       cc_type = classname_ty;
@@ -188,11 +201,12 @@ let typeconst_structure mro class_name stc =
     match stc.stc_kind with
     | TCAbstract { atc_default = Some _; _ }
       when not (is_set mro_passthrough_abstract_typeconst mro.mro_flags) ->
-      false
-    | TCAbstract _ -> true
+      CCConcrete
+    | TCAbstract { atc_default = default; _ } ->
+      CCAbstract (Option.is_some default)
     | TCPartiallyAbstract _
     | TCConcrete _ ->
-      false
+      CCConcrete
   in
   ( snd stc.stc_name,
     {

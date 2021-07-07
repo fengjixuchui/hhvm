@@ -66,7 +66,6 @@ std::string Option::AutoloadRoot;
 bool Option::GenerateTextHHBC = false;
 bool Option::GenerateHhasHHBC = false;
 bool Option::GenerateBinaryHHBC = false;
-std::string Option::RepoCentralPath;
 
 std::string Option::IdPrefix = "$$";
 
@@ -159,10 +158,6 @@ void Option::Load(const IniSetting::Map& ini, Hdf &config) {
 
   {
     // Repo
-    {
-      // Repo Central
-      Config::Bind(RepoCentralPath, ini, config, "Repo.Central.Path");
-    }
     Config::Bind(RuntimeOption::RepoDebugInfo,
                  ini, config, "Repo.DebugInfo",
                  RuntimeOption::RepoDebugInfo);
@@ -188,26 +183,9 @@ void Option::Load(const IniSetting::Map& ini, Hdf &config) {
                ini, config, "JitEnableRenameFunction",
                RuntimeOption::EvalJitEnableRenameFunction);
   Config::Bind(EnableShortTags, ini, config, "EnableShortTags", true);
-
-#define BIND_HAC_OPTION(Name, Def)                      \
-  Config::Bind(RuntimeOption::EvalHackArrCompat##Name,  \
-               ini, config, "HackArrCompat" #Name,      \
-               RuntimeOption::EvalHackArrCompat##Def);
-
-#define BIND_HAC_OPTION_SELF(Name)  BIND_HAC_OPTION(Name, Name)
-
-  BIND_HAC_OPTION_SELF(Notices)
-  BIND_HAC_OPTION(CheckCompare, Notices)
-  BIND_HAC_OPTION_SELF(SerializeNotices)
-  BIND_HAC_OPTION_SELF(CompactSerializeNotices)
-
-#undef BIND_HAC_OPTION_SELF
-#undef BIND_HAC_OPTION
-
-  Config::Bind(RuntimeOption::EvalHackArrDVArrs,
-               ini, config, "HackArrDVArrs",
-               RuntimeOption::EvalHackArrDVArrs);
-
+  Config::Bind(RuntimeOption::EvalHackArrCompatSerializeNotices,
+               ini, config, "HackArrCompatSerializeNotices",
+               RuntimeOption::EvalHackArrCompatSerializeNotices);
   Config::Bind(RuntimeOption::EvalForbidDynamicCallsToFunc,
                ini, config, "ForbidDynamicCallsToFunc",
                RuntimeOption::EvalForbidDynamicCallsToFunc);
@@ -273,9 +251,6 @@ void Option::Load(const IniSetting::Map& ini, Hdf &config) {
   Config::Bind(RuntimeOption::EvalNoticeOnCoerceForBitOp, ini, config,
                "NoticeOnCoerceForBitOp",
                RuntimeOption::EvalNoticeOnCoerceForBitOp);
-
-  RO::EvalArrayProvenance = false;
-  RO::EvalLogArrayProvenance = false;
 }
 
 void Option::Load() {

@@ -15,9 +15,9 @@ val get_message_pos : 'a message -> 'a
 
 val get_message_str : 'a message -> string
 
-type error = (Pos.t, Pos_or_decl.t) error_ [@@deriving eq]
+type error = (Pos.t, Pos_or_decl.t) error_ [@@deriving eq, show]
 
-type finalized_error = (Pos.absolute, Pos.absolute) error_
+type finalized_error = (Pos.absolute, Pos.absolute) error_ [@@deriving eq, show]
 
 type applied_fixme = Pos.t * int
 
@@ -58,6 +58,16 @@ type typing_error_callback =
 
 type error_from_reasons_callback =
   ?code:int -> (Pos_or_decl.t * string) list -> unit
+
+(** Type representing the errors for a single file. *)
+type per_file_errors
+
+(** The type of collections of errors *)
+type t [@@deriving eq]
+
+module ErrorSet : Caml.Set.S with type elt := error
+
+module FinalizedErrorSet : Caml.Set.S with type elt := finalized_error
 
 (** This will check that the first position of the given reasons is in the
     current decl and if yes use it as primary error position. If no,
@@ -161,9 +171,6 @@ val try_ : (unit -> 'a) -> (error -> 'a) -> 'a
 
 val try_with_error : (unit -> 'a) -> (unit -> 'a) -> 'a
 
-(* The type of collections of errors *)
-type t [@@deriving eq]
-
 (** Return the list of errors caused by the function passed as parameter
     along with its result. *)
 val do_ : (unit -> 'a) -> t * 'a
@@ -223,9 +230,26 @@ val get_error_list : t -> error list
 
 val get_sorted_error_list : t -> error list
 
+val as_map : t -> error list Relative_path.Map.t
+
 val from_error_list : error list -> t
 
+(** Default applied phase is Typing. *)
+val from_file_error_list : ?phase:phase -> (Relative_path.t * error) list -> t
+
+val per_file_error_count : per_file_errors -> int
+
+val errors_in_file : t -> Relative_path.t -> error list
+
+val get_file_errors : t -> Relative_path.t -> per_file_errors
+
 val iter_error_list : (error -> unit) -> t -> unit
+
+val fold_per_file :
+  t ->
+  init:'acc ->
+  f:(Relative_path.t -> per_file_errors -> 'acc -> 'acc) ->
+  'acc
 
 val fold_errors :
   ?phase:phase -> t -> init:'a -> f:(Relative_path.t -> error -> 'a -> 'a) -> 'a
@@ -233,7 +257,7 @@ val fold_errors :
 val fold_errors_in :
   ?phase:phase ->
   t ->
-  source:Relative_path.t ->
+  file:Relative_path.t ->
   init:'a ->
   f:(error -> 'a -> 'a) ->
   'a
@@ -669,6 +693,9 @@ val extend_non_abstract_record : string -> Pos.t -> Pos_or_decl.t -> unit
 
 val extend_sealed : Pos.t -> Pos_or_decl.t -> string -> string -> string -> unit
 
+val sealed_not_subtype :
+  string -> Pos.t -> Pos_or_decl.t -> string -> string -> string -> unit
+
 val trait_prop_const_class : Pos.t -> string -> unit
 
 val read_before_write : Pos.t * string -> unit
@@ -1020,6 +1047,14 @@ val visibility_extends :
   string ->
   Pos_or_decl.t ->
   Pos_or_decl.t ->
+  string ->
+  error_from_reasons_callback ->
+  unit
+
+val visibility_override_internal :
+  Pos_or_decl.t ->
+  Pos_or_decl.t ->
+  string ->
   string ->
   error_from_reasons_callback ->
   unit
@@ -1599,11 +1634,11 @@ val multiple_inherited_class_member_with_different_case :
   p2:Pos_or_decl.t ->
   unit
 
-val atom_invalid_parameter : Pos.t -> unit
+val via_label_invalid_parameter : Pos.t -> unit
 
-val atom_invalid_parameter_in_enum_class : Pos.t -> unit
+val via_label_invalid_parameter_in_enum_class : Pos.t -> unit
 
-val atom_invalid_generic : Pos.t -> string -> unit
+val via_label_invalid_generic : Pos.t -> string -> unit
 
 val enum_class_label_unknown : Pos.t -> string -> string -> unit
 
@@ -1724,8 +1759,12 @@ val readonly_invalid_as_mut : Pos.t -> unit
 val unresolved_type_variable_projection :
   Pos.t -> string -> proj_pos:Pos_or_decl.t -> unit
 
-val function_pointer_with_atom : Pos.t -> Pos_or_decl.t -> unit
+val function_pointer_with_via_label : Pos.t -> Pos_or_decl.t -> unit
 
 val reified_static_method_in_expr_tree : Pos.t -> unit
 
 val invalid_echo_argument_at : Pos.t -> error_from_reasons_callback
+
+val module_mismatch : Pos.t -> Pos_or_decl.t -> string option -> string -> unit
+
+val module_hint : def_pos:Pos_or_decl.t -> use_pos:Pos.t -> unit

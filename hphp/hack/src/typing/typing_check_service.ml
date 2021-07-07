@@ -141,14 +141,15 @@ type process_file_results = {
   deferred_decls: Deferred_decl.deferment list;
 }
 
-let process_file_remote_execution
-    (_dynamic_view_files : Relative_path.Set.t)
+let process_files_remote_execution
+    (re_env : ReEnv.t)
     (ctx : Provider_context.t)
     (errors : Errors.t)
-    (file : check_file_computation) : process_file_results =
-  let fn = file.path in
+    (files : check_file_computation list)
+    (recheck_id : string option) : process_file_results =
+  let fns = List.map files ~f:(fun file -> file.path) in
   let deps_mode = Provider_context.get_deps_mode ctx in
-  let errors' = Re.process_file fn deps_mode in
+  let errors' = Re.process_files re_env fns deps_mode recheck_id in
   { errors = Errors.merge errors' errors; deferred_decls = [] }
 
 let process_file
@@ -381,7 +382,7 @@ let process_files
     (progress : computation_progress)
     ~(memory_cap : int option)
     ~(longlived_workers : bool)
-    ~(remote_execution : bool)
+    ~(remote_execution : ReEnv.t option)
     ~(check_info : check_info) : typing_result * computation_progress =
   if not longlived_workers then SharedMem.invalidate_caches ();
   File_provider.local_changes_push_sharedmem_stack ();
@@ -421,6 +422,7 @@ let process_files
       else
         (false, tally, heap_mb)
     in
+
     match progress.remaining with
     | [] -> (errors, progress, tally, heap_mb, max_heap_mb)
     | _ when exit_now ->
@@ -435,10 +437,7 @@ let process_files
         match fn with
         | Check file ->
           let process_file () =
-            if remote_execution then
-              process_file_remote_execution dynamic_view_files ctx errors file
-            else
-              process_file dynamic_view_files ctx errors file
+            process_file dynamic_view_files ctx errors file
           in
           let result =
             if check_info.profile_log then (
@@ -489,9 +488,32 @@ let process_files
           Vfs.prefetch paths;
           (errors, [], ProcessFilesTally.incr_prefetches tally)
       in
+      let (fns, check_fns, errors) =
+        match remote_execution with
+        | Some re_env ->
+          let (check_fns, fns) =
+            List.partition_map fns ~f:(function
+                | Check file -> First file
+                | fn -> Second fn)
+          in
+          if List.is_empty check_fns then
+            (fns, [], errors)
+          else
+            let result =
+              process_files_remote_execution
+                re_env
+                ctx
+                errors
+                check_fns
+                check_info.recheck_id
+            in
+            let check_fns = List.map check_fns ~f:(fun f -> Check f) in
+            (fns, check_fns, result.errors)
+        | None -> (fns, [], errors)
+      in
       let progress =
         {
-          completed = fn :: progress.completed;
+          completed = (fn :: check_fns) @ progress.completed;
           remaining = fns;
           deferred = List.concat [deferred; progress.deferred];
         }
@@ -564,7 +586,7 @@ let load_and_process_files
     (progress : computation_progress)
     ~(memory_cap : int option)
     ~(longlived_workers : bool)
-    ~(remote_execution : bool)
+    ~(remote_execution : ReEnv.t option)
     ~(check_info : check_info) : typing_result * computation_progress =
   (* When the type-checking worker receives SIGUSR1, display a position which
      corresponds approximately with the function/expression being checked. *)
@@ -585,6 +607,29 @@ let load_and_process_files
 (* Let's go! That's where the action is *)
 (*****************************************************************************)
 
+let possibly_push_new_errors_to_lsp_client :
+    Provider_context.t ->
+    progress:Typing_service_types.computation_progress ->
+    Errors.t ->
+    Diagnostic_pusher.t option ->
+    Diagnostic_pusher.t option =
+ fun ctx ~progress new_errors diag ->
+  if TypecheckerOptions.stream_errors (Provider_context.get_tcopt ctx) then
+    diag
+    |> Option.map ~f:(fun diag ->
+           let rechecked =
+             progress.completed
+             |> List.filter_map ~f:(function
+                    | Check { path; deferred_count = _ } -> Some path
+                    | Declare _
+                    | Prefetch _ ->
+                      None)
+             |> Relative_path.Set.of_list
+           in
+           Diagnostic_pusher.push_new_errors diag ~rechecked new_errors)
+  else
+    diag
+
 (** Merge the results from multiple workers.
 
     We don't really care about which files are left unchecked since we use
@@ -592,21 +637,23 @@ let load_and_process_files
     empty list for the list of unchecked files. *)
 let merge
     ~(should_prefetch_deferred_files : bool)
+    (ctx : Provider_context.t)
     (delegate_state : Delegate.state ref)
     (files_to_process : file_computation BigList.t ref)
     (files_initial_count : int)
     (files_in_progress : file_computation Hash_set.t)
     (files_checked_count : int ref)
-    ((produced_by_job : typing_result), (progress : progress))
+    (diagnostic_pusher : Diagnostic_pusher.t option ref)
+    ( (produced_by_job : typing_result),
+      ({ kind = progress_kind; progress : computation_progress } : progress) )
     (acc : typing_result) : typing_result =
   let () =
-    match progress.kind with
+    match progress_kind with
     | Progress -> ()
     | DelegateProgress _ ->
       delegate_state :=
-        Delegate.merge !delegate_state produced_by_job.errors progress.progress
+        Delegate.merge !delegate_state produced_by_job.errors progress
   in
-  let progress = progress.progress in
 
   files_to_process := BigList.append progress.remaining !files_to_process;
 
@@ -670,6 +717,14 @@ let merge
     ~total_count:files_initial_count
     ~unit:"files"
     ~extra:delegate_progress;
+
+  diagnostic_pusher :=
+    possibly_push_new_errors_to_lsp_client
+      ctx
+      ~progress
+      produced_by_job.errors
+      !diagnostic_pusher;
+
   accumulate_job_output produced_by_job acc
 
 let next
@@ -677,8 +732,13 @@ let next
     (delegate_state : Delegate.state ref)
     (files_to_process : file_computation BigList.t ref)
     (files_in_progress : file_computation Hash_set.Poly.t)
-    (record : Measure.record) =
-  let max_size = Bucket.max_size () in
+    (record : Measure.record)
+    (remote_execution : ReEnv.t option) =
+  let max_size =
+    match remote_execution with
+    | Some _ -> 25000
+    | _ -> Bucket.max_size ()
+  in
   let num_workers =
     match workers with
     | Some w -> List.length w
@@ -712,7 +772,7 @@ let next
       type checking) logic applies. *)
     match delegate_job with
     | Some { current_bucket; remaining_jobs; job } ->
-      return_bucket_job (DelegateProgress job) current_bucket remaining_jobs
+      return_bucket_job (DelegateProgress job) ~current_bucket ~remaining_jobs
     | None ->
       (* WARNING: the following List.length is costly - for a full init, files_to_process starts
       out as the size of the entire repo, and we're traversing the entire list. *)
@@ -743,7 +803,8 @@ let next
         begin
           match num_workers with
           (* When num_workers is zero, the execution mode is delegate-only, so we give an empty bucket to MultiWorker for execution. *)
-          | 0 -> return_bucket_job Progress [] jobs
+          | 0 ->
+            return_bucket_job Progress ~current_bucket:[] ~remaining_jobs:jobs
           | _ ->
             let bucket_size =
               Bucket.calculate_bucket_size
@@ -754,7 +815,7 @@ let next
             let (current_bucket, remaining_jobs) =
               BigList.split_n jobs bucket_size
             in
-            return_bucket_job Progress current_bucket remaining_jobs
+            return_bucket_job Progress ~current_bucket ~remaining_jobs
         end)
 
 let on_cancelled
@@ -781,6 +842,7 @@ let on_cancelled
   `job` runs in each worker and does not have access to this mutable state.
  *)
 let process_in_parallel
+    ?diagnostic_pusher
     (ctx : Provider_context.t)
     (dynamic_view_files : Relative_path.Set.t)
     (workers : MultiWorker.worker list option)
@@ -790,9 +852,14 @@ let process_in_parallel
     ~(interrupt : 'a MultiWorker.interrupt_config)
     ~(memory_cap : int option)
     ~(longlived_workers : bool)
-    ~(remote_execution : bool)
+    ~(remote_execution : ReEnv.t option)
     ~(check_info : check_info) :
-    typing_result * Delegate.state * Telemetry.t * 'a * Relative_path.t list =
+    typing_result
+    * Delegate.state
+    * Telemetry.t
+    * _
+    * Relative_path.t list
+    * Diagnostic_pusher.t option =
   let record = Measure.create () in
   (* [record] is used by [next] *)
   let delegate_state = ref delegate_state in
@@ -800,6 +867,7 @@ let process_in_parallel
   let files_in_progress = Hash_set.Poly.create () in
   let files_processed_count = ref 0 in
   let files_initial_count = BigList.length fnl in
+  let diagnostic_pusher = ref diagnostic_pusher in
   let delegate_progress =
     Typing_service_delegate.get_progress !delegate_state
   in
@@ -811,7 +879,13 @@ let process_in_parallel
     ~extra:delegate_progress;
 
   let next =
-    next workers delegate_state files_to_process files_in_progress record
+    next
+      workers
+      delegate_state
+      files_to_process
+      files_in_progress
+      record
+      remote_execution
   in
   let should_prefetch_deferred_files =
     Vfs.is_vfs ()
@@ -843,11 +917,13 @@ let process_in_parallel
       ~merge:
         (merge
            ~should_prefetch_deferred_files
+           ctx
            delegate_state
            files_to_process
            files_initial_count
            files_in_progress
-           files_processed_count)
+           files_processed_count
+           diagnostic_pusher)
       ~next
       ~on_cancelled:(on_cancelled next files_to_process files_in_progress)
       ~interrupt
@@ -870,9 +946,46 @@ let process_in_parallel
     in
     List.concat (List.map cancelled_results ~f:paths_of)
   in
-  (typing_result, !delegate_state, telemetry, env, paths_of cancelled_results)
+  ( typing_result,
+    !delegate_state,
+    telemetry,
+    env,
+    paths_of cancelled_results,
+    !diagnostic_pusher )
 
-type ('a, 'b, 'c, 'd) job_result = 'a * 'b * 'c * 'd * Relative_path.t list
+let process_sequentially
+    ?diagnostic_pusher
+    ctx
+    fnl
+    dynamic_view_files
+    ~longlived_workers
+    ~remote_execution
+    ~check_info =
+  let progress =
+    { completed = []; remaining = BigList.as_list fnl; deferred = [] }
+  in
+  let (typing_result, progress) =
+    process_files
+      dynamic_view_files
+      ctx
+      (neutral ())
+      progress
+      ~memory_cap:None
+      ~longlived_workers
+      ~remote_execution
+      ~check_info
+  in
+  let diagnostic_pusher =
+    possibly_push_new_errors_to_lsp_client
+      ctx
+      ~progress
+      typing_result.errors
+      diagnostic_pusher
+  in
+  (typing_result, diagnostic_pusher)
+
+type ('a, 'b, 'c, 'd, 'e) job_result =
+  'a * 'b * 'c * 'd * 'e * Relative_path.t list
 
 module type Mocking_sig = sig
   val with_test_mocking :
@@ -880,9 +993,9 @@ module type Mocking_sig = sig
     file_computation BigList.t ->
     ((* ... before passing it to the real job executor... *)
      file_computation BigList.t ->
-    ('a, 'b, 'c, 'd) job_result) ->
+    ('a, 'b, 'c, 'd, 'e) job_result) ->
     (* ... which output we can also modify. *)
-    ('a, 'b, 'c, 'd) job_result
+    ('a, 'b, 'c, 'd, 'e) job_result
 end
 
 module NoMocking = struct
@@ -909,10 +1022,10 @@ module TestMocking = struct
     in
     (* Only cancel once to avoid infinite loops *)
     cancelled := Relative_path.Set.empty;
-    let (res, delegate_state, telemetry, env, cancelled) =
+    let (res, delegate_state, telemetry, env, diag, cancelled) =
       f (BigList.create fnl)
     in
-    (res, delegate_state, telemetry, env, mock_cancelled @ cancelled)
+    (res, delegate_state, telemetry, env, diag, mock_cancelled @ cancelled)
 end
 
 module Mocking =
@@ -936,6 +1049,7 @@ let should_process_sequentially
   | _ -> false
 
 let go_with_interrupt
+    ?(diagnostic_pusher : Diagnostic_pusher.t option)
     (ctx : Provider_context.t)
     (workers : MultiWorker.worker list option)
     (delegate_state : Delegate.state)
@@ -945,10 +1059,15 @@ let go_with_interrupt
     ~(interrupt : 'a MultiWorker.interrupt_config)
     ~(memory_cap : int option)
     ~(longlived_workers : bool)
-    ~(remote_execution : bool)
+    ~(remote_execution : ReEnv.t option)
     ~(check_info : check_info)
     ~(profiling : CgroupProfiler.Profiling.t) :
-    (Errors.t, Delegate.state, Telemetry.t, 'a) job_result =
+    ( Errors.t,
+      Delegate.state,
+      Telemetry.t,
+      _,
+      Diagnostic_pusher.t option )
+    job_result =
   let opts = Provider_context.get_tcopt ctx in
   let sample_rate = GlobalOptions.tco_typecheck_sample_rate opts in
   let fnl = BigList.create fnl in
@@ -975,19 +1094,20 @@ let go_with_interrupt
     BigList.map fnl ~f:(fun path -> Check { path; deferred_count = 0 })
   in
   Mocking.with_test_mocking fnl @@ fun fnl ->
-  let (typing_result, delegate_state, telemetry, env, cancelled_fnl) =
+  let ( typing_result,
+        delegate_state,
+        telemetry,
+        env,
+        cancelled_fnl,
+        diagnostic_pusher ) =
     if should_process_sequentially opts fnl then begin
       Hh_logger.log "Type checking service will process files sequentially";
-      let progress =
-        { completed = []; remaining = BigList.as_list fnl; deferred = [] }
-      in
-      let (typing_result, _progress) =
-        process_files
-          dynamic_view_files
+      let (typing_result, diagnostic_pusher) =
+        process_sequentially
+          ?diagnostic_pusher
           ctx
-          (neutral ())
-          progress
-          ~memory_cap:None
+          fnl
+          dynamic_view_files
           ~longlived_workers
           ~remote_execution
           ~check_info
@@ -996,11 +1116,17 @@ let go_with_interrupt
         delegate_state,
         telemetry,
         interrupt.MultiThreadedCall.env,
-        [] )
+        [],
+        diagnostic_pusher )
     end else begin
       Hh_logger.log "Type checking service will process files in parallel";
+      let num_workers =
+        match remote_execution with
+        | Some _ -> Some 1
+        | _ -> TypecheckerOptions.num_local_workers opts
+      in
       let workers =
-        match (workers, TypecheckerOptions.num_local_workers opts) with
+        match (workers, num_workers) with
         | (Some workers, Some num_local_workers) ->
           let (workers, _) = List.split_n workers num_local_workers in
           Some workers
@@ -1009,6 +1135,7 @@ let go_with_interrupt
           workers
       in
       process_in_parallel
+        ?diagnostic_pusher
         ctx
         dynamic_view_files
         workers
@@ -1058,7 +1185,12 @@ let go_with_interrupt
     |> Telemetry.object_ ~key:"profiling_info" ~value:typing_result.telemetry
     |> Telemetry.object_ ~key:"job_sizes" ~value:job_size_telemetry
   in
-  (typing_result.errors, delegate_state, telemetry, env, cancelled_fnl)
+  ( typing_result.errors,
+    delegate_state,
+    telemetry,
+    env,
+    diagnostic_pusher,
+    cancelled_fnl )
 
 let go
     ?(profiling : CgroupProfiler.Profiling.t = CgroupProfiler.Profiling.empty)
@@ -1070,11 +1202,12 @@ let go
     (fnl : Relative_path.t list)
     ~(memory_cap : int option)
     ~(longlived_workers : bool)
-    ~(remote_execution : bool)
+    ~(remote_execution : ReEnv.t option)
     ~(check_info : check_info) : Errors.t * Delegate.state * Telemetry.t =
   let interrupt = MultiThreadedCall.no_interrupt () in
-  let (res, delegate_state, telemetry, (), cancelled) =
+  let (res, delegate_state, telemetry, (), diagnostic_pusher, cancelled) =
     go_with_interrupt
+      ?diagnostic_pusher:None
       ctx
       workers
       delegate_state
@@ -1088,5 +1221,6 @@ let go
       ~check_info
       ~profiling
   in
+  assert (Option.is_none diagnostic_pusher);
   assert (List.is_empty cancelled);
   (res, delegate_state, telemetry)

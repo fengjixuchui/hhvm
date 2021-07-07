@@ -20,7 +20,6 @@
 #include "hphp/runtime/base/execution-context.h"
 #include "hphp/runtime/base/runtime-option.h"
 #include "hphp/runtime/base/request-info.h"
-#include "hphp/runtime/vm/repo.h"
 #include "hphp/runtime/vm/repo-global-data.h"
 #include "hphp/runtime/vm/vm-regs.h"
 #include "hphp/util/logger.h"
@@ -571,7 +570,7 @@ void raise_str_to_class_notice(const StringData* name) {
 
 void raise_clsmeth_compat_type_hint(
   const Func* func, const std::string& displayName,
-  folly::Optional<int> param) {
+  Optional<int> param) {
   if (param) {
     raise_notice(
       "class_meth Compat: Argument %d passed to %s()"

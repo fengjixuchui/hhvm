@@ -117,7 +117,8 @@ let add_const name const acc =
          In this case, Child still doesn't have a value for the FOO
          constant. *)
       acc
-    | (_, _, true, false) ->
+    | (_, _, CCAbstract false, CCAbstract true)
+    | (_, _, CCAbstract _, CCConcrete) ->
       (* Don't replace a concrete constant with an abstract constant
            found later in the MRO.*)
       acc
@@ -290,7 +291,7 @@ let mark_as_synthesized inh =
           { sc with sc_from_req_extends = true }
         end
         inh.ih_substs;
-    ih_cstr = (Option.map (fst inh.ih_cstr) mark_elt, snd inh.ih_cstr);
+    ih_cstr = (Option.map (fst inh.ih_cstr) ~f:mark_elt, snd inh.ih_cstr);
     ih_props = SMap.map mark_elt inh.ih_props;
     ih_sprops = SMap.map mark_elt inh.ih_sprops;
     ih_methods = SMap.map mark_elt inh.ih_methods;
@@ -313,7 +314,8 @@ let filter_privates class_type =
     | Vprivate _ when get_elt_lsb elt -> true
     | Vprivate _ -> false
     | Vpublic
-    | Vprotected _ ->
+    | Vprotected _
+    | Vinternal _ ->
       true
   in
   {
@@ -335,7 +337,8 @@ let chown_private_and_protected owner class_type =
     | Vprotected _ when not (get_elt_synthesized elt) ->
       { elt with elt_visibility = Vprotected owner }
     | Vpublic
-    | Vprotected _ ->
+    | Vprotected _
+    | Vinternal _ ->
       elt
   in
   {

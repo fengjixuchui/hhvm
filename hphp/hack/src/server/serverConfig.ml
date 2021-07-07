@@ -109,7 +109,7 @@ let make_sharedmem_config config options local_config =
 let config_list_regexp = Str.regexp "[, \t]+"
 
 let process_experimental sl =
-  match List.map sl String.lowercase with
+  match List.map sl ~f:String.lowercase with
   | ["false"] -> SSet.empty
   | ["true"] -> TypecheckerOptions.experimental_all
   | features -> List.fold_left features ~f:SSet.add ~init:SSet.empty
@@ -157,7 +157,7 @@ let maybe_relative_path fn =
   Path.make
     begin
       if Filename.is_relative fn then
-        Relative_path.(to_absolute (from_root fn))
+        Relative_path.(to_absolute (from_root ~suffix:fn))
       else
         fn
     end
@@ -279,7 +279,9 @@ let load ~silent config_filename options : t * ServerLocalConfig.t =
     bool_ "warn_on_non_opt_build" ~default:false config
   in
   let formatter_override =
-    Option.map (SMap.find_opt config "formatter_override") maybe_relative_path
+    Option.map
+      (SMap.find_opt config "formatter_override")
+      ~f:maybe_relative_path
   in
   let global_opts =
     GlobalOptions.make
@@ -317,6 +319,7 @@ let load ~silent config_filename options : t * ServerLocalConfig.t =
       ?tco_num_remote_workers:
         ServerLocalConfig.RemoteTypeCheck.(
           Some local_config.remote_type_check.num_workers)
+      ~tco_stream_errors:local_config.stream_errors
       ?so_remote_version_specifier:local_config.remote_version_specifier
       ?so_remote_worker_vfs_checkout_threshold:
         ServerLocalConfig.RemoteTypeCheck.(
@@ -435,7 +438,6 @@ let load ~silent config_filename options : t * ServerLocalConfig.t =
       ~tco_ifc_enabled:(ServerArgs.enable_ifc options)
       ?po_enable_enum_classes:(bool_opt "enable_enum_classes" config)
       ?po_enable_enum_supertyping:(bool_opt "enable_enum_supertyping" config)
-      ?po_hack_arr_dv_arrs:(bool_opt "hack_arr_dv_arrs" config)
       ?po_interpret_soft_types_as_like_types:
         (bool_opt "interpret_soft_types_as_like_types" config)
       ?tco_enable_strict_string_concat_interp:
@@ -453,6 +455,8 @@ let load ~silent config_filename options : t * ServerLocalConfig.t =
       ?tco_require_extends_implements_ancestors:
         (bool_opt "require_extends_implements_ancestors" config)
       ?tco_strict_value_equality:(bool_opt "strict_value_equality" config)
+      ?tco_enforce_sealed_subclasses:
+        (bool_opt "enable_sealed_subclasses" config)
       ()
   in
   Errors.allowed_fixme_codes_strict :=

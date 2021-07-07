@@ -59,6 +59,19 @@ const char* show(APCBespokeMode mode) {
 }
 
 template <typename Array>
+ArrayData* GetEmptyArray(bool legacy) {
+  if constexpr (std::is_same<Array, PackedArray>::value) {
+    return ArrayData::CreateVec(legacy);
+  }
+  if constexpr (std::is_same<Array, MixedArray>::value) {
+    return ArrayData::CreateDict(legacy);
+  }
+  if constexpr (std::is_same<Array, SetArray>::value) {
+    return ArrayData::CreateKeyset();
+  }
+}
+
+template <typename Array>
 tv_lval LvalAtIterPos(ArrayData* ad, ssize_t pos) {
   if constexpr (std::is_same<Array, PackedArray>::value) {
     return PackedArray::LvalUncheckedInt(ad, pos);
@@ -185,7 +198,10 @@ ArrayData* implAPCBespoke(APCBespokeEnv& env, ArrayData* ain,
   // If we are targeting a vanilla layout, tag the array as being sampled.
   auto const mue = MakeUncountedEnv { /*seen=*/nullptr };
   auto const make_or_reuse_vanilla_result = [&]() -> ArrayData* {
-    if (copy) return Array::MakeUncounted(copy, mue, hasApcTv);
+    if (copy) {
+      if (copy->empty()) return GetEmptyArray<Array>(copy->isLegacyArray());
+      return Array::MakeUncounted(copy, mue, hasApcTv);
+    }
     assertx(vin->isStatic() || vin->isUncounted());
     if (ain == vin) return nullptr;
     vin->persistentIncRef();
@@ -201,7 +217,10 @@ ArrayData* implAPCBespoke(APCBespokeEnv& env, ArrayData* ain,
   // we have to a) set the profile and b) avoid instrumenting creation ops.
   if (layout.logging()) {
     auto const vad = [&]{
-      if (copy) return Array::MakeUncounted(copy, mue, false);
+      if (copy) {
+        if (copy->empty()) return GetEmptyArray<Array>(copy->isLegacyArray());
+        return Array::MakeUncounted(copy, mue, false);
+      }
       assertx(vin->isStatic() || vin->isUncounted());
       vin->persistentIncRef();
       return vin;
@@ -367,6 +386,13 @@ ArrayData* readAPCBespoke(const APCTypedValue* tv) {
       DecRefUncountedArray(result);
       return expected;
     }
+    // Clean up after ourselves: treadmill the vanilla and logging arrays.
+    auto const lad = data->logging_result;
+    const_cast<APCTypedValue*>(tv)->setArrayData(result);
+    Treadmill::enqueue([vad, lad]{
+      DecRefUncountedArray(vad);
+      DecRefUncountedArray(lad);
+    });
     return result;
   }
 
@@ -391,8 +417,10 @@ void freeAPCBespoke(APCTypedValue* tv) {
   auto const data = reinterpret_cast<APCBespokeData*>(tv);
   if (auto const ad = data->array.load(std::memory_order_acquire)) {
     DecRefUncountedArray(ad);
+  } else {
+    DecRefUncountedArray(tv->getArrayData());
+    DecRefUncountedArray(data->logging_result);
   }
-  DecRefUncountedArray(data->logging_result);
   free(data);
 }
 

@@ -9,10 +9,7 @@
 open Hh_prelude
 include Cli_args
 
-type saved_state_target =
-  | Informant_induced_saved_state_target of
-      ServerMonitorUtils.target_saved_state
-  | Saved_state_target_info of saved_state_target_info
+type saved_state_target = Saved_state_target_info of saved_state_target_info
 [@@deriving show]
 
 (*****************************************************************************)
@@ -308,16 +305,6 @@ let parse_options () : options =
     Exit.exit Exit_status.Input_error
   | _ -> ());
   let root_path = Path.make !root in
-  (ai_mode :=
-     match !ai_mode with
-     | Some ai ->
-       (* ai may have json mode enabled internally, in which case,
-        * it should not be disabled by hack if --json was not used *)
-       if !json_mode then
-         Some (Ai_options.set_json_mode ai true)
-       else
-         Some ai
-     | None -> None);
   Wwwroot.assert_www_directory root_path;
   if Option.is_some !save && Option.is_some save_with_spec then (
     Printf.eprintf
@@ -469,9 +456,7 @@ let with_saved_state options = options.with_saved_state
 let is_using_precomputed_saved_state options =
   match with_saved_state options with
   | Some (Saved_state_target_info _) -> true
-  | Some (Informant_induced_saved_state_target _)
-  | None ->
-    false
+  | None -> false
 
 let allow_non_opt_build options = options.allow_non_opt_build
 
@@ -493,15 +478,6 @@ let set_max_procs options procs = { options with max_procs = Some procs }
 let set_no_load options is_no_load = { options with no_load = is_no_load }
 
 let set_config options config = { options with config }
-
-let set_saved_state_target options target =
-  match target with
-  | None -> options
-  | Some target ->
-    {
-      options with
-      with_saved_state = Some (Informant_induced_saved_state_target target);
-    }
 
 (****************************************************************************)
 (* Misc *)

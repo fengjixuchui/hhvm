@@ -627,11 +627,6 @@ and ('ex, 'fb, 'en, 'hi) expr_ =
       (** Label used for enum classes.
 
           enum_name#label_name or #label_name *)
-  | Any
-      (** Placeholder for expressions that aren't understood by parts of
-          the toolchain.
-
-          TODO: Remove. *)
   | Hole of ('ex, 'fb, 'en, 'hi) expr * 'hi * 'hi * hole_source
       (** Annotation used to record failure in subtyping or coercion of an
           expression and calls to [unsafe_cast] or [enforced_cast].
@@ -875,11 +870,23 @@ and ca_type =
   | CA_hint of hint
   | CA_enum of string list
 
+and ('ex, 'fb, 'en, 'hi) class_const_kind =
+  | CCAbstract of ('ex, 'fb, 'en, 'hi) expr option
+      (** CCAbstract represents the states
+       *    abstract const int X;
+       *    abstract const int Y = 4;
+       * The expr option is a default value
+       *)
+  | CCConcrete of ('ex, 'fb, 'en, 'hi) expr
+      (** CCConcrete represents
+       *    const int Z = 4;
+       * The expr is the value of the constant. It is not optional
+       *)
+
 and ('ex, 'fb, 'en, 'hi) class_const = {
   cc_type: hint option;
   cc_id: sid;
-  cc_expr: ('ex, 'fb, 'en, 'hi) expr option;
-      (** expr = None indicates an abstract const *)
+  cc_kind: ('ex, 'fb, 'en, 'hi) class_const_kind;
   cc_doc_comment: doc_comment option;
 }
 
@@ -980,6 +987,7 @@ and ('ex, 'fb, 'en, 'hi) typedef = {
   t_namespace: nsenv;
   t_span: pos;
   t_emit_id: emit_id option;
+  t_is_ctx: bool;
 }
 
 and ('ex, 'fb, 'en, 'hi) gconst = {

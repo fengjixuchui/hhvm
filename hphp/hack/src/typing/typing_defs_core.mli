@@ -15,6 +15,7 @@ type ce_visibility =
   | Vpublic
   | Vprivate of string
   | Vprotected of string
+  | Vinternal of string
 [@@deriving eq, show]
 
 (* Represents <<Policied()>> or <<InferFlows>> attribute *)
@@ -412,7 +413,7 @@ module Flags : sig
 
   val get_fp_ifc_external : 'a fun_param -> bool
 
-  val get_fp_is_atom : 'a fun_param -> bool
+  val get_fp_via_label : 'a fun_param -> bool
 
   val get_fp_readonly : 'a fun_param -> bool
 
@@ -433,7 +434,7 @@ module Flags : sig
     has_default:bool ->
     ifc_external:bool ->
     ifc_can_call:bool ->
-    is_atom:bool ->
+    via_label:bool ->
     readonly:bool ->
     Hh_prelude.Int.t
 

@@ -60,6 +60,8 @@ type t = {
   tco_remote_min_batch_size: int;
   (* Dictates the number of remote type checking workers *)
   tco_num_remote_workers: int;
+  tco_stream_errors: bool;
+      (** Whether to send errors to the IDE as soon as they are discovered. *)
   (* The version specifier that is used to identify the remote worker package version to install *)
   so_remote_version_specifier: string option;
   (* Above this threshold of files to check, the remote type checking worker will not use Eden *)
@@ -283,8 +285,6 @@ type t = {
   tco_ifc_enabled: string list;
   (* Enables the enum supertyping extension *)
   po_enable_enum_supertyping: bool;
-  (* Treat varray as vec, dict as dict, TODO varray_or_darray as vec_or_dict *)
-  po_hack_arr_dv_arrs: bool;
   (* <<__Soft>> T -> ~T *)
   po_interpret_soft_types_as_like_types: bool;
   (* Restricts string concatenation and interpolation to arraykeys *)
@@ -311,6 +311,8 @@ type t = {
   tco_require_extends_implements_ancestors: bool;
   (* Emit an error when "==" or "!=" is used to compare values that are incompatible types *)
   tco_strict_value_equality: bool;
+  (* All member of the __Sealed whitelist should be subclasses*)
+  tco_enforce_sealed_subclasses: bool;
 }
 [@@deriving eq, show]
 
@@ -336,6 +338,7 @@ val make :
   ?tco_remote_max_batch_size:int ->
   ?tco_remote_min_batch_size:int ->
   ?tco_num_remote_workers:int ->
+  ?tco_stream_errors:bool ->
   ?so_remote_version_specifier:string ->
   ?so_remote_worker_vfs_checkout_threshold:int ->
   ?so_naming_sqlite_path:string ->
@@ -424,7 +427,6 @@ val make :
   ?tco_use_direct_decl_parser:bool ->
   ?tco_ifc_enabled:string list ->
   ?po_enable_enum_supertyping:bool ->
-  ?po_hack_arr_dv_arrs:bool ->
   ?po_interpret_soft_types_as_like_types:bool ->
   ?tco_enable_strict_string_concat_interp:bool ->
   ?tco_ignore_unsafe_cast:bool ->
@@ -437,6 +439,7 @@ val make :
   ?tco_meth_caller_only_public_visibility:bool ->
   ?tco_require_extends_implements_ancestors:bool ->
   ?tco_strict_value_equality:bool ->
+  ?tco_enforce_sealed_subclasses:bool ->
   unit ->
   t
 
@@ -474,6 +477,8 @@ val tco_remote_min_batch_size : t -> int
 
 val tco_num_remote_workers : t -> int
 
+val tco_stream_errors : t -> bool
+
 val so_remote_version_specifier : t -> string option
 
 val so_remote_worker_vfs_checkout_threshold : t -> int
@@ -509,8 +514,6 @@ val tco_disallow_byref_dynamic_calls : t -> bool
 val tco_disallow_byref_calls : t -> bool
 
 val default : t
-
-val tco_experimental_isarray : string
 
 val tco_experimental_generics_arity : string
 
@@ -688,8 +691,6 @@ val tco_use_direct_decl_parser : t -> bool
 
 val po_enable_enum_supertyping : t -> bool
 
-val po_hack_arr_dv_arrs : t -> bool
-
 val po_interpret_soft_types_as_like_types : t -> bool
 
 val tco_enable_strict_string_concat_interp : t -> bool
@@ -719,3 +720,5 @@ val tco_meth_caller_only_public_visibility : t -> bool
 val tco_require_extends_implements_ancestors : t -> bool
 
 val tco_strict_value_equality : t -> bool
+
+val tco_enforce_sealed_subclasses : t -> bool

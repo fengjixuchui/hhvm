@@ -1,5 +1,5 @@
 <?hh
-<<file: __EnableUnstableFeatures('enum_atom')>>
+<<file: __EnableUnstableFeatures('enum_class_label')>>
 
 interface IBox {}
 class Box<T> implements IBox {
@@ -11,7 +11,7 @@ enum class E : IBox {
 class C {
     const type T = string;
 }
-function f<T>(<<__Atom>> HH\MemberOf<C::T, Box<T>> $elt) : T {
+function f<T>(<<__ViaLabel>> HH\MemberOf<C::T, Box<T>> $elt) : T {
   return $elt->data;
 }
 

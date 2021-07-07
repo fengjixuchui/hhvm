@@ -26,12 +26,12 @@ pub enum Ctx {
     Rx,
 
     // Policied hierarchy
-    PoliciedOfLocal,
-    PoliciedOfShallow,
     PoliciedOf,
     PoliciedLocal,
     PoliciedShallow,
     Policied,
+
+    Controlled,
 
     ReadGlobals,
     Globals,
@@ -50,13 +50,12 @@ impl fmt::Display for Ctx {
             Rx => write!(f, "{}", c::RX),
             WriteThisProps => write!(f, "{}", c::WRITE_THIS_PROPS),
             WriteProps => write!(f, "{}", c::WRITE_PROPS),
-            PoliciedOfLocal => write!(f, "{}", c::POLICIED_OF_LOCAL),
-            PoliciedOfShallow => write!(f, "{}", c::POLICIED_OF_SHALLOW),
             PoliciedOf => write!(f, "{}", c::POLICIED_OF),
             PoliciedLocal => write!(f, "{}", c::POLICIED_LOCAL),
             PoliciedShallow => write!(f, "{}", c::POLICIED_SHALLOW),
             Policied => write!(f, "{}", c::POLICIED),
             Pure => write!(f, "{}", c::PURE),
+            Controlled => write!(f, "{}", c::CONTROLLED),
             ReadGlobals => write!(f, "{}", c::READ_GLOBALS),
             Globals => write!(f, "{}", c::GLOBALS),
         }
@@ -66,7 +65,7 @@ impl fmt::Display for Ctx {
 #[derive(Debug)]
 pub struct HhasCtxConstant {
     pub name: String,
-    pub coeffects: Vec<Ctx>,
+    pub coeffects: (Vec<Ctx>, Vec<String>),
     pub is_abstract: bool,
 }
 
@@ -153,12 +152,13 @@ impl HhasCoeffects {
                 c::RX => Some(Ctx::Rx),
                 c::WRITE_THIS_PROPS => Some(Ctx::WriteThisProps),
                 c::WRITE_PROPS => Some(Ctx::WriteProps),
-                c::POLICIED_OF_LOCAL => Some(Ctx::PoliciedOfLocal),
-                c::POLICIED_OF_SHALLOW => Some(Ctx::PoliciedOfShallow),
                 c::POLICIED_OF => Some(Ctx::PoliciedOf),
                 c::POLICIED_LOCAL => Some(Ctx::PoliciedLocal),
                 c::POLICIED_SHALLOW => Some(Ctx::PoliciedShallow),
                 c::POLICIED => Some(Ctx::Policied),
+                c::CONTROLLED => Some(Ctx::Controlled),
+                c::GLOBALS => Some(Ctx::Globals),
+                c::READ_GLOBALS => Some(Ctx::ReadGlobals),
                 _ => None,
             },
             _ => None,
@@ -171,7 +171,6 @@ impl HhasCoeffects {
         for c in coeffects.iter() {
             result.push(match c {
                 RxLocal => RxShallow,
-                PoliciedOfLocal => PoliciedOfShallow,
                 PoliciedLocal => PoliciedShallow,
                 _ => *c,
             })
@@ -179,21 +178,30 @@ impl HhasCoeffects {
         result
     }
 
-    pub fn from_ctx_constant(hint: &Hint) -> Vec<Ctx> {
+    pub fn from_ctx_constant(hint: &Hint) -> (Vec<Ctx>, Vec<String>) {
+        let mut static_coeffects = vec![];
+        let mut unenforced_static_coeffects = vec![];
         let Hint(_, h) = hint;
         match &**h {
-            Hint_::Hintersection(hl) if hl.is_empty() => vec![Ctx::Pure],
+            Hint_::Hintersection(hl) if hl.is_empty() => static_coeffects.push(Ctx::Pure),
             Hint_::Hintersection(hl) => {
-                let mut result = vec![];
                 for h in hl {
-                    if let Some(c) = HhasCoeffects::from_type_static(h) {
-                        result.push(c);
+                    let Hint(_, h_inner) = h;
+                    match &**h_inner {
+                        Hint_::Happly(Id(_, id), _) => {
+                            if let Some(c) = HhasCoeffects::from_type_static(h) {
+                                static_coeffects.push(c)
+                            } else {
+                                unenforced_static_coeffects.push(strip_ns(id.as_str()).to_string());
+                            }
+                        }
+                        _ => {}
                     }
                 }
-                result
             }
-            _ => vec![],
+            _ => {}
         }
+        (static_coeffects, unenforced_static_coeffects)
     }
 
     pub fn from_ast<Ex, Fb, En, Hi>(

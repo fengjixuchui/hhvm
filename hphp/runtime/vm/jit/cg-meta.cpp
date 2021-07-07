@@ -102,13 +102,13 @@ void processInlineFrames(const CGMeta& cm) {
 
 }
 
-folly::Optional<IStack> inlineStackAt(CTCA addr) {
-  if (!addr) return folly::none;
+Optional<IStack> inlineStackAt(CTCA addr) {
+  if (!addr) return std::nullopt;
   auto off = stackAddrToOffset(addr);
   if (auto pos = s_inlineStacks.find(off)) {
     if (pos->frame != kInvalidFrameID) return *pos;
   }
-  return folly::none;
+  return std::nullopt;
 }
 
 IFrame getInlineFrame(IFrameID id) {
@@ -147,10 +147,10 @@ void eraseCatchTrace(CTCA addr) {
   }
 }
 
-folly::Optional<TCA> getCatchTrace(CTCA ip) {
+Optional<TCA> getCatchTrace(CTCA ip) {
   auto const found = s_catchTraceMap.find(tc::addrToOffset(ip));
   if (found && *found != kInvalidCatchTrace) return tc::offsetToAddr(*found);
-  return folly::none;
+  return std::nullopt;
 }
 
 Reason* getTrapReason(CTCA addr) {
@@ -264,7 +264,6 @@ void CGMeta::process_only(
     inProgressTailJumps.swap(*inProgressTailBranches);
   }
   assertx(inProgressTailJumps.empty());
-  reusedStubs.clear();
 }
 
 void CGMeta::clear() {
@@ -279,14 +278,13 @@ void CGMeta::clear() {
   literalAddrs.clear();
   veneers.clear();
   alignments.clear();
-  reusedStubs.clear();
   addressImmediates.clear();
   fallthru.reset();
   codePointers.clear();
   inProgressTailJumps.clear();
   bcMap.clear();
+  smashableBinds.clear();
   smashableCallData.clear();
-  smashableJumpData.clear();
 }
 
 bool CGMeta::empty() const {
@@ -302,14 +300,13 @@ bool CGMeta::empty() const {
     literalAddrs.empty() &&
     veneers.empty() &&
     alignments.empty() &&
-    reusedStubs.empty() &&
     addressImmediates.empty() &&
     !fallthru.has_value() &&
     codePointers.empty() &&
     inProgressTailJumps.empty() &&
     bcMap.empty() &&
-    smashableCallData.empty() &&
-    smashableJumpData.empty();
+    smashableBinds.empty() &&
+    smashableCallData.empty();
 }
 
 }}

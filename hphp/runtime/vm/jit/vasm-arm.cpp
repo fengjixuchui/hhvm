@@ -220,6 +220,7 @@ struct Vgen {
 
   static void emitVeneers(Venv& env);
   static void handleLiterals(Venv& env);
+  static void retargetBinds(Venv& env);
   static void patch(Venv& env);
 
   static void pad(CodeBlock& cb) {
@@ -335,6 +336,7 @@ struct Vgen {
   void emit(const jmp& i);
   void emit(const jmpi& i);
   void emit(const jmpr& i) { a->Br(X(i.target)); }
+  void emit(const ldbindretaddr& i);
   void emit(const lea& i);
   void emit(const leap& i);
   void emit(const leav& i);
@@ -419,6 +421,7 @@ struct Vgen {
   void emit(const xorqi& i);
 
   // arm intrinsics
+  void emit(const prefetch& /*i*/) { /* ignored */ }
   void emit(const fcvtzs& i) { a->Fcvtzs(X(i.d), D(i.s)); }
   void emit(const mrs& i) { a->Mrs(X(i.r), vixl::SystemRegister(i.s.l())); }
   void emit(const msr& i) { a->Msr(vixl::SystemRegister(i.s.l()), X(i.r)); }
@@ -459,11 +462,6 @@ static CodeBlock* getBlock(Venv& env, CodeAddress a) {
   return nullptr;
 }
 
-static CodeAddress toReal(Venv& env, CodeAddress a) {
-  CodeBlock* b = getBlock(env, a);
-  return (b == nullptr) ? a : b->toDestAddress(a);
-}
-
 void Vgen::emitVeneers(Venv& env) {
   auto& meta = env.meta;
   decltype(env.meta.veneers) notEmitted;
@@ -492,7 +490,7 @@ void Vgen::emitVeneers(Venv& env) {
     av.Br(rAsm);
 
     // Update the veneer source instruction to jump/call the veneer.
-    auto const realSource = toReal(env, veneer.source);
+    auto const realSource = env.text.toDestAddress(veneer.source);
     CodeBlock tmpBlock;
     tmpBlock.init(realSource, kInstructionSize, "emitVeneers");
     MacroAssembler at{tmpBlock};
@@ -547,8 +545,10 @@ void Vgen::emitVeneers(Venv& env) {
         for (auto& tj : meta.inProgressTailJumps) {
           if (tj.toSmash() == veneer.source) tj.adjust(appendix);
         }
-        for (auto& stub : env.stubs) {
-          if (stub.jcc == veneer.source) stub.jcc = appendix;
+        for (auto& bind : meta.smashableBinds) {
+          if (bind.smashable.toSmash() == veneer.source) {
+            bind.smashable.adjust(appendix);
+          }
         }
       }
     } else {
@@ -590,7 +590,7 @@ void Vgen::handleLiterals(Venv& env) {
 
     // Patch the LDR.
     auto const patchAddressActual =
-      Instruction::Cast(toReal(env, pl.patchAddress));
+      Instruction::Cast(env.text.toDestAddress(pl.patchAddress));
     assertx(patchAddressActual->IsLoadLiteral());
     patchAddressActual->SetImmPCOffsetTarget(
       Instruction::Cast(literalAddress),
@@ -617,6 +617,9 @@ void Vgen::handleLiterals(Venv& env) {
   env.meta.literalsToPool.swap(notEmitted);
 }
 
+void Vgen::retargetBinds(Venv& env) {
+}
+
 void Vgen::patch(Venv& env) {
   // Patch the 32 bit target of the LDR
   auto patch = [&env](TCA instr, TCA target) {
@@ -633,7 +636,7 @@ void Vgen::patch(Venv& env) {
   };
 
   for (auto const& p : env.jmps) {
-    auto addr = toReal(env, p.instr);
+    auto addr = env.text.toDestAddress(p.instr);
     auto const target = env.addrs[p.target];
     assertx(target);
     if (env.meta.smashableLocations.count(p.instr)) {
@@ -645,7 +648,7 @@ void Vgen::patch(Venv& env) {
     patch(addr, target);
   }
   for (auto const& p : env.jccs) {
-    auto addr = toReal(env, p.instr);
+    auto addr = env.text.toDestAddress(p.instr);
     auto const target = env.addrs[p.target];
     assertx(target);
     if (env.meta.smashableLocations.count(p.instr)) {
@@ -751,7 +754,7 @@ void Vgen::emit(const load& i) {
 
 void Vgen::emit(const store& i) {
   if (i.s.isGP()) {
-    if (i.s == rsp()) {
+    if (i.s == arm::rsp()) {
       a->Mov(rAsm, X(i.s));
       a->Str(rAsm, M(i.d));
     } else {
@@ -813,7 +816,7 @@ void Vgen::emit(const callfaststub& i) {
 void Vgen::emit(const phpret& i) {
   // prefer load-pair instruction
   if (!i.noframe) {
-    a->ldp(X(rvmfp()), X(rlr()), X(i.fp)[AROFF(m_sfp)]);
+    a->ldp(X(arm::rvmfp()), X(rlr()), X(i.fp)[AROFF(m_sfp)]);
   } else {
     a->Ldr(X(rlr()), X(i.fp)[AROFF(m_savedRip)]);
   }
@@ -1022,6 +1025,12 @@ void Vgen::emit(const jmpi& i) {
   }
 }
 
+void Vgen::emit(const ldbindretaddr& i) {
+  auto const addr = a->frontier();
+  emit(leap{reg::rip[(intptr_t)addr], i.d});
+  env.ldbindretaddrs.push_back({addr, i.target, i.spOff});
+}
+
 void Vgen::emit(const lea& i) {
   auto p = i.s;
   assertx(p.base.isValid());
@@ -1035,7 +1044,7 @@ void Vgen::emit(const lea& i) {
 
 void Vgen::emit(const leav& i) {
   auto const addr = a->frontier();
-  emit(leap{reg::rip[0xdeadbeef], i.d});
+  emit(leap{reg::rip[(intptr_t)addr], i.d});
   env.leas.push_back({addr, i.s});
 }
 
@@ -1532,6 +1541,7 @@ Y(addlm, addl, loadl, storel, i.s0, m)
 Y(addwm, addl, loadw, storew, Reg32(i.s0), m)
 Y(addqim, addqi, load, store, i.s0, m)
 Y(andbim, andbi, loadb, storeb, i.s, m)
+Y(subqim, subqi, load, store, i.s0, m)
 Y(orbim, orqi, loadb, storeb, i.s0, m)
 Y(orqim, orqi, load, store, i.s0, m)
 Y(orwim, orqi, loadw, storew, i.s0, m)
@@ -1686,7 +1696,7 @@ void lower(const VLS& e, jmpm& i, Vlabel b, size_t z) {
 void lower(const VLS& e, stublogue& /*i*/, Vlabel b, size_t z) {
   lower_impl(e.unit, b, z, [&] (Vout& v) {
     // Push both the LR and FP regardless of i.saveframe to align SP.
-    v << pushp{rlr(), rvmfp()};
+    v << pushp{rlr(), arm::rvmfp()};
   });
 }
 
@@ -1701,7 +1711,7 @@ void lower(const VLS& e, stubret& i, Vlabel b, size_t z) {
   lower_impl(e.unit, b, z, [&] (Vout& v) {
     // Pop LR and (optionally) FP.
     if (i.saveframe) {
-      v << popp{rvmfp(), rlr()};
+      v << popp{arm::rvmfp(), rlr()};
     } else {
       v << popp{PhysReg(rAsm), rlr()};
     }
@@ -1739,14 +1749,14 @@ void lower(const VLS& e, stubunwind& i, Vlabel b, size_t z) {
 void lower(const VLS& e, stubtophp& /*i*/, Vlabel b, size_t z) {
   lower_impl(e.unit, b, z, [&] (Vout& v) {
     // Pop the call frame
-    v << lea{rsp()[16], rsp()};
+    v << lea{arm::rsp()[16], arm::rsp()};
   });
 }
 
 void lower(const VLS& e, loadstubret& i, Vlabel b, size_t z) {
   lower_impl(e.unit, b, z, [&] (Vout& v) {
     // Load the LR to the destination.
-    v << load{rsp()[AROFF(m_savedRip)], i.d};
+    v << load{arm::rsp()[AROFF(m_savedRip)], i.d};
   });
 }
 

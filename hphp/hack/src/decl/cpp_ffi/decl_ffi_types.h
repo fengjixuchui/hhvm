@@ -5,19 +5,28 @@
  LICENSE file in the "hack" directory of this source tree.
 */
 
-struct decls;
+#pragma once
 
-struct bump;
+#include <cstdint>
+#include <cstddef>
 
-struct decl_parser_options;
+#include "hphp/hack/src/decl/cpp_ffi/decl_ffi_types_fwd.h"
+
+// These definitions must be kept in sync with the corresponding rust
+// definitions in 'decl_cpp_ffi.rs'.
+
+namespace HPHP { namespace hackc { namespace decl {
 
 struct bytes {
-    uint8_t const* data;
-    size_t len;
+    std::uint8_t const* data;
+    std::size_t len;
+    std::size_t cap;
 };
 
 struct decl_result {
-    size_t hash;
+    std::size_t hash;
     bytes serialized;
-    decls const* decls;
+    decls const* decl_list;
 };
+
+}}} // namespace HPHP::hackc::decl

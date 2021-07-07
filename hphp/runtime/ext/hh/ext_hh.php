@@ -569,7 +569,8 @@ namespace HH\ReifiedGenerics {
 namespace HH\Coeffects {
 
   /**
-   * Creates an unsafe way to call a function by providing defaults coeffects
+   * Creates an unsafe way to call a function by providing defaults coeffects.
+   * EXTREMELY UNSAFE. USE WITH CAUTION.
    */
   <<__Native>>
   function backdoor((function()[defaults]: Tout) $f)[]: mixed;
@@ -586,11 +587,11 @@ namespace HH\Coeffects {
 
 namespace __SystemLib {
 
-<<__Native, __IsFoldable, __Pure>>
+<<__Native, __IsFoldable>>
 function is_dynamically_callable_inst_method(
     string $class,
     string $method
-): bool;
+)[]: bool;
 
 <<__Native>>
 function reflection_class_get_name(

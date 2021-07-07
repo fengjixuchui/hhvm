@@ -11,11 +11,11 @@ open Hh_prelude
 open Reordered_argument_collections
 open String_utils
 
-type error_code = int [@@deriving eq]
+type error_code = int [@@deriving eq, ord, show]
 
 (** We use `Pos.t message` and `Pos_or_decl.t message` on the server
     and convert to `Pos.absolute message` before sending it to the client *)
-type 'a message = 'a * string [@@deriving eq, ord]
+type 'a message = 'a * string [@@deriving eq, ord, show]
 
 let get_message_pos (msg : 'a message) = fst msg
 
@@ -102,8 +102,8 @@ let files_t_merge ~f x y =
       in
       Relative_path.Map.add
         acc
-        k
-        (PhaseMap.merge x y ~f:(fun phase x y -> f phase k x y)))
+        ~key:k
+        ~data:(PhaseMap.merge x y ~f:(fun phase x y -> f phase k x y)))
 
 let files_t_to_list x =
   files_t_fold x ~f:(fun _ _ x acc -> List.rev_append x acc) ~init:[]
@@ -147,15 +147,30 @@ type ('prim_pos, 'pos) error_ = {
   claim: 'prim_pos message;
   reasons: 'pos message list;
 }
-[@@deriving eq]
+[@@deriving eq, ord, show]
 
 type finalized_error = (Pos.absolute, Pos.absolute) error_
+[@@deriving eq, ord, show]
 
-type error = (Pos.t, Pos_or_decl.t) error_ [@@deriving eq]
+type error = (Pos.t, Pos_or_decl.t) error_ [@@deriving eq, ord, show]
 
 type applied_fixme = Pos.t * int [@@deriving eq]
 
+type per_file_errors = error file_t
+
 type t = error files_t * applied_fixme files_t [@@deriving eq]
+
+module Error = struct
+  type t = error [@@deriving ord]
+end
+
+module ErrorSet = Caml.Set.Make (Error)
+
+module FinalizedError = struct
+  type t = finalized_error [@@deriving ord]
+end
+
+module FinalizedErrorSet = Caml.Set.Make (FinalizedError)
 
 let applied_fixmes : applied_fixme files_t ref = ref Relative_path.Map.empty
 
@@ -386,8 +401,12 @@ let set_current_list file_t_map new_list =
   file_t_map :=
     Relative_path.Map.add
       !file_t_map
-      current_file
-      (PhaseMap.add (get_current_file_t !file_t_map) current_phase new_list)
+      ~key:current_file
+      ~data:
+        (PhaseMap.add
+           (get_current_file_t !file_t_map)
+           ~key:current_phase
+           ~data:new_list)
 
 let do_with_context path phase f = run_in_context path phase (fun () -> do_ f)
 
@@ -421,7 +440,7 @@ let to_absolute : error -> finalized_error =
  fun { code; claim; reasons } ->
   let claim = (fst claim |> Pos.to_absolute, snd claim) in
   let reasons =
-    List.map reasons (fun (p, s) ->
+    List.map reasons ~f:(fun (p, s) ->
         (p |> Pos_or_decl.unsafe_to_raw_pos |> Pos.to_absolute, s))
   in
   { code; claim; reasons }
@@ -526,7 +545,7 @@ let to_string ({ code; claim; reasons } : finalized_error) : string =
         error_code
         reason_msg
     end;
-  List.iter reasons (fun (p, w) ->
+  List.iter reasons ~f:(fun (p, w) ->
       let msg = Printf.sprintf "  %s\n  %s\n" (Pos.string p) w in
       Buffer.add_string buf msg);
   Buffer.contents buf
@@ -797,7 +816,7 @@ and incremental_update :
     in
     match new_phase_map with
     | None -> Relative_path.Map.remove acc path
-    | Some x -> Relative_path.Map.add acc path x
+    | Some x -> Relative_path.Map.add acc ~key:path ~data:x
   in
   (* Replace old errors with new *)
   let res =
@@ -875,6 +894,34 @@ and get_applied_fixmes (_err, fixmes) = files_t_to_list fixmes
 
 and from_error_list err = (list_to_files_t err, Relative_path.Map.empty)
 
+let from_file_error_list : ?phase:phase -> (Relative_path.t * error) list -> t =
+ fun ?(phase = Typing) errors ->
+  let errors =
+    List.fold
+      errors
+      ~init:Relative_path.Map.empty
+      ~f:(fun errors (file, error) ->
+        let errors_for_file =
+          Relative_path.Map.find_opt errors file
+          |> Option.value ~default:PhaseMap.empty
+        in
+        let errors_for_phase =
+          PhaseMap.find_opt errors_for_file phase |> Option.value ~default:[]
+        in
+        let errors_for_phase = error :: errors_for_phase in
+        let errors_for_file =
+          PhaseMap.add errors_for_file ~key:phase ~data:errors_for_phase
+        in
+        Relative_path.Map.add errors ~key:file ~data:errors_for_file)
+  in
+  (errors, Relative_path.Map.empty)
+
+let as_map : t -> error list Relative_path.Map.t =
+ fun (errors, _fixmes) ->
+  Relative_path.Map.map
+    errors
+    ~f:(PhaseMap.fold ~init:[] ~f:(fun _ -> List.append))
+
 let add_error_assert_primary_pos_in_current_decl :
     current_decl_and_file:Pos_or_decl.ctx ->
     error_code ->
@@ -938,6 +985,20 @@ let apply_callback_to_errors : t -> error_from_reasons_callback -> unit =
 (* Accessors. (All methods delegated to the parameterized module.) *)
 (*****************************************************************************)
 
+let errors_in_file : t -> Relative_path.t -> _ =
+ fun (errors, _) file ->
+  Relative_path.Map.find_opt errors file
+  |> Option.value ~default:PhaseMap.empty
+  |> PhaseMap.fold ~init:[] ~f:(fun _phase errors acc -> errors @ acc)
+
+let per_file_error_count : per_file_errors -> int =
+  PhaseMap.fold ~init:0 ~f:(fun _phase errors count ->
+      List.length errors + count)
+
+let get_file_errors : t -> Relative_path.t -> per_file_errors =
+ fun (errors, _) file ->
+  Relative_path.Map.find_opt errors file |> Option.value ~default:PhaseMap.empty
+
 let iter_error_list f err = List.iter ~f (get_sorted_error_list err)
 
 let fold_errors ?phase err ~init ~f =
@@ -951,13 +1012,20 @@ let fold_errors ?phase err ~init ~f =
         | None -> acc
         | Some errors -> List.fold_right errors ~init:acc ~f:(f source))
 
-let fold_errors_in ?phase err ~source ~init ~f =
-  Relative_path.Map.find_opt (fst err) source
+let fold_errors_in ?phase err ~file ~init ~f =
+  Relative_path.Map.find_opt (fst err) file
   |> Option.value ~default:PhaseMap.empty
   |> PhaseMap.fold ~init ~f:(fun p errors acc ->
          match phase with
          | Some x when not (equal_phase x p) -> acc
          | _ -> List.fold_right errors ~init:acc ~f)
+
+let fold_per_file :
+    t ->
+    init:'acc ->
+    f:(Relative_path.t -> per_file_errors -> 'acc -> 'acc) ->
+    'acc =
+ (fun (errors, _fixmes) -> Relative_path.Map.fold errors)
 
 let get_failed_files err phase =
   files_t_fold (fst err) ~init:Relative_path.Set.empty ~f:(fun source p _ acc ->
@@ -2217,6 +2285,17 @@ let visibility_extends
   in
   on_error ~code:(Typing.err_code Typing.VisibilityExtends) [msg1; msg2]
 
+let visibility_override_internal
+    pos parent_pos m parent_m (on_error : error_from_reasons_callback) =
+  let msg1 =
+    (pos, Printf.sprintf "Cannot override this member in module `%s`" m)
+  in
+  let msg2 =
+    ( parent_pos,
+      Printf.sprintf "This member is internal to module `%s`" parent_m )
+  in
+  on_error ~code:(Typing.err_code Typing.ModuleError) [msg1; msg2]
+
 let member_not_implemented member_name parent_pos pos defn_pos =
   let msg1 =
     ( pos,
@@ -2308,7 +2387,7 @@ let abstract_tconst_not_allowed
     ]
 
 let add_with_trail code claim reasons trail =
-  add_list code claim (reasons @ List.map trail typedef_trail_entry)
+  add_list code claim (reasons @ List.map trail ~f:typedef_trail_entry)
 
 let enum_constant_type_bad pos ty_pos ty trail =
   add_with_trail
@@ -3223,6 +3302,24 @@ let extend_sealed child_pos parent_pos parent_name parent_kind verb =
       ^ " "
       ^ Markdown_lite.md_codify name )
     [(parent_pos, "Declaration is here")]
+
+let sealed_not_subtype
+    verb parent_pos child_pos parent_name child_name child_kind =
+  let parent_name = strip_ns parent_name in
+  let child_name = strip_ns child_name in
+  add_list
+    (Typing.err_code Typing.SealedNotSubtype)
+    ( parent_pos,
+      child_kind
+      ^ " "
+      ^ Markdown_lite.md_codify child_name
+      ^ " in sealed whitelist for "
+      ^ Markdown_lite.md_codify parent_name
+      ^ ", but does not "
+      ^ verb
+      ^ " "
+      ^ Markdown_lite.md_codify parent_name )
+    [(child_pos, "Definition is here")]
 
 let trait_prop_const_class pos x =
   add
@@ -4270,8 +4367,8 @@ let generics_not_allowed p =
 
 let trivial_strict_eq p b left right left_trail right_trail =
   let msg = "This expression is always " ^ b in
-  let left_trail = List.map left_trail typedef_trail_entry in
-  let right_trail = List.map right_trail typedef_trail_entry in
+  let left_trail = List.map left_trail ~f:typedef_trail_entry in
+  let right_trail = List.map right_trail ~f:typedef_trail_entry in
   add_list
     (Typing.err_code Typing.TrivialStrictEq)
     (p, msg)
@@ -4420,14 +4517,14 @@ let local_variable_modified_and_used pos_modified pos_used_l =
     (Typing.err_code Typing.LocalVariableModifedAndUsed)
     ( pos_modified,
       "Unsequenced modification and access to local variable. Modified here" )
-    (List.map pos_used_l used_msg)
+    (List.map pos_used_l ~f:used_msg)
 
 let local_variable_modified_twice pos_modified pos_modified_l =
   let modified_msg p = (Pos_or_decl.of_raw_pos p, "And also modified here") in
   add_list
     (Typing.err_code Typing.LocalVariableModifedTwice)
     (pos_modified, "Unsequenced modifications to local variable. Modified here")
-    (List.map pos_modified_l modified_msg)
+    (List.map pos_modified_l ~f:modified_msg)
 
 let assign_during_case p =
   add
@@ -4525,7 +4622,7 @@ let ambiguous_lambda pos uses =
     (Typing.err_code Typing.AmbiguousLambda)
     (pos, msg1)
     ( (Pos_or_decl.of_raw_pos pos, msg2)
-    :: List.map uses (fun (pos, ty) ->
+    :: List.map uses ~f:(fun (pos, ty) ->
            (pos, "This use has type " ^ Markdown_lite.md_codify ty)) )
 
 let wrong_expression_kind_attribute
@@ -4803,7 +4900,7 @@ let duplicate_interface pos name others =
       Printf.sprintf
         "Interface %s is used more than once in this declaration."
         (strip_ns name |> Markdown_lite.md_codify) )
-    (List.map others (fun pos -> (pos, "Here is another occurrence")))
+    (List.map others ~f:(fun pos -> (pos, "Here is another occurrence")))
 
 let hk_var_description because_nested var_name =
   if because_nested then
@@ -5018,7 +5115,7 @@ let reinheriting_classish_const
       ^ " cannot re-inherit constant "
       ^ const_name
       ^ " from "
-      ^ src_classish_name )
+      ^ strip_ns src_classish_name )
     [
       ( Pos_or_decl.of_raw_pos dest_classish_pos,
         "because it already inherited it via " ^ strip_ns existing_const_origin
@@ -5223,36 +5320,36 @@ let multiple_inherited_class_member_with_different_case
   in
   add_list (Typing.err_code Typing.InheritedMethodCaseDiffers) claim reasons
 
-let atom_invalid_parameter pos =
+let via_label_invalid_parameter pos =
   add_list
-    (Typing.err_code Typing.AtomInvalidParameter)
+    (Typing.err_code Typing.ViaLabelInvalidParameter)
     ( pos,
       "Attribute "
-      ^ Naming_special_names.UserAttributes.uaAtom
+      ^ Naming_special_names.UserAttributes.uaViaLabel
       ^ " is only allowed on "
       ^ Naming_special_names.Classes.cMemberOf )
     []
 
-let atom_invalid_parameter_in_enum_class pos =
+let via_label_invalid_parameter_in_enum_class pos =
   add_list
-    (Typing.err_code Typing.AtomInvalidParameter)
+    (Typing.err_code Typing.ViaLabelInvalidParameter)
     ( pos,
       "When using "
-      ^ Naming_special_names.UserAttributes.uaAtom
+      ^ Naming_special_names.UserAttributes.uaViaLabel
       ^ ", only type parameters bounded by enum classes and "
       ^ "enum classes are allowed as the first parameters of "
       ^ Naming_special_names.Classes.cMemberOf )
     []
 
-let atom_invalid_generic pos name =
+let via_label_invalid_generic pos name =
   add_list
-    (Typing.err_code Typing.AtomInvalidParameter)
+    (Typing.err_code Typing.ViaLabelInvalidParameter)
     ( pos,
       "The type "
       ^ name
       ^ " must be a type constant or a reified generic "
       ^ "in order to be used with "
-      ^ Naming_special_names.UserAttributes.uaAtom )
+      ^ Naming_special_names.UserAttributes.uaViaLabel )
     []
 
 let enum_class_label_unknown pos label_name class_name =
@@ -5659,11 +5756,15 @@ let unresolved_type_variable_projection pos tname ~proj_pos =
         "Disambiguate the types using explicit type annotations here." );
     ]
 
-let function_pointer_with_atom pos fpos =
+let function_pointer_with_via_label pos fpos =
+  let via_label = Naming_special_names.UserAttributes.uaViaLabel in
   add_list
-    (Typing.err_code Typing.FunctionPointerWithAtom)
-    (pos, "Function pointer on functions/methods using __Atom is not supported.")
-    [(fpos, "__Atom is used here.")]
+    (Typing.err_code Typing.FunctionPointerWithViaLabel)
+    ( pos,
+      "Function pointer on functions/methods using "
+      ^ via_label
+      ^ " is not supported." )
+    [(fpos, via_label ^ " is used here.")]
 
 let reified_static_method_in_expr_tree pos =
   add
@@ -5684,6 +5785,24 @@ let invalid_echo_argument_at pos ?code reasons =
     (pos, msg)
     reasons
 
+let module_mismatch pos m2_pos m1 m2 =
+  add_list
+    (Typing.err_code Typing.ModuleError)
+    ( pos,
+      Printf.sprintf
+        "Cannot access an internal element from module `%s` %s"
+        m2
+        (match m1 with
+        | Some m -> Printf.sprintf "in module `%s`" m
+        | None -> "outside of a module") )
+    [(m2_pos, Printf.sprintf "This is from module `%s`" m2)]
+
+let module_hint ~def_pos ~use_pos =
+  add_list
+    (Typing.err_code Typing.ModuleHintError)
+    (use_pos, "You cannot use this type in a public declaration.")
+    [(def_pos, "It is declared as `internal` here")]
+
 (*****************************************************************************)
 (* Printing *)
 (*****************************************************************************)
@@ -5691,7 +5810,7 @@ let invalid_echo_argument_at pos ?code reasons =
 let to_json (error : finalized_error) =
   let (error_code, msgl) = (get_code error, to_list error) in
   let elts =
-    List.map msgl (fun (p, w) ->
+    List.map msgl ~f:(fun (p, w) ->
         let (line, scol, ecol) = Pos.info_pos p in
         Hh_json.JSON_Object
           [

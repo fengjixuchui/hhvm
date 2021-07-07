@@ -1,6 +1,7 @@
 [("\\a2",
   (Shallow_decl_defs.Fun
      { Typing_defs.fe_deprecated = None; fe_module = None;
+       fe_internal = false;
        fe_type =
        (Rwitness_from_decl ([3:10-12]),
         (Tfun
@@ -11,8 +12,10 @@
              { et_enforced = Typing_defs_core.Unenforced;
                et_type =
                (Rhint ([3:16-35]),
-                (Tdarray ((Rhint ([3:23-26]), (Tprim Tint)),
-                   (Rhint ([3:28-34]), (Tprim Tstring)))))
+                (Tapply (([3:16-22], "\\HH\\dict"),
+                   [(Rhint ([3:23-26]), (Tprim Tint));
+                     (Rhint ([3:28-34]), (Tprim Tstring))]
+                   )))
                };
              ft_flags =
              (make_ft_flags FSync ~return_disposable:false
@@ -23,6 +26,7 @@
   ("\\v0",
    (Shallow_decl_defs.Fun
       { Typing_defs.fe_deprecated = None; fe_module = None;
+        fe_internal = false;
         fe_type =
         (Rwitness_from_decl ([7:10-12]),
          (Tfun
@@ -32,7 +36,10 @@
               ft_ret =
               { et_enforced = Typing_defs_core.Unenforced;
                 et_type =
-                (Rhint ([7:16-22]), (Tvarray (Rhint ([7:16-22]), Tany))) };
+                (Rhint ([7:16-22]),
+                 (Tapply (([7:16-22], "\\HH\\vec"),
+                    [(Rhint ([7:16-22]), Tany)])))
+                };
               ft_flags =
               (make_ft_flags FSync ~return_disposable:false
                 ~returns_readonly:false ~readonly_this:false);
@@ -42,6 +49,7 @@
   ("\\v1",
    (Shallow_decl_defs.Fun
       { Typing_defs.fe_deprecated = None; fe_module = None;
+        fe_internal = false;
         fe_type =
         (Rwitness_from_decl ([11:10-12]),
          (Tfun
@@ -52,7 +60,8 @@
               { et_enforced = Typing_defs_core.Unenforced;
                 et_type =
                 (Rhint ([11:16-27]),
-                 (Tvarray (Rhint ([11:23-26]), (Tprim Tint))))
+                 (Tapply (([11:16-22], "\\HH\\vec"),
+                    [(Rhint ([11:23-26]), (Tprim Tint))])))
                 };
               ft_flags =
               (make_ft_flags FSync ~return_disposable:false
@@ -63,6 +72,7 @@
   ("\\d0",
    (Shallow_decl_defs.Fun
       { Typing_defs.fe_deprecated = None; fe_module = None;
+        fe_internal = false;
         fe_type =
         (Rwitness_from_decl ([15:10-12]),
          (Tfun
@@ -73,8 +83,9 @@
               { et_enforced = Typing_defs_core.Unenforced;
                 et_type =
                 (Rhint ([15:16-22]),
-                 (Tdarray ((Rhint ([15:16-22]), Tany),
-                    (Rhint ([15:16-22]), Tany))))
+                 (Tapply (([15:16-22], "\\HH\\dict"),
+                    [(Rhint ([15:16-22]), Tany); (Rhint ([15:16-22]), Tany)]
+                    )))
                 };
               ft_flags =
               (make_ft_flags FSync ~return_disposable:false
@@ -85,6 +96,7 @@
   ("\\d2",
    (Shallow_decl_defs.Fun
       { Typing_defs.fe_deprecated = None; fe_module = None;
+        fe_internal = false;
         fe_type =
         (Rwitness_from_decl ([19:10-12]),
          (Tfun
@@ -95,8 +107,10 @@
               { et_enforced = Typing_defs_core.Unenforced;
                 et_type =
                 (Rhint ([19:16-35]),
-                 (Tdarray ((Rhint ([19:23-26]), (Tprim Tint)),
-                    (Rhint ([19:28-34]), (Tprim Tstring)))))
+                 (Tapply (([19:16-22], "\\HH\\dict"),
+                    [(Rhint ([19:23-26]), (Tprim Tint));
+                      (Rhint ([19:28-34]), (Tprim Tstring))]
+                    )))
                 };
               ft_flags =
               (make_ft_flags FSync ~return_disposable:false
@@ -107,6 +121,7 @@
   ("\\vd0",
    (Shallow_decl_defs.Fun
       { Typing_defs.fe_deprecated = None; fe_module = None;
+        fe_internal = false;
         fe_type =
         (Rwitness_from_decl ([23:10-13]),
          (Tfun
@@ -117,8 +132,8 @@
               { et_enforced = Typing_defs_core.Unenforced;
                 et_type =
                 (Rhint ([23:17-33]),
-                 (Tvarray_or_darray
-                    (Rvarray_or_darray_key ([23:17-33]), (Tprim Tarraykey)),
+                 (Tvec_or_dict
+                    (Rvec_or_dict_key ([23:17-33]), (Tprim Tarraykey)),
                     (Rhint ([23:17-33]), Tany)))
                 };
               ft_flags =
@@ -130,6 +145,7 @@
   ("\\vd1",
    (Shallow_decl_defs.Fun
       { Typing_defs.fe_deprecated = None; fe_module = None;
+        fe_internal = false;
         fe_type =
         (Rwitness_from_decl ([27:10-13]),
          (Tfun
@@ -140,8 +156,8 @@
               { et_enforced = Typing_defs_core.Unenforced;
                 et_type =
                 (Rhint ([27:17-38]),
-                 (Tvarray_or_darray
-                    (Rvarray_or_darray_key ([27:17-38]), (Tprim Tarraykey)),
+                 (Tvec_or_dict
+                    (Rvec_or_dict_key ([27:17-38]), (Tprim Tarraykey)),
                     (Rhint ([27:34-37]), (Tprim Tint))))
                 };
               ft_flags =
@@ -153,6 +169,7 @@
   ("\\vd2",
    (Shallow_decl_defs.Fun
       { Typing_defs.fe_deprecated = None; fe_module = None;
+        fe_internal = false;
         fe_type =
         (Rwitness_from_decl ([31:10-13]),
          (Tfun
@@ -163,7 +180,7 @@
               { et_enforced = Typing_defs_core.Unenforced;
                 et_type =
                 (Rhint ([31:17-46]),
-                 (Tvarray_or_darray (Rhint ([31:34-37]), (Tprim Tint)),
+                 (Tvec_or_dict (Rhint ([31:34-37]), (Tprim Tint)),
                     (Rhint ([31:39-45]), (Tprim Tstring))))
                 };
               ft_flags =
@@ -175,6 +192,7 @@
   ("\\vd3",
    (Shallow_decl_defs.Fun
       { Typing_defs.fe_deprecated = None; fe_module = None;
+        fe_internal = false;
         fe_type =
         (Rwitness_from_decl ([35:10-13]),
          (Tfun

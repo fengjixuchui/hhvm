@@ -99,9 +99,9 @@ function jit_serialize_option(string $cmd, $test, $options, $serialize) {
   $cmds = explode(' -- ', $cmd, 2);
   $cmds[0] .=
     ' --count=' . ($serialize ? (int)$options['jit-serialize'] + 1 : 1) .
-    " -vEval.JitSerdesFile=" . $serialized .
-    " -vEval.JitSerdesMode=" . ($serialize ? 'Serialize' : 'DeserializeOrFail').
-    ($serialize ? " -vEval.JitSerializeOptProfRequests=1" : '');
+    " -vEval.JitSerdesFile=\"" . $serialized . "\"" .
+    " -vEval.JitSerdesMode=" . ($serialize ? 'Serialize' : 'DeserializeOrFail') .
+    ($serialize ? " -vEval.JitSerializeOptProfRequests=" . (int)$options['jit-serialize'] : '');
   if (isset($options['jitsample']) && $serialize) {
     $cmds[0] .= ' -vDeploymentId="' . $options['jitsample'] . '-serialize"';
   }
@@ -154,6 +154,9 @@ Examples:
 
   # Quick tests in JIT mode with some extra runtime options:
   % {$argv[0]} test/quick -a '-vEval.JitMaxTranslations=120 -vEval.HHIRRefcountOpts=0'
+
+  # Quick tests in JIT mode with RepoAuthoritative and an extra compile-time option:
+  % {$argv[0]} test/quick -r --compiler-args '--parse-on-demand=false'
 
   # All quick tests except debugger
   % {$argv[0]} -e debugger test/quick
@@ -355,6 +358,10 @@ function verify_hhbc() {
   return bin_root().'/verify.hhbc';
 }
 
+function unit_cache_file() {
+  return Status::getTmpPathFile('unit-cache.sql');
+}
+
 function read_opts_file($file) {
   if ($file === null || !file_exists($file)) {
     return "";
@@ -409,7 +416,8 @@ function rel_path($to) {
 }
 
 function get_options($argv): (darray<string, mixed>, varray<string>) {
-  // Options marked * affect test behavior, and need to be reported by list_tests
+  // Options marked * affect test behavior, and need to be reported by list_tests.
+  // Options with a trailing : take a value.
   $parameters = darray[
     '*env:' => '',
     'exclude:' => 'e:',
@@ -418,6 +426,7 @@ function get_options($argv): (darray<string, mixed>, varray<string>) {
     'include:' => 'i:',
     'include-pattern:' => 'I:',
     '*repo' => 'r',
+    '*split-hphpc' => '',
     '*repo-single' => '',
     '*repo-separate' => '',
     '*repo-threads:' => '',
@@ -432,6 +441,7 @@ function get_options($argv): (darray<string, mixed>, varray<string>) {
     'testpilot' => '',
     'threads:' => '',
     '*args:' => 'a:',
+    '*compiler-args:' => '',
     'log' => 'l',
     'failure-file:' => '',
     '*wholecfg' => '',
@@ -457,7 +467,6 @@ function get_options($argv): (darray<string, mixed>, varray<string>) {
     'write-to-checkout' => '',
     'bespoke' => '',
     'lazyclass' => '',
-    '*force-repo' => '',
     'hn' => '',
   ];
   $options = darray[];
@@ -542,6 +551,17 @@ function get_options($argv): (darray<string, mixed>, varray<string>) {
     }
     if (isset($options['mode']) && $options['mode'] != 'jit') {
       echo "jit-serialize only works in jit mode\n";
+      exit(1);
+    }
+  }
+
+  if (isset($options['split-hphpc'])) {
+    if (!isset($options['repo'])) {
+      echo "split-hphpc only works in repo mode\n";
+      exit(1);
+    }
+    if (!isset($options['repo-separate'])) {
+      echo "split-hphpc only works in repo-separate mode\n";
       exit(1);
     }
   }
@@ -817,13 +837,7 @@ function find_debug_config($test, $name) {
 function mode_cmd($options): varray<string> {
   $repo_args = '';
   if (!isset($options['repo'])) {
-    // Set the non-repo-mode shared repo.
-    // When in repo mode, we set our own central path.
-    if (isset($options['force-repo'])) {
-      $repo_args = "-vRepo.Local.Mode=-- -vRepo.Central.Path=".verify_hhbc();
-    } else {
-      $repo_args = "-vRepo.Local.Mode=-- -vRepo.Central.Path=:memory: -vRepo.Commit=0";
-    }
+    $repo_args = "-vUnitFileCache.Path=".unit_cache_file();
   }
   $interp_args = "$repo_args -vEval.Jit=0";
   $jit_args = "$repo_args -vEval.Jit=true";
@@ -855,6 +869,10 @@ function extra_args($options): string {
     $args .= ' -vEval.ClassPassesClassname=true';
   }
   return $args;
+}
+
+function extra_compiler_args($options): string {
+  return $options['compiler-args'] ?? '';
 }
 
 function hhvm_cmd_impl(
@@ -890,6 +908,11 @@ function hhvm_cmd_impl(
       // use a fixed path for embedded data
       '-vEval.EmbeddedDataExtractPath='
         .escapeshellarg(bin_root().'/hhvm_%{type}_%{buildid}'),
+
+      // Stick to a single thread for retranslate-all
+      '-vEval.JitWorkerThreads=1',
+      '-vEval.JitWorkerThreadsForSerdes=1',
+
       extra_args($options),
     ];
 
@@ -944,10 +967,6 @@ function hhvm_cmd_impl(
     if (isset($options['bespoke'])) {
       $args[] = '-vEval.BespokeArrayLikeMode=1';
       $args[] = '-vServer.APC.MemModelTreadmill=true';
-    }
-
-    if (!isset($options['repo'])) {
-      $args[] = '-vEval.StressUnitSerde=true';
     }
 
     if (isset($options['use-internal-compiler'])) {
@@ -1036,10 +1055,7 @@ function hhvm_cmd(
     $program = isset($options['hackc']) ? "hackc" : "hhvm";
     $hhbbc_repo = '"' . test_repo($options, $test) . "/$program.$repo_suffix\"";
     $cmd .= ' -vRepo.Authoritative=true';
-    $cmd .= ' -vRepo.Commit=0';
-    $cmd .= ' -vRepo.Local.Mode=--';
-    $cmd .= ' -vRepo.Central.Mode=r-';
-    $cmd .= " -vRepo.Central.Path=$hhbbc_repo";
+    $cmd .= " -vRepo.Path=$hhbbc_repo";
   }
 
   if (isset($options['jitsample'])) {
@@ -1085,15 +1101,17 @@ function hhvm_cmd(
 }
 
 function hphp_cmd($options, $test, $program): string {
-  $extra_args = preg_replace("/-v\s*/", "-vRuntime.", extra_args($options));
+  // Transform extra_args like "-vName=Value" into "-vRuntime.Name=Value".
+  $extra_args = preg_replace("/(^-v|\s+-v)\s*/", "$1Runtime.", extra_args($options));
 
-  $compiler_args = "";
+  $compiler_args = extra_compiler_args($options);
   if (isset($options['hackc'])) {
     $hh_single_compile = hh_codegen_path();
     $compiler_args = implode(" ", varray[
       '-vRuntime.Eval.HackCompilerUseEmbedded=false',
       "-vRuntime.Eval.HackCompilerInheritConfig=true",
-      "-vRuntime.Eval.HackCompilerCommand=\"{$hh_single_compile} --daemon --dump-symbol-refs\""
+      "-vRuntime.Eval.HackCompilerCommand=\"{$hh_single_compile} --daemon --dump-symbol-refs\"",
+      $compiler_args
     ]);
   }
 
@@ -1113,7 +1131,7 @@ function hphp_cmd($options, $test, $program): string {
   }
 
   return implode(" ", varray[
-    hhvm_path(),
+    hphpc_path($options),
     '--hphp',
     '-vUseHHBBC='. (repo_separate($options, $test) ? 'false' : 'true'),
     '--config',
@@ -1130,17 +1148,31 @@ function hphp_cmd($options, $test, $program): string {
     '--nofork=1 -thhbc -l1 -k1',
     '-o "' . test_repo($options, $test) . '"',
     "--program $program.hhbc \"$test\"",
-    "-vRuntime.Repo.Local.Mode=-- -vRuntime.Repo.Central.Path=".verify_hhbc(),
+    "-vRuntime.UnitFileCache.Path=".unit_cache_file(),
     $extra_args,
     $compiler_args,
     read_opts_file("$test.hphp_opts"),
   ]);
 }
 
+function hphpc_path($options) {
+  if (isset($options['split-hphpc'])) {
+    $file = "";
+    $file = bin_root().'/hphpc';
+
+    if (!is_file($file)) {
+      error("$file doesn't exist. Did you forget to build first?");
+    }
+    return rel_path($file);
+  } else {
+    return hhvm_path();
+  }
+}
+
 function hhbbc_cmd($options, $test, $program) {
   $test_repo = test_repo($options, $test);
   return implode(" ", varray[
-    hhvm_path(),
+    hphpc_path($options),
     '--hhbbc',
     '--no-logging',
     '--no-cores',
@@ -1495,6 +1527,10 @@ final class Status {
   // Remember to teach clean_intermediate_files to clean up all the exts you use
   public static function getTestTmpPath(string $test, string $ext): string {
     return self::$tmpdir . '/' . $test . '.' . $ext;
+  }
+
+  public static function getTmpPathFile(string $filename): string {
+    return self::$tmpdir . '/' . $filename;
   }
 
   // Similar to getTestTmpPath, but if we're run with --write-to-checkout
@@ -2396,6 +2432,12 @@ function should_skip_test_simple(
     return 'skip-lazyclass';
   }
 
+  $no_jitserialize_tag = "nojitserialize";
+  if (isset($options['jit-serialize']) &&
+      file_exists("$test.$no_jitserialize_tag")) {
+    return 'skip-jit-serialize';
+  }
+
   return null;
 }
 
@@ -3075,6 +3117,9 @@ function run_test($options, $test) {
       $cmd = jit_serialize_option($hhvm[0], $test, $options, true);
       $outputs = run_config_cli($options, $test, $cmd, $hhvm_env);
       if ($outputs === false) return false;
+      $cmd = jit_serialize_option($hhvm[0], $test, $options, true);
+      $outputs = run_config_cli($options, $test, $cmd, $hhvm_env);
+      if ($outputs === false) return false;
       $hhvm[0] = jit_serialize_option($hhvm[0], $test, $options, false);
     }
 
@@ -3180,6 +3225,8 @@ function print_commands($tests, $options) {
     }
     if (isset($options['jit-serialize'])) {
       invariant(count($commands) === 1, 'get_options enforces jit mode only');
+      $hhbbc_cmds .=
+        jit_serialize_option($commands[0], $test, $options, true) . "\n";
       $hhbbc_cmds .=
         jit_serialize_option($commands[0], $test, $options, true) . "\n";
       $commands[0] = jit_serialize_option($commands[0], $test, $options, false);

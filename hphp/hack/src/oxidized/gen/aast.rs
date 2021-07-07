@@ -3,7 +3,7 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the "hack" directory of this source tree.
 //
-// @generated SignedSource<<5fcc0994184f990f8ec4409c3fdf0bd5>>
+// @generated SignedSource<<373d9681bc6df5fe72827123e58e3ea7>>
 //
 // To regenerate this file, run:
 //   hphp/hack/src/oxidized_regen.sh
@@ -811,11 +811,6 @@ pub enum Expr_<Ex, Fb, En, Hi> {
     ///
     /// enum_name#label_name or #label_name
     EnumClassLabel(Box<(Option<Sid>, String)>),
-    /// Placeholder for expressions that aren't understood by parts of
-    /// the toolchain.
-    ///
-    /// TODO: Remove.
-    Any,
     /// Annotation used to record failure in subtyping or coercion of an
     /// expression and calls to [unsafe_cast] or [enforced_cast].
     ///
@@ -1438,11 +1433,36 @@ pub enum CaType {
     Serialize,
     ToOcamlRep
 )]
+pub enum ClassConstKind<Ex, Fb, En, Hi> {
+    /// CCAbstract represents the states
+    ///    abstract const int X;
+    ///    abstract const int Y = 4;
+    /// The expr option is a default value
+    CCAbstract(Option<Expr<Ex, Fb, En, Hi>>),
+    /// CCConcrete represents
+    ///    const int Z = 4;
+    /// The expr is the value of the constant. It is not optional
+    CCConcrete(Expr<Ex, Fb, En, Hi>),
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    FromOcamlRep,
+    Hash,
+    NoPosHash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToOcamlRep
+)]
 pub struct ClassConst<Ex, Fb, En, Hi> {
     pub type_: Option<Hint>,
     pub id: Sid,
-    /// expr = None indicates an abstract const
-    pub expr: Option<Expr<Ex, Fb, En, Hi>>,
+    pub kind: ClassConstKind<Ex, Fb, En, Hi>,
     pub doc_comment: Option<DocComment>,
 }
 
@@ -1663,6 +1683,7 @@ pub struct Typedef<Ex, Fb, En, Hi> {
     pub namespace: Nsenv,
     pub span: Pos,
     pub emit_id: Option<EmitId>,
+    pub is_ctx: bool,
 }
 
 #[derive(

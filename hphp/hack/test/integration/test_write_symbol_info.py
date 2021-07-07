@@ -28,6 +28,8 @@ from glean.schema.hack.types import (
     InterfaceDefinition,
     MethodDeclaration,
     MethodDefinition,
+    MethodOverrides,
+    NamespaceDeclaration,
     NamespaceQName,
     PropertyDeclaration,
     PropertyDefinition,
@@ -37,6 +39,7 @@ from glean.schema.hack.types import (
     TypeConstDeclaration,
     TypeConstDefinition,
     TypedefDeclaration,
+    TypedefDefinition,
 )
 from glean.schema.src.types import FileLines
 from hh_paths import hh_server
@@ -143,6 +146,8 @@ max_workers = 2
             "hack.InterfaceDefinition": InterfaceDefinition,
             "hack.MethodDeclaration": MethodDeclaration,
             "hack.MethodDefinition": MethodDefinition,
+            "hack.MethodOverrides": MethodOverrides,
+            "hack.NamespaceDeclaration": NamespaceDeclaration,
             "hack.NamespaceQName": NamespaceQName,
             "hack.PropertyDeclaration": PropertyDeclaration,
             "hack.PropertyDefinition": PropertyDefinition,
@@ -152,6 +157,7 @@ max_workers = 2
             "hack.TypeConstDeclaration": TypeConstDeclaration,
             "hack.TypeConstDefinition": TypeConstDefinition,
             "hack.TypedefDeclaration": TypedefDeclaration,
+            "hack.TypedefDefinition": TypedefDefinition,
             "src.FileLines": FileLines,
         }
         predicate_base = predicate_name[: predicate_name.rfind(".")]

@@ -12,7 +12,9 @@ module type S = sig
 
   type client
 
-  (** What client to select next. *)
+  type client_id = int
+
+  (** Outcome of the POSIX [select] system call. *)
   type select_outcome =
     | Select_persistent
     | Select_new of client
@@ -58,12 +60,15 @@ module type S = sig
 
   val read_client_msg : client -> 'a ServerCommandTypes.command
 
-  val make_persistent : client -> client
+  val make_and_store_persistent : client -> client
+
+  val get_persistent_client : unit -> (client_id * client) option
 
   val is_persistent : client -> bool
 
   val priority_to_string : client -> string
 
+  (** Shutdown socket connection to client *)
   val shutdown_client : client -> unit
 
   val ping : client -> unit

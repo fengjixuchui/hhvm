@@ -130,9 +130,6 @@ RawDestructors computeDestructors() {
   set(KindOfResource, getMethodPtr(&ResourceHdr::release));
   set(KindOfRClsMeth, getMethodPtr(&RClsMethData::release));
   set(KindOfRFunc,    getMethodPtr(&RFuncData::release));
-  if constexpr (!use_lowptr) {
-    set(KindOfClsMeth, getMethodPtr(&ClsMethDataRef::Release));
-  }
 #define DT(name, ...)                                       \
   assertx(IMPLIES(isRefcountedType(KindOf##name),           \
           result[typeToDestrIdx(KindOf##name)] != nullptr));
@@ -514,8 +511,8 @@ Array Variant::toPHPArrayHelper() const {
         throwInvalidClsMethToType("array");
       }
       raiseClsMethConvertWarningHelper("array");
-      return make_map_array(0, m_data.pclsmeth->getClsStr(),
-                            1, m_data.pclsmeth->getFuncStr());
+      return make_dict_array(0, m_data.pclsmeth->getClsStr(),
+                             1, m_data.pclsmeth->getFuncStr());
     case KindOfRClsMeth:
       SystemLib::throwInvalidOperationExceptionObject(
         "RClsMeth to PHPArray conversion");
@@ -651,7 +648,6 @@ void Variant::setEvalScalar() {
       auto const clsMeth = m_data.pclsmeth;
       m_data.parr = clsMethToVecHelper(clsMeth).detach();
       m_type = KindOfPersistentVec;
-      decRefClsMeth(clsMeth);
       do_array();
       return;
   }

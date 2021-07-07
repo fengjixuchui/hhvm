@@ -123,7 +123,7 @@ struct RepoOptions {
   std::string path() const { return m_path; }
   SHA1 cacheKeySha1() const { return m_sha1; }
   std::string toJSON() const;
-  folly::dynamic toDynamic() const;
+  const folly::dynamic& toDynamic() const { return m_cachedDynamic; }
   std::uint32_t getParserFlags() const;
   std::uint32_t getCompilerFlags() const;
   std::uint32_t getFactsFlags() const;
@@ -138,6 +138,7 @@ struct RepoOptions {
     // bigger problems.
     return m_sha1 == o.m_sha1;
   }
+  bool operator!=(const RepoOptions& o) const { return !(*this == o); }
 
   // Getters for the parser options we pass to HackC for extracting facts
   bool allowNewAttributeSyntax() const noexcept {
@@ -162,6 +163,7 @@ private:
   void filterNamespaces();
   void initDefaults(const Hdf& hdf, const IniSettingMap& ini);
   void calcCacheKey();
+  void calcDynamic();
 
   #define N(t, n, ...) t n;
   #define P(t, n, ...) t n;
@@ -178,6 +180,8 @@ private:
   struct stat m_stat;
 
   SHA1 m_sha1;
+
+  folly::dynamic m_cachedDynamic;
 
   static bool s_init;
   static RepoOptions s_defaults;
@@ -215,7 +219,7 @@ struct RuntimeOption {
     std::set<std::string>& xboxPasswords
   );
 
-  static folly::Optional<folly::fs::path> GetHomePath(
+  static Optional<folly::fs::path> GetHomePath(
     const folly::StringPiece user);
 
   static std::string GetDefaultUser();
@@ -745,6 +749,8 @@ struct RuntimeOption {
   F(bool, HackCompilerInheritConfig,   true)                            \
   /* Use compiler pool to get hhas from hh_single_compile process */    \
   F(bool, HackCompilerUseCompilerPool, true)                            \
+  /* enable decls in compilation */                                     \
+  F(bool, EnableDecl, false)                                     \
   /* When using embedded data, extract it to the ExtractPath or the
    * ExtractFallback. */                                                \
   F(string, EmbeddedDataExtractPath,   "/var/run/hhvm_%{type}_%{buildid}") \
@@ -819,6 +825,8 @@ struct RuntimeOption {
   F(bool, ProfileHWStructLog,          false)                           \
   F(int32_t, ProfileHWExportInterval,  30)                              \
   F(string, ReorderProps,              reorderPropsDefault())           \
+  F(bool, ReorderRDS,                  true)                            \
+  F(double, RDSReorderThreshold,       0.0005)                          \
   F(bool, JitAlwaysInterpOne,          false)                           \
   F(int32_t, JitNopInterval,           0)                               \
   F(uint32_t, JitMaxTranslations,      10)                              \
@@ -828,7 +836,7 @@ struct RuntimeOption {
   F(uint32_t, JitTraceletGuardsLimit,  5)                               \
   F(uint64_t, JitGlobalTranslationLimit, -1)                            \
   F(int64_t, JitMaxRequestTranslationTime, -1)                          \
-  F(uint32_t, JitMaxRegionInstrs,      2000)                            \
+  F(uint32_t, JitMaxRegionInstrs,      3000)                            \
   F(uint32_t, JitMaxLiveRegionInstrs,  50)                              \
   F(uint32_t, JitMaxAwaitAllUnroll,    8)                               \
   F(bool, JitProfileWarmupRequests,    false)                           \
@@ -841,6 +849,7 @@ struct RuntimeOption {
   F(bool,     JitBuildOutliningHashes, false)                           \
   F(bool,     JitPGOLayoutSplitHotCold, pgoLayoutSplitHotColdDefault()) \
   F(bool,     JitPGOVasmBlockCounters, true)                            \
+  F(bool,     JitPGOVasmBlockCountersOptPrologue, true)                 \
   F(bool,     JitPGOVasmBlockCountersForceSaveSF, false)                \
   F(bool,     JitPGOVasmBlockCountersForceSaveGP, false)                \
   F(uint32_t, JitPGOVasmBlockCountersMaxOpMismatches, 12)               \
@@ -1052,6 +1061,7 @@ struct RuntimeOption {
   F(std::set<std::string>, JitSerdesDebugFunctions, {})                 \
   F(uint32_t, JitSerializeOptProfSeconds, ServerExecutionMode() ? 300 : 0)\
   F(uint32_t, JitSerializeOptProfRequests, 0)                           \
+  F(bool, JitSerializeOptProfRestart,  true)                            \
   F(int, SimpleJsonMaxLength,        2 << 20)                           \
   F(uint32_t, JitSampleRate,               0)                           \
   F(uint32_t, TraceServerRequestRate,      0)                           \
@@ -1158,42 +1168,9 @@ struct RuntimeOption {
   F(double, BespokeArraySinkSideExitThreshold, 95.0)                    \
   F(uint64_t, BespokeArraySinkSideExitMaxSources, 64)                   \
   F(uint64_t, BespokeArraySinkSideExitMinSampleCount, 4)                \
-  /* Raise notices on various array operations which may present        \
-   * compatibility issues with Hack arrays.                             \
-   *                                                                    \
-   * The various *Notices options independently control separate        \
-   * subsets of notices.  The Check* options are subordinate to the     \
-   * HackArrCompatNotices option, and control whether various runtime   \
-   * checks are made; they do not affect any optimizations. */          \
-  F(bool, HackArrCompatNotices, false)                                  \
-  F(bool, HackArrCompatCheckCompare, false)                             \
-  F(bool, HackArrCompatFBSerializeHackArraysNotices, false)             \
-  /* Raise notices on intish-cast (which may use an is_array check) */  \
-  F(bool, HackArrCompatIntishCastNotices, false)                        \
-  /* Raise notices when is_vec or is_dict  is called with a v/darray */ \
-  F(bool, HackArrCompatIsVecDictNotices, false)                         \
   F(bool, HackArrCompatSerializeNotices, false)                         \
-  /* Raise notices when fb_compact_*() would change behavior */         \
-  F(bool, HackArrCompatCompactSerializeNotices, false)                  \
-  /* Raise notices when we cast a marked dvarray to a vec or a marked   \
-   * darray to a dict (implicitly clearing the legacy mark). */         \
-  F(bool, HackArrCompatCastMarkedArrayNotices, false)                   \
   /* When this flag is on, var_export outputs d/varrays. */             \
   F(bool, HackArrDVArrVarExport, false)                                 \
-  /* This is the flag for "unification", meaning that darrays are       \
-   * replaced by dicts and varrays by vecs. */                          \
-  F(bool, HackArrDVArrs, true)                                          \
-  /* Raise a notice for `$dict is shape` and `$vec is tuple`. */        \
-  F(bool, HackArrIsShapeTupleNotices, false)                            \
-  /* Notice on array serialization behavior, even if array provenance   \
-   * is disabled. If we see these notices, we're missing markings. */   \
-  F(bool, RaiseArraySerializationNotices, false)                        \
-  /* Dead flags. Will clean up when we clean them up in GlobalData. */  \
-  F(bool, ArrayProvenance, false)                                       \
-  F(bool, LogArrayProvenance, false)                                    \
-  F(uint32_t, LogArrayProvenanceSampleRatio, 1000)                      \
-  F(uint32_t, ArrayProvenanceLargeEnumLimit, 256)                       \
-  F(uint32_t, LogArrayProvenanceDiagnosticsSampleRate, 0)               \
   /* Raise a notice when the result of appending to a dict or darray    \
    * is affected by removing keys from that array-like. */              \
   F(bool, DictDArrayAppendNotices, true)                                \
@@ -1361,7 +1338,6 @@ struct RuntimeOption {
   /* More aggresively reuse already compiled units based on SHA1     */ \
   F(bool, CheckUnitSHA1, true)                                          \
   F(bool, ReuseUnitsByHash, false)                                      \
-  F(bool, StressUnitSerde, false)                                       \
   /* Arbitrary string to force different unit-cache hashes */           \
   F(std::string, UnitCacheBreaker, "")                                  \
   /* When dynamic_fun is called on a function not marked as
@@ -1411,12 +1387,15 @@ struct RuntimeOption {
   F(int32_t, NoticeOnCoerceForMath, 0)                                  \
   /* 0 nothing, 1 notice, 2 error */                                    \
   F(int32_t, NoticeOnCoerceForCmp, 0)                                   \
+  /* 0 nothing, 1 notice, 2 error, 3 behaviour change */                \
+  F(int32_t, NoticeOnCoerceForEq, 0)                                    \
   F(string, TaoMigrationOverride, std::string(""))                      \
   F(string, SRRouteMigrationOverride, std::string(""))                  \
   F(int32_t, SampleRequestTearing, 0)                                   \
   F(bool, EnableAbstractContextConstants, true)                         \
   F(bool, TypeconstAbstractDefaultReflectionIsAbstract, false)          \
   F(bool, AbstractContextConstantUninitAccess, false)                   \
+  F(bool, TraitConstantInterfaceBehavior, false)                       \
   /* */
 
 private:
@@ -1436,6 +1415,14 @@ public:
   static std::string CodeCoverageOutputFile;
 
   // Repo (hhvm bytecode repository) options
+  static std::string RepoPath;
+  static int64_t RepoLocalReadaheadRate;
+  static bool RepoLocalReadaheadConcurrent;
+  static bool RepoLitstrLazyLoad;
+  static bool RepoDebugInfo;
+  static bool RepoAuthoritative;
+
+  // These are (functionally) unused
   static RepoMode RepoLocalMode;
   static std::string RepoLocalPath;
   static RepoMode RepoCentralMode;
@@ -1446,11 +1433,6 @@ public:
   static bool RepoAllowFallbackPath;
   static std::string RepoJournal;
   static bool RepoCommit;
-  static bool RepoDebugInfo;
-  static bool RepoAuthoritative;
-  static int64_t RepoLocalReadaheadRate;
-  static bool RepoLitstrLazyLoad;
-  static bool RepoLocalReadaheadConcurrent;
   static uint32_t RepoBusyTimeoutMS;
 
   // pprof/hhprof options

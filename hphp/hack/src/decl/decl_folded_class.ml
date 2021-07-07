@@ -327,9 +327,15 @@ and class_is_abstract (c : Shallow_decl_defs.shallow_class) : bool =
     true
   | _ -> false
 
+and synthesize_const_defaults c =
+  let open Typing_defs in
+  match c.cc_abstract with
+  | CCAbstract true -> { c with cc_abstract = CCConcrete }
+  | _ -> c
+
 (* When all type constants have been inherited and declared, this step synthesizes
  * the defaults of abstract type constants into concrete type constants. *)
-and synthesize_defaults
+and synthesize_typeconst_defaults
     (k : string)
     (tc : Typing_defs.typeconst_type)
     ((typeconsts, consts) :
@@ -349,7 +355,7 @@ and synthesize_defaults
     let constant = SMap.find_opt k consts in
     let consts =
       Option.value_map constant ~default:consts ~f:(fun c ->
-          SMap.add k { c with cc_abstract = false } consts)
+          SMap.add k { c with cc_abstract = CCConcrete } consts)
     in
     (typeconsts, consts)
   | _ -> (typeconsts, consts)
@@ -362,6 +368,7 @@ and class_decl
     Decl_defs.decl_class_type * Decl_store.class_members =
   let is_abstract = class_is_abstract c in
   let const = Attrs.mem SN.UserAttributes.uaConst c.sc_user_attributes in
+  let internal = Attrs.mem SN.UserAttributes.uaInternal c.sc_user_attributes in
   let (_p, cls_name) = c.sc_name in
   let class_dep = Dep.Type cls_name in
   let env = { Decl_env.mode = c.sc_mode; droot = Some class_dep; ctx } in
@@ -391,7 +398,8 @@ and class_decl
   in
   let (typeconsts, consts) =
     if Ast_defs.(equal_class_kind c.sc_kind Cnormal) then
-      SMap.fold synthesize_defaults typeconsts (typeconsts, consts)
+      let consts = SMap.map synthesize_const_defaults consts in
+      SMap.fold synthesize_typeconst_defaults typeconsts (typeconsts, consts)
     else
       (typeconsts, consts)
   in
@@ -422,22 +430,22 @@ and class_decl
           String.equal (snd sm.sm_name) SN.Members.__toString)
     with
     | Some { sm_name = (pos, _); _ }
-      when String.( <> ) cls_name SN.Classes.cStringish ->
-      (* HHVM implicitly adds Stringish interface for every class/iface/trait
+      when String.( <> ) cls_name SN.Classes.cStringishObject ->
+      (* HHVM implicitly adds StringishObject interface for every class/iface/trait
        * with a __toString method; "string" also implements this interface *)
-      (* Declare Stringish and parents if not already declared *)
+      (* Declare StringishObject and parents if not already declared *)
       let class_env = { ctx; stack = SSet.empty } in
       let (_ : _ option) =
-        (* Ensure stringish is declared. *)
-        class_decl_if_missing ~sh class_env SN.Classes.cStringish
+        (* Ensure stringishObject is declared. *)
+        class_decl_if_missing ~sh class_env SN.Classes.cStringishObject
       in
       let ty =
-        mk (Reason.Rhint pos, Tapply ((pos, SN.Classes.cStringish), []))
+        mk (Reason.Rhint pos, Tapply ((pos, SN.Classes.cStringishObject), []))
       in
       ty :: impl
     | _ -> impl
   in
-  let impl = List.map impl (get_implements env parents) in
+  let impl = List.map impl ~f:(get_implements env parents) in
   let impl = List.fold_right impl ~f:(SMap.fold SMap.add) ~init:SMap.empty in
   let (extends, xhp_attr_deps, ext_strict) =
     get_class_parents_and_traits env c parents
@@ -459,7 +467,7 @@ and class_decl
     || SMap.exists (fun n _ -> is_disposable_class_name n) impl
     || List.exists
          (c.sc_req_extends @ c.sc_req_implements)
-         (is_disposable_type env parents)
+         ~f:(is_disposable_type env parents)
   in
   (* If this class is disposable then we require that any extended class or
    * trait that is used, is also disposable, in order that escape analysis
@@ -482,7 +490,7 @@ and class_decl
         | TCConcrete { tc_type } -> Some tc_type
         | TCPartiallyAbstract { patc_type; _ } -> Some patc_type
         | TCAbstract { atc_default; _ } -> atc_default)
-      (fun x -> SMap.find_opt x impl)
+      ~get_ancestor:(fun x -> SMap.find_opt x impl)
       consts
   in
   let has_own_cstr = has_concrete_cstr && Option.is_some c.sc_constructor in
@@ -494,6 +502,7 @@ and class_decl
     {
       dc_final = c.sc_final;
       dc_const = const;
+      dc_internal = internal;
       dc_abstract = is_abstract;
       dc_need_init = has_concrete_cstr;
       dc_deferred_init_members = deferred_members;
@@ -614,7 +623,7 @@ and build_constructor
     (method_ : Shallow_decl_defs.shallow_method) :
     (Decl_defs.element * Typing_defs.fun_elt option) option =
   let (_, class_name) = class_.sc_name in
-  let vis = visibility class_name method_.sm_visibility in
+  let vis = visibility class_name class_.sc_module method_.sm_visibility in
   let pos = fst method_.sm_name in
   let cstr =
     {
@@ -640,6 +649,7 @@ and build_constructor
     {
       fe_module = None;
       fe_pos = pos;
+      fe_internal = false;
       fe_deprecated = method_.sm_deprecated;
       fe_type = method_.sm_type;
       fe_php_std_lib = false;
@@ -677,7 +687,7 @@ and class_class_decl (class_id : Typing_defs.pos_id) : Typing_defs.class_const =
     mk (reason, Tapply ((pos, SN.Classes.cClassname), [mk (reason, Tthis)]))
   in
   {
-    cc_abstract = false;
+    cc_abstract = CCConcrete;
     cc_pos = pos;
     cc_synthesized = true;
     cc_type = classname_ty;
@@ -697,7 +707,7 @@ and prop_decl
     | None -> mk (Reason.Rwitness_from_decl sp_pos, Typing_defs.make_tany ())
     | Some ty' -> ty'
   in
-  let vis = visibility (snd c.sc_name) sp.sp_visibility in
+  let vis = visibility (snd c.sc_name) c.sc_module sp.sp_visibility in
   let elt =
     {
       elt_flags =
@@ -735,7 +745,7 @@ and static_prop_decl
     | None -> mk (Reason.Rwitness_from_decl sp_pos, Typing_defs.make_tany ())
     | Some ty' -> ty'
   in
-  let vis = visibility (snd c.sc_name) sp.sp_visibility in
+  let vis = visibility (snd c.sc_name) c.sc_module sp.sp_visibility in
   let elt =
     {
       elt_flags =
@@ -761,12 +771,20 @@ and static_prop_decl
   let acc = SMap.add sp_name (elt, Some ty) acc in
   acc
 
-and visibility (cid : string) (visibility : Aast_defs.visibility) :
-    Typing_defs.ce_visibility =
+and visibility
+    (class_id : string)
+    (module_id : string option)
+    (visibility : Aast_defs.visibility) : Typing_defs.ce_visibility =
   match visibility with
   | Public -> Vpublic
-  | Protected -> Vprotected cid
-  | Private -> Vprivate cid
+  | Protected -> Vprotected class_id
+  | Private -> Vprivate class_id
+  | Internal ->
+    begin
+      match module_id with
+      | Some m -> Vinternal m
+      | None -> Vpublic
+    end
 
 (* each concrete type constant T = <sometype> implicitly defines a
 class constant with the same name which is TypeStructure<sometype> *)
@@ -781,8 +799,9 @@ and typeconst_structure
   in
   let abstract =
     match stc.stc_kind with
-    | TCAbstract _ -> true
-    | _ -> false
+    | TCAbstract { atc_default = default; _ } ->
+      CCAbstract (Option.is_some default)
+    | _ -> CCConcrete
   in
   {
     cc_abstract = abstract;
@@ -824,7 +843,7 @@ and typeconst_fold
       if Option.is_some stc.stc_reifiable then
         stc.stc_reifiable
       else
-        Option.bind ptc_opt (fun ptc -> ptc.ttc_reifiable)
+        Option.bind ptc_opt ~f:(fun ptc -> ptc.ttc_reifiable)
     in
     let tc =
       {
@@ -858,7 +877,7 @@ and method_decl_acc
     | (Some ({ elt_visibility = Vprotected _ as parent_vis; _ }, _), Protected)
       ->
       parent_vis
-    | _ -> visibility (snd c.sc_name) m.sm_visibility
+    | _ -> visibility (snd c.sc_name) c.sc_module m.sm_visibility
   in
   let support_dynamic_type = sm_support_dynamic_type m in
   let elt =
@@ -885,6 +904,7 @@ and method_decl_acc
     {
       fe_module = None;
       fe_pos = pos;
+      fe_internal = false;
       fe_deprecated = None;
       fe_type = m.sm_type;
       fe_php_std_lib = false;

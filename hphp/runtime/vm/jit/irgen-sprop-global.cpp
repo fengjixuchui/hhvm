@@ -80,6 +80,8 @@ ClsPropLookup ldClsPropAddrKnown(IRGS& env,
     }
   }
 
+  profileRDSAccess(env, handle);
+
   auto const ptrTy = knownType.ptr(Ptr::SProp);
 
   auto const addr = [&]{
@@ -222,6 +224,13 @@ void emitSetS(IRGS& env, ReadOnlyOp op) {
     value = gen(env, VerifyPropCoerceAll, ssaCls, slot, value, cns(env, true));
   }
 
+  if (lookup.slot != kInvalidSlot && ssaCls->hasConstVal()) {
+    if (!ssaCls->clsVal()->sPropLink(lookup.slot).isLocal()) {
+      gen(env, Unreachable, ASSERT_REASON);
+      return;
+    }
+  }
+
   discard(env);
   destroyName(env, ssaPropName);
   bindMem(env, lookup.propPtr, value);
@@ -258,6 +267,13 @@ void emitSetOpS(IRGS& env, SetOpOp op) {
       auto const slot = gen(env, LookupSPropSlot, ssaCls, ssaPropName);
       value = gen(env, VerifyPropCoerceAll, ssaCls, slot, value,
                   cns(env, true));
+    }
+
+    if (lookup.slot != kInvalidSlot && ssaCls->hasConstVal()) {
+      if (!ssaCls->clsVal()->sPropLink(lookup.slot).isLocal()) {
+        gen(env, Unreachable, ASSERT_REASON);
+        return;
+      }
     }
 
     discard(env);
@@ -334,6 +350,13 @@ void emitIncDecS(IRGS& env, IncDecOp subop) {
   } else if (RuntimeOption::EvalCheckPropTypeHints > 0) {
     auto const slot = gen(env, LookupSPropSlot, ssaCls, ssaPropName);
     gen(env, VerifyPropAll, ssaCls, slot, result, cns(env, true));
+  }
+
+  if (lookup.slot != kInvalidSlot && ssaCls->hasConstVal()) {
+    if (!ssaCls->clsVal()->sPropLink(lookup.slot).isLocal()) {
+      gen(env, Unreachable, ASSERT_REASON);
+      return;
+    }
   }
 
   discard(env);
@@ -448,6 +471,7 @@ void emitInitProp(IRGS& env, const StringData* propName, InitPropOp op) {
         );
       }
 
+      profileRDSAccess(env, handle);
       auto const base = gen(
         env,
         LdRDSAddr,

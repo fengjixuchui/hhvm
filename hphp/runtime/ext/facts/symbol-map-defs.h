@@ -82,15 +82,6 @@ getPathSymMap(typename SymbolMap<S>::Data& data) {
 
 } // namespace
 
-template <typename S> bool TypeDecl<S>::operator==(const TypeDecl<S>& o) const {
-  return m_name == o.m_name && m_path == o.m_path;
-}
-
-template <typename S>
-bool MethodDecl<S>::operator==(const MethodDecl<S>& o) const {
-  return m_type == o.m_type && m_method == o.m_method;
-}
-
 template <typename S>
 SymbolMap<S>::SymbolMap(
     folly::fs::path root, DBData dbData, SQLite::OpenMode dbMode)
@@ -107,7 +98,7 @@ template <typename S> SymbolMap<S>::~SymbolMap() {
 }
 
 template <typename S>
-std::optional<Symbol<S, SymKind::Type>>
+Optional<Symbol<S, SymKind::Type>>
 SymbolMap<S>::getTypeName(const S& typeName) {
   Symbol<S, SymKind::Type> type{typeName};
   auto path = getOnlyPath(type);
@@ -326,7 +317,7 @@ std::vector<Symbol<S, SymKind::Type>> SymbolMap<S>::getBaseTypes(
   };
 
   return readOrUpdate<TypeVec>(
-      [&](const Data& data) -> std::optional<TypeVec> {
+      [&](const Data& data) -> Optional<TypeVec> {
         auto const* baseTypes = data.m_inheritanceInfo.getBaseTypes(
             derivedType, derivedTypePath, kind);
         if (!baseTypes) {
@@ -380,7 +371,7 @@ std::vector<Symbol<S, SymKind::Type>> SymbolMap<S>::getDerivedTypes(
     return subtypes;
   };
   auto subtypes = readOrUpdate<TypeVec>(
-      [&](const Data& data) -> std::optional<TypeVec> {
+      [&](const Data& data) -> Optional<TypeVec> {
         auto const* derivedTypes =
             data.m_inheritanceInfo.getDerivedTypes(baseType, kind);
         if (!derivedTypes) {
@@ -468,7 +459,7 @@ SymbolMap<S>::getAttributesOfType(Symbol<S, SymKind::Type> type) {
     return attrVec;
   };
   return readOrUpdate<AttrVec>(
-      [&](const Data& data) -> std::optional<AttrVec> {
+      [&](const Data& data) -> Optional<AttrVec> {
         auto const* attrs = data.m_typeAttrs.getAttributes({type, path});
         if (!attrs) {
           return std::nullopt;
@@ -513,7 +504,7 @@ SymbolMap<S>::getTypesAndTypeAliasesWithAttribute(
     return typeVec;
   };
   auto types = readOrUpdate<TypeVec>(
-      [&](const Data& data) -> std::optional<TypeVec> {
+      [&](const Data& data) -> Optional<TypeVec> {
         auto const* attrs = data.m_typeAttrs.getKeysWithAttribute(attr);
         if (!attrs) {
           return std::nullopt;
@@ -568,7 +559,7 @@ std::vector<Symbol<S, SymKind::Type>> SymbolMap<S>::getAttributesOfMethod(
     return attrVec;
   };
   return readOrUpdate<AttrVec>(
-      [&](const Data& data) -> std::optional<AttrVec> {
+      [&](const Data& data) -> Optional<AttrVec> {
         auto const* attrs =
             data.m_methodAttrs.getAttributes({{type, path}, method});
         if (!attrs) {
@@ -617,7 +608,7 @@ SymbolMap<S>::getMethodsWithAttribute(Symbol<S, SymKind::Type> attr) {
     return methodVec;
   };
   auto methods = readOrUpdate<MethodVec>(
-      [&](const Data& data) -> std::optional<MethodVec> {
+      [&](const Data& data) -> Optional<MethodVec> {
         auto const* attrs = data.m_methodAttrs.getKeysWithAttribute(attr);
         if (!attrs) {
           return std::nullopt;
@@ -662,6 +653,87 @@ SymbolMap<S>::getMethodsWithAttribute(const S& attr) {
 }
 
 template <typename S>
+std::vector<Symbol<S, SymKind::Type>>
+SymbolMap<S>::getAttributesOfFile(Path<S> path) {
+  if (path == nullptr) {
+    return {};
+  }
+  using AttrVec = std::vector<Symbol<S, SymKind::Type>>;
+  auto makeVec = [&](auto const& attrs) -> AttrVec {
+    AttrVec attrVec;
+    attrVec.reserve(attrs.size());
+    for (auto const& attr : attrs) {
+      attrVec.emplace_back(attr);
+    }
+    return attrVec;
+  };
+  return readOrUpdate<AttrVec>(
+      [&](const Data& data) -> Optional<AttrVec> {
+        auto const* attrs = data.m_fileAttrs.getAttributes({path});
+        if (!attrs) {
+          return std::nullopt;
+        }
+        return makeVec(*attrs);
+      },
+      [&](AutoloadDB& db,
+          SQLiteTxn& txn) -> std::vector<Symbol<S, SymKind::Type>> {
+        auto const attrStrs = db.getAttributesOfFile(txn, path.native());
+        std::vector<Symbol<S, SymKind::Type>> attrs;
+        attrs.reserve(attrStrs.size());
+        for (auto const& attrStr : attrStrs) {
+          attrs.emplace_back(attrStr);
+        }
+        return attrs;
+      },
+      [&](Data& data,
+          std::vector<Symbol<S, SymKind::Type>> attrsFromDB) -> AttrVec {
+        return makeVec(
+            data.m_fileAttrs.getAttributes({path}, std::move(attrsFromDB)));
+      });
+}
+
+template <typename S>
+std::vector<Path<S>>
+SymbolMap<S>::getFilesWithAttribute(Symbol<S, SymKind::Type> attr) {
+  using PathVec = std::vector<Path<S>>;
+  auto makeVec = [](auto&& paths) -> PathVec {
+    PathVec pathVec;
+    pathVec.reserve(paths.size());
+    for (auto&& path : std::move(paths)) {
+      pathVec.push_back(std::move(path));
+    }
+    return pathVec;
+  };
+  auto paths = readOrUpdate<PathVec>(
+      [&](const Data& data) -> Optional<PathVec> {
+        auto const* attrs = data.m_fileAttrs.getKeysWithAttribute(attr);
+        if (!attrs) {
+          return std::nullopt;
+        }
+        return makeVec(*attrs);
+      },
+      [&](AutoloadDB& db, SQLiteTxn& txn) -> PathVec {
+        auto const dbPathDecls = db.getFilesWithAttribute(txn, attr.slice());
+        PathVec pathDecls;
+        pathDecls.reserve(dbPathDecls.size());
+        for (auto const& path : dbPathDecls) {
+          pathDecls.push_back(Path<S>{path});
+        }
+        return pathDecls;
+      },
+      [&](Data& data, PathVec pathsFromDB) -> PathVec {
+        return makeVec(data.m_fileAttrs.getKeysWithAttribute(
+            attr, std::move(pathsFromDB)));
+      });
+  return paths;
+}
+
+template <typename S>
+std::vector<Path<S>> SymbolMap<S>::getFilesWithAttribute(const S& attr) {
+  return getFilesWithAttribute(Symbol<S, SymKind::Type>{attr});
+}
+
+template <typename S>
 std::vector<folly::dynamic> SymbolMap<S>::getTypeAttributeArgs(
     Symbol<S, SymKind::Type> type, Symbol<S, SymKind::Type> attr) {
   auto path = getOnlyPath(type);
@@ -670,7 +742,7 @@ std::vector<folly::dynamic> SymbolMap<S>::getTypeAttributeArgs(
   }
   using ArgVec = std::vector<folly::dynamic>;
   return readOrUpdate<ArgVec>(
-      [&](const Data& data) -> std::optional<ArgVec> {
+      [&](const Data& data) -> Optional<ArgVec> {
         auto const* args =
             data.m_typeAttrs.getAttributeArgs({type, path}, attr);
         if (!args) {
@@ -706,7 +778,7 @@ std::vector<folly::dynamic> SymbolMap<S>::getMethodAttributeArgs(
   }
   using ArgVec = std::vector<folly::dynamic>;
   return readOrUpdate<ArgVec>(
-      [&](const Data& data) -> std::optional<ArgVec> {
+      [&](const Data& data) -> Optional<ArgVec> {
         auto const* args =
             data.m_methodAttrs.getAttributeArgs({{type, path}, method}, attr);
         if (!args) {
@@ -731,6 +803,36 @@ std::vector<folly::dynamic> SymbolMap<S>::getMethodAttributeArgs(
       Symbol<S, SymKind::Type>{type},
       Symbol<S, SymKind::Function>{method},
       Symbol<S, SymKind::Type>{attribute});
+}
+
+template <typename S>
+std::vector<folly::dynamic> SymbolMap<S>::getFileAttributeArgs(
+    Path<S> path, Symbol<S, SymKind::Type> attr) {
+  if (path == nullptr) {
+    return {};
+  }
+  using ArgVec = std::vector<folly::dynamic>;
+  return readOrUpdate<ArgVec>(
+      [&](const Data& data) -> Optional<ArgVec> {
+        auto const* args = data.m_fileAttrs.getAttributeArgs({path}, attr);
+        if (!args) {
+          return std::nullopt;
+        }
+        return *args;
+      },
+      [&](AutoloadDB& db, SQLiteTxn& txn) -> ArgVec {
+        return db.getFileAttributeArgs(txn, path.slice(), attr.slice());
+      },
+      [&](Data& data, std::vector<folly::dynamic> argsFromDB) -> ArgVec {
+        return data.m_fileAttrs.getAttributeArgs(
+            {path}, attr, std::move(argsFromDB));
+      });
+}
+
+template <typename S>
+std::vector<folly::dynamic>
+SymbolMap<S>::getFileAttributeArgs(Path<S> path, const S& attribute) {
+  return getFileAttributeArgs(path, Symbol<S, SymKind::Type>{attribute});
 }
 
 template <typename S>
@@ -774,7 +876,7 @@ SymbolMap<S>::getKindAndFlags(Symbol<S, SymKind::Type> type, Path<S> path) {
     return {TypeKind::Unknown, static_cast<TypeFlagMask>(TypeFlag::Empty)};
   }
   return readOrUpdate<std::pair<TypeKind, TypeFlagMask>>(
-      [&](const Data& data) -> std::optional<std::pair<TypeKind, int>> {
+      [&](const Data& data) -> Optional<std::pair<TypeKind, int>> {
         return data.m_typeKind.getKindAndFlags(type, path);
       },
       [&](AutoloadDB& db, SQLiteTxn& txn) -> std::pair<TypeKind, TypeFlagMask> {
@@ -792,7 +894,7 @@ SymbolMap<S>::getKindAndFlags(Symbol<S, SymKind::Type> type, Path<S> path) {
 }
 
 template <typename S>
-std::optional<SHA1> SymbolMap<S>::getSha1Hash(Path<S> path) const {
+Optional<SHA1> SymbolMap<S>::getSha1Hash(Path<S> path) const {
   auto rlock = m_syncedData.rlock();
   auto const& sha1Hashes = rlock->m_sha1Hashes;
   auto const it = sha1Hashes.find(path);
@@ -880,7 +982,7 @@ void SymbolMap<S>::update(
               while (true) {
                 auto maybeWork = m_syncedData.withRLock(
                     [](const Data& data)
-                        -> std::optional<HPHP::Facts::UpdateDBWorkItem> {
+                        -> Optional<HPHP::Facts::UpdateDBWorkItem> {
                       if (data.m_updateDBWork.empty()) {
                         return std::nullopt;
                       }
@@ -898,7 +1000,7 @@ void SymbolMap<S>::update(
                     work.m_alteredPathFacts);
                 auto _workItemToDestroy =
                     m_syncedData.withWLock([&work](Data& data) {
-                      std::optional<UpdateDBWorkItem> workItemToDestroy;
+                      Optional<UpdateDBWorkItem> workItemToDestroy;
                       if (data.m_updateDBWork.empty()) {
                         return workItemToDestroy;
                       }
@@ -1151,6 +1253,18 @@ void SymbolMap<S>::updateDBPath(
   for (auto const& constant : facts.m_constants) {
     db.insertConstant(txn, constant, path);
   }
+
+  for (auto const& attribute : facts.m_attributes) {
+    if (attribute.m_args.empty()) {
+      db.insertFileAttribute(
+          txn, path, attribute.m_name, std::nullopt, nullptr);
+    } else {
+      for (auto i = 0; i < attribute.m_args.size(); ++i) {
+        db.insertFileAttribute(
+            txn, path, attribute.m_name, i, &attribute.m_args[i]);
+      }
+    }
+  }
 }
 
 template <typename S>
@@ -1204,7 +1318,7 @@ Path<S> SymbolMap<S>::getOnlyPath(Symbol<S, k> symbol) {
   };
 
   return readOrUpdate<Path<S>>(
-      [&](const Data& data) -> std::optional<Path<S>> {
+      [&](const Data& data) -> Optional<Path<S>> {
         auto paths = getPathSymMap<S, k>(data).getSymbolPaths(symbol);
         if (paths) {
           return {onlyPath(*paths)};
@@ -1247,7 +1361,7 @@ SymbolMap<S>::getPathSymbols(Path<S> path) {
       const typename PathToSymbolsMap<S, k>::PathSymbolMap::ValuesSet>;
 
   return readOrUpdate<SymbolSetRef>(
-      [&](const Data& data) -> std::optional<SymbolSetRef> {
+      [&](const Data& data) -> Optional<SymbolSetRef> {
         auto const* symbols = getPathSymMap<S, k>(data).getPathSymbols(path);
         if (symbols) {
           return {*symbols};
@@ -1287,6 +1401,7 @@ SymbolMap<S>::getPathSymbols(Path<S> path) {
 template <typename S>
 void SymbolMap<S>::Data::updatePath(Path<S> path, FileFacts facts) {
   typename PathToSymbolsMap<S, SymKind::Type>::SymbolSet types;
+  typename PathToMethodsMap<S>::MethodSet methods;
   for (auto& type : facts.m_types) {
     always_assert(!type.m_name.empty());
     // ':' is a valid character in XHP classnames, but not Hack
@@ -1311,10 +1426,11 @@ void SymbolMap<S>::Data::updatePath(Path<S> path, FileFacts facts) {
         std::move(type.m_requireImplements));
 
     for (auto& [method, attributes] : type.m_methods) {
-      m_methodAttrs.setAttributes(
-          {.m_type = {.m_name = typeName, .m_path = path},
-           .m_method = Symbol<S, SymKind::Function>{method}},
-          std::move(attributes));
+      MethodDecl<S> methodDecl{
+          .m_type = {.m_name = typeName, .m_path = path},
+          .m_method = Symbol<S, SymKind::Function>{method}};
+      m_methodAttrs.setAttributes(methodDecl, std::move(attributes));
+      methods.insert(methodDecl);
     }
   }
 
@@ -1330,9 +1446,12 @@ void SymbolMap<S>::Data::updatePath(Path<S> path, FileFacts facts) {
     constants.insert(Symbol<S, SymKind::Constant>{constant});
   }
 
+  m_fileAttrs.setAttributes({path}, facts.m_attributes);
+
   m_typePath.replacePathSymbols(path, std::move(types));
   m_functionPath.replacePathSymbols(path, std::move(functions));
   m_constantPath.replacePathSymbols(path, std::move(constants));
+  m_methodPath.replacePathMethods(path, std::move(methods));
   m_sha1Hashes.insert_or_assign(path, SHA1{facts.m_sha1hex});
 
   m_fileExistsMap.insert_or_assign(path, true);
@@ -1354,9 +1473,23 @@ void SymbolMap<S>::Data::removePath(
         {type, path}, db.getAttributesOfType(txn, type.slice(), path.native()));
   }
 
+  for (auto methodDecl : m_methodPath.getPathMethods(
+           path, db.getPathMethods(txn, path.slice()))) {
+    m_methodAttrs.removeKey(
+        methodDecl,
+        db.getAttributesOfMethod(
+            txn,
+            methodDecl.m_type.m_name.slice(),
+            methodDecl.m_method.slice(),
+            path.native()));
+  }
+
+  m_fileAttrs.removeKey({path}, db.getAttributesOfFile(txn, path.native()));
+
   m_typePath.removePath(path);
   m_functionPath.removePath(path);
   m_constantPath.removePath(path);
+  m_methodPath.removePath(path);
 
   m_fileExistsMap.insert_or_assign(path, false);
 }

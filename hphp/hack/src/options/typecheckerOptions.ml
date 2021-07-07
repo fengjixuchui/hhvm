@@ -42,6 +42,8 @@ let remote_min_batch_size = GlobalOptions.tco_remote_min_batch_size
 
 let num_remote_workers = GlobalOptions.tco_num_remote_workers
 
+let stream_errors = GlobalOptions.tco_stream_errors
+
 let remote_version_specifier = GlobalOptions.so_remote_version_specifier
 
 let disallow_array_typehint = GlobalOptions.tco_disallow_array_typehint
@@ -58,8 +60,6 @@ let migration_flag_enabled = GlobalOptions.tco_migration_flag_enabled
 let log_inference_constraints = GlobalOptions.tco_log_inference_constraints
 
 let default = GlobalOptions.default
-
-let experimental_isarray = GlobalOptions.tco_experimental_isarray
 
 let experimental_generics_arity = GlobalOptions.tco_experimental_generics_arity
 
@@ -170,8 +170,6 @@ let enable_sound_dynamic = GlobalOptions.tco_enable_sound_dynamic
 
 let use_direct_decl_parser = GlobalOptions.tco_use_direct_decl_parser
 
-let hack_arr_dv_arrs = GlobalOptions.po_hack_arr_dv_arrs
-
 let interpret_soft_types_as_like_types =
   GlobalOptions.po_interpret_soft_types_as_like_types
 
@@ -208,3 +206,7 @@ let require_extends_implements_ancestors =
   GlobalOptions.tco_require_extends_implements_ancestors
 
 let strict_value_equality = GlobalOptions.tco_strict_value_equality
+
+let enforce_sealed_subclasses = GlobalOptions.tco_enforce_sealed_subclasses
+
+let enable_enum_supertyping = GlobalOptions.po_enable_enum_supertyping

@@ -155,10 +155,7 @@ let make_param_local_ty env decl_hint param =
        * argument, "f(C ...$args)", $args is a varray<C> *)
       let r = Reason.Rvar_param param.param_pos in
       let arr_values = mk (r, t) in
-      let unification =
-        TypecheckerOptions.hack_arr_dv_arrs (Env.get_tcopt env)
-      in
-      MakeType.varray ~unification r arr_values
+      MakeType.varray r arr_values
     | _ -> ty
   in
   (env, ty)
@@ -314,7 +311,10 @@ let function_dynamically_callable
         let (env, fun_param) = Typing.bind_param ~immutable env param in
         (env, fun_param)
       in
-      List.map_env env (List.zip_exn param_tys f.f_params) bind_param_and_check
+      List.map_env
+        env
+        (List.zip_exn param_tys f.f_params)
+        ~f:bind_param_and_check
     in
 
     let pos = fst f.f_name in
@@ -369,6 +369,18 @@ let fun_def ctx fd :
       let (env, cap_ty, unsafe_cap_ty) =
         Typing.type_capability env f.f_ctxs f.f_unsafe_ctxs (fst f.f_name)
       in
+      let env =
+        Env.set_module
+          env
+          (Naming_attributes_params.get_module_attribute f.f_user_attributes)
+      in
+      let env =
+        Env.set_internal
+          env
+          (Naming_attributes.mem
+             SN.UserAttributes.uaInternal
+             f.f_user_attributes)
+      in
       Typing_type_wellformedness.fun_ env f;
       let env =
         Phase.localize_and_add_ast_generic_parameters_and_where_constraints
@@ -378,11 +390,6 @@ let fun_def ctx fd :
           f.f_where_constraints
       in
       let env = Env.set_fn_kind env f.f_fun_kind in
-      let env =
-        Env.set_module
-          env
-          (Naming_attributes_params.get_module_attribute f.f_user_attributes)
-      in
       let (return_decl_ty, params_decl_ty, variadicity_decl_ty) =
         merge_decl_header_with_hints
           ~params:f.f_params
@@ -405,6 +412,9 @@ let fun_def ctx fd :
         match snd f.f_ret with
         | Some (ret_pos, _) -> ret_pos
         | None -> fst f.f_name
+      in
+      let (env, return_ty) =
+        Typing_return.force_return_kind env ret_pos return_ty
       in
       let return =
         Typing_return.make_info
@@ -438,7 +448,7 @@ let fun_def ctx fd :
         List.map_env
           env
           (List.zip_exn param_tys f.f_params)
-          bind_param_and_check
+          ~f:bind_param_and_check
       in
       let (env, t_variadic) =
         get_callable_variadicity
@@ -470,9 +480,9 @@ let fun_def ctx fd :
           if partial_callback 4030 then Errors.expecting_return_type_hint pos
         | Some _ -> ()
       end;
-      let (env, tparams) = List.map_env env f.f_tparams Typing.type_param in
+      let (env, tparams) = List.map_env env f.f_tparams ~f:Typing.type_param in
       let (env, user_attributes) =
-        List.map_env env f.f_user_attributes Typing.user_attribute
+        List.map_env env f.f_user_attributes ~f:Typing.user_attribute
       in
       let env = Typing_solver.close_tyvars_and_solve env in
       let env = Typing_solver.solve_all_unsolved_tyvars env in
@@ -600,7 +610,10 @@ let method_dynamically_callable
         let (env, fun_param) = Typing.bind_param ~immutable env param in
         (env, fun_param)
       in
-      List.map_env env (List.zip_exn param_tys m.m_params) bind_param_and_check
+      List.map_env
+        env
+        (List.zip_exn param_tys m.m_params)
+        ~f:bind_param_and_check
     in
 
     let pos = fst m.m_name in
@@ -745,6 +758,9 @@ let method_def env cls m =
         | Some (ret_pos, _) -> ret_pos
         | None -> fst m.m_name
       in
+      let (env, locl_ty) =
+        Typing_return.force_return_kind env ret_pos locl_ty
+      in
       let return =
         Typing_return.make_info
           ret_pos
@@ -778,7 +794,7 @@ let method_def env cls m =
         List.map_env
           env
           (List.zip_exn param_tys m.m_params)
-          bind_param_and_check
+          ~f:bind_param_and_check
       in
       let (env, t_variadic) =
         get_callable_variadicity
@@ -818,9 +834,9 @@ let method_def env cls m =
         | Some _ -> hint_of_type_hint m.m_ret
       in
       let m = { m with m_ret = (fst m.m_ret, type_hint') } in
-      let (env, tparams) = List.map_env env m.m_tparams Typing.type_param in
+      let (env, tparams) = List.map_env env m.m_tparams ~f:Typing.type_param in
       let (env, user_attributes) =
-        List.map_env env m.m_user_attributes Typing.user_attribute
+        List.map_env env m.m_user_attributes ~f:Typing.user_attribute
       in
       let env = Typing_solver.close_tyvars_and_solve env in
       let env = Typing_solver.solve_all_unsolved_tyvars env in
@@ -887,6 +903,61 @@ let check_parent env class_def class_type =
       Errors.extend_final position (Cls.pos parent_type) (Cls.name parent_type)
   | None -> ()
 
+let sealed_subtype ctx (c : Nast.class_) ~is_enum =
+  let parent_name = snd c.c_name in
+  let is_sealed (attr : Nast.user_attribute) =
+    String.equal (snd attr.ua_name) SN.UserAttributes.uaSealed
+  in
+  match List.find c.c_user_attributes ~f:is_sealed with
+  | None -> ()
+  | Some sealed_attr ->
+    let iter_item (param : Nast.expr) =
+      match snd param with
+      | Class_const (cid, _) ->
+        let klass_name = Nast.class_id_to_str (snd cid) in
+        let klass = Decl_provider.get_class ctx klass_name in
+        (match klass with
+        | None -> ()
+        | Some decl ->
+          let includes_ancestor =
+            if is_enum then
+              match Cls.enum_type decl with
+              | None -> true
+              | Some enum_ty ->
+                let check x =
+                  match get_node x with
+                  | Tapply ((_, name), _) -> String.equal name parent_name
+                  | _ -> true
+                in
+                List.exists enum_ty.te_includes ~f:check
+            else
+              Cls.has_ancestor decl parent_name
+          in
+          if not includes_ancestor then
+            let parent_pos = fst param in
+            let child_pos = Cls.pos decl in
+            let child_name = Cls.name decl in
+            let (child_kind, verb) =
+              match Cls.kind decl with
+              | Ast_defs.Cabstract
+              | Ast_defs.Cnormal ->
+                ("Class", "extend")
+              | Ast_defs.Cinterface -> ("Interface", "implement")
+              | Ast_defs.Ctrait -> ("Trait", "use")
+              | Ast_defs.Cenum -> ("Enum", "use")
+            in
+            Errors.sealed_not_subtype
+              verb
+              parent_pos
+              child_pos
+              parent_name
+              child_name
+              child_kind)
+      (* unit below is fine because error cases are handled as Parsing[1002] *)
+      | _ -> ()
+    in
+    List.iter sealed_attr.ua_params ~f:iter_item
+
 let check_parent_sealed
     ~(is_enum_class : bool) (child_pos, child_type) parent_type =
   match Cls.sealed_whitelist parent_type with
@@ -919,7 +990,7 @@ let check_parents_sealed env child_def child_type =
   in
   let parents = parents @ child_def.c_implements @ child_def.c_uses in
   let is_enum_class = Aast.is_enum_class child_def in
-  List.iter parents (function
+  List.iter parents ~f:(function
       | (_, Happly ((_, name), _)) ->
         begin
           match Env.get_class_dep env name with
@@ -945,7 +1016,7 @@ let rec check_implements_or_extends_unique impl =
     (match get_node ty with
     | Tapply ((_, name), _ :: _) ->
       let (pos_list, rest) =
-        List.partition_map rest (fun (h, ty) ->
+        List.partition_map rest ~f:(fun (h, ty) ->
             match get_node ty with
             | Tapply ((pos', name'), _) when String.equal name name' ->
               First pos'
@@ -957,7 +1028,7 @@ let rec check_implements_or_extends_unique impl =
     | _ -> check_implements_or_extends_unique rest)
 
 let check_cstr_dep env deps =
-  List.iter deps (fun ((p, _dep_hint), dep) ->
+  List.iter deps ~f:(fun ((p, _dep_hint), dep) ->
       match get_node dep with
       | Tapply ((_, class_name), _) ->
         Env.make_depend_on_constructor env class_name
@@ -969,7 +1040,7 @@ let check_const_trait_members pos env use_list =
   let (_, trait, _) = Decl_utils.unwrap_class_hint use_list in
   match Env.get_class env trait with
   | Some c when Ast_defs.(equal_class_kind (Cls.kind c) Ctrait) ->
-    List.iter (Cls.props c) (fun (x, ce) ->
+    List.iter (Cls.props c) ~f:(fun (x, ce) ->
         if not (get_ce_const ce) then Errors.trait_prop_const_class pos x)
   | _ -> ()
 
@@ -1055,8 +1126,8 @@ let check_enum_includes env cls =
                   origin_const_pos
                   src_class_name
                   const_name
-              else
-                (* multiple inherit *)
+              else if String.( <> ) origin_class_name class_const.cc_origin then
+                (* check for diamond inclusion, if not raise an error about multiple inherit *)
                 Errors.reinheriting_classish_const
                   dest_class_pos
                   dest_class_name
@@ -1075,7 +1146,7 @@ let shallow_decl_enabled (ctx : Provider_context.t) : bool =
   TypecheckerOptions.shallow_class_decl (Provider_context.get_tcopt ctx)
 
 let class_type_param env ct =
-  let (env, tparam_list) = List.map_env env ct Typing.type_param in
+  let (env, tparam_list) = List.map_env env ct ~f:Typing.type_param in
   (env, tparam_list)
 
 (** Checks that a dynamic element is also dynamic in the parents. *)
@@ -1116,14 +1187,14 @@ let check_static_class_element get_dyn_elt element_name static_pos ~elt_type =
 (** Error if there are abstract methods that this class is supposed to provide
     implementation for. *)
 let check_extend_abstract_meth ~is_final p seq =
-  List.iter seq (fun (x, ce) ->
+  List.iter seq ~f:(fun (x, ce) ->
       match ce.ce_type with
       | (lazy ty) when get_ce_abstract ce && is_fun ty ->
         Errors.implement_abstract ~is_final p (get_pos ty) "method" x
       | _ -> ())
 
 let check_extend_abstract_prop ~is_final p seq =
-  List.iter seq (fun (x, ce) ->
+  List.iter seq ~f:(fun (x, ce) ->
       if get_ce_abstract ce then
         let ce_pos = Lazy.force ce.ce_type |> get_pos in
         Errors.implement_abstract ~is_final p ce_pos "property" x)
@@ -1131,7 +1202,7 @@ let check_extend_abstract_prop ~is_final p seq =
 (* Type constants must be bound to a concrete type for non-abstract classes.
  *)
 let check_extend_abstract_typeconst ~is_final p seq =
-  List.iter seq (fun (x, tc) ->
+  List.iter seq ~f:(fun (x, tc) ->
       match tc.ttc_kind with
       | TCAbstract _ ->
         Errors.implement_abstract
@@ -1143,10 +1214,12 @@ let check_extend_abstract_typeconst ~is_final p seq =
       | _ -> ())
 
 let check_extend_abstract_const ~is_final p seq =
-  List.iter seq (fun (x, cc) ->
-      if cc.cc_abstract && not cc.cc_synthesized then
+  List.iter seq ~f:(fun (x, cc) ->
+      match cc.cc_abstract with
+      | CCAbstract _ when not cc.cc_synthesized ->
         let cc_pos = get_pos cc.cc_type in
-        Errors.implement_abstract ~is_final p cc_pos "constant" x)
+        Errors.implement_abstract ~is_final p cc_pos "constant" x
+      | _ -> ())
 
 exception Found of Pos_or_decl.t
 
@@ -1320,7 +1393,7 @@ let typeconst_def
       c_tconst_user_attributes
   in
   let (env, user_attributes) =
-    List.map_env env c_tconst_user_attributes Typing.user_attribute
+    List.map_env env c_tconst_user_attributes ~f:Typing.user_attribute
   in
   ( env,
     {
@@ -1348,14 +1421,15 @@ let is_literal_expr e =
   | _ -> false
 
 let class_const_def ~in_enum_class c env cc =
-  let { cc_type = h; cc_id = id; cc_expr = e; _ } = cc in
-  let (env, ty, opt_expected) =
+  let { cc_type = h; cc_id = id; cc_kind = k; _ } = cc in
+  let (env, hint_ty, opt_expected) =
     match h with
     | None ->
       begin
-        match e with
-        | None -> ()
-        | Some e ->
+        match k with
+        | CCAbstract None -> ()
+        | CCAbstract (Some e (* default *))
+        | CCConcrete e ->
           if
             (not (is_literal_expr e))
             && Partial.should_check_error c.c_mode 2035
@@ -1389,71 +1463,77 @@ let class_const_def ~in_enum_class c env cc =
         Some (ExpectedTy.make_and_allow_coercion (fst id) Reason.URhint opt_ty)
       )
   in
-  let (env, eopt, ty) =
-    match e with
-    | Some ((e_pos, _) as e) ->
+  let check env ty' =
+    (* Lifted out to closure to illustrate which variables are captured *)
+    Typing_coercion.coerce_type
+      (fst id)
+      Reason.URhint
+      env
+      ty'
+      hint_ty
+      Errors.class_constant_value_does_not_match_hint
+  in
+  let type_and_check env e =
+    let (env, (te, ty')) =
+      Typing.(
+        expr_with_pure_coeffects ?expected:opt_expected env e |> triple_to_pair)
+    in
+    let env = check env ty' in
+    (env, te, ty')
+  in
+  let (env, kind, ty) =
+    match k with
+    | CCConcrete ((e_pos, _) as e) when in_enum_class ->
       let (env, cap, unsafe_cap) =
-        if in_enum_class then
-          (* Enum class constant initializers are restricted to be `write_props` *)
-          let make_hint pos s = (pos, Aast.Happly ((pos, s), [])) in
-          let enum_class_ctx =
-            Some (e_pos, [make_hint e_pos SN.Capabilities.writeProperty])
-          in
-          Typing.type_capability env enum_class_ctx enum_class_ctx e_pos
-        else
-          let pure = MakeType.mixed (Reason.Rwitness e_pos) in
-          (env, pure, pure)
+        (* Enum class constant initializers are restricted to be `write_props` *)
+        let make_hint pos s = (pos, Aast.Happly ((pos, s), [])) in
+        let enum_class_ctx =
+          Some (e_pos, [make_hint e_pos SN.Capabilities.writeProperty])
+        in
+        Typing.type_capability env enum_class_ctx enum_class_ctx e_pos
       in
       let (env, (te, ty')) =
         Typing.(
           with_special_coeffects env cap unsafe_cap @@ fun env ->
           expr env ?expected:opt_expected e |> triple_to_pair)
       in
-      (* If we are checking an enum class, wrap ty' into the right
-       * HH\MemberOf<class name, ty'> alias
-       *)
       let (te, ty') =
-        if in_enum_class then
-          match deref ty.et_type with
-          | (r, Tnewtype (memberof, [enum_name; _], _))
-            when String.equal memberof SN.Classes.cMemberOf ->
-            let lift r ty = mk (r, Tnewtype (memberof, [enum_name; ty], ty)) in
-            let ((p, te_ty), te) = te in
-            let te = ((p, lift (get_reason te_ty) te_ty), te) in
-            let ty' = lift r ty' in
-            (te, ty')
-          | _ -> (te, ty')
-        else
+        match deref hint_ty.et_type with
+        | (r, Tnewtype (memberof, [enum_name; _], _))
+          when String.equal memberof SN.Classes.cMemberOf ->
+          let lift r ty = mk (r, Tnewtype (memberof, [enum_name; ty], ty)) in
+          let ((p, te_ty), te) = te in
+          let te = ((p, lift (get_reason te_ty) te_ty), te) in
+          let ty' = lift r ty' in
           (te, ty')
+        | _ -> (te, ty')
       in
-      let env =
-        Typing_coercion.coerce_type
-          (fst id)
-          Reason.URhint
-          env
-          ty'
-          ty
-          Errors.class_constant_value_does_not_match_hint
-      in
-      (env, Some te, ty')
-    | None -> (env, None, ty.et_type)
+      let env = check env ty' in
+      (env, Aast.CCConcrete te, ty')
+    | CCConcrete e ->
+      let (env, te, ty') = type_and_check env e in
+      (env, Aast.CCConcrete te, ty')
+    | CCAbstract (Some default) ->
+      let (env, tdefault, ty') = type_and_check env default in
+      (env, CCAbstract (Some tdefault), ty')
+    | CCAbstract None -> (env, CCAbstract None, hint_ty.et_type)
   in
   ( env,
     ( {
         Aast.cc_type = cc.cc_type;
         Aast.cc_id = cc.cc_id;
-        Aast.cc_expr = eopt;
+        Aast.cc_kind = kind;
         Aast.cc_doc_comment = cc.cc_doc_comment;
       },
       ty ) )
 
 let class_constr_def env cls constructor =
   let env = { env with inside_constructor = true } in
-  Option.bind constructor (method_def env cls)
+  Option.bind constructor ~f:(method_def env cls)
 
 let class_implements_type env implements c1 (_hint2, ctype2) =
   let params =
-    List.map c1.c_tparams (fun { tp_name = (p, s); _ } ->
+    List.map c1.c_tparams ~f:(fun { tp_name = (p, s); _ } ->
         mk
           ( Reason.Rwitness_from_decl (Pos_or_decl.of_raw_pos p),
             Tgeneric (s, []) ))
@@ -1527,7 +1607,7 @@ let class_var_def ~is_static cls env cv =
         cv.cv_user_attributes
   in
   let (env, user_attributes) =
-    List.map_env env cv.cv_user_attributes Typing.user_attribute
+    List.map_env env cv.cv_user_attributes ~f:Typing.user_attribute
   in
   if
     Option.is_none (hint_of_type_hint cv.cv_type)
@@ -1554,7 +1634,7 @@ let class_var_def ~is_static cls env cv =
     let env_with_require_dynamic =
       Typing_dynamic.add_require_dynamic_bounds env cls
     in
-    Option.iter decl_cty (fun ty ->
+    Option.iter decl_cty ~f:(fun ty ->
         Typing_dynamic.check_property_sound_for_dynamic_write
           ~on_error:Errors.property_is_not_enforceable
           env_with_require_dynamic
@@ -1600,11 +1680,6 @@ let class_def_ env c tc =
     Typing.attributes_check_def env kind c.c_user_attributes
   in
   let (env, file_attrs) = Typing.file_attributes env c.c_file_attributes in
-  let env =
-    Env.set_module
-      env
-      (Naming_attributes_params.get_module_attribute c.c_user_attributes)
-  in
   let ctx = Env.get_ctx env in
   if
     (not Ast_defs.(equal_class_kind c.c_kind Ctrait))
@@ -1646,14 +1721,14 @@ let class_def_ env c tc =
               Errors.override_per_trait c.c_name id ce.ce_origin pos
     in
 
-    List.iter (Cls.methods tc) (check_override ~is_static:false);
-    List.iter (Cls.smethods tc) (check_override ~is_static:true)
+    List.iter (Cls.methods tc) ~f:(check_override ~is_static:false);
+    List.iter (Cls.smethods tc) ~f:(check_override ~is_static:true)
   );
   check_enum_includes env c;
   let (pc, c_name) = c.c_name in
   let (req_extends, req_implements) = split_reqs c in
   let hints_and_decl_tys hints =
-    List.map hints (fun hint -> (hint, Decl_hint.hint env.decl_env hint))
+    List.map hints ~f:(fun hint -> (hint, Decl_hint.hint env.decl_env hint))
   in
   let extends = hints_and_decl_tys c.c_extends in
   let implements = hints_and_decl_tys c.c_implements in
@@ -1741,6 +1816,13 @@ let class_def_ env c tc =
   let env = List.fold impl ~init:env ~f:check_where_constraints in
   check_parent env c tc;
   check_parents_sealed env c tc;
+  ( if TypecheckerOptions.enforce_sealed_subclasses (Env.get_tcopt env) then
+    match c.c_kind with
+    | Ast_defs.Cenum
+      when TypecheckerOptions.enable_enum_supertyping (Env.get_tcopt env) ->
+      sealed_subtype ctx c ~is_enum:true
+    | Ast_defs.Cenum -> ()
+    | _ -> sealed_subtype ctx c ~is_enum:false );
   let _ =
     if c.c_support_dynamic_type then
       (* Any class that extends a class or implements an interface
@@ -1821,7 +1903,7 @@ let class_def_ env c tc =
     check_extend_abstract_const ~is_final pc (Cls.consts tc);
     check_extend_abstract_typeconst ~is_final pc (Cls.typeconsts tc)
   );
-  if Cls.const tc then List.iter c.c_uses (check_const_trait_members pc env);
+  if Cls.const tc then List.iter c.c_uses ~f:(check_const_trait_members pc env);
   let (static_vars, vars) = split_vars c in
   List.iter static_vars ~f:(fun { cv_id = (p, id); _ } ->
       check_static_class_element (Cls.get_prop tc) ~elt_type:`Property id p);
@@ -1839,35 +1921,35 @@ let class_def_ env c tc =
   if Cls.is_disposable tc then
     List.iter
       (c.c_extends @ c.c_uses)
-      (Typing_disposable.enforce_is_disposable env);
+      ~f:(Typing_disposable.enforce_is_disposable env);
   let (env, typed_vars_and_global_inference_envs) =
-    List.map_env env vars (class_var_def ~is_static:false tc)
+    List.map_env env vars ~f:(class_var_def ~is_static:false tc)
   in
   let (typed_vars, vars_global_inference_envs) =
     List.unzip typed_vars_and_global_inference_envs
   in
   let (typed_methods, methods_global_inference_envs) =
-    List.filter_map methods (method_def env tc) |> List.unzip
+    List.filter_map methods ~f:(method_def env tc) |> List.unzip
   in
   let (env, typed_typeconsts) =
-    List.map_env env c.c_typeconsts (typeconst_def c)
+    List.map_env env c.c_typeconsts ~f:(typeconst_def c)
   in
   let in_enum_class = Env.is_enum_class env c_name in
   let (env, consts) =
-    List.map_env env c.c_consts (class_const_def ~in_enum_class c)
+    List.map_env env c.c_consts ~f:(class_const_def ~in_enum_class c)
   in
   let (typed_consts, const_types) = List.unzip consts in
   let env = Typing_enum.enum_class_check env tc c.c_consts const_types in
   let typed_constructor = class_constr_def env tc constructor in
   let env = Env.set_static env in
   let (env, typed_static_vars_and_global_inference_envs) =
-    List.map_env env static_vars (class_var_def ~is_static:true tc)
+    List.map_env env static_vars ~f:(class_var_def ~is_static:true tc)
   in
   let (typed_static_vars, static_vars_global_inference_envs) =
     List.unzip typed_static_vars_and_global_inference_envs
   in
   let (typed_static_methods, static_methods_global_inference_envs) =
-    List.filter_map static_methods (method_def env tc) |> List.unzip
+    List.filter_map static_methods ~f:(method_def env tc) |> List.unzip
   in
   let (methods, constr_global_inference_env) =
     match typed_constructor with
@@ -1877,7 +1959,7 @@ let class_def_ env c tc =
   in
   let (env, tparams) = class_type_param env c.c_tparams in
   let (env, user_attributes) =
-    List.map_env env c.c_user_attributes Typing.user_attribute
+    List.map_env env c.c_user_attributes ~f:Typing.user_attribute
   in
   let env = Typing_solver.solve_all_unsolved_tyvars env in
   ( if TypecheckerOptions.enable_sound_dynamic (Provider_context.get_tcopt ctx)
@@ -1885,7 +1967,7 @@ let class_def_ env c tc =
     let parent_names =
       List.filter_map
         (c.c_extends @ c.c_uses @ c.c_implements)
-        (function
+        ~f:(function
           | (_, Happly ((_, name), _)) -> Some name
           | _ -> None)
     in
@@ -1896,7 +1978,7 @@ let class_def_ env c tc =
         (Cls.name parent, Cls.kind parent)
         f
     in
-    List.iter parent_names (fun name ->
+    List.iter parent_names ~f:(fun name ->
         match Env.get_class_dep env name with
         | Some parent_type ->
           begin
@@ -1967,7 +2049,17 @@ let class_def ctx c =
   let (name_pos, name) = c.c_name in
   let tc = Env.get_class env name in
   let env = Env.set_env_pessimize env in
-  Typing_helpers.add_decl_errors (Option.bind tc Cls.decl_errors);
+  Typing_helpers.add_decl_errors (Option.bind tc ~f:Cls.decl_errors);
+  let env =
+    Env.set_module
+      env
+      (Naming_attributes_params.get_module_attribute c.c_user_attributes)
+  in
+  let env =
+    Env.set_internal
+      env
+      (Naming_attributes.mem SN.UserAttributes.uaInternal c.c_user_attributes)
+  in
   Typing_type_wellformedness.class_ env c;
   NastInitCheck.class_ env c;
   match tc with
@@ -2118,9 +2210,9 @@ let record_def_def ctx rd =
   check_record_inheritance_cycle env rd.rd_name;
 
   let (env, attributes) =
-    List.map_env env rd.rd_user_attributes Typing.user_attribute
+    List.map_env env rd.rd_user_attributes ~f:Typing.user_attribute
   in
-  let (_env, fields) = List.map_env env rd.rd_fields record_field in
+  let (_env, fields) = List.map_env env rd.rd_fields ~f:record_field in
   {
     Aast.rd_annotation = Env.save (Env.get_tpenv env) env;
     Aast.rd_name = rd.rd_name;
@@ -2160,7 +2252,7 @@ let nast_to_tast_gienv ~(do_tast_checks : bool) ctx nast :
      * so just create the minimal env for us to construct a Stmt.
      *)
     | Stmt s ->
-      let env = Env.empty ctx Relative_path.default None in
+      let env = Env.empty ctx Relative_path.default ~droot:None in
       Some (Aast.Stmt (snd (Typing.stmt env s)), [])
     | Namespace _
     | NamespaceUse _
@@ -2170,7 +2262,7 @@ let nast_to_tast_gienv ~(do_tast_checks : bool) ctx nast :
         "Invalid nodes in NAST. These nodes should be removed during naming."
   in
   Nast_check.program ctx nast;
-  let (tast, envs) = List.unzip @@ List.filter_map nast convert_def in
+  let (tast, envs) = List.unzip @@ List.filter_map nast ~f:convert_def in
   let envs = List.concat envs in
   if do_tast_checks then Tast_check.program ctx tast;
   (tast, envs)

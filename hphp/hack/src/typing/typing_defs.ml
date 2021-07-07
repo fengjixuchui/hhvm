@@ -96,6 +96,7 @@ type class_elt = {
 type fun_elt = {
   fe_deprecated: string option;
   fe_module: string option;
+  fe_internal: bool;  (** Top-level functions have limited visibilities *)
   fe_type: decl_ty;
   fe_pos: Pos_or_decl.t;
   fe_php_std_lib: bool;
@@ -103,9 +104,18 @@ type fun_elt = {
 }
 [@@deriving show]
 
+(* TODO(T71787342) This is temporary. It is necessary because legacy decl
+ * uses Typing_defs types to represent folded inherited members. This will
+ * be removed when shallow decl ships as this information is only necessary
+ * there. *)
+type class_const_kind =
+  | CCAbstract of bool (* has default *)
+  | CCConcrete
+[@@deriving eq, show]
+
 type class_const = {
   cc_synthesized: bool;
-  cc_abstract: bool;
+  cc_abstract: class_const_kind;
   cc_pos: Pos_or_decl.t;
   cc_type: decl_ty;
   cc_origin: string;
@@ -145,49 +155,6 @@ type record_def_type = {
  * ```
  *)
 type requirement = Pos_or_decl.t * decl_ty
-
-and class_type = {
-  tc_need_init: bool;
-  tc_members_fully_known: bool;
-      (** Whether the typechecker knows of all (non-interface) ancestors
-       * and thus knows all accessible members of this class
-       * This is not the case if one ancestor at least could not be found. *)
-  tc_abstract: bool;
-  tc_final: bool;
-  tc_const: bool;
-  tc_deferred_init_members: SSet.t;
-      (** When a class is abstract (or in a trait) the initialization of
-       * a protected member can be delayed *)
-  tc_kind: Ast_defs.class_kind;
-  tc_is_xhp: bool;
-  tc_has_xhp_keyword: bool;
-  tc_is_disposable: bool;
-  tc_module: string option;
-  tc_name: string;
-  tc_pos: Pos_or_decl.t;
-  tc_tparams: decl_tparam list;
-  tc_where_constraints: decl_where_constraint list;
-  tc_consts: class_const SMap.t;
-  tc_typeconsts: typeconst_type SMap.t;
-  tc_props: class_elt SMap.t;
-  tc_sprops: class_elt SMap.t;
-  tc_methods: class_elt SMap.t;
-  tc_smethods: class_elt SMap.t;
-  tc_construct: class_elt option * consistent_kind;
-      (** the consistent_kind represents final constructor or __ConsistentConstruct *)
-  tc_ancestors: decl_ty SMap.t;
-      (** This includes all the classes, interfaces and traits this class is
-       * using. *)
-  tc_support_dynamic_type: bool;
-      (** Whether the class is coercible to dynamic *)
-  tc_req_ancestors: requirement list;
-  tc_req_ancestors_extends: SSet.t;  (** the extends of req_ancestors *)
-  tc_extends: SSet.t;
-  tc_enum_type: enum_type option;
-  tc_sealed_whitelist: SSet.t option;
-  tc_xhp_enum_values: Ast_defs.xhp_enum_value list SMap.t;
-  tc_decl_errors: Errors.t option; [@opaque]
-}
 
 and abstract_typeconst = {
   atc_as_constraint: decl_ty option;
@@ -322,7 +289,7 @@ end = struct
     | Some (p, x') when String.equal x x' -> Some (Some p)
     | Some _
     | None ->
-      List.find_map expansions (function
+      List.find_map expansions ~f:(function
           | (_, x') when String.equal x x' -> Some None
           | _ -> None)
 
@@ -1075,7 +1042,8 @@ let constraint_ty_equal ?(normalize_lists = false) ty1 ty2 =
   Int.equal (constraint_ty_compare ~normalize_lists ty1 ty2) 0
 
 let ty_equal ?(normalize_lists = false) ty1 ty2 =
-  Int.equal 0 (ty_compare ~normalize_lists ty1 ty2)
+  phys_equal (get_node ty1) (get_node ty2)
+  || Int.equal 0 (ty_compare ~normalize_lists ty1 ty2)
 
 let equal_internal_type ty1 ty2 =
   match (ty1, ty2) with
@@ -1318,8 +1286,8 @@ let error_Tunapplied_alias_in_illegal_context () =
 
 module Attributes = struct
   let mem x xs =
-    List.exists xs (fun { ua_name; _ } -> String.equal x (snd ua_name))
+    List.exists xs ~f:(fun { ua_name; _ } -> String.equal x (snd ua_name))
 
   let find x xs =
-    List.find xs (fun { ua_name; _ } -> String.equal x (snd ua_name))
+    List.find xs ~f:(fun { ua_name; _ } -> String.equal x (snd ua_name))
 end

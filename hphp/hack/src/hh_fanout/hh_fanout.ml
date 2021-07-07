@@ -13,7 +13,6 @@ type env = {
   client_id: string;
   root: Path.t;
   ignore_hh_version: bool;
-  is_64bit: bool;
   detail_level: Calculate_fanout.Detail_level.t;
   naming_table_path: Path.t option;
   dep_table_path: Path.t option;
@@ -113,7 +112,7 @@ let load_saved_state ~(env : env) : saved_state_result Lwt.t =
               { root = env.root; sockname = env.watchman_sockname }
           ~ignore_hh_version:env.ignore_hh_version
           ~saved_state_type:
-            (Saved_state_loader.Naming_and_dep_table { is_64bit = env.is_64bit })
+            (Saved_state_loader.Naming_and_dep_table { is_64bit = true })
       in
       (match dep_table_saved_state with
       | Error load_error ->
@@ -139,10 +138,7 @@ let load_saved_state ~(env : env) : saved_state_result Lwt.t =
   in
 
   let deps_mode =
-    if env.is_64bit then
-      Typing_deps_mode.CustomMode (Some (Path.to_string dep_table_path))
-    else
-      Typing_deps_mode.SQLiteMode
+    Typing_deps_mode.CustomMode (Some (Path.to_string dep_table_path))
   in
   let setup_result = set_up_global_environment env ~deps_mode in
 
@@ -195,7 +191,7 @@ let get_state_path ~(env : env) : Path.t =
     state_path
 
 let make_incremental_state ~(env : env) : Incremental.state =
-  let state_path = get_state_path env in
+  let state_path = get_state_path ~env in
   Hh_logger.log "State path: %s" (Path.to_string state_path);
   Incremental.make_reference_implementation state_path
 
@@ -444,7 +440,7 @@ let env
     root
     detail_level
     ignore_hh_version
-    is_64bit
+    _is_64bit
     naming_table_path
     dep_table_path
     watchman_sockname
@@ -493,7 +489,6 @@ let env
     client_id;
     root;
     ignore_hh_version;
-    is_64bit;
     detail_level;
     naming_table_path;
     dep_table_path;
@@ -544,7 +539,7 @@ If not provided, defaults to the value for 'from'.
     value & flag & info ["ignore-hh-version"] ~doc
   in
   let is_64bit =
-    let doc = "Use 64bit depgraph." in
+    let doc = "[legacy] ignored]" in
     value & flag & info ["64bit"] ~doc
   in
   let naming_table_path =
@@ -607,7 +602,7 @@ let clean_subcommand =
   let exits = Term.default_exits in
 
   let run env =
-    let state_path = get_state_path env in
+    let state_path = get_state_path ~env in
     Hh_logger.log "Deleting %s" (Path.to_string state_path);
     Sys_utils.rm_dir_tree (Path.to_string state_path)
   in

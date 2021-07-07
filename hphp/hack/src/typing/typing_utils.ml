@@ -136,6 +136,11 @@ let (is_sub_type_for_union_i_ref :
 
 let is_sub_type_for_union_i x = !is_sub_type_for_union_i_ref x
 
+let (is_type_disjoint_ref : (env -> locl_ty -> locl_ty -> bool) ref) =
+  ref (not_implemented "is_type_disjoint")
+
+let is_type_disjoint x = !is_type_disjoint_ref x
+
 let (is_sub_type_ignore_generic_params_ref : is_sub_type_type ref) =
   ref (not_implemented "is_sub_type_ignore_generic_params")
 
@@ -281,8 +286,8 @@ let rec is_any env ty =
   | Tany _
   | Terr ->
     true
-  | Tunion tyl -> List.for_all tyl (is_any env)
-  | Tintersection tyl -> List.exists tyl (is_any env)
+  | Tunion tyl -> List.for_all tyl ~f:(is_any env)
+  | Tintersection tyl -> List.exists tyl ~f:(is_any env)
   | _ -> false
 
 let is_tunion env ty =
@@ -373,8 +378,9 @@ let wrap_union_inter_ty_in_var env r ty =
  * generic parameter, repeat the process until a type is reached that is not
  * a generic parameter. Don't loop on cycles.
  * (For example, function foo<Tu as Tv, Tv as Tu>(...))
+ * Also breaks apart intersections.
  *****************************************************************************)
-let get_concrete_supertypes env ty =
+let get_concrete_supertypes ~abstract_enum env ty =
   let rec iter seen env acc tyl =
     match tyl with
     | [] -> (env, acc)
@@ -383,7 +389,9 @@ let get_concrete_supertypes env ty =
       (match get_node ty with
       (* Enums with arraykey upper bound are treated as "abstract" *)
       | Tnewtype (cid, _, bound_ty)
-        when is_prim Aast.Tarraykey bound_ty && Env.is_enum env cid ->
+        when abstract_enum
+             && is_prim Aast.Tarraykey bound_ty
+             && Env.is_enum env cid ->
         iter seen env acc tyl
       (* Don't expand enums or newtype; just return the type itself *)
       | Tnewtype (_, _, ty)
@@ -478,7 +486,7 @@ let rec get_base_type env ty =
   | Tnewtype _
   | Tdependent _ ->
     begin
-      match get_concrete_supertypes env ty with
+      match get_concrete_supertypes ~abstract_enum:true env ty with
       (* If the type is exactly equal, we don't want to recurse *)
       | (_, ty2 :: _) when ty_equal ty ty2 -> ty
       | (_, ty :: _) -> get_base_type env ty
@@ -529,6 +537,7 @@ let string_of_visibility = function
   | Vpublic -> "public"
   | Vprivate _ -> "private"
   | Vprotected _ -> "protected"
+  | Vinternal _ -> "internal"
 
 let unwrap_class_type ty =
   match deref ty with
@@ -588,7 +597,7 @@ let default_fun_param ?(pos = Pos_or_decl.none) ty : 'a fun_param =
         ~has_default:false
         ~ifc_external:false
         ~ifc_can_call:false
-        ~is_atom:false
+        ~via_label:false
         ~readonly:false;
   }
 
